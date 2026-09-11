@@ -7,12 +7,12 @@ import (
 	"slices"
 	"sort"
 	"strings"
-	"time"
 
 	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
-	"github.com/gopernicus/gopernicus/pockets/authorization/domain/relationship"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/audit"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/relationships"
 	"github.com/gopernicus/gopernicus/sdk"
-	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
+	"github.com/gopernicus/gopernicus/sdk/pkg/list"
 )
 
 // reachableCTE is the relation-aware userset-expansion recursive CTE shared by the
@@ -38,99 +38,54 @@ const reachableCTE = `WITH RECURSIVE reachable(atype, aid, arelation) AS (
 	JOIN reachable ON r.subject_type = reachable.atype AND r.subject_id = reachable.aid AND r.subject_relation = reachable.arelation
 )`
 
-// boundedReachableCTE is the BUDGETED sibling of reachableCTE used by the two
-// CHECK-path methods (CheckRelationWithGroupExpansion, CheckBatchDirect) to bound
-// group-expansion work against the engine's MaxGraphStates (F4). Two mechanisms
-// bound it and together guarantee that work depends on the CONFIGURED budget, not
-// on the adversary's graph size:
-//
-//   - a `depth` column carries the recursion level, and `WHERE depth < ?`
-//     (the max_depth placeholder = maxExpansionStates) stops the recursion from
-//     running away down a deep membership chain — at most maxExpansionStates
-//     recursion levels regardless of graph shape;
-//   - `capped` materializes the DISTINCT reachable states LIMITed to the
-//     state_cap placeholder (= maxExpansionStates+1), so the downstream match
-//     join never scans more than maxExpansionStates+1 states, and a
-//     `count(*) = state_cap` reading is the deterministic OVERFLOW signal the
-//     caller maps to relationship.ErrExpansionBudgetExceeded.
-//
-// Correctness pin: any state a within-budget graph needs has a shortest
-// membership path shorter than its distinct-state count <= maxExpansionStates, so
-// the depth bound never cuts a within-budget state; reaching a state at depth
-// beyond the bound implies > maxExpansionStates distinct states, which the
-// state_cap overflow catches. A within-budget graph yields the SAME bool as the
-// unbounded reachableCTE. Re-derived in the libSQL dialect (positional binds); the
-// storetest suite is the pgx-equivalence proof. Placeholder order: subject_type,
-// subject_id, max_depth, state_cap.
-const boundedReachableCTE = `WITH RECURSIVE reachable(atype, aid, arelation, depth) AS (
-	SELECT ?, ?, '', 0
-	UNION
-	SELECT r.resource_type, r.resource_id, r.relation, reachable.depth + 1
-	FROM iam_relationships r
-	JOIN reachable ON r.subject_type = reachable.atype AND r.subject_id = reachable.aid AND r.subject_relation = reachable.arelation
-	WHERE reachable.depth < ?
-),
-states AS (
-	SELECT DISTINCT atype, aid, arelation FROM reachable
-),
-capped AS (
-	SELECT atype, aid, arelation FROM states LIMIT ?
+// boundedReachableCTE caps the full-state UNION at budget+1 distinct states.
+// A full prefix proves overflow. There is no depth column that can duplicate
+// a state at every cycle level. Physical scans remain planner-dependent.
+// Placeholder order: subject_type, subject_id, state_cap.
+const boundedReachableCTE = reachableCTE + `,
+capped AS MATERIALIZED (
+ SELECT atype, aid, arelation FROM reachable LIMIT ?
 )`
 
-// relationshipStore fills relationship.Storer over iam_relationships. Every
-// statement runs on s.db.QuerierFrom(ctx): the connector's ambient
-// Transact-owned transaction when the context carries one, the pooled
-// connection otherwise (the port's ambient-transaction contract — reads
-// included, so a host that reads, decides, and writes inside ONE transaction
-// sees its own uncommitted state). The only place the store begins a
-// transaction of its own is the standalone SetRelationTargets path, and only
-// when no ambient one exists.
+// relationshipStore reads through the ambient querier and routes all writes
+// through a join-or-own transaction so facts and optional history commit together.
 type relationshipStore struct {
-	db *tursodb.DB
+	audit bool
+	model *relationships.ReadModel
+	db    *tursodb.DB
 }
 
-func newRelationshipStore(db *tursodb.DB) *relationshipStore {
-	return &relationshipStore{db: db}
+func newRelationshipStore(db *tursodb.DB, cfg config) *relationshipStore {
+	return &relationshipStore{db: db, audit: cfg.audit}
 }
 
-var _ relationship.Storer = (*relationshipStore)(nil)
+var _ relationships.Storer = (*relationshipStore)(nil)
 
-// subjectRelationshipRow is the db-tagged projection of a ListRelationshipsBySubject row.
+// tupleKeyExpr preserves the complete tuple in byte-order listing cursors.
+const tupleKeyExpr = "(resource_type || char(1) || resource_id || char(1) || relation || char(1) || subject_type || char(1) || subject_id || char(1) || subject_relation) COLLATE BINARY"
+
 type subjectRelationshipRow struct {
-	ID           string       `db:"relationship_id"`
-	ResourceType string       `db:"resource_type"`
-	ResourceID   string       `db:"resource_id"`
-	Relation     string       `db:"relation"`
-	CreatedAt    tursodb.Time `db:"created_at"`
+	ResourceType    string `db:"resource_type"`
+	ResourceID      string `db:"resource_id"`
+	Relation        string `db:"relation"`
+	SubjectRelation string `db:"subject_relation"`
+	TupleKey        string `db:"tuple_key"`
 }
 
-func (r subjectRelationshipRow) toDomain() relationship.SubjectRelationship {
-	return relationship.SubjectRelationship{
-		ID:           r.ID,
-		ResourceType: r.ResourceType,
-		ResourceID:   r.ResourceID,
-		Relation:     r.Relation,
-		CreatedAt:    r.CreatedAt.Time,
-	}
+func (r subjectRelationshipRow) toDomain() relationships.SubjectRelationship {
+	return relationships.SubjectRelationship{ResourceType: r.ResourceType, ResourceID: r.ResourceID, Relation: r.Relation, SubjectRelation: r.SubjectRelation}
 }
 
-// resourceRelationshipRow is the db-tagged projection of a ListRelationshipsByResource row.
 type resourceRelationshipRow struct {
-	ID          string       `db:"relationship_id"`
-	SubjectType string       `db:"subject_type"`
-	SubjectID   string       `db:"subject_id"`
-	Relation    string       `db:"relation"`
-	CreatedAt   tursodb.Time `db:"created_at"`
+	SubjectType     string `db:"subject_type"`
+	SubjectID       string `db:"subject_id"`
+	Relation        string `db:"relation"`
+	SubjectRelation string `db:"subject_relation"`
+	TupleKey        string `db:"tuple_key"`
 }
 
-func (r resourceRelationshipRow) toDomain() relationship.ResourceRelationship {
-	return relationship.ResourceRelationship{
-		ID:          r.ID,
-		SubjectType: r.SubjectType,
-		SubjectID:   r.SubjectID,
-		Relation:    r.Relation,
-		CreatedAt:   r.CreatedAt.Time,
-	}
+func (r resourceRelationshipRow) toDomain() relationships.ResourceRelationship {
+	return relationships.ResourceRelationship{SubjectType: r.SubjectType, SubjectID: r.SubjectID, Relation: r.Relation, SubjectRelation: r.SubjectRelation}
 }
 
 // CheckRelationWithGroupExpansion reports whether the subject — or any group it
@@ -147,7 +102,7 @@ SELECT EXISTS(
 	JOIN reachable ON r.subject_type = reachable.atype AND r.subject_id = reachable.aid AND r.subject_relation = reachable.arelation
 	WHERE r.resource_type = ? AND r.resource_id = ? AND r.relation = ?
 )`
-		return existsQuery(ctx, s.db.QuerierFrom(ctx), query, subjectType, subjectID, resourceType, resourceID, relation)
+		return existsQuery(ctx, s.reader(ctx), query, subjectType, subjectID, resourceType, resourceID, relation)
 	}
 
 	query := boundedReachableCTE + `
@@ -160,14 +115,14 @@ SELECT
 		WHERE r.resource_type = ? AND r.resource_id = ? AND r.relation = ?
 	)`
 	var stateCount, matched int
-	if err := s.db.QuerierFrom(ctx).QueryRow(ctx, query,
-		subjectType, subjectID, maxExpansionStates, maxExpansionStates+1,
+	if err := s.reader(ctx).QueryRow(ctx, query,
+		subjectType, subjectID, maxExpansionStates+1,
 		resourceType, resourceID, relation,
 	).Scan(&stateCount, &matched); err != nil {
 		return false, tursodb.MapError(err)
 	}
 	if stateCount > maxExpansionStates {
-		return false, relationship.ErrExpansionBudgetExceeded
+		return false, relationships.ErrExpansionBudgetExceeded
 	}
 	return matched != 0, nil
 }
@@ -182,15 +137,15 @@ type rowQuerier interface {
 // GetRelationTargets returns the subjects holding a relation on a resource. An
 // empty subject_relation reads back as "" (a concrete subject); a non-empty one
 // as the exact userset relation.
-func (s *relationshipStore) GetRelationTargets(ctx context.Context, resourceType, resourceID, relation string) ([]relationship.RelationTarget, error) {
-	return relationTargets(ctx, s.db.QuerierFrom(ctx), resourceType, resourceID, relation)
+func (s *relationshipStore) GetRelationTargets(ctx context.Context, resourceType, resourceID, relation string) ([]relationships.RelationTarget, error) {
+	return relationTargets(ctx, s.reader(ctx), resourceType, resourceID, relation)
 }
 
 // relationTargets is the one relation-targets read: the read-side
 // GetRelationTargets runs it on the ambient querier (pool or host transaction),
 // the DecisionView's RelationTargets on the mutation transaction. Same
 // statement, same row order, same mapping.
-func relationTargets(ctx context.Context, q rowQuerier, resourceType, resourceID, relation string) ([]relationship.RelationTarget, error) {
+func relationTargets(ctx context.Context, q rowQuerier, resourceType, resourceID, relation string) ([]relationships.RelationTarget, error) {
 	const stmt = `SELECT subject_type, subject_id, subject_relation FROM iam_relationships WHERE resource_type = ? AND resource_id = ? AND relation = ?`
 	rows, err := q.Query(ctx, stmt, resourceType, resourceID, relation)
 	if err != nil {
@@ -198,13 +153,13 @@ func relationTargets(ctx context.Context, q rowQuerier, resourceType, resourceID
 	}
 	defer rows.Close()
 
-	var out []relationship.RelationTarget
+	var out []relationships.RelationTarget
 	for rows.Next() {
 		var subjectType, subjectID, subjectRelation string
 		if err := rows.Scan(&subjectType, &subjectID, &subjectRelation); err != nil {
 			return nil, tursodb.MapError(err)
 		}
-		out = append(out, relationship.RelationTarget{
+		out = append(out, relationships.RelationTarget{
 			Type:     subjectType,
 			ID:       subjectID,
 			Relation: subjectRelation,
@@ -251,7 +206,7 @@ FROM iam_relationships r
 JOIN reachable ON r.subject_type = reachable.atype AND r.subject_id = reachable.aid AND r.subject_relation = reachable.arelation
 WHERE r.resource_type = ? AND r.relation = ? AND r.resource_id IN ` + inClause(len(resourceIDs))
 
-		matched, err := queryStrings(ctx, s.db.QuerierFrom(ctx), query, args...)
+		matched, err := queryStrings(ctx, s.reader(ctx), query, args...)
 		if err != nil {
 			return nil, err
 		}
@@ -263,7 +218,7 @@ WHERE r.resource_type = ? AND r.relation = ? AND r.resource_id IN ` + inClause(l
 
 	// The distinct-state count rides every result row via the cnt cross-join, so
 	// overflow is detectable even when no resource matches (zero match rows).
-	args := []any{subjectType, subjectID, maxExpansionStates, maxExpansionStates + 1, resourceType, relation}
+	args := []any{subjectType, subjectID, maxExpansionStates + 1, resourceType, relation}
 	for _, id := range resourceIDs {
 		args = append(args, id)
 	}
@@ -277,7 +232,7 @@ matches AS (
 )
 SELECT cnt.n, m.rid FROM cnt LEFT JOIN matches m ON 1=1`
 
-	rows, err := s.db.QuerierFrom(ctx).Query(ctx, query, args...)
+	rows, err := s.reader(ctx).Query(ctx, query, args...)
 	if err != nil {
 		return nil, tursodb.MapError(err)
 	}
@@ -301,7 +256,7 @@ SELECT cnt.n, m.rid FROM cnt LEFT JOIN matches m ON 1=1`
 		return nil, tursodb.MapError(err)
 	}
 	if overflow {
-		return nil, relationship.ErrExpansionBudgetExceeded
+		return nil, relationships.ErrExpansionBudgetExceeded
 	}
 	return out, nil
 }
@@ -370,13 +325,13 @@ FROM iam_relationships r
 JOIN reachable ON r.subject_type = reachable.atype AND r.subject_id = reachable.aid AND r.subject_relation = reachable.arelation
 WHERE r.resource_type = ? AND r.relation = ? AND r.resource_id IN ` + inClause(len(resourceIDs)) + `
 ORDER BY r.resource_id`
-		return queryStrings(ctx, s.db.QuerierFrom(ctx), query, args...)
+		return queryStrings(ctx, s.reader(ctx), query, args...)
 	}
 
 	// The distinct-state count rides every result row via the cnt cross-join, so
 	// overflow is detectable even when no resource matches (zero match rows) —
 	// the same shape CheckBatchDirect uses.
-	args := []any{subjectType, subjectID, maxExpansionStates, maxExpansionStates + 1, resourceType, relation}
+	args := []any{subjectType, subjectID, maxExpansionStates + 1, resourceType, relation}
 	for _, id := range resourceIDs {
 		args = append(args, id)
 	}
@@ -390,7 +345,7 @@ matches AS (
 )
 SELECT cnt.n, m.rid FROM cnt LEFT JOIN matches m ON 1=1 ORDER BY m.rid`
 
-	rows, err := s.db.QuerierFrom(ctx).Query(ctx, query, args...)
+	rows, err := s.reader(ctx).Query(ctx, query, args...)
 	if err != nil {
 		return nil, tursodb.MapError(err)
 	}
@@ -415,7 +370,7 @@ SELECT cnt.n, m.rid FROM cnt LEFT JOIN matches m ON 1=1 ORDER BY m.rid`
 		return nil, tursodb.MapError(err)
 	}
 	if overflow {
-		return nil, relationship.ErrExpansionBudgetExceeded
+		return nil, relationships.ErrExpansionBudgetExceeded
 	}
 	return out, nil
 }
@@ -424,9 +379,9 @@ SELECT cnt.n, m.rid FROM cnt LEFT JOIN matches m ON 1=1 ORDER BY m.rid`
 // resourceIDs — the set form of GetRelationTargets, one statement per chunk of
 // at most maxSetReadIDs ids, merged into one map. An id with no targets is
 // absent from the map; a duplicated input id carries one entry.
-func (s *relationshipStore) RelationTargetsFor(ctx context.Context, resourceType string, resourceIDs []string, relation string) (map[string][]relationship.RelationTarget, error) {
+func (s *relationshipStore) RelationTargetsFor(ctx context.Context, resourceType string, resourceIDs []string, relation string) (map[string][]relationships.RelationTarget, error) {
 	ids := setReadIDs(resourceIDs)
-	out := make(map[string][]relationship.RelationTarget, len(ids))
+	out := make(map[string][]relationships.RelationTarget, len(ids))
 	if len(ids) == 0 {
 		return out, nil
 	}
@@ -440,7 +395,7 @@ func (s *relationshipStore) RelationTargetsFor(ctx context.Context, resourceType
 }
 
 // relationTargetsForChunk reads ONE bind-safe chunk into the accumulating map.
-func (s *relationshipStore) relationTargetsForChunk(ctx context.Context, resourceType string, resourceIDs []string, relation string, out map[string][]relationship.RelationTarget) error {
+func (s *relationshipStore) relationTargetsForChunk(ctx context.Context, resourceType string, resourceIDs []string, relation string, out map[string][]relationships.RelationTarget) error {
 	args := []any{resourceType, relation}
 	for _, id := range resourceIDs {
 		args = append(args, id)
@@ -448,7 +403,7 @@ func (s *relationshipStore) relationTargetsForChunk(ctx context.Context, resourc
 	query := `SELECT resource_id, subject_type, subject_id, subject_relation FROM iam_relationships
 WHERE resource_type = ? AND relation = ? AND resource_id IN ` + inClause(len(resourceIDs))
 
-	rows, err := s.db.QuerierFrom(ctx).Query(ctx, query, args...)
+	rows, err := s.reader(ctx).Query(ctx, query, args...)
 	if err != nil {
 		return tursodb.MapError(err)
 	}
@@ -459,7 +414,7 @@ WHERE resource_type = ? AND relation = ? AND resource_id IN ` + inClause(len(res
 		if err := rows.Scan(&resourceID, &subjectType, &subjectID, &subjectRelation); err != nil {
 			return tursodb.MapError(err)
 		}
-		out[resourceID] = append(out[resourceID], relationship.RelationTarget{
+		out[resourceID] = append(out[resourceID], relationships.RelationTarget{
 			Type:     subjectType,
 			ID:       subjectID,
 			Relation: subjectRelation,
@@ -468,116 +423,68 @@ WHERE resource_type = ? AND relation = ? AND resource_id IN ` + inClause(len(res
 	return tursodb.MapError(rows.Err())
 }
 
-// CreateRelationships inserts a batch as one multi-row INSERT ... ON CONFLICT DO
-// NOTHING (libsql has no UNNEST). The bare ON CONFLICT covers both unique indexes:
-// an exact-duplicate tuple AND a second, different relation for the same
-// (subject, resource) are SILENT no-ops (nil error, existing row unchanged),
-// never ErrAlreadyExists. The whole batch shares one store-stamped created_at.
-//
-// Id strategy (Q6): an ALL-empty batch omits the relationship_id column so the
-// DDL DEFAULT fills each key; an ALL-populated batch inserts the ids verbatim; a
-// MIXED batch is a loud store error (the engine mints all-or-none). There is no
-// RETURNING — the port is error-only.
-func (s *relationshipStore) CreateRelationships(ctx context.Context, in []relationship.CreateRelationship) error {
-	return createRelationships(ctx, s.db.QuerierFrom(ctx), in)
+// CreateRelationships inserts full tuples as one batch. Exact duplicates and
+// competing relations for an already-related subject retain the existing row.
+func (s *relationshipStore) CreateRelationships(ctx context.Context, in []relationships.CreateRelationship) error {
+	return s.write(ctx, func(tx *writeTx) error { return createRelationships(ctx, tx, in) })
 }
 
-func createRelationships(ctx context.Context, db tursodb.Querier, in []relationship.CreateRelationship) error {
+func createRelationships(ctx context.Context, db *writeTx, in []relationships.CreateRelationship) error {
 	if len(in) == 0 {
 		return nil
 	}
-
-	empty, populated := 0, 0
-	for _, c := range in {
-		if c.RelationshipID == "" {
-			empty++
-		} else {
-			populated++
+	for _, row := range in {
+		if err := row.Validate(); err != nil {
+			return err
 		}
 	}
-	if empty > 0 && populated > 0 {
-		return fmt.Errorf("authorization turso store: mixed relationship_id batch (%d empty, %d populated) — the engine mints all-or-none: %w", empty, populated, sdk.ErrInvalidInput)
-	}
-	withID := populated > 0
 
-	cols := "resource_type, resource_id, relation, subject_type, subject_id, subject_relation, created_at"
-	row := "(?, ?, ?, ?, ?, ?, ?)"
-	if withID {
-		cols = "relationship_id, " + cols
-		row = "(?, ?, ?, ?, ?, ?, ?, ?)"
-	}
-
-	now := tursodb.FormatTime(time.Now().UTC())
+	const cols = "resource_type, resource_id, relation, subject_type, subject_id, subject_relation"
+	const row = "(?, ?, ?, ?, ?, ?)"
 	var buf strings.Builder
 	fmt.Fprintf(&buf, "INSERT INTO iam_relationships (%s) VALUES ", cols)
-	args := make([]any, 0, len(in)*8)
+	args := make([]any, 0, len(in)*6)
 	for i, c := range in {
 		if i > 0 {
 			buf.WriteString(", ")
 		}
 		buf.WriteString(row)
-		if withID {
-			args = append(args, c.RelationshipID)
-		}
-		args = append(args, c.ResourceType, c.ResourceID, c.Relation, c.SubjectType, c.SubjectID, c.SubjectRelation, now)
+		args = append(args, c.ResourceType, c.ResourceID, c.Relation, c.SubjectType, c.SubjectID, c.SubjectRelation)
 	}
 	buf.WriteString(" ON CONFLICT DO NOTHING")
 
-	if _, err := db.Exec(ctx, buf.String(), args...); err != nil {
+	if _, err := db.relationships(ctx, audit.ActionAdded, buf.String(), args...); err != nil {
 		return err
 	}
 	return nil
 }
 
-// SetRelationTargets reconciles one resource+relation (conflict probe,
-// delete-surplus, insert-missing) inside a BEGIN IMMEDIATE transaction.
-// Competing writers serialize at the write intent before reading, so concurrent
-// desired-state moves cannot commit an accidental union.
-//
-// Which transaction is the port's ambient contract: when ctx carries the
-// connector's Transact-owned transaction the reconciliation runs ON it — no
-// begin, no commit, no rollback here; the host's callback return decides, and
-// the host must return this method's error (sdk.ErrConflict included) to roll
-// its own preceding work back. The write lock the host's BEGIN IMMEDIATE holds
-// is released at the HOST's commit, so a competing caller waits for the whole
-// host workflow. There is NO busy retry on the ambient path: retryBusy re-runs
-// the whole transaction, which is only sound when the store owns it; inside a
-// BEGIN IMMEDIATE transaction the write lock is already held so SQLITE_BUSY is
-// not expected, and if one surfaces it is returned as-is for the host to
-// propagate. Without an ambient transaction the store opens and owns one under
-// the bounded busy retry exactly as before — retrying is naturally safe because
-// the operation describes state, not a one-time occurrence.
-func (s *relationshipStore) SetRelationTargets(ctx context.Context, resourceType, resourceID, relationName string, in []relationship.CreateRelationship) error {
-	desired := make(map[relationship.SubjectRef]relationship.CreateRelationship, len(in))
+// SetRelationTargets atomically reconciles one resource and relation. Ambient
+// calls use a savepoint; locks remain held until the host transaction ends.
+func (s *relationshipStore) SetRelationTargets(ctx context.Context, resourceType, resourceID, relationName string, in []relationships.CreateRelationship) error {
+	desired := make(map[relationships.SubjectRef]relationships.CreateRelationship, len(in))
 	for _, c := range in {
+		if err := c.Validate(); err != nil {
+			return err
+		}
 		if c.ResourceType != resourceType || c.ResourceID != resourceID || c.Relation != relationName {
 			return fmt.Errorf("authorization turso store: SetRelationTargets row is outside requested scope: %w", sdk.ErrInvalidInput)
 		}
 		desired[c.Subject()] = c
 	}
-	rows := make([]relationship.CreateRelationship, 0, len(desired))
+	rows := make([]relationships.CreateRelationship, 0, len(desired))
 	for _, c := range desired {
 		rows = append(rows, c)
 	}
 
-	if tx, ok := tursodb.TxFromContext(ctx); ok {
+	return s.write(ctx, func(tx *writeTx) error {
 		return s.setRelationTargetsTx(ctx, tx, resourceType, resourceID, relationName, rows)
-	}
-	return retryBusy(ctx, func() error {
-		return s.db.InTx(ctx, func(tx *tursodb.Tx) error {
-			return s.setRelationTargetsTx(ctx, tx, resourceType, resourceID, relationName, rows)
-		})
 	})
 }
 
-// setRelationTargetsTx is the reconciliation body over an OPEN transaction —
-// the store's own (standalone) or the host's (ambient). It probes for a desired
-// target already holding a different relation (sdk.ErrConflict), deletes the
-// surplus rows, and inserts the missing ones. It never commits or rolls back:
-// the caller that owns tx does.
-func (s *relationshipStore) setRelationTargetsTx(ctx context.Context, tx *tursodb.Tx, resourceType, resourceID, relationName string, rows []relationship.CreateRelationship) error {
+func (s *relationshipStore) setRelationTargetsTx(ctx context.Context, tx *writeTx, resourceType, resourceID, relationName string, rows []relationships.CreateRelationship) error {
 	if len(rows) == 0 {
-		_, err := tx.Exec(ctx, `DELETE FROM iam_relationships WHERE resource_type = ? AND resource_id = ? AND relation = ?`, resourceType, resourceID, relationName)
+		_, err := tx.relationships(ctx, audit.ActionRemoved, `DELETE FROM iam_relationships WHERE resource_type = ? AND resource_id = ? AND relation = ?`, resourceType, resourceID, relationName)
 		return tursodb.MapError(err)
 	}
 
@@ -606,7 +513,7 @@ func (s *relationshipStore) setRelationTargetsTx(ctx context.Context, tx *tursod
 	deleteArgs := []any{resourceType, resourceID, relationName}
 	deleteArgs = append(deleteArgs, args...)
 	deleteQ := `DELETE FROM iam_relationships WHERE resource_type = ? AND resource_id = ? AND relation = ? AND NOT (` + pred + `)`
-	if _, err := tx.Exec(ctx, deleteQ, deleteArgs...); err != nil {
+	if _, err := tx.relationships(ctx, audit.ActionRemoved, deleteQ, deleteArgs...); err != nil {
 		return tursodb.MapError(err)
 	}
 	return createRelationships(ctx, tx, rows)
@@ -615,30 +522,38 @@ func (s *relationshipStore) setRelationTargetsTx(ctx context.Context, tx *tursod
 // DeleteResourceRelationships removes every tuple for a resource (idempotent).
 func (s *relationshipStore) DeleteResourceRelationships(ctx context.Context, resourceType, resourceID string) error {
 	const q = `DELETE FROM iam_relationships WHERE resource_type = ? AND resource_id = ?`
-	_, err := s.db.QuerierFrom(ctx).Exec(ctx, q, resourceType, resourceID)
-	return err
+	return s.write(ctx, func(tx *writeTx) error {
+		_, err := tx.relationships(ctx, audit.ActionRemoved, q, resourceType, resourceID)
+		return err
+	})
 }
 
 // DeleteRelationshipTarget removes one exact tuple, including subject_relation.
-func (s *relationshipStore) DeleteRelationshipTarget(ctx context.Context, resourceType, resourceID, relationName string, target relationship.SubjectRef) error {
+func (s *relationshipStore) DeleteRelationshipTarget(ctx context.Context, resourceType, resourceID, relationName string, target relationships.SubjectRef) error {
 	const q = `DELETE FROM iam_relationships WHERE resource_type = ? AND resource_id = ? AND relation = ? AND subject_type = ? AND subject_id = ? AND subject_relation = ?`
-	_, err := s.db.QuerierFrom(ctx).Exec(ctx, q, resourceType, resourceID, relationName, target.Type, target.ID, target.Relation)
-	return err
+	return s.write(ctx, func(tx *writeTx) error {
+		_, err := tx.relationships(ctx, audit.ActionRemoved, q, resourceType, resourceID, relationName, target.Type, target.ID, target.Relation)
+		return err
+	})
 }
 
 // DeleteRelationship removes one exact tuple (idempotent — absent is nil).
 func (s *relationshipStore) DeleteRelationship(ctx context.Context, resourceType, resourceID, relation, subjectType, subjectID string) error {
 	const q = `DELETE FROM iam_relationships WHERE resource_type = ? AND resource_id = ? AND relation = ? AND subject_type = ? AND subject_id = ?`
-	_, err := s.db.QuerierFrom(ctx).Exec(ctx, q, resourceType, resourceID, relation, subjectType, subjectID)
-	return err
+	return s.write(ctx, func(tx *writeTx) error {
+		_, err := tx.relationships(ctx, audit.ActionRemoved, q, resourceType, resourceID, relation, subjectType, subjectID)
+		return err
+	})
 }
 
 // DeleteByResourceAndSubject removes every relation a subject holds on a resource
 // (idempotent).
 func (s *relationshipStore) DeleteByResourceAndSubject(ctx context.Context, resourceType, resourceID, subjectType, subjectID string) error {
 	const q = `DELETE FROM iam_relationships WHERE resource_type = ? AND resource_id = ? AND subject_type = ? AND subject_id = ?`
-	_, err := s.db.QuerierFrom(ctx).Exec(ctx, q, resourceType, resourceID, subjectType, subjectID)
-	return err
+	return s.write(ctx, func(tx *writeTx) error {
+		_, err := tx.relationships(ctx, audit.ActionRemoved, q, resourceType, resourceID, subjectType, subjectID)
+		return err
+	})
 }
 
 // CountByResourceAndRelation counts DIRECT tuples only — never expanded
@@ -652,9 +567,16 @@ func (s *relationshipStore) CountByResourceAndRelation(ctx context.Context, reso
 	return n, nil
 }
 
-// ListRelationshipsBySubject pages the resources a subject relates to (created_at
-// DESC, relationship_id DESC).
-func (s *relationshipStore) ListRelationshipsBySubject(ctx context.Context, subjectType, subjectID string, filter relationship.SubjectRelationshipFilter, req crud.ListRequest) (crud.Page[relationship.SubjectRelationship], error) {
+// relationshipsBaseSQL exposes the computed key to the outer keyset predicate.
+func relationshipsBaseSQL(columns, where string) string {
+	return `SELECT ` + columns + `, tuple_key FROM (
+    SELECT ` + columns + `, ` + tupleKeyExpr + ` AS tuple_key
+    FROM iam_relationships ` + where + `
+) AS r WHERE 1 = 1`
+}
+
+// ListRelationshipsBySubject pages complete tuple identities in byte order.
+func (s *relationshipStore) ListRelationshipsBySubject(ctx context.Context, subjectType, subjectID string, filter relationships.SubjectRelationshipFilter, req list.Request) (list.Page[relationships.SubjectRelationship], error) {
 	where := "WHERE subject_type = ? AND subject_id = ?"
 	args := []any{subjectType, subjectID}
 	if filter.ResourceType != nil {
@@ -666,24 +588,23 @@ func (s *relationshipStore) ListRelationshipsBySubject(ctx context.Context, subj
 		args = append(args, *filter.Relation)
 	}
 	q := tursodb.ListQuery[subjectRelationshipRow]{
-		BaseSQL:      `SELECT relationship_id, resource_type, resource_id, relation, created_at FROM iam_relationships ` + where,
+		BaseSQL:      relationshipsBaseSQL("resource_type, resource_id, relation, subject_relation", where),
 		Args:         args,
-		OrderFields:  relationship.OrderFields,
-		DefaultOrder: relationship.DefaultOrder,
-		PK:           "relationship_id",
-		OrderValueOf: func(r subjectRelationshipRow, _ string) any { return r.CreatedAt.Time },
-		PKOf:         func(r subjectRelationshipRow) string { return r.ID },
+		OrderFields:  relationships.OrderFields,
+		DefaultOrder: relationships.DefaultOrder,
+		PK:           "tuple_key",
+		OrderValueOf: func(r subjectRelationshipRow, _ string) any { return r.TupleKey },
+		PKOf:         func(r subjectRelationshipRow) string { return r.TupleKey },
 	}
 	page, err := tursodb.List(ctx, s.db.QuerierFrom(ctx), q, req)
 	if err != nil {
-		return crud.Page[relationship.SubjectRelationship]{}, err
+		return list.Page[relationships.SubjectRelationship]{}, err
 	}
-	return crud.MapPage(page, subjectRelationshipRow.toDomain), nil
+	return list.MapPage(page, subjectRelationshipRow.toDomain), nil
 }
 
-// ListRelationshipsByResource pages the subjects related to a resource (created_at
-// DESC, relationship_id DESC).
-func (s *relationshipStore) ListRelationshipsByResource(ctx context.Context, resourceType, resourceID string, filter relationship.ResourceRelationshipFilter, req crud.ListRequest) (crud.Page[relationship.ResourceRelationship], error) {
+// ListRelationshipsByResource pages complete tuple identities in byte order.
+func (s *relationshipStore) ListRelationshipsByResource(ctx context.Context, resourceType, resourceID string, filter relationships.ResourceRelationshipFilter, req list.Request) (list.Page[relationships.ResourceRelationship], error) {
 	where := "WHERE resource_type = ? AND resource_id = ?"
 	args := []any{resourceType, resourceID}
 	if filter.SubjectType != nil {
@@ -695,19 +616,19 @@ func (s *relationshipStore) ListRelationshipsByResource(ctx context.Context, res
 		args = append(args, *filter.Relation)
 	}
 	q := tursodb.ListQuery[resourceRelationshipRow]{
-		BaseSQL:      `SELECT relationship_id, subject_type, subject_id, relation, created_at FROM iam_relationships ` + where,
+		BaseSQL:      relationshipsBaseSQL("subject_type, subject_id, relation, subject_relation", where),
 		Args:         args,
-		OrderFields:  relationship.OrderFields,
-		DefaultOrder: relationship.DefaultOrder,
-		PK:           "relationship_id",
-		OrderValueOf: func(r resourceRelationshipRow, _ string) any { return r.CreatedAt.Time },
-		PKOf:         func(r resourceRelationshipRow) string { return r.ID },
+		OrderFields:  relationships.OrderFields,
+		DefaultOrder: relationships.DefaultOrder,
+		PK:           "tuple_key",
+		OrderValueOf: func(r resourceRelationshipRow, _ string) any { return r.TupleKey },
+		PKOf:         func(r resourceRelationshipRow) string { return r.TupleKey },
 	}
 	page, err := tursodb.List(ctx, s.db.QuerierFrom(ctx), q, req)
 	if err != nil {
-		return crud.Page[relationship.ResourceRelationship]{}, err
+		return list.Page[relationships.ResourceRelationship]{}, err
 	}
-	return crud.MapPage(page, resourceRelationshipRow.toDomain), nil
+	return list.MapPage(page, resourceRelationshipRow.toDomain), nil
 }
 
 // lookupResourceIDsSQL renders the direct-relation keyset lookup and its args.
@@ -748,7 +669,7 @@ func (s *relationshipStore) LookupResourceIDs(ctx context.Context, resourceType 
 		return nil, nil
 	}
 	query, args := lookupResourceIDsSQL(resourceType, relations, subjectType, subjectID, after, limit)
-	return queryStrings(ctx, s.db.QuerierFrom(ctx), query, args...)
+	return queryStrings(ctx, s.reader(ctx), query, args...)
 }
 
 // lookupResourceIDsByRelationTargetSQL renders the relation-target keyset lookup
@@ -775,7 +696,7 @@ func (s *relationshipStore) LookupResourceIDsByRelationTarget(ctx context.Contex
 		return nil, nil
 	}
 	query, args := lookupResourceIDsByRelationTargetSQL(resourceType, relation, targetType, targetIDs, after, limit)
-	return queryStrings(ctx, s.db.QuerierFrom(ctx), query, args...)
+	return queryStrings(ctx, s.reader(ctx), query, args...)
 }
 
 // lookupDescendantResourceIDsSQL renders the descendant-closure statement and its
@@ -824,7 +745,7 @@ func (s *relationshipStore) LookupDescendantResourceIDs(ctx context.Context, res
 		return nil, nil
 	}
 	query, args := lookupDescendantResourceIDsSQL(resourceType, relations, subjectType, rootIDs, after, limit)
-	return queryStrings(ctx, s.db.QuerierFrom(ctx), query, args...)
+	return queryStrings(ctx, s.reader(ctx), query, args...)
 }
 
 // withLimit appends a bounded ` LIMIT ?` and its argument when limit is positive
@@ -835,4 +756,8 @@ func withLimit(query string, args []any, limit int) (string, []any) {
 		return query + "\nLIMIT ?", append(args, limit)
 	}
 	return query, args
+}
+
+func (s *relationshipStore) write(ctx context.Context, fn func(*writeTx) error) error {
+	return runWrite(ctx, s.db, config{audit: s.audit}, fn)
 }

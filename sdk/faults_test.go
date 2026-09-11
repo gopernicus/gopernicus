@@ -74,6 +74,30 @@ func TestValidationError_AddAndErr(t *testing.T) {
 	}
 }
 
+func TestValidationError_AddViolation(t *testing.T) {
+	var collected ValidationError
+	collected.AddViolation(nil)
+	if collected.Err() != nil {
+		t.Fatal("a successful validator must not produce an error")
+	}
+	violation := Violation{Field: "name", Code: CodeRequired, Message: "name is required"}
+	collected.AddViolation(&violation)
+	collected.AddViolation(nil)
+	// A caller can reuse or change its result without changing an already
+	// collected response.
+	violation.Message = "changed"
+	collected.Add("email", CodeInvalidFormat, "email is malformed")
+
+	err := fmt.Errorf("create: %w", collected.Err())
+	var got *ValidationError
+	if !errors.Is(err, ErrInvalidInput) || !errors.As(err, &got) {
+		t.Fatalf("wrapped collector lost its error contract: %v", err)
+	}
+	if len(got.Violations) != 2 || got.Violations[0].Message != "name is required" || got.Violations[1].Field != "email" {
+		t.Fatalf("collected violations = %+v", got.Violations)
+	}
+}
+
 // TestValidationError_ErrEmptyIsUntypedNil pins the typed-nil trap: a caller
 // doing `if err := ve.Err(); err != nil` must not fire on an empty collector.
 func TestValidationError_ErrEmptyIsUntypedNil(t *testing.T) {

@@ -27,7 +27,7 @@ Gopernicus is open source under the [MIT License](https://github.com/gopernicus/
 ## The package collection
 
 <div class="docs-cards">
-  <a class="docs-card" href="./sdk/overview"><strong>SDK</strong><span>A stdlib-only kernel with foundation mechanics, capabilities, and the pocket-mount contract.</span></a>
+  <a class="docs-card" href="./sdk/overview"><strong>SDK</strong><span>A stdlib-only kernel with pkg mechanisms, capabilities, and the pocket-mount contract.</span></a>
   <a class="docs-card" href="./pockets/overview"><strong>Pockets</strong><span>Datastore-free modules for authentication, authorization, CMS, events, and jobs.</span></a>
   <a class="docs-card" href="./integrations/catalog"><strong>Integrations</strong><span>Separate modules for databases, Redis, OAuth, storage, email, tracing, IDs, and scheduling.</span></a>
   <a class="docs-card" href="./ui/react"><strong>UI options</strong><span>Use the API alone, connect a React/TanStack client, or add the optional GOTH presentation system.</span></a>
@@ -57,9 +57,9 @@ The packages can be composed at different boundaries:
 
 | Application shape | Gopernicus provides | The host or client provides |
 |---|---|---|
-| API only | HTTP foundation, JSON responses, pocket routes, capabilities, stores, and OpenAPI description | application routes, client applications, deployment, and UI |
+| API only | HTTP packages, JSON responses, pocket routes, capabilities and stores | application routes, client applications, deployment, and UI |
 | API plus React | the same API and contracts | React components, TanStack Query/Router, browser state, and asset pipeline |
-| API plus Go UI | HTTP foundation plus an optional UI package and pocket view adapter | page composition, theme choices, asset routes, and lifecycle |
+| API plus Go UI | HTTP packages plus an optional UI package and pocket view adapter | page composition, theme choices, asset routes, and lifecycle |
 
 These are composition choices, not separate editions. See [React and TanStack](ui/react.md) for the API-only client pattern and [GOTH UI](ui/goth.md) for the optional Go presentation package.
 

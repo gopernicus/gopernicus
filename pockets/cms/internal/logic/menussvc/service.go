@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/gopernicus/gopernicus/pockets/cms/domain/menus"
-	"github.com/gopernicus/gopernicus/sdk/foundation/cryptids"
+	"github.com/gopernicus/gopernicus/sdk"
 )
 
 // Clock returns the current time. Injected so tests can pin timestamps.
@@ -19,13 +19,13 @@ type Service struct {
 	repo menus.MenuRepository
 	// ids is the app-chosen entity-ID strategy (cms.Config.IDs); zero value →
 	// default nanoids.
-	ids   cryptids.IDGenerator
+	ids   sdk.IDGenerator
 	clock Clock
 }
 
 // NewService constructs a Service. A nil clock defaults to time.Now. ids is the
 // app's entity-ID strategy (cms.Config.IDs).
-func NewService(repo menus.MenuRepository, ids cryptids.IDGenerator, clock Clock) *Service {
+func NewService(repo menus.MenuRepository, ids sdk.IDGenerator, clock Clock) *Service {
 	if clock == nil {
 		clock = time.Now
 	}

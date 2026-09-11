@@ -3,7 +3,7 @@ package cms
 import (
 	"testing"
 
-	"github.com/gopernicus/gopernicus/sdk/foundation/environment"
+	"github.com/gopernicus/gopernicus/sdk/pkg/environment"
 )
 
 // TestConfigEnvTags pins the CMS_* keys on Config: the contact-notification

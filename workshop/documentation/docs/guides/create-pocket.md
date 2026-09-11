@@ -21,19 +21,18 @@ The emitted tree is a born-conforming CRUD-shaped starting point:
 ```text
 notes/
   notes.go
-  domain/note/
-  internal/logic/notesvc/
-  memstore/
-  storetest/
+  logic/note/
+  stores/memory/
+  stores/storetest/
   stores/pgx/
   stores/turso/
 ```
 
 It is not generated forever. Rename, split, and replace the placeholder aggregate with the real domain language.
 
-## Design the public rim first
+## Design the public logic contracts first
 
-The domain package is a compatibility promise. Define:
+The public logic package is a compatibility promise. Define:
 
 - entity/value types and their valid construction;
 - repository operations the pocket actually consumes;
@@ -46,47 +45,44 @@ Document repository contracts in their Go doc comments. Those comments plus `sto
 
 Avoid returning a database driver's types or accepting a generic “query anything” handle. A public port should remain meaningful across memory, pgx, and Turso.
 
-## Seal services
+## Expose complete use cases
 
-Put policy in `internal/logic/<domain>svc`. The root pocket package constructs those services and selectively exposes the driving surface through a public `Service`.
-
-The root socket should make dependencies visible:
+The scaffold's `note.Service` lives in `logic/note`, beside its entity and
+`Storer` port. It implements use cases directly with private fields. The root
+only assembles it from the host's repositories. Hosts may use either constructor:
 
 ```go
-type Repositories struct {
-    Notes note.Repository
-}
+// Root composition:
+func NewService(repos Repositories, opts ...note.Option) (*note.Service, error)
 
-type Config struct {
-    IDs cryptids.IDGenerator
-}
-
-type Service struct {
-    // unexported domain service
-}
-
-func NewService(repos Repositories, cfg Config) (*Service, error)
-func (s *Service) Register(m pocket.Mount) error
+// Public logic/note package:
+func NewService(store Storer, opts ...Option) (*Service, error)
 ```
 
-Every config field must state required, safe-default, or deny-by-absence behavior.
+A larger pocket can return named `Components` instead of combining every method
+onto a root service. Keep logic independent of transport and root composition.
+
+Required dependencies stay explicit. The generated `WithIDs` option selects the
+ID generator; omitting it uses the SDK default. Options configure private state
+before construction and document defaults, nil values and ordering. Coherent
+policy or connection records can remain configuration structs when useful.
 
 ## Add inbound delivery only when needed
 
-Workshop's pocket scaffold registers no routes. If the pocket owns an HTTP surface:
+Workshop's pocket scaffold has no routes or placeholder `Register` method. If the pocket owns an HTTP surface:
 
-1. place handlers in `internal/inbound/<pocket>`;
-2. accept only the one-method `pocket.RouteRegistrar`;
+1. place the public adapter in `inbound/http`, with private handler helpers;
+2. accept only the one-method `pockets.RouteRegistrar`;
 3. use `web.Decode`, responders, render, and error mapping;
 4. document the literal route table and conventional namespace;
-5. return use cases on `Service` so HTTP is not the only entry point;
+5. expose use cases through public logic services and middleware through the adapter;
 6. start no process-owned goroutine from `Register`.
 
 If HTML is optional, define a technology-neutral `Views` interface in the core. Put the GOTH implementation in a sibling `views/goth` module. Nil views should remove the HTML surface structurally.
 
 ## Turn repository behavior into conformance
 
-Build `storetest.Run` around externally observable behavior, including difficult edges:
+Build `storetest.Run` in `stores/storetest` around externally observable behavior, including difficult edges:
 
 - create/get/list/delete and error classes;
 - ordering, search, cursors, offset, counts, and page limits;
@@ -118,7 +114,7 @@ Inside this repository, add the core and two store modules to:
 - `go.work`;
 - `MODULES` and `STORE_MODULES` in the root Makefile;
 - `test-stores` live legs;
-- the hardcoded pocket list in `guard-pocket-core-sdk-only`.
+- the hardcoded pocket list in `guard-pocket-dependencies`.
 
 Workshop prints this checklist when it detects a workspace target. Add view modules and examples if your pocket has them.
 

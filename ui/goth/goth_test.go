@@ -11,7 +11,7 @@ import (
 )
 
 func TestNewDefaults(t *testing.T) {
-	b, err := New(Config{})
+	b, err := New()
 	if err != nil {
 		t.Fatalf("New(zero): %v", err)
 	}
@@ -43,7 +43,7 @@ func TestNewAssetBasePath(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			b, err := New(Config{AssetBasePath: tt.in})
+			b, err := New(WithAssetBasePath(tt.in))
 			if tt.wantErr {
 				if err == nil {
 					t.Fatalf("New(%q) = nil error, want error", tt.in)
@@ -94,7 +94,7 @@ func TestNewThemeStylesheetPathValidation(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			b, err := New(Config{ThemeStylesheetPath: tt.in})
+			b, err := New(WithThemeStylesheetPath(tt.in))
 			if tt.wantErr {
 				if err == nil {
 					t.Fatalf("New(ThemeStylesheetPath=%q) = nil error, want error", tt.in)
@@ -112,7 +112,7 @@ func TestNewThemeStylesheetPathValidation(t *testing.T) {
 }
 
 func TestNewUnknownProfile(t *testing.T) {
-	b, err := New(Config{Profile: Profile(99)})
+	b, err := New(WithProfile(Profile(99)))
 	if err == nil {
 		t.Fatalf("New(unknown profile) = nil error, want error")
 	}
@@ -131,7 +131,7 @@ func TestRequirementsByProfile(t *testing.T) {
 		{Full, true},
 	}
 	for _, tt := range tests {
-		b, err := New(Config{Profile: tt.profile})
+		b, err := New(WithProfile(tt.profile))
 		if err != nil {
 			t.Fatalf("New(profile %v): %v", tt.profile, err)
 		}
@@ -224,7 +224,7 @@ func TestParseManifest(t *testing.T) {
 // TestEmbeddedManifestHasFourAssets proves the committed manifest carries exactly
 // the four logical assets the amended asset pipeline emits.
 func TestEmbeddedManifestHasFourAssets(t *testing.T) {
-	b, err := New(Config{})
+	b, err := New()
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -240,7 +240,7 @@ func TestEmbeddedManifestHasFourAssets(t *testing.T) {
 }
 
 func TestDocumentRenderSpecimen(t *testing.T) {
-	b, err := New(Config{})
+	b, err := New()
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -284,7 +284,7 @@ func TestDocumentRenderSpecimen(t *testing.T) {
 // parses the real committed manifest and Head emits external, fingerprinted,
 // SRI-guarded links for each profile asset.
 func TestHeadRendersEmbeddedManifestAssets(t *testing.T) {
-	b, err := New(Config{Profile: Full})
+	b, err := New(WithProfile(Full))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -331,7 +331,7 @@ func TestHeadProfileAwareAssetSelection(t *testing.T) {
 		{Full, true, true},
 	}
 	for _, tt := range tests {
-		b, err := New(Config{Profile: tt.profile})
+		b, err := New(WithProfile(tt.profile))
 		if err != nil {
 			t.Fatalf("New(%v): %v", tt.profile, err)
 		}
@@ -373,7 +373,7 @@ func TestProfileScriptEmission(t *testing.T) {
 		{Full, true, true, true},
 	}
 	for _, tt := range tests {
-		b, err := New(Config{Profile: tt.profile})
+		b, err := New(WithProfile(tt.profile))
 		if err != nil {
 			t.Fatalf("New(%v): %v", tt.profile, err)
 		}
@@ -399,7 +399,7 @@ func TestProfileScriptEmission(t *testing.T) {
 // kit's embedded default theme (theme-default.css) as a stylesheet link AFTER the
 // kit stylesheet, carrying integrity + crossorigin, and before any script.
 func TestHeadDefaultThemeLink(t *testing.T) {
-	b, err := New(Config{Profile: Full})
+	b, err := New(WithProfile(Full))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -431,7 +431,7 @@ func TestHeadDefaultThemeLink(t *testing.T) {
 // know host bytes) and the kit's default theme asset is NOT linked.
 func TestHeadHostThemeLink(t *testing.T) {
 	const hostPath = "/static/brand-theme.css"
-	b, err := New(Config{Profile: Full, ThemeStylesheetPath: hostPath})
+	b, err := New(WithProfile(Full), WithThemeStylesheetPath(hostPath))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -467,11 +467,7 @@ func TestHeadHostThemeLink(t *testing.T) {
 
 // ExampleNew shows the frozen construction call. It compiles as public-API proof.
 func ExampleNew() {
-	bundle, err := New(Config{
-		AssetBasePath:       "/assets/goth",
-		Profile:             Full,
-		ThemeStylesheetPath: "/static/brand-theme.css",
-	})
+	bundle, err := New(WithAssetBasePath("/assets/goth"), WithProfile(Full), WithThemeStylesheetPath("/static/brand-theme.css"))
 	if err != nil {
 		return
 	}

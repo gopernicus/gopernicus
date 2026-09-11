@@ -8,8 +8,6 @@ import (
 	"time"
 
 	"github.com/gopernicus/gopernicus/sdk"
-	"github.com/gopernicus/gopernicus/sdk/foundation/cryptids"
-	"github.com/gopernicus/gopernicus/sdk/foundation/slug"
 )
 
 // Kind distinguishes hierarchical categories from flat tags.
@@ -36,9 +34,9 @@ type Term struct {
 }
 
 // NewTerm validates inputs, generates a slug, mints its ID from ids (empty under
-// cryptids.Database — the store then assigns the key), and returns a new Term.
+// sdk.DatabaseID — the store then assigns the key), and returns a new Term.
 // ParentID is ignored for tags. Validation failures wrap sdk.ErrInvalidInput.
-func NewTerm(ids cryptids.IDGenerator, kind Kind, name, parentID string, now time.Time) (Term, error) {
+func NewTerm(ids sdk.IDGenerator, kind Kind, name, parentID string, now time.Time) (Term, error) {
 	name = strings.TrimSpace(name)
 	if err := validate(kind, name); err != nil {
 		return Term{}, err
@@ -51,7 +49,7 @@ func NewTerm(ids cryptids.IDGenerator, kind Kind, name, parentID string, now tim
 	return Term{
 		ID:        ids.MustGenerate(),
 		Kind:      kind,
-		Slug:      slug.Make(name),
+		Slug:      sdk.Slugify(name),
 		Name:      name,
 		ParentID:  strings.TrimSpace(parentID),
 		CreatedAt: now,
@@ -75,7 +73,7 @@ func (t *Term) ApplyEdit(name, parentID string, now time.Time) error {
 	}
 
 	t.Name = name
-	t.Slug = slug.Make(name)
+	t.Slug = sdk.Slugify(name)
 	t.ParentID = parentID
 	t.UpdatedAt = now.UTC()
 	return nil
@@ -88,7 +86,7 @@ func validate(kind Kind, name string) error {
 	if name == "" {
 		return fmt.Errorf("name is required: %w", sdk.ErrInvalidInput)
 	}
-	if slug.Make(name) == "" {
+	if sdk.Slugify(name) == "" {
 		return fmt.Errorf("name must contain an alphanumeric character: %w", sdk.ErrInvalidInput)
 	}
 	return nil

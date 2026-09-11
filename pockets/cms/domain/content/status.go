@@ -4,7 +4,6 @@ import (
 	"fmt"
 
 	"github.com/gopernicus/gopernicus/sdk"
-	"github.com/gopernicus/gopernicus/sdk/foundation/slug"
 )
 
 // Status is an entry's publication state.
@@ -26,7 +25,7 @@ func validate(title string, status Status) error {
 	if title == "" {
 		return fmt.Errorf("title is required: %w", sdk.ErrInvalidInput)
 	}
-	if slug.Make(title) == "" {
+	if sdk.Slugify(title) == "" {
 		return fmt.Errorf("title must contain at least one alphanumeric character: %w", sdk.ErrInvalidInput)
 	}
 	if !status.Valid() {

@@ -7,7 +7,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/gopernicus/gopernicus/sdk"
-	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
+	"github.com/gopernicus/gopernicus/sdk/pkg/list"
 )
 
 // searchArg is the connector-reserved named argument AddSearchClause binds. It is
@@ -21,10 +21,11 @@ const searchArg = "list_search"
 // predicate does not depend on the server's standard_conforming_strings setting.
 const searchEscape = `\`
 
-// AddSearchClause appends a case-insensitive LITERAL-substring predicate over
-// fields and binds @list_search. It writes WHERE when buf holds no WHERE clause
-// yet and AND otherwise — the same rule ApplyCursorPagination follows, so the two
-// compose in either order.
+// AddSearchClause wraps the complete SELECT in buf with an outer literal,
+// case-insensitive substring predicate. Fields must name projected, unqualified
+// text columns. Call before final ORDER BY / LIMIT / OFFSET; existing arguments
+// remain in place. Blank terms are a no-op; a nonblank term without searchable
+// fields returns sdk.ErrInvalidInput.
 //
 // The generated predicate is:
 //
@@ -40,7 +41,7 @@ const searchEscape = `\`
 //     not restored.
 //   - **COLLATE "C" pins the fold.** ILIKE under a non-deterministic collation is
 //     an error, and under a locale collation its folding would diverge from
-//     SQLite's LIKE and from crud.MatchesSearch. The C collation gives the
+//     SQLite's LIKE and from list.MatchesSearch. The C collation gives the
 //     ASCII-only fold all three agree on.
 //   - **Columns are quoted through QuoteIdentifier**, so a column name that is not
 //     a valid identifier is an error rather than an injection point.
@@ -49,7 +50,7 @@ const searchEscape = `\`
 // nothing. A NON-blank term with no fields is sdk.ErrInvalidInput — a list that
 // declares nothing searchable must not answer a search with an unfiltered page
 // that looks like a result.
-func AddSearchClause(buf *strings.Builder, args pgx.NamedArgs, fields []crud.SearchField, term string) error {
+func AddSearchClause(buf *strings.Builder, args pgx.NamedArgs, fields []list.SearchField, term string) error {
 	term = strings.TrimSpace(term)
 	if term == "" {
 		return nil
@@ -71,11 +72,7 @@ func AddSearchClause(buf *strings.Builder, args pgx.NamedArgs, fields []crud.Sea
 			fmt.Sprintf(`(%s COLLATE "C") ILIKE @%s ESCAPE '%s'`, quoted, searchArg, searchEscape))
 	}
 
-	if strings.Contains(strings.ToUpper(buf.String()), "WHERE") {
-		buf.WriteString(" AND ")
-	} else {
-		buf.WriteString(" WHERE ")
-	}
+	beginListPredicate(buf)
 	buf.WriteString("(" + strings.Join(predicates, " OR ") + ")")
 
 	args[searchArg] = "%" + EscapeSearchTerm(term) + "%"

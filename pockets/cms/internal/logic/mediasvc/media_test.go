@@ -11,9 +11,7 @@ import (
 	"time"
 
 	"github.com/gopernicus/gopernicus/pockets/cms/domain/media"
-
 	"github.com/gopernicus/gopernicus/sdk"
-	"github.com/gopernicus/gopernicus/sdk/foundation/cryptids"
 )
 
 // fakeAssets is an in-memory AssetRepository.
@@ -74,7 +72,7 @@ func TestMedia_UploadOpenDelete(t *testing.T) {
 	ctx := context.Background()
 	blobs := newMemBlobs()
 	now := time.Date(2026, 6, 22, 0, 0, 0, 0, time.UTC)
-	svc := NewService(newFakeAssets(), blobs, cryptids.IDGenerator{}, func() time.Time { return now })
+	svc := NewService(newFakeAssets(), blobs, sdk.IDGenerator{}, func() time.Time { return now })
 
 	content := "PNG-BYTES"
 	a, err := svc.Upload(ctx, "My Logo.PNG", "image/png", int64(len(content)), strings.NewReader(content))
@@ -118,7 +116,7 @@ func TestMedia_UploadOpenDelete(t *testing.T) {
 
 func TestMedia_UploadValidation(t *testing.T) {
 	ctx := context.Background()
-	svc := NewService(newFakeAssets(), newMemBlobs(), cryptids.IDGenerator{}, nil)
+	svc := NewService(newFakeAssets(), newMemBlobs(), sdk.IDGenerator{}, nil)
 
 	if _, err := svc.Upload(ctx, "", "image/png", 1, strings.NewReader("x")); !errors.Is(err, sdk.ErrInvalidInput) {
 		t.Errorf("blank filename: %v", err)

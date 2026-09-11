@@ -15,7 +15,7 @@ import (
 // is exercised.
 type failingEmitter struct{}
 
-func (failingEmitter) Emit(context.Context, sdkevents.Event, ...sdkevents.EmitOption) error {
+func (failingEmitter) Emit(context.Context, sdkevents.Event) error {
 	return errors.New("bus down")
 }
 

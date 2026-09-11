@@ -6,7 +6,7 @@ import (
 	"time"
 
 	firestoredb "github.com/gopernicus/gopernicus/integrations/datastores/firestore"
-	"github.com/gopernicus/gopernicus/pockets/authentication/domain/identifier"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/identifier"
 	"github.com/gopernicus/gopernicus/sdk"
 )
 

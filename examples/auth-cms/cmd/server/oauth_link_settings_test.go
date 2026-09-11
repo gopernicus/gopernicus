@@ -53,7 +53,7 @@ var sixDigitCode = regexp.MustCompile(`\b\d{6}\b`)
 type linkHost struct {
 	t      *testing.T
 	srv    *httptest.Server
-	svc    *auth.Service
+	svc    *auth.Components
 	sender *recordingSender
 	origin string
 }
@@ -68,10 +68,10 @@ func newLinkHost(t *testing.T) *linkHost {
 	return newLinkHostTuned(t, nil)
 }
 
-// newLinkHostTuned is newLinkHost with the host's auth.Config open to one
+// newLinkHostTuned is newLinkHost with the host's authenticationConfig open to one
 // tweak before NewService — the seam a test that needs a non-default posture
 // (a machine-routes gate, say) boots through. A nil tune is the shipped config.
-func newLinkHostTuned(t *testing.T, tune func(*auth.Config)) *linkHost {
+func newLinkHostTuned(t *testing.T, tune func(*authenticationConfig)) *linkHost {
 	t.Helper()
 
 	sender := &recordingSender{}
@@ -280,7 +280,7 @@ func (c *linkClient) callback(code, state string) (*http.Response, []byte) {
 func (h *linkHost) sessionCookiesSet(resp *http.Response) []string {
 	var names []string
 	for _, ck := range resp.Cookies() {
-		if ck.Name == h.svc.SessionCookieName() || ck.Name == h.svc.RefreshCookieName() {
+		if ck.Name == h.svc.HTTP.SessionCookieName() || ck.Name == h.svc.HTTP.RefreshCookieName() {
 			names = append(names, ck.Name)
 		}
 	}
@@ -407,10 +407,15 @@ func TestOAuthLinkTargetsTheStateOwnerNotTheCaller(t *testing.T) {
 	// referrer, a shared machine).
 	state := owner.startLink(settingsRedirect)
 
-	// The attacker — signed in as a DIFFERENT user — redeems it.
+	// A different browser has the leaked state but lacks the initiation proof.
 	resp, body := attacker.callback(ownerAddr, state)
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("stolen callback = %d, want 404; body=%s", resp.StatusCode, body)
+	}
+	// The failed callback did not consume the owner's legitimate flow.
+	resp, body = owner.callback(ownerAddr, state)
 	if resp.StatusCode != http.StatusFound {
-		t.Fatalf("attacker callback = %d, want 302; body=%s", resp.StatusCode, body)
+		t.Fatalf("owner callback = %d; body=%s", resp.StatusCode, body)
 	}
 	if names := host.sessionCookiesSet(resp); len(names) != 0 {
 		t.Errorf("attacker callback re-issued session cookies %v", names)
@@ -511,6 +516,14 @@ func TestOAuthUnlinkCodeFlow(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("unlink = %d, want 200; body=%s", resp.StatusCode, body)
 	}
+	// Credential removal revokes the old session; sign in with the remaining method.
+	if resp, body := c.do("GET", "/auth/methods", "", nil); resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("unlinked credential retained its old session: %d %s", resp.StatusCode, body)
+	}
+	if resp, body := c.do("POST", "/auth/login", `{"email":"`+addr+`","password":"`+linkPassword+`"}`, nil); resp.StatusCode != http.StatusOK {
+		t.Fatalf("remaining password could not sign in: %d %s", resp.StatusCode, body)
+	}
+
 	if c.methods().linked(linkProvider) {
 		t.Error("the provider is still in the inventory after a successful unlink")
 	}

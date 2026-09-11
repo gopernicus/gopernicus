@@ -1,5 +1,11 @@
 # authorization stores: baseline writes join the ambient `crud.Transactor` transaction
 
+Current mutation contract: [authorization-audit-log-implementation.md](authorization-audit-log-implementation.md)
+(AUDIT-026). The approved change removes request receipts, scope revisions and the
+best-effort audit sink, adds optional atomic change history, and protects guarded
+reads against supported raw writers. Earlier protocol descriptions below are
+historical evidence, not the current API.
+
 **Status:** RELEASED 2026-09-08 — PR #41 squash @ `495787c`; `pockets/authorization/v0.9.0` @
 `495787c`, `stores/pgx/v0.5.0` + `stores/turso/v0.4.0` @ `a5ca592`, cold-verified (see the
 Execution record). RATIFIED 2026-09-08 (owner, in-session: "release with your recommendations" —

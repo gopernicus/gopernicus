@@ -39,10 +39,9 @@ import (
 	"time"
 
 	gcfs "cloud.google.com/go/firestore"
-	"google.golang.org/api/iterator"
-
 	firestoredb "github.com/gopernicus/gopernicus/integrations/datastores/firestore"
 	"github.com/gopernicus/gopernicus/integrations/datastores/firestore/firestoretest"
+	"google.golang.org/api/iterator"
 )
 
 // liveIndexTimeout bounds the whole matrix run. Each row is one Limit(1) query
@@ -66,11 +65,11 @@ func TestIndexProbeAcceptsTheDeployedManifestLive(t *testing.T) {
 
 	// The constructor's own path — no WithoutIndexProbe, which is what a real
 	// host wires.
-	if _, err := Repositories(db); err != nil {
-		t.Errorf("Repositories(db) with the probe enabled: %v", err)
+	if _, err := Repositories(t.Context(), db); err != nil {
+		t.Errorf("Repositories(t.Context(), db) with the probe enabled: %v", err)
 	}
-	if _, err := RelationshipRepository(db); err != nil {
-		t.Errorf("RelationshipRepository(db) with the probe enabled: %v", err)
+	if _, err := RelationshipRepository(t.Context(), db); err != nil {
+		t.Errorf("RelationshipRepository(t.Context(), db) with the probe enabled: %v", err)
 	}
 }
 

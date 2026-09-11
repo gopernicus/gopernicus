@@ -7,12 +7,12 @@ import (
 	"slices"
 	"time"
 
-	"github.com/gopernicus/gopernicus/pockets/authentication/domain/authgrant"
-	"github.com/gopernicus/gopernicus/pockets/authentication/domain/challenge"
-	"github.com/gopernicus/gopernicus/pockets/authentication/domain/identifier"
-	"github.com/gopernicus/gopernicus/pockets/authentication/domain/passwordless"
-	"github.com/gopernicus/gopernicus/pockets/authentication/domain/session"
-	"github.com/gopernicus/gopernicus/pockets/authentication/domain/user"
+	authgrant "github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/authgrant"
+	challenge "github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/challenge"
+	identifier "github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/identifier"
+	passwordless "github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/passwordless"
+	session "github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/session"
+	user "github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/user"
 	"github.com/gopernicus/gopernicus/sdk"
 )
 
@@ -116,10 +116,13 @@ func (r passwordlessRepo) Redeem(_ context.Context, in passwordless.RedeemInput)
 	//    identifier/user ids are an expectation, not an authority.
 	current, hasCurrent := r.findActiveAuthClaim(identifier.Kind(binding.Kind), binding.NormalizedValue, nil)
 
+	if hasCurrent && !binding.MatchesOwner(current.UserID, current.ID, r.users[current.UserID].AuthRevision) {
+		return reject()
+	}
 	switch {
 	case !hasCurrent:
 		// 3a. Nobody claims the address.
-		if !binding.ProvisionIfAbsent {
+		if !binding.ProvisionIfAbsent || binding.HasOwner() {
 			// A login-only link whose account vanished between issue and consume.
 			return reject()
 		}
@@ -276,6 +279,6 @@ func (r passwordlessRepo) insertSessionLocked(proposed session.Session, userID s
 			return session.Session{}, sdk.ErrAlreadyExists
 		}
 	}
-	r.sessions[proposed.ID] = proposed
-	return proposed, nil
+	r.sessions[proposed.ID] = cloneSession(proposed)
+	return cloneSession(proposed), nil
 }

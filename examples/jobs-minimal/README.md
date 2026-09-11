@@ -1,10 +1,15 @@
 # examples/jobs-minimal
 
-The zero-infra proof host for `pockets/jobs` (design §8). It mounts the jobs
-pocket backed by the in-core `pockets/jobs/memstore` — no datastore driver, no
+The zero-infra proof host for `pockets/jobs` (design §8). It constructs the jobs
+service backed by the in-core `pockets/jobs/stores/memory` — no datastore driver, no
 migrations, no external infrastructure — and runs the jobs `Runtime` in-process
 next to an HTTP server. Boot it with `go run ./cmd/server` and drive it with
 `curl`.
+
+Jobs has no HTTP routes to mount, so this host omits optional `Service.Register`.
+It validates handlers through `NewRuntime` and explicitly runs/drains the runtime.
+An HTTP startup failure or fatal runtime error cancels the other component and
+returns after both stop; the host does not wait indefinitely for a later signal.
 
 ## What it proves
 
@@ -60,11 +65,12 @@ curl -fsS -X POST localhost:8083/enqueue -d '{"kind":"demo.slow","payload":{}}'
 
 The optional full-fidelity fields `id` (idempotency key), `priority`, and
 `max_attempts` route the request through `Service.EnqueueJob` instead of
-`Service.Enqueue`.
+`Service.Enqueue`. A positive `max_attempts` overrides the ordinary runtime's
+default for that job.
 
 ## In-memory store caveat
 
-`memstore` is in-process: a restart clears all state. The no-double-fire property
+`stores/memory` is in-process: a restart clears all state. The no-double-fire property
 the restart demonstrates here is that the restarted scheduler computes its next
 slot from *now* and does not refire a pre-restart slot — deterministic IDs plus
 fire-once catch-up. True cross-restart dedup (a crash mid-slot not double-firing

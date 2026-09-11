@@ -17,7 +17,7 @@ be a sibling connector, swapped at the composition root.
 | `New() *Parser` | builds a parser configured with the standard five fields plus `@descriptor` aliases, evaluating in UTC |
 | `Parser.Parse(expr) (CronSchedule, error)` | validates a five-field expression or `@descriptor`; non-nil error on an invalid expression |
 | `CronSchedule` | the returned schedule shape: `Next(after time.Time) time.Time` |
-| `CronSchedule.Next(after)` | next fire time strictly after `after`, evaluated in UTC; zero `time.Time` means it never fires again |
+| `CronSchedule.Next(after)` | next fire time strictly after `after`, evaluated in UTC; zero means no match within the vendor's bounded search window |
 
 ## Grammar and UTC contract
 
@@ -28,25 +28,34 @@ restricted, a match on **either** fires (robfig OR-semantics).
 
 Every schedule evaluates in **UTC**: `Next` normalizes its input to UTC before
 delegating, because a robfig schedule built by the standard parser otherwise
-evaluates in the input time's location. v1 has no timezone support, matching the
-port contract so this adapter cannot silently localize.
+evaluates in the input time's location. `TZ=` and `CRON_TZ=` prefixes are rejected,
+including `UTC`, to keep the accepted grammar consistent with the port.
+
+`@every` requires a positive whole-second duration of at least one second.
+Zero, negative and fractional-second intervals fail instead of being silently
+rounded. Robfig aligns the next occurrence to a whole-second boundary, so
+`@every 5s` from `12:00:00.500Z` returns `12:00:05Z`.
+
+Calendar search stops after the input year plus five. For example, February 29
+from 2097 returns zero even though another occurrence exists in 2104. The jobs
+pocket rejects a recurrence that returns zero. Hosts needing a larger search
+window can supply a different parser; this connector retains the vendor's bound.
 
 ## Wiring
 
 `CronSchedule` is a type alias to the interface literal `interface { Next(after
 time.Time) time.Time }`, identical in shape to the jobs pocket's `CronSchedule`
-port. Because that consumer-side port is a *defined* interface type (not an
-alias), Go's method-identity rules mean an external `Parser` cannot be assigned
-directly to the pocket's `CronParser` field without a trivial composition-root
-adapter (three lines: a struct forwarding `Parse`, whose returned schedule
-satisfies the port's schedule leaf directly). The adapter is host code; neither
-module imports the other.
+port. Both are aliases, so `robfigcron.New()` directly satisfies
+`pockets/jobs/logic/schedules.CronParser`. The host passes it to the schedules
+configuration's `Cron` field; no forwarding adapter is needed. Neither module
+imports the other.
 
 ## Testing
 
 Unit tests are hermetic and run with a plain `go test ./...` — five-field
 round-trips through `Next`, `@hourly`/`@daily` descriptors, invalid-expression
 errors, the day-of-month/day-of-week OR-semantics spot check, UTC pinning against
-a non-UTC input, the never-fires zero-time contract, and a compile-time
+a non-UTC input, rejected timezone prefixes and invalid intervals, whole-second
+`@every` recurrence, the never-fires zero-time contract, and a compile-time
 structural-satisfaction assertion against a locally-mirrored copy of the port
 interfaces (no import of the jobs pocket).

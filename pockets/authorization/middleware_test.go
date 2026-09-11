@@ -5,11 +5,15 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
-	"sort"
-	"strings"
 	"testing"
 
-	"github.com/gopernicus/gopernicus/sdk/foundation/identity"
+	authorizationhttp "github.com/gopernicus/gopernicus/pockets/authorization/inbound/http"
+	authmodel "github.com/gopernicus/gopernicus/pockets/authorization/logic/model"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/mutations"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/relationships"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/roles"
+	"github.com/gopernicus/gopernicus/pockets/authorization/stores/memory"
+	"github.com/gopernicus/gopernicus/sdk"
 )
 
 // TestRequirePermissionPanicsWithoutAModelBearingKind proves the
@@ -18,33 +22,33 @@ import (
 // per-request 500 — and the message names the fix (wire a model), not the
 // relationship kind.
 func TestRequirePermissionPanicsWithoutAModelBearingKind(t *testing.T) {
-	comps, err := NewService(Repositories{Roles: &roleFake{}}, Config{})
+	comps, err := New(Repositories{Roles: &roleFake{}})
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
-	svc := comps.Service
+	svc := comps
 
 	mounts := map[string]struct {
 		mount func()
 		want  string
 	}{
 		"RequirePermission": {
-			func() { _ = svc.RequirePermission("delete", FixedResource("post", "p1")) },
-			"authorization: RequirePermission requires a decision-capable kind (Config.RelationshipModel or Config.RoleModel); a roles-only host without a role model must not mount it",
+			func() { _ = svc.HTTP.RequirePermission("delete", authorizationhttp.FixedResource("post", "p1")) },
+			"authorization: RequirePermission requires a decision-capable kind (WithRelationshipModel or WithRoleModel); a roles-only host without a role model must not mount it",
 		},
 		"RequirePermissionOn": {
-			func() { _ = svc.RequirePermissionOn("post", "delete", "postID") },
-			"authorization: RequirePermissionOn requires a decision-capable kind (Config.RelationshipModel or Config.RoleModel); a roles-only host without a role model must not mount it",
+			func() { _ = svc.HTTP.RequirePermissionOn("post", "delete", "postID") },
+			"authorization: RequirePermissionOn requires a decision-capable kind (WithRelationshipModel or WithRoleModel); a roles-only host without a role model must not mount it",
 		},
 		"RequirePermissionFixed": {
-			func() { _ = svc.RequirePermissionFixed("post", "delete", "p1") },
-			"authorization: RequirePermissionFixed requires a decision-capable kind (Config.RelationshipModel or Config.RoleModel); a roles-only host without a role model must not mount it",
+			func() { _ = svc.HTTP.RequirePermissionFixed("post", "delete", "p1") },
+			"authorization: RequirePermissionFixed requires a decision-capable kind (WithRelationshipModel or WithRoleModel); a roles-only host without a role model must not mount it",
 		},
 		"RequireAnyPermission": {
 			func() {
-				_ = svc.RequireAnyPermission(GateSpec{ResourceType: "post", Permission: "delete", Resource: FixedResource("post", "p1")})
+				_ = svc.HTTP.RequireAnyPermission(authorizationhttp.GateSpec{ResourceType: "post", Permission: "delete", Resource: authorizationhttp.FixedResource("post", "p1")})
 			},
-			"authorization: RequireAnyPermission requires a decision-capable kind (Config.RelationshipModel or Config.RoleModel); a roles-only host without a role model must not mount it",
+			"authorization: RequireAnyPermission requires a decision-capable kind (WithRelationshipModel or WithRoleModel); a roles-only host without a role model must not mount it",
 		},
 	}
 	for name, tc := range mounts {
@@ -64,51 +68,28 @@ func TestRequirePermissionPanicsWithoutAModelBearingKind(t *testing.T) {
 	}
 }
 
-// TestServicePublicMethodSetUnchanged pins the host-facing surface across the
-// composite decider's introduction: the decision methods and the gates moved to
-// a new implementation BEHIND the same names, so no method may appear or vanish
-// here without a deliberate compatibility decision.
-func TestServicePublicMethodSetUnchanged(t *testing.T) {
-	want := []string{
-		"AssignRole",
-		"Check",
-		"CheckBatch",
-		"CheckExplain",
-		"FilterAuthorized",
-		"GetPermissionsForRelation",
-		"GetRelationTargets",
-		"GetSchema",
-		"GrantRelationship",
-		"HasRole",
-		"ListEffectiveRoleGrantsByResource",
-		"ListRelationshipsByResource",
-		"ListRelationshipsBySubject",
-		"ListRoleAssignmentsByResource",
-		"ListRoleAssignmentsBySubject",
-		"LookupResources",
-		"LookupResourcesIn",
-		"PurgeResourceAuthorization",
-		"Register",
-		"ReplaceRelationship",
-		"RequireAnyPermission",
-		"RequirePermission",
-		"RequirePermissionFixed",
-		"RequirePermissionOn",
-		"RevokeRelationship",
-		"SchemaDigest",
-		"UnassignRole",
-		"ValidateRelation",
-		"ValidateRelationships",
+// Request-facing services must not expose a path to separately held trusted writers.
+func TestPublicServicesKeepTrustedCapabilitiesSeparate(t *testing.T) {
+	comps := mustComponents(t, Repositories{Relationships: memory.NewRelationships(), Roles: memory.NewRoles()}, WithRelationshipModel(validModel()))
+	trusted := map[reflect.Type]bool{reflect.TypeOf(&relationships.RelationshipWriter{}): true, reflect.TypeOf(&roles.Writer{}): true, reflect.TypeOf(&mutations.SystemMutator{}): true}
+	for _, service := range []any{comps.Decisions, comps.Relationships, comps.Roles, comps.Mutations, comps.HTTP} {
+		typ := reflect.TypeOf(service)
+		for i := 0; i < typ.NumMethod(); i++ {
+			method := typ.Method(i)
+			for j := 0; j < method.Type.NumOut(); j++ {
+				if trusted[method.Type.Out(j)] {
+					t.Errorf("%s.%s exposes trusted capability", typ, method.Name)
+				}
+			}
+		}
 	}
-	typ := reflect.TypeOf(&Service{})
-	got := make([]string, 0, typ.NumMethod())
-	for i := 0; i < typ.NumMethod(); i++ {
-		got = append(got, typ.Method(i).Name)
-	}
-	sort.Strings(got)
-	sort.Strings(want)
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("public method set changed:\n got %s\nwant %s", strings.Join(got, ", "), strings.Join(want, ", "))
+	for _, service := range []any{comps.Decisions, comps.Relationships, comps.Roles} {
+		typ := reflect.TypeOf(service)
+		for _, method := range []string{"AssignRole", "UnassignRole", "CreateRelationships", "SetRelationTargets", "Apply", "TeardownResourceAuthorization"} {
+			if _, ok := typ.MethodByName(method); ok {
+				t.Errorf("read service %s exposes %s", typ, method)
+			}
+		}
 	}
 }
 
@@ -116,12 +97,12 @@ func TestServicePublicMethodSetUnchanged(t *testing.T) {
 // once it configures a role model: the same ladder, decided by role assignments.
 func TestGatesOnARolesOnlyModelHost(t *testing.T) {
 	roles := newSeededRoles(t, assignment("u1", "auditor", "project", "p1"))
-	comps, err := NewService(Repositories{Roles: roles}, Config{RoleModel: projectRoleModel()})
+	comps, err := New(Repositories{Roles: roles}, WithRoleModel(projectRoleModel()))
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
 
-	gate := comps.Service.RequirePermissionOn("project", "audit", "projectID")
+	gate := comps.HTTP.RequirePermissionOn("project", "audit", "projectID")
 	handler := gate(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	}))
@@ -136,7 +117,7 @@ func TestGatesOnARolesOnlyModelHost(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			req := httptest.NewRequest(http.MethodGet, "/projects/"+tc.projectID, nil)
 			req.SetPathValue("projectID", tc.projectID)
-			req = req.WithContext(identity.WithPrincipal(req.Context(), identity.Principal{Type: "user", ID: "u1"}))
+			req = req.WithContext(sdk.WithPrincipal(req.Context(), sdk.Principal{Type: "user", ID: "u1"}))
 			rec := httptest.NewRecorder()
 			handler.ServeHTTP(rec, req)
 			if rec.Code != tc.wantStatus {
@@ -159,12 +140,12 @@ func TestGatesOnARolesOnlyModelHost(t *testing.T) {
 				t.Fatalf("an undeclared pair must panic at mount even on a model-bearing roles host")
 			}
 		}()
-		_ = comps.Service.RequirePermissionOn("project", "view", "projectID")
+		_ = comps.HTTP.RequirePermissionOn("project", "view", "projectID")
 	}()
 
 	// The same decision through the plain Check facade.
-	res, err := comps.Service.Check(context.Background(), CheckRequest{
-		Principal: PrincipalRef{Type: "user", ID: "u1"}, Permission: "audit", Resource: Resource{Type: "project", ID: "p1"},
+	res, err := comps.Decisions.Check(context.Background(), authmodel.CheckRequest{
+		Principal: authmodel.PrincipalRef{Type: "user", ID: "u1"}, Permission: "audit", Resource: authmodel.Resource{Type: "project", ID: "p1"},
 	})
 	if err != nil || !res.Allowed {
 		t.Fatalf("Check on a roles-only model host: got %+v err=%v", res, err)
@@ -176,20 +157,20 @@ func TestGatesOnARolesOnlyModelHost(t *testing.T) {
 // route line whose alternatives are all ungranted is 403.
 func TestRequireAnyPermissionDelegates(t *testing.T) {
 	roles := newSeededRoles(t, assignment("u1", "auditor", "project", "p1"))
-	comps, err := NewService(Repositories{Roles: roles}, Config{RoleModel: projectRoleModel()})
+	comps, err := New(Repositories{Roles: roles}, WithRoleModel(projectRoleModel()))
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
 
-	handler := comps.Service.RequireAnyPermission(
-		GateSpec{ResourceType: "project", Permission: "audit", Resource: FixedResource("project", "p2")},
-		GateSpec{ResourceType: "project", Permission: "audit", Resource: FixedResource("project", "p1")},
+	handler := comps.HTTP.RequireAnyPermission(
+		authorizationhttp.GateSpec{ResourceType: "project", Permission: "audit", Resource: authorizationhttp.FixedResource("project", "p2")},
+		authorizationhttp.GateSpec{ResourceType: "project", Permission: "audit", Resource: authorizationhttp.FixedResource("project", "p1")},
 	)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	}))
 
 	req := httptest.NewRequest(http.MethodGet, "/gated", nil)
-	req = req.WithContext(identity.WithPrincipal(req.Context(), identity.Principal{Type: "user", ID: "u1"}))
+	req = req.WithContext(sdk.WithPrincipal(req.Context(), sdk.Principal{Type: "user", ID: "u1"}))
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusNoContent {
@@ -197,7 +178,7 @@ func TestRequireAnyPermissionDelegates(t *testing.T) {
 	}
 
 	req = httptest.NewRequest(http.MethodGet, "/gated", nil)
-	req = req.WithContext(identity.WithPrincipal(req.Context(), identity.Principal{Type: "user", ID: "u2"}))
+	req = req.WithContext(sdk.WithPrincipal(req.Context(), sdk.Principal{Type: "user", ID: "u2"}))
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusForbidden {
@@ -215,13 +196,13 @@ func TestRequireAnyPermissionDelegates(t *testing.T) {
 // implementation: no principal → 401, a principal without a grant → 403 (relFake
 // denies every Check).
 func TestRequirePermissionDelegates(t *testing.T) {
-	comps, err := NewService(Repositories{Relationships: &relFake{}}, Config{RelationshipModel: validModel()})
+	comps, err := New(Repositories{Relationships: &relFake{}}, WithRelationshipModel(validModel()))
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
-	svc := comps.Service
+	svc := comps
 
-	gate := svc.RequirePermission("delete", FixedResource("post", "p1"))
+	gate := svc.HTTP.RequirePermission("delete", authorizationhttp.FixedResource("post", "p1"))
 	handler := gate(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -235,7 +216,7 @@ func TestRequirePermissionDelegates(t *testing.T) {
 
 	// Principal without a grant → 403.
 	req := httptest.NewRequest(http.MethodGet, "/gated", nil)
-	req = req.WithContext(identity.WithPrincipal(req.Context(), identity.Principal{Type: "user", ID: "u1"}))
+	req = req.WithContext(sdk.WithPrincipal(req.Context(), sdk.Principal{Type: "user", ID: "u1"}))
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusForbidden {

@@ -14,7 +14,7 @@ Gopernicus separates three responsibilities:
 ## Choose a connector
 
 ```go
-db, err := pgxdb.Open(pgxdb.Config{
+db, err := pgxdb.Open(ctx, pgxdb.Config{
     DSN: os.Getenv("DATABASE_URL"),
 })
 if err != nil {
@@ -23,7 +23,11 @@ if err != nil {
 defer db.Close()
 ```
 
-Or use the symmetric Turso connector. Connector config may carry environment tags, but `Open` reads no variables implicitly.
+Or use the symmetric Turso connector. Pass the host's startup context to `Open`;
+the configured connection timeout is an additional upper bound. Canceling that
+context after a successful return does not close the database. Hosts own
+`DB.Close`. Connector config may carry environment tags, and pgx also honors
+standard `PG*` defaults while parsing its connection string.
 
 ## Choose or implement stores
 
@@ -103,7 +107,7 @@ The application server does not migrate automatically. This prevents replicas fr
 
 ## Transactions stay behind ports
 
-Use SDK `crud.Transactor` or pocket-declared atomic repository methods when a use case spans several writes. Do not pull a connector's raw underlying handle into logic as a service-locator shortcut.
+Use SDK `transaction.Transactor` or pocket-declared atomic repository methods when a use case spans several writes. Do not pull a connector's raw underlying handle into logic as a service-locator shortcut.
 
 An atomic domain operation should be one port method when all implementations must guarantee the same invariant—for example authentication's user + primary identifier creation or authorization's guarded mutation apply.
 

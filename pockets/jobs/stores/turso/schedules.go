@@ -8,9 +8,9 @@ import (
 	"time"
 
 	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
-	"github.com/gopernicus/gopernicus/pockets/jobs/domain/schedule"
+	schedule "github.com/gopernicus/gopernicus/pockets/jobs/logic/schedules"
 	"github.com/gopernicus/gopernicus/sdk"
-	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
+	"github.com/gopernicus/gopernicus/sdk/pkg/list"
 )
 
 // scheduleColumns is the job_schedules projection, in scheduleRow's field order.
@@ -19,10 +19,7 @@ const scheduleColumns = "schedule_id, name, kind, tenant_id, cron_expr, every_se
 // Compile-time seam: the Schedules store fills the exact schedule.Repository port.
 var _ schedule.Repository = (*Schedules)(nil)
 
-// Schedules implements schedule.Repository over a libSQL database. ClaimDue is a
-// pure value compare-and-set on next_run_at — no locking construct, byte-identical
-// semantics to the postgres store — so N runtime instances fire each (schedule,
-// slot) pair exactly once with no leader election.
+// Schedules persists schedule templates and their pending occurrences.
 type Schedules struct {
 	db *tursodb.DB
 }
@@ -65,7 +62,11 @@ func (r scheduleRow) toDomain() schedule.Schedule {
 }
 
 // NewScheduleStore returns a Schedules store backed by db.
+// It panics if db is nil; the caller owns the database lifecycle.
 func NewScheduleStore(db *tursodb.DB) *Schedules {
+	if db == nil {
+		panic("jobs turso: NewScheduleStore received a nil database")
+	}
 	return &Schedules{db: db}
 }
 
@@ -91,7 +92,9 @@ func (s *Schedules) Ensure(ctx context.Context, in schedule.Ensure, next time.Ti
 				if specChanged {
 					existing.NextRunAt = next
 				}
-				existing.UpdatedAt = now
+				if now.After(existing.UpdatedAt) {
+					existing.UpdatedAt = now
+				}
 				cron, every := specColumns(existing.Spec)
 				const upd = `UPDATE job_schedules SET kind = ?, tenant_id = ?, cron_expr = ?, every_secs = ?, payload = ?, next_run_at = ?, updated_at = ? WHERE schedule_id = ?`
 				if _, err := tx.Exec(ctx, upd, existing.Kind, nullString(existing.TenantID), cron, every, payloadValue(existing.Payload), tursodb.FormatTime(existing.NextRunAt), tursodb.FormatTime(existing.UpdatedAt), existing.ID); err != nil {
@@ -138,7 +141,7 @@ func (s *Schedules) ListDue(ctx context.Context, now time.Time, limit int, kinds
 	// before the limit.
 	kindClause, kindArgs := kindsIn(kinds)
 	q := `SELECT ` + scheduleColumns + ` FROM job_schedules
-		WHERE enabled = 1 AND next_run_at <= ?` + kindClause + `
+		WHERE enabled = 1 AND next_run_at <= ? AND NOT EXISTS (SELECT 1 FROM job_schedule_occurrences pending WHERE pending.schedule_id = job_schedules.schedule_id)` + kindClause + `
 		ORDER BY next_run_at, schedule_id LIMIT ?`
 	lim := limit
 	if lim <= 0 {
@@ -163,33 +166,6 @@ func (s *Schedules) ListDue(ctx context.Context, now time.Time, limit int, kinds
 	return due, tursodb.MapError(rows.Err())
 }
 
-// ClaimDue is the pure value compare-and-set on next_run_at: it advances
-// next_run_at to newNextRunAt (and last_run_at to now) only when the row's
-// current next_run_at still equals prevNextRunAt, the schedule is enabled, and
-// its kind still equals expectedKind (#37: a re-kinded row is left to its new
-// owner), reporting true when this caller won the (schedule, slot) pair.
-func (s *Schedules) ClaimDue(ctx context.Context, id string, prevNextRunAt, newNextRunAt, now time.Time, expectedKind string) (bool, error) {
-	const q = `UPDATE job_schedules SET next_run_at = ?, last_run_at = ?, updated_at = ?
-		WHERE schedule_id = ? AND next_run_at = ? AND enabled = 1 AND kind = ?`
-	var won bool
-	err := retryBusy(ctx, func() error {
-		n, err := tursodb.ExecAffecting(ctx, s.db, q, tursodb.FormatTime(newNextRunAt.UTC()), tursodb.FormatTime(now.UTC()), tursodb.FormatTime(now.UTC()), id, tursodb.FormatTime(prevNextRunAt.UTC()), expectedKind)
-		if err != nil {
-			return err
-		}
-		won = n == 1
-		return nil
-	})
-	return won, err
-}
-
-// SetLastJob records the id of the job fired for the most recent slot. A missing
-// id yields sdk.ErrNotFound.
-func (s *Schedules) SetLastJob(ctx context.Context, id, jobID string, now time.Time) error {
-	const q = `UPDATE job_schedules SET last_job_id = ?, updated_at = ? WHERE schedule_id = ?`
-	return s.execAffecting(ctx, q, jobID, tursodb.FormatTime(now.UTC()), id)
-}
-
 // Get returns the schedule with the given id, or sdk.ErrNotFound.
 func (s *Schedules) Get(ctx context.Context, id string) (schedule.Schedule, error) {
 	const q = `SELECT ` + scheduleColumns + ` FROM job_schedules WHERE schedule_id = ?`
@@ -202,7 +178,7 @@ func (s *Schedules) Get(ctx context.Context, id string) (schedule.Schedule, erro
 
 // List returns a cursor- or offset-paginated page of schedules, in the resolved
 // order (default created_at DESC, schedule_id DESC).
-func (s *Schedules) List(ctx context.Context, req crud.ListRequest) (crud.Page[schedule.Schedule], error) {
+func (s *Schedules) List(ctx context.Context, req list.Request) (list.Page[schedule.Schedule], error) {
 	lq := tursodb.ListQuery[scheduleRow]{
 		BaseSQL:      `SELECT ` + scheduleColumns + ` FROM job_schedules`,
 		OrderFields:  schedule.OrderFields,
@@ -213,15 +189,15 @@ func (s *Schedules) List(ctx context.Context, req crud.ListRequest) (crud.Page[s
 	}
 	page, err := tursodb.List(ctx, s.db, lq, req)
 	if err != nil {
-		return crud.Page[schedule.Schedule]{}, err
+		return list.Page[schedule.Schedule]{}, err
 	}
-	return crud.MapPage(page, scheduleRow.toDomain), nil
+	return list.MapPage(page, scheduleRow.toDomain), nil
 }
 
 // SetEnabled toggles a schedule's enabled flag. A missing id yields
 // sdk.ErrNotFound.
 func (s *Schedules) SetEnabled(ctx context.Context, id string, enabled bool, now time.Time) error {
-	const q = `UPDATE job_schedules SET enabled = ?, updated_at = ? WHERE schedule_id = ?`
+	const q = `UPDATE job_schedules SET enabled = ?, updated_at = MAX(updated_at, ?) WHERE schedule_id = ?`
 	return s.execAffecting(ctx, q, tursodb.BoolToInt(enabled), tursodb.FormatTime(now.UTC()), id)
 }
 

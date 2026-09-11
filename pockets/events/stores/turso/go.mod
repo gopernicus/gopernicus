@@ -3,9 +3,9 @@ module github.com/gopernicus/gopernicus/pockets/events/stores/turso
 go 1.26.1
 
 require (
-	github.com/gopernicus/gopernicus/integrations/datastores/turso v0.1.0
-	github.com/gopernicus/gopernicus/pockets/events v0.2.0
-	github.com/gopernicus/gopernicus/sdk v0.5.0
+	github.com/gopernicus/gopernicus/integrations/datastores/turso v0.4.0
+	github.com/gopernicus/gopernicus/pockets/events v0.3.0
+	github.com/gopernicus/gopernicus/sdk v0.9.0
 )
 
 require (

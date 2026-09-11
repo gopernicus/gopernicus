@@ -17,25 +17,15 @@ import (
 
 func TestLimiterAppliesDefaultKeyPrefix(t *testing.T) {
 	l := NewLimiter(nil)
-	if l.keyPrefix != defaultLimiterKeyPrefix {
-		t.Errorf("keyPrefix = %q, want %q", l.keyPrefix, defaultLimiterKeyPrefix)
+	if l.keyPrefix != defaultLimiterKeyPrefix+limiterKeyVersion {
+		t.Errorf("keyPrefix = %q, want %q", l.keyPrefix, defaultLimiterKeyPrefix+limiterKeyVersion)
 	}
 }
 
 func TestLimiterKeyPrefixOption(t *testing.T) {
 	l := NewLimiter(nil, WithLimiterKeyPrefix("api:"))
-	if l.keyPrefix != "api:" {
-		t.Errorf("keyPrefix = %q, want %q", l.keyPrefix, "api:")
-	}
-}
-
-func TestLimiterCloseIsIdempotentWithoutDatabase(t *testing.T) {
-	l := NewLimiter(nil)
-	if err := l.Close(); err != nil {
-		t.Fatalf("first Close() error = %v", err)
-	}
-	if err := l.Close(); err != nil {
-		t.Errorf("second Close() error = %v, want nil", err)
+	if l.keyPrefix != "api:v2:" {
+		t.Errorf("keyPrefix = %q, want %q", l.keyPrefix, "api:v2:")
 	}
 }
 
@@ -44,8 +34,8 @@ func TestLimiterPortSatisfaction(t *testing.T) {
 }
 
 // A limiter with no usable connection must fail its boot probe rather than
-// report healthy — the whole point of StatusCheck is that a limiter which cannot
-// reach its table would otherwise fail open and silent behind the sdk middleware.
+// report healthy. StatusCheck catches missing dependencies before traffic
+// reaches the host's configured middleware failure policy.
 func TestLimiterStatusCheckWithoutDatabase(t *testing.T) {
 	err := NewLimiter(nil).StatusCheck(context.Background())
 	if err == nil {
@@ -64,7 +54,7 @@ func TestLimiterBootRefusesUnreachableDatabase(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	db, err := Open(Config{DSN: "postgres://postgres:postgres@127.0.0.1:1/postgres?sslmode=disable", ConnectTimeout: 2 * time.Second})
+	db, err := Open(context.Background(), Config{DSN: "postgres://postgres:postgres@127.0.0.1:1/postgres?sslmode=disable", ConnectTimeout: 2 * time.Second})
 	if err != nil {
 		return
 	}
@@ -116,6 +106,26 @@ func TestLimiterAllowRejectsNonPositiveCeiling(t *testing.T) {
 		_, err := NewLimiter(nil).Allow(context.Background(), "k", limit)
 		if !errors.Is(err, sdk.ErrInvalidInput) {
 			t.Errorf("Allow() with %+v error = %v, want sdk.ErrInvalidInput", limit, err)
+		}
+	}
+}
+
+func TestLimiterEmptyKeysAndNormalizedBounds(t *testing.T) {
+	l := NewLimiter(nil)
+	if _, err := l.Allow(context.Background(), "", ratelimiter.PerSecond(1)); !errors.Is(err, sdk.ErrInvalidInput) {
+		t.Fatal(err)
+	}
+	if err := l.Reset(context.Background(), ""); !errors.Is(err, sdk.ErrInvalidInput) {
+		t.Fatal(err)
+	}
+	for _, limit := range []ratelimiter.Limit{{Requests: 1, Window: ratelimiter.MaxWindow + 1}, {Requests: ratelimiter.MaxCeiling, Window: time.Hour}} {
+		if _, err := l.Allow(context.Background(), "key", limit); !errors.Is(err, sdk.ErrInvalidInput) {
+			t.Fatalf("limit %+v: %v", limit, err)
+		}
+	}
+	for _, prefix := range []string{"", "custom:", "custom:v2:"} {
+		if got := NewLimiter(nil, WithLimiterKeyPrefix(prefix)).keyPrefix; got != prefix+"v2:" {
+			t.Fatal(got)
 		}
 	}
 }

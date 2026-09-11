@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
-	"github.com/gopernicus/gopernicus/pockets/jobs/domain/job"
+	job "github.com/gopernicus/gopernicus/pockets/jobs/logic/queue"
 	jobsturso "github.com/gopernicus/gopernicus/pockets/jobs/stores/turso"
 )
 
@@ -24,7 +24,7 @@ func TestLiveJobsDeliveryTurso(t *testing.T) {
 	}
 
 	runLiveDeliveryProofs(t, "turso", func(t *testing.T) job.FencedQueueRepository {
-		db, err := tursodb.Open(tursodb.Config{URL: url, AuthToken: token})
+		db, err := tursodb.Open(context.Background(), tursodb.Config{URL: url, AuthToken: token})
 		if err != nil {
 			t.Fatalf("turso connect: %v", err)
 		}

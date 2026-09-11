@@ -56,7 +56,7 @@ func (s *InquiryStore) Create(ctx context.Context, in messaging.Inquiry) (messag
 		"message":    in.Message,
 		"created_at": in.CreatedAt.UTC(),
 	}
-	// Empty ID → the cryptids.Database strategy (amended D10): omit the id
+	// Empty ID → the sdk.DatabaseID strategy (amended D10): omit the id
 	// column so the schema default generates the key, read back with RETURNING.
 	if in.ID == "" {
 		q := `INSERT INTO ` + s.table(inquiriesTable) + ` (name, email, message, created_at)

@@ -6,6 +6,14 @@ github.com/dustin/go-humanize v1.0.1 h1:GzkhY7T5VNhEkwH0PVJgjz+fX1rhBrR7pRT3mDkp
 github.com/dustin/go-humanize v1.0.1/go.mod h1:Mu1zIs6XwVuF/gI1OepvI0qD18qycQx+mFykh5fBlto=
 github.com/google/uuid v1.6.0 h1:NIvaJDMOsjHA8n1jAhLSgzrAzy1Hgr+hNrb57e+94F0=
 github.com/google/uuid v1.6.0/go.mod h1:TIyPZe4MgqvfeYDBFedMoGGpEw/LqOeaOT+nhxU+yHo=
+github.com/gopernicus/gopernicus/integrations/datastores/turso v0.4.0 h1:lrL06XAWtc3Eda6E+AA5v8TudkKEHyd4KVGj70YScj8=
+github.com/gopernicus/gopernicus/integrations/datastores/turso v0.4.0/go.mod h1:83vKGYZCHOoTnCSWM/ClCLOvBlXOgkvGh3SPfn+dOOE=
+github.com/gopernicus/gopernicus/pockets v0.1.0 h1:2WcybbfPw1km00DmG37CekPbxYmObyyj3T1Ec0eFSRY=
+github.com/gopernicus/gopernicus/pockets v0.1.0/go.mod h1:A2H/Tl9Pn2v2mFLOgkCQngMRFkMN10E1MEzGCQICsEw=
+github.com/gopernicus/gopernicus/pockets/cms v0.3.0 h1:z3ADWDmI9COL02Jky8eVgJnshdPf4nQ2QoogrdLZGGs=
+github.com/gopernicus/gopernicus/pockets/cms v0.3.0/go.mod h1:SD8l/U1/O3bEZQxOSkQAO/5cTdzeEa3WqStThKXdOYg=
+github.com/gopernicus/gopernicus/sdk v0.9.0 h1:g7rTlx/W8Dzb0VwsGJhfhas2hK2L7I61BELPuGQCLZY=
+github.com/gopernicus/gopernicus/sdk v0.9.0/go.mod h1:z0bypQiCybwPoxoDfzhYvB1BtH2av549QR84GacngaE=
 github.com/mattn/go-isatty v0.0.20 h1:xfD0iDuEKnDkl03q4limB+vH+GxLEtL/jb4xVJSWWEY=
 github.com/mattn/go-isatty v0.0.20/go.mod h1:W+V8PltTTMOvKvAeJH7IuucS94S2C6jfK/D7dTCTo3Y=
 github.com/ncruces/go-strftime v1.0.0 h1:HMFp8mLCTPp341M/ZnA4qaf7ZlsbTc+miZjCLOFAw7w=

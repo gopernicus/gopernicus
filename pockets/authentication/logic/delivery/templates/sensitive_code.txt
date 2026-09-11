@@ -1,0 +1,5 @@
+Use this code to confirm a sensitive change to your account.
+
+Your verification code is: {{.Secret}}
+
+If you did not start this, secure your account — someone may have your password.

@@ -12,16 +12,35 @@ below, which owns pagination mechanics (ordering, keyset cursors, offset,
 counts) while every store keeps writing its own SQL. App/pocket repositories
 consume this package's `*DB`.
 
+## Connection configuration
+
+Zero `MaxLifetime`, `MaxIdleTime`, pool counts and `HealthCheckPeriod` retain
+DSN values or pgx defaults. Positive fields override the parsed settings; negative
+values, overflowing counts, inconsistent minimum/maximum counts and invalid
+health-check periods fail at construction. The pinned pgx defaults retire
+connections after one hour and idle connections after 30 minutes. Omitted
+lifetimes no longer retire a connection after every use.
+
+`Open(ctx, cfg)` uses the host's startup context for connection checks and retry
+waits. `ConnectTimeout` adds an upper bound (10 seconds when omitted); the earlier
+deadline wins. Cancellation before opening prevents connection attempts, and a
+startup failure closes the owned pool. After a successful return, canceling the
+startup context does not close the database; the host calls `DB.Close` when done.
+Pocket SQL store constructors take a host context for schema probes; pass your
+startup context and deadline to those constructors too.
+SQL migration streams are flat directories: nested files belong to separate
+host-controlled streams; export copies only direct SQL files.
+
 ## Surface
 
 | member | shape |
 |---|---|
-| `Config` | `DSN` or split `Host`/`Port`/`User`/`Password`/`Database`/`SSLMode`, plus pool settings, `LogQueries`, `Logger`, `Tracer`, and `Retry`; env tags are provided for host parsers, but `Open` never reads environment itself |
-| `Open(cfg) (*DB, error)` | opens a `pgxpool` and pings; every connection scans `timestamptz` in UTC and, unless the host named a zone, runs with session `timezone=UTC` (see below) |
+| `Config` | `DSN` or split `Host`/`Port`/`User`/`Password`/`Database`/`SSLMode`, plus pool settings, `LogQueries`, `Logger`, `Tracer`, and `Retry`; env tags are provided for host parsers; pgx also honors standard `PG*` environment defaults during DSN parsing |
+| `Open(ctx, cfg) (*DB, error)` | opens a `pgxpool` and pings; every connection scans `timestamptz` in UTC and, unless the host named a zone, runs with session `timezone=UTC` (see below) |
 | `DB` | `Exec` / `Query` / `QueryRow` / `InTx` / `Begin` / `Close` / `Ping` / `Underlying() *pgxpool.Pool` |
 | `Querier` | interface intersection of `*DB` and `*Tx` (`Exec`/`Query`/`QueryRow`) — lets a store accept pool-or-tx |
 | `MapError(err) error` | SQLSTATE-based: `23505`→`ErrAlreadyExists`, `23503`→`ErrInvalidReference`, `23514`/`23502`→`ErrInvalidInput`, `22P02` (malformed uuid/integer literal)→`ErrInvalidInput` keeping the server message as the sentence before the sentinel, `pgx.ErrNoRows`→`ErrNotFound`; unknown errors pass through |
-| `RedactDSN(dsn) string` | masks a URL-form DSN's userinfo password for safe logging; unparseable input returns the literal `"REDACTED"` |
+| `RedactDSN(dsn) string` | masks URL userinfo, `password` and `sslpassword`; keyword DSNs and malformed inputs return the literal `"REDACTED"` |
 | `StatusCheck(ctx, db)` | 1s-deadline ping |
 | `ProbeTable(ctx, q, table) error` | boot-time existence probe for a store's table (`to_regclass`, name bound as a parameter, bare or schema-qualified): absent → wraps `ErrNotFound` naming the relation; a query failure maps through `MapError` and is never misreported as missing. Run it in a store constructor so a host aimed at the wrong database fails before serving |
 | `ProbeTables(ctx, q, tables…) error` | `ProbeTable` over every relation a store owns; probing stops at the first failure and returns it unchanged — the absent-relation error already names the table, and a query failure is about none of them. No tables is nil |
@@ -29,10 +48,10 @@ consume this package's `*DB`.
 | `MigrateOption` / `WithSchema(s)` | the only `RunMigrations` option: run this stream inside `s` — create the schema if absent, `SET LOCAL search_path` for the transaction, and keep the stream's `schema_migrations` ledger in `s`. No option = today's unqualified stream, byte-for-byte |
 | `Schema` / `NewSchema(name) (Schema, error)` | validated Postgres schema name; the zero value means "no schema" and renders bare names. Rejection wraps `ErrInvalidInput` (empty, >63 bytes, non-identifier, reserved `pg_` prefix, `information_schema`); `public` is valid |
 | `(Schema).Table(t)` / `IsZero()` / `String()` | `"<schema>".t` for a set schema, bare `t` for the zero value; the one qualifier used by the runner's ledger statements and by every pgx store's `WithSchema` |
-| `NewLimiter(db, opts…) *Limiter` / `WithLimiterKeyPrefix` | a durable `sdk/capabilities/ratelimiter.Limiter` over the caller-owned `*DB` — one atomic statement per `Allow` against the host-owned `ratelimit_windows` table (see below) |
-| `(*Limiter).StatusCheck(ctx) error` | boot probe for that host-owned table; call it before serving, because a missing table makes the sdk middleware fail open and silent |
+| `NewLimiter(db, opts…) *Limiter` / `WithLimiterKeyPrefix` | a durable `sdk/capabilities/ratelimiter.Limiter` over the caller-owned `*DB` — atomic admission against the host-owned `ratelimit_windows` table (see below) |
+| `(*Limiter).StatusCheck(ctx) error` | boot probe for the host-owned table and required window_ms column; call it before serving |
 | `Collect[T](ctx, q, sql, args…) ([]T, error)` | parent-bounded, unpaginated read: every row scanned into a db-tagged `T` via strict `RowToStructByName`, both the query and the collect error through `MapError`, and no rows as an empty NON-NIL `[]T` so the caller marshals `[]` and never `null`. Not a paging primitive — an unbounded result set belongs on `List` |
-| `List[T]` / `ListQuery[T]` | the shared paginated-SELECT helper implementing the `sdk/foundation/crud` list standards (see below) |
+| `List[T]` / `ListQuery[T]` | the shared paginated-SELECT helper implementing the `sdk/pkg/list` list standards (see below) |
 | `QuoteIdentifier(ident) (string, error)` | regex allow-list + per-segment double-quoting for dynamic identifiers (order columns); rejection wraps `ErrInvalidInput` |
 | `ApplyCursorPagination` / `AddOrderByClause` / `AddLimitClause` | NamedArgs SQL builders under `List`: tuple-comparison keyset predicate (direction × forPrevious operator table), ORDER BY with PK tiebreaker + optional `LOWER()`, `LIMIT @limit` |
 | `LoggingQueryTracer` / `NewLoggingQueryTracer` | `pgx.QueryTracer` over `*slog.Logger`; **logs SQL args verbatim — dev-only** |
@@ -41,21 +60,21 @@ consume this package's `*DB`.
 
 ## The list toolkit — `List[T]` over `ListQuery[T]`
 
-`List[T]` runs a paginated SELECT to the `sdk/foundation/crud` standards; the crud
+`List[T]` runs a paginated SELECT to the `sdk/pkg/list` standards; the list
 package doc's mode/count matrix is normative, and this helper is its pgx
 implementation. A store describes its list with a `ListQuery[T]`:
 `BaseSQL` (a `SELECT … FROM … [WHERE …]` with **no** ORDER BY/LIMIT/OFFSET),
 `Args` (`pgx.NamedArgs` for the base WHERE), the aggregate's `OrderFields`
 allow-list + `DefaultOrder`, the `PK` tiebreaker column, an optional
-`Limits` (`crud.Limits` — the resource's page-size default/max, passed to
-`req.NormalizedLimit`; the zero value keeps `crud`'s `DefaultLimit`/`MaxLimit`),
+`Limits` (`list.Limits` — the resource's page-size default/max, passed to
+`req.NormalizedLimit`; the zero value keeps `list`'s `DefaultLimit`/`MaxLimit`),
 and `OrderValueOf`/`PKOf` accessors for cursor encoding. The helper validates the
 request, resolves the order **by column** against the allow-list (every
 identifier passes `QuoteIdentifier`), then switches on the request's
 **resolved strategy** into one of two linear flows — `listCursor` (keyset
 predicate + reverse-probe prev pages) or `listOffset` (`LIMIT/OFFSET`, HasMore
 from its own over-fetch, no cursors emitted). The strategy is explicit
-(`crud.StrategyCursor` / `crud.StrategyOffset`), never inferred from the offset
+(`list.StrategyCursor` / `list.StrategyOffset`), never inferred from the offset
 value, so `Offset 0` under the offset strategy is a real first offset page. Both
 flows scan via `pgx.CollectRows` + `RowToStructByName[T]`, and on `WithCount`
 wrap `BaseSQL` in a `COUNT(*)` subquery so the filter WHERE is reused by
@@ -65,7 +84,7 @@ Store conventions that ride the toolkit (set by the authentication store,
 `pockets/authentication/stores/pgx`, the pattern-setter):
 
 - **Row structs, not domain tags.** `T` is a store-local db-tagged row struct
-  with a `toDomain` converter; pages bridge through `crud.MapPage`. Domain
+  with a `toDomain` converter; pages bridge through `list.MapPage`. Domain
   entities never carry persistence tags.
 - **NamedArgs filter builders.** Per-store WHERE fragments are plain funcs
   appending to `pgx.NamedArgs` — shared by the list call and (via the count
@@ -303,59 +322,46 @@ cross-instance limiter without standing up Redis. One connector implementing a
 second sdk port is the `kvstores/goredis` precedent: the integration unit is the
 **library**, not the port.
 
-Semantics match the goredis limiter deliberately, so the two are swappable:
-`Limit.Burst` adds to `Limit.Requests` to form the effective ceiling; each key is
-an independent budget inside a configurable namespace (`WithLimiterKeyPrefix`,
-default `ratelimit:`); a new window carries the decaying tail of the previous one
-(the sliding approximation); a denial reports `Remaining: 0` with a positive
-`RetryAfter` and consumes no quota; `Reset` clears one key. `Close` is an
-idempotent no-op — it never closes the caller's pool. One deliberate strictness:
-a non-positive `Limit.Window` **or** a non-positive ceiling
-(`Requests + Burst`) returns `sdk.ErrInvalidInput` instead of denying everything,
-because a zero ceiling on a login path is a misconfiguration, not a policy.
-Both `Allow` and `Reset` map database failures through `MapError`, so callers
-match the same stable sdk kinds on either method.
+Semantics match Memory and Redis: anchored two-window counters, integer
+milliseconds, and Requests+Burst as the ceiling. Windows round up to milliseconds;
+invalid keys or numerical ranges match `sdk.ErrInvalidInput`. A live key cannot
+change Window; ceiling changes preserve consumed quota. Expired rows are absent
+for admission even before physical pruning. Reset clears one compatible key.
+Both methods map database errors through MapError. The host owns pool lifecycle;
+the limiter has no Close method.
 
-**Every decision is one statement.** `Allow` is a single
-`INSERT … ON CONFLICT (key) DO UPDATE … RETURNING` whose admission test is
-computed in SQL: Postgres locks the conflicting row and re-evaluates the `SET`
-expressions against its latest committed version, so under N instances racing a
-ceiling of K, exactly K calls are admitted. A read-then-check-then-write limiter
-over-admits here (measured: 40/40 admitted at a ceiling of 8), which is why the
-transition is indivisible and why the proof is a live exact-K test rather than a
-unit test.
+Every configured prefix receives the internal `v2:` suffix. New code normally
+starts fresh budgets beside old keys. A collision with legacy state lacking a
+valid window_ms returns `sdk.ErrConflict` and preserves the row, even on Reset.
+Old and new writers must have disjoint physical keys; use a fresh host prefix if
+old logical v2:* keys could overlap. The format guard cannot detect an old writer
+overwriting new state.
+Coordinate the required column migration and rolling-upgrade quota policy using
+[AUDIT-011](../../../AUDIT.md#audit-011-rate-limiter-contract-and-adapter-corrections).
 
-**Server time only.** `clock_timestamp()` is evaluated once per statement, in the
-proposed row, and read back on the conflict branch — window selection, `ResetAt`,
-and `RetryAfter` are all server arithmetic. A skewed application clock cannot
-change a decision or a returned duration. That instant is captured when the
-statement *starts*, before it waits on the row lock, so a statement that loses a
-race can hold a `now` older than the window the winner installed; every sliding
-weight is clamped to `[0, 1]` and `RetryAfter` to the window, so a stale `now`
-can never over-count the previous window's tail or return a `RetryAfter` longer
-than `Limit.Window` (measured unclamped: `1m0.000024s` on a one-minute window).
+**Every quota decision is one atomic statement.** `INSERT … ON CONFLICT … DO UPDATE … RETURNING`
+serializes admission on the row. A missing key first creates an expired, zero-count
+placeholder, then repeats the statement to decide after locking that record. Thus
+a new key needs two statements; established keys need one. Initialization consumes
+no quota, and backend errors are never retried. A second initialization interrupted
+by concurrent Reset/pruning returns `sdk.ErrConflict` without admission. The conflict branch samples clock_timestamp()
+after obtaining that lock, once, and clamps to the previous decision on clock
+rollback. Window selection and returned retry durations use this database time.
+RetryAfter is a relative checkpoint at the current bucket end, not a reservation
+or the earliest possible admission. Live tests cover exact-K concurrency and a
+request blocked across a window boundary.
 
 ### Failure posture is the host's call
 
-`Allow` returns an error when Postgres is unreachable or slow. The limiter sets
-**no internal deadline** — it inherits the caller's context, so a stalled
-database stalls the rate-limited request for as long as that context allows.
-Give the request context a deadline you are willing to serve.
+Allow inherits the caller's deadline; it sets no internal timeout. Cancellation
+returns the caller error but cannot roll back a completed remote admission.
 
-What the host does with that error is the host's decision, and today's callers
-genuinely differ: `sdk/capabilities/ratelimiter.Middleware` fails **open** (a
-limiter error is swallowed and the request proceeds unthrottled), while the
-authentication pocket's login and passwordless call sites fail **closed** (the
-error propagates and the attempt is rejected — its refresh path fails open).
-Neither is wrong; they are different tradeoffs between "let traffic through
-during a database outage" and "never admit unmetered credential attempts."
-
-This matters most on the swap. A Memory limiter cannot fail: replacing it with
-this one puts every rate-limited path on a network round-trip to Postgres, so a
-database incident becomes an availability event (fail-closed paths) or a
-brute-force window (fail-open paths). Decide which you want per path, and
-monitor limiter error rate and latency as first-class signals, not as database
-noise.
+SDK middleware defaults to closed (503 for dependency/capacity errors). Hosts
+can select FailOpen and use OnError to observe failures. Configuration errors
+remain 500 and quota denial remains 429 with Retry-After. Authentication explicitly
+opens its public-IP and refresh-session outage paths and logs those failures;
+its other service policies remain unchanged. Memory can also fail at capacity.
+Choose policy per route and monitor errors and latency.
 
 ### Reference DDL — host-owned
 
@@ -363,12 +369,9 @@ noise.
 ledger (the same scaffold-and-own rule every pocket store follows); the table
 name is fixed, and keys are always bound parameters, never concatenated SQL.
 
-**If this table is absent, the limiter fails OPEN and SILENT.** Every `Allow`
-returns an error (`42P01`), and `sdk/capabilities/ratelimiter.Middleware`
-swallows limiter errors and lets the request through — so a host that forgot the
-migration, or pointed at the wrong database or `search_path`, serves completely
-unthrottled traffic with a green health check and no log line. Nothing in the
-request path will tell you. **Verify the table at boot, before serving:**
+Apply the reference schema before serving traffic. A missing table or column
+makes admission fail; the host's middleware policy determines the HTTP result.
+Verify the required schema at boot:
 
 ```go
 limiter := pgxdb.NewLimiter(db)
@@ -377,10 +380,10 @@ if err := limiter.StatusCheck(ctx); err != nil {
 }
 ```
 
-`StatusCheck` probes for the table (`SELECT 1 … LIMIT 0` — no rows, no heap
-access) and reports a missing one as `sdk.ErrNotFound`; other failures map
-through `MapError`. An undeadlined context gets one second, like the
-package-level `StatusCheck`.
+`StatusCheck` probes `SELECT window_ms FROM ratelimit_windows LIMIT 0` and
+reports a missing table or required column as `sdk.ErrNotFound`; other failures
+map through `MapError`. An undeadlined context gets one second. This is a schema
+availability probe; it does not validate every stored row or test write privileges.
 
 ```sql
 CREATE TABLE ratelimit_windows (
@@ -390,7 +393,8 @@ CREATE TABLE ratelimit_windows (
     prev_count    BIGINT      NOT NULL,
     last_allowed  BOOLEAN     NOT NULL,
     updated_at    TIMESTAMPTZ NOT NULL,
-    expires_at    TIMESTAMPTZ NOT NULL
+    expires_at    TIMESTAMPTZ NOT NULL,
+    window_ms     BIGINT      NOT NULL DEFAULT 0
 )
 -- Suggested, not required — tune against your own traffic (see the write-load
 -- note below). Leave more free space per page for the update-in-place attempt,
@@ -409,7 +413,29 @@ CREATE INDEX ratelimit_windows_expires_at_idx ON ratelimit_windows (expires_at);
 
 `last_allowed` is the outcome of the most recent decision, written by the same
 transition that made it — it is how one atomic statement returns its verdict.
-`expires_at` is 2.5 windows past that decision, mirroring the goredis key TTL.
+`expires_at` is the current bucket start plus two windows, matching Redis.
+`window_ms` records the normalized policy and distinguishes compatible state.
+An absent key first inserts an expired, zero-count placeholder, then makes its
+admission in the same locked conflict path as existing keys. A second concurrent
+removal during initialization returns `sdk.ErrConflict` without consuming quota.
+
+For an existing table, apply this host-owned migration before deploying the new
+adapter:
+
+```sql
+ALTER TABLE ratelimit_windows
+    ADD COLUMN window_ms BIGINT NOT NULL DEFAULT 0;
+```
+
+The zero default lets old writers retain their original insert statements. New
+adapter prefixes always append `v2:`, including custom and empty prefixes; normal
+old keys therefore start fresh budgets on rollout. Ensure old and new deployments
+use disjoint physical key namespaces: an arbitrary old logical key beginning
+`v2:` can collide with a new key. Allow and Reset reject nonpositive or out-of-range
+`window_ms` as `sdk.ErrConflict` without modifying the row, even when expired.
+That guard cannot identify an old writer that updates a new row while preserving
+its positive `window_ms`. The connector never migrates or deletes legacy state
+automatically; any intentional quota reset or legacy cleanup is host-owned.
 
 **`UNLOGGED` is a real option.** `CREATE UNLOGGED TABLE ratelimit_windows`
 roughly halves the WAL this table generates and keeps its contents out of base
@@ -424,18 +450,18 @@ conflicting `ON CONFLICT DO UPDATE` blocks and then re-evaluates against the
 winner's committed row. If your database or role sets a
 `REPEATABLE READ`/`SERIALIZABLE` default, that same statement raises
 serialization failures (`40001`) under contention instead of blocking, and the
-host must retry them — the connector never auto-retries statements.
+host decides whether to retry them. The connector never retries a database
+error; its sole extra statement initializes a missing key without charging quota.
 
 ### Pruning, write load, and retention are the host's job
 
-**Every checked request is one write, and none of them are HOT.** `expires_at`
-is indexed and is rewritten on every `Allow`, so each call costs a new heap
-tuple **plus** a new index tuple plus the WAL for both — a heap-only-tuple
-update is off the table by construction (that is the price of the cheap expiry
-sweep). Budget for it: this is one of the highest-churn small tables in the
-database, its bloat is autovacuum-bound rather than volume-bound, and the
-storage parameters commented into the DDL above exist for exactly that reason.
-Monitor write volume and dead-tuple counts against your login/attempt traffic.
+Every checked request executes an upsert; a missing key also needs initialization.
+Expiry stays at the current bucket
+start plus two windows, so requests inside the same bucket do not keep extending
+retention. Updates still create heap versions and WAL; index work and HOT
+eligibility depend on which stored values change and table/page conditions.
+Monitor write volume, latency and dead tuples, and tune the optional storage
+parameters against host traffic.
 
 **Schedule** the pruning statement (cron, `pockets/jobs`, or pg_cron — the
 connector never runs it):
@@ -603,3 +629,37 @@ POSTGRES_TEST_DSN='postgres://postgres:postgres@localhost:5432/postgres?sslmode=
 `make check` stays hermetic (the live test skips); the live path is the store
 modules' conformance gate, recorded as a dated NOTES.md artifact at milestone
 close.
+
+## Listing projection and transaction cleanup
+
+All List paths order the projected output of the authored SELECT. Search and
+cursor helpers wrap that SELECT before adding their outer predicate. Run them before final ordering or pagination. Project every
+search/order/PK field using an unqualified output name: select
+`t.created_at AS created_at` and use `Column: "created_at"`. Update strict row
+scanners for added projections. `OrderValueOf` must return the projected value
+and type. Fixed-order expressions must use projected fields. Authored filters,
+including OR and nested SELECTs, remain intact.
+
+SQL keyset ordering requires non-null order and PK values throughout the matched
+population. Use a non-null projected key or offset mode for nullable ordering.
+A SQL cursor with a null order value, or a non-string case-folded value, is
+invalid input. Other type compatibility belongs to `OrderValueOf` and the
+projected column; the generic helper does not inspect the database schema.
+
+Reverse probes include the incoming cursor and fetch `limit+1` records before
+restoring normal order for `list.MarkPrevPage`. This fixes previous links at a
+page size of one. Case-folded ordering retains the raw primary-key tiebreaker.
+
+`DB.Transact` implements `capabilities/transaction.Transactor` and shares cleanup
+with `InTx`. Pass its callback context to participating repositories backed by
+the same DB instance. Commit uses the Begin context. Rollback receives an
+independent five-second deadline; actual completion depends on the driver.
+Callback error causes and panic values survive cleanup. SQL helpers do not
+retry callbacks; portable consumers must allow for connectors that do.
+Cancellation racing a commit cannot undo a commit already accepted by a server.
+
+Limiter options configure private construction settings in order; the last prefix
+wins and the internal `v2:` suffix is appended afterward, including to an empty
+prefix. They cannot change a live limiter. `NewLimiter` panics on a nil option.
+`RunMigrations` rejects a nil `MigrateOption` with `sdk.ErrInvalidInput` before
+accessing the database; repeated `WithSchema` uses the last schema.

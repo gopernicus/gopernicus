@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gopernicus/gopernicus/sdk/foundation/web"
+	"github.com/gopernicus/gopernicus/sdk/pkg/web"
 	uigoth "github.com/gopernicus/gopernicus/ui/goth"
 )
 
@@ -55,7 +55,7 @@ func assertAssetsReachable(bundle *uigoth.Bundle, serve func(path string) int) e
 // real StylesOnly bundle this host builds: the mapped header is exactly style-src 'self'
 // with no remote origin, no nonce, and no unsafe-* source.
 func TestDocSnippet_CSPHeaderFormatter(t *testing.T) {
-	bundle, err := uigoth.New(uigoth.Config{AssetBasePath: gothAssetBasePath})
+	bundle, err := uigoth.New(uigoth.WithAssetBasePath(gothAssetBasePath))
 	if err != nil {
 		t.Fatalf("bundle: %v", err)
 	}
@@ -74,7 +74,7 @@ func TestDocSnippet_CSPHeaderFormatter(t *testing.T) {
 // passes on a correctly wired host and CATCHES the "host forgot to mount the asset
 // route" failure mode.
 func TestDocSnippet_AssetReachabilitySelfCheck(t *testing.T) {
-	bundle, err := uigoth.New(uigoth.Config{AssetBasePath: gothAssetBasePath})
+	bundle, err := uigoth.New(uigoth.WithAssetBasePath(gothAssetBasePath))
 	if err != nil {
 		t.Fatalf("bundle: %v", err)
 	}

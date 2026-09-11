@@ -12,9 +12,9 @@ import "context"
 // the poller stays correct even under drops.
 //
 // The returned Subscription's lifetime is the caller's to manage. Unsubscribe
-// stops further wakes; closing the bus has the same effect for all its
-// subscriptions.
-func WakeChannel(bus Bus, topic string) (<-chan struct{}, Subscription, error) {
+// stops new dispatch selection; callbacks already selected can still signal.
+// Close drains admitted events before releasing the bus subscriptions.
+func WakeChannel(bus Subscriber, topic string) (<-chan struct{}, Subscription, error) {
 	wake := make(chan struct{}, 1)
 	sub, err := bus.Subscribe(topic, func(context.Context, Event) error {
 		select {

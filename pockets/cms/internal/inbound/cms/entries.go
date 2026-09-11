@@ -14,8 +14,8 @@ import (
 	"github.com/gopernicus/gopernicus/pockets/cms/domain/taxonomy"
 	"github.com/gopernicus/gopernicus/pockets/cms/internal/logic/entrysvc"
 	"github.com/gopernicus/gopernicus/sdk"
-	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
-	"github.com/gopernicus/gopernicus/sdk/foundation/web"
+	"github.com/gopernicus/gopernicus/sdk/pkg/list"
+	"github.com/gopernicus/gopernicus/sdk/pkg/web"
 )
 
 // entryService is the narrow surface the entry handlers consume. *entrysvc.Service
@@ -26,8 +26,8 @@ type entryService interface {
 	Get(ctx context.Context, id string) (content.Entry, error)
 	GetBySlug(ctx context.Context, typ, slug string) (content.Entry, error)
 	Delete(ctx context.Context, id string) error
-	List(ctx context.Context, q content.EntryQuery) (crud.Page[content.Entry], error)
-	ListByTerm(ctx context.Context, termID string, q content.EntryQuery) (crud.Page[content.Entry], error)
+	List(ctx context.Context, q content.EntryQuery) (list.Page[content.Entry], error)
+	ListByTerm(ctx context.Context, termID string, q content.EntryQuery) (list.Page[content.Entry], error)
 	Publish(ctx context.Context, id string) (content.Entry, error)
 	Unpublish(ctx context.Context, id string) (content.Entry, error)
 	SetTerms(ctx context.Context, entryID string, termIDs []string) error
@@ -58,7 +58,7 @@ func NewEntryHandlers(svc entryService, taxo taxonomyService, media mediaService
 func (h *EntryHandlers) List(w http.ResponseWriter, r *http.Request, ct content.ContentType) {
 	order, linkOrder := parseEntryOrder(r)
 	status := parseEntryStatus(r)
-	q := content.EntryQuery{Type: ct.Slug, Status: status, ListRequest: crud.ListRequest{
+	q := content.EntryQuery{Type: ct.Slug, Status: status, Request: list.Request{
 		Cursor: r.URL.Query().Get("cursor"),
 		Limit:  atoiOrZero(r.URL.Query().Get("limit")),
 		Order:  order,
@@ -119,9 +119,9 @@ func isHTMX(r *http.Request) bool {
 // allow-list. Per Q3, an unknown field/direction falls back to the default order
 // (no 4xx/5xx) and is NOT propagated into the pagination links; a valid value is
 // returned verbatim as linkOrder so the "Older →"/"← Newer" links carry it.
-func parseEntryOrder(r *http.Request) (order crud.Order, linkOrder string) {
+func parseEntryOrder(r *http.Request) (order list.Order, linkOrder string) {
 	raw := r.URL.Query().Get("order")
-	resolved, err := crud.ParseOrder(content.OrderFields, raw, content.DefaultOrder)
+	resolved, err := list.ParseOrder(content.OrderFields, raw, content.DefaultOrder)
 	if err != nil {
 		return content.DefaultOrder, ""
 	}
@@ -303,7 +303,7 @@ func (h *EntryHandlers) assetOptions(ctx context.Context, selected string) []Sel
 
 // relationOptions lists published+draft entries of relTo as select options.
 func (h *EntryHandlers) relationOptions(ctx context.Context, relTo, selected string) []SelectOption {
-	page, err := h.svc.List(ctx, content.EntryQuery{Type: relTo, ListRequest: crud.ListRequest{Limit: crud.MaxLimit}})
+	page, err := h.svc.List(ctx, content.EntryQuery{Type: relTo, Request: list.Request{Limit: list.MaxLimit}})
 	if err != nil {
 		return nil
 	}
@@ -316,7 +316,7 @@ func (h *EntryHandlers) relationOptions(ctx context.Context, relTo, selected str
 
 // parentOptions lists candidate parents (entries of ct except exclude).
 func (h *EntryHandlers) parentOptions(ctx context.Context, ct content.ContentType, exclude, selected string) []SelectOption {
-	page, err := h.svc.List(ctx, content.EntryQuery{Type: ct.Slug, ListRequest: crud.ListRequest{Limit: crud.MaxLimit}})
+	page, err := h.svc.List(ctx, content.EntryQuery{Type: ct.Slug, Request: list.Request{Limit: list.MaxLimit}})
 	if err != nil {
 		return nil
 	}

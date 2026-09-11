@@ -4,7 +4,7 @@ import (
 	"context"
 
 	firestoredb "github.com/gopernicus/gopernicus/integrations/datastores/firestore"
-	"github.com/gopernicus/gopernicus/pockets/authentication/domain/credential"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/credential"
 )
 
 var _ credential.MutationRepository = (*credentialMutationStore)(nil)

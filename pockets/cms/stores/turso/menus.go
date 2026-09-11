@@ -3,9 +3,10 @@ package turso
 import (
 	"context"
 
+	"github.com/gopernicus/gopernicus/sdk"
+
 	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
 	"github.com/gopernicus/gopernicus/pockets/cms/domain/menus"
-	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
 )
 
 // MenuStore implements menus.MenuRepository over a libSQL database.
@@ -69,7 +70,7 @@ func (r menuItemRow) toDomain() menus.MenuItem {
 
 // CreateMenu persists a new menu.
 func (s *MenuStore) CreateMenu(ctx context.Context, m menus.Menu) (menus.Menu, error) {
-	// Empty ID → the cryptids.Database strategy (amended D10): omit the id
+	// Empty ID → the sdk.DatabaseID strategy (amended D10): omit the id
 	// column so the schema default generates the key, read back with RETURNING.
 	if m.ID == "" {
 		const q = `INSERT INTO menus (name, slug, created_at, updated_at) VALUES (?, ?, ?, ?) RETURNING id`
@@ -147,7 +148,7 @@ func (s *MenuStore) ItemsForMenu(ctx context.Context, menuID string) ([]menus.Me
 
 // AddItem persists a new menu item.
 func (s *MenuStore) AddItem(ctx context.Context, it menus.MenuItem) (menus.MenuItem, error) {
-	// Empty ID → the cryptids.Database strategy (amended D10): omit the id
+	// Empty ID → the sdk.DatabaseID strategy (amended D10): omit the id
 	// column so the schema default generates the key, read back with RETURNING.
 	if it.ID == "" {
 		const q = `INSERT INTO menu_items (menu_id, label, url, parent_id, position, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id`
@@ -185,7 +186,7 @@ func (s *MenuStore) UpdateItem(ctx context.Context, id string, it menus.MenuItem
 		return menus.MenuItem{}, err
 	}
 	if n == 0 {
-		return menus.MenuItem{}, crud.ErrNotFound
+		return menus.MenuItem{}, sdk.ErrNotFound
 	}
 	return it, nil
 }

@@ -12,7 +12,7 @@
 // unconditionally whether or not a real tracer is wired.
 //
 // SpanIdentity is the optional linkage convention between a tracer's spans and
-// sdk/foundation/logging's trace_id/span_id fields: a finisher whose span has stable trace
+// sdk/pkg/logging's trace_id/span_id fields: a finisher whose span has stable trace
 // and span IDs also implements SpanIdentity, so a caller (e.g. tracing.Middleware)
 // can stash those IDs via sdk.WithTraceID/WithSpanID and have them appear on log
 // lines. An implementer that adds it must keep the method set in sync with this
@@ -44,7 +44,7 @@ type SpanFinisher interface {
 // SpanIdentity is an optional interface a SpanFinisher may also implement to
 // expose the stable identity of its span. It is the compile-checked home for
 // the cross-module method-set contract that links a tracer's spans to
-// sdk/foundation/logging's trace_id/span_id fields: a caller type-asserts it on the
+// sdk/pkg/logging's trace_id/span_id fields: a caller type-asserts it on the
 // returned SpanFinisher and, when it is satisfied with non-empty IDs, stashes
 // them via sdk.WithTraceID/WithSpanID so they land on log lines. Optional;
 // implementations without stable span identity simply omit it.

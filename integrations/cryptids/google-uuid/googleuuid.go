@@ -1,6 +1,6 @@
 // Package googleuuid is an identifier connector wrapping exactly one
 // third-party library, github.com/google/uuid. Its constructors return
-// cryptids.GenerateFunc values, so a host chooses uuid-shaped entity keys the
+// sdk.IDGenerateFunc values, so a host chooses uuid-shaped entity keys the
 // same way it chooses any other ID strategy: once, at wiring, on a pocket's
 // Config.IDs.
 //
@@ -15,18 +15,18 @@ package googleuuid
 import (
 	"github.com/google/uuid"
 
-	"github.com/gopernicus/gopernicus/sdk/foundation/cryptids"
+	"github.com/gopernicus/gopernicus/sdk"
 )
 
 // Compile-time proof the constructors satisfy the sdk-owned port.
 var (
-	_ cryptids.GenerateFunc = V4()
-	_ cryptids.GenerateFunc = V7()
+	_ sdk.IDGenerateFunc = V4()
+	_ sdk.IDGenerateFunc = V7()
 )
 
 // V4 returns a GenerateFunc minting canonical lowercase UUIDv4 strings
 // (122 random bits). The only error source is the OS entropy pool.
-func V4() cryptids.GenerateFunc {
+func V4() sdk.IDGenerateFunc {
 	return func() (string, error) {
 		u, err := uuid.NewRandom()
 		if err != nil {
@@ -40,7 +40,7 @@ func V4() cryptids.GenerateFunc {
 // millisecond timestamp prefix over random bits, so the text form is
 // time-ordered. Prefer it for database keys; prefer V4 when IDs must not
 // reveal creation time.
-func V7() cryptids.GenerateFunc {
+func V7() sdk.IDGenerateFunc {
 	return func() (string, error) {
 		u, err := uuid.NewV7()
 		if err != nil {

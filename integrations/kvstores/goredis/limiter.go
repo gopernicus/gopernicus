@@ -3,249 +3,196 @@ package goredis
 import (
 	"context"
 	"fmt"
-	"strconv"
-	"strings"
-	"sync"
 	"time"
 
-	"github.com/redis/go-redis/v9"
-
+	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/ratelimiter"
+	"github.com/redis/go-redis/v9"
 )
 
-// defaultLimiterKeyPrefix namespaces rate-limit keys in a shared Redis instance.
 const defaultLimiterKeyPrefix = "ratelimit:"
+const limiterKeyVersion = "v2:"
 
-// slidingWindowScript is an atomic Lua sliding-window rate limiter. It reads
-// Redis server time (not the caller's clock) so distributed application
-// instances agree on the window regardless of clock skew, and lets Redis expire
-// idle keys via PEXPIRE. It returns [allowed (0/1), remaining, reset_at_unix_ns].
+// The reply is {allowed, remaining, reset_at_ms, retry_ms}. Negative allowed
+// markers report incompatible state (-2) or a live window-policy mismatch (-1).
 const slidingWindowScript = `
 local key = KEYS[1]
-local window_ns = tonumber(ARGV[1])
-local limit = tonumber(ARGV[2])
+local window = tonumber(ARGV[1])
+local ceiling = tonumber(ARGV[2])
+local max_window = tonumber(ARGV[3])
+local exists = redis.call('EXISTS', key) == 1
+if exists then
+    local stored_window = tonumber(redis.call('HGET', key, 'window_ms'))
+    if not stored_window or stored_window <= 0 or stored_window > max_window or stored_window ~= math.floor(stored_window) then
+        return {-2, 0, 0, 0}
+    end
+end
 
--- Use Redis server time to avoid clock skew across distributed servers.
-local redis_time = redis.call('TIME')
-local now = tonumber(redis_time[1]) * 1000000000 + tonumber(redis_time[2]) * 1000
-
-local data = redis.call('HMGET', key, 'count', 'window_start', 'prev_count', 'prev_window_start')
+local stamp = redis.call('TIME')
+local now = tonumber(stamp[1]) * 1000 + math.floor(tonumber(stamp[2]) / 1000)
+local data = redis.call('HMGET', key, 'count', 'window_start', 'prev_count', 'window_ms', 'updated_at', 'expires_at')
 local count = tonumber(data[1]) or 0
-local window_start = tonumber(data[2]) or 0
-local prev_count = tonumber(data[3]) or 0
-local prev_window_start = tonumber(data[4]) or 0
+local start = tonumber(data[2]) or now
+local previous = tonumber(data[3]) or 0
+local stored_window = tonumber(data[4]) or window
+local updated = tonumber(data[5]) or now
+local expires = tonumber(data[6]) or now
+now = math.max(now, updated)
 
--- New key or expired window.
-if window_start == 0 then
-    redis.call('HMSET', key, 'count', 1, 'window_start', now, 'prev_count', 0, 'prev_window_start', 0)
-    redis.call('PEXPIRE', key, math.ceil(window_ns / 1000000 * 2.5))
-    return {1, limit - 1, now + window_ns}
-end
-
-local window_end = window_start + window_ns
-
-if now > window_end then
-    -- Window expired: slide forward, carrying the previous window only if it is
-    -- recent enough to still weigh on the sliding estimate.
-    if now < window_end + window_ns then
-        prev_count = count
-        prev_window_start = window_start
-    else
-        prev_count = 0
-        prev_window_start = 0
-    end
+if not exists or now >= expires then
+    start = now
     count = 0
-    window_start = now
-    window_end = now + window_ns
-end
-
--- Sliding-window approximation: blend the decaying tail of the previous window.
-local effective_count = count
-if prev_window_start > 0 then
-    local elapsed = now - window_start
-    local weight = (window_ns - elapsed) / window_ns
-    if weight > 0 then
-        effective_count = effective_count + math.floor(prev_count * weight)
+    previous = 0
+elseif stored_window ~= window then
+    return {-1, 0, 0, 0}
+else
+    local steps = math.floor((now - start) / window)
+    if steps >= 1 then
+        previous = steps == 1 and count or 0
+        count = 0
+        start = start + steps * window
     end
 end
 
-if effective_count >= limit then
-    redis.call('HMSET', key, 'count', count, 'window_start', window_start, 'prev_count', prev_count, 'prev_window_start', prev_window_start)
-    redis.call('PEXPIRE', key, math.ceil(window_ns / 1000000 * 2.5))
-    return {0, 0, window_end}
+local remaining_ms = window - (now - start)
+local effective = count + math.floor(previous * remaining_ms / window)
+local allowed = effective < ceiling
+local remaining = 0
+local retry = remaining_ms
+if allowed then
+    count = count + 1
+    remaining = math.max(ceiling - effective - 1, 0)
+    retry = 0
 end
-
-count = count + 1
-redis.call('HMSET', key, 'count', count, 'window_start', window_start, 'prev_count', prev_count, 'prev_window_start', prev_window_start)
-redis.call('PEXPIRE', key, math.ceil(window_ns / 1000000 * 2.5))
-
-local remaining = limit - effective_count - 1
-if remaining < 0 then
-    remaining = 0
-end
-
-return {1, remaining, window_end}
+expires = start + 2 * window
+redis.call('HSET', key, 'count', count, 'window_start', start, 'prev_count', previous,
+    'window_ms', window, 'updated_at', now, 'expires_at', expires)
+redis.call('PEXPIREAT', key, expires)
+return {allowed and 1 or 0, remaining, start + window, retry}
 `
 
-var _ ratelimiter.Limiter = (*Limiter)(nil)
+const resetLimiterScript = `
+local key = KEYS[1]
+if redis.call('EXISTS', key) == 0 then return 0 end
+local window = tonumber(redis.call('HGET', key, 'window_ms'))
+if not window or window <= 0 or window > tonumber(ARGV[1]) or window ~= math.floor(window) then
+    return -1
+end
+return redis.call('DEL', key)
+`
 
-// Limiter is a Redis-backed ratelimiter.Limiter that enforces one sliding window
-// across every application instance sharing the client. The window is evaluated
-// by an atomic Lua script (EVALSHA with an EVAL/reload fallback) keyed off Redis
-// server time. The caller supplies and owns the *redis.Client — Close is a no-op
-// and never closes it.
+var (
+	_                  ratelimiter.Limiter = (*Limiter)(nil)
+	limiterAllowScript                     = redis.NewScript(slidingWindowScript)
+	limiterResetScript                     = redis.NewScript(resetLimiterScript)
+)
+
+// Limiter applies the shared two-window approximation atomically using Redis
+// time. The host owns its client; no lifecycle methods are needed here.
 type Limiter struct {
 	rdb       *redis.Client
 	keyPrefix string
-
-	// scriptSHA is loaded lazily on first use and cached; scriptLoaded guards it
-	// against a NOSCRIPT reload after a server-side SCRIPT FLUSH.
-	scriptMu     sync.RWMutex
-	scriptSHA    string
-	scriptLoaded bool
 }
 
-// LimiterOption configures a Limiter.
-type LimiterOption func(*Limiter)
+// LimiterOption configures construction of a Limiter. Options apply in order.
+type LimiterOption func(*limiterConfig)
 
-// WithLimiterKeyPrefix sets the prefix prepended to every rate-limit key, for
-// namespacing in a shared Redis instance. Default: "ratelimit:".
+type limiterConfig struct {
+	keyPrefix string
+}
+
+// WithLimiterKeyPrefix selects the host namespace (default "ratelimit:"). An
+// internal "v2:" suffix is always appended, including to custom/empty prefixes.
 func WithLimiterKeyPrefix(prefix string) LimiterOption {
-	return func(l *Limiter) {
-		l.keyPrefix = prefix
-	}
+	return func(cfg *limiterConfig) { cfg.keyPrefix = prefix }
 }
 
-// NewLimiter creates a Redis rate limiter over the caller's client (which may be
-// the same client feeding the Bus and Cacher). The caller owns the client.
+// NewLimiter wraps a caller-owned client. Versioned keys normally separate old
+// state; a colliding legacy record is rejected, never migrated or deleted.
+// A nil option panics.
 func NewLimiter(rdb *redis.Client, opts ...LimiterOption) *Limiter {
-	l := &Limiter{
-		rdb:       rdb,
-		keyPrefix: defaultLimiterKeyPrefix,
-	}
+	cfg := limiterConfig{keyPrefix: defaultLimiterKeyPrefix}
 	for _, opt := range opts {
-		opt(l)
+		if opt == nil {
+			panic("goredis: nil LimiterOption")
+		}
+		opt(&cfg)
 	}
-	return l
+	return &Limiter{rdb: rdb, keyPrefix: cfg.keyPrefix + limiterKeyVersion}
 }
 
-// Allow checks and records a request against key's sliding window. Limit.Burst
-// is added to Limit.Requests to form the effective ceiling.
+// Allow normalizes the policy and checks a nonempty key using server-time
+// millisecond buckets. RetryAfter is a relative checkpoint, not local-clock math.
 func (l *Limiter) Allow(ctx context.Context, key string, limit ratelimiter.Limit) (ratelimiter.Result, error) {
 	if err := ctx.Err(); err != nil {
 		return ratelimiter.Result{}, err
 	}
-
-	fullKey := l.keyPrefix + key
-	windowNs := limit.Window.Nanoseconds()
-	effectiveLimit := limit.Requests + limit.Burst
-
-	raw, err := l.evalScript(ctx, fullKey, windowNs, effectiveLimit)
+	if key == "" {
+		return ratelimiter.Result{}, fmt.Errorf("goredis: rate limit key is empty: %w", sdk.ErrInvalidInput)
+	}
+	normalized, err := limit.Normalize()
 	if err != nil {
-		return ratelimiter.Result{}, fmt.Errorf("goredis: executing rate limit script: %w", err)
+		return ratelimiter.Result{}, err
 	}
-
-	values, ok := raw.([]any)
-	if !ok || len(values) != 3 {
-		return ratelimiter.Result{}, fmt.Errorf("goredis: unexpected rate limit script result: %v", raw)
+	raw, err := limiterAllowScript.Run(ctx, l.rdb, []string{l.keyPrefix + key}, normalized.Window.Milliseconds(), normalized.Requests+normalized.Burst, ratelimiter.MaxWindow.Milliseconds()).Result()
+	if ctx.Err() != nil {
+		return ratelimiter.Result{}, ctx.Err()
 	}
-
-	allowed, err := toInt64(values[0])
 	if err != nil {
-		return ratelimiter.Result{}, fmt.Errorf("goredis: parsing allowed: %w", err)
+		return ratelimiter.Result{}, fmt.Errorf("goredis: evaluating rate limit: %w", err)
 	}
-	remaining, err := toInt64(values[1])
-	if err != nil {
-		return ratelimiter.Result{}, fmt.Errorf("goredis: parsing remaining: %w", err)
-	}
-	resetAtNs, err := toInt64(values[2])
-	if err != nil {
-		return ratelimiter.Result{}, fmt.Errorf("goredis: parsing reset_at: %w", err)
-	}
-
-	resetAt := time.Unix(0, resetAtNs)
-	var retryAfter time.Duration
-	if allowed == 0 {
-		retryAfter = time.Until(resetAt)
-		if retryAfter < 0 {
-			retryAfter = 0
-		}
-	}
-
-	return ratelimiter.Result{
-		Allowed:    allowed == 1,
-		Remaining:  int(remaining),
-		ResetAt:    resetAt,
-		RetryAfter: retryAfter,
-	}, nil
+	return decodeLimiterResult(raw, normalized)
 }
 
-// Reset clears the sliding-window state for key.
+func decodeLimiterResult(raw any, limit ratelimiter.Limit) (ratelimiter.Result, error) {
+	values, ok := raw.([]any)
+	if !ok || len(values) != 4 {
+		return ratelimiter.Result{}, fmt.Errorf("goredis: invalid rate limit reply shape")
+	}
+	numbers := [4]int64{}
+	for i, value := range values {
+		n, ok := value.(int64)
+		if !ok {
+			return ratelimiter.Result{}, fmt.Errorf("goredis: rate limit reply field %d is not an integer", i)
+		}
+		numbers[i] = n
+	}
+	allowed, remaining, reset, retry := numbers[0], numbers[1], numbers[2], numbers[3]
+	if (allowed == -1 || allowed == -2) && remaining == 0 && reset == 0 && retry == 0 {
+		if allowed == -2 {
+			return ratelimiter.Result{}, fmt.Errorf("goredis: incompatible rate limit state: %w", sdk.ErrConflict)
+		}
+		return ratelimiter.Result{}, fmt.Errorf("goredis: active rate limit window changed: %w", sdk.ErrInvalidInput)
+	}
+	ceiling := int64(limit.Requests + limit.Burst)
+	if (allowed != 0 && allowed != 1) || remaining < 0 || remaining >= ceiling || reset <= 0 || reset > 1<<53-1 || retry < 0 || retry > limit.Window.Milliseconds() || (allowed == 1 && retry != 0) || (allowed == 0 && (remaining != 0 || retry == 0)) {
+		return ratelimiter.Result{}, fmt.Errorf("goredis: invalid rate limit reply values")
+	}
+	return ratelimiter.Result{Allowed: allowed == 1, Remaining: int(remaining), ResetAt: time.UnixMilli(reset).UTC(), RetryAfter: time.Duration(retry) * time.Millisecond}, nil
+}
+
+// Reset removes compatible state for a nonempty key. Legacy collisions are
+// errors and remain untouched; an absent key succeeds.
 func (l *Limiter) Reset(ctx context.Context, key string) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	return l.rdb.Del(ctx, l.keyPrefix+key).Err()
-}
-
-// Close is a no-op: Redis expires keys via PEXPIRE and the client lifecycle
-// belongs to the caller. It is idempotent, so repeated calls remain safe.
-func (l *Limiter) Close() error {
-	return nil
-}
-
-// evalScript runs the sliding-window script via EVALSHA, loading and caching the
-// SHA on first use and reloading after a NOSCRIPT (server-side SCRIPT FLUSH). If
-// ScriptLoad itself fails it falls back to a plain EVAL.
-func (l *Limiter) evalScript(ctx context.Context, key string, windowNs int64, limit int) (any, error) {
-	l.scriptMu.RLock()
-	sha := l.scriptSHA
-	loaded := l.scriptLoaded
-	l.scriptMu.RUnlock()
-
-	if loaded && sha != "" {
-		result, err := l.rdb.EvalSha(ctx, sha, []string{key}, windowNs, limit).Result()
-		if err == nil {
-			return result, nil
-		}
-		if !isNoScriptError(err) {
-			return nil, err
-		}
-		l.scriptMu.Lock()
-		l.scriptLoaded = false
-		l.scriptMu.Unlock()
+	if key == "" {
+		return fmt.Errorf("goredis: rate limit key is empty: %w", sdk.ErrInvalidInput)
 	}
-
-	newSHA, err := l.rdb.ScriptLoad(ctx, slidingWindowScript).Result()
+	raw, err := limiterResetScript.Run(ctx, l.rdb, []string{l.keyPrefix + key}, ratelimiter.MaxWindow.Milliseconds()).Result()
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
 	if err != nil {
-		return l.rdb.Eval(ctx, slidingWindowScript, []string{key}, windowNs, limit).Result()
+		return fmt.Errorf("goredis: resetting rate limit: %w", err)
 	}
-
-	l.scriptMu.Lock()
-	l.scriptSHA = newSHA
-	l.scriptLoaded = true
-	l.scriptMu.Unlock()
-
-	return l.rdb.EvalSha(ctx, newSHA, []string{key}, windowNs, limit).Result()
-}
-
-func isNoScriptError(err error) bool {
-	return err != nil && strings.Contains(err.Error(), "NOSCRIPT")
-}
-
-// toInt64 normalizes the Lua reply elements, which go-redis may surface as any
-// of int64/int/float64/string depending on the RESP protocol version.
-func toInt64(v any) (int64, error) {
-	switch val := v.(type) {
-	case int64:
-		return val, nil
-	case int:
-		return int64(val), nil
-	case float64:
-		return int64(val), nil
-	case string:
-		return strconv.ParseInt(val, 10, 64)
-	default:
-		return 0, fmt.Errorf("cannot convert %T to int64", v)
+	count, ok := raw.(int64)
+	if !ok || count < -1 || count > 1 {
+		return fmt.Errorf("goredis: invalid rate limit reset reply")
 	}
+	if count == -1 {
+		return fmt.Errorf("goredis: incompatible rate limit state: %w", sdk.ErrConflict)
+	}
+	return nil
 }

@@ -6,8 +6,8 @@ import (
 	"fmt"
 
 	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
-	"github.com/gopernicus/gopernicus/pockets/authentication/domain/securityevent"
-	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/securityevent"
+	"github.com/gopernicus/gopernicus/sdk/pkg/list"
 )
 
 // SecurityEventStore implements securityevent.SecurityEventRepository over a libSQL
@@ -22,7 +22,11 @@ type SecurityEventStore struct {
 var _ securityevent.SecurityEventRepository = (*SecurityEventStore)(nil)
 
 // NewSecurityEventStore returns a SecurityEventStore backed by db.
+// It panics if db is nil; the caller owns the database lifecycle.
 func NewSecurityEventStore(db *tursodb.DB) *SecurityEventStore {
+	if db == nil {
+		panic("authentication turso: NewSecurityEventStore received a nil database")
+	}
 	return &SecurityEventStore{db: db}
 }
 
@@ -91,7 +95,7 @@ func (s *SecurityEventStore) Create(ctx context.Context, evt securityevent.Secur
 	if err != nil {
 		return securityevent.SecurityEvent{}, err
 	}
-	// Empty ID → the cryptids.Database strategy (amended D10): omit the id
+	// Empty ID → the sdk.DatabaseID strategy (amended D10): omit the id
 	// column so the schema default generates the key, read back with RETURNING.
 	if evt.ID == "" {
 		const q = `INSERT INTO security_events (user_id, actor_type, actor_id, event_type, event_status, details, ip_address, user_agent, created_at)
@@ -123,7 +127,7 @@ func (s *SecurityEventStore) Create(ctx context.Context, evt securityevent.Secur
 
 // List returns a cursor-paginated page of events matching filter, ordered
 // created_at DESC, id DESC. The dynamic WHERE is parameterized.
-func (s *SecurityEventStore) List(ctx context.Context, filter securityevent.ListFilter, req crud.ListRequest) (crud.Page[securityevent.SecurityEvent], error) {
+func (s *SecurityEventStore) List(ctx context.Context, filter securityevent.ListFilter, req list.Request) (list.Page[securityevent.SecurityEvent], error) {
 	where := "WHERE 1 = 1"
 	var args []any
 	if filter.UserID != "" {
@@ -157,9 +161,9 @@ func (s *SecurityEventStore) List(ctx context.Context, filter securityevent.List
 	}
 	page, err := tursodb.List(ctx, s.db, q, req)
 	if err != nil {
-		return crud.Page[securityevent.SecurityEvent]{}, err
+		return list.Page[securityevent.SecurityEvent]{}, err
 	}
-	return crud.MapPage(page, securityEventRow.toDomain), nil
+	return list.MapPage(page, securityEventRow.toDomain), nil
 }
 
 // marshalDetails renders an open details bag as TEXT JSON. A nil or empty map

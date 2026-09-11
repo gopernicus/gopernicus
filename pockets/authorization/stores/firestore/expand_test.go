@@ -11,7 +11,7 @@ import (
 
 	firestoredb "github.com/gopernicus/gopernicus/integrations/datastores/firestore"
 	"github.com/gopernicus/gopernicus/integrations/datastores/firestore/firestoretest"
-	"github.com/gopernicus/gopernicus/pockets/authorization/domain/relationship"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/relationships"
 )
 
 // A2a: the snapshot-bound expansion (A-D2 / ruling R2) and the four reads built
@@ -42,7 +42,7 @@ func TestExpandBudgetThreshold(t *testing.T) {
 		}
 	}
 	for _, budget := range []int{states - 1, 2, 1} {
-		if _, err := expandUnderSnapshot(t, db, "user", "u1", budget); !errors.Is(err, relationship.ErrExpansionBudgetExceeded) {
+		if _, err := expandUnderSnapshot(t, db, "user", "u1", budget); !errors.Is(err, relationships.ErrExpansionBudgetExceeded) {
 			t.Fatalf("budget %d: want ErrExpansionBudgetExceeded, got %v", budget, err)
 		}
 	}
@@ -65,16 +65,16 @@ func TestExpandBudgetSurfacesThroughTheCheck(t *testing.T) {
 		t.Fatalf("budget 4 fits the four states: ok=%v err=%v", ok, err)
 	}
 	ok, err := s.CheckRelationWithGroupExpansion(ctx, "doc", "d1", "viewer", "user", "u1", 3)
-	if !errors.Is(err, relationship.ErrExpansionBudgetExceeded) {
+	if !errors.Is(err, relationships.ErrExpansionBudgetExceeded) {
 		t.Fatalf("budget 3 must be indeterminate, got ok=%v err=%v", ok, err)
 	}
 	if ok {
 		t.Fatalf("an overflowed check must never report allowed")
 	}
-	if _, err := s.FilterRelation(ctx, "doc", []string{"d1"}, "viewer", "user", "u1", 3); !errors.Is(err, relationship.ErrExpansionBudgetExceeded) {
+	if _, err := s.FilterRelation(ctx, "doc", []string{"d1"}, "viewer", "user", "u1", 3); !errors.Is(err, relationships.ErrExpansionBudgetExceeded) {
 		t.Fatalf("FilterRelation overflow must fail the whole call, got %v", err)
 	}
-	if _, err := s.CheckBatchDirect(ctx, "doc", []string{"d1"}, "viewer", "user", "u1", 3); !errors.Is(err, relationship.ErrExpansionBudgetExceeded) {
+	if _, err := s.CheckBatchDirect(ctx, "doc", []string{"d1"}, "viewer", "user", "u1", 3); !errors.Is(err, relationships.ErrExpansionBudgetExceeded) {
 		t.Fatalf("CheckBatchDirect overflow must fail the whole call, got %v", err)
 	}
 }
@@ -112,7 +112,7 @@ func TestExpandChunksFrontierPastDisjunctionCap(t *testing.T) {
 	db, _ := newRelationships(t)
 	const groups = 35
 
-	tuples := make([]relationship.CreateRelationship, 0, 2*groups)
+	tuples := make([]relationships.CreateRelationship, 0, 2*groups)
 	for i := 0; i < groups; i++ {
 		g := docID("g", i)
 		tuples = append(tuples,
@@ -292,7 +292,7 @@ func TestGetRelationTargetsPreservesUsersets(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetRelationTargets: %v", err)
 	}
-	want := []relationship.RelationTarget{
+	want := []relationships.RelationTarget{
 		{Type: "space", ID: "root"},
 		{Type: "group", ID: "g", Relation: "member"},
 	}
@@ -346,7 +346,7 @@ func expandUnderSnapshot(t *testing.T, db *firestoredb.DB, subjectType, subjectI
 
 // sameTargets compares two target lists as SETS: the port fixes no order within
 // one resource's targets.
-func sameTargets(a, b []relationship.RelationTarget) bool {
+func sameTargets(a, b []relationships.RelationTarget) bool {
 	if len(a) != len(b) {
 		return false
 	}
@@ -385,7 +385,7 @@ func TestCheckReadBudgetScalesWithTheGrantsOfThePrincipal(t *testing.T) {
 			ctx := context.Background()
 			db, s := newRelationships(t)
 
-			batch := make([]relationship.CreateRelationship, 0, grants)
+			batch := make([]relationships.CreateRelationship, 0, grants)
 			for i := 0; i < grants; i++ {
 				batch = append(batch, ctf("doc", docID("d", i), "viewer", "user", "u1"))
 			}

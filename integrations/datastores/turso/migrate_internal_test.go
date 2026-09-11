@@ -145,3 +145,30 @@ func TestRunMigrations_LegacyTableMigratedAndAdopted(t *testing.T) {
 		t.Fatalf("legacy adoption failed: rows=%d source=%q, want rows=1 source=%s", n, source, defaultMigrationSource)
 	}
 }
+
+func TestRunMigrationsUsesOneFlatSQLStream(t *testing.T) {
+	db := newMemDB(t)
+	fsys := fstest.MapFS{
+		"m/001_create.sql":        sqlFile("CREATE TABLE chosen (id TEXT);"),
+		"m/002_insert.sql":        sqlFile("INSERT INTO chosen VALUES ('yes');"),
+		"m/_ignored.sql":          sqlFile("INVALID SQL"),
+		"m/README.md":             sqlFile("not a migration"),
+		"m/nested/001_create.sql": sqlFile("INVALID SQL"),
+		"m/nested/003_nested.sql": sqlFile("INVALID SQL"),
+	}
+	for range 2 {
+		if err := RunMigrations(context.Background(), db, fsys, "m"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var rows, migrations int
+	if err := db.QueryRow(context.Background(), "SELECT COUNT(*) FROM chosen").Scan(&rows); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(context.Background(), "SELECT COUNT(*) FROM schema_migrations").Scan(&migrations); err != nil {
+		t.Fatal(err)
+	}
+	if rows != 1 || migrations != 2 {
+		t.Fatalf("rows=%d migrations=%d, want ordered/idempotent direct SQL only", rows, migrations)
+	}
+}

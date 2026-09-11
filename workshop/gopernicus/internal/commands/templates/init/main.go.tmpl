@@ -15,9 +15,9 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/gopernicus/gopernicus/sdk/foundation/environment"
-	"github.com/gopernicus/gopernicus/sdk/foundation/logging"
-	"github.com/gopernicus/gopernicus/sdk/foundation/web"
+	"github.com/gopernicus/gopernicus/sdk/pkg/environment"
+	"github.com/gopernicus/gopernicus/sdk/pkg/logging"
+	"github.com/gopernicus/gopernicus/sdk/pkg/web"
 {{- if .HasDB}}
 
 	{{.ConnectorAlias}} "{{.ConnectorPath}}"
@@ -25,34 +25,36 @@ import (
 )
 
 func main() {
-	// Load .env (a missing file is not an error) before reading any config.
-	_ = environment.LoadEnv()
+	// A missing .env is allowed; malformed configuration must stop startup.
+	if err := environment.LoadEnv(); err != nil {
+		slog.Error("load environment", "error", err)
+		os.Exit(1)
+	}
+
+	logOpts := logging.Options{Format: "json"}
+	if err := environment.ParseEnvTags("", &logOpts); err != nil {
+		slog.Error("configure logging", "error", err)
+		os.Exit(1)
+	}
+	log := logging.New(logOpts)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	if err := run(ctx); err != nil {
-		slog.Error("server exited with error", "error", err)
+	if err := run(ctx, log); err != nil {
+		log.Error("server exited with error", "error", err)
 		os.Exit(1)
 	}
 }
 
-func run(ctx context.Context) error {
-	// Config comes from the environment through the sdk's struct tags: the
-	// literal pre-seeds this host's own defaults, the environment wins over
-	// them, and an empty value (KEY=) keeps what is already set.
-	logOpts := logging.Options{Format: "json"}
-	if err := environment.ParseEnvTags("", &logOpts); err != nil {
-		return err
-	}
-	log := logging.New(logOpts)
+func run(ctx context.Context, log *slog.Logger) error {
 {{- if .HasDB}}
 
 	// Database. The connector owns the driver, DSN, and dialect error mapping;
 	// the host owns the schema — migrations live under workshop/migrations and
 	// are applied pre-boot by `make migrate`, never by the framework at startup.
 {{- if eq .DB "turso"}}
-	db, err := {{.ConnectorAlias}}.Open({{.ConnectorAlias}}.Config{
+	db, err := {{.ConnectorAlias}}.Open(ctx, {{.ConnectorAlias}}.Config{
 		URL:       os.Getenv("TURSO_DATABASE_URL"),
 		AuthToken: os.Getenv("TURSO_AUTH_TOKEN"),
 	})
@@ -64,7 +66,7 @@ func run(ctx context.Context) error {
 	if err := environment.ParseEnvTags("", &dbCfg); err != nil {
 		return err
 	}
-	db, err := {{.ConnectorAlias}}.Open(dbCfg)
+	db, err := {{.ConnectorAlias}}.Open(ctx, dbCfg)
 	if err != nil {
 		return err
 	}
@@ -74,22 +76,18 @@ func run(ctx context.Context) error {
 
 	// Host-owned HTTP router + middleware stack. Pockets mount their routes onto
 	// this via the narrow RouteRegistrar; the host never sees a concrete handler.
-	router := web.NewWebHandler(web.WithLogging(log))
+	router := web.NewWebHandler()
 	router.Use(web.RequestID(), web.Logger(log), web.Panics(log))
 
 	// ── Mount your pockets here ─────────────────────────────────────────────
-	// A gopernicus pocket reaches this host only through the narrow pocket.Mount
-	// + Register surface (constitution rule 5 — no init(), no service locator).
-	// Add the pocket (and, if it persists data, a store adapter) to go.mod, then
-	// wire it in this block following the FS2 shape:
+	// Add the pocket (and, if it persists data, a store adapter) to go.mod.
+	// Construct its services with the required inputs and optional With... options.
+	// Hosts may call public use cases directly from handlers or workers. For a
+	// pocket that supplies HTTP components, register them on the host router:
 	//
-	//   mount := pocket.Mount{Router: router, Logger: log}
-	//   repos := <store>.Repositories(db)        // or your own in-memory store
-	//   svc, err := <pocket>.NewService(repos, <pocket>.Config{ /* ... */ })
-	//   if err != nil {
+	//   if err := components.Register(pockets.Mount{Router: router, Logger: log}); err != nil {
 	//       return err
 	//   }
-	//   svc.Register(mount)
 	//
 	// See README.md ("Wiring a pocket") for the full walkthrough. Nothing is
 	// mounted by default — an sdk-only host is the hermetic baseline.

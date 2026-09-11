@@ -31,7 +31,7 @@ The useful file is `examples/minimal/cmd/server/main.go`. Its `run` function per
 
 1. construct an in-memory implementation of `cms.Repositories`;
 2. construct the host's `web.WebHandler` and middleware stack;
-3. create a `pocket.Mount`;
+3. create a `pockets.Mount`;
 4. build a `ui/goth` bundle and serve its embedded assets;
 5. create the CMS view adapter;
 6. call `cms.Register` with repositories and host-selected capabilities;
@@ -44,14 +44,12 @@ The core wiring looks like this:
 store := memstore.New()
 repos := store.Repositories()
 
-router := web.NewWebHandler(web.WithLogging(log))
+router := web.NewWebHandler()
 router.Use(web.RequestID(), web.Logger(log), web.Panics(log))
 
-mount := pocket.Mount{Router: router, Logger: log}
+mount := pockets.Mount{Router: router, Logger: log}
 
-bundle, err := uigoth.New(uigoth.Config{
-    AssetBasePath: "/assets/goth",
-})
+bundle, err := uigoth.New(uigoth.WithAssetBasePath("/assets/goth"))
 if err != nil {
     return err
 }
@@ -70,7 +68,7 @@ if err := cms.Register(mount, repos, cms.Config{
 }
 ```
 
-The real example also serves the bundle assets, registers custom content and templates, seeds the repositories, and supplies contact-form addresses. Treat the source as the executable version of this abbreviated listing. Remove the view bundle and its asset route when the host should expose an API only.
+The real example also serves the bundle assets, registers custom content and templates, seeds the repositories, and supplies contact-form addresses. Treat the source as the executable version of this abbreviated list. Remove the view bundle and its asset route when the host should expose an API only.
 
 ## What this proves
 

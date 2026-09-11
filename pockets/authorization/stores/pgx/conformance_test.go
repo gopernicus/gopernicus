@@ -19,31 +19,29 @@ package pgx
 
 import (
 	"context"
-	"errors"
 	"os"
 	"regexp"
 	"strings"
 	"sync"
 	"testing"
 
-	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
+	"github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
 	"github.com/gopernicus/gopernicus/pockets/authorization"
-	"github.com/gopernicus/gopernicus/pockets/authorization/domain/mutation"
-	"github.com/gopernicus/gopernicus/pockets/authorization/storetest"
-	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/mutations"
+	"github.com/gopernicus/gopernicus/pockets/authorization/stores/storetest"
+	"github.com/gopernicus/gopernicus/sdk/capabilities/transaction"
 )
 
 // authorizationTables are the pocket's tables cleared before each newRepos call
 // so every leaf subtest starts from a clean, isolated store — including the v3
-// write-path tables (iam_scopes revision anchors, iam_mutations receipts) so the
-// Mutations conformance suite starts from revision 0 with no consumed MutationIDs.
+// optional audit history so every test observes only its own changes.
 // No FKs between them, so order is immaterial.
-var authorizationTables = []string{"iam_relationships", "iam_roles", "iam_scopes", "iam_mutations"}
+var authorizationTables = []string{"iam_relationships", "iam_roles", "iam_audit"}
 
 // fixtureTables are the relation names a hand-rolled fixture statement may name:
 // the pocket's own tables plus the migration ledger the destructive fixtures
 // clear. qualifySQL rewrites exactly these under the test schema.
-var fixtureTables = append(append([]string(nil), authorizationTables...), "schema_migrations")
+var fixtureTables = append(append([]string(nil), authorizationTables...), "schema_migrations", "iam_scopes", "iam_mutations")
 
 // fixtureTableRE matches a bare fixtureTables name on word boundaries, so index
 // and constraint names that merely embed one (idx_iam_roles_unique,
@@ -73,9 +71,9 @@ var testSchemaOnce = sync.OnceValues(func() (pgxdb.Schema, error) {
 func TestConformance(t *testing.T) {
 	dsn := requireDSN(t)
 
-	storetest.Run(t, func(t *testing.T) authorization.Repositories {
+	storetest.Run(t, func(t *testing.T, policy mutations.GuardianPolicy) authorization.Repositories {
 		db := openAndMigrate(t, dsn)
-		repos, err := Repositories(db, storeOptions(t)...)
+		repos, err := Repositories(context.Background(), db, append(storeOptions(t), WithGuardianPolicy(policy))...)
 		if err != nil {
 			t.Fatalf("Repositories: %v", err)
 		}
@@ -84,74 +82,21 @@ func TestConformance(t *testing.T) {
 }
 
 // TestTransactional runs the shared ambient-transaction family: the connector
-// (*pgxdb.DB) is the crud.Transactor, and the SAME connector backs the
+// (*pgxdb.DB) is the transaction.Transactor, and the SAME connector backs the
 // repositories, so a Transact-owned transaction is the one the stores join.
 // Each newRepos call builds a fresh, truncated store exactly as TestConformance
 // does; the family never calls it for an observer (see storetest.RunTransactional).
 func TestTransactional(t *testing.T) {
 	dsn := requireDSN(t)
 
-	storetest.RunTransactional(t, func(t *testing.T) (authorization.Repositories, crud.Transactor) {
+	storetest.RunTransactional(t, func(t *testing.T) (authorization.Repositories, transaction.Transactor) {
 		db := openAndMigrate(t, dsn)
-		repos, err := Repositories(db, storeOptions(t)...)
+		repos, err := Repositories(context.Background(), db, storeOptions(t)...)
 		if err != nil {
 			t.Fatalf("Repositories: %v", err)
 		}
 		return repos, db
 	})
-}
-
-// TestTransactionalRefusalLeavesLedgerUntouched is the adapter-local half of the
-// shared MutationRefusesAmbientTransaction spec: the port exposes no anchor or
-// receipt reader, so the proof that a refused guarded mutation touched neither
-// iam_scopes nor iam_mutations is direct SQL here — checked through the pool
-// while the host transaction is still OPEN (so it does not lean on the rollback
-// to hide effects) and again after it.
-func TestTransactionalRefusalLeavesLedgerUntouched(t *testing.T) {
-	ctx := context.Background()
-	db, repos := liveRepos(t)
-	m := repos.Mutations
-
-	mustApplyLive(t, m, grantCmd(mutID(t), "M", "owner", "u1"))
-	before := ledgerState(t, db)
-
-	err := db.Transact(ctx, func(ctx context.Context) error {
-		rcpt, err := m.Apply(ctx, grantCmd(mutID(t), "M", "viewer", "u2"), nil)
-		if !errors.Is(err, mutation.ErrGuardedInsideTransaction) || rcpt != nil {
-			t.Fatalf("Apply inside Transact: want ErrGuardedInsideTransaction + nil receipt, got %+v, %v", rcpt, err)
-		}
-		if open := ledgerState(t, db); open != before {
-			t.Fatalf("ledger changed while the host transaction was open: before=%+v now=%+v", before, open)
-		}
-		return err
-	})
-	if !errors.Is(err, mutation.ErrGuardedInsideTransaction) {
-		t.Fatalf("Transact must return the refusal, got %v", err)
-	}
-	if after := ledgerState(t, db); after != before {
-		t.Fatalf("ledger changed across the refused mutation: before=%+v after=%+v", before, after)
-	}
-}
-
-// ledger is the direct-SQL view of the write-path tables: receipt rows, anchor
-// rows, and the sum of anchor revisions (a bump moves it; a bare revision-0
-// insert moves the count).
-type ledger struct {
-	receipts, anchors int
-	revisionSum       int64
-}
-
-// ledgerState reads ledger through the POOL (never the ambient transaction).
-func ledgerState(t *testing.T, db *pgxdb.DB) ledger {
-	t.Helper()
-	var l ledger
-	if err := db.QueryRow(context.Background(), `SELECT count(*) FROM `+qualify(t, "iam_mutations")).Scan(&l.receipts); err != nil {
-		t.Fatalf("count receipts: %v", err)
-	}
-	if err := db.QueryRow(context.Background(), `SELECT count(*), coalesce(sum(revision), 0) FROM `+qualify(t, "iam_scopes")).Scan(&l.anchors, &l.revisionSum); err != nil {
-		t.Fatalf("count anchors: %v", err)
-	}
-	return l
 }
 
 // testSchema is the optional schema leg's target, or the zero Schema.
@@ -239,7 +184,7 @@ func requireDSN(t *testing.T) string {
 // truncates both tables so the returned repositories start empty and isolated.
 func openAndMigrate(t *testing.T, dsn string) *pgxdb.DB {
 	t.Helper()
-	db, err := pgxdb.Open(pgxdb.Config{DSN: dsn})
+	db, err := pgxdb.Open(context.Background(), pgxdb.Config{DSN: dsn})
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}
@@ -265,4 +210,15 @@ func truncate(t *testing.T, db *pgxdb.DB) {
 	if _, err := db.Exec(context.Background(), q); err != nil {
 		t.Fatalf("truncate: %v", err)
 	}
+}
+
+func TestAuditConformance(t *testing.T) {
+	storetest.RunAudit(t, func(t *testing.T, enabled bool) authorization.Repositories {
+		var opts []Option
+		if enabled {
+			opts = append(opts, WithAudit())
+		}
+		_, repos := liveReposWith(t, opts...)
+		return repos
+	})
 }

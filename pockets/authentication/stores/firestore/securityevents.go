@@ -4,8 +4,8 @@ import (
 	"context"
 
 	firestoredb "github.com/gopernicus/gopernicus/integrations/datastores/firestore"
-	"github.com/gopernicus/gopernicus/pockets/authentication/domain/securityevent"
-	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/securityevent"
+	"github.com/gopernicus/gopernicus/sdk/pkg/list"
 )
 
 var _ securityevent.SecurityEventRepository = (*securityEventStore)(nil)
@@ -31,9 +31,9 @@ func (s *securityEventStore) Create(ctx context.Context, evt securityevent.Secur
 
 // List pages the rail under the filter's equality subset and its inclusive
 // Since / exclusive Until range, ordered (created_at DESC, id DESC) by default.
-func (s *securityEventStore) List(ctx context.Context, filter securityevent.ListFilter, req crud.ListRequest) (crud.Page[securityevent.SecurityEvent], error) {
+func (s *securityEventStore) List(ctx context.Context, filter securityevent.ListFilter, req list.Request) (list.Page[securityevent.SecurityEvent], error) {
 	if err := refuseAmbient(ctx); err != nil {
-		return crud.Page[securityevent.SecurityEvent]{}, err
+		return list.Page[securityevent.SecurityEvent]{}, err
 	}
-	return crud.Page[securityevent.SecurityEvent]{}, errNotImplemented
+	return list.Page[securityevent.SecurityEvent]{}, errNotImplemented
 }

@@ -28,17 +28,17 @@ import (
 func TestConstructorProbesTheIndexManifest(t *testing.T) {
 	db := firestoretest.OpenDatabase(t, emulatorDatabase)
 
-	if _, err := Repositories(db); !errors.Is(err, firestoredb.ErrProbeUnavailableOnEmulator) {
-		t.Errorf("Repositories(db) = %v, want ErrProbeUnavailableOnEmulator — a store that skipped the probe here would report a green nothing verified", err)
+	if _, err := Repositories(t.Context(), db); !errors.Is(err, firestoredb.ErrProbeUnavailableOnEmulator) {
+		t.Errorf("Repositories(t.Context(), db) = %v, want ErrProbeUnavailableOnEmulator — a store that skipped the probe here would report a green nothing verified", err)
 	}
-	if _, err := RelationshipRepository(db); !errors.Is(err, firestoredb.ErrProbeUnavailableOnEmulator) {
-		t.Errorf("RelationshipRepository(db) = %v, want ErrProbeUnavailableOnEmulator", err)
+	if _, err := RelationshipRepository(t.Context(), db); !errors.Is(err, firestoredb.ErrProbeUnavailableOnEmulator) {
+		t.Errorf("RelationshipRepository(t.Context(), db) = %v, want ErrProbeUnavailableOnEmulator", err)
 	}
 
 	// The refusal is a wiring error, not a retryable outage: it names the option
 	// that fixes it, and no amount of waiting deploys an index registry.
-	if _, err := Repositories(db); !errors.Is(err, sdk.ErrInvalidInput) {
-		t.Errorf("Repositories(db) = %v, want it to wrap sdk.ErrInvalidInput", err)
+	if _, err := Repositories(t.Context(), db); !errors.Is(err, sdk.ErrInvalidInput) {
+		t.Errorf("Repositories(t.Context(), db) = %v, want it to wrap sdk.ErrInvalidInput", err)
 	}
 }
 
@@ -48,14 +48,14 @@ func TestConstructorProbesTheIndexManifest(t *testing.T) {
 func TestConstructorSkipsTheProbeWhenAskedTo(t *testing.T) {
 	db := firestoretest.OpenDatabase(t, emulatorDatabase)
 
-	repos, err := Repositories(db, WithoutIndexProbe())
+	repos, err := Repositories(t.Context(), db, WithoutIndexProbe())
 	if err != nil {
-		t.Fatalf("Repositories(db, WithoutIndexProbe()): %v", err)
+		t.Fatalf("Repositories(t.Context(), db, WithoutIndexProbe()): %v", err)
 	}
 	if repos.Relationships == nil || repos.Roles == nil || repos.Mutations == nil {
 		t.Errorf("repository set is incomplete: %+v", repos)
 	}
-	if _, err := RelationshipRepository(db, WithoutIndexProbe()); err != nil {
-		t.Errorf("RelationshipRepository(db, WithoutIndexProbe()): %v", err)
+	if _, err := RelationshipRepository(t.Context(), db, WithoutIndexProbe()); err != nil {
+		t.Errorf("RelationshipRepository(t.Context(), db, WithoutIndexProbe()): %v", err)
 	}
 }

@@ -2,133 +2,185 @@ package ratelimiter_test
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
+	"io"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
+	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/ratelimiter"
 )
 
-// fakeAllower records the key it was called with and returns a canned result.
 type fakeAllower struct {
 	res    ratelimiter.Result
 	err    error
 	gotKey string
+	calls  int
+	cancel context.CancelFunc
 }
 
 func (f *fakeAllower) Allow(_ context.Context, key string, _ ratelimiter.Limit) (ratelimiter.Result, error) {
+	f.calls++
 	f.gotKey = key
+	if f.cancel != nil {
+		f.cancel()
+	}
 	return f.res, f.err
 }
+func staticKey(k string) func(*http.Request) string { return func(*http.Request) string { return k } }
 
-func staticKey(k string) func(*http.Request) string {
-	return func(*http.Request) string { return k }
+func TestMiddlewareFailurePolicy(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		err           error
+		allowed, open bool
+		want          int
+		wantNext      bool
+	}{
+		{"allowed", nil, true, false, 200, true},
+		{"denied", nil, false, false, 429, false},
+		{"outage closed", io.ErrUnexpectedEOF, false, false, 503, false},
+		{"outage open", io.ErrUnexpectedEOF, false, true, 200, true},
+		{"capacity closed", ratelimiter.ErrCapacity, false, false, 503, false},
+		{"invalid even open", sdk.ErrInvalidInput, false, true, 500, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			allower := &fakeAllower{res: ratelimiter.Result{Allowed: tc.allowed}, err: tc.err}
+			reports := 0
+			nextRan := false
+			cfg := ratelimiter.MiddlewareConfig{Limit: ratelimiter.PerMinute(5), Key: staticKey("ip:test"), FailOpen: tc.open, OnError: func(_ context.Context, err error) {
+				reports++
+				if !errors.Is(err, tc.err) {
+					t.Fatal(err)
+				}
+			}}
+			h := ratelimiter.Middleware(allower, cfg)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { nextRan = true; w.WriteHeader(200) }))
+			w := httptest.NewRecorder()
+			h.ServeHTTP(w, httptest.NewRequest("GET", "/", nil))
+			if w.Code != tc.want || nextRan != tc.wantNext || allower.gotKey != "ip:test" {
+				t.Fatalf("status=%d next=%v key=%q", w.Code, nextRan, allower.gotKey)
+			}
+			wantReports := 0
+			if tc.err != nil {
+				wantReports = 1
+			}
+			if reports != wantReports {
+				t.Fatalf("reports=%d", reports)
+			}
+		})
+	}
 }
 
-func TestMiddleware(t *testing.T) {
-	t.Run("allowed request runs next", func(t *testing.T) {
-		allower := &fakeAllower{res: ratelimiter.Result{Allowed: true}}
-		nextRan := false
-		mw := ratelimiter.Middleware(allower, ratelimiter.PerMinute(5), staticKey("k"), nil)
-		h := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			nextRan = true
-			w.WriteHeader(http.StatusOK)
-		}))
+func TestMiddlewareInvalidConfiguration(t *testing.T) {
+	for _, kind := range []string{"limit", "key function", "empty key", "nil limiter"} {
+		t.Run(kind, func(t *testing.T) {
+			fake := &fakeAllower{res: ratelimiter.Result{Allowed: true}}
+			var allower ratelimiter.Allower = fake
+			cfg := ratelimiter.MiddlewareConfig{Limit: ratelimiter.PerMinute(1), Key: staticKey("k"), FailOpen: true}
+			switch kind {
+			case "limit":
+				cfg.Limit = ratelimiter.Limit{}
+			case "key function":
+				cfg.Key = nil
+			case "empty key":
+				cfg.Key = staticKey("")
+			case "nil limiter":
+				allower = nil
+			}
+			reports := 0
+			cfg.OnError = func(_ context.Context, err error) {
+				reports++
+				if !errors.Is(err, sdk.ErrInvalidInput) {
+					t.Fatal(err)
+				}
+			}
+			h := ratelimiter.Middleware(allower, cfg)(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { t.Fatal("invalid configuration bypassed enforcement") }))
+			w := httptest.NewRecorder()
+			h.ServeHTTP(w, httptest.NewRequest("GET", "/", nil))
+			if w.Code != 500 || fake.calls != 0 || reports != 1 {
+				t.Fatalf("%d calls=%d reports=%d", w.Code, fake.calls, reports)
+			}
+		})
+	}
+}
 
-		rec := httptest.NewRecorder()
-		h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
-
-		if !nextRan {
-			t.Fatal("expected next to run on an allowed request")
+func TestMiddlewareCustomRejectAndRetryRounding(t *testing.T) {
+	for _, tc := range []struct {
+		retry  time.Duration
+		header string
+	}{{0, ""}, {1, "1"}, {time.Second, "1"}, {time.Second + 1, "2"}, {time.Duration(math.MaxInt64), "9223372037"}} {
+		fake := &fakeAllower{res: ratelimiter.Result{RetryAfter: tc.retry}}
+		h := ratelimiter.Middleware(fake, ratelimiter.MiddlewareConfig{Limit: ratelimiter.PerMinute(1), Key: staticKey("k")})(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { t.Fatal("denial ran next") }))
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, httptest.NewRequest("GET", "/", nil))
+		if w.Code != 429 || w.Header().Get("Retry-After") != tc.header {
+			t.Fatalf("%s: %d %v", tc.retry, w.Code, w.Header())
 		}
-		if rec.Code != http.StatusOK {
-			t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	fake := &fakeAllower{}
+	h := ratelimiter.Middleware(fake, ratelimiter.MiddlewareConfig{Limit: ratelimiter.PerMinute(1), Key: staticKey("k"), Reject: func(w http.ResponseWriter, _ *http.Request, _ ratelimiter.Result) { w.WriteHeader(418) }})(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { t.Fatal("denial ran next") }))
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest("GET", "/", nil))
+	if w.Code != 418 {
+		t.Fatal(w.Code)
+	}
+}
+
+func TestMiddlewareCanceledCallerDoesNotContinue(t *testing.T) {
+	for _, when := range []string{"before", "during", "hook"} {
+		t.Run(when, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			fake := &fakeAllower{res: ratelimiter.Result{Allowed: true}}
+			if when == "before" {
+				cancel()
+			}
+			if when == "during" {
+				fake.cancel = cancel
+			}
+			if when == "hook" {
+				fake.err = io.ErrUnexpectedEOF
+			}
+			reported := false
+			cfg := ratelimiter.MiddlewareConfig{Limit: ratelimiter.PerMinute(1), Key: staticKey("k"), FailOpen: true, OnError: func(context.Context, error) {
+				reported = true
+				if when == "hook" {
+					cancel()
+				}
+			}}
+			h := ratelimiter.Middleware(fake, cfg)(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { t.Fatal("canceled caller ran next") }))
+			w := httptest.NewRecorder()
+			h.ServeHTTP(w, httptest.NewRequest("GET", "/", nil).WithContext(ctx))
+			if !reported || w.Body.Len() != 0 || (when == "before" && fake.calls != 0) {
+				t.Fatalf("reported=%v calls=%d body=%s", reported, fake.calls, w.Body.String())
+			}
+		})
+	}
+}
+
+func TestMiddlewareRealHTTPBudget(t *testing.T) {
+	h := ratelimiter.Middleware(ratelimiter.NewMemory(), ratelimiter.MiddlewareConfig{Limit: ratelimiter.PerMinute(1).WithBurst(1), Key: staticKey("public:catalog")})(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { io.WriteString(w, "ok") }))
+	server := httptest.NewServer(h)
+	defer server.Close()
+	for i := 0; i < 3; i++ {
+		res, err := server.Client().Get(server.URL)
+		if err != nil {
+			t.Fatal(err)
 		}
-	})
-
-	t.Run("denied with nil reject writes default 429 JSON", func(t *testing.T) {
-		allower := &fakeAllower{res: ratelimiter.Result{Allowed: false}}
-		nextRan := false
-		mw := ratelimiter.Middleware(allower, ratelimiter.PerMinute(5), staticKey("k"), nil)
-		h := mw(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { nextRan = true }))
-
-		rec := httptest.NewRecorder()
-		h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
-
-		if nextRan {
-			t.Fatal("expected next NOT to run on a denied request")
+		body, err := io.ReadAll(res.Body)
+		res.Body.Close()
+		if err != nil {
+			t.Fatal(err)
 		}
-		if rec.Code != http.StatusTooManyRequests {
-			t.Fatalf("status = %d, want %d", rec.Code, http.StatusTooManyRequests)
+		if i < 2 {
+			if res.StatusCode != 200 || string(body) != "ok" {
+				t.Fatalf("%d %q", res.StatusCode, body)
+			}
+		} else if res.StatusCode != 429 || res.Header.Get("Retry-After") == "" {
+			t.Fatalf("%d %v", res.StatusCode, res.Header)
 		}
-		var body struct {
-			Message string `json:"message"`
-			Code    string `json:"code"`
-		}
-		if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
-			t.Fatalf("decode body: %v", err)
-		}
-		if body.Code != "rate_limited" {
-			t.Fatalf("code = %q, want %q", body.Code, "rate_limited")
-		}
-	})
-
-	t.Run("denied with custom reject fires custom, not default", func(t *testing.T) {
-		allower := &fakeAllower{res: ratelimiter.Result{Allowed: false}}
-		mw := ratelimiter.Middleware(allower, ratelimiter.PerMinute(5), staticKey("k"),
-			func(w http.ResponseWriter, _ *http.Request, _ ratelimiter.Result) {
-				w.WriteHeader(http.StatusTeapot)
-				w.Write([]byte("custom"))
-			})
-		h := mw(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
-			t.Fatal("next must not run on a denied request")
-		}))
-
-		rec := httptest.NewRecorder()
-		h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
-
-		if rec.Code != http.StatusTeapot {
-			t.Fatalf("status = %d, want %d (custom reject)", rec.Code, http.StatusTeapot)
-		}
-		if rec.Body.String() != "custom" {
-			t.Fatalf("body = %q, want %q (default reject should not fire)", rec.Body.String(), "custom")
-		}
-	})
-
-	t.Run("limiter error fails open: request proceeds", func(t *testing.T) {
-		allower := &fakeAllower{res: ratelimiter.Result{Allowed: false}, err: errors.New("limiter down")}
-		nextRan := false
-		mw := ratelimiter.Middleware(allower, ratelimiter.PerMinute(5), staticKey("k"),
-			func(http.ResponseWriter, *http.Request, ratelimiter.Result) {
-				t.Fatal("reject must not fire on a limiter error (fail open)")
-			})
-		h := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			nextRan = true
-			w.WriteHeader(http.StatusOK)
-		}))
-
-		rec := httptest.NewRecorder()
-		h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
-
-		if !nextRan {
-			t.Fatal("expected next to run when the limiter errors (fail open)")
-		}
-		if rec.Code != http.StatusOK {
-			t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
-		}
-	})
-
-	t.Run("key func output reaches the Allower", func(t *testing.T) {
-		allower := &fakeAllower{res: ratelimiter.Result{Allowed: true}}
-		mw := ratelimiter.Middleware(allower, ratelimiter.PerMinute(5), staticKey("ip:1.2.3.4"), nil)
-		h := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
-
-		h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/", nil))
-
-		if allower.gotKey != "ip:1.2.3.4" {
-			t.Fatalf("Allower key = %q, want %q", allower.gotKey, "ip:1.2.3.4")
-		}
-	})
+	}
 }

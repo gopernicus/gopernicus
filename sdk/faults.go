@@ -13,8 +13,8 @@ const (
 	CodeRequired = "required"
 	// CodeInvalidType marks a value of the wrong JSON/Go type.
 	CodeInvalidType = "invalid_type"
-	// CodeInvalidFormat marks a value of the right type whose contents do not
-	// parse (a date, an instant, an identifier shape).
+	// CodeInvalidFormat marks a value of the right type that fails a field rule,
+	// such as a format, length, range, or allowed-value check.
 	CodeInvalidFormat = "invalid_format"
 	// CodeUnknownField marks a key the write surface does not declare.
 	CodeUnknownField = "unknown_field"
@@ -24,23 +24,18 @@ const (
 
 // Violation is one refused field: which field, a stable machine code, and a
 // caller-facing sentence. It carries no json tags — the kernel stays
-// transport-agnostic and the transport (sdk/foundation/web) owns the wire shape.
+// transport-agnostic and the transport (sdk/pkg/web) owns the wire shape.
 type Violation struct {
 	Field   string
 	Code    string
 	Message string
 }
 
-// ValidationError collects every problem with a write rather than failing at the
-// first one, so a caller fixes a form in one round trip. It unwraps to
-// [ErrInvalidInput], so existing errors.Is checks and IsExpected keep working;
-// transports that recognize the concrete type additionally render the per-field
-// detail.
+// ValidationError collects field problems from request or domain validation.
+// It unwraps to [ErrInvalidInput]; transports can also render its field detail.
 //
-// Every method has a POINTER receiver, and Error is deliberately pointer-only: a
-// value receiver would make errors.As(err, &ve) silently miss a
-// ValidationError stored by value, turning a 400 into a nondeterministic 500.
-// Always return *ValidationError.
+// Only *ValidationError implements error, so errors.As callers consistently
+// recover a pointer. Use Err to return nil when the collector is empty.
 //
 // The collector's usage shape:
 //
@@ -60,7 +55,7 @@ type ValidationError struct {
 
 // Error reports the first violation as "field: message", with " (and N more)"
 // when further violations were collected. An empty collector reports
-// "validation failed" — mirroring web.FieldErrors.Error.
+// "validation failed".
 func (e *ValidationError) Error() string {
 	if len(e.Violations) == 0 {
 		return "validation failed"
@@ -81,10 +76,15 @@ func (e *ValidationError) Add(field, code, message string) {
 	e.Violations = append(e.Violations, Violation{Field: field, Code: code, Message: message})
 }
 
-// Err returns nil when nothing was collected, else the collector itself. The
-// explicit nil matters: returning e unconditionally hands the caller a non-nil
-// error interface holding a typed nil-equivalent value, and `if err != nil`
-// fires on a write that had no problem at all.
+// AddViolation appends a copy of a validator's result. A nil result is valid
+// and adds nothing. Only deliberately caller-facing validation data belongs here.
+func (e *ValidationError) AddViolation(v *Violation) {
+	if v != nil {
+		e.Violations = append(e.Violations, *v)
+	}
+}
+
+// Err returns nil when nothing was collected, else the collector itself.
 func (e *ValidationError) Err() error {
 	if len(e.Violations) == 0 {
 		return nil

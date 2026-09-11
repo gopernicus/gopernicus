@@ -5,8 +5,8 @@ go 1.26.1
 require (
 	cloud.google.com/go/firestore v1.25.0
 	github.com/gopernicus/gopernicus/integrations/datastores/firestore v0.1.0
-	github.com/gopernicus/gopernicus/pockets/authorization v0.12.0
-	github.com/gopernicus/gopernicus/sdk v0.7.0
+	github.com/gopernicus/gopernicus/pockets/authorization v0.13.0
+	github.com/gopernicus/gopernicus/sdk v0.9.0
 	google.golang.org/api v0.287.1
 )
 
@@ -23,6 +23,7 @@ require (
 	github.com/google/s2a-go v0.1.9 // indirect
 	github.com/googleapis/enterprise-certificate-proxy v0.3.17 // indirect
 	github.com/googleapis/gax-go/v2 v2.23.0 // indirect
+	github.com/gopernicus/gopernicus/pockets v0.1.0 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc v0.67.0 // indirect
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.67.0 // indirect

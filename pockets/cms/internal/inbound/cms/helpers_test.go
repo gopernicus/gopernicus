@@ -3,6 +3,7 @@ package cms
 import (
 	"context"
 	"io"
+	"log/slog"
 	"net/http"
 
 	"github.com/gopernicus/gopernicus/pockets/cms/domain/content"
@@ -11,9 +12,8 @@ import (
 	"github.com/gopernicus/gopernicus/pockets/cms/domain/messaging"
 	"github.com/gopernicus/gopernicus/pockets/cms/domain/taxonomy"
 	"github.com/gopernicus/gopernicus/pockets/cms/internal/logic/entrysvc"
-	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
-	"github.com/gopernicus/gopernicus/sdk/foundation/logging"
-	"github.com/gopernicus/gopernicus/sdk/foundation/web"
+	"github.com/gopernicus/gopernicus/sdk/pkg/list"
+	"github.com/gopernicus/gopernicus/sdk/pkg/web"
 )
 
 // stringRenderer is a minimal web.Renderer that writes a fixed body, standing in
@@ -41,22 +41,22 @@ func newTestRegistry() *content.Registry {
 // the one under test ---
 
 func menuRouter(svc menuService) http.Handler {
-	return BuildRouter(newTestRegistry(), &fakeEntrySvc{}, &fakeTaxo{}, svc, &fakeMediaSvc{}, &fakeContactSvc{}, nil, logging.NewNoop(), WithViews(stubViews{}))
+	return BuildRouter(newTestRegistry(), &fakeEntrySvc{}, &fakeTaxo{}, svc, &fakeMediaSvc{}, &fakeContactSvc{}, nil, slog.New(slog.DiscardHandler), WithViews(stubViews{}))
 }
 
 func mediaRouter(svc mediaService) http.Handler {
-	return BuildRouter(newTestRegistry(), &fakeEntrySvc{}, &fakeTaxo{}, &fakeMenuSvc{}, svc, &fakeContactSvc{}, nil, logging.NewNoop(), WithViews(stubViews{}))
+	return BuildRouter(newTestRegistry(), &fakeEntrySvc{}, &fakeTaxo{}, &fakeMenuSvc{}, svc, &fakeContactSvc{}, nil, slog.New(slog.DiscardHandler), WithViews(stubViews{}))
 }
 
 func contactRouter(svc messagingService) http.Handler {
-	return BuildRouter(newTestRegistry(), &fakeEntrySvc{}, &fakeTaxo{}, &fakeMenuSvc{}, &fakeMediaSvc{}, svc, nil, logging.NewNoop(), WithViews(stubViews{}))
+	return BuildRouter(newTestRegistry(), &fakeEntrySvc{}, &fakeTaxo{}, &fakeMenuSvc{}, &fakeMediaSvc{}, svc, nil, slog.New(slog.DiscardHandler), WithViews(stubViews{}))
 }
 
 // --- fakeEntrySvc ---
 
 type fakeEntrySvc struct {
-	listFn      func(ctx context.Context, q content.EntryQuery) (crud.Page[content.Entry], error)
-	byTermFn    func(ctx context.Context, termID string, q content.EntryQuery) (crud.Page[content.Entry], error)
+	listFn      func(ctx context.Context, q content.EntryQuery) (list.Page[content.Entry], error)
+	byTermFn    func(ctx context.Context, termID string, q content.EntryQuery) (list.Page[content.Entry], error)
 	getFn       func(ctx context.Context, id string) (content.Entry, error)
 	getSlugFn   func(ctx context.Context, typ, slug string) (content.Entry, error)
 	createFn    func(ctx context.Context, typeSlug string, in entrysvc.Input) (content.Entry, error)
@@ -97,17 +97,17 @@ func (f *fakeEntrySvc) Delete(ctx context.Context, id string) error {
 	}
 	return nil
 }
-func (f *fakeEntrySvc) List(ctx context.Context, q content.EntryQuery) (crud.Page[content.Entry], error) {
+func (f *fakeEntrySvc) List(ctx context.Context, q content.EntryQuery) (list.Page[content.Entry], error) {
 	if f.listFn != nil {
 		return f.listFn(ctx, q)
 	}
-	return crud.Page[content.Entry]{}, nil
+	return list.Page[content.Entry]{}, nil
 }
-func (f *fakeEntrySvc) ListByTerm(ctx context.Context, termID string, q content.EntryQuery) (crud.Page[content.Entry], error) {
+func (f *fakeEntrySvc) ListByTerm(ctx context.Context, termID string, q content.EntryQuery) (list.Page[content.Entry], error) {
 	if f.byTermFn != nil {
 		return f.byTermFn(ctx, termID, q)
 	}
-	return crud.Page[content.Entry]{}, nil
+	return list.Page[content.Entry]{}, nil
 }
 func (f *fakeEntrySvc) Publish(ctx context.Context, id string) (content.Entry, error) {
 	if f.publishFn != nil {

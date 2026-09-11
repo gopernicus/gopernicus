@@ -29,7 +29,7 @@ func Run(t *testing.T, newLimiter func(t *testing.T) ratelimiter.Limiter) {
 	t.Run("Reset", func(t *testing.T) { testReset(t, newLimiter(t)) })
 	t.Run("WindowRefill", func(t *testing.T) { testWindowRefill(t, newLimiter(t)) })
 	t.Run("IndependentKeys", func(t *testing.T) { testIndependentKeys(t, newLimiter(t)) })
-	t.Run("CloseIdempotent", func(t *testing.T) { testCloseIdempotent(t, newLimiter(t)) })
+	runContract(t, newLimiter)
 }
 
 func testAllowUnderLimit(t *testing.T, l ratelimiter.Limiter) {
@@ -135,14 +135,5 @@ func testIndependentKeys(t *testing.T, l ratelimiter.Limiter) {
 	// A different key must have its own budget, unaffected by "a" above.
 	if res, err := l.Allow(ctx, "b", limit); err != nil || !res.Allowed {
 		t.Fatalf("Allow(b) = %+v, err %v, want Allowed=true", res, err)
-	}
-}
-
-func testCloseIdempotent(t *testing.T, l ratelimiter.Limiter) {
-	if err := l.Close(); err != nil {
-		t.Fatalf("first Close() error = %v", err)
-	}
-	if err := l.Close(); err != nil {
-		t.Errorf("second Close() error = %v, want nil (Close must be idempotent)", err)
 	}
 }

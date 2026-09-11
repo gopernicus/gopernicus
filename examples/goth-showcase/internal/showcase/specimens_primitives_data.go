@@ -11,7 +11,7 @@ import (
 
 	"github.com/a-h/templ"
 
-	"github.com/gopernicus/gopernicus/sdk/foundation/web"
+	"github.com/gopernicus/gopernicus/sdk/pkg/web"
 	"github.com/gopernicus/gopernicus/ui/goth"
 	"github.com/gopernicus/gopernicus/ui/goth/htmx"
 	"github.com/gopernicus/gopernicus/ui/goth/primitives"
@@ -411,7 +411,7 @@ func (s *Server) registerDataFixtures() {
 			return
 		}
 
-				bundle := s.bundles[goth.Full]
+		bundle := s.bundles[goth.Full]
 		w.Header().Set("Content-Security-Policy", buildCSP(bundle, true))
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		body := `<main data-slot="data-table-page"><h1>Data Table</h1>` +

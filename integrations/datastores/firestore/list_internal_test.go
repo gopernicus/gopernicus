@@ -10,7 +10,7 @@ import (
 	gcfs "cloud.google.com/go/firestore"
 
 	"github.com/gopernicus/gopernicus/sdk"
-	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
+	"github.com/gopernicus/gopernicus/sdk/pkg/list"
 )
 
 // The hermetic half of C4. Everything here is a DECISION the List helper makes
@@ -51,13 +51,13 @@ func hermeticQuery(t *testing.T, db *DB) ListQuery[listRow] {
 	t.Helper()
 	return ListQuery[listRow]{
 		Query: db.Collection("list_items").Where("kind", "==", "a"),
-		OrderFields: map[string]crud.OrderField{
+		OrderFields: map[string]list.OrderField{
 			"created_at": {Column: "created_at"},
 			"name":       {Column: "name"},
 			"id":         {Column: "id"},
 			"doc_id":     {Column: gcfs.DocumentID},
 		},
-		DefaultOrder: crud.NewOrder("created_at", crud.DESC),
+		DefaultOrder: list.NewOrder("created_at", list.DESC),
 		PK:           "id",
 		Decode:       func(*gcfs.DocumentSnapshot) (listRow, error) { return listRow{}, nil },
 		OrderValueOf: func(r listRow, field string) any {
@@ -77,15 +77,15 @@ func TestResolveOrder(t *testing.T) {
 
 	cases := []struct {
 		name      string
-		order     crud.Order
+		order     list.Order
 		wantField string
 		wantDir   gcfs.Direction
 	}{
-		{"explicit_desc", crud.NewOrder("name", crud.DESC), "name", gcfs.Desc},
-		{"explicit_asc", crud.NewOrder("name", crud.ASC), "name", gcfs.Asc},
-		{"blank_uses_default", crud.Order{}, "created_at", gcfs.Desc},
-		{"unknown_direction_is_asc", crud.Order{Field: "name", Direction: "sideways"}, "name", gcfs.Asc},
-		{"document_id_is_orderable", crud.NewOrder(gcfs.DocumentID, crud.ASC), gcfs.DocumentID, gcfs.Asc},
+		{"explicit_desc", list.NewOrder("name", list.DESC), "name", gcfs.Desc},
+		{"explicit_asc", list.NewOrder("name", list.ASC), "name", gcfs.Asc},
+		{"blank_uses_default", list.Order{}, "created_at", gcfs.Desc},
+		{"unknown_direction_is_asc", list.Order{Field: "name", Direction: "sideways"}, "name", gcfs.Asc},
+		{"document_id_is_orderable", list.NewOrder(gcfs.DocumentID, list.ASC), gcfs.DocumentID, gcfs.Asc},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -106,7 +106,7 @@ func TestResolveOrderRejectsUnknownField(t *testing.T) {
 	db := hermeticDB(t)
 	q := hermeticQuery(t, db)
 
-	if _, _, err := q.resolveOrder(crud.NewOrder("password", crud.ASC)); !errors.Is(err, sdk.ErrInvalidInput) {
+	if _, _, err := q.resolveOrder(list.NewOrder("password", list.ASC)); !errors.Is(err, sdk.ErrInvalidInput) {
 		t.Fatalf("resolveOrder err = %v, want ErrInvalidInput", err)
 	}
 }
@@ -116,9 +116,9 @@ func TestResolveOrderRejectsUnknownField(t *testing.T) {
 func TestResolveOrderRefusesCastLower(t *testing.T) {
 	db := hermeticDB(t)
 	q := hermeticQuery(t, db)
-	q.OrderFields = map[string]crud.OrderField{"name": {Column: "name", CastLower: true}}
+	q.OrderFields = map[string]list.OrderField{"name": {Column: "name", CastLower: true}}
 
-	_, _, err := q.resolveOrder(crud.NewOrder("name", crud.ASC))
+	_, _, err := q.resolveOrder(list.NewOrder("name", list.ASC))
 	if !errors.Is(err, sdk.ErrInvalidInput) {
 		t.Fatalf("resolveOrder err = %v, want ErrInvalidInput", err)
 	}
@@ -142,7 +142,7 @@ func TestListValidate(t *testing.T) {
 			t.Run(tc.name, func(t *testing.T) {
 				q := hermeticQuery(t, db)
 				tc.breakIt(&q)
-				if _, err := List(ctx, db.ReaderFrom(ctx), q, crud.ListRequest{Limit: 2}); !errors.Is(err, sdk.ErrInvalidInput) {
+				if _, err := List(ctx, db.ReaderFrom(ctx), q, list.Request{Limit: 2}); !errors.Is(err, sdk.ErrInvalidInput) {
 					t.Fatalf("List err = %v, want ErrInvalidInput", err)
 				}
 			})
@@ -151,7 +151,7 @@ func TestListValidate(t *testing.T) {
 
 	t.Run("search_without_a_postfilter_is_refused", func(t *testing.T) {
 		q := hermeticQuery(t, db)
-		if _, err := List(ctx, db.ReaderFrom(ctx), q, crud.ListRequest{Limit: 2, Search: "gear"}); !errors.Is(err, sdk.ErrInvalidInput) {
+		if _, err := List(ctx, db.ReaderFrom(ctx), q, list.Request{Limit: 2, Search: "gear"}); !errors.Is(err, sdk.ErrInvalidInput) {
 			t.Fatalf("List err = %v, want ErrInvalidInput (an unfiltered page must not answer a search)", err)
 		}
 	})
@@ -159,7 +159,7 @@ func TestListValidate(t *testing.T) {
 	t.Run("blank_search_is_not_a_search", func(t *testing.T) {
 		q := hermeticQuery(t, db)
 		for _, term := range []string{"", "   "} {
-			if err := q.validate(crud.ListRequest{Search: term}); err != nil {
+			if err := q.validate(list.Request{Search: term}); err != nil {
 				t.Fatalf("validate(search=%q) = %v, want nil", term, err)
 			}
 		}
@@ -168,7 +168,7 @@ func TestListValidate(t *testing.T) {
 	t.Run("search_with_a_postfilter_is_accepted", func(t *testing.T) {
 		q := hermeticQuery(t, db)
 		q.PostFilter = func(listRow) bool { return true }
-		if err := q.validate(crud.ListRequest{Search: "gear"}); err != nil {
+		if err := q.validate(list.Request{Search: "gear"}); err != nil {
 			t.Fatalf("validate = %v, want nil", err)
 		}
 	})
@@ -176,7 +176,7 @@ func TestListValidate(t *testing.T) {
 	// An invalid request is rejected by crud before the ListQuery is inspected.
 	t.Run("cursor_and_offset_together", func(t *testing.T) {
 		q := hermeticQuery(t, db)
-		if _, err := List(ctx, db.ReaderFrom(ctx), q, crud.ListRequest{Limit: 2, Cursor: "x", Offset: 3}); !errors.Is(err, sdk.ErrInvalidInput) {
+		if _, err := List(ctx, db.ReaderFrom(ctx), q, list.Request{Limit: 2, Cursor: "x", Offset: 3}); !errors.Is(err, sdk.ErrInvalidInput) {
 			t.Fatalf("List err = %v, want ErrInvalidInput", err)
 		}
 	})
@@ -263,7 +263,7 @@ func TestOrderedClauses(t *testing.T) {
 func TestCursorArityMatchesTheOrderClauses(t *testing.T) {
 	db := hermeticDB(t)
 	q := hermeticQuery(t, db)
-	cursor := &crud.Cursor{OrderField: "created_at", OrderValue: time.Now().UTC(), PK: "e4"}
+	cursor := &list.Cursor{OrderField: "created_at", OrderValue: time.Now().UTC(), PK: "e4"}
 
 	t.Run("distinct_field_and_pk", func(t *testing.T) {
 		position := q.cursorPosition(cursor, "created_at")
@@ -276,7 +276,7 @@ func TestCursorArityMatchesTheOrderClauses(t *testing.T) {
 	})
 
 	t.Run("pk_is_the_order_field", func(t *testing.T) {
-		idCursor := &crud.Cursor{OrderField: "id", OrderValue: "e4", PK: "e4"}
+		idCursor := &list.Cursor{OrderField: "id", OrderValue: "e4", PK: "e4"}
 		position := q.cursorPosition(idCursor, "id")
 		if len(position) != 1 || position[0] != "e4" {
 			t.Fatalf("cursorPosition = %v, want the single pk value", position)
@@ -288,7 +288,7 @@ func TestCursorArityMatchesTheOrderClauses(t *testing.T) {
 
 	t.Run("document_id_cursor_is_the_id_string", func(t *testing.T) {
 		q.PK = ""
-		idCursor := &crud.Cursor{OrderField: gcfs.DocumentID, OrderValue: "e4", PK: "e4"}
+		idCursor := &list.Cursor{OrderField: gcfs.DocumentID, OrderValue: "e4", PK: "e4"}
 		position := q.cursorPosition(idCursor, gcfs.DocumentID)
 		// The vendor resolves a document-id cursor value from a plain string
 		// relative to the query's own collection, so no *DocumentRef is needed.

@@ -1,50 +1,39 @@
 package notify
 
 import (
-	"context"
 	"errors"
 	"io"
 	"log/slog"
 	"strings"
 	"testing"
 
-	"github.com/gopernicus/gopernicus/sdk/foundation/environment"
-	"github.com/gopernicus/gopernicus/sdk/foundation/identity"
+	"github.com/gopernicus/gopernicus/sdk/pkg/environment"
 )
 
 // metadatalessNotifier does not implement CapabilityReporter — a third-party or
 // hand-rolled transport that declares nothing about itself.
 type metadatalessNotifier struct{}
 
-func (metadatalessNotifier) Kind() string { return identity.KindPhone }
-func (metadatalessNotifier) Notify(context.Context, identity.Address, Message) error {
-	return nil
-}
-
 // structuralNotifier declares capabilities without being any bundled type,
 // proving detection is structural rather than a concrete-type switch.
 type structuralNotifier struct{ caps Capabilities }
 
-func (structuralNotifier) Kind() string { return identity.KindPhone }
-func (structuralNotifier) Notify(context.Context, identity.Address, Message) error {
-	return nil
-}
 func (n structuralNotifier) Capabilities() Capabilities { return n.caps }
 
 func discardLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
 
-func TestInspectNotifier(t *testing.T) {
+func TestInspectTransport(t *testing.T) {
 	tests := []struct {
 		name         string
-		notifier     Notifier
+		notifier     any
 		wantDeclared bool
 		wantCaps     Capabilities
 	}{
 		{
 			name:         "bundled Console declares development-only",
-			notifier:     NewConsole(identity.KindEmail, discardLogger()),
+			notifier:     NewConsole(discardLogger()),
 			wantDeclared: true,
 			wantCaps:     Capabilities{TransportSecurity: TransportSecurityNone, DevelopmentOnly: true},
 		},
@@ -68,7 +57,7 @@ func TestInspectNotifier(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := InspectNotifier(tt.notifier)
+			got := InspectTransport(tt.notifier)
 			if got.Declared != tt.wantDeclared {
 				t.Errorf("Declared = %v, want %v", got.Declared, tt.wantDeclared)
 			}
@@ -79,15 +68,15 @@ func TestInspectNotifier(t *testing.T) {
 	}
 }
 
-func TestCheckNotifier(t *testing.T) {
-	console := NewConsole(identity.KindEmail, discardLogger())
+func TestCheckTransport(t *testing.T) {
+	console := NewConsole(discardLogger())
 	tls := structuralNotifier{caps: Capabilities{TransportSecurity: TransportSecurityTLS}}
 	bare := metadatalessNotifier{}
 
 	tests := []struct {
 		name             string
 		mode             environment.Mode
-		notifier         Notifier
+		notifier         any
 		wantErr          error
 		wantErrSubstring string
 		wantProdCapable  bool
@@ -136,11 +125,11 @@ func TestCheckNotifier(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			posture, err := CheckNotifier(tt.mode, tt.notifier)
+			posture, err := CheckTransport(tt.mode, tt.notifier)
 
 			if tt.wantErr != nil {
 				if !errors.Is(err, tt.wantErr) {
-					t.Fatalf("CheckNotifier() error = %v, want errors.Is %v", err, tt.wantErr)
+					t.Fatalf("CheckTransport() error = %v, want errors.Is %v", err, tt.wantErr)
 				}
 				if tt.wantErrSubstring != "" && !strings.Contains(err.Error(), tt.wantErrSubstring) {
 					t.Errorf("error %q does not explain the reason %q", err.Error(), tt.wantErrSubstring)
@@ -149,7 +138,7 @@ func TestCheckNotifier(t *testing.T) {
 			}
 
 			if err != nil {
-				t.Fatalf("CheckNotifier() error = %v, want nil", err)
+				t.Fatalf("CheckTransport() error = %v, want nil", err)
 			}
 			if got := posture.ProductionCapable(); got != tt.wantProdCapable {
 				t.Errorf("ProductionCapable() = %v, want %v", got, tt.wantProdCapable)
@@ -158,10 +147,10 @@ func TestCheckNotifier(t *testing.T) {
 	}
 }
 
-// TestCheckNotifierErrorIsCapabilityOwned pins that the sdk validator's wording
+// TestCheckTransportErrorIsCapabilityOwned pins that the sdk validator's wording
 // is the capability's, with no authentication vocabulary leaking into it.
-func TestCheckNotifierErrorIsCapabilityOwned(t *testing.T) {
-	_, err := CheckNotifier(environment.ModeProduction, metadatalessNotifier{})
+func TestCheckTransportErrorIsCapabilityOwned(t *testing.T) {
+	_, err := CheckTransport(environment.ModeProduction, metadatalessNotifier{})
 	if err == nil {
 		t.Fatal("want error")
 	}

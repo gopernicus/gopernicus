@@ -24,7 +24,9 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
-	"fmt"
+	"errors"
+	"io"
+	"net/http"
 	"os"
 	"strings"
 	"testing"
@@ -34,6 +36,7 @@ import (
 	"google.golang.org/api/option"
 
 	"github.com/gopernicus/gopernicus/integrations/filestorage/gcs"
+	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/filestorage"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/filestorage/filestoragetest"
 )
@@ -46,9 +49,7 @@ var (
 )
 
 // TestCapabilities asserts, at run time as well as compile time, that a GCS
-// Store advertises the two optional capabilities — the mirror image of the sdk
-// suite's RunOptionalCapabilityAbsent (which is only for backends like Disk that
-// implement neither).
+// Store advertises both optional protocols. Disk's tests assert their absence.
 func TestCapabilities(t *testing.T) {
 	var s filestorage.Storer = &gcs.Store{}
 	if _, ok := s.(filestorage.ResumableUploader); !ok {
@@ -64,12 +65,17 @@ func TestCapabilities(t *testing.T) {
 // service-account key (a real RSA key, a fake project) and checks the minted V4
 // URL. This runs offline in `make check`; it never touches GCS.
 func TestSignedURLHermetic(t *testing.T) {
+	t.Setenv("STORAGE_EMULATOR_HOST", "")
 	saJSON := generateServiceAccountJSON(t)
+	noNetwork := &http.Client{Transport: testTransport(func(*http.Request) (*http.Response, error) {
+		t.Error("local signing attempted a network request")
+		return nil, errors.New("unexpected network")
+	})}
 
 	st, err := gcs.Open(context.Background(), gcs.Config{
 		Bucket:          "test-bucket",
 		CredentialsJSON: saJSON,
-	})
+	}, gcs.WithClientOption(option.WithoutAuthentication(), option.WithHTTPClient(noNetwork)))
 	if err != nil {
 		t.Fatalf("Open with generated credentials: %v", err)
 	}
@@ -90,7 +96,43 @@ func TestSignedURLHermetic(t *testing.T) {
 			t.Errorf("signed URL missing %q\ngot: %s", want, url)
 		}
 	}
+
+	t.Run("vendor credentials need explicit signing config", func(t *testing.T) {
+		st, err := gcs.Open(context.Background(), gcs.Config{Bucket: "bucket"}, gcs.WithClientOption(
+			option.WithCredentialsJSON([]byte(saJSON)), option.WithoutAuthentication(), option.WithHTTPClient(noNetwork)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer st.Close()
+		if _, err := st.SignedURL(context.Background(), "key", time.Second); !errors.Is(err, sdk.ErrInvalidInput) {
+			t.Fatalf("vendor-only signing: %v", err)
+		}
+	})
+	t.Run("explicit IAM wins over local private key", func(t *testing.T) {
+		calls := 0
+		hc := &http.Client{Transport: testTransport(func(r *http.Request) (*http.Response, error) {
+			calls++
+			if !strings.HasSuffix(r.URL.Path, "/selected@example.invalid:signBlob") {
+				t.Errorf("IAM target=%s", r.URL)
+			}
+			return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"signedBlob":"AQID"}`)), Request: r}, nil
+		})}
+		st, err := gcs.Open(context.Background(), gcs.Config{Bucket: "bucket", CredentialsJSON: saJSON, SigningServiceAccount: "selected@example.invalid"},
+			gcs.WithClientOption(option.WithoutAuthentication(), option.WithHTTPClient(hc)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer st.Close()
+		signed, err := st.SignedURL(context.Background(), "key", time.Second)
+		if err != nil || calls != 1 || !strings.Contains(signed, "X-Goog-Signature=010203") {
+			t.Fatalf("calls=%d signed=%q err=%v", calls, signed, err)
+		}
+	})
 }
+
+type testTransport func(*http.Request) (*http.Response, error)
+
+func (fn testTransport) RoundTrip(r *http.Request) (*http.Response, error) { return fn(r) }
 
 // TestConformance_GCS runs the shared filestorage.Storer conformance suite
 // against a live GCS API (fake-gcs-server or real). Each newStorer gets a unique
@@ -113,7 +155,7 @@ func TestConformance_GCS(t *testing.T) {
 	}
 
 	filestoragetest.Run(t, func(t *testing.T) filestorage.Storer {
-		prefix := fmt.Sprintf("conformance/%d/", time.Now().UnixNano())
+		prefix := "conformance/" + rand.Text() + "/"
 		st, err := gcs.Open(ctx, gcs.Config{
 			Bucket:          bucket,
 			Prefix:          prefix,

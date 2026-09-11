@@ -5,8 +5,8 @@ import (
 	"time"
 
 	firestoredb "github.com/gopernicus/gopernicus/integrations/datastores/firestore"
-	"github.com/gopernicus/gopernicus/pockets/authentication/domain/apikey"
-	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/apikey"
+	"github.com/gopernicus/gopernicus/sdk/pkg/list"
 )
 
 var _ apikey.APIKeyRepository = (*apiKeyStore)(nil)
@@ -43,11 +43,11 @@ func (s *apiKeyStore) GetByHash(ctx context.Context, keyHash string) (apikey.API
 // ListByServiceAccount pages the parent-scoped keys and is the pocket's ONLY
 // searchable list: req.Search is applied as a client-side PostFilter over
 // apikey.SearchFields (ruling R4).
-func (s *apiKeyStore) ListByServiceAccount(ctx context.Context, serviceAccountID string, req crud.ListRequest) (crud.Page[apikey.APIKey], error) {
+func (s *apiKeyStore) ListByServiceAccount(ctx context.Context, serviceAccountID string, req list.Request) (list.Page[apikey.APIKey], error) {
 	if err := refuseAmbient(ctx); err != nil {
-		return crud.Page[apikey.APIKey]{}, err
+		return list.Page[apikey.APIKey]{}, err
 	}
-	return crud.Page[apikey.APIKey]{}, errNotImplemented
+	return list.Page[apikey.APIKey]{}, errNotImplemented
 }
 
 // Revoke stamps revoked_at; unknown id → sdk.ErrNotFound.

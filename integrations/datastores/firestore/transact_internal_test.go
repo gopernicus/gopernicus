@@ -6,12 +6,13 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/gopernicus/gopernicus/sdk/capabilities/transaction"
+
 	gcfs "cloud.google.com/go/firestore"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
 	"github.com/gopernicus/gopernicus/sdk"
-	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
 )
 
 // TestDBIsATransactor restates the compile-time assertion as a runtime one and
@@ -20,14 +21,14 @@ import (
 func TestDBIsATransactor(t *testing.T) {
 	t.Setenv("FIRESTORE_EMULATOR_HOST", "127.0.0.1:1")
 
-	var transactor crud.Transactor = openForTest(t)
+	var transactor transaction.Transactor = openForTest(t)
 	ctx := withTx(context.Background(), &gcfs.Transaction{}, false)
 
 	if err := transactor.Transact(ctx, func(context.Context) error {
 		t.Fatal("the callback ran despite an ambient transaction")
 		return nil
 	}); !errors.Is(err, ErrNestedTransact) {
-		t.Fatalf("nested Transact through crud.Transactor = %v, want ErrNestedTransact", err)
+		t.Fatalf("nested Transact through transaction.Transactor = %v, want ErrNestedTransact", err)
 	}
 }
 
@@ -110,83 +111,50 @@ func TestReadSnapshotReusesTheAmbientTransaction(t *testing.T) {
 func TestAttemptStateOutcomes(t *testing.T) {
 	callbackErr := errors.New("domain refusal")
 
-	t.Run("callback error is returned unwrapped", func(t *testing.T) {
-		s := &attemptState{}
-		func() {
-			var rerr error = callbackErr
-			defer s.beginAttempt(&rerr)()
-		}()
-		if got := s.result(callbackErr); got != callbackErr {
-			t.Fatalf("result = %v, want the identical callback error", got)
-		}
-	})
+	for _, failure := range []error{callbackErr, fmt.Errorf("passwordless rejected: %w", sdk.ErrForbidden)} {
+		t.Run(failure.Error(), func(t *testing.T) {
+			s := &attemptState{}
+			returned := failure
+			s.beginAttempt(&returned)()
+			if got := s.result(returned); got != failure {
+				t.Fatalf("result = %v, want the identical callback error", got)
+			}
+		})
+	}
 
-	t.Run("a callback's raw status is classified rather than leaked", func(t *testing.T) {
-		// The vendor retries a callback error that IS a gRPC Aborted status, and
-		// the LAST attempt's error is the one that comes back. It is the ONE
-		// narrowing of "returned unwrapped" (callbackError): a bare vendor
-		// status carries no domain meaning, so it is mapped instead of reaching
-		// a host as an unclassified 500 — while the status stays in the chain.
-		aborted := status.Error(codes.Aborted, "forced")
+	t.Run("callback Aborted remains retryable and classified", func(t *testing.T) {
 		s := &attemptState{}
-		for range 2 {
-			func() {
-				rerr := aborted
-				defer s.beginAttempt(&rerr)()
-			}()
+		var returned error = status.Error(codes.Aborted, "forced")
+		s.beginAttempt(&returned)()
+		if code := status.Code(returned); code != codes.Aborted {
+			t.Fatalf("wrapped callback status = %s, want Aborted", code)
 		}
-		got := s.result(aborted)
-		if !errors.Is(got, sdk.ErrConflict) {
-			t.Fatalf("result = %v, want an error wrapping sdk.ErrConflict", got)
-		}
-		if code := status.Code(got); code != codes.Aborted {
-			t.Fatalf("status.Code(result) = %s, want Aborted — the retry gate reads it", code)
-		}
-	})
-
-	t.Run("a callback's domain sentinel is returned byte-identical", func(t *testing.T) {
-		// The other side of the narrowing: a domain refusal that already
-		// carries an sdk sentinel is NOT remapped, so `errors.Is`/`==` against
-		// the caller's own value still holds.
-		domain := fmt.Errorf("passwordless rejected: %w", sdk.ErrForbidden)
-		s := &attemptState{}
-		func() {
-			rerr := domain
-			defer s.beginAttempt(&rerr)()
-		}()
-		if got := s.result(domain); got != domain {
-			t.Fatalf("result = %v, want the identical domain error", got)
+		got := s.result(returned)
+		if !errors.Is(got, sdk.ErrConflict) || status.Code(got) != codes.Aborted {
+			t.Fatalf("result = %v, want retryable mapped contention", got)
 		}
 	})
 
 	t.Run("vendor error is mapped", func(t *testing.T) {
 		s := &attemptState{}
-		func() {
-			var rerr error
-			defer s.beginAttempt(&rerr)()
-		}()
-		commitAborted := status.Error(codes.Aborted, "too much contention")
-		got := s.result(commitAborted)
+		got := s.result(status.Error(codes.Aborted, "commit contention"))
 		if !errors.Is(got, sdk.ErrConflict) {
-			t.Fatalf("result = %v, want an error wrapping sdk.ErrConflict", got)
+			t.Fatalf("result = %v, want sdk.ErrConflict", got)
 		}
 	})
 
-	t.Run("a losing attempt's failure does not leak", func(t *testing.T) {
+	t.Run("a losing attempt does not mask a terminal error", func(t *testing.T) {
 		s := &attemptState{}
-		func() {
-			var rerr error = callbackErr
-			defer s.beginAttempt(&rerr)()
-		}()
-		func() {
-			var rerr error // the winning attempt returned nil
-			defer s.beginAttempt(&rerr)()
-		}()
-		if s.failed || s.err != nil {
-			t.Fatalf("attempt state after a clean retry = %+v, want reset", s)
+		var returned error = status.Error(codes.Aborted, "read contention")
+		s.beginAttempt(&returned)()
+		if got := s.result(status.Error(codes.PermissionDenied, "next begin refused")); !errors.Is(got, sdk.ErrForbidden) {
+			t.Fatalf("result = %v, want sdk.ErrForbidden", got)
+		}
+		if got := s.result(context.Canceled); !errors.Is(got, context.Canceled) {
+			t.Fatalf("result = %v, want context.Canceled", got)
 		}
 		if got := s.result(nil); got != nil {
-			t.Fatalf("result = %v, want nil", got)
+			t.Fatalf("successful retry result = %v", got)
 		}
 	})
 

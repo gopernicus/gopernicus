@@ -1,0 +1,326 @@
+{
+  "status": "ready",
+  "branch": "audit-release-20260911",
+  "modules": [
+    {
+      "directory": "integrations/scheduling/robfig-cron",
+      "module": "github.com/gopernicus/gopernicus/integrations/scheduling/robfig-cron",
+      "version": "v0.2.0",
+      "tag": "integrations/scheduling/robfig-cron/v0.2.0",
+      "layer": 1,
+      "sum": "h1:q+a9Z8V8yvuRcHMvCudeMsugDZJY9wszXWSqRmk9g7A=",
+      "go_mod_sum": "h1:vzfPBRNf5Z9j+VW4LuIyXnp1DVn5aIfSmKYqOHQeuuo="
+    },
+    {
+      "directory": "sdk",
+      "module": "github.com/gopernicus/gopernicus/sdk",
+      "version": "v0.9.0",
+      "tag": "sdk/v0.9.0",
+      "layer": 1,
+      "sum": "h1:g7rTlx/W8Dzb0VwsGJhfhas2hK2L7I61BELPuGQCLZY=",
+      "go_mod_sum": "h1:z0bypQiCybwPoxoDfzhYvB1BtH2av549QR84GacngaE="
+    },
+    {
+      "directory": "ui/goth",
+      "module": "github.com/gopernicus/gopernicus/ui/goth",
+      "version": "v0.2.0",
+      "tag": "ui/goth/v0.2.0",
+      "layer": 1,
+      "sum": "h1:I+frS3EyeGsd4c43uLDTiDbiMf9wZQUQBXv9rOcmkC8=",
+      "go_mod_sum": "h1:N5d51dHXti9FcUOZ3ktYI1BaFFVbbSwSd5N8KyS92Fg="
+    },
+    {
+      "directory": "integrations/cryptids/bcrypt",
+      "module": "github.com/gopernicus/gopernicus/integrations/cryptids/bcrypt",
+      "version": "v0.2.0",
+      "tag": "integrations/cryptids/bcrypt/v0.2.0",
+      "layer": 2,
+      "sum": "h1:VFF0q8blnmzec395gh+XO1la0rOf+aViyWz5YFSpmlA=",
+      "go_mod_sum": "h1:3mHXOB5p+FlhZRKJ3FzsU6x4Coa5ACpJLfApKbzJH8s="
+    },
+    {
+      "directory": "integrations/cryptids/golang-jwt",
+      "module": "github.com/gopernicus/gopernicus/integrations/cryptids/golang-jwt",
+      "version": "v0.2.0",
+      "tag": "integrations/cryptids/golang-jwt/v0.2.0",
+      "layer": 2,
+      "sum": "h1:doAgY+G0VY4QVFXm+H9lMfaJ/n6XSO6NJvhat4RTd2E=",
+      "go_mod_sum": "h1:djn4xPs/RALCPqrak4h6uhBq7cldp5gBs3OajGzLY9s="
+    },
+    {
+      "directory": "integrations/cryptids/google-uuid",
+      "module": "github.com/gopernicus/gopernicus/integrations/cryptids/google-uuid",
+      "version": "v0.2.0",
+      "tag": "integrations/cryptids/google-uuid/v0.2.0",
+      "layer": 2,
+      "sum": "h1:49A+boRZsCnFsCw6+7+M9REauJANv+aNvLMg/skfgTA=",
+      "go_mod_sum": "h1:7IdvQ8Kiu8YSNpZkQjD4OSEiynX/Ura6lTqgi3yEDhU="
+    },
+    {
+      "directory": "integrations/datastores/pgxdb",
+      "module": "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb",
+      "version": "v0.7.0",
+      "tag": "integrations/datastores/pgxdb/v0.7.0",
+      "layer": 2,
+      "sum": "h1:Z1iaL/vssP8YahDuONLtzr/TgOU03CDezVIrPD8G6c4=",
+      "go_mod_sum": "h1:m73aQqKrcCcr/XY5CwqUY5REpUg0Pwr1r3i+YfpAPJg="
+    },
+    {
+      "directory": "integrations/datastores/turso",
+      "module": "github.com/gopernicus/gopernicus/integrations/datastores/turso",
+      "version": "v0.4.0",
+      "tag": "integrations/datastores/turso/v0.4.0",
+      "layer": 2,
+      "sum": "h1:lrL06XAWtc3Eda6E+AA5v8TudkKEHyd4KVGj70YScj8=",
+      "go_mod_sum": "h1:83vKGYZCHOoTnCSWM/ClCLOvBlXOgkvGh3SPfn+dOOE="
+    },
+    {
+      "directory": "integrations/email/sendgrid",
+      "module": "github.com/gopernicus/gopernicus/integrations/email/sendgrid",
+      "version": "v0.3.0",
+      "tag": "integrations/email/sendgrid/v0.3.0",
+      "layer": 2,
+      "sum": "h1:lg3bBmb8E1ndMj5L9MYVTvz4A9TCIyOGbIt3Lhmva4E=",
+      "go_mod_sum": "h1:zw+6Ki1w5c6lfOryoSRnWN6BG9428ab1o9CH6lyVh6M="
+    },
+    {
+      "directory": "integrations/filestorage/gcs",
+      "module": "github.com/gopernicus/gopernicus/integrations/filestorage/gcs",
+      "version": "v0.2.0",
+      "tag": "integrations/filestorage/gcs/v0.2.0",
+      "layer": 2,
+      "sum": "h1:EAJ1K03UKlQfJ2ccST0tJN1hx/8YZdD95CdH0MC2Ffk=",
+      "go_mod_sum": "h1:j+uq0FiLz9ab/veXL4Wxn4sP2WCuNTcScubp4XTAV74="
+    },
+    {
+      "directory": "integrations/filestorage/s3",
+      "module": "github.com/gopernicus/gopernicus/integrations/filestorage/s3",
+      "version": "v0.2.0",
+      "tag": "integrations/filestorage/s3/v0.2.0",
+      "layer": 2,
+      "sum": "h1:8LvvCS9A8/7D6Fs5E5Kl3CBFGCLi8lJ8+gLw1tty7Rc=",
+      "go_mod_sum": "h1:9qHJ6jJsVe52iK6l9Khyh7TCNJnv1fQQh3Fqm7FaTEQ="
+    },
+    {
+      "directory": "integrations/kvstores/goredis",
+      "module": "github.com/gopernicus/gopernicus/integrations/kvstores/goredis",
+      "version": "v0.2.0",
+      "tag": "integrations/kvstores/goredis/v0.2.0",
+      "layer": 2,
+      "sum": "h1:xR+2/YunATxaMaZ0c/QhkoH1msTcRfjBfiZ6koUJVg8=",
+      "go_mod_sum": "h1:FgppPk3eiVREbRaeKVApcd9VNJO/0L8NjwfQqmGdj+Q="
+    },
+    {
+      "directory": "integrations/oauth/github",
+      "module": "github.com/gopernicus/gopernicus/integrations/oauth/github",
+      "version": "v0.2.0",
+      "tag": "integrations/oauth/github/v0.2.0",
+      "layer": 2,
+      "sum": "h1:2ivJFO0oFg28FRhfBKXn11SN3JY8eP/NKR1IaVhTXnc=",
+      "go_mod_sum": "h1:+YCe4CUwj5ECYZUTymv3hg1BhJ8olrfbTcqXN6Akujo="
+    },
+    {
+      "directory": "integrations/oauth/google",
+      "module": "github.com/gopernicus/gopernicus/integrations/oauth/google",
+      "version": "v0.2.0",
+      "tag": "integrations/oauth/google/v0.2.0",
+      "layer": 2,
+      "sum": "h1:LREFE63pzxtM1H8f2fKzKzfoZ8ZOq+xcTakL/QILj2c=",
+      "go_mod_sum": "h1:qEKvnsqbjANtYIUhbasxC98hNMCKatdv4WZ3xO0dpZk="
+    },
+    {
+      "directory": "integrations/tracing/otel",
+      "module": "github.com/gopernicus/gopernicus/integrations/tracing/otel",
+      "version": "v0.2.0",
+      "tag": "integrations/tracing/otel/v0.2.0",
+      "layer": 2,
+      "sum": "h1:MohWegX0FuJXEtoT3GI00lgRsvjNC9Z708ivQUCWX28=",
+      "go_mod_sum": "h1:delrEPDvESys8zK5OhtfKcReiXmK/zcH9uSDd8ZJNFk="
+    },
+    {
+      "directory": "pockets",
+      "module": "github.com/gopernicus/gopernicus/pockets",
+      "version": "v0.1.0",
+      "tag": "pockets/v0.1.0",
+      "layer": 2,
+      "sum": "h1:2WcybbfPw1km00DmG37CekPbxYmObyyj3T1Ec0eFSRY=",
+      "go_mod_sum": "h1:A2H/Tl9Pn2v2mFLOgkCQngMRFkMN10E1MEzGCQICsEw="
+    },
+    {
+      "directory": "pockets/authentication",
+      "module": "github.com/gopernicus/gopernicus/pockets/authentication",
+      "version": "v0.11.0",
+      "tag": "pockets/authentication/v0.11.0",
+      "layer": 3,
+      "sum": "h1:jab1wiCCmtWQzneyghsH0ChL+n58u1YnsyVi+sZhoVU=",
+      "go_mod_sum": "h1:V4s8PuUv/BPWtuLigf9aVCYEcSA+tklqVUnMnTkxvg4="
+    },
+    {
+      "directory": "pockets/authorization",
+      "module": "github.com/gopernicus/gopernicus/pockets/authorization",
+      "version": "v0.13.0",
+      "tag": "pockets/authorization/v0.13.0",
+      "layer": 3,
+      "sum": "h1:Up4wvL9x+R2IWA19kM8nNKn9Ku4KGo11IPvFtDXeGkc=",
+      "go_mod_sum": "h1:SWt/blN2Csf2p8dohOtJXbINP/BT5Z3oV9/GOxkFXGo="
+    },
+    {
+      "directory": "pockets/cms",
+      "module": "github.com/gopernicus/gopernicus/pockets/cms",
+      "version": "v0.3.0",
+      "tag": "pockets/cms/v0.3.0",
+      "layer": 3,
+      "sum": "h1:z3ADWDmI9COL02Jky8eVgJnshdPf4nQ2QoogrdLZGGs=",
+      "go_mod_sum": "h1:SD8l/U1/O3bEZQxOSkQAO/5cTdzeEa3WqStThKXdOYg="
+    },
+    {
+      "directory": "pockets/events",
+      "module": "github.com/gopernicus/gopernicus/pockets/events",
+      "version": "v0.3.0",
+      "tag": "pockets/events/v0.3.0",
+      "layer": 3,
+      "sum": "h1:P2E2NhEzzMyVxuDxSS/0st1KwxpftI3LHWR37+yK0L0=",
+      "go_mod_sum": "h1:3jXfwugCkrkX0DU+dUdcI/WHd3c2laNRLJmMWoop0cw="
+    },
+    {
+      "directory": "pockets/jobs",
+      "module": "github.com/gopernicus/gopernicus/pockets/jobs",
+      "version": "v0.6.0",
+      "tag": "pockets/jobs/v0.6.0",
+      "layer": 3,
+      "sum": "h1:dORiZ6Msiynz2MLbhfEZpx7q5uy5XlcNrR2dTfCMGSw=",
+      "go_mod_sum": "h1:lkPD3Lz1IoDt44mPI13cvJxGOghej2qG3pPqgYPMUdo="
+    },
+    {
+      "directory": "pockets/authentication/stores/pgx",
+      "module": "github.com/gopernicus/gopernicus/pockets/authentication/stores/pgx",
+      "version": "v0.6.0",
+      "tag": "pockets/authentication/stores/pgx/v0.6.0",
+      "layer": 4,
+      "sum": "h1:uZ/B3Vp1NpuBhCOVbfWuTiv6R2tR2x9gUWyRuGZdOc0=",
+      "go_mod_sum": "h1:/s5GT5ql9w3Ixd/pHfDcbDiZOd8ey35SkQsRZ5UR7DU="
+    },
+    {
+      "directory": "pockets/authentication/stores/turso",
+      "module": "github.com/gopernicus/gopernicus/pockets/authentication/stores/turso",
+      "version": "v0.5.0",
+      "tag": "pockets/authentication/stores/turso/v0.5.0",
+      "layer": 4,
+      "sum": "h1:ynViF3RPfR9Psi7KHSyXL3XANPnvXTOMQfWt+kBXtIU=",
+      "go_mod_sum": "h1:F1ZF7pNhcB69r6rGddKnGMDCt4Z++QmyHgm2Jq9x4UA="
+    },
+    {
+      "directory": "pockets/authentication/views/goth",
+      "module": "github.com/gopernicus/gopernicus/pockets/authentication/views/goth",
+      "version": "v0.4.0",
+      "tag": "pockets/authentication/views/goth/v0.4.0",
+      "layer": 4,
+      "sum": "h1:v6viwFqh1l7YIq4BMGIeMmzmi5M+ZvnNai9Rj0NM5h0=",
+      "go_mod_sum": "h1:wPFspru4nROeZVEbPlaekrwP3hGciDluPbkzf1RSrVY="
+    },
+    {
+      "directory": "pockets/authorization/stores/pgx",
+      "module": "github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx",
+      "version": "v0.8.0",
+      "tag": "pockets/authorization/stores/pgx/v0.8.0",
+      "layer": 4,
+      "sum": "h1:FDJTetXv+EXAlh9Gd72zrt/7aFHahIuIN3SMIyxsrF0=",
+      "go_mod_sum": "h1:odv0Qu6fgRg23Fi8iuCMQdbl/aUYOcHS1eMjNqQ68Ts="
+    },
+    {
+      "directory": "pockets/authorization/stores/turso",
+      "module": "github.com/gopernicus/gopernicus/pockets/authorization/stores/turso",
+      "version": "v0.7.0",
+      "tag": "pockets/authorization/stores/turso/v0.7.0",
+      "layer": 4,
+      "sum": "h1:HDk/0zFZSm0qUKJ6BjcwA0OMJTm2dPbAD/F/WV68ybU=",
+      "go_mod_sum": "h1:7sn3gJ38GA3UrkkxlgRiG7cYKD5/QMpZm0+eULOTRj4="
+    },
+    {
+      "directory": "pockets/cms/stores/pgx",
+      "module": "github.com/gopernicus/gopernicus/pockets/cms/stores/pgx",
+      "version": "v0.4.0",
+      "tag": "pockets/cms/stores/pgx/v0.4.0",
+      "layer": 4,
+      "sum": "h1:+sWAviU4G7nLJnBTQFOi05o9TrwtpfZIpGZwpyURIKM=",
+      "go_mod_sum": "h1:7fNJjZhZ8yrOtEETwQoByDwBk7gy7+g4n7TEbi6cVOs="
+    },
+    {
+      "directory": "pockets/cms/stores/turso",
+      "module": "github.com/gopernicus/gopernicus/pockets/cms/stores/turso",
+      "version": "v0.3.0",
+      "tag": "pockets/cms/stores/turso/v0.3.0",
+      "layer": 4,
+      "sum": "h1:PtnSZ8M2GGKWxh84hjpp83DkN6h8EK1Cxw6j03ywx6Y=",
+      "go_mod_sum": "h1:aJgsXTLFWMY7LndCaPRvGNWa0y4I4pRhThNuDdHTWek="
+    },
+    {
+      "directory": "pockets/cms/views/goth",
+      "module": "github.com/gopernicus/gopernicus/pockets/cms/views/goth",
+      "version": "v0.3.0",
+      "tag": "pockets/cms/views/goth/v0.3.0",
+      "layer": 4,
+      "sum": "h1:le3rBE5WAQhEoNBo+FiE0J5U8O0G33DUV8kE48T7gjg=",
+      "go_mod_sum": "h1:Og8blfxYBKp45x2X4e4tp5fPEHsN5CNJmuQyXOpctfs="
+    },
+    {
+      "directory": "pockets/events/stores/pgx",
+      "module": "github.com/gopernicus/gopernicus/pockets/events/stores/pgx",
+      "version": "v0.4.0",
+      "tag": "pockets/events/stores/pgx/v0.4.0",
+      "layer": 4,
+      "sum": "h1:ZIkqro6xreAK/w7uoIFHwnUFjCOhigV0i4SyR3ne4+0=",
+      "go_mod_sum": "h1:sq//I+DonB2mSeH0F+xBto6XSZltM2BiYjZsJAYSrng="
+    },
+    {
+      "directory": "pockets/events/stores/turso",
+      "module": "github.com/gopernicus/gopernicus/pockets/events/stores/turso",
+      "version": "v0.3.0",
+      "tag": "pockets/events/stores/turso/v0.3.0",
+      "layer": 4,
+      "sum": "h1:fZNdwkRoyytIP1KBLi9/e90c8v64fQN6+b7hbkDVva4=",
+      "go_mod_sum": "h1:5gLTqF59nkl5dsBP37/975AqiLjqqJJZfQ0rzxdgtyA="
+    },
+    {
+      "directory": "pockets/jobs/stores/pgx",
+      "module": "github.com/gopernicus/gopernicus/pockets/jobs/stores/pgx",
+      "version": "v0.6.0",
+      "tag": "pockets/jobs/stores/pgx/v0.6.0",
+      "layer": 4,
+      "sum": "h1:g5mC3WhYXAmDC+lM326/FaMl345gi2MA+OuGGVZkP28=",
+      "go_mod_sum": "h1:9pJCvAOgy+Lxy9NzJlYgKtJoooxHJj2uyQCTTQugA7g="
+    },
+    {
+      "directory": "pockets/jobs/stores/turso",
+      "module": "github.com/gopernicus/gopernicus/pockets/jobs/stores/turso",
+      "version": "v0.5.0",
+      "tag": "pockets/jobs/stores/turso/v0.5.0",
+      "layer": 4,
+      "sum": "h1:r9FoBRfAWUvdhvRmTx4RNdCC0tZDdRuQWAeQ/QI4M10=",
+      "go_mod_sum": "h1:jxYvAhsD1/9XUcuc/WviDkvIMA/hStBNZ9IGm8hLiUg="
+    },
+    {
+      "directory": "workshop/gopernicus",
+      "module": "github.com/gopernicus/gopernicus/workshop/gopernicus",
+      "version": "v0.3.0",
+      "tag": "workshop/gopernicus/v0.3.0",
+      "layer": 5,
+      "sum": "h1:r7y6J1hpsgX3ohs3ydtRSLKtMyqeIHggYYdu/gmafNc=",
+      "go_mod_sum": "h1:iKje4yq6ncagK4eccilKyM8i3zkhJWHZa2i9dbzlgqE="
+    }
+  ],
+  "held_modules": [
+    "integrations/datastores/firestore",
+    "pockets/authentication/stores/firestore",
+    "pockets/authorization/stores/firestore"
+  ],
+  "verification": {
+    "candidate_module_count": 34,
+    "candidate_source_entries": 1737,
+    "ui_browser_passed": 441,
+    "firestore_live": "not run; first tags held",
+    "publication": "pending",
+    "final_workspace_check": "passed",
+    "live_sql_redis": "passed; disposable fixtures cleaned"
+  }
+}

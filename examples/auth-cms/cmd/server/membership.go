@@ -6,10 +6,15 @@ import (
 	"net/http"
 	"sync"
 
-	auth "github.com/gopernicus/gopernicus/pockets/authentication"
-	authorization "github.com/gopernicus/gopernicus/pockets/authorization"
+	invitations "github.com/gopernicus/gopernicus/pockets/authentication/logic/invitations"
+	authorizationhttp "github.com/gopernicus/gopernicus/pockets/authorization/inbound/http"
+	audit "github.com/gopernicus/gopernicus/pockets/authorization/logic/audit"
+	decisions "github.com/gopernicus/gopernicus/pockets/authorization/logic/decisions"
+	model "github.com/gopernicus/gopernicus/pockets/authorization/logic/model"
+	mutations "github.com/gopernicus/gopernicus/pockets/authorization/logic/mutations"
+	relationships "github.com/gopernicus/gopernicus/pockets/authorization/logic/relationships"
 	"github.com/gopernicus/gopernicus/sdk"
-	"github.com/gopernicus/gopernicus/sdk/foundation/web"
+	"github.com/gopernicus/gopernicus/sdk/pkg/web"
 )
 
 // The demo resource the flagship checks against. An invitation created at
@@ -82,12 +87,12 @@ func (r *hostResourceRegistry) remove(resourceType, resourceID string) {
 // the tuple write. The host also checks resource existence because authentication
 // does not own resource lifecycle.
 type relationshipGranter struct {
-	writer *authorization.RelationshipWriter
-	reader *authorization.Service
+	writer *relationships.RelationshipWriter
+	reader *relationships.Service
 	exists resourceExistsFn
 }
 
-var _ auth.Granter = relationshipGranter{}
+var _ invitations.Granter = relationshipGranter{}
 
 // Grant records that (in.SubjectType, in.SubjectID) holds in.Relation on the resource as
 // a relationship tuple. Two host duties frame the write:
@@ -103,7 +108,7 @@ var _ auth.Granter = relationshipGranter{}
 // an implicit upgrade/downgrade. A concurrent later write may of course win after
 // that check: this is the ordinary application race posture chosen for project
 // member invitations.
-func (g relationshipGranter) Grant(ctx context.Context, in auth.GrantInput) error {
+func (g relationshipGranter) Grant(ctx context.Context, in invitations.GrantInput) error {
 	if g.exists == nil {
 		return fmt.Errorf("auth-cms: relationshipGranter resource-existence seam is not wired")
 	}
@@ -119,7 +124,7 @@ func (g relationshipGranter) Grant(ctx context.Context, in auth.GrantInput) erro
 	if g.writer == nil || g.reader == nil {
 		return fmt.Errorf("auth-cms: relationshipGranter authorization capabilities are not wired")
 	}
-	if err := g.writer.CreateRelationships(ctx, []authorization.CreateRelationship{{
+	if err := g.writer.CreateRelationships(ctx, []relationships.CreateRelationship{{
 		ResourceType: in.ResourceType,
 		ResourceID:   in.ResourceID,
 		Relation:     in.Relation,
@@ -143,16 +148,16 @@ func (g relationshipGranter) Grant(ctx context.Context, in auth.GrantInput) erro
 
 // guardedRelationshipGranter is the opt-in high-integrity invitation posture.
 // It consumes OperationID to derive durable mutation idempotency and maps guarded
-// mutation receipts. A host can select this adapter for tenant/account owner or
+// atomic writes and guardian protection. A host can select this adapter for tenant/account owner or
 // administrator invitations while ordinary resource sharing uses relationshipGranter.
 type guardedRelationshipGranter struct {
-	system *authorization.SystemMutator
+	system *mutations.SystemMutator
 	exists resourceExistsFn
 }
 
-var _ auth.Granter = guardedRelationshipGranter{}
+var _ invitations.Granter = guardedRelationshipGranter{}
 
-func (g guardedRelationshipGranter) Grant(ctx context.Context, in auth.GrantInput) error {
+func (g guardedRelationshipGranter) Grant(ctx context.Context, in invitations.GrantInput) error {
 	if g.exists == nil {
 		return fmt.Errorf("auth-cms: guardedRelationshipGranter resource-existence seam is not wired")
 	}
@@ -165,27 +170,16 @@ func (g guardedRelationshipGranter) Grant(ctx context.Context, in auth.GrantInpu
 			in.ResourceType, in.ResourceID, in.Relation, in.SubjectType, in.SubjectID, sdk.ErrNotFound)
 	}
 
-	mid := authorization.DeriveMutationID("auth-cms/invitation-grant",
-		in.OperationID, in.ResourceType, in.ResourceID, in.Relation, in.SubjectType, in.SubjectID)
-	receipt, err := g.system.GrantRelationship(ctx, authorization.GrantRelationshipCommand{
-		MutationID: mid, ResourceType: in.ResourceType, ResourceID: in.ResourceID, Relation: in.Relation,
-		Subject: authorization.SubjectRef{Type: in.SubjectType, ID: in.SubjectID},
+	ctx = audit.WithSource(ctx, audit.Source{System: "invitation-acceptance"})
+	_, err = g.system.GrantRelationship(ctx, mutations.GrantRelationshipCommand{
+		ResourceType: in.ResourceType, ResourceID: in.ResourceID, Relation: in.Relation,
+		Subject: relationships.SubjectRef{Type: in.SubjectType, ID: in.SubjectID},
 	})
-	if err != nil {
-		return err
-	}
-	switch receipt.Outcome {
-	case authorization.OutcomeApplied, authorization.OutcomeNoChange:
-		return nil
-	case authorization.OutcomeSemanticConflict, authorization.OutcomeInvariantBlocked:
-		return fmt.Errorf("auth-cms: guarded invitation grant returned %q: %w", receipt.Outcome, sdk.ErrConflict)
-	default:
-		return fmt.Errorf("auth-cms: guarded invitation grant returned non-success outcome %q: %w", receipt.Outcome, sdk.ErrConflict)
-	}
+	return err
 }
 
 // hostInviteCheck is the relation-aware host authorization policy the authentication
-// pocket calls from its parsed create/list invitation handlers (auth.Config.InviteCheck,
+// pocket calls from its parsed create/list invitation handlers (authenticationConfig.InviteCheck,
 // design D3). It is REQUIRED whenever a Granter enables invitations, and it runs AFTER the
 // pocket has resolved the caller principal and parsed the exact requested relation — data a
 // route-wrapping middleware could never see. The mapping expresses "may this caller grant
@@ -200,24 +194,24 @@ func (g guardedRelationshipGranter) Grant(ctx context.Context, in auth.GrantInpu
 //
 // A denial wraps sdk.ErrForbidden (→403); an authorizer infrastructure error fails CLOSED
 // (returned as-is, →500), never an allow.
-func hostInviteCheck(authorizer *authorization.Service) auth.InviteCheck {
-	return func(ctx context.Context, req auth.InviteCheckRequest) error {
+func hostInviteCheck(authorizer *decisions.Service) invitations.InviteCheck {
+	return func(ctx context.Context, req invitations.InviteCheckRequest) error {
 		// Platform-admin recipe: host runs it first (engine grants no bypass). isPlatformAdmin
 		// already fails closed to false on any probe error.
 		if isPlatformAdmin(ctx, authorizer, req.Principal.Type, req.Principal.ID) {
 			return nil
 		}
 		// Owner-granting is elevated: a member-capable manager cannot invite an owner.
-		if req.Action == auth.InviteCreate && req.Relation == "owner" {
+		if req.Action == invitations.InviteCreate && req.Relation == "owner" {
 			return fmt.Errorf("auth-cms: %s:%s may not invite an owner on %s:%s (owner grants are reserved to platform admins): %w",
 				req.Principal.Type, req.Principal.ID, req.ResourceType, req.ResourceID, sdk.ErrForbidden)
 		}
 		// Otherwise the caller must hold manage_access on the target resource — for both
 		// creating a non-owner invitation and listing a resource's invitations.
-		res, err := authorizer.Check(ctx, authorization.CheckRequest{
-			Principal:  authorization.PrincipalRef{Type: req.Principal.Type, ID: req.Principal.ID},
+		res, err := authorizer.Check(ctx, model.CheckRequest{
+			Principal:  model.PrincipalRef{Type: req.Principal.Type, ID: req.Principal.ID},
 			Permission: manageAccessPerm,
-			Resource:   authorization.Resource{Type: req.ResourceType, ID: req.ResourceID},
+			Resource:   model.Resource{Type: req.ResourceType, ID: req.ResourceID},
 		})
 		if err != nil {
 			// Fail closed: an authorizer failure denies, never allows.
@@ -244,11 +238,11 @@ func hostInviteCheck(authorizer *authorization.Service) auth.InviteCheck {
 // explicitly lists it (here, `auditor` → project/audit), never a
 // relationship-owned permission and never a permission added later. Universal
 // bypass is therefore this closure's job, not the model's.
-func isPlatformAdmin(ctx context.Context, authorizer *authorization.Service, subjectType, subjectID string) bool {
-	res, err := authorizer.Check(ctx, authorization.CheckRequest{
-		Principal:  authorization.PrincipalRef{Type: subjectType, ID: subjectID},
+func isPlatformAdmin(ctx context.Context, authorizer *decisions.Service, subjectType, subjectID string) bool {
+	res, err := authorizer.Check(ctx, model.CheckRequest{
+		Principal:  model.PrincipalRef{Type: subjectType, ID: subjectID},
 		Permission: "admin",
-		Resource:   authorization.Resource{Type: "platform", ID: "main"},
+		Resource:   model.Resource{Type: "platform", ID: "main"},
 	})
 	return err == nil && res.Allowed
 }
@@ -265,13 +259,13 @@ func isPlatformAdmin(ctx context.Context, authorizer *authorization.Service, sub
 // present admin passes straight to next; every other case — non-admin principal
 // or none at all — falls through to the builder-gated handler (its 403/500 or
 // 401 legs respectively).
-func requireMembership(authSvc *auth.Service, authorizer *authorization.Service) web.Middleware {
-	gate := authorizer.RequirePermission(demoPermission, authorization.FixedResource(demoResourceType, demoResourceID))
+func requireMembership(authorizer *decisions.Service, gates *authorizationhttp.Adapter) web.Middleware {
+	gate := gates.RequirePermission(demoPermission, authorizationhttp.FixedResource(demoResourceType, demoResourceID))
 	return func(next http.Handler) http.Handler {
 		gated := gate(next)
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			// Platform-admin recipe: host runs it first (engine grants no bypass).
-			if p, ok := authSvc.CurrentPrincipal(r.Context()); ok && isPlatformAdmin(r.Context(), authorizer, p.Type, p.ID) {
+			if p, ok := sdk.PrincipalFromContext(r.Context()); ok && isPlatformAdmin(r.Context(), authorizer, p.Type, p.ID) {
 				next.ServeHTTP(w, r)
 				return
 			}

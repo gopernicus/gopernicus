@@ -8,11 +8,16 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gopernicus/gopernicus/pockets/authentication/domain/challenge"
-	"github.com/gopernicus/gopernicus/sdk/capabilities/email"
+	inbound "github.com/gopernicus/gopernicus/pockets/authentication/inbound/http"
+	authlogic "github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/challenge"
+	protection "github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/protection"
+	delivery "github.com/gopernicus/gopernicus/pockets/authentication/logic/delivery"
+	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/notify"
+	"github.com/gopernicus/gopernicus/sdk/capabilities/notify/email"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/ratelimiter"
-	"github.com/gopernicus/gopernicus/sdk/foundation/identity"
+	environment "github.com/gopernicus/gopernicus/sdk/pkg/environment"
 )
 
 // stubChallenges satisfies challenge.Repository for the enable-time construction
@@ -37,15 +42,14 @@ func (stubChallenges) PurgeExpired(context.Context, time.Time, int) (int, error)
 type prodMailer struct{}
 
 func (prodMailer) Send(context.Context, email.Message) error { return nil }
-func (prodMailer) Capabilities() email.Capabilities {
-	return email.Capabilities{TransportSecurity: email.TransportSecurityTLS}
+func (prodMailer) Capabilities() notify.Capabilities {
+	return notify.Capabilities{TransportSecurity: notify.TransportSecurityTLS}
 }
 
 // prodNotifier is a production-capable notifier double declaring metadata.
-type prodNotifier struct{ kind string }
+type prodNotifier struct{}
 
-func (p prodNotifier) Kind() string                                                 { return p.kind }
-func (prodNotifier) Notify(context.Context, identity.Address, notify.Message) error { return nil }
+func (prodNotifier) Send(context.Context, string, string) error { return nil }
 func (prodNotifier) Capabilities() notify.Capabilities {
 	return notify.Capabilities{TransportSecurity: notify.TransportSecurityTLS}
 }
@@ -67,23 +71,24 @@ type durableLimiter struct{}
 func (durableLimiter) Allow(context.Context, string, ratelimiter.Limit) (ratelimiter.Result, error) {
 	return ratelimiter.Result{Allowed: true}, nil
 }
-func (durableLimiter) Reset(context.Context, string) error      { return nil }
-func (durableLimiter) Close() error                             { return nil }
-func (durableLimiter) RateLimiterDurability() LimiterDurability { return LimiterDurability{} }
+func (durableLimiter) Reset(context.Context, string) error { return nil }
+func (durableLimiter) RateLimiterDurability() authlogic.LimiterDurability {
+	return authlogic.LimiterDurability{}
+}
 
 // inProcessLimiter is a custom limiter that positively declares itself
 // in-process-only — production rejects it (ErrNonDurableRateLimiter) exactly like
 // the bundled ratelimiter.Memory default.
 type inProcessLimiter struct{ durableLimiter }
 
-func (inProcessLimiter) RateLimiterDurability() LimiterDurability {
-	return LimiterDurability{InProcessOnly: true}
+func (inProcessLimiter) RateLimiterDurability() authlogic.LimiterDurability {
+	return authlogic.LimiterDurability{InProcessOnly: true}
 }
 
 // prodKeyer is a production-capable identifier keyer double: it satisfies
 // IdentifierKeyer so production construction (which requires the keyer) is
 // satisfied. The digest shape is irrelevant here — PII-freeness of the login key is
-// proven in the authsvc limiter tests.
+// proven in the authentication service limiter tests.
 type prodKeyer struct{}
 
 func (prodKeyer) IdentifierKey(kind, normalizedValue string) string { return "k:" + kind }
@@ -91,7 +96,12 @@ func (prodKeyer) IdentifierKey(kind, normalizedValue string) string { return "k:
 // TestNewServiceRuntimeModeRequired proves an empty RuntimeMode is rejected so a
 // host cannot accidentally inherit the development posture (design §8).
 func TestNewServiceRuntimeModeRequired(t *testing.T) {
-	_, err := NewService(Repositories{}, Config{Hasher: stubHasher{}, Mailer: stubMailer{}, TokenSigner: stubSigner{}})
+	_, err := New(testRepositories(Repositories{}),
+		stubSigner{},
+		"",
+		"",
+		WithPassword(PasswordConfig{Hasher: stubHasher{}}),
+		WithDelivery(DeliveryConfig{Mailer: stubMailer{}}))
 	if !errors.Is(err, ErrRuntimeModeRequired) {
 		t.Errorf("empty RuntimeMode: err=%v, want ErrRuntimeModeRequired", err)
 	}
@@ -101,13 +111,12 @@ func TestNewServiceRuntimeModeRequired(t *testing.T) {
 // §3.3): wiring the Challenges repository enables the atomic secret rail, which
 // requires a ChallengeProtector — nil is rejected with ErrChallengeProtectorRequired.
 func TestNewServiceChallengeProtectorRequired(t *testing.T) {
-	_, err := NewService(Repositories{Challenges: stubChallenges{}}, Config{
-		Hasher:       stubHasher{},
-		Mailer:       stubMailer{},
-		TokenSigner:  stubSigner{},
-		RuntimeMode:  RuntimeModeDevelopment,
-		DeliveryMode: DeliveryModeOff,
-	})
+	_, err := New(testRepositories(Repositories{Challenges: stubChallenges{}}),
+		stubSigner{},
+		environment.ModeDevelopment,
+		delivery.ModeOff,
+		WithPassword(PasswordConfig{Hasher: stubHasher{}}),
+		WithDelivery(DeliveryConfig{Mailer: stubMailer{}}))
 	if !errors.Is(err, ErrChallengeProtectorRequired) {
 		t.Errorf("Challenges wired without protector: err=%v, want ErrChallengeProtectorRequired", err)
 	}
@@ -117,11 +126,11 @@ func TestNewServiceChallengeProtectorRequired(t *testing.T) {
 // absence: a nil Challenges repository tolerates a nil protector, and wiring both
 // together constructs cleanly.
 func TestNewServiceChallengeSubsystemWiring(t *testing.T) {
-	base := Config{Hasher: stubHasher{}, Mailer: stubMailer{}, TokenSigner: stubSigner{}, RuntimeMode: RuntimeModeDevelopment, DeliveryMode: DeliveryModeOff}
-	if _, err := NewService(Repositories{}, base); err != nil {
+	base := constructorConfig{Hasher: stubHasher{}, Mailer: stubMailer{}, TokenSigner: stubSigner{}, RuntimeMode: environment.ModeDevelopment, DeliveryMode: delivery.ModeOff}
+	if _, err := newFixture(testRepositories(Repositories{}), base); err != nil {
 		t.Errorf("challenge off (nil repo, nil protector): err=%v, want nil", err)
 	}
-	protector, err := NewHMACChallengeProtector(HMACKeyRing{
+	protector, err := protection.NewHMACChallengeProtector(protection.HMACKeyRing{
 		Active: "2026-01",
 		Keys:   map[string][]byte{"2026-01": make([]byte, 32)},
 	})
@@ -130,14 +139,19 @@ func TestNewServiceChallengeSubsystemWiring(t *testing.T) {
 	}
 	withProtector := base
 	withProtector.ChallengeProtector = protector
-	if _, err := NewService(Repositories{Challenges: stubChallenges{}}, withProtector); err != nil {
+	if _, err := newFixture(testRepositories(Repositories{Challenges: stubChallenges{}}), withProtector); err != nil {
 		t.Errorf("challenge on (repo + protector): err=%v, want nil", err)
 	}
 }
 
 // TestNewServiceRuntimeModeInvalid proves an unknown RuntimeMode is rejected.
 func TestNewServiceRuntimeModeInvalid(t *testing.T) {
-	_, err := NewService(Repositories{}, Config{Hasher: stubHasher{}, Mailer: stubMailer{}, TokenSigner: stubSigner{}, RuntimeMode: "staging"})
+	_, err := New(testRepositories(Repositories{}),
+		stubSigner{},
+		"staging",
+		"",
+		WithPassword(PasswordConfig{Hasher: stubHasher{}}),
+		WithDelivery(DeliveryConfig{Mailer: stubMailer{}}))
 	if !errors.Is(err, ErrRuntimeModeInvalid) {
 		t.Errorf("unknown RuntimeMode: err=%v, want ErrRuntimeModeInvalid", err)
 	}
@@ -147,10 +161,18 @@ func TestNewServiceRuntimeModeInvalid(t *testing.T) {
 // validation does not mask the pre-existing required-collaborator errors (nil
 // Hasher/Mailer/TokenSigner still report their own errors first).
 func TestNewServiceRuntimeModeCheckedAfterRequiredCollaborators(t *testing.T) {
-	if _, err := NewService(Repositories{}, Config{}); !errors.Is(err, ErrHasherRequired) {
+	if _, err := New(testRepositories(Repositories{}),
+		nil,
+		"",
+		""); !errors.Is(err, ErrHasherRequired) {
 		t.Errorf("nil Hasher with empty mode: err=%v, want ErrHasherRequired", err)
 	}
-	if _, err := NewService(Repositories{}, Config{Hasher: stubHasher{}, Mailer: stubMailer{}}); !errors.Is(err, ErrTokenSignerRequired) {
+	if _, err := New(testRepositories(Repositories{}),
+		nil,
+		"",
+		"",
+		WithPassword(PasswordConfig{Hasher: stubHasher{}}),
+		WithDelivery(DeliveryConfig{Mailer: stubMailer{}})); !errors.Is(err, ErrTokenSignerRequired) {
 		t.Errorf("nil signer with empty mode: err=%v, want ErrTokenSignerRequired", err)
 	}
 }
@@ -158,13 +180,12 @@ func TestNewServiceRuntimeModeCheckedAfterRequiredCollaborators(t *testing.T) {
 // TestNewServiceProductionRejectsConsoleEmail proves the console email sender is
 // rejected in production RuntimeMode (design §6.3): it leaks message bodies.
 func TestNewServiceProductionRejectsConsoleEmail(t *testing.T) {
-	_, err := NewService(Repositories{}, Config{
-		Hasher:       stubHasher{},
-		Mailer:       email.NewConsole(nil),
-		TokenSigner:  stubSigner{},
-		RuntimeMode:  RuntimeModeProduction,
-		DeliveryMode: DeliveryModeOff,
-	})
+	_, err := New(testRepositories(Repositories{}),
+		stubSigner{},
+		environment.ModeProduction,
+		delivery.ModeOff,
+		WithPassword(PasswordConfig{Hasher: stubHasher{}}),
+		WithDelivery(DeliveryConfig{Mailer: email.NewConsole(nil)}))
 	if !errors.Is(err, ErrInsecureDeliveryTransport) {
 		t.Errorf("console email in production: err=%v, want ErrInsecureDeliveryTransport", err)
 	}
@@ -174,13 +195,12 @@ func TestNewServiceProductionRejectsConsoleEmail(t *testing.T) {
 // declares no capability metadata is rejected in production (cannot be proven
 // safe). stubMailer implements no CapabilityReporter.
 func TestNewServiceProductionRejectsMetadatalessEmail(t *testing.T) {
-	_, err := NewService(Repositories{}, Config{
-		Hasher:       stubHasher{},
-		Mailer:       stubMailer{},
-		TokenSigner:  stubSigner{},
-		RuntimeMode:  RuntimeModeProduction,
-		DeliveryMode: DeliveryModeOff,
-	})
+	_, err := New(testRepositories(Repositories{}),
+		stubSigner{},
+		environment.ModeProduction,
+		delivery.ModeOff,
+		WithPassword(PasswordConfig{Hasher: stubHasher{}}),
+		WithDelivery(DeliveryConfig{Mailer: stubMailer{}}))
 	if !errors.Is(err, ErrInsecureDeliveryTransport) {
 		t.Errorf("metadata-less email in production: err=%v, want ErrInsecureDeliveryTransport", err)
 	}
@@ -189,14 +209,12 @@ func TestNewServiceProductionRejectsMetadatalessEmail(t *testing.T) {
 // TestNewServiceProductionRejectsConsoleNotifier proves a development-only
 // notifier is rejected in production even when the Mailer is production-capable.
 func TestNewServiceProductionRejectsConsoleNotifier(t *testing.T) {
-	_, err := NewService(Repositories{}, Config{
-		Hasher:       stubHasher{},
-		Mailer:       prodMailer{},
-		TokenSigner:  stubSigner{},
-		RuntimeMode:  RuntimeModeProduction,
-		DeliveryMode: DeliveryModeOff,
-		Notifiers:    []notify.Notifier{notify.NewConsole(identity.KindPhone, nil)},
-	})
+	_, err := New(testRepositories(Repositories{}),
+		stubSigner{},
+		environment.ModeProduction,
+		delivery.ModeOff,
+		WithPassword(PasswordConfig{Hasher: stubHasher{}}),
+		WithDelivery(DeliveryConfig{Mailer: prodMailer{}, BodySenders: map[string]delivery.BodySender{sdk.AddressKindPhone: notify.NewConsole(nil)}}))
 	if !errors.Is(err, ErrInsecureDeliveryTransport) {
 		t.Errorf("console notifier in production: err=%v, want ErrInsecureDeliveryTransport", err)
 	}
@@ -206,16 +224,15 @@ func TestNewServiceProductionRejectsConsoleNotifier(t *testing.T) {
 // construction succeeds when every delivery transport declares metadata and is
 // not development-only.
 func TestNewServiceProductionAcceptsDeclaredTransports(t *testing.T) {
-	svc, err := NewService(Repositories{}, Config{
-		Hasher:          stubHasher{},
-		Mailer:          prodMailer{},
-		TokenSigner:     stubSigner{},
-		RuntimeMode:     RuntimeModeProduction,
-		DeliveryMode:    DeliveryModeOff,
-		Notifiers:       []notify.Notifier{prodNotifier{"sms"}},
-		RateLimiter:     durableLimiter{},
-		IdentifierKeyer: prodKeyer{},
-	})
+	svc, err := New(testRepositories(Repositories{}),
+		stubSigner{},
+		environment.ModeProduction,
+		delivery.ModeOff,
+		WithPassword(PasswordConfig{Hasher: stubHasher{}}),
+		WithIdentity(IdentityConfig{IdentifierKeyer: prodKeyer{}}),
+		WithAbuseProtection(AbuseProtectionConfig{RateLimiter: durableLimiter{}}),
+		WithDelivery(DeliveryConfig{Mailer: prodMailer{}, BodySenders: map[string]delivery.BodySender{"sms": prodNotifier{}}}),
+		WithBrowser(BrowserConfig{SessionCookie: inbound.CookieConfig{Secure: true}}))
 	if err != nil {
 		t.Fatalf("production with declared transports: err=%v, want nil", err)
 	}
@@ -229,14 +246,13 @@ func TestNewServiceProductionAcceptsDeclaredTransports(t *testing.T) {
 func TestNewServiceDevelopmentWarnsOnConsoleTransport(t *testing.T) {
 	var buf bytes.Buffer
 	log := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
-	_, err := NewService(Repositories{}, Config{
-		Hasher:       stubHasher{},
-		Mailer:       email.NewConsole(nil),
-		TokenSigner:  stubSigner{},
-		RuntimeMode:  RuntimeModeDevelopment,
-		DeliveryMode: DeliveryModeOff,
-		Logger:       log,
-	})
+	_, err := New(testRepositories(Repositories{}),
+		stubSigner{},
+		environment.ModeDevelopment,
+		delivery.ModeOff,
+		WithPassword(PasswordConfig{Hasher: stubHasher{}}),
+		WithDelivery(DeliveryConfig{Mailer: email.NewConsole(nil)}),
+		WithLogger(log))
 	if err != nil {
 		t.Fatalf("console email in development: err=%v, want nil", err)
 	}
@@ -245,17 +261,19 @@ func TestNewServiceDevelopmentWarnsOnConsoleTransport(t *testing.T) {
 	}
 }
 
-// prodDeliveryConfig is a production Config with declared transports, an outbox
+// prodDeliveryConfig is a production constructorConfig with declared transports, an outbox
 // encrypter, the generic-jobs dispatcher, and the runtime acknowledgment — every
 // delivery gate satisfied. Cases override one dimension to isolate a single failing
 // gate.
-func prodDeliveryConfig() Config {
-	return Config{
+func prodDeliveryConfig() constructorConfig {
+	return constructorConfig{
+		PasswordFlowsDisabled:    true,
+		SessionCookie:            inbound.CookieConfig{Secure: true},
 		Hasher:                   stubHasher{},
 		Mailer:                   prodMailer{},
 		TokenSigner:              stubSigner{},
-		RuntimeMode:              RuntimeModeProduction,
-		DeliveryMode:             DeliveryModeJobs,
+		RuntimeMode:              environment.ModeProduction,
+		DeliveryMode:             delivery.ModeJobs,
 		DeliveryDispatcher:       stubDispatcher{},
 		DeliveryEncrypter:        stubEncrypter{},
 		DeliveryJobsAcknowledged: true,
@@ -274,7 +292,7 @@ func prodDeliveryConfig() Config {
 func TestNewServiceProductionRequiresDeliveryWorkerAcknowledgment(t *testing.T) {
 	cfg := prodDeliveryConfig()
 	cfg.DeliveryJobsAcknowledged = false
-	_, err := NewService(Repositories{}, cfg)
+	_, err := newFixture(testRepositories(Repositories{}), cfg)
 	if !errors.Is(err, ErrDeliveryJobsUnacknowledged) {
 		t.Errorf("unacknowledged jobs runtime in production: err=%v, want ErrDeliveryJobsUnacknowledged", err)
 	}
@@ -287,7 +305,7 @@ func TestNewServiceProductionMissingEncrypterBeforeAcknowledgment(t *testing.T) 
 	cfg := prodDeliveryConfig()
 	cfg.DeliveryEncrypter = nil
 	cfg.DeliveryJobsAcknowledged = false
-	_, err := NewService(Repositories{}, cfg)
+	_, err := newFixture(testRepositories(Repositories{}), cfg)
 	if !errors.Is(err, ErrDeliveryEncrypterRequired) {
 		t.Errorf("nil encrypter with dispatcher wired: err=%v, want ErrDeliveryEncrypterRequired", err)
 	}
@@ -298,15 +316,12 @@ func TestNewServiceProductionMissingEncrypterBeforeAcknowledgment(t *testing.T) 
 // cleanly, while the encrypted-payload requirement still holds (the encrypter is
 // wired here).
 func TestNewServiceDevelopmentToleratesUnacknowledgedRuntime(t *testing.T) {
-	_, err := NewService(Repositories{}, Config{
-		Hasher:             stubHasher{},
-		Mailer:             stubMailer{},
-		TokenSigner:        stubSigner{},
-		RuntimeMode:        RuntimeModeDevelopment,
-		DeliveryMode:       DeliveryModeJobs,
-		DeliveryDispatcher: stubDispatcher{},
-		DeliveryEncrypter:  stubEncrypter{},
-	})
+	_, err := New(testRepositories(Repositories{}),
+		stubSigner{},
+		environment.ModeDevelopment,
+		delivery.ModeJobs,
+		WithPassword(PasswordConfig{Hasher: stubHasher{}, PasswordFlowsDisabled: true}),
+		WithDelivery(DeliveryConfig{Mailer: stubMailer{}, DeliveryEncrypter: stubEncrypter{}, DeliveryDispatcher: stubDispatcher{}}))
 	if err != nil {
 		t.Errorf("unacknowledged jobs runtime in development: err=%v, want nil", err)
 	}
@@ -317,30 +332,30 @@ func TestNewServiceDevelopmentToleratesUnacknowledgedRuntime(t *testing.T) {
 // encrypter is still ErrDeliveryEncrypterRequired (design §8 — development permits
 // console but still requires encrypted job payloads).
 func TestNewServiceDevelopmentOutboxStillRequiresEncrypter(t *testing.T) {
-	_, err := NewService(Repositories{}, Config{
-		Hasher:             stubHasher{},
-		Mailer:             stubMailer{},
-		TokenSigner:        stubSigner{},
-		RuntimeMode:        RuntimeModeDevelopment,
-		DeliveryMode:       DeliveryModeJobs,
-		DeliveryDispatcher: stubDispatcher{},
-	})
+	_, err := New(testRepositories(Repositories{}),
+		stubSigner{},
+		environment.ModeDevelopment,
+		delivery.ModeJobs,
+		WithPassword(PasswordConfig{Hasher: stubHasher{}}),
+		WithDelivery(DeliveryConfig{Mailer: stubMailer{}, DeliveryDispatcher: stubDispatcher{}}))
 	if !errors.Is(err, ErrDeliveryEncrypterRequired) {
 		t.Errorf("dev outbox without encrypter: err=%v, want ErrDeliveryEncrypterRequired", err)
 	}
 }
 
-// prodLimiterConfig is a production Config with declared transports and the PII-free
+// prodLimiterConfig is a production constructorConfig with declared transports and the PII-free
 // keyer satisfied — every gate green EXCEPT the rate limiter each case supplies, so
 // the limiter dimension is isolated.
-func prodLimiterConfig() Config {
-	return Config{
-		Hasher:          stubHasher{},
-		Mailer:          prodMailer{},
-		TokenSigner:     stubSigner{},
-		RuntimeMode:     RuntimeModeProduction,
-		DeliveryMode:    DeliveryModeOff,
-		IdentifierKeyer: prodKeyer{},
+func prodLimiterConfig() constructorConfig {
+	return constructorConfig{
+		PasswordFlowsDisabled: true,
+		SessionCookie:         inbound.CookieConfig{Secure: true},
+		Hasher:                stubHasher{},
+		Mailer:                prodMailer{},
+		TokenSigner:           stubSigner{},
+		RuntimeMode:           environment.ModeProduction,
+		DeliveryMode:          delivery.ModeOff,
+		IdentifierKeyer:       prodKeyer{},
 	}
 }
 
@@ -349,7 +364,7 @@ func prodLimiterConfig() Config {
 // ratelimiter.Memory, whose budget is per-process and would be N× across instances.
 func TestNewServiceProductionRejectsDefaultMemoryLimiter(t *testing.T) {
 	cfg := prodLimiterConfig() // RateLimiter left nil → in-process memory default
-	_, err := NewService(Repositories{}, cfg)
+	_, err := newFixture(testRepositories(Repositories{}), cfg)
 	if !errors.Is(err, ErrNonDurableRateLimiter) {
 		t.Errorf("nil (memory-default) limiter in production: err=%v, want ErrNonDurableRateLimiter", err)
 	}
@@ -361,7 +376,7 @@ func TestNewServiceProductionRejectsDefaultMemoryLimiter(t *testing.T) {
 func TestNewServiceProductionRejectsExplicitMemoryLimiter(t *testing.T) {
 	cfg := prodLimiterConfig()
 	cfg.RateLimiter = ratelimiter.NewMemory()
-	_, err := NewService(Repositories{}, cfg)
+	_, err := newFixture(testRepositories(Repositories{}), cfg)
 	if !errors.Is(err, ErrNonDurableRateLimiter) {
 		t.Errorf("explicit memory limiter in production: err=%v, want ErrNonDurableRateLimiter", err)
 	}
@@ -373,7 +388,7 @@ func TestNewServiceProductionRejectsExplicitMemoryLimiter(t *testing.T) {
 func TestNewServiceProductionRejectsDeclaredInProcessLimiter(t *testing.T) {
 	cfg := prodLimiterConfig()
 	cfg.RateLimiter = inProcessLimiter{}
-	_, err := NewService(Repositories{}, cfg)
+	_, err := newFixture(testRepositories(Repositories{}), cfg)
 	if !errors.Is(err, ErrNonDurableRateLimiter) {
 		t.Errorf("declared in-process limiter in production: err=%v, want ErrNonDurableRateLimiter", err)
 	}
@@ -384,7 +399,7 @@ func TestNewServiceProductionRejectsDeclaredInProcessLimiter(t *testing.T) {
 func TestNewServiceProductionAcceptsDurableLimiter(t *testing.T) {
 	cfg := prodLimiterConfig()
 	cfg.RateLimiter = durableLimiter{}
-	svc, err := NewService(Repositories{}, cfg)
+	svc, err := newFixture(testRepositories(Repositories{}), cfg)
 	if err != nil {
 		t.Fatalf("durable limiter in production: err=%v, want nil", err)
 	}
@@ -402,7 +417,7 @@ func TestNewServiceProductionRequiresIdentifierKeyer(t *testing.T) {
 	cfg := prodLimiterConfig()
 	cfg.IdentifierKeyer = nil
 	cfg.RateLimiter = durableLimiter{}
-	_, err := NewService(Repositories{}, cfg)
+	_, err := newFixture(testRepositories(Repositories{}), cfg)
 	if !errors.Is(err, ErrIdentifierKeyerRequired) {
 		t.Errorf("production without identifier keyer: err=%v, want ErrIdentifierKeyerRequired", err)
 	}
@@ -413,14 +428,13 @@ func TestNewServiceProductionRequiresIdentifierKeyer(t *testing.T) {
 func TestNewServiceDevelopmentWarnsOnMemoryLimiter(t *testing.T) {
 	var buf bytes.Buffer
 	log := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
-	_, err := NewService(Repositories{}, Config{
-		Hasher:       stubHasher{},
-		Mailer:       stubMailer{},
-		TokenSigner:  stubSigner{},
-		RuntimeMode:  RuntimeModeDevelopment,
-		DeliveryMode: DeliveryModeOff,
-		Logger:       log,
-	})
+	_, err := New(testRepositories(Repositories{}),
+		stubSigner{},
+		environment.ModeDevelopment,
+		delivery.ModeOff,
+		WithPassword(PasswordConfig{Hasher: stubHasher{}}),
+		WithDelivery(DeliveryConfig{Mailer: stubMailer{}}),
+		WithLogger(log))
 	if err != nil {
 		t.Fatalf("memory limiter in development: err=%v, want nil", err)
 	}
@@ -433,14 +447,13 @@ func TestNewServiceDevelopmentWarnsOnMemoryLimiter(t *testing.T) {
 // not require the keyer: the per-instance SHA-256 digest fallback keeps keys
 // PII-free without it.
 func TestNewServiceDevelopmentToleratesMissingIdentifierKeyer(t *testing.T) {
-	if _, err := NewService(Repositories{}, Config{
-		Hasher:       stubHasher{},
-		Mailer:       stubMailer{},
-		TokenSigner:  stubSigner{},
-		RuntimeMode:  RuntimeModeDevelopment,
-		DeliveryMode: DeliveryModeOff,
-		RateLimiter:  durableLimiter{},
-	}); err != nil {
+	if _, err := New(testRepositories(Repositories{}),
+		stubSigner{},
+		environment.ModeDevelopment,
+		delivery.ModeOff,
+		WithPassword(PasswordConfig{Hasher: stubHasher{}}),
+		WithAbuseProtection(AbuseProtectionConfig{RateLimiter: durableLimiter{}}),
+		WithDelivery(DeliveryConfig{Mailer: stubMailer{}})); err != nil {
 		t.Errorf("development without identifier keyer: err=%v, want nil", err)
 	}
 }
@@ -451,9 +464,9 @@ func TestNewServiceDevelopmentToleratesMissingIdentifierKeyer(t *testing.T) {
 
 // passwordlessProtector builds an HMAC challenge protector for the passwordless
 // enablement tests — wiring Repositories.Challenges REQUIRES one.
-func passwordlessProtector(t *testing.T) ChallengeProtector {
+func passwordlessProtector(t *testing.T) protection.ChallengeProtector {
 	t.Helper()
-	p, err := NewHMACChallengeProtector(HMACKeyRing{
+	p, err := protection.NewHMACChallengeProtector(protection.HMACKeyRing{
 		Active: "2026-01",
 		Keys:   map[string][]byte{"2026-01": make([]byte, 32)},
 	})
@@ -464,27 +477,28 @@ func passwordlessProtector(t *testing.T) ChallengeProtector {
 }
 
 // passwordlessDevRepos is the fully-wired repository set a passwordless-enabled host
-// needs: the atomic challenge rail. The delivery runtime is wired in Config
+// needs: the atomic challenge rail. The delivery runtime is wired in constructorConfig
 // (DeliveryDispatcher), not a repository.
 func passwordlessDevRepos() Repositories {
 	return Repositories{Challenges: stubChallenges{}}
 }
 
-// passwordlessDevConfig is a development Config with every passwordless enablement
+// passwordlessDevConfig is a development constructorConfig with every passwordless enablement
 // gate satisfied for the email kind: the challenge protector, the generic-jobs
 // dispatcher, the outbox encrypter, and an absolute PublicAuthBaseURL. Cases override
 // one dimension to isolate a single failing gate.
-func passwordlessDevConfig(t *testing.T) Config {
+func passwordlessDevConfig(t *testing.T) constructorConfig {
 	t.Helper()
-	return Config{
-		Hasher:      stubHasher{},
-		Mailer:      stubMailer{},
-		TokenSigner: stubSigner{},
-		RuntimeMode: RuntimeModeDevelopment,
+	return constructorConfig{
+		PasswordFlowsDisabled: true,
+		Hasher:                stubHasher{},
+		Mailer:                stubMailer{},
+		TokenSigner:           stubSigner{},
+		RuntimeMode:           environment.ModeDevelopment,
 		// Passwordless requires a delivery runtime; the wired jobs dispatcher makes
 		// "jobs" the mode for every case except the "delivery outbox absent" case, which
 		// drops the dispatcher and selects "off".
-		DeliveryMode:       DeliveryModeJobs,
+		DeliveryMode:       delivery.ModeJobs,
 		DeliveryDispatcher: stubDispatcher{},
 		ChallengeProtector: passwordlessProtector(t),
 		DeliveryEncrypter:  stubEncrypter{},
@@ -497,18 +511,17 @@ func passwordlessDevConfig(t *testing.T) Config {
 // wired and PasswordlessEnabled reports false, so the transport registers no
 // passwordless routes (deny-by-absence, design §4.2).
 func TestNewServicePasswordlessAbsentByDefault(t *testing.T) {
-	svc, err := NewService(Repositories{}, Config{
-		Hasher:       stubHasher{},
-		Mailer:       stubMailer{},
-		TokenSigner:  stubSigner{},
-		RuntimeMode:  RuntimeModeDevelopment,
-		DeliveryMode: DeliveryModeOff,
-	})
+	svc, err := New(testRepositories(Repositories{}),
+		stubSigner{},
+		environment.ModeDevelopment,
+		delivery.ModeOff,
+		WithPassword(PasswordConfig{Hasher: stubHasher{}}),
+		WithDelivery(DeliveryConfig{Mailer: stubMailer{}}))
 	if err != nil {
 		t.Fatalf("no passwordless: err=%v, want nil", err)
 	}
-	if svc.svc.PasswordlessEnabled() {
-		t.Error("PasswordlessEnabled() = true with empty Config.Passwordless, want false")
+	if svc.Authentication.PasswordlessEnabled() {
+		t.Error("PasswordlessEnabled() = true with empty PasswordlessConfig.Passwordless, want false")
 	}
 }
 
@@ -520,14 +533,14 @@ func TestNewServicePasswordlessMatrix(t *testing.T) {
 	cases := []struct {
 		name    string
 		repos   func() Repositories
-		mutate  func(*Config)
+		mutate  func(*constructorConfig)
 		wantErr error
 		enabled bool // asserted only when wantErr is nil
 	}{
 		{
 			name:  "email fully wired",
 			repos: passwordlessDevRepos,
-			mutate: func(c *Config) {
+			mutate: func(c *constructorConfig) {
 				c.Passwordless = []string{"email"}
 			},
 			enabled: true,
@@ -535,7 +548,7 @@ func TestNewServicePasswordlessMatrix(t *testing.T) {
 		{
 			name:  "invalid kind rejected",
 			repos: passwordlessDevRepos,
-			mutate: func(c *Config) {
+			mutate: func(c *constructorConfig) {
 				c.Passwordless = []string{"push"}
 			},
 			wantErr: ErrPasswordlessKindInvalid,
@@ -543,7 +556,7 @@ func TestNewServicePasswordlessMatrix(t *testing.T) {
 		{
 			name:  "phone without notifier unsupported",
 			repos: passwordlessDevRepos,
-			mutate: func(c *Config) {
+			mutate: func(c *constructorConfig) {
 				c.Passwordless = []string{"phone"}
 			},
 			wantErr: ErrPasswordlessKindUnsupported,
@@ -551,25 +564,25 @@ func TestNewServicePasswordlessMatrix(t *testing.T) {
 		{
 			name:  "phone with notifier wired",
 			repos: passwordlessDevRepos,
-			mutate: func(c *Config) {
+			mutate: func(c *constructorConfig) {
 				c.Passwordless = []string{"phone"}
-				c.Notifiers = []notify.Notifier{prodNotifier{"phone"}}
+				c.BodySenders = map[string]delivery.BodySender{"phone": prodNotifier{}}
 			},
 			enabled: true,
 		},
 		{
 			name:  "email and phone both enabled",
 			repos: passwordlessDevRepos,
-			mutate: func(c *Config) {
+			mutate: func(c *constructorConfig) {
 				c.Passwordless = []string{"email", "phone"}
-				c.Notifiers = []notify.Notifier{prodNotifier{"phone"}}
+				c.BodySenders = map[string]delivery.BodySender{"phone": prodNotifier{}}
 			},
 			enabled: true,
 		},
 		{
 			name:  "challenge rail absent",
 			repos: func() Repositories { return Repositories{} },
-			mutate: func(c *Config) {
+			mutate: func(c *constructorConfig) {
 				c.Passwordless = []string{"email"}
 				c.ChallengeProtector = nil // no challenge rail wired
 			},
@@ -578,11 +591,11 @@ func TestNewServicePasswordlessMatrix(t *testing.T) {
 		{
 			name:  "delivery outbox absent",
 			repos: func() Repositories { return Repositories{Challenges: stubChallenges{}} },
-			mutate: func(c *Config) {
+			mutate: func(c *constructorConfig) {
 				c.Passwordless = []string{"email"}
 				// No delivery dispatcher is wired, so "jobs" is not selectable; "off" makes
 				// passwordless's own delivery requirement the dimension under test.
-				c.DeliveryMode = DeliveryModeOff
+				c.DeliveryMode = delivery.ModeOff
 				c.DeliveryDispatcher = nil
 			},
 			wantErr: ErrPasswordlessDeliveryRequired,
@@ -590,7 +603,7 @@ func TestNewServicePasswordlessMatrix(t *testing.T) {
 		{
 			name:  "public base url absent",
 			repos: passwordlessDevRepos,
-			mutate: func(c *Config) {
+			mutate: func(c *constructorConfig) {
 				c.Passwordless = []string{"email"}
 				c.PublicAuthBaseURL = ""
 			},
@@ -599,7 +612,7 @@ func TestNewServicePasswordlessMatrix(t *testing.T) {
 		{
 			name:  "public base url not absolute",
 			repos: passwordlessDevRepos,
-			mutate: func(c *Config) {
+			mutate: func(c *constructorConfig) {
 				c.Passwordless = []string{"email"}
 				c.PublicAuthBaseURL = "/auth"
 			},
@@ -608,7 +621,7 @@ func TestNewServicePasswordlessMatrix(t *testing.T) {
 		{
 			name:  "development permits http base url",
 			repos: passwordlessDevRepos,
-			mutate: func(c *Config) {
+			mutate: func(c *constructorConfig) {
 				c.Passwordless = []string{"email"}
 				c.PublicAuthBaseURL = "http://localhost:8080"
 			},
@@ -619,7 +632,7 @@ func TestNewServicePasswordlessMatrix(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := passwordlessDevConfig(t)
 			tc.mutate(&cfg)
-			svc, err := NewService(tc.repos(), cfg)
+			svc, err := newFixture(testRepositories(tc.repos()), cfg)
 			if tc.wantErr != nil {
 				if !errors.Is(err, tc.wantErr) {
 					t.Fatalf("err=%v, want %v", err, tc.wantErr)
@@ -629,7 +642,7 @@ func TestNewServicePasswordlessMatrix(t *testing.T) {
 			if err != nil {
 				t.Fatalf("err=%v, want nil", err)
 			}
-			if got := svc.svc.PasswordlessEnabled(); got != tc.enabled {
+			if got := svc.Authentication.PasswordlessEnabled(); got != tc.enabled {
 				t.Errorf("PasswordlessEnabled() = %v, want %v", got, tc.enabled)
 			}
 		})
@@ -642,14 +655,14 @@ func TestNewServicePasswordlessMatrix(t *testing.T) {
 func TestNewServicePasswordlessKindEnabled(t *testing.T) {
 	cfg := passwordlessDevConfig(t)
 	cfg.Passwordless = []string{"email"}
-	svc, err := NewService(passwordlessDevRepos(), cfg)
+	svc, err := newFixture(testRepositories(passwordlessDevRepos()), cfg)
 	if err != nil {
 		t.Fatalf("email passwordless: err=%v, want nil", err)
 	}
-	if !svc.svc.PasswordlessKindEnabled("email") {
+	if !svc.Authentication.PasswordlessKindEnabled("email") {
 		t.Error("PasswordlessKindEnabled(email) = false, want true")
 	}
-	if svc.svc.PasswordlessKindEnabled("phone") {
+	if svc.Authentication.PasswordlessKindEnabled("phone") {
 		t.Error("PasswordlessKindEnabled(phone) = true, want false (not listed)")
 	}
 }
@@ -659,21 +672,16 @@ func TestNewServicePasswordlessKindEnabled(t *testing.T) {
 // single-use token in transit. Every other production gate is satisfied so the base
 // URL is the dimension under test.
 func TestNewServiceProductionPasswordlessRejectsHTTPBaseURL(t *testing.T) {
-	_, err := NewService(passwordlessDevRepos(), Config{
-		Hasher:                   stubHasher{},
-		Mailer:                   prodMailer{},
-		TokenSigner:              stubSigner{},
-		RuntimeMode:              RuntimeModeProduction,
-		DeliveryMode:             DeliveryModeJobs,
-		DeliveryDispatcher:       stubDispatcher{},
-		ChallengeProtector:       passwordlessProtector(t),
-		DeliveryEncrypter:        stubEncrypter{},
-		DeliveryJobsAcknowledged: true,
-		RateLimiter:              durableLimiter{},
-		IdentifierKeyer:          prodKeyer{},
-		PublicAuthBaseURL:        "http://auth.example.com",
-		Passwordless:             []string{"email"},
-	})
+	_, err := New(testRepositories(passwordlessDevRepos()),
+		stubSigner{},
+		environment.ModeProduction,
+		delivery.ModeJobs,
+		WithPassword(PasswordConfig{Hasher: stubHasher{}}),
+		WithIdentity(IdentityConfig{ChallengeProtector: passwordlessProtector(t), IdentifierKeyer: prodKeyer{}}),
+		WithAbuseProtection(AbuseProtectionConfig{RateLimiter: durableLimiter{}}),
+		WithDelivery(DeliveryConfig{Mailer: prodMailer{}, DeliveryEncrypter: stubEncrypter{}, DeliveryDispatcher: stubDispatcher{}, DeliveryJobsAcknowledged: true}),
+		WithPasswordless(PasswordlessConfig{Passwordless: []string{"email"}}),
+		WithLinks(LinksConfig{PublicAuthBaseURL: "http://auth.example.com"}))
 	if !errors.Is(err, ErrPublicAuthBaseURLInsecure) {
 		t.Errorf("http base url in production: err=%v, want ErrPublicAuthBaseURLInsecure", err)
 	}
@@ -684,26 +692,21 @@ func TestNewServiceProductionPasswordlessRejectsHTTPBaseURL(t *testing.T) {
 // a durable limiter + identifier keyer, an acknowledged worker, an HTTPS base URL,
 // and the challenge + outbox rails all satisfied (design §4.2/§8).
 func TestNewServiceProductionPasswordlessAcceptsFullWiring(t *testing.T) {
-	svc, err := NewService(passwordlessDevRepos(), Config{
-		Hasher:                   stubHasher{},
-		Mailer:                   prodMailer{},
-		TokenSigner:              stubSigner{},
-		RuntimeMode:              RuntimeModeProduction,
-		DeliveryMode:             DeliveryModeJobs,
-		DeliveryDispatcher:       stubDispatcher{},
-		ChallengeProtector:       passwordlessProtector(t),
-		DeliveryEncrypter:        stubEncrypter{},
-		DeliveryJobsAcknowledged: true,
-		RateLimiter:              durableLimiter{},
-		IdentifierKeyer:          prodKeyer{},
-		Notifiers:                []notify.Notifier{prodNotifier{"phone"}},
-		PublicAuthBaseURL:        "https://auth.example.com",
-		Passwordless:             []string{"email", "phone"},
-	})
+	svc, err := New(testRepositories(passwordlessDevRepos()),
+		stubSigner{},
+		environment.ModeProduction,
+		delivery.ModeJobs,
+		WithPassword(PasswordConfig{Hasher: stubHasher{}, PasswordFlowsDisabled: true}),
+		WithIdentity(IdentityConfig{ChallengeProtector: passwordlessProtector(t), IdentifierKeyer: prodKeyer{}}),
+		WithAbuseProtection(AbuseProtectionConfig{RateLimiter: durableLimiter{}}),
+		WithDelivery(DeliveryConfig{Mailer: prodMailer{}, BodySenders: map[string]delivery.BodySender{"phone": prodNotifier{}}, DeliveryEncrypter: stubEncrypter{}, DeliveryDispatcher: stubDispatcher{}, DeliveryJobsAcknowledged: true}),
+		WithPasswordless(PasswordlessConfig{Passwordless: []string{"email", "phone"}}),
+		WithLinks(LinksConfig{PublicAuthBaseURL: "https://auth.example.com"}),
+		WithBrowser(BrowserConfig{SessionCookie: inbound.CookieConfig{Secure: true}}))
 	if err != nil {
 		t.Fatalf("full production passwordless wiring: err=%v, want nil", err)
 	}
-	if !svc.svc.PasswordlessEnabled() {
+	if !svc.Authentication.PasswordlessEnabled() {
 		t.Error("PasswordlessEnabled() = false after full production wiring, want true")
 	}
 }
@@ -714,22 +717,16 @@ func TestNewServiceProductionPasswordlessAcceptsFullWiring(t *testing.T) {
 // by the always-on transport check, so passwordless cannot silently enable an
 // insecure channel.
 func TestNewServiceProductionPasswordlessRejectsConsolePhone(t *testing.T) {
-	_, err := NewService(passwordlessDevRepos(), Config{
-		Hasher:                   stubHasher{},
-		Mailer:                   prodMailer{},
-		TokenSigner:              stubSigner{},
-		RuntimeMode:              RuntimeModeProduction,
-		DeliveryMode:             DeliveryModeJobs,
-		DeliveryDispatcher:       stubDispatcher{},
-		ChallengeProtector:       passwordlessProtector(t),
-		DeliveryEncrypter:        stubEncrypter{},
-		DeliveryJobsAcknowledged: true,
-		RateLimiter:              durableLimiter{},
-		IdentifierKeyer:          prodKeyer{},
-		Notifiers:                []notify.Notifier{notify.NewConsole(identity.KindPhone, nil)},
-		PublicAuthBaseURL:        "https://auth.example.com",
-		Passwordless:             []string{"phone"},
-	})
+	_, err := New(testRepositories(passwordlessDevRepos()),
+		stubSigner{},
+		environment.ModeProduction,
+		delivery.ModeJobs,
+		WithPassword(PasswordConfig{Hasher: stubHasher{}}),
+		WithIdentity(IdentityConfig{ChallengeProtector: passwordlessProtector(t), IdentifierKeyer: prodKeyer{}}),
+		WithAbuseProtection(AbuseProtectionConfig{RateLimiter: durableLimiter{}}),
+		WithDelivery(DeliveryConfig{Mailer: prodMailer{}, BodySenders: map[string]delivery.BodySender{sdk.AddressKindPhone: notify.NewConsole(nil)}, DeliveryEncrypter: stubEncrypter{}, DeliveryDispatcher: stubDispatcher{}, DeliveryJobsAcknowledged: true}),
+		WithPasswordless(PasswordlessConfig{Passwordless: []string{"phone"}}),
+		WithLinks(LinksConfig{PublicAuthBaseURL: "https://auth.example.com"}))
 	if !errors.Is(err, ErrInsecureDeliveryTransport) {
 		t.Errorf("console phone notifier in production: err=%v, want ErrInsecureDeliveryTransport", err)
 	}

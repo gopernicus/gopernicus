@@ -7,135 +7,132 @@ this charter generalizes from; `examples/cms` (Turso) and `examples/minimal`
 (in-memory, zero libsql in its module graph) both mount it. This document is
 the contract the *next* pocket (auth, phase 4+) is held to.
 
+The root `pockets` package owns `Mount`, `RouteRegistrar`, `PrefixRegistrar` and
+`Group`. It is an independent module over SDK. Concrete pockets keep their own
+modules in direct subdirectories; importing the shared contract imports none of
+them. SDK never imports this module.
+
 ## 1. The definition, and the dial
 
 Rule ids on this page are historical identifiers cross-referenced from ratified
 plans and are not renamed: FS = the former "feature standard" series.
 
-A pocket reaches its host through exactly three things (FS2, ratified
-2026-07-07 — supersedes this section's earlier two-thing form, whose single
-`Register(mount, repos, cfg)` rebuilt the service a host may already hold):
+A pocket exposes explicitly constructed services and optional inbound adapters
+(FS2, amended by the owner on 2026-09-11):
 
-- **Explicit dependencies as data.** A `Repositories` struct of the outbound
-  ports the pocket needs (the host, or a `stores/<package>` adapter module,
-  fills it) and a `Config` struct for view/infrastructure overrides and
-  host-registered extensions.
-- **One build.** `NewService(repos, cfg) (*Service, error)` validates the
-  wiring once and returns the pocket's public `Service` — the **driving
-  surface**: the use-cases, promoted by thin delegation from the sealed
-  interior. This is what a host's own handlers, another pocket's port, or
-  the shipped transport all consume.
-- **Narrow mount, optional.** `svc.Register(mount pocket.Mount) error`
-  mounts the pocket's shipped HTTP surface — an optional convenience
-  adapter over the Service. A host may mount it, mount part of it
-  (subsystem deny-by-absence), or skip it entirely and write its own
-  handlers against the Service. `pocket.Mount{Router, Logger, Events}`
-  (`sdk/pocket`) is the only host context the pocket can reach — no
-  service locator, no global registry.
+- **Explicit dependencies.** The host supplies repository ports and configuration.
+  Every public constructor validates the dependencies it requires; direct component
+  construction must be as safe as construction through the pocket root.
+- **Focused public services.** Real use cases live in `logic/<concern>` packages,
+  alongside the types and ports they own. A host may construct those services
+  directly or use the root's convenience constructor. Private fields and helpers
+  encapsulate implementation; a forwarding façade is not required.
+- **Convenient composition.** A root constructor may return the one service it
+  builds, or a `Components` value with named services, adapters and runtimes. A
+  component bundle represents real assembly and lifecycle or capability boundaries;
+  it is not another universal service. No component starts background workers
+  implicitly unless its construction contract explicitly says so.
+- **Public optional transport.** `inbound/http` owns HTTP middleware, handlers,
+  response mapping and bundled route registration. Hosts may mount its routes,
+  use its middleware or supported handlers on their own routes, or call services
+  from other transports. Route registration uses `pockets.Mount`/`RouteRegistrar`;
+  a transport-free pocket needs no placeholder `Register` method.
 
-There is deliberately **no `init()` registration and no service locator**
-(constitution rule 5, `00-overview.md`). This mirrors ordinary Go idiom:
-composition roots (`main`) do wiring explicitly, and structural typing (Go
-interfaces are satisfied implicitly) means a host's concrete router or
-router plugs into `pocket.Mount` without either side importing the other's
-type. A global registry would hide wiring order and make two hosts
-silently share state through package-level variables; explicit `Repositories`
-+ `Config` + `Register` keeps every dependency visible at the call site.
+There is no `init()` registration, global registry, or service locator. Logic
+imports neither the root composition package nor inbound. Assembly points inward
+to services and adapters, and adapters consume narrowly declared logic contracts.
 
-### FS2 amendment — the authorization `Components` bundle (AUTHORIZATION-SPECIFIC)
+### Authorization capabilities
 
-`pockets/authorization` (v3) is the one sanctioned deviation from FS2's
-`svc, err := NewService(repos, cfg)` return: its constructor returns a
-**`Components{Service, RelationshipWriter, SystemMutator}`** bundle instead of a bare `*Service`
-(ratified default #4, authorizationv3). This is an **authorization-specific
-amended shape, not a general replacement of FS2** — a sanctioned variant for the
-narrow case where a pocket has a **separately-held trusted capability** that
-must not be reachable from its ordinary driving surface:
+Authorization's ordinary mutation service retains actor guards and atomic
+model/guardian validation. `RelationshipWriter` and `SystemMutator` are separate
+trusted capabilities handed out by the composition root only to code that needs
+them. They must remain unreachable through ordinary decision, relationship-read,
+role-read and guarded-mutation services. Splitting role and relationship services
+must not turn raw store assignment methods into ordinary guarded use cases or
+split one atomic guard/write/audit unit into independent writes.
 
-- `Components.Service` is the ordinary FS2 driving surface — decisions, lists,
-  and actor-facing *guarded* mutations. HTTP handlers and consumer seams receive
-  only this. `svc.Register(mount)` is unchanged.
-- `Components.RelationshipWriter` is the normal trusted application-side ReBAC
-  state capability (schema-valid create/delete and atomic desired-state
-  reconciliation). It is independent of the advanced mutation repository.
-- `Components.SystemMutator` is the optional high-integrity actor-free command
-  capability (revisions, guardian invariants, receipts, audit, teardown). Both are
-  **structurally unreachable from `Service`** and is handed by the composition
-  root only to code that legitimately needs it. This is the whole point of the
-  bundle: capabilities that must be *held apart* cannot be one
-  `*Service`, and stapling the trusted methods onto `Service` (or gating them
-  behind an `Actor{Kind: system}` flag) would put a self-grant one reflection or
-  one constructed-value away.
-
-Why this stays an exception, not the new default (the ruling, with reasoning):
-**no other pocket in the repo has a SystemMutator-like separately-trusted
-capability.** cms, authentication, events, and jobs all return the bare FS2
-`*Service` and have no second, deliberately-partitioned surface — a survey of
-their `<name>.go` constructors confirms `*Service`-only returns and no
-system/trusted sibling. Generalizing `Components` would tax every conforming
-pocket with a one-member bundle for a capability it does not have. The rule a
-future pocket applies: **return the bare `*Service` unless you have a second
-surface that MUST be partitioned from the driving surface by construction** — in
-which case a named `Components{Service, …}` bundle is the sanctioned shape, and
-the extra member is a real trust/lifecycle boundary, never mere grouping.
+This separation does not require every pocket to have the same components.
+CMS retains its earlier public API and directory layout until its deferred audit.
 
 ## 2. Anatomy
 
-Mirrors `pockets/cms` and `pockets/authentication`, generalized (trio layout,
-ratified 2026-07-02 — `.claude/plans/roadmap/pocket-trio-relayout.md`):
+Pockets share the application's inbound / logic / outbound responsibilities,
+with public contracts for external hosts and adapter authors. The public API is
+deliberate; a second service consisting only of forwarding methods is not required.
 
 | path | contents | visibility |
 |---|---|---|
-| `<name>.go` | the pocket's host-facing exported surface: `Repositories`, `Config`, `NewService(repos, cfg) (*Service, error)`, and the `Service` driving surface with its `Register(mount) error` mount method (FS2) — plus whatever additional exported types host-facing needs require (e.g. auth's `PasswordHasher` port, its `Principal` alias) | public — the socket |
-| `domain/<domain>/` (e.g. `domain/content/`, `domain/user/`) | the hexagon's public rim: entities + repository ports (interfaces store adapters and host stores implement) | public **by necessity** — hosts and store modules import these across module boundaries, and Go forbids importing another module's `internal/` |
-| `internal/logic/<domain>svc/` | domain services: business rules over the ports, no HTTP/SQL — the hexagon's sealed interior | internal |
-| `internal/inbound/<pocket>/` (e.g. `internal/inbound/cms/` — D1, segovia-lessons phase 01, 2026-07-08) | driving adapter wearing the ratified file anatomy: `routes.go` is the ONE readable route table (a `Mount` dispatcher; per-resource deny-by-absence `mountX` helpers live in their resource files — the authentication shape); per-resource files at resource #2 (`entries.go`, `media.go`, …); transport-named `api.go`/`html.go` only as the single-resource degenerate form; the maximal flatten (single resource, small handler set → handlers stay in `routes.go`; `pockets/events/internal/inbound/events/routes.go` is the blessed example); **never** `/api`/`/html`/`/htmx` subdirectories. Handlers are thin delegations to the Service, writing responses through `sdk/foundation/web` responders only (FS9); views are consumed through the pocket's `Views` port, never hardcoded (FS3; cms converged at feature-standard B2, 2026-07-07). `internal/inbound/http/` means transport plumbing only (middleware), mirroring the app pattern — a pocket has none until real plumbing appears | internal |
-| `stores/<package>/` | a **separate module** — the store implementation written against one driver package's API (`stores/pgx`, `stores/turso`; R-KV3), owning its SQL, canonical migrations, and `ExportMigrations` | public API, but never imported by the pocket core |
-| `storetest/` | the exported conformance suite (`Run(t, newRepos)`) + the test-scoped reference in-memory implementation; every store implementation runs it | public test-support package inside the pocket core (stdlib + sdk only — G2 keeps drivers out) |
-| `views/<pkg>` (per-concern, only if the pocket has HTML) | a **separate module** — the bundled default implementation of the pocket core's `Views` port, named for the package it's built on (`views/goth`, the ui/goth adapter; R-KV2). The core defines the port (domain-typed params, `web.Renderer` returns) and registers its HTML surface only when `Config.Views` is non-nil — uniform nil → HTML off (FS3). A host wires the default with one import + one Config field, implements the port itself (`html/template` via `web.Template` works in three lines), or wires nothing and runs API-only with zero view tech in its graph. cms's in-core `theme/` (`PublicViews` + `Default()`) was the reference implementation that proved the shape; it migrated to `views/templ` at feature-standard B2 (2026-07-07; the in-core `theme/` is now deleted) | public API, never imported by the pocket core |
+| root Go files | dependencies/configuration and construction of named components | small public assembly surface |
+| `logic/<concern>/` | real services, workflows, owned types and consumed ports | public supported APIs; private fields and helpers |
+| `inbound/http/` | HTTP middleware, supported handlers, response mapping and route registration | public adapter with validated construction |
+| `internal/<concern>/` | genuinely private engines, helpers or test support, when needed | internal; not a mandatory layer |
+| `stores/memory/` | optional usable memory adapter | public package in the pocket core module |
+| `stores/storetest/` | shared conformance suite and test-only reference helpers | public test-support package in the core module |
+| `stores/<driver>/` | driver adapter, queries, canonical migrations/indexes and export helpers | separate module; never imported by core production code |
+| `views/<pkg>/` | optional bundled implementation of a public Views port | separate module; never imported by core production code |
 
-**How a pocket maps onto the app hexagon** (`internal/{inbound,logic,
-outbound}` — ARCHITECTURE.md's app pattern, contracted for hosts in
-`examples/README.md`). A pocket is the same hexagon,
-library-shaped: everted at the port layer, with outbound pushed out of the
-module entirely.
+`stores/` groups outbound persistence packages; it has no package or go.mod.
+Memory and conformance introduce no drivers or additional module versions.
+CMS remains on its earlier layout while its audit is deferred.
 
-| app pattern | pocket equivalent | why it moved |
-|---|---|---|
-| `cmd/` (composition root) | the HOST's `main` + `<name>.go`'s socket | pockets are composed *by* hosts; `Register` is the wiring point |
-| `internal/logic/domains/<d>` (entities + ports + services together) | split by visibility: entities + ports → public `domain/<domain>/`; services → `internal/logic/<domain>svc/` | store modules and hosts must import the ports; services stay sealed so the API surface is exactly the rim |
-| `internal/inbound/domains/<domain>/` (+ `inbound/http/` plumbing, `inbound/views/` global tree — `examples/README.md` §4, the Inbound anatomy) | `internal/inbound/<pocket>/` — the one domain, flattened out of `domains/` | same role, same privacy. The deliberate deltas (FS1/FS3): pocket templates never co-locate (templ is third-party, the core is sdk-only) — the render port lives in the core and the bundled default is the `views/<pkg>` sibling module; and there is no pocket `inbound/views/` tree — the pocket theming seam is embed-the-sibling-default (live override: `examples/cms/internal/theme/`) |
-| `internal/outbound` | `stores/<package>/` — separate modules | stronger than a directory split: drivers stay out of the core's go.mod entirely (guard G2) |
+Domain vocabulary belongs with its owning logic package. A shared inward model
+package is useful only where distinct services need a common independent contract;
+`domain/` is not a compulsory directory. Avoid duplicate transport commands whose
+only purpose is to work around root/inbound import cycles.
 
-Reading rule: **`domain/` is what outsiders implement, `internal/` is the
-interior wearing the app pattern's names, `stores/` is outbound
-module-ized.** The dependency arrows of constitution rule 8 are identical
-on both sides.
+**Application-to-pocket mapping:**
+
+| app responsibility | pocket location |
+|---|---|
+| composition root | host `cmd/` plus the pocket root's assembly |
+| domain contracts and use cases | public `logic/<concern>/` |
+| inbound adapters | public `inbound/http/` |
+| outbound persistence | `stores/memory/` or separate `stores/<driver>/` modules |
+| presentation implementation | optional `views/<pkg>/` module |
+
+Go's `internal` restriction follows the parent import tree, not the go.mod
+boundary. External hosts cannot import private packages. Dependency guards still
+protect inward direction, including public logic and in-module store support.
+Exporting a package does not require exporting its handler structs, state, or
+implementation helpers. Export only the construction and behavior hosts should use.
 
 **Extension model (the four tiers, ratified 2026-07-07, feature-standard
 FS1–FS10; extends the `internal/` discipline ratified 2026-07-02):** hosts
 customize via deliberate seams — never via interior reach-ins. Every host
 need lands in exactly one of four tiers:
 
-1. **Configure** — nil-safe `Config` fields with safe defaults (auth's nil
+1. **Configure** — options and policy fields with documented defaults (auth's nil
    `RateLimiter` → in-memory) and **deny-by-absence subsystems** (no
    `Providers` → no OAuth routes; no `Granter` → no invitation routes).
-   Absent field = subsystem off, structurally.
-2. **Replace a component** — interface-valued `Config` fields with bundled
+   Each optional capability documents its disabled/default behavior.
+2. **Replace a component** — interface-valued options and policy fields with bundled
    defaults (`Views`, FS3) and registered data (cms `Types`/`Templates`,
    jobs `Handlers`). The port lives in the core; defaults that carry a
    dependency ship as sibling modules (FS1/FS4).
 3. **Inject at the seams** — middleware fields (cms `AdminMiddleware`
    taking auth's `RequireUser`; structural typing, zero imports either
    way — the C2 pattern, §5).
-4. **Extend past the pocket** — the public `Service` driving surface
-   (FS2): a host writes its own handlers, routes, or flows calling the
-   promoted use-cases directly; the shipped transport is never the only
-   door.
+4. **Compose public components** — a host uses focused logic services or public
+   inbound adapters from its own handlers, routes, and workflows. The shipped
+   route table is optional; a host can use its middleware independently.
 
-Configuration is always a `Config` struct with documented nil semantics —
-never functional options (FS6; two idioms would deliver nothing the struct
-doesn't). Route tables are direct `Handle` calls through the
+Construction keeps required dependencies explicit. Independent optional settings
+use typed `WithFoo(...)` options over private construction settings; coherent
+policy and model records remain data supplied through named feature options,
+such as `WithPassword(PasswordConfig{...})`. Feature options replace whole records,
+including zero fields. Required modes, signers, buses and handler registries stay
+explicit; named input records can group related required ports. The
+owner's constructor audit (2026-09-11) replaces FS6's former blanket prohibition
+on functional options. Document defaults, nil arguments and ordering; validate
+the resolved configuration before returning a usable component. Options are
+construction inputs, not setters on running services. See
+[pocket-constructor-options.md](../plans/pocket-constructor-options.md) for the
+owner-approved follow-up. Use `New` / `NewX` for functions and **constructor**
+for the noun and dedicated filenames (`constructor.go`). Short constructors may
+stay in their service files; no file split is required just for naming uniformity.
+
+Route tables are direct `Handle` calls through the
 `RouteRegistrar` seam (`r.Handle("POST", "/auth/login", h.login)`) — the
 stringly form is deliberate signposting that a pocket registers as a
 guest through a one-method port, where an app-local domain uses the
@@ -153,38 +150,38 @@ single route wraps the registrar (§4 item 3), which covers the gap tiers
 `Config` earns a place only with veto/mutate semantics, argued case by
 case (FS8). If a host legitimately needs something `internal/` seals, that
 is the signal to **add a seam** (a Config field, a port — the
-`AdminMiddleware` precedent), not to export the interior. Every exported
-symbol is a compatibility promise; the sealed interior is what lets a
-pocket refactor safely.
+`AdminMiddleware` precedent), or deliberately support a public component. Every exported symbol is a
+compatibility promise; public packages still keep implementation details private.
 
-**Memory-store placement** (ratified R3, 2026-07-02): the reference in-memory
-implementation lives inside `storetest` (test-scoped) by default, and host
-memstores (`examples/minimal` pattern) keep the zero-infra proof role. A
-pocket MAY instead ship its reference as a public in-core package (e.g.
-`pockets/jobs/memstore`) when the implementation is substantial and
-host-needed — never as a `stores/memory` module (it isolates no external
-dependency, failing constitution rule 2's earn-your-module test). The
-2026-07-06 taxonomy amendment widens what an integration may isolate — a
-third-party library or an external vendor's live API contract — but a memory
-store isolates neither, so this refusal stands.
+**Memory-store placement** (amended by the owner, 2026-09-11): usable memory
+adapters live at `stores/memory` in the pocket core module. They are optional
+imports, useful to tests and hosts without external infrastructure. Shared
+conformance lives alongside them at `stores/storetest` in the same module.
+Reference fakes that exist only for tests need not become advertised adapters.
+Neither package gets its own go.mod: neither isolates an external dependency.
+The core service depends on domain ports and never imports a concrete memory
+store. Core tests may import their own memory/conformance
+packages. Test support and memory remain covered by the core dependency rules.
 
 ## 3. The rules
 
-- **sdk-only core** (FS1, ratified 2026-07-07 — supersedes D7's "accept for
-  now" via its own revisit clause). A pocket core module's `go.mod`
-  requires exactly `github.com/gopernicus/gopernicus/sdk` — nothing else
-  (the dev-only relative `replace` is permitted pre-tag; a `tool` directive
-  counts as a require). Same structural move as sdk's empty `go.mod`.
+- **SDK and shared-contract dependencies only** (FS1). A concrete pocket core's
+  `go.mod` may require `github.com/gopernicus/gopernicus/sdk` and the exact
+  `github.com/gopernicus/gopernicus/pockets` module. The shared module requires
+  SDK only and never imports concrete pockets. Development-only local replaces
+  are permitted pre-tag; a `tool` directive counts as a dependency.
   Anything carrying a third-party dependency ships as a sibling module:
   persistence → `stores/<pkg>`, presentation → `views/<pkg>`. Sibling
   modules are **per-concern, never mandatory** (FS4): jobs, with no HTTP
   and no views, is a fully conforming pocket. Machine-checked in `make
   check`.
 - **Datastore-free core.** `pockets/<name>` never imports `integrations/`,
-  `examples/`, or its own `stores/` (or `views/`). Guard G2
-  (`make guard-pocket-isolation`) enforces this by grep; violating it is a
-  build-time architecture bug, not a style note.
-- **Transport uses sdk/foundation/web** (FS9). Handlers respond through `web.Respond*`
+  `examples/`, or concrete `stores/` / `views/` adapters in production code.
+  Memory and conformance are core-module packages but outbound/test concerns;
+  only those packages and core tests may import that store support.
+  Guard G2 follows actual module boundaries and checks parsed imports, including
+  the core packages nested under `stores/`.
+- **Transport uses sdk/pkg/web** (FS9). Handlers respond through `web.Respond*`
   / `web.Render` / `web.Err*`; a pocket-local write helper is a red flag
   in review and a guard failure. When the sdk is missing a capability a
   pocket needs, the fix lands in the sdk if it passes `sdk/README.md`'s
@@ -210,7 +207,7 @@ store isolates neither, so this refusal stands.
   pocket must clear, and `stores/firestore` ships only where a host demand
   exists — authentication and authorization in that milestone; cms, events, and
   jobs get none. It is also the family that does NOT join a host's ambient
-  `crud.Transactor` transaction (ruling R1): a Firestore transaction sees none
+  `transaction.Transactor` transaction (ruling R1): a Firestore transaction sees none
   of its own pending writes, so `storetest.RunTransactional` skips loudly there
   and a store method handed a connector transaction fails loud rather than
   splitting atomicity. Each store README states which family a host gets.
@@ -226,17 +223,13 @@ store isolates neither, so this refusal stands.
   evidence), and workshop v2's brief gains store *scaffolding* so hosts
   can choose import-vs-own; the migrations and `storetest` suites are the
   durable assets under either delivery mode.
-- **Ports public, services internal.** Entities and repository interfaces
+- **Deliberate public API, private implementation details.** Entities and repository interfaces
   (`content.EntryRepository`, …) are what a store adapter or a host's own
   store implements — they must be importable from outside the module.
-  Services (`internal/logic/<domain>svc`) and HTTP
-  (`internal/inbound/<pocket>`) are implementation and stay unexported
-  from the module's public API. A pocket MAY additionally export HTTP
-  middleware gates as **root-package re-exports of internal implementations**
-  (`authentication.RequireUser`, `authorization.RequirePermission`) — the root
-  package writes no HTTP itself; the handler body lives in `internal/logic`, so
-  this reinforces rather than amends the internal-HTTP rule
-  (middleware-consolidation, 2026-07-11).
+  Focused public logic services own use cases; root constructors assemble them.
+  HTTP handlers, middleware and response mapping live in public `inbound/http`.
+  Production logic never imports HTTP, SDK web, root composition or inbound
+  packages (G25; CMS's structure remains deferred).
 - **No pocket → pocket imports** (constitution rule 6). Cross-pocket needs
   are ports the *consuming* pocket declares in its own public package; the
   host wires an implementation, which may be backed by another pocket's
@@ -271,13 +264,13 @@ contract:
    pages) plus a fixed `GET /{$}` home. See
    `pockets/cms/internal/inbound/cms/routes.go`'s `Mount` for the literal
    table.
-2. **`pocket.PrefixRegistrar`** (`sdk/pocket/prefix.go`) wraps a
+2. **`pockets.PrefixRegistrar`** (`pockets/routes.go`) wraps a
    `RouteRegistrar` and prefixes every path a pocket registers through it, so
    a host *can* mount a pocket under `/x/` without the pocket's cooperation:
 
    ```go
-   mount := pocket.Mount{
-       Router: pocket.PrefixRegistrar{Prefix: "/blog", Next: router},
+   mount := pockets.Mount{
+       Router: pockets.PrefixRegistrar{Prefix: "/blog", Next: router},
        Logger: log,
    }
    svc.Register(mount) // FS2 shape (auth, jobs). cms still takes the
@@ -288,7 +281,7 @@ contract:
    It normalizes the slash bookkeeping (trailing slash on the prefix, a
    missing leading slash, Go 1.22+ ServeMux's `"{$}"` exact-match suffix for a
    pocket's root route) so a host doesn't have to. `""` or `"/"` as `Prefix`
-   is a deliberate no-op. Unit-tested in `sdk/pocket/prefix_test.go`.
+   is a deliberate no-op. Unit-tested in `pockets/routes_test.go`.
 3. **Per-route override — wrap the registrar** (the route-level face of
    extension tier 4; segovia-lessons phase 02, 2026-07-08). `Mount.Router`
    is a one-method interface precisely so a host can interpose on
@@ -297,7 +290,7 @@ contract:
    framework support needed:
 
    ```go
-   type inviteOnly struct{ pocket.RouteRegistrar }
+   type inviteOnly struct{ pockets.RouteRegistrar }
 
    func (o inviteOnly) Handle(method, path string, h http.HandlerFunc, mw ...web.Middleware) {
        if method == "POST" && path == "/auth/register" {
@@ -344,7 +337,8 @@ host imports both.
 
 **Worked example — now REAL, not illustrative** (2026-07-02): `pockets/authentication`
 exists, and `examples/auth-cms` is the living proof — the host builds
-`authSvc, _ := auth.NewService(...)` and passes `authSvc.RequireUser` into
+`authSvc, err := auth.New(...)`, handles construction errors, and passes
+`authSvc.HTTP.RequireAccessToken()` into
 `cms.Config.AdminMiddleware`; cms's admin surface is auth-gated with neither
 pocket importing the other (verified: the greps in both directions are
 empty; the five-step login flow passes over live HTTP). The middleware seam
@@ -381,11 +375,11 @@ policy, the *only* thing allowed to move from a pocket-declared port into
 `sdk` is genuinely shared **vocabulary** multiple pockets need identically —
 e.g. an identity-in-context convention, or an error sentinel — never a
 pocket's domain-specific port. **CASHED for identity-in-context, 2026-07-08
-(events-v1 A-I1): `sdk/foundation/identity` — authentication stashes the Principal, the
+(events-v1 A-I1): `sdk` — authentication stashes the Principal, the
 events gateway reads it; vocabulary only, fails closed.** The `CurrentUser`
 port above stays as the general C2 pattern for domain-shaped needs.
 **Grown 2026-07-10 (identity-resolution):** the display/contact
-projection of a principal is now `sdk/foundation/identity.Resolver` (host-wired;
+projection of a principal is now `sdk.IdentityResolver` (host-wired;
 authentication implements it) and delivery is `sdk/capabilities/notify` — but
 domain-shaped needs (e.g. `CurrentUser`) STAY consumer-declared C2
 ports; the graduation bar is unchanged. `cms`'s `CurrentUser` port above stays in
@@ -419,7 +413,7 @@ vocabulary explicitly **fails criterion 2 today** and stays consumer-declared
 
 ## 6. C3 — Mount evolution policy
 
-`pocket.Mount` (`sdk/pocket/pocket.go`) grows **only** by adding narrow,
+`pockets.Mount` (`pockets/mount.go`) grows **only** by adding narrow,
 single-purpose ports, following the existing `Router` / `Logger` pattern —
 one field, one capability, no concrete types. It must never
 become a service locator (a field that is itself a bag of unrelated
@@ -428,7 +422,7 @@ shape of.
 
 Pre-v1, adding a field to
 `Mount` is a **compatible change**: hosts construct `Mount` with named struct
-fields (`pocket.Mount{Router: r, Logger: log}`), so a new zero-value field
+fields (`pockets.Mount{Router: r, Logger: log}`), so a new zero-value field
 never breaks an existing call site.
 
 **Built from this list** (C3's sanctioned process — added the day a real
@@ -437,7 +431,7 @@ pocket needed it):
 - The **event bus port** — `Events events.Emitter`, added at events-v1 when
   cms's first emit call landed (the SSE gateway + a host-side subscriber
   are the multi-pocket consumers that ended its speculative status).
-  Emit-only and **best-effort at-most-once** (`Mount.Events` is never
+  Emit-only and **best-effort asynchronous notification** (`Mount.Events` is never
   transactional — an event is lost on a crash between commit and emit);
   durable delivery rides a pocket's own `Repositories` (the events
   pocket's outbox), never this field. Nil → the pocket emits nothing.
@@ -468,18 +462,18 @@ cite by item number:
 
 1. Module compiles standalone (`cd pockets/<name> && go build ./...`) with
    its own `go.mod`.
-2. `go.mod` requires **only** `sdk` (FS1; the D7 view-deps allowance is
+2. `go.mod` requires **only SDK and shared pockets** (FS1; the D7 view-deps allowance is
    superseded). Datastore drivers live in `stores/<package>`, view tech in
    `views/<package>` — separate modules each.
-3. `pockets/<name>` never imports `integrations/`, `examples/`, or
-   `pockets/<name>/stores/*` (guard G2 covers this once the guard's module
-   list is extended to the new pocket — flag if it isn't).
-4. The pocket exposes the FS2 trio: `NewService(repos, cfg) (*Service,
-   error)` (loud validation), the `Service` driving surface (use-cases by
-   thin delegation), and `svc.Register(mount pocket.Mount) error` that
-   only reaches `mount.Router` / `mount.Logger`. The shipped transport is
-   an optional adapter over the Service — a host must be able to skip it
-   and still reach every use-case.
+3. Core production code never imports `integrations/`, `examples/`, or concrete
+   adapters. Memory/conformance packages and core tests may use
+   their own `stores/memory` and `stores/storetest` support; driver modules remain
+   separate. New immediate pocket modules are discovered by the boundary checker.
+4. The pocket exposes validated public construction and focused logic services.
+   A small root assembles them where helpful. Public inbound adapters expose
+   optional bundled routes and reusable middleware/handlers, so hosts can use
+   their own transport without losing access to use cases. A transport-free
+   pocket needs no registration stub. See amended FS2 in §1.
 5. Each `stores/<package>` adapter module exposes `Repositories(db)` and
    `ExportMigrations(dst)`; it does not register or apply migrations itself.
    For a MULTI-KIND store with boot-time table probes the accepted surface is
@@ -488,7 +482,7 @@ cite by item number:
    jobs' error-less bundle and events' probing single-Store `New(db)`).
    A store never calls a connector's `Underlying()` (guard G10's sibling G9
    enforces it); a future cross-repository transaction consumes the
-   scaffolded `crud.Transactor` seam (`sdk/foundation/crud/tx.go`) instead.
+   scaffolded `transaction.Transactor` seam (`sdk/capabilities/transaction`) instead.
 6. A minimal-host proof exists: a `go run`-able host with an in-memory (or
    otherwise zero-external-infra) `Repositories` implementation, mirroring
    `examples/minimal`.
@@ -500,7 +494,7 @@ cite by item number:
    reachable only via `Register`'s explicit parameters.
 9. No pocket → pocket imports (§5); any cross-pocket need is a port
    declared in this pocket's own public package.
-10. A `storetest` conformance package exists and the reference in-memory
+10. A `stores/storetest` conformance package exists and the reference in-memory
     implementation passes it in the pocket's own `go test ./...`.
 11. Every `stores/<package>` in the supported set ({turso, pgx}, §3)
     exists and passes `storetest`, with the live run recorded as a dated
@@ -513,8 +507,8 @@ cite by item number:
     optional capability is always a nil-safe port, decided in the host's
     `main`.
 13. Every crud-paginated list port follows the pgx-crud-v1 standards
-    (`sdk/foundation/crud`'s package doc is normative): the aggregate declares its
-    order allow-list (`map[string]crud.OrderField`) + default `crud.Order`
+    (`sdk/pkg/list`'s package doc is normative): the aggregate declares its
+    order allow-list (`map[string]list.OrderField`) + default `list.Order`
     in its pocket-core domain package (indexed spine columns only — EAV
     fields are never sortable); the storetest suite carries the standard
     six-case family per paginated port (`Order`, `PrevPage`, `OffsetMode`,
@@ -524,12 +518,12 @@ cite by item number:
     (400) at JSON edges, clamp/fallback at SSR edges. Store adapters build
     on the connector `List[T]` helpers (`pgxdb.List` / `turso.List`), never
     hand-rolled pagination. An aggregate whose resource needs non-default
-    page sizes declares a `var ListLimits = crud.Limits{…}` beside its
+    page sizes declares a `var ListLimits = list.Limits{…}` beside its
     `OrderFields`/`DefaultOrder`, and its stores and handlers pass it to
-    `req.NormalizedLimit` / `crud.ListParams.Limits`; the zero value keeps
-    `crud`'s `DefaultLimit`/`MaxLimit`.
+    `req.NormalizedLimit` / `list.Params.Limits`; the zero value keeps
+    `list`'s `DefaultLimit`/`MaxLimit`.
 14. Entity-ID strategy (segovia-lessons phase 04, amended D9/D10): the
-    pocket `Config` carries `IDs cryptids.IDGenerator` (zero value → the
+    pocket `Config` carries `IDs sdk.IDGenerator` (zero value → the
     nanoid default) and threads it to every ENTITY-KEY constructor; opaque
     secrets (session tokens, verification codes, minted key material)
     never follow it — they keep a package-private unconditional random

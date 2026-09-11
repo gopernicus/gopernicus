@@ -6,9 +6,10 @@ import (
 	"time"
 
 	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
-	"github.com/gopernicus/gopernicus/pockets/authentication/domain/session"
-	"github.com/gopernicus/gopernicus/pockets/authentication/domain/user"
-	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/session"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/user"
+	"github.com/gopernicus/gopernicus/sdk"
+	"github.com/gopernicus/gopernicus/sdk/pkg/list"
 )
 
 // UserAdminStore implements user.AdminRepository over libSQL: the operator
@@ -30,7 +31,11 @@ type UserAdminStore struct {
 var _ user.AdminRepository = (*UserAdminStore)(nil)
 
 // NewUserAdminStore returns a UserAdminStore backed by db.
+// It panics if db is nil; the caller owns the database lifecycle.
 func NewUserAdminStore(db *tursodb.DB) *UserAdminStore {
+	if db == nil {
+		panic("authentication turso: NewUserAdminStore received a nil database")
+	}
 	return &UserAdminStore{db: db}
 }
 
@@ -93,7 +98,7 @@ func (r userSummaryRow) toDomain() user.Summary {
 // List returns a page of directory rows ordered created_at DESC, id DESC. SQLite's
 // default TEXT collation is BINARY, which already is the byte-wise tiebreak order
 // the pgx sibling pins with COLLATE "C".
-func (s *UserAdminStore) List(ctx context.Context, req crud.ListRequest) (crud.Page[user.Summary], error) {
+func (s *UserAdminStore) List(ctx context.Context, req list.Request) (list.Page[user.Summary], error) {
 	q := tursodb.ListQuery[userSummaryRow]{
 		BaseSQL:      userSummarySelect,
 		OrderFields:  user.OrderFields,
@@ -104,9 +109,9 @@ func (s *UserAdminStore) List(ctx context.Context, req crud.ListRequest) (crud.P
 	}
 	page, err := tursodb.List(ctx, s.db, q, req)
 	if err != nil {
-		return crud.Page[user.Summary]{}, err
+		return list.Page[user.Summary]{}, err
 	}
-	return crud.MapPage(page, userSummaryRow.toDomain), nil
+	return list.MapPage(page, userSummaryRow.toDomain), nil
 }
 
 // GetSummary returns one user's directory projection, or sdk.ErrNotFound.
@@ -208,7 +213,11 @@ type ActiveSessionStore struct {
 var _ session.ActiveUserRepository = (*ActiveSessionStore)(nil)
 
 // NewActiveSessionStore returns an ActiveSessionStore backed by db.
+// It panics if db is nil; the caller owns the database lifecycle.
 func NewActiveSessionStore(db *tursodb.DB) *ActiveSessionStore {
+	if db == nil {
+		panic("authentication turso: NewActiveSessionStore received a nil database")
+	}
 	return &ActiveSessionStore{db: db}
 }
 
@@ -217,7 +226,7 @@ func NewActiveSessionStore(db *tursodb.DB) *ActiveSessionStore {
 // Unknown user → sdk.ErrNotFound; deactivated → session.ErrUserNotActive with no
 // row written; a colliding refresh_token_hash → sdk.ErrAlreadyExists, exactly as
 // SessionStore.Create reports it.
-func (s *ActiveSessionStore) CreateForActiveUser(ctx context.Context, sess session.Session) (session.Session, error) {
+func (s *ActiveSessionStore) CreateForActiveUser(ctx context.Context, sess session.Session, expectedAuthRevision int64) (session.Session, error) {
 	methods, err := encodeMethods(sess.Authentication.Methods)
 	if err != nil {
 		return session.Session{}, err
@@ -225,14 +234,18 @@ func (s *ActiveSessionStore) CreateForActiveUser(ctx context.Context, sess sessi
 
 	err = s.db.InTx(ctx, func(tx *tursodb.Tx) error {
 		var status string
-		const readQ = `SELECT status FROM users WHERE id = ?`
-		if err := tx.QueryRow(ctx, readQ, sess.UserID).Scan(&status); err != nil {
+		var revision int64
+		const readQ = `SELECT status, auth_revision FROM users WHERE id = ?`
+		if err := tx.QueryRow(ctx, readQ, sess.UserID).Scan(&status, &revision); err != nil {
 			return tursodb.MapError(err)
 		}
 		if !user.NormalizeStatus(user.Status(status)).Active() {
 			return session.ErrUserNotActive
 		}
 
+		if revision != expectedAuthRevision {
+			return sdk.ErrConflict
+		}
 		const insertQ = `INSERT INTO sessions (` + sessionColumns + `) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 		if _, err := tx.Exec(ctx, insertQ,
 			sess.ID, sess.UserID, sess.RefreshTokenHash, nullHash(sess.PreviousRefreshTokenHash),

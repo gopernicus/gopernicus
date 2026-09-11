@@ -6,8 +6,9 @@ import (
 	"strings"
 	"testing"
 
-	auth "github.com/gopernicus/gopernicus/pockets/authentication"
-	"github.com/gopernicus/gopernicus/sdk/foundation/web"
+	inbound "github.com/gopernicus/gopernicus/pockets/authentication/inbound/http"
+	delivery "github.com/gopernicus/gopernicus/pockets/authentication/logic/delivery"
+	"github.com/gopernicus/gopernicus/sdk/pkg/web"
 	uigoth "github.com/gopernicus/gopernicus/ui/goth"
 )
 
@@ -24,7 +25,7 @@ func renderMethod(t *testing.T, r web.Renderer) string {
 // newViews builds the host override over a default ui/goth bundle.
 func newViews(t *testing.T) Views {
 	t.Helper()
-	b, err := uigoth.New(uigoth.Config{})
+	b, err := uigoth.New()
 	if err != nil {
 		t.Fatalf("bundle: %v", err)
 	}
@@ -43,16 +44,16 @@ func newViews(t *testing.T) Views {
 // a failed attempt cannot repopulate it.
 func TestLoginOverrideRendersBrandedForm(t *testing.T) {
 	v := newViews(t)
-	m := auth.LoginPage{
-		PageContext: auth.PageContext{CSRFToken: "csrf-abc", ReturnTo: "/dashboard"},
+	m := inbound.LoginPage{
+		PageContext: inbound.PageContext{CSRFToken: "csrf-abc", ReturnTo: "/dashboard"},
 		Email:       "user@example.com",
 	}
 	out := renderMethod(t, v.Login(m))
 
 	for _, want := range []string{
-		"Gopernicus CMS",                 // host brand marker
-		`data-brand="gopernicus-cms"`,    // machine-checkable brand marker
-		`action="/auth/login"`,           // canonical endpoint unchanged
+		"Gopernicus CMS",              // host brand marker
+		`data-brand="gopernicus-cms"`, // machine-checkable brand marker
+		`action="/auth/login"`,        // canonical endpoint unchanged
 		`name="csrf_token" value="csrf-abc"`,
 		`name="return_to" value="/dashboard"`,
 		`name="email"`,
@@ -79,7 +80,7 @@ func TestPromotedDefaultsServeOtherPages(t *testing.T) {
 	// The compile-time assertion var _ auth.Views = Views{} (in authpages.go) already
 	// proves every method exists; this confirms a non-overridden method renders the
 	// bundled default rather than a host page.
-	out := renderMethod(t, v.Register(auth.RegisterPage{}))
+	out := renderMethod(t, v.Register(inbound.RegisterPage{}))
 	if !strings.Contains(out, `action="/auth/register"`) {
 		t.Errorf("Register did not render the promoted bundled default:\n%s", out)
 	}
@@ -93,8 +94,8 @@ func TestPromotedDefaultsServeOtherPages(t *testing.T) {
 // distinct facility from the page Views above.
 func TestEmailOverrideTargetsFeatureNamespace(t *testing.T) {
 	o := EmailOverride()
-	if o.Namespace != auth.EmailContentNamespace {
-		t.Fatalf("EmailOverride Namespace = %q, want %q", o.Namespace, auth.EmailContentNamespace)
+	if o.Namespace != delivery.Namespace {
+		t.Fatalf("EmailOverride Namespace = %q, want %q", o.Namespace, delivery.Namespace)
 	}
 	data, err := o.FS.ReadFile("templates/verification.html")
 	if err != nil {

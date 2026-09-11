@@ -38,7 +38,7 @@ A pocket is a library-shaped hexagon with a public rim and sealed interior.
 1. Read the [Pocket contract](../architecture/pocket-contract.md) completely.
 2. Use [Create a pocket](../guides/create-pocket.md).
 3. Start with `gopernicus new pocket` if the emitted CRUD-shaped anatomy fits.
-4. Keep the core SDK-only and put each external datastore or view dependency in a sibling module.
+4. Keep the core dependent only on SDK and shared pockets and put each external datastore or view dependency in a sibling module.
 5. Publish a conformance suite for every outbound repository contract.
 
 The pocket contract is intentionally stricter than an ordinary app-local domain because independent hosts must be able to compose it safely.
@@ -47,7 +47,7 @@ The pocket contract is intentionally stricter than an ordinary app-local domain 
 
 Decide whether the concern belongs in the SDK before adding another package:
 
-- pure mechanism or vocabulary with zero service semantics → `sdk/foundation`;
+- pure mechanism or vocabulary with zero service semantics → `sdk/pkg`;
 - a narrow behavioral port plus shared observable policy → `sdk/capabilities`;
 - a third-party library or vendor API contract → `integrations`;
 - a complete domain capability with entities, ports, and use cases → `pockets`;
@@ -57,7 +57,7 @@ Read [SDK overview](../sdk/overview.md), especially the admission test.
 
 ## I am building a separate React client
 
-Start with the [React and TanStack guide](../ui/react.md), then use the [web foundation](../sdk/web.md) and [Compose a host](../guides/compose-host.md) pages to define the Go side. Keep browser routing and server-state caching in the React application; keep authorization, persistence, and response contracts in the Go host.
+Start with the [React and TanStack guide](../ui/react.md), then use the [web package](../sdk/web.md) and [Compose a host](../guides/compose-host.md) pages to define the Go side. Keep browser routing and server-state caching in the React application; keep authorization, persistence, and response contracts in the Go host.
 
 ## I am arriving from an earlier design
 
@@ -65,7 +65,7 @@ Do not map packages one-for-one. Begin by identifying responsibilities:
 
 | Earlier responsibility | Current home |
 |---|---|
-| generic HTTP/config/logging mechanism | SDK foundation |
+| generic HTTP/config/logging mechanism | SDK pkg |
 | cache, email, OAuth, event bus, tracing | SDK capability + optional integration |
 | authentication, authorization, CMS | pocket module |
 | database driver | datastore integration |

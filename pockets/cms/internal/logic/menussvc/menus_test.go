@@ -8,9 +8,7 @@ import (
 	"time"
 
 	"github.com/gopernicus/gopernicus/pockets/cms/domain/menus"
-
 	"github.com/gopernicus/gopernicus/sdk"
-	"github.com/gopernicus/gopernicus/sdk/foundation/cryptids"
 )
 
 // fakeMenus is an in-memory MenuRepository.
@@ -104,7 +102,7 @@ func clock(start time.Time) Clock {
 
 func TestService_MenuFlow(t *testing.T) {
 	ctx := context.Background()
-	svc := NewService(newFakeMenus(), cryptids.IDGenerator{}, clock(time.Date(2026, 6, 22, 0, 0, 0, 0, time.UTC)))
+	svc := NewService(newFakeMenus(), sdk.IDGenerator{}, clock(time.Date(2026, 6, 22, 0, 0, 0, 0, time.UTC)))
 
 	m, err := svc.CreateMenu(ctx, "Main Menu")
 	if err != nil || m.Slug != "main-menu" {
@@ -149,7 +147,7 @@ func TestService_MenuFlow(t *testing.T) {
 
 func TestService_MenuErrors(t *testing.T) {
 	ctx := context.Background()
-	svc := NewService(newFakeMenus(), cryptids.IDGenerator{}, clock(time.Now()))
+	svc := NewService(newFakeMenus(), sdk.IDGenerator{}, clock(time.Now()))
 
 	if _, err := svc.CreateMenu(ctx, "  "); !errors.Is(err, sdk.ErrInvalidInput) {
 		t.Errorf("blank name: %v", err)

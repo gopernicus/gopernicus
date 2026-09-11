@@ -4,7 +4,7 @@ import (
 	"testing"
 
 	"github.com/gopernicus/gopernicus/integrations/datastores/firestore"
-	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
+	"github.com/gopernicus/gopernicus/sdk/pkg/list"
 )
 
 // searchRow is the row the SearchFilter cases match over.
@@ -26,12 +26,12 @@ func searchValueOf(row searchRow, field string) string {
 }
 
 // TestSearchFilterMatchesTheCrudOracle pins the shared postfilter to the ONE
-// definition of matching every backend uses (crud.MatchesSearch): a literal
+// definition of matching every backend uses (list.MatchesSearch): a literal
 // substring under ASCII-only case folding, so `%`, `_` and `\` are ordinary
 // characters. A per-store reimplementation is exactly how the three backends
 // would drift apart.
 func TestSearchFilterMatchesTheCrudOracle(t *testing.T) {
-	fields := []crud.SearchField{{Column: "name"}}
+	fields := []list.SearchField{{Column: "name"}}
 	rows := []searchRow{
 		{Name: "deploy-bot"},
 		{Name: "Deploy-Admin"},
@@ -48,9 +48,9 @@ func TestSearchFilterMatchesTheCrudOracle(t *testing.T) {
 			t.Fatalf("SearchFilter(%q) = nil for a non-blank term over a declared field", term)
 		}
 		for _, row := range rows {
-			want := crud.MatchesSearch(row.Name, term)
+			want := list.MatchesSearch(row.Name, term)
 			if got := filter(row); got != want {
-				t.Errorf("term %q against %q = %v, want %v (the crud.MatchesSearch oracle)", term, row.Name, got, want)
+				t.Errorf("term %q against %q = %v, want %v (the list.MatchesSearch oracle)", term, row.Name, got, want)
 			}
 		}
 	}
@@ -62,12 +62,12 @@ func TestSearchFilterMatchesTheCrudOracle(t *testing.T) {
 func TestSearchFilterAcrossFields(t *testing.T) {
 	row := searchRow{Name: "deploy-bot", Email: "ops@example.com"}
 
-	both := firestore.SearchFilter([]crud.SearchField{{Column: "name"}, {Column: "email"}}, searchValueOf, "example.com")
+	both := firestore.SearchFilter([]list.SearchField{{Column: "name"}, {Column: "email"}}, searchValueOf, "example.com")
 	if !both(row) {
 		t.Error("a term matching the second declared field did not match")
 	}
 
-	nameOnly := firestore.SearchFilter([]crud.SearchField{{Column: "name"}}, searchValueOf, "example.com")
+	nameOnly := firestore.SearchFilter([]list.SearchField{{Column: "name"}}, searchValueOf, "example.com")
 	if nameOnly(row) {
 		t.Error("a term matched an UNDECLARED field — SearchFields is the allow-list")
 	}
@@ -78,7 +78,7 @@ func TestSearchFilterAcrossFields(t *testing.T) {
 // is a list that declares nothing searchable, and List turns that nil into
 // sdk.ErrInvalidInput rather than answering a search with an unfiltered page.
 func TestSearchFilterReturnsNil(t *testing.T) {
-	fields := []crud.SearchField{{Column: "name"}}
+	fields := []list.SearchField{{Column: "name"}}
 
 	for _, term := range []string{"", "   ", "\t\n"} {
 		if firestore.SearchFilter(fields, searchValueOf, term) != nil {

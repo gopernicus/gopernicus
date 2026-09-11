@@ -16,8 +16,8 @@ import (
 	"github.com/gopernicus/gopernicus/pockets/cms/domain/content"
 	"github.com/gopernicus/gopernicus/sdk"
 	sdkevents "github.com/gopernicus/gopernicus/sdk/capabilities/events"
-	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
-	"github.com/gopernicus/gopernicus/sdk/foundation/cryptids"
+
+	"github.com/gopernicus/gopernicus/sdk/pkg/list"
 )
 
 // Clock returns the current time. Injected so tests can pin timestamps.
@@ -47,7 +47,7 @@ type Service struct {
 	registry *content.Registry
 	// ids is the app-chosen entity-ID strategy (cms.Config.IDs); zero value →
 	// default nanoids.
-	ids    cryptids.IDGenerator
+	ids    sdk.IDGenerator
 	clock  Clock
 	events sdkevents.Emitter
 }
@@ -57,7 +57,7 @@ type Service struct {
 // the best-effort content-event rail (Mount.Events): omitted or nil, it defaults
 // to sdkevents.Noop so emit call sites stay unconditional and a nil host bus
 // simply drops events.
-func NewService(entries content.EntryRepository, registry *content.Registry, ids cryptids.IDGenerator, clock Clock, emitter ...sdkevents.Emitter) *Service {
+func NewService(entries content.EntryRepository, registry *content.Registry, ids sdk.IDGenerator, clock Clock, emitter ...sdkevents.Emitter) *Service {
 	if clock == nil {
 		clock = time.Now
 	}
@@ -147,13 +147,13 @@ func (s *Service) GetBySlug(ctx context.Context, typ, slug string) (content.Entr
 }
 
 // List returns a cursor-paginated page of entries matching q.
-func (s *Service) List(ctx context.Context, q content.EntryQuery) (crud.Page[content.Entry], error) {
+func (s *Service) List(ctx context.Context, q content.EntryQuery) (list.Page[content.Entry], error) {
 	return s.entries.List(ctx, q)
 }
 
 // ListByTerm returns a cursor-paginated page of entries matching q associated
 // with termID.
-func (s *Service) ListByTerm(ctx context.Context, termID string, q content.EntryQuery) (crud.Page[content.Entry], error) {
+func (s *Service) ListByTerm(ctx context.Context, termID string, q content.EntryQuery) (list.Page[content.Entry], error) {
 	return s.entries.ListByTerm(ctx, termID, q)
 }
 

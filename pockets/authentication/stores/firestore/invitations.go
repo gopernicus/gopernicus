@@ -4,13 +4,13 @@ import (
 	"context"
 
 	firestoredb "github.com/gopernicus/gopernicus/integrations/datastores/firestore"
-	"github.com/gopernicus/gopernicus/pockets/authentication/domain/invitation"
-	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
+	invitations "github.com/gopernicus/gopernicus/pockets/authentication/logic/invitations"
+	"github.com/gopernicus/gopernicus/sdk/pkg/list"
 )
 
-var _ invitation.InvitationRepository = (*invitationStore)(nil)
+var _ invitations.InvitationRepository = (*invitationStore)(nil)
 
-// invitationStore fills invitation.InvitationRepository over the invitations
+// invitationStore fills invitations.InvitationRepository over the invitations
 // collection and its two claims — the token hash and the PARTIAL pending tuple
 // (SCHEMA.md §5.5, §5.6). Bodies land in N4b.
 type invitationStore struct {
@@ -23,51 +23,66 @@ func newInvitationStore(db *firestoredb.DB) *invitationStore {
 
 // Create writes the invitation with its token claim and — while the stored
 // status is pending — its pending-tuple claim.
-func (s *invitationStore) Create(ctx context.Context, inv invitation.Invitation) (invitation.Invitation, error) {
+func (s *invitationStore) Create(ctx context.Context, inv invitations.Invitation) (invitations.Invitation, error) {
 	if err := refuseAmbient(ctx); err != nil {
-		return invitation.Invitation{}, err
+		return invitations.Invitation{}, err
 	}
-	return invitation.Invitation{}, errNotImplemented
+	return invitations.Invitation{}, errNotImplemented
 }
 
 // Get returns the invitation by id, or sdk.ErrNotFound.
-func (s *invitationStore) Get(ctx context.Context, id string) (invitation.Invitation, error) {
+func (s *invitationStore) Get(ctx context.Context, id string) (invitations.Invitation, error) {
 	if err := refuseAmbient(ctx); err != nil {
-		return invitation.Invitation{}, err
+		return invitations.Invitation{}, err
 	}
-	return invitation.Invitation{}, errNotImplemented
+	return invitations.Invitation{}, errNotImplemented
 }
 
 // GetByTokenHash resolves the mailed secret's hash through its claim document.
-func (s *invitationStore) GetByTokenHash(ctx context.Context, tokenHash string) (invitation.Invitation, error) {
+func (s *invitationStore) GetByTokenHash(ctx context.Context, tokenHash string) (invitations.Invitation, error) {
 	if err := refuseAmbient(ctx); err != nil {
-		return invitation.Invitation{}, err
+		return invitations.Invitation{}, err
 	}
-	return invitation.Invitation{}, errNotImplemented
+	return invitations.Invitation{}, errNotImplemented
 }
 
 // ListByResource pages the resource's invitations on the derived resource key.
-func (s *invitationStore) ListByResource(ctx context.Context, resourceType, resourceID string, req crud.ListRequest) (crud.Page[invitation.Invitation], error) {
+func (s *invitationStore) ListByResource(ctx context.Context, resourceType, resourceID string, req list.Request) (list.Page[invitations.Invitation], error) {
 	if err := refuseAmbient(ctx); err != nil {
-		return crud.Page[invitation.Invitation]{}, err
+		return list.Page[invitations.Invitation]{}, err
 	}
-	return crud.Page[invitation.Invitation]{}, errNotImplemented
+	return list.Page[invitations.Invitation]{}, errNotImplemented
 }
 
 // ListBySubject pages the invitee's invitations on the derived subject key,
 // isolated by kind.
-func (s *invitationStore) ListBySubject(ctx context.Context, kind, identifier string, req crud.ListRequest) (crud.Page[invitation.Invitation], error) {
+func (s *invitationStore) ListBySubject(ctx context.Context, kind, identifier string, req list.Request) (list.Page[invitations.Invitation], error) {
 	if err := refuseAmbient(ctx); err != nil {
-		return crud.Page[invitation.Invitation]{}, err
+		return list.Page[invitations.Invitation]{}, err
 	}
-	return crud.Page[invitation.Invitation]{}, errNotImplemented
+	return list.Page[invitations.Invitation]{}, errNotImplemented
 }
 
-// UpdateStatus transitions the stored status and releases the pending claim in
-// the same transaction when the row leaves pending.
-func (s *invitationStore) UpdateStatus(ctx context.Context, id string, upd invitation.StatusUpdate) (invitation.Invitation, error) {
+// UpdateStatus will conditionally transition an unclaimed current token.
+// ClaimAcceptance and CompleteAcceptance remain part of the separate N4b
+// invitation implementation milestone; all three currently fail explicitly.
+func (s *invitationStore) UpdateStatus(ctx context.Context, id string, upd invitations.StatusUpdate) (invitations.Invitation, error) {
 	if err := refuseAmbient(ctx); err != nil {
-		return invitation.Invitation{}, err
+		return invitations.Invitation{}, err
 	}
-	return invitation.Invitation{}, errNotImplemented
+	return invitations.Invitation{}, errNotImplemented
+}
+
+func (s *invitationStore) ClaimAcceptance(ctx context.Context, id string, claim invitations.Acceptance) (invitations.Invitation, error) {
+	if err := refuseAmbient(ctx); err != nil {
+		return invitations.Invitation{}, err
+	}
+	return invitations.Invitation{}, errNotImplemented
+}
+
+func (s *invitationStore) CompleteAcceptance(ctx context.Context, id string, claim invitations.Acceptance) (invitations.Invitation, error) {
+	if err := refuseAmbient(ctx); err != nil {
+		return invitations.Invitation{}, err
+	}
+	return invitations.Invitation{}, errNotImplemented
 }

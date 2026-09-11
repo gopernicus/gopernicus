@@ -3,8 +3,7 @@
 // module graph (the load-bearing opt-out property). It owns the SQL; the HOST
 // owns its database lifecycle. It is the dialect sibling of
 // pockets/events/stores/turso: same surface plus the Postgres-only WithSchema
-// option — SQLite has no schemas — same migration version set (identical
-// filenames), same port semantics — a host switches dialect by one import + one
+// option — SQLite has no schemas — matching migration versions, same port semantics — a host switches dialect by one import + one
 // Open call.
 //
 // Migrations follow the scaffold model (matching the auth, cms, and jobs pgx
@@ -25,6 +24,8 @@ import (
 	"context"
 	"embed"
 	"fmt"
+
+	"github.com/gopernicus/gopernicus/sdk"
 
 	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
 )
@@ -61,16 +62,36 @@ func WithSchema(s pgxdb.Schema) Option {
 // not applied before boot — so the failure surfaces at wiring time, before the
 // host serves traffic, rather than on the poller's first read. It does NOT touch
 // migrations: the host owns and applies the schema (see ExportMigrations).
+// It also rejects a non-bytea payload column until migration 0002 is applied.
 // WithSchema qualifies both the probe and every statement the store runs.
-func New(db *pgxdb.DB, opts ...Option) (*Store, error) {
+func New(ctx context.Context, db *pgxdb.DB, opts ...Option) (*Store, error) {
+	if db == nil {
+		return nil, fmt.Errorf("events outbox: database is required: %w", sdk.ErrInvalidInput)
+	}
 	var cfg config
 	for _, o := range opts {
+		if o == nil {
+			return nil, fmt.Errorf("events pgx: nil option: %w", sdk.ErrInvalidInput)
+		}
 		o(&cfg)
 	}
 	s := &Store{db: db, schema: cfg.schema}
-	if err := pgxdb.ProbeTable(context.Background(), db, s.table(outboxTable)); err != nil {
+	if err := pgxdb.ProbeTable(ctx, db, s.table(outboxTable)); err != nil {
 		return nil, fmt.Errorf("events outbox store: %s table missing — apply the %q migration source before boot: %w",
 			s.table(outboxTable), "events", err)
+	}
+	// Inspect catalog data rather than cached query field descriptions, which
+	// may still describe the old column immediately after a migration.
+	var binaryPayload bool
+	if err := db.QueryRow(ctx, `SELECT EXISTS (
+		SELECT 1 FROM pg_attribute
+		WHERE attrelid = to_regclass($1) AND attname = 'payload'
+		AND atttypid = 'bytea'::regtype AND NOT attisdropped
+	)`, s.table(outboxTable)).Scan(&binaryPayload); err != nil {
+		return nil, pgxdb.MapError(err)
+	}
+	if !binaryPayload {
+		return nil, fmt.Errorf("events outbox store: payload must be bytea; apply events migration 0002 before boot: %w", sdk.ErrInvalidInput)
 	}
 	return s, nil
 }

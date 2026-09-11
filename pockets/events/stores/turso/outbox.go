@@ -2,10 +2,12 @@ package turso
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
-	"github.com/gopernicus/gopernicus/pockets/events/domain/outbox"
+	"github.com/gopernicus/gopernicus/pockets/events/logic/outbox"
+	"github.com/gopernicus/gopernicus/sdk"
 	sdkevents "github.com/gopernicus/gopernicus/sdk/capabilities/events"
 )
 
@@ -82,6 +84,9 @@ func (s *Store) AppendTx(ctx context.Context, tx *tursodb.Tx, recs ...sdkevents.
 	if len(recs) == 0 {
 		return nil
 	}
+	if tx == nil {
+		return fmt.Errorf("events outbox: transaction is required: %w", sdk.ErrInvalidInput)
+	}
 	return insertRecords(ctx, tx, recs...)
 }
 
@@ -142,27 +147,23 @@ func (s *Store) PurgePublished(ctx context.Context, before time.Time) (int, erro
 // constraint violation on event_id is mapped to sdk.ErrAlreadyExists by the
 // connector's Exec.
 func insertRecords(ctx context.Context, q tursodb.Querier, recs ...sdkevents.Record) error {
+	for _, rc := range recs {
+		if err := rc.Validate(); err != nil {
+			return err
+		}
+	}
 	const insert = `INSERT INTO event_outbox (` + outboxColumns + `)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`
 	now := tursodb.FormatTime(time.Now().UTC())
 	for _, rc := range recs {
 		if _, err := q.Exec(ctx, insert,
 			rc.EventID, rc.Type, tursodb.FormatTime(rc.OccurredAt), rc.CorrelationID,
-			payloadValue(rc.Payload), nullStr(rc.AggregateType), nullStr(rc.AggregateID),
+			append([]byte{}, rc.Payload...), nullStr(rc.AggregateType), nullStr(rc.AggregateID),
 			nullStr(rc.TenantID), now); err != nil {
 			return err
 		}
 	}
 	return nil
-}
-
-// payloadValue returns a non-empty JSON text for storage: the raw payload, or
-// "{}" when it is empty (the column is NOT NULL).
-func payloadValue(p []byte) string {
-	if len(p) == 0 {
-		return "{}"
-	}
-	return string(p)
 }
 
 // nullStr renders a nullable *string metadata field for storage: nil stores as

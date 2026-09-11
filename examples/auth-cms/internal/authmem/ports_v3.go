@@ -4,7 +4,7 @@
 // delivery-job outbox. Each is a thin view over the one shared *data holder and
 // its single mutex, so every promised atomic operation runs inside ONE mutex-held
 // critical section — no fake cross-repository transaction. The behavior mirrors
-// the storetest reference (pockets/authentication/storetest/reference_test.go),
+// the storetest reference (pockets/authentication/stores/storetest/reference_test.go),
 // which the exported conformance suite proves against this store; authmem's one
 // intentional divergence is that auth_revision rides the user row (its
 // single-anchor model) rather than a separate revision map.
@@ -14,14 +14,14 @@ import (
 	"context"
 	"time"
 
-	auth "github.com/gopernicus/gopernicus/pockets/authentication"
-	"github.com/gopernicus/gopernicus/pockets/authentication/domain/authgrant"
-	"github.com/gopernicus/gopernicus/pockets/authentication/domain/challenge"
-	"github.com/gopernicus/gopernicus/pockets/authentication/domain/contactchange"
-	"github.com/gopernicus/gopernicus/pockets/authentication/domain/credential"
-	"github.com/gopernicus/gopernicus/pockets/authentication/domain/identifier"
-	"github.com/gopernicus/gopernicus/pockets/authentication/domain/passwordreset"
-	"github.com/gopernicus/gopernicus/pockets/authentication/domain/session"
+	authgrant "github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/authgrant"
+	challenge "github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/challenge"
+	contactchange "github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/contactchange"
+	credential "github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/credential"
+	identifier "github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/identifier"
+	passwordreset "github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/passwordreset"
+	protection "github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/protection"
+	session "github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/session"
 	"github.com/gopernicus/gopernicus/sdk"
 )
 
@@ -45,9 +45,12 @@ var (
 // empty-hash guard makes an empty candidate never match.
 type challengeRepo struct{ *data }
 
-func (r challengeRepo) Replace(_ context.Context, c challenge.Challenge) (challenge.Challenge, error) {
+func (r challengeRepo) Replace(ctx context.Context, c challenge.Challenge) (challenge.Challenge, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return challenge.Challenge{}, err
+	}
 	// Delete the prior (SUBJECT KEY, purpose) row (the single-active claim). The
 	// subject key defaults to the user id for every purpose that predates it
 	// (CHAU-6.1), so this is unchanged for all of them.
@@ -55,13 +58,15 @@ func (r challengeRepo) Replace(_ context.Context, c challenge.Challenge) (challe
 	c.SubjectKey = subjectKey
 	for id, ex := range r.challenges {
 		if ex.ResolvedSubjectKey() == subjectKey && ex.Purpose == c.Purpose {
-			delete(r.challenges, id)
+			continue
+		}
+		if (ex.Purpose == c.Purpose && ex.SecretDigest == c.SecretDigest) || (c.ID != "" && id == c.ID) {
+			return challenge.Challenge{}, sdk.ErrAlreadyExists
 		}
 	}
-	// Enforce the (purpose, secret_digest) unique index against the remainder.
-	for _, ex := range r.challenges {
-		if ex.Purpose == c.Purpose && ex.SecretDigest == c.SecretDigest {
-			return challenge.Challenge{}, sdk.ErrAlreadyExists
+	for id, ex := range r.challenges {
+		if ex.ResolvedSubjectKey() == subjectKey && ex.Purpose == c.Purpose {
+			delete(r.challenges, id)
 		}
 	}
 	if c.ID == "" {
@@ -70,7 +75,9 @@ func (r challengeRepo) Replace(_ context.Context, c challenge.Challenge) (challe
 	if c.Version == 0 {
 		c.Version = 1
 	}
+	c.Context = append([]byte(nil), c.Context...)
 	r.challenges[c.ID] = c
+	c.Context = append([]byte(nil), c.Context...)
 	return c, nil
 }
 
@@ -90,7 +97,7 @@ func (r challengeRepo) ConsumeCode(_ context.Context, userID, purpose string, ca
 	// Select the candidate naming the row's key, then compare in constant time.
 	matched := false
 	for _, cand := range candidates {
-		if cand.KeyID == row.ProtectorKeyID && auth.ConstantTimeDigestEqual(cand.Digest, row.SecretDigest) {
+		if cand.KeyID == row.ProtectorKeyID && protection.ConstantTimeDigestEqual(cand.Digest, row.SecretDigest) {
 			matched = true
 			break
 		}
@@ -204,6 +211,15 @@ func (r passwordResetRepo) Redeem(_ context.Context, in passwordreset.RedeemInpu
 	if !found {
 		return passwordreset.RedeemResult{}, sdk.ErrNotFound
 	}
+
+	binding, err := passwordreset.ParseBinding(r.challenges[chID].Context)
+	if err != nil {
+		return passwordreset.RedeemResult{}, err
+	}
+	owner, ok := r.users[userID]
+	if !ok || !owner.Active() || !binding.Matches(userID, owner.AuthRevision, r.identifiers[binding.IdentifierID]) {
+		return passwordreset.RedeemResult{}, sdk.ErrNotFound
+	}
 	delete(r.challenges, chID)
 	r.passwords[userID] = in.NewPasswordHash
 	for id, s := range r.sessions {
@@ -221,6 +237,7 @@ func (r passwordResetRepo) Redeem(_ context.Context, in passwordreset.RedeemInpu
 			delete(r.challenges, id)
 		}
 	}
+	r.advanceCredentialRevisionLocked(userID, in.Now)
 	return passwordreset.RedeemResult{UserID: userID}, nil
 }
 
@@ -259,12 +276,23 @@ func (r contactChangeRepo) Create(_ context.Context, p contactchange.PendingChan
 // Consume is get-and-delete: the row is removed regardless of expiry, so an
 // expired Consume deletes and reports ErrExpired, and any second Consume →
 // ErrNotFound (design §2.4's pinned contract, the oauthstate.Consume precedent).
-func (r contactChangeRepo) Consume(_ context.Context, userID string, kind identifier.Kind) (contactchange.PendingChange, error) {
+func (r contactChangeRepo) Get(_ context.Context, userID string, kind identifier.Kind) (contactchange.PendingChange, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	key := contactChangeKey(userID, kind)
 	p, ok := r.contactChanges[key]
 	if !ok {
+		return contactchange.PendingChange{}, sdk.ErrNotFound
+	}
+	return p, nil
+}
+
+func (r contactChangeRepo) Consume(_ context.Context, userID string, kind identifier.Kind, expectedID string) (contactchange.PendingChange, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	key := contactChangeKey(userID, kind)
+	p, ok := r.contactChanges[key]
+	if !ok || p.ID != expectedID {
 		return contactchange.PendingChange{}, sdk.ErrNotFound
 	}
 	delete(r.contactChanges, key)
@@ -283,31 +311,80 @@ func (r contactChangeRepo) Consume(_ context.Context, userID string, kind identi
 // promises.
 type authGrantRepo struct{ *data }
 
-func (r authGrantRepo) Create(_ context.Context, g authgrant.Grant) (authgrant.Grant, error) {
+func (r authGrantRepo) Create(ctx context.Context, g authgrant.Grant, expectedAuthRevision int64, now time.Time) (authgrant.Grant, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return authgrant.Grant{}, err
+	}
+	u, ok := r.users[g.UserID]
+	if !ok {
+		return authgrant.Grant{}, sdk.ErrNotFound
+	}
+	sess, ok := r.sessions[g.SessionID]
+	if !ok {
+		return authgrant.Grant{}, sdk.ErrNotFound
+	}
+	if !u.Active() || sess.UserID != g.UserID || !now.Before(sess.ExpiresAt) {
+		return authgrant.Grant{}, sdk.ErrUnauthorized
+	}
+	if u.AuthRevision != expectedAuthRevision {
+		return authgrant.Grant{}, sdk.ErrConflict
+	}
 	if g.ID == "" {
 		g.ID = ids.MustGenerate()
 	}
+	if _, ok := r.authGrants[g.ID]; ok {
+		return authgrant.Grant{}, sdk.ErrAlreadyExists
+	}
+	g.Methods = append([]session.AuthenticationMethod(nil), g.Methods...)
 	r.authGrants[g.ID] = g
+	g.Methods = append([]session.AuthenticationMethod(nil), g.Methods...)
 	return g, nil
 }
 
-func (r authGrantRepo) Consume(_ context.Context, sessionID, purpose, contextDigest string, now time.Time) (authgrant.Grant, error) {
+func (r authGrantRepo) Consume(ctx context.Context, req authgrant.Requirement, now time.Time) (authgrant.Grant, error) {
+	if err := req.Validate(); err != nil {
+		return authgrant.Grant{}, err
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	for id, g := range r.authGrants {
-		if g.Consumed() || g.SessionID != sessionID || g.Purpose != purpose || g.ContextDigest != contextDigest {
+	if err := ctx.Err(); err != nil {
+		return authgrant.Grant{}, err
+	}
+	u, ok := r.users[req.UserID]
+	if !ok {
+		return authgrant.Grant{}, sdk.ErrNotFound
+	}
+	sess, ok := r.sessions[req.SessionID]
+	if !ok {
+		return authgrant.Grant{}, sdk.ErrNotFound
+	}
+	if !u.Active() || sess.UserID != req.UserID || !now.Before(sess.ExpiresAt) {
+		return authgrant.Grant{}, sdk.ErrUnauthorized
+	}
+	var selected authgrant.Grant
+	for _, g := range r.authGrants {
+		if g.Consumed() || g.SessionID != req.SessionID || g.UserID != req.UserID || g.Purpose != req.Purpose || g.ContextDigest != req.ContextDigest {
 			continue
 		}
-		g.ConsumedAt = now.UTC() // single-use: mark before returning
-		r.authGrants[id] = g
-		if g.Expired(now) {
-			return authgrant.Grant{}, sdk.ErrExpired
+		if !g.Expired(now) && !req.Accepts(g.AuthenticatedAt, g.Assurance, now) {
+			continue
 		}
-		return g, nil
+		if selected.ID == "" || g.CreatedAt.Before(selected.CreatedAt) || (g.CreatedAt.Equal(selected.CreatedAt) && g.ID < selected.ID) {
+			selected = g
+		}
 	}
-	return authgrant.Grant{}, sdk.ErrNotFound
+	if selected.ID == "" {
+		return authgrant.Grant{}, sdk.ErrNotFound
+	}
+	selected.ConsumedAt = now.UTC()
+	r.authGrants[selected.ID] = selected
+	if selected.Expired(now) {
+		return authgrant.Grant{}, sdk.ErrExpired
+	}
+	selected.Methods = append([]session.AuthenticationMethod(nil), selected.Methods...)
+	return selected, nil
 }
 
 func (r authGrantRepo) DeleteBySession(_ context.Context, sessionID string) error {
@@ -433,6 +510,7 @@ func (r credentialMutationRepo) Apply(_ context.Context, userID string, expected
 		u.AuthRevision = expectedAuthRevision + 1
 		r.users[userID] = u
 	}
+	r.revokeCredentialStateLocked(userID)
 	return nil
 }
 

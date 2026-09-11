@@ -1,7 +1,7 @@
 // Package goth is the ui/goth presentation bundle: it exposes the immutable
-// Bundle, its Config/profiles, the parsed asset Manifest, the deterministic
+// Bundle, its options/profiles, the parsed asset Manifest, the deterministic
 // browser Requirements, and the document composition components. It registers no
-// route, installs no middleware, accepts no pocket.Mount, and writes no HTTP
+// route, installs no middleware, accepts no pockets.Mount, and writes no HTTP
 // response header — the host composes assets, routes, and CSP. See README.md for
 // the frozen public contract.
 package goth
@@ -19,17 +19,15 @@ import (
 	"github.com/gopernicus/gopernicus/ui/goth/theme"
 )
 
-// DefaultAssetBasePath is the public URL prefix used when Config.AssetBasePath is
-// empty.
+// DefaultAssetBasePath is the public URL prefix used when WithAssetBasePath
+// is omitted or given an empty path.
 const DefaultAssetBasePath = "/assets/goth"
 
 // Profile selects which self-hosted asset classes a Bundle serves and requires.
 type Profile uint8
 
 const (
-	// StylesOnly is the zero value: compiled CSS only. Chosen deliberately so a
-	// zero Config yields the safest, smallest, no-JavaScript bundle rather than an
-	// accidental full runtime.
+	// StylesOnly is the default profile: compiled CSS with no JavaScript runtime.
 	StylesOnly Profile = iota
 	// Interactive adds the Alpine CSP build + GOTH controllers.
 	Interactive
@@ -39,29 +37,31 @@ const (
 
 func (p Profile) valid() bool { return p <= Full }
 
-// Config is the value passed to New. Its zero value is valid and yields a
-// StylesOnly bundle mounted at the default asset base path with the kit's embedded
-// default theme injected.
-type Config struct {
-	// AssetBasePath is the public URL prefix the host will serve the embedded
-	// asset FS under. Empty means DefaultAssetBasePath ("/assets/goth"). It is
-	// normalized to a leading slash and no trailing slash; a value containing a
-	// scheme, host, "..", control characters, or a query/fragment is a
-	// construction error.
-	AssetBasePath string
+// Option configures construction of a Bundle. Options apply in order; the last
+// value for each setting wins. New validates the final settings.
+type Option func(*config)
 
-	// Profile selects the asset set. Zero value StylesOnly.
-	Profile Profile
+type config struct {
+	assetBasePath       string
+	profile             Profile
+	themeStylesheetPath string
+}
 
-	// ThemeStylesheetPath is the root-relative public path of the HOST's theme
-	// stylesheet. Head() emits it as a <link rel="stylesheet"> AFTER the kit
-	// stylesheet (source-order cascade: the host wins). Empty selects the kit's
-	// embedded compiled default theme (theme-default.css) — the WordPress model's
-	// fallback. A non-empty value must begin with exactly one "/" and is emitted
-	// verbatim with no integrity attribute (the kit cannot know host bytes). A
-	// scheme, authority/host form ("//"), any additional leading slash, backslash,
-	// "..", control character, query, or fragment is a construction error.
-	ThemeStylesheetPath string
+// WithAssetBasePath selects the public prefix serving embedded assets. Empty
+// uses DefaultAssetBasePath. New normalizes a leading slash and no trailing
+// slash, rejecting schemes, hosts, "..", controls, queries and fragments.
+func WithAssetBasePath(path string) Option { return func(cfg *config) { cfg.assetBasePath = path } }
+
+// WithProfile selects the asset set. The default is StylesOnly.
+func WithProfile(profile Profile) Option { return func(cfg *config) { cfg.profile = profile } }
+
+// WithThemeStylesheetPath selects the host stylesheet emitted after the kit
+// stylesheet. Empty selects the embedded default theme. A nonempty path must
+// start with exactly one slash; schemes, hosts, backslashes, "..", controls,
+// queries and fragments are rejected. The host path is emitted verbatim without
+// integrity because the kit does not own its contents.
+func WithThemeStylesheetPath(path string) Option {
+	return func(cfg *config) { cfg.themeStylesheetPath = path }
 }
 
 // Bundle is the constructed, immutable presentation bundle. It holds no request
@@ -74,19 +74,26 @@ type Bundle struct {
 	requirements        Requirements
 }
 
-// New validates cfg and returns a Bundle. It returns a non-nil error for an
-// invalid AssetBasePath, an invalid ThemeStylesheetPath, an unknown Profile, or a
-// malformed embedded manifest. It never returns a partially built Bundle alongside
-// an error.
-func New(cfg Config) (*Bundle, error) {
-	if !cfg.Profile.valid() {
-		return nil, fmt.Errorf("goth: unknown profile %d", cfg.Profile)
+// New returns a StylesOnly bundle at DefaultAssetBasePath with the embedded
+// default theme unless configured otherwise. It rejects nil options, invalid
+// asset or theme paths, unknown profiles and a malformed embedded manifest.
+// It never returns a partially built Bundle alongside an error.
+func New(opts ...Option) (*Bundle, error) {
+	var cfg config
+	for _, opt := range opts {
+		if opt == nil {
+			return nil, fmt.Errorf("goth: nil Option")
+		}
+		opt(&cfg)
 	}
-	basePath, err := normalizeAssetBasePath(cfg.AssetBasePath)
+	if !cfg.profile.valid() {
+		return nil, fmt.Errorf("goth: unknown profile %d", cfg.profile)
+	}
+	basePath, err := normalizeAssetBasePath(cfg.assetBasePath)
 	if err != nil {
 		return nil, err
 	}
-	themePath, err := normalizeThemeStylesheetPath(cfg.ThemeStylesheetPath)
+	themePath, err := normalizeThemeStylesheetPath(cfg.themeStylesheetPath)
 	if err != nil {
 		return nil, err
 	}
@@ -95,11 +102,11 @@ func New(cfg Config) (*Bundle, error) {
 		return nil, err
 	}
 	return &Bundle{
-		profile:             cfg.Profile,
+		profile:             cfg.profile,
 		assetBasePath:       basePath,
 		themeStylesheetPath: themePath,
 		manifest:            manifest,
-		requirements:        requirementsForProfile(cfg.Profile),
+		requirements:        requirementsForProfile(cfg.profile),
 	}, nil
 }
 

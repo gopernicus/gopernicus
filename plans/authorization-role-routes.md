@@ -1,5 +1,11 @@
 # authorization: bundled role-administration routes (issue #20) — host gate + assignment-policy hook, receipts as today
 
+Current mutation contract: [authorization-audit-log-implementation.md](authorization-audit-log-implementation.md)
+(AUDIT-026). The approved change removes request receipts, scope revisions and the
+best-effort audit sink, adds optional atomic change history, and protects guarded
+reads against supported raw writers. Earlier protocol descriptions below are
+historical evidence, not the current API.
+
 **Status: PLANNED 2026-08-31.** Plan C of the three-plan batch; releases together
 with Plan B (#19 RequireAnyPermission + #22 LookupResources limit/paging) as ONE
 `pockets/authorization/v0.7.0` train (current tag: `pockets/authorization/v0.6.0`).

@@ -21,9 +21,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
 	"github.com/jackc/pgx/v5"
-
-	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
 )
 
 // explainSeedRows is the per-(type, relation) row multiplier: 4 resource types ×
@@ -193,7 +192,7 @@ func seedLookupFixture(t *testing.T, db *pgxdb.DB) {
 	ctx := context.Background()
 	start := time.Now()
 
-	relSQL := qualifySQL(t, `INSERT INTO iam_relationships (resource_type, resource_id, relation, subject_type, subject_id, subject_relation, created_at)
+	relSQL := qualifySQL(t, `INSERT INTO iam_relationships (resource_type, resource_id, relation, subject_type, subject_id, subject_relation)
 SELECT rt.t,
        'r' || lpad(g::text, 9, '0'),
        rel.r,
@@ -202,8 +201,7 @@ SELECT rt.t,
             WHEN 'parent' THEN 'r' || lpad((g / 10)::text, 9, '0')
             WHEN 'space' THEN 's' || lpad(((g % 400) + 1)::text, 9, '0')
             ELSE 'u' || lpad(((g + rel.k * 167) % 500)::text, 5, '0') END,
-       '',
-       now()
+       ''
 FROM generate_series(1, @rows) g,
      (VALUES ('doc'), ('space'), ('dash'), ('tenant')) AS rt(t),
      (VALUES ('owner', 0), ('viewer', 1), ('parent', 2), ('space', 3)) AS rel(r, k)
@@ -212,8 +210,8 @@ WHERE NOT (rel.r = 'parent' AND g < 10)`)
 		t.Fatalf("seed iam_relationships: %v", err)
 	}
 
-	roleSQL := qualifySQL(t, `INSERT INTO iam_roles (subject_type, subject_id, role, resource_type, resource_id, created_at)
-SELECT 'user', 'u' || lpad((g % 100)::text, 5, '0'), r.name, 'doc', 'r' || lpad(g::text, 9, '0'), now()
+	roleSQL := qualifySQL(t, `INSERT INTO iam_roles (subject_type, subject_id, role, resource_type, resource_id)
+SELECT 'user', 'u' || lpad((g % 100)::text, 5, '0'), r.name, 'doc', 'r' || lpad(g::text, 9, '0')
 FROM generate_series(1, @rows) g, (VALUES ('editor'), ('reviewer')) AS r(name)`)
 	if _, err := db.Exec(ctx, roleSQL, pgx.NamedArgs{"rows": explainRoleRows}); err != nil {
 		t.Fatalf("seed iam_roles: %v", err)

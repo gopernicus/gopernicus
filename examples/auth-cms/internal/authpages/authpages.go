@@ -1,7 +1,7 @@
 // Package authpages is this host's REAL partial override of the authentication
 // pocket's HTML surface (design §9.2, AV3-8.9): it embeds the ui/goth
 // views/goth.Views and overrides exactly ONE page — Login — with a
-// Gopernicus-CMS-branded template rendered through sdk/foundation/web.Template
+// Gopernicus-CMS-branded template rendered through sdk/pkg/web.Template
 // (stdlib html/template, no templ import here). Every other page is served by the
 // promoted ui/goth default, so the override changes presentation ONLY: route
 // security, request decoding, service policy, redirect resolution, and error
@@ -26,9 +26,10 @@ import (
 	"embed"
 	"html/template"
 
-	auth "github.com/gopernicus/gopernicus/pockets/authentication"
+	inbound "github.com/gopernicus/gopernicus/pockets/authentication/inbound/http"
+	delivery "github.com/gopernicus/gopernicus/pockets/authentication/logic/delivery"
 	authgoth "github.com/gopernicus/gopernicus/pockets/authentication/views/goth"
-	"github.com/gopernicus/gopernicus/sdk/foundation/web"
+	"github.com/gopernicus/gopernicus/sdk/pkg/web"
 	uigoth "github.com/gopernicus/gopernicus/ui/goth"
 )
 
@@ -50,7 +51,7 @@ type Views struct {
 
 // _ pins Views to the authentication.Views port: the embedded default supplies the
 // fifteen non-overridden methods, and Login below supplies the sixteenth.
-var _ auth.Views = Views{}
+var _ inbound.Views = Views{}
 
 // New returns the host override over the ui/goth bundle, with its branded Login
 // template parsed once. It fails loudly if the ui/goth Views cannot be constructed
@@ -70,7 +71,7 @@ func New(bundle *uigoth.Bundle) (Views, error) {
 // canonical /auth/login endpoint the bundled default does, with the same field
 // names (email, password, csrf_token, return_to) so the pocket's dispatcher,
 // CSRF/origin gate, service call, and PRG are unchanged — only the chrome differs.
-func (v Views) Login(m auth.LoginPage) web.Renderer {
+func (v Views) Login(m inbound.LoginPage) web.Renderer {
 	return web.Template(v.login, loginTemplateName, m)
 }
 
@@ -80,8 +81,8 @@ func (v Views) Login(m auth.LoginPage) web.Renderer {
 // (the one-time code), so the verification flow is unbroken — only the copy is
 // host-branded. This is the SECOND override system, wired through
 // Config.EmailContentTemplates, distinct from the Views page override above.
-func EmailOverride() auth.EmailContentTemplate {
-	return auth.EmailContentTemplate{Namespace: auth.EmailContentNamespace, FS: brandEmailFS}
+func EmailOverride() delivery.TemplateOverride {
+	return delivery.TemplateOverride{Namespace: delivery.Namespace, FS: brandEmailFS}
 }
 
 // loginHTML is the branded sign-in page. It is deliberately plain and asset-free so

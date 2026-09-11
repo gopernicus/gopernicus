@@ -8,7 +8,7 @@
 //
 // Hosts wire it as:
 //
-//	bundle, _ := goth.New(goth.Config{AssetBasePath: "/assets/goth"})
+//	bundle, _ := goth.New(goth.WithAssetBasePath("/assets/goth"))
 //	cmsViews, _ := cmsgoth.New(bundle)
 //	cms.Config{Views: cmsViews}
 //
@@ -29,7 +29,7 @@ import (
 	"github.com/gopernicus/gopernicus/pockets/cms/domain/menus"
 	"github.com/gopernicus/gopernicus/pockets/cms/domain/messaging"
 	"github.com/gopernicus/gopernicus/pockets/cms/domain/taxonomy"
-	"github.com/gopernicus/gopernicus/sdk/foundation/web"
+	"github.com/gopernicus/gopernicus/sdk/pkg/web"
 	"github.com/gopernicus/gopernicus/ui/goth"
 )
 

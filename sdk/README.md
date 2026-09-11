@@ -1,60 +1,52 @@
 # sdk
 
-`sdk` is the stdlib-only kernel of the gopernicus framework — its `go.mod` has
-no `require` block, so "imports only the standard library" is enforced
-structurally, not just by convention. Each subpackage owns one concern as a
-small **service + the port(s) it needs**: the interface that adapters target,
-a service struct that owns cross-cutting policy (logging, tracing, error
-mapping), the shared types/errors for that concern, and a `New(...)`
-constructor. Adapters (concrete implementations) live in `integrations/`
-(reusable), `pockets/<name>/stores/<dialect>` (pocket store adapters), and
-`internal/outbound/` (app-specific) and depend on sdk — never the reverse.
+`sdk` is the stdlib-only core of the gopernicus framework. Root `package sdk`
+contains common vocabulary and small, clearly named primitives. Packages under `pkg/` group coherent mechanisms; capabilities define replaceable contracts
+and their observable behavior. A helper does not need a separate package solely
+because it is a different operation.
 
-`sdk` is **not** an interfaces-only package. The value is the behavior and
-vocabulary the service structs own; the interfaces are how adapters plug in.
+The SDK includes implementations as well as interfaces. External-library adapters
+live in integrations, pocket stores or host outbound packages and depend inward
+on SDK. The SDK module has no third-party requirements; import guards enforce its
+stdlib boundary.
 
 ## The layering law (sdk-layering, 2026-07-10)
 
 The module is LAYERED, and the layers are physical:
 
-- **The kernel** is the root `package sdk` itself (`errors.go` — the
-  error vocabulary; `context.go` — the request/trace/span-id context
-  vocabulary; `faults.go` — the write-fault vocabulary
-  `Violation`/`ValidationError`/`StaleError` + the `Code*` strings).
-  Stdlib imports only. Leaf-ness is cycle-enforced against
-  every subpackage that imports it; guard G12(a) covers the rest.
-  Promoting something to the kernel means adding a root file — a
-  visible, deliberate act. **The admission criterion** (written down at
-  crud-write-vocabulary, 2026-08-31, when the first behavior-bearing
-  vocabulary was promoted): a shape is admitted only when it is **shared
-  by two or more foundation packages that may not import each other**
-  (the flat tier's consequence), **stdlib-only**, and carries **zero
-  transport semantics** — the kernel names the fault, `foundation/web`
-  owns its wire shape. Carrying an `Add`/`Err` collector is not
-  disqualifying; carrying a status code, a json tag, or an
-  `http`/`url` import is. Argue the next promotion against these three
-  tests, not against this precedent.
-- **`foundation/`** — pure mechanism and vocabulary with zero service
-  semantics (web, workers, identity, crud, cryptids, validation,
-  logging, conversion, slug, async, environment). Foundation packages
-  import the ROOT only — the tier is FLAT.
+- **The kernel** is root `package sdk`: errors/faults, request/trace/span and
+  principal context values, identity projections, configurable ID generation,
+  pointer reads and slug generation. It imports stdlib only and no SDK
+  subpackage; guard G12(a) enforces that boundary.
+  **Root admission:** common vocabulary or a small primitive whose explicit
+  name is understandable without a subsystem qualifier; useful across
+  applications, with no transport/application lifecycle. A candidate need not
+  already be used by two packages under `pkg/`. This replaces the narrower
+  two-consumer criterion by owner decision (2026-09-10).
+  Keep subject areas in separate files, preserve host-owned configuration, and
+  retain named packages when their namespace explains a coherent API.
+- **`pkg/`** — reusable mechanisms and vocabulary (web, workers, list,
+  cryptids, validation, logging, async, environment). Packages under `pkg/`
+  import the ROOT only — the tier is FLAT. Validation and environment keep
+  their useful namespaces; cryptids means "cryptography tidbits".
 - **`capabilities/`** — behavioral ports + the observable policy that
   goes with them, pinned by conformance tests (cacher, tracing, email,
-  notify, oauth, filestorage, ratelimiter, events, work). A capability
+  notify, oauth, filestorage, ratelimiter, events, work, transaction). A capability
   MAY ship a first-party stdlib default (`cacher.Memory`, `email.Console`),
   or its implementation of record may live in an integration
   (`oauth` → `integrations/oauth/*`) or a pocket
   (`work` → `pockets/jobs`) — defaults are optional, not definitional
   (sdk-work-protocol, 2026-07-13).
-  Capabilities import root + foundation and NEVER each other;
-  capability×capability composition leaves sdk as a composing
-  integration (`integrations/notify/mailer` is the exemplar), and a
-  capability's web middleware lives in the CAPABILITY (cacher.Pages,
+  Capabilities import root + pkg and their own subsystem subpackages.
+  For example, notify/email provides typed email within notify and adapts it into
+  a selected Delivery. Different capabilities do not import each other. A
+  capability's web middleware lives with the capability (cacher.Pages,
   tracing.Middleware), never in web.
-- **`pocket/`** — the one sanctioned composition package.
 
-Guard G12 enforces all of it over production code (tests exempt — two
-deliberate env round-trip tests are the reason the exemption exists).
+The shared host/pocket contract lives in the separate `pockets` module, which
+depends on SDK. SDK never imports it.
+
+Guard G12 enforces these boundaries in both production and test code.
 
 ## The import rule
 
@@ -66,7 +58,7 @@ and the *concrete dependency* in `integrations/`:
 
 - the libSQL driver + `database/sql` plumbing live in
   `integrations/datastores/turso`, never in `sdk`.
-- `sdk/foundation/web.Render` takes a local `Renderer` interface; `templ.Component`
+- `sdk/pkg/web.Render` takes a local `Renderer` interface; `templ.Component`
   satisfies it implicitly, so `templ` stays out of `sdk`.
 
 Enforced by `make check`.
@@ -79,19 +71,21 @@ describe *behavior*.
 | Layer | Rule | Examples |
 |---|---|---|
 | Port (interface) | role/capability, `-er` suffix where it reads naturally — **never** `Port` | `Storer`, `SignedURLer`, `ResumableUploader`, `Resolver` |
-| Service (the type apps use) | domain noun | `Cache`, `FileStore`, `RateLimiter` |
+| Service (when shared behavior needs a struct) | domain noun | `Cache` |
 | Adapter (implementation) | the technology; the package name carries the "adapter" meaning | `redis`, `gcs` |
 
-"Port-ness" is conveyed by **position** — it's the interface the service struct
-*accepts* — not by the name. A port that some backends can't fully implement
-should be **segregated** into optional capability interfaces rather than forcing
+A port describes what its consumer accepts. A capability does not need a
+service wrapper when callers can use the adapter through that interface. A port
+that some backends can't fully implement should be **segregated** into optional capability interfaces rather than forcing
 `ErrNotSupported` stubs (see `filestorage`: `Storer` + `ResumableUploader` +
 `SignedURLer`). Consumers may still declare their own narrow interface locally
 for the subset they use; Go satisfies it implicitly.
 
 ## Admission policy — what belongs in sdk
 
-Promote a concern into `sdk` only when **all** hold:
+For a replaceable capability or service, require **all** of the following.
+Small root primitives use the root-admission criteria above; they do not need an
+artificial interface or multiple implementations.
 
 1. **Plurality or test-seam** — two+ real implementations exist or are genuinely
    foreseen, or it must be faked across many packages in tests.
@@ -110,32 +104,31 @@ interface).
 
 | package | concern |
 |---|---|
-| `config` | `.env` + environment loading (an unquoted ` #` starts an inline comment; quote values that contain it), plus `ParseEnvTags` struct population from `env:`/`default:`/`required:` tags (no deps) — descends into untagged nested structs, and treats an empty value (`KEY=`) as not provided so a pre-seeded field or `default:` survives a copied env template; `Secret`/`DecodeSecret` read a hex-encoded secret with a minimum-length floor (unset/empty → nil so the host applies its posture; `ErrSecretEncoding`/`ErrSecretUnderMinimum`); also the **canonical deployment posture** — `Mode` (`ModeDevelopment`/`ModeProduction`), `ValidateMode`, `ParseMode`, `ErrModeRequired`/`ErrModeInvalid`. A REQUIRED enum with no default, so nothing silently inherits the permissive posture. It reads **no** environment variable implicitly: the host names the key (`APP_MODE`, `AUTH_RUNTIME_MODE`, …) and passes the value to `ParseMode`. Staging/preview/CI map onto the two postures (normally production) — a third value would have no defined rules. `pockets/authentication`'s `RuntimeMode` is a type ALIAS of this, so app-wide code names the posture without importing a pocket |
-| `logging` | `slog` setup + request/trace/span-id-from-context handler |
-| **root `package sdk`** (the kernel) | transport-agnostic sentinel errors (`ErrNotFound`, …) plus the write-fault vocabulary in `faults.go` (`Violation`, `ValidationError` — the collect-every-problem refusal with `Add`/`Err`, unwrapping `ErrInvalidInput`; `Refuse`/`UnknownReference`; the `Code*` strings; `StaleError` unwrapping `ErrConflict` and carrying the current CAS token). `Error()` is pointer-only on both fault types — a value receiver would make `errors.As` miss a value-stored error |
-| `web` | generic HTTP primitives: handler/route groups + verb sugar, middleware (request-id, tracing, logger, panic recovery, CORS, default headers, `NoStore` — place `Tracing` outer of `Logger` so the traced context reaches the access log line and `RecordError` keeps landing on Logger's writer), error→status mapping, response helpers (SSR + JSON kit), request decoding (`DecodeJSON` + auto-validate; `ReadBody` is the strict write-side reader — one JSON object, declared keys only, bounded by `DefaultBodyLimit`, every undeclared key a named `unknown_field` 400 — with non-short-circuiting typed getters whose single terminal check is `Body.Err()`), the write faults on the wire (`ErrStale` → 409 `"stale"` + `current_updated_at`; `ErrValidation` and `ErrFromDomain` both render `*sdk.ValidationError` through one helper, and `ErrFromDomain` recognizes exactly three explicit wire-text contracts — `SafeDomainError`, `sdk.ValidationError`, `sdk.StaleError` — by concrete type, in that pinned order), SSE streaming, static/SPA file server, app-driven OpenAPI 3.1 builder, page caching, and the `templ` render seam; `ServerConfig` (env-tagged listen address + timeouts, plus `TrustedProxyCount` for `TrustProxies` and `PublicBaseURL`/`Origin()` — the externally visible scheme+host+port, `http://HOST:PORT` when unset) |
-| `crud` | optional generic CRUD contract (`Reader[T,F]`/`Writer`/`CRUD`), `Page`/`ListRequest` with two pagination modes (bidirectional keyset cursors — the default — and limit/offset), per-aggregate ordering allow-lists, opt-in total counts (`WithCount` → `Page.Total`), strict-or-clamping limit parsing (`ParseListQuery` is the transport-edge parser over `url.Values` and the exported `QueryKey*` keys, delegating to `ParseListRequest`; every rejection from it and from `ParseOrder` wraps `sdk.ErrInvalidInput` with its sentence preserved, so `web.ErrFromDomain` answers 400 and `web.ErrValidation` puts the sentence on the wire), `Validate` store-edge mode check, `MapPage`/`MapPageErr` row→domain bridging (the latter for mappers that validate and can fail), `Items`/`MapItems` bounded-page constructors for a parent-scoped, uncursored list (`MapItems` is `MapPage(Items(x), fn)`, the one nil-normalization site: `Items`, `MapItems`, `TrimPage`, `MapPage`, and `MapPageErr` all turn nil items into `[]`, so an empty page marshals `"items":[]` and never `null` — a directly constructed `Page[T]{}` is caller-owned and still marshals `null`), cursor codec; the WRITE side is `Field[T]`/`Some`/`Overlay` — the sparse-PATCH representation and its fold, where the zero value is absent/unchanged and the nullable rule is normative (`Field[*T]` for a nullable column, `Some[*T](nil)` the explicit clear; `Field[T]` for NOT NULL) — with the faults in the kernel (`sdk.ValidationError`/`sdk.StaleError`) and the strict body reader in `web` (crud may never import `net/http`, G21); the package doc carries the normative mode/count matrix and the `limit`/`cursor`/`offset`/`count`/`order` query-param vocabulary; every `Page` field except `items` is omitempty, so clients read an absent `has_more`/`next_cursor` as false/empty (the normal end-of-list signal); **search** is the twin of ordering — an aggregate declares `[]SearchField` beside its `OrderFields`, the edge parses `q` into `ListRequest.Search`, and `MatchesSearch` is the shared LITERAL-substring/ASCII-fold oracle both SQL connectors are pinned against (a term's contents are never invalid; a term against a list with no searchable fields is `sdk.ErrInvalidInput`) |
-| `slug` | pure URL-safe slug generation with accent folding (no domain knowledge) |
-| `email` | `Sender`/`Message` port — wired defaults `SMTP` (`net/smtp`, multipart text+HTML) and `Console` (dev logger); optional template layer (`TemplateRegistry`/`Emailer` with layered `LayerInfra`/`LayerCore`/`LayerApp` layouts + branding — a pocket registers its defaults at `LayerCore`, a host overrides at `LayerApp`); optional production-safety metadata (`CapabilityReporter`/`Capabilities{TransportSecurity, DevelopmentOnly}` — a consumer fail-closes in production on a `DevelopmentOnly` or metadata-less Sender; `Console` is `DevelopmentOnly`, `SMTP` is production-capable) **and the enforcement helper that owns that rule** (`CheckSender(environment.Mode, Sender) (TransportPosture, error)` + `InspectSender`; production rejects with `ErrInsecureTransport`, development returns a posture whose `ProductionCapable()` tells the caller whether to warn — no logger parameter, because message text is a composition concern); SendGrid backend in `integrations/email/sendgrid` |
-| `validation` | composable field validators (`Required`, `Email`, `UUID`, `PasswordStrength`, …) + `Errors` accumulator; composes with `web.FieldErrors.AddErr` (doc-only, no import edge) |
-| `async` | bounded fire-and-forget goroutine pool for request-scoped side work — no polling, no jobs (that's `workers`) |
-| `conversion` | representation utilities: `Ptr`/`Deref` generics, acronym-aware case conversion (custom acronyms via the immutable `Caser`), strict/flexible datetime parsing, nil-safe JSON helpers, `Overlap` |
-| `tracing` | minimal span port (`Tracer`/`SpanFinisher`) + `Noop` default — OpenTelemetry backend in `integrations/tracing/otel` (stdout/OTLP-gRPC exporters) |
-| `cryptids` | identifier generation: the zero-arg `GenerateFunc` port + `IDGenerator` (zero value = nanoid-shaped default: 21 chars, confusion-free alphabet; `NanoID(alphabet, size)` for custom shapes; `Database` delegates key generation to the store via the empty-ID convention; google/uuid backend in `integrations/cryptids/google-uuid`) — plus `Encrypter` port + `AESGCM` default, `SHA256Hasher` (API keys — never passwords), `JWTSigner` port — golang-jwt backend in `integrations/cryptids/golang-jwt` |
-| `oauth` | OAuth 2.0/OIDC `Provider` port + PKCE S256 helper — providers live in `integrations/oauth/*` (no vendor-neutral default exists) |
-| `events` | in-process event bus port (`Bus`/`Broadcaster`/`Emitter`/`TypedHandler[T]`) + `Memory` default, `Noop`, `WakeChannel` — with `eventstest` conformance suite; the durable-outbox + SSE-gateway consumer is `pockets/events` |
-| `identity` | request-identity **vocabulary + the Resolver port** (A-I1, 2026-07-07; grown at identity-resolution, 2026-07-10): `Principal{Type, ID}`, `Address{Kind, Value}` (`KindEmail`/`KindPhone`, kinds open), `Info{Principal, DisplayName, Addresses}` (a display/contact PROJECTION — **no User struct enters sdk, ever**: the record stays pocket-owned), `Resolver` (one method, fail-closed on the errs not-found class; no default — identity data is pocket-owned, the sdk/capabilities/oauth posture; `pockets/authentication` is the first implementation), strict positional `ResolveAll`, `WithPrincipal`/`FromContext`. No middleware, no authorization vocabulary |
-| `notify` | delivery **port** (identity-resolution, 2026-07-10): `Notifier{Kind() string; Notify(ctx, identity.Address, Message)}` — a host wires one Notifier per address kind it supports; the wired set DEFINES the host's supported kinds (deny-by-absence per kind). Ships `Console` (any kind, dev default) + `MailerBridge` (email kind over an `email.Sender`, From at construction). Optional production-safety metadata mirrors email's (`CapabilityReporter`/`Capabilities{TransportSecurity, DevelopmentOnly}` — a consumer fail-closes in production on a `DevelopmentOnly` or metadata-less Notifier; `Console` is `DevelopmentOnly`), with the matching enforcement helper `CheckNotifier(environment.Mode, Notifier) (TransportPosture, error)` + `InspectNotifier` and `ErrInsecureTransport`. A Notifier fails loudly, never silently drops. Provider integrations (`integrations/notify/<tech>`) are demand-gated |
-| `cacher`, `filestorage` | facility ports — wired defaults `cacher.Memory` (used by every example) and `filestorage.Disk` (used by `examples/cms`; `examples/minimal` leaves blob storage unset); GCS/S3 backends in `integrations/filestorage/{gcs,s3}` |
-| `ratelimiter` | facility port — wired default `ratelimiter.Memory` (D6/phase-2); first real consumer is `pockets/authentication`'s login-attempt limiting; `Acquire` is the blocking counterpart for workers (waits on `RetryAfter` instead of rejecting — no separate throttler port) |
-| `workers` | facility: worker pool (adaptive polling, coalesced wake channel, middleware, panic recovery, graceful drain, a Debug per-idle-iteration line + opt-in INFO idle heartbeat — `WithHeartbeat(interval)`, zero/off by default) + generic `Runner[T Job]` (claim → hooks → process → complete/fail); first consumer is `pockets/jobs`' runtime |
-| `work` | the keyed-work submission **protocol** (sdk-work-protocol, 2026-07-13): typed lifecycle `Status` with the frozen seven-value vocabulary (`pending`/`running`/`completed`/`failed`/`dead_letter`/`canceled`/`superseded`; `failed` is NON-terminal — retryable; `Terminal()`/`Known()` predicates), segregated consumer ports `Enqueuer` (idempotent keyed admission), `Replacer` (optional atomic replace/supersede), `StatusReader` (deterministic latest-by-key), opaque `[]byte` payload — NO default implementation (the oauth posture); the implementation of record is `pockets/jobs`; `worktest` ships the conformance suite. Executor-side (claim/lease/checkpoint/fencing) stays in `foundation/workers` + the jobs domain |
+| `environment` | Checked single-line dotenv loading; `ParseEnvTags` for typed config with env > nonzero field > default precedence (empty env counts as absent); `Secret`/`DecodeSecret` for hex secrets with a minimum-byte floor; explicit `Mode` deployment posture and validation. Hosts own missing-secret policy and choose the mode key. See [package docs](../workshop/documentation/docs/sdk/pkg.md#environment-and-deployment-posture) for parsing and precedence rules. |
+| `logging` | `New(Options)` returns standard `*slog.Logger` with automatic request/trace/span IDs from context; `ContextHandler` wraps custom handlers. Empty/unknown options default to INFO, JSON, and STDERR. |
+| **root `package sdk`** | Error/fault vocabulary; request/trace/span context; `Principal`, identity info/address/resolver and principal context; `IDGenerator`/`NanoID`/`DatabaseID`; `Deref`/`DerefOr`; `Slugify`. See the [root API guide](../workshop/documentation/docs/sdk/overview.md#root-api). |
+| `web` | ServeMux routing/groups, JSON decoding/responses and domain-error mapping, HTML Renderer/Template, HTTP middleware/status/error recording, SSE, static/SPA serving and server lifecycle. Hosts own middleware configuration, body limits and OpenAPI documents; caching/tracing middleware live in their capabilities. |
+| `list` | `Request`, `Page[T]`, per-resource `Limits`, cursor/offset pagination, ordering/search allow-lists, strict query parsing and row mapping. See the [listing contract](../workshop/documentation/docs/sdk/pkg.md#listing-vocabulary). Domain packages own repository methods and update inputs. |
+| `transaction` | Capability exposing `Transactor`; SQL and Firestore connectors implement it. Repositories must participate through the callback context. The callback may retry; external effects follow a successful return. |
+| `notify/email` | Typed `Message`/`Sender`, SMTP and development Console; `NewDelivery(sender, message)` preserves full HTML/text for an explicit `notify.Send` call. Optional `NewRenderer` and `Emailer` retain layered content/layouts and branding. Plain-text templates use text/template and are required. SMTP honors cancellation and encodes MIME; SendGrid lives in `integrations/email/sendgrid`. |
+| `validation` | explicit field checks (`Required`, `Email`, `UUID`, `MinLength`, …) return optional `*sdk.Violation` data; collect with `sdk.ValidationError.AddViolation` and return `Err()` from DTO or domain validation. Length checks count Unicode code points; optional pointer checks skip nil and use the scalar rule. Password policy belongs to authentication or the host |
+| `async` | bounded in-process task pool; explicit admission and `Close(ctx)` drain. Tasks may outlive a request; no persistence or automatic task cancellation |
+| `tracing` | minimal span port (`Tracer`/`SpanFinisher`), optional HTTP metadata seams + `Noop` default — OpenTelemetry backend in `integrations/tracing/otel` (stdout/OTLP-gRPC exporters) |
+| `cryptids` | `Encrypter` with `AESGCM`, the `SHA256` digest function, and `JWTSigner`; JWT implementation lives in `integrations/cryptids/golang-jwt` |
+| `oauth` | OAuth 2.0/OIDC `Provider` port, explicit authorization request, optional OIDC/refresh + PKCE S256 helper — providers live in `integrations/oauth/*` (no vendor-neutral default exists) |
+| `events` | bounded notifications (`Emitter`/`Subscriber`/`Bus`), explicit local `Memory.Dispatch`, `Record`/`RemoteEvent` envelope with stable identity, `Noop`, `TypedHandler`, and `WakeChannel`; Redis has checked `Publish` and separate `SubscribeWork`. `eventstest` verifies the common notification contract; `pockets/events` supplies outbox polling + SSE |
+| `notify` | `Delivery`, `DeliveryFunc` and `Send(ctx, deliveries...)`: caller-selected sequential delivery, ordinary failures collected by index, cancellation skips remaining work. No registry, identity routing or implicit retries. `SendError` preserves causes and attempted/skipped failures. Shared `Capabilities`, `InspectTransport` and `CheckTransport` own production posture; body Console is development-only. |
+| `cacher` | owned byte storage, optional literal prefix deletion, bounded Memory/Noop, namespaced Cache with JSON/load helpers, and public HTML Pages; Redis in `integrations/kvstores/goredis`. Hosts own TTL, scope, error reporting and invalidation. [Cache contract and examples](../workshop/documentation/docs/sdk/capabilities.md#caching-application-data-and-public-pages) |
+| `filestorage` | seven-operation `Storer`, portable key/range/error rules, optional signed URLs and client PUT sessions; confined, staged `Disk` default with host-owned `Close`; GCS/S3 integrations. Use the adapter directly; no FileStore wrapper. [Storage contract and ownership](../workshop/documentation/docs/sdk/capabilities.md#file-storage-and-object-ownership) |
+| `ratelimiter` | keyed `Allower` admission and `Limiter` reset, bounded `NewMemory(opts ...MemoryOption)` with `WithMaxEntries`, host-configured HTTP middleware, and blocking `Acquire` for workers; shared two-window approximation with Redis/Postgres |
+| `workers` | Generic polling Pool, worker middleware, and `Runner`/`FencedRunner` over host-supplied store interfaces. Job middleware wraps processing with explicit defer/reject outcomes. Jobs supplies one queue implementation; custom queues need only SDK. [Execution contract](../workshop/documentation/docs/sdk/pkg.md#workers-versus-jobs) |
+| `work` | the keyed-work submission **protocol** (sdk-work-protocol, 2026-07-13): typed lifecycle `Status` with the frozen seven-value vocabulary (`pending`/`running`/`completed`/`failed`/`dead_letter`/`canceled`/`superseded`; `failed` is NON-terminal — retryable; `Terminal()`/`Known()` predicates), segregated consumer ports `Enqueuer` (idempotent admission under a nonempty logical key), `Replacer` (optional atomic replace/supersede), `StatusReader` (deterministic latest-by-key), opaque `[]byte` payload — NO default implementation (the oauth posture); the implementation of record is `pockets/jobs`; `worktest` ships the conformance suite. Executor-side (claim/lease/checkpoint/fencing) stays in `pkg/workers` + the jobs domain |
 | `pocket` | the host↔pocket pluggability contract (`Mount`, `RouteRegistrar`) — see [ARCHITECTURE.md](../ARCHITECTURE.md)'s Pockets section and the full charter, [pockets/README.md](../pockets/README.md) |
 
 ## Not responsible for
 
 - **CMS-specific** HTTP transport: the route table, concrete handlers, and the
-  `templ` views live in `pockets/cms/internal/http`. `sdk/foundation/web` owns only the
+  `templ` views live in `pockets/cms/internal/http`. `sdk/pkg/web` owns only the
   reusable transport primitives above (middleware, response/error helpers,
   server config types, the render seam) — it never knows an app's routes or
   pages.

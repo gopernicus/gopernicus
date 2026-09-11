@@ -5,18 +5,15 @@
 // as firestoredb) owns how to talk to Firestore, and the HOST owns the
 // database's lifecycle and its index deployment.
 //
-// The adapter fills ALL EIGHTEEN slots of auth.Repositories — the identity,
-// credential, session, machine-identity, audit, invitation, challenge, and
-// atomic-redemption ports — and [Repositories] returns them wired, exactly as
-// the pgx and turso siblings do. Whether a port MOUNTS anything is the host's
-// Config decision, never this constructor's.
+// Repositories wires every repository slot, but several operations still return
+// errNotImplemented. README.md lists supported capabilities; a non-nil slot is
+// not proof of implementation. Enable only capabilities supported by this adapter.
 //
 // # Two family differences a host is choosing when it picks this store
 //
 // This store does NOT join an ambient transaction (milestone ruling R1). A
 // Firestore transaction requires every read to precede every write and never
-// observes its own pending writes, so the ambient-join guarantee the two SQL
-// families provide cannot be honored natively. A method whose context carries a
+// observes its own pending writes. A method whose context carries a
 // connector transaction fails loud with [ErrAmbientTransactionUnsupported]
 // rather than quietly running on the client beside the host's transaction. The
 // authentication pocket has no RunTransactional conformance family, so R1 shows

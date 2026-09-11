@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gopernicus/gopernicus/sdk/foundation/cryptids"
+	"github.com/gopernicus/gopernicus/sdk"
 )
 
 // canonical asserts the 8-4-4-4-12 lowercase text form and returns the version
@@ -61,9 +61,9 @@ func TestUniqueness(t *testing.T) {
 }
 
 // TestWiresAsIDGenerator proves the decided-once wiring shape a host uses:
-// cryptids.NewGenerator(googleuuid.V7()) on a pocket's Config.IDs.
+// sdk.NewIDGenerator(googleuuid.V7()) on a pocket's Config.IDs.
 func TestWiresAsIDGenerator(t *testing.T) {
-	gen := cryptids.NewGenerator(V7())
+	gen := sdk.NewIDGenerator(V7())
 	s := gen.MustGenerate()
 	if v := canonical(t, s); v != '7' {
 		t.Errorf("version nibble = %c, want 7 (%q)", v, s)

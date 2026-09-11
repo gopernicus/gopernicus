@@ -45,7 +45,7 @@ the core (`pockets/authorization v0.8.0`).
 
 **Baseline writes join the ambient transaction.** When the context handed to a
 `relationship.Storer` or `role.Storer` method carries the connector's
-Transact-owned transaction (`crud.Transactor` — `(*pgxdb.DB).Transact` /
+Transact-owned transaction (`transaction.Transactor` — `(*pgxdb.DB).Transact` /
 `(*tursodb.DB).Transact`), every method of both bundled SQL stores — reads and
 writes — now runs ON that transaction (`QuerierFrom(ctx)`), and
 `SetRelationTargets` reconciles on it instead of opening its own. A host's
@@ -166,7 +166,7 @@ deploying: *would this v1 data gain, lose, or retain access under v3?*
 
 AZ3-5.1 executed this runbook end to end against a populated v1 fixture on live
 PostgreSQL (C-collation scratch database) and libSQL/SQLite, and BOOTED a
-v3-composed `authorization.Service` over the converted PostgreSQL store to verify
+v3-composed `decisions.Service` over the converted PostgreSQL store to verify
 the gain/lose/retain verdicts hold. The executed evidence — commands, detection
 outputs, repair statements, post-boot access comparison, and rollback
 demonstration — is recorded in [Executed evidence](#executed-evidence-az3-51-2026-07-14)
@@ -521,7 +521,7 @@ recorded the `authorization` files under. `examples/auth-cms` needs none of this
 
 This runbook was executed end to end against a populated v1 fixture on both
 dialects. The PostgreSQL leg additionally **booted** a v3-composed
-`authorization.Service` over the converted store and compared access. The
+`decisions.Service` over the converted store and compared access. The
 repeatable form of the boot + access comparison is
 `pockets/authorization/stores/pgx` `TestUpgradeRunbook` (env-gated on
 `POSTGRES_TEST_DSN`, hermetic-skippable, fully re-runnable — it owns and drops the

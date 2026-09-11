@@ -12,7 +12,7 @@ import (
 	"testing"
 
 	auth "github.com/gopernicus/gopernicus/pockets/authentication"
-	"github.com/gopernicus/gopernicus/pockets/authentication/storetest"
+	"github.com/gopernicus/gopernicus/pockets/authentication/stores/storetest"
 )
 
 // TestConformance runs the auth storetest suite against authmem.

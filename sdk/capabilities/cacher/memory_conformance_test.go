@@ -17,3 +17,7 @@ import (
 func TestMemory_Conformance(t *testing.T) {
 	cachertest.Run(t, func(t *testing.T) cacher.Storer { return cacher.NewMemory() })
 }
+
+func TestMemory_PrefixConformance(t *testing.T) {
+	cachertest.RunPrefix(t, func(t *testing.T) cacher.Storer { return cacher.NewMemory() })
+}

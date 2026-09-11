@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	"github.com/gopernicus/gopernicus/sdk"
-	"github.com/gopernicus/gopernicus/sdk/foundation/slug"
 )
 
 // FieldDef declares one custom field of a content type: its storage key, its
@@ -53,7 +52,7 @@ type ContentType struct {
 // from the plural display name (e.g. "Articles" → "articles"). Admin lives at
 // /{AdminBase}, /{AdminBase}/new, /{AdminBase}/{id}/edit, etc.
 func (c ContentType) AdminBase() string {
-	return slug.Make(c.Plural)
+	return sdk.Slugify(c.Plural)
 }
 
 // PublicBase returns the URL prefix segment for this routable type's public
@@ -67,7 +66,7 @@ func (c ContentType) PublicBase() string {
 	if c.Hierarchical {
 		return ""
 	}
-	return slug.Make(c.Plural)
+	return sdk.Slugify(c.Plural)
 }
 
 // DefaultTemplate returns the type's default template name (Templates[0]), or

@@ -43,8 +43,11 @@ const MigrationsDir = "migrations"
 // not applied before boot — so the failure surfaces at wiring time, before the
 // host serves traffic, rather than on the poller's first read. It does NOT touch
 // migrations: the host owns and applies the schema (see ExportMigrations).
-func New(db *tursodb.DB) (*Store, error) {
-	if err := probeOutboxTable(context.Background(), db); err != nil {
+func New(ctx context.Context, db *tursodb.DB) (*Store, error) {
+	if db == nil {
+		return nil, fmt.Errorf("events outbox: database is required: %w", sdk.ErrInvalidInput)
+	}
+	if err := probeOutboxTable(ctx, db); err != nil {
 		return nil, err
 	}
 	return &Store{db: db}, nil

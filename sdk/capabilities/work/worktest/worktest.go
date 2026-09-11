@@ -5,7 +5,7 @@
 // Run(t, newHarness) runner so implementations are verified against one shared
 // behavioral contract. Imports stdlib + the sdk root + sdk/capabilities/work
 // only (sdk stays dependency-free per the constitution), never another
-// capability or sdk/pocket.
+// capability or pockets.
 //
 // Return values alone cannot prove a queue admitted no hidden duplicate or that
 // a replacement retired the prior generation, so the suite drives a TEST-ONLY
@@ -20,6 +20,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"sync"
 	"testing"
 
 	"github.com/gopernicus/gopernicus/sdk"
@@ -59,6 +60,31 @@ type Inspector interface {
 // instance obtained from newHarness for each subtest.
 func Run(t *testing.T, newHarness func(t *testing.T) (Queue, Inspector)) {
 	t.Helper()
+	t.Run("EmptyKeyRejected", func(t *testing.T) {
+		q, insp := newHarness(t)
+		if _, err := q.EnqueueOnce(context.Background(), "kind", "", nil); !errors.Is(err, sdk.ErrInvalidInput) {
+			t.Fatalf("empty enqueue: %v", err)
+		}
+		if _, err := q.LatestStatusByKey(context.Background(), ""); !errors.Is(err, sdk.ErrInvalidInput) {
+			t.Fatalf("empty status: %v", err)
+		}
+		if got := executions(t, insp, ""); len(got) != 0 {
+			t.Fatal("invalid key admitted work")
+		}
+	})
+	t.Run("ConcurrentEnqueueOnce", func(t *testing.T) {
+		q, insp := newHarness(t)
+		const key = "suite-concurrent-enqueue"
+		ids := concurrentAdmissions(t, func(int) (string, error) { return q.EnqueueOnce(context.Background(), "kind", key, []byte("original")) })
+		for _, id := range ids {
+			if id == "" || id != ids[0] {
+				t.Fatalf("concurrent IDs = %v", ids)
+			}
+		}
+		if got := executions(t, insp, key); len(got) != 1 {
+			t.Fatalf("admitted %d executions", len(got))
+		}
+	})
 
 	t.Run("EnqueueOnceIdempotentWhileActive", func(t *testing.T) {
 		q, insp := newHarness(t)
@@ -86,6 +112,38 @@ func Run(t *testing.T, newHarness func(t *testing.T) (Queue, Inspector)) {
 // obtained from newHarness for each subtest.
 func RunReplace(t *testing.T, newHarness func(t *testing.T) (ReplaceQueue, Inspector)) {
 	t.Helper()
+	t.Run("EmptyReplaceKeyRejected", func(t *testing.T) {
+		q, insp := newHarness(t)
+		if _, err := q.Replace(context.Background(), "kind", "", nil); !errors.Is(err, sdk.ErrInvalidInput) {
+			t.Fatalf("empty replace: %v", err)
+		}
+		if got := executions(t, insp, ""); len(got) != 0 {
+			t.Fatal("invalid replacement admitted work")
+		}
+	})
+	t.Run("ConcurrentReplaceAndEnqueue", func(t *testing.T) {
+		q, insp := newHarness(t)
+		const key = "suite-concurrent-replace"
+		concurrentAdmissions(t, func(i int) (string, error) {
+			if i%2 == 0 {
+				return q.Replace(context.Background(), "kind", key, []byte("replacement"))
+			}
+			return q.EnqueueOnce(context.Background(), "kind", key, []byte("original"))
+		})
+		got := executions(t, insp, key)
+		if countStatus(got, work.StatusPending) != 1 {
+			t.Fatalf("active generations: %+v", got)
+		}
+		for _, e := range got {
+			if e.Status != work.StatusPending && e.Status != work.StatusSuperseded {
+				t.Fatalf("unexpected generation: %+v", e)
+			}
+		}
+		status, err := q.LatestStatusByKey(context.Background(), key)
+		if err != nil || status != work.StatusPending {
+			t.Fatalf("latest = %v, %v", status, err)
+		}
+	})
 
 	t.Run("ReplaceFreshDistinctExecution", func(t *testing.T) {
 		q, insp := newHarness(t)
@@ -115,7 +173,7 @@ func testEnqueueOnceIdempotentWhileActive(t *testing.T, q Queue, insp Inspector)
 		t.Fatal("first EnqueueOnce() executionID = \"\", want non-empty")
 	}
 
-	second, err := q.EnqueueOnce(ctx, kind, key, []byte("payload"))
+	second, err := q.EnqueueOnce(ctx, "different-kind", key, []byte("changed payload"))
 	if err != nil {
 		t.Fatalf("second EnqueueOnce() error = %v", err)
 	}
@@ -129,6 +187,9 @@ func testEnqueueOnceIdempotentWhileActive(t *testing.T, q Queue, insp Inspector)
 	}
 	if execs[0].ExecutionID != first {
 		t.Errorf("sole execution ID = %q, want %q", execs[0].ExecutionID, first)
+	}
+	if !bytes.Equal(execs[0].Payload, []byte("payload")) {
+		t.Fatal("idempotent admission replaced active payload")
 	}
 }
 
@@ -243,7 +304,9 @@ func testReplaceFreshDistinctExecution(t *testing.T, q ReplaceQueue, insp Inspec
 		t.Fatalf("EnqueueOnce() error = %v", err)
 	}
 
-	replaced, err := q.Replace(ctx, kind, key, []byte("v2"))
+	payload := []byte{0xff, 0, 1}
+	wantPayload := bytes.Clone(payload)
+	replaced, err := q.Replace(ctx, kind, key, payload)
 	if err != nil {
 		t.Fatalf("Replace() error = %v", err)
 	}
@@ -253,8 +316,14 @@ func testReplaceFreshDistinctExecution(t *testing.T, q ReplaceQueue, insp Inspec
 	if replaced == original {
 		t.Errorf("Replace() executionID = %q, want distinct from the original %q", replaced, original)
 	}
+	payload[0] = 0
 
 	execs := executions(t, insp, key)
+	for _, e := range execs {
+		if e.ExecutionID == replaced && !bytes.Equal(e.Payload, wantPayload) {
+			t.Fatal("replacement did not own opaque payload bytes")
+		}
+	}
 	if got := statusOf(execs, original); got != work.StatusSuperseded {
 		t.Errorf("original execution status = %q, want %q", got, work.StatusSuperseded)
 	}
@@ -301,6 +370,14 @@ func testReplaceRepeatedSupersedesToLatest(t *testing.T, q ReplaceQueue, insp In
 		}
 
 		execs := executions(t, insp, key)
+		if len(execs) != gen+1 {
+			t.Fatalf("generation count = %d, want %d", len(execs), gen+1)
+		}
+		for _, e := range execs {
+			if e.ExecutionID != fresh && e.Status != work.StatusSuperseded {
+				t.Fatalf("old generation survived: %+v", e)
+			}
+		}
 		if pending := countStatus(execs, work.StatusPending); pending != 1 {
 			t.Errorf("after gen %d: pending generations = %d, want exactly 1", gen, pending)
 		}
@@ -351,4 +428,25 @@ func countStatus(execs []Execution, status work.Status) int {
 		}
 	}
 	return n
+}
+
+func concurrentAdmissions(t *testing.T, admit func(int) (string, error)) []string {
+	t.Helper()
+	const count = 12
+	ids := make([]string, count)
+	errs := make([]error, count)
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for i := range count {
+		wg.Add(1)
+		go func() { defer wg.Done(); <-start; ids[i], errs[i] = admit(i) }()
+	}
+	close(start)
+	wg.Wait()
+	for i, err := range errs {
+		if err != nil || ids[i] == "" {
+			t.Fatalf("admission %d = %q, %v", i, ids[i], err)
+		}
+	}
+	return ids
 }

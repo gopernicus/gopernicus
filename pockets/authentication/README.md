@@ -21,7 +21,7 @@ two explicit modes — durable generic **jobs** or a bounded ephemeral
 **credential/identifier management suite** (revision-serialized mutations),
 **passwordless** email/phone login, a
 fail-closed **production runtime posture**, and an **optional HTML/templ surface**
-mounted over the unchanged JSON API. `Config.Views == nil` keeps the pocket
+mounted over the unchanged JSON API. `BrowserConfig.Views == nil` keeps the pocket
 JSON-only with no view technology in the host graph; a non-nil `Views` adds HTML
 GET pages + form handling without touching a single JSON contract.
 
@@ -31,47 +31,138 @@ Designs of record: `.claude/plans/restructure/auth-pocket-design.md` (v1),
 D1–D8), and `.claude/plans/roadmap/auth-v3-identity-design.md` (v3, the identity
 milestone — executed through `.claude/plans/authv3/`).
 
-## Layout (the trio — see `pockets/README.md` §2 for the full contract)
+## Authentication audit adoption
 
+The current changes and custom-store migration are recorded in
+[AUDIT-022](../../AUDIT.md#audit-022-authentication-proof-lifecycle-and-host-api).
+Upgrade core and adapters together; apply invitation migration `0018` before the
+new binary, and stop old authentication writers during the cutover.
+
+Credential writes and session admission share `users.auth_revision`:
+`Passwords.Change` validates the expected revision and hash, atomically changes
+the credential and revokes sessions/grants/reset proofs. Every service session
+mint uses `ActiveSessions.CreateForActiveUser` with its proof's expected revision.
+A login that read an old password cannot recreate a session after reset. Existing
+sessions need no new column; normal stateless access-token revocation latency
+still depends on the host's choice of live or stateless middleware.
+
+Passwordless, recovery and credential-management proofs for an existing account
+carry the credential revision under which they were issued. A later credential change invalidates that proof;
+completion cannot retry against the newer revision. Identifier confirmation also
+requires the same live session that started it. Existing in-flight proofs must
+restart at upgrade; see the migration entry for the complete list.
+
+The public `logic/authentication.Service` exposes passwordless, method inventory,
+credential management, identifier changes and step-up operations in
+[logic/authentication](logic/authentication). Custom
+HTTP, terminal and mobile transports call these same use cases. Hosts authenticate
+the caller, supply its user/session IDs and apply application authorization.
+For a host-owned sensitive operation, call `RequireRecentAuthentication` with
+its purpose, binding and `RecentAuthPolicy`; on `ErrStepUpRequired`, collect
+password or identifier-code proof and retry. Explicit grants enforce the requested
+age and assurance as well as a live session, and are consumed once. Phone proof
+records SMS methods, not email methods.
+
+`AbuseProtectionConfig.AuthenticationLimits` configures independent subject and IP budgets for
+login/password-token issuance, password-reset starts, sensitive-code starts and
+sensitive-password proofs. Defaults per minute are 5/30, 3/20, 5/30 and 5/30
+respectively. Full zero limits select defaults; partial invalid limits fail boot.
+Subject keys contain digests; hosts supply trusted client IP context and a shared
+limiter for production. Limiter failures fail closed on these operations.
+
+A sensitive code has an operation/session/channel binding and a distinct delivery
+issuance key. Concurrent starts cannot reuse a queued message for a replaced code.
+Earlier messages may already have reached a provider; superseded codes fail.
+Challenge storage and delivery admission are separate operations: a queue failure
+is reported and the caller must start again. This does not provide a transaction
+between authentication storage, jobs and an external sender.
+
+The SQL adapters own transactions for their focused atomic repository operations;
+they do not generally join a host's ambient connector transaction. Firestore
+explicitly refuses ambient transactions and remains incomplete; see its
+[supported capability inventory](stores/firestore/README.md).
+
+## Public packages and composition
+
+| Package | Responsibility |
+|---|---|
+| `authentication` (root) | grouped options, `Repositories`, `New` and the named `Components` bundle |
+| `logic/authentication` | Credential, session, account and OAuth use cases; validated constructors with explicit prerequisites and typed options |
+| `logic/authentication/<aggregate>` | Owned entities and repository contracts for users, sessions, identifiers and credential proofs |
+| `logic/authentication/protection` | Host-keyed challenge protection and identifier digest helpers |
+| `logic/invitations` | Invitation entities, repositories, grant policy and validated constructors with explicit prerequisites and typed options |
+| `logic/delivery` | Rendering, encrypted admission, job processing and host-run delivery runtime |
+| `inbound/http` | HTTP middleware, cookies, browser policies, view ports and optional bundled routes |
+| `stores/{pgx,turso,firestore}` | Separate datastore modules; `stores/storetest` holds conformance tests |
+| `views/goth` | Optional templ view module implementing `authenticationhttp.Views` |
+
+The root contains assembly and its validation. It exposes named components without
+copying the services' method sets or their vocabulary. Disabled invitations are a
+nil `Components.Invitations`. No core imports a concrete store, and production logic
+imports neither HTTP nor the root package. Shared redirect validation and delivery
+test fixtures remain private implementation packages.
+
+In examples below, `auth` means the root package, `authlogic` means
+`logic/authentication`, `authenticationhttp` means `inbound/http`, and `delivery`,
+`invitations`, and `protection` name their respective packages above.
+
+```go
+parts, err := auth.New(repos, signer, runtimeMode, deliveryMode, options...)
+if err != nil { return err }
+// Ordinary service calls work without registering the bundled HTTP routes.
+pair, account, err := parts.Authentication.Login(ctx, address, password)
+if err != nil { return err }
+_ = pair
+_ = account
+// Mount only when the host wants the bundled API/browser routes.
+if err := parts.HTTP.Register(pockets.Mount{Router: router}); err != nil { return err }
+// The host owns the delivery process lifetime and observes its result.
+go func() { deliveryDone <- parts.Delivery.Run(ctx) }()
 ```
-authentication.go        the socket: Repositories, Config, PasswordHasher,
-                         CompromisedPasswordChecker, Granter, MemberCheck,
-                         Principal, TokenPair, Views (+ view-model aliases),
-                         Service, NewService, Register — the entire host-facing
-                         exported surface
-views.go                 public aliases re-exporting the Views port and every
-                         view model (no internal/ exposure)
-domain/                  the hexagon's public rim — entities + repository ports.
-  user/ session/         Public BY NECESSITY: hosts and store modules implement/
-  identifier/            import these across module boundaries.
-  challenge/ authgrant/  identifier is the v3 identity rail; challenge/authgrant/
-  contactchange/         contactchange/credential are the v3 atomic security
-  credential/            rails. Delivery owns NO domain here — durable delivery is
-                         the generic jobs pocket (see "Delivery execution modes").
-  oauthaccount/ oauthstate/
-  serviceaccount/ apikey/
-  passwordreset/
-  securityevent/ invitation/
-internal/
-  logic/authsvc/         the identity service — the sealed interior
-  logic/delivery/        the shared delivery processor (renderer/router, encrypted
-                         command envelope, initializer) + the bounded in_process
-                         runtime; jobs mode drives the same processor off-module
-  logic/invitationsvc/   the invitation service (built only when a Granter is wired)
-  inbound/authentication/ driving adapter: JSON handlers, the content-type
-                         dispatcher, the HTML GET/form handlers, the Views port,
-                         and the route table
-  redirect/              open-redirect guard: safe-relative-path validator +
-                         exact-match absolute allowlist
-storetest/               executable spec for domain/'s ports + the reference
-                         in-memory implementation
-stores/turso/            the outbound tier: per-dialect SQL + canonical
-stores/pgx/              migrations (0001–0016; auth owns no delivery table),
-                         each its own module
-views/goth/              the bundled default HTML surface — a SIBLING module
-                         (goth.New(bundle), the ui/goth adapter); the pocket
-                         core never imports templ or ui/goth
+
+Hosts can construct a focused service directly and supply just its HTTP credential
+port when serving custom routes:
+
+```go
+built, err := authlogic.New(logicRepos, signer, environment.ModeProduction, limiter,
+    authlogic.WithPassword(authlogic.PasswordConfig{Hasher: hasher}),
+    authlogic.WithIdentity(authlogic.IdentityConfig{IdentifierKeyer: keyer}),
+)
+if err != nil { return err }
+service := built.Service // pass built.DeliveryInitializer only to delivery processors
+httpAuth, err := authenticationhttp.NewAuthenticator(service, environment.ModeProduction,
+    authenticationhttp.WithCookies(authenticationhttp.CookieConfig{Secure: true}),
+    authenticationhttp.WithLimiter(limiter),
+)
+if err != nil { return err }
+protected := httpAuth.RequireAccessTokenLive()(accountHandler)
+_ = protected
 ```
+
+`NewAuthenticator` does not configure bundled routes; `Register` on that adapter
+returns an input error. For the full adapter, use the independently built services:
+
+```go
+httpAuth, err := authenticationhttp.New(service, environment.ModeProduction,
+    authenticationhttp.WithInvitations(invitationService), // omit when disabled
+    authenticationhttp.WithAuthenticatorPolicy(authenticationhttp.AuthenticatorPolicy{
+        Cookie: authenticationhttp.CookieConfig{Secure: true},
+        Limiter: limiter,
+    }),
+    authenticationhttp.WithBrowser(authenticationhttp.BrowserConfig{
+        AllowedOrigins: []string{"https://app.example.com"},
+    }),
+)
+if err != nil { return err }
+if err := httpAuth.Register(pockets.Mount{Router: router}); err != nil { return err }
+```
+
+`Authenticate` verifies credential proof before returning authenticated context;
+`RequireLive` validates its backing session. The SDK principal context alone never
+supplies credential proof. The HTTP adapter keeps its credential service, cookie
+configuration and resolved route policy private. Trusted administrative/invitation
+methods still require host authorization; use the policy-carrying invitation methods
+when calling from an untrusted request.
 
 ## The identifier model (design §2.2)
 
@@ -97,14 +188,14 @@ phone → strict E.164. Two partial-unique indexes encode the invariants:
 A **notification-only** address is not an authentication claim, so it may be
 *shared* — the same phone can be a notification identifier on more than one
 account (only login/recovery addresses are exclusive). Atomic writes:
-`Users.CreateWithPrimaryIdentifier` commits a user + its first identifier in one
-transaction; `Identifiers.ApplyVerifiedChange` is the revision-CAS that retires
+`Users.Provision` commits a user, first identifier and initial password or
+provider link in one transaction; `Identifiers.ApplyVerifiedChange` is the revision-CAS that retires
 the replaced/displaced rows and adds the newly verified one atomically.
 
 ## Route surface (JSON)
 
-Claimed namespace **`/auth/*`** (prefixable via `pocket.PrefixRegistrar` — a
-prefixed host MUST also set `Config.RefreshCookiePath` to the full prefixed path,
+Claimed namespace **`/auth/*`** (prefixable via `pockets.PrefixRegistrar` — a
+prefixed host MUST also set `BrowserConfig.RefreshCookiePath` to the full prefixed path,
 e.g. `/api/v1/auth`, or the browser never sends the refresh cookie to
 `/api/v1/auth/refresh`).
 JSON bodies are strictly decoded (unknown fields → 400). Optional subsystems are
@@ -122,12 +213,16 @@ API callers skip it), and sets `Cache-Control: no-store`.
 - `POST /auth/verify` — **`{email, code}`** → 200. **v3 break:** the body now
   carries `email` (the challenge rail keys the code by identifier); the pre-v3
   `{code}`-only body is a 400.
-- `POST /auth/login` — `{email, password}` → 200 + BOTH cookies. Rate-limited
-  (identifier+IP key) BEFORE credential work → 429. `RequireVerifiedEmail` →
+- `POST /auth/login` — `{email, password}` → 200 + BOTH cookies. Browser Origin
+  policy applies to JSON as well as form requests. Rate-limited
+  (independent identifier and IP budgets) BEFORE credential work → 429. `RequireVerifiedEmail` →
   an unverified login is 403.
 - `POST /auth/refresh` — rotates the presented refresh token (§1.3). Not gated;
-  rotation IS the credential. Every denial is a generic 401.
-- `POST /auth/logout` — NOT gated (§1.5) → 200 + both cookies cleared. Origin-only
+  rotation IS the credential. Browser requests pass Origin policy before rotation;
+  native no-Origin requests remain supported.
+- `POST /auth/logout` — accepts refresh proof (JSON `{refresh_token}` or cookie),
+  falling back to a verified, unexpired access token. Expired access-only proof
+  is rejected; revocation failures are reported while both cookies clear. Origin-only
   (no double-submit token, D2). Content-type dispatched like the other shared POSTs:
   a form body (Views wired) clears both cookies and **303s to `/auth/login`**; nil
   Views → 415.
@@ -169,7 +264,8 @@ API callers skip it), and sets `Cache-Control: no-store`.
   recovery** identifier (never a proposed new address).
 - `POST /auth/step-up/password` — earns a single-use grant by proving the
   current password.
-- `POST /auth/step-up/code` — earns a grant by proving a delivered code.
+- `POST /auth/step-up/code` — earns a grant by proving a delivered code. Carry
+  the same `kind` from begin to completion (`email` default, `phone` for SMS).
 
 **Credential suite (design §5.2–5.6) — all live + browser-safe:**
 
@@ -180,7 +276,7 @@ API callers skip it), and sets `Cache-Control: no-store`.
   identifier; policy-guarded, revision-CAS, revokes sessions, remints.
 - `POST /auth/oauth/{provider}/unlink/start` → `POST /auth/oauth/{provider}/unlink`
   — provider-bound code-gated unlink; a Google code can never unlink GitHub
-  (the code binds the exact provider; wrong-provider use consumes and rejects).
+  (the code binds the exact provider; another provider cannot consume its proof).
 - `POST /auth/identifiers/{email,phone}` → `.../confirm` — add/change an
   identifier: start proves an existing method (step-up) and delivers a proof code
   to the NEW address; confirm consumes the code, evaluates the credential policy,
@@ -193,7 +289,7 @@ API callers skip it), and sets `Cache-Control: no-store`.
   removing a primary auto-selects or requires a replacement; a policy-refused
   last-method removal is 409 `cannot_remove_last_method`.
 
-**Passwordless — registered only when `Config.Passwordless` is non-empty
+**Passwordless — registered only when `PasswordlessConfig.Passwordless` is non-empty
 (design §4):**
 
 - `POST /auth/passwordless/start` — `{identifier_kind, identifier, method?}` →
@@ -209,7 +305,7 @@ API callers skip it), and sets `Cache-Control: no-store`.
   current bound identifier before minting. **POST-only — no GET consumes** (a
   link scanner cannot authenticate). All failures are one generic 401.
 
-**OAuth — registered only when `Config.Providers` is non-empty:**
+**OAuth — registered only when `OAuthConfig.Providers` is non-empty:**
 
 - `GET /auth/oauth/{provider}/start` → 302 (PKCE S256, server-side state, OIDC
   nonce when supported).
@@ -233,7 +329,7 @@ authorized half mounts with the admin surface. See
 - `POST /auth/admin/users/{id}/verification/resend` — authorized; 202 + a
   secret-free receipt, or 409 `already_verified` / `user_deactivated`, or 404.
 
-**User administration — registered only when `Config.UserAdminCheck` is wired
+**User administration — registered only when `AdministrationConfig.UserAdminCheck` is wired
 (deny-by-absence; repository presence alone is NOT enough). Each route is gated
 live session → (mutations only) browser-safe Origin/CSRF → `UserAdminCheck`, and
 answers `Cache-Control: no-store`. See
@@ -241,14 +337,14 @@ answers `Cache-Control: no-store`. See
 
 | route | check action | result |
 |---|---|---|
-| `GET /auth/admin/users` | `UserAdminList` (no target) | `crud.Page[user summary]`, ordered `created_at DESC, id DESC`, with the usual `limit`/`cursor`/`offset`/`count` params. A malformed `limit`/`cursor`/`offset`/`count`/`order` answers 400 `bad_request` carrying the parser's own sentence (e.g. `cursor and offset are mutually exclusive: invalid input`), on this and every other list route |
+| `GET /auth/admin/users` | `UserAdminList` (no target) | `list.Page[user summary]`, ordered `created_at DESC, id DESC`, with the usual `limit`/`cursor`/`offset`/`count` params. A malformed `limit`/`cursor`/`offset`/`count`/`order` answers 400 `bad_request` carrying the parser's own sentence (e.g. `cursor and offset are mutually exclusive: invalid input`), on this and every other list route |
 | `GET /auth/admin/users/{id}` | `UserAdminRead` | one summary |
 | `POST /auth/admin/users/{id}/deactivate` | `UserAdminDeactivate` | `{user, changed}` — `changed:false` on an idempotent replay |
 | `POST /auth/admin/users/{id}/reactivate` | `UserAdminReactivate` | `{user, changed}` |
 | `POST /auth/admin/users/{id}/verification/resend` | `UserAdminResendVerification` | 202 + secret-free receipt, or a typed 409/404 |
 
 **Machine identity — registered only when `ServiceAccounts` AND `APIKeys` are
-both wired AND the host names a `Config.MachineRoutesGate`. Every route carries
+both wired AND the host names a `AdministrationConfig.MachineRoutesGate`. Every route carries
 the same stack, outermost first: `BundledRouteAuth.MachineLifecycle` —
 `RequireAccessTokenLive()` by default — → (on the three POSTs) the browser-safe
 `Origin`/CSRF gate → the host's gate — human, live, same-origin, authorized. See
@@ -290,14 +386,14 @@ is 403 `origin_rejected` — both BEFORE the host's gate runs. Bearer-only calle
 (no session cookie) skip the gate entirely, and the two GETs are body-less reads
 that never carry it.
 
-**Bearer JWT / token endpoint — `Config.TokenSigner` is REQUIRED, so
+**Bearer JWT / token endpoint — `signer` is REQUIRED, so
 `/auth/token` is always registered:**
 
 - `POST /auth/token` — `{email, password}` → 200 `{access_token, expires_at,
   refresh_token}` (the API twin of `/auth/login`). Shares login's pre-credential
   rate limit and verified-email gating; clients rotate via `/auth/refresh`.
 
-**Invitations — registered only when `Config.Granter` is wired; every
+**Invitations — registered only when `InvitationsConfig.Granter` is wired; every
 authenticated route is `Invitations`-gated (`RequireAccessTokenOrAPIKeyLive()`
 by default, immediate revocation), only decline is public:**
 
@@ -341,21 +437,30 @@ DTO:
 An invitation that never carried metadata omits the key everywhere, so hosts that
 do not use the channel see byte-identical responses.
 
-**Resolve-on-provisioning.** A pending AUTO-ACCEPT invitation for an address is
-granted the moment an account for that address comes into existence, with no
-`POST /auth/invitations/accept` call: `Register` (so a no-verify host still
-resolves), `Verify`, and the OAuth register-and-link branch — a brand-new
-password-less account provisioned from a **provider-verified** email. All three
-call the one internal resolver, which is best-effort (a failure never fails
-registration or the OAuth login, and is audited by the invitation service) and
-idempotent (a resolved invitation moves off pending, so a second pass is a no-op
-and a failed grant stays pending for the next attempt). Ordinary OAuth login of an
-already-linked user and a pending-link completion for an already-registered
-address are **not** provisioning events and never re-grant — an address that
-already belongs to an account was direct-added at create time. Non-auto-accept
-invitations are never resolved this way; they stay pending for an explicit accept.
+**Verified ownership and automatic acceptance.** Email and phone invitations
+require the caller's active verified identifier, independently of
+`RequireVerifiedEmail`. A submitted email string is never ownership proof.
+Password registration alone cannot grant invitations. `Verify` and provisioning
+from a provider-verified OAuth email may resolve auto-accept invitations. The
+verified-email lookup also limits immediate direct-add to an active verified owner.
+Resolver errors do not fail the authentication operation; non-auto-accept
+invitations await explicit acceptance.
 
-**The Granter contract and invitation authority (D1–D3).** `Config.Granter` is
+**Durable acceptance.** The store atomically claims the current, unexpired token
+and binds it to the accepting subject before calling the Granter:
+`pending → accepting → accepted`. A claim reserves the invitation tuple and makes
+cancel, decline and resend conflict. Resend on an unclaimed invitation invalidates
+its old token; an acceptance that read that token earlier still fails at the claim.
+
+If granting or finalization returns an error, the claim stays `accepting`: the host
+side effect may already have committed. Repeating acceptance with the same token
+and subject, including after a process restart or token expiry, retries the same
+operation and finishes the receipt. A completed retry succeeds without granting
+again. Another subject cannot resume that claim. There is no automatic retry worker
+or claim timeout; hosts retry through acceptance/the verified resolver, or reconcile
+a permanently failed operation. Cancellation never claims to undo a grant in progress.
+
+**The Granter contract and invitation authority (D1–D3).** `InvitationsConfig.Granter` is
 the host seam an accepted, auto-accepted, or directly-added invitation grants
 through — a structured, operation-scoped request:
 
@@ -372,19 +477,16 @@ type GrantInput struct {
 type Granter interface{ Grant(context.Context, GrantInput) error }
 ```
 
-- **Optional operation-scoped identity.** `OperationID` is an opaque, non-secret handle
-  for THIS logical grant. Pending accept and resolve-on-registration use the
-  persisted invitation row id — a retry of the same invitation reuses it, while a
-  later invitation row for the same tuple gets a distinct id. Direct-add has no
-  invitation row, so the pocket mints a fresh high-entropy id from its
-  unconditional secret generator (never `Config.IDs`, whose `cryptids.Database`
-  strategy yields an empty id until an entity is inserted). It is available to an
-  adapter that chooses durable command idempotency: such an adapter can derive an
-  authorization MutationID from a fixed purpose + `OperationID` + the tuple. A
-  baseline relationship-state adapter may ignore it; exact tuple creation is
-  naturally idempotent and a later re-grant simply restores current state. The
-  field is metadata, not authority and not a mandate to use receipts or a mutation
-  repository.
+- **Stable operation identity.** `OperationID` is an opaque, non-secret handle
+  for this logical grant. Pending acceptance and automatic resolution use the
+  persisted invitation row ID. Hosts must make repeated and concurrent calls with
+  that ID idempotent, including a retry after a committed grant whose response was
+  lost. A later invitation for the same tuple has a distinct operation ID.
+  Direct-add has no invitation row and receives a fresh high-entropy operation ID
+  per call from the unconditional secret generator (`WithIDs` may use database
+  IDs). An adapter can derive a durable mutation key from purpose, operation ID and
+  tuple. Exact tuple creation may already be idempotent; any additional host effects
+  need equivalent deduplication. The field is metadata, never authority.
 - **Opaque host metadata.** `Metadata` is small, host-owned routing data the
   inviter sets at create time (`metadata` on the create body / `CreateInput`),
   which the pocket persists and round-trips VERBATIM to `GrantInput` on every
@@ -394,7 +496,7 @@ type Granter interface{ Grant(context.Context, GrantInput) error }
   only shape and size (**32 entries**, **64-byte keys**, **256-byte values**, **4
   KiB** JSON-encoded total, UTF-8, non-empty keys; each violation wraps
   `ErrInvalidInput`); nil/empty persists as `{}`. It is **untrusted** inviter
-  input, never an authorization claim by itself: `Config.InviteCheck` receives the
+  input, never an authorization claim by itself: `InvitationsConfig.InviteCheck` receives the
   same metadata — alongside the normalized invitee context, below — so a host can
   authorize the complete invitation at issuance, and a `Granter` applying any
   security-sensitive side effect from it MUST revalidate. The resource-owner
@@ -408,7 +510,7 @@ type Granter interface{ Grant(context.Context, GrantInput) error }
   (applied / no_change → nil; semantic_conflict / invariant_blocked / anything
   else → a loud error).
 - **Required `InviteCheck`.** Whenever a `Granter` enables invitations,
-  `Config.InviteCheck` is REQUIRED at construction — nil → `ErrInviteCheckRequired`;
+  `InvitationsConfig.InviteCheck` is REQUIRED at construction — nil → `ErrInviteCheckRequired`;
   an `InviteCheck` wired with no `Granter` → `ErrInviteCheckWithoutGranter`. It is
   posed by the pocket's own AUTHORIZED invitation operations (which the shipped
   create/list routes drive) after live-session validation, principal resolution,
@@ -417,10 +519,10 @@ type Granter interface{ Grant(context.Context, GrantInput) error }
   host therefore sees the caller, resource, action, validated relation, and the
   normalized invitee context a route wrapper cannot, and can refuse, e.g., an
   editor inviting a co-owner or a routing value that conflicts with the invitee's
-  existing state. Host-direct `Service.Create`/`Service.ListByResource` are trusted
+  existing state. Host-direct `invitations.Service.Create`/`invitations.Service.ListByResource` are trusted
   composition calls that deliberately skip it; a host writing its OWN handlers
-  instead calls the policy-carrying twins `Service.CreateAuthorized` /
-  `Service.ListByResourceAuthorized`, which pose `InviteCheck` exactly as the
+  instead calls the policy-carrying twins `invitations.Service.CreateAuthorized` /
+  `invitations.Service.ListByResourceAuthorized`, which pose `InviteCheck` exactly as the
   shipped routes do — the principal they take is the resolved caller (the inviter),
   never the invitee. Denial (wrap `sdk.ErrForbidden`) or an infrastructure error
   fails closed.
@@ -510,7 +612,7 @@ router.Use(web.CORSWithConfig(web.CORSConfig{
 }))
 ```
 
-The same origin must ALSO appear in `Config.AllowedOrigins`: CORS decides what the
+The same origin must ALSO appear in `BrowserConfig.AllowedOrigins`: CORS decides what the
 browser may read, the pocket's own allowlist decides what may mutate. An origin
 that clears CORS but not `AllowedOrigins` gets a readable 403 with code
 `origin_rejected` (below) — that is the diagnosable signature of this exact
@@ -518,7 +620,7 @@ misconfiguration.
 
 ## HTML surface (Views) — the optional presentation tier
 
-`Config.Views == nil` (the default) → **API-only**: no HTML GET page or form
+`BrowserConfig.Views == nil` (the default) → **API-only**: no HTML GET page or form
 decoding is registered, the shared POST routes accept JSON only, and there is no
 view technology in the host's module graph. A non-nil `Views` mounts the HTML
 pages **alongside the unchanged JSON API** — the JSON DTO/status/body/cookie
@@ -563,7 +665,7 @@ double-submit CSRF contract: the form's `csrf_token` field is compared to the
 `Cache-Control: no-store`, `Referrer-Policy: no-referrer`, `X-Frame-Options: DENY`,
 `X-Content-Type-Options: nosniff`, and the fixed CSP prefix `default-src 'none';
 base-uri 'none'; form-action 'self'; frame-ancestors 'none'`. With no resource
-policy (`Config.HTMLPolicy == nil`, the default) that prefix is followed by
+policy (`BrowserConfig.HTMLPolicy == nil`, the default) that prefix is followed by
 `script-src 'nonce-…'|'none'` — the historical asset-free posture.
 
 **Bundled default, `html/template` alternative, and overrides.** The blessed
@@ -575,10 +677,10 @@ correct `autocomplete` (`email`, `current-password`, `new-password`,
 landing that reads the URL fragment through an externalized same-origin
 `fragment.js` (served by `goth.FragmentScriptHandler()`), scrubs history, and POSTs
 (with a manual visible fallback; the token never enters a query string, and no
-inline script is emitted). The adapter also derives `Config.HTMLPolicy` from the
+inline script is emitted). The adapter also derives `BrowserConfig.HTMLPolicy` from the
 bundle via `authViews.HTMLPolicy()` (see §11.6 of `ui/goth/README.md` for the full
 adapter recipe). A host may instead satisfy the port with stdlib `html/template` via
-`sdk/foundation/web.Template` — no templ/`ui/goth` import required. The
+`sdk/pkg/web.Template` — no templ/`ui/goth` import required. The
 **blessed override path is embedding the bundled `goth.Views` and overriding
 individual methods**; promoted defaults satisfy every other page. Overriding
 presentation **cannot bypass** middleware, decoding, service, redirect, or status
@@ -586,10 +688,10 @@ policy — all of that lives in the inbound handler, never a `Views` method (pro
 byte-identical across three presentations in `isolation_test.go`).
 
 **A `Views` override is markup-only; assets are opened separately through
-`Config.HTMLPolicy`.** Overriding `Views` controls the rendered HTML markup; it does
+`BrowserConfig.HTMLPolicy`.** Overriding `Views` controls the rendered HTML markup; it does
 NOT by itself widen the CSP. The asset-free CSP above is the secure **default**, not a
 permanent restriction (GOTH-0.4): a host opts into loading external styles, scripts,
-fonts, and images by wiring a validated `Config.HTMLPolicy` — a technology-neutral,
+fonts, and images by wiring a validated `BrowserConfig.HTMLPolicy` — a technology-neutral,
 pocket-owned resource policy built with `NewHTMLResourcePolicy`.
 
 - `HTMLResourcePolicy` carries a deterministically ordered set of ADDITIONAL CSP
@@ -618,7 +720,7 @@ pocket-owned resource policy built with `NewHTMLResourcePolicy`.
   source nor a nonce, an empty source, or a source carrying a control character,
   whitespace, `;`, or `,` (the header-injection guard) is rejected — the pocket never
   emits an attacker-controlled header.
-- `Config.HTMLPolicy` is consulted only by the HTML surface, which is gated on `Views`.
+- `BrowserConfig.HTMLPolicy` is consulted only by the HTML surface, which is gated on `Views`.
   Setting `HTMLPolicy` with a nil `Views` is `ErrHTMLPolicyWithoutViews` at construction
   — a policy for an absent HTML surface is contradictory wiring, never a silent no-op.
 - The pocket core imports no templ, Alpine, HTMX, or `ui/goth`:
@@ -628,12 +730,12 @@ pocket-owned resource policy built with `NewHTMLResourcePolicy`.
 
 `Views` (HTML pages) and the email overrides — `EmailContentTemplates` (bodies)
 and `EmailLayouts` (the frame around them), both below — are **distinct**
-override facilities: different Config fields, different types, different
+override facilities: different option groups, different types, different
 subsystems, no shared type.
 
 ## The middleware surface (what other pockets and host routes gate on)
 
-`Service.RequirePrincipal(opts ...PrincipalOption)` is the ONE authenticator.
+`authenticationhttp.Adapter.RequirePrincipal(opts ...PrincipalOption)` is the ONE authenticator.
 Every other gate — the six named helpers and every bundled route — is a
 pre-composition of it.
 
@@ -651,10 +753,10 @@ pre-composition of it.
 func Accept(kinds ...CredentialKind) PrincipalOption // OR-set of credentials; default: every wired kind
 func Transports(ts ...Transport) PrincipalOption    // OR-set of transports;  default: header + cookie
 func Live() PrincipalOption                          // access_token ⇒ the session row must exist; api_key ⇒ pass
-func Browser() PrincipalOption                       // on denial 303 to Config.BrowserLoginPath (validated return_to) instead of a JSON 401
+func Browser() PrincipalOption                       // on denial 303 to BrowserConfig.BrowserLoginPath (validated return_to) instead of a JSON 401
 func Optional() PrincipalOption                      // no credential within the set passes anonymous instead of denying
 
-func (s *Service) RequirePrincipal(opts ...PrincipalOption) web.Middleware
+func (s *authenticationhttp.Adapter) RequirePrincipal(opts ...PrincipalOption) web.Middleware
 ```
 
 With zero options `RequirePrincipal()` admits every wired credential over both
@@ -704,22 +806,22 @@ postures read as vocabulary at the call site:
 | `RequireAccessTokenCookie()` | `RequirePrincipal(Accept(CredentialAccessToken), Transports(TransportCookie))` |
 | `RequireAPIKey()` | `RequirePrincipal(Accept(CredentialAPIKey))` |
 
-- `Service.CurrentUser(ctx)` / `Service.CurrentPrincipal(ctx)` — read the
+- `authlogic.Service.CurrentUser(ctx)` / `authlogic.Service.CurrentPrincipal(ctx)` — read the
   resolved identity.
-- `Service.CurrentCredential(ctx) (Credential, bool)` — read what authenticated
+- `authlogic.Service.CurrentCredential(ctx) (Credential, bool)` — read what authenticated
   the request: kind, transport, and the proof's coordinates (`SessionID` once
   proven by `Live()`; `APIKeyID` / `ServiceAccountID` / `ActAsUser` for a key).
   It is the read that tells an act-as-user API key from a person's session,
   which `CurrentPrincipal` alone cannot.
-- `Service.CurrentSessionID(ctx)` — the live session id stashed by a `Live()`
+- `authlogic.Service.CurrentSessionID(ctx)` — the live session id stashed by a `Live()`
   gate; absent for a stateless gate or a machine credential.
-- `Config.MachineRoutesGate` — the one middleware the pocket CONSUMES instead of
+- `AdministrationConfig.MachineRoutesGate` — the one middleware the pocket CONSUMES instead of
   providing: the host's authorization, applied last in the bundled
   machine-identity lifecycle stack (`BundledRouteAuth.MachineLifecycle` —
   `RequireAccessTokenLive()` by default → the browser-safe `Origin`/CSRF gate on
   the three mutations → gate); nil leaves those routes unmounted (404). See
   [Machine identity](#machine-identity--ownership-delegation-and-the-two-seams).
-- `Service.RunDelivery(ctx)` — the host-owned `in_process` delivery runtime loop
+- `delivery.Runtime.Run(ctx)` — the host-owned `in_process` delivery runtime loop
   (below); in `jobs` mode the host runs the generic jobs runtime instead.
 
 ### Migration from the pre-`v0.9.0` fixed middleware names
@@ -738,13 +840,13 @@ postures read as vocabulary at the call site:
 | `RequireLiveSessionBrowser` | `RequirePrincipal(Live(), Browser())` | identical |
 | `AuthenticateAPIKey(ctx, rawKey)` | no direct replacement | raw credential verification is not an application-service entry point; it moves behind `RequirePrincipal` — read the result with `CurrentPrincipal` / `CurrentCredential` |
 
-### `Config.BundledRouteAuth` — overriding one bundled surface's authentication
+### `BrowserConfig.BundledRouteAuth` — overriding one bundled surface's authentication
 
 Each bundled route group runs behind ONE named authentication posture, resolved
 once at construction from the audited default below or a host override —
 never per-route, because the posture is a property of what the surface does:
 
-| `Config.BundledRouteAuth` slot | routes | default |
+| `BrowserConfig.BundledRouteAuth` slot | routes | default |
 |---|---|---|
 | `OAuthLinkStart` | `GET /auth/oauth/{provider}/link/start` | `RequireAccessToken()` |
 | `SessionSecurityReads` | `GET /auth/delivery/status`, `/auth/methods`, `/auth/csrf` | `RequireAccessTokenLive()` |
@@ -766,14 +868,14 @@ requirement).
 Override one semantic surface without restating the others:
 
 ```go
-Config{
-	BundledRouteAuth: BundledRouteAuthentication{
-		Invitations: PrincipalStrategy(
-			Accept(CredentialAccessToken),
-			Live(),
+auth.WithBrowser(auth.BrowserConfig{
+	BundledRouteAuth: authenticationhttp.BundledRouteAuthentication{
+		Invitations: authenticationhttp.PrincipalStrategy(
+			authenticationhttp.Accept(authenticationhttp.CredentialAccessToken),
+			authenticationhttp.Live(),
 		),
 	},
-}
+})
 ```
 
 `PrincipalStrategy()` called with **no arguments is an explicit choice of the
@@ -797,7 +899,7 @@ the route's application input."
 ## Repositories (the ports a host or store adapter satisfies)
 
 The bundled store adapters fill the whole bundle from one handle
-(`authstore.Repositories(db) (Repositories, error)`). Both dialect constructors
+(`authstore.Repositories(ctx, db) (Repositories, error)`). Both dialect constructors
 now **return an error**: before returning repos they probe all 13 canonical
 tables and fail loudly — naming the missing table and the `authentication`
 migration source, wrapping `sdk.ErrNotFound` — when a migration was not applied
@@ -842,7 +944,7 @@ Nil semantics:
 | `ServiceAccounts`, `APIKeys` | both nil → machine subsystem OFF | **both-or-neither** → `ErrMachineReposRequired` |
 | `SecurityEvents` | **no audit trail** — the recording site is a no-op (AV9); degrades silently by design | none — never a construction error |
 | `Invitations` | allowed only while `Granter` is nil | Granter set + nil → `ErrInvitationRepoRequired` |
-| `UserAdmin`, `ActiveSessions` | the account-lifecycle capability is OFF: the trusted admin methods fail closed with `ErrUserAdminUnavailable`, the bundled admin routes are not registered, and session minting uses the unfenced `Sessions.Create` | `Config.UserAdminCheck` set + either nil → `ErrUserAdminReposRequired`. The reverse is **not** an error: a bundled store adapter always supplies both, and the routes stay unmounted until the host makes an authorization decision |
+| `UserAdmin`, `ActiveSessions` | the account-lifecycle capability is OFF: the trusted admin methods fail closed with `ErrUserAdminUnavailable`, the bundled admin routes are not registered, and session minting uses the unfenced `Sessions.Create` | `AdministrationConfig.UserAdminCheck` set + either nil → `ErrUserAdminReposRequired`. The reverse is **not** an error: a bundled store adapter always supplies both, and the routes stay unmounted until the host makes an authorization decision |
 
 Sentinel contract (the port doc comments are the spec; `storetest` is its
 executable form): duplicate → `errs.ErrAlreadyExists`; absent → `errs.ErrNotFound`;
@@ -859,19 +961,35 @@ contractual and byte-wise. The pgx canonical migrations now carry per-column
 any database's default collation; a `C`-locale database remains a supported
 belt-and-suspenders posture, not a requirement.
 
-## Config — required vs defaulted vs deny-by-absence
+## Constructor inputs — required vs defaulted vs deny-by-absence
 
-Required (nil → error at `NewService`/`Register`): **`Hasher`**
-(`ErrHasherRequired`), **`Mailer`** (`ErrMailerRequired`), **`TokenSigner`**
-(`ErrTokenSignerRequired`), **`RuntimeMode`** (`ErrRuntimeModeRequired` — no
-default, so a host can never inherit the development posture; unknown →
-`ErrRuntimeModeInvalid`). The rest carry a safe default or are deny-by-absence.
+The root constructor is `New(repos, signer, runtimeMode, deliveryMode, opts...)`.
+Modes and signing stay explicit. Optional features use records with one clear
+purpose, supplied through `WithPassword`, `WithSessions`, `WithIdentity`,
+`WithAbuseProtection`, `WithDelivery`, `WithMessages`, `WithOAuth`,
+`WithPasswordless`, `WithLinks`, `WithBrowser`, `WithInvitations`, and
+`WithAdministration`. IDs and logging use `WithIDs` and `WithLogger`.
+
+Each option replaces its complete group, including zero values; a later
+`WithPassword(PasswordConfig{})` restores the default password posture rather
+than retaining earlier fields. Slice/map settings are snapshotted when creating
+an option and when constructing each component. Reusing an option does not share
+mutable configuration between components. Nil options are invalid input.
+`LinksConfig` is shared by browser, terminal and mobile flows; `BrowserConfig`
+controls cookies, origins, login routing and views.
+
+`TokenSigner`, `Users`, `Identifiers`, `Sessions` and `ActiveSessions` are required.
+Password flows also require `Hasher` and `Passwords`; with delivery enabled they
+require `Challenges`, `PasswordResets` and `ChallengeProtector`. Delivery requires
+`Mailer`. An OAuth-only host can select `PasswordFlowsDisabled: true` and
+`DeliveryModeOff` and omit the password and mail dependencies. Missing core ports
+fail at construction, and `Register` rejects a nil router.
 
 | field | nil/zero means |
 |---|---|
-| `RuntimeMode` | **REQUIRED, no default.** `"production"` rejects development-only delivery transports and every incomplete security wiring (below); `"development"` warns instead. A **type alias** of `environment.Mode` (`sdk/foundation/environment`) — see [Security posture](#security-posture) for the canonical-name table; app-wide code should name `environment.Mode` and needs no auth import. |
-| `Hasher` (PasswordHasher) | **hard error** — a password pocket with no hasher is a foot-gun. |
-| `Mailer` (email.Sender) | **hard error** — silently dropping mail is unsafe degradation. |
+| `RuntimeMode` | **REQUIRED, no default.** `"production"` rejects development-only delivery transports and every incomplete security wiring (below); `"development"` warns instead. Uses `environment.Mode` (`sdk/pkg/environment`) — see [Security posture](#security-posture); app-wide code should name `environment.Mode` and needs no auth import. |
+| `Hasher` (PasswordHasher) | Required when password flows are enabled. Host owns algorithm and password strength policy. |
+| `Mailer` (email.Sender) | Required when delivery is enabled; may be nil with `DeliveryModeOff`. |
 | `MailFrom` | From address on verification/reset/change mail. |
 | `CompromisedPasswordChecker` | nil → no breach/blocklist check (length policy still applies). Wired → register/set/change/reset all consult it; the core ships none and adds no network dependency. |
 | `CompromisedPasswordFailOpen` | false (**FAIL CLOSED**): an unavailable breach service rejects the password rather than becoming a silent bypass. true trades coverage for availability (WARN-logged). |
@@ -880,7 +998,7 @@ default, so a host can never inherit the development posture; unknown →
 | `IdentifierKeyer` | derives PII-free rate-limit/idempotency keys under a key **distinct** from the pepper, JWT, and encryption keys. **Production-required** (`ErrIdentifierKeyerRequired`); development falls back to a per-instance SHA-256. |
 | `CredentialPolicy` | nil → the bundled safe default (`credential.NewDefaultPolicy`: one direct login method + one verified recovery method, PSTN restricted). A host may supply stronger rules; `ErrCredentialPolicyRequired` covers a strict-production posture that disables the default without a replacement. |
 | `DeliveryEncrypter` (cryptids.Encrypter) | REQUIRED once delivery can send — a wired `DeliveryDispatcher` (`jobs` mode) or `DeliveryMode: "in_process"` (`ErrDeliveryEncrypterRequired`) — the command envelope briefly carries the rendered secret + destination, so it is always sealed. Bundled `cryptids.NewAESGCM` with a distinct 32-byte key. |
-| `DeliveryMode` | **REQUIRED**, no default (`AUTH_DELIVERY_MODE`): `"jobs"` (durable delivery on the generic jobs runtime), `"in_process"` (bounded, EPHEMERAL in-process pool), or `"off"` (no delivery runtime). Empty → `ErrDeliveryModeRequired`, unknown → `ErrDeliveryModeInvalid`, never inferred from a non-nil collaborator. `"jobs"` requires `Config.DeliveryDispatcher` (`ErrDeliveryQueueRequired`); `"off"` rejects a wired dispatcher (`ErrDeliveryOffButDeliverable`); `"in_process"` needs no dispatcher (it owns its bounded pool). `Register` starts no runtime in any mode. |
+| `DeliveryMode` | **REQUIRED**, no default (`AUTH_DELIVERY_MODE`): `"jobs"` (durable delivery on the generic jobs runtime), `"in_process"` (bounded, EPHEMERAL in-process pool), or `"off"` (no delivery runtime). Empty → `ErrDeliveryModeRequired`, unknown → `ErrDeliveryModeInvalid`, never inferred from a non-nil collaborator. `"jobs"` requires `DeliveryConfig.DeliveryDispatcher` (`ErrDeliveryQueueRequired`); `"off"` rejects a wired dispatcher (`ErrDeliveryOffButDeliverable`); `"in_process"` needs no dispatcher (it owns its bounded pool). `Register` starts no runtime in any mode. |
 | `DeliveryJobsAcknowledged` | a wiring assertion that the host runs the durable generic jobs delivery runtime. Meaningful for `DeliveryMode: "jobs"`; the queue is the ONLY send path, so production REQUIRES it (`ErrDeliveryJobsUnacknowledged`) rather than silently swallowing every message; development tolerates the zero value. |
 | `DeliveryEphemeralAcknowledged` | a wiring assertion that the host accepts the crash-loss guarantee of `DeliveryMode: "in_process"` (in-flight work is lost on a restart). Production REQUIRES it (`ErrDeliveryEphemeralUnacknowledged`); the recommended production posture is `"jobs"`. |
 | `PublicAuthBaseURL` | the absolute base magic links + landing pages build from (`AUTH_PUBLIC_BASE_URL`). REQUIRED once a link flow is enabled (`ErrPublicAuthBaseURLRequired`); production requires **HTTPS** (`ErrPublicAuthBaseURLInsecure`). Request Host/forwarded headers NEVER participate. |
@@ -891,30 +1009,32 @@ default, so a host can never inherit the development posture; unknown →
 | `Views` | **nil → API-only** (no HTML routes, JSON-only POSTs, no templ in the graph). Non-nil → HTML pages mount alongside the unchanged JSON API. The blessed default is the ui/goth adapter `authgoth.New(bundle)` (`pockets/authentication/views/goth`); the override path is embedding its `Views`. |
 | `HTMLPolicy` (*HTMLResourcePolicy) | **nil → the historical asset-free CSP** (script-src nonce-only, no external origins). Non-nil → the same fixed protections plus the policy's validated widening resource directives (script/style/image/font/connect/media/worker), so a selected HTML view can load its assets. Only WIDENS — a policy can never remove a fixed protection. Build with `NewHTMLResourcePolicy` (validates loudly). Set with a nil `Views` → `ErrHTMLPolicyWithoutViews` at construction (contradictory wiring). Technology-neutral — the core imports no templ/`ui/goth`. |
 | `EmailContentTemplates` | empty → the bundled `LayerCore` email bodies render unchanged. Each entry overrides a bundled template at `email.LayerApp` (Namespace must be `EmailContentNamespace`). Changes email BODIES only — a **distinct** override system from `Views`. |
-| `EmailLayouts` | empty → the sdk's bundled email layouts render unchanged. Each entry registers a host layout at `email.LayerApp` — the highest layer wins, so it resolves ahead of the sdk default. Every delivery purpose renders with `email.LayoutTransactional`, so ONE entry shipping `layouts/transactional.html` (+ optional `.txt`) re-frames ALL auth mail: `EmailLayouts: []auth.EmailLayoutOverride{{FS: layoutsFS}}`. `FS` is walked from `Dir` (empty → `"layouts"`); a file's base name is the layout type it replaces, and the file names itself with `{{define "layout:<name>"}}` (`.text` for the `.txt` half) like the sdk's bundled layouts. Changes the email FRAME only — bodies stay with `EmailContentTemplates`, brand values with `EmailBranding`. |
+| `EmailLayouts` | empty → the sdk's bundled email layouts render unchanged. Each entry registers a host layout at `email.LayerApp` — the highest layer wins, so it resolves ahead of the sdk default. Every delivery purpose renders with `email.LayoutTransactional`, so ONE entry shipping `layouts/transactional.html` (+ optional `.txt`) re-frames ALL auth mail: `EmailLayouts: []delivery.LayoutOverride{{FS: layoutsFS}}`. `FS` is walked from `Dir` (empty → `"layouts"`); a file's base name is the layout type it replaces, and the file names itself with `{{define "layout:<name>"}}` (`.text` for the `.txt` half) like the sdk's bundled layouts. Changes the email FRAME only — bodies stay with `EmailContentTemplates`, brand values with `EmailBranding`. |
 | `EmailBranding` (*email.Branding) | nil → the sdk's unset fallback (`Your Company`, no logo, no tagline, no address). Fills the bundled layout frame's `{{.Brand.*}}` values without touching bodies or routes. All auth mail renders with `email.LayoutTransactional`, which renders **`LogoURL`, `Name`, `Tagline`, and `Address`** — a non-empty `LogoURL` now emits an `<img>` above the brand name, so a logo works **without replacing the whole layout** (fixed in `sdk v0.3.x`; previously the transactional layout silently dropped it). `Name`/`Tagline` stay visible alongside the image because mail clients block external images by default, and the `alt` text is `Name` (falling back to `Your Company`). Use an absolute, publicly fetchable **HTTPS** URL: the sdk renderer never fetches, resolves, or validates it, and `html/template` is the escaping boundary. An `EmailLayouts` override at `LayerApp` still wins — a host replacing `transactional.html` owns its own logo markup. |
 | `DeliveryData` (DeliveryDataHook) | nil → the pocket-built template data renders as-is (today's output, byte-for-byte). Wired → runs once per render for every purpose and both rails, receiving the public `Purpose*` and a fresh, secret-free copy of the data, returning additions/replacements (a resource NAME, a relation label, an inviter name). `Secret`, `Link`, `Subject` are reserved — returning one is `ErrDeliveryDataReserved`. See [Mail content](#mail-content--host-owned-data-subjects-and-sms-bodies). |
 | `EmailSubjects` (map purpose → template) | empty → the bundled subjects. Each entry replaces the email SUBJECT for one `Purpose*`, rendered against the same (hook-enriched) data as the body with missing-key errors on. Unknown purpose / empty source / parse failure → `ErrDeliveryOverrideInvalid` at construction; an empty or CR/LF-carrying rendered subject → `ErrDeliverySubjectInvalid` at render, before anything is queued. |
 | `SMSBodies` (map purpose → template) | empty → the bundled SMS bodies. Same rules as `EmailSubjects` for the body-only rail; an entry for an email-only purpose (registration verification, password reset, OAuth pending link) is `ErrDeliveryOverrideInvalid` — an override customizes an existing rail, it never enables a new kind. |
 | `RequireVerifiedEmail` | false. true → login AND `/auth/token` refuse an unverified user with 403 (**requires a WORKING Mailer**, else total login lockout). |
-| `PasswordFlowsDisabled` | false (every route mounted). true → the password credential is OFF as a posture: `Register` mounts NONE of `/auth/register`, `/auth/login`, `/auth/verify`, `/auth/verification/resend`, `/auth/password/{forgot,reset,change,set,remove,remove/start}`, `/auth/step-up/password` (JSON and HTML pages — deny-by-absence, 404), and the matching `Service` use-cases refuse with `ErrPasswordFlowsDisabled` (wraps `sdk.ErrNotFound`). For a Google-only / passwordless-only host. `Hasher` stays required. |
-| `MachineRoutesGate` (web.Middleware) | **nil → the bundled machine-identity lifecycle routes are NOT mounted** (404, deny-by-absence) even when `ServiceAccounts` + `APIKeys` are wired, and `NewService` WARNs so an upgrading host learns the posture at boot instead of from production 404s. Key AUTHENTICATION is unaffected (`RequireAPIKey()` and the bearer path of `RequirePrincipal` still follow `MachineEnabled`). Non-nil → `POST`/`GET /auth/service-accounts`, `POST`/`GET /auth/service-accounts/{id}/keys` and `POST /auth/api-keys/{id}/revoke` mount, each as `BundledRouteAuth.MachineLifecycle` (`RequireAccessTokenLive()` by default) → (on the three POSTs) the browser-safe `Origin`/CSRF gate → this gate: human credential only by default (an API key, act-as-user or not, is 401), immediately revocable, CSRF-safe for cookie clients, then the host's authorization. Typical: `authorizer.RequirePermissionFixed("platform", "steward", "global")`. Set with the machine subsystem unwired (both repositories nil — a half-wired pair fails earlier with `ErrMachineReposRequired`) → `ErrMachineRoutesGateWithoutRepos` (a policy that can never be consulted is contradictory wiring). A **single** middleware, not the `[]web.Middleware` of `cms.Config.AdminMiddleware` / `events.Config.StreamMiddleware`: nil is the unambiguous "no policy", where an empty non-nil slice would mean "mounted, ungated". **Scope behind the gate:** ownership is fixed (the caller is the creator; delegation is the explicit, validated, audited `act_as_user_id`, and `owner_user_id` is refused by name), but **listing is GLOBAL** — a gate holder sees every service account, lists the keys of any account, and mints/revokes by any id. A host that needs a creator-scoped list or per-object authorization leaves the gate nil and serves its own routes over `CreateServiceAccount` / `MintAPIKey` / `ListServiceAccounts` / `ListAPIKeys` / `RevokeAPIKey`. |
-| `BundledRouteAuth` (BundledRouteAuthentication) | every field zero → the audited default authenticator for that bundled route group (see [The middleware surface](#the-middleware-surface-what-other-pockets-and-host-routes-gate-on)). A non-zero field, built with `PrincipalStrategy(opts...)`, replaces ONLY that group's authentication; it configures authentication alone and never substitutes for `MachineRoutesGate` / `UserAdminCheck` / `InviteCheck`. Resolved once at `NewService` into concrete middleware and held immutable for the process's life. |
+| `PasswordFlowsDisabled` | false (every route mounted). true → the password credential is OFF as a posture: `Register` mounts NONE of `/auth/register`, `/auth/login`, `/auth/verify`, `/auth/verification/resend`, `/auth/password/{forgot,reset,change,set,remove,remove/start}`, `/auth/step-up/password` (JSON and HTML pages — deny-by-absence, 404), and the matching `Service` use-cases refuse with `ErrPasswordFlowsDisabled` (wraps `sdk.ErrNotFound`). For a Google-only / passwordless-only host. `Hasher` and `Passwords` may be omitted. |
+| `MachineRoutesGate` (web.Middleware) | **nil → the bundled machine-identity lifecycle routes are NOT mounted** (404, deny-by-absence) even when `ServiceAccounts` + `APIKeys` are wired, and `New` WARNs so an upgrading host learns the posture at boot instead of from production 404s. Key AUTHENTICATION is unaffected (`RequireAPIKey()` and the bearer path of `RequirePrincipal` still follow `MachineEnabled`). Non-nil → `POST`/`GET /auth/service-accounts`, `POST`/`GET /auth/service-accounts/{id}/keys` and `POST /auth/api-keys/{id}/revoke` mount, each as `BundledRouteAuth.MachineLifecycle` (`RequireAccessTokenLive()` by default) → (on the three POSTs) the browser-safe `Origin`/CSRF gate → this gate: human credential only by default (an API key, act-as-user or not, is 401), immediately revocable, CSRF-safe for cookie clients, then the host's authorization. Typical: `authorizer.RequirePermissionFixed("platform", "steward", "global")`. Set with the machine subsystem unwired (both repositories nil — a half-wired pair fails earlier with `ErrMachineReposRequired`) → `ErrMachineRoutesGateWithoutRepos` (a policy that can never be consulted is contradictory wiring). A **single** middleware, not the `[]web.Middleware` of `cms.Config.AdminMiddleware` / `events.WithStreamMiddleware`: nil is the unambiguous "no policy", where an empty non-nil slice would mean "mounted, ungated". **Scope behind the gate:** ownership is fixed (the caller is the creator; delegation is the explicit, validated, audited `act_as_user_id`, and `owner_user_id` is refused by name), but **listing is GLOBAL** — a gate holder sees every service account, lists the keys of any account, and mints/revokes by any id. A host that needs a creator-scoped list or per-object authorization leaves the gate nil and serves its own routes over `CreateServiceAccount` / `MintAPIKey` / `ListServiceAccounts` / `ListAPIKeys` / `RevokeAPIKey`. |
+| `BundledRouteAuth` (BundledRouteAuthentication) | every field zero → the audited default authenticator for that bundled route group (see [The middleware surface](#the-middleware-surface-what-other-pockets-and-host-routes-gate-on)). A non-zero field, built with `PrincipalStrategy(opts...)`, replaces ONLY that group's authentication; it configures authentication alone and never substitutes for `MachineRoutesGate` / `UserAdminCheck` / `InviteCheck`. Resolved once at `New` into concrete middleware and held immutable for the process's life. |
 | `RateLimiter` | `ratelimiter.NewMemory()` — an in-process limiter (not "unlimited"). **Production rejects a per-process limiter** (`ErrNonDurableRateLimiter`): a multi-instance host needs a shared/durable one. |
-| `SessionCookie` (CookieConfig) | zero value usable: name `session`, path `/`, browser-session cookie backed by a 7-day server session. `Secure` is a host deployment choice (true behind TLS). |
-| `RefreshCookiePath string` | the refresh cookie's `Path` scope (`AUTH_REFRESH_COOKIE_PATH`). Empty → `/auth` (covers `/auth/refresh` AND `/auth/logout`). **A host mounting the pocket under a prefix MUST set the FULL prefixed path** — `pocket.PrefixRegistrar{Prefix: "/api/v1"}` → `RefreshCookiePath: "/api/v1/auth"` — else the browser never sends the refresh cookie to `/api/v1/auth/refresh` and cookie-driven refresh dies SILENTLY (the registrar exposes registration, not its mount prefix, so the pocket cannot derive it). A non-empty value must be a valid absolute cookie path (leading `/`, no query/fragment/control/header-delimiter character, no trailing slash except `/` itself) or construction fails with `ErrRefreshCookiePathInvalid`. The SAME resolved path issues (login, rotation) and deletes (logout) the cookie. Configures ONLY the refresh cookie: the access cookie keeps `SessionCookie.Path` and both keep `SameSite=Lax`. |
-| `Providers []oauth.Provider` | OAuth OFF (deny-by-absence). Non-empty → both oauth repos required. |
+| `SessionCookie` (CookieConfig) | zero value usable: name `session`, path `/`, browser-session cookie backed by a 7-day server session. `Secure: true` is required in production; development can use HTTP. |
+| `RefreshCookiePath string` | the refresh cookie's `Path` scope (`AUTH_REFRESH_COOKIE_PATH`). Empty → `/auth` (covers `/auth/refresh` AND `/auth/logout`). **A host mounting the pocket under a prefix MUST set the FULL prefixed path** — `pockets.PrefixRegistrar{Prefix: "/api/v1"}` → `RefreshCookiePath: "/api/v1/auth"` — else the browser never sends the refresh cookie to `/api/v1/auth/refresh` and cookie-driven refresh dies SILENTLY (the registrar exposes registration, not its mount prefix, so the pocket cannot derive it). A non-empty value must be a valid absolute cookie path (leading `/`, no query/fragment/control/header-delimiter character, no trailing slash except `/` itself) or construction fails with `ErrRefreshCookiePathInvalid`. The SAME resolved path issues (login, rotation) and deletes (logout) the cookie. Configures ONLY the refresh cookie: the access cookie keeps `SessionCookie.Path` and both keep `SameSite=Lax`. |
+| `Providers []oauth.Provider` | OAuth OFF (deny-by-absence). Non-empty → both oauth repos and a valid callback base required. Nil, duplicate and invalid provider names fail construction. |
+| `TrustOAuthEmail` | Host callback for new email-based registration/adoption; nil denies those paths. Verified provider evidence is also required. Existing linked-ID login needs no email/trust callback. |
+| `OAuthNativeRedirectURIs` | Exact allowlist enabling native JSON authorization-code routes. Register each URI with the provider; loopback ports match exactly. |
 | `PasswordResetURL` | **REQUIRED in production** whenever the forgot/reset rail is wired (`ErrPasswordResetURLRequired`); development permits empty with one startup WARN and keeps the legacy raw-token mail. The absolute public reset landing route BEFORE `?token=` is appended — a **separate** field from `PublicAuthBaseURL` (which is the full passwordless landing URL, not an origin). HTTPS in production; no fragment; no pre-existing `token` parameter; other query parameters preserved. Built in the worker from this value only — request `Host`/forwarded headers never participate. See [Password reset](#password-reset--the-link-rail). |
 | `OAuthLinkBaseURL` (`AUTH_OAUTH_LINK_URL`) | the absolute SPA landing URL the anti-takeover OAuth **pending-link** email links to, BEFORE `#token=<token>` is appended — a **separate** field from `PublicAuthBaseURL` (that route POSTs magic-link redeem; this one POSTs `verify-link`). The token rides the URL **fragment** (mirroring the magic link), so it never reaches the server on the landing GET and the page can scrub it from history. **Never a production boot requirement** — this changes presentation, not the anti-takeover guarantee (the emailed secret stays proof of inbox control): **empty degrades** the mail to its historical bare-token line, and when OAuth providers are wired one startup WARN names `AUTH_OAUTH_LINK_URL`. A non-empty value is validated in every mode — absolute http(s), a host, **no fragment** (`ErrOAuthLinkURLInvalid`), HTTPS in production (`ErrOAuthLinkURLInsecure`); existing non-secret query parameters are preserved. Built from this value only — request `Host`/forwarded headers never participate. On the pending-link branch the callback redirect also carries `?auth=link_sent&provider=<name>` so the SPA can render a "check your email" state. See [OAuth account linking](#oauth-account-linking--two-distinct-flows). |
 | `UserAdminCheck` | **nil → the bundled admin routes are NOT registered**, even when the store supplies `Repositories.UserAdmin` — turning a store capability into an HTTP surface is the host's decision, not the store's. Non-nil → `GET /auth/admin/users`, `GET /auth/admin/users/{id}`, and the deactivate/reactivate POSTs mount, and BOTH `Repositories.UserAdmin` and `Repositories.ActiveSessions` become required (`ErrUserAdminReposRequired`). Authentication never invents a role named `admin` and never imports authorization — see [Account lifecycle](#account-lifecycle--the-operator-directory-and-deactivation). |
 | `TokenEncrypter` (cryptids.Encrypter) | provider tokens NOT persisted (login/linking still work). Wire `cryptids.NewAESGCM` to store them. |
-| `OAuthCallbackBase`, `RedirectAllowlist` | callback origin / exact-match allowlist for ABSOLUTE redirect targets (open-redirect guard). Safe same-origin relative paths are honored without allowlisting in the browser lanes; any other target falls back to `/`. The invitation lane's mailed-link destination stays exact-match only. |
-| `TokenSigner` (cryptids.JWTSigner) | **REQUIRED.** `sdk/foundation/cryptids.NewHS256` is the stdlib default; `integrations/cryptids/golang-jwt` covers RS256/ES256. **Multi-instance hosts MUST share the signing secret** (§1.6). |
+| `OAuthCallbackBase`, `RedirectAllowlist` | callback HTTP(S) origin with optional clean mount prefix (no trailing slash, query, credentials or fragment; HTTPS in production) / exact-match allowlist for ABSOLUTE redirect targets (open-redirect guard). Safe same-origin relative paths are honored without allowlisting in the browser lanes; any other target falls back to `/`. The invitation lane's mailed-link destination stays exact-match only. |
+| `TokenSigner` (cryptids.JWTSigner) | **REQUIRED.** `integrations/cryptids/golang-jwt` implements HS256/HS384/HS512 with explicit expiration and 60-second clock tolerance; there is no SDK implementation. **Multi-instance hosts MUST share the signing secret** (§1.6). |
 | `AccessTokenTTL` | 0 → 15m (bounds the stateless revocation window). `AUTH_ACCESS_TOKEN_TTL`. |
 | `RefreshTTL` | 0 → 7d — the FIXED refresh horizon; rotation never extends it. `AUTH_REFRESH_TTL`. |
-| `Granter` / `InviteCheck` / `MemberCheck` / `Notifiers` | invitation subsystem seams (see the invitation section). `Granter` now takes a structured `GrantInput` (operation-scoped, fail-loud). `InviteCheck` (the relation-aware host policy) is REQUIRED whenever `Granter` is wired — nil → `ErrInviteCheckRequired`; set without a `Granter` → `ErrInviteCheckWithoutGranter`. |
+| `Granter` / `InviteCheck` / `MemberCheck` / `BodySenders` | invitation subsystem seams (see the invitation section). `Granter` now takes a structured `GrantInput` (operation-scoped, fail-loud). `InviteCheck` (the relation-aware host policy) is REQUIRED whenever `Granter` is wired — nil → `ErrInviteCheckRequired`; set without a `Granter` → `ErrInviteCheckWithoutGranter`. |
 | `ListStrategy` | `"cursor"` default; `"offset"` allowed; anything else `ErrInvalidListStrategy`. |
-| `IDs` (cryptids.IDGenerator) | entity-ID strategy; NEVER mints secrets (codes/tokens/keys keep their own high-entropy generator). |
+| `IDs` (sdk.IDGenerator) | entity-ID strategy; NEVER mints secrets (codes/tokens/keys keep their own high-entropy generator). |
 | `Logger` | best-effort WARN sink for audit-write failures + the ephemeral-key/console-transport warnings; nil → `slog.Default()`. |
 
 **Distinct secrets and rotation (design §3.3/§4.4/§6.1.1).** v3 uses **five
@@ -962,8 +1082,26 @@ Password recovery is **atomic** (`PasswordResets.Reset`): one transaction consum
 the reset challenge, sets the typed password row, and revokes all sessions +
 outstanding password/reset grants and challenges — so a completed reset
 **rejects every prior session** and a live reset cannot restore a removed
-password. The shared password policy (length + optional breach check) applies
-identically at register/set/change/reset.
+password. The host-selected password policy (or default length limits), followed by the
+optional breach check, applies identically at register/set/change/reset.
+
+## Host password policy
+
+`PasswordConfig.ValidatePassword func(context.Context, string) error` checks newly chosen
+passwords at registration, initial password setting, change, and reset. Nil keeps
+the existing default: 15–64 Unicode code points and at most 256 bytes. A callback
+replaces all those bounds, including the byte cap, so the host can define its own
+length, complexity, and input limits. Return `sdk.ValidationError` or an error
+wrapping `sdk.ErrInvalidInput` for policy refusals; dependency failures retain their
+error classification. Do not include the submitted password in errors or logs.
+
+`PasswordConfig.CompromisedPasswordChecker` still runs after the selected validator succeeds;
+its fail-open setting is independent. Existing-password verification at login and
+step-up does not apply the new-password policy, so tightening policy does not lock
+out existing credentials. `PasswordConfig.Hasher` selects the algorithm, and
+`bcrypt.New(bcrypt.WithCost(n))` sets bcrypt's cost. Bcrypt additionally enforces its
+72-byte algorithm limit during hashing and verification. A too-long new password
+returns an invalid-input error; a login failure remains a generic credential denial.
 
 ## Mail content — host-owned data, subjects, and SMS bodies
 
@@ -972,13 +1110,13 @@ delivery purpose, but the **data** those templates render is built by the
 pocket's own callers — and the pocket has no source for a resource's name, a
 relation's label, or an inviter's display name. Without a data seam a host can
 restyle "You were invited to project p1" but never say *which* project. Three
-`Config` seams close that gap. All three are validated at `NewService`/`Register`
+message policy options close that gap. All three are validated at `New`
 and all default off: nil hook + empty maps render **today's output
 byte-for-byte** (pinned by test against pre-release goldens).
 
-- **`Config.DeliveryData`** (`DeliveryDataHook`) — per-render data enrichment.
-- **`Config.EmailSubjects`** — per-purpose email subject overrides.
-- **`Config.SMSBodies`** — per-purpose SMS body overrides.
+- **`MessagesConfig.DeliveryData`** (`DeliveryDataHook`) — per-render data enrichment.
+- **`MessagesConfig.EmailSubjects`** — per-purpose email subject overrides.
+- **`MessagesConfig.SMSBodies`** — per-purpose SMS body overrides.
 
 Purposes are exported constants, so nothing is keyed by a string literal:
 `PurposeRegistrationVerification`, `PurposePasswordReset`,
@@ -1058,7 +1196,7 @@ name-like fields are what make that fallback work.
 rendered against the same data as the body — hook enrichment included — and
 parsed once at construction with **missing-key errors on**, so a template that
 names a field the purpose does not carry fails that render loudly rather than
-shipping `<no value>`. Rejected at `NewService`/`Register` with
+shipping `<no value>`. Rejected at `New` with
 `ErrDeliveryOverrideInvalid` (the message names the cause): an unknown purpose
 key, an empty/whitespace-only source, a parse failure, and an `SMSBodies` entry
 for a purpose that has no SMS rail (`PurposeRegistrationVerification`,
@@ -1072,7 +1210,7 @@ render never executes it.
 ```go
 cfg.DeliveryData = func(ctx context.Context, purpose string, data map[string]any) (map[string]any, error) {
 	switch purpose {
-	case auth.PurposeInvitation, auth.PurposeMemberAdded:
+	case delivery.PurposeInvitation, delivery.PurposeMemberAdded:
 		rt, _ := data["ResourceType"].(string)
 		id, _ := data["ResourceID"].(string)
 		name, err := names.Lookup(ctx, rt, id) // the host's own read model
@@ -1084,7 +1222,7 @@ cfg.DeliveryData = func(ctx context.Context, purpose string, data map[string]any
 	return nil, nil
 }
 cfg.EmailSubjects = map[string]string{
-	auth.PurposeInvitation: "You're invited to {{or .ResourceName .ResourceID}}",
+	delivery.PurposeInvitation: "You're invited to {{or .ResourceName .ResourceID}}",
 }
 ```
 
@@ -1102,17 +1240,17 @@ the request path, which is what makes the unauthenticated `forgot`/`passwordless
 start` endpoints enumeration-safe (they submit an opaque, encrypted command
 envelope and return one uniform response without resolving the account or calling
 a provider). The same versioned, encrypted `command.Envelope` and the same
-processor run behind both real modes; `Config.DeliveryMode` selects which:
+processor run behind both real modes; `deliveryMode` selects which:
 
 - **`jobs` (recommended production posture).** The host wires a
-  `Config.DeliveryDispatcher` backed by the generic **jobs** pocket and runs the
+  `DeliveryConfig.DeliveryDispatcher` backed by the generic **jobs** pocket and runs the
   generic jobs runtime. Auth owns no delivery table: durability, fencing, keyed
   idempotency/replacement, retry, status, and terminal purge are the generic jobs
   store's responsibility. Auth exposes the registered job kind/handler seam via
-  `Service.DeliveryJobRuntime()`; a composition adapter (never a pocket core)
+  `delivery.Runtime.JobRuntime()`; a composition adapter (never a pocket core)
   bridges the two pockets.
 - **`in_process`.** The same processor runs behind a bounded ephemeral queue and
-  a fixed worker pool that the host drives with `Service.RunDelivery(ctx)` (cancel
+  a fixed worker pool that the host drives with `delivery.Runtime.Run(ctx)` (cancel
   ctx to stop). Retry/status retention is process-local and bounded; accepted work
   does **not** survive a crash or restart — in-flight work is lost. There is **no
   cross-instance coordination**: each process keeps its own queue, its own
@@ -1120,7 +1258,7 @@ processor run behind both real modes; `Config.DeliveryMode` selects which:
   on **neither** and a user may receive duplicate messages. `in_process` is for
   development / single-instance hosts; production requires the explicit crash-loss
   acknowledgment. Tuning knobs (workers, capacity, admission deadline, shutdown
-  drain, status retention max/TTL) live on `Config.InProcessDelivery`, validated
+  drain, status retention max/TTL) live on `DeliveryConfig.InProcessDelivery`, validated
   fail-closed at construction.
 - **`off`.** Allowed only when no configured auth capability can send.
 
@@ -1129,13 +1267,14 @@ Cross-cutting guarantees (both real modes):
 - **At-least-once + duplicates (never exactly-once).** A crash after provider
   acceptance but before completion replays the SAME secret (the checkpointed
   rendered envelope is stable) — so consumers must tolerate at-least-once
-  duplicates. Submit idempotency deduplicates a repeated start; an explicit resend
-  (`Replace`) supersedes older active work under the same PII-free logical key and
-  fences a stale worker's checkpoint/completion. **The resend / in-flight
-  replacement race is real:** a resend cannot retract a provider call already in
-  flight, so the recipient may receive both the superseded and the fresh message.
-  The freshly issued challenge invalidates/replaces the old proof where the flow
-  supports replacement; single-use redemption still guarantees exactly one winner.
+  duplicates. Each issuance has its own PII-free key; retries of that issuance
+  reuse its admitted command. Flows that explicitly replace a logical command
+  also fence stale checkpoints/completions. Verification resends and sensitive
+  codes instead use distinct issuance keys so a valid code cannot lose its
+  delivery checkpoint to another start. No resend can retract a provider call
+  already in flight. Recipients may receive superseded messages; only the current
+  challenge can be redeemed, once. Persistence order determines that challenge,
+  independently of concurrent request or message arrival order.
 - **Encryption + key rotation.** The command envelope ALWAYS seals its rendered
   secret + destination with `DeliveryEncrypter` (AES-GCM, a distinct key) —
   plaintext secrets never land in a durable payload column, log, event, or status
@@ -1159,13 +1298,13 @@ Cross-cutting guarantees (both real modes):
   seam is deliberate executor/consumer separation — carrying the executor's retry
   counter through the sdk keyed-work status seam would push executor mechanics into
   the protocol. Operational attempt counts come from **lifecycle/health events**, not
-  this field: read the `retried` counter emitted by `Config.DeliveryEventsEmitter`
+  this field: read the `retried` counter emitted by `DeliveryConfig.DeliveryEventsEmitter`
   (the delivered/skipped/**retried**/dead-lettered/superseded/purged stream). Tooling
   that read `attempt` for retry visibility must repoint to that health counter.
 - **Health.** `GET /auth/delivery/status` (live-session-gated) lets a caller poll
   the dispatcher with its `receipt` to learn a send failed without holding the
   start request open.
-- **Events observe, never queue.** An optional `Config.DeliveryEventsEmitter`
+- **Events observe, never queue.** An optional `DeliveryConfig.DeliveryEventsEmitter`
   publishes secret-free lifecycle events (delivered / skipped / retried /
   dead-lettered / superseded / purged). Those events are operational observation
   only: the dispatcher — not an event — is the record that accepted delivery work,
@@ -1173,7 +1312,7 @@ Cross-cutting guarantees (both real modes):
   event is ever required to make delivery happen. Wire the emitter for
   metrics/dashboards; leave it nil and delivery is unchanged.
 - **Production fail-closed.** Under `DeliveryMode: "jobs"`, a missing
-  `Config.DeliveryDispatcher` is rejected (`ErrDeliveryQueueRequired`), and a jobs
+  `DeliveryConfig.DeliveryDispatcher` is rejected (`ErrDeliveryQueueRequired`), and a jobs
   delivery runtime the host never acknowledges running is rejected
   (`ErrDeliveryJobsUnacknowledged`). Under `DeliveryMode: "in_process"`, production
   requires the explicit crash-loss acknowledgment (`ErrDeliveryEphemeralUnacknowledged`).
@@ -1185,10 +1324,10 @@ lifecycle, exactly like the jobs and events pollers.
 
 - **`jobs` mode.** The host builds a durable generic-jobs `Repositories.FencedQueue`,
   wires a **composition adapter** (the ONLY code allowed to import both pockets —
-  neither pocket core imports the other) that maps `auth.DeliveryDispatcher`
+  neither pocket core imports the other) that maps `delivery.Dispatcher`
   (`Submit`/`Replace`/`LatestStatus`) onto the jobs fenced primitives
   (`EnqueueOnce`/`Replace`/`LatestStatusByKey`) and registers
-  `authSvc.DeliveryJobRuntime().Handle` (+ its `Discard` terminal hook) under one
+  the returned `deliveryRuntime.Handle` (+ its `Discard` terminal hook) under one
   job kind. The host then runs the generic `jobs.FencedRuntime` in its own
   goroutine (stop it after HTTP drains) and periodically calls the jobs
   `PurgeTerminal`. `examples/auth-cms/internal/authjobs` is the exemplary adapter,
@@ -1196,18 +1335,25 @@ lifecycle, exactly like the jobs and events pollers.
 
   ```go
   // composition root (main) — jobs mode
-  dispatcher := authjobs.NewDispatcher(jobsSvc)     // auth.DeliveryDispatcher over the fenced primitives
-  cfg.DeliveryMode = auth.DeliveryModeJobs
-  cfg.DeliveryDispatcher = dispatcher
-  cfg.DeliveryEncrypter = deliveryKey               // envelope always sealed
-  cfg.DeliveryJobsAcknowledged = true               // asserts the host runs the jobs runtime
-  authSvc, _ := auth.NewService(repos, cfg)
-  rt, _ := jobs.NewFencedRuntime(jobsSvc, authjobs.FencedRuntimeConfig(authSvc.DeliveryJobRuntime()))
+  dispatcher := authjobs.NewDispatcher(jobsSvc.Queue)
+  // Other options supply the host's password, identity and link policies.
+  options = append(options, auth.WithDelivery(auth.DeliveryConfig{
+      Mailer: mailer, MailFrom: mailFrom,
+      DeliveryDispatcher: dispatcher,
+      DeliveryEncrypter: deliveryKey,
+      DeliveryJobsAcknowledged: true, // the host runs this runtime
+  }))
+  authSvc, err := auth.New(repos, signer, runtimeMode, delivery.ModeJobs, options...)
+  if err != nil { return err }
+  deliveryRuntime, ok := authSvc.Delivery.JobRuntime()
+  if !ok { return errors.New("jobs delivery runtime is not configured") }
+  rt, err := authjobs.NewRuntime(jobsSvc.Queue, deliveryRuntime)
+  if err != nil { return err }
   go rt.Run(runtimeCtx)                              // host owns the loop; stop after HTTP drains
   ```
 
 - **`in_process` mode.** No dispatcher, no jobs runtime; the host runs the bounded
-  pool itself with `go authSvc.RunDelivery(ctx)` for the process lifetime and
+  pool itself with `go authSvc.Delivery.Run(ctx)` for the process lifetime and
   cancels the context to drain on shutdown (see the Quickstart). Set
   `DeliveryEphemeralAcknowledged: true` for production, and expect the ephemeral
   posture above.
@@ -1216,7 +1362,7 @@ lifecycle, exactly like the jobs and events pollers.
 
 By default a magic link sent to an address with no account delivers nothing: the
 worker resolves the address, finds no owner, and terminates the job silently. With
-`Config.PasswordlessProvisionOnRedeem` the link is delivered instead, and clicking
+`PasswordlessConfig.PasswordlessProvisionOnRedeem` the link is delivered instead, and clicking
 it **creates the account** (CHAU-6.x).
 
 This is a real security decision, not a convenience toggle. Read the whole section
@@ -1357,13 +1503,19 @@ the replay fails, assert the invitation resolved once — is
 
 ## Password reset — the link rail
 
+The token's stored context binds the issuing credential revision and verified
+recovery identifier. Redemption checks both inside the same transaction as the
+password change and session revocation. Retiring/replacing the recovery address or
+changing credentials invalidates previously issued links. Old unbound reset links
+must restart after the audit upgrade; there is no reset schema migration.
+
 Reset mail used to print a raw token and tell the user to "use this token". That
 is not a flow anyone can complete without a hand-built form. It now carries a
 clickable link to a landing route the host configures (CHAU-5.x).
 
 ### Configuration
 
-`Config.PasswordResetURL` is the **absolute public reset landing route, before the
+`LinksConfig.PasswordResetURL` is the **absolute public reset landing route, before the
 token query parameter is appended** — for example
 `https://app.example.com/reset-password`.
 
@@ -1491,21 +1643,21 @@ session and therefore no `__Host-auth_csrf` cookie to compare.
 
 ### Code replacement, and the in-flight duplicate
 
-A resend uses delivery **replacement**, not idempotent enqueue: it supersedes any
-still-pending verification job for the same address, including an undelivered
-original registration mail, and issues a **new** challenge — which invalidates the
-previous code.
+Each public resend enqueues a distinct opaque command. Its worker issues a fresh
+challenge and checkpoints that exact code before delivery. Registration and admin
+resends also use distinct issuance keys. A later admitted command cannot steal an
+earlier initializer's checkpoint after it has replaced the challenge.
 
-Be honest about the limit: **replacement cannot retract a provider call already
-accepted.** If the earlier message was already handed to the provider, the user
-may receive two mails. Only the newest code verifies; the older one fails as
-invalid. That is the correct trade — the alternative is re-sending a code the
-user may never have received.
+The last persisted challenge invalidates its predecessor. Concurrent requests,
+workers and providers can finish in different orders, so the last email to arrive
+is not necessarily the valid one. Earlier queued messages may still be delivered;
+superseded codes fail. If needed, start a new resend after overlapping requests
+have settled.
 
 ### `POST /auth/admin/users/{id}/verification/resend` — authorized
 
 Mounts with the rest of the admin surface, so it exists only when the host wired
-`Config.UserAdminCheck` (action `resend-verification`). Because the caller has
+`AdministrationConfig.UserAdminCheck` (action `resend-verification`). Because the caller has
 already been authorized, it **may** report real state:
 
 | target | response |
@@ -1516,8 +1668,8 @@ already been authorized, it **may** report real state:
 | no active primary email | `404` |
 | unknown user | `404` |
 
-It issues through the same challenge and delivery-replacement helper as the
-public path, so the two cannot drift into parallel mail implementations.
+It uses the same challenge and delivery processor as the public path, with a
+distinct issuance key and a pollable receipt for the authorized caller.
 
 ### Audit
 
@@ -1533,7 +1685,7 @@ public path, so the two cannot drift into parallel mail implementations.
 
 A dead-lettered verification mail shows up in the generic jobs dead-letter with
 its PII-free logical key, never the address. The user-visible fix is another
-resend, which supersedes the dead job's key. A terminal delivery failure does
+resend, which admits a new issuance. A terminal delivery failure does
 **not** restore the previous code: the replacement already invalidated it, so the
 account waits for the next successful resend. Check the transport before the auth
 pocket — the worker's send is the only step that touches a provider.
@@ -1628,7 +1780,7 @@ reason: the row is gone.
 The stateless tier (`RequireAccessToken()`, no `Live()`) validates the access
 JWT's signature and expiry without a session lookup — so an access token issued
 *before* the transition stays acceptable on those routes for at most
-`Config.AccessTokenTTL` (default 15 minutes). This is the same bounded asymmetry
+`SessionsConfig.AccessTokenTTL` (default 15 minutes). This is the same bounded asymmetry
 logout has always had, and it is bounded by design rather than unnoticed. Two
 consequences worth knowing:
 
@@ -1640,7 +1792,7 @@ consequences worth knowing:
 ### Wiring it
 
 ```go
-cfg.UserAdminCheck = func(ctx context.Context, req auth.UserAdminCheckRequest) error {
+cfg.UserAdminCheck = func(ctx context.Context, req authlogic.UserAdminCheckRequest) error {
 	// The host answers with ITS OWN policy. authentication never invents a role
 	// named "admin", never interprets a role string, and never imports
 	// pockets/authorization.
@@ -1669,10 +1821,10 @@ The trusted methods are available whenever the repositories are wired, with or
 without a check:
 
 ```go
-page, err := svc.ListUsers(ctx, req)              // crud.Page[auth.UserSummary]
-summary, err := svc.GetUserSummary(ctx, userID)
-summary, change, err := svc.DeactivateUser(ctx, actor, userID)
-summary, change, err := svc.ReactivateUser(ctx, actor, userID)
+page, err := svc.Authentication.ListUsers(ctx, req)              // list.Page[user.Summary]
+summary, err := svc.Authentication.GetUserSummary(ctx, userID)
+summary, change, err := svc.Authentication.DeactivateUser(ctx, actor, userID)
+summary, change, err := svc.Authentication.ReactivateUser(ctx, actor, userID)
 ```
 
 **They apply NO authorization.** They exist so a host can build its own transport,
@@ -1692,7 +1844,7 @@ deploying a binary built against the new store tag — see the store READMEs.
 ## Machine identity — ownership, delegation, and the two seams
 
 The bundled lifecycle routes mount **only** when the host names a
-`Config.MachineRoutesGate`. The pocket ships no policy of its own: it supplies
+`AdministrationConfig.MachineRoutesGate`. The pocket ships no policy of its own: it supplies
 the credential class and the revocation check, the host supplies the
 authorization.
 
@@ -1718,7 +1870,7 @@ three MUTATIONS then clear the browser-safe `Origin`/CSRF gate, so a cookie
 client's mint or revoke is refused as CSRF before the host's policy is ever
 consulted; bearer-only callers skip it. The gate then answers authorization in
 the host's own vocabulary and writes its own denial. A host that needs a
-different posture overrides `Config.BundledRouteAuth.MachineLifecycle`.
+different posture overrides `BrowserConfig.BundledRouteAuth.MachineLifecycle`.
 
 **Audit.** Each lifecycle op records one security event whose `Actor` is the
 principal in the request context: `service_account_created`, `api_key_minted`
@@ -1732,7 +1884,7 @@ revoke path holds only the key id; `APIKeyRepository` has no Get-by-id) — see
 
 | seam | how |
 |---|---|
-| **Own the routes** | leave `MachineRoutesGate` nil and serve your own transport over the unchanged `Service.CreateServiceAccount` / `ListServiceAccounts` / `MintAPIKey` / `ListAPIKeys` / `RevokeAPIKey`. This is the seam for a creator-scoped list, per-object revoke authorization, a naming policy, or a maximum key TTL. The owner-existence check and the audit rows apply here too — they live in the service, not the handler. |
+| **Own the routes** | leave `MachineRoutesGate` nil and serve your own transport over the unchanged `authlogic.Service.CreateServiceAccount` / `ListServiceAccounts` / `MintAPIKey` / `ListAPIKeys` / `RevokeAPIKey`. This is the seam for a creator-scoped list, per-object revoke authorization, a naming policy, or a maximum key TTL. The owner-existence check and the audit rows apply here too — they live in the service, not the handler. |
 | **Own the store** | fill `Repositories.ServiceAccounts` / `.APIKeys` yourself (both or neither, else `ErrMachineReposRequired`). |
 
 There is **no "decorate the service" seam**: `Register` hands the concrete
@@ -1743,13 +1895,66 @@ one — the cited uses (naming policy, max TTL) are reachable through the two
 seams above, and exporting a lifecycle port now would freeze the positional
 `CreateServiceAccount` signature that the v1.0 cut should restructure.
 
+## Browser, terminal and mobile OAuth
+
+OAuth authorization-code completion requires the public state **and** an
+independent completion secret retained by the initiating client. State alone is
+insufficient. Start binds provider, browser/native mode, exact provider callback
+URI, PKCE and nonce. Wrong proof/mode/provider cannot consume the valid flow.
+Successful state consumption remains atomic and single-use.
+
+Browser start/link routes set a separate per-state, host-only HttpOnly cookie,
+SameSite=Lax at `/`. HTTPS callback configuration adds Secure and `__Host-`;
+these proof cookies do not inherit session cookie logic/authentication/path settings. The
+browser callback reads the proof, sets session cookies on login/register and
+redirects to the validated application destination. Parallel flows retain
+independent cookies. Callback URLs never contain the completion secret.
+
+With `OAuthConfig.OAuthNativeRedirectURIs` configured, these JSON routes are added:
+
+- `POST /auth/oauth/{provider}/native/start`: `{ "redirect_uri": "com.example.app:/oauth" }`.
+- `POST /auth/oauth/{provider}/native/complete`: `{ "code": "…", "state": "…", "flow_secret": "…" }`.
+- `POST /auth/oauth/{provider}/native/link/start`: the same start body, gated by the person's access token.
+- `POST /auth/oauth/native/verify-link`: `{ "token": "…" }` for the separately delivered pending-link proof.
+
+Start returns `authorization_url`, `state`, `flow_secret` and `expires_at`. The
+native app retains `flow_secret` locally, opens the authorization URL in the
+system browser, receives code/state at its registered callback, and posts all
+three completion fields to the host. Completion returns `action` and, when a
+session was minted, `access_token`, `refresh_token`, and `token_type: "Bearer"`.
+Pending linking returns an action without credentials; its proof completes via
+the native verify-link route. These native routes set no cookies, perform no
+credential redirects and use `Cache-Control: no-store`.
+
+The host must configure a provider registration that accepts its native callback
+URI. Claimed HTTPS links, private app schemes and configured loopback IP/ports
+are supported through exact allowlisting. Arbitrary ephemeral loopback ports and
+the separate OAuth device-authorization grant are not implemented.
+
+Direct service callers use `OAuthStartRequest`, retain the returned `OAuthStart`
+proof, then submit `OAuthCallbackRequest`. Mode has no implicit default. These
+service APIs require no browser cookies. `StartLink` callers must authorize the
+supplied user ID themselves; bundled routes supply that authentication gate.
+
+Email-based registration/adoption requires `EmailVerified` plus explicit host
+`TrustOAuthEmail(provider, identity)` approval. A conservative Google policy can
+check provider name and `identity.EmailAuthoritative`. Trust does not bypass the
+existing mailed proof when another account already claims the email. Explicit
+session-gated linking and existing linked-ID login remain independent of email.
+
+The original transport migration is in
+[AUDIT-015](../../AUDIT.md#audit-015-bound-oauth-flows-and-truthful-tracing).
+The current [AUDIT-022](../../AUDIT.md#audit-022-authentication-proof-lifecycle-and-host-api)
+also strengthens repository contracts and binds explicit/pending links to their
+issuing credential revision. Old in-flight linking flows must restart.
+
 ## OAuth account linking — two distinct flows
 
 There are **two** ways a provider identity ends up attached to a user, and they
 are not variations of each other. Conflating them is what makes people conclude
 the explicit one is missing.
 
-> **Version evidence.** `Service.StartLink`, the session-gated
+> **Version evidence.** `authlogic.Service.StartLink`, the session-gated
 > `GET /auth/oauth/{provider}/link/start` route, the server-side state's
 > `LinkUserID` binding, the `ActionLinked` callback branch, `GET /auth/methods`,
 > and the code-gated unlink pair **all shipped in `pockets/authentication/v0.1.0`**
@@ -1795,7 +2000,7 @@ Properties worth relying on:
 - **State is single-use** and expires (10 minutes); a replay is rejected.
 - **The redirect is validated at START.** `redirect` is resolved before it is
   stored: a safe same-origin relative path is honored directly, an absolute
-  target must appear verbatim in `Config.RedirectAllowlist`, and anything else is
+  target must appear verbatim in `LinksConfig.RedirectAllowlist`, and anything else is
   replaced by the same-origin default `/` — so the callback can only ever land
   same-origin or somewhere the host approved. The provider URL carries no redirect, verifier,
   nonce, or user id — only the opaque state token.
@@ -1836,7 +2041,7 @@ does not mint one; flow 2 proves address ownership with a mailed secret and does
 mint one.** Flow 2 additionally revokes a squatter password/sessions when the
 matched identifier was unverified at flow start (design §5.7/V5).
 
-**Completing it in a browser.** With `Config.Views` wired, `GET /auth/oauth/link` is
+**Completing it in a browser.** With `BrowserConfig.Views` wired, `GET /auth/oauth/link` is
 a **public** landing page that finishes this branch: it reads the mailed secret from
 the URL fragment with the shared `fragment.js` reader, the user confirms, and the
 form POSTs `verify-link` (the form arm of the same dispatch every other page uses),
@@ -1864,12 +2069,12 @@ fragment** — the token owns it, HTTPS in production).
 - `GET /auth/methods` (live-session-gated, `no-store`) is the linked-method
   inventory: `{has_password, oauth[], identifiers[]}`. A link shows up on the very
   next read — there is no confirmation step.
-- With `Config.Views` wired, the bundled account page renders the same inventory and
+- With `BrowserConfig.Views` wired, the bundled account page renders the same inventory and
   offers a **link affordance** for every wired provider the caller has not linked
   (`AccountSecurityPage.LinkableProviders`), anchored at
   `/auth/oauth/{provider}/link/start?redirect=/auth/account`. The destination is a
   safe same-origin relative path, so the resolver honors it with no
-  `Config.RedirectAllowlist` entry — a completed link lands back on the inventory
+  `LinksConfig.RedirectAllowlist` entry — a completed link lands back on the inventory
   on an unconfigured host.
 - Removing a link is the **code-gated pair**, not a DELETE:
   `POST /auth/oauth/{provider}/unlink/start` (live session + browser-safe
@@ -1939,25 +2144,11 @@ credential rail is unwired.
   (`ErrDeliveryJobsUnacknowledged`), and an unacknowledged `in_process` crash-loss
   posture (`ErrDeliveryEphemeralUnacknowledged`). Development WARNs on each instead.
 
-  **Deployment posture is app-wide vocabulary, not auth vocabulary.**
-  `auth.RuntimeMode` is a **type alias** of `environment.Mode`
-  (`sdk/foundation/environment`), and `RuntimeModeDevelopment`/`RuntimeModeProduction`
-  alias `environment.ModeDevelopment`/`ModeProduction`. Nothing to migrate: the
-  names are the same type, assignable in both directions, with the same
-  `"development"`/`"production"` wire values and the same `AUTH_RUNTIME_MODE`
-  env-tag parsing. What it buys is that a host's **general** mailer, notifier
-  composition, or any other component can name the posture — and enforce the
-  transport rule — without importing this pocket:
-
-  | old (still compiles) | canonical, pocket-free |
-  |---|---|
-  | `auth.RuntimeMode` | `environment.Mode` |
-  | `auth.RuntimeModeDevelopment` | `environment.ModeDevelopment` |
-  | `auth.RuntimeModeProduction` | `environment.ModeProduction` |
-  | `auth.ErrRuntimeModeRequired` | `environment.ErrModeRequired` |
-  | `auth.ErrRuntimeModeInvalid` | `environment.ErrModeInvalid` |
-  | `auth.ErrInsecureDeliveryTransport` | `email.ErrInsecureTransport` / `notify.ErrInsecureTransport` |
-  | (none — the rule lived here) | `email.CheckSender(mode, sender)` / `notify.CheckNotifier(mode, n)` |
+  **Deployment posture is app-wide vocabulary.** `runtimeMode` uses
+  `environment.Mode` from `sdk/pkg/environment`, with `ModeDevelopment` and
+  `ModeProduction`. The old root RuntimeMode aliases are removed. The wire values
+  and `AUTH_RUNTIME_MODE` parsing remain unchanged. `notify.CheckTransport`
+  enforces the same transport rule outside this pocket.
 
   Auth's sentinels **wrap** the canonical ones, so `errors.Is` matches either
   target and existing host checks are unaffected; only the message text gained a
@@ -1977,7 +2168,7 @@ credential rail is unwired.
   package mailer // a host's own generic package
 
   func RequireProductionCapable(mode environment.Mode, sender email.Sender) error {
-      posture, err := email.CheckSender(mode, sender)
+      posture, err := notify.CheckTransport(mode, sender)
       if err != nil {
           return fmt.Errorf("mail transport: %w", err) // wraps email.ErrInsecureTransport
       }
@@ -2098,12 +2289,12 @@ new pair; grace (previous, unused) → new access JWT only; reuse (previous, use
 thief on the stale token gets at most one grace access JWT; the second arrival on
 the consumed slot burns the session. Two HttpOnly `SameSite=Lax` cookies: the
 access-JWT cookie (`Path=/`) and the refresh cookie (`<name>_refresh`,
-`Path=Config.RefreshCookiePath` — `/auth` by default, `/api/v1/auth` on a
+`Path=BrowserConfig.RefreshCookiePath` — `/auth` by default, `/api/v1/auth` on a
 prefixed host; the same path issues and clears it).
 
-## Migrations are host-owned (0001–0016)
+## Migrations are host-owned (0001–0018)
 
-Auth ships **sixteen** canonical migrations per dialect, byte-identical filename
+Auth ships **seventeen** canonical migrations per dialect (0017 is unused), identical filename
 sets across pgx and turso:
 
 ```
@@ -2113,9 +2304,10 @@ sets across pgx and turso:
 0004_oauth_accounts     0009_invitations          0014_user_status
 0005_oauth_states       0010_user_identifiers     0015_challenge_subject_keys
                                                   0016_invitation_metadata
+                                                  0018_invitation_acceptance
 ```
 
-Thirteen of those create tables; the last three **add columns** and are
+Thirteen of those create tables; the remaining four **add columns** and are
 **append-only**, precisely because the tables they touch are already tagged and
 immutable:
 
@@ -2131,6 +2323,14 @@ immutable:
   host-owned routing bag (`jsonb`/`TEXT`, `NOT NULL DEFAULT '{}'`). Every
   pre-existing row reads back as an empty map; the store never writes JSON `null`,
   which would bypass the default.
+
+- **`0018_invitation_acceptance.sql`** — adds `resolved_subject_type` and extends
+  invitation tuple uniqueness from pending to pending/accepting. Deploy this schema
+  before the updated stores. Stop old invitation writers before starting new ones:
+  old unconditional updates cannot honor the durable claim. Custom stores implement
+  `ClaimAcceptance`/`CompleteAcceptance` and current-token `UpdateStatus` together.
+  Existing accepted rows have an empty subject type and are not backfilled with a
+  guessed identity kind; replay of those legacy tokens may conflict.
 
 **Upgrading from a host that copied an earlier set:** re-export or copy the
 missing files into your migration directory and apply them **before** deploying a
@@ -2163,31 +2363,29 @@ UPGRADE NOTE below).
 
 ## Quickstart — the v3 minimum (dev, all defaults)
 
-The required fields are `Hasher`, `Mailer`, `TokenSigner`, `RuntimeMode`, and
+For this password-and-email example the required fields are `Hasher`, `Mailer`, `TokenSigner`, `RuntimeMode`, and
 `DeliveryMode`; the challenge and delivery rails need their protector/encrypter,
 and `in_process` mode needs the host to run the delivery runtime. A
 single-instance dev host:
 
 ```go
-cfg := auth.Config{
-    Hasher:      bcrypt.New(),
-    Mailer:      email.NewConsole(log),      // dev only; production uses SMTP/sendgrid
-    MailFrom:    "auth@example.com",
-    TokenSigner: signer,                      // cryptids.NewHS256(key) or golang-jwt
-    RuntimeMode: auth.RuntimeModeDevelopment, // production has NO default
-
-    ChallengeProtector: protector,            // HMAC pepper key ring (Challenges wired)
-    DeliveryEncrypter:  deliveryKey,          // AES-GCM (command envelope always sealed)
-    DeliveryMode:       auth.DeliveryModeInProcess, // bounded ephemeral pool; no dispatcher needed
-    // For durable delivery set DeliveryMode "jobs" and wire Config.DeliveryDispatcher
-    // over the generic jobs pocket instead (recommended production posture).
-    // AccessTokenTTL / RefreshTTL omitted → 15m / 7d.
-    // Views: authViews                        // add HTML pages (authgoth.New(bundle)); omit for API-only
-}
-authSvc, err := auth.NewService(repos, cfg)   // repos, err := authstore.Repositories(db) — probes the 13 tables
-// run the in-process delivery runtime for the whole process lifetime:
-go authSvc.RunDelivery(ctx)
-authSvc.Register(pocket.Mount{Router: router, Logger: log})
+authSvc, err := auth.New(repos, signer, environment.ModeDevelopment, delivery.ModeInProcess,
+    auth.WithPassword(auth.PasswordConfig{Hasher: bcrypt.New()}),
+    auth.WithIdentity(auth.IdentityConfig{ChallengeProtector: protector}),
+    auth.WithDelivery(auth.DeliveryConfig{
+        Mailer: email.NewConsole(log), // development only
+        MailFrom: "auth@example.com",
+        DeliveryEncrypter: deliveryKey,
+    }),
+    auth.WithLogger(log),
+)
+// repos comes from authstore.Repositories(ctx, db), after host-owned migrations.
+// Run jobs mode with a durable dispatcher for production. Session TTL defaults
+// remain 15 minutes and 7 days; WithBrowser adds optional HTML views.
+if err != nil { return err }
+// Run the in-process runtime for the process lifetime and observe its result.
+go func() { deliveryDone <- authSvc.Delivery.Run(ctx) }()
+if err := authSvc.HTTP.Register(pockets.Mount{Router: router, Logger: log}); err != nil { return err }
 ```
 
 **`examples/auth-cms/cmd/server` is this page's executable twin** — the full v3
@@ -2195,7 +2393,7 @@ surface (identifiers, challenge rail, delivery runtime, passwordless, HTML pages
 branded page override) on in-memory stores with zero infra; its README carries the
 JSON + HTML run-and-look protocol. Production hosts set `RuntimeMode=production`
 (which fail-closes every incomplete wiring above), a stable shared secret per key,
-SMTP/real notifiers, a durable/shared limiter, and an HTTPS `PublicAuthBaseURL`.
+SMTP/real body senders, a durable/shared limiter, and an HTTPS `PublicAuthBaseURL`.
 
 ## Datastores — {turso, pgx} out of the box, or none at all
 
@@ -2205,13 +2403,13 @@ collation). A host may satisfy `Repositories` itself —
 `examples/auth-cms/internal/authmem` is the zero-infra proof for every port.
 Conformance is env-gated: turso via `-tags=integration` + `TURSO_*`; pgx via
 `POSTGRES_TEST_DSN`. Child tables carry no enforced FKs (credential/identifier
-atomicity lives in the `CreateWithPrimaryIdentifier`/`ApplyVerifiedChange`/
+atomicity lives in the `Provision`/`Passwords.Change`/`ApplyVerifiedChange`/
 `PasswordResets.Reset` transactions, so no cascade can orphan a credential).
 
 `integrations/cryptids/bcrypt` satisfies `PasswordHasher`;
 `integrations/cryptids/golang-jwt` satisfies `cryptids.JWTSigner`;
 `integrations/oauth/{google,github}` satisfy `oauth.Provider`;
-`integrations/notify/mailer` bridges the email kind onto notify. None imports this
+`sdk/capabilities/notify/email.NewDelivery` retains typed mail when dispatching. Provider integrations do not import this
 module and this module imports none — `pockets/authentication/go.mod` requires
 exactly `sdk`.
 
@@ -2293,7 +2491,7 @@ execution record in `RELEASING.md`); not yet applied to a real host.
 
 The delivery-refactor (2026-07-13) removed authentication's private durable
 delivery queue. Durable delivery is now the generic **jobs** pocket reached
-through a host-wired `Config.DeliveryDispatcher`; the bounded ephemeral path is
+through a host-wired `DeliveryConfig.DeliveryDispatcher`; the bounded ephemeral path is
 `in_process`. Auth owns no delivery table (canonical set is `0001–0016`). See
 "Delivery execution modes" above for the full model; this note is the compatibility
 delta.
@@ -2301,10 +2499,10 @@ delta.
 **Public removals (breaking):**
 
 - `Repositories.DeliveryJobs` — removed. Durable delivery no longer has an auth
-  repository port; wire `Config.DeliveryDispatcher` over the generic jobs pocket.
-- `domain/deliveryjob` — the bespoke delivery-job domain package is removed.
+  repository port; wire `DeliveryConfig.DeliveryDispatcher` over the generic jobs pocket.
+- `logic/authentication/deliveryjob` — the bespoke delivery-job domain package is removed.
 - `Service.RunDeliveryWorker` — removed. Run the generic `jobs.FencedRuntime` in
-  `jobs` mode, or `Service.RunDelivery(ctx)` in `in_process` mode.
+  `jobs` mode, or `delivery.Runtime.Run(ctx)` in `in_process` mode.
 - Obsolete errors removed: `ErrNonDurableDeliveryRepository`,
   `ErrDeliveryWorkerUnacknowledged`, `ErrInProcessDurableDeliveryRepository`, and
   the delivery-durability construction funcs.
@@ -2313,19 +2511,19 @@ delta.
 
 **Renames:**
 
-- `Config.DeliveryWorkerAcknowledged` → `Config.DeliveryJobsAcknowledged` (the
+- `Config.DeliveryWorkerAcknowledged` → `DeliveryConfig.DeliveryJobsAcknowledged` (the
   wiring assertion that the host runs the generic jobs delivery runtime; production
   requires it under `jobs` mode).
 
 **Additions:**
 
-- `Config.DeliveryMode` (`"jobs"` | `"in_process"` | `"off"`, required, no default),
-  `Config.DeliveryDispatcher` (the transport-neutral outbound seam),
-  `Config.InProcessDelivery` (bounded-pool tuning), `Config.DeliveryEventsEmitter`
-  (optional secret-free observer), `Config.DeliveryEphemeralAcknowledged`.
-- `Service.RunDelivery(ctx)` (host-owned `in_process` runtime),
-  `Service.DeliveryJobRuntime()` (the registered `jobs` kind/handler seam), and
-  `Service.InProcessQueueDepth()` (secret-free depth for host health).
+- `deliveryMode` (`"jobs"` | `"in_process"` | `"off"`, required, no default),
+  `DeliveryConfig.DeliveryDispatcher` (the transport-neutral outbound seam),
+  `DeliveryConfig.InProcessDelivery` (bounded-pool tuning), `DeliveryConfig.DeliveryEventsEmitter`
+  (optional secret-free observer), `DeliveryConfig.DeliveryEphemeralAcknowledged`.
+- `delivery.Runtime.Run(ctx)` (host-owned `in_process` runtime),
+  `delivery.Runtime.JobRuntime()` (the registered `jobs` kind/handler seam), and
+  `delivery.Runtime.QueueDepth()` (secret-free depth for host health).
 - Generic jobs gained the fenced surface: `Repositories.FencedQueue`, the fenced
   primitives, `jobs.FencedRuntime`, and migration `0003_fenced_job_queue` — see
   `pockets/jobs/README.md`.
@@ -2336,12 +2534,12 @@ and is no longer projected. The field is retained for compatibility.
 
 **Adopter steps:**
 
-1. Set `Config.DeliveryMode` explicitly (`jobs` recommended for production).
+1. Set `deliveryMode` explicitly (`jobs` recommended for production).
 2. `jobs` mode: build a durable `jobs.Repositories.FencedQueue`, wire a composition
    adapter mapping `DeliveryDispatcher` onto the fenced primitives + registering
    `DeliveryJobRuntime().Handle`, run `jobs.FencedRuntime`, and set
    `DeliveryJobsAcknowledged: true` (see "Composition and lifecycle ownership").
-3. `in_process` mode: run `go Service.RunDelivery(ctx)` and set
+3. `in_process` mode: run `go delivery.Runtime.Run(ctx)` and set
    `DeliveryEphemeralAcknowledged: true` (accept crash-loss).
 4. A host that scaffolded the bespoke delivery-outbox table under an earlier v3 cut
    drains-then-drops it via the **Auth delivery-runtime upgrade runbook** in
@@ -2369,8 +2567,47 @@ compiles — switch it to keyed fields. This is the only breaking edge.
   malformed identifier or invalid metadata is now rejected before the policy is
   asked, and a refusal still leaves no row and no grant on both the pending and
   direct-add branches.
-- The trusted `Service.Create` and `Service.ListByResource` composition methods are
+- The trusted `invitations.Service.Create` and `invitations.Service.ListByResource` composition methods are
   unchanged and remain check-free.
 - Owner-facing invitation responses (pending create, resource list, resend) now
   include `metadata` when the invitation carries any; it omits when empty, and
   `GET /auth/invitations/mine` never includes it.
+
+### Rate-limiter outage policy
+
+`RateLimitByIP` deliberately proceeds on limiter dependency failures and logs a
+classified warning through the configured logger. Invalid limits remain 500
+configuration errors; exhausted budgets return the shared JSON 429 response with
+Retry-After. The refresh-session budget also retains its deliberate open outage
+policy and now logs failures. A canceled refresh stops before rotation. Login and
+other service entry points retain their existing failure policies.
+
+The underlying SDK middleware defaults to closed; hosts using it directly select
+FailOpen explicitly. Memory is bounded by MaxEntries and can return ErrCapacity;
+select a shared adapter for production as required by the existing security
+posture. See [AUDIT-011](../../AUDIT.md#audit-011-rate-limiter-contract-and-adapter-corrections)
+for the constructor, policy and adapter migration.
+
+## Selecting outbound delivery transports
+
+Email uses `DeliveryConfig.Mailer` (`notify/email.Sender`) and host-owned `MailFrom`.
+Non-email identifier routes use `DeliveryConfig.BodySenders map[string]BodySender`, where
+`BodySender.Send(ctx, destination, body string) error` is a pocket-owned port.
+For example, map `sdk.AddressKindPhone` to the host's SMS sender, or to
+`notify.NewConsole(log)` in development. These keys are authentication identifier
+kinds, not a generic SDK channel registry.
+
+Wiring is copied and rejects empty/whitespace keys, nil/typed-nil senders and an
+`email` entry. Email always keeps HTML and text through its typed sender. All
+transports share `notify.CapabilityReporter` and `notify.CheckTransport` production
+checks; missing metadata and development Console are rejected in production.
+
+Each queued command selects one configured route after decoding its existing
+envelope. A password reset does not fan out to other configured body senders.
+The SDK separately supports host-selected multi-channel calls through
+`notify.Send(ctx, deliveries...)`, with indexed partial failures. Eligibility,
+purpose-specific rendering and durable retry/checkpoint behavior remain in the
+pocket. Queued envelope schema is unchanged. Core email templates now include
+handwritten plain-text alternatives with usable links.
+
+Consumer migration: [AUDIT-014](../../AUDIT.md#audit-014-explicit-notification-deliveries-and-email-correctness).

@@ -3,15 +3,15 @@ module github.com/gopernicus/gopernicus/integrations/filestorage/gcs
 go 1.26.1
 
 require (
+	cloud.google.com/go/auth v0.18.2
 	cloud.google.com/go/storage v1.61.3
-	github.com/gopernicus/gopernicus/sdk v0.1.0
+	github.com/gopernicus/gopernicus/sdk v0.9.0
 	google.golang.org/api v0.271.0
 )
 
 require (
 	cel.dev/expr v0.25.1 // indirect
 	cloud.google.com/go v0.123.0 // indirect
-	cloud.google.com/go/auth v0.18.2 // indirect
 	cloud.google.com/go/auth/oauth2adapt v0.2.8 // indirect
 	cloud.google.com/go/compute/metadata v0.9.0 // indirect
 	cloud.google.com/go/iam v1.5.3 // indirect

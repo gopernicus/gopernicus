@@ -27,5 +27,14 @@ func QueryOne[T any](ctx context.Context, db Querier, query string, args ...any)
 		}
 		return zero, sdk.ErrNotFound
 	}
-	return ScanStruct[T](rows)
+	out, err := ScanStruct[T](rows)
+	if err != nil {
+		return zero, err
+	}
+	// UPDATE ... RETURNING can yield a row before its implicit transaction
+	// commits. Like sql.Row.Scan, report finalization failures before success.
+	if err := rows.Close(); err != nil {
+		return zero, MapError(err)
+	}
+	return out, nil
 }

@@ -1,133 +1,114 @@
 package events
 
 import (
+	"bytes"
 	"encoding/json"
+	"fmt"
 	"time"
+
+	"github.com/gopernicus/gopernicus/sdk"
 )
 
-// EventEncoder is an optional interface an event may implement to control its
-// serialization (protobuf, msgpack, a stable envelope). Events that do not
-// implement it are encoded with json.Marshal by EncodeEvent.
-type EventEncoder interface {
-	EncodeEvent() ([]byte, error)
-}
+// EventEncoder supplies opaque transport bytes. Without it EncodeEvent uses
+// JSON. Custom binary consumers decode these bytes themselves; RemoteEvent's
+// Unmarshal convenience supports JSON only.
+type EventEncoder interface{ EncodeEvent() ([]byte, error) }
 
-// EncodeEvent serializes an event for transport (the outbox row, a remote
-// broker). It uses the event's EventEncoder when present and falls back to
-// json.Marshal otherwise. This is the one place serialization happens — a
-// domain service never hand-rolls json.Marshal for an event.
 func EncodeEvent(event Event) ([]byte, error) {
-	if enc, ok := event.(EventEncoder); ok {
-		return enc.EncodeEvent()
+	if err := ValidateEvent(event); err != nil {
+		return nil, err
+	}
+	if encoder, ok := event.(EventEncoder); ok {
+		return encoder.EncodeEvent()
 	}
 	return json.Marshal(event)
 }
 
-// Record is the durable/wire envelope: the outbox row's shape and the only
-// event form that crosses a datastore or process boundary. EventID (sdk/id) is
-// the at-least-once de-duplication key — it is the outbox primary key and the
-// SSE `id:` field, so consumers de-dupe on it.
+// Record is the complete durable/transport envelope. Metadata is independent of
+// the payload's format. JSON encodes opaque Payload bytes as base64. EventID is
+// preserved on replay; CorrelationID can be shared by many distinct events.
 type Record struct {
-	EventID       string
-	Type          string
-	OccurredAt    time.Time
-	CorrelationID string
-	Payload       []byte // EncodeEvent output
-	AggregateType *string
-	AggregateID   *string
-	TenantID      *string
+	EventID       string    `json:"event_id"`
+	Type          string    `json:"type"`
+	OccurredAt    time.Time `json:"occurred_at"`
+	CorrelationID string    `json:"correlation_id"`
+	Payload       []byte    `json:"payload"`
+	AggregateType *string   `json:"aggregate_type,omitempty"`
+	AggregateID   *string   `json:"aggregate_id,omitempty"`
+	TenantID      *string   `json:"tenant_id,omitempty"`
 }
 
-// NewRecord builds a Record from a typed Event: it assigns a fresh EventID from
-// sdk/id, copies the envelope fields, extracts Metadata when the event carries
-// it, and encodes the payload via EncodeEvent. Serialization is owned here, not
-// by callers.
-func NewRecord(e Event) (Record, error) {
-	payload, err := EncodeEvent(e)
+// NewRecord snapshots an event. It preserves a nonempty Identified ID and
+// otherwise generates one. Encoder-owned bytes and metadata pointers are copied.
+func NewRecord(event Event) (Record, error) {
+	payload, err := EncodeEvent(event)
 	if err != nil {
 		return Record{}, err
 	}
-	rec := Record{
-		EventID:       ids.MustGenerate(),
-		Type:          e.Type(),
-		OccurredAt:    e.OccurredAt(),
-		CorrelationID: e.CorrelationID(),
-		Payload:       payload,
+	record := Record{
+		Type:          event.Type(),
+		OccurredAt:    event.OccurredAt(),
+		CorrelationID: event.CorrelationID(),
+		Payload:       bytes.Clone(payload),
 	}
-	if m, ok := e.(Metadata); ok {
-		rec.AggregateType = m.AggregateType()
-		rec.AggregateID = m.AggregateID()
-		rec.TenantID = m.TenantID()
+	if identified, ok := event.(Identified); ok {
+		record.EventID = identified.EventID()
 	}
-	return rec, nil
+	if record.EventID == "" {
+		record.EventID = ids.MustGenerate()
+	}
+	if metadata, ok := event.(Metadata); ok {
+		record.AggregateType = copyString(metadata.AggregateType())
+		record.AggregateID = copyString(metadata.AggregateID())
+		record.TenantID = copyString(metadata.TenantID())
+	}
+	return record, nil
 }
 
-// RemoteEvent is an event reconstructed from a transport envelope on another
-// process (or replayed from the outbox). The broadcast/durable path cannot
-// recover the original typed struct, so RemoteEvent carries the envelope fields
-// plus the encoded payload. It satisfies Event and Metadata directly and
-// Unmarshaler for TypedHandler's slow path (decoding the payload into the
-// handler's concrete type), so one handler serves both in-process typed events
-// and rehydrated ones.
-type RemoteEvent struct {
-	EventType   string
-	Occurred    time.Time
-	Correlation string
-	Payload     []byte // the original EncodeEvent bytes
-
-	Tenant  *string
-	AggType *string
-	AggID   *string
+// Validate checks the envelope's required identity and type. Occurrence time and
+// correlation are caller vocabulary, not a framework clock or tracing policy.
+func (r Record) Validate() error {
+	if r.EventID == "" {
+		return fmt.Errorf("events: record needs an event ID: %w", sdk.ErrInvalidInput)
+	}
+	return ValidateEvent(RemoteEvent{Record: r})
 }
+
+// Event returns an independent payload/metadata snapshot ready for dispatch.
+func (r Record) Event() RemoteEvent {
+	r.Payload = bytes.Clone(r.Payload)
+	r.AggregateType = copyString(r.AggregateType)
+	r.AggregateID = copyString(r.AggregateID)
+	r.TenantID = copyString(r.TenantID)
+	return RemoteEvent{Record: r}
+}
+
+// RemoteEvent exposes a Record through the same methods as a typed local event.
+// The embedded Record retains identity and routing without inspecting payloads.
+type RemoteEvent struct{ Record }
 
 var (
 	_ Event        = RemoteEvent{}
 	_ Metadata     = RemoteEvent{}
+	_ Identified   = RemoteEvent{}
 	_ Unmarshaler  = RemoteEvent{}
 	_ EventEncoder = RemoteEvent{}
 )
 
-// Type implements Event.
-func (e RemoteEvent) Type() string { return e.EventType }
-
-// OccurredAt implements Event.
-func (e RemoteEvent) OccurredAt() time.Time { return e.Occurred }
-
-// CorrelationID implements Event.
-func (e RemoteEvent) CorrelationID() string { return e.Correlation }
-
-// AggregateType implements Metadata.
-func (e RemoteEvent) AggregateType() *string { return e.AggType }
-
-// AggregateID implements Metadata.
-func (e RemoteEvent) AggregateID() *string { return e.AggID }
-
-// TenantID implements Metadata.
-func (e RemoteEvent) TenantID() *string { return e.Tenant }
-
-// EncodeEvent returns the original payload bytes unchanged, so re-encoding a
-// rehydrated event preserves its wire form rather than JSON-marshaling the
-// RemoteEvent wrapper.
+func (e RemoteEvent) Type() string                 { return e.Record.Type }
+func (e RemoteEvent) OccurredAt() time.Time        { return e.Record.OccurredAt }
+func (e RemoteEvent) CorrelationID() string        { return e.Record.CorrelationID }
+func (e RemoteEvent) EventID() string              { return e.Record.EventID }
+func (e RemoteEvent) AggregateType() *string       { return e.Record.AggregateType }
+func (e RemoteEvent) AggregateID() *string         { return e.Record.AggregateID }
+func (e RemoteEvent) TenantID() *string            { return e.Record.TenantID }
 func (e RemoteEvent) EncodeEvent() ([]byte, error) { return e.Payload, nil }
+func (e RemoteEvent) Unmarshal(target any) error   { return json.Unmarshal(e.Payload, target) }
 
-// Unmarshal decodes the payload into target — TypedHandler's slow path uses it
-// to rebuild the handler's concrete event type from the wire bytes.
-func (e RemoteEvent) Unmarshal(target any) error {
-	return json.Unmarshal(e.Payload, target)
-}
-
-// DecodeRemoteMetadata best-effort extracts tenant/aggregate metadata from an
-// encoded event payload (BaseEvent's json tags). Absent or unparseable fields
-// stay nil. A bus adapter uses it to populate a RemoteEvent's Metadata from the
-// payload it received.
-func DecodeRemoteMetadata(payload []byte) (tenant, aggType, aggID *string) {
-	var probe struct {
-		Tenant  *string `json:"tenant_id"`
-		AggType *string `json:"aggregate_type"`
-		AggID   *string `json:"aggregate_id"`
+func copyString(value *string) *string {
+	if value == nil {
+		return nil
 	}
-	if err := json.Unmarshal(payload, &probe); err != nil {
-		return nil, nil, nil
-	}
-	return probe.Tenant, probe.AggType, probe.AggID
+	copied := *value
+	return &copied
 }

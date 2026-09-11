@@ -5,19 +5,23 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	inbound "github.com/gopernicus/gopernicus/pockets/authentication/inbound/http"
+	delivery "github.com/gopernicus/gopernicus/pockets/authentication/logic/delivery"
+	environment "github.com/gopernicus/gopernicus/sdk/pkg/environment"
 )
 
-// Browser login-path tests (#12). Config.BrowserLoginPath configures ONLY the browser
+// Browser login-path tests (#12). BrowserConfig.BrowserLoginPath configures ONLY the browser
 // identity gates. A non-empty value must validate as a safe root-relative path so a
 // gate can never be pointed off-site; empty defaults to "/auth/login".
 
-func browserBaseConfig() Config {
-	return Config{
+func browserBaseConfig() constructorConfig {
+	return constructorConfig{
 		Hasher:       stubHasher{},
 		Mailer:       stubMailer{},
 		TokenSigner:  stubSigner{},
-		RuntimeMode:  RuntimeModeDevelopment,
-		DeliveryMode: DeliveryModeOff,
+		RuntimeMode:  environment.ModeDevelopment,
+		DeliveryMode: delivery.ModeOff,
 	}
 }
 
@@ -43,7 +47,7 @@ func TestBrowserLoginPathConstructionMatrix(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := browserBaseConfig()
 			cfg.BrowserLoginPath = tt.path
-			_, err := NewService(Repositories{}, cfg)
+			_, err := newFixture(testRepositories(Repositories{}), cfg)
 			if tt.wantErr == nil {
 				if err != nil {
 					t.Fatalf("NewService: err=%v, want nil", err)
@@ -63,14 +67,14 @@ func TestBrowserLoginPathConstructionMatrix(t *testing.T) {
 func TestBrowserLoginPathOverrideReachesGate(t *testing.T) {
 	cfg := browserBaseConfig()
 	cfg.BrowserLoginPath = "/signin"
-	svc, err := NewService(Repositories{}, cfg)
+	svc, err := newFixture(testRepositories(Repositories{}), cfg)
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
 
 	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusNoContent) })
 	rec := httptest.NewRecorder()
-	svc.RequirePrincipal(Browser())(next).ServeHTTP(rec, httptest.NewRequest("GET", "/admin", nil))
+	svc.HTTP.RequirePrincipal(inbound.Browser())(next).ServeHTTP(rec, httptest.NewRequest("GET", "/admin", nil))
 	if rec.Code != http.StatusSeeOther {
 		t.Fatalf("denied browser GET = %d, want 303", rec.Code)
 	}

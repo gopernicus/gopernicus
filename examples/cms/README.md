@@ -5,8 +5,8 @@ pocket module over the `sdk` framework kernel, persisted in Turso/libSQL,
 rendered through the [`ui/goth`](../../ui/goth/README.md) kit (templ + plain CSS)
 via the `pockets/cms/views/goth` adapter.
 
-The host builds a `ui/goth` bundle (`uigoth.New(uigoth.Config{AssetBasePath:
-"/assets/goth"})`), serves its embedded fingerprinted assets under that path with
+The host builds a `ui/goth` bundle (`uigoth.New(uigoth.WithAssetBasePath(
+"/assets/goth"))`), serves its embedded fingerprinted assets under that path with
 `web.NewStaticFileServer(uigothassets.FS, web.WithAssetPrefix("dist/"))`, and passes
 the bundle to `cmsViews`. The admin CRUD pages render through the GOTH default; the
 public site is this host's custom theme (`internal/theme`, the pocket's
@@ -112,6 +112,6 @@ imports **only** the standard library (and other `sdk` packages). Concrete
 third-party drivers live in **`integrations/`** (reusable connectors, one
 external lib each). The `pockets/cms` hexagon is datastore-free — its store
 SQL lives in the separate `pockets/cms/stores/turso` module, which this host
-depends on. The `templ` render seam in `sdk/foundation/web` takes a local `Renderer`
+depends on. The `templ` render seam in `sdk/pkg/web` takes a local `Renderer`
 interface that `templ.Component` satisfies implicitly, so `sdk` never imports
 `templ`.

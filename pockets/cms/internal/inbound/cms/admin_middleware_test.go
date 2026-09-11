@@ -1,13 +1,13 @@
 package cms
 
 import (
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"sync"
 	"testing"
 
-	"github.com/gopernicus/gopernicus/sdk/foundation/logging"
-	"github.com/gopernicus/gopernicus/sdk/foundation/web"
+	"github.com/gopernicus/gopernicus/sdk/pkg/web"
 )
 
 // routeRecorder is a counting middleware: it records, per request, the method+
@@ -98,7 +98,7 @@ var publicRoutes = []struct{ method, path string }{
 }
 
 func newAdminRouter(rr *routeRecorder) http.Handler {
-	return BuildRouter(newTestRegistry(), &fakeEntrySvc{}, &fakeTaxo{}, &fakeMenuSvc{}, &fakeMediaSvc{}, &fakeContactSvc{}, nil, logging.NewNoop(), WithViews(stubViews{}), WithAdminMiddleware(rr.middleware()))
+	return BuildRouter(newTestRegistry(), &fakeEntrySvc{}, &fakeTaxo{}, &fakeMenuSvc{}, &fakeMediaSvc{}, &fakeContactSvc{}, nil, slog.New(slog.DiscardHandler), WithViews(stubViews{}), WithAdminMiddleware(rr.middleware()))
 }
 
 func TestAdminMiddleware_WrapsEveryAdminRoute(t *testing.T) {
@@ -128,7 +128,7 @@ func TestAdminMiddleware_SkipsEveryPublicRoute(t *testing.T) {
 // TestAdminMiddleware_NilPreservesBehavior documents the zero-value contract:
 // with no AdminMiddleware configured, an admin route still serves (no gating).
 func TestAdminMiddleware_NilPreservesBehavior(t *testing.T) {
-	h := BuildRouter(newTestRegistry(), &fakeEntrySvc{}, &fakeTaxo{}, &fakeMenuSvc{}, &fakeMediaSvc{}, &fakeContactSvc{}, nil, logging.NewNoop(), WithViews(stubViews{}))
+	h := BuildRouter(newTestRegistry(), &fakeEntrySvc{}, &fakeTaxo{}, &fakeMenuSvc{}, &fakeMediaSvc{}, &fakeContactSvc{}, nil, slog.New(slog.DiscardHandler), WithViews(stubViews{}))
 
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, httptest.NewRequest("GET", "/articles", nil))

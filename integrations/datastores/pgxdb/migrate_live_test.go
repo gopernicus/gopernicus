@@ -28,7 +28,7 @@ func schemaLiveDSN(t *testing.T) string {
 // openLive opens the throwaway database and closes it at test end.
 func openLive(t *testing.T, dsn string) *DB {
 	t.Helper()
-	db, err := Open(Config{DSN: dsn})
+	db, err := Open(context.Background(), Config{DSN: dsn})
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -279,7 +279,7 @@ func pinnedSearchPathDB(t *testing.T, dsn, schema string) *DB {
 	q := u.Query()
 	q.Set("options", "-csearch_path="+schema+",public")
 	u.RawQuery = q.Encode()
-	db, err := Open(Config{DSN: u.String()})
+	db, err := Open(context.Background(), Config{DSN: u.String()})
 	if err != nil {
 		t.Fatalf("open pinned pool: %v", err)
 	}

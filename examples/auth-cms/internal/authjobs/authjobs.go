@@ -30,16 +30,15 @@ import (
 	"encoding/json"
 	"time"
 
-	auth "github.com/gopernicus/gopernicus/pockets/authentication"
-	"github.com/gopernicus/gopernicus/pockets/jobs"
-	"github.com/gopernicus/gopernicus/pockets/jobs/domain/job"
+	delivery "github.com/gopernicus/gopernicus/pockets/authentication/logic/delivery"
+	job "github.com/gopernicus/gopernicus/pockets/jobs/logic/queue"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/work"
 )
 
 // Enqueuer is the narrow slice of the generic jobs Service the Dispatcher needs,
 // composed from the sdk keyed-work submission protocol: this bridge requires all
 // three segregated capabilities — idempotent admission, atomic replace/supersede,
-// and latest-by-key status. *jobs.Service satisfies it.
+// and latest-by-key status. *queue.Service satisfies it.
 type Enqueuer interface {
 	work.Enqueuer
 	work.Replacer
@@ -48,7 +47,7 @@ type Enqueuer interface {
 
 // Compile-time proof the adapter satisfies authentication's stdlib-typed delivery
 // transport seam without either pocket importing the other.
-var _ auth.DeliveryDispatcher = (*Dispatcher)(nil)
+var _ delivery.Dispatcher = (*Dispatcher)(nil)
 
 // Dispatcher bridges auth.DeliveryDispatcher to the generic jobs fenced primitives.
 type Dispatcher struct {
@@ -60,7 +59,7 @@ type Dispatcher struct {
 // command is submitted under auth.DeliveryJobKind (the single kind the one delivery
 // handler processes); the per-command rail/purpose ride inside the sealed payload.
 func NewDispatcher(j Enqueuer) *Dispatcher {
-	return &Dispatcher{jobs: j, kind: auth.DeliveryJobKind}
+	return &Dispatcher{jobs: j, kind: delivery.JobKind}
 }
 
 // Submit admits payload under logicalKey exactly once. The kind/purpose params are
@@ -82,51 +81,49 @@ func (d *Dispatcher) LatestStatus(ctx context.Context, logicalKey string) (strin
 	return string(st), err
 }
 
-// FencedRuntimeConfig builds the generic jobs FencedRuntime configuration that runs
-// authentication's delivery processor, registering rt.Handle under rt.Kind and rt.Discard
-// as the per-kind dead-letter hook. The host passes the returned config to
-// jobs.NewFencedRuntime; opts tune sizing/cadence.
-//
-// The handler maps auth's explicit retry/permanent verdict (AV3D-3.4) onto the generic
-// runtime's policy: a permanent-classified handle error (auth.DeliveryErrorPermanent)
-// becomes jobs.Permanent so the runtime dead-letters IMMEDIATELY and fires rt.Discard;
-// any other error is a transient failure the runtime retries with bounded backoff. The
-// execution ID rides into the claim for the best-effort lifecycle observation.
-func FencedRuntimeConfig(rt auth.DeliveryJobRuntime, opts ...func(*jobs.FencedRuntimeConfig)) jobs.FencedRuntimeConfig {
-	cfg := jobs.FencedRuntimeConfig{
-		Handlers: map[string]jobs.FencedHandlerFunc{
-			rt.Kind: func(ctx context.Context, claim jobs.FencedClaim) error {
-				err := rt.Handle(ctx, auth.DeliveryClaim{
-					ExecutionID: claim.ExecutionID,
-					Payload:     []byte(claim.Payload),
-					Attempt:     claim.Attempt,
-					Checkpoint: func(ctx context.Context, sealed []byte) error {
-						return claim.Checkpoint(ctx, json.RawMessage(sealed))
-					},
-				})
-				if err == nil {
-					return nil
-				}
-				if auth.DeliveryErrorPermanent(err) {
-					return jobs.Permanent(err.Error())
-				}
-				return err
-			},
-		},
-		DeadLetters: map[string]jobs.DeadLetterFunc{
-			rt.Kind: func(ctx context.Context, j job.Job) error {
-				return rt.Discard(ctx, j.JobID, []byte(j.Payload))
-			},
+// NewRuntime connects authentication delivery to the generic fenced queue.
+// The handler and discard hook share rt.Kind. Construction starts no workers;
+// the host runs the returned runtime. Supplied options replace their whole group.
+func NewRuntime(svc *job.Service, rt delivery.JobRuntime, opts ...job.FencedRuntimeOption) (*job.FencedRuntime, error) {
+	options := []job.FencedRuntimeOption{job.WithDeadLetters(deadLetters(rt))}
+	options = append(options, opts...)
+	return job.NewFencedRuntime(svc, handlers(rt), options...)
+}
+
+// Permanent delivery errors become immediate dead letters; ordinary errors keep
+// the generic runtime's bounded retry policy. Checkpoints keep the same lease fence.
+func handlers(rt delivery.JobRuntime) map[string]job.FencedHandlerFunc {
+	return map[string]job.FencedHandlerFunc{
+		rt.Kind: func(ctx context.Context, claim job.FencedClaim) error {
+			err := rt.Handle(ctx, delivery.Claim{
+				ExecutionID: claim.ExecutionID,
+				Payload:     []byte(claim.Payload),
+				Attempt:     claim.Attempt,
+				Checkpoint: func(ctx context.Context, sealed []byte) error {
+					return claim.Checkpoint(ctx, json.RawMessage(sealed))
+				},
+			})
+			if err == nil {
+				return nil
+			}
+			if delivery.HandleErrorPermanent(err) {
+				return job.Permanent(err.Error())
+			}
+			return err
 		},
 	}
-	for _, opt := range opts {
-		opt(&cfg)
+}
+
+func deadLetters(rt delivery.JobRuntime) map[string]job.DeadLetterFunc {
+	return map[string]job.DeadLetterFunc{
+		rt.Kind: func(ctx context.Context, j job.Job) error {
+			return rt.Discard(ctx, j.JobID, []byte(j.Payload))
+		},
 	}
-	return cfg
 }
 
 // Purger is the narrow slice of the generic jobs Service PurgeTerminal needs: the
-// bounded terminal purge. *jobs.Service satisfies it.
+// bounded terminal purge. *queue.Service satisfies it.
 type Purger interface {
 	PurgeTerminal(ctx context.Context, before time.Time, limit int) (int, error)
 }
@@ -136,7 +133,7 @@ type Purger interface {
 // terminal generations older than before are removed, up to limit, WITHOUT any
 // auth-specific SQL — the retention policy is the caller's. The observed count is the
 // number removed. A purge error is returned unchanged and no purged event is emitted.
-func PurgeTerminal(ctx context.Context, purger Purger, rt auth.DeliveryJobRuntime, before time.Time, limit int) (int, error) {
+func PurgeTerminal(ctx context.Context, purger Purger, rt delivery.JobRuntime, before time.Time, limit int) (int, error) {
 	n, err := purger.PurgeTerminal(ctx, before, limit)
 	if err != nil {
 		return n, err

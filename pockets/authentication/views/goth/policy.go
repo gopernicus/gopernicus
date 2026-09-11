@@ -3,7 +3,7 @@ package goth
 import (
 	"errors"
 
-	"github.com/gopernicus/gopernicus/pockets/authentication"
+	inbound "github.com/gopernicus/gopernicus/pockets/authentication/inbound/http"
 	"github.com/gopernicus/gopernicus/ui/goth"
 )
 
@@ -19,20 +19,20 @@ const selfSource = "'self'"
 // HTMLResourceKind. Both are the literal CSP directive name, but the mapping is
 // explicit so a directive ui/goth requires that is NOT a member of the pocket's
 // frozen widenable allowlist is skipped rather than smuggled into a header.
-var directiveKind = map[goth.Directive]authentication.HTMLResourceKind{
-	goth.DirectiveScript:  authentication.HTMLScriptSrc,
-	goth.DirectiveStyle:   authentication.HTMLStyleSrc,
-	goth.DirectiveImg:     authentication.HTMLImgSrc,
-	goth.DirectiveFont:    authentication.HTMLFontSrc,
-	goth.DirectiveConnect: authentication.HTMLConnectSrc,
-	goth.DirectiveMedia:   authentication.HTMLMediaSrc,
-	goth.DirectiveWorker:  authentication.HTMLWorkerSrc,
+var directiveKind = map[goth.Directive]inbound.HTMLResourceKind{
+	goth.DirectiveScript:  inbound.HTMLScriptSrc,
+	goth.DirectiveStyle:   inbound.HTMLStyleSrc,
+	goth.DirectiveImg:     inbound.HTMLImgSrc,
+	goth.DirectiveFont:    inbound.HTMLFontSrc,
+	goth.DirectiveConnect: inbound.HTMLConnectSrc,
+	goth.DirectiveMedia:   inbound.HTMLMediaSrc,
+	goth.DirectiveWorker:  inbound.HTMLWorkerSrc,
 }
 
 // HTMLPolicy maps the bundle's deterministic browser Requirements into the pocket's
 // technology-neutral HTMLResourcePolicy, plus the script-src the externalized
 // fragment-reader landings need. It is the value a host hands to
-// authentication.Config.HTMLPolicy so the auth CSP widens exactly far enough to load
+// authentication.BrowserConfig.HTMLPolicy so the auth CSP widens exactly far enough to load
 // the GOTH stylesheet (and, on Interactive/Full profiles, the runtime), the
 // same-origin fragment-reader script, and any per-render nonced inline script — and
 // no further. The pocket's fixed protections (default-src 'none', base-uri 'none',
@@ -49,7 +49,7 @@ var directiveKind = map[goth.Directive]authentication.HTMLResourceKind{
 // The construction cannot fail for a valid bundle (every source is a fixed keyword),
 // so HTMLPolicy panics only on the impossible internal contract break; callers that
 // prefer an error use NewHTMLPolicy.
-func (v Views) HTMLPolicy() *authentication.HTMLResourcePolicy {
+func (v Views) HTMLPolicy() *inbound.HTMLResourcePolicy {
 	p, err := v.newHTMLPolicy()
 	if err != nil {
 		panic(err)
@@ -59,12 +59,12 @@ func (v Views) HTMLPolicy() *authentication.HTMLResourcePolicy {
 
 // NewHTMLPolicy is the error-returning form of HTMLPolicy for callers that construct
 // the policy in a fallible seam.
-func (v Views) NewHTMLPolicy() (*authentication.HTMLResourcePolicy, error) {
+func (v Views) NewHTMLPolicy() (*inbound.HTMLResourcePolicy, error) {
 	return v.newHTMLPolicy()
 }
 
-func (v Views) newHTMLPolicy() (*authentication.HTMLResourcePolicy, error) {
-	return authentication.NewHTMLResourcePolicy(v.resourceDirectives()...)
+func (v Views) newHTMLPolicy() (*inbound.HTMLResourcePolicy, error) {
+	return inbound.NewHTMLResourcePolicy(v.resourceDirectives()...)
 }
 
 // resourceDirectives builds the deterministic directive slice the policy is
@@ -76,10 +76,10 @@ func (v Views) newHTMLPolicy() (*authentication.HTMLResourcePolicy, error) {
 // It is a package-private seam so the contract test can assert directly on the
 // produced directives (Kind/Sources/Nonce) — the constructed HTMLResourcePolicy is
 // opaque by design.
-func (v Views) resourceDirectives() []authentication.HTMLResourceDirective {
+func (v Views) resourceDirectives() []inbound.HTMLResourceDirective {
 	req := v.bundle.Requirements()
 
-	var out []authentication.HTMLResourceDirective
+	var out []inbound.HTMLResourceDirective
 	scriptSeen, imgSeen, fontSeen := false, false, false
 	for _, d := range req.Directives() {
 		kind, ok := directiveKind[d]
@@ -87,19 +87,19 @@ func (v Views) resourceDirectives() []authentication.HTMLResourceDirective {
 			continue
 		}
 		sources, _ := req.Sources(d)
-		dir := authentication.HTMLResourceDirective{Kind: kind, Sources: append([]string(nil), sources...)}
+		dir := inbound.HTMLResourceDirective{Kind: kind, Sources: append([]string(nil), sources...)}
 		switch kind {
-		case authentication.HTMLScriptSrc:
+		case inbound.HTMLScriptSrc:
 			// The bundle's script-src (Interactive/Full) plus the same-origin
 			// fragment reader plus the per-render nonce channel (C5). Dedup keeps the
 			// first occurrence, so appending 'self' is safe if it is already present.
 			scriptSeen = true
 			dir.Sources = append(dir.Sources, selfSource)
 			dir.Nonce = true
-		case authentication.HTMLImgSrc:
+		case inbound.HTMLImgSrc:
 			imgSeen = true
 			dir.Sources = append(dir.Sources, selfSource)
-		case authentication.HTMLFontSrc:
+		case inbound.HTMLFontSrc:
 			fontSeen = true
 			dir.Sources = append(dir.Sources, selfSource)
 		}
@@ -111,26 +111,26 @@ func (v Views) resourceDirectives() []authentication.HTMLResourceDirective {
 	// mapped policy (C5). NewHTMLResourcePolicy re-sorts directives by name, so the
 	// append order here does not affect the emitted header.
 	if !scriptSeen {
-		out = append(out, authentication.HTMLResourceDirective{
-			Kind:    authentication.HTMLScriptSrc,
+		out = append(out, inbound.HTMLResourceDirective{
+			Kind:    inbound.HTMLScriptSrc,
 			Sources: []string{selfSource},
 			Nonce:   true,
 		})
 	}
 	// Same-origin imagery and fonts are the adapter's own surface, not the
-	// bundle's: the host's theme stylesheet (goth.Config.ThemeStylesheetPath)
+	// bundle's: the host's theme stylesheet (goth.WithThemeStylesheetPath)
 	// may declare @font-face over self-hosted files, and a WithBrand component
 	// renders self-hosted logo imagery. Widen exactly to 'self' — never a
 	// remote origin — so those load under the pocket's default-src 'none'.
 	if !imgSeen {
-		out = append(out, authentication.HTMLResourceDirective{
-			Kind:    authentication.HTMLImgSrc,
+		out = append(out, inbound.HTMLResourceDirective{
+			Kind:    inbound.HTMLImgSrc,
 			Sources: []string{selfSource},
 		})
 	}
 	if !fontSeen {
-		out = append(out, authentication.HTMLResourceDirective{
-			Kind:    authentication.HTMLFontSrc,
+		out = append(out, inbound.HTMLResourceDirective{
+			Kind:    inbound.HTMLFontSrc,
 			Sources: []string{selfSource},
 		})
 	}

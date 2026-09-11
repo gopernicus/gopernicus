@@ -4,11 +4,10 @@ import (
 	"context"
 	"time"
 
-	"github.com/jackc/pgx/v5"
-
 	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
-	"github.com/gopernicus/gopernicus/pockets/authentication/domain/session"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/session"
 	"github.com/gopernicus/gopernicus/sdk"
+	"github.com/jackc/pgx/v5"
 )
 
 // SessionStore implements session.SessionRepository over a PostgreSQL database. A
@@ -28,7 +27,11 @@ type SessionStore struct {
 var _ session.SessionRepository = (*SessionStore)(nil)
 
 // NewSessionStore returns a SessionStore backed by db.
+// It panics if db is nil; the caller owns the database lifecycle.
 func NewSessionStore(db *pgxdb.DB, opts ...Option) *SessionStore {
+	if db == nil {
+		panic("authentication pgx: NewSessionStore received a nil database")
+	}
 	return &SessionStore{db: db, qualified: qualified{schema: applyOptions(opts).schema}}
 }
 

@@ -5,8 +5,8 @@ import (
 	"time"
 
 	firestoredb "github.com/gopernicus/gopernicus/integrations/datastores/firestore"
-	"github.com/gopernicus/gopernicus/pockets/authentication/domain/user"
-	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/user"
+	"github.com/gopernicus/gopernicus/sdk/pkg/list"
 )
 
 var _ user.AdminRepository = (*userAdminStore)(nil)
@@ -35,9 +35,9 @@ func newUserAdminStore(db *firestoredb.DB) *userAdminStore {
 // List, because this ListQuery declares no PostFilter: user.OrderFields exposes
 // nothing searchable, and a top-level users-directory search is a plan-level
 // decision rather than an accidental full collection scan (ruling R4).
-func (s *userAdminStore) List(ctx context.Context, req crud.ListRequest) (crud.Page[user.Summary], error) {
+func (s *userAdminStore) List(ctx context.Context, req list.Request) (list.Page[user.Summary], error) {
 	if err := refuseAmbient(ctx); err != nil {
-		return crud.Page[user.Summary]{}, err
+		return list.Page[user.Summary]{}, err
 	}
 	return firestoredb.List(ctx, s.db.ReaderFrom(ctx), listUsers(s.db), req)
 }

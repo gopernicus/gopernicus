@@ -18,6 +18,7 @@ package robfigcron
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/robfig/cron/v3"
@@ -36,7 +37,8 @@ const parseOptions = cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow 
 // direction.
 type CronSchedule = interface {
 	// Next returns the next fire time strictly after the given time, evaluated in
-	// UTC. A zero time.Time means the expression never fires again.
+	// UTC. Zero means no match through calendar year after.Year()+5, the vendor's
+	// bounded search window.
 	Next(after time.Time) time.Time
 }
 
@@ -53,8 +55,24 @@ func New() *Parser {
 }
 
 // Parse validates a five-field cron expression (or an @descriptor alias) and
-// returns its schedule. It returns a non-nil error for an invalid expression.
+// returns its schedule. Timezone prefixes are unsupported. @every requires a
+// whole-second duration of at least one second; invalid expressions return errors.
 func (p *Parser) Parse(expr string) (CronSchedule, error) {
+	trimmed := strings.TrimSpace(expr)
+	if strings.HasPrefix(trimmed, "TZ=") || strings.HasPrefix(trimmed, "CRON_TZ=") {
+		// The vendor honors these prefixes even when Next receives UTC, and
+		// malformed standalone prefixes can panic in its parser.
+		return nil, fmt.Errorf("robfigcron: parse %q: timezone prefixes are unsupported; schedules use UTC", expr)
+	}
+	if durationText, ok := strings.CutPrefix(expr, "@every "); ok {
+		duration, err := time.ParseDuration(durationText)
+		if err != nil {
+			return nil, fmt.Errorf("robfigcron: parse %q: %w", expr, err)
+		}
+		if duration < time.Second || duration%time.Second != 0 {
+			return nil, fmt.Errorf("robfigcron: parse %q: @every requires whole seconds, at least one second", expr)
+		}
+	}
 	inner, err := p.inner.Parse(expr)
 	if err != nil {
 		return nil, fmt.Errorf("robfigcron: parse %q: %w", expr, err)
@@ -69,8 +87,8 @@ type schedule struct {
 
 // Next normalizes after to UTC before delegating: a robfig schedule built by the
 // standard parser evaluates in the input time's location, so a non-UTC input
-// would otherwise localize the result. A zero time.Time means the expression
-// never fires again.
+// would otherwise localize the result. Calendar search ends after the input
+// year plus five; zero means no occurrence was found within that window.
 func (s schedule) Next(after time.Time) time.Time {
 	return s.inner.Next(after.UTC())
 }

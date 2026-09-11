@@ -6,14 +6,13 @@ import (
 	"errors"
 	"time"
 
-	"github.com/jackc/pgx/v5"
-
 	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
-	"github.com/gopernicus/gopernicus/pockets/authentication/domain/identifier"
-	"github.com/gopernicus/gopernicus/pockets/authentication/domain/passwordless"
-	"github.com/gopernicus/gopernicus/pockets/authentication/domain/session"
-	"github.com/gopernicus/gopernicus/pockets/authentication/domain/user"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/identifier"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/passwordless"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/session"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/user"
 	"github.com/gopernicus/gopernicus/sdk"
+	"github.com/jackc/pgx/v5"
 )
 
 // PasswordlessStore implements passwordless.Repository over PostgreSQL: the
@@ -42,7 +41,11 @@ type PasswordlessStore struct {
 var _ passwordless.Repository = (*PasswordlessStore)(nil)
 
 // NewPasswordlessStore returns a PasswordlessStore backed by db.
+// It panics if db is nil; the caller owns the database lifecycle.
 func NewPasswordlessStore(db *pgxdb.DB, opts ...Option) *PasswordlessStore {
+	if db == nil {
+		panic("authentication pgx: NewPasswordlessStore received a nil database")
+	}
 	return &PasswordlessStore{db: db, qualified: qualified{schema: applyOptions(opts).schema}}
 }
 
@@ -57,16 +60,13 @@ func (s *PasswordlessStore) Redeem(ctx context.Context, in passwordless.RedeemIn
 
 	var out passwordless.RedeemResult
 	err := s.db.InTx(ctx, func(tx *pgxdb.Tx) error {
-		// 1. Consume the LIVE challenge. The expires_at guard folds unknown, used,
-		//    and expired into one no-row outcome, and the DELETE is what serializes
-		//    concurrent redemptions of the same token.
+		// Discover the proof without locking its row. Existing-account redemption
+		// takes the user lock first, matching every credential writer's lock order.
 		var contextBlob *string
 		selErr := tx.QueryRow(ctx,
-			`DELETE FROM `+s.table(challengesTable)+`
-				WHERE purpose = @purpose AND secret_digest = @digest AND expires_at > @now
-				RETURNING context`,
-			pgx.NamedArgs{"purpose": in.Purpose, "digest": in.TokenDigest, "now": now}).
-			Scan(&contextBlob)
+			`SELECT context FROM `+s.table(challengesTable)+`
+				WHERE purpose = @purpose AND secret_digest = @digest AND expires_at > @now`,
+			pgx.NamedArgs{"purpose": in.Purpose, "digest": in.TokenDigest, "now": now}).Scan(&contextBlob)
 		if selErr != nil {
 			if errors.Is(selErr, pgx.ErrNoRows) {
 				return passwordless.ErrRedemption
@@ -74,7 +74,7 @@ func (s *PasswordlessStore) Redeem(ctx context.Context, in passwordless.RedeemIn
 			return pgxdb.MapError(selErr)
 		}
 
-		// 2. Decode and validate the versioned binding.
+		// Decode and validate the versioned binding.
 		var binding passwordless.Binding
 		if contextBlob == nil || json.Unmarshal([]byte(*contextBlob), &binding) != nil {
 			return passwordless.ErrRedemption
@@ -83,10 +83,9 @@ func (s *PasswordlessStore) Redeem(ctx context.Context, in passwordless.RedeemIn
 			return passwordless.ErrRedemption
 		}
 
-		// 3. Re-read the CURRENT active claim for the bound address, locking it so a
-		//    concurrent identifier mutation cannot change it under us. The binding's
-		//    recorded ids are an expectation, not an authority: the address may have
-		//    gained an owner between send and consume, and the now-current owner wins.
+		// Discover the current owner, lock it, then lock and revalidate the claim.
+		// A moved claim rejects this attempt without consuming its proof.
+
 		var (
 			identID      string
 			identUserID  string
@@ -96,18 +95,42 @@ func (s *PasswordlessStore) Redeem(ctx context.Context, in passwordless.RedeemIn
 		claimQ := `SELECT id, user_id, verified_at, login_enabled
 			FROM ` + s.table(identifiersTable) + `
 			WHERE kind = @kind AND normalized_value = @value AND replaced_at IS NULL
-				AND (login_enabled = TRUE OR recovery_enabled = TRUE)
-			FOR UPDATE`
+				AND (login_enabled = TRUE OR recovery_enabled = TRUE)`
 		claimErr := tx.QueryRow(ctx, claimQ, pgx.NamedArgs{"kind": binding.Kind, "value": binding.NormalizedValue}).
 			Scan(&identID, &identUserID, &verifiedAt, &loginEnabled)
 		switch {
 		case errors.Is(claimErr, pgx.ErrNoRows):
-			if !binding.ProvisionIfAbsent {
+			if !binding.ProvisionIfAbsent || binding.HasOwner() {
 				return passwordless.ErrRedemption
+			}
+			if err := s.consumeProof(ctx, tx, in, *contextBlob, now); err != nil {
+				return err
 			}
 			return s.provision(ctx, tx, in, binding, now, &out)
 		case claimErr != nil:
 			return pgxdb.MapError(claimErr)
+		}
+
+		owner, err := lockActiveUser(ctx, tx, s.table(usersTable), identUserID)
+		if err != nil {
+			return err
+		}
+		previousID, previousUserID := identID, identUserID
+		claimErr = tx.QueryRow(ctx, claimQ+" FOR UPDATE", pgx.NamedArgs{"kind": binding.Kind, "value": binding.NormalizedValue}).Scan(&identID, &identUserID, &verifiedAt, &loginEnabled)
+		if errors.Is(claimErr, pgx.ErrNoRows) {
+			return passwordless.ErrRedemption
+		}
+		if claimErr != nil {
+			return pgxdb.MapError(claimErr)
+		}
+		if identID != previousID || identUserID != previousUserID {
+			return passwordless.ErrRedemption
+		}
+		if !binding.MatchesOwner(identUserID, identID, owner.AuthRevision) {
+			return passwordless.ErrRedemption
+		}
+		if err := s.consumeProof(ctx, tx, in, *contextBlob, now); err != nil {
+			return err
 		}
 
 		if verifiedAt != nil {
@@ -122,6 +145,21 @@ func (s *PasswordlessStore) Redeem(ctx context.Context, in passwordless.RedeemIn
 		return passwordless.RedeemResult{}, err
 	}
 	return out, nil
+}
+
+// consumeProof arbitrates one-use redemption after the owner/claim locks. A
+// concurrently replaced challenge or altered binding leaves this attempt inert.
+func (s *PasswordlessStore) consumeProof(ctx context.Context, tx *pgxdb.Tx, in passwordless.RedeemInput, binding string, now time.Time) error {
+	tag, err := tx.Exec(ctx, `DELETE FROM `+s.table(challengesTable)+`
+  WHERE purpose = @purpose AND secret_digest = @digest AND expires_at > @now AND context = @binding`,
+		pgx.NamedArgs{"purpose": in.Purpose, "digest": in.TokenDigest, "now": now, "binding": binding})
+	if err != nil {
+		return pgxdb.MapError(err)
+	}
+	if tag.RowsAffected() == 0 {
+		return passwordless.ErrRedemption
+	}
+	return nil
 }
 
 // provision creates one active user and one VERIFIED primary identifier, then

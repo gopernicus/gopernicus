@@ -7,7 +7,7 @@ import (
 
 	"github.com/a-h/templ"
 
-	"github.com/gopernicus/gopernicus/sdk/foundation/web"
+	"github.com/gopernicus/gopernicus/sdk/pkg/web"
 	"github.com/gopernicus/gopernicus/ui/goth"
 	"github.com/gopernicus/gopernicus/ui/goth/htmx"
 	"github.com/gopernicus/gopernicus/ui/goth/primitives"
@@ -243,7 +243,7 @@ func (s *Server) registerPaletteFixtures() {
 			writeFragment(w, http.StatusOK, fragment)
 			return
 		}
-				bundle := s.bundles[goth.Full]
+		bundle := s.bundles[goth.Full]
 		w.Header().Set("Content-Security-Policy", buildCSP(bundle, true))
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		body := `<main data-slot="combobox-options-page"><h1>Options</h1><div data-slot="listbox" role="listbox" aria-label="Fruits">` +
@@ -255,7 +255,7 @@ func (s *Server) registerPaletteFixtures() {
 	// /combobox/pick echoes the selected fruit. It accepts GET (the client/no-JS GET
 	// form) and POST (the no-JS form-POST specimen), proving the form value round-trips.
 	comboboxPick := func(w http.ResponseWriter, r *http.Request) {
-				bundle := s.bundles[goth.StylesOnly]
+		bundle := s.bundles[goth.StylesOnly]
 		w.Header().Set("Content-Security-Policy", buildCSP(bundle, false))
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 
@@ -274,7 +274,7 @@ func (s *Server) registerPaletteFixtures() {
 
 	// /command/run echoes the run command (a link's ?cmd or a submit button's field).
 	s.handler.Handle(http.MethodGet, "/command/run", func(w http.ResponseWriter, r *http.Request) {
-				bundle := s.bundles[goth.StylesOnly]
+		bundle := s.bundles[goth.StylesOnly]
 		w.Header().Set("Content-Security-Policy", buildCSP(bundle, false))
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 

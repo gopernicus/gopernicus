@@ -58,7 +58,7 @@ Names must be lowercase Go identifiers starting with a letter.
 
 The emitted pocket contains:
 
-- SDK-only core module and public socket;
+- SDK/shared-contract core module and public socket;
 - domain entity, ordering allow-list, and repository port;
 - sealed create/get/list/delete service;
 - public memory store;

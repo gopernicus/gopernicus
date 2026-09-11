@@ -10,7 +10,7 @@ import (
 	"google.golang.org/api/iterator"
 
 	"github.com/gopernicus/gopernicus/sdk"
-	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
+	"github.com/gopernicus/gopernicus/sdk/pkg/list"
 )
 
 // scanPageSize is the MINIMUM number of documents one underlying pull fetches
@@ -52,15 +52,15 @@ const scanPageSize = 50
 //
 // PostFilter is R4's client-side predicate: nil means none, non-nil makes every
 // path page-fill in Go (see the PostFilter section on List). Search is composed
-// BY THE STORE into PostFilter from crud.MatchesSearch and its SearchFields —
+// BY THE STORE into PostFilter from list.MatchesSearch and its SearchFields —
 // this helper never interprets req.Search, and refuses a non-blank one when no
 // PostFilter is set rather than answering a search with an unfiltered page.
 type ListQuery[T any] struct {
 	Query        gcfs.Query
-	OrderFields  map[string]crud.OrderField
-	DefaultOrder crud.Order
+	OrderFields  map[string]list.OrderField
+	DefaultOrder list.Order
 	PK           string
-	Limits       crud.Limits
+	Limits       list.Limits
 	Decode       func(*gcfs.DocumentSnapshot) (T, error)
 	OrderValueOf func(row T, field string) any
 	PKOf         func(row T) string
@@ -98,13 +98,13 @@ type ListQuery[T any] struct {
 // SAME composite index with all directions flipped — belongs in that store's
 // index manifest (C-D7). Firestore orders strings by UTF-8 bytes, which is the
 // byte order pgx pins with COLLATE "C" and turso gets from SQLite's BINARY
-// collation; crud.OrderField.CastLower has no Firestore analogue and is
+// collation; list.OrderField.CastLower has no Firestore analogue and is
 // REFUSED (sdk.ErrInvalidInput) rather than silently ignored.
 //
 // Order by a field EVERY document in the population has. An OrderBy clause
 // drops documents that lack the field entirely (they are not in that index),
 // and a document whose field is NULL sorts before every other value but cannot
-// be addressed by a crud.Cursor — a cursor carries the DECODED order value, and
+// be addressed by a list.Cursor — a cursor carries the DECODED order value, and
 // an absent model decodes to a Go zero (time.Time{}), which Firestore compares
 // as a timestamp rather than as null. Page-fill resumes are unaffected (they
 // carry the snapshot, not the value), but a page BOUNDARY landing inside a null
@@ -130,7 +130,7 @@ type ListQuery[T any] struct {
 // A PostFilter makes every read path a page-fill loop: successive underlying
 // pages of max(want, scanPageSize) documents are pulled, decoded, and filtered
 // until want matches are collected or the population is exhausted. HasMore and
-// NextCursor still come from crud.TrimPage over limit+1 MATCHES, so NextCursor
+// NextCursor still come from list.TrimPage over limit+1 MATCHES, so NextCursor
 // encodes the last RETURNED match — never the extra match that proved HasMore,
 // and never the last document scanned. The reverse probe collects up to limit
 // matches the same way, and an offset skips exactly n MATCHES rather than n
@@ -139,20 +139,20 @@ type ListQuery[T any] struct {
 //
 // Iterator errors are mapped through MapError at the iteration boundary and
 // every iterator is stopped; iterator.Done is consumed as the loop terminator.
-func List[T any](ctx context.Context, r Reader, q ListQuery[T], req crud.ListRequest) (crud.Page[T], error) {
+func List[T any](ctx context.Context, r Reader, q ListQuery[T], req list.Request) (list.Page[T], error) {
 	if err := req.Validate(); err != nil {
-		return crud.Page[T]{}, err
+		return list.Page[T]{}, err
 	}
 	if err := q.validate(req); err != nil {
-		return crud.Page[T]{}, err
+		return list.Page[T]{}, err
 	}
 
 	field, direction, err := q.resolveOrder(req.Order)
 	if err != nil {
-		return crud.Page[T]{}, err
+		return list.Page[T]{}, err
 	}
 
-	if req.ResolvedStrategy() == crud.StrategyOffset {
+	if req.ResolvedStrategy() == list.StrategyOffset {
 		return q.listOffset(ctx, r, req, field, direction)
 	}
 	return q.listCursor(ctx, r, req, field, direction)
@@ -164,7 +164,7 @@ func List[T any](ctx context.Context, r Reader, q ListQuery[T], req crud.ListReq
 // PostFilter to apply it — the turso rule ("a list that declares nothing
 // searchable must not answer a search with an unfiltered page") in Firestore's
 // vocabulary, where the predicate is Go code rather than a LIKE clause.
-func (q ListQuery[T]) validate(req crud.ListRequest) error {
+func (q ListQuery[T]) validate(req list.Request) error {
 	switch {
 	case q.Decode == nil:
 		return fmt.Errorf("firestore: ListQuery requires a Decode function: %w", sdk.ErrInvalidInput)
@@ -184,13 +184,13 @@ func (q ListQuery[T]) validate(req crud.ListRequest) error {
 // a query; an absent field is sdk.ErrInvalidInput. CastLower is refused rather
 // than ignored: Firestore cannot fold case in an index, and quietly serving raw
 // byte order under a case-insensitive request is the false green.
-func (q ListQuery[T]) resolveOrder(order crud.Order) (string, gcfs.Direction, error) {
+func (q ListQuery[T]) resolveOrder(order list.Order) (string, gcfs.Direction, error) {
 	if order.Field == "" {
 		order = q.DefaultOrder
 	}
 
 	direction := gcfs.Asc
-	if order.Direction == crud.DESC {
+	if order.Direction == list.DESC {
 		direction = gcfs.Desc
 	}
 
@@ -230,13 +230,13 @@ func (q ListQuery[T]) ordered(field string, direction gcfs.Direction, reverse bo
 	return out
 }
 
-// cursorPosition converts a decoded crud.Cursor into the StartAfter tuple for
+// cursorPosition converts a decoded list.Cursor into the StartAfter tuple for
 // the ordering ordered() built: (order value, pk), or just the pk when the
 // order field IS the pk. The single-value form deliberately uses Cursor.PK
 // rather than Cursor.OrderValue: both describe the same field, but PK is
 // typed string by the crud grammar, which is what the vendor wants for a
 // document-id cursor and what a string sort key holds anyway.
-func (q ListQuery[T]) cursorPosition(cursor *crud.Cursor, field string) []any {
+func (q ListQuery[T]) cursorPosition(cursor *list.Cursor, field string) []any {
 	if q.pk() == field {
 		return []any{cursor.PK}
 	}
@@ -247,15 +247,15 @@ func (q ListQuery[T]) cursorPosition(cursor *crud.Cursor, field string) []any {
 // a stale token — skips both the StartAfter and the reverse probe), collect
 // limit+1 rows, TrimPage for HasMore/NextCursor, then probe backwards for
 // HasPrev/PreviousCursor when a cursor was present.
-func (q ListQuery[T]) listCursor(ctx context.Context, r Reader, req crud.ListRequest, field string, direction gcfs.Direction) (crud.Page[T], error) {
+func (q ListQuery[T]) listCursor(ctx context.Context, r Reader, req list.Request, field string, direction gcfs.Direction) (list.Page[T], error) {
 	limit := req.NormalizedLimit(q.Limits)
 
-	var cursor *crud.Cursor
+	var cursor *list.Cursor
 	if req.Cursor != "" {
 		var err error
-		cursor, err = crud.DecodeCursor(req.Cursor, field)
+		cursor, err = list.DecodeCursor(req.Cursor, field)
 		if err != nil {
-			return crud.Page[T]{}, fmt.Errorf("decode cursor: %w: %w", sdk.ErrInvalidInput, err)
+			return list.Page[T]{}, fmt.Errorf("decode cursor: %w: %w", sdk.ErrInvalidInput, err)
 		}
 	}
 
@@ -266,28 +266,28 @@ func (q ListQuery[T]) listCursor(ctx context.Context, r Reader, req crud.ListReq
 
 	items, err := q.window(ctx, r, forward, limit+1)
 	if err != nil {
-		return crud.Page[T]{}, err
+		return list.Page[T]{}, err
 	}
 
 	encode := func(row T) (string, error) {
-		return crud.EncodeCursor(field, q.OrderValueOf(row, field), q.PKOf(row))
+		return list.EncodeCursor(field, q.OrderValueOf(row, field), q.PKOf(row))
 	}
 
-	page, err := crud.TrimPage(items, limit, encode)
+	page, err := list.TrimPage(items, limit, encode)
 	if err != nil {
-		return crud.Page[T]{}, err
+		return list.Page[T]{}, err
 	}
 
 	if cursor != nil {
 		if err := q.markPrev(ctx, r, &page, field, direction, limit, cursor, encode); err != nil {
-			return crud.Page[T]{}, err
+			return list.Page[T]{}, err
 		}
 	}
 
 	if req.WithCount {
 		total, err := q.count(ctx, r, field, direction)
 		if err != nil {
-			return crud.Page[T]{}, err
+			return list.Page[T]{}, err
 		}
 		page.Total = &total
 	}
@@ -301,7 +301,7 @@ func (q ListQuery[T]) listCursor(ctx context.Context, r Reader, req crud.ListReq
 // (the crud strategy matrix). Under a PostFilter the offset counts MATCHES,
 // not scanned documents, so paging a searched list by offset lands where the
 // caller expects; the skipped matches are still read and billed.
-func (q ListQuery[T]) listOffset(ctx context.Context, r Reader, req crud.ListRequest, field string, direction gcfs.Direction) (crud.Page[T], error) {
+func (q ListQuery[T]) listOffset(ctx context.Context, r Reader, req list.Request, field string, direction gcfs.Direction) (list.Page[T], error) {
 	limit := req.NormalizedLimit(q.Limits)
 	base := q.ordered(field, direction, false)
 
@@ -315,10 +315,10 @@ func (q ListQuery[T]) listOffset(ctx context.Context, r Reader, req crud.ListReq
 		items, err = q.filteredOffset(ctx, r, base, req.Offset, limit+1)
 	}
 	if err != nil {
-		return crud.Page[T]{}, err
+		return list.Page[T]{}, err
 	}
 
-	page := crud.Page[T]{Items: items}
+	page := list.Page[T]{Items: items}
 	if len(items) > limit {
 		page.Items = items[:limit]
 		page.HasMore = true
@@ -328,7 +328,7 @@ func (q ListQuery[T]) listOffset(ctx context.Context, r Reader, req crud.ListReq
 	if req.WithCount {
 		total, err := q.count(ctx, r, field, direction)
 		if err != nil {
-			return crud.Page[T]{}, err
+			return list.Page[T]{}, err
 		}
 		page.Total = &total
 	}
@@ -336,17 +336,12 @@ func (q ListQuery[T]) listOffset(ctx context.Context, r Reader, req crud.ListReq
 	return page, nil
 }
 
-// markPrev runs the reverse probe and applies crud.MarkPrevPage: the rows
-// strictly BEFORE the incoming cursor in forward order are the rows the
-// reversed sort returns after the SAME StartAfter tuple. Up to limit of them
-// are fetched (matches, under a PostFilter), restored to forward order, and
-// handed to crud.MarkPrevPage — a full window supplies PreviousCursor, a
-// partial one only HasPrev. A one-row existence probe would answer HasPrev but
-// could not address the previous page.
-func (q ListQuery[T]) markPrev(ctx context.Context, r Reader, page *crud.Page[T], field string, direction gcfs.Direction, limit int, cursor *crud.Cursor, encode func(T) (string, error)) error {
-	backward := q.ordered(field, direction, true).StartAfter(q.cursorPosition(cursor, field)...)
+// markPrev includes the incoming boundary and one extra predecessor, then
+// restores forward order for the SDK previous-page helper.
+func (q ListQuery[T]) markPrev(ctx context.Context, r Reader, page *list.Page[T], field string, direction gcfs.Direction, limit int, cursor *list.Cursor, encode func(T) (string, error)) error {
+	backward := q.ordered(field, direction, true).StartAt(q.cursorPosition(cursor, field)...)
 
-	prev, err := q.window(ctx, r, backward, limit)
+	prev, err := q.window(ctx, r, backward, limit+1)
 	if err != nil {
 		return err
 	}
@@ -355,7 +350,7 @@ func (q ListQuery[T]) markPrev(ctx context.Context, r Reader, page *crud.Page[T]
 		prev[i], prev[j] = prev[j], prev[i]
 	}
 
-	return crud.MarkPrevPage(page, prev, limit, encode)
+	return list.MarkPrevPage(page, prev, limit, encode)
 }
 
 // window returns up to want rows from base: one query when there is no
@@ -493,7 +488,7 @@ func (q ListQuery[T]) scan(ctx context.Context, r Reader, base gcfs.Query, want 
 //
 // The row slice is allocated even when the query matches nothing, so an empty
 // page marshals "items":[] and never "items":null on every path, not just the
-// ones crud.TrimPage normalizes.
+// ones list.TrimPage normalizes.
 func (q ListQuery[T]) fetch(ctx context.Context, r Reader, query gcfs.Query) ([]T, []*gcfs.DocumentSnapshot, error) {
 	it := r.Documents(ctx, query)
 	defer it.Stop()

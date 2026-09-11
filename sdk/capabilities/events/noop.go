@@ -2,9 +2,8 @@ package events
 
 import "context"
 
-// Noop is the disabled-bus default: Emit does nothing, Subscribe returns a
-// no-op subscription. Wire it (or leave Mount.Events nil and guard) when a host
-// does not use events, so call sites can Emit unconditionally.
+// Noop explicitly disables notifications. It validates admission but does not
+// provide Dispatch or any checked outbox handoff. It owns no lifecycle state.
 type Noop struct{}
 
 var (
@@ -12,20 +11,21 @@ var (
 	_ Broadcaster = Noop{}
 )
 
-// Emit discards the event.
-func (Noop) Emit(context.Context, Event, ...EmitOption) error { return nil }
-
-// Subscribe returns a subscription whose Unsubscribe is a no-op.
-func (Noop) Subscribe(string, Handler) (Subscription, error) {
+func (Noop) Emit(ctx context.Context, event Event) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return ValidateEvent(event)
+}
+func (Noop) Subscribe(topic string, handler Handler) (Subscription, error) {
+	if err := ValidateSubscription(topic, handler); err != nil {
+		return nil, err
+	}
 	return noopSubscription{}, nil
 }
-
-// SubscribeBroadcast returns a subscription whose Unsubscribe is a no-op.
-func (Noop) SubscribeBroadcast(string, Handler) (Subscription, error) {
-	return noopSubscription{}, nil
+func (n Noop) SubscribeBroadcast(topic string, handler Handler) (Subscription, error) {
+	return n.Subscribe(topic, handler)
 }
-
-// Close is a no-op.
 func (Noop) Close(context.Context) error { return nil }
 
 type noopSubscription struct{}

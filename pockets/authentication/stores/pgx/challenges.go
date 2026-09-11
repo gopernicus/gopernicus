@@ -4,12 +4,11 @@ import (
 	"context"
 	"time"
 
-	"github.com/jackc/pgx/v5"
-
 	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
-	auth "github.com/gopernicus/gopernicus/pockets/authentication"
-	"github.com/gopernicus/gopernicus/pockets/authentication/domain/challenge"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/challenge"
+	protection "github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/protection"
 	"github.com/gopernicus/gopernicus/sdk"
+	"github.com/jackc/pgx/v5"
 )
 
 // ChallengeStore implements challenge.Repository over a PostgreSQL database
@@ -28,7 +27,11 @@ type ChallengeStore struct {
 var _ challenge.Repository = (*ChallengeStore)(nil)
 
 // NewChallengeStore returns a ChallengeStore backed by db.
+// It panics if db is nil; the caller owns the database lifecycle.
 func NewChallengeStore(db *pgxdb.DB, opts ...Option) *ChallengeStore {
+	if db == nil {
+		panic("authentication pgx: NewChallengeStore received a nil database")
+	}
 	return &ChallengeStore{db: db, qualified: qualified{schema: applyOptions(opts).schema}}
 }
 
@@ -77,46 +80,30 @@ func (s *ChallengeStore) Replace(ctx context.Context, c challenge.Challenge) (ch
 	// The row is unique under the SUBJECT KEY, which defaults to the user id for
 	// every purpose that predates the field (CHAU-6.1).
 	subjectKey := c.ResolvedSubjectKey()
-	err := s.db.InTx(ctx, func(tx *pgxdb.Tx) error {
-		if _, err := tx.Exec(ctx,
-			`DELETE FROM `+s.table(challengesTable)+` WHERE subject_key = @subject_key AND purpose = @purpose`,
-			pgx.NamedArgs{"subject_key": subjectKey, "purpose": c.Purpose}); err != nil {
-			return err
-		}
-		args := pgx.NamedArgs{
-			"subject_key":      subjectKey,
-			"user_id":          c.UserID,
-			"purpose":          c.Purpose,
-			"secret_digest":    c.SecretDigest,
-			"protector_key_id": nullText(c.ProtectorKeyID),
-			"context":          nullBytes(c.Context),
-			"attempt_count":    c.AttemptCount,
-			"expires_at":       c.ExpiresAt.UTC(),
-			"created_at":       c.CreatedAt.UTC(),
-			"version":          c.Version,
-		}
-		if c.ID == "" {
-			insert := `INSERT INTO ` + s.table(challengesTable) + `
-				(subject_key, user_id, purpose, secret_digest, protector_key_id, context, attempt_count, expires_at, created_at, version)
-				VALUES (@subject_key, @user_id, @purpose, @secret_digest, @protector_key_id, @context, @attempt_count, @expires_at, @created_at, @version)
-				RETURNING id`
-			if err := tx.QueryRow(ctx, insert, args).Scan(&c.ID); err != nil {
-				return pgxdb.MapError(err)
-			}
-			return nil
-		}
-		args["id"] = c.ID
-		insert := `INSERT INTO ` + s.table(challengesTable) + `
-			(id, subject_key, user_id, purpose, secret_digest, protector_key_id, context, attempt_count, expires_at, created_at, version)
-			VALUES (@id, @subject_key, @user_id, @purpose, @secret_digest, @protector_key_id, @context, @attempt_count, @expires_at, @created_at, @version)`
-		if _, err := tx.Exec(ctx, insert, args); err != nil {
-			return err
-		}
-		return nil
-	})
-	if err != nil {
-		return challenge.Challenge{}, err
+	args := pgx.NamedArgs{
+		"subject_key": subjectKey, "user_id": c.UserID, "purpose": c.Purpose,
+		"secret_digest": c.SecretDigest, "protector_key_id": nullText(c.ProtectorKeyID),
+		"context": nullBytes(c.Context), "attempt_count": c.AttemptCount,
+		"expires_at": c.ExpiresAt.UTC(), "created_at": c.CreatedAt.UTC(), "version": c.Version,
 	}
+	columns := "subject_key, user_id, purpose, secret_digest, protector_key_id, context, attempt_count, expires_at, created_at, version"
+	values := "@subject_key, @user_id, @purpose, @secret_digest, @protector_key_id, @context, @attempt_count, @expires_at, @created_at, @version"
+	if c.ID != "" {
+		columns = "id, " + columns
+		values = "@id, " + values
+		args["id"] = c.ID
+	}
+	q := `INSERT INTO ` + s.table(challengesTable) + ` (` + columns + `) VALUES (` + values + `)
+		ON CONFLICT (subject_key, purpose) DO UPDATE SET
+		id = EXCLUDED.id, user_id = EXCLUDED.user_id, secret_digest = EXCLUDED.secret_digest,
+		protector_key_id = EXCLUDED.protector_key_id, context = EXCLUDED.context,
+		attempt_count = EXCLUDED.attempt_count, expires_at = EXCLUDED.expires_at,
+		created_at = EXCLUDED.created_at, version = EXCLUDED.version
+		RETURNING id`
+	if err := s.db.QueryRow(ctx, q, args).Scan(&c.ID); err != nil {
+		return challenge.Challenge{}, pgxdb.MapError(err)
+	}
+	c.SubjectKey = subjectKey
 	return c, nil
 }
 
@@ -132,6 +119,7 @@ func (s *ChallengeStore) ConsumeCode(ctx context.Context, userID, purpose string
 	err := s.db.InTx(ctx, func(tx *pgxdb.Tx) error {
 		var (
 			id             string
+			ownerID        string
 			secretDigest   string
 			protectorKeyID *string
 			contextText    *string
@@ -139,10 +127,10 @@ func (s *ChallengeStore) ConsumeCode(ctx context.Context, userID, purpose string
 			expiresAt      time.Time
 		)
 		selErr := tx.QueryRow(ctx,
-			`SELECT id, secret_digest, protector_key_id, context, attempt_count, expires_at
+			`SELECT id, user_id, secret_digest, protector_key_id, context, attempt_count, expires_at
 				FROM `+s.table(challengesTable)+` WHERE subject_key = @subject_key AND purpose = @purpose FOR UPDATE`,
 			pgx.NamedArgs{"subject_key": userID, "purpose": purpose}).
-			Scan(&id, &secretDigest, &protectorKeyID, &contextText, &attemptCount, &expiresAt)
+			Scan(&id, &ownerID, &secretDigest, &protectorKeyID, &contextText, &attemptCount, &expiresAt)
 		if selErr != nil {
 			if selErr == pgx.ErrNoRows {
 				outcome = challenge.OutcomeNotFound
@@ -162,7 +150,7 @@ func (s *ChallengeStore) ConsumeCode(ctx context.Context, userID, purpose string
 		keyID := textFrom(protectorKeyID)
 		matched := false
 		for _, cand := range candidates {
-			if cand.KeyID == keyID && auth.ConstantTimeDigestEqual(cand.Digest, secretDigest) {
+			if cand.KeyID == keyID && protection.ConstantTimeDigestEqual(cand.Digest, secretDigest) {
 				matched = true
 				break
 			}
@@ -191,7 +179,8 @@ func (s *ChallengeStore) ConsumeCode(ctx context.Context, userID, purpose string
 		}
 		consumed = challenge.Consumed{
 			ID:             id,
-			UserID:         userID,
+			UserID:         ownerID,
+			SubjectKey:     userID,
 			Purpose:        purpose,
 			Context:        bytesFrom(contextText),
 			ProtectorKeyID: keyID,

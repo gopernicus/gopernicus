@@ -23,8 +23,8 @@ import (
 	"testing"
 
 	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
-	"github.com/gopernicus/gopernicus/pockets/events/domain/outbox"
-	"github.com/gopernicus/gopernicus/pockets/events/storetest"
+	"github.com/gopernicus/gopernicus/pockets/events/logic/outbox"
+	"github.com/gopernicus/gopernicus/pockets/events/stores/storetest"
 )
 
 // outboxTables are the pocket's tables cleared before each newRepo call so every
@@ -40,7 +40,7 @@ func TestConformance(t *testing.T) {
 
 	storetest.Run(t, func(t *testing.T) outbox.EntryRepository {
 		db := openAndMigrate(t, dsn)
-		store, err := New(db, storeOptions(t)...)
+		store, err := New(context.Background(), db, storeOptions(t)...)
 		if err != nil {
 			t.Fatalf("New: %v", err)
 		}
@@ -90,7 +90,7 @@ func storeOptions(t *testing.T) []Option {
 // migrates into it with pgxdb.WithSchema.
 func openAndMigrate(t *testing.T, dsn string) *pgxdb.DB {
 	t.Helper()
-	db, err := pgxdb.Open(pgxdb.Config{DSN: dsn})
+	db, err := pgxdb.Open(context.Background(), pgxdb.Config{DSN: dsn})
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}

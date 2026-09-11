@@ -126,6 +126,14 @@ func (e *MissingIndexError) Unwrap() []error {
 	return []error{ErrMissingIndex, e.cause}
 }
 
+// IsTransactionAborted reports a native Aborted status, including one preserved
+// by MapError or wrapped by a caller. A generic conflict or an ambiguous commit
+// failure does not prove that a transaction aborted. Callers must distinguish
+// store failures from policy callbacks before deciding whether to retry.
+func IsTransactionAborted(err error) bool {
+	return status.Code(err) == codes.Aborted
+}
+
 // MapError translates a Firestore error into the sdk sentinel vocabulary the
 // pockets' ports are written against (C-D5). It is the ONLY place vendor error
 // shapes are interpreted: every Reader/Writer method returns through it, and a
@@ -190,7 +198,7 @@ func MapError(err error) error {
 	// deliberately NOT mapped: the caller withdrew the request, which is not a
 	// statement about the database.
 	if errors.Is(err, context.DeadlineExceeded) {
-		return fmt.Errorf("firestore: %s: %w", err, sdk.ErrUnavailable)
+		return fmt.Errorf("firestore: %w: %w", err, sdk.ErrUnavailable)
 	}
 
 	if mapped := mapVendorError(err); mapped != nil {

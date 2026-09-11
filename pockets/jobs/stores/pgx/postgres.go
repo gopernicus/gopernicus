@@ -21,8 +21,7 @@
 // MapError: Queue's Claim is one UPDATE ... WHERE job_id=(SELECT ... FOR UPDATE
 // SKIP LOCKED) ... RETURNING statement (contention-free concurrent claiming, N
 // workers each locking a different row; the lease-expiry reclaim arm is folded
-// in), and Schedules' ClaimDue is a pure value compare-and-set — byte-identical
-// semantics to the turso store.
+// in). Schedules atomically admit pending occurrences before queue delivery.
 package pgx
 
 import (
@@ -32,11 +31,12 @@ import (
 
 	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
 	"github.com/gopernicus/gopernicus/pockets/jobs"
+	"github.com/gopernicus/gopernicus/sdk"
 )
 
 // probeTables is the inventory of relations this package's stores read and
 // write — the set StatusCheck probes under the configured schema.
-var probeTables = []string{"job_queue", "job_schedules", "fenced_job_queue"}
+var probeTables = []string{"job_queue", "job_schedules", "fenced_job_queue", "job_schedule_occurrences"}
 
 // Option configures the stores this package constructs.
 type Option func(*config)
@@ -59,6 +59,9 @@ type config struct {
 func newConfig(opts []Option) config {
 	cfg := config{lease: DefaultLease}
 	for _, opt := range opts {
+		if opt == nil {
+			panic("jobs pgx: store constructor received a nil option")
+		}
 		opt(&cfg)
 	}
 	return cfg
@@ -83,6 +86,14 @@ func WithSchema(s pgxdb.Schema) Option {
 // traffic; without a schema it is the same cheap existence check against the
 // connection's default namespace.
 func StatusCheck(ctx context.Context, db *pgxdb.DB, opts ...Option) error {
+	if db == nil {
+		return fmt.Errorf("jobs pgx: nil database: %w", sdk.ErrInvalidInput)
+	}
+	for _, opt := range opts {
+		if opt == nil {
+			return fmt.Errorf("jobs pgx: nil option: %w", sdk.ErrInvalidInput)
+		}
+	}
 	cfg := newConfig(opts)
 	for _, name := range probeTables {
 		table := cfg.schema.Table(name)
@@ -99,6 +110,7 @@ func StatusCheck(ctx context.Context, db *pgxdb.DB, opts ...Option) error {
 // applies the schema (see ExportMigrations) and the store just provides repos.
 // opts configure both stores (WithLease, WithSchema); db is the connector wrapper
 // (error mapping + Tx), not a raw *pgxpool.Pool.
+// It panics if db is nil; the caller owns the database lifecycle.
 func Repositories(db *pgxdb.DB, opts ...QueueOption) jobs.Repositories {
 	return jobs.Repositories{
 		Queue:     NewQueueStore(db, opts...),

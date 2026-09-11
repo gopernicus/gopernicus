@@ -5,9 +5,9 @@
 // client, three facilities. It depends only on sdk facility ports and go-redis;
 // it imports no pockets and no other integration.
 //
-//   - events.Bus + events.Broadcaster — Bus (bus.go, broadcast.go): a durable
-//     competing-consumer rail on Redis Streams plus a best-effort fan-out rail
-//     on Redis pub/sub.
+//   - events.Bus + events.Broadcaster — Bus: notification fanout over Redis
+//     pub/sub, with explicit SubscribeWork for reliable competing consumers
+//     over Redis Streams.
 //   - cacher.Storer — Cacher (cacher.go): a TTL-aware distributed cache over
 //     GET/MGET/SET/DEL/SCAN.
 //   - ratelimiter.Limiter — Limiter (limiter.go): a distributed sliding-window
@@ -16,40 +16,47 @@
 // Each facility takes the caller's *redis.Client and never closes it — the
 // caller owns the client lifecycle, and one client can feed all three.
 //
-// # Two delivery rails, two guarantees (Bus)
+// # Notification and work delivery
 //
-// Streams (the events.Bus path — Emit/Subscribe/Close):
+// Emit admits a bounded asynchronous publication. Publish waits for XADD
+// acceptance and best-effort pub/sub fanout; it never forces local callbacks.
+// Subscribe and SubscribeBroadcast both receive exact-topic or wildcard
+// notifications after acknowledged pub/sub setup. Notifications have no replay.
+// Setup uses a five-second context; underlying I/O interruption depends on the
+// caller-owned client's timeout/context configuration, which the bus preserves.
 //
-//   - Emit writes an event to a per-type stream with XADD.
-//   - Subscribe lazily creates a consumer group on that stream (XGROUPCREATE
-//     MKSTREAM) and starts XReadGroup worker goroutines.
-//   - Delivery is at-least-once with competing-consumer semantics: N processes
-//     sharing one ConsumerGroup split the load, each stream message going to
-//     exactly one consumer across the group, and a crashed consumer's unacked
-//     messages are re-delivered. Handlers MUST be idempotent.
-//   - XACK-always poison-pill policy: a message is acknowledged even when it
-//     fails to parse or a handler errors or panics, so one bad message can never
-//     block the group's pending list. There is no in-bus retry — durable retry
-//     is the outbox/jobs rail's job, not this bus's.
+// SubscribeWork accepts an exact topic and verifies the group before returning.
+// Group members must deploy identical handler responsibilities. Compose required
+// steps into one handler because the first registration starts readers. Each
+// worker reads or reclaims one entry at a time, preserving XAUTOCLAIM cursors and
+// alternating recovery with new work. Redis 6.2 or newer is required for reclaim.
 //
-// Broadcast (the events.Broadcaster path — SubscribeBroadcast; see broadcast.go):
+// XACK follows successful completion of every selected handler. Errors, panics,
+// cancellation, malformed records and missing handlers leave entries pending.
+// HandlerTimeout covers the whole selected-handler attempt; RetryAfter must
+// exceed it. A callback ignoring cancellation can overlap reclaim, so handlers
+// must be idempotent. Permanent poison requires host-owned repair or explicit
+// terminal disposition. There is no automatic discard, DLQ policy or trimming.
 //
-//   - Every Emit also PUBLISHes onto a pub/sub channel, and SubscribeBroadcast
-//     delivers each event to EVERY process that has a broadcast subscriber.
-//   - Delivery is best-effort fan-out with no durability and no replay: an event
-//     published while a subscriber is disconnected is simply gone (SSE clients
-//     reconnect and re-fetch). This is the right shape for ephemeral consumers.
+// Unsubscribe removes inactive topics from reads. NOGROUP recreates the group
+// at 0, so retained entries can be delivered again. There is no exactly-once
+// guarantee. Close refuses new admissions and waits for admitted publications
+// and callbacks; repeated callers wait for shared completion with their own
+// contexts. Callbacks must not call Close themselves.
 //
-// # Wildcard note
+// # Record format and rollout
 //
-// A "*" subscription on the streams path receives events on topics THIS process
-// also emits (the consumer reads a stream once a local wildcard subscriber makes
-// it relevant). Cross-process wildcard fan-out is the broadcast path's job, not
-// the competing-consumer streams path's.
+// Both paths serialize the canonical events.Record, preserving stable IDs,
+// metadata and opaque payload bytes. Publish record.Event() for stable-ID replay.
+// New appends an internal v2: suffix to all stream and broadcast prefixes. Hosts
+// must coordinate old writers, disjoint physical namespaces, old pending work
+// and duplicate-safe replay; no old messages are automatically migrated/deleted.
+// Options.BatchSize and MaxLen are removed. Hosts own stream retention.
 //
-// # Options from the environment
+// # Construction options
 //
-// Options carries `env:` struct tags so a host can populate it with
-// sdk/foundation/environment.ParseEnvTags; that is a convenience, not an import edge — the zero
-// value is filled with the defaults documented on Options by New.
+// New takes a required client followed by BusOption values such as WithLogger,
+// WithStreamPrefix and WithConsumerGroup. Hosts map their own environment-loaded
+// policy into options. Without options New uses the documented defaults.
+// Connection Config retains its environment tags for Open.
 package goredis

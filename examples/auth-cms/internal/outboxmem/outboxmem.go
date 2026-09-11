@@ -2,7 +2,7 @@
 // auth-cms host wires when EVENTS_OUTBOX=memory selects the durable second
 // variant (design §8's zero-infra proof: memory bus + in-memory outbox + poller
 // + SSE over `go run`, no datastore driver in the graph). It is the runnable
-// twin of the test-scoped reference in pockets/events/storetest — R3/S6 keeps
+// twin of the test-scoped reference in pockets/events/stores/storetest — R3/S6 keeps
 // the runnable in-memory store example-local, so pockets/events ships no
 // stores/memory module.
 //
@@ -21,7 +21,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/gopernicus/gopernicus/pockets/events/domain/outbox"
+	outbox "github.com/gopernicus/gopernicus/pockets/events/logic/outbox"
 	"github.com/gopernicus/gopernicus/sdk"
 	sdkevents "github.com/gopernicus/gopernicus/sdk/capabilities/events"
 )
@@ -54,6 +54,9 @@ func (s *Store) Append(ctx context.Context, recs ...sdkevents.Record) error {
 
 	seen := make(map[string]bool, len(recs))
 	for _, rc := range recs {
+		if err := rc.Validate(); err != nil {
+			return err
+		}
 		if _, exists := s.entries[rc.EventID]; exists || seen[rc.EventID] {
 			return fmt.Errorf("outboxmem append %q: %w", rc.EventID, sdk.ErrAlreadyExists)
 		}
@@ -62,7 +65,7 @@ func (s *Store) Append(ctx context.Context, recs ...sdkevents.Record) error {
 
 	now := time.Now().UTC()
 	for _, rc := range recs {
-		rc := rc
+		rc := rc.Event().Record
 		s.entries[rc.EventID] = &outbox.Entry{Record: rc, CreatedAt: now}
 	}
 	return nil
@@ -78,7 +81,9 @@ func (s *Store) ListUnpublished(ctx context.Context, limit int) ([]outbox.Entry,
 	var out []outbox.Entry
 	for _, e := range s.entries {
 		if e.PublishedAt == nil {
-			out = append(out, *e)
+			snapshot := *e
+			snapshot.Record = e.Record.Event().Record
+			out = append(out, snapshot)
 		}
 	}
 	sort.Slice(out, func(i, j int) bool {

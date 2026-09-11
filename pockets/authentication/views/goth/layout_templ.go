@@ -9,7 +9,7 @@ import "github.com/a-h/templ"
 import templruntime "github.com/a-h/templ/runtime"
 
 import (
-	"github.com/gopernicus/gopernicus/pockets/authentication"
+	authentication "github.com/gopernicus/gopernicus/pockets/authentication/inbound/http"
 	"github.com/gopernicus/gopernicus/ui/goth/components/forms"
 	"github.com/gopernicus/gopernicus/ui/goth/components/layouts"
 )

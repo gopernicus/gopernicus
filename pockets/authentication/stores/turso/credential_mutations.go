@@ -5,8 +5,8 @@ import (
 	"time"
 
 	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
-	"github.com/gopernicus/gopernicus/pockets/authentication/domain/credential"
-	"github.com/gopernicus/gopernicus/pockets/authentication/domain/session"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/credential"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/session"
 	"github.com/gopernicus/gopernicus/sdk"
 )
 
@@ -27,7 +27,11 @@ type CredentialMutationStore struct {
 var _ credential.MutationRepository = (*CredentialMutationStore)(nil)
 
 // NewCredentialMutationStore returns a CredentialMutationStore backed by db.
+// It panics if db is nil; the caller owns the database lifecycle.
 func NewCredentialMutationStore(db *tursodb.DB) *CredentialMutationStore {
+	if db == nil {
+		panic("authentication turso: NewCredentialMutationStore received a nil database")
+	}
 	return &CredentialMutationStore{db: db}
 }
 
@@ -169,6 +173,6 @@ func (s *CredentialMutationStore) Apply(ctx context.Context, userID string, expe
 			now, userID); err != nil {
 			return err
 		}
-		return nil
+		return revokeCredentialState(ctx, tx, userID)
 	})
 }

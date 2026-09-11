@@ -8,8 +8,11 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/gopernicus/gopernicus/sdk/capabilities/oauth"
 
 	"github.com/coreos/go-oidc/v3/oidc"
 	"github.com/coreos/go-oidc/v3/oidc/oidctest"
@@ -64,7 +67,7 @@ func newFakeGoogle(t *testing.T, register func(mux *http.ServeMux)) (*Provider, 
 		jwksURL:     srv.URL + "/keys",
 	}
 
-	p, err := newProvider(context.Background(), testClientID, testClientSecret, nil, srv.Client(), eps)
+	p, err := newProvider(context.Background(), Config{ClientID: testClientID, ClientSecret: testClientSecret, HTTPClient: srv.Client()}, eps)
 	if err != nil {
 		t.Fatalf("newProvider: %v", err)
 	}
@@ -84,12 +87,6 @@ func TestProviderMetadata(t *testing.T) {
 	if got := p.Name(); got != "google" {
 		t.Errorf("Name() = %q, want %q", got, "google")
 	}
-	if !p.SupportsOIDC() {
-		t.Error("SupportsOIDC() = false, want true")
-	}
-	if !p.TrustEmailVerification() {
-		t.Error("TrustEmailVerification() = false, want true")
-	}
 }
 
 func TestGetAuthorizationURL(t *testing.T) {
@@ -97,12 +94,15 @@ func TestGetAuthorizationURL(t *testing.T) {
 
 	const (
 		state       = "state-123"
-		verifier    = "verifier-abc"
+		verifier    = "01234567890123456789012345678901234567890123456"
 		nonce       = "nonce-xyz"
 		redirectURI = "https://app.example.com/callback"
 	)
 
-	raw := p.GetAuthorizationURL(state, verifier, nonce, redirectURI)
+	raw, err := p.GetAuthorizationURL(oauth.AuthorizationRequest{State: state, CodeVerifier: verifier, Nonce: nonce, RedirectURI: redirectURI})
+	if err != nil {
+		t.Fatal(err)
+	}
 	u, err := url.Parse(raw)
 	if err != nil {
 		t.Fatalf("parse url: %v", err)
@@ -120,8 +120,8 @@ func TestGetAuthorizationURL(t *testing.T) {
 		"scope":                 "openid email profile",
 		"state":                 state,
 		"code_challenge_method": "S256",
-		"access_type":           "offline",
-		"prompt":                "consent",
+		"access_type":           "",
+		"prompt":                "",
 		"nonce":                 nonce,
 	}
 	for k, want := range checks {
@@ -137,7 +137,10 @@ func TestGetAuthorizationURL(t *testing.T) {
 func TestGetAuthorizationURLOmitsEmptyNonce(t *testing.T) {
 	p, _ := newFakeGoogle(t, nil)
 
-	raw := p.GetAuthorizationURL("s", "v", "", "https://app.example.com/callback")
+	raw, err := p.GetAuthorizationURL(oauth.AuthorizationRequest{State: "s", CodeVerifier: strings.Repeat("v", 43), RedirectURI: "https://app.example.com/callback"})
+	if err != nil {
+		t.Fatal(err)
+	}
 	u, _ := url.Parse(raw)
 	if _, ok := u.Query()["nonce"]; ok {
 		t.Error("nonce should be omitted when empty")
@@ -341,7 +344,7 @@ func TestValidateIDTokenNonceMismatch(t *testing.T) {
 	}
 }
 
-func TestValidateIDTokenMissingEmail(t *testing.T) {
+func TestValidateIDTokenEmailOptional(t *testing.T) {
 	p, fake := newFakeGoogle(t, nil)
 
 	claims := `{
@@ -352,8 +355,8 @@ func TestValidateIDTokenMissingEmail(t *testing.T) {
 	}`
 	token := fake.signIDToken(t, claims)
 
-	if _, err := p.ValidateIDToken(context.Background(), token, ""); err == nil {
-		t.Fatal("expected missing-email error")
+	if _, err := p.ValidateIDToken(context.Background(), token, ""); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -383,7 +386,7 @@ func TestNewDiscoveryFailure(t *testing.T) {
 	eps := googleEndpoints()
 	eps.issuer = srv.URL
 
-	if _, err := newProvider(context.Background(), testClientID, testClientSecret, nil, srv.Client(), eps); err == nil {
+	if _, err := newProvider(context.Background(), Config{ClientID: testClientID, ClientSecret: testClientSecret, HTTPClient: srv.Client()}, eps); err == nil {
 		t.Fatal("expected fail-fast discovery error")
 	}
 }
@@ -392,7 +395,7 @@ func TestNewFailsFastOnCancelledContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	if _, err := New(ctx, testClientID, testClientSecret, nil, http.DefaultClient); err == nil {
+	if _, err := New(ctx, Config{ClientID: testClientID, ClientSecret: testClientSecret, HTTPClient: http.DefaultClient}); err == nil {
 		t.Fatal("expected discovery to fail fast on a cancelled context")
 	}
 }

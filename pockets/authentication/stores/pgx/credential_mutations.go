@@ -4,12 +4,11 @@ import (
 	"context"
 	"time"
 
-	"github.com/jackc/pgx/v5"
-
 	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
-	"github.com/gopernicus/gopernicus/pockets/authentication/domain/credential"
-	"github.com/gopernicus/gopernicus/pockets/authentication/domain/session"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/credential"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/session"
 	"github.com/gopernicus/gopernicus/sdk"
+	"github.com/jackc/pgx/v5"
 )
 
 // CredentialMutationStore implements credential.MutationRepository over a
@@ -29,7 +28,11 @@ type CredentialMutationStore struct {
 var _ credential.MutationRepository = (*CredentialMutationStore)(nil)
 
 // NewCredentialMutationStore returns a CredentialMutationStore backed by db.
+// It panics if db is nil; the caller owns the database lifecycle.
 func NewCredentialMutationStore(db *pgxdb.DB, opts ...Option) *CredentialMutationStore {
+	if db == nil {
+		panic("authentication pgx: NewCredentialMutationStore received a nil database")
+	}
 	return &CredentialMutationStore{db: db, qualified: qualified{schema: applyOptions(opts).schema}}
 }
 
@@ -174,6 +177,6 @@ func (s *CredentialMutationStore) Apply(ctx context.Context, userID string, expe
 			pgx.NamedArgs{"now": now, "id": userID}); err != nil {
 			return err
 		}
-		return nil
+		return revokeCredentialState(ctx, tx, s.qualified, userID)
 	})
 }

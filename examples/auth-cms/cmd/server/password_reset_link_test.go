@@ -13,16 +13,20 @@ import (
 
 	"github.com/gopernicus/gopernicus/examples/auth-cms/internal/authmem"
 	auth "github.com/gopernicus/gopernicus/pockets/authentication"
-	"github.com/gopernicus/gopernicus/sdk/capabilities/email"
+	authenticationlogic "github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication"
+	"github.com/gopernicus/gopernicus/sdk/capabilities/notify"
+	"github.com/gopernicus/gopernicus/sdk/capabilities/notify/email"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/ratelimiter"
-)
 
-// CHAU-5.3 — the password-reset link rail, driven over real HTTP through exported
-// host seams.
-//
-// The load-bearing assertion is that the token extracted FROM THE DELIVERED MAIL
-// actually completes a reset and the user can then log in with the new password.
-// Finding an `href=` would prove nothing.
+	// CHAU-5.3 — the password-reset link rail, driven over real HTTP through exported
+	// host seams.
+	//
+	// The load-bearing assertion is that the token extracted FROM THE DELIVERED MAIL
+	// actually completes a reset and the user can then log in with the new password.
+	// Finding an `href=` would prove nothing.
+	delivery "github.com/gopernicus/gopernicus/pockets/authentication/logic/delivery"
+	environment "github.com/gopernicus/gopernicus/sdk/pkg/environment"
+)
 
 const (
 	resetLandingURL = "https://app.example.com/reset-password"
@@ -36,7 +40,7 @@ var resetLinkPattern = regexp.MustCompile(`https://app\.example\.com/reset-passw
 func newResetHost(t *testing.T) *linkHost {
 	t.Helper()
 	sender := &recordingSender{}
-	svc := bootInProcess(t, sender, func(cfg *auth.Config) {
+	svc := bootInProcess(t, sender, func(cfg *authenticationConfig) {
 		cfg.PasswordResetURL = resetLandingURL
 	})
 	router := mountInProcess(t, svc)
@@ -80,7 +84,6 @@ func (durableStubLimiter) Allow(context.Context, string, ratelimiter.Limit) (rat
 	return ratelimiter.Result{Allowed: true}, nil
 }
 func (durableStubLimiter) Reset(context.Context, string) error { return nil }
-func (durableStubLimiter) Close() error                        { return nil }
 
 // productionSender declares production-capable transport metadata so a
 // production-mode construction reaches the reset-URL check rather than stopping
@@ -88,8 +91,8 @@ func (durableStubLimiter) Close() error                        { return nil }
 type productionSender struct{}
 
 func (productionSender) Send(context.Context, email.Message) error { return nil }
-func (productionSender) Capabilities() email.Capabilities {
-	return email.Capabilities{TransportSecurity: email.TransportSecurityTLS}
+func (productionSender) Capabilities() notify.Capabilities {
+	return notify.Capabilities{TransportSecurity: notify.TransportSecurityTLS}
 }
 
 // TestPasswordResetLinkCompletesTheFlow is the end-to-end walk.
@@ -108,7 +111,7 @@ func TestPasswordResetLinkCompletesTheFlow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse %q: %v", link, err)
 	}
-	token := u.Query().Get(auth.PasswordResetTokenParam)
+	token := u.Query().Get(authenticationlogic.PasswordResetTokenParam)
 	if token == "" {
 		t.Fatalf("the delivered link %q carries no token", link)
 	}
@@ -194,20 +197,21 @@ func TestPasswordResetProductionRequiresTheURL(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildAuthConfig: %v", err)
 	}
-	base.DeliveryMode = auth.DeliveryModeInProcess
+	base.DeliveryMode = delivery.ModeInProcess
 	base.DeliveryJobsAcknowledged = false
 	base.DeliveryEphemeralAcknowledged = true
 
 	t.Run("production without a reset URL fails loudly", func(t *testing.T) {
 		cfg := base
-		cfg.RuntimeMode = auth.RuntimeModeProduction
+		cfg.RuntimeMode = environment.ModeProduction
+		cfg.OAuthCallbackBase = "https://auth.example.com"
 		cfg.PasswordResetURL = ""
 		cfg.Mailer = productionSender{} // otherwise the transport gate stops us first
-		cfg.Notifiers = nil
+		cfg.BodySenders = nil
 		cfg.Passwordless = nil
 		cfg.RateLimiter = durableStubLimiter{}
 
-		_, err := auth.NewService(authmem.New().Repositories(), cfg)
+		_, err := auth.New(authmem.New().Repositories(), cfg.TokenSigner, cfg.RuntimeMode, cfg.DeliveryMode, cfg.options()...)
 		if !errors.Is(err, auth.ErrPasswordResetURLRequired) {
 			t.Fatalf("NewService = %v, want ErrPasswordResetURLRequired", err)
 		}
@@ -215,14 +219,15 @@ func TestPasswordResetProductionRequiresTheURL(t *testing.T) {
 
 	t.Run("production rejects a plain-http reset URL", func(t *testing.T) {
 		cfg := base
-		cfg.RuntimeMode = auth.RuntimeModeProduction
+		cfg.RuntimeMode = environment.ModeProduction
+		cfg.OAuthCallbackBase = "https://auth.example.com"
 		cfg.PasswordResetURL = "http://app.example.com/reset-password"
 		cfg.Mailer = productionSender{}
-		cfg.Notifiers = nil
+		cfg.BodySenders = nil
 		cfg.Passwordless = nil
 		cfg.RateLimiter = durableStubLimiter{}
 
-		_, err := auth.NewService(authmem.New().Repositories(), cfg)
+		_, err := auth.New(authmem.New().Repositories(), cfg.TokenSigner, cfg.RuntimeMode, cfg.DeliveryMode, cfg.options()...)
 		if !errors.Is(err, auth.ErrPasswordResetURLInsecure) {
 			t.Fatalf("NewService = %v, want ErrPasswordResetURLInsecure", err)
 		}
@@ -230,18 +235,18 @@ func TestPasswordResetProductionRequiresTheURL(t *testing.T) {
 
 	t.Run("development without a reset URL still constructs", func(t *testing.T) {
 		cfg := base
-		cfg.RuntimeMode = auth.RuntimeModeDevelopment
+		cfg.RuntimeMode = environment.ModeDevelopment
 		cfg.PasswordResetURL = ""
-		if _, err := auth.NewService(authmem.New().Repositories(), cfg); err != nil {
+		if _, err := auth.New(authmem.New().Repositories(), cfg.TokenSigner, cfg.RuntimeMode, cfg.DeliveryMode, cfg.options()...); err != nil {
 			t.Fatalf("NewService (development) = %v, want nil", err)
 		}
 	})
 
 	t.Run("a malformed reset URL fails in every mode", func(t *testing.T) {
 		cfg := base
-		cfg.RuntimeMode = auth.RuntimeModeDevelopment
+		cfg.RuntimeMode = environment.ModeDevelopment
 		cfg.PasswordResetURL = "https://app.example.com/reset#step2"
-		if _, err := auth.NewService(authmem.New().Repositories(), cfg); !errors.Is(err, auth.ErrPasswordResetURLInvalid) {
+		if _, err := auth.New(authmem.New().Repositories(), cfg.TokenSigner, cfg.RuntimeMode, cfg.DeliveryMode, cfg.options()...); !errors.Is(err, auth.ErrPasswordResetURLInvalid) {
 			t.Fatalf("NewService = %v, want ErrPasswordResetURLInvalid", err)
 		}
 	})

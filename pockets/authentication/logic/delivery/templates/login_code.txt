@@ -1,0 +1,5 @@
+Use this code to sign in. It can be used once and expires shortly.
+
+Your sign-in code is: {{.Secret}}
+
+If you did not try to sign in, you can ignore this message.

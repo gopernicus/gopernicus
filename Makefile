@@ -1,10 +1,10 @@
 # gopernicus — framework monorepo (sdk + integrations + pockets + examples)
 #
-# Multi-module workspace (go.work), 41 modules. templ is pinned via the `tool`
+# Multi-module workspace (go.work), 42 modules. templ is pinned via the `tool`
 # directive in pockets/cms/views/goth/go.mod (where the .templ sources live),
 # so `go tool templ` is reproducible.
 
-MODULES = sdk integrations/cryptids/bcrypt integrations/cryptids/golang-jwt integrations/cryptids/google-uuid integrations/datastores/pgxdb integrations/datastores/turso integrations/datastores/firestore integrations/email/sendgrid integrations/filestorage/gcs integrations/filestorage/s3 integrations/kvstores/goredis integrations/notify/mailer integrations/oauth/github integrations/oauth/google integrations/scheduling/robfig-cron integrations/tracing/otel pockets/authentication pockets/authentication/stores/firestore pockets/authentication/stores/pgx pockets/authentication/stores/turso pockets/authentication/views/goth pockets/authorization pockets/authorization/stores/pgx pockets/authorization/stores/turso pockets/authorization/stores/firestore pockets/cms pockets/cms/stores/pgx pockets/cms/stores/turso pockets/cms/views/goth pockets/events pockets/events/stores/pgx pockets/events/stores/turso pockets/jobs pockets/jobs/stores/pgx pockets/jobs/stores/turso ui/goth examples/auth-cms examples/cms examples/goth-showcase examples/jobs-minimal examples/minimal workshop/gopernicus
+MODULES = sdk pockets integrations/cryptids/bcrypt integrations/cryptids/golang-jwt integrations/cryptids/google-uuid integrations/datastores/pgxdb integrations/datastores/turso integrations/datastores/firestore integrations/email/sendgrid integrations/filestorage/gcs integrations/filestorage/s3 integrations/kvstores/goredis integrations/oauth/github integrations/oauth/google integrations/scheduling/robfig-cron integrations/tracing/otel pockets/authentication pockets/authentication/stores/firestore pockets/authentication/stores/pgx pockets/authentication/stores/turso pockets/authentication/views/goth pockets/authorization pockets/authorization/stores/pgx pockets/authorization/stores/turso pockets/authorization/stores/firestore pockets/cms pockets/cms/stores/pgx pockets/cms/stores/turso pockets/cms/views/goth pockets/events pockets/events/stores/pgx pockets/events/stores/turso pockets/jobs pockets/jobs/stores/pgx pockets/jobs/stores/turso ui/goth examples/auth-cms examples/cms examples/goth-showcase examples/jobs-minimal examples/minimal workshop/gopernicus
 
 # STORE_MODULES carry env-gated live conformance suites (storetest against a real
 # database). `make check`/`make test` run them hermetically (loud skips); `make
@@ -25,13 +25,13 @@ LIVE_TAG_MODULES = $(filter %/firestore,$(INTEGRATION_TAG_MODULES))
 
 .PHONY: generate generate-ui-assets build vet test test-stores test-ui-browser docs-install docs docs-build run migrate check tidy guard warm-scaffold-cache \
 	guard-sdk-stdlib guard-pocket-isolation guard-sdk-no-outward guard-no-legacy-path \
-	guard-pocket-core-sdk-only guard-pocket-transport-sdk-web guard-pocket-no-cross-pocket \
+	guard-pocket-dependencies guard-pocket-transport-sdk-web guard-pocket-no-cross-pocket \
 	guard-store-no-foreign-pocket guard-no-underlying guard-no-lax-scan \
 	guard-workshop-boundary guard-sdk-layering guard-integration-no-inward \
 	guard-auth-no-delivery-repo guard-auth-no-request-time-provider \
 	guard-authorization-no-delivery-repo guard-authorization-rolesvc-no-engine guard-ui-no-inward guard-ui-require-whitelist \
-	guard-no-legacy-features-path guard-crud-no-nethttp guard-violation-message-not-error \
-	guard-firestore-mediation
+	guard-no-legacy-features-path guard-list-no-nethttp guard-violation-message-not-error \
+	guard-firestore-mediation guard-pocket-logic
 
 # Regenerate *_templ.go from .templ sources. Each bundled views/templ module pins
 # its own templ tool; generation runs inside each so the tool version is
@@ -167,15 +167,15 @@ tidy:
 # Layering guards — each enforces one architectural boundary from the
 # constitution (00-overview.md) or the feature-standard charter (FS rules,
 # 2026-07-07); every target must print nothing and exit 0 on a clean tree.
-# `make guard` runs all twenty-three.
+# `make guard` runs the dependency and behavior boundary checks below.
 guard: guard-sdk-stdlib guard-pocket-isolation guard-sdk-no-outward guard-no-legacy-path \
-	guard-pocket-core-sdk-only guard-pocket-transport-sdk-web guard-pocket-no-cross-pocket \
+	guard-pocket-dependencies guard-pocket-transport-sdk-web guard-pocket-no-cross-pocket \
 	guard-store-no-foreign-pocket guard-no-underlying guard-no-lax-scan \
 	guard-workshop-boundary guard-sdk-layering guard-integration-no-inward \
 	guard-auth-no-delivery-repo guard-auth-no-request-time-provider \
 	guard-authorization-no-delivery-repo guard-authorization-rolesvc-no-engine guard-ui-no-inward guard-ui-require-whitelist \
-	guard-no-legacy-features-path guard-crud-no-nethttp guard-violation-message-not-error \
-	guard-firestore-mediation
+	guard-no-legacy-features-path guard-list-no-nethttp guard-violation-message-not-error \
+	guard-firestore-mediation guard-pocket-logic
 
 # G1: sdk imports only the standard library (also enforced structurally by
 # sdk/go.mod having no require block).
@@ -184,15 +184,12 @@ guard-sdk-stdlib:
 	@! grep -rn --include='*.go' '"github.com/' sdk/ | grep -v '"github.com/gopernicus/gopernicus/sdk' || { echo "ERROR: sdk imports an external module — sdk is the stdlib kernel and must stay dependency-free"; exit 1; }
 	@! grep -rnE '"(cloud\.google\.com|golang\.org/x|gopkg\.in)/' --include='*.go' sdk/ || { echo "ERROR: sdk imports an external module — sdk is the stdlib kernel and must stay dependency-free"; exit 1; }
 
-# G2: every pocket core (pockets/*, excluding their own store/views adapter
-# modules) never imports integrations, examples, or any pocket's stores or
-# views (A4: generalized from pockets/cms to all pockets/*; views added
-# 2026-07-07, feature-standard FS3; ui/ added 2026-07-17, GOTH-1.1, for grep-level
-# symmetry with G13/G17 — a pocket core reaches a UI implementation only through
-# its own views/<pkg> adapter module, never directly).
+# G2: core production code cannot wire adapters. The shared Go checker follows
+# actual go.mod boundaries, so stores/memory and stores/storetest remain covered;
+# core tests may use those own-pocket packages without pulling in driver modules.
 guard-pocket-isolation:
-	@echo "== guard: pockets/* cores never import integrations/examples/ui/their own stores/views =="
-	@! grep -rn --include='*.go' -E '"github.com/gopernicus/gopernicus/(integrations|examples|ui|pockets/[a-z0-9]+/(stores|views))' pockets --exclude-dir=stores --exclude-dir=views || { echo "ERROR: a pockets/* core imports an adapter layer"; exit 1; }
+	@echo "== guard: pocket cores and store support preserve dependency direction =="
+	@cd workshop/gopernicus && go test ./internal/commands -run '^TestPocketBoundaries/isolation$$' -count=1
 
 # G3: sdk never imports outward (pockets/integrations/examples).
 guard-sdk-no-outward:
@@ -204,53 +201,42 @@ guard-no-legacy-path:
 	@echo "== guard: no legacy gopernicus/ import =="
 	@! grep -rn --include='*.go' -E '"gopernicus/' . || { echo "ERROR: legacy gopernicus import found"; exit 1; }
 
-# G5 (FS1, feature-standard 2026-07-07): every pocket core go.mod requires
-# exactly sdk — nothing else. Direct requires only ("// indirect" lines are
+# G5: shared pockets requires SDK only; concrete pocket cores may also require
+# the exact shared pockets module, never a concrete peer. Direct requires only ("// indirect" lines are
 # MVS bookkeeping, not a host-facing promise); a `tool` directive counts as a
 # require; the dev-only relative `replace` of sdk is permitted pre-tag.
-guard-pocket-core-sdk-only:
-	@echo "== guard: pocket core go.mod requires sdk only (FS1) =="
-	@fail=0; for f in pockets/authentication pockets/authorization pockets/cms pockets/events pockets/jobs; do \
+guard-pocket-dependencies:
+	@echo "== guard: shared pockets requires SDK; concrete cores require SDK/shared pockets only (FS1) =="
+	@fail=0; for f in pockets pockets/authentication pockets/authorization pockets/cms pockets/events pockets/jobs; do \
+		allowed='^github.com/gopernicus/gopernicus/sdk$$'; \
+		if [ "$$f" != pockets ]; then allowed='^github.com/gopernicus/gopernicus/(sdk|pockets)$$'; fi; \
 		extras=$$(awk '/^require \(/{inblk=1; next} inblk && /^\)/{inblk=0; next} inblk && !/\/\/ indirect/{print $$1} /^require [^(]/{print $$2}' $$f/go.mod \
-			| grep -v '^github.com/gopernicus/gopernicus/sdk$$' || true); \
+			| grep -vE "$$allowed" || true); \
 		tools=$$(grep -E '^tool ' $$f/go.mod | awk '{print $$2}' || true); \
 		bad=$$(printf '%s\n%s\n' "$$extras" "$$tools" | grep -v '^$$' || true); \
-		if [ -n "$$bad" ]; then echo "ERROR (FS1): $$f/go.mod requires more than sdk:"; echo "$$bad"; fail=1; fi; \
+		if [ -n "$$bad" ]; then echo "ERROR (FS1): $$f/go.mod has dependencies outside its SDK/shared-contract allowance:"; echo "$$bad"; fail=1; fi; \
 	done; exit $$fail
+	@modules=$$(cd pockets && go list -deps -test -f '{{if .Module}}{{.Module.Path}}{{end}}' ./...) || exit 1; \
+		bad=$$(printf '%s\n' "$$modules" | sort -u | grep -vE '^$$|^github.com/gopernicus/gopernicus/(sdk|pockets)$$' || true); \
+		if [ -n "$$bad" ]; then echo "ERROR (FS1): shared pockets imports outside SDK/stdlib (including tests):"; echo "$$bad"; exit 1; fi
 
-# G6 (FS9, feature-standard 2026-07-07): pocket transports respond via
-# sdk/foundation/web — no hand-rolled JSON/error response writing anywhere in a pocket's
-# sealed interior (production code; tests exempt). A legitimate future hit
-# (e.g. json.NewEncoder into a buffer or an SSE stream) gets a named per-line
-# exception HERE citing FS9 — never a regex weakening.
-#
-# Exclusion-style over ALL of pockets/ (the G2 idiom): one expression covering
-# root, domain/, memstore/, storetest/, and internal/ — closing the root-file
-# blind spot a pocket's root package (e.g. authentication.go, authorization's
-# exported RequirePermission builder) sat outside. stores/ and views/ are
-# separate adapter modules, excluded to match G2.
+# G6: production pocket responses use sdk/pkg/web, including files in the root
+# and moved in-module store-support packages. Nested adapter modules are separate.
 guard-pocket-transport-sdk-web:
-	@echo "== guard: pocket transports use sdk/foundation/web responders (FS9) =="
-	@! grep -rn --include='*.go' --exclude='*_test.go' --exclude-dir=stores --exclude-dir=views -E 'json\.NewEncoder\(|http\.Error\(' pockets/ || { echo "ERROR (FS9): hand-rolled HTTP response writing in a pocket core — use web.Respond* (pockets/README.md, FS9)"; exit 1; }
+	@echo "== guard: pocket transports use sdk/pkg/web responders (FS9) =="
+	@cd workshop/gopernicus && go test ./internal/commands -run '^TestPocketBoundaries/transport$$' -count=1
 
-# G7 (constitution rule 6, events-v1 task-13; the plan called it "G5" but that
-# slot was already taken by FS1): no pocket imports a DIFFERENT pocket — a
-# pocket declares a port and the host wires the peer (ARCHITECTURE.md rule 6).
-# For each pockets/<x> we grep its whole subtree for pocket imports and drop
-# the self-imports (pockets/<x>/...); what remains is a pockets/<x> file
-# reaching into some pockets/<y>, y != x. The stores/ subtree is excluded
-# (separate adapter modules, per the task spec, matching G2's stores exclusion);
-# views/ is NOT excluded — an intra-pocket views->own-core import is a self-
-# import (y == x) and is dropped by the filter, so it never false-positives,
-# while a views adapter reaching a foreign pocket is still caught.
+# G7: neither a core nor its view modules import another pocket. The same
+# module-aware check runs against scaffold output in the CLI tests.
 guard-pocket-no-cross-pocket:
-	@echo "== guard: no pocket core imports a different pocket (rule 6) =="
-	@fail=0; for d in pockets/*/; do \
-		x=$$(basename $$d); \
-		hits=$$(grep -rn --include='*.go' --exclude-dir=stores -E '"github.com/gopernicus/gopernicus/pockets/[a-z0-9]+' $$d \
-			| grep -vE '"github.com/gopernicus/gopernicus/pockets/'"$$x"'([\"/])' || true); \
-		if [ -n "$$hits" ]; then echo "ERROR (rule 6): $$x reaches into a different pocket core — declare a port and let the host wire the peer:"; echo "$$hits"; fail=1; fi; \
-	done; exit $$fail
+	@echo "== guard: pocket cores and views never import another pocket =="
+	@cd workshop/gopernicus && go test ./internal/commands -run '^TestPocketBoundaries/cross-pocket$$' -count=1
+
+# G25: the audited pockets' domain and logic packages have no HTTP dependency.
+# CMS remains deferred; its existing isolation and transport rules still apply.
+guard-pocket-logic:
+	@echo "== guard: pocket domain and logic are transport independent =="
+	@cd workshop/gopernicus && go test ./internal/commands -run '^TestPocketBoundaries/logic$$' -count=1
 
 # G8 (authorization-v1 Z5, Q3 ADD): store adapter modules never import a
 # DIFFERENT pocket — a store implements exactly its own pocket's ports over
@@ -270,12 +256,12 @@ guard-store-no-foreign-pocket:
 
 # G9 (datastore-hardening P6, audit ruling 6): nothing outside the datastore
 # connectors calls Underlying() — the escape hatch to the raw pool/DB is the
-# service-locator workaround the scaffolded crud.Transactor seam exists to
+# service-locator workaround the scaffolded transaction.Transactor seam exists to
 # prevent. A legitimate future host/cmd hit gets a named per-line exception
 # HERE citing audit ruling 6 — never a regex weakening (the G6 discipline).
 guard-no-underlying:
-	@echo "== guard: no Underlying() outside the datastore connectors (crud.Transactor seam) =="
-	@! grep -rn --include='*.go' '\.Underlying()' --exclude-dir=integrations . || { echo "ERROR (P6/ruling 6): Underlying() called outside integrations/datastores — use the ports, or consume the crud.Transactor seam"; exit 1; }
+	@echo "== guard: no Underlying() outside the datastore connectors (transaction.Transactor seam) =="
+	@! grep -rn --include='*.go' '\.Underlying()' --exclude-dir=integrations . || { echo "ERROR (P6/ruling 6): Underlying() called outside integrations/datastores — use the ports, or consume the transaction.Transactor seam"; exit 1; }
 
 # G10 (datastore-hardening P6, audit ruling 8): RowToStructByNameLax silently
 # tolerates missing fields — the quiet-data-loss variant of pgx struct
@@ -297,38 +283,39 @@ guard-workshop-boundary:
 # G12 (sdk-layering, 2026-07-10; tests included 2026-08-27): the intra-sdk
 # import law. Kernel = the root
 # package (cycle-enforced against every subpackage that imports it; the grep
-# below is the primary enforcement for the rest). foundation/* may import the
-# ROOT only — FLAT, no foundation->foundation edges. capabilities/* may import
-# root + foundation — NEVER another capability. sdk/pocket is the ONE
-# sanctioned composer (unconstrained). The law applies to production and test
+# below is the primary enforcement for the rest). pkg/* may import the
+# ROOT only — FLAT, no pkg->pkg edges. capabilities/* may import
+# root + pkg and its own subsystem subpackages (notify/email -> notify),
+# never a different capability. Shared pocket composition lives in the separate
+# pockets module. The law applies to production and test
 # code alike: a test proves its package contract without coupling peer tiers.
 guard-sdk-layering:
-	@echo "== guard: sdk layering (kernel <- foundation <- capabilities <- pocket) =="
+	@echo "== guard: sdk layering (kernel <- pkg <- capabilities) =="
 	@! grep -n --include='*.go' '"github.com/gopernicus/gopernicus/sdk/' sdk/*.go 2>/dev/null || { echo "ERROR (G12a): the kernel (root package sdk) imports a subpackage"; exit 1; }
-	@fail=0; for d in sdk/foundation/*/; do \
+	@fail=0; for d in sdk/pkg/*/; do \
 		x=$$(basename $$d); \
-		hits=$$(grep -rn --include='*.go' -E '"github.com/gopernicus/gopernicus/sdk/(foundation|capabilities|pocket)' $$d \
-			| grep -vE '"github.com/gopernicus/gopernicus/sdk/foundation/'"$$x"'([\"/])' || true); \
-		if [ -n "$$hits" ]; then echo "ERROR (G12b): foundation/$$x imports a sibling tier or upward — foundation imports the root only, including in tests:"; echo "$$hits"; fail=1; fi; \
+		hits=$$(grep -rn --include='*.go' -E '"github.com/gopernicus/gopernicus/sdk/(pkg|capabilities)' $$d \
+			| grep -vE '"github.com/gopernicus/gopernicus/sdk/pkg/'"$$x"'([\"/])' || true); \
+		if [ -n "$$hits" ]; then echo "ERROR (G12b): pkg/$$x imports a sibling tier or upward — pkg imports the root only, including in tests:"; echo "$$hits"; fail=1; fi; \
 	done; exit $$fail
 	@fail=0; for d in sdk/capabilities/*/; do \
 		x=$$(basename $$d); \
-		hits=$$(grep -rn --include='*.go' -E '"github.com/gopernicus/gopernicus/sdk/(capabilities|pocket)' $$d \
+		hits=$$(grep -rn --include='*.go' -E '"github.com/gopernicus/gopernicus/sdk/capabilities' $$d \
 			| grep -vE '"github.com/gopernicus/gopernicus/sdk/capabilities/'"$$x"'([\"/])' || true); \
-		if [ -n "$$hits" ]; then echo "ERROR (G12c): capabilities/$$x imports another capability or sdk/pocket — including in tests, cross-capability composition leaves sdk (integrations)"; echo "$$hits"; fail=1; fi; \
+		if [ -n "$$hits" ]; then echo "ERROR (G12c): capabilities/$$x imports another capability — including in tests, cross-capability composition leaves sdk"; echo "$$hits"; fail=1; fi; \
 	done; exit $$fail
 
-# G21 (web-crud-list-request, 2026-08-27): sdk/foundation/crud may import
+# G21 (web-crud-list-request, 2026-08-27): sdk/pkg/list may import
 # net/url (its ParseListQuery reads url.Values — transport vocabulary), never
 # net/http. The reason is dependency weight, not taste: every store adapter
-# (integrations/datastores/pgxdb, turso, each pocket's stores/*) imports crud,
-# so whatever crud imports, every adapter carries. G12b greps gopernicus
+# (integrations/datastores/pgxdb, turso, each pocket's stores/*) imports list,
+# so whatever list imports, every adapter carries. G12b greps gopernicus
 # module paths only and cannot see a stdlib edge; this one-liner can.
-# Production files only — a crud test may drive an httptest server if it ever
+# Production files only — a list test may drive an httptest server if it ever
 # needs to; the adapters do not link tests.
-guard-crud-no-nethttp:
-	@echo "== guard: sdk/foundation/crud never imports net/http (G21) =="
-	@! grep -rln --include='*.go' --exclude='*_test.go' '"net/http"' sdk/foundation/crud/ || { echo "ERROR (G21): sdk/foundation/crud imports net/http — crud is transport vocabulary over url.Values and every store adapter carries its imports"; exit 1; }
+guard-list-no-nethttp:
+	@echo "== guard: sdk/pkg/list never imports net/http (G21) =="
+	@! grep -rln --include='*.go' --exclude='*_test.go' '"net/http"' sdk/pkg/list/ || { echo "ERROR (G21): sdk/pkg/list imports net/http — list is transport vocabulary over url.Values and every store adapter carries its imports"; exit 1; }
 
 # G23 (crud-write-vocabulary, 2026-08-31): sdk.Violation.Message is CALLER-FACING
 # TEXT ONLY. web.ErrFromDomain now puts a ValidationError's sentences on the wire
@@ -336,7 +323,7 @@ guard-crud-no-nethttp:
 # leaks internals to the caller — sdk.Refuse(field, code, err.Error()) and
 # ve.Add(field, code, err.Error()) are the two shapes that do it. Comment lines
 # are excluded so the rule can be stated in prose (sdk/faults.go,
-# sdk/foundation/web/errors.go both name the anti-pattern).
+# sdk/pkg/web/errors.go both name the anti-pattern).
 # (G22 is RESERVED for the host-layout-contract PR-B `gopernicus guard` tool.)
 guard-violation-message-not-error:
 	@echo "== guard: sdk.Violation messages never wrap a raw error string (G23) =="
@@ -408,14 +395,13 @@ guard-firestore-mediation:
 	done; exit $$fail
 
 # G13 (sdk-layering, 2026-07-10, folded steward finding): integrations never
-# import inward — no pockets/, examples/, or workshop/. Load-bearing now that
-# COMPOSING integrations (zero external deps, e.g. notify/mailer) are
-# legitimate: the import direction is what keeps "integration" meaning
-# something. A legitimate future hit gets a named per-line exception HERE —
+# depend on other framework modules except SDK/self. Integrations implement
+# SDK contracts using third-party providers; composition within a cohesive SDK
+# subsystem needs no separate integration module. A legitimate future hit gets a named per-line exception HERE —
 # never a regex weakening.
 guard-integration-no-inward:
-	@echo "== guard: integrations import no pockets/examples/workshop =="
-	@! grep -rn --include='*.go' -E '"github.com/gopernicus/gopernicus/(pockets|examples|workshop)' integrations/ || { echo "ERROR (G13): an integration imports inward"; exit 1; }
+	@echo "== guard: integration framework imports and requirements stay within SDK/self =="
+	@cd workshop/gopernicus && go test ./internal/commands -run '^TestIntegrationBoundaries$$' -count=1
 
 # G14 (authv3-delivery-refactor AV3D-5.1): authentication owns NO bespoke durable
 # delivery queue. The private deliveryjob domain, its `delivery_jobs` table, and
@@ -433,14 +419,15 @@ guard-auth-no-delivery-repo:
 # G15 (authv3-delivery-refactor AV3D-2.4/5.1): no auth producer calls a provider
 # on the request path. Every outbound message is admitted through the delivery
 # dispatcher seam; the actual send (Router.Deliver, email.Sender.Send,
-# notify.Notifier.Notify) is the off-request processor's job. A producer that
+# BodySender.Send) is the off-request processor's job. A producer that
 # called any send verb directly would leak a secret on the request path, defeating
 # enumeration safety. The delivery/ package (where those verbs legitimately live)
 # is excluded; the AST-precise companion is TestNoProducerBypassesDispatcherSeam
 # (producer_seam_test.go) — this coarse grep keeps the boundary in `make guard`.
 guard-auth-no-request-time-provider:
 	@echo "== guard: no authentication producer calls a provider on the request path (AV3D-2.4) =="
-	@hits=$$(grep -rnE '\.(Deliver|Send|Notify)\(' --include='*.go' --exclude='*_test.go' pockets/authentication/internal/logic | grep -v '/delivery/' || true); \
+	@test -d pockets/authentication/logic
+	@hits=$$(grep -rnE '\.(Deliver|Send|Notify)\(' --include='*.go' --exclude='*_test.go' pockets/authentication/logic | grep -v '/delivery/' || true); \
 		if [ -n "$$hits" ]; then echo "ERROR (AV3D-2.4): a producer package calls a provider-send verb directly — outbound must go through the delivery dispatcher seam, never a request-time send:"; echo "$$hits"; exit 1; fi
 
 # G16 (authorizationv3 AZ3-5.3): authorization owns NO authorization-specific
@@ -459,13 +446,13 @@ guard-authorization-no-delivery-repo:
 	@! grep -rnE 'domain/deliveryjob|package deliveryjob' --include='*.go' pockets/authorization || { echo "ERROR (AZ3-5.3): a bespoke deliveryjob domain package appeared in authorization — the v3 kernel ships no effects/delivery domain"; exit 1; }
 
 # G19 (authorization-roles-model, 2026-08-26): the roles domain service
-# (rolesvc) NEVER imports the relationship engine (authorizersvc) or the
-# composite decider (decisionsvc). The decision surface composes DOWNWARD onto
-# rolesvc; the dependency must not point back up, or the sealed roles kind
-# becomes a second home for decision logic.
+# (logic/roles) never imports the relationship engine or composite decider.
+# The decision surface composes downward onto roles; the leaf must not import
+# the composition that consumes it.
 guard-authorization-rolesvc-no-engine:
-	@echo "== guard: authorization rolesvc imports neither authorizersvc nor decisionsvc (G19) =="
-	@! grep -rnE 'internal/logic/(authorizersvc|decisionsvc)["`]' --include='*.go' pockets/authorization/internal/logic/rolesvc || { echo "ERROR (G19): rolesvc imports the relationship engine or the composite decider — the roles kind is a leaf; decisionsvc composes onto it, never the reverse"; exit 1; }
+	@echo "== guard: authorization roles imports neither relationships nor decisions (G19) =="
+	@test -d pockets/authorization/logic/roles
+	@! grep -rnE 'logic/(relationships|decisions)["`/]' --include='*.go' pockets/authorization/logic/roles || { echo "ERROR (G19): roles imports the relationship engine or composite decider — roles is a leaf; decisions composes onto it, never the reverse"; exit 1; }
 
 # G17 (ui-goth GOTH-0.2, 2026-07-17): the seventh module kind — a UI
 # implementation (a reusable presentation system for one rendering/runtime
@@ -492,19 +479,19 @@ guard-ui-no-inward:
 # bookkeeping, and the templ `tool` directive is that same view library, not a new
 # dependency). The frozen GOTH-0.3 surface imports no sdk, but the taxonomy
 # (ARCHITECTURE.md UI-implementation row) permits it, so sdk stays on the
-# whitelist. It also imports no sdk/pocket: a UI implementation is not a pocket
-# composer (the sdk/pocket.Mount seam is a host/pocket concern). A legitimate
+# whitelist. It also imports no pockets: a UI implementation is not a pocket
+# composer (the pockets.Mount seam is a host/pocket concern). A legitimate
 # future view library gets a named addition to the whitelist HERE — never a regex
 # weakening.
 guard-ui-require-whitelist:
-	@echo "== guard: ui/* go.mod requires only templ + sdk, and never imports sdk/pocket (G5 analogue) =="
+	@echo "== guard: ui/* go.mod requires only templ + sdk, and never imports pockets (G5 analogue) =="
 	@fail=0; for f in ui/*/go.mod; do \
 		[ -f "$$f" ] || continue; \
 		extras=$$(awk '/^require \(/{inblk=1; next} inblk && /^\)/{inblk=0; next} inblk && !/\/\/ indirect/{print $$1} /^require [^(]/{print $$2}' $$f \
 			| grep -vE '^(github.com/a-h/templ|github.com/gopernicus/gopernicus/sdk)$$' || true); \
 		if [ -n "$$extras" ]; then echo "ERROR (G18): $$f requires beyond templ/sdk:"; echo "$$extras"; fail=1; fi; \
 	done; exit $$fail
-	@! grep -rn --include='*.go' '"github.com/gopernicus/gopernicus/sdk/pocket' ui/ || { echo "ERROR (G18): a ui/ implementation imports sdk/pocket — a UI implementation is not a pocket composer"; exit 1; }
+	@! grep -rn --include='*.go' '"github.com/gopernicus/gopernicus/pockets' ui/ || { echo "ERROR (G18): a ui/ implementation imports pockets — a UI implementation is not a pocket composer"; exit 1; }
 
 # >>> LEGACY-PATTERNS — self-exempt block (see SELF-EXEMPTION below). Every
 # literal legacy string in this Makefile lives between these two markers.
@@ -554,7 +541,7 @@ guard-no-legacy-features-path:
 		| grep -nE '$(LEGACY_TIER_RE)' | sed 's#^#Makefile:#' || true); \
 	all=$$(printf '%s\n%s\n' "$$hits" "$$self" | grep -v '^$$' || true); \
 	if [ -n "$$all" ]; then \
-		echo "ERROR (G20): the retired features/ vocabulary is back — the third tier is pockets/ and the sdk composer is sdk/pocket (no shim, no alias):"; \
+		echo "ERROR (G20): the retired features/ vocabulary is back — the third tier is pockets/ and its shared contract is pockets (no shim, no alias):"; \
 		echo "$$all"; fail=1; \
 	fi; \
 	for a in $(LEGACY_TIER_ARTIFACTS); do \

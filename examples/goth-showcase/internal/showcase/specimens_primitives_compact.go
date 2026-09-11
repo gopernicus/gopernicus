@@ -7,7 +7,7 @@ import (
 
 	"github.com/a-h/templ"
 
-	"github.com/gopernicus/gopernicus/sdk/foundation/web"
+	"github.com/gopernicus/gopernicus/sdk/pkg/web"
 	"github.com/gopernicus/gopernicus/ui/goth"
 	"github.com/gopernicus/gopernicus/ui/goth/primitives"
 )
@@ -179,7 +179,7 @@ func compactFormSpecimen() string {
 // submission.
 func (s *Server) registerCompactFixtures() {
 	s.handler.Handle(http.MethodGet, "/compact/echo", func(w http.ResponseWriter, r *http.Request) {
-				bundle := s.bundles[goth.StylesOnly]
+		bundle := s.bundles[goth.StylesOnly]
 		w.Header().Set("Content-Security-Policy", buildCSP(bundle, false))
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 

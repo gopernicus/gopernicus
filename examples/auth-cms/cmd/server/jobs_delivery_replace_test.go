@@ -11,14 +11,14 @@ import (
 	"github.com/gopernicus/gopernicus/examples/auth-cms/internal/authjobs"
 	"github.com/gopernicus/gopernicus/examples/auth-cms/internal/authmem"
 	auth "github.com/gopernicus/gopernicus/pockets/authentication"
-	"github.com/gopernicus/gopernicus/pockets/jobs"
-	"github.com/gopernicus/gopernicus/pockets/jobs/domain/job"
+	delivery "github.com/gopernicus/gopernicus/pockets/authentication/logic/delivery"
+	job "github.com/gopernicus/gopernicus/pockets/jobs/logic/queue"
 	"github.com/gopernicus/gopernicus/sdk"
-	"github.com/gopernicus/gopernicus/sdk/capabilities/email"
+	"github.com/gopernicus/gopernicus/sdk/capabilities/notify/email"
 )
 
 // This file proves the AV3D-3.3 duplicate / resend / stale-worker properties end to
-// end on the host's real jobs-mode composition (auth.Service -> authjobs.Dispatcher
+// end on the host's real jobs-mode composition (authentication.Service -> authjobs.Dispatcher
 // -> generic jobs fenced queue -> jobs.FencedRuntime -> auth delivery processor),
 // against the inspectable in-memory fenced queue AV3D-3.2 introduced (live pgx/turso
 // are AV3D-3.5; env DSNs unset). It reuses that harness — inspectingQueue,
@@ -88,19 +88,19 @@ func (s *gatingSender) all() []email.Message {
 // widenLease bumps the claim lease well past a test's orchestration window so a
 // handler paused at an adversarial gate does not lapse its lease and get reclaimed as
 // a duplicate before the test triggers the replacement.
-func widenLease(c *jobs.FencedRuntimeConfig) { c.LeaseFor = 5 * time.Second }
+func widenLease(c *deliveryRuntimeTestConfig) { c.LeaseFor = 5 * time.Second }
 
 // replaceGeneration drives the exact composition Replace path a resend takes —
-// authjobs.Dispatcher.Replace -> jobs.Service.Replace -> fenced-queue supersession —
+// authjobs.Dispatcher.Replace -> queue.Service.Replace -> fenced-queue supersession —
 // admitting payload as a fresh generation under logicalKey and returning the new
 // execution id. payload is the prior generation's opaque admission bytes, so the new
 // generation is a faithful re-admission of the same enumeration-safe start.
 func replaceGeneration(t *testing.T, b booted, logicalKey string, payload []byte) string {
 	t.Helper()
-	dispatcher := authjobs.NewDispatcher(b.jobs)
+	dispatcher := authjobs.NewDispatcher(b.jobs.Queue)
 	// purpose is dropped by the adapter (it rides inside the sealed envelope); the real
 	// value is passed for honesty.
-	newID, err := dispatcher.Replace(context.Background(), auth.DeliveryJobKind, "password_reset", logicalKey, payload)
+	newID, err := dispatcher.Replace(context.Background(), delivery.JobKind, "password_reset", logicalKey, payload)
 	if err != nil {
 		t.Fatalf("dispatcher.Replace: %v", err)
 	}
@@ -129,9 +129,9 @@ func assertJobStatus(t *testing.T, store *inspectingQueue, id string, want job.S
 // assertLatestSucceeded proves a status lookup by the receipt key resolves to the
 // latest generation in a terminal, non-failed (delivered) state. "succeeded" and the
 // pending/failed flags are the frozen auth status vocabulary (delivery.StatusSucceeded).
-func assertLatestSucceeded(t *testing.T, svc *auth.Service, receiptKey string) {
+func assertLatestSucceeded(t *testing.T, svc *auth.Components, receiptKey string) {
 	t.Helper()
-	st, err := svc.DeliveryStatus(context.Background(), receiptKey)
+	st, err := svc.Authentication.DeliveryStatus(context.Background(), receiptKey)
 	if err != nil {
 		t.Fatalf("DeliveryStatus(receipt key): %v", err)
 	}
@@ -193,13 +193,13 @@ func TestReceiptKeyMapsToPIIFreeLogicalKeyNotExecutionID(t *testing.T) {
 	b := bootDelivery(t, authRepos, store, cap)
 
 	// The execution id is not a status key: a lookup by it does not resolve.
-	if _, err := b.svc.DeliveryStatus(ctx, gen1ID); !errors.Is(err, sdk.ErrNotFound) {
+	if _, err := b.svc.Authentication.DeliveryStatus(ctx, gen1ID); !errors.Is(err, sdk.ErrNotFound) {
 		t.Fatalf("status by execution id err = %v, want ErrNotFound (status keys on the logical key, not the execution id)", err)
 	}
 
 	// The receipt key resolves — pending before delivery, succeeded after — proving
 	// resolution is latest-by-key.
-	st, err := b.svc.DeliveryStatus(ctx, receiptKey)
+	st, err := b.svc.Authentication.DeliveryStatus(ctx, receiptKey)
 	if err != nil {
 		t.Fatalf("DeliveryStatus(receipt key) before delivery: %v", err)
 	}
@@ -227,7 +227,7 @@ func TestSubmitOnceCoalescesOntoOneActiveExecution(t *testing.T) {
 	cap := &captureSender{}
 	b := bootDelivery(t, authRepos, store, cap)
 
-	if _, err := b.svc.RegisterUser(ctx, addr, "correct-horse-battery-staple", "Coalesce User"); err != nil {
+	if _, err := b.svc.Authentication.Register(ctx, addr, "correct-horse-battery-staple", "Coalesce User"); err != nil {
 		t.Fatalf("RegisterUser: %v", err)
 	}
 	// Registration verification renders synchronously at admission, so the code is
@@ -236,15 +236,15 @@ func TestSubmitOnceCoalescesOntoOneActiveExecution(t *testing.T) {
 	if !ok {
 		t.Fatal("no rendered verification payload for the registered address")
 	}
-	if err := b.svc.Verify(ctx, addr, code); err != nil {
+	if err := b.svc.Authentication.Verify(ctx, addr, code); err != nil {
 		t.Fatalf("Verify: %v", err)
 	}
 
 	// Two duplicate forgot-password starts for the same identifier while active.
-	if err := b.svc.ForgotPassword(ctx, addr); err != nil {
+	if err := b.svc.Authentication.ForgotPassword(ctx, addr); err != nil {
 		t.Fatalf("ForgotPassword #1: %v", err)
 	}
-	if err := b.svc.ForgotPassword(ctx, addr); err != nil {
+	if err := b.svc.Authentication.ForgotPassword(ctx, addr); err != nil {
 		t.Fatalf("ForgotPassword #2: %v", err)
 	}
 

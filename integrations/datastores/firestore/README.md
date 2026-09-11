@@ -149,7 +149,7 @@ obligations follow:
 - Writes queued by a losing attempt are discarded; nothing read on a losing
   attempt is still known to be true.
 
-`(*DB).Transact` implements `sdk/foundation/crud.Transactor`. It commits when
+`(*DB).Transact` implements `sdk/capabilities/transaction.Transactor`. It commits when
 the callback returns nil, rolls back and returns the callback's error
 **unwrapped** when it does not — with one narrowing: an error carrying a bare
 gRPC status and no sdk sentinel goes through `MapError`, so a vendor status a
@@ -177,6 +177,11 @@ server's `Aborted` goes through `MapError` and surfaces as `sdk.ErrConflict`:
 the caller is the contention loser and may retry the whole workflow. Lower
 `Config.MaxAttempts` to 1 to get that immediately; raise it for a hot document
 (each retry re-runs the callback, so the cost is real reads).
+
+A failure beginning a later attempt, or cancellation while retrying, is returned
+as that terminal failure. Earlier contention does not replace it. Mapped context
+deadlines retain both `context.DeadlineExceeded` and `sdk.ErrUnavailable` for
+`errors.Is` checks.
 
 **A contended READ inside the callback is retried too.** The vendor decides
 whether to retry by asking whether the error IS or WRAPS a gRPC `Aborted`
@@ -319,9 +324,9 @@ first `https://` token in the message, verbatim.
 The connector maps INFRASTRUCTURE errors only. Store-level CAS, no-op, and
 idempotency semantics stay with the owning adapter.
 
-## `List[T]` — the crud grammar over documents
+## `List[T]` — the listing contract over documents
 
-`List[T]`/`ListQuery[T]` implement the `sdk/foundation/crud` list standards with
+`List[T]`/`ListQuery[T]` implement the `sdk/pkg/list` list standards with
 observable semantics identical to `pgxdb.List` and `turso.List`: ordering
 against a per-aggregate allow-list, bidirectional keyset cursors with a reverse
 probe for `HasPrev`/`PreviousCursor`, an explicit offset strategy, and opt-in
@@ -333,11 +338,10 @@ counts. The per-pocket `storetest` conformance suites are the parity proof.
   trims. An empty `PK` means the document id, and a document-id cursor value
   travels as the id STRING — the vendor resolves it to a reference itself. A
   stale order-field cursor decodes to the first page, exactly as turso does.
-- **Reverse probe.** The prev window flips the sort, bounds it at the incoming
-  cursor, fetches up to `limit` rows and restores forward order. Page two's
-  window is always one row short — page one is the first page, which no cursor
-  addresses — so it reports `HasPrev` with an EMPTY `PreviousCursor`, which is
-  `crud.MarkPrevPage`'s specified behavior and the SQL connectors'.
+- **Reverse probe.** Include the incoming boundary with `StartAt`, fetch up to
+  `limit+1` rows in the flipped order, then restore forward order. Any match
+  sets `HasPrev`; an extra predecessor supplies `PreviousCursor`. Without an
+  extra predecessor, the previous page is first and its cursor stays empty.
 - **Offset strategy.** `Offset(n).Limit(limit+1)`, `HasMore` from the
   over-fetch, no cursors emitted. O(offset) documents are billed. Under a
   `PostFilter` the offset counts MATCHES, not scanned documents.
@@ -376,7 +380,7 @@ q.PostFilter = firestoredb.SearchFilter(apikey.SearchFields, func(row apikey.API
 }, req.Search)
 ```
 
-`SearchFilter` matches with `crud.MatchesSearch` (literal substring, ASCII-only
+`SearchFilter` matches with `list.MatchesSearch` (literal substring, ASCII-only
 case folding, so `%`, `_` and `\` are ordinary characters) and ORs across the
 declared fields — a field the store did not declare is not searched. It returns
 `nil` for a blank term (no search is not a filter) and for a non-blank term over
@@ -387,7 +391,7 @@ answer turso's `AddSearchClause` gives. The rule pinned for the future: **a
 Firestore list honors `Search` only under a parent scope**; a top-level
 searchable list is a plan-level decision, never an accidental full scan.
 
-`crud.OrderField.CastLower` is likewise REFUSED, not ignored: Firestore cannot
+`list.OrderField.CastLower` is likewise REFUSED, not ignored: Firestore cannot
 case-fold in an index, and no store in this repository sets the flag. Firestore
 orders strings by UTF-8 bytes — the same raw byte order pgx pins with
 `COLLATE "C"` and turso gets from SQLite's BINARY collation — so keyset parity
@@ -402,7 +406,7 @@ all directions flipped — belongs in that store's manifest.
 Order by a field **every document in the population has**. A document missing
 the order field is invisible to every List path — page, cursor, reverse probe,
 and total — and a document whose field is NULL is traversed (null sorts first)
-but cannot be addressed by a `crud.Cursor`, which carries the decoded value.
+but cannot be addressed by a `list.Cursor`, which carries the decoded value.
 Write optional timestamps through `NullTime`, and do not order by them.
 
 ## The index manifest — shipped, exported, probed
@@ -598,14 +602,14 @@ observes its own pending writes. The pockets' `storetest.RunTransactional`
 family proves the join from both sides ("the ambient read sees the uncommitted
 change"), which a native Firestore adapter cannot satisfy. So:
 
-- A pocket's `stores/firestore` returns **no** `crud.Transactor` to the
+- A pocket's `stores/firestore` returns **no** `transaction.Transactor` to the
   conformance harness, and that family **skips loudly** (the harness's existing
   nil-transactor path, which the in-memory stores also take).
 - A store method whose context carries a connector transaction
   (`firestoredb.TxFromContext`) **fails loud** with a store-typed sentinel
   wrapping `sdk.ErrInvalidInput` — it never quietly runs on the client beside
   the host's transaction. A silent split is the failure; an error is honest.
-- This connector still implements `crud.Transactor` (`(*DB).Transact`) for a
+- This connector still implements `transaction.Transactor` (`(*DB).Transact`) for a
   host's own multi-document atomicity. That seam is sdk-level and host-facing,
   independent of whether the pocket stores join it.
 

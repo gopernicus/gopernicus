@@ -50,6 +50,9 @@ func (s qualified) table(name string) string { return s.schema.Table(name) }
 func applyOptions(opts []Option) config {
 	var cfg config
 	for _, opt := range opts {
+		if opt == nil {
+			panic("authentication pgx: store constructor received a nil option")
+		}
 		opt(&cfg)
 	}
 	return cfg

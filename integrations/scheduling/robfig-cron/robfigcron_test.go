@@ -78,6 +78,56 @@ func TestInvalidExpressionErrors(t *testing.T) {
 	}
 }
 
+func TestRejectsTimezonePrefixes(t *testing.T) {
+	for _, expr := range []string{
+		"TZ=America/New_York 0 12 * * *",
+		"CRON_TZ=America/New_York @daily",
+		"TZ=UTC 0 12 * * *",
+		"CRON_TZ=UTC @every 1h",
+		"TZ=UTC",
+		"CRON_TZ=",
+		"TZ=UTC\t0 12 * * *",
+		"  CRON_TZ=UTC",
+	} {
+		t.Run(expr, func(t *testing.T) {
+			if schedule, err := robfigcron.New().Parse(expr); schedule != nil || err == nil {
+				t.Fatalf("Parse(%q) = %v, %v; want nil schedule and error", expr, schedule, err)
+			}
+		})
+	}
+}
+
+func TestEveryRequiresWholeSeconds(t *testing.T) {
+	for _, expr := range []string{"@every 0s", "@every -1h", "@every 500ms", "@every 1500ms", "@every 1s1ns", "@every 999999999999999999999h"} {
+		if schedule, err := robfigcron.New().Parse(expr); schedule != nil || err == nil {
+			t.Errorf("Parse(%q) = %v, %v; want nil schedule and error", expr, schedule, err)
+		}
+	}
+	base := time.Date(2026, 7, 8, 10, 0, 0, 500_000_000, time.FixedZone("plus5", 5*60*60))
+	for _, tc := range []struct {
+		expr  string
+		delay time.Duration
+	}{
+		{"@every 1s", time.Second},
+		{"@every 90s", 90 * time.Second},
+		{"@every 1h30m", 90 * time.Minute},
+	} {
+		schedule, err := robfigcron.New().Parse(tc.expr)
+		if err != nil {
+			t.Fatalf("Parse(%q): %v", tc.expr, err)
+		}
+		// Robfig aligns recurring intervals to whole-second boundaries.
+		want := base.UTC().Truncate(time.Second).Add(tc.delay)
+		got := schedule.Next(base)
+		if !got.Equal(want) || got.Location() != time.UTC || !got.After(base) {
+			t.Errorf("Next(%q) = %s, want %s in UTC strictly after input", tc.expr, got, want)
+		}
+		if next := schedule.Next(got); !next.Equal(got.Add(tc.delay)) {
+			t.Errorf("second Next(%q) = %s, want %s", tc.expr, next, got.Add(tc.delay))
+		}
+	}
+}
+
 // TestDomDowOrSemantics pins the robfig OR-semantics: when both day-of-month and
 // day-of-week are restricted, a match on EITHER fires. "0 0 1 * 1" is midnight
 // on the 1st OR any Monday; from Wednesday 2026-07-08 the next fire is the

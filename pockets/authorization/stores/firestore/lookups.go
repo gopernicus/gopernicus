@@ -6,9 +6,9 @@ import (
 	"slices"
 
 	gcfs "cloud.google.com/go/firestore"
-	"google.golang.org/api/iterator"
-
 	firestoredb "github.com/gopernicus/gopernicus/integrations/datastores/firestore"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/relationships"
+	"google.golang.org/api/iterator"
 )
 
 // lookupPageSize is the number of documents ONE keyset stream pulls per physical
@@ -91,43 +91,45 @@ func newIDStream(reader firestoredb.Reader, q gcfs.Query, after string, limit in
 // nothing about the merged result, which is why every stream is drained
 // independently.
 func (s *idStream) peek(ctx context.Context) (string, bool, error) {
-	if s.pos < len(s.buf) {
-		return s.buf[s.pos], true, nil
-	}
-	if s.done {
-		return "", false, nil
-	}
-	q := s.base.Limit(s.pageSize)
-	if s.last != nil {
-		q = s.base.StartAfter(s.last).Limit(s.pageSize)
-	}
-	it := s.reader.Documents(ctx, q)
-	defer it.Stop()
-
-	s.buf = s.buf[:0]
-	s.pos = 0
-	for {
-		snap, err := it.Next()
-		if errors.Is(err, iterator.Done) {
-			break
-		}
-		if err != nil {
-			return "", false, firestoredb.MapError(err)
-		}
-		id, err := s.idOf(snap)
-		if err != nil {
+	for s.pos >= len(s.buf) && !s.done {
+		if err := ctx.Err(); err != nil {
 			return "", false, err
 		}
-		s.buf = append(s.buf, id)
-		s.last = snap
+		q := s.base.Limit(s.pageSize)
+		if s.last != nil {
+			q = s.base.StartAfter(s.last).Limit(s.pageSize)
+		}
+		it := s.reader.Documents(ctx, q)
+		s.buf = s.buf[:0]
+		s.pos = 0
+		read := 0
+		for {
+			snap, err := it.Next()
+			if errors.Is(err, iterator.Done) {
+				break
+			}
+			if err != nil {
+				it.Stop()
+				return "", false, firestoredb.MapError(err)
+			}
+			read++
+			id, err := s.idOf(snap)
+			if err != nil {
+				it.Stop()
+				return "", false, err
+			}
+			s.last = snap
+			if id != "" {
+				s.buf = append(s.buf, id)
+			}
+		}
+		it.Stop()
+		s.done = read < s.pageSize
 	}
-	if len(s.buf) < s.pageSize {
-		s.done = true
-	}
-	if len(s.buf) == 0 {
+	if s.pos >= len(s.buf) {
 		return "", false, nil
 	}
-	return s.buf[0], true, nil
+	return s.buf[s.pos], true, nil
 }
 
 // advance consumes the current id.
@@ -233,7 +235,7 @@ func subjectKeysOf(subjectType string, ids []string) []string {
 // The closure is a SET: a resource already collected is never re-queued, which
 // is what terminates a cycle and what makes a root appear in the result only
 // when a cycle makes it a genuine descendant.
-func descendantClosure(ctx context.Context, db *firestoredb.DB, r firestoredb.Reader, resourceType string, relations []string, subjectType string, rootIDs []string) ([]string, error) {
+func descendantClosure(ctx context.Context, db *firestoredb.DB, r firestoredb.Reader, resourceType string, relations []string, subjectType string, rootIDs []string, models ...*relationships.ReadModel) ([]string, error) {
 	rels := distinctSortedIDs(relations)
 	frontier := subjectKeysOf(subjectType, rootIDs)
 	found := map[string]struct{}{}
@@ -249,6 +251,9 @@ func descendantClosure(ctx context.Context, db *firestoredb.DB, r firestoredb.Re
 				return nil, err
 			}
 			for _, row := range rows {
+				if !permits(firstReadModel(models), row) {
+					continue
+				}
 				if _, seen := found[row.ResourceID]; seen {
 					continue
 				}

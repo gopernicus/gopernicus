@@ -1,0 +1,5 @@
+The {{.IdentifierKind}} on your account was just changed.
+
+If you made this change, no action is needed.
+
+If you did not, secure your account immediately — someone may have access to it.

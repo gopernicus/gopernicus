@@ -15,7 +15,7 @@ import (
 	"testing"
 
 	{{.Pocket}} "{{.ModulePath}}"
-	"{{.ModulePath}}/storetest"
+	"{{.ModulePath}}/stores/storetest"
 	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
 )
 
@@ -28,7 +28,7 @@ func TestConformance(t *testing.T) {
 
 	storetest.Run(t, func(t *testing.T) {{.Pocket}}.Repositories {
 		db := openAndMigrate(t, url, token)
-		repos, err := Repositories(db)
+		repos, err := Repositories(context.Background(), db)
 		if err != nil {
 			t.Fatalf("Repositories: %v", err)
 		}
@@ -51,7 +51,7 @@ func requireTursoEnv(t *testing.T) (url, token string) {
 // truncates the table so the returned repositories start empty and isolated.
 func openAndMigrate(t *testing.T, url, token string) *tursodb.DB {
 	t.Helper()
-	db, err := tursodb.Open(tursodb.Config{URL: url, AuthToken: token})
+	db, err := tursodb.Open(context.Background(), tursodb.Config{URL: url, AuthToken: token})
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}

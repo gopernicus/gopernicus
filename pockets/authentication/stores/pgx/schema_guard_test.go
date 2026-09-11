@@ -95,10 +95,10 @@ func TestWithSchema(t *testing.T) {
 		t.Errorf("scoped table = %q, want %q", scoped.table(usersTable), want)
 	}
 
-	if got := NewUserStore(nil).table(usersTable); got != usersTable {
+	if got := NewUserStore(&pgxdb.DB{}).table(usersTable); got != usersTable {
 		t.Errorf("NewUserStore without options = %q, want %q", got, usersTable)
 	}
-	if got, want := NewUserStore(nil, WithSchema(s)).table(usersTable), `"auth_x".`+usersTable; got != want {
+	if got, want := NewUserStore(&pgxdb.DB{}, WithSchema(s)).table(usersTable), `"auth_x".`+usersTable; got != want {
 		t.Errorf("NewUserStore(WithSchema) = %q, want %q", got, want)
 	}
 	if got, want := userSummarySelect(qualified{schema: s}), `"auth_x".`+usersTable+" u"; !strings.Contains(got, want) {

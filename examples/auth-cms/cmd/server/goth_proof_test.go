@@ -8,13 +8,13 @@ import (
 	"testing"
 
 	"github.com/gopernicus/gopernicus/examples/auth-cms/internal/authmem"
+	"github.com/gopernicus/gopernicus/pockets"
 	auth "github.com/gopernicus/gopernicus/pockets/authentication"
-	sdkevents "github.com/gopernicus/gopernicus/sdk/capabilities/events"
-	"github.com/gopernicus/gopernicus/sdk/foundation/web"
-	"github.com/gopernicus/gopernicus/sdk/pocket"
-	uigothassets "github.com/gopernicus/gopernicus/ui/goth/assets"
-
+	delivery "github.com/gopernicus/gopernicus/pockets/authentication/logic/delivery"
 	authgoth "github.com/gopernicus/gopernicus/pockets/authentication/views/goth"
+	sdkevents "github.com/gopernicus/gopernicus/sdk/capabilities/events"
+	"github.com/gopernicus/gopernicus/sdk/pkg/web"
+	uigothassets "github.com/gopernicus/gopernicus/ui/goth/assets"
 )
 
 // gothProofRouter builds the host's real presentation composition — the ui/goth
@@ -27,19 +27,19 @@ func gothProofRouter(t *testing.T) *web.WebHandler {
 	if err != nil {
 		t.Fatalf("buildAuthConfig: %v", err)
 	}
-	cfg.DeliveryMode = auth.DeliveryModeInProcess
+	cfg.DeliveryMode = delivery.ModeInProcess
 	cfg.DeliveryEphemeralAcknowledged = true
-	svc, err := auth.NewService(authmem.New().Repositories(), cfg)
+	svc, err := auth.New(authmem.New().Repositories(), cfg.TokenSigner, cfg.RuntimeMode, cfg.DeliveryMode, cfg.options()...)
 	if err != nil {
 		t.Fatalf("auth.NewService: %v", err)
 	}
 
-	router := web.NewWebHandler(web.WithLogging(quietLog()))
+	router := web.NewWebHandler()
 	uigothStatic := web.NewStaticFileServer(uigothassets.FS, web.WithAssetPrefix("dist/"))
 	uigothStatic.AddRoutes(router, authAssetBasePath)
 	router.Handle(http.MethodGet, authgoth.DefaultFragmentScriptPath, authgoth.FragmentScriptHandler().ServeHTTP)
 
-	if err := svc.Register(pocket.Mount{Router: router, Logger: quietLog(), Events: sdkevents.NewMemory()}); err != nil {
+	if err := svc.HTTP.Register(pockets.Mount{Router: router, Logger: quietLog(), Events: sdkevents.NewMemory()}); err != nil {
 		t.Fatalf("auth Register: %v", err)
 	}
 	return router
@@ -182,16 +182,16 @@ func TestGOTHNilViewsAssetFreePosture(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildAuthConfig: %v", err)
 	}
-	cfg.DeliveryMode = auth.DeliveryModeInProcess
+	cfg.DeliveryMode = delivery.ModeInProcess
 	cfg.DeliveryEphemeralAcknowledged = true
 	cfg.Views = nil
 	cfg.HTMLPolicy = nil
-	svc, err := auth.NewService(authmem.New().Repositories(), cfg)
+	svc, err := auth.New(authmem.New().Repositories(), cfg.TokenSigner, cfg.RuntimeMode, cfg.DeliveryMode, cfg.options()...)
 	if err != nil {
 		t.Fatalf("auth.NewService (nil Views): %v", err)
 	}
-	router := web.NewWebHandler(web.WithLogging(quietLog()))
-	if err := svc.Register(pocket.Mount{Router: router, Logger: quietLog(), Events: sdkevents.NewMemory()}); err != nil {
+	router := web.NewWebHandler()
+	if err := svc.HTTP.Register(pockets.Mount{Router: router, Logger: quietLog(), Events: sdkevents.NewMemory()}); err != nil {
 		t.Fatalf("auth Register (nil Views): %v", err)
 	}
 	rec := get(t, router, "/auth/login")

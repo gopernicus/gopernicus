@@ -4,11 +4,10 @@ import (
 	"context"
 	"time"
 
-	"github.com/jackc/pgx/v5"
-
 	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
-	"github.com/gopernicus/gopernicus/pockets/authentication/domain/oauthstate"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/oauthstate"
 	"github.com/gopernicus/gopernicus/sdk"
+	"github.com/jackc/pgx/v5"
 )
 
 // OAuthStateStore implements oauthstate.StateRepository over a PostgreSQL
@@ -24,7 +23,11 @@ type OAuthStateStore struct {
 var _ oauthstate.StateRepository = (*OAuthStateStore)(nil)
 
 // NewOAuthStateStore returns an OAuthStateStore backed by db.
+// It panics if db is nil; the caller owns the database lifecycle.
 func NewOAuthStateStore(db *pgxdb.DB, opts ...Option) *OAuthStateStore {
+	if db == nil {
+		panic("authentication pgx: NewOAuthStateStore received a nil database")
+	}
 	return &OAuthStateStore{db: db, qualified: qualified{schema: applyOptions(opts).schema}}
 }
 

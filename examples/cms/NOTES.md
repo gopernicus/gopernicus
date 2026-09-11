@@ -11,7 +11,7 @@ pgxdb NamedArgs list toolkit (`QuoteIdentifier`, keyset/order/limit
 builders, `List[T]`/`ListQuery[T]` over CollectRows+RowToStructByName)
 with a semantics-only turso twin; all four features' pgx stores on the
 full idiom set (store-local db-tagged row structs + toDomain +
-`crud.MapPage` — domain types stay tag-free; NamedArgs everywhere;
+`list.MapPage` — domain types stay tag-free; NamedArgs everywhere;
 UNNEST bulk writes for cms entry_fields/entry_terms and the events
 outbox; preserve-verbatim honored for jobs Claim SKIP LOCKED, ClaimDue
 CAS, auth DELETE…RETURNING consume); order allow-lists in the domain

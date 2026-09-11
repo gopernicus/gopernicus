@@ -56,8 +56,10 @@ var probeTables = []string{
 // query. This is the store half of the scaffold model: the host owns and
 // applies the schema (see ExportMigrations) and the store just provides repos.
 // db is the connector wrapper (error mapping + Tx), not a raw *sql.DB.
-func Repositories(db *tursodb.DB) (auth.Repositories, error) {
-	ctx := context.Background()
+func Repositories(ctx context.Context, db *tursodb.DB) (auth.Repositories, error) {
+	if db == nil {
+		return auth.Repositories{}, fmt.Errorf("authentication turso: nil database: %w", sdk.ErrInvalidInput)
+	}
 	for _, table := range probeTables {
 		if err := probeTable(ctx, db, table); err != nil {
 			return auth.Repositories{}, err
@@ -106,6 +108,7 @@ var probeColumns = []struct{ table, column, migration string }{
 	{"users", "status_changed_at", "0014_user_status.sql"},
 	{"challenges", "subject_key", "0015_challenge_subject_keys.sql"},
 	{"invitations", "metadata", "0016_invitation_metadata.sql"},
+	{"invitations", "resolved_subject_type", "0018_invitation_acceptance.sql"},
 }
 
 // probeColumn verifies one ALTER-added column exists, naming the migration that

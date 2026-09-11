@@ -8,7 +8,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/gopernicus/gopernicus/sdk"
-	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
+	"github.com/gopernicus/gopernicus/sdk/pkg/list"
 )
 
 // ListQuery describes one paginated SELECT for List. T is a store-local,
@@ -20,23 +20,32 @@ import (
 // applies when the request Order is zero. PK is the tiebreaker/cursor column.
 // OrderValueOf returns a row's value for the resolved order column and PKOf its
 // pk, both used to encode cursors. Limits is the resource's page-size vocabulary
-// passed to req.NormalizedLimit; the zero value preserves the crud-constant
+// passed to req.NormalizedLimit; the zero value preserves the list-constant
 // defaults.
+//
+// All list ordering and predicates run outside BaseSQL in a derived table.
+// This keeps expressions over output aliases consistent on every page. Project
+// every search/order/PK column using an unqualified output name; inner table aliases
+// are not visible outside that SELECT. Include added columns in the row scanner.
+// OrderValueOf must return the projected value and type used for ordering.
+// SQL keyset ordering requires non-null order values and primary keys in every
+// matching row; use a non-null projection or offset mode for nullable ordering.
 type ListQuery[T any] struct {
 	BaseSQL      string
 	Args         pgx.NamedArgs
-	OrderFields  map[string]crud.OrderField
-	DefaultOrder crud.Order
+	OrderFields  map[string]list.OrderField
+	DefaultOrder list.Order
 	// SearchFields is the allow-list of searchable text columns — the twin of
 	// OrderFields (crud-search-upstream T2). Empty means the list is NOT
-	// searchable: a blank ListRequest.Search still works, and a NON-blank one is
+	// searchable: a blank Request.Search still works, and a NON-blank one is
 	// sdk.ErrInvalidInput rather than a silently unfiltered page.
-	SearchFields []crud.SearchField
+	SearchFields []list.SearchField
 	// FixedOrder is a store-authored ORDER BY expression (without the keyword)
 	// for a list whose order is not the caller's to choose: composite columns,
 	// NULLS LAST, computed sort keys — "closing_date DESC NULLS LAST, name ASC,
 	// id ASC". It is trusted store text, like BaseSQL, never request data, and
-	// is written verbatim; the store includes its own PK tiebreak in it — List
+	// is written verbatim over projected fields; the store includes its own PK
+	// tiebreak in it — List
 	// does not append one. When set, OrderFields/DefaultOrder are not consulted
 	// (OrderFields also set is a programming error reported as
 	// sdk.ErrInvalidInput), a request carrying an Order is sdk.ErrInvalidInput,
@@ -45,12 +54,12 @@ type ListQuery[T any] struct {
 	// expression is not derivable. The zero value keeps the OrderFields path.
 	FixedOrder   string
 	PK           string
-	Limits       crud.Limits
+	Limits       list.Limits
 	OrderValueOf func(row T, field string) any
 	PKOf         func(row T) string
 }
 
-// List runs a paginated SELECT implementing the sdk/foundation/crud list matrix over
+// List runs a paginated SELECT implementing the sdk/pkg/list list matrix over
 // pgx.CollectRows + RowToStructByName. It validates the request, resolves the
 // order against q.OrderFields, then switches on req.ResolvedStrategy() into one
 // of two linear flows: listCursor appends the keyset tuple predicate (and, when
@@ -63,9 +72,9 @@ type ListQuery[T any] struct {
 //
 // A ListQuery with FixedOrder takes the offset flow only, with its ORDER BY
 // written verbatim; see the field doc for what it refuses.
-func List[T any](ctx context.Context, db Querier, q ListQuery[T], req crud.ListRequest) (crud.Page[T], error) {
+func List[T any](ctx context.Context, db Querier, q ListQuery[T], req list.Request) (list.Page[T], error) {
 	if err := req.Validate(); err != nil {
-		return crud.Page[T]{}, err
+		return list.Page[T]{}, err
 	}
 
 	var (
@@ -75,13 +84,13 @@ func List[T any](ctx context.Context, db Querier, q ListQuery[T], req crud.ListR
 	)
 	if q.FixedOrder != "" {
 		if err := q.checkFixedOrder(req); err != nil {
-			return crud.Page[T]{}, err
+			return list.Page[T]{}, err
 		}
 	} else {
 		var err error
 		orderCol, castLower, direction, err = q.resolveOrder(req.Order)
 		if err != nil {
-			return crud.Page[T]{}, err
+			return list.Page[T]{}, err
 		}
 	}
 
@@ -96,28 +105,31 @@ func List[T any](ctx context.Context, db Querier, q ListQuery[T], req crud.ListR
 	// search excluded.
 	searched, err := q.withSearch(req.Search)
 	if err != nil {
-		return crud.Page[T]{}, err
+		return list.Page[T]{}, err
 	}
 
-	if req.ResolvedStrategy() == crud.StrategyOffset {
+	if req.ResolvedStrategy() == list.StrategyOffset {
 		return searched.listOffset(ctx, db, req, orderCol, castLower, direction)
 	}
 	return searched.listCursor(ctx, db, req, orderCol, castLower, direction)
 }
 
-// withSearch returns a copy of q whose BaseSQL carries the search predicate and
-// whose Args carry the bound pattern. A blank term returns q unchanged.
+// withSearch places BaseSQL in a projected outer scope and applies optional
+// search. Even a blank term wraps the SELECT, so ORDER BY expressions cannot
+// bind to an inner source column that an output alias transforms.
 //
 // The copy is not cosmetic. ListQuery is passed BY VALUE, but its pgx.NamedArgs
 // is a map — shared, not copied — so binding the reserved argument directly would
 // leak it into the caller's query struct and into every later query built from
 // it. cloneArgs gives this derivation its own map.
 func (q ListQuery[T]) withSearch(term string) (ListQuery[T], error) {
-	if strings.TrimSpace(term) == "" {
-		return q, nil
-	}
 	var buf strings.Builder
 	buf.WriteString(q.BaseSQL)
+	if strings.TrimSpace(term) == "" {
+		wrapListSource(&buf)
+		q.BaseSQL = buf.String()
+		return q, nil
+	}
 	args := cloneArgs(q.Args)
 	if err := AddSearchClause(&buf, args, q.SearchFields, term); err != nil {
 		return ListQuery[T]{}, err
@@ -131,15 +143,15 @@ func (q ListQuery[T]) withSearch(term string) (ListQuery[T], error) {
 // a stale token — skips the predicate and the reverse probe), over-fetch
 // limit+1, TrimPage for HasMore/NextCursor, then the reverse probe for
 // HasPrev/PreviousCursor when a cursor was present.
-func (q ListQuery[T]) listCursor(ctx context.Context, db Querier, req crud.ListRequest, orderCol string, castLower bool, direction string) (crud.Page[T], error) {
+func (q ListQuery[T]) listCursor(ctx context.Context, db Querier, req list.Request, orderCol string, castLower bool, direction string) (list.Page[T], error) {
 	limit := req.NormalizedLimit(q.Limits)
 
-	var cursor *crud.Cursor
+	var cursor *list.Cursor
 	if req.Cursor != "" {
 		var err error
-		cursor, err = crud.DecodeCursor(req.Cursor, orderCol)
+		cursor, err = list.DecodeCursor(req.Cursor, orderCol)
 		if err != nil {
-			return crud.Page[T]{}, fmt.Errorf("decode cursor: %w: %w", sdk.ErrInvalidInput, err)
+			return list.Page[T]{}, fmt.Errorf("decode cursor: %w: %w", sdk.ErrInvalidInput, err)
 		}
 	}
 
@@ -149,38 +161,42 @@ func (q ListQuery[T]) listCursor(ctx context.Context, db Querier, req crud.ListR
 
 	if cursor != nil {
 		if err := ApplyCursorPagination(&buf, args, orderCol, q.PK, cursor.OrderValue, cursor.PK, direction, false, castLower); err != nil {
-			return crud.Page[T]{}, err
+			return list.Page[T]{}, err
 		}
 	}
 	if err := AddOrderByClause(&buf, orderCol, q.PK, direction, false, castLower); err != nil {
-		return crud.Page[T]{}, err
+		return list.Page[T]{}, err
 	}
 	AddLimitClause(&buf, args, limit+1)
 
 	items, err := q.collect(ctx, db, buf.String(), args)
 	if err != nil {
-		return crud.Page[T]{}, err
+		return list.Page[T]{}, err
 	}
 
 	encode := func(row T) (string, error) {
-		return crud.EncodeCursor(orderCol, q.OrderValueOf(row, orderCol), q.PKOf(row))
+		value := q.OrderValueOf(row, orderCol)
+		if err := validateCursorValue(value, castLower); err != nil {
+			return "", err
+		}
+		return list.EncodeCursor(orderCol, value, q.PKOf(row))
 	}
 
-	page, err := crud.TrimPage(items, limit, encode)
+	page, err := list.TrimPage(items, limit, encode)
 	if err != nil {
-		return crud.Page[T]{}, err
+		return list.Page[T]{}, err
 	}
 
 	if cursor != nil {
 		if err := q.markPrev(ctx, db, &page, orderCol, direction, castLower, limit, cursor, encode); err != nil {
-			return crud.Page[T]{}, err
+			return list.Page[T]{}, err
 		}
 	}
 
 	if req.WithCount {
 		total, err := q.count(ctx, db)
 		if err != nil {
-			return crud.Page[T]{}, err
+			return list.Page[T]{}, err
 		}
 		page.Total = &total
 	}
@@ -193,7 +209,7 @@ func (q ListQuery[T]) listCursor(ctx context.Context, db Querier, req crud.ListR
 // encodes a cursor — NextCursor/PreviousCursor stay empty, and the caller does
 // the offset arithmetic (see the crud strategy matrix). Under FixedOrder the
 // ORDER BY is the store's expression verbatim (orderCol/direction are unused).
-func (q ListQuery[T]) listOffset(ctx context.Context, db Querier, req crud.ListRequest, orderCol string, castLower bool, direction string) (crud.Page[T], error) {
+func (q ListQuery[T]) listOffset(ctx context.Context, db Querier, req list.Request, orderCol string, castLower bool, direction string) (list.Page[T], error) {
 	limit := req.NormalizedLimit(q.Limits)
 
 	var buf strings.Builder
@@ -203,7 +219,7 @@ func (q ListQuery[T]) listOffset(ctx context.Context, db Querier, req crud.ListR
 	if q.FixedOrder != "" {
 		buf.WriteString(" ORDER BY " + q.FixedOrder)
 	} else if err := AddOrderByClause(&buf, orderCol, q.PK, direction, false, castLower); err != nil {
-		return crud.Page[T]{}, err
+		return list.Page[T]{}, err
 	}
 	AddLimitClause(&buf, args, limit+1)
 	buf.WriteString(" OFFSET @" + offsetArg)
@@ -211,10 +227,10 @@ func (q ListQuery[T]) listOffset(ctx context.Context, db Querier, req crud.ListR
 
 	items, err := q.collect(ctx, db, buf.String(), args)
 	if err != nil {
-		return crud.Page[T]{}, err
+		return list.Page[T]{}, err
 	}
 
-	page := crud.Page[T]{Items: items}
+	page := list.Page[T]{Items: items}
 	if len(items) > limit {
 		page.Items = items[:limit]
 		page.HasMore = true
@@ -224,7 +240,7 @@ func (q ListQuery[T]) listOffset(ctx context.Context, db Querier, req crud.ListR
 	if req.WithCount {
 		total, err := q.count(ctx, db)
 		if err != nil {
-			return crud.Page[T]{}, err
+			return list.Page[T]{}, err
 		}
 		page.Total = &total
 	}
@@ -244,14 +260,14 @@ func (q ListQuery[T]) collect(ctx context.Context, db Querier, sql string, args 
 // strategy must be offset — a keyset predicate cannot be derived from an
 // arbitrary ORDER BY expression, so the cursor flow is refused outright. Every
 // refusal wraps sdk.ErrInvalidInput.
-func (q ListQuery[T]) checkFixedOrder(req crud.ListRequest) error {
+func (q ListQuery[T]) checkFixedOrder(req list.Request) error {
 	if len(q.OrderFields) > 0 {
 		return fmt.Errorf("FixedOrder and OrderFields are mutually exclusive: %w", sdk.ErrInvalidInput)
 	}
 	if req.Order.Field != "" {
 		return fmt.Errorf("order field %q: the list order is fixed by the store: %w", req.Order.Field, sdk.ErrInvalidInput)
 	}
-	if req.ResolvedStrategy() != crud.StrategyOffset {
+	if req.ResolvedStrategy() != list.StrategyOffset {
 		return fmt.Errorf("cursor strategy: a FixedOrder list is offset-only (no keyset predicate over a fixed ORDER BY expression): %w", sdk.ErrInvalidInput)
 	}
 	return nil
@@ -261,14 +277,14 @@ func (q ListQuery[T]) checkFixedOrder(req crud.ListRequest) error {
 // column, its CastLower flag, and a normalized direction by matching the order
 // field against the columns in q.OrderFields. An order field absent from the
 // allow-list returns an error wrapping sdk.ErrInvalidInput.
-func (q ListQuery[T]) resolveOrder(order crud.Order) (column string, castLower bool, direction string, err error) {
+func (q ListQuery[T]) resolveOrder(order list.Order) (column string, castLower bool, direction string, err error) {
 	if order.Field == "" {
 		order = q.DefaultOrder
 	}
 
-	dir := crud.ASC
-	if order.Direction == crud.DESC {
-		dir = crud.DESC
+	dir := list.ASC
+	if order.Direction == list.DESC {
+		dir = list.DESC
 	}
 
 	for _, of := range q.OrderFields {
@@ -279,11 +295,10 @@ func (q ListQuery[T]) resolveOrder(order crud.Order) (column string, castLower b
 	return "", false, "", fmt.Errorf("unknown order field %q: %w", order.Field, sdk.ErrInvalidInput)
 }
 
-// markPrev runs the reverse probe for cursor mode and applies crud.MarkPrevPage.
-// The probe flips the operator and ORDER BY, fetches up to limit rows, and
-// reverses them back to forward order so the probe's first row is the previous
-// page's first record.
-func (q ListQuery[T]) markPrev(ctx context.Context, db Querier, page *crud.Page[T], orderCol, direction string, castLower bool, limit int, cursor *crud.Cursor, encode func(T) (string, error)) error {
+// markPrev runs the reverse probe for cursor mode and applies list.MarkPrevPage.
+// The probe includes the boundary, flips ORDER BY, fetches limit+1 rows, and
+// restores forward order before applying the SDK helper.
+func (q ListQuery[T]) markPrev(ctx context.Context, db Querier, page *list.Page[T], orderCol, direction string, castLower bool, limit int, cursor *list.Cursor, encode func(T) (string, error)) error {
 	var buf strings.Builder
 	buf.WriteString(q.BaseSQL)
 	args := cloneArgs(q.Args)
@@ -294,7 +309,7 @@ func (q ListQuery[T]) markPrev(ctx context.Context, db Querier, page *crud.Page[
 	if err := AddOrderByClause(&buf, orderCol, q.PK, direction, true, castLower); err != nil {
 		return err
 	}
-	AddLimitClause(&buf, args, limit)
+	AddLimitClause(&buf, args, limit+1)
 
 	prev, err := q.collect(ctx, db, buf.String(), args)
 	if err != nil {
@@ -305,7 +320,7 @@ func (q ListQuery[T]) markPrev(ctx context.Context, db Querier, page *crud.Page[
 		prev[i], prev[j] = prev[j], prev[i]
 	}
 
-	return crud.MarkPrevPage(page, prev, limit, encode)
+	return list.MarkPrevPage(page, prev, limit, encode)
 }
 
 // count returns the full filtered row count by wrapping BaseSQL in a

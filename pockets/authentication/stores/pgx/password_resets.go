@@ -2,12 +2,13 @@ package pgx
 
 import (
 	"context"
-
-	"github.com/jackc/pgx/v5"
+	"errors"
 
 	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
-	"github.com/gopernicus/gopernicus/pockets/authentication/domain/passwordreset"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/passwordreset"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/session"
 	"github.com/gopernicus/gopernicus/sdk"
+	"github.com/jackc/pgx/v5"
 )
 
 // PasswordResetStore implements passwordreset.Repository over a PostgreSQL
@@ -27,33 +28,68 @@ type PasswordResetStore struct {
 var _ passwordreset.Repository = (*PasswordResetStore)(nil)
 
 // NewPasswordResetStore returns a PasswordResetStore backed by db.
+// It panics if db is nil; the caller owns the database lifecycle.
 func NewPasswordResetStore(db *pgxdb.DB, opts ...Option) *PasswordResetStore {
+	if db == nil {
+		panic("authentication pgx: NewPasswordResetStore received a nil database")
+	}
 	return &PasswordResetStore{db: db, qualified: qualified{schema: applyOptions(opts).schema}}
 }
 
 // Redeem atomically consumes the live reset challenge and applies the full reset
-// composition, returning the reset user's ID. A non-live challenge (unknown,
-// consumed, or expired) → sdk.ErrNotFound with no changes applied.
+// composition, including the current recovery/revision binding check and one
+// revision increment. Unknown, expired, consumed or stale proof returns
+// sdk.ErrNotFound with no changes applied.
 func (s *PasswordResetStore) Redeem(ctx context.Context, in passwordreset.RedeemInput) (passwordreset.RedeemResult, error) {
 	if in.TokenDigest == "" {
 		return passwordreset.RedeemResult{}, sdk.ErrNotFound
 	}
 	var userID string
 	err := s.db.InTx(ctx, func(tx *pgxdb.Tx) error {
+
+		if err := tx.QueryRow(ctx, `SELECT user_id FROM `+s.table(challengesTable)+` WHERE purpose = @purpose AND secret_digest = @digest AND expires_at > @now`, pgx.NamedArgs{"purpose": in.Purpose, "digest": in.TokenDigest, "now": in.Now.UTC()}).Scan(&userID); err != nil {
+			return pgxdb.MapError(err)
+		}
+		revision, err := lockCredentialUser(ctx, tx, s.qualified, userID)
+		if errors.Is(err, session.ErrUserNotActive) {
+			return sdk.ErrNotFound
+		}
+		if err != nil {
+			return err
+		}
+		var proofContext *string
 		// 1. Consume the LIVE password_reset challenge, resolving the user from it.
 		// The expires_at guard excludes expired rows, so unknown/expired/used all
 		// return no row → sdk.ErrNotFound (the single generic failure).
 		selErr := tx.QueryRow(ctx,
 			`DELETE FROM `+s.table(challengesTable)+`
-				WHERE purpose = @purpose AND secret_digest = @digest AND expires_at > @now
-				RETURNING user_id`,
-			pgx.NamedArgs{"purpose": in.Purpose, "digest": in.TokenDigest, "now": in.Now.UTC()}).
-			Scan(&userID)
+				WHERE user_id = @user_id AND purpose = @purpose AND secret_digest = @digest AND expires_at > @now
+				RETURNING context`,
+			pgx.NamedArgs{"user_id": userID, "purpose": in.Purpose, "digest": in.TokenDigest, "now": in.Now.UTC()}).
+			Scan(&proofContext)
 		if selErr != nil {
 			if selErr == pgx.ErrNoRows {
 				return sdk.ErrNotFound
 			}
 			return pgxdb.MapError(selErr)
+		}
+
+		binding, err := passwordreset.ParseBinding(bytesFrom(proofContext))
+		if err != nil {
+			return err
+		}
+		row, err := pgxdb.QueryOne[identifierRow](ctx, tx,
+			`SELECT `+identifierColumns+` FROM `+s.table(identifiersTable)+` WHERE id = @id`,
+			pgx.NamedArgs{"id": binding.IdentifierID})
+		if err != nil {
+			return pgxdb.MapError(err)
+		}
+		if !binding.Matches(userID, revision, row.toDomain()) {
+			return sdk.ErrNotFound
+		}
+
+		if err := bumpCredentialRevision(ctx, tx, s.qualified, userID, in.Now); err != nil {
+			return err
 		}
 		// 2. Set the typed password row.
 		if _, err := tx.Exec(ctx,

@@ -24,116 +24,110 @@ import (
 
 	robfigcron "github.com/gopernicus/gopernicus/integrations/scheduling/robfig-cron"
 	"github.com/gopernicus/gopernicus/pockets/jobs"
-	"github.com/gopernicus/gopernicus/pockets/jobs/domain/job"
-	"github.com/gopernicus/gopernicus/pockets/jobs/domain/schedule"
-	"github.com/gopernicus/gopernicus/pockets/jobs/memstore"
-	"github.com/gopernicus/gopernicus/sdk/foundation/environment"
-	"github.com/gopernicus/gopernicus/sdk/foundation/logging"
-	"github.com/gopernicus/gopernicus/sdk/foundation/web"
-	"github.com/gopernicus/gopernicus/sdk/pocket"
+	"github.com/gopernicus/gopernicus/pockets/jobs/logic/queue"
+	"github.com/gopernicus/gopernicus/pockets/jobs/logic/schedules"
+	"github.com/gopernicus/gopernicus/pockets/jobs/stores/memory"
+	"github.com/gopernicus/gopernicus/sdk/pkg/environment"
+	"github.com/gopernicus/gopernicus/sdk/pkg/logging"
+	"github.com/gopernicus/gopernicus/sdk/pkg/web"
 )
 
 func main() {
-	_ = environment.LoadEnv()
+	// A missing .env is allowed; malformed configuration must stop startup.
+	if err := environment.LoadEnv(); err != nil {
+		slog.Error("load environment", "error", err)
+		os.Exit(1)
+	}
+
+	logOpts := logging.Options{Format: "text"}
+	if err := environment.ParseEnvTags("", &logOpts); err != nil {
+		slog.Error("configure logging", "error", err)
+		os.Exit(1)
+	}
+	log := logging.New(logOpts)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	if err := run(ctx); err != nil {
-		slog.Error("server exited with error", "error", err)
+	if err := run(ctx, log); err != nil {
+		log.Error("server exited with error", "error", err)
 		os.Exit(1)
 	}
 }
 
-func run(ctx context.Context) error {
-	// Config comes from the environment through the sdk's struct tags: the
-	// literal pre-seeds this host's own defaults, the environment wins over
-	// them, and an empty value (KEY=) keeps what is already set.
-	logOpts := logging.Options{Format: "text"}
-	if err := environment.ParseEnvTags("", &logOpts); err != nil {
-		return err
-	}
-	log := logging.New(logOpts)
-
+func run(ctx context.Context, log *slog.Logger) error {
 	// Stores: the in-core memstore with its DEFAULT lease (15m). No driver, no
 	// migrations, no datastore module — zero external infrastructure.
-	queue := memstore.NewQueue()
-	schedules := memstore.NewSchedules()
-	repos := jobs.Repositories{Queue: queue, Schedules: schedules}
+	queueStore := memory.NewQueue()
+	scheduleStore := memory.NewSchedules()
+	repos := jobs.Repositories{Queue: queueStore, Schedules: scheduleStore}
 
-	cfg := jobs.Config{
-		Handlers: map[string]jobs.HandlerFunc{
-			"demo.print":  printHandler(log),
-			"demo.flaky":  flakyHandler(log),
-			"demo.doomed": doomedHandler(log),
-			"demo.slow":   slowHandler(log),
-		},
-		// robfig-cron is a CPU-only library (the bcrypt zero-infra precedent); its
-		// *Parser satisfies jobs.CronParser directly now that CronSchedule is a type
-		// alias — no composition-root adapter.
-		Cron: robfigcron.New(),
+	handlers := map[string]queue.HandlerFunc{
+		"demo.print":  printHandler(log),
+		"demo.flaky":  flakyHandler(log),
+		"demo.doomed": doomedHandler(log),
+		"demo.slow":   slowHandler(log),
+	}
+	runtimeCfg := queue.RuntimePolicy{
 		// Short cadence so the demo is observable: the queue pool still runs a fresh
 		// enqueue sub-second via the wake channel; these bound the SCHEDULER pool's
 		// idle poll (it has no wake channel) so the interval/cron fire promptly.
 		PollInterval: 1 * time.Second,
 		IdleInterval: 2 * time.Second,
-		MaxAttempts:  3,
-		// Route the runtime pools' operational lines ("processing job"/"job
-		// completed"/…) through the host logger, same format and stream as the
-		// handler logs — instead of the slog.Default() fallback.
-		Logger: log,
 	}
 	// The demo cadence above is pre-seeded, so it survives an empty environment;
 	// JOBS_* can still tune it.
-	if err := environment.ParseEnvTags("", &cfg); err != nil {
+	if err := environment.ParseEnvTags("", &runtimeCfg); err != nil {
 		return err
 	}
 
-	svc, err := jobs.NewService(repos, cfg)
+	// The host loads its admission and scheduling settings, then supplies named options.
+	settings := struct {
+		MaxAttempts   int `env:"JOBS_MAX_ATTEMPTS"`
+		ScheduleBatch int `env:"JOBS_SCHEDULE_BATCH"`
+	}{MaxAttempts: 3}
+	if err := environment.ParseEnvTags("", &settings); err != nil {
+		return err
+	}
+	parts, err := jobs.New(repos, jobs.WithMaxAttempts(settings.MaxAttempts),
+		jobs.WithCronParser(robfigcron.New()), jobs.WithScheduleBatchSize(settings.ScheduleBatch))
 	if err != nil {
 		return err
 	}
 
-	// One stdlib-path interval schedule and one robfig-path cron schedule. Both
+	// One stdlib-path interval schedule and one robfig-path cron schedules. Both
 	// fire demo.print with a deterministic sched_<id>_<slot> job ID.
-	if _, err := svc.EnsureSchedule(ctx, schedule.Ensure{
+	if _, err := parts.Schedules.EnsureSchedule(ctx, schedules.Ensure{
 		Name:    "heartbeat-15s",
 		Kind:    "demo.print",
-		Spec:    schedule.Spec{Every: 15 * time.Second},
+		Spec:    schedules.Spec{Every: 15 * time.Second},
 		Payload: json.RawMessage(`{"source":"heartbeat-15s"}`),
 	}); err != nil {
 		return err
 	}
-	if _, err := svc.EnsureSchedule(ctx, schedule.Ensure{
+	if _, err := parts.Schedules.EnsureSchedule(ctx, schedules.Ensure{
 		Name:    "minute-cron",
 		Kind:    "demo.print",
-		Spec:    schedule.Spec{Cron: "* * * * *"},
+		Spec:    schedules.Spec{Cron: "* * * * *"},
 		Payload: json.RawMessage(`{"source":"minute-cron"}`),
 	}); err != nil {
 		return err
 	}
 
-	rt, err := jobs.NewRuntime(svc)
+	rt, err := queue.NewRuntime(parts.Queue, handlers, queue.WithScheduler(parts.Schedules), queue.WithRuntimePolicy(runtimeCfg), queue.WithRuntimeLogger(log))
 	if err != nil {
 		return err
 	}
 
 	// Host-owned router. The only route is the host's own POST /enqueue — jobs v1
 	// registers no pocket routes.
-	router := web.NewWebHandler(web.WithLogging(log))
+	router := web.NewWebHandler()
 	router.Use(web.RequestID(), web.Logger(log), web.Panics(log))
-	router.Handle(http.MethodPost, "/enqueue", enqueueHandler(svc, log))
+	router.Handle(http.MethodPost, "/enqueue", enqueueHandler(parts.Queue, log))
 	// Host-local liveness probe (host route, not pocket surface). Mounted on
 	// the root router with no middleware — unauthenticated by design, since a
 	// readiness probe can't log in.
 	router.Handle(http.MethodGet, "/healthz", healthzHandler())
-
-	// Register mounts the built Service and logs; it starts nothing — the host
-	// owns the run loop.
-	mount := pocket.Mount{Router: router, Logger: log}
-	if err := svc.Register(mount); err != nil {
-		return err
-	}
 
 	srv := web.ServerConfig{Port: "8083"}
 	if err := environment.ParseEnvTags("", &srv); err != nil {
@@ -144,25 +138,33 @@ func run(ctx context.Context) error {
 	// sharing one process and one cancellation. On ctx-cancel both drain — the HTTP
 	// server stops accepting, the pools stop claiming, in-flight handlers finish
 	// and persist Complete/Fail — then we exit 0.
-	rtDone := make(chan error, 1)
-	go func() { rtDone <- rt.Run(ctx) }()
-
 	log.InfoContext(ctx, "jobs proof host started", "enqueue", "POST /enqueue")
-	srvErr := web.Run(ctx, router, srv, log)
-
-	// web.Run returned because ctx was cancelled and the HTTP server drained. Wait
-	// for the jobs Runtime to drain too, so an in-flight slow handler finishes
-	// before the process exits.
-	log.InfoContext(context.Background(), "waiting for jobs runtime to drain")
-	rtErr := <-rtDone
+	err = runHTTPAndJobs(ctx, func(ctx context.Context) error {
+		return web.Run(ctx, router, srv, log)
+	}, rt.Run)
 	log.InfoContext(context.Background(), "jobs runtime drained")
-	return errors.Join(srvErr, rtErr)
+	return err
+}
+
+// Either component stopping shuts down its sibling. This includes HTTP listen
+// failures and fatal worker errors, not only cancellation from a signal.
+func runHTTPAndJobs(ctx context.Context, serve, work func(context.Context) error) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	jobsDone := make(chan error, 1)
+	go func() {
+		jobsDone <- work(ctx)
+		cancel()
+	}()
+	serverErr := serve(ctx)
+	cancel()
+	return errors.Join(serverErr, <-jobsDone)
 }
 
 // printHandler logs the job's payload. It backs both schedules, so its log line
 // carries the deterministic sched_ job ID when a schedule fires.
-func printHandler(log *slog.Logger) jobs.HandlerFunc {
-	return func(ctx context.Context, j job.Job) error {
+func printHandler(log *slog.Logger) queue.HandlerFunc {
+	return func(ctx context.Context, j queue.Job) error {
 		log.InfoContext(ctx, "demo.print", "job_id", j.ID(), "payload", string(j.Payload))
 		return nil
 	}
@@ -171,8 +173,8 @@ func printHandler(log *slog.Logger) jobs.HandlerFunc {
 // flakyHandler fails until the job has been retried at least twice, proving the
 // retry path: two failures (RetryCount 0, then 1) then a completion (RetryCount
 // 2). With MaxAttempts 3 it always reaches completion before dead-letter.
-func flakyHandler(log *slog.Logger) jobs.HandlerFunc {
-	return func(ctx context.Context, j job.Job) error {
+func flakyHandler(log *slog.Logger) queue.HandlerFunc {
+	return func(ctx context.Context, j queue.Job) error {
 		if j.RetryCount() < 2 {
 			log.InfoContext(ctx, "demo.flaky failing", "job_id", j.ID(), "retry_count", j.RetryCount())
 			return errors.New("demo.flaky: transient failure")
@@ -184,8 +186,8 @@ func flakyHandler(log *slog.Logger) jobs.HandlerFunc {
 
 // doomedHandler always fails, so the job exhausts MaxAttempts (3) and reaches
 // dead_letter observably after three "job failed" log lines.
-func doomedHandler(log *slog.Logger) jobs.HandlerFunc {
-	return func(ctx context.Context, j job.Job) error {
+func doomedHandler(log *slog.Logger) queue.HandlerFunc {
+	return func(ctx context.Context, j queue.Job) error {
 		log.InfoContext(ctx, "demo.doomed failing", "job_id", j.ID(), "retry_count", j.RetryCount())
 		return errors.New("demo.doomed: permanent failure")
 	}
@@ -193,8 +195,8 @@ func doomedHandler(log *slog.Logger) jobs.HandlerFunc {
 
 // slowHandler sleeps ~5s ignoring ctx, so a SIGTERM mid-flight lets the drain
 // prove that in-flight handlers finish before Run returns.
-func slowHandler(log *slog.Logger) jobs.HandlerFunc {
-	return func(ctx context.Context, j job.Job) error {
+func slowHandler(log *slog.Logger) queue.HandlerFunc {
+	return func(ctx context.Context, j queue.Job) error {
 		log.InfoContext(ctx, "demo.slow started", "job_id", j.ID())
 		time.Sleep(5 * time.Second)
 		log.InfoContext(ctx, "demo.slow finished", "job_id", j.ID())
@@ -203,7 +205,7 @@ func slowHandler(log *slog.Logger) jobs.HandlerFunc {
 }
 
 // enqueueRequest is the host-owned POST /enqueue body. kind + payload are the
-// primitive-typed pair jobs.Service.Enqueue takes; the optional id/priority/
+// primitive-typed pair queue.Service.Enqueue takes; the optional id/priority/
 // max_attempts fields route to EnqueueJob for full-fidelity enqueues (id is the
 // idempotency key).
 type enqueueRequest struct {
@@ -217,7 +219,7 @@ type enqueueRequest struct {
 // enqueueHandler is the host's own enqueue route (deliberately not a pocket
 // route — jobs v1 claims none). It calls svc.Enqueue for the primitive-typed
 // path, or svc.EnqueueJob when any full-fidelity field is present.
-func enqueueHandler(svc *jobs.Service, log *slog.Logger) http.HandlerFunc {
+func enqueueHandler(svc *queue.Service, log *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req enqueueRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -235,7 +237,7 @@ func enqueueHandler(svc *jobs.Service, log *slog.Logger) http.HandlerFunc {
 
 		var jobID string
 		if req.ID != "" || req.Priority != 0 || req.MaxAttempts != 0 {
-			j, err := svc.EnqueueJob(r.Context(), job.Enqueue{
+			j, err := svc.EnqueueJob(r.Context(), queue.Enqueue{
 				ID:          req.ID,
 				Kind:        req.Kind,
 				Payload:     payload,

@@ -9,7 +9,7 @@ import (
 	"testing"
 
 	firestoredb "github.com/gopernicus/gopernicus/integrations/datastores/firestore"
-	"github.com/gopernicus/gopernicus/pockets/authorization/domain/relationship"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/relationships"
 )
 
 // A2b: the two core v0.12.0 set reads (FilterRelation, RelationTargetsFor) and
@@ -26,7 +26,7 @@ func TestFilterRelationIsSortedDistinctSubset(t *testing.T) {
 	db, s := newRelationships(t)
 	ctx := context.Background()
 
-	tuples := make([]relationship.CreateRelationship, 0, len(setReadIDUniverse))
+	tuples := make([]relationships.CreateRelationship, 0, len(setReadIDUniverse))
 	held := []string{"B", "a", "_x", "~z", "Z", "é"}
 	for _, id := range held {
 		tuples = append(tuples, ctf("doc", id, "viewer", "user", "u1"))
@@ -95,7 +95,7 @@ func TestFilterRelationMatchesPerResourceCheck(t *testing.T) {
 // database handle: any read would fail on the wire.
 func TestSetReadsEmptyInputPerformNoIO(t *testing.T) {
 	ctx := context.Background()
-	s := newRelationshipStore(closedDB(t))
+	s := newRelationshipStore(closedDB(t), false)
 
 	for _, ids := range [][]string{nil, {}} {
 		got, err := s.FilterRelation(ctx, "doc", ids, "viewer", "user", "u1", 0)
@@ -191,7 +191,7 @@ func TestSetReadsChunkPastDisjunctionCapAndIssueNoPerCandidateReads(t *testing.T
 	const candidates = 65
 	ids := make([]string, 0, 2*candidates)
 	var want []string
-	tuples := make([]relationship.CreateRelationship, 0, candidates)
+	tuples := make([]relationships.CreateRelationship, 0, candidates)
 	for i := 0; i < candidates; i++ {
 		id := docID("d", i)
 		ids = append(ids, id, id) // every id twice: the fold is proven at scale

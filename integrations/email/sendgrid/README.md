@@ -1,62 +1,78 @@
 # integrations/email/sendgrid
 
-An email connector wrapping exactly one third-party library —
-`github.com/sendgrid/sendgrid-go` (with its transport dependency
-`github.com/sendgrid/rest`). Its `Sender` implements the `sdk/capabilities/email.Sender`
-port over Twilio SendGrid's v3 Mail Send API.
+SendGrid's Mail Send adapter implements
+`sdk/capabilities/notify/email.Sender`. It uses SendGrid's typed mail builder
+and a fresh standard-library HTTP request for each send; concurrent sends do
+not share mutable request state.
 
-It is an integration rather than an `sdk` default because it speaks one
-vendor's live API contract, which churns on SendGrid's schedule, not `sdk`'s.
-The stdlib defaults (`email.Console`, `email.SMTP`) stay vendor-neutral; a
-SaaS mailer lives in its own module and is swapped in at the composition root.
+## Wiring and selected delivery
 
-## Surface
+```go
+sender, err := sendgrid.New(sendgrid.Config{
+    APIKey:   apiKey,
+    FromName: "Example",
+})
+if err != nil {
+    return err
+}
+err = notify.Send(ctx, email.NewDelivery(sender, email.Message{
+    From:    "no-reply@example.test",
+    To:      []string{"person@example.test"},
+    Subject: "Reset your password",
+    Text:    "Open " + resetURL,
+    HTML:    renderedHTML,
+}))
+```
 
-| member | shape |
-|---|---|
-| `New(cfg Config) *Sender` | builds a POST client for the Mail Send endpoint; no network I/O |
-| `Config{APIKey, FromName, Host}` | API key, optional display name, optional host override |
-| `Sender.Send(ctx, email.Message) error` | validates then delivers via SendGrid |
+Import `email` from `sdk/capabilities/notify/email` and `notify` from
+`sdk/capabilities/notify`. Passing one delivery sends only that email. Other
+host-selected deliveries can be supplied in the same call. Direct
+`sender.Send(ctx, message)` is also supported.
 
-`Config.Host` overrides the scheme+host requests are sent to (empty defaults to
-`https://api.sendgrid.com`; set `https://api.eu.sendgrid.com` for the EU
-region). The sdk `email.Message` carries only a bare `From` address, so
-`FromName` supplies the optional display name paired with it.
+## Configuration
 
-## Capability metadata
+`New(Config) (*Sender, error)` validates configuration without I/O. The host supplies APIKey, optional
+FromName, optional Host, and optional HTTPClient. Host must be an HTTP(S) origin,
+without credentials, query, fragment or endpoint path; empty selects
+`https://api.sendgrid.com`. A missing/blank API key, line breaks in the key or
+FromName, or an invalid origin returns `sdk.ErrInvalidInput` from New. Provider
+credential validity is checked only when sending.
 
-`Sender` implements `email.CapabilityReporter`, so a production host can fail
-closed rather than trust an undeclared transport. `Capabilities()` describes
-the *configured instance* — it inspects the receiver's `Config.Host`, not
-merely SendGrid's default endpoint:
+HTTPClient is copied at construction. Its transport remains shared and host-owned;
+configure it before use. Without a client, the adapter uses the standard transport
+and a 30-second timeout. Every request carries the caller's context. Redirects are
+disabled on the adapter's copy, including when the supplied client allows them,
+so credentials and message bodies stay at the configured endpoint. The host's
+original client is unchanged. HTTP endpoints are supported for local tests.
 
-- an empty `Config.Host` (SendGrid's default, `https://api.sendgrid.com`) or
-  any explicit `https://` host reports `{TransportSecurity: tls,
-  DevelopmentOnly: false}` — production-capable, since both deliver over TLS;
-- any other `Config.Host` (a plain-`http://` test server or local emulator)
-  reports `{TransportSecurity: none, DevelopmentOnly: true}` — it cannot
-  deliver over TLS, so it must not claim production capability regardless of
-  which vendor's API it emulates.
+The email Message supplies bare From/To mailboxes; FromName adds the provider's
+display name. Both text and HTML reach SendGrid. Every To recipient is visible
+to the other recipients; use separate messages for private delivery.
 
-## Error contract
+## Posture and errors
 
-`Send` calls `email.Message.Validate()` first (invalid input wraps
-`sdk/errs.ErrInvalidInput`). A non-2xx SendGrid response maps to a stable
-`sdk/errs` kind where one fits — 400 → `ErrInvalidInput`, 401 →
-`ErrUnauthorized`, 403 → `ErrForbidden`, 404 → `ErrNotFound`; other statuses
-return a plain error carrying the status code and response body. Transport
-failures wrap the underlying error.
+Sender implements `notify.CapabilityReporter`. A valid HTTPS origin declares
+TLS and production-capable posture. HTTP declares development-only posture. `notify.CheckTransport(mode, sender)` checks the
+shared SDK policy; a custom HTTP transport remains the host's responsibility.
 
-## Testing
+Message validation failures wrap `sdk.ErrInvalidInput`. A non-2xx response returns
+`*ResponseError` with an inspectable StatusCode and a safe summary that omits
+the provider body. `errors.As` reaches it through notify.Send errors too.
+Mappings for `errors.Is` remain 400 → sdk.ErrInvalidInput, 401 →
+sdk.ErrUnauthorized, 403 → sdk.ErrForbidden and 404 → sdk.ErrNotFound.
+These auth errors concern provider credentials, not the application's user.
+Other statuses retain their numeric code without inventing a domain mapping.
 
-Tests are hermetic and run with a plain `go test ./...`. They point the client
-at an `httptest.Server` via `Config.Host` — SendGrid's overridable request
-host — capture the constructed request in the handler, and assert the auth
-header, recipients, subject, from address, and content types, plus the non-2xx
-error mappings. There is deliberately no live SendGrid leg: a real call would
-send real email.
+Unused response bodies are closed without reading. Transport errors preserve
+their cause. A successful response means provider acceptance; retries and
+recipient policy belong to the host. An error does not prove non-delivery.
 
-`Capabilities()` is covered per configured instance: an empty `Config.Host`,
-an explicit `https://` host, and the plain-`http://` `httptest.Server` host the
-other tests already point the client at — the last of these must report
-`DevelopmentOnly: true` and must not claim `TransportSecurityTLS`.
+## Verification and migration
+
+`go test -race ./...` exercises owned HTTP listeners and fake transports:
+request content, cancellation, concurrent request isolation, redirect refusal,
+response closure, safe diagnostics and metadata. No real SendGrid delivery runs.
+
+See [AUDIT-014](../../../AUDIT.md#audit-014-explicit-notification-deliveries-and-email-correctness)
+for coordinated SDK/authentication migration. This module keeps its existing path;
+its obsolete sendgrid/rest and x/net requirements were removed.

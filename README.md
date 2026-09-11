@@ -8,10 +8,10 @@ infrastructure. Gopernicus is open source under the [MIT License](LICENSE),
 very much a work in progress, and not stable. See [ARCHITECTURE.md](ARCHITECTURE.md)
 for the full layering rules and [NOTES.md](NOTES.md) for the decision log.
 
-## The forty-one modules
+## The forty-two modules
 
 ```
-sdk/                                stdlib-only, layered: root = kernel; foundation/ + capabilities/ + pocket (empty go.mod = structural enforcement)
+sdk/                                stdlib-only, layered: root = kernel; pkg/ + capabilities/ (empty go.mod = structural enforcement)
 integrations/cryptids/bcrypt/       password-hashing connector (x/crypto), its own module
 integrations/cryptids/golang-jwt/   JWT-signing connector (golang-jwt/jwt v5), its own module
 integrations/cryptids/google-uuid/  uuid ID-generation connector (google/uuid v4/v7), its own module
@@ -22,12 +22,12 @@ integrations/email/sendgrid/        SendGrid email connector (sendgrid-go), its 
 integrations/filestorage/gcs/       Google Cloud Storage connector (cloud.google.com/go/storage), its own module
 integrations/filestorage/s3/        S3-compatible object-storage connector (aws-sdk-go-v2; MinIO/DO Spaces via endpoint + path-style), its own module
 integrations/kvstores/goredis/      Redis connector — events bus, cacher, ratelimiter over one go-redis client, its own module
-integrations/notify/mailer/         COMPOSING integration (zero external deps): the email-kind notifier over email.Sender, its own module
 integrations/oauth/github/          GitHub OAuth provider (vendor API contract; zero external libs), its own module
 integrations/oauth/google/          Google OIDC provider connector (coreos/go-oidc v3), its own module
 integrations/scheduling/robfig-cron/ cron-expression connector (robfig/cron v3), its own module
 integrations/tracing/otel/          OpenTelemetry tracing connector (stdout/OTLP-gRPC exporters or caller-supplied provider), its own module
-pockets/authentication/                      session-auth hexagon — datastore-free; domain/ public rim, internal/ interior
+pockets/                           shared host-contract module; requires SDK only
+pockets/authentication/                      session-auth hexagon — public logic services and HTTP adapters; datastore-free
 pockets/authentication/stores/pgx/           auth's pgx store adapter, its own module
 pockets/authentication/stores/turso/         auth's Turso store adapter, its own module
 pockets/authentication/views/goth/           auth's bundled default views (ui/goth), its own module
@@ -39,7 +39,7 @@ pockets/cms/                       the CMS hexagon — datastore-free; domain/ p
 pockets/cms/stores/pgx/            the CMS pocket's pgx store adapter, its own module
 pockets/cms/stores/turso/          the CMS pocket's Turso store adapter, its own module
 pockets/cms/views/goth/            cms's bundled default views (ui/goth) — the FS3 sibling, its own module
-pockets/events/                    durable outbox + SSE gateway hexagon — datastore-free; domain/ public rim
+pockets/events/                    durable outbox + SSE gateway — public logic services and HTTP adapters; datastore-free
 pockets/events/stores/pgx/         events' pgx store adapter, its own module
 pockets/events/stores/turso/       events' Turso store adapter, its own module
 pockets/jobs/                      durable queue + schedules hexagon — datastore-free; public memstore/
@@ -61,23 +61,22 @@ tagged versions, not the workspace.
 
 - **`sdk` imports only the standard library.** Third-party types cross into
   `sdk` only via structural typing seams (e.g. `templ.Component` satisfying
-  `sdk/foundation/web.Renderer`).
+  `sdk/pkg/web.Renderer`).
 - **One external dependency ⇒ its own module.** A stdlib-only implementation
   of an `sdk` port ships *inside* `sdk` as a default (`cacher.Memory`,
   `filestorage.Disk`, `email.SMTP`/`Console`); anything needing a third-party
   library is an `integrations/<category>/<tech>` module.
-- **A pocket is an sdk-only core + per-concern sibling modules.**
-  `pockets/<name>`'s go.mod requires exactly `sdk` and never imports
+- **A pocket core uses SDK and the shared pocket contract, with per-concern sibling modules.**
+  `pockets/<name>`'s go.mod permits only `sdk` and shared `pockets`, and never imports
   `integrations/`, `examples/`, or its own `stores/`/`views/`; each
   `pockets/<name>/stores/<dialect>` is its own module owning that dialect's
   SQL and migrations, and presentation defaults ship the same way
   (`views/<pkg>`, where a pocket has HTML).
 - **No init() registration, no service locator.** A host wires a pocket
-  explicitly in its `main`: `svc, err := name.NewService(repos, cfg)` then
-  `svc.Register(mount)` — the public `Service` is the pocket's use-case
-  surface, and the shipped HTTP layer is an optional adapter over it (cms
-  still takes the earlier `Register(mount, repos, cfg)` form until its
-  public Service lands).
+  explicitly in its `main`. Root constructors assemble named components;
+  hosts can also construct focused `logic/<concern>.Service` instances directly.
+  Public `inbound/http` adapters supply optional routes and middleware. CMS
+  retains its earlier `Register(mount, repos, cfg)` form while its audit is deferred.
 - **A UI implementation is a reusable presentation system, not a pocket.**
   The top-level `ui/` family (`ui/goth`, planned `ui/react`/`ui/vue`) is the
   seventh module kind: it owns view-library dependencies, semantic tokens,
@@ -92,7 +91,7 @@ tagged versions, not the workspace.
   enforce this.
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for the full detail, including the
-pocket contract (`sdk/pocket`), the app-hexagon pattern (`internal/logic`),
+pocket contract (`pockets`), the app-hexagon pattern (`internal/logic`),
 and the Registry content model.
 
 The host side of that boundary has its own charter:
@@ -116,7 +115,7 @@ make migrate           # applies examples/cms/workshop/migrations pre-boot
 make run                # or: cd examples/cms && go run ./cmd/server
 ```
 
-From the repo root, `make check` builds, vets, and tests all forty-one modules
+From the repo root, `make check` builds, vets, and tests all forty-two modules
 and runs the twenty-three layering guards; `make test-stores` runs the live dialect
 conformance suites (expects `POSTGRES_TEST_DSN` / `TURSO_*` / `FIRESTORE_EMULATOR_HOST`). See [examples/cms/README.md](examples/cms/README.md)
 for that host's full env/make-target reference.

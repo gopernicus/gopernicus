@@ -1,2 +1,8 @@
+github.com/gopernicus/gopernicus/integrations/scheduling/robfig-cron v0.2.0 h1:q+a9Z8V8yvuRcHMvCudeMsugDZJY9wszXWSqRmk9g7A=
+github.com/gopernicus/gopernicus/integrations/scheduling/robfig-cron v0.2.0/go.mod h1:vzfPBRNf5Z9j+VW4LuIyXnp1DVn5aIfSmKYqOHQeuuo=
+github.com/gopernicus/gopernicus/pockets/jobs v0.6.0 h1:dORiZ6Msiynz2MLbhfEZpx7q5uy5XlcNrR2dTfCMGSw=
+github.com/gopernicus/gopernicus/pockets/jobs v0.6.0/go.mod h1:lkPD3Lz1IoDt44mPI13cvJxGOghej2qG3pPqgYPMUdo=
+github.com/gopernicus/gopernicus/sdk v0.9.0 h1:g7rTlx/W8Dzb0VwsGJhfhas2hK2L7I61BELPuGQCLZY=
+github.com/gopernicus/gopernicus/sdk v0.9.0/go.mod h1:z0bypQiCybwPoxoDfzhYvB1BtH2av549QR84GacngaE=
 github.com/robfig/cron/v3 v3.0.1 h1:WdRxkvbJztn8LMz/QEvLN5sBU+xKpSqwwUO1Pjr4qDs=
 github.com/robfig/cron/v3 v3.0.1/go.mod h1:eQICP3HwyT7UooqI/z+Ov+PtYAWygg1TEWWzGIFLtro=

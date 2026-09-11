@@ -6,19 +6,17 @@ import (
 	"context"
 	"fmt"
 	"testing"
-	"time"
 
 	gcfs "cloud.google.com/go/firestore"
-
 	firestoredb "github.com/gopernicus/gopernicus/integrations/datastores/firestore"
 	"github.com/gopernicus/gopernicus/integrations/datastores/firestore/firestoretest"
-	"github.com/gopernicus/gopernicus/pockets/authorization/domain/relationship"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/relationships"
 )
 
 // The A2a/A2b fixtures. The read side lands before the write side, so these
 // tests cannot seed through CreateRelationships (A2c). They seed through
 // putTuple — the SAME private helper the write path will use — so a fixture can
-// never disagree with a real row about derived keys, claims, or timestamps, and
+// never disagree with a real row about derived keys or claims, and
 // so the read tests exercise the document shape SCHEMA.md pins rather than one
 // invented for testing.
 
@@ -28,47 +26,32 @@ func newRelationships(t *testing.T) (*firestoredb.DB, *relationshipStore) {
 	t.Helper()
 	db := firestoretest.OpenDatabase(t, emulatorDatabase)
 	firestoretest.Reset(t, db)
-	return db, newRelationshipStore(db)
+	return db, newRelationshipStore(db, false)
 }
 
 // ctf is the storetest fixture constructor's local twin: a concrete-subject tuple.
-func ctf(rt, rid, relation, st, sid string) relationship.CreateRelationship {
-	return relationship.CreateRelationship{ResourceType: rt, ResourceID: rid, Relation: relation, SubjectType: st, SubjectID: sid}
+func ctf(rt, rid, relation, st, sid string) relationships.CreateRelationship {
+	return relationships.CreateRelationship{ResourceType: rt, ResourceID: rid, Relation: relation, SubjectType: st, SubjectID: sid}
 }
 
 // ctfUserset is ctf for a USERSET subject (subject_relation non-empty), the edge
 // group expansion actually walks.
-func ctfUserset(rt, rid, relation, st, sid, subjectRelation string) relationship.CreateRelationship {
+func ctfUserset(rt, rid, relation, st, sid, subjectRelation string) relationships.CreateRelationship {
 	c := ctf(rt, rid, relation, st, sid)
 	c.SubjectRelation = subjectRelation
 	return c
 }
 
 // seedTuples writes tuples through putTuple and returns the rows written, so a
-// test can hand them straight back to dropTuples. The whole batch shares one
-// timestamp, exactly as a real CreateRelationships batch does.
-func seedTuples(t *testing.T, db *firestoredb.DB, tuples ...relationship.CreateRelationship) []relationshipDoc {
+// test can hand them straight back to dropTuples.
+func seedTuples(t *testing.T, db *firestoredb.DB, tuples ...relationships.CreateRelationship) []relationshipDoc {
 	t.Helper()
 	ctx := context.Background()
 	w := db.WriterFrom(ctx)
-	now := time.Now().UTC()
 
 	rows := make([]relationshipDoc, 0, len(tuples))
 	for _, c := range tuples {
-		id := c.RelationshipID
-		if id == "" {
-			id = firestoredb.NewID()
-		}
-		row := relationshipDoc{
-			RelationshipID:  id,
-			ResourceType:    c.ResourceType,
-			ResourceID:      c.ResourceID,
-			Relation:        c.Relation,
-			SubjectType:     c.SubjectType,
-			SubjectID:       c.SubjectID,
-			SubjectRelation: c.SubjectRelation,
-			CreatedAt:       now,
-		}
+		row := newRow(c)
 		if err := putTuple(ctx, db, w, row); err != nil {
 			t.Fatalf("seed %s:%s#%s <- %s:%s: %v", c.ResourceType, c.ResourceID, c.Relation, c.SubjectType, c.SubjectID, err)
 		}

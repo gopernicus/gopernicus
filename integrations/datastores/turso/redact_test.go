@@ -67,3 +67,15 @@ func TestConfigRedacted(t *testing.T) {
 		t.Fatalf("Redacted() = %q leaked the auth token", got)
 	}
 }
+
+func TestRedactDSNDriverAliasesAndMalformedQueries(t *testing.T) {
+	for _, query := range []string{
+		"auth_token=secret", "jwt=secret", "authToken=secret&authToken=another-secret",
+		"authToken=secret%zz", "authToken=secret;invalid", "auth%zzToken=secret",
+	} {
+		got := RedactDSN("libsql://example.test?" + query)
+		if strings.Contains(got, "secret") {
+			t.Errorf("credential was not redacted: %q", got)
+		}
+	}
+}

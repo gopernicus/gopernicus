@@ -5,23 +5,20 @@
 // contract. Imports stdlib + sdk/capabilities/events only (sdk stays dependency-free per the
 // constitution).
 //
-// Scope is deliberate. Unlike cacher, event buses do NOT share one
-// delivery-count contract: the Memory bus is at-most-once, the durable outbox
-// rail is at-least-once, and Redis consumer groups differ again. The suite
-// therefore asserts only the common observable contract — subscribe-then-emit
-// delivers; the "*" wildcard matches; unsubscribe stops delivery; no delivery
-// after Close; Close is idempotent; WithSync completes handlers before
-// returning; TypedHandler serves both the direct type-assertion path and the
-// Unmarshaler slow path. Delivery-count guarantees are documented per backend,
-// never asserted here, so an at-least-once backend passes the same suite.
+// The common port provides notifications: healthy subscribe-then-emit delivery,
+// wildcard matching, unsubscribe, input validation, and shared shutdown behavior.
+// Memory.Dispatch and reliable Redis work are tested separately. Noop deliberately
+// disables notifications and does not run this delivery suite.
 package eventstest
 
 import (
 	"context"
+	"errors"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/events"
 )
 
@@ -49,12 +46,12 @@ func newSuiteEvent(topic, data string) suiteEvent {
 func Run(t *testing.T, newBus func(t *testing.T) events.Bus) {
 	t.Helper()
 
+	t.Run("InvalidAdmissions", func(t *testing.T) { testInvalidAdmissions(t, newBus(t)) })
 	t.Run("SubscribeThenEmitDelivers", func(t *testing.T) { testSubscribeThenEmitDelivers(t, newBus(t)) })
 	t.Run("WildcardMatches", func(t *testing.T) { testWildcardMatches(t, newBus(t)) })
 	t.Run("UnsubscribeStopsDelivery", func(t *testing.T) { testUnsubscribeStopsDelivery(t, newBus(t)) })
 	t.Run("NoDeliveryAfterClose", func(t *testing.T) { testNoDeliveryAfterClose(t, newBus(t)) })
 	t.Run("CloseIdempotent", func(t *testing.T) { testCloseIdempotent(t, newBus(t)) })
-	t.Run("WithSyncCompletesBeforeReturning", func(t *testing.T) { testWithSyncCompletesBeforeReturning(t, newBus(t)) })
 	t.Run("TypedHandlerAssertionPath", func(t *testing.T) { testTypedHandlerAssertionPath(t, newBus(t)) })
 	t.Run("TypedHandlerUnmarshalerPath", func(t *testing.T) { testTypedHandlerUnmarshalerPath(t, newBus(t)) })
 }
@@ -146,7 +143,7 @@ func testUnsubscribeStopsDelivery(t *testing.T, bus events.Bus) {
 }
 
 // testNoDeliveryAfterClose proves a Close'd bus delivers nothing and does not
-// error or panic on a subsequent Emit.
+// invoke handlers on a subsequent Emit, which reports ErrClosed.
 func testNoDeliveryAfterClose(t *testing.T, bus events.Bus) {
 	ctx := context.Background()
 
@@ -162,8 +159,8 @@ func testNoDeliveryAfterClose(t *testing.T, bus events.Bus) {
 		t.Fatalf("Close() error = %v", err)
 	}
 
-	if err := bus.Emit(ctx, newSuiteEvent("suite.closed", "")); err != nil {
-		t.Fatalf("Emit() after Close should not error, got: %v", err)
+	if err := bus.Emit(ctx, newSuiteEvent("suite.closed", "")); !errors.Is(err, events.ErrClosed) {
+		t.Fatalf("Emit() after Close = %v, want ErrClosed", err)
 	}
 
 	time.Sleep(settleWindow)
@@ -180,30 +177,6 @@ func testCloseIdempotent(t *testing.T, bus events.Bus) {
 	}
 	if err := bus.Close(ctx); err != nil {
 		t.Errorf("second Close() error = %v, want nil (Close must be idempotent)", err)
-	}
-}
-
-// testWithSyncCompletesBeforeReturning proves a WithSync emit runs handlers
-// before it returns: the delivery is asserted immediately with no wait.
-func testWithSyncCompletesBeforeReturning(t *testing.T, bus events.Bus) {
-	ctx := context.Background()
-	defer bus.Close(ctx)
-
-	var count int32
-	sub, err := bus.Subscribe("suite.sync", func(context.Context, events.Event) error {
-		atomic.AddInt32(&count, 1)
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("Subscribe() error = %v", err)
-	}
-	defer sub.Unsubscribe()
-
-	if err := bus.Emit(ctx, newSuiteEvent("suite.sync", ""), events.WithSync()); err != nil {
-		t.Fatalf("Emit(WithSync) error = %v", err)
-	}
-	if got := atomic.LoadInt32(&count); got < 1 {
-		t.Errorf("WithSync handler ran %d times before Emit returned, want >= 1", got)
 	}
 }
 
@@ -245,12 +218,13 @@ func testTypedHandlerUnmarshalerPath(t *testing.T, bus events.Bus) {
 	if err != nil {
 		t.Fatalf("EncodeEvent() error = %v", err)
 	}
-	remote := events.RemoteEvent{
-		EventType:   "suite.remote",
-		Occurred:    time.Now().UTC(),
-		Correlation: "corr-remote",
-		Payload:     payload,
-	}
+	remote := events.Record{
+		EventID:       "suite-remote-id",
+		Type:          "suite.remote",
+		OccurredAt:    time.Now().UTC(),
+		CorrelationID: "corr-remote",
+		Payload:       payload,
+	}.Event()
 
 	got := make(chan string, 1)
 	handler := events.TypedHandler(func(_ context.Context, e suiteEvent) error {
@@ -298,5 +272,34 @@ func waitForValue(t *testing.T, ch <-chan string, want, msg string) {
 		}
 	case <-time.After(deliverTimeout):
 		t.Fatalf("%s: no delivery within %s", msg, deliverTimeout)
+	}
+}
+
+func testInvalidAdmissions(t *testing.T, bus events.Bus) {
+	defer bus.Close(context.Background())
+	for _, evt := range []events.Event{nil, events.NewBaseEvent(""), events.NewBaseEvent("*")} {
+		if err := bus.Emit(context.Background(), evt); !errors.Is(err, sdk.ErrInvalidInput) {
+			t.Errorf("invalid Emit = %v", err)
+		}
+	}
+	h := func(context.Context, events.Event) error { return nil }
+	for _, tc := range []struct {
+		topic   string
+		handler events.Handler
+	}{{"", h}, {"valid", nil}} {
+		if _, err := bus.Subscribe(tc.topic, tc.handler); !errors.Is(err, sdk.ErrInvalidInput) {
+			t.Errorf("invalid Subscribe = %v", err)
+		}
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := bus.Emit(ctx, newSuiteEvent("suite.canceled", "")); !errors.Is(err, context.Canceled) {
+		t.Errorf("canceled Emit = %v", err)
+	}
+	if err := bus.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := bus.Subscribe("valid", h); !errors.Is(err, events.ErrClosed) {
+		t.Errorf("closed Subscribe = %v", err)
 	}
 }

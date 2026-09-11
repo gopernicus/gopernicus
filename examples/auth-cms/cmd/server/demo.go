@@ -9,13 +9,20 @@ import (
 	"net/http"
 	"time"
 
+	golangjwt "github.com/gopernicus/gopernicus/integrations/cryptids/golang-jwt"
 	auth "github.com/gopernicus/gopernicus/pockets/authentication"
-	"github.com/gopernicus/gopernicus/pockets/authentication/domain/securityevent"
-	authorization "github.com/gopernicus/gopernicus/pockets/authorization"
-	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
-	"github.com/gopernicus/gopernicus/sdk/foundation/cryptids"
-	"github.com/gopernicus/gopernicus/sdk/foundation/environment"
-	"github.com/gopernicus/gopernicus/sdk/foundation/web"
+	authenticationhttp "github.com/gopernicus/gopernicus/pockets/authentication/inbound/http"
+	protection "github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/protection"
+	securityevent "github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/securityevent"
+	authorizationhttp "github.com/gopernicus/gopernicus/pockets/authorization/inbound/http"
+	decisions "github.com/gopernicus/gopernicus/pockets/authorization/logic/decisions"
+	model "github.com/gopernicus/gopernicus/pockets/authorization/logic/model"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/roles"
+	"github.com/gopernicus/gopernicus/sdk"
+	"github.com/gopernicus/gopernicus/sdk/pkg/cryptids"
+	"github.com/gopernicus/gopernicus/sdk/pkg/environment"
+	"github.com/gopernicus/gopernicus/sdk/pkg/list"
+	"github.com/gopernicus/gopernicus/sdk/pkg/web"
 )
 
 // registerDemoRoutes mounts the host-local demo routes (host code, NOT pocket
@@ -36,21 +43,21 @@ import (
 //     through the authorization engine. A member (granted on invitation accept) → 200;
 //     an ungranted user → 403.
 //   - GET /demo/my-projects — RequireAccessTokenOrAPIKey-gated: the relationship kind's
-//     LookupResources enumeration (demonstration (b)); {admin, ids} (admin flag
+//     LookupAllResourceIDs enumeration (demonstration (b)); {admin, ids} (admin flag
 //     is the host-composed platform-admin recipe, not an engine bypass).
 //   - GET /demo/audit — RequireAccessTokenOrAPIKey + ROLE-MODEL gated: the pocket's
 //     coordinate gate asks `audit` on project/demo, a pair the RoleModel owns
 //     (the `auditor` role grants it), so the host writes no role check of its own.
 //     200 with a driven ListRoleAssignmentsByResource read-back, 403 without a
 //     granting role.
-func registerDemoRoutes(router *web.WebHandler, authSvc *auth.Service, authorizer *authorization.Service) {
-	principal := authSvc.RequireAccessTokenOrAPIKey()
-	router.Handle("GET", "/demo/whoami", demoWhoami(authSvc), principal)
-	router.Handle("GET", "/demo/members-only", demoMembersOnly(authSvc),
-		principal, requireMembership(authSvc, authorizer))
-	router.Handle("GET", "/demo/my-projects", demoMyProjects(authSvc, authorizer), principal)
-	router.Handle("GET", "/demo/audit", demoAudit(authorizer),
-		principal, authorizer.RequirePermissionFixed(demoResourceType, demoAuditPermission, demoResourceID))
+func registerDemoRoutes(router *web.WebHandler, authentication *authenticationhttp.Adapter, authorizer *decisions.Service, roleReader *roles.Service, authorization *authorizationhttp.Adapter) {
+	principal := authentication.RequireAccessTokenOrAPIKey()
+	router.Handle("GET", "/demo/whoami", demoWhoami(), principal)
+	router.Handle("GET", "/demo/members-only", demoMembersOnly(),
+		principal, requireMembership(authorizer, authorization))
+	router.Handle("GET", "/demo/my-projects", demoMyProjects(authorizer), principal)
+	router.Handle("GET", "/demo/audit", demoAudit(roleReader),
+		principal, authorization.RequirePermissionFixed(demoResourceType, demoAuditPermission, demoResourceID))
 }
 
 // The audit route's role-model vocabulary: `auditor` is the role the host declares
@@ -66,21 +73,21 @@ const (
 // demoMyProjects (authorization-v1 Z4, demonstration (b)) exercises the
 // relationship kind's ENUMERATION API — flagship-specific, NEVER a consumer seam.
 // It maps the resolved principal onto an authorization.PrincipalRef and asks the engine
-// which `project` resources the subject may `view`. LookupResources is now pure
+// which `project` resources the subject may `view`. LookupAllResourceIDs is now pure
 // enumeration (the engine grants no admin bypass), so the host composes
 // admin-sees-everything itself: it runs the isPlatformAdmin recipe FIRST and
 // surfaces it as an explicit `admin` flag. In a real app an admin skips ID
 // filtering entirely; here the JSON is {"admin": bool, "ids": [...]} — a member
 // gets the ids, a stranger gets an empty list, an admin gets admin=true.
-func demoMyProjects(authSvc *auth.Service, authorizer *authorization.Service) http.HandlerFunc {
+func demoMyProjects(authorizer *decisions.Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		p, ok := authSvc.CurrentPrincipal(r.Context())
+		p, ok := sdk.PrincipalFromContext(r.Context())
 		if !ok {
 			writeHostJSON(w, http.StatusUnauthorized, map[string]string{"error": "authentication required"})
 			return
 		}
 		admin := isPlatformAdmin(r.Context(), authorizer, p.Type, p.ID)
-		res, err := authorizer.LookupResources(r.Context(), authorization.PrincipalRef{Type: p.Type, ID: p.ID}, demoPermission, demoResourceType)
+		res, err := authorizer.LookupAllResourceIDs(r.Context(), model.PrincipalRef{Type: p.Type, ID: p.ID}, demoPermission, demoResourceType)
 		if err != nil {
 			writeHostJSON(w, http.StatusInternalServerError, map[string]string{"error": "lookup failed"})
 			return
@@ -103,9 +110,9 @@ func demoMyProjects(authSvc *auth.Service, authorizer *authorization.Service) ht
 // subject who passes the gate via a GLOBAL grant is allowed yet never appears in
 // the resource's listing — the documented v1 enumeration-vs-decision divergence,
 // visible right here.
-func demoAudit(authorizer *authorization.Service) http.HandlerFunc {
+func demoAudit(roleReader *roles.Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		page, err := authorizer.ListRoleAssignmentsByResource(r.Context(), demoResourceType, demoResourceID, crud.ListRequest{})
+		page, err := roleReader.ListRoleAssignmentsByResource(r.Context(), demoResourceType, demoResourceID, list.Request{})
 		if err != nil {
 			writeHostJSON(w, http.StatusInternalServerError, map[string]string{"error": "list assignments failed"})
 			return
@@ -123,9 +130,9 @@ func demoAudit(authorizer *authorization.Service) http.HandlerFunc {
 }
 
 // demoWhoami echoes the resolved principal (the authenticator ran first).
-func demoWhoami(authSvc *auth.Service) http.HandlerFunc {
+func demoWhoami() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		p, ok := authSvc.CurrentPrincipal(r.Context())
+		p, ok := sdk.PrincipalFromContext(r.Context())
 		if !ok {
 			writeHostJSON(w, http.StatusUnauthorized, map[string]string{"error": "authentication required"})
 			return
@@ -139,9 +146,9 @@ func demoWhoami(authSvc *auth.Service) http.HandlerFunc {
 
 // demoMembersOnly is reached only when both the authenticator and the membership
 // gate pass, so it just confirms access.
-func demoMembersOnly(authSvc *auth.Service) http.HandlerFunc {
+func demoMembersOnly() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		p, _ := authSvc.CurrentPrincipal(r.Context())
+		p, _ := sdk.PrincipalFromContext(r.Context())
 		writeHostJSON(w, http.StatusOK, map[string]string{
 			"resource":       demoResourceType + "/" + demoResourceID,
 			"relation":       demoRelation,
@@ -155,13 +162,13 @@ func demoMembersOnly(authSvc *auth.Service) http.HandlerFunc {
 // (plan-cut amendment, SRE — DEFAULT-OFF because it dumps IP/UA/emails and this
 // host is public). It is additionally session-gated (RequireAccessToken): with no
 // AUTH_DEBUG the route is never registered (404), and with no session it is 401.
-func registerDebugRoutes(router *web.WebHandler, authSvc *auth.Service, repos auth.Repositories, log *slog.Logger) {
+func registerDebugRoutes(router *web.WebHandler, authentication *authenticationhttp.Adapter, repos auth.Repositories, log *slog.Logger) {
 	if environment.GetEnvOrDefault("AUTH_DEBUG", "") != "1" {
 		log.Info("debug security-events route DISABLED (set AUTH_DEBUG=1 to enable)")
 		return
 	}
 	log.Warn("debug security-events route ENABLED (AUTH_DEBUG=1) — dumps IP/UA/emails; do not enable in production")
-	router.Handle("GET", "/debug/security-events", debugSecurityEvents(repos.SecurityEvents), authSvc.RequireAccessToken())
+	router.Handle("GET", "/debug/security-events", debugSecurityEvents(repos.SecurityEvents), authentication.RequireAccessToken())
 }
 
 // debugEventResponse is the trimmed audit-row shape the debug dump returns.
@@ -184,7 +191,7 @@ func debugSecurityEvents(repo securityevent.SecurityEventRepository) http.Handle
 		out := make([]debugEventResponse, 0)
 		cursor := ""
 		for i := 0; i < 100; i++ { // bound against a runaway cursor
-			pageResult, err := repo.List(r.Context(), securityevent.ListFilter{}, crud.ListRequest{Limit: crud.MaxLimit, Cursor: cursor})
+			pageResult, err := repo.List(r.Context(), securityevent.ListFilter{}, list.Request{Limit: list.MaxLimit, Cursor: cursor})
 			if err != nil {
 				writeHostJSON(w, http.StatusInternalServerError, map[string]string{"error": "list security events"})
 				return
@@ -214,8 +221,8 @@ func debugSecurityEvents(repo securityevent.SecurityEventRepository) http.Handle
 // buildTokenSigner builds the REQUIRED access-JWT signer from the environment
 // (auth-jwt plan §1.6, D3 — the core no longer tolerates a nil signer):
 //
-//   - AUTH_JWT_SECRET set (≥32 bytes) → the sdk stdlib HS256 default
-//     (cryptids.NewHS256) over that secret — a stable key across boots that
+//   - AUTH_JWT_SECRET set (≥32 bytes) → the golang-jwt HS256 integration
+//     (golangjwt.New) over that secret — a stable key across boots that
 //     MULTIPLE INSTANCES can share.
 //   - AUTH_JWT_SECRET absent → an EPHEMERAL random 32-byte key generated at boot.
 //     NEVER a hardcoded constant (this host lands on public GitHub; a committed
@@ -235,7 +242,7 @@ func buildTokenSigner(log *slog.Logger) (cryptids.JWTSigner, error) {
 		secret = hex.EncodeToString(b[:]) // 64 hex chars ≥ 32 bytes
 		log.Warn("AUTH_JWT_SECRET unset: using an EPHEMERAL random signing key — DEV / SINGLE-INSTANCE ONLY; access JWTs will NOT survive a restart, and a MULTI-INSTANCE deployment MUST share AUTH_JWT_SECRET across every instance")
 	}
-	signer, err := cryptids.NewHS256([]byte(secret))
+	signer, err := golangjwt.New(secret)
 	if err != nil {
 		return nil, fmt.Errorf("build jwt signer: %w", err)
 	}
@@ -252,7 +259,7 @@ func buildTokenSigner(log *slog.Logger) (cryptids.JWTSigner, error) {
 // whenever Challenges is wired. This pepper is DISTINCT from the JWT signing key, the
 // identifier keyer, the delivery-outbox key, and the provider-token key — never
 // reused across them, and never logged (only the WARN, never the material).
-func buildChallengeProtector(log *slog.Logger) (auth.ChallengeProtector, error) {
+func buildChallengeProtector(log *slog.Logger) (protection.ChallengeProtector, error) {
 	const activeKeyID = "dev"
 	key := environment.GetEnvOrDefault("AUTH_CHALLENGE_PEPPER", "")
 	var raw []byte
@@ -269,7 +276,7 @@ func buildChallengeProtector(log *slog.Logger) (auth.ChallengeProtector, error) 
 		}
 		raw = decoded
 	}
-	protector, err := auth.NewHMACChallengeProtector(auth.HMACKeyRing{
+	protector, err := protection.NewHMACChallengeProtector(protection.HMACKeyRing{
 		Active: activeKeyID,
 		Keys:   map[string][]byte{activeKeyID: raw},
 	})
@@ -327,7 +334,7 @@ func buildDeliveryEncrypter(log *slog.Logger) (cryptids.Encrypter, error) {
 // SINGLE-INSTANCE ONLY: it derives the PII-free rate-limit/outbox idempotency keys,
 // so a multi-instance deployment MUST share the key. It is deliberately separate from
 // the challenge pepper, JWT, and encryption keys.
-func buildIdentifierKeyer(log *slog.Logger) (auth.IdentifierKeyer, error) {
+func buildIdentifierKeyer(log *slog.Logger) (protection.IdentifierKeyer, error) {
 	key := environment.GetEnvOrDefault("AUTH_IDENTIFIER_KEY", "")
 	var raw []byte
 	if key == "" {
@@ -343,7 +350,7 @@ func buildIdentifierKeyer(log *slog.Logger) (auth.IdentifierKeyer, error) {
 		}
 		raw = decoded
 	}
-	keyer, err := auth.NewHMACIdentifierKeyer(raw)
+	keyer, err := protection.NewHMACIdentifierKeyer(raw)
 	if err != nil {
 		return nil, fmt.Errorf("build identifier keyer: %w", err)
 	}

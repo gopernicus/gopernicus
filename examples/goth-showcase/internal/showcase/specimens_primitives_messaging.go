@@ -5,7 +5,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/gopernicus/gopernicus/sdk/foundation/web"
+	"github.com/gopernicus/gopernicus/sdk/pkg/web"
 	"github.com/gopernicus/gopernicus/ui/goth"
 	"github.com/gopernicus/gopernicus/ui/goth/htmx"
 	"github.com/gopernicus/gopernicus/ui/goth/primitives"
@@ -303,7 +303,7 @@ func (s *Server) registerMessageScrollerFixtures() {
 			return
 		}
 		// No-JS history reload: a full document with the earlier turns prepended.
-				bundle := s.bundles[goth.Full]
+		bundle := s.bundles[goth.Full]
 		w.Header().Set("Content-Security-Policy", buildCSP(bundle, true))
 		content := compKids(primitives.MessageScrollerContent(primitives.MessageScrollerContentProps{
 			Base: primitives.Base{ID: "scroller-content"},

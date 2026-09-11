@@ -7,8 +7,8 @@ import (
 	"time"
 
 	"github.com/gopernicus/gopernicus/examples/auth-cms/internal/authjobs"
-	auth "github.com/gopernicus/gopernicus/pockets/authentication"
-	"github.com/gopernicus/gopernicus/sdk/foundation/environment"
+	delivery "github.com/gopernicus/gopernicus/pockets/authentication/logic/delivery"
+	"github.com/gopernicus/gopernicus/sdk/pkg/environment"
 )
 
 // Delivery terminal-purge scheduler defaults (IX-10). Sane for a proof host: purge hourly,
@@ -82,7 +82,7 @@ func envPositiveInt(log *slog.Logger, key string, def int) int {
 // most cfg.Batch terminal delivery rows older than the cfg.Retention window (measured from
 // now) and emits the purged lifecycle observation via authjobs.PurgeTerminal. now is injected
 // so a test can pin the retention cutoff.
-func newDeliveryPurge(purger authjobs.Purger, rt auth.DeliveryJobRuntime, cfg deliveryPurgeConfig, now func() time.Time) func(context.Context) (int, error) {
+func newDeliveryPurge(purger authjobs.Purger, rt delivery.JobRuntime, cfg deliveryPurgeConfig, now func() time.Time) func(context.Context) (int, error) {
 	return func(ctx context.Context) (int, error) {
 		before := now().Add(-cfg.Retention)
 		return authjobs.PurgeTerminal(ctx, purger, rt, before, cfg.Batch)

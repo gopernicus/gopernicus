@@ -10,20 +10,19 @@ The repository is a Go workspace of independently versionable modules. `go.work`
 ```text
 gopernicus/
 ├── sdk/                         stdlib-only layered kernel
-│   ├── foundation/              mechanism and vocabulary
-│   ├── capabilities/            ports plus shared policy
-│   └── pocket/                 host↔pocket mount contract
+│   ├── pkg/              mechanism and vocabulary
+│   └── capabilities/            ports plus shared policy
 ├── integrations/                reusable technology connectors
 │   ├── datastores/{pgxdb,turso}
 │   ├── cryptids/*
 │   ├── filestorage/*
 │   ├── kvstores/goredis
 │   └── ...
-├── pockets/
-│   ├── authentication/          SDK-only pocket core
-│   │   ├── domain/              public entities and ports
-│   │   ├── internal/            sealed services and inbound adapters
-│   │   ├── storetest/           exported repository conformance
+├── pockets/                     shared host-contract module (SDK only)
+│   ├── authentication/          SDK/shared-contract pocket core
+│   │   ├── logic/               public services, owned types and ports
+│   │   ├── inbound/http/        public HTTP adapter and middleware
+│   │   ├── stores/storetest/    exported repository conformance
 │   │   ├── stores/{pgx,turso}/  independent store modules
 │   │   └── views/goth/          independent presentation module
 │   └── ...
@@ -39,41 +38,43 @@ The package path communicates the dependency tier:
 ```go
 import (
     "github.com/gopernicus/gopernicus/sdk"
-    "github.com/gopernicus/gopernicus/sdk/foundation/web"
+    "github.com/gopernicus/gopernicus/sdk/pkg/web"
     "github.com/gopernicus/gopernicus/sdk/capabilities/cacher"
-    "github.com/gopernicus/gopernicus/sdk/pocket"
+    "github.com/gopernicus/gopernicus/pockets"
 )
 ```
 
-The root `sdk` package owns only cross-cutting error and request/trace context vocabulary. Foundation packages are flat and independent. Capabilities can use foundation mechanics but not one another. The `pocket` package is the explicit composer.
+The root `sdk` package owns only cross-cutting error and request/trace context vocabulary. Packages under `pkg/` are flat and independent. Capabilities can use pkg mechanisms but not one another. The separate `pockets` module owns the shared host contract and depends on SDK. It imports no concrete pockets.
 
 ## A pocket core and its siblings
 
 A pocket is physically split so its core remains portable:
 
 ```text
-pockets/cms/                    module: .../pockets/cms
-  cms.go                         public socket: Repositories, Config, Register
-  domain/content/                public entity + repository contracts
-  domain/media/
-  internal/logic/                private use cases
-  internal/inbound/              private route handlers
-  storetest/                     public test support
+pockets/jobs/                    module: .../pockets/jobs
+  jobs.go, config.go             root composition
+  logic/queue/                  public queue service, types, ports and runtimes
+  logic/schedules/              public schedule service, types and ports
+  stores/memory/                optional adapter within core module
+  stores/storetest/             shared conformance within core module
 
-pockets/cms/stores/pgx/         module: .../pockets/cms/stores/pgx
-pockets/cms/stores/turso/       module: .../pockets/cms/stores/turso
-pockets/cms/views/goth/         module: .../pockets/cms/views/goth
+pockets/jobs/stores/pgx/         module: .../pockets/jobs/stores/pgx
+pockets/jobs/stores/turso/       module: .../pockets/jobs/stores/turso
 ```
 
-The pocket core's `go.mod` requires exactly the SDK. A store module imports the public domain ports and a datastore connector. A view module imports the pocket's public render seam and a UI implementation. Nothing forces a host to choose any sibling.
+The core's `go.mod` permits only SDK and the shared pockets contract. A store
+module imports public logic-owned ports and a datastore connector. HTTP pockets
+expose `inbound/http`; optional view modules implement its public render seam.
+CMS retains its earlier domain/internal layout pending its deferred audit.
 
 ### Reading rule
 
-- `domain/` is what outsiders may implement or exchange;
-- `internal/` is the pocket's sealed policy and delivery implementation;
-- `stores/` is outbound, isolated into per-technology modules;
-- `views/` is optional presentation, also isolated;
-- the root package is the socket hosts compose.
+- `logic/` owns supported services, types and consumed ports;
+- `inbound/http/` exposes HTTP adapters, reusable middleware and supported handlers;
+- `internal/` holds genuinely private helpers or engines, only when needed;
+- `stores/` groups outbound adapters; drivers have separate modules;
+- `views/` is optional presentation in separate modules;
+- the root constructs and connects named components.
 
 ## Integrations are library-shaped
 

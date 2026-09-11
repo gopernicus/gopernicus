@@ -6,7 +6,7 @@ import (
 
 	"github.com/a-h/templ"
 
-	"github.com/gopernicus/gopernicus/sdk/foundation/web"
+	"github.com/gopernicus/gopernicus/sdk/pkg/web"
 	"github.com/gopernicus/gopernicus/ui/goth"
 	"github.com/gopernicus/gopernicus/ui/goth/primitives"
 )
@@ -163,7 +163,7 @@ func selectFormSpecimen() string {
 // registerAnchoredFixtures wires the echo route the no-JS Select form submits to.
 func (s *Server) registerAnchoredFixtures() {
 	s.handler.Handle(http.MethodGet, "/anchored/echo", func(w http.ResponseWriter, r *http.Request) {
-				bundle := s.bundles[goth.StylesOnly]
+		bundle := s.bundles[goth.StylesOnly]
 		w.Header().Set("Content-Security-Policy", buildCSP(bundle, false))
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 

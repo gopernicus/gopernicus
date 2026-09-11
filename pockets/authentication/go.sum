@@ -1,2 +1,4 @@
-github.com/gopernicus/gopernicus/sdk v0.6.0 h1:bliwauqjOipBXJX2zuW3o49t+K5jKOu7Uch8+BoV4jk=
-github.com/gopernicus/gopernicus/sdk v0.6.0/go.mod h1:z0bypQiCybwPoxoDfzhYvB1BtH2av549QR84GacngaE=
+github.com/gopernicus/gopernicus/pockets v0.1.0 h1:2WcybbfPw1km00DmG37CekPbxYmObyyj3T1Ec0eFSRY=
+github.com/gopernicus/gopernicus/pockets v0.1.0/go.mod h1:A2H/Tl9Pn2v2mFLOgkCQngMRFkMN10E1MEzGCQICsEw=
+github.com/gopernicus/gopernicus/sdk v0.9.0 h1:g7rTlx/W8Dzb0VwsGJhfhas2hK2L7I61BELPuGQCLZY=
+github.com/gopernicus/gopernicus/sdk v0.9.0/go.mod h1:z0bypQiCybwPoxoDfzhYvB1BtH2av549QR84GacngaE=

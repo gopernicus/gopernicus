@@ -20,7 +20,7 @@ React application
             │ JSON / HTTP (and optionally OpenAPI)
             ▼
 Gopernicus host
-  ├── sdk/foundation/web    router, middleware, responses
+  ├── sdk/pkg/web    router, middleware, responses
   ├── pockets/*            domain services and pocket routes
   ├── integrations/*        database, identity, mail, storage, tracing
   └── host code              composition, lifecycle, app-local routes
@@ -30,24 +30,25 @@ The Go host still owns authentication policy, authorization checks, persistence,
 
 ## API-only host shape
 
-Leave pocket view configuration empty when the host only needs an API. Register JSON routes with the SDK web foundation and document the public surface explicitly:
+Leave pocket view configuration empty when the host only needs an API. Register JSON routes with the SDK web package and document the public surface explicitly:
 
 ```go
-router := web.NewWebHandler(web.WithLogging(log))
+router := web.NewWebHandler()
 router.Use(web.RequestID(), web.Logger(log), web.Panics(log))
 
-mount := pocket.Mount{Router: router, Logger: log}
+mount := pockets.Mount{Router: router, Logger: log}
 
 // Construct the pocket service and its repositories in the host.
 // Register pocket routes on mount, then add app-local API routes.
 router.GET("/api/projects", listProjects)
 router.POST("/api/projects", createProject)
 
-router.ServeOpenAPI(
-    "/openapi.json",
-    web.OpenAPIInfo{Title: "Projects API", Version: "1.0.0"},
-    routeSpecs,
-)
+// Serve a host-owned, validated OpenAPI JSON document if needed.
+router.GET("/openapi.json", func(w http.ResponseWriter, r *http.Request) {
+    w.Header().Set("Content-Type", "application/json")
+    _, err := w.Write(openAPIDocument)
+    web.RecordError(w, err)
+})
 ```
 
 The exact pocket construction depends on the pocket and store modules selected by the host. The important part is that no GOTH or other UI dependency enters the API host's module graph just because a pocket has an optional view adapter.
@@ -129,10 +130,10 @@ The Go host can still expose `/api/projects/{id}` while the browser route is `/p
 
 ## OpenAPI and generated clients
 
-`sdk/foundation/web` can emit an explicit OpenAPI document from route specifications. A React project may use that document to generate TypeScript types or a typed client when the API contract is ready for it. Client generation is planned tooling rather than a required part of the current Workshop flow; handwritten clients like the example above are valid in the meantime.
+The host can maintain an OpenAPI document or choose optional generation tooling. The SDK does not reflect Go types into schemas. A React project may use the host-owned document to generate TypeScript types or a typed client when the API contract is ready for it. Client generation is planned tooling rather than a required part of the current Workshop flow; handwritten clients like the example above are valid in the meantime.
 
 ## Shared UI work
 
 A future `ui/react` module can hold client-side primitives, tokens, and patterns shared by multiple React applications. It should remain independent of pocket persistence and Go route registration. Pocket-specific API hooks and screens belong in the consuming React application or in a separate client package that depends on the API contract.
 
-See [Web foundation](../sdk/web.md), [Pocket modules](../pockets/overview.md), and [Compose a host](../guides/compose-host.md) for the Go side of this boundary.
+See [Web package](../sdk/web.md), [Pocket modules](../pockets/overview.md), and [Compose a host](../guides/compose-host.md) for the Go side of this boundary.

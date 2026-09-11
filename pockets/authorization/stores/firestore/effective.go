@@ -7,12 +7,11 @@ import (
 	"strings"
 
 	gcfs "cloud.google.com/go/firestore"
-	"google.golang.org/api/iterator"
-
 	firestoredb "github.com/gopernicus/gopernicus/integrations/datastores/firestore"
-	"github.com/gopernicus/gopernicus/pockets/authorization/domain/role"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/roles"
 	"github.com/gopernicus/gopernicus/sdk"
-	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
+	"github.com/gopernicus/gopernicus/sdk/pkg/list"
+	"google.golang.org/api/iterator"
 )
 
 // effectivePageSize is how many documents ONE effective-listing stream pulls per
@@ -28,11 +27,11 @@ const effectivePageSize = 50
 // their derived column (SCHEMA.md §4.1) — a cursor is a wire format, and PKOf
 // echoing a stored value is what keeps three families' formats the same.
 type effectiveRow struct {
-	grant role.EffectiveGrant
+	grant roles.EffectiveGrant
 	key   string
 }
 
-func (r effectiveRow) toDomain() role.EffectiveGrant { return r.grant }
+func (r effectiveRow) toDomain() roles.EffectiveGrant { return r.grant }
 
 // listEffectiveByResource is ListEffectiveByResource's dedicated merge/group
 // reader. It is NOT a boolean PostFilter over one query, and the reason is the
@@ -57,25 +56,25 @@ func (r effectiveRow) toDomain() role.EffectiveGrant { return r.grant }
 // count of distinct groups is not a server aggregation. That is the documented
 // price of the effective listing, and the reason the RAW listings (which count
 // documents) stay on the connector's List.
-func listEffectiveByResource(ctx context.Context, db *firestoredb.DB, resourceType, resourceID string, req crud.ListRequest) (crud.Page[role.EffectiveGrant], error) {
+func listEffectiveByResource(ctx context.Context, db *firestoredb.DB, resourceType, resourceID string, req list.Request) (list.Page[roles.EffectiveGrant], error) {
 	if err := req.Validate(); err != nil {
-		return crud.Page[role.EffectiveGrant]{}, err
+		return list.Page[roles.EffectiveGrant]{}, err
 	}
 	if strings.TrimSpace(req.Search) != "" {
-		return crud.Page[role.EffectiveGrant]{}, fmt.Errorf("authorization firestore store: search is not supported by the effective role listing: %w", sdk.ErrInvalidInput)
+		return list.Page[roles.EffectiveGrant]{}, fmt.Errorf("authorization firestore store: search is not supported by the effective role listing: %w", sdk.ErrInvalidInput)
 	}
 	field, direction, err := effectiveOrderField(req.Order)
 	if err != nil {
-		return crud.Page[role.EffectiveGrant]{}, err
+		return list.Page[roles.EffectiveGrant]{}, err
 	}
-	limit := req.NormalizedLimit(crud.Limits{})
+	limit := req.NormalizedLimit(list.Limits{})
 
-	var page crud.Page[effectiveRow]
+	var page list.Page[effectiveRow]
 	err = db.ReadSnapshot(ctx, func(ctx context.Context, r firestoredb.Reader) error {
-		page = crud.Page[effectiveRow]{}
+		page = list.Page[effectiveRow]{}
 
 		var err error
-		if req.ResolvedStrategy() == crud.StrategyOffset {
+		if req.ResolvedStrategy() == list.StrategyOffset {
 			page, err = effectiveOffsetPage(ctx, db, r, resourceType, resourceID, req.Offset, direction, limit)
 		} else {
 			page, err = effectiveCursorPage(ctx, db, r, resourceType, resourceID, req.Cursor, field, direction, limit)
@@ -94,29 +93,25 @@ func listEffectiveByResource(ctx context.Context, db *firestoredb.DB, resourceTy
 		return nil
 	})
 	if err != nil {
-		return crud.Page[role.EffectiveGrant]{}, err
+		return list.Page[roles.EffectiveGrant]{}, err
 	}
-	return crud.MapPage(page, effectiveRow.toDomain), nil
+	return list.MapPage(page, effectiveRow.toDomain), nil
 }
 
 // effectiveCursorPage is the keyset flow, and it is the connector List's cursor
-// flow reproduced over grouped rows with the SAME crud helpers — crud.TrimPage
-// for HasMore/NextCursor and crud.MarkPrevPage for the reverse window — so the
+// flow reproduced over grouped rows with the SAME crud helpers — list.TrimPage
+// for HasMore/NextCursor and list.MarkPrevPage for the reverse window — so the
 // three families answer a cursor identically.
 //
-// The reverse probe is a FULL logical window, not an existence check: it re-runs
-// the merge in the flipped direction bounded at the incoming cursor and collects
-// up to limit GROUPS, so page two reports HasPrev with an empty PreviousCursor
-// (crud.MarkPrevPage's specified behavior for a short window — page one is the
-// first page and no cursor addresses it) while page three hands back a cursor
-// that lands exactly on page two.
-func effectiveCursorPage(ctx context.Context, db *firestoredb.DB, r firestoredb.Reader, resourceType, resourceID, token, field string, direction gcfs.Direction, limit int) (crud.Page[effectiveRow], error) {
+// The reverse probe includes the incoming boundary and fetches limit+1 groups.
+// The extra predecessor supplies a cursor that opens the previous page.
+func effectiveCursorPage(ctx context.Context, db *firestoredb.DB, r firestoredb.Reader, resourceType, resourceID, token, field string, direction gcfs.Direction, limit int) (list.Page[effectiveRow], error) {
 	// A nil cursor is either the first page or a STALE token (one issued under a
 	// different order field), which decodes to the first page exactly as the SQL
 	// siblings' List does.
-	cursor, err := crud.DecodeCursor(token, field)
+	cursor, err := list.DecodeCursor(token, field)
 	if err != nil {
-		return crud.Page[effectiveRow]{}, fmt.Errorf("decode cursor: %w: %w", sdk.ErrInvalidInput, err)
+		return list.Page[effectiveRow]{}, fmt.Errorf("decode cursor: %w: %w", sdk.ErrInvalidInput, err)
 	}
 
 	after := ""
@@ -124,31 +119,31 @@ func effectiveCursorPage(ctx context.Context, db *firestoredb.DB, r firestoredb.
 		after = cursor.PK
 	}
 
-	rows, err := mergeEffective(ctx, db, r, resourceType, resourceID, after, direction, limit+1)
+	rows, err := mergeEffective(ctx, db, r, resourceType, resourceID, after, direction, limit+1, false)
 	if err != nil {
-		return crud.Page[effectiveRow]{}, err
+		return list.Page[effectiveRow]{}, err
 	}
 
 	encode := func(row effectiveRow) (string, error) {
-		return crud.EncodeCursor(field, row.key, row.key)
+		return list.EncodeCursor(field, row.key, row.key)
 	}
-	page, err := crud.TrimPage(rows, limit, encode)
+	page, err := list.TrimPage(rows, limit, encode)
 	if err != nil {
-		return crud.Page[effectiveRow]{}, err
+		return list.Page[effectiveRow]{}, err
 	}
 	if cursor == nil {
 		return page, nil
 	}
 
-	prev, err := mergeEffective(ctx, db, r, resourceType, resourceID, after, flipDirection(direction), limit)
+	prev, err := mergeEffective(ctx, db, r, resourceType, resourceID, after, flipDirection(direction), limit+1, true)
 	if err != nil {
-		return crud.Page[effectiveRow]{}, err
+		return list.Page[effectiveRow]{}, err
 	}
 	for i, j := 0, len(prev)-1; i < j; i, j = i+1, j-1 {
 		prev[i], prev[j] = prev[j], prev[i]
 	}
-	if err := crud.MarkPrevPage(&page, prev, limit, encode); err != nil {
-		return crud.Page[effectiveRow]{}, err
+	if err := list.MarkPrevPage(&page, prev, limit, encode); err != nil {
+		return list.Page[effectiveRow]{}, err
 	}
 	return page, nil
 }
@@ -159,10 +154,10 @@ func effectiveCursorPage(ctx context.Context, db *firestoredb.DB, r firestoredb.
 // Offset cannot express that, which is why the skip happens after the merge —
 // the same posture the connector's List takes under a PostFilter, and the same
 // billing note: the skipped groups are read.
-func effectiveOffsetPage(ctx context.Context, db *firestoredb.DB, r firestoredb.Reader, resourceType, resourceID string, offset int, direction gcfs.Direction, limit int) (crud.Page[effectiveRow], error) {
-	rows, err := mergeEffective(ctx, db, r, resourceType, resourceID, "", direction, offset+limit+1)
+func effectiveOffsetPage(ctx context.Context, db *firestoredb.DB, r firestoredb.Reader, resourceType, resourceID string, offset int, direction gcfs.Direction, limit int) (list.Page[effectiveRow], error) {
+	rows, err := mergeEffective(ctx, db, r, resourceType, resourceID, "", direction, offset+limit+1, false)
 	if err != nil {
-		return crud.Page[effectiveRow]{}, err
+		return list.Page[effectiveRow]{}, err
 	}
 	if offset < len(rows) {
 		rows = rows[offset:]
@@ -170,7 +165,7 @@ func effectiveOffsetPage(ctx context.Context, db *firestoredb.DB, r firestoredb.
 		rows = nil
 	}
 
-	page := crud.Page[effectiveRow]{Items: rows}
+	page := list.Page[effectiveRow]{Items: rows}
 	if len(rows) > limit {
 		page.Items = rows[:limit]
 		page.HasMore = true
@@ -185,7 +180,7 @@ func effectiveOffsetPage(ctx context.Context, db *firestoredb.DB, r firestoredb.
 // groups: O(population) document reads, under the same snapshot as the page it
 // accompanies, so the count and the page always agree.
 func effectiveTotal(ctx context.Context, db *firestoredb.DB, r firestoredb.Reader, resourceType, resourceID string) (int64, error) {
-	rows, err := mergeEffective(ctx, db, r, resourceType, resourceID, "", gcfs.Asc, 0)
+	rows, err := mergeEffective(ctx, db, r, resourceType, resourceID, "", gcfs.Asc, 0, false)
 	if err != nil {
 		return 0, err
 	}
@@ -193,16 +188,17 @@ func effectiveTotal(ctx context.Context, db *firestoredb.DB, r firestoredb.Reade
 }
 
 // mergeEffective is the merge/group itself: at most want grouped grants in
-// grant_key order, strictly after the `after` key in the requested direction (an
-// empty after starts at the beginning; a non-positive want is unbounded).
+// grant_key order, after the `after` key in the requested direction. inclusive
+// includes the boundary for reverse probes. Empty after starts at the beginning;
+// a non-positive want is unbounded.
 //
 // Both streams are ordered by grant_key in the SAME direction, so the merged
 // sequence is monotone and every document of one group arrives adjacent to the
 // rest — which is what lets the grouping be streaming rather than a full
 // materialization, and what makes a group that spans BOTH streams land on one
 // side of a page boundary rather than being split across two pages.
-func mergeEffective(ctx context.Context, db *firestoredb.DB, r firestoredb.Reader, resourceType, resourceID, after string, direction gcfs.Direction, want int) ([]effectiveRow, error) {
-	streams := effectiveStreams(db, r, resourceType, resourceID, after, direction)
+func mergeEffective(ctx context.Context, db *firestoredb.DB, r firestoredb.Reader, resourceType, resourceID, after string, direction gcfs.Direction, want int, inclusive bool) ([]effectiveRow, error) {
+	streams := effectiveStreams(db, r, resourceType, resourceID, after, direction, inclusive)
 
 	var out []effectiveRow
 	for want <= 0 || len(out) < want {
@@ -262,12 +258,12 @@ func mergeEffective(ctx context.Context, db *firestoredb.DB, r firestoredb.Reade
 // — while a GLOBAL request reads exactly ONE and marks it Direct: a global
 // assignment IS the direct assignment at the global scope, and there is no
 // second arm to fall back to (turso's scopedLiteral = 0 collapsing the union).
-func effectiveStreams(db *firestoredb.DB, r firestoredb.Reader, resourceType, resourceID, after string, direction gcfs.Direction) []*grantStream {
+func effectiveStreams(db *firestoredb.DB, r firestoredb.Reader, resourceType, resourceID, after string, direction gcfs.Direction, inclusive bool) []*grantStream {
 	scoped := resourceType != "" || resourceID != ""
 
-	streams := []*grantStream{newGrantStream(db, r, resourceKey(resourceType, resourceID), after, direction, false)}
+	streams := []*grantStream{newGrantStream(db, r, resourceKey(resourceType, resourceID), after, direction, false, inclusive)}
 	if scoped {
-		streams = append(streams, newGrantStream(db, r, resourceKey("", ""), after, direction, true))
+		streams = append(streams, newGrantStream(db, r, resourceKey("", ""), after, direction, true, inclusive))
 	}
 	return streams
 }
@@ -299,15 +295,17 @@ type grantStream struct {
 	done bool
 }
 
-// newGrantStream builds one scope's stream. after is the EXCLUSIVE grant_key
-// bound, and the inequality follows the direction — so the reverse probe reads
-// the grants strictly BEFORE the cursor simply by flipping the direction.
-func newGrantStream(db *firestoredb.DB, r firestoredb.Reader, scopeKey, after string, direction gcfs.Direction, global bool) *grantStream {
+// newGrantStream builds one scope's stream. Reverse probes include the boundary;
+// forward pages exclude it. Physical continuation always resumes after a snapshot.
+func newGrantStream(db *firestoredb.DB, r firestoredb.Reader, scopeKey, after string, direction gcfs.Direction, global, inclusive bool) *grantStream {
 	q := rolesQuery(db).Where("resource_key", "==", scopeKey)
 	if after != "" {
 		op := ">"
 		if direction == gcfs.Desc {
 			op = "<"
+		}
+		if inclusive {
+			op += "="
 		}
 		q = q.Where("grant_key", op, after)
 	}

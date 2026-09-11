@@ -32,7 +32,7 @@
 // Cross-source ordering hazard: the shared ledger keyed (source, version)
 // expresses NO ordering between sources, so a host that scaffolds another
 // pocket's migrations but not "authorization" would fail at runtime, not boot.
-// Mitigation: Repositories probes all four tables at construction and errors —
+// Mitigation: Repositories probes all three tables at construction and errors —
 // naming the specific missing table — before the host serves traffic; the README
 // documents the prerequisite (including the roles-only adopter, which still
 // applies the FULL "authorization" source, iam_relationships included).
@@ -42,11 +42,13 @@ import (
 	"context"
 	"embed"
 	"fmt"
+	"slices"
 
-	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
+	"github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
 	"github.com/gopernicus/gopernicus/pockets/authorization"
-	"github.com/gopernicus/gopernicus/pockets/authorization/domain/mutation"
-	"github.com/gopernicus/gopernicus/pockets/authorization/domain/relationship"
+	mutation "github.com/gopernicus/gopernicus/pockets/authorization/logic/mutations"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/relationships"
+	"github.com/gopernicus/gopernicus/sdk"
 )
 
 // MigrationsFS holds the embedded canonical schema (migration source
@@ -66,24 +68,27 @@ const migrationSource = "authorization"
 // storeTables is the pocket's table inventory, probed at construction in this
 // order. Every statement in the package renders these names through a store's
 // table method so a schema-scoped store qualifies them.
-var storeTables = []string{"iam_relationships", "iam_roles", "iam_scopes", "iam_mutations"}
+var storeTables = []string{"iam_relationships", "iam_roles", "iam_audit"}
 
 // Option configures the store set at construction.
 type Option func(*config)
 
 type config struct {
+	audit    bool
 	guardian mutation.GuardianPolicy
 	schema   pgxdb.Schema
 }
 
-// WithGuardianPolicy overrides the default guardian invariant (owner protected on
-// every resource type, minimum one direct anchor) the atomic mutation repository
-// enforces under its scope lock. Supply an empty policy to declare no invariant, or
-// a narrower rule set to protect specific resource types. It mirrors the reference
-// memstore's WithGuardianPolicy so the guardian contract is wired identically
-// across dialects.
+// WithAudit enables atomic recording of actual authorization fact changes.
+// Every write then requires an explicit valid audit source on its context.
+func WithAudit() Option { return func(c *config) { c.audit = true } }
+
+// WithGuardianPolicy installs the host's relationship invariants. The option
+// snapshots its input; the store defaults to an empty policy. NewService checks
+// the repository's policy against the host relationship model.
 func WithGuardianPolicy(p mutation.GuardianPolicy) Option {
-	return func(c *config) { c.guardian = p }
+	p.Rules = slices.Clone(p.Rules)
+	return func(c *config) { c.guardian = mutation.GuardianPolicy{Rules: slices.Clone(p.Rules)} }
 }
 
 // WithSchema places every table this store touches in s. The zero Schema is the
@@ -97,24 +102,28 @@ func WithSchema(s pgxdb.Schema) Option {
 	return func(c *config) { c.schema = s }
 }
 
-// Repositories returns the authorization repository set backed by db — ALL THREE
+// Repositories returns the authorization repository set backed by db — all fact, mutation and audit
 // ports wired (relationship.Storer, role.Storer, and the atomic
 // mutation.MutationRepository over the shared iam_* tables) — AFTER verifying the
-// iam_relationships, iam_roles, iam_scopes, AND iam_mutations tables exist (the
+// iam_relationships, iam_roles and iam_audit tables exist (the
 // boot-time probe). It errors with sdk.ErrNotFound naming the specific missing
 // table when the "authorization" migration source was not applied before boot, so
 // the failure surfaces at wiring time rather than on the first query. It does NOT
 // touch migrations: the host owns and applies the schema (see ExportMigrations). db
 // is the connector wrapper (error mapping + Tx), not a raw pool. The mutation
-// repository defaults to the ratified guardian policy unless WithGuardianPolicy
-// overrides it. WithSchema qualifies both the probes and every statement the
+// repository has no guardian rules unless WithGuardianPolicy supplies them. WithSchema qualifies both the probes and every statement the
 // stores run.
-func Repositories(db *pgxdb.DB, opts ...Option) (authorization.Repositories, error) {
-	cfg := config{guardian: mutation.DefaultGuardianPolicy()}
+func Repositories(ctx context.Context, db *pgxdb.DB, opts ...Option) (authorization.Repositories, error) {
+	if db == nil {
+		return authorization.Repositories{}, fmt.Errorf("authorization pgx: nil database: %w", sdk.ErrInvalidInput)
+	}
+	cfg := config{}
 	for _, o := range opts {
+		if o == nil {
+			return authorization.Repositories{}, fmt.Errorf("authorization store: nil option: %w", sdk.ErrInvalidInput)
+		}
 		o(&cfg)
 	}
-	ctx := context.Background()
 	for _, table := range storeTables {
 		if err := probe(ctx, db, cfg.schema.Table(table)); err != nil {
 			return authorization.Repositories{}, err
@@ -124,21 +133,36 @@ func Repositories(db *pgxdb.DB, opts ...Option) (authorization.Repositories, err
 		Relationships: newRelationshipStore(db, cfg),
 		Roles:         newRoleStore(db, cfg),
 		Mutations:     newMutationStore(db, cfg),
+		Audit:         &auditStore{db: db, schema: cfg.schema},
 	}, nil
 }
 
-// RelationshipRepository returns only the relationship port after probing only
-// iam_relationships. It is the direct constructor for a baseline-only host that
+// RelationshipRepository returns only the relationship port after probing both fact tables
+// required by authorization write locking. WithAudit also probes iam_audit. It is the direct constructor for a baseline-only host that
 // intentionally does not wire the advanced mutation repository. It takes the same
 // options as Repositories so a host composing its own repository set gets the same
 // WithSchema seam; WithGuardianPolicy is accepted and ignored (no mutation
 // repository is built).
-func RelationshipRepository(db *pgxdb.DB, opts ...Option) (relationship.Storer, error) {
+func RelationshipRepository(ctx context.Context, db *pgxdb.DB, opts ...Option) (relationships.Storer, error) {
+	if db == nil {
+		return nil, fmt.Errorf("authorization pgx: nil database: %w", sdk.ErrInvalidInput)
+	}
 	var cfg config
 	for _, o := range opts {
+		if o == nil {
+			return nil, fmt.Errorf("authorization store: nil option: %w", sdk.ErrInvalidInput)
+		}
 		o(&cfg)
 	}
-	if err := probe(context.Background(), db, cfg.schema.Table("iam_relationships")); err != nil {
+	if err := probe(ctx, db, cfg.schema.Table("iam_relationships")); err != nil {
+		return nil, err
+	}
+	if cfg.audit {
+		if err := probe(ctx, db, cfg.schema.Table("iam_audit")); err != nil {
+			return nil, err
+		}
+	}
+	if err := probe(ctx, db, cfg.schema.Table("iam_roles")); err != nil {
 		return nil, err
 	}
 	return newRelationshipStore(db, cfg), nil

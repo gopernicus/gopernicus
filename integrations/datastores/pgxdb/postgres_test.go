@@ -1,6 +1,7 @@
 package pgxdb
 
 import (
+	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -100,7 +101,7 @@ func TestMapError_Passthrough(t *testing.T) {
 // TestOpen_EmptyDSN is the hermetic config-validation case: Open rejects an
 // empty DSN before any connection attempt.
 func TestOpen_EmptyDSN(t *testing.T) {
-	db, err := Open(Config{})
+	db, err := Open(context.Background(), Config{})
 	if err == nil {
 		t.Fatal("want error on empty DSN, got nil")
 	}

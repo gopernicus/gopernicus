@@ -5,9 +5,9 @@ import (
 	"time"
 
 	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
-	"github.com/gopernicus/gopernicus/pockets/authentication/domain/apikey"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/apikey"
 	"github.com/gopernicus/gopernicus/sdk"
-	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
+	"github.com/gopernicus/gopernicus/sdk/pkg/list"
 )
 
 // APIKeyStore implements apikey.APIKeyRepository over a libSQL database. GetByHash
@@ -25,7 +25,11 @@ type APIKeyStore struct {
 var _ apikey.APIKeyRepository = (*APIKeyStore)(nil)
 
 // NewAPIKeyStore returns an APIKeyStore backed by db.
+// It panics if db is nil; the caller owns the database lifecycle.
 func NewAPIKeyStore(db *tursodb.DB) *APIKeyStore {
+	if db == nil {
+		panic("authentication turso: NewAPIKeyStore received a nil database")
+	}
 	return &APIKeyStore{db: db}
 }
 
@@ -63,7 +67,7 @@ func (r apiKeyRow) toDomain() apikey.APIKey {
 
 // Create persists a new key; a colliding key_hash → sdk.ErrAlreadyExists.
 func (s *APIKeyStore) Create(ctx context.Context, k apikey.APIKey) (apikey.APIKey, error) {
-	// Empty ID → the cryptids.Database strategy (amended D10): omit the id
+	// Empty ID → the sdk.DatabaseID strategy (amended D10): omit the id
 	// column so the schema default generates the key, read back with RETURNING.
 	if k.ID == "" {
 		const q = `INSERT INTO api_keys (service_account_id, name, key_prefix, key_hash, expires_at, revoked_at, last_used_at, created_at)
@@ -102,7 +106,7 @@ func (s *APIKeyStore) GetByHash(ctx context.Context, keyHash string) (apikey.API
 
 // ListByServiceAccount returns a cursor-paginated page of a service account's
 // keys, ordered created_at DESC, id DESC.
-func (s *APIKeyStore) ListByServiceAccount(ctx context.Context, serviceAccountID string, req crud.ListRequest) (crud.Page[apikey.APIKey], error) {
+func (s *APIKeyStore) ListByServiceAccount(ctx context.Context, serviceAccountID string, req list.Request) (list.Page[apikey.APIKey], error) {
 	q := tursodb.ListQuery[apiKeyRow]{
 		BaseSQL:      `SELECT ` + apiKeyColumns + ` FROM api_keys WHERE service_account_id = ?`,
 		Args:         []any{serviceAccountID},
@@ -115,9 +119,9 @@ func (s *APIKeyStore) ListByServiceAccount(ctx context.Context, serviceAccountID
 	}
 	page, err := tursodb.List(ctx, s.db, q, req)
 	if err != nil {
-		return crud.Page[apikey.APIKey]{}, err
+		return list.Page[apikey.APIKey]{}, err
 	}
-	return crud.MapPage(page, apiKeyRow.toDomain), nil
+	return list.MapPage(page, apiKeyRow.toDomain), nil
 }
 
 // Revoke marks the key revoked as of revokedAt; unknown id → sdk.ErrNotFound.

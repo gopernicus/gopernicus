@@ -38,7 +38,7 @@ func TestWarmScaffoldModuleCache(t *testing.T) {
 	runGo(t, initDir, warmEnv(), "mod", "tidy")
 
 	// Shape 2 — the pocket scaffold's two store modules
-	// (TestScaffoldPocketStoresCompile tidies both). The sdk-only core and
+	// (TestScaffoldPocketStoresCompile tidies both). The SDK/shared-contract core and
 	// --db=memory init shapes need no network (sdk is third-party-free), so
 	// they are not warmed.
 	pocketDir := t.TempDir()
@@ -57,6 +57,7 @@ func TestWarmScaffoldModuleCache(t *testing.T) {
 	for _, st := range stores {
 		dir := filepath.Join(pocketDir, filepath.FromSlash(st.dir))
 		replaceModule(t, dir, baseModule+"/sdk", filepath.Join(root, "sdk"))
+		replaceModule(t, dir, baseModule+"/pockets", filepath.Join(root, "pockets"))
 		replaceModule(t, dir, st.connMod, filepath.Join(root, filepath.FromSlash(st.connRel)))
 		runGo(t, dir, warmEnv(), "mod", "tidy")
 	}

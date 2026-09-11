@@ -3,17 +3,17 @@ package content
 import (
 	"context"
 
-	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
+	"github.com/gopernicus/gopernicus/sdk/pkg/list"
 )
 
 // EntryQuery is a type-scoped, optionally status-filtered list query over
-// entries. It embeds the generic cursor ListRequest. Type is required for
+// entries. It embeds the generic cursor Request. Type is required for
 // type-scoped lists (the spine is shared, so an unfiltered list mixes types);
 // an empty Status matches any status.
 type EntryQuery struct {
 	Type   string // content type slug; required for type-scoped lists
 	Status Status // "" = any status
-	crud.ListRequest
+	list.Request
 }
 
 // EntryRepository is the single generic port for persisting all content
@@ -42,11 +42,11 @@ type EntryRepository interface {
 	Delete(ctx context.Context, id string) error
 
 	// List returns a cursor-paginated page of entries matching q.
-	List(ctx context.Context, q EntryQuery) (crud.Page[Entry], error)
+	List(ctx context.Context, q EntryQuery) (list.Page[Entry], error)
 
 	// ListByTerm returns a cursor-paginated page of entries matching q that are
 	// associated with termID.
-	ListByTerm(ctx context.Context, termID string, q EntryQuery) (crud.Page[Entry], error)
+	ListByTerm(ctx context.Context, termID string, q EntryQuery) (list.Page[Entry], error)
 
 	// SetTerms replaces the entry's taxonomy associations with termIDs.
 	SetTerms(ctx context.Context, entryID string, termIDs []string) error

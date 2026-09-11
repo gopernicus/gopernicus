@@ -7,7 +7,7 @@ import (
 
 	"github.com/gopernicus/gopernicus/pockets/cms/domain/taxonomy"
 	"github.com/gopernicus/gopernicus/sdk"
-	"github.com/gopernicus/gopernicus/sdk/foundation/web"
+	"github.com/gopernicus/gopernicus/sdk/pkg/web"
 )
 
 // taxonomyService is the narrow surface the taxonomy handlers consume.

@@ -4,9 +4,9 @@ go 1.26.1
 
 require (
 	github.com/a-h/templ v0.3.1020
-	github.com/gopernicus/gopernicus/pockets/authentication v0.7.0
-	github.com/gopernicus/gopernicus/sdk v0.5.0
-	github.com/gopernicus/gopernicus/ui/goth v0.1.0
+	github.com/gopernicus/gopernicus/pockets/authentication v0.11.0
+	github.com/gopernicus/gopernicus/sdk v0.9.0
+	github.com/gopernicus/gopernicus/ui/goth v0.2.0
 )
 
 require (
@@ -16,6 +16,7 @@ require (
 	github.com/cli/browser v1.3.0 // indirect
 	github.com/fatih/color v1.16.0 // indirect
 	github.com/fsnotify/fsnotify v1.7.0 // indirect
+	github.com/gopernicus/gopernicus/pockets v0.1.0 // indirect
 	github.com/mattn/go-colorable v0.1.13 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/natefinch/atomic v1.0.1 // indirect

@@ -11,9 +11,10 @@ import (
 	"testing"
 
 	"github.com/gopernicus/gopernicus/examples/auth-cms/internal/authmem"
+	"github.com/gopernicus/gopernicus/pockets"
 	auth "github.com/gopernicus/gopernicus/pockets/authentication"
-	"github.com/gopernicus/gopernicus/sdk/foundation/web"
-	"github.com/gopernicus/gopernicus/sdk/pocket"
+	delivery "github.com/gopernicus/gopernicus/pockets/authentication/logic/delivery"
+	"github.com/gopernicus/gopernicus/sdk/pkg/web"
 )
 
 // U7 cross-module acceptance: the whole same-site cross-origin cookie flow through
@@ -50,7 +51,7 @@ const (
 
 // newBrowserFlowHost builds the coordination-hub-shaped composition and returns the
 // running TLS server plus the built auth Service (for its exported cookie names).
-func newBrowserFlowHost(t *testing.T) (*httptest.Server, *auth.Service) {
+func newBrowserFlowHost(t *testing.T) (*httptest.Server, *auth.Components) {
 	t.Helper()
 
 	cfg, err := buildAuthConfig(quietLog(), nil)
@@ -65,18 +66,18 @@ func newBrowserFlowHost(t *testing.T) (*httptest.Server, *auth.Service) {
 	cfg.AllowedOrigins = []string{browserSPAOrigin}
 	// in_process delivery owns its bounded pool and needs no dispatcher; this flow
 	// sends nothing, it only needs a constructible Service.
-	cfg.DeliveryMode = auth.DeliveryModeInProcess
+	cfg.DeliveryMode = delivery.ModeInProcess
 	cfg.DeliveryEphemeralAcknowledged = true
 	// A just-registered account has no verified identifier yet, and this flow proves
 	// cookie/CORS/CSRF plumbing rather than the verification rail.
 	cfg.RequireVerifiedEmail = false
 
-	svc, err := auth.NewService(authmem.New().Repositories(), cfg)
+	svc, err := auth.New(authmem.New().Repositories(), cfg.TokenSigner, cfg.RuntimeMode, cfg.DeliveryMode, cfg.options()...)
 	if err != nil {
 		t.Fatalf("auth.NewService: %v", err)
 	}
 
-	router := web.NewWebHandler(web.WithLogging(quietLog()))
+	router := web.NewWebHandler()
 	// Genuinely global CORS: one Use around the whole mux, so it also answers the
 	// preflight to a method-qualified pocket route. AllowedHeaders is non-nil, so it
 	// REPLACES the default list — the host opts X-CSRF-Token in explicitly.
@@ -84,8 +85,8 @@ func newBrowserFlowHost(t *testing.T) (*httptest.Server, *auth.Service) {
 		AllowedOrigins: []string{browserSPAOrigin},
 		AllowedHeaders: []string{"Accept", "Content-Type", "Authorization", csrfEchoHeader},
 	}))
-	if err := svc.Register(pocket.Mount{
-		Router: pocket.PrefixRegistrar{Prefix: apiPrefix, Next: router},
+	if err := svc.HTTP.Register(pockets.Mount{
+		Router: pockets.PrefixRegistrar{Prefix: apiPrefix, Next: router},
 		Logger: quietLog(),
 	}); err != nil {
 		t.Fatalf("authSvc.Register: %v", err)
@@ -194,21 +195,21 @@ func TestBrowserCookieFlowThroughHostSeams(t *testing.T) {
 	if got := login.Header.Get("Vary"); !strings.Contains(got, "Origin") {
 		t.Errorf("login Vary = %q, want it to include Origin", got)
 	}
-	issued := setCookie(t, login, svc.RefreshCookieName())
+	issued := setCookie(t, login, svc.HTTP.RefreshCookieName())
 	if issued.Path != apiPrefix+"/auth" {
 		t.Fatalf("issued refresh cookie Path = %q, want %q", issued.Path, apiPrefix+"/auth")
 	}
 
 	// The jar's own Path matching: the refresh cookie rides the prefixed auth paths
 	// and nothing else.
-	if !contains(spa.jarCookieNames(apiPrefix+"/auth/refresh"), svc.RefreshCookieName()) {
+	if !contains(spa.jarCookieNames(apiPrefix+"/auth/refresh"), svc.HTTP.RefreshCookieName()) {
 		t.Fatalf("refresh cookie is not sent to %s/auth/refresh; jar has %v",
 			apiPrefix, spa.jarCookieNames(apiPrefix+"/auth/refresh"))
 	}
-	if contains(spa.jarCookieNames("/healthz"), svc.RefreshCookieName()) {
+	if contains(spa.jarCookieNames("/healthz"), svc.HTTP.RefreshCookieName()) {
 		t.Errorf("refresh cookie rides /healthz; it must be scoped to %s/auth", apiPrefix)
 	}
-	if contains(spa.jarCookieNames(apiPrefix+"/cms/entries"), svc.RefreshCookieName()) {
+	if contains(spa.jarCookieNames(apiPrefix+"/cms/entries"), svc.HTTP.RefreshCookieName()) {
 		t.Errorf("refresh cookie rides an unrelated prefixed path; it must be scoped to %s/auth", apiPrefix)
 	}
 
@@ -263,7 +264,7 @@ func TestBrowserCookieFlowThroughHostSeams(t *testing.T) {
 	if refresh.StatusCode != http.StatusOK {
 		t.Fatalf("cookie refresh = %d, want 200; body=%s", refresh.StatusCode, refreshBody)
 	}
-	if rotated := setCookie(t, refresh, svc.RefreshCookieName()); rotated.Path != apiPrefix+"/auth" {
+	if rotated := setCookie(t, refresh, svc.HTTP.RefreshCookieName()); rotated.Path != apiPrefix+"/auth" {
 		t.Fatalf("rotated refresh cookie Path = %q, want %q", rotated.Path, apiPrefix+"/auth")
 	}
 
@@ -293,14 +294,14 @@ func TestBrowserCookieFlowThroughHostSeams(t *testing.T) {
 	if out.StatusCode != http.StatusOK {
 		t.Fatalf("logout = %d, want 200; body=%s", out.StatusCode, outBody)
 	}
-	cleared := setCookie(t, out, svc.RefreshCookieName())
+	cleared := setCookie(t, out, svc.HTTP.RefreshCookieName())
 	if cleared.Path != apiPrefix+"/auth" {
 		t.Fatalf("cleared refresh cookie Path = %q, want %q (issue and clear must match)", cleared.Path, apiPrefix+"/auth")
 	}
 	if cleared.MaxAge >= 0 && cleared.Value != "" {
 		t.Fatalf("logout did not expire the refresh cookie: %+v", cleared)
 	}
-	if contains(spa.jarCookieNames(apiPrefix+"/auth/refresh"), svc.RefreshCookieName()) {
+	if contains(spa.jarCookieNames(apiPrefix+"/auth/refresh"), svc.HTTP.RefreshCookieName()) {
 		t.Error("the refresh cookie survived logout in the jar")
 	}
 	if after, body := spa.do("GET", apiPrefix+"/auth/me", "", nil); after.StatusCode != http.StatusUnauthorized {

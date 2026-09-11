@@ -1,7 +1,7 @@
 package goth
 
 import (
-	"github.com/gopernicus/gopernicus/pockets/authentication"
+	authentication "github.com/gopernicus/gopernicus/pockets/authentication/inbound/http"
 	"github.com/gopernicus/gopernicus/ui/goth/components/forms"
 	"github.com/gopernicus/gopernicus/ui/goth/primitives"
 )
@@ -39,6 +39,7 @@ templ stepUpBody(m authentication.StepUpPage) {
 		if m.CodeAvailable {
 			<form method="post" action="/auth/step-up/begin" autocomplete="off">
 				@csrfField(m.PageContext)
+				@returnToField(m.PageContext)
 				@stepUpBinding(m)
 				@forms.FormActions(forms.FormActionsProps{}) {
 					@primitives.Button(primitives.ButtonProps{Type: primitives.ButtonTypeSubmit}) {
@@ -77,6 +78,12 @@ templ stepUpBody(m authentication.StepUpPage) {
 // for (design §5.0). They are operation identifiers, never a credential; the service
 // is authoritative on what the grant authorizes.
 templ stepUpBinding(m authentication.StepUpPage) {
+	if m.Kind != "" {
+		<input type="hidden" name="kind" value={ m.Kind }/>
+	}
+	if m.Operation != "" {
+		<input type="hidden" name="operation" value={ m.Operation }/>
+	}
 	if m.Purpose != "" {
 		<input type="hidden" name="purpose" value={ m.Purpose }/>
 	}

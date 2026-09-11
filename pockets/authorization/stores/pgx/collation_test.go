@@ -23,9 +23,9 @@ import (
 	"strings"
 	"testing"
 
-	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
-	"github.com/gopernicus/gopernicus/pockets/authorization/domain/role"
-	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
+	"github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/roles"
+	"github.com/gopernicus/gopernicus/sdk/pkg/list"
 )
 
 // collatedColumn names one table column the canonical schema must pin to
@@ -36,22 +36,11 @@ type collatedColumn struct {
 	Why    string
 }
 
-// contractualCollatedColumns is the authorization inventory (AAH-5). relationship_id
-// is the keyset PK tiebreak of the relationship listings (and, since a
-// CreateRelationships batch shares one created_at, their effective discriminator).
-// Every iam_roles structural column feeds the derived role_key / grant_key ordering
-// expression, so ALL of them must be C for the concatenated key to sort byte-wise
-// (a mixed collation would raise an indeterminate-collation error). Deliberately
-// EXCLUDED: iam_relationships' resource_type/resource_id/relation/subject_type/
-// subject_id/subject_relation are the recursion columns of the reachable
-// userset-expansion CTE — collating them raises a recursive-term collation
-// mismatch (SQLSTATE 42P21) unless the store SQL also collates the anchor casts
-// (out of scope), and their ordering need only be a deterministic total order,
-// which any collation supplies; iam_scopes / iam_mutations are equality/unique
-// keys only (iam_scopes' lock order is computed in Go, not SQL). Byte parity
-// already holds for all of those under any deterministic collation.
+// Role key columns retain their contractual C collation. Relationship tuple
+// ordering pins C on the derived expression instead, avoiding changes to the
+// recursive CTE's column collations. The surrogate relationship ID is removed
+// by migration 0006.
 var contractualCollatedColumns = []collatedColumn{
-	{"iam_relationships", "relationship_id", "keyset PK tiebreak"},
 	{"iam_roles", "subject_type", "feeds derived role_key/grant_key ordering key"},
 	{"iam_roles", "subject_id", "feeds derived role_key/grant_key ordering key"},
 	{"iam_roles", "role", "feeds derived role_key/grant_key ordering key"},
@@ -66,7 +55,7 @@ func resetCanonicalSchema(t *testing.T, db *pgxdb.DB) {
 	t.Helper()
 	ctx := context.Background()
 	ensureSchema(t, db)
-	for _, tbl := range []string{"iam_mutations", "iam_scopes", "iam_roles", "iam_relationships"} {
+	for _, tbl := range []string{"iam_audit", "iam_mutations", "iam_scopes", "iam_roles", "iam_relationships"} {
 		if _, err := db.Exec(ctx, "DROP TABLE IF EXISTS "+qualify(t, tbl)+" CASCADE"); err != nil {
 			t.Fatalf("drop %s: %v", tbl, err)
 		}
@@ -150,7 +139,7 @@ func TestContractualCollation_SQL(t *testing.T) {
 // catalog reports collation_name = 'C' for every inventoried column.
 func TestContractualCollation_Catalog(t *testing.T) {
 	dsn := requireDSN(t)
-	db, err := pgxdb.Open(pgxdb.Config{DSN: dsn})
+	db, err := pgxdb.Open(context.Background(), pgxdb.Config{DSN: dsn})
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}
@@ -195,7 +184,7 @@ func TestCollationControlsOrdering_NonC(t *testing.T) {
 	if dsn == "" {
 		t.Skip("POSTGRES_NON_C_TEST_DSN not set — non-C ordering proof NOT verified")
 	}
-	db, err := pgxdb.Open(pgxdb.Config{DSN: dsn})
+	db, err := pgxdb.Open(context.Background(), pgxdb.Config{DSN: dsn})
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}
@@ -208,26 +197,26 @@ func TestCollationControlsOrdering_NonC(t *testing.T) {
 
 	resetCanonicalSchema(t, db)
 
-	repos, err := Repositories(db, storeOptions(t)...)
+	repos, err := Repositories(context.Background(), db, storeOptions(t)...)
 	if err != nil {
 		t.Fatalf("Repositories: %v", err)
 	}
-	roles := repos.Roles
+	roleStore := repos.Roles
 
 	// Two viewer grants scoped to one resource, differing only in subject_id. 'B'
 	// (0x42) sorts before 'a' (0x61) byte-wise; en_US.utf8 sorts 'a' before 'B'.
 	// The grant_key differs at that byte, so the derived-key ORDER BY reveals the
 	// winning collation.
-	for _, a := range []role.Assignment{
+	for _, a := range []roles.Assignment{
 		{SubjectType: "user", SubjectID: "aaa-collate-proof", Role: "viewer", ResourceType: "doc", ResourceID: "d-collate-proof"},
 		{SubjectType: "user", SubjectID: "BBB-collate-proof", Role: "viewer", ResourceType: "doc", ResourceID: "d-collate-proof"},
 	} {
-		if err := roles.Assign(ctx, a); err != nil {
+		if err := roleStore.Assign(ctx, a); err != nil {
 			t.Fatalf("Assign %s: %v", a.SubjectID, err)
 		}
 	}
 
-	page, err := roles.ListEffectiveByResource(ctx, "doc", "d-collate-proof", crud.ListRequest{})
+	page, err := roleStore.ListEffectiveByResource(ctx, "doc", "d-collate-proof", list.Request{})
 	if err != nil {
 		t.Fatalf("ListEffectiveByResource: %v", err)
 	}

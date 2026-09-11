@@ -45,7 +45,6 @@ type pocketParams struct {
 	Pocket     string // notes  — the pocket/core package name
 	Agg        string // note   — the domain package name (also the table name)
 	AggTitle   string // Note   — the exported entity type
-	AggSvc     string // notesvc — the internal service package
 	ReposField string // Notes  — the Repositories struct field (title-cased plural)
 	Source     string // notes  — the migration source (== Pocket)
 
@@ -149,7 +148,6 @@ func buildPocketParams(moduleRoot, name, aggregate string) (pocketParams, error)
 		Pocket:        name,
 		Agg:           aggregate,
 		AggTitle:      title(aggregate),
-		AggSvc:        aggregate + "svc",
 		ReposField:    title(aggregate) + "s",
 		Source:        name,
 		PgxVersion:    pgxVersion,
@@ -159,7 +157,7 @@ func buildPocketParams(moduleRoot, name, aggregate string) (pocketParams, error)
 }
 
 // emitPocket renders the standalone pocket tree: the sdk-only core (socket,
-// domain rim, sealed service, storetest + in-core memstore reference) plus the
+// public logic service and contracts, memory + storetest packages) plus the
 // stores/turso and stores/pgx sibling modules (Q2: both always).
 func emitPocket(targetDir string, p pocketParams) error {
 	agg := p.Agg
@@ -167,13 +165,14 @@ func emitPocket(targetDir string, p pocketParams) error {
 		// Core module.
 		{Template: "templates/pocket/core.go.mod.tmpl", Out: "go.mod"},
 		{Template: "templates/pocket/socket.go.tmpl", Out: p.Pocket + ".go", Format: true},
-		{Template: "templates/pocket/entity.go.tmpl", Out: filepath.Join("domain", agg, agg+".go"), Format: true},
-		{Template: "templates/pocket/order.go.tmpl", Out: filepath.Join("domain", agg, "order.go"), Format: true},
-		{Template: "templates/pocket/repository.go.tmpl", Out: filepath.Join("domain", agg, "repository.go"), Format: true},
-		{Template: "templates/pocket/service.go.tmpl", Out: filepath.Join("internal", "logic", p.AggSvc, "service.go"), Format: true},
-		{Template: "templates/pocket/storetest.go.tmpl", Out: filepath.Join("storetest", "storetest.go"), Format: true},
-		{Template: "templates/pocket/memstore.go.tmpl", Out: filepath.Join("memstore", "memstore.go"), Format: true},
-		{Template: "templates/pocket/memstore_conformance_test.go.tmpl", Out: filepath.Join("memstore", "conformance_test.go"), Format: true},
+		{Template: "templates/pocket/service.go.tmpl", Out: filepath.Join("logic", agg, "service.go"), Format: true},
+		{Template: "templates/pocket/service_test.go.tmpl", Out: filepath.Join("logic", agg, "service_test.go"), Format: true},
+		{Template: "templates/pocket/entity.go.tmpl", Out: filepath.Join("logic", agg, agg+".go"), Format: true},
+		{Template: "templates/pocket/order.go.tmpl", Out: filepath.Join("logic", agg, "order.go"), Format: true},
+		{Template: "templates/pocket/repository.go.tmpl", Out: filepath.Join("logic", agg, "repository.go"), Format: true},
+		{Template: "templates/pocket/storetest.go.tmpl", Out: filepath.Join("stores", "storetest", "storetest.go"), Format: true},
+		{Template: "templates/pocket/memory.go.tmpl", Out: filepath.Join("stores", "memory", "memory.go"), Format: true},
+		{Template: "templates/pocket/memory_conformance_test.go.tmpl", Out: filepath.Join("stores", "memory", "conformance_test.go"), Format: true},
 		{Template: "templates/pocket/readme.md.tmpl", Out: "README.md"},
 
 		// stores/turso.
@@ -235,7 +234,7 @@ not register modules — complete these steps by hand:
   3. Makefile STORE_MODULES: append %[2]s/stores/pgx and %[2]s/stores/turso.
   4. Makefile test-stores: add a pgx (plain) and a turso (-tags=integration) leg
      for the two store modules.
-  5. guard-pocket-core-sdk-only (G5): add %[3]s to the hardcoded pocket list —
+  5. guard-pocket-dependencies (G5): add %[3]s to the hardcoded pocket list —
      it is the one manually-extended guard.
 
 Then drop the emitted go.mod sibling replace directives (go.work resolves the
@@ -259,9 +258,9 @@ Flags:
   --dir         target directory (default: <name> under the current directory)
 
 Emits a STANDALONE, born-conforming pocket tree: an sdk-only core (the FS2
-socket, the domain rim with an order allow-list, a sealed create/get/list/delete
-service, a storetest conformance suite + an in-core memstore reference) plus
-stores/turso and stores/pgx sibling modules. Mounts no routes — Register logs
-only. See the emitted README for wiring + resolution instructions.
+composition root, a public logic service with an order allow-list and create/get/list/delete
+service, stores/storetest conformance + stores/memory reference packages) plus
+stores/turso and stores/pgx sibling modules. Mounts no routes. See the emitted
+README for wiring + resolution instructions.
 `)
 }

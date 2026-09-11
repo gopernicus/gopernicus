@@ -336,7 +336,7 @@ jobs:
       # explicitly). A store train appends its manifest here in the same change
       # that adds its live step, because a store whose composites were never
       # deployed fails live as FAILED_PRECONDITION that reads like a store bug.
-      FIRESTORE_LIVE_INDEXES: pockets/authorization/stores/firestore/firestore.indexes.json
+      FIRESTORE_LIVE_INDEXES: pockets/authorization/stores/firestore/firestore.indexes.json pockets/authorization/stores/firestore/firestore.audit.indexes.json
       # Force-unset. Nothing else in this job writes FIRESTORE_EMULATOR_HOST —
       # this line exists so that a value inherited from anywhere (a future
       # repo-level env, a runner image default) cannot point the "live" leg at an

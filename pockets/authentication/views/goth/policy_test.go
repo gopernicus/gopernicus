@@ -7,18 +7,18 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/gopernicus/gopernicus/pockets/authentication"
+	inbound "github.com/gopernicus/gopernicus/pockets/authentication/inbound/http"
 	uigoth "github.com/gopernicus/gopernicus/ui/goth"
 )
 
 // findDirective returns the produced directive of the given kind, or ok=false.
-func findDirective(dirs []authentication.HTMLResourceDirective, kind authentication.HTMLResourceKind) (authentication.HTMLResourceDirective, bool) {
+func findDirective(dirs []inbound.HTMLResourceDirective, kind inbound.HTMLResourceKind) (inbound.HTMLResourceDirective, bool) {
 	for _, d := range dirs {
 		if d.Kind == kind {
 			return d, true
 		}
 	}
-	return authentication.HTMLResourceDirective{}, false
+	return inbound.HTMLResourceDirective{}, false
 }
 
 func hasSource(sources []string, want string) bool {
@@ -32,7 +32,7 @@ func hasSource(sources []string, want string) bool {
 
 func viewsForProfile(t *testing.T, p uigoth.Profile) Views {
 	t.Helper()
-	b, err := uigoth.New(uigoth.Config{Profile: p})
+	b, err := uigoth.New(uigoth.WithProfile(p))
 	if err != nil {
 		t.Fatalf("bundle: %v", err)
 	}
@@ -52,7 +52,7 @@ func viewsForProfile(t *testing.T, p uigoth.Profile) Views {
 func TestHTMLPolicy_ScriptSrcCarriesNonce(t *testing.T) {
 	for _, p := range []uigoth.Profile{uigoth.StylesOnly, uigoth.Interactive, uigoth.Full} {
 		dirs := viewsForProfile(t, p).resourceDirectives()
-		script, ok := findDirective(dirs, authentication.HTMLScriptSrc)
+		script, ok := findDirective(dirs, inbound.HTMLScriptSrc)
 		if !ok {
 			t.Fatalf("profile %d: produced policy has no script-src directive", p)
 		}
@@ -69,7 +69,7 @@ func TestHTMLPolicy_ScriptSrcCarriesNonce(t *testing.T) {
 // the ui/goth stylesheet loads under the pocket's default-src 'none' CSP.
 func TestHTMLPolicy_StyleSrcSelf(t *testing.T) {
 	dirs := viewsForProfile(t, uigoth.StylesOnly).resourceDirectives()
-	style, ok := findDirective(dirs, authentication.HTMLStyleSrc)
+	style, ok := findDirective(dirs, inbound.HTMLStyleSrc)
 	if !ok {
 		t.Fatal("produced policy has no style-src directive")
 	}
@@ -124,7 +124,7 @@ func TestFragmentScriptHandler(t *testing.T) {
 
 // TestWithFragmentScriptPath overrides the served path for the reader script.
 func TestWithFragmentScriptPath(t *testing.T) {
-	b, err := uigoth.New(uigoth.Config{})
+	b, err := uigoth.New()
 	if err != nil {
 		t.Fatalf("bundle: %v", err)
 	}
@@ -132,7 +132,7 @@ func TestWithFragmentScriptPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	body := render(t, v.ResetPassword(authentication.ResetPage{RedeemPath: "/auth/password/reset"}))
+	body := render(t, v.ResetPassword(inbound.ResetPage{RedeemPath: "/auth/password/reset"}))
 	mustContain(t, "custom path", body, `src="/custom/reader.js"`)
 }
 
@@ -144,7 +144,7 @@ func TestWithFragmentScriptPath(t *testing.T) {
 func TestHTMLPolicy_ImgAndFontSrcSelf(t *testing.T) {
 	for _, p := range []uigoth.Profile{uigoth.StylesOnly, uigoth.Interactive, uigoth.Full} {
 		dirs := viewsForProfile(t, p).resourceDirectives()
-		for _, kind := range []authentication.HTMLResourceKind{authentication.HTMLImgSrc, authentication.HTMLFontSrc} {
+		for _, kind := range []inbound.HTMLResourceKind{inbound.HTMLImgSrc, inbound.HTMLFontSrc} {
 			dir, ok := findDirective(dirs, kind)
 			if !ok {
 				t.Fatalf("profile %d: produced policy has no %s directive", p, kind)

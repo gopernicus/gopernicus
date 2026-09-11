@@ -6,7 +6,7 @@ import (
 	"net/http"
 
 	"github.com/gopernicus/gopernicus/pockets/cms/domain/media"
-	"github.com/gopernicus/gopernicus/sdk/foundation/web"
+	"github.com/gopernicus/gopernicus/sdk/pkg/web"
 )
 
 // maxUploadBytes caps a single multipart upload (32 MiB).

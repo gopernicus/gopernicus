@@ -1,0 +1,7 @@
+To finish linking your {{.ProviderName}} account, confirm with {{if .Link}}this link:
+{{.Link}}
+
+It can be used once and expires shortly.{{else}}this token:
+{{.Secret}}{{end}}
+
+If you did not start this, you can ignore this message.

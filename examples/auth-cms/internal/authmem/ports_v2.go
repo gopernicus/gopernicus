@@ -6,14 +6,15 @@ import (
 	"sort"
 	"time"
 
-	"github.com/gopernicus/gopernicus/pockets/authentication/domain/apikey"
-	"github.com/gopernicus/gopernicus/pockets/authentication/domain/invitation"
-	"github.com/gopernicus/gopernicus/pockets/authentication/domain/oauthaccount"
-	"github.com/gopernicus/gopernicus/pockets/authentication/domain/oauthstate"
-	"github.com/gopernicus/gopernicus/pockets/authentication/domain/securityevent"
-	"github.com/gopernicus/gopernicus/pockets/authentication/domain/serviceaccount"
+	apikey "github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/apikey"
+	oauthaccount "github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/oauthaccount"
+	oauthstate "github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/oauthstate"
+	securityevent "github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/securityevent"
+	serviceaccount "github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/serviceaccount"
+	session "github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/session"
+	invitation "github.com/gopernicus/gopernicus/pockets/authentication/logic/invitations"
 	"github.com/gopernicus/gopernicus/sdk"
-	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
+	"github.com/gopernicus/gopernicus/sdk/pkg/list"
 )
 
 // orderField is the keyset order column every paginated auth port pages by; it
@@ -38,6 +39,13 @@ type oauthAccountRepo struct{ *data }
 func (r oauthAccountRepo) Create(_ context.Context, a oauthaccount.OAuthAccount) (oauthaccount.OAuthAccount, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	u, ok := r.users[a.UserID]
+	if !ok {
+		return oauthaccount.OAuthAccount{}, sdk.ErrNotFound
+	}
+	if !u.Active() {
+		return oauthaccount.OAuthAccount{}, session.ErrUserNotActive
+	}
 	for _, ex := range r.oauthAccounts {
 		if ex.Provider == a.Provider && ex.ProviderUserID == a.ProviderUserID {
 			return oauthaccount.OAuthAccount{}, sdk.ErrAlreadyExists
@@ -73,9 +81,19 @@ func (r oauthAccountRepo) ListByUser(_ context.Context, userID string) ([]oautha
 func (r oauthAccountRepo) Delete(_ context.Context, userID, provider string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	u, ok := r.users[userID]
+	if !ok {
+		return sdk.ErrNotFound
+	}
+	if !u.Active() {
+		return session.ErrUserNotActive
+	}
+
 	for i, a := range r.oauthAccounts {
 		if a.UserID == userID && a.Provider == provider {
 			r.oauthAccounts = append(r.oauthAccounts[:i], r.oauthAccounts[i+1:]...)
+			r.advanceCredentialRevisionLocked(userID, time.Now())
+			r.revokeCredentialStateLocked(userID)
 			return nil
 		}
 	}
@@ -135,7 +153,7 @@ func (r serviceAccountRepo) Get(_ context.Context, id string) (serviceaccount.Se
 	return sa, nil
 }
 
-func (r serviceAccountRepo) List(_ context.Context, req crud.ListRequest) (crud.Page[serviceaccount.ServiceAccount], error) {
+func (r serviceAccountRepo) List(_ context.Context, req list.Request) (list.Page[serviceaccount.ServiceAccount], error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	all := make([]serviceaccount.ServiceAccount, 0, len(r.serviceAccounts))
@@ -199,8 +217,8 @@ func (r apiKeyRepo) GetByHash(_ context.Context, keyHash string) (apikey.APIKey,
 	return apikey.APIKey{}, sdk.ErrNotFound
 }
 
-func (r apiKeyRepo) ListByServiceAccount(_ context.Context, serviceAccountID string, req crud.ListRequest) (crud.Page[apikey.APIKey], error) {
-	// The search term is applied through crud.MatchesSearch — the SHARED oracle the
+func (r apiKeyRepo) ListByServiceAccount(_ context.Context, serviceAccountID string, req list.Request) (list.Page[apikey.APIKey], error) {
+	// The search term is applied through list.MatchesSearch — the SHARED oracle the
 	// SQL dialects are pinned against (crud-search-upstream T4) — so this host
 	// store cannot disagree with Postgres or libSQL about what a term matches.
 	r.mu.RLock()
@@ -210,7 +228,7 @@ func (r apiKeyRepo) ListByServiceAccount(_ context.Context, serviceAccountID str
 		if k.ServiceAccountID != serviceAccountID {
 			continue
 		}
-		if !crud.MatchesSearch(k.Name, req.Search) {
+		if !list.MatchesSearch(k.Name, req.Search) {
 			continue
 		}
 		all = append(all, k)
@@ -260,7 +278,7 @@ func (r securityEventRepo) Create(_ context.Context, evt securityevent.SecurityE
 	return evt, nil
 }
 
-func (r securityEventRepo) List(_ context.Context, filter securityevent.ListFilter, req crud.ListRequest) (crud.Page[securityevent.SecurityEvent], error) {
+func (r securityEventRepo) List(_ context.Context, filter securityevent.ListFilter, req list.Request) (list.Page[securityevent.SecurityEvent], error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	all := make([]securityevent.SecurityEvent, 0)
@@ -291,11 +309,20 @@ type invitationRepo struct{ *data }
 // relation) — kind-aware (migration 0013), so the same value coexists across
 // kinds. Once a row moves off pending, a new pending invite for the same tuple
 // succeeds.
-func (r invitationRepo) Create(_ context.Context, inv invitation.Invitation) (invitation.Invitation, error) {
+func (r invitationRepo) Create(ctx context.Context, inv invitation.Invitation) (invitation.Invitation, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return invitation.Invitation{}, err
+	}
+	if inv.Status != invitation.StatusPending || inv.ResolvedSubjectType != "" {
+		return invitation.Invitation{}, sdk.ErrInvalidInput
+	}
 	for _, ex := range r.invitations {
-		if ex.Status == invitation.StatusPending &&
+		if (inv.ID != "" && ex.ID == inv.ID) || ex.TokenHash == inv.TokenHash {
+			return invitation.Invitation{}, sdk.ErrAlreadyExists
+		}
+		if ex.Active() &&
 			ex.ResourceType == inv.ResourceType && ex.ResourceID == inv.ResourceID &&
 			ex.IdentifierKind == inv.IdentifierKind &&
 			ex.Identifier == inv.Identifier && ex.Relation == inv.Relation {
@@ -309,8 +336,8 @@ func (r invitationRepo) Create(_ context.Context, inv invitation.Invitation) (in
 	// Mirror the SQL stores' nil/empty → '{}' round-trip and defensive copy: a
 	// stored row always carries a non-nil metadata map the caller cannot mutate.
 	inv.Metadata = invitation.CloneMetadata(inv.Metadata)
-	r.invitations[inv.ID] = inv
-	return inv, nil
+	r.invitations[inv.ID] = inv.Clone()
+	return inv.Clone(), nil
 }
 
 func (r invitationRepo) Get(_ context.Context, id string) (invitation.Invitation, error) {
@@ -320,7 +347,7 @@ func (r invitationRepo) Get(_ context.Context, id string) (invitation.Invitation
 	if !ok {
 		return invitation.Invitation{}, sdk.ErrNotFound
 	}
-	return inv, nil
+	return inv.Clone(), nil
 }
 
 // GetByTokenHash returns the invitation for tokenHash; a present row past its
@@ -330,34 +357,34 @@ func (r invitationRepo) GetByTokenHash(_ context.Context, tokenHash string) (inv
 	defer r.mu.RUnlock()
 	for _, inv := range r.invitations {
 		if inv.TokenHash == tokenHash {
-			if inv.Expired(time.Now()) {
+			if inv.Status != invitation.StatusAccepting && inv.Status != invitation.StatusAccepted && inv.Expired(time.Now()) {
 				return invitation.Invitation{}, sdk.ErrExpired
 			}
-			return inv, nil
+			return inv.Clone(), nil
 		}
 	}
 	return invitation.Invitation{}, sdk.ErrNotFound
 }
 
-func (r invitationRepo) ListByResource(_ context.Context, resourceType, resourceID string, req crud.ListRequest) (crud.Page[invitation.Invitation], error) {
+func (r invitationRepo) ListByResource(_ context.Context, resourceType, resourceID string, req list.Request) (list.Page[invitation.Invitation], error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	all := make([]invitation.Invitation, 0)
 	for _, inv := range r.invitations {
 		if inv.ResourceType == resourceType && inv.ResourceID == resourceID {
-			all = append(all, inv)
+			all = append(all, inv.Clone())
 		}
 	}
 	return page(all, req, func(inv invitation.Invitation) (time.Time, string) { return inv.CreatedAt, inv.ID })
 }
 
-func (r invitationRepo) ListBySubject(_ context.Context, kind, identifier string, req crud.ListRequest) (crud.Page[invitation.Invitation], error) {
+func (r invitationRepo) ListBySubject(_ context.Context, kind, identifier string, req list.Request) (list.Page[invitation.Invitation], error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	all := make([]invitation.Invitation, 0)
 	for _, inv := range r.invitations {
 		if inv.IdentifierKind == kind && inv.Identifier == identifier {
-			all = append(all, inv)
+			all = append(all, inv.Clone())
 		}
 	}
 	return page(all, req, func(inv invitation.Invitation) (time.Time, string) { return inv.CreatedAt, inv.ID })
@@ -365,38 +392,86 @@ func (r invitationRepo) ListBySubject(_ context.Context, kind, identifier string
 
 // UpdateStatus applies the lifecycle transition's mutable subset, leaving the
 // immutable fields (id, resource, identifier, invited-by, created-at) intact.
-func (r invitationRepo) UpdateStatus(_ context.Context, id string, upd invitation.StatusUpdate) (invitation.Invitation, error) {
+func (r invitationRepo) UpdateStatus(ctx context.Context, id string, upd invitation.StatusUpdate) (invitation.Invitation, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return invitation.Invitation{}, err
+	}
 	inv, ok := r.invitations[id]
 	if !ok {
 		return invitation.Invitation{}, sdk.ErrNotFound
 	}
-	inv.Status = upd.Status
-	inv.TokenHash = upd.TokenHash
-	inv.ExpiresAt = upd.ExpiresAt
-	inv.AcceptedAt = upd.AcceptedAt
-	inv.ResolvedSubjectID = upd.ResolvedSubjectID
-	inv.UpdatedAt = upd.UpdatedAt
-	r.invitations[id] = inv
-	return inv, nil
+	updated, err := inv.UpdateStatus(upd)
+	if err != nil {
+		return invitation.Invitation{}, err
+	}
+	for existingID, existing := range r.invitations {
+		if existingID == id {
+			continue
+		}
+		if existing.TokenHash == updated.TokenHash {
+			return invitation.Invitation{}, sdk.ErrAlreadyExists
+		}
+		if existing.Active() && updated.Active() && existing.ResourceType == updated.ResourceType && existing.ResourceID == updated.ResourceID && existing.IdentifierKind == updated.IdentifierKind && existing.Identifier == updated.Identifier && existing.Relation == updated.Relation {
+			return invitation.Invitation{}, sdk.ErrAlreadyExists
+		}
+	}
+	r.invitations[id] = updated.Clone()
+	return updated.Clone(), nil
+}
+
+func (r invitationRepo) ClaimAcceptance(ctx context.Context, id string, claim invitation.Acceptance) (invitation.Invitation, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return invitation.Invitation{}, err
+	}
+	inv, ok := r.invitations[id]
+	if !ok {
+		return invitation.Invitation{}, sdk.ErrNotFound
+	}
+	updated, err := inv.ClaimAcceptance(claim)
+	if err != nil {
+		return invitation.Invitation{}, err
+	}
+	r.invitations[id] = updated.Clone()
+	return updated.Clone(), nil
+}
+
+func (r invitationRepo) CompleteAcceptance(ctx context.Context, id string, claim invitation.Acceptance) (invitation.Invitation, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return invitation.Invitation{}, err
+	}
+	inv, ok := r.invitations[id]
+	if !ok {
+		return invitation.Invitation{}, sdk.ErrNotFound
+	}
+	updated, err := inv.CompleteAcceptance(claim)
+	if err != nil {
+		return invitation.Invitation{}, err
+	}
+	r.invitations[id] = updated.Clone()
+	return updated.Clone(), nil
 }
 
 // --- shared pagination ---
 
 // page sorts items by (created_at, id) in the resolved direction, then applies
-// the sdk/foundation/crud list matrix — cursor or offset mode, the reverse-probe prev page,
+// the sdk/pkg/list list matrix — cursor or offset mode, the reverse-probe prev page,
 // and the optional count — the keyset shape a dialect store implements in SQL,
 // hand-rolled here so this memstore paginates identically (the jobs memstore
 // precedent). created_at is the only sortable field.
-func page[T any](items []T, req crud.ListRequest, key func(T) (time.Time, string)) (crud.Page[T], error) {
+func page[T any](items []T, req list.Request, key func(T) (time.Time, string)) (list.Page[T], error) {
 	if err := req.Validate(); err != nil {
-		return crud.Page[T]{}, err
+		return list.Page[T]{}, err
 	}
 	if req.Order.Field != "" && req.Order.Field != orderField {
-		return crud.Page[T]{}, fmt.Errorf("unknown order field %q: %w", req.Order.Field, sdk.ErrInvalidInput)
+		return list.Page[T]{}, fmt.Errorf("unknown order field %q: %w", req.Order.Field, sdk.ErrInvalidInput)
 	}
-	asc := req.Order.Direction == crud.ASC
+	asc := req.Order.Direction == list.ASC
 
 	sort.Slice(items, func(i, j int) bool {
 		ti, ii := key(items[i])
@@ -414,13 +489,13 @@ func page[T any](items []T, req crud.ListRequest, key func(T) (time.Time, string
 	})
 
 	total := int64(len(items))
-	limit := req.NormalizedLimit(crud.Limits{})
+	limit := req.NormalizedLimit(list.Limits{})
 	encode := func(it T) (string, error) {
 		t, id := key(it)
-		return crud.EncodeCursor(orderField, t, id)
+		return list.EncodeCursor(orderField, t, id)
 	}
 
-	if req.ResolvedStrategy() == crud.StrategyOffset {
+	if req.ResolvedStrategy() == list.StrategyOffset {
 		window := items
 		if req.Offset < len(window) {
 			window = window[req.Offset:]
@@ -430,9 +505,9 @@ func page[T any](items []T, req crud.ListRequest, key func(T) (time.Time, string
 		if len(window) > limit+1 {
 			window = window[:limit+1]
 		}
-		pg, err := crud.TrimPage(window, limit, encode)
+		pg, err := list.TrimPage(window, limit, encode)
 		if err != nil {
-			return crud.Page[T]{}, err
+			return list.Page[T]{}, err
 		}
 		pg.NextCursor = ""
 		pg.HasPrev = req.Offset > 0
@@ -442,14 +517,19 @@ func page[T any](items []T, req crud.ListRequest, key func(T) (time.Time, string
 		return pg, nil
 	}
 
-	cur, err := crud.DecodeCursor(req.Cursor, orderField)
+	cur, err := list.DecodeCursor(req.Cursor, orderField)
 	if err != nil {
-		return crud.Page[T]{}, err
+		return list.Page[T]{}, err
 	}
 
+	var cv time.Time
 	forward := items
 	if cur != nil {
-		cv, _ := cur.OrderValue.(time.Time)
+		var ok bool
+		cv, ok = cur.OrderValue.(time.Time)
+		if !ok {
+			return list.Page[T]{}, fmt.Errorf("cursor order value must be a timestamp: %w", sdk.ErrInvalidInput)
+		}
 		forward = forward[:0:0]
 		for _, it := range items {
 			t, id := key(it)
@@ -462,26 +542,25 @@ func page[T any](items []T, req crud.ListRequest, key func(T) (time.Time, string
 	if len(window) > limit+1 {
 		window = window[:limit+1]
 	}
-	pg, err := crud.TrimPage(window, limit, encode)
+	pg, err := list.TrimPage(window, limit, encode)
 	if err != nil {
-		return crud.Page[T]{}, err
+		return list.Page[T]{}, err
 	}
 
 	if cur != nil {
-		cv, _ := cur.OrderValue.(time.Time)
 		var before []T
 		for _, it := range items {
 			t, id := key(it)
-			if beforeCursor(t, id, cv, cur.PK, asc) {
+			if !afterCursor(t, id, cv, cur.PK, asc) {
 				before = append(before, it)
 			}
 		}
-		// The previous page is the `limit` rows immediately before the cursor.
-		if len(before) > limit {
-			before = before[len(before)-limit:]
+		// Include the boundary and one extra predecessor for the previous cursor.
+		if len(before) > limit+1 {
+			before = before[len(before)-limit-1:]
 		}
-		if err := crud.MarkPrevPage(&pg, before, limit, encode); err != nil {
-			return crud.Page[T]{}, err
+		if err := list.MarkPrevPage(&pg, before, limit, encode); err != nil {
+			return list.Page[T]{}, err
 		}
 	}
 
@@ -504,19 +583,4 @@ func afterCursor(t time.Time, id string, cv time.Time, cpk string, asc bool) boo
 		return id > cpk
 	}
 	return id < cpk
-}
-
-// beforeCursor reports whether (t, id) sorts strictly before the cursor under the
-// resolved direction — the reverse-probe predicate.
-func beforeCursor(t time.Time, id string, cv time.Time, cpk string, asc bool) bool {
-	if !t.Equal(cv) {
-		if asc {
-			return t.Before(cv)
-		}
-		return t.After(cv)
-	}
-	if asc {
-		return id < cpk
-	}
-	return id > cpk
 }

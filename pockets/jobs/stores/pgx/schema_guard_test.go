@@ -80,7 +80,7 @@ func TestNoBareTableReferences(t *testing.T) {
 // bare names byte-for-byte as this store always has, and WithSchema qualifies
 // every store's table() with the quoted schema.
 func TestWithSchema(t *testing.T) {
-	db := (*pgxdb.DB)(nil)
+	db := &pgxdb.DB{}
 
 	t.Run("zero schema renders bare", func(t *testing.T) {
 		if got := NewQueueStore(db).table("job_queue"); got != "job_queue" {
@@ -128,7 +128,7 @@ func TestWithLease(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := NewQueueStore(nil, tc.opts...).lease; got != tc.want {
+			if got := NewQueueStore(&pgxdb.DB{}, tc.opts...).lease; got != tc.want {
 				t.Errorf("lease = %v, want %v", got, tc.want)
 			}
 		})

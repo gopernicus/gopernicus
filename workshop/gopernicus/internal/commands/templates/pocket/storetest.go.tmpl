@@ -16,19 +16,19 @@ import (
 	"time"
 
 	{{.Pocket}} "{{.ModulePath}}"
-	"{{.ModulePath}}/domain/{{.Agg}}"
-	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
-	"github.com/gopernicus/gopernicus/sdk/foundation/cryptids"
+	"{{.ModulePath}}/logic/{{.Agg}}"
+	listing "github.com/gopernicus/gopernicus/sdk/pkg/list"
+
 	"github.com/gopernicus/gopernicus/sdk"
 )
 
 var (
 	// ids is the suite's entity-ID generator: the default nanoid strategy,
-	// matching the pocket's zero-value Config.IDs.
-	ids = cryptids.IDGenerator{}
-	// dbIDs is the cryptids.Database strategy: entities reach Create with an empty
+	// matching the pocket's default ID generator.
+	ids = sdk.IDGenerator{}
+	// dbIDs is the sdk.DatabaseID strategy: entities reach Create with an empty
 	// id and the store must assign the database-generated key.
-	dbIDs = cryptids.NewGenerator(cryptids.Database)
+	dbIDs = sdk.NewIDGenerator(sdk.DatabaseID)
 	// suiteBase is a fixed reference instant the pagination cases offset from.
 	suiteBase = time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
 )
@@ -136,7 +136,7 @@ func testRejectsUnknownOrder(t *testing.T, repos {{.Pocket}}.Repositories) {
 	mustCreate(t, store, "one", suiteBase)
 	// An order field outside {{.Agg}}.OrderFields (created_at only) is rejected
 	// with ErrInvalidInput identically across every backend.
-	if _, err := store.List(ctx, {{.Pocket}}.ListFilter{}, crud.ListRequest{Order: crud.NewOrder("name", crud.ASC)}); !errors.Is(err, sdk.ErrInvalidInput) {
+	if _, err := store.List(ctx, {{.Agg}}.ListFilter{}, listing.Request{Order: listing.NewOrder("name", listing.ASC)}); !errors.Is(err, sdk.ErrInvalidInput) {
 		t.Fatalf("unknown order field must reject with ErrInvalidInput, got %v", err)
 	}
 }
@@ -144,7 +144,7 @@ func testRejectsUnknownOrder(t *testing.T, repos {{.Pocket}}.Repositories) {
 // --- the standard paginated-port case family (pgx-crud-v1, checklist 13) ---
 
 // listFunc runs a List against the scoped (Name == scopedName) filter.
-type listFunc func(ctx context.Context, req crud.ListRequest) (crud.Page[{{.Agg}}.{{.AggTitle}}], error)
+type listFunc func(ctx context.Context, req listing.Request) (listing.Page[{{.Agg}}.{{.AggTitle}}], error)
 
 // runPagedFamily wires the six standard cases. Each obtains a clean, isolated
 // Repositories and seeds its own population, matching the per-leaf isolation
@@ -153,8 +153,8 @@ func runPagedFamily(t *testing.T, newRepos func(t *testing.T) {{.Pocket}}.Reposi
 	t.Helper()
 
 	scoped := func(repos {{.Pocket}}.Repositories) listFunc {
-		return func(ctx context.Context, req crud.ListRequest) (crud.Page[{{.Agg}}.{{.AggTitle}}], error) {
-			return repos.{{.ReposField}}.List(ctx, {{.Pocket}}.ListFilter{Name: scopedName}, req)
+		return func(ctx context.Context, req listing.Request) (listing.Page[{{.Agg}}.{{.AggTitle}}], error) {
+			return repos.{{.ReposField}}.List(ctx, {{.Agg}}.ListFilter{Name: scopedName}, req)
 		}
 	}
 
@@ -210,11 +210,11 @@ func seedFamily(t *testing.T, repos {{.Pocket}}.Repositories) ([]{{.Agg}}.{{.Agg
 func runOrderCase(t *testing.T, list listFunc, created []{{.Agg}}.{{.AggTitle}}) {
 	t.Helper()
 	wantAsc := sortedIDs(created, true)
-	if got := pageAllOrdered(t, list, crud.NewOrder("created_at", crud.ASC), 2); !equalStrings(got, wantAsc) {
+	if got := pageAllOrdered(t, list, listing.NewOrder("created_at", listing.ASC), 2); !equalStrings(got, wantAsc) {
 		t.Errorf("asc order = %v, want %v", got, wantAsc)
 	}
 	wantDesc := sortedIDs(created, false)
-	if got := pageAllOrdered(t, list, crud.NewOrder("created_at", crud.DESC), 2); !equalStrings(got, wantDesc) {
+	if got := pageAllOrdered(t, list, listing.NewOrder("created_at", listing.DESC), 2); !equalStrings(got, wantDesc) {
 		t.Errorf("desc order = %v, want %v", got, wantDesc)
 	}
 }
@@ -228,7 +228,7 @@ func runPrevPageCase(t *testing.T, list listFunc, created []{{.Agg}}.{{.AggTitle
 		t.Fatalf("prev-page case needs >= 6 seeded rows, got %d", len(desc))
 	}
 
-	page1, err := list(ctx, crud.ListRequest{Limit: 2})
+	page1, err := list(ctx, listing.Request{Limit: 2})
 	if err != nil {
 		t.Fatalf("page1: %v", err)
 	}
@@ -239,7 +239,7 @@ func runPrevPageCase(t *testing.T, list listFunc, created []{{.Agg}}.{{.AggTitle
 		t.Errorf("page1 = %v, want %v", got, desc[0:2])
 	}
 
-	page2, err := list(ctx, crud.ListRequest{Limit: 2, Cursor: page1.NextCursor})
+	page2, err := list(ctx, listing.Request{Limit: 2, Cursor: page1.NextCursor})
 	if err != nil {
 		t.Fatalf("page2: %v", err)
 	}
@@ -257,7 +257,7 @@ func runPrevPageCase(t *testing.T, list listFunc, created []{{.Agg}}.{{.AggTitle
 		t.Errorf("previous of page2 = %v, want page1 %v", got, desc[0:2])
 	}
 
-	page3, err := list(ctx, crud.ListRequest{Limit: 2, Cursor: page2.NextCursor})
+	page3, err := list(ctx, listing.Request{Limit: 2, Cursor: page2.NextCursor})
 	if err != nil {
 		t.Fatalf("page3: %v", err)
 	}
@@ -280,11 +280,11 @@ func runOffsetModeCase(t *testing.T, list listFunc, created []{{.Agg}}.{{.AggTit
 	ctx := context.Background()
 	_ = created
 
-	cursorIDs := pageAllOrdered(t, list, crud.Order{}, 2)
+	cursorIDs := pageAllOrdered(t, list, listing.Order{}, 2)
 
 	var offsetIDs []string
 	for off := 0; off < 100; off += 2 {
-		page, err := list(ctx, crud.ListRequest{Strategy: crud.StrategyOffset, Limit: 2, Offset: off})
+		page, err := list(ctx, listing.Request{Strategy: listing.StrategyOffset, Limit: 2, Offset: off})
 		if err != nil {
 			t.Fatalf("offset page at %d: %v", off, err)
 		}
@@ -303,7 +303,7 @@ func runOffsetModeCase(t *testing.T, list listFunc, created []{{.Agg}}.{{.AggTit
 		t.Errorf("offset traversal = %v, want cursor traversal %v", offsetIDs, cursorIDs)
 	}
 
-	zero, err := list(ctx, crud.ListRequest{Strategy: crud.StrategyOffset, Limit: 2, Offset: 0})
+	zero, err := list(ctx, listing.Request{Strategy: listing.StrategyOffset, Limit: 2, Offset: 0})
 	if err != nil {
 		t.Fatalf("offset-zero page: %v", err)
 	}
@@ -321,7 +321,7 @@ func runWithCountCase(t *testing.T, list listFunc, wantTotal int) {
 	t.Helper()
 	ctx := context.Background()
 
-	cursorPage, err := list(ctx, crud.ListRequest{Limit: 2, WithCount: true})
+	cursorPage, err := list(ctx, listing.Request{Limit: 2, WithCount: true})
 	if err != nil {
 		t.Fatalf("cursor+count: %v", err)
 	}
@@ -329,7 +329,7 @@ func runWithCountCase(t *testing.T, list listFunc, wantTotal int) {
 		t.Errorf("cursor-mode Total = %v, want %d", cursorPage.Total, wantTotal)
 	}
 
-	offsetPage, err := list(ctx, crud.ListRequest{Strategy: crud.StrategyOffset, Limit: 2, Offset: 2, WithCount: true})
+	offsetPage, err := list(ctx, listing.Request{Strategy: listing.StrategyOffset, Limit: 2, Offset: 2, WithCount: true})
 	if err != nil {
 		t.Fatalf("offset+count: %v", err)
 	}
@@ -337,7 +337,7 @@ func runWithCountCase(t *testing.T, list listFunc, wantTotal int) {
 		t.Errorf("offset-mode Total = %v, want %d", offsetPage.Total, wantTotal)
 	}
 
-	noCount, err := list(ctx, crud.ListRequest{Limit: 2})
+	noCount, err := list(ctx, listing.Request{Limit: 2})
 	if err != nil {
 		t.Fatalf("no-count: %v", err)
 	}
@@ -352,15 +352,15 @@ func runStaleCursorCase(t *testing.T, list listFunc, created []{{.Agg}}.{{.AggTi
 	t.Helper()
 	ctx := context.Background()
 
-	first, err := list(ctx, crud.ListRequest{Limit: 2})
+	first, err := list(ctx, listing.Request{Limit: 2})
 	if err != nil {
 		t.Fatalf("first page: %v", err)
 	}
-	stale, err := crud.EncodeCursor("updated_at", created[0].CreatedAt, created[0].ID)
+	stale, err := listing.EncodeCursor("updated_at", created[0].CreatedAt, created[0].ID)
 	if err != nil {
 		t.Fatalf("EncodeCursor: %v", err)
 	}
-	got, err := list(ctx, crud.ListRequest{Limit: 2, Cursor: stale})
+	got, err := list(ctx, listing.Request{Limit: 2, Cursor: stale})
 	if err != nil {
 		t.Fatalf("stale cursor: err=%v, want first page", err)
 	}
@@ -377,10 +377,10 @@ func runStaleCursorCase(t *testing.T, list listFunc, created []{{.Agg}}.{{.AggTi
 func runCursorOffsetExclusiveCase(t *testing.T, list listFunc) {
 	t.Helper()
 	ctx := context.Background()
-	if _, err := list(ctx, crud.ListRequest{Strategy: crud.StrategyCursor, Limit: 2, Offset: 2}); !errors.Is(err, sdk.ErrInvalidInput) {
+	if _, err := list(ctx, listing.Request{Strategy: listing.StrategyCursor, Limit: 2, Offset: 2}); !errors.Is(err, sdk.ErrInvalidInput) {
 		t.Errorf("cursor strategy + offset: err=%v, want ErrInvalidInput", err)
 	}
-	if _, err := list(ctx, crud.ListRequest{Strategy: crud.StrategyOffset, Limit: 2, Cursor: "anything"}); !errors.Is(err, sdk.ErrInvalidInput) {
+	if _, err := list(ctx, listing.Request{Strategy: listing.StrategyOffset, Limit: 2, Cursor: "anything"}); !errors.Is(err, sdk.ErrInvalidInput) {
 		t.Errorf("offset strategy + cursor: err=%v, want ErrInvalidInput", err)
 	}
 }
@@ -438,13 +438,13 @@ func equalStrings(a, b []string) bool {
 	return true
 }
 
-func pageAllOrdered(t *testing.T, list listFunc, order crud.Order, limit int) []string {
+func pageAllOrdered(t *testing.T, list listFunc, order listing.Order, limit int) []string {
 	t.Helper()
 	ctx := context.Background()
 	var out []string
 	cursor := ""
 	for i := 0; i < 100; i++ { // bound against a runaway cursor
-		page, err := list(ctx, crud.ListRequest{Limit: limit, Cursor: cursor, Order: order})
+		page, err := list(ctx, listing.Request{Limit: limit, Cursor: cursor, Order: order})
 		if err != nil {
 			t.Fatalf("List: %v", err)
 		}
@@ -458,9 +458,9 @@ func pageAllOrdered(t *testing.T, list listFunc, order crud.Order, limit int) []
 	return nil
 }
 
-func backPage(t *testing.T, list listFunc, previousCursor string) crud.Page[{{.Agg}}.{{.AggTitle}}] {
+func backPage(t *testing.T, list listFunc, previousCursor string) listing.Page[{{.Agg}}.{{.AggTitle}}] {
 	t.Helper()
-	page, err := list(context.Background(), crud.ListRequest{Limit: 2, Cursor: previousCursor})
+	page, err := list(context.Background(), listing.Request{Limit: 2, Cursor: previousCursor})
 	if err != nil {
 		t.Fatalf("previous page: %v", err)
 	}

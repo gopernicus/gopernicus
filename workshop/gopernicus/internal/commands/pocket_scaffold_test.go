@@ -6,12 +6,12 @@ package commands
 // no per-module `make` target ever compiles it — it can rot silently. These two
 // legs are the drift answer:
 //
-//   - Hermetic leg: emit a pocket into t.TempDir(), absolute-replace sdk, then
-//     tidy + build + test the CORE (sdk-only, empty go.sum, fully offline). The
-//     `go test ./...` exercises the storetest suite against the in-core memstore —
+//   - Hermetic leg: emit a pocket into t.TempDir(), absolute-replace SDK and shared pockets, then
+//     tidy + build + test the CORE (SDK/shared-contract only, empty go.sum, fully offline). The
+//     `go test ./...` exercises the storetest suite against the stores/memory adapter —
 //     the six-case pagination family + DBGeneratedIDOnEmpty hermetically. Then the
 //     FS1 + G2/G6/G10 guard SHAPES run over the emitted core.
-//   - Warm-cache leg: absolute-replace sdk + the connector into each store module
+//   - Warm-cache leg: absolute-replace SDK + shared pockets + the connector into each store module
 //     and GOPROXY=off tidy + build + vet -tags=integration both. The emitted
 //     go.mods PIN the exact driver versions this repo's stores use, so GOMODCACHE
 //     is already warm from `make check`'s own builds (workshop is last in MODULES).
@@ -37,8 +37,8 @@ func scaffoldPocketParams(t *testing.T) pocketParams {
 	return p
 }
 
-// TestScaffoldPocketCoreCompiles is the hermetic leg: an sdk-only pocket core
-// builds and its storetest passes fully offline against the in-core memstore.
+// TestScaffoldPocketCoreCompiles is the hermetic leg: an SDK/shared-contract pocket core
+// builds and its storetest passes fully offline against the stores/memory adapter.
 func TestScaffoldPocketCoreCompiles(t *testing.T) {
 	root := repoRoot(t)
 	target := t.TempDir()
@@ -50,8 +50,8 @@ func TestScaffoldPocketCoreCompiles(t *testing.T) {
 
 	// Cheap template sanity: the socket + both migrations landed.
 	socket := readFile(t, filepath.Join(target, params.Pocket+".go"))
-	if !strings.Contains(socket, "func NewService(") || !strings.Contains(socket, ") Register(") {
-		t.Fatalf("emitted socket missing the FS2 trio:\n%s", socket)
+	if !strings.Contains(socket, "func NewService(") || !strings.Contains(socket, "*"+params.Agg+".Service") {
+		t.Fatalf("emitted root must construct the public logic service:\n%s", socket)
 	}
 	for _, m := range []string{
 		filepath.Join("stores", "turso", "migrations", "0001_"+params.Agg+".sql"),
@@ -63,11 +63,13 @@ func TestScaffoldPocketCoreCompiles(t *testing.T) {
 	}
 
 	replaceModule(t, target, baseModule+"/sdk", filepath.Join(root, "sdk"))
+	replaceModule(t, target, baseModule+"/pockets", filepath.Join(root, "pockets"))
 
 	env := hermeticEnv()
 	runGo(t, target, env, "mod", "tidy")
 	runGo(t, target, env, "build", "./...")
 	runGo(t, target, env, "test", "./...")
+	runGo(t, target, env, "vet", "./...")
 
 	assertPocketGuardShapes(t, target, params)
 }
@@ -98,9 +100,10 @@ func TestScaffoldPocketStoresCompile(t *testing.T) {
 	}
 	for _, st := range stores {
 		dir := filepath.Join(target, filepath.FromSlash(st.dir))
-		// The core resolves via the emitted `replace => ../..`; sdk + the connector
-		// are the pre-tag replaces a human adopter (and this test) injects.
+		// The core resolves via the emitted `replace => ../..`; SDK, shared pockets and the connector
+		// are replaced here so the build exercises this checkout.
 		replaceModule(t, dir, baseModule+"/sdk", filepath.Join(root, "sdk"))
+		replaceModule(t, dir, baseModule+"/pockets", filepath.Join(root, "pockets"))
 		replaceModule(t, dir, st.connMod, filepath.Join(root, filepath.FromSlash(st.connRel)))
 		runGo(t, dir, env, "mod", "tidy")
 		runGo(t, dir, env, "build", "./...")
@@ -108,26 +111,17 @@ func TestScaffoldPocketStoresCompile(t *testing.T) {
 	}
 }
 
-// assertPocketGuardShapes reimplements the emitted core's guard SHAPES as Go
-// string matching (review-gate fold item 8): FS1 (go.mod requires sdk only),
-// G2 (core imports no integrations/examples/own stores/views), G6/FS9 (no
-// hand-rolled HTTP response writing in internal/), and G9/G10 hygiene.
+// assertPocketGuardShapes checks module requirements, the same parsed-source
+// boundaries used by make guard, and whole-tree G9/G10 hygiene.
 func assertPocketGuardShapes(t *testing.T, target string, p pocketParams) {
 	t.Helper()
 
-	// FS1: the core go.mod requires exactly sdk.
+	// FS1: the core go.mod requires only SDK and the shared pockets contract.
 	gomod := readFile(t, filepath.Join(target, "go.mod"))
 	for _, mod := range moduleRequires(gomod) {
-		if mod != baseModule+"/sdk" {
-			t.Errorf("FS1 shape violated: emitted core go.mod requires %q (want sdk only)", mod)
+		if mod != baseModule+"/sdk" && mod != baseModule+"/pockets" {
+			t.Errorf("FS1 shape violated: emitted core go.mod requires %q (want SDK/shared pockets only)", mod)
 		}
-	}
-
-	coreForbidden := []string{
-		baseModule + "/integrations",
-		baseModule + "/examples",
-		p.ModulePath + "/stores",
-		p.ModulePath + "/views",
 	}
 
 	err := filepath.WalkDir(target, func(path string, d fs.DirEntry, err error) error {
@@ -137,8 +131,6 @@ func assertPocketGuardShapes(t *testing.T, target string, p pocketParams) {
 		if d.IsDir() || !strings.HasSuffix(path, ".go") {
 			return nil
 		}
-		slashed := filepath.ToSlash(path)
-		inStores := strings.Contains(slashed, "/stores/")
 		b, rerr := os.ReadFile(path)
 		if rerr != nil {
 			return rerr
@@ -154,25 +146,17 @@ func assertPocketGuardShapes(t *testing.T, target string, p pocketParams) {
 			t.Errorf("G10 shape violated: emitted %s uses lax struct scanning", rel)
 		}
 
-		// FS1/G2 (pocket core isolation) and G6/FS9 apply to the CORE only — the
-		// store modules legitimately import their connector.
-		if inStores {
-			return nil
-		}
-		for _, f := range coreForbidden {
-			if strings.Contains(s, `"`+f) {
-				t.Errorf("G2 shape violated: emitted core file %s imports an adapter layer (%s)", rel, f)
-			}
-		}
-		if strings.Contains(slashed, "/internal/") && !strings.HasSuffix(path, "_test.go") {
-			if strings.Contains(s, "json.NewEncoder(") || strings.Contains(s, "http.Error(") {
-				t.Errorf("G6/FS9 shape violated: emitted core file %s hand-rolls an HTTP response", rel)
-			}
-		}
 		return nil
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+	findings, err := pocketBoundaryFindings(target, p.ModulePath, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, finding := range findings {
+		t.Errorf("%s: emitted %s: %s", finding.rule, finding.file, finding.message)
 	}
 }
 

@@ -2,12 +2,9 @@
 // once by a PII-free logical key, optionally replace/supersede it, and read the
 // deterministic latest lifecycle status back by that key.
 //
-// Vocabulary + contract only; NO default implementation — the oauth precedent.
-// A keyed queue cannot operate without durable storage and a claim/lease
-// executor, so no honest process-local default exists; the implementation of
-// record is pockets/jobs, and any other backend supplies its own. Capabilities
-// MAY ship a stdlib default, an integration implementation, or a pocket
-// implementation of record; this one has the last kind only.
+// This package ships vocabulary and contracts. The jobs pocket provides an
+// implementation over its queue stores; other backends can implement these ports.
+// Persistence and execution guarantees depend on that implementation.
 //
 // Status is the FULL frozen seven-value lifecycle vocabulary, adopted verbatim
 // from the persisted job status so every bridge transports it without a mapping
@@ -21,14 +18,19 @@
 // lifecycle and NEVER its payload, destination, attempt count, or any secret.
 // An unknown logical key resolves to the sdk not-found error class
 // (errors.Is(err, sdk.ErrNotFound)); it is never a distinct in-band status.
+// Keys must be nonempty; empty keys return sdk.ErrInvalidInput. Key scope is
+// shared across kinds: kind does not namespace the key. Hosts include any tenant
+// or workflow scope in the logical key. Unkeyed enqueue is outside these ports.
 //
 // Payload is opaque bytes the queue never interprets. It is []byte and
 // deliberately NOT json.RawMessage: some producers submit ciphertext, and the
-// protocol must not imply the payload is JSON.
+// protocol must not imply the payload is JSON. Implementations own a copy of
+// admitted bytes; later caller mutation cannot change queued work. Idempotent
+// admission preserves the active execution's original kind and payload.
 //
 // Executor-side behavior — claim, lease, checkpoint, fencing, scheduling, retry
 // policy, dead-letter hooks, purge/retention — is out of this protocol; it lives
-// in sdk/foundation/workers and pockets/jobs.
+// in sdk/pkg/workers and pockets/jobs.
 package work
 
 import "context"

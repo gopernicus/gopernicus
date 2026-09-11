@@ -4,12 +4,11 @@ import (
 	"context"
 	"time"
 
-	"github.com/jackc/pgx/v5"
-
 	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
-	"github.com/gopernicus/gopernicus/pockets/authentication/domain/contactchange"
-	"github.com/gopernicus/gopernicus/pockets/authentication/domain/identifier"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/contactchange"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/identifier"
 	"github.com/gopernicus/gopernicus/sdk"
+	"github.com/jackc/pgx/v5"
 )
 
 // ContactChangeStore implements contactchange.Repository over a PostgreSQL
@@ -26,7 +25,11 @@ type ContactChangeStore struct {
 var _ contactchange.Repository = (*ContactChangeStore)(nil)
 
 // NewContactChangeStore returns a ContactChangeStore backed by db.
+// It panics if db is nil; the caller owns the database lifecycle.
 func NewContactChangeStore(db *pgxdb.DB, opts ...Option) *ContactChangeStore {
+	if db == nil {
+		panic("authentication pgx: NewContactChangeStore received a nil database")
+	}
 	return &ContactChangeStore{db: db, qualified: qualified{schema: applyOptions(opts).schema}}
 }
 
@@ -55,54 +58,41 @@ func scanContactChange(row pgxdb.Scanner) (contactchange.PendingChange, error) {
 // Create atomically replaces any prior (UserID, Kind) pending change with p and
 // returns the stored row (with its assigned ID).
 func (s *ContactChangeStore) Create(ctx context.Context, p contactchange.PendingChange) (contactchange.PendingChange, error) {
-	err := s.db.InTx(ctx, func(tx *pgxdb.Tx) error {
-		if _, err := tx.Exec(ctx,
-			`DELETE FROM `+s.table(contactChangesTable)+` WHERE user_id = @user_id AND kind = @kind`,
-			pgx.NamedArgs{"user_id": p.UserID, "kind": string(p.Kind)}); err != nil {
-			return err
-		}
-		args := pgx.NamedArgs{
-			"user_id":                p.UserID,
-			"kind":                   string(p.Kind),
-			"new_value":              p.NewValue,
-			"login_enabled":          p.LoginEnabled,
-			"recovery_enabled":       p.RecoveryEnabled,
-			"notification_enabled":   p.NotificationEnabled,
-			"make_primary":           p.MakePrimary,
-			"replaces_identifier_id": p.ReplacesIdentifierID,
-			"expires_at":             p.ExpiresAt.UTC(),
-			"created_at":             p.CreatedAt.UTC(),
-		}
-		if p.ID == "" {
-			insert := `INSERT INTO ` + s.table(contactChangesTable) + `
-				(user_id, kind, new_value, login_enabled, recovery_enabled, notification_enabled, make_primary, replaces_identifier_id, expires_at, created_at)
-				VALUES (@user_id, @kind, @new_value, @login_enabled, @recovery_enabled, @notification_enabled, @make_primary, @replaces_identifier_id, @expires_at, @created_at)
-				RETURNING id`
-			if err := tx.QueryRow(ctx, insert, args).Scan(&p.ID); err != nil {
-				return pgxdb.MapError(err)
-			}
-			return nil
-		}
+	args := pgx.NamedArgs{
+		"user_id": p.UserID, "kind": string(p.Kind), "new_value": p.NewValue,
+		"login_enabled": p.LoginEnabled, "recovery_enabled": p.RecoveryEnabled,
+		"notification_enabled": p.NotificationEnabled, "make_primary": p.MakePrimary,
+		"replaces_identifier_id": p.ReplacesIdentifierID, "expires_at": p.ExpiresAt.UTC(), "created_at": p.CreatedAt.UTC(),
+	}
+	columns := "user_id, kind, new_value, login_enabled, recovery_enabled, notification_enabled, make_primary, replaces_identifier_id, expires_at, created_at"
+	values := "@user_id, @kind, @new_value, @login_enabled, @recovery_enabled, @notification_enabled, @make_primary, @replaces_identifier_id, @expires_at, @created_at"
+	if p.ID != "" {
+		columns = "id, " + columns
+		values = "@id, " + values
 		args["id"] = p.ID
-		insert := `INSERT INTO ` + s.table(contactChangesTable) + `
-			(id, user_id, kind, new_value, login_enabled, recovery_enabled, notification_enabled, make_primary, replaces_identifier_id, expires_at, created_at)
-			VALUES (@id, @user_id, @kind, @new_value, @login_enabled, @recovery_enabled, @notification_enabled, @make_primary, @replaces_identifier_id, @expires_at, @created_at)`
-		if _, err := tx.Exec(ctx, insert, args); err != nil {
-			return err
-		}
-		return nil
-	})
-	if err != nil {
-		return contactchange.PendingChange{}, err
+	}
+	q := `INSERT INTO ` + s.table(contactChangesTable) + ` (` + columns + `) VALUES (` + values + `)
+		ON CONFLICT (user_id, kind) DO UPDATE SET id = EXCLUDED.id, new_value = EXCLUDED.new_value,
+		login_enabled = EXCLUDED.login_enabled, recovery_enabled = EXCLUDED.recovery_enabled,
+		notification_enabled = EXCLUDED.notification_enabled, make_primary = EXCLUDED.make_primary,
+		replaces_identifier_id = EXCLUDED.replaces_identifier_id, expires_at = EXCLUDED.expires_at,
+		created_at = EXCLUDED.created_at RETURNING id`
+	if err := s.db.QueryRow(ctx, q, args).Scan(&p.ID); err != nil {
+		return contactchange.PendingChange{}, pgxdb.MapError(err)
 	}
 	return p, nil
 }
 
+func (s *ContactChangeStore) Get(ctx context.Context, userID string, kind identifier.Kind) (contactchange.PendingChange, error) {
+	p, err := scanContactChange(s.db.QueryRow(ctx, `SELECT `+contactChangeReturning+` FROM `+s.table(contactChangesTable)+` WHERE user_id = $1 AND kind = $2`, userID, string(kind)))
+	return p, pgxdb.MapError(err)
+}
+
 // Consume atomically deletes and returns the (userID, kind) pending change: live →
 // the PendingChange, expired → sdk.ErrExpired (row deleted), missing → sdk.ErrNotFound.
-func (s *ContactChangeStore) Consume(ctx context.Context, userID string, kind identifier.Kind) (contactchange.PendingChange, error) {
-	q := `DELETE FROM ` + s.table(contactChangesTable) + ` WHERE user_id = @user_id AND kind = @kind RETURNING ` + contactChangeReturning
-	p, err := scanContactChange(s.db.QueryRow(ctx, q, pgx.NamedArgs{"user_id": userID, "kind": string(kind)}))
+func (s *ContactChangeStore) Consume(ctx context.Context, userID string, kind identifier.Kind, expectedID string) (contactchange.PendingChange, error) {
+	q := `DELETE FROM ` + s.table(contactChangesTable) + ` WHERE user_id = @user_id AND kind = @kind AND id = @id RETURNING ` + contactChangeReturning
+	p, err := scanContactChange(s.db.QueryRow(ctx, q, pgx.NamedArgs{"user_id": userID, "kind": string(kind), "id": expectedID}))
 	if err != nil {
 		if err == pgx.ErrNoRows {
 			return contactchange.PendingChange{}, sdk.ErrNotFound

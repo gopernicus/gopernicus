@@ -9,9 +9,10 @@ import (
 	"github.com/gopernicus/gopernicus/examples/auth-cms/internal/authjobs"
 	"github.com/gopernicus/gopernicus/examples/auth-cms/internal/authmem"
 	auth "github.com/gopernicus/gopernicus/pockets/authentication"
+	delivery "github.com/gopernicus/gopernicus/pockets/authentication/logic/delivery"
 	"github.com/gopernicus/gopernicus/pockets/jobs"
-	jobsmem "github.com/gopernicus/gopernicus/pockets/jobs/memstore"
-	"github.com/gopernicus/gopernicus/sdk/capabilities/email"
+	jobsmem "github.com/gopernicus/gopernicus/pockets/jobs/stores/memory"
+	"github.com/gopernicus/gopernicus/sdk/capabilities/notify/email"
 )
 
 // TestJobsModeDeliveryEndToEnd drives a real register → generic-jobs FencedRuntime →
@@ -31,35 +32,33 @@ func TestJobsModeDeliveryEndToEnd(t *testing.T) {
 	cfg.Mailer = cap // capture the rendered verification email instead of logging it
 	// This test IS the jobs-mode path: pin the mode rather than inherit whatever
 	// AUTH_DELIVERY_MODE says, now that the seam reads it.
-	cfg.DeliveryMode = auth.DeliveryModeJobs
+	cfg.DeliveryMode = delivery.ModeJobs
 
-	// The generic-jobs delivery stack (mirrors run()): fenced queue -> jobs.Service ->
+	// The generic-jobs delivery stack (mirrors run()): fenced queue -> queue.Service ->
 	// dispatcher, wired into the auth Config BEFORE building the auth Service.
-	deliveryJobs, err := jobs.NewService(jobs.Repositories{FencedQueue: jobsmem.NewFencedQueue()}, jobs.Config{Logger: quietLog()})
+	deliveryJobs, err := jobs.New(jobs.Repositories{FencedQueue: jobsmem.NewFencedQueue()})
 	if err != nil {
 		t.Fatalf("jobs.NewService: %v", err)
 	}
-	cfg.DeliveryDispatcher = authjobs.NewDispatcher(deliveryJobs)
+	cfg.DeliveryDispatcher = authjobs.NewDispatcher(deliveryJobs.Queue)
 
 	repos := authmem.New().Repositories()
 
-	svc, err := auth.NewService(repos, cfg)
+	svc, err := auth.New(repos, cfg.TokenSigner, cfg.RuntimeMode, cfg.DeliveryMode, cfg.options()...)
 	if err != nil {
 		t.Fatalf("auth.NewService: %v", err)
 	}
 
 	// Construction order: only NOW — after the auth Service is fully built — is the
 	// delivery processor seam read and the jobs runtime built over it.
-	rt, ok := svc.DeliveryJobRuntime()
+	rt, ok := svc.Delivery.JobRuntime()
 	if !ok {
 		t.Fatal("DeliveryJobRuntime unavailable in jobs mode with a wired dispatcher")
 	}
-	runtime, err := jobs.NewFencedRuntime(deliveryJobs, authjobs.FencedRuntimeConfig(rt,
-		func(c *jobs.FencedRuntimeConfig) {
-			c.Logger = quietLog()
-			c.PollInterval = 10 * time.Millisecond
-			c.IdleInterval = 10 * time.Millisecond
-		}))
+	runtime, err := runtimeFromDeliveryConfig(deliveryJobs.Queue, rt, func(c *deliveryRuntimeTestConfig) {
+		c.PollInterval = 10 * time.Millisecond
+		c.IdleInterval = 10 * time.Millisecond
+	})
 	if err != nil {
 		t.Fatalf("jobs.NewFencedRuntime: %v", err)
 	}
@@ -68,7 +67,7 @@ func TestJobsModeDeliveryEndToEnd(t *testing.T) {
 	defer cancel()
 
 	// No delivery work runs until the host starts the runtime.
-	if _, err := svc.RegisterUser(ctx, "e2e@example.com", "correct-horse-battery-staple", "E2E User"); err != nil {
+	if _, err := svc.Authentication.Register(ctx, "e2e@example.com", "correct-horse-battery-staple", "E2E User"); err != nil {
 		t.Fatalf("RegisterUser: %v", err)
 	}
 	if _, ok := cap.latest(); ok {

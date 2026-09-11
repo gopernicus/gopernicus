@@ -1,47 +1,75 @@
 # integrations/cryptids/golang-jwt
 
-A stateless-token connector wrapping exactly one third-party library —
-`github.com/golang-jwt/jwt/v5`. Its `Signer` structurally satisfies the
-sdk-owned `cryptids.JWTSigner` port, signing and verifying HMAC-SHA JSON Web
-Tokens from a shared secret.
+HMAC JWT signing and verification using `github.com/golang-jwt/jwt/v5`.
+`Signer` implements `sdk/pkg/cryptids.JWTSigner`. Hosts construct
+it and pass the inward interface to their services or pockets.
 
-It owns "how to sign a token with golang-jwt," never any pocket's
-authentication policy. A different token scheme (asymmetric RS/ES, PASETO)
-would be a sibling connector, swapped at the composition root.
+The integration module path and SDK crypto namespace remain `cryptids`. ID
+generation lives separately in `sdk`.
 
 ## Surface
 
-| member | shape |
+| Member | Behavior |
 |---|---|
-| `New(secret string, opts ...Option) (*Signer, error)` | builds a signer; defaults to HS256; `ErrSecretTooShort` under 32 bytes |
-| `WithMethod(method *jwt.SigningMethodHMAC) Option` | pins the HMAC method (HS256/HS384/HS512); default HS256; nil ignored |
-| `Signer.Sign(claims map[string]any, expiresAt time.Time) (string, error)` | signed token with registered `exp`/`iat` added; caller-supplied `nbf` honored on verify |
-| `Signer.Verify(token string) (map[string]any, error)` | claims when signature, method, and time claims all check out |
-| `ErrSecretTooShort` | secret under 32 bytes (256-bit HMAC minimum) |
-| `ErrEmptyToken` | empty token string passed to `Verify` |
+| `New(secret string, opts ...Option) (*Signer, error)` | Constructs an HS256 signer by default; validates the selected method and key after options. |
+| `WithMethod(method *jwt.SigningMethodHMAC) Option` | Selects HS256, HS384, or HS512. A nil method leaves the current selection unchanged. The option snapshots the method when created; the signer keeps its own validated copy. |
+| `Signer.Sign(claims map[string]any, expiresAt time.Time) (string, error)` | Copies claims, then sets `exp` from `expiresAt` and `iat` from the current time, overriding those two supplied claims. |
+| `Signer.Verify(token string) (map[string]any, error)` | Verifies the signature, method, encoding, and time claims. Returned JSON numbers are `float64`. |
+| `ErrSecretTooShort` | Key is shorter than the selected method requires; constructor errors wrap this sentinel. |
+| `ErrEmptyToken` | An initialized signer's `Verify` received an empty token. |
 
-## Algorithm-confusion guard
+Construct signers with `New`. Methods on a zero-value or nil signer return
+errors. Sign does not mutate its input map. Options configure private construction
+settings in order, with the last non-nil method selection winning. They cannot
+change a live signer or bypass construction-time key checks. A nil `Option`
+returns an error wrapping `sdk.ErrInvalidInput`; `WithMethod(nil)` remains valid.
 
-`Verify` pins the token's signing method to the one the `Signer` was built with
-**before the secret is ever returned** to the parser. A token whose `alg` header
-was swapped — to a different HMAC variant, an asymmetric algorithm, or `none` —
-is rejected before any MAC is computed. This closes the classic JWT
-algorithm-confusion hole where an attacker rewrites `alg` to steer verification
-onto a weaker or key-mismatched path. `WithValidMethods` repeats the assertion
-at the parser boundary; `WithStrictDecoding` rejects non-canonical base64url
-that would otherwise admit padding-bit signature malleability.
+## Keys and algorithms
 
-## Why a 32-byte minimum
+The minimum key lengths are 32 bytes for HS256, 48 for HS384, and 64 for HS512,
+matching the hash-output lengths required by
+[RFC 7518 §3.2](https://www.rfc-editor.org/rfc/rfc7518#section-3.2).
+Only those name/hash combinations are supported.
 
-`New` rejects secrets under 32 bytes (256 bits), the NIST minimum for
-HMAC-SHA256. A shorter key weakens the MAC below its design strength.
+`New` uses the string's bytes directly: it does not trim, hex-decode, or
+base64-decode them. Preserve the effective key bytes when migrating from another
+signer. For an existing decoded `[]byte` key, pass `string(keyBytes)`. Replacing
+that with its encoded representation changes the key and invalidates tokens.
+Hosts own secure key generation, storage, and rotation.
+
+Verification accepts only the configured method and checks the concrete HMAC
+method before returning the key. Different HMAC variants, asymmetric methods,
+and `alg=none` are rejected. Strict base64url decoding rejects padding and
+noncanonical signature padding bits.
+
+## Claims and time checks
+
+Claims must be a JSON object containing numeric `exp`. This expiration
+requirement belongs to the framework's expiring-token contract. Optional `nbf`
+and `iat` must also be numeric when present; null, strings, arrays, and objects
+are invalid values for these claims.
+
+All three dates must fall in calendar years 0001–9999. The explicit range
+rejects extreme numbers that could overflow the library's date conversion and
+make a future `nbf` or `iat` appear to be in the past.
+
+The library enforces expiration, not-before, and issued-at with 60 seconds of
+clock tolerance. An expired token is accepted only within that tolerance;
+not-before and issued-at can be at most 60 seconds ahead. Missing expiration,
+zero expiration, and a null claims payload are rejected. Ordinary tokens do
+not need `nbf` or `iat` to verify.
+
+`Sign` always owns `exp` and `iat`. Callers can supply `nbf`; its validity is
+checked during verification. The host or consuming service owns issuer,
+audience, identity, session, and authorization requirements.
 
 ## Testing
 
-Unit tests are hermetic and run with a plain `go test ./...` — round-trip
-(HS256 and HS512), wrong-key rejection, expiry and not-yet-valid (`nbf`)
-handling, tampered/malformed/empty rejection, and the algorithm-confusion cases:
-a same-secret HS512 forgery rejected by an HS256 signer, an HS256 token rejected
-when HS512 is configured, and an `alg=none` token rejected. A compile-time
-assertion (`var _ cryptids.JWTSigner = (*Signer)(nil)`) proves `Signer`
-satisfies the port.
+Run `go test ./...`. Tests cover method/key boundaries, zero-value use,
+authoritative signing times, malformed/null claims, clock tolerance, wrong keys,
+algorithm confusion, strict encoding, and upstream interoperability for all
+three supported methods.
+
+A [saved legacy SDK token](testdata/README.md) proves compatibility with ordinary
+HS256 tokens minted before the SDK implementation was retired. The fixture uses
+public dummy data and retains its original captured bytes.

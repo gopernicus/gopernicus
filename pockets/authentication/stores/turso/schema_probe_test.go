@@ -30,7 +30,7 @@ func probeDial(t *testing.T) *tursodb.DB {
 	if url == "" {
 		t.Skip("TURSO_DATABASE_URL not set — turso store probe NOT verified")
 	}
-	db, err := tursodb.Open(tursodb.Config{URL: url, AuthToken: os.Getenv("TURSO_AUTH_TOKEN")})
+	db, err := tursodb.Open(context.Background(), tursodb.Config{URL: url, AuthToken: os.Getenv("TURSO_AUTH_TOKEN")})
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}
@@ -69,7 +69,7 @@ func TestSchemaProbe_FullSchema(t *testing.T) {
 	probeResetSchema(t, db)
 	t.Cleanup(func() { probeResetSchema(t, db) })
 
-	if _, err := Repositories(db); err != nil {
+	if _, err := Repositories(context.Background(), db); err != nil {
 		t.Fatalf("Repositories on full schema: %v", err)
 	}
 }
@@ -88,7 +88,7 @@ func TestSchemaProbe_MissingTable(t *testing.T) {
 				t.Fatalf("drop %s: %v", table, err)
 			}
 
-			_, err := Repositories(db)
+			_, err := Repositories(context.Background(), db)
 			if err == nil {
 				t.Fatalf("Repositories succeeded with %s missing", table)
 			}
@@ -111,7 +111,7 @@ func TestSchemaProbe_InfraFailureNotMisclassified(t *testing.T) {
 	// Close the connection so every subsequent probe query fails at the infra layer.
 	db.Close()
 
-	_, err := Repositories(db)
+	_, err := Repositories(context.Background(), db)
 	if err == nil {
 		t.Fatal("Repositories succeeded against a closed connection")
 	}
@@ -127,7 +127,7 @@ func TestSchemaProbe_CreatesNoSchema(t *testing.T) {
 	probeDropAll(t, db)
 	t.Cleanup(func() { probeResetSchema(t, db) })
 
-	if _, err := Repositories(db); err == nil {
+	if _, err := Repositories(context.Background(), db); err == nil {
 		t.Fatal("Repositories succeeded against an empty database")
 	}
 

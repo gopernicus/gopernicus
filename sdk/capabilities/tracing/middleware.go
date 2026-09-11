@@ -1,22 +1,24 @@
 package tracing
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
 	"strconv"
 
 	"github.com/gopernicus/gopernicus/sdk"
-	"github.com/gopernicus/gopernicus/sdk/foundation/web"
+	"github.com/gopernicus/gopernicus/sdk/pkg/web"
 )
 
 // Middleware returns HTTP middleware that wraps each request in a span on t. A
 // nil tracer is treated as Noop, so the middleware can be wired unconditionally.
 //
-// This is a capability×foundation composition (a tracing capability producing a
+// This is a capability×pkg composition (a tracing capability producing a
 // web.Middleware), so it lives with the tracing semantics rather than in web:
 // web stays agnostic of tracing, tracing legally depends on web (capability →
-// foundation) and reads/writes the trace_id/span_id via the kernel's
+// pkg) and reads/writes the trace_id/span_id via the kernel's
 // request-identity vocabulary (sdk.WithTraceID/WithSpanID), so it never imports
 // logging.
 //
@@ -25,12 +27,10 @@ import (
 //   - The span's context — and, when t returns a SpanFinisher implementing
 //     SpanIdentity, the trace_id/span_id stashed on it — is already on the
 //     request when Logger emits its access line, so those IDs appear on the
-//     request log via logging.TracingHandler.
-//   - web.RecordError type-asserts the response writer directly with no Unwrap
-//     walk. This middleware records a 5xx onto the span with a synthesized error
-//     and never touches the writer's recorded error, so a handler's RecordError
-//     keeps landing on Logger's inner StatusRecorder — the access line's error
-//     field does not silently regress.
+//     request log via logging.ContextHandler.
+//   - Nested StatusRecorders forward original response errors to Logger. This
+//     middleware records a 5xx onto the span with a synthesized error without
+//     replacing the original cause in the access log.
 //
 // The span name is r.Pattern alone (it already embeds the method, e.g.
 // "GET /posts/{id}", because Handle wraps middleware inside the mux match, so
@@ -47,25 +47,58 @@ func Middleware(t Tracer) web.Middleware {
 	}
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			name := r.Pattern
-			if name == "" {
-				name = "http.request"
+			var ctx context.Context
+			var span SpanFinisher
+			var attrs []Attribute
+			if httpTracer, ok := t.(HTTPTracer); ok {
+				ctx, span = httpTracer.StartHTTPSpan(r)
+			} else {
+				name := r.Pattern
+				if name == "" {
+					name = "http.request"
+				}
+				ctx, span = t.StartSpan(r.Context(), name)
+				attrs = []Attribute{
+					StringAttribute("http.method", r.Method),
+					StringAttribute("http.host", r.Host),
+					StringAttribute("user_agent", r.UserAgent()),
+					StringAttribute("net.peer.ip", peerHost(r.RemoteAddr)),
+				}
+				if r.Pattern != "" {
+					attrs = append(attrs, StringAttribute("http.route", r.Pattern))
+				}
 			}
 
-			ctx, span := t.StartSpan(r.Context(), name)
-			defer span.Finish()
-
-			attrs := []Attribute{
-				StringAttribute("http.method", r.Method),
-				StringAttribute("http.host", r.Host),
-				StringAttribute("user_agent", r.UserAgent()),
-				StringAttribute("net.peer.ip", peerHost(r.RemoteAddr)),
+			sw := web.NewStatusRecorder(w)
+			defer func() {
+				panicValue := recover()
+				defer span.Finish()
+				// A normal empty handler completes with implicit 200. An escaping
+				// panic or a hijack before headers has no known response status.
+				status := sw.Status()
+				if status != 0 && (panicValue == nil || sw.Committed()) {
+					if httpSpan, ok := span.(HTTPSpan); ok {
+						httpSpan.SetHTTPStatus(status)
+					} else {
+						span.SetAttributes(StringAttribute("http.status_code", strconv.Itoa(status)))
+					}
+				}
+				switch {
+				case panicValue != nil:
+					span.RecordError(errors.New("http handler panic"))
+				case sw.Err() != nil:
+					span.RecordError(errors.New("http response failed"))
+				case status >= 500:
+					span.RecordError(fmt.Errorf("server error: %d", status))
+				}
+				// Do not overwrite the writer's cause; Logger needs the original.
+				if panicValue != nil {
+					panic(panicValue)
+				}
+			}()
+			if len(attrs) > 0 {
+				span.SetAttributes(attrs...)
 			}
-			if r.Pattern != "" {
-				attrs = append(attrs, StringAttribute("http.route", r.Pattern))
-			}
-			span.SetAttributes(attrs...)
-
 			if id, ok := span.(SpanIdentity); ok {
 				if traceID := id.TraceID(); traceID != "" {
 					ctx = sdk.WithTraceID(ctx, traceID)
@@ -75,13 +108,7 @@ func Middleware(t Tracer) web.Middleware {
 				}
 			}
 
-			sw := web.NewStatusRecorder(w)
 			next.ServeHTTP(sw, r.WithContext(ctx))
-
-			span.SetAttributes(StringAttribute("http.status_code", strconv.Itoa(sw.Status())))
-			if sw.Status() >= 500 {
-				span.RecordError(fmt.Errorf("server error: %d", sw.Status()))
-			}
 		})
 	}
 }
@@ -94,4 +121,17 @@ func peerHost(addr string) string {
 		return addr
 	}
 	return host
+}
+
+// HTTPTracer optionally creates an HTTP span with protocol metadata available at
+// creation time (including to a sampler). It owns the request attributes; the
+// middleware still owns completion and request-context identity propagation.
+type HTTPTracer interface {
+	StartHTTPSpan(*http.Request) (context.Context, SpanFinisher)
+}
+
+// HTTPSpan optionally receives native HTTP status metadata instead of the
+// generic string attribute. A status is supplied only when it is known.
+type HTTPSpan interface {
+	SetHTTPStatus(int)
 }

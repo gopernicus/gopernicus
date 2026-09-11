@@ -21,7 +21,7 @@ import (
 
 	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
 	auth "github.com/gopernicus/gopernicus/pockets/authentication"
-	"github.com/gopernicus/gopernicus/pockets/authentication/storetest"
+	"github.com/gopernicus/gopernicus/pockets/authentication/stores/storetest"
 )
 
 // authTables are the pocket's tables in child-before-parent order, so a
@@ -107,7 +107,7 @@ func TestConformance_Postgres(t *testing.T) {
 	// so a stale ledger cannot mask a DDL change, and every leaf below then
 	// re-applies the (idempotent) stream and truncates.
 	if !schema.IsZero() {
-		db, err := pgxdb.Open(pgxdb.Config{DSN: dsn})
+		db, err := pgxdb.Open(context.Background(), pgxdb.Config{DSN: dsn})
 		if err != nil {
 			t.Fatalf("connect: %v", err)
 		}
@@ -116,7 +116,7 @@ func TestConformance_Postgres(t *testing.T) {
 	}
 
 	storetest.Run(t, func(t *testing.T) auth.Repositories {
-		db, err := pgxdb.Open(pgxdb.Config{DSN: dsn})
+		db, err := pgxdb.Open(context.Background(), pgxdb.Config{DSN: dsn})
 		if err != nil {
 			t.Fatalf("connect: %v", err)
 		}
@@ -128,7 +128,7 @@ func TestConformance_Postgres(t *testing.T) {
 		truncate(t, db, schema)
 		t.Cleanup(func() { truncate(t, db, schema) })
 
-		repos, err := Repositories(db, storeOpts(schema)...)
+		repos, err := Repositories(context.Background(), db, storeOpts(schema)...)
 		if err != nil {
 			t.Fatalf("Repositories: %v", err)
 		}

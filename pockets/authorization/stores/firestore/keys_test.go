@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gopernicus/gopernicus/pockets/authorization/domain/relationship"
+	authmodel "github.com/gopernicus/gopernicus/pockets/authorization/logic/model"
 )
 
 // hexID is the shape every natural document id must have: 64 lowercase hex
@@ -28,6 +28,38 @@ func sqlConcat(parts ...string) string {
 		b.WriteString(p)
 	}
 	return b.String()
+}
+
+func TestTupleSortPartsPreserveFullNaturalOrderWithinIndexLimits(t *testing.T) {
+	values := []string{"a", "a!", "a/b", "aa", "~", "é", "😀", strings.Repeat("x", 256), strings.Repeat("😀", 64)}
+	var rows []relationshipDoc
+	for _, value := range values {
+		for field := 0; field < 6; field++ {
+			parts := []string{"doc", "d", "viewer", "group", "g", ""}
+			parts[field] = value
+			rows = append(rows, relationshipDoc{ResourceType: parts[0], ResourceID: parts[1], Relation: parts[2], SubjectType: parts[3], SubjectID: parts[4], SubjectRelation: parts[5]})
+		}
+		rows = append(rows, relationshipDoc{ResourceType: value, ResourceID: value, Relation: value, SubjectType: value, SubjectID: value, SubjectRelation: value})
+	}
+	full := func(row relationshipDoc) string {
+		return sqlConcat(row.ResourceType, row.ResourceID, row.Relation, row.SubjectType, row.SubjectID, row.SubjectRelation)
+	}
+	for _, left := range rows {
+		prefix, suffix := tupleSortKeys(left)
+		if len(prefix) > 1284 || len(suffix) > 257 || suffix == "" || prefix+suffix != full(left) {
+			t.Fatalf("invalid tuple ordering parts: %d/%d bytes for %+v", len(prefix), len(suffix), left)
+		}
+		for _, right := range rows {
+			rp, rs := tupleSortKeys(right)
+			order := strings.Compare(prefix, rp)
+			if order == 0 {
+				order = strings.Compare(suffix, rs)
+			}
+			if want := strings.Compare(full(left), full(right)); order != want {
+				t.Fatalf("split order differs from full tuple order: %+v / %+v", left, right)
+			}
+		}
+	}
 }
 
 // TestRoleKeyMatchesTheSQLExpression pins role_key byte-for-byte against
@@ -144,7 +176,7 @@ func TestSortKeyOrderIsRawByteOrder(t *testing.T) {
 // port's maximum component size (1536 bytes, past the 1500-byte id limit), one
 // carrying slashes, and one spelling a reserved name — hashes to a legal id.
 func TestDocumentIDsAreLegalFirestoreIDs(t *testing.T) {
-	max := strings.Repeat("x", relationship.MaxRefFieldLen)
+	max := strings.Repeat("x", authmodel.MaxRefFieldLen)
 	cases := map[string]string{
 		"plain":              relationshipDocID("doc", "d1", "owner", "user", "u1", ""),
 		"userset":            relationshipDocID("doc", "d1", "viewer", "group", "eng", "member"),
@@ -153,10 +185,7 @@ func TestDocumentIDsAreLegalFirestoreIDs(t *testing.T) {
 		"maximum components": relationshipDocID(max, max, max, max, max, max),
 		"unicode":            relationshipDocID("dôc", "🗂", "ownër", "üser", "u¹", "membér"),
 		"subject claim":      subjectClaimDocID(max, max, max, max, max),
-		"id claim":           idClaimDocID(strings.Repeat("z", 4096)),
 		"role":               roleDocID(max, max, max, "", ""),
-		"scope":              scopeDocID("resource", max, max),
-		"mutation":           mutationDocID("MFRGGZDFMZTWQ2LKNNWG23TPOBYXE43UOV3HO"),
 	}
 
 	for name, id := range cases {
@@ -220,10 +249,9 @@ func TestDerivedKeysAreDeterministic(t *testing.T) {
 	// The golden ids. Changing one is a SCHEMA change — every stored document
 	// moves and every claim is orphaned — never a refactor.
 	goldens := map[string]struct{ got, want string }{
-		"tuple":    {relationshipDocID("doc", "d1", "owner", "user", "u1", ""), "fa8297b15d943380dcbd7cd3da788ea02dccd738d201a39896a3f68671cb3100"},
-		"subject":  {subjectClaimDocID("doc", "d1", "user", "u1", ""), "0ef3b055cf09ef927cdedcac3ba13feaccf527957f016bd096e9c49b2dafac19"},
-		"id claim": {idClaimDocID("rel-1"), "c0efaa03f42b6a400e052407672fa7650196c528a47daee381c1496326d9bcca"},
-		"role":     {roleDocID("user", "u1", "admin", "tenant", "t1"), "62e6d75d2e1ded919ecb86b9963428656cc1d8a90600de1569752b1339229bd7"},
+		"tuple":   {relationshipDocID("doc", "d1", "owner", "user", "u1", ""), "fa8297b15d943380dcbd7cd3da788ea02dccd738d201a39896a3f68671cb3100"},
+		"subject": {subjectClaimDocID("doc", "d1", "user", "u1", ""), "0ef3b055cf09ef927cdedcac3ba13feaccf527957f016bd096e9c49b2dafac19"},
+		"role":    {roleDocID("user", "u1", "admin", "tenant", "t1"), "62e6d75d2e1ded919ecb86b9963428656cc1d8a90600de1569752b1339229bd7"},
 	}
 	for name, g := range goldens {
 		if g.got != g.want {
@@ -240,8 +268,5 @@ func TestClaimIDsSeparateTheirNamespaces(t *testing.T) {
 	claim := subjectClaimDocID("doc", "d1", "user", "u1", "")
 	if tuple == claim {
 		t.Fatalf("the tuple id and its subject claim id collided on %q", tuple)
-	}
-	if id := idClaimDocID("doc"); id == resourceKey("doc", "") {
-		t.Fatalf("a one-part and a two-part key collided on %q", id)
 	}
 }

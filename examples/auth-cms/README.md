@@ -2,7 +2,7 @@
 
 This host mounts **real pocket modules** — `pockets/cms`,
 `pockets/authentication`, `pockets/authorization`, and `pockets/events` — onto
-one host router, with in-memory stores and no datastore driver, and wires auth's
+one host router, with in-memory stores by default, and wires auth's
 identity middleware into cms's admin surface. It is both the auth-v2 milestone's
 **A9 proof host** (OAuth, machine identity, JWT bearer, security-event audit, and
 ReBAC-decoupled invitations) and the **auth-v3 identity proof host**: it wires the
@@ -16,7 +16,7 @@ pages (the `ui/goth` adapter `authgoth`) **with a real host page override**
 and a `RuntimeMode=development` posture whose production-negative twin is proven
 hermetically.
 
-> The v3 surface has BOTH a JSON API and (because `Config.Views` is wired) normal
+> The v3 surface has BOTH a JSON API and (because `BrowserConfig.Views` is wired) normal
 > HTML pages/forms. The legs below drive the JSON API with curl; the HTML/browser
 > journeys are described alongside. **curl `-d` sends
 > `Content-Type: application/x-www-form-urlencoded`, which the content-type
@@ -39,6 +39,13 @@ repo's host-contract guard until that plan lands. For layout, read
 worked examples `examples/cms`, `examples/minimal`, and
 `examples/jobs-minimal`.
 
+The authorization audit adds a normal
+[document listing example](internal/outbound/domains/documents/README.md) under
+`internal/{logic,inbound,outbound}/domains/documents`. Its complete-set,
+candidate and constrained PostgreSQL strategies share one host operation and
+have real HTTP regressions. The running demo chooses memory/candidates; optional
+PostgreSQL tests use an explicitly selected scratch database.
+
 ## What it proves
 
 - **Constitution rule 6 (pockets never import other pockets), with THREE real
@@ -47,7 +54,7 @@ worked examples `examples/cms`, `examples/minimal`, and
   `cmd/server/main.go` imports all three. The cross-pocket connections are made
   entirely in the composition root (`auth.Service.RequireUser` →
   `cms.Config.AdminMiddleware`; the engine `relationshipGranter` →
-  `auth.Config.Granter`; `authorizer.Check` → `events.Config.Authorize`) — over
+  `auth.InvitationsConfig.Granter`; `authorizer.Check` → `events.WithAuthorization`) — over
   sdk-shaped seams, with zero import edges between the pockets.
 
 - **The pocket-module opt-out holds for a second pocket — no libsql in the
@@ -61,20 +68,20 @@ worked examples `examples/cms`, `examples/minimal`, and
   `go list -m all` reports the store adapters' libsql; the module's own graph —
   `GOWORK=off`, i.e. what actually builds this host — has none, exactly like
   `examples/minimal`.) `bcrypt` is a CPU-bound library with no external service,
-  and the JWT signer is the sdk stdlib HS256 default (no integration), so the host
-  stays zero-infra.
+  and the golang-jwt signer is also a local library integration, so JWT signing
+  needs no external service.
 
 - **The whole auth-v2 surface, live:** the verified-email login gate, a
   host-local fake OAuth provider, API-key machine calls, JWT access tokens +
-  rotating store-backed refresh tokens (host-signed by the sdk stdlib HS256
-  default, `sdk/foundation/cryptids`), security-event audit rows,
+  rotating store-backed refresh tokens (host-signed through
+  `integrations/cryptids/golang-jwt`), security-event audit rows,
   and invitations that grant through the **`pockets/authorization` engine's
   `relationshipGranter`** — ordinary member invitation-accept writes a real ReBAC
   tuple via the trusted application-side `RelationshipWriter` (the memstore-backed
   engine keeps the host **driver-free** — no libsql in the graph). The A9 milestone
   shipped this seam with a toy in-memory `Granter` instead (ratified AV4:
   invitations work with no ReBAC in the graph); `authorization-v1` Z4 commit 2
-  swapped the engine in through the identical `auth.Config.Granter` seam.
+  swapped the engine in through the identical `auth.InvitationsConfig.Granter` seam.
 
 ## Authorization postures — the flagship, demonstrated (both kinds)
 
@@ -84,7 +91,7 @@ Authorization is "supported, never required": a host runs with no checks, with a
 **flagship** — and the middle posture stays a permanent, recorded artifact in git
 history:
 
-- **Middle posture (commit 1, `2e1e5eb`):** `events.Config.Authorize` was
+- **Middle posture (commit 1, `2e1e5eb`):** `events.WithAuthorization` was
   satisfied by a plain ownership closure over a toy membership map, with **no
   `pockets/authorization` in the module graph** (`GOWORK=off go list -m all |
   grep -c authorization` → `0`) — a Check seam met entirely by host code, no IAM
@@ -92,7 +99,7 @@ history:
 - **Flagship posture (current):** the host mounts `pockets/authorization`, **both
   kinds** wired and **memstore-backed** (so the graph stays driver-free —
   `GOWORK=off go list -m all | grep -i libsql` is still empty). The SAME
-  `events.Config.Authorize` seam now delegates to `authorizer.Check`, and the
+  `events.WithAuthorization` seam now delegates to `authorizer.Check`, and the
   invitation `Granter` is the engine's `relationshipGranter`.
 
 **The relationship kind (GUARDED, AZ3-4.1).** `main` declares a schema
@@ -121,7 +128,7 @@ removed the session-only mutation routes — see below); the guarded actor path 
   `isPlatformAdmin`) OR `authorizer.Check` (`view` on `project/demo`) → 200,
   otherwise 403.
 - `GET /demo/my-projects` — the relationship kind's **enumeration** via
-  `authorizer.LookupResources(..., "view", "project")` (pure, no bypass), returned
+  `authorizer.LookupAllResourceIDs(..., "view", "project")` (pure, no bypass), returned
   as `{"admin", "ids"}` where `admin` is the host-composed platform-admin flag: a
   member → `{"admin":false,"ids":["demo"]}`, a stranger → `{"admin":false,"ids":[]}`,
   the platform admin → `{"admin":true,"ids":[]}` (a real app skips ID filtering when
@@ -131,7 +138,7 @@ removed the session-only mutation routes — see below); the guarded actor path 
 **The roles kind** is **independently wireable** — a roles-only host would wire
 `authorization.Repositories{Roles: …}` alone, with or without a model. Here it
 rides alongside the relationship kind and **bears its own model**
-(`Config.RoleModel`, `authzRoleModel()`): on the SAME `project` type the `auditor`
+(`authorization.WithRoleModel`, `authzRoleModel()`): on the SAME `project` type the `auditor`
 role grants `audit`. The two models share the TYPE but never a (type, permission)
 **pair** — `view`/`manage_access` are relationship-owned, `audit` is role-owned — so
 the ONE decision surface **dispatches** each pair to its owning model (a pair in both
@@ -141,7 +148,7 @@ an undeclared `(type, role)` is refused with `ErrInvalidRoleModel` instead of st
 a silent no-grant. Demo routes:
 
 - `GET /demo/audit` — gated through the pocket's coordinate gate
-  `authorizer.RequirePermissionFixed("project", "audit", "demo")`: 403 without a
+  `authz.HTTP.RequirePermissionFixed("project", "audit", "demo")`: 403 without a
   granting role, 200 with one. The host writes **no** role check of its own — the
   role model decides, and the pair is checked for legality at route registration.
   On success the handler drives a `ListRoleAssignmentsByResource` read-back. The
@@ -168,7 +175,7 @@ surface is deferred with the AZADM packet.
   atomic-security rails (identifier, challenge, password-reset, contact-change,
   authentication-grant, credential-mutation — see `ports_v3.go`; delivery owns no
   auth port — durable delivery runs on the generic jobs pocket). It honors the
-  contracts the shared `pockets/authentication/storetest`
+  contracts the shared `pockets/authentication/stores/storetest`
   suite proves (uniqueness, sentinels, expired-at-read, the pinned GetByHash and
   partial-pending-uniqueness contracts, atomic single-use consume + revision-CAS,
   and the created_at DESC, id DESC paging), and projects the masked credential
@@ -179,7 +186,7 @@ surface is deferred with the AZADM packet.
   self-contained `sdk/capabilities/oauth.Provider`, no vendor, no network; identity derived
   from the authorization `code`.
 - **TokenSigner** (REQUIRED — the core no longer tolerates a nil signer):
-  `cryptids.NewHS256` (the sdk stdlib HS256 default) over `AUTH_JWT_SECRET`;
+  `golangjwt.New` (the HMAC JWT integration) over `AUTH_JWT_SECRET`;
   absent → an **ephemeral** per-boot key. The ephemeral key is a **DEV /
   single-instance convenience only**: access JWTs don't survive a restart, and a
   **multi-instance** deployment MUST share `AUTH_JWT_SECRET` across every instance
@@ -189,20 +196,20 @@ surface is deferred with the AZADM packet.
   collaboration adapter. It validates the target resource still exists, writes
   through `RelationshipWriter.CreateRelationships`, then performs the detached
   exact-state check required by the Granter contract. It intentionally ignores
-  `OperationID`: no MutationID, receipt, or mutation repository is needed, and a
+  `OperationID`: no request ledger is needed, and a
   re-grant after deletion restores current state. A separately named
   `guardedRelationshipGranter` in the same file demonstrates the sensitive posture:
-  it derives a MutationID from `OperationID`, calls `SystemMutator`, and inspects
-  receipts. The host can select either posture per resource type/relation.
+  it calls `SystemMutator` to enforce guardian rules and supplies an explicit
+  audit source for hosts that enable recording. The host can select either posture per resource type/relation.
 - **InviteCheck** (`hostInviteCheck`, `cmd/server/membership.go`) — the required
   relation-aware host authorization policy the pocket calls from its parsed
-  create/list invitation handlers (`auth.Config.InviteCheck`): a platform admin may
+  create/list invitation handlers (`auth.InvitationsConfig.InviteCheck`): a platform admin may
   invite any relation, owner-granting is otherwise reserved to platform admins (the
   editor→owner escalation guard), and every other create/list requires `manage_access`
   on the resource. Denials fail closed (`sdk.ErrForbidden` → 403).
 - **authorization**: `pockets/authorization` (`cmd/server/main.go`) — BOTH kinds
   (relationships + roles), memstore-backed (no driver in the graph). Backs
-  `auth.Config.Granter`, `events.Config.Authorize` (`authorizer.Check`), and the
+  `auth.InvitationsConfig.Granter`, `events.WithAuthorization` (`authorizer.Check`), and the
   host demo routes.
 - **`RequireVerifiedEmail: true`** — login and `/auth/token` refuse an unverified
   user with 403.
@@ -211,7 +218,7 @@ surface is deferred with the AZADM packet.
   `content.*` events post-write (best-effort). The public-page cache
   (`cacher.NewMemory`, held in a variable and handed to `cms.Config.Cache`) is
   `web.CachePages` keyed as `page:<uri>`. The host subscribes on `"*"`, filters
-  `content.*` in the handler, and calls `cache.DeletePattern(ctx, "page:*")` to
+  `content.*` in the handler, and calls `cache.DeletePrefix(ctx, "page:")` to
   drop every cached page so the next request re-renders fresh content. Delivery
   is async (ratified: an emitter's latency must not depend on its subscribers),
   so invalidation runs shortly *after* the admin write returns, not
@@ -238,8 +245,8 @@ surface is deferred with the AZADM packet.
   send path in either — the console mailer/notifier log the delivered secret, so
   drive codes/tokens/links from the server log.
   - **`AUTH_DELIVERY_MODE=jobs` (default — jobs-mode wiring over an IN-MEMORY fenced
-    queue):** `DeliveryMode: jobs` + `DeliveryEncrypter` (AES-GCM) +
-    `DeliveryJobsAcknowledged: true`; the host wires `Config.DeliveryDispatcher` over
+    queue):** delivery mode `jobs` + `DeliveryEncrypter` (AES-GCM) +
+    `DeliveryJobsAcknowledged: true`; the host wires `DeliveryConfig.DeliveryDispatcher` over
     the generic **jobs** pocket and runs the jobs `FencedRuntime` (bound to
     `authSvc.DeliveryJobRuntime()`) in a **supervised** goroutine (see the shutdown
     section: an unexpected runtime exit brings the host down rather than serving with a
@@ -261,7 +268,7 @@ surface is deferred with the AZADM packet.
     host uses; the purged count surfaces on `/healthz/delivery`.
   - **`AUTH_DELIVERY_MODE=in_process` (small/development — EPHEMERAL):** the same delivery
     processor runs behind a bounded queue + fixed worker pool the host drives via
-    `authSvc.RunDelivery`. No dispatcher, no jobs runtime;
+    `authSvc.Delivery.Run`. No dispatcher, no jobs runtime;
     `DeliveryEphemeralAcknowledged: true`. Its posture is **never hidden**: startup
     logs a LOUD WARN that accepted in-flight work is **LOST on crash or restart**,
     there is **no cross-instance coordination**, and running multiple instances
@@ -293,14 +300,14 @@ surface is deferred with the AZADM packet.
 - **AllowedOrigins**: defaults to this host's own origin (`AUTH_ALLOWED_ORIGINS`)
   so same-origin browser forms pass the browser-safe gate and cross-site
   credentialed POSTs are refused.
-- **Views (HTML) + page override**: `Config.Views = authpages.New(bundle)` —
+- **Views (HTML) + page override**: `WithBrowser(BrowserConfig{Views: views, ...})`, with views from `authpages.New(bundle)` —
   `internal/authpages` **embeds the bundled `ui/goth` `authgoth.Views`** and overrides
   ONLY `Login` with a Gopernicus-CMS-branded page rendered through stdlib
   `html/template` (no templ import in the host). Every other page is the promoted
   ui/goth default (rendered from the fingerprinted assets the host serves under
   `/assets/goth`); the override changes presentation ONLY (same endpoints, CSRF/
   origin gate, PRG, status mapping, JSON contract). The embedded `authgoth.Views`
-  promotes `HTMLPolicy()`, which the host wires into `Config.HTMLPolicy` so the CSP
+  promotes `HTMLPolicy()`, which the host wires into `BrowserConfig.HTMLPolicy` so the CSP
   widens exactly enough for the ui/goth pages + the externalized `fragment.js`
   (served via `authgoth.FragmentScriptHandler()`).
 - **EmailContentTemplates (distinct override system)**: `authpages.EmailOverride()`
@@ -310,25 +317,25 @@ surface is deferred with the AZADM packet.
   remove flows work; `authmem`'s credential-mutation `Snapshot` projects the
   masked inventory from the real identifier rows (matching pgx/turso).
 
-### Config / port nil-semantics (host view)
+### Constructor policy and port nil semantics (host view)
 
 | collaborator | this host wires | nil/absent means |
 |---|---|---|
-| `Config.Providers` | the fake provider | OAuth routes not registered (deny-by-absence) |
-| `Config.TokenSigner` | sdk HS256 over `AUTH_JWT_SECRET` (or ephemeral dev key) | REQUIRED — nil is `ErrTokenSignerRequired` at construction (no nil variant) |
-| `Config.TokenEncrypter` | AES-GCM iff `AUTH_TOKEN_ENCRYPTER_KEY` | provider tokens not persisted (login/link still work) |
-| `Config.Granter` | engine `relationshipGranter` (baseline `RelationshipWriter`, structured `GrantInput`; guarded alternative also demonstrated) | invitation routes not registered (deny-by-absence) |
-| `Config.InviteCheck` | relation-aware `hostInviteCheck` (platform-admin bypass, owner-grant reserved, else `manage_access`) | REQUIRED once `Granter` is wired — nil is `ErrInviteCheckRequired`; set without a `Granter` is `ErrInviteCheckWithoutGranter` |
-| `Config.RuntimeMode` | `development` (explicit) | REQUIRED, no default — nil is `ErrRuntimeModeRequired` |
-| `Config.DeliveryMode` | `jobs` (explicit) | REQUIRED, no default — empty is `ErrDeliveryModeRequired`, unknown is `ErrDeliveryModeInvalid` |
-| `Config.ChallengeProtector` | HMAC key ring (`AUTH_CHALLENGE_PEPPER` or ephemeral) | REQUIRED once `Challenges` wired — `ErrChallengeProtectorRequired` |
-| `Config.DeliveryEncrypter` | AES-GCM (`AUTH_DELIVERY_ENCRYPTER_KEY` or ephemeral) | REQUIRED once delivery can send (`jobs` dispatcher or `in_process`) — `ErrDeliveryEncrypterRequired` |
-| `Config.IdentifierKeyer` | HMAC (`AUTH_IDENTIFIER_KEY` or ephemeral) | production-required; dev falls back to per-instance SHA-256 |
-| `Config.Passwordless` | `[email, phone]` (`AUTH_PASSWORDLESS`) | empty → passwordless routes not registered |
-| `Config.PublicAuthBaseURL` | `…/auth/magic` (`AUTH_PUBLIC_BASE_URL`) | REQUIRED once a link flow is enabled; production requires HTTPS |
-| `Config.OAuthLinkBaseURL` | empty (`AUTH_OAUTH_LINK_URL`) | the OAuth pending-link email's landing URL; empty → bare-token email fallback + one startup WARN; point it at this host's bundled public landing (`…/auth/oauth/link`, mounted with `Config.Views` + a provider) to make the mailed link work; non-empty validated (no fragment, HTTPS in production) |
-| `Config.Views` | `authpages.New(bundle)` (branded-Login override of the ui/goth `authgoth.Views`) | nil → API-only (no HTML pages, no templ/`ui/goth` in the graph) |
-| `Config.EmailContentTemplates` | `authpages.EmailOverride()` | empty → bundled LayerCore email bodies |
+| `OAuthConfig.Providers` | the fake provider | OAuth routes not registered (deny-by-absence) |
+| `New`'s `signer` argument | golang-jwt HS256 over `AUTH_JWT_SECRET` (or ephemeral dev key) | REQUIRED — nil is `ErrTokenSignerRequired` at construction (no nil variant) |
+| `OAuthConfig.TokenEncrypter` | AES-GCM iff `AUTH_TOKEN_ENCRYPTER_KEY` | provider tokens not persisted (login/link still work) |
+| `InvitationsConfig.Granter` | engine `relationshipGranter` (baseline `RelationshipWriter`, structured `GrantInput`; guarded alternative also demonstrated) | invitation routes not registered (deny-by-absence) |
+| `InvitationsConfig.InviteCheck` | relation-aware `hostInviteCheck` (platform-admin bypass, owner-grant reserved, else `manage_access`) | REQUIRED once `Granter` is wired — nil is `ErrInviteCheckRequired`; set without a `Granter` is `ErrInviteCheckWithoutGranter` |
+| `New`'s `runtimeMode` argument | `development` (explicit) | REQUIRED, no default — empty is `ErrRuntimeModeRequired` |
+| `New`'s `deliveryMode` argument | `jobs` (explicit) | REQUIRED, no default — empty is `ErrDeliveryModeRequired`, unknown is `ErrDeliveryModeInvalid` |
+| `IdentityConfig.ChallengeProtector` | HMAC key ring (`AUTH_CHALLENGE_PEPPER` or ephemeral) | REQUIRED once `Challenges` wired — `ErrChallengeProtectorRequired` |
+| `DeliveryConfig.DeliveryEncrypter` | AES-GCM (`AUTH_DELIVERY_ENCRYPTER_KEY` or ephemeral) | REQUIRED once delivery can send (`jobs` dispatcher or `in_process`) — `ErrDeliveryEncrypterRequired` |
+| `IdentityConfig.IdentifierKeyer` | HMAC (`AUTH_IDENTIFIER_KEY` or ephemeral) | production-required; dev falls back to per-instance SHA-256 |
+| `PasswordlessConfig.Passwordless` | `[email, phone]` (`AUTH_PASSWORDLESS`) | empty → passwordless routes not registered |
+| `LinksConfig.PublicAuthBaseURL` | `…/auth/magic` (`AUTH_PUBLIC_BASE_URL`) | REQUIRED once a link flow is enabled; production requires HTTPS |
+| `LinksConfig.OAuthLinkBaseURL` | empty (`AUTH_OAUTH_LINK_URL`) | the OAuth pending-link email's landing URL; empty → bare-token email fallback + one startup WARN; point it at this host's bundled public landing (`…/auth/oauth/link`, mounted with `BrowserConfig.Views` + a provider) to make the mailed link work; non-empty validated (no fragment, HTTPS in production) |
+| `BrowserConfig.Views` | `authpages.New(bundle)` (branded-Login override of the ui/goth `authgoth.Views`) | nil → API-only (no HTML pages, no templ/`ui/goth` in the graph) |
+| `MessagesConfig.EmailContentTemplates` | `authpages.EmailOverride()` | empty → bundled LayerCore email bodies |
 | `Repositories.SecurityEvents` | authmem | no audit trail (recording site is a no-op) |
 | `AUTH_DEBUG` | off by default | `/debug/security-events` not registered (404) |
 
@@ -393,7 +400,7 @@ curl -i -c jar -b jar http://localhost:8082/articles
 
 ```sh
 # start -> 302; note state + PKCE code_challenge in the Location header
-curl -i "http://localhost:8082/auth/oauth/fake/start"
+curl -i -c ojar -b ojar "http://localhost:8082/auth/oauth/fake/start"
 # drive the callback (code becomes the identity) -> 302 + session cookie
 curl -i -c ojar -b ojar \
   "http://localhost:8082/auth/oauth/fake/callback?code=oauth-user%40fake.local&state=<STATE_FROM_LOCATION>"
@@ -407,9 +414,9 @@ curl -i -c ojar -b ojar http://localhost:8082/auth/oauth/linked  # 200 -> [{"pro
 
 **Prerequisite — the platform-admin tuple.** The five machine-identity lifecycle
 routes (`/auth/service-accounts…`, `/auth/api-keys/{id}/revoke`) are mounted only
-because this host sets `auth.Config.MachineRoutesGate` (`main.go`, right after
+because this host sets `auth.AdministrationConfig.MachineRoutesGate` (`main.go`, right after
 `buildAuthConfig`) to
-`authorizer.RequirePermissionFixed("platform", "admin", "main")` — the coordinate
+`authz.HTTP.RequirePermissionFixed("platform", "admin", "main")` — the coordinate
 `authzSchema()` already declares. Each route therefore runs
 `RequireUser` → `RequireLiveSession` → (on the three POSTs) the browser-safe
 `Origin`/CSRF gate → that gate: no credential is **401**, an API-key
@@ -422,7 +429,7 @@ and the five routes are **404** for everyone, with this WARN at boot (key
 *authentication* is unaffected — a bearer key still resolves on `/demo/whoami`):
 
 ```
-level=WARN msg="auth: machine repositories are wired but Config.MachineRoutesGate is
+level=WARN msg="auth: machine repositories are wired but AdministrationConfig.MachineRoutesGate is
 unset; the bundled lifecycle routes are NOT mounted (404) — set a gate or serve your
 own routes over the Service methods"
 ```
@@ -599,13 +606,13 @@ curl -i -c jar -b jar http://localhost:8082/debug/security-events               
 
 The host mounts the events pocket's SSE gateway on the same root router (no
 prefix), so the subject stream lands at **`GET /events`**. It is wrapped by
-`authSvc.RequireUser` (`Config.StreamMiddleware`): the handler reads the stashed
-`identity.Principal` and **fails closed with 401 when no session/bearer is
-present**. `Config.Authorize` is wired through the **authorization engine**
+`authSvc.HTTP.RequireAccessToken()` (`WithStreamMiddleware`): the handler reads the stashed
+`sdk.Principal` and **fails closed with 401 when no session/bearer is
+present**. `WithAuthorization` is wired through the **authorization engine**
 (`authorizer.Check`, the flagship posture — see "Authorization postures" above),
 so the resource-scoped `GET /events/{resource_type}/{resource_id}` route **is
 registered**: a member of the resource is allowed, a resolved non-member gets 403,
-an unauthenticated caller 401. `Repositories.Outbox` is nil — direct-emit mode: the
+an unauthenticated caller 401. `WithOutbox` is nil — direct-emit mode: the
 gateway fans
 best-effort `content.*` frames out over SSE the moment cms emits them (async, O3),
 with no durable rail and no poller. Bodies are metadata-only (`{type, occurred_at,
@@ -634,7 +641,7 @@ curl -N -b jar http://localhost:8082/events
 Reboot with `EVENTS_OUTBOX=memory` to swap the emit path in front of the bus from
 direct-emit to the **durable at-least-once rail**. The host wires an example-local
 in-memory outbox (`internal/outboxmem`, an honest `outbox.EntryRepository`) into
-`Repositories.Outbox` and drives an `events.Poller` on an `sdk/foundation/workers` pool. A
+`WithOutbox` and drives an `outbox.Poller` (`pockets/events/logic/outbox`) on an `sdk/pkg/workers` pool. A
 host-owned `POST /outbox-demo` route appends a record, then signals a cap-1 wake
 channel (the canonical append-then-signal pattern) so the poller drains it
 sub-second rather than waiting out the idle interval: **outbox → poll → emit →
@@ -689,12 +696,13 @@ curl -i -b bjar http://localhost:8082/demo/audit                                
 ```
 
 **Role assignment now HAS an HTTP surface** — the pocket's own, not a host route.
-The host sets `authorization.Config.RoleRoutesGate`, so `Register` mounts the
+The host supplies `authorization.WithRoleRoutes(authorizationhttp.RoleRoutes{Gate: gate})`,
+so `Register` mounts the
 bundled role-administration routes under `/authorization/*`. The gate
 (`roleAdministrationGate`, `cmd/server/authorization.go`) is the ENTIRE chain the
-pocket requires: `authSvc.RequireAccessTokenLive()` (a live human session, which
+pocket requires: `authSvc.HTTP.RequireAccessTokenLive()` (a live human session, which
 stashes the principal the routes read back) composed with
-`authorizer.RequirePermissionFixed("platform", "admin", "main")` — the same
+`authz.HTTP.RequirePermissionFixed("platform", "admin", "main")` — the same
 platform-admin coordinate `MachineRoutesGate` names. It is assigned through
 `deferredMiddleware` because the authorization pocket is built before `authSvc`
 exists; an unassigned gate fails closed with a 500, never an open door.
@@ -729,20 +737,18 @@ the first admin is inherently trusted, so a freshly registered browser account i
 registered user through the `SystemMutator` and then walks the whole flow over HTTP:
 
 ```sh
-# assign -> 200 with a receipt (the client supplies its own idempotency key)
+# assign -> 200 with the outcome
 curl -sX POST http://localhost:8082/authorization/roles -b adminjar \
   -H 'Content-Type: application/json' \
-  -d '{"mutation_id":"my-own-idempotency-key-000001","subject_type":"user","subject_id":"grantee-1","role":"auditor","resource_type":"project","resource_id":"demo"}'
-#  -> {"receipt":{"mutation_id":"…","scope_kind":"resource","scope_type":"project",
-#                 "scope_id":"demo","operation":"role_assign","outcome":"applied",
-#                 "revision":1,"replayed":false,"created_at":"…"}}
+  -d '{"subject_type":"user","subject_id":"grantee-1","role":"auditor","resource_type":"project","resource_id":"demo"}'
+#  -> {"outcome":"applied"}
 
-# replay the SAME mutation_id -> 200, replayed:true, same revision (no double grant)
+# repeat the same request -> 200 {"outcome":"no_change"}
 # list it
 curl -s -b adminjar 'http://localhost:8082/authorization/roles/by-subject?subject_type=user&subject_id=grantee-1'
 # the enumeration that agrees with HasRole
 curl -s -b adminjar 'http://localhost:8082/authorization/roles/effective?resource_type=project&resource_id=demo'
-# unassign -> 200 {"receipt":{…},"same_role_grant_remains":false}
+# unassign -> 200 {"outcome":"applied","same_role_grant_remains":false}
 curl -sX POST http://localhost:8082/authorization/roles/unassign -b adminjar \
   -H 'Content-Type: application/json' \
   -d '{"subject_type":"user","subject_id":"grantee-1","role":"auditor","resource_type":"project","resource_id":"demo"}'
@@ -750,13 +756,14 @@ curl -sX POST http://localhost:8082/authorization/roles/unassign -b adminjar \
 
 Refusals a client will meet: a role the host `RoleModel` does not declare → **400**;
 a half-scoped `resource_type`/`resource_id` pair → **400**; a listing missing either
-of its query values, or carrying `q` → **400**; every domain outcome
-(`no_change`, `semantic_conflict`, `invariant_blocked`, `not_found`) → **200** with
-the outcome named in the receipt, because a conflict is an outcome, not an error.
+of its query values, or carrying `q` → **400**; successful outcomes
+(`applied`, `no_change`, `not_found`) → **200**. Semantic and guardian conflicts
+return **409**; retired mutation IDs and expected revisions are rejected as unknown fields.
 
-Comment the `roleRoutesGate.set(...)` line's `Config.RoleRoutesGate` out of
-`newAuthorization` and all five paths answer **404** with one boot WARN naming the
-unset gate — the pocket's deny-by-absence posture.
+Omit `authorization.WithRoleRoutes(...)` in `newAuthorization` and all five paths
+answer **404**. This intentional headless
+configuration is logged informationally, without a missing-route warning. The
+host passes its logger through `authorization.WithLogger` at construction.
 
 ⚠ **Cookie hosts owe a CSRF layer; this host does not have one.** These are
 state-changing POSTs and the pocket adds nothing beneath your gate. This proof
@@ -780,7 +787,7 @@ section.
 
 ### Leg 8 — auth-v3: normal HTML pages (twice-through)
 
-Because `Config.Views` is wired, every core auth journey has a normal HTML page in
+Because `BrowserConfig.Views` is wired, every core auth journey has a normal HTML page in
 addition to the JSON API. The dispatcher keeps ONE route per endpoint; a form POST
 303-redirects (PRG), a JSON POST keeps its JSON status/body. Drive them in a
 browser at `http://localhost:8082/auth/...`:
@@ -860,8 +867,8 @@ account page redirects to login (after validating a safe relative return-to).
 
 ### Leg 11 — auth-v3: override systems + delivery runtime
 
-The host demonstrates the **two distinct override facilities**: `Config.Views`
-(the branded Login page, Leg 8) and `Config.EmailContentTemplates` (a branded
+The host demonstrates the **two distinct override facilities**: `BrowserConfig.Views`
+(the branded Login page, Leg 8) and `MessagesConfig.EmailContentTemplates` (a branded
 verification email BODY at `email.LayerApp`). Register any user and the delivered
 verification body reads "Your Gopernicus CMS verification code is: …" (the
 LayerApp override), not the bundled default — proof the two systems are distinct.
@@ -869,7 +876,7 @@ The startup log shows the development console-transport WARNs (email sender + ph
 notifier) and the per-job delivery lifecycle (`delivery job … outcome=delivered
 attempt=1`). The delivery dispatcher is the ONLY send path:
 retry/replacement/terminal/purge are proven hermetically
-(`internal/logic/delivery` + the jobs-mode host proofs), and a memory host cannot
+(`pockets/authentication/logic/delivery` + the jobs-mode host proofs), and a memory host cannot
 boot production, so the production-negative gates
 (`cmd/server/production_test.go`) are hermetic: console→`ErrInsecureDeliveryTransport`,
 http-base→`ErrPublicAuthBaseURLInsecure`, memory-limiter→`ErrNonDurableRateLimiter`,
@@ -890,7 +897,7 @@ unwired kind (e.g. `slack`) fails 400; email is always-on via the Mailer.
 - **events** (SSE, `pockets/events`): `GET /events` — the authenticated
   subject's stream (best-effort `content.*` fan-out), gated by `RequireUser`
   (401 when absent). `GET /events/{resource_type}/{resource_id}` — the
-  resource-scoped stream, registered because `Config.Authorize` is wired through
+  resource-scoped stream, registered because `WithAuthorization` is wired through
   the authorization engine (`authorizer.Check`, the flagship posture): member →
   stream, resolved non-member → 403. Under `EVENTS_OUTBOX=memory` the host also
   mounts `POST /outbox-demo` (host-owned durable-rail trigger, not pocket surface).
@@ -906,18 +913,18 @@ unwired kind (e.g. `slack`) fails 400; email is always-on via the Mailer.
   `/auth/oauth/{provider}/{start,callback,link/start,unlink/start,unlink}` +
   `/auth/oauth/verify-link`; machine `/auth/service-accounts…`,
   `/auth/api-keys/{id}/revoke` (mounted ONLY because this host names a
-  `Config.MachineRoutesGate`; each runs `RequireUser` + `RequireLiveSession` +
+  `AdministrationConfig.MachineRoutesGate`; each runs `RequireUser` + `RequireLiveSession` +
   (POSTs only) the browser-safe `Origin`/CSRF gate +
   `RequirePermissionFixed("platform","admin","main")` — see Leg 2); invitations
   `/auth/invitations/…`. Because
-  `Config.Views` is wired, the HTML GET pages (`/auth/{login,register,verify,
+  `BrowserConfig.Views` is wired, the HTML GET pages (`/auth/{login,register,verify,
   password/forgot,password/reset,account,step-up,magic,…}`) mount alongside the
   JSON API — a form POST 303-redirects, a JSON POST keeps its JSON body.
 - **authorization** (JSON, `pockets/authorization`): the bundled
   role-administration surface `POST /authorization/roles`,
   `POST /authorization/roles/unassign`, and
   `GET /authorization/roles/{by-subject,by-resource,effective}` — mounted ONLY
-  because this host names a `Config.RoleRoutesGate`, which composes
+  because this host supplies `RoleRoutes.Gate`, which composes
   `RequireAccessTokenLive()` with
   `RequirePermissionFixed("platform","admin","main")` (see Leg 7b). The rest of
   `/authorization/*` stays reserved.
@@ -928,7 +935,7 @@ unwired kind (e.g. `slack`) fails 400; email is always-on via the Mailer.
   `GET /demo/whoami` (RequirePrincipal-gated: any credential class → 200),
   `GET /demo/members-only` (RequirePrincipal + engine-Check gated: member/owner →
   200, resolved non-member → 403), `GET /demo/my-projects` (the relationship
-  kind's `LookupResources` enumeration → `{admin, ids}`), `GET /demo/audit`
+  kind's `LookupAllResourceIDs` enumeration → `{admin, ids}`), `GET /demo/audit`
   (the roles kind's ROLE-MODEL gate, `RequirePermissionFixed("project", "audit",
   "demo")`, + a direct-scope `ListRoleAssignmentsByResource` read-back), and `GET /debug/security-events`
   (`AUTH_DEBUG=1` + `RequireUser`). The demo routes are READ-ONLY: AZ3-4.1 removed the
@@ -943,3 +950,15 @@ unwired kind (e.g. `slack`) fails 400; email is always-on via the Mailer.
   enums): `{mode, runtime, admitted, outstanding, queued, capacity, saturated,
   delivered, skipped, retried, dead_lettered, superseded, purged, observer_failures}`.
   See the "Delivery operational health" wiring bullet above.
+
+## OAuth audit update
+
+The local fake OAuth provider uses the core SDK port without advertising OIDC or
+refresh support. This demonstration host explicitly trusts its fake identity
+source; production hosts must choose their own `TrustOAuthEmail` policy.
+Browser start now sets a per-flow proof cookie. Keep the same cookie jar across
+start and callback (for example, curl `-c cookies.txt` then `-b cookies.txt`);
+copying the public state URL alone cannot complete a login/link. The example's
+HTTP tests verify that a foreign browser fails and the original can still finish.
+Native authorization-code support is opt-in through exact host callback
+configuration; see the authentication README and root AUDIT-015.

@@ -4,11 +4,10 @@ import (
 	"context"
 	"time"
 
-	"github.com/jackc/pgx/v5"
-
 	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
-	"github.com/gopernicus/gopernicus/pockets/authentication/domain/oauthaccount"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/oauthaccount"
 	"github.com/gopernicus/gopernicus/sdk"
+	"github.com/jackc/pgx/v5"
 )
 
 // OAuthAccountStore implements oauthaccount.OAuthAccountRepository over a
@@ -26,7 +25,11 @@ type OAuthAccountStore struct {
 var _ oauthaccount.OAuthAccountRepository = (*OAuthAccountStore)(nil)
 
 // NewOAuthAccountStore returns an OAuthAccountStore backed by db.
+// It panics if db is nil; the caller owns the database lifecycle.
 func NewOAuthAccountStore(db *pgxdb.DB, opts ...Option) *OAuthAccountStore {
+	if db == nil {
+		panic("authentication pgx: NewOAuthAccountStore received a nil database")
+	}
 	return &OAuthAccountStore{db: db, qualified: qualified{schema: applyOptions(opts).schema}}
 }
 
@@ -69,10 +72,26 @@ func (r oauthAccountRow) toDomain() oauthaccount.OAuthAccount {
 // Create persists a new link; a colliding (provider, provider_user_id) →
 // sdk.ErrAlreadyExists (plain INSERT, no ON CONFLICT).
 func (s *OAuthAccountStore) Create(ctx context.Context, a oauthaccount.OAuthAccount) (oauthaccount.OAuthAccount, error) {
-	q := `INSERT INTO ` + s.table(oauthAccountsTable) + ` (` + oauthAccountColumns + `)
+	var created oauthaccount.OAuthAccount
+	err := s.db.InTx(ctx, func(tx *pgxdb.Tx) error {
+		if _, err := lockCredentialUser(ctx, tx, s.qualified, a.UserID); err != nil {
+			return err
+		}
+		var err error
+		created, err = insertOAuthAccount(ctx, tx, s.qualified, a)
+		return err
+	})
+	if err != nil {
+		return oauthaccount.OAuthAccount{}, err
+	}
+	return created, nil
+}
+
+func insertOAuthAccount(ctx context.Context, tx *pgxdb.Tx, qualifiedTables qualified, a oauthaccount.OAuthAccount) (oauthaccount.OAuthAccount, error) {
+	q := `INSERT INTO ` + qualifiedTables.table(oauthAccountsTable) + ` (` + oauthAccountColumns + `)
 		VALUES (@provider, @provider_user_id, @user_id, @provider_email, @provider_email_verified,
 			@account_verified, @linked_at, @access_token, @refresh_token, @token_expires_at, @token_type, @scope)`
-	_, err := s.db.Exec(ctx, q, pgx.NamedArgs{
+	_, err := tx.Exec(ctx, q, pgx.NamedArgs{
 		"provider":                a.Provider,
 		"provider_user_id":        a.ProviderUserID,
 		"user_id":                 a.UserID,
@@ -122,15 +141,61 @@ func (s *OAuthAccountStore) ListByUser(ctx context.Context, userID string) ([]oa
 
 // Delete removes userID's link to provider; no such link → sdk.ErrNotFound.
 func (s *OAuthAccountStore) Delete(ctx context.Context, userID, provider string) error {
-	n, err := pgxdb.ExecAffecting(ctx, s.db, "DELETE FROM "+s.table(oauthAccountsTable)+" WHERE user_id = @user_id AND provider = @provider", pgx.NamedArgs{
-		"user_id":  userID,
-		"provider": provider,
+	return s.db.InTx(ctx, func(tx *pgxdb.Tx) error {
+		if _, err := lockCredentialUser(ctx, tx, s.qualified, userID); err != nil {
+			return err
+		}
+		n, err := pgxdb.ExecAffecting(ctx, tx, `DELETE FROM `+s.table(oauthAccountsTable)+` WHERE user_id = @id AND provider = @provider`, pgx.NamedArgs{"id": userID, "provider": provider})
+		if err != nil {
+			return err
+		}
+		if n == 0 {
+			return sdk.ErrNotFound
+		}
+		if err := bumpCredentialRevision(ctx, tx, s.qualified, userID, time.Now().UTC()); err != nil {
+			return err
+		}
+		return revokeCredentialState(ctx, tx, s.qualified, userID)
+	})
+}
+
+// Link makes adoption and provider attachment one conditional credential commit.
+func (s *OAuthAccountStore) Link(ctx context.Context, a oauthaccount.OAuthAccount, expectedAuthRevision int64, adoptIdentifierID string, now time.Time) (oauthaccount.OAuthAccount, int64, error) {
+	var revision int64
+	err := s.db.InTx(ctx, func(tx *pgxdb.Tx) error {
+		current, err := lockCredentialUser(ctx, tx, s.qualified, a.UserID)
+		if err != nil {
+			return err
+		}
+		if current != expectedAuthRevision {
+			return sdk.ErrConflict
+		}
+		if adoptIdentifierID != "" {
+			n, err := pgxdb.ExecAffecting(ctx, tx, `UPDATE `+s.table(identifiersTable)+` SET verified_at = @now, updated_at = @now WHERE id = @identifier_id AND user_id = @id AND kind = 'email' AND replaced_at IS NULL AND (login_enabled = TRUE OR recovery_enabled = TRUE)`, pgx.NamedArgs{"id": a.UserID, "identifier_id": adoptIdentifierID, "now": now.UTC()})
+			if err != nil {
+				return err
+			}
+			if n != 1 {
+				return sdk.ErrConflict
+			}
+			if _, err := tx.Exec(ctx, `DELETE FROM `+s.table(passwordsTable)+` WHERE user_id = @id`, pgx.NamedArgs{"id": a.UserID}); err != nil {
+				return err
+			}
+			if err := revokeCredentialState(ctx, tx, s.qualified, a.UserID); err != nil {
+				return err
+			}
+		}
+		if _, err := insertOAuthAccount(ctx, tx, s.qualified, a); err != nil {
+			return err
+		}
+		if err := bumpCredentialRevision(ctx, tx, s.qualified, a.UserID, now); err != nil {
+			return err
+		}
+		revision = current + 1
+		return nil
 	})
 	if err != nil {
-		return err
+		return oauthaccount.OAuthAccount{}, 0, err
 	}
-	if n == 0 {
-		return sdk.ErrNotFound
-	}
-	return nil
+	return a, revision, nil
 }

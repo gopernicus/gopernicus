@@ -4,8 +4,8 @@ import (
 	"context"
 
 	firestoredb "github.com/gopernicus/gopernicus/integrations/datastores/firestore"
-	"github.com/gopernicus/gopernicus/pockets/authentication/domain/contactchange"
-	"github.com/gopernicus/gopernicus/pockets/authentication/domain/identifier"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/contactchange"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/identifier"
 )
 
 var _ contactchange.Repository = (*contactChangeStore)(nil)
@@ -31,7 +31,14 @@ func (s *contactChangeStore) Create(ctx context.Context, p contactchange.Pending
 
 // Consume is single-use: the row is deleted and returned. An expired row's
 // deletion COMMITS, then sdk.ErrExpired is returned; absent → sdk.ErrNotFound.
-func (s *contactChangeStore) Consume(ctx context.Context, userID string, kind identifier.Kind) (contactchange.PendingChange, error) {
+func (s *contactChangeStore) Get(ctx context.Context, userID string, kind identifier.Kind) (contactchange.PendingChange, error) {
+	if err := refuseAmbient(ctx); err != nil {
+		return contactchange.PendingChange{}, err
+	}
+	return contactchange.PendingChange{}, errNotImplemented
+}
+
+func (s *contactChangeStore) Consume(ctx context.Context, userID string, kind identifier.Kind, expectedID string) (contactchange.PendingChange, error) {
 	if err := refuseAmbient(ctx); err != nil {
 		return contactchange.PendingChange{}, err
 	}

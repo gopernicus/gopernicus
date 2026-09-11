@@ -9,7 +9,7 @@ import (
 
 	"github.com/a-h/templ"
 
-	"github.com/gopernicus/gopernicus/sdk/foundation/web"
+	"github.com/gopernicus/gopernicus/sdk/pkg/web"
 	"github.com/gopernicus/gopernicus/ui/goth/primitives"
 )
 

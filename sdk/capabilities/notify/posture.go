@@ -3,45 +3,56 @@ package notify
 import (
 	"errors"
 	"fmt"
+	"reflect"
 
-	"github.com/gopernicus/gopernicus/sdk/foundation/environment"
+	"github.com/gopernicus/gopernicus/sdk/pkg/environment"
 )
 
-// ErrInsecureTransport is returned by CheckNotifier in
-// environment.ModeProduction when a Notifier is development-only or declares no
+// ErrInsecureTransport is returned by CheckTransport in
+// environment.ModeProduction when a transport is development-only or declares no
 // capability metadata at all. A development-only transport exposes message
-// bodies — the bundled Console notifier logs them — and a Notifier that declares
+// bodies — the bundled Console sender logs them — and a transport that declares
 // nothing cannot be proven safe, so production rejects both. The returned error
 // wraps this sentinel with the specific reason.
-var ErrInsecureTransport = errors.New("notify: production rejects a development-only or metadata-less Notifier")
+var ErrInsecureTransport = errors.New("notify: production rejects a development-only or metadata-less transport")
 
-// TransportPosture is the classification CheckNotifier returns: what the
-// Notifier declared about itself, separate from whether that is acceptable for a
+// TransportPosture is the classification CheckTransport returns: what the
+// transport declared about itself, separate from whether that is acceptable for a
 // given mode. A caller in development uses it to phrase its own warning — this
 // package deliberately takes no logger, because message text and log routing are
 // composition concerns.
 type TransportPosture struct {
-	// Declared reports whether the Notifier implements CapabilityReporter. False
+	// Declared reports whether the transport implements CapabilityReporter. False
 	// means Capabilities is the zero value because nothing was declared, not
 	// because the transport declared zero values.
 	Declared bool
-	// Capabilities is what the Notifier declared. It is the zero value when
+	// Capabilities is what the transport declared. It is the zero value when
 	// Declared is false.
 	Capabilities Capabilities
 }
 
-// ProductionCapable reports whether the Notifier is acceptable in
+// ProductionCapable reports whether the transport is acceptable in
 // environment.ModeProduction: it declared metadata and is not development-only.
 // In development a false result is exactly the condition worth warning about.
 func (p TransportPosture) ProductionCapable() bool {
 	return p.Declared && !p.Capabilities.DevelopmentOnly
 }
 
-// InspectNotifier reports what n declares about itself without applying any
-// policy. Detection is structural — any Notifier implementing CapabilityReporter
+// InspectTransport reports what n declares about itself without applying any
+// policy. Detection is structural — any transport implementing CapabilityReporter
 // qualifies, bundled or third-party — so a host's own transport can opt in
-// without this package knowing its type. A nil Notifier declares nothing.
-func InspectNotifier(n Notifier) TransportPosture {
+// without this package knowing its type. A nil transport declares nothing.
+func InspectTransport(n any) TransportPosture {
+	if n == nil {
+		return TransportPosture{}
+	}
+	v := reflect.ValueOf(n)
+	switch v.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		if v.IsNil() {
+			return TransportPosture{}
+		}
+	}
 	r, ok := n.(CapabilityReporter)
 	if !ok {
 		return TransportPosture{}
@@ -49,18 +60,18 @@ func InspectNotifier(n Notifier) TransportPosture {
 	return TransportPosture{Declared: true, Capabilities: r.Capabilities()}
 }
 
-// CheckNotifier validates n against mode and returns the Notifier's declared
+// CheckTransport validates n against mode and returns the transport's declared
 // posture either way.
 //
-// In environment.ModeProduction a Notifier that declares no metadata, or
+// In environment.ModeProduction a transport that declares no metadata, or
 // declares itself development-only, is rejected with an error wrapping
 // ErrInsecureTransport. In environment.ModeDevelopment both are accepted and the
 // returned posture tells the caller whether to warn.
 //
 // An invalid or empty mode is rejected with the environment package's own
 // validation error rather than defaulting to a posture the host did not choose.
-func CheckNotifier(mode environment.Mode, n Notifier) (TransportPosture, error) {
-	posture := InspectNotifier(n)
+func CheckTransport(mode environment.Mode, n any) (TransportPosture, error) {
+	posture := InspectTransport(n)
 
 	if err := environment.ValidateMode(mode); err != nil {
 		return posture, err
@@ -69,10 +80,10 @@ func CheckNotifier(mode environment.Mode, n Notifier) (TransportPosture, error) 
 		return posture, nil
 	}
 	if !posture.Declared {
-		return posture, fmt.Errorf("%w: the Notifier declares no capability metadata", ErrInsecureTransport)
+		return posture, fmt.Errorf("%w: the transport declares no capability metadata", ErrInsecureTransport)
 	}
 	if posture.Capabilities.DevelopmentOnly {
-		return posture, fmt.Errorf("%w: the Notifier is development-only", ErrInsecureTransport)
+		return posture, fmt.Errorf("%w: the transport is development-only", ErrInsecureTransport)
 	}
 	return posture, nil
 }

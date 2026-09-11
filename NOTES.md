@@ -554,7 +554,7 @@ credential leak — credentials now only on explicit allowlist matches); the
 OpenAPI generator collapsed non-200/201/204 statuses to `"200"` (a 202
 override now emits correctly).
 
-**Caveats.** `slug.Make` accent folding is a behavior change (D-5): persisted
+**Caveats.** `sdk.Slugify` accent folding is a behavior change (D-5): persisted
 slugs are untouched (write-time), but a mixed corpus now exists (old rows
 slugged under the old algorithm) and renames re-slug (confirmed live in the
 phase-6 drive); the cms content-type route-segment recompute path shifts only
@@ -1281,7 +1281,7 @@ events-v1 phase 4's docker run.
   TRIGGER: the first host that needs a cms use-case without (or beside) the
   shipped HTML transport.
 - **storetest empty-page keyset case** — cms pins it; auth/jobs do not
-  (D5 gate finding; empty path lives in `sdk/crud.TrimPage`, tested there).
+  (D5 gate finding; empty path lives in `sdk/list.TrimPage`, tested there).
   OWNER CALL open: add the case to both storetests to pin the contract.
 - **Hygiene, parked for repo-hardening tasks 9/10:** stale
   templ/goldmark/bluemonday `// indirect` entries in the two cms store
@@ -1345,7 +1345,7 @@ gate edits, and P1–P5 post-gate amendments are logged in the plan +
 design-doc header — headline items: A-I1 (no `Config.Identity`; fails
 closed), P5 (`MaxConnAge` cannot be disabled), gate edit 1 (best-effort
 SSE `id:` is CorrelationID, no de-dupe; durable `id:` is EventID),
-AuthorizeStream takes `identity.Principal` (faithful post-A-I1 shape, a
+AuthorizeStream takes `sdk.Principal` (faithful post-A-I1 shape, a
 logged divergence from the design's `userID string`).
 
 **Open flags (jrazmi):** (1) events `Config` has no `Logger` field — the
@@ -1430,7 +1430,7 @@ Post-close amendment to pgx-crud-v1, owner-ratified in-conversation
 mode interleaving was split into linear `listCursor`/`listOffset` private
 flows behind the unchanged `List` signature (both dialects; the offset
 flow no longer strips cursors post-hoc); (2) **mode selection is now an
-explicit `crud.Strategy`** ("cursor" default via zero value, "offset")
+explicit `list.Strategy`** ("cursor" default via zero value, "offset")
 — the `Offset > 0` inference is REMOVED: a cursor-strategy request
 carrying an offset fails loudly (wrapping ErrInvalidInput) instead of
 silently flipping modes, and `offset=0` is now expressible offset mode
@@ -1459,9 +1459,9 @@ parent milestone — jrazmi's commit call.
 Second post-close amendment to pgx-crud-v1, owner-ratified
 in-conversation (max page size is a RESOURCE property — "a list of ids
 could be more than 100; a list of embeddings for moby dick should be
-limited"). `crud.Limits{Default, Max}` is the resource's policy,
+limited"). `list.Limits{Default, Max}` is the resource's policy,
 declared per-aggregate in the domain rim beside OrderFields (the Q1
-pattern) via `var ListLimits = crud.Limits{…}` — the DefaultLimit(25)/
+pattern) via `var ListLimits = list.Limits{…}` — the DefaultLimit(25)/
 MaxLimit(100) constants survive as zero-value FALLBACKS, so sdk stays
 the zero-config starter. `NormalizedLimit(l Limits)` replaces the
 zero-arg store-edge clamp; `ListParams.Limits` replaces v1a's MaxLimit
@@ -1580,7 +1580,7 @@ consumers embed crud over a non-string key, segovia v2 verified crud-free
 and all-string); Getter/Lister split and UUIDv7 likewise deferred with
 triggers. **D7 (owner-raised):** pluggable ID generation recorded, not
 shipped — app-local code needs no framework support (hosts own their call
-sites); the feature-side design is pre-agreed (sdk `id.Generator` func
+sites); the feature-side design is pre-agreed (sdk `sdk.IDGenerator` func
 type + per-feature nil-safe `Config.IDGenerator`, extension tier 2);
 trigger = first host needing feature entities keyed by its own generator.
 Owner carry-back: flip Segovia flag #2, drop its interim-workaround note.
@@ -1786,7 +1786,7 @@ tx-path threaded; pgxdb's stale asymmetry records rewritten) · the FULL
 turso struct-scan sweep (strict `ScanStruct[T]`, `turso.Time/NullTime/
 Bool` Scanner types, ~23 row structs + toDomain across five stores, zero
 hand-scan callbacks left; write-side helpers renamed FormatNullTime/Ptr)
-· `crud.Transactor` scaffolded UNCONSUMED (`Transact`, pinned semantics,
+· `transaction.Transactor` scaffolded UNCONSUMED (`Transact`, pinned semantics,
 no sdk ctx stash, nesting unpinned) + guards **G9 no-Underlying** and
 **G10 no-Lax** (prove-can-fail recorded; `make guard` runs TEN) · opt-in
 `Config.Retry` (connection-acquisition-only, full-jitter, ctx-budgeted;
@@ -1876,7 +1876,7 @@ projection — NO User struct in sdk, ever), fail-closed `Resolver`,
 strict `ResolveAll` (P1, `feb68fb`) · **sdk/notify** (new):
 `Notifier{Kind,Notify}` + `Console` + From-carrying `MailerBridge`; no
 Set helper (one consumer) (P2, `e57114b`) · **authentication**:
-`auth.Service` implements `identity.Resolver` (nil-guarded, machine-off
+`auth.Service` implements `sdk.IdentityResolver` (nil-guarded, machine-off
 safe); `Config.Notifiers` with loud duplicate-kind rejection; kind-aware
 invitations — supported-kind predicate (email always-on via the required
 Mailer), service-owned kind-aware normalization, the delivery fork over

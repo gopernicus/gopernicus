@@ -25,7 +25,7 @@ func transactLiveDB(t *testing.T) (*DB, string) {
 	if url == "" || token == "" {
 		t.Skip("TURSO_DATABASE_URL/TURSO_AUTH_TOKEN not set — Transact live semantics NOT verified")
 	}
-	db, err := Open(Config{URL: url, AuthToken: token})
+	db, err := Open(context.Background(), Config{URL: url, AuthToken: token})
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}

@@ -9,31 +9,30 @@ import (
 	"testing"
 
 	gcfs "cloud.google.com/go/firestore"
-
 	firestoredb "github.com/gopernicus/gopernicus/integrations/datastores/firestore"
-	"github.com/gopernicus/gopernicus/pockets/authorization/domain/relationship"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/relationships"
 	"github.com/gopernicus/gopernicus/sdk"
-	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
+	"github.com/gopernicus/gopernicus/sdk/pkg/list"
 )
 
 // A2c: the raw relationship writes and the transactional claim lifecycle
 // (A-D3). The shared conformance suite covers the port's OUTCOMES; what is
-// asserted here is the part only this family has — that a tuple's THREE
+// asserted here is the part only this family has — that a tuple's TWO
 // documents move together, that a refused operation leaves none of them behind,
 // and that the transaction budget is enforced before anything is written.
 
-// assertTupleDocs asserts a tuple's row and BOTH claims are present (want) or
-// all three absent. A row without its claims is uniqueness enforced by nothing;
+// assertTupleDocs asserts a tuple's row and the subject claim are present (want) or
+// both absent. A row without its claims is uniqueness enforced by nothing;
 // a claim without its row is a tuple that can never be recreated.
 func assertTupleDocs(t *testing.T, db *firestoredb.DB, row relationshipDoc, want bool) {
 	t.Helper()
 	ctx := context.Background()
-	tuple, subject, id := claimRefs(db, row)
-	snaps, err := db.ReaderFrom(ctx).GetAll(ctx, []*gcfs.DocumentRef{tuple, subject, id})
+	tuple, subject := claimRefs(db, row)
+	snaps, err := db.ReaderFrom(ctx).GetAll(ctx, []*gcfs.DocumentRef{tuple, subject})
 	if err != nil {
 		t.Fatalf("GetAll: %v", err)
 	}
-	for i, what := range []string{"row", "subject claim", "id claim"} {
+	for i, what := range []string{"row", "subject claim"} {
 		if got := snaps[i].Exists(); got != want {
 			t.Fatalf("%s:%s#%s <- %s:%s: %s exists=%v, want %v",
 				row.ResourceType, row.ResourceID, row.Relation, row.SubjectType, row.SubjectID, what, got, want)
@@ -41,7 +40,7 @@ func assertTupleDocs(t *testing.T, db *firestoredb.DB, row relationshipDoc, want
 	}
 }
 
-// TestCreateRelationshipsClaimLifecycle walks a tuple's three documents through
+// TestCreateRelationshipsClaimLifecycle walks a tuple's two documents through
 // a create and each delete variant: they arrive together and they leave
 // together, so no delete path can strand a claim that would block recreating
 // the tuple.
@@ -49,16 +48,16 @@ func TestCreateRelationshipsClaimLifecycle(t *testing.T) {
 	ctx := context.Background()
 	db, s := newRelationships(t)
 
-	rows := func(c relationship.CreateRelationship) relationshipDoc {
+	rows := func(c relationships.CreateRelationship) relationshipDoc {
 		t.Helper()
-		page, err := s.ListRelationshipsByResource(ctx, c.ResourceType, c.ResourceID, relationship.ResourceRelationshipFilter{}, crud.ListRequest{Limit: 100})
+		page, err := s.ListRelationshipsByResource(ctx, c.ResourceType, c.ResourceID, relationships.ResourceRelationshipFilter{}, list.Request{Limit: 100})
 		if err != nil {
 			t.Fatalf("list: %v", err)
 		}
 		for _, item := range page.Items {
 			if item.SubjectType == c.SubjectType && item.SubjectID == c.SubjectID && item.Relation == c.Relation {
 				return relationshipDoc{
-					RelationshipID: item.ID, ResourceType: c.ResourceType, ResourceID: c.ResourceID,
+					ResourceType: c.ResourceType, ResourceID: c.ResourceID,
 					Relation: c.Relation, SubjectType: c.SubjectType, SubjectID: c.SubjectID, SubjectRelation: c.SubjectRelation,
 				}
 			}
@@ -69,7 +68,7 @@ func TestCreateRelationshipsClaimLifecycle(t *testing.T) {
 
 	for _, tc := range []struct {
 		name   string
-		tuple  relationship.CreateRelationship
+		tuple  relationships.CreateRelationship
 		delete func(relationshipDoc) error
 	}{
 		{
@@ -84,7 +83,7 @@ func TestCreateRelationshipsClaimLifecycle(t *testing.T) {
 			tuple: ctfUserset("doc", "d2", "viewer", "group", "eng", "member"),
 			delete: func(row relationshipDoc) error {
 				return s.DeleteRelationshipTarget(ctx, row.ResourceType, row.ResourceID, row.Relation,
-					relationship.SubjectRef{Type: row.SubjectType, ID: row.SubjectID, Relation: row.SubjectRelation})
+					relationships.SubjectRef{Type: row.SubjectType, ID: row.SubjectID, Relation: row.SubjectRelation})
 			},
 		},
 		{
@@ -103,7 +102,7 @@ func TestCreateRelationshipsClaimLifecycle(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if err := s.CreateRelationships(ctx, []relationship.CreateRelationship{tc.tuple}); err != nil {
+			if err := s.CreateRelationships(ctx, []relationships.CreateRelationship{tc.tuple}); err != nil {
 				t.Fatalf("create: %v", err)
 			}
 			row := rows(tc.tuple)
@@ -122,8 +121,8 @@ func TestCreateRelationshipsClaimLifecycle(t *testing.T) {
 			assertTupleDocs(t, db, row, false)
 
 			// The claims really are released: the identical tuple can be
-			// created again, which a stranded subject or id claim would block.
-			if err := s.CreateRelationships(ctx, []relationship.CreateRelationship{tc.tuple}); err != nil {
+			// created again, which a stranded subject claim would block.
+			if err := s.CreateRelationships(ctx, []relationships.CreateRelationship{tc.tuple}); err != nil {
 				t.Fatalf("recreate after delete: %v", err)
 			}
 			assertTupleDocs(t, db, rows(tc.tuple), true)
@@ -139,7 +138,7 @@ func TestCreateRelationshipsResolvesDuplicateSubjectsInInputOrder(t *testing.T) 
 	ctx := context.Background()
 	db, s := newRelationships(t)
 
-	if err := s.CreateRelationships(ctx, []relationship.CreateRelationship{
+	if err := s.CreateRelationships(ctx, []relationships.CreateRelationship{
 		ctf("doc", "d1", "owner", "user", "u1"),  // wins
 		ctf("doc", "d1", "member", "user", "u1"), // same subject, different relation
 		ctf("doc", "d1", "owner", "user", "u1"),  // exact duplicate
@@ -153,7 +152,7 @@ func TestCreateRelationshipsResolvesDuplicateSubjectsInInputOrder(t *testing.T) 
 		t.Fatalf("the later relation for the same subject must be skipped, got %d member rows", n)
 	}
 	// A stored subject wins over a later CALL the same way.
-	if err := s.CreateRelationships(ctx, []relationship.CreateRelationship{ctf("doc", "d1", "member", "user", "u1")}); err != nil {
+	if err := s.CreateRelationships(ctx, []relationships.CreateRelationship{ctf("doc", "d1", "member", "user", "u1")}); err != nil {
 		t.Fatalf("second relation for a stored subject must be nil, got %v", err)
 	}
 	if n, _ := s.CountByResourceAndRelation(ctx, "doc", "d1", "member"); n != 0 {
@@ -173,7 +172,7 @@ func TestCreateRelationshipsResolvesDuplicateSubjectsInInputOrder(t *testing.T) 
 func assertRowAbsent(t *testing.T, db *firestoredb.DB, row relationshipDoc) {
 	t.Helper()
 	ctx := context.Background()
-	tuple, _, _ := claimRefs(db, row)
+	tuple, _ := claimRefs(db, row)
 	snap, err := db.ReaderFrom(ctx).Get(ctx, tuple)
 	if err != nil && !errors.Is(err, sdk.ErrNotFound) {
 		t.Fatalf("Get: %v", err)
@@ -191,14 +190,14 @@ func TestSetRelationTargetsConflictWritesNothing(t *testing.T) {
 	ctx := context.Background()
 	db, s := newRelationships(t)
 
-	if err := s.CreateRelationships(ctx, []relationship.CreateRelationship{
+	if err := s.CreateRelationships(ctx, []relationships.CreateRelationship{
 		ctf("space", "child", "parent", "space", "keep"),
 		ctf("space", "child", "owner", "space", "occupied"),
 	}); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 
-	err := s.SetRelationTargets(ctx, "space", "child", "parent", []relationship.CreateRelationship{
+	err := s.SetRelationTargets(ctx, "space", "child", "parent", []relationships.CreateRelationship{
 		ctf("space", "child", "parent", "space", "keep"),
 		ctf("space", "child", "parent", "space", "fresh"),    // would be created
 		ctf("space", "child", "parent", "space", "occupied"), // holds `owner`
@@ -214,7 +213,6 @@ func TestSetRelationTargetsConflictWritesNothing(t *testing.T) {
 	// The would-be new tuple left NO document behind — row or claim.
 	assertTupleDocs(t, db, relationshipDoc{
 		ResourceType: "space", ResourceID: "child", Relation: "parent", SubjectType: "space", SubjectID: "fresh",
-		RelationshipID: "never-minted",
 	}, false)
 	if n, _ := s.CountByResourceAndRelation(ctx, "space", "child", "owner"); n != 1 {
 		t.Fatalf("the occupied target's own relation must survive, got %d owner rows", n)
@@ -235,7 +233,7 @@ func TestSetRelationTargetsConcurrentDisjointSetsConverge(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if err := s.SetRelationTargets(ctx, "space", "child", "parent", []relationship.CreateRelationship{
+			if err := s.SetRelationTargets(ctx, "space", "child", "parent", []relationships.CreateRelationship{
 				ctf("space", "child", "parent", "space", id),
 			}); err != nil {
 				t.Errorf("set %s: %v", id, err)
@@ -262,7 +260,6 @@ func TestSetRelationTargetsConcurrentDisjointSetsConverge(t *testing.T) {
 	// state unrepairable by a later reconciliation.
 	assertTupleDocs(t, db, relationshipDoc{
 		ResourceType: "space", ResourceID: "child", Relation: "parent", SubjectType: "space", SubjectID: loser,
-		RelationshipID: "never-minted",
 	}, false)
 }
 
@@ -280,7 +277,7 @@ func TestLargeBatchesCommitInOneTransaction(t *testing.T) {
 	_, s := newRelationships(t)
 
 	const tuples = 200
-	batch := make([]relationship.CreateRelationship, 0, tuples)
+	batch := make([]relationships.CreateRelationship, 0, tuples)
 	for i := 0; i < tuples; i++ {
 		batch = append(batch, ctf("doc", "big", "viewer", "user", docID("u", i)))
 	}

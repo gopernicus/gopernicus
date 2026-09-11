@@ -28,6 +28,14 @@ Two SQL decisions worth flagging:
 
 ## Surface
 
+Fenced keyed admission reads the greatest stored `created_at` under its existing
+transaction-scoped advisory lock. New creation timestamps follow that value by
+at least one microsecond when the wall clock repeats or moves backward. This
+preserves latest-generation lookup across active and terminal history without
+changing the schema. `scheduled_for` and lease timing remain independent;
+adjusted creation timestamps are ordering metadata, not precise wall-clock proof.
+Existing history is not rewritten; update every writer sharing these tables.
+
 Mirrors the turso store's exported surface (a host switches dialect by one import
 + one `Open` call):
 

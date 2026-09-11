@@ -12,14 +12,14 @@ import (
 
 	firestoredb "github.com/gopernicus/gopernicus/integrations/datastores/firestore"
 	"github.com/gopernicus/gopernicus/integrations/datastores/firestore/firestoretest"
-	"github.com/gopernicus/gopernicus/pockets/authorization/domain/role"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/roles"
+	authroles "github.com/gopernicus/gopernicus/pockets/authorization/logic/roles"
 	"github.com/gopernicus/gopernicus/sdk"
-	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
+	listing "github.com/gopernicus/gopernicus/sdk/pkg/list"
 )
 
 // The A3a/A3b fixtures and the cases the shared conformance suite does not
-// reach: the document shape a role grant writes, the role_key TIEBREAK (which
-// only shows itself when created_at ties, and a real Assign never ties), the
+// reach: the document shape a role grant writes, natural role_key ordering, the
 // unrestricted probe's read budget, and the effective listing's page-boundary
 // and reverse/offset/count behaviour.
 
@@ -29,26 +29,22 @@ func newRoles(t *testing.T) (*firestoredb.DB, *roleStore) {
 	t.Helper()
 	db := firestoretest.OpenDatabase(t, emulatorDatabase)
 	firestoretest.Reset(t, db)
-	return db, newRoleStore(db)
+	return db, newRoleStore(db, false)
 }
 
 // ra is the local assignment constructor.
-func ra(subjectID, roleName, resourceType, resourceID string) role.Assignment {
-	return role.Assignment{SubjectType: "user", SubjectID: subjectID, Role: roleName, ResourceType: resourceType, ResourceID: resourceID}
+func ra(subjectID, roleName, resourceType, resourceID string) authroles.Assignment {
+	return authroles.Assignment{SubjectType: "user", SubjectID: subjectID, Role: roleName, ResourceType: resourceType, ResourceID: resourceID}
 }
 
 // seedRoles writes grants through putRole — the SAME helper the write path uses,
-// so a fixture can never disagree with a real row about derived keys — stamping
-// the WHOLE batch with one timestamp. That tie is the point: it is what forces
-// the listings onto their role_key tiebreak.
-func seedRoles(t *testing.T, db *firestoredb.DB, in ...role.Assignment) {
+// so a fixture cannot disagree with runtime writes about derived keys.
+func seedRoles(t *testing.T, db *firestoredb.DB, in ...authroles.Assignment) {
 	t.Helper()
 	ctx := context.Background()
 	w := db.WriterFrom(ctx)
-	now := time.Now().UTC()
 	for _, a := range in {
 		row := newRoleDoc(a)
-		row.CreatedAt = now
 		if err := putRole(ctx, db, w, row); err != nil {
 			t.Fatalf("seed %s:%s %s on %s/%s: %v", a.SubjectType, a.SubjectID, a.Role, a.ResourceType, a.ResourceID, err)
 		}
@@ -56,7 +52,7 @@ func seedRoles(t *testing.T, db *firestoredb.DB, in ...role.Assignment) {
 }
 
 // TestAssignWritesTheDocumentShape pins what a grant stores: the two equality
-// keys, both contractual sort keys, and a microsecond-truncated timestamp. A
+// keys, both contractual sort keys, and no creation timestamp. A
 // derived key that disagreed with its own row would make every list and lookup
 // silently wrong, and no port-level assertion could see it.
 func TestAssignWritesTheDocumentShape(t *testing.T) {
@@ -88,8 +84,8 @@ func TestAssignWritesTheDocumentShape(t *testing.T) {
 	if want := grantKey(a.SubjectType, a.SubjectID, a.Role); row.GrantKey != want {
 		t.Errorf("grant_key = %q, want %q", row.GrantKey, want)
 	}
-	if row.CreatedAt != firestoredb.TruncateTime(row.CreatedAt) {
-		t.Errorf("created_at %v is not microsecond-truncated", row.CreatedAt)
+	if _, exists := snap.Data()["created_at"]; exists {
+		t.Error("role document stores removed created_at metadata")
 	}
 	if row.ResourceType != "doc" || row.ResourceID != "d1" || row.Role != a.Role || row.SubjectID != a.SubjectID {
 		t.Errorf("stored row lost an original field: %+v", row)
@@ -98,7 +94,7 @@ func TestAssignWritesTheDocumentShape(t *testing.T) {
 
 // TestAssignIsIdempotentAndUnassignAbsentIsNil covers the two idempotency rules
 // at the document level: a duplicate Assign leaves the ORIGINAL document
-// untouched (created_at included), and an Unassign of an absent grant is nil
+// untouched, and an Unassign of an absent grant is nil
 // with no precondition turning absence into an error.
 func TestAssignIsIdempotentAndUnassignAbsentIsNil(t *testing.T) {
 	ctx := context.Background()
@@ -117,7 +113,6 @@ func TestAssignIsIdempotentAndUnassignAbsentIsNil(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
-	created, _ := decodeRole(first)
 
 	time.Sleep(2 * time.Millisecond)
 	if err := s.Assign(ctx, a); err != nil {
@@ -126,10 +121,6 @@ func TestAssignIsIdempotentAndUnassignAbsentIsNil(t *testing.T) {
 	second, err := db.ReaderFrom(ctx).Get(ctx, ref)
 	if err != nil {
 		t.Fatalf("Get: %v", err)
-	}
-	again, _ := decodeRole(second)
-	if !again.CreatedAt.Equal(created.CreatedAt) {
-		t.Fatalf("duplicate Assign refreshed created_at: %v then %v", created.CreatedAt, again.CreatedAt)
 	}
 	if !second.UpdateTime.Equal(first.UpdateTime) {
 		t.Fatalf("duplicate Assign rewrote the document (update time moved %v → %v)", first.UpdateTime, second.UpdateTime)
@@ -146,46 +137,39 @@ func TestAssignIsIdempotentAndUnassignAbsentIsNil(t *testing.T) {
 	}
 }
 
-// TestRoleListingsBreakTiesOnRoleKey is the parity case the conformance suite
-// cannot reach: every row of a batch shares ONE created_at, so the contractual
-// order is decided entirely by the role_key tiebreak. The role names are chosen
-// to separate raw BYTE order from any collation — a slash, an underscore, an
-// upper-case letter, and a non-ASCII name — which is exactly the order SQLite's
-// BINARY collation and postgres's COLLATE "C" give the SQL siblings.
+// TestRoleListingsBreakTiesOnRoleKey checks raw byte ordering of natural role keys.
 func TestRoleListingsBreakTiesOnRoleKey(t *testing.T) {
 	ctx := context.Background()
 	db, s := newRoles(t)
 
 	roles := []string{"Zed", "_x", "admin/lead", "admin_lead", "éditeur", "~last"}
-	seeds := make([]role.Assignment, 0, len(roles))
+	seeds := make([]authroles.Assignment, 0, len(roles))
 	for _, name := range roles {
 		seeds = append(seeds, ra("u1", name, "doc", "d1"))
 	}
 	seedRoles(t, db, seeds...)
 
-	// The default order is created_at DESC with the role_key DESC tiebreak, so
-	// a tied batch comes back in DESCENDING role_key order.
+	// The default order is ascending natural role_key.
 	keys := make([]string, 0, len(roles))
 	for _, name := range roles {
 		keys = append(keys, roleKey("user", "u1", name, "doc", "d1"))
 	}
 	slices.Sort(keys)
-	slices.Reverse(keys)
 
 	for _, tc := range []struct {
 		name string
-		list func(crud.ListRequest) (crud.Page[role.Assignment], error)
+		list func(listing.Request) (listing.Page[authroles.Assignment], error)
 	}{
-		{"ListBySubject", func(req crud.ListRequest) (crud.Page[role.Assignment], error) {
+		{"ListBySubject", func(req listing.Request) (listing.Page[authroles.Assignment], error) {
 			return s.ListBySubject(ctx, "user", "u1", req)
 		}},
-		{"ListByResource", func(req crud.ListRequest) (crud.Page[role.Assignment], error) {
+		{"ListByResource", func(req listing.Request) (listing.Page[authroles.Assignment], error) {
 			return s.ListByResource(ctx, "doc", "d1", req)
 		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			// One page: the whole tied batch in role_key DESC order.
-			page, err := tc.list(crud.ListRequest{Limit: 100})
+			page, err := tc.list(listing.Request{Limit: 100})
 			if err != nil {
 				t.Fatalf("list: %v", err)
 			}
@@ -198,7 +182,7 @@ func TestRoleListingsBreakTiesOnRoleKey(t *testing.T) {
 			var walked []string
 			cursor := ""
 			for i := 0; i < len(keys); i++ {
-				page, err := tc.list(crud.ListRequest{Limit: 2, Cursor: cursor})
+				page, err := tc.list(listing.Request{Limit: 2, Cursor: cursor})
 				if err != nil {
 					t.Fatalf("page %d: %v", i, err)
 				}
@@ -218,7 +202,7 @@ func TestRoleListingsBreakTiesOnRoleKey(t *testing.T) {
 // assignmentKeys projects a page to its role_key values, recomputed from the
 // returned rows so the assertion reads the PORT's answer rather than the store's
 // internal field.
-func assignmentKeys(items []role.Assignment) []string {
+func assignmentKeys(items []authroles.Assignment) []string {
 	out := make([]string, 0, len(items))
 	for _, a := range items {
 		out = append(out, roleKey(a.SubjectType, a.SubjectID, a.Role, a.ResourceType, a.ResourceID))
@@ -287,7 +271,7 @@ func TestRolesLookupFoldsDuplicatesAcrossChunks(t *testing.T) {
 		roles = append(roles, fmt.Sprintf("r%03d", i))
 	}
 	ids := []string{"p1", "p2", "p3", "p4"}
-	var seeds []role.Assignment
+	var seeds []authroles.Assignment
 	for _, id := range ids {
 		// Every project is granted by BOTH a first-chunk role and a later-chunk one.
 		seeds = append(seeds,
@@ -344,7 +328,7 @@ func TestEffectiveDualProvenanceAtAPageBoundary(t *testing.T) {
 		ra("u5", "auditor", "doc", "d2"), // another scope — must not leak
 	)
 
-	first, err := s.ListEffectiveByResource(ctx, "doc", "d1", crud.ListRequest{Limit: 2})
+	first, err := s.ListEffectiveByResource(ctx, "doc", "d1", listing.Request{Limit: 2})
 	if err != nil {
 		t.Fatalf("page one: %v", err)
 	}
@@ -355,7 +339,7 @@ func TestEffectiveDualProvenanceAtAPageBoundary(t *testing.T) {
 		t.Fatalf("page one must carry a continuation: %+v", first)
 	}
 
-	second, err := s.ListEffectiveByResource(ctx, "doc", "d1", crud.ListRequest{Limit: 2, Cursor: first.NextCursor})
+	second, err := s.ListEffectiveByResource(ctx, "doc", "d1", listing.Request{Limit: 2, Cursor: first.NextCursor})
 	if err != nil {
 		t.Fatalf("page two: %v", err)
 	}
@@ -364,7 +348,7 @@ func TestEffectiveDualProvenanceAtAPageBoundary(t *testing.T) {
 	}
 	// Page two is addressed by a cursor, so it reports a previous page; its
 	// window is one row short of the limit (page one is the first page and no
-	// cursor addresses it), which is crud.MarkPrevPage's empty-PreviousCursor
+	// cursor addresses it), which is listing.MarkPrevPage's empty-PreviousCursor
 	// case and the SQL siblings' behaviour.
 	if !second.HasPrev {
 		t.Fatalf("page two must report HasPrev: %+v", second)
@@ -375,7 +359,7 @@ func TestEffectiveDualProvenanceAtAPageBoundary(t *testing.T) {
 
 	// The count is DISTINCT logical grants: four, not the five documents that
 	// carry them.
-	counted, err := s.ListEffectiveByResource(ctx, "doc", "d1", crud.ListRequest{Limit: 2, WithCount: true})
+	counted, err := s.ListEffectiveByResource(ctx, "doc", "d1", listing.Request{Limit: 2, WithCount: true})
 	if err != nil {
 		t.Fatalf("counted page: %v", err)
 	}
@@ -403,16 +387,16 @@ func TestEffectivePageThreeRoundTripsToPageTwo(t *testing.T) {
 
 	for _, tc := range []struct {
 		name  string
-		order crud.Order
+		order listing.Order
 		want  []string
 	}{
-		{"Ascending", crud.Order{}, want},
-		{"Descending", crud.NewOrder("grant_key", crud.DESC), reversed(want)},
+		{"Ascending", listing.Order{}, want},
+		{"Descending", listing.NewOrder("grant_key", listing.DESC), reversed(want)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			page := func(cursor string) crud.Page[role.EffectiveGrant] {
+			page := func(cursor string) listing.Page[roles.EffectiveGrant] {
 				t.Helper()
-				p, err := s.ListEffectiveByResource(ctx, "doc", "d1", crud.ListRequest{Limit: 1, Cursor: cursor, Order: tc.order})
+				p, err := s.ListEffectiveByResource(ctx, "doc", "d1", listing.Request{Limit: 1, Cursor: cursor, Order: tc.order})
 				if err != nil {
 					t.Fatalf("page(%q): %v", cursor, err)
 				}
@@ -456,7 +440,7 @@ func TestEffectiveOffsetAndCountCountGroups(t *testing.T) {
 		ra("u3", "auditor", "", ""),
 	)
 
-	page, err := s.ListEffectiveByResource(ctx, "doc", "d1", crud.ListRequest{Strategy: crud.StrategyOffset, Offset: 1, Limit: 1, WithCount: true})
+	page, err := s.ListEffectiveByResource(ctx, "doc", "d1", listing.Request{Strategy: listing.StrategyOffset, Offset: 1, Limit: 1, WithCount: true})
 	if err != nil {
 		t.Fatalf("offset page: %v", err)
 	}
@@ -474,7 +458,7 @@ func TestEffectiveOffsetAndCountCountGroups(t *testing.T) {
 	}
 
 	// Past the end: an empty page, not an error.
-	page, err = s.ListEffectiveByResource(ctx, "doc", "d1", crud.ListRequest{Strategy: crud.StrategyOffset, Offset: 9, Limit: 2})
+	page, err = s.ListEffectiveByResource(ctx, "doc", "d1", listing.Request{Strategy: listing.StrategyOffset, Offset: 9, Limit: 2})
 	if err != nil {
 		t.Fatalf("offset past the end: %v", err)
 	}
@@ -497,7 +481,7 @@ func TestEffectiveGlobalScopeRequestIsAllDirect(t *testing.T) {
 		ra("u3", "auditor", "doc", "d1"), // scoped: never in a global listing
 	)
 
-	page, err := s.ListEffectiveByResource(ctx, "", "", crud.ListRequest{Limit: 100, WithCount: true})
+	page, err := s.ListEffectiveByResource(ctx, "", "", listing.Request{Limit: 100, WithCount: true})
 	if err != nil {
 		t.Fatalf("global listing: %v", err)
 	}
@@ -522,20 +506,20 @@ func TestEffectiveRejectsUnknownOrderAndSearch(t *testing.T) {
 	ctx := context.Background()
 	_, s := newRoles(t)
 
-	if _, err := s.ListEffectiveByResource(ctx, "doc", "d1", crud.ListRequest{Order: crud.NewOrder("created_at", crud.ASC)}); !errors.Is(err, sdk.ErrInvalidInput) {
+	if _, err := s.ListEffectiveByResource(ctx, "doc", "d1", listing.Request{Order: listing.NewOrder("created_at", listing.ASC)}); !errors.Is(err, sdk.ErrInvalidInput) {
 		t.Fatalf("unknown order field must reject with ErrInvalidInput, got %v", err)
 	}
-	if _, err := s.ListEffectiveByResource(ctx, "doc", "d1", crud.ListRequest{Search: "aud"}); !errors.Is(err, sdk.ErrInvalidInput) {
+	if _, err := s.ListEffectiveByResource(ctx, "doc", "d1", listing.Request{Search: "aud"}); !errors.Is(err, sdk.ErrInvalidInput) {
 		t.Fatalf("search must reject with ErrInvalidInput, got %v", err)
 	}
-	if _, err := s.ListEffectiveByResource(ctx, "doc", "d1", crud.ListRequest{Cursor: "x", Strategy: crud.StrategyOffset}); !errors.Is(err, sdk.ErrInvalidInput) {
+	if _, err := s.ListEffectiveByResource(ctx, "doc", "d1", listing.Request{Cursor: "x", Strategy: listing.StrategyOffset}); !errors.Is(err, sdk.ErrInvalidInput) {
 		t.Fatalf("a contradictory strategy must reject with ErrInvalidInput, got %v", err)
 	}
 }
 
 // grantLabels renders a page as subject:provenance pairs, the shape every
 // effective assertion above reads.
-func grantLabels(items []role.EffectiveGrant) []string {
+func grantLabels(items []roles.EffectiveGrant) []string {
 	out := make([]string, 0, len(items))
 	for _, g := range items {
 		out = append(out, g.SubjectID+":"+g.Provenance())
@@ -544,7 +528,7 @@ func grantLabels(items []role.EffectiveGrant) []string {
 }
 
 // label renders a one-item page.
-func label(p crud.Page[role.EffectiveGrant]) string {
+func label(p listing.Page[roles.EffectiveGrant]) string {
 	if len(p.Items) != 1 {
 		return fmt.Sprintf("<%d items>", len(p.Items))
 	}

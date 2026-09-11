@@ -10,8 +10,6 @@ import (
 	"time"
 
 	"github.com/gopernicus/gopernicus/sdk"
-	"github.com/gopernicus/gopernicus/sdk/foundation/cryptids"
-	"github.com/gopernicus/gopernicus/sdk/foundation/slug"
 )
 
 // Menu is a named navigation menu (the aggregate root for its items).
@@ -37,8 +35,8 @@ type MenuItem struct {
 }
 
 // NewMenu validates the name, derives a slug, mints its ID from ids (empty under
-// cryptids.Database — the store then assigns the key), and returns a new Menu.
-func NewMenu(ids cryptids.IDGenerator, name string, now time.Time) (Menu, error) {
+// sdk.DatabaseID — the store then assigns the key), and returns a new Menu.
+func NewMenu(ids sdk.IDGenerator, name string, now time.Time) (Menu, error) {
 	name = strings.TrimSpace(name)
 	if err := requireName(name); err != nil {
 		return Menu{}, err
@@ -47,7 +45,7 @@ func NewMenu(ids cryptids.IDGenerator, name string, now time.Time) (Menu, error)
 	return Menu{
 		ID:        ids.MustGenerate(),
 		Name:      name,
-		Slug:      slug.Make(name),
+		Slug:      sdk.Slugify(name),
 		CreatedAt: now,
 		UpdatedAt: now,
 	}, nil
@@ -60,14 +58,14 @@ func (m *Menu) Rename(name string, now time.Time) error {
 		return err
 	}
 	m.Name = name
-	m.Slug = slug.Make(name)
+	m.Slug = sdk.Slugify(name)
 	m.UpdatedAt = now.UTC()
 	return nil
 }
 
 // NewMenuItem validates and returns a new item belonging to menuID, minting its
-// ID from ids (empty under cryptids.Database — the store then assigns the key).
-func NewMenuItem(ids cryptids.IDGenerator, menuID, label, url, parentID string, position int, now time.Time) (MenuItem, error) {
+// ID from ids (empty under sdk.DatabaseID — the store then assigns the key).
+func NewMenuItem(ids sdk.IDGenerator, menuID, label, url, parentID string, position int, now time.Time) (MenuItem, error) {
 	label = strings.TrimSpace(label)
 	if label == "" {
 		return MenuItem{}, fmt.Errorf("label is required: %w", sdk.ErrInvalidInput)
@@ -107,7 +105,7 @@ func requireName(name string) error {
 	if name == "" {
 		return fmt.Errorf("name is required: %w", sdk.ErrInvalidInput)
 	}
-	if slug.Make(name) == "" {
+	if sdk.Slugify(name) == "" {
 		return fmt.Errorf("name must contain an alphanumeric character: %w", sdk.ErrInvalidInput)
 	}
 	return nil

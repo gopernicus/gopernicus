@@ -4,17 +4,17 @@ import (
 	"net/http"
 	"testing"
 
+	"github.com/gopernicus/gopernicus/pockets"
 	"github.com/gopernicus/gopernicus/pockets/cms/domain/content"
 	"github.com/gopernicus/gopernicus/pockets/cms/domain/media"
 	"github.com/gopernicus/gopernicus/pockets/cms/domain/menus"
 	"github.com/gopernicus/gopernicus/pockets/cms/domain/messaging"
 	"github.com/gopernicus/gopernicus/pockets/cms/domain/taxonomy"
-	"github.com/gopernicus/gopernicus/sdk/foundation/web"
-	"github.com/gopernicus/gopernicus/sdk/pocket"
+	"github.com/gopernicus/gopernicus/sdk/pkg/web"
 )
 
 // recordingRegistrar captures the routes a pocket mounts, standing in for the
-// host's real router. It implements pocket.RouteRegistrar.
+// host's real router. It implements pockets.RouteRegistrar.
 type recordingRegistrar struct{ routes map[string]bool }
 
 func (r *recordingRegistrar) Handle(method, path string, _ http.HandlerFunc, _ ...web.Middleware) {
@@ -61,7 +61,7 @@ func (stubViews) SeedTemplates() []content.TemplateBinding                { retu
 func TestRegister_MountsRouteSet(t *testing.T) {
 	rec := &recordingRegistrar{routes: map[string]bool{}}
 
-	err := Register(pocket.Mount{Router: rec}, Repositories{}, Config{Views: stubViews{}})
+	err := Register(pockets.Mount{Router: rec}, Repositories{}, Config{Views: stubViews{}})
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}

@@ -4,7 +4,7 @@ import (
 	"context"
 
 	firestoredb "github.com/gopernicus/gopernicus/integrations/datastores/firestore"
-	"github.com/gopernicus/gopernicus/pockets/authentication/domain/passwordless"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/passwordless"
 )
 
 var _ passwordless.Repository = (*passwordlessStore)(nil)

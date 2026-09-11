@@ -7,18 +7,19 @@
 // imports sdk/capabilities/oauth for the port vocabulary and no pocket or other integration.
 //
 // GitHub does not support OpenID Connect for user login (no ID tokens), so
-// SupportsOIDC reports false and ValidateIDToken always returns an error;
-// callers use GetUserInfo instead. GitHub Apps issue expiring user access tokens
+// it implements no IDTokenValidator; callers use GetUserInfo. GitHub Apps issue expiring user access tokens
 // (8h) with refresh tokens (6mo), so RefreshToken is GitHub-Apps-aware.
 package github
 
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -66,61 +67,62 @@ func githubEndpoints() endpoints {
 // Provider implements oauth.Provider for GitHub. GitHub does not support OIDC,
 // so there is no ID token verifier.
 type Provider struct {
-	config    oauth.ProviderConfig
+	config    Config
 	endpoints endpoints
 	client    *http.Client
 }
 
-// New creates a GitHub OAuth provider with the given credentials.
-//
-// Unlike an OIDC provider, New performs no network I/O at construction — GitHub
-// has no discovery document to fetch, so there is nothing to fail fast on. If
-// scopes is empty, it defaults to ["user:email"] (required to read the primary
-// verified email). If client is nil, a client with a 30s timeout is used.
-func New(clientID, clientSecret string, scopes []string, client *http.Client) *Provider {
-	return newProvider(clientID, clientSecret, scopes, client, githubEndpoints())
+// Config belongs to the host. Scopes and the HTTP client configuration are
+// copied at construction; the underlying transport remains host-owned.
+type Config struct {
+	ClientID     string
+	ClientSecret string
+	Scopes       []string
+	HTTPClient   *http.Client
 }
 
-// newProvider is the endpoint-injectable constructor New delegates to. Tests
-// supply httptest endpoints; New supplies GitHub's real ones.
-func newProvider(clientID, clientSecret string, scopes []string, client *http.Client, eps endpoints) *Provider {
-	if len(scopes) == 0 {
-		scopes = []string{"user:email"}
-	}
-	if client == nil {
-		client = &http.Client{Timeout: defaultTimeout}
-	}
-	return &Provider{
-		config: oauth.ProviderConfig{
-			ClientID:     clientID,
-			ClientSecret: clientSecret,
-			Scopes:       scopes,
-			AuthURL:      eps.authURL,
-			TokenURL:     eps.tokenURL,
-			UserInfoURL:  eps.userInfoURL,
-		},
-		endpoints: eps,
-		client:    client,
-	}
+// New validates local configuration; it performs no network I/O.
+func New(cfg Config) (*Provider, error) {
+	return newProvider(cfg, githubEndpoints())
 }
 
-func (p *Provider) Name() string                 { return "github" }
-func (p *Provider) SupportsOIDC() bool           { return false }
-func (p *Provider) TrustEmailVerification() bool { return false }
+func newProvider(cfg Config, eps endpoints) (*Provider, error) {
+	if strings.TrimSpace(cfg.ClientID) == "" {
+		return nil, fmt.Errorf("oauth github: client ID is required")
+	}
+	if strings.TrimSpace(cfg.ClientSecret) == "" {
+		return nil, fmt.Errorf("oauth github: client secret is required")
+	}
+	if len(cfg.Scopes) == 0 {
+		cfg.Scopes = []string{"user:email"}
+	}
+	cfg.Scopes = slices.Clone(cfg.Scopes)
+	client := http.Client{Timeout: defaultTimeout}
+	if cfg.HTTPClient != nil {
+		client = *cfg.HTTPClient
+	}
+	// Never replay credentials or bearer tokens at a redirect target.
+	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	cfg.HTTPClient = &client
+	return &Provider{config: cfg, endpoints: eps, client: &client}, nil
+}
 
-// GetAuthorizationURL builds the GitHub authorization URL for the
-// authorization-code flow with PKCE (S256). GitHub does not implement OIDC, so
-// nonce is unused (there is no ID token to echo it back in).
-func (p *Provider) GetAuthorizationURL(state, codeVerifier, _, redirectURI string) string {
+func (p *Provider) Name() string { return "github" }
+
+// GetAuthorizationURL builds an authorization-code URL with PKCE S256.
+func (p *Provider) GetAuthorizationURL(r oauth.AuthorizationRequest) (string, error) {
+	if err := r.Validate(); err != nil {
+		return "", err
+	}
 	params := url.Values{
 		"client_id":             {p.config.ClientID},
-		"redirect_uri":          {redirectURI},
+		"redirect_uri":          {r.RedirectURI},
 		"scope":                 {strings.Join(p.config.Scopes, " ")},
-		"state":                 {state},
-		"code_challenge":        {oauth.GenerateCodeChallenge(codeVerifier)},
+		"state":                 {r.State},
+		"code_challenge":        {oauth.GenerateCodeChallenge(r.CodeVerifier)},
 		"code_challenge_method": {"S256"},
 	}
-	return p.config.AuthURL + "?" + params.Encode()
+	return p.endpoints.authURL + "?" + params.Encode(), nil
 }
 
 func (p *Provider) ExchangeCode(ctx context.Context, code, codeVerifier, redirectURI string) (*oauth.TokenResponse, error) {
@@ -141,20 +143,27 @@ func (p *Provider) ExchangeCode(ctx context.Context, code, codeVerifier, redirec
 		Error        string `json:"error"`
 		ErrorDesc    string `json:"error_description"`
 	}
-	if err := p.postForm(ctx, p.config.TokenURL, data, &raw); err != nil {
+	if err := p.postForm(ctx, p.endpoints.tokenURL, data, &raw); err != nil {
 		return nil, fmt.Errorf("oauth github: exchange code: %w", err)
 	}
 	if raw.Error != "" {
-		return nil, fmt.Errorf("oauth github: %s: %s", raw.Error, raw.ErrorDesc)
+		return nil, &oauth.Error{Provider: "github", Operation: "token response", StatusCode: http.StatusOK, Code: raw.Error}
 	}
 
-	return &oauth.TokenResponse{
+	token := &oauth.TokenResponse{
 		AccessToken:  raw.AccessToken,
 		RefreshToken: raw.RefreshToken,
 		ExpiresIn:    raw.ExpiresIn,
 		TokenType:    raw.TokenType,
 		Scopes:       raw.Scope,
-	}, nil
+	}
+	if err := token.Validate(); err != nil {
+		return nil, err
+	}
+	if !strings.EqualFold(token.TokenType, "bearer") {
+		return nil, fmt.Errorf("oauth github: unsupported token type")
+	}
+	return token, nil
 }
 
 // GetUserInfo fetches the user profile and primary verified email from GitHub.
@@ -168,8 +177,12 @@ func (p *Provider) GetUserInfo(ctx context.Context, accessToken string) (*oauth.
 		Name      string `json:"name"`
 		AvatarURL string `json:"avatar_url"`
 	}
-	if err := p.getJSON(ctx, p.config.UserInfoURL, accessToken, &profile); err != nil {
+	if err := p.getJSON(ctx, p.endpoints.userInfoURL, accessToken, &profile); err != nil {
 		return nil, fmt.Errorf("oauth github: get user profile: %w", err)
+	}
+
+	if profile.ID <= 0 {
+		return nil, fmt.Errorf("oauth github: missing user ID")
 	}
 
 	var emails []struct {
@@ -178,7 +191,13 @@ func (p *Provider) GetUserInfo(ctx context.Context, accessToken string) (*oauth.
 		Verified bool   `json:"verified"`
 	}
 	if err := p.getJSON(ctx, p.endpoints.emailsURL, accessToken, &emails); err != nil {
-		return nil, fmt.Errorf("oauth github: get user emails: %w", err)
+		var response *oauth.Error
+		if !errors.As(err, &response) || response.StatusCode != http.StatusForbidden || response.Operation != "provider response" {
+			return nil, fmt.Errorf("oauth github: get user emails: %w", err)
+		}
+		// Missing email permission does not invalidate the stable /user identity.
+		// No verified email evidence is available on this path.
+		emails = nil
 	}
 
 	var primaryEmail string
@@ -196,23 +215,18 @@ func (p *Provider) GetUserInfo(ctx context.Context, accessToken string) (*oauth.
 		primaryEmail = profile.Email
 		emailVerified = false
 	}
-	if primaryEmail == "" {
-		return nil, fmt.Errorf("oauth github: no email found for user")
-	}
 
-	return &oauth.UserInfo{
+	info := &oauth.UserInfo{
 		ProviderUserID: strconv.Itoa(profile.ID),
 		Email:          primaryEmail,
 		EmailVerified:  emailVerified,
 		Name:           profile.Name,
 		Picture:        profile.AvatarURL,
-	}, nil
-}
-
-// ValidateIDToken is not supported — GitHub does not support OIDC for user
-// login. Callers must use GetUserInfo instead.
-func (p *Provider) ValidateIDToken(_ context.Context, _, _ string) (*oauth.IDTokenClaims, error) {
-	return nil, fmt.Errorf("oauth github: OIDC not supported")
+	}
+	if err := info.Validate(); err != nil {
+		return nil, err
+	}
+	return info, nil
 }
 
 // RefreshToken exchanges a refresh token for a new access token and refresh
@@ -235,20 +249,27 @@ func (p *Provider) RefreshToken(ctx context.Context, refreshToken string) (*oaut
 		Error        string `json:"error"`
 		ErrorDesc    string `json:"error_description"`
 	}
-	if err := p.postForm(ctx, p.config.TokenURL, data, &raw); err != nil {
+	if err := p.postForm(ctx, p.endpoints.tokenURL, data, &raw); err != nil {
 		return nil, fmt.Errorf("oauth github: refresh token: %w", err)
 	}
 	if raw.Error != "" {
-		return nil, fmt.Errorf("oauth github: %s: %s", raw.Error, raw.ErrorDesc)
+		return nil, &oauth.Error{Provider: "github", Operation: "token response", StatusCode: http.StatusOK, Code: raw.Error}
 	}
 
-	return &oauth.TokenResponse{
+	token := &oauth.TokenResponse{
 		AccessToken:  raw.AccessToken,
 		RefreshToken: raw.RefreshToken,
 		ExpiresIn:    raw.ExpiresIn,
 		TokenType:    raw.TokenType,
 		Scopes:       raw.Scope,
-	}, nil
+	}
+	if err := token.Validate(); err != nil {
+		return nil, err
+	}
+	if !strings.EqualFold(token.TokenType, "bearer") {
+		return nil, fmt.Errorf("oauth github: unsupported token type")
+	}
+	return token, nil
 }
 
 func (p *Provider) postForm(ctx context.Context, endpoint string, data url.Values, result any) error {
@@ -259,20 +280,7 @@ func (p *Provider) postForm(ctx context.Context, endpoint string, data url.Value
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Accept", "application/json")
 
-	resp, err := p.client.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBody))
-	if err != nil {
-		return fmt.Errorf("read response: %w", err)
-	}
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("status %d: %s", resp.StatusCode, body)
-	}
-	return json.Unmarshal(body, result)
+	return p.doJSON(req, result)
 }
 
 func (p *Provider) getJSON(ctx context.Context, endpoint, bearerToken string, result any) error {
@@ -283,18 +291,31 @@ func (p *Provider) getJSON(ctx context.Context, endpoint, bearerToken string, re
 	req.Header.Set("Authorization", "Bearer "+bearerToken)
 	req.Header.Set("Accept", "application/json")
 
+	return p.doJSON(req, result)
+}
+
+func (p *Provider) doJSON(req *http.Request, result any) error {
 	resp, err := p.client.Do(req)
 	if err != nil {
-		return err
+		return &oauth.Error{Provider: "github", Operation: "HTTP request", Cause: err}
 	}
 	defer resp.Body.Close()
-
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBody))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBody+1))
 	if err != nil {
-		return fmt.Errorf("read response: %w", err)
+		return &oauth.Error{Provider: "github", Operation: "read response", StatusCode: resp.StatusCode, Cause: err}
 	}
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("status %d: %s", resp.StatusCode, body)
+	if len(body) > maxResponseBody {
+		return &oauth.Error{Provider: "github", Operation: "response too large", StatusCode: resp.StatusCode}
 	}
-	return json.Unmarshal(body, result)
+	var failure struct {
+		Code string `json:"error"`
+	}
+	_ = json.Unmarshal(body, &failure)
+	if resp.StatusCode != http.StatusOK || failure.Code != "" {
+		return &oauth.Error{Provider: "github", Operation: "provider response", StatusCode: resp.StatusCode, Code: failure.Code}
+	}
+	if err := json.Unmarshal(body, result); err != nil {
+		return &oauth.Error{Provider: "github", Operation: "decode response", StatusCode: resp.StatusCode, Cause: err}
+	}
+	return nil
 }

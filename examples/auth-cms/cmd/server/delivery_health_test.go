@@ -12,8 +12,9 @@ import (
 	"github.com/gopernicus/gopernicus/examples/auth-cms/internal/authmem"
 	"github.com/gopernicus/gopernicus/examples/auth-cms/internal/deliveryhealth"
 	auth "github.com/gopernicus/gopernicus/pockets/authentication"
-	"github.com/gopernicus/gopernicus/sdk/capabilities/email"
+	delivery "github.com/gopernicus/gopernicus/pockets/authentication/logic/delivery"
 	sdkevents "github.com/gopernicus/gopernicus/sdk/capabilities/events"
+	"github.com/gopernicus/gopernicus/sdk/capabilities/notify/email"
 )
 
 // This file is the AV3D-5.3 REAL-INTERACTION proof for the host-composed delivery health
@@ -28,7 +29,7 @@ import (
 // observer-failure path is exercised end to end.
 type failingBus struct{}
 
-func (failingBus) Emit(context.Context, sdkevents.Event, ...sdkevents.EmitOption) error {
+func (failingBus) Emit(context.Context, sdkevents.Event) error {
 	return errProviderDown
 }
 
@@ -36,13 +37,13 @@ func (failingBus) Emit(context.Context, sdkevents.Event, ...sdkevents.EmitOption
 // as run() does for AUTH_DELIVERY_MODE=in_process: the health emitter wraps the delivery-events
 // emitter, and the depth source reads the auth Service's InProcessQueueDepth. A nil emitter
 // defaults to a real in-memory bus; a nil sender keeps the console mailer.
-func bootHealth(t *testing.T, sender email.Sender, emitter sdkevents.Emitter, tune func(*auth.Config)) (*auth.Service, *deliveryhealth.Health) {
+func bootHealth(t *testing.T, sender email.Sender, emitter sdkevents.Emitter, tune func(*authenticationConfig)) (*auth.Components, *deliveryhealth.Health) {
 	t.Helper()
 	cfg, err := buildAuthConfig(quietLog(), nil)
 	if err != nil {
 		t.Fatalf("buildAuthConfig: %v", err)
 	}
-	cfg.DeliveryMode = auth.DeliveryModeInProcess
+	cfg.DeliveryMode = delivery.ModeInProcess
 	cfg.DeliveryJobsAcknowledged = false
 	cfg.DeliveryEphemeralAcknowledged = true
 	cfg.DeliveryDispatcher = nil
@@ -50,7 +51,7 @@ func bootHealth(t *testing.T, sender email.Sender, emitter sdkevents.Emitter, tu
 		cfg.Mailer = sender
 	}
 
-	h := deliveryhealth.New(string(auth.DeliveryModeInProcess))
+	h := deliveryhealth.New(string(delivery.ModeInProcess))
 	if emitter == nil {
 		emitter = sdkevents.NewMemory(sdkevents.WithLogger(quietLog()))
 	}
@@ -59,22 +60,22 @@ func bootHealth(t *testing.T, sender email.Sender, emitter sdkevents.Emitter, tu
 	if tune != nil {
 		tune(&cfg)
 	}
-	svc, err := auth.NewService(authmem.New().Repositories(), cfg)
+	svc, err := auth.New(authmem.New().Repositories(), cfg.TokenSigner, cfg.RuntimeMode, cfg.DeliveryMode, cfg.options()...)
 	if err != nil {
 		t.Fatalf("auth.NewService (in_process + health): %v", err)
 	}
-	h.SetDepthSource(svc.InProcessQueueDepth)
+	h.SetDepthSource(svc.Delivery.QueueDepth)
 	return svc, h
 }
 
 // runDeliveryHealth starts the host-owned in_process runtime bracketed by the health
 // lifecycle markers exactly as run() does, and returns a stop func.
-func runDeliveryHealth(t *testing.T, svc *auth.Service, h *deliveryhealth.Health) (stop func()) {
+func runDeliveryHealth(t *testing.T, svc *auth.Components, h *deliveryhealth.Health) (stop func()) {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	h.MarkStarted()
-	go func() { defer h.MarkStopped(); done <- svc.RunDelivery(ctx) }()
+	go func() { defer h.MarkStopped(); done <- svc.Delivery.Run(ctx) }()
 	return func() {
 		cancel()
 		select {
@@ -142,8 +143,8 @@ func TestDeliveryHealthNotStartedVsRunning(t *testing.T) {
 // running) via REAL forgot-password admissions over HTTP and asserts the health endpoint
 // shows the queue saturated/backlogged — distinct from an idle queue.
 func TestDeliveryHealthBacklogUnderSaturation(t *testing.T) {
-	svc, h := bootHealth(t, &recordingSender{}, nil, func(c *auth.Config) {
-		c.InProcessDelivery = auth.InProcessDeliveryConfig{
+	svc, h := bootHealth(t, &recordingSender{}, nil, func(c *authenticationConfig) {
+		c.InProcessDelivery = delivery.InProcessConfig{
 			QueueCapacity:     1,
 			AdmissionDeadline: 50 * time.Millisecond,
 		}
@@ -173,13 +174,13 @@ func TestDeliveryHealthBacklogUnderSaturation(t *testing.T) {
 // fails with MaxAttempts=1, so the bounded pool dead-letters on the first attempt, and
 // asserts the health endpoint's dead_lettered counter increments.
 func TestDeliveryHealthDeadLetterIncrements(t *testing.T) {
-	svc, h := bootHealth(t, &recordingSender{failFirst: 1_000}, nil, func(c *auth.Config) {
-		c.InProcessDelivery = auth.InProcessDeliveryConfig{MaxAttempts: 1}
+	svc, h := bootHealth(t, &recordingSender{failFirst: 1_000}, nil, func(c *authenticationConfig) {
+		c.InProcessDelivery = delivery.InProcessConfig{MaxAttempts: 1}
 	})
 	stop := runDeliveryHealth(t, svc, h)
 	defer stop()
 
-	if _, err := svc.RegisterUser(context.Background(), "deadletter-health@example.com", "correct-horse-battery-staple", "DL User"); err != nil {
+	if _, err := svc.Authentication.Register(context.Background(), "deadletter-health@example.com", "correct-horse-battery-staple", "DL User"); err != nil {
 		t.Fatalf("RegisterUser: %v", err)
 	}
 	s := waitHealth(t, h, 5*time.Second, func(s deliveryhealth.Snapshot) bool { return s.DeadLettered >= 1 })
@@ -196,7 +197,7 @@ func TestDeliveryHealthObserverFailureVisible(t *testing.T) {
 	stop := runDeliveryHealth(t, svc, h)
 	defer stop()
 
-	if _, err := svc.RegisterUser(context.Background(), "observerfail-health@example.com", "correct-horse-battery-staple", "OF User"); err != nil {
+	if _, err := svc.Authentication.Register(context.Background(), "observerfail-health@example.com", "correct-horse-battery-staple", "OF User"); err != nil {
 		t.Fatalf("RegisterUser: %v", err)
 	}
 	waitHealth(t, h, 5*time.Second, func(s deliveryhealth.Snapshot) bool { return s.ObserverFailures >= 1 })
@@ -212,7 +213,7 @@ func TestDeliveryHealthNoLeak(t *testing.T) {
 	stop := runDeliveryHealth(t, svc, h)
 	defer stop()
 
-	if _, err := svc.RegisterUser(context.Background(), canaryAddr, "correct-horse-battery-staple", "Canary User"); err != nil {
+	if _, err := svc.Authentication.Register(context.Background(), canaryAddr, "correct-horse-battery-staple", "Canary User"); err != nil {
 		t.Fatalf("RegisterUser: %v", err)
 	}
 	waitSends(t, sender, 1, 5*time.Second)

@@ -3,44 +3,39 @@ package firestore
 import (
 	"context"
 	"errors"
-	"time"
 
 	gcfs "cloud.google.com/go/firestore"
-
 	firestoredb "github.com/gopernicus/gopernicus/integrations/datastores/firestore"
-	"github.com/gopernicus/gopernicus/pockets/authorization/domain/role"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/roles"
 	"github.com/gopernicus/gopernicus/sdk"
-	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
+	"github.com/gopernicus/gopernicus/sdk/pkg/list"
 )
 
-var _ role.Storer = (*roleStore)(nil)
+var _ roles.Storer = (*roleStore)(nil)
 
 // roleStore fills role.Storer over the iam_roles collection, whose document id
 // IS the unique 5-tuple (SCHEMA.md §3.2). Every method refuses an ambient
 // transaction first (R1), and every document it touches is addressed through
 // grants.go — the file that owns the collection.
 type roleStore struct {
-	db *firestoredb.DB
+	db    *firestoredb.DB
+	audit bool
 }
 
-func newRoleStore(db *firestoredb.DB) *roleStore {
-	return &roleStore{db: db}
+func newRoleStore(db *firestoredb.DB, enabled bool) *roleStore {
+	return &roleStore{db: db, audit: enabled}
 }
 
-// Assign stores a role grant idempotently. The SQL siblings say
-// `ON CONFLICT DO NOTHING` on the 5-tuple index; here the 5-tuple IS the
-// document id, so the equivalent is one transaction that reads that document
-// and writes only when it is absent — a duplicate is a no-op that RETAINS the
-// existing row untouched, its original store-stamped created_at included.
-//
-// The check and the write are one transaction rather than a bare Create whose
-// AlreadyExists is swallowed: ruling R3's "never check-then-write outside a
-// transaction". The read is in the transaction's read set, so a concurrent
-// first-writer aborts this commit and the vendor re-runs the callback, which
-// then observes the winner and writes nothing. now is stamped INSIDE the
-// callback because a retried attempt is a fresh attempt.
-func (s *roleStore) Assign(ctx context.Context, a role.Assignment) error {
+// Assign stores a validated natural role grant idempotently. Reading and
+// creating in one transaction lets a losing first writer retry as a no-op.
+func (s *roleStore) Assign(ctx context.Context, a roles.Assignment) error {
 	if err := refuseAmbient(ctx); err != nil {
+		return err
+	}
+	if err := validateAuditSource(ctx, s.audit); err != nil {
+		return err
+	}
+	if err := a.Validate(); err != nil {
 		return err
 	}
 	return retryTransact(ctx, s.db, func(ctx context.Context) error {
@@ -52,27 +47,33 @@ func (s *roleStore) Assign(ctx context.Context, a role.Assignment) error {
 			return nil
 		}
 		row := newRoleDoc(a)
-		row.CreatedAt = time.Now().UTC()
-		return putRole(ctx, s.db, s.db.WriterFrom(ctx), row)
+		return (factWrites{roleAdds: []roleDoc{row}}).flush(ctx, s.db, s.db.WriterFrom(ctx), s.audit)
 	})
 }
 
-// Unassign removes an exact assignment. It is ONE delete on the deterministic
-// document and carries NO existence precondition, so an absent assignment is
-// nil rather than a port error — the idempotency the SQL siblings get from
-// "zero rows deleted". A single document delete is atomic on its own, so no
-// transaction is opened.
+// Unassign reads then removes an exact assignment in one transaction. An absent
+// assignment is a no-op, so it never creates a removal audit record.
 func (s *roleStore) Unassign(ctx context.Context, subjectType, subjectID, roleName, resourceType, resourceID string) error {
 	if err := refuseAmbient(ctx); err != nil {
 		return err
 	}
-	return dropRole(ctx, s.db, s.db.WriterFrom(ctx), subjectType, subjectID, roleName, resourceType, resourceID)
+	if err := validateAuditSource(ctx, s.audit); err != nil {
+		return err
+	}
+	return retryTransact(ctx, s.db, func(ctx context.Context) error {
+		exists, err := roleExists(ctx, s.db, s.db.ReaderFrom(ctx), subjectType, subjectID, roleName, resourceType, resourceID)
+		if err != nil || !exists {
+			return err
+		}
+		row := roleDoc{SubjectType: subjectType, SubjectID: subjectID, Role: roleName, ResourceType: resourceType, ResourceID: resourceID}
+		return (factWrites{roleDrops: []roleDoc{row}}).flush(ctx, s.db, s.db.WriterFrom(ctx), s.audit)
+	})
 }
 
 // HasExactRole reports whether an assignment exists at the EXACT scope: one Get
 // on the deterministic document, never a query. A global grant does not satisfy
 // a scoped lookup and vice versa, because the scope pair is part of the id; the
-// global-fallback rule is the service's (rolesvc.Service.HasRole, Q5), never
+// global-fallback rule is the service's (roles.Service.HasRole, Q5), never
 // this store's.
 func (s *roleStore) HasExactRole(ctx context.Context, subjectType, subjectID, roleName, resourceType, resourceID string) (bool, error) {
 	if err := refuseAmbient(ctx); err != nil {
@@ -82,19 +83,19 @@ func (s *roleStore) HasExactRole(ctx context.Context, subjectType, subjectID, ro
 }
 
 // ListBySubject pages a subject's assignments in the contractual order
-// (created_at DESC by default, role_key as the tiebreak). The subject is ONE
+// (role_key ASC by default). The subject is ONE
 // equality clause on the derived subject_key, which hashes exactly the
 // (subject_type, subject_id) pair the SQL siblings match with two columns.
-func (s *roleStore) ListBySubject(ctx context.Context, subjectType, subjectID string, req crud.ListRequest) (crud.Page[role.Assignment], error) {
+func (s *roleStore) ListBySubject(ctx context.Context, subjectType, subjectID string, req list.Request) (list.Page[roles.Assignment], error) {
 	if err := refuseAmbient(ctx); err != nil {
-		return crud.Page[role.Assignment]{}, err
+		return list.Page[roles.Assignment]{}, err
 	}
 	base := rolesQuery(s.db).Where("subject_key", "==", roleSubjectKey(subjectType, subjectID))
 	page, err := firestoredb.List(ctx, s.db.ReaderFrom(ctx), listRoles(base), req)
 	if err != nil {
-		return crud.Page[role.Assignment]{}, err
+		return list.Page[roles.Assignment]{}, err
 	}
-	return crud.MapPage(page, roleDoc.toAssignment), nil
+	return list.MapPage(page, roleDoc.toAssignment), nil
 }
 
 // ListByResource is the RAW direct-scope listing: the assignments stored EXACTLY
@@ -103,16 +104,16 @@ func (s *roleStore) ListBySubject(ctx context.Context, subjectType, subjectID st
 // scope is the empty pair stored as empty strings (never null, never absent),
 // listing ("", "") returns exactly the global grants, as the SQL siblings' two
 // empty-string equality clauses do.
-func (s *roleStore) ListByResource(ctx context.Context, resourceType, resourceID string, req crud.ListRequest) (crud.Page[role.Assignment], error) {
+func (s *roleStore) ListByResource(ctx context.Context, resourceType, resourceID string, req list.Request) (list.Page[roles.Assignment], error) {
 	if err := refuseAmbient(ctx); err != nil {
-		return crud.Page[role.Assignment]{}, err
+		return list.Page[roles.Assignment]{}, err
 	}
 	base := rolesQuery(s.db).Where("resource_key", "==", resourceKey(resourceType, resourceID))
 	page, err := firestoredb.List(ctx, s.db.ReaderFrom(ctx), listRoles(base), req)
 	if err != nil {
-		return crud.Page[role.Assignment]{}, err
+		return list.Page[roles.Assignment]{}, err
 	}
-	return crud.MapPage(page, roleDoc.toAssignment), nil
+	return list.MapPage(page, roleDoc.toAssignment), nil
 }
 
 // ListEffectiveByResource pages the EFFECTIVE role grants on a resource: the
@@ -121,9 +122,9 @@ func (s *roleStore) ListByResource(ctx context.Context, resourceType, resourceID
 // provenance. The algorithm is effective.go's stream merge — see
 // listEffectiveByResource for why it is a dedicated reader rather than a filter
 // over one query.
-func (s *roleStore) ListEffectiveByResource(ctx context.Context, resourceType, resourceID string, req crud.ListRequest) (crud.Page[role.EffectiveGrant], error) {
+func (s *roleStore) ListEffectiveByResource(ctx context.Context, resourceType, resourceID string, req list.Request) (list.Page[roles.EffectiveGrant], error) {
 	if err := refuseAmbient(ctx); err != nil {
-		return crud.Page[role.EffectiveGrant]{}, err
+		return list.Page[roles.EffectiveGrant]{}, err
 	}
 	return listEffectiveByResource(ctx, s.db, resourceType, resourceID, req)
 }

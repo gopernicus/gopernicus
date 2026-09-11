@@ -3,12 +3,18 @@ package turso
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
+	"errors"
 	"fmt"
+	"time"
 )
+
+const rollbackTimeout = 5 * time.Second
 
 // Tx represents a database transaction pinned to a single connection.
 type Tx struct {
 	conn *sql.Conn
+	ctx  context.Context
 	// tracer is inherited from the DB that began the transaction so opted-in
 	// query logging covers transaction-path statements too.
 	tracer *loggingQueryTracer
@@ -33,30 +39,54 @@ func (d *DB) Begin(ctx context.Context) (*Tx, error) {
 		return nil, fmt.Errorf("beginning transaction: %w", err)
 	}
 	if _, err := conn.ExecContext(ctx, "BEGIN IMMEDIATE"); err != nil {
-		conn.Close()
+		// A transport error may leave BEGIN's outcome unknown.
+		if discardErr := discardConn(conn); discardErr != nil {
+			return nil, fmt.Errorf("discard failed: %w (begin error: %w)", discardErr, MapError(err))
+		}
 		return nil, fmt.Errorf("beginning transaction: %w", MapError(err))
 	}
-	return &Tx{conn: conn, tracer: d.tracer}, nil
+	return &Tx{conn: conn, ctx: ctx, tracer: d.tracer}, nil
 }
 
-// Commit commits the transaction and releases the pinned connection.
+// Commit uses the Begin context. A failed commit is rolled back before releasing
+// the pinned connection; failed cleanup discards the physical connection.
 func (t *Tx) Commit() error {
-	_, err := t.conn.ExecContext(context.Background(), "COMMIT")
-	closeErr := t.conn.Close()
+	err := t.ctx.Err()
+	if err == nil {
+		_, err = t.conn.ExecContext(t.ctx, "COMMIT")
+	}
 	if err != nil {
+		if rbErr := t.Rollback(); rbErr != nil && !errors.Is(rbErr, sql.ErrConnDone) {
+			return fmt.Errorf("rollback failed: %w (commit error: %w)", rbErr, MapError(err))
+		}
 		return MapError(err)
 	}
-	return closeErr
+	return t.conn.Close()
 }
 
-// Rollback aborts the transaction and releases the pinned connection.
+// Rollback uses an independent five-second context, then releases the pinned
+// connection. A failed rollback discards the physical connection from the pool.
 func (t *Tx) Rollback() error {
-	_, err := t.conn.ExecContext(context.Background(), "ROLLBACK")
-	closeErr := t.conn.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), rollbackTimeout)
+	defer cancel()
+	_, err := t.conn.ExecContext(ctx, "ROLLBACK")
 	if err != nil {
+		if discardErr := discardConn(t.conn); discardErr != nil {
+			return fmt.Errorf("discard failed: %w (rollback error: %w)", discardErr, MapError(err))
+		}
 		return MapError(err)
 	}
-	return closeErr
+	return t.conn.Close()
+}
+
+func discardConn(conn *sql.Conn) error {
+	// Returning ErrBadConn through Raw tells database/sql to discard the driver
+	// connection. Close alone would return a potentially open transaction to it.
+	err := conn.Raw(func(any) error { return driver.ErrBadConn })
+	if errors.Is(err, driver.ErrBadConn) || errors.Is(err, sql.ErrConnDone) {
+		return nil
+	}
+	return err
 }
 
 // Exec executes a query within the transaction.
@@ -91,22 +121,27 @@ func (t *Tx) QueryRow(ctx context.Context, query string, args ...any) *sql.Row {
 	return t.conn.QueryRowContext(ctx, query, args...)
 }
 
-// InTx runs fn within a transaction, rolling back on error and committing
-// otherwise.
+// InTx commits when fn returns nil and rolls back on errors or panics. Callback
+// errors remain unchanged unless cleanup also fails; panic values are preserved.
 func (d *DB) InTx(ctx context.Context, fn func(tx *Tx) error) error {
 	tx, err := d.Begin(ctx)
 	if err != nil {
 		return err
 	}
 
-	if err := fn(tx); err != nil {
-		if rbErr := tx.Rollback(); rbErr != nil {
-			return fmt.Errorf("rollback failed: %v (original error: %w)", rbErr, err)
+	return tx.run(fn)
+}
+
+func (t *Tx) run(fn func(*Tx) error) (err error) {
+	defer func() {
+		if rbErr := t.Rollback(); err != nil && rbErr != nil && !errors.Is(rbErr, sql.ErrConnDone) {
+			err = fmt.Errorf("rollback failed: %w (original error: %w)", rbErr, err)
 		}
+	}()
+	if err = fn(t); err != nil {
 		return err
 	}
-
-	if err := tx.Commit(); err != nil {
+	if err = t.Commit(); err != nil {
 		return fmt.Errorf("commit failed: %w", err)
 	}
 	return nil

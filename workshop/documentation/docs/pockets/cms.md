@@ -53,13 +53,42 @@ if err := cms.Register(mount, repos, cms.Config{
 | `Views` | nil disables HTML; the media byte endpoint remains |
 | `Types` | host-defined content types added to Article and Page |
 | `Templates` | host render bindings for registered types |
-| `Cache` | nil disables public-page caching |
+| `Cache` | host-owned `cacher.Storer`; nil disables public-page caching |
+| `PageCache` | `cacher.PageConfig`: host TTL, body limit and optional trusted scope |
 | `Blobs` | host-owned file storage for media bytes |
 | `Mailer` | host-owned contact delivery |
 | `IDs` | zero uses default nanoids; database/custom strategies supported |
 | `AdminMiddleware` | wraps every admin route; nil leaves the surface ungated |
 
 The views seam and registry-template seam are different: `Views` controls page chrome and forms, while template bindings render a particular registered content type.
+
+## Public-page cache policy
+
+The host chooses the cache adapter and page policy independently:
+
+```go
+cms.Config{
+    Cache: cacher.NewMemory(cacher.WithMaxEntries(1000)),
+    PageCache: cacher.PageConfig{
+        TTL:          30 * time.Second,
+        MaxBodyBytes: 512 << 10,
+    },
+}
+```
+
+Zero PageCache uses 60 seconds and a 1 MiB body limit. Negative page TTL disables
+caching; this differs from raw storage's zero TTL meaning no expiration. Public
+GET HTML is eligible; credentials, cookies, principals, conditional requests,
+`no-store`, `Vary`, encoded responses and nonce CSP bypass it. Keep personalized
+content outside these routes. A trusted tenant can be added through
+`PageCache.Scope`; Pages does not decide which proxy headers to trust.
+
+Page keys are versioned beneath `page:`. A host using a prefix-capable adapter
+can call `DeletePrefix(ctx, "page:")` after content changes. CMS does not
+synchronously invalidate every write: an in-flight render can repopulate an
+invalidated entry, so TTL remains part of the freshness policy. See the
+[cache contract](../sdk/capabilities.md#caching-application-data-and-public-pages)
+for supported headers and middleware ordering.
 
 ## GOTH and custom themes
 
@@ -74,7 +103,7 @@ CMS declares no authentication or authorization dependency. The host injects mid
 ```go
 cms.Config{
     AdminMiddleware: []web.Middleware{
-        authSvc.RequireAccessToken(),
+        authSvc.HTTP.RequireAccessToken(),
         requireCMSAdmin,
     },
 }
@@ -84,7 +113,7 @@ Public pages, contact submission, and asset delivery are outside the admin middl
 
 ## Prefix limitation
 
-`pocket.PrefixRegistrar` can relocate registered routes, but current views produce root-relative links and form actions. For now, mount CMS at the host root when using bundled views, or supply prefix-aware custom views.
+`pockets.PrefixRegistrar` can relocate registered routes, but current views produce root-relative links and form actions. For now, mount CMS at the host root when using bundled views, or supply prefix-aware custom views.
 
 ## Persistence
 

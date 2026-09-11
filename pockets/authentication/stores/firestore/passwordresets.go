@@ -4,7 +4,7 @@ import (
 	"context"
 
 	firestoredb "github.com/gopernicus/gopernicus/integrations/datastores/firestore"
-	"github.com/gopernicus/gopernicus/pockets/authentication/domain/passwordreset"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/passwordreset"
 )
 
 var _ passwordreset.Repository = (*passwordResetStore)(nil)

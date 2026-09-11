@@ -45,7 +45,7 @@ func TestLive_ScanUTC(t *testing.T) {
 
 	ctx := context.Background()
 
-	db, err := Open(Config{DSN: dsn})
+	db, err := Open(context.Background(), Config{DSN: dsn})
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -100,7 +100,7 @@ func TestLive_ScanUTC(t *testing.T) {
 		q.Set("timezone", "Europe/Oslo")
 		u.RawQuery = q.Encode()
 
-		oslo, err := Open(Config{DSN: u.String()})
+		oslo, err := Open(context.Background(), Config{DSN: u.String()})
 		if err != nil {
 			t.Fatalf("open with timezone=Europe/Oslo: %v", err)
 		}

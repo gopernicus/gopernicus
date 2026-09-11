@@ -18,8 +18,8 @@ import (
 	"testing"
 
 	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
-	"github.com/gopernicus/gopernicus/pockets/events/domain/outbox"
-	"github.com/gopernicus/gopernicus/pockets/events/storetest"
+	"github.com/gopernicus/gopernicus/pockets/events/logic/outbox"
+	"github.com/gopernicus/gopernicus/pockets/events/stores/storetest"
 )
 
 // outboxTables are the pocket's tables cleared before each newRepo call so every
@@ -35,7 +35,7 @@ func TestConformance(t *testing.T) {
 
 	storetest.Run(t, func(t *testing.T) outbox.EntryRepository {
 		db := openAndMigrate(t, url, token)
-		store, err := New(db)
+		store, err := New(context.Background(), db)
 		if err != nil {
 			t.Fatalf("New: %v", err)
 		}
@@ -58,7 +58,7 @@ func requireTursoEnv(t *testing.T) (url, token string) {
 // truncates the outbox table so the returned store starts empty and isolated.
 func openAndMigrate(t *testing.T, url, token string) *tursodb.DB {
 	t.Helper()
-	db, err := tursodb.Open(tursodb.Config{URL: url, AuthToken: token})
+	db, err := tursodb.Open(context.Background(), tursodb.Config{URL: url, AuthToken: token})
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}

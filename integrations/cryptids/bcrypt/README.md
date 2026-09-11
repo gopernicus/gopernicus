@@ -1,40 +1,45 @@
 # integrations/cryptids/bcrypt
 
-A password-hashing connector wrapping exactly one third-party library —
-`golang.org/x/crypto/bcrypt`. Its `Hasher` structurally satisfies the
-pocket-owned `PasswordHasher` port (mirrors `auth.PasswordHasher` in the auth
-pocket module) with zero import in either direction: the port lives with its
-consumer, this integration knows only bcrypt.
+Password hashing and verification using `golang.org/x/crypto/bcrypt`.
+`Hasher` structurally implements authentication logic's consumer-owned `Hasher` interface;
+this module imports no pocket. It uses the SDK's input-error classification.
 
-It owns "how to hash with bcrypt," never any pocket's policy. A different
-algorithm (argon2, scrypt) would be a sibling connector, swapped at the
-composition root.
+The host selects the hasher, password policy, and cost. This adapter enforces
+bcrypt's algorithm limit without adding minimum-length or complexity rules.
 
 ## Surface
 
-| member | shape |
+| Member | Behavior |
 |---|---|
-| `New(opts ...Option) *Hasher` | builds a hasher; defaults to `bcrypt.DefaultCost` |
-| `WithCost(cost int) Option` | sets the cost factor; out-of-range values fall back to `bcrypt.DefaultCost` |
-| `Hasher.HashPassword(password) (string, error)` | self-describing bcrypt hash; `ErrPasswordTooLong` for input over 72 bytes |
-| `Hasher.VerifyPassword(hash, password) error` | nil on match, non-nil otherwise; constant-time compare |
-| `ErrPasswordTooLong` | returned instead of silently truncating over-long input |
+| `New(opts ...Option) *Hasher` | Constructs a hasher using `bcrypt.DefaultCost`. |
+| `WithCost(cost int) Option` | Sets hashing cost; values outside the library's supported range fall back to `bcrypt.DefaultCost`. |
+| `Hasher.HashPassword(password) (string, error)` | Returns a self-describing bcrypt hash. |
+| `Hasher.VerifyPassword(hash, password) error` | Returns nil on a match; uses the hash's stored cost and the library's constant-time comparison. |
+| `ErrPasswordTooLong` | Returned by both methods for passwords over 72 bytes; wraps `sdk.ErrInvalidInput`. |
 
-## Why reject over-72-byte input
+The zero-value hasher uses the library's default cost. Changing configured cost
+affects new hashes; existing hashes remain verifiable using their stored cost.
 
-bcrypt truncates silently at 72 bytes, which would let distinct passwords verify
-against the same hash. `HashPassword` returns `ErrPasswordTooLong` rather than
-truncate.
+## Password length and errors
 
-## Error contract
+The limit is **72 bytes**, not 72 characters. Both hashing and verification
+reject longer strings. This prevents an overlong candidate from matching a
+hash solely because its first 72 bytes match. Existing hashes are unchanged;
+previously accepted overlong candidates now fail.
 
-The port promises only a self-describing hash and a non-nil error on mismatch
-with a constant-time compare — all satisfied here with plain, stable errors, so
-this module takes no `sdk` dependency.
+Callers can use `errors.Is(err, bcrypt.ErrPasswordTooLong)` for the specific
+algorithm limit or `errors.Is(err, sdk.ErrInvalidInput)` for an input error.
+Other errors wrap the library's hash/verification causes. The SDK classification
+lets standard HTTP handling report unsupported password input as a client error.
 
 ## Testing
 
-Unit tests are hermetic and run with a plain `go test ./...` — roundtrip, wrong
-password, salt uniqueness, cost option, the 72-byte boundary, and a compile-time
-structural-satisfaction assertion against a locally-mirrored copy of the port
-interface (no import of the auth pocket).
+Run `go test ./...`. Tests cover round trips, mismatches, randomized salts,
+configured/default cost, and the 72-byte boundary for hashing and verification,
+including multibyte passwords and input-error classification. A local interface
+assertion checks the consumer's method set without importing a pocket.
+
+`Option` values configure private construction settings and apply in order; the
+last cost wins. `WithCost` is safe to reuse concurrently, including its invalid-cost
+fallback. A nil option panics with `bcrypt: nil Option`. Options cannot change a
+constructed hasher.

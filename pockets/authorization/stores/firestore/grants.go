@@ -6,16 +6,15 @@ import (
 	"fmt"
 
 	gcfs "cloud.google.com/go/firestore"
-	"google.golang.org/api/iterator"
-
 	firestoredb "github.com/gopernicus/gopernicus/integrations/datastores/firestore"
-	"github.com/gopernicus/gopernicus/pockets/authorization/domain/role"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/roles"
 	"github.com/gopernicus/gopernicus/sdk"
-	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
+	"github.com/gopernicus/gopernicus/sdk/pkg/list"
+	"google.golang.org/api/iterator"
 )
 
 // This file OWNS the iam_roles collection, the way tuples.go owns a relationship
-// tuple's three documents: putRole and dropRole are its only writers, roleRef
+// tuple's two documents: putRole and dropRole are its only writers, roleRef
 // and rolesQuery are the only two places a role document or a role query is
 // addressed, and decodeRole is the only decoder. Every other file — the port
 // methods in roles.go, the effective listing in effective.go, and (from A4) the
@@ -45,43 +44,34 @@ func rolesQuery(db *firestoredb.DB) gcfs.Query {
 // the empty (resource_type, resource_id) pair, exactly as the SQL families store
 // it — empty strings, never null or absent — so resourceKey("", "") is a real,
 // matchable value and a global grant participates in every index.
-func newRoleDoc(a role.Assignment) roleDoc {
+func newRoleDoc(a roles.Assignment) roleDoc {
 	return roleDoc{
 		SubjectType:  a.SubjectType,
 		SubjectID:    a.SubjectID,
 		Role:         a.Role,
 		ResourceType: a.ResourceType,
 		ResourceID:   a.ResourceID,
-		CreatedAt:    a.CreatedAt,
 	}
 }
 
 // toAssignment projects a stored row back to the port's type.
-func (r roleDoc) toAssignment() role.Assignment {
-	return role.Assignment{
+func (r roleDoc) toAssignment() roles.Assignment {
+	return roles.Assignment{
 		SubjectType:  r.SubjectType,
 		SubjectID:    r.SubjectID,
 		Role:         r.Role,
 		ResourceType: r.ResourceType,
 		ResourceID:   r.ResourceID,
-		CreatedAt:    r.CreatedAt,
 	}
 }
 
-// putRole writes one role grant through w. The derived keys and the truncated
-// timestamp are computed HERE rather than by the caller, so a row can never
-// reach the collection with a role_key that does not match its own fields.
-//
-// The verb is Create, never Set (SCHEMA.md §5.4): the document id IS the unique
-// 5-tuple, so a duplicate loses at the server instead of overwriting a row whose
-// created_at the port promises to retain. The caller has already established, in
-// the transaction's read phase, that the grant is absent.
+// putRole derives the equality and natural sort keys from the grant's fields.
+// Create detects a concurrent duplicate without overwriting an existing grant.
 func putRole(ctx context.Context, db *firestoredb.DB, w firestoredb.Writer, row roleDoc) error {
 	row.SubjectKey = roleSubjectKey(row.SubjectType, row.SubjectID)
 	row.ResourceKey = resourceKey(row.ResourceType, row.ResourceID)
 	row.RoleKey = roleKey(row.SubjectType, row.SubjectID, row.Role, row.ResourceType, row.ResourceID)
 	row.GrantKey = grantKey(row.SubjectType, row.SubjectID, row.Role)
-	row.CreatedAt = firestoredb.TruncateTime(row.CreatedAt)
 
 	return w.Create(ctx, roleRef(db, row.SubjectType, row.SubjectID, row.Role, row.ResourceType, row.ResourceID), row)
 }
@@ -148,30 +138,16 @@ func roleResourceID(snap *gcfs.DocumentSnapshot) (string, error) {
 	return row.ResourceID, nil
 }
 
-// listRoles is the ListQuery both RAW role listings share. Only the base query
-// differs between them, so the ORDER contract, the keyset tiebreak, and the
-// decoding are one definition and the two listings cannot drift.
-//
-// The order allow-list and default come straight from the pocket
-// (role.OrderFields, role.DefaultOrder) — the same values both SQL adapters
-// pass — and PK is role_key, the derived 5-tuple sort key iam_roles has instead
-// of a surrogate id. Equal created_at values therefore break the tie on the
-// contractual key rather than on the hashed document name, byte-for-byte as the
-// SQL families do (SCHEMA.md §4.1). PKOf echoes the STORED role_key; it is never
-// recomputed in Go, which is the same invariant the SQL stores reach from the
-// other side by scanning the computed column.
-//
-// No PostFilter is declared, so a non-blank Search is refused with
-// sdk.ErrInvalidInput by the connector's List rather than answered with an
-// unfiltered page (ruling R4: the role listings have no SearchFields).
+// listRoles gives both raw role listings the same natural role_key order and
+// cursor semantics. No PostFilter is declared, so Search is refused.
 func listRoles(base gcfs.Query) firestoredb.ListQuery[roleDoc] {
 	return firestoredb.ListQuery[roleDoc]{
 		Query:        base,
-		OrderFields:  role.OrderFields,
-		DefaultOrder: role.DefaultOrder,
+		OrderFields:  roles.OrderFields,
+		DefaultOrder: roles.DefaultOrder,
 		PK:           "role_key",
 		Decode:       decodeRole,
-		OrderValueOf: func(row roleDoc, _ string) any { return row.CreatedAt },
+		OrderValueOf: func(row roleDoc, _ string) any { return row.RoleKey },
 		PKOf:         func(row roleDoc) string { return row.RoleKey },
 	}
 }
@@ -183,15 +159,15 @@ func listRoles(base gcfs.Query) firestoredb.ListQuery[roleDoc] {
 // than one query: an unknown field is sdk.ErrInvalidInput and CastLower is
 // REFUSED rather than silently served in raw byte order, exactly as the
 // connector answers for every other list here.
-func effectiveOrderField(order crud.Order) (string, gcfs.Direction, error) {
+func effectiveOrderField(order list.Order) (string, gcfs.Direction, error) {
 	if order.Field == "" {
-		order = role.DefaultEffectiveOrder
+		order = roles.DefaultEffectiveOrder
 	}
 	direction := gcfs.Asc
-	if order.Direction == crud.DESC {
+	if order.Direction == list.DESC {
 		direction = gcfs.Desc
 	}
-	for _, of := range role.EffectiveOrderFields {
+	for _, of := range roles.EffectiveOrderFields {
 		if of.Column != order.Field {
 			continue
 		}

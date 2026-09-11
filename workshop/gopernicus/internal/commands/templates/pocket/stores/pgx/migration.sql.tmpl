@@ -3,7 +3,7 @@
 -- matches across dialects; representation changes, structure and semantics do
 -- not. Timestamps are TIMESTAMPTZ (postgres orders them natively).
 --
--- id carries an INLINE DEFAULT: under a cryptids.Database wiring the service mints
+-- id carries an INLINE DEFAULT: under an sdk.DatabaseID wiring the service mints
 -- no id, the store omits the id column, and this DEFAULT fills the key (read back
 -- with RETURNING). gen_random_uuid() is built into PostgreSQL 13+; the ::text cast
 -- keeps the key a TEXT column, matching the rim and the turso dialect.

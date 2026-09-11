@@ -24,7 +24,7 @@ func TestInvitationMetadataUpgradeAndMalformed_Turso(t *testing.T) {
 	}
 	ctx := context.Background()
 
-	db, err := tursodb.Open(tursodb.Config{URL: url, AuthToken: token})
+	db, err := tursodb.Open(context.Background(), tursodb.Config{URL: url, AuthToken: token})
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}
@@ -35,7 +35,7 @@ func TestInvitationMetadataUpgradeAndMalformed_Turso(t *testing.T) {
 	truncate(t, db)
 	t.Cleanup(func() { truncate(t, db) })
 
-	repos, err := Repositories(db)
+	repos, err := Repositories(context.Background(), db)
 	if err != nil {
 		t.Fatalf("Repositories: %v", err)
 	}

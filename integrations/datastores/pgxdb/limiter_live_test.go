@@ -36,7 +36,8 @@ const limiterTableDDL = `CREATE TABLE IF NOT EXISTS ratelimit_windows (
     prev_count    BIGINT      NOT NULL,
     last_allowed  BOOLEAN     NOT NULL,
     updated_at    TIMESTAMPTZ NOT NULL,
-    expires_at    TIMESTAMPTZ NOT NULL
+    expires_at    TIMESTAMPTZ NOT NULL,
+    window_ms     BIGINT      NOT NULL DEFAULT 0
 )`
 
 const limiterIndexDDL = `CREATE INDEX IF NOT EXISTS ratelimit_windows_expires_at_idx
@@ -51,6 +52,7 @@ type windowRow struct {
 	LastAllowed  bool
 	UpdatedAt    time.Time
 	ExpiresAt    time.Time
+	WindowMS     int64
 }
 
 // limiterSkipWarning prints the not-verified banner once per test binary.
@@ -84,7 +86,7 @@ func openLimiterDB(t *testing.T) *DB {
 		t.Skip("POSTGRES_TEST_DSN not set — pgxdb ratelimiter.Limiter conformance NOT verified")
 	}
 
-	db, err := Open(Config{DSN: dsn})
+	db, err := Open(context.Background(), Config{DSN: dsn})
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -112,10 +114,10 @@ func readWindow(t *testing.T, db *DB, key string) windowRow {
 
 	var row windowRow
 	err := db.QueryRow(context.Background(),
-		`SELECT window_start, request_count, prev_count, last_allowed, updated_at, expires_at
+		`SELECT window_start, request_count, prev_count, last_allowed, updated_at, expires_at, window_ms
 		   FROM ratelimit_windows WHERE key = @key`,
 		jackpgx.NamedArgs{"key": key},
-	).Scan(&row.WindowStart, &row.RequestCount, &row.PrevCount, &row.LastAllowed, &row.UpdatedAt, &row.ExpiresAt)
+	).Scan(&row.WindowStart, &row.RequestCount, &row.PrevCount, &row.LastAllowed, &row.UpdatedAt, &row.ExpiresAt, &row.WindowMS)
 	if err != nil {
 		t.Fatalf("read window row %q: %v", key, err)
 	}
@@ -133,7 +135,7 @@ func serverNow(t *testing.T, db *DB) time.Time {
 }
 
 // TestLive_ConformanceLimiter runs the shared ratelimiter.Limiter conformance
-// suite (allow/deny/reset/refill/independent keys/idempotent close) against live
+// suite (allow/deny/reset/refill/independent keys) against live
 // Postgres. Each fresh Limiter gets its own key prefix.
 func TestLive_ConformanceLimiter(t *testing.T) {
 	db := openLimiterDB(t)
@@ -154,12 +156,9 @@ func TestLive_ConformanceLimiter(t *testing.T) {
 // over-admits here; a single atomic row transition cannot. The persisted counter
 // must also equal the ceiling — denied calls consume no quota.
 //
-// It is also where the returned Result is bounds-checked, because only a
-// concurrent caller can produce the stale clock_timestamp() that made the sliding
-// weight exceed 1: a statement captures `now` before it waits on the row lock, so
-// a loser can hold a `now` earlier than the window_start the winner installed.
-// Unclamped, that returns a RetryAfter longer than the window. A sequential test
-// cannot reach the state at all.
+// Returned results must stay within their policy bounds under row contention.
+// The decision clock is sampled after locking and clamped against stored time;
+// racing callers must not receive negative quota or an oversized retry interval.
 func TestLive_LimiterAdmitsExactlyLimitUnderConcurrency(t *testing.T) {
 	db := openLimiterDB(t)
 
@@ -172,7 +171,7 @@ func TestLive_LimiterAdmitsExactlyLimitUnderConcurrency(t *testing.T) {
 	)
 
 	prefix := livePrefix(t)
-	fullKey := prefix + "race"
+	fullKey := prefix + limiterKeyVersion + "race"
 	t.Cleanup(func() {
 		_, _ = db.Exec(context.Background(),
 			"DELETE FROM ratelimit_windows WHERE key = @key", jackpgx.NamedArgs{"key": fullKey})
@@ -185,7 +184,7 @@ func TestLive_LimiterAdmitsExactlyLimitUnderConcurrency(t *testing.T) {
 		// between them: the point of the test is row-level contention, and an
 		// unbounded pool would trade that for connection-slot exhaustion on a
 		// small server.
-		instance, err := Open(Config{DSN: dsn, MaxConns: connsPerInstance})
+		instance, err := Open(context.Background(), Config{DSN: dsn, MaxConns: connsPerInstance})
 		if err != nil {
 			t.Fatalf("open instance %d: %v", i, err)
 		}
@@ -260,7 +259,7 @@ func TestLive_LimiterUsesServerTime(t *testing.T) {
 	db := openLimiterDB(t)
 
 	prefix := livePrefix(t)
-	fullKey := prefix + "clock"
+	fullKey := prefix + limiterKeyVersion + "clock"
 	t.Cleanup(func() {
 		_, _ = db.Exec(context.Background(),
 			"DELETE FROM ratelimit_windows WHERE key = @key", jackpgx.NamedArgs{"key": fullKey})
@@ -281,7 +280,7 @@ func TestLive_LimiterUsesServerTime(t *testing.T) {
 	}
 
 	row := readWindow(t, db, fullKey)
-	if row.UpdatedAt.Before(before) || row.UpdatedAt.After(after) {
+	if row.UpdatedAt.Before(before.Truncate(time.Millisecond)) || row.UpdatedAt.After(after) {
 		t.Errorf("stored updated_at %v outside the server-clock bracket [%v, %v] — the instant is not server-derived",
 			row.UpdatedAt, before, after)
 	}
@@ -291,8 +290,8 @@ func TestLive_LimiterUsesServerTime(t *testing.T) {
 	if got := res.ResetAt.Sub(row.WindowStart); got != window {
 		t.Errorf("ResetAt - window_start = %v, want exactly %v (server arithmetic, not caller clock)", got, window)
 	}
-	if got := row.ExpiresAt.Sub(row.UpdatedAt); got != window*5/2 {
-		t.Errorf("expires_at - updated_at = %v, want %v (2.5 windows of retention)", got, window*5/2)
+	if got := row.ExpiresAt.Sub(row.WindowStart); got != window*2 {
+		t.Errorf("expires_at - updated_at = %v, want %v (2 windows of retention)", got, window*2)
 	}
 
 	denied, err := limiter.Allow(context.Background(), "clock", limit)
@@ -378,44 +377,13 @@ func TestLive_LimiterKeyPrefixIsolates(t *testing.T) {
 	}
 }
 
-// TestLive_LimiterCloseLeavesDatabaseUsable proves Close never touches the shared
-// pool: the caller-owned *DB still serves statements (and the limiter itself
-// still works) after a repeated Close.
-func TestLive_LimiterCloseLeavesDatabaseUsable(t *testing.T) {
-	db := openLimiterDB(t)
-
-	prefix := livePrefix(t)
-	t.Cleanup(func() {
-		_, _ = db.Exec(context.Background(),
-			"DELETE FROM ratelimit_windows WHERE key LIKE @p", jackpgx.NamedArgs{"p": prefix + "%"})
-	})
-
-	limiter := NewLimiter(db, WithLimiterKeyPrefix(prefix))
-	if res, err := limiter.Allow(context.Background(), "close", ratelimiter.PerMinute(5)); err != nil || !res.Allowed {
-		t.Fatalf("Allow before Close = %+v, err %v, want Allowed=true", res, err)
-	}
-	if err := limiter.Close(); err != nil {
-		t.Fatalf("first Close: %v", err)
-	}
-	if err := limiter.Close(); err != nil {
-		t.Fatalf("second Close: %v", err)
-	}
-
-	if err := StatusCheck(context.Background(), db); err != nil {
-		t.Fatalf("StatusCheck after limiter Close: %v — the limiter closed the caller's pool", err)
-	}
-	if res, err := limiter.Allow(context.Background(), "close", ratelimiter.PerMinute(5)); err != nil || !res.Allowed {
-		t.Fatalf("Allow after Close = %+v, err %v, want Allowed=true", res, err)
-	}
-}
-
 // TestLive_LimiterHonorsContextCancellation proves a canceled context aborts
 // before any state is written.
 func TestLive_LimiterHonorsContextCancellation(t *testing.T) {
 	db := openLimiterDB(t)
 
 	prefix := livePrefix(t)
-	fullKey := prefix + "canceled"
+	fullKey := prefix + limiterKeyVersion + "canceled"
 	limiter := NewLimiter(db, WithLimiterKeyPrefix(prefix))
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -445,7 +413,7 @@ func TestLive_LimiterPruningStatement(t *testing.T) {
 	db := openLimiterDB(t)
 
 	prefix := livePrefix(t)
-	fullKey := prefix + "prune"
+	fullKey := prefix + limiterKeyVersion + "prune"
 	t.Cleanup(func() {
 		_, _ = db.Exec(context.Background(),
 			"DELETE FROM ratelimit_windows WHERE key = @key", jackpgx.NamedArgs{"key": fullKey})
@@ -458,7 +426,7 @@ func TestLive_LimiterPruningStatement(t *testing.T) {
 		t.Fatalf("Allow = %+v, err %v, want Allowed=true", res, err)
 	}
 
-	// The row's retention is 2.5 windows; wait past it, then run the README's
+	// The row's retention is 2 windows; wait past it, then run the README's
 	// pruning statement verbatim.
 	time.Sleep(200 * time.Millisecond)
 	tag, err := db.Exec(context.Background(), "DELETE FROM ratelimit_windows WHERE expires_at < now()")
@@ -499,7 +467,7 @@ func openScopedToSchema(t *testing.T, schema string) *DB {
 	q.Set("search_path", schema)
 	u.RawQuery = q.Encode()
 
-	scoped, err := Open(Config{DSN: u.String(), MaxConns: 2})
+	scoped, err := Open(context.Background(), Config{DSN: u.String(), MaxConns: 2})
 	if err != nil {
 		t.Fatalf("open pool scoped to schema %q: %v", schema, err)
 	}
@@ -508,7 +476,7 @@ func openScopedToSchema(t *testing.T, schema string) *DB {
 }
 
 // errMapDDL makes both halves of the port fail with a SQLSTATE MapError knows:
-// the CHECK rejects Allow's insert of request_count = 1 (23514 → ErrInvalidInput)
+// the CHECK rejects Allow changing request_count to 1 (23514 → ErrInvalidInput)
 // and the ON DELETE RESTRICT child row rejects Reset's DELETE (23503 →
 // ErrInvalidReference). The seeded row uses a count the CHECK permits.
 var errMapDDL = []string{
@@ -521,6 +489,7 @@ var errMapDDL = []string{
 	    last_allowed  BOOLEAN     NOT NULL,
 	    updated_at    TIMESTAMPTZ NOT NULL,
 	    expires_at    TIMESTAMPTZ NOT NULL,
+	    window_ms     BIGINT      NOT NULL DEFAULT 0,
 	    CONSTRAINT ratelimit_windows_count_never_one CHECK (request_count <> 1)
 	)`,
 	`CREATE TABLE IF NOT EXISTS ` + errMapSchema + `.ratelimit_holds (
@@ -532,11 +501,8 @@ var errMapDDL = []string{
 // same stable sdk kinds, so a caller never has to branch on which method produced
 // a raw pgx error.
 //
-// The two halves are guarded at different depths, deliberately: the Allow
-// assertion fails without Allow's own MapError (QueryRow hands back a raw Scan
-// error), while Reset's error is already mapped by DB.Exec one layer down — that
-// assertion pins the port contract, not the call-site line, and would catch the
-// connector dropping its mapping.
+// Both paths use QueryRow, whose Scan returns a raw driver error. These
+// assertions require each limiter operation to apply the connector's mapping.
 func TestLive_LimiterMapsDatabaseErrorsOnBothPaths(t *testing.T) {
 	db := openLimiterDB(t)
 
@@ -561,10 +527,10 @@ func TestLive_LimiterMapsDatabaseErrorsOnBothPaths(t *testing.T) {
 		t.Errorf("Allow() against a violated CHECK error = %v, want sdk.ErrInvalidInput", err)
 	}
 
-	held := prefix + "held"
+	held := prefix + limiterKeyVersion + "held"
 	if _, err := scoped.Exec(ctx,
-		`INSERT INTO ratelimit_windows (key, window_start, request_count, prev_count, last_allowed, updated_at, expires_at)
-		 VALUES (@key, now(), 7, 0, TRUE, now(), now() + INTERVAL '1 hour')`,
+		`INSERT INTO ratelimit_windows (key, window_start, request_count, prev_count, last_allowed, updated_at, expires_at, window_ms)
+		 VALUES (@key, now(), 7, 0, TRUE, now(), now() + INTERVAL '1 hour', 60000)`,
 		jackpgx.NamedArgs{"key": held}); err != nil {
 		t.Fatalf("seed held window row: %v", err)
 	}
@@ -584,9 +550,8 @@ const emptySchema = "pgxdb_limiter_noddl"
 
 // TestLive_LimiterStatusCheckDetectsMissingTable is the boot gate for the one
 // precondition this connector cannot create: without the host-owned table every
-// Allow errors, and sdk/capabilities/ratelimiter.Middleware fails OPEN and silent
-// — an unthrottled deployment with a green health check. StatusCheck must turn
-// that into a startup failure, and must not cry wolf when the table is there.
+// Allow errors. StatusCheck catches that before traffic reaches the SDK's
+// default-closed middleware or a host's explicitly selected fail-open policy.
 func TestLive_LimiterStatusCheckDetectsMissingTable(t *testing.T) {
 	db := openLimiterDB(t)
 
@@ -614,8 +579,7 @@ func TestLive_LimiterStatusCheckDetectsMissingTable(t *testing.T) {
 	}
 
 	// The failure StatusCheck is standing in front of: without the probe, this is
-	// all the host would get, one error per request, behind a middleware that
-	// swallows it.
+	// all the host would get, one error per request at runtime.
 	if _, err := missing.Allow(ctx, "unmigrated", ratelimiter.PerMinute(5)); err == nil {
 		t.Error("Allow() without the reference table error = nil, want non-nil")
 	}

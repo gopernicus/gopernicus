@@ -9,9 +9,9 @@
 //
 // Hosts wire it as:
 //
-//	bundle, _ := goth.New(goth.Config{AssetBasePath: "/assets/goth"})
+//	bundle, _ := goth.New(goth.WithAssetBasePath("/assets/goth"))
 //	authViews, _ := authgoth.New(bundle)
-//	authentication.Config{Views: authViews, HTMLPolicy: authViews.HTMLPolicy()}
+//	authentication.WithBrowser(authentication.BrowserConfig{Views: authViews, HTMLPolicy: authViews.HTMLPolicy()})
 //
 // and serve bundle assets + authgoth.FragmentScriptHandler() under the paths the
 // bundle/adapter name. Customize by embedding this Views and overriding individual
@@ -26,16 +26,18 @@
 package goth
 
 import (
-	"github.com/a-h/templ"
+	"fmt"
 
-	"github.com/gopernicus/gopernicus/pockets/authentication"
-	"github.com/gopernicus/gopernicus/sdk/foundation/web"
+	"github.com/a-h/templ"
+	inbound "github.com/gopernicus/gopernicus/pockets/authentication/inbound/http"
+	"github.com/gopernicus/gopernicus/sdk"
+	"github.com/gopernicus/gopernicus/sdk/pkg/web"
 	"github.com/gopernicus/gopernicus/ui/goth"
 )
 
 // _ pins Views to the authentication.Views port at compile time (mirrors the
 // stubViews assertion in the pocket's inbound html_test.go).
-var _ authentication.Views = Views{}
+var _ inbound.Views = Views{}
 
 // Views is the ui/goth-backed renderer. It holds the immutable presentation Bundle
 // and the public path the host serves the externalized fragment-reader script at.
@@ -48,13 +50,19 @@ type Views struct {
 }
 
 // Option customizes a Views at construction.
-type Option func(*Views)
+type Option func(*viewConfig)
+
+type viewConfig struct {
+	fragmentScriptPath string
+	brand              templ.Component
+	appName            string
+}
 
 // WithFragmentScriptPath overrides the public URL the reset/magic-link landings load
 // the externalized fragment-reader script from. It must match the path the host
 // mounts FragmentScriptHandler() under. Empty is ignored (the default is kept).
 func WithFragmentScriptPath(path string) Option {
-	return func(v *Views) {
+	return func(v *viewConfig) {
 		if path != "" {
 			v.fragmentScriptPath = path
 		}
@@ -68,14 +76,14 @@ func WithFragmentScriptPath(path string) Option {
 // The page's <h1> title inside the shell is unaffected (single top-level
 // heading per page is preserved).
 func WithBrand(brand templ.Component) Option {
-	return func(v *Views) { v.brand = brand }
+	return func(v *viewConfig) { v.brand = brand }
 }
 
 // WithAppName suffixes every document <title> with the application name
 // ("Sign in · <name>") so browser tabs and history identify the product.
 // Empty keeps today's bare page titles.
 func WithAppName(name string) Option {
-	return func(v *Views) { v.appName = name }
+	return func(v *viewConfig) { v.appName = name }
 }
 
 // New returns the ui/goth Views over bundle. It returns an error for a nil bundle so
@@ -85,11 +93,14 @@ func New(bundle *goth.Bundle, opts ...Option) (Views, error) {
 	if bundle == nil {
 		return Views{}, errNilBundle
 	}
-	v := Views{bundle: bundle, fragmentScriptPath: DefaultFragmentScriptPath}
+	cfg := viewConfig{fragmentScriptPath: DefaultFragmentScriptPath}
 	for _, opt := range opts {
-		opt(&v)
+		if opt == nil {
+			return Views{}, fmt.Errorf("authentication goth: nil option: %w", sdk.ErrInvalidInput)
+		}
+		opt(&cfg)
 	}
-	return v, nil
+	return Views{bundle: bundle, fragmentScriptPath: cfg.fragmentScriptPath, brand: cfg.brand, appName: cfg.appName}, nil
 }
 
 // page wraps a page body in the shared GOTH document chrome: the bundle's head
@@ -111,86 +122,86 @@ func (v Views) page(title string, headExtra templ.Component, body templ.Componen
 func (v Views) fragmentHead() templ.Component { return fragmentScriptTag(v.fragmentScriptPath) }
 
 // Login renders the password-login form.
-func (v Views) Login(m authentication.LoginPage) web.Renderer {
+func (v Views) Login(m inbound.LoginPage) web.Renderer {
 	return v.page("Sign in", nil, loginBody(m))
 }
 
 // Register renders the account-creation form.
-func (v Views) Register(m authentication.RegisterPage) web.Renderer {
+func (v Views) Register(m inbound.RegisterPage) web.Renderer {
 	return v.page("Create your account", nil, registerBody(m))
 }
 
 // Verify renders the registration verification form.
-func (v Views) Verify(m authentication.VerifyPage) web.Renderer {
+func (v Views) Verify(m inbound.VerifyPage) web.Renderer {
 	return v.page("Verify your email", nil, verifyBody(m))
 }
 
 // ForgotPassword renders the reset-request form.
-func (v Views) ForgotPassword(m authentication.ForgotPage) web.Renderer {
+func (v Views) ForgotPassword(m inbound.ForgotPage) web.Renderer {
 	return v.page("Reset your password", nil, forgotBody(m))
 }
 
 // ResetPassword renders the fragment-token reset form.
-func (v Views) ResetPassword(m authentication.ResetPage) web.Renderer {
+func (v Views) ResetPassword(m inbound.ResetPage) web.Renderer {
 	return v.page("Choose a new password", v.fragmentHead(), resetBody(m))
 }
 
 // PasswordlessStart renders the passwordless-login start form.
-func (v Views) PasswordlessStart(m authentication.PasswordlessStartPage) web.Renderer {
+func (v Views) PasswordlessStart(m inbound.PasswordlessStartPage) web.Renderer {
 	return v.page("Sign in without a password", nil, passwordlessStartBody(m))
 }
 
 // PasswordlessCode renders the one-time-code entry form.
-func (v Views) PasswordlessCode(m authentication.PasswordlessCodePage) web.Renderer {
+func (v Views) PasswordlessCode(m inbound.PasswordlessCodePage) web.Renderer {
 	return v.page("Enter your code", nil, passwordlessCodeBody(m))
 }
 
 // MagicLinkLanding renders the fragment-token magic-link landing page.
-func (v Views) MagicLinkLanding(m authentication.MagicLinkPage) web.Renderer {
+func (v Views) MagicLinkLanding(m inbound.MagicLinkPage) web.Renderer {
 	return v.page("Signing you in", v.fragmentHead(), magicLinkBody(m))
 }
 
 // CheckDelivery renders the post-start delivery confirmation.
-func (v Views) CheckDelivery(m authentication.CheckDeliveryPage) web.Renderer {
+func (v Views) CheckDelivery(m inbound.CheckDeliveryPage) web.Renderer {
 	return v.page("Check your messages", nil, checkDeliveryBody(m))
 }
 
 // OAuthLinkLanding renders the fragment-token OAuth pending-link landing.
-func (v Views) OAuthLinkLanding(m authentication.OAuthLinkPage) web.Renderer {
+func (v Views) OAuthLinkLanding(m inbound.OAuthLinkPage) web.Renderer {
 	return v.page("Finish linking your account", v.fragmentHead(), oauthLinkBody(m))
 }
 
 // StepUp renders the recent-authentication confirmation page.
-func (v Views) StepUp(m authentication.StepUpPage) web.Renderer {
+func (v Views) StepUp(m inbound.StepUpPage) web.Renderer {
 	return v.page("Confirm it's you", nil, stepUpBody(m))
 }
 
 // AccountSecurity renders the masked method inventory.
-func (v Views) AccountSecurity(m authentication.AccountSecurityPage) web.Renderer {
+func (v Views) AccountSecurity(m inbound.AccountSecurityPage) web.Renderer {
 	return v.page("Account security", nil, accountSecurityBody(m))
 }
 
 // IdentifierForm renders the add/edit identifier form.
-func (v Views) IdentifierForm(m authentication.IdentifierFormPage) web.Renderer {
+func (v Views) IdentifierForm(m inbound.IdentifierFormPage) web.Renderer {
 	return v.page(identifierFormTitle(m.Mode), nil, identifierFormBody(m))
 }
 
 // PasswordForm renders the set/change/remove password form.
-func (v Views) PasswordForm(m authentication.PasswordFormPage) web.Renderer {
+func (v Views) PasswordForm(m inbound.PasswordFormPage) web.Renderer {
 	return v.page(passwordPageTitle(m.Mode), nil, passwordFormBody(m))
 }
 
 // OAuthUnlink renders the provider-bound unlink confirmation.
-func (v Views) OAuthUnlink(m authentication.OAuthUnlinkPage) web.Renderer {
+func (v Views) OAuthUnlink(m inbound.OAuthUnlinkPage) web.Renderer {
 	return v.page("Unlink account", nil, oauthUnlinkBody(m))
 }
 
 // Status renders a generic informational page.
-func (v Views) Status(m authentication.StatusPage) web.Renderer {
+func (v Views) Status(m inbound.StatusPage) web.Renderer {
 	return v.page(statusTitle(m.Title), nil, statusBody(m))
 }
 
 // Error renders a generic error page.
-func (v Views) Error(m authentication.ErrorPage) web.Renderer {
+func (v Views) Error(m inbound.ErrorPage) web.Renderer {
 	return v.page(statusText(m.Status), nil, errorBody(m))
 }

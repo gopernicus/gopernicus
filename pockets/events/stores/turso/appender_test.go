@@ -21,7 +21,7 @@ import (
 func TestAppendTx(t *testing.T) {
 	url, token := requireTursoEnv(t)
 	db := openAndMigrate(t, url, token)
-	store, err := New(db)
+	store, err := New(context.Background(), db)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -79,4 +79,26 @@ func hasEntry(t *testing.T, store *Store, eventID string) bool {
 		}
 	}
 	return false
+}
+
+func TestLegacyTextPayloadRemainsReadable(t *testing.T) {
+	url, token := requireTursoEnv(t)
+	db := openAndMigrate(t, url, token)
+	ctx := context.Background()
+	payload := " { \"b\":2, \"a\": 1 }\n"
+	now := tursodb.FormatTime(time.Now())
+	if _, err := db.Exec(ctx, `INSERT INTO event_outbox (event_id,event_type,occurred_at,payload,created_at) VALUES (?,?,?,?,?)`, "legacy", "test.legacy", now, payload, now); err != nil {
+		t.Fatal(err)
+	}
+	store, err := New(context.Background(), db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries, err := store.ListUnpublished(ctx, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || string(entries[0].Payload) != payload {
+		t.Fatalf("legacy payload = %+v", entries)
+	}
 }

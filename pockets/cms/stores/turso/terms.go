@@ -3,9 +3,10 @@ package turso
 import (
 	"context"
 
+	"github.com/gopernicus/gopernicus/sdk"
+
 	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
 	"github.com/gopernicus/gopernicus/pockets/cms/domain/taxonomy"
-	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
 )
 
 // TermStore implements taxonomy.TermRepository over a libSQL database.
@@ -47,7 +48,7 @@ func (r termRow) toDomain() taxonomy.Term {
 
 // Create persists a new term.
 func (s *TermStore) Create(ctx context.Context, t taxonomy.Term) (taxonomy.Term, error) {
-	// Empty ID → the cryptids.Database strategy (amended D10): omit the id
+	// Empty ID → the sdk.DatabaseID strategy (amended D10): omit the id
 	// column so the schema default generates the key, read back with RETURNING.
 	if t.ID == "" {
 		const q = `INSERT INTO terms (kind, slug, name, parent_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?) RETURNING id`
@@ -80,12 +81,12 @@ func (s *TermStore) Update(ctx context.Context, id string, t taxonomy.Term) (tax
 		return taxonomy.Term{}, err
 	}
 	if n == 0 {
-		return taxonomy.Term{}, crud.ErrNotFound
+		return taxonomy.Term{}, sdk.ErrNotFound
 	}
 	return t, nil
 }
 
-// Get returns the term with the given id, or crud.ErrNotFound.
+// Get returns the term with the given id, or sdk.ErrNotFound.
 func (s *TermStore) Get(ctx context.Context, id string) (taxonomy.Term, error) {
 	const q = `SELECT ` + termColumns + ` FROM terms WHERE id = ?`
 	row, err := tursodb.QueryOne[termRow](ctx, s.db, q, id)
@@ -95,7 +96,7 @@ func (s *TermStore) Get(ctx context.Context, id string) (taxonomy.Term, error) {
 	return row.toDomain(), nil
 }
 
-// GetBySlug returns the term with the given kind+slug, or crud.ErrNotFound.
+// GetBySlug returns the term with the given kind+slug, or sdk.ErrNotFound.
 func (s *TermStore) GetBySlug(ctx context.Context, kind taxonomy.Kind, slug string) (taxonomy.Term, error) {
 	const q = `SELECT ` + termColumns + ` FROM terms WHERE kind = ? AND slug = ?`
 	row, err := tursodb.QueryOne[termRow](ctx, s.db, q, string(kind), slug)

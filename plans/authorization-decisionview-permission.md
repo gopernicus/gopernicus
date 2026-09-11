@@ -1,5 +1,11 @@
 # authorization: `DecisionView.CheckPermission` — the hierarchy walk inside the guarded mutation
 
+Current mutation contract: [authorization-audit-log-implementation.md](authorization-audit-log-implementation.md)
+(AUDIT-026). The approved change removes request receipts, scope revisions and the
+best-effort audit sink, adds optional atomic change history, and protects guarded
+reads against supported raw writers. Earlier protocol descriptions below are
+historical evidence, not the current API.
+
 **Status:** RELEASED 2026-09-08 — PR #40 squash @ `3c446c0`; `pockets/authorization/v0.8.0` @ `3c446c0`, `stores/pgx/v0.4.0` + `stores/turso/v0.3.0` @ `9e5a713`, cold-verified (see the Execution record). EXECUTED 2026-09-05 on branch `authorization-decisionview-permission` (checkpoint `3483352`). RATIFIED 2026-09-05 (owner, in-session). Drafted 2026-09-04 from the segovia v2
 tenancy design (`segovia/.claude/plans/v2-tenancy.md`, D13, owner-ruled: "make sure
 DecisionView is traversing the ReBAC hierarchy"). Revised 2026-09-05 after review:

@@ -5,12 +5,12 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/jackc/pgx/v5"
-
 	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
-	"github.com/gopernicus/gopernicus/pockets/authentication/domain/session"
-	"github.com/gopernicus/gopernicus/pockets/authentication/domain/user"
-	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/session"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/user"
+	"github.com/gopernicus/gopernicus/sdk"
+	"github.com/gopernicus/gopernicus/sdk/pkg/list"
+	"github.com/jackc/pgx/v5"
 )
 
 // UserAdminStore implements user.AdminRepository over PostgreSQL: the operator
@@ -31,7 +31,11 @@ type UserAdminStore struct {
 var _ user.AdminRepository = (*UserAdminStore)(nil)
 
 // NewUserAdminStore returns a UserAdminStore backed by db.
+// It panics if db is nil; the caller owns the database lifecycle.
 func NewUserAdminStore(db *pgxdb.DB, opts ...Option) *UserAdminStore {
+	if db == nil {
+		panic("authentication pgx: NewUserAdminStore received a nil database")
+	}
 	return &UserAdminStore{db: db, qualified: qualified{schema: applyOptions(opts).schema}}
 }
 
@@ -97,7 +101,7 @@ func (r userSummaryRow) toDomain() user.Summary {
 
 // List returns a page of directory rows ordered created_at DESC, id DESC (the id
 // tiebreak is contractual — see the 0014 collation note).
-func (s *UserAdminStore) List(ctx context.Context, req crud.ListRequest) (crud.Page[user.Summary], error) {
+func (s *UserAdminStore) List(ctx context.Context, req list.Request) (list.Page[user.Summary], error) {
 	q := pgxdb.ListQuery[userSummaryRow]{
 		BaseSQL:      userSummarySelect(s.qualified),
 		OrderFields:  user.OrderFields,
@@ -115,9 +119,9 @@ func (s *UserAdminStore) List(ctx context.Context, req crud.ListRequest) (crud.P
 	}
 	page, err := pgxdb.List(ctx, s.db, q, req)
 	if err != nil {
-		return crud.Page[user.Summary]{}, err
+		return list.Page[user.Summary]{}, err
 	}
-	return crud.MapPage(page, userSummaryRow.toDomain), nil
+	return list.MapPage(page, userSummaryRow.toDomain), nil
 }
 
 // GetSummary returns one user's directory projection, or sdk.ErrNotFound.
@@ -217,7 +221,11 @@ type ActiveSessionStore struct {
 var _ session.ActiveUserRepository = (*ActiveSessionStore)(nil)
 
 // NewActiveSessionStore returns an ActiveSessionStore backed by db.
+// It panics if db is nil; the caller owns the database lifecycle.
 func NewActiveSessionStore(db *pgxdb.DB, opts ...Option) *ActiveSessionStore {
+	if db == nil {
+		panic("authentication pgx: NewActiveSessionStore received a nil database")
+	}
 	return &ActiveSessionStore{db: db, qualified: qualified{schema: applyOptions(opts).schema}}
 }
 
@@ -226,7 +234,7 @@ func NewActiveSessionStore(db *pgxdb.DB, opts ...Option) *ActiveSessionStore {
 // Unknown user → sdk.ErrNotFound; deactivated → session.ErrUserNotActive with no
 // row written; a colliding refresh_token_hash → sdk.ErrAlreadyExists, exactly as
 // SessionStore.Create reports it.
-func (s *ActiveSessionStore) CreateForActiveUser(ctx context.Context, sess session.Session) (session.Session, error) {
+func (s *ActiveSessionStore) CreateForActiveUser(ctx context.Context, sess session.Session, expectedAuthRevision int64) (session.Session, error) {
 	methods, err := encodeMethods(sess.Authentication.Methods)
 	if err != nil {
 		return session.Session{}, err
@@ -238,14 +246,18 @@ func (s *ActiveSessionStore) CreateForActiveUser(ctx context.Context, sess sessi
 		// transaction commits. That is exactly the fence — the transition can only
 		// run before this insert (and be seen here) or after it (and revoke it).
 		var status string
-		lockQ := `SELECT status FROM ` + s.table(usersTable) + ` WHERE id = @user_id FOR SHARE`
-		if err := tx.QueryRow(ctx, lockQ, pgx.NamedArgs{"user_id": sess.UserID}).Scan(&status); err != nil {
+		var revision int64
+		lockQ := `SELECT status, auth_revision FROM ` + s.table(usersTable) + ` WHERE id = @user_id FOR SHARE`
+		if err := tx.QueryRow(ctx, lockQ, pgx.NamedArgs{"user_id": sess.UserID}).Scan(&status, &revision); err != nil {
 			return pgxdb.MapError(err)
 		}
 		if !user.NormalizeStatus(user.Status(status)).Active() {
 			return session.ErrUserNotActive
 		}
 
+		if revision != expectedAuthRevision {
+			return sdk.ErrConflict
+		}
 		insertQ := `INSERT INTO ` + s.table(sessionsTable) + ` (` + sessionColumns + `)
 			VALUES (@id, @user_id, @refresh_token_hash, @previous_refresh_token_hash, @previous_used, @rotation_count, @authenticated_at, @authentication_methods, @assurance_level, @created_at, @expires_at)`
 		if _, err := tx.Exec(ctx, insertQ, pgx.NamedArgs{

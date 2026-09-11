@@ -10,10 +10,12 @@ package google
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 
@@ -65,89 +67,96 @@ func googleEndpoints() endpoints {
 // Provider implements oauth.Provider for Google with cryptographic ID token
 // verification via JWKS.
 type Provider struct {
-	config    oauth.ProviderConfig
+	config    Config
 	endpoints endpoints
 	client    *http.Client
 	verifier  *oidc.IDTokenVerifier
 }
 
-// New creates a Google OAuth provider with the given credentials.
-//
-// New performs OIDC discovery at construction time: it fetches Google's
-// .well-known/openid-configuration over the network to resolve the issuer, JWKS
-// URL, and supported signing algorithms. This is a deliberate fail-fast call —
-// if Google is unreachable, New returns an error rather than deferring the
-// failure to the first ID token validation. Pass a context with a timeout to
-// bound it.
-//
-// If scopes is empty, it defaults to ["openid", "email", "profile"]. If client
-// is nil, a client with a 30s timeout is used; the same client is used for both
-// discovery and the token/userinfo flows.
-func New(ctx context.Context, clientID, clientSecret string, scopes []string, client *http.Client) (*Provider, error) {
-	return newProvider(ctx, clientID, clientSecret, scopes, client, googleEndpoints())
+// Config belongs to the host. Scopes and the HTTP client configuration are
+// copied at construction; the underlying transport remains host-owned.
+type Config struct {
+	ClientID     string
+	ClientSecret string
+	Scopes       []string
+	HTTPClient   *http.Client
+	// AccessType may be empty, "online", or "offline". Prompt is an optional
+	// space-separated combination of "consent" and "select_account", or "none".
+	AccessType string
+	Prompt     string
 }
 
-// newProvider is the endpoint-injectable constructor New delegates to. Tests
-// supply httptest endpoints; New supplies Google's real ones.
-func newProvider(ctx context.Context, clientID, clientSecret string, scopes []string, client *http.Client, eps endpoints) (*Provider, error) {
-	if len(scopes) == 0 {
-		scopes = []string{"openid", "email", "profile"}
-	}
-	if client == nil {
-		client = &http.Client{Timeout: defaultTimeout}
-	}
+// New performs OIDC discovery using the supplied context. Bound that context
+// with a deadline. The copied client is used for discovery, JWKS and API calls.
+func New(ctx context.Context, cfg Config) (*Provider, error) {
+	return newProvider(ctx, cfg, googleEndpoints())
+}
 
-	// OIDC discovery: fetches the issuer, JWKS URL, and supported algorithms.
-	// go-oidc caches the JWKS keys and handles key rotation. This is the
-	// fail-fast network call documented on New.
-	oidcCtx := oidc.ClientContext(ctx, client)
-	provider, err := oidc.NewProvider(oidcCtx, eps.issuer)
+func newProvider(ctx context.Context, cfg Config, eps endpoints) (*Provider, error) {
+	if strings.TrimSpace(cfg.ClientID) == "" {
+		return nil, fmt.Errorf("oauth google: client ID is required")
+	}
+	if len(cfg.Scopes) == 0 {
+		cfg.Scopes = []string{"openid", "email", "profile"}
+	}
+	cfg.Scopes = slices.Clone(cfg.Scopes)
+	if !slices.Contains(cfg.Scopes, "openid") {
+		return nil, fmt.Errorf("oauth google: openid scope is required")
+	}
+	if cfg.AccessType != "" && cfg.AccessType != "online" && cfg.AccessType != "offline" {
+		return nil, fmt.Errorf("oauth google: invalid access type")
+	}
+	for _, prompt := range strings.Fields(cfg.Prompt) {
+		if prompt != "consent" && prompt != "select_account" && prompt != "none" || prompt == "none" && cfg.Prompt != "none" {
+			return nil, fmt.Errorf("oauth google: invalid prompt")
+		}
+	}
+	client := http.Client{Timeout: defaultTimeout}
+	if cfg.HTTPClient != nil {
+		client = *cfg.HTTPClient
+	}
+	// Never replay credentials or bearer tokens at a redirect target.
+	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	transport := client.Transport
+	if transport == nil {
+		transport = http.DefaultTransport
+	}
+	client.Transport = boundedTransport{base: transport}
+	cfg.HTTPClient = &client
+	provider, err := oidc.NewProvider(oidc.ClientContext(ctx, &client), eps.issuer)
 	if err != nil {
-		return nil, fmt.Errorf("oauth google: OIDC discovery: %w", err)
+		return nil, &oauth.Error{Provider: "google", Operation: "OIDC discovery", Cause: errors.Join(err, ctx.Err())}
 	}
-
-	verifier := provider.Verifier(&oidc.Config{ClientID: clientID})
-
-	return &Provider{
-		config: oauth.ProviderConfig{
-			ClientID:     clientID,
-			ClientSecret: clientSecret,
-			Scopes:       scopes,
-			AuthURL:      eps.authURL,
-			TokenURL:     eps.tokenURL,
-			UserInfoURL:  eps.userInfoURL,
-			JWKSURL:      eps.jwksURL,
-		},
-		endpoints: eps,
-		client:    client,
-		verifier:  verifier,
-	}, nil
+	return &Provider{config: cfg, endpoints: eps, client: &client,
+		verifier: provider.Verifier(&oidc.Config{ClientID: cfg.ClientID})}, nil
 }
 
-func (p *Provider) Name() string                 { return "google" }
-func (p *Provider) SupportsOIDC() bool           { return true }
-func (p *Provider) TrustEmailVerification() bool { return true }
+func (p *Provider) Name() string { return "google" }
 
-// GetAuthorizationURL builds the Google consent-screen URL for the
-// authorization-code flow with PKCE (S256). access_type=offline and
-// prompt=consent request a refresh token; nonce, when non-empty, is echoed back
-// in the ID token for replay protection.
-func (p *Provider) GetAuthorizationURL(state, codeVerifier, nonce, redirectURI string) string {
+// GetAuthorizationURL builds an authorization-code URL with PKCE S256.
+func (p *Provider) GetAuthorizationURL(r oauth.AuthorizationRequest) (string, error) {
+	if err := r.Validate(); err != nil {
+		return "", err
+	}
 	params := url.Values{
 		"client_id":             {p.config.ClientID},
-		"redirect_uri":          {redirectURI},
-		"response_type":         {"code"},
+		"redirect_uri":          {r.RedirectURI},
 		"scope":                 {strings.Join(p.config.Scopes, " ")},
-		"state":                 {state},
-		"code_challenge":        {oauth.GenerateCodeChallenge(codeVerifier)},
+		"state":                 {r.State},
+		"code_challenge":        {oauth.GenerateCodeChallenge(r.CodeVerifier)},
 		"code_challenge_method": {"S256"},
-		"access_type":           {"offline"},
-		"prompt":                {"consent"},
 	}
-	if nonce != "" {
-		params.Set("nonce", nonce)
+	params.Set("response_type", "code")
+	if r.Nonce != "" {
+		params.Set("nonce", r.Nonce)
 	}
-	return p.config.AuthURL + "?" + params.Encode()
+	if p.config.AccessType != "" {
+		params.Set("access_type", p.config.AccessType)
+	}
+	if p.config.Prompt != "" {
+		params.Set("prompt", p.config.Prompt)
+	}
+	return p.endpoints.authURL + "?" + params.Encode(), nil
 }
 
 func (p *Provider) ExchangeCode(ctx context.Context, code, codeVerifier, redirectURI string) (*oauth.TokenResponse, error) {
@@ -168,18 +177,25 @@ func (p *Provider) ExchangeCode(ctx context.Context, code, codeVerifier, redirec
 		TokenType    string `json:"token_type"`
 		Scope        string `json:"scope"`
 	}
-	if err := p.postForm(ctx, p.config.TokenURL, data, &raw); err != nil {
+	if err := p.postForm(ctx, p.endpoints.tokenURL, data, &raw); err != nil {
 		return nil, fmt.Errorf("oauth google: exchange code: %w", err)
 	}
 
-	return &oauth.TokenResponse{
+	token := &oauth.TokenResponse{
 		AccessToken:  raw.AccessToken,
 		RefreshToken: raw.RefreshToken,
 		ExpiresIn:    raw.ExpiresIn,
 		IDToken:      raw.IDToken,
 		TokenType:    raw.TokenType,
 		Scopes:       raw.Scope,
-	}, nil
+	}
+	if err := token.Validate(); err != nil {
+		return nil, err
+	}
+	if !strings.EqualFold(token.TokenType, "bearer") {
+		return nil, fmt.Errorf("oauth google: unsupported token type")
+	}
+	return token, nil
 }
 
 func (p *Provider) GetUserInfo(ctx context.Context, accessToken string) (*oauth.UserInfo, error) {
@@ -187,20 +203,26 @@ func (p *Provider) GetUserInfo(ctx context.Context, accessToken string) (*oauth.
 		Sub           string `json:"sub"`
 		Email         string `json:"email"`
 		EmailVerified bool   `json:"email_verified"`
+		HostedDomain  string `json:"hd"`
 		Name          string `json:"name"`
 		Picture       string `json:"picture"`
 	}
-	if err := p.getJSON(ctx, p.config.UserInfoURL, accessToken, &raw); err != nil {
+	if err := p.getJSON(ctx, p.endpoints.userInfoURL, accessToken, &raw); err != nil {
 		return nil, fmt.Errorf("oauth google: get user info: %w", err)
 	}
 
-	return &oauth.UserInfo{
-		ProviderUserID: raw.Sub,
-		Email:          raw.Email,
-		EmailVerified:  raw.EmailVerified,
-		Name:           raw.Name,
-		Picture:        raw.Picture,
-	}, nil
+	info := &oauth.UserInfo{
+		ProviderUserID:     raw.Sub,
+		Email:              raw.Email,
+		EmailVerified:      raw.EmailVerified,
+		EmailAuthoritative: authoritativeEmail(raw.Email, raw.EmailVerified, raw.HostedDomain),
+		Name:               raw.Name,
+		Picture:            raw.Picture,
+	}
+	if err := info.Validate(); err != nil {
+		return nil, err
+	}
+	return info, nil
 }
 
 // ValidateIDToken verifies a Google OIDC ID token cryptographically.
@@ -209,38 +231,43 @@ func (p *Provider) GetUserInfo(ctx context.Context, accessToken string) (*oauth.
 // and cached from JWKS by go-oidc), and the standard claims are validated: iss
 // must be the discovered issuer, aud must match the configured ClientID, and
 // exp must not be expired. The nonce claim is checked when a non-empty nonce is
-// provided; the email claim must be present.
+// provided; the subject claim must be present. Email remains optional.
 func (p *Provider) ValidateIDToken(ctx context.Context, idToken, nonce string) (*oauth.IDTokenClaims, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, &oauth.Error{Provider: "google", Operation: "verify ID token", Cause: err}
+	}
 	token, err := p.verifier.Verify(ctx, idToken)
 	if err != nil {
-		return nil, fmt.Errorf("oauth google: verify ID token: %w", err)
+		return nil, &oauth.Error{Provider: "google", Operation: "verify ID token", Cause: errors.Join(err, ctx.Err())}
 	}
 
 	var claims struct {
 		Email         string `json:"email"`
 		EmailVerified bool   `json:"email_verified"`
+		HostedDomain  string `json:"hd"`
 		Name          string `json:"name"`
 		Picture       string `json:"picture"`
 		Nonce         string `json:"nonce"`
 	}
 	if err := token.Claims(&claims); err != nil {
-		return nil, fmt.Errorf("oauth google: extract claims: %w", err)
+		return nil, &oauth.Error{Provider: "google", Operation: "extract claims", Cause: err}
 	}
 
 	if nonce != "" && claims.Nonce != nonce {
 		return nil, fmt.Errorf("oauth google: nonce mismatch")
 	}
-	if claims.Email == "" {
-		return nil, fmt.Errorf("oauth google: missing email in ID token")
+	if strings.TrimSpace(token.Subject) == "" {
+		return nil, fmt.Errorf("oauth google: missing subject in ID token")
 	}
 
 	return &oauth.IDTokenClaims{
-		Subject:       token.Subject,
-		Email:         claims.Email,
-		EmailVerified: claims.EmailVerified,
-		Name:          claims.Name,
-		Picture:       claims.Picture,
-		Nonce:         claims.Nonce,
+		Subject:            token.Subject,
+		Email:              claims.Email,
+		EmailVerified:      claims.EmailVerified,
+		EmailAuthoritative: authoritativeEmail(claims.Email, claims.EmailVerified, claims.HostedDomain),
+		Name:               claims.Name,
+		Picture:            claims.Picture,
+		Nonce:              claims.Nonce,
 	}, nil
 }
 
@@ -258,16 +285,23 @@ func (p *Provider) RefreshToken(ctx context.Context, refreshToken string) (*oaut
 		TokenType   string `json:"token_type"`
 		Scope       string `json:"scope"`
 	}
-	if err := p.postForm(ctx, p.config.TokenURL, data, &raw); err != nil {
+	if err := p.postForm(ctx, p.endpoints.tokenURL, data, &raw); err != nil {
 		return nil, fmt.Errorf("oauth google: refresh token: %w", err)
 	}
 
-	return &oauth.TokenResponse{
+	token := &oauth.TokenResponse{
 		AccessToken: raw.AccessToken,
 		ExpiresIn:   raw.ExpiresIn,
 		TokenType:   raw.TokenType,
 		Scopes:      raw.Scope,
-	}, nil
+	}
+	if err := token.Validate(); err != nil {
+		return nil, err
+	}
+	if !strings.EqualFold(token.TokenType, "bearer") {
+		return nil, fmt.Errorf("oauth google: unsupported token type")
+	}
+	return token, nil
 }
 
 func (p *Provider) postForm(ctx context.Context, endpoint string, data url.Values, result any) error {
@@ -278,20 +312,7 @@ func (p *Provider) postForm(ctx context.Context, endpoint string, data url.Value
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Accept", "application/json")
 
-	resp, err := p.client.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBody))
-	if err != nil {
-		return fmt.Errorf("read response: %w", err)
-	}
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("status %d: %s", resp.StatusCode, body)
-	}
-	return json.Unmarshal(body, result)
+	return p.doJSON(req, result)
 }
 
 func (p *Provider) getJSON(ctx context.Context, endpoint, bearerToken string, result any) error {
@@ -302,18 +323,75 @@ func (p *Provider) getJSON(ctx context.Context, endpoint, bearerToken string, re
 	req.Header.Set("Authorization", "Bearer "+bearerToken)
 	req.Header.Set("Accept", "application/json")
 
+	return p.doJSON(req, result)
+}
+
+// Google is authoritative for Gmail and verified Workspace identities. A raw
+// email_verified claim alone does not establish continuing mailbox ownership.
+func authoritativeEmail(email string, verified bool, hostedDomain string) bool {
+	local, domain, ok := strings.Cut(email, "@")
+	return verified && ok && local != "" && domain != "" && !strings.Contains(domain, "@") &&
+		(strings.EqualFold(domain, "gmail.com") || strings.TrimSpace(hostedDomain) != "")
+}
+
+func (p *Provider) doJSON(req *http.Request, result any) error {
 	resp, err := p.client.Do(req)
 	if err != nil {
-		return err
+		return &oauth.Error{Provider: "google", Operation: "HTTP request", Cause: err}
 	}
 	defer resp.Body.Close()
-
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBody))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBody+1))
 	if err != nil {
-		return fmt.Errorf("read response: %w", err)
+		return &oauth.Error{Provider: "google", Operation: "read response", StatusCode: resp.StatusCode, Cause: err}
 	}
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("status %d: %s", resp.StatusCode, body)
+	if len(body) > maxResponseBody {
+		return &oauth.Error{Provider: "google", Operation: "response too large", StatusCode: resp.StatusCode}
 	}
-	return json.Unmarshal(body, result)
+	var failure struct {
+		Code string `json:"error"`
+	}
+	_ = json.Unmarshal(body, &failure)
+	if resp.StatusCode != http.StatusOK || failure.Code != "" {
+		return &oauth.Error{Provider: "google", Operation: "provider response", StatusCode: resp.StatusCode, Code: failure.Code}
+	}
+	if err := json.Unmarshal(body, result); err != nil {
+		return &oauth.Error{Provider: "google", Operation: "decode response", StatusCode: resp.StatusCode, Cause: err}
+	}
+	return nil
+}
+
+// Bound discovery and JWKS bodies as well as direct API responses without
+// replacing go-oidc's verification/key-cache implementation.
+type boundedTransport struct{ base http.RoundTripper }
+
+func (t boundedTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	resp, err := t.base.RoundTrip(req)
+	if err != nil {
+		return nil, err
+	}
+	resp.Body = &boundedBody{ReadCloser: resp.Body, remaining: maxResponseBody}
+	return resp, nil
+}
+
+type boundedBody struct {
+	io.ReadCloser
+	remaining int64
+}
+
+func (b *boundedBody) Read(p []byte) (int, error) {
+	if len(p) == 0 {
+		return 0, nil
+	}
+	if b.remaining < 0 {
+		return 0, fmt.Errorf("oauth google: response too large")
+	}
+	if int64(len(p)) > b.remaining+1 {
+		p = p[:b.remaining+1]
+	}
+	n, err := b.ReadCloser.Read(p)
+	b.remaining -= int64(n)
+	if b.remaining < 0 {
+		return 0, fmt.Errorf("oauth google: response too large")
+	}
+	return n, err
 }

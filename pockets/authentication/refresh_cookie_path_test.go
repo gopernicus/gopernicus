@@ -3,21 +3,24 @@ package authentication
 import (
 	"errors"
 	"testing"
+
+	delivery "github.com/gopernicus/gopernicus/pockets/authentication/logic/delivery"
+	environment "github.com/gopernicus/gopernicus/sdk/pkg/environment"
 )
 
-// Refresh-cookie path tests (upstream evidence §2). Config.RefreshCookiePath scopes
+// Refresh-cookie path tests (upstream evidence §2). BrowserConfig.RefreshCookiePath scopes
 // ONLY the refresh cookie; empty defaults to "/auth" and a non-empty value must be a
 // valid absolute cookie path so a prefixed host cannot silently scope the cookie to a
 // path a browser will never match. The end-to-end issue/rotate/delete and cookie-jar
-// proofs live in internal/inbound/authentication.
+// proofs live in inbound/http.
 
-func refreshPathBaseConfig() Config {
-	return Config{
+func refreshPathBaseConfig() constructorConfig {
+	return constructorConfig{
 		Hasher:       stubHasher{},
 		Mailer:       stubMailer{},
 		TokenSigner:  stubSigner{},
-		RuntimeMode:  RuntimeModeDevelopment,
-		DeliveryMode: DeliveryModeOff,
+		RuntimeMode:  environment.ModeDevelopment,
+		DeliveryMode: delivery.ModeOff,
 	}
 }
 
@@ -51,7 +54,7 @@ func TestRefreshCookiePathConstructionMatrix(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := refreshPathBaseConfig()
 			cfg.RefreshCookiePath = tt.path
-			_, err := NewService(Repositories{}, cfg)
+			_, err := newFixture(testRepositories(Repositories{}), cfg)
 			if tt.wantErr == nil {
 				if err != nil {
 					t.Fatalf("NewService: err=%v, want nil", err)

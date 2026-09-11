@@ -17,10 +17,13 @@ var canonicalMigrations = []string{
 	"0003_iam_scopes.sql",
 	"0004_iam_mutations.sql",
 	"0005_iam_lookup_keyset.sql",
+	"0006_iam_tuple_identity.sql",
+	"0007_iam_audit.sql",
 }
 
 // expectedTables are every CREATE TABLE the canonical set must define.
 var expectedTables = []string{
+	"iam_audit",
 	"iam_relationships",
 	"iam_roles",
 	"iam_scopes",
@@ -32,6 +35,7 @@ var expectedTables = []string{
 // nonnegative-revision anchors on iam_scopes/iam_mutations, the persisted-outcome
 // set on iam_mutations, and the consistent global/scoped role pair on iam_roles.
 var expectedConstraints = []string{
+	"ck_iam_audit_action", "ck_iam_audit_fact", "ck_iam_audit_source",
 	"ck_iam_relationships_nonempty",
 	"ck_iam_roles_nonempty",
 	"ck_iam_roles_scope_pair",
@@ -52,6 +56,7 @@ var expectedConstraints = []string{
 // effective-role GROUP BY (AZ3-1.5), and the two 0005 keyset paths the paged
 // lookups range-scan (authorization-lookup-paging, A6).
 var expectedIndexes = []string{
+	"idx_iam_audit_time", "idx_iam_audit_resource", "idx_iam_audit_subject", "idx_iam_audit_actor",
 	"idx_iam_relationships_unique_tuple",
 	"idx_iam_relationships_unique_subject",
 	"idx_iam_relationships_resource",

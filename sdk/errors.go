@@ -1,23 +1,12 @@
-// Package sdk is the framework kernel: the root of the gopernicus sdk module.
+// Package sdk provides the framework's common vocabulary and small primitives:
+// errors and validation faults, request/trace/span and principal context values,
+// identity projections, configurable ID generation, pointer reads and URL slugs.
 //
-// The kernel holds the cross-cutting vocabulary every tier may depend on — the
-// transport-agnostic sentinel errors below, the request-identity context
-// vocabulary in context.go (the second promotion, 2026-07-10), and the write-fault
-// vocabulary in faults.go (Violation/ValidationError/StaleError — the third,
-// 2026-08-31: shapes both foundation/crud and foundation/web must name, and the
-// two tiers may not see each other). Its contract is deliberately narrow:
-//
-//   - It imports the standard library only. The module's go.mod has no require
-//     block, so "stdlib only" is a structural fact, not a convention.
-//   - It is a leaf within the sdk module. The Go compiler enforces this against
-//     every subpackage that imports the kernel (crud, cryptids, email, web, …):
-//     the root package cannot import one of its own subpackages without forming
-//     an import cycle. Subpackages that do not import the kernel are not caught
-//     by the cycle, so guard G12(a) (landing at P5) is the primary enforcement
-//     of the no-subpackage-imports rule; the cycle is the belt to its
-//     suspenders.
-//   - Promotion to the kernel is a deliberate, visible act: adding a file to the
-//     root package. Nothing is admitted implicitly.
+// Root SDK imports only the standard library, never an SDK subpackage. Every
+// framework tier may use it. Subpackages provide coherent mechanisms or
+// capabilities, with integrations supplying external-library implementations.
+// Hosts own configuration, identity records and application policy; these helpers
+// do not start services or install global configuration.
 //
 // The sentinels are transport-agnostic and designed to be wrapped with domain
 // context, then checked at boundaries using errors.Is().
@@ -70,9 +59,7 @@ var (
 	// request. Transports map this to 503 Service Unavailable.
 	ErrUnavailable = errors.New("unavailable")
 
-	// expectedErrors lists all known domain sentinels. Used by IsExpected to
-	// distinguish errors that map to a specific HTTP status from unexpected
-	// errors that fall through to 500.
+	// expectedErrors lists the domain sentinels recognized by IsExpected.
 	expectedErrors = []error{
 		ErrNotFound, ErrAlreadyExists, ErrInvalidReference,
 		ErrInvalidInput, ErrUnauthorized, ErrForbidden,
@@ -81,8 +68,8 @@ var (
 )
 
 // IsExpected reports whether err wraps a known domain sentinel.
-// Errors that return false will map to HTTP 500 in ErrFromDomain
-// and typically warrant logging at the delivery layer.
+// This is domain classification, not an HTTP status prediction: transports
+// also recognize typed validation errors and explicit public-error adapters.
 func IsExpected(err error) bool {
 	for _, sentinel := range expectedErrors {
 		if errors.Is(err, sentinel) {

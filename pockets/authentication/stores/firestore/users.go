@@ -4,8 +4,8 @@ import (
 	"context"
 
 	firestoredb "github.com/gopernicus/gopernicus/integrations/datastores/firestore"
-	"github.com/gopernicus/gopernicus/pockets/authentication/domain/identifier"
-	"github.com/gopernicus/gopernicus/pockets/authentication/domain/user"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/identifier"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/user"
 )
 
 var _ user.UserRepository = (*userStore)(nil)
@@ -34,10 +34,14 @@ func newUserStore(db *firestoredb.DB) *userStore {
 // is written with CREATE, whose precondition the SERVER evaluates at commit. A
 // check-then-write would be both slower and weaker (ruling R3).
 //
-// Both ids may be empty under the greenfield cryptids.Database convention; they
+// Both ids may be empty under the greenfield sdk.DatabaseID convention; they
 // are minted INSIDE the callback so a retried attempt mints fresh ones rather
 // than reusing ids a losing attempt claimed (N-D5).
 func (s *userStore) CreateWithPrimaryIdentifier(ctx context.Context, u user.User, ident identifier.Identifier) (user.User, identifier.Identifier, error) {
+	return s.Provision(ctx, u, ident, user.InitialCredentials{})
+}
+
+func (s *userStore) Provision(ctx context.Context, u user.User, ident identifier.Identifier, credentials user.InitialCredentials) (user.User, identifier.Identifier, error) {
 	if err := refuseAmbient(ctx); err != nil {
 		return user.User{}, identifier.Identifier{}, err
 	}
@@ -66,6 +70,18 @@ func (s *userStore) CreateWithPrimaryIdentifier(ctx context.Context, u user.User
 		}
 		if err := putIdentifier(ctx, s.db, w, plan, identRow); err != nil {
 			return err
+		}
+		if credentials.PasswordHash != "" {
+			if err := putPassword(ctx, s.db, w, userRow.ID, credentials.PasswordHash); err != nil {
+				return err
+			}
+		}
+		if credentials.OAuth != nil {
+			account := *credentials.OAuth
+			account.UserID = userRow.ID
+			if err := putOAuthAccount(ctx, s.db, w, newOAuthAccountDoc(account)); err != nil {
+				return err
+			}
 		}
 		if err := plan.commit(ctx, w); err != nil {
 			return err

@@ -2,9 +2,10 @@ package turso
 
 import (
 	"context"
+	"time"
 
 	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
-	"github.com/gopernicus/gopernicus/pockets/authentication/domain/oauthaccount"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/oauthaccount"
 	"github.com/gopernicus/gopernicus/sdk"
 )
 
@@ -22,7 +23,11 @@ type OAuthAccountStore struct {
 var _ oauthaccount.OAuthAccountRepository = (*OAuthAccountStore)(nil)
 
 // NewOAuthAccountStore returns an OAuthAccountStore backed by db.
+// It panics if db is nil; the caller owns the database lifecycle.
 func NewOAuthAccountStore(db *tursodb.DB) *OAuthAccountStore {
+	if db == nil {
+		panic("authentication turso: NewOAuthAccountStore received a nil database")
+	}
 	return &OAuthAccountStore{db: db}
 }
 
@@ -65,8 +70,24 @@ func (r oauthAccountRow) toDomain() oauthaccount.OAuthAccount {
 // Create persists a new link; a colliding (provider, provider_user_id) →
 // sdk.ErrAlreadyExists (plain INSERT, no ON CONFLICT).
 func (s *OAuthAccountStore) Create(ctx context.Context, a oauthaccount.OAuthAccount) (oauthaccount.OAuthAccount, error) {
+	var created oauthaccount.OAuthAccount
+	err := s.db.InTx(ctx, func(tx *tursodb.Tx) error {
+		if _, err := lockCredentialUser(ctx, tx, a.UserID); err != nil {
+			return err
+		}
+		var err error
+		created, err = insertOAuthAccount(ctx, tx, a)
+		return err
+	})
+	if err != nil {
+		return oauthaccount.OAuthAccount{}, err
+	}
+	return created, nil
+}
+
+func insertOAuthAccount(ctx context.Context, tx *tursodb.Tx, a oauthaccount.OAuthAccount) (oauthaccount.OAuthAccount, error) {
 	const q = `INSERT INTO oauth_accounts (` + oauthAccountColumns + `) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-	_, err := s.db.Exec(ctx, q,
+	_, err := tx.Exec(ctx, q,
 		a.Provider, a.ProviderUserID, a.UserID, a.ProviderEmail,
 		tursodb.BoolToInt(a.ProviderEmailVerified), tursodb.BoolToInt(a.AccountVerified),
 		tursodb.FormatTime(a.LinkedAt), a.AccessToken, a.RefreshToken,
@@ -112,12 +133,61 @@ func (s *OAuthAccountStore) ListByUser(ctx context.Context, userID string) ([]oa
 
 // Delete removes userID's link to provider; no such link → sdk.ErrNotFound.
 func (s *OAuthAccountStore) Delete(ctx context.Context, userID, provider string) error {
-	n, err := tursodb.ExecAffecting(ctx, s.db, "DELETE FROM oauth_accounts WHERE user_id = ? AND provider = ?", userID, provider)
+	return s.db.InTx(ctx, func(tx *tursodb.Tx) error {
+		if _, err := lockCredentialUser(ctx, tx, userID); err != nil {
+			return err
+		}
+		n, err := tursodb.ExecAffecting(ctx, tx, `DELETE FROM oauth_accounts WHERE user_id = ? AND provider = ?`, userID, provider)
+		if err != nil {
+			return err
+		}
+		if n == 0 {
+			return sdk.ErrNotFound
+		}
+		if err := bumpCredentialRevision(ctx, tx, userID, time.Now().UTC()); err != nil {
+			return err
+		}
+		return revokeCredentialState(ctx, tx, userID)
+	})
+}
+
+// Link makes adoption and provider attachment one conditional credential commit.
+func (s *OAuthAccountStore) Link(ctx context.Context, a oauthaccount.OAuthAccount, expectedAuthRevision int64, adoptIdentifierID string, now time.Time) (oauthaccount.OAuthAccount, int64, error) {
+	var revision int64
+	err := s.db.InTx(ctx, func(tx *tursodb.Tx) error {
+		current, err := lockCredentialUser(ctx, tx, a.UserID)
+		if err != nil {
+			return err
+		}
+		if current != expectedAuthRevision {
+			return sdk.ErrConflict
+		}
+		if adoptIdentifierID != "" {
+			n, err := tursodb.ExecAffecting(ctx, tx, `UPDATE user_identifiers SET verified_at = ?, updated_at = ? WHERE id = ? AND user_id = ? AND kind = 'email' AND replaced_at IS NULL AND (login_enabled = TRUE OR recovery_enabled = TRUE)`, tursodb.FormatTime(now), tursodb.FormatTime(now), adoptIdentifierID, a.UserID)
+			if err != nil {
+				return err
+			}
+			if n != 1 {
+				return sdk.ErrConflict
+			}
+			if _, err := tx.Exec(ctx, `DELETE FROM user_passwords WHERE user_id = ?`, a.UserID); err != nil {
+				return err
+			}
+			if err := revokeCredentialState(ctx, tx, a.UserID); err != nil {
+				return err
+			}
+		}
+		if _, err := insertOAuthAccount(ctx, tx, a); err != nil {
+			return err
+		}
+		if err := bumpCredentialRevision(ctx, tx, a.UserID, now); err != nil {
+			return err
+		}
+		revision = current + 1
+		return nil
+	})
 	if err != nil {
-		return err
+		return oauthaccount.OAuthAccount{}, 0, err
 	}
-	if n == 0 {
-		return sdk.ErrNotFound
-	}
-	return nil
+	return a, revision, nil
 }

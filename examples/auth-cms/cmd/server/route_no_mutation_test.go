@@ -7,7 +7,8 @@ import (
 
 	"github.com/gopernicus/gopernicus/examples/auth-cms/internal/authmem"
 	auth "github.com/gopernicus/gopernicus/pockets/authentication"
-	"github.com/gopernicus/gopernicus/sdk/foundation/web"
+	delivery "github.com/gopernicus/gopernicus/pockets/authentication/logic/delivery"
+	"github.com/gopernicus/gopernicus/sdk/pkg/web"
 )
 
 // TestNoSessionOnlyAuthorizationMutationRoute is the permanent regression guard for the
@@ -29,16 +30,16 @@ func TestNoSessionOnlyAuthorizationMutationRoute(t *testing.T) {
 	}
 	// in_process delivery owns its bounded pool and needs no dispatcher — enough to
 	// construct a real Service for the route-registration surface under test.
-	authCfg.DeliveryMode = auth.DeliveryModeInProcess
+	authCfg.DeliveryMode = delivery.ModeInProcess
 	authCfg.DeliveryEphemeralAcknowledged = true
-	authSvc, err := auth.NewService(authmem.New().Repositories(), authCfg)
+	authSvc, err := auth.New(authmem.New().Repositories(), authCfg.TokenSigner, authCfg.RuntimeMode, authCfg.DeliveryMode, authCfg.options()...)
 	if err != nil {
 		t.Fatalf("auth.NewService: %v", err)
 	}
-	authorizer := hostAuthz(t).Service
+	authorizer := hostAuthz(t)
 
-	router := web.NewWebHandler(web.WithLogging(quietLog()))
-	registerDemoRoutes(router, authSvc, authorizer)
+	router := web.NewWebHandler()
+	registerDemoRoutes(router, authSvc.HTTP, authorizer.Decisions, authorizer.Roles, authorizer.HTTP)
 
 	// The retired session-only authorization-mutation routes must be absent (404). A
 	// shipped HTTP route must never mutate authorization with session presence alone.

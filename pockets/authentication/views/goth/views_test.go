@@ -2,21 +2,23 @@ package goth
 
 import (
 	"context"
+	"errors"
 	"io"
 	"strings"
 	"testing"
 
-	"github.com/a-h/templ"
+	"github.com/gopernicus/gopernicus/sdk"
 
-	"github.com/gopernicus/gopernicus/pockets/authentication"
-	"github.com/gopernicus/gopernicus/sdk/foundation/web"
+	"github.com/a-h/templ"
+	inbound "github.com/gopernicus/gopernicus/pockets/authentication/inbound/http"
+	"github.com/gopernicus/gopernicus/sdk/pkg/web"
 	uigoth "github.com/gopernicus/gopernicus/ui/goth"
 )
 
 // newViews builds a Views over a default (StylesOnly) ui/goth bundle for tests.
 func newViews(t *testing.T) Views {
 	t.Helper()
-	b, err := uigoth.New(uigoth.Config{})
+	b, err := uigoth.New()
 	if err != nil {
 		t.Fatalf("bundle: %v", err)
 	}
@@ -59,12 +61,12 @@ func mustNotContain(t *testing.T, name, body string, forbid ...string) {
 
 // ctx builds a representative page context: CSRF token, CSP nonce, a validated
 // return-to, and one field error. None of these are secrets.
-func ctx() authentication.PageContext {
-	return authentication.PageContext{
+func ctx() inbound.PageContext {
+	return inbound.PageContext{
 		CSRFToken:   "csrf-abc123",
 		CSPNonce:    "nonce-xyz789",
 		ReturnTo:    "/dashboard",
-		FieldErrors: []authentication.FieldError{{Field: "email", Message: "That email looks invalid."}},
+		FieldErrors: []inbound.FieldError{{Field: "email", Message: "That email looks invalid."}},
 	}
 }
 
@@ -79,32 +81,32 @@ func TestNilBundleRejected(t *testing.T) {
 // error — the minimal-model smoke test across the whole port.
 func TestAllPagesRenderZeroModels(t *testing.T) {
 	v := newViews(t)
-	render(t, v.Login(authentication.LoginPage{}))
-	render(t, v.Register(authentication.RegisterPage{}))
-	render(t, v.Verify(authentication.VerifyPage{}))
-	render(t, v.ForgotPassword(authentication.ForgotPage{}))
-	render(t, v.ResetPassword(authentication.ResetPage{}))
-	render(t, v.PasswordlessStart(authentication.PasswordlessStartPage{}))
-	render(t, v.PasswordlessCode(authentication.PasswordlessCodePage{}))
-	render(t, v.MagicLinkLanding(authentication.MagicLinkPage{}))
-	render(t, v.OAuthLinkLanding(authentication.OAuthLinkPage{}))
-	render(t, v.CheckDelivery(authentication.CheckDeliveryPage{}))
-	render(t, v.StepUp(authentication.StepUpPage{}))
-	render(t, v.AccountSecurity(authentication.AccountSecurityPage{}))
-	render(t, v.IdentifierForm(authentication.IdentifierFormPage{}))
-	render(t, v.IdentifierForm(authentication.IdentifierFormPage{Mode: "edit", ID: "id1"}))
-	render(t, v.PasswordForm(authentication.PasswordFormPage{}))
-	render(t, v.PasswordForm(authentication.PasswordFormPage{Mode: "remove"}))
-	render(t, v.OAuthUnlink(authentication.OAuthUnlinkPage{}))
-	render(t, v.Status(authentication.StatusPage{}))
-	render(t, v.Error(authentication.ErrorPage{}))
+	render(t, v.Login(inbound.LoginPage{}))
+	render(t, v.Register(inbound.RegisterPage{}))
+	render(t, v.Verify(inbound.VerifyPage{}))
+	render(t, v.ForgotPassword(inbound.ForgotPage{}))
+	render(t, v.ResetPassword(inbound.ResetPage{}))
+	render(t, v.PasswordlessStart(inbound.PasswordlessStartPage{}))
+	render(t, v.PasswordlessCode(inbound.PasswordlessCodePage{}))
+	render(t, v.MagicLinkLanding(inbound.MagicLinkPage{}))
+	render(t, v.OAuthLinkLanding(inbound.OAuthLinkPage{}))
+	render(t, v.CheckDelivery(inbound.CheckDeliveryPage{}))
+	render(t, v.StepUp(inbound.StepUpPage{}))
+	render(t, v.AccountSecurity(inbound.AccountSecurityPage{}))
+	render(t, v.IdentifierForm(inbound.IdentifierFormPage{}))
+	render(t, v.IdentifierForm(inbound.IdentifierFormPage{Mode: "edit", ID: "id1"}))
+	render(t, v.PasswordForm(inbound.PasswordFormPage{}))
+	render(t, v.PasswordForm(inbound.PasswordFormPage{Mode: "remove"}))
+	render(t, v.OAuthUnlink(inbound.OAuthUnlinkPage{}))
+	render(t, v.Status(inbound.StatusPage{}))
+	render(t, v.Error(inbound.ErrorPage{}))
 }
 
 // TestDocumentLoadsGOTHAssets proves every page's chrome loads the ui/goth
 // fingerprinted stylesheet from the bundle asset base path (the migration's
 // load-bearing "styled via GOTH assets" property).
 func TestDocumentLoadsGOTHAssets(t *testing.T) {
-	body := render(t, newViews(t).Login(authentication.LoginPage{PageContext: ctx()}))
+	body := render(t, newViews(t).Login(inbound.LoginPage{PageContext: ctx()}))
 	mustContain(t, "assets", body,
 		`rel="stylesheet"`,
 		`/assets/goth/`,
@@ -117,7 +119,7 @@ func TestDocumentLoadsGOTHAssets(t *testing.T) {
 // correct autocomplete tokens, the CSRF hidden field, and the validated return-to
 // hidden field. The entered email is echoed; the password is never echoed.
 func TestLogin_LabelsAutocompleteCSRF(t *testing.T) {
-	body := render(t, newViews(t).Login(authentication.LoginPage{
+	body := render(t, newViews(t).Login(inbound.LoginPage{
 		PageContext: ctx(),
 		Email:       "user@example.com",
 	}))
@@ -141,7 +143,7 @@ func TestLogin_LabelsAutocompleteCSRF(t *testing.T) {
 
 // TestRegister_NewPassword proves the registration form uses new-password.
 func TestRegister_NewPassword(t *testing.T) {
-	body := render(t, newViews(t).Register(authentication.RegisterPage{PageContext: ctx(), Email: "u@e.com", DisplayName: "Ada"}))
+	body := render(t, newViews(t).Register(inbound.RegisterPage{PageContext: ctx(), Email: "u@e.com", DisplayName: "Ada"}))
 	mustContain(t, "Register", body,
 		`action="/auth/register"`,
 		`autocomplete="new-password"`,
@@ -154,7 +156,7 @@ func TestRegister_NewPassword(t *testing.T) {
 // TestVerify_OneTimeCodeHiddenEmail proves the verify form uses one-time-code and
 // carries the plain email as a hidden field, while displaying the masked address.
 func TestVerify_OneTimeCodeHiddenEmail(t *testing.T) {
-	body := render(t, newViews(t).Verify(authentication.VerifyPage{
+	body := render(t, newViews(t).Verify(inbound.VerifyPage{
 		PageContext: ctx(),
 		Email:       "user@example.com",
 		MaskedEmail: "u•••@example.com",
@@ -173,7 +175,7 @@ func TestVerify_OneTimeCodeHiddenEmail(t *testing.T) {
 // EMPTY, the externalized fragment-reader script is loaded same-origin, and the form
 // carries the data-* config the reader keys off. No token appears in a query string.
 func TestReset_FragmentTokenExternalizedNeverRendered(t *testing.T) {
-	body := render(t, newViews(t).ResetPassword(authentication.ResetPage{
+	body := render(t, newViews(t).ResetPassword(inbound.ResetPage{
 		PageContext: ctx(),
 		RedeemPath:  "/auth/password/reset",
 	}))
@@ -196,7 +198,7 @@ func TestReset_FragmentTokenExternalizedNeverRendered(t *testing.T) {
 // field value only — never a query string or referrer surface.
 func TestReset_ErrorRerenderRetainsToken(t *testing.T) {
 	const tok = "reset-token-abc123"
-	body := render(t, newViews(t).ResetPassword(authentication.ResetPage{
+	body := render(t, newViews(t).ResetPassword(inbound.ResetPage{
 		PageContext: ctx(),
 		RedeemPath:  "/auth/password/reset",
 		Token:       tok,
@@ -210,7 +212,7 @@ func TestReset_ErrorRerenderRetainsToken(t *testing.T) {
 // auto-submits), and offers a visible manual fallback — never a token in a query
 // string and never an inline script.
 func TestMagicLink_ExternalReaderScrubAndManualFallback(t *testing.T) {
-	body := render(t, newViews(t).MagicLinkLanding(authentication.MagicLinkPage{
+	body := render(t, newViews(t).MagicLinkLanding(inbound.MagicLinkPage{
 		PageContext: ctx(),
 		RedeemPath:  "/auth/passwordless/redeem",
 	}))
@@ -235,7 +237,7 @@ func TestMagicLink_ExternalReaderScrubAndManualFallback(t *testing.T) {
 // autocomplete/type to the selected kind.
 func TestPasswordlessStart_TelAutocompleteByKind(t *testing.T) {
 	v := newViews(t)
-	body := render(t, v.PasswordlessStart(authentication.PasswordlessStartPage{
+	body := render(t, v.PasswordlessStart(inbound.PasswordlessStartPage{
 		PageContext: ctx(),
 		Kind:        "phone",
 		Kinds:       []string{"email", "phone"},
@@ -246,7 +248,7 @@ func TestPasswordlessStart_TelAutocompleteByKind(t *testing.T) {
 		`autocomplete="tel"`,
 	)
 
-	emailBody := render(t, v.PasswordlessStart(authentication.PasswordlessStartPage{
+	emailBody := render(t, v.PasswordlessStart(inbound.PasswordlessStartPage{
 		PageContext: ctx(),
 		Kind:        "email",
 		Kinds:       []string{"email"},
@@ -257,7 +259,7 @@ func TestPasswordlessStart_TelAutocompleteByKind(t *testing.T) {
 // TestPasswordlessCode_OneTimeCode proves the OTP entry form uses one-time-code and
 // carries the plain identifier hidden while displaying the masked one.
 func TestPasswordlessCode_OneTimeCode(t *testing.T) {
-	body := render(t, newViews(t).PasswordlessCode(authentication.PasswordlessCodePage{
+	body := render(t, newViews(t).PasswordlessCode(inbound.PasswordlessCodePage{
 		PageContext:      ctx(),
 		Kind:             "email",
 		Identifier:       "user@example.com",
@@ -275,7 +277,7 @@ func TestPasswordlessCode_OneTimeCode(t *testing.T) {
 // methods the service reported viable.
 func TestStepUp_OffersOnlyViableMethods(t *testing.T) {
 	v := newViews(t)
-	pwOnly := render(t, v.StepUp(authentication.StepUpPage{
+	pwOnly := render(t, v.StepUp(inbound.StepUpPage{
 		PageContext:       ctx(),
 		Operation:         "remove your password",
 		PasswordAvailable: true,
@@ -287,9 +289,12 @@ func TestStepUp_OffersOnlyViableMethods(t *testing.T) {
 	)
 	mustNotContain(t, "StepUp password", pwOnly, `action="/auth/step-up/code"`)
 
-	codeOnly := render(t, v.StepUp(authentication.StepUpPage{
+	codeOnly := render(t, v.StepUp(inbound.StepUpPage{
 		PageContext:      ctx(),
 		MaskedIdentifier: "u•••@example.com",
+		Kind:             "email",
+		Purpose:          "remove_password",
+		Context:          "credential",
 		CodeAvailable:    true,
 	}))
 	mustContain(t, "StepUp code", codeOnly,
@@ -299,16 +304,21 @@ func TestStepUp_OffersOnlyViableMethods(t *testing.T) {
 		"u•••@example.com",
 	)
 	mustNotContain(t, "StepUp code", codeOnly, `autocomplete="current-password"`)
+	for _, field := range []string{`name="kind" value="email"`, `name="purpose" value="remove_password"`, `name="context" value="credential"`} {
+		if strings.Count(codeOnly, field) != 2 {
+			t.Fatalf("both code forms must preserve %s: %s", field, codeOnly)
+		}
+	}
 }
 
 // TestAccountSecurity_MaskedInventory proves the inventory renders masked values, the
 // has/no-password branches, and management links — no secret appears.
 func TestAccountSecurity_MaskedInventory(t *testing.T) {
-	body := render(t, newViews(t).AccountSecurity(authentication.AccountSecurityPage{
-		PageContext: authentication.PageContext{Actor: "a•••@example.com"},
+	body := render(t, newViews(t).AccountSecurity(inbound.AccountSecurityPage{
+		PageContext: inbound.PageContext{Actor: "a•••@example.com"},
 		HasPassword: true,
-		OAuth:       []authentication.OAuthMethod{{Provider: "github", Removable: true}},
-		Identifiers: []authentication.IdentifierMethod{{ID: "id1", Kind: "email", MaskedValue: "u•••@example.com", Uses: []string{"login", "recovery"}, Primary: true}},
+		OAuth:       []inbound.OAuthMethod{{Provider: "github", Removable: true}},
+		Identifiers: []inbound.IdentifierMethod{{ID: "id1", Kind: "email", MaskedValue: "u•••@example.com", Uses: []string{"login", "recovery"}, Primary: true}},
 	}))
 	mustContain(t, "AccountSecurity", body,
 		"a•••@example.com",
@@ -342,10 +352,10 @@ func oauthSection(t *testing.T, body string) string {
 // route, carrying the account page as the post-flow destination — and never offers one
 // for a provider that is already linked.
 func TestAccountSecurity_LinkableProvidersAffordance(t *testing.T) {
-	body := render(t, newViews(t).AccountSecurity(authentication.AccountSecurityPage{
-		PageContext:       authentication.PageContext{Actor: "a•••@example.com"},
+	body := render(t, newViews(t).AccountSecurity(inbound.AccountSecurityPage{
+		PageContext:       inbound.PageContext{Actor: "a•••@example.com"},
 		HasPassword:       true,
-		OAuth:             []authentication.OAuthMethod{{Provider: "github", Removable: true}},
+		OAuth:             []inbound.OAuthMethod{{Provider: "github", Removable: true}},
 		LinkableProviders: []string{"google", "gitlab"},
 	}))
 	mustContain(t, "AccountSecurity linkable", body,
@@ -369,23 +379,23 @@ func TestAccountSecurity_ZeroLinkableProvidersUnchanged(t *testing.T) {
 		goldenLinked  = `<section aria-labelledby="oauth-heading" data-slot="account-section"><h2 id="oauth-heading">Linked accounts</h2><ul><li><span>google</span> <a href="/auth/oauth/google/unlink">Unlink</a></li></ul></section>`
 	)
 	v := newViews(t)
-	pc := authentication.PageContext{Actor: "a•••@example.com"}
+	pc := inbound.PageContext{Actor: "a•••@example.com"}
 
-	none := oauthSection(t, render(t, v.AccountSecurity(authentication.AccountSecurityPage{PageContext: pc, HasPassword: true})))
+	none := oauthSection(t, render(t, v.AccountSecurity(inbound.AccountSecurityPage{PageContext: pc, HasPassword: true})))
 	if none != goldenNoLinks {
 		t.Errorf("no-links section changed:\n got %q\nwant %q", none, goldenNoLinks)
 	}
 
-	linked := oauthSection(t, render(t, v.AccountSecurity(authentication.AccountSecurityPage{
+	linked := oauthSection(t, render(t, v.AccountSecurity(inbound.AccountSecurityPage{
 		PageContext: pc, HasPassword: true,
-		OAuth: []authentication.OAuthMethod{{Provider: "google", Removable: true}},
+		OAuth: []inbound.OAuthMethod{{Provider: "google", Removable: true}},
 	})))
 	if linked != goldenLinked {
 		t.Errorf("linked section changed:\n got %q\nwant %q", linked, goldenLinked)
 	}
 
 	// An explicitly empty (non-nil) slice is the same as the nil zero value.
-	empty := oauthSection(t, render(t, v.AccountSecurity(authentication.AccountSecurityPage{
+	empty := oauthSection(t, render(t, v.AccountSecurity(inbound.AccountSecurityPage{
 		PageContext: pc, HasPassword: true, LinkableProviders: []string{},
 	})))
 	if empty != goldenNoLinks {
@@ -404,11 +414,11 @@ func TestAccountSecurity_NonRemovableMethodExplained(t *testing.T) {
 		goldenRemovable = `<section aria-labelledby="oauth-heading" data-slot="account-section"><h2 id="oauth-heading">Linked accounts</h2><ul><li><span>google</span> <a href="/auth/oauth/google/unlink">Unlink</a></li></ul></section>`
 	)
 	v := newViews(t)
-	pc := authentication.PageContext{Actor: "a•••@example.com"}
+	pc := inbound.PageContext{Actor: "a•••@example.com"}
 
-	blocked := render(t, v.AccountSecurity(authentication.AccountSecurityPage{
+	blocked := render(t, v.AccountSecurity(inbound.AccountSecurityPage{
 		PageContext: pc,
-		OAuth:       []authentication.OAuthMethod{{Provider: "google", Removable: false}},
+		OAuth:       []inbound.OAuthMethod{{Provider: "google", Removable: false}},
 	}))
 	if got := oauthSection(t, blocked); got != goldenBlocked {
 		t.Errorf("non-removable section:\n got %q\nwant %q", got, goldenBlocked)
@@ -417,9 +427,9 @@ func TestAccountSecurity_NonRemovableMethodExplained(t *testing.T) {
 	// on the page for a method the policy refuses to remove.
 	mustNotContain(t, "AccountSecurity non-removable", blocked, "/auth/oauth/google/unlink", ">Unlink<")
 
-	removable := render(t, v.AccountSecurity(authentication.AccountSecurityPage{
+	removable := render(t, v.AccountSecurity(inbound.AccountSecurityPage{
 		PageContext: pc, HasPassword: true,
-		OAuth: []authentication.OAuthMethod{{Provider: "google", Removable: true}},
+		OAuth: []inbound.OAuthMethod{{Provider: "google", Removable: true}},
 	}))
 	if got := oauthSection(t, removable); got != goldenRemovable {
 		t.Errorf("removable section:\n got %q\nwant %q", got, goldenRemovable)
@@ -428,7 +438,7 @@ func TestAccountSecurity_NonRemovableMethodExplained(t *testing.T) {
 	mustNotContain(t, "AccountSecurity removable", removable, nonRemovableNote, `data-variant="muted"`)
 
 	// The zero model (no linked accounts at all) explains nothing.
-	zero := render(t, v.AccountSecurity(authentication.AccountSecurityPage{}))
+	zero := render(t, v.AccountSecurity(inbound.AccountSecurityPage{}))
 	mustNotContain(t, "AccountSecurity zero", zero, nonRemovableNote)
 }
 
@@ -438,7 +448,7 @@ func TestAccountSecurity_NonRemovableMethodExplained(t *testing.T) {
 // user's own submit completes the link (no auto-submit — linking two accounts is
 // deliberate). No token appears in a query string and no script is inline.
 func TestOAuthLinkLanding_FragmentTokenNeverRendered(t *testing.T) {
-	body := render(t, newViews(t).OAuthLinkLanding(authentication.OAuthLinkPage{
+	body := render(t, newViews(t).OAuthLinkLanding(inbound.OAuthLinkPage{
 		PageContext: ctx(),
 		RedeemPath:  "/auth/oauth/verify-link",
 	}))
@@ -465,18 +475,18 @@ func TestOAuthLinkLanding_FragmentTokenNeverRendered(t *testing.T) {
 // respective controls with correct autocomplete and never echo a secret.
 func TestPasswordForm_Variants(t *testing.T) {
 	v := newViews(t)
-	set := render(t, v.PasswordForm(authentication.PasswordFormPage{PageContext: ctx(), Mode: "set"}))
+	set := render(t, v.PasswordForm(inbound.PasswordFormPage{PageContext: ctx(), Mode: "set"}))
 	mustContain(t, "PasswordForm set", set, `action="/auth/password/set"`, `autocomplete="new-password"`)
 	mustNotContain(t, "PasswordForm set", set, `autocomplete="current-password"`)
 
-	change := render(t, v.PasswordForm(authentication.PasswordFormPage{PageContext: ctx(), Mode: "change", ShowCurrentPassword: true}))
+	change := render(t, v.PasswordForm(inbound.PasswordFormPage{PageContext: ctx(), Mode: "change", ShowCurrentPassword: true}))
 	mustContain(t, "PasswordForm change", change,
 		`action="/auth/password/change"`,
 		`autocomplete="current-password"`,
 		`autocomplete="new-password"`,
 	)
 
-	remove := render(t, v.PasswordForm(authentication.PasswordFormPage{PageContext: ctx(), Mode: "remove", MaskedDestination: "u•••@example.com"}))
+	remove := render(t, v.PasswordForm(inbound.PasswordFormPage{PageContext: ctx(), Mode: "remove", MaskedDestination: "u•••@example.com"}))
 	mustContain(t, "PasswordForm remove", remove,
 		`action="/auth/password/remove/start"`,
 		`action="/auth/password/remove"`,
@@ -489,7 +499,7 @@ func TestPasswordForm_Variants(t *testing.T) {
 // the edit form shows the masked existing value without an address input.
 func TestIdentifierForm_AddEdit(t *testing.T) {
 	v := newViews(t)
-	add := render(t, v.IdentifierForm(authentication.IdentifierFormPage{
+	add := render(t, v.IdentifierForm(inbound.IdentifierFormPage{
 		PageContext:  ctx(),
 		Mode:         "add",
 		Kind:         "phone",
@@ -504,7 +514,7 @@ func TestIdentifierForm_AddEdit(t *testing.T) {
 
 	// Removable is set because the remove control is gated on it; the non-removable
 	// shape is pinned by TestIdentifierForm_NonRemovableExplained.
-	edit := render(t, v.IdentifierForm(authentication.IdentifierFormPage{
+	edit := render(t, v.IdentifierForm(inbound.IdentifierFormPage{
 		PageContext: ctx(),
 		Mode:        "edit",
 		Kind:        "email",
@@ -553,7 +563,7 @@ func TestIdentifierForm_NonRemovableExplained(t *testing.T) {
 		goldenRemovable = `<form method="post" action="/auth/identifiers/id1" autocomplete="off"><input type="hidden" name="csrf_token" value="csrf-abc123"><input type="hidden" name="id" value="id1"> <input type="hidden" name="action" value="remove"><div class="goth-form-actions" data-align="end" data-slot="form-actions"><button class="goth-button" data-size="default" data-slot="button" data-variant="destructive" type="submit">Remove this identifier</button></div></form>`
 	)
 	v := newViews(t)
-	edit := authentication.IdentifierFormPage{
+	edit := inbound.IdentifierFormPage{
 		PageContext: ctx(), Mode: "edit", Kind: "email", ID: "id1", MaskedValue: "u•••@example.com",
 	}
 
@@ -583,11 +593,11 @@ func TestIdentifierForm_NonRemovableExplained(t *testing.T) {
 func TestIdentifierForm_ZeroModelFailsSafe(t *testing.T) {
 	v := newViews(t)
 
-	zeroEdit := render(t, v.IdentifierForm(authentication.IdentifierFormPage{Mode: "edit", ID: "id1"}))
+	zeroEdit := render(t, v.IdentifierForm(inbound.IdentifierFormPage{Mode: "edit", ID: "id1"}))
 	mustContain(t, "IdentifierForm zero edit", zeroEdit, nonRemovableNote)
 	mustNotContain(t, "IdentifierForm zero edit", zeroEdit, `name="action" value="remove"`)
 
-	for _, m := range []authentication.IdentifierFormPage{{}, {Mode: "confirm", Kind: "email"}} {
+	for _, m := range []inbound.IdentifierFormPage{{}, {Mode: "confirm", Kind: "email"}} {
 		body := render(t, v.IdentifierForm(m))
 		mustNotContain(t, "IdentifierForm zero "+m.Mode, body,
 			nonRemovableNote, `name="action" value="remove"`)
@@ -597,7 +607,7 @@ func TestIdentifierForm_ZeroModelFailsSafe(t *testing.T) {
 // TestIdentifierForm_Confirm proves the ownership-proof code form posts the
 // kind-specific confirm edge and echoes no code (the code is delivered out-of-band).
 func TestIdentifierForm_Confirm(t *testing.T) {
-	confirm := render(t, newViews(t).IdentifierForm(authentication.IdentifierFormPage{
+	confirm := render(t, newViews(t).IdentifierForm(inbound.IdentifierFormPage{
 		PageContext: ctx(),
 		Mode:        "confirm",
 		Kind:        "phone",
@@ -613,7 +623,7 @@ func TestIdentifierForm_Confirm(t *testing.T) {
 // TestOAuthUnlink_ProviderBound proves the unlink confirmation posts to the same
 // provider it names and delivers the code to a masked address it never echoes.
 func TestOAuthUnlink_ProviderBound(t *testing.T) {
-	body := render(t, newViews(t).OAuthUnlink(authentication.OAuthUnlinkPage{
+	body := render(t, newViews(t).OAuthUnlink(inbound.OAuthUnlinkPage{
 		PageContext:       ctx(),
 		Provider:          "github",
 		MaskedDestination: "u•••@example.com",
@@ -630,10 +640,10 @@ func TestOAuthUnlink_ProviderBound(t *testing.T) {
 // the HTTP status text.
 func TestErrorStatus_GenericCopy(t *testing.T) {
 	v := newViews(t)
-	errBody := render(t, v.Error(authentication.ErrorPage{Status: 400, Message: "That link is no longer valid."}))
+	errBody := render(t, v.Error(inbound.ErrorPage{Status: 400, Message: "That link is no longer valid."}))
 	mustContain(t, "Error", errBody, "400 Bad Request", "That link is no longer valid.")
 
-	statusBody := render(t, v.Status(authentication.StatusPage{Title: "Check your inbox", Detail: "We sent you a message."}))
+	statusBody := render(t, v.Status(inbound.StatusPage{Title: "Check your inbox", Detail: "We sent you a message."}))
 	mustContain(t, "Status", statusBody, "Check your inbox", "We sent you a message.")
 }
 
@@ -641,7 +651,7 @@ func TestErrorStatus_GenericCopy(t *testing.T) {
 // the ui/goth Views that overrides only Login keeps every other method's default.
 type overrideLogin struct{ Views }
 
-func (overrideLogin) Login(authentication.LoginPage) web.Renderer { return marker("CUSTOM-LOGIN") }
+func (overrideLogin) Login(inbound.LoginPage) web.Renderer { return marker("CUSTOM-LOGIN") }
 
 type marker string
 
@@ -651,12 +661,12 @@ func (m marker) Render(_ context.Context, w io.Writer) error {
 }
 
 func TestEmbed_OverrideOneMethod(t *testing.T) {
-	var v authentication.Views = overrideLogin{newViews(t)}
-	login := render(t, v.Login(authentication.LoginPage{}))
+	var v inbound.Views = overrideLogin{newViews(t)}
+	login := render(t, v.Login(inbound.LoginPage{}))
 	if !strings.Contains(login, "CUSTOM-LOGIN") {
 		t.Fatalf("overridden Login did not render custom marker:\n%s", login)
 	}
-	reg := render(t, v.Register(authentication.RegisterPage{}))
+	reg := render(t, v.Register(inbound.RegisterPage{}))
 	if !strings.Contains(reg, `action="/auth/register"`) {
 		t.Fatalf("non-overridden Register did not render the ui/goth default:\n%s", reg)
 	}
@@ -666,7 +676,7 @@ func TestEmbed_OverrideOneMethod(t *testing.T) {
 // renders above every page family's body, the document title carries the app
 // suffix, and the zero-option construction stays byte-identically unbranded.
 func TestWithBrandAndAppName(t *testing.T) {
-	b, err := uigoth.New(uigoth.Config{})
+	b, err := uigoth.New()
 	if err != nil {
 		t.Fatalf("bundle: %v", err)
 	}
@@ -676,7 +686,7 @@ func TestWithBrandAndAppName(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 
-	login := render(t, v.Login(authentication.LoginPage{PageContext: ctx()}))
+	login := render(t, v.Login(inbound.LoginPage{PageContext: ctx()}))
 	mustContain(t, "branded login", login,
 		`<title>Sign in · GPS Impact</title>`,
 		`class="host-brand"`,
@@ -691,13 +701,13 @@ func TestWithBrandAndAppName(t *testing.T) {
 	}
 
 	// The chrome rides the shared page seam: other page families carry it too.
-	reset := render(t, v.ResetPassword(authentication.ResetPage{PageContext: ctx()}))
+	reset := render(t, v.ResetPassword(inbound.ResetPage{PageContext: ctx()}))
 	mustContain(t, "branded reset", reset, `class="host-brand"`, "· GPS Impact</title>")
-	status := render(t, v.Status(authentication.StatusPage{PageContext: ctx()}))
+	status := render(t, v.Status(inbound.StatusPage{PageContext: ctx()}))
 	mustContain(t, "branded status", status, `class="host-brand"`)
 
 	// Zero-option construction stays unbranded with bare titles.
-	plain := render(t, newViews(t).Login(authentication.LoginPage{PageContext: ctx()}))
+	plain := render(t, newViews(t).Login(inbound.LoginPage{PageContext: ctx()}))
 	mustNotContain(t, "plain login", plain, "host-brand", "· GPS Impact")
 	mustContain(t, "plain login", plain, "<title>Sign in</title>")
 }
@@ -706,7 +716,7 @@ func TestWithBrandAndAppName(t *testing.T) {
 // anchors with display-cased labels under a separator, and an empty provider
 // list renders none of it.
 func TestLogin_ProviderButtons(t *testing.T) {
-	body := render(t, newViews(t).Login(authentication.LoginPage{
+	body := render(t, newViews(t).Login(inbound.LoginPage{
 		PageContext:    ctx(),
 		OAuthProviders: []string{"google", "github"},
 	}))
@@ -724,6 +734,25 @@ func TestLogin_ProviderButtons(t *testing.T) {
 		t.Error("provider anchors missing the kit button slot")
 	}
 
-	none := render(t, newViews(t).Login(authentication.LoginPage{PageContext: ctx()}))
+	none := render(t, newViews(t).Login(inbound.LoginPage{PageContext: ctx()}))
 	mustNotContain(t, "no providers", none, `data-slot="auth-providers"`, "Continue with")
+}
+
+func TestOptionsDoNotRetainLiveViews(t *testing.T) {
+	bundle, err := uigoth.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var captured *viewConfig
+	views, err := New(bundle, func(c *viewConfig) { captured = c; c.appName = "Original" })
+	if err != nil {
+		t.Fatal(err)
+	}
+	captured.appName = "Changed"
+	page := render(t, views.Login(inbound.LoginPage{}))
+	mustContain(t, "login", page, "Original")
+	mustNotContain(t, "login", page, "Changed")
+	if _, err := New(bundle, nil); !errors.Is(err, sdk.ErrInvalidInput) {
+		t.Fatalf("nil option: %v", err)
+	}
 }

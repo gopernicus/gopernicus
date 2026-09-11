@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"strings"
 	"time"
 
@@ -27,7 +28,9 @@ const Driver = "libsql"
 
 // Config holds the Turso connection settings.
 type Config struct {
-	URL             string
+	URL string
+
+	// AuthToken overrides any authToken, auth_token or jwt credential in URL.
 	AuthToken       string
 	MaxOpenConns    int
 	MaxIdleConns    int
@@ -58,28 +61,42 @@ type Config struct {
 	Retry RetryPolicy
 }
 
-// dsn builds the libSQL connection string, appending the auth token as the
-// authToken query parameter when Config.AuthToken is set.
-func (cfg Config) dsn() string {
-	dsn := cfg.URL
-	if cfg.AuthToken != "" {
-		sep := "?"
-		if strings.Contains(dsn, "?") {
-			sep = "&"
-		}
-		dsn += sep + authTokenParam + "=" + cfg.AuthToken
+// dsn validates the URL and sets the separately configured credential.
+func (cfg Config) dsn() (string, error) {
+	u, err := url.Parse(cfg.URL)
+	if err != nil {
+		return "", fmt.Errorf("turso: invalid database URL: %w", sdk.ErrInvalidInput)
 	}
-	return dsn
+	q, err := url.ParseQuery(u.RawQuery)
+	if err != nil || u.Fragment != "" {
+		return "", fmt.Errorf("turso: malformed database query or fragment: %w", sdk.ErrInvalidInput)
+	}
+	if cfg.AuthToken != "" {
+		for _, name := range credentialParams {
+			q.Del(name)
+		}
+		q.Set(authTokenParam, cfg.AuthToken)
+	}
+	u.RawQuery = q.Encode()
+	return u.String(), nil
 }
 
-// Redacted returns the connection target with the userinfo password and the
-// authToken query parameter masked, safe to place in logs and error messages.
+// Redacted returns the connection target with the userinfo password and all
+// supported credential query parameters masked, safe for logs and errors.
 func (cfg Config) Redacted() string {
-	return RedactDSN(cfg.dsn())
+	dsn, err := cfg.dsn()
+	if err != nil {
+		return redactedDSN
+	}
+	return RedactDSN(dsn)
 }
 
 // Open connects to a remote Turso / libSQL database and verifies it with a ping.
-func Open(cfg Config) (*DB, error) {
+// The context bounds startup only; the caller owns the returned DB's lifetime.
+func Open(ctx context.Context, cfg Config) (*DB, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if cfg.URL == "" {
 		return nil, fmt.Errorf("turso: empty database URL")
 	}
@@ -87,7 +104,16 @@ func Open(cfg Config) (*DB, error) {
 		cfg.ConnectTimeout = 10 * time.Second
 	}
 
-	db, err := sql.Open(Driver, cfg.dsn())
+	dsn, err := cfg.dsn()
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithTimeout(ctx, cfg.ConnectTimeout)
+	defer cancel()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	db, err := sql.Open(Driver, dsn)
 	if err != nil {
 		return nil, fmt.Errorf("opening libsql database: %w", err)
 	}
@@ -95,9 +121,6 @@ func Open(cfg Config) (*DB, error) {
 	db.SetMaxOpenConns(cfg.MaxOpenConns)
 	db.SetMaxIdleConns(cfg.MaxIdleConns)
 	db.SetConnMaxLifetime(cfg.ConnMaxLifetime)
-
-	ctx, cancel := context.WithTimeout(context.Background(), cfg.ConnectTimeout)
-	defer cancel()
 
 	wrapped := &DB{db: db}
 	if cfg.LogQueries {

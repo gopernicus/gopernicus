@@ -9,7 +9,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gopernicus/gopernicus/sdk/foundation/cryptids"
 	"github.com/gopernicus/gopernicus/sdk"
 )
 
@@ -29,9 +28,9 @@ type ListFilter struct {
 }
 
 // New builds a {{.AggTitle}}, minting its id from ids (empty under
-// cryptids.Database — the store then assigns the key from its DDL DEFAULT). A
+// sdk.DatabaseID — the store then assigns the key from its DDL DEFAULT). A
 // blank name wraps sdk.ErrInvalidInput.
-func New(ids cryptids.IDGenerator, name string, now time.Time) ({{.AggTitle}}, error) {
+func New(ids sdk.IDGenerator, name string, now time.Time) ({{.AggTitle}}, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return {{.AggTitle}}{}, fmt.Errorf("name is required: %w", sdk.ErrInvalidInput)

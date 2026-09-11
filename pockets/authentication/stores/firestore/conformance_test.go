@@ -24,7 +24,7 @@ import (
 
 	"github.com/gopernicus/gopernicus/integrations/datastores/firestore/firestoretest"
 	auth "github.com/gopernicus/gopernicus/pockets/authentication"
-	"github.com/gopernicus/gopernicus/pockets/authentication/storetest"
+	"github.com/gopernicus/gopernicus/pockets/authentication/stores/storetest"
 )
 
 // emulatorDatabase is this store train's own emulator database. It is NOT the
@@ -40,7 +40,7 @@ func newRepos(t *testing.T) auth.Repositories {
 	t.Helper()
 	db := firestoretest.OpenDatabase(t, emulatorDatabase)
 	firestoretest.Reset(t, db)
-	repos, err := Repositories(db, WithoutIndexProbe())
+	repos, err := Repositories(t.Context(), db, WithoutIndexProbe())
 	if err != nil {
 		t.Fatalf("Repositories: %v", err)
 	}
@@ -67,7 +67,7 @@ func TestConformance(t *testing.T) {
 func TestAmbientTransactionRefused(t *testing.T) {
 	db := firestoretest.OpenDatabase(t, emulatorDatabase)
 	firestoretest.Reset(t, db)
-	repos, err := Repositories(db, WithoutIndexProbe())
+	repos, err := Repositories(t.Context(), db, WithoutIndexProbe())
 	if err != nil {
 		t.Fatalf("Repositories: %v", err)
 	}

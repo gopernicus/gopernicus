@@ -4,7 +4,7 @@
 // build-tag gated (`livedelivery`) so the default hermetic `make check` / `go
 // test` never compile it and the in-memory host's default build stays free of any
 // datastore driver. It runs the SAME jobs-mode composition the host runs
-// (auth.Service -> authjobs.Dispatcher -> generic jobs fenced queue ->
+// (authentication.Service -> authjobs.Dispatcher -> generic jobs fenced queue ->
 // jobs.FencedRuntime -> auth delivery processor), but against a LIVE pgx or turso
 // fenced queue instead of the in-memory stand-in the hermetic proofs use.
 //
@@ -39,11 +39,11 @@ import (
 	"github.com/gopernicus/gopernicus/examples/auth-cms/internal/authjobs"
 	"github.com/gopernicus/gopernicus/examples/auth-cms/internal/authmem"
 	auth "github.com/gopernicus/gopernicus/pockets/authentication"
-	"github.com/gopernicus/gopernicus/pockets/jobs"
-	"github.com/gopernicus/gopernicus/pockets/jobs/domain/job"
-	"github.com/gopernicus/gopernicus/sdk/capabilities/email"
+	delivery "github.com/gopernicus/gopernicus/pockets/authentication/logic/delivery"
+	job "github.com/gopernicus/gopernicus/pockets/jobs/logic/queue"
 	sdkevents "github.com/gopernicus/gopernicus/sdk/capabilities/events"
-	"github.com/gopernicus/gopernicus/sdk/foundation/cryptids"
+	"github.com/gopernicus/gopernicus/sdk/capabilities/notify/email"
+	"github.com/gopernicus/gopernicus/sdk/pkg/cryptids"
 )
 
 // liveInspectingQueue wraps ANY job.FencedQueueRepository (a live pgx/turso store)
@@ -231,7 +231,7 @@ type secretScanningEmitter struct {
 	types []string
 }
 
-func (e *secretScanningEmitter) Emit(_ context.Context, ev sdkevents.Event, _ ...sdkevents.EmitOption) error {
+func (e *secretScanningEmitter) Emit(_ context.Context, ev sdkevents.Event) error {
 	b, _ := json.Marshal(ev)
 	e.mu.Lock()
 	e.blobs = append(e.blobs, b)
@@ -451,7 +451,7 @@ func liveProviderTimeoutRetry(t *testing.T, open liveStoreFactory) {
 	// attempt before the provider is called, letting Retries outpace the provider count —
 	// yet stays comfortably below the 3s lease so the lease never lapses mid-attempt.
 	hang := &hangingSender{}
-	boot := bootDelivery(t, repos, store, hang, func(c *jobs.FencedRuntimeConfig) {
+	boot := bootDelivery(t, repos, store, hang, func(c *deliveryRuntimeTestConfig) {
 		c.LeaseFor = 3 * time.Second
 		c.ProcessTimeout = 400 * time.Millisecond
 		c.MaxAttempts = 50
@@ -642,7 +642,7 @@ func liveResendConvergesToLatest(t *testing.T, open liveStoreFactory) {
 
 	// The gen-1 admission's logical key + sealed opaque bytes. A resend re-admits the
 	// same enumeration-safe start as a fresh generation via the composition Replace path
-	// (jobs.Service.Replace), superseding gen-1.
+	// (queue.Service.Replace), superseding gen-1.
 	gen1, err := store.Get(ctx, fid)
 	if err != nil {
 		t.Fatalf("Get gen-1: %v", err)
@@ -659,7 +659,7 @@ func liveResendConvergesToLatest(t *testing.T, open liveStoreFactory) {
 	}
 	deliver := &captureSender{}
 	boot := bootDelivery(t, repos, store, deliver)
-	gen2ID, err := boot.jobs.Replace(ctx, auth.DeliveryJobKind, gen1.LogicalKey, opaqueBytes)
+	gen2ID, err := boot.jobs.Replace(ctx, delivery.JobKind, gen1.LogicalKey, opaqueBytes)
 	if err != nil {
 		t.Fatalf("Replace (resend): %v", err)
 	}
@@ -830,19 +830,18 @@ func liveTerminalCleanupAndPurge(t *testing.T, open liveStoreFactory) {
 		}
 		return nil
 	}
-	runtime, err := jobs.NewFencedRuntime(boot.jobs, authjobs.FencedRuntimeConfig(rt, func(c *jobs.FencedRuntimeConfig) {
-		c.Logger = quietLog()
+	runtime, err := runtimeFromDeliveryConfig(boot.jobs.Queue, rt, func(c *deliveryRuntimeTestConfig) {
 		c.PollInterval = 10 * time.Millisecond
 		c.IdleInterval = 10 * time.Millisecond
 		c.LeaseFor = 300 * time.Millisecond
 		c.MaxAttempts = 50
 		c.Backoff = func(int) time.Duration { return 20 * time.Millisecond }
-	}))
+	})
 	if err != nil {
 		t.Fatalf("build runtime with wrapped discard: %v", err)
 	}
 
-	bad, err := store.EnqueueOnce(ctx, job.Enqueue{Kind: auth.DeliveryJobKind, LogicalKey: "live-bad-key", Payload: json.RawMessage(`"not-ciphertext"`)})
+	bad, err := store.EnqueueOnce(ctx, job.Enqueue{Kind: delivery.JobKind, LogicalKey: "live-bad-key", Payload: json.RawMessage(`"not-ciphertext"`)})
 	if err != nil {
 		t.Fatalf("EnqueueOnce garbage: %v", err)
 	}
@@ -872,7 +871,7 @@ func liveTerminalCleanupAndPurge(t *testing.T, open liveStoreFactory) {
 
 	// Bounded purge (host-driven, no auth-specific SQL): a terminal generation older than
 	// the cutoff is removed; a non-terminal generation survives.
-	survivor, err := store.EnqueueOnce(ctx, job.Enqueue{Kind: auth.DeliveryJobKind, LogicalKey: "live-survivor-key", Payload: json.RawMessage(`"pending"`), ScheduledFor: time.Now().Add(time.Hour)})
+	survivor, err := store.EnqueueOnce(ctx, job.Enqueue{Kind: delivery.JobKind, LogicalKey: "live-survivor-key", Payload: json.RawMessage(`"pending"`), ScheduledFor: time.Now().Add(time.Hour)})
 	if err != nil {
 		t.Fatalf("EnqueueOnce survivor: %v", err)
 	}

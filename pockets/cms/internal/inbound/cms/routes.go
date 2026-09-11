@@ -3,16 +3,12 @@ package cms
 import (
 	"log/slog"
 	"net/http"
-	"time"
 
+	"github.com/gopernicus/gopernicus/pockets"
 	"github.com/gopernicus/gopernicus/pockets/cms/domain/content"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/cacher"
-	"github.com/gopernicus/gopernicus/sdk/foundation/web"
-	"github.com/gopernicus/gopernicus/sdk/pocket"
+	"github.com/gopernicus/gopernicus/sdk/pkg/web"
 )
-
-// publicPageTTL is how long rendered public pages stay cached.
-const publicPageTTL = 60 * time.Second
 
 // RouterOption customizes router construction. It is a convenience for the
 // standalone BuildRouter helper (used by tests); the pocket's own Register
@@ -21,8 +17,9 @@ type RouterOption func(*routerConfig)
 
 // routerConfig collects host overrides applied during BuildRouter.
 type routerConfig struct {
-	views   Views
-	adminMW []web.Middleware
+	views     Views
+	adminMW   []web.Middleware
+	pageCache cacher.PageConfig
 }
 
 // WithViews sets the HTML rendering port. When unset (nil), the HTML surface is
@@ -35,6 +32,12 @@ func WithViews(v Views) RouterOption {
 // Mount's adminMW parameter). Public routes are never wrapped.
 func WithAdminMiddleware(mw ...web.Middleware) RouterOption {
 	return func(c *routerConfig) { c.adminMW = mw }
+}
+
+// WithPageCache configures public-page caching in the standalone router.
+// Pocket hosts use cms.Config.PageCache instead.
+func WithPageCache(cfg cacher.PageConfig) RouterOption {
+	return func(c *routerConfig) { c.pageCache = cfg }
 }
 
 // Deps are the domain services + registry the CMS handlers need. cms.Register
@@ -58,7 +61,7 @@ type Deps struct {
 //
 // A nil views registers ONLY the media byte endpoint (GET /media/{id}/file) and
 // returns — the entire HTML surface (public site + admin) is not mounted (FS3).
-func Mount(r pocket.RouteRegistrar, d Deps, views Views, cache cacher.Storer, adminMW []web.Middleware) {
+func Mount(r pockets.RouteRegistrar, d Deps, views Views, cache cacher.Storer, pageCache cacher.PageConfig, adminMW []web.Middleware) {
 	md := NewMediaHandlers(d.Media, views)
 	if views == nil {
 		r.Handle("GET", "/media/{id}/file", md.Serve)
@@ -74,7 +77,7 @@ func Mount(r pocket.RouteRegistrar, d Deps, views Views, cache cacher.Storer, ad
 	// Public pages are cacheable (TTL); admin pages never are.
 	var pubMW []web.Middleware
 	if cache != nil {
-		pubMW = append(pubMW, cacher.Pages(cache, publicPageTTL))
+		pubMW = append(pubMW, cacher.Pages(cache, pageCache))
 	}
 
 	// Public home.
@@ -153,7 +156,7 @@ func BuildRouter(registry *content.Registry, entries entryService, taxo taxonomy
 		opt(&cfg)
 	}
 
-	h := web.NewWebHandler(web.WithLogging(log))
+	h := web.NewWebHandler()
 	h.Use(web.RequestID(), web.Logger(log), web.Panics(log))
 
 	Mount(h, Deps{
@@ -163,7 +166,7 @@ func BuildRouter(registry *content.Registry, entries entryService, taxo taxonomy
 		Menus:    menusvc,
 		Media:    mediasvc,
 		Contact:  contact,
-	}, cfg.views, cache, cfg.adminMW)
+	}, cfg.views, cache, cfg.pageCache, cfg.adminMW)
 
 	return h
 }

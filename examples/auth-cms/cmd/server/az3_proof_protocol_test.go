@@ -13,35 +13,21 @@ import (
 	"testing"
 
 	authorization "github.com/gopernicus/gopernicus/pockets/authorization"
-	authzmem "github.com/gopernicus/gopernicus/pockets/authorization/memstore"
+	audit2 "github.com/gopernicus/gopernicus/pockets/authorization/logic/audit"
+	authzmem "github.com/gopernicus/gopernicus/pockets/authorization/stores/memory"
 	"github.com/gopernicus/gopernicus/sdk"
-	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
+	"github.com/gopernicus/gopernicus/sdk/pkg/list"
+
+	// -----------------------------------------------------------------------------
+	// Recording apparatus
+	// -----------------------------------------------------------------------------
+	model "github.com/gopernicus/gopernicus/pockets/authorization/logic/model"
+	mutations "github.com/gopernicus/gopernicus/pockets/authorization/logic/mutations"
+	relationships "github.com/gopernicus/gopernicus/pockets/authorization/logic/relationships"
+	roles "github.com/gopernicus/gopernicus/pockets/authorization/logic/roles"
 )
 
-// AZ3-4.2 — exact-semantics and concurrency proof protocol.
-//
-// This suite DRIVES and RECORDS the twelve-point protocol over the auth-cms host
-// composition (the AZ3-4.1 wiring: the memstore bundle under authzGuardianPolicy,
-// the hostMutationGuard, and the separately held SystemMutator) plus a capturing
-// AuditSink. Every point is OBSERVED in this run — not merely referenced — and its
-// evidence (commands, receipt fields, stored-row reads, audit events) is written to
-// a durable transcript artifact at testdata/az3-proof-transcript.md. The transcript
-// carries no secrets: there are no session tokens or password material anywhere on
-// the authorization path, and MutationIDs are opaque idempotency tokens that are
-// safe to retain. It claims no effects delivery and no generic admin API.
-//
-// Points 2,3,4,6 exercise userset / navigational-Through schema shapes the host's
-// live project/platform schema does not declare; they run over the SAME composition
-// pattern (proofComposition: hostMutationGuard + the guardian-policy'd memstore
-// bundle) with a proof schema that adds the group/doc and org/space types, so the
-// real host guard authorizes them. Points 1,7,8,9,10,11,12 run over the live host
-// schema (authzSchema).
-
 const proofTranscriptPath = "testdata/az3-proof-transcript.md"
-
-// -----------------------------------------------------------------------------
-// Recording apparatus
-// -----------------------------------------------------------------------------
 
 // proofSection is one numbered protocol point's recorded evidence.
 type proofSection struct {
@@ -79,14 +65,8 @@ func (t *proofTranscript) render() string {
 	b.WriteString("This is a recorded artifact: each section below was OBSERVED in a real protocol run\n")
 	b.WriteString("over the auth-cms host composition (the AZ3-4.1 memstore bundle under\n")
 	b.WriteString("authzGuardianPolicy, the hostMutationGuard, and the separately held SystemMutator)\n")
-	b.WriteString("with a capturing AuditSink wired into `Config.Audit`.\n\n")
-	b.WriteString("No secrets: authorization carries no session tokens or password material; MutationIDs\n")
-	b.WriteString("are opaque idempotency tokens (safe to retain). This transcript claims NO effects\n")
-	b.WriteString("delivery and NO generic authorization admin API — both are deferred follow-ups.\n\n")
-	b.WriteString("MutationIDs in this run are derived deterministically (DeriveMutationID) so the\n")
-	b.WriteString("artifact is reproducible; actor-facing production callers mint unguessable IDs with\n")
-	b.WriteString("NewMutationID. Possession of a MutationID is never authority — the guard runs on\n")
-	b.WriteString("every actor-facing application and replay.\n\n")
+	b.WriteString("with optional atomic audit recording enabled.\n\n")
+	b.WriteString("History contains committed fact changes, including trusted setup. Guard denials, no-ops and failed writes add no entries.\n\n")
 	for _, s := range t.sections {
 		fmt.Fprintf(&b, "## %d. %s\n\n", s.n, s.title)
 		for _, ln := range s.lines {
@@ -97,46 +77,36 @@ func (t *proofTranscript) render() string {
 	return b.String()
 }
 
-// capturingAuditSink records every actor-facing mutation attempt and every trusted
-// teardown the composition observes. It is the AZ3-4.2 audit-observation seam.
-type capturingAuditSink struct {
-	mu     sync.Mutex
-	events []authorization.AuditEvent
+// capturedHistory reads the same committed records a host would display.
+type capturedHistory struct {
+	reader audit2.Reader
+	t      *testing.T
 }
 
-func (c *capturingAuditSink) RecordMutation(_ context.Context, e authorization.AuditEvent) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.events = append(c.events, e)
-	return nil
-}
-
-func (c *capturingAuditSink) all() []authorization.AuditEvent {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return append([]authorization.AuditEvent(nil), c.events...)
-}
-
-// auditLines renders captured audit events as transcript lines (coarse, bounded
-// fields only — never secrets).
-func auditLines(events []authorization.AuditEvent) []string {
-	if len(events) == 0 {
-		return []string{"audit: (no events captured)"}
+func (c *capturedHistory) all() []audit2.Record {
+	c.t.Helper()
+	page, err := c.reader.List(context.Background(), audit2.Filter{}, list.Request{Limit: 100, Order: list.Order{Field: "occurred_at", Direction: list.ASC}})
+	if err != nil {
+		c.t.Fatal(err)
 	}
-	out := make([]string, 0, len(events))
-	for _, e := range events {
-		line := fmt.Sprintf("audit: decision=%s operation=%s scope=%s:%s(%s)",
-			e.Decision, e.Operation, e.Scope.Type, e.Scope.ID, e.Scope.Kind)
-		if e.Outcome != "" {
-			line += " outcome=" + string(e.Outcome)
+	return page.Items
+}
+
+func auditLines(records []audit2.Record) []string {
+	out := make([]string, 0, len(records))
+	for _, e := range records {
+		source := e.Source.System
+		if source == "" {
+			source = e.Source.ActorType + ":" + e.Source.ActorID
 		}
-		if e.Reason != "" {
-			line += " reason=" + string(e.Reason)
+		fact := ""
+		if row := e.Change.Relationship; row != nil {
+			fact = fmt.Sprintf("%s:%s#%s <- %s:%s#%s", row.ResourceType, row.ResourceID, row.Relation, row.SubjectType, row.SubjectID, row.SubjectRelation)
 		}
-		if e.Detail != "" {
-			line += " detail=" + e.Detail
+		if row := e.Change.Role; row != nil {
+			fact = fmt.Sprintf("role %s for %s:%s at %s:%s", row.Role, row.SubjectType, row.SubjectID, row.ResourceType, row.ResourceID)
 		}
-		out = append(out, line)
+		out = append(out, fmt.Sprintf("audit: %s %s; source=%s; reason=%s", e.Change.Action, fact, source, e.Source.Reason))
 	}
 	return out
 }
@@ -145,70 +115,57 @@ func auditLines(events []authorization.AuditEvent) []string {
 // Composition and command helpers
 // -----------------------------------------------------------------------------
 
-// proofComposition builds the guarded auth composition exactly as newAuthorization
-// does — the guardian-policy'd memstore bundle, hostMutationGuard, and the
-// separately held SystemMutator — plus a capturing AuditSink and a caller-chosen
-// schema. This is the AZ3-4.1 host composition; only the schema and the audit sink
-// vary so userset/hierarchy shapes can be proven over the same real guard.
-func proofComposition(t *testing.T, schema authorization.Schema, audit authorization.AuditSink) authorization.Components {
+func proofComposition(t *testing.T, schema relationships.Schema, history *capturedHistory) authorization.Components {
 	t.Helper()
-	store := authzmem.New(authzmem.WithGuardianPolicy(authzGuardianPolicy()))
-	comps, err := authorization.NewService(authorization.Repositories{
+	// Small proof models omit the project's protected scope. Install its rule
+	// only in fixtures that declare that resource type.
+	policy := mutations.GuardianPolicy{}
+	if _, ok := schema.ResourceTypes[demoResourceType]; ok {
+		policy = authzGuardianPolicy()
+	}
+	store := authzmem.New(authzmem.WithGuardianPolicy(policy), authzmem.WithAudit())
+	if history != nil {
+		history.reader = store.Audit()
+		history.t = t
+	}
+	comps, err := authorization.New(authorization.Repositories{
 		Relationships: store.Relationships(),
 		Roles:         store.Roles(),
 		Mutations:     store.Mutations(),
-	}, authorization.Config{
-		RelationshipModel: schema,
-		Guard:             hostMutationGuard{},
-		Audit:             audit,
-	})
+	}, authorization.WithRelationshipModel(schema), authorization.WithGuard(hostMutationGuard{}))
 	if err != nil {
 		t.Fatalf("proofComposition: %v", err)
 	}
 	return comps
 }
 
-// pid derives a stable MutationID from descriptive parts so the transcript is
-// reproducible (see the transcript preamble).
-func pid(parts ...string) authorization.MutationID {
-	return authorization.DeriveMutationID(append([]string{"az3-4.2"}, parts...)...)
+func subj(t, id string) relationships.SubjectRef { return relationships.SubjectRef{Type: t, ID: id} }
+
+func userset(t, id, relation string) relationships.SubjectRef {
+	return relationships.SubjectRef{Type: t, ID: id, Relation: relation}
 }
 
-func revPtr(v uint64) *authorization.Revision {
-	r := authorization.Revision(v)
-	return &r
-}
-
-func subj(t, id string) authorization.SubjectRef { return authorization.SubjectRef{Type: t, ID: id} }
-
-func userset(t, id, relation string) authorization.SubjectRef {
-	return authorization.SubjectRef{Type: t, ID: id, Relation: relation}
-}
-
-// trustGrant seeds a relationship through the trusted SystemMutator (bypasses the
-// host guard, obeys the atomic contract). Setup uses this; the ACT under test uses
-// the guarded Service so the audit sink captures exactly the act.
-func trustGrant(t *testing.T, sm *authorization.SystemMutator, rt, rid, rel string, s authorization.SubjectRef) {
+func trustGrant(t *testing.T, sm *mutations.SystemMutator, rt, rid, rel string, s relationships.SubjectRef) {
 	t.Helper()
-	if _, err := sm.GrantRelationship(context.Background(), authorization.GrantRelationshipCommand{
-		MutationID:   pid("seed", rt, rid, rel, s.Type, s.ID, s.Relation),
+	if _, err := sm.GrantRelationship(proofSystemContext(), mutations.GrantRelationshipCommand{
+
 		ResourceType: rt, ResourceID: rid, Relation: rel, Subject: s,
 	}); err != nil {
 		t.Fatalf("trustGrant %s:%s#%s <- %s:%s#%s: %v", rt, rid, rel, s.Type, s.ID, s.Relation, err)
 	}
 }
 
-func proofActor(userID string) authorization.Actor {
-	return authorization.Actor{PrincipalRef: authorization.PrincipalRef{Type: "user", ID: userID}}
+func proofActor(userID string) mutations.Actor {
+	return mutations.Actor{PrincipalRef: model.PrincipalRef{Type: "user", ID: userID}}
 }
 
 // check is a small read helper for the transcript's stored-state observations.
-func check(t *testing.T, svc *authorization.Service, userID, permission, resourceType, resourceID string) bool {
+func check(t *testing.T, svc authorization.Components, userID, permission, resourceType, resourceID string) bool {
 	t.Helper()
-	res, err := svc.Check(context.Background(), authorization.CheckRequest{
-		Principal:  authorization.PrincipalRef{Type: "user", ID: userID},
+	res, err := svc.Decisions.Check(context.Background(), model.CheckRequest{
+		Principal:  model.PrincipalRef{Type: "user", ID: userID},
 		Permission: permission,
-		Resource:   authorization.Resource{Type: resourceType, ID: resourceID},
+		Resource:   model.Resource{Type: resourceType, ID: resourceID},
 	})
 	if err != nil {
 		t.Fatalf("Check(%s, %s, %s:%s): %v", userID, permission, resourceType, resourceID, err)
@@ -223,31 +180,31 @@ func check(t *testing.T, svc *authorization.Service, userID, permission, resourc
 // proofUsersetSchema adds a userset-bearing group/doc pair to the host's project +
 // platform types so the real hostMutationGuard (manage_access = owner) authorizes a
 // manager granting an exact userset subject on a doc.
-func proofUsersetSchema() authorization.Schema {
-	return authorization.NewSchema([]authorization.ResourceSchema{
-		{Name: "platform", Def: authorization.ResourceTypeDef{
-			Relations:   map[string]authorization.RelationDef{"admin": {AllowedSubjects: []authorization.SubjectTypeRef{{Type: "user"}}}},
-			Permissions: map[string]authorization.PermissionRule{"admin": authorization.AnyOf(authorization.Direct("admin"))},
+func proofUsersetSchema() relationships.Schema {
+	return relationships.NewSchema([]relationships.ResourceSchema{
+		{Name: "platform", Def: relationships.ResourceTypeDef{
+			Relations:   map[string]relationships.RelationDef{"admin": {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "user"}}}},
+			Permissions: map[string]relationships.PermissionRule{"admin": relationships.AnyOf(relationships.Direct("admin"))},
 		}},
-		{Name: "group", Def: authorization.ResourceTypeDef{
-			Relations: map[string]authorization.RelationDef{
-				"member": {AllowedSubjects: []authorization.SubjectTypeRef{{Type: "user"}, {Type: "group", Relation: "member"}}},
-				"admin":  {AllowedSubjects: []authorization.SubjectTypeRef{{Type: "user"}}},
+		{Name: "group", Def: relationships.ResourceTypeDef{
+			Relations: map[string]relationships.RelationDef{
+				"member": {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "user"}, {Type: "group", Relation: "member"}}},
+				"admin":  {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "user"}}},
 			},
 		}},
-		{Name: "doc", Def: authorization.ResourceTypeDef{
-			Relations: map[string]authorization.RelationDef{
-				"owner": {AllowedSubjects: []authorization.SubjectTypeRef{{Type: "user"}}},
-				"viewer": {AllowedSubjects: []authorization.SubjectTypeRef{
+		{Name: "doc", Def: relationships.ResourceTypeDef{
+			Relations: map[string]relationships.RelationDef{
+				"owner": {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "user"}}},
+				"viewer": {AllowedSubjects: []relationships.SubjectTypeRef{
 					{Type: "user"},
 					{Type: "group"},
 					{Type: "group", Relation: "member"},
 					{Type: "group", Relation: "admin"},
 				}},
 			},
-			Permissions: map[string]authorization.PermissionRule{
-				"view":          authorization.AnyOf(authorization.Direct("viewer")),
-				"manage_access": authorization.AnyOf(authorization.Direct("owner")),
+			Permissions: map[string]relationships.PermissionRule{
+				"view":          relationships.AnyOf(relationships.Direct("viewer")),
+				"manage_access": relationships.AnyOf(relationships.Direct("owner")),
 			},
 		}},
 	})
@@ -256,20 +213,20 @@ func proofUsersetSchema() authorization.Schema {
 // proofHierarchySchema is the non-self Through-root hierarchy: a space inherits
 // `view` up its `parent` chain AND from its owning `org` (a NON-self Through). Used
 // for point 6's Check/Lookup parity.
-func proofHierarchySchema() authorization.Schema {
-	return authorization.NewSchema([]authorization.ResourceSchema{
-		{Name: "org", Def: authorization.ResourceTypeDef{
-			Relations:   map[string]authorization.RelationDef{"admin": {AllowedSubjects: []authorization.SubjectTypeRef{{Type: "user"}}}},
-			Permissions: map[string]authorization.PermissionRule{"view": authorization.AnyOf(authorization.Direct("admin"))},
+func proofHierarchySchema() relationships.Schema {
+	return relationships.NewSchema([]relationships.ResourceSchema{
+		{Name: "org", Def: relationships.ResourceTypeDef{
+			Relations:   map[string]relationships.RelationDef{"admin": {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "user"}}}},
+			Permissions: map[string]relationships.PermissionRule{"view": relationships.AnyOf(relationships.Direct("admin"))},
 		}},
-		{Name: "space", Def: authorization.ResourceTypeDef{
-			Relations: map[string]authorization.RelationDef{
-				"parent": {AllowedSubjects: []authorization.SubjectTypeRef{{Type: "space"}}},
-				"viewer": {AllowedSubjects: []authorization.SubjectTypeRef{{Type: "user"}}},
-				"org":    {AllowedSubjects: []authorization.SubjectTypeRef{{Type: "org"}}},
+		{Name: "space", Def: relationships.ResourceTypeDef{
+			Relations: map[string]relationships.RelationDef{
+				"parent": {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "space"}}},
+				"viewer": {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "user"}}},
+				"org":    {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "org"}}},
 			},
-			Permissions: map[string]authorization.PermissionRule{
-				"view": authorization.AnyOf(authorization.Direct("viewer"), authorization.Through("org", "view"), authorization.Through("parent", "view")),
+			Permissions: map[string]relationships.PermissionRule{
+				"view": relationships.AnyOf(relationships.Direct("viewer"), relationships.Through("org", "view"), relationships.Through("parent", "view")),
 			},
 		}},
 	})
@@ -297,8 +254,8 @@ func TestAZ3ProofProtocol(t *testing.T) {
 		{"07_global_role_in_effective_enumeration", proofPoint07},
 		{"08_scoped_revoke_same_role_grant_remains", proofPoint08},
 		{"09_concurrent_last_owner_revoke_single_winner", proofPoint09},
-		{"10_stale_revision_and_payload_mismatch", proofPoint10},
-		{"11_exact_retry_replayed", proofPoint11},
+		{"10_conflict_leaves_history_unchanged", proofPoint10},
+		{"11_repeat_uses_current_state", proofPoint11},
 		{"12_teardown_only_via_system_mutator", proofPoint12},
 	}
 	for _, p := range points {
@@ -316,17 +273,17 @@ func TestAZ3ProofProtocol(t *testing.T) {
 
 // 1. An ordinary member cannot self-grant.
 func proofPoint01(t *testing.T, tr *proofTranscript) {
-	sink := &capturingAuditSink{}
+	sink := &capturedHistory{}
 	comps := proofComposition(t, authzSchema(), sink)
-	svc, sm := comps.Service, comps.SystemMutator
+	svc, sm := comps, comps.SystemMutator
 	ctx := context.Background()
 
 	trustGrant(t, sm, "project", "p1", "owner", subj("user", "manager"))
 	trustGrant(t, sm, "project", "p1", "member", subj("user", "ordinary")) // trusted seed, not audited
 
 	// The ordinary member attempts to self-grant owner (self-escalation).
-	_, err := svc.GrantRelationship(ctx, proofActor("ordinary"), authorization.GrantRelationshipCommand{
-		MutationID: pid("p1", "self-grant"), ResourceType: "project", ResourceID: "p1",
+	_, err := svc.Mutations.GrantRelationship(ctx, proofActor("ordinary"), mutations.GrantRelationshipCommand{
+		ResourceType: "project", ResourceID: "p1",
 		Relation: "owner", Subject: subj("user", "ordinary"),
 	})
 	if !errors.Is(err, sdk.ErrForbidden) {
@@ -348,20 +305,20 @@ func proofPoint01(t *testing.T, tr *proofTranscript) {
 // 2. An authorized manager grants an exact group#member subject and a concrete
 // member gains access.
 func proofPoint02(t *testing.T, tr *proofTranscript) {
-	sink := &capturingAuditSink{}
+	sink := &capturedHistory{}
 	comps := proofComposition(t, proofUsersetSchema(), sink)
-	svc, sm := comps.Service, comps.SystemMutator
+	svc, sm := comps, comps.SystemMutator
 	ctx := context.Background()
 
 	trustGrant(t, sm, "group", "eng", "member", subj("user", "alice")) // alice is a member of group:eng
 	trustGrant(t, sm, "doc", "d2", "owner", subj("user", "manager"))   // manager holds manage_access on doc:d2
 
 	// The manager (authorized via manage_access) grants the exact group#member userset.
-	rcpt, err := svc.GrantRelationship(ctx, proofActor("manager"), authorization.GrantRelationshipCommand{
-		MutationID: pid("p2", "grant-userset"), ResourceType: "doc", ResourceID: "d2",
+	rcpt, err := svc.Mutations.GrantRelationship(ctx, proofActor("manager"), mutations.GrantRelationshipCommand{
+		ResourceType: "doc", ResourceID: "d2",
 		Relation: "viewer", Subject: userset("group", "eng", "member"),
 	})
-	if err != nil || rcpt.Outcome != authorization.OutcomeApplied {
+	if err != nil || rcpt.Outcome != mutations.OutcomeApplied {
 		t.Fatalf("manager userset grant: outcome=%v err=%v", outcomeOf(rcpt), err)
 	}
 	memberAllowed := check(t, svc, "alice", "view", "doc", "d2")
@@ -374,16 +331,16 @@ func proofPoint02(t *testing.T, tr *proofTranscript) {
 	}
 
 	// Stored-row observation: the viewer target is the EXACT userset (group:eng#member).
-	targets, err := svc.GetRelationTargets(ctx, "doc", "d2", "viewer")
+	targets, err := svc.Relationships.GetRelationTargets(ctx, "doc", "d2", "viewer")
 	if err != nil {
 		t.Fatalf("GetRelationTargets: %v", err)
 	}
-	digest, _ := svc.SchemaDigest()
+	digest := svc.Relationships.SchemaDigest()
 
 	tr.add(2, "Authorized manager grants an exact group#member subject",
 		"command: Service.GrantRelationship(actor=user:manager, grant doc:d2#viewer <- group:eng#member)",
-		fmt.Sprintf("receipt: outcome=%s revision=%d replayed=%v schema_digest=%s", rcpt.Outcome, rcpt.Revision, rcpt.Replayed, short(rcpt.SchemaDigest)),
-		fmt.Sprintf("live schema digest: %s (matches receipt)", short(digest)),
+		fmt.Sprintf("result: outcome=%s", rcpt.Outcome),
+		fmt.Sprintf("live schema digest: %s (current model)", short(digest)),
 		fmt.Sprintf("stored viewer target(s): %s", targetsString(targets)),
 		fmt.Sprintf("Check(user:alice member-of-eng, view, doc:d2) = %v (member gains access)", memberAllowed),
 		fmt.Sprintf("Check(user:stranger, view, doc:d2) = %v (non-member denied)", strangerAllowed),
@@ -393,9 +350,9 @@ func proofPoint02(t *testing.T, tr *proofTranscript) {
 
 // 3. A group#admin grant does not authorize an ordinary member.
 func proofPoint03(t *testing.T, tr *proofTranscript) {
-	sink := &capturingAuditSink{}
+	sink := &capturedHistory{}
 	comps := proofComposition(t, proofUsersetSchema(), sink)
-	svc, sm := comps.Service, comps.SystemMutator
+	svc, sm := comps, comps.SystemMutator
 	ctx := context.Background()
 
 	trustGrant(t, sm, "group", "eng", "member", subj("user", "alice")) // ordinary member
@@ -403,11 +360,11 @@ func proofPoint03(t *testing.T, tr *proofTranscript) {
 	trustGrant(t, sm, "doc", "d3", "owner", subj("user", "manager"))
 
 	// The manager grants the group#ADMIN userset on doc:d3#viewer.
-	rcpt, err := svc.GrantRelationship(ctx, proofActor("manager"), authorization.GrantRelationshipCommand{
-		MutationID: pid("p3", "grant-admin-userset"), ResourceType: "doc", ResourceID: "d3",
+	rcpt, err := svc.Mutations.GrantRelationship(ctx, proofActor("manager"), mutations.GrantRelationshipCommand{
+		ResourceType: "doc", ResourceID: "d3",
 		Relation: "viewer", Subject: userset("group", "eng", "admin"),
 	})
-	if err != nil || rcpt.Outcome != authorization.OutcomeApplied {
+	if err != nil || rcpt.Outcome != mutations.OutcomeApplied {
 		t.Fatalf("manager admin-userset grant: outcome=%v err=%v", outcomeOf(rcpt), err)
 	}
 	memberAllowed := check(t, svc, "alice", "view", "doc", "d3") // member, NOT admin
@@ -421,7 +378,7 @@ func proofPoint03(t *testing.T, tr *proofTranscript) {
 
 	tr.add(3, "A group#admin grant does not authorize an ordinary member",
 		"command: Service.GrantRelationship(actor=user:manager, grant doc:d3#viewer <- group:eng#admin)",
-		fmt.Sprintf("receipt: outcome=%s revision=%d", rcpt.Outcome, rcpt.Revision),
+		fmt.Sprintf("result: outcome=%s", rcpt.Outcome),
 		fmt.Sprintf("Check(user:alice group:eng#member, view, doc:d3) = %v (member does NOT satisfy the admin userset)", memberAllowed),
 		fmt.Sprintf("Check(user:carol group:eng#admin, view, doc:d3) = %v (admin satisfies it)", adminAllowed),
 	)
@@ -430,19 +387,19 @@ func proofPoint03(t *testing.T, tr *proofTranscript) {
 
 // 4. Decision APIs reject userset-valued callers.
 func proofPoint04(t *testing.T, tr *proofTranscript) {
-	sink := &capturingAuditSink{}
+	sink := &capturedHistory{}
 	comps := proofComposition(t, proofUsersetSchema(), sink)
-	svc, sm := comps.Service, comps.SystemMutator
+	svc, sm := comps, comps.SystemMutator
 	ctx := context.Background()
 
 	// Structural proof: a decision request's caller (CheckRequest.Principal) is a
 	// concrete PrincipalRef with only (Type, ID) — no Relation field a caller could
 	// set to a userset. The STORED subject type (SubjectRef) is a DIFFERENT type that
 	// does carry Relation, and no decision path accepts it.
-	prinType := reflect.TypeOf(authorization.PrincipalRef{})
-	crPrincipal, _ := reflect.TypeOf(authorization.CheckRequest{}).FieldByName("Principal")
+	prinType := reflect.TypeOf(model.PrincipalRef{})
+	crPrincipal, _ := reflect.TypeOf(model.CheckRequest{}).FieldByName("Principal")
 	principalHasRelation := hasField(prinType, "Relation")
-	subjectHasRelation := hasField(reflect.TypeOf(authorization.SubjectRef{}), "Relation")
+	subjectHasRelation := hasField(reflect.TypeOf(relationships.SubjectRef{}), "Relation")
 	callerIsPrincipalRef := crPrincipal.Type == prinType
 
 	// Driven proof: a caller is always the CONCRETE entity. A concrete-group grant
@@ -450,8 +407,8 @@ func proofPoint04(t *testing.T, tr *proofTranscript) {
 	// group#member".
 	trustGrant(t, sm, "group", "eng", "member", subj("user", "alice"))
 	trustGrant(t, sm, "doc", "dc", "owner", subj("user", "manager"))
-	if _, err := svc.GrantRelationship(ctx, proofActor("manager"), authorization.GrantRelationshipCommand{
-		MutationID: pid("p4", "grant-concrete-group"), ResourceType: "doc", ResourceID: "dc",
+	if _, err := svc.Mutations.GrantRelationship(ctx, proofActor("manager"), mutations.GrantRelationshipCommand{
+		ResourceType: "doc", ResourceID: "dc",
 		Relation: "viewer", Subject: subj("group", "eng"), // concrete group entity, no relation
 	}); err != nil {
 		t.Fatalf("concrete-group grant: %v", err)
@@ -484,25 +441,25 @@ func proofPoint04(t *testing.T, tr *proofTranscript) {
 func proofPoint05(t *testing.T, tr *proofTranscript) {
 	// space.parent is used by Through("parent","view") but allows a userset
 	// (space#member) — must be rejected at compile (NewService).
-	bad := authorization.NewSchema([]authorization.ResourceSchema{{
-		Name: "space", Def: authorization.ResourceTypeDef{
-			Relations: map[string]authorization.RelationDef{
-				"parent": {AllowedSubjects: []authorization.SubjectTypeRef{{Type: "space", Relation: "member"}}},
-				"member": {AllowedSubjects: []authorization.SubjectTypeRef{{Type: "user"}}},
-				"viewer": {AllowedSubjects: []authorization.SubjectTypeRef{{Type: "user"}}},
+	bad := relationships.NewSchema([]relationships.ResourceSchema{{
+		Name: "space", Def: relationships.ResourceTypeDef{
+			Relations: map[string]relationships.RelationDef{
+				"parent": {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "space", Relation: "member"}}},
+				"member": {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "user"}}},
+				"viewer": {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "user"}}},
 			},
-			Permissions: map[string]authorization.PermissionRule{
-				"view": authorization.AnyOf(authorization.Direct("viewer"), authorization.Through("parent", "view")),
+			Permissions: map[string]relationships.PermissionRule{
+				"view": relationships.AnyOf(relationships.Direct("viewer"), relationships.Through("parent", "view")),
 			},
 		},
 	}})
 
 	store := authzmem.New(authzmem.WithGuardianPolicy(authzGuardianPolicy()))
-	_, err := authorization.NewService(authorization.Repositories{
+	_, err := authorization.New(authorization.Repositories{
 		Relationships: store.Relationships(),
 		Roles:         store.Roles(),
 		Mutations:     store.Mutations(),
-	}, authorization.Config{RelationshipModel: bad, Guard: hostMutationGuard{}})
+	}, authorization.WithRelationshipModel(bad), authorization.WithGuard(hostMutationGuard{}))
 	if err == nil {
 		t.Fatal("a Through relation allowing a userset target must fail schema compile")
 	}
@@ -522,9 +479,9 @@ func proofPoint05(t *testing.T, tr *proofTranscript) {
 
 // 6. A non-self Through-root hierarchy: Check and Lookup return the same descendants.
 func proofPoint06(t *testing.T, tr *proofTranscript) {
-	sink := &capturingAuditSink{}
+	sink := &capturedHistory{}
 	comps := proofComposition(t, proofHierarchySchema(), sink)
-	svc, sm := comps.Service, comps.SystemMutator
+	svc, sm := comps, comps.SystemMutator
 	ctx := context.Background()
 
 	// root <- mid <- leaf; root's access flows ONLY from org O (a non-self Through
@@ -534,15 +491,15 @@ func proofPoint06(t *testing.T, tr *proofTranscript) {
 	trustGrant(t, sm, "space", "root", "org", subj("org", "O"))
 	trustGrant(t, sm, "org", "O", "admin", subj("user", "u1"))
 
-	principal := authorization.PrincipalRef{Type: "user", ID: "u1"}
+	principal := model.PrincipalRef{Type: "user", ID: "u1"}
 	// Check honors the org-derived root's descendants.
 	leafAllowed := check(t, svc, "u1", "view", "space", "leaf")
 	if !leafAllowed {
 		t.Fatal("Check on the grandchild of a non-self Through root was denied")
 	}
-	look, err := svc.LookupResources(ctx, principal, "view", "space")
+	look, err := svc.Decisions.LookupAllResourceIDs(ctx, principal, "view", "space")
 	if err != nil {
-		t.Fatalf("LookupResources: %v", err)
+		t.Fatalf("LookupAllResourceIDs: %v", err)
 	}
 	got := append([]string(nil), look.IDs...)
 	sort.Strings(got)
@@ -560,30 +517,30 @@ func proofPoint06(t *testing.T, tr *proofTranscript) {
 	tr.add(6, "Non-self Through-root hierarchy: Check and Lookup return the same descendants",
 		"setup: space:root inherits view ONLY from org:O#admin@user:u1 (a non-self Through root); root<-mid<-leaf via parent",
 		fmt.Sprintf("Check(user:u1, view, space:leaf) = %v (grandchild of the org-derived root)", leafAllowed),
-		fmt.Sprintf("LookupResources(user:u1, view, space).IDs = %v", got),
+		fmt.Sprintf("LookupAllResourceIDs(user:u1, view, space).IDs = %v", got),
 		fmt.Sprintf("parity: each Lookup id is Check-allowed = %v", allChecked(t, svc, want)),
 	)
 }
 
 // 7. A global role appears in effective role enumeration.
 func proofPoint07(t *testing.T, tr *proofTranscript) {
-	sink := &capturingAuditSink{}
+	sink := &capturedHistory{}
 	comps := proofComposition(t, authzSchema(), sink)
-	svc, sm := comps.Service, comps.SystemMutator
+	svc, sm := comps, comps.SystemMutator
 	ctx := context.Background()
 
 	// A GLOBAL role assignment (trusted-only blast radius) with NO direct scoped row.
-	if _, err := sm.AssignRole(ctx, authorization.AssignRoleCommand{
-		MutationID: pid("p7", "global-role"), Subject: authorization.PrincipalRef{Type: "user", ID: "dave"}, Role: "auditor",
+	if _, err := sm.AssignRole(audit2.WithSource(ctx, audit2.Source{System: "proof-setup"}), mutations.AssignRoleCommand{
+		Subject: model.PrincipalRef{Type: "user", ID: "dave"}, Role: "auditor",
 	}); err != nil {
 		t.Fatalf("global AssignRole: %v", err)
 	}
 
-	page, err := svc.ListEffectiveRoleGrantsByResource(ctx, "project", "p7", crud.ListRequest{})
+	page, err := svc.Roles.ListEffectiveRoleGrantsByResource(ctx, "project", "p7", list.Request{})
 	if err != nil {
 		t.Fatalf("ListEffectiveRoleGrantsByResource: %v", err)
 	}
-	var found *authorization.EffectiveGrant
+	var found *roles.EffectiveGrant
 	for i := range page.Items {
 		if page.Items[i].SubjectID == "dave" && page.Items[i].Role == "auditor" {
 			found = &page.Items[i]
@@ -595,7 +552,7 @@ func proofPoint07(t *testing.T, tr *proofTranscript) {
 	if found.Direct || !found.Global {
 		t.Fatalf("effective grant provenance: want direct=false global=true, got direct=%v global=%v", found.Direct, found.Global)
 	}
-	hasRole, err := svc.HasRole(ctx, authorization.PrincipalRef{Type: "user", ID: "dave"}, "auditor", "project", "p7")
+	hasRole, err := svc.Roles.HasRole(ctx, model.PrincipalRef{Type: "user", ID: "dave"}, "auditor", "project", "p7")
 	if err != nil {
 		t.Fatalf("HasRole: %v", err)
 	}
@@ -612,28 +569,28 @@ func proofPoint07(t *testing.T, tr *proofTranscript) {
 
 // 8. A scoped revoke while a global remains reports same_role_grant_remains.
 func proofPoint08(t *testing.T, tr *proofTranscript) {
-	sink := &capturingAuditSink{}
+	sink := &capturedHistory{}
 	comps := proofComposition(t, authzSchema(), sink)
-	svc, sm := comps.Service, comps.SystemMutator
+	svc, sm := comps, comps.SystemMutator
 	ctx := context.Background()
 
 	trustGrant(t, sm, "project", "p8", "owner", subj("user", "manager"))
 	// erin holds BOTH a global auditor and a scoped auditor on project:p8.
-	if _, err := sm.AssignRole(ctx, authorization.AssignRoleCommand{
-		MutationID: pid("p8", "global-role"), Subject: authorization.PrincipalRef{Type: "user", ID: "erin"}, Role: "auditor",
+	if _, err := sm.AssignRole(audit2.WithSource(ctx, audit2.Source{System: "proof-setup"}), mutations.AssignRoleCommand{
+		Subject: model.PrincipalRef{Type: "user", ID: "erin"}, Role: "auditor",
 	}); err != nil {
 		t.Fatalf("global AssignRole: %v", err)
 	}
-	if _, err := svc.AssignRole(ctx, proofActor("manager"), authorization.AssignRoleCommand{
-		MutationID: pid("p8", "scoped-role"), Subject: authorization.PrincipalRef{Type: "user", ID: "erin"}, Role: "auditor",
+	if _, err := svc.Mutations.AssignRole(ctx, proofActor("manager"), mutations.AssignRoleCommand{
+		Subject: model.PrincipalRef{Type: "user", ID: "erin"}, Role: "auditor",
 		ResourceType: "project", ResourceID: "p8",
 	}); err != nil {
 		t.Fatalf("scoped AssignRole: %v", err)
 	}
 
 	// The manager revokes the SCOPED assignment; the global still confers the role.
-	result, err := svc.UnassignRole(ctx, proofActor("manager"), authorization.UnassignRoleCommand{
-		MutationID: pid("p8", "scoped-unassign"), Subject: authorization.PrincipalRef{Type: "user", ID: "erin"}, Role: "auditor",
+	result, err := svc.Mutations.UnassignRole(ctx, proofActor("manager"), mutations.UnassignRoleCommand{
+		Subject: model.PrincipalRef{Type: "user", ID: "erin"}, Role: "auditor",
 		ResourceType: "project", ResourceID: "p8",
 	})
 	if err != nil {
@@ -642,7 +599,7 @@ func proofPoint08(t *testing.T, tr *proofTranscript) {
 	if !result.SameRoleGrantRemains {
 		t.Fatal("scoped revoke while a global remains must report same_role_grant_remains=true")
 	}
-	stillHas, err := svc.HasRole(ctx, authorization.PrincipalRef{Type: "user", ID: "erin"}, "auditor", "project", "p8")
+	stillHas, err := svc.Roles.HasRole(ctx, model.PrincipalRef{Type: "user", ID: "erin"}, "auditor", "project", "p8")
 	if err != nil {
 		t.Fatalf("HasRole after scoped revoke: %v", err)
 	}
@@ -653,7 +610,7 @@ func proofPoint08(t *testing.T, tr *proofTranscript) {
 	tr.add(8, "A scoped revoke while a global remains reports same_role_grant_remains",
 		"setup: user:erin holds auditor GLOBALLY and scoped on project:p8",
 		"command: Service.UnassignRole(actor=user:manager, user:erin/auditor scoped on project:p8)",
-		fmt.Sprintf("result: outcome=%s same_role_grant_remains=%v (computed inside the atomic critical section)", result.Receipt.Outcome, result.SameRoleGrantRemains),
+		fmt.Sprintf("result: outcome=%s same_role_grant_remains=%v (computed inside the atomic critical section)", result.Outcome, result.SameRoleGrantRemains),
 		fmt.Sprintf("HasRole(user:erin, auditor, project:p8) after revoke = %v (global fallback retains it)", stillHas),
 	)
 	tr.add(8, "A scoped revoke while a global remains reports same_role_grant_remains", auditLines(sink.all())...)
@@ -661,9 +618,9 @@ func proofPoint08(t *testing.T, tr *proofTranscript) {
 
 // 9. Two concurrent last-owner revokes produce one success / one invariant block.
 func proofPoint09(t *testing.T, tr *proofTranscript) {
-	sink := &capturingAuditSink{}
+	sink := &capturedHistory{}
 	comps := proofComposition(t, authzSchema(), sink)
-	svc, sm := comps.Service, comps.SystemMutator
+	svc, sm := comps, comps.SystemMutator
 	ctx := context.Background()
 
 	// A platform admin drives both revokes so the guard passes for either — isolating
@@ -679,12 +636,12 @@ func proofPoint09(t *testing.T, tr *proofTranscript) {
 		trustGrant(t, sm, "project", res, "owner", subj("user", "o2"))
 
 		var wg sync.WaitGroup
-		outs := make([]authorization.Outcome, 2)
+		outs := make([]mutations.Outcome, 2)
 		errs := make([]error, 2)
 		revoke := func(i int, ownerID string) {
 			defer wg.Done()
-			rcpt, err := svc.RevokeRelationship(ctx, proofActor("admin"), authorization.RevokeRelationshipCommand{
-				MutationID: pid("p9", res, "revoke", ownerID), ResourceType: "project", ResourceID: res,
+			rcpt, err := svc.Mutations.RevokeRelationship(ctx, proofActor("admin"), mutations.RevokeRelationshipCommand{
+				ResourceType: "project", ResourceID: res,
 				Relation: "owner", Subject: subj("user", ownerID),
 			})
 			if err != nil {
@@ -698,20 +655,20 @@ func proofPoint09(t *testing.T, tr *proofTranscript) {
 		go revoke(1, "o2")
 		wg.Wait()
 
-		for i, err := range errs {
-			if err != nil {
-				t.Fatalf("round %d revoke %d errored (must be a domain outcome): %v", r, i, err)
-			}
-		}
 		applied, blocked := 0, 0
-		for _, o := range outs {
-			switch o {
-			case authorization.OutcomeApplied:
-				applied++
-			case authorization.OutcomeInvariantBlocked:
+		for i, err := range errs {
+			switch {
+			case errors.Is(err, mutations.ErrInvariantBlocked):
 				blocked++
+				outcomeSet["invariant_blocked"]++
+			case err != nil:
+				t.Fatalf("round %d revoke %d: %v", r, i, err)
+			case outs[i] == mutations.OutcomeApplied:
+				applied++
+				outcomeSet[string(outs[i])]++
+			default:
+				t.Fatalf("round %d revoke %d: unexpected outcome %s", r, i, outs[i])
 			}
-			outcomeSet[string(o)]++
 		}
 		if applied != 1 || blocked != 1 {
 			t.Fatalf("round %d: want exactly one applied + one invariant_blocked, got applied=%d blocked=%d (%v)", r, applied, blocked, outs)
@@ -731,92 +688,45 @@ func proofPoint09(t *testing.T, tr *proofTranscript) {
 	)
 }
 
-// 10. Stale revision and MutationID payload mismatch return stable errors.
 func proofPoint10(t *testing.T, tr *proofTranscript) {
-	sink := &capturingAuditSink{}
-	comps := proofComposition(t, authzSchema(), sink)
-	svc, sm := comps.Service, comps.SystemMutator
-	ctx := context.Background()
-
-	trustGrant(t, sm, "project", "p10", "owner", subj("user", "manager")) // scope revision now >= 1
-
-	// Stale revision: an ExpectedRevision of 0 no longer matches the scope.
-	_, staleErr := svc.GrantRelationship(ctx, proofActor("manager"), authorization.GrantRelationshipCommand{
-		MutationID: pid("p10", "stale"), ResourceType: "project", ResourceID: "p10",
-		Relation: "member", Subject: subj("user", "x"), ExpectedRevision: revPtr(0),
-	})
-	if !errors.Is(staleErr, authorization.ErrStaleRevision) {
-		t.Fatalf("stale revision: want ErrStaleRevision, got %v", staleErr)
+	history := &capturedHistory{}
+	comps := proofComposition(t, authzSchema(), history)
+	trustGrant(t, comps.SystemMutator, "project", "p10", "owner", subj("user", "manager"))
+	before := len(history.all())
+	result, err := comps.Mutations.GrantRelationship(context.Background(), proofActor("manager"), mutations.GrantRelationshipCommand{ResourceType: "project", ResourceID: "p10", Relation: "member", Subject: subj("user", "manager")})
+	if !errors.Is(err, mutations.ErrSemanticConflict) || result != nil {
+		t.Fatalf("conflict: %+v, %v", result, err)
 	}
-
-	// Payload mismatch: reuse one MutationID under two different payloads.
-	mid := pid("p10", "mismatch")
-	if _, err := svc.GrantRelationship(ctx, proofActor("manager"), authorization.GrantRelationshipCommand{
-		MutationID: mid, ResourceType: "project", ResourceID: "p10", Relation: "member", Subject: subj("user", "y"),
-	}); err != nil {
-		t.Fatalf("first grant under reused id: %v", err)
+	if len(history.all()) != before {
+		t.Fatal("refused change added history")
 	}
-	_, mismatchErr := svc.GrantRelationship(ctx, proofActor("manager"), authorization.GrantRelationshipCommand{
-		MutationID: mid, ResourceType: "project", ResourceID: "p10", Relation: "member", Subject: subj("user", "z"),
-	})
-	if !errors.Is(mismatchErr, authorization.ErrMutationMismatch) {
-		t.Fatalf("payload mismatch: want ErrMutationMismatch, got %v", mismatchErr)
-	}
-
-	tr.add(10, "Stale revision and MutationID payload mismatch return stable errors",
-		"command A: GrantRelationship(actor=user:manager, project:p10#member <- user:x, ExpectedRevision=0) against a scope already at revision >= 1",
-		fmt.Sprintf("result A: errors.Is(ErrStaleRevision)=%v (a command error, never a domain outcome, nothing committed)", errors.Is(staleErr, authorization.ErrStaleRevision)),
-		"command B: reuse one MutationID for two different payloads (project:p10#member <- user:y, then <- user:z)",
-		fmt.Sprintf("result B: errors.Is(ErrMutationMismatch)=%v (never a silent overwrite)", errors.Is(mismatchErr, authorization.ErrMutationMismatch)),
-	)
-	tr.add(10, "Stale revision and MutationID payload mismatch return stable errors", auditLines(sink.all())...)
+	tr.add(10, "Conflicting grants return errors without changing history", "owner-to-member grant without replace: semantic_conflict; original owner and audit count unchanged")
 }
 
-// 11. An exact retry returns the original outcome with Replayed=true.
 func proofPoint11(t *testing.T, tr *proofTranscript) {
-	sink := &capturingAuditSink{}
-	comps := proofComposition(t, authzSchema(), sink)
-	svc, sm := comps.Service, comps.SystemMutator
-	ctx := context.Background()
-
-	trustGrant(t, sm, "project", "p11", "owner", subj("user", "manager"))
-	cmd := authorization.GrantRelationshipCommand{
-		MutationID: pid("p11", "retry"), ResourceType: "project", ResourceID: "p11",
-		Relation: "member", Subject: subj("user", "frank"),
+	history := &capturedHistory{}
+	comps := proofComposition(t, authzSchema(), history)
+	trustGrant(t, comps.SystemMutator, "project", "p11", "owner", subj("user", "manager"))
+	cmd := mutations.GrantRelationshipCommand{ResourceType: "project", ResourceID: "p11", Relation: "member", Subject: subj("user", "frank")}
+	for _, want := range []mutations.Outcome{mutations.OutcomeApplied, mutations.OutcomeNoChange} {
+		result, err := comps.Mutations.GrantRelationship(context.Background(), proofActor("manager"), cmd)
+		if err != nil || result == nil || result.Outcome != want {
+			t.Fatalf("grant: %+v, %v", result, err)
+		}
 	}
-	first, err := svc.GrantRelationship(ctx, proofActor("manager"), cmd)
-	if err != nil {
-		t.Fatalf("first grant: %v", err)
+	if len(history.all()) != 2 {
+		t.Fatal("duplicate grant recorded a change")
 	}
-	if first.Replayed {
-		t.Fatal("first application must not be a replay")
-	}
-	retry, err := svc.GrantRelationship(ctx, proofActor("manager"), cmd) // exact same command
-	if err != nil {
-		t.Fatalf("retry: %v", err)
-	}
-	if !retry.Replayed {
-		t.Fatal("exact retry must be Replayed=true")
-	}
-	if retry.Outcome != first.Outcome || retry.Revision != first.Revision {
-		t.Fatalf("retry must return the original receipt: first(outcome=%s rev=%d) retry(outcome=%s rev=%d)",
-			first.Outcome, first.Revision, retry.Outcome, retry.Revision)
-	}
-
-	tr.add(11, "An exact retry returns the original outcome with Replayed=true",
-		"command: GrantRelationship(actor=user:manager, project:p11#member <- user:frank), issued twice with the SAME MutationID and payload",
-		fmt.Sprintf("first: outcome=%s revision=%d replayed=%v", first.Outcome, first.Revision, first.Replayed),
-		fmt.Sprintf("retry: outcome=%s revision=%d replayed=%v (original outcome, no revision bump)", retry.Outcome, retry.Revision, retry.Replayed),
-	)
-	tr.add(11, "An exact retry returns the original outcome with Replayed=true", auditLines(sink.all())...)
+	tr.add(11, "Repeated grants report current state and add no duplicate history", "first: applied; repeated call: no_change; one added member fact in history")
+	tr.add(11, "", auditLines(history.all())...)
 }
 
 // 12. Resource teardown is possible only through the separately held SystemMutator
 // command with a recorded reason.
 func proofPoint12(t *testing.T, tr *proofTranscript) {
-	sink := &capturingAuditSink{}
+	sink := &capturedHistory{}
 	comps := proofComposition(t, authzSchema(), sink)
-	svc, sm := comps.Service, comps.SystemMutator
+	svc, sm := comps, comps.SystemMutator
 	ctx := context.Background()
 
 	trustGrant(t, sm, "project", "p12", "owner", subj("user", "manager"))
@@ -824,46 +734,46 @@ func proofPoint12(t *testing.T, tr *proofTranscript) {
 
 	// Structural: the actor-facing Service exposes NO teardown method; teardown is on
 	// SystemMutator only.
-	_, svcHasTeardown := reflect.TypeOf(svc).MethodByName("TeardownAuthorizationScope")
-	_, smHasTeardown := reflect.TypeOf(sm).MethodByName("TeardownAuthorizationScope")
+	_, svcHasTeardown := reflect.TypeOf(svc).MethodByName("TeardownResourceAuthorization")
+	_, smHasTeardown := reflect.TypeOf(sm).MethodByName("TeardownResourceAuthorization")
 
 	// A reason is REQUIRED: an empty reason is refused before any write.
-	_, emptyErr := sm.TeardownAuthorizationScope(ctx, authorization.TeardownAuthorizationScopeCommand{
-		MutationID: pid("p12", "empty-reason"), ResourceType: "project", ResourceID: "p12", Reason: "  ",
+	_, emptyErr := sm.TeardownResourceAuthorization(audit2.WithSource(ctx, audit2.Source{System: "proof-cleanup"}), mutations.TeardownResourceAuthorizationCommand{
+		ResourceType: "project", ResourceID: "p12", Reason: "  ",
 	})
-	if !errors.Is(emptyErr, authorization.ErrTeardownReasonRequired) {
+	if !errors.Is(emptyErr, mutations.ErrTeardownReasonRequired) {
 		t.Fatalf("empty teardown reason: want ErrTeardownReasonRequired, got %v", emptyErr)
 	}
 
 	// The trusted teardown zeroes the scope (the one operation allowed to remove the
 	// last owner) with an explicit, recorded reason.
 	const reason = "az3-4.2 proof: project p12 destroyed by owner request"
-	rcpt, err := sm.TeardownAuthorizationScope(ctx, authorization.TeardownAuthorizationScopeCommand{
-		MutationID: pid("p12", "teardown"), ResourceType: "project", ResourceID: "p12", Reason: reason,
+	rcpt, err := sm.TeardownResourceAuthorization(audit2.WithSource(ctx, audit2.Source{System: "proof-cleanup"}), mutations.TeardownResourceAuthorizationCommand{
+		ResourceType: "project", ResourceID: "p12", Reason: reason,
 	})
-	if err != nil || rcpt.Outcome != authorization.OutcomeApplied {
+	if err != nil || rcpt.Outcome != mutations.OutcomeApplied {
 		t.Fatalf("teardown: outcome=%v err=%v", outcomeOf(rcpt), err)
 	}
-	ownerTargets, err := svc.GetRelationTargets(ctx, "project", "p12", "owner")
+	ownerTargets, err := svc.Relationships.GetRelationTargets(ctx, "project", "p12", "owner")
 	if err != nil {
 		t.Fatalf("GetRelationTargets owner: %v", err)
 	}
-	memberTargets, _ := svc.GetRelationTargets(ctx, "project", "p12", "member")
+	memberTargets, _ := svc.Relationships.GetRelationTargets(ctx, "project", "p12", "member")
 	if len(ownerTargets) != 0 || len(memberTargets) != 0 {
 		t.Fatalf("teardown left rows: owners=%d members=%d", len(ownerTargets), len(memberTargets))
 	}
 
 	if svcHasTeardown {
-		t.Fatal("the actor-facing Service must not expose TeardownAuthorizationScope")
+		t.Fatal("the actor-facing Service must not expose TeardownResourceAuthorization")
 	}
 	if !smHasTeardown {
-		t.Fatal("SystemMutator must expose TeardownAuthorizationScope")
+		t.Fatal("SystemMutator must expose TeardownResourceAuthorization")
 	}
 
 	// The reason is recorded observably on the audit seam (Detail), never a secret.
 	teardownAudited := false
 	for _, e := range sink.all() {
-		if e.Operation == authorization.OpTeardown && e.Detail == reason {
+		if e.Change.Action == audit2.ActionRemoved && e.Source.Reason == reason {
 			teardownAudited = true
 		}
 	}
@@ -872,10 +782,10 @@ func proofPoint12(t *testing.T, tr *proofTranscript) {
 	}
 
 	tr.add(12, "Resource teardown is possible only through the separately held SystemMutator with a recorded reason",
-		fmt.Sprintf("structural: actor-facing Service exposes TeardownAuthorizationScope=%v; SystemMutator exposes it=%v", svcHasTeardown, smHasTeardown),
-		fmt.Sprintf("precondition: empty reason rejected, errors.Is(ErrTeardownReasonRequired)=%v", errors.Is(emptyErr, authorization.ErrTeardownReasonRequired)),
-		"command: SystemMutator.TeardownAuthorizationScope(project:p12, reason=<recorded>)",
-		fmt.Sprintf("receipt: outcome=%s revision=%d (the one op allowed to remove the last owner)", rcpt.Outcome, rcpt.Revision),
+		fmt.Sprintf("structural: actor-facing Service exposes TeardownResourceAuthorization=%v; SystemMutator exposes it=%v", svcHasTeardown, smHasTeardown),
+		fmt.Sprintf("precondition: empty reason rejected, errors.Is(ErrTeardownReasonRequired)=%v", errors.Is(emptyErr, mutations.ErrTeardownReasonRequired)),
+		"command: SystemMutator.TeardownResourceAuthorization(project:p12, reason=<recorded>)",
+		fmt.Sprintf("result: outcome=%s (the one op allowed to remove the last owner)", rcpt.Outcome),
 		fmt.Sprintf("stored-row check after teardown: owner rows=%d member rows=%d", len(ownerTargets), len(memberTargets)),
 	)
 	tr.add(12, "Resource teardown is possible only through the separately held SystemMutator with a recorded reason", auditLines(sink.all())...)
@@ -894,12 +804,12 @@ func hasField(t reflect.Type, name string) bool {
 	return false
 }
 
-func checkPrincipal(t *testing.T, svc *authorization.Service, st, sid, permission, rt, rid string) bool {
+func checkPrincipal(t *testing.T, svc authorization.Components, st, sid, permission, rt, rid string) bool {
 	t.Helper()
-	res, err := svc.Check(context.Background(), authorization.CheckRequest{
-		Principal:  authorization.PrincipalRef{Type: st, ID: sid},
+	res, err := svc.Decisions.Check(context.Background(), model.CheckRequest{
+		Principal:  model.PrincipalRef{Type: st, ID: sid},
 		Permission: permission,
-		Resource:   authorization.Resource{Type: rt, ID: rid},
+		Resource:   model.Resource{Type: rt, ID: rid},
 	})
 	if err != nil {
 		t.Fatalf("Check(%s:%s, %s, %s:%s): %v", st, sid, permission, rt, rid, err)
@@ -907,7 +817,7 @@ func checkPrincipal(t *testing.T, svc *authorization.Service, st, sid, permissio
 	return res.Allowed
 }
 
-func allChecked(t *testing.T, svc *authorization.Service, ids []string) bool {
+func allChecked(t *testing.T, svc authorization.Components, ids []string) bool {
 	t.Helper()
 	for _, id := range ids {
 		if !check(t, svc, "u1", "view", "space", id) {
@@ -917,23 +827,23 @@ func allChecked(t *testing.T, svc *authorization.Service, ids []string) bool {
 	return true
 }
 
-func ownerCount(t *testing.T, svc *authorization.Service, resourceID string) int {
+func ownerCount(t *testing.T, svc authorization.Components, resourceID string) int {
 	t.Helper()
-	targets, err := svc.GetRelationTargets(context.Background(), "project", resourceID, "owner")
+	targets, err := svc.Relationships.GetRelationTargets(context.Background(), "project", resourceID, "owner")
 	if err != nil {
 		t.Fatalf("GetRelationTargets owner project:%s: %v", resourceID, err)
 	}
 	return len(targets)
 }
 
-func outcomeOf(r *authorization.Receipt) authorization.Outcome {
+func outcomeOf(r *mutations.Result) mutations.Outcome {
 	if r == nil {
 		return ""
 	}
 	return r.Outcome
 }
 
-func targetsString(targets []authorization.RelationTarget) string {
+func targetsString(targets []relationships.RelationTarget) string {
 	if len(targets) == 0 {
 		return "(none)"
 	}
@@ -967,4 +877,8 @@ func short(digest string) string {
 		return digest
 	}
 	return digest[:16] + "…"
+}
+
+func proofSystemContext() context.Context {
+	return audit2.WithSource(context.Background(), audit2.Source{System: "proof-setup"})
 }

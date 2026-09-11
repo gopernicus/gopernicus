@@ -2,28 +2,25 @@ package turso
 
 import (
 	"context"
-	"time"
 
 	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
-	"github.com/gopernicus/gopernicus/pockets/authorization/domain/role"
-	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/audit"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/roles"
+	"github.com/gopernicus/gopernicus/sdk/pkg/list"
 )
 
 // roleColumns is the iam_roles projection in a fixed order shared by the Assign
 // insert and the rolesBaseSQL listing (matching roleRow's db tags).
-const roleColumns = "subject_type, subject_id, role, resource_type, resource_id, created_at"
+const roleColumns = "subject_type, subject_id, role, resource_type, resource_id"
 
-// roleKeyExpr is the SQL keyset tiebreak: the 5-tuple joined by char(1).
-// iam_roles has no surrogate id — the 5-tuple is the natural key. The value is
-// DB-computed and echoed back by PKOf (never recomputed in Go), so the cursor PK
-// always matches the derived role_key column byte-for-byte; the separator choice
-// is backend-local and need not match the pgx sibling (which uses chr(1)).
-const roleKeyExpr = "subject_type || char(1) || subject_id || char(1) || role || char(1) || resource_type || char(1) || resource_id"
+// roleKeyExpr joins the natural five-field identity with the forbidden U+0001
+// separator. The computed key supplies both ordering and cursor continuation.
+const roleKeyExpr = "(subject_type || char(1) || subject_id || char(1) || role || char(1) || resource_type || char(1) || resource_id) COLLATE BINARY"
 
 // effectiveGrantKeyExpr is the effective listing's derived ordering/keyset key:
 // the (subject_type, subject_id, role) triple joined by char(1). It is DB-computed
 // and echoed back by PKOf so the cursor PK matches the column byte-for-byte.
-const effectiveGrantKeyExpr = "subject_type || char(1) || subject_id || char(1) || role"
+const effectiveGrantKeyExpr = "(subject_type || char(1) || subject_id || char(1) || role) COLLATE BINARY"
 
 // effectiveRoleRow is the db-tagged effective-grant listing projection ScanStruct
 // scans into. IsDirect/IsGlobal are the MAX(CASE …) provenance flags (1/0);
@@ -37,8 +34,8 @@ type effectiveRoleRow struct {
 	GrantKey    string `db:"grant_key"`
 }
 
-func (r effectiveRoleRow) toDomain() role.EffectiveGrant {
-	return role.EffectiveGrant{
+func (r effectiveRoleRow) toDomain() roles.EffectiveGrant {
+	return roles.EffectiveGrant{
 		SubjectType: r.SubjectType,
 		SubjectID:   r.SubjectID,
 		Role:        r.Role,
@@ -88,23 +85,21 @@ func rolesBaseSQL(innerWhere string) string {
 // RoleKey is the derived keyset tiebreak (see rolesBaseSQL) — scanned so PKOf can
 // echo it rather than recompute it in Go.
 type roleRow struct {
-	SubjectType  string       `db:"subject_type"`
-	SubjectID    string       `db:"subject_id"`
-	Role         string       `db:"role"`
-	ResourceType string       `db:"resource_type"`
-	ResourceID   string       `db:"resource_id"`
-	CreatedAt    tursodb.Time `db:"created_at"`
-	RoleKey      string       `db:"role_key"`
+	SubjectType  string `db:"subject_type"`
+	SubjectID    string `db:"subject_id"`
+	Role         string `db:"role"`
+	ResourceType string `db:"resource_type"`
+	ResourceID   string `db:"resource_id"`
+	RoleKey      string `db:"role_key"`
 }
 
-func (r roleRow) toDomain() role.Assignment {
-	return role.Assignment{
+func (r roleRow) toDomain() roles.Assignment {
+	return roles.Assignment{
 		SubjectType:  r.SubjectType,
 		SubjectID:    r.SubjectID,
 		Role:         r.Role,
 		ResourceType: r.ResourceType,
 		ResourceID:   r.ResourceID,
-		CreatedAt:    r.CreatedAt.Time,
 	}
 }
 
@@ -114,37 +109,43 @@ func (r roleRow) toDomain() role.Assignment {
 // assignment joins the same host transaction the relationship tuples beside it
 // do.
 type roleStore struct {
-	db *tursodb.DB
+	audit bool
+	db    *tursodb.DB
 }
 
-func newRoleStore(db *tursodb.DB) *roleStore {
-	return &roleStore{db: db}
+func newRoleStore(db *tursodb.DB, cfg config) *roleStore {
+	return &roleStore{db: db, audit: cfg.audit}
 }
 
-var _ role.Storer = (*roleStore)(nil)
+var _ roles.Storer = (*roleStore)(nil)
 
 // Assign inserts an assignment idempotently via the TARGETED ON CONFLICT DO
 // NOTHING on the 5-tuple index (never INSERT OR IGNORE, which would swallow a NOT
-// NULL breach too). A duplicate is a no-op that retains the original store-stamped
-// created_at.
-func (s *roleStore) Assign(ctx context.Context, a role.Assignment) error {
+// NULL breach too). A duplicate is a no-op.
+func (s *roleStore) Assign(ctx context.Context, a roles.Assignment) error {
+	if err := a.Validate(); err != nil {
+		return err
+	}
 	const q = `INSERT INTO iam_roles (` + roleColumns + `)
-VALUES (?, ?, ?, ?, ?, ?)
+VALUES (?, ?, ?, ?, ?)
 ON CONFLICT(subject_type, subject_id, role, resource_type, resource_id) DO NOTHING`
-	_, err := s.db.QuerierFrom(ctx).Exec(ctx, q,
-		a.SubjectType, a.SubjectID, a.Role, a.ResourceType, a.ResourceID,
-		tursodb.FormatTime(time.Now().UTC()),
-	)
-	return err
+	return s.write(ctx, func(tx *writeTx) error {
+		_, err := tx.roles(ctx, audit.ActionAdded, q,
+			a.SubjectType, a.SubjectID, a.Role, a.ResourceType, a.ResourceID,
+		)
+		return err
+	})
 }
 
 // Unassign removes an exact assignment (idempotent — zero rows deleted is nil).
 func (s *roleStore) Unassign(ctx context.Context, subjectType, subjectID, roleName, resourceType, resourceID string) error {
 	const q = `DELETE FROM iam_roles WHERE subject_type = ? AND subject_id = ? AND role = ? AND resource_type = ? AND resource_id = ?`
-	if _, err := tursodb.ExecAffecting(ctx, s.db.QuerierFrom(ctx), q, subjectType, subjectID, roleName, resourceType, resourceID); err != nil {
-		return err
-	}
-	return nil
+	return s.write(ctx, func(tx *writeTx) error {
+		if _, err := tx.roles(ctx, audit.ActionRemoved, q, subjectType, subjectID, roleName, resourceType, resourceID); err != nil {
+			return err
+		}
+		return nil
+	})
 }
 
 // HasExactRole reports whether an assignment exists at the EXACT scope. The
@@ -155,50 +156,50 @@ func (s *roleStore) HasExactRole(ctx context.Context, subjectType, subjectID, ro
 	return existsQuery(ctx, s.db.QuerierFrom(ctx), q, subjectType, subjectID, roleName, resourceType, resourceID)
 }
 
-// ListBySubject pages a subject's assignments (created_at DESC, role_key DESC).
-func (s *roleStore) ListBySubject(ctx context.Context, subjectType, subjectID string, req crud.ListRequest) (crud.Page[role.Assignment], error) {
+// ListBySubject pages a subject's assignments by role_key in byte order.
+func (s *roleStore) ListBySubject(ctx context.Context, subjectType, subjectID string, req list.Request) (list.Page[roles.Assignment], error) {
 	q := tursodb.ListQuery[roleRow]{
 		BaseSQL:      rolesBaseSQL(" WHERE subject_type = ? AND subject_id = ?"),
 		Args:         []any{subjectType, subjectID},
-		OrderFields:  role.OrderFields,
-		DefaultOrder: role.DefaultOrder,
+		OrderFields:  roles.OrderFields,
+		DefaultOrder: roles.DefaultOrder,
 		PK:           "role_key",
-		OrderValueOf: func(r roleRow, _ string) any { return r.CreatedAt.Time },
+		OrderValueOf: func(r roleRow, _ string) any { return r.RoleKey },
 		PKOf:         func(r roleRow) string { return r.RoleKey },
 	}
 	page, err := tursodb.List(ctx, s.db.QuerierFrom(ctx), q, req)
 	if err != nil {
-		return crud.Page[role.Assignment]{}, err
+		return list.Page[roles.Assignment]{}, err
 	}
-	return crud.MapPage(page, roleRow.toDomain), nil
+	return list.MapPage(page, roleRow.toDomain), nil
 }
 
 // ListByResource is the RAW direct-scope listing: it pages the assignments stored
 // exactly at (resourceType, resourceID) and never surfaces globally-granted
 // subjects. Use ListEffectiveByResource for the enumeration that agrees with the
 // service's HasRole fallback.
-func (s *roleStore) ListByResource(ctx context.Context, resourceType, resourceID string, req crud.ListRequest) (crud.Page[role.Assignment], error) {
+func (s *roleStore) ListByResource(ctx context.Context, resourceType, resourceID string, req list.Request) (list.Page[roles.Assignment], error) {
 	q := tursodb.ListQuery[roleRow]{
 		BaseSQL:      rolesBaseSQL(" WHERE resource_type = ? AND resource_id = ?"),
 		Args:         []any{resourceType, resourceID},
-		OrderFields:  role.OrderFields,
-		DefaultOrder: role.DefaultOrder,
+		OrderFields:  roles.OrderFields,
+		DefaultOrder: roles.DefaultOrder,
 		PK:           "role_key",
-		OrderValueOf: func(r roleRow, _ string) any { return r.CreatedAt.Time },
+		OrderValueOf: func(r roleRow, _ string) any { return r.RoleKey },
 		PKOf:         func(r roleRow) string { return r.RoleKey },
 	}
 	page, err := tursodb.List(ctx, s.db.QuerierFrom(ctx), q, req)
 	if err != nil {
-		return crud.Page[role.Assignment]{}, err
+		return list.Page[roles.Assignment]{}, err
 	}
-	return crud.MapPage(page, roleRow.toDomain), nil
+	return list.MapPage(page, roleRow.toDomain), nil
 }
 
 // ListEffectiveByResource pages the EFFECTIVE role grants on a resource: the union
 // of the direct scoped assignments with the global assignments a scoped HasRole
 // satisfies, de-duplicated by (subject, role) with provenance, ordered by the
 // derived grant_key ascending. A global grant is never rewritten as a scoped row.
-func (s *roleStore) ListEffectiveByResource(ctx context.Context, resourceType, resourceID string, req crud.ListRequest) (crud.Page[role.EffectiveGrant], error) {
+func (s *roleStore) ListEffectiveByResource(ctx context.Context, resourceType, resourceID string, req list.Request) (list.Page[roles.EffectiveGrant], error) {
 	scopedLiteral := "0"
 	if resourceType != "" || resourceID != "" {
 		scopedLiteral = "1"
@@ -206,17 +207,17 @@ func (s *roleStore) ListEffectiveByResource(ctx context.Context, resourceType, r
 	q := tursodb.ListQuery[effectiveRoleRow]{
 		BaseSQL:      effectiveRolesBaseSQL(scopedLiteral),
 		Args:         []any{resourceType, resourceID, resourceType, resourceID},
-		OrderFields:  role.EffectiveOrderFields,
-		DefaultOrder: role.DefaultEffectiveOrder,
+		OrderFields:  roles.EffectiveOrderFields,
+		DefaultOrder: roles.DefaultEffectiveOrder,
 		PK:           "grant_key",
 		OrderValueOf: func(r effectiveRoleRow, _ string) any { return r.GrantKey },
 		PKOf:         func(r effectiveRoleRow) string { return r.GrantKey },
 	}
 	page, err := tursodb.List(ctx, s.db.QuerierFrom(ctx), q, req)
 	if err != nil {
-		return crud.Page[role.EffectiveGrant]{}, err
+		return list.Page[roles.EffectiveGrant]{}, err
 	}
-	return crud.MapPage(page, effectiveRoleRow.toDomain), nil
+	return list.MapPage(page, effectiveRoleRow.toDomain), nil
 }
 
 // lookupResourceIDsBySubjectAndRolesSQL renders the SCOPED half of the roles
@@ -276,4 +277,8 @@ func (s *roleStore) LookupResourceIDsBySubjectAndRoles(ctx context.Context, subj
 		return nil, false, err
 	}
 	return ids, false, nil
+}
+
+func (s *roleStore) write(ctx context.Context, fn func(*writeTx) error) error {
+	return runWrite(ctx, s.db, config{audit: s.audit}, fn)
 }

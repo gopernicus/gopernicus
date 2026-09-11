@@ -10,10 +10,13 @@ import (
 
 	"github.com/gopernicus/gopernicus/examples/auth-cms/internal/authmem"
 	auth "github.com/gopernicus/gopernicus/pockets/authentication"
-	"github.com/gopernicus/gopernicus/sdk/capabilities/email"
+	authenticationlogic "github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication"
+	delivery "github.com/gopernicus/gopernicus/pockets/authentication/logic/delivery"
+	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/notify"
+	"github.com/gopernicus/gopernicus/sdk/capabilities/notify/email"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/ratelimiter"
-	"github.com/gopernicus/gopernicus/sdk/foundation/identity"
+	environment "github.com/gopernicus/gopernicus/sdk/pkg/environment"
 )
 
 // prodSender is a production-capable email transport double: it declares
@@ -22,8 +25,8 @@ import (
 type prodSender struct{}
 
 func (prodSender) Send(context.Context, email.Message) error { return nil }
-func (prodSender) Capabilities() email.Capabilities {
-	return email.Capabilities{TransportSecurity: email.TransportSecurityStartTLS, DevelopmentOnly: false}
+func (prodSender) Capabilities() notify.Capabilities {
+	return notify.Capabilities{TransportSecurity: notify.TransportSecurityStartTLS, DevelopmentOnly: false}
 }
 
 // prodNotifier is a production-capable phone Notifier double: it declares
@@ -31,8 +34,8 @@ func (prodSender) Capabilities() email.Capabilities {
 // the valid baseline.
 type prodNotifier struct{ kind string }
 
-func (n prodNotifier) Kind() string                                                 { return n.kind }
-func (prodNotifier) Notify(context.Context, identity.Address, notify.Message) error { return nil }
+func (n prodNotifier) Kind() string                             { return n.kind }
+func (prodNotifier) Send(context.Context, string, string) error { return nil }
 func (prodNotifier) Capabilities() notify.Capabilities {
 	return notify.Capabilities{TransportSecurity: notify.TransportSecurityTLS, DevelopmentOnly: false}
 }
@@ -46,9 +49,8 @@ func (durableLimiter) Allow(context.Context, string, ratelimiter.Limit) (ratelim
 	return ratelimiter.Result{Allowed: true}, nil
 }
 func (durableLimiter) Reset(context.Context, string) error { return nil }
-func (durableLimiter) Close() error                        { return nil }
-func (durableLimiter) RateLimiterDurability() auth.LimiterDurability {
-	return auth.LimiterDurability{InProcessOnly: false}
+func (durableLimiter) RateLimiterDurability() authenticationlogic.LimiterDurability {
+	return authenticationlogic.LimiterDurability{InProcessOnly: false}
 }
 
 // productionBaseline returns a production-VALID config + repositories: every v3
@@ -57,15 +59,17 @@ func (durableLimiter) RateLimiterDurability() auth.LimiterDurability {
 // acknowledged runtime, and the identifier keyer buildAuthConfig already wires). It
 // constructs cleanly in production (proven by TestProductionBaselineConstructs), so
 // each negative below isolates exactly one broken safeguard.
-func productionBaseline(t *testing.T) (auth.Config, auth.Repositories) {
+func productionBaseline(t *testing.T) (authenticationConfig, auth.Repositories) {
 	t.Helper()
 	cfg, err := buildAuthConfig(quietLog(), nil)
 	if err != nil {
 		t.Fatalf("buildAuthConfig: %v", err)
 	}
-	cfg.RuntimeMode = auth.RuntimeModeProduction
+	cfg.RuntimeMode = environment.ModeProduction
+	cfg.SessionCookie.Secure = true
+	cfg.OAuthCallbackBase = "https://auth.example.com"
 	cfg.Mailer = prodSender{}
-	cfg.Notifiers = []notify.Notifier{prodNotifier{kind: identity.KindPhone}}
+	cfg.BodySenders = map[string]delivery.BodySender{sdk.AddressKindPhone: prodNotifier{kind: sdk.AddressKindPhone}}
 	cfg.RateLimiter = durableLimiter{}
 	cfg.PublicAuthBaseURL = "https://auth.example.com/auth/magic"
 	// Production requires an HTTPS reset landing route (CHAU-5.1); the host's own
@@ -85,7 +89,7 @@ func productionBaseline(t *testing.T) (auth.Config, auth.Repositories) {
 // matrix.
 func TestProductionBaselineConstructs(t *testing.T) {
 	cfg, repos := productionBaseline(t)
-	if _, err := auth.NewService(repos, cfg); err != nil {
+	if _, err := auth.New(repos, cfg.TokenSigner, cfg.RuntimeMode, cfg.DeliveryMode, cfg.options()...); err != nil {
 		t.Fatalf("production-valid baseline should construct, got: %v", err)
 	}
 }
@@ -98,16 +102,16 @@ func TestProductionBaselineConstructs(t *testing.T) {
 func TestProductionNegatives(t *testing.T) {
 	cases := []struct {
 		name   string
-		mutate func(cfg *auth.Config, repos *auth.Repositories)
+		mutate func(cfg *authenticationConfig, repos *auth.Repositories)
 		want   error
 	}{
 		{
 			// console: the host's dev email + phone transports leak OTPs/magic links to
 			// logs, so production rejects them.
 			name: "console_delivery_transports",
-			mutate: func(cfg *auth.Config, _ *auth.Repositories) {
+			mutate: func(cfg *authenticationConfig, _ *auth.Repositories) {
 				cfg.Mailer = email.NewConsole(quietLog())
-				cfg.Notifiers = []notify.Notifier{notify.NewConsole(identity.KindPhone, quietLog())}
+				cfg.BodySenders = map[string]delivery.BodySender{sdk.AddressKindPhone: notify.NewConsole(quietLog())}
 			},
 			want: auth.ErrInsecureDeliveryTransport,
 		},
@@ -117,7 +121,7 @@ func TestProductionNegatives(t *testing.T) {
 			// Views/public-URL combination — the bundled magic-link page is wired, so
 			// its base URL must be HTTPS in production.
 			name: "insecure_http_public_auth_base_url",
-			mutate: func(cfg *auth.Config, _ *auth.Repositories) {
+			mutate: func(cfg *authenticationConfig, _ *auth.Repositories) {
 				cfg.PublicAuthBaseURL = "http://auth.example.com/auth/magic"
 			},
 			want: auth.ErrPublicAuthBaseURLInsecure,
@@ -126,7 +130,7 @@ func TestProductionNegatives(t *testing.T) {
 			// memory limiter: a nil RateLimiter defaults to the in-process
 			// ratelimiter.Memory, which enforces only a per-process budget.
 			name: "in_process_memory_rate_limiter",
-			mutate: func(cfg *auth.Config, _ *auth.Repositories) {
+			mutate: func(cfg *authenticationConfig, _ *auth.Repositories) {
 				cfg.RateLimiter = nil
 			},
 			want: auth.ErrNonDurableRateLimiter,
@@ -135,7 +139,7 @@ func TestProductionNegatives(t *testing.T) {
 			// keyer: PII-free rate-limit/idempotency keys need the shared HMAC keyer in
 			// production so one identifier maps to one bucket across instances.
 			name: "missing_identifier_keyer",
-			mutate: func(cfg *auth.Config, _ *auth.Repositories) {
+			mutate: func(cfg *authenticationConfig, _ *auth.Repositories) {
 				cfg.IdentifierKeyer = nil
 			},
 			want: auth.ErrIdentifierKeyerRequired,
@@ -144,7 +148,7 @@ func TestProductionNegatives(t *testing.T) {
 			// runtime: the queue is the only send path, so production requires the host
 			// to affirm it runs the generic-jobs delivery runtime (jobs.FencedRuntime).
 			name: "unacknowledged_delivery_runtime",
-			mutate: func(cfg *auth.Config, _ *auth.Repositories) {
+			mutate: func(cfg *authenticationConfig, _ *auth.Repositories) {
 				cfg.DeliveryJobsAcknowledged = false
 			},
 			want: auth.ErrDeliveryJobsUnacknowledged,
@@ -155,7 +159,7 @@ func TestProductionNegatives(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg, repos := productionBaseline(t)
 			tc.mutate(&cfg, &repos)
-			_, err := auth.NewService(repos, cfg)
+			_, err := auth.New(repos, cfg.TokenSigner, cfg.RuntimeMode, cfg.DeliveryMode, cfg.options()...)
 			if !errors.Is(err, tc.want) {
 				t.Fatalf("production %s: got err %v, want %v", tc.name, err, tc.want)
 			}
@@ -179,12 +183,12 @@ func TestDevelopmentConsoleTransportWarns(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildAuthConfig: %v", err)
 	}
-	if cfg.RuntimeMode != auth.RuntimeModeDevelopment {
+	if cfg.RuntimeMode != environment.ModeDevelopment {
 		t.Fatalf("host default RuntimeMode = %q, want development", cfg.RuntimeMode)
 	}
 	// run() wires the generic-jobs dispatcher; reproduce it so jobs-mode construction succeeds.
 	cfg.DeliveryDispatcher = jobsDispatcher(t)
-	if _, err := auth.NewService(authmem.New().Repositories(), cfg); err != nil {
+	if _, err := auth.New(authmem.New().Repositories(), cfg.TokenSigner, cfg.RuntimeMode, cfg.DeliveryMode, cfg.options()...); err != nil {
 		t.Fatalf("development construction should succeed, got: %v", err)
 	}
 	if !rec.hasWarnContaining("development-only delivery transport") {

@@ -4,8 +4,8 @@ import (
 	"context"
 
 	firestoredb "github.com/gopernicus/gopernicus/integrations/datastores/firestore"
-	"github.com/gopernicus/gopernicus/pockets/authentication/domain/serviceaccount"
-	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/serviceaccount"
+	"github.com/gopernicus/gopernicus/sdk/pkg/list"
 )
 
 var _ serviceaccount.ServiceAccountRepository = (*serviceAccountStore)(nil)
@@ -37,11 +37,11 @@ func (s *serviceAccountStore) Get(ctx context.Context, id string) (serviceaccoun
 }
 
 // List pages the directory, ordered (created_at DESC, id DESC) by default.
-func (s *serviceAccountStore) List(ctx context.Context, req crud.ListRequest) (crud.Page[serviceaccount.ServiceAccount], error) {
+func (s *serviceAccountStore) List(ctx context.Context, req list.Request) (list.Page[serviceaccount.ServiceAccount], error) {
 	if err := refuseAmbient(ctx); err != nil {
-		return crud.Page[serviceaccount.ServiceAccount]{}, err
+		return list.Page[serviceaccount.ServiceAccount]{}, err
 	}
-	return crud.Page[serviceaccount.ServiceAccount]{}, errNotImplemented
+	return list.Page[serviceaccount.ServiceAccount]{}, errNotImplemented
 }
 
 // Update persists changes; unknown id → sdk.ErrNotFound.

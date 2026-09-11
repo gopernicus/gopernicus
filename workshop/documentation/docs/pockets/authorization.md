@@ -8,8 +8,7 @@ description: Relationship-based authorization, roles, bounded evaluation, and gu
 `pockets/authorization` is the flagship IAM pocket. It offers independently wireable authorization kinds:
 
 - **relationships**: schema-driven ReBAC with direct relations, exact usersets, group expansion, and through traversal;
-- **roles**: opaque role assignments with global and resource scopes;
-- **policy**: a named future seam, not shipped.
+- **roles**: opaque role assignments, either global or attached to a resource, with optional permission rules supplied by the host.
 
 ## Choose a posture first
 
@@ -26,21 +25,82 @@ Other pockets accept check-shaped collaborators. They do not require the flagshi
 ## Construction returns components
 
 ```go
-components, err := authorization.NewService(repos, authorization.Config{
-    Model: model,
-})
+components, err := authorization.New(repos,
+    authorization.WithRelationshipModel(relationshipModel),
+    authorization.WithRoleModel(roleModel),
+)
 if err != nil {
     return err
 }
 
-if err := components.Service.Register(mount); err != nil {
+if err := components.Register(mount); err != nil {
     return err
 }
 ```
 
-The `Components` bundle separates surfaces with different trust assumptions: the evaluation service, baseline relationship writer, optional guarded mutation service, and trusted system mutator.
+The root assembles public components with distinct responsibilities:
 
-`Register` currently mounts no routes and starts nothing. `/authorization/*` is reserved for a future admin surface.
+| Component | Public owner | Purpose |
+|---|---|---|
+| `Decisions` | `logic/decisions.Service` | check, explain, lookup and filtered list operations |
+| `Relationships` | `logic/relationships.Service` | relationship reads, schema and ReBAC evaluation |
+| `Roles` | `logic/roles.Service` | role assignment reads |
+| `Mutations` | `logic/mutations.Service` | atomic actor-facing guarded changes |
+| `HTTP` | `inbound/http.Adapter` | permission middleware and optional role administration routes |
+| `RelationshipWriter` / `SystemMutator` | separate writer types | explicitly held trusted changes |
+
+Only configured components are present. Shared principal, check and role-model
+vocabulary lives in `logic/model`; persistence ports live with their owners.
+Hosts may construct these public services and adapters directly. Their state
+and implementation helpers remain private.
+
+Bundled role-administration routes mount only with a configured host gate and
+guarded mutation service. `Register` starts no background work. A host can skip
+bundled routes and use the public middleware on its own routes.
+
+## Constructor options
+
+Repositories remain explicit in `New(repos, opts ...Option)`. Models and budgets
+are coherent values: `WithRelationshipModel(schema)`, `WithRoleModel(roleModel)`
+and `WithLimits(model.EvaluationLimits{...})`. Use `WithGuard` for actor policy and
+`WithLogger` for diagnostics. `WithRoleRoutes(authorizationhttp.RoleRoutes{...})`
+groups the optional gate, assignment pre-check and listing strategy.
+
+Every option replaces its entire setting or group. `WithRoleRoutes(RoleRoutes{})`
+clears a previous gate and assignment policy, leaving handlers disabled. An
+assignment policy without a gate fails construction; an invalid list strategy
+fails even without a gate. Nil options return `sdk.ErrInvalidInput` errors.
+Model options snapshot source maps and slices when created; constructed services
+compile immutable models. Host services, callbacks and loggers remain borrowed.
+
+Focused constructors use the same convention:
+
+```go
+checks, err := decisions.NewService(
+    decisions.Readers{Relationships: relationshipService, Roles: roleService},
+    decisions.WithRoleModel(roleModel),
+)
+if err != nil { return err }
+
+writes, err := mutations.NewService(
+    mutationRepository,
+    mutations.Services{Relationships: relationshipService, Roles: roleService},
+    mutations.WithRoleModel(checks.CompiledRoleModel()),
+    mutations.WithGuard(hostGuard),
+)
+if err != nil { return err }
+
+adapter, err := authorizationhttp.New(
+    authorizationhttp.Services{Decisions: checks, Roles: roleService, Mutations: writes.Service},
+    authorizationhttp.WithRoleRoutes(authorizationhttp.RoleRoutes{Gate: hostGate}),
+)
+if err != nil { return err }
+```
+
+Services with relationships inherit that service's limits when `WithLimits` is
+omitted or entirely zero. Explicit limits must resolve to the same budget.
+Only supply initialized interface-valued services; typed-nil dependencies fail
+construction. The root assembly handles optional component wiring automatically.
 
 ## Relationship model
 
@@ -56,31 +116,33 @@ If an evaluation limit is reached, the result is indeterminate—not a denial th
 
 | Field | Meaning |
 |---|---|
-| `Repositories.Relationships` | relationship kind off when nil; requires `Config.Model` when present |
+| `Repositories.Relationships` | relationship kind off when nil; requires `WithRelationshipModel` when present |
 | `Repositories.Roles` | role kind off when nil |
 | both kinds nil | construction error |
 | `Repositories.Mutations` | optional high-integrity mutation path; required with guard/system mutation |
-| `Config.Guard` | nil disables actor-facing guarded mutations; never default-allow |
-| `Config.Audit` | optional best-effort audit; valid only with a guard |
-| `Config.Limits` | zero fields choose safe defaults; negative values error |
+| `WithGuard` | nil disables actor-facing guarded mutations; never default-allow |
+| Store `WithAudit()` | optional atomic change history for raw, trusted and guarded writes; host owns access and retention |
+| `WithLimits` | zero fields choose safe defaults; negative values error |
 
 ## Middleware gate
 
-For relationship-backed hosts, `Service.RequirePermission` creates SDK web middleware:
+The HTTP adapter produces SDK web middleware for either model-bearing kind:
 
 ```go
 router.GET(
     "/projects/{id}",
     showProject,
-    authSvc.RequireAccessToken(),
-    authorizationSvc.RequirePermission(
-        "view",
-        authorization.FixedResource("project", "main"),
-    ),
+    authenticationComponents.HTTP.RequireAccessToken(),
+    components.HTTP.RequirePermissionOn("project", "view", "id"),
 )
 ```
 
-Use a request-based resource resolver for path-dependent IDs. Constructing this middleware without the relationship kind is a boot-time panic: registration is the correct place to reveal contradictory wiring.
+`RequirePermissionOn` resolves the named path parameter and validates the
+resource/permission pair at route registration. `RequirePermissionFixed` covers
+fixed resources; `RequirePermission` accepts a custom resolver. A roles-only host
+without a role permission model cannot build permission gates. The public
+`authorizationhttp.New` constructor accepts a narrow decision-service contract
+for hosts constructing adapters independently.
 
 No principal returns 401, a false decision returns 403, evaluation-limit exhaustion returns 503, and resolver/infrastructure errors fail closed.
 
@@ -89,12 +151,18 @@ No principal returns 401, a false decision returns 403, evaluation-limit exhaust
 The pocket exposes two relationship write postures:
 
 - a baseline desired-state `RelationshipWriter` for trusted host workflows;
-- an optional guarded/idempotent mutation lifecycle with mutation IDs, dependency revisions, receipts, last-owner/guardian protection, and atomic multi-write behavior.
+- optional guarded mutations with current-model validation, guardian protection and atomic writes; store-level `WithAudit()` records actual committed additions/removals with actor or system attribution.
 
 Use guarded mutations for actor-facing access changes and sensitive administrative workflows. Use the trusted system surface only for bootstrap, migrations, or workflows whose authorization was already proven elsewhere.
 
 ## Stores and conformance
 
-The public `memstore`, pgx store, and Turso store all run the same conformance suite. It covers adversarial graph shapes, exact usersets, cycles, bounded evaluation, role scoping, mutation replay, concurrency, revision conflicts, last-owner invariants, and check/lookup parity.
+The public `stores/memory`, pgx, Turso and Firestore stores all run the same conformance suite. It covers adversarial graph shapes, exact usersets, cycles, bounded evaluation, role scoping, state convergence, raw/guarded concurrency, atomic audit history, last-owner invariants, and check/lookup parity.
 
 Store constructors probe required tables at boot. Export the authorization migration source into the host's ledger and apply it before constructing repositories.
+
+Audit readers are exposed as `Repositories.Audit`. Trusted/raw calls use
+`audit.WithSource(ctx, audit.Source{System: "bootstrap"})` from `logic/audit`
+when recording is enabled. Guarded calls attribute changes to their actor. No-op,
+denied and rolled-back changes add no history. SQL migration `0007` removes the
+receipt/revision tables and adds `iam_audit`; see the repository’s `AUDIT.md` entry AUDIT-026.

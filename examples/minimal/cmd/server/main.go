@@ -15,18 +15,21 @@ import (
 	"syscall"
 	"time"
 
+	cataloghttp "github.com/gopernicus/gopernicus/examples/minimal/internal/inbound/domains/catalog"
+	"github.com/gopernicus/gopernicus/examples/minimal/internal/logic/domains/catalog"
 	"github.com/gopernicus/gopernicus/examples/minimal/internal/memstore"
+	catalogstore "github.com/gopernicus/gopernicus/examples/minimal/internal/outbound/domains/catalog"
+	"github.com/gopernicus/gopernicus/pockets"
 	"github.com/gopernicus/gopernicus/pockets/cms"
 	"github.com/gopernicus/gopernicus/pockets/cms/domain/content"
 	"github.com/gopernicus/gopernicus/pockets/cms/domain/menus"
 	cmsgoth "github.com/gopernicus/gopernicus/pockets/cms/views/goth"
+	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/cacher"
-	"github.com/gopernicus/gopernicus/sdk/capabilities/email"
-	"github.com/gopernicus/gopernicus/sdk/pocket"
-	"github.com/gopernicus/gopernicus/sdk/foundation/cryptids"
-	"github.com/gopernicus/gopernicus/sdk/foundation/environment"
-	"github.com/gopernicus/gopernicus/sdk/foundation/logging"
-	"github.com/gopernicus/gopernicus/sdk/foundation/web"
+	"github.com/gopernicus/gopernicus/sdk/capabilities/notify/email"
+	"github.com/gopernicus/gopernicus/sdk/pkg/environment"
+	"github.com/gopernicus/gopernicus/sdk/pkg/logging"
+	"github.com/gopernicus/gopernicus/sdk/pkg/web"
 	uigoth "github.com/gopernicus/gopernicus/ui/goth"
 	uigothassets "github.com/gopernicus/gopernicus/ui/goth/assets"
 )
@@ -37,27 +40,29 @@ import (
 const gothAssetBasePath = "/assets/goth"
 
 func main() {
-	_ = environment.LoadEnv()
+	// A missing .env is allowed; malformed configuration must stop startup.
+	if err := environment.LoadEnv(); err != nil {
+		slog.Error("load environment", "error", err)
+		os.Exit(1)
+	}
+
+	logOpts := logging.Options{Format: "text"}
+	if err := environment.ParseEnvTags("", &logOpts); err != nil {
+		slog.Error("configure logging", "error", err)
+		os.Exit(1)
+	}
+	log := logging.New(logOpts)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	if err := run(ctx); err != nil {
-		slog.Error("server exited with error", "error", err)
+	if err := run(ctx, log); err != nil {
+		log.Error("server exited with error", "error", err)
 		os.Exit(1)
 	}
 }
 
-func run(ctx context.Context) error {
-	// Config comes from the environment through the sdk's struct tags: the
-	// literal pre-seeds this host's own defaults, the environment wins over
-	// them, and an empty value (KEY=) keeps what is already set.
-	logOpts := logging.Options{Format: "text"}
-	if err := environment.ParseEnvTags("", &logOpts); err != nil {
-		return err
-	}
-	log := logging.New(logOpts)
-
+func run(ctx context.Context, log *slog.Logger) error {
 	// The store is in-memory: no driver, no migrations, no datastore module.
 	store := memstore.New()
 	repos := store.Repositories()
@@ -66,15 +71,15 @@ func run(ctx context.Context) error {
 	}
 
 	// Host-owned router + middleware. The pocket mounts its routes onto this.
-	router := web.NewWebHandler(web.WithLogging(log))
+	router := web.NewWebHandler()
 	router.Use(web.RequestID(), web.Logger(log), web.Panics(log))
 
-	mount := pocket.Mount{Router: router, Logger: log}
+	mount := pockets.Mount{Router: router, Logger: log}
 
 	// The ui/goth presentation bundle backs the CMS views; the host serves the
 	// kit's fingerprinted assets (the CMS pages' stylesheet) under the path the
 	// bundle names. The kit owns no route, so the host mounts it.
-	bundle, err := uigoth.New(uigoth.Config{AssetBasePath: gothAssetBasePath})
+	bundle, err := uigoth.New(uigoth.WithAssetBasePath(gothAssetBasePath))
 	if err != nil {
 		return err
 	}
@@ -85,8 +90,16 @@ func run(ctx context.Context) error {
 	uigothStatic := web.NewStaticFileServer(uigothassets.FS, web.WithAssetPrefix("dist/"))
 	uigothStatic.AddRoutes(router, gothAssetBasePath)
 
+	// The host chooses a public data projection with 30-second freshness, its
+	// own namespace and an error hook. Swap this store for cacher.Noop{} to
+	// disable data caching while keeping the catalog route and source working.
+	catalogCache := cacher.New(cacher.NewMemory(cacher.WithMaxEntries(100)), cacher.WithNamespace("minimal-catalog:v1"), cacher.WithOnError(func(ctx context.Context, operation string, err error) {
+		log.WarnContext(ctx, "catalog cache failed", "operation", operation, "error", err)
+	}))
+	cataloghttp.Mount(router, catalog.New(catalogstore.NewCMS(repos.Entries), catalogCache, 30*time.Second))
+
 	if err := cms.Register(mount, repos, cms.Config{
-		Views:     cmsViews,                                 // the ui/goth-backed bundled default
+		Views:     cmsViews,                                // the ui/goth-backed bundled default
 		Types:     []content.ContentType{productType()},    // host-registered custom type (zero migration)
 		Templates: []cms.TemplateBinding{productBinding()}, // its dev-authored renderer
 		Cache:     cacher.NewMemory(),
@@ -121,7 +134,7 @@ func healthzHandler() http.HandlerFunc {
 // seed populates a little content so the public site renders something.
 // ids seeds demo content with the default entity-ID strategy, matching the
 // zero-value cms.Config.IDs the host wires.
-var ids = cryptids.IDGenerator{}
+var ids = sdk.IDGenerator{}
 
 func seed(ctx context.Context, repos cms.Repositories) error {
 	now := time.Now().UTC()

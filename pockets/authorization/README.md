@@ -1,1764 +1,332 @@
-# pockets/authorization — the IAM domain: independently wireable kinds
+# Authorization
 
-A pluggable, datastore-free authorization pocket: an IAM domain offering
-multiple KINDS of authorization — **relationships** (a hardened ReBAC engine:
-schema-driven permission checks, exact-userset group expansion,
-through-traversal) and **roles** (opaque-string role assignments, scoped or
-global, with an optional permission model) — plus a named, deferred **policy**
-seam. Both models feed ONE decision surface, dispatched by pair ownership. ReBAC is one kind, not the
-pocket's identity. This is the **v3 correctness kernel**: exact userset
-semantics, an immutable compiled schema, bounded/cancellation-aware evaluation,
-and a repository-atomic, guarded, idempotent mutation lifecycle. Design of
-record: `.claude/plans/roadmap/auth-v2-pocket-design.md` (as amended by the
-2026-07-08 multi-kind owner direction), executed via `.claude/plans/authorization-v1/`
-then hardened via `.claude/plans/authorizationv3/`.
+Authorization provides opt-in relationship and role services. A host can use
+relationship permissions, opaque role assignments, modeled role permissions, or
+both permission models. Hosts own the policy, repositories and HTTP middleware.
+The pocket provides no default allow policy and performs no startup migrations.
 
-**A host can wire this pocket safely from this README alone** — it does not
-need to read `internal/` code or the plan. If a claim here disagrees with the
-code, the code wins; report the mismatch.
+## Public packages
 
-## The three postures — decide this first (§2.1)
+| Package | Owns |
+| --- | --- |
+| `authorization` | `New`, typed `Option` values, `Repositories`, named `Components`, optional mounting |
+| `logic/relationships` | Tuple/subject types, schema DSL/compiler, store ports, ReBAC/read `Service`, trusted `RelationshipWriter` |
+| `logic/roles` | Assignment types, store ports, role read `Service`, separately constructed trusted raw `Writer` |
+| `logic/decisions` | Permission `Service` across models, complete-ID/paged-ID helpers and `FilterPage` |
+| `logic/mutations` | Atomic commands/ports, guarded `Service`, `MutationGuard`, `DecisionView`, guardian policy, trusted `SystemMutator` |
+| `logic/model` | Principals, resources, checks/results, explanations, budgets, immutable role permission models |
+| `logic/audit` | Committed audit records, attribution and reader port |
+| `inbound/http` (`authorizationhttp`) | Validated `Adapter`, permission middleware, optional role handlers |
+| `stores/memory` | In-memory reference stores |
+| `stores/storetest` | Shared store conformance suites |
 
-Authorization in gopernicus is **supported, never required**. All three
-postures are first-class; nothing else in this README matters until a
-host knows its row:
+`stores/pgx`, `stores/turso` and `stores/firestore` are separate adapter modules.
+The core imports no store technology. Public services own their contracts and
+behavior; the root composes them without a parallel forwarding service.
+`internal/decisioncursor` contains shared cursor encoding mechanics only.
 
-| posture | what the host does | modules pulled | migrations |
-|---|---|---|---|
-| **1 — none** | No authorization checks. Consumer seams stay nil (deny-by-absence closes the gated surfaces). | none | none |
-| **2 — host-authored** (the middle posture) | Satisfies any Check-shaped seam (`events.Config.Authorize`, `auth.Config.Granter`, its own gates) with a **plain closure over its own data**. | none — no IAM module in the graph | none |
-| **3 — flagship** | Mounts `pockets/authorization` with any combination of its kinds wired. | this module (+ one `stores/*` module in production; `memstore` for zero-infra hosts) | source `"authorization"`, wholesale |
-
-**Consumer seams are Check-only (AV2).** The seams other pockets expose
-(`func(ctx, principal, resourceType, resourceID) (bool, error)` and
-kin) accept ANY implementation — that is what makes posture 2 real.
-Everything on `Service` beyond boolean checks (enumeration, the guarded
-mutation lifecycle, role listings, the model DSL) is **flagship-specific API,
-never a cross-pocket seam**. Graduation trigger (recorded, not cashed): the
-day two pockets need the identical authorize vocabulary, an `sdk` port is
-designed; until then there is deliberately no `sdk/authorization` — and the
-ARCHITECTURE.md protocol table records authorization's check/decision
-vocabulary as *deferred* from sdk graduation (fails criterion 2), even after
-v3 settled its semantics.
-
-Living/recorded artifacts, one per posture: `examples/minimal` (wires
-nothing — posture 1); the middle-posture ownership-closure artifact — posture
-2; the `examples/auth-cms` HEAD host — posture 3, both relationship write paths:
-ordinary member invitations use `RelationshipWriter`, while guarded actor
-mutations and sensitive invitation tests use the v3 lifecycle.
-
-## The kinds
-
-| kind | expresses | `Repositories` field | table | nil semantics |
-|---|---|---|---|---|
-| **relationships** | ReBAC tuples + a schema: who relates to what, and which permissions those relations grant (exact-userset group expansion, `Through` traversal; `Check` is pure schema evaluation — platform-admin/self-access are host recipes) | `.Relationships`; optional `.Mutations` only for guarded writes | `iam_relationships` | nil ⇒ kind OFF structurally; every read method returns `ErrRelationshipsNotConfigured` |
-| **roles** | opaque-string role grants — `(subject, role)` pairs, resource-scoped or global — plus an OPTIONAL `Config.RoleModel` (per resource type: the roles that exist and the permissions they grant). With a model the kind ANSWERS the decision surface for the pairs the model declares; without one it stays lookup-only, exactly as before | `.Roles` (+ `.Mutations` for writes) | `iam_roles` | nil ⇒ kind OFF; every method returns `ErrRolesNotConfigured` |
-| **policy** (deferred) | attribute/condition-shaped rules | (future) `.Policies` | (future) `iam_policies` | a designed, named seam — see "The policy seam" below |
-
-**The decision surface — ONE facade, shared by the model-bearing kinds.**
-`Check`, `CheckExplain`, `CheckBatch`, `FilterAuthorized`, `LookupResources`,
-`LookupResourcesIn` and the four gates (`RequirePermission*` plus
-`RequireAnyPermission`) are not a per-kind family: each
-`(resource type, permission)` pair is answered by the model that DECLARES it —
-the relationship `Schema` or the `RoleModel`, never both (`ErrModelConflict`
-forbids the overlap at construction). A pair neither model declares denies with
-`"no rules defined"`. On a host where NO kind bears a model (a roles-only wiring
-with no `RoleModel`), all six methods fail closed with `ErrNoDecisionKind` — a
-server-side wiring fault that answers HTTP 500, not a deny — and the gates panic
-at mount.
-
-**Relationship-kind `Service` methods.** Reads: `ValidateRelation(s)`,
-`GetSchema`, `SchemaDigest`, `GetPermissionsForRelation`,
-`GetRelationTargets`, `ListRelationshipsBySubject`/`ByResource`. Guarded
-actor-facing writes (require `Config.Guard` + `Repositories.Mutations`):
-`GrantRelationship`, `RevokeRelationship`, `ReplaceRelationship`,
-`PurgeResourceAuthorization`.
-
-**Roles-kind `Service` methods.** Reads: `HasRole`,
-`ListRoleAssignmentsBySubject`, `ListRoleAssignmentsByResource` (raw),
-`ListEffectiveRoleGrantsByResource` (effective). Guarded actor-facing writes:
-`AssignRole`, `UnassignRole`. These stay OPAQUE whether or not a model is
-configured; the model adds the decision half (and, at assign time only, the
-`ErrInvalidRoleModel` typo gate — see "The role model").
-
-**Baseline writes are held apart from `Service`.** `Components.RelationshipWriter`
-exposes schema-validated `CreateRelationships`, exact/idempotent
-`DeleteRelationship`, idempotent `DeleteResourceRelationships`, and atomic
-`SetRelationTargets`. This is the normal trusted application-side capability,
-not an unsafe or legacy API. Keeping it out of `Service` means a composition root
-must place it deliberately; `Register` still mounts no HTTP routes. Raw role
-assignment remains on the guarded mutation path.
-
-Rules of the kinds:
-
-- **Independently wireable.** A host wires either kind, both, or a
-  roles-only bundle with no model. Zero kinds is a loud
-  `ErrNoKindConfigured` at construction.
-- **Port-optional, schema-wholesale** (the §2.1 bounding rule applied
-  intra-pocket): an adopting host scaffolds ALL `iam_*` tables
-  inert-but-present regardless of which kinds it wires. **A roles-only
-  host still applies the FULL `"authorization"` migration source** (all four
-  files, `iam_relationships` included), and both store boot probes expect all
-  four tables. Source-level schema optionality is the pocket boundary's job,
-  never a kind's.
-- **One decision surface, DISPATCHED — never merged.** One decision surface
-  dispatches each `(resource type, permission)` pair to the model that declares
-  it; cross-kind union and universal-role bypass are not built (2026-08-26:
-  gps-360-go hand-wrote the whole roles decision half and auth-cms splits one
-  type across kinds by permission — demand for a roles engine and one surface,
-  not for merging kinds). A pair declared by BOTH models is `ErrModelConflict`
-  at construction, which is what keeps the surface a dispatch. Any policy that
-  genuinely spans kinds — a universal admin bypass, a union of two answers —
-  remains the host's own closure around the surface.
-- **Terminology:** a KIND is a nil-safe port family WITHIN this one
-  pocket module — never a module, and unrelated to ARCHITECTURE.md's
-  R6 "Kinds of module" taxonomy vocabulary.
-
-## Exact userset semantics — the v3 correctness core (member vs admin)
-
-A stored relationship subject is an exact `SubjectRef{Type, ID, Relation}`. An
-empty `Relation` names a **concrete** subject (`user:u1`, or the group object
-`group:eng` itself); a non-empty `Relation` names the exact **userset**
-`Type:ID#Relation` (`group:eng#member`, `group:eng#admin`). These are distinct
-in validation, storage, direct checks, batch checks, and lookup:
-
-- `group:eng`, `group:eng#member`, and `group:eng#admin` are **three different
-  subjects** and never compare equal. A grant to `group:eng#admin` authorizes
-  only the group's admins — it does **not** authorize an ordinary
-  `group:eng#member`.
-- A concrete `group:eng` grant (empty relation) names the group **object**; it
-  does not reach the group's members. Member reach requires a userset grant
-  (`group:eng#member`) or a `Through` navigation the schema declares.
-- Nested userset membership traverses where the schema allows it (a userset may
-  itself contain another exact userset). v3 defines **no** userset rewrite
-  operators (union/intersection/exclusion, computed/tuple-to-userset) and **no**
-  userset-valued decision request.
-
-This is the single most consequential v1→v3 change: v1 hard-coded
-`relation = 'member'` and ignored the stored `subject_relation`, so
-`group:eng#admin` behaved like `#member` and a concrete `group:eng` reached
-members. v3 evaluates the exact stored relation across memory, pgx, and turso.
-See "UPGRADE NOTE" for the access-fate assessment a live adopter runs.
-
-**Decision callers are concrete principals only.** `Check`, `CheckBatch`,
-`FilterAuthorized`, and `LookupResources` take a `PrincipalRef{Type, ID}` — a
-concrete caller. There is **no** field on a decision request that can carry a
-userset relation: supplying a userset at a decision boundary is structurally
-impossible, never silently ignored. `PrincipalRef` and `SubjectRef` are
-intentionally different types; `authorization.PrincipalFrom(identity.Principal)`
-maps a resolved platform principal onto a decision request in one call.
-
-### Self-referential hierarchies (relationships)
-
-A self-referential `Through` expresses a parent tree in schema:
-`space.view = AnyOf(Direct("viewer"), Through("parent","view"))` (relation
-`parent` targeting `space` itself) flows `view` access down every descendant
-of a granted node. `NewService` accepts this shape; genuinely non-terminating
-shapes — mutual cross-type cycles (`a.x -> b.x -> a.x`), cross-permission
-self-type chains (`space.view -> space.admin -> space.view`), and unsatisfiable
-self-only rules (a permission whose every `AnyOf` check is a self-`Through`) —
-stay rejected loudly at construction.
-
-**Check/Lookup parity (D1(c) closed, AZ3-1.4).** `Check` walks the parent chain
-hop-by-hop, so it honors a node reachable through ANY grant. `LookupResources`
-matches it exactly: its self-referential branch seeds the descendant walk from
-EVERY root the permission grants — direct grants AND roots derived through a
-non-self `Through` (e.g. `Through("org","view")`) — so a grandchild `Check`
-allows is enumerated too. The `storetest` bidirectional oracle proves both
-directions (every `Check`-allow appears in `LookupResources`; every looked-up ID
-passes `Check`) across every dialect. `LookupResources` output is sorted with
-each ID exactly once, and limit exhaustion is `ErrEvaluationLimit`, never a
-partial list.
-
-## The immutable compiled schema — digest and validation failures
-
-The model is **registered data, zero migrations** (relationship kind only): a
-host declares its schema in `main` with `NewSchema`/`ResourceSchema` — resource
-types, relations with `AllowedSubjects`, permissions built from
-`Direct`/`Through`/`AnyOf` — and changing it is a redeploy, not a migration.
-
-`NewService` **compiles the schema once** and holds an immutable projection:
-
-- The compiler deep-copies the caller's source maps/slices, so a host mutating
-  its schema map after construction cannot alter a live decision or race the
-  engine. `GetSchema()` returns a `SchemaSnapshot` (a deep, read-only copy
-  sharing no memory with the runtime policy); the internal compiled schema is
-  never returned.
-- `SchemaDigest()` is a stable SHA-256 over a versioned canonical encoding
-  (`MutationEncodingVersion` has the mutation analogue; the schema encoding
-  version is `gopernicus.authorization.schema/1`). Equivalent schemas — the same
-  policy declared in a different map iteration or contributor order — yield an
-  **identical digest**; any policy change yields a different one. Each mutation
-  receipt records the digest that governed it.
-
-**Validation failures — all loud at `NewService`** (the schema compiler wraps
-`sdk.ErrInvalidInput`; aggregated errors are sorted deterministically):
-
-- empty resource/relation/permission names or empty rules;
-- duplicate declarations after composition/merge;
-- an ambiguous check (both `Direct` and `Through`, or neither);
-- an unknown direct relation or unknown userset relation;
-- a `Through` permission missing from **any** possible resource target
-  (mixed-target partials are rejected, not treated as "exists on one target");
-- an `AllowedSubjects{Type, Relation}` whose non-empty `Relation` does not exist
-  on the referenced type or is not meaningful as a userset;
-- a relation used by `Through` that allows a userset target (navigational
-  relations point at concrete resource subjects only);
-- a relation with zero allowed subjects (unsatisfiable declaration);
-- genuine cycles and globally unsatisfiable permission graphs (the sanctioned
-  self-hierarchy shape is preserved).
-
-An accepted schema is a fixed policy artifact identified by one stable digest.
-
-## The role model — the roles kind's decision half
-
-`Config.RoleModel` is the roles kind's counterpart of the relationship `Schema`:
-registered data, zero migrations, hand-typed in `main`. It is OPTIONAL — the
-zero value is "no model" and leaves the kind exactly as it was (assignments,
-`HasRole`, the listings, and no part in the decision surface).
+## Compose once, pass the capabilities callers need
 
 ```go
-type RoleModel struct {
-    ResourceTypes map[string]RoleTypeDef
-}
-
-type RoleTypeDef struct {
-    Roles       []string            // roles assignable at (type, id)
-    Permissions map[string][]string // permission → the roles that grant it
-}
-```
-
-```go
-Config{
-    RoleModel: authorization.RoleModel{ResourceTypes: map[string]authorization.RoleTypeDef{
-        "project": {Roles: []string{"auditor"}, Permissions: map[string][]string{"audit": {"auditor"}}},
-    }},
-}
-```
-
-**Presence.** The model is SET when `ResourceTypes` is non-empty. Set requires
-`Repositories.Roles` (`ErrRoleModelWithoutRoles`); a roles repository with NO
-model stays valid — the asymmetry with `ErrModelRequired` is deliberate.
-
-**Validation — all loud at `NewService`, first failure wins, the message names
-the offending symbol** (`ErrInvalidRoleModel` / `ErrModelConflict`, both wrapping
-`sdk.ErrInvalidInput`):
-
-1. **Presence** — an unset model is never compiled (and never validated).
-2. **Names** — every resource type, role, and permission name passes the same
-   ref-field rule the check path applies to request fields (non-empty, bounded,
-   UTF-8, no control characters).
-3. **Structure** — no duplicate role within a type; every permission's grantor
-   list is non-empty and names only roles that type declares; every declared role
-   grants at least one of that type's permissions (an unused role is a typo until
-   proven otherwise).
-4. **Pair ownership** (`ErrModelConflict`) — a `(resource type, permission)` pair
-   declared by BOTH `Config.RelationshipModel` and `Config.RoleModel`. A resource TYPE may
-   appear in both (auth-cms's `project`: `view` from relationships, `audit` from
-   roles) — only a PAIR may not. This rule is what makes the decision surface a
-   dispatch rather than a merge.
-
-The model is deep-copied at construction and grantor lists are stored **sorted**,
-so a host mutating its maps afterwards cannot alter a live decision and probe
-order — and therefore the debug `Reason` and the explain trace — is
-deterministic. (Known tradeoff: a host cannot express probe priority; the deny
-path pays all `|grantors|` probes. A priority-ordered model is a follow-up if a
-measured host needs it.)
-
-**How a role-owned `Check` decides.** The pair's sorted grantor roles are probed
-at the request's scope with the roles kind's own scope rule (exact scope, then
-the global `("", "")` fallback); the first held role grants. Cost is bounded by
-the model — at most `2·|grantors|` store probes, short-circuiting. Debug
-`Reason` strings (never wire codes; `ReasonGranted`/`ReasonDenied` remain the
-codes to switch on):
-
-| situation | `Reason` |
-|---|---|
-| a grantor role is held | `role:<role>@direct` or `role:<role>@global` |
-| the pair is declared, no grantor held | `no matching role` |
-| the model declares no such pair | `no rules defined` (the relationship engine's wording) |
-
-Any store error returns the error — never an allow.
-
-**Explain.** `CheckExplain` records one step per grantor probe, in the model's
-sorted order, up to and including the granting one. Role steps use
-`ExplainKindRole` and set two additive fields — `ExplainStep.Role` (the role
-probed) and `ExplainStep.Scope` (`ExplainScopeDirect` / `ExplainScopeGlobal`, or
-`""` when not held); both are empty on relationship steps. A role step sits at
-the request's own coordinates: `Depth: 0`, `Relation: ""`.
-
-**`LookupResult.Unrestricted`.** `LookupResources` for a role-owned pair walks the
-principal's assignments. A granting role held GLOBALLY means the principal
-reaches EVERY resource of the type, which no ID list can express, so the result is
-`{IDs: []string{}, Unrestricted: true}` — **the host must skip ID filtering
-entirely rather than read the empty slice as "none"**. `IDs` remains ALWAYS
-non-nil; only the roles kind ever sets `Unrestricted` (the relationship kind is
-pure tuple enumeration). The field is additive because it is fail-closed under
-ignorance: a caller that reads only `IDs` shows an unrestricted principal an
-empty page — restrictive, never permissive.
-
-**Assign-time validation (only).** With a model configured, a role assignment
-whose `(resource type, role)` pair the model does not declare is rejected with
-`ErrInvalidRoleModel` — a scoped assignment needs the role in that exact type's
-`Roles`; a global one needs it declared by SOME type, because global scope is
-assignment DATA, not a second permission namespace. The check runs inside the
-mutation repository's boundary as part of the receipt-absent semantic validator,
-so `Service.AssignRole`, `SystemMutator.AssignRole`, and the generic
-`SystemMutator.Apply(OpRoleAssign)` cannot disagree or bypass it, while an exact
-replay still returns its stored receipt after a later model change dropped the
-role. `UnassignRole` and EVERY read path stay opaque: existing rows need no
-migration, remain listable, and remain removable. A stored role the model cannot
-express is simply never a grantor. Hosts with no model are untouched.
-
-**Store-probe follow-up (recorded, not built).** The engine runs on the EXISTING
-`role.Storer` — `HasExactRole` probes for `Check`, a paged `ListBySubject` walk
-for `LookupResources` — so a host adopts the model by bumping ONE module, with no
-store port, DDL, migration, or store tag change. The walk is budgeted
-(`MaxGraphStates`, below), so the missing store-side probes
-(`RolesHeld(subject, type, id)`, `ListBySubjectForResourceType`) are a
-PERFORMANCE follow-up, not a correctness gap. **Trigger:** `ErrEvaluationLimit`
-from the assignment walk in a real host, or measured gate latency.
-
-## Evaluation limits, indeterminate errors, and fail-closed guidance
-
-`Config.Limits` is a resolved semantic `EvaluationLimits` budget — the DECISION
-SURFACE's, not one kind's — charged per decision/enumeration and shared across
-nested checks. Fields and their zero-value defaults (re-exported as
-`authorization.DefaultMax*` consts):
-
-| field | bounds | default |
-|---|---|---|
-| `MaxThroughDepth` | navigational `Through` recursion (Through hops from 0; `depth > MaxThroughDepth` exhausts) — relationship kind only | 10 |
-| `MaxGraphStates` | distinct `(resource, permission)` states expanded (diamond-deduped) — **and** every role-assignment row a roles-kind `LookupResources` walk scans, so an adversarial assignment count is bounded work, never an open-ended store walk | 10000 |
-| `MaxRelationTargets` | per-hop relation fan-out / expanded targets — relationship kind only | 1000 |
-| `MaxBatchSize` | checks accepted in one `CheckBatch`/`FilterAuthorized`, charged ONCE for the whole batch by the decision surface whichever kinds own its pairs (also bounds a purge's affected rows) | 1000 |
-| `MaxLookupResults` | resource IDs one `LookupResources` returns, on either kind (the relationship store fetches max+1 so overflow is distinguishable; the roles walk charges its running distinct count) — **and**, for the paged `LookupResourcesIn`, the PAGE SIZE plus every INTERMEDIATE node (a `Through` hop's target set, a self-hierarchy's root set); it is never a total-results cap on a paged query | 1000 |
-| `MaxFilterScan` | candidates ONE `FilterPage` call may pull from its source; every source request is clamped to the remaining budget. Reaching it returns a PARTIAL page plus a continuation, not `ErrEvaluationLimit` — the one dimension whose exhaustion is resumable | 20000 |
-
-Rules:
-
-- A **zero** field selects the default; a **negative** field fails `NewService`
-  with `ErrInvalidLimits` (a construction error wrapping `sdk.ErrInvalidInput`).
-  Zero never means unlimited; there is no unlimited mode. The budget is resolved
-  — and a negative field rejected — whenever ANY model-bearing kind is wired
-  (`Config.RelationshipModel` or `Config.RoleModel`); on a roles-only wiring with no role
-  model nothing consumes it and it stays an orphaned, ignored setting. The
-  `Through`/fan-out dimensions are simply inert on a roles-only host.
-- **Exhaustion is indeterminate, never a deny or a truncated list.** Any budget
-  dimension hitting its ceiling returns `ErrEvaluationLimit` (wrapping
-  `sdk.ErrUnavailable`, HTTP 503 — never a new error kind, never `ErrConflict`).
-  `LookupResources` never returns a partial slice as complete.
-- A decision is **allow, deny, or indeterminate error**. Invalid input,
-  cancellation, infrastructure failure, and limit exhaustion never masquerade
-  as an ordinary deny or a complete partial list. The engine checks context
-  cancellation before recursion and before every store call.
-
-### Enumeration with a caller Limit — `LookupResourcesIn`
-
-`LookupResourcesIn(ctx, LookupRequest{Principal, Permission, ResourceType, Limit, After})`
-is the PAGED struct-input SIBLING of `LookupResources`, not a replacement: the
-positional method keeps its signature and its complete, budget-bounded
-semantics, so host ports and method values are untouched.
-
-One call returns ONE page: at most `Limit` ids, `LookupResult.HasMore` when more
-remain, and `LookupResult.NextCursor` to hand back as the next request's
-`After`. Walking to `HasMore == false` yields exactly what `LookupResources`
-returns — same ids, same order, no repeats.
-
-- **`Limit` is a PAGE SIZE.** `Limit == 0` means `MaxLookupResults` — one full
-  page. It does NOT mean unbounded (nothing here is), and it deliberately does
-  NOT follow `crud.ListRequest`, where `0` means `DefaultLimit`. A `Limit` ABOVE
-  `MaxLookupResults` and a NEGATIVE `Limit` are both validation errors wrapping
-  `sdk.ErrInvalidInput` (HTTP 400) — a limit is not a reference, so it is not
-  `ErrInvalidRef`.
-- **`After` is the previous page's `NextCursor`,** and `""` starts at the
-  beginning. `NextCursor` is set only when `HasMore` is true.
-- **The cursor is bound to its query.** It carries a fingerprint of the
-  principal, the permission, the resource type, the OWNING KIND, and that kind's
-  MODEL DIGEST (the compiled relationship schema digest, or the compiled role
-  model's digest). A cursor presented against a different query, against the
-  other kind, or after a deploy that CHANGED the model is `ErrInvalidCursor`
-  (wrapping `sdk.ErrInvalidInput`) — in-flight cursors are invalidated and the
-  client restarts from page one. The fingerprint is query binding, not
-  authentication: the id inside stays untrusted client input and is validated
-  like any resource id.
-- **Keyset, not a snapshot.** Pages are ordered by resource id ascending in BYTE
-  order, and the cursor is the last id returned. A page sees grants that land
-  ahead of it and misses ones that land behind it — the standard keyset
-  contract; a client that needs a consistent view refetches from the start. Ids
-  are opaque (nanoid), so the order is stable but meaningless to a human: NEVER
-  sort a paged prefilter client-side and expect consistency across pages. Any
-  user-facing order belongs to the client after it fetches its rows, or to a
-  postfilter.
-- **What the budget bounds now.** `MaxLookupResults` bounds the PAGE SIZE and
-  every INTERMEDIATE node — a non-self `Through` hop's target set (the orgs
-  whose posts you are enumerating) and a self-hierarchy's non-descendant ROOT
-  set, which must be complete before it seeds the closure because a lexically
-  late root may grant a lexically early descendant. It is NEVER a total-results
-  cap on a paged query. A principal over the intermediate bound is
-  `ErrEvaluationLimit` on EVERY page — indeterminate, never a short list that
-  looks complete. Top-level leaf reads are bounded by the page, not by the total
-  number of reachable resources.
-- **`LookupResult.Truncated` is DEPRECATED.** It carries the same value as
-  `HasMore` for one release and is then removed; new code reads `HasMore`.
-- **`Unrestricted` ignores `Limit` and `After`** and passes through untouched
-  with no cursor: it names no IDs to page, and the host must still skip ID
-  filtering entirely.
-
-**Fail-closed caller guidance (load-bearing).** `allowed, _ := authorizer.Check(...)`
-is a silent fail-OPEN — an engine error (store down, unwired kind, budget
-exhausted) reads as a decision. **Always propagate the error and fail closed:**
-
-```go
-res, err := authorizer.Check(ctx, req)
-if err != nil {
-    return false, err // fail CLOSED — never `allowed, _ :=`
-}
-return res.Allowed, nil
-```
-
-The shipped `RequirePermission` middleware and all consumer closures follow
-this: engine or resolver error → 500 (or 503 for `ErrEvaluationLimit`), no
-principal → 401, `!Allowed` → 403. Stable reason codes
-(`ReasonGranted`/`ReasonDenied`/`ReasonEvaluationLimit`/`ReasonStaleRevision`/…)
-are frozen wire codes a host, audit sink, or explain trace can switch on;
-`CheckExplain` returns an opt-in bounded `Explanation` that rides the same
-evaluation path and budget (it cannot create a separate, more permissive
-evaluator, cannot change the decision, and is never auto-logged).
-
-### The postfilter page-filler — `FilterPage`
-
-`FilterPage` is the OTHER enumeration path: instead of asking the engine which
-resources are accessible and then reading those rows (the prefilter), it reads
-host-ordered candidate rows first and filters them with `FilterAuthorized` until
-one page is full.
-
-| | prefilter — `LookupResources`/`LookupResourcesIn` | postfilter — `FilterPage` |
-|---|---|---|
-| use when | access is SPARSE relative to the table ("everything of type X I may see", a cross-container "mine" list, a home feed) | access is DENSE within a set the database already bounds (a container's contents, a search result, the caller's own starred rows) |
-| who orders | the ENGINE (resource id ascending); any user-facing order is the client's after fetch | the HOST/database (name, date, rank — whatever its keyset query orders by) |
-| cost scales with | the principal's total reachable set (bounded by `MaxLookupResults`; overflow is `ErrEvaluationLimit`) | the candidates scanned to fill one page (bounded by `MaxFilterScan`; the bound yields a partial page, not an error) |
-
-A host may use both on one resource type — they are different questions.
-
-**Which one a container listing wants.** Prefilter when the principal's visible
-set of that type is BOUNDED — the ordinary case for a member of a handful of
-tenants and spaces, and the pattern a host should reach for first. Postfilter
-(`FilterPage`) when it is NOT bounded and the host's own query is: a manager
-listing inside a huge tenant, a search result, a host-ordered candidate stream
-where "everything of type X I may see" would be a table scan. Both are cheap
-now; the choice is about which set is smaller, not about which one is safe.
-
-### What one `FilterAuthorized` costs
-
-`FilterAuthorized` decides the whole candidate set as ONE evaluation of the
-permission, not one evaluation per candidate. It walks the permission tree once,
-level by level: each `Direct` branch is a single store read over the candidates
-still undecided (an admitted candidate leaves the set — the `AnyOf`
-short-circuit, per candidate), and each `Through` hop is a single read that
-collects every candidate's targets, whose DISTINCT targets are then decided the
-same way one level down.
-
-So **a denied candidate costs a SHARE of one read per branch, not a read per
-branch.** The reads one call makes are `O(branches + hops)` — a function of the
-SCHEMA — while the candidate count only widens each read:
-
-| shape | reads for N candidates |
-|---|---|
-| 5 direct branches (one userset-bearing) + `Through(org)` + `Through(tenant)`, every candidate DENIED | **9**, for N = 1, 50, or 500 |
-| the same work as N per-request `Check`s (what `CheckBatch` still does) | `6N + 3` — 303 at N = 50, 1803 at N = 300 |
-
-(The engine's own benchmark prints both numbers:
-`go test ./internal/logic/authorizersvc -bench DeniedCandidates`.)
-
-The answers are the ones N sequential `Check`s give, and the budget is one
-decision's: `MaxThroughDepth`, `MaxRelationTargets` and the group-expansion
-bound are charged exactly as `Check` charges them, and `MaxGraphStates` is
-charged ONCE for the set rather than once per candidate. That last one is the
-single behavioral consequence to size for: a very wide candidate set over a very
-deep graph can exhaust `MaxGraphStates` where each candidate alone would not, and
-exhaustion is `ErrEvaluationLimit` (indeterminate, fail closed) for the whole
-call — never a wrong answer, and never a partial list presented as complete.
-`MaxBatchSize` bounds the candidate set, so the two limits are a deliberate
-ratio: `MaxGraphStates` should exceed `MaxBatchSize` times the states one
-candidate's walk reaches.
-
-`CheckBatch` is deliberately unchanged: it accepts requests that mix
-principals, permissions, and resource types, so it stays a per-request path (with
-the v0.10.0 memoized reader sharing reads across the batch).
-
-**The candidate-cursor contract.** A `CandidateSource` returns one cursor PER
-ROW (`Candidate.NextCursor`, the source-compatible cursor immediately AFTER that
-row), not one per page: that is the state `FilterPage` needs to stop in the
-middle of an over-fetched pull without skipping or repeating a row. Every cursor
-must be non-empty and must differ from the cursor immediately before it, and no
-cursor may repeat within one call (a cycle is refused rather than spun on). A
-source that returns more candidates than requested, or reports `HasMore` while
-returning none, is refused the same way. All four refusals wrap
-`sdk.ErrInvalidInput`. Cursors are opaque to the pocket and are returned to the
-caller VERBATIM — `FilterPage` adds no encoding of its own.
-
-**The scan bound.** Each pull asks for `min(2×Limit, MaxBatchSize, remaining
-MaxFilterScan)` candidates and costs exactly one `FilterAuthorized` call, so one
-`FilterPage` call never scans more than `MaxFilterScan` candidates. Reaching the
-bound with the page unfilled returns the partial page and the cursor after the
-last scanned candidate. **`Page.HasMore` therefore means UNSCANNED CANDIDATES
-REMAIN, not that another authorized row is guaranteed:** following a page with
-`HasMore` may produce a final EMPTY page when every remaining candidate is
-denied. `Limit` 0 is `crud.DefaultLimit` (this IS a page, unlike
-`LookupResourcesIn`); a negative `Limit` or one above `MaxBatchSize` is
-`sdk.ErrInvalidInput`; `Items` is always non-nil.
-
-```go
-// The host's keyset query is the source: rows in ITS order, each with the
-// cursor that follows it.
-source := func(ctx context.Context, cursor string, limit int) (authorization.CandidatePage[Dashboard], error) {
-    rows, hasMore, err := dashboards.ListBySpaceAfter(ctx, spaceID, cursor, limit)
-    if err != nil {
-        return authorization.CandidatePage[Dashboard]{}, err
-    }
-    items := make([]authorization.Candidate[Dashboard], len(rows))
-    for i, row := range rows {
-        items[i] = authorization.Candidate[Dashboard]{Item: row, NextCursor: row.Name + "\x00" + row.ID}
-    }
-    return authorization.CandidatePage[Dashboard]{Items: items, HasMore: hasMore}, nil
-}
-
-page, err := authorization.FilterPage(ctx, authorizer, authorization.FilterPageRequest[Dashboard]{
-    Principal:    authorization.PrincipalFrom(principal),
-    Permission:   "view",
-    ResourceType: "dashboard",
-    ID:           func(d Dashboard) string { return d.ID },
-    Source:       source,
-    Limit:        req.Limit,
-    Cursor:       req.Cursor,
-})
-if err != nil {
-    return crud.Page[Dashboard]{}, err // fail CLOSED
-}
-```
-
-
-## Choosing a relationship write path
-
-ReBAC tuples are ordinary application state by default. The guarded mutation
-lifecycle is an optional security tool for operations whose threat model needs
-it; it is not the preferred default merely because a host writes relationships.
-
-| use case | recommended path | why |
-|---|---|---|
-| host-domain topology or projection | baseline `RelationshipWriter`, especially `SetRelationTargets` | state convergence and atomic parent/container replacement |
-| bootstrap, migration, fixture, authoritative-table synchronization | baseline writer | no occurrence identity or receipt ledger is needed |
-| ordinary folder/document sharing | baseline writer by default; guarded is optional | normal last-write-wins or detached-check races are often acceptable |
-| account/tenant membership | host threat-model decision; guarded is commonly appropriate, not mandatory | authority and blast radius vary by product |
-| owner/admin replacement with a last-owner rule | guarded lifecycle | repository-atomic guardian invariant |
-| compliance audit, durable idempotency, or evidence requirements | guarded lifecycle | receipts, replay identity, revisions, audit |
-| public actor-facing generic authorization management API | guarded lifecycle | fail-closed actor policy inside the atomic boundary |
-| resource teardown | baseline `DeleteResourceRelationships` for ordinary desired-state cleanup; guarded `TeardownAuthorizationScope` when bypassing a configured guardian is itself an audited security event | the host chooses whether teardown needs a reason, receipt, and invariant exception |
-
-The trade-off is explicit:
-
-- **Baseline:** simpler, schema-valid, atomic per desired-state operation, and
-  state-convergent. Actor authorization may be a detached host check; races use
-  normal application state-write semantics.
-- **Guarded:** atomically couples host authorization dependencies and the write,
-  supports guardian invariants, durable idempotency, receipts, revisions, and
-  audit, at greater API and operational complexity.
-
-Neither is universally correct. Do not mix the two paths for the same
-security-sensitive relation and expect guarded dependency revisions or guardian
-rules to observe baseline writes: select ownership by resource type/relation.
-
-### Baseline desired-state writer
-
-`RelationshipWriter` is returned whenever `Repositories.Relationships` and the
-schema are configured, even when `Repositories.Mutations == nil`. It never
-silently routes through `SystemMutator`.
-
-```go
-writer := comps.RelationshipWriter // composition-root capability; not on Service
-
-err := writer.SetRelationTargets(ctx,
-    authorization.Resource{Type: "space", ID: "child"},
-    "parent",
-    []authorization.SubjectRef{{Type: "space", ID: "new"}},
+import (
+    "github.com/gopernicus/gopernicus/pockets/authorization"
+    authmodel "github.com/gopernicus/gopernicus/pockets/authorization/logic/model"
+    "github.com/gopernicus/gopernicus/pockets/authorization/logic/relationships"
 )
-```
 
-`SetRelationTargets` makes one resource+relation exactly equal the supplied
-target set in one honest store transaction/lock. Repeating A is a no-op;
-A → B → A restores A; an empty set clears idempotently. The memstore, PostgreSQL,
-and Turso implementations serialize competing calls so a parent move never
-accumulates old and new targets. Additions are validated against the immutable
-compiled schema before storage. Deletions validate reference shape but may
-remove a tuple no longer accepted by a newer schema.
-
-#### Ambient transactions — the row and its tuple commit together
-
-The writer passes `ctx` straight through to the relationship store, and the
-bundled SQL stores honor the connector's ambient transaction: when `ctx` carries
-the transaction a `crud.Transactor.Transact` call stashed there (pgxdb, turso —
-the host's own `*pgxdb.DB` / `*tursodb.DB` IS the transactor), **every** store
-method — reads and writes, relationships and roles — runs ON that transaction.
-No second connection, no nested begin. So a host that projects topology from
-its own rows writes the row and the tuple as one unit:
-
-```go
-err := db.Transact(ctx, func(ctx context.Context) error {
-    if err := spaces.Move(ctx, spaceID, newParentID); err != nil { // the app row
-        return err
-    }
-    return writer.SetRelationTargets(ctx,                             // its projection
-        authorization.Resource{Type: "space", ID: spaceID},
-        "parent",
-        []authorization.SubjectRef{{Type: "space", ID: newParentID}},
-    )
-})
-```
-
-The rules a host must hold:
-
-- **Return write errors from the callback.** The store never rolls back or
-  marks the transaction rollback-only; the enclosing `Transact` decides from the
-  callback's return. Returning `nil` after swallowing a `SetRelationTargets`
-  conflict (`sdk.ErrConflict`) commits the row without its tuple.
-- **Reads inside the transaction see the transaction's own uncommitted state**
-  (read-then-decide-then-write in one unit); the same read with a context
-  outside the transaction sees committed state only.
-- **The serialization lock widens to the host's commit.** `SetRelationTargets`
-  serializes competing callers on one key; inside an ambient transaction that
-  lock is released at the host's commit, so a competing move waits for the whole
-  workflow — the property that keeps a concurrent move from slipping between
-  the row and the tuple. Do slow work before the write, not after.
-- **The guarded path does NOT join.** `Service` mutation methods and
-  `SystemMutator` keep their own transaction (anchor locks, receipt, replay
-  ledger). Called inside an ambient transaction they refuse with
-  `ErrGuardedInsideTransaction` (wrapping `sdk.ErrInvalidInput`) before any
-  guard, validator, or row is touched, instead of silently committing on a
-  second connection. Keep guarded calls outside `Transact`.
-- **Outside a transaction nothing changed.** Every method behaves exactly as
-  before; `SetRelationTargets` still opens and owns its own transaction.
-- **memstore has no transaction concept.** It is mutex-atomic per operation and
-  ignores the context; a host that needs the join wires a SQL store.
-
-The `storetest.RunTransactional` family is the executable form of this contract
-(the join proven from both sides, not just a rollback); every bundled SQL store
-runs it live, and a third-party store over another connector must pass it.
-
-### The optional high-integrity mutation lifecycle
-
-On this path every write is one atomic command with a `MutationID`, one mutation
-scope, an optional expected revision, and an explicit domain outcome.
-
-### Construction — the `Components` bundle
-
-`NewService` returns a **`Components{Service, RelationshipWriter, SystemMutator}`** bundle (not a
-bare `*Service`):
-
-```go
-comps, err := authorization.NewService(repos, cfg)
-// comps.Service       — the host-facing decision/list/guarded-mutation surface
-// comps.RelationshipWriter — baseline trusted application-state capability
-// comps.SystemMutator  — the separately held, trusted, actor-free capability
-```
-
-`Service` cannot recover either write capability. The composition root places
-each deliberately; HTTP handlers receive `Components.Service` only unless the
-host explicitly builds a guarded management endpoint.
-
-Construction matrix (all loud at `NewService`):
-
-| condition | result |
-|---|---|
-| both `Repositories` kind fields nil | `ErrNoKindConfigured` |
-| `Relationships` set XOR `Config.RelationshipModel` set | `ErrModelRequired` |
-| `Config.Guard` set, `Repositories.Mutations` nil | `ErrGuardWithoutMutations` (a guard has no atomic write path) |
-| `Config.Audit` set, `Config.Guard` nil | `ErrAuditWithoutGuard` (nothing to observe) |
-| nil `Config.Guard` | construction succeeds; every actor-facing guarded mutation fails closed with `ErrMutationsNotConfigured`; decision/list APIs and `RelationshipWriter` remain available, and `SystemMutator` is callable only if `.Mutations` is wired |
-| negative `Config.Limits` field (relationship kind wired) | `ErrInvalidLimits` |
-
-There is **no default allow guard**: the absence of a guard closes the
-actor-facing write path, it never opens it.
-
-### Actor-facing (guarded) writes
-
-An untrusted write always carries a non-empty concrete `Actor` (an
-`Actor{PrincipalRef}` — there is no `system` kind a caller can construct) and
-passes the host `MutationGuard`:
-
-```go
-type MutationGuard interface {
-    AuthorizeMutation(ctx context.Context, attempt MutationAttempt, view DecisionView) error
-}
-```
-
-The guard returns nil to ALLOW or a stable denial/error (typically wrapping
-`sdk.ErrForbidden`) to reject. **A guard that depends on authorization DATA must
-read it only through `view`** — the dependency-tracking `DecisionView` the
-repository supplies inside the atomic boundary — and must **never** call the
-outer `Service`, which would open a detached check-then-write race. Every scope
-the guard reads through `view` is recorded with the revision it observed; the
-repository locks those anchors plus the mutation scope in canonical order and
-**re-validates every observed revision before commit** — a mismatch returns
-`ErrStaleRevision` and writes nothing. The guard must be synchronous, honor
-`ctx` cancellation, and do no network or unrelated-store I/O.
-
-The view is two layers. `StoreDecisionView` is what a store implements: the
-transaction-bound primitives `CheckRelation` (unbounded userset expansion),
-`CheckRelationBounded` (the read-side expansion budget), `RelationTargets` (a
-Through hop's edge read), `HasRole`, and `Dependencies`. `DecisionView` — what
-`AuthorizeMutation` receives — embeds it and adds **`CheckPermission`**, the
-relationship engine's own walk run over those primitives:
-
-```go
-func (g hostGuard) AuthorizeMutation(ctx context.Context, attempt authorization.MutationAttempt, view authorization.DecisionView) error {
-    ok, err := view.CheckPermission(ctx, attempt.Scope, "manage", attempt.Actor.Type, attempt.Actor.ID)
-    if err != nil {
-        return err // ErrEvaluationLimit, ErrPermissionOwnedByRoles, … — the mutation writes nothing
-    }
-    if !ok {
-        return fmt.Errorf("manage denied: %w", sdk.ErrForbidden)
-    }
-    return nil
-}
-```
-
-`CheckPermission` gives the SAME answer the read-side `Check` gives for that
-principal on that resource — direct relations, exact usersets, every `Through`
-hop, the same `Config.Limits` budgets — evaluated inside the mutation
-transaction, with every scope the walk navigated recorded as a locked,
-revision-validated dependency. So a schema where authority is inherited from a
-container (`dashboard.manage = owner | Through(space, manage)`) needs no
-ancestor re-walk in host code and no detached `Service.Check`. Budget
-exhaustion is `ErrEvaluationLimit` (a command error), never a deny. A pair the
-`RoleModel` declares is refused with `ErrPermissionOwnedByRoles` before any
-store read — the guard asks `HasRole` for those. The scope must be a resource
-scope; anything else is `ErrInvalidRequest`.
-
-Typed guarded commands (each takes `actor Actor` + a command struct carrying a
-`MutationID`, the target, and an optional `ExpectedRevision *Revision`):
-
-- `Service.GrantRelationship` / `RevokeRelationship` / `ReplaceRelationship` /
-  `PurgeResourceAuthorization` → `(*Receipt, error)`;
-- `Service.AssignRole` → `(*Receipt, error)`;
-- `Service.UnassignRole` → `(UnassignRoleResult, error)` (see raw vs effective
-  role listing).
-
-A denial never reaches `Apply`; on denial the `MutationID` is **not** consumed
-(a later allowed command with a fresh ID applies cleanly). The one-relation rule
-means a different relation for a subject already related to the resource is a
-`semantic_conflict` — use `ReplaceRelationship` (atomic, no delete/create gap).
-
-### The trusted `SystemMutator`
-
-`SystemMutator` bypasses only the host `MutationGuard`; it still validates
-schema, requires a `MutationID`, uses atomic `Apply`, enforces guardian
-invariants, increments revisions, persists receipts, and audits. Its surface:
-
-- `Apply(ctx, Command)` — the generic trusted write;
-- `GrantRelationship(ctx, GrantRelationshipCommand)`;
-- `AssignRole(ctx, AssignRoleCommand)` / `UnassignRole(ctx, UnassignRoleCommand)`;
-- `TeardownAuthorizationScope(ctx, TeardownAuthorizationScopeCommand)` — the one
-  operation allowed to reduce a protected scope to zero (see invariants).
-
-### MutationID, dependency revision, outcomes vs replay, receipt retention
-
-- **`MutationID`.** `NewMutationID` mints a cryptographically strong,
-  globally-unguessable 256-bit key (base32) — the actor-facing default.
-  `DeriveMutationID(parts...)` produces a *deterministic* stable ID from a fixed
-  operation identity (SHA-256 over length-prefixed parts) for **trusted**
-  idempotency — a `SystemMutator` holder derives it so a retried bootstrap or
-  invitation-accept dedups against its stored receipt rather than duplicating.
-  Possession of a `MutationID` is **never** authority: an actor-facing replay
-  re-runs the guard against current state before returning a stored receipt.
-- **Dependency-revision validation.** Scope revisions are per-scope anchors —
-  resource scope (`ScopeResource`) for relationships and scoped roles, subject
-  scope (`ScopeSubject`) for global roles. A guarded write commits only if every
-  authorization scope the guard used has the same revision when the repository
-  locks and validates dependencies (canonical lock order; an absent anchor reads
-  as revision 0, so a concurrent first writer is a detectable 0→1 change).
-- **Outcome vs replay are independent facts** (default #8). A `Receipt` carries a
-  stable `Outcome` — `OutcomeApplied`, `OutcomeNoChange`, `OutcomeSemanticConflict`,
-  `OutcomeInvariantBlocked`, `OutcomeNotFound` — with **`Receipt.Replayed`** as
-  separate metadata. Conflict is never encoded as `(nil, nil)`. Stale expected/
-  dependency revision (`ErrStaleRevision`) and a `MutationID` replayed with a
-  different payload (`ErrMutationMismatch`) are **command errors**, not outcomes.
-  Only committed `applied`/`no_change`/`not_found` receipts are persisted and
-  replayable; denial, stale, payload mismatch, cancellation, and infrastructure
-  failure create no receipt (so a retry re-evaluates). An exact retry returns the
-  original receipt with `Replayed=true` and no revision bump — even under a newer
-  schema that would now reject the original relation.
-- **Receipt retention.** Permanent by default (`iam_mutations.expires_at` is
-  nullable; a NULL means permanent). A finite window is an explicit weaker
-  idempotency posture with a ratified minimum and a cleanup contract — not the
-  default.
-
-### Last-owner/guardian and teardown invariants
-
-The last-owner/guardian invariant is **one repository-atomic post-state rule**,
-never a service-level exists→count→delete (the v1 non-atomic path is deleted).
-Under the mutation scope lock, every ordinary command on a configured protected
-resource type must leave **at least N direct anchors** for the protected
-relation. A *direct anchor* is an exact concrete `SubjectRef` with an empty
-relation — a `group:eng#member` owner is **not** a direct anchor, and
-group-expanded/effective counts never mask loss of the final direct guardian.
-The first successful command must establish the minimum (normally an owner
-grant); a member/role-first command and any mutation of a legacy orphan scope
-are blocked until a trusted repair establishes it. Two concurrent last-owner
-revokes produce exactly one success and one `OutcomeInvariantBlocked` (one
-database arbiter under concurrency).
-
-The policy is `GuardianPolicy{Rules []GuardianRule{ResourceType, Relation,
-MinAnchors}}`. **Its configuration seam is STORE CONSTRUCTION, not `Config`** —
-the invariant must live where the atomic lock lives, so it is a store option:
-`memstore.WithGuardianPolicy` / `stores/pgx.WithGuardianPolicy` /
-`stores/turso.WithGuardianPolicy`. `DefaultGuardianPolicy` is the ratified
-default (owner, min-1 direct anchor, every resource type); an explicitly empty
-`GuardianPolicy` declares no invariant. The `authorization.GuardianPolicy` /
-`GuardianRule` / `DefaultGuardianPolicy` aliases let a host name the vocabulary
-without importing `domain/mutation`. Roles carry no guardian notion in v3
-(opaque roles have no direct-anchor concept, default #5).
-
-**Resource teardown** is a distinct `SystemMutator.TeardownAuthorizationScope`
-command — the one operation permitted to reduce a protected scope to zero. It
-requires the separately held capability **plus** a recorded non-empty teardown
-reason (`ErrTeardownReasonRequired` otherwise). Ordinary
-`PurgeResourceAuthorization` cannot silently bypass the guardian minimum (a purge
-that would orphan a protected resource is `OutcomeInvariantBlocked`).
-Authorization does **not** call a foreign resource repository from inside its
-transaction; a host deleting a resource orders its own teardown, and the
-ordering + ID-reuse hazard is documented on the method rather than misrepresented
-as cross-pocket database atomicity.
-
-### Compatibility and best-effort audit
-
-The original validated relationship-state capabilities are restored on the
-separately held `RelationshipWriter`, not on the actor-facing `Service`. The
-baseline is genuinely state based and does not inherit permanent MutationID
-replay behavior. `examples/auth-cms` uses it for ordinary project-member
-invitations; the example also retains a `guardedRelationshipGranter` showing how
-`OperationID` can opt a sensitive invitation into `SystemMutator` receipts and
-durable replay semantics. `Config.Audit`
-(optional `AuditSink`) observes actor-facing and teardown attempts as
-accepted/denied/failed with coarse bounded fields — never raw resource/subject
-IDs as labels, never changing a committed mutation; a sink failure is warned and
-swallowed.
-
-## Bundled role-administration routes
-
-The pocket ships the HTTP wire for the guarded role lifecycle it already owns, so
-a flagship-posture host stops rebuilding the same ~200 lines. The routes mount
-**only** when the host names a gate: `Config.RoleRoutesGate == nil` is the
-default and nothing registers (the `MachineRoutesGate` precedent). Everything
-else in `/authorization/*` stays reserved.
-
-| Method | Path | Service call | Response |
-|---|---|---|---|
-| POST | `/authorization/roles` | `AssignRole` | 200 `{"receipt":{…}}` |
-| POST | `/authorization/roles/unassign` | `UnassignRole` | 200 `{"receipt":{…},"same_role_grant_remains":bool}` |
-| GET | `/authorization/roles/by-subject?subject_type=…&subject_id=…` | `ListRoleAssignmentsBySubject` | 200 page of assignments |
-| GET | `/authorization/roles/by-resource?resource_type=…&resource_id=…` | `ListRoleAssignmentsByResource` | 200 page of assignments |
-| GET | `/authorization/roles/effective?resource_type=…&resource_id=…` | `ListEffectiveRoleGrantsByResource` | 200 page of effective grants |
-
-The verb is **`unassign`**, not `revoke`: the domain verb is `OpRoleUnassign`, and
-one vocabulary beats a second wire verb. Each listing is its own path rather than
-one path dispatching on which query parameters are present, so a host gate can
-switch on method and path without re-parsing the query.
-
-### The gate is the ENTIRE middleware stack
-
-Unlike the authentication pocket, this one owns no credential and adds **no**
-middleware beneath your gate — no authenticator, no CSRF layer. Whatever the gate
-does not do, nothing does. Compose all three concerns yourself, outermost first:
-
-```go
-gate := func(next http.Handler) http.Handler {
-    return authenticate(browserSafe(
-        authorizer.RequirePermissionFixed("platform", "admin", "platform")(next),
-    ))
-}
-
-comps, err := authorization.NewService(repos, authorization.Config{
-    RoleModel:      model,
-    Guard:          hostGuard,
-    RoleRoutesGate: gate,
-})
-```
-
-1. **Authentication** must stash the principal with
-   `identity.WithPrincipal`. The bundled writes read it back with
-   `identity.FromContext` and answer **401** when it is absent — they never
-   fabricate a zero `Actor`. This is the AV5 platform convention, so any host
-   middleware satisfies it and the pocket imports no authentication pocket.
-2. **⚠ Cookie-credential hosts owe a browser-origin/CSRF layer.** These are
-   state-changing POSTs and the pocket supplies none (FS1 — it owns no session
-   cookie to compare against).
-
-   What actually carries the defense today, stated exactly: the two writes
-   **require `Content-Type: application/json`** and answer **415** to anything
-   else, which is every content type an HTML form can send
-   (`application/x-www-form-urlencoded`, `multipart/form-data`, `text/plain`) —
-   so the classic form-POST forgery is refused; and a cross-site `fetch` that
-   sets a JSON content type is not a simple request, so the browser preflights
-   it and the preflight fails absent a credentialed CORS allowlist. Session
-   cookies additionally ride `SameSite=Lax`, which withholds them from
-   cross-site POSTs.
-
-   **This is NOT an origin check, and it lapses.** It is content-type strictness
-   plus a browser default, not a decision the host made about who may call. It
-   stops working the moment a host installs a credentialed CORS allowlist for an
-   SPA origin (the preflight then passes and the cookie rides along), relaxes the
-   accepted content type, or moves to a cookie posture weaker than `Lax`. A host
-   in any of those postures MUST compose a real Origin allowlist plus a
-   double-submit token inside its gate closure.
-3. **Authorization** decides. The bundled handlers write no 403 of their own.
-
-`RoleRoutesGate` is a single `web.Middleware`, matching `MachineRoutesGate`. The
-five paths are distinct, so a gate wanting read-wide/write-narrow granularity
-switches on the request method or path itself.
-
-### `Config.AssignmentPolicy` — legality, not authorization
-
-An optional hook consulted **only** on the bundled assign route, immediately
-before `Service.AssignRole`:
-
-```go
-type AssignmentPolicy func(ctx context.Context, cmd AssignRoleCommand) error
-```
-
-Four properties, all deliberate:
-
-- **Legality only, over the command SHAPE** — unknown role names, global-only
-  rules, closed scope registries, machine subjects barred. A policy that needs to
-  read authorization STATE belongs in `Config.Guard`, which runs inside the
-  atomic boundary with a revision-tracked `DecisionView`; a route-level state
-  read would reinstate the detached check-then-write race this pocket eliminated.
-- **Assign only** — there is no symmetric unassignment hook, mirroring
-  `Config.RoleModel` (assignment legality governed; unassignment and every read
-  stay opaque). Revocation AUTHORIZATION already flows through `Config.Guard`,
-  which sees `OpRoleUnassign` and the scope kind atomically. A documented
-  non-goal, revisitable on demand.
-- **Bundled routes only** — a host driving `Service.AssignRole` directly is
-  unaffected.
-- **Not audited** — `Config.Audit` records guard outcomes, and a policy refusal
-  never reaches the guard.
-
-Error mapping: wrap an sdk sentinel (`sdk.ErrForbidden`, `sdk.ErrInvalidInput`)
-or return a `web.NewSafeDomainError` for a custom safe sentence. An unwrapped
-bare error lands **500 by design** — the same contract `MutationGuard`
-documents.
-
-### Misconfiguration matrix and the orphan rule
-
-| wiring | result |
-|---|---|
-| `RoleRoutesGate` set, `Repositories.Roles` nil | `ErrRoleRoutesGateWithoutRoles` at `NewService` |
-| `RoleRoutesGate` set, `Config.Guard` nil | `ErrRoleRoutesGateWithoutGuard` at `NewService` (every bundled write would fail closed with `ErrMutationsNotConfigured`) |
-| `AssignmentPolicy` set, no gate | `ErrAssignmentPolicyWithoutRoutes` at `NewService` |
-| `ListStrategy` neither `"cursor"` nor `"offset"` | `ErrInvalidListStrategy` at `NewService`, orphaned or not |
-| gate set, `Mount.Router` nil | `ErrRoleRoutesWithoutRouter` at `Register` |
-| roles + `Guard` wired, no gate | one **WARN** at `Register`: the routes are not mounted and will 404 |
-
-**The orphan rule.** A security-affecting orphaned setting fails construction
-(`AssignmentPolicy` without a gate; `Audit` without a `Guard`) — a rule that can
-never run is a silent no-op giving false confidence. A cosmetic orphaned setting
-is silently ignored (`ListStrategy` with no gate — the `MailFrom` precedent). An
-INVALID value is invalid either way.
-
-### Wire shapes, idempotency, and outcome-vs-error
-
-Both writes take the same body:
-
-```json
-{"mutation_id": "…", "subject_type": "user", "subject_id": "u-1",
- "role": "viewer", "resource_type": "organization", "resource_id": "o-1",
- "expected_revision": 7}
-```
-
-`mutation_id` is optional: absent, the server mints an unguessable one and every
-request is distinct; present, it is the client's own idempotency key, validated
-for strength, and an exact retry dedups against the stored receipt (`replayed:
-true`). Client ids are kept because retry idempotency is the point of the
-receipts rail; the squat surface is bounded — the population behind the gate is
-your administrators, and a squatted id yields a payload-mismatch conflict, never
-a silent overwrite. `expected_revision` is the optional compare-and-set anchor;
-omitting it from the wire would have been a silent capability cut. An empty
-`resource_type`/`resource_id` pair is a GLOBAL assignment; a half pair is a 400.
-
-The receipt is an **explicit** projection, never a marshal of `mutation.Receipt`:
-`mutation_id`, `scope_kind`, `scope_type`, `scope_id`, `operation`, `outcome`,
-`revision`, `replayed`, `created_at`. `payload_encoding`, `payload_digest`, and
-`schema_digest` are deliberately off the v1 wire (additive later if a host needs
-them). `same_role_grant_remains` is top-level on the unassign envelope only — it
-is a statement about that unassign, not a receipt field.
-
-**All five domain outcomes ride 200** with the outcome named in the receipt,
-`semantic_conflict`, `invariant_blocked`, and `not_found` included: a conflict is
-an OUTCOME, never an error. ERRORS map through `web.RespondJSONDomainError`
-(FS9): gate denial → 403, missing principal → 401, malformed body / half-scoped
-pair / `ErrMutationsNotConfigured` / a role the `RoleModel` does not declare →
-400, stale revision and payload mismatch → their existing 409 class, an unwrapped
-policy error → 500.
-
-Listings page with `limit`/`cursor`/`offset`/`count` plus `order`
-(`created_at` for the raw listings, `grant_key` for the effective one);
-`Config.ListStrategy` sets the default when a request names neither a cursor nor
-an offset. **Both** query values are required and non-empty on every listing, so
-the bundled surface cannot enumerate the GLOBAL scope — that is a documented
-non-goal, and a host that wants it writes its own route over
-`ListRoleAssignmentsByResource("", "")`. A non-empty `q` is a named 400: the role
-listings declare no search fields.
-
-### Non-goals
-
-No relationship-mutation routes (role administration only). No
-`UnassignmentPolicy`. No bundled global-scope enumeration. No `Mount.Events`
-emission — `AuditSink` remains the only observation seam for mutation attempts.
-No HTML: JSON only, the pocket stays view-free.
-
-## Raw versus effective role listing
-
-Two listings, deliberately distinct:
-
-- `ListRoleAssignmentsByResource` surfaces the **RAW** direct-scope assignments
-  stored at a resource. It never surfaces a globally-granted subject.
-- `ListEffectiveRoleGrantsByResource` (`EffectiveGrant` with explicit
-  provenance — `Direct`, `Global`, or both) unions the direct scoped assignments
-  with the **global** assignments a scoped `HasRole` satisfies, de-duplicated by
-  `(subject, role)`. Its grant set **agrees with `HasRole`** (the Q5 global
-  fallback), closing the v1 enumeration-vs-decision divergence — a global grant
-  is reported with `Global` provenance, never rewritten as a scoped row.
-
-**The roles scope rule (Q5).** The store-level lookup (`HasExactRole`) is
-exact-scope match; `HasRole` treats a GLOBAL assignment (empty resource pair) as
-satisfying any resource-scoped check. No graph walk — just the one fallback.
-**Revoke carefully:** a scoped `UnassignRole` returns an `UnassignRoleResult`
-whose `SameRoleGrantRemains` is true iff a GLOBAL assignment for the same exact
-role still satisfies the scoped fallback — so a caller cannot mistake removal of
-one scoped row for removal of effective access. It is a statement about THIS
-exact role grant via the global fallback only; it does not claim generic access
-remains (a host may compose access from other role/ReBAC rules).
-
-## The cms boundary (documented, not a gap)
-
-cms admin gating stays **coarse**: `AdminMiddleware` is session-level
-(`RequireUser`) and this milestone does not change it. Fine-grained cms
-authorization (per-entry, per-type) is future demand-gated work; when it
-comes, it arrives as host-wired closures over this pocket's kinds —
-never as a cms→authorization import (rule 6).
-
-## Anatomy + socket
-
-```
-authorization.go         the socket: Repositories, Config, Service,
-                         NewService (→ Components{Service, RelationshipWriter, SystemMutator}),
-                         Register; root aliases for the engine, role-model, and
-                         mutation vocabulary; the errs vars
-codes.go                 stable Reason codes + pocket error sentinels + the
-                         web.Error mapper seam
-mutation_service.go      Actor, MutationGuard, AuditSink, SystemMutator,
-                         Components, the generic guarded ApplyMutation seam
-relationship_mutations.go  typed guarded relationship commands
-role_mutations.go        typed guarded role commands + UnassignRoleResult
-role_routes.go           AssignmentPolicy + the bundled-route construction
-                         sentinels, and roleRouteAdapter — the ONE conversion
-                         site between the transport and the command vocabulary
-middleware.go            RequirePermission* (root delegation; bodies internal)
-domain/                  the hexagon's public rim — tuple types + ports
-  relationship/          SubjectRef, CreateRelationship, projections, the Storer
-  role/                  Assignment, EffectiveGrant, the Storer
-  mutation/              MutationID, Command, Receipt, Outcome, Revision,
-                         ScopeKey, GuardianPolicy, MutationRepository (the
-                         frozen atomic write contract; port doc comments = spec)
-internal/inbound/
-  authorization/         the bundled role-administration JSON transport
-                         (RoleAdminService port, DTOs, the five gated routes)
-internal/logic/
-  authorizersvc/         the sealed ReBAC engine (schema DSL, compiler,
-                         immutable snapshot, bounded check/lookup, budget,
-                         reasons/explain, EvaluationLimits)
-  rolesvc/               the roles service (the Q5 global-fallback rule; never
-                         imports either engine — a make guard pins it)
-  decisionsvc/           the compositions tier: RoleModel + its validation and
-                         immutable compilation, the roles decision engine, the
-                         pair-dispatching Composite, and the composite's gates
-memstore/                public in-core reference implementation, all three
-                         ports over ONE shared-state bundle (real graph-walk
-                         expansion + atomic Apply) — hosts may wire it
-storetest/               executable spec: Run(t, newRepos) — Adversarial,
-                         Roles/* (+ Roles/Decision), Composed, Mutations
-                         (22 cases), the Parity oracle (one arm per kind), Budget
-stores/turso/            the outbound tier: per-dialect SQL + migrations
-stores/pgx/              (source "authorization"), each its own module
-```
-
-The socket is the FS2-shaped build plus the ratified `Components` bundle:
-`comps, err := authorization.NewService(repos, cfg)` then
-`comps.Service.Register(mount)`. `Register` logs one line, captures the logger
-for best-effort audit warnings, and mounts the bundled role-administration
-routes when `Config.RoleRoutesGate` is set — otherwise **no routes** at all. The
-rest of `/authorization/*` remains this pocket's claimed-but-unregistered
-namespace (charter C1).
-
-## Wiring semantics — nil vs required
-
-| field | semantics |
-|---|---|
-| `Repositories.Relationships` | nil = relationship kind off. Wired ⇔ `Config.RelationshipModel` set — either without the other is a loud `ErrModelRequired`. |
-| `Repositories.Roles` | nil = roles kind off. Needs no Config at all — `Config.RoleModel` is optional and adds the decision half. |
-| `Repositories.Mutations` | optional high-integrity command path (`mutation.MutationRepository`). Required only when `Config.Guard` is set or `SystemMutator` is used. Baseline relationship writes do not depend on it. |
-| both kind fields nil | loud `ErrNoKindConfigured` at `NewService`. |
-| an unwired kind's methods | fail closed with that kind's sentinel (`ErrRelationshipsNotConfigured` / `ErrRolesNotConfigured`). |
-| the decision surface with NO model-bearing kind | `Check`/`CheckBatch`/`CheckExplain`/`FilterAuthorized`/`LookupResources` fail closed with `ErrNoDecisionKind` (a server-side WIRING FAULT: it wraps no sdk kind and answers **HTTP 500**, unlike the actor-observable `ErrMutationsNotConfigured` at 400), and every `RequirePermission*` gate panics at mount. |
-| `Config.RelationshipModel` | REQUIRED with `Relationships`, forbidden without it; compiled + schema-validated at `NewService` (see validation-failures list). |
-| `Config.RoleModel` | optional; the ROLES kind's model. Set ⇒ `Repositories.Roles` (one direction — `ErrRoleModelWithoutRoles`; a roles repo with no model is the valid opaque posture). Compiled + validated at `NewService`: structurally invalid → `ErrInvalidRoleModel`; a `(resource type, permission)` pair also declared by `Config.RelationshipModel` → `ErrModelConflict`. |
-| `Config.Limits` | optional `EvaluationLimits`; zero fields → safe defaults, negative → `ErrInvalidLimits`. The decision surface's budget: resolved whenever ANY model-bearing kind is wired (`RelationshipModel` or `RoleModel`); ignored-with-note under a roles-only wiring with no model. |
-| `Config.IDs` | optional (`cryptids.IDGenerator`); zero value ⇒ the nanoid default; `cryptids.Database` defers to the store's DDL DEFAULT. Relationship-kind-scoped. |
-| `Config.Guard` | nil = actor-facing guarded mutations fail closed with `ErrMutationsNotConfigured`; decisions/lists and baseline `RelationshipWriter` still work. Non-nil requires `Repositories.Mutations`. No default-allow policy. |
-| `Config.Audit` | optional best-effort `AuditSink`; requires `Config.Guard` (`ErrAuditWithoutGuard`). |
-| `Config.RoleRoutesGate` | nil = the bundled role-administration routes do NOT mount (404) and a WARN fires at `Register` when roles + `Guard` are wired. Non-nil requires `Repositories.Roles` (`ErrRoleRoutesGateWithoutRoles`), `Config.Guard` (`ErrRoleRoutesGateWithoutGuard`), and a non-nil `Mount.Router` (`ErrRoleRoutesWithoutRouter`). It is the ENTIRE stack: authenticator + any CSRF layer + the decision. |
-| `Config.AssignmentPolicy` | optional bundled-assign legality pre-check; requires `RoleRoutesGate` (`ErrAssignmentPolicyWithoutRoutes`). Not the authorization seam, not audited, assign-only. |
-| `Config.ListStrategy` | optional `crud.Strategy` default for the bundled listings; zero ⇒ cursor. An unknown value is `ErrInvalidListStrategy` even when orphaned; a VALID unused value is silently ignored. |
-
-The nil-Guard/nil-model asymmetry is deliberate: an orphaned `RelationshipModel` errors
-loudly (capability-defining), while an orphaned `Limits`/`IDs` is
-ignored-with-note (a tuning knob, the auth `MailFrom` precedent).
-
-**`Check` evaluates the models; policy short-circuits are host composition.**
-Each engine evaluates only what its model declares — neither grants a
-platform-admin or self-access bypass. Both are HOST recipes a host runs first in
-its own Check closure, and both fail **closed**:
-
-- **Platform admin (host recipe).** Declare a `platform` resource type with an
-  `admin` *permission* (not just a relation), create a
-  `platform:main#admin@user:<id>` data tuple, and check that permission first in
-  the host's Check closure. Platform-admin stays DATA, never Config — the bypass
-  is host composition, not engine magic. For `LookupResources`, the host runs the
-  admin check first and skips ID filtering if it holds.
-- **Self-access (host recipe).** A host that models users as ReBAC resources adds
-  an ID-equality check in its own closure; a host that doesn't simply never
-  carries the rule.
-
-**The roles kind does not change that — a globally held role is DATA, not a
-bypass.** A `("", "")` role assignment grants exactly the role-owned permissions
-whose `RoleModel` entries EXPLICITLY name that role (and makes their
-`LookupResources` `Unrestricted`). It grants no relationship-owned permission, and
-no permission added to the model later, until that permission's grantor list says
-so. A host wanting one flag to bypass every present and future decision —
-gps-360-go's steward catch-all, auth-cms's `isPlatformAdmin` — keeps it in
-APPLICATION composition, run before the decision surface, and owns the widening;
-the pocket ships no `Superuser` primitive. D-D is unchanged either way: every
-one of these paths fails closed on an error.
-
-### The `RequirePermission` middleware gate (middleware-consolidation, 2026-07-11)
-
-The pocket exports an HTTP middleware builder that gates a route on the context
-`Principal` holding a permission on a resolved resource — the
-`RequireUser`-shaped sibling of the recipes above.
-
-**Requires a MODEL-BEARING kind; a roles-only host with no role model must not
-mount it.** `RequirePermission` panics when neither `Config.RelationshipModel` nor
-`Config.RoleModel` is wired, at REGISTRATION/BOOT time (build the gate once when
-wiring routes, never inside the per-request path):
-
-```
-authorization: RequirePermission requires a decision-capable kind
-(Config.RelationshipModel or Config.RoleModel); a roles-only host without a role
-model must not mount it
-```
-
-The coordinate forms `RequirePermissionOn`/`RequirePermissionFixed` additionally
-check the `(resource type, permission)` pair at registration against BOTH
-compiled models — a pair NEITHER declares panics at mount. The shape (root
-delegation to the composite decision surface — the root package writes NO HTTP;
-the 401/403/500/503 responses live in the one shared gate body in
-`authorizersvc`):
-
-```go
-type ResourceResolver func(r *http.Request) (Resource, error)
-func FixedResource(resourceType, resourceID string) ResourceResolver
-func (s *Service) RequirePermission(permission string, resource ResourceResolver) web.Middleware
-```
-
-**PURE Check, no bypass hook.** A host wanting platform-admin/self-access
-composes those recipes as its OWN closure AROUND this middleware, run first
-(auth-cms's `requireMembership` composes `isPlatformAdmin` before the
-builder-gated handler). D-D: it fails CLOSED (`Check`/resolver error → 500;
-`ErrEvaluationLimit` → 503; no principal → 401; `!Allowed` → 403), the
-deliberate opposite of `ratelimiter.Middleware`'s fail-open. The 401/403/500
-responses use `web.RespondJSONError` (the FS9 `web.Error` shape) — an adopter
-replacing a hand-rolled gate with this builder changes its response *body*
-contract to the FS9 shape (status codes unchanged).
-
-**`RequireAnyPermission` — the disjunction on the route line.** A route admitted
-by EITHER of two grants used to hand-roll the OR in the handler. It is one gate
-now, over the same shared body:
-
-```go
-type GateSpec struct {
-    ResourceType string
-    Permission   string
-    Resource     ResourceResolver
-}
-func (s *Service) RequireAnyPermission(alternatives ...GateSpec) web.Middleware
-
-router.Handle("GET", "/orgs/{orgID}/projects/{projectID}", h.show,
-    authorizer.RequireAnyPermission(
-        authorization.GateSpec{ResourceType: "project", Permission: "view", Resource: authorization.PathResource("project", "projectID")},
-        authorization.GateSpec{ResourceType: "org", Permission: "admin", Resource: authorization.PathResource("org", "orgID")},
-    ))
-```
-
-- **Registration validation, per alternative.** Zero alternatives, a nil
-  `Resource` resolver, a `(resource type, permission)` pair NEITHER compiled
-  model declares, or more alternatives than `EvaluationLimits.MaxBatchSize` all
-  panic at mount, each message naming the alternative's index and pair
-  (`alternative 2 of 5`). The cap is not cosmetic: each alternative is one
-  budget-bounded `Check`, so an N-alternative route line multiplies per-request
-  store work by N — order and count both cost.
-- **The ladder, fail closed.** No principal → 401. Alternatives are evaluated
-  **strictly in order**, resolve-then-`Check`, and the **first allow
-  short-circuits** — later alternatives are never consulted. A resolver error,
-  a resolved `Resource.Type` disagreeing with the alternative's declared
-  `ResourceType`, or a `Check` error fails the **whole request** closed (503 for
-  `ErrEvaluationLimit`, 500 otherwise) even when a later alternative would have
-  allowed. Every alternative denied or inapplicable → 403. Type agreement is
-  checked because `mustDeclare` validates the DECLARED pair while `Check`
-  dispatches on the RESOLVED one: a disagreeing resolver would otherwise
-  evaluate a pair no model declares and deny forever behind a green mount.
-- **`ErrAlternativeNotApplicable` — the one skip.** A `ResourceResolver`
-  returning (or wrapping, `errors.Is`-visibly) this exported sentinel declares
-  "this alternative does not apply to THIS request" — the row names no
-  organization, the path carries no tenant — and evaluation moves to the next
-  alternative exactly as a deny does; all-inapplicable is the ordinary 403. It
-  is deliberately narrow: **any other** resolver error still fails the whole
-  request closed, so a store outage can never be swallowed into a later
-  alternative's allow.
-- **Order is outcome-affecting, not a cost knob.** Under whole-request
-  fail-closed, an erroring alternative 1 means alternative 2's allow is never
-  reached. Order by which alternative should decide. Duplicate alternatives (the
-  same pair with different resolvers) are legal and evaluated independently.
-- **No nesting, no policy language, no bypass hook.** An AND of ORs is stacked
-  middleware, as it is today, and the gate is the same PURE `Check` — a host
-  wanting platform-admin/self-access composes it in its own closure around this
-  middleware.
-
-**Consumer-side nil semantics** (in the CONSUMING pockets): a nil Check-shaped
-seam is deny-by-absence — auth's `Granter` (nil = no grant on invitation accept)
-and events' `Authorize` (nil = the resource-scoped stream route never registers)
-are the live examples.
-
-## The policy seam — designed, named, DEFERRED
-
-The third kind exists as a **named seam only**: designed enough to land without
-re-deciding anything, built when its trigger fires.
-
-- **Shape when it lands:** a `policy.Evaluator` port in its own public rim
-  (`domain/policy`), one nil-safe `Repositories.Policies` field (kind OFF when
-  nil), per-kind Service methods, and — if data-driven — an `iam_policies` table
-  as the next migration number in source `"authorization"`.
-- **The named open question (decided at ITS cut):** data-driven policies (rows,
-  host-editable at runtime) vs code-registered policies (the cms `Types` / jobs
-  `Handlers` precedent).
-- **Demand trigger:** the first host need neither a relationship model nor a role
-  lookup expresses cleanly (attribute/condition rules) or runtime-editable rules.
-
-## Store parity — one suite, three backends
-
-Supported stores: **{turso, pgx}** as sibling modules, plus the in-core
-`memstore/` reference — and all three pass the ONE `storetest` suite
-(`storetest.Run(t, newRepos func(t) authorization.Repositories)`; a nil kind
-skips that kind's families with a loud named `t.Skip`). Group expansion,
-descendant lookup, and atomic `Apply` are the places the flagship could
-authorize/mutate differently per backend — recursive CTEs (both SQL stores) vs a
-Go graph walk + one mutex (`memstore`) — which is why the same suite runs against
-all three, live per dialect at milestone close.
-
-The suite's named families are acceptance criteria, not nice-to-haves:
-
-- The `Relationship/*` port contract — CRUD round-trip, the
-  one-relation-per-subject rules, desired-state `SetRelationTargets`, listings,
-  and `LookupKeyset` (`Direct`, `ByRelationTarget`, `Descendants`,
-  `DescendantsFollowTheRelationUnion`): the keyset half of the three lookup
-  ports on every dialect — `after` is EXCLUSIVE at every position, `limit` caps
-  the head of the order, ids come back DISTINCT and sorted in BYTE order (the
-  fixture ids `B a _x ~z Z é` interleave differently under a locale collation,
-  so a store comparing under the database's default collation FAILS rather than
-  passing by accident), and ONE descendant call follows the UNION of the self
-  relations along a path that ALTERNATES them.
-- `Adversarial/*` — `MembershipCycle` (cyclic group data terminates; CTEs
-  cycle-safe by relation-aware UNION dedup, memstore by a `[3]string` visited
-  set — all unbounded-but-cycle-safe), `DeepNesting`, `DiamondDedup` (with the
-  **direct-count security assertion**: `CountByResourceAndRelation` counts direct
-  tuples ONLY — that count feeds last-owner protection, and an expansion join
-  would silently overcount owners), `NestedUserset`, `PlatformAdminIsNotMagic`,
-  `MemberAdminUsersetSeparation`, `CyclePerRelationIsRelationAware`,
-  `RelationAwareConcreteGroupGrant`, `MissingUsersetRelationRejected`.
-- The `Mutations/*` family — **22 cases**: the six frozen specs
-  (`ExactReplayReturnsOriginalReceipt`, `MutationIDPayloadMismatchChangesNothing`,
-  `StaleRevisionRejected`, `RollbackLeavesNoTrace`, `NoPartialBatch`,
-  `ConcurrentSingleWinner`) plus grant/revoke/replace revisions, purge/teardown,
-  role assign/unassign scopes, expected-revision/no-op,
-  `ReplayAfterSchemaChange`, `GuardianEstablishesMinimum`,
-  `LastOwnerGuardianScenarios`, `ConcurrentGuardRevokeRacesGuardedMutation`,
-  `ConcurrentTwoOwnerRevokeRounds`, `ConcurrentReplaceNoAbsentState`,
-  `ConcurrentReceiptRevisionForensics`, `CrossScopeBatchRejectedNoStateChange`,
-  `ContextCancellationNoStateChange`, replay/stale-writer/mixed-kind storms.
-- The `Parity/*` oracle — bidirectional Check/Lookup completeness+soundness over
-  a finite fixture universe + `LimitExhaustionIsError`. It has ONE ARM PER
-  MODEL-BEARING KIND, each gated on its own kind: the relationship arm, and
-  `Parity/Roles` (added v0.3.0 — `RolesCheckLookupOracle`, plus
-  `RolesMultiPageWalk`, which pins cursor behaviour across a multi-page
-  `ListBySubject` walk per dialect). Paging joins the oracle:
-  `LookupPagedParity` — `OracleUniverse` (walk `LookupResourcesIn` at page sizes
-  1/2/7/universe; the concatenation IS the plain `LookupResources` result, same
-  ids, same order, no repeats, every id passing `Check`, every page non-nil with
-  `Truncated` mirroring `HasMore` and a continuation exactly while `HasMore`),
-  `HierarchyDescendantBeforeRoot` (a descendant lexically BEFORE its root, one
-  path alternating two self relations), `CursorIsBoundToItsQuery` (refused for
-  another principal, another permission, another resource type, and after a
-  schema change — while the cursor's OWN query still pages),
-  `IntermediateOverflowIsErrorOnEveryPage` (an overflowing `Through` target set
-  stays `ErrEvaluationLimit` on every page; a `Limit` above the budget is
-  `sdk.ErrInvalidInput`) — and `RolesPagedParity` — `ScopedWalk` (page sizes
-  1/7/50 over the multi-page assignment fixture),
-  `DuplicateGrantingRolesAppearOnce`, `GlobalGrantHasNoPage`,
-  `CursorRefusedAfterRoleModelChange`.
-- The `Budget/*` family — depth-boundary, fan-out, lookup-result-cap, and
-  sibling-Through parity across dialects.
-- The `Transactional/*` family (`storetest.RunTransactional(t, newRepos func(t)
-  (authorization.Repositories, crud.Transactor))`, separate entry point because
-  it needs the connector's transactor) — the ambient-transaction contract proven
-  from BOTH sides: `CreateJoinsTransaction`, `SetRelationTargetsJoinsTransaction`
-  (ambient read sees new, outside read sees old, until commit),
-  `SetRelationTargetsConflictRollsBackHostWork`, `DeletesJoinTransaction` (all
-  four deletes), `RolesJoinTransaction`, `ReadsJoinTransaction` (every read
-  method, both CTE budget branches, listings with a count and a cursor
-  follow-up), `MutationRefusesAmbientTransaction` (`Apply` and `ApplyGuarded`),
-  `StandaloneUnchanged`. The memstore registers it with a nil transactor and
-  skips it loudly; each SQL store runs it live and adds a direct-SQL assertion
-  that a refused guarded mutation left the anchors and receipts untouched.
-- The `Roles/*` family — assign/unassign idempotence, exact-scope isolation, the
-  Q5 global fallback, `EffectiveEnumerationAgreesWithHasRole`,
-  `ScopedRevokeGlobalRoleRemains`, `EffectivePagination`, and
-  `RolesLookupKeyset` (`Scoped`, `GlobalQueriedRoleIsUnrestricted`,
-  `GlobalUnqueriedRoleIsNotUnrestricted`, `EmptyRolesIsNothing`) — the role
-  resource-id lookup's keyset contract: byte order, exclusive `after`, capping
-  `limit`, ONE id per resource across two granting roles, and a global grant of
-  a QUERIED role as `unrestricted` with no ids to page.
-- The `Roles/Decision` family (added v0.3.0) — the same three backends run the
-  role engine over a `Config.RoleModel`: `DirectGrantAllows`,
-  `GlobalGrantSatisfiesScopedCheck`, `UndeclaredPairDenies`,
-  `GlobalRoleIsUnrestrictedOnlyForItsDeclaredPairs`.
-- The `Composed/*` family (added v0.3.0; skipped unless BOTH kinds are wired) —
-  `PairOwnershipDispatch` over a fixture whose one resource type is split across
-  the two models by permission, so the dispatch is proved per dialect and not
-  only in unit tests, plus `PagedPairOwnershipDispatch` — each owner pages to
-  its own plain result, and a relationship-owned cursor presented on the
-  role-owned permission of the SAME type is `ErrInvalidCursor` (the fingerprint
-  binds the owning KIND, not only the query).
-
-**Migrations:** source `"authorization"` — the identical four-file set in both
-store modules (dialect-specific DDL inside):
-
-- `0001_iam_relationships.sql` — the ReBAC tuple store. `relationship_id`
-  DEFAULT is `lower(hex(randomblob(16)))` (turso) / `gen_random_uuid()::text`
-  (pgx); `idx_iam_relationships_unique_subject` (WITHOUT `relation`) enforces the
-  one-relation-per-exact-`SubjectRef` rule.
-- `0002_iam_roles.sql` — the roles assignment store; `ck_iam_roles_scope_pair`
-  keeps the global/scoped pair consistent.
-- `0003_iam_scopes.sql` — the scope **revision anchors** (`(scope_kind,
-  scope_type, scope_id)` PK, `revision ≥ 0 DEFAULT 0`; an absent anchor reads as
-  revision 0 by contract).
-- `0004_iam_mutations.sql` — the mutation **receipts** keyed by `MutationID`
-  (payload digest, resulting revision, domain outcome, governing schema digest —
-  never the payload; nullable `expires_at`, permanent retention default).
-
-**Scaffold-and-own:** hosts export with `ExportMigrations(dst)` into their own
-ledger and NEVER renumber scaffolded files. Both store constructors
-(`Repositories(db, ...Option) (authorization.Repositories, error)`) probe all
-four `iam_*` tables at boot and error before the host serves traffic, naming the
-specific missing table. Migration source ordering: the four files are a
-contiguous intra-source group in filename order; the `authorization` source is
-self-contained and can sit anywhere in a host's ordered stream relative to
-`cms`/`auth`/`jobs`/`events`.
-
-**Live-store commands** (env-gated; loud skips keep `make check` hermetic):
-
-```sh
-# pgx — plain env-gate; pgx test DBs must be C-collation
-cd pockets/authorization/stores/pgx && \
-  POSTGRES_TEST_DSN='postgres://…?sslmode=disable' go test -race -count=1 ./...
-
-# turso — build-tag gated
-cd pockets/authorization/stores/turso && \
-  TURSO_DATABASE_URL='libsql://…' TURSO_AUTH_TOKEN='…' \
-  go test -tags=integration -race -count=1 -timeout 20m ./...   # full suite ≈ 12 min against the remote playground (Mutations ≈ 7 min); Go's default 10m panics
-
-# the memory reference + shared suite (hermetic, race + high-contention)
-cd pockets/authorization && go test -race ./...
-```
-
-## Wiring page — the code
-
-One complete `main.go` wiring, the executable twin of
-`examples/auth-cms/cmd/server/` (read that host for the full running program):
-
-```go
-// Both models are registered data — no migration. This one is the RELATIONSHIP
-// kind's schema; the roles kind's RoleModel follows it.
-model := authorization.NewSchema([]authorization.ResourceSchema{
-    {Name: "project", Def: authorization.ResourceTypeDef{
-        Relations: map[string]authorization.RelationDef{
-            "owner":  {AllowedSubjects: []authorization.SubjectTypeRef{{Type: "user"}}},
-            "member": {AllowedSubjects: []authorization.SubjectTypeRef{{Type: "user"}}},
+components, err := authorization.New(repos,
+    authorization.WithRelationshipModel(relationships.NewSchema([]relationships.ResourceSchema{{
+        Name: "document",
+        Def: relationships.ResourceTypeDef{
+            Relations: map[string]relationships.RelationDef{
+                "viewer": {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "user"}}},
+            },
+            Permissions: map[string]relationships.PermissionRule{
+                "view": relationships.AnyOf(relationships.Direct("viewer")),
+            },
         },
-        Permissions: map[string]authorization.PermissionRule{
-            "view":          authorization.AnyOf(authorization.Direct("owner"), authorization.Direct("member")),
-            "manage_access": authorization.AnyOf(authorization.Direct("owner")), // what the guard reads
-        },
-    }},
-    // Declaring a `platform` type with an `admin` permission + a
-    // platform:main#admin@user:<id> tuple is the (data, not Config) platform-admin
-    // recipe. The host runs the `admin` Check first in its own closure.
-    {Name: "platform", Def: authorization.ResourceTypeDef{
-        Relations:   map[string]authorization.RelationDef{"admin": {AllowedSubjects: []authorization.SubjectTypeRef{{Type: "user"}}}},
-        Permissions: map[string]authorization.PermissionRule{"admin": authorization.AnyOf(authorization.Direct("admin"))},
-    }},
-})
-
-// BOTH kinds over ONE shared-state memstore bundle (zero-infra host) so the
-// trusted SystemMutator's writes and the read side observe the same state. The
-// guardian minimum (owner, min-1) is a STORE-construction option. Production:
-// swap memstore.New for a store module — see the swap snippet below.
-store := authzmem.New(authzmem.WithGuardianPolicy(authorization.GuardianPolicy{
-    Rules: []authorization.GuardianRule{{ResourceType: "project", Relation: "owner", MinAnchors: 1}},
-}))
-
-comps, err := authorization.NewService(authorization.Repositories{
-    Relationships: store.Relationships(),
-    Roles:         store.Roles(),
-    Mutations:     store.Mutations(),
-}, authorization.Config{
-    RelationshipModel: model,
-    // The ROLES kind's model. It shares the `project` TYPE with the schema above
-    // but never a PAIR: `view`/`manage_access` are relationship-owned, `audit` is
-    // role-owned. A pair in both would be ErrModelConflict at construction.
-    RoleModel: authorization.RoleModel{ResourceTypes: map[string]authorization.RoleTypeDef{
-        "project": {Roles: []string{"auditor"}, Permissions: map[string][]string{"audit": {"auditor"}}},
-    }},
-    Guard: hostGuard{}, // the host MutationGuard reading manage_access via the DecisionView
-})
+    }})),
+    authorization.WithGuard(hostMutationGuard),
+)
 if err != nil {
     return err
 }
-authorizer := comps.Service
-writer := comps.RelationshipWriter // normal trusted application-state writer
-system := comps.SystemMutator       // advanced high-integrity capability
-if err := authorizer.Register(mount); err != nil { // logs only; no routes
-    return err
-}
 
-// Boot-seed the ownable scope through the TRUSTED SystemMutator (establish the
-// owner FIRST so a later member invitation is not member-first-blocked). Each
-// MutationID is DERIVED from its tuple, so a restart re-seed dedups.
-seed := authorization.GrantRelationshipCommand{
-    ResourceType: "project", ResourceID: "demo", Relation: "owner",
-    Subject: authorization.SubjectRef{Type: "user", ID: "demo-owner"},
-}
-seed.MutationID = authorization.DeriveMutationID("host/bootstrap-owner",
-    seed.ResourceType, seed.ResourceID, seed.Relation, seed.Subject.Type, seed.Subject.ID)
-if _, err := system.GrantRelationship(ctx, seed); err != nil {
-    return err
-}
-
-// Stop 1 — the Granter seam (auth): ordinary project sharing uses the baseline
-// writer. OperationID remains available but this adapter does not need it.
-//
-//   type invitationGranter struct {
-//       writer *authorization.RelationshipWriter
-//       reader *authorization.Service
-//   }
-//   func (g invitationGranter) Grant(ctx context.Context, in auth.GrantInput) error {
-//       row := authorization.CreateRelationship{
-//           ResourceType: in.ResourceType, ResourceID: in.ResourceID, Relation: in.Relation,
-//           SubjectType: in.SubjectType, SubjectID: in.SubjectID,
-//       }
-//       if err := g.writer.CreateRelationships(ctx, []authorization.CreateRelationship{row}); err != nil {
-//           return err
-//       }
-//       // Detached exact-state verification maps the one-relation conflict to
-//       // sdk.ErrConflict; see examples/auth-cms/cmd/server/membership.go.
-//       return verifyExactGrant(ctx, g.reader, in)
-//   }
-authCfg.Granter = invitationGranter{writer: writer, reader: authorizer}
-
-// A tenant-owner adapter can instead hold system, derive a MutationID from
-// in.OperationID + tuple, call SystemMutator.GrantRelationship, and inspect the
-// receipt. The same process may select that posture by resource type/relation.
-
-// Stop 2 — the Check seam (events): the scoped SSE stream authorizes through the
-// engine. This closure shape satisfies ANY Check-only seam. PrincipalRef is
-// concrete; a decision request cannot carry a userset.
-eventsCfg.Authorize = func(ctx context.Context, p identity.Principal, resourceType, resourceID string) (bool, error) {
-    res, err := authorizer.Check(ctx, authorization.CheckRequest{
-        Principal:  authorization.PrincipalFrom(p),
-        Permission: "view",
-        Resource:   authorization.Resource{Type: resourceType, ID: resourceID},
-    })
-    if err != nil {
-        return false, err // fail CLOSED — never `allowed, _ :=`
-    }
-    return res.Allowed, nil
-}
-
-// Stop 3 — enumeration (flagship-only API, never a seam):
-result, err := authorizer.LookupResources(ctx, authorization.PrincipalFrom(p), "view", "project")
-// The pair's owning model enumerates: result.IDs sorted, each exactly once. A
-// role-owned pair whose granting role is held GLOBALLY answers
-// result.Unrestricted with an EMPTY IDs — check it before treating empty as
-// "no access". For admin-sees-everything, run the platform-admin Check first
-// and skip filtering.
-
-// Stop 3b — the same enumeration PAGED: Limit is a page size (0 = the
-// MaxLookupResults ceiling, NOT crud's DefaultLimit; above it or negative is
-// invalid input, 400) and After is the previous page's NextCursor. The
-// top-level reads are bounded by the page; an intermediate Through target set
-// or a hierarchy root set over MaxLookupResults is still ErrEvaluationLimit on
-// every page — never a short list.
-page, err := authorizer.LookupResourcesIn(ctx, authorization.LookupRequest{
-    Principal:    authorization.PrincipalFrom(p),
-    Permission:   "view",
-    ResourceType: "project",
-    Limit:        50,
-    After:        cursorFromClient, // "" on the first page; ErrInvalidCursor (400) if it was minted for another query or an older model
-})
-if err != nil {
-    return err // fail CLOSED — a page end is never an error, an error is never a short list
-}
-// page.HasMore + page.NextCursor continue the walk in the same byte order;
-// page.Unrestricted ignores Limit and means: skip ID filtering.
-
-// Stop 3c — explain a decision (support/debug, never the hot path). CheckExplain
-// rides the SAME evaluation path and budget as Check: it cannot change the
-// decision or create a more permissive evaluator, and nothing is auto-logged.
-res, explanation, err := authorizer.CheckExplain(ctx, authorization.CheckRequest{
-    Principal:  authorization.PrincipalFrom(p),
+result, err := components.Decisions.Check(ctx, authmodel.CheckRequest{
+    Principal: authmodel.PrincipalRef{Type: "user", ID: userID},
     Permission: "view",
-    Resource:   authorization.Resource{Type: "project", ID: projectID},
-})
-if err != nil {
-    return err // fail CLOSED — an unexplained decision is not an allow
-}
-log.Info("decision", "allowed", res.Allowed, "reason_code", res.ReasonCode) // the FROZEN wire code
-for _, step := range explanation.Steps { // bounded by the same budget
-    // Kind is ExplainKindDirect / ExplainKindThrough / ExplainKindRole; a role
-    // step carries Role + Scope (ExplainScopeDirect / ExplainScopeGlobal).
-    log.Info("step", "kind", step.Kind, "depth", step.Depth,
-        "resource", step.ResourceType+":"+step.ResourceID, "relation", step.Relation,
-        "role", step.Role, "scope", step.Scope, "outcome", step.Outcome)
-}
-// explanation.Decision equals res.ReasonCode. Reason (the debug TEXT on
-// CheckResult) is not contract — never switch on it.
-
-// Stop 4 — a role-gated host route. `audit` is declared by the RoleModel, so the
-// SAME coordinate gate the relationship kind uses answers it: the surface
-// dispatches on the PAIR, never on the kind, and the host writes no gate code.
-router.Handle("GET", "/demo/audit", demoAudit(authorizer),
-    authorizer.RequirePermissionFixed("project", "audit", "demo")) // auth-cms's live line
-
-// The opaque probe stays for the raw role FACT — a capability flag, an admin
-// listing — as opposed to a decision:
-ok, err := authorizer.HasRole(ctx, authorization.PrincipalFrom(p), "auditor", "project", "demo")
-```
-
-**The store-module swap** (memstore → production turso; pgx is symmetric):
-
-```go
-import authzstore "github.com/gopernicus/gopernicus/pockets/authorization/stores/turso"
-
-repos, err := authzstore.Repositories(db,
-    authzstore.WithGuardianPolicy(authorization.DefaultGuardianPolicy())) // boot-probes all four iam_* tables
-if err != nil {
-    return err // errors BEFORE serving traffic, naming the missing table
-}
-comps, err := authorization.NewService(repos, authorization.Config{RelationshipModel: model, Guard: hostGuard{}})
-```
-
-plus the migration step: `authzstore.ExportMigrations(dst)` scaffolds the four
-`authorization`-source files into the host's ledger — apply before boot, never
-renumber.
-
-**Roles-only wiring** (kind independence — no relationship model, no ReBAC
-engine; still applies the full four-file source). Adding `Config.RoleModel` to
-this same wiring is what puts a roles-only host ON the decision surface; without
-it the five decision methods return `ErrNoDecisionKind` (HTTP 500 — a wiring
-fault) and the gates panic at mount:
-
-```go
-store := authzmem.New()
-comps, err := authorization.NewService(authorization.Repositories{
-    Roles:     store.Roles(),     // Relationships nil = that kind OFF
-    Mutations: store.Mutations(), // needed for guarded AssignRole/UnassignRole
-}, authorization.Config{Guard: hostGuard{}}) // no Model — a roles-only host never constructs one
-```
-
-**The composed-kinds closure — kept as a BEFORE/AFTER.** Until v0.3.0 the roles
-kind answered nothing on the decision surface, so every role-derived permission
-was a hand-written `HasRole` branch in the host — the host, not the pocket,
-held the role → permission mapping:
-
-```go
-// BEFORE (v0.2.0): the host derives the permission from the role itself.
-authorize := func(ctx context.Context, p identity.Principal, rt, rid string) (bool, error) {
-    principal := authorization.PrincipalFrom(p)
-    res, err := authorizer.Check(ctx, authorization.CheckRequest{
-        Principal: principal, Permission: "view", Resource: authorization.Resource{Type: rt, ID: rid},
-    })
-    if err != nil {
-        return false, err // fail CLOSED on error
-    }
-    if res.Allowed {
-        return true, nil
-    }
-    return authorizer.HasRole(ctx, principal, "auditor", rt, rid)
-}
-```
-
-```go
-// AFTER (v0.3.0): the mapping lives in Config.RoleModel, so the role-owned pair
-// is an ordinary Check — the surface dispatches it to the RoleModel.
-res, err := authorizer.Check(ctx, authorization.CheckRequest{
-    Principal:  authorization.PrincipalFrom(p),
-    Permission: "audit",
-    Resource:   authorization.Resource{Type: "project", ID: rid},
+    Resource: authmodel.Resource{Type: "document", ID: documentID},
 })
 ```
 
-A closure of the BEFORE shape is still exactly right when a host genuinely wants
-a UNION of two DIFFERENT permissions, or a bypass that spans kinds: the pocket
-dispatches each pair to one model and never merges two answers. What it is no
-longer is how a host expresses "this role grants this permission".
+`Components` contains `Decisions`, `Relationships`, `Roles`, `Mutations`, `HTTP`,
+`RelationshipWriter` and `SystemMutator`. Give request handlers the concrete
+service or narrow local interface they need. Retain the full bundle and trusted
+writers at host composition.
 
-## The proof host — examples/auth-cms
+- A relationship repository requires a relationship schema, and vice versa.
+- A roles repository can be used without a role model. `Roles` then supports
+  opaque role checks and listing; no role permission engine is created.
+- `RoleModel` requires a roles repository. A host with neither a relationship
+  schema nor a role model has no `Decisions` component.
+- A missing relationship or roles repository leaves that named component nil.
+- A nil `Guard` disables actor-facing mutations. A nonnil guard requires an
+  atomic mutation repository. Baseline writes do not require that repository.
+- `Logger` is captured at construction, defaulting to `slog.Default()`.
+  Mounting does not replace it.
 
-`examples/auth-cms` is the living posture-3 composition (all in-memory, rule 6
-demonstrated). It proves the guarded and trusted paths in host code and tests:
+Typed-nil dependencies are rejected at construction. Permission methods on a nil
+`Decisions` component report `model.ErrNoDecisionKind`; ordinary nil role reads
+report `roles.ErrRolesNotConfigured`. Prefer selecting the services your host
+actually configured at boot.
 
-- `cmd/server/authorization.go` — `authzSchema` (adds `manage_access =
-  AnyOf(Direct(owner))`), `authzGuardianPolicy` (owner/min-1 narrowed to the
-  ownable `project` type — the sanctioned host-narrowing path, since `platform`
-  is a flat admin-list type with no owner relation), `authzRoleModel` (the roles kind's `project/audit ← auditor`, sharing the
-  `project` TYPE with the schema but no PAIR), `newAuthorization` (wires
-  `Config.Guard` and BOTH models, so one host proves pair-ownership dispatch),
-  `seedAuthorization` (boot-seeds `project:demo#owner` then `platform:main#admin`,
-  and the `auditor` role assignment, via `SystemMutator` + `DeriveMutationID`).
-- `cmd/server/guard.go` — `hostMutationGuard`: a platform-admin short-circuit
-  (`view.CheckRelation(platform:main#admin)`), global (subject-scoped) mutations
-  refused (trusted-only blast radius), else the `manage_access`-backing relation
-  (`owner`) on the mutated resource scope — reading ONLY the dependency-tracking
-  `DecisionView`, so both tuples become revision-tracked dependencies. `hostActor`
-  adapts `identity.Principal` → `Actor` at the boundary.
-- `cmd/server/testdata/az3-proof-transcript.md` — the checked-in
-  exact-semantics/concurrency transcript (12 sections, real observed values;
-  claims NO effects delivery and NO generic admin API; secret-scanned clean).
+## Construction options
 
-**Honest consequence (deferred surface).** auth-cms intentionally lost its
-browser-driven role-assignment endpoints: all session-only authorization-mutation
-HTTP routes were removed (a shipped session-only mutation route is forbidden).
-Recent-auth/step-up protection is NOT claimed — authentication does not yet
-export a public sensitive-operation protector. The proof here is host code plus
-tests, not a browser flow; the browser role-assignment surface returns with the
-deferred AZADM packet.
+The root constructor is `New(repos Repositories, opts ...Option)`. Required
+per-kind ports stay in `Repositories`; optional policy uses these named values:
 
-## Non-goals (cut lines)
+| Option | Value and behavior |
+| --- | --- |
+| `WithRelationshipModel` | Complete relationship schema; required with the relationship repository |
+| `WithRoleModel` | Complete role permission model; empty restores opaque role facts |
+| `WithLimits` | Common `model.EvaluationLimits`; zero dimensions default when used |
+| `WithGuard` | Actor-facing atomic mutation policy; nil disables actor writes |
+| `WithLogger` | Borrowed operational logger; nil uses `slog.Default()` |
+| `WithRoleRoutes` | Complete `authorizationhttp.RoleRoutes` gate, assignment policy and listing defaults |
 
-- **No ABAC policy kind in v3** — the attribute/condition policy kind stays a
-  named, deferred seam (the policy-seam section is its ledger).
-- **No role IMPLICATION hierarchy, no role catalog API** — `Config.RoleModel`
-  (v0.3.0) declares which roles grant which permissions, but a role never implies
-  another role: a permission lists every role that grants it, explicitly. Roles
-  stay opaque strings at the `domain/role` rim and on every read path; the model
-  is consulted at DECISION time and, when configured, at ASSIGN time only
-  (`ErrInvalidRoleModel` on an undeclared `(type, role)` pair — existing rows are
-  never re-validated and stay removable). There is no `GetRoleModel`, no model
-  digest on receipts, and no "what can role X do" listing — those return with the
-  deferred admin packet.
-- **No decision cache** — correctness and bounded evaluation land first. Mutation
-  revisions/events make a future cache possible without inventing invalidation
-  now.
-- **No templ/HTML UI, no routes** — `Register` logs only; `/authorization/*`
-  stays claimed-unregistered. A view module is demand-gated.
-- **No cross-kind UNION and no universal-role bypass** — one decision surface
-  dispatches each pair to the model that declares it; cross-kind union and
-  universal-role bypass are not built (2026-08-26: gps-360-go hand-wrote the whole
-  roles decision half and auth-cms splits one type across kinds by permission —
-  demand for a roles engine and one surface, not for merging kinds). A pair
-  declared by both models is `ErrModelConflict` at construction. There is no
-  `Superuser` primitive: a globally held role grants only the role-owned
-  permissions that name it, and a true bypass of relationship-owned or future
-  permissions stays a host closure around the surface. Trigger for the union: the
-  first host that must declare one pair in both models. Trigger for an override
-  seam: a second host needing the same bypass shape that cannot express it as
-  explicit grants.
-- **No `sdk/authorization` port** — authorization's check/decision vocabulary
-  stays consumer-declared (fails the sdk graduation criteria today); identity
-  rides `sdk/foundation/identity`.
-- **No groups aggregate** (Q1 TRIM): expansion is pure tuples
-  (`group:{id}#member@user:{x}`); a groups table returns with the first
-  named-group UX demand as migration 0005+.
-- **No PostfilterLoop** (§2.6 demand gate) — a future enumeration-shaped consumer
-  seam must ship paired with it.
+Options apply in order and replace their entire value/group. They do not merge
+nonzero fields. Replacing role routes with `RoleRoutes{}` removes the prior gate
+and assignment policy, leaving handlers disabled. An assignment policy without a
+gate is invalid. A nonzero invalid list strategy fails even with no gate; a valid
+orphaned strategy is ignored. Limits on an opaque, unguarded roles-only host retain
+the existing unused-budget behavior.
 
-## Deferred follow-ups (non-blocking, not part of the v3 gate)
+All four construction families reject nil options with an error wrapping
+`sdk.ErrInvalidInput`. A valid option carrying a nil logger, guard or disabled
+route gate keeps its documented meaning. Source model maps/slices are captured
+by value; services, immutable compiled models and callbacks remain borrowed.
+There is no supported option application against a running service.
 
-These are recorded, ratified-as-deferred packets — not gaps, and not part of the
-v3 completion gate:
+## Construct services directly
 
-- **Effects and observability**
-  (`.claude/plans/authorizationv3/05-effects-and-observability.md`). The v3
-  correctness kernel emits **no** durable side effects: it lands the mutation
-  identity, revision, receipt, and audit vocabulary a later adapter needs without
-  creating a delivery queue, dispatching a post-commit callback, or appending an
-  event. Before it executes it must ratify command/event cardinality and choose
-  an honest procedural guarantee (at-least-once with a MutationID-idempotent
-  handler, or at-most-once best effort) — domain mutation idempotency alone
-  cannot prove a procedural side effect was not duplicated. Durable mode requires
-  a same-transaction events outbox, never an authorization-specific jobs table,
-  and must consume the shared `sdk/capabilities/work` + `pockets/jobs`
-  vocabulary.
-- **Generic admin surface**
-  (`.claude/plans/authorizationv3/06-admin-and-proof-host.md`). API-only, and
-  **blocked indefinitely** — it may not execute until authentication exports a
-  host-facing sensitive-operation protector covering live session, origin/CSRF,
-  and operation-bound recent-auth consumption. **That seam does not exist**: the
-  current authentication pocket does not export a public recent-auth consume /
-  browser-safe mutation gate, and no ratified authentication follow-up creates
-  one, so a generic authorization admin adapter that claims auth-v3 step-up
-  composition is a **missing prerequisite**, not a satisfied v3 premise.
-  Authorization must never unblock itself by importing authentication internals.
+The same implementations are available without root composition:
 
-## UPGRADE NOTE — v1 → v3 (host-owned, data-preserving)
+```go
+relationshipParts, err := relationships.NewService(
+    relationshipStore, relationshipSchema, relationships.WithLimits(limits),
+)
+if err != nil { return err }
 
-A host with a live pre-v3 authorization database follows the **executed,
-data-preserving upgrade runbook**, [`stores/UPGRADE.md`](stores/UPGRADE.md), which
-wraps the detection-and-repair queries in [`stores/CONVERSION.md`](stores/CONVERSION.md).
-The one semantic change that moves access is that **the userset relation became
-load-bearing**: v1 hard-coded `relation = 'member'` and ignored the stored
-`subject_relation`, so a `group:g#admin` grant behaved like `#member` and a
-concrete `group:g` grant reached the group's members; v3 evaluates the exact
-stored relation. Before deploying, the runbook's **gain/lose/retain assessment**
-tells an adopter each stored shape's access fate — concrete principals and valid
-`#member` usersets **retain**; concrete-group grants and non-`member` usersets
-**lose** the over-broad access v1's `member` collapse granted; structurally
-malformed rows **block** until repaired.
+roleService, err := roles.NewService(roleStore)
+if err != nil { return err }
 
-The runbook is **executed and validated** (AZ3-5.1, 2026-07-14): it ran end to end
-against a populated v1 fixture on live PostgreSQL and libSQL/SQLite, and booted a
-v3 `Service` over the converted PostgreSQL store to confirm the verdicts. Two rules
-are load-bearing and non-negotiable: **no step resets a real adopter database**
-(the destructive reset path is dev/example only), and **no ambiguous or missing
-userset relation is ever silently defaulted to `member`** — that guess is the v1
-defect v3 removes. The constraints are added with an explicit
-`ALTER TABLE … ADD CONSTRAINT` (PostgreSQL) or table-rebuild (libSQL/SQLite), which
-**fails while any malformed row remains** — the enforced repair gate.
+decisionService, err := decisions.NewService(decisions.Readers{
+    Relationships: relationshipParts.Service,
+    Roles: roleService,
+}, decisions.WithRoleModel(roleModel))
+if err != nil { return err }
+
+mutationParts, err := mutations.NewService(mutationRepository, mutations.Services{
+    Relationships: relationshipParts.Service,
+    Roles: roleService,
+},
+    mutations.WithRoleModel(decisionService.CompiledRoleModel()),
+    mutations.WithGuard(hostMutationGuard),
+)
+if err != nil { return err }
+```
+
+Imports in this example are the corresponding `logic/roles`, `logic/decisions`
+and `logic/mutations` packages. Services with a supplied relationship engine
+inherit its limits when their entire `Limits` value is zero. Explicit limits
+must resolve to exactly the engine's limits; mismatched budgets fail construction.
+A mutation service also rejects an independently compiled role model that
+conflicts with the supplied relationship model.
+
+`relationships.NewService` and `mutations.NewService` return small capability
+bundles because their trusted writers must be held separately. `roles.NewService`
+and `decisions.NewService` return their actual service and an error.
+
+## Models and decisions
+
+Relationship tuples are keyed by resource type, resource ID, relation, subject
+type, subject ID and optional subject relation. A concrete `group:g1` and a
+userset `group:g1#member` are different subjects. Only the exact userset expands;
+`#member` never expands `#admin`, and a concrete group reference does not
+implicitly mean group membership. The current schema controls every permission
+read, including reads inside mutation guards and lookup validation.
+
+`relationships.Through("parent", "view")` follows navigation to another
+resource's permission. Self-referential hierarchies are supported; graph cycles
+and work limits are handled by the evaluator. `relationships.AnyOf` groups alternative permission checks.
+
+Model options snapshot their source maps and slices when created; constructors
+compile independent immutable models. Changing the input maps after option
+creation or construction cannot change decisions. `Relationships.GetSchema()`
+returns an immutable snapshot; its collection accessors return copies.
+`SchemaDigest()` and `GetSchema()` return values directly, without an error.
+
+A `model.RoleModel` declares roles and the permissions they grant per resource
+type. An exact scoped role grant is checked first, then the principal's global
+assignment. A global assignment applies only to permissions whose model names
+that role. Resource-independent permissions can use a singleton resource type.
+Opaque role reads and unassignment remain useful for inspecting/removing old
+facts; modeled permission decisions and guarded assignments use the current
+model.
+
+Each `(resource type, permission)` pair belongs to exactly one model. Declaring
+it in both is `model.ErrModelConflict`. A type may exist in both models with
+different permissions. The decision service dispatches to the owning model;
+it does not combine unrelated role and relationship answers. Host-specific
+administrator or self-access rules belong in host policy.
+
+`Check`, `CheckExplain`, `CheckBatch` and `FilterAuthorized` fail closed on errors.
+A denied result is different from an indeterminate error. `ReasonCode` gives a
+stable classification; explanation traces describe the owning evaluator.
+
+## Lists and evaluation budgets
+
+`model.EvaluationLimits` bounds traversal depth, distinct graph states,
+evaluation steps, relation fan-out, batch size, lookup results and candidate
+scanning. Zero fields select finite defaults; negatives are rejected. Exhausted
+evaluation returns `model.ErrEvaluationLimit` (`sdk.ErrUnavailable`), never a
+complete-looking truncated result. Store query counts remain adapter telemetry,
+not an interchangeable semantic budget.
+
+Three list workflows are supported:
+
+1. `Decisions.LookupAllResourceIDs` returns a bounded complete `ResourceSet` for
+   hosts that can filter their own storage query with IDs. It fails when the
+   complete set exceeds the configured cap.
+2. `Decisions.LookupResourceIDPage` enumerates one page of authorized IDs. Treat
+   it as enumeration, not as permission to claim a globally complete set.
+3. `decisions.FilterPage` scans a host-owned ordered candidate source, checks
+   authorization in batches, and fills a visible page within a scan budget.
+   Resume using its cursor. `ScanLimitReached` identifies a partial page that
+   ended at the scan budget rather than at the end of the underlying collection.
+
+Cursors bind the query, principal, resource type, permission, owning model and
+model digest. Reusing them for a changed query or model fails with an invalid
+cursor error. They are continuation state, not authorization grants.
+
+The host owns content ordering, SQL joins, counts and pagination semantics.
+`examples/auth-cms` exercises separate-store ID filtering, ordered candidates and
+SQL pushdown. Do not join authorization rows with ad hoc semantics: a correct
+join must preserve exact usersets, scope fallback, current model ownership and
+limit behavior. Shared helpers make the separate-store paths usable without
+making a particular database mandatory.
+
+## Choose the write capability deliberately
+
+`relationships.RelationshipWriter` supports trusted baseline state operations:
+`CreateRelationships`, `SetRelationTargets`, `DeleteRelationship`, and
+`DeleteResourceRelationships`. The last three take a `model.Resource`.
+Additions validate the current schema. These operations bypass actor guards and
+guardian minimums; they are intended for host-managed facts and provisioning.
+They use the store's ambient transaction and audit contracts. A read service
+cannot return or manufacture its writer.
+
+`roles.Writer` is an explicit trusted raw role writer constructed from a raw
+`roles.Storer`. It validates tuple structure, but has no role model, guard or
+guardian policy. Ordinary actor-facing assignment and unassignment belong to
+`mutations.Service`.
+
+The guarded mutation service provides typed assignment, unassignment, grant,
+revoke, replace and resource-purge operations. The host guard receives an actor,
+an immutable proposed change and a `mutations.DecisionView`. It must authorize
+against that view: its reads execute within the repository's atomic operation,
+so checks and changes cannot race each other through unrelated outer reads.
+Repository retries receive a fresh proposed change. There is no mutation receipt
+ledger or idempotency key; repeated commands apply normal tuple/no-op semantics.
+
+`mutations.Result` reports the committed outcome (`applied`, `no_change` or
+`not_found`). Policy, semantic and invariant failures are errors.
+`mutations.ReasonFor` classifies mutation errors. Unassignment also reports
+whether the same role remains effective through another scope.
+
+Guardian rules protect configured minimum anchor counts. Rules must match the
+host model. Actor purge is bounded by `MaxBatchSize` and keeps guardian rules.
+Trusted resource deletion uses `SystemMutator.TeardownResourceAuthorization`
+with a required bounded reason. `SystemMutator.Apply` cannot bypass that reason
+requirement by submitting a generic teardown command.
+
+## HTTP adapters and host-owned routes
+
+```go
+import authorizationhttp "github.com/gopernicus/gopernicus/pockets/authorization/inbound/http"
+
+adapter, err := authorizationhttp.New(authorizationhttp.Services{
+    Decisions: components.Decisions,
+    Roles: components.Roles,
+    Mutations: components.Mutations,
+}, authorizationhttp.WithRoleRoutes(authorizationhttp.RoleRoutes{
+    Gate: hostRoleAdministrationMiddleware,
+}))
+if err != nil { return err }
+
+mux.Handle("POST /admin/roles", adapter.AssignRole())
+mux.Handle("GET /admin/roles", adapter.RolesBySubject())
+mux.Handle("GET /documents/{id}", adapter.RequirePermissionOn(
+    "document", "view", "id",
+)(documentHandler))
+```
+
+Pass only configured services; omit absent optional interface fields instead of
+putting typed-nil pointers in them. Root composition handles this wiring.
+
+The adapter validates dependencies, budgets, role-route posture and list strategy.
+Individual role handler builders retain the configured gate, including when the
+host chooses different routes. A nil gate disables all five role handlers, whose
+individual builders then return not-found handlers. The host gate is responsible
+for authentication, authorization and browser-origin/CSRF protection when needed.
+Handlers still reject requests without a concrete SDK principal.
+
+For bundled paths, use `adapter.Register(router)` or root
+`components.Register(mount)`. Pass `authorization.WithRoleRoutes(authorizationhttp.RoleRoutes{Gate: gate})`
+to root construction to enable:
+
+| Method | Bundled path |
+| --- | --- |
+| POST | `/authorization/roles` |
+| POST | `/authorization/roles/unassign` |
+| GET | `/authorization/roles/by-subject` |
+| GET | `/authorization/roles/by-resource` |
+| GET | `/authorization/roles/effective` |
+
+A role gate requires role reads and guarded writes. An assignment-only legality
+policy can use `RoleRoutes.AssignmentPolicy`; it requires
+enabled role routes and supplements the atomic guard. The default list strategy
+is cursor; offset is also supported. List strategy is validated even when routes
+are disabled. Enabled bundled routes require a usable router.
+
+Permission middleware includes `RequirePermission`, `RequirePermissionOn`,
+`RequirePermissionFixed` and `RequireAnyPermission`, with `FixedResource`,
+`PathResource` and `GateSpec` helpers. Static invalid coordinates fail during
+route setup. Runtime errors use `RespondError`: no principal is 401, a denied
+permission is 403, an exhausted evaluation is 503, and an infrastructure failure
+is 500. Host custom routes can call the same mapper.
+
+## Stores, audit and upgrades
+
+Relationships and role assignments are composite-keyed facts without synthetic
+IDs or creation timestamps. Their deterministic raw listing order uses the tuple
+fields. Role listings distinguish exact assignment rows from effective grants
+that merge scoped and global provenance.
+
+Committed audit history is opt-in at store construction. `iam_audit` records
+applied changes and attribution atomically with the write. It is neither an
+idempotent receipt ledger nor a denied-attempt log. Hosts own audit access,
+retention and export; `Repositories.Audit` supplies reads when available.
+
+Run the shared `stores/storetest` suites for store correctness. Host-owned
+migrations and dialect requirements are documented in:
+
+- [Store upgrade runbook](stores/UPGRADE.md)
+- [Store conversion guidance](stores/CONVERSION.md)
+- [PostgreSQL](stores/pgx/README.md)
+- [Turso](stores/turso/README.md)
+- [Firestore](stores/firestore/README.md) and its [upgrade guide](stores/firestore/UPGRADE.md)
+
+The package reorganization changes imports, construction and receiver ownership;
+it changes no SQL schema, tuple format, cursor encoding or audit storage format.
+Consumer migration notes live in the repository's `AUDIT.md`.

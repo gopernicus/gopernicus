@@ -7,7 +7,8 @@ import (
 	"strings"
 
 	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
-	"github.com/gopernicus/gopernicus/pockets/authentication/domain/passwordreset"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/passwordreset"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/session"
 	"github.com/gopernicus/gopernicus/sdk"
 )
 
@@ -27,33 +28,67 @@ type PasswordResetStore struct {
 var _ passwordreset.Repository = (*PasswordResetStore)(nil)
 
 // NewPasswordResetStore returns a PasswordResetStore backed by db.
+// It panics if db is nil; the caller owns the database lifecycle.
 func NewPasswordResetStore(db *tursodb.DB) *PasswordResetStore {
+	if db == nil {
+		panic("authentication turso: NewPasswordResetStore received a nil database")
+	}
 	return &PasswordResetStore{db: db}
 }
 
 // Redeem atomically consumes the live reset challenge and applies the full reset
-// composition, returning the reset user's ID. A non-live challenge (unknown,
-// consumed, or expired) → sdk.ErrNotFound with no changes applied.
+// composition, including the current recovery/revision binding check and one
+// revision increment. Unknown, expired, consumed or stale proof returns
+// sdk.ErrNotFound with no changes applied.
 func (s *PasswordResetStore) Redeem(ctx context.Context, in passwordreset.RedeemInput) (passwordreset.RedeemResult, error) {
 	if in.TokenDigest == "" {
 		return passwordreset.RedeemResult{}, sdk.ErrNotFound
 	}
 	var userID string
 	err := s.db.InTx(ctx, func(tx *tursodb.Tx) error {
+
+		if err := tx.QueryRow(ctx, `SELECT user_id FROM challenges WHERE purpose = ? AND secret_digest = ? AND expires_at > ?`, in.Purpose, in.TokenDigest, tursodb.FormatTime(in.Now)).Scan(&userID); err != nil {
+			return tursodb.MapError(err)
+		}
+		revision, err := lockCredentialUser(ctx, tx, userID)
+		if errors.Is(err, session.ErrUserNotActive) {
+			return sdk.ErrNotFound
+		}
+		if err != nil {
+			return err
+		}
+		var proofContext sql.NullString
 		// 1. Consume the LIVE password_reset challenge, resolving the user from it.
 		// The expires_at guard excludes expired rows, so unknown/expired/used all
 		// return no row → sdk.ErrNotFound (the single generic failure).
 		selErr := tx.QueryRow(ctx,
 			`DELETE FROM challenges
-				WHERE purpose = ? AND secret_digest = ? AND expires_at > ?
-				RETURNING user_id`,
-			in.Purpose, in.TokenDigest, tursodb.FormatTime(in.Now)).
-			Scan(&userID)
+				WHERE user_id = ? AND purpose = ? AND secret_digest = ? AND expires_at > ?
+				RETURNING context`,
+			userID, in.Purpose, in.TokenDigest, tursodb.FormatTime(in.Now)).
+			Scan(&proofContext)
 		if selErr != nil {
 			if errors.Is(selErr, sql.ErrNoRows) {
 				return sdk.ErrNotFound
 			}
 			return tursodb.MapError(selErr)
+		}
+
+		binding, err := passwordreset.ParseBinding(bytesFrom(proofContext))
+		if err != nil {
+			return err
+		}
+		row, err := tursodb.QueryOne[identifierRow](ctx, tx,
+			`SELECT `+identifierColumns+` FROM user_identifiers WHERE id = ?`, binding.IdentifierID)
+		if err != nil {
+			return tursodb.MapError(err)
+		}
+		if !binding.Matches(userID, revision, row.toDomain()) {
+			return sdk.ErrNotFound
+		}
+
+		if err := bumpCredentialRevision(ctx, tx, userID, in.Now); err != nil {
+			return err
 		}
 		// 2. Set the typed password row.
 		if _, err := tx.Exec(ctx,

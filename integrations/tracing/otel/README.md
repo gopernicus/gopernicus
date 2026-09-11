@@ -32,13 +32,17 @@ modes:
 | `ExporterProvider`    | a caller-supplied `trace.TracerProvider` (`Config.Provider`) | caller owns the provider; `Shutdown` is a no-op |
 
 A zero `Config` is a usable dev tracer: empty `Exporter` defaults to stdout, empty
-`ServiceName` to `gopernicus`, and a zero `SampleRate` to full sampling.
+`ServiceName` to `gopernicus`. Stdout samples root spans and honors the parent
+sampling decision. OTLP literal `SampleRate: 0` samples no roots; environment
+loading defaults the ratio to 1. All configurations reject nonfinite ratios and
+values outside [0,1]. Caller-supplied providers retain their own sampling policy.
 
 ```go
 tracer, err := otel.Open(ctx, otel.Config{
     Exporter:    otel.ExporterOTLPGRPC,
     ServiceName: "cms",
     Endpoint:    "localhost:4317",
+    SampleRate:  1,
     Insecure:    true,
 })
 if err != nil {
@@ -52,7 +56,7 @@ defer span.Finish()
 span.SetAttributes(tracing.StringAttribute("entry.id", id))
 ```
 
-The scalar `Config` fields carry `env:` tags for `sdk/foundation/environment.ParseEnvTags`
+The scalar `Config` fields carry `env:` tags for `sdk/pkg/environment.ParseEnvTags`
 (`TRACING_EXPORTER`, `TRACING_SERVICE_NAME`, `TRACING_OTLP_ENDPOINT`, …); the
 `Stdout` and `Provider` fields are programmatic-only.
 
@@ -71,3 +75,42 @@ Hermetic, no network. The provider mode is exercised against otel's
 through the `sdk/capabilities/tracing.Tracer` surface; the stdout mode redirects output to a
 buffer and asserts the emitted JSON; the OTLP/gRPC mode is verified to construct
 and shut down offline. Run with `go test ./...`.
+
+## HTTP spans and propagation
+
+```go
+router.Use(otel.Middleware(tracer, otel.HTTPConfig{
+    TrustTraceContext: false,
+}), web.Logger(log), web.Panics(log))
+```
+
+Mount middleware inside routing so `r.Pattern` is available. This adapter starts
+server spans and supplies current typed HTTP attributes at creation time, where
+the sampler can read them. It reuses SDK completion and context/log identity
+handling. Ordinary `tracer.StartSpan` still starts internal spans.
+
+`TrustTraceContext` explicitly accepts W3C traceparent/tracestate. With
+parent-based sampling, accepted callers can choose the sampling flag regardless
+of the root ratio. The default ignores incoming trace headers and keeps any
+existing context parent. No global provider/propagator or baggage extraction is
+installed. Hosts choose which inbound callers they trust.
+
+The bounded metadata subset includes method, route template, scheme, server and
+peer address/port, and known response status. Status and ports are integers.
+Unknown routes never fall back to raw request paths. Raw URLs, queries, bodies,
+user-agent and arbitrary headers are omitted. This is a deliberate subset of
+HTTP semantic conventions, not a claim of full instrumentation coverage.
+
+Completion reports response errors and escaping panics using safe failure
+categories, finishes once, and rethrows escaping panics unchanged. A partial
+response retains its committed status; panic/abort/hijack before commitment has
+no invented status. Logger keeps its original cause. `error.type` is the fixed
+`http.request_failed` category. The generic SDK middleware retains its legacy
+string attribute path for other tracers.
+
+Dashboard migration: the adapter uses `http.request.method`, integer
+`http.response.status_code`, `server.address`/`server.port`,
+`network.peer.address`/`network.peer.port` and method-free `http.route`.
+Replace queries using `http.method`, string `http.status_code`, `http.host` or
+`net.peer.ip` when switching middleware.
+See [AUDIT-015](../../../AUDIT.md#audit-015-bound-oauth-flows-and-truthful-tracing).

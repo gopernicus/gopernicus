@@ -11,7 +11,6 @@ import (
 	"os"
 	"path"
 	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 )
@@ -33,8 +32,9 @@ type migrationSource struct {
 }
 
 // RunMigrations applies the host-owned SQL migration stream at migrationsDir.
-// Migrations are applied in filename order, in one transaction, and recorded in
-// schema_migrations with a checksum guard. Files prefixed with "_" are skipped.
+// Direct SQL files are applied in filename order, in one transaction, and
+// recorded in schema_migrations with a checksum guard. Files prefixed with "_"
+// are skipped.
 //
 // One database, one stream: a host exports every pocket's migrations into a
 // single merged, filename-ordered directory and calls RunMigrations once per
@@ -94,7 +94,7 @@ func ExportMigrations(migrationsFS fs.FS, dir, dst string) error {
 		return err
 	}
 	for _, e := range entries {
-		if e.IsDir() {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".sql") {
 			continue
 		}
 		data, err := fs.ReadFile(migrationsFS, path.Join(dir, e.Name()))
@@ -212,23 +212,17 @@ func migrateLegacyMigrationsTable(ctx context.Context, tx *Tx) error {
 }
 
 func getMigrationFiles(migrationsFS fs.FS, dir string) ([]string, error) {
-	var files []string
-
-	err := fs.WalkDir(migrationsFS, dir, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		name := filepath.Base(path)
-		if !d.IsDir() && strings.HasSuffix(name, ".sql") && !strings.HasPrefix(name, "_") {
-			files = append(files, name)
-		}
-		return nil
-	})
+	entries, err := fs.ReadDir(migrationsFS, dir)
 	if err != nil {
 		return nil, err
 	}
-
-	sort.Strings(files)
+	var files []string
+	for _, entry := range entries {
+		name := entry.Name()
+		if !entry.IsDir() && strings.HasSuffix(name, ".sql") && !strings.HasPrefix(name, "_") {
+			files = append(files, name)
+		}
+	}
 	return files, nil
 }
 
@@ -239,7 +233,7 @@ func getMigrationFiles(migrationsFS fs.FS, dir string) ([]string, error) {
 func applyMigration(ctx context.Context, tx *Tx, src migrationSource, file string) error {
 	version := file
 
-	content, err := fs.ReadFile(src.FS, filepath.Join(src.Dir, file))
+	content, err := fs.ReadFile(src.FS, path.Join(src.Dir, file))
 	if err != nil {
 		return fmt.Errorf("read migration file: %w", err)
 	}

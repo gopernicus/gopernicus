@@ -5,7 +5,6 @@ import (
 	"fmt"
 
 	gcfs "cloud.google.com/go/firestore"
-
 	firestoredb "github.com/gopernicus/gopernicus/integrations/datastores/firestore"
 	"github.com/gopernicus/gopernicus/sdk"
 )
@@ -40,4 +39,8 @@ func readPassword(ctx context.Context, db *firestoredb.DB, r firestoredb.Reader,
 		return "", fmt.Errorf("authentication firestore store: decoding %s: %s: %w", collectionPasswords, err, sdk.ErrInvalidInput)
 	}
 	return row.Hash, nil
+}
+
+func dropPassword(ctx context.Context, db *firestoredb.DB, w firestoredb.Writer, userID string) error {
+	return w.Delete(ctx, passwordRef(db, userID))
 }

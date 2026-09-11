@@ -4,11 +4,10 @@ import (
 	"context"
 	"time"
 
-	"github.com/jackc/pgx/v5"
-
 	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
-	"github.com/gopernicus/gopernicus/pockets/authentication/domain/identifier"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/identifier"
 	"github.com/gopernicus/gopernicus/sdk"
+	"github.com/jackc/pgx/v5"
 )
 
 // IdentifierStore implements identifier.IdentifierRepository over a PostgreSQL
@@ -26,7 +25,11 @@ type IdentifierStore struct {
 var _ identifier.IdentifierRepository = (*IdentifierStore)(nil)
 
 // NewIdentifierStore returns an IdentifierStore backed by db.
+// It panics if db is nil; the caller owns the database lifecycle.
 func NewIdentifierStore(db *pgxdb.DB, opts ...Option) *IdentifierStore {
+	if db == nil {
+		panic("authentication pgx: NewIdentifierStore received a nil database")
+	}
 	return &IdentifierStore{db: db, qualified: qualified{schema: applyOptions(opts).schema}}
 }
 

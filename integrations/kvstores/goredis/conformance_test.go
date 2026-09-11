@@ -114,13 +114,7 @@ func TestConformance_Bus(t *testing.T) {
 	eventstest.Run(t, func(t *testing.T) events.Bus {
 		rdb := dialLive(t, addr)
 		prefix := fmt.Sprintf("evtest:%d:", time.Now().UnixNano())
-		return goredis.New(rdb, slog.New(slog.DiscardHandler), goredis.Options{
-			StreamPrefix:  prefix,
-			ConsumerGroup: "conformance",
-			Workers:       2,
-			BlockTimeout:  150 * time.Millisecond,
-			BatchSize:     10,
-		})
+		return goredis.New(rdb, goredis.WithLogger(slog.New(slog.DiscardHandler)), goredis.WithStreamPrefix(prefix), goredis.WithConsumerGroup("conformance"), goredis.WithWorkers(2), goredis.WithBlockTimeout(150*time.Millisecond))
 	})
 }
 
@@ -133,6 +127,16 @@ func TestConformance_Cacher(t *testing.T) {
 	cachertest.Run(t, func(t *testing.T) cacher.Storer {
 		rdb := dialLive(t, addr)
 		prefix := fmt.Sprintf("cachetest:%d:", time.Now().UnixNano())
+		return goredis.NewCacher(rdb, goredis.WithCacheKeyPrefix(prefix))
+	})
+}
+
+// TestConformance_CacherPrefix verifies the optional literal-prefix contract.
+func TestConformance_CacherPrefix(t *testing.T) {
+	addr := requireAddr(t)
+	cachertest.RunPrefix(t, func(t *testing.T) cacher.Storer {
+		rdb := dialLive(t, addr)
+		prefix := fmt.Sprintf("cachetest[*?]\\:%d:", time.Now().UnixNano())
 		return goredis.NewCacher(rdb, goredis.WithCacheKeyPrefix(prefix))
 	})
 }
@@ -158,8 +162,8 @@ func TestBroadcastFansOutAcrossInstances(t *testing.T) {
 
 	prefix := fmt.Sprintf("bcast:%d:", time.Now().UnixNano())
 	log := slog.New(slog.DiscardHandler)
-	busA := goredis.New(dialLive(t, addr), log, goredis.Options{StreamPrefix: prefix})
-	busB := goredis.New(dialLive(t, addr), log, goredis.Options{StreamPrefix: prefix})
+	busA := goredis.New(dialLive(t, addr), goredis.WithLogger(log), goredis.WithStreamPrefix(prefix))
+	busB := goredis.New(dialLive(t, addr), goredis.WithLogger(log), goredis.WithStreamPrefix(prefix))
 	t.Cleanup(func() {
 		_ = busA.Close(context.Background())
 		_ = busB.Close(context.Background())
@@ -176,11 +180,8 @@ func TestBroadcastFansOutAcrossInstances(t *testing.T) {
 		t.Fatalf("SubscribeBroadcast() error = %v", err)
 	}
 
-	// Give the SUBSCRIBE a moment to be live before publishing.
-	time.Sleep(300 * time.Millisecond)
-
 	event := events.NewBaseEvent("note.created").WithTenant("t1").WithAggregate("note", "n1")
-	if err := busB.Emit(context.Background(), event, events.WithSync()); err != nil {
+	if err := busB.Publish(context.Background(), event); err != nil {
 		t.Fatalf("Emit() error = %v", err)
 	}
 
@@ -204,7 +205,7 @@ func TestBroadcastFansOutAcrossInstances(t *testing.T) {
 	}
 
 	// Topic filtering: an unmatched type must not arrive.
-	if err := busB.Emit(context.Background(), events.NewBaseEvent("other.event"), events.WithSync()); err != nil {
+	if err := busB.Publish(context.Background(), events.NewBaseEvent("other.event")); err != nil {
 		t.Fatalf("Emit(other) error = %v", err)
 	}
 	select {

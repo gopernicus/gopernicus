@@ -6,7 +6,7 @@ import (
 
 	"github.com/a-h/templ"
 
-	"github.com/gopernicus/gopernicus/sdk/foundation/web"
+	"github.com/gopernicus/gopernicus/sdk/pkg/web"
 	"github.com/gopernicus/gopernicus/ui/goth"
 	"github.com/gopernicus/gopernicus/ui/goth/primitives"
 )
@@ -169,7 +169,7 @@ func selectionFormSpecimen() string {
 // browser harness can assert real submission with no JavaScript.
 func (s *Server) registerSelectionFixtures() {
 	s.handler.Handle(http.MethodGet, "/selection/echo", func(w http.ResponseWriter, r *http.Request) {
-				bundle := s.bundles[goth.StylesOnly]
+		bundle := s.bundles[goth.StylesOnly]
 		w.Header().Set("Content-Security-Policy", buildCSP(bundle, false))
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 

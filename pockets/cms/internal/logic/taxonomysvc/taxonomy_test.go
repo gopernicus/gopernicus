@@ -8,9 +8,7 @@ import (
 	"time"
 
 	"github.com/gopernicus/gopernicus/pockets/cms/domain/taxonomy"
-
 	"github.com/gopernicus/gopernicus/sdk"
-	"github.com/gopernicus/gopernicus/sdk/foundation/cryptids"
 )
 
 // fakeTerms is an in-memory TermRepository for driving the service.
@@ -77,7 +75,7 @@ func clock(start time.Time) Clock {
 
 func TestService_Terms(t *testing.T) {
 	ctx := context.Background()
-	svc := NewService(newFakeTerms(), cryptids.IDGenerator{}, clock(time.Date(2026, 6, 22, 0, 0, 0, 0, time.UTC)))
+	svc := NewService(newFakeTerms(), sdk.IDGenerator{}, clock(time.Date(2026, 6, 22, 0, 0, 0, 0, time.UTC)))
 
 	cat, err := svc.CreateTerm(ctx, taxonomy.KindCategory, "News & Updates", "")
 	if err != nil {
@@ -124,7 +122,7 @@ func TestService_Terms(t *testing.T) {
 
 func TestService_TermErrors(t *testing.T) {
 	ctx := context.Background()
-	svc := NewService(newFakeTerms(), cryptids.IDGenerator{}, clock(time.Now()))
+	svc := NewService(newFakeTerms(), sdk.IDGenerator{}, clock(time.Now()))
 
 	if _, err := svc.CreateTerm(ctx, taxonomy.Kind("bogus"), "x", ""); !errors.Is(err, sdk.ErrInvalidInput) {
 		t.Errorf("bad kind: %v", err)

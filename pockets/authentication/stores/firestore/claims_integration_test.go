@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gopernicus/gopernicus/pockets/authentication/domain/identifier"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/identifier"
 	"github.com/gopernicus/gopernicus/sdk"
 )
 

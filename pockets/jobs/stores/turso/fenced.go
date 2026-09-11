@@ -9,9 +9,9 @@ import (
 	"time"
 
 	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
-	"github.com/gopernicus/gopernicus/pockets/jobs/domain/job"
+	job "github.com/gopernicus/gopernicus/pockets/jobs/logic/queue"
 	"github.com/gopernicus/gopernicus/sdk"
-	"github.com/gopernicus/gopernicus/sdk/foundation/workers"
+	"github.com/gopernicus/gopernicus/sdk/pkg/workers"
 )
 
 // fencedColumns is the fenced_job_queue projection, in fencedRow's field order.
@@ -38,10 +38,13 @@ type FencedQueue struct {
 
 // NewFencedQueueStore returns a FencedQueue backed by db. The claim lease is
 // per-claim (the caller supplies leaseFor to Claim), so there is no store-level
-// lease default to configure. It sets busy_timeout best-effort; the bounded retry
-// loop is the real contention defense.
+// lease default to configure. The host owns connection settings; store operations
+// use bounded busy retries.
+// It panics if db is nil; the caller owns the database lifecycle.
 func NewFencedQueueStore(db *tursodb.DB) *FencedQueue {
-	_, _ = db.Exec(context.Background(), "PRAGMA busy_timeout = 5000")
+	if db == nil {
+		panic("jobs turso: NewFencedQueueStore received a nil database")
+	}
 	return &FencedQueue{db: db}
 }
 
@@ -405,7 +408,20 @@ func insertFenced(ctx context.Context, tx *tursodb.Tx, in job.Enqueue) (job.Job,
 	if id == "" {
 		id = newID("job")
 	}
-	now := tursodb.FormatTime(time.Now().UTC())
+	// BEGIN IMMEDIATE serializes this read with other admissions. Fixed-width
+	// TEXT retains nanoseconds; advance past all same-key generations, including
+	// terminal jobs, when the clock repeats or moves backward.
+	createdAt := time.Now().UTC()
+	if in.LogicalKey != "" {
+		var latest tursodb.NullTime
+		if err := tx.QueryRow(ctx, `SELECT MAX(created_at) FROM fenced_job_queue WHERE logical_key = ?`, in.LogicalKey).Scan(&latest); err != nil {
+			return job.Job{}, tursodb.MapError(err)
+		}
+		if latest.Valid && !createdAt.After(latest.Time) {
+			createdAt = latest.Time.Add(time.Nanosecond)
+		}
+	}
+	now := tursodb.FormatTime(createdAt)
 	const insert = `INSERT INTO fenced_job_queue (` + fencedColumns + `)
 		VALUES (?, ?, ?, ?, 'pending', ?, 0, ?, ?, NULL, NULL, NULL, NULL, ?, NULL, NULL, NULL, ?, ?)
 		RETURNING ` + fencedColumns

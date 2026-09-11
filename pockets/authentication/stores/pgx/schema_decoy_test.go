@@ -16,8 +16,8 @@ import (
 
 	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
 	auth "github.com/gopernicus/gopernicus/pockets/authentication"
-	"github.com/gopernicus/gopernicus/pockets/authentication/domain/identifier"
-	"github.com/gopernicus/gopernicus/pockets/authentication/domain/user"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/identifier"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/user"
 	"github.com/gopernicus/gopernicus/sdk"
 )
 
@@ -61,7 +61,7 @@ func TestLive_WithSchema_Decoy(t *testing.T) {
 
 	// BEFORE the schema is migrated, the probe must fail naming the QUALIFIED
 	// table — the decoy in the default schema must not satisfy it.
-	_, err := Repositories(db, WithSchema(schema))
+	_, err := Repositories(context.Background(), db, WithSchema(schema))
 	if err == nil {
 		t.Fatal("Repositories succeeded against an unmigrated schema (the default-schema decoy answered for it)")
 	}
@@ -75,7 +75,7 @@ func TestLive_WithSchema_Decoy(t *testing.T) {
 	if err := pgxdb.RunMigrations(ctx, db, MigrationsFS, MigrationsDir, pgxdb.WithSchema(schema)); err != nil {
 		t.Fatalf("migrate schema: %v", err)
 	}
-	scoped, err := Repositories(db, WithSchema(schema))
+	scoped, err := Repositories(context.Background(), db, WithSchema(schema))
 	if err != nil {
 		t.Fatalf("Repositories on the migrated schema: %v", err)
 	}
@@ -94,7 +94,7 @@ func TestLive_WithSchema_Decoy(t *testing.T) {
 	}
 
 	// The negative direction: no option, so the write must land in the decoy.
-	bare, err := Repositories(db)
+	bare, err := Repositories(context.Background(), db)
 	if err != nil {
 		t.Fatalf("Repositories without options: %v", err)
 	}
@@ -133,7 +133,7 @@ func TestLive_ProbeColumn_SchemaFilter(t *testing.T) {
 		t.Fatalf("drop lifecycle columns: %v", err)
 	}
 
-	_, err := Repositories(db, WithSchema(schema))
+	_, err := Repositories(context.Background(), db, WithSchema(schema))
 	if err == nil {
 		t.Fatal("Repositories succeeded with the lifecycle columns missing (the default schema answered the column probe)")
 	}

@@ -1,50 +1,71 @@
-// Package {{.AggSvc}} is the sealed service of the {{.Pocket}} pocket's {{.Agg}}
-// aggregate — the hexagon's interior: business rules over the {{.Agg}}.Storer
-// port, no HTTP and no SQL. It is unexported from the module's public API; the
-// socket promotes its use-cases by thin delegation.
-package {{.AggSvc}}
+package {{.Agg}}
 
 import (
-	"context"
-	"time"
+    "context"
+    "fmt"
+    "time"
 
-	"{{.ModulePath}}/domain/{{.Agg}}"
-	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
-	"github.com/gopernicus/gopernicus/sdk/foundation/cryptids"
+    "github.com/gopernicus/gopernicus/sdk"
+    "github.com/gopernicus/gopernicus/sdk/pkg/list"
 )
 
-// Service is the {{.Agg}} use-case set over its store.
+var ErrStoreRequired = fmt.Errorf("{{.Pocket}}: {{.Agg}} store is required: %w", sdk.ErrInvalidInput)
+
+// Option configures a service before it becomes available.
+type Option func(*config)
+
+type config struct {
+    ids sdk.IDGenerator
+}
+
+// WithIDs selects the ID generator. Its zero value uses nanoid;
+// sdk.NewIDGenerator(sdk.DatabaseID) defers generation to the store.
+// Repeated options use the last supplied generator.
+func WithIDs(ids sdk.IDGenerator) Option {
+    return func(cfg *config) { cfg.ids = ids }
+}
+
+// Service implements {{.Agg}} use cases over the host's store.
 type Service struct {
-	store {{.Agg}}.Storer
-	ids   cryptids.IDGenerator
+    store Storer
+    ids sdk.IDGenerator
 }
 
-// NewService builds the service over its store and id generator.
-func NewService(store {{.Agg}}.Storer, ids cryptids.IDGenerator) *Service {
-	return &Service{store: store, ids: ids}
+// NewService validates the store before making the service available.
+func NewService(store Storer, opts ...Option) (*Service, error) {
+    if store == nil {
+        return nil, ErrStoreRequired
+    }
+    var cfg config
+    for _, opt := range opts {
+        if opt == nil {
+            return nil, fmt.Errorf("{{.Pocket}}: nil service option: %w", sdk.ErrInvalidInput)
+        }
+        opt(&cfg)
+    }
+    return &Service{store: store, ids: cfg.ids}, nil
 }
 
-// Create validates and persists a new {{.Agg}}, minting its id from the
-// configured generator and stamping created_at at the current instant.
-func (s *Service) Create(ctx context.Context, name string) ({{.Agg}}.{{.AggTitle}}, error) {
-	entity, err := {{.Agg}}.New(s.ids, name, time.Now())
-	if err != nil {
-		return {{.Agg}}.{{.AggTitle}}{}, err
-	}
-	return s.store.Create(ctx, entity)
+// Create persists a new {{.Agg}}, minting its id with the configured generator.
+func (s *Service) Create(ctx context.Context, name string) ({{.AggTitle}}, error) {
+    entity, err := New(s.ids, name, time.Now())
+    if err != nil {
+        return {{.AggTitle}}{}, err
+    }
+    return s.store.Create(ctx, entity)
 }
 
 // Get returns the {{.Agg}} for id, or sdk.ErrNotFound.
-func (s *Service) Get(ctx context.Context, id string) ({{.Agg}}.{{.AggTitle}}, error) {
-	return s.store.Get(ctx, id)
+func (s *Service) Get(ctx context.Context, id string) ({{.AggTitle}}, error) {
+    return s.store.Get(ctx, id)
 }
 
-// Delete removes the {{.Agg}} for id (idempotent — absent is nil).
+// Delete removes the {{.Agg}} for id. An absent id succeeds.
 func (s *Service) Delete(ctx context.Context, id string) error {
-	return s.store.Delete(ctx, id)
+    return s.store.Delete(ctx, id)
 }
 
-// List returns a cursor-paginated page of {{.Agg}}s matching filter.
-func (s *Service) List(ctx context.Context, filter {{.Agg}}.ListFilter, req crud.ListRequest) (crud.Page[{{.Agg}}.{{.AggTitle}}], error) {
-	return s.store.List(ctx, filter, req)
+// List returns a cursor-paginated page matching filter.
+func (s *Service) List(ctx context.Context, filter ListFilter, req list.Request) (list.Page[{{.AggTitle}}], error) {
+    return s.store.List(ctx, filter, req)
 }

@@ -15,24 +15,28 @@
 package golangjwt
 
 import (
+	"crypto"
 	"errors"
 	"fmt"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
 
-	"github.com/gopernicus/gopernicus/sdk/foundation/cryptids"
+	"github.com/gopernicus/gopernicus/sdk"
+	"github.com/gopernicus/gopernicus/sdk/pkg/cryptids"
 )
 
-// minSecretBytes is the shortest HMAC secret Signer accepts: 256 bits, the NIST
-// minimum for HMAC-SHA256. A shorter key weakens the MAC below its design
-// strength, so New rejects it rather than sign with it.
-const minSecretBytes = 32
+// Limit NumericDates to calendar years 0001–9999. This avoids float-to-int and
+// time.Time overflow in the library's conversion of extreme JSON numbers.
+const (
+	minNumericDate = -62135596800 // 0001-01-01T00:00:00Z, inclusive.
+	maxNumericDate = 253402300800 // 10000-01-01T00:00:00Z, exclusive.
+)
 
 var (
-	// ErrSecretTooShort is returned by New when the secret is under
-	// minSecretBytes.
-	ErrSecretTooShort = fmt.Errorf("golangjwt: secret must be at least %d bytes", minSecretBytes)
+	// ErrSecretTooShort is returned by New when the secret is shorter than
+	// the selected method's hash output: 32, 48, or 64 bytes.
+	ErrSecretTooShort = errors.New("golangjwt: secret is too short")
 
 	// ErrEmptyToken is returned by Verify for an empty token string.
 	ErrEmptyToken = errors.New("golangjwt: token is empty")
@@ -48,46 +52,74 @@ type Signer struct {
 	method *jwt.SigningMethodHMAC
 }
 
-// Option configures a Signer passed to New.
-type Option func(*Signer)
+// Option configures construction of a Signer. Options apply in order.
+type Option func(*config)
+
+type config struct {
+	method *jwt.SigningMethodHMAC
+}
 
 // WithMethod pins the HMAC signing method (HS256, HS384, HS512); the default is
 // HS256. Verify rejects any token whose alg header differs from this method, so
 // the choice is a security boundary, not just a performance knob. A nil method
-// is ignored, leaving the default in place.
+// is ignored, leaving the current selection in place. The option snapshots the
+// method so later caller changes cannot alter reused construction settings.
 func WithMethod(method *jwt.SigningMethodHMAC) Option {
-	return func(s *Signer) {
-		if method != nil {
-			s.method = method
-		}
+	if method == nil {
+		return func(*config) {}
 	}
+	snapshot := *method
+	return func(cfg *config) { cfg.method = &snapshot }
 }
 
-// New builds a Signer from a shared secret, defaulting to HS256. It returns
-// ErrSecretTooShort when the secret is under 32 bytes.
+// New builds a Signer from a shared secret, defaulting to HS256. The string's
+// bytes are used directly, without decoding. HS256, HS384, and HS512 require
+// at least 32, 48, and 64 bytes respectively; shorter keys return ErrSecretTooShort.
+// A nil option returns an error wrapping sdk.ErrInvalidInput.
 func New(secret string, opts ...Option) (*Signer, error) {
-	if len(secret) < minSecretBytes {
-		return nil, ErrSecretTooShort
-	}
-	s := &Signer{secret: []byte(secret), method: jwt.SigningMethodHS256}
+	cfg := config{method: jwt.SigningMethodHS256}
 	for _, opt := range opts {
-		opt(s)
+		if opt == nil {
+			return nil, fmt.Errorf("golangjwt: nil Option: %w", sdk.ErrInvalidInput)
+		}
+		opt(&cfg)
 	}
-	return s, nil
+	if cfg.method == nil {
+		return nil, errors.New("golangjwt: signing method is required")
+	}
+	var minSecretBytes int
+	switch *cfg.method {
+	case jwt.SigningMethodHMAC{Name: "HS256", Hash: crypto.SHA256}:
+		minSecretBytes = 32
+	case jwt.SigningMethodHMAC{Name: "HS384", Hash: crypto.SHA384}:
+		minSecretBytes = 48
+	case jwt.SigningMethodHMAC{Name: "HS512", Hash: crypto.SHA512}:
+		minSecretBytes = 64
+	default:
+		return nil, fmt.Errorf("golangjwt: unsupported signing method %q", cfg.method.Alg())
+	}
+	if len(secret) < minSecretBytes {
+		return nil, fmt.Errorf("%w for %s: need at least %d bytes", ErrSecretTooShort, cfg.method.Alg(), minSecretBytes)
+	}
+	// Options can supply a caller-owned method; keep the validated configuration.
+	method := *cfg.method
+	return &Signer{secret: []byte(secret), method: &method}, nil
 }
 
 // Sign creates a signed token carrying claims plus registered exp and iat
-// claims. expiresAt sets exp; iat is the current UTC time. A caller may include
-// nbf in claims to make the token not-yet-valid until a future time; Verify
-// honors it.
+// claims. expiresAt sets exp; iat is the current UTC time. These overwrite any
+// caller-supplied exp or iat without changing the caller's map. A caller may
+// include nbf in claims; Verify honors it.
 func (s *Signer) Sign(claims map[string]any, expiresAt time.Time) (string, error) {
-	mapClaims := jwt.MapClaims{
-		"exp": expiresAt.Unix(),
-		"iat": time.Now().UTC().Unix(),
+	if s == nil || s.method == nil || len(s.secret) == 0 {
+		return "", errors.New("golangjwt: signer must be created with New")
 	}
+	mapClaims := make(jwt.MapClaims, len(claims)+2)
 	for k, v := range claims {
 		mapClaims[k] = v
 	}
+	mapClaims["exp"] = expiresAt.Unix()
+	mapClaims["iat"] = time.Now().UTC().Unix()
 	token := jwt.NewWithClaims(s.method, mapClaims)
 	signed, err := token.SignedString(s.secret)
 	if err != nil {
@@ -97,7 +129,10 @@ func (s *Signer) Sign(claims map[string]any, expiresAt time.Time) (string, error
 }
 
 // Verify parses and validates a token, returning its claims when the signature,
-// signing method, and time claims (exp, nbf) all check out.
+// signing method, and time claims all check out. Claims must be a JSON object
+// with a numeric exp. Optional nbf and iat must also be numeric; explicit null
+// is invalid. Dates must be in calendar years 0001–9999. All three time checks
+// allow 60 seconds of clock skew.
 //
 // The key function pins token.Method to this Signer's method before the secret
 // is ever returned, so a token whose alg header was swapped — to a different
@@ -106,12 +141,16 @@ func (s *Signer) Sign(claims map[string]any, expiresAt time.Time) (string, error
 // and WithStrictDecoding rejects non-canonical base64url that would otherwise
 // admit padding-bit signature malleability.
 func (s *Signer) Verify(tokenString string) (map[string]any, error) {
+	if s == nil || s.method == nil || len(s.secret) == 0 {
+		return nil, errors.New("golangjwt: signer must be created with New")
+	}
 	if tokenString == "" {
 		return nil, ErrEmptyToken
 	}
 
 	keyFunc := func(token *jwt.Token) (any, error) {
-		if token.Method.Alg() != s.method.Alg() {
+		method, ok := token.Method.(*jwt.SigningMethodHMAC)
+		if !ok || *method != *s.method {
 			return nil, fmt.Errorf("golangjwt: unexpected signing method %q, want %q", token.Method.Alg(), s.method.Alg())
 		}
 		return s.secret, nil
@@ -122,6 +161,9 @@ func (s *Signer) Verify(tokenString string) (map[string]any, error) {
 		keyFunc,
 		jwt.WithValidMethods([]string{s.method.Alg()}),
 		jwt.WithStrictDecoding(),
+		jwt.WithExpirationRequired(),
+		jwt.WithIssuedAt(),
+		jwt.WithLeeway(time.Minute),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("golangjwt: verify: %w", err)
@@ -130,6 +172,12 @@ func (s *Signer) Verify(tokenString string) (map[string]any, error) {
 	claims, ok := token.Claims.(jwt.MapClaims)
 	if !ok || !token.Valid {
 		return nil, fmt.Errorf("golangjwt: invalid token claims")
+	}
+	for _, name := range []string{"exp", "nbf", "iat"} {
+		value, present := claims[name].(float64)
+		if present && (value < minNumericDate || value >= maxNumericDate) {
+			return nil, fmt.Errorf("golangjwt: verify: %w: %s outside calendar years 0001–9999", jwt.ErrTokenInvalidClaims, name)
+		}
 	}
 
 	result := make(map[string]any, len(claims))

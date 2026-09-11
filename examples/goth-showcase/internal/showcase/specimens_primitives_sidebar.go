@@ -6,7 +6,7 @@ import (
 
 	"github.com/a-h/templ"
 
-	"github.com/gopernicus/gopernicus/sdk/foundation/web"
+	"github.com/gopernicus/gopernicus/sdk/pkg/web"
 	"github.com/gopernicus/gopernicus/ui/goth"
 	"github.com/gopernicus/gopernicus/ui/goth/primitives"
 	"github.com/gopernicus/gopernicus/ui/goth/theme"
@@ -242,7 +242,7 @@ func (s *Server) registerSidebarFixtures() {
 	s.handler.Handle(http.MethodGet, "/sidebar", func(w http.ResponseWriter, r *http.Request) {
 		st := parseSBState(r.URL.Query())
 
-				bundle := s.bundles[goth.Interactive]
+		bundle := s.bundles[goth.Interactive]
 		w.Header().Set("Content-Security-Policy", buildCSP(bundle, false))
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		body := `<main data-slot="sidebar-page"><h1>Sidebar</h1>` +

@@ -14,10 +14,10 @@ import (
 
 	firestoredb "github.com/gopernicus/gopernicus/integrations/datastores/firestore"
 	"github.com/gopernicus/gopernicus/pockets/authorization"
-	"github.com/gopernicus/gopernicus/pockets/authorization/domain/mutation"
-	"github.com/gopernicus/gopernicus/pockets/authorization/domain/relationship"
-	"github.com/gopernicus/gopernicus/pockets/authorization/domain/role"
-	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/mutations"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/relationships"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/roles"
+	"github.com/gopernicus/gopernicus/sdk/pkg/list"
 )
 
 // assertAmbientRefusal drives every public port method inside BOTH kinds of
@@ -59,7 +59,7 @@ func assertAmbientRefusal(t *testing.T, db *firestoredb.DB, repos authorization.
 					if !errors.Is(err, ErrAmbientTransactionUnsupported) {
 						t.Errorf("%s inside an ambient transaction: got %v, want ErrAmbientTransactionUnsupported", c.name, err)
 					}
-					if c.mutation && !errors.Is(err, mutation.ErrGuardedInsideTransaction) {
+					if c.mutation && !errors.Is(err, mutations.ErrGuardedInsideTransaction) {
 						t.Errorf("%s inside an ambient transaction: got %v, want it to also carry mutation.ErrGuardedInsideTransaction", c.name, err)
 					}
 				}
@@ -80,12 +80,12 @@ type portCall struct {
 	call     func(context.Context) error
 }
 
-// portCalls enumerates every method of the three ports — 18 + 7 + 2 = 27. A port
-// method missing from this list is a method that could silently join a host's
-// transaction, so the count is asserted by the caller of the table below.
+// portCalls enumerates the three ports' database methods and the optional
+// relation set reads this store supplies. GuardianPolicy reads configuration
+// only, so it has no ambient transaction to refuse.
 func portCalls(repos authorization.Repositories) []portCall {
 	r, o, m := repos.Relationships, repos.Roles, repos.Mutations
-	ref := relationship.SubjectRef{Type: "user", ID: "u1"}
+	ref := relationships.SubjectRef{Type: "user", ID: "u1"}
 	ids := []string{"d1"}
 
 	err1 := func(_ any, err error) error { return err }
@@ -99,10 +99,10 @@ func portCalls(repos authorization.Repositories) []portCall {
 			return err1(r.GetRelationTargets(ctx, "doc", "d1", "owner"))
 		}},
 		{name: "FilterRelation", call: func(ctx context.Context) error {
-			return err1(r.FilterRelation(ctx, "doc", ids, "owner", "user", "u1", 0))
+			return err1(r.(relationships.RelationSetReader).FilterRelation(ctx, "doc", ids, "owner", "user", "u1", 0))
 		}},
 		{name: "RelationTargetsFor", call: func(ctx context.Context) error {
-			return err1(r.RelationTargetsFor(ctx, "doc", ids, "owner"))
+			return err1(r.(relationships.RelationSetReader).RelationTargetsFor(ctx, "doc", ids, "owner"))
 		}},
 		{name: "CheckRelationExists", call: func(ctx context.Context) error {
 			_, err := r.CheckRelationExists(ctx, "doc", "d1", "owner", "user", "u1")
@@ -112,7 +112,7 @@ func portCalls(repos authorization.Repositories) []portCall {
 			return err1(r.CheckBatchDirect(ctx, "doc", ids, "owner", "user", "u1", 0))
 		}},
 		{name: "CreateRelationships", call: func(ctx context.Context) error {
-			return r.CreateRelationships(ctx, []relationship.CreateRelationship{{
+			return r.CreateRelationships(ctx, []relationships.CreateRelationship{{
 				ResourceType: "doc", ResourceID: "d1", Relation: "owner", SubjectType: "user", SubjectID: "u1",
 			}})
 		}},
@@ -136,10 +136,10 @@ func portCalls(repos authorization.Repositories) []portCall {
 			return err
 		}},
 		{name: "ListRelationshipsBySubject", call: func(ctx context.Context) error {
-			return err1(r.ListRelationshipsBySubject(ctx, "user", "u1", relationship.SubjectRelationshipFilter{}, crud.ListRequest{}))
+			return err1(r.ListRelationshipsBySubject(ctx, "user", "u1", relationships.SubjectRelationshipFilter{}, list.Request{}))
 		}},
 		{name: "ListRelationshipsByResource", call: func(ctx context.Context) error {
-			return err1(r.ListRelationshipsByResource(ctx, "doc", "d1", relationship.ResourceRelationshipFilter{}, crud.ListRequest{}))
+			return err1(r.ListRelationshipsByResource(ctx, "doc", "d1", relationships.ResourceRelationshipFilter{}, list.Request{}))
 		}},
 		{name: "LookupResourceIDs", call: func(ctx context.Context) error {
 			return err1(r.LookupResourceIDs(ctx, "doc", []string{"owner"}, "user", "u1", "", 10))
@@ -152,7 +152,7 @@ func portCalls(repos authorization.Repositories) []portCall {
 		}},
 
 		{name: "Assign", call: func(ctx context.Context) error {
-			return o.Assign(ctx, role.Assignment{SubjectType: "user", SubjectID: "u1", Role: "admin"})
+			return o.Assign(ctx, roles.Assignment{SubjectType: "user", SubjectID: "u1", Role: "admin"})
 		}},
 		{name: "Unassign", call: func(ctx context.Context) error {
 			return o.Unassign(ctx, "user", "u1", "admin", "", "")
@@ -162,13 +162,13 @@ func portCalls(repos authorization.Repositories) []portCall {
 			return err
 		}},
 		{name: "ListBySubject", call: func(ctx context.Context) error {
-			return err1(o.ListBySubject(ctx, "user", "u1", crud.ListRequest{}))
+			return err1(o.ListBySubject(ctx, "user", "u1", list.Request{}))
 		}},
 		{name: "ListByResource", call: func(ctx context.Context) error {
-			return err1(o.ListByResource(ctx, "tenant", "t1", crud.ListRequest{}))
+			return err1(o.ListByResource(ctx, "tenant", "t1", list.Request{}))
 		}},
 		{name: "ListEffectiveByResource", call: func(ctx context.Context) error {
-			return err1(o.ListEffectiveByResource(ctx, "tenant", "t1", crud.ListRequest{}))
+			return err1(o.ListEffectiveByResource(ctx, "tenant", "t1", list.Request{}))
 		}},
 		{name: "LookupResourceIDsBySubjectAndRoles", call: func(ctx context.Context) error {
 			_, _, err := o.LookupResourceIDsBySubjectAndRoles(ctx, "user", "u1", "tenant", []string{"admin"}, "", 10)
@@ -176,17 +176,16 @@ func portCalls(repos authorization.Repositories) []portCall {
 		}},
 
 		{name: "Apply", mutation: true, call: func(ctx context.Context) error {
-			return err1(m.Apply(ctx, mutation.Command{}, nil))
+			return err1(m.Apply(ctx, mutations.Command{}, nil))
 		}},
 		{name: "ApplyGuarded", mutation: true, call: func(ctx context.Context) error {
-			return err1(m.ApplyGuarded(ctx, mutation.Command{}, func(context.Context, mutation.StoreDecisionView) error { return nil }, nil))
+			return err1(m.ApplyGuarded(ctx, mutations.Command{}, func(context.Context, mutations.StoreDecisionView) error { return nil }, nil))
 		}},
 	}
 }
 
 // TestPortCallsCoverEveryPortMethod keeps the ambient-refusal table honest: the
-// three ports declare 18 + 7 + 2 methods at core v0.12.0, and a method missing
-// from the table is a method whose refusal nothing asserts.
+// database methods and optional set reads remain covered when the ports change.
 func TestPortCallsCoverEveryPortMethod(t *testing.T) {
 	const want = 27
 	if got := len(portCalls(authorization.Repositories{})); got != want {

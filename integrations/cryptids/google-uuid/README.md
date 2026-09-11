@@ -1,26 +1,26 @@
 # integrations/cryptids/google-uuid
 
 An identifier connector wrapping exactly one third-party library —
-`github.com/google/uuid`. Its constructors return `cryptids.GenerateFunc`
+`github.com/google/uuid`. Its constructors return `sdk.IDGenerateFunc`
 values, so a host chooses uuid-shaped entity keys the same way it chooses any
 other ID strategy: once, at wiring, on a pocket's `Config.IDs`.
 
 It owns "how to mint a uuid with google/uuid," never any pocket's ID policy.
 A different ID shape (the sdk's stdlib nanoid, a database-generated key via
-`cryptids.Database`) is swapped at the composition root, not here.
+`sdk.DatabaseID`) is swapped at the composition root, not here.
 
 ## Surface
 
 | member | shape |
 |---|---|
-| `V4() cryptids.GenerateFunc` | canonical lowercase UUIDv4 (122 random bits) |
-| `V7() cryptids.GenerateFunc` | canonical lowercase UUIDv7 (time-ordered text form) |
+| `V4() sdk.IDGenerateFunc` | canonical lowercase UUIDv4 (122 random bits) |
+| `V7() sdk.IDGenerateFunc` | canonical lowercase UUIDv7 (time-ordered text form) |
 
 ## Wiring
 
 ```go
 authentication.Config{
-    IDs: cryptids.NewGenerator(googleuuid.V7()),
+    IDs: sdk.NewIDGenerator(googleuuid.V7()),
     // ...
 }
 ```
@@ -37,5 +37,5 @@ IDs must not reveal creation time.
 
 Unit tests are hermetic and run with a plain `go test ./...` — canonical-form
 and version-nibble pins for both shapes, a 1000-mint uniqueness sweep, the
-`cryptids.NewGenerator` wiring shape, and the V7 text-ordering property. A
+`sdk.NewIDGenerator` wiring shape, and the V7 text-ordering property. A
 compile-time assertion proves both constructors satisfy the sdk-owned port.

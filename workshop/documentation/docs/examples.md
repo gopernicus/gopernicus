@@ -64,7 +64,7 @@ Do not read it for layout. Its composition root carries provider behavior that t
 
 ## Jobs in memory
 
-`examples/jobs-minimal` uses the public `pockets/jobs/memstore` and starts the runtime explicitly. Its demo protocol exercises a normal job, a retry, a dead-letter, and a recurring schedule.
+`examples/jobs-minimal` uses the public `pockets/jobs/stores/memory` and starts the runtime explicitly. Its demo protocol exercises a normal job, a retry, a dead-letter, and a recurring schedule.
 
 ```bash
 cd examples/jobs-minimal

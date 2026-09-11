@@ -5,11 +5,11 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/gopernicus/gopernicus/pockets/authentication/domain/identifier"
-	"github.com/gopernicus/gopernicus/pockets/authentication/domain/session"
-	"github.com/gopernicus/gopernicus/pockets/authentication/domain/user"
+	identifier "github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/identifier"
+	session "github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/session"
+	user "github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/user"
 	"github.com/gopernicus/gopernicus/sdk"
-	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
+	"github.com/gopernicus/gopernicus/sdk/pkg/list"
 )
 
 // The account-lifecycle ports (coordination-hub-auth-upstream CHAU-1.1): the
@@ -54,7 +54,7 @@ func (r userAdminRepo) summaryLocked(u user.User) user.Summary {
 	return s
 }
 
-func (r userAdminRepo) List(_ context.Context, req crud.ListRequest) (crud.Page[user.Summary], error) {
+func (r userAdminRepo) List(_ context.Context, req list.Request) (list.Page[user.Summary], error) {
 	r.mu.RLock()
 	all := make([]user.Summary, 0, len(r.users))
 	for _, u := range r.users {
@@ -134,7 +134,7 @@ type activeSessionRepo struct{ *data }
 // a concurrent SetStatus either commits first (and this refuses) or commits after
 // (and revokes the row this wrote). It reproduces the ordinary Create's
 // uniqueness contract so the two paths cannot diverge.
-func (r activeSessionRepo) CreateForActiveUser(_ context.Context, s session.Session) (session.Session, error) {
+func (r activeSessionRepo) CreateForActiveUser(_ context.Context, s session.Session, expectedAuthRevision int64) (session.Session, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -145,11 +145,14 @@ func (r activeSessionRepo) CreateForActiveUser(_ context.Context, s session.Sess
 	if !u.Active() {
 		return session.Session{}, session.ErrUserNotActive
 	}
+	if u.AuthRevision != expectedAuthRevision {
+		return session.Session{}, sdk.ErrConflict
+	}
 	for _, ex := range r.sessions {
 		if ex.RefreshTokenHash == s.RefreshTokenHash {
 			return session.Session{}, sdk.ErrAlreadyExists
 		}
 	}
-	r.sessions[s.ID] = s
-	return s, nil
+	r.sessions[s.ID] = cloneSession(s)
+	return cloneSession(s), nil
 }

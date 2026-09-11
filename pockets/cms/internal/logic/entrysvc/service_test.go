@@ -9,8 +9,8 @@ import (
 	"github.com/gopernicus/gopernicus/pockets/cms/domain/content"
 	"github.com/gopernicus/gopernicus/sdk"
 	sdkevents "github.com/gopernicus/gopernicus/sdk/capabilities/events"
-	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
-	"github.com/gopernicus/gopernicus/sdk/foundation/cryptids"
+
+	"github.com/gopernicus/gopernicus/sdk/pkg/list"
 )
 
 // fakeRepo is an in-memory content.EntryRepository for service tests.
@@ -66,18 +66,18 @@ func (r *fakeRepo) Delete(_ context.Context, id string) error {
 	return nil
 }
 
-func (r *fakeRepo) List(_ context.Context, q content.EntryQuery) (crud.Page[content.Entry], error) {
+func (r *fakeRepo) List(_ context.Context, q content.EntryQuery) (list.Page[content.Entry], error) {
 	var items []content.Entry
 	for _, e := range r.entries {
 		if e.Type == q.Type && (q.Status == "" || e.Status == q.Status) {
 			items = append(items, e)
 		}
 	}
-	return crud.Page[content.Entry]{Items: items}, nil
+	return list.Page[content.Entry]{Items: items}, nil
 }
 
-func (r *fakeRepo) ListByTerm(_ context.Context, termID string, q content.EntryQuery) (crud.Page[content.Entry], error) {
-	return crud.Page[content.Entry]{}, nil
+func (r *fakeRepo) ListByTerm(_ context.Context, termID string, q content.EntryQuery) (list.Page[content.Entry], error) {
+	return list.Page[content.Entry]{}, nil
 }
 
 func (r *fakeRepo) SetTerms(_ context.Context, entryID string, termIDs []string) error {
@@ -108,7 +108,7 @@ func fixedClock() Clock {
 
 func TestService_CreateAndGet(t *testing.T) {
 	repo := newFakeRepo()
-	svc := NewService(repo, testRegistry(t), cryptids.IDGenerator{}, fixedClock())
+	svc := NewService(repo, testRegistry(t), sdk.IDGenerator{}, fixedClock())
 	ctx := context.Background()
 
 	e, err := svc.Create(ctx, "article", Input{
@@ -135,14 +135,14 @@ func TestService_CreateAndGet(t *testing.T) {
 }
 
 func TestService_Create_UnknownType(t *testing.T) {
-	svc := NewService(newFakeRepo(), testRegistry(t), cryptids.IDGenerator{}, fixedClock())
+	svc := NewService(newFakeRepo(), testRegistry(t), sdk.IDGenerator{}, fixedClock())
 	if _, err := svc.Create(context.Background(), "ghost", Input{Title: "x"}); !errors.Is(err, sdk.ErrNotFound) {
 		t.Fatalf("err = %v, want ErrNotFound", err)
 	}
 }
 
 func TestService_Create_MissingRequiredField(t *testing.T) {
-	svc := NewService(newFakeRepo(), testRegistry(t), cryptids.IDGenerator{}, fixedClock())
+	svc := NewService(newFakeRepo(), testRegistry(t), sdk.IDGenerator{}, fixedClock())
 	_, err := svc.Create(context.Background(), "article", Input{Title: "x", Fields: content.Fields{"subtitle": {Raw: "y"}}})
 	if !errors.Is(err, sdk.ErrInvalidInput) {
 		t.Fatalf("err = %v, want ErrInvalidInput", err)
@@ -150,7 +150,7 @@ func TestService_Create_MissingRequiredField(t *testing.T) {
 }
 
 func TestService_Create_RelationMustExist(t *testing.T) {
-	svc := NewService(newFakeRepo(), testRegistry(t), cryptids.IDGenerator{}, fixedClock())
+	svc := NewService(newFakeRepo(), testRegistry(t), sdk.IDGenerator{}, fixedClock())
 	_, err := svc.Create(context.Background(), "article", Input{
 		Title:  "x",
 		Fields: content.Fields{"rating": {Raw: "1"}, "related": {Raw: "no-such-entry"}},
@@ -162,7 +162,7 @@ func TestService_Create_RelationMustExist(t *testing.T) {
 
 func TestService_Create_RelationResolves(t *testing.T) {
 	repo := newFakeRepo()
-	svc := NewService(repo, testRegistry(t), cryptids.IDGenerator{}, fixedClock())
+	svc := NewService(repo, testRegistry(t), sdk.IDGenerator{}, fixedClock())
 	ctx := context.Background()
 
 	target, err := svc.Create(ctx, "article", Input{Title: "Target", Fields: content.Fields{"rating": {Raw: "1"}}})
@@ -179,7 +179,7 @@ func TestService_Create_RelationResolves(t *testing.T) {
 
 func TestService_PublishUnpublish(t *testing.T) {
 	repo := newFakeRepo()
-	svc := NewService(repo, testRegistry(t), cryptids.IDGenerator{}, fixedClock())
+	svc := NewService(repo, testRegistry(t), sdk.IDGenerator{}, fixedClock())
 	ctx := context.Background()
 
 	e, err := svc.Create(ctx, "article", Input{Title: "Draft", Status: content.StatusDraft, Fields: content.Fields{"rating": {Raw: "1"}}})
@@ -201,7 +201,7 @@ func TestService_PublishUnpublish(t *testing.T) {
 
 func TestService_EditReplacesFields(t *testing.T) {
 	repo := newFakeRepo()
-	svc := NewService(repo, testRegistry(t), cryptids.IDGenerator{}, fixedClock())
+	svc := NewService(repo, testRegistry(t), sdk.IDGenerator{}, fixedClock())
 	ctx := context.Background()
 
 	e, err := svc.Create(ctx, "article", Input{Title: "Orig", Fields: content.Fields{"rating": {Raw: "1"}, "subtitle": {Raw: "old"}}})
@@ -221,7 +221,7 @@ func TestService_EditReplacesFields(t *testing.T) {
 }
 
 // recordingBus wraps a Memory bus and forces synchronous delivery so a test can
-// assert on the content events entrysvc emits deterministically (WithSync).
+// assert on the content events entrysvc emits deterministically (Dispatch).
 type recordingBus struct {
 	bus  *sdkevents.Memory
 	seen []sdkevents.Event
@@ -244,9 +244,9 @@ func newRecordingBus(t *testing.T) *recordingBus {
 	return rb
 }
 
-// Emit forces WithSync so the recording handler has run before Emit returns.
-func (rb *recordingBus) Emit(ctx context.Context, e sdkevents.Event, opts ...sdkevents.EmitOption) error {
-	return rb.bus.Emit(ctx, e, append(opts, sdkevents.WithSync())...)
+// Emit uses Dispatch so the recording handler has run before Emit returns.
+func (rb *recordingBus) Emit(ctx context.Context, e sdkevents.Event) error {
+	return rb.bus.Dispatch(ctx, e)
 }
 
 func (rb *recordingBus) last() sdkevents.Event { return rb.seen[len(rb.seen)-1] }
@@ -272,7 +272,7 @@ func assertContentEvent(t *testing.T, e sdkevents.Event, wantType, wantID string
 
 func TestService_Emits(t *testing.T) {
 	rb := newRecordingBus(t)
-	svc := NewService(newFakeRepo(), testRegistry(t), cryptids.IDGenerator{}, fixedClock(), rb)
+	svc := NewService(newFakeRepo(), testRegistry(t), sdk.IDGenerator{}, fixedClock(), rb)
 	ctx := context.Background()
 
 	e, err := svc.Create(ctx, "article", Input{Title: "One", Fields: content.Fields{"rating": {Raw: "1"}}})
@@ -311,12 +311,12 @@ func TestService_Emits(t *testing.T) {
 // the domain write already succeeded, so the caller sees no error.
 type failingEmitter struct{}
 
-func (failingEmitter) Emit(context.Context, sdkevents.Event, ...sdkevents.EmitOption) error {
+func (failingEmitter) Emit(context.Context, sdkevents.Event) error {
 	return errors.New("emit boom")
 }
 
 func TestService_EmitErrorNotReturned(t *testing.T) {
-	svc := NewService(newFakeRepo(), testRegistry(t), cryptids.IDGenerator{}, fixedClock(), failingEmitter{})
+	svc := NewService(newFakeRepo(), testRegistry(t), sdk.IDGenerator{}, fixedClock(), failingEmitter{})
 	e, err := svc.Create(context.Background(), "article", Input{Title: "Resilient", Fields: content.Fields{"rating": {Raw: "1"}}})
 	if err != nil {
 		t.Fatalf("Create returned emit error to caller: %v", err)
@@ -327,7 +327,7 @@ func TestService_EmitErrorNotReturned(t *testing.T) {
 }
 
 func TestService_NilEmitterNoPanic(t *testing.T) {
-	svc := NewService(newFakeRepo(), testRegistry(t), cryptids.IDGenerator{}, fixedClock(), nil)
+	svc := NewService(newFakeRepo(), testRegistry(t), sdk.IDGenerator{}, fixedClock(), nil)
 	if _, err := svc.Create(context.Background(), "article", Input{Title: "Quiet", Fields: content.Fields{"rating": {Raw: "1"}}}); err != nil {
 		t.Fatalf("create with nil emitter: %v", err)
 	}

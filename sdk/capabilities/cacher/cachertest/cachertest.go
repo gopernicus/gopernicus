@@ -8,8 +8,14 @@ package cachertest
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"sync"
+
 	"testing"
 	"time"
+
+	"github.com/gopernicus/gopernicus/sdk"
 
 	"github.com/gopernicus/gopernicus/sdk/capabilities/cacher"
 )
@@ -28,10 +34,13 @@ func Run(t *testing.T, newStorer func(t *testing.T) cacher.Storer) {
 	t.Run("SetGetRoundTrip", func(t *testing.T) { testSetGetRoundTrip(t, newStorer(t)) })
 	t.Run("GetManyPartialHits", func(t *testing.T) { testGetManyPartialHits(t, newStorer(t)) })
 	t.Run("Delete", func(t *testing.T) { testDelete(t, newStorer(t)) })
-	t.Run("DeletePattern", func(t *testing.T) { testDeletePattern(t, newStorer(t)) })
 	t.Run("TTLExpiry", func(t *testing.T) { testTTLExpiry(t, newStorer(t)) })
 	t.Run("ZeroTTLNeverExpires", func(t *testing.T) { testZeroTTLNeverExpires(t, newStorer(t)) })
-	t.Run("CloseIdempotent", func(t *testing.T) { testCloseIdempotent(t, newStorer(t)) })
+	t.Run("OverwriteReplacesTTL", func(t *testing.T) { testOverwriteReplacesTTL(t, newStorer(t)) })
+	t.Run("OwnedValues", func(t *testing.T) { testOwnedValues(t, newStorer(t)) })
+	t.Run("EmptyValues", func(t *testing.T) { testEmptyValues(t, newStorer(t)) })
+	t.Run("InvalidTTLAndCancellation", func(t *testing.T) { testInvalidInputs(t, newStorer(t)) })
+	t.Run("ConcurrentAccess", func(t *testing.T) { testConcurrentAccess(t, newStorer(t)) })
 }
 
 func testGetMiss(t *testing.T, s cacher.Storer) {
@@ -97,33 +106,12 @@ func testDelete(t *testing.T, s cacher.Storer) {
 	if err := s.Delete(ctx, "k"); err != nil {
 		t.Fatalf("Delete() error = %v", err)
 	}
-	if _, ok, _ := s.Get(ctx, "k"); ok {
-		t.Error("Get() after Delete() found = true, want false")
+	if _, ok, err := s.Get(ctx, "k"); err != nil || ok {
+		t.Errorf("Get() after Delete() found = %v, error = %v; want false, nil", ok, err)
 	}
 	// Deleting an already-absent key must not error.
 	if err := s.Delete(ctx, "never-set"); err != nil {
 		t.Errorf("Delete(never-set) error = %v, want nil", err)
-	}
-}
-
-func testDeletePattern(t *testing.T, s cacher.Storer) {
-	ctx := context.Background()
-	for _, k := range []string{"page:/a", "page:/b", "other"} {
-		if err := s.Set(ctx, k, []byte("v"), 0); err != nil {
-			t.Fatalf("Set(%s) error = %v", k, err)
-		}
-	}
-	if err := s.DeletePattern(ctx, "page:*"); err != nil {
-		t.Fatalf("DeletePattern() error = %v", err)
-	}
-	if _, ok, _ := s.Get(ctx, "page:/a"); ok {
-		t.Error("page:/a should have been deleted by pattern")
-	}
-	if _, ok, _ := s.Get(ctx, "page:/b"); ok {
-		t.Error("page:/b should have been deleted by pattern")
-	}
-	if _, ok, _ := s.Get(ctx, "other"); !ok {
-		t.Error("other should survive a non-matching pattern delete")
 	}
 }
 
@@ -132,12 +120,12 @@ func testTTLExpiry(t *testing.T, s cacher.Storer) {
 	if err := s.Set(ctx, "k", []byte("v"), shortTTL); err != nil {
 		t.Fatalf("Set() error = %v", err)
 	}
-	if _, ok, _ := s.Get(ctx, "k"); !ok {
-		t.Fatal("Get() immediately after Set() with a positive TTL found = false, want true")
+	if _, ok, err := s.Get(ctx, "k"); err != nil || !ok {
+		t.Fatalf("Get() immediately after Set() found = %v, error = %v; want true, nil", ok, err)
 	}
 	time.Sleep(shortTTL * 4)
-	if _, ok, _ := s.Get(ctx, "k"); ok {
-		t.Error("Get() after TTL elapsed found = true, want false (expired)")
+	if _, ok, err := s.Get(ctx, "k"); err != nil || ok {
+		t.Errorf("Get() after TTL elapsed found = %v, error = %v; want false, nil", ok, err)
 	}
 }
 
@@ -147,16 +135,134 @@ func testZeroTTLNeverExpires(t *testing.T, s cacher.Storer) {
 		t.Fatalf("Set() error = %v", err)
 	}
 	time.Sleep(shortTTL * 4)
-	if _, ok, _ := s.Get(ctx, "k"); !ok {
-		t.Error("Get() for a TTL=0 (no expiry) entry found = false after waiting, want true")
+	if _, ok, err := s.Get(ctx, "k"); err != nil || !ok {
+		t.Errorf("Get() for TTL=0 after waiting found = %v, error = %v; want true, nil", ok, err)
 	}
 }
 
-func testCloseIdempotent(t *testing.T, s cacher.Storer) {
-	if err := s.Close(); err != nil {
-		t.Fatalf("first Close() error = %v", err)
+func testOverwriteReplacesTTL(t *testing.T, s cacher.Storer) {
+	ctx := context.Background()
+	if err := s.Set(ctx, "becomes-expiring", []byte("old"), 0); err != nil {
+		t.Fatal(err)
 	}
-	if err := s.Close(); err != nil {
-		t.Errorf("second Close() error = %v, want nil (Close must be idempotent)", err)
+	if err := s.Set(ctx, "becomes-expiring", []byte("new"), shortTTL); err != nil {
+		t.Fatal(err)
 	}
+	if err := s.Set(ctx, "becomes-immortal", []byte("old"), shortTTL); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Set(ctx, "becomes-immortal", []byte("new"), 0); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(shortTTL * 4)
+	if _, found, err := s.Get(ctx, "becomes-expiring"); err != nil || found {
+		t.Fatalf("positive replacement TTL did not expire: %v, %v", found, err)
+	}
+	if value, found, err := s.Get(ctx, "becomes-immortal"); err != nil || !found || string(value) != "new" {
+		t.Fatalf("zero replacement TTL did not remove expiry: %q, %v, %v", value, found, err)
+	}
+}
+
+func testOwnedValues(t *testing.T, s cacher.Storer) {
+	ctx := context.Background()
+	input := []byte("original")
+	if err := s.Set(ctx, "k", input, 0); err != nil {
+		t.Fatal(err)
+	}
+	input[0] = 'X'
+	got, found, err := s.Get(ctx, "k")
+	if err != nil || !found || string(got) != "original" {
+		t.Fatalf("stored input aliased: %q, %v, %v", got, found, err)
+	}
+	got[0] = 'Y'
+	many, err := s.GetMany(ctx, []string{"k", "k", "missing"})
+	if err != nil || len(many) != 1 || string(many["k"]) != "original" {
+		t.Fatalf("Get/GetMany ownership: %v, %v", many, err)
+	}
+	many["k"][0] = 'Z'
+	delete(many, "k")
+	got, found, err = s.Get(ctx, "k")
+	if err != nil || !found || string(got) != "original" {
+		t.Fatalf("GetMany aliased storage: %q, %v, %v", got, found, err)
+	}
+}
+
+func testEmptyValues(t *testing.T, s cacher.Storer) {
+	ctx := context.Background()
+	for _, value := range [][]byte{nil, {}} {
+		if err := s.Set(ctx, "empty", value, 0); err != nil {
+			t.Fatal(err)
+		}
+		got, found, err := s.Get(ctx, "empty")
+		if err != nil || !found || len(got) != 0 {
+			t.Fatalf("empty value = %v, %v, %v", got, found, err)
+		}
+		many, err := s.GetMany(ctx, []string{"empty"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if value, found := many["empty"]; !found || len(value) != 0 {
+			t.Fatal("bulk read lost empty hit")
+		}
+	}
+	if got, err := s.GetMany(ctx, nil); err != nil || len(got) != 0 {
+		t.Fatalf("empty bulk = %v, %v", got, err)
+	}
+}
+
+func testInvalidInputs(t *testing.T, s cacher.Storer) {
+	ctx := context.Background()
+	if err := s.Set(ctx, "k", []byte("original"), 0); err != nil {
+		t.Fatal(err)
+	}
+	for _, ttl := range []time.Duration{-1, -time.Second} {
+		if err := s.Set(ctx, "k", []byte("changed"), ttl); !errors.Is(err, sdk.ErrInvalidInput) {
+			t.Fatalf("negative TTL = %v", err)
+		}
+	}
+	canceled, cancel := context.WithCancel(ctx)
+	cancel()
+	checks := []func() error{
+		func() error { _, _, err := s.Get(canceled, "k"); return err },
+		func() error { _, err := s.GetMany(canceled, []string{"k"}); return err },
+		func() error { _, err := s.GetMany(canceled, nil); return err },
+		func() error { return s.Set(canceled, "k", []byte("changed"), 0) },
+		func() error { return s.Delete(canceled, "k") },
+	}
+	for i, check := range checks {
+		if err := check(); !errors.Is(err, context.Canceled) {
+			t.Errorf("canceled operation %d = %v", i, err)
+		}
+	}
+	got, found, err := s.Get(ctx, "k")
+	if err != nil || !found || string(got) != "original" {
+		t.Fatalf("invalid operation mutated value: %q, %v, %v", got, found, err)
+	}
+}
+
+func testConcurrentAccess(t *testing.T, s cacher.Storer) {
+	var wg sync.WaitGroup
+	for worker := range 4 {
+		wg.Go(func() {
+			ctx := context.Background()
+			key := fmt.Sprintf("worker:%d", worker)
+			for range 10 {
+				if err := s.Set(ctx, key, []byte(key), 0); err != nil {
+					t.Error(err)
+					return
+				}
+				got, found, err := s.Get(ctx, key)
+				if err != nil || !found || string(got) != key {
+					t.Errorf("concurrent read = %q, %v, %v", got, found, err)
+					return
+				}
+				got[0] = 'X'
+				if err := s.Delete(ctx, key); err != nil {
+					t.Error(err)
+					return
+				}
+			}
+		})
+	}
+	wg.Wait()
 }

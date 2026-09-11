@@ -4,19 +4,19 @@
 // (verify: `GOWORK=off go list -m all | grep -i libsql` is empty). The host is
 // the only party that imports the pockets — no pocket imports another
 // (constitution rule 6); the cross-pocket flow rides sdk vocabulary
-// (sdk/foundation/web.Middleware, sdk/foundation/identity, sdk/capabilities/events) the host wires between them.
+// (sdk/pkg/web.Middleware, sdk, sdk/capabilities/events) the host wires between them.
 //
 // The cross-pocket wiring is the point: cms's admin surface (the CRUD routes)
 // is gated by auth's identity middleware via cms.Config.AdminMiddleware ←
-// authSvc.RequireAccessToken(). Neither pocket imports the other; structural typing on
-// sdk/foundation/web.Middleware and the auth Service is what lets the host connect them.
+// authSvc.HTTP.RequireAccessToken(). Neither pocket imports the other; structural typing on
+// sdk/pkg/web.Middleware and the auth Service is what lets the host connect them.
 // Public cms routes (the home page, published singles) stay ungated.
 //
 // On top of v1, this host exercises the whole auth-v2 surface for the A9 proof
 // protocol (see README): the verified-email login gate (RequireVerifiedEmail),
 // a host-local fake OAuth provider (oauthfake.go), machine identity (API keys +
 // service accounts), access JWTs + rotating refresh tokens signed host-side by
-// the sdk stdlib HS256 default (sdk/foundation/cryptids), security-event audit
+// the golang-jwt HS256 integration, security-event audit
 // rows surfaced through a
 // DEFAULT-OFF debug route, and invitations that grant through the authorization
 // engine's relationshipGranter (membership.go) — authorization-v1's FLAGSHIP
@@ -24,15 +24,15 @@
 // via the separately held baseline RelationshipWriter, retiring the A9 toy membership map; the
 // memstore-backed engine keeps the host zero-infra (no libsql). The host-local
 // demo routes (demo.go) are gated variously on a resolved principal, an engine
-// Check, a LookupResources enumeration, and a roles-kind HasRole check.
+// Check, a LookupAllResourceIDs enumeration, and a roles-kind HasRole check.
 //
 // pockets/events adds the SSE gateway at GET /events (authenticated via
-// authSvc.RequireAccessToken() on StreamMiddleware): a cms edit fans out as a
+// authSvc.HTTP.RequireAccessToken() on StreamMiddleware): a cms edit fans out as a
 // content.updated frame to any open stream. Two rails prove out here. The
 // DEFAULT variant is direct-emit/best-effort — cms emits straight onto the bus
 // (SSE id: = CorrelationID). The DURABLE variant (EVENTS_OUTBOX=memory) routes a
 // host-owned POST /outbox-demo append through an example-local in-memory outbox
-// (internal/outboxmem) and a host-driven events.Poller on an sdk/foundation/workers pool:
+// (internal/outboxmem) and a host-driven outbox.Poller on an sdk/pkg/workers pool:
 // outbox -> poll -> emit -> SSE, id: = the durable outbox EventID. The shutdown
 // order is HTTP server -> delivery runtime -> terminal-purge scheduler -> poller pool
 // -> bus.Close (see run's tail comment); HTTP and the delivery runtime are supervised
@@ -57,28 +57,33 @@ import (
 	"github.com/gopernicus/gopernicus/examples/auth-cms/internal/memstore"
 	"github.com/gopernicus/gopernicus/examples/auth-cms/internal/outboxmem"
 	"github.com/gopernicus/gopernicus/integrations/cryptids/bcrypt"
+	"github.com/gopernicus/gopernicus/pockets"
 	auth "github.com/gopernicus/gopernicus/pockets/authentication"
+	delivery "github.com/gopernicus/gopernicus/pockets/authentication/logic/delivery"
+	invitations "github.com/gopernicus/gopernicus/pockets/authentication/logic/invitations"
 	authgoth "github.com/gopernicus/gopernicus/pockets/authentication/views/goth"
-	authorization "github.com/gopernicus/gopernicus/pockets/authorization"
+	model "github.com/gopernicus/gopernicus/pockets/authorization/logic/model"
 	"github.com/gopernicus/gopernicus/pockets/cms"
 	"github.com/gopernicus/gopernicus/pockets/cms/domain/content"
 	"github.com/gopernicus/gopernicus/pockets/cms/domain/menus"
 	cmsgoth "github.com/gopernicus/gopernicus/pockets/cms/views/goth"
 	eventspocket "github.com/gopernicus/gopernicus/pockets/events"
+	eventshttp "github.com/gopernicus/gopernicus/pockets/events/inbound/http"
+	outbox "github.com/gopernicus/gopernicus/pockets/events/logic/outbox"
+	eventstreams "github.com/gopernicus/gopernicus/pockets/events/logic/streams"
 	"github.com/gopernicus/gopernicus/pockets/jobs"
-	jobsmem "github.com/gopernicus/gopernicus/pockets/jobs/memstore"
+	queue "github.com/gopernicus/gopernicus/pockets/jobs/logic/queue"
+	jobsmem "github.com/gopernicus/gopernicus/pockets/jobs/stores/memory"
+	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/cacher"
-	"github.com/gopernicus/gopernicus/sdk/capabilities/email"
 	sdkevents "github.com/gopernicus/gopernicus/sdk/capabilities/events"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/notify"
+	"github.com/gopernicus/gopernicus/sdk/capabilities/notify/email"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/oauth"
-	"github.com/gopernicus/gopernicus/sdk/foundation/cryptids"
-	"github.com/gopernicus/gopernicus/sdk/foundation/environment"
-	"github.com/gopernicus/gopernicus/sdk/foundation/identity"
-	"github.com/gopernicus/gopernicus/sdk/foundation/logging"
-	"github.com/gopernicus/gopernicus/sdk/foundation/web"
-	"github.com/gopernicus/gopernicus/sdk/foundation/workers"
-	"github.com/gopernicus/gopernicus/sdk/pocket"
+	"github.com/gopernicus/gopernicus/sdk/pkg/environment"
+	"github.com/gopernicus/gopernicus/sdk/pkg/logging"
+	"github.com/gopernicus/gopernicus/sdk/pkg/web"
+	"github.com/gopernicus/gopernicus/sdk/pkg/workers"
 	uigoth "github.com/gopernicus/gopernicus/ui/goth"
 	uigothassets "github.com/gopernicus/gopernicus/ui/goth/assets"
 )
@@ -98,31 +103,33 @@ const defaultPort = "8082"
 // the externalized fragment-reader script is served separately and covered by the
 // adapter's script-src 'self'.
 func newAuthBundle() (*uigoth.Bundle, error) {
-	return uigoth.New(uigoth.Config{AssetBasePath: authAssetBasePath})
+	return uigoth.New(uigoth.WithAssetBasePath(authAssetBasePath))
 }
 
 func main() {
-	_ = environment.LoadEnv()
+	// A missing .env is allowed; malformed configuration must stop startup.
+	if err := environment.LoadEnv(); err != nil {
+		slog.Error("load environment", "error", err)
+		os.Exit(1)
+	}
+
+	logOpts := logging.Options{Format: "text"}
+	if err := environment.ParseEnvTags("", &logOpts); err != nil {
+		slog.Error("configure logging", "error", err)
+		os.Exit(1)
+	}
+	log := logging.New(logOpts)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	if err := run(ctx); err != nil {
-		slog.Error("server exited with error", "error", err)
+	if err := run(ctx, log); err != nil {
+		log.Error("server exited with error", "error", err)
 		os.Exit(1)
 	}
 }
 
-func run(ctx context.Context) error {
-	// Config comes from the environment through the sdk's struct tags: the literal
-	// pre-seeds this host's own defaults, the environment wins over them, and an
-	// empty value (KEY=) keeps what is already set. This host logs text by default.
-	logOpts := logging.Options{Format: "text"}
-	if err := environment.ParseEnvTags("", &logOpts); err != nil {
-		return err
-	}
-	log := logging.New(logOpts)
-
+func run(ctx context.Context, log *slog.Logger) error {
 	// The HTTP server config, read the same way. It is resolved here rather than at
 	// the web.Run call because TrustProxies (below) and every host-derived URL take
 	// their values from it.
@@ -154,9 +161,11 @@ func run(ctx context.Context) error {
 	// The value is the authentication pocket's own AUTH_DELIVERY_MODE tag, read here —
 	// ahead of buildAuthConfig — because the jobs-mode dispatcher must be built before the
 	// config is assembled. buildAuthConfig pre-seeds the same default and reads the same
-	// key, so the two never disagree; an unrecognized value is auth.NewService's loud
+	// key, so the two never disagree; an unrecognized value is auth.New's loud
 	// construction error rather than a silent fallback to jobs.
-	deliverySelection := auth.Config{DeliveryMode: auth.DeliveryModeJobs}
+	deliverySelection := authenticationConfig{
+		DeliveryMode: delivery.ModeJobs,
+	}
 	if err := environment.ParseEnvTags("", &deliverySelection); err != nil {
 		return err
 	}
@@ -180,25 +189,29 @@ func run(ctx context.Context) error {
 	// (internal/authjobs) is the ONE place that imports BOTH pockets; neither pocket core
 	// imports the other (constitution rule 6).
 	var (
-		deliveryJobs       *jobs.Service
+		deliveryJobs       *jobs.Components
 		deliveryDispatcher *authjobs.Dispatcher
 	)
-	if mode == auth.DeliveryModeJobs {
-		jobsCfg := jobs.Config{Logger: log}
-		if err := environment.ParseEnvTags("", &jobsCfg); err != nil {
+	if mode == delivery.ModeJobs {
+		settings := struct {
+			MaxAttempts   int `env:"JOBS_MAX_ATTEMPTS"`
+			ScheduleBatch int `env:"JOBS_SCHEDULE_BATCH"`
+		}{}
+		if err := environment.ParseEnvTags("", &settings); err != nil {
 			return err
 		}
-		dj, err := jobs.NewService(jobs.Repositories{FencedQueue: jobsmem.NewFencedQueue()}, jobsCfg)
+		dj, err := jobs.New(jobs.Repositories{FencedQueue: jobsmem.NewFencedQueue()},
+			jobs.WithMaxAttempts(settings.MaxAttempts), jobs.WithScheduleBatchSize(settings.ScheduleBatch))
 		if err != nil {
 			return err
 		}
 		deliveryJobs = dj
-		deliveryDispatcher = authjobs.NewDispatcher(dj)
+		deliveryDispatcher = authjobs.NewDispatcher(dj.Queue)
 	}
 
 	// Host-owned router + middleware. Both pockets and the host demo routes mount
 	// onto this.
-	router := web.NewWebHandler(web.WithLogging(log))
+	router := web.NewWebHandler()
 	// TrustProxies runs OUTER of every pocket mount so auth's inbound reads the
 	// host-resolved client IP (web.ClientIP) instead of the spoofable leftmost
 	// X-Forwarded-For hop. TRUSTED_PROXY_COUNT=0 (default) trusts only RemoteAddr,
@@ -225,7 +238,7 @@ func run(ctx context.Context) error {
 	// into cms.Config.Cache) so the host's content-event subscriber can drop it.
 	pageCache := cacher.NewMemory()
 
-	mount := pocket.Mount{Router: router, Logger: log, Events: bus}
+	mount := pockets.Mount{Router: router, Logger: log, Events: bus}
 
 	// The authorization pocket (authorization-v1 Z4 commit 2 — the FLAGSHIP
 	// posture), now GUARDED (AZ3-4.1): BOTH kinds wired, memstore-backed, so the host
@@ -241,7 +254,7 @@ func run(ctx context.Context) error {
 	// ordering seam: named here, resolved per request, assigned once right after
 	// authSvc exists and long before the host serves.
 	roleRoutesGate := &deferredMiddleware{}
-	authzComponents, err := newAuthorization(roleRoutesGate.middleware)
+	authzComponents, err := newAuthorization(roleRoutesGate.middleware, log)
 	if err != nil {
 		return err
 	}
@@ -251,10 +264,10 @@ func run(ctx context.Context) error {
 	// boot owner/platform-admin seed. The baseline RelationshipWriter is separately
 	// passed to the ordinary-member invitation adapter. Neither capability is
 	// recoverable from Service or automatically exposed through HTTP.
-	authorizer := authzComponents.Service
+	authorizer := authzComponents.Decisions
 	systemMutator := authzComponents.SystemMutator
 	relationshipWriter := authzComponents.RelationshipWriter
-	if err := authorizer.Register(mount); err != nil {
+	if err := authzComponents.Register(mount); err != nil {
 		return err
 	}
 	// Bootstrap the ownable scope through the TRUSTED SystemMutator BEFORE serving:
@@ -282,14 +295,14 @@ func run(ctx context.Context) error {
 	// resource-existence seam so acceptance against a deleted resource fails loudly.
 	authCfg, err := buildAuthConfig(log, relationshipGranter{
 		writer: relationshipWriter,
-		reader: authorizer,
+		reader: authzComponents.Relationships,
 		exists: hostResources.Exists,
 	})
 	if err != nil {
 		return err
 	}
 	// A Granter enables invitations, so the pocket REQUIRES a relation-aware host
-	// authorization policy (auth.Config.InviteCheck, design D3) — the two are wired
+	// authorization policy (authenticationConfig.InviteCheck, design D3) — the two are wired
 	// together. hostInviteCheck consults the authorizer so a member-capable manager cannot
 	// escalate by inviting an owner; a nil InviteCheck here would be ErrInviteCheckRequired
 	// at NewService, never an allow-by-default.
@@ -303,14 +316,14 @@ func run(ctx context.Context) error {
 	// session, platform admin. Set here rather than
 	// in buildAuthConfig because the gate is a method value on the authorizer, which the
 	// composition seam does not receive (the DeliveryMode post-set precedent below).
-	authCfg.MachineRoutesGate = authorizer.RequirePermissionFixed(platformResourceType, "admin", platformResourceID)
+	authCfg.MachineRoutesGate = authzComponents.HTTP.RequirePermissionFixed(platformResourceType, "admin", platformResourceID)
 	// Apply the selected delivery mode to the auth config. buildAuthConfig returns the
 	// jobs-mode posture (in-memory fenced queue on this host); AUTH_DELIVERY_MODE=in_process flips
 	// it to the bounded EPHEMERAL pool here — and announces that posture LOUDLY. Neither mode
 	// is durable on this proof host (both use in-memory stores).
 	switch mode {
-	case auth.DeliveryModeInProcess:
-		authCfg.DeliveryMode = auth.DeliveryModeInProcess
+	case delivery.ModeInProcess:
+		authCfg.DeliveryMode = delivery.ModeInProcess
 		authCfg.DeliveryJobsAcknowledged = false
 		authCfg.DeliveryEphemeralAcknowledged = true
 		authCfg.DeliveryDispatcher = nil // in_process owns its bounded pool; no dispatcher
@@ -337,12 +350,12 @@ func run(ctx context.Context) error {
 	// middleware is what cms gates its admin routes on, and
 	// RequireAccessTokenOrAPIKey() / CurrentPrincipal back the host demo routes. The pocket's own HTTP routes are
 	// the optional adapter over that surface — built once here, mounted once via
-	// authSvc.Register(mount).
-	authSvc, err := auth.NewService(authRepos, authCfg)
+	// authSvc.HTTP.Register(mount).
+	authSvc, err := auth.New(authRepos, authCfg.TokenSigner, authCfg.RuntimeMode, authCfg.DeliveryMode, authCfg.options()...)
 	if err != nil {
 		return err
 	}
-	if err := authSvc.Register(mount); err != nil {
+	if err := authSvc.HTTP.Register(mount); err != nil {
 		return err
 	}
 	// Close the role-routes ordering seam: the bundled /authorization/roles* surface
@@ -350,8 +363,8 @@ func run(ctx context.Context) error {
 	// same coordinate MachineRoutesGate names. Assigned before the host serves, so no
 	// request can reach the routes ahead of their gate (which fails closed anyway).
 	roleRoutesGate.set(roleAdministrationGate(
-		authSvc.RequireAccessTokenLive(),
-		authorizer.RequirePermissionFixed(platformResourceType, "admin", platformResourceID),
+		authSvc.HTTP.RequireAccessTokenLive(),
+		authzComponents.HTTP.RequirePermissionFixed(platformResourceType, "admin", platformResourceID),
 	))
 	// Boot fails LOUDLY if the chain never landed, matching the construction-matrix
 	// posture the pockets already give this host: a gate is a security control, and
@@ -361,38 +374,36 @@ func run(ctx context.Context) error {
 	if !roleRoutesGate.installed() {
 		return errRoleRoutesGateNotInstalled
 	}
+	if err := registerDocumentRoutes(ctx, router, authSvc.HTTP.RequireAccessTokenLive(), authorizer, systemMutator); err != nil {
+		return err
+	}
 
 	// In the bounded in_process mode the health surface reads the live queue depth from the
 	// auth Service (a secret-free counts-only seam) so it can report backlog/saturation.
-	if mode == auth.DeliveryModeInProcess {
-		health.SetDepthSource(authSvc.InProcessQueueDepth)
+	if mode == delivery.ModeInProcess {
+		health.SetDepthSource(authSvc.Delivery.QueueDepth)
 	}
 
 	// The delivery processor is fully attached now (its account resolver is this built
 	// authSvc). In jobs mode, ONLY NOW read the registered job kind/handler seam and build
 	// the jobs FencedRuntime over it (AV3D-3.1) — so no handler can run against a half-built
-	// auth Service. In in_process mode the host runs authSvc.RunDelivery instead. The runtime
+	// auth Service. In in_process mode the host runs authSvc.Delivery.Run instead. The runtime
 	// is built here but STARTED explicitly by the host, below.
-	var deliveryFenced *jobs.FencedRuntime
+	var deliveryFenced *queue.FencedRuntime
 	// deliveryPurge is the jobs-mode host-owned terminal-purge pass (IX-10). In in_process
 	// mode it stays nil: that mode's queue is ephemeral and its latest-by-key status map is
 	// already self-bounding (a finite max-entry count + TTL), so nothing accumulates to purge.
 	var deliveryPurge func(context.Context) (int, error)
 	var deliveryPurgeInterval time.Duration
-	if mode == auth.DeliveryModeJobs {
-		deliveryRuntime, ok := authSvc.DeliveryJobRuntime()
+	if mode == delivery.ModeJobs {
+		deliveryRuntime, ok := authSvc.Delivery.JobRuntime()
 		if !ok {
 			return fmt.Errorf("auth delivery job runtime unavailable: jobs-mode dispatcher not wired")
 		}
-		df, err := jobs.NewFencedRuntime(deliveryJobs, authjobs.FencedRuntimeConfig(deliveryRuntime,
-			func(c *jobs.FencedRuntimeConfig) {
-				c.Logger = log
-				c.PollInterval = time.Second
-				// Provider timeout safely inside the claim lease (AV3D-3.4): a stuck send is
-				// cancelled well before the 30s default lease lapses and a second worker could
-				// reclaim the job. NewFencedRuntime rejects a ProcessTimeout >= LeaseFor.
-				c.ProcessTimeout = 20 * time.Second
-			}))
+		// Bound each provider attempt inside the default 30-second claim lease.
+		df, err := authjobs.NewRuntime(deliveryJobs.Queue, deliveryRuntime,
+			queue.WithFencedRuntimeLogger(log),
+			queue.WithFencedRuntimePolicy(queue.FencedRuntimePolicy{PollInterval: time.Second, ProcessTimeout: 20 * time.Second}))
 		if err != nil {
 			return err
 		}
@@ -402,7 +413,7 @@ func run(ctx context.Context) error {
 		// purged lifecycle observation (which the health surface counts). The host owns the
 		// schedule/lifecycle below; the pocket purges nothing on its own.
 		purgeCfg := deliveryPurgeConfigFromEnv(log)
-		deliveryPurge = newDeliveryPurge(deliveryJobs, deliveryRuntime, purgeCfg, time.Now)
+		deliveryPurge = newDeliveryPurge(deliveryJobs.Queue, deliveryRuntime, purgeCfg, time.Now)
 		deliveryPurgeInterval = purgeCfg.Interval
 	}
 
@@ -426,7 +437,7 @@ func run(ctx context.Context) error {
 		Mailer:          email.NewConsole(log),
 		MailFrom:        "cms@localhost",
 		ContactTo:       "ops@localhost",
-		AdminMiddleware: []web.Middleware{authSvc.RequireAccessToken()}, // auth gates cms's admin surface
+		AdminMiddleware: []web.Middleware{authSvc.HTTP.RequireAccessToken()}, // auth gates cms's admin surface
 	}
 	// CMS_MAIL_FROM / CMS_CONTACT_TO win over the two addresses seeded above.
 	if err := environment.ParseEnvTags("", &cmsCfg); err != nil {
@@ -439,8 +450,9 @@ func run(ctx context.Context) error {
 	// Host cache-invalidation subscriber (S5/O6): subscribe to every event ("*")
 	// and filter content.* in the handler — the bus stays a plain fan-out with no
 	// prefix routing. On a cms content event, drop the whole public-page cache
-	// (cacher.Pages keys pages "page:"+RequestURI, so "page:*" clears them all);
-	// the next request re-renders fresh. Before this wiring the page was purely
+	// (cacher.Pages uses versioned keys under "page:");
+	// invalidation is best effort: an in-flight render may repopulate an old page.
+	// Before this wiring the page was purely
 	// TTL-bound: an edit within the 60s TTL kept serving stale bytes. Because cms
 	// emits are async (O3), this runs shortly AFTER the admin write returns rather
 	// than synchronously with it — a re-fetch trigger, not a transactional write.
@@ -448,70 +460,69 @@ func run(ctx context.Context) error {
 		if !strings.HasPrefix(e.Type(), "content.") {
 			return nil
 		}
-		return pageCache.DeletePattern(ctx, "page:*")
+		return pageCache.DeletePrefix(ctx, "page:")
 	}); err != nil {
 		return err
 	}
 
 	// The events pocket's SSE gateway, best-effort/direct-emit (design §6 wiring
 	// note): the SAME bus instance flows to both Mount.Events (cms is the emitter)
-	// and events.Config.Bus (the gateway is the consumer) — one fan-out, no second
+	// and events.New(bus, ...) (the gateway is the consumer) — one fan-out, no second
 	// bus. A content.* frame fans out to any open stream the moment cms emits. The
-	// gateway reads connect-time identity from sdk/foundation/identity, stashed by
-	// authSvc.RequireAccessToken() on StreamMiddleware (A-I1 E2: no Identity field — absent
-	// principal fails closed with 401). Repositories.Outbox nil ⇒ direct-emit mode
+	// gateway reads connect-time identity from sdk, stashed by
+	// authSvc.HTTP.RequireAccessToken() on StreamMiddleware (A-I1 E2: no Identity field — absent
+	// principal fails closed with 401). WithOutbox omitted ⇒ direct-emit mode
 	// (no durable rail, no poller). Authorize is wired below through the
 	// authorization ENGINE (the flagship posture — authorization-v1 Z4 commit 2),
 	// so the resource-scoped /events/{resource_type}/{resource_id} route IS
 	// registered. The subject stream lands at GET /events (host mounts at root, no
 	// prefix — same as cms/auth).
-	// Variant selection (design §8): the DEFAULT is direct-emit (Repositories.Outbox
-	// nil — cms emits straight onto the bus). With EVENTS_OUTBOX=memory the host
+	// Variant selection (design §8): the DEFAULT is direct-emit (WithOutbox
+	// omitted — cms emits straight onto the bus). With EVENTS_OUTBOX=memory the host
 	// instead wires an example-local in-memory outbox and drives a poller that
 	// drains it onto the SAME bus — the durable at-least-once rail. Either way the
 	// gateway is a plain bus consumer; only the emit path in front of the bus
 	// changes.
-	var eventsRepos eventspocket.Repositories
 	var outboxStore *outboxmem.Store
+	eventOptions := []eventspocket.Option{
+		eventspocket.WithLogger(log),
+		// This demo explicitly shares its notification feed with authenticated users.
+		eventspocket.WithVisibility(func(context.Context, sdk.Principal, sdkevents.Event) (bool, error) { return true, nil }),
+		eventspocket.WithStreamMiddleware(authSvc.HTTP.RequireAccessToken()),
+		eventspocket.WithAuthorization(func(ctx context.Context, p sdk.Principal, resourceType, resourceID string) (bool, error) {
+			result, err := authorizer.Check(ctx, model.CheckRequest{
+				Principal: model.PrincipalRef{Type: p.Type, ID: p.ID}, Permission: demoPermission,
+				Resource: model.Resource{Type: resourceType, ID: resourceID},
+			})
+			return result.Allowed, err
+		}),
+	}
 	if durableOutbox() {
 		outboxStore = outboxmem.New()
-		eventsRepos = eventspocket.Repositories{Outbox: outboxStore}
+		eventOptions = append(eventOptions, eventspocket.WithOutbox(outboxStore))
 	}
-	eventsCfg := eventspocket.Config{
-		Bus:              bus,
-		StreamMiddleware: []web.Middleware{authSvc.RequireAccessToken()},
-		// Authorize (the FLAGSHIP posture — authorization-v1 Z4 commit 2): the SAME
-		// events Check seam, now backed by the authorization ENGINE instead of the
-		// retired toy map (commit 1). The host stays zero-infra (the authorizer is
-		// memstore-backed — no libsql). A non-nil Authorize registers the
-		// resource-scoped GET /events/{resource_type}/{resource_id} route; the
-		// closure maps the stream's identity.Principal onto an authorization.PrincipalRef
-		// unadapted and asks the engine for the `view` permission on the (type, id).
-		Authorize: func(ctx context.Context, p identity.Principal, resourceType, resourceID string) (bool, error) {
-			res, err := authorizer.Check(ctx, authorization.CheckRequest{
-				Principal:  authorization.PrincipalRef{Type: p.Type, ID: p.ID},
-				Permission: demoPermission,
-				Resource:   authorization.Resource{Type: resourceType, ID: resourceID},
-			})
-			return res.Allowed, err
-		},
-	}
-	// EVENTS_HEARTBEAT / EVENTS_BUFFER_SIZE / EVENTS_MAX_CONN_AGE /
-	// EVENTS_MAX_CONNS_PER_SUBJECT tune the gateway; unset keeps the pocket defaults.
-	if err := environment.ParseEnvTags("", &eventsCfg); err != nil {
+	// The host loads policy values; dependencies stay in the wiring above.
+	var streamLimits eventstreams.Limits
+	var streamHTTP eventshttp.Policy
+	if err := environment.ParseEnvTags("", &streamLimits); err != nil {
 		return err
 	}
-	eventsSvc, err := eventspocket.NewService(eventsRepos, eventsCfg)
+	if err := environment.ParseEnvTags("", &streamHTTP); err != nil {
+		return err
+	}
+	eventOptions = append(eventOptions, eventspocket.WithStreamLimits(streamLimits), eventspocket.WithHTTPPolicy(streamHTTP))
+	eventsSvc, err := eventspocket.New(bus, eventOptions...)
 	if err != nil {
 		return err
 	}
+	defer eventsSvc.Close()
 	if err := eventsSvc.Register(mount); err != nil {
 		return err
 	}
 
 	// Durable-outbox variant plumbing (EVENTS_OUTBOX=memory): the host owns the
 	// poller lifecycle (the pocket owns no goroutines — D4). The poller runs on
-	// an sdk/foundation/workers pool woken by the canonical append-then-signal pattern
+	// an sdk/pkg/workers pool woken by the canonical append-then-signal pattern
 	// (gate edit 2): a dedicated cap-1 wake channel the POST /outbox-demo handler
 	// signals right after Append, so a fresh record drains sub-second instead of
 	// waiting out the pool's idle interval. The pool runs on its OWN
@@ -522,7 +533,10 @@ func run(ctx context.Context) error {
 		poolDone   chan struct{}
 	)
 	if outboxStore != nil {
-		poller := eventspocket.NewPoller(outboxStore, bus)
+		poller, err := outbox.NewPoller(outboxStore, bus.Dispatch)
+		if err != nil {
+			return err
+		}
 		wake := make(chan struct{}, 1)
 		router.Handle(http.MethodPost, "/outbox-demo", outboxDemoHandler(outboxStore, wake, log))
 
@@ -549,8 +563,8 @@ func run(ctx context.Context) error {
 	// seeding runs at boot (seedAuthorization) and ordinary invitation acceptance rides
 	// the baseline RelationshipWriter (membership.go); the guarded actor path is proven by
 	// authorization_test.go, not a browser flow.
-	registerDemoRoutes(router, authSvc, authorizer)
-	registerDebugRoutes(router, authSvc, authRepos, log)
+	registerDemoRoutes(router, authSvc.HTTP, authorizer, authzComponents.Roles, authzComponents.HTTP)
+	registerDebugRoutes(router, authSvc.HTTP, authRepos, log)
 
 	// Host-local liveness probe (host route, not pocket surface). Mounted on
 	// the root router with no middleware, outside every gated group and
@@ -567,15 +581,15 @@ func run(ctx context.Context) error {
 
 	// The selected delivery runtime drains the auth delivery queue off the request path —
 	// the host owns its lifecycle (the pocket starts no goroutine). Jobs mode runs the
-	// generic-jobs FencedRuntime (AV3D-3.1); in_process mode runs authSvc.RunDelivery (the
+	// generic-jobs FencedRuntime (AV3D-3.1); in_process mode runs authSvc.Delivery.Run (the
 	// bounded ephemeral pool, AV3D-4.1). It runs on its OWN Background-derived context (never
 	// the parent ctx) so shutdown stops it AFTER HTTP has drained, mirroring the poller order
 	// below. MarkStarted/MarkStopped bracket the goroutine so the health surface reports
 	// not-started vs running.
 	var deliveryRun func(context.Context) error
 	switch mode {
-	case auth.DeliveryModeInProcess:
-		deliveryRun = authSvc.RunDelivery
+	case delivery.ModeInProcess:
+		deliveryRun = authSvc.Delivery.Run
 	default:
 		deliveryRun = deliveryFenced.Run
 	}
@@ -622,17 +636,16 @@ func run(ctx context.Context) error {
 	// P3):
 	//  1. web.Run blocks until hostCtx is canceled (by the signal ctx OR by the delivery
 	//     supervisor on an unexpected runtime exit), then drains in-flight HTTP on its
-	//     OWN fresh Background+ShutdownTimeout context (run.go), closing every open
-	//     SSE stream via its request context. By the time web.Run returns, hostCtx is
-	//     already canceled.
+	//     OWN fresh Background+ShutdownTimeout context (run.go). At the deadline it
+	//     closes remaining connections, canceling their request contexts (including
+	//     SSE). Host cancellation alone does not interrupt a normal drain.
 	//  2. THEN stop the poller pool. It runs on its OWN Background-derived context
 	//     (never the parent ctx — a canceled parent would tear it down before HTTP
 	//     finished draining), so cancel that context now and wait, bounded, for the
 	//     in-flight batch to finish.
 	//  3. Close the bus LAST, on a FRESH bounded context (a canceled parent ctx
-	//     would make Memory.Close drain nothing). Closing after the poller stops is
-	//     why the poller's closed-bus edge (Poll emitting into a closed bus) never
-	//     happens.
+	//     stops waiting immediately). Closing after the poller stops
+	//     lets the final outbox handoff finish before new admissions are refused.
 	runErr := web.Run(hostCtx, router, srv, log)
 
 	// Stop the delivery runtime after HTTP drains (its own context, like the poller).
@@ -675,6 +688,7 @@ func run(ctx context.Context) error {
 	log.InfoContext(context.Background(), "closing event bus")
 	closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
+	_ = eventsSvc.Close()
 	_ = bus.Close(closeCtx)
 
 	return runErr
@@ -731,7 +745,7 @@ func healthzHandler() http.HandlerFunc {
 // is seeded on purpose: registration is part of the proof flow.
 // ids seeds demo content with the default entity-ID strategy, matching the
 // zero-value cms.Config.IDs the host wires.
-var ids = cryptids.IDGenerator{}
+var ids = sdk.IDGenerator{}
 
 func seed(ctx context.Context, repos cms.Repositories) error {
 	now := time.Now().UTC()
@@ -821,33 +835,33 @@ func seed(ctx context.Context, repos cms.Repositories) error {
 //     never printing key material (see demo.go builders).
 //
 // The granter is the invitation grant-on-accept seam (nil → invitations off). When run()
-// passes a non-nil Granter it also sets the REQUIRED relation-aware auth.Config.InviteCheck
+// passes a non-nil Granter it also sets the REQUIRED relation-aware authenticationConfig.InviteCheck
 // (hostInviteCheck) right after this seam returns — the two are wired together (design D3).
 // It builds no goroutines and reads no host lifecycle; run() owns the worker + shutdown.
-func buildAuthConfig(log *slog.Logger, granter auth.Granter) (auth.Config, error) {
+func buildAuthConfig(log *slog.Logger, granter invitations.Granter) (authenticationConfig, error) {
 	// The REQUIRED access-JWT signer, optional provider-token encrypter, REQUIRED
 	// challenge protector (authmem wires Challenges), REQUIRED delivery-outbox
 	// encrypter (jobs mode seals every command envelope), and identifier keyer — each
 	// from its own distinct env var (demo.go).
 	signer, err := buildTokenSigner(log)
 	if err != nil {
-		return auth.Config{}, err
+		return authenticationConfig{}, err
 	}
 	encrypter, err := buildTokenEncrypter()
 	if err != nil {
-		return auth.Config{}, err
+		return authenticationConfig{}, err
 	}
 	challengeProtector, err := buildChallengeProtector(log)
 	if err != nil {
-		return auth.Config{}, err
+		return authenticationConfig{}, err
 	}
 	deliveryEncrypter, err := buildDeliveryEncrypter(log)
 	if err != nil {
-		return auth.Config{}, err
+		return authenticationConfig{}, err
 	}
 	identifierKeyer, err := buildIdentifierKeyer(log)
 	if err != nil {
-		return auth.Config{}, err
+		return authenticationConfig{}, err
 	}
 
 	// The ui/goth HTML surface: build the presentation bundle, then this host's
@@ -858,11 +872,11 @@ func buildAuthConfig(log *slog.Logger, granter auth.Granter) (auth.Config, error
 	// 'none' — the host never hand-writes that CSP (ui-goth GOTH-7.2).
 	bundle, err := newAuthBundle()
 	if err != nil {
-		return auth.Config{}, err
+		return authenticationConfig{}, err
 	}
 	authViews, err := authpages.New(bundle)
 	if err != nil {
-		return auth.Config{}, err
+		return authenticationConfig{}, err
 	}
 
 	// This host's own externally visible origin, resolved from the SAME
@@ -872,88 +886,122 @@ func buildAuthConfig(log *slog.Logger, granter auth.Granter) (auth.Config, error
 	// it, so an environment that leaves those keys empty keeps them.
 	srv := web.ServerConfig{Port: defaultPort}
 	if err := environment.ParseEnvTags("", &srv); err != nil {
-		return auth.Config{}, err
+		return authenticationConfig{}, err
 	}
 	origin := srv.Origin()
 
-	cfg := auth.Config{
-		Hasher:               bcrypt.New(),
-		Mailer:               email.NewConsole(log),
-		MailFrom:             "auth@localhost",
-		RequireVerifiedEmail: true,
-		RuntimeMode:          auth.RuntimeModeDevelopment,
+	cfg := authenticationConfig{
+		TokenSigner: signer,
+		RuntimeMode: environment.ModeDevelopment,
 		// Delivery on the generic jobs runtime (authv3-delivery-refactor
 		// AV3D-0.1). run() wires the generic-jobs dispatcher (authCfg.DeliveryDispatcher)
 		// over an in-memory fenced queue for this demo, so it is NON-DURABLE here (a real
 		// durable posture is a pgx/turso FencedQueue store swap); the production-negative
 		// matrix proves the SAME wiring flipped to production fails closed on an
 		// unacknowledged runtime.
-		DeliveryMode:       auth.DeliveryModeJobs,
-		ChallengeProtector: challengeProtector,
-		DeliveryEncrypter:  deliveryEncrypter,
-		IdentifierKeyer:    identifierKeyer,
-		// The optional HTML surface (design §9.2): this host's REAL partial override
-		// (authpages.New) embeds the ui/goth Views and overrides only the Login page
-		// with Gopernicus-CMS branding — presentation changes only, the JSON API and
-		// every route/service/redirect policy are unchanged (AV3-8.9, proven
-		// isolation-safe in AV3-8.5). Every non-overridden page is the promoted ui/goth
-		// default rendered from the fingerprinted assets under authAssetBasePath.
-		Views: authViews,
-		// The resource policy the ui/goth adapter derives from the bundle: it widens the
-		// pocket's strict CSP exactly far enough to load the GOTH stylesheet and the
-		// same-origin fragment-reader script (script-src 'self' + the per-render nonce),
-		// and can never remove the pocket-owned fixed protections (ui-goth GOTH-7.2).
-		HTMLPolicy: authViews.HTMLPolicy(),
-		// The DISTINCT second override system (design §6.2): a host email LayerApp
-		// content override that rebrands the verification email body. It swaps an EMAIL,
-		// not a page — a different facility from Views, wired through a different Config
-		// field into the delivery router. The code ({{.Secret}}) still renders, so the
-		// verification flow is unbroken; only the copy is host-branded.
-		EmailContentTemplates: []auth.EmailContentTemplate{authpages.EmailOverride()},
-		// The exact-match Origin allowlist the browser-safe mutation gate validates
-		// cookie-authenticated sensitive mutations and HTML form posts against; defaults
-		// to this host's own origin (design §9.1), overridden by AUTH_ALLOWED_ORIGINS.
-		AllowedOrigins: []string{origin},
-		// Passwordless login for email + phone (design §4.2): magic link + OTP. Each
-		// listed kind needs a wired delivery channel (email via the Mailer, phone via the
-		// console Notifier) or construction fails LOUDLY; AUTH_PASSWORDLESS narrows it.
-		Passwordless: []string{identity.KindEmail, identity.KindPhone},
-		// The magic-link / redemption-page base URL (design §6.4), config-only: the
-		// framework appends "#token=<token>", so it points at the bundled fragment-reading
-		// landing GET this host mounts at /auth/magic. AUTH_PUBLIC_BASE_URL overrides it;
-		// request Host/forwarded headers NEVER participate.
-		PublicAuthBaseURL: origin + "/auth/magic",
-		// The password-reset landing route the reset mail links to (CHAU-5.1),
-		// config-only: the link is built in the delivery worker from THIS value,
-		// never from a request Host/forwarded header. Production requires it.
-		// AUTH_PASSWORD_RESET_URL overrides this host's own reset page.
-		PasswordResetURL: origin + "/auth/password/reset",
-		// The OAuth pending-link landing URL the anti-takeover confirmation mail links
-		// to (oauth-pending-link plan D1), config-only. Empty by default, keeping the
-		// mail's bare-token line — but this demo DOES serve the pocket's bundled
-		// fragment-reading landing (public GET /auth/oauth/link, mounted with Views +
-		// a provider), so http://HOST:PORT/auth/oauth/link is a working value here. A
-		// real host points AUTH_OAUTH_LINK_URL at that route or its own SPA route; the
-		// empty pre-seed is what that key overrides.
-		OAuthLinkBaseURL: "",
-		// The queue is the only send path; affirm run() runs the generic-jobs delivery
-		// runtime (jobs.FencedRuntime) (authv3-delivery-refactor AV3D-0.1).
-		DeliveryJobsAcknowledged: true,
-		Providers:                []oauth.Provider{fakeOAuthProvider{}},
-		OAuthCallbackBase:        origin,
-		// Absolute post-flow destinations only; safe same-origin relative paths
-		// (e.g. the account page's ?redirect=/auth/account) need no entry.
-		RedirectAllowlist: []string{"/"},
-		TokenEncrypter:    encrypter,
-		TokenSigner:       signer,
-		// AccessTokenTTL / RefreshTTL are left zero: AUTH_ACCESS_TOKEN_TTL and
-		// AUTH_REFRESH_TTL carry the pocket's own tag defaults (15m / 168h), which are
-		// the values the pocket resolves a zero field to anyway.
-		Granter: granter,
-		// The phone-kind console notifier makes phone a supported delivery kind
-		// (deny-by-absence; the dev stand-in for SMS — the token lands in the log).
-		Notifiers: []notify.Notifier{notify.NewConsole(identity.KindPhone, log)},
-		Logger:    log,
+
+		DeliveryMode: delivery.ModeJobs,
+		Logger:       log,
+		PasswordConfig: auth.PasswordConfig{
+			Hasher:               bcrypt.New(),
+			RequireVerifiedEmail: true,
+		},
+		IdentityConfig: auth.IdentityConfig{
+			ChallengeProtector: challengeProtector,
+			IdentifierKeyer:    identifierKeyer,
+		},
+		DeliveryConfig: auth.DeliveryConfig{
+			Mailer:   email.NewConsole(log),
+			MailFrom: "auth@localhost",
+			// The phone-kind console notifier makes phone a supported delivery kind
+			// (deny-by-absence; the dev stand-in for SMS — the token lands in the log).
+
+			BodySenders:       map[string]delivery.BodySender{sdk.AddressKindPhone: notify.NewConsole(log)},
+			DeliveryEncrypter: deliveryEncrypter,
+			// The queue is the only send path; affirm run() runs the generic-jobs delivery
+			// runtime (jobs.FencedRuntime) (authv3-delivery-refactor AV3D-0.1).
+
+			DeliveryJobsAcknowledged: true,
+		},
+		MessagesConfig: auth.MessagesConfig{
+			// The DISTINCT second override system (design §6.2): a host email LayerApp
+			// content override that rebrands the verification email body. It swaps an EMAIL,
+			// not a page — a different facility from Views, wired through a different Config
+			// field into the delivery router. The code ({{.Secret}}) still renders, so the
+			// verification flow is unbroken; only the copy is host-branded.
+
+			EmailContentTemplates: []delivery.TemplateOverride{authpages.EmailOverride()},
+		},
+		OAuthConfig: auth.OAuthConfig{
+			Providers:         []oauth.Provider{fakeOAuthProvider{}},
+			TokenEncrypter:    encrypter,
+			OAuthCallbackBase: origin,
+			// This host explicitly trusts its local demonstration identity source.
+
+			TrustOAuthEmail: func(provider string, _ oauth.UserInfo) bool { return provider == "fake" },
+		},
+		PasswordlessConfig: auth.PasswordlessConfig{
+			// Passwordless login for email + phone (design §4.2): magic link + OTP. Each
+			// listed kind needs a wired delivery channel (email via the Mailer, phone via the
+			// console Notifier) or construction fails LOUDLY; AUTH_PASSWORDLESS narrows it.
+
+			Passwordless: []string{sdk.AddressKindEmail, sdk.AddressKindPhone},
+		},
+		LinksConfig: auth.LinksConfig{
+			// The magic-link / redemption-page base URL (design §6.4), config-only: the
+			// framework appends "#token=<token>", so it points at the bundled fragment-reading
+			// landing GET this host mounts at /auth/magic. AUTH_PUBLIC_BASE_URL overrides it;
+			// request Host/forwarded headers NEVER participate.
+
+			PublicAuthBaseURL: origin + "/auth/magic",
+			// The password-reset landing route the reset mail links to (CHAU-5.1),
+			// config-only: the link is built in the delivery worker from THIS value,
+			// never from a request Host/forwarded header. Production requires it.
+			// AUTH_PASSWORD_RESET_URL overrides this host's own reset page.
+
+			PasswordResetURL: origin + "/auth/password/reset",
+			// The OAuth pending-link landing URL the anti-takeover confirmation mail links
+			// to (oauth-pending-link plan D1), config-only. Empty by default, keeping the
+			// mail's bare-token line — but this demo DOES serve the pocket's bundled
+			// fragment-reading landing (public GET /auth/oauth/link, mounted with Views +
+			// a provider), so http://HOST:PORT/auth/oauth/link is a working value here. A
+			// real host points AUTH_OAUTH_LINK_URL at that route or its own SPA route; the
+			// empty pre-seed is what that key overrides.
+
+			OAuthLinkBaseURL: "",
+			// Absolute post-flow destinations only; safe same-origin relative paths
+			// (e.g. the account page's ?redirect=/auth/account) need no entry.
+
+			RedirectAllowlist: []string{"/"},
+		},
+		BrowserConfig: auth.BrowserConfig{
+			// The exact-match Origin allowlist the browser-safe mutation gate validates
+			// cookie-authenticated sensitive mutations and HTML form posts against; defaults
+			// to this host's own origin (design §9.1), overridden by AUTH_ALLOWED_ORIGINS.
+
+			AllowedOrigins: []string{origin},
+			// The optional HTML surface (design §9.2): this host's REAL partial override
+			// (authpages.New) embeds the ui/goth Views and overrides only the Login page
+			// with Gopernicus-CMS branding — presentation changes only, the JSON API and
+			// every route/service/redirect policy are unchanged (AV3-8.9, proven
+			// isolation-safe in AV3-8.5). Every non-overridden page is the promoted ui/goth
+			// default rendered from the fingerprinted assets under authAssetBasePath.
+
+			Views: authViews,
+			// The resource policy the ui/goth adapter derives from the bundle: it widens the
+			// pocket's strict CSP exactly far enough to load the GOTH stylesheet and the
+			// same-origin fragment-reader script (script-src 'self' + the per-render nonce),
+			// and can never remove the pocket-owned fixed protections (ui-goth GOTH-7.2).
+
+			HTMLPolicy: authViews.HTMLPolicy(),
+		},
+		InvitationsConfig: auth.InvitationsConfig{
+			// AccessTokenTTL / RefreshTTL are left zero: AUTH_ACCESS_TOKEN_TTL and
+			// AUTH_REFRESH_TTL carry the pocket's own tag defaults (15m / 168h), which are
+			// the values the pocket resolves a zero field to anyway.
+
+			Granter: granter,
+		},
 	}
 	// The pocket's own env tags, applied over the literal: AUTH_MAIL_FROM,
 	// AUTH_ALLOWED_ORIGINS, AUTH_PASSWORDLESS, AUTH_PUBLIC_BASE_URL,
@@ -964,7 +1012,7 @@ func buildAuthConfig(log *slog.Logger, granter auth.Granter) (auth.Config, error
 	// keeps what the literal seeded; an unrecognized mode or strategy is the pocket's
 	// loud construction error.
 	if err := environment.ParseEnvTags("", &cfg); err != nil {
-		return auth.Config{}, err
+		return authenticationConfig{}, err
 	}
 	return cfg, nil
 }

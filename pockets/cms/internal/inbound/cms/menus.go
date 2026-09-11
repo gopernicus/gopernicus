@@ -7,7 +7,7 @@ import (
 
 	"github.com/gopernicus/gopernicus/pockets/cms/domain/menus"
 	"github.com/gopernicus/gopernicus/sdk"
-	"github.com/gopernicus/gopernicus/sdk/foundation/web"
+	"github.com/gopernicus/gopernicus/sdk/pkg/web"
 )
 
 // menuService is the narrow surface the menu handlers consume.

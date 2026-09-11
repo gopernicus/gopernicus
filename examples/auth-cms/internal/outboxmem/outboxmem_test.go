@@ -3,8 +3,8 @@ package outboxmem
 import (
 	"testing"
 
-	"github.com/gopernicus/gopernicus/pockets/events/domain/outbox"
-	"github.com/gopernicus/gopernicus/pockets/events/storetest"
+	outbox "github.com/gopernicus/gopernicus/pockets/events/logic/outbox"
+	"github.com/gopernicus/gopernicus/pockets/events/stores/storetest"
 )
 
 // TestConformance runs the shared events storetest suite against outboxmem — the

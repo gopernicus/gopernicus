@@ -5,7 +5,7 @@ import (
 	"time"
 
 	firestoredb "github.com/gopernicus/gopernicus/integrations/datastores/firestore"
-	"github.com/gopernicus/gopernicus/pockets/authentication/domain/challenge"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/challenge"
 )
 
 var _ challenge.Repository = (*challengeStore)(nil)

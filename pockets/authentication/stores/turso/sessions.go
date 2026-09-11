@@ -6,7 +6,7 @@ import (
 	"time"
 
 	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
-	"github.com/gopernicus/gopernicus/pockets/authentication/domain/session"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/session"
 	"github.com/gopernicus/gopernicus/sdk"
 )
 
@@ -26,7 +26,11 @@ type SessionStore struct {
 var _ session.SessionRepository = (*SessionStore)(nil)
 
 // NewSessionStore returns a SessionStore backed by db.
+// It panics if db is nil; the caller owns the database lifecycle.
 func NewSessionStore(db *tursodb.DB) *SessionStore {
+	if db == nil {
+		panic("authentication turso: NewSessionStore received a nil database")
+	}
 	return &SessionStore{db: db}
 }
 

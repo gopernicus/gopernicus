@@ -21,8 +21,9 @@ import (
 
 	"github.com/gopernicus/gopernicus/integrations/datastores/firestore/firestoretest"
 	"github.com/gopernicus/gopernicus/pockets/authorization"
-	"github.com/gopernicus/gopernicus/pockets/authorization/storetest"
-	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/mutations"
+	"github.com/gopernicus/gopernicus/pockets/authorization/stores/storetest"
+	"github.com/gopernicus/gopernicus/sdk/capabilities/transaction"
 )
 
 // emulatorDatabase is this store train's own emulator database. It is NOT the
@@ -35,10 +36,14 @@ const emulatorDatabase = "authorization"
 // repository set — a FRESH, empty store per call, which is what every storetest
 // family assumes.
 func newRepos(t *testing.T) authorization.Repositories {
+	return newReposWithPolicy(t, mutations.GuardianPolicy{})
+}
+
+func newReposWithPolicy(t *testing.T, policy mutations.GuardianPolicy) authorization.Repositories {
 	t.Helper()
 	db := firestoretest.OpenDatabase(t, emulatorDatabase)
 	firestoretest.Reset(t, db)
-	repos, err := Repositories(db, WithoutIndexProbe())
+	repos, err := Repositories(t.Context(), db, WithoutIndexProbe(), WithGuardianPolicy(policy))
 	if err != nil {
 		t.Fatalf("Repositories: %v", err)
 	}
@@ -49,22 +54,22 @@ func newRepos(t *testing.T) authorization.Repositories {
 // the adversarial/budget/keyset/set-read families, and the mutation families)
 // against the emulator. It is the executable form of all three ports' contracts.
 func TestConformance(t *testing.T) {
-	storetest.Run(t, newRepos)
+	storetest.Run(t, newReposWithPolicy)
 }
 
 // TestRunTransactional is ruling R1's loud skip. The Firestore store hands the
-// harness NO crud.Transactor, because a Firestore transaction requires every
+// harness NO transaction.Transactor, because a Firestore transaction requires every
 // read to precede every write and never observes its own pending writes — the
 // exact property the ambient family proves from both sides. The harness's
 // existing nil-transactor path (the memstore takes it too) skips the family
 // loudly rather than reporting a green it did not earn.
 func TestRunTransactional(t *testing.T) {
-	// The harness owns the SKIP line ("no crud.Transactor supplied — ambient-
+	// The harness owns the SKIP line ("no transaction.Transactor supplied — ambient-
 	// transaction family NOT verified"); this log is what names the family, the
 	// store, and the ruling right above it, so a log reader never has to guess
 	// whose skip it is or whether it is a defect.
-	t.Log("firestore: this store supplies NO crud.Transactor — the ambient-transaction family is a KNOWN FAMILY DIFFERENCE (firestore-stores ruling R1), not a defect and not a gap to be fixed by a wrapper. See README.md, first section.")
-	storetest.RunTransactional(t, func(t *testing.T) (authorization.Repositories, crud.Transactor) {
+	t.Log("firestore: this store supplies NO transaction.Transactor — the ambient-transaction family is a KNOWN FAMILY DIFFERENCE (firestore-stores ruling R1), not a defect and not a gap to be fixed by a wrapper. See README.md, first section.")
+	storetest.RunTransactional(t, func(t *testing.T) (authorization.Repositories, transaction.Transactor) {
 		return newRepos(t), nil
 	})
 }
@@ -77,9 +82,25 @@ func TestRunTransactional(t *testing.T) {
 func TestAmbientTransactionRefused(t *testing.T) {
 	db := firestoretest.OpenDatabase(t, emulatorDatabase)
 	firestoretest.Reset(t, db)
-	repos, err := Repositories(db, WithoutIndexProbe())
+	repos, err := Repositories(t.Context(), db, WithoutIndexProbe())
 	if err != nil {
 		t.Fatalf("Repositories: %v", err)
 	}
 	assertAmbientRefusal(t, db, repos)
+}
+
+func TestAuditConformance(t *testing.T) {
+	storetest.RunAudit(t, func(t *testing.T, enabled bool) authorization.Repositories {
+		db := firestoretest.OpenDatabase(t, emulatorDatabase)
+		firestoretest.Reset(t, db)
+		opts := []Option{WithoutIndexProbe()}
+		if enabled {
+			opts = append(opts, WithAudit())
+		}
+		repos, err := Repositories(t.Context(), db, opts...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return repos
+	})
 }

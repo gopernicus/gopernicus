@@ -35,11 +35,11 @@ const (
 Profiles are additive. Zero configuration chooses the smallest and safest profile, the default asset path, and the built-in neutral theme.
 
 ```go
-bundle, err := goth.New(goth.Config{
-    AssetBasePath:      "/assets/goth",
-    Profile:            goth.Full,
-    ThemeStylesheetPath: "/assets/app/theme.css",
-})
+bundle, err := goth.New(
+    goth.WithAssetBasePath("/assets/goth"),
+    goth.WithProfile(goth.Full),
+    goth.WithThemeStylesheetPath("/assets/app/theme.css"),
+)
 if err != nil {
     return err
 }

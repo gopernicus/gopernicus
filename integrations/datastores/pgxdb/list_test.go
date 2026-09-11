@@ -10,7 +10,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/gopernicus/gopernicus/sdk"
-	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
+	"github.com/gopernicus/gopernicus/sdk/pkg/list"
 )
 
 // errCapture short-circuits a capture Querier right after it hands the
@@ -46,7 +46,7 @@ func (c *listCapture) Query(_ context.Context, query string, args ...any) (jackp
 
 func (c *listCapture) QueryRow(context.Context, string, ...any) jackpgx.Row { return nil }
 
-var listOrderFields = map[string]crud.OrderField{
+var listOrderFields = map[string]list.OrderField{
 	"created_at": {Column: "created_at"},
 	"id":         {Column: "id"},
 }
@@ -56,7 +56,7 @@ func newListQuery() ListQuery[listRow] {
 		BaseSQL:      "SELECT id, created_at FROM widgets WHERE kind = @kind",
 		Args:         jackpgx.NamedArgs{"kind": "gadget"},
 		OrderFields:  listOrderFields,
-		DefaultOrder: crud.NewOrder("created_at", crud.DESC),
+		DefaultOrder: list.NewOrder("created_at", list.DESC),
 		PK:           "id",
 		OrderValueOf: func(r listRow, _ string) any { return r.CreatedAt },
 		PKOf:         func(r listRow) string { return r.ID },
@@ -67,11 +67,11 @@ func newListQuery() ListQuery[listRow] {
 // DefaultOrder ORDER BY and LIMIT n+1 with no keyset predicate.
 func TestList_FirstPageSQL(t *testing.T) {
 	cq := &listCapture{}
-	_, err := List(context.Background(), cq, newListQuery(), crud.ListRequest{Limit: 2})
+	_, err := List(context.Background(), cq, newListQuery(), list.Request{Limit: 2})
 	if !errors.Is(err, errCapture) {
 		t.Fatalf("err = %v, want errCapture", err)
 	}
-	want := `SELECT id, created_at FROM widgets WHERE kind = @kind ORDER BY "created_at" DESC, "id" DESC LIMIT @limit`
+	want := "SELECT * FROM (\nSELECT id, created_at FROM widgets WHERE kind = @kind\n) AS list_source " + `ORDER BY "created_at" DESC, "id" DESC LIMIT @limit`
 	if cq.query != want {
 		t.Fatalf("query =\n  %q\nwant\n  %q", cq.query, want)
 	}
@@ -85,10 +85,10 @@ func TestList_FirstPageSQL(t *testing.T) {
 // arg is Max+1 (the +1 over-fetch), not the request value.
 func TestList_LimitsClamp(t *testing.T) {
 	q := newListQuery()
-	q.Limits = crud.Limits{Max: 5}
+	q.Limits = list.Limits{Max: 5}
 
 	cq := &listCapture{}
-	_, err := List(context.Background(), cq, q, crud.ListRequest{Limit: 6})
+	_, err := List(context.Background(), cq, q, list.Request{Limit: 6})
 	if !errors.Is(err, errCapture) {
 		t.Fatalf("err = %v, want errCapture", err)
 	}
@@ -97,22 +97,22 @@ func TestList_LimitsClamp(t *testing.T) {
 	}
 }
 
-// TestList_CursorPageSQL: a cursor appends the keyset tuple predicate as an AND
-// and binds the cursor order value (UTC time) + pk.
+// TestList_CursorPageSQL preserves the authored filter in a derived table and
+// binds the cursor order value (UTC time) + pk.
 func TestList_CursorPageSQL(t *testing.T) {
 	ct := time.Date(2026, 7, 8, 12, 0, 0, 0, time.FixedZone("x", 2*3600))
-	token, err := crud.EncodeCursor("created_at", ct, "pk-9")
+	token, err := list.EncodeCursor("created_at", ct, "pk-9")
 	if err != nil {
 		t.Fatalf("EncodeCursor: %v", err)
 	}
 
 	cq := &listCapture{}
-	_, err = List(context.Background(), cq, newListQuery(), crud.ListRequest{Limit: 2, Cursor: token})
+	_, err = List(context.Background(), cq, newListQuery(), list.Request{Limit: 2, Cursor: token})
 	if !errors.Is(err, errCapture) {
 		t.Fatalf("err = %v, want errCapture", err)
 	}
-	want := `SELECT id, created_at FROM widgets WHERE kind = @kind ` +
-		`AND ("created_at", "id") < (@cursor_order_value, @cursor_pk) ` +
+	want := "SELECT * FROM (\nSELECT * FROM (\nSELECT id, created_at FROM widgets WHERE kind = @kind\n) AS list_source\n) AS list_source WHERE " +
+		`("created_at", "id") < (@cursor_order_value, @cursor_pk) ` +
 		`ORDER BY "created_at" DESC, "id" DESC LIMIT @limit`
 	if cq.query != want {
 		t.Fatalf("query =\n  %q\nwant\n  %q", cq.query, want)
@@ -130,11 +130,11 @@ func TestList_CursorPageSQL(t *testing.T) {
 // keyset predicate.
 func TestList_OffsetPageSQL(t *testing.T) {
 	cq := &listCapture{}
-	_, err := List(context.Background(), cq, newListQuery(), crud.ListRequest{Limit: 2, Offset: 4, Strategy: crud.StrategyOffset})
+	_, err := List(context.Background(), cq, newListQuery(), list.Request{Limit: 2, Offset: 4, Strategy: list.StrategyOffset})
 	if !errors.Is(err, errCapture) {
 		t.Fatalf("err = %v, want errCapture", err)
 	}
-	want := `SELECT id, created_at FROM widgets WHERE kind = @kind ORDER BY "created_at" DESC, "id" DESC LIMIT @limit OFFSET @offset`
+	want := "SELECT * FROM (\nSELECT id, created_at FROM widgets WHERE kind = @kind\n) AS list_source " + `ORDER BY "created_at" DESC, "id" DESC LIMIT @limit OFFSET @offset`
 	if cq.query != want {
 		t.Fatalf("query =\n  %q\nwant\n  %q", cq.query, want)
 	}
@@ -146,16 +146,16 @@ func TestList_OffsetPageSQL(t *testing.T) {
 // TestList_StaleCursorIsFirstPage: a token whose order field no longer matches
 // the resolved order decodes to a first page — no keyset predicate.
 func TestList_StaleCursorIsFirstPage(t *testing.T) {
-	token, err := crud.EncodeCursor("name", "Widget", "pk-1")
+	token, err := list.EncodeCursor("name", "Widget", "pk-1")
 	if err != nil {
 		t.Fatalf("EncodeCursor: %v", err)
 	}
 	cq := &listCapture{}
-	_, err = List(context.Background(), cq, newListQuery(), crud.ListRequest{Limit: 2, Cursor: token})
+	_, err = List(context.Background(), cq, newListQuery(), list.Request{Limit: 2, Cursor: token})
 	if !errors.Is(err, errCapture) {
 		t.Fatalf("err = %v, want errCapture", err)
 	}
-	want := `SELECT id, created_at FROM widgets WHERE kind = @kind ORDER BY "created_at" DESC, "id" DESC LIMIT @limit`
+	want := "SELECT * FROM (\nSELECT id, created_at FROM widgets WHERE kind = @kind\n) AS list_source " + `ORDER BY "created_at" DESC, "id" DESC LIMIT @limit`
 	if cq.query != want {
 		t.Fatalf("query =\n  %q\nwant\n  %q (stale cursor should be first page)", cq.query, want)
 	}
@@ -165,7 +165,7 @@ func TestList_StaleCursorIsFirstPage(t *testing.T) {
 // rejected by Validate before any SQL is built.
 func TestList_ValidateRejectsBadRequest(t *testing.T) {
 	cq := &listCapture{}
-	_, err := List(context.Background(), cq, newListQuery(), crud.ListRequest{Limit: 2, Cursor: "x", Offset: 3})
+	_, err := List(context.Background(), cq, newListQuery(), list.Request{Limit: 2, Cursor: "x", Offset: 3})
 	if !errors.Is(err, sdk.ErrInvalidInput) {
 		t.Fatalf("err = %v, want ErrInvalidInput", err)
 	}
@@ -178,7 +178,7 @@ func TestList_ValidateRejectsBadRequest(t *testing.T) {
 // rejected with ErrInvalidInput before any SQL is built.
 func TestList_UnknownOrderRejected(t *testing.T) {
 	cq := &listCapture{}
-	req := crud.ListRequest{Limit: 2, Order: crud.NewOrder("password", crud.ASC)}
+	req := list.Request{Limit: 2, Order: list.NewOrder("password", list.ASC)}
 	_, err := List(context.Background(), cq, newListQuery(), req)
 	if !errors.Is(err, sdk.ErrInvalidInput) {
 		t.Fatalf("err = %v, want ErrInvalidInput", err)
@@ -188,16 +188,23 @@ func TestList_UnknownOrderRejected(t *testing.T) {
 	}
 }
 
+type fixedOrderRow struct {
+	ID          string     `db:"id"`
+	CreatedAt   time.Time  `db:"created_at"`
+	ClosingDate *time.Time `db:"closing_date"`
+	Name        string     `db:"name"`
+}
+
 // newFixedOrderQuery is a store whose order is the product's, not the caller's:
 // no OrderFields, a composite FixedOrder with NULLS LAST and the pk tiebreak
 // included by the store itself.
-func newFixedOrderQuery() ListQuery[listRow] {
-	return ListQuery[listRow]{
-		BaseSQL:    "SELECT id, created_at FROM widgets WHERE kind = @kind",
+func newFixedOrderQuery() ListQuery[fixedOrderRow] {
+	return ListQuery[fixedOrderRow]{
+		BaseSQL:    "SELECT id, created_at, closing_date, name FROM widgets WHERE kind = @kind",
 		Args:       jackpgx.NamedArgs{"kind": "gadget"},
 		FixedOrder: "closing_date DESC NULLS LAST, name ASC, id ASC",
 		PK:         "id",
-		PKOf:       func(r listRow) string { return r.ID },
+		PKOf:       func(r fixedOrderRow) string { return r.ID },
 	}
 }
 
@@ -206,11 +213,11 @@ func newFixedOrderQuery() ListQuery[listRow] {
 // offset flow is otherwise unchanged: LIMIT n+1 OFFSET off.
 func TestList_FixedOrderSQL(t *testing.T) {
 	cq := &listCapture{}
-	_, err := List(context.Background(), cq, newFixedOrderQuery(), crud.ListRequest{Limit: 2, Offset: 4, Strategy: crud.StrategyOffset})
+	_, err := List(context.Background(), cq, newFixedOrderQuery(), list.Request{Limit: 2, Offset: 4, Strategy: list.StrategyOffset})
 	if !errors.Is(err, errCapture) {
 		t.Fatalf("err = %v, want errCapture", err)
 	}
-	want := `SELECT id, created_at FROM widgets WHERE kind = @kind ORDER BY closing_date DESC NULLS LAST, name ASC, id ASC LIMIT @limit OFFSET @offset`
+	want := "SELECT * FROM (\nSELECT id, created_at, closing_date, name FROM widgets WHERE kind = @kind\n) AS list_source " + `ORDER BY closing_date DESC NULLS LAST, name ASC, id ASC LIMIT @limit OFFSET @offset`
 	if cq.query != want {
 		t.Fatalf("query =\n  %q\nwant\n  %q", cq.query, want)
 	}
@@ -223,14 +230,14 @@ func TestList_FixedOrderSQL(t *testing.T) {
 // BEFORE the fixed ORDER BY, exactly as on the OrderFields path.
 func TestList_FixedOrderSearchFolded(t *testing.T) {
 	q := newFixedOrderQuery()
-	q.SearchFields = []crud.SearchField{{Column: "name"}}
+	q.SearchFields = []list.SearchField{{Column: "name"}}
 
 	cq := &listCapture{}
-	_, err := List(context.Background(), cq, q, crud.ListRequest{Limit: 2, Strategy: crud.StrategyOffset, Search: "gizmo"})
+	_, err := List(context.Background(), cq, q, list.Request{Limit: 2, Strategy: list.StrategyOffset, Search: "gizmo"})
 	if !errors.Is(err, errCapture) {
 		t.Fatalf("err = %v, want errCapture", err)
 	}
-	want := `SELECT id, created_at FROM widgets WHERE kind = @kind AND (("name" COLLATE "C") ILIKE @list_search ESCAPE '\') ` +
+	want := "SELECT * FROM (\nSELECT id, created_at, closing_date, name FROM widgets WHERE kind = @kind\n) AS list_source WHERE " + `(("name" COLLATE "C") ILIKE @list_search ESCAPE '\') ` +
 		`ORDER BY closing_date DESC NULLS LAST, name ASC, id ASC LIMIT @limit OFFSET @offset`
 	if cq.query != want {
 		t.Fatalf("query =\n  %q\nwant\n  %q", cq.query, want)
@@ -250,14 +257,14 @@ func TestList_FixedOrderRefusals(t *testing.T) {
 
 	cases := []struct {
 		name string
-		q    ListQuery[listRow]
-		req  crud.ListRequest
+		q    ListQuery[fixedOrderRow]
+		req  list.Request
 	}{
-		{"request order", newFixedOrderQuery(), crud.ListRequest{Limit: 2, Strategy: crud.StrategyOffset, Order: crud.NewOrder("id", crud.ASC)}},
-		{"default (cursor) strategy", newFixedOrderQuery(), crud.ListRequest{Limit: 2}},
-		{"explicit cursor strategy", newFixedOrderQuery(), crud.ListRequest{Limit: 2, Strategy: crud.StrategyCursor}},
-		{"cursor token", newFixedOrderQuery(), crud.ListRequest{Limit: 2, Cursor: "abc"}},
-		{"OrderFields alongside FixedOrder", both, crud.ListRequest{Limit: 2, Strategy: crud.StrategyOffset}},
+		{"request order", newFixedOrderQuery(), list.Request{Limit: 2, Strategy: list.StrategyOffset, Order: list.NewOrder("id", list.ASC)}},
+		{"default (cursor) strategy", newFixedOrderQuery(), list.Request{Limit: 2}},
+		{"explicit cursor strategy", newFixedOrderQuery(), list.Request{Limit: 2, Strategy: list.StrategyCursor}},
+		{"cursor token", newFixedOrderQuery(), list.Request{Limit: 2, Cursor: "abc"}},
+		{"OrderFields alongside FixedOrder", both, list.Request{Limit: 2, Strategy: list.StrategyOffset}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -274,14 +281,14 @@ func TestList_FixedOrderRefusals(t *testing.T) {
 }
 
 // TestList_FixedOrderZeroValueKeepsOrderFields: a query without FixedOrder is
-// byte-identical to before — the OrderFields path and DefaultOrder still apply.
+// uses the OrderFields path and DefaultOrder in the same projected scope.
 func TestList_FixedOrderZeroValueKeepsOrderFields(t *testing.T) {
 	cq := &listCapture{}
-	_, err := List(context.Background(), cq, newListQuery(), crud.ListRequest{Limit: 2, Strategy: crud.StrategyOffset})
+	_, err := List(context.Background(), cq, newListQuery(), list.Request{Limit: 2, Strategy: list.StrategyOffset})
 	if !errors.Is(err, errCapture) {
 		t.Fatalf("err = %v, want errCapture", err)
 	}
-	want := `SELECT id, created_at FROM widgets WHERE kind = @kind ORDER BY "created_at" DESC, "id" DESC LIMIT @limit OFFSET @offset`
+	want := "SELECT * FROM (\nSELECT id, created_at FROM widgets WHERE kind = @kind\n) AS list_source " + `ORDER BY "created_at" DESC, "id" DESC LIMIT @limit OFFSET @offset`
 	if cq.query != want {
 		t.Fatalf("query =\n  %q\nwant\n  %q", cq.query, want)
 	}

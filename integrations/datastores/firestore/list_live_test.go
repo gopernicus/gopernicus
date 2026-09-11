@@ -38,7 +38,7 @@ import (
 
 	"github.com/gopernicus/gopernicus/integrations/datastores/firestore"
 	"github.com/gopernicus/gopernicus/integrations/datastores/firestore/firestoretest"
-	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
+	"github.com/gopernicus/gopernicus/sdk/pkg/list"
 )
 
 // liveListCollection is the ONLY collection this leg writes or clears.
@@ -68,36 +68,36 @@ func TestListUnderCompositeIndexesLive(t *testing.T) {
 
 	for _, tc := range []struct {
 		name  string
-		order crud.Order
+		order list.Order
 		want  [][]string
 	}{
-		{"asc", crud.NewOrder("created_at", crud.ASC), [][]string{
+		{"asc", list.NewOrder("created_at", list.ASC), [][]string{
 			{group + "r1", group + "r2"}, {group + "r3", group + "r4"}, {group + "r5", group + "r6"},
 		}},
-		{"desc", crud.NewOrder("created_at", crud.DESC), [][]string{
+		{"desc", list.NewOrder("created_at", list.DESC), [][]string{
 			{group + "r6", group + "r5"}, {group + "r4", group + "r3"}, {group + "r2", group + "r1"},
 		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			p1 := mustList(t, ctx, r, q, crud.ListRequest{Limit: 2, Order: tc.order})
+			p1 := mustList(t, ctx, r, q, list.Request{Limit: 2, Order: tc.order})
 			eqListIDs(t, listIDs(p1.Items), tc.want[0], "page 1")
-			p2 := mustList(t, ctx, r, q, crud.ListRequest{Limit: 2, Cursor: p1.NextCursor, Order: tc.order})
+			p2 := mustList(t, ctx, r, q, list.Request{Limit: 2, Cursor: p1.NextCursor, Order: tc.order})
 			eqListIDs(t, listIDs(p2.Items), tc.want[1], "page 2")
 
 			// Page three is the one whose reverse probe needs the FLIPPED
 			// composite index, and whose PreviousCursor must address page two.
-			p3 := mustList(t, ctx, r, q, crud.ListRequest{Limit: 2, Cursor: p2.NextCursor, Order: tc.order})
+			p3 := mustList(t, ctx, r, q, list.Request{Limit: 2, Cursor: p2.NextCursor, Order: tc.order})
 			eqListIDs(t, listIDs(p3.Items), tc.want[2], "page 3")
 			if !p3.HasPrev || p3.PreviousCursor == "" {
 				t.Fatalf("page 3 HasPrev=%v prevCursor=%q, want true/set", p3.HasPrev, p3.PreviousCursor)
 			}
-			back := mustList(t, ctx, r, q, crud.ListRequest{Limit: 2, Cursor: p3.PreviousCursor, Order: tc.order})
+			back := mustList(t, ctx, r, q, list.Request{Limit: 2, Cursor: p3.PreviousCursor, Order: tc.order})
 			eqListIDs(t, listIDs(back.Items), tc.want[1], "page 3 → page 2")
 		})
 	}
 
 	t.Run("count", func(t *testing.T) {
-		page := mustList(t, ctx, r, q, crud.ListRequest{Limit: 2, WithCount: true, Order: crud.NewOrder("n", crud.DESC)})
+		page := mustList(t, ctx, r, q, list.Request{Limit: 2, WithCount: true, Order: list.NewOrder("n", list.DESC)})
 		if page.Total == nil || *page.Total != 6 {
 			t.Fatalf("Total = %v, want 6", page.Total)
 		}
@@ -123,7 +123,7 @@ func TestListPostFilterLive(t *testing.T) {
 	r := db.ReaderFrom(ctx)
 	q := liveListQuery(db, group)
 	q.PostFilter = func(row listItem) bool { return row.N%2 == 0 }
-	asc := crud.NewOrder("created_at", crud.ASC)
+	asc := list.NewOrder("created_at", list.ASC)
 
 	want := make([]string, 0, 6)
 	for i := 2; i <= 12; i += 2 {
@@ -131,7 +131,7 @@ func TestListPostFilterLive(t *testing.T) {
 	}
 	eqListIDs(t, traverseListIDs(t, ctx, r, q, asc, 2), want, "postfiltered traversal")
 
-	page := mustList(t, ctx, r, q, crud.ListRequest{Limit: 2, WithCount: true, Order: asc})
+	page := mustList(t, ctx, r, q, list.Request{Limit: 2, WithCount: true, Order: asc})
 	if page.Total == nil || *page.Total != 6 {
 		t.Fatalf("Total = %v, want the 6 matches", page.Total)
 	}

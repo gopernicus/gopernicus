@@ -34,7 +34,7 @@ func newTestEvent(topic, data string) testEvent {
 // Sync delivery
 // =============================================================================
 
-func TestMemory_EmitSync_CallsHandler(t *testing.T) {
+func TestMemory_Dispatch_CallsHandler(t *testing.T) {
 	bus := newMemory()
 	defer bus.Close(context.Background())
 
@@ -46,7 +46,7 @@ func TestMemory_EmitSync_CallsHandler(t *testing.T) {
 		return nil
 	})
 
-	if err := bus.Emit(context.Background(), newTestEvent("test.event", "hello"), events.WithSync()); err != nil {
+	if err := bus.Dispatch(context.Background(), newTestEvent("test.event", "hello")); err != nil {
 		t.Fatalf("Emit() error = %v", err)
 	}
 	if received != "hello" {
@@ -54,7 +54,7 @@ func TestMemory_EmitSync_CallsHandler(t *testing.T) {
 	}
 }
 
-func TestMemory_EmitSync_PropagatesError(t *testing.T) {
+func TestMemory_Dispatch_PropagatesError(t *testing.T) {
 	bus := newMemory()
 	defer bus.Close(context.Background())
 
@@ -62,13 +62,13 @@ func TestMemory_EmitSync_PropagatesError(t *testing.T) {
 		return errors.New("handler failed")
 	})
 
-	err := bus.Emit(context.Background(), newTestEvent("test.event", ""), events.WithSync())
+	err := bus.Dispatch(context.Background(), newTestEvent("test.event", ""))
 	if err == nil {
 		t.Error("sync Emit should propagate the handler error")
 	}
 }
 
-func TestMemory_EmitSync_MultipleHandlers(t *testing.T) {
+func TestMemory_Dispatch_MultipleHandlers(t *testing.T) {
 	bus := newMemory()
 	defer bus.Close(context.Background())
 
@@ -80,7 +80,7 @@ func TestMemory_EmitSync_MultipleHandlers(t *testing.T) {
 	bus.Subscribe("test.event", h)
 	bus.Subscribe("test.event", h)
 
-	bus.Emit(context.Background(), newTestEvent("test.event", ""), events.WithSync())
+	bus.Dispatch(context.Background(), newTestEvent("test.event", ""))
 	if atomic.LoadInt32(&count) != 2 {
 		t.Errorf("handler called %d times, want 2", count)
 	}
@@ -154,8 +154,8 @@ func TestMemory_Wildcard(t *testing.T) {
 		return nil
 	})
 
-	bus.Emit(context.Background(), newTestEvent("user.created", ""), events.WithSync())
-	bus.Emit(context.Background(), newTestEvent("order.completed", ""), events.WithSync())
+	bus.Dispatch(context.Background(), newTestEvent("user.created", ""))
+	bus.Dispatch(context.Background(), newTestEvent("order.completed", ""))
 
 	if atomic.LoadInt32(&count) != 2 {
 		t.Errorf("wildcard handler called %d times, want 2", count)
@@ -176,9 +176,9 @@ func TestMemory_Unsubscribe(t *testing.T) {
 		return nil
 	})
 
-	bus.Emit(context.Background(), newTestEvent("test.event", ""), events.WithSync())
+	bus.Dispatch(context.Background(), newTestEvent("test.event", ""))
 	sub.Unsubscribe()
-	bus.Emit(context.Background(), newTestEvent("test.event", ""), events.WithSync())
+	bus.Dispatch(context.Background(), newTestEvent("test.event", ""))
 
 	if atomic.LoadInt32(&count) != 1 {
 		t.Errorf("handler called %d times after unsubscribe, want 1", count)
@@ -206,7 +206,7 @@ func TestMemory_NoHandlers(t *testing.T) {
 	bus := newMemory()
 	defer bus.Close(context.Background())
 
-	if err := bus.Emit(context.Background(), newTestEvent("unknown.event", ""), events.WithSync()); err != nil {
+	if err := bus.Dispatch(context.Background(), newTestEvent("unknown.event", "")); err != nil {
 		t.Fatalf("Emit() with no handlers should not error, got: %v", err)
 	}
 }
@@ -216,7 +216,9 @@ func TestMemory_NoHandlers(t *testing.T) {
 // =============================================================================
 
 func TestMemory_SubscribeBroadcast(t *testing.T) {
-	var bus events.Broadcaster = newMemory()
+	memory := newMemory()
+	defer memory.Close(context.Background())
+	var bus events.Broadcaster = memory
 
 	var count int32
 	sub, err := bus.SubscribeBroadcast("test.event", func(_ context.Context, _ events.Event) error {
@@ -228,7 +230,7 @@ func TestMemory_SubscribeBroadcast(t *testing.T) {
 	}
 	defer sub.Unsubscribe()
 
-	bus.(*events.Memory).Emit(context.Background(), newTestEvent("test.event", ""), events.WithSync())
+	bus.(*events.Memory).Dispatch(context.Background(), newTestEvent("test.event", ""))
 	if atomic.LoadInt32(&count) != 1 {
 		t.Errorf("broadcast handler called %d times, want 1", count)
 	}
@@ -259,12 +261,12 @@ func TestMemory_NoDeliveryAfterClose(t *testing.T) {
 
 	bus.Close(context.Background())
 
-	// Both paths must drop post-close without delivering or panicking.
-	if err := bus.Emit(context.Background(), newTestEvent("test.event", "")); err != nil {
-		t.Fatalf("async Emit after Close should not error, got: %v", err)
+	// Both paths reject post-close admissions without delivering.
+	if err := bus.Emit(context.Background(), newTestEvent("test.event", "")); !errors.Is(err, events.ErrClosed) {
+		t.Fatalf("Emit after Close = %v, want ErrClosed", err)
 	}
-	if err := bus.Emit(context.Background(), newTestEvent("test.event", ""), events.WithSync()); err != nil {
-		t.Fatalf("sync Emit after Close should not error, got: %v", err)
+	if err := bus.Dispatch(context.Background(), newTestEvent("test.event", "")); !errors.Is(err, events.ErrClosed) {
+		t.Fatalf("Dispatch after Close = %v, want ErrClosed", err)
 	}
 	if got := atomic.LoadInt32(&count); got != 0 {
 		t.Errorf("handler called %d times after Close, want 0", got)
@@ -300,10 +302,10 @@ func TestMemory_AsyncPanicRecovered(t *testing.T) {
 }
 
 // =============================================================================
-// Bounded queue / drop-on-full
+// Bounded queue / admission failure
 // =============================================================================
 
-func TestMemory_DropsWhenQueueFull(t *testing.T) {
+func TestMemory_RejectsWhenQueueFull(t *testing.T) {
 	const queueSize = 2
 	bus := newMemory(events.WithWorkerCount(1), events.WithQueueSize(queueSize))
 
@@ -329,13 +331,18 @@ func TestMemory_DropsWhenQueueFull(t *testing.T) {
 	// are dropped. Emit must never block.
 	const flood = 50
 	for i := 0; i < flood; i++ {
-		emitReturned := make(chan struct{})
+		emitReturned := make(chan error, 1)
 		go func() {
-			bus.Emit(context.Background(), newTestEvent("flood.event", ""))
-			close(emitReturned)
+			emitReturned <- bus.Emit(context.Background(), newTestEvent("flood.event", ""))
 		}()
 		select {
-		case <-emitReturned:
+		case err := <-emitReturned:
+			if i < queueSize && err != nil {
+				t.Fatalf("queue admission %d: %v", i, err)
+			}
+			if i >= queueSize && !errors.Is(err, events.ErrCapacity) {
+				t.Fatalf("full queue admission %d: %v, want ErrCapacity", i, err)
+			}
 		case <-time.After(time.Second):
 			t.Fatal("Emit blocked while the queue was full (drop-on-full violated)")
 		}
@@ -345,10 +352,19 @@ func TestMemory_DropsWhenQueueFull(t *testing.T) {
 	bus.Close(context.Background()) // drains queued events
 
 	got := atomic.LoadInt32(&delivered)
-	if got > queueSize+1 { // 1 in-flight + queueSize queued
-		t.Errorf("delivered %d events, want <= %d (bounded queue leaked)", got, queueSize+1)
+	if got != queueSize+1 { // 1 in-flight + queueSize queued
+		t.Errorf("delivered %d events, want %d accepted events", got, queueSize+1)
 	}
 	if got >= flood {
 		t.Errorf("delivered %d events, expected drops below %d", got, flood)
 	}
+}
+
+func TestNewMemoryRejectsNilOption(t *testing.T) {
+	defer func() {
+		if got := recover(); got != "events.NewMemory: nil option" {
+			t.Fatalf("panic = %v", got)
+		}
+	}()
+	events.NewMemory(nil)
 }

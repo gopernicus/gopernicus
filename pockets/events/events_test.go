@@ -11,11 +11,14 @@ import (
 	"testing"
 	"time"
 
+	eventshttp "github.com/gopernicus/gopernicus/pockets/events/inbound/http"
+	"github.com/gopernicus/gopernicus/pockets/events/logic/streams"
+
+	"github.com/gopernicus/gopernicus/pockets"
 	events "github.com/gopernicus/gopernicus/pockets/events"
+	"github.com/gopernicus/gopernicus/sdk"
 	sdkevents "github.com/gopernicus/gopernicus/sdk/capabilities/events"
-	"github.com/gopernicus/gopernicus/sdk/foundation/identity"
-	"github.com/gopernicus/gopernicus/sdk/foundation/web"
-	"github.com/gopernicus/gopernicus/sdk/pocket"
+	"github.com/gopernicus/gopernicus/sdk/pkg/web"
 )
 
 // recordingRouter records the (method, path) of every registered route so a test
@@ -39,10 +42,10 @@ func (r *recordingRouter) has(route string) bool {
 
 // stashIdentity is a test stand-in for authentication.RequireAccessToken: it stashes a
 // fixed Principal on the request context (the middleware side of A-I1).
-func stashIdentity(p identity.Principal) web.Middleware {
+func stashIdentity(p sdk.Principal) web.Middleware {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			next.ServeHTTP(w, r.WithContext(identity.WithPrincipal(r.Context(), p)))
+			next.ServeHTTP(w, r.WithContext(sdk.WithPrincipal(r.Context(), p)))
 		})
 	}
 }
@@ -79,22 +82,18 @@ func readSSE(body io.Reader, out chan<- sseFrame) {
 
 // newTestServer builds a host router, mounts the events pocket over it with the
 // given middleware and Authorize, and returns the running server and its bus.
-func newTestServer(t *testing.T, mw []web.Middleware, authorize events.AuthorizeStream) (*httptest.Server, sdkevents.Bus) {
+func newTestServer(t *testing.T, mw []web.Middleware, authorize eventshttp.AuthorizeStream) (*httptest.Server, sdkevents.Bus) {
 	t.Helper()
 	bus := sdkevents.NewMemory()
 	t.Cleanup(func() { _ = bus.Close(context.Background()) })
 
-	svc, err := events.NewService(events.Repositories{}, events.Config{
-		Bus:              bus,
-		StreamMiddleware: mw,
-		Authorize:        authorize,
-	})
+	svc, err := events.New(bus, events.WithVisibility(allowEvents), events.WithAuthorization(authorize), events.WithStreamMiddleware(mw...))
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
 
 	router := web.NewWebHandler()
-	if err := svc.Register(pocket.Mount{Router: router}); err != nil {
+	if err := svc.Register(pockets.Mount{Router: router}); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 
@@ -144,8 +143,8 @@ func awaitFrame(t *testing.T, frames <-chan sseFrame) sseFrame {
 }
 
 func TestNewService_NilBusErrors(t *testing.T) {
-	_, err := events.NewService(events.Repositories{}, events.Config{})
-	if err != events.ErrBusRequired {
+	_, err := events.New(nil)
+	if err != streams.ErrBusRequired {
 		t.Fatalf("err = %v, want ErrBusRequired", err)
 	}
 }
@@ -153,7 +152,7 @@ func TestNewService_NilBusErrors(t *testing.T) {
 func TestNewService_BuildsWithBus(t *testing.T) {
 	bus := sdkevents.NewMemory()
 	defer bus.Close(context.Background())
-	if _, err := events.NewService(events.Repositories{}, events.Config{Bus: bus}); err != nil {
+	if _, err := events.New(bus, events.WithVisibility(allowEvents)); err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
 }
@@ -163,12 +162,12 @@ func TestRegister_ResourceRouteDenyByAbsence(t *testing.T) {
 	defer bus.Close(context.Background())
 
 	// No Authorize → the resource-scoped route is not registered.
-	svc, err := events.NewService(events.Repositories{}, events.Config{Bus: bus})
+	svc, err := events.New(bus, events.WithVisibility(allowEvents))
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
 	rr := &recordingRouter{}
-	if err := svc.Register(pocket.Mount{Router: rr}); err != nil {
+	if err := svc.Register(pockets.Mount{Router: rr}); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 	if !rr.has("GET /events") {
@@ -179,13 +178,13 @@ func TestRegister_ResourceRouteDenyByAbsence(t *testing.T) {
 	}
 
 	// With Authorize → the resource-scoped route is registered.
-	authorize := func(context.Context, identity.Principal, string, string) (bool, error) { return true, nil }
-	svc2, err := events.NewService(events.Repositories{}, events.Config{Bus: bus, Authorize: authorize})
+	authorize := func(context.Context, sdk.Principal, string, string) (bool, error) { return true, nil }
+	svc2, err := events.New(bus, events.WithVisibility(allowEvents), events.WithAuthorization(authorize))
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
 	rr2 := &recordingRouter{}
-	if err := svc2.Register(pocket.Mount{Router: rr2}); err != nil {
+	if err := svc2.Register(pockets.Mount{Router: rr2}); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 	if !rr2.has("GET /events/{resource_type}/{resource_id}") {
@@ -194,7 +193,7 @@ func TestRegister_ResourceRouteDenyByAbsence(t *testing.T) {
 }
 
 func TestEndToEnd_SubjectStreamReceivesEmit(t *testing.T) {
-	mw := []web.Middleware{stashIdentity(identity.Principal{Type: identity.User, ID: "u1"})}
+	mw := []web.Middleware{stashIdentity(sdk.Principal{Type: sdk.PrincipalTypeUser, ID: "u1"})}
 	srv, bus := newTestServer(t, mw, nil)
 
 	frames, cancel := openStream(t, srv.URL+"/events")
@@ -235,3 +234,5 @@ func TestEndToEnd_NoMiddlewareFailsClosed(t *testing.T) {
 		t.Fatalf("status = %d, want 401", resp.StatusCode)
 	}
 }
+
+func allowEvents(context.Context, sdk.Principal, sdkevents.Event) (bool, error) { return true, nil }

@@ -3,9 +3,11 @@ package turso
 import (
 	"context"
 
+	"github.com/gopernicus/gopernicus/sdk"
+
 	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
 	"github.com/gopernicus/gopernicus/pockets/cms/domain/content"
-	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
+	"github.com/gopernicus/gopernicus/sdk/pkg/list"
 )
 
 // EntryStore implements content.EntryRepository over a libSQL database. It is
@@ -76,7 +78,7 @@ type fieldRow struct {
 // Create persists a new entry and its custom fields in one transaction.
 func (s *EntryStore) Create(ctx context.Context, e content.Entry) (content.Entry, error) {
 	err := s.db.InTx(ctx, func(tx *tursodb.Tx) error {
-		// Empty ID → the cryptids.Database strategy (amended D10): omit the id
+		// Empty ID → the sdk.DatabaseID strategy (amended D10): omit the id
 		// column so the schema default generates the key, read back with RETURNING.
 		// The generated key must be assigned before writeFields writes the child rows.
 		if e.ID == "" {
@@ -121,7 +123,7 @@ func (s *EntryStore) Update(ctx context.Context, id string, e content.Entry) (co
 			return err
 		}
 		if n == 0 {
-			return crud.ErrNotFound
+			return sdk.ErrNotFound
 		}
 		if _, err := tx.Exec(ctx, "DELETE FROM entry_fields WHERE entry_id = ?", id); err != nil {
 			return err
@@ -161,14 +163,14 @@ func (s *EntryStore) Delete(ctx context.Context, id string) error {
 		return tursodb.MapError(err)
 	}
 	if n == 0 {
-		return crud.ErrNotFound
+		return sdk.ErrNotFound
 	}
 	return nil
 }
 
 // List returns a cursor-paginated page of entries matching q, ordered by
 // (created_at, id) descending.
-func (s *EntryStore) List(ctx context.Context, q content.EntryQuery) (crud.Page[content.Entry], error) {
+func (s *EntryStore) List(ctx context.Context, q content.EntryQuery) (list.Page[content.Entry], error) {
 	where := "WHERE type = ?"
 	args := []any{q.Type}
 	return s.listWhere(ctx, where, args, q)
@@ -176,7 +178,7 @@ func (s *EntryStore) List(ctx context.Context, q content.EntryQuery) (crud.Page[
 
 // ListByTerm returns a cursor-paginated page of entries matching q that are
 // associated with termID.
-func (s *EntryStore) ListByTerm(ctx context.Context, termID string, q content.EntryQuery) (crud.Page[content.Entry], error) {
+func (s *EntryStore) ListByTerm(ctx context.Context, termID string, q content.EntryQuery) (list.Page[content.Entry], error) {
 	where := "WHERE type = ? AND id IN (SELECT entry_id FROM entry_terms WHERE term_id = ?)"
 	args := []any{q.Type, termID}
 	return s.listWhere(ctx, where, args, q)
@@ -186,7 +188,7 @@ func (s *EntryStore) ListByTerm(ctx context.Context, termID string, q content.En
 // given a base WHERE clause and its args. It appends the optional status filter,
 // runs the shared turso.List matrix over the entry order allow-list, then loads
 // fields + terms for each returned spine row.
-func (s *EntryStore) listWhere(ctx context.Context, where string, args []any, q content.EntryQuery) (crud.Page[content.Entry], error) {
+func (s *EntryStore) listWhere(ctx context.Context, where string, args []any, q content.EntryQuery) (list.Page[content.Entry], error) {
 	if q.Status != "" {
 		where += " AND status = ?"
 		args = append(args, string(q.Status))
@@ -201,19 +203,19 @@ func (s *EntryStore) listWhere(ctx context.Context, where string, args []any, q 
 		OrderValueOf: func(r entryRow, _ string) any { return r.CreatedAt.Time },
 		PKOf:         func(r entryRow) string { return r.ID },
 	}
-	page, err := tursodb.List(ctx, s.db, lq, q.ListRequest)
+	page, err := tursodb.List(ctx, s.db, lq, q.Request)
 	if err != nil {
-		return crud.Page[content.Entry]{}, err
+		return list.Page[content.Entry]{}, err
 	}
-	domainPage := crud.MapPage(page, entryRow.toDomain)
+	domainPage := list.MapPage(page, entryRow.toDomain)
 
 	// Hydrate fields + terms for the rows on this page only.
 	for i := range domainPage.Items {
 		if domainPage.Items[i].Fields, err = s.loadFields(ctx, domainPage.Items[i].ID); err != nil {
-			return crud.Page[content.Entry]{}, err
+			return list.Page[content.Entry]{}, err
 		}
 		if domainPage.Items[i].TermIDs, err = s.loadTermIDs(ctx, domainPage.Items[i].ID); err != nil {
-			return crud.Page[content.Entry]{}, err
+			return list.Page[content.Entry]{}, err
 		}
 	}
 

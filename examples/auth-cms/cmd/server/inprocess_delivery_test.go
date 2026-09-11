@@ -11,15 +11,16 @@ import (
 	"time"
 
 	"github.com/gopernicus/gopernicus/examples/auth-cms/internal/authmem"
+	"github.com/gopernicus/gopernicus/pockets"
 	auth "github.com/gopernicus/gopernicus/pockets/authentication"
-	"github.com/gopernicus/gopernicus/sdk/capabilities/email"
+	delivery "github.com/gopernicus/gopernicus/pockets/authentication/logic/delivery"
 	sdkevents "github.com/gopernicus/gopernicus/sdk/capabilities/events"
-	"github.com/gopernicus/gopernicus/sdk/foundation/web"
-	"github.com/gopernicus/gopernicus/sdk/pocket"
+	"github.com/gopernicus/gopernicus/sdk/capabilities/notify/email"
+	"github.com/gopernicus/gopernicus/sdk/pkg/web"
 )
 
 // This file is the AV3D-4.5 REAL-INTERACTION proof for DeliveryMode "in_process": it
-// drives the host's actual composition (buildAuthConfig -> auth.NewService in in_process
+// drives the host's actual composition (buildAuthConfig -> auth.New in in_process
 // mode -> the bounded InProcessQueue + fixed worker pool the host runs via RunDelivery)
 // through normal delivery, saturation (503 over real HTTP), transient retry (same secret),
 // cancellation, and shutdown drain — observing the REAL mailer output — and measures
@@ -70,13 +71,13 @@ func (e *senderError) Error() string { return e.s }
 // repositories, overriding the mailer and applying any per-test tuning. No delivery
 // dispatcher is wired (the in_process mode owns its bounded pool and needs none);
 // passwordless enablement is satisfied by in_process itself.
-func bootInProcess(t *testing.T, sender email.Sender, tune func(*auth.Config)) *auth.Service {
+func bootInProcess(t *testing.T, sender email.Sender, tune func(*authenticationConfig)) *auth.Components {
 	t.Helper()
 	cfg, err := buildAuthConfig(quietLog(), nil)
 	if err != nil {
 		t.Fatalf("buildAuthConfig: %v", err)
 	}
-	cfg.DeliveryMode = auth.DeliveryModeInProcess
+	cfg.DeliveryMode = delivery.ModeInProcess
 	cfg.DeliveryJobsAcknowledged = false
 	cfg.DeliveryEphemeralAcknowledged = true // set so the same wiring also passes in production
 	if sender != nil {
@@ -86,7 +87,7 @@ func bootInProcess(t *testing.T, sender email.Sender, tune func(*auth.Config)) *
 		tune(&cfg)
 	}
 	authRepos := authmem.New().Repositories()
-	svc, err := auth.NewService(authRepos, cfg)
+	svc, err := auth.New(authRepos, cfg.TokenSigner, cfg.RuntimeMode, cfg.DeliveryMode, cfg.options()...)
 	if err != nil {
 		t.Fatalf("auth.NewService (in_process): %v", err)
 	}
@@ -95,11 +96,11 @@ func bootInProcess(t *testing.T, sender email.Sender, tune func(*auth.Config)) *
 
 // mountInProcess registers the auth HTTP surface on a fresh router so a test can drive
 // the REAL forgot-password / passwordless admission over HTTP.
-func mountInProcess(t *testing.T, svc *auth.Service) http.Handler {
+func mountInProcess(t *testing.T, svc *auth.Components) http.Handler {
 	t.Helper()
-	router := web.NewWebHandler(web.WithLogging(quietLog()))
+	router := web.NewWebHandler()
 	bus := sdkevents.NewMemory(sdkevents.WithLogger(quietLog()))
-	if err := svc.Register(pocket.Mount{Router: router, Logger: quietLog(), Events: bus}); err != nil {
+	if err := svc.HTTP.Register(pockets.Mount{Router: router, Logger: quietLog(), Events: bus}); err != nil {
 		t.Fatalf("auth.Register: %v", err)
 	}
 	return router
@@ -131,11 +132,11 @@ func waitSends(t *testing.T, s *recordingSender, n int, within time.Duration) {
 }
 
 // runDelivery starts the host-owned in_process runtime and returns a stop func.
-func runDelivery(t *testing.T, svc *auth.Service) (stop func()) {
+func runDelivery(t *testing.T, svc *auth.Components) (stop func()) {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
-	go func() { done <- svc.RunDelivery(ctx) }()
+	go func() { done <- svc.Delivery.Run(ctx) }()
 	return func() {
 		cancel()
 		select {
@@ -160,7 +161,7 @@ func TestInProcessHostDeliversRegistrationOverPool(t *testing.T) {
 	defer stop()
 
 	const addr = "inproc-normal@example.com"
-	if _, err := svc.RegisterUser(context.Background(), addr, "correct-horse-battery-staple", "InProc User"); err != nil {
+	if _, err := svc.Authentication.Register(context.Background(), addr, "correct-horse-battery-staple", "InProc User"); err != nil {
 		t.Fatalf("RegisterUser: %v", err)
 	}
 	waitSends(t, sender, 1, 5*time.Second)
@@ -196,8 +197,8 @@ func TestInProcessHostForgotPasswordAdmitsOverHTTP(t *testing.T) {
 // single slot is full, a further admission returns 503 Service Unavailable within the
 // admission deadline — never a 202 after silently dropping the work.
 func TestInProcessHostSaturationReturns503OverHTTP(t *testing.T) {
-	svc := bootInProcess(t, &recordingSender{}, func(c *auth.Config) {
-		c.InProcessDelivery = auth.InProcessDeliveryConfig{
+	svc := bootInProcess(t, &recordingSender{}, func(c *authenticationConfig) {
+		c.InProcessDelivery = delivery.InProcessConfig{
 			QueueCapacity:     1,
 			AdmissionDeadline: 50 * time.Millisecond,
 		}
@@ -232,7 +233,7 @@ func TestInProcessHostRetryReusesSecretOverPool(t *testing.T) {
 	defer stop()
 
 	const addr = "inproc-retry@example.com"
-	if _, err := svc.RegisterUser(context.Background(), addr, "correct-horse-battery-staple", "Retry User"); err != nil {
+	if _, err := svc.Authentication.Register(context.Background(), addr, "correct-horse-battery-staple", "Retry User"); err != nil {
 		t.Fatalf("RegisterUser: %v", err)
 	}
 	// First (failed) attempt + one default backoff (~5s) + the successful retry.
@@ -255,8 +256,8 @@ func TestInProcessHostRetryReusesSecretOverPool(t *testing.T) {
 func TestInProcessHostShutdownDrainAndNoLeak(t *testing.T) {
 	sender := &recordingSender{}
 	const workers = 3
-	svc := bootInProcess(t, sender, func(c *auth.Config) {
-		c.InProcessDelivery = auth.InProcessDeliveryConfig{
+	svc := bootInProcess(t, sender, func(c *authenticationConfig) {
+		c.InProcessDelivery = delivery.InProcessConfig{
 			Workers:          workers,
 			ShutdownDeadline: 2 * time.Second,
 		}
@@ -268,12 +269,12 @@ func TestInProcessHostShutdownDrainAndNoLeak(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
-	go func() { done <- svc.RunDelivery(ctx) }()
+	go func() { done <- svc.Delivery.Run(ctx) }()
 
 	// Drive real work so the pool is actively delivering during the measurement.
 	for i := 0; i < workers*4; i++ {
 		addr := "inproc-leak-" + string(rune('a'+i)) + "@example.com"
-		if _, err := svc.RegisterUser(ctx, addr, "correct-horse-battery-staple", "Leak User"); err != nil {
+		if _, err := svc.Authentication.Register(ctx, addr, "correct-horse-battery-staple", "Leak User"); err != nil {
 			t.Fatalf("RegisterUser: %v", err)
 		}
 	}

@@ -13,6 +13,7 @@
 package cms
 
 import (
+	"github.com/gopernicus/gopernicus/pockets"
 	"github.com/gopernicus/gopernicus/pockets/cms/domain/content"
 	"github.com/gopernicus/gopernicus/pockets/cms/domain/media"
 	"github.com/gopernicus/gopernicus/pockets/cms/domain/menus"
@@ -24,11 +25,10 @@ import (
 	"github.com/gopernicus/gopernicus/pockets/cms/internal/logic/menussvc"
 	"github.com/gopernicus/gopernicus/pockets/cms/internal/logic/messagingsvc"
 	"github.com/gopernicus/gopernicus/pockets/cms/internal/logic/taxonomysvc"
+	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/cacher"
-	"github.com/gopernicus/gopernicus/sdk/capabilities/email"
-	"github.com/gopernicus/gopernicus/sdk/foundation/cryptids"
-	"github.com/gopernicus/gopernicus/sdk/foundation/web"
-	"github.com/gopernicus/gopernicus/sdk/pocket"
+	"github.com/gopernicus/gopernicus/sdk/capabilities/notify/email"
+	"github.com/gopernicus/gopernicus/sdk/pkg/web"
 )
 
 // Repositories is the set of outbound ports the pocket needs. A store adapter
@@ -59,8 +59,11 @@ type Config struct {
 	Types     []content.ContentType // host-registered custom types
 	Templates []TemplateBinding     // host (type,template) → render func
 	Cache     cacher.Storer         // nil → no public-page caching
-	Blobs     media.BlobStore       // blob storage for media (disk/s3); host-owned
-	Mailer    email.Sender          // contact-form delivery; host-owned
+	// PageCache controls public-page TTL, body limit and optional host scope.
+	// Zero config selects 60 seconds and 1 MiB; negative TTL disables caching.
+	PageCache cacher.PageConfig
+	Blobs     media.BlobStore // blob storage for media (disk/s3); host-owned
+	Mailer    email.Sender    // contact-form delivery; host-owned
 	// MailFrom is the From address for contact notifications. (env: CMS_MAIL_FROM)
 	MailFrom string `env:"CMS_MAIL_FROM"`
 	// ContactTo is the recipient for contact notifications. (env: CMS_CONTACT_TO)
@@ -68,11 +71,11 @@ type Config struct {
 
 	// IDs is the app's entity-ID strategy, decided once at wiring (amended D9):
 	// it mints the keys of entries, assets, menus, menu items, inquiries, and
-	// terms. The zero value generates default nanoids; cryptids.Database delegates
+	// terms. The zero value generates default nanoids; sdk.DatabaseID delegates
 	// key generation to the database (the bundled stores omit the id column and
 	// read it back with RETURNING); an integration's GenerateFunc (e.g.
 	// google-uuid) chooses another shape.
-	IDs cryptids.IDGenerator
+	IDs sdk.IDGenerator
 
 	// AdminMiddleware wraps every admin route the pocket mounts (the CRUD/
 	// management surface); public routes (site pages, asset serving, the contact
@@ -89,7 +92,7 @@ type Config struct {
 // services from the supplied repositories, and registers the pocket's routes.
 // Migrations are registered by the store adapter (see pockets/cms/stores/turso),
 // not here — the core is dialect-blind.
-func Register(m pocket.Mount, repos Repositories, cfg Config) error {
+func Register(m pockets.Mount, repos Repositories, cfg Config) error {
 	registry := content.NewRegistry()
 	if err := registerSeedTypes(registry); err != nil {
 		return err
@@ -125,7 +128,7 @@ func Register(m pocket.Mount, repos Repositories, cfg Config) error {
 		Menus:    menuSvc,
 		Media:    mediaSvc,
 		Contact:  contactSvc,
-	}, cfg.Views, cfg.Cache, cfg.AdminMiddleware)
+	}, cfg.Views, cfg.Cache, cfg.PageCache, cfg.AdminMiddleware)
 
 	return nil
 }

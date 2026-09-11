@@ -4,11 +4,13 @@ import (
 	"context"
 	"time"
 
+	"github.com/gopernicus/gopernicus/sdk"
+
 	"github.com/jackc/pgx/v5"
 
 	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
 	"github.com/gopernicus/gopernicus/pockets/cms/domain/content"
-	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
+	"github.com/gopernicus/gopernicus/sdk/pkg/list"
 )
 
 // EntryStore implements content.EntryRepository over a PostgreSQL database. It is
@@ -98,7 +100,7 @@ func (s *EntryStore) Create(ctx context.Context, e content.Entry) (content.Entry
 			"created_at":   e.CreatedAt.UTC(),
 			"updated_at":   e.UpdatedAt.UTC(),
 		}
-		// Empty ID → the cryptids.Database strategy (amended D10): omit the id
+		// Empty ID → the sdk.DatabaseID strategy (amended D10): omit the id
 		// column so the schema default generates the key, read back with RETURNING.
 		// The generated key must be assigned before writeFields writes the child rows.
 		if e.ID == "" {
@@ -152,7 +154,7 @@ func (s *EntryStore) Update(ctx context.Context, id string, e content.Entry) (co
 			return err
 		}
 		if n == 0 {
-			return crud.ErrNotFound
+			return sdk.ErrNotFound
 		}
 		if _, err := tx.Exec(ctx, "DELETE FROM "+s.table(entryFieldsTable)+" WHERE entry_id = @entry_id", pgx.NamedArgs{"entry_id": id}); err != nil {
 			return err
@@ -192,23 +194,23 @@ func (s *EntryStore) Delete(ctx context.Context, id string) error {
 		return pgxdb.MapError(err)
 	}
 	if n == 0 {
-		return crud.ErrNotFound
+		return sdk.ErrNotFound
 	}
 	return nil
 }
 
 // List returns a page of entries matching q, in the resolved order (default
 // created_at DESC, id DESC).
-func (s *EntryStore) List(ctx context.Context, q content.EntryQuery) (crud.Page[content.Entry], error) {
+func (s *EntryStore) List(ctx context.Context, q content.EntryQuery) (list.Page[content.Entry], error) {
 	where, args := s.entryFilter(q, "")
-	return s.listPage(ctx, where, args, q.ListRequest)
+	return s.listPage(ctx, where, args, q.Request)
 }
 
 // ListByTerm returns a page of entries matching q that are associated with
 // termID, in the resolved order.
-func (s *EntryStore) ListByTerm(ctx context.Context, termID string, q content.EntryQuery) (crud.Page[content.Entry], error) {
+func (s *EntryStore) ListByTerm(ctx context.Context, termID string, q content.EntryQuery) (list.Page[content.Entry], error) {
 	where, args := s.entryFilter(q, termID)
-	return s.listPage(ctx, where, args, q.ListRequest)
+	return s.listPage(ctx, where, args, q.Request)
 }
 
 // entryFilter composes the type, optional term, and optional status filters into
@@ -231,7 +233,7 @@ func (s *EntryStore) entryFilter(q content.EntryQuery, termID string) (string, p
 
 // listPage runs the paginated spine query via pgxdb.List over the entry row
 // struct, then hydrates fields + terms for the rows on this page only.
-func (s *EntryStore) listPage(ctx context.Context, where string, args pgx.NamedArgs, req crud.ListRequest) (crud.Page[content.Entry], error) {
+func (s *EntryStore) listPage(ctx context.Context, where string, args pgx.NamedArgs, req list.Request) (list.Page[content.Entry], error) {
 	lq := pgxdb.ListQuery[entryRow]{
 		BaseSQL:      `SELECT ` + entryColumns + ` FROM ` + s.table(entriesTable) + where,
 		Args:         args,
@@ -243,16 +245,16 @@ func (s *EntryStore) listPage(ctx context.Context, where string, args pgx.NamedA
 	}
 	page, err := pgxdb.List(ctx, s.db, lq, req)
 	if err != nil {
-		return crud.Page[content.Entry]{}, err
+		return list.Page[content.Entry]{}, err
 	}
-	domainPage := crud.MapPage(page, entryRow.toDomain)
+	domainPage := list.MapPage(page, entryRow.toDomain)
 
 	for i := range domainPage.Items {
 		if domainPage.Items[i].Fields, err = s.loadFields(ctx, domainPage.Items[i].ID); err != nil {
-			return crud.Page[content.Entry]{}, err
+			return list.Page[content.Entry]{}, err
 		}
 		if domainPage.Items[i].TermIDs, err = s.loadTermIDs(ctx, domainPage.Items[i].ID); err != nil {
-			return crud.Page[content.Entry]{}, err
+			return list.Page[content.Entry]{}, err
 		}
 	}
 	return domainPage, nil

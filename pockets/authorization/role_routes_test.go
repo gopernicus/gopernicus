@@ -12,13 +12,13 @@ import (
 	"strings"
 	"testing"
 
-	inbound "github.com/gopernicus/gopernicus/pockets/authorization/internal/inbound/authorization"
-	"github.com/gopernicus/gopernicus/pockets/authorization/memstore"
+	"github.com/gopernicus/gopernicus/pockets"
+	authorizationhttp "github.com/gopernicus/gopernicus/pockets/authorization/inbound/http"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/mutations"
+	"github.com/gopernicus/gopernicus/pockets/authorization/stores/memory"
 	"github.com/gopernicus/gopernicus/sdk"
-	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
-	"github.com/gopernicus/gopernicus/sdk/foundation/identity"
-	"github.com/gopernicus/gopernicus/sdk/foundation/web"
-	"github.com/gopernicus/gopernicus/sdk/pocket"
+	"github.com/gopernicus/gopernicus/sdk/pkg/list"
+	"github.com/gopernicus/gopernicus/sdk/pkg/web"
 )
 
 // allowRoleRouteGuard is the permissive MutationGuard the role-route wiring
@@ -26,98 +26,101 @@ import (
 // tests that care about denial supply their own.
 type allowRoleRouteGuard struct{}
 
-func (allowRoleRouteGuard) AuthorizeMutation(context.Context, MutationAttempt, DecisionView) error {
+func (allowRoleRouteGuard) AuthorizeMutation(context.Context, mutations.MutationAttempt, mutations.DecisionView) error {
 	return nil
 }
 
 // passRoleRouteGate is a no-op host gate: it authenticates and authorizes
-// nothing, and exists only so a Config carries a NON-NIL RoleRoutesGate.
+// nothing, and exists only so RoleRoutes carries a NON-NIL Gate.
 func passRoleRouteGate(next http.Handler) http.Handler { return next }
 
-// refuseAssignment is a stand-in AssignmentPolicy for the construction matrix.
-func refuseAssignment(context.Context, AssignRoleCommand) error {
+// refuseAssignment is a stand-in RoleRouteAssignmentPolicy for the construction matrix.
+func refuseAssignment(context.Context, mutations.AssignRoleCommand) error {
 	return sdk.ErrForbidden
 }
 
-// TestNewServiceRoleRoutesConstructionMatrix pins every row of the bundled
+// TestNewRoleRoutesConstructionMatrix pins every row of the bundled
 // role-administration wiring matrix: each contradictory posture fails
 // construction by its own named sentinel, and each legal posture builds.
 func TestNewServiceRoleRoutesConstructionMatrix(t *testing.T) {
 	tests := []struct {
 		name    string
-		repos   func(*memstore.Store) Repositories
-		cfg     Config
+		repos   func(*memory.Store) Repositories
+		cfg     []Option
 		wantErr error
 	}{
 		{
 			name: "gate without the roles kind",
-			repos: func(s *memstore.Store) Repositories {
+			repos: func(s *memory.Store) Repositories {
 				return Repositories{Relationships: &relFake{}, Mutations: s.Mutations()}
 			},
-			cfg: Config{
-				RelationshipModel: validModel(),
-				Guard:             allowRoleRouteGuard{},
-				RoleRoutesGate:    passRoleRouteGate,
+			cfg:     []Option{WithRelationshipModel(validModel()), WithGuard(allowRoleRouteGuard{}), WithRoleRoutes(authorizationhttp.RoleRoutes{Gate: passRoleRouteGate})},
+			wantErr: authorizationhttp.ErrRoleRoutesGateWithoutRoles,
+		},
+		{
+			name: "gate without a guard",
+			repos: func(s *memory.Store) Repositories {
+				return Repositories{Roles: s.Roles(), Mutations: s.Mutations()}
 			},
-			wantErr: ErrRoleRoutesGateWithoutRoles,
+			cfg:     []Option{WithRoleRoutes(authorizationhttp.RoleRoutes{Gate: passRoleRouteGate})},
+			wantErr: authorizationhttp.ErrRoleRoutesGateWithoutGuard,
 		},
 		{
-			name:    "gate without a guard",
-			repos:   func(s *memstore.Store) Repositories { return Repositories{Roles: s.Roles(), Mutations: s.Mutations()} },
-			cfg:     Config{RoleRoutesGate: passRoleRouteGate},
-			wantErr: ErrRoleRoutesGateWithoutGuard,
+			name: "assignment policy without the routes",
+			repos: func(s *memory.Store) Repositories {
+				return Repositories{Roles: s.Roles(), Mutations: s.Mutations()}
+			},
+			cfg:     []Option{WithGuard(allowRoleRouteGuard{}), WithRoleRoutes(authorizationhttp.RoleRoutes{AssignmentPolicy: refuseAssignment})},
+			wantErr: authorizationhttp.ErrRoleRouteAssignmentPolicyWithoutRoutes,
 		},
 		{
-			name:    "assignment policy without the routes",
-			repos:   func(s *memstore.Store) Repositories { return Repositories{Roles: s.Roles(), Mutations: s.Mutations()} },
-			cfg:     Config{Guard: allowRoleRouteGuard{}, AssignmentPolicy: refuseAssignment},
-			wantErr: ErrAssignmentPolicyWithoutRoutes,
-		},
-		{
-			name:    "unknown list strategy",
-			repos:   func(s *memstore.Store) Repositories { return Repositories{Roles: s.Roles(), Mutations: s.Mutations()} },
-			cfg:     Config{Guard: allowRoleRouteGuard{}, RoleRoutesGate: passRoleRouteGate, ListStrategy: "keyset"},
-			wantErr: ErrInvalidListStrategy,
+			name: "unknown list strategy",
+			repos: func(s *memory.Store) Repositories {
+				return Repositories{Roles: s.Roles(), Mutations: s.Mutations()}
+			},
+			cfg:     []Option{WithGuard(allowRoleRouteGuard{}), WithRoleRoutes(authorizationhttp.RoleRoutes{Gate: passRoleRouteGate, ListStrategy: "keyset"})},
+			wantErr: authorizationhttp.ErrInvalidListStrategy,
 		},
 		{
 			name:  "unknown list strategy is rejected even when orphaned by no gate",
-			repos: func(s *memstore.Store) Repositories { return Repositories{Roles: s.Roles()} },
-			cfg:   Config{ListStrategy: "keyset"},
+			repos: func(s *memory.Store) Repositories { return Repositories{Roles: s.Roles()} },
+			cfg:   []Option{WithRoleRoutes(authorizationhttp.RoleRoutes{ListStrategy: "keyset"})},
 			// An invalid enum is a typo, never a posture — the orphan rule silences
 			// only a VALID unused value.
-			wantErr: ErrInvalidListStrategy,
+			wantErr: authorizationhttp.ErrInvalidListStrategy,
 		},
 		{
-			name:  "gate with roles and a guard",
-			repos: func(s *memstore.Store) Repositories { return Repositories{Roles: s.Roles(), Mutations: s.Mutations()} },
-			cfg:   Config{Guard: allowRoleRouteGuard{}, RoleRoutesGate: passRoleRouteGate},
-		},
-		{
-			name:  "gate with an assignment policy and an offset strategy",
-			repos: func(s *memstore.Store) Repositories { return Repositories{Roles: s.Roles(), Mutations: s.Mutations()} },
-			cfg: Config{
-				Guard:            allowRoleRouteGuard{},
-				RoleRoutesGate:   passRoleRouteGate,
-				AssignmentPolicy: refuseAssignment,
-				ListStrategy:     crud.StrategyOffset,
+			name: "gate with roles and a guard",
+			repos: func(s *memory.Store) Repositories {
+				return Repositories{Roles: s.Roles(), Mutations: s.Mutations()}
 			},
+			cfg: []Option{WithGuard(allowRoleRouteGuard{}), WithRoleRoutes(authorizationhttp.RoleRoutes{Gate: passRoleRouteGate})},
 		},
 		{
-			name:  "no gate at all is unchanged",
-			repos: func(s *memstore.Store) Repositories { return Repositories{Roles: s.Roles(), Mutations: s.Mutations()} },
-			cfg:   Config{Guard: allowRoleRouteGuard{}},
+			name: "gate with an assignment policy and an offset strategy",
+			repos: func(s *memory.Store) Repositories {
+				return Repositories{Roles: s.Roles(), Mutations: s.Mutations()}
+			},
+			cfg: []Option{WithGuard(allowRoleRouteGuard{}), WithRoleRoutes(authorizationhttp.RoleRoutes{Gate: passRoleRouteGate, AssignmentPolicy: refuseAssignment, ListStrategy: list.StrategyOffset})},
+		},
+		{
+			name: "no gate at all is unchanged",
+			repos: func(s *memory.Store) Repositories {
+				return Repositories{Roles: s.Roles(), Mutations: s.Mutations()}
+			},
+			cfg: []Option{WithGuard(allowRoleRouteGuard{})},
 		},
 		{
 			name:  "a valid but unused list strategy is a silent cosmetic orphan",
-			repos: func(s *memstore.Store) Repositories { return Repositories{Roles: s.Roles()} },
-			cfg:   Config{ListStrategy: crud.StrategyOffset},
+			repos: func(s *memory.Store) Repositories { return Repositories{Roles: s.Roles()} },
+			cfg:   []Option{WithRoleRoutes(authorizationhttp.RoleRoutes{ListStrategy: list.StrategyOffset})},
 		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			store := memstore.New()
-			_, err := NewService(tc.repos(store), tc.cfg)
+			store := memory.New()
+			_, err := New(tc.repos(store), tc.cfg...)
 			switch {
 			case tc.wantErr != nil && !errors.Is(err, tc.wantErr):
 				t.Fatalf("NewService error = %v, want %v", err, tc.wantErr)
@@ -128,45 +131,30 @@ func TestNewServiceRoleRoutesConstructionMatrix(t *testing.T) {
 	}
 }
 
-// TestServiceCapturesRoleRouteConfig proves the three new Config fields reach
+// TestServiceCapturesRoleRouteConfig proves the grouped route settings reach
 // the Service, so Register has everything the mount needs.
 func TestServiceCapturesRoleRouteConfig(t *testing.T) {
-	store := memstore.New()
-	comps, err := NewService(
-		Repositories{Roles: store.Roles(), Mutations: store.Mutations()},
-		Config{
-			Guard:            allowRoleRouteGuard{},
-			RoleRoutesGate:   passRoleRouteGate,
-			AssignmentPolicy: refuseAssignment,
-			ListStrategy:     crud.StrategyOffset,
-		},
-	)
+	store := memory.New()
+	comps, err := New(Repositories{Roles: store.Roles(), Mutations: store.Mutations()}, WithGuard(allowRoleRouteGuard{}), WithRoleRoutes(authorizationhttp.RoleRoutes{Gate: passRoleRouteGate, AssignmentPolicy: refuseAssignment, ListStrategy: list.StrategyOffset}))
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
-	svc := comps.Service
-	if svc.roleRoutesGate == nil {
-		t.Error("roleRoutesGate not captured")
-	}
-	if svc.assignmentPolicy == nil {
-		t.Error("assignmentPolicy not captured")
-	}
-	if svc.listStrategy != crud.StrategyOffset {
-		t.Errorf("listStrategy = %q, want %q", svc.listStrategy, crud.StrategyOffset)
+	if comps.HTTP == nil || !comps.HTTP.RoutesEnabled() {
+		t.Fatal("configured public adapter is missing its routes")
 	}
 }
 
 // TestValidateListStrategy pins the accepted set directly, including the zero
 // value that resolves to cursor at the transport.
 func TestValidateListStrategy(t *testing.T) {
-	for _, ok := range []crud.Strategy{"", crud.StrategyCursor, crud.StrategyOffset} {
-		if err := validateListStrategy(ok); err != nil {
-			t.Errorf("validateListStrategy(%q) = %v, want nil", ok, err)
+	for _, ok := range []list.Strategy{"", list.StrategyCursor, list.StrategyOffset} {
+		if err := authorizationhttp.ValidateListStrategy(ok); err != nil {
+			t.Errorf("authorizationhttp.ValidateListStrategy(%q) = %v, want nil", ok, err)
 		}
 	}
-	for _, bad := range []crud.Strategy{"keyset", "CURSOR", "page"} {
-		if err := validateListStrategy(bad); !errors.Is(err, ErrInvalidListStrategy) {
-			t.Errorf("validateListStrategy(%q) = %v, want ErrInvalidListStrategy", bad, err)
+	for _, bad := range []list.Strategy{"keyset", "CURSOR", "page"} {
+		if err := authorizationhttp.ValidateListStrategy(bad); !errors.Is(err, authorizationhttp.ErrInvalidListStrategy) {
+			t.Errorf("authorizationhttp.ValidateListStrategy(%q) = %v, want ErrInvalidListStrategy", bad, err)
 		}
 	}
 }
@@ -176,11 +164,11 @@ func TestValidateListStrategy(t *testing.T) {
 // startup failure rather than an HTTP status class.
 func TestRoleRouteSentinelsWrapNoSDKKind(t *testing.T) {
 	sentinels := []error{
-		ErrRoleRoutesGateWithoutRoles,
-		ErrRoleRoutesGateWithoutGuard,
-		ErrAssignmentPolicyWithoutRoutes,
-		ErrInvalidListStrategy,
-		ErrRoleRoutesWithoutRouter,
+		authorizationhttp.ErrRoleRoutesGateWithoutRoles,
+		authorizationhttp.ErrRoleRoutesGateWithoutGuard,
+		authorizationhttp.ErrRoleRouteAssignmentPolicyWithoutRoutes,
+		authorizationhttp.ErrInvalidListStrategy,
+		authorizationhttp.ErrRoleRoutesWithoutRouter,
 	}
 	kinds := []error{sdk.ErrInvalidInput, sdk.ErrForbidden, sdk.ErrUnauthorized, sdk.ErrNotFound, sdk.ErrConflict}
 	for _, s := range sentinels {
@@ -192,7 +180,7 @@ func TestRoleRouteSentinelsWrapNoSDKKind(t *testing.T) {
 	}
 }
 
-// webMiddlewareCompiles keeps the Config field's declared type honest: the gate
+// webMiddlewareCompiles keeps the route field's declared type honest: the gate
 // is exactly an sdk web.Middleware, assignable from a plain wrapper.
 var _ web.Middleware = passRoleRouteGate
 
@@ -209,11 +197,11 @@ var _ web.Middleware = passRoleRouteGate
 // recordingRoleGuard allows every attempt and records what it saw, so a test can
 // prove a refused request never reached the guarded boundary.
 type recordingRoleGuard struct {
-	attempts []MutationAttempt
+	attempts []mutations.MutationAttempt
 	deny     bool
 }
 
-func (g *recordingRoleGuard) AuthorizeMutation(_ context.Context, attempt MutationAttempt, _ DecisionView) error {
+func (g *recordingRoleGuard) AuthorizeMutation(_ context.Context, attempt mutations.MutationAttempt, _ mutations.DecisionView) error {
 	g.attempts = append(g.attempts, attempt)
 	if g.deny {
 		return fmt.Errorf("the host refused this mutation: %w", sdk.ErrForbidden)
@@ -232,10 +220,10 @@ type roleAdminHost struct {
 
 // authenticatedGate is the ordinary test gate: it stashes a principal exactly as
 // a host's authentication middleware would, then allows.
-func authenticatedGate(p identity.Principal) web.Middleware {
+func authenticatedGate(p sdk.Principal) web.Middleware {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			next.ServeHTTP(w, r.WithContext(identity.WithPrincipal(r.Context(), p)))
+			next.ServeHTTP(w, r.WithContext(sdk.WithPrincipal(r.Context(), p)))
 		})
 	}
 }
@@ -248,26 +236,23 @@ func denyingRoleGate(http.Handler) http.Handler {
 }
 
 // newRoleAdminHost builds a roles-only memstore host, registers it through the
-// real pocket.Mount, and returns the mounted router. A nil gate is the
+// real pockets.Mount, and returns the mounted router. A nil gate is the
 // deny-by-absence posture.
-func newRoleAdminHost(t *testing.T, gate web.Middleware, policy AssignmentPolicy) roleAdminHost {
+func newRoleAdminHost(t *testing.T, gate web.Middleware, policy authorizationhttp.RoleRouteAssignmentPolicy) roleAdminHost {
 	t.Helper()
-	store := memstore.New()
+	store := memory.New()
 	guard := &recordingRoleGuard{}
-	comps, err := NewService(
-		Repositories{Roles: store.Roles(), Mutations: store.Mutations()},
-		Config{Guard: guard, RoleRoutesGate: gate, AssignmentPolicy: policy},
-	)
+	logs := &bytes.Buffer{}
+	comps, err := New(Repositories{Roles: store.Roles(), Mutations: store.Mutations()}, WithGuard(guard), WithLogger(slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug}))), WithRoleRoutes(authorizationhttp.RoleRoutes{Gate: gate, AssignmentPolicy: policy}))
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
-	logs := &bytes.Buffer{}
 	router := web.NewWebHandler()
-	mount := pocket.Mount{
+	mount := pockets.Mount{
 		Router: router,
 		Logger: slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
 	}
-	if err := comps.Service.Register(mount); err != nil {
+	if err := comps.Register(mount); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 	return roleAdminHost{handler: router, comps: comps, guard: guard, logs: logs}
@@ -301,7 +286,7 @@ var bundledRoleRoutes = []struct{ method, path string }{
 }
 
 // TestRegisterWithoutGateMountsNothing proves deny-by-absence: with no gate the
-// five paths 404 and boot warns that they are not mounted.
+// five paths 404 and intentional headless operation emits no warning.
 func TestRegisterWithoutGateMountsNothing(t *testing.T) {
 	host := newRoleAdminHost(t, nil, nil)
 	for _, rt := range bundledRoleRoutes {
@@ -315,8 +300,8 @@ func TestRegisterWithoutGateMountsNothing(t *testing.T) {
 			t.Errorf("%s %s = %d, want 404", rt.method, rt.path, rec.Code)
 		}
 	}
-	if !strings.Contains(host.logs.String(), "are NOT mounted") {
-		t.Errorf("no not-mounted WARN in the boot log: %s", host.logs.String())
+	if strings.Contains(host.logs.String(), "level=WARN") {
+		t.Errorf("intentional headless mount warned: %s", host.logs.String())
 	}
 	if !strings.Contains(host.logs.String(), "role_routes=false") {
 		t.Errorf("registered line does not report role_routes=false: %s", host.logs.String())
@@ -326,15 +311,12 @@ func TestRegisterWithoutGateMountsNothing(t *testing.T) {
 // TestRegisterWithGateAndNilRouterIsLoud proves the promised-routes-nowhere-to-go
 // wiring fails Register rather than booting route-free.
 func TestRegisterWithGateAndNilRouterIsLoud(t *testing.T) {
-	store := memstore.New()
-	comps, err := NewService(
-		Repositories{Roles: store.Roles(), Mutations: store.Mutations()},
-		Config{Guard: &recordingRoleGuard{}, RoleRoutesGate: passRoleRouteGate},
-	)
+	store := memory.New()
+	comps, err := New(Repositories{Roles: store.Roles(), Mutations: store.Mutations()}, WithGuard(&recordingRoleGuard{}), WithRoleRoutes(authorizationhttp.RoleRoutes{Gate: passRoleRouteGate}))
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
-	if err := comps.Service.Register(pocket.Mount{}); !errors.Is(err, ErrRoleRoutesWithoutRouter) {
+	if err := comps.Register(pockets.Mount{}); !errors.Is(err, authorizationhttp.ErrRoleRoutesWithoutRouter) {
 		t.Fatalf("Register = %v, want ErrRoleRoutesWithoutRouter", err)
 	}
 }
@@ -342,12 +324,12 @@ func TestRegisterWithGateAndNilRouterIsLoud(t *testing.T) {
 // TestRegisterWithoutGateStillToleratesAZeroMount pins the unchanged posture for
 // every host that sets no gate.
 func TestRegisterWithoutGateStillToleratesAZeroMount(t *testing.T) {
-	store := memstore.New()
-	comps, err := NewService(Repositories{Roles: store.Roles()}, Config{})
+	store := memory.New()
+	comps, err := New(Repositories{Roles: store.Roles()})
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
-	if err := comps.Service.Register(pocket.Mount{}); err != nil {
+	if err := comps.Register(pockets.Mount{}); err != nil {
 		t.Fatalf("Register with a zero Mount: %v", err)
 	}
 }
@@ -396,47 +378,34 @@ func TestBundledWritesRequireAStashedPrincipal(t *testing.T) {
 	}
 }
 
-// TestBundledRoleLifecycle drives the whole receipted lifecycle through the
-// mounted routes: assign, replay the same client id, list, then unassign with an
-// honest same_role_grant_remains.
 func TestBundledRoleLifecycle(t *testing.T) {
-	host := newRoleAdminHost(t, authenticatedGate(identity.Principal{Type: "user", ID: "admin-1"}), nil)
-	clientID := "bundled-lifecycle-mutation-id-0001"
+	host := newRoleAdminHost(t, authenticatedGate(sdk.Principal{Type: "user", ID: "admin-1"}), nil)
 
 	// A GLOBAL viewer grant, so the later scoped unassign has a fallback to
 	// report honestly.
 	if rec := postRole(t, host.handler, "/authorization/roles",
-		`{"mutation_id":"bundled-lifecycle-global-id-000001","subject_type":"user","subject_id":"u-1","role":"viewer"}`); rec.Code != http.StatusOK {
+		`{"subject_type":"user","subject_id":"u-1","role":"viewer"}`); rec.Code != http.StatusOK {
 		t.Fatalf("global assign = %d, body %s", rec.Code, rec.Body.String())
 	}
 
 	rec := postRole(t, host.handler, "/authorization/roles",
-		`{"mutation_id":"`+clientID+`","subject_type":"user","subject_id":"u-1","role":"viewer","resource_type":"organization","resource_id":"o-1"}`)
+		`{"subject_type":"user","subject_id":"u-1","role":"viewer","resource_type":"organization","resource_id":"o-1"}`)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("assign = %d, body %s", rec.Code, rec.Body.String())
 	}
 	first := decodeAssign(t, rec)
-	if first.Receipt.Outcome != string(OutcomeApplied) {
-		t.Errorf("outcome = %q, want applied", first.Receipt.Outcome)
-	}
-	if first.Receipt.Replayed {
-		t.Error("first application reports replayed")
-	}
-	if first.Receipt.MutationID != clientID {
-		t.Errorf("mutation_id = %q, want the client's %q", first.Receipt.MutationID, clientID)
+	if first.Outcome != string(mutations.OutcomeApplied) {
+		t.Errorf("outcome = %q, want applied", first.Outcome)
 	}
 
 	replay := postRole(t, host.handler, "/authorization/roles",
-		`{"mutation_id":"`+clientID+`","subject_type":"user","subject_id":"u-1","role":"viewer","resource_type":"organization","resource_id":"o-1"}`)
+		`{"subject_type":"user","subject_id":"u-1","role":"viewer","resource_type":"organization","resource_id":"o-1"}`)
 	if replay.Code != http.StatusOK {
 		t.Fatalf("replay = %d, body %s", replay.Code, replay.Body.String())
 	}
 	second := decodeAssign(t, replay)
-	if !second.Receipt.Replayed {
-		t.Error("an exact retry did not report replayed")
-	}
-	if second.Receipt.Revision != first.Receipt.Revision {
-		t.Errorf("replay revision = %d, want the original %d", second.Receipt.Revision, first.Receipt.Revision)
+	if second.Outcome != string(mutations.OutcomeNoChange) {
+		t.Fatalf("duplicate assign: %+v", second)
 	}
 
 	listing := getRole(t, host.handler, "/authorization/roles/by-subject?subject_type=user&subject_id=u-1")
@@ -481,38 +450,22 @@ func TestBundledRoleLifecycle(t *testing.T) {
 		t.Fatalf("unassign = %d, body %s", unassign.Code, unassign.Body.String())
 	}
 	var removed struct {
-		Receipt              receiptWire `json:"receipt"`
-		SameRoleGrantRemains bool        `json:"same_role_grant_remains"`
+		Outcome              string `json:"outcome"`
+		SameRoleGrantRemains bool   `json:"same_role_grant_remains"`
 	}
 	if err := json.Unmarshal(unassign.Body.Bytes(), &removed); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if removed.Receipt.Outcome != string(OutcomeApplied) {
-		t.Errorf("unassign outcome = %q, want applied", removed.Receipt.Outcome)
+	if removed.Outcome != string(mutations.OutcomeApplied) {
+		t.Errorf("unassign outcome = %q, want applied", removed.Outcome)
 	}
 	if !removed.SameRoleGrantRemains {
 		t.Error("same_role_grant_remains = false, but the global viewer grant still satisfies the scoped check")
 	}
-	if removed.Receipt.MutationID == "" {
-		t.Error("the server minted no mutation_id for a request that supplied none")
-	}
-}
-
-// receiptWire is the receipt envelope as a caller sees it.
-type receiptWire struct {
-	MutationID string `json:"mutation_id"`
-	ScopeKind  string `json:"scope_kind"`
-	ScopeType  string `json:"scope_type"`
-	ScopeID    string `json:"scope_id"`
-	Operation  string `json:"operation"`
-	Outcome    string `json:"outcome"`
-	Revision   uint64 `json:"revision"`
-	Replayed   bool   `json:"replayed"`
-	CreatedAt  string `json:"created_at"`
 }
 
 type assignWire struct {
-	Receipt receiptWire `json:"receipt"`
+	Outcome string `json:"outcome"`
 }
 
 func decodeAssign(t *testing.T, rec *httptest.ResponseRecorder) assignWire {
@@ -524,19 +477,19 @@ func decodeAssign(t *testing.T, rec *httptest.ResponseRecorder) assignWire {
 	return got
 }
 
-// TestAssignmentPolicyRefusalNeverReachesTheGuard proves the legality hook runs
+// TestRoleRouteAssignmentPolicyRefusalNeverReachesTheGuard proves the legality hook runs
 // before the guarded write and that a refusal wrapping sdk.ErrForbidden lands
 // 403 with nothing written.
-func TestAssignmentPolicyRefusalNeverReachesTheGuard(t *testing.T) {
-	var seen []AssignRoleCommand
-	policy := func(_ context.Context, cmd AssignRoleCommand) error {
+func TestRoleRouteAssignmentPolicyRefusalNeverReachesTheGuard(t *testing.T) {
+	var seen []mutations.AssignRoleCommand
+	policy := func(_ context.Context, cmd mutations.AssignRoleCommand) error {
 		seen = append(seen, cmd)
 		if cmd.Role == "steward" {
 			return fmt.Errorf("steward is not assignable through the bundled route: %w", sdk.ErrForbidden)
 		}
 		return nil
 	}
-	host := newRoleAdminHost(t, authenticatedGate(identity.Principal{Type: "user", ID: "admin-1"}), policy)
+	host := newRoleAdminHost(t, authenticatedGate(sdk.Principal{Type: "user", ID: "admin-1"}), policy)
 
 	rec := postRole(t, host.handler, "/authorization/roles",
 		`{"subject_type":"user","subject_id":"u-1","role":"steward","resource_type":"organization","resource_id":"o-1"}`)
@@ -558,72 +511,34 @@ func TestAssignmentPolicyRefusalNeverReachesTheGuard(t *testing.T) {
 	if len(seen) != 2 {
 		t.Fatalf("policy saw %d commands, want both assigns", len(seen))
 	}
-	if seen[0].MutationID == "" {
-		t.Error("the policy saw an unresolved MutationID; it must see the exact command that would apply")
+	if seen[0].Role != "steward" || seen[1].Role != "viewer" {
+		t.Fatalf("policy commands: %+v", seen)
 	}
 }
 
-// TestAssignmentPolicyIsNotConsultedOnUnassign pins the assign-only scope: the
+// TestRoleRouteAssignmentPolicyIsNotConsultedOnUnassign pins the assign-only scope: the
 // unassign route never calls the hook, whatever it would have said.
-func TestAssignmentPolicyIsNotConsultedOnUnassign(t *testing.T) {
+func TestRoleRouteAssignmentPolicyIsNotConsultedOnUnassign(t *testing.T) {
 	var calls int
-	policy := func(context.Context, AssignRoleCommand) error {
+	policy := func(context.Context, mutations.AssignRoleCommand) error {
 		calls++
 		return nil
 	}
-	host := newRoleAdminHost(t, authenticatedGate(identity.Principal{Type: "user", ID: "admin-1"}), policy)
+	host := newRoleAdminHost(t, authenticatedGate(sdk.Principal{Type: "user", ID: "admin-1"}), policy)
 
 	if rec := postRole(t, host.handler, "/authorization/roles/unassign",
 		`{"subject_type":"user","subject_id":"u-1","role":"viewer","resource_type":"organization","resource_id":"o-1"}`); rec.Code != http.StatusOK {
 		t.Fatalf("unassign = %d, body %s", rec.Code, rec.Body.String())
 	}
 	if calls != 0 {
-		t.Errorf("AssignmentPolicy ran %d times on unassign, want 0", calls)
+		t.Errorf("RoleRouteAssignmentPolicy ran %d times on unassign, want 0", calls)
 	}
-}
-
-// TestAssignmentPolicyRefusalIsNotAudited pins the documented non-property: the
-// AuditSink observes guard outcomes, and a policy refusal never reaches the
-// guard, so it is never recorded.
-func TestAssignmentPolicyRefusalIsNotAudited(t *testing.T) {
-	store := memstore.New()
-	sink := &countingRoleAuditSink{}
-	comps, err := NewService(
-		Repositories{Roles: store.Roles(), Mutations: store.Mutations()},
-		Config{
-			Guard:            &recordingRoleGuard{},
-			Audit:            sink,
-			RoleRoutesGate:   authenticatedGate(identity.Principal{Type: "user", ID: "admin-1"}),
-			AssignmentPolicy: func(context.Context, AssignRoleCommand) error { return sdk.ErrForbidden },
-		},
-	)
-	if err != nil {
-		t.Fatalf("NewService: %v", err)
-	}
-	router := web.NewWebHandler()
-	if err := comps.Service.Register(pocket.Mount{Router: router}); err != nil {
-		t.Fatalf("Register: %v", err)
-	}
-	if rec := postRole(t, router, "/authorization/roles",
-		`{"subject_type":"user","subject_id":"u-1","role":"viewer"}`); rec.Code != http.StatusForbidden {
-		t.Fatalf("refused assign = %d, body %s", rec.Code, rec.Body.String())
-	}
-	if sink.events != 0 {
-		t.Errorf("the audit sink recorded %d events for a policy refusal, want 0", sink.events)
-	}
-}
-
-type countingRoleAuditSink struct{ events int }
-
-func (s *countingRoleAuditSink) RecordMutation(context.Context, AuditEvent) error {
-	s.events++
-	return nil
 }
 
 // TestBundledAssignForwardsTheActorToTheGuard proves the principal the gate
 // stashed is the Actor the guard authorizes — the whole point of D2.
 func TestBundledAssignForwardsTheActorToTheGuard(t *testing.T) {
-	host := newRoleAdminHost(t, authenticatedGate(identity.Principal{Type: "service_account", ID: "sa-7"}), nil)
+	host := newRoleAdminHost(t, authenticatedGate(sdk.Principal{Type: "service_account", ID: "sa-7"}), nil)
 	if rec := postRole(t, host.handler, "/authorization/roles",
 		`{"subject_type":"user","subject_id":"u-1","role":"viewer","resource_type":"organization","resource_id":"o-1"}`); rec.Code != http.StatusOK {
 		t.Fatalf("assign = %d, body %s", rec.Code, rec.Body.String())
@@ -635,18 +550,18 @@ func TestBundledAssignForwardsTheActorToTheGuard(t *testing.T) {
 	if attempt.Actor.Type != "service_account" || attempt.Actor.ID != "sa-7" {
 		t.Errorf("actor = %+v, want the stashed principal", attempt.Actor)
 	}
-	if attempt.Operation != OpRoleAssign {
+	if attempt.Operation != mutations.OpRoleAssign {
 		t.Errorf("operation = %q, want role_assign", attempt.Operation)
 	}
-	if attempt.Scope != (ScopeKey{Kind: ScopeResource, Type: "organization", ID: "o-1"}) {
-		t.Errorf("scope = %+v, want the resource scope", attempt.Scope)
+	if attempt.Target != (mutations.Target{Kind: mutations.TargetResource, Type: "organization", ID: "o-1"}) {
+		t.Errorf("scope = %+v, want the resource scope", attempt.Target)
 	}
 }
 
 // TestBundledHalfScopedPairIs400 proves the domain's global-or-fully-scoped rule
 // surfaces as a 400 rather than a 500.
 func TestBundledHalfScopedPairIs400(t *testing.T) {
-	host := newRoleAdminHost(t, authenticatedGate(identity.Principal{Type: "user", ID: "admin-1"}), nil)
+	host := newRoleAdminHost(t, authenticatedGate(sdk.Principal{Type: "user", ID: "admin-1"}), nil)
 	rec := postRole(t, host.handler, "/authorization/roles",
 		`{"subject_type":"user","subject_id":"u-1","role":"viewer","resource_type":"organization"}`)
 	if rec.Code != http.StatusBadRequest {
@@ -658,32 +573,16 @@ func TestBundledHalfScopedPairIs400(t *testing.T) {
 // through the pocket's OWN mapper (codes.go RespondError, threaded into the
 // transport by Register) rather than the generic sdk-kind mapping: a client
 // branches on the stable machine code, not on 409-versus-409.
-func TestBundledMutationErrorsCarryStableCodes(t *testing.T) {
-	host := newRoleAdminHost(t, authenticatedGate(identity.Principal{Type: "user", ID: "admin-1"}), nil)
-
-	stale := postRole(t, host.handler, "/authorization/roles",
-		`{"subject_type":"user","subject_id":"u-1","role":"viewer","resource_type":"organization","resource_id":"o-1","expected_revision":42}`)
-	if stale.Code != http.StatusConflict {
-		t.Fatalf("stale-revision assign = %d, body %s", stale.Code, stale.Body.String())
+func TestBundledWritesRejectRetiredProtocolFields(t *testing.T) {
+	host := newRoleAdminHost(t, authenticatedGate(sdk.Principal{Type: "user", ID: "admin-1"}), nil)
+	for _, extra := range []string{`"mutation_id":"obsolete"`, `"expected_revision":42`} {
+		rec := postRole(t, host.handler, "/authorization/roles", `{"subject_type":"user","subject_id":"u-1","role":"viewer",`+extra+`}`)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("retired field accepted: %d %s", rec.Code, rec.Body.String())
+		}
 	}
-	if got := errorCode(t, stale); got != string(ReasonStaleRevision) {
-		t.Errorf("stale-revision code = %q, want %q", got, ReasonStaleRevision)
-	}
-
-	// A MutationID replayed under a DIFFERENT payload is the stable
-	// payload-mismatch refusal, never a silent overwrite.
-	mutationID := "bundled-mismatch-mutation-id-00001"
-	if first := postRole(t, host.handler, "/authorization/roles",
-		`{"mutation_id":"`+mutationID+`","subject_type":"user","subject_id":"u-1","role":"viewer","resource_type":"organization","resource_id":"o-1"}`); first.Code != http.StatusOK {
-		t.Fatalf("first assign = %d, body %s", first.Code, first.Body.String())
-	}
-	mismatch := postRole(t, host.handler, "/authorization/roles",
-		`{"mutation_id":"`+mutationID+`","subject_type":"user","subject_id":"u-2","role":"viewer","resource_type":"organization","resource_id":"o-1"}`)
-	if mismatch.Code != http.StatusConflict {
-		t.Fatalf("payload-mismatch replay = %d, body %s", mismatch.Code, mismatch.Body.String())
-	}
-	if got := errorCode(t, mismatch); got != string(ReasonMutationMismatch) {
-		t.Errorf("payload-mismatch code = %q, want %q", got, ReasonMutationMismatch)
+	if len(host.guard.attempts) != 0 {
+		t.Fatal("malformed commands reached guard")
 	}
 }
 
@@ -697,109 +596,4 @@ func errorCode(t *testing.T, rec *httptest.ResponseRecorder) string {
 		t.Fatalf("decode error body %s: %v", rec.Body.String(), err)
 	}
 	return body.Code
-}
-
-// ---------------------------------------------------------------------------
-// Adapter unit tests — the single conversion site, field for field
-// ---------------------------------------------------------------------------
-
-// TestAdapterAssignCommandFieldForField pins every field of the conversion, so
-// the transport's duplicated request shape cannot drift from the command
-// silently.
-func TestAdapterAssignCommandFieldForField(t *testing.T) {
-	adapter := roleRouteAdapter{}
-	rev := uint64(11)
-	cmd, err := adapter.assignCommand(inbound.AssignRoleRequest{
-		ActorType: "user", ActorID: "admin-1",
-		MutationID:  "adapter-supplied-mutation-id-0001",
-		SubjectType: "service_account", SubjectID: "sa-3",
-		Role:         "contributor",
-		ResourceType: "organization", ResourceID: "o-9",
-		ExpectedRevision: &rev,
-	})
-	if err != nil {
-		t.Fatalf("assignCommand: %v", err)
-	}
-	want := AssignRoleCommand{
-		MutationID:       "adapter-supplied-mutation-id-0001",
-		Subject:          PrincipalRef{Type: "service_account", ID: "sa-3"},
-		Role:             "contributor",
-		ResourceType:     "organization",
-		ResourceID:       "o-9",
-		ExpectedRevision: func() *Revision { r := Revision(11); return &r }(),
-	}
-	if cmd.MutationID != want.MutationID || cmd.Subject != want.Subject || cmd.Role != want.Role ||
-		cmd.ResourceType != want.ResourceType || cmd.ResourceID != want.ResourceID {
-		t.Errorf("command = %+v, want %+v", cmd, want)
-	}
-	if cmd.ExpectedRevision == nil || *cmd.ExpectedRevision != *want.ExpectedRevision {
-		t.Errorf("expected revision = %v, want %v", cmd.ExpectedRevision, *want.ExpectedRevision)
-	}
-}
-
-// TestAdapterUnassignCommandFieldForField is the symmetric pin.
-func TestAdapterUnassignCommandFieldForField(t *testing.T) {
-	adapter := roleRouteAdapter{}
-	cmd, err := adapter.unassignCommand(inbound.UnassignRoleRequest{
-		ActorType: "user", ActorID: "admin-1",
-		MutationID:  "adapter-supplied-mutation-id-0002",
-		SubjectType: "user", SubjectID: "u-4",
-		Role: "viewer",
-	})
-	if err != nil {
-		t.Fatalf("unassignCommand: %v", err)
-	}
-	if cmd.MutationID != "adapter-supplied-mutation-id-0002" ||
-		cmd.Subject != (PrincipalRef{Type: "user", ID: "u-4"}) ||
-		cmd.Role != "viewer" || cmd.ResourceType != "" || cmd.ResourceID != "" {
-		t.Errorf("command = %+v", cmd)
-	}
-	if cmd.ExpectedRevision != nil {
-		t.Errorf("expected revision = %v, want nil for an absent anchor", cmd.ExpectedRevision)
-	}
-}
-
-// TestAdapterMintsAndValidatesMutationIDs pins the three id postures: minted
-// when absent (and distinct per request), kept when supplied, refused when too
-// weak.
-func TestAdapterMintsAndValidatesMutationIDs(t *testing.T) {
-	adapter := roleRouteAdapter{}
-
-	first, err := adapter.assignCommand(inbound.AssignRoleRequest{SubjectType: "user", SubjectID: "u-1", Role: "viewer"})
-	if err != nil {
-		t.Fatalf("assignCommand: %v", err)
-	}
-	second, err := adapter.assignCommand(inbound.AssignRoleRequest{SubjectType: "user", SubjectID: "u-1", Role: "viewer"})
-	if err != nil {
-		t.Fatalf("assignCommand: %v", err)
-	}
-	if first.MutationID == "" || first.MutationID == second.MutationID {
-		t.Errorf("minted ids %q and %q; each request must get its own", first.MutationID, second.MutationID)
-	}
-	if err := first.MutationID.Validate(); err != nil {
-		t.Errorf("minted id fails validation: %v", err)
-	}
-
-	if _, err := adapter.assignCommand(inbound.AssignRoleRequest{MutationID: "short", SubjectType: "user", SubjectID: "u-1", Role: "viewer"}); !errors.Is(err, sdk.ErrInvalidInput) {
-		t.Errorf("weak client id = %v, want an invalid-input refusal", err)
-	}
-	if _, err := adapter.unassignCommand(inbound.UnassignRoleRequest{MutationID: "short", SubjectType: "user", SubjectID: "u-1", Role: "viewer"}); !errors.Is(err, sdk.ErrInvalidInput) {
-		t.Errorf("weak client id on unassign = %v, want an invalid-input refusal", err)
-	}
-}
-
-// TestRevisionFrom pins the optional compare-and-set conversion.
-func TestRevisionFrom(t *testing.T) {
-	if revisionFrom(nil) != nil {
-		t.Error("a nil anchor became non-nil")
-	}
-	v := uint64(5)
-	got := revisionFrom(&v)
-	if got == nil || *got != Revision(5) {
-		t.Errorf("revisionFrom(&5) = %v, want 5", got)
-	}
-	v = 6
-	if *got != Revision(5) {
-		t.Error("revisionFrom aliased the caller's value")
-	}
 }

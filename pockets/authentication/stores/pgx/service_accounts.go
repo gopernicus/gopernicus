@@ -4,12 +4,11 @@ import (
 	"context"
 	"time"
 
-	"github.com/jackc/pgx/v5"
-
 	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
-	"github.com/gopernicus/gopernicus/pockets/authentication/domain/serviceaccount"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/serviceaccount"
 	"github.com/gopernicus/gopernicus/sdk"
-	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
+	"github.com/gopernicus/gopernicus/sdk/pkg/list"
+	"github.com/jackc/pgx/v5"
 )
 
 // ServiceAccountStore implements serviceaccount.ServiceAccountRepository over a
@@ -23,7 +22,11 @@ type ServiceAccountStore struct {
 var _ serviceaccount.ServiceAccountRepository = (*ServiceAccountStore)(nil)
 
 // NewServiceAccountStore returns a ServiceAccountStore backed by db.
+// It panics if db is nil; the caller owns the database lifecycle.
 func NewServiceAccountStore(db *pgxdb.DB, opts ...Option) *ServiceAccountStore {
+	if db == nil {
+		panic("authentication pgx: NewServiceAccountStore received a nil database")
+	}
 	return &ServiceAccountStore{db: db, qualified: qualified{schema: applyOptions(opts).schema}}
 }
 
@@ -67,7 +70,7 @@ func (s *ServiceAccountStore) Create(ctx context.Context, sa serviceaccount.Serv
 		"created_at":    sa.CreatedAt.UTC(),
 		"updated_at":    sa.UpdatedAt.UTC(),
 	}
-	// Empty ID → the cryptids.Database strategy (amended D10): omit the id
+	// Empty ID → the sdk.DatabaseID strategy (amended D10): omit the id
 	// column so the schema default generates the key, read back with RETURNING.
 	if sa.ID == "" {
 		q := `INSERT INTO ` + s.table(serviceAccountsTable) + ` (name, description, created_by, act_as_user, owner_user_id, created_at, updated_at)
@@ -98,7 +101,7 @@ func (s *ServiceAccountStore) Get(ctx context.Context, id string) (serviceaccoun
 }
 
 // List returns a cursor-paginated page ordered created_at DESC, id DESC.
-func (s *ServiceAccountStore) List(ctx context.Context, req crud.ListRequest) (crud.Page[serviceaccount.ServiceAccount], error) {
+func (s *ServiceAccountStore) List(ctx context.Context, req list.Request) (list.Page[serviceaccount.ServiceAccount], error) {
 	q := pgxdb.ListQuery[serviceAccountRow]{
 		BaseSQL:      `SELECT ` + serviceAccountColumns + ` FROM ` + s.table(serviceAccountsTable),
 		OrderFields:  serviceaccount.OrderFields,
@@ -109,9 +112,9 @@ func (s *ServiceAccountStore) List(ctx context.Context, req crud.ListRequest) (c
 	}
 	page, err := pgxdb.List(ctx, s.db, q, req)
 	if err != nil {
-		return crud.Page[serviceaccount.ServiceAccount]{}, err
+		return list.Page[serviceaccount.ServiceAccount]{}, err
 	}
-	return crud.MapPage(page, serviceAccountRow.toDomain), nil
+	return list.MapPage(page, serviceAccountRow.toDomain), nil
 }
 
 // Update replaces the account for id; unknown → sdk.ErrNotFound. It leaves id and

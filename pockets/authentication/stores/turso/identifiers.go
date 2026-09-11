@@ -5,7 +5,7 @@ import (
 	"time"
 
 	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
-	"github.com/gopernicus/gopernicus/pockets/authentication/domain/identifier"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/identifier"
 	"github.com/gopernicus/gopernicus/sdk"
 )
 
@@ -23,7 +23,11 @@ type IdentifierStore struct {
 var _ identifier.IdentifierRepository = (*IdentifierStore)(nil)
 
 // NewIdentifierStore returns an IdentifierStore backed by db.
+// It panics if db is nil; the caller owns the database lifecycle.
 func NewIdentifierStore(db *tursodb.DB) *IdentifierStore {
+	if db == nil {
+		panic("authentication turso: NewIdentifierStore received a nil database")
+	}
 	return &IdentifierStore{db: db}
 }
 

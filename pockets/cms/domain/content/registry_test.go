@@ -8,8 +8,8 @@ import (
 	"time"
 
 	"github.com/gopernicus/gopernicus/sdk"
-	"github.com/gopernicus/gopernicus/sdk/foundation/cryptids"
-	"github.com/gopernicus/gopernicus/sdk/foundation/web"
+
+	"github.com/gopernicus/gopernicus/sdk/pkg/web"
 )
 
 // stubRenderer is a trivial web.Renderer used to prove template resolution.
@@ -207,7 +207,7 @@ func TestFields_Accessors(t *testing.T) {
 
 func TestNewEntry(t *testing.T) {
 	now := time.Date(2026, 6, 22, 12, 0, 0, 0, time.UTC)
-	e, err := NewEntry(cryptids.IDGenerator{}, "article", "  Hello World  ", "ex", "body", "me", StatusPublished, "", now)
+	e, err := NewEntry(sdk.IDGenerator{}, "article", "  Hello World  ", "ex", "body", "me", StatusPublished, "", now)
 	if err != nil {
 		t.Fatalf("NewEntry: %v", err)
 	}
@@ -225,7 +225,7 @@ func TestNewEntry(t *testing.T) {
 	}
 
 	// Empty title rejected.
-	if _, err := NewEntry(cryptids.IDGenerator{}, "article", "   ", "", "", "", StatusDraft, "", now); !errors.Is(err, sdk.ErrInvalidInput) {
+	if _, err := NewEntry(sdk.IDGenerator{}, "article", "   ", "", "", "", StatusDraft, "", now); !errors.Is(err, sdk.ErrInvalidInput) {
 		t.Fatalf("empty title err = %v, want ErrInvalidInput", err)
 	}
 }

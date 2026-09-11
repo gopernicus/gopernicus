@@ -4,11 +4,12 @@ import (
 	"context"
 	"errors"
 
+	"github.com/gopernicus/gopernicus/sdk/capabilities/transaction"
+
 	gcfs "cloud.google.com/go/firestore"
 	"google.golang.org/grpc/status"
 
 	"github.com/gopernicus/gopernicus/sdk"
-	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
 )
 
 // ErrNestedTransact is returned when Transact is called from inside a context
@@ -31,9 +32,9 @@ var ErrNestedTransact = errors.New("firestore: nested Transact — the workflow 
 var errPanicInTransact = errors.New("firestore: the Transact callback panicked")
 
 // Compile-time proof the connector satisfies the sdk transaction seam.
-var _ crud.Transactor = (*DB)(nil)
+var _ transaction.Transactor = (*DB)(nil)
 
-// Transact implements sdk/foundation/crud.Transactor over a Firestore
+// Transact implements sdk/capabilities/transaction.Transactor over a Firestore
 // read-write transaction: it calls fn with a context carrying the transaction,
 // COMMITS when fn returns nil, ROLLS BACK and returns fn's error unwrapped when
 // it does not, and re-panics after rolling back when fn panics. Repositories
@@ -103,7 +104,7 @@ var _ crud.Transactor = (*DB)(nil)
 //     cannot escape as an unclassified 500. A domain sentinel, a plain error,
 //     and an already-mapped error all come back byte-identical, so a caller can
 //     still compare with == or errors.Is against its own sentinel.
-//   - A vendor error (begin, commit, or the read-after-write re-check) is
+//   - A vendor error (begin, commit, retry backoff, or read-after-write re-check) is
 //     returned through MapError. Retries exhausted by a losing COMMIT surface
 //     as the server's Aborted, hence sdk.ErrConflict: the caller is the
 //     contention loser and may retry the whole workflow.
@@ -195,27 +196,23 @@ func (d *DB) attempts() int {
 	return d.maxAttempts
 }
 
-// attemptState carries what the callback wrapper learns across the vendor's
-// retry loop so Transact/ReadSnapshot can tell three outcomes apart after
-// RunTransaction returns: the callback failed (return its error untouched), the
-// callback panicked (re-panic), or the vendor failed (map it).
-//
-// Every field is reset at the top of each attempt, which is the same discipline
-// the callback itself owes its own state.
+// callbackFailure distinguishes a callback's returned error from a later
+// begin/backoff failure. Unwrap preserves the vendor's Aborted retry detection.
+type callbackFailure struct {
+	cause error
+}
+
+func (e *callbackFailure) Error() string { return e.cause.Error() }
+func (e *callbackFailure) Unwrap() error { return e.cause }
+
+// attemptState records a panic until the vendor has rolled the attempt back.
 type attemptState struct {
-	failed     bool
-	err        error
 	panicked   bool
 	panicValue any
 }
 
-// beginAttempt resets the attempt-local state and returns the deferred function
-// that records how the attempt ended. It is written as a defer so a panic is
-// converted into an error for the vendor — which then rolls the transaction
-// back instead of leaving it open until the server's lock timeout — while the
-// panic value survives to be re-raised by result.
 func (s *attemptState) beginAttempt(rerr *error) func() {
-	s.failed, s.err, s.panicked, s.panicValue = false, nil, false, nil
+	s.panicked, s.panicValue = false, nil
 	return func() {
 		if r := recover(); r != nil {
 			s.panicked, s.panicValue = true, r
@@ -223,30 +220,18 @@ func (s *attemptState) beginAttempt(rerr *error) func() {
 			return
 		}
 		if *rerr != nil {
-			s.failed, s.err = true, *rerr
+			*rerr = &callbackFailure{cause: *rerr}
 		}
 	}
 }
 
-// result turns the vendor's return value into the connector's, given what the
-// last attempt did.
 func (s *attemptState) result(err error) error {
 	if s.panicked {
-		// The vendor has rolled back by now (it saw errPanicInTransact). The
-		// original stack is gone — recovering is the price of not leaving a
-		// transaction open — but the panic VALUE is re-raised unchanged, so a
-		// caller's recover sees exactly what its callback panicked with.
 		panic(s.panicValue)
 	}
-	if err != nil && s.failed {
-		// The last attempt's callback failed, so the vendor's error IS that
-		// error: it returns a callback error untouched. One corner is worth
-		// naming — if the context is cancelled during the retry backoff the
-		// vendor returns the cancellation instead, and this returns the
-		// callback error anyway. That is deliberate: the callback error is why
-		// the transaction did not commit, and ctx.Err() still tells the caller
-		// the rest.
-		return callbackError(s.err)
+	var callback *callbackFailure
+	if errors.As(err, &callback) {
+		return callbackError(callback.cause)
 	}
 	return MapError(err)
 }

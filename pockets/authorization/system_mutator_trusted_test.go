@@ -5,16 +5,10 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/gopernicus/gopernicus/pockets/authorization/domain/mutation"
-	"github.com/gopernicus/gopernicus/pockets/authorization/memstore"
+	authmodel "github.com/gopernicus/gopernicus/pockets/authorization/logic/model"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/mutations"
+	"github.com/gopernicus/gopernicus/pockets/authorization/stores/memory"
 )
-
-// -----------------------------------------------------------------------------
-// AZ3-3.4 — trusted SystemMutator convenience surface, its parity with the
-// actor-facing guarded seam (schema digest + semantic validator), the invitation
-// deterministic-MutationID idempotency contract, and capability placement.
-// All over the REAL memstore bundle (shared-state relationship/role/mutation repos).
-// -----------------------------------------------------------------------------
 
 // newTrustedComponents builds a Components over the memstore bundle with the guardian
 // invariant disabled (empty policy — last-owner protection is AZ3-3.2's concern, not
@@ -23,12 +17,12 @@ import (
 // SystemMutator is the write surface under test.
 func newTrustedComponents(t *testing.T) Components {
 	t.Helper()
-	st := memstore.New(memstore.WithGuardianPolicy(mutation.GuardianPolicy{}))
-	comps, err := NewService(Repositories{
+	st := memory.New(memory.WithGuardianPolicy(mutations.GuardianPolicy{}))
+	comps, err := New(Repositories{
 		Relationships: st.Relationships(),
 		Roles:         st.Roles(),
 		Mutations:     st.Mutations(),
-	}, Config{RelationshipModel: lifecycleModel()})
+	}, WithRelationshipModel(lifecycleModel()))
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
@@ -42,8 +36,8 @@ func TestSystemMutatorGrantRelationshipTrustedApplies(t *testing.T) {
 	comps := newTrustedComponents(t)
 	ctx := context.Background()
 
-	rcpt, err := comps.SystemMutator.GrantRelationship(ctx, GrantRelationshipCommand{
-		MutationID:   mustID(t),
+	rcpt, err := comps.SystemMutator.GrantRelationship(ctx, mutations.GrantRelationshipCommand{
+
 		ResourceType: "doc",
 		ResourceID:   "d1",
 		Relation:     "owner",
@@ -52,38 +46,14 @@ func TestSystemMutatorGrantRelationshipTrustedApplies(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GrantRelationship: %v", err)
 	}
-	if rcpt.Outcome != OutcomeApplied {
+	if rcpt.Outcome != mutations.OutcomeApplied {
 		t.Fatalf("want applied, got %s", rcpt.Outcome)
 	}
-	res, err := comps.Service.Check(ctx, CheckRequest{
-		Principal: PrincipalRef{Type: "user", ID: "u1"}, Permission: "edit", Resource: Resource{Type: "doc", ID: "d1"},
+	res, err := comps.Decisions.Check(ctx, authmodel.CheckRequest{
+		Principal: authmodel.PrincipalRef{Type: "user", ID: "u1"}, Permission: "edit", Resource: authmodel.Resource{Type: "doc", ID: "d1"},
 	})
 	if err != nil || !res.Allowed {
 		t.Fatalf("trusted grant not visible to Check: allowed=%v err=%v", res.Allowed, err)
-	}
-}
-
-// TestSystemMutatorTrustedStampsSchemaDigest proves the trusted path stamps the
-// governing schema digest onto the receipt exactly as the guarded seam does (AZ3-3.1
-// parity): the receipt records the schema that governed the application.
-func TestSystemMutatorTrustedStampsSchemaDigest(t *testing.T) {
-	comps := newTrustedComponents(t)
-	digest, err := comps.Service.SchemaDigest()
-	if err != nil {
-		t.Fatalf("SchemaDigest: %v", err)
-	}
-	rcpt, err := comps.SystemMutator.GrantRelationship(context.Background(), GrantRelationshipCommand{
-		MutationID:   mustID(t),
-		ResourceType: "doc",
-		ResourceID:   "d1",
-		Relation:     "owner",
-		Subject:      subjU("u1"),
-	})
-	if err != nil {
-		t.Fatalf("GrantRelationship: %v", err)
-	}
-	if digest == "" || rcpt.SchemaDigest != digest {
-		t.Fatalf("trusted receipt digest %q != governing digest %q", rcpt.SchemaDigest, digest)
 	}
 }
 
@@ -93,8 +63,8 @@ func TestSystemMutatorTrustedStampsSchemaDigest(t *testing.T) {
 // — a trusted caller is not a schema bypass.
 func TestSystemMutatorTrustedRunsSemanticValidator(t *testing.T) {
 	comps := newTrustedComponents(t)
-	_, err := comps.SystemMutator.GrantRelationship(context.Background(), GrantRelationshipCommand{
-		MutationID:   mustID(t),
+	_, err := comps.SystemMutator.GrantRelationship(context.Background(), mutations.GrantRelationshipCommand{
+
 		ResourceType: "doc",
 		ResourceID:   "d1",
 		Relation:     "nonexistent_relation",
@@ -111,31 +81,26 @@ func TestSystemMutatorAssignRoleTrusted(t *testing.T) {
 	comps := newTrustedComponents(t)
 	ctx := context.Background()
 
-	if _, err := comps.SystemMutator.AssignRole(ctx, AssignRoleCommand{
-		MutationID: mustID(t),
-		Subject:    PrincipalRef{Type: "user", ID: "u1"},
-		Role:       "auditor",
+	if _, err := comps.SystemMutator.AssignRole(ctx, mutations.AssignRoleCommand{
+
+		Subject: authmodel.PrincipalRef{Type: "user", ID: "u1"},
+		Role:    "auditor",
 	}); err != nil {
 		t.Fatalf("AssignRole: %v", err)
 	}
-	ok, err := comps.Service.HasRole(ctx, PrincipalRef{Type: "user", ID: "u1"}, "auditor", "doc", "d1")
+	ok, err := comps.Roles.HasRole(ctx, authmodel.PrincipalRef{Type: "user", ID: "u1"}, "auditor", "doc", "d1")
 	if err != nil || !ok {
 		t.Fatalf("global trusted role not visible via HasRole fallback: ok=%v err=%v", ok, err)
 	}
 }
 
-// TestInvitationStableMutationIDReplaysWithoutDuplicateBump proves the invitation
-// idempotency contract this task owns: a grant retried under a STABLE derived
-// MutationID replays its stored receipt (Replayed=true) and does NOT bump the scope
-// revision a second time — no duplicate stored mutation, no duplicate revision.
-func TestInvitationStableMutationIDReplaysWithoutDuplicateBump(t *testing.T) {
+func TestTrustedDuplicateGrantReportsNoChange(t *testing.T) {
 	comps := newTrustedComponents(t)
 	ctx := context.Background()
 
 	// Deterministic id from the invitation operation identity (its resulting tuple).
-	id := DeriveMutationID("invitation-grant", "doc", "d1", "owner", "user", "u1")
-	cmd := GrantRelationshipCommand{
-		MutationID:   id,
+	cmd := mutations.GrantRelationshipCommand{
+
 		ResourceType: "doc",
 		ResourceID:   "d1",
 		Relation:     "owner",
@@ -146,40 +111,16 @@ func TestInvitationStableMutationIDReplaysWithoutDuplicateBump(t *testing.T) {
 	if err != nil {
 		t.Fatalf("first grant: %v", err)
 	}
-	if first.Outcome != OutcomeApplied || first.Replayed {
-		t.Fatalf("first grant: want applied non-replay, got outcome=%s replayed=%v", first.Outcome, first.Replayed)
+	if first.Outcome != mutations.OutcomeApplied {
+		t.Fatalf("first grant: want applied, got outcome=%s", first.Outcome)
 	}
 
 	replay, err := comps.SystemMutator.GrantRelationship(ctx, cmd)
 	if err != nil {
 		t.Fatalf("replay grant: %v", err)
 	}
-	if !replay.Replayed {
-		t.Fatalf("retry under a stable MutationID must be a replay, got replayed=false")
-	}
-	if replay.Revision != first.Revision {
-		t.Fatalf("replay bumped the revision: first=%d replay=%d", first.Revision, replay.Revision)
-	}
-}
-
-// TestTrustedDeriveMutationIDStableAndValid pins the derivation contract: it is
-// deterministic, distinguishes different operation identities (including part
-// boundaries), and always satisfies MutationID.Validate.
-func TestTrustedDeriveMutationIDStableAndValid(t *testing.T) {
-	a := DeriveMutationID("grant", "doc", "d1", "owner", "user", "u1")
-	b := DeriveMutationID("grant", "doc", "d1", "owner", "user", "u1")
-	if a != b {
-		t.Fatalf("derivation is not deterministic: %q != %q", a, b)
-	}
-	if c := DeriveMutationID("grant", "doc", "d1", "owner", "user", "u2"); c == a {
-		t.Fatalf("different identity derived the same id")
-	}
-	// Part-boundary must matter (length-prefixed): ["a","bc"] != ["ab","c"].
-	if DeriveMutationID("a", "bc") == DeriveMutationID("ab", "c") {
-		t.Fatalf("part boundaries alias")
-	}
-	if err := a.Validate(); err != nil {
-		t.Fatalf("derived id must satisfy MutationID.Validate, got %v", err)
+	if replay.Outcome != mutations.OutcomeNoChange {
+		t.Fatalf("duplicate grant: %+v", replay)
 	}
 }
 
@@ -188,7 +129,7 @@ func TestTrustedDeriveMutationIDStableAndValid(t *testing.T) {
 // live on Components.RelationshipWriter; AssignRole/UnassignRole remain guarded on
 // Service because the baseline capability is relationship-specific.
 func TestBaselineWriterHeldApartFromService(t *testing.T) {
-	svcType := reflect.TypeOf(&Service{})
+	svcType := reflect.TypeOf(&mutations.Service{})
 	removed := []string{
 		"CreateRelationships",
 		"DeleteRelationship",
@@ -201,7 +142,7 @@ func TestBaselineWriterHeldApartFromService(t *testing.T) {
 		}
 	}
 
-	actorType := reflect.TypeOf(Actor{})
+	actorType := reflect.TypeOf(mutations.Actor{})
 	for _, name := range []string{"AssignRole", "UnassignRole"} {
 		m, ok := svcType.MethodByName(name)
 		if !ok {

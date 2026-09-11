@@ -4,9 +4,10 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/gopernicus/gopernicus/sdk/capabilities/notify"
+
 	"github.com/gopernicus/gopernicus/integrations/email/sendgrid"
-	"github.com/gopernicus/gopernicus/sdk/capabilities/email"
-	"github.com/gopernicus/gopernicus/sdk/foundation/environment"
+	"github.com/gopernicus/gopernicus/sdk/pkg/environment"
 )
 
 // TestCheckSenderCompatibility is the integration-side half of the sdk's
@@ -34,7 +35,7 @@ func TestCheckSenderCompatibility(t *testing.T) {
 		{
 			name: "plain-http host is rejected in production",
 			host: "http://127.0.0.1:8080", mode: environment.ModeProduction,
-			wantErr: email.ErrInsecureTransport,
+			wantErr: notify.ErrInsecureTransport,
 		},
 		{
 			name: "plain-http host is accepted in development but not production-capable",
@@ -50,9 +51,12 @@ func TestCheckSenderCompatibility(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			sender := sendgrid.New(sendgrid.Config{APIKey: "test-key", Host: tt.host})
+			sender, err := sendgrid.New(sendgrid.Config{APIKey: "test-key", Host: tt.host})
+			if err != nil {
+				t.Fatal(err)
+			}
 
-			posture, err := email.CheckSender(tt.mode, sender)
+			posture, err := notify.CheckTransport(tt.mode, sender)
 
 			if tt.wantErr != nil {
 				if !errors.Is(err, tt.wantErr) {

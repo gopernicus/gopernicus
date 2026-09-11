@@ -13,16 +13,16 @@ import (
 	"github.com/gopernicus/gopernicus/examples/auth-cms/internal/authjobs"
 	"github.com/gopernicus/gopernicus/examples/auth-cms/internal/authmem"
 	auth "github.com/gopernicus/gopernicus/pockets/authentication"
-	"github.com/gopernicus/gopernicus/pockets/jobs"
-	"github.com/gopernicus/gopernicus/pockets/jobs/domain/job"
+	delivery "github.com/gopernicus/gopernicus/pockets/authentication/logic/delivery"
+	job "github.com/gopernicus/gopernicus/pockets/jobs/logic/queue"
 	"github.com/gopernicus/gopernicus/sdk"
-	"github.com/gopernicus/gopernicus/sdk/capabilities/email"
 	sdkevents "github.com/gopernicus/gopernicus/sdk/capabilities/events"
-	"github.com/gopernicus/gopernicus/sdk/foundation/cryptids"
+	"github.com/gopernicus/gopernicus/sdk/capabilities/notify/email"
+	"github.com/gopernicus/gopernicus/sdk/pkg/cryptids"
 )
 
 // This file proves the AV3D-3.4 durable-jobs-mode mappings end to end on the host's
-// real composition (auth.Service -> authjobs adapter -> generic jobs fenced queue ->
+// real composition (authentication.Service -> authjobs adapter -> generic jobs fenced queue ->
 // jobs.FencedRuntime -> auth delivery processor), against the inspectable in-memory
 // fenced queue (live pgx/turso are AV3D-3.5; env DSNs unset):
 //
@@ -87,12 +87,12 @@ func waitJobStatus(t *testing.T, store *inspectingQueue, id string, want job.Sta
 }
 
 // waitReceiptState polls DeliveryStatus(receiptKey) until State == want.
-func waitReceiptState(t *testing.T, svc *auth.Service, receiptKey, want string) {
+func waitReceiptState(t *testing.T, svc *auth.Components, receiptKey, want string) {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
 	var last string
 	for time.Now().Before(deadline) {
-		st, err := svc.DeliveryStatus(context.Background(), receiptKey)
+		st, err := svc.Authentication.DeliveryStatus(context.Background(), receiptKey)
 		if err == nil {
 			last = st.State
 			if st.State == want {
@@ -144,7 +144,7 @@ type captureEmitter struct {
 	failAll     bool
 }
 
-func (e *captureEmitter) Emit(_ context.Context, ev sdkevents.Event, _ ...sdkevents.EmitOption) error {
+func (e *captureEmitter) Emit(_ context.Context, ev sdkevents.Event) error {
 	e.mu.Lock()
 	e.transitions = append(e.transitions, strings.TrimPrefix(ev.Type(), "authentication.delivery."))
 	fail := e.failAll
@@ -179,13 +179,13 @@ func TestJobsModeTransientRetriesBoundedThenDeadLetters(t *testing.T) {
 	const addr = "transient-dl@example.com"
 
 	fail := &failingSender{}
-	b := bootDelivery(t, authRepos, store, fail, func(c *jobs.FencedRuntimeConfig) {
+	b := bootDelivery(t, authRepos, store, fail, func(c *deliveryRuntimeTestConfig) {
 		c.Workers = 1
 		c.MaxAttempts = 3
 		c.Backoff = func(int) time.Duration { return 15 * time.Millisecond }
 		c.LeaseFor = 2 * time.Second
 	})
-	if _, err := b.svc.RegisterUser(ctx, addr, "correct-horse-battery-staple", "Transient User"); err != nil {
+	if _, err := b.svc.Authentication.Register(ctx, addr, "correct-horse-battery-staple", "Transient User"); err != nil {
 		t.Fatalf("RegisterUser: %v", err)
 	}
 	id := renderedJobID(t, store, b.enc, addr)
@@ -205,7 +205,7 @@ func TestJobsModeTransientRetriesBoundedThenDeadLetters(t *testing.T) {
 	if jobStatus(t, store, id) != job.StatusDeadLetter {
 		t.Fatalf("terminal generic status = %q, want dead_letter", jobStatus(t, store, id))
 	}
-	st, err := b.svc.DeliveryStatus(ctx, key)
+	st, err := b.svc.Authentication.DeliveryStatus(ctx, key)
 	if err != nil {
 		t.Fatalf("DeliveryStatus: %v", err)
 	}
@@ -226,14 +226,14 @@ func TestJobsModePermanentDeadLettersImmediately(t *testing.T) {
 	ctx := context.Background()
 
 	cap := &captureSender{}
-	b := bootDelivery(t, authRepos, store, cap, func(c *jobs.FencedRuntimeConfig) {
+	b := bootDelivery(t, authRepos, store, cap, func(c *deliveryRuntimeTestConfig) {
 		c.Workers = 1
 		c.MaxAttempts = 10 // a transient error would retry many times
 		c.Backoff = func(int) time.Duration { return 10 * time.Millisecond }
 		c.LeaseFor = 2 * time.Second
 	})
 	// A garbage (unsealed) payload the Engine cannot Open -> OutcomePermanent.
-	id, err := b.jobs.EnqueueOnce(ctx, auth.DeliveryJobKind, "perm-key", json.RawMessage(`"not-sealed-ciphertext"`))
+	id, err := b.jobs.Queue.EnqueueOnce(ctx, delivery.JobKind, "perm-key", json.RawMessage(`"not-sealed-ciphertext"`))
 	if err != nil {
 		t.Fatalf("EnqueueOnce garbage: %v", err)
 	}
@@ -267,11 +267,11 @@ func TestJobsModeParentCancellationLeavesReclaimable(t *testing.T) {
 	const addr = "cancel-reclaim@example.com"
 
 	gate := &ctxGatingSender{entered: make(chan string, 4), release: make(chan struct{})}
-	b := bootDelivery(t, authRepos, store, gate, func(c *jobs.FencedRuntimeConfig) {
+	b := bootDelivery(t, authRepos, store, gate, func(c *deliveryRuntimeTestConfig) {
 		c.Workers = 1
 		c.LeaseFor = 300 * time.Millisecond // lapses quickly after cancel so the restart reclaims
 	})
-	if _, err := b.svc.RegisterUser(ctx, addr, "correct-horse-battery-staple", "Cancel User"); err != nil {
+	if _, err := b.svc.Authentication.Register(ctx, addr, "correct-horse-battery-staple", "Cancel User"); err != nil {
 		t.Fatalf("RegisterUser: %v", err)
 	}
 	id := renderedJobID(t, store, b.enc, addr)
@@ -296,7 +296,7 @@ func TestJobsModeParentCancellationLeavesReclaimable(t *testing.T) {
 
 	// Restart with a healthy provider: the reclaimed job delivers and completes.
 	cap := &captureSender{}
-	restarted := bootDelivery(t, authRepos, store, cap, func(c *jobs.FencedRuntimeConfig) {
+	restarted := bootDelivery(t, authRepos, store, cap, func(c *deliveryRuntimeTestConfig) {
 		c.Workers = 1
 		c.LeaseFor = 300 * time.Millisecond
 		c.PollInterval = 10 * time.Millisecond
@@ -324,14 +324,14 @@ func TestJobsModeProviderTimeoutBoundedInsideLease(t *testing.T) {
 	// A stuck sender that only returns when its (per-attempt) context is cancelled.
 	stuck := &ctxGatingSender{entered: make(chan string, 8), release: make(chan struct{})}
 	const lease = 3 * time.Second
-	b := bootDelivery(t, authRepos, store, stuck, func(c *jobs.FencedRuntimeConfig) {
+	b := bootDelivery(t, authRepos, store, stuck, func(c *deliveryRuntimeTestConfig) {
 		c.Workers = 1
 		c.LeaseFor = lease
 		c.ProcessTimeout = 40 * time.Millisecond // safely inside the lease
 		c.MaxAttempts = 2
 		c.Backoff = func(int) time.Duration { return 10 * time.Millisecond }
 	})
-	if _, err := b.svc.RegisterUser(ctx, addr, "correct-horse-battery-staple", "Timeout User"); err != nil {
+	if _, err := b.svc.Authentication.Register(ctx, addr, "correct-horse-battery-staple", "Timeout User"); err != nil {
 		t.Fatalf("RegisterUser: %v", err)
 	}
 	id := renderedJobID(t, store, b.enc, addr)
@@ -349,10 +349,10 @@ func TestJobsModeProviderTimeoutBoundedInsideLease(t *testing.T) {
 	}
 
 	// Construction validation: a timeout not shorter than the lease fails loudly.
-	if _, err := jobs.NewFencedRuntime(b.jobs, authjobs.FencedRuntimeConfig(b.rt, func(c *jobs.FencedRuntimeConfig) {
+	if _, err := runtimeFromDeliveryConfig(b.jobs.Queue, b.rt, func(c *deliveryRuntimeTestConfig) {
 		c.LeaseFor = time.Second
 		c.ProcessTimeout = 2 * time.Second
-	})); !errors.Is(err, jobs.ErrProcessTimeoutExceedsLease) {
+	}); !errors.Is(err, job.ErrProcessTimeoutExceedsLease) {
 		t.Fatalf("NewFencedRuntime err = %v, want ErrProcessTimeoutExceedsLease for timeout > lease", err)
 	}
 }
@@ -373,13 +373,13 @@ func TestJobsModeDiscardRunsAfterDeadLetterIdempotent(t *testing.T) {
 	var idempotentBad atomic.Bool
 
 	fail := &failingSender{}
-	b := bootDelivery(t, authRepos, store, fail, func(c *jobs.FencedRuntimeConfig) {
+	b := bootDelivery(t, authRepos, store, fail, func(c *deliveryRuntimeTestConfig) {
 		c.Workers = 1
 		c.MaxAttempts = 2
 		c.Backoff = func(int) time.Duration { return 10 * time.Millisecond }
 		c.LeaseFor = 2 * time.Second
-		orig := c.DeadLetters[auth.DeliveryJobKind]
-		c.DeadLetters[auth.DeliveryJobKind] = func(ctx context.Context, j job.Job) error {
+		orig := c.DeadLetters[delivery.JobKind]
+		c.DeadLetters[delivery.JobKind] = func(ctx context.Context, j job.Job) error {
 			// Ordering: the terminal transition is already recorded when the hook runs.
 			if stored, err := store.FencedQueue.Get(ctx, j.JobID); err != nil || stored.JobStatus != job.StatusDeadLetter {
 				orderBad.Store(true)
@@ -424,13 +424,13 @@ func TestJobsModeDiscardFailureDoesNotResurrect(t *testing.T) {
 	const addr = "discard-fail@example.com"
 
 	fail := &failingSender{}
-	b := bootDelivery(t, authRepos, store, fail, func(c *jobs.FencedRuntimeConfig) {
+	b := bootDelivery(t, authRepos, store, fail, func(c *deliveryRuntimeTestConfig) {
 		c.Workers = 1
 		c.MaxAttempts = 2
 		c.Backoff = func(int) time.Duration { return 10 * time.Millisecond }
 		c.LeaseFor = 2 * time.Second
-		orig := c.DeadLetters[auth.DeliveryJobKind]
-		c.DeadLetters[auth.DeliveryJobKind] = func(ctx context.Context, j job.Job) error {
+		orig := c.DeadLetters[delivery.JobKind]
+		c.DeadLetters[delivery.JobKind] = func(ctx context.Context, j job.Job) error {
 			_ = orig(ctx, j)
 			return errors.New("discard failed")
 		}
@@ -466,13 +466,13 @@ func TestJobsModeObserverEmitsRetryDeadLetterPurge(t *testing.T) {
 
 	em := &captureEmitter{}
 	fail := &failingSender{}
-	b := bootDeliveryEmit(t, authRepos, store, fail, em, func(c *jobs.FencedRuntimeConfig) {
+	b := bootDeliveryEmit(t, authRepos, store, fail, em, func(c *deliveryRuntimeTestConfig) {
 		c.Workers = 1
 		c.MaxAttempts = 3
 		c.Backoff = func(int) time.Duration { return 15 * time.Millisecond }
 		c.LeaseFor = 2 * time.Second
 	})
-	if _, err := b.svc.RegisterUser(ctx, addr, "correct-horse-battery-staple", "Observer User"); err != nil {
+	if _, err := b.svc.Authentication.Register(ctx, addr, "correct-horse-battery-staple", "Observer User"); err != nil {
 		t.Fatalf("RegisterUser: %v", err)
 	}
 	id := renderedJobID(t, store, b.enc, addr)
@@ -489,7 +489,7 @@ func TestJobsModeObserverEmitsRetryDeadLetterPurge(t *testing.T) {
 	}
 
 	// Host-driven terminal purge emits a purged event.
-	n, err := authjobs.PurgeTerminal(ctx, b.jobs, b.rt, time.Now().Add(time.Hour), 100)
+	n, err := authjobs.PurgeTerminal(ctx, b.jobs.Queue, b.rt, time.Now().Add(time.Hour), 100)
 	if err != nil {
 		t.Fatalf("PurgeTerminal: %v", err)
 	}
@@ -513,13 +513,13 @@ func TestJobsModeObserverFailureChangesNothing(t *testing.T) {
 
 	em := &captureEmitter{failAll: true}
 	cap := &captureSender{}
-	b := bootDeliveryEmit(t, authRepos, store, cap, em, func(c *jobs.FencedRuntimeConfig) {
+	b := bootDeliveryEmit(t, authRepos, store, cap, em, func(c *deliveryRuntimeTestConfig) {
 		c.Workers = 1
 		c.LeaseFor = 2 * time.Second
 		c.PollInterval = 10 * time.Millisecond
 		c.IdleInterval = 10 * time.Millisecond
 	})
-	if _, err := b.svc.RegisterUser(ctx, addr, "correct-horse-battery-staple", "Observer Fail User"); err != nil {
+	if _, err := b.svc.Authentication.Register(ctx, addr, "correct-horse-battery-staple", "Observer Fail User"); err != nil {
 		t.Fatalf("RegisterUser: %v", err)
 	}
 	id := renderedJobID(t, store, b.enc, addr)
@@ -548,13 +548,13 @@ func TestJobsModePurgeRemovesTerminalStatusSane(t *testing.T) {
 	const addr = "purge-terminal@example.com"
 
 	cap := &captureSender{}
-	b := bootDelivery(t, authRepos, store, cap, func(c *jobs.FencedRuntimeConfig) {
+	b := bootDelivery(t, authRepos, store, cap, func(c *deliveryRuntimeTestConfig) {
 		c.Workers = 1
 		c.LeaseFor = 2 * time.Second
 		c.PollInterval = 10 * time.Millisecond
 		c.IdleInterval = 10 * time.Millisecond
 	})
-	if _, err := b.svc.RegisterUser(ctx, addr, "correct-horse-battery-staple", "Purge User"); err != nil {
+	if _, err := b.svc.Authentication.Register(ctx, addr, "correct-horse-battery-staple", "Purge User"); err != nil {
 		t.Fatalf("RegisterUser: %v", err)
 	}
 	verifID := renderedJobID(t, store, b.enc, addr)
@@ -571,10 +571,10 @@ func TestJobsModePurgeRemovesTerminalStatusSane(t *testing.T) {
 	if !ok {
 		t.Fatal("no rendered verification payload")
 	}
-	if err := b.svc.Verify(ctx, addr, code); err != nil {
+	if err := b.svc.Authentication.Verify(ctx, addr, code); err != nil {
 		t.Fatalf("Verify: %v", err)
 	}
-	if err := b.svc.ForgotPassword(ctx, addr); err != nil {
+	if err := b.svc.Authentication.ForgotPassword(ctx, addr); err != nil {
 		t.Fatalf("ForgotPassword: %v", err)
 	}
 	pendingID, ok := opaqueEnqueueID(store, b.enc, addr)
@@ -583,7 +583,7 @@ func TestJobsModePurgeRemovesTerminalStatusSane(t *testing.T) {
 	}
 
 	// Bounded purge with a generous retention window: only terminal generations go.
-	n, err := authjobs.PurgeTerminal(ctx, b.jobs, b.rt, time.Now().Add(time.Hour), 100)
+	n, err := authjobs.PurgeTerminal(ctx, b.jobs.Queue, b.rt, time.Now().Add(time.Hour), 100)
 	if err != nil {
 		t.Fatalf("PurgeTerminal: %v", err)
 	}
@@ -593,7 +593,7 @@ func TestJobsModePurgeRemovesTerminalStatusSane(t *testing.T) {
 
 	// The terminal generation is gone; a status read for its key is a clean not-found,
 	// never a crash or a false success.
-	if _, err := b.svc.DeliveryStatus(ctx, verifKey); !errors.Is(err, sdk.ErrNotFound) {
+	if _, err := b.svc.Authentication.DeliveryStatus(ctx, verifKey); !errors.Is(err, sdk.ErrNotFound) {
 		t.Fatalf("DeliveryStatus after purge err = %v, want sdk.ErrNotFound (status sane after purge)", err)
 	}
 	// The non-terminal generation survived the purge.

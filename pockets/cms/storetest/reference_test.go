@@ -15,7 +15,7 @@ import (
 	"github.com/gopernicus/gopernicus/pockets/cms/domain/messaging"
 	"github.com/gopernicus/gopernicus/pockets/cms/domain/taxonomy"
 	"github.com/gopernicus/gopernicus/sdk"
-	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
+	"github.com/gopernicus/gopernicus/sdk/pkg/list"
 )
 
 // TestReference runs the conformance suite against the in-package reference
@@ -131,7 +131,7 @@ func (r refEntries) Delete(_ context.Context, id string) error {
 	return nil
 }
 
-func (r refEntries) List(_ context.Context, q content.EntryQuery) (crud.Page[content.Entry], error) {
+func (r refEntries) List(_ context.Context, q content.EntryQuery) (list.Page[content.Entry], error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	var all []content.Entry
@@ -140,10 +140,10 @@ func (r refEntries) List(_ context.Context, q content.EntryQuery) (crud.Page[con
 			all = append(all, e)
 		}
 	}
-	return refPage(all, q.ListRequest)
+	return refPage(all, q.Request)
 }
 
-func (r refEntries) ListByTerm(_ context.Context, termID string, q content.EntryQuery) (crud.Page[content.Entry], error) {
+func (r refEntries) ListByTerm(_ context.Context, termID string, q content.EntryQuery) (list.Page[content.Entry], error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	var matched []content.Entry
@@ -158,7 +158,7 @@ func (r refEntries) ListByTerm(_ context.Context, termID string, q content.Entry
 			}
 		}
 	}
-	return refPage(matched, q.ListRequest)
+	return refPage(matched, q.Request)
 }
 
 func (r refEntries) SetTerms(_ context.Context, entryID string, termIDs []string) error {
@@ -169,22 +169,22 @@ func (r refEntries) SetTerms(_ context.Context, entryID string, termIDs []string
 }
 
 // refPage sorts by (created_at, id) in the resolved direction, then applies the
-// full sdk/foundation/crud list matrix — cursor or offset mode, the reverse-probe prev
+// full sdk/pkg/list list matrix — cursor or offset mode, the reverse-probe prev
 // page, and the optional count — the same keyset shape the dialect stores
 // implement, hand-rolled here so the reference impl paginates identically. It
 // encodes the cursor from the record's stored created_at (this store keeps
 // nanoseconds, so no truncation happens), which is the property the precision
 // case guards. created_at is the only sortable field (content.OrderFields).
-func refPage(items []content.Entry, req crud.ListRequest) (crud.Page[content.Entry], error) {
+func refPage(items []content.Entry, req list.Request) (list.Page[content.Entry], error) {
 	if err := req.Validate(); err != nil {
-		return crud.Page[content.Entry]{}, err
+		return list.Page[content.Entry]{}, err
 	}
 	if req.Order.Field != "" {
 		if _, ok := content.OrderFields[req.Order.Field]; !ok {
-			return crud.Page[content.Entry]{}, fmt.Errorf("unknown order field %q: %w", req.Order.Field, sdk.ErrInvalidInput)
+			return list.Page[content.Entry]{}, fmt.Errorf("unknown order field %q: %w", req.Order.Field, sdk.ErrInvalidInput)
 		}
 	}
-	asc := req.Order.Direction == crud.ASC
+	asc := req.Order.Direction == list.ASC
 
 	sort.Slice(items, func(i, j int) bool {
 		ti, tj := items[i].CreatedAt, items[j].CreatedAt
@@ -201,12 +201,12 @@ func refPage(items []content.Entry, req crud.ListRequest) (crud.Page[content.Ent
 	})
 
 	total := int64(len(items))
-	limit := req.NormalizedLimit(crud.Limits{})
+	limit := req.NormalizedLimit(list.Limits{})
 	encode := func(e content.Entry) (string, error) {
-		return crud.EncodeCursor(orderField, e.CreatedAt, e.ID)
+		return list.EncodeCursor(orderField, e.CreatedAt, e.ID)
 	}
 
-	if req.ResolvedStrategy() == crud.StrategyOffset {
+	if req.ResolvedStrategy() == list.StrategyOffset {
 		window := items
 		if req.Offset < len(window) {
 			window = window[req.Offset:]
@@ -216,9 +216,9 @@ func refPage(items []content.Entry, req crud.ListRequest) (crud.Page[content.Ent
 		if len(window) > limit+1 {
 			window = window[:limit+1]
 		}
-		pg, err := crud.TrimPage(window, limit, encode)
+		pg, err := list.TrimPage(window, limit, encode)
 		if err != nil {
-			return crud.Page[content.Entry]{}, err
+			return list.Page[content.Entry]{}, err
 		}
 		pg.NextCursor = ""
 		pg.HasPrev = req.Offset > 0
@@ -228,14 +228,19 @@ func refPage(items []content.Entry, req crud.ListRequest) (crud.Page[content.Ent
 		return pg, nil
 	}
 
-	cur, err := crud.DecodeCursor(req.Cursor, orderField)
+	cur, err := list.DecodeCursor(req.Cursor, orderField)
 	if err != nil {
-		return crud.Page[content.Entry]{}, err
+		return list.Page[content.Entry]{}, err
 	}
 
+	var cv time.Time
 	forward := items
 	if cur != nil {
-		cv, _ := cur.OrderValue.(time.Time)
+		var ok bool
+		cv, ok = cur.OrderValue.(time.Time)
+		if !ok {
+			return list.Page[content.Entry]{}, fmt.Errorf("cursor order value must be a timestamp: %w", sdk.ErrInvalidInput)
+		}
 		forward = forward[:0:0]
 		for _, e := range items {
 			if refAfterCursor(e, cv, cur.PK, asc) {
@@ -247,24 +252,23 @@ func refPage(items []content.Entry, req crud.ListRequest) (crud.Page[content.Ent
 	if len(window) > limit+1 {
 		window = window[:limit+1]
 	}
-	pg, err := crud.TrimPage(window, limit, encode)
+	pg, err := list.TrimPage(window, limit, encode)
 	if err != nil {
-		return crud.Page[content.Entry]{}, err
+		return list.Page[content.Entry]{}, err
 	}
 
 	if cur != nil {
-		cv, _ := cur.OrderValue.(time.Time)
 		var before []content.Entry
 		for _, e := range items {
-			if refBeforeCursor(e, cv, cur.PK, asc) {
+			if !refAfterCursor(e, cv, cur.PK, asc) {
 				before = append(before, e)
 			}
 		}
-		if len(before) > limit {
-			before = before[len(before)-limit:]
+		if len(before) > limit+1 {
+			before = before[len(before)-limit-1:]
 		}
-		if err := crud.MarkPrevPage(&pg, before, limit, encode); err != nil {
-			return crud.Page[content.Entry]{}, err
+		if err := list.MarkPrevPage(&pg, before, limit, encode); err != nil {
+			return list.Page[content.Entry]{}, err
 		}
 	}
 
@@ -287,21 +291,6 @@ func refAfterCursor(e content.Entry, cv time.Time, cpk string, asc bool) bool {
 		return e.ID > cpk
 	}
 	return e.ID < cpk
-}
-
-// refBeforeCursor reports whether e sorts strictly before the cursor under the
-// resolved direction — the reverse-probe predicate.
-func refBeforeCursor(e content.Entry, cv time.Time, cpk string, asc bool) bool {
-	if !e.CreatedAt.Equal(cv) {
-		if asc {
-			return e.CreatedAt.Before(cv)
-		}
-		return e.CreatedAt.After(cv)
-	}
-	if asc {
-		return e.ID < cpk
-	}
-	return e.ID > cpk
 }
 
 // --- taxonomy.TermRepository ---

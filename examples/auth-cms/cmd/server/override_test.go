@@ -9,7 +9,8 @@ import (
 
 	"github.com/gopernicus/gopernicus/examples/auth-cms/internal/authmem"
 	auth "github.com/gopernicus/gopernicus/pockets/authentication"
-	"github.com/gopernicus/gopernicus/sdk/capabilities/email"
+	delivery "github.com/gopernicus/gopernicus/pockets/authentication/logic/delivery"
+	"github.com/gopernicus/gopernicus/sdk/capabilities/notify/email"
 )
 
 // TestOverrideSystemsAreDistinct proves the host wires BOTH override systems and that
@@ -29,8 +30,8 @@ func TestOverrideSystemsAreDistinct(t *testing.T) {
 		t.Fatal("Config.EmailContentTemplates empty: the host email override is not wired")
 	}
 	// The email override targets the pocket's email namespace, not any page facility.
-	if got := cfg.EmailContentTemplates[0].Namespace; got != auth.EmailContentNamespace {
-		t.Fatalf("email override Namespace = %q, want %q", got, auth.EmailContentNamespace)
+	if got := cfg.EmailContentTemplates[0].Namespace; got != delivery.Namespace {
+		t.Fatalf("email override Namespace = %q, want %q", got, delivery.Namespace)
 	}
 }
 
@@ -73,9 +74,9 @@ func TestEmailLayerAppOverrideWins(t *testing.T) {
 	// Drive delivery with the self-contained bounded in-process runtime so this test
 	// needs no generic-jobs composition — the branded template render is what is under
 	// test, not the transport.
-	cfg.DeliveryMode = auth.DeliveryModeInProcess
+	cfg.DeliveryMode = delivery.ModeInProcess
 
-	svc, err := auth.NewService(authmem.New().Repositories(), cfg)
+	svc, err := auth.New(authmem.New().Repositories(), cfg.TokenSigner, cfg.RuntimeMode, cfg.DeliveryMode, cfg.options()...)
 	if err != nil {
 		t.Fatalf("auth.NewService: %v", err)
 	}
@@ -86,9 +87,9 @@ func TestEmailLayerAppOverrideWins(t *testing.T) {
 	// The outbox is the only send path, so run the delivery runtime to drain the
 	// verification job registration enqueues.
 	workerDone := make(chan error, 1)
-	go func() { workerDone <- svc.RunDelivery(ctx) }()
+	go func() { workerDone <- svc.Delivery.Run(ctx) }()
 
-	if _, err := svc.RegisterUser(ctx, "brand@example.com", "correct-horse-battery-staple", "Brand User"); err != nil {
+	if _, err := svc.Authentication.Register(ctx, "brand@example.com", "correct-horse-battery-staple", "Brand User"); err != nil {
 		t.Fatalf("RegisterUser: %v", err)
 	}
 

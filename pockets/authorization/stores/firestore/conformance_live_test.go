@@ -33,13 +33,18 @@
 package firestore
 
 import (
+	"context"
 	"testing"
 
 	firestoredb "github.com/gopernicus/gopernicus/integrations/datastores/firestore"
 	"github.com/gopernicus/gopernicus/integrations/datastores/firestore/firestoretest"
 	"github.com/gopernicus/gopernicus/pockets/authorization"
-	"github.com/gopernicus/gopernicus/pockets/authorization/storetest"
-	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/audit"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/mutations"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/relationships"
+	"github.com/gopernicus/gopernicus/pockets/authorization/stores/storetest"
+	"github.com/gopernicus/gopernicus/sdk/capabilities/transaction"
+	"github.com/gopernicus/gopernicus/sdk/pkg/list"
 )
 
 // liveAllCollections is the COMPLETE set of collections this store owns, and the
@@ -50,14 +55,12 @@ import (
 var liveAllCollections = []string{
 	collectionRelationships,
 	collectionSubjectClaims,
-	collectionIDClaims,
 	collectionRoles,
-	collectionScopes,
-	collectionMutations,
+	collectionAudit,
 }
 
 // newLiveRepos returns the per-fixture factory over ONE live client: each call
-// clears this store's six collections and constructs the repository set afresh,
+// clears this store's collections and constructs the repository set afresh,
 // which is the "FRESH, empty Repositories per call" storetest requires. The
 // client is opened once, at the root, rather than per fixture — the suite calls
 // this factory well over a hundred times and a client per call would be a
@@ -69,12 +72,12 @@ var liveAllCollections = []string{
 // ListIndexes per fixture; if a live run ever shows Admin quota pressure, hoist
 // the probe to a single root-level construction and say so HERE — do not quietly
 // pass WithoutIndexProbe, which would delete the proof.
-func newLiveRepos(t *testing.T, db *firestoredb.DB) func(*testing.T) authorization.Repositories {
+func newLiveRepos(t *testing.T, db *firestoredb.DB) func(*testing.T, mutations.GuardianPolicy) authorization.Repositories {
 	t.Helper()
-	return func(t *testing.T) authorization.Repositories {
+	return func(t *testing.T, policy mutations.GuardianPolicy) authorization.Repositories {
 		t.Helper()
 		firestoretest.ResetLive(t, db, liveAllCollections...)
-		repos, err := Repositories(db)
+		repos, err := Repositories(t.Context(), db, WithGuardianPolicy(policy))
 		if err != nil {
 			t.Fatalf("Repositories against %s (the index probe runs here — a missing composite fails construction, naming it): %v", db.Target(), err)
 		}
@@ -99,17 +102,17 @@ func TestConformanceLive(t *testing.T) {
 
 // TestRunTransactionalLive is the ONE allowed skip of the live leg (ruling R1),
 // and the audit step in .github/workflows/live-stores.yml allows it BY NAME. The
-// store hands the harness no crud.Transactor, because a Firestore transaction
+// store hands the harness no transaction.Transactor, because a Firestore transaction
 // requires every read to precede every write and never observes its own pending
 // writes — the exact property the ambient family proves from both sides. Real
 // Firestore does not change that; it is a family difference, so this skip is the
 // same on the emulator and live.
 func TestRunTransactionalLive(t *testing.T) {
 	db := firestoretest.OpenLive(t)
-	t.Log("firestore: this store supplies NO crud.Transactor — the ambient-transaction family is a KNOWN FAMILY DIFFERENCE (firestore-stores ruling R1), not a defect. It is the only test root this leg is allowed to skip, and live-stores.yml allows it by name.")
+	t.Log("firestore: this store supplies NO transaction.Transactor — the ambient-transaction family is a KNOWN FAMILY DIFFERENCE (firestore-stores ruling R1), not a defect. It is the only test root this leg is allowed to skip, and live-stores.yml allows it by name.")
 	newRepos := newLiveRepos(t, db)
-	storetest.RunTransactional(t, func(t *testing.T) (authorization.Repositories, crud.Transactor) {
-		return newRepos(t), nil
+	storetest.RunTransactional(t, func(t *testing.T) (authorization.Repositories, transaction.Transactor) {
+		return newRepos(t, mutations.GuardianPolicy{}), nil
 	})
 }
 
@@ -121,6 +124,56 @@ func TestRunTransactionalLive(t *testing.T) {
 // than assuming the emulator's transaction plumbing behaves like production's.
 func TestAmbientTransactionRefusedLive(t *testing.T) {
 	db := firestoretest.OpenLive(t)
-	repos := newLiveRepos(t, db)(t)
+	repos := newLiveRepos(t, db)(t, mutations.GuardianPolicy{})
 	assertAmbientRefusal(t, db, repos)
+}
+
+// The disposable live harness must deploy both exported manifests before this
+// test. Without live configuration OpenLive reports the verification gap.
+func TestAuditConformanceLive(t *testing.T) {
+	db := firestoretest.OpenLive(t)
+	storetest.RunAudit(t, func(t *testing.T, enabled bool) authorization.Repositories {
+		firestoretest.ResetLive(t, db, liveAllCollections...)
+		opts := []Option{}
+		if enabled {
+			opts = append(opts, WithAudit())
+		}
+		repos, err := Repositories(t.Context(), db, opts...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return repos
+	})
+}
+
+func TestAuditQueryMatrixLive(t *testing.T) {
+	db := firestoretest.OpenLive(t)
+	firestoretest.ResetLive(t, db, liveAllCollections...)
+	repos, err := Repositories(t.Context(), db, WithAudit())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := audit.WithSource(context.Background(), audit.Source{ActorType: "user", ActorID: "actor"})
+	tuple := relationships.CreateRelationship{ResourceType: "doc", ResourceID: "matrix", Relation: "viewer", SubjectType: "user", SubjectID: "subject"}
+	if err := repos.Relationships.CreateRelationships(ctx, []relationships.CreateRelationship{tuple}); err != nil {
+		t.Fatal(err)
+	}
+	for mask := 0; mask < 8; mask++ {
+		filter := audit.Filter{}
+		if mask&1 != 0 {
+			filter.ActorType, filter.ActorID = "user", "actor"
+		}
+		if mask&2 != 0 {
+			filter.ResourceType, filter.ResourceID = "doc", "matrix"
+		}
+		if mask&4 != 0 {
+			filter.SubjectType, filter.SubjectID = "user", "subject"
+		}
+		for _, direction := range []string{list.ASC, list.DESC} {
+			page, err := repos.Audit.List(ctx, filter, list.Request{Limit: 2, Order: list.NewOrder("occurred_at", direction), WithCount: true})
+			if err != nil || len(page.Items) != 1 || page.Total == nil || *page.Total != 1 {
+				t.Fatalf("audit filter %d %s: page=%+v err=%v", mask, direction, page, err)
+			}
+		}
+	}
 }

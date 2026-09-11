@@ -17,7 +17,7 @@ import (
 	gcfs "cloud.google.com/go/firestore"
 
 	"github.com/gopernicus/gopernicus/integrations/datastores/firestore"
-	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
+	"github.com/gopernicus/gopernicus/sdk/pkg/list"
 )
 
 // listBase is the timestamp the fixtures are spaced from.
@@ -37,14 +37,14 @@ type listItem struct {
 func listQueryFor(db *firestore.DB, collection, kind string) firestore.ListQuery[listItem] {
 	return firestore.ListQuery[listItem]{
 		Query: db.Collection(collection).Where("kind", "==", kind),
-		OrderFields: map[string]crud.OrderField{
+		OrderFields: map[string]list.OrderField{
 			"created_at": {Column: "created_at"},
 			"name":       {Column: "name"},
 			"n":          {Column: "n"},
 			"id":         {Column: "id"},
 			"doc_id":     {Column: gcfs.DocumentID},
 		},
-		DefaultOrder: crud.NewOrder("created_at", crud.DESC),
+		DefaultOrder: list.NewOrder("created_at", list.DESC),
 		PK:           "id",
 		Decode:       decodeListItem,
 		OrderValueOf: func(row listItem, field string) any {
@@ -77,7 +77,7 @@ func decodeListItem(snap *gcfs.DocumentSnapshot) (listItem, error) {
 }
 
 // mustList runs one List call and fails the test on error.
-func mustList(t *testing.T, ctx context.Context, r firestore.Reader, q firestore.ListQuery[listItem], req crud.ListRequest) crud.Page[listItem] {
+func mustList(t *testing.T, ctx context.Context, r firestore.Reader, q firestore.ListQuery[listItem], req list.Request) list.Page[listItem] {
 	t.Helper()
 	page, err := firestore.List(ctx, r, q, req)
 	if err != nil {
@@ -88,14 +88,14 @@ func mustList(t *testing.T, ctx context.Context, r firestore.Reader, q firestore
 
 // traverseListIDs pages the whole list with the given order and limit,
 // following NextCursor, and fails if any row appears twice.
-func traverseListIDs(t *testing.T, ctx context.Context, r firestore.Reader, q firestore.ListQuery[listItem], order crud.Order, limit int) []string {
+func traverseListIDs(t *testing.T, ctx context.Context, r firestore.Reader, q firestore.ListQuery[listItem], order list.Order, limit int) []string {
 	t.Helper()
 
 	seen := map[string]bool{}
 	var ids []string
 	cursor := ""
 	for range 1000 {
-		page := mustList(t, ctx, r, q, crud.ListRequest{Limit: limit, Cursor: cursor, Order: order})
+		page := mustList(t, ctx, r, q, list.Request{Limit: limit, Cursor: cursor, Order: order})
 		for _, row := range page.Items {
 			if seen[row.ID] {
 				t.Fatalf("id %q on more than one page", row.ID)

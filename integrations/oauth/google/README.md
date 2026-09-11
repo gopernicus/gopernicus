@@ -1,59 +1,57 @@
 # integrations/oauth/google
 
-An `sdk/capabilities/oauth.Provider` implementation for **Google** OAuth 2.0 + OpenID
-Connect. It wraps exactly one third-party library —
-`github.com/coreos/go-oidc/v3` — used solely for cryptographic ID token
-verification (OIDC discovery, JWKS fetch/cache, RS256 signature validation).
-The authorization-code, token-exchange, refresh, and userinfo flows are
-hand-rolled on `net/http`; there is **no `golang.org/x/oauth2` dependency**. It
-imports `sdk/capabilities/oauth` for the port vocabulary and no pocket or other integration.
-
-## Construction fetches the network (fail-fast)
+Google OAuth 2.0 and OpenID Connect behind the stdlib SDK provider port.
+`go-oidc` owns discovery, signature verification and cached JWKS rotation;
+the adapter uses `net/http` for token exchange, refresh and userinfo.
 
 ```go
-provider, err := google.New(ctx, clientID, clientSecret, scopes, httpClient)
+provider, err := google.New(ctx, google.Config{
+    ClientID: clientID,
+    ClientSecret: clientSecret,
+    HTTPClient: httpClient,
+})
 if err != nil {
-    return err // Google unreachable at boot — fail fast
+    return err
 }
 ```
 
-`New` performs **OIDC discovery at construction time**: it fetches Google's
-`.well-known/openid-configuration` to resolve the issuer, JWKS URL, and
-supported signing algorithms, then builds the ID token verifier. This is a
-deliberate fail-fast network call — if Google is unreachable, `New` returns an
-error rather than deferring the failure to the first `ValidateIDToken`. Pass a
-context with a timeout to bound it. The library caches the JWKS keys and handles
-Google's key rotation for the life of the provider.
+Construction fetches discovery. Give `ctx` a deadline. `ClientID` is required;
+`ClientSecret` may be empty for a provider registration that permits public
+clients. The host must register each callback URI and choose a compatible client
+type; a native URI does not turn a web client registration into a native client.
 
-## Configuration surface
+Empty `Scopes` defaults to `openid email profile`; custom scopes must include
+`openid`. Scopes and HTTP client configuration are copied. The underlying
+transport remains shared; callers must not mutate it concurrently. A nil client
+gets a 30-second timeout. Redirects are always refused, including discovery and
+JWKS redirects. Direct API, discovery and JWKS response bodies are limited to
+1 MiB and overflow is an error.
 
-| Parameter | Meaning |
-|---|---|
-| `ctx` | Context for the construction-time discovery call (bound it with a timeout). |
-| `clientID` | Google OAuth client ID; also the expected `aud` for ID token validation. |
-| `clientSecret` | Google OAuth client secret, sent on token exchange/refresh. |
-| `scopes` | Requested scopes; empty defaults to `["openid", "email", "profile"]`. |
-| `client` | `*http.Client` for discovery and the token/userinfo flows; nil defaults to a 30s-timeout client. |
+`AccessType` defaults to empty; set `"offline"` when refresh tokens are wanted.
+`Prompt` defaults to empty; choose `"consent"`, `"select_account"`, their
+combination, or `"none"`. The adapter no longer forces offline consent on every
+login. Whether Google returns a refresh token also depends on its grant policy.
 
-The authorization URL is built for the PKCE (S256) authorization-code flow with
-`access_type=offline` and `prompt=consent` (to obtain a refresh token) and an
-optional `nonce` echoed back in the ID token. Response bodies from the token and
-userinfo endpoints are capped at 1 MB.
+The core `oauth.Provider` takes `oauth.AuthorizationRequest` and returns
+`(string, error)` from `GetAuthorizationURL`. It validates state, PKCE verifier
+and redirect shape. Google also implements optional `oauth.IDTokenValidator`
+and `oauth.TokenRefresher`. ID token validation checks signature, issuer,
+audience, expiry, a supplied nonce and a nonempty subject. Email is optional.
+Authentication requires an ID token for a flow initiated through this OIDC
+capability; missing tokens cannot fall back to userinfo.
 
-## Provider behavior
+`EmailVerified` preserves Google's assertion. `EmailAuthoritative` separately
+reports verified Gmail or verified Workspace (`hd`) evidence. A verified email
+from another domain alone does not establish Google's continuing authority over
+that mailbox. The host's `authentication.Config.TrustOAuthEmail` decides whether
+the evidence permits new email-based registration/adoption; existing linked-ID
+login remains independent of email. See [Google's verification guidance](https://developers.google.com/identity/gsi/web/guides/verify-google-id-token).
 
-- `Name()` → `"google"`; `SupportsOIDC()` → `true`;
-  `TrustEmailVerification()` → `true`.
-- `ExchangeCode` / `RefreshToken` — `application/x-www-form-urlencoded` POST to
-  Google's token endpoint.
-- `GetUserInfo` — bearer-token GET to Google's userinfo endpoint.
-- `ValidateIDToken` — verifies the RSA signature against Google's JWKS and the
-  standard claims (`iss`, `aud`, `exp`); checks `nonce` when provided and
-  requires a non-empty `email`.
+Malformed success responses fail before use. `errors.As(err, *oauth.Error)`
+exposes operation, HTTP status and protocol code; `errors.Is` retains cancellation
+and other wrapped causes. Error strings omit upstream bodies and descriptions;
+the unwrapped cause and remote code are untrusted diagnostics.
 
-## Testing
-
-The test suite is fully hermetic — it stands up an `httptest` server backed by
-go-oidc's `oidctest` helper for OIDC discovery, JWKS, and ID token signing, with
-caller-supplied fakes for the token and userinfo endpoints. No live Google
-account or network is required.
+Tests use owned HTTP/OIDC servers and locally signed tokens. No real Google
+login, provider credentials or device-authorization grant is exercised.
+Migration: [AUDIT-015](../../../AUDIT.md#audit-015-bound-oauth-flows-and-truthful-tracing).

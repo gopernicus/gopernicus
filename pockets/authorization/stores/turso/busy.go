@@ -6,19 +6,8 @@ import (
 	"time"
 )
 
-// busy-retry discipline: libSQL/SQLite has no row locks, so the atomic mutation
-// repository serializes writers with the connector's BEGIN IMMEDIATE transaction
-// (the auth v3 precedent) — a contending writer WAITS at the write intent rather
-// than losing an update. When serialization times out under load, the residual
-// surface is SQLITE_BUSY / "database is locked" rather than a lost write. The store
-// must make that surface as WAITING, not a spurious failure — the shared
-// ConcurrentReplayStorm / ConcurrentSingleWinner cases assert zero spurious errors,
-// so a busy error must never leak where the contract promises an application
-// outcome. busy_timeout is set on the connection best-effort in Repositories, and
-// the bounded retry loop below is the real defense: because Apply is idempotent by
-// MutationID, re-running the whole transaction resolves to a deterministic terminal
-// outcome (replay / stale / invariant_blocked). This mirrors the jobs turso store's
-// helper of the same shape.
+// BEGIN IMMEDIATE contention is retried before any application callback runs.
+// Transport errors are not proof of an aborted transaction and never retry.
 const (
 	busyMaxRetries = 200
 	busyBaseDelay  = 2 * time.Millisecond
@@ -36,8 +25,7 @@ func isBusy(err error) bool {
 	msg := err.Error()
 	return strings.Contains(msg, "SQLITE_BUSY") ||
 		strings.Contains(msg, "database is locked") ||
-		strings.Contains(msg, "database table is locked") ||
-		strings.Contains(msg, "Server returned status 503")
+		strings.Contains(msg, "database table is locked")
 }
 
 // retryBusy runs fn, retrying on a transient busy/locked error with a bounded,

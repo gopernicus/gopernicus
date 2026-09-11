@@ -24,8 +24,8 @@ import (
 	"time"
 
 	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
-	"github.com/gopernicus/gopernicus/pockets/authentication/domain/serviceaccount"
-	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/serviceaccount"
+	"github.com/gopernicus/gopernicus/sdk/pkg/list"
 )
 
 const (
@@ -194,7 +194,7 @@ func TestCollationControlsOrdering_NonC(t *testing.T) {
 	if dsn == "" {
 		t.Skip("POSTGRES_NON_C_TEST_DSN not set — non-C ordering proof NOT verified")
 	}
-	db, err := pgxdb.Open(pgxdb.Config{DSN: dsn})
+	db, err := pgxdb.Open(context.Background(), pgxdb.Config{DSN: dsn})
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}
@@ -223,7 +223,7 @@ func TestCollationControlsOrdering_NonC(t *testing.T) {
 		t.Fatalf("create lower: %v", err)
 	}
 
-	page, err := store.List(ctx, crud.ListRequest{})
+	page, err := store.List(ctx, list.Request{})
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}

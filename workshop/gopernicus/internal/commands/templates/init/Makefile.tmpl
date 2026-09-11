@@ -45,14 +45,14 @@ guard-one-rule:
 		! grep -rn --include='*.go' -E '/internal/(inbound|outbound)|"github.com/gopernicus/gopernicus/integrations' internal/logic || { echo "ERROR: internal/logic reached outward — the hexagon imports only sdk"; exit 1; }; \
 	fi
 
-# Hygiene (mirrors the gopernicus repo's G9/G10): the crud.Transactor seam is the
+# Hygiene (mirrors the gopernicus repo's G9/G10): the transaction.Transactor seam is the
 # only way to the raw pool — never the raw-pool escape hatch; strict struct
 # scanning only — never the lax row-scan variant. The grep tokens are split with
 # adjacent shell quotes ('a''b' → 'ab') so the scaffold's own template source
 # never carries the forbidden literals verbatim.
 guard-no-underlying:
 	@echo "== guard: no Underlying() outside a datastore connector =="
-	@! grep -rn --include='*.go' '\.Underlying''()' . || { echo "ERROR: raw-pool escape hatch called — use the ports or the crud.Transactor seam"; exit 1; }
+	@! grep -rn --include='*.go' '\.Underlying''()' . || { echo "ERROR: raw-pool escape hatch called — use the ports or the transaction.Transactor seam"; exit 1; }
 
 guard-no-lax-scan:
 	@echo "== guard: strict struct scanning only (no lax row-scan) =="

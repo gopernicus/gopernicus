@@ -7,7 +7,7 @@ import (
 
 	"github.com/a-h/templ"
 
-	"github.com/gopernicus/gopernicus/sdk/foundation/web"
+	"github.com/gopernicus/gopernicus/sdk/pkg/web"
 	"github.com/gopernicus/gopernicus/ui/goth"
 	"github.com/gopernicus/gopernicus/ui/goth/htmx"
 	"github.com/gopernicus/gopernicus/ui/goth/primitives"
@@ -195,7 +195,7 @@ func (s *Server) registerDateFixtures() {
 	// the selected date. Prev/next and day selection both round-trip here, so the
 	// no-JS calendar has shareable URLs and full-document navigation.
 	s.handler.Handle(http.MethodGet, "/calendar/select", func(w http.ResponseWriter, r *http.Request) {
-				bundle := s.bundles[goth.Interactive]
+		bundle := s.bundles[goth.Interactive]
 		w.Header().Set("Content-Security-Policy", buildCSP(bundle, false))
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 
@@ -249,7 +249,7 @@ func (s *Server) registerDateFixtures() {
 			writeFragment(w, http.StatusOK, fragment)
 			return
 		}
-				bundle := s.bundles[goth.Full]
+		bundle := s.bundles[goth.Full]
 		w.Header().Set("Content-Security-Policy", buildCSP(bundle, true))
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		body := `<main data-slot="date-picker-page"><h1>Date Picker</h1>` +

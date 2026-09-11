@@ -8,7 +8,7 @@ import "context"
 // the tracing capability stashes trace/span ids off a span's identity, and
 // logging reads all three onto its log lines. Homing the keys and their
 // accessors in the kernel is what lets web and tracing carry these ids without
-// importing logging — the foundation->foundation edge the layering forbids.
+// importing logging — the pkg->pkg edge the layering forbids.
 // The first promotion was the sentinel errors; the kernel contract (stdlib
 // only, promotion is a visible act) lives in errors.go.
 

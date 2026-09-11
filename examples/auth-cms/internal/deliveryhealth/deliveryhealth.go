@@ -35,7 +35,7 @@ import (
 	"strings"
 	"sync/atomic"
 
-	auth "github.com/gopernicus/gopernicus/pockets/authentication"
+	delivery "github.com/gopernicus/gopernicus/pockets/authentication/logic/delivery"
 	sdkevents "github.com/gopernicus/gopernicus/sdk/capabilities/events"
 )
 
@@ -98,7 +98,7 @@ func (h *Health) SetDepthSource(fn depthSource) {
 // Dispatcher wraps a delivery dispatcher (jobs mode) so every admitted command is counted.
 // The returned value is a drop-in auth.DeliveryDispatcher; it forwards unchanged and only
 // counts. A nil next returns nil (the caller's nil-dispatcher semantics are preserved).
-func (h *Health) Dispatcher(next auth.DeliveryDispatcher) auth.DeliveryDispatcher {
+func (h *Health) Dispatcher(next delivery.Dispatcher) delivery.Dispatcher {
 	if next == nil {
 		return nil
 	}
@@ -118,11 +118,11 @@ func (h *Health) Emitter(next sdkevents.Emitter) sdkevents.Emitter {
 
 // countingDispatcher counts admissions and forwards to the wrapped dispatcher.
 type countingDispatcher struct {
-	next auth.DeliveryDispatcher
+	next delivery.Dispatcher
 	h    *Health
 }
 
-var _ auth.DeliveryDispatcher = countingDispatcher{}
+var _ delivery.Dispatcher = countingDispatcher{}
 
 func (d countingDispatcher) Submit(ctx context.Context, kind, purpose, logicalKey string, payload []byte) (string, error) {
 	id, err := d.next.Submit(ctx, kind, purpose, logicalKey, payload)
@@ -158,9 +158,9 @@ var _ sdkevents.Emitter = countingEmitter{}
 // wrapped emitter. A forward failure increments observer_failures and is returned verbatim
 // so the pocket's observer logs it exactly as before. Only ev.Type() is read; no other
 // field of the event is inspected or stored.
-func (e countingEmitter) Emit(ctx context.Context, ev sdkevents.Event, opts ...sdkevents.EmitOption) error {
+func (e countingEmitter) Emit(ctx context.Context, ev sdkevents.Event) error {
 	e.h.classify(ev.Type())
-	if err := e.next.Emit(ctx, ev, opts...); err != nil {
+	if err := e.next.Emit(ctx, ev); err != nil {
 		e.h.observerFail.Add(1)
 		return err
 	}

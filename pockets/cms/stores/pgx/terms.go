@@ -4,11 +4,12 @@ import (
 	"context"
 	"time"
 
+	"github.com/gopernicus/gopernicus/sdk"
+
 	"github.com/jackc/pgx/v5"
 
 	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
 	"github.com/gopernicus/gopernicus/pockets/cms/domain/taxonomy"
-	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
 )
 
 // TermStore implements taxonomy.TermRepository over a PostgreSQL database.
@@ -63,7 +64,7 @@ func (s *TermStore) Create(ctx context.Context, t taxonomy.Term) (taxonomy.Term,
 		"created_at": t.CreatedAt.UTC(),
 		"updated_at": t.UpdatedAt.UTC(),
 	}
-	// Empty ID → the cryptids.Database strategy (amended D10): omit the id
+	// Empty ID → the sdk.DatabaseID strategy (amended D10): omit the id
 	// column so the schema default generates the key, read back with RETURNING.
 	if t.ID == "" {
 		q := `INSERT INTO ` + s.table(termsTable) + ` (kind, slug, name, parent_id, created_at, updated_at)
@@ -98,12 +99,12 @@ func (s *TermStore) Update(ctx context.Context, id string, t taxonomy.Term) (tax
 		return taxonomy.Term{}, err
 	}
 	if n == 0 {
-		return taxonomy.Term{}, crud.ErrNotFound
+		return taxonomy.Term{}, sdk.ErrNotFound
 	}
 	return t, nil
 }
 
-// Get returns the term with the given id, or crud.ErrNotFound.
+// Get returns the term with the given id, or sdk.ErrNotFound.
 func (s *TermStore) Get(ctx context.Context, id string) (taxonomy.Term, error) {
 	q := `SELECT ` + termColumns + ` FROM ` + s.table(termsTable) + ` WHERE id = @id`
 	row, err := pgxdb.QueryOne[termRow](ctx, s.db, q, pgx.NamedArgs{"id": id})
@@ -113,7 +114,7 @@ func (s *TermStore) Get(ctx context.Context, id string) (taxonomy.Term, error) {
 	return row.toDomain(), nil
 }
 
-// GetBySlug returns the term with the given kind+slug, or crud.ErrNotFound.
+// GetBySlug returns the term with the given kind+slug, or sdk.ErrNotFound.
 func (s *TermStore) GetBySlug(ctx context.Context, kind taxonomy.Kind, slug string) (taxonomy.Term, error) {
 	q := `SELECT ` + termColumns + ` FROM ` + s.table(termsTable) + ` WHERE kind = @kind AND slug = @slug`
 	row, err := pgxdb.QueryOne[termRow](ctx, s.db, q, pgx.NamedArgs{"kind": string(kind), "slug": slug})

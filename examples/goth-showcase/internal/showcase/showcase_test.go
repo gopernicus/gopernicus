@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gopernicus/gopernicus/sdk/foundation/web"
+	"github.com/gopernicus/gopernicus/sdk/pkg/web"
 )
 
 var idAttrRE = regexp.MustCompile(`\sid="([^"]+)"`)

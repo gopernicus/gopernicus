@@ -1,31 +1,19 @@
-// Package events is the event-bus facility port: the vocabulary an emitter and
-// its consumers share, plus the in-process Memory default and a Noop.
-//
-// An Event is a typed value that flows through a Bus in-process. Bus backends
-// (the shipped Memory, the redis-streams integration) satisfy the port; a
-// conformance suite (sdk/capabilities/events/eventstest) pins the common observable
-// contract. The bus knows zero CMS/auth concepts — pockets emit their own
-// typed events and consumers subscribe by topic.
-//
-// Delivery is deliberately weak. The Memory bus is at-most-once, in-process,
-// with no persistence and no replay: Emit is a best-effort wake-up signal, NOT
-// a transactional write. A caller that must not lose an event rides the durable
-// outbox rail (a Record persisted in the same transaction as its domain rows),
-// never Emit. Because delivery can drop or duplicate depending on the backend,
-// Handler implementations must be idempotent.
-//
-// This package is stdlib-only apart from sdk/foundation/cryptids (intra-module); a
-// distributed backend is a separate integration module.
+// Package events provides typed notifications, subscriptions and transport
+// envelopes. Emit is bounded asynchronous notification; Memory.Dispatch waits
+// for local handlers. A remote integration's checked publication confirms only
+// its documented handoff. Durable intent belongs in a transactional outbox.
 package events
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"time"
 
-	"github.com/gopernicus/gopernicus/sdk/foundation/cryptids"
+	"github.com/gopernicus/gopernicus/sdk"
 )
 
-var ids = cryptids.IDGenerator{}
+var ids = sdk.IDGenerator{}
 
 // =============================================================================
 // Event vocabulary
@@ -46,8 +34,7 @@ type Event interface {
 }
 
 // Metadata is an optional Event capability carrying the routing metadata the
-// SSE gateway filters on. BaseEvent satisfies it. TenantID is vocabulary only —
-// nothing filters by tenant until tenancy exists (auth v2+).
+// consumers can filter on. BaseEvent satisfies it; routing policy stays host-owned.
 type Metadata interface {
 	AggregateType() *string
 	AggregateID() *string
@@ -56,7 +43,7 @@ type Metadata interface {
 
 // BaseEvent provides the common Event fields. Embed it in an event type to
 // satisfy Event (and Metadata via the optional aggregate/tenant fields). Its
-// json tags define the wire shape DecodeRemoteMetadata probes.
+// JSON tags also describe the optional fields in its ordinary typed payload.
 type BaseEvent struct {
 	EventType   string    `json:"type"`
 	Occurred    time.Time `json:"occurred_at"`
@@ -92,7 +79,7 @@ func (e BaseEvent) AggregateID() *string { return e.AggID }
 func (e BaseEvent) TenantID() *string { return e.Tenant }
 
 // NewBaseEvent builds a BaseEvent with the given type, the current UTC time,
-// and a fresh correlation ID from sdk/id.
+// and a fresh correlation ID from sdk.IDGenerator.
 func NewBaseEvent(eventType string) BaseEvent {
 	return BaseEvent{
 		EventType:   eventType,
@@ -128,7 +115,8 @@ func (e BaseEvent) WithAggregate(aggregateType, aggregateID string) BaseEvent {
 // Handlers
 // =============================================================================
 
-// Handler processes an event. Implementations MUST be idempotent: an event may
+// Handler processes an immutable event and must support concurrent calls.
+// Implementations MUST be idempotent: an event may
 // be delivered more than once (the durable rail is at-least-once; a remote
 // backend may redeliver), and a best-effort event may be dropped entirely.
 type Handler func(ctx context.Context, event Event) error
@@ -167,75 +155,68 @@ func TypedHandler[T Event](fn func(ctx context.Context, event T) error) Handler 
 	}
 }
 
-// =============================================================================
-// Ports
-// =============================================================================
+// Subscription removes a registration. Calls already selected may finish;
+// Unsubscribe is idempotent and does not wait for callbacks.
+type Subscription interface{ Unsubscribe() error }
 
-// Subscription is an active subscription that can be cancelled.
-type Subscription interface {
-	// Unsubscribe removes this subscription. It is safe to call more than once
-	// (subsequent calls are no-ops).
-	Unsubscribe() error
-}
-
-// Emitter is the narrow emit-only port — what Mount.Events carries.
-//
-// Emit is best-effort: on the Memory bus it is at-most-once, in-process, and
-// returns without waiting for handlers by default. It is NOT transactional and
-// NOT durable; an event lost between a domain commit and Emit is simply gone.
-// Work that must not be lost belongs on the outbox rail, not here.
+// Emitter admits bounded asynchronous notification. Closed/capacity/validation
+// errors mean no admission. Success is not persistence or handler completion.
+// Accepted work may outlive the caller; events and referenced data must remain
+// immutable. There is no total ordering across events.
 type Emitter interface {
-	Emit(ctx context.Context, event Event, opts ...EmitOption) error
+	Emit(context.Context, Event) error
 }
 
-// Bus is the full port a bus backend satisfies and the events pocket consumes.
+// Subscriber receives notifications for an exact topic or "*" (all topics).
+// Every matching local subscription receives its own invocation. A distributed
+// work consumer group has a separate integration-specific API.
+type Subscriber interface {
+	Subscribe(string, Handler) (Subscription, error)
+}
+
+// Bus combines notification and subscription lifecycle. Close refuses new work,
+// drains admitted work, and waits with each caller's context. It returns the
+// context error if unfinished; repeated calls wait for the same completion.
+// Hosts own Close; a callback must not wait for its own bus to finish draining.
 type Bus interface {
 	Emitter
-
-	// Subscribe registers a handler for an exact topic, or "*" for every event.
-	Subscribe(topic string, handler Handler) (Subscription, error)
-
-	// Close shuts the bus down, draining in-flight async handlers up to the
-	// context deadline. Close is idempotent.
-	Close(ctx context.Context) error
+	Subscriber
+	Close(context.Context) error
 }
 
-// Broadcaster is an optional Bus capability: SubscribeBroadcast delivers every
-// matching event to this handler on EVERY process — fan-out with no durability
-// or replay, for ephemeral consumers (SSE streams, metrics) that reconnect and
-// re-fetch. Memory satisfies it trivially (one process); a distributed backend
-// distinguishes consumer-group Subscribe (one process) from broadcast.
+// Broadcaster explicitly selects notification fanout on every connected process.
+// Delivery is ephemeral: disconnected/slow consumers may miss notifications.
+// Bundled Memory and Redis notification subscriptions already use this behavior.
 type Broadcaster interface {
-	SubscribeBroadcast(topic string, handler Handler) (Subscription, error)
+	SubscribeBroadcast(string, Handler) (Subscription, error)
 }
 
-// =============================================================================
-// Emit options
-// =============================================================================
+// Identified carries stable per-event identity across replay/publication.
+// CorrelationID groups related events and is not a deduplication key.
+type Identified interface{ EventID() string }
 
-// EmitConfig is the resolved configuration for a single Emit call.
-type EmitConfig struct {
-	// Sync dispatches synchronously and waits for handlers to complete before
-	// Emit returns, propagating the first handler error.
-	Sync bool
-}
+var (
+	ErrClosed       = fmt.Errorf("events: bus closed: %w", sdk.ErrUnavailable)
+	ErrCapacity     = fmt.Errorf("events: notification queue full: %w", sdk.ErrUnavailable)
+	ErrHandlerPanic = errors.New("events: handler panicked")
+)
 
-// EmitOption configures a single Emit call.
-type EmitOption func(*EmitConfig)
-
-// WithSync dispatches the event synchronously and waits for handlers — used for
-// deterministic tests and same-request flows that need the handler to have run
-// before Emit returns.
-func WithSync() EmitOption {
-	return func(c *EmitConfig) { c.Sync = true }
-}
-
-// ApplyOptions resolves options into an EmitConfig. Bus backends call it to
-// honor WithSync consistently.
-func ApplyOptions(opts ...EmitOption) EmitConfig {
-	var cfg EmitConfig
-	for _, opt := range opts {
-		opt(&cfg)
+// ValidateEvent checks the generic notification boundary. Typed-nil values or
+// panicking custom Event methods are caller misuse, not reflection-detected.
+func ValidateEvent(event Event) error {
+	if event == nil {
+		return fmt.Errorf("events: nil event: %w", sdk.ErrInvalidInput)
 	}
-	return cfg
+	if event.Type() == "" || event.Type() == "*" {
+		return fmt.Errorf("events: event type must be nonempty and not '*': %w", sdk.ErrInvalidInput)
+	}
+	return nil
+}
+
+// ValidateSubscription checks notification topics and handler presence.
+func ValidateSubscription(topic string, handler Handler) error {
+	if topic == "" || handler == nil {
+		return fmt.Errorf("events: subscription needs a topic and handler: %w", sdk.ErrInvalidInput)
+	}
+	return nil
 }

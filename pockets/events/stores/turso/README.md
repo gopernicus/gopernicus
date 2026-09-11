@@ -8,9 +8,9 @@ owns its database lifecycle.
 It fills the events pocket's one outbound port, `outbox.EntryRepository`, over
 the `integrations/datastores/turso` connector — fixed-width ISO-8601 `TEXT`
 timestamps (lexicographic == chronological, which the unpublished-drain
-`ORDER BY created_at` relies on), `TEXT` JSON payload, `event_id` as the primary
+`ORDER BY created_at` relies on), opaque `BLOB` payload, `event_id` as the primary
 key and the at-least-once de-dupe key (a duplicate append surfaces as
-`errs.ErrAlreadyExists`).
+`sdk.ErrAlreadyExists`).
 
 ## ⚠️ Prerequisite: apply the `events` migration source before wiring an appender
 
@@ -20,7 +20,7 @@ The outbox table belongs to migration source **`events`**, distinct from
 migrations but not this store's would fail at *runtime*, not boot.
 
 **`New(db)` guards against exactly that:** it probes for the `event_outbox` table
-at construction and returns `errs.ErrNotFound` if the `events` source has not
+at construction and returns `sdk.ErrNotFound` if the `events` source has not
 been applied — the failure surfaces at wiring time, before the host serves
 traffic (design §5 mitigation b). Scaffold this store's migrations with
 `ExportMigrations` and apply them with your host's runner pre-boot, alongside
@@ -52,9 +52,17 @@ vocabulary being `*turso.Tx` from the integration both already require (design
 ## Migrations
 
 `migrations/0001_event_outbox.sql` (source `events`) is the canonical schema.
-The pgx sibling carries the **identical filename set** — same filename == same
-logical schema step; content is per-dialect. After export, the host owns the
+The existing payload column has TEXT affinity; new writes bind BLOB values and
+preserve empty or binary bytes. Existing TEXT rows remain readable without a table
+rebuild. Historical empty payloads already changed to `{}` cannot be recovered.
+`0002_event_outbox_payload_bytes.sql` is an explicit no-op matching the pgx
+bytea migration version. Apply it to retain the shared dialect version set. After export, the host owns the
 final migration stream in its own dir.
+
+`Append` validates every record's identity/type before any insert and commits the
+whole batch in its own transaction. It does not join a transaction from context;
+use `AppendTx` to share the domain write's commit. Malformed historical records
+can block the poller; operator repair or quarantine is explicit host policy.
 
 ## Testing
 

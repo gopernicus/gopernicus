@@ -40,13 +40,16 @@ func WithSlowThreshold(d time.Duration) LoggingOption {
 // configured via WithSlowThreshold, commands slower than it. Install it with
 // WithLogging or hand it to rdb.AddHook directly. A nil logger falls back to
 // slog.Default(). It returns the redis.Hook interface go-redis's AddHook
-// consumes.
+// consumes. A nil option panics.
 func LoggingHook(log *slog.Logger, opts ...LoggingOption) redis.Hook {
 	if log == nil {
 		log = slog.Default()
 	}
 	h := &loggingHook{log: log}
 	for _, opt := range opts {
+		if opt == nil {
+			panic("goredis: nil LoggingOption")
+		}
 		opt(h)
 	}
 	return h

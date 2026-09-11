@@ -23,7 +23,9 @@ gopernicus init \
 Load environment before reading config. Choose a required deployment posture rather than inferring “development” from missing input. Derive a process context from interrupt and termination signals.
 
 ```go
-_ = environment.LoadEnv()
+if err := environment.LoadEnv(); err != nil {
+    return err
+}
 
 mode, err := environment.ParseMode(os.Getenv("APP_MODE"))
 if err != nil {
@@ -37,6 +39,8 @@ ctx, stop := signal.NotifyContext(
 )
 defer stop()
 ```
+
+Create the logger after loading configuration. The example and scaffold `main` functions parse `logging.Options`, call `logging.New`, pass the logger into `run(ctx, log)`, and report returned errors with that same logger. Context-aware calls automatically include available SDK request/trace/span IDs; tracer construction remains a separate host choice.
 
 ## 3. Construct outbound infrastructure
 
@@ -57,7 +61,7 @@ Every constructor error should fail boot. Defer or coordinate `Close` calls in r
 ## 4. Build the host router
 
 ```go
-router := web.NewWebHandler(web.WithLogging(log))
+router := web.NewWebHandler()
 router.Use(
     web.RequestID(),
     tracing.Middleware(tracer),
@@ -65,7 +69,7 @@ router.Use(
     web.Panics(log),
 )
 
-mount := pocket.Mount{
+mount := pockets.Mount{
     Router: router,
     Logger: log,
     Events: bus,
@@ -76,22 +80,31 @@ Add CORS/default security headers according to the host's browser/API posture. I
 
 ## 5. Construct pockets in dependency order
 
-Pockets cannot import one another, but services may still need host wiring. Build providers first, then bridge their public seams.
+Pockets cannot import one another, but services may still need host wiring. Build
+providers first, then bridge their public seams. Authentication keeps its signer
+and modes explicit; the policy variables below are the host's `PasswordConfig`,
+`IdentityConfig`, `DeliveryConfig` and `BrowserConfig` values.
 
 ```go
-authSvc, err := authentication.NewService(authRepos, authConfig)
+authSvc, err := authentication.New(
+    authRepos, tokenSigner, runtimeMode, deliveryMode,
+    authentication.WithPassword(passwordPolicy),
+    authentication.WithIdentity(identityPolicy),
+    authentication.WithDelivery(deliverySettings),
+    authentication.WithBrowser(browserPolicy),
+)
 if err != nil {
     return err
 }
 
-if err := authSvc.Register(mount); err != nil {
+if err := authSvc.HTTP.Register(mount); err != nil {
     return err
 }
 
 if err := cms.Register(mount, cmsRepos, cms.Config{
     Views: cmsViews,
     AdminMiddleware: []web.Middleware{
-        authSvc.RequireAccessToken(),
+        authSvc.HTTP.RequireAccessToken(),
         requireCMSAdmin,
     },
 }); err != nil {

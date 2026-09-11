@@ -22,7 +22,7 @@ import (
 	"github.com/gopernicus/gopernicus/pockets/cms"
 	"github.com/gopernicus/gopernicus/pockets/cms/domain/menus"
 	cmsgoth "github.com/gopernicus/gopernicus/pockets/cms/views/goth"
-	"github.com/gopernicus/gopernicus/sdk/foundation/web"
+	"github.com/gopernicus/gopernicus/sdk/pkg/web"
 	uigoth "github.com/gopernicus/gopernicus/ui/goth"
 )
 

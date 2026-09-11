@@ -1,93 +1,170 @@
 package cacher
 
 import (
+	"bytes"
+	"container/list"
 	"context"
 	"strings"
 	"sync"
 	"time"
 )
 
-// Memory is the in-memory, TTL-aware default Storer that ships with sdk — no
-// external dependency, handy for development and single-node deployments.
-// (A distributed Storer like redis is a separate integration module.)
+const defaultMaxEntries = 10_000
+
+var (
+	_ Storer        = (*Memory)(nil)
+	_ PrefixDeleter = (*Memory)(nil)
+)
+
+// MemoryOption configures an in-process cache at construction.
+type MemoryOption func(*memoryConfig)
+
+type memoryConfig struct {
+	maxEntries int
+}
+
+// WithMaxEntries bounds the cache's key count, not payload bytes. Nonpositive
+// values select the default of 10,000. Repeated options replace the limit.
+func WithMaxEntries(n int) MemoryOption {
+	return func(c *memoryConfig) { c.maxEntries = n }
+}
+
+// Memory is a bounded, concurrency-safe cache with TTL and least-recently-used
+// eviction. Construct it with NewMemory; its zero value is not initialized.
+// Expired values are reclaimed on access and before capacity evicts live values.
+// It starts no janitor and owns no resources requiring shutdown.
 type Memory struct {
-	mu   sync.RWMutex
-	data map[string]memEntry
-	now  func() time.Time
+	mu         sync.Mutex
+	data       map[string]*list.Element
+	lru        list.List
+	maxEntries int
+	now        func() time.Time
 }
 
 type memEntry struct {
+	key     string
 	value   []byte
-	expires time.Time // zero = no expiry
+	expires time.Time
 }
 
-var _ Storer = (*Memory)(nil)
-
-// NewMemory returns an empty in-memory Storer.
-func NewMemory() *Memory {
-	return &Memory{data: map[string]memEntry{}, now: time.Now}
-}
-
-func (s *Memory) live(e memEntry) bool {
-	return e.expires.IsZero() || e.expires.After(s.now())
-}
-
-// Get retrieves a value by key. found is false for missing or expired keys.
-func (s *Memory) Get(ctx context.Context, key string) ([]byte, bool, error) {
-	s.mu.RLock()
-	e, ok := s.data[key]
-	s.mu.RUnlock()
-	if !ok || !s.live(e) {
-		return nil, false, nil
+// NewMemory returns an empty bounded cache. A nil option panics.
+func NewMemory(opts ...MemoryOption) *Memory {
+	var cfg memoryConfig
+	for _, opt := range opts {
+		if opt == nil {
+			panic("cacher.NewMemory: nil option")
+		}
+		opt(&cfg)
 	}
-	return e.value, true, nil
+	if cfg.maxEntries <= 0 {
+		cfg.maxEntries = defaultMaxEntries
+	}
+	return &Memory{data: make(map[string]*list.Element), maxEntries: cfg.maxEntries, now: time.Now}
 }
 
-// GetMany retrieves multiple values in one call.
+// Get returns independently owned bytes and refreshes a present entry's recency.
+func (s *Memory) Get(ctx context.Context, key string) ([]byte, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return nil, false, err
+	}
+	value, found := s.get(key, s.now())
+	return value, found, nil
+}
+
+// GetMany reads present values and refreshes recency in requested-key order.
 func (s *Memory) GetMany(ctx context.Context, keys []string) (map[string][]byte, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	out := make(map[string][]byte, len(keys))
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	for _, k := range keys {
-		if e, ok := s.data[k]; ok && s.live(e) {
-			out[k] = e.value
+	now := s.now()
+	for _, key := range keys {
+		if value, found := s.get(key, now); found {
+			out[key] = value
 		}
 	}
 	return out, nil
 }
 
-// Set stores a value with TTL (0 = no expiry).
-func (s *Memory) Set(ctx context.Context, key string, value []byte, ttl time.Duration) error {
-	var exp time.Time
-	if ttl > 0 {
-		exp = s.now().Add(ttl)
+func (s *Memory) get(key string, now time.Time) ([]byte, bool) {
+	element, found := s.data[key]
+	if !found {
+		return nil, false
 	}
-	s.mu.Lock()
-	s.data[key] = memEntry{value: value, expires: exp}
-	s.mu.Unlock()
-	return nil
+	entry := element.Value.(*memEntry)
+	if !entry.expires.IsZero() && !now.Before(entry.expires) {
+		s.remove(element)
+		return nil, false
+	}
+	s.lru.MoveToFront(element)
+	return bytes.Clone(entry.value), true
 }
 
-// Delete removes a single key.
-func (s *Memory) Delete(ctx context.Context, key string) error {
-	s.mu.Lock()
-	delete(s.data, key)
-	s.mu.Unlock()
-	return nil
-}
-
-// DeletePattern removes keys matching a "prefix*" glob (the common case).
-func (s *Memory) DeletePattern(ctx context.Context, pattern string) error {
-	prefix := strings.TrimSuffix(pattern, "*")
+// Set copies value and replaces the prior TTL. Zero TTL means no expiration.
+func (s *Memory) Set(ctx context.Context, key string, value []byte, ttl time.Duration) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for k := range s.data {
-		if strings.HasPrefix(k, prefix) {
-			delete(s.data, k)
+	if err := validateSet(ctx, ttl); err != nil {
+		return err
+	}
+	now := s.now()
+	entry := &memEntry{key: key, value: bytes.Clone(value)}
+	if ttl > 0 {
+		entry.expires = now.Add(ttl)
+	}
+	if element, found := s.data[key]; found {
+		element.Value = entry
+		s.lru.MoveToFront(element)
+		return nil
+	}
+	if len(s.data) >= s.maxEntries {
+		for _, element := range s.data {
+			expires := element.Value.(*memEntry).expires
+			if !expires.IsZero() && !now.Before(expires) {
+				s.remove(element)
+			}
+		}
+		if len(s.data) >= s.maxEntries {
+			s.remove(s.lru.Back())
+		}
+	}
+	s.data[key] = s.lru.PushFront(entry)
+	return nil
+}
+
+// Delete removes a key if present.
+func (s *Memory) Delete(ctx context.Context, key string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if element, found := s.data[key]; found {
+		s.remove(element)
+	}
+	return nil
+}
+
+// DeletePrefix removes literal prefixes. An empty prefix clears this Memory.
+func (s *Memory) DeletePrefix(ctx context.Context, prefix string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	for key, element := range s.data {
+		if strings.HasPrefix(key, prefix) {
+			s.remove(element)
 		}
 	}
 	return nil
 }
 
-// Close releases resources (none for the in-memory store).
-func (s *Memory) Close() error { return nil }
+func (s *Memory) remove(element *list.Element) {
+	delete(s.data, element.Value.(*memEntry).key)
+	s.lru.Remove(element)
+}

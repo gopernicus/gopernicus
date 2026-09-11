@@ -4,12 +4,11 @@ import (
 	"context"
 	"time"
 
-	"github.com/jackc/pgx/v5"
-
 	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
-	"github.com/gopernicus/gopernicus/pockets/authentication/domain/apikey"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/apikey"
 	"github.com/gopernicus/gopernicus/sdk"
-	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
+	"github.com/gopernicus/gopernicus/sdk/pkg/list"
+	"github.com/jackc/pgx/v5"
 )
 
 // APIKeyStore implements apikey.APIKeyRepository over a PostgreSQL database.
@@ -28,7 +27,11 @@ type APIKeyStore struct {
 var _ apikey.APIKeyRepository = (*APIKeyStore)(nil)
 
 // NewAPIKeyStore returns an APIKeyStore backed by db.
+// It panics if db is nil; the caller owns the database lifecycle.
 func NewAPIKeyStore(db *pgxdb.DB, opts ...Option) *APIKeyStore {
+	if db == nil {
+		panic("authentication pgx: NewAPIKeyStore received a nil database")
+	}
 	return &APIKeyStore{db: db, qualified: qualified{schema: applyOptions(opts).schema}}
 }
 
@@ -75,7 +78,7 @@ func (s *APIKeyStore) Create(ctx context.Context, k apikey.APIKey) (apikey.APIKe
 		"last_used_at":       pgxdb.NullTime(k.LastUsedAt),
 		"created_at":         k.CreatedAt.UTC(),
 	}
-	// Empty ID → the cryptids.Database strategy (amended D10): omit the id
+	// Empty ID → the sdk.DatabaseID strategy (amended D10): omit the id
 	// column so the schema default generates the key, read back with RETURNING.
 	if k.ID == "" {
 		q := `INSERT INTO ` + s.table(apiKeysTable) + ` (service_account_id, name, key_prefix, key_hash, expires_at, revoked_at, last_used_at, created_at)
@@ -108,7 +111,7 @@ func (s *APIKeyStore) GetByHash(ctx context.Context, keyHash string) (apikey.API
 
 // ListByServiceAccount returns a cursor-paginated page of a service account's
 // keys, ordered created_at DESC, id DESC.
-func (s *APIKeyStore) ListByServiceAccount(ctx context.Context, serviceAccountID string, req crud.ListRequest) (crud.Page[apikey.APIKey], error) {
+func (s *APIKeyStore) ListByServiceAccount(ctx context.Context, serviceAccountID string, req list.Request) (list.Page[apikey.APIKey], error) {
 	q := pgxdb.ListQuery[apiKeyRow]{
 		BaseSQL:      `SELECT ` + apiKeyColumns + ` FROM ` + s.table(apiKeysTable) + ` WHERE service_account_id = @service_account_id`,
 		Args:         pgx.NamedArgs{"service_account_id": serviceAccountID},
@@ -121,9 +124,9 @@ func (s *APIKeyStore) ListByServiceAccount(ctx context.Context, serviceAccountID
 	}
 	page, err := pgxdb.List(ctx, s.db, q, req)
 	if err != nil {
-		return crud.Page[apikey.APIKey]{}, err
+		return list.Page[apikey.APIKey]{}, err
 	}
-	return crud.MapPage(page, apiKeyRow.toDomain), nil
+	return list.MapPage(page, apiKeyRow.toDomain), nil
 }
 
 // Revoke marks the key revoked as of revokedAt; unknown id → sdk.ErrNotFound.

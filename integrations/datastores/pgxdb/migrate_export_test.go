@@ -8,13 +8,14 @@ import (
 	"testing/fstest"
 )
 
-// TestExportMigrations verifies the scaffold helper copies every regular file at
+// TestExportMigrations verifies the scaffold helper copies every SQL file at
 // dir verbatim, skips subdirectories, and creates a not-yet-existing dst.
 func TestExportMigrations(t *testing.T) {
 	src := fstest.MapFS{
 		"migrations/0001_init.sql":   {Data: []byte("CREATE TABLE a (id TEXT);\n")},
 		"migrations/0002_more.sql":   {Data: []byte("ALTER TABLE a ADD COLUMN b TEXT;\n")},
 		"migrations/sub/0003_ig.sql": {Data: []byte("-- nested, must be skipped\n")},
+		"migrations/README.md":       {Data: []byte("host migration notes")},
 	}
 
 	// dst does not exist yet — ExportMigrations must create the full path.
@@ -46,7 +47,7 @@ func TestExportMigrations(t *testing.T) {
 
 	for name, f := range src {
 		base := filepath.Base(name)
-		if base == "0003_ig.sql" {
+		if base == "0003_ig.sql" || base == "README.md" {
 			if _, err := os.Stat(filepath.Join(dst, base)); !os.IsNotExist(err) {
 				t.Fatalf("nested file %s was copied; want skipped", base)
 			}

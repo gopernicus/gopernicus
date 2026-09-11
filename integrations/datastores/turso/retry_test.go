@@ -134,7 +134,7 @@ func TestOpen_RetryAgainstUnreachable(t *testing.T) {
 
 	const backoff = 30 * time.Millisecond
 	start := time.Now()
-	db, err := Open(Config{
+	db, err := Open(context.Background(), Config{
 		URL:            "http://" + addr,
 		ConnectTimeout: 2 * time.Second,
 		Retry:          RetryPolicy{Attempts: 2, MinBackoff: backoff, MaxBackoff: backoff},

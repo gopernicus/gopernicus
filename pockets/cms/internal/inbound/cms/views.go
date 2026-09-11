@@ -6,7 +6,7 @@ import (
 	"github.com/gopernicus/gopernicus/pockets/cms/domain/menus"
 	"github.com/gopernicus/gopernicus/pockets/cms/domain/messaging"
 	"github.com/gopernicus/gopernicus/pockets/cms/domain/taxonomy"
-	"github.com/gopernicus/gopernicus/sdk/foundation/web"
+	"github.com/gopernicus/gopernicus/sdk/pkg/web"
 )
 
 // Views is the CMS pocket's HTML rendering port (FS3): the whole HTML surface —
@@ -18,7 +18,7 @@ import (
 // The bundled default lives in the sibling module pockets/cms/views/goth. The
 // blessed way to customize is partial override: embed that concrete default and
 // override individual methods (e.g. only the four chrome methods). Implementing
-// all methods from scratch (e.g. over sdk/foundation/web.Template) is possible but not the
+// all methods from scratch (e.g. over sdk/pkg/web.Template) is possible but not the
 // sold path.
 //
 // A nil Config.Views means the HTML surface is not registered — only the media

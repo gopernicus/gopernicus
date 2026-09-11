@@ -18,7 +18,7 @@ import (
 //
 // This is deliberately not an integrations/oauth/* connector: it isolates no
 // real vendor API. A real host swaps in integrations/oauth/google or /github via
-// the same auth.Config.Providers slot.
+// the same authenticationConfig.Providers slot.
 type fakeOAuthProvider struct{}
 
 var _ oauth.Provider = fakeOAuthProvider{}
@@ -26,26 +26,21 @@ var _ oauth.Provider = fakeOAuthProvider{}
 // Name is the provider key in the /auth/oauth/{provider}/* routes.
 func (fakeOAuthProvider) Name() string { return "fake" }
 
-// SupportsOIDC is false: the identity is read from GetUserInfo, not an ID token.
-func (fakeOAuthProvider) SupportsOIDC() bool { return false }
-
-// TrustEmailVerification is true, so a first-seen identity's verified-email claim
-// marks the newly registered user verified — the OAuth-registered user can then
-// pass the host's RequireVerifiedEmail login gate.
-func (fakeOAuthProvider) TrustEmailVerification() bool { return true }
-
 // GetAuthorizationURL builds a fake authorize URL that surfaces the state and the
 // S256 PKCE challenge as query params (so the A9 transcript can note them in the
 // 302 Location), plus a suggested `code` the operator can pass straight to the
 // callback. Any code works — the identity is derived from it.
-func (fakeOAuthProvider) GetAuthorizationURL(state, codeVerifier, nonce, redirectURI string) string {
+func (fakeOAuthProvider) GetAuthorizationURL(req oauth.AuthorizationRequest) (string, error) {
+	if err := req.Validate(); err != nil {
+		return "", err
+	}
 	q := url.Values{}
-	q.Set("state", state)
-	q.Set("code_challenge", oauth.GenerateCodeChallenge(codeVerifier))
+	q.Set("state", req.State)
+	q.Set("code_challenge", oauth.GenerateCodeChallenge(req.CodeVerifier))
 	q.Set("code_challenge_method", "S256")
-	q.Set("redirect_uri", redirectURI)
+	q.Set("redirect_uri", req.RedirectURI)
 	q.Set("code", "oauth-user@fake.local")
-	return "https://oauth.fake.local/authorize?" + q.Encode()
+	return "https://oauth.fake.local/authorize?" + q.Encode(), nil
 }
 
 // ExchangeCode returns a token that carries the authorization code forward as its
@@ -79,14 +74,4 @@ func (fakeOAuthProvider) GetUserInfo(_ context.Context, accessToken string) (*oa
 		Email:          email,
 		EmailVerified:  true,
 	}, nil
-}
-
-// ValidateIDToken is unsupported (no OIDC).
-func (fakeOAuthProvider) ValidateIDToken(context.Context, string, string) (*oauth.IDTokenClaims, error) {
-	return nil, errors.New("fake oauth: OIDC not supported")
-}
-
-// RefreshToken is unsupported.
-func (fakeOAuthProvider) RefreshToken(context.Context, string) (*oauth.TokenResponse, error) {
-	return nil, errors.New("fake oauth: refresh not supported")
 }

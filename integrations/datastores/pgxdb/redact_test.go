@@ -25,6 +25,26 @@ func TestRedactDSN(t *testing.T) {
 			dsn:  "postgres://user:pass@%zz",
 			want: "REDACTED",
 		},
+		{
+			name: "query credentials and duplicates are masked",
+			dsn:  "postgresql://user@localhost/db?password=one&password=two&sslpassword=three&sslmode=require",
+			want: "postgresql://user@localhost/db?password=REDACTED&sslmode=require&sslpassword=REDACTED",
+		},
+		{
+			name: "keyword DSN is opaque",
+			dsn:  "host=localhost user=alice password=secret dbname=app",
+			want: "REDACTED",
+		},
+		{
+			name: "malformed query is opaque",
+			dsn:  "postgres://localhost/db?password=secret%zz",
+			want: "REDACTED",
+		},
+		{
+			name: "fragment is opaque",
+			dsn:  "postgres://localhost/db?password=secret#fragment",
+			want: "REDACTED",
+		},
 	}
 
 	for _, tt := range tests {

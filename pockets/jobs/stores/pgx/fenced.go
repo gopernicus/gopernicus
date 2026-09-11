@@ -10,9 +10,9 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
-	"github.com/gopernicus/gopernicus/pockets/jobs/domain/job"
+	job "github.com/gopernicus/gopernicus/pockets/jobs/logic/queue"
 	"github.com/gopernicus/gopernicus/sdk"
-	"github.com/gopernicus/gopernicus/sdk/foundation/workers"
+	"github.com/gopernicus/gopernicus/sdk/pkg/workers"
 )
 
 // fencedColumns is the fenced_job_queue projection, in fencedRow's field order.
@@ -46,7 +46,11 @@ func (q *FencedQueue) table(name string) string { return q.schema.Table(name) }
 // NewFencedQueueStore returns a FencedQueue backed by db, applying opts
 // (WithSchema). The claim lease is per-claim (the caller supplies leaseFor to
 // Claim), so WithLease is accepted and ignored.
+// It panics if db is nil; the caller owns the database lifecycle.
 func NewFencedQueueStore(db *pgxdb.DB, opts ...Option) *FencedQueue {
+	if db == nil {
+		panic("jobs pgx: NewFencedQueueStore received a nil database")
+	}
 	cfg := newConfig(opts)
 	return &FencedQueue{db: db, schema: cfg.schema}
 }
@@ -366,7 +370,20 @@ func (q *FencedQueue) insertFenced(ctx context.Context, tx *pgxdb.Tx, in job.Enq
 	if id == "" {
 		id = newID("job")
 	}
-	now := time.Now().UTC()
+	// Keyed admission already holds lockKey. Compare at PostgreSQL's stored
+	// precision so repeated/backward clocks cannot put a new generation before
+	// its predecessor (including terminal jobs). Scheduling still uses in.
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	if in.LogicalKey != "" {
+		query := `SELECT MAX(created_at) FROM ` + q.table("fenced_job_queue") + ` WHERE logical_key = @key`
+		var latest *time.Time
+		if err := tx.QueryRow(ctx, query, pgx.NamedArgs{"key": in.LogicalKey}).Scan(&latest); err != nil {
+			return job.Job{}, pgxdb.MapError(err)
+		}
+		if latest != nil && !now.After(*latest) {
+			now = latest.Add(time.Microsecond)
+		}
+	}
 	insert := `INSERT INTO ` + q.table("fenced_job_queue") + ` (` + fencedColumns + `)
 		VALUES (@job_id, @kind, @tenant_id, @payload, 'pending', @priority, 0, @max_attempts, @logical_key,
 		        NULL, NULL, NULL, NULL, @scheduled_for, NULL, NULL, NULL, @created_at, @updated_at)

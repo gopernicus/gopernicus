@@ -13,32 +13,36 @@ import (
 	"syscall"
 
 	"github.com/gopernicus/gopernicus/examples/goth-showcase/internal/showcase"
-	"github.com/gopernicus/gopernicus/sdk/foundation/environment"
-	"github.com/gopernicus/gopernicus/sdk/foundation/logging"
-	"github.com/gopernicus/gopernicus/sdk/foundation/web"
+	"github.com/gopernicus/gopernicus/sdk/pkg/environment"
+	"github.com/gopernicus/gopernicus/sdk/pkg/logging"
+	"github.com/gopernicus/gopernicus/sdk/pkg/web"
 )
 
 func main() {
+	// A missing .env is allowed; malformed configuration must stop startup.
+	if err := environment.LoadEnv(); err != nil {
+		slog.Error("load environment", "error", err)
+		os.Exit(1)
+	}
+
+	logOpts := logging.Options{Format: "text"}
+	if err := environment.ParseEnvTags("", &logOpts); err != nil {
+		slog.Error("configure logging", "error", err)
+		os.Exit(1)
+	}
+	log := logging.New(logOpts)
+
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	if err := run(ctx); err != nil {
-		slog.Error("showcase exited with error", "error", err)
+	if err := run(ctx, log); err != nil {
+		log.Error("showcase exited with error", "error", err)
 		os.Exit(1)
 	}
 }
 
-func run(ctx context.Context) error {
-	// Config comes from the environment through the sdk's struct tags: the
-	// literal pre-seeds this host's own defaults, the environment wins over
-	// them, and an empty value (KEY=) keeps what is already set.
-	logOpts := logging.Options{Format: "text"}
-	if err := environment.ParseEnvTags("", &logOpts); err != nil {
-		return err
-	}
-	log := logging.New(logOpts)
-
-	router := web.NewWebHandler(web.WithLogging(log))
+func run(ctx context.Context, log *slog.Logger) error {
+	router := web.NewWebHandler()
 	router.Use(web.RequestID(), web.Logger(log), web.Panics(log))
 
 	if _, err := showcase.New(router); err != nil {

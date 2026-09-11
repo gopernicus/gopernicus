@@ -26,7 +26,7 @@ func probeDial(t *testing.T) *pgxdb.DB {
 	if dsn == "" {
 		t.Skip("POSTGRES_TEST_DSN not set — postgres store probe NOT verified")
 	}
-	db, err := pgxdb.Open(pgxdb.Config{DSN: dsn})
+	db, err := pgxdb.Open(context.Background(), pgxdb.Config{DSN: dsn})
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}
@@ -69,7 +69,7 @@ func TestSchemaProbe_FullSchema(t *testing.T) {
 	probeResetSchema(t, db)
 	t.Cleanup(func() { probeResetSchema(t, db) })
 
-	if _, err := Repositories(db, storeOpts(testSchema(t))...); err != nil {
+	if _, err := Repositories(context.Background(), db, storeOpts(testSchema(t))...); err != nil {
 		t.Fatalf("Repositories on full schema: %v", err)
 	}
 }
@@ -89,7 +89,7 @@ func TestSchemaProbe_MissingTable(t *testing.T) {
 				t.Fatalf("drop %s: %v", table, err)
 			}
 
-			_, err := Repositories(db, storeOpts(schema)...)
+			_, err := Repositories(context.Background(), db, storeOpts(schema)...)
 			if err == nil {
 				t.Fatalf("Repositories succeeded with %s missing", table)
 			}
@@ -112,7 +112,7 @@ func TestSchemaProbe_InfraFailureNotMisclassified(t *testing.T) {
 	// Close the pool so every subsequent probe query fails at the infra layer.
 	_ = db.Close()
 
-	_, err := Repositories(db, storeOpts(testSchema(t))...)
+	_, err := Repositories(context.Background(), db, storeOpts(testSchema(t))...)
 	if err == nil {
 		t.Fatal("Repositories succeeded against a closed pool")
 	}
@@ -129,7 +129,7 @@ func TestSchemaProbe_CreatesNoSchema(t *testing.T) {
 	probeDropAll(t, db)
 	t.Cleanup(func() { probeResetSchema(t, db) })
 
-	if _, err := Repositories(db, storeOpts(schema)...); err == nil {
+	if _, err := Repositories(context.Background(), db, storeOpts(schema)...); err == nil {
 		t.Fatal("Repositories succeeded against an empty database")
 	}
 

@@ -6,7 +6,7 @@
 // repaired, applies the data-preserving conversion (ALTER-add the three CHECK
 // constraints the canonical CREATE TABLE IF NOT EXISTS cannot add to a pre-existing
 // table + the canonical 0003/0004 new tables), seeds revision anchors, BOOTS a
-// v3-composed authorization.Service over the converted store, and asserts the
+// v3-composed mutations.Service over the converted store, and asserts the
 // gain/lose/retain access verdicts from the UPGRADE.md §2 assessment table hold. It
 // then exercises the documented rollback boundary.
 //
@@ -20,13 +20,16 @@ package pgx
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
-	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
+	"github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
 	"github.com/gopernicus/gopernicus/pockets/authorization"
-	"github.com/gopernicus/gopernicus/pockets/authorization/domain/mutation"
-	"github.com/gopernicus/gopernicus/pockets/authorization/domain/relationship"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/decisions"
+	authmodel "github.com/gopernicus/gopernicus/pockets/authorization/logic/model"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/mutations"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/relationships"
 )
 
 // v1BaselineDDL is the pre-v3 schema reconstructed verbatim from git d11c7a2
@@ -108,33 +111,33 @@ var dataPreservingConstraints = []string{
 // concrete group, group#member, and group#admin as DISTINCT subjects; doc.owner
 // backs the guardian last-owner invariant; org.member requires a group#member
 // userset (making the concrete org:o1 row ambiguous).
-func upgradeSchema() authorization.Schema {
-	return authorization.NewSchema([]authorization.ResourceSchema{
-		{Name: "group", Def: authorization.ResourceTypeDef{
-			Relations: map[string]authorization.RelationDef{
-				"member": {AllowedSubjects: []authorization.SubjectTypeRef{{Type: "user"}, {Type: "group", Relation: "member"}}},
-				"admin":  {AllowedSubjects: []authorization.SubjectTypeRef{{Type: "user"}}},
+func upgradeSchema() relationships.Schema {
+	return relationships.NewSchema([]relationships.ResourceSchema{
+		{Name: "group", Def: relationships.ResourceTypeDef{
+			Relations: map[string]relationships.RelationDef{
+				"member": {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "user"}, {Type: "group", Relation: "member"}}},
+				"admin":  {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "user"}}},
 			},
 		}},
-		{Name: "org", Def: authorization.ResourceTypeDef{
-			Relations: map[string]authorization.RelationDef{
-				"member": {AllowedSubjects: []authorization.SubjectTypeRef{{Type: "group", Relation: "member"}}},
+		{Name: "org", Def: relationships.ResourceTypeDef{
+			Relations: map[string]relationships.RelationDef{
+				"member": {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "group", Relation: "member"}}},
 			},
 		}},
-		{Name: "doc", Def: authorization.ResourceTypeDef{
-			Relations: map[string]authorization.RelationDef{
-				"viewer": {AllowedSubjects: []authorization.SubjectTypeRef{
+		{Name: "doc", Def: relationships.ResourceTypeDef{
+			Relations: map[string]relationships.RelationDef{
+				"viewer": {AllowedSubjects: []relationships.SubjectTypeRef{
 					{Type: "user"},
 					{Type: "group"},
 					{Type: "group", Relation: "member"},
 					{Type: "group", Relation: "admin"},
 					{Type: "org", Relation: "member"},
 				}},
-				"owner": {AllowedSubjects: []authorization.SubjectTypeRef{{Type: "user"}}},
+				"owner": {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "user"}}},
 			},
-			Permissions: map[string]authorization.PermissionRule{
-				"view":   authorization.AnyOf(authorization.Direct("viewer")),
-				"manage": authorization.AnyOf(authorization.Direct("owner")),
+			Permissions: map[string]relationships.PermissionRule{
+				"view":   relationships.AnyOf(relationships.Direct("viewer")),
+				"manage": relationships.AnyOf(relationships.Direct("owner")),
 			},
 		}},
 	})
@@ -148,7 +151,7 @@ func TestUpgradeRunbook(t *testing.T) {
 	dsn := requireDSN(t)
 	ctx := context.Background()
 
-	db, err := pgxdb.Open(pgxdb.Config{DSN: dsn})
+	db, err := pgxdb.Open(context.Background(), pgxdb.Config{DSN: dsn})
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}
@@ -156,7 +159,7 @@ func TestUpgradeRunbook(t *testing.T) {
 
 	ensureSchema(t, db)
 	dropAll := func() {
-		for _, tbl := range []string{"iam_mutations", "iam_scopes", "iam_roles", "iam_relationships"} {
+		for _, tbl := range []string{"iam_audit", "iam_mutations", "iam_scopes", "iam_roles", "iam_relationships"} {
 			_, _ = db.Exec(ctx, "DROP TABLE IF EXISTS "+qualify(t, tbl)+" CASCADE")
 		}
 		// Clear the ledger rows for the canonical versions (the host runner records
@@ -240,36 +243,22 @@ func TestUpgradeRunbook(t *testing.T) {
 	if err := pgxdb.RunMigrations(ctx, db, MigrationsFS, MigrationsDir, migrateOptions(t)...); err != nil {
 		t.Fatalf("apply canonical migrations: %v", err)
 	}
-	// (c) seed revision-0 anchors (CONVERSION.md §3).
-	if _, err := db.Exec(ctx, qualifySQL(t, `INSERT INTO iam_scopes (scope_kind, scope_type, scope_id)
-		SELECT DISTINCT 'resource', resource_type, resource_id FROM iam_relationships
-		UNION SELECT DISTINCT 'resource', resource_type, resource_id FROM iam_roles WHERE resource_type <> ''
-		ON CONFLICT DO NOTHING`)); err != nil {
-		t.Fatalf("seed resource anchors: %v", err)
-	}
-	if _, err := db.Exec(ctx, qualifySQL(t, `INSERT INTO iam_scopes (scope_kind, scope_type, scope_id)
-		SELECT DISTINCT 'subject', subject_type, subject_id FROM iam_roles WHERE resource_type = ''
-		ON CONFLICT DO NOTHING`)); err != nil {
-		t.Fatalf("seed subject anchors: %v", err)
-	}
-	// Every seeded anchor is revision 0, and no receipt is backfilled.
-	if n := countRows(t, ctx, db, `SELECT count(*) FROM iam_scopes WHERE revision <> 0`); n != 0 {
-		t.Fatalf("a seeded anchor carried a nonzero revision (n=%d)", n)
-	}
-	if n := countRows(t, ctx, db, `SELECT count(*) FROM iam_mutations`); n != 0 {
-		t.Fatalf("iam_mutations must be empty after conversion, got %d receipts", n)
+	if n := countRows(t, ctx, db, `SELECT count(*) FROM iam_audit`); n != 0 {
+		t.Fatalf("upgrade invented audit history: %d", n)
 	}
 
 	// ---- Boot a v3-composed service over the converted store ----
-	repos, err := Repositories(db, storeOptions(t)...)
+	repos, err := Repositories(context.Background(), db, append(storeOptions(t), WithGuardianPolicy(mutations.GuardianPolicy{
+		Rules: []mutations.GuardianRule{{ResourceType: "doc", Relation: "owner", MinAnchors: 1}},
+	}))...)
 	if err != nil {
 		t.Fatalf("boot Repositories over converted store: %v", err)
 	}
-	comps, err := authorization.NewService(repos, authorization.Config{RelationshipModel: upgradeSchema()})
+	comps, err := authorization.New(repos, authorization.WithRelationshipModel(upgradeSchema()))
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
-	svc := comps.Service
+	svc := comps.Decisions
 
 	// ---- Access comparison: the gain/lose/retain verdicts from UPGRADE.md §2 ----
 	// RETAIN: a concrete principal grant is unchanged.
@@ -285,10 +274,10 @@ func TestUpgradeRunbook(t *testing.T) {
 	// The ambiguous org:o1 row, left concrete, is NEVER silently read as member: a
 	// member of gorg does not reach org:o1 (no member could, since gorg has no members
 	// here — the point is v3 does not fabricate the userset).
-	orgRes, err := svc.Check(ctx, authorization.CheckRequest{
-		Principal:  authorization.PrincipalRef{Type: "user", ID: "umem"},
+	orgRes, err := svc.Check(ctx, authmodel.CheckRequest{
+		Principal:  authmodel.PrincipalRef{Type: "user", ID: "umem"},
 		Permission: "view",
-		Resource:   authorization.Resource{Type: "doc", ID: "dcon"},
+		Resource:   authmodel.Resource{Type: "doc", ID: "dcon"},
 	})
 	if err != nil {
 		t.Fatalf("ambiguous-row check: %v", err)
@@ -298,27 +287,23 @@ func TestUpgradeRunbook(t *testing.T) {
 	}
 
 	// The global role still satisfies HasRole; the scoped role is scoped.
-	if ok, err := svc.HasRole(ctx, authorization.PrincipalRef{Type: "user", ID: "uglob"}, "platform_admin", "doc", "anything"); err != nil || !ok {
+	if ok, err := comps.Roles.HasRole(ctx, authmodel.PrincipalRef{Type: "user", ID: "uglob"}, "platform_admin", "doc", "anything"); err != nil || !ok {
 		t.Fatalf("global role must satisfy a scoped HasRole (ok=%v err=%v)", ok, err)
 	}
-	if ok, err := svc.HasRole(ctx, authorization.PrincipalRef{Type: "user", ID: "uscope"}, "editor", "doc", "dscope"); err != nil || !ok {
+	if ok, err := comps.Roles.HasRole(ctx, authmodel.PrincipalRef{Type: "user", ID: "uscope"}, "editor", "doc", "dscope"); err != nil || !ok {
 		t.Fatalf("scoped role must hold at its scope (ok=%v err=%v)", ok, err)
 	}
 
 	// ---- Last-owner invariant holds on the converted store ----
 	// Revoking downed's only owner is blocked by the guardian (owner, min 1).
-	revoke := mutation.Command{
-		MutationID:    mutID(t),
-		Scope:         mutation.ScopeKey{Kind: mutation.ScopeResource, Type: "doc", ID: "downed"},
-		Operation:     mutation.OpRevoke,
-		Relationships: []mutation.RelationshipRow{{Relation: "owner", Subject: relationship.SubjectRef{Type: "user", ID: "uowner"}}},
+	revoke := mutations.Command{
+		Target:        mutations.Target{Kind: mutations.TargetResource, Type: "doc", ID: "downed"},
+		Operation:     mutations.OpRevoke,
+		Relationships: []mutations.RelationshipRow{{Relation: "owner", Subject: relationships.SubjectRef{Type: "user", ID: "uowner"}}},
 	}
 	rcpt, err := repos.Mutations.Apply(ctx, revoke, nil)
-	if err != nil {
-		t.Fatalf("last-owner revoke Apply: %v", err)
-	}
-	if rcpt.Outcome != mutation.OutcomeInvariantBlocked {
-		t.Fatalf("last-owner revoke outcome = %q, want invariant_blocked", rcpt.Outcome)
+	if !errors.Is(err, mutations.ErrInvariantBlocked) || rcpt != nil {
+		t.Fatalf("last-owner revoke must return no receipt and invariant rejection: %+v, %v", rcpt, err)
 	}
 	if ok, _ := repos.Relationships.CheckRelationExists(ctx, "doc", "downed", "owner", "user", "uowner"); !ok {
 		t.Fatal("a blocked last-owner revoke must leave the owner in place")
@@ -328,23 +313,17 @@ func TestUpgradeRunbook(t *testing.T) {
 	// Before any v3 mutation commits: a v1-style write reintroducing a malformed row
 	// is now rejected by the applied constraint — hand-reversing repairs is unsafe,
 	// so restore-from-backup is the rollback mechanism.
-	if _, err := db.Exec(ctx, qualifySQL(t, `INSERT INTO iam_relationships (resource_type,resource_id,relation,subject_type,subject_id,created_at) VALUES ('doc','dx','','user','ux', now())`)); err == nil {
+	if _, err := db.Exec(ctx, qualifySQL(t, `INSERT INTO iam_relationships (resource_type,resource_id,relation,subject_type,subject_id) VALUES ('doc','dx','','user','ux')`)); err == nil {
 		t.Fatal("the applied constraint must reject a v1-style malformed reintroduction")
 	}
-	// The first committed v3 mutation is the rollback boundary: after it, a receipt
-	// exists and the scope revision has advanced past the seeded 0, so resuming a v1
-	// binary (which ignores both) would desync — past this line rollback means
-	// restore-from-backup, not an in-place downgrade.
-	grant := grantCmd(mutID(t), "downed", "viewer", "unew")
-	if _, err := repos.Mutations.Apply(ctx, grant, nil); err != nil {
-		t.Fatalf("first v3 mutation: %v", err)
+	// New facts use the natural tuple identity and current invariant checks.
+	if _, err := repos.Mutations.Apply(ctx, grantCmd("downed", "viewer", "unew"), nil); err != nil {
+		t.Fatal(err)
 	}
-	if n := countRows(t, ctx, db, `SELECT count(*) FROM iam_mutations`); n == 0 {
-		t.Fatal("the first v3 mutation must persist a receipt (the rollback boundary)")
+	if n := countRows(t, ctx, db, `SELECT count(*) FROM iam_relationships WHERE resource_id='downed' AND subject_id='unew'`); n != 1 {
+		t.Fatalf("new fact count=%d", n)
 	}
-	if rev := countRows(t, ctx, db, `SELECT revision FROM iam_scopes WHERE scope_kind='resource' AND scope_type='doc' AND scope_id='downed'`); rev == 0 {
-		t.Fatal("the first v3 mutation must advance the scope revision past the seeded 0")
-	}
+
 }
 
 func countRows(t *testing.T, ctx context.Context, db *pgxdb.DB, query string) int64 {
@@ -356,12 +335,12 @@ func countRows(t *testing.T, ctx context.Context, db *pgxdb.DB, query string) in
 	return n
 }
 
-func mustCheck(t *testing.T, ctx context.Context, svc *authorization.Service, subjType, subjID, docID string, want bool, label string) {
+func mustCheck(t *testing.T, ctx context.Context, svc *decisions.Service, subjType, subjID, docID string, want bool, label string) {
 	t.Helper()
-	res, err := svc.Check(ctx, authorization.CheckRequest{
-		Principal:  authorization.PrincipalRef{Type: subjType, ID: subjID},
+	res, err := svc.Check(ctx, authmodel.CheckRequest{
+		Principal:  authmodel.PrincipalRef{Type: subjType, ID: subjID},
 		Permission: "view",
-		Resource:   authorization.Resource{Type: "doc", ID: docID},
+		Resource:   authmodel.Resource{Type: "doc", ID: docID},
 	})
 	if err != nil {
 		t.Fatalf("%s: Check(%s:%s, doc:%s): %v", label, subjType, subjID, docID, err)

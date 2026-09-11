@@ -8,8 +8,8 @@ import (
 
 	firestoredb "github.com/gopernicus/gopernicus/integrations/datastores/firestore"
 	"github.com/gopernicus/gopernicus/integrations/datastores/firestore/firestoretest"
-	"github.com/gopernicus/gopernicus/pockets/authorization/domain/mutation"
-	"github.com/gopernicus/gopernicus/pockets/authorization/domain/relationship"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/mutations"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/relationships"
 	"github.com/gopernicus/gopernicus/sdk"
 )
 
@@ -34,15 +34,13 @@ func TestRetryableConflictClassifiesByIdentity(t *testing.T) {
 		want bool
 	}{
 		{name: "a mapped Aborted from a transactional read", err: mappedAborted, want: true},
-		{name: "a mapped Aborted wrapped by a caller", err: fmt.Errorf("reading the anchor: %w", mappedAborted), want: true},
-		{name: "a bare conflict (an emulator lock timeout maps here)", err: sdk.ErrConflict, want: true},
-		{name: "the store's own receipt race", err: errReceiptRaced, want: true},
+		{name: "a mapped Aborted wrapped by a caller", err: fmt.Errorf("reading the tuple: %w", mappedAborted), want: true},
+		{name: "a bare conflict does not prove an abort", err: sdk.ErrConflict, want: false},
 
-		{name: "a stale revision is a permanent refusal", err: mutation.ErrStaleRevision, want: false},
-		{name: "a payload mismatch is a permanent refusal", err: mutation.ErrPayloadMismatch, want: false},
-		{name: "an invalid command is a shape refusal", err: mutation.ErrInvalidCommand, want: false},
+		{name: "an invalid command is a shape refusal", err: mutations.ErrInvalidCommand, want: false},
+		{name: "a semantic conflict is a permanent refusal", err: mutations.ErrSemanticConflict, want: false},
+		{name: "an invariant refusal is permanent", err: mutations.ErrInvariantBlocked, want: false},
 		{name: "the reconciliation's relation conflict is deterministic", err: errTargetRelationConflict, want: false},
-		{name: "a wrapped stale revision is still terminal", err: fmt.Errorf("apply: %w", mutation.ErrStaleRevision), want: false},
 
 		{name: "a forbidden guard denial is an answer", err: sdk.ErrForbidden, want: false},
 		{name: "row/claim drift is a store-integrity failure", err: sdk.ErrUnavailable, want: false},
@@ -55,6 +53,25 @@ func TestRetryableConflictClassifiesByIdentity(t *testing.T) {
 				t.Fatalf("retryableConflict(%v) = %v, want %v", tc.err, got, tc.want)
 			}
 		})
+	}
+}
+
+func TestGuardReadContentionIsDistinctFromPolicyRefusal(t *testing.T) {
+	contention := firestoredb.MapError(firestoretest.AbortedError("guard read contention"))
+	readErr := markGuardReadError(contention)
+	if !retryableGuardRead(fmt.Errorf("guard lookup: %w", readErr)) || !errors.Is(readErr, contention) {
+		t.Fatalf("propagated view read lost retry identity: %v", readErr)
+	}
+	for _, refusal := range []error{contention, sdk.ErrConflict, mutations.ErrSemanticConflict, mutations.ErrInvariantBlocked,
+		errors.Join(readErr, sdk.ErrForbidden)} {
+		if retryableGuardRead(refusal) {
+			t.Fatalf("policy refusal was classified as retryable: %v", refusal)
+		}
+	}
+	for _, refusal := range []error{mutations.ErrSemanticConflict, mutations.ErrInvariantBlocked} {
+		if got := detachVendorRetry(refusal); got != refusal {
+			t.Fatalf("refusal identity changed: %v", got)
+		}
 	}
 }
 
@@ -112,11 +129,11 @@ func TestRetryContentionStopsOnTerminalAndDrainsRetryable(t *testing.T) {
 		}
 	})
 
-	t.Run("the final error is mapped", func(t *testing.T) {
+	t.Run("the final store error is mapped", func(t *testing.T) {
 		// A raw vendor status must not leave the store without a sentinel, so
 		// the loop runs its answer through MapError once.
 		err := retryContention(ctx, func() (error, bool) {
-			return firestoretest.AbortedError("raw"), true
+			return firestoretest.AbortedError("raw"), false
 		})
 		if !errors.Is(err, sdk.ErrConflict) {
 			t.Fatalf("err = %v, want it mapped to sdk.ErrConflict", err)
@@ -124,9 +141,19 @@ func TestRetryContentionStopsOnTerminalAndDrainsRetryable(t *testing.T) {
 	})
 
 	t.Run("a domain refusal is returned byte-identical", func(t *testing.T) {
-		refusal := relationship.ErrExpansionBudgetExceeded
+		refusal := relationships.ErrExpansionBudgetExceeded
 		if err := retryContention(ctx, func() (error, bool) { return refusal, false }); err != refusal {
 			t.Fatalf("err = %v, want the identical refusal", err)
 		}
 	})
+}
+
+func TestAmbiguousCommitErrorsNeverReplayOperation(t *testing.T) {
+	for _, err := range []error{sdk.ErrUnavailable, context.DeadlineExceeded, errors.New("connection lost after commit"), sdk.ErrConflict} {
+		calls := 0
+		got := retryContention(context.Background(), func() (error, bool) { calls++; return err, false })
+		if calls != 1 || got == nil {
+			t.Fatalf("ambiguous result replayed: %v calls=%d got=%v", err, calls, got)
+		}
+	}
 }

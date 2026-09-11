@@ -45,7 +45,7 @@ func TestConformance_Turso(t *testing.T) {
 	}
 
 	storetest.Run(t, func(t *testing.T) cms.Repositories {
-		db, err := tursodb.Open(tursodb.Config{URL: url, AuthToken: token})
+		db, err := tursodb.Open(context.Background(), tursodb.Config{URL: url, AuthToken: token})
 		if err != nil {
 			t.Fatalf("connect: %v", err)
 		}

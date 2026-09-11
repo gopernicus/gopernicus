@@ -1,181 +1,134 @@
-# pockets/authorization/stores/pgx
+# Authorization on PostgreSQL
 
-The authorization pocket's **PostgreSQL** store adapter — the dialect sibling of
-`pockets/authorization/stores/turso`. Its own module so a host that brings a
-different datastore never pulls `pgx` into its module graph. It owns the SQL and
-the canonical migration files; the host owns its database lifecycle.
-
-It fills **all three** outbound ports over the `integrations/datastores/pgxdb`
-connector:
-
-- `relationship.Storer` over **`iam_relationships`** — the ReBAC tuple store
-  (group expansion and descendant lookup as recursive CTEs). Its baseline
-  `SetRelationTargets` uses a transaction-scoped advisory lock per
-  resource+relation, so competing desired states serialize and never union.
-- `role.Storer` over **`iam_roles`** — the roles kind's plain assignment lookups.
-- `mutation.MutationRepository` — the atomic v3 write path over the shared `iam_*`
-  tables plus the **`iam_scopes`** revision anchors and **`iam_mutations`**
-  receipts. One `Apply`/`ApplyGuarded` is a single write-serializing transaction:
-  it locks the mutation scope plus every guard-observed dependency anchor
-  `FOR UPDATE` in canonical order, re-validates the observed revisions,
-  de-duplicates by receipt, evaluates the guardian invariant, applies all rows or
-  none, bumps the scope revision exactly once, and mints the receipt — the scope
-  anchor lock is the concurrency spine (two last-owner revokes cannot both commit;
-  a replay storm has exactly one first application).
-
-Timestamps are `TIMESTAMPTZ` (postgres orders them natively; no lexicographic-`TEXT`
-convention needed). `iam_relationships` rows are **immutable** — no `updated_at`;
-a relationship is deleted and recreated. Representation changes vs turso; structure
-and port semantics do not.
-
-## ⚠️ Prerequisite: apply the `authorization` migration source before wiring
-
-Both tables belong to migration source **`authorization`**, distinct from
-`cms`/`auth`/`jobs`/`events`. The shared `(source, version)` migration ledger
-expresses **no ordering between sources**, so a host that scaffolds another
-pocket's migrations but not this store's would fail at *runtime*, not boot.
-
-**`Repositories(db)` guards against exactly that:** it probes for **all four**
-`iam_relationships`, `iam_roles`, `iam_scopes`, and `iam_mutations` tables at
-construction (`SELECT to_regclass($1)`) and returns `errs.ErrNotFound` — naming the
-specific missing table — if the `authorization` source has not been applied. The
-failure surfaces at wiring time, before the host serves traffic. Scaffold this
-store's migrations with `ExportMigrations` and apply them with your host's runner
-pre-boot, alongside every other pocket source you wire.
-
-A deliberately baseline-only host may call `RelationshipRepository(db)` instead;
-it probes only `iam_relationships` and returns no mutation repository. Applying
-the wholesale canonical source remains the normal migration practice.
-
-**Hosts never renumber** the scaffolded files: the filenames are the shared
-`(source, version)` ledger keys and the turso sibling carries the byte-identical
-set (same filename == same logical schema step; content is per-dialect).
-
-## Kinds are port-optional; the schema is wholesale
-
-The two kinds (relationships, roles) are independently wireable at the
-**port/behavior level** — but the **schema is NOT per-kind**. Both `iam_*` tables
-scaffold into every adopting host regardless of which kinds it wires (the §2.1
-bounding rule applied intra-pocket). A **roles-only** adopter still applies the
-FULL `authorization` source, `iam_relationships` included, and both boot probes
-expect both tables.
-
-**Kind selection is the host's wiring choice.** `Repositories(db)` always returns
-both kinds AND the atomic mutation repository wired; a host wanting a single kind
-zeroes the other `authorization.Repositories` field after construction, or wires
-its own single-kind `Repositories`. A nil kind field turns that kind OFF
-structurally (deny-by-absence) at `authorization.NewService`.
-
-## Surface
-
-| member | shape |
-|---|---|
-| `RelationshipRepository(db *pgxdb.DB, opts ...Option) (relationship.Storer, error)` | baseline-only constructor; probes only `iam_relationships`, so the host may wire `Repositories{Relationships: repo}` with `.Mutations == nil` |
-| `Repositories(db *pgxdb.DB, opts ...Option) (authorization.Repositories, error)` | all three ports wired (relationships, roles, atomic mutations); errors if any `iam_*` table is missing (boot-time probe, names the missing table) |
-| `WithGuardianPolicy(p mutation.GuardianPolicy) Option` | overrides the mutation repository's guardian invariant (default: owner protected on every type, min one direct anchor) — mirrors the memstore option |
-| `WithSchema(s pgxdb.Schema) Option` | places every `iam_*` table this store touches in `s`; the zero `Schema` (the default) renders today's unqualified SQL byte-for-byte. **Postgres-only** — the turso sibling has no counterpart, SQLite has no schemas |
-| `ExportMigrations(dst string) error` | copies the canonical `migrations/*.sql` into the host's dir |
-| `MigrationsFS` / `MigrationsDir` | the embedded canonical migration files |
-
-## Schema
-
-By default every statement names its table bare, so the tables land wherever the
-host's connection resolves them. `WithSchema` places the whole `iam_*` set in one
-named schema instead:
+This adapter supplies relationship, role, atomic mutation and audit-reader ports
+from one store. Hosts own database connections and apply the complete
+`authorization` migration source before construction. The framework does not
+migrate at boot.
 
 ```go
-s, err := pgxdb.NewSchema("auth") // validated at the host; WithSchema never panics
-if err != nil { ... }
-
-// Migrate that stream into the schema — its own call, its own ledger.
-if err := pgxdb.RunMigrations(ctx, db, authFS, "migrations/auth", pgxdb.WithSchema(s)); err != nil { ... }
-
-repos, err := pgx.Repositories(db, pgx.WithSchema(s))
+repos, err := pgx.Repositories(ctx, db, pgx.WithSchema(schema), pgx.WithAudit())
+if err != nil {
+    return err
+}
+ctx = authorization.WithAuditSource(ctx, authorization.AuditSource{
+    System: "document-sync",
+    Reason: "project current document access",
+})
+err = repos.Relationships.CreateRelationships(ctx, tuples)
 ```
 
-Both sides must agree: a store constructed for a schema its migrations never
-reached fails the boot-time probe, naming the qualified table. The option is
-per-store-set, not per-repository — **per-repository different schemas are out of
-scope**: the constructors mechanically allow it, but the one-stream-per-schema
-migration model gives it no story, and the four `iam_*` tables are one wholesale
-schema.
+Use `WithAudit()` only when new changes should be recorded. The default is off;
+`repos.Audit` still lists previously retained history. `WithGuardianPolicy(policy)`
+installs explicit relationship invariants; its default is empty.
+`GuardianPolicy()` returns a defensive snapshot and `authorization.New`
+validates configured rules against the host relationship model.
 
-The `pg_advisory_xact_lock` that serializes `SetRelationTargets` is **database**-scoped,
-not schema-scoped: two hosts sharing one database and the same
-`resourceType/resourceID/relation` lock key contend across schemas. That is not a
-regression (it is equally true under a `search_path` pin today), and it is a
-serialization point only — never a correctness one.
+`RelationshipRepository(ctx, db, opts...)` supports baseline-only host composition
+without constructing a mutation repository. It accepts the same store options.
+It probes both fact tables because writes lock both; WithAudit also requires iam_audit.
 
-## Migrations
+## Writes and history
 
-The canonical set (source `authorization`) carries the **byte-identical filename
-set** as the turso sibling:
+Raw relationship and role methods are trusted state-writing ports. They join an
+ambient connector transaction or own a transaction. `SetRelationTargets` applies
+one desired relation set atomically; a conflicting existing relation returns
+`sdk.ErrConflict` and preserves the previous set. Raw relationship creates retain
+an existing subject relation on conflict. Atomic commands apply current model
+validation, optional guards and configured guardian invariants on every call.
 
-- `migrations/0001_iam_relationships.sql` — the ReBAC tuple store.
-  `relationship_id` carries an inline `DEFAULT gen_random_uuid()::text` so a
-  `cryptids.Database`-wired host lets the DB mint the key. The
-  `idx_iam_relationships_unique_subject` index (WITHOUT `relation`) enforces the
-  ratified one-relation-per-exact-`SubjectRef` rule.
-- `migrations/0002_iam_roles.sql` — the roles assignment store. Scope columns are
-  `NOT NULL DEFAULT ''` so a global grant (empty resource pair) participates in
-  the unique index; the `ck_iam_roles_scope_pair` constraint keeps that pair
-  consistent (both empty or both non-empty).
-- `migrations/0003_iam_scopes.sql` — the scope **revision anchors** (v3 write
-  path). One row per resource/subject scope; `revision` is the monotonic anchor
-  the atomic mutation repositories bump and validate under lock.
-- `migrations/0004_iam_mutations.sql` — the mutation **receipts** (idempotency
-  ledger, keyed by MutationID). Stores the payload digest, resulting revision,
-  domain outcome, and governing schema digest — never the payload itself.
-  `expires_at` is nullable; **permanent retention is the default posture**.
-- `migrations/0005_iam_lookup_keyset.sql` — the **keyset access paths** for the
-  paged lookups. The four `Lookup*` reads page by resource id (`… AND resource_id
-  > @after ORDER BY resource_id LIMIT @limit`), and neither
-  `idx_iam_relationships_type_relation` nor `idx_iam_roles_subject` carries
-  `resource_id`, so without these two indexes every page would sort the whole
-  matching set. It adds `idx_iam_relationships_type_relation_resource
-  (resource_type, relation, resource_id COLLATE "C")` — the `COLLATE "C"` matches
-  the per-query pin the lookup SQL carries, because the engine merges these ID
-  streams by Go string comparison and `resource_id` is deliberately uncollated in
-  0001 — and `idx_iam_roles_subject_resource_lookup (subject_type, subject_id,
-  resource_type, resource_id, role)`, which answers the roles lookup as an
-  index-only scan. Both are **ordinary transactional** `CREATE INDEX IF NOT
-  EXISTS` statements (the runner applies the stream in one transaction, so
-  `CONCURRENTLY` is not available): each build holds a SHARE lock on its table —
-  reads proceed, writes wait — so schedule the upgrade on a large existing table.
-  `TestLookupPlansAtScale` is the measurement: at ~1e6 tuples it EXPLAINs every
-  lookup shape and asserts the selected access paths.
+Successful commands return `mutation.Result` containing the current Outcome and
+SameRoleGrantRemains annotation. Semantic and invariant refusals return an error
+and a nil result. There are no durable operation IDs, receipts, replay tokens,
+expected revisions or revision counters. Repeating a command evaluates current
+state and policy; natural tuple duplicates remain no-ops.
 
-After export, the host owns the final migration stream in its own dir.
+With recording enabled, every supported raw or command write requires a valid
+source before work, including no-op attempts. Supply either an actor type/ID pair
+or an explicit system name, with an optional bounded reason. Actor-facing service
+methods replace attribution with their validated actor. Source metadata never
+confers permission.
 
-**Upgrading an existing v1 database?** See
-[`../CONVERSION.md`](../CONVERSION.md) for the v1 → v3 detection-and-repair draft
-(invalid/missing userset relations, silent-conflict awareness, scope-revision
-seeding — and the standing rule that an ambiguous userset relation is an operator
-decision, never an automatic `member` grant). The full host upgrade runbook —
-backup, window, binary stop, audit/repair, apply/seed, boot, rollback boundary,
-and the gain/lose/retain access assessment — is [`../UPGRADE.md`](../UPGRADE.md).
+Each actual added or removed tuple/role produces one `audit.Record`; EventID
+only groups the records of a changed call. Records preserve the complete six-field
+relationship identity or five-field role identity. Replacements record removal
+and addition, broad deletes record every removed fact, and resource teardown
+includes scoped roles. No-ops, refused operations and rollbacks record nothing.
+Timestamps use UTC microseconds and describe when the operation records its
+changes, rather than a separate commit-order sequence.
 
-## Testing
+Facts and their audit records use the same transaction. Ambient operations use a
+savepoint: an audit failure rolls back that operation even when the host handles
+its error and commits other work. Failure to restore the savepoint aborts the
+host transaction. Multiple calls in one host transaction produce separate event
+groups that commit or roll back together. Guarded/command methods refuse an
+ambient transaction with `ErrGuardedInsideTransaction`.
 
-`go test ./...` is hermetic: the `ExportMigrations` unit test runs, and the live
-conformance suite **skips loudly** without a DSN (`POSTGRES_TEST_DSN not set —
-postgres conformance NOT verified`). Unlike the turso sibling (which is
-`-tags=integration`), this store follows the pgx convention of plain env-gating —
-no build tag. The live run — the dialect-parity gate covering the named
-adversarial sub-runners and the `Roles/*` family — runs against a dockered
-postgres:
+`repos.Audit.List(ctx, audit.Filter{...}, list.Request{...})` supports exact
+optional resource, subject and actor pairs, standard cursor/offset pagination
+and totals. Each filter pair is both-or-neither. Ordering defaults to
+`occurred_at DESC` with record ID as the tiebreak; ASC is also supported. Hosts
+own access control, retention, presentation and export. No audit HTTP route is
+installed. Direct database edits and writes through a separately constructed
+store with recording disabled are outside recorded coverage.
 
-```sh
-docker run --rm -d -p 5432:5432 -e POSTGRES_PASSWORD=postgres postgres:17
-POSTGRES_TEST_DSN='postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable' \
-  go test -count=1 ./...
-```
+## Concurrency
 
-Setting `POSTGRES_TEST_SCHEMA` additionally runs the whole live suite inside that
-schema — migrations through `pgxdb.WithSchema`, stores through `WithSchema`, and
-every hand-rolled fixture statement qualified — which is the behavioral proof that
-no statement fell back to an unqualified name. Unset, every fixture behaves
-exactly as it always has.
+Every mutation-owned transaction explicitly uses READ COMMITTED and takes
+`SHARE ROW EXCLUSIVE` locks on the schema-qualified relationship table followed
+by the role table, before guard or state reads. Raw writes take the same locks.
+These locks also conflict with ordinary SQL INSERT/UPDATE/DELETE, so negative
+membership checks, nested usersets and global-role reads stay stable through
+commit without revision anchors. Ordinary SELECTs remain concurrent.
 
-`make check` stays hermetic (the suite skips); `make test-stores` runs this live
-path expecting `POSTGRES_TEST_DSN`.
+This deliberately serializes authorization writers per schema. An ambient host
+transaction retains the locks until its own commit; keep such workflows short.
+The adapter preserves an ambient transaction's isolation level and captures its
+actual INSERT/DELETE RETURNING rows. Host transactions that already acquired
+locks in another order can deadlock. Their caller owns rollback/retry. Owned
+trusted writes have bounded, cancellation-aware retries for PostgreSQL's definite
+40001/40P01 transaction aborts; guarded writes report
+`mutation.ErrConcurrentMutation` without rerunning the guard. Unknown commit or
+transport failures never replay internally.
+
+## Reads and tuple identity
+
+Relationships use the full tuple as their SQL primary key:
+resource type, resource ID, relation, subject type, subject ID, subject relation.
+Roles retain their natural five-field key. Neither fact type stores a surrogate
+relationship ID or CreatedAt. The independent one-relation-per-exact-subject
+constraint remains; distinct userset relations remain distinct subjects.
+
+Relationship lists order by `tuple_key ASC`; role lists by `role_key ASC`.
+Keys join canonical fields with U+0001, which validation forbids inside a field.
+PostgreSQL ordering expressions explicitly use COLLATE "C".
+Model-bound readers filter persisted facts through the current host model.
+Recursive userset expansion retains exact userset relation identity, detects
+cycles and enforces the same expansion-state budget in ordinary and guarded
+reads. Physical scan cost remains planner-dependent.
+
+## Migration and deployment
+
+Export the canonical files with `ExportMigrations(dst)` and apply them using the
+host's runner. Fresh databases apply 0001 through 0007. Keep earlier deployed
+migration files unchanged.
+
+0006 removes relationship IDs and fact timestamps, preserving full tuple keys.
+It rejects legacy U+0001 separators before dropping metadata; repair those
+records explicitly and rerun. 0007 drops `iam_scopes` and `iam_mutations`, creates
+`iam_audit` and its time/resource/subject/actor listing indexes. Old receipts do
+not contain enough information to reconstruct actor-attributed fact history;
+the migration does not invent it.
+
+Stop old writers before upgrading. Archive legacy receipt/revision tables first
+if needed, apply the complete migration source, then deploy the new binary.
+An old binary cannot operate against the new schema. Rollback requires a
+compatible backup or a deliberate host migration; do not resume old writers
+against partially upgraded tables.
+
+WithSchema(schema) qualifies every runtime table and audit query. Apply migrations with the matching pgxdb.WithSchema(schema); constructor probes catch missing tables before serving requests.
+
+## Verification
+
+Set POSTGRES_TEST_DSN and run `go test -race -count=1 ./...`. Repeat with POSTGRES_TEST_SCHEMA to exercise a named schema. The optional non-C locale proof requires its documented locale fixture.
+Live tests include shared fact/mutation/audit conformance, exact userset deltas,
+ambient savepoint recovery, retained readers, pagination and populated upgrades.

@@ -23,10 +23,10 @@ below. Rulings R1–R5 of the milestone README govern.
 | sdk | `v0.6.0` (the pocket core's pin; the connector pins `v0.4.0`, so this module takes the higher) |
 | SQL tables | 13, over 16 migrations (0014/0015/0016 are ALTERs: user lifecycle, challenge subject keys, invitation metadata) |
 
-## 2. Port inventory — 58 methods across 18 interfaces
+## 2. Port inventory — 64 methods across 18 interfaces
 
 `auth.Repositories` has **eighteen fields** filled by **eighteen DISTINCT
-interfaces** declaring **58 methods** in total. (The plan text says "eighteen
+interfaces** declaring **64 methods** in total after AUDIT-022. (The plan text says "eighteen
 fields over sixteen port interfaces … about sixty methods"; the audit's count is
 the one this store is built against, and `portcalls_test.go` asserts it, so an
 upstream port change fails this module rather than silently escaping the R1
@@ -35,19 +35,21 @@ refusal.)
 The read set of an operation is also its CONTENTION set — a Firestore
 transaction locks what it read — which is why every row states it.
 
-### `user.UserRepository` — 3
+### `user.UserRepository` — 4
 
 | Method | Reads | Writes | Claims |
 |---|---|---|---|
+| `Provision` | same reads as `CreateWithPrimaryIdentifier`, plus initial provider identity uniqueness | user and first identifier, optional initial password and provider link; all commit together | takes auth + primary |
 | `CreateWithPrimaryIdentifier` | users doc (when the caller supplies an id), identifier doc, auth claim (when login/recovery), primary claim (when primary) | users doc **with the directory projection**, identifier doc | takes auth + primary |
 | `Get` | users doc | — | — |
 | `Update` | users doc | `display_name`, `updated_at` — FIELD updates, never a whole-document Set (§6.2) | — |
 
-### `user.PasswordRepository` — 2
+### `user.PasswordRepository` — 3
 
 | Method | Reads | Writes | Claims |
 |---|---|---|---|
-| `Set` | — | user_passwords doc (Set IS the upsert; the doc id is the user id) | — |
+| `Set` | active users doc, sessions, grants, password-reset challenges | password upsert, `auth_revision + 1`; delete sessions/grants/reset challenges atomically | releases deleted refresh and challenge-digest claims |
+| `Change` | same as `Set`, plus current password; expected revision and hash must match | same as `Set`; stale expectation writes nothing | same as `Set` |
 | `Get` | user_passwords doc | — | — |
 
 ### `identifier.IdentifierRepository` — 5
@@ -84,16 +86,17 @@ transaction locks what it read — which is why every row states it.
 
 | Method | Reads | Writes | Claims |
 |---|---|---|---|
-| `CreateForActiveUser` | users doc (status), refresh claim doc | session doc | takes the current-hash claim |
+| `CreateForActiveUser` | users doc (status and expected `auth_revision`), refresh claim doc | session doc | takes the current-hash claim |
 
-### `oauthaccount.OAuthAccountRepository` — 4
+### `oauthaccount.OAuthAccountRepository` — 5
 
 | Method | Reads | Writes | Claims |
 |---|---|---|---|
-| `Create` | — (`Create` on the PK-derived doc id IS the uniqueness check) | oauth_accounts doc | — |
+| `Create` | active users doc; PK-derived provider document ID arbitrates uniqueness | oauth_accounts doc | — |
+| `Link` | active users doc and expected revision; adoption also reads matched active email, active identifiers, sessions/grants/reset challenges | provider link, `auth_revision + 1`; adoption verifies the identifier and projection, removes password and revokes sessions/grants/reset challenges | releases revoked credential claims |
 | `GetByProvider` | doc by id | — | — |
 | `ListByUser` | query `user_id ==`, order `(linked_at DESC, provider_user_id DESC)` | — | — |
-| `Delete` | query `user_id ==`, `provider ==` (the doc id needs `provider_user_id`, which the caller does not supply) | delete the matches; none → `sdk.ErrNotFound` | — |
+| `Delete` | active users doc; matching provider links and sessions/grants/reset challenges | delete matching links, increment revision, revoke sessions/grants/reset challenges; absent link writes nothing | releases revoked credential claims |
 
 ### `oauthstate.StateRepository` — 2
 
@@ -125,7 +128,10 @@ transaction locks what it read — which is why every row states it.
 | `Create` | — | security_events doc (append-only) | — |
 | `List` | query: any subset of `user_id`/`event_type`/`event_status` equalities × the `created_at` range (`Since` inclusive, `Until` exclusive) × both directions | — | — |
 
-### `invitation.InvitationRepository` — 6
+### `invitation.InvitationRepository` — 10
+
+These methods remain unimplemented until N4b; the following is the required
+transaction contract, updated for durable acceptance claims (migration 0018).
 
 | Method | Reads | Writes | Claims |
 |---|---|---|---|
@@ -134,7 +140,9 @@ transaction locks what it read — which is why every row states it.
 | `GetByTokenHash` | token claim → doc | — | ACCESS PATH |
 | `ListByResource` | query `resource_key ==`, order `(created_at, id)` | — | — |
 | `ListBySubject` | query `subject_key ==`, order `(created_at, id)` | — | — |
-| `UpdateStatus` | doc, plus the OLD and NEW token claims and the pending claim | status, token hash, expiry, accepted_at, resolved subject, updated_at | releases the pending claim when the STORED status leaves pending; re-points the token claim when `TokenHash` changes |
+| `UpdateStatus` | doc, current-token precondition, old/new token claims and active-tuple claim | pending/expired → pending/declined/cancelled only | re-points token claim on resend; releases tuple on decline/cancel; rejects accepting |
+| `ClaimAcceptance` | current token, status, expiry, bound subject and tuple claim | pending → accepting, resolved subject type/id | retains tuple reservation; matching claim retries remain valid after expiry |
+| `CompleteAcceptance` | token and bound subject claim | accepting → accepted, accepted_at | releases tuple reservation; matching accepted retry preserves timestamp |
 
 ### `challenge.Repository` — 4
 
@@ -145,18 +153,18 @@ transaction locks what it read — which is why every row states it.
 | `ConsumeToken` | digest claim → doc | delete both; an expired token's deletion COMMITS, then `sdk.ErrExpired` | releases the digest claim |
 | `PurgeExpired` | query `expires_at <= before`, ordered and bounded, re-read INSIDE the transaction with each row's digest claim | delete rows + claims | releases every purged row's claim |
 
-### `contactchange.Repository` — 2
+### `contactchange.Repository` — 3
 
 `Create` (Set on the `(user_id, kind)` doc id — replacement is structural),
-`Consume` (single-use read-and-delete; expired → the deletion COMMITS, then
+`Get` (current pending generation), `Consume` (expected-ID conditional read-and-delete; expired → the deletion COMMITS, then
 `sdk.ErrExpired`; absent → `sdk.ErrNotFound`). No claims.
 
 ### `authgrant.Repository` — 3
 
 | Method | Reads | Writes | Claims |
 |---|---|---|---|
-| `Create` | — | authentication_grants doc | — |
-| `Consume` | query `consume_key ==`, `consumed_at == null`, order `(created_at, id)`, limit 1 | `consumed_at`; expired → the write COMMITS, then `sdk.ErrExpired` | — |
+| `Create` | active owner with expected revision and matching live session | authentication_grants doc | — |
+| `Consume` | active owner and matching live session; query `consume_key ==`, `consumed_at == null`, order `(created_at, id)` in batches of 32 until the oldest expired or policy-suitable grant is found | `consumed_at`; expired → the write COMMITS, then `sdk.ErrExpired`; unsuitable fresh grants stay unspent | — |
 | `DeleteBySession` | query `session_id ==` | delete every match (bulk, idempotent) | — |
 
 ### `credential.MutationRepository` — 2
@@ -198,7 +206,7 @@ becomes an EXPLICIT null through the connector's `NullTime` helpers.
 
 | SQL column | Firestore field | Notes |
 |---|---|---|
-| `id TEXT PK DEFAULT lower(hex(randomblob(16)))` | `id` | store-minted with `firestoredb.NewID()` when the caller sends an empty id (the `cryptids.Database` convention); the doc id is `h(id)` |
+| `id TEXT PK DEFAULT lower(hex(randomblob(16)))` | `id` | store-minted with `firestoredb.NewID()` when the caller sends an empty id (the `sdk.DatabaseID` convention); the doc id is `h(id)` |
 | `display_name TEXT NOT NULL DEFAULT ''` | `display_name` | |
 | `auth_revision INTEGER NOT NULL DEFAULT 0` | `auth_revision` (int64) | the optimistic-serialization anchor of every credential-policy mutation |
 | `status TEXT NOT NULL DEFAULT 'active' CHECK (active, deactivated)` | `status` | CHECK has no Firestore analogue; the domain's `ParseStatus`/`Valid` is the gate, and the store reader normalizes an empty legacy value exactly as the SQL stores do |
@@ -287,10 +295,10 @@ exists in the port, so none exists here.
 Indexes `idx_security_events_created_at_id`, `_user_id`, `_event_type`,
 `_event_status` become the composite matrix of §7.
 
-### 3.9 `invitations` (migrations 0009, 0016)
+### 3.9 `invitations` (migrations 0009, 0016, 0018)
 
 Columns map one-to-one (`id`, `resource_type`, `resource_id`, `relation`,
-`identifier`, `identifier_kind`, `resolved_subject_id`, `invited_by`,
+`identifier`, `identifier_kind`, `resolved_subject_id`, `resolved_subject_type`, `invited_by`,
 `token_hash`, `auto_accept` bool, `status`, `expires_at`, `accepted_at`
 nullable, `created_at`, `updated_at`, `metadata` — a native map where SQL stores
 `'{}'`), plus the derived `resource_key` and `subject_key` (§4).
@@ -299,7 +307,7 @@ nullable, `created_at`, `updated_at`, `metadata` — a native map where SQL stor
 |---|---|
 | PK `id` | the DOCUMENT ID |
 | UNIQUE `idx_invitations_token_hash` | **claim** `invitation_token_hashes` (§5.5) |
-| UNIQUE PARTIAL `idx_invitations_pending_tuple (resource_type, resource_id, identifier_kind, identifier, relation) WHERE status = 'pending'` | **claim** `invitation_pending` (§5.6) — relation INCLUDED, predicate is the STORED status |
+| UNIQUE PARTIAL `idx_invitations_pending_tuple (resource_type, resource_id, identifier_kind, identifier, relation) WHERE status IN ('pending', 'accepting')` | **claim** `invitation_pending` (§5.6) — relation INCLUDED, predicate is the STORED status |
 | `idx_invitations_resource` | `resource_key ==` |
 | `idx_invitations_kind_identifier` | `subject_key ==` |
 | `idx_invitations_resolved_subject_id` | equality query (the resolve-on-registration lookup the pocket drives through `ListBySubject` today; kept as a documented access path) |
@@ -639,14 +647,14 @@ projection of what the unbuilt tasks will issue.
 |---|---|---|---|
 | `users` | — | `(created_at, id)` both directions | `UserAdmin.List` — **BUILT (N2c)**, through the connector `List` helper with `user.OrderFields`/`user.DefaultOrder` and PK `id`; the reverse direction is the `HasPrev` probe's |
 | `user_identifiers` | `user_id ==`, `active ==` | `(created_at, id)` ascending | `ListByUser` — **BUILT (N2a)**, exactly one shape: `user_id == AND active == true ORDER BY created_at ASC, id ASC`. It is NOT paged (the port returns a slice), so it needs no reversed direction of its own. Credential `Snapshot` (N2b) reuses it |
-| `sessions` | `user_id ==` \| `previous_refresh_token_hash ==` | — | revocation cascades, grace lookup |
-| `oauth_accounts` | `user_id ==` (+ `provider ==` for Delete) | `(linked_at DESC, provider_user_id DESC)` | `ListByUser` |
+| `sessions` | `user_id ==` \| `previous_refresh_token_hash ==` | — | **BUILT (N3a)**, exactly two shapes, both a SINGLE equality with NO order: `user_id ==` (`DeleteByUser`, and the N2b/N4d revocation cascades) and `previous_refresh_token_hash == … LIMIT 1` (`GetByRefreshHash`'s grace half, under a `ReadSnapshot`). Firestore serves a single-field equality from the automatic index, so NEITHER needs a composite. The CURRENT hash issues no query at all — its claim is the access path (§7.1) |
+| `oauth_accounts` | `user_id ==` (+ `provider ==` for Delete) | `(linked_at DESC, provider_user_id DESC)` | **BUILT (N3b)**, two shapes: `ListByUser` = `user_id == ORDER BY linked_at DESC, provider_user_id DESC` (a COMPOSITE — already in the manifest — with no reversed direction, because the port returns a slice, not a page) and `Delete` = `user_id == AND provider ==`, equality-only and therefore served without a composite (Firestore merges the two automatic single-field indexes) |
 | `service_accounts` | — | `(created_at, id)` both directions | `List` |
 | `api_keys` | `service_account_id ==` | `(created_at, id)` both directions | + `PostFilter` search (R4) |
 | `security_events` | any subset of `user_id`, `event_type`, `event_status` × `created_at` range | `(created_at, id)` both directions | the widest set: every equality subset × the range × both directions |
 | `invitations` | `resource_key ==` \| `subject_key ==` \| `resolved_subject_id ==` | `(created_at, id)` both directions | |
 | `challenges` | `expires_at <=` (purge); `user_id ==` + `purpose in` (reset/adoption revocation) | `expires_at`, then `id` | |
-| `authentication_grants` | `consume_key ==` + `consumed_at == null`; `session_id ==`; `user_id ==` | `(created_at, id)` | Consume, and the two revocation cascades |
+| `authentication_grants` | `consume_key ==` + `consumed_at == null`; `session_id ==`; `user_id ==` | `(created_at, id)` ascending | `Consume` — **BUILT (N3b)** — selects unspent grants in batches of 32, using a `(created_at, id)` cursor until it finds the oldest expired or policy-suitable grant. `consumed_at == null` is a Firestore IS_NULL filter and the shape needs the four-field COMPOSITE the manifest already carries. `session_id ==` (`DeleteBySession`) is **BUILT (N3b)** and equality-only, so no composite. `user_id ==` is N2b's half of the lifecycle cascade (`readGrantsForUser`), also equality-only |
 
 Every direction a store serves — PLUS the reversed direction the List helper's
 `HasPrev` probe issues, which needs the same index with all directions flipped —
@@ -666,6 +674,11 @@ document id:
 | `Identifiers.Get`, and every retirement's read of the row it retires | `user_identifiers/h(identifier_id)` |
 | `Identifiers.GetLogin` / `GetRecovery` | `identifier_claims/h(kind, value)` → the row it names (**two point reads under ONE `ReadSnapshot`**, so the claim and the row agree) |
 | the active primary of a `(user, kind)` — the primary switch's demotion target AND the directory projection's only input | `identifier_primaries/h(user_id, kind)` → the row it names |
+| `Sessions.Get`, `Rotate`/`ConsumeGrace`'s CAS read, `Delete`'s claim lookup | `sessions/h(session_id)` |
+| `Sessions.GetByRefreshHash`, CURRENT slot | `session_refresh_hashes/h(hash)` → the row it names (**two point reads under ONE `ReadSnapshot`**, with the grace QUERY as the fallback in the same snapshot) |
+| `OAuthAccounts.GetByProvider` | `oauth_accounts/h(provider, provider_user_id)` |
+| `OAuthStates.Consume` | `oauth_states/h(token)` |
+| `ActiveSessions.CreateForActiveUser`'s status/revision proof | `users/h(user_id)` — fences mint against concurrent lifecycle or credential changes |
 
 This is why the CLAIM documents are described as access paths and not only as
 constraints (§5.1, §5.2): resolving an address through its claim keeps the lookup
@@ -682,6 +695,30 @@ Two shapes deliberately do NOT appear above and must not appear at N5 either:
 - **No query enforces uniqueness.** A claim is taken with `Create`, whose
   precondition the SERVER evaluates at commit; nothing reads a claim to decide
   whether it is free (ruling R3).
+
+### 7.2 Ownership rules (the executable half of §5)
+
+Every collection whose uniqueness is carried by a claim document OR by a derived
+document id has exactly one owner file, and `ownership_test.go` fails the build
+if any other non-test file so much as names the collection. The rules are
+hermetic (no emulator) and match on identifier boundaries, so a fragment of a
+longer name — `oauth_accounts.provider_email_verified` is not the users
+document's `email_verified` projection — is not a violation.
+
+| Owner file | Owns | Writers |
+|---|---|---|
+| `users_doc.go` | `users` | `putUser` (the ONLY whole-document write; takes the projection explicitly), `updateUserProfile`, `advanceUserRevision` |
+| `identifiers_doc.go` | `user_identifiers`, `identifier_claims`, `identifier_primaries` | `putIdentifier`, `updateIdentifier` |
+| `passwords_doc.go` | `user_passwords` | `putPassword` |
+| `projection.go` | the two projection FIELD names, in both spellings | `resolveEmailProjection` and its `apply`/`updates`/`fill` |
+| `sessions_doc.go` (N3a) | `sessions`, `session_refresh_hashes` | `putSession`, `updateSession`, `dropSession`, `dropSessionsForUser` |
+| `oauth_doc.go` (N3b) | `oauth_accounts`, `oauth_states` | `putOAuthAccount`, `dropOAuthAccounts`, `putOAuthState`, `dropOAuthState` |
+| `grants_doc.go` (N3b) | `authentication_grants` | `putAuthGrant`, `spendAuthGrant`, `dropAuthGrants` |
+
+The revocation helpers (`dropSessionsForUser`, `dropAuthGrants`) take
+ALREADY-READ documents and read nothing, which is what lets N2b's `SetStatus` and
+N4d's adoption finish a multi-collection read phase before they write — the
+vendor refuses any read issued after a transaction's first write.
 
 ## 8. Index manifest
 
@@ -703,7 +740,7 @@ whatever the host and the authorization store deploy.
 - **No ambient transaction.** This store returns `ErrAmbientTransactionUnsupported`
   from every port method whose context carries a connector transaction. The
   authentication pocket has NO `RunTransactional` conformance family, so R1
-  appears here only as that refusal — `portcalls_test.go` drives all 58 methods
+  appears here only as that refusal — `portcalls_test.go` drives all 64 methods
   inside both a `Transact` and a `ReadSnapshot`.
 - **Committed outcomes versus rollback errors.** The consume family
   (`OAuthStates.Consume`, `AuthenticationGrants.Consume`,

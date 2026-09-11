@@ -3,7 +3,7 @@ package {{.Agg}}
 import (
 	"context"
 
-	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
+	"github.com/gopernicus/gopernicus/sdk/pkg/list"
 )
 
 // Storer persists {{.AggTitle}}s. It is implemented by the pocket store adapters
@@ -17,7 +17,7 @@ import (
 //   - Create with an empty ID → the store assigns the DDL-default key and returns
 //     it (the empty-id convention, checklist 14).
 //
-// List is crud-typed; ordering is pinned to created_at DESC, id DESC (the id
+// List is list-typed; ordering is pinned to created_at DESC, id DESC (the id
 // tiebreak is contractual and keeps pages stable across a shared created_at).
 type Storer interface {
 	// Create persists a new {{.Agg}} and returns the stored row (its id filled by
@@ -29,5 +29,5 @@ type Storer interface {
 	Delete(ctx context.Context, id string) error
 	// List returns a cursor-paginated page of {{.Agg}}s matching filter, ordered
 	// created_at DESC, id DESC.
-	List(ctx context.Context, filter ListFilter, req crud.ListRequest) (crud.Page[{{.AggTitle}}], error)
+	List(ctx context.Context, filter ListFilter, req list.Request) (list.Page[{{.AggTitle}}], error)
 }

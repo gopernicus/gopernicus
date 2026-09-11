@@ -9,19 +9,21 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/gopernicus/gopernicus/pockets"
 	auth "github.com/gopernicus/gopernicus/pockets/authentication"
 	authorization "github.com/gopernicus/gopernicus/pockets/authorization"
+	mutations "github.com/gopernicus/gopernicus/pockets/authorization/logic/mutations"
 	sdkevents "github.com/gopernicus/gopernicus/sdk/capabilities/events"
-	"github.com/gopernicus/gopernicus/sdk/foundation/web"
-	"github.com/gopernicus/gopernicus/sdk/pocket"
-)
+	"github.com/gopernicus/gopernicus/sdk/pkg/web"
 
-// The bundled role-administration proof (issue #20). The pocket's own tests use
-// STUB gates — it cannot import pockets/authentication — so THIS is the only
-// place the real chain is provable end to end: a real session cookie from the
-// auth pocket, the real platform-admin permission decided by the authorization
-// pocket, and the real FS9 error bodies a client sees. It is the #6
-// MachineRoutesGate precedent applied to role administration.
+	// The bundled role-administration proof (issue #20). The pocket's own tests use
+	// STUB gates — it cannot import pockets/authentication — so THIS is the only
+	// place the real chain is provable end to end: a real session cookie from the
+	// auth pocket, the real platform-admin permission decided by the authorization
+	// pocket, and the real FS9 error bodies a client sees. It is the #6
+	// MachineRoutesGate precedent applied to role administration.
+	relationships "github.com/gopernicus/gopernicus/pockets/authorization/logic/relationships"
+)
 
 const (
 	roleAdminEmail = "role-admin@example.com"
@@ -36,7 +38,7 @@ const (
 // roleRoutesHost is a host whose router carries BOTH pockets — the auth surface
 // the proof signs in through and the bundled role-administration routes it then
 // drives — plus the trusted mutator that seeds the platform admin and the boot
-// log the not-mounted WARN lands in.
+// constructor-owned authorization log.
 type roleRoutesHost struct {
 	*linkHost
 	comps authorization.Components
@@ -44,7 +46,7 @@ type roleRoutesHost struct {
 }
 
 // newRoleRoutesHost boots the real composition. withGate false is the
-// deny-by-absence posture — the same wiring with Config.RoleRoutesGate nil — so
+// deny-by-absence posture — the same wiring with RoleRoutes.Gate nil — so
 // one fixture proves both halves.
 func newRoleRoutesHost(t *testing.T, withGate bool) *roleRoutesHost {
 	t.Helper()
@@ -59,7 +61,7 @@ func newRoleRoutesHost(t *testing.T, withGate bool) *roleRoutesHost {
 	if withGate {
 		configured = gate.middleware
 	}
-	comps, err := newAuthorization(configured)
+	comps, err := newAuthorization(configured, log)
 	if err != nil {
 		t.Fatalf("newAuthorization: %v", err)
 	}
@@ -67,21 +69,21 @@ func newRoleRoutesHost(t *testing.T, withGate bool) *roleRoutesHost {
 	sender := &recordingSender{}
 	svc := bootInProcess(t, sender, nil)
 
-	router := web.NewWebHandler(web.WithLogging(quietLog()))
-	mount := pocket.Mount{
+	router := web.NewWebHandler()
+	mount := pockets.Mount{
 		Router: router,
 		Logger: log,
 		Events: sdkevents.NewMemory(sdkevents.WithLogger(quietLog())),
 	}
-	if err := comps.Service.Register(mount); err != nil {
+	if err := comps.Register(mount); err != nil {
 		t.Fatalf("authorization Register: %v", err)
 	}
-	if err := svc.Register(pocket.Mount{Router: router, Logger: quietLog(), Events: mount.Events}); err != nil {
+	if err := svc.HTTP.Register(pockets.Mount{Router: router, Logger: quietLog(), Events: mount.Events}); err != nil {
 		t.Fatalf("auth Register: %v", err)
 	}
 	gate.set(roleAdministrationGate(
-		svc.RequireAccessTokenLive(),
-		comps.Service.RequirePermissionFixed(platformResourceType, "admin", platformResourceID),
+		svc.HTTP.RequireAccessTokenLive(),
+		comps.HTTP.RequirePermissionFixed(platformResourceType, "admin", platformResourceID),
 	))
 
 	if err := seedAuthorization(context.Background(), comps.SystemMutator); err != nil {
@@ -107,12 +109,12 @@ func newRoleRoutesHost(t *testing.T, withGate bool) *roleRoutesHost {
 // against. Platform admin stays DATA, never Config.
 func (h *roleRoutesHost) makePlatformAdmin(userID string) {
 	h.t.Helper()
-	if _, err := h.comps.SystemMutator.GrantRelationship(context.Background(), authorization.GrantRelationshipCommand{
-		MutationID:   mustMutationID(h.t),
+	if _, err := h.comps.SystemMutator.GrantRelationship(context.Background(), mutations.GrantRelationshipCommand{
+
 		ResourceType: platformResourceType,
 		ResourceID:   platformResourceID,
 		Relation:     "admin",
-		Subject:      authorization.SubjectRef{Type: "user", ID: userID},
+		Subject:      relationships.SubjectRef{Type: "user", ID: userID},
 	}); err != nil {
 		h.t.Fatalf("seed platform admin %s: %v", userID, err)
 	}
@@ -127,55 +129,36 @@ var roleAdminRoutes = []struct{ method, path, body string }{
 	{"GET", "/authorization/roles/effective?resource_type=" + demoResourceType + "&resource_id=" + demoResourceID, ""},
 }
 
-// receiptEnvelope is the assign/unassign response as a client reads it.
-type receiptEnvelope struct {
-	Receipt struct {
-		MutationID string `json:"mutation_id"`
-		ScopeKind  string `json:"scope_kind"`
-		ScopeType  string `json:"scope_type"`
-		ScopeID    string `json:"scope_id"`
-		Operation  string `json:"operation"`
-		Outcome    string `json:"outcome"`
-		Revision   uint64 `json:"revision"`
-		Replayed   bool   `json:"replayed"`
-		CreatedAt  string `json:"created_at"`
-	} `json:"receipt"`
-	SameRoleGrantRemains bool `json:"same_role_grant_remains"`
+// mutationEnvelope is the assign/unassign response as a client reads it.
+type mutationEnvelope struct {
+	Outcome              string `json:"outcome"`
+	SameRoleGrantRemains bool   `json:"same_role_grant_remains"`
 }
 
-// TestRoleRoutesPlatformAdminDrivesTheLifecycle walks the whole administration
-// flow over real HTTP with a real session: assign, replay, list, unassign.
 func TestRoleRoutesPlatformAdminDrivesTheLifecycle(t *testing.T) {
 	host := newRoleRoutesHost(t, true)
 	admin := host.signUp(roleAdminEmail)
 	host.makePlatformAdmin(admin.userIDFor())
 
-	mutationID := "auth-cms-role-routes-proof-000001"
-	body := `{"mutation_id":"` + mutationID + `","subject_type":"user","subject_id":"` + roleGrantee +
+	body := `{"subject_type":"user","subject_id":"` + roleGrantee +
 		`","role":"` + demoRole + `","resource_type":"` + demoResourceType + `","resource_id":"` + demoResourceID + `"}`
 
 	resp, payload := admin.do("POST", "/authorization/roles", body, nil)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("assign = %d, want 200; body=%s", resp.StatusCode, payload)
 	}
-	first := decodeReceipt(t, payload)
-	if first.Receipt.Outcome != "applied" || first.Receipt.Replayed {
-		t.Fatalf("first assign receipt = %+v, want applied and not replayed", first.Receipt)
-	}
-	if first.Receipt.Operation != "role_assign" || first.Receipt.ScopeType != demoResourceType {
-		t.Errorf("receipt scope/operation = %+v", first.Receipt)
+	first := decodeMutation(t, payload)
+	if first.Outcome != "applied" {
+		t.Fatalf("first assign receipt = %+v, want applied and not replayed", first)
 	}
 
 	resp, payload = admin.do("POST", "/authorization/roles", body, nil)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("replay = %d, want 200; body=%s", resp.StatusCode, payload)
 	}
-	replay := decodeReceipt(t, payload)
-	if !replay.Receipt.Replayed {
-		t.Error("an exact retry of the same mutation_id did not report replayed")
-	}
-	if replay.Receipt.Revision != first.Receipt.Revision {
-		t.Errorf("replay revision = %d, want the original %d", replay.Receipt.Revision, first.Receipt.Revision)
+	replay := decodeMutation(t, payload)
+	if replay.Outcome != "no_change" {
+		t.Fatalf("duplicate assign: %+v", replay)
 	}
 
 	resp, payload = admin.do("GET", "/authorization/roles/by-subject?subject_type=user&subject_id="+roleGrantee, "", nil)
@@ -206,15 +189,12 @@ func TestRoleRoutesPlatformAdminDrivesTheLifecycle(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("unassign = %d, want 200; body=%s", resp.StatusCode, payload)
 	}
-	removed := decodeReceipt(t, payload)
-	if removed.Receipt.Outcome != "applied" {
-		t.Errorf("unassign outcome = %q, want applied", removed.Receipt.Outcome)
+	removed := decodeMutation(t, payload)
+	if removed.Outcome != "applied" {
+		t.Errorf("unassign outcome = %q, want applied", removed.Outcome)
 	}
 	if removed.SameRoleGrantRemains {
 		t.Error("same_role_grant_remains = true, but there is no global grant of this role")
-	}
-	if removed.Receipt.MutationID == "" {
-		t.Error("the server minted no mutation_id for a request that supplied none")
 	}
 
 	resp, payload = admin.do("GET", "/authorization/roles/by-subject?subject_type=user&subject_id="+roleGrantee, "", nil)
@@ -269,8 +249,8 @@ func TestRoleRoutesRefuseAnAnonymousCaller(t *testing.T) {
 }
 
 // TestRoleRoutesAreNotMountedWithoutAGate proves the deny-by-absence posture on
-// the real host: the same wiring with no gate answers 404 everywhere and says so
-// at boot.
+// the real host: the same wiring with no gate answers 404 everywhere, and
+// intentional headless use is logged as ordinary configuration, not a warning.
 func TestRoleRoutesAreNotMountedWithoutAGate(t *testing.T) {
 	host := newRoleRoutesHost(t, false)
 	admin := host.signUp(roleAdminEmail)
@@ -282,8 +262,8 @@ func TestRoleRoutesAreNotMountedWithoutAGate(t *testing.T) {
 			t.Errorf("%s %s = %d, want 404; body=%s", rt.method, rt.path, resp.StatusCode, payload)
 		}
 	}
-	if !bytes.Contains(host.logs.Bytes(), []byte("are NOT mounted")) {
-		t.Errorf("no not-mounted WARN at boot: %s", host.logs.String())
+	if !bytes.Contains(host.logs.Bytes(), []byte("role_routes=false")) || bytes.Contains(host.logs.Bytes(), []byte("level=WARN")) {
+		t.Errorf("expected informational headless configuration: %s", host.logs.String())
 	}
 }
 
@@ -347,9 +327,9 @@ func TestDeferredMiddlewareFailsClosed(t *testing.T) {
 	}
 }
 
-func decodeReceipt(t *testing.T, payload []byte) receiptEnvelope {
+func decodeMutation(t *testing.T, payload []byte) mutationEnvelope {
 	t.Helper()
-	var got receiptEnvelope
+	var got mutationEnvelope
 	if err := json.Unmarshal(payload, &got); err != nil {
 		t.Fatalf("decode receipt envelope: %v (body=%s)", err, payload)
 	}
@@ -358,4 +338,4 @@ func decodeReceipt(t *testing.T, payload []byte) receiptEnvelope {
 
 // authServiceIsTheAuthenticator keeps the gate's first layer named in one place;
 // a compile-time assertion that the host's chosen posture is a web.Middleware.
-var _ = func(svc *auth.Service) web.Middleware { return svc.RequireAccessTokenLive() }
+var _ = func(svc *auth.Components) web.Middleware { return svc.HTTP.RequireAccessTokenLive() }

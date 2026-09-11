@@ -9,7 +9,7 @@ import (
 	"testing"
 
 	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
-	"github.com/gopernicus/gopernicus/pockets/jobs/domain/job"
+	job "github.com/gopernicus/gopernicus/pockets/jobs/logic/queue"
 	jobspgx "github.com/gopernicus/gopernicus/pockets/jobs/stores/pgx"
 )
 
@@ -24,7 +24,7 @@ func TestLiveJobsDeliveryPGX(t *testing.T) {
 	}
 
 	runLiveDeliveryProofs(t, "pgx", func(t *testing.T) job.FencedQueueRepository {
-		db, err := pgxdb.Open(pgxdb.Config{DSN: dsn})
+		db, err := pgxdb.Open(context.Background(), pgxdb.Config{DSN: dsn})
 		if err != nil {
 			t.Fatalf("pgx connect: %v", err)
 		}

@@ -11,9 +11,8 @@
 // The two stores implement the pocket's ports over the connector's DB/MapError:
 // Queue's Claim is one UPDATE ... WHERE job_id=(SELECT ... LIMIT 1) ... RETURNING
 // statement (SQLite's single-writer model makes double-claim impossible; the
-// lease-expiry reclaim arm is folded in), and Schedules' ClaimDue is a pure value
-// compare-and-set. Contention surfaces as waiting (busy-timeout + bounded
-// retry-on-busy inside the adapter), never a failed claim.
+// lease-expiry reclaim arm is folded in). Schedules atomically admit pending
+// occurrences. Bounded retry-on-busy handles transient write contention.
 package turso
 
 import (
@@ -26,6 +25,7 @@ import (
 // applies the schema (see ExportMigrations) and the store just provides repos.
 // opts configure the queue store (WithLease); db is the connector wrapper (error
 // mapping + Tx), not a raw *sql.DB.
+// It panics if db is nil; the caller owns the database lifecycle.
 func Repositories(db *tursodb.DB, opts ...QueueOption) jobs.Repositories {
 	return jobs.Repositories{
 		Queue:     NewQueueStore(db, opts...),

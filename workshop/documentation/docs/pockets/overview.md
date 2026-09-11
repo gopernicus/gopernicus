@@ -5,17 +5,17 @@ description: Choose and compose complete Gopernicus domain capabilities.
 
 # Pockets
 
-Pockets are optional, reusable hexagons. Each core is datastore-free and requires only the SDK; store and view implementations live in sibling modules so a host imports exactly what it chooses.
+Pockets are optional, reusable hexagons. Each core is datastore-free and requires only SDK and the shared pockets contract; store and view implementations live in sibling modules so a host imports exactly what it chooses.
 
 ## Catalog
 
 | Pocket | Capability | HTTP surface | Durable stores | Memory posture |
 |---|---|---|---|---|
 | [Authentication](authentication.md) | human/machine identity, sessions, credentials, recovery, OAuth, delivery | `/auth/*` JSON; optional HTML | pgx, Turso | example-local full reference |
-| [Authorization](authorization.md) | relationship/ReBAC and roles, guarded mutations | none today; namespace reserved | pgx, Turso | public `memstore` |
+| [Authorization](authorization.md) | relationship/ReBAC and roles, guarded mutations | optional role administration and reusable permission middleware | pgx, Turso, Firestore | public `stores/memory` |
 | [CMS](cms.md) | content registry, taxonomy, menus, media, inquiries | JSON + optional HTML/admin | pgx, Turso | example-local reference |
 | [Events](events.md) | durable outbox drain + authenticated SSE gateway | `/events` streams | pgx, Turso | `storetest` reference |
-| [Jobs](jobs.md) | durable queue, schedules, keyed/fenced work | none today; namespace reserved | pgx, Turso | public `memstore` |
+| [Jobs](jobs.md) | durable queue, schedules, keyed/fenced work | none today; namespace reserved | pgx, Turso | public `stores/memory` |
 
 ## Pockets are optional in both directions
 
@@ -27,35 +27,23 @@ No host must use a pocket, and no pocket may import another pocket. This creates
 
 Authorization makes this especially explicit: a host can leave authorization absent, use a closure over its own data, or wire the full authorization pocket. Other pockets accept check/middleware seams rather than requiring the flagship module.
 
-## The socket pattern
+## Public services and optional adapters
 
-Most pockets follow this shape:
+Each audited pocket exposes focused services under `logic/` and a small root
+constructor that assembles named components. HTTP pockets expose `inbound/http`:
+mount bundled routes, use supported handlers or middleware on host routes, or
+call the logic services directly from another transport.
 
-```go
-repos := store.Repositories(db)
+- Authentication assembles authentication, invitations, delivery and HTTP.
+- Authorization separates decisions, relationship reads, role reads and guarded
+  mutations from its separately held trusted writers and public HTTP adapter.
+- Events assembles a filtered streams service and optional HTTP adapter; its
+  outbox poller remains host-driven.
+- Jobs assembles queue and schedule services; the host constructs and runs workers.
+- CMS retains `cms.Register(mount, repos, cfg)` and its earlier layout pending audit.
 
-svc, err := name.NewService(repos, name.Config{
-    // host collaborators and policy
-})
-if err != nil {
-    return err
-}
-
-if err := svc.Register(pocket.Mount{
-    Router: router,
-    Logger: log,
-    Events: bus,
-}); err != nil {
-    return err
-}
-```
-
-Variations are intentional and documented:
-
-- CMS currently builds internally in `cms.Register(mount, repos, cfg)`;
-- authorization returns a `Components` bundle because trusted and guarded mutation surfaces must be distinct;
-- events subscribes its hub at `NewService`, while the optional outbox poller remains host-driven;
-- jobs separates `Service` from `Runtime`, and `Register` starts nothing.
+A pocket with only one service can return it directly. A component bundle earns
+its place through assembly, lifecycle or capability separation, not uniformity.
 
 ## Choose only needed adapters
 
@@ -72,7 +60,7 @@ The host also decides whether to include a sibling `views/goth` implementation. 
 
 ```go
 cms.Config{
-    AdminMiddleware: []web.Middleware{authSvc.RequireAccessToken()},
+    AdminMiddleware: []web.Middleware{authenticationComponents.HTTP.RequireAccessToken()},
 }
 ```
 

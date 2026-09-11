@@ -2,18 +2,16 @@ package pgx
 
 import (
 	"context"
-	"sort"
-	"time"
 
+	"github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/audit"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/mutations"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/relationships"
 	"github.com/jackc/pgx/v5"
-
-	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
-	"github.com/gopernicus/gopernicus/pockets/authorization/domain/mutation"
-	"github.com/gopernicus/gopernicus/pockets/authorization/domain/relationship"
 )
 
 // mutRelRow is the loaded relationship-row projection the per-operation evaluators
-// reason over (the resource is fixed by the command scope, so it is not stored).
+// reason over (the resource is fixed by the command target, so it is not stored).
 type mutRelRow struct {
 	relation        string
 	subjectType     string
@@ -23,28 +21,28 @@ type mutRelRow struct {
 
 // evaluate dispatches to the per-operation evaluator, applying row changes only
 // when the outcome is applied. It returns the domain outcome and whether a change
-// was committed (which drives the revision bump). The whole call runs under the
-// scope's FOR UPDATE lock, so read-then-write is atomic — the SQL mirror of the
+// was committed (which describes the result). The whole call runs under the
+// authorization write lock, so read-then-write is atomic — the SQL mirror of the
 // memstore's evaluateLocked under its mutex.
-func (m *mutationStore) evaluate(ctx context.Context, tx *pgxdb.Tx, cmd mutation.Command) (mutation.Outcome, bool, error) {
+func (m *mutationStore) evaluate(ctx context.Context, tx *writeTx, cmd mutations.Command) (mutations.Outcome, bool, error) {
 	switch cmd.Operation {
-	case mutation.OpGrant:
+	case mutations.OpGrant:
 		return m.grant(ctx, tx, cmd)
-	case mutation.OpRevoke:
+	case mutations.OpRevoke:
 		return m.revoke(ctx, tx, cmd)
-	case mutation.OpReplace:
+	case mutations.OpReplace:
 		return m.replace(ctx, tx, cmd)
-	case mutation.OpPurge:
+	case mutations.OpPurge:
 		return m.purge(ctx, tx, cmd, false)
-	case mutation.OpTeardown:
+	case mutations.OpTeardown:
 		return m.purge(ctx, tx, cmd, true)
-	case mutation.OpRoleAssign:
+	case mutations.OpRoleAssign:
 		return m.roleAssign(ctx, tx, cmd)
-	case mutation.OpRoleUnassign:
+	case mutations.OpRoleUnassign:
 		return m.roleUnassign(ctx, tx, cmd)
 	default:
 		// Command.Validate rejects unknown operations before we reach here.
-		return mutation.OutcomeNoChange, false, nil
+		return mutations.OutcomeNoChange, false, nil
 	}
 }
 
@@ -53,43 +51,43 @@ func (m *mutationStore) evaluate(ctx context.Context, tx *pgxdb.Tx, cmd mutation
 // is a one-relation semantic conflict that rolls the whole command back; a grant
 // that would leave a protected resource below its guardian minimum is
 // invariant-blocked.
-func (m *mutationStore) grant(ctx context.Context, tx *pgxdb.Tx, cmd mutation.Command) (mutation.Outcome, bool, error) {
-	rt, rid := cmd.Scope.Type, cmd.Scope.ID
+func (m *mutationStore) grant(ctx context.Context, tx *writeTx, cmd mutations.Command) (mutations.Outcome, bool, error) {
+	rt, rid := cmd.Target.Type, cmd.Target.ID
 	current, err := loadResourceRelationships(ctx, tx, m.schema, rt, rid)
 	if err != nil {
 		return "", false, err
 	}
-	var adds []mutation.RelationshipRow
+	var adds []mutations.RelationshipRow
 	for _, row := range cmd.Relationships {
 		existing, ok := findSubject(current, row.Subject)
 		if ok {
 			if existing.relation == row.Relation {
 				continue // exact duplicate — no change for this row
 			}
-			return mutation.OutcomeSemanticConflict, false, nil
+			return mutations.OutcomeSemanticConflict, false, nil
 		}
 		adds = append(adds, row)
 	}
 	if len(adds) == 0 {
-		return mutation.OutcomeNoChange, false, nil
+		return mutations.OutcomeNoChange, false, nil
 	}
 	next := append(append([]mutRelRow(nil), current...), rowsFromCommand(adds)...)
 	if !m.relationshipInvariantOK(rt, next) {
-		return mutation.OutcomeInvariantBlocked, false, nil
+		return mutations.OutcomeInvariantBlocked, false, nil
 	}
 	for _, a := range adds {
 		if err := insertRelationship(ctx, tx, m.schema, rt, rid, a); err != nil {
 			return "", false, err
 		}
 	}
-	return mutation.OutcomeApplied, true, nil
+	return mutations.OutcomeApplied, true, nil
 }
 
 // revoke removes the command's exact relationship rows. Revoking rows that none
 // exist is a committed not_found no-op; a revoke that would drop a protected
 // relation below its guardian minimum is invariant-blocked.
-func (m *mutationStore) revoke(ctx context.Context, tx *pgxdb.Tx, cmd mutation.Command) (mutation.Outcome, bool, error) {
-	rt, rid := cmd.Scope.Type, cmd.Scope.ID
+func (m *mutationStore) revoke(ctx context.Context, tx *writeTx, cmd mutations.Command) (mutations.Outcome, bool, error) {
+	rt, rid := cmd.Target.Type, cmd.Target.ID
 	current, err := loadResourceRelationships(ctx, tx, m.schema, rt, rid)
 	if err != nil {
 		return "", false, err
@@ -108,32 +106,31 @@ func (m *mutationStore) revoke(ctx context.Context, tx *pgxdb.Tx, cmd mutation.C
 		kept = append(kept, r)
 	}
 	if matched == 0 {
-		return mutation.OutcomeNotFound, false, nil
+		return mutations.OutcomeNotFound, false, nil
 	}
 	if !m.relationshipInvariantOK(rt, kept) {
-		return mutation.OutcomeInvariantBlocked, false, nil
+		return mutations.OutcomeInvariantBlocked, false, nil
 	}
 	for _, row := range cmd.Relationships {
 		if err := deleteRelationship(ctx, tx, m.schema, rt, rid, row); err != nil {
 			return "", false, err
 		}
 	}
-	return mutation.OutcomeApplied, true, nil
+	return mutations.OutcomeApplied, true, nil
 }
 
 // replace atomically sets each row's subject to the row's relation on the resource
-// — the sanctioned one-relation answer, with no delete/create gap (an in-place
-// UPDATE of the relation column). A subject already at the target relation is a
+// — the sanctioned one-relation answer, with no externally visible intermediate state. A subject already at the target relation is a
 // per-row no-op; a replace-away that removes the last direct guardian is
 // invariant-blocked.
-func (m *mutationStore) replace(ctx context.Context, tx *pgxdb.Tx, cmd mutation.Command) (mutation.Outcome, bool, error) {
-	rt, rid := cmd.Scope.Type, cmd.Scope.ID
+func (m *mutationStore) replace(ctx context.Context, tx *writeTx, cmd mutations.Command) (mutations.Outcome, bool, error) {
+	rt, rid := cmd.Target.Type, cmd.Target.ID
 	current, err := loadResourceRelationships(ctx, tx, m.schema, rt, rid)
 	if err != nil {
 		return "", false, err
 	}
 	next := append([]mutRelRow(nil), current...)
-	var updates, inserts []mutation.RelationshipRow
+	var updates, inserts []mutations.RelationshipRow
 	for _, row := range cmd.Relationships {
 		idx := findSubjectIndex(next, row.Subject)
 		if idx >= 0 {
@@ -148,10 +145,10 @@ func (m *mutationStore) replace(ctx context.Context, tx *pgxdb.Tx, cmd mutation.
 		inserts = append(inserts, row)
 	}
 	if len(updates) == 0 && len(inserts) == 0 {
-		return mutation.OutcomeNoChange, false, nil
+		return mutations.OutcomeNoChange, false, nil
 	}
 	if !m.relationshipInvariantOK(rt, next) {
-		return mutation.OutcomeInvariantBlocked, false, nil
+		return mutations.OutcomeInvariantBlocked, false, nil
 	}
 	for _, row := range updates {
 		if err := replaceRelationship(ctx, tx, m.schema, rt, rid, row); err != nil {
@@ -163,7 +160,7 @@ func (m *mutationStore) replace(ctx context.Context, tx *pgxdb.Tx, cmd mutation.
 			return "", false, err
 		}
 	}
-	return mutation.OutcomeApplied, true, nil
+	return mutations.OutcomeApplied, true, nil
 }
 
 // purge removes every relationship on the resource. An ordinary purge
@@ -171,8 +168,8 @@ func (m *mutationStore) replace(ctx context.Context, tx *pgxdb.Tx, cmd mutation.
 // resource is invariant-blocked. Teardown (teardown=true) is the one operation
 // allowed to zero a protected scope: it bypasses the invariant and also clears the
 // resource's scoped role assignments.
-func (m *mutationStore) purge(ctx context.Context, tx *pgxdb.Tx, cmd mutation.Command, teardown bool) (mutation.Outcome, bool, error) {
-	rt, rid := cmd.Scope.Type, cmd.Scope.ID
+func (m *mutationStore) purge(ctx context.Context, tx *writeTx, cmd mutations.Command, teardown bool) (mutations.Outcome, bool, error) {
+	rt, rid := cmd.Target.Type, cmd.Target.ID
 	current, err := loadResourceRelationships(ctx, tx, m.schema, rt, rid)
 	if err != nil {
 		return "", false, err
@@ -187,38 +184,38 @@ func (m *mutationStore) purge(ctx context.Context, tx *pgxdb.Tx, cmd mutation.Co
 		}
 	}
 	if removedRel == 0 && removedRole == 0 {
-		return mutation.OutcomeNoChange, false, nil
+		return mutations.OutcomeNoChange, false, nil
 	}
 	// Blast-radius bound: an ordinary purge that would remove more than the
 	// service-sourced ceiling (EvaluationLimits.MaxBatchSize) is invariant-blocked,
 	// atomically under the scope lock. Teardown is the trusted, unbounded path.
 	if !teardown && cmd.MaxAffectedRows > 0 && removedRel > cmd.MaxAffectedRows {
-		return mutation.OutcomeInvariantBlocked, false, nil
+		return mutations.OutcomeInvariantBlocked, false, nil
 	}
 	if !teardown && !m.relationshipInvariantOK(rt, nil) {
-		return mutation.OutcomeInvariantBlocked, false, nil
+		return mutations.OutcomeInvariantBlocked, false, nil
 	}
-	if _, err := tx.Exec(ctx,
+	if _, err := tx.relationships(ctx, audit.ActionRemoved,
 		`DELETE FROM `+m.table("iam_relationships")+` WHERE resource_type = @resource_type AND resource_id = @resource_id`,
 		pgx.NamedArgs{"resource_type": rt, "resource_id": rid}); err != nil {
 		return "", false, mapMutationError(err)
 	}
 	if teardown {
-		if _, err := tx.Exec(ctx,
+		if _, err := tx.roles(ctx, audit.ActionRemoved,
 			`DELETE FROM `+m.table("iam_roles")+` WHERE resource_type = @resource_type AND resource_id = @resource_id`,
 			pgx.NamedArgs{"resource_type": rt, "resource_id": rid}); err != nil {
 			return "", false, mapMutationError(err)
 		}
 	}
-	return mutation.OutcomeApplied, true, nil
+	return mutations.OutcomeApplied, true, nil
 }
 
 // roleAssign assigns the command's role rows at the command's scope (a resource
-// scope is a scoped assignment; a subject scope is a global assignment).
+// target is a scoped assignment; a subject scope is a global assignment).
 // Exact-duplicate assignments are a no-op.
-func (m *mutationStore) roleAssign(ctx context.Context, tx *pgxdb.Tx, cmd mutation.Command) (mutation.Outcome, bool, error) {
-	resType, resID := roleScope(cmd.Scope)
-	var adds []mutation.RoleRow
+func (m *mutationStore) roleAssign(ctx context.Context, tx *writeTx, cmd mutations.Command) (mutations.Outcome, bool, error) {
+	resType, resID := roleScope(cmd.Target)
+	var adds []mutations.RoleRow
 	for _, row := range cmd.Roles {
 		ok, err := hasExactRole(ctx, tx, m.schema, row.SubjectType, row.SubjectID, row.Role, resType, resID)
 		if err != nil {
@@ -230,13 +227,12 @@ func (m *mutationStore) roleAssign(ctx context.Context, tx *pgxdb.Tx, cmd mutati
 		adds = append(adds, row)
 	}
 	if len(adds) == 0 {
-		return mutation.OutcomeNoChange, false, nil
+		return mutations.OutcomeNoChange, false, nil
 	}
-	now := time.Now().UTC()
 	for _, a := range adds {
-		if _, err := tx.Exec(ctx,
-			`INSERT INTO `+m.table("iam_roles")+` (subject_type, subject_id, role, resource_type, resource_id, created_at)
-			 VALUES (@subject_type, @subject_id, @role, @resource_type, @resource_id, @created_at)
+		if _, err := tx.roles(ctx, audit.ActionAdded,
+			`INSERT INTO `+m.table("iam_roles")+` (subject_type, subject_id, role, resource_type, resource_id)
+			 VALUES (@subject_type, @subject_id, @role, @resource_type, @resource_id)
 			 ON CONFLICT (subject_type, subject_id, role, resource_type, resource_id) DO NOTHING`,
 			pgx.NamedArgs{
 				"subject_type":  a.SubjectType,
@@ -244,21 +240,20 @@ func (m *mutationStore) roleAssign(ctx context.Context, tx *pgxdb.Tx, cmd mutati
 				"role":          a.Role,
 				"resource_type": resType,
 				"resource_id":   resID,
-				"created_at":    now,
 			}); err != nil {
 			return "", false, mapMutationError(err)
 		}
 	}
-	return mutation.OutcomeApplied, true, nil
+	return mutations.OutcomeApplied, true, nil
 }
 
 // roleUnassign removes the command's exact role rows. Unassigning rows that none
 // exist is a committed not_found no-op.
-func (m *mutationStore) roleUnassign(ctx context.Context, tx *pgxdb.Tx, cmd mutation.Command) (mutation.Outcome, bool, error) {
-	resType, resID := roleScope(cmd.Scope)
+func (m *mutationStore) roleUnassign(ctx context.Context, tx *writeTx, cmd mutations.Command) (mutations.Outcome, bool, error) {
+	resType, resID := roleScope(cmd.Target)
 	matched := int64(0)
 	for _, row := range cmd.Roles {
-		n, err := pgxdb.ExecAffecting(ctx, tx,
+		n, err := tx.roles(ctx, audit.ActionRemoved,
 			`DELETE FROM `+m.table("iam_roles")+` WHERE subject_type = @subject_type AND subject_id = @subject_id AND role = @role AND resource_type = @resource_type AND resource_id = @resource_id`,
 			pgx.NamedArgs{
 				"subject_type":  row.SubjectType,
@@ -273,9 +268,9 @@ func (m *mutationStore) roleUnassign(ctx context.Context, tx *pgxdb.Tx, cmd muta
 		matched += n
 	}
 	if matched == 0 {
-		return mutation.OutcomeNotFound, false, nil
+		return mutations.OutcomeNotFound, false, nil
 	}
-	return mutation.OutcomeApplied, true, nil
+	return mutations.OutcomeApplied, true, nil
 }
 
 // relationshipInvariantOK reports whether the candidate rows satisfy every guardian
@@ -307,11 +302,11 @@ func (m *mutationStore) relationshipInvariantOK(resourceType string, rows []mutR
 }
 
 // =============================================================================
-// Row helpers (all run within the caller's scope-locked transaction)
+// Row helpers (all run within the caller's write-locked transaction)
 // =============================================================================
 
 // loadResourceRelationships loads every relationship row for a resource.
-func loadResourceRelationships(ctx context.Context, tx *pgxdb.Tx, schema pgxdb.Schema, resourceType, resourceID string) ([]mutRelRow, error) {
+func loadResourceRelationships(ctx context.Context, tx pgxdb.Querier, schema pgxdb.Schema, resourceType, resourceID string) ([]mutRelRow, error) {
 	rows, err := tx.Query(ctx,
 		`SELECT relation, subject_type, subject_id, subject_relation FROM `+schema.Table("iam_relationships")+` WHERE resource_type = @resource_type AND resource_id = @resource_id`,
 		pgx.NamedArgs{"resource_type": resourceType, "resource_id": resourceID})
@@ -333,12 +328,11 @@ func loadResourceRelationships(ctx context.Context, tx *pgxdb.Tx, schema pgxdb.S
 	return out, nil
 }
 
-// insertRelationship inserts one relationship row, letting the DDL default mint the
-// relationship_id (the port is error-only, no RETURNING).
-func insertRelationship(ctx context.Context, tx *pgxdb.Tx, schema pgxdb.Schema, resourceType, resourceID string, row mutation.RelationshipRow) error {
-	_, err := tx.Exec(ctx,
-		`INSERT INTO `+schema.Table("iam_relationships")+` (resource_type, resource_id, relation, subject_type, subject_id, subject_relation, created_at)
-		 VALUES (@resource_type, @resource_id, @relation, @subject_type, @subject_id, @subject_relation, @created_at)`,
+// insertRelationship inserts one complete relationship tuple.
+func insertRelationship(ctx context.Context, tx *writeTx, schema pgxdb.Schema, resourceType, resourceID string, row mutations.RelationshipRow) error {
+	_, err := tx.relationships(ctx, audit.ActionAdded,
+		`INSERT INTO `+schema.Table("iam_relationships")+` (resource_type, resource_id, relation, subject_type, subject_id, subject_relation)
+		 VALUES (@resource_type, @resource_id, @relation, @subject_type, @subject_id, @subject_relation)`,
 		pgx.NamedArgs{
 			"resource_type":    resourceType,
 			"resource_id":      resourceID,
@@ -346,34 +340,25 @@ func insertRelationship(ctx context.Context, tx *pgxdb.Tx, schema pgxdb.Schema, 
 			"subject_type":     row.Subject.Type,
 			"subject_id":       row.Subject.ID,
 			"subject_relation": row.Subject.Relation,
-			"created_at":       time.Now().UTC(),
 		})
 	return mapMutationError(err)
 }
 
 // replaceRelationship rewrites the relation of the row matching an exact SubjectRef
-// in place — no delete/create visibility gap. The unique-subject index guarantees
+// under the transaction lock, recording removal and addition. The unique-subject index guarantees
 // at most one such row.
-func replaceRelationship(ctx context.Context, tx *pgxdb.Tx, schema pgxdb.Schema, resourceType, resourceID string, row mutation.RelationshipRow) error {
-	_, err := tx.Exec(ctx,
-		`UPDATE `+schema.Table("iam_relationships")+` SET relation = @relation
-		 WHERE resource_type = @resource_type AND resource_id = @resource_id
-		   AND subject_type = @subject_type AND subject_id = @subject_id AND subject_relation = @subject_relation`,
-		pgx.NamedArgs{
-			"resource_type":    resourceType,
-			"resource_id":      resourceID,
-			"relation":         row.Relation,
-			"subject_type":     row.Subject.Type,
-			"subject_id":       row.Subject.ID,
-			"subject_relation": row.Subject.Relation,
-		})
-	return mapMutationError(err)
+func replaceRelationship(ctx context.Context, tx *writeTx, schema pgxdb.Schema, resourceType, resourceID string, row mutations.RelationshipRow) error {
+	_, err := tx.relationships(ctx, audit.ActionRemoved, `DELETE FROM `+schema.Table("iam_relationships")+` WHERE resource_type=@resource_type AND resource_id=@resource_id AND subject_type=@subject_type AND subject_id=@subject_id AND subject_relation=@subject_relation`, pgx.NamedArgs{"resource_type": resourceType, "resource_id": resourceID, "subject_type": row.Subject.Type, "subject_id": row.Subject.ID, "subject_relation": row.Subject.Relation})
+	if err != nil {
+		return mapMutationError(err)
+	}
+	return insertRelationship(ctx, tx, schema, resourceType, resourceID, row)
 }
 
 // deleteRelationship removes one exact relationship row (the revoke identity: the
 // relation plus the exact SubjectRef).
-func deleteRelationship(ctx context.Context, tx *pgxdb.Tx, schema pgxdb.Schema, resourceType, resourceID string, row mutation.RelationshipRow) error {
-	_, err := tx.Exec(ctx,
+func deleteRelationship(ctx context.Context, tx *writeTx, schema pgxdb.Schema, resourceType, resourceID string, row mutations.RelationshipRow) error {
+	_, err := tx.relationships(ctx, audit.ActionRemoved,
 		`DELETE FROM `+schema.Table("iam_relationships")+`
 		 WHERE resource_type = @resource_type AND resource_id = @resource_id AND relation = @relation
 		   AND subject_type = @subject_type AND subject_id = @subject_id AND subject_relation = @subject_relation`,
@@ -390,7 +375,7 @@ func deleteRelationship(ctx context.Context, tx *pgxdb.Tx, schema pgxdb.Schema, 
 
 // countScopedRoles counts the role assignments scoped to a resource (teardown's
 // role sweep set).
-func countScopedRoles(ctx context.Context, tx *pgxdb.Tx, schema pgxdb.Schema, resourceType, resourceID string) (int, error) {
+func countScopedRoles(ctx context.Context, tx pgxdb.Querier, schema pgxdb.Schema, resourceType, resourceID string) (int, error) {
 	var n int
 	if err := tx.QueryRow(ctx,
 		`SELECT COUNT(*) FROM `+schema.Table("iam_roles")+` WHERE resource_type = @resource_type AND resource_id = @resource_id`,
@@ -401,7 +386,7 @@ func countScopedRoles(ctx context.Context, tx *pgxdb.Tx, schema pgxdb.Schema, re
 }
 
 // hasExactRole reports whether an assignment exists at the EXACT scope.
-func hasExactRole(ctx context.Context, tx *pgxdb.Tx, schema pgxdb.Schema, subjectType, subjectID, role, resourceType, resourceID string) (bool, error) {
+func hasExactRole(ctx context.Context, tx pgxdb.Querier, schema pgxdb.Schema, subjectType, subjectID, role, resourceType, resourceID string) (bool, error) {
 	var ok bool
 	if err := tx.QueryRow(ctx,
 		`SELECT EXISTS (SELECT 1 FROM `+schema.Table("iam_roles")+` WHERE subject_type = @subject_type AND subject_id = @subject_id AND role = @role AND resource_type = @resource_type AND resource_id = @resource_id)`,
@@ -418,10 +403,10 @@ func hasExactRole(ctx context.Context, tx *pgxdb.Tx, schema pgxdb.Schema, subjec
 }
 
 // roleScope maps a command scope to the role assignment's (resourceType,
-// resourceID): a resource scope is a scoped assignment; a subject scope is a global
+// resourceID): a resource target is a scoped assignment; a subject scope is a global
 // assignment (empty pair).
-func roleScope(scope mutation.ScopeKey) (string, string) {
-	if scope.Kind == mutation.ScopeResource {
+func roleScope(scope mutations.Target) (string, string) {
+	if scope.Kind == mutations.TargetResource {
 		return scope.Type, scope.ID
 	}
 	return "", ""
@@ -436,7 +421,7 @@ type relIdentity struct {
 	subjectRelation string
 }
 
-func relIdentityOf(relation string, subj relationship.SubjectRef) relIdentity {
+func relIdentityOf(relation string, subj relationships.SubjectRef) relIdentity {
 	return relIdentity{relation, subj.Type, subj.ID, subj.Relation}
 }
 
@@ -446,14 +431,14 @@ func rowIdentity(r mutRelRow) relIdentity {
 
 // findSubject returns the loaded row matching an exact SubjectRef (type, id, and
 // userset relation) regardless of the row's relation — the one-relation arbiter.
-func findSubject(rows []mutRelRow, subj relationship.SubjectRef) (mutRelRow, bool) {
+func findSubject(rows []mutRelRow, subj relationships.SubjectRef) (mutRelRow, bool) {
 	if i := findSubjectIndex(rows, subj); i >= 0 {
 		return rows[i], true
 	}
 	return mutRelRow{}, false
 }
 
-func findSubjectIndex(rows []mutRelRow, subj relationship.SubjectRef) int {
+func findSubjectIndex(rows []mutRelRow, subj relationships.SubjectRef) int {
 	for i, r := range rows {
 		if r.subjectType == subj.Type && r.subjectID == subj.ID && r.subjectRelation == subj.Relation {
 			return i
@@ -462,7 +447,7 @@ func findSubjectIndex(rows []mutRelRow, subj relationship.SubjectRef) int {
 	return -1
 }
 
-func rowFromCommand(row mutation.RelationshipRow) mutRelRow {
+func rowFromCommand(row mutations.RelationshipRow) mutRelRow {
 	return mutRelRow{
 		relation:        row.Relation,
 		subjectType:     row.Subject.Type,
@@ -471,215 +456,10 @@ func rowFromCommand(row mutation.RelationshipRow) mutRelRow {
 	}
 }
 
-func rowsFromCommand(rows []mutation.RelationshipRow) []mutRelRow {
+func rowsFromCommand(rows []mutations.RelationshipRow) []mutRelRow {
 	out := make([]mutRelRow, 0, len(rows))
 	for _, r := range rows {
 		out = append(out, rowFromCommand(r))
 	}
 	return out
-}
-
-// =============================================================================
-// DecisionView — the dependency-tracking guard reader
-// =============================================================================
-
-// decisionView is the dependency-tracking mutation.DecisionView the repository
-// supplies to a guard inside the transaction. Every read records the scope key and
-// the revision it observed (an absent anchor records 0) so the repository can lock
-// those anchors and re-validate the revisions before commit. Reads run through the
-// transaction (Querier), never through the outer Service.
-type decisionView struct {
-	tx     *pgxdb.Tx
-	schema pgxdb.Schema
-	deps   map[string]mutation.Dependency
-	order  []string
-}
-
-var _ mutation.StoreDecisionView = (*decisionView)(nil)
-
-func newDecisionView(tx *pgxdb.Tx, schema pgxdb.Schema) *decisionView {
-	return &decisionView{tx: tx, schema: schema, deps: map[string]mutation.Dependency{}}
-}
-
-// CheckRelation is CheckRelationBounded in the unbounded mode: the legacy
-// primitive, now with the same one-snapshot dependency collection.
-func (v *decisionView) CheckRelation(ctx context.Context, scope mutation.ScopeKey, relation, subjectType, subjectID string) (bool, error) {
-	return v.CheckRelationBounded(ctx, scope, relation, subjectType, subjectID, 0)
-}
-
-// reachedState is one row of the CheckRelationBounded statement: a state of the
-// subject's exact-userset expansion, the revision of the resource scope its
-// membership edges live under (0 with no anchor), and whether a grant on the
-// checked resource matches this state.
-type reachedState struct {
-	atype, aid string
-	revision   int64
-	grants     bool
-}
-
-// CheckRelationBounded reports whether subjectType:subjectID holds relation on
-// the resource named by scope, with exact-userset expansion bounded by
-// maxExpansionStates (the read-side accounting: the seed counts; overflow is
-// relationship.ErrExpansionBudgetExceeded, never an allow or a truncated deny; a
-// non-positive bound is unbounded). The resource scope is recorded BEFORE the
-// grant read. Then ONE statement — one PostgreSQL snapshot — returns the reached
-// states, each state's resource-scope revision, and the per-state grant match,
-// so the decision and the revisions it depends on can never straddle a
-// concurrent commit (the two-statement read-then-record hazard under READ
-// COMMITTED). Dependency collection is bounded by the same cap as the decision.
-func (v *decisionView) CheckRelationBounded(ctx context.Context, scope mutation.ScopeKey, relation, subjectType, subjectID string, maxExpansionStates int) (bool, error) {
-	if err := ctx.Err(); err != nil {
-		return false, err
-	}
-	if err := v.record(ctx, scope); err != nil {
-		return false, err
-	}
-	args := pgx.NamedArgs{
-		"subject_type":  subjectType,
-		"subject_id":    subjectID,
-		"resource_type": scope.Type,
-		"resource_id":   scope.ID,
-		"relation":      relation,
-		"resource_kind": string(mutation.ScopeResource),
-	}
-	cte, from := reachableCTE(v.schema), "reachable"
-	if maxExpansionStates > 0 {
-		cte, from = boundedReachableCTE(v.schema), "capped"
-		args["max_depth"] = maxExpansionStates
-		args["state_cap"] = maxExpansionStates + 1
-	}
-	q := cte + `
-SELECT s.atype, s.aid, COALESCE(sc.revision, 0),
-	EXISTS (
-		SELECT 1 FROM ` + v.schema.Table("iam_relationships") + ` r
-		WHERE r.resource_type = @resource_type AND r.resource_id = @resource_id AND r.relation = @relation
-		  AND r.subject_type = s.atype AND r.subject_id = s.aid AND r.subject_relation = s.arelation
-	)
-FROM ` + from + ` s
-LEFT JOIN ` + v.schema.Table("iam_scopes") + ` sc
-	ON sc.scope_kind = @resource_kind AND sc.scope_type = s.atype AND sc.scope_id = s.aid`
-	rows, err := v.tx.Query(ctx, q, args)
-	if err != nil {
-		return false, mapMutationError(err)
-	}
-	var states []reachedState
-	for rows.Next() {
-		var st reachedState
-		if err := rows.Scan(&st.atype, &st.aid, &st.revision, &st.grants); err != nil {
-			rows.Close()
-			return false, mapMutationError(err)
-		}
-		states = append(states, st)
-	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
-		return false, mapMutationError(err)
-	}
-	if maxExpansionStates > 0 && len(states) > maxExpansionStates {
-		return false, relationship.ErrExpansionBudgetExceeded
-	}
-	// Record every resource scope the expansion traversed with the revision THIS
-	// snapshot observed: an edge feeding the reachable set lives under its
-	// (atype, aid) scope, so a concurrent membership revoke bumps that revision
-	// and invalidates the decision at commit. Recording the seed (the subject as
-	// a resource scope) is a harmless over-record; UNDER-recording is the bug.
-	allowed := false
-	for _, st := range states {
-		v.recordObserved(mutation.ScopeKey{Kind: mutation.ScopeResource, Type: st.atype, ID: st.aid}, mutation.Revision(st.revision))
-		allowed = allowed || st.grants
-	}
-	return allowed, nil
-}
-
-// RelationTargets records the scope's revision FIRST, then reads its targets
-// through the transaction with the read-side statement. With record-before-read
-// a parent edge that a concurrent transaction revokes between the two reads is
-// paired with the PRE-revoke revision, so commit validation sees the bump and
-// aborts as stale; the reverse order would pair the stale edge with the
-// post-revoke revision and validate it.
-func (v *decisionView) RelationTargets(ctx context.Context, scope mutation.ScopeKey, relation string) ([]relationship.RelationTarget, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	if err := v.record(ctx, scope); err != nil {
-		return nil, err
-	}
-	targets, err := relationTargets(ctx, v.tx, v.schema, scope.Type, scope.ID, relation)
-	if err != nil {
-		return nil, mapMutationError(err)
-	}
-	return targets, nil
-}
-
-// HasRole reports whether subjectType:subjectID holds role at scope, recording the
-// scope + revision as a dependency. It mirrors rolesvc.HasRole's effective
-// semantics: an exact-scope match, plus the global fallback (a global assignment
-// satisfies a resource-scoped query); a subject-scoped query has no fallback.
-func (v *decisionView) HasRole(ctx context.Context, scope mutation.ScopeKey, role, subjectType, subjectID string) (bool, error) {
-	if err := ctx.Err(); err != nil {
-		return false, err
-	}
-	if err := v.record(ctx, scope); err != nil {
-		return false, err
-	}
-	var resType, resID string
-	if scope.Kind == mutation.ScopeResource {
-		resType, resID = scope.Type, scope.ID
-	}
-	ok, err := hasExactRole(ctx, v.tx, v.schema, subjectType, subjectID, role, resType, resID)
-	if err != nil {
-		return false, err
-	}
-	if ok {
-		return true, nil
-	}
-	if scope.Kind == mutation.ScopeResource {
-		// The exact-resource check failed, so the global fallback reads the
-		// subject's GLOBAL roles, which serialize into its subject scope. Record
-		// that scope regardless of the fallback's result: a concurrent global
-		// grant/revoke bumps its revision and must invalidate the decision.
-		if err := v.record(ctx, mutation.ScopeKey{Kind: mutation.ScopeSubject, Type: subjectType, ID: subjectID}); err != nil {
-			return false, err
-		}
-		return hasExactRole(ctx, v.tx, v.schema, subjectType, subjectID, role, "", "")
-	}
-	return false, nil
-}
-
-// Dependencies returns the recorded scopes and revisions sorted by
-// ScopeKey.Canonical().
-func (v *decisionView) Dependencies() []mutation.Dependency {
-	keys := append([]string(nil), v.order...)
-	sort.Strings(keys)
-	out := make([]mutation.Dependency, 0, len(keys))
-	for _, k := range keys {
-		out = append(out, v.deps[k])
-	}
-	return out
-}
-
-// record captures a scope dependency once, reading its current (unlocked) revision.
-func (v *decisionView) record(ctx context.Context, scope mutation.ScopeKey) error {
-	if _, ok := v.deps[scope.Canonical()]; ok {
-		return nil
-	}
-	rev, err := scopeRevision(ctx, v.tx, v.schema, scope)
-	if err != nil {
-		return err
-	}
-	v.recordObserved(scope, rev)
-	return nil
-}
-
-// recordObserved captures a scope dependency with a revision the caller already
-// read in the same statement snapshot as the rows it depends on. A scope
-// recorded earlier keeps its FIRST revision: an older observation can only make
-// commit validation stricter, never let a later change slip through.
-func (v *decisionView) recordObserved(scope mutation.ScopeKey, rev mutation.Revision) {
-	key := scope.Canonical()
-	if _, ok := v.deps[key]; ok {
-		return
-	}
-	v.deps[key] = mutation.Dependency{Scope: scope, Revision: rev}
-	v.order = append(v.order, key)
 }

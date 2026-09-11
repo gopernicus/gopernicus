@@ -31,7 +31,7 @@ it, who must not).
 ## Contents
 
 1. Package and import layout
-2. Bundle, `Config`, and profiles
+2. Bundle, options, and profiles
 3. Manifest and asset access
 4. Browser resource requirements
 5. Theme token contract
@@ -48,7 +48,7 @@ it, who must not).
 
 | import path | package | purpose |
 |---|---|---|
-| `.../ui/goth` | `goth` | `Bundle`, `Config`, `Profile`, `Manifest`, `Requirements`, document components |
+| `.../ui/goth` | `goth` | `Bundle`, `Option`, `Profile`, `Manifest`, `Requirements`, document components |
 | `.../ui/goth/theme` | `theme` | semantic token names (values are CSS-only) and document-attribute helpers |
 | `.../ui/goth/primitives` | `primitives` | all 64 catalog primitives in ONE package (Shadcn-style compound prefixes) |
 | `.../ui/goth/components/{forms,layouts,feedback,data}` | per-dir | opinionated domain-neutral compositions (Phase 7) |
@@ -69,12 +69,12 @@ Rules frozen here:
   and any later `sdk`-importing addition is new public surface that reopens
   GOTH-0.3 and re-enters Gate B.
 - Nothing in `ui/goth` calls `http.Handle`, registers a route, installs
-  middleware, accepts a `pocket.Mount`, or writes an HTTP response header. It
+  middleware, accepts a `pockets.Mount`, or writes an HTTP response header. It
   exposes assets, renderers, and requirements; the host composes them.
 
 ---
 
-## 2. Bundle, `Config`, and profiles
+## 2. Bundle, options, and profiles
 
 ```go
 package goth
@@ -83,9 +83,7 @@ package goth
 type Profile uint8
 
 const (
-	// StylesOnly is the zero value: compiled CSS only. Chosen deliberately so a
-	// zero Config yields the safest, smallest, no-JavaScript bundle rather than
-	// an accidental full runtime.
+	// StylesOnly is the default profile: compiled CSS with no JavaScript runtime.
 	StylesOnly Profile = iota
 	// Interactive adds the Alpine CSP build + GOTH controllers.
 	Interactive
@@ -93,43 +91,33 @@ const (
 	Full
 )
 
-// Config is the value passed to New. Its zero value is valid and yields a
-// StylesOnly bundle mounted at the default asset base path with the kit's
-// embedded default theme injected.
-type Config struct {
-	// AssetBasePath is the public URL prefix the host will serve the embedded
-	// asset FS under. Empty means DefaultAssetBasePath ("/assets/goth"). It is
-	// normalized to a leading slash and no trailing slash; a value containing a
-	// scheme, host, "..", control characters, or a query/fragment is a
-	// construction error.
-	AssetBasePath string
+// Options configure private construction settings in order. Last value wins.
+type Option func(*config) // config is private to this package
 
-	// Profile selects the asset set. Zero value StylesOnly.
-	Profile Profile
+// Empty selects "/assets/goth". New normalizes a leading slash and removes
+// trailing slashes, rejecting schemes, hosts, "..", controls, queries/fragments.
+func WithAssetBasePath(path string) Option
 
-	// ThemeStylesheetPath is the root-relative public path of the HOST's theme
-	// stylesheet. Head() emits it as a <link rel="stylesheet"> AFTER the kit
-	// stylesheet (source-order cascade: the host wins). Empty selects the kit's
-	// embedded compiled default theme (theme-default.css) — the WordPress model's
-	// fallback. A non-empty value must begin with exactly one "/" and is emitted
-	// verbatim with NO integrity attribute (the kit cannot know host bytes). A
-	// scheme, authority/host form ("//"), any additional leading slash, backslash,
-	// "..", control character, query, or fragment is a construction error.
-	// Root-relative-only is deliberately conservative: widening to absolute URLs
-	// later is compatible; narrowing is not.
-	ThemeStylesheetPath string
-}
+// Select the asset set; default StylesOnly.
+func WithProfile(profile Profile) Option
+
+// Empty selects the embedded default theme. Nonempty paths must start with
+// exactly one slash. Schemes, hosts, backslashes, "..", controls, queries and
+// fragments are rejected. The host stylesheet follows the kit stylesheet and
+// is emitted verbatim without integrity because the kit does not own its bytes.
+func WithThemeStylesheetPath(path string) Option
 
 // Bundle is the constructed, immutable presentation bundle. Returned by value
 // intent is a pointer receiver on methods but Bundle itself is safe to share
 // across goroutines after New returns; it holds no request state.
 type Bundle struct { /* unexported */ }
 
-// New validates cfg and returns a Bundle. It returns a non-nil error for an
+// New defaults to StylesOnly, the default asset path and the embedded theme.
+// It validates final settings and returns a non-nil error for a nil option, an
 // invalid AssetBasePath, an invalid ThemeStylesheetPath, an unknown Profile, or a
 // malformed embedded manifest. It never returns a partially built Bundle alongside
 // an error.
-func New(cfg Config) (*Bundle, error)
+func New(opts ...Option) (*Bundle, error)
 
 func (b *Bundle) Profile() Profile
 func (b *Bundle) AssetBasePath() string
@@ -151,13 +139,14 @@ func (b *Bundle) Head() templ.Component
 
 | type / field | zero value | error behavior | ownership |
 |---|---|---|---|
-| `Profile` | `StylesOnly` | unknown value → `New` error | set by host in `Config` |
-| `Config` | valid; StylesOnly + default path + injected default theme | invalid `AssetBasePath`/`ThemeStylesheetPath` → `New` error | constructed by host |
-| `Config.AssetBasePath` | `""` → `DefaultAssetBasePath` | scheme/host/`..`/control/query → error | host chooses; only the host serves the route |
-| `Config.ThemeStylesheetPath` | `""` → kit's embedded `theme-default.css` injected | non-`/`-leading / `//` / extra slash / backslash / scheme / host / `..` / control / query / fragment → error | host supplies + serves the file; emitted verbatim, no integrity |
+| `Profile` | `StylesOnly` | unknown value → `New` error | set by host with `WithProfile` |
+| `New()` | StylesOnly + default path + injected default theme | nil option or invalid final settings → error | constructed by host |
+| `WithAssetBasePath` | `""` → `DefaultAssetBasePath` | scheme/host/`..`/control/query → error | host chooses; only the host serves the route |
+| `WithThemeStylesheetPath` | `""` → kit's embedded `theme-default.css` injected | non-`/`-leading / `//` / extra slash / backslash / scheme / host / `..` / control / query / fragment → error | host supplies + serves the file; emitted verbatim, no integrity |
 | `Bundle` | N/A (constructed only via `New`) | — | immutable; shared read-only; never mutated after `New` |
 
-`New` is the only constructor. There is no exported mutator on `Bundle`; a host
+`New` is the only constructor. Options are reusable construction values; a nil
+option returns a package-specific error. The former `Config` record is removed. There is no exported mutator on `Bundle`; a host
 that wants a different profile/theme/path builds another `Bundle`.
 `DefaultAssetBasePath` is an exported package-level value; theming is CSS-only, so
 there is no exported Go theme value (a host overrides tokens through its own
@@ -216,7 +205,7 @@ package assets
 // FS is the embedded, read-only asset filesystem. The embed RETAINS the dist/
 // path segment (go:embed dist), so served FS paths are "dist/<hashed>" rather
 // than root-level. Serve it under the bundle AssetBasePath with
-// sdk/foundation/web.NewStaticFileServer + WithAssetPrefix("dist/"); the "dist/"
+// sdk/pkg/web.NewStaticFileServer + WithAssetPrefix("dist/"); the "dist/"
 // prefix is what the SDK server matches to apply immutable caching, and the kit
 // registers no route itself.
 var FS fs.FS
@@ -345,7 +334,7 @@ last `:root` declaration win. Set a token by redeclaring its custom property:
 
 ```css
 /* the host's own stylesheet, served under 'self' and pointed at by */
-/* Config.ThemeStylesheetPath */
+/* WithThemeStylesheetPath */
 :root {
   --primary: oklch(0.55 0.22 265);
   --radius: 0.25rem;
@@ -360,7 +349,7 @@ last `:root` declaration win. Set a token by redeclaring its custom property:
 - **Default (empty `ThemeStylesheetPath`).** `Head()` injects the kit's compiled
   `theme-default.css` (the polished light/dark palette) after `theme.css`. Zero
   wiring yields a fully themed page.
-- **Host theme.** Set `Config.ThemeStylesheetPath` to a root-relative path your
+- **Host theme.** Pass `WithThemeStylesheetPath` a root-relative path your
   host serves. `Head()` emits it as a `<link rel="stylesheet">` after the kit
   stylesheet and **does not** inject `theme-default.css`, so your file is the sole
   palette; anything you omit falls through to the neutral `contract.css` fallbacks
@@ -513,7 +502,7 @@ type DocumentOptions struct {
 | `DocumentOptions` | light/LTR/empty title/lang "en" | no error path; rendering is total | host constructs per page |
 
 **Configured-host-link SRI limitation + composition escape.** When
-`Config.ThemeStylesheetPath` is set, `Head()`/`Document()` emit the host theme link
+`WithThemeStylesheetPath` supplies a nonempty host path, `Head()`/`Document()` emit the host theme link
 **verbatim with no `integrity` attribute** — the kit cannot know the host's bytes,
 so it cannot compute a Subresource Integrity hash for them (the kit's own assets,
 including the default `theme-default.css`, always carry integrity + crossorigin).
@@ -975,11 +964,11 @@ host-owned; the host also serves its own theme stylesheet under the path it pass
 ```go
 // 1. Construct the immutable bundle. Theming is CSS-only: point ThemeStylesheetPath
 //    at a stylesheet the host serves, or leave it empty to inject the kit default.
-bundle, err := goth.New(goth.Config{
-	AssetBasePath:       "/assets/goth",
-	Profile:             goth.Full,
-	ThemeStylesheetPath: "/theme/host.css", // empty → kit's theme-default.css
-})
+bundle, err := goth.New(
+	goth.WithAssetBasePath("/assets/goth"),
+	goth.WithProfile(goth.Full),
+	goth.WithThemeStylesheetPath("/theme/host.css"), // empty → kit's theme-default.css
+)
 if err != nil {
 	return err
 }
@@ -1042,17 +1031,17 @@ is the shape `examples/minimal` ships:
 
 ```go
 import (
-	"github.com/gopernicus/gopernicus/sdk/foundation/web"
+	"github.com/gopernicus/gopernicus/sdk/pkg/web"
 	uigoth "github.com/gopernicus/gopernicus/ui/goth"
 	uigothassets "github.com/gopernicus/gopernicus/ui/goth/assets"
 )
 
 const gothAssetBasePath = "/assets/goth"
 
-// 1. Immutable bundle. The zero Config is a valid StylesOnly bundle with the kit's
+// 1. Immutable bundle. New() creates a valid StylesOnly bundle with the kit's
 //    default theme injected; pin the asset base path so the emitted hrefs and the
 //    route below agree.
-bundle, err := uigoth.New(uigoth.Config{AssetBasePath: gothAssetBasePath})
+bundle, err := uigoth.New(uigoth.WithAssetBasePath(gothAssetBasePath))
 if err != nil {
 	return err
 }
@@ -1071,7 +1060,7 @@ the three reference wirings.
 
 ### 11.2 Profiles and the asset route
 
-`Config.Profile` selects the served/required asset classes (§2): `StylesOnly` (CSS
+`WithProfile` selects the served/required asset classes (§2): `StylesOnly` (CSS
 only, the zero value and the safest no-JS bundle), `Interactive` (adds the Alpine CSP
 runtime), `Full` (adds HTMX 2.0.10). All three reference hosts run `StylesOnly` — the
 primitives' no-JS baselines carry them, and the CMS admin list's HTMX grammar rides
@@ -1184,7 +1173,7 @@ composed router). The check catches the mistake before the first real request.
 ### 11.6 Custom pocket `Views` — the `views/goth` adapter recipe
 
 A pocket core exposes a technology-neutral `Views` port returning
-`sdk/foundation/web.Renderer` and never imports `ui/goth`, templ, Alpine, or HTMX (a
+`sdk/pkg/web.Renderer` and never imports `ui/goth`, templ, Alpine, or HTMX (a
 nil `Views` keeps the pocket HTML-free). The GOTH rendering ships as a **sibling
 module** `pockets/<name>/views/goth` that implements that port over a `*goth.Bundle`.
 The two reference adapters are `pockets/authentication/views/goth` and
@@ -1300,7 +1289,7 @@ Two caveats for a host:
 
 Theming is CSS-only (§5): the kit ships neutral contract fallbacks + a default palette,
 and a host overrides tokens by serving a stylesheet loaded *after* the kit stylesheet
-(`Config.ThemeStylesheetPath`). Brand values are override inputs, not part of the
+(`WithThemeStylesheetPath`). Brand values are override inputs, not part of the
 contract — the token **names** generalize, specific values do not, and **no Segovia or
 GPS360 code is imported into this repository.**
 
@@ -1317,7 +1306,7 @@ A GPS-branded host ships its own stylesheet redeclaring the tokens it wants:
 
 ```css
 /* the host's own brand stylesheet, served under 'self' and pointed at by     */
-/* Config.ThemeStylesheetPath. This is illustrative GPS branding — no Segovia  */
+/* WithThemeStylesheetPath. This is illustrative GPS branding — no Segovia  */
 /* code or asset is imported; only the frozen kit token NAMES are used.        */
 
 /* REQUIRED: the kit reset leaves the document surface unpainted. */

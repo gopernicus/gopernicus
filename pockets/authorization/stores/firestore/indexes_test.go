@@ -10,7 +10,6 @@ import (
 	"testing"
 
 	gcfs "cloud.google.com/go/firestore"
-
 	firestoredb "github.com/gopernicus/gopernicus/integrations/datastores/firestore"
 )
 
@@ -28,7 +27,7 @@ const compositeBudget = 200
 // firestore.indexes.json declares — see derivedFieldOverrides for why they are
 // declared at all and why the set is every queried field rather than only the
 // composite-free ones.
-const indexFieldOverrideCount = 17
+const indexFieldOverrideCount = 16
 
 // probeValue and probeValues are the literals the live matrix leg filters with.
 // They match nothing: the point of executing a matrix row live is that Firestore
@@ -50,11 +49,11 @@ var probeValues = []string{probeValue + "-a", probeValue + "-b", probeValue + "-
 var equalityPrecedence = map[string][]string{
 	collectionRelationships: {
 		"resource_key", "subject_type", "subject_id", "resource_type",
-		"relation", "subject_key", "resource_id", "created_at", "relationship_id",
+		"relation", "subject_key", "resource_id", "tuple_key_prefix", "tuple_key_suffix",
 	},
 	collectionRoles: {
 		"subject_key", "resource_key", "resource_type", "role",
-		"resource_id", "grant_key", "created_at", "role_key",
+		"resource_id", "grant_key", "role_key",
 	},
 }
 
@@ -73,7 +72,7 @@ type orderSpec struct {
 // prose and a new query cannot ship without its index.
 //
 // Document-addressed reads (Get/GetAll on a deterministic id — HasExactRole, the
-// unrestricted probe, the claim and anchor reads, the receipt) are NOT rows: they
+// unrestricted probe and claim reads) are NOT rows: they
 // use no index at all. SCHEMA.md §7 still lists them.
 type queryShape struct {
 	// name identifies the shape in a failure message and in SCHEMA.md §7.
@@ -211,8 +210,8 @@ func queryMatrix() []queryShape {
 				collection: collectionRelationships,
 				equality:   append([]string{"subject_type", "subject_id"}, filters...),
 				order: []orderSpec{
-					{field: "created_at", direction: dir},
-					{field: "relationship_id", direction: dir},
+					{field: "tuple_key_prefix", direction: dir},
+					{field: "tuple_key_suffix", direction: dir},
 				},
 			})
 		}
@@ -226,8 +225,8 @@ func queryMatrix() []queryShape {
 				collection: collectionRelationships,
 				equality:   append([]string{"resource_key"}, filters...),
 				order: []orderSpec{
-					{field: "created_at", direction: dir},
-					{field: "relationship_id", direction: dir},
+					{field: "tuple_key_prefix", direction: dir},
+					{field: "tuple_key_suffix", direction: dir},
 				},
 			})
 		}
@@ -241,7 +240,6 @@ func queryMatrix() []queryShape {
 				collection: collectionRoles,
 				equality:   []string{"subject_key"},
 				order: []orderSpec{
-					{field: "created_at", direction: dir},
 					{field: "role_key", direction: dir},
 				},
 			},
@@ -250,7 +248,6 @@ func queryMatrix() []queryShape {
 				collection: collectionRoles,
 				equality:   []string{"resource_key"},
 				order: []orderSpec{
-					{field: "created_at", direction: dir},
 					{field: "role_key", direction: dir},
 				},
 			},

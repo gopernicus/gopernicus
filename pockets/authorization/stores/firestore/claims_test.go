@@ -12,11 +12,12 @@ import (
 )
 
 // claimOwners are the only non-test files of this package allowed to name the
-// two claim collections: keys.go DECLARES the constants and the document-id
-// builders, documents.go declares the two claim SHAPES, and tuples.go is the
-// pair of helpers that owns a tuple's three documents. None of the three is a
+// subject claim collection: keys.go DECLARES the constants and the document-id
+// builders, documents.go declares the claim shape, and tuples.go is the
+// pair of helpers that owns a tuple's two documents. None of the three is a
 // write path of its own except tuples.go, which is the point.
 var claimOwners = map[string]bool{
+	"upgrade.go":   true, // explicit host maintenance, never a runtime write path
 	"keys.go":      true,
 	"tuples.go":    true,
 	"documents.go": true,
@@ -27,29 +28,13 @@ var claimOwners = map[string]bool{
 // change reaches past the constants.
 var claimSymbols = []string{
 	"collectionSubjectClaims",
-	"collectionIDClaims",
 	"iam_relationship_subjects",
 	"iam_relationship_ids",
 }
 
-// TestClaimCollectionsAreOwnedByTuplesOnly is the A-D3 risk mitigation, made
-// executable. A relationship tuple's uniqueness lives in two CLAIM documents
-// beside the row (SCHEMA.md §5.2, §5.3), and the failure mode that would break
-// it silently is a future write path that changes the row and forgets a claim —
-// leaving the one-relation-per-subject and primary-key invariants enforced by
-// nothing at all. The mitigation is that putTuple and dropTuple own all three
-// documents; this test is what keeps that true, by refusing to let any other
-// file in the package so much as NAME a claim collection.
-//
-// It is hermetic on purpose (no emulator, no build tag): the property is about
-// this package's source, so it should fail on a plain `go test ./...` in the
-// review that introduces the drift, not on a datastore run.
-//
-// Test files are exempt: proving the claim lifecycle requires reading those
-// documents, and a test cannot corrupt production state. Like the role rule
-// below it reads CODE, not prose — the source is rendered with its comments
-// removed, because a package doc naming the SQL table it mirrors is
-// documentation, not a write path.
+// TestClaimCollectionsAreOwnedByTuplesOnly prevents runtime writers from
+// bypassing the helpers that maintain a tuple and its subject claim together.
+// The explicit offline upgrade is the only separate maintenance writer.
 func TestClaimCollectionsAreOwnedByTuplesOnly(t *testing.T) {
 	entries, err := os.ReadDir(".")
 	if err != nil {
@@ -94,6 +79,7 @@ func TestClaimOwnersExist(t *testing.T) {
 // the collection — putRole and dropRole are its only writers, roleRef and
 // rolesQuery its only addressing, decodeRole its only decoder.
 var roleOwners = map[string]bool{
+	"upgrade.go":   true, // removes legacy role timestamps during host maintenance
 	"keys.go":      true,
 	"documents.go": true,
 	"grants.go":    true,
@@ -159,53 +145,13 @@ func TestRoleOwnersExist(t *testing.T) {
 	}
 }
 
-// mutationOwners are the only non-test files allowed to name the two mutation
-// collections: keys.go DECLARES the constants and the two document-id builders,
-// documents.go declares the two document SHAPES, and mutations.go is the file
-// that owns them — anchorRef/readAnchor/writeAnchor are the anchor's only
-// addressing and its only writer, readAnchorsAndReceipt and insertReceipt the
-// receipt's.
-var mutationOwners = map[string]bool{
-	"keys.go":      true,
-	"documents.go": true,
-	"mutations.go": true,
+// Only the explicit cleanup may address retired protocol collections.
+func TestRetiredMutationCollectionsOnlyAppearInMaintenance(t *testing.T) {
+	assertCollectionOwnership(t, map[string]bool{"upgrade.go": true}, []string{"iam_mutations", "iam_scopes"}, "legacy ledgers belong only to explicit maintenance")
 }
 
-// mutationSymbols are the names a write path would have to use to reach a scope
-// anchor or a receipt: the constants, and the raw collection names in case a
-// future change reaches past them.
-var mutationSymbols = []string{
-	"collectionScopes",
-	"collectionMutations",
-	"iam_scopes",
-	"iam_mutations",
-}
-
-// TestMutationCollectionsAreOwnedByMutationsOnly is the A7 fold's third
-// ownership rule, and it guards the two documents that decide whether a mutation
-// is idempotent at all.
-//
-// The scope anchor is the revision every ExpectedRevision check and every
-// dependency validation reads; the receipt is what makes a replayed MutationID
-// return the original answer instead of applying twice. A write path that
-// bumped an anchor outside writeAnchor, or minted a receipt outside
-// insertReceipt, would break exactly-once semantics with nothing at read time
-// noticing — the same failure class the claim and role rules exist for, on the
-// two collections where it is worst.
-//
-// Hermetic, comment-stripped, test files exempt, for the same reasons as above.
-func TestMutationCollectionsAreOwnedByMutationsOnly(t *testing.T) {
-	assertCollectionOwnership(t, mutationOwners, mutationSymbols,
-		"scope anchors and receipts are owned by mutations.go (writeAnchor/insertReceipt) — route the change through them instead")
-}
-
-// TestMutationOwnersExist keeps the allow-list honest.
-func TestMutationOwnersExist(t *testing.T) {
-	for name := range mutationOwners {
-		if _, err := os.Stat(name); err != nil {
-			t.Errorf("mutation owner %s: %v", name, err)
-		}
-	}
+func TestAuditCollectionHasOneWriter(t *testing.T) {
+	assertCollectionOwnership(t, map[string]bool{"keys.go": true, "audit.go": true}, []string{"collectionAudit", "iam_audit"}, "audit writes and reads belong in audit.go")
 }
 
 // assertCollectionOwnership is the shared body of the ownership rules: no

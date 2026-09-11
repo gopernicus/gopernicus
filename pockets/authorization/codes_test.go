@@ -7,6 +7,10 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	authorizationhttp "github.com/gopernicus/gopernicus/pockets/authorization/inbound/http"
+	authmodel "github.com/gopernicus/gopernicus/pockets/authorization/logic/model"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/mutations"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/relationships"
 	"github.com/gopernicus/gopernicus/sdk"
 )
 
@@ -18,12 +22,11 @@ func TestVocabularyErrorKinds(t *testing.T) {
 		err  error
 		kind error
 	}{
-		{ErrInvalidRequest, sdk.ErrInvalidInput},
-		{ErrUnknownSymbol, sdk.ErrInvalidInput},
-		{ErrEvaluationLimit, sdk.ErrUnavailable},
-		{ErrStaleRevision, sdk.ErrConflict},
-		{ErrInvariantConflict, sdk.ErrConflict},
-		{ErrMutationMismatch, sdk.ErrConflict},
+		{authmodel.ErrInvalidRequest, sdk.ErrInvalidInput},
+		{authmodel.ErrUnknownSymbol, sdk.ErrInvalidInput},
+		{authmodel.ErrEvaluationLimit, sdk.ErrUnavailable},
+		{mutations.ErrConcurrentMutation, sdk.ErrConflict},
+		{mutations.ErrInvariantBlocked, sdk.ErrConflict},
 	}
 	for _, tc := range cases {
 		if !errors.Is(tc.err, tc.kind) {
@@ -31,11 +34,11 @@ func TestVocabularyErrorKinds(t *testing.T) {
 		}
 	}
 	// Evaluation-limit exhaustion must NOT be a conflict.
-	if errors.Is(ErrEvaluationLimit, sdk.ErrConflict) {
+	if errors.Is(authmodel.ErrEvaluationLimit, sdk.ErrConflict) {
 		t.Fatalf("ErrEvaluationLimit must not wrap sdk.ErrConflict")
 	}
 	// Infrastructure failure wraps no expected sentinel → maps to 500.
-	if sdk.IsExpected(ErrInfrastructure) {
+	if sdk.IsExpected(authmodel.ErrInfrastructure) {
 		t.Fatalf("ErrInfrastructure must not be an expected sdk kind")
 	}
 }
@@ -45,25 +48,24 @@ func TestVocabularyErrorKinds(t *testing.T) {
 func TestVocabularyReasonFor(t *testing.T) {
 	cases := []struct {
 		err  error
-		want Reason
+		want authmodel.Reason
 	}{
-		{fmt.Errorf("ctx: %w", ErrEvaluationLimit), ReasonEvaluationLimit},
-		{fmt.Errorf("ctx: %w", ErrStaleRevision), ReasonStaleRevision},
-		{fmt.Errorf("ctx: %w", ErrMutationMismatch), ReasonMutationMismatch},
-		{fmt.Errorf("ctx: %w", ErrInvariantConflict), ReasonInvariantConflict},
-		{fmt.Errorf("ctx: %w", ErrUnknownSymbol), ReasonUnknownSymbol},
-		{fmt.Errorf("ctx: %w", ErrInvalidRequest), ReasonInvalidRequest},
+		{fmt.Errorf("ctx: %w", authmodel.ErrEvaluationLimit), authmodel.ReasonEvaluationLimit},
+		{fmt.Errorf("ctx: %w", mutations.ErrConcurrentMutation), authmodel.ReasonConcurrentMutation},
+		{fmt.Errorf("ctx: %w", mutations.ErrInvariantBlocked), authmodel.ReasonInvariantConflict},
+		{fmt.Errorf("ctx: %w", authmodel.ErrUnknownSymbol), authmodel.ReasonUnknownSymbol},
+		{fmt.Errorf("ctx: %w", authmodel.ErrInvalidRequest), authmodel.ReasonInvalidRequest},
 	}
 	for _, tc := range cases {
-		got, ok := ReasonFor(tc.err)
+		got, ok := mutations.ReasonFor(tc.err)
 		if !ok || got != tc.want {
 			t.Fatalf("ReasonFor(%v) = (%q, %v), want (%q, true)", tc.err, got, ok, tc.want)
 		}
 	}
-	if _, ok := ReasonFor(errors.New("unowned")); ok {
+	if _, ok := mutations.ReasonFor(errors.New("unowned")); ok {
 		t.Fatalf("ReasonFor(unowned) must return ok=false")
 	}
-	if _, ok := ReasonFor(nil); ok {
+	if _, ok := mutations.ReasonFor(nil); ok {
 		t.Fatalf("ReasonFor(nil) must return ok=false")
 	}
 }
@@ -77,25 +79,25 @@ func TestVocabularyReasonFor(t *testing.T) {
 // succeed. It deliberately DIFFERS from ErrMutationsNotConfigured (400), the
 // precondition an actor can observe on a correctly deployed host.
 func TestNoDecisionKindIsAWiringFaultNotADeny(t *testing.T) {
-	if errors.Is(ErrNoDecisionKind, sdk.ErrInvalidInput) {
+	if errors.Is(authmodel.ErrNoDecisionKind, sdk.ErrInvalidInput) {
 		t.Fatalf("ErrNoDecisionKind must not wrap sdk.ErrInvalidInput — it is a wiring fault, not bad input")
 	}
 	for _, kind := range []error{sdk.ErrForbidden, sdk.ErrUnauthorized, sdk.ErrUnavailable, sdk.ErrConflict} {
-		if errors.Is(ErrNoDecisionKind, kind) {
+		if errors.Is(authmodel.ErrNoDecisionKind, kind) {
 			t.Fatalf("ErrNoDecisionKind must not wrap %v", kind)
 		}
 	}
-	if sdk.IsExpected(ErrNoDecisionKind) {
+	if sdk.IsExpected(authmodel.ErrNoDecisionKind) {
 		t.Fatalf("ErrNoDecisionKind must not be an expected sdk kind")
 	}
 	// It is a distinct identity: it does NOT wrap the relationship-kind sentinel,
 	// so a host branching on ErrRelationshipsNotConfigured cannot silently catch it.
-	if errors.Is(ErrNoDecisionKind, ErrRelationshipsNotConfigured) {
+	if errors.Is(authmodel.ErrNoDecisionKind, relationships.ErrRelationshipsNotConfigured) {
 		t.Fatalf("ErrNoDecisionKind must be a clean identity, not a wrap of ErrRelationshipsNotConfigured")
 	}
 
 	rec := httptest.NewRecorder()
-	RespondError(rec, fmt.Errorf("Check: %w", ErrNoDecisionKind))
+	authorizationhttp.RespondError(rec, fmt.Errorf("Check: %w", authmodel.ErrNoDecisionKind))
 	if rec.Code == http.StatusForbidden {
 		t.Fatalf("a wiring fault must never surface as a deny (403)")
 	}
@@ -104,18 +106,18 @@ func TestNoDecisionKindIsAWiringFaultNotADeny(t *testing.T) {
 	}
 	// ReasonFor does not own it: a wiring fault carries no decision reason and the
 	// caller treats it as infrastructure.
-	if reason, ok := ReasonFor(ErrNoDecisionKind); ok {
+	if reason, ok := mutations.ReasonFor(authmodel.ErrNoDecisionKind); ok {
 		t.Fatalf("ReasonFor(ErrNoDecisionKind) = (%q, true), want ok=false", reason)
 	}
 	// The actor-observable precondition refusal keeps its 400: the two "not
 	// configured" sentinels answer DIFFERENT statuses by design.
-	mutations := httptest.NewRecorder()
-	RespondError(mutations, ErrMutationsNotConfigured)
-	if mutations.Code != http.StatusBadRequest {
-		t.Fatalf("ErrMutationsNotConfigured maps to %d, want %d", mutations.Code, http.StatusBadRequest)
+	mutationResponse := httptest.NewRecorder()
+	authorizationhttp.RespondError(mutationResponse, mutations.ErrMutationsNotConfigured)
+	if mutationResponse.Code != http.StatusBadRequest {
+		t.Fatalf("ErrMutationsNotConfigured maps to %d, want %d", mutationResponse.Code, http.StatusBadRequest)
 	}
-	if rec.Code == mutations.Code {
+	if rec.Code == mutationResponse.Code {
 		t.Fatalf("the wiring fault (%d) and the actor-observable precondition (%d) must not share a status",
-			rec.Code, mutations.Code)
+			rec.Code, mutationResponse.Code)
 	}
 }

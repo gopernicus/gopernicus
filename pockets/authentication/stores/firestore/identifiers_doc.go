@@ -7,11 +7,10 @@ import (
 	"time"
 
 	gcfs "cloud.google.com/go/firestore"
-	"google.golang.org/api/iterator"
-
 	firestoredb "github.com/gopernicus/gopernicus/integrations/datastores/firestore"
-	"github.com/gopernicus/gopernicus/pockets/authentication/domain/identifier"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/identifier"
 	"github.com/gopernicus/gopernicus/sdk"
+	"google.golang.org/api/iterator"
 )
 
 // The user_identifiers collection and BOTH of its claim collections are owned
@@ -83,7 +82,7 @@ func activeIdentifiersQuery(db *firestoredb.DB, userID string) gcfs.Query {
 }
 
 // newIdentifierDoc builds the document for an identifier being CREATED, minting
-// the id when the caller left it empty (the greenfield cryptids.Database
+// the id when the caller left it empty (the greenfield sdk.DatabaseID
 // convention the SQL adapters serve with `RETURNING id`) and linking it to
 // userID, which the atomic create only learns inside its own transaction.
 //

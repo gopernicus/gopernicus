@@ -18,7 +18,7 @@ func TestWakeChannel_EmitFiresWake(t *testing.T) {
 	}
 	defer sub.Unsubscribe()
 
-	bus.Emit(context.Background(), newTestEvent("test.event", ""), events.WithSync())
+	bus.Dispatch(context.Background(), newTestEvent("test.event", ""))
 
 	select {
 	case <-wake:
@@ -38,7 +38,7 @@ func TestWakeChannel_BurstIsCoalesced(t *testing.T) {
 	defer sub.Unsubscribe()
 
 	for i := 0; i < 100; i++ {
-		bus.Emit(context.Background(), newTestEvent("test.event", ""), events.WithSync())
+		bus.Dispatch(context.Background(), newTestEvent("test.event", ""))
 	}
 
 	received := 0
@@ -71,7 +71,7 @@ func TestWakeChannel_NonMatchingTopicIgnored(t *testing.T) {
 	}
 	defer sub.Unsubscribe()
 
-	bus.Emit(context.Background(), newTestEvent("b.bar", ""), events.WithSync())
+	bus.Dispatch(context.Background(), newTestEvent("b.bar", ""))
 
 	select {
 	case <-wake:
@@ -90,7 +90,7 @@ func TestWakeChannel_UnsubscribeStopsWakes(t *testing.T) {
 	}
 	sub.Unsubscribe()
 
-	bus.Emit(context.Background(), newTestEvent("test.event", ""), events.WithSync())
+	bus.Dispatch(context.Background(), newTestEvent("test.event", ""))
 
 	select {
 	case <-wake:

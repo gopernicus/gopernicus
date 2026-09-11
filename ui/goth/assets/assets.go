@@ -17,7 +17,7 @@ var distFS embed.FS
 // FS is the embedded, read-only asset filesystem. The embed RETAINS the dist/
 // path segment, so served FS paths are "dist/<hashed>" rather than root-level.
 // Serve it under the bundle AssetBasePath with
-// sdk/foundation/web.NewStaticFileServer + WithAssetPrefix("dist/"); the "dist/"
+// sdk/pkg/web.NewStaticFileServer + WithAssetPrefix("dist/"); the "dist/"
 // prefix is what the SDK server matches to apply immutable caching.
 var FS fs.FS = distFS
 

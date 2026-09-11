@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"math"
 	"os"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -34,14 +35,13 @@ const (
 const (
 	defaultExporter    = ExporterStdout
 	defaultServiceName = "gopernicus"
-	defaultSampleRate  = 1.0
 )
 
 // Config selects and configures the OpenTelemetry exporter Open builds. Its
-// `env:` tags let a host populate the scalar fields with sdk/foundation/environment.ParseEnvTags;
+// `env:` tags let a host populate the scalar fields with sdk/pkg/environment.ParseEnvTags;
 // the Stdout and Provider fields are programmatic-only. A zero Config is filled
 // with the documented defaults by Open (stdout exporter, service name
-// "gopernicus", full sampling), so struct-literal construction stays
+// "gopernicus", parent-based sampling of roots), so struct-literal construction stays
 // first-class.
 type Config struct {
 	// Exporter chooses the span destination. Empty defaults to ExporterStdout.
@@ -54,9 +54,9 @@ type Config struct {
 	// values are omitted.
 	ServiceVersion string `env:"TRACING_SERVICE_VERSION" default:""`
 	Environment    string `env:"TRACING_ENVIRONMENT" default:""`
-	// SampleRate is the head-sampling ratio in [0,1] applied by the OTLP
-	// exporter. Zero defaults to full sampling (1.0); the stdout exporter always
-	// samples so dev output is never silently dropped.
+	// SampleRate is the OTLP root-sampling ratio in [0,1]. Literal zero samples
+	// no roots; environment loading defaults it to 1. Parent decisions take
+	// precedence. Stdout samples roots and respects parents; Provider owns its policy.
 	SampleRate float64 `env:"TRACING_SAMPLE_RATE" default:"1"`
 
 	// Endpoint is the OTLP/gRPC collector address (host:port). Empty lets the
@@ -92,8 +92,8 @@ func Open(ctx context.Context, cfg Config) (*Tracer, error) {
 	if cfg.ServiceName == "" {
 		cfg.ServiceName = defaultServiceName
 	}
-	if cfg.SampleRate <= 0 {
-		cfg.SampleRate = defaultSampleRate
+	if math.IsNaN(cfg.SampleRate) || math.IsInf(cfg.SampleRate, 0) || cfg.SampleRate < 0 || cfg.SampleRate > 1 {
+		return nil, fmt.Errorf("otel: sample rate must be finite and between 0 and 1")
 	}
 
 	switch cfg.Exporter {
@@ -136,6 +136,7 @@ func openStdout(cfg Config) (*Tracer, error) {
 
 	tp := sdktrace.NewTracerProvider(
 		sdktrace.WithSyncer(exporter),
+		sdktrace.WithSampler(sdktrace.ParentBased(sdktrace.AlwaysSample())),
 		sdktrace.WithResource(res),
 	)
 	return newOwnedTracer(tp, cfg.ServiceName), nil
@@ -163,7 +164,7 @@ func openOTLPGRPC(ctx context.Context, cfg Config) (*Tracer, error) {
 
 	tp := sdktrace.NewTracerProvider(
 		sdktrace.WithBatcher(exporter),
-		sdktrace.WithSampler(sdktrace.TraceIDRatioBased(cfg.SampleRate)),
+		sdktrace.WithSampler(rootSampler(cfg.SampleRate)),
 		sdktrace.WithResource(res),
 	)
 	return newOwnedTracer(tp, cfg.ServiceName), nil
@@ -185,4 +186,8 @@ func newResource(cfg Config) (*resource.Resource, error) {
 		return nil, fmt.Errorf("otel: building resource: %w", err)
 	}
 	return res, nil
+}
+
+func rootSampler(rate float64) sdktrace.Sampler {
+	return sdktrace.ParentBased(sdktrace.TraceIDRatioBased(rate))
 }

@@ -8,28 +8,23 @@ import (
 	"testing"
 
 	firestoredb "github.com/gopernicus/gopernicus/integrations/datastores/firestore"
-	"github.com/gopernicus/gopernicus/pockets/authorization/domain/relationship"
-	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/relationships"
+	"github.com/gopernicus/gopernicus/sdk/pkg/list"
 )
 
 // A2d: the two crud listings, the streamed distinct-id lookups, and the
 // descendant BFS (A-D4). The shared conformance suite proves the port contract;
 // what is asserted here is the part that only shows up at Firestore's own
-// seams — the tie-break under one shared timestamp, deduplication across chunk
+// seams — natural-key cursor boundaries, deduplication across chunk
 // and PAGE boundaries, and the DNF product that decides how a hop is chunked.
 
-// TestListingsPageStablyUnderTiedTimestamps is the reason the listings carry a
-// PK at all: a bulk create stamps ONE created_at for the whole batch, so
-// created_at cannot order the page and relationship_id is the load-bearing
-// tiebreak. The walk pages forward one row at a time, then walks BACK from page
-// three to page two, which is where a cursor built on the timestamp alone
-// repeats or skips rows.
-func TestListingsPageStablyUnderTiedTimestamps(t *testing.T) {
+// TestListingsPageInNaturalTupleOrder covers forward and reverse cursor paging.
+func TestListingsPageInNaturalTupleOrder(t *testing.T) {
 	ctx := context.Background()
 	_, s := newRelationships(t)
 
 	const rows = 7
-	tuples := make([]relationship.CreateRelationship, 0, rows)
+	tuples := make([]relationships.CreateRelationship, 0, rows)
 	for i := 0; i < rows; i++ {
 		tuples = append(tuples, ctf("doc", docID("d", i), "viewer", "user", "u1"))
 	}
@@ -37,19 +32,13 @@ func TestListingsPageStablyUnderTiedTimestamps(t *testing.T) {
 		t.Fatalf("create: %v", err)
 	}
 
-	// One batch, one timestamp: the tie is real, not incidental.
-	all, err := s.ListRelationshipsBySubject(ctx, "user", "u1", relationship.SubjectRelationshipFilter{}, crud.ListRequest{Limit: 50})
+	// Compare paged results with the complete natural ordering.
+	all, err := s.ListRelationshipsBySubject(ctx, "user", "u1", relationships.SubjectRelationshipFilter{}, list.Request{Limit: 50})
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
 	if len(all.Items) != rows {
 		t.Fatalf("want %d rows, got %d", rows, len(all.Items))
-	}
-	stamp := all.Items[0].CreatedAt
-	for _, item := range all.Items {
-		if !item.CreatedAt.Equal(stamp) {
-			t.Fatalf("the batch must share ONE created_at; %s has %s, want %s", item.ID, item.CreatedAt, stamp)
-		}
 	}
 
 	// Page forward two at a time; every resource appears exactly once and the
@@ -58,7 +47,7 @@ func TestListingsPageStablyUnderTiedTimestamps(t *testing.T) {
 	cursor := ""
 	var cursors []string
 	for page := 0; page < rows; page++ {
-		got, err := s.ListRelationshipsBySubject(ctx, "user", "u1", relationship.SubjectRelationshipFilter{}, crud.ListRequest{Limit: 2, Cursor: cursor})
+		got, err := s.ListRelationshipsBySubject(ctx, "user", "u1", relationships.SubjectRelationshipFilter{}, list.Request{Limit: 2, Cursor: cursor})
 		if err != nil {
 			t.Fatalf("page %d: %v", page, err)
 		}
@@ -84,14 +73,14 @@ func TestListingsPageStablyUnderTiedTimestamps(t *testing.T) {
 	if len(cursors) < 3 {
 		t.Fatalf("want at least three pages, got %d", len(cursors))
 	}
-	third, err := s.ListRelationshipsBySubject(ctx, "user", "u1", relationship.SubjectRelationshipFilter{}, crud.ListRequest{Limit: 2, Cursor: cursors[2]})
+	third, err := s.ListRelationshipsBySubject(ctx, "user", "u1", relationships.SubjectRelationshipFilter{}, list.Request{Limit: 2, Cursor: cursors[2]})
 	if err != nil {
 		t.Fatalf("page three: %v", err)
 	}
 	if !third.HasPrev || third.PreviousCursor == "" {
 		t.Fatalf("page three must offer a previous cursor: %+v", third)
 	}
-	back, err := s.ListRelationshipsBySubject(ctx, "user", "u1", relationship.SubjectRelationshipFilter{}, crud.ListRequest{Limit: 2, Cursor: third.PreviousCursor})
+	back, err := s.ListRelationshipsBySubject(ctx, "user", "u1", relationships.SubjectRelationshipFilter{}, list.Request{Limit: 2, Cursor: third.PreviousCursor})
 	if err != nil {
 		t.Fatalf("page three -> two: %v", err)
 	}
@@ -101,7 +90,7 @@ func TestListingsPageStablyUnderTiedTimestamps(t *testing.T) {
 }
 
 // ids projects a subject listing page to its resource ids.
-func ids(items []relationship.SubjectRelationship) []string {
+func ids(items []relationships.SubjectRelationship) []string {
 	out := make([]string, 0, len(items))
 	for _, item := range items {
 		out = append(out, item.ResourceID)
@@ -117,7 +106,7 @@ func TestListingFiltersAndResourceScope(t *testing.T) {
 	ctx := context.Background()
 	_, s := newRelationships(t)
 
-	if err := s.CreateRelationships(ctx, []relationship.CreateRelationship{
+	if err := s.CreateRelationships(ctx, []relationships.CreateRelationship{
 		ctf("doc", "x", "viewer", "user", "u1"),
 		ctf("doc", "x", "owner", "group", "eng"),
 		ctf("folder", "x", "viewer", "user", "u1"), // same id, other TYPE
@@ -126,7 +115,7 @@ func TestListingFiltersAndResourceScope(t *testing.T) {
 		t.Fatalf("create: %v", err)
 	}
 
-	byResource, err := s.ListRelationshipsByResource(ctx, "doc", "x", relationship.ResourceRelationshipFilter{}, crud.ListRequest{Limit: 50})
+	byResource, err := s.ListRelationshipsByResource(ctx, "doc", "x", relationships.ResourceRelationshipFilter{}, list.Request{Limit: 50})
 	if err != nil {
 		t.Fatalf("list by resource: %v", err)
 	}
@@ -135,7 +124,7 @@ func TestListingFiltersAndResourceScope(t *testing.T) {
 	}
 
 	subjectType, relation := "user", "viewer"
-	filtered, err := s.ListRelationshipsByResource(ctx, "doc", "x", relationship.ResourceRelationshipFilter{SubjectType: &subjectType, Relation: &relation}, crud.ListRequest{Limit: 50})
+	filtered, err := s.ListRelationshipsByResource(ctx, "doc", "x", relationships.ResourceRelationshipFilter{SubjectType: &subjectType, Relation: &relation}, list.Request{Limit: 50})
 	if err != nil {
 		t.Fatalf("filtered list by resource: %v", err)
 	}
@@ -144,7 +133,7 @@ func TestListingFiltersAndResourceScope(t *testing.T) {
 	}
 
 	resourceType := "doc"
-	narrow, err := s.ListRelationshipsBySubject(ctx, "user", "u1", relationship.SubjectRelationshipFilter{ResourceType: &resourceType}, crud.ListRequest{Limit: 50})
+	narrow, err := s.ListRelationshipsBySubject(ctx, "user", "u1", relationships.SubjectRelationshipFilter{ResourceType: &resourceType}, list.Request{Limit: 50})
 	if err != nil {
 		t.Fatalf("filtered list by subject: %v", err)
 	}
@@ -152,7 +141,7 @@ func TestListingFiltersAndResourceScope(t *testing.T) {
 		t.Fatalf("the resource-type filter must keep u1's two doc rows, got %d: %+v", got, narrow.Items)
 	}
 	editor := "editor"
-	one, err := s.ListRelationshipsBySubject(ctx, "user", "u1", relationship.SubjectRelationshipFilter{ResourceType: &resourceType, Relation: &editor}, crud.ListRequest{Limit: 50})
+	one, err := s.ListRelationshipsBySubject(ctx, "user", "u1", relationships.SubjectRelationshipFilter{ResourceType: &resourceType, Relation: &editor}, list.Request{Limit: 50})
 	if err != nil {
 		t.Fatalf("two-filter list by subject: %v", err)
 	}
@@ -174,7 +163,7 @@ func TestLookupDedupesAcrossChunksAndPages(t *testing.T) {
 	// them granting `viewer` on the SAME doc; a second relation on the same doc
 	// duplicates it again. The physical stream therefore carries dozens of
 	// documents for one id, across more than one page.
-	tuples := []relationship.CreateRelationship{ctf("doc", "shared", "editor", "user", "u1")}
+	tuples := []relationships.CreateRelationship{ctf("doc", "shared", "editor", "user", "u1")}
 	for i := 0; i < 40; i++ {
 		g := docID("g", i)
 		tuples = append(tuples,
@@ -226,7 +215,7 @@ func TestLookupsExcludeForeignResourceTypesAndUsersets(t *testing.T) {
 	ctx := context.Background()
 	_, s := newRelationships(t)
 
-	if err := s.CreateRelationships(ctx, []relationship.CreateRelationship{
+	if err := s.CreateRelationships(ctx, []relationships.CreateRelationship{
 		ctf("space", "s2", "parent", "space", "p1"),
 		ctf("folder", "s3", "parent", "space", "p1"),                 // other resource type
 		ctfUserset("space", "s4", "parent", "space", "p1", "member"), // a USERSET target
@@ -262,7 +251,7 @@ func TestDescendantWalkChunksByTheDNFProduct(t *testing.T) {
 
 	// 31 children of one root, so the SECOND hop's frontier is 31 wide.
 	const children = 31
-	tuples := make([]relationship.CreateRelationship, 0, children+1)
+	tuples := make([]relationships.CreateRelationship, 0, children+1)
 	for i := 0; i < children; i++ {
 		tuples = append(tuples, ctf("space", docID("c", i), "parent", "space", "root"))
 	}
@@ -326,7 +315,7 @@ func TestDescendantWalkTerminatesOnCyclesAndPagesTheClosure(t *testing.T) {
 	_, s := newRelationships(t)
 
 	// a -> b -> c -> a, plus a leaf off c.
-	if err := s.CreateRelationships(ctx, []relationship.CreateRelationship{
+	if err := s.CreateRelationships(ctx, []relationships.CreateRelationship{
 		ctf("space", "b", "parent", "space", "a"),
 		ctf("space", "c", "parent", "space", "b"),
 		ctf("space", "a", "parent", "space", "c"),
@@ -367,7 +356,7 @@ func TestLookupAfterIsRawByteOrder(t *testing.T) {
 	_, s := newRelationships(t)
 
 	raw := []string{"B", "a", "_x", "~z", "Z", "é"}
-	tuples := make([]relationship.CreateRelationship, 0, len(raw))
+	tuples := make([]relationships.CreateRelationship, 0, len(raw))
 	for _, id := range raw {
 		tuples = append(tuples, ctf("doc", id, "viewer", "user", "u1"))
 	}

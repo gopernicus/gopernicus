@@ -30,13 +30,13 @@ import (
 	"github.com/gopernicus/gopernicus/pockets/cms/domain/messaging"
 	"github.com/gopernicus/gopernicus/pockets/cms/domain/taxonomy"
 	"github.com/gopernicus/gopernicus/sdk"
-	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
-	"github.com/gopernicus/gopernicus/sdk/foundation/cryptids"
+
+	"github.com/gopernicus/gopernicus/sdk/pkg/list"
 )
 
 // ids assigns entity keys when a Create arrives with an empty ID (the
-// cryptids.Database strategy, amended D10) — mimicking a schema default.
-var ids = cryptids.IDGenerator{}
+// sdk.DatabaseID strategy, amended D10) — mimicking a schema default.
+var ids = sdk.IDGenerator{}
 
 // orderField is the keyset order column entries paginate by; it must match the
 // cursor's order field so a stale cursor from a different sort is ignored.
@@ -146,7 +146,7 @@ func (r entryRepo) Delete(_ context.Context, id string) error {
 	return nil
 }
 
-func (r entryRepo) List(_ context.Context, q content.EntryQuery) (crud.Page[content.Entry], error) {
+func (r entryRepo) List(_ context.Context, q content.EntryQuery) (list.Page[content.Entry], error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	var all []content.Entry
@@ -155,10 +155,10 @@ func (r entryRepo) List(_ context.Context, q content.EntryQuery) (crud.Page[cont
 			all = append(all, e)
 		}
 	}
-	return entryPageOf(all, q.ListRequest)
+	return entryPageOf(all, q.Request)
 }
 
-func (r entryRepo) ListByTerm(_ context.Context, termID string, q content.EntryQuery) (crud.Page[content.Entry], error) {
+func (r entryRepo) ListByTerm(_ context.Context, termID string, q content.EntryQuery) (list.Page[content.Entry], error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	var matched []content.Entry
@@ -167,7 +167,7 @@ func (r entryRepo) ListByTerm(_ context.Context, termID string, q content.EntryQ
 			matched = append(matched, e)
 		}
 	}
-	return entryPageOf(matched, q.ListRequest)
+	return entryPageOf(matched, q.Request)
 }
 
 func (r entryRepo) SetTerms(_ context.Context, entryID string, termIDs []string) error {
@@ -421,20 +421,20 @@ func (r inquiryRepo) List(_ context.Context) ([]messaging.Inquiry, error) {
 }
 
 // entryPageOf sorts items by (created_at, id) in the resolved direction, then
-// applies the sdk/foundation/crud list matrix — cursor or offset mode, the reverse-probe
+// applies the sdk/pkg/list list matrix — cursor or offset mode, the reverse-probe
 // prev page, and the optional count — the same keyset shape the dialect stores
 // implement in SQL, hand-rolled here so this demo store paginates identically.
 // created_at is the only sortable field (content.OrderFields).
-func entryPageOf(items []content.Entry, req crud.ListRequest) (crud.Page[content.Entry], error) {
+func entryPageOf(items []content.Entry, req list.Request) (list.Page[content.Entry], error) {
 	if err := req.Validate(); err != nil {
-		return crud.Page[content.Entry]{}, err
+		return list.Page[content.Entry]{}, err
 	}
 	if req.Order.Field != "" {
 		if _, ok := content.OrderFields[req.Order.Field]; !ok {
-			return crud.Page[content.Entry]{}, fmt.Errorf("unknown order field %q: %w", req.Order.Field, sdk.ErrInvalidInput)
+			return list.Page[content.Entry]{}, fmt.Errorf("unknown order field %q: %w", req.Order.Field, sdk.ErrInvalidInput)
 		}
 	}
-	asc := req.Order.Direction == crud.ASC
+	asc := req.Order.Direction == list.ASC
 
 	sort.Slice(items, func(i, j int) bool {
 		ti, tj := items[i].CreatedAt, items[j].CreatedAt
@@ -451,12 +451,12 @@ func entryPageOf(items []content.Entry, req crud.ListRequest) (crud.Page[content
 	})
 
 	total := int64(len(items))
-	limit := req.NormalizedLimit(crud.Limits{})
+	limit := req.NormalizedLimit(list.Limits{})
 	encode := func(e content.Entry) (string, error) {
-		return crud.EncodeCursor(orderField, e.CreatedAt, e.ID)
+		return list.EncodeCursor(orderField, e.CreatedAt, e.ID)
 	}
 
-	if req.ResolvedStrategy() == crud.StrategyOffset {
+	if req.ResolvedStrategy() == list.StrategyOffset {
 		window := items
 		if req.Offset < len(window) {
 			window = window[req.Offset:]
@@ -466,9 +466,9 @@ func entryPageOf(items []content.Entry, req crud.ListRequest) (crud.Page[content
 		if len(window) > limit+1 {
 			window = window[:limit+1]
 		}
-		pg, err := crud.TrimPage(window, limit, encode)
+		pg, err := list.TrimPage(window, limit, encode)
 		if err != nil {
-			return crud.Page[content.Entry]{}, err
+			return list.Page[content.Entry]{}, err
 		}
 		pg.NextCursor = ""
 		pg.HasPrev = req.Offset > 0
@@ -478,14 +478,19 @@ func entryPageOf(items []content.Entry, req crud.ListRequest) (crud.Page[content
 		return pg, nil
 	}
 
-	cur, err := crud.DecodeCursor(req.Cursor, orderField)
+	cur, err := list.DecodeCursor(req.Cursor, orderField)
 	if err != nil {
-		return crud.Page[content.Entry]{}, err
+		return list.Page[content.Entry]{}, err
 	}
 
+	var cv time.Time
 	forward := items
 	if cur != nil {
-		cv, _ := cur.OrderValue.(time.Time)
+		var ok bool
+		cv, ok = cur.OrderValue.(time.Time)
+		if !ok {
+			return list.Page[content.Entry]{}, fmt.Errorf("cursor order value must be a timestamp: %w", sdk.ErrInvalidInput)
+		}
 		forward = forward[:0:0]
 		for _, e := range items {
 			if afterEntryCursor(e, cv, cur.PK, asc) {
@@ -497,25 +502,24 @@ func entryPageOf(items []content.Entry, req crud.ListRequest) (crud.Page[content
 	if len(window) > limit+1 {
 		window = window[:limit+1]
 	}
-	pg, err := crud.TrimPage(window, limit, encode)
+	pg, err := list.TrimPage(window, limit, encode)
 	if err != nil {
-		return crud.Page[content.Entry]{}, err
+		return list.Page[content.Entry]{}, err
 	}
 
 	if cur != nil {
-		cv, _ := cur.OrderValue.(time.Time)
 		var before []content.Entry
 		for _, e := range items {
-			if beforeEntryCursor(e, cv, cur.PK, asc) {
+			if !afterEntryCursor(e, cv, cur.PK, asc) {
 				before = append(before, e)
 			}
 		}
-		// The previous page is the `limit` rows immediately before the cursor.
-		if len(before) > limit {
-			before = before[len(before)-limit:]
+		// Include the boundary and one extra predecessor for the previous cursor.
+		if len(before) > limit+1 {
+			before = before[len(before)-limit-1:]
 		}
-		if err := crud.MarkPrevPage(&pg, before, limit, encode); err != nil {
-			return crud.Page[content.Entry]{}, err
+		if err := list.MarkPrevPage(&pg, before, limit, encode); err != nil {
+			return list.Page[content.Entry]{}, err
 		}
 	}
 
@@ -538,19 +542,4 @@ func afterEntryCursor(e content.Entry, cv time.Time, cpk string, asc bool) bool 
 		return e.ID > cpk
 	}
 	return e.ID < cpk
-}
-
-// beforeEntryCursor reports whether e sorts strictly before the cursor under the
-// resolved direction — the reverse-probe predicate.
-func beforeEntryCursor(e content.Entry, cv time.Time, cpk string, asc bool) bool {
-	if !e.CreatedAt.Equal(cv) {
-		if asc {
-			return e.CreatedAt.Before(cv)
-		}
-		return e.CreatedAt.After(cv)
-	}
-	if asc {
-		return e.ID < cpk
-	}
-	return e.ID > cpk
 }

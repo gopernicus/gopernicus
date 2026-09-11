@@ -83,8 +83,15 @@ var probeTables = []string{
 // applies the schema (see ExportMigrations) and the store just provides repos.
 // db is the connector wrapper (error mapping + Tx), not a raw *pgxpool.Pool.
 // WithSchema qualifies both the probe and every statement the stores run.
-func Repositories(db *pgxdb.DB, opts ...Option) (auth.Repositories, error) {
-	ctx := context.Background()
+func Repositories(ctx context.Context, db *pgxdb.DB, opts ...Option) (auth.Repositories, error) {
+	if db == nil {
+		return auth.Repositories{}, fmt.Errorf("authentication pgx: nil database: %w", sdk.ErrInvalidInput)
+	}
+	for _, opt := range opts {
+		if opt == nil {
+			return auth.Repositories{}, fmt.Errorf("authentication pgx: nil option: %w", sdk.ErrInvalidInput)
+		}
+	}
 	s := qualified{schema: applyOptions(opts).schema}
 	for _, table := range probeTables {
 		name := s.table(table)
@@ -138,6 +145,7 @@ var probeColumns = []struct{ table, column, migration string }{
 	{usersTable, "status_changed_at", "0014_user_status.sql"},
 	{challengesTable, "subject_key", "0015_challenge_subject_keys.sql"},
 	{invitationsTable, "metadata", "0016_invitation_metadata.sql"},
+	{invitationsTable, "resolved_subject_type", "0018_invitation_acceptance.sql"},
 }
 
 // probeColumnSQL is the default column probe. It is deliberately NOT filtered by

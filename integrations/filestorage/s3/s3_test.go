@@ -40,22 +40,17 @@ import (
 // for local-only operations (presigning) without a live server.
 func hermeticStore(t *testing.T, usePathStyle bool) *Store {
 	t.Helper()
-	store, err := Open(context.Background(), Config{
-		Bucket:          "mybucket",
-		Region:          "us-east-1",
-		AccessKeyID:     "AKIAEXAMPLE",
-		SecretAccessKey: "secretexample",
-		Endpoint:        "http://localhost:9000",
-		UsePathStyle:    usePathStyle,
+	store := requestStore(t, func(r *http.Request) (*http.Response, error) {
+		t.Errorf("unexpected HTTP request: %s", r.Method)
+		return nil, errors.New("unexpected HTTP request")
 	})
-	if err != nil {
-		t.Fatalf("Open() error = %v", err)
-	}
-	return store
+	options := store.client.Options()
+	options.UsePathStyle = usePathStyle
+	return newTestStore(t, awss3.New(options), "mybucket")
 }
 
 // TestImplementsPorts pins the compile-time contract at runtime: Store honors the
-// core Storer and both optional capability interfaces the sdk advertises via
+// core Storer and the signed-URL capability interface the sdk advertises via
 // type assertion.
 func TestImplementsPorts(t *testing.T) {
 	var s any = hermeticStore(t, true)
@@ -65,8 +60,8 @@ func TestImplementsPorts(t *testing.T) {
 	if _, ok := s.(filestorage.SignedURLer); !ok {
 		t.Error("Store does not implement filestorage.SignedURLer")
 	}
-	if _, ok := s.(filestorage.ResumableUploader); !ok {
-		t.Error("Store does not implement filestorage.ResumableUploader")
+	if _, ok := s.(filestorage.ResumableUploader); ok {
+		t.Error("S3 multipart upload is not a client PUT session URI")
 	}
 }
 
@@ -103,16 +98,16 @@ func TestIsNotFound(t *testing.T) {
 }
 
 // TestMapReadError proves a missing object maps to ErrObjectNotFound and any
-// other read failure maps to ErrDownloadFailed — the sentinels the sdk
-// conformance suite asserts with errors.Is.
+// other read failures preserve their cause.
 func TestMapReadError(t *testing.T) {
 	notFound := mapReadError("k", &types.NoSuchKey{})
 	if !errors.Is(notFound, filestorage.ErrObjectNotFound) {
 		t.Errorf("mapReadError(NoSuchKey) = %v, want errors.Is(_, ErrObjectNotFound)", notFound)
 	}
-	other := mapReadError("k", errors.New("network down"))
-	if !errors.Is(other, filestorage.ErrDownloadFailed) {
-		t.Errorf("mapReadError(other) = %v, want errors.Is(_, ErrDownloadFailed)", other)
+	cause := errors.New("network down")
+	other := mapReadError("k", cause)
+	if !errors.Is(other, cause) {
+		t.Errorf("mapReadError(other) = %v, want original cause", other)
 	}
 	if errors.Is(other, filestorage.ErrObjectNotFound) {
 		t.Errorf("mapReadError(other) unexpectedly matched ErrObjectNotFound")
@@ -164,7 +159,18 @@ func TestConformance_Live(t *testing.T) {
 	}
 	setupBucket(t, ctx, store, cfg.Bucket)
 
-	filestoragetest.Run(t, func(t *testing.T) filestorage.Storer { return store })
+	filestoragetest.Run(t, func(t *testing.T) filestorage.Storer {
+		testCfg := cfg
+		testCfg.Bucket = fmt.Sprintf("gopernicus-s3-test-%d", time.Now().UnixNano())
+		testStore, err := Open(ctx, testCfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		setupBucket(t, ctx, testStore, testCfg.Bucket)
+		return testStore
+	})
+
+	runStreamingUploads(t, store)
 
 	t.Run("SignedURLRoundTrip", func(t *testing.T) {
 		const path = "signed/hello.txt"
@@ -193,13 +199,13 @@ func TestConformance_Live(t *testing.T) {
 		}
 	})
 
-	t.Run("InitiateResumableUpload", func(t *testing.T) {
-		id, err := store.InitiateResumableUpload(ctx, "resumable/big.bin", "application/octet-stream")
+	t.Run("InitiateMultipartUpload", func(t *testing.T) {
+		id, err := store.InitiateMultipartUpload(ctx, "resumable/big.bin", "application/octet-stream")
 		if err != nil {
-			t.Fatalf("InitiateResumableUpload() error = %v", err)
+			t.Fatalf("InitiateMultipartUpload() error = %v", err)
 		}
 		if id == "" {
-			t.Error("InitiateResumableUpload() returned empty upload ID")
+			t.Error("InitiateMultipartUpload() returned empty upload ID")
 		}
 		_, _ = store.client.AbortMultipartUpload(ctx, &awss3.AbortMultipartUploadInput{
 			Bucket:   aws.String(cfg.Bucket),
@@ -220,6 +226,9 @@ func liveConfig(t *testing.T) (Config, bool) {
 			"  docker run --rm -d -p 9000:9000 -e MINIO_ROOT_USER=minioadmin -e MINIO_ROOT_PASSWORD=minioadmin quay.io/minio/minio server /data\n" +
 			"  S3_TEST_ENDPOINT=http://localhost:9000 S3_TEST_ACCESS_KEY_ID=minioadmin S3_TEST_SECRET_ACCESS_KEY=minioadmin S3_TEST_REGION=us-east-1 go test ./...")
 		return Config{}, false
+	}
+	if os.Getenv("S3_TEST_ACCESS_KEY_ID") == "" || os.Getenv("S3_TEST_SECRET_ACCESS_KEY") == "" {
+		t.Fatal("live tests require explicit synthetic S3_TEST_ACCESS_KEY_ID and S3_TEST_SECRET_ACCESS_KEY")
 	}
 	region := os.Getenv("S3_TEST_REGION")
 	if region == "" {
@@ -242,11 +251,7 @@ func setupBucket(t *testing.T, ctx context.Context, store *Store, bucket string)
 	if _, err := store.client.CreateBucket(ctx, &awss3.CreateBucketInput{
 		Bucket: aws.String(bucket),
 	}); err != nil {
-		var owned *types.BucketAlreadyOwnedByYou
-		var exists *types.BucketAlreadyExists
-		if !errors.As(err, &owned) && !errors.As(err, &exists) {
-			t.Fatalf("CreateBucket(%s): %v", bucket, err)
-		}
+		t.Fatalf("CreateBucket(%s): %v", bucket, err)
 	}
 	t.Cleanup(func() {
 		emptyBucket(t, store, bucket)

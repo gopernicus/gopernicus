@@ -26,9 +26,8 @@ import (
 	"testing"
 
 	gcfs "cloud.google.com/go/firestore"
-
 	"github.com/gopernicus/gopernicus/integrations/datastores/firestore/firestoretest"
-	"github.com/gopernicus/gopernicus/pockets/authorization/domain/relationship"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/relationships"
 )
 
 // liveCollections are the collections a live reset is allowed to clear. Naming
@@ -37,7 +36,6 @@ import (
 var liveCollections = []string{
 	collectionRelationships,
 	collectionSubjectClaims,
-	collectionIDClaims,
 }
 
 // TestSetRelationTargetsConcurrentDisjointSetsConvergeLive is the strict form of
@@ -58,7 +56,7 @@ func TestSetRelationTargetsConcurrentDisjointSetsConvergeLive(t *testing.T) {
 	// The index probe is deliberately skipped: A5 deploys this store's manifest
 	// and A6 owns the live entrypoint that proves the probe. What is under test
 	// here is transaction serializability, which no index affects.
-	s, err := RelationshipRepository(db, WithoutIndexProbe())
+	s, err := RelationshipRepository(t.Context(), db, WithoutIndexProbe())
 	if err != nil {
 		t.Fatalf("RelationshipRepository: %v", err)
 	}
@@ -70,7 +68,7 @@ func TestSetRelationTargetsConcurrentDisjointSetsConvergeLive(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if err := s.SetRelationTargets(ctx, "space", "child", "parent", []relationship.CreateRelationship{
+			if err := s.SetRelationTargets(ctx, "space", "child", "parent", []relationships.CreateRelationship{
 				{ResourceType: "space", ResourceID: "child", Relation: "parent", SubjectType: "space", SubjectID: id},
 			}); err != nil {
 				t.Errorf("set %s: %v", id, err)
@@ -94,16 +92,16 @@ func TestSetRelationTargetsConcurrentDisjointSetsConvergeLive(t *testing.T) {
 		t.Fatalf("the winning target must be the concrete subject it asked for, got %+v", targets[0])
 	}
 
-	// Every loser is gone completely — row and both claims.
+	// Every loser is gone completely — row and the subject claim.
 	for _, id := range callers {
 		if id == winner {
 			continue
 		}
 		row := relationshipDoc{
 			ResourceType: "space", ResourceID: "child", Relation: "parent",
-			SubjectType: "space", SubjectID: id, RelationshipID: "never-minted",
+			SubjectType: "space", SubjectID: id,
 		}
-		tuple, subject, _ := claimRefs(db, row)
+		tuple, subject := claimRefs(db, row)
 		snaps, err := db.ReaderFrom(ctx).GetAll(ctx, []*gcfs.DocumentRef{tuple, subject})
 		if err != nil {
 			t.Fatalf("GetAll: %v", err)
@@ -130,16 +128,16 @@ func TestLargeBatchCommitsInOneTransactionLive(t *testing.T) {
 	db := firestoretest.OpenLive(t)
 	firestoretest.ResetLive(t, db, liveCollections...)
 
-	s, err := RelationshipRepository(db, WithoutIndexProbe())
+	s, err := RelationshipRepository(t.Context(), db, WithoutIndexProbe())
 	if err != nil {
 		t.Fatalf("RelationshipRepository: %v", err)
 	}
 
 	ctx := context.Background()
 	const tuples = 200
-	batch := make([]relationship.CreateRelationship, 0, tuples)
+	batch := make([]relationships.CreateRelationship, 0, tuples)
 	for i := 0; i < tuples; i++ {
-		batch = append(batch, relationship.CreateRelationship{
+		batch = append(batch, relationships.CreateRelationship{
 			ResourceType: "doc", ResourceID: "live-big", Relation: "viewer",
 			SubjectType: "user", SubjectID: fmt.Sprintf("u%04d", i),
 		})

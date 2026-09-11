@@ -4,7 +4,7 @@
 // inside one connector-owned Transact, and they commit or roll back TOGETHER.
 // The shared storetest family proves the join per store method; this test
 // proves it across the host/pocket boundary the plan exists for, and proves the
-// widened advisory lock: a competing SetRelationTargets on the same key from
+// widened authorization table lock: a competing SetRelationTargets on the same key from
 // another connection blocks until the host's COMMIT — never slipping between
 // the row and the tuple — and the stored targets afterwards are the second
 // caller's, never a union. It requires POSTGRES_TEST_DSN and skips loudly
@@ -17,11 +17,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5"
-
-	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
-	"github.com/gopernicus/gopernicus/pockets/authorization/domain/relationship"
+	"github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/relationships"
 	"github.com/gopernicus/gopernicus/sdk"
+	"github.com/jackc/pgx/v5"
 )
 
 // ambientWait bounds every wait in the test — the outside visibility reads, the
@@ -71,7 +70,7 @@ func spaceParent(t *testing.T, db *pgxdb.DB, table, id string) (parent string, o
 }
 
 // parentTargets reads the tuple through the POOL with a bounded context.
-func parentTargets(t *testing.T, s relationship.Storer, spaceID string) []string {
+func parentTargets(t *testing.T, s relationships.Storer, spaceID string) []string {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), ambientWait)
 	defer cancel()
@@ -86,29 +85,29 @@ func parentTargets(t *testing.T, s relationship.Storer, spaceID string) []string
 	return ids
 }
 
-func setParent(ctx context.Context, s relationship.Storer, spaceID, parentID string) error {
-	return s.SetRelationTargets(ctx, "space", spaceID, "parent", []relationship.CreateRelationship{{
+func setParent(ctx context.Context, s relationships.Storer, spaceID, parentID string) error {
+	return s.SetRelationTargets(ctx, "space", spaceID, "parent", []relationships.CreateRelationship{{
 		ResourceType: "space", ResourceID: spaceID, Relation: "parent", SubjectType: "space", SubjectID: parentID,
 	}})
 }
 
-// waitForAdvisoryWaiter polls pg_stat_activity (through the pool) until some
-// backend is waiting on an advisory lock — the competitor blocked on the key
+// waitForAuthorizationWaiter polls pg_stat_activity (through the pool) until some
+// backend is waiting on an authorization table lock — the competitor blocked on the key
 // the open host transaction holds — or the bound expires. No fixed sleeps: the
 // poll returns as soon as the wait is observable.
-func waitForAdvisoryWaiter(t *testing.T, db *pgxdb.DB) {
+func waitForAuthorizationWaiter(t *testing.T, db *pgxdb.DB) {
 	t.Helper()
 	deadline := time.Now().Add(ambientWait)
 	for {
 		var n int
-		if err := db.QueryRow(context.Background(), `SELECT count(*) FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND wait_event = 'advisory'`).Scan(&n); err != nil {
+		if err := db.QueryRow(context.Background(), `SELECT count(*) FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND wait_event = 'relation' AND query LIKE '%LOCK TABLE %iam_relationships%'`).Scan(&n); err != nil {
 			t.Fatalf("pg_stat_activity: %v", err)
 		}
 		if n >= 1 {
 			return
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("competing SetRelationTargets never blocked on the advisory lock within %s", ambientWait)
+			t.Fatalf("competing SetRelationTargets never blocked on the authorization table lock within %s", ambientWait)
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
@@ -163,10 +162,10 @@ func TestAmbientRowAndTupleCommitTogether(t *testing.T) {
 			t.Fatalf("tuple visible outside the open transaction: %v", got)
 		}
 		// A competing move on the SAME key from the pool: it must block on the
-		// advisory lock the ambient transaction holds, for as long as the
+		// authorization table lock the ambient transaction holds, for as long as the
 		// transaction is open.
 		go func() { second <- setParent(context.Background(), s, "S", "P2") }()
-		waitForAdvisoryWaiter(t, db)
+		waitForAuthorizationWaiter(t, db)
 		select {
 		case err := <-second:
 			t.Fatalf("competing SetRelationTargets completed while the host transaction was still open (err=%v) — the lock did not widen to the host's commit", err)

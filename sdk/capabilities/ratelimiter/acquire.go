@@ -6,33 +6,35 @@ import (
 	"time"
 )
 
-// minRetryWait floors the sleep between denied checks so a backend reporting
-// a zero (or sub-millisecond) RetryAfter cannot spin Acquire into a busy loop.
 const minRetryWait = time.Millisecond
 
-// Acquire blocks until limiter allows key under limit, sleeping each denied
-// check's RetryAfter before checking again. It returns nil once allowed, the
-// backend's error (wrapped) if a check fails, or ctx.Err() when the context
-// is cancelled first.
-//
-// This is the waiting counterpart to the rejecting Allow: an HTTP surface
-// rejects with 429 + RetryAfter, while a background worker that must respect
-// an external budget (an upstream API's rate limit) calls Acquire and runs
-// late instead of dropping work. It composes with any Limiter backend; there
-// is no separate throttler port.
-func Acquire(ctx context.Context, limiter Limiter, key string, limit Limit) error {
+// Acquire waits for admission with the caller's context. It consumes one unit
+// when allowed and returns backend errors without hiding their cause or adding
+// keys to diagnostics. Concurrent waiters are not a fair queue or reservations.
+// Cancellation racing an accepted backend write does not refund that write.
+func Acquire(ctx context.Context, limiter Allower, key string, limit Limit) error {
+	if err := checkKey(ctx, key); err != nil {
+		return err
+	}
+	limit, err := limit.Normalize()
+	if err != nil {
+		return err
+	}
 	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		result, err := limiter.Allow(ctx, key, limit)
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 		if err != nil {
-			return fmt.Errorf("ratelimiter: acquire %q: %w", key, err)
+			return fmt.Errorf("ratelimiter: acquire: %w", err)
 		}
 		if result.Allowed {
 			return nil
 		}
-
-		wait := max(result.RetryAfter, minRetryWait)
-
-		timer := time.NewTimer(wait)
+		timer := time.NewTimer(max(result.RetryAfter, minRetryWait))
 		select {
 		case <-ctx.Done():
 			timer.Stop()

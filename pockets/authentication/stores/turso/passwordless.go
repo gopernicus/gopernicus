@@ -9,10 +9,10 @@ import (
 	"time"
 
 	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
-	"github.com/gopernicus/gopernicus/pockets/authentication/domain/identifier"
-	"github.com/gopernicus/gopernicus/pockets/authentication/domain/passwordless"
-	"github.com/gopernicus/gopernicus/pockets/authentication/domain/session"
-	"github.com/gopernicus/gopernicus/pockets/authentication/domain/user"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/identifier"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/passwordless"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/session"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/user"
 	"github.com/gopernicus/gopernicus/sdk"
 )
 
@@ -37,7 +37,11 @@ type PasswordlessStore struct {
 var _ passwordless.Repository = (*PasswordlessStore)(nil)
 
 // NewPasswordlessStore returns a PasswordlessStore backed by db.
+// It panics if db is nil; the caller owns the database lifecycle.
 func NewPasswordlessStore(db *tursodb.DB) *PasswordlessStore {
+	if db == nil {
+		panic("authentication turso: NewPasswordlessStore received a nil database")
+	}
 	return &PasswordlessStore{db: db}
 }
 
@@ -93,7 +97,7 @@ func (s *PasswordlessStore) Redeem(ctx context.Context, in passwordless.RedeemIn
 			Scan(&identID, &identUserID, &verifiedAt, &loginEnabled)
 		switch {
 		case errors.Is(claimErr, sql.ErrNoRows):
-			if !binding.ProvisionIfAbsent {
+			if !binding.ProvisionIfAbsent || binding.HasOwner() {
 				return passwordless.ErrRedemption
 			}
 			return provisionTurso(ctx, tx, in, binding, now, &out)
@@ -101,6 +105,13 @@ func (s *PasswordlessStore) Redeem(ctx context.Context, in passwordless.RedeemIn
 			return tursodb.MapError(claimErr)
 		}
 
+		owner, err := readActiveUserTurso(ctx, tx, identUserID)
+		if err != nil {
+			return err
+		}
+		if !binding.MatchesOwner(identUserID, identID, owner.AuthRevision) {
+			return passwordless.ErrRedemption
+		}
 		if verifiedAt.Valid {
 			if loginEnabled == 0 {
 				return passwordless.ErrRedemption

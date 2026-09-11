@@ -7,10 +7,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gopernicus/gopernicus/pockets/authentication/internal/logic/delivery"
-	"github.com/gopernicus/gopernicus/sdk/capabilities/email"
-	"github.com/gopernicus/gopernicus/sdk/foundation/web"
-	"github.com/gopernicus/gopernicus/sdk/pocket"
+	"github.com/gopernicus/gopernicus/pockets"
+	inbound "github.com/gopernicus/gopernicus/pockets/authentication/inbound/http"
+	protection "github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/protection"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/delivery"
+	"github.com/gopernicus/gopernicus/sdk/capabilities/notify"
+	"github.com/gopernicus/gopernicus/sdk/capabilities/notify/email"
+	environment "github.com/gopernicus/gopernicus/sdk/pkg/environment"
+	"github.com/gopernicus/gopernicus/sdk/pkg/web"
 )
 
 // ---------------------------------------------------------------------------
@@ -26,31 +30,34 @@ import (
 // unchanged (proven by the production cases reusing the same prod transports).
 // ---------------------------------------------------------------------------
 
-// deliveryDevConfig is a minimal valid development Config with no DeliveryMode
+// deliveryDevConfig is a minimal valid development constructorConfig with no DeliveryMode
 // selected. Cases set DeliveryMode (and any delivery collaborators) to isolate a
 // single dimension.
-func deliveryDevConfig() Config {
-	return Config{
-		Hasher:      stubHasher{},
-		Mailer:      stubMailer{},
-		TokenSigner: stubSigner{},
-		RuntimeMode: RuntimeModeDevelopment,
+func deliveryDevConfig() constructorConfig {
+	return constructorConfig{
+		PasswordFlowsDisabled: true,
+		Hasher:                stubHasher{},
+		Mailer:                stubMailer{},
+		TokenSigner:           stubSigner{},
+		RuntimeMode:           environment.ModeDevelopment,
 	}
 }
 
-// deliveryProdConfig is a production Config with every always-on production gate
+// deliveryProdConfig is a production constructorConfig with every always-on production gate
 // satisfied EXCEPT the delivery dimension each case sets: production-capable
 // transport, a durable limiter, and the PII-free keyer. The delivery-mode block
 // runs before those gates, but they are wired so a success case actually
 // constructs.
-func deliveryProdConfig() Config {
-	return Config{
-		Hasher:          stubHasher{},
-		Mailer:          prodMailer{},
-		TokenSigner:     stubSigner{},
-		RuntimeMode:     RuntimeModeProduction,
-		RateLimiter:     durableLimiter{},
-		IdentifierKeyer: prodKeyer{},
+func deliveryProdConfig() constructorConfig {
+	return constructorConfig{
+		PasswordFlowsDisabled: true,
+		SessionCookie:         inbound.CookieConfig{Secure: true},
+		Hasher:                stubHasher{},
+		Mailer:                prodMailer{},
+		TokenSigner:           stubSigner{},
+		RuntimeMode:           environment.ModeProduction,
+		RateLimiter:           durableLimiter{},
+		IdentifierKeyer:       prodKeyer{},
 	}
 }
 
@@ -75,21 +82,21 @@ func (stubDispatcher) LatestStatus(context.Context, string) (string, error) { re
 type devOnlyMailer struct{}
 
 func (devOnlyMailer) Send(context.Context, email.Message) error { return nil }
-func (devOnlyMailer) Capabilities() email.Capabilities {
-	return email.Capabilities{TransportSecurity: email.TransportSecurityNone, DevelopmentOnly: true}
+func (devOnlyMailer) Capabilities() notify.Capabilities {
+	return notify.Capabilities{TransportSecurity: notify.TransportSecurityNone, DevelopmentOnly: true}
 }
 
 func TestNewServiceDeliveryModeMatrix(t *testing.T) {
 	cases := []struct {
 		name    string
 		repos   Repositories
-		cfg     func() Config
+		cfg     func() constructorConfig
 		wantErr error // nil → construction must succeed
 	}{
 		{
 			name:  "empty mode fails loudly",
 			repos: Repositories{},
-			cfg: func() Config {
+			cfg: func() constructorConfig {
 				c := deliveryDevConfig()
 				c.DeliveryMode = ""
 				return c
@@ -99,7 +106,7 @@ func TestNewServiceDeliveryModeMatrix(t *testing.T) {
 		{
 			name:  "unknown mode fails loudly",
 			repos: Repositories{},
-			cfg: func() Config {
+			cfg: func() constructorConfig {
 				c := deliveryDevConfig()
 				c.DeliveryMode = "queue"
 				return c
@@ -109,18 +116,18 @@ func TestNewServiceDeliveryModeMatrix(t *testing.T) {
 		{
 			name:  "off with no deliverable capability constructs",
 			repos: Repositories{},
-			cfg: func() Config {
+			cfg: func() constructorConfig {
 				c := deliveryDevConfig()
-				c.DeliveryMode = DeliveryModeOff
+				c.DeliveryMode = delivery.ModeOff
 				return c
 			},
 		},
 		{
 			name:  "off rejects a wired delivery dispatcher",
 			repos: Repositories{},
-			cfg: func() Config {
+			cfg: func() constructorConfig {
 				c := deliveryDevConfig()
-				c.DeliveryMode = DeliveryModeOff
+				c.DeliveryMode = delivery.ModeOff
 				c.DeliveryDispatcher = stubDispatcher{}
 				c.DeliveryEncrypter = stubEncrypter{} // isolate the off-conflict, not the encrypter gate
 				return c
@@ -130,9 +137,9 @@ func TestNewServiceDeliveryModeMatrix(t *testing.T) {
 		{
 			name:  "off rejects an enabled passwordless flow",
 			repos: Repositories{Challenges: stubChallenges{}},
-			cfg: func() Config {
+			cfg: func() constructorConfig {
 				c := deliveryDevConfig()
-				c.DeliveryMode = DeliveryModeOff
+				c.DeliveryMode = delivery.ModeOff
 				c.ChallengeProtector = mustProtector(t)
 				c.PublicAuthBaseURL = "https://auth.example.com"
 				c.Passwordless = []string{"email"}
@@ -141,13 +148,13 @@ func TestNewServiceDeliveryModeMatrix(t *testing.T) {
 			wantErr: ErrPasswordlessDeliveryRequired,
 		},
 		{
-			// The generic-jobs dispatcher (Config.DeliveryDispatcher) absent → the jobs mode
+			// The generic-jobs dispatcher (DeliveryConfig.DeliveryDispatcher) absent → the jobs mode
 			// has no send path and fails closed.
 			name:  "jobs requires the queue capability",
 			repos: Repositories{},
-			cfg: func() Config {
+			cfg: func() constructorConfig {
 				c := deliveryDevConfig()
-				c.DeliveryMode = DeliveryModeJobs
+				c.DeliveryMode = delivery.ModeJobs
 				return c
 			},
 			wantErr: ErrDeliveryQueueRequired,
@@ -157,9 +164,9 @@ func TestNewServiceDeliveryModeMatrix(t *testing.T) {
 			// dispatcher still requires the encrypter — the payload is always sealed.
 			name:  "jobs via dispatcher requires an encrypter",
 			repos: Repositories{},
-			cfg: func() Config {
+			cfg: func() constructorConfig {
 				c := deliveryDevConfig()
-				c.DeliveryMode = DeliveryModeJobs
+				c.DeliveryMode = delivery.ModeJobs
 				c.DeliveryDispatcher = stubDispatcher{}
 				return c
 			},
@@ -168,9 +175,9 @@ func TestNewServiceDeliveryModeMatrix(t *testing.T) {
 		{
 			name:  "jobs via dispatcher with encrypter constructs (development)",
 			repos: Repositories{},
-			cfg: func() Config {
+			cfg: func() constructorConfig {
 				c := deliveryDevConfig()
-				c.DeliveryMode = DeliveryModeJobs
+				c.DeliveryMode = delivery.ModeJobs
 				c.DeliveryDispatcher = stubDispatcher{}
 				c.DeliveryEncrypter = stubEncrypter{}
 				return c
@@ -181,9 +188,9 @@ func TestNewServiceDeliveryModeMatrix(t *testing.T) {
 			// only send path, so production requires the explicit runtime affirmation.
 			name:  "jobs via dispatcher in production requires the runtime acknowledgment",
 			repos: Repositories{},
-			cfg: func() Config {
+			cfg: func() constructorConfig {
 				c := deliveryProdConfig()
-				c.DeliveryMode = DeliveryModeJobs
+				c.DeliveryMode = delivery.ModeJobs
 				c.DeliveryDispatcher = stubDispatcher{}
 				c.DeliveryEncrypter = stubEncrypter{}
 				return c
@@ -195,9 +202,9 @@ func TestNewServiceDeliveryModeMatrix(t *testing.T) {
 			// durable transport is not asked to prove a negative) once acknowledged.
 			name:  "jobs via dispatcher in production with acknowledgment constructs",
 			repos: Repositories{},
-			cfg: func() Config {
+			cfg: func() constructorConfig {
 				c := deliveryProdConfig()
-				c.DeliveryMode = DeliveryModeJobs
+				c.DeliveryMode = delivery.ModeJobs
 				c.DeliveryDispatcher = stubDispatcher{}
 				c.DeliveryEncrypter = stubEncrypter{}
 				c.DeliveryJobsAcknowledged = true
@@ -210,10 +217,10 @@ func TestNewServiceDeliveryModeMatrix(t *testing.T) {
 			// rejected because it leaks OTPs/magic links to logs.
 			name:  "jobs in production rejects a development-only transport",
 			repos: Repositories{},
-			cfg: func() Config {
+			cfg: func() constructorConfig {
 				c := deliveryProdConfig()
 				c.Mailer = devOnlyMailer{}
-				c.DeliveryMode = DeliveryModeJobs
+				c.DeliveryMode = delivery.ModeJobs
 				c.DeliveryDispatcher = stubDispatcher{}
 				c.DeliveryEncrypter = stubEncrypter{}
 				c.DeliveryJobsAcknowledged = true
@@ -228,9 +235,9 @@ func TestNewServiceDeliveryModeMatrix(t *testing.T) {
 			// the jobs-mode queue.
 			name:  "in_process requires an encrypter",
 			repos: Repositories{},
-			cfg: func() Config {
+			cfg: func() constructorConfig {
 				c := deliveryDevConfig()
-				c.DeliveryMode = DeliveryModeInProcess
+				c.DeliveryMode = delivery.ModeInProcess
 				return c
 			},
 			wantErr: ErrDeliveryEncrypterRequired,
@@ -238,9 +245,9 @@ func TestNewServiceDeliveryModeMatrix(t *testing.T) {
 		{
 			name:  "in_process with an encrypter constructs (development)",
 			repos: Repositories{},
-			cfg: func() Config {
+			cfg: func() constructorConfig {
 				c := deliveryDevConfig()
-				c.DeliveryMode = DeliveryModeInProcess
+				c.DeliveryMode = delivery.ModeInProcess
 				c.DeliveryEncrypter = stubEncrypter{}
 				return c
 			},
@@ -248,9 +255,9 @@ func TestNewServiceDeliveryModeMatrix(t *testing.T) {
 		{
 			name:  "in_process in production requires the crash-loss acknowledgment",
 			repos: Repositories{},
-			cfg: func() Config {
+			cfg: func() constructorConfig {
 				c := deliveryProdConfig()
-				c.DeliveryMode = DeliveryModeInProcess
+				c.DeliveryMode = delivery.ModeInProcess
 				c.DeliveryEncrypter = stubEncrypter{}
 				return c
 			},
@@ -259,9 +266,9 @@ func TestNewServiceDeliveryModeMatrix(t *testing.T) {
 		{
 			name:  "in_process in production with the crash-loss acknowledgment constructs",
 			repos: Repositories{},
-			cfg: func() Config {
+			cfg: func() constructorConfig {
 				c := deliveryProdConfig()
-				c.DeliveryMode = DeliveryModeInProcess
+				c.DeliveryMode = delivery.ModeInProcess
 				c.DeliveryEncrypter = stubEncrypter{}
 				c.DeliveryEphemeralAcknowledged = true
 				return c
@@ -273,11 +280,11 @@ func TestNewServiceDeliveryModeMatrix(t *testing.T) {
 		{
 			name:  "in_process rejects a negative worker count",
 			repos: Repositories{},
-			cfg: func() Config {
+			cfg: func() constructorConfig {
 				c := deliveryDevConfig()
-				c.DeliveryMode = DeliveryModeInProcess
+				c.DeliveryMode = delivery.ModeInProcess
 				c.DeliveryEncrypter = stubEncrypter{}
-				c.InProcessDelivery = InProcessDeliveryConfig{Workers: -1}
+				c.InProcessDelivery = delivery.InProcessConfig{Workers: -1}
 				return c
 			},
 			wantErr: delivery.ErrInProcessWorkersInvalid,
@@ -285,11 +292,11 @@ func TestNewServiceDeliveryModeMatrix(t *testing.T) {
 		{
 			name:  "in_process rejects a negative queue capacity",
 			repos: Repositories{},
-			cfg: func() Config {
+			cfg: func() constructorConfig {
 				c := deliveryDevConfig()
-				c.DeliveryMode = DeliveryModeInProcess
+				c.DeliveryMode = delivery.ModeInProcess
 				c.DeliveryEncrypter = stubEncrypter{}
-				c.InProcessDelivery = InProcessDeliveryConfig{QueueCapacity: -8}
+				c.InProcessDelivery = delivery.InProcessConfig{QueueCapacity: -8}
 				return c
 			},
 			wantErr: delivery.ErrInProcessCapacityInvalid,
@@ -297,11 +304,11 @@ func TestNewServiceDeliveryModeMatrix(t *testing.T) {
 		{
 			name:  "in_process rejects a negative admission deadline",
 			repos: Repositories{},
-			cfg: func() Config {
+			cfg: func() constructorConfig {
 				c := deliveryDevConfig()
-				c.DeliveryMode = DeliveryModeInProcess
+				c.DeliveryMode = delivery.ModeInProcess
 				c.DeliveryEncrypter = stubEncrypter{}
-				c.InProcessDelivery = InProcessDeliveryConfig{AdmissionDeadline: -time.Second}
+				c.InProcessDelivery = delivery.InProcessConfig{AdmissionDeadline: -time.Second}
 				return c
 			},
 			wantErr: delivery.ErrInProcessAdmissionDeadlineInvalid,
@@ -309,11 +316,11 @@ func TestNewServiceDeliveryModeMatrix(t *testing.T) {
 		{
 			name:  "in_process rejects a negative shutdown deadline",
 			repos: Repositories{},
-			cfg: func() Config {
+			cfg: func() constructorConfig {
 				c := deliveryDevConfig()
-				c.DeliveryMode = DeliveryModeInProcess
+				c.DeliveryMode = delivery.ModeInProcess
 				c.DeliveryEncrypter = stubEncrypter{}
-				c.InProcessDelivery = InProcessDeliveryConfig{ShutdownDeadline: -time.Second}
+				c.InProcessDelivery = delivery.InProcessConfig{ShutdownDeadline: -time.Second}
 				return c
 			},
 			wantErr: delivery.ErrInProcessShutdownDeadlineInvalid,
@@ -321,11 +328,11 @@ func TestNewServiceDeliveryModeMatrix(t *testing.T) {
 		{
 			name:  "in_process rejects a negative attempt cap",
 			repos: Repositories{},
-			cfg: func() Config {
+			cfg: func() constructorConfig {
 				c := deliveryDevConfig()
-				c.DeliveryMode = DeliveryModeInProcess
+				c.DeliveryMode = delivery.ModeInProcess
 				c.DeliveryEncrypter = stubEncrypter{}
-				c.InProcessDelivery = InProcessDeliveryConfig{MaxAttempts: -1}
+				c.InProcessDelivery = delivery.InProcessConfig{MaxAttempts: -1}
 				return c
 			},
 			wantErr: delivery.ErrInProcessMaxAttemptsInvalid,
@@ -333,11 +340,11 @@ func TestNewServiceDeliveryModeMatrix(t *testing.T) {
 		{
 			name:  "in_process rejects negative status retention max entries",
 			repos: Repositories{},
-			cfg: func() Config {
+			cfg: func() constructorConfig {
 				c := deliveryDevConfig()
-				c.DeliveryMode = DeliveryModeInProcess
+				c.DeliveryMode = delivery.ModeInProcess
 				c.DeliveryEncrypter = stubEncrypter{}
-				c.InProcessDelivery = InProcessDeliveryConfig{StatusMaxEntries: -1}
+				c.InProcessDelivery = delivery.InProcessConfig{StatusMaxEntries: -1}
 				return c
 			},
 			wantErr: delivery.ErrInProcessStatusMaxEntriesInvalid,
@@ -345,11 +352,11 @@ func TestNewServiceDeliveryModeMatrix(t *testing.T) {
 		{
 			name:  "in_process rejects a negative status retention TTL",
 			repos: Repositories{},
-			cfg: func() Config {
+			cfg: func() constructorConfig {
 				c := deliveryDevConfig()
-				c.DeliveryMode = DeliveryModeInProcess
+				c.DeliveryMode = delivery.ModeInProcess
 				c.DeliveryEncrypter = stubEncrypter{}
-				c.InProcessDelivery = InProcessDeliveryConfig{StatusTTL: -time.Minute}
+				c.InProcessDelivery = delivery.InProcessConfig{StatusTTL: -time.Minute}
 				return c
 			},
 			wantErr: delivery.ErrInProcessStatusTTLInvalid,
@@ -357,13 +364,13 @@ func TestNewServiceDeliveryModeMatrix(t *testing.T) {
 		{
 			name:  "in_process rejects status retention smaller than the queue capacity",
 			repos: Repositories{},
-			cfg: func() Config {
+			cfg: func() constructorConfig {
 				c := deliveryDevConfig()
-				c.DeliveryMode = DeliveryModeInProcess
+				c.DeliveryMode = delivery.ModeInProcess
 				c.DeliveryEncrypter = stubEncrypter{}
 				// A queued generation must never be retention-evicted, so max entries must be
 				// at least the capacity.
-				c.InProcessDelivery = InProcessDeliveryConfig{QueueCapacity: 64, StatusMaxEntries: 8}
+				c.InProcessDelivery = delivery.InProcessConfig{QueueCapacity: 64, StatusMaxEntries: 8}
 				return c
 			},
 			wantErr: delivery.ErrInProcessStatusRetentionTooSmall,
@@ -371,11 +378,11 @@ func TestNewServiceDeliveryModeMatrix(t *testing.T) {
 		{
 			name:  "in_process with tuned in-bounds knobs constructs",
 			repos: Repositories{},
-			cfg: func() Config {
+			cfg: func() constructorConfig {
 				c := deliveryDevConfig()
-				c.DeliveryMode = DeliveryModeInProcess
+				c.DeliveryMode = delivery.ModeInProcess
 				c.DeliveryEncrypter = stubEncrypter{}
-				c.InProcessDelivery = InProcessDeliveryConfig{
+				c.InProcessDelivery = delivery.InProcessConfig{
 					Workers:           4,
 					QueueCapacity:     32,
 					AdmissionDeadline: 100 * time.Millisecond,
@@ -391,7 +398,7 @@ func TestNewServiceDeliveryModeMatrix(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			svc, err := NewService(tc.repos, tc.cfg())
+			svc, err := newFixture(testRepositories(tc.repos), tc.cfg())
 			if tc.wantErr != nil {
 				if !errors.Is(err, tc.wantErr) {
 					t.Fatalf("err=%v, want %v", err, tc.wantErr)
@@ -412,8 +419,8 @@ func TestNewServiceDeliveryModeMatrix(t *testing.T) {
 // does not mask the required RuntimeMode gate: an empty RuntimeMode reports its own
 // error first even when DeliveryMode is also empty.
 func TestNewServiceDeliveryModeCheckedAfterRuntimeMode(t *testing.T) {
-	c := Config{Hasher: stubHasher{}, Mailer: stubMailer{}, TokenSigner: stubSigner{}}
-	if _, err := NewService(Repositories{}, c); !errors.Is(err, ErrRuntimeModeRequired) {
+	c := constructorConfig{Hasher: stubHasher{}, Mailer: stubMailer{}, TokenSigner: stubSigner{}}
+	if _, err := newFixture(testRepositories(Repositories{}), c); !errors.Is(err, ErrRuntimeModeRequired) {
 		t.Fatalf("empty RuntimeMode + empty DeliveryMode: err=%v, want ErrRuntimeModeRequired", err)
 	}
 }
@@ -448,15 +455,15 @@ func (d countingDispatcher) LatestStatus(context.Context, string) (string, error
 func TestRegisterStartsNoDeliveryWorker(t *testing.T) {
 	var calls int64
 	cfg := deliveryDevConfig()
-	cfg.DeliveryMode = DeliveryModeJobs
+	cfg.DeliveryMode = delivery.ModeJobs
 	cfg.DeliveryDispatcher = countingDispatcher{calls: &calls}
 	cfg.DeliveryEncrypter = stubEncrypter{}
 
-	svc, err := NewService(Repositories{}, cfg)
+	svc, err := newFixture(testRepositories(Repositories{}), cfg)
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
-	if err := svc.Register(pocket.Mount{Router: web.NewWebHandler()}); err != nil {
+	if err := svc.HTTP.Register(pockets.Mount{Router: web.NewWebHandler()}); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 	// Give any (erroneously) started goroutine a chance to run before asserting.
@@ -468,33 +475,33 @@ func TestRegisterStartsNoDeliveryWorker(t *testing.T) {
 
 // TestInProcessRegisterStartsNoRuntime proves the bounded in-process runtime is wired
 // in in_process mode but started by NEITHER NewService NOR Register — the host owns the
-// lifecycle via RunDelivery (authv3-delivery-refactor AV3D-4.1 / standing invariant
+// lifecycle via Runtime.Run (authv3-delivery-refactor AV3D-4.1 / standing invariant
 // "Register starts no goroutines"). If construction or Register had started the pool,
-// the first RunDelivery below would collide and return ErrInProcessAlreadyRunning; a
+// the first Runtime.Run below would collide and return ErrInProcessAlreadyRunning; a
 // clean nil on cancel proves nothing was running. The rigorous "the pool processes
 // nothing until Run" proof lives at the delivery layer (inprocess_test.go).
 func TestInProcessRegisterStartsNoRuntime(t *testing.T) {
 	cfg := deliveryDevConfig()
-	cfg.DeliveryMode = DeliveryModeInProcess
+	cfg.DeliveryMode = delivery.ModeInProcess
 	cfg.DeliveryEncrypter = stubEncrypter{}
 
-	svc, err := NewService(Repositories{}, cfg)
+	svc, err := newFixture(testRepositories(Repositories{}), cfg)
 	if err != nil {
 		t.Fatalf("NewService (in_process): %v", err)
 	}
-	if svc.inProcessRuntime == nil {
+	if _, _, ok := svc.Delivery.QueueDepth(); !ok {
 		t.Fatal("in_process mode did not wire the bounded delivery runtime")
 	}
-	if err := svc.Register(pocket.Mount{Router: web.NewWebHandler()}); err != nil {
+	if err := svc.HTTP.Register(pockets.Mount{Router: web.NewWebHandler()}); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 	// Give any (erroneously) started goroutine a chance to claim the runtime before the
-	// host-owned RunDelivery does.
+	// host-owned Runtime.Run does.
 	time.Sleep(20 * time.Millisecond)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
-	go func() { done <- svc.RunDelivery(ctx) }()
+	go func() { done <- svc.Delivery.Run(ctx) }()
 	time.Sleep(20 * time.Millisecond)
 	cancel()
 	select {
@@ -507,25 +514,25 @@ func TestInProcessRegisterStartsNoRuntime(t *testing.T) {
 	}
 }
 
-// TestRunDeliveryNoopWithoutInProcessMode proves RunDelivery is a safe no-op in every
+// TestRuntime.RunNoopWithoutInProcessMode proves Runtime.Run is a safe no-op in every
 // mode that is not in_process, so a host may call it unconditionally alongside the
 // mode-specific runtimes.
 func TestRunDeliveryNoopWithoutInProcessMode(t *testing.T) {
 	cfg := deliveryDevConfig()
-	cfg.DeliveryMode = DeliveryModeOff
-	svc, err := NewService(Repositories{}, cfg)
+	cfg.DeliveryMode = delivery.ModeOff
+	svc, err := newFixture(testRepositories(Repositories{}), cfg)
 	if err != nil {
 		t.Fatalf("NewService (off): %v", err)
 	}
-	if err := svc.RunDelivery(context.Background()); err != nil {
+	if err := svc.Delivery.Run(context.Background()); err != nil {
 		t.Fatalf("RunDelivery in off mode = %v, want a no-op nil", err)
 	}
 }
 
 // mustProtector builds an HMAC challenge protector for the passwordless-off case.
-func mustProtector(t *testing.T) ChallengeProtector {
+func mustProtector(t *testing.T) protection.ChallengeProtector {
 	t.Helper()
-	p, err := NewHMACChallengeProtector(HMACKeyRing{
+	p, err := protection.NewHMACChallengeProtector(protection.HMACKeyRing{
 		Active: "2026-01",
 		Keys:   map[string][]byte{"2026-01": make([]byte, 32)},
 	})

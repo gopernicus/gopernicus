@@ -12,7 +12,6 @@ import (
 	"io"
 	"sort"
 	"testing"
-	"time"
 
 	"github.com/gopernicus/gopernicus/sdk/capabilities/filestorage"
 )
@@ -22,6 +21,11 @@ import (
 func Run(t *testing.T, newStorer func(t *testing.T) filestorage.Storer) {
 	t.Helper()
 
+	t.Run("PortableKeys", func(t *testing.T) { testPortableKeys(t, newStorer(t)) })
+	t.Run("LiteralPrefixes", func(t *testing.T) { testLiteralPrefixes(t, newStorer(t)) })
+	t.Run("StreamingReplacement", func(t *testing.T) { testStreamingReplacement(t, newStorer(t)) })
+	t.Run("Cancellation", func(t *testing.T) { testCancellation(t, newStorer(t)) })
+	t.Run("RangeEdges", func(t *testing.T) { testRangeEdges(t, newStorer(t)) })
 	t.Run("UploadDownloadRoundTrip", func(t *testing.T) { testUploadDownloadRoundTrip(t, newStorer(t)) })
 	t.Run("Exists", func(t *testing.T) { testExists(t, newStorer(t)) })
 	t.Run("Delete", func(t *testing.T) { testDelete(t, newStorer(t)) })
@@ -189,33 +193,5 @@ func testNotFoundErrorMapping(t *testing.T, s filestorage.Storer) {
 	}
 	if _, err := s.GetObjectSize(ctx, "does-not-exist.txt"); !errors.Is(err, filestorage.ErrObjectNotFound) {
 		t.Errorf("GetObjectSize(missing) error = %v, want errors.Is(_, filestorage.ErrObjectNotFound)", err)
-	}
-}
-
-// RunOptionalCapabilityAbsent asserts the optional-capability story for a
-// Storer that does NOT implement filestorage.ResumableUploader or
-// filestorage.SignedURLer: FileStore's type-assert helpers must yield the
-// documented sentinel errors rather than panicking or silently no-opping.
-// Call this only for backends known not to implement those optional
-// interfaces (e.g. Disk); a backend that does implement one or both (e.g. a
-// future GCS integration) is out of scope for this helper.
-func RunOptionalCapabilityAbsent(t *testing.T, newStorer func(t *testing.T) filestorage.Storer) {
-	t.Helper()
-	ctx := context.Background()
-	s := newStorer(t)
-
-	if _, ok := s.(filestorage.ResumableUploader); ok {
-		t.Fatalf("%T implements ResumableUploader; RunOptionalCapabilityAbsent is only for backends that don't", s)
-	}
-	if _, ok := s.(filestorage.SignedURLer); ok {
-		t.Fatalf("%T implements SignedURLer; RunOptionalCapabilityAbsent is only for backends that don't", s)
-	}
-
-	fs := filestorage.New(s)
-	if _, err := fs.InitiateResumableUpload(ctx, "path", "text/plain"); !errors.Is(err, filestorage.ErrResumableNotSupported) {
-		t.Errorf("InitiateResumableUpload() error = %v, want errors.Is(_, filestorage.ErrResumableNotSupported)", err)
-	}
-	if _, err := fs.SignedURL(ctx, "path", time.Minute); !errors.Is(err, filestorage.ErrSignedURLNotSupported) {
-		t.Errorf("SignedURL() error = %v, want errors.Is(_, filestorage.ErrSignedURLNotSupported)", err)
 	}
 }

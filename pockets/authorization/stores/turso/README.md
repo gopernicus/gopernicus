@@ -1,145 +1,129 @@
-# pockets/authorization/stores/turso
+# Authorization on Turso / libSQL
 
-The authorization pocket's **Turso / libSQL** store adapter — its own module so a
-host that brings a different datastore never pulls `libsql` into its module graph.
-It owns the SQL and the canonical migration files; the host owns its database
-lifecycle.
+This adapter supplies relationship, role, atomic mutation and audit-reader ports
+from one store. Hosts own database connections and apply the complete
+`authorization` migration source before construction. The framework does not
+migrate at boot.
 
-It fills **all three** outbound ports over the `integrations/datastores/turso`
-connector:
-
-- `relationship.Storer` over **`iam_relationships`** — the ReBAC tuple store
-  (group expansion and descendant lookup as recursive CTEs). Its baseline
-  `SetRelationTargets` runs in `BEGIN IMMEDIATE`, so competing desired states
-  serialize and never union.
-- `role.Storer` over **`iam_roles`** — the roles kind's plain assignment lookups.
-- `mutation.MutationRepository` — the atomic v3 write path over the shared `iam_*`
-  tables plus the **`iam_scopes`** revision anchors and **`iam_mutations`**
-  receipts. libSQL/SQLite has no `FOR UPDATE`, so one `Apply`/`ApplyGuarded` is a
-  single `BEGIN IMMEDIATE` write-serializing transaction (the auth v3 precedent):
-  it takes the write intent up front so `sqld` serializes contending writers, then
-  re-reads the mutation scope plus every guard-observed dependency anchor in
-  canonical order, re-validates the observed revisions, de-duplicates by receipt,
-  evaluates the guardian invariant, applies all rows or none, bumps the scope
-  revision exactly once, and mints the receipt. Full write serialization is
-  strictly stronger than the pgx sibling's per-anchor `FOR UPDATE` — it precludes a
-  mid-transaction dependency change by construction, so the canonical-order
-  dependency re-validation is a defense-in-depth mirror of the pgx contract, not
-  the primary mechanism (two last-owner revokes cannot both commit; a replay storm
-  has exactly one first application). A residual `SQLITE_BUSY` (serialization that
-  timed out under load rather than blocking) is absorbed by a bounded busy-retry of
-  the idempotent transaction — never surfaced where the contract promises an
-  application outcome.
-
-Timestamps are fixed-width ISO-8601 `TEXT` (lexicographic == chronological, which
-the keyset listings' `created_at` order relies on). `iam_relationships` rows are
-**immutable** — no `updated_at`; a relationship is deleted and recreated.
-
-## ⚠️ Prerequisite: apply the `authorization` migration source before wiring
-
-Both tables belong to migration source **`authorization`**, distinct from
-`cms`/`auth`/`jobs`/`events`. The shared `(source, version)` migration ledger
-expresses **no ordering between sources**, so a host that scaffolds another
-pocket's migrations but not this store's would fail at *runtime*, not boot.
-
-**`Repositories(db)` guards against exactly that:** it probes for **all four**
-`iam_relationships`, `iam_roles`, `iam_scopes`, and `iam_mutations` tables at
-construction and returns `errs.ErrNotFound` — naming the specific missing table —
-if the `authorization` source has not been applied. The failure surfaces at wiring
-time, before the host serves traffic. Scaffold this store's migrations with
-`ExportMigrations` and apply them with your host's runner pre-boot, alongside every
-other pocket source you wire.
-
-A deliberately baseline-only host may call `RelationshipRepository(db)` instead;
-it probes only `iam_relationships` and returns no mutation repository. Applying
-the wholesale canonical source remains the normal migration practice.
-
-**Hosts never renumber** the scaffolded files: the filenames are the shared
-`(source, version)` ledger keys and the pgx sibling carries the identical set.
-
-## Kinds are port-optional; the schema is wholesale
-
-The two kinds (relationships, roles) are independently wireable at the
-**port/behavior level** — but the **schema is NOT per-kind**. Both `iam_*` tables
-scaffold into every adopting host regardless of which kinds it wires (the §2.1
-bounding rule applied intra-pocket). A **roles-only** adopter still applies the
-FULL `authorization` source, `iam_relationships` included, and both boot probes
-expect both tables.
-
-**Kind selection is the host's wiring choice.** `Repositories(db)` always returns
-both kinds AND the atomic mutation repository wired; a host wanting a single kind
-zeroes the other `authorization.Repositories` field after construction, or wires
-its own single-kind `Repositories`. A nil kind field turns that kind OFF
-structurally (deny-by-absence) at `authorization.NewService`.
-
-## Surface
-
-| member | shape |
-|---|---|
-| `RelationshipRepository(db *turso.DB) (relationship.Storer, error)` | baseline-only constructor; probes only `iam_relationships`, so the host may wire `Repositories{Relationships: repo}` with `.Mutations == nil` |
-| `Repositories(db *turso.DB, opts ...Option) (authorization.Repositories, error)` | all three ports wired (relationships, roles, atomic mutations); errors if any `iam_*` table is missing (boot-time probe, names the missing table) |
-| `WithGuardianPolicy(p mutation.GuardianPolicy) Option` | overrides the mutation repository's guardian invariant (default: owner protected on every type, min one direct anchor) — mirrors the memstore and pgx options |
-| `ExportMigrations(dst string) error` | copies the canonical `migrations/*.sql` into the host's dir |
-| `MigrationsFS` / `MigrationsDir` | the embedded canonical migration files |
-
-## Migrations
-
-The canonical schema (source `authorization`) is the version filename set authored
-here and mirrored exactly by the pgx sibling (same filename == same logical schema
-step; content is per-dialect):
-
-- `migrations/0001_iam_relationships.sql` — the ReBAC tuple store.
-  `relationship_id` carries an inline `DEFAULT (lower(hex(randomblob(16))))` so a
-  `cryptids.Database`-wired host lets the DB mint the key. The
-  `idx_iam_relationships_unique_subject` index (WITHOUT `relation`) enforces the
-  ratified one-relation-per-exact-`SubjectRef` rule.
-- `migrations/0002_iam_roles.sql` — the roles assignment store. Scope columns are
-  `NOT NULL DEFAULT ''` so a global grant (empty resource pair) participates in
-  the unique index; the `ck_iam_roles_scope_pair` constraint keeps that pair
-  consistent (both empty or both non-empty).
-- `migrations/0003_iam_scopes.sql` — the scope **revision anchors** (v3 write
-  path). One row per resource/subject scope; `revision` is the monotonic anchor
-  the atomic mutation repositories bump and validate under lock.
-- `migrations/0004_iam_mutations.sql` — the mutation **receipts** (idempotency
-  ledger, keyed by MutationID). Stores the payload digest, resulting revision,
-  domain outcome, and governing schema digest — never the payload itself.
-  `expires_at` is nullable; **permanent retention is the default posture**.
-- `migrations/0005_iam_lookup_keyset.sql` — the **keyset access paths** for the
-  paged lookups. The four `Lookup*` reads page by resource id (`… AND resource_id
-  > ? ORDER BY resource_id LIMIT ?`), and neither
-  `idx_iam_relationships_type_relation` nor `idx_iam_roles_subject` carries
-  `resource_id`, so without these two indexes every page would sort the whole
-  matching set. It adds `idx_iam_relationships_type_relation_resource
-  (resource_type, relation, resource_id)` and
-  `idx_iam_roles_subject_resource_lookup (subject_type, subject_id,
-  resource_type, resource_id, role)`. No `COLLATE` clause appears here (the pgx
-  sibling must spell out `COLLATE "C"`): the ordering contract is raw byte order
-  and SQLite's default BINARY collation already is that. The index build holds
-  the write lock for its duration, so schedule the upgrade on a large existing
-  database.
-
-After export, the host owns the final migration stream in its own dir.
-
-**Upgrading an existing v1 database?** See
-[`../CONVERSION.md`](../CONVERSION.md) for the v1 → v3 detection-and-repair draft
-(invalid/missing userset relations, silent-conflict awareness, scope-revision
-seeding — and the standing rule that an ambiguous userset relation is an operator
-decision, never an automatic `member` grant). The full host upgrade runbook —
-backup, window, binary stop, audit/repair, apply/seed, boot, rollback boundary,
-and the gain/lose/retain access assessment — is [`../UPGRADE.md`](../UPGRADE.md).
-
-## Testing
-
-`go test ./...` is hermetic: the live conformance suite is behind
-`-tags=integration` and skips loudly without the env
-(`TURSO_DATABASE_URL/TURSO_AUTH_TOKEN`). The live run — the dialect-parity gate
-covering the named adversarial sub-runners and the `Roles/*` family — runs against
-the authorized playground database:
-
-```sh
-TURSO_DATABASE_URL='libsql://…' TURSO_AUTH_TOKEN='…' \
-  go test -tags=integration -count=1 ./...
+```go
+repos, err := turso.Repositories(ctx, db, turso.WithAudit())
+if err != nil {
+    return err
+}
+ctx = authorization.WithAuditSource(ctx, authorization.AuditSource{
+    System: "document-sync",
+    Reason: "project current document access",
+})
+err = repos.Relationships.CreateRelationships(ctx, tuples)
 ```
 
-`make check` stays hermetic (the live suite is tag-gated); `make test-stores`
-runs this live path expecting `TURSO_DATABASE_URL`/`TURSO_AUTH_TOKEN`.
+Use `WithAudit()` only when new changes should be recorded. The default is off;
+`repos.Audit` still lists previously retained history. `WithGuardianPolicy(policy)`
+installs explicit relationship invariants; its default is empty.
+`GuardianPolicy()` returns a defensive snapshot and `authorization.New`
+validates configured rules against the host relationship model.
+
+`RelationshipRepository(ctx, db, opts...)` supports baseline-only host composition
+without constructing a mutation repository. It accepts the same store options.
+It probes iam_relationships; WithAudit also requires iam_audit.
+
+## Writes and history
+
+Raw relationship and role methods are trusted state-writing ports. They join an
+ambient connector transaction or own a transaction. `SetRelationTargets` applies
+one desired relation set atomically; a conflicting existing relation returns
+`sdk.ErrConflict` and preserves the previous set. Raw relationship creates retain
+an existing subject relation on conflict. Atomic commands apply current model
+validation, optional guards and configured guardian invariants on every call.
+
+Successful commands return `mutation.Result` containing the current Outcome and
+SameRoleGrantRemains annotation. Semantic and invariant refusals return an error
+and a nil result. There are no durable operation IDs, receipts, replay tokens,
+expected revisions or revision counters. Repeating a command evaluates current
+state and policy; natural tuple duplicates remain no-ops.
+
+With recording enabled, every supported raw or command write requires a valid
+source before work, including no-op attempts. Supply either an actor type/ID pair
+or an explicit system name, with an optional bounded reason. Actor-facing service
+methods replace attribution with their validated actor. Source metadata never
+confers permission.
+
+Each actual added or removed tuple/role produces one `audit.Record`; EventID
+only groups the records of a changed call. Records preserve the complete six-field
+relationship identity or five-field role identity. Replacements record removal
+and addition, broad deletes record every removed fact, and resource teardown
+includes scoped roles. No-ops, refused operations and rollbacks record nothing.
+Timestamps use UTC microseconds and describe when the operation records its
+changes, rather than a separate commit-order sequence.
+
+Facts and their audit records use the same transaction. Ambient operations use a
+savepoint: an audit failure rolls back that operation even when the host handles
+its error and commits other work. Failure to restore the savepoint aborts the
+host transaction. Multiple calls in one host transaction produce separate event
+groups that commit or roll back together. Guarded/command methods refuse an
+ambient transaction with `ErrGuardedInsideTransaction`.
+
+`repos.Audit.List(ctx, audit.Filter{...}, list.Request{...})` supports exact
+optional resource, subject and actor pairs, standard cursor/offset pagination
+and totals. Each filter pair is both-or-neither. Ordering defaults to
+`occurred_at DESC` with record ID as the tiebreak; ASC is also supported. Hosts
+own access control, retention, presentation and export. No audit HTTP route is
+installed. Direct database edits and writes through a separately constructed
+store with recording disabled are outside recorded coverage.
+
+## Concurrency
+
+Writes use the connector's BEGIN IMMEDIATE transaction, acquiring SQLite's
+write intent before guard or state reads. This serializes authorization writers,
+including raw writes, and protects negative membership predicates without
+revision anchors. An ambient host transaction retains its write intent until
+host commit; keep such workflows short.
+
+Only definite busy/locked failures while acquiring BEGIN IMMEDIATE are retried,
+with bounded cancellation-aware waits. Once a guard or write starts, the adapter
+never repeats it after a transport or commit error. In particular, HTTP 503 is
+not treated as proof that a transaction aborted. Actual changes come from
+INSERT/DELETE RETURNING, including skipped duplicates and exact usersets.
+
+## Reads and tuple identity
+
+Relationships use the full tuple as their SQL primary key:
+resource type, resource ID, relation, subject type, subject ID, subject relation.
+Roles retain their natural five-field key. Neither fact type stores a surrogate
+relationship ID or CreatedAt. The independent one-relation-per-exact-subject
+constraint remains; distinct userset relations remain distinct subjects.
+
+Relationship lists order by `tuple_key ASC`; role lists by `role_key ASC`.
+Keys join canonical fields with U+0001, which validation forbids inside a field.
+SQLite ordering expressions explicitly use BINARY collation.
+Model-bound readers filter persisted facts through the current host model.
+Recursive userset expansion retains exact userset relation identity, detects
+cycles and enforces the same expansion-state budget in ordinary and guarded
+reads. Physical scan cost remains planner-dependent.
+
+## Migration and deployment
+
+Export the canonical files with `ExportMigrations(dst)` and apply them using the
+host's runner. Fresh databases apply 0001 through 0007. Keep earlier deployed
+migration files unchanged.
+
+0006 removes relationship IDs and fact timestamps, preserving full tuple keys.
+It rejects legacy U+0001 separators before dropping metadata; repair those
+records explicitly and rerun. 0007 drops `iam_scopes` and `iam_mutations`, creates
+`iam_audit` and its time/resource/subject/actor listing indexes. Old receipts do
+not contain enough information to reconstruct actor-attributed fact history;
+the migration does not invent it.
+
+Stop old writers before upgrading. Archive legacy receipt/revision tables first
+if needed, apply the complete migration source, then deploy the new binary.
+An old binary cannot operate against the new schema. Rollback requires a
+compatible backup or a deliberate host migration; do not resume old writers
+against partially upgraded tables.
+
+Repositories probes both fact tables and iam_audit before serving requests. The full migration source is required even if the host wires only one authorization kind.
+
+## Verification
+
+Set TURSO_DATABASE_URL and TURSO_AUTH_TOKEN, then run `go test -tags=integration -race -count=1 ./...` against a disposable database.
+Live tests include shared fact/mutation/audit conformance, exact userset deltas,
+ambient savepoint recovery, retained readers, pagination and populated upgrades.

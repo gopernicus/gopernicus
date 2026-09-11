@@ -40,7 +40,8 @@ Use `GOWORK=off` when validating that a module's declared requirements—not wor
 
 ## Pocket store conformance
 
-Pocket cores export test suites:
+Pocket cores export test suites at `stores/storetest` (CMS keeps its previous
+`storetest` path while deferred):
 
 ```go
 func TestStore(t *testing.T) {
@@ -68,9 +69,11 @@ Turso legs need `TURSO_DATABASE_URL` and `TURSO_AUTH_TOKEN` and compile with `-t
 `make guard` enforces boundaries including:
 
 - SDK standard-library-only and internal tiering;
-- pocket core SDK-only requirements;
+- pocket core SDK/shared-contract dependency requirements;
 - no pocket-to-pocket imports;
-- no pocket core imports of stores, views, UI, integrations, or examples;
+- no production services importing concrete stores, views, UI, integrations, or examples;
+- memory and conformance packages remain covered as core-module code under `stores`;
+- domain and internal logic stay independent of HTTP and inbound adapters;
 - no integration imports inward to pockets/hosts/Workshop;
 - transport responders use SDK web primitives;
 - store modules do not reach foreign pockets;
@@ -78,7 +81,7 @@ Turso legs need `TURSO_DATABASE_URL` and `TURSO_AUTH_TOKEN` and compile with `-t
 - UI dependency whitelist;
 - security-specific negative boundaries for authentication/authorization delivery.
 
-If a guard fails, fix the dependency direction. Do not weaken a regex to make an architecture bug disappear.
+If a guard fails, fix the dependency direction. Pocket guards follow actual module boundaries and parse Go source; the same checks run against generated pockets.
 
 ## Scaffold compile proofs
 

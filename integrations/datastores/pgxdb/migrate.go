@@ -58,6 +58,7 @@ func WithSchema(s Schema) MigrateOption {
 // RunMigrations applies the host-owned SQL migration stream at migrationsDir.
 // Migrations are applied in filename order, in one transaction, and recorded in
 // schema_migrations with a checksum guard. Files prefixed with "_" are skipped.
+// A nil option returns an error wrapping sdk.ErrInvalidInput.
 //
 // One stream per schema. Without WithSchema the stream is the database's
 // default-schema stream: a host exports every pocket's migrations into a
@@ -87,6 +88,9 @@ func WithSchema(s Schema) MigrateOption {
 func RunMigrations(ctx context.Context, db *DB, migrationsFS fs.FS, migrationsDir string, opts ...MigrateOption) error {
 	var cfg migrateConfig
 	for _, opt := range opts {
+		if opt == nil {
+			return fmt.Errorf("pgxdb: nil MigrateOption: %w", sdk.ErrInvalidInput)
+		}
 		opt(&cfg)
 	}
 
@@ -208,7 +212,7 @@ func ExportMigrations(migrationsFS fs.FS, dir, dst string) error {
 		return err
 	}
 	for _, e := range entries {
-		if e.IsDir() {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".sql") {
 			continue
 		}
 		data, err := fs.ReadFile(migrationsFS, path.Join(dir, e.Name()))
@@ -267,22 +271,17 @@ func createMigrationsTable(ctx context.Context, tx *Tx, schema Schema) error {
 }
 
 func getMigrationFiles(migrationsFS fs.FS, dir string) ([]string, error) {
-	var files []string
-
-	err := fs.WalkDir(migrationsFS, dir, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		name := filepath.Base(path)
-		if !d.IsDir() && strings.HasSuffix(name, ".sql") && !strings.HasPrefix(name, "_") {
-			files = append(files, name)
-		}
-		return nil
-	})
+	entries, err := fs.ReadDir(migrationsFS, dir)
 	if err != nil {
 		return nil, err
 	}
-
+	var files []string
+	for _, entry := range entries {
+		name := entry.Name()
+		if !entry.IsDir() && strings.HasSuffix(name, ".sql") && !strings.HasPrefix(name, "_") {
+			files = append(files, name)
+		}
+	}
 	sort.Strings(files)
 	return files, nil
 }
@@ -296,7 +295,7 @@ func applyMigration(ctx context.Context, tx *Tx, src migrationSource, file strin
 	version := file
 	ledger := schema.Table(migrationsTable)
 
-	content, err := fs.ReadFile(src.FS, filepath.Join(src.Dir, file))
+	content, err := fs.ReadFile(src.FS, path.Join(src.Dir, file))
 	if err != nil {
 		return fmt.Errorf("read migration file: %w", err)
 	}

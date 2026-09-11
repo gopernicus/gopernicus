@@ -3,12 +3,18 @@ package main
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"net/http"
 	"sync/atomic"
 
 	authorization "github.com/gopernicus/gopernicus/pockets/authorization"
-	authzmem "github.com/gopernicus/gopernicus/pockets/authorization/memstore"
-	"github.com/gopernicus/gopernicus/sdk/foundation/web"
+	authorizationhttp "github.com/gopernicus/gopernicus/pockets/authorization/inbound/http"
+	audit "github.com/gopernicus/gopernicus/pockets/authorization/logic/audit"
+	model "github.com/gopernicus/gopernicus/pockets/authorization/logic/model"
+	mutations "github.com/gopernicus/gopernicus/pockets/authorization/logic/mutations"
+	relationships "github.com/gopernicus/gopernicus/pockets/authorization/logic/relationships"
+	authzmem "github.com/gopernicus/gopernicus/pockets/authorization/stores/memory"
+	"github.com/gopernicus/gopernicus/sdk/pkg/web"
 )
 
 // Host-owned authorization policy vocabulary.
@@ -31,27 +37,35 @@ const (
 // (owner/member relations; `view` = AnyOf(owner, member); the new `manage_access` =
 // Direct(owner) permission the host MutationGuard enforces) and the flat `platform`
 // admin-list type backing the platform-admin data tuple.
-func authzSchema() authorization.Schema {
-	return authorization.NewSchema([]authorization.ResourceSchema{
-		{Name: demoResourceType, Def: authorization.ResourceTypeDef{
-			Relations: map[string]authorization.RelationDef{
-				"owner":  {AllowedSubjects: []authorization.SubjectTypeRef{{Type: "user"}}},
-				"member": {AllowedSubjects: []authorization.SubjectTypeRef{{Type: "user"}}},
+func authzSchema() relationships.Schema {
+	return relationships.NewSchema([]relationships.ResourceSchema{
+		{Name: "document", Def: relationships.ResourceTypeDef{
+			Relations: map[string]relationships.RelationDef{
+				"viewer": {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "user"}}},
 			},
-			Permissions: map[string]authorization.PermissionRule{
-				demoPermission:   authorization.AnyOf(authorization.Direct("owner"), authorization.Direct("member")),
-				manageAccessPerm: authorization.AnyOf(authorization.Direct("owner")),
+			Permissions: map[string]relationships.PermissionRule{
+				"view": relationships.AnyOf(relationships.Direct("viewer")),
 			},
 		}},
-		{Name: platformResourceType, Def: authorization.ResourceTypeDef{
-			Relations: map[string]authorization.RelationDef{
-				"admin": {AllowedSubjects: []authorization.SubjectTypeRef{{Type: "user"}}},
+		{Name: demoResourceType, Def: relationships.ResourceTypeDef{
+			Relations: map[string]relationships.RelationDef{
+				"owner":  {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "user"}}},
+				"member": {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "user"}}},
+			},
+			Permissions: map[string]relationships.PermissionRule{
+				demoPermission:   relationships.AnyOf(relationships.Direct("owner"), relationships.Direct("member")),
+				manageAccessPerm: relationships.AnyOf(relationships.Direct("owner")),
+			},
+		}},
+		{Name: platformResourceType, Def: relationships.ResourceTypeDef{
+			Relations: map[string]relationships.RelationDef{
+				"admin": {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "user"}}},
 			},
 			// The `admin` permission makes platform-admin an ordinary schema-declared
 			// check the host runs first in its own Check closure (see requireMembership /
 			// demoMyProjects). The engine no longer bypasses on this tuple.
-			Permissions: map[string]authorization.PermissionRule{
-				"admin": authorization.AnyOf(authorization.Direct("admin")),
+			Permissions: map[string]relationships.PermissionRule{
+				"admin": relationships.AnyOf(relationships.Direct("admin")),
 			},
 		}},
 	})
@@ -68,9 +82,9 @@ func authzSchema() authorization.Schema {
 // — a pair declared by both models would fail construction with ErrModelConflict —
 // and it is what makes each decision dispatch to exactly one model, so the two
 // recipes stay demonstrable side by side without entangling.
-func authzRoleModel() authorization.RoleModel {
-	return authorization.RoleModel{
-		ResourceTypes: map[string]authorization.RoleTypeDef{
+func authzRoleModel() model.RoleModel {
+	return model.RoleModel{
+		ResourceTypes: map[string]model.RoleTypeDef{
 			demoResourceType: {
 				Roles:       []string{demoRole},
 				Permissions: map[string][]string{demoAuditPermission: {demoRole}},
@@ -90,9 +104,9 @@ func authzRoleModel() authorization.RoleModel {
 // not a weakened posture: the empty GuardianPolicy the pre-AZ3-4.1 demo wired (which
 // disabled last-owner protection entirely to let member invitations precede an owner) is
 // gone, replaced by a boot-time owner seed + this real invariant.
-func authzGuardianPolicy() authorization.GuardianPolicy {
-	return authorization.GuardianPolicy{
-		Rules: []authorization.GuardianRule{{ResourceType: demoResourceType, Relation: "owner", MinAnchors: 1}},
+func authzGuardianPolicy() mutations.GuardianPolicy {
+	return mutations.GuardianPolicy{
+		Rules: []mutations.GuardianRule{{ResourceType: demoResourceType, Relation: "owner", MinAnchors: 1}},
 	}
 }
 
@@ -102,24 +116,25 @@ func authzGuardianPolicy() authorization.GuardianPolicy {
 // trusted SystemMutator writes and the read side observe the same state), and BOTH
 // bear a model — the relationship Schema and the RoleModel — so the ONE decision
 // surface dispatches each (type, permission) pair to its owning model. It runs under
-// the project-scoped guardian minimum, with the host MutationGuard wired into Config.Guard.
+// the project-scoped guardian minimum, with the host MutationGuard wired through authorization.WithGuard.
 // The returned Components hold the actor-facing Service and the separately held trusted
 // SystemMutator apart, by construction.
-func newAuthorization(roleRoutesGate web.Middleware) (authorization.Components, error) {
+func newAuthorization(roleRoutesGate web.Middleware, logger *slog.Logger) (authorization.Components, error) {
 	store := authzmem.New(authzmem.WithGuardianPolicy(authzGuardianPolicy()))
-	return authorization.NewService(authorization.Repositories{
-		Relationships: store.Relationships(),
-		Roles:         store.Roles(),
-		Mutations:     store.Mutations(),
-	}, authorization.Config{
-		RelationshipModel: authzSchema(),
-		RoleModel:         authzRoleModel(),
-		Guard:             hostMutationGuard{},
-		// The bundled role-administration routes mount only because this host names
-		// a gate; nil (which every composition test passes) is the deny-by-absence
-		// posture and registers nothing.
-		RoleRoutesGate: roleRoutesGate,
-	})
+	return authorization.New(
+		authorization.Repositories{
+			Relationships: store.Relationships(),
+			Roles:         store.Roles(),
+			Mutations:     store.Mutations(),
+		},
+		authorization.WithLogger(logger),
+		authorization.WithRelationshipModel(authzSchema()),
+		authorization.WithRoleModel(authzRoleModel()),
+		authorization.WithGuard(hostMutationGuard{}),
+		// The gate enables bundled role administration; a nil gate leaves every
+		// role route disabled, including in the headless composition tests.
+		authorization.WithRoleRoutes(authorizationhttp.RoleRoutes{Gate: roleRoutesGate}),
+	)
 }
 
 // roleAdministrationGate composes the D6 chain the bundled /authorization/* routes
@@ -127,7 +142,7 @@ func newAuthorization(roleRoutesGate web.Middleware) (authorization.Components, 
 // gate, so this closure is the ENTIRE stack:
 //
 //  1. authenticate — the auth pocket's live human-session middleware, which stashes
-//     the principal with identity.WithPrincipal. Without it the bundled writes
+//     the principal with sdk.WithPrincipal. Without it the bundled writes
 //     answer 401 rather than fabricate a zero Actor.
 //  2. authorize — the platform-admin coordinate already declared in authzSchema
 //     (platform/admin on platform:main), the same one MachineRoutesGate names.
@@ -169,7 +184,7 @@ func (d *deferredMiddleware) set(m web.Middleware) { d.chain.Store(&m) }
 // so a reordering refactor fails at boot instead of at the first request.
 func (d *deferredMiddleware) installed() bool { return d.chain.Load() != nil }
 
-// middleware is the web.Middleware the host hands to Config.RoleRoutesGate. An
+// middleware is the web.Middleware the host passes in RoleRoutes.Gate. An
 // unassigned chain fails CLOSED with a 500 rather than admitting the request: a
 // route that outran its gate is a host bug, never an open door.
 func (d *deferredMiddleware) middleware(next http.Handler) http.Handler {
@@ -191,37 +206,34 @@ func (d *deferredMiddleware) middleware(next http.Handler) http.Handler {
 // roleAdministrationGate, so a platform admin assigns and unassigns roles over HTTP.
 // Establishing the FIRST owner stays trusted and boot-time — it cannot yet prove it
 // manages the resource.
-var seedOwnerSubject = authorization.SubjectRef{Type: "user", ID: "demo-owner"}
+var seedOwnerSubject = relationships.SubjectRef{Type: "user", ID: "demo-owner"}
 
 // seedAuthorization establishes the ownable scope through the TRUSTED SystemMutator
 // before the host serves: project:demo#owner (the guardian minimum, granted FIRST so a
 // later member invitation is not member-first-blocked) and the platform:main#admin data
-// tuple. Each MutationID is DERIVED from its tuple, so a restart re-seed dedups against
-// the stored receipt — no duplicate revision bump. It is the trusted bootstrap the
+// tuple. Repeated seeding leaves existing identical grants unchanged. It is the trusted bootstrap the
 // retired POST /demo/admin/bootstrap route used to perform per-request; establishing the
 // first owner is inherently trusted (it cannot yet prove it manages the resource).
-func seedAuthorization(ctx context.Context, system *authorization.SystemMutator) error {
-	grants := []authorization.GrantRelationshipCommand{
+func seedAuthorization(ctx context.Context, system *mutations.SystemMutator) error {
+	ctx = audit.WithSource(ctx, audit.Source{System: "bootstrap"})
+	grants := []mutations.GrantRelationshipCommand{
 		{ResourceType: demoResourceType, ResourceID: demoResourceID, Relation: "owner", Subject: seedOwnerSubject},
 		{ResourceType: platformResourceType, ResourceID: platformResourceID, Relation: "admin", Subject: seedOwnerSubject},
 	}
 	for _, g := range grants {
-		g.MutationID = authorization.DeriveMutationID("auth-cms/bootstrap-grant",
-			g.ResourceType, g.ResourceID, g.Relation, g.Subject.Type, g.Subject.ID)
+
 		if _, err := system.GrantRelationship(ctx, g); err != nil {
 			return err
 		}
 	}
-	// The ROLES-kind seed, on the same trusted seam and the same derived-MutationID
-	// replay rule: the demo owner also holds `auditor` on project:demo, so the
+	// The ROLES-kind seed, on the same trusted seam: the demo owner also holds `auditor` on project:demo, so the
 	// role-model gate on /demo/audit is answerable at boot. The (project, auditor)
 	// pair must be declared by authzRoleModel — with a model wired, an undeclared
 	// pair is refused with ErrInvalidRoleModel rather than stored as a silent
 	// no-grant.
-	if _, err := system.AssignRole(ctx, authorization.AssignRoleCommand{
-		MutationID: authorization.DeriveMutationID("auth-cms/bootstrap-role",
-			demoResourceType, demoResourceID, demoRole, seedOwnerSubject.Type, seedOwnerSubject.ID),
-		Subject:      authorization.PrincipalRef{Type: seedOwnerSubject.Type, ID: seedOwnerSubject.ID},
+	if _, err := system.AssignRole(ctx, mutations.AssignRoleCommand{
+
+		Subject:      model.PrincipalRef{Type: seedOwnerSubject.Type, ID: seedOwnerSubject.ID},
 		Role:         demoRole,
 		ResourceType: demoResourceType,
 		ResourceID:   demoResourceID,

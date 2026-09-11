@@ -7,8 +7,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gopernicus/gopernicus/sdk/foundation/web"
-	"github.com/gopernicus/gopernicus/sdk/pocket"
+	"github.com/gopernicus/gopernicus/pockets"
+	delivery "github.com/gopernicus/gopernicus/pockets/authentication/logic/delivery"
+	"github.com/gopernicus/gopernicus/sdk/pkg/web"
 )
 
 // ---------------------------------------------------------------------------
@@ -61,9 +62,9 @@ func (d *recordingDispatcher) calls() []recordedSubmit {
 	return out
 }
 
-func jobsModeConfig(disp DeliveryDispatcher) Config {
+func jobsModeConfig(disp delivery.Dispatcher) constructorConfig {
 	c := deliveryDevConfig()
-	c.DeliveryMode = DeliveryModeJobs
+	c.DeliveryMode = delivery.ModeJobs
 	c.DeliveryEncrypter = stubEncrypter{}
 	c.DeliveryDispatcher = disp
 	return c
@@ -75,23 +76,23 @@ func jobsModeConfig(disp DeliveryDispatcher) Config {
 // jobs runtime explicitly (Register starts no goroutines).
 func TestDeliveryJobRuntime_JobsModeExposed(t *testing.T) {
 	disp := &recordingDispatcher{}
-	svc, err := NewService(Repositories{}, jobsModeConfig(disp))
+	svc, err := newFixture(testRepositories(Repositories{}), jobsModeConfig(disp))
 	if err != nil {
 		t.Fatalf("NewService (jobs mode + dispatcher): %v", err)
 	}
 
-	rt, ok := svc.DeliveryJobRuntime()
+	rt, ok := svc.Delivery.JobRuntime()
 	if !ok {
 		t.Fatal("DeliveryJobRuntime not exposed in jobs mode with a wired dispatcher")
 	}
-	if rt.Kind != DeliveryJobKind {
-		t.Fatalf("rt.Kind = %q, want %q", rt.Kind, DeliveryJobKind)
+	if rt.Kind != delivery.JobKind {
+		t.Fatalf("rt.Kind = %q, want %q", rt.Kind, delivery.JobKind)
 	}
 	if rt.Handle == nil || rt.Discard == nil {
 		t.Fatal("DeliveryJobRuntime handler/discard is nil")
 	}
 
-	if err := svc.Register(pocket.Mount{Router: web.NewWebHandler()}); err != nil {
+	if err := svc.HTTP.Register(pockets.Mount{Router: web.NewWebHandler()}); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 	// Give any (erroneously) started goroutine a chance to submit/claim before asserting.
@@ -103,26 +104,26 @@ func TestDeliveryJobRuntime_JobsModeExposed(t *testing.T) {
 
 // TestDeliveryJobRuntime_UnavailableWithoutDispatcher proves the seam is closed in
 // every mode that is not jobs-over-generic-jobs: in_process (the host runs
-// RunDelivery, not a jobs runtime) and off.
+// Runtime.Run, not a jobs runtime) and off.
 func TestDeliveryJobRuntime_UnavailableWithoutDispatcher(t *testing.T) {
 	inProc := deliveryDevConfig()
-	inProc.DeliveryMode = DeliveryModeInProcess
+	inProc.DeliveryMode = delivery.ModeInProcess
 	inProc.DeliveryEncrypter = stubEncrypter{} // in_process seals its bounded-queue payload (AV3D-4.1)
-	svc, err := NewService(Repositories{}, inProc)
+	svc, err := newFixture(testRepositories(Repositories{}), inProc)
 	if err != nil {
 		t.Fatalf("NewService (in_process): %v", err)
 	}
-	if _, ok := svc.DeliveryJobRuntime(); ok {
+	if _, ok := svc.Delivery.JobRuntime(); ok {
 		t.Fatal("DeliveryJobRuntime exposed in in_process mode")
 	}
 
 	off := deliveryDevConfig()
-	off.DeliveryMode = DeliveryModeOff
-	svc2, err := NewService(Repositories{}, off)
+	off.DeliveryMode = delivery.ModeOff
+	svc2, err := newFixture(testRepositories(Repositories{}), off)
 	if err != nil {
 		t.Fatalf("NewService (off): %v", err)
 	}
-	if _, ok := svc2.DeliveryJobRuntime(); ok {
+	if _, ok := svc2.Delivery.JobRuntime(); ok {
 		t.Fatal("DeliveryJobRuntime exposed in off mode (no delivery runtime)")
 	}
 }
@@ -135,12 +136,15 @@ func TestDeliveryJobRuntime_UnavailableWithoutDispatcher(t *testing.T) {
 // secret.
 func TestJobsModeProducerSubmitsSealedCommand(t *testing.T) {
 	disp := &recordingDispatcher{}
-	svc, err := NewService(Repositories{}, jobsModeConfig(disp))
+	cfg := jobsModeConfig(disp)
+	cfg.PasswordFlowsDisabled = false
+	cfg.ChallengeProtector = passwordlessProtector(t)
+	svc, err := newFixture(testRepositories(Repositories{Challenges: stubChallenges{}, PasswordResets: configPasswordResets{}}), cfg)
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
 
-	if err := svc.ForgotPassword(context.Background(), "user@example.com"); err != nil {
+	if err := svc.Authentication.ForgotPassword(context.Background(), "user@example.com"); err != nil {
 		t.Fatalf("ForgotPassword: %v", err)
 	}
 

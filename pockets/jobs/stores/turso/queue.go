@@ -8,10 +8,10 @@ import (
 	"time"
 
 	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
-	"github.com/gopernicus/gopernicus/pockets/jobs/domain/job"
+	job "github.com/gopernicus/gopernicus/pockets/jobs/logic/queue"
 	"github.com/gopernicus/gopernicus/sdk"
-	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
-	"github.com/gopernicus/gopernicus/sdk/foundation/workers"
+	"github.com/gopernicus/gopernicus/sdk/pkg/list"
+	"github.com/gopernicus/gopernicus/sdk/pkg/workers"
 )
 
 // DefaultLease is the stale-claim recovery window applied when no WithLease
@@ -26,15 +26,17 @@ const jobColumns = "job_id, kind, tenant_id, payload, status, priority, retry_co
 var _ job.QueueRepository = (*Queue)(nil)
 
 // QueueOption configures a Queue.
-type QueueOption func(*Queue)
+type QueueOption func(*queueConfig)
+
+type queueConfig struct{ lease time.Duration }
 
 // WithLease sets the stale-claim recovery window folded into Claim's due
 // predicate: a running job whose claimed_at is older than d becomes claimable
 // again (design §6.3). It is store configuration, never a Claim parameter, so
 // the port signature stays identical to workers.JobStore. Non-positive values
-// are ignored and the default is kept.
+// are ignored, preserving the previous setting (or the default).
 func WithLease(d time.Duration) QueueOption {
-	return func(q *Queue) {
+	return func(q *queueConfig) {
 		if d > 0 {
 			q.lease = d
 		}
@@ -93,16 +95,21 @@ func (r jobRow) toDomain() job.Job {
 	}
 }
 
-// NewQueueStore returns a Queue backed by db, applying opts (WithLease). It sets
-// busy_timeout on the connection best-effort; the bounded retry loop is the real
-// contention defense.
+// NewQueueStore returns a Queue backed by db, applying opts (WithLease).
+// The host owns connection settings; store operations use bounded busy retries.
+// It panics if db is nil; the caller owns the database lifecycle.
 func NewQueueStore(db *tursodb.DB, opts ...QueueOption) *Queue {
-	q := &Queue{db: db, lease: DefaultLease}
-	for _, opt := range opts {
-		opt(q)
+	if db == nil {
+		panic("jobs turso: NewQueueStore received a nil database")
 	}
-	_, _ = db.Exec(context.Background(), "PRAGMA busy_timeout = 5000")
-	return q
+	cfg := queueConfig{lease: DefaultLease}
+	for _, opt := range opts {
+		if opt == nil {
+			panic("jobs turso: NewQueueStore received a nil option")
+		}
+		opt(&cfg)
+	}
+	return &Queue{db: db, lease: cfg.lease}
 }
 
 // Enqueue inserts one pending job. A caller-supplied ID that already exists
@@ -216,7 +223,7 @@ func (q *Queue) Claim(ctx context.Context, workerID string, now time.Time, kinds
 func (q *Queue) Complete(ctx context.Context, jobID string, now time.Time) error {
 	ts := tursodb.FormatTime(now.UTC())
 	const q1 = `UPDATE job_queue SET status = 'completed', completed_at = ?, updated_at = ? WHERE job_id = ?`
-	return q.execAffecting(ctx, q1, ts, ts, jobID)
+	return q.transition(ctx, jobID, job.StatusCompleted, q1, ts, ts, jobID)
 }
 
 // Fail increments retry_count and, in one statement, either reschedules the job
@@ -233,7 +240,7 @@ func (q *Queue) Fail(ctx context.Context, jobID string, now time.Time, reason st
 		    worker_name = CASE WHEN retry_count + 1 >= ? THEN worker_name ELSE NULL END,
 		    claimed_at = CASE WHEN retry_count + 1 >= ? THEN claimed_at ELSE NULL END
 		WHERE job_id = ?`
-	return q.execAffecting(ctx, fail, reason, ts, maxAttempts, maxAttempts, maxAttempts, jobID)
+	return q.transition(ctx, jobID, job.StatusDeadLetter, fail, reason, ts, maxAttempts, maxAttempts, maxAttempts, jobID)
 }
 
 // Get returns the job with the given id, or sdk.ErrNotFound.
@@ -249,7 +256,7 @@ func (q *Queue) Get(ctx context.Context, id string) (job.Job, error) {
 // List returns a cursor- or offset-paginated page of jobs matching the filter,
 // in the resolved order (default created_at DESC, job_id DESC). The Kind/Status
 // filter is shared by the page query and the WithCount total.
-func (q *Queue) List(ctx context.Context, f job.ListFilter, req crud.ListRequest) (crud.Page[job.Job], error) {
+func (q *Queue) List(ctx context.Context, f job.ListFilter, req list.Request) (list.Page[job.Job], error) {
 	where := "WHERE 1 = 1"
 	var args []any
 	if f.Kind != "" {
@@ -272,22 +279,28 @@ func (q *Queue) List(ctx context.Context, f job.ListFilter, req crud.ListRequest
 	}
 	page, err := tursodb.List(ctx, q.db, lq, req)
 	if err != nil {
-		return crud.Page[job.Job]{}, err
+		return list.Page[job.Job]{}, err
 	}
-	return crud.MapPage(page, jobRow.toDomain), nil
+	return list.MapPage(page, jobRow.toDomain), nil
 }
 
-// execAffecting runs a write that must touch exactly one row, mapping zero rows
-// affected to sdk.ErrNotFound and retrying transient busy errors.
-func (q *Queue) execAffecting(ctx context.Context, query string, args ...any) error {
+// transition serializes the terminal-state guard and update under BEGIN
+// IMMEDIATE. It cannot distinguish two workers while the job is still running.
+func (q *Queue) transition(ctx context.Context, id string, repeated job.Status, query string, args ...any) error {
 	return retryBusy(ctx, func() error {
-		n, err := tursodb.ExecAffecting(ctx, q.db, query, args...)
-		if err != nil {
+		return q.db.InTx(ctx, func(tx *tursodb.Tx) error {
+			var status job.Status
+			if err := tx.QueryRow(ctx, `SELECT status FROM job_queue WHERE job_id = ?`, id).Scan(&status); err != nil {
+				return tursodb.MapError(err)
+			}
+			if status.Terminal() {
+				if status == repeated {
+					return nil
+				}
+				return sdk.ErrConflict
+			}
+			_, err := tx.Exec(ctx, query, args...)
 			return err
-		}
-		if n == 0 {
-			return sdk.ErrNotFound
-		}
-		return nil
+		})
 	})
 }

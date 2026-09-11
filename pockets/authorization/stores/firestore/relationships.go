@@ -5,22 +5,24 @@ import (
 	"errors"
 
 	firestoredb "github.com/gopernicus/gopernicus/integrations/datastores/firestore"
-	"github.com/gopernicus/gopernicus/pockets/authorization/domain/relationship"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/relationships"
 	"github.com/gopernicus/gopernicus/sdk"
-	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
+	"github.com/gopernicus/gopernicus/sdk/pkg/list"
 )
 
-var _ relationship.Storer = (*relationshipStore)(nil)
+var _ relationships.Storer = (*relationshipStore)(nil)
 
 // relationshipStore fills relationship.Storer over the iam_relationships
-// collection and its two claim collections (SCHEMA.md §5). Every method refuses
+// collection and its subject claim collection (SCHEMA.md §5). Every method refuses
 // an ambient transaction first (R1); the bodies land in A2a–A2d.
 type relationshipStore struct {
-	db *firestoredb.DB
+	model *relationships.ReadModel
+	db    *firestoredb.DB
+	audit bool
 }
 
-func newRelationshipStore(db *firestoredb.DB) *relationshipStore {
-	return &relationshipStore{db: db}
+func newRelationshipStore(db *firestoredb.DB, enabled bool) *relationshipStore {
+	return &relationshipStore{db: db, audit: enabled}
 }
 
 // CheckRelationWithGroupExpansion reports whether the concrete subject — or any
@@ -46,11 +48,11 @@ func (s *relationshipStore) CheckRelationWithGroupExpansion(ctx context.Context,
 	var allowed bool
 	err := s.db.ReadSnapshot(ctx, func(ctx context.Context, r firestoredb.Reader) error {
 		allowed = false
-		reached, err := expand(ctx, s.db, r, subjectType, subjectID, maxExpansionStates)
+		reached, err := expand(ctx, s.db, r, subjectType, subjectID, maxExpansionStates, s.model)
 		if err != nil {
 			return err
 		}
-		allowed, err = anyTupleWithSubject(ctx, s.db, r, resourceType, resourceID, relation, reached)
+		allowed, err = anyTupleWithSubject(ctx, s.db, r, resourceType, resourceID, relation, reached, s.model)
 		return err
 	})
 	if err != nil {
@@ -63,11 +65,11 @@ func (s *relationshipStore) CheckRelationWithGroupExpansion(ctx context.Context,
 // for "through" permission traversal. It is ONE query on the derived
 // resource_key, so it needs no snapshot; userset targets come back as stored
 // (an empty Relation is a concrete subject).
-func (s *relationshipStore) GetRelationTargets(ctx context.Context, resourceType, resourceID, relation string) ([]relationship.RelationTarget, error) {
+func (s *relationshipStore) GetRelationTargets(ctx context.Context, resourceType, resourceID, relation string) ([]relationships.RelationTarget, error) {
 	if err := refuseAmbient(ctx); err != nil {
 		return nil, err
 	}
-	return relationTargets(ctx, s.db, s.db.ReaderFrom(ctx), resourceType, resourceID, relation)
+	return relationTargets(ctx, s.db, s.db.ReaderFrom(ctx), resourceType, resourceID, relation, s.model)
 }
 
 // FilterRelation returns the DISTINCT, byte-order sorted subset of resourceIDs
@@ -91,7 +93,7 @@ func (s *relationshipStore) FilterRelation(ctx context.Context, resourceType str
 	var out []string
 	err := s.db.ReadSnapshot(ctx, func(ctx context.Context, r firestoredb.Reader) error {
 		var err error
-		out, err = filterRelation(ctx, s.db, r, resourceType, ids, relation, subjectType, subjectID, maxExpansionStates)
+		out, err = filterRelation(ctx, s.db, r, resourceType, ids, relation, subjectType, subjectID, maxExpansionStates, s.model)
 		return err
 	})
 	if err != nil {
@@ -103,14 +105,14 @@ func (s *relationshipStore) FilterRelation(ctx context.Context, resourceType str
 // filterRelation is FilterRelation's snapshot-bound body: one shared expansion,
 // then one query per candidate chunk. ids must be distinct and byte-sorted, so
 // the output is produced in the contractual order by construction.
-func filterRelation(ctx context.Context, db *firestoredb.DB, r firestoredb.Reader, resourceType string, ids []string, relation, subjectType, subjectID string, maxExpansionStates int) ([]string, error) {
-	reached, err := expand(ctx, db, r, subjectType, subjectID, maxExpansionStates)
+func filterRelation(ctx context.Context, db *firestoredb.DB, r firestoredb.Reader, resourceType string, ids []string, relation, subjectType, subjectID string, maxExpansionStates int, models ...*relationships.ReadModel) ([]string, error) {
+	reached, err := expand(ctx, db, r, subjectType, subjectID, maxExpansionStates, firstReadModel(models))
 	if err != nil {
 		return nil, err
 	}
 	matched := make(map[string]struct{}, len(ids))
 	if err := scanCandidates(ctx, db, r, resourceType, ids, relation, func(row relationshipDoc) {
-		if _, ok := reached[row.SubjectKey]; ok {
+		if _, ok := reached[row.SubjectKey]; ok && permits(firstReadModel(models), row) {
 			matched[row.ResourceID] = struct{}{}
 		}
 	}); err != nil {
@@ -131,19 +133,22 @@ func filterRelation(ctx context.Context, db *firestoredb.DB, r firestoredb.Reade
 // are returned as stored, and an empty input performs no database I/O. The
 // candidate set is read in chunks of maxDisjunctions ids under one snapshot and
 // the chunks are merged, so chunking is invisible to the contract.
-func (s *relationshipStore) RelationTargetsFor(ctx context.Context, resourceType string, resourceIDs []string, relation string) (map[string][]relationship.RelationTarget, error) {
+func (s *relationshipStore) RelationTargetsFor(ctx context.Context, resourceType string, resourceIDs []string, relation string) (map[string][]relationships.RelationTarget, error) {
 	if err := refuseAmbient(ctx); err != nil {
 		return nil, err
 	}
 	ids := distinctSortedIDs(resourceIDs)
-	out := make(map[string][]relationship.RelationTarget, len(ids))
+	out := make(map[string][]relationships.RelationTarget, len(ids))
 	if len(ids) == 0 {
 		return out, nil
 	}
 	err := s.db.ReadSnapshot(ctx, func(ctx context.Context, r firestoredb.Reader) error {
 		clear(out)
 		return scanCandidates(ctx, s.db, r, resourceType, ids, relation, func(row relationshipDoc) {
-			out[row.ResourceID] = append(out[row.ResourceID], relationship.RelationTarget{
+			if !permits(s.model, row) {
+				return
+			}
+			out[row.ResourceID] = append(out[row.ResourceID], relationships.RelationTarget{
 				Type:     row.SubjectType,
 				ID:       row.SubjectID,
 				Relation: row.SubjectRelation,
@@ -195,7 +200,7 @@ func (s *relationshipStore) CheckBatchDirect(ctx context.Context, resourceType s
 		for id := range out {
 			out[id] = false
 		}
-		matched, err := filterRelation(ctx, s.db, r, resourceType, ids, relation, subjectType, subjectID, maxExpansionStates)
+		matched, err := filterRelation(ctx, s.db, r, resourceType, ids, relation, subjectType, subjectID, maxExpansionStates, s.model)
 		if err != nil {
 			return err
 		}
@@ -210,31 +215,26 @@ func (s *relationshipStore) CheckBatchDirect(ctx context.Context, resourceType s
 	return out, nil
 }
 
-// CreateRelationships inserts a batch of tuples in ONE Firestore transaction:
-// every document the batch could collide with is read first, then the surviving
-// rows are written. There is no partial commit — the whole batch lands or none
-// of it does — and the batch shares one created_at, which is what makes the
-// relationship_id the load-bearing keyset tiebreak.
-//
-// A colliding row is a SILENT NO-OP (nil error, existing row untouched), never
-// ErrAlreadyExists: the SQL siblings' bare `ON CONFLICT DO NOTHING` has no
-// conflict target, so it covers the unique tuple, the one-relation-per-subject
-// index, AND the primary key. See createRelationships for the three collisions
-// and for how duplicates inside the batch resolve in input order.
-//
-// The batch is never split. Firestore publishes no per-transaction write COUNT
-// limit — the bound is the 10 MiB request size — and an oversized commit fails
-// at the server atomically, so a batch too large for one request is refused by
-// Firestore with nothing written rather than half applied here (SCHEMA.md §8.1).
-func (s *relationshipStore) CreateRelationships(ctx context.Context, relationships []relationship.CreateRelationship) error {
+// CreateRelationships validates then atomically inserts natural tuples. Exact
+// duplicates and occupied subject claims are no-ops; the first row per subject
+// wins within a batch. The batch is never split into partial commits.
+func (s *relationshipStore) CreateRelationships(ctx context.Context, relationships []relationships.CreateRelationship) error {
 	if err := refuseAmbient(ctx); err != nil {
+		return err
+	}
+	if err := validateAuditSource(ctx, s.audit); err != nil {
 		return err
 	}
 	if len(relationships) == 0 {
 		return nil
 	}
+	for _, row := range relationships {
+		if err := row.Validate(); err != nil {
+			return err
+		}
+	}
 	return retryTransact(ctx, s.db, func(ctx context.Context) error {
-		return createRelationships(ctx, s.db, relationships)
+		return createRelationships(ctx, s.db, relationships, s.audit)
 	})
 }
 
@@ -242,15 +242,18 @@ func (s *relationshipStore) CreateRelationships(ctx context.Context, relationshi
 // desired set, atomically, in ONE Firestore transaction: read the current
 // targets and the missing targets' claims, then delete the surplus and create
 // the missing. An empty desired set clears the relation, and repeating a desired
-// state changes nothing — existing rows keep their id and created_at.
+// state changes nothing.
 //
 // Concurrent callers CONVERGE rather than union. Firestore aborts the commit
 // that lost the race against a writer whose document the loser's query covered,
 // the vendor re-runs this callback, and the retry sees the winner's row as
 // surplus and removes it. A desired target already holding a different relation
 // is sdk.ErrConflict and the transaction rolls back unchanged.
-func (s *relationshipStore) SetRelationTargets(ctx context.Context, resourceType, resourceID, relation string, targets []relationship.CreateRelationship) error {
+func (s *relationshipStore) SetRelationTargets(ctx context.Context, resourceType, resourceID, relation string, targets []relationships.CreateRelationship) error {
 	if err := refuseAmbient(ctx); err != nil {
+		return err
+	}
+	if err := validateAuditSource(ctx, s.audit); err != nil {
 		return err
 	}
 	desired, err := desiredTargets(resourceType, resourceID, relation, targets)
@@ -258,17 +261,18 @@ func (s *relationshipStore) SetRelationTargets(ctx context.Context, resourceType
 		return err
 	}
 	return retryTransact(ctx, s.db, func(ctx context.Context) error {
-		return setRelationTargets(ctx, s.db, resourceType, resourceID, relation, desired)
+		return setRelationTargets(ctx, s.db, resourceType, resourceID, relation, desired, s.audit)
 	})
 }
 
-// DeleteRelationshipTarget removes ONE exact tuple, userset relation included.
-// The tuple's document id IS the six-part tuple, so the read is a single Get
-// rather than a query — but it still happens inside the transaction, because the
-// relationship_id claim can only be dropped by reading the row that owns it.
-// An absent tuple is nil (idempotent) and writes nothing.
-func (s *relationshipStore) DeleteRelationshipTarget(ctx context.Context, resourceType, resourceID, relation string, target relationship.SubjectRef) error {
+// DeleteRelationshipTarget removes one exact tuple and its subject claim in a
+// transaction. Reading first ensures an absent tuple cannot delete a claim
+// that legitimately belongs to another relation.
+func (s *relationshipStore) DeleteRelationshipTarget(ctx context.Context, resourceType, resourceID, relation string, target relationships.SubjectRef) error {
 	if err := refuseAmbient(ctx); err != nil {
+		return err
+	}
+	if err := validateAuditSource(ctx, s.audit); err != nil {
 		return err
 	}
 	ref := s.db.Doc(collectionRelationships, relationshipDocID(resourceType, resourceID, relation, target.Type, target.ID, target.Relation))
@@ -284,7 +288,7 @@ func (s *relationshipStore) DeleteRelationshipTarget(ctx context.Context, resour
 		if err != nil {
 			return err
 		}
-		return dropTuple(ctx, s.db, s.db.WriterFrom(ctx), row)
+		return (factWrites{drops: []relationshipDoc{row}}).flush(ctx, s.db, s.db.WriterFrom(ctx), s.audit)
 	})
 }
 
@@ -295,10 +299,13 @@ func (s *relationshipStore) DeleteResourceRelationships(ctx context.Context, res
 	if err := refuseAmbient(ctx); err != nil {
 		return err
 	}
+	if err := validateAuditSource(ctx, s.audit); err != nil {
+		return err
+	}
 	return retryTransact(ctx, s.db, func(ctx context.Context) error {
 		return dropMatching(ctx, s.db,
 			s.db.Collection(collectionRelationships).Where("resource_key", "==", resourceKey(resourceType, resourceID)),
-			nil)
+			nil, s.audit)
 	})
 }
 
@@ -311,6 +318,9 @@ func (s *relationshipStore) DeleteRelationship(ctx context.Context, resourceType
 	if err := refuseAmbient(ctx); err != nil {
 		return err
 	}
+	if err := validateAuditSource(ctx, s.audit); err != nil {
+		return err
+	}
 	return retryTransact(ctx, s.db, func(ctx context.Context) error {
 		return dropMatching(ctx, s.db,
 			s.db.Collection(collectionRelationships).
@@ -318,7 +328,7 @@ func (s *relationshipStore) DeleteRelationship(ctx context.Context, resourceType
 				Where("relation", "==", relation),
 			func(row relationshipDoc) bool {
 				return row.SubjectType == subjectType && row.SubjectID == subjectID
-			})
+			}, s.audit)
 	})
 }
 
@@ -328,12 +338,15 @@ func (s *relationshipStore) DeleteByResourceAndSubject(ctx context.Context, reso
 	if err := refuseAmbient(ctx); err != nil {
 		return err
 	}
+	if err := validateAuditSource(ctx, s.audit); err != nil {
+		return err
+	}
 	return retryTransact(ctx, s.db, func(ctx context.Context) error {
 		return dropMatching(ctx, s.db,
 			s.db.Collection(collectionRelationships).Where("resource_key", "==", resourceKey(resourceType, resourceID)),
 			func(row relationshipDoc) bool {
 				return row.SubjectType == subjectType && row.SubjectID == subjectID
-			})
+			}, s.audit)
 	})
 }
 
@@ -361,14 +374,14 @@ func (s *relationshipStore) CountByResourceAndRelation(ctx context.Context, reso
 }
 
 // ListRelationshipsBySubject pages the resources a subject relates to, in the
-// port's contractual order (created_at DESC, relationship_id DESC by default).
+// port's contractual order (tuple_key ASC by default).
 // The subject is matched on its type and id ONLY — never on subject_key, which
 // folds in subject_relation — so a subject's userset rows are listed beside its
 // concrete ones, exactly as the SQL siblings' five-column WHERE lists them.
 // Both optional filters become equality clauses.
-func (s *relationshipStore) ListRelationshipsBySubject(ctx context.Context, subjectType, subjectID string, filter relationship.SubjectRelationshipFilter, req crud.ListRequest) (crud.Page[relationship.SubjectRelationship], error) {
+func (s *relationshipStore) ListRelationshipsBySubject(ctx context.Context, subjectType, subjectID string, filter relationships.SubjectRelationshipFilter, req list.Request) (list.Page[relationships.SubjectRelationship], error) {
 	if err := refuseAmbient(ctx); err != nil {
-		return crud.Page[relationship.SubjectRelationship]{}, err
+		return list.Page[relationships.SubjectRelationship]{}, err
 	}
 	base := s.db.Collection(collectionRelationships).
 		Where("subject_type", "==", subjectType).
@@ -379,20 +392,20 @@ func (s *relationshipStore) ListRelationshipsBySubject(ctx context.Context, subj
 	if filter.Relation != nil {
 		base = base.Where("relation", "==", *filter.Relation)
 	}
-	page, err := firestoredb.List(ctx, s.db.ReaderFrom(ctx), listRelationships(base), req)
+	page, err := listRelationships(ctx, s.db.ReaderFrom(ctx), base, req)
 	if err != nil {
-		return crud.Page[relationship.SubjectRelationship]{}, err
+		return list.Page[relationships.SubjectRelationship]{}, err
 	}
-	return crud.MapPage(page, relationshipDoc.toSubjectRelationship), nil
+	return list.MapPage(page, relationshipDoc.toSubjectRelationship), nil
 }
 
 // ListRelationshipsByResource pages the subjects related to a resource, in the
 // same contractual order. The resource is ONE equality clause on the derived
 // resource_key, which is the hash of exactly the (resource_type, resource_id)
 // pair the SQL siblings match with two columns.
-func (s *relationshipStore) ListRelationshipsByResource(ctx context.Context, resourceType, resourceID string, filter relationship.ResourceRelationshipFilter, req crud.ListRequest) (crud.Page[relationship.ResourceRelationship], error) {
+func (s *relationshipStore) ListRelationshipsByResource(ctx context.Context, resourceType, resourceID string, filter relationships.ResourceRelationshipFilter, req list.Request) (list.Page[relationships.ResourceRelationship], error) {
 	if err := refuseAmbient(ctx); err != nil {
-		return crud.Page[relationship.ResourceRelationship]{}, err
+		return list.Page[relationships.ResourceRelationship]{}, err
 	}
 	base := s.db.Collection(collectionRelationships).
 		Where("resource_key", "==", resourceKey(resourceType, resourceID))
@@ -402,11 +415,11 @@ func (s *relationshipStore) ListRelationshipsByResource(ctx context.Context, res
 	if filter.Relation != nil {
 		base = base.Where("relation", "==", *filter.Relation)
 	}
-	page, err := firestoredb.List(ctx, s.db.ReaderFrom(ctx), listRelationships(base), req)
+	page, err := listRelationships(ctx, s.db.ReaderFrom(ctx), base, req)
 	if err != nil {
-		return crud.Page[relationship.ResourceRelationship]{}, err
+		return list.Page[relationships.ResourceRelationship]{}, err
 	}
-	return crud.MapPage(page, relationshipDoc.toResourceRelationship), nil
+	return list.MapPage(page, relationshipDoc.toResourceRelationship), nil
 }
 
 // LookupResourceIDs returns the DISTINCT resource ids where the subject holds
@@ -428,7 +441,7 @@ func (s *relationshipStore) LookupResourceIDs(ctx context.Context, resourceType 
 	var out []string
 	err := s.db.ReadSnapshot(ctx, func(ctx context.Context, r firestoredb.Reader) error {
 		out = nil
-		reached, err := expand(ctx, s.db, r, subjectType, subjectID, 0)
+		reached, err := expand(ctx, s.db, r, subjectType, subjectID, 0, s.model)
 		if err != nil {
 			return err
 		}
@@ -437,7 +450,7 @@ func (s *relationshipStore) LookupResourceIDs(ctx context.Context, resourceType 
 			q := whereAnyOf(
 				whereAnyOf(s.db.Collection(collectionRelationships).Where("resource_type", "==", resourceType), "relation", pair.primary),
 				"subject_key", pair.secondary)
-			streams = append(streams, newIDStream(r, q, after, limit, relationshipResourceID))
+			streams = append(streams, newIDStream(r, q, after, limit, s.modelResourceID))
 		}
 		out, err = mergeDistinctIDs(ctx, streams, limit)
 		return err
@@ -471,7 +484,7 @@ func (s *relationshipStore) LookupResourceIDsByRelationTarget(ctx context.Contex
 			q := whereAnyOf(s.db.Collection(collectionRelationships).
 				Where("resource_type", "==", resourceType).
 				Where("relation", "==", relation), "subject_key", chunk)
-			streams = append(streams, newIDStream(r, q, after, limit, relationshipResourceID))
+			streams = append(streams, newIDStream(r, q, after, limit, s.modelResourceID))
 		}
 		var err error
 		out, err = mergeDistinctIDs(ctx, streams, limit)
@@ -502,7 +515,7 @@ func (s *relationshipStore) LookupDescendantResourceIDs(ctx context.Context, res
 	}
 	var out []string
 	err := s.db.ReadSnapshot(ctx, func(ctx context.Context, r firestoredb.Reader) error {
-		closure, err := descendantClosure(ctx, s.db, r, resourceType, relations, subjectType, rootIDs)
+		closure, err := descendantClosure(ctx, s.db, r, resourceType, relations, subjectType, rootIDs, s.model)
 		if err != nil {
 			return err
 		}

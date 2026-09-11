@@ -3,10 +3,10 @@ package firestore
 import (
 	"strings"
 
-	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
+	"github.com/gopernicus/gopernicus/sdk/pkg/list"
 )
 
-// SearchFilter builds the ListQuery.PostFilter that answers crud.ListRequest's
+// SearchFilter builds the ListQuery.PostFilter that answers list.Request's
 // Search over a Firestore list (ruling R4). Firestore has no substring
 // operator, so the predicate the SQL connectors express as
 // `LIKE ? ESCAPE '\'` / `ILIKE` is Go code here, page-filled by List — and this
@@ -17,7 +17,7 @@ import (
 // pgx and turso; valueOf reads a row's value for one of those columns (the
 // Firestore analogue of naming the column in the SQL predicate). A row matches
 // when ANY declared field matches, which is the SQL `OR` across columns.
-// Matching itself is crud.MatchesSearch — a LITERAL substring under ASCII-only
+// Matching itself is list.MatchesSearch — a LITERAL substring under ASCII-only
 // case folding, so `%`, `_` and `\` are ordinary characters and non-ASCII code
 // points compare exactly. All three backends therefore answer the same term the
 // same way, which is what the pockets' storetest search group asserts.
@@ -35,7 +35,7 @@ import (
 //
 // The cost model is the page-fill cost model: O(documents scanned), not
 // O(rows returned). R4 restricts Search to parent-scoped lists for that reason.
-func SearchFilter[T any](fields []crud.SearchField, valueOf func(row T, field string) string, term string) func(T) bool {
+func SearchFilter[T any](fields []list.SearchField, valueOf func(row T, field string) string, term string) func(T) bool {
 	if strings.TrimSpace(term) == "" || len(fields) == 0 || valueOf == nil {
 		return nil
 	}
@@ -47,7 +47,7 @@ func SearchFilter[T any](fields []crud.SearchField, valueOf func(row T, field st
 
 	return func(row T) bool {
 		for _, column := range columns {
-			if crud.MatchesSearch(valueOf(row, column), term) {
+			if list.MatchesSearch(valueOf(row, column), term) {
 				return true
 			}
 		}

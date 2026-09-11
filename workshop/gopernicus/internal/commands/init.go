@@ -77,7 +77,7 @@ func runInit(args []string) int {
 	}
 
 	fmt.Printf("scaffolded %s (--db=%s) into %s\n", params.ModulePath, params.DB, absTarget)
-	fmt.Println("next: add the pre-tag replace directives (see README.md), then `go mod tidy && make run`")
+	fmt.Println("next: `go mod tidy && make run` (see README.md for database configuration)")
 	return 0
 }
 
@@ -97,12 +97,12 @@ func buildInitParams(modulePath, db string) (initParams, error) {
 		p.HasDB = true
 		p.ConnectorAlias = "tursodb"
 		p.ConnectorRel = "integrations/datastores/turso"
-		p.ConnectorVersion = "v0.3.0"
+		p.ConnectorVersion = "v0.4.0"
 	case "pgx":
 		p.HasDB = true
 		p.ConnectorAlias = "pgxdb"
 		p.ConnectorRel = "integrations/datastores/pgxdb"
-		p.ConnectorVersion = "v0.6.1"
+		p.ConnectorVersion = "v0.7.0"
 	default:
 		return initParams{}, fmt.Errorf("unknown --db %q (want: turso | pgx | none)", db)
 	}
@@ -147,6 +147,6 @@ Flags:
 
 Emits an sdk-only composition root (cmd/server), a host Makefile, .env.example,
 a host-owned migration ledger, and a README. Mounts no pockets — wire your own
-in cmd/server/main.go. See the emitted README for pre-tag wiring.
+in cmd/server/main.go. See the emitted README for configuration and wiring.
 `)
 }

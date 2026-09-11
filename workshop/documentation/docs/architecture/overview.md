@@ -40,16 +40,17 @@ The SDK is dependency-free as a Go module, but it is not a flat utility bag:
 
 ```text
 sdk/                          kernel: cross-cutting errors + context vocabulary
-  foundation/<package>       pure mechanism and vocabulary
+  pkg/<package>       pure mechanism and vocabulary
   capabilities/<package>     behavioral ports + observable policy
-  pocket/                   sanctioned host↔pocket composition
 ```
 
 - the root kernel imports no SDK subpackage;
-- a foundation package may import only the root kernel, never another foundation package;
-- a capability may import the kernel and foundation, never another capability;
+- a package under `pkg/` may import only the root kernel, never another package under `pkg/`;
+- a capability may import the kernel and pkg, never another capability;
 - capability-to-capability composition leaves the SDK;
-- `sdk/pocket` is the one package allowed to express the host/pocket composition contract.
+
+The separate `pockets` module expresses the shared host/pocket composition contract.
+It depends on SDK and imports no concrete pockets.
 
 This makes package placement predictive. “Used by many things” is not enough to enter the SDK; the concern must pass the SDK [admission test](../sdk/overview.md#admission-test).
 
@@ -59,7 +60,8 @@ This makes package placement predictive. “Used by many things” is not enough
 |---|---|---|
 | SDK | portable vocabulary, mechanism, behavioral policy | standard library + legal inward SDK tiers |
 | integration | one third-party library/family or external vendor contract | SDK, wrapped dependency |
-| pocket core | a reusable domain capability and its public ports | SDK only |
+| shared pockets | host mounting contract over SDK | SDK only |
+| pocket core | a reusable domain capability and its public ports | SDK + shared pockets |
 | pocket store | one pocket's port implementations and SQL | pocket core, SDK, one datastore connector |
 | pocket view | one pocket's `Views` implementation | pocket core, SDK, one UI implementation |
 | UI implementation | reusable presentation system, components, assets | its view/runtime libraries and optionally SDK |
@@ -73,29 +75,32 @@ A separate Go module is a dependency boundary. External libraries and optional a
 There is no `init()` registry and no application-wide service locator. A host constructs values in dependency order:
 
 ```go
-db, err := pgxdb.Open(dbConfig)
+db, err := pgxdb.Open(ctx, dbConfig)
 if err != nil { return err }
 
-repos, err := authpgx.Repositories(db)
+repos, err := authpgx.Repositories(ctx, db)
 if err != nil { return err }
 
-auth, err := authentication.NewService(repos, authentication.Config{
-    RuntimeMode: mode,
-    Hasher:      passwordHasher,
-    Mailer:      sender,
-    TokenSigner: tokenSigner,
-    // challenge protection and delivery posture omitted here
-})
+auth, err := authentication.New(
+    repos, tokenSigner, mode, deliveryMode,
+    authentication.WithPassword(authentication.PasswordConfig{Hasher: passwordHasher}),
+    authentication.WithIdentity(authentication.IdentityConfig{ChallengeProtector: protector}),
+    authentication.WithDelivery(deliverySettings),
+    authentication.WithBrowser(browserSettings),
+)
 if err != nil { return err }
 
-if err := auth.Register(pocket.Mount{
+if err := auth.HTTP.Register(pockets.Mount{
     Router: router,
     Logger: logger,
     Events: bus,
 }); err != nil { return err }
 ```
 
-The exact authentication config is richer than this abbreviated shape. What matters here is direction: the host chooses concrete adapters, passes only typed seams inward, and owns every returned lifecycle.
+The host assembles coherent `DeliveryConfig` and `BrowserConfig` values for its
+chosen mode, credentials and cookie policy. Options replace complete groups and
+constructors validate their final combination. The host chooses concrete adapters,
+passes typed collaborators inward and owns each returned lifecycle.
 
 ## Cross-pocket composition
 
@@ -108,7 +113,7 @@ Pocket cores never import one another. When pocket A needs behavior pocket B hap
 Examples:
 
 - CMS accepts `AdminMiddleware`; the host passes authentication's `RequireAccessToken()`.
-- Authentication durable delivery depends on SDK work protocol interfaces; the jobs `Service` implements them.
+- Authentication durable delivery depends on SDK work protocol interfaces; the jobs `queue.Service` implements them.
 - Events stream middleware requires a principal; the host passes authentication middleware that stores one in context.
 
 This prevents an optional pocket from becoming a hidden dependency of another pocket.

@@ -1,0 +1,39 @@
+package contactchange
+
+import (
+	"context"
+
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/identifier"
+)
+
+// Repository persists the pending-value flow state of an identifier add/change
+// (design §2.4). Implemented by pocket store adapters (pockets/authentication/
+// stores/turso, .../pgx) or any host-provided implementation (see the storetest
+// reference). The port doc comments are the spec; the storetest conformance suite
+// is their executable form.
+//
+// Contract (pinned, design §2.4 — the storetest conformance suite executes these):
+//   - Create is an atomic replace for (UserID, Kind): it deletes any existing
+//     pending change for that pair before inserting the new one, so at most one is
+//     active per (user, kind). It returns the stored row (with its assigned ID).
+//   - Consume is a single-use get-and-delete keyed by (userID, kind). The row is
+//     deleted REGARDLESS of expiry, so:
+//   - Consume of a live pending change returns it and deletes the row.
+//   - Consume of an expired pending change DELETES the row and returns
+//     sdk.ErrExpired.
+//   - A missing or already-consumed pending change → sdk.ErrNotFound.
+//     Stores implement it as DELETE … RETURNING so the delete and the expiry
+//     decision are one atomic step (the oauthstate.Consume precedent).
+type Repository interface {
+	// Get returns the current pending change without spending it. Missing -> sdk.ErrNotFound.
+	Get(ctx context.Context, userID string, kind identifier.Kind) (PendingChange, error)
+	// Create atomically replaces any prior (UserID, Kind) pending change with p and
+	// returns the stored row.
+	Create(ctx context.Context, p PendingChange) (PendingChange, error)
+	// Consume atomically deletes and returns the pending change only when its ID
+	// matches expectedID. A replaced generation returns sdk.ErrNotFound without
+	// deleting the current change. For a matching generation:
+	// live → the PendingChange, expired → sdk.ErrExpired (row deleted), missing or
+	// already-consumed → sdk.ErrNotFound.
+	Consume(ctx context.Context, userID string, kind identifier.Kind, expectedID string) (PendingChange, error)
+}

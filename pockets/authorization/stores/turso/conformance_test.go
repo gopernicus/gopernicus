@@ -15,23 +15,21 @@ package turso
 
 import (
 	"context"
-	"errors"
 	"os"
 	"testing"
 
 	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
 	"github.com/gopernicus/gopernicus/pockets/authorization"
-	"github.com/gopernicus/gopernicus/pockets/authorization/domain/mutation"
-	"github.com/gopernicus/gopernicus/pockets/authorization/storetest"
-	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/mutations"
+	"github.com/gopernicus/gopernicus/pockets/authorization/stores/storetest"
+	"github.com/gopernicus/gopernicus/sdk/capabilities/transaction"
 )
 
 // authorizationTables are the pocket's tables cleared before each newRepos call
 // so every leaf subtest starts from a clean, isolated store — including the v3
-// write-path tables (iam_scopes revision anchors, iam_mutations receipts) so the
-// Mutations conformance suite starts from revision 0 with no consumed MutationIDs.
+// optional audit history so every test observes only its own changes.
 // No FKs between them, so order is immaterial.
-var authorizationTables = []string{"iam_relationships", "iam_roles", "iam_scopes", "iam_mutations"}
+var authorizationTables = []string{"iam_relationships", "iam_roles", "iam_audit"}
 
 // TestConformance runs the shared authorization conformance suite (both kinds)
 // against a live Turso/libSQL database. Each newRepos call opens a connection,
@@ -41,9 +39,9 @@ var authorizationTables = []string{"iam_relationships", "iam_roles", "iam_scopes
 func TestConformance(t *testing.T) {
 	url, token := requireTursoEnv(t)
 
-	storetest.Run(t, func(t *testing.T) authorization.Repositories {
+	storetest.Run(t, func(t *testing.T, policy mutations.GuardianPolicy) authorization.Repositories {
 		db := openAndMigrate(t, url, token)
-		repos, err := Repositories(db)
+		repos, err := Repositories(context.Background(), db, WithGuardianPolicy(policy))
 		if err != nil {
 			t.Fatalf("Repositories: %v", err)
 		}
@@ -52,74 +50,21 @@ func TestConformance(t *testing.T) {
 }
 
 // TestTransactional runs the shared ambient-transaction family: the connector
-// (*tursodb.DB) is the crud.Transactor, and the SAME connector backs the
+// (*tursodb.DB) is the transaction.Transactor, and the SAME connector backs the
 // repositories, so a Transact-owned BEGIN IMMEDIATE transaction is the one the
 // stores join. Each newRepos call builds a fresh, truncated store exactly as
 // TestConformance does; the family never calls it for an observer.
 func TestTransactional(t *testing.T) {
 	url, token := requireTursoEnv(t)
 
-	storetest.RunTransactional(t, func(t *testing.T) (authorization.Repositories, crud.Transactor) {
+	storetest.RunTransactional(t, func(t *testing.T) (authorization.Repositories, transaction.Transactor) {
 		db := openAndMigrate(t, url, token)
-		repos, err := Repositories(db)
+		repos, err := Repositories(context.Background(), db)
 		if err != nil {
 			t.Fatalf("Repositories: %v", err)
 		}
 		return repos, db
 	})
-}
-
-// TestTransactionalRefusalLeavesLedgerUntouched is the adapter-local half of the
-// shared MutationRefusesAmbientTransaction spec: the port exposes no anchor or
-// receipt reader, so the proof that a refused guarded mutation touched neither
-// iam_scopes nor iam_mutations is direct SQL here — checked through the pool
-// while the host transaction is still OPEN (so it does not lean on the rollback
-// to hide effects) and again after it.
-func TestTransactionalRefusalLeavesLedgerUntouched(t *testing.T) {
-	ctx := context.Background()
-	db, repos := liveRepos(t)
-	m := repos.Mutations
-
-	mustApplyLive(t, m, grantCmd(mutID(t), "M", "owner", "u1"))
-	before := ledgerState(t, db)
-
-	err := db.Transact(ctx, func(ctx context.Context) error {
-		rcpt, err := m.Apply(ctx, grantCmd(mutID(t), "M", "viewer", "u2"), nil)
-		if !errors.Is(err, mutation.ErrGuardedInsideTransaction) || rcpt != nil {
-			t.Fatalf("Apply inside Transact: want ErrGuardedInsideTransaction + nil receipt, got %+v, %v", rcpt, err)
-		}
-		if open := ledgerState(t, db); open != before {
-			t.Fatalf("ledger changed while the host transaction was open: before=%+v now=%+v", before, open)
-		}
-		return err
-	})
-	if !errors.Is(err, mutation.ErrGuardedInsideTransaction) {
-		t.Fatalf("Transact must return the refusal, got %v", err)
-	}
-	if after := ledgerState(t, db); after != before {
-		t.Fatalf("ledger changed across the refused mutation: before=%+v after=%+v", before, after)
-	}
-}
-
-// ledger is the direct-SQL view of the write-path tables: receipt rows, anchor
-// rows, and the sum of anchor revisions (a bump moves it; a bare revision-0
-// insert moves the count).
-type ledger struct {
-	receipts, anchors int
-	revisionSum       int64
-}
-
-// ledgerState reads ledger through the POOL (never the ambient transaction).
-func ledgerState(t *testing.T, db *tursodb.DB) ledger {
-	t.Helper()
-	var l ledger
-	if err := db.QueryRow(context.Background(), `SELECT count(*) FROM iam_mutations`).Scan(&l.receipts); err != nil {
-		t.Fatalf("count receipts: %v", err)
-	}
-	if err := db.QueryRow(context.Background(), `SELECT count(*), coalesce(sum(revision), 0) FROM iam_scopes`).Scan(&l.anchors, &l.revisionSum); err != nil {
-		t.Fatalf("count anchors: %v", err)
-	}
-	return l
 }
 
 // requireTursoEnv returns the live connection env or skips loudly.
@@ -137,7 +82,7 @@ func requireTursoEnv(t *testing.T) (url, token string) {
 // truncates both tables so the returned repositories start empty and isolated.
 func openAndMigrate(t *testing.T, url, token string) *tursodb.DB {
 	t.Helper()
-	db, err := tursodb.Open(tursodb.Config{URL: url, AuthToken: token})
+	db, err := tursodb.Open(context.Background(), tursodb.Config{URL: url, AuthToken: token})
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}
@@ -160,4 +105,15 @@ func truncate(t *testing.T, db *tursodb.DB) {
 			t.Fatalf("truncate %s: %v", tbl, err)
 		}
 	}
+}
+
+func TestAuditConformance(t *testing.T) {
+	storetest.RunAudit(t, func(t *testing.T, enabled bool) authorization.Repositories {
+		var opts []Option
+		if enabled {
+			opts = append(opts, WithAudit())
+		}
+		_, repos := liveReposWith(t, opts...)
+		return repos
+	})
 }

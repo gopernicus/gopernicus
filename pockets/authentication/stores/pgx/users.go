@@ -4,12 +4,11 @@ import (
 	"context"
 	"time"
 
-	"github.com/jackc/pgx/v5"
-
 	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
-	"github.com/gopernicus/gopernicus/pockets/authentication/domain/identifier"
-	"github.com/gopernicus/gopernicus/pockets/authentication/domain/user"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/identifier"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/user"
 	"github.com/gopernicus/gopernicus/sdk"
+	"github.com/jackc/pgx/v5"
 )
 
 // UserStore implements user.UserRepository over a PostgreSQL database. Identity
@@ -24,7 +23,11 @@ type UserStore struct {
 var _ user.UserRepository = (*UserStore)(nil)
 
 // NewUserStore returns a UserStore backed by db.
+// It panics if db is nil; the caller owns the database lifecycle.
 func NewUserStore(db *pgxdb.DB, opts ...Option) *UserStore {
+	if db == nil {
+		panic("authentication pgx: NewUserStore received a nil database")
+	}
 	return &UserStore{db: db, qualified: qualified{schema: applyOptions(opts).schema}}
 }
 
@@ -63,6 +66,10 @@ func (r userRow) toDomain() user.User {
 // users.auth_revision column and the user_identifiers table. Empty IDs use the
 // DB-generated convention (RETURNING id).
 func (s *UserStore) CreateWithPrimaryIdentifier(ctx context.Context, u user.User, ident identifier.Identifier) (user.User, identifier.Identifier, error) {
+	return s.Provision(ctx, u, ident, user.InitialCredentials{})
+}
+
+func (s *UserStore) Provision(ctx context.Context, u user.User, ident identifier.Identifier, credentials user.InitialCredentials) (user.User, identifier.Identifier, error) {
 	err := s.db.InTx(ctx, func(tx *pgxdb.Tx) error {
 		// status is written explicitly rather than left to the column DEFAULT so the
 		// persisted posture is the one the domain constructed. A zero-value Status
@@ -97,6 +104,19 @@ func (s *UserStore) CreateWithPrimaryIdentifier(ctx context.Context, u user.User
 			return err
 		}
 		ident = created
+
+		if credentials.PasswordHash != "" {
+			if _, err := tx.Exec(ctx, `INSERT INTO `+s.table(passwordsTable)+` (user_id,hash) VALUES (@id,@hash)`, pgx.NamedArgs{"id": u.ID, "hash": credentials.PasswordHash}); err != nil {
+				return err
+			}
+		}
+		if credentials.OAuth != nil {
+			account := *credentials.OAuth
+			account.UserID = u.ID
+			if _, err := insertOAuthAccount(ctx, tx, s.qualified, account); err != nil {
+				return err
+			}
+		}
 		return nil
 	})
 	if err != nil {

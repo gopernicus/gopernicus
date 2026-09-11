@@ -4,8 +4,8 @@ import (
 	"context"
 
 	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
-	"github.com/gopernicus/gopernicus/pockets/authentication/domain/identifier"
-	"github.com/gopernicus/gopernicus/pockets/authentication/domain/user"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/identifier"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/user"
 	"github.com/gopernicus/gopernicus/sdk"
 )
 
@@ -20,7 +20,11 @@ type UserStore struct {
 var _ user.UserRepository = (*UserStore)(nil)
 
 // NewUserStore returns a UserStore backed by db.
+// It panics if db is nil; the caller owns the database lifecycle.
 func NewUserStore(db *tursodb.DB) *UserStore {
+	if db == nil {
+		panic("authentication turso: NewUserStore received a nil database")
+	}
 	return &UserStore{db: db}
 }
 
@@ -60,6 +64,10 @@ func (r userRow) toDomain() user.User {
 // users.auth_revision column and the user_identifiers table. Empty IDs use the
 // DB-generated convention (RETURNING id).
 func (s *UserStore) CreateWithPrimaryIdentifier(ctx context.Context, u user.User, ident identifier.Identifier) (user.User, identifier.Identifier, error) {
+	return s.Provision(ctx, u, ident, user.InitialCredentials{})
+}
+
+func (s *UserStore) Provision(ctx context.Context, u user.User, ident identifier.Identifier, credentials user.InitialCredentials) (user.User, identifier.Identifier, error) {
 	err := s.db.InTx(ctx, func(tx *tursodb.Tx) error {
 		// status is written explicitly rather than left to the column DEFAULT so the
 		// persisted posture is the one the domain constructed. A zero-value Status
@@ -91,6 +99,19 @@ func (s *UserStore) CreateWithPrimaryIdentifier(ctx context.Context, u user.User
 			return err
 		}
 		ident = created
+
+		if credentials.PasswordHash != "" {
+			if _, err := tx.Exec(ctx, `INSERT INTO user_passwords (user_id,hash) VALUES (?,?)`, u.ID, credentials.PasswordHash); err != nil {
+				return err
+			}
+		}
+		if credentials.OAuth != nil {
+			account := *credentials.OAuth
+			account.UserID = u.ID
+			if _, err := insertOAuthAccount(ctx, tx, account); err != nil {
+				return err
+			}
+		}
 		return nil
 	})
 	if err != nil {

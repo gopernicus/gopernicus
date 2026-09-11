@@ -5,7 +5,7 @@ import (
 	"time"
 
 	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
-	"github.com/gopernicus/gopernicus/pockets/authentication/domain/oauthstate"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/oauthstate"
 	"github.com/gopernicus/gopernicus/sdk"
 )
 
@@ -20,7 +20,11 @@ type OAuthStateStore struct {
 var _ oauthstate.StateRepository = (*OAuthStateStore)(nil)
 
 // NewOAuthStateStore returns an OAuthStateStore backed by db.
+// It panics if db is nil; the caller owns the database lifecycle.
 func NewOAuthStateStore(db *tursodb.DB) *OAuthStateStore {
+	if db == nil {
+		panic("authentication turso: NewOAuthStateStore received a nil database")
+	}
 	return &OAuthStateStore{db: db}
 }
 

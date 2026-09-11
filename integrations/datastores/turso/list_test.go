@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/gopernicus/gopernicus/sdk"
-	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
+	"github.com/gopernicus/gopernicus/sdk/pkg/list"
 )
 
 // TestAppendCursorPredicate_Combos tables the tuple predicate for every
@@ -26,21 +26,22 @@ func TestAppendCursorPredicate_Combos(t *testing.T) {
 		forPrevious bool
 		wantOp      string
 	}{
-		{"asc_forward", crud.ASC, false, ">"},
-		{"asc_previous", crud.ASC, true, "<"},
-		{"desc_forward", crud.DESC, false, "<"},
-		{"desc_previous", crud.DESC, true, ">"},
+		{"asc_forward", list.ASC, false, ">"},
+		{"asc_previous", list.ASC, true, "<="},
+		{"desc_forward", list.DESC, false, "<"},
+		{"desc_previous", list.DESC, true, ">="},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			var buf strings.Builder
+			buf.WriteString("SELECT id, created_at, name FROM widgets")
 			var args []any
 			if err := appendCursorPredicate(&buf, &args, "created_at", "id", ts, "pk-1", tc.direction, tc.forPrevious, false); err != nil {
 				t.Fatalf("appendCursorPredicate: %v", err)
 			}
 
-			want := ` WHERE ("created_at", "id") ` + tc.wantOp + " (?, ?)"
+			want := "SELECT * FROM (\nSELECT id, created_at, name FROM widgets\n) AS list_source" + ` WHERE ("created_at", "id") ` + tc.wantOp + " (?, ?)"
 			if got := buf.String(); got != want {
 				t.Fatalf("fragment =\n  %q\nwant\n  %q", got, want)
 			}
@@ -51,17 +52,17 @@ func TestAppendCursorPredicate_Combos(t *testing.T) {
 	}
 }
 
-// TestAppendCursorPredicate_AndWhenWherePresent: an existing WHERE makes the
-// predicate an AND, and non-time order values bind unchanged in arg order.
-func TestAppendCursorPredicate_AndWhenWherePresent(t *testing.T) {
+// TestAppendCursorPredicate_PreservesAuthoredFilter: an existing WHERE makes the
+// outer predicate preserve the filter and the caller's argument order.
+func TestAppendCursorPredicate_PreservesAuthoredFilter(t *testing.T) {
 	var buf strings.Builder
-	buf.WriteString("SELECT id FROM widgets WHERE kind = ?")
+	buf.WriteString("SELECT id, created_at, name FROM widgets WHERE kind = ?")
 	args := []any{"gadget"}
-	if err := appendCursorPredicate(&buf, &args, "created_at", "id", int64(5), "pk-1", crud.ASC, false, false); err != nil {
+	if err := appendCursorPredicate(&buf, &args, "created_at", "id", int64(5), "pk-1", list.ASC, false, false); err != nil {
 		t.Fatalf("appendCursorPredicate: %v", err)
 	}
 
-	want := `SELECT id FROM widgets WHERE kind = ? AND ("created_at", "id") > (?, ?)`
+	want := "SELECT * FROM (\nSELECT id, created_at, name FROM widgets WHERE kind = ?\n) AS list_source WHERE " + `("created_at", "id") > (?, ?)`
 	if got := buf.String(); got != want {
 		t.Fatalf("fragment =\n  %q\nwant\n  %q", got, want)
 	}
@@ -74,11 +75,12 @@ func TestAppendCursorPredicate_AndWhenWherePresent(t *testing.T) {
 // comparison in LOWER().
 func TestAppendCursorPredicate_CastLower(t *testing.T) {
 	var buf strings.Builder
+	buf.WriteString("SELECT id, created_at, name FROM widgets")
 	var args []any
-	if err := appendCursorPredicate(&buf, &args, "name", "id", "Widget", "pk-1", crud.ASC, false, true); err != nil {
+	if err := appendCursorPredicate(&buf, &args, "name", "id", "Widget", "pk-1", list.ASC, false, true); err != nil {
 		t.Fatalf("appendCursorPredicate: %v", err)
 	}
-	want := ` WHERE (LOWER("name"), "id") > (LOWER(?), ?)`
+	want := "SELECT * FROM (\nSELECT id, created_at, name FROM widgets\n) AS list_source" + ` WHERE (LOWER("name"), "id") > (LOWER(?), ?)`
 	if got := buf.String(); got != want {
 		t.Fatalf("fragment =\n  %q\nwant\n  %q", got, want)
 	}
@@ -93,10 +95,10 @@ func TestAppendOrderBy_Combos(t *testing.T) {
 		forPrevious bool
 		wantDir     string
 	}{
-		{"asc_forward", crud.ASC, false, "ASC"},
-		{"asc_previous", crud.ASC, true, "DESC"},
-		{"desc_forward", crud.DESC, false, "DESC"},
-		{"desc_previous", crud.DESC, true, "ASC"},
+		{"asc_forward", list.ASC, false, "ASC"},
+		{"asc_previous", list.ASC, true, "DESC"},
+		{"desc_forward", list.DESC, false, "DESC"},
+		{"desc_previous", list.DESC, true, "ASC"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -116,7 +118,7 @@ func TestAppendOrderBy_Combos(t *testing.T) {
 // tiebreaker term is emitted.
 func TestAppendOrderBy_PKIsOrder(t *testing.T) {
 	var buf strings.Builder
-	if err := appendOrderBy(&buf, "id", "id", crud.ASC, false, false); err != nil {
+	if err := appendOrderBy(&buf, "id", "id", list.ASC, false, false); err != nil {
 		t.Fatalf("appendOrderBy: %v", err)
 	}
 	if got, want := buf.String(), ` ORDER BY "id" ASC`; got != want {
@@ -142,7 +144,7 @@ func TestAppendOrderBy_RejectsBadIdentifier(t *testing.T) {
 	for _, tc := range bad {
 		t.Run(tc.name, func(t *testing.T) {
 			var buf strings.Builder
-			if err := appendOrderBy(&buf, tc.orderCol, tc.pkCol, crud.ASC, false, false); !errors.Is(err, sdk.ErrInvalidInput) {
+			if err := appendOrderBy(&buf, tc.orderCol, tc.pkCol, list.ASC, false, false); !errors.Is(err, sdk.ErrInvalidInput) {
 				t.Fatalf("appendOrderBy err = %v, want ErrInvalidInput (buf=%q)", err, buf.String())
 			}
 		})
@@ -165,7 +167,7 @@ func TestAppendCursorPredicate_RejectsBadIdentifier(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			var buf strings.Builder
 			var args []any
-			if err := appendCursorPredicate(&buf, &args, tc.orderCol, tc.pkCol, int64(1), "pk", crud.ASC, false, false); !errors.Is(err, sdk.ErrInvalidInput) {
+			if err := appendCursorPredicate(&buf, &args, tc.orderCol, tc.pkCol, int64(1), "pk", list.ASC, false, false); !errors.Is(err, sdk.ErrInvalidInput) {
 				t.Fatalf("appendCursorPredicate err = %v, want ErrInvalidInput", err)
 			}
 		})
@@ -180,7 +182,7 @@ type listRow struct {
 	N         int64
 }
 
-var listOrderFields = map[string]crud.OrderField{
+var listOrderFields = map[string]list.OrderField{
 	"created_at": {Column: "created_at"},
 	"name":       {Column: "name"},
 	"n":          {Column: "n"},
@@ -206,7 +208,7 @@ func listQueryFor(kind string) ListQuery[listRow] {
 		BaseSQL:      "SELECT id, created_at, name, n FROM list_items WHERE kind = ?",
 		Args:         []any{kind},
 		OrderFields:  listOrderFields,
-		DefaultOrder: crud.NewOrder("created_at", crud.DESC),
+		DefaultOrder: list.NewOrder("created_at", list.DESC),
 		PK:           "id",
 		Scan:         scanListRow,
 		OrderValueOf: func(r listRow, field string) any {
@@ -255,14 +257,14 @@ func seedListItems(t *testing.T, db *DB) {
 	}
 }
 
-func traverseIDs(t *testing.T, db *DB, q ListQuery[listRow], order crud.Order, limit int) []string {
+func traverseIDs(t *testing.T, db *DB, q ListQuery[listRow], order list.Order, limit int) []string {
 	t.Helper()
 	ctx := context.Background()
 	seen := map[string]bool{}
 	var ids []string
 	cursor := ""
 	for i := 0; i < 1000; i++ {
-		p, err := List(ctx, db, q, crud.ListRequest{Limit: limit, Cursor: cursor, Order: order})
+		p, err := List(ctx, db, q, list.Request{Limit: limit, Cursor: cursor, Order: order})
 		if err != nil {
 			t.Fatalf("List: %v", err)
 		}
@@ -311,37 +313,37 @@ func TestList_Behavior(t *testing.T) {
 	q := listQueryFor("a")
 
 	t.Run("forward_created_desc", func(t *testing.T) {
-		eqIDs(t, traverseIDs(t, db, q, crud.NewOrder("created_at", crud.DESC), 2), []string{"e5", "e4", "e3", "e2", "e1"}, "created desc")
+		eqIDs(t, traverseIDs(t, db, q, list.NewOrder("created_at", list.DESC), 2), []string{"e5", "e4", "e3", "e2", "e1"}, "created desc")
 	})
 	t.Run("forward_name_asc", func(t *testing.T) {
-		eqIDs(t, traverseIDs(t, db, q, crud.NewOrder("name", crud.ASC), 2), []string{"e1", "e2", "e3", "e4", "e5"}, "name asc")
+		eqIDs(t, traverseIDs(t, db, q, list.NewOrder("name", list.ASC), 2), []string{"e1", "e2", "e3", "e4", "e5"}, "name asc")
 	})
 	t.Run("forward_n_asc", func(t *testing.T) {
-		eqIDs(t, traverseIDs(t, db, q, crud.NewOrder("n", crud.ASC), 2), []string{"e2", "e3", "e1", "e4", "e5"}, "n asc")
+		eqIDs(t, traverseIDs(t, db, q, list.NewOrder("n", list.ASC), 2), []string{"e2", "e3", "e1", "e4", "e5"}, "n asc")
 	})
 
 	t.Run("prev_probe_full_window", func(t *testing.T) {
-		desc := crud.NewOrder("created_at", crud.DESC)
-		p1, _ := List(ctx, db, q, crud.ListRequest{Limit: 2, Order: desc})
+		desc := list.NewOrder("created_at", list.DESC)
+		p1, _ := List(ctx, db, q, list.Request{Limit: 2, Order: desc})
 		if p1.HasPrev {
 			t.Fatal("first page HasPrev = true, want false")
 		}
-		p2, _ := List(ctx, db, q, crud.ListRequest{Limit: 2, Cursor: p1.NextCursor, Order: desc})
-		p3, err := List(ctx, db, q, crud.ListRequest{Limit: 2, Cursor: p2.NextCursor, Order: desc})
+		p2, _ := List(ctx, db, q, list.Request{Limit: 2, Cursor: p1.NextCursor, Order: desc})
+		p3, err := List(ctx, db, q, list.Request{Limit: 2, Cursor: p2.NextCursor, Order: desc})
 		if err != nil {
 			t.Fatalf("p3: %v", err)
 		}
 		if !p3.HasPrev || p3.PreviousCursor == "" {
 			t.Fatalf("p3 HasPrev=%v prevCursor=%q, want true/set (full window)", p3.HasPrev, p3.PreviousCursor)
 		}
-		back, _ := List(ctx, db, q, crud.ListRequest{Limit: 2, Cursor: p3.PreviousCursor, Order: desc})
+		back, _ := List(ctx, db, q, list.Request{Limit: 2, Cursor: p3.PreviousCursor, Order: desc})
 		eqIDs(t, idsOf(back.Items), []string{"e3", "e2"}, "previous cursor round-trip")
 	})
 
 	t.Run("prev_probe_partial_window", func(t *testing.T) {
-		desc := crud.NewOrder("created_at", crud.DESC)
-		p1, _ := List(ctx, db, q, crud.ListRequest{Limit: 3, Order: desc})
-		p2, err := List(ctx, db, q, crud.ListRequest{Limit: 3, Cursor: p1.NextCursor, Order: desc})
+		desc := list.NewOrder("created_at", list.DESC)
+		p1, _ := List(ctx, db, q, list.Request{Limit: 3, Order: desc})
+		p2, err := List(ctx, db, q, list.Request{Limit: 3, Cursor: p1.NextCursor, Order: desc})
 		if err != nil {
 			t.Fatalf("p2: %v", err)
 		}
@@ -351,10 +353,10 @@ func TestList_Behavior(t *testing.T) {
 	})
 
 	t.Run("offset_matches_cursor", func(t *testing.T) {
-		desc := crud.NewOrder("created_at", crud.DESC)
+		desc := list.NewOrder("created_at", list.DESC)
 		var got []string
 		for off := 0; off < 6; off += 2 {
-			p, err := List(ctx, db, q, crud.ListRequest{Limit: 2, Offset: off, Order: desc, Strategy: crud.StrategyOffset})
+			p, err := List(ctx, db, q, list.Request{Limit: 2, Offset: off, Order: desc, Strategy: list.StrategyOffset})
 			if err != nil {
 				t.Fatalf("offset %d: %v", off, err)
 			}
@@ -372,19 +374,19 @@ func TestList_Behavior(t *testing.T) {
 	})
 
 	t.Run("count_under_filter", func(t *testing.T) {
-		p, _ := List(ctx, db, q, crud.ListRequest{Limit: 2, WithCount: true})
+		p, _ := List(ctx, db, q, list.Request{Limit: 2, WithCount: true})
 		if p.Total == nil || *p.Total != 5 {
 			t.Fatalf("Total = %v, want 5", p.Total)
 		}
-		pb, _ := List(ctx, db, listQueryFor("b"), crud.ListRequest{Limit: 10, WithCount: true})
+		pb, _ := List(ctx, db, listQueryFor("b"), list.Request{Limit: 10, WithCount: true})
 		if pb.Total == nil || *pb.Total != 2 {
 			t.Fatalf("Total(b) = %v, want 2", pb.Total)
 		}
 	})
 
 	t.Run("stale_cursor_is_first_page", func(t *testing.T) {
-		token, _ := crud.EncodeCursor("name", "delta", "e4")
-		p, err := List(ctx, db, q, crud.ListRequest{Limit: 2, Cursor: token, Order: crud.NewOrder("created_at", crud.DESC)})
+		token, _ := list.EncodeCursor("name", "delta", "e4")
+		p, err := List(ctx, db, q, list.Request{Limit: 2, Cursor: token, Order: list.NewOrder("created_at", list.DESC)})
 		if err != nil {
 			t.Fatalf("List: %v", err)
 		}
@@ -398,10 +400,10 @@ func TestList_Behavior(t *testing.T) {
 	// Limit of 3 against Max 2 returns the Max-2 window (plus HasMore from the
 	// Max+1 over-fetch), where the default vocabulary would have returned 3.
 	t.Run("limits_clamp", func(t *testing.T) {
-		desc := crud.NewOrder("created_at", crud.DESC)
+		desc := list.NewOrder("created_at", list.DESC)
 		clamped := q
-		clamped.Limits = crud.Limits{Max: 2}
-		p, err := List(ctx, db, clamped, crud.ListRequest{Limit: 3, Order: desc})
+		clamped.Limits = list.Limits{Max: 2}
+		p, err := List(ctx, db, clamped, list.Request{Limit: 3, Order: desc})
 		if err != nil {
 			t.Fatalf("List: %v", err)
 		}
@@ -420,10 +422,10 @@ func TestList_RejectsInvalid(t *testing.T) {
 	ctx := context.Background()
 	q := listQueryFor("a")
 
-	if _, err := List(ctx, db, q, crud.ListRequest{Limit: 2, Cursor: "x", Offset: 3}); !errors.Is(err, sdk.ErrInvalidInput) {
+	if _, err := List(ctx, db, q, list.Request{Limit: 2, Cursor: "x", Offset: 3}); !errors.Is(err, sdk.ErrInvalidInput) {
 		t.Fatalf("cursor+offset err = %v, want ErrInvalidInput", err)
 	}
-	if _, err := List(ctx, db, q, crud.ListRequest{Limit: 2, Order: crud.NewOrder("password", crud.ASC)}); !errors.Is(err, sdk.ErrInvalidInput) {
+	if _, err := List(ctx, db, q, list.Request{Limit: 2, Order: list.NewOrder("password", list.ASC)}); !errors.Is(err, sdk.ErrInvalidInput) {
 		t.Fatalf("unknown order err = %v, want ErrInvalidInput", err)
 	}
 }
@@ -441,21 +443,21 @@ func TestList_RejectsRawExpressionPKOnFirstPage(t *testing.T) {
 	q := listQueryFor("a")
 	q.PK = "id || char(0) || name"
 
-	if _, err := List(ctx, db, q, crud.ListRequest{Limit: 2}); !errors.Is(err, sdk.ErrInvalidInput) {
+	if _, err := List(ctx, db, q, list.Request{Limit: 2}); !errors.Is(err, sdk.ErrInvalidInput) {
 		t.Fatalf("raw-expression PK err = %v, want ErrInvalidInput", err)
 	}
 }
 
 // TestList_EmptyPageItemsNonNil: a list whose filter matches nothing comes back
 // with a non-nil Items slice. The connector accumulates rows into a `var items
-// []T` that stays nil when there are none; crud.TrimPage normalizes it, so an
+// []T` that stays nil when there are none; list.TrimPage normalizes it, so an
 // empty page marshals "items":[] and never "items":null.
 func TestList_EmptyPageItemsNonNil(t *testing.T) {
 	db := newMemDB(t)
 	seedListItems(t, db)
 	ctx := context.Background()
 
-	p, err := List(ctx, db, listQueryFor("no-such-kind"), crud.ListRequest{Limit: 10})
+	p, err := List(ctx, db, listQueryFor("no-such-kind"), list.Request{Limit: 10})
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}

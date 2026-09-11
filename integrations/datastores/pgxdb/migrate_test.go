@@ -1,6 +1,28 @@
 package pgxdb
 
-import "testing"
+import (
+	"slices"
+	"testing"
+	"testing/fstest"
+)
+
+func TestMigrationFilesUseOneFlatStream(t *testing.T) {
+	src := fstest.MapFS{
+		"migrations/0002_second.sql":       {Data: []byte("SELECT 2;")},
+		"migrations/0001_first.sql":        {Data: []byte("SELECT 1;")},
+		"migrations/_disabled.sql":         {Data: []byte("SELECT 0;")},
+		"migrations/README.md":             {Data: []byte("host notes")},
+		"migrations/nested/0001_first.sql": {Data: []byte("different stream")},
+		"migrations/nested/0003_third.sql": {Data: []byte("different stream")},
+	}
+	got, err := getMigrationFiles(src, "migrations")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"0001_first.sql", "0002_second.sql"}; !slices.Equal(got, want) {
+		t.Fatalf("migration files = %v, want %v", got, want)
+	}
+}
 
 // TestMigrateConfig_WithSchema pins the option plumbing: no option leaves the
 // zero Schema (today's unqualified SQL), and WithSchema carries a validated

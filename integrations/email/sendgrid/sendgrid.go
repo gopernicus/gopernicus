@@ -1,135 +1,141 @@
-// Package sendgrid implements the sdk/capabilities/email.Sender port over Twilio SendGrid's
-// v3 Mail Send API, wrapping exactly one third-party library —
-// github.com/sendgrid/sendgrid-go (with its transport dependency
-// github.com/sendgrid/rest). It is an integration rather than an sdk default
-// because it speaks one vendor's live API contract, which churns on SendGrid's
-// schedule, not sdk's; sdk defaults (Console, SMTP) must stay vendor-neutral.
-// It imports sdk/capabilities/email for the Sender vocabulary and sdk/errs for stable error
-// kinds — no pocket and no other integration.
+// Package sendgrid implements notify/email.Sender using SendGrid's typed mail
+// request builder and an adapter-owned HTTP client.
 package sendgrid
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
+	"time"
 
-	"github.com/sendgrid/sendgrid-go"
 	"github.com/sendgrid/sendgrid-go/helpers/mail"
 
 	"github.com/gopernicus/gopernicus/sdk"
-	"github.com/gopernicus/gopernicus/sdk/capabilities/email"
+	"github.com/gopernicus/gopernicus/sdk/capabilities/notify"
+	"github.com/gopernicus/gopernicus/sdk/capabilities/notify/email"
 )
 
-// sendPath is SendGrid's v3 Mail Send endpoint path, appended to the host to
-// form the request BaseURL.
 const sendPath = "/v3/mail/send"
 
-// Compile-time assertions that Sender satisfies the sdk email port and
-// declares production-safety capability metadata.
-var (
-	_ email.Sender             = (*Sender)(nil)
-	_ email.CapabilityReporter = (*Sender)(nil)
-)
-
-// Config holds SendGrid connection settings.
+// Config is host-owned provider configuration.
 type Config struct {
-	// APIKey authenticates requests; sent as a Bearer token by sendgrid-go.
 	APIKey string
-	// FromName is the optional display name paired with each message's From
-	// address (the sdk email.Message carries only a bare address).
+	// FromName is the display name paired with the message's bare From mailbox.
 	FromName string
-	// Host overrides the scheme+host the request is sent to (e.g.
-	// "https://api.eu.sendgrid.com"). Empty uses SendGrid's default,
-	// https://api.sendgrid.com. Tests point this at an httptest server.
+	// Host is an HTTP(S) origin. Empty selects https://api.sendgrid.com.
+	// Plain HTTP is supported for local testing and is development-only.
 	Host string
+	// HTTPClient supplies a transport, timeout and other HTTP settings. New copies
+	// the client and disables redirects so bearer credentials and message bodies
+	// never follow a redirect. The transport remains shared and host-owned.
+	// Nil uses the standard transport with a 30-second timeout.
+	HTTPClient *http.Client
 }
 
-// Sender delivers email.Message values through SendGrid's Mail Send API.
+// Sender holds immutable configuration; every send builds its own request.
 type Sender struct {
-	client   *sendgrid.Client
+	client   *http.Client
+	apiKey   string
 	fromName string
-	// host is the configured Config.Host as given to New, before
-	// sendgrid-go's internal default substitution. Capabilities inspects it
-	// to describe this instance rather than SendGrid's default endpoint.
-	host string
+	host     string
 }
 
-// Capabilities declares SendGrid production-capable when the configured host
-// either is empty (SendGrid's default, https://api.sendgrid.com) or is
-// explicitly HTTPS: both deliver over TLS. A non-HTTPS Config.Host — the
-// httptest server integration tests point at, or a local emulator — cannot
-// deliver over TLS, so that instance is reported development-only rather than
-// allowed to claim a production capability it does not have.
-func (s *Sender) Capabilities() email.Capabilities {
-	if s.host == "" || strings.HasPrefix(s.host, "https://") {
-		return email.Capabilities{TransportSecurity: email.TransportSecurityTLS, DevelopmentOnly: false}
+var _ email.Sender = (*Sender)(nil)
+
+func (s *Sender) Capabilities() notify.Capabilities {
+	if strings.HasPrefix(s.host, "https://") {
+		return notify.Capabilities{TransportSecurity: notify.TransportSecurityTLS}
 	}
-	return email.Capabilities{TransportSecurity: email.TransportSecurityNone, DevelopmentOnly: true}
+	return notify.Capabilities{TransportSecurity: notify.TransportSecurityNone, DevelopmentOnly: true}
 }
 
-// New constructs a Sender. It builds a POST client for the Mail Send endpoint
-// against cfg.Host (or SendGrid's default host when empty); no network I/O
-// happens here.
-func New(cfg Config) *Sender {
-	request := sendgrid.GetRequest(cfg.APIKey, sendPath, cfg.Host)
-	request.Method = "POST"
-	return &Sender{
-		client:   &sendgrid.Client{Request: request},
-		fromName: cfg.FromName,
-		host:     cfg.Host,
+// New validates configuration and prepares a sender without I/O. Credentials
+// are checked by the provider when sending; construction only validates inputs.
+func New(cfg Config) (*Sender, error) {
+	if strings.TrimSpace(cfg.APIKey) == "" {
+		return nil, fmt.Errorf("sendgrid: API key is required: %w", sdk.ErrInvalidInput)
 	}
+	if strings.ContainsAny(cfg.APIKey, "\r\n") || strings.ContainsAny(cfg.FromName, "\r\n") {
+		return nil, fmt.Errorf("sendgrid: configuration contains line breaks: %w", sdk.ErrInvalidInput)
+	}
+	host := cfg.Host
+	if host == "" {
+		host = "https://api.sendgrid.com"
+	}
+	u, err := url.Parse(host)
+	if err != nil || u.Hostname() == "" || (u.Scheme != "https" && u.Scheme != "http") || u.User != nil || u.RawQuery != "" || u.Fragment != "" || (u.Path != "" && u.Path != "/") {
+		return nil, fmt.Errorf("sendgrid: Host must be an HTTP(S) origin: %w", sdk.ErrInvalidInput)
+	}
+	client := http.Client{Timeout: 30 * time.Second}
+	if cfg.HTTPClient != nil {
+		client = *cfg.HTTPClient
+	}
+	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	return &Sender{client: &client, apiKey: cfg.APIKey, fromName: cfg.FromName, host: u.Scheme + "://" + u.Host}, nil
 }
 
-// Send validates the message and delivers it. A non-2xx response is mapped to a
-// stable sdk/errs kind where one fits (400/401/403/404); other statuses return
-// a plain error carrying the status code and response body.
+// Send performs one request. It preserves both email representations and stable
+// SDK error causes, without returning provider response bodies in diagnostics.
 func (s *Sender) Send(ctx context.Context, msg email.Message) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if err := msg.Validate(); err != nil {
 		return err
 	}
-
 	m := mail.NewV3Mail()
 	m.SetFrom(mail.NewEmail(s.fromName, msg.From))
 	m.Subject = msg.Subject
-
-	if msg.Text != "" {
-		m.AddContent(mail.NewContent("text/plain", msg.Text))
-	}
+	m.AddContent(mail.NewContent("text/plain", msg.Text))
 	if msg.HTML != "" {
 		m.AddContent(mail.NewContent("text/html", msg.HTML))
 	}
-
 	p := mail.NewPersonalization()
-	for _, addr := range msg.To {
-		p.AddTos(mail.NewEmail("", addr))
+	for _, address := range msg.To {
+		p.AddTos(mail.NewEmail("", address))
 	}
 	m.AddPersonalizations(p)
 
-	resp, err := s.client.SendWithContext(ctx, m)
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, s.host+sendPath, bytes.NewReader(mail.GetRequestBody(m)))
+	if err != nil {
+		return fmt.Errorf("sendgrid: request: %w", err)
+	}
+	request.Header.Set("Authorization", "Bearer "+s.apiKey)
+	request.Header.Set("Content-Type", "application/json")
+	response, err := s.client.Do(request)
 	if err != nil {
 		return fmt.Errorf("sendgrid: send: %w", err)
 	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return statusError(resp.StatusCode, resp.Body)
+	defer response.Body.Close()
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return &ResponseError{StatusCode: response.StatusCode}
 	}
 	return nil
 }
 
-// statusError maps a non-2xx SendGrid response to an error. Auth- and
-// input-relevant codes wrap a sdk/errs sentinel so callers can branch on kind;
-// every case keeps the status code and body for diagnostics.
-func statusError(status int, body string) error {
-	switch status {
+// ResponseError reports a rejected provider response without its potentially
+// sensitive body. Authentication errors concern provider credentials, not the
+// application's end user. Retry policy belongs to the host.
+type ResponseError struct{ StatusCode int }
+
+func (e *ResponseError) Error() string {
+	return fmt.Sprintf("sendgrid: status %d (%s)", e.StatusCode, http.StatusText(e.StatusCode))
+}
+
+func (e *ResponseError) Unwrap() error {
+	switch e.StatusCode {
 	case http.StatusBadRequest:
-		return fmt.Errorf("sendgrid: status %d: %s: %w", status, body, sdk.ErrInvalidInput)
+		return sdk.ErrInvalidInput
 	case http.StatusUnauthorized:
-		return fmt.Errorf("sendgrid: status %d: %s: %w", status, body, sdk.ErrUnauthorized)
+		return sdk.ErrUnauthorized
 	case http.StatusForbidden:
-		return fmt.Errorf("sendgrid: status %d: %s: %w", status, body, sdk.ErrForbidden)
+		return sdk.ErrForbidden
 	case http.StatusNotFound:
-		return fmt.Errorf("sendgrid: status %d: %s: %w", status, body, sdk.ErrNotFound)
+		return sdk.ErrNotFound
 	default:
-		return fmt.Errorf("sendgrid: status %d: %s", status, body)
+		return nil
 	}
 }

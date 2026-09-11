@@ -8,8 +8,8 @@ import (
 	"time"
 
 	firestoredb "github.com/gopernicus/gopernicus/integrations/datastores/firestore"
-	"github.com/gopernicus/gopernicus/pockets/authentication/domain/identifier"
-	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/identifier"
+	"github.com/gopernicus/gopernicus/sdk/pkg/list"
 )
 
 // The DIRECTORY PROJECTION cases (N-D3, SCHEMA.md §6). The conformance suite's
@@ -55,7 +55,7 @@ func TestProjectionIsWrittenByTheAtomicCreate(t *testing.T) {
 		t.Errorf("email-less subject projected as (%q, %v), want empty and unverified", email, ok)
 	}
 	// Absence must not remove the subject from the directory.
-	page, err := r.UserAdmin.List(context.Background(), crud.ListRequest{Limit: 10})
+	page, err := r.UserAdmin.List(context.Background(), list.Request{Limit: 10})
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
@@ -193,7 +193,7 @@ func TestDirectoryPageReadsNoIdentifiers(t *testing.T) {
 	}
 
 	counting := &countingReader{reader: db.ReaderFrom(ctx)}
-	page, err := firestoredb.List(ctx, counting, listUsers(db), crud.ListRequest{Limit: 10})
+	page, err := firestoredb.List(ctx, counting, listUsers(db), list.Request{Limit: 10})
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}

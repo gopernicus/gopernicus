@@ -4,16 +4,22 @@ package commands
 // test (review-gate fold items 4 + 8). `gopernicus init` emits Go sources that
 // live in no module until a user runs the CLI, so no per-module `make` target
 // ever compiles them — they can rot silently. This test is the drift answer for
-// those scaffold-once surfaces: it emits hosts into t.TempDir(), rewires their
-// pre-tag replace directives to ABSOLUTE paths in THIS repo, and runs
+// those scaffold-once surfaces: it emits hosts into t.TempDir(), adds framework
+// replace directives to ABSOLUTE paths in THIS repo, and runs
 // `go mod tidy && go build ./...` as a child process — proving the templates
-// still produce a compiling host on every `make check`. It then runs the emitted
+// still produce a compiling host on every `make check`. Temporary host binaries
+// also exercise configuration failures before serving or opening a database.
+// It then runs the emitted
 // host's guard SHAPES (the app one-rule grep + the G9/G10 hygiene patterns,
 // reimplemented as Go string matching) so a template can never smuggle a
 // boundary violation into emitted output. A silent skip is a rotting scaffold:
 // the legs FAIL LOUD, never skip on a cold cache.
 
 import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -22,6 +28,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 // The forbidden literals the emitted-host guard shapes reject. Assembled from
@@ -37,12 +44,12 @@ var (
 // go.mod must carry. Bump sdkPin with every sdk tag the template moves to.
 var (
 	inlineHint = regexp.MustCompile(`^[A-Z0-9_]+=\S*\s+#`)
-	sdkPin     = baseModule + "/sdk v0.8.0"
+	sdkPin     = baseModule + "/sdk v0.9.0"
 )
 
 // TestScaffoldInitNoneCompiles is the hermetic leg: an sdk-only host builds fully
-// offline (sdk is third-party-free, so an empty go.sum suffices). No network, no
-// DB, no env.
+// offline (sdk is third-party-free, so an empty go.sum suffices). Startup checks
+// use disposable dotenv files and no network or database.
 func TestScaffoldInitNoneCompiles(t *testing.T) {
 	root := repoRoot(t)
 	target := t.TempDir()
@@ -68,6 +75,32 @@ func TestScaffoldInitNoneCompiles(t *testing.T) {
 	runGo(t, target, env, "build", "./...")
 
 	assertGuardShapes(t, target)
+
+	binary := filepath.Join(t.TempDir(), "server")
+	runGo(t, target, env, "build", "-o", binary, "./cmd/server")
+	t.Run("malformed dotenv", func(t *testing.T) {
+		assertMalformedEnvRejected(t, binary)
+	})
+	t.Run("configured startup error", func(t *testing.T) {
+		dir := t.TempDir()
+		stdout, stderr := runStartupFailure(t, binary, dir, []string{
+			"LOG_FORMAT=json", "LOG_OUTPUT=STDOUT", "READ_TIMEOUT=invalid-duration",
+		})
+		if stderr != "" {
+			t.Fatalf("configured startup error used stderr: %s", stderr)
+		}
+		var record struct {
+			Level   string `json:"level"`
+			Message string `json:"msg"`
+			Error   string `json:"error"`
+		}
+		if err := json.Unmarshal([]byte(stdout), &record); err != nil {
+			t.Fatalf("startup output is not one JSON log record: %v\n%s", err, stdout)
+		}
+		if record.Level != "ERROR" || record.Message != "server exited with error" || !strings.Contains(record.Error, "READ_TIMEOUT") {
+			t.Fatalf("unexpected startup error record: %+v", record)
+		}
+	})
 }
 
 // TestScaffoldInitTursoCompiles is the warm-cache leg: a --db=turso host tidies
@@ -96,6 +129,49 @@ func TestScaffoldInitTursoCompiles(t *testing.T) {
 	runGo(t, target, env, "build", "./...")
 
 	assertGuardShapes(t, target)
+
+	for _, pkg := range []string{"cmd/server", "workshop/migrations"} {
+		t.Run(pkg+" rejects malformed dotenv", func(t *testing.T) {
+			binary := filepath.Join(t.TempDir(), "startup")
+			runGo(t, target, env, "build", "-o", binary, "./"+pkg)
+			assertMalformedEnvRejected(t, binary)
+		})
+	}
+}
+
+func assertMalformedEnvRejected(t *testing.T, binary string) {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, ".env"), []byte("GOPERNICUS_STARTUP_TEST=\"dummy-private-value\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	stdout, stderr := runStartupFailure(t, binary, dir, []string{"LOG_FORMAT=json", "LOG_OUTPUT=STDOUT"})
+	if stdout != "" {
+		t.Fatalf("malformed dotenv reached configured startup: %s", stdout)
+	}
+	if !strings.Contains(stderr, "load environment") || !strings.Contains(stderr, ".env") || strings.Contains(stderr, "dummy-private-value") {
+		t.Fatalf("expected a value-free dotenv bootstrap error, got: %s", stderr)
+	}
+}
+
+func runStartupFailure(t *testing.T, binary, dir string, env []string) (string, string) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, binary)
+	cmd.Dir = dir
+	cmd.Env = append([]string{}, env...)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	err := cmd.Run()
+	if ctx.Err() != nil {
+		t.Fatalf("startup did not reject configuration before running: %v\nstdout: %s\nstderr: %s", ctx.Err(), stdout.String(), stderr.String())
+	}
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) || exitErr.ExitCode() != 1 {
+		t.Fatalf("startup exit = %v, want status 1\nstdout: %s\nstderr: %s", err, stdout.String(), stderr.String())
+	}
+	return stdout.String(), stderr.String()
 }
 
 // TestScaffoldInitEnvTemplate is the render-only tripwire for the emitted
@@ -166,9 +242,8 @@ func hermeticEnv() []string {
 	return append(os.Environ(), "GOWORK=off", "GOPROXY=off")
 }
 
-// replaceModule rewrites an emitted (commented) pre-tag replace into a functional
-// absolute one via `go mod edit`. This is the pre-tag wiring the emitted README
-// documents, injected here so the child build resolves against this repo.
+// replaceModule adds an absolute replacement via `go mod edit` so the child
+// build exercises this checkout. Released hosts need no framework replacements.
 func replaceModule(t *testing.T, dir, module, path string) {
 	t.Helper()
 	cmd := exec.Command("go", "mod", "edit", "-replace", module+"="+path)

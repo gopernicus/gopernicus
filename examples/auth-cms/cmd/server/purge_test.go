@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	auth "github.com/gopernicus/gopernicus/pockets/authentication"
+	delivery "github.com/gopernicus/gopernicus/pockets/authentication/logic/delivery"
 )
 
 // fakePurger stands in for the jobs Service's bounded terminal purge. It removes at most the
@@ -57,7 +57,7 @@ func TestDeliveryPurgeBoundedBatch(t *testing.T) {
 
 	purger := &fakePurger{remaining: 1200}
 	var observed []int
-	rt := auth.DeliveryJobRuntime{Purged: func(_ context.Context, n int) { observed = append(observed, n) }}
+	rt := delivery.JobRuntime{Purged: func(_ context.Context, n int) { observed = append(observed, n) }}
 
 	purge := newDeliveryPurge(purger, rt, deliveryPurgeConfig{Retention: retention, Batch: batch}, func() time.Time { return fixedNow })
 
@@ -96,7 +96,7 @@ func TestDeliveryPurgeBoundedBatch(t *testing.T) {
 func TestDeliveryPurgeLoopContinuesAfterError(t *testing.T) {
 	t.Parallel()
 	purger := &fakePurger{err: errors.New("purge backend unavailable")}
-	purge := newDeliveryPurge(purger, auth.DeliveryJobRuntime{}, deliveryPurgeConfig{Retention: time.Hour, Batch: 10}, time.Now)
+	purge := newDeliveryPurge(purger, delivery.JobRuntime{}, deliveryPurgeConfig{Retention: time.Hour, Batch: 10}, time.Now)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -133,7 +133,7 @@ func TestDeliveryPurgeLoopContinuesAfterError(t *testing.T) {
 func TestDeliveryPurgeLoopCleanShutdown(t *testing.T) {
 	t.Parallel()
 	purger := &fakePurger{remaining: 5}
-	purge := newDeliveryPurge(purger, auth.DeliveryJobRuntime{}, deliveryPurgeConfig{Retention: time.Hour, Batch: 10}, time.Now)
+	purge := newDeliveryPurge(purger, delivery.JobRuntime{}, deliveryPurgeConfig{Retention: time.Hour, Batch: 10}, time.Now)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})

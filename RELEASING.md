@@ -1,5 +1,451 @@
 # Releasing gopernicus modules
 
+## Unreleased: Turso statement completion (2026-09-11)
+
+QueryOne now checks result closure before returning a row. SQLite can return an
+UPDATE...RETURNING row before an implicit commit; ignoring a close-time busy
+failure exposed uncommitted claims as successful work. Return the driver error
+and zero result so store-owned busy retry can handle the failed statement.
+No signature/schema change. Upgrade connector and adapters together.
+
+Migration: [AUDIT-033](AUDIT.md#audit-033-turso-statement-completion-before-success).
+This fix was found by the coordinated release's live jobs concurrency gate.
+
+## Unreleased: Host startup cancellation and constructor errors (2026-09-11)
+
+SQL connector Open and Firestore probing constructors take the host context
+first. SendGrid.New, S3.New and events outbox.NewPoller return construction errors
+instead of deferring known-invalid configuration to use. Raw SQL store wrappers
+retain simple signatures and reject nil borrowed databases explicitly.
+
+Migration: [AUDIT-032](AUDIT.md#audit-032-host-startup-cancellation-and-constructor-errors).
+Implementation/release plan: [startup-release-segovia.md](plans/startup-release-segovia.md).
+The coordinated release is being prepared; no new tags have been published.
+Firestore first tags are held pending remote-work reconciliation and required
+live evidence. Segovia v2 is the first PostgreSQL-backed adopter.
+
+## Unreleased: Consistent pocket construction (2026-09-11)
+
+Non-CMS pocket roots and configurable services, HTTP adapters and runtimes now
+accept typed WithFoo options with explicit required inputs. Optional feature and
+policy records replace whole groups. Former construction-only Config/Deps bags
+are removed; owned callers and examples use the new signatures. Dedicated source
+files use `constructor.go`. This supersedes the retained-pocket-Config choices
+from the previous constructor pass. Schemas, dependencies and versions are unchanged.
+
+Migration: [AUDIT-031](AUDIT.md#audit-031-consistent-pocket-constructor-options).
+Implementation and checks: [pocket-constructor-options.md](plans/pocket-constructor-options.md).
+No modules have been tagged or published.
+
+## Unreleased: Constructor options (2026-09-11)
+
+Coordinate SDK, changed adapters, non-CMS pockets, UI and consuming hosts.
+Selected small constructors now accept typed WithFoo options; required inputs
+stay explicit and coherent policy/connection records remain. Existing options
+configure private construction settings instead of live objects. Nil options
+receive explicit diagnostics; defaults and runtime behavior are preserved.
+
+Migration: [AUDIT-030](AUDIT.md#audit-030-constructor-options).
+Review and verification: [constructor-options.md](plans/constructor-options.md).
+No module versions, dependencies, schemas or persisted formats changed.
+No modules have been tagged or published.
+
+## Unreleased: Integration contracts and startup behavior (2026-09-11)
+
+Coordinate affected connectors, pocket stores and hosts. SQL probing constructors
+now require the host context; PostgreSQL pool defaults, Turso credential handling,
+Firestore terminal errors, Redis deadlines, cron validation and S3 region checks
+are corrected. Migration file selection and connection ownership are explicit.
+No dependency, persisted-format or SQL migration change is introduced.
+
+Migration: [AUDIT-029](AUDIT.md#audit-029-integration-contracts-and-startup-behavior).
+Review and verification: [integration-sweep.md](plans/integration-sweep.md).
+No modules have been tagged or published.
+
+## Unreleased: Public pocket services and HTTP adapters (2026-09-11)
+
+Upgrade authentication, authorization, jobs and events together with their stores,
+authentication views and consuming hosts. Services and their types now live in
+public `logic/<concern>` packages; HTTP adapters live in `inbound/http`. Root
+constructors assemble named components. Removed import paths and universal root
+services have no compatibility shims. CMS is excluded. This change adds no SQL
+migration, stored-format change or module version update.
+
+Migration: [AUDIT-028](AUDIT.md#audit-028-public-pocket-services-and-http-adapters),
+including the symbol map and changes to construction, methods and lifecycle wiring.
+Implementation and verification: [pocket-structure.md](plans/pocket-structure.md).
+No modules have been tagged or published.
+
+## Unreleased: Authorization change history and mutation simplification (2026-09-11)
+
+Upgrade core and adapters together. Commands no longer carry mutation IDs or
+expected revisions; results describe current outcomes. Remove Config.Audit and
+use store WithAudit() plus explicit source metadata for trusted/raw writes when
+recording is wanted. Stop old writers, optionally archive old ledgers, then
+apply SQL 0007 (after 0006). Firestore uses explicit ledger cleanup and optional
+additional audit indexes. Audit records and changed facts commit together.
+
+Migration: [AUDIT-026](AUDIT.md#audit-026-authorization-change-history-and-mutation-simplification).
+Verification: [implementation plan](plans/authorization-audit-log-implementation.md).
+This entry supersedes earlier authorization receipt/revision descriptions below.
+
+
+## Unreleased: Authorization tuple identity (2026-09-11)
+
+Upgrade authorization core and stores together. Remove relationship IDs and
+relationship/role timestamps from callers; restart raw listing cursors with
+`tuple_key`/`role_key` ordering. SQL hosts apply append-only migration `0006`;
+Firestore hosts deploy the new indexes and explicitly upgrade tuple documents
+with traffic stopped. Scope revisions and receipt history are removed by the subsequent
+AUDIT-026 change above. No tags, publication or external consumer edits occurred.
+
+Migration: [AUDIT-025](AUDIT.md#audit-025-authorization-tuple-identity-and-metadata-removal).
+Implementation and verification: [authorization-tuples-implementation.md](plans/authorization-tuples-implementation.md).
+
+## Unreleased: Authorization mutation safety and host contracts (2026-09-11)
+
+Upgrade authorization core and adapters together. Explicitly configure guardian
+protection where required; the new default is empty. Migrate guard reads to
+DecisionView.Check(CheckRequest), handle semantic/invariant refusals as errors,
+and rename the route-only assignment policy. Custom mutation repositories expose
+a defensive GuardianPolicy snapshot. PostgreSQL serializable mutation protection,
+Firestore retry classification, role budgets and fixed FilterPage pulls are
+included. No stored-data migration, tags or publication.
+
+Migration: [AUDIT-024](AUDIT.md#audit-024-authorization-mutation-safety-and-simpler-host-contracts).
+Plan and verification: [authorization-followup-implementation.md](plans/authorization-followup-implementation.md).
+
+## Unreleased: Authorization model authority and listing (2026-09-11)
+
+Upgrade authorization core and all store adapters together. Custom stores/views
+must supply model-scoped readers; current models govern every permission read,
+including retained older tuples. Lookup APIs now distinguish complete ResourceSet
+from ResourceIDPage, and FilterPage returns FilteredPage with scan-limit status.
+New repeated-work limits, canonical target order, stricter boot validation,
+guarded role permissions and constructor-owned logging are host-visible.
+No new authorization schema migration or automatic tuple deletion is required.
+Baseline/guarded dependency ownership remains an explicit host decision.
+No tags, publication or external consumer changes occurred.
+
+Migration: [AUDIT-023](AUDIT.md#audit-023-authorization-model-authority-evaluation-and-listing-apis).
+Implementation and verification: [authorization-audit-implementation.md](plans/authorization-audit-implementation.md).
+
+## Unreleased: Authentication proof lifecycle (2026-09-10)
+
+Upgrade authentication core, SQL/Firestore adapters and bundled views together.
+Custom repositories adopt atomic provisioning, credential/revision admission,
+policy-aware grants and durable invitation claims. Apply invitation migration
+`0018`; stop old writers/workers during the cutover. Existing sessions require no
+new column, but in-flight sensitive codes, passwordless codes/all magic links, reset links
+and OAuth linking flows restart. Browser Origin/logout
+requirements, verified invitation ownership and configuration validation change.
+Firestore remains incomplete; implemented capabilities have the stronger contracts.
+No tags, publication or external consumer edits occurred.
+
+Migration: [AUDIT-022](AUDIT.md#audit-022-authentication-proof-lifecycle-and-host-api).
+Verification: [authentication-audit-implementation.md](plans/authentication-audit-implementation.md).
+
+## Unreleased: Jobs SQL generation ordering (2026-09-10)
+
+Jobs pgx/Turso adapters now keep new same-key fenced generations ordered through
+repeated/backward clocks, using existing locks and stored timestamp precision.
+No schema, repository interface or dependency-version change. Upgrade every SQL
+writer together; old adapters can still insert out-of-order generations. Historical
+rows are not backfilled. Scheduler durability findings are recorded separately;
+this release note does not claim they are fixed. No tags or publication occurred.
+Migration: [AUDIT-019](AUDIT.md#audit-019-jobs-sql-generation-ordering).
+Evidence and remaining work: [jobs-persistence-audit.md](plans/jobs-persistence-audit.md).
+
+## Unreleased: Jobs runtime handler snapshots (2026-09-10)
+
+Jobs validates and snapshots staged handlers at NewRuntime; queue and scheduler
+use the same final kinds, independently for each runtime. Optional Register no
+longer rejects enqueue-only or fenced-only services. Public signatures and store
+schemas are unchanged, but hosts must handle late invalid configuration at
+runtime construction rather than rely on Register. No tags, module requirements
+or external publication changed. Include this fix in the coordinated audit release.
+Migration: [AUDIT-018](AUDIT.md#audit-018-jobs-runtime-handler-snapshots).
+Implementation: [jobs-runtime-implementation.md](plans/jobs-runtime-implementation.md).
+
+## Unreleased: SDK package directory rename (2026-09-10)
+
+SDK foundation packages move to `sdk/pkg/{async,cryptids,environment,list,logging,
+validation,web,workers}`. The module and package identifiers/APIs stay the same;
+old import paths are removed. All repository imports, templates, guards and
+canonical docs use the new paths. No dependency versions or module count changed.
+
+Release a compatible SDK and all dependent modules still referring to the old
+paths together; update consumer imports and any generation/build scripts. Current
+workspace verification does not prove unpublished module versions resolve remotely.
+No tags or external publication occurred. Migration: [AUDIT-017](AUDIT.md#audit-017-sdk-foundation-directory-renamed-to-pkg).
+Implementation: [sdk-pkg-rename.md](plans/sdk-pkg-rename.md).
+
+## Unreleased: Shared pockets module (2026-09-10)
+
+The host mounting contract moves from SDK into the independently versioned
+`github.com/gopernicus/gopernicus/pockets` module, package `pockets`. Concrete
+pocket module paths and runtime behavior stay the same. SDK has no forwarding
+package or outward dependency. The workspace now contains 42 modules.
+
+Publish the compatible SDK release, then the new shared `pockets/v0.1.0` module,
+then compatible concrete pocket/adapters and Workshop releases with coordinated
+requirements. Current `v0.1.0` requirements name the intended first shared-module
+release; nothing was tagged or published during this change. Existing SDK and
+other dependency pins are retained except where minimum-version selection
+requires alignment. Confirm those pins against the final releases before tagging.
+
+Local workspace and explicit sibling replacements verify the unpublished tree;
+they do not establish that module-proxy consumers can resolve these changes yet.
+Migration: [AUDIT-016](AUDIT.md#audit-016-shared-pockets-module).
+Implementation: [pockets-module-move.md](plans/pockets-module-move.md).
+
+## Unreleased: Bound OAuth flows and truthful tracing (2026-09-10)
+
+OAuth providers use concrete configuration and a smaller SDK port with optional
+OIDC/refresh capabilities. Authentication requires initiating-client proof for
+browser/native authorization-code completion and explicit host email trust for
+new email-based registration/adoption. Native routes are opt-in and cookie-free.
+Malformed identities, unsafe redirects, oversized responses and raw upstream
+error disclosure are rejected. Old in-flight authorization flows restart; no
+repository schema or pending-link format changes.
+
+Tracing now reports partial-response failures/panics accurately. OTLP literal
+zero disables root sampling, parent decisions take precedence, and explicit
+OTel HTTP middleware supplies server spans, typed metadata and opt-in W3C trust.
+
+Coordinate SDK, authentication, OAuth adapters, OTel and dependent module
+requirements when publishing. No module versions/tags or external consumer files
+were changed. Migration: [AUDIT-015](AUDIT.md#audit-015-bound-oauth-flows-and-truthful-tracing).
+Implementation: [oauth-tracing-implementation.md](plans/oauth-tracing-implementation.md).
+
+## Unreleased: Explicit notification deliveries and email correctness (2026-09-10)
+
+Breaking SDK/authentication update: email moves to sdk/capabilities/notify/email.
+notify.Send(ctx, deliveries...) attempts exactly the caller-selected deliveries;
+email.NewDelivery preserves typed email content and DeliveryFunc adapts host
+channels. Indexed partial failures preserve causes; hosts choose retries.
+The old Notifier/Message API and integrations/notify/mailer bridge are removed.
+Authentication uses Mailer for email and Config.BodySenders for non-email kinds.
+
+Rendering is independent of sending, with immutable construction options,
+explicit RenderRequest/SendRequest.Layout and deliberate plain-text templates.
+Empty/misnamed template roots and invalid explicit configuration now fail.
+SMTP honors cancellation and encodes MIME safely; mailbox/header validation is
+stricter. SendGrid isolates concurrent requests, refuses redirects and returns
+safe inspectable status errors. Shared production posture lives in notify.
+
+Consumer migration: [AUDIT-014](AUDIT.md#audit-014-explicit-notification-deliveries-and-email-correctness).
+Implementation and verification: [email-notify-implementation.md](plans/email-notify-implementation.md).
+Coordinate SDK, authentication, SendGrid and dependent module requirements when
+publishing. Remove bridge requirements; SendGrid drops unused rest/x/net
+dependencies. No module versions, tags, external consumers or queued envelope
+schemas were changed. Hosts retain provider configuration and delivery policy.
+
+## Unreleased: File-storage correctness and direct adapter contracts (2026-09-10)
+
+Breaking SDK/storage update: pass Storer or a narrow consumer interface directly;
+FileStore/New/WithLogger and operation/unsupported sentinels are removed. Keys
+are canonical without silent rewriting; listing is literal, reads describe stored
+bytes, ranges share zero/EOF behavior, and missing objects match sdk.ErrNotFound.
+Disk confines paths, stages complete replacements and requires concrete Close.
+It reserves .gopernicus-tmp (including case variants) and creates replacement/new files with mode
+0600; review deployed keys, symlinks and cross-user file access before upgrade.
+
+GCS aborts failed sources, uses explicit local-key/IAM signing and initiates client
+PUT sessions through its configured authenticated HTTP client with ContentType
+and Origin options. S3 exposes honest InitiateMultipartUpload IDs separately;
+its bounded upload manager supports non-seekable inputs up to about 48.8 GiB and
+attempts cancellation-safe multipart cleanup. Signed expiry is whole seconds
+from one second through seven days. Hosts own error reporting and resources.
+
+Consumer migration: [AUDIT-013](AUDIT.md#audit-013-file-storage-correctness-and-direct-adapter-contracts).
+Implementation and verification: [filestorage-implementation.md](plans/filestorage-implementation.md).
+Coordinate SDK, GCS/S3 adapter and dependent requirements when publishing. S3
+adds AWS transfermanager v0.1.6 without upgrading other pinned dependencies.
+GCS promotes its existing auth dependency to direct for credential-context tests.
+No external consumers, deployed storage, stored keys, schema, versions or tags
+were changed. Actual cloud signing/session permissions and browser CORS need
+host verification.
+
+## Unreleased: Event delivery contracts and Redis recovery (2026-09-10)
+
+Breaking SDK/events update: Emit accepts no options and admits bounded async
+notification. Memory.Dispatch checks local handler completion; Redis.Publish
+checks remote acceptance. Bus.Subscribe now means notification fanout on both
+backends; Redis competing consumers use exact-topic SubscribeWork. Outbox pollers
+take an explicit delivery function. Record/RemoteEvent preserve event IDs,
+metadata and opaque payloads; DecodeRemoteMetadata is removed.
+
+Redis work requires Redis 6.2 or newer and reclaims pending entries, acknowledging
+only successful complete handler attempts. MaxLen and BatchSize are removed;
+hosts own poison disposition and stream retention. The new v2 transport requires
+coordinated old-stream drain, stopped old writers and disjoint physical prefixes;
+it does not migrate or discard old pending work automatically.
+
+Consumer migration: [AUDIT-012](AUDIT.md#audit-012-event-delivery-contracts-and-redis-recovery).
+Implementation and verification: [events-implementation.md](plans/events-implementation.md).
+Coordinate SDK, events pocket, Redis adapter and dependent module requirements
+when publishing. No outbox schema, external consumer, module pin, tag or deployed
+Redis state was changed.
+
+## Unreleased: Rate-limiter contract and adapter corrections (2026-09-10)
+
+Breaking SDK update: bounded NewMemory(MemoryConfig), small Allower/Limiter ports,
+explicit MiddlewareConfig with closed default and error reporting, and removal of
+no-op Close and the subject-shaped default resolver/wrapper. Memory, Redis and
+Postgres now share validated millisecond windows, anchored approximate admission,
+Burst, cancellation and logical expiry behavior. Authentication preserves and
+reports its deliberate open outage paths. A runnable host policy example retains
+dynamic limit resolution and worker Acquire without SDK account policy.
+
+Consumer migration: [AUDIT-011](AUDIT.md#audit-011-rate-limiter-contract-and-adapter-corrections).
+Implementation: [ratelimiter-implementation.md](plans/ratelimiter-implementation.md).
+Coordinate SDK, goredis, pgxdb and authentication requirements at release.
+Postgres requires the host-owned window_ms column migration. Both adapters use
+internal v2 keys; review physical namespace overlap and fresh/dual quotas before
+rolling upgrades. No deployment, module pins, tags or external consumers changed.
+
+## Unreleased: Complete caching and correct storage/HTTP policy (2026-09-10)
+
+Breaking SDK/cache update: explicit MemoryConfig/Config/PageConfig constructors,
+optional literal PrefixDeleter replacing DeletePattern, and host-owned resource
+lifecycle replacing cache Close. Memory is bounded and copies bytes; Redis TTL,
+namespace escaping and cancellation now match the storage contract. Cache adds
+namespaces, an error hook and typed JSON/load-on-miss helpers. Pages uses bounded,
+versioned public HTML records with request isolation and conservative metadata
+policy. CMS exposes PageCache configuration. The minimal host demonstrates
+application-data caching at GET /catalog.json.
+
+Consumer migration: [AUDIT-010](AUDIT.md#audit-010-cache-storage-data-helpers-and-public-page-policy).
+Implementation and verification: [cacher-implementation.md](plans/cacher-implementation.md).
+Coordinate SDK, Redis adapter and CMS requirements when releasing. Old page keys
+become cold entries; no schema, module pins, tags or external consumers changed.
+
+## Unreleased: Common primitives in root SDK (2026-09-10)
+
+Breaking SDK package consolidation: foundation/{pointer,slug,id,identity} move to
+root sdk. Use Deref/DerefOr, Slugify, IDGenerator/IDGenerateFunc/NewIDGenerator,
+NanoID/DatabaseID and the explicit Principal/Identity vocabulary. Existing output,
+fields and runtime policy stay unchanged. Validation/environment/cryptids retain
+their packages. Consumer mapping: [AUDIT-009](AUDIT.md#audit-009-common-primitives-promoted-into-root-sdk).
+
+Coordinate SDK and affected pocket/store/integration requirements and the Workshop
+scaffold SDK pin before publishing; the old SDK lacks these root symbols. No
+requirements, versions, tags, schema or consumer applications changed here.
+Implementation: [sdk-root-promotion.md](plans/sdk-root-promotion.md).
+
+## Unreleased: Restore the cryptids package name (2026-09-10)
+
+The SDK crypto namespace is `foundation/cryptids` ("cryptography tidbits"). This
+reverses only S4's temporary `cryptography` name; its ID separation, removed APIs
+and security fixes remain. Update any interim cryptography imports/qualifiers.
+No behavior, persisted formats, module pins or tags changed. AUDIT-004 now shows
+the final API; [AUDIT-008](AUDIT.md#audit-008-cryptids-name-restoration) covers
+checkouts already using the temporary name. Coordinate SDK/authentication/JWT
+requirements at release. Root SDK consolidation is now implemented in AUDIT-009.
+
+## Unreleased: Workers, job middleware and async lifecycle (2026-09-10)
+
+Breaking SDK update: simplify ProcessFunc to return error, narrow Job, remove
+redundant hooks/retry options and Pool.Errors, and replace async presets/shutdown
+options with explicit host configuration. Generic runners and worker middleware
+remain SDK-owned. Add job middleware, explicit defer/reject outcomes and optional
+atomic deferral ports, implemented by jobs memory/pgx/Turso. Correct admission,
+drain, persistence reporting, polling cadence and fatal sibling shutdown.
+Keyed-work protocol methods now reject empty logical keys.
+
+Consumer migration: [AUDIT-007](AUDIT.md#audit-007-workers-job-middleware-and-async-lifecycle).
+Implementation: [workers-cleanup.md](plans/workers-cleanup.md). Coordinate SDK,
+jobs, jobs store and dependent module requirements: old processors do not compile
+with the new SDK. Custom stores need the optional deferral port only if their
+processors defer. No stored status/schema changes, consumer edits, pins or tags.
+
+## Unreleased: Web correctness and API cleanup (2026-09-09)
+
+Breaking SDK update: remove dead router logging options, the Decode alias,
+duplicate streaming/generic response conveniences and the reflection OpenAPI
+builder. Correct middleware isolation, proxy attribution, response status/error
+forwarding, failed-render caching, panic/abort/hijack handling, timeout shutdown,
+SSE frames, strict body handling and static/SPA behavior. Authentication's older
+JSON routes now share its existing 1-MiB bound and trailing-input rejection.
+
+Consumer migration: [AUDIT-006](AUDIT.md#audit-006-web-correctness-and-api-cleanup).
+Implementation: [web-cleanup.md](plans/web-cleanup.md). Coordinate SDK, CMS and
+Workshop requirements because old router constructors will not compile with the
+new SDK; release authentication/authorization input changes deliberately. No
+module pins, tags, consumer upgrades or data migrations were made.
+
+## Unreleased: Listing and transaction audit cleanup (2026-09-09)
+
+Breaking SDK change: `foundation/crud` becomes `foundation/list`, with concise
+request/parser names; `Transactor` moves to `capabilities/transaction`. Unused
+generic repository/patch helpers and the duplicate not-found alias are removed.
+CMS EntryQuery's embedded field is now Request. Listing fixes cover cursor
+validation/precision, inclusive previous probes, stable folded ordering, SQL
+projection/filter composition and empty offset JSON. SQL transaction helpers
+clean up panic/error/canceled/failed commits before connection reuse.
+
+Consumer migration: [AUDIT-005](AUDIT.md#audit-005-listing-vocabulary-and-transaction-correctness).
+Implementation: [listing-transaction-cleanup.md](plans/listing-transaction-cleanup.md).
+Coordinate SDK, affected pocket/connector and Workshop module requirements at
+release. Custom SQL projections and previous probes require review alongside
+import changes. No schema migration, release tag or consumer upgrade was made.
+
+
+## Unreleased: Identity and cryptography cleanup (2026-09-09)
+
+Breaking SDK update: ID generation moves from `foundation/cryptids` into
+root SDK (final destination after AUDIT-009); crypto keeps the cryptids name. The SDK HS256 implementation, hasher object, and
+identity batch helper are removed. JWT signing uses the existing golang-jwt
+integration with an explicit expiration/time/key contract. Bcrypt consistently
+enforces its byte limit and classifies it as invalid input. Authentication adds
+the host's optional `Config.ValidatePassword` callback; nil preserves defaults.
+
+Consumer migration: [AUDIT-004](AUDIT.md#audit-004-identity-ids-cryptography-and-host-password-policy).
+Implementation: [identity-cryptography-cleanup.md](plans/identity-cryptography-cleanup.md).
+Coordinate pre-v1 SDK, affected pocket/integration, and Workshop releases and
+their SDK requirements: old SDK tags lack the new packages. Integration module
+paths stay unchanged. Auth-cms adds the local JWT integration dependency; bcrypt
+adds an SDK requirement. No tags were created or consumer applications upgraded.
+Auth-cms's module tidy also records SDK v0.7.1 and jobs v0.5.0 already selected
+by its dependency graph; these are not the future coordinated release versions.
+The verification-discovered jobs memstore generation-order fix needs no schema
+or API migration; durable store ordering remains a later audit item.
+
+## Unreleased: SDK environment and logging cleanup (2026-09-09)
+
+Breaking SDK update: dotenv parsing rejects malformed assignments and reports
+write failures; tagged parsing checks destination types/ranges and returns
+value-free diagnostics. Logging automatically includes available context IDs,
+renames the public wrapper to ContextHandler, and removes its functional
+options and redundant constructors. Two namespace lookup wrappers are removed.
+Examples and Workshop templates now check dotenv loading and use their
+configured logger for startup errors.
+
+Consumer migration: [AUDIT-003](AUDIT.md#audit-003-environment-parsing-and-context-logging).
+No release tag or dependency pin has changed. Select deliberate pre-v1 SDK and
+Workshop versions and coordinate the scaffold's SDK requirement at release.
+
+## Unreleased: SDK utility package cleanup (2026-09-09)
+
+Breaking SDK update: `foundation/conversion` is removed. `Deref` and `DerefOr`
+move to root SDK (final destination after AUDIT-009); use Go 1.26's `new(value)` in place of `Ptr`.
+The case/acronym, date parsing, JSON default, and overlap APIs are removed.
+`sdk.Slugify` preserves the old slug.Make output. Consumer instructions:
+[AUDIT.md — AUDIT-002](AUDIT.md#audit-002-conversion-removal-and-pointer-package).
+Implementation: [plans/utility-package-cleanup.md](plans/utility-package-cleanup.md).
+No tag or dependency pin has changed; select a deliberate pre-v1 breaking SDK
+version when releasing this change.
+
+## Unreleased: SDK validation consolidation (2026-09-09)
+
+Breaking SDK update; no tag or dependency pin has been changed. Release this as
+a deliberate pre-v1 breaking SDK version. The standalone consumer migration
+instructions are in [AUDIT.md — AUDIT-001](AUDIT.md#audit-001-validation-consolidation),
+covering removed collectors, typed helper results, password-policy removal,
+Unicode length checks, optional fields, and pointer/null JSON decoding.
+Implementation record: [plans/validation-consolidation.md](plans/validation-consolidation.md).
+
 This repo is a multi-module workspace (`go.work`, dev-only) with thirty-seven
 modules today: `sdk`; `integrations/{cryptids/bcrypt, cryptids/golang-jwt, cryptids/google-uuid,
 datastores/pgxdb, datastores/turso, email/sendgrid, filestorage/gcs,
@@ -439,6 +885,7 @@ prefix, per the standard Go module convention for multi-module repos:
 
 ```
 sdk/v0.1.0
+pockets/v0.1.0
 integrations/datastores/turso/v0.1.0
 pockets/cms/v0.1.0
 pockets/cms/stores/turso/v0.1.0

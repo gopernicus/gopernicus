@@ -7,8 +7,8 @@ import (
 	"time"
 
 	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
-	auth "github.com/gopernicus/gopernicus/pockets/authentication"
-	"github.com/gopernicus/gopernicus/pockets/authentication/domain/challenge"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/challenge"
+	protection "github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/protection"
 	"github.com/gopernicus/gopernicus/sdk"
 )
 
@@ -29,7 +29,11 @@ type ChallengeStore struct {
 var _ challenge.Repository = (*ChallengeStore)(nil)
 
 // NewChallengeStore returns a ChallengeStore backed by db.
+// It panics if db is nil; the caller owns the database lifecycle.
 func NewChallengeStore(db *tursodb.DB) *ChallengeStore {
+	if db == nil {
+		panic("authentication turso: NewChallengeStore received a nil database")
+	}
 	return &ChallengeStore{db: db}
 }
 
@@ -121,6 +125,7 @@ func (s *ChallengeStore) ConsumeCode(ctx context.Context, userID, purpose string
 	err := s.db.InTx(ctx, func(tx *tursodb.Tx) error {
 		var (
 			id             string
+			ownerID        string
 			secretDigest   string
 			protectorKeyID sql.NullString
 			contextText    sql.NullString
@@ -128,9 +133,9 @@ func (s *ChallengeStore) ConsumeCode(ctx context.Context, userID, purpose string
 			expiresAt      tursodb.Time
 		)
 		selErr := tx.QueryRow(ctx,
-			`SELECT id, secret_digest, protector_key_id, context, attempt_count, expires_at
+			`SELECT id, user_id, secret_digest, protector_key_id, context, attempt_count, expires_at
 				FROM challenges WHERE subject_key = ? AND purpose = ?`, userID, purpose).
-			Scan(&id, &secretDigest, &protectorKeyID, &contextText, &attemptCount, &expiresAt)
+			Scan(&id, &ownerID, &secretDigest, &protectorKeyID, &contextText, &attemptCount, &expiresAt)
 		if selErr != nil {
 			if errors.Is(selErr, sql.ErrNoRows) {
 				outcome = challenge.OutcomeNotFound
@@ -150,7 +155,7 @@ func (s *ChallengeStore) ConsumeCode(ctx context.Context, userID, purpose string
 		keyID := protectorKeyID.String
 		matched := false
 		for _, cand := range candidates {
-			if cand.KeyID == keyID && auth.ConstantTimeDigestEqual(cand.Digest, secretDigest) {
+			if cand.KeyID == keyID && protection.ConstantTimeDigestEqual(cand.Digest, secretDigest) {
 				matched = true
 				break
 			}
@@ -177,7 +182,8 @@ func (s *ChallengeStore) ConsumeCode(ctx context.Context, userID, purpose string
 		}
 		consumed = challenge.Consumed{
 			ID:             id,
-			UserID:         userID,
+			UserID:         ownerID,
+			SubjectKey:     userID,
 			Purpose:        purpose,
 			Context:        bytesFrom(contextText),
 			ProtectorKeyID: keyID,

@@ -8,7 +8,7 @@ import (
 
 	"github.com/gopernicus/gopernicus/pockets/cms"
 	"github.com/gopernicus/gopernicus/pockets/cms/domain/menus"
-	"github.com/gopernicus/gopernicus/sdk/foundation/web"
+	"github.com/gopernicus/gopernicus/sdk/pkg/web"
 	uigoth "github.com/gopernicus/gopernicus/ui/goth"
 )
 
@@ -16,7 +16,7 @@ import (
 // backs the admin/forms pages the theme does not override).
 func newTheme(t *testing.T) Theme {
 	t.Helper()
-	bundle, err := uigoth.New(uigoth.Config{AssetBasePath: "/assets/goth"})
+	bundle, err := uigoth.New(uigoth.WithAssetBasePath("/assets/goth"))
 	if err != nil {
 		t.Fatalf("bundle: %v", err)
 	}

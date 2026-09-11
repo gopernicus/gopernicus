@@ -16,7 +16,7 @@ import (
 	"strings"
 	"testing"
 
-	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
+	"github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
 )
 
 // createTableRE extracts the table names the canonical migrations define, so a
@@ -104,7 +104,7 @@ func TestWithSchema(t *testing.T) {
 	}{
 		{"relationshipStore", func(cfg config) string { return newRelationshipStore(nil, cfg).table("iam_relationships") }},
 		{"roleStore", func(cfg config) string { return newRoleStore(nil, cfg).table("iam_roles") }},
-		{"mutationStore", func(cfg config) string { return newMutationStore(nil, cfg).table("iam_scopes") }},
+		{"mutationStore", func(cfg config) string { return newMutationStore(nil, cfg).table("iam_audit") }},
 	} {
 		bare := tc.table(zero)
 		if strings.ContainsAny(bare, `".`) {

@@ -4,11 +4,12 @@ import (
 	"context"
 	"time"
 
+	"github.com/gopernicus/gopernicus/sdk"
+
 	"github.com/jackc/pgx/v5"
 
 	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
 	"github.com/gopernicus/gopernicus/pockets/cms/domain/menus"
-	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
 )
 
 // MenuStore implements menus.MenuRepository over a PostgreSQL database.
@@ -83,7 +84,7 @@ func (s *MenuStore) CreateMenu(ctx context.Context, m menus.Menu) (menus.Menu, e
 		"created_at": m.CreatedAt.UTC(),
 		"updated_at": m.UpdatedAt.UTC(),
 	}
-	// Empty ID → the cryptids.Database strategy (amended D10): omit the id
+	// Empty ID → the sdk.DatabaseID strategy (amended D10): omit the id
 	// column so the schema default generates the key, read back with RETURNING.
 	if m.ID == "" {
 		q := `INSERT INTO ` + s.table(menusTable) + ` (name, slug, created_at, updated_at)
@@ -169,7 +170,7 @@ func (s *MenuStore) AddItem(ctx context.Context, it menus.MenuItem) (menus.MenuI
 		"created_at": it.CreatedAt.UTC(),
 		"updated_at": it.UpdatedAt.UTC(),
 	}
-	// Empty ID → the cryptids.Database strategy (amended D10): omit the id
+	// Empty ID → the sdk.DatabaseID strategy (amended D10): omit the id
 	// column so the schema default generates the key, read back with RETURNING.
 	if it.ID == "" {
 		q := `INSERT INTO ` + s.table(menuItemsTable) + ` (menu_id, label, url, parent_id, position, created_at, updated_at)
@@ -214,7 +215,7 @@ func (s *MenuStore) UpdateItem(ctx context.Context, id string, it menus.MenuItem
 		return menus.MenuItem{}, err
 	}
 	if n == 0 {
-		return menus.MenuItem{}, crud.ErrNotFound
+		return menus.MenuItem{}, sdk.ErrNotFound
 	}
 	return it, nil
 }

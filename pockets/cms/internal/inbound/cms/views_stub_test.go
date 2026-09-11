@@ -9,7 +9,7 @@ import (
 	"github.com/gopernicus/gopernicus/pockets/cms/domain/menus"
 	"github.com/gopernicus/gopernicus/pockets/cms/domain/messaging"
 	"github.com/gopernicus/gopernicus/pockets/cms/domain/taxonomy"
-	"github.com/gopernicus/gopernicus/sdk/foundation/web"
+	"github.com/gopernicus/gopernicus/sdk/pkg/web"
 )
 
 // stubViews is a package-local marker implementation of the Views port for the

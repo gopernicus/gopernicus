@@ -1,12 +1,14 @@
 package bcrypt_test
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
 	xbcrypt "golang.org/x/crypto/bcrypt"
 
 	"github.com/gopernicus/gopernicus/integrations/cryptids/bcrypt"
+	"github.com/gopernicus/gopernicus/sdk"
 )
 
 // testCost keeps hashing fast; production cost is higher.
@@ -103,11 +105,21 @@ func TestDefaultCost(t *testing.T) {
 
 func TestSeventyTwoByteBoundary(t *testing.T) {
 	h := bcrypt.New(bcrypt.WithCost(testCost))
-
-	if _, err := h.HashPassword(strings.Repeat("a", 72)); err != nil {
-		t.Fatalf("72-byte password should be accepted: %v", err)
-	}
-	if _, err := h.HashPassword(strings.Repeat("a", 73)); err == nil {
-		t.Fatal("73-byte password should be rejected")
+	for _, password := range []string{strings.Repeat("a", 72), strings.Repeat("😀", 18)} {
+		hash, err := h.HashPassword(password)
+		if err != nil {
+			t.Fatalf("72-byte password should be accepted: %v", err)
+		}
+		if err := h.VerifyPassword(hash, password); err != nil {
+			t.Fatalf("72-byte password should verify: %v", err)
+		}
+		for _, tooLong := range []string{password + "a", password + "😀"} {
+			if _, err := h.HashPassword(tooLong); !errors.Is(err, bcrypt.ErrPasswordTooLong) || !errors.Is(err, sdk.ErrInvalidInput) {
+				t.Errorf("HashPassword error = %v, want ErrPasswordTooLong and sdk.ErrInvalidInput", err)
+			}
+			if err := h.VerifyPassword(hash, tooLong); !errors.Is(err, bcrypt.ErrPasswordTooLong) || !errors.Is(err, sdk.ErrInvalidInput) {
+				t.Errorf("VerifyPassword error = %v, want ErrPasswordTooLong and sdk.ErrInvalidInput", err)
+			}
+		}
 	}
 }

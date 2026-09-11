@@ -4,7 +4,7 @@ The {{.Pocket}} pocket's PostgreSQL store adapter — its own module, so a host
 that brings a different datastore never pulls pgx into its graph. The dialect
 sibling of `{{.Pocket}}/stores/turso`: same surface, same migration version set.
 
-- `Repositories(db)` returns a `{{.Pocket}}.Repositories` after probing the
+- `Repositories(ctx, db)` returns a `{{.Pocket}}.Repositories` after probing the
   `{{.Agg}}` table (boot-time; errors if the `{{.Source}}` migration source was
   not applied).
 - `ExportMigrations(dst)` copies the canonical SQL into a host's migration dir

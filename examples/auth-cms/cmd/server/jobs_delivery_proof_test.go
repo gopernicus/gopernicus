@@ -13,19 +13,20 @@ import (
 
 	"github.com/gopernicus/gopernicus/examples/auth-cms/internal/authjobs"
 	"github.com/gopernicus/gopernicus/examples/auth-cms/internal/authmem"
+	"github.com/gopernicus/gopernicus/pockets"
 	auth "github.com/gopernicus/gopernicus/pockets/authentication"
+	delivery "github.com/gopernicus/gopernicus/pockets/authentication/logic/delivery"
 	"github.com/gopernicus/gopernicus/pockets/jobs"
-	"github.com/gopernicus/gopernicus/pockets/jobs/domain/job"
-	jobsmem "github.com/gopernicus/gopernicus/pockets/jobs/memstore"
-	"github.com/gopernicus/gopernicus/sdk/capabilities/email"
+	job "github.com/gopernicus/gopernicus/pockets/jobs/logic/queue"
+	jobsmem "github.com/gopernicus/gopernicus/pockets/jobs/stores/memory"
 	sdkevents "github.com/gopernicus/gopernicus/sdk/capabilities/events"
-	"github.com/gopernicus/gopernicus/sdk/foundation/cryptids"
-	"github.com/gopernicus/gopernicus/sdk/foundation/web"
-	"github.com/gopernicus/gopernicus/sdk/pocket"
+	"github.com/gopernicus/gopernicus/sdk/capabilities/notify/email"
+	"github.com/gopernicus/gopernicus/sdk/pkg/cryptids"
+	"github.com/gopernicus/gopernicus/sdk/pkg/web"
 )
 
 // This file proves the AV3D-3.2 durable-jobs-mode security properties end to end on
-// the host's real composition (auth.Service -> authjobs.Dispatcher -> generic jobs
+// the host's real composition (authentication.Service -> authjobs.Dispatcher -> generic jobs
 // fenced queue -> jobs.FencedRuntime -> auth delivery processor), against an
 // inspectable in-memory fenced queue (live pgx/turso are AV3D-3.5; env DSNs unset):
 //
@@ -238,16 +239,16 @@ func (q *inspectingQueue) Complete(ctx context.Context, id, leaseID string, now 
 // booted is one modeled boot of the jobs-mode delivery composition over a shared,
 // durable store and auth repositories.
 type booted struct {
-	svc     *auth.Service
-	runtime *jobs.FencedRuntime
+	svc     *auth.Components
+	runtime *job.FencedRuntime
 	enc     cryptids.Encrypter
 	// jobs is the generic jobs Service the composition dispatcher submits/replaces
 	// through — exposed so an adversarial test can drive the exact dispatcher -> jobs
 	// Replace path (AV3D-3.3).
-	jobs *jobs.Service
+	jobs *jobs.Components
 	// rt is the auth delivery job runtime seam, exposed so a proof can drive the
 	// host-owned purge-observe hook (authjobs.PurgeTerminal) (AV3D-3.4).
-	rt auth.DeliveryJobRuntime
+	rt delivery.JobRuntime
 }
 
 // bootDelivery builds the jobs Service, dispatcher, auth Service, and FencedRuntime
@@ -255,16 +256,16 @@ type booted struct {
 // wires. Rebuilding it over the same store models a process restart with the DB
 // intact. sender overrides the mailer so a test can observe (or fail) the send; nil
 // keeps the console default. The runtime is tuned for fast, deterministic tests.
-func bootDelivery(t *testing.T, authRepos auth.Repositories, store job.FencedQueueRepository, sender email.Sender, tune ...func(*jobs.FencedRuntimeConfig)) booted {
+func bootDelivery(t *testing.T, authRepos auth.Repositories, store job.FencedQueueRepository, sender email.Sender, tune ...func(*deliveryRuntimeTestConfig)) booted {
 	return bootDeliveryEmit(t, authRepos, store, sender, nil, tune...)
 }
 
 // bootDeliveryEmit is bootDelivery with an optional delivery lifecycle events emitter
 // wired onto the auth config (AV3D-3.4). A nil emitter is the no-observation path
 // bootDelivery uses; a non-nil emitter drives the jobs-mode observer.
-func bootDeliveryEmit(t *testing.T, authRepos auth.Repositories, store job.FencedQueueRepository, sender email.Sender, emitter sdkevents.Emitter, tune ...func(*jobs.FencedRuntimeConfig)) booted {
+func bootDeliveryEmit(t *testing.T, authRepos auth.Repositories, store job.FencedQueueRepository, sender email.Sender, emitter sdkevents.Emitter, tune ...func(*deliveryRuntimeTestConfig)) booted {
 	t.Helper()
-	deliveryJobs, err := jobs.NewService(jobs.Repositories{FencedQueue: store}, jobs.Config{Logger: quietLog()})
+	deliveryJobs, err := jobs.New(jobs.Repositories{FencedQueue: store})
 	if err != nil {
 		t.Fatalf("jobs.NewService: %v", err)
 	}
@@ -277,23 +278,22 @@ func bootDeliveryEmit(t *testing.T, authRepos auth.Repositories, store job.Fence
 	}
 	// The jobs-mode composition is the subject here: pin the mode rather than inherit
 	// whatever AUTH_DELIVERY_MODE says, now that the seam reads it.
-	cfg.DeliveryMode = auth.DeliveryModeJobs
-	cfg.DeliveryDispatcher = authjobs.NewDispatcher(deliveryJobs)
+	cfg.DeliveryMode = delivery.ModeJobs
+	cfg.DeliveryDispatcher = authjobs.NewDispatcher(deliveryJobs.Queue)
 	if emitter != nil {
 		cfg.DeliveryEventsEmitter = emitter
 	}
 
-	svc, err := auth.NewService(authRepos, cfg)
+	svc, err := auth.New(authRepos, cfg.TokenSigner, cfg.RuntimeMode, cfg.DeliveryMode, cfg.options()...)
 	if err != nil {
 		t.Fatalf("auth.NewService: %v", err)
 	}
-	rt, ok := svc.DeliveryJobRuntime()
+	rt, ok := svc.Delivery.JobRuntime()
 	if !ok {
 		t.Fatal("DeliveryJobRuntime unavailable in jobs mode with a wired dispatcher")
 	}
-	opts := []func(*jobs.FencedRuntimeConfig){
-		func(c *jobs.FencedRuntimeConfig) {
-			c.Logger = quietLog()
+	opts := []func(*deliveryRuntimeTestConfig){
+		func(c *deliveryRuntimeTestConfig) {
 			c.PollInterval = 10 * time.Millisecond
 			c.IdleInterval = 10 * time.Millisecond
 			// A short lease so a dropped/left-reclaimable job becomes claimable again
@@ -308,14 +308,14 @@ func bootDeliveryEmit(t *testing.T, authRepos auth.Repositories, store job.Fence
 	// tune overrides the defaults last, so an adversarial test can widen the lease
 	// past its orchestration window without touching the restart proofs.
 	opts = append(opts, tune...)
-	runtime, err := jobs.NewFencedRuntime(deliveryJobs, authjobs.FencedRuntimeConfig(rt, opts...))
+	runtime, err := runtimeFromDeliveryConfig(deliveryJobs.Queue, rt, opts...)
 	if err != nil {
 		t.Fatalf("jobs.NewFencedRuntime: %v", err)
 	}
 	return booted{svc: svc, runtime: runtime, enc: cfg.DeliveryEncrypter, jobs: deliveryJobs, rt: rt}
 }
 
-func runRuntime(rt *jobs.FencedRuntime) (context.CancelFunc, chan error) {
+func runRuntime(rt *job.FencedRuntime) (context.CancelFunc, chan error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- rt.Run(ctx) }()
@@ -439,11 +439,11 @@ func countOpaque(q *inspectingQueue, enc cryptids.Encrypter) int {
 // proof covers the passwordless opaque admission alongside forgot-password. It asserts
 // the start did not error at the server; the real assertion is that a new opaque
 // payload was persisted (checked by the caller).
-func drivePasswordlessStart(t *testing.T, svc *auth.Service, identifier string) {
+func drivePasswordlessStart(t *testing.T, svc *auth.Components, identifier string) {
 	t.Helper()
-	router := web.NewWebHandler(web.WithLogging(quietLog()))
+	router := web.NewWebHandler()
 	bus := sdkevents.NewMemory(sdkevents.WithLogger(quietLog()))
-	if err := svc.Register(pocket.Mount{Router: router, Logger: quietLog(), Events: bus}); err != nil {
+	if err := svc.HTTP.Register(pockets.Mount{Router: router, Logger: quietLog(), Events: bus}); err != nil {
 		t.Fatalf("auth.Register: %v", err)
 	}
 	body := `{"identifier_kind":"email","identifier":"` + identifier + `"}`
@@ -477,17 +477,17 @@ func TestJobsModeSealsEveryPersistedPayload(t *testing.T) {
 	ctx := context.Background()
 	const addr = "seal-recipient@example.com"
 
-	if _, err := b.svc.RegisterUser(ctx, addr, "correct-horse-battery-staple", "Seal User"); err != nil {
+	if _, err := b.svc.Authentication.Register(ctx, addr, "correct-horse-battery-staple", "Seal User"); err != nil {
 		t.Fatalf("RegisterUser: %v", err)
 	}
 	code, ok := renderedSecretFor(store, b.enc, addr)
 	if !ok {
 		t.Fatal("no rendered verification payload found for the registered address")
 	}
-	if err := b.svc.Verify(ctx, addr, code); err != nil {
+	if err := b.svc.Authentication.Verify(ctx, addr, code); err != nil {
 		t.Fatalf("Verify (needed so forgot-password resolves and renders): %v", err)
 	}
-	if err := b.svc.ForgotPassword(ctx, addr); err != nil {
+	if err := b.svc.Authentication.ForgotPassword(ctx, addr); err != nil {
 		t.Fatalf("ForgotPassword: %v", err)
 	}
 
@@ -593,7 +593,7 @@ func admitVerifiedForgotPassword(t *testing.T, store *inspectingQueue, authRepos
 	ctx := context.Background()
 	drain := &captureSender{}
 	admit := bootDelivery(t, authRepos, store, drain)
-	if _, err := admit.svc.RegisterUser(ctx, addr, "correct-horse-battery-staple", "Restart User"); err != nil {
+	if _, err := admit.svc.Authentication.Register(ctx, addr, "correct-horse-battery-staple", "Restart User"); err != nil {
 		t.Fatalf("RegisterUser: %v", err)
 	}
 	// Drain the verification job so only the forgot-password job is pending at restart.
@@ -605,10 +605,10 @@ func admitVerifiedForgotPassword(t *testing.T, store *inspectingQueue, authRepos
 	if !ok {
 		t.Fatal("no rendered verification payload for the registered address")
 	}
-	if err := admit.svc.Verify(ctx, addr, code); err != nil {
+	if err := admit.svc.Authentication.Verify(ctx, addr, code); err != nil {
 		t.Fatalf("Verify (needed so forgot-password resolves and renders): %v", err)
 	}
-	if err := admit.svc.ForgotPassword(ctx, addr); err != nil {
+	if err := admit.svc.Authentication.ForgotPassword(ctx, addr); err != nil {
 		t.Fatalf("ForgotPassword: %v", err)
 	}
 	fid, ok := opaqueEnqueueID(store, admit.enc, addr)

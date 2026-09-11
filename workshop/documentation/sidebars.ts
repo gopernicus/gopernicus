@@ -40,7 +40,7 @@ const sidebars: SidebarsConfig = {
       label: 'SDK',
       link: {type: 'doc', id: 'sdk/overview'},
       items: [
-        'sdk/foundation',
+        'sdk/pkg',
         'sdk/capabilities',
         'sdk/web',
       ],

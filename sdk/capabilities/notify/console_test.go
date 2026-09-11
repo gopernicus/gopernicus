@@ -6,26 +6,17 @@ import (
 	"encoding/json"
 	"log/slog"
 	"testing"
-
-	"github.com/gopernicus/gopernicus/sdk/foundation/identity"
 )
 
-func TestConsole_Kind(t *testing.T) {
-	c := NewConsole(identity.KindPhone, slog.Default())
-	if got := c.Kind(); got != identity.KindPhone {
-		t.Errorf("Kind() = %q, want %q", got, identity.KindPhone)
-	}
-}
-
-func TestConsole_Notify_LogsKindAddressSubjectBody(t *testing.T) {
+func TestConsole_SendLogsAddressBody(t *testing.T) {
 	var buf bytes.Buffer
 	log := slog.New(slog.NewJSONHandler(&buf, nil))
-	c := NewConsole(identity.KindPhone, log)
+	c := NewConsole(log)
 
-	to := identity.Address{Kind: identity.KindPhone, Value: "+15551234567"}
-	msg := Message{Subject: "Your code", Body: "123456"}
-	if err := c.Notify(context.Background(), to, msg); err != nil {
-		t.Fatalf("Notify() error = %v", err)
+	to := "+15551234567"
+	body := "123456"
+	if err := c.Send(context.Background(), to, body); err != nil {
+		t.Fatalf("Send() error = %v", err)
 	}
 
 	// A non-empty buffer proves the logger we passed is the one used.
@@ -33,17 +24,11 @@ func TestConsole_Notify_LogsKindAddressSubjectBody(t *testing.T) {
 	if err := json.Unmarshal(buf.Bytes(), &entry); err != nil {
 		t.Fatalf("log output is not valid JSON: %v (raw: %s)", err, buf.String())
 	}
-	if entry["kind"] != identity.KindPhone {
-		t.Errorf("logged kind = %v, want %q", entry["kind"], identity.KindPhone)
+	if entry["to"] != to {
+		t.Errorf("logged to = %v, want %q", entry["to"], to)
 	}
-	if entry["to"] != to.Value {
-		t.Errorf("logged to = %v, want %q", entry["to"], to.Value)
-	}
-	if entry["subject"] != msg.Subject {
-		t.Errorf("logged subject = %v, want %q", entry["subject"], msg.Subject)
-	}
-	if entry["body"] != msg.Body {
-		t.Errorf("logged body = %v, want %q", entry["body"], msg.Body)
+	if entry["body"] != body {
+		t.Errorf("logged body = %v, want %q", entry["body"], body)
 	}
 }
 
@@ -56,10 +41,10 @@ func TestConsole_NilLogger_UsesSlogDefault(t *testing.T) {
 	defer slog.SetDefault(orig)
 	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, nil)))
 
-	c := NewConsole(identity.KindEmail, nil)
-	to := identity.Address{Kind: identity.KindEmail, Value: "a@example.com"}
-	if err := c.Notify(context.Background(), to, Message{Subject: "s", Body: "b"}); err != nil {
-		t.Fatalf("Notify() error = %v", err)
+	c := NewConsole(nil)
+	to := "a@example.com"
+	if err := c.Send(context.Background(), to, "b"); err != nil {
+		t.Fatalf("Send() error = %v", err)
 	}
 	if buf.Len() == 0 {
 		t.Fatal("nil logger should fall back to slog.Default(); got no output")

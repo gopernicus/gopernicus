@@ -10,18 +10,45 @@ surface (`Querier`, `Scanner`, `ExecAffecting`, the timestamp helpers, and
 It owns "how to talk to libSQL," never any pocket's SQL. App/pocket
 repositories consume this package's `*DB`.
 
+`Open(ctx, cfg)` uses the host's startup context for the driver ping and optional
+eager connectivity checks and retry waits. `ConnectTimeout` adds an upper bound
+(10 seconds when omitted); the earlier deadline wins. Cancellation before opening
+prevents I/O, and startup failures close the owned database. After a successful
+return, canceling the startup context does not close the database; the host calls
+`DB.Close` when done. The pinned driver's WebSocket connection handshake does not
+accept cancellation; use HTTP/libSQL URLs when startup cancellation is required.
+
+`Config.AuthToken` overrides credentials supplied in the URL (`authToken`,
+`auth_token` or `jwt`) and is URL-encoded before reaching the driver. URL-only
+credentials still work. Malformed query strings and URL fragments are rejected;
+`RedactDSN` and `Config.Redacted` mask every supported credential alias and fully
+redact malformed input.
+
+Migration streams are flat: `RunMigrations` reads direct `.sql` files in lexical
+filename order, skipping directories and names beginning with `_`.
+`ExportMigrations` copies direct `.sql` files, including underscore-prefixed SQL
+for the host to manage, and skips documentation and nested directories.
+
+## Single-row statement completion
+
+`QueryOne` closes its result before returning a successful row. SQLite may yield
+an `UPDATE ... RETURNING` row before the implicit transaction commits; a busy
+failure while closing now returns an error and a zero result. Store-owned busy
+retry can then retry the statement without exposing an uncommitted job claim.
+An explicit transaction still commits through its transaction owner.
+
 ## The list helper — `List[T]`, the pgxdb semantic twin
 
-`List[T]`/`ListQuery[T]` implement the `sdk/foundation/crud` list standards — ordering
+`List[T]`/`ListQuery[T]` implement the `sdk/pkg/list` list standards — ordering
 against a per-aggregate allow-list, bidirectional keyset cursors (reverse-probe
 prev pages), and opt-in `COUNT(*)` totals — with observable semantics identical
 to `pgxdb.List`. Like the pgxdb twin it switches on the request's **resolved
-strategy** (`crud.StrategyCursor` / `crud.StrategyOffset`, explicit — never
+strategy** (`list.StrategyCursor` / `list.StrategyOffset`, explicit — never
 inferred from the offset value) into a `listCursor` or `listOffset` flow; the
 offset flow appends `LIMIT/OFFSET`, derives HasMore from its own over-fetch, and
 emits no cursors. Like the pgxdb twin, `ListQuery[T]` carries an optional
-`Limits` (`crud.Limits` — the resource's page-size default/max, passed to
-`req.NormalizedLimit`; the zero value keeps `crud`'s `DefaultLimit`/`MaxLimit`).
+`Limits` (`list.Limits` — the resource's page-size default/max, passed to
+`req.NormalizedLimit`; the zero value keeps `list`'s `DefaultLimit`/`MaxLimit`).
 The per-pocket `storetest` conformance suites are the parity proof.
 
 The twin is *semantic*, deliberately not idiomatic: it binds `?` placeholders
@@ -81,3 +108,34 @@ behavior tests run against in-memory SQLite through the real driver.
 Live conformance runs are per-pocket (the `stores/turso` modules), gated on
 `-tags=integration` + `TURSO_DATABASE_URL`/`TURSO_AUTH_TOKEN`, and only ever
 against the authorized playground database. Unset, they skip loudly.
+
+## Listing projection and transaction cleanup
+
+All List paths order the projected output of the authored SELECT. Search and
+cursor helpers wrap that SELECT before adding their outer predicate. Run them before final ordering or pagination. Project every
+search/order/PK field using an unqualified output name: select
+`t.created_at AS created_at` and use `Column: "created_at"`. Update strict row
+scanners for added projections. `OrderValueOf` must return the projected value
+and type. Authored filters, including OR and nested SELECTs, remain intact.
+
+SQL keyset ordering requires non-null order and PK values throughout the matched
+population. Use a non-null projected key or offset mode for nullable ordering.
+A SQL cursor with a null order value, or a non-string case-folded value, is
+invalid input. Other type compatibility belongs to `OrderValueOf` and the
+projected column; the generic helper does not inspect the database schema.
+
+Reverse probes include the incoming cursor and fetch `limit+1` records before
+restoring normal order for `list.MarkPrevPage`. This fixes previous links at a
+page size of one. Case-folded ordering retains the raw primary-key tiebreaker.
+
+`DB.Transact` implements `capabilities/transaction.Transactor` and shares cleanup
+with `InTx`. Pass its callback context to participating repositories backed by
+the same DB instance. Commit uses the Begin context. Rollback receives an
+independent five-second deadline; actual completion depends on the driver.
+Callback error causes and panic values survive cleanup. SQL helpers do not
+retry callbacks; portable consumers must allow for connectors that do.
+Cancellation racing a commit cannot undo a commit already accepted by a server.
+
+A failed manual COMMIT is rolled back before its connection is released. Failed
+rollback or uncertain BEGIN disposes of the physical connection. Empty offset
+pages now serialize `items: []`, matching cursor pages.

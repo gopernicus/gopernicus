@@ -7,9 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	auth "github.com/gopernicus/gopernicus/pockets/authentication"
-	authorization "github.com/gopernicus/gopernicus/pockets/authorization"
-	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
+	mutations "github.com/gopernicus/gopernicus/pockets/authorization/logic/mutations"
+	listing "github.com/gopernicus/gopernicus/sdk/pkg/list"
 )
 
 // crud-search-upstream T4 — the search capability end to end over real HTTP.
@@ -32,12 +31,12 @@ var apiKeySearchNames = []string{
 
 // machineHost is newLinkHost's composition plus the authorization engine whose
 // platform-admin gate the machine-identity lifecycle routes run behind. The host's
-// run() sets auth.Config.MachineRoutesGate from the same coordinate
+// run() sets authenticationConfig.MachineRoutesGate from the same coordinate
 // (platform/admin on platform:main, declared in authzSchema); with the gate unset the
 // five routes are not mounted at all, so every test below would 404.
 type machineHost struct {
 	*linkHost
-	system *authorization.SystemMutator
+	system *mutations.SystemMutator
 }
 
 // newMachineHost boots the in_process host with the REAL platform-admin gate on the
@@ -46,14 +45,14 @@ type machineHost struct {
 func newMachineHost(t *testing.T) *machineHost {
 	t.Helper()
 
-	components, err := newAuthorization(nil)
+	components, err := newAuthorization(nil, nil)
 	if err != nil {
 		t.Fatalf("newAuthorization: %v", err)
 	}
-	gate := components.Service.RequirePermissionFixed(platformResourceType, "admin", platformResourceID)
+	gate := components.HTTP.RequirePermissionFixed(platformResourceType, "admin", platformResourceID)
 
 	return &machineHost{
-		linkHost: newLinkHostTuned(t, func(cfg *auth.Config) { cfg.MachineRoutesGate = gate }),
+		linkHost: newLinkHostTuned(t, func(cfg *authenticationConfig) { cfg.MachineRoutesGate = gate }),
 		system:   components.SystemMutator,
 	}
 }
@@ -103,7 +102,7 @@ type apiKeyListResponse struct {
 }
 
 // TestAPIKeySearchThroughHTTP mints keys through the real endpoint, then searches
-// them with `?q=` and compares each result set against crud.MatchesSearch — the
+// them with `?q=` and compares each result set against listing.MatchesSearch — the
 // SAME oracle the store-conformance suite and both SQL dialects are pinned to.
 func TestAPIKeySearchThroughHTTP(t *testing.T) {
 	host := newMachineHost(t)
@@ -169,7 +168,7 @@ func TestAPIKeySearchThroughHTTP(t *testing.T) {
 
 			var want []string
 			for _, name := range apiKeySearchNames {
-				if crud.MatchesSearch(name, term) {
+				if listing.MatchesSearch(name, term) {
 					want = append(want, name)
 				}
 			}
@@ -179,7 +178,7 @@ func TestAPIKeySearchThroughHTTP(t *testing.T) {
 				gotNames = append(gotNames, k.Name)
 			}
 			if len(gotNames) != len(want) {
-				t.Fatalf("q=%q returned %v, want %v (the crud.MatchesSearch oracle)", term, gotNames, want)
+				t.Fatalf("q=%q returned %v, want %v (the listing.MatchesSearch oracle)", term, gotNames, want)
 			}
 			set := map[string]bool{}
 			for _, n := range gotNames {
@@ -230,7 +229,7 @@ func TestAPIKeySearchCountReflectsTheTerm(t *testing.T) {
 
 	want := 0
 	for _, name := range apiKeySearchNames {
-		if crud.MatchesSearch(name, "deploy") {
+		if listing.MatchesSearch(name, "deploy") {
 			want++
 		}
 	}

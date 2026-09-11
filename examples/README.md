@@ -166,7 +166,7 @@ every package under `internal/logic/compositions/<name>`, walked recursively:
    one-domain composition is thin sequencing that belongs in a handler. The
    doc says which; the guard holds the floor.
 5. **No transaction handle.** No field, parameter, or result typed
-   `Transactor` (`sdk/foundation/crud`) or `Tx`. A composition owns the
+   `Transactor` (`sdk/pkg/list`) or `Tx`. A composition owns the
    cross-domain workflow, its invariant, and its sequencing — never a
    repository port, a storage import, or a transaction handle. A workflow
    that needs an atomic write across two domains is the signal those
@@ -188,7 +188,7 @@ watch for it.
 ### H9 — hygiene
 
 `.Underlying()` is called nowhere except under `internal/integrations/` and
-`workshop/`, and `RowToStructByNameLax` appears nowhere: the `crud.Transactor`
+`workshop/`, and `RowToStructByNameLax` appears nowhere: the `transaction.Transactor`
 seam is the only route to a raw pool, and struct scanning is strict. Both are
 checked on the AST (a `CallExpr` whose selector is `Underlying`; the
 identifier `RowToStructByNameLax`), so comments and split-token tricks are
@@ -256,13 +256,13 @@ internal/inbound/
 - **The maximal flatten** (a gopernicus-side clarification of the Segovia
   text): a single-resource, single-transport domain with a small handler
   set may keep its handlers in `routes.go` itself —
-  `pockets/events/internal/inbound/events/routes.go` is the blessed
+  `pockets/events/inbound/http/adapter.go` is the blessed
   example. The never-split rule constrains the route *table*, not the
   co-residence of a few handlers.
 - **Pockets mirror the file anatomy, not the tree** (D1, ratified
   2026-07-08). A pocket is its one domain, so the `domains/` level
-  flattens to `internal/inbound/<pocket>/`
-  (`pockets/cms/internal/inbound/cms/`), carrying the same file anatomy
+  flattens to public `inbound/http/` in the audited framework pockets. CMS
+  retains `internal/inbound/cms/` until its deferred audit. The adapter carries the same file anatomy
   with a `Mount` dispatcher in `routes.go` and per-resource
   deny-by-absence `mountX` helpers living in their resource files. `middleware/`
   keeps one meaning on both sides of the line — plumbing — and a pocket
@@ -305,7 +305,8 @@ administration; `outbound` is the framework's pgx stores placed in the host's
 **The test — host pocket, app-local domain, or both:**
 
 - The package imports a framework pocket's public rim
-  (`github.com/gopernicus/gopernicus/pockets/<p>`, `.../pockets/<p>/domain/...`)
+  (`github.com/gopernicus/gopernicus/pockets/<p>`, `.../pockets/<p>/logic/...`,
+  or its public `inbound/http`; CMS retains its earlier domain paths)
   and owns **no aggregate of its own** — its durable state is the pocket's, or
   sibling tables keyed to the pocket's records and owned by the host pocket's
   outbound → **host pocket**.
@@ -332,11 +333,11 @@ subset, and never an empty directory.
 - `<host-module>/pockets/<n>/logic` imports only the standard library,
   `sdk/...`, framework pocket CORES
   (`github.com/gopernicus/gopernicus/pockets/<p>`,
-  `.../pockets/<p>/domain/...`; a framework pocket's public `memstore/` and
-  `storetest/` from `_test.go` ONLY — the reference's
-  `pockets/auth/logic/model_test.go` imports `authorization/memstore` to test
-  the model against the real engine, and that is sanctioned), and its own
-  `<host-module>/pockets/<n>/logic/...`. Never `internal/*`, never framework
+  `.../pockets/<p>/logic/...`; CMS retains its domain paths) and its own
+  `<host-module>/pockets/<n>/logic/...`. A framework pocket's
+  `stores/memory` and `stores/storetest` are allowed from `_test.go` only — the
+  reference's `pockets/auth/logic/model_test.go` imports authorization memory to test
+  the model against the real engine, and that is sanctioned. Never `internal/*`, never framework
   `pockets/*/{stores,views}/*` from production code, never `integrations/*`,
   never another host pocket.
 - `<host-module>/pockets/<n>/inbound` and `<host-module>/pockets/<n>/outbound`
@@ -450,6 +451,16 @@ adopts them by bumping its pin — `go get -tool github.com/gopernicus/gopernicu
 | `examples/auth-cms` | the **authentication conformance harness**, not a layout reference |
 | `examples/goth-showcase` | the `ui/goth` kit showcase, not a layout reference |
 
+`examples/minimal` also demonstrates application-data caching at
+`GET /catalog.json`: a host service caches a public product projection from CMS
+for 30 seconds, with an explicit namespace, bounded Memory and a host error hook.
+Run `go run ./cmd/server` from that module, then request
+`http://localhost:8081/catalog.json`. Swap its data store for `cacher.Noop{}` to
+exercise source loading without caching. Data freshness is TTL-based unless the
+host invalidates the logical `published:` prefix after a write; the runnable
+HTTP proof covers that invalidation and never includes draft products. The JSON
+route sets HTTP no-store independently of the service's data cache.
+
 The first three run under this repo's own `make guard` once the guard verb
 ships; `auth-cms` and `goth-showcase` carry named, dated exemptions.
 
@@ -466,3 +477,14 @@ grows several ad-hoc packages directly under `internal/` that H0 makes
 findings. That is a known, dated debt with a named follow-up plan, not a
 pattern to copy: the shape to copy is §2, and the worked examples are `cms`,
 `minimal`, and `jobs-minimal`.
+
+## Rate-limit policy example
+
+The minimal host includes a runnable domain example at
+[`ratelimit_example_test.go`](minimal/internal/logic/domains/catalog/ratelimit_example_test.go).
+It resolves host-owned account budgets before calling the SDK's Allower port,
+propagates lookup failures without consuming quota, and uses the same resolved
+policy with Acquire for worker work. Run it from `examples/minimal` with
+`go test ./internal/logic/domains/catalog -run 'Example_hostRateLimitPolicy|TestPolicyFailure' -v`.
+The example has no account-schema or tier policy in the SDK and adds no route to
+the running CMS host.

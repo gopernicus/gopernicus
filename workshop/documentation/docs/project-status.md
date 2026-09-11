@@ -9,8 +9,8 @@ Gopernicus is an open-source, actively developed multi-module repository release
 
 ## Available today
 
-- stdlib-only layered SDK: kernel, foundation, capabilities, and pocket mount;
-- web server/router helpers, middleware, JSON and HTML responses, SSE, static files, streaming, and OpenAPI construction;
+- stdlib-only layered SDK: kernel, pkg, capabilities, and pocket mount;
+- web server/router helpers, middleware, JSON and HTML responses, SSE, static files, and server lifecycle;
 - reusable capabilities for cache, email, events, file storage, notification, OAuth, rate limiting, tracing, and work submission;
 - authentication, authorization, CMS, events, and jobs pocket cores;
 - PostgreSQL and Turso store modules for every shipped durable pocket;

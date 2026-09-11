@@ -7,17 +7,14 @@ SQL and the canonical migration files; the host owns its database lifecycle.
 
 It fills the events pocket's one outbound port, `outbox.EntryRepository`, over
 the `integrations/datastores/pgxdb` connector — `TIMESTAMPTZ` timestamps (postgres
-orders them natively; no lexicographic-`TEXT` convention needed), `JSON` payload,
+orders them natively; no lexicographic-`TEXT` convention needed), `BYTEA` payload,
 `event_id` as the primary key and the at-least-once de-dupe key (a duplicate
-append surfaces as `errs.ErrAlreadyExists`). Representation changes vs turso;
+append surfaces as `sdk.ErrAlreadyExists`). Representation changes vs turso;
 structure and port semantics do not.
 
-**`payload` is `JSON`, not `JSONB`.** The payload is opaque to this store (no jsonb
-operators or indexes), and `JSON` preserves the caller's exact bytes while `JSONB`
-re-canonicalizes whitespace/key order. The shared `storetest` suite asserts a
-byte-exact payload round-trip, which only `JSON` satisfies — same decision and
-rationale as `pockets/jobs/stores/pgx` (jobs-v1 precedent), and a deliberate
-deviation from the design's illustrative `JSONB`.
+Payloads are opaque bytes, including empty input, binary data and non-JSON text.
+The store validates every record's identity/type before insertion and preserves
+the entire batch atomically.
 
 ## ⚠️ Prerequisite: apply the `events` migration source before wiring an appender
 
@@ -30,8 +27,28 @@ migrations but not this store's would fail at *runtime*, not boot.
 at construction (`pgxdb.ProbeTable`, qualified by the store's schema) and returns
 `sdk.ErrNotFound` if the `events` source has not been applied — the failure
 surfaces at wiring time, before the host serves traffic (design §5 mitigation b).
+`New` also rejects a payload column other than `bytea` with `sdk.ErrInvalidInput`.
 Scaffold this store's migrations with `ExportMigrations` and apply them with your
 host's runner pre-boot, alongside every other pocket source you wire.
+
+## Upgrade from JSON payload storage
+
+Export and apply `0002_event_outbox_payload_bytes.sql` before starting the new
+writer. Keep `0001` unchanged in existing host ledgers. Stop old writers for the
+migration: their JSON casts cannot write the new bytea column. Named-schema hosts
+must apply both migrations to the same schema configured on the store.
+
+The migration copies historical JSON text to UTF-8 bytes, preserving whitespace
+and key ordering from the original JSON column. It cannot recover original empty
+payloads that older code changed to `{}`, or formatting already normalized by a
+host's custom JSONB column. A rollback requires host-owned data conversion and is
+possible only when every retained new payload meets the old JSON contract.
+
+`Append` always opens its own transaction; it does not join an ambient transaction
+from context. `AppendTx` uses the supplied transaction for atomic domain/outbox
+writes. Invalid identity/type rejects the whole batch before any insert. Existing
+malformed records may block the poller and require operator repair or quarantine;
+the framework never acknowledges them automatically.
 
 ## Surface
 
@@ -76,7 +93,7 @@ if err != nil { /* fail boot */ }
 // Migrate the "events" stream into the schema — its own call, its own ledger.
 err = pgxdb.RunMigrations(ctx, db, migrationsFS, "migrations/events", pgxdb.WithSchema(schema))
 
-store, err := pgx.New(db, pgx.WithSchema(schema))
+store, err := pgx.New(ctx, db, pgx.WithSchema(schema))
 ```
 
 `WithSchema` never panics: the name is validated by `pgxdb.NewSchema` at the host,
@@ -96,10 +113,11 @@ not partition the lock space.
 
 ## Migrations
 
-`migrations/0001_event_outbox.sql` (source `events`) is the canonical schema. The
-turso sibling carries the **identical filename set** — same filename == same
-logical schema step; content is per-dialect. After export, the host owns the final
-migration stream in its own dir.
+`migrations/0001_event_outbox.sql` creates the historical schema;
+`0002_event_outbox_payload_bytes.sql` upgrades payloads to bytea. Apply both under
+source `events`. Turso carries the same version set; its 0002 is an explicit
+no-op because SQLite already supports byte payloads in the existing column. After
+export, the host owns the final migration stream in its own dir.
 
 ## Testing
 

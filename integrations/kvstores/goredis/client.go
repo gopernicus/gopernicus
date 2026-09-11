@@ -9,6 +9,7 @@ import (
 
 	"github.com/redis/go-redis/v9"
 
+	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/tracing"
 )
 
@@ -25,9 +26,9 @@ const (
 )
 
 // Config holds the go-redis connection settings for Open. Its `env:` tags let a
-// host populate it with sdk/foundation/environment.ParseEnvTags (keys are already namespaced by
+// host populate it with sdk/pkg/environment.ParseEnvTags (keys are already namespaced by
 // component: REDIS_ADDR, REDIS_PASSWORD, ...; the host passes its own app
-// namespace, exactly as bus.go's Options carries EVENT_BUS_* keys). Populating
+// namespace). Populating
 // from the environment is a convenience, not an import edge — a zero Config is
 // filled with the documented defaults by Open, so struct-literal construction
 // and bring-your-own-client both stay first-class.
@@ -51,19 +52,29 @@ type ClientOption func(*clientOptions)
 // clientOptions collects the hooks an Open call installs.
 type clientOptions struct {
 	hooks []redis.Hook
+	err   error
 }
 
 // WithLogging installs a LoggingHook so command errors are logged always and,
 // when a slow threshold is configured, commands slower than it. A nil logger
-// falls back to slog.Default().
+// falls back to slog.Default(). Repeated calls add hooks in order. The supplied
+// LoggingOption slice is copied for reuse; log remains a borrowed dependency.
 func WithLogging(log *slog.Logger, opts ...LoggingOption) ClientOption {
+	snapshot := append([]LoggingOption(nil), opts...)
 	return func(o *clientOptions) {
-		o.hooks = append(o.hooks, LoggingHook(log, opts...))
+		for _, opt := range snapshot {
+			if opt == nil {
+				o.err = fmt.Errorf("goredis: nil LoggingOption: %w", sdk.ErrInvalidInput)
+				return
+			}
+		}
+		o.hooks = append(o.hooks, LoggingHook(log, snapshot...))
 	}
 }
 
 // WithTracing installs a TracingHook so each command runs inside a span from
 // tracer, the sdk/capabilities/tracing port. A nil tracer yields a Noop-backed hook.
+// Repeated calls add hooks in order.
 func WithTracing(tracer tracing.Tracer) ClientOption {
 	return func(o *clientOptions) {
 		o.hooks = append(o.hooks, TracingHook(tracer))
@@ -71,7 +82,9 @@ func WithTracing(tracer tracing.Tracer) ClientOption {
 }
 
 // Open builds a *redis.Client from cfg, installs any hooks the ClientOptions
-// carry, and verifies the server with a fail-fast PING before returning. Zero
+// carry, and verifies the server with a fail-fast PING before returning. Nil
+// ClientOption or nested LoggingOption values return an error wrapping
+// sdk.ErrInvalidInput before allocating a client. Zero
 // fields take the documented defaults; go-redis's own defaults fill anything
 // left unset.
 //
@@ -117,6 +130,9 @@ func Open(ctx context.Context, cfg Config, opts ...ClientOption) (*redis.Client,
 		WriteTimeout: cfg.WriteTimeout,
 		PoolSize:     cfg.PoolSize,
 		MinIdleConns: cfg.MinIdleConns,
+		// go-redis otherwise replaces the I/O context with Background, so the
+		// caller's deadline would not bound an established connection's reads.
+		ContextTimeoutEnabled: true,
 	}
 	if cfg.TLSEnabled {
 		redisOpts.TLSConfig = &tls.Config{MinVersion: tls.VersionTLS12}
@@ -124,7 +140,13 @@ func Open(ctx context.Context, cfg Config, opts ...ClientOption) (*redis.Client,
 
 	var co clientOptions
 	for _, opt := range opts {
+		if opt == nil {
+			return nil, fmt.Errorf("goredis: nil ClientOption: %w", sdk.ErrInvalidInput)
+		}
 		opt(&co)
+		if co.err != nil {
+			return nil, co.err
+		}
 	}
 
 	rdb := redis.NewClient(redisOpts)
@@ -134,6 +156,9 @@ func Open(ctx context.Context, cfg Config, opts ...ClientOption) (*redis.Client,
 
 	if err := rdb.Ping(ctx).Err(); err != nil {
 		_ = rdb.Close()
+		if ctx.Err() != nil {
+			err = ctx.Err()
+		}
 		return nil, fmt.Errorf("goredis: pinging redis at %s: %w", cfg.Addr, err)
 	}
 
@@ -143,11 +168,17 @@ func Open(ctx context.Context, cfg Config, opts ...ClientOption) (*redis.Client,
 // StatusCheck returns nil if it can successfully talk to Redis. It mirrors the
 // datastores/pgxdb StatusCheck: when ctx carries no deadline it bounds the PING
 // with a one-second timeout, otherwise it honors the caller's deadline.
+// A borrowed client must enable redis.Options.ContextTimeoutEnabled for I/O
+// deadlines; clients returned by Open already do. The client is never modified.
 func StatusCheck(ctx context.Context, rdb *redis.Client) error {
 	if _, ok := ctx.Deadline(); !ok {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, time.Second)
 		defer cancel()
 	}
-	return rdb.Ping(ctx).Err()
+	err := rdb.Ping(ctx).Err()
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	return err
 }

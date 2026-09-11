@@ -3,6 +3,7 @@ package cms
 import (
 	"context"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -11,9 +12,8 @@ import (
 	"github.com/gopernicus/gopernicus/pockets/cms/domain/content"
 	"github.com/gopernicus/gopernicus/pockets/cms/domain/media"
 	"github.com/gopernicus/gopernicus/pockets/cms/domain/menus"
-	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
-	"github.com/gopernicus/gopernicus/sdk/foundation/logging"
-	"github.com/gopernicus/gopernicus/sdk/foundation/web"
+	"github.com/gopernicus/gopernicus/sdk/pkg/list"
+	"github.com/gopernicus/gopernicus/sdk/pkg/web"
 )
 
 // overrideViews embeds the Views port (the decorator pattern) and replaces only
@@ -31,10 +31,10 @@ func (overrideViews) Home(_ []menus.MenuItem, _ []ListItem) web.Renderer {
 // a Views that embeds the default and overrides Home, and that the pocket's own
 // handler renders the override (it calls through the interface).
 func TestViews_HostOverridesHome(t *testing.T) {
-	entries := &fakeEntrySvc{listFn: func(ctx context.Context, q content.EntryQuery) (crud.Page[content.Entry], error) {
-		return crud.Page[content.Entry]{Items: []content.Entry{{Type: "article", Slug: "x", Title: "X", Status: content.StatusPublished}}}, nil
+	entries := &fakeEntrySvc{listFn: func(ctx context.Context, q content.EntryQuery) (list.Page[content.Entry], error) {
+		return list.Page[content.Entry]{Items: []content.Entry{{Type: "article", Slug: "x", Title: "X", Status: content.StatusPublished}}}, nil
 	}}
-	r := BuildRouter(newTestRegistry(), entries, &fakeTaxo{}, &fakeMenuSvc{}, &fakeMediaSvc{}, &fakeContactSvc{}, nil, logging.NewNoop(), WithViews(overrideViews{stubViews{}}))
+	r := BuildRouter(newTestRegistry(), entries, &fakeTaxo{}, &fakeMenuSvc{}, &fakeMediaSvc{}, &fakeContactSvc{}, nil, slog.New(slog.DiscardHandler), WithViews(overrideViews{stubViews{}}))
 
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
@@ -50,10 +50,10 @@ func TestViews_HostOverridesHome(t *testing.T) {
 // TestViews_BaseRendersWhenNotOverridden confirms the embedded default still
 // renders when Home is not overridden (the seam is opt-in).
 func TestViews_BaseRendersWhenNotOverridden(t *testing.T) {
-	entries := &fakeEntrySvc{listFn: func(ctx context.Context, q content.EntryQuery) (crud.Page[content.Entry], error) {
-		return crud.Page[content.Entry]{}, nil
+	entries := &fakeEntrySvc{listFn: func(ctx context.Context, q content.EntryQuery) (list.Page[content.Entry], error) {
+		return list.Page[content.Entry]{}, nil
 	}}
-	r := BuildRouter(newTestRegistry(), entries, &fakeTaxo{}, &fakeMenuSvc{}, &fakeMediaSvc{}, &fakeContactSvc{}, nil, logging.NewNoop(), WithViews(stubViews{}))
+	r := BuildRouter(newTestRegistry(), entries, &fakeTaxo{}, &fakeMenuSvc{}, &fakeMediaSvc{}, &fakeContactSvc{}, nil, slog.New(slog.DiscardHandler), WithViews(stubViews{}))
 
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
@@ -78,7 +78,7 @@ func TestViews_NilRegistersOnlyMediaServe(t *testing.T) {
 	svc := &fakeMediaSvc{openFn: func(ctx context.Context, id string) (media.Asset, io.ReadCloser, error) {
 		return asset, io.NopCloser(strings.NewReader("PNG-BYTES")), nil
 	}}
-	r := BuildRouter(newTestRegistry(), &fakeEntrySvc{}, &fakeTaxo{}, &fakeMenuSvc{}, svc, &fakeContactSvc{}, nil, logging.NewNoop())
+	r := BuildRouter(newTestRegistry(), &fakeEntrySvc{}, &fakeTaxo{}, &fakeMenuSvc{}, svc, &fakeContactSvc{}, nil, slog.New(slog.DiscardHandler))
 
 	for _, path := range []string{"/", "/articles", "/contact", "/media"} {
 		rec := httptest.NewRecorder()

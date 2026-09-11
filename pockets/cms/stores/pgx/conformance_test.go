@@ -161,7 +161,7 @@ func testSchema(t *testing.T) pgxdb.Schema {
 // openDB opens a connector pool closed at test end.
 func openDB(t *testing.T, dsn string) *pgxdb.DB {
 	t.Helper()
-	db, err := pgxdb.Open(pgxdb.Config{DSN: dsn})
+	db, err := pgxdb.Open(context.Background(), pgxdb.Config{DSN: dsn})
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}

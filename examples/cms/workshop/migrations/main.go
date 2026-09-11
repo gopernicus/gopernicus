@@ -11,11 +11,13 @@ package main
 import (
 	"context"
 	"embed"
+	"fmt"
 	"log/slog"
 	"os"
 	"time"
 
-	"github.com/gopernicus/gopernicus/sdk/foundation/environment"
+	"github.com/gopernicus/gopernicus/sdk/pkg/environment"
+	"github.com/gopernicus/gopernicus/sdk/pkg/logging"
 
 	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
 )
@@ -27,26 +29,40 @@ import (
 var migrationsFS embed.FS
 
 func main() {
-	_ = environment.LoadEnv()
+	if err := environment.LoadEnv(); err != nil {
+		slog.Error("load environment", "error", err)
+		os.Exit(1)
+	}
 
-	log := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	logOpts := logging.Options{Format: "text", Output: "STDOUT"}
+	if err := environment.ParseEnvTags("", &logOpts); err != nil {
+		slog.Error("configure logging", "error", err)
+		os.Exit(1)
+	}
+	log := logging.New(logOpts)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
-	db, err := tursodb.Open(tursodb.Config{
+	if err := run(ctx, log); err != nil {
+		log.Error("migrations", "error", err)
+		os.Exit(1)
+	}
+}
+
+func run(ctx context.Context, log *slog.Logger) error {
+	db, err := tursodb.Open(ctx, tursodb.Config{
 		URL:       os.Getenv("TURSO_DATABASE_URL"),
 		AuthToken: os.Getenv("TURSO_AUTH_TOKEN"),
 	})
 	if err != nil {
-		log.Error("connecting to database", "error", err)
-		os.Exit(1)
+		return fmt.Errorf("connecting to database: %w", err)
 	}
 	defer db.Close()
 
 	log.Info("running migrations", "dir", "primary")
 	if err := tursodb.RunMigrations(ctx, db, migrationsFS, "primary"); err != nil {
-		log.Error("running migrations", "error", err)
-		os.Exit(1)
+		return fmt.Errorf("running migrations: %w", err)
 	}
 	log.Info("migrations complete")
+	return nil
 }

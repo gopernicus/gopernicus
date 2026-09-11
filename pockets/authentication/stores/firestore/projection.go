@@ -2,9 +2,8 @@ package firestore
 
 import (
 	gcfs "cloud.google.com/go/firestore"
-
-	"github.com/gopernicus/gopernicus/pockets/authentication/domain/identifier"
-	"github.com/gopernicus/gopernicus/pockets/authentication/domain/user"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/identifier"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/user"
 )
 
 // The DIRECTORY PROJECTION (N-D3, SCHEMA.md §6) and the only code allowed to

@@ -16,7 +16,16 @@ plaintext**: session refresh tokens (`refresh_token_hash`), challenge OTP codes 
 magic-link tokens (`secret_digest`), API keys, and invitation tokens are hashed at
 rest and looked up by digest. Child tables carry **no enforced FKs** to `users`
 (the conformance suite exercises child ports without a users row; credential and
-identifier atomicity lives in the service transactions, not cascades).
+identifier atomicity lives in focused repository transactions, not cascades).
+
+## Transaction scope
+
+Atomic repository methods own their transaction: provisioning, credential writes,
+session admission, grants, invitation claims and challenge replacement each enforce
+their documented invariant. Authentication stores do not generally join a host's
+ambient connector transaction. Wrapping several service calls in host `Transact`
+does not make them one atomic unit. External invitation grants must use the stable
+operation ID for idempotence. See [AUDIT-022](../../../../AUDIT.md#audit-022-authentication-proof-lifecycle-and-host-api).
 
 ## Surface
 
@@ -26,11 +35,16 @@ option — SQLite has no schemas** (a host switches dialect by one import + one
 
 | member | shape |
 |---|---|
-| `Repositories(db *pgxdb.DB, opts ...Option) (auth.Repositories, error)` | the 17-port bundle, no migration side effects — **probes all 13 canonical tables first**, then the ALTER-added columns (`users.status`, `users.status_changed_at`, `challenges.subject_key`), and errors (`sdk.ErrNotFound`, naming the table or column + the `authentication` migration source) when one is missing; an infrastructure/query failure is never misreported as a missing table |
+| `Repositories(ctx context.Context, db *pgxdb.DB, opts ...Option) (auth.Repositories, error)` | the 17-port bundle, no migration side effects — **probes all 13 canonical tables first**, then the ALTER-added columns (`users.status`, `users.status_changed_at`, `challenges.subject_key`), and errors (`sdk.ErrNotFound`, naming the table or column + the `authentication` migration source) when one is missing; an infrastructure/query failure is never misreported as a missing table |
 | `Option` | construction option, accepted by `Repositories` and by every one of the 18 `NewXStore(db, opts ...Option)` constructors, so a host composing its own bundle gets the same seam |
 | `WithSchema(s pgxdb.Schema) Option` | places every table these stores touch in `s`; the zero `Schema` is the default and renders today's unqualified SQL byte-for-byte. It never panics — validation happened in `pgxdb.NewSchema` at the host |
 | `ExportMigrations(dst string) error` | copies the canonical `migrations/*.sql` into the host's dir |
 | `MigrationsFS` / `MigrationsDir` | the embedded canonical migration files |
+
+The individual `NewXStore` constructors wrap the supplied database without
+probing or taking ownership. Passing a nil database is a programming error and
+panics immediately. The probing `Repositories` constructor returns
+`sdk.ErrInvalidInput` for a nil database.
 
 ## Schema
 
@@ -45,7 +59,7 @@ if err != nil { return err }
 // one stream per schema, applied pre-boot, with its own ledger inside s
 if err := pgxdb.RunMigrations(ctx, db, pgxfs, dir, pgxdb.WithSchema(s)); err != nil { return err }
 
-repos, err := pgx.Repositories(db, pgx.WithSchema(s))
+repos, err := pgx.Repositories(ctx, db, pgx.WithSchema(s))
 ```
 
 Every table reference renders `"<schema>".<table>` through one chokepoint, never
@@ -66,7 +80,7 @@ change outside this option. With a schema set the probe IS scoped to it.
 ## Migrations
 
 `migrations/*.sql` carry the **identical version (filename) set** as the turso
-tree — `0001`–`0015` (thirteen tables; auth owns no delivery table). Same filename
+tree — `0001`–`0018` (thirteen tables; auth owns no delivery table). Same filename
 = same logical schema step; content is per-dialect. After export, the host owns
 the final migration stream and applies it pre-boot through its own ledger.
 

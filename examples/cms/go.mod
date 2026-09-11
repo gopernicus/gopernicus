@@ -3,13 +3,13 @@ module github.com/gopernicus/gopernicus/examples/cms
 go 1.26.1
 
 require (
-	github.com/gopernicus/gopernicus/integrations/datastores/turso v0.1.0
-	github.com/gopernicus/gopernicus/integrations/tracing/otel v0.0.0
-	github.com/gopernicus/gopernicus/pockets/cms v0.2.0
-	github.com/gopernicus/gopernicus/pockets/cms/stores/turso v0.2.0
-	github.com/gopernicus/gopernicus/pockets/cms/views/goth v0.2.0
-	github.com/gopernicus/gopernicus/sdk v0.5.0
-	github.com/gopernicus/gopernicus/ui/goth v0.1.0
+	github.com/gopernicus/gopernicus/integrations/datastores/turso v0.4.0
+	github.com/gopernicus/gopernicus/integrations/tracing/otel v0.2.0
+	github.com/gopernicus/gopernicus/pockets/cms v0.3.0
+	github.com/gopernicus/gopernicus/pockets/cms/stores/turso v0.3.0
+	github.com/gopernicus/gopernicus/pockets/cms/views/goth v0.3.0
+	github.com/gopernicus/gopernicus/sdk v0.9.0
+	github.com/gopernicus/gopernicus/ui/goth v0.2.0
 )
 
 require (
@@ -21,6 +21,7 @@ require (
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/google/uuid v1.6.0 // indirect
+	github.com/gopernicus/gopernicus/pockets v0.1.0
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.29.0 // indirect
 	github.com/tursodatabase/libsql-client-go v0.0.0-20260528064733-9d5d30a29a60 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
@@ -41,17 +42,3 @@ require (
 	google.golang.org/grpc v1.81.1 // indirect
 	google.golang.org/protobuf v1.36.11 // indirect
 )
-
-replace github.com/gopernicus/gopernicus/sdk => ../../sdk
-
-replace github.com/gopernicus/gopernicus/integrations/datastores/turso => ../../integrations/datastores/turso
-
-replace github.com/gopernicus/gopernicus/integrations/tracing/otel => ../../integrations/tracing/otel
-
-replace github.com/gopernicus/gopernicus/pockets/cms => ../../pockets/cms
-
-replace github.com/gopernicus/gopernicus/pockets/cms/stores/turso => ../../pockets/cms/stores/turso
-
-replace github.com/gopernicus/gopernicus/pockets/cms/views/goth => ../../pockets/cms/views/goth
-
-replace github.com/gopernicus/gopernicus/ui/goth => ../../ui/goth

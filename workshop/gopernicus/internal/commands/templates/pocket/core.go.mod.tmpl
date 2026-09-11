@@ -2,6 +2,9 @@ module {{.ModulePath}}
 
 go {{.GoVersion}}
 
-// FS1: a pocket core requires EXACTLY sdk — nothing else. Persistence lives in
+// FS1: a pocket core requires only SDK and the shared pockets contract. Persistence lives in
 // the stores/{turso,pgx} sibling modules; views (if any) in a views/ sibling.
-require github.com/gopernicus/gopernicus/sdk v0.5.0
+require (
+	github.com/gopernicus/gopernicus/pockets v0.1.0
+	github.com/gopernicus/gopernicus/sdk v0.9.0
+)

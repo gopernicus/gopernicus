@@ -1,0 +1,421 @@
+{
+  "indexes": [
+    {
+      "collectionGroup": "iam_audit",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "occurred_at",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "id",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "iam_audit",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "occurred_at",
+          "order": "DESCENDING"
+        },
+        {
+          "fieldPath": "id",
+          "order": "DESCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "iam_audit",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "actor_key",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "occurred_at",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "id",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "iam_audit",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "actor_key",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "occurred_at",
+          "order": "DESCENDING"
+        },
+        {
+          "fieldPath": "id",
+          "order": "DESCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "iam_audit",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "resource_key",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "occurred_at",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "id",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "iam_audit",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "resource_key",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "occurred_at",
+          "order": "DESCENDING"
+        },
+        {
+          "fieldPath": "id",
+          "order": "DESCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "iam_audit",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "actor_key",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "resource_key",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "occurred_at",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "id",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "iam_audit",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "actor_key",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "resource_key",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "occurred_at",
+          "order": "DESCENDING"
+        },
+        {
+          "fieldPath": "id",
+          "order": "DESCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "iam_audit",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "subject_key",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "occurred_at",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "id",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "iam_audit",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "subject_key",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "occurred_at",
+          "order": "DESCENDING"
+        },
+        {
+          "fieldPath": "id",
+          "order": "DESCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "iam_audit",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "actor_key",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "subject_key",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "occurred_at",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "id",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "iam_audit",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "actor_key",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "subject_key",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "occurred_at",
+          "order": "DESCENDING"
+        },
+        {
+          "fieldPath": "id",
+          "order": "DESCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "iam_audit",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "resource_key",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "subject_key",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "occurred_at",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "id",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "iam_audit",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "resource_key",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "subject_key",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "occurred_at",
+          "order": "DESCENDING"
+        },
+        {
+          "fieldPath": "id",
+          "order": "DESCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "iam_audit",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "actor_key",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "resource_key",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "subject_key",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "occurred_at",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "id",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "iam_audit",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "actor_key",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "resource_key",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "subject_key",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "occurred_at",
+          "order": "DESCENDING"
+        },
+        {
+          "fieldPath": "id",
+          "order": "DESCENDING"
+        }
+      ]
+    }
+  ],
+  "fieldOverrides": [
+    {
+      "collectionGroup": "iam_audit",
+      "fieldPath": "id",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "iam_audit",
+      "fieldPath": "event_id",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "iam_audit",
+      "fieldPath": "occurred_at",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "iam_audit",
+      "fieldPath": "actor_type",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "iam_audit",
+      "fieldPath": "actor_id",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "iam_audit",
+      "fieldPath": "system",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "iam_audit",
+      "fieldPath": "reason",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "iam_audit",
+      "fieldPath": "action",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "iam_audit",
+      "fieldPath": "kind",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "iam_audit",
+      "fieldPath": "resource_type",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "iam_audit",
+      "fieldPath": "resource_id",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "iam_audit",
+      "fieldPath": "subject_type",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "iam_audit",
+      "fieldPath": "subject_id",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "iam_audit",
+      "fieldPath": "relation",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "iam_audit",
+      "fieldPath": "subject_relation",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "iam_audit",
+      "fieldPath": "role",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "iam_audit",
+      "fieldPath": "resource_key",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "iam_audit",
+      "fieldPath": "subject_key",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "iam_audit",
+      "fieldPath": "actor_key",
+      "indexes": []
+    }
+  ]
+}

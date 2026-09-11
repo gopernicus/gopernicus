@@ -7,7 +7,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
+	"github.com/gopernicus/gopernicus/sdk/pkg/list"
 )
 
 // TestApplyCursorPagination_Combos tables the tuple predicate for every
@@ -25,21 +25,22 @@ func TestApplyCursorPagination_Combos(t *testing.T) {
 		forPrevious bool
 		wantOp      string
 	}{
-		{"asc_forward", crud.ASC, false, ">"},
-		{"asc_previous", crud.ASC, true, "<"},
-		{"desc_forward", crud.DESC, false, "<"},
-		{"desc_previous", crud.DESC, true, ">"},
+		{"asc_forward", list.ASC, false, ">"},
+		{"asc_previous", list.ASC, true, "<="},
+		{"desc_forward", list.DESC, false, "<"},
+		{"desc_previous", list.DESC, true, ">="},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			var buf strings.Builder
+			buf.WriteString("SELECT id, created_at, name FROM widgets")
 			args := pgx.NamedArgs{}
 			if err := ApplyCursorPagination(&buf, args, "created_at", "id", ts, "pk-1", tc.direction, tc.forPrevious, false); err != nil {
 				t.Fatalf("ApplyCursorPagination: %v", err)
 			}
 
-			want := ` WHERE ("created_at", "id") ` + tc.wantOp + ` (@cursor_order_value, @cursor_pk)`
+			want := "SELECT * FROM (\nSELECT id, created_at, name FROM widgets\n) AS list_source" + ` WHERE ("created_at", "id") ` + tc.wantOp + ` (@cursor_order_value, @cursor_pk)`
 			if got := buf.String(); got != want {
 				t.Fatalf("fragment =\n  %q\nwant\n  %q", got, want)
 			}
@@ -58,16 +59,16 @@ func TestApplyCursorPagination_Combos(t *testing.T) {
 	}
 }
 
-// TestApplyCursorPagination_AndWhenWherePresent: an existing WHERE clause makes
-// the predicate an AND rather than a fresh WHERE.
-func TestApplyCursorPagination_AndWhenWherePresent(t *testing.T) {
+// TestApplyCursorPagination_PreservesAuthoredFilter: an existing WHERE clause makes
+// the outer predicate preserve the authored filter.
+func TestApplyCursorPagination_PreservesAuthoredFilter(t *testing.T) {
 	var buf strings.Builder
-	buf.WriteString("SELECT id FROM widgets WHERE kind = @kind")
+	buf.WriteString("SELECT id, created_at, name FROM widgets WHERE kind = @kind OR id IN (SELECT id FROM special WHERE enabled)")
 	args := pgx.NamedArgs{"kind": "gadget"}
-	if err := ApplyCursorPagination(&buf, args, "created_at", "id", int64(5), "pk-1", crud.ASC, false, false); err != nil {
+	if err := ApplyCursorPagination(&buf, args, "created_at", "id", int64(5), "pk-1", list.ASC, false, false); err != nil {
 		t.Fatalf("ApplyCursorPagination: %v", err)
 	}
-	want := `SELECT id FROM widgets WHERE kind = @kind AND ("created_at", "id") > (@cursor_order_value, @cursor_pk)`
+	want := "SELECT * FROM (\nSELECT id, created_at, name FROM widgets WHERE kind = @kind OR id IN (SELECT id FROM special WHERE enabled)\n) AS list_source WHERE " + `("created_at", "id") > (@cursor_order_value, @cursor_pk)`
 	if got := buf.String(); got != want {
 		t.Fatalf("fragment =\n  %q\nwant\n  %q", got, want)
 	}
@@ -80,11 +81,12 @@ func TestApplyCursorPagination_AndWhenWherePresent(t *testing.T) {
 // comparison in LOWER().
 func TestApplyCursorPagination_CastLower(t *testing.T) {
 	var buf strings.Builder
+	buf.WriteString("SELECT id, created_at, name FROM widgets")
 	args := pgx.NamedArgs{}
-	if err := ApplyCursorPagination(&buf, args, "name", "id", "Widget", "pk-1", crud.ASC, false, true); err != nil {
+	if err := ApplyCursorPagination(&buf, args, "name", "id", "Widget", "pk-1", list.ASC, false, true); err != nil {
 		t.Fatalf("ApplyCursorPagination: %v", err)
 	}
-	want := ` WHERE (LOWER("name"), "id") > (LOWER(@cursor_order_value), @cursor_pk)`
+	want := "SELECT * FROM (\nSELECT id, created_at, name FROM widgets\n) AS list_source" + ` WHERE (LOWER("name"), "id") > (LOWER(@cursor_order_value), @cursor_pk)`
 	if got := buf.String(); got != want {
 		t.Fatalf("fragment =\n  %q\nwant\n  %q", got, want)
 	}
@@ -94,8 +96,9 @@ func TestApplyCursorPagination_CastLower(t *testing.T) {
 // column is rejected by QuoteIdentifier before any SQL is written.
 func TestApplyCursorPagination_RejectsBadIdentifier(t *testing.T) {
 	var buf strings.Builder
+	buf.WriteString("SELECT id, created_at, name FROM widgets")
 	args := pgx.NamedArgs{}
-	if err := ApplyCursorPagination(&buf, args, "created_at; DROP", "id", int64(1), "pk", crud.ASC, false, false); err == nil {
+	if err := ApplyCursorPagination(&buf, args, "created_at; DROP", "id", int64(1), "pk", list.ASC, false, false); err == nil {
 		t.Fatal("expected error for injection in order column")
 	}
 }
@@ -110,10 +113,10 @@ func TestAddOrderByClause_Combos(t *testing.T) {
 		forPrevious bool
 		wantDir     string
 	}{
-		{"asc_forward", crud.ASC, false, "ASC"},
-		{"asc_previous", crud.ASC, true, "DESC"},
-		{"desc_forward", crud.DESC, false, "DESC"},
-		{"desc_previous", crud.DESC, true, "ASC"},
+		{"asc_forward", list.ASC, false, "ASC"},
+		{"asc_previous", list.ASC, true, "DESC"},
+		{"desc_forward", list.DESC, false, "DESC"},
+		{"desc_previous", list.DESC, true, "ASC"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -133,7 +136,7 @@ func TestAddOrderByClause_Combos(t *testing.T) {
 // tiebreaker term is emitted.
 func TestAddOrderByClause_PKIsOrder(t *testing.T) {
 	var buf strings.Builder
-	if err := AddOrderByClause(&buf, "id", "id", crud.ASC, false, false); err != nil {
+	if err := AddOrderByClause(&buf, "id", "id", list.ASC, false, false); err != nil {
 		t.Fatalf("AddOrderByClause: %v", err)
 	}
 	if got, want := buf.String(), ` ORDER BY "id" ASC`; got != want {
@@ -144,7 +147,7 @@ func TestAddOrderByClause_PKIsOrder(t *testing.T) {
 // TestAddOrderByClause_CastLower: castLower wraps the order column in LOWER().
 func TestAddOrderByClause_CastLower(t *testing.T) {
 	var buf strings.Builder
-	if err := AddOrderByClause(&buf, "name", "id", crud.ASC, false, true); err != nil {
+	if err := AddOrderByClause(&buf, "name", "id", list.ASC, false, true); err != nil {
 		t.Fatalf("AddOrderByClause: %v", err)
 	}
 	if got, want := buf.String(), ` ORDER BY LOWER("name") ASC, "id" ASC`; got != want {
@@ -182,5 +185,15 @@ func TestNormalizeOrderValue(t *testing.T) {
 	}
 	if v := normalizeOrderValue("abc"); v != "abc" {
 		t.Errorf("normalizeOrderValue(string) = %v, want abc", v)
+	}
+}
+
+func TestAddOrderByClause_FoldedPKKeepsRawTiebreaker(t *testing.T) {
+	var buf strings.Builder
+	if err := AddOrderByClause(&buf, "id", "id", list.ASC, false, true); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := buf.String(), ` ORDER BY LOWER("id") ASC, "id" ASC`; got != want {
+		t.Fatalf("order = %q, want %q", got, want)
 	}
 }

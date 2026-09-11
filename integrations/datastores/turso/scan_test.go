@@ -8,7 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
+	"github.com/gopernicus/gopernicus/sdk"
+
+	"github.com/gopernicus/gopernicus/sdk/pkg/list"
 )
 
 // scanRowStruct is a well-formed db-tagged row struct exercising every wrapper
@@ -215,14 +217,14 @@ func TestList_NilScanStructScan(t *testing.T) {
 
 	q := ListQuery[nilScanRow]{
 		BaseSQL:      "SELECT id, name, active, created_at FROM items",
-		OrderFields:  map[string]crud.OrderField{"created_at": {Column: "created_at"}},
-		DefaultOrder: crud.Order{Field: "created_at", Direction: crud.DESC},
+		OrderFields:  map[string]list.OrderField{"created_at": {Column: "created_at"}},
+		DefaultOrder: list.Order{Field: "created_at", Direction: list.DESC},
 		PK:           "id",
 		OrderValueOf: func(r nilScanRow, _ string) any { return r.CreatedAt.Time },
 		PKOf:         func(r nilScanRow) string { return r.ID },
 		// Scan is nil: ScanStruct[nilScanRow] runs.
 	}
-	page, err := List(ctx, db, q, crud.ListRequest{})
+	page, err := List(ctx, db, q, list.Request{})
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
@@ -345,7 +347,7 @@ func TestScanStruct_CompositeStoreRowShape(t *testing.T) {
 func TestScanStruct_MapsNoRowsThroughDriver(t *testing.T) {
 	// Guards that a scan error still routes through MapError (sql.ErrNoRows path is
 	// exercised by QueryOne; here we assert MapError is wired).
-	if got := MapError(sql.ErrNoRows); !errors.Is(got, crud.ErrNotFound) {
+	if got := MapError(sql.ErrNoRows); !errors.Is(got, sdk.ErrNotFound) {
 		t.Fatalf("MapError(ErrNoRows) = %v", got)
 	}
 }

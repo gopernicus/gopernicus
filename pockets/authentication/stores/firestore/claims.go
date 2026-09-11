@@ -4,7 +4,6 @@ import (
 	"context"
 
 	gcfs "cloud.google.com/go/firestore"
-
 	firestoredb "github.com/gopernicus/gopernicus/integrations/datastores/firestore"
 )
 

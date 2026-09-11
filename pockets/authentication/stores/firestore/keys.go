@@ -124,10 +124,10 @@ func invitationTokenClaimDocID(tokenHash string) string { return firestoredb.Key
 
 // invitationPendingClaimDocID reproduces idx_invitations_pending_tuple:
 // (resource_type, resource_id, identifier_kind, identifier, relation) WHERE
-// status = 'pending'. RELATION is part of the tuple — two invitations to the
+// status IN ('pending', 'accepting'). RELATION is part of the tuple — two invitations to the
 // same address for the same resource under different relations coexist — and
 // the predicate is the STORED status, never the read clock: an expired but still
-// pending row keeps its claim.
+// pending or accepting row keeps its claim.
 func invitationPendingClaimDocID(resourceType, resourceID, identifierKind, identifierValue, relation string) string {
 	return firestoredb.KeyHash(resourceType, resourceID, identifierKind, identifierValue, relation)
 }

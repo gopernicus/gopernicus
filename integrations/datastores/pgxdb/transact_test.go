@@ -27,7 +27,7 @@ func transactLiveDB(t *testing.T) *DB {
 	if dsn == "" {
 		t.Skip("POSTGRES_TEST_DSN not set — Transact live semantics NOT verified")
 	}
-	db, err := Open(Config{DSN: dsn})
+	db, err := Open(context.Background(), Config{DSN: dsn})
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -76,7 +76,7 @@ func TestTransact_CommitOnNil(t *testing.T) {
 }
 
 // TestTransact_RollbackOnErrorUnwrapped: fn's error rolls back and comes back
-// IDENTICAL (unwrapped, per the crud.Transactor contract).
+// IDENTICAL (unwrapped, per the transaction.Transactor contract).
 func TestTransact_RollbackOnErrorUnwrapped(t *testing.T) {
 	db := transactLiveDB(t)
 	ctx := context.Background()

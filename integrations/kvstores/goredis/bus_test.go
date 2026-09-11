@@ -1,241 +1,474 @@
-// These tests are hermetic: they exercise encoding/decoding, defaulting, and
-// the RemoteEvent rehydration path without any Redis connection. The live
-// contract is verified by conformance_test.go under REDIS_TEST_ADDR.
 package goredis
 
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
+	"reflect"
+	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
-	"github.com/redis/go-redis/v9"
-
+	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/events"
+	"github.com/redis/go-redis/v9"
 )
 
-// testEvent is a concrete event whose BaseEvent json tags let it round-trip
-// through EncodeEvent and the Unmarshaler slow path.
 type testEvent struct {
 	events.BaseEvent
 	Data string `json:"data"`
 }
 
-// dummyClient builds a client that is never used for I/O in these tests (New
-// does no network work; construction is enough to inspect defaults).
+// Also used by the module's cache/limiter hook tests; it performs no startup I/O.
 func dummyClient() *redis.Client {
 	return redis.NewClient(&redis.Options{Addr: "127.0.0.1:6390"})
 }
 
-func TestNewAppliesDefaults(t *testing.T) {
-	b := New(dummyClient(), slog.New(slog.DiscardHandler), Options{})
+type busCommandHook struct {
+	run func(context.Context, redis.Cmder) error
+}
 
-	if b.cfg.StreamPrefix != defaultStreamPrefix {
-		t.Errorf("StreamPrefix = %q, want %q", b.cfg.StreamPrefix, defaultStreamPrefix)
+func (h busCommandHook) DialHook(next redis.DialHook) redis.DialHook { return next }
+func (h busCommandHook) ProcessHook(redis.ProcessHook) redis.ProcessHook {
+	return h.run
+}
+func (h busCommandHook) ProcessPipelineHook(next redis.ProcessPipelineHook) redis.ProcessPipelineHook {
+	return next
+}
+
+func newTestBus(t *testing.T, opts ...BusOption) *Bus {
+	t.Helper()
+	rdb := dummyClient()
+	t.Cleanup(func() { _ = rdb.Close() })
+	b := New(rdb, append([]BusOption{WithLogger(slog.New(slog.DiscardHandler))}, opts...)...)
+	t.Cleanup(func() { _ = b.Close(context.Background()) })
+	return b
+}
+
+func TestBusDefaultsAndExplicitOptions(t *testing.T) {
+	b := newTestBus(t)
+	want := busConfig{log: b.log, StreamPrefix: "events:v2:", ConsumerGroup: "default", Workers: 4,
+		QueueSize: 1000, BlockTimeout: 5 * time.Second, RetryAfter: time.Minute, HandlerTimeout: 30 * time.Second}
+	if b.cfg != want || b.consumerName == "" {
+		t.Fatalf("defaults = %+v, consumer = %q", b.cfg, b.consumerName)
 	}
-	if b.cfg.ConsumerGroup != defaultConsumerGroup {
-		t.Errorf("ConsumerGroup = %q, want %q", b.cfg.ConsumerGroup, defaultConsumerGroup)
+	explicit := newTestBus(t, WithStreamPrefix("ignored:"), WithStreamPrefix("host:v2:"), WithConsumerGroup("workers"),
+		WithWorkers(2), WithQueueSize(3), WithBlockTimeout(time.Millisecond), WithRetryAfter(time.Second), WithHandlerTimeout(100*time.Millisecond))
+	want = busConfig{log: explicit.log, StreamPrefix: "host:v2:v2:", ConsumerGroup: "workers", Workers: 2,
+		QueueSize: 3, BlockTimeout: time.Millisecond, RetryAfter: time.Second, HandlerTimeout: 100 * time.Millisecond}
+	if explicit.cfg != want {
+		t.Fatalf("explicit = %+v, want %+v", explicit.cfg, want)
 	}
-	if b.cfg.Workers != defaultWorkers {
-		t.Errorf("Workers = %d, want %d", b.cfg.Workers, defaultWorkers)
-	}
-	if b.cfg.BlockTimeout != defaultBlockTimeout {
-		t.Errorf("BlockTimeout = %s, want %s", b.cfg.BlockTimeout, defaultBlockTimeout)
-	}
-	if b.cfg.BatchSize != defaultBatchSize {
-		t.Errorf("BatchSize = %d, want %d", b.cfg.BatchSize, defaultBatchSize)
-	}
-	if b.consumerName == "" {
-		t.Error("consumerName was not generated")
+	nilLogger := New(nil, WithLogger(nil))
+	defer nilLogger.Close(context.Background())
+	if nilLogger.log != slog.Default() {
+		t.Fatal("nil logger was not defaulted")
 	}
 }
 
-func TestNewKeepsExplicitOptions(t *testing.T) {
-	opts := Options{
-		StreamPrefix:  "myapp:",
-		ConsumerGroup: "workers",
-		Workers:       8,
-		BlockTimeout:  250 * time.Millisecond,
-		BatchSize:     32,
-		MaxLen:        1000,
-	}
-	b := New(dummyClient(), slog.New(slog.DiscardHandler), opts)
-	if b.cfg != opts {
-		t.Errorf("cfg = %+v, want %+v", b.cfg, opts)
-	}
-}
-
-func TestNewNilLoggerFallsBack(t *testing.T) {
-	b := New(dummyClient(), nil, Options{})
-	if b.log == nil {
-		t.Fatal("nil logger was not replaced with a default")
-	}
-}
-
-func TestParseMessageRoundTrip(t *testing.T) {
-	base := events.NewBaseEvent("widget.created").WithTenant("t1").WithAggregate("widget", "w1")
-	src := testEvent{BaseEvent: base, Data: "hello"}
-
-	data, err := events.EncodeEvent(src)
+func TestBusRecordRoundTripAndTypedHandler(t *testing.T) {
+	src := testEvent{BaseEvent: events.NewBaseEvent("widget.created").WithTenant("t1").WithAggregate("widget", "w1"), Data: "hello"}
+	record, err := events.NewRecord(src)
 	if err != nil {
-		t.Fatalf("EncodeEvent() error = %v", err)
+		t.Fatal(err)
 	}
-
-	values := map[string]any{
-		"type":           src.Type(),
-		"correlation_id": src.CorrelationID(),
-		"occurred_at":    src.OccurredAt().Format(time.RFC3339Nano),
-		"payload":        string(data),
-	}
-
-	got, err := parseMessage(values)
+	raw, err := json.Marshal(record)
 	if err != nil {
-		t.Fatalf("parseMessage() error = %v", err)
+		t.Fatal(err)
 	}
-	remote, ok := got.(events.RemoteEvent)
-	if !ok {
-		t.Fatalf("parseMessage() returned %T, want events.RemoteEvent", got)
+	remote, err := parseMessage(map[string]any{"record": string(raw)})
+	if err != nil || !reflect.DeepEqual(remote.Record, record) {
+		t.Fatalf("record = %+v, %v; want %+v", remote, err, record)
 	}
-
-	if remote.Type() != "widget.created" {
-		t.Errorf("Type() = %q, want widget.created", remote.Type())
-	}
-	if remote.CorrelationID() != src.CorrelationID() {
-		t.Errorf("CorrelationID() = %q, want %q", remote.CorrelationID(), src.CorrelationID())
-	}
-	if !remote.OccurredAt().Equal(src.OccurredAt()) {
-		t.Errorf("OccurredAt() = %s, want %s", remote.OccurredAt(), src.OccurredAt())
-	}
-	if remote.TenantID() == nil || *remote.TenantID() != "t1" {
-		t.Errorf("TenantID() = %v, want t1", remote.TenantID())
-	}
-	if remote.AggregateType() == nil || *remote.AggregateType() != "widget" {
-		t.Errorf("AggregateType() = %v, want widget", remote.AggregateType())
-	}
-	if remote.AggregateID() == nil || *remote.AggregateID() != "w1" {
-		t.Errorf("AggregateID() = %v, want w1", remote.AggregateID())
-	}
-	if string(remote.Payload) != string(data) {
-		t.Errorf("Payload not preserved: got %q, want %q", remote.Payload, data)
-	}
-}
-
-func TestParseMessageMissingPayload(t *testing.T) {
-	_, err := parseMessage(map[string]any{"type": "widget.created"})
-	if err == nil {
-		t.Fatal("parseMessage() with no payload field: want error, got nil")
-	}
-}
-
-// TestRemoteEventRehydratesThroughTypedHandler proves the slow path a stream
-// consumer relies on: a RemoteEvent parsed off the wire decodes into the
-// handler's concrete type via TypedHandler's Unmarshaler branch.
-func TestRemoteEventRehydratesThroughTypedHandler(t *testing.T) {
-	src := testEvent{BaseEvent: events.NewBaseEvent("widget.updated"), Data: "payload-body"}
-	data, err := events.EncodeEvent(src)
-	if err != nil {
-		t.Fatalf("EncodeEvent() error = %v", err)
-	}
-	values := map[string]any{
-		"type":           src.Type(),
-		"correlation_id": src.CorrelationID(),
-		"occurred_at":    src.OccurredAt().Format(time.RFC3339Nano),
-		"payload":        string(data),
-	}
-	got, err := parseMessage(values)
-	if err != nil {
-		t.Fatalf("parseMessage() error = %v", err)
-	}
-
 	var received testEvent
-	handler := events.TypedHandler(func(_ context.Context, e testEvent) error {
-		received = e
+	if err := events.TypedHandler(func(_ context.Context, e testEvent) error { received = e; return nil })(context.Background(), remote); err != nil {
+		t.Fatal(err)
+	}
+	if received.Data != src.Data || received.Type() != src.Type() {
+		t.Fatalf("typed payload = %+v", received)
+	}
+	for _, values := range []map[string]any{{"payload": "old format"}, {"record": "{}"}, {"record": "not json"}, {"record": `{"event_id":"id","type":"*"}`}} {
+		if _, err := parseMessage(values); err == nil {
+			t.Fatalf("accepted invalid envelope %v", values)
+		}
+	}
+}
+
+func TestBusPublishPreservesOpaqueRecordWithoutLocalDispatch(t *testing.T) {
+	b := newTestBus(t)
+	var localCalls atomic.Int64
+	b.broadcastSubs[1] = &broadcastSub{topic: "binary", handler: func(context.Context, events.Event) error { localCalls.Add(1); return nil }}
+	b.workSubs["binary"] = []handlerEntry{{handler: func(context.Context, events.Event) error { localCalls.Add(1); return nil }}}
+	tenant := "tenant"
+	record := events.Record{EventID: "stable", Type: "binary", Payload: []byte{0, 0xff, 'x'}, TenantID: &tenant}
+	var streamRaw, broadcastRaw string
+	var commands []string
+	b.rdb.AddHook(busCommandHook{run: func(_ context.Context, cmd redis.Cmder) error {
+		commands = append(commands, cmd.Name())
+		switch cmd.Name() {
+		case "xadd":
+			args := cmd.Args()
+			if len(args) != 5 || args[1] != "events:v2:binary" || args[3] != "record" {
+				t.Fatalf("XADD must contain one untrimmed envelope: %#v", args)
+			}
+			streamRaw = args[4].(string)
+			cmd.(*redis.StringCmd).SetVal("1-0")
+		case "publish":
+			broadcastRaw = string(cmd.Args()[2].([]byte))
+			cmd.(*redis.IntCmd).SetVal(0)
+		default:
+			t.Fatalf("unexpected command %s", cmd.Name())
+		}
 		return nil
+	}})
+	if err := b.Publish(context.Background(), record.Event()); err != nil {
+		t.Fatal(err)
+	}
+	got, err := decodeRecord(streamRaw)
+	if err != nil || !reflect.DeepEqual(got.Record, record) || streamRaw != broadcastRaw || localCalls.Load() != 0 || !reflect.DeepEqual(commands, []string{"xadd", "publish"}) {
+		t.Fatalf("publication lost envelope or dispatched locally: record=%+v err=%v commands=%v local=%d", got.Record, err, commands, localCalls.Load())
+	}
+}
+
+func TestBusPublishFailureAndCancellationDoNotBroadcast(t *testing.T) {
+	for _, canceled := range []bool{false, true} {
+		t.Run(map[bool]string{false: "failure", true: "cancellation"}[canceled], func(t *testing.T) {
+			b := newTestBus(t)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			failure := errors.New("XADD failed")
+			calls := 0
+			b.rdb.AddHook(busCommandHook{run: func(_ context.Context, cmd redis.Cmder) error {
+				calls++
+				if cmd.Name() != "xadd" {
+					t.Fatal("broadcast ran after failed/canceled acceptance")
+				}
+				if canceled {
+					cmd.(*redis.StringCmd).SetVal("1-0")
+					cancel()
+					return nil
+				}
+				return failure
+			}})
+			want := failure
+			if canceled {
+				want = context.Canceled
+			}
+			if err := b.Publish(ctx, events.NewBaseEvent("topic")); !errors.Is(err, want) || calls != 1 {
+				t.Fatalf("Publish = %v, calls=%d", err, calls)
+			}
+		})
+	}
+}
+
+func TestBusBoundedAsyncAdmissionAndSharedDrain(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		b := newTestBus(t, WithWorkers(1), WithQueueSize(1))
+		entered := make(chan struct{}, 1)
+		release := make(chan struct{})
+		var writes atomic.Int64
+		b.rdb.AddHook(busCommandHook{run: func(ctx context.Context, cmd redis.Cmder) error {
+			if cmd.Name() == "xadd" {
+				if writes.Add(1) == 1 {
+					entered <- struct{}{}
+					<-release
+				}
+				cmd.(*redis.StringCmd).SetVal("1-0")
+			} else {
+				cmd.(*redis.IntCmd).SetVal(0)
+			}
+			return ctx.Err()
+		}})
+		ctx, cancel := context.WithCancel(context.Background())
+		if err := b.Emit(ctx, events.NewBaseEvent("topic")); err != nil {
+			t.Fatal(err)
+		}
+		<-entered
+		cancel() // Admitted async publication keeps its independent context.
+		if err := b.Emit(context.Background(), events.NewBaseEvent("topic")); err != nil {
+			t.Fatal(err)
+		}
+		if err := b.Emit(context.Background(), events.NewBaseEvent("topic")); !errors.Is(err, events.ErrCapacity) {
+			t.Fatalf("full queue = %v", err)
+		}
+		for range 2 {
+			closeCtx, stop := context.WithTimeout(context.Background(), time.Millisecond)
+			if err := b.Close(closeCtx); !errors.Is(err, context.DeadlineExceeded) {
+				t.Fatalf("undrained Close = %v", err)
+			}
+			stop()
+		}
+		if err := b.Publish(context.Background(), events.NewBaseEvent("topic")); !errors.Is(err, events.ErrClosed) {
+			t.Fatalf("closed publication = %v", err)
+		}
+		close(release)
+		if err := b.Close(context.Background()); err != nil || writes.Load() != 2 {
+			t.Fatalf("drain = %v, writes=%d", err, writes.Load())
+		}
 	})
-	if err := handler(context.Background(), got); err != nil {
-		t.Fatalf("handler error = %v", err)
+}
+
+func TestBusValidationAndClosedGating(t *testing.T) {
+	b := newTestBus(t)
+	for _, event := range []events.Event{nil, events.BaseEvent{}, events.NewBaseEvent("*")} {
+		if err := b.Emit(context.Background(), event); !errors.Is(err, sdk.ErrInvalidInput) {
+			t.Fatalf("invalid Emit = %v", err)
+		}
+		if err := b.Publish(context.Background(), event); !errors.Is(err, sdk.ErrInvalidInput) {
+			t.Fatalf("invalid Publish = %v", err)
+		}
 	}
-	if received.Data != "payload-body" {
-		t.Errorf("decoded Data = %q, want payload-body", received.Data)
+	if _, err := b.Subscribe("", func(context.Context, events.Event) error { return nil }); !errors.Is(err, sdk.ErrInvalidInput) {
+		t.Fatal(err)
 	}
-	if received.Type() != "widget.updated" {
-		t.Errorf("decoded Type() = %q, want widget.updated", received.Type())
+	if _, err := b.Subscribe("topic", nil); !errors.Is(err, sdk.ErrInvalidInput) {
+		t.Fatal(err)
+	}
+	if err := b.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	for _, subscribe := range []func() (events.Subscription, error){
+		func() (events.Subscription, error) { return b.Subscribe("topic", nil) },
+		func() (events.Subscription, error) { return b.SubscribeBroadcast("topic", nil) },
+		func() (events.Subscription, error) { return b.SubscribeWork(context.Background(), "topic", nil) },
+	} {
+		if _, err := subscribe(); !errors.Is(err, events.ErrClosed) {
+			t.Fatalf("closed subscription = %v", err)
+		}
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := b.Emit(ctx, nil); !errors.Is(err, context.Canceled) {
+		t.Fatal(err)
 	}
 }
 
-// TestBroadcastEnvelopeRoundTrip mirrors broadcastLoop's decode: envelope →
-// RemoteEvent with metadata recovered from the payload.
-func TestBroadcastEnvelopeRoundTrip(t *testing.T) {
-	base := events.NewBaseEvent("note.created").WithTenant("t9").WithAggregate("note", "n9")
-	src := testEvent{BaseEvent: base, Data: "note-body"}
-	payload, err := events.EncodeEvent(src)
+func TestBusWorkAttemptRecoversEachCallbackWithoutAck(t *testing.T) {
+	b := newTestBus(t)
+	var calls, acks int
+	b.workSubs["topic"] = []handlerEntry{
+		{handler: func(context.Context, events.Event) error { calls++; panic("failed") }},
+		{handler: func(context.Context, events.Event) error { calls++; return errors.New("failed") }},
+		{handler: func(context.Context, events.Event) error { calls++; return nil }},
+	}
+	b.rdb.AddHook(busCommandHook{run: func(context.Context, redis.Cmder) error { acks++; return nil }})
+	raw, err := json.Marshal(events.Record{EventID: "id", Type: "topic"})
 	if err != nil {
-		t.Fatalf("EncodeEvent() error = %v", err)
+		t.Fatal(err)
 	}
+	b.processMessage(b.cfg.StreamPrefix+"topic", "1-0", map[string]any{"record": string(raw)})
+	if calls != 3 || acks != 0 {
+		t.Fatalf("callbacks=%d, ACKs=%d", calls, acks)
+	}
+	if err := callEventHandler(context.Background(), func(context.Context, events.Event) error { panic("x") }, events.NewBaseEvent("topic")); !errors.Is(err, events.ErrHandlerPanic) {
+		t.Fatalf("panic classification = %v", err)
+	}
+}
 
-	env := broadcastEnvelope{
-		Type:          src.Type(),
-		CorrelationID: src.CorrelationID(),
-		OccurredAt:    src.OccurredAt(),
-		Payload:       payload,
+func TestBusWorkTimeoutCoversWholeAttempt(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		b := newTestBus(t, WithHandlerTimeout(30*time.Millisecond), WithRetryAfter(time.Second))
+		var deadlines []time.Time
+		var acks int
+		handler := func(ctx context.Context, _ events.Event) error {
+			deadline, _ := ctx.Deadline()
+			deadlines = append(deadlines, deadline)
+			time.Sleep(20 * time.Millisecond)
+			return nil
+		}
+		b.workSubs["topic"] = []handlerEntry{{handler: handler}, {handler: handler}, {handler: handler}}
+		b.rdb.AddHook(busCommandHook{run: func(context.Context, redis.Cmder) error { acks++; return nil }})
+		raw, err := json.Marshal(events.Record{EventID: "id", Type: "topic"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		b.processMessage(b.cfg.StreamPrefix+"topic", "1-0", map[string]any{"record": string(raw)})
+		if len(deadlines) != 2 || deadlines[0] != deadlines[1] || acks != 0 {
+			t.Fatalf("deadlines=%v ACKs=%d; want one deadline, no third callback or ACK", deadlines, acks)
+		}
+	})
+}
+
+func TestBusInvalidWorkConfigNeverCreatesGroup(t *testing.T) {
+	for _, opt := range []BusOption{
+		WithHandlerTimeout(-time.Second), WithRetryAfter(-time.Second),
+		WithHandlerTimeout(time.Millisecond + 1), WithRetryAfter(30 * time.Second),
+		WithBlockTimeout(-time.Second), WithBlockTimeout(time.Millisecond + 1),
+	} {
+		b := newTestBus(t, opt)
+		if _, err := b.SubscribeWork(context.Background(), "topic", func(context.Context, events.Event) error { return nil }); !errors.Is(err, sdk.ErrInvalidInput) {
+			t.Fatalf("invalid config %+v = %v", b.cfg, err)
+		}
 	}
-	raw, err := json.Marshal(env)
+	b := newTestBus(t)
+	if _, err := b.SubscribeWork(context.Background(), "*", func(context.Context, events.Event) error { return nil }); !errors.Is(err, sdk.ErrInvalidInput) {
+		t.Fatalf("wildcard work = %v", err)
+	}
+}
+
+func TestBusWorkReclaimCursorAndSingleEntryReads(t *testing.T) {
+	b := newTestBus(t, WithWorkers(1), WithBlockTimeout(time.Millisecond))
+	raw, err := json.Marshal(events.Record{EventID: "later-id", Type: "topic"})
 	if err != nil {
-		t.Fatalf("marshal envelope: %v", err)
+		t.Fatal(err)
 	}
-
-	var decoded broadcastEnvelope
-	if err := json.Unmarshal(raw, &decoded); err != nil {
-		t.Fatalf("unmarshal envelope: %v", err)
+	var scans, reads, handled, acks atomic.Int64
+	b.workSubs["topic"] = []handlerEntry{{handler: func(context.Context, events.Event) error { handled.Add(1); return nil }}}
+	b.rdb.AddHook(busCommandHook{run: func(_ context.Context, cmd redis.Cmder) error {
+		args := cmd.Args()
+		switch cmd.Name() {
+		case "xautoclaim":
+			if args[len(args)-1] != int64(1) {
+				t.Errorf("claimed beyond available capacity: %#v", args)
+			}
+			if scans.Add(1) == 1 {
+				cmd.(*redis.XAutoClaimCmd).SetVal(nil, "123-0")
+			} else {
+				if args[5] != "123-0" {
+					t.Errorf("lost nonterminal cursor after empty scan: %#v", args)
+				}
+				cmd.(*redis.XAutoClaimCmd).SetVal([]redis.XMessage{{ID: "124-0", Values: map[string]any{"record": string(raw)}}}, "0-0")
+			}
+		case "xreadgroup":
+			reads.Add(1)
+			if args[len(args)-2] != b.cfg.StreamPrefix+"topic" || args[len(args)-1] != ">" {
+				t.Errorf("read must select one stream: %#v", args)
+			}
+			return redis.Nil
+		case "xack":
+			acks.Add(1)
+			cmd.(*redis.IntCmd).SetVal(1)
+			b.cancel()
+		default:
+			t.Errorf("unexpected command: %s", cmd.Name())
+		}
+		return nil
+	}})
+	b.wg.Add(1)
+	finished := make(chan struct{})
+	go func() { b.consumeLoop(0); close(finished) }()
+	select {
+	case <-finished:
+	case <-time.After(time.Second):
+		t.Fatal("worker did not progress beyond empty nonterminal reclaim scan")
 	}
-
-	tenant, aggType, aggID := events.DecodeRemoteMetadata(decoded.Payload)
-	remote := events.RemoteEvent{
-		EventType:   decoded.Type,
-		Occurred:    decoded.OccurredAt,
-		Correlation: decoded.CorrelationID,
-		Payload:     decoded.Payload,
-		Tenant:      tenant,
-		AggType:     aggType,
-		AggID:       aggID,
-	}
-
-	if remote.Type() != "note.created" {
-		t.Errorf("Type() = %q, want note.created", remote.Type())
-	}
-	if remote.TenantID() == nil || *remote.TenantID() != "t9" {
-		t.Errorf("TenantID() = %v, want t9", remote.TenantID())
-	}
-	if remote.AggregateID() == nil || *remote.AggregateID() != "n9" {
-		t.Errorf("AggregateID() = %v, want n9", remote.AggregateID())
-	}
-}
-
-func TestSubscribeAfterCloseErrors(t *testing.T) {
-	b := New(dummyClient(), slog.New(slog.DiscardHandler), Options{})
-	if err := b.Close(context.Background()); err != nil {
-		t.Fatalf("Close() error = %v", err)
-	}
-	if _, err := b.Subscribe("widget.created", func(context.Context, events.Event) error { return nil }); err == nil {
-		t.Error("Subscribe() after Close: want error, got nil")
-	}
-	if _, err := b.SubscribeBroadcast("widget.created", func(context.Context, events.Event) error { return nil }); err == nil {
-		t.Error("SubscribeBroadcast() after Close: want error, got nil")
-	}
-}
-
-func TestCloseIsIdempotentWithoutRedis(t *testing.T) {
-	b := New(dummyClient(), slog.New(slog.DiscardHandler), Options{})
-	if err := b.Close(context.Background()); err != nil {
-		t.Fatalf("first Close() error = %v", err)
-	}
-	if err := b.Close(context.Background()); err != nil {
-		t.Errorf("second Close() error = %v, want nil", err)
+	if scans.Load() != 2 || reads.Load() != 1 || handled.Load() != 1 || acks.Load() != 1 {
+		t.Fatalf("scans=%d reads=%d handlers=%d ACKs=%d", scans.Load(), reads.Load(), handled.Load(), acks.Load())
 	}
 }
 
-func TestPortSatisfaction(t *testing.T) {
-	var _ events.Bus = (*Bus)(nil)
-	var _ events.Broadcaster = (*Bus)(nil)
+func TestBusWorkSubscriptionFailureIsRetryable(t *testing.T) {
+	b := newTestBus(t, WithWorkers(1))
+	var creates atomic.Int64
+	failure := errors.New("group setup failed")
+	b.rdb.AddHook(busCommandHook{run: func(_ context.Context, cmd redis.Cmder) error {
+		if cmd.Name() == "xgroup" {
+			if creates.Add(1) == 1 {
+				return failure
+			}
+			cmd.(*redis.StatusCmd).SetVal("OK")
+			return nil
+		}
+		return redis.Nil
+	}})
+	handler := func(context.Context, events.Event) error { return nil }
+	if _, err := b.SubscribeWork(context.Background(), "topic", handler); !errors.Is(err, failure) {
+		t.Fatal(err)
+	}
+	if b.workStarted || len(b.workSubs) != 0 {
+		t.Fatal("failed setup installed a registration or permanently started workers")
+	}
+	sub, err := b.SubscribeWork(context.Background(), "topic", handler)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sub.Unsubscribe(); err != nil {
+		t.Fatal(err)
+	}
+	if topics := b.activeTopics(); len(topics) != 0 {
+		t.Fatalf("unsubscribed work remains active: %v", topics)
+	}
+}
+
+func TestBusWorkSubscribeCloseRaceRejectsRegistration(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		b := newTestBus(t, WithWorkers(1))
+		entered, release := make(chan struct{}), make(chan struct{})
+		b.rdb.AddHook(busCommandHook{run: func(_ context.Context, cmd redis.Cmder) error {
+			close(entered)
+			<-release
+			cmd.(*redis.StatusCmd).SetVal("OK")
+			return nil
+		}})
+		done := make(chan error, 1)
+		go func() {
+			_, err := b.SubscribeWork(context.Background(), "topic", func(context.Context, events.Event) error { return nil })
+			done <- err
+		}()
+		<-entered
+		ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
+		if err := b.Close(ctx); !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("Close while admitted setup runs = %v", err)
+		}
+		cancel()
+		close(release)
+		if err := <-done; !errors.Is(err, events.ErrClosed) {
+			t.Fatalf("registration after Close = %v", err)
+		}
+		if err := b.Close(context.Background()); err != nil || len(b.activeTopics()) != 0 {
+			t.Fatalf("close cleanup = %v", err)
+		}
+	})
+}
+
+func TestBusUnhandledAndUnsubscribedWorkNeverAcknowledges(t *testing.T) {
+	b := newTestBus(t)
+	var calls, acks int
+	entries := []handlerEntry{{id: 1, handler: func(context.Context, events.Event) error { calls++; return nil }}}
+	b.workSubs["topic"] = entries
+	b.rdb.AddHook(busCommandHook{run: func(context.Context, redis.Cmder) error { acks++; return nil }})
+	if err := (&workSubscription{id: 1, topic: "topic", bus: b}).Unsubscribe(); err != nil {
+		t.Fatal(err)
+	}
+	if entries[0].handler != nil || len(b.activeTopics()) != 0 {
+		t.Fatal("unsubscribe retained its handler graph or active topic")
+	}
+	b.processMessage(b.cfg.StreamPrefix+"topic", "1-0", map[string]any{"record": `{"event_id":"id","type":"topic"}`})
+	if calls != 0 || acks != 0 {
+		t.Fatalf("unhandled entry: callbacks=%d ACKs=%d", calls, acks)
+	}
+}
+
+func TestBusCloseWaitsForAdmittedCheckedPublication(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		b := newTestBus(t)
+		entered, release := make(chan struct{}), make(chan struct{})
+		b.rdb.AddHook(busCommandHook{run: func(_ context.Context, cmd redis.Cmder) error {
+			if cmd.Name() == "xadd" {
+				close(entered)
+				<-release
+				cmd.(*redis.StringCmd).SetVal("1-0")
+			} else {
+				cmd.(*redis.IntCmd).SetVal(0)
+			}
+			return nil
+		}})
+		done := make(chan error, 1)
+		go func() { done <- b.Publish(context.Background(), events.NewBaseEvent("topic")) }()
+		<-entered
+		ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
+		if err := b.Close(ctx); !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("Close completed before accepted Publish: %v", err)
+		}
+		cancel()
+		close(release)
+		if err := <-done; err != nil {
+			t.Fatal(err)
+		}
+		if err := b.Close(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	})
 }

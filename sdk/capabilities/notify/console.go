@@ -2,50 +2,37 @@ package notify
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
+	"strings"
 
-	"github.com/gopernicus/gopernicus/sdk/foundation/identity"
+	"github.com/gopernicus/gopernicus/sdk"
 )
 
-// Console is a development Notifier that logs deliveries instead of sending them
-// — the dev default for any kind, mirroring email.Console. It never drops
-// silently: every Notify is logged.
-type Console struct {
-	kind string
-	log  *slog.Logger
+// Console is a development body sender. It logs the destination and plain text;
+// a host may use it for a non-email channel without a provider account.
+type Console struct{ log *slog.Logger }
+
+// NewConsole creates a development sender. A nil logger uses slog.Default.
+func NewConsole(log *slog.Logger) *Console {
+	if log == nil {
+		log = slog.Default()
+	}
+	return &Console{log: log}
 }
 
-var (
-	_ Notifier           = (*Console)(nil)
-	_ CapabilityReporter = (*Console)(nil)
-)
-
-// Capabilities marks the console notifier development-only: it logs message
-// bodies (OTPs, magic links) rather than delivering them, so a production host
-// must reject it.
 func (c *Console) Capabilities() Capabilities {
 	return Capabilities{TransportSecurity: TransportSecurityNone, DevelopmentOnly: true}
 }
 
-// NewConsole returns a console Notifier for the given kind. A nil logger falls
-// back to slog.Default().
-func NewConsole(kind string, log *slog.Logger) *Console {
-	if log == nil {
-		log = slog.Default()
+// Send logs one plain-text body. Use DeliveryFunc to select it in notify.Send.
+func (c *Console) Send(ctx context.Context, destination, body string) error {
+	if err := ctx.Err(); err != nil {
+		return err
 	}
-	return &Console{kind: kind, log: log}
-}
-
-// Kind reports the address kind this Notifier declares.
-func (c *Console) Kind() string { return c.kind }
-
-// Notify logs the delivery at INFO.
-func (c *Console) Notify(ctx context.Context, to identity.Address, msg Message) error {
-	c.log.InfoContext(ctx, "notify (console notifier)",
-		"kind", c.kind,
-		"to", to.Value,
-		"subject", msg.Subject,
-		"body", msg.Body,
-	)
+	if strings.TrimSpace(destination) == "" || strings.TrimSpace(body) == "" {
+		return fmt.Errorf("notify: destination and body are required: %w", sdk.ErrInvalidInput)
+	}
+	c.log.InfoContext(ctx, "notification (console sender)", "to", destination, "body", body)
 	return nil
 }

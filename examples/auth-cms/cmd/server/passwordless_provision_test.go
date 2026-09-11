@@ -14,16 +14,18 @@ import (
 
 	"github.com/gopernicus/gopernicus/examples/auth-cms/internal/authmem"
 	auth "github.com/gopernicus/gopernicus/pockets/authentication"
-)
+	invitations "github.com/gopernicus/gopernicus/pockets/authentication/logic/invitations"
 
-// CHAU-6.7 — provision-on-consumption, end to end over real HTTP through exported
-// host seams.
-//
-// The load-bearing sequence is: request a link for an address with NO account →
-// assert NO user exists yet → redeem by POST → assert the account now exists and
-// the caller is signed in → assert the replay fails. A test that only checked
-// "redeem returned 200" would not prove the account is created at CONSUME rather
-// than at SEND, which is the entire security claim.
+	// CHAU-6.7 — provision-on-consumption, end to end over real HTTP through exported
+	// host seams.
+	//
+	// The load-bearing sequence is: request a link for an address with NO account →
+	// assert NO user exists yet → redeem by POST → assert the account now exists and
+	// the caller is signed in → assert the replay fails. A test that only checked
+	// "redeem returned 200" would not prove the account is created at CONSUME rather
+	// than at SEND, which is the entire security claim.
+	delivery "github.com/gopernicus/gopernicus/pockets/authentication/logic/delivery"
+)
 
 // magicTokenPattern extracts the token from the fragment of a delivered
 // magic-link URL.
@@ -37,7 +39,7 @@ type recordingGranter struct {
 	granted []string
 }
 
-func (g *recordingGranter) Grant(_ context.Context, in auth.GrantInput) error {
+func (g *recordingGranter) Grant(_ context.Context, in invitations.GrantInput) error {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	g.granted = append(g.granted, in.ResourceType+":"+in.ResourceID+"#"+in.Relation+"@"+in.SubjectID)
@@ -61,14 +63,14 @@ func newProvisioningHostWithInvitations(t *testing.T) (*linkHost, *recordingGran
 	if err != nil {
 		t.Fatalf("buildAuthConfig: %v", err)
 	}
-	cfg.DeliveryMode = auth.DeliveryModeInProcess
+	cfg.DeliveryMode = delivery.ModeInProcess
 	cfg.DeliveryJobsAcknowledged = false
 	cfg.DeliveryEphemeralAcknowledged = true
 	cfg.Mailer = sender
 	cfg.PasswordlessProvisionOnRedeem = true
-	cfg.InviteCheck = func(context.Context, auth.InviteCheckRequest) error { return nil }
+	cfg.InviteCheck = func(context.Context, invitations.InviteCheckRequest) error { return nil }
 
-	svc, err := auth.NewService(authmem.New().Repositories(), cfg)
+	svc, err := auth.New(authmem.New().Repositories(), cfg.TokenSigner, cfg.RuntimeMode, cfg.DeliveryMode, cfg.options()...)
 	if err != nil {
 		t.Fatalf("auth.NewService: %v", err)
 	}
@@ -86,7 +88,7 @@ func newProvisioningHostWithInvitations(t *testing.T) (*linkHost, *recordingGran
 func newProvisioningHost(t *testing.T) *linkHost {
 	t.Helper()
 	sender := &recordingSender{}
-	svc := bootInProcess(t, sender, func(cfg *auth.Config) {
+	svc := bootInProcess(t, sender, func(cfg *authenticationConfig) {
 		cfg.PasswordlessProvisionOnRedeem = true
 	})
 	router := mountInProcess(t, svc)
@@ -247,7 +249,7 @@ func TestProvisionWiringFailsLoudly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildAuthConfig: %v", err)
 	}
-	base.DeliveryMode = auth.DeliveryModeInProcess
+	base.DeliveryMode = delivery.ModeInProcess
 	base.DeliveryJobsAcknowledged = false
 	base.DeliveryEphemeralAcknowledged = true
 	base.PasswordlessProvisionOnRedeem = true
@@ -255,7 +257,7 @@ func TestProvisionWiringFailsLoudly(t *testing.T) {
 	t.Run("no atomic redemption repository", func(t *testing.T) {
 		repos := authmem.New().Repositories()
 		repos.Passwordless = nil
-		if _, err := auth.NewService(repos, base); !errors.Is(err, auth.ErrPasswordlessProvisionWiring) {
+		if _, err := auth.New(repos, base.TokenSigner, base.RuntimeMode, base.DeliveryMode, base.options()...); !errors.Is(err, auth.ErrPasswordlessProvisionWiring) {
 			t.Fatalf("NewService = %v, want ErrPasswordlessProvisionWiring", err)
 		}
 	})
@@ -263,7 +265,7 @@ func TestProvisionWiringFailsLoudly(t *testing.T) {
 	t.Run("no fenced session mint", func(t *testing.T) {
 		repos := authmem.New().Repositories()
 		repos.ActiveSessions = nil
-		if _, err := auth.NewService(repos, base); !errors.Is(err, auth.ErrPasswordlessProvisionWiring) {
+		if _, err := auth.New(repos, base.TokenSigner, base.RuntimeMode, base.DeliveryMode, base.options()...); !errors.Is(err, auth.ErrPasswordlessProvisionWiring) {
 			t.Fatalf("NewService = %v, want ErrPasswordlessProvisionWiring", err)
 		}
 	})
@@ -271,7 +273,7 @@ func TestProvisionWiringFailsLoudly(t *testing.T) {
 	t.Run("no identifier keyer", func(t *testing.T) {
 		cfg := base
 		cfg.IdentifierKeyer = nil
-		if _, err := auth.NewService(authmem.New().Repositories(), cfg); !errors.Is(err, auth.ErrPasswordlessProvisionWiring) {
+		if _, err := auth.New(authmem.New().Repositories(), cfg.TokenSigner, cfg.RuntimeMode, cfg.DeliveryMode, cfg.options()...); !errors.Is(err, auth.ErrPasswordlessProvisionWiring) {
 			t.Fatalf("NewService = %v, want ErrPasswordlessProvisionWiring", err)
 		}
 	})
@@ -279,13 +281,13 @@ func TestProvisionWiringFailsLoudly(t *testing.T) {
 	t.Run("email passwordless kind not enabled", func(t *testing.T) {
 		cfg := base
 		cfg.Passwordless = []string{"phone"}
-		if _, err := auth.NewService(authmem.New().Repositories(), cfg); !errors.Is(err, auth.ErrPasswordlessProvisionWiring) {
+		if _, err := auth.New(authmem.New().Repositories(), cfg.TokenSigner, cfg.RuntimeMode, cfg.DeliveryMode, cfg.options()...); !errors.Is(err, auth.ErrPasswordlessProvisionWiring) {
 			t.Fatalf("NewService = %v, want ErrPasswordlessProvisionWiring", err)
 		}
 	})
 
 	t.Run("the complete wiring constructs", func(t *testing.T) {
-		if _, err := auth.NewService(authmem.New().Repositories(), base); err != nil {
+		if _, err := auth.New(authmem.New().Repositories(), base.TokenSigner, base.RuntimeMode, base.DeliveryMode, base.options()...); err != nil {
 			t.Fatalf("the complete provisioning wiring failed to construct: %v", err)
 		}
 	})

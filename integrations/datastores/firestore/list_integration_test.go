@@ -14,7 +14,7 @@
 //     document-id PK, and the whole PostFilter family: offset over matches,
 //     reverse windows, count, the multi-pull page fill, and the cursor pointing
 //     at the last RETURNED match);
-//   - the search group, which is a PostFilter built from crud.MatchesSearch and
+//   - the search group, which is a PostFilter built from list.MatchesSearch and
 //     mirrors the pocket storetest search expectations (LiteralSubstringOracle,
 //     BlankTermIsUnfiltered, SearchIsScopedToTheParent, CountReflectsTheSearch,
 //     SearchWithCursorPaging).
@@ -37,7 +37,7 @@ import (
 
 	"github.com/gopernicus/gopernicus/integrations/datastores/firestore"
 	"github.com/gopernicus/gopernicus/sdk"
-	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
+	"github.com/gopernicus/gopernicus/sdk/pkg/list"
 )
 
 // TestListBehavior is the turso behavior suite, ported: everything in it is a
@@ -49,53 +49,53 @@ func TestListBehavior(t *testing.T) {
 	q := listQueryFor(db, collection, "a")
 
 	t.Run("forward_created_desc", func(t *testing.T) {
-		eqListIDs(t, traverseListIDs(t, ctx, r, q, crud.NewOrder("created_at", crud.DESC), 2),
+		eqListIDs(t, traverseListIDs(t, ctx, r, q, list.NewOrder("created_at", list.DESC), 2),
 			[]string{"e5", "e4", "e3", "e2", "e1"}, "created desc")
 	})
 	t.Run("forward_name_asc", func(t *testing.T) {
-		eqListIDs(t, traverseListIDs(t, ctx, r, q, crud.NewOrder("name", crud.ASC), 2),
+		eqListIDs(t, traverseListIDs(t, ctx, r, q, list.NewOrder("name", list.ASC), 2),
 			[]string{"e1", "e2", "e3", "e4", "e5"}, "name asc")
 	})
 	t.Run("forward_n_asc", func(t *testing.T) {
-		eqListIDs(t, traverseListIDs(t, ctx, r, q, crud.NewOrder("n", crud.ASC), 2),
+		eqListIDs(t, traverseListIDs(t, ctx, r, q, list.NewOrder("n", list.ASC), 2),
 			[]string{"e2", "e3", "e1", "e4", "e5"}, "n asc")
 	})
 
 	t.Run("default_order_when_blank", func(t *testing.T) {
 		// The ListQuery's DefaultOrder is created_at DESC.
-		page := mustList(t, ctx, r, q, crud.ListRequest{Limit: 2})
+		page := mustList(t, ctx, r, q, list.Request{Limit: 2})
 		eqListIDs(t, listIDs(page.Items), []string{"e5", "e4"}, "default order")
 	})
 
 	t.Run("prev_probe_full_window", func(t *testing.T) {
-		desc := crud.NewOrder("created_at", crud.DESC)
-		p1 := mustList(t, ctx, r, q, crud.ListRequest{Limit: 2, Order: desc})
+		desc := list.NewOrder("created_at", list.DESC)
+		p1 := mustList(t, ctx, r, q, list.Request{Limit: 2, Order: desc})
 		if p1.HasPrev {
 			t.Fatal("first page HasPrev = true, want false")
 		}
-		p2 := mustList(t, ctx, r, q, crud.ListRequest{Limit: 2, Cursor: p1.NextCursor, Order: desc})
-		p3 := mustList(t, ctx, r, q, crud.ListRequest{Limit: 2, Cursor: p2.NextCursor, Order: desc})
+		p2 := mustList(t, ctx, r, q, list.Request{Limit: 2, Cursor: p1.NextCursor, Order: desc})
+		p3 := mustList(t, ctx, r, q, list.Request{Limit: 2, Cursor: p2.NextCursor, Order: desc})
 		if !p3.HasPrev || p3.PreviousCursor == "" {
 			t.Fatalf("p3 HasPrev=%v prevCursor=%q, want true/set (full window)", p3.HasPrev, p3.PreviousCursor)
 		}
-		back := mustList(t, ctx, r, q, crud.ListRequest{Limit: 2, Cursor: p3.PreviousCursor, Order: desc})
+		back := mustList(t, ctx, r, q, list.Request{Limit: 2, Cursor: p3.PreviousCursor, Order: desc})
 		eqListIDs(t, listIDs(back.Items), []string{"e3", "e2"}, "previous cursor round-trip")
 	})
 
 	t.Run("prev_probe_partial_window", func(t *testing.T) {
-		desc := crud.NewOrder("created_at", crud.DESC)
-		p1 := mustList(t, ctx, r, q, crud.ListRequest{Limit: 3, Order: desc})
-		p2 := mustList(t, ctx, r, q, crud.ListRequest{Limit: 3, Cursor: p1.NextCursor, Order: desc})
+		desc := list.NewOrder("created_at", list.DESC)
+		p1 := mustList(t, ctx, r, q, list.Request{Limit: 3, Order: desc})
+		p2 := mustList(t, ctx, r, q, list.Request{Limit: 3, Cursor: p1.NextCursor, Order: desc})
 		if !p2.HasPrev || p2.PreviousCursor != "" {
 			t.Fatalf("p2 HasPrev=%v prevCursor=%q, want true/empty (partial window)", p2.HasPrev, p2.PreviousCursor)
 		}
 	})
 
 	t.Run("offset_matches_cursor", func(t *testing.T) {
-		desc := crud.NewOrder("created_at", crud.DESC)
+		desc := list.NewOrder("created_at", list.DESC)
 		var got []string
 		for off := 0; off < 6; off += 2 {
-			page := mustList(t, ctx, r, q, crud.ListRequest{Limit: 2, Offset: off, Order: desc, Strategy: crud.StrategyOffset})
+			page := mustList(t, ctx, r, q, list.Request{Limit: 2, Offset: off, Order: desc, Strategy: list.StrategyOffset})
 			if wantPrev := off > 0; page.HasPrev != wantPrev {
 				t.Errorf("offset %d HasPrev = %v, want %v", off, page.HasPrev, wantPrev)
 			}
@@ -108,22 +108,22 @@ func TestListBehavior(t *testing.T) {
 	})
 
 	t.Run("count_under_filter", func(t *testing.T) {
-		page := mustList(t, ctx, r, q, crud.ListRequest{Limit: 2, WithCount: true})
+		page := mustList(t, ctx, r, q, list.Request{Limit: 2, WithCount: true})
 		if page.Total == nil || *page.Total != 5 {
 			t.Fatalf("Total = %v, want 5", page.Total)
 		}
-		other := mustList(t, ctx, r, listQueryFor(db, collection, "b"), crud.ListRequest{Limit: 10, WithCount: true})
+		other := mustList(t, ctx, r, listQueryFor(db, collection, "b"), list.Request{Limit: 10, WithCount: true})
 		if other.Total == nil || *other.Total != 2 {
 			t.Fatalf("Total(b) = %v, want 2", other.Total)
 		}
 	})
 
 	t.Run("stale_cursor_is_first_page", func(t *testing.T) {
-		token, err := crud.EncodeCursor("name", "delta", "e4")
+		token, err := list.EncodeCursor("name", "delta", "e4")
 		if err != nil {
 			t.Fatalf("EncodeCursor: %v", err)
 		}
-		page := mustList(t, ctx, r, q, crud.ListRequest{Limit: 2, Cursor: token, Order: crud.NewOrder("created_at", crud.DESC)})
+		page := mustList(t, ctx, r, q, list.Request{Limit: 2, Cursor: token, Order: list.NewOrder("created_at", list.DESC)})
 		eqListIDs(t, listIDs(page.Items), []string{"e5", "e4"}, "stale cursor first page")
 		if page.HasPrev {
 			t.Error("stale-cursor first page HasPrev = true, want false")
@@ -131,15 +131,15 @@ func TestListBehavior(t *testing.T) {
 	})
 
 	t.Run("malformed_cursor_is_rejected", func(t *testing.T) {
-		if _, err := firestore.List(ctx, r, q, crud.ListRequest{Limit: 2, Cursor: "not-base64!!"}); !errors.Is(err, sdk.ErrInvalidInput) {
+		if _, err := firestore.List(ctx, r, q, list.Request{Limit: 2, Cursor: "not-base64!!"}); !errors.Is(err, sdk.ErrInvalidInput) {
 			t.Fatalf("malformed cursor err = %v, want ErrInvalidInput", err)
 		}
 	})
 
 	t.Run("limits_clamp", func(t *testing.T) {
 		clamped := q
-		clamped.Limits = crud.Limits{Max: 2}
-		page := mustList(t, ctx, r, clamped, crud.ListRequest{Limit: 3, Order: crud.NewOrder("created_at", crud.DESC)})
+		clamped.Limits = list.Limits{Max: 2}
+		page := mustList(t, ctx, r, clamped, list.Request{Limit: 3, Order: list.NewOrder("created_at", list.DESC)})
 		eqListIDs(t, listIDs(page.Items), []string{"e5", "e4"}, "limits clamp to Max 2")
 		if !page.HasMore {
 			t.Error("HasMore = false, want true (Max+1 over-fetch proves a next page)")
@@ -147,14 +147,14 @@ func TestListBehavior(t *testing.T) {
 	})
 
 	t.Run("unknown_order_field", func(t *testing.T) {
-		_, err := firestore.List(ctx, r, q, crud.ListRequest{Limit: 2, Order: crud.NewOrder("password", crud.ASC)})
+		_, err := firestore.List(ctx, r, q, list.Request{Limit: 2, Order: list.NewOrder("password", list.ASC)})
 		if !errors.Is(err, sdk.ErrInvalidInput) {
 			t.Fatalf("unknown order err = %v, want ErrInvalidInput", err)
 		}
 	})
 
 	t.Run("empty_page_items_non_nil", func(t *testing.T) {
-		page := mustList(t, ctx, r, listQueryFor(db, collection, "no-such-kind"), crud.ListRequest{Limit: 10})
+		page := mustList(t, ctx, r, listQueryFor(db, collection, "no-such-kind"), list.Request{Limit: 10})
 		if page.Items == nil || len(page.Items) != 0 {
 			t.Fatalf("Items = %#v, want empty non-nil", page.Items)
 		}
@@ -189,31 +189,31 @@ func TestListReverseRoundTripsBothDirections(t *testing.T) {
 
 	for _, tc := range []struct {
 		name  string
-		order crud.Order
+		order list.Order
+		limit int
 		want  [][]string
 	}{
-		{"asc", crud.NewOrder("created_at", crud.ASC), [][]string{{"r1", "r2"}, {"r3", "r4"}, {"r5", "r6"}}},
-		{"desc", crud.NewOrder("created_at", crud.DESC), [][]string{{"r6", "r5"}, {"r4", "r3"}, {"r2", "r1"}}},
+		{"asc", list.NewOrder("created_at", list.ASC), 2, [][]string{{"r1", "r2"}, {"r3", "r4"}, {"r5", "r6"}}},
+		{"desc", list.NewOrder("created_at", list.DESC), 2, [][]string{{"r6", "r5"}, {"r4", "r3"}, {"r2", "r1"}}},
+		{"asc_one", list.NewOrder("created_at", list.ASC), 1, [][]string{{"r1"}, {"r2"}, {"r3"}}},
+		{"desc_one", list.NewOrder("created_at", list.DESC), 1, [][]string{{"r6"}, {"r5"}, {"r4"}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			p1 := mustList(t, ctx, r, q, crud.ListRequest{Limit: 2, Order: tc.order})
+			p1 := mustList(t, ctx, r, q, list.Request{Limit: tc.limit, Order: tc.order})
 			eqListIDs(t, listIDs(p1.Items), tc.want[0], "page 1")
-			p2 := mustList(t, ctx, r, q, crud.ListRequest{Limit: 2, Cursor: p1.NextCursor, Order: tc.order})
+			p2 := mustList(t, ctx, r, q, list.Request{Limit: tc.limit, Cursor: p1.NextCursor, Order: tc.order})
 			eqListIDs(t, listIDs(p2.Items), tc.want[1], "page 2")
-			p3 := mustList(t, ctx, r, q, crud.ListRequest{Limit: 2, Cursor: p2.NextCursor, Order: tc.order})
+			p3 := mustList(t, ctx, r, q, list.Request{Limit: tc.limit, Cursor: p2.NextCursor, Order: tc.order})
 			eqListIDs(t, listIDs(p3.Items), tc.want[2], "page 3")
 
 			if !p3.HasPrev || p3.PreviousCursor == "" {
 				t.Fatalf("page 3 HasPrev=%v prevCursor=%q, want true/set", p3.HasPrev, p3.PreviousCursor)
 			}
-			back := mustList(t, ctx, r, q, crud.ListRequest{Limit: 2, Cursor: p3.PreviousCursor, Order: tc.order})
+			back := mustList(t, ctx, r, q, list.Request{Limit: tc.limit, Cursor: p3.PreviousCursor, Order: tc.order})
 			eqListIDs(t, listIDs(back.Items), tc.want[1], "page 3 → page 2")
 
-			// One step further back is page ONE, which no cursor addresses: the
-			// probe from page two finds only the single row strictly before its
-			// cursor (the boundary row itself is excluded), so the window is
-			// partial — HasPrev without a PreviousCursor, exactly as
-			// crud.MarkPrevPage specifies and the SQL connectors behave.
+			// The inclusive probe reaches page one, with no extra predecessor
+			// to encode. An empty PreviousCursor therefore opens that first page.
 			if !back.HasPrev || back.PreviousCursor != "" {
 				t.Fatalf("page 2 HasPrev=%v prevCursor=%q, want true/empty (partial window)", back.HasPrev, back.PreviousCursor)
 			}
@@ -242,31 +242,31 @@ func TestListTiedOrderValuesPageOnThePK(t *testing.T) {
 	q := listQueryFor(db, collection, "a")
 
 	t.Run("asc_limit_1", func(t *testing.T) {
-		eqListIDs(t, traverseListIDs(t, ctx, r, q, crud.NewOrder("created_at", crud.ASC), 1),
+		eqListIDs(t, traverseListIDs(t, ctx, r, q, list.NewOrder("created_at", list.ASC), 1),
 			[]string{"t0", "t1", "t2", "t3", "t4"}, "tied asc, one at a time")
 	})
 	t.Run("asc_limit_2_boundary_inside_the_tie", func(t *testing.T) {
-		eqListIDs(t, traverseListIDs(t, ctx, r, q, crud.NewOrder("created_at", crud.ASC), 2),
+		eqListIDs(t, traverseListIDs(t, ctx, r, q, list.NewOrder("created_at", list.ASC), 2),
 			[]string{"t0", "t1", "t2", "t3", "t4"}, "tied asc, boundary inside the tie")
 	})
 	t.Run("desc_limit_2", func(t *testing.T) {
-		eqListIDs(t, traverseListIDs(t, ctx, r, q, crud.NewOrder("created_at", crud.DESC), 2),
+		eqListIDs(t, traverseListIDs(t, ctx, r, q, list.NewOrder("created_at", list.DESC), 2),
 			[]string{"t4", "t3", "t2", "t1", "t0"}, "tied desc")
 	})
 	// The reverse probe's own boundary sits INSIDE the tie: page three's cursor
 	// addresses t3, and the two rows before it (t2, t1) share t3's timestamp,
 	// so only the PK tiebreaker can place them.
 	t.Run("reverse_probe_inside_the_tie", func(t *testing.T) {
-		asc := crud.NewOrder("created_at", crud.ASC)
-		p1 := mustList(t, ctx, r, q, crud.ListRequest{Limit: 2, Order: asc})
-		p2 := mustList(t, ctx, r, q, crud.ListRequest{Limit: 2, Cursor: p1.NextCursor, Order: asc})
+		asc := list.NewOrder("created_at", list.ASC)
+		p1 := mustList(t, ctx, r, q, list.Request{Limit: 2, Order: asc})
+		p2 := mustList(t, ctx, r, q, list.Request{Limit: 2, Cursor: p1.NextCursor, Order: asc})
 		eqListIDs(t, listIDs(p2.Items), []string{"t2", "t3"}, "page 2 inside the tie")
-		p3 := mustList(t, ctx, r, q, crud.ListRequest{Limit: 2, Cursor: p2.NextCursor, Order: asc})
+		p3 := mustList(t, ctx, r, q, list.Request{Limit: 2, Cursor: p2.NextCursor, Order: asc})
 		eqListIDs(t, listIDs(p3.Items), []string{"t4"}, "page 3")
 		if !p3.HasPrev || p3.PreviousCursor == "" {
 			t.Fatalf("page 3 HasPrev=%v prevCursor=%q, want true/set (a full window across the tie)", p3.HasPrev, p3.PreviousCursor)
 		}
-		back := mustList(t, ctx, r, q, crud.ListRequest{Limit: 2, Cursor: p3.PreviousCursor, Order: asc})
+		back := mustList(t, ctx, r, q, list.Request{Limit: 2, Cursor: p3.PreviousCursor, Order: asc})
 		eqListIDs(t, listIDs(back.Items), []string{"t2", "t3"}, "back inside the tie")
 	})
 }
@@ -283,28 +283,28 @@ func TestListPKIsTheOrderField(t *testing.T) {
 
 	t.Run("document_field_pk", func(t *testing.T) {
 		q := listQueryFor(db, collection, "a") // PK "id", ordering by "id"
-		eqListIDs(t, traverseListIDs(t, ctx, r, q, crud.NewOrder("id", crud.ASC), 2),
+		eqListIDs(t, traverseListIDs(t, ctx, r, q, list.NewOrder("id", list.ASC), 2),
 			[]string{"e1", "e2", "e3", "e4", "e5"}, "id asc")
-		eqListIDs(t, traverseListIDs(t, ctx, r, q, crud.NewOrder("id", crud.DESC), 2),
+		eqListIDs(t, traverseListIDs(t, ctx, r, q, list.NewOrder("id", list.DESC), 2),
 			[]string{"e5", "e4", "e3", "e2", "e1"}, "id desc")
 	})
 
 	t.Run("document_id_pk", func(t *testing.T) {
 		q := listQueryFor(db, collection, "a")
 		q.PK = "" // the document id
-		eqListIDs(t, traverseListIDs(t, ctx, r, q, crud.NewOrder(gcfs.DocumentID, crud.ASC), 2),
+		eqListIDs(t, traverseListIDs(t, ctx, r, q, list.NewOrder(gcfs.DocumentID, list.ASC), 2),
 			[]string{"e1", "e2", "e3", "e4", "e5"}, "__name__ asc")
 
 		// And the reverse probe over the same single-clause ordering.
-		asc := crud.NewOrder(gcfs.DocumentID, crud.ASC)
-		p1 := mustList(t, ctx, r, q, crud.ListRequest{Limit: 2, Order: asc})
-		p2 := mustList(t, ctx, r, q, crud.ListRequest{Limit: 2, Cursor: p1.NextCursor, Order: asc})
-		p3 := mustList(t, ctx, r, q, crud.ListRequest{Limit: 2, Cursor: p2.NextCursor, Order: asc})
+		asc := list.NewOrder(gcfs.DocumentID, list.ASC)
+		p1 := mustList(t, ctx, r, q, list.Request{Limit: 2, Order: asc})
+		p2 := mustList(t, ctx, r, q, list.Request{Limit: 2, Cursor: p1.NextCursor, Order: asc})
+		p3 := mustList(t, ctx, r, q, list.Request{Limit: 2, Cursor: p2.NextCursor, Order: asc})
 		eqListIDs(t, listIDs(p3.Items), []string{"e5"}, "__name__ page 3")
 		if !p3.HasPrev || p3.PreviousCursor == "" {
 			t.Fatalf("page 3 HasPrev=%v prevCursor=%q, want true/set", p3.HasPrev, p3.PreviousCursor)
 		}
-		back := mustList(t, ctx, r, q, crud.ListRequest{Limit: 2, Cursor: p3.PreviousCursor, Order: asc})
+		back := mustList(t, ctx, r, q, list.Request{Limit: 2, Cursor: p3.PreviousCursor, Order: asc})
 		eqListIDs(t, listIDs(back.Items), []string{"e3", "e4"}, "__name__ reverse round trip")
 	})
 }
@@ -327,7 +327,7 @@ func TestListDocumentIDTiebreakUnderATimestampOrder(t *testing.T) {
 	q := listQueryFor(db, collection, "a")
 	q.PK = ""
 
-	eqListIDs(t, traverseListIDs(t, ctx, r, q, crud.NewOrder("created_at", crud.ASC), 1),
+	eqListIDs(t, traverseListIDs(t, ctx, r, q, list.NewOrder("created_at", list.ASC), 1),
 		[]string{"d1", "d2", "d3"}, "document-id tiebreak under a tie")
 }
 
@@ -349,7 +349,7 @@ func TestListPostFilterPaging(t *testing.T) {
 	// The matches: even N — p02, p04, p06, p08, p10, p12.
 	filtered := listQueryFor(db, collection, "a")
 	filtered.PostFilter = func(row listItem) bool { return row.N%2 == 0 }
-	asc := crud.NewOrder("created_at", crud.ASC)
+	asc := list.NewOrder("created_at", list.ASC)
 	matches := []string{"p02", "p04", "p06", "p08", "p10", "p12"}
 
 	t.Run("forward_traversal_returns_only_matches", func(t *testing.T) {
@@ -357,12 +357,12 @@ func TestListPostFilterPaging(t *testing.T) {
 	})
 
 	t.Run("next_cursor_is_the_last_returned_match", func(t *testing.T) {
-		page := mustList(t, ctx, r, filtered, crud.ListRequest{Limit: 2, Order: asc})
+		page := mustList(t, ctx, r, filtered, list.Request{Limit: 2, Order: asc})
 		eqListIDs(t, listIDs(page.Items), []string{"p02", "p04"}, "page 1")
 		if !page.HasMore || page.NextCursor == "" {
 			t.Fatalf("page 1 HasMore=%v NextCursor=%q, want more", page.HasMore, page.NextCursor)
 		}
-		cursor, err := crud.DecodeCursor(page.NextCursor, "created_at")
+		cursor, err := list.DecodeCursor(page.NextCursor, "created_at")
 		if err != nil || cursor == nil {
 			t.Fatalf("DecodeCursor = %v, %v", cursor, err)
 		}
@@ -371,33 +371,33 @@ func TestListPostFilterPaging(t *testing.T) {
 		if cursor.PK != "p04" {
 			t.Fatalf("NextCursor addresses %q, want the last RETURNED match p04", cursor.PK)
 		}
-		next := mustList(t, ctx, r, filtered, crud.ListRequest{Limit: 2, Cursor: page.NextCursor, Order: asc})
+		next := mustList(t, ctx, r, filtered, list.Request{Limit: 2, Cursor: page.NextCursor, Order: asc})
 		eqListIDs(t, listIDs(next.Items), []string{"p06", "p08"}, "page 2")
 	})
 
 	t.Run("filtered_reverse_windows", func(t *testing.T) {
-		p1 := mustList(t, ctx, r, filtered, crud.ListRequest{Limit: 2, Order: asc})
-		p2 := mustList(t, ctx, r, filtered, crud.ListRequest{Limit: 2, Cursor: p1.NextCursor, Order: asc})
-		p3 := mustList(t, ctx, r, filtered, crud.ListRequest{Limit: 2, Cursor: p2.NextCursor, Order: asc})
+		p1 := mustList(t, ctx, r, filtered, list.Request{Limit: 2, Order: asc})
+		p2 := mustList(t, ctx, r, filtered, list.Request{Limit: 2, Cursor: p1.NextCursor, Order: asc})
+		p3 := mustList(t, ctx, r, filtered, list.Request{Limit: 2, Cursor: p2.NextCursor, Order: asc})
 		eqListIDs(t, listIDs(p3.Items), []string{"p10", "p12"}, "page 3")
 		if !p3.HasPrev || p3.PreviousCursor == "" {
 			t.Fatalf("page 3 HasPrev=%v prevCursor=%q, want true/set (a full window of MATCHES)", p3.HasPrev, p3.PreviousCursor)
 		}
-		back := mustList(t, ctx, r, filtered, crud.ListRequest{Limit: 2, Cursor: p3.PreviousCursor, Order: asc})
+		back := mustList(t, ctx, r, filtered, list.Request{Limit: 2, Cursor: p3.PreviousCursor, Order: asc})
 		eqListIDs(t, listIDs(back.Items), []string{"p06", "p08"}, "page 3 → page 2")
 
 		// A partial reverse window sets HasPrev with no cursor: from page two of
 		// a three-per-page traversal only two matches precede it.
-		big1 := mustList(t, ctx, r, filtered, crud.ListRequest{Limit: 4, Order: asc})
-		big2 := mustList(t, ctx, r, filtered, crud.ListRequest{Limit: 4, Cursor: big1.NextCursor, Order: asc})
+		big1 := mustList(t, ctx, r, filtered, list.Request{Limit: 4, Order: asc})
+		big2 := mustList(t, ctx, r, filtered, list.Request{Limit: 4, Cursor: big1.NextCursor, Order: asc})
 		if !big2.HasPrev || big2.PreviousCursor != "" {
 			t.Fatalf("page 2 HasPrev=%v prevCursor=%q, want true/empty (partial window)", big2.HasPrev, big2.PreviousCursor)
 		}
 	})
 
 	t.Run("offset_counts_matches_not_scanned_documents", func(t *testing.T) {
-		page := mustList(t, ctx, r, filtered, crud.ListRequest{
-			Limit: 2, Offset: 2, Order: asc, Strategy: crud.StrategyOffset,
+		page := mustList(t, ctx, r, filtered, list.Request{
+			Limit: 2, Offset: 2, Order: asc, Strategy: list.StrategyOffset,
 		})
 		// Offset 2 skips two MATCHES (p02, p04) — not two documents, which would
 		// have started at p04 — and reports no cursors.
@@ -413,8 +413,8 @@ func TestListPostFilterPaging(t *testing.T) {
 		}
 
 		// The tail: offset past every match returns an empty, non-nil page.
-		tail := mustList(t, ctx, r, filtered, crud.ListRequest{
-			Limit: 2, Offset: 6, Order: asc, Strategy: crud.StrategyOffset,
+		tail := mustList(t, ctx, r, filtered, list.Request{
+			Limit: 2, Offset: 6, Order: asc, Strategy: list.StrategyOffset,
 		})
 		if len(tail.Items) != 0 || tail.Items == nil {
 			t.Fatalf("offset 6 items = %#v, want empty non-nil", tail.Items)
@@ -426,11 +426,11 @@ func TestListPostFilterPaging(t *testing.T) {
 
 	t.Run("count_with_and_without_the_postfilter", func(t *testing.T) {
 		unfiltered := mustList(t, ctx, r, listQueryFor(db, collection, "a"),
-			crud.ListRequest{Limit: 2, WithCount: true, Order: asc})
+			list.Request{Limit: 2, WithCount: true, Order: asc})
 		if unfiltered.Total == nil || *unfiltered.Total != 12 {
 			t.Fatalf("unfiltered Total = %v, want 12 (the server aggregation)", unfiltered.Total)
 		}
-		counted := mustList(t, ctx, r, filtered, crud.ListRequest{Limit: 2, WithCount: true, Order: asc})
+		counted := mustList(t, ctx, r, filtered, list.Request{Limit: 2, WithCount: true, Order: asc})
 		if counted.Total == nil || *counted.Total != 6 {
 			t.Fatalf("filtered Total = %v, want the 6 MATCHES", counted.Total)
 		}
@@ -461,12 +461,12 @@ func TestListPostFilterFillsAcrossUnderlyingPulls(t *testing.T) {
 	// 50-document pull, so filling a page of four forces a second pull.
 	q := listQueryFor(db, collection, "a")
 	q.PostFilter = func(row listItem) bool { return row.N >= 45 && row.N%2 == 1 }
-	asc := crud.NewOrder("created_at", crud.ASC)
+	asc := list.NewOrder("created_at", list.ASC)
 	want := []string{"s45", "s47", "s49", "s51", "s53", "s55", "s57", "s59"}
 
 	eqListIDs(t, traverseListIDs(t, ctx, r, q, asc, 3), want, "matches across pulls")
 
-	page := mustList(t, ctx, r, q, crud.ListRequest{Limit: 3, WithCount: true, Order: asc})
+	page := mustList(t, ctx, r, q, list.Request{Limit: 3, WithCount: true, Order: asc})
 	eqListIDs(t, listIDs(page.Items), want[:3], "first filled page")
 	if page.Total == nil || *page.Total != int64(len(want)) {
 		t.Fatalf("Total = %v, want %d (the iterate-and-filter count also pulls twice)", page.Total, len(want))
@@ -483,7 +483,7 @@ func TestListWithCountInsideATransaction(t *testing.T) {
 	seedListItems(t, ctx, db, collection)
 	q := listQueryFor(db, collection, "a")
 
-	direct := mustList(t, ctx, db.ReaderFrom(ctx), q, crud.ListRequest{Limit: 2, WithCount: true})
+	direct := mustList(t, ctx, db.ReaderFrom(ctx), q, list.Request{Limit: 2, WithCount: true})
 	if direct.Total == nil || *direct.Total != 5 {
 		t.Fatalf("Total outside a snapshot = %v, want 5", direct.Total)
 	}
@@ -491,7 +491,7 @@ func TestListWithCountInsideATransaction(t *testing.T) {
 	// The same fallback carries a read-write transaction: reads there are also
 	// transaction-scoped, and the aggregation is equally unavailable.
 	if err := db.Transact(ctx, func(txCtx context.Context) error {
-		page, err := firestore.List(txCtx, db.ReaderFrom(txCtx), q, crud.ListRequest{Limit: 2, WithCount: true})
+		page, err := firestore.List(txCtx, db.ReaderFrom(txCtx), q, list.Request{Limit: 2, WithCount: true})
 		if err != nil {
 			return err
 		}
@@ -509,7 +509,7 @@ func TestListWithCountInsideATransaction(t *testing.T) {
 			t.Errorf("Reader.Count inside a snapshot = %v, want ErrCountInTransaction", err)
 		}
 		// …and List still answers WithCount, by iterating.
-		page, err := firestore.List(snapCtx, r, q, crud.ListRequest{Limit: 2, WithCount: true})
+		page, err := firestore.List(snapCtx, r, q, list.Request{Limit: 2, WithCount: true})
 		if err != nil {
 			return err
 		}
@@ -521,7 +521,7 @@ func TestListWithCountInsideATransaction(t *testing.T) {
 		// The postfiltered count iterates in both worlds.
 		filtered := q
 		filtered.PostFilter = func(row listItem) bool { return row.N >= 30 }
-		filteredPage, err := firestore.List(snapCtx, r, filtered, crud.ListRequest{Limit: 2, WithCount: true})
+		filteredPage, err := firestore.List(snapCtx, r, filtered, list.Request{Limit: 2, WithCount: true})
 		if err != nil {
 			return err
 		}
@@ -554,7 +554,7 @@ var searchNames = []string{
 // makes that behave like the SQL connectors' LIKE/ILIKE predicate. The
 // expectations mirror the pocket storetest search group — LiteralSubstringOracle,
 // BlankTermIsUnfiltered, SearchIsScopedToTheParent, CountReflectsTheSearch,
-// SearchWithCursorPaging — against the same oracle: crud.MatchesSearch itself.
+// SearchWithCursorPaging — against the same oracle: list.MatchesSearch itself.
 func TestListSearchAsAPostFilter(t *testing.T) {
 	ctx, db, collection := listFixture(t)
 	for i, name := range searchNames {
@@ -576,7 +576,7 @@ func TestListSearchAsAPostFilter(t *testing.T) {
 	// shared composition of it — exactly the three lines a Firestore store
 	// writes (R4). A blank term yields a nil PostFilter, which is how "no
 	// search is not a filter" reaches the helper.
-	searchFields := []crud.SearchField{{Column: "name"}}
+	searchFields := []list.SearchField{{Column: "name"}}
 	searchValueOf := func(row listItem, field string) string {
 		if field == "name" {
 			return row.Name
@@ -585,13 +585,13 @@ func TestListSearchAsAPostFilter(t *testing.T) {
 	}
 	searchQuery := func(parent, term string) firestore.ListQuery[listItem] {
 		q := listQueryFor(db, collection, parent)
-		q.DefaultOrder = crud.NewOrder("created_at", crud.ASC)
+		q.DefaultOrder = list.NewOrder("created_at", list.ASC)
 		q.PostFilter = firestore.SearchFilter(searchFields, searchValueOf, term)
 		return q
 	}
 	namesFor := func(t *testing.T, term string) []string {
 		t.Helper()
-		page := mustList(t, ctx, r, searchQuery("sa-search", term), crud.ListRequest{Limit: 50, Search: term})
+		page := mustList(t, ctx, r, searchQuery("sa-search", term), list.Request{Limit: 50, Search: term})
 		out := make([]string, 0, len(page.Items))
 		for _, row := range page.Items {
 			out = append(out, row.Name)
@@ -611,12 +611,12 @@ func TestListSearchAsAPostFilter(t *testing.T) {
 
 				var want []string
 				for _, name := range searchNames {
-					if crud.MatchesSearch(name, term) {
+					if list.MatchesSearch(name, term) {
 						want = append(want, name)
 					}
 				}
 				if len(got) != len(want) {
-					t.Fatalf("search %q returned %v, want %v (the crud.MatchesSearch oracle)", term, got, want)
+					t.Fatalf("search %q returned %v, want %v (the list.MatchesSearch oracle)", term, got, want)
 				}
 				set := map[string]bool{}
 				for _, n := range got {
@@ -644,7 +644,7 @@ func TestListSearchAsAPostFilter(t *testing.T) {
 			t.Fatalf("search returned %v, want exactly the one row under this parent", got)
 		}
 		foreign := mustList(t, ctx, r, searchQuery("sa-other", "deploy-bot"),
-			crud.ListRequest{Limit: 50, Search: "deploy-bot"})
+			list.Request{Limit: 50, Search: "deploy-bot"})
 		if len(foreign.Items) != 1 {
 			t.Errorf("the foreign parent returned %d rows, want 1", len(foreign.Items))
 		}
@@ -653,10 +653,10 @@ func TestListSearchAsAPostFilter(t *testing.T) {
 	t.Run("CountReflectsTheSearch", func(t *testing.T) {
 		const term = "deploy"
 		page := mustList(t, ctx, r, searchQuery("sa-search", term),
-			crud.ListRequest{Limit: 50, WithCount: true, Search: term})
+			list.Request{Limit: 50, WithCount: true, Search: term})
 		want := 0
 		for _, name := range searchNames {
-			if crud.MatchesSearch(name, term) {
+			if list.MatchesSearch(name, term) {
 				want++
 			}
 		}
@@ -672,7 +672,7 @@ func TestListSearchAsAPostFilter(t *testing.T) {
 		const term = "naming"
 		matching := 0
 		for _, name := range searchNames {
-			if crud.MatchesSearch(name, term) {
+			if list.MatchesSearch(name, term) {
 				matching++
 			}
 		}
@@ -681,7 +681,7 @@ func TestListSearchAsAPostFilter(t *testing.T) {
 		}
 
 		q := searchQuery("sa-search", term)
-		first := mustList(t, ctx, r, q, crud.ListRequest{Limit: 2, Search: term})
+		first := mustList(t, ctx, r, q, list.Request{Limit: 2, Search: term})
 		if len(first.Items) != 2 {
 			t.Fatalf("first page has %d items, want 2", len(first.Items))
 		}
@@ -692,13 +692,13 @@ func TestListSearchAsAPostFilter(t *testing.T) {
 			t.Error("the first page reports a previous page")
 		}
 
-		second := mustList(t, ctx, r, q, crud.ListRequest{Limit: 2, Cursor: first.NextCursor, Search: term})
+		second := mustList(t, ctx, r, q, list.Request{Limit: 2, Cursor: first.NextCursor, Search: term})
 		if len(second.Items) != matching-2 {
 			t.Fatalf("second page has %d items, want %d", len(second.Items), matching-2)
 		}
 		seen := map[string]bool{}
 		for _, row := range append(append([]listItem{}, first.Items...), second.Items...) {
-			if !crud.MatchesSearch(row.Name, term) {
+			if !list.MatchesSearch(row.Name, term) {
 				t.Errorf("a paged row %q does not match the search", row.Name)
 			}
 			if seen[row.ID] {
@@ -737,13 +737,13 @@ func TestListCountDescribesTheTraversablePopulation(t *testing.T) {
 
 	r := db.ReaderFrom(ctx)
 	q := listQueryFor(db, collection, "a")
-	byN := crud.NewOrder("n", crud.ASC)
+	byN := list.NewOrder("n", list.ASC)
 
 	traversable := traverseListIDs(t, ctx, r, q, byN, 2)
 	eqListIDs(t, traversable, []string{"e2", "e3", "e1", "e4", "e5"}, "n asc traversal")
 
 	t.Run("outside a transaction the aggregation counts the ordered query", func(t *testing.T) {
-		page := mustList(t, ctx, r, q, crud.ListRequest{Limit: 2, Order: byN, WithCount: true})
+		page := mustList(t, ctx, r, q, list.Request{Limit: 2, Order: byN, WithCount: true})
 		if page.Total == nil {
 			t.Fatal("Total is nil under WithCount")
 		}
@@ -754,7 +754,7 @@ func TestListCountDescribesTheTraversablePopulation(t *testing.T) {
 
 	t.Run("inside a ReadSnapshot the iterate fallback agrees", func(t *testing.T) {
 		err := db.ReadSnapshot(ctx, func(snapCtx context.Context, sr firestore.Reader) error {
-			page, err := firestore.List(snapCtx, sr, q, crud.ListRequest{Limit: 2, Order: byN, WithCount: true})
+			page, err := firestore.List(snapCtx, sr, q, list.Request{Limit: 2, Order: byN, WithCount: true})
 			if err != nil {
 				return err
 			}
@@ -772,7 +772,7 @@ func TestListCountDescribesTheTraversablePopulation(t *testing.T) {
 		// Ordered by created_at, which every row HAS, the same list counts six.
 		// That is the point: Total answers "how many rows can this ordering
 		// reach", not "how many documents match the filter".
-		page := mustList(t, ctx, r, q, crud.ListRequest{Limit: 2, Order: crud.NewOrder("created_at", crud.ASC), WithCount: true})
+		page := mustList(t, ctx, r, q, list.Request{Limit: 2, Order: list.NewOrder("created_at", list.ASC), WithCount: true})
 		if page.Total == nil || *page.Total != int64(len(traversable)+1) {
 			t.Errorf("Total under created_at = %v, want %d", page.Total, len(traversable)+1)
 		}
@@ -824,7 +824,7 @@ func TestListPostFilterResumesOnSnapshotsNotValues(t *testing.T) {
 	}
 
 	q := listQueryFor(db, collection, "nulls")
-	q.DefaultOrder = crud.NewOrder("created_at", crud.ASC)
+	q.DefaultOrder = list.NewOrder("created_at", list.ASC)
 	// The documented absent model: a null timestamp decodes to the zero time.
 	q.Decode = func(snap *gcfs.DocumentSnapshot) (listItem, error) {
 		data := snap.Data()
@@ -840,7 +840,7 @@ func TestListPostFilterResumesOnSnapshotsNotValues(t *testing.T) {
 	r := db.ReaderFrom(ctx)
 
 	t.Run("the page fills across the pull boundary inside the null run", func(t *testing.T) {
-		page := mustList(t, ctx, r, q, crud.ListRequest{Limit: 2, Order: crud.NewOrder("created_at", crud.ASC)})
+		page := mustList(t, ctx, r, q, list.Request{Limit: 2, Order: list.NewOrder("created_at", list.ASC)})
 		eqListIDs(t, listIDs(page.Items), []string{"n01", "n52"}, "first page of matches")
 		if !page.HasMore {
 			t.Error("HasMore = false — the matches after the pull boundary were dropped")
@@ -848,14 +848,14 @@ func TestListPostFilterResumesOnSnapshotsNotValues(t *testing.T) {
 	})
 
 	t.Run("no match is dropped from the count either", func(t *testing.T) {
-		page := mustList(t, ctx, r, q, crud.ListRequest{Limit: 2, Order: crud.NewOrder("created_at", crud.ASC), WithCount: true})
+		page := mustList(t, ctx, r, q, list.Request{Limit: 2, Order: list.NewOrder("created_at", list.ASC), WithCount: true})
 		if page.Total == nil || int(*page.Total) != len(matches) {
 			t.Fatalf("Total = %v, want %d — the counting scan resumes the same way the page does", page.Total, len(matches))
 		}
 	})
 
 	t.Run("an offset over matches crosses the boundary too", func(t *testing.T) {
-		page := mustList(t, ctx, r, q, crud.ListRequest{Limit: 2, Offset: 1, Order: crud.NewOrder("created_at", crud.ASC), Strategy: crud.StrategyOffset})
+		page := mustList(t, ctx, r, q, list.Request{Limit: 2, Offset: 1, Order: list.NewOrder("created_at", list.ASC), Strategy: list.StrategyOffset})
 		eqListIDs(t, listIDs(page.Items), []string{"n52", "n53"}, "offset over matches")
 	})
 }

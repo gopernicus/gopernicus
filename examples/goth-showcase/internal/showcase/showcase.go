@@ -1,6 +1,6 @@
 // Package showcase is the zero-datastore host for the ui/goth browser and
 // accessibility harness (GOTH-1.5). It registers the embedded ui/goth asset FS
-// through sdk/foundation/web.StaticFileServer, serves one page per specimen
+// through sdk/pkg/web.StaticFileServer, serves one page per specimen
 // across all three bundle profiles (StylesOnly / Interactive / Full), themes,
 // and HTMX fixtures, and writes a strict CSP header mapped from
 // goth.Bundle.Requirements() plus the host-owned baseline. It owns no schema, no
@@ -21,18 +21,18 @@ import (
 
 	"github.com/a-h/templ"
 
-	"github.com/gopernicus/gopernicus/sdk/foundation/web"
+	"github.com/gopernicus/gopernicus/sdk/pkg/web"
 	"github.com/gopernicus/gopernicus/ui/goth"
 	"github.com/gopernicus/gopernicus/ui/goth/assets"
 )
 
 // hostThemePath is the root-relative public path the showcase serves its
 // host-authored theme stylesheet under, and the value it wires into
-// goth.Config.ThemeStylesheetPath so the kit links it after the kit stylesheet.
+// goth.WithThemeStylesheetPath so the kit links it after the kit stylesheet.
 const hostThemePath = "/theme/host.css"
 
 // allStylePath is the public path the showcase serves its /all gallery stylesheet
-// under, wired into the /all bundle's goth.Config.ThemeStylesheetPath so the kit
+// under, wired into the /all bundle's goth.WithThemeStylesheetPath so the kit
 // links it after the kit stylesheet (same strict style-src 'self' pattern as the
 // host theme stylesheet).
 const allStylePath = "/all/gallery.css"
@@ -67,10 +67,7 @@ type Server struct {
 func New(handler *web.WebHandler) (*Server, error) {
 	bundles := map[goth.Profile]*goth.Bundle{}
 	for _, p := range []goth.Profile{goth.StylesOnly, goth.Interactive, goth.Full} {
-		b, err := goth.New(goth.Config{
-			AssetBasePath: goth.DefaultAssetBasePath,
-			Profile:       p,
-		})
+		b, err := goth.New(goth.WithAssetBasePath(goth.DefaultAssetBasePath), goth.WithProfile(p))
 		if err != nil {
 			return nil, fmt.Errorf("showcase: build profile %d bundle: %w", p, err)
 		}
@@ -78,13 +75,9 @@ func New(handler *web.WebHandler) (*Server, error) {
 	}
 
 	// The host-theme bundle links a real host-authored stylesheet AFTER the kit
-	// stylesheet (goth.Config.ThemeStylesheetPath) — the WordPress model, proven
+	// stylesheet (goth.WithThemeStylesheetPath) — the WordPress model, proven
 	// under a strict style-src 'self' with no nonce and no inline style.
-	themed, err := goth.New(goth.Config{
-		AssetBasePath:       goth.DefaultAssetBasePath,
-		Profile:             goth.Interactive,
-		ThemeStylesheetPath: hostThemePath,
-	})
+	themed, err := goth.New(goth.WithAssetBasePath(goth.DefaultAssetBasePath), goth.WithProfile(goth.Interactive), goth.WithThemeStylesheetPath(hostThemePath))
 	if err != nil {
 		return nil, fmt.Errorf("showcase: build host-theme bundle: %w", err)
 	}
@@ -92,11 +85,7 @@ func New(handler *web.WebHandler) (*Server, error) {
 	// The /all bundle is the Full superset (Alpine + HTMX, so every Interactive/Full
 	// specimen's runtime is present) with the gallery stylesheet linked after the kit
 	// CSS — same strict style-src 'self' pattern as the host theme bundle.
-	all, err := goth.New(goth.Config{
-		AssetBasePath:       goth.DefaultAssetBasePath,
-		Profile:             goth.Full,
-		ThemeStylesheetPath: allStylePath,
-	})
+	all, err := goth.New(goth.WithAssetBasePath(goth.DefaultAssetBasePath), goth.WithProfile(goth.Full), goth.WithThemeStylesheetPath(allStylePath))
 	if err != nil {
 		return nil, fmt.Errorf("showcase: build /all bundle: %w", err)
 	}

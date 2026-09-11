@@ -2,15 +2,13 @@ package notify
 
 import (
 	"testing"
-
-	"github.com/gopernicus/gopernicus/sdk/foundation/identity"
 )
 
 // TestConsoleCapabilities_DevelopmentOnly proves the bundled console notifier
 // declares itself development-only so a production host rejects it (auth v3
 // §6.3): it logs message bodies rather than delivering them.
 func TestConsoleCapabilities_DevelopmentOnly(t *testing.T) {
-	var n Notifier = NewConsole(identity.KindPhone, nil)
+	var n any = NewConsole(nil)
 	r, ok := n.(CapabilityReporter)
 	if !ok {
 		t.Fatal("Console does not implement CapabilityReporter")

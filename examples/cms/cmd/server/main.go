@@ -18,16 +18,15 @@ import (
 	"github.com/gopernicus/gopernicus/examples/cms/internal/theme"
 	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
 	"github.com/gopernicus/gopernicus/integrations/tracing/otel"
+	"github.com/gopernicus/gopernicus/pockets"
 	"github.com/gopernicus/gopernicus/pockets/cms"
 	cmsturso "github.com/gopernicus/gopernicus/pockets/cms/stores/turso"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/cacher"
-	"github.com/gopernicus/gopernicus/sdk/capabilities/email"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/filestorage"
-	"github.com/gopernicus/gopernicus/sdk/capabilities/tracing"
-	"github.com/gopernicus/gopernicus/sdk/foundation/environment"
-	"github.com/gopernicus/gopernicus/sdk/foundation/logging"
-	"github.com/gopernicus/gopernicus/sdk/foundation/web"
-	"github.com/gopernicus/gopernicus/sdk/pocket"
+	"github.com/gopernicus/gopernicus/sdk/capabilities/notify/email"
+	"github.com/gopernicus/gopernicus/sdk/pkg/environment"
+	"github.com/gopernicus/gopernicus/sdk/pkg/logging"
+	"github.com/gopernicus/gopernicus/sdk/pkg/web"
 	uigoth "github.com/gopernicus/gopernicus/ui/goth"
 	uigothassets "github.com/gopernicus/gopernicus/ui/goth/assets"
 )
@@ -38,28 +37,29 @@ import (
 const gothAssetBasePath = "/assets/goth"
 
 func main() {
-	// Load .env (missing file is not an error) before reading any config.
-	_ = environment.LoadEnv()
+	// A missing .env is allowed; malformed configuration must stop startup.
+	if err := environment.LoadEnv(); err != nil {
+		slog.Error("load environment", "error", err)
+		os.Exit(1)
+	}
+
+	logOpts := logging.Options{Format: "json"}
+	if err := environment.ParseEnvTags("", &logOpts); err != nil {
+		slog.Error("configure logging", "error", err)
+		os.Exit(1)
+	}
+	log := logging.New(logOpts)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	if err := run(ctx); err != nil {
-		slog.Error("server exited with error", "error", err)
+	if err := run(ctx, log); err != nil {
+		log.Error("server exited with error", "error", err)
 		os.Exit(1)
 	}
 }
 
-func run(ctx context.Context) error {
-	// Config comes from the environment through the sdk's struct tags: the
-	// literal pre-seeds this host's own defaults, the environment wins over
-	// them, and an empty value (KEY=) keeps what is already set.
-	logOpts := logging.Options{Format: "json"}
-	if err := environment.ParseEnvTags("", &logOpts); err != nil {
-		return err
-	}
-	log := logging.New(logOpts, logging.WithTracing())
-
+func run(ctx context.Context, log *slog.Logger) error {
 	// Parsed before the tracer, whose flush budget reuses SHUTDOWN_TIMEOUT.
 	srv := web.ServerConfig{Port: "8080"}
 	if err := environment.ParseEnvTags("", &srv); err != nil {
@@ -68,7 +68,7 @@ func run(ctx context.Context) error {
 
 	// Database. The Turso datastore connector owns the driver, DSN, and dialect
 	// error mapping; the pocket store adapter owns the CMS schema + repositories.
-	db, err := tursodb.Open(tursodb.Config{
+	db, err := tursodb.Open(ctx, tursodb.Config{
 		URL:             os.Getenv("TURSO_DATABASE_URL"),
 		AuthToken:       os.Getenv("TURSO_AUTH_TOKEN"),
 		MaxOpenConns:    4,
@@ -105,14 +105,14 @@ func run(ctx context.Context) error {
 	// Tracing sits OUTER of Logger so the traced context (and its trace_id/span_id)
 	// is on the request when Logger emits its access line, and so web.RecordError's
 	// direct writer type-assert keeps landing on Logger's writer.
-	router := web.NewWebHandler(web.WithLogging(log))
-	router.Use(web.RequestID(), tracing.Middleware(tracer), web.Logger(log), web.Panics(log))
+	router := web.NewWebHandler()
+	router.Use(web.RequestID(), otel.Middleware(tracer, otel.HTTPConfig{}), web.Logger(log), web.Panics(log))
 
 	// The host owns its database lifecycle: migrations are scaffolded into
 	// ./workshop/migrations and applied PRE-BOOT by that runner (go run
 	// ./workshop/migrations / make migrate), never by the framework at startup.
 	// So no migration registrar is wired here.
-	mount := pocket.Mount{Router: router, Logger: log}
+	mount := pockets.Mount{Router: router, Logger: log}
 
 	// Host infrastructure the pocket can't default: blob storage for media and
 	// an email sender for the contact form.
@@ -120,7 +120,7 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	blobs := filestorage.New(diskStore, filestorage.WithLogger(log))
+	defer diskStore.Close()
 
 	var sender email.Sender
 	if host := os.Getenv("SMTP_HOST"); host != "" {
@@ -139,7 +139,7 @@ func run(ctx context.Context) error {
 	// bundle names. The host's custom public-site theme embeds the ui/goth default,
 	// so its admin/forms pages render through the bundle while the public chrome
 	// stays ACME-branded.
-	bundle, err := uigoth.New(uigoth.Config{AssetBasePath: gothAssetBasePath})
+	bundle, err := uigoth.New(uigoth.WithAssetBasePath(gothAssetBasePath))
 	if err != nil {
 		return err
 	}
@@ -156,7 +156,7 @@ func run(ctx context.Context) error {
 	repos := cmsturso.Repositories(db)
 	cmsCfg := cms.Config{
 		Views:     cmsViews, // host-owned custom public-site theme (the §6 seam) over ui/goth
-		Blobs:     blobs,
+		Blobs:     diskStore,
 		Cache:     cacher.NewMemory(), // in-memory public-page cache; redis later
 		Mailer:    sender,
 		MailFrom:  "cms@localhost",
@@ -193,12 +193,12 @@ func healthzHandler(db *tursodb.DB) http.HandlerFunc {
 
 // buildTracer gates the TRACER CHOICE on TRACING_ENABLED (the Tracing middleware
 // is always wired). Enabled → an OpenTelemetry tracer built from the TRACING_*
-// env tags via environment.ParseEnvTags; disabled → tracing.Noop. The returned
+// env tags via environment.ParseEnvTags; disabled → nil (Noop middleware). The returned
 // shutdown func flushes+stops an owned provider and is a no-op for Noop.
-func buildTracer(ctx context.Context) (tracing.Tracer, func(context.Context) error, error) {
+func buildTracer(ctx context.Context) (*otel.Tracer, func(context.Context) error, error) {
 	enabled, _ := strconv.ParseBool(os.Getenv("TRACING_ENABLED"))
 	if !enabled {
-		return tracing.Noop{}, func(context.Context) error { return nil }, nil
+		return nil, func(context.Context) error { return nil }, nil
 	}
 	var cfg otel.Config
 	if err := environment.ParseEnvTags("", &cfg); err != nil {

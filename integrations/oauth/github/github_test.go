@@ -6,6 +6,8 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"testing"
+
+	"github.com/gopernicus/gopernicus/sdk/capabilities/oauth"
 )
 
 const (
@@ -34,7 +36,10 @@ func newFakeGitHub(t *testing.T, register func(mux *http.ServeMux)) (*Provider, 
 		emailsURL:   srv.URL + "/user/emails",
 	}
 
-	p := newProvider(testClientID, testClientSecret, nil, srv.Client(), eps)
+	p, err := newProvider(Config{ClientID: testClientID, ClientSecret: testClientSecret, HTTPClient: srv.Client()}, eps)
+	if err != nil {
+		t.Fatal(err)
+	}
 	return p, srv
 }
 
@@ -44,16 +49,13 @@ func TestProviderMetadata(t *testing.T) {
 	if got := p.Name(); got != "github" {
 		t.Errorf("Name() = %q, want %q", got, "github")
 	}
-	if p.SupportsOIDC() {
-		t.Error("SupportsOIDC() = true, want false")
-	}
-	if p.TrustEmailVerification() {
-		t.Error("TrustEmailVerification() = true, want false")
-	}
 }
 
 func TestNewDefaultsScopes(t *testing.T) {
-	p := New(testClientID, testClientSecret, nil, nil)
+	p, err := New(Config{ClientID: testClientID, ClientSecret: testClientSecret})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(p.config.Scopes) != 1 || p.config.Scopes[0] != "user:email" {
 		t.Errorf("default scopes = %v, want [user:email]", p.config.Scopes)
 	}
@@ -67,12 +69,15 @@ func TestGetAuthorizationURL(t *testing.T) {
 
 	const (
 		state       = "state-123"
-		verifier    = "verifier-abc"
+		verifier    = "01234567890123456789012345678901234567890123456"
 		nonce       = "nonce-ignored"
 		redirectURI = "https://app.example.com/callback"
 	)
 
-	raw := p.GetAuthorizationURL(state, verifier, nonce, redirectURI)
+	raw, err := p.GetAuthorizationURL(oauth.AuthorizationRequest{State: state, CodeVerifier: verifier, Nonce: nonce, RedirectURI: redirectURI})
+	if err != nil {
+		t.Fatal(err)
+	}
 	u, err := url.Parse(raw)
 	if err != nil {
 		t.Fatalf("parse url: %v", err)
@@ -324,8 +329,8 @@ func TestGetUserInfoNoEmail(t *testing.T) {
 		})
 	})
 
-	if _, err := p.GetUserInfo(context.Background(), "tok"); err == nil {
-		t.Fatal("expected error when no email can be resolved")
+	if info, err := p.GetUserInfo(context.Background(), "tok"); err != nil || info.Email != "" {
+		t.Fatalf("optional email: info=%+v err=%v", info, err)
 	}
 }
 
@@ -341,10 +346,9 @@ func TestGetUserInfoProfileError(t *testing.T) {
 	}
 }
 
-func TestValidateIDTokenNotSupported(t *testing.T) {
+func TestNoIDTokenValidator(t *testing.T) {
 	p, _ := newFakeGitHub(t, nil)
-
-	if _, err := p.ValidateIDToken(context.Background(), "any-token", "any-nonce"); err == nil {
-		t.Fatal("expected ValidateIDToken to return an OIDC-not-supported error")
+	if _, ok := any(p).(oauth.IDTokenValidator); ok {
+		t.Fatal("GitHub must not implement OIDC")
 	}
 }

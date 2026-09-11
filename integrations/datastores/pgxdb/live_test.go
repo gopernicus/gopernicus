@@ -13,7 +13,7 @@ import (
 	jackpgx "github.com/jackc/pgx/v5"
 
 	"github.com/gopernicus/gopernicus/sdk"
-	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
+	"github.com/gopernicus/gopernicus/sdk/pkg/list"
 )
 
 // TestLive_OpenAndMigrate is the one env-gated live test: it opens a real
@@ -33,7 +33,7 @@ func TestLive_OpenAndMigrate(t *testing.T) {
 
 	ctx := context.Background()
 
-	db, err := Open(Config{DSN: dsn})
+	db, err := Open(context.Background(), Config{DSN: dsn})
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -91,7 +91,7 @@ type scratchRow struct {
 	N         int64     `db:"n"`
 }
 
-var scratchOrderFields = map[string]crud.OrderField{
+var scratchOrderFields = map[string]list.OrderField{
 	"created_at": {Column: "created_at"},
 	"name":       {Column: "name"},
 	"n":          {Column: "n"},
@@ -103,7 +103,7 @@ func scratchQuery(kind string) ListQuery[scratchRow] {
 		BaseSQL:      "SELECT id, created_at, name, n FROM list_scratch WHERE kind = @kind",
 		Args:         jackpgx.NamedArgs{"kind": kind},
 		OrderFields:  scratchOrderFields,
-		DefaultOrder: crud.NewOrder("created_at", crud.DESC),
+		DefaultOrder: list.NewOrder("created_at", list.DESC),
 		PK:           "id",
 		OrderValueOf: func(r scratchRow, field string) any {
 			switch field {
@@ -123,14 +123,14 @@ func scratchQuery(kind string) ListQuery[scratchRow] {
 
 // traverse pages the whole result set forward via cursors and returns the ids in
 // visitation order, asserting no page exceeds the limit and no id repeats.
-func traverse(t *testing.T, db Querier, q ListQuery[scratchRow], order crud.Order, limit int) []string {
+func traverse(t *testing.T, db Querier, q ListQuery[scratchRow], order list.Order, limit int) []string {
 	t.Helper()
 	ctx := context.Background()
 	seen := map[string]bool{}
 	var ids []string
 	cursor := ""
 	for i := 0; i < 1000; i++ {
-		p, err := List(ctx, db, q, crud.ListRequest{Limit: limit, Cursor: cursor, Order: order})
+		p, err := List(ctx, db, q, list.Request{Limit: limit, Cursor: cursor, Order: order})
 		if err != nil {
 			t.Fatalf("List: %v", err)
 		}
@@ -179,7 +179,7 @@ func TestLive_ListBehavior(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	db, err := Open(Config{DSN: dsn})
+	db, err := Open(context.Background(), Config{DSN: dsn})
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -226,19 +226,19 @@ func TestLive_ListBehavior(t *testing.T) {
 	q := scratchQuery("a")
 
 	t.Run("forward_created_desc", func(t *testing.T) {
-		got := traverse(t, db, q, crud.NewOrder("created_at", crud.DESC), 2)
+		got := traverse(t, db, q, list.NewOrder("created_at", list.DESC), 2)
 		eqIDs(t, got, []string{"e5", "e4", "e3", "e2", "e1"}, "created desc")
 	})
 	t.Run("forward_created_asc", func(t *testing.T) {
-		got := traverse(t, db, q, crud.NewOrder("created_at", crud.ASC), 2)
+		got := traverse(t, db, q, list.NewOrder("created_at", list.ASC), 2)
 		eqIDs(t, got, []string{"e1", "e2", "e3", "e4", "e5"}, "created asc")
 	})
 	t.Run("forward_name_asc", func(t *testing.T) {
-		got := traverse(t, db, q, crud.NewOrder("name", crud.ASC), 2)
+		got := traverse(t, db, q, list.NewOrder("name", list.ASC), 2)
 		eqIDs(t, got, []string{"e1", "e2", "e3", "e4", "e5"}, "name asc")
 	})
 	t.Run("forward_n_asc", func(t *testing.T) {
-		got := traverse(t, db, q, crud.NewOrder("n", crud.ASC), 2)
+		got := traverse(t, db, q, list.NewOrder("n", list.ASC), 2)
 		eqIDs(t, got, []string{"e2", "e3", "e1", "e4", "e5"}, "n asc")
 	})
 
@@ -246,19 +246,19 @@ func TestLive_ListBehavior(t *testing.T) {
 		// With 5 rows at limit 2 the pages are [e5 e4] [e3 e2] [e1]. Page 3's
 		// previous page is page 2 (a full window, not the first page), so the
 		// probe returns limit rows and PreviousCursor is set.
-		desc := crud.NewOrder("created_at", crud.DESC)
-		p1, err := List(ctx, db, q, crud.ListRequest{Limit: 2, Order: desc})
+		desc := list.NewOrder("created_at", list.DESC)
+		p1, err := List(ctx, db, q, list.Request{Limit: 2, Order: desc})
 		if err != nil {
 			t.Fatalf("p1: %v", err)
 		}
 		if p1.HasPrev {
 			t.Fatal("first page HasPrev = true, want false")
 		}
-		p2, err := List(ctx, db, q, crud.ListRequest{Limit: 2, Cursor: p1.NextCursor, Order: desc})
+		p2, err := List(ctx, db, q, list.Request{Limit: 2, Cursor: p1.NextCursor, Order: desc})
 		if err != nil {
 			t.Fatalf("p2: %v", err)
 		}
-		p3, err := List(ctx, db, q, crud.ListRequest{Limit: 2, Cursor: p2.NextCursor, Order: desc})
+		p3, err := List(ctx, db, q, list.Request{Limit: 2, Cursor: p2.NextCursor, Order: desc})
 		if err != nil {
 			t.Fatalf("p3: %v", err)
 		}
@@ -267,7 +267,7 @@ func TestLive_ListBehavior(t *testing.T) {
 			t.Fatalf("p3 HasPrev=%v prevCursor=%q, want true/set (full window)", p3.HasPrev, p3.PreviousCursor)
 		}
 		// The previous cursor pages back to page 2.
-		back, err := List(ctx, db, q, crud.ListRequest{Limit: 2, Cursor: p3.PreviousCursor, Order: desc})
+		back, err := List(ctx, db, q, list.Request{Limit: 2, Cursor: p3.PreviousCursor, Order: desc})
 		if err != nil {
 			t.Fatalf("back: %v", err)
 		}
@@ -275,12 +275,12 @@ func TestLive_ListBehavior(t *testing.T) {
 	})
 
 	t.Run("prev_probe_partial_window", func(t *testing.T) {
-		desc := crud.NewOrder("created_at", crud.DESC)
-		p1, err := List(ctx, db, q, crud.ListRequest{Limit: 3, Order: desc})
+		desc := list.NewOrder("created_at", list.DESC)
+		p1, err := List(ctx, db, q, list.Request{Limit: 3, Order: desc})
 		if err != nil {
 			t.Fatalf("p1: %v", err)
 		}
-		p2, err := List(ctx, db, q, crud.ListRequest{Limit: 3, Cursor: p1.NextCursor, Order: desc})
+		p2, err := List(ctx, db, q, list.Request{Limit: 3, Cursor: p1.NextCursor, Order: desc})
 		if err != nil {
 			t.Fatalf("p2: %v", err)
 		}
@@ -293,10 +293,10 @@ func TestLive_ListBehavior(t *testing.T) {
 	})
 
 	t.Run("offset_matches_cursor", func(t *testing.T) {
-		desc := crud.NewOrder("created_at", crud.DESC)
+		desc := list.NewOrder("created_at", list.DESC)
 		var got []string
 		for off := 0; off < 6; off += 2 {
-			p, err := List(ctx, db, q, crud.ListRequest{Limit: 2, Offset: off, Order: desc, Strategy: crud.StrategyOffset})
+			p, err := List(ctx, db, q, list.Request{Limit: 2, Offset: off, Order: desc, Strategy: list.StrategyOffset})
 			if err != nil {
 				t.Fatalf("offset %d: %v", off, err)
 			}
@@ -314,14 +314,14 @@ func TestLive_ListBehavior(t *testing.T) {
 	})
 
 	t.Run("count_under_filter", func(t *testing.T) {
-		p, err := List(ctx, db, q, crud.ListRequest{Limit: 2, WithCount: true})
+		p, err := List(ctx, db, q, list.Request{Limit: 2, WithCount: true})
 		if err != nil {
 			t.Fatalf("List: %v", err)
 		}
 		if p.Total == nil || *p.Total != 5 {
 			t.Fatalf("Total = %v, want 5 (kind a rows, not capped by limit)", p.Total)
 		}
-		pb, err := List(ctx, db, scratchQuery("b"), crud.ListRequest{Limit: 10, WithCount: true})
+		pb, err := List(ctx, db, scratchQuery("b"), list.Request{Limit: 10, WithCount: true})
 		if err != nil {
 			t.Fatalf("List b: %v", err)
 		}
@@ -332,11 +332,11 @@ func TestLive_ListBehavior(t *testing.T) {
 
 	t.Run("stale_cursor_is_first_page", func(t *testing.T) {
 		// A cursor tagged with a different order field decodes stale → first page.
-		token, err := crud.EncodeCursor("name", "delta", "e4")
+		token, err := list.EncodeCursor("name", "delta", "e4")
 		if err != nil {
 			t.Fatalf("EncodeCursor: %v", err)
 		}
-		p, err := List(ctx, db, q, crud.ListRequest{Limit: 2, Cursor: token, Order: crud.NewOrder("created_at", crud.DESC)})
+		p, err := List(ctx, db, q, list.Request{Limit: 2, Cursor: token, Order: list.NewOrder("created_at", list.DESC)})
 		if err != nil {
 			t.Fatalf("List: %v", err)
 		}
@@ -364,12 +364,19 @@ func TestLive_ListBehavior(t *testing.T) {
 			}
 		}
 
-		fq := ListQuery[scratchRow]{
-			BaseSQL:    "SELECT id, created_at, name, n FROM list_scratch WHERE kind = @kind",
+		type fixedScratchRow struct {
+			ID        string     `db:"id"`
+			CreatedAt time.Time  `db:"created_at"`
+			Name      string     `db:"name"`
+			N         int64      `db:"n"`
+			ClosingAt *time.Time `db:"closing_at"`
+		}
+		fq := ListQuery[fixedScratchRow]{
+			BaseSQL:    "SELECT id, created_at, name, n, closing_at FROM list_scratch WHERE kind = @kind",
 			Args:       jackpgx.NamedArgs{"kind": "a"},
 			FixedOrder: "closing_at DESC NULLS LAST, name ASC, id ASC",
 			PK:         "id",
-			PKOf:       func(r scratchRow) string { return r.ID },
+			PKOf:       func(r fixedScratchRow) string { return r.ID },
 		}
 
 		var got []string
@@ -382,11 +389,15 @@ func TestLive_ListBehavior(t *testing.T) {
 			{[]string{"e5", "e1"}, true, true},
 			{[]string{"e3"}, false, true},
 		} {
-			p, err := List(ctx, db, fq, crud.ListRequest{Limit: 2, Offset: i * 2, Strategy: crud.StrategyOffset, WithCount: true})
+			p, err := List(ctx, db, fq, list.Request{Limit: 2, Offset: i * 2, Strategy: list.StrategyOffset, WithCount: true})
 			if err != nil {
 				t.Fatalf("page %d: %v", i+1, err)
 			}
-			eqIDs(t, idsOf(p.Items), want.ids, fmt.Sprintf("fixed order page %d", i+1))
+			pageIDs := make([]string, len(p.Items))
+			for j, row := range p.Items {
+				pageIDs[j] = row.ID
+			}
+			eqIDs(t, pageIDs, want.ids, fmt.Sprintf("fixed order page %d", i+1))
 			if p.HasMore != want.hasMore || p.HasPrev != want.hasPrev {
 				t.Errorf("page %d HasMore/HasPrev = %v/%v, want %v/%v", i+1, p.HasMore, p.HasPrev, want.hasMore, want.hasPrev)
 			}
@@ -396,11 +407,11 @@ func TestLive_ListBehavior(t *testing.T) {
 			if p.NextCursor != "" || p.PreviousCursor != "" {
 				t.Errorf("page %d emitted cursors under the offset strategy", i+1)
 			}
-			got = append(got, idsOf(p.Items)...)
+			got = append(got, pageIDs...)
 		}
 		eqIDs(t, got, []string{"e2", "e4", "e5", "e1", "e3"}, "fixed order traversal")
 
-		if _, err := List(ctx, db, fq, crud.ListRequest{Limit: 2}); !errors.Is(err, sdk.ErrInvalidInput) {
+		if _, err := List(ctx, db, fq, list.Request{Limit: 2}); !errors.Is(err, sdk.ErrInvalidInput) {
 			t.Errorf("cursor strategy under FixedOrder err = %v, want ErrInvalidInput", err)
 		}
 	})
@@ -423,7 +434,7 @@ func TestLive_ProbeTable(t *testing.T) {
 		t.Skip("POSTGRES_TEST_DSN not set — postgres conformance NOT verified")
 	}
 	ctx := context.Background()
-	db, err := Open(Config{DSN: dsn})
+	db, err := Open(context.Background(), Config{DSN: dsn})
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -468,7 +479,7 @@ func TestLive_Collect(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	db, err := Open(Config{DSN: dsn})
+	db, err := Open(context.Background(), Config{DSN: dsn})
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}

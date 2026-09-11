@@ -7,10 +7,10 @@ import (
 	"testing"
 	"time"
 
-	auth "github.com/gopernicus/gopernicus/pockets/authentication"
+	delivery "github.com/gopernicus/gopernicus/pockets/authentication/logic/delivery"
 	"github.com/gopernicus/gopernicus/pockets/jobs"
-	"github.com/gopernicus/gopernicus/pockets/jobs/domain/job"
-	jobsmem "github.com/gopernicus/gopernicus/pockets/jobs/memstore"
+	job "github.com/gopernicus/gopernicus/pockets/jobs/logic/queue"
+	jobsmem "github.com/gopernicus/gopernicus/pockets/jobs/stores/memory"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/work"
 )
 
@@ -47,8 +47,8 @@ func TestDispatcherMapsToSingleKind(t *testing.T) {
 	if _, err := d.Submit(ctx, "email", "password_reset", "key-1", []byte("p")); err != nil {
 		t.Fatalf("Submit: %v", err)
 	}
-	if fake.onceKind != auth.DeliveryJobKind {
-		t.Fatalf("Submit kind = %q, want %q (rail dropped, single job kind)", fake.onceKind, auth.DeliveryJobKind)
+	if fake.onceKind != delivery.JobKind {
+		t.Fatalf("Submit kind = %q, want %q (rail dropped, single job kind)", fake.onceKind, delivery.JobKind)
 	}
 	if fake.onceKey != "key-1" {
 		t.Fatalf("Submit key = %q, want key-1", fake.onceKey)
@@ -57,8 +57,8 @@ func TestDispatcherMapsToSingleKind(t *testing.T) {
 	if _, err := d.Replace(ctx, "phone", "login_code", "key-2", []byte("p")); err != nil {
 		t.Fatalf("Replace: %v", err)
 	}
-	if fake.replaceKind != auth.DeliveryJobKind {
-		t.Fatalf("Replace kind = %q, want %q", fake.replaceKind, auth.DeliveryJobKind)
+	if fake.replaceKind != delivery.JobKind {
+		t.Fatalf("Replace kind = %q, want %q", fake.replaceKind, delivery.JobKind)
 	}
 	if fake.replaceKey != "key-2" {
 		t.Fatalf("Replace key = %q, want key-2", fake.replaceKey)
@@ -72,21 +72,21 @@ func TestDispatcherMapsToSingleKind(t *testing.T) {
 	}
 }
 
-// TestFencedRuntimeConfigRejectsTimeoutExceedingLease proves the COMPOSED jobs-mode
+// TestRuntimeRejectsTimeoutExceedingLease proves the COMPOSED jobs-mode
 // runtime construction fails closed on an invalid timeout/lease combination (AV3D-3.4/
 // 3.5): a ProcessTimeout at or beyond the claim lease would let a stuck provider send
 // outlive the lease so a second worker reclaims and double-processes the job. The host
-// wiring (authjobs.FencedRuntimeConfig → jobs.NewFencedRuntime) surfaces this as
+// wiring (authjobs.Runtime → queue.NewFencedRuntime) surfaces this as
 // jobs.ErrProcessTimeoutExceedsLease rather than silently accepting the inversion. A
 // timeout safely inside the lease constructs.
-func TestFencedRuntimeConfigRejectsTimeoutExceedingLease(t *testing.T) {
-	svc, err := jobs.NewService(jobs.Repositories{FencedQueue: jobsmem.NewFencedQueue()}, jobs.Config{})
+func TestRuntimeRejectsTimeoutExceedingLease(t *testing.T) {
+	svc, err := jobs.New(jobs.Repositories{FencedQueue: jobsmem.NewFencedQueue()})
 	if err != nil {
 		t.Fatalf("jobs.NewService: %v", err)
 	}
-	rt := auth.DeliveryJobRuntime{
-		Kind:   auth.DeliveryJobKind,
-		Handle: func(context.Context, auth.DeliveryClaim) error { return nil },
+	rt := delivery.JobRuntime{
+		Kind:   delivery.JobKind,
+		Handle: func(context.Context, delivery.Claim) error { return nil },
 	}
 
 	// ProcessTimeout == LeaseFor and > LeaseFor both fail closed.
@@ -94,37 +94,31 @@ func TestFencedRuntimeConfigRejectsTimeoutExceedingLease(t *testing.T) {
 		{lease: time.Second, timeout: time.Second},
 		{lease: time.Second, timeout: 2 * time.Second},
 	} {
-		cfg := FencedRuntimeConfig(rt, func(c *jobs.FencedRuntimeConfig) {
-			c.LeaseFor = tc.lease
-			c.ProcessTimeout = tc.timeout
-		})
-		if _, err := jobs.NewFencedRuntime(svc, cfg); !errors.Is(err, jobs.ErrProcessTimeoutExceedsLease) {
+		policy := job.FencedRuntimePolicy{LeaseFor: tc.lease, ProcessTimeout: tc.timeout}
+		if _, err := NewRuntime(svc.Queue, rt, job.WithFencedRuntimePolicy(policy)); !errors.Is(err, job.ErrProcessTimeoutExceedsLease) {
 			t.Fatalf("lease=%s timeout=%s: err = %v, want ErrProcessTimeoutExceedsLease", tc.lease, tc.timeout, err)
 		}
 	}
 
 	// A timeout safely inside the lease constructs.
-	ok := FencedRuntimeConfig(rt, func(c *jobs.FencedRuntimeConfig) {
-		c.LeaseFor = 2 * time.Second
-		c.ProcessTimeout = time.Second
-	})
-	if _, err := jobs.NewFencedRuntime(svc, ok); err != nil {
+	policy := job.FencedRuntimePolicy{LeaseFor: 2 * time.Second, ProcessTimeout: time.Second}
+	if _, err := NewRuntime(svc.Queue, rt, job.WithFencedRuntimePolicy(policy)); err != nil {
 		t.Fatalf("timeout inside lease should construct: %v", err)
 	}
 }
 
-// TestFencedRuntimeConfigBridgesClaim proves FencedRuntimeConfig registers the auth
+// TestRuntimeBridgesClaim proves Runtime registers the auth
 // handler under its kind and bridges a jobs FencedClaim (payload/attempt/checkpoint)
 // to an auth DeliveryClaim, and wires the discard hook to the dead-letter path.
-func TestFencedRuntimeConfigBridgesClaim(t *testing.T) {
+func TestRuntimeBridgesClaim(t *testing.T) {
 	var gotPayload []byte
 	var gotAttempt int
 	var checkpointed []byte
 	var discarded []byte
 
-	rt := auth.DeliveryJobRuntime{
-		Kind: auth.DeliveryJobKind,
-		Handle: func(ctx context.Context, claim auth.DeliveryClaim) error {
+	rt := delivery.JobRuntime{
+		Kind: delivery.JobKind,
+		Handle: func(ctx context.Context, claim delivery.Claim) error {
 			gotPayload = claim.Payload
 			gotAttempt = claim.Attempt
 			return claim.Checkpoint(ctx, []byte("cp"))
@@ -135,14 +129,13 @@ func TestFencedRuntimeConfigBridgesClaim(t *testing.T) {
 		},
 	}
 
-	cfg := FencedRuntimeConfig(rt)
-	handler, ok := cfg.Handlers[auth.DeliveryJobKind]
+	handler, ok := handlers(rt)[delivery.JobKind]
 	if !ok {
-		t.Fatalf("no handler registered under %q", auth.DeliveryJobKind)
+		t.Fatalf("no handler registered under %q", delivery.JobKind)
 	}
 
 	ctx := context.Background()
-	err := handler(ctx, jobs.FencedClaim{
+	err := handler(ctx, job.FencedClaim{
 		ExecutionID: "exec-1",
 		LeaseID:     "lease-1",
 		Payload:     json.RawMessage(`"sealed"`),
@@ -165,9 +158,9 @@ func TestFencedRuntimeConfigBridgesClaim(t *testing.T) {
 		t.Fatalf("checkpoint bridged = %q, want cp", string(checkpointed))
 	}
 
-	dl, ok := cfg.DeadLetters[auth.DeliveryJobKind]
+	dl, ok := deadLetters(rt)[delivery.JobKind]
 	if !ok {
-		t.Fatalf("no dead-letter hook registered under %q", auth.DeliveryJobKind)
+		t.Fatalf("no dead-letter hook registered under %q", delivery.JobKind)
 	}
 	if err := dl(ctx, job.Job{JobID: "exec-1", Payload: json.RawMessage(`"dead"`)}); err != nil {
 		t.Fatalf("dead-letter hook: %v", err)

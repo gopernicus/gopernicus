@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/gopernicus/gopernicus/pockets/cms/domain/media"
-	"github.com/gopernicus/gopernicus/sdk/foundation/cryptids"
+	"github.com/gopernicus/gopernicus/sdk"
 )
 
 // Clock returns the current time. Injected so tests can pin timestamps.
@@ -22,13 +22,13 @@ type MediaService struct {
 	blobs  media.BlobStore
 	// ids is the app-chosen entity-ID strategy (cms.Config.IDs); zero value →
 	// default nanoids.
-	ids   cryptids.IDGenerator
+	ids   sdk.IDGenerator
 	clock Clock
 }
 
 // NewService constructs a MediaService. A nil clock defaults to time.Now. ids is
 // the app's entity-ID strategy (cms.Config.IDs).
-func NewService(assets media.AssetRepository, blobs media.BlobStore, ids cryptids.IDGenerator, clock Clock) *MediaService {
+func NewService(assets media.AssetRepository, blobs media.BlobStore, ids sdk.IDGenerator, clock Clock) *MediaService {
 	if clock == nil {
 		clock = time.Now
 	}

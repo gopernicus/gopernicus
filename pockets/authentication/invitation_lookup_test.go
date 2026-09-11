@@ -6,9 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gopernicus/gopernicus/pockets/authentication/domain/identifier"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/identifier"
 	"github.com/gopernicus/gopernicus/sdk"
-	"github.com/gopernicus/gopernicus/sdk/foundation/cryptids"
 )
 
 // memIdentifierRepo is a minimal identifier.IdentifierRepository for the
@@ -59,21 +58,14 @@ func (r *memIdentifierRepo) ApplyVerifiedChange(context.Context, identifier.Appl
 	return identifier.Identifier{}, errors.New("unused")
 }
 
-// TestUserLookupResolvesRegisteredAccountsRegardlessOfVerification pins the
-// add-or-signup product rule at its decision point: the invitee lookup that
-// invitationsvc.Create branches on reports found=true for EVERY registered email —
-// a verified primary identifier AND an account still awaiting registration
-// verification alike — so both are DIRECT-ADDED rather than sent a pending signup
-// invitation. Email verification is an independent access gate (Config
-// RequireVerifiedEmail refuses the password login until Verify succeeds); it is
-// deliberately not an existence test. An address no account claims resolves to
-// found=false, which is what mints the pending invitation.
-func TestUserLookupResolvesRegisteredAccountsRegardlessOfVerification(t *testing.T) {
+// TestUserLookupRequiresVerifiedOwnership prevents automatic invitation grants
+// from treating an unverified registration address as proof of ownership.
+func TestUserLookupRequiresVerifiedOwnership(t *testing.T) {
 	repo := &memIdentifierRepo{}
 	norm := identifier.DefaultNormalizer{}
 	now := time.Now()
 
-	verified, err := identifier.New(cryptids.IDGenerator{}, norm, "", identifier.KindEmail, "verified@example.com",
+	verified, err := identifier.New(sdk.IDGenerator{}, norm, "", identifier.KindEmail, "verified@example.com",
 		identifier.Uses{Login: true, Recovery: true, Notification: true}, true, now, now)
 	if err != nil {
 		t.Fatalf("new verified identifier: %v", err)
@@ -83,7 +75,7 @@ func TestUserLookupResolvesRegisteredAccountsRegardlessOfVerification(t *testing
 
 	// The unverified registration identifier Register creates atomically with the
 	// user: login-enabled and active, but not yet proved.
-	unverified, err := identifier.NewRegistrationEmail(cryptids.IDGenerator{}, norm, "", "Unverified@Example.com", now)
+	unverified, err := identifier.NewRegistrationEmail(sdk.IDGenerator{}, norm, "", "Unverified@Example.com", now)
 	if err != nil {
 		t.Fatalf("new registration identifier: %v", err)
 	}
@@ -102,7 +94,7 @@ func TestUserLookupResolvesRegisteredAccountsRegardlessOfVerification(t *testing
 		wantFound bool
 	}{
 		{"verified registration is a known user", "Verified@Example.com", "user-verified", true},
-		{"unverified registration is still a known user", "unverified@example.com", "user-unverified", true},
+		{"unverified registration has no proven ownership", "unverified@example.com", "", false},
 		{"unclaimed address is not a user", "nobody@example.com", "", false},
 		{"unparseable address is not a user (never an error)", "not-an-email", "", false},
 	}

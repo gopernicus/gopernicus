@@ -6,9 +6,8 @@ import (
 	"time"
 
 	gcfs "cloud.google.com/go/firestore"
-
 	firestoredb "github.com/gopernicus/gopernicus/integrations/datastores/firestore"
-	"github.com/gopernicus/gopernicus/pockets/authentication/domain/user"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/user"
 	"github.com/gopernicus/gopernicus/sdk"
 )
 
@@ -42,7 +41,7 @@ func usersQuery(db *firestoredb.DB) gcfs.Query {
 }
 
 // newUserDoc builds the document for a user being CREATED, minting the id when
-// the caller left it empty (the greenfield cryptids.Database convention, which
+// the caller left it empty (the greenfield sdk.DatabaseID convention, which
 // the SQL adapters serve with `RETURNING id`).
 //
 // It is called INSIDE the transaction callback so a retried attempt mints a
@@ -204,4 +203,9 @@ func (d userDoc) summary() (user.Summary, error) {
 	}
 	projectionOfUser(d).fill(&s)
 	return s, nil
+}
+
+// Password/provider changes preserve the independently owned email projection.
+func advanceCredentialRevision(ctx context.Context, db *firestoredb.DB, w firestoredb.Writer, userID string, revision int64, now time.Time) error {
+	return w.Update(ctx, userRef(db, userID), []gcfs.Update{{Path: fieldUserAuthRevision, Value: revision}, {Path: fieldUserUpdatedAt, Value: firestoredb.TruncateTime(now)}})
 }

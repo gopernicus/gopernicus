@@ -33,7 +33,8 @@ const IndexesFile = "firestore.indexes.json"
 // carrying a connector-owned Firestore transaction (milestone ruling R1). A
 // Firestore transaction requires every read to precede every write and never
 // observes its own pending writes, so this store cannot join a host's ambient
-// transaction the way the pgx and turso adapters do. Running on the client
+// transaction. The authentication SQL adapters also own their focused atomic
+// operations rather than guaranteeing ambient joining. Running on the client
 // beside the host's transaction would SILENTLY split an atomic unit, so the call
 // fails instead. It wraps [sdk.ErrInvalidInput]: the wiring is wrong, and no
 // retry fixes it.
@@ -80,8 +81,10 @@ func WithoutIndexProbe() Option {
 // offers it, and the host's Config decides whether anything mounts. It does NOT
 // deploy anything: the host owns its manifest and its deployment (see
 // [ExportIndexes]), exactly as the host owns migrations for the SQL stores.
-func Repositories(db *firestoredb.DB, opts ...Option) (auth.Repositories, error) {
-	if _, err := newConfig(db, opts); err != nil {
+// ctx controls startup probing only; each probe is also bounded by
+// firestoredb.ProbeTimeout. db remains owned by the caller.
+func Repositories(ctx context.Context, db *firestoredb.DB, opts ...Option) (auth.Repositories, error) {
+	if _, err := newConfig(ctx, db, opts); err != nil {
 		return auth.Repositories{}, err
 	}
 	return auth.Repositories{
@@ -121,20 +124,24 @@ func ExportIndexes(dst string) error {
 }
 
 // newConfig resolves the options and runs the boot probe.
-func newConfig(db *firestoredb.DB, opts []Option) (config, error) {
+func newConfig(ctx context.Context, db *firestoredb.DB, opts []Option) (config, error) {
 	cfg := config{probeIndex: true}
 	for _, o := range opts {
+		if o == nil {
+			return config{}, fmt.Errorf("firestore pocket store: nil option: %w", sdk.ErrInvalidInput)
+		}
 		o(&cfg)
 	}
 	if db == nil {
 		return config{}, fmt.Errorf("authentication firestore store: nil database: %w", sdk.ErrInvalidInput)
 	}
+	if err := ctx.Err(); err != nil {
+		return config{}, err
+	}
 	if cfg.probeIndex {
-		// The constructor takes no context — neither do the SQL siblings' table
-		// probes — so the probe runs on Background and is bounded by the
-		// connector's ProbeTimeout (30s): an Admin API that never answers fails
-		// the boot instead of hanging it.
-		if err := firestoredb.ProbeIndexesFS(context.Background(), db, IndexesFS, IndexesFile); err != nil {
+		probeCtx, cancel := context.WithTimeout(ctx, firestoredb.ProbeTimeout)
+		defer cancel()
+		if err := firestoredb.ProbeIndexesFS(probeCtx, db, IndexesFS, IndexesFile); err != nil {
 			return config{}, err
 		}
 	}

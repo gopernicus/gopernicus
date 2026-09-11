@@ -307,3 +307,29 @@ func TestConnectorSentinelsWrapSDKSentinels(t *testing.T) {
 		})
 	}
 }
+
+func TestIsTransactionAbortedRecognizesOnlyNativeAbort(t *testing.T) {
+	for _, code := range []codes.Code{codes.Aborted, codes.Unavailable, codes.DeadlineExceeded, codes.FailedPrecondition, codes.ResourceExhausted, codes.Internal, codes.Unknown, codes.Canceled} {
+		t.Run(code.String(), func(t *testing.T) {
+			raw := status.Error(code, "transaction response")
+			for name, err := range map[string]error{"raw": raw, "mapped": firestore.MapError(raw), "wrapped mapped": fmt.Errorf("reading authority: %w", firestore.MapError(raw))} {
+				if got := firestore.IsTransactionAborted(err); got != (code == codes.Aborted) {
+					t.Fatalf("%s: IsTransactionAborted(%v)=%v", name, err, got)
+				}
+			}
+		})
+	}
+	for _, err := range []error{nil, sdk.ErrConflict, sdk.ErrUnavailable, context.Canceled, context.DeadlineExceeded, errors.New("connection lost after commit")} {
+		if firestore.IsTransactionAborted(err) {
+			t.Fatalf("non-status error classified as abort: %v", err)
+		}
+	}
+}
+
+func TestMapErrorPreservesDeadlineCause(t *testing.T) {
+	original := fmt.Errorf("read: %w", context.DeadlineExceeded)
+	mapped := firestore.MapError(original)
+	if !errors.Is(mapped, original) || !errors.Is(mapped, context.DeadlineExceeded) || !errors.Is(mapped, sdk.ErrUnavailable) {
+		t.Fatalf("mapped deadline lost its cause or classification: %v", mapped)
+	}
+}

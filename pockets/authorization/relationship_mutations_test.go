@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/gopernicus/gopernicus/pockets/authorization/domain/mutation"
-	"github.com/gopernicus/gopernicus/pockets/authorization/memstore"
+	authmodel "github.com/gopernicus/gopernicus/pockets/authorization/logic/model"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/mutations"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/relationships"
+	"github.com/gopernicus/gopernicus/pockets/authorization/stores/memory"
 	"github.com/gopernicus/gopernicus/sdk"
 )
 
@@ -20,12 +22,12 @@ import (
 // configurable set of operations, proving the guard distinguishes bulk purge from a
 // single grant by MutationAttempt.Operation.
 type opGuard struct {
-	deny map[Operation]bool
+	deny map[mutations.Operation]bool
 	err  error
-	seen []MutationAttempt
+	seen []mutations.MutationAttempt
 }
 
-func (g *opGuard) AuthorizeMutation(_ context.Context, attempt MutationAttempt, _ DecisionView) error {
+func (g *opGuard) AuthorizeMutation(_ context.Context, attempt mutations.MutationAttempt, _ mutations.DecisionView) error {
 	g.seen = append(g.seen, attempt)
 	if g.err != nil {
 		return g.err
@@ -38,16 +40,16 @@ func (g *opGuard) AuthorizeMutation(_ context.Context, attempt MutationAttempt, 
 
 // lifecycleModel declares a resource type with the relations the lifecycle tests
 // grant/replace; "edit" is a permission over owner/editor.
-func lifecycleModel() Schema {
-	return NewSchema([]ResourceSchema{{
+func lifecycleModel() relationships.Schema {
+	return relationships.NewSchema([]relationships.ResourceSchema{{
 		Name: "doc",
-		Def: ResourceTypeDef{
-			Relations: map[string]RelationDef{
-				"owner":  {AllowedSubjects: []SubjectTypeRef{{Type: "user"}}},
-				"editor": {AllowedSubjects: []SubjectTypeRef{{Type: "user"}}},
-				"viewer": {AllowedSubjects: []SubjectTypeRef{{Type: "user"}}},
+		Def: relationships.ResourceTypeDef{
+			Relations: map[string]relationships.RelationDef{
+				"owner":  {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "user"}}},
+				"editor": {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "user"}}},
+				"viewer": {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "user"}}},
 			},
-			Permissions: map[string]PermissionRule{"edit": AnyOf(Direct("owner"), Direct("editor"))},
+			Permissions: map[string]relationships.PermissionRule{"edit": relationships.AnyOf(relationships.Direct("owner"), relationships.Direct("editor"))},
 		},
 	}})
 }
@@ -55,81 +57,63 @@ func lifecycleModel() Schema {
 // newGuardedLifecycle builds a Service over the real memstore bundle with the
 // guardian invariant disabled (empty policy), so the grant/revoke/replace/purge
 // lifecycle is exercised without fighting last-owner protection (that is AZ3-3.2).
-func newGuardedLifecycle(t *testing.T, guard MutationGuard, limits EvaluationLimits) *Service {
+func newGuardedLifecycle(t *testing.T, guard mutations.MutationGuard, limits authmodel.EvaluationLimits) Components {
 	t.Helper()
-	st := memstore.New(memstore.WithGuardianPolicy(mutation.GuardianPolicy{}))
-	comps, err := NewService(Repositories{
+	st := memory.New(memory.WithGuardianPolicy(mutations.GuardianPolicy{}))
+	comps, err := New(Repositories{
 		Relationships: st.Relationships(),
 		Roles:         st.Roles(),
 		Mutations:     st.Mutations(),
-	}, Config{RelationshipModel: lifecycleModel(), Guard: guard, Limits: limits})
+	}, WithRelationshipModel(lifecycleModel()), WithGuard(guard), WithLimits(limits))
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
-	return comps.Service
+	return comps
 }
 
-func mustID(t *testing.T) MutationID {
-	t.Helper()
-	id, err := NewMutationID()
-	if err != nil {
-		t.Fatalf("NewMutationID: %v", err)
-	}
-	return id
-}
+func subjU(id string) relationships.SubjectRef { return relationships.SubjectRef{Type: "user", ID: id} }
 
-func subjU(id string) SubjectRef { return SubjectRef{Type: "user", ID: id} }
-
-// TestGrantRelationshipGuardedApplies proves a guarded grant flows through the
-// repository ApplyGuarded boundary, returns an applied receipt, records the governing
-// schema digest, and the guard saw the grant attempt.
 func TestGrantRelationshipGuardedApplies(t *testing.T) {
 	guard := &opGuard{}
-	svc := newGuardedLifecycle(t, guard, EvaluationLimits{})
+	svc := newGuardedLifecycle(t, guard, authmodel.EvaluationLimits{})
 	ctx := context.Background()
 
-	rcpt, err := svc.GrantRelationship(ctx, actorU1(), GrantRelationshipCommand{
-		MutationID: mustID(t), ResourceType: "doc", ResourceID: "d1", Relation: "editor", Subject: subjU("u2"),
+	rcpt, err := svc.Mutations.GrantRelationship(ctx, actorU1(), mutations.GrantRelationshipCommand{
+		ResourceType: "doc", ResourceID: "d1", Relation: "editor", Subject: subjU("u2"),
 	})
 	if err != nil {
 		t.Fatalf("GrantRelationship: %v", err)
 	}
-	if rcpt == nil || rcpt.Outcome != OutcomeApplied || rcpt.Replayed {
+	if rcpt == nil || rcpt.Outcome != mutations.OutcomeApplied {
 		t.Fatalf("want applied non-replay receipt, got %+v", rcpt)
 	}
 
-	digest, _ := svc.SchemaDigest()
-	if digest == "" || rcpt.SchemaDigest != digest {
-		t.Fatalf("receipt schema digest %q must equal the governing digest %q", rcpt.SchemaDigest, digest)
-	}
-	if len(guard.seen) != 1 || guard.seen[0].Operation != OpGrant {
+	if len(guard.seen) != 1 || guard.seen[0].Operation != mutations.OpGrant {
 		t.Fatalf("guard did not observe the grant attempt: %+v", guard.seen)
 	}
 
-	targets, err := svc.GetRelationTargets(ctx, "doc", "d1", "editor")
+	targets, err := svc.Relationships.GetRelationTargets(ctx, "doc", "d1", "editor")
 	if err != nil || len(targets) != 1 {
 		t.Fatalf("grant not visible to reads: targets=%+v err=%v", targets, err)
 	}
 }
 
-// TestGrantRelationshipExactReplay proves an exact grant replay returns the stored
-// receipt with Replayed=true and does not re-apply.
-func TestGrantRelationshipExactReplay(t *testing.T) {
-	svc := newGuardedLifecycle(t, &opGuard{}, EvaluationLimits{})
+func TestGrantRelationshipRepeatedCallReportsCurrentState(t *testing.T) {
+	svc := newGuardedLifecycle(t, &opGuard{}, authmodel.EvaluationLimits{})
 	ctx := context.Background()
-	id := mustID(t)
-	cmd := GrantRelationshipCommand{MutationID: id, ResourceType: "doc", ResourceID: "d1", Relation: "editor", Subject: subjU("u2")}
-
-	first, err := svc.GrantRelationship(ctx, actorU1(), cmd)
-	if err != nil || first.Replayed {
-		t.Fatalf("first grant: replayed=%v err=%v", first.Replayed, err)
+	cmd := mutations.GrantRelationshipCommand{ResourceType: "doc", ResourceID: "d1", Relation: "editor", Subject: subjU("u2")}
+	for i, want := range []mutations.Outcome{mutations.OutcomeApplied, mutations.OutcomeNoChange} {
+		got, err := svc.Mutations.GrantRelationship(ctx, actorU1(), cmd)
+		if err != nil || got == nil || got.Outcome != want {
+			t.Fatalf("call %d: %+v, %v", i, got, err)
+		}
 	}
-	replay, err := svc.GrantRelationship(ctx, actorU1(), cmd)
-	if err != nil {
-		t.Fatalf("replay grant: %v", err)
+	if _, err := svc.Mutations.RevokeRelationship(ctx, actorU1(), mutations.RevokeRelationshipCommand(cmd)); err != nil {
+		t.Fatal(err)
 	}
-	if !replay.Replayed || replay.Outcome != OutcomeApplied || replay.MutationID != first.MutationID {
-		t.Fatalf("want replay of the original applied receipt, got %+v", replay)
+	got, err := svc.Mutations.GrantRelationship(ctx, actorU1(), cmd)
+	if err != nil || got == nil || got.Outcome != mutations.OutcomeApplied {
+		t.Fatalf("regrant after revoke: %+v, %v", got, err)
 	}
 }
 
@@ -137,33 +121,30 @@ func TestGrantRelationshipExactReplay(t *testing.T) {
 // relation for an already-related subject is a semantic_conflict (not a silent
 // overwrite), and ReplaceRelationship resolves it atomically.
 func TestGrantRelationshipConflictThenReplace(t *testing.T) {
-	svc := newGuardedLifecycle(t, &opGuard{}, EvaluationLimits{})
+	svc := newGuardedLifecycle(t, &opGuard{}, authmodel.EvaluationLimits{})
 	ctx := context.Background()
 
-	if _, err := svc.GrantRelationship(ctx, actorU1(), GrantRelationshipCommand{
-		MutationID: mustID(t), ResourceType: "doc", ResourceID: "d1", Relation: "viewer", Subject: subjU("u2"),
+	if _, err := svc.Mutations.GrantRelationship(ctx, actorU1(), mutations.GrantRelationshipCommand{
+		ResourceType: "doc", ResourceID: "d1", Relation: "viewer", Subject: subjU("u2"),
 	}); err != nil {
 		t.Fatalf("seed viewer: %v", err)
 	}
 
-	conflict, err := svc.GrantRelationship(ctx, actorU1(), GrantRelationshipCommand{
-		MutationID: mustID(t), ResourceType: "doc", ResourceID: "d1", Relation: "editor", Subject: subjU("u2"),
+	conflict, err := svc.Mutations.GrantRelationship(ctx, actorU1(), mutations.GrantRelationshipCommand{
+		ResourceType: "doc", ResourceID: "d1", Relation: "editor", Subject: subjU("u2"),
 	})
-	if err != nil {
-		t.Fatalf("conflicting grant returned error, want a semantic_conflict outcome: %v", err)
-	}
-	if conflict.Outcome != OutcomeSemanticConflict {
-		t.Fatalf("want semantic_conflict, got %+v", conflict)
+	if !errors.Is(err, mutations.ErrSemanticConflict) || conflict != nil {
+		t.Fatalf("conflicting grant: receipt=%+v err=%v", conflict, err)
 	}
 
-	replaced, err := svc.ReplaceRelationship(ctx, actorU1(), ReplaceRelationshipCommand{
-		MutationID: mustID(t), ResourceType: "doc", ResourceID: "d1", Relation: "editor", Subject: subjU("u2"),
+	replaced, err := svc.Mutations.ReplaceRelationship(ctx, actorU1(), mutations.ReplaceRelationshipCommand{
+		ResourceType: "doc", ResourceID: "d1", Relation: "editor", Subject: subjU("u2"),
 	})
-	if err != nil || replaced.Outcome != OutcomeApplied {
+	if err != nil || replaced.Outcome != mutations.OutcomeApplied {
 		t.Fatalf("replace: outcome=%v err=%v", replaced.Outcome, err)
 	}
-	editors, _ := svc.GetRelationTargets(ctx, "doc", "d1", "editor")
-	viewers, _ := svc.GetRelationTargets(ctx, "doc", "d1", "viewer")
+	editors, _ := svc.Relationships.GetRelationTargets(ctx, "doc", "d1", "editor")
+	viewers, _ := svc.Relationships.GetRelationTargets(ctx, "doc", "d1", "viewer")
 	if len(editors) != 1 || len(viewers) != 0 {
 		t.Fatalf("replace not atomic: editors=%+v viewers=%+v", editors, viewers)
 	}
@@ -172,24 +153,24 @@ func TestGrantRelationshipConflictThenReplace(t *testing.T) {
 // TestRevokeRelationshipAppliedAndNotFound proves a revoke of a present tuple applies
 // and a revoke of an absent tuple is a committed not_found no-op, never an error.
 func TestRevokeRelationshipAppliedAndNotFound(t *testing.T) {
-	svc := newGuardedLifecycle(t, &opGuard{}, EvaluationLimits{})
+	svc := newGuardedLifecycle(t, &opGuard{}, authmodel.EvaluationLimits{})
 	ctx := context.Background()
 
-	if _, err := svc.GrantRelationship(ctx, actorU1(), GrantRelationshipCommand{
-		MutationID: mustID(t), ResourceType: "doc", ResourceID: "d1", Relation: "editor", Subject: subjU("u2"),
+	if _, err := svc.Mutations.GrantRelationship(ctx, actorU1(), mutations.GrantRelationshipCommand{
+		ResourceType: "doc", ResourceID: "d1", Relation: "editor", Subject: subjU("u2"),
 	}); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	applied, err := svc.RevokeRelationship(ctx, actorU1(), RevokeRelationshipCommand{
-		MutationID: mustID(t), ResourceType: "doc", ResourceID: "d1", Relation: "editor", Subject: subjU("u2"),
+	applied, err := svc.Mutations.RevokeRelationship(ctx, actorU1(), mutations.RevokeRelationshipCommand{
+		ResourceType: "doc", ResourceID: "d1", Relation: "editor", Subject: subjU("u2"),
 	})
-	if err != nil || applied.Outcome != OutcomeApplied {
+	if err != nil || applied.Outcome != mutations.OutcomeApplied {
 		t.Fatalf("revoke present: outcome=%v err=%v", applied.Outcome, err)
 	}
-	absent, err := svc.RevokeRelationship(ctx, actorU1(), RevokeRelationshipCommand{
-		MutationID: mustID(t), ResourceType: "doc", ResourceID: "d1", Relation: "editor", Subject: subjU("u9"),
+	absent, err := svc.Mutations.RevokeRelationship(ctx, actorU1(), mutations.RevokeRelationshipCommand{
+		ResourceType: "doc", ResourceID: "d1", Relation: "editor", Subject: subjU("u9"),
 	})
-	if err != nil || absent.Outcome != OutcomeNotFound {
+	if err != nil || absent.Outcome != mutations.OutcomeNotFound {
 		t.Fatalf("revoke absent: want not_found no-op, outcome=%v err=%v", absent.Outcome, err)
 	}
 }
@@ -198,88 +179,82 @@ func TestRevokeRelationshipAppliedAndNotFound(t *testing.T) {
 // affected-row bound (the resolved MaxBatchSize): a purge within the bound applies,
 // and one that would exceed it is invariant_blocked with nothing removed.
 func TestPurgeResourceAuthorizationBound(t *testing.T) {
-	svc := newGuardedLifecycle(t, &opGuard{}, EvaluationLimits{MaxBatchSize: 2})
+	svc := newGuardedLifecycle(t, &opGuard{}, authmodel.EvaluationLimits{MaxBatchSize: 2})
 	ctx := context.Background()
 	for _, u := range []string{"u1", "u2", "u3"} {
-		if _, err := svc.GrantRelationship(ctx, actorU1(), GrantRelationshipCommand{
-			MutationID: mustID(t), ResourceType: "doc", ResourceID: "big", Relation: "viewer", Subject: subjU(u),
+		if _, err := svc.Mutations.GrantRelationship(ctx, actorU1(), mutations.GrantRelationshipCommand{
+			ResourceType: "doc", ResourceID: "big", Relation: "viewer", Subject: subjU(u),
 		}); err != nil {
 			t.Fatalf("seed %s: %v", u, err)
 		}
 	}
-	blocked, err := svc.PurgeResourceAuthorization(ctx, actorU1(), PurgeResourceAuthorizationCommand{
-		MutationID: mustID(t), ResourceType: "doc", ResourceID: "big",
+	blocked, err := svc.Mutations.PurgeResourceAuthorization(ctx, actorU1(), mutations.PurgeResourceAuthorizationCommand{
+		ResourceType: "doc", ResourceID: "big",
 	})
-	if err != nil || blocked.Outcome != OutcomeInvariantBlocked {
-		t.Fatalf("over-bound purge: want invariant_blocked, outcome=%v err=%v", blocked.Outcome, err)
+	if !errors.Is(err, mutations.ErrInvariantBlocked) || blocked != nil {
+		t.Fatalf("over-bound purge: receipt=%+v err=%v", blocked, err)
 	}
-	if targets, _ := svc.GetRelationTargets(ctx, "doc", "big", "viewer"); len(targets) != 3 {
+	if targets, _ := svc.Relationships.GetRelationTargets(ctx, "doc", "big", "viewer"); len(targets) != 3 {
 		t.Fatalf("blocked purge removed rows: %+v", targets)
 	}
 
 	// A resource within the bound purges cleanly.
-	if _, err := svc.GrantRelationship(ctx, actorU1(), GrantRelationshipCommand{
-		MutationID: mustID(t), ResourceType: "doc", ResourceID: "small", Relation: "viewer", Subject: subjU("u1"),
+	if _, err := svc.Mutations.GrantRelationship(ctx, actorU1(), mutations.GrantRelationshipCommand{
+		ResourceType: "doc", ResourceID: "small", Relation: "viewer", Subject: subjU("u1"),
 	}); err != nil {
 		t.Fatalf("seed small: %v", err)
 	}
-	ok, err := svc.PurgeResourceAuthorization(ctx, actorU1(), PurgeResourceAuthorizationCommand{
-		MutationID: mustID(t), ResourceType: "doc", ResourceID: "small",
+	ok, err := svc.Mutations.PurgeResourceAuthorization(ctx, actorU1(), mutations.PurgeResourceAuthorizationCommand{
+		ResourceType: "doc", ResourceID: "small",
 	})
-	if err != nil || ok.Outcome != OutcomeApplied {
+	if err != nil || ok.Outcome != mutations.OutcomeApplied {
 		t.Fatalf("within-bound purge: outcome=%v err=%v", ok.Outcome, err)
 	}
 }
 
 // TestPurgeGuardSeparateAction proves the guard distinguishes bulk purge from a
-// single grant via MutationAttempt.Operation: a guard denying OpPurge still allows
+// single grant via MutationAttempt.Operation: a guard denying mutations.OpPurge still allows
 // grants, and the denied purge commits nothing.
 func TestPurgeGuardSeparateAction(t *testing.T) {
-	guard := &opGuard{deny: map[Operation]bool{OpPurge: true}}
-	svc := newGuardedLifecycle(t, guard, EvaluationLimits{})
+	guard := &opGuard{deny: map[mutations.Operation]bool{mutations.OpPurge: true}}
+	svc := newGuardedLifecycle(t, guard, authmodel.EvaluationLimits{})
 	ctx := context.Background()
 
-	if _, err := svc.GrantRelationship(ctx, actorU1(), GrantRelationshipCommand{
-		MutationID: mustID(t), ResourceType: "doc", ResourceID: "d1", Relation: "viewer", Subject: subjU("u2"),
+	if _, err := svc.Mutations.GrantRelationship(ctx, actorU1(), mutations.GrantRelationshipCommand{
+		ResourceType: "doc", ResourceID: "d1", Relation: "viewer", Subject: subjU("u2"),
 	}); err != nil {
 		t.Fatalf("grant must be allowed while purge is denied: %v", err)
 	}
-	_, err := svc.PurgeResourceAuthorization(ctx, actorU1(), PurgeResourceAuthorizationCommand{
-		MutationID: mustID(t), ResourceType: "doc", ResourceID: "d1",
+	_, err := svc.Mutations.PurgeResourceAuthorization(ctx, actorU1(), mutations.PurgeResourceAuthorizationCommand{
+		ResourceType: "doc", ResourceID: "d1",
 	})
 	if !errors.Is(err, sdk.ErrForbidden) {
 		t.Fatalf("purge with a purge-denying guard: want forbidden, got %v", err)
 	}
-	if targets, _ := svc.GetRelationTargets(ctx, "doc", "d1", "viewer"); len(targets) != 1 {
+	if targets, _ := svc.Relationships.GetRelationTargets(ctx, "doc", "d1", "viewer"); len(targets) != 1 {
 		t.Fatalf("denied purge changed state: %+v", targets)
 	}
 }
 
-// TestGuardDenialCommitsNothing proves a denial never reaches Apply's row changes:
-// the denied grant returns a forbidden error, writes no row, and does not consume
-// its MutationID (a later allowed grant of the same tuple applies fresh).
 func TestGuardDenialCommitsNothing(t *testing.T) {
 	guard := &opGuard{err: fmt.Errorf("no: %w", sdk.ErrForbidden)}
-	svc := newGuardedLifecycle(t, guard, EvaluationLimits{})
+	svc := newGuardedLifecycle(t, guard, authmodel.EvaluationLimits{})
 	ctx := context.Background()
-	id := mustID(t)
 
-	if _, err := svc.GrantRelationship(ctx, actorU1(), GrantRelationshipCommand{
-		MutationID: id, ResourceType: "doc", ResourceID: "d1", Relation: "editor", Subject: subjU("u2"),
+	if _, err := svc.Mutations.GrantRelationship(ctx, actorU1(), mutations.GrantRelationshipCommand{
+		ResourceType: "doc", ResourceID: "d1", Relation: "editor", Subject: subjU("u2"),
 	}); !errors.Is(err, sdk.ErrForbidden) {
 		t.Fatalf("denied grant: want forbidden, got %v", err)
 	}
-	if targets, _ := svc.GetRelationTargets(ctx, "doc", "d1", "editor"); len(targets) != 0 {
+	if targets, _ := svc.Relationships.GetRelationTargets(ctx, "doc", "d1", "editor"); len(targets) != 0 {
 		t.Fatalf("denial reached Apply and wrote a row: %+v", targets)
 	}
 
-	// The denied MutationID is not consumed: reusing it under an allowing guard
-	// applies a fresh write (not a replay).
 	guard.err = nil
-	rcpt, err := svc.GrantRelationship(ctx, actorU1(), GrantRelationshipCommand{
-		MutationID: id, ResourceType: "doc", ResourceID: "d1", Relation: "editor", Subject: subjU("u2"),
+	rcpt, err := svc.Mutations.GrantRelationship(ctx, actorU1(), mutations.GrantRelationshipCommand{
+		ResourceType: "doc", ResourceID: "d1", Relation: "editor", Subject: subjU("u2"),
 	})
-	if err != nil || rcpt.Replayed || rcpt.Outcome != OutcomeApplied {
+	if err != nil || rcpt.Outcome != mutations.OutcomeApplied {
 		t.Fatalf("post-denial retry should apply fresh, got %+v err=%v", rcpt, err)
 	}
 }
@@ -287,16 +262,16 @@ func TestGuardDenialCommitsNothing(t *testing.T) {
 // TestGrantReadOnlyPosture proves a nil Guard closes the actor-facing write path:
 // GrantRelationship fails with ErrMutationsNotConfigured and writes nothing.
 func TestGrantReadOnlyPosture(t *testing.T) {
-	st := memstore.New(memstore.WithGuardianPolicy(mutation.GuardianPolicy{}))
-	comps, err := NewService(Repositories{
+	st := memory.New(memory.WithGuardianPolicy(mutations.GuardianPolicy{}))
+	comps, err := New(Repositories{
 		Relationships: st.Relationships(), Roles: st.Roles(), Mutations: st.Mutations(),
-	}, Config{RelationshipModel: lifecycleModel()}) // no Guard → read-only posture
+	}, WithRelationshipModel(lifecycleModel())) // no Guard → read-only posture
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
-	if _, err := comps.Service.GrantRelationship(context.Background(), actorU1(), GrantRelationshipCommand{
-		MutationID: mustID(t), ResourceType: "doc", ResourceID: "d1", Relation: "editor", Subject: subjU("u2"),
-	}); !errors.Is(err, ErrMutationsNotConfigured) {
+	if _, err := comps.Mutations.GrantRelationship(context.Background(), actorU1(), mutations.GrantRelationshipCommand{
+		ResourceType: "doc", ResourceID: "d1", Relation: "editor", Subject: subjU("u2"),
+	}); !errors.Is(err, mutations.ErrMutationsNotConfigured) {
 		t.Fatalf("read-only grant: want ErrMutationsNotConfigured, got %v", err)
 	}
 }
@@ -304,83 +279,77 @@ func TestGrantReadOnlyPosture(t *testing.T) {
 // TestGrantUnwiredRelationshipKind proves the typed relationship mutations fail closed
 // with the relationship-kind sentinel when the kind is off.
 func TestGrantUnwiredRelationshipKind(t *testing.T) {
-	st := memstore.New()
-	comps, err := NewService(Repositories{Roles: st.Roles(), Mutations: st.Mutations()},
-		Config{Guard: &opGuard{}})
+	st := memory.New()
+	comps, err := New(Repositories{Roles: st.Roles(), Mutations: st.Mutations()}, WithGuard(&opGuard{}))
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
-	if _, err := comps.Service.GrantRelationship(context.Background(), actorU1(), GrantRelationshipCommand{
-		MutationID: mustID(t), ResourceType: "doc", ResourceID: "d1", Relation: "editor", Subject: subjU("u2"),
-	}); !errors.Is(err, ErrRelationshipsNotConfigured) {
+	if _, err := comps.Mutations.GrantRelationship(context.Background(), actorU1(), mutations.GrantRelationshipCommand{
+		ResourceType: "doc", ResourceID: "d1", Relation: "editor", Subject: subjU("u2"),
+	}); !errors.Is(err, relationships.ErrRelationshipsNotConfigured) {
 		t.Fatalf("unwired grant: want ErrRelationshipsNotConfigured, got %v", err)
 	}
 }
 
-// TestGrantSemanticValidatorRejectsUnknownRelation proves the receipt-absent
-// current-schema validator runs inside Apply: granting a relation the schema does not
-// declare is rejected and commits nothing.
 func TestGrantSemanticValidatorRejectsUnknownRelation(t *testing.T) {
-	svc := newGuardedLifecycle(t, &opGuard{}, EvaluationLimits{})
+	svc := newGuardedLifecycle(t, &opGuard{}, authmodel.EvaluationLimits{})
 	ctx := context.Background()
-	_, err := svc.GrantRelationship(ctx, actorU1(), GrantRelationshipCommand{
-		MutationID: mustID(t), ResourceType: "doc", ResourceID: "d1", Relation: "bogus", Subject: subjU("u2"),
+	_, err := svc.Mutations.GrantRelationship(ctx, actorU1(), mutations.GrantRelationshipCommand{
+		ResourceType: "doc", ResourceID: "d1", Relation: "bogus", Subject: subjU("u2"),
 	})
 	if err == nil {
 		t.Fatalf("grant of an undeclared relation must be rejected by the semantic validator")
 	}
-	if targets, _ := svc.GetRelationTargets(ctx, "doc", "d1", "bogus"); len(targets) != 0 {
+	if targets, _ := svc.Relationships.GetRelationTargets(ctx, "doc", "d1", "bogus"); len(targets) != 0 {
 		t.Fatalf("rejected grant wrote a row: %+v", targets)
 	}
 }
 
-// TestGrantReplaySurvivesSchemaChange proves the pinned validation order: an exact
-// stored replay returns its original receipt (and original schema digest) through a
-// service whose CURRENT schema no longer accepts the relation, while a NEW command
-// with that relation is rejected by the current-schema validator.
-func TestGrantReplaySurvivesSchemaChange(t *testing.T) {
-	st := memstore.New(memstore.WithGuardianPolicy(mutation.GuardianPolicy{}))
+func TestRepeatedGrantUsesCurrentSchema(t *testing.T) {
+	st := memory.New(memory.WithGuardianPolicy(mutations.GuardianPolicy{}))
 	ctx := context.Background()
 
-	svcOld, err := NewService(Repositories{
+	svcOld, err := New(Repositories{
 		Relationships: st.Relationships(), Roles: st.Roles(), Mutations: st.Mutations(),
-	}, Config{RelationshipModel: lifecycleModel(), Guard: &opGuard{}})
+	}, WithRelationshipModel(lifecycleModel()), WithGuard(&opGuard{}))
 	if err != nil {
 		t.Fatalf("NewService old: %v", err)
 	}
-	id := mustID(t)
-	cmd := GrantRelationshipCommand{MutationID: id, ResourceType: "doc", ResourceID: "d1", Relation: "editor", Subject: subjU("u2")}
-	orig, err := svcOld.Service.GrantRelationship(ctx, actorU1(), cmd)
+
+	cmd := mutations.GrantRelationshipCommand{ResourceType: "doc", ResourceID: "d1", Relation: "editor", Subject: subjU("u2")}
+	_, err = svcOld.Mutations.GrantRelationship(ctx, actorU1(), cmd)
 	if err != nil {
 		t.Fatalf("original grant: %v", err)
 	}
 
 	// A newer schema WITHOUT the editor relation, sharing the same store.
-	newerModel := NewSchema([]ResourceSchema{{
+	newerModel := relationships.NewSchema([]relationships.ResourceSchema{{
 		Name: "doc",
-		Def: ResourceTypeDef{
-			Relations:   map[string]RelationDef{"owner": {AllowedSubjects: []SubjectTypeRef{{Type: "user"}}}},
-			Permissions: map[string]PermissionRule{"edit": AnyOf(Direct("owner"))},
+		Def: relationships.ResourceTypeDef{
+			Relations:   map[string]relationships.RelationDef{"owner": {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "user"}}}},
+			Permissions: map[string]relationships.PermissionRule{"edit": relationships.AnyOf(relationships.Direct("owner"))},
 		},
 	}})
-	svcNew, err := NewService(Repositories{
+	svcNew, err := New(Repositories{
 		Relationships: st.Relationships(), Roles: st.Roles(), Mutations: st.Mutations(),
-	}, Config{RelationshipModel: newerModel, Guard: &opGuard{}})
+	}, WithRelationshipModel(newerModel), WithGuard(&opGuard{}))
 	if err != nil {
 		t.Fatalf("NewService newer: %v", err)
 	}
 
-	replay, err := svcNew.Service.GrantRelationship(ctx, actorU1(), cmd)
-	if err != nil {
-		t.Fatalf("exact replay under newer schema must succeed, got %v", err)
+	result, err := svcNew.Mutations.GrantRelationship(ctx, actorU1(), cmd)
+	if err == nil || result != nil {
+		t.Fatalf("repeated grant of removed relation: %+v, %v", result, err)
 	}
-	if !replay.Replayed || replay.Outcome != OutcomeApplied || replay.SchemaDigest != orig.SchemaDigest {
-		t.Fatalf("replay must return the original receipt+digest, got %+v (orig digest %q)", replay, orig.SchemaDigest)
+	if _, err := svcNew.SystemMutator.GrantRelationship(ctx, cmd); err == nil {
+		t.Fatal("trusted grant bypassed current schema")
 	}
-
+	if _, err := svcNew.Mutations.RevokeRelationship(ctx, actorU1(), mutations.RevokeRelationshipCommand(cmd)); err != nil {
+		t.Fatalf("removed relation must stay revocable: %v", err)
+	}
 	// A NEW command with the now-undeclared relation is rejected by the current schema.
-	if _, err := svcNew.Service.GrantRelationship(ctx, actorU1(), GrantRelationshipCommand{
-		MutationID: mustID(t), ResourceType: "doc", ResourceID: "d1", Relation: "editor", Subject: subjU("u9"),
+	if _, err := svcNew.Mutations.GrantRelationship(ctx, actorU1(), mutations.GrantRelationshipCommand{
+		ResourceType: "doc", ResourceID: "d1", Relation: "editor", Subject: subjU("u9"),
 	}); err == nil {
 		t.Fatalf("a fresh grant of the undeclared relation must be rejected")
 	}

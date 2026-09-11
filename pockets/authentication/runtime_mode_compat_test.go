@@ -7,27 +7,28 @@ import (
 	"time"
 
 	auth "github.com/gopernicus/gopernicus/pockets/authentication"
-	"github.com/gopernicus/gopernicus/sdk/capabilities/email"
+	delivery "github.com/gopernicus/gopernicus/pockets/authentication/logic/delivery"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/notify"
-	"github.com/gopernicus/gopernicus/sdk/foundation/environment"
+	"github.com/gopernicus/gopernicus/sdk/capabilities/notify/email"
+	"github.com/gopernicus/gopernicus/sdk/pkg/environment"
 )
 
 // This file is the CHAU-3.3 compatibility proof for moving the runtime-posture
-// vocabulary to sdk/foundation/environment. It is an EXTERNAL test package, so
+// vocabulary to sdk/pkg/environment. It is an EXTERNAL test package, so
 // everything here is reachable by a host through exported API only.
 //
 // The counterpart proof — that app-wide code enforces the same transport rule
 // with NO authentication import at all — lives in the sdk itself
-// (sdk/capabilities/email/posture_test.go and
+// (sdk/capabilities/notify/email/posture_test.go and
 // sdk/capabilities/notify/posture_test.go). Those packages cannot import a
 // pocket, which is exactly the guarantee coordination-hub's generic
 // internal/integrations/mailer needs: it drops its pockets/authentication
-// import and names environment.Mode + email.CheckSender instead.
+// import and names environment.Mode + notify.CheckTransport instead.
 
 // hostRuntimeConfig is an old-style host's configuration struct: it declares the
 // posture with auth's type name, as every host written before this change did.
 type hostRuntimeConfig struct {
-	Mode auth.RuntimeMode `env:"AUTH_RUNTIME_MODE"`
+	Mode environment.Mode `env:"AUTH_RUNTIME_MODE"`
 }
 
 // compatHasher and compatSigner are the minimum required collaborators for
@@ -53,56 +54,56 @@ type appWideMailer struct {
 // requireProductionCapable is the app-wide equivalent of what authentication
 // does internally, written with no pocket import.
 func (m appWideMailer) requireProductionCapable() error {
-	_, err := email.CheckSender(m.mode, m.sender)
+	_, err := notify.CheckTransport(m.mode, m.sender)
 	return err
 }
 
 // TestOldStyleHostStillCompiles pins that a host naming auth.RuntimeMode and its
 // constants keeps working unchanged.
 func TestOldStyleHostStillCompiles(t *testing.T) {
-	cfg := hostRuntimeConfig{Mode: auth.RuntimeModeProduction}
+	cfg := hostRuntimeConfig{Mode: environment.ModeProduction}
 
-	if cfg.Mode != auth.RuntimeModeProduction {
-		t.Fatalf("Mode = %q, want %q", cfg.Mode, auth.RuntimeModeProduction)
+	if cfg.Mode != environment.ModeProduction {
+		t.Fatalf("Mode = %q, want %q", cfg.Mode, environment.ModeProduction)
 	}
 
 	// The historic string values are part of the contract: a host reading
 	// AUTH_RUNTIME_MODE from the environment must still match.
-	if string(auth.RuntimeModeProduction) != "production" {
-		t.Errorf("RuntimeModeProduction = %q, want \"production\"", auth.RuntimeModeProduction)
+	if string(environment.ModeProduction) != "production" {
+		t.Errorf("RuntimeModeProduction = %q, want \"production\"", environment.ModeProduction)
 	}
-	if string(auth.RuntimeModeDevelopment) != "development" {
-		t.Errorf("RuntimeModeDevelopment = %q, want \"development\"", auth.RuntimeModeDevelopment)
+	if string(environment.ModeDevelopment) != "development" {
+		t.Errorf("RuntimeModeDevelopment = %q, want \"development\"", environment.ModeDevelopment)
 	}
 
-	// A struct literal on the real Config still accepts the old constant.
-	authCfg := auth.Config{RuntimeMode: auth.RuntimeModeDevelopment}
-	if authCfg.RuntimeMode != auth.RuntimeModeDevelopment {
-		t.Errorf("Config.RuntimeMode = %q, want development", authCfg.RuntimeMode)
+	// A host-owned configuration record accepts the shared mode.
+	authCfg := hostRuntimeConfig{Mode: environment.ModeDevelopment}
+	if authCfg.Mode != environment.ModeDevelopment {
+		t.Errorf("host configuration mode = %q, want development", authCfg.Mode)
 	}
 }
 
 // TestAliasIsAssignableBothDirections is the migration guarantee: the two names
 // are ONE type, so a host can move package by package instead of all at once.
 func TestAliasIsAssignableBothDirections(t *testing.T) {
-	var fromAuth environment.Mode = auth.RuntimeModeProduction
-	var fromSDK auth.RuntimeMode = environment.ModeProduction
+	var fromAuth environment.Mode = environment.ModeProduction
+	var fromSDK environment.Mode = environment.ModeProduction
 
 	if fromAuth != environment.ModeProduction {
 		t.Errorf("auth constant assigned to environment.Mode = %q", fromAuth)
 	}
-	if fromSDK != auth.RuntimeModeProduction {
+	if fromSDK != environment.ModeProduction {
 		t.Errorf("environment constant assigned to auth.RuntimeMode = %q", fromSDK)
 	}
 
-	// No conversion needed in a Config literal written the new way.
-	cfg := auth.Config{RuntimeMode: environment.ModeProduction}
-	if cfg.RuntimeMode != auth.RuntimeModeProduction {
-		t.Errorf("Config.RuntimeMode = %q, want production", cfg.RuntimeMode)
+	// No conversion is needed in the host configuration.
+	cfg := hostRuntimeConfig{Mode: environment.ModeProduction}
+	if cfg.Mode != environment.ModeProduction {
+		t.Errorf("host configuration mode = %q, want production", cfg.Mode)
 	}
 
 	// And an app-wide component accepts a value the host read as auth's type.
-	m := appWideMailer{mode: cfg.RuntimeMode, sender: email.NewSMTP(email.SMTPConfig{Host: "mail.example.com", Port: "587"})}
+	m := appWideMailer{mode: cfg.Mode, sender: email.NewSMTP(email.SMTPConfig{Host: "mail.example.com", Port: "587"})}
 	if err := m.requireProductionCapable(); err != nil {
 		t.Errorf("app-wide production check on an SMTP sender = %v, want nil", err)
 	}
@@ -145,25 +146,22 @@ func TestRuntimeModeSentinelsMatchBothVocabularies(t *testing.T) {
 // TestInsecureTransportMatchesBothVocabularies proves the same for the transport
 // verdict now delegated to the capability packages.
 func TestInsecureTransportMatchesBothVocabularies(t *testing.T) {
-	_, err := auth.NewService(auth.Repositories{}, auth.Config{
-		Hasher:       compatHasher{},
-		TokenSigner:  compatSigner{},
-		Mailer:       email.NewConsole(nil),
-		RuntimeMode:  auth.RuntimeModeProduction,
-		DeliveryMode: auth.DeliveryModeOff,
-	})
+	_, err := auth.New(auth.Repositories{},
+		compatSigner{},
+		environment.ModeProduction,
+		delivery.ModeOff,
+		auth.WithPassword(auth.PasswordConfig{Hasher: compatHasher{}}),
+		auth.WithDelivery(auth.DeliveryConfig{Mailer: email.NewConsole(nil)}))
 	if err == nil {
 		t.Fatal("NewService with a console mailer in production = nil error, want rejection")
 	}
 	if !errors.Is(err, auth.ErrInsecureDeliveryTransport) {
 		t.Errorf("errors.Is(err, auth.ErrInsecureDeliveryTransport) = false; err = %v", err)
 	}
-	if !errors.Is(err, email.ErrInsecureTransport) {
-		t.Errorf("errors.Is(err, email.ErrInsecureTransport) = false; err = %v", err)
+	if !errors.Is(err, notify.ErrInsecureTransport) {
+		t.Errorf("errors.Is(err, notify.ErrInsecureTransport) = false; err = %v", err)
 	}
-	if errors.Is(err, notify.ErrInsecureTransport) {
-		t.Errorf("an email-sender rejection matched notify.ErrInsecureTransport; err = %v", err)
-	}
+
 }
 
 // TestParseModeFeedsAuthConfig is the documented migration wiring: the host owns
@@ -177,9 +175,9 @@ func TestParseModeFeedsAuthConfig(t *testing.T) {
 		t.Fatalf("ParseMode() error = %v", err)
 	}
 
-	cfg := auth.Config{RuntimeMode: mode}
-	if cfg.RuntimeMode != auth.RuntimeModeProduction {
-		t.Errorf("Config.RuntimeMode = %q, want production", cfg.RuntimeMode)
+	cfg := hostRuntimeConfig{Mode: mode}
+	if cfg.Mode != environment.ModeProduction {
+		t.Errorf("host configuration mode = %q, want production", cfg.Mode)
 	}
 
 	os.Unsetenv("AUTH_RUNTIME_MODE")

@@ -4,19 +4,23 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gopernicus/gopernicus/sdk/foundation/environment"
+	eventshttp "github.com/gopernicus/gopernicus/pockets/events/inbound/http"
+	"github.com/gopernicus/gopernicus/pockets/events/logic/streams"
+
+	"github.com/gopernicus/gopernicus/sdk/pkg/environment"
 )
 
-// TestConfigEnvTags pins the EVENTS_* keys on Config: a host tunes the gateway
-// through ParseEnvTags. The collaborator fields (Bus, StreamMiddleware,
-// Authorize, Projector) carry no tag and are untouched by the parse.
+// TestConfigEnvTags pins the EVENTS_* keys on the host-loadable limits and HTTP policy.
 func TestConfigEnvTags(t *testing.T) {
 	t.Setenv("EVENTS_HEARTBEAT", "10s")
 	t.Setenv("EVENTS_BUFFER_SIZE", "128")
 	t.Setenv("EVENTS_MAX_CONN_AGE", "30m")
 	t.Setenv("EVENTS_MAX_CONNS_PER_SUBJECT", "25")
 
-	var cfg Config
+	var cfg struct {
+		streams.Limits
+		eventshttp.Policy
+	}
 	if err := environment.ParseEnvTags("", &cfg); err != nil {
 		t.Fatalf("ParseEnvTags: %v", err)
 	}

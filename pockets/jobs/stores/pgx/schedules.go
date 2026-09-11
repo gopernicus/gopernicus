@@ -3,15 +3,14 @@ package pgx
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 
 	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
-	"github.com/gopernicus/gopernicus/pockets/jobs/domain/schedule"
+	schedule "github.com/gopernicus/gopernicus/pockets/jobs/logic/schedules"
 	"github.com/gopernicus/gopernicus/sdk"
-	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
+	"github.com/gopernicus/gopernicus/sdk/pkg/list"
 )
 
 // scheduleColumns is the job_schedules column list, in Ensure's INSERT order.
@@ -27,10 +26,7 @@ const scheduleRowColumns = "schedule_id, name, kind, COALESCE(tenant_id, '') AS 
 // Compile-time seam: the Schedules store fills the exact schedule.Repository port.
 var _ schedule.Repository = (*Schedules)(nil)
 
-// Schedules implements schedule.Repository over a PostgreSQL database. ClaimDue is
-// a pure value compare-and-set on next_run_at — no locking construct,
-// byte-identical semantics to the turso store — so N runtime instances fire each
-// (schedule, slot) pair exactly once with no leader election.
+// Schedules persists schedule templates and their pending occurrences.
 type Schedules struct {
 	db     *pgxdb.DB
 	schema pgxdb.Schema
@@ -79,7 +75,11 @@ func (r scheduleRow) toDomain() schedule.Schedule {
 // (WithSchema). WithLease is accepted and ignored: schedules hold no claim
 // lease, so the option exists here only because Repositories passes one opts set
 // to both stores.
+// It panics if db is nil; the caller owns the database lifecycle.
 func NewScheduleStore(db *pgxdb.DB, opts ...Option) *Schedules {
+	if db == nil {
+		panic("jobs pgx: NewScheduleStore received a nil database")
+	}
 	cfg := newConfig(opts)
 	return &Schedules{db: db, schema: cfg.schema}
 }
@@ -89,78 +89,20 @@ func NewScheduleStore(db *pgxdb.DB, opts ...Option) *Schedules {
 // advancing next_run_at to next only when the spec changed.
 func (s *Schedules) Ensure(ctx context.Context, in schedule.Ensure, next time.Time) (schedule.Schedule, error) {
 	now := time.Now().UTC()
-	var out schedule.Schedule
-
-	err := s.db.InTx(ctx, func(tx *pgxdb.Tx) error {
-		sel := `SELECT ` + scheduleRowColumns + ` FROM ` + s.table("job_schedules") + ` WHERE name = @name`
-		row, err := pgxdb.QueryOne[scheduleRow](ctx, tx, sel, pgx.NamedArgs{"name": in.Name})
-		switch {
-		case err == nil:
-			existing := row.toDomain()
-			specChanged := existing.Spec != in.Spec
-			existing.Kind = in.Kind
-			existing.TenantID = in.TenantID
-			existing.Spec = in.Spec
-			existing.Payload = in.Payload
-			if specChanged {
-				existing.NextRunAt = next
-			}
-			existing.UpdatedAt = now
-			cron, every := specColumns(existing.Spec)
-			upd := `UPDATE ` + s.table("job_schedules") + ` SET kind = @kind, tenant_id = @tenant_id, cron_expr = @cron, every_secs = @every, payload = @payload, next_run_at = @next_run_at, updated_at = @updated_at WHERE schedule_id = @id`
-			if _, err := tx.Exec(ctx, upd, pgx.NamedArgs{
-				"kind":        existing.Kind,
-				"tenant_id":   nullString(existing.TenantID),
-				"cron":        cron,
-				"every":       every,
-				"payload":     payloadValue(existing.Payload),
-				"next_run_at": existing.NextRunAt.UTC(),
-				"updated_at":  existing.UpdatedAt,
-				"id":          existing.ID,
-			}); err != nil {
-				return err
-			}
-			out = existing
-			return nil
-		case errors.Is(err, sdk.ErrNotFound):
-			sch := schedule.Schedule{
-				ID:        newID("sched"),
-				Name:      in.Name,
-				Kind:      in.Kind,
-				TenantID:  in.TenantID,
-				Spec:      in.Spec,
-				Payload:   in.Payload,
-				Enabled:   true,
-				NextRunAt: next,
-				CreatedAt: now,
-				UpdatedAt: now,
-			}
-			cron, every := specColumns(sch.Spec)
-			ins := `INSERT INTO ` + s.table("job_schedules") + ` (` + scheduleColumns + `) VALUES (@id, @name, @kind, @tenant_id, @cron, @every, @payload, TRUE, @next_run_at, NULL, NULL, @created_at, @updated_at)`
-			if _, err := tx.Exec(ctx, ins, pgx.NamedArgs{
-				"id":          sch.ID,
-				"name":        sch.Name,
-				"kind":        sch.Kind,
-				"tenant_id":   nullString(sch.TenantID),
-				"cron":        cron,
-				"every":       every,
-				"payload":     payloadValue(sch.Payload),
-				"next_run_at": sch.NextRunAt.UTC(),
-				"created_at":  sch.CreatedAt,
-				"updated_at":  sch.UpdatedAt,
-			}); err != nil {
-				return err
-			}
-			out = sch
-			return nil
-		default:
-			return err
-		}
-	})
+	cron, every := specColumns(in.Spec)
+	q := `INSERT INTO ` + s.table("job_schedules") + ` AS current (` + scheduleColumns + `)
+ VALUES (@id, @name, @kind, @tenant_id, @cron, @every, @payload, TRUE, @next, NULL, NULL, @now, @now)
+ ON CONFLICT (name) DO UPDATE SET kind = EXCLUDED.kind, tenant_id = EXCLUDED.tenant_id,
+ cron_expr = EXCLUDED.cron_expr, every_secs = EXCLUDED.every_secs, payload = EXCLUDED.payload,
+ next_run_at = CASE WHEN current.cron_expr IS DISTINCT FROM EXCLUDED.cron_expr
+ OR current.every_secs IS DISTINCT FROM EXCLUDED.every_secs THEN EXCLUDED.next_run_at ELSE current.next_run_at END,
+ updated_at = GREATEST(current.updated_at, EXCLUDED.updated_at)
+ RETURNING ` + scheduleRowColumns
+	row, err := pgxdb.QueryOne[scheduleRow](ctx, s.db, q, pgx.NamedArgs{"id": newID("sched"), "name": in.Name, "kind": in.Kind, "tenant_id": nullString(in.TenantID), "cron": cron, "every": every, "payload": payloadValue(in.Payload), "next": next.UTC(), "now": now})
 	if err != nil {
 		return schedule.Schedule{}, err
 	}
-	return out, nil
+	return row.toDomain(), nil
 }
 
 // ListDue returns up to limit enabled schedules whose next_run_at <= now, ordered
@@ -168,7 +110,7 @@ func (s *Schedules) Ensure(ctx context.Context, in schedule.Ensure, next time.Ti
 // limit returns all due schedules. A non-empty kinds (#37) restricts the scan to
 // those kinds inside the query, before the limit.
 func (s *Schedules) ListDue(ctx context.Context, now time.Time, limit int, kinds []string) ([]schedule.Schedule, error) {
-	where := `WHERE enabled = TRUE AND next_run_at <= @now`
+	where := `WHERE enabled = TRUE AND next_run_at <= @now AND NOT EXISTS (SELECT 1 FROM ` + s.table("job_schedule_occurrences") + ` pending WHERE pending.schedule_id = ` + s.table("job_schedules") + `.schedule_id)`
 	args := pgx.NamedArgs{"now": now.UTC()}
 	if len(kinds) > 0 {
 		where += ` AND kind = ANY(@kinds)`
@@ -200,33 +142,6 @@ func (s *Schedules) ListDue(ctx context.Context, now time.Time, limit int, kinds
 	return due, nil
 }
 
-// ClaimDue is the pure value compare-and-set on next_run_at: it advances
-// next_run_at to newNextRunAt (and last_run_at to now) only when the row's
-// current next_run_at still equals prevNextRunAt, the schedule is enabled, and
-// its kind still equals expectedKind (#37: a re-kinded row is left to its new
-// owner), reporting true when this caller won the (schedule, slot) pair.
-//
-// The CAS statement's $1..$4 are preserved VERBATIM from before the pgx idiom
-// sweep (pgx-crud-v1 P5 directive): the affected-rows bool contract is
-// load-bearing, so its args stay positional rather than risk any observable
-// change from a NamedArgs rewrite; the kind guard is appended as $5.
-func (s *Schedules) ClaimDue(ctx context.Context, id string, prevNextRunAt, newNextRunAt, now time.Time, expectedKind string) (bool, error) {
-	q := `UPDATE ` + s.table("job_schedules") + ` SET next_run_at = $1, last_run_at = $2, updated_at = $2
-		WHERE schedule_id = $3 AND next_run_at = $4 AND enabled = TRUE AND kind = $5`
-	n, err := pgxdb.ExecAffecting(ctx, s.db, q, newNextRunAt.UTC(), now.UTC(), id, prevNextRunAt.UTC(), expectedKind)
-	if err != nil {
-		return false, err
-	}
-	return n == 1, nil
-}
-
-// SetLastJob records the id of the job fired for the most recent slot. A missing
-// id yields sdk.ErrNotFound.
-func (s *Schedules) SetLastJob(ctx context.Context, id, jobID string, now time.Time) error {
-	q := `UPDATE ` + s.table("job_schedules") + ` SET last_job_id = @last_job_id, updated_at = @updated_at WHERE schedule_id = @id`
-	return s.execAffecting(ctx, q, pgx.NamedArgs{"last_job_id": jobID, "updated_at": now.UTC(), "id": id})
-}
-
 // Get returns the schedule with the given id, or sdk.ErrNotFound.
 func (s *Schedules) Get(ctx context.Context, id string) (schedule.Schedule, error) {
 	q := `SELECT ` + scheduleRowColumns + ` FROM ` + s.table("job_schedules") + ` WHERE schedule_id = @id`
@@ -239,7 +154,7 @@ func (s *Schedules) Get(ctx context.Context, id string) (schedule.Schedule, erro
 
 // List returns a cursor- or offset-paginated page of schedules, in the resolved
 // order (default created_at DESC, schedule_id DESC).
-func (s *Schedules) List(ctx context.Context, req crud.ListRequest) (crud.Page[schedule.Schedule], error) {
+func (s *Schedules) List(ctx context.Context, req list.Request) (list.Page[schedule.Schedule], error) {
 	lq := pgxdb.ListQuery[scheduleRow]{
 		BaseSQL:      `SELECT ` + scheduleRowColumns + ` FROM ` + s.table("job_schedules"),
 		OrderFields:  schedule.OrderFields,
@@ -250,15 +165,15 @@ func (s *Schedules) List(ctx context.Context, req crud.ListRequest) (crud.Page[s
 	}
 	page, err := pgxdb.List(ctx, s.db, lq, req)
 	if err != nil {
-		return crud.Page[schedule.Schedule]{}, err
+		return list.Page[schedule.Schedule]{}, err
 	}
-	return crud.MapPage(page, scheduleRow.toDomain), nil
+	return list.MapPage(page, scheduleRow.toDomain), nil
 }
 
 // SetEnabled toggles a schedule's enabled flag. A missing id yields
 // sdk.ErrNotFound.
 func (s *Schedules) SetEnabled(ctx context.Context, id string, enabled bool, now time.Time) error {
-	q := `UPDATE ` + s.table("job_schedules") + ` SET enabled = @enabled, updated_at = @updated_at WHERE schedule_id = @id`
+	q := `UPDATE ` + s.table("job_schedules") + ` SET enabled = @enabled, updated_at = GREATEST(updated_at, @updated_at) WHERE schedule_id = @id`
 	return s.execAffecting(ctx, q, pgx.NamedArgs{"enabled": enabled, "updated_at": now.UTC(), "id": id})
 }
 

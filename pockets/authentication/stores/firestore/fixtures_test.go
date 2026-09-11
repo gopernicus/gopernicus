@@ -9,14 +9,12 @@ import (
 	"time"
 
 	gcfs "cloud.google.com/go/firestore"
-
 	firestoredb "github.com/gopernicus/gopernicus/integrations/datastores/firestore"
 	"github.com/gopernicus/gopernicus/integrations/datastores/firestore/firestoretest"
 	auth "github.com/gopernicus/gopernicus/pockets/authentication"
-	"github.com/gopernicus/gopernicus/pockets/authentication/domain/identifier"
-	"github.com/gopernicus/gopernicus/pockets/authentication/domain/user"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/identifier"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/user"
 	"github.com/gopernicus/gopernicus/sdk"
-	"github.com/gopernicus/gopernicus/sdk/foundation/cryptids"
 )
 
 // The white-box fixtures for the tasks the shared conformance suite cannot
@@ -30,7 +28,7 @@ var testBase = time.Date(2026, 6, 2, 9, 0, 0, 0, time.UTC)
 
 // dbGenerated is the greenfield id strategy: the domain mints nothing and the
 // store assigns the key.
-var dbGenerated = cryptids.NewGenerator(cryptids.Database)
+var dbGenerated = sdk.NewIDGenerator(sdk.DatabaseID)
 
 // normalizer is the pocket's bundled address normalizer.
 var normalizer = identifier.DefaultNormalizer{}
@@ -48,7 +46,7 @@ func openRepos(t *testing.T) (auth.Repositories, *firestoredb.DB) {
 	t.Helper()
 	db := firestoretest.OpenDatabase(t, emulatorDatabase)
 	firestoretest.Reset(t, db)
-	r, err := Repositories(db, WithoutIndexProbe())
+	r, err := Repositories(t.Context(), db, WithoutIndexProbe())
 	if err != nil {
 		t.Fatalf("Repositories: %v", err)
 	}

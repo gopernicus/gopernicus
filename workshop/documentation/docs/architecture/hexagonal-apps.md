@@ -76,7 +76,7 @@ HTTP handlers translate between transport and use cases:
 3. map domain errors to an HTTP result;
 4. render a view or serialize a response.
 
-Handlers should not write SQL, choose providers, or hold domain invariants. Use `sdk/foundation/web` for HTTP mechanism without moving application routes into the SDK.
+Handlers should not write SQL, choose providers, or hold domain invariants. Use `sdk/pkg/web` for HTTP mechanism without moving application routes into the SDK.
 
 A useful inbound split is:
 
@@ -128,7 +128,7 @@ Keep a domain app-local by default. Extract a reusable pocket when:
 - multiple hosts need the whole capability;
 - the public rim can be kept stable and datastore-neutral;
 - hosts need meaningful configure/replace/inject/extend seams;
-- the core can require only SDK;
+- the core can require only SDK and the shared pockets contract;
 - repository behavior can be expressed as a conformance suite;
 - a zero-infrastructure host can prove the pocket without a bundled store.
 

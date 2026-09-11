@@ -36,8 +36,8 @@ const MigrationsDir = "migrations"
 // sdk.ErrNotFound naming the missing table when the "{{.Source}}" migration
 // source was not applied before boot. It does NOT touch migrations. db is the
 // connector wrapper (error mapping + Tx), not a raw pool.
-func Repositories(db *pgxdb.DB) ({{.Pocket}}.Repositories, error) {
-	if err := probeTable(context.Background(), db, "{{.Agg}}"); err != nil {
+func Repositories(ctx context.Context, db *pgxdb.DB) ({{.Pocket}}.Repositories, error) {
+	if err := probeTable(ctx, db, "{{.Agg}}"); err != nil {
 		return {{.Pocket}}.Repositories{}, err
 	}
 	return {{.Pocket}}.Repositories{

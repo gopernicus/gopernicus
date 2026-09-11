@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/gopernicus/gopernicus/sdk"
-	"github.com/gopernicus/gopernicus/sdk/foundation/cryptids"
 )
 
 // Inquiry is a submitted contact-form message.
@@ -21,9 +20,9 @@ type Inquiry struct {
 }
 
 // NewInquiry validates the inputs and returns a new Inquiry, minting its ID from
-// ids (empty under cryptids.Database — the store then assigns the key).
+// ids (empty under sdk.DatabaseID — the store then assigns the key).
 // Validation failures wrap sdk.ErrInvalidInput.
-func NewInquiry(ids cryptids.IDGenerator, name, email, message string, now time.Time) (Inquiry, error) {
+func NewInquiry(ids sdk.IDGenerator, name, email, message string, now time.Time) (Inquiry, error) {
 	name = strings.TrimSpace(name)
 	email = strings.TrimSpace(email)
 	message = strings.TrimSpace(message)

@@ -1,330 +1,183 @@
-// Package gcs is the file-storage connector for Google Cloud Storage: it
-// implements the sdk/capabilities/filestorage core Storer port over exactly one third-party
-// library-family, cloud.google.com/go/storage (with google.golang.org/api's
-// client options and iterator, the storage client's own required surface).
-//
-// The old fat storage interface is superseded by the sdk's split: Store honors
-// the core filestorage.Storer and, because GCS supports them, the two optional
-// capability interfaces — filestorage.ResumableUploader (resumable upload
-// sessions) and filestorage.SignedURLer (short-lived V4 signed read URLs).
-// Callers that only need the core port never see the extras; callers that want
-// them reach through filestorage.FileStore's type-assert helpers.
-//
-// It is its own module (github.com/gopernicus/gopernicus/integrations/filestorage/gcs), depending only
-// on sdk (for the filestorage sentinels its errors map to) and the Google Cloud
-// storage client. Not-found conditions map to filestorage.ErrObjectNotFound so
-// errors.Is at the call site stays backend-agnostic. A different vendor (S3, …)
-// is a sibling connector, swapped at the composition root.
+// Package gcs implements filestorage.Storer and the optional signed-read and
+// resumable-upload capabilities using the Google Cloud Storage client family.
+// Hosts construct Store directly and own its Close lifecycle.
 package gcs
 
 import (
 	"context"
-	"errors"
+	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
+	"net/url"
+	"os"
 	"strings"
-	"time"
 
 	gcsstorage "cloud.google.com/go/storage"
-	"google.golang.org/api/iterator"
 	"google.golang.org/api/option"
+	"google.golang.org/api/option/internaloption"
+	"google.golang.org/api/transport"
 
+	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/filestorage"
 )
 
-// resumableInitTimeout bounds the single HTTP POST that starts a resumable
-// upload session when no caller deadline is attached to the context.
-const resumableInitTimeout = 15 * time.Minute
-
-// Compile-time proof of the port set this connector satisfies. Store honors the
-// core Storer plus both optional capabilities GCS can back.
 var (
 	_ filestorage.Storer            = (*Store)(nil)
 	_ filestorage.ResumableUploader = (*Store)(nil)
 	_ filestorage.SignedURLer       = (*Store)(nil)
 )
 
-// Config holds the settings Open needs. Hosts populate it from sdk/foundation/environment; the
-// connector carries no env tags and no functional-options layer beyond Option.
+// Config holds bucket, namespace and authentication settings for Open.
 type Config struct {
-	// Bucket is the target GCS bucket. Required.
 	Bucket string
-
-	// Prefix, when set, is a key root prepended to every path — the GCS analogue
-	// of the sdk Disk default's base directory. It scopes one Store to a subtree
-	// of a shared bucket (multi-tenant / per-app roots) and is transparent to
-	// callers: List strips it back off before returning paths. A missing trailing
-	// slash is added.
+	// Prefix is a canonical directory key. A missing trailing slash is added;
+	// leading/repeated slashes and dot/dot-dot segments are rejected.
 	Prefix string
-
-	// CredentialsJSON is a service-account key in JSON. When empty, Open falls
-	// back to Application Default Credentials (GOOGLE_APPLICATION_CREDENTIALS,
-	// gcloud auth, or the workload's metadata identity). A key that carries a
-	// private key also lets SignedURL sign locally with no network round trip.
+	// CredentialsJSON supplies credentials; empty uses the vendor's ADC path.
+	// A service-account private key also permits local SignedURL signing when
+	// SigningServiceAccount is empty. Open may perform credential discovery I/O.
 	CredentialsJSON string
-
-	// Endpoint overrides the storage API host — set it to a fake-gcs-server /
-	// emulator URL (e.g. "http://localhost:4443/storage/v1/") for tests. When
-	// set, Open also disables authentication, matching the emulator's contract.
+	// Endpoint overrides the storage API URL and disables default authentication
+	// for emulator use. Explicit vendor client options are applied afterward.
 	Endpoint string
+	// SigningServiceAccount explicitly selects IAM SignBlob for this service
+	// account email or unique ID, using the configured authenticated HTTP client.
+	// Empty selects local signing from CredentialsJSON, if available. Signing
+	// identity is never inferred through background metadata/credential calls.
+	SigningServiceAccount string
 }
 
-// Option configures Open before the client is built.
+// Option configures the vendor client before Open builds it.
 type Option func(*options)
 
 type options struct {
 	clientOpts []option.ClientOption
 }
 
-// WithClientOption threads a raw google.golang.org/api/option.ClientOption
-// through to storage.NewClient for settings Config does not surface (custom
-// HTTP client, quota project, scopes). It is the bring-your-own escape hatch;
-// most hosts never need it.
+// WithClientOption preserves the vendor option seam for credentials, scopes,
+// quota projects, custom HTTP clients and endpoint overrides. These options
+// configure storage and its retained HTTP client. Vendor-only credentials do
+// not infer local signing identity; use Config's signing fields for SignedURL.
+// Calls append options in order. The option copies the supplied slice, while
+// vendor option values and their dependencies retain vendor ownership semantics.
 func WithClientOption(opts ...option.ClientOption) Option {
-	return func(o *options) {
-		o.clientOpts = append(o.clientOpts, opts...)
-	}
+	snapshot := append([]option.ClientOption(nil), opts...)
+	return func(o *options) { o.clientOpts = append(o.clientOpts, snapshot...) }
 }
 
-// Store is a GCS-backed filestorage.Storer scoped to one bucket (and optional
-// key prefix). Construct it with Open; the zero value is not usable. Close it to
-// release the underlying client.
+// Store owns a storage client scoped to one bucket and optional directory key.
+// Construct it with Open; the zero value is not usable.
 type Store struct {
-	client *gcsstorage.Client
-	bucket string
-	prefix string
+	client         *gcsstorage.Client
+	httpClient     *http.Client
+	endpoint       string
+	bucket         string
+	prefix         string
+	signingAccount string
+	privateKey     []byte
 }
 
-// Open builds a Store for cfg.Bucket, verifying nothing at construction time —
-// the Google Cloud client authenticates lazily on first use, so Open makes no
-// network round trip (unlike the datastores' ping-on-open). Pass a ctx with a
-// deadline if you add an Option that dials.
+// Open validates local settings, then builds the storage client and retains its
+// configured HTTP transport for authenticated resumable initiation and IAM.
+// Credential discovery can perform I/O; callers should supply a startup deadline.
+// A nil Gopernicus option returns an error wrapping sdk.ErrInvalidInput.
 func Open(ctx context.Context, cfg Config, opts ...Option) (*Store, error) {
-	if cfg.Bucket == "" {
-		return nil, fmt.Errorf("gcs: empty bucket")
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
-
+	if cfg.Bucket == "" {
+		return nil, fmt.Errorf("gcs: bucket is required: %w", sdk.ErrInvalidInput)
+	}
+	prefix := cfg.Prefix
+	if prefix != "" {
+		if err := filestorage.ValidatePath(strings.TrimSuffix(prefix, "/")); err != nil {
+			return nil, fmt.Errorf("gcs: configured prefix: %w", err)
+		}
+		if !strings.HasSuffix(prefix, "/") {
+			prefix += "/"
+		}
+	}
 	var o options
+	o.clientOpts = []option.ClientOption{
+		option.WithScopes(gcsstorage.ScopeFullControl, "https://www.googleapis.com/auth/cloud-platform"),
+		internaloption.WithDefaultEndpointTemplate("https://storage.UNIVERSE_DOMAIN/storage/v1/"),
+		internaloption.WithDefaultMTLSEndpoint("https://storage.mtls.googleapis.com/storage/v1/"),
+		internaloption.WithDefaultUniverseDomain("googleapis.com"),
+		// Match storage.NewClient's context-aware auth implementation. Legacy
+		// oauth2 TokenSource adapters retain their own cancellation semantics.
+		internaloption.EnableNewAuthLibrary(),
+	}
+	// Mirror storage.NewClient's emulator defaults before applying explicit
+	// configuration. Both clients must choose the same endpoint and auth path.
+	if host := os.Getenv("STORAGE_EMULATOR_HOST"); host != "" {
+		if !strings.Contains(host, "://") {
+			host = "http://" + host
+		}
+		emulator, err := url.Parse(host)
+		if err != nil {
+			return nil, fmt.Errorf("gcs: invalid emulator endpoint: %w", sdk.ErrInvalidInput)
+		}
+		emulator.Path = "storage/v1/"
+		o.clientOpts = append(o.clientOpts, option.WithoutAuthentication(),
+			internaloption.SkipDialSettingsValidation(),
+			internaloption.WithDefaultEndpointTemplate(emulator.String()),
+			internaloption.WithDefaultMTLSEndpoint(emulator.String()))
+	}
 	if cfg.CredentialsJSON != "" {
 		o.clientOpts = append(o.clientOpts, option.WithCredentialsJSON([]byte(cfg.CredentialsJSON)))
 	}
 	if cfg.Endpoint != "" {
-		o.clientOpts = append(o.clientOpts,
-			option.WithEndpoint(cfg.Endpoint),
-			option.WithoutAuthentication(),
-		)
+		o.clientOpts = append(o.clientOpts, option.WithEndpoint(cfg.Endpoint), option.WithoutAuthentication())
 	}
 	for _, opt := range opts {
+		if opt == nil {
+			return nil, fmt.Errorf("gcs: nil Option: %w", sdk.ErrInvalidInput)
+		}
 		opt(&o)
 	}
 
-	client, err := gcsstorage.NewClient(ctx, o.clientOpts...)
-	if err != nil {
-		return nil, fmt.Errorf("gcs: create client: %w", err)
+	s := &Store{bucket: cfg.Bucket, prefix: prefix, signingAccount: cfg.SigningServiceAccount}
+	if s.signingAccount == "" && cfg.CredentialsJSON != "" {
+		var key struct {
+			Type        string `json:"type"`
+			ClientEmail string `json:"client_email"`
+			PrivateKey  string `json:"private_key"`
+		}
+		if err := json.Unmarshal([]byte(cfg.CredentialsJSON), &key); err != nil {
+			return nil, fmt.Errorf("gcs: parsing credentials JSON: %w", err)
+		}
+		if key.Type == "service_account" && key.ClientEmail != "" && key.PrivateKey != "" {
+			s.signingAccount, s.privateKey = key.ClientEmail, []byte(key.PrivateKey)
+		}
 	}
-
-	return &Store{
-		client: client,
-		bucket: cfg.Bucket,
-		prefix: normalizePrefix(cfg.Prefix),
-	}, nil
+	httpClient, endpoint, err := transport.NewHTTPClient(ctx, o.clientOpts...)
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+	if err != nil {
+		return nil, fmt.Errorf("gcs: creating HTTP client: %w", err)
+	}
+	// Keep the exact configured transport shared by the storage API and extras,
+	// while retaining the vendor options used by storage.NewClient itself.
+	clientOpts := append(o.clientOpts, option.WithEndpoint(endpoint), option.WithHTTPClient(httpClient))
+	client, err := gcsstorage.NewClient(ctx, clientOpts...)
+	if err != nil {
+		return nil, fmt.Errorf("gcs: creating storage client: %w", err)
+	}
+	if err := ctx.Err(); err != nil {
+		_ = client.Close()
+		return nil, err
+	}
+	s.client, s.httpClient, s.endpoint = client, httpClient, endpoint
+	return s, nil
 }
 
-// Close releases the underlying storage client.
-func (s *Store) Close() error {
-	return s.client.Close()
-}
+// Close releases storage-client resources and closes idle HTTP connections.
+// Finish active operations before closing the store.
+func (s *Store) Close() error { return s.client.Close() }
 
-// object returns the bucket object handle for a caller-facing path, applying the
-// store prefix.
+func (s *Store) key(path string) string { return s.prefix + path }
+
 func (s *Store) object(path string) *gcsstorage.ObjectHandle {
 	return s.client.Bucket(s.bucket).Object(s.key(path))
-}
-
-// key maps a caller-facing path to a full object name under the store prefix.
-func (s *Store) key(path string) string {
-	return s.prefix + strings.TrimPrefix(path, "/")
-}
-
-// Upload streams reader to the object at path.
-func (s *Store) Upload(ctx context.Context, path string, reader io.Reader) error {
-	wc := s.object(path).NewWriter(ctx)
-	if _, err := io.Copy(wc, reader); err != nil {
-		_ = wc.Close()
-		return fmt.Errorf("gcs: upload %q: %w", path, mapErr(err))
-	}
-	if err := wc.Close(); err != nil {
-		return fmt.Errorf("gcs: upload %q: %w", path, mapErr(err))
-	}
-	return nil
-}
-
-// Download opens the object at path. Missing objects map to
-// filestorage.ErrObjectNotFound.
-func (s *Store) Download(ctx context.Context, path string) (io.ReadCloser, error) {
-	rc, err := s.object(path).NewReader(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("gcs: download %q: %w", path, mapErr(err))
-	}
-	return rc, nil
-}
-
-// Delete removes the object at path. A missing object is not an error
-// (idempotent), matching the sdk Disk default.
-func (s *Store) Delete(ctx context.Context, path string) error {
-	if err := s.object(path).Delete(ctx); err != nil {
-		if errors.Is(err, gcsstorage.ErrObjectNotExist) {
-			return nil
-		}
-		return fmt.Errorf("gcs: delete %q: %w", path, mapErr(err))
-	}
-	return nil
-}
-
-// Exists reports whether an object exists at path.
-func (s *Store) Exists(ctx context.Context, path string) (bool, error) {
-	if _, err := s.object(path).Attrs(ctx); err != nil {
-		if errors.Is(err, gcsstorage.ErrObjectNotExist) {
-			return false, nil
-		}
-		return false, fmt.Errorf("gcs: exists %q: %w", path, mapErr(err))
-	}
-	return true, nil
-}
-
-// List returns the caller-facing paths of objects under prefix (the store prefix
-// is applied and then stripped back off), excluding directory-marker keys.
-func (s *Store) List(ctx context.Context, prefix string) ([]string, error) {
-	it := s.client.Bucket(s.bucket).Objects(ctx, &gcsstorage.Query{Prefix: s.key(prefix)})
-
-	var out []string
-	for {
-		attrs, err := it.Next()
-		if errors.Is(err, iterator.Done) {
-			break
-		}
-		if err != nil {
-			return nil, fmt.Errorf("gcs: list %q: %w", prefix, mapErr(err))
-		}
-		if isDirectory(attrs.Name) {
-			continue
-		}
-		out = append(out, strings.TrimPrefix(attrs.Name, s.prefix))
-	}
-	return out, nil
-}
-
-// DownloadRange reads length bytes from offset (length -1 = to end). Missing
-// objects map to filestorage.ErrObjectNotFound.
-func (s *Store) DownloadRange(ctx context.Context, path string, offset, length int64) (io.ReadCloser, error) {
-	rc, err := s.object(path).NewRangeReader(ctx, offset, length)
-	if err != nil {
-		return nil, fmt.Errorf("gcs: download range %q: %w", path, mapErr(err))
-	}
-	return rc, nil
-}
-
-// GetObjectSize returns the byte size of the object at path. Missing objects map
-// to filestorage.ErrObjectNotFound.
-func (s *Store) GetObjectSize(ctx context.Context, path string) (int64, error) {
-	attrs, err := s.object(path).Attrs(ctx)
-	if err != nil {
-		return 0, fmt.Errorf("gcs: object size %q: %w", path, mapErr(err))
-	}
-	return attrs.Size, nil
-}
-
-// InitiateResumableUpload starts a GCS resumable upload session and returns its
-// session URI. It signs a V4 POST URL carrying the x-goog-resumable:start
-// header, POSTs to it, and returns the Location header the server hands back.
-// The client then PUTs data directly to that URI. Signing needs credentials with
-// a private key (a service-account key via Config.CredentialsJSON).
-func (s *Store) InitiateResumableUpload(ctx context.Context, path, contentType string) (string, error) {
-	signedURL, err := s.client.Bucket(s.bucket).SignedURL(s.key(path), &gcsstorage.SignedURLOptions{
-		Scheme:      gcsstorage.SigningSchemeV4,
-		Method:      http.MethodPost,
-		Expires:     time.Now().Add(resumableInitTimeout),
-		ContentType: contentType,
-		Headers:     []string{"x-goog-resumable:start"},
-	})
-	if err != nil {
-		return "", fmt.Errorf("gcs: sign resumable url %q: %w", path, err)
-	}
-
-	if _, ok := ctx.Deadline(); !ok {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, resumableInitTimeout)
-		defer cancel()
-	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, signedURL, nil)
-	if err != nil {
-		return "", fmt.Errorf("gcs: build resumable request %q: %w", path, err)
-	}
-	req.Header.Set("Content-Type", contentType)
-	req.Header.Set("x-goog-resumable", "start")
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("gcs: initiate resumable upload %q: %w", path, err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusCreated {
-		return "", fmt.Errorf("gcs: initiate resumable upload %q: want 201, got %d", path, resp.StatusCode)
-	}
-	sessionURI := resp.Header.Get("Location")
-	if sessionURI == "" {
-		return "", fmt.Errorf("gcs: initiate resumable upload %q: missing Location header", path)
-	}
-	return sessionURI, nil
-}
-
-// SignedURL mints a short-lived V4 signed GET URL for the object at path.
-// Signing needs credentials with a private key (a service-account key via
-// Config.CredentialsJSON); with bare Application Default Credentials the library
-// falls back to the IAM SignBlob API. The ctx is accepted for interface parity;
-// V4 signing with a local key performs no network round trip.
-func (s *Store) SignedURL(_ context.Context, path string, expiry time.Duration) (string, error) {
-	url, err := s.client.Bucket(s.bucket).SignedURL(s.key(path), &gcsstorage.SignedURLOptions{
-		Scheme:  gcsstorage.SigningSchemeV4,
-		Method:  http.MethodGet,
-		Expires: time.Now().Add(expiry),
-	})
-	if err != nil {
-		return "", fmt.Errorf("gcs: sign url %q: %w", path, err)
-	}
-	return url, nil
-}
-
-// mapErr converts a GCS driver error into the sdk/capabilities/filestorage sentinel a caller
-// can errors.Is against; a not-found becomes filestorage.ErrObjectNotFound.
-// Unrecognized errors pass through unchanged.
-func mapErr(err error) error {
-	if err == nil {
-		return nil
-	}
-	if errors.Is(err, gcsstorage.ErrObjectNotExist) {
-		return filestorage.ErrObjectNotFound
-	}
-	return err
-}
-
-// normalizePrefix trims a leading slash and ensures a single trailing slash so
-// key() can concatenate without producing "//" or a leading "/". Empty stays
-// empty.
-func normalizePrefix(p string) string {
-	p = strings.Trim(p, "/")
-	if p == "" {
-		return ""
-	}
-	return p + "/"
-}
-
-// isDirectory reports whether a GCS object name is a directory-marker key
-// (trailing slash). GCS's namespace is flat, but some tools write such markers;
-// they are not real objects, so List skips them.
-func isDirectory(name string) bool {
-	return strings.HasSuffix(name, "/")
 }

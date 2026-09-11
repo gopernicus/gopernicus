@@ -25,7 +25,7 @@ const (
 	decoyEventType = "test.withschema.decoy"
 )
 
-// decoyCreateSQL mirrors migrations/0001_event_outbox.sql, applied to public as
+// decoyCreateSQL mirrors the schema after migration 0002, applied to public as
 // the decoy the store must NOT write to when a schema is set (and MUST write to
 // when none is).
 const decoyCreateSQL = `CREATE TABLE IF NOT EXISTS public.event_outbox (
@@ -33,7 +33,7 @@ const decoyCreateSQL = `CREATE TABLE IF NOT EXISTS public.event_outbox (
     event_type     TEXT        NOT NULL,
     occurred_at    TIMESTAMPTZ NOT NULL,
     correlation_id TEXT        NOT NULL DEFAULT '',
-    payload        JSON        NOT NULL DEFAULT '{}',
+    payload        BYTEA       NOT NULL DEFAULT ''::bytea,
     aggregate_type TEXT,
     aggregate_id   TEXT,
     tenant_id      TEXT,
@@ -57,7 +57,7 @@ func TestLive_WithSchema_Decoy(t *testing.T) {
 	dsn := requireDSN(t)
 	ctx := context.Background()
 
-	db, err := pgxdb.Open(pgxdb.Config{DSN: dsn})
+	db, err := pgxdb.Open(context.Background(), pgxdb.Config{DSN: dsn})
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}
@@ -95,7 +95,7 @@ func TestLive_WithSchema_Decoy(t *testing.T) {
 
 	// Before the schema is migrated, the qualified probe must fail — and name the
 	// qualified table, not the visible public decoy.
-	_, err = New(db, WithSchema(schema))
+	_, err = New(context.Background(), db, WithSchema(schema))
 	if err == nil {
 		t.Fatal("New with an unmigrated schema succeeded — the probe resolved the public decoy instead")
 	}
@@ -110,7 +110,7 @@ func TestLive_WithSchema_Decoy(t *testing.T) {
 		t.Fatalf("migrate into %q: %v", decoySchema, err)
 	}
 
-	scoped, err := New(db, WithSchema(schema))
+	scoped, err := New(context.Background(), db, WithSchema(schema))
 	if err != nil {
 		t.Fatalf("New after migrating into %q: %v", decoySchema, err)
 	}
@@ -129,7 +129,7 @@ func TestLive_WithSchema_Decoy(t *testing.T) {
 
 	// Negative direction: with no option the write lands in the decoy and the
 	// schema is untouched. This is the "default unchanged" half of the promise.
-	bare, err := New(db)
+	bare, err := New(context.Background(), db)
 	if err != nil {
 		t.Fatalf("New (no option): %v", err)
 	}

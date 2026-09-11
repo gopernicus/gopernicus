@@ -6,7 +6,7 @@
 //
 // It is its own module (github.com/gopernicus/gopernicus/integrations/datastores/pgxdb), depending
 // only on sdk (the sentinels MapError targets, plus the ports it satisfies —
-// crud.Transactor and ratelimiter.Limiter) and pgx/v5.
+// transaction.Transactor and ratelimiter.Limiter) and pgx/v5.
 //
 // Its exported surface mirrors the turso connector's by convention (Config /
 // Open / DB / MapError / StatusCheck / RunMigrations). Nothing mechanically proves
@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"net"
 	"net/url"
 	"strings"
@@ -59,8 +60,8 @@ const (
 )
 
 // Config holds the PostgreSQL connection settings. Hosts populate it directly
-// or via env-tag helpers; Open never reads process environment itself. DSN wins
-// over the split Host/Port/User/Password/Database/SSLMode fields.
+// or via env-tag helpers. pgx's DSN parser also honors its standard PG* environment
+// defaults. DSN wins over the split Host/Port/User/Password/Database/SSLMode fields.
 //
 // LogQueries, Logger, and Tracer are deliberate, interim exceptions to
 // "no per-connector observability field": pgx exposes exactly one tracing
@@ -86,6 +87,8 @@ type Config struct {
 	Database string `env:"DB_NAME"`
 	SSLMode  string `env:"DB_SSLMODE"`
 
+	// Zero pool settings retain the DSN's values or pgx defaults; positive
+	// settings override them. Negative values are invalid.
 	MaxConns       int           `env:"DB_MAX_CONNS"`
 	MinConns       int           `env:"DB_MIN_CONNS"`
 	MaxLifetime    time.Duration `env:"DB_MAX_CONN_LIFETIME"`
@@ -253,6 +256,22 @@ func hasSessionTimeZone(params map[string]string) bool {
 // string itself is never rewritten — pgconn has already parsed it into
 // ConnConfig, so the parsed form is what gets adjusted.
 func (cfg Config) poolConfig(dsn string) (*pgxpool.Config, error) {
+	if cfg.MaxConns < 0 || cfg.MinConns < 0 || cfg.MaxConns > math.MaxInt32 || cfg.MinConns > math.MaxInt32 {
+		return nil, fmt.Errorf("postgres: pool counts must be between 0 and %d: %w", math.MaxInt32, sdk.ErrInvalidInput)
+	}
+	for _, setting := range []struct {
+		name  string
+		value time.Duration
+	}{
+		{"MaxLifetime", cfg.MaxLifetime},
+		{"MaxIdleTime", cfg.MaxIdleTime},
+		{"HealthCheckPeriod", cfg.HealthCheckPeriod},
+		{"ConnectTimeout", cfg.ConnectTimeout},
+	} {
+		if setting.value < 0 {
+			return nil, fmt.Errorf("postgres: %s cannot be negative: %w", setting.name, sdk.ErrInvalidInput)
+		}
+	}
 	poolConfig, err := pgxpool.ParseConfig(dsn)
 	if err != nil {
 		return nil, fmt.Errorf("parsing connection string: %w", err)
@@ -263,10 +282,22 @@ func (cfg Config) poolConfig(dsn string) (*pgxpool.Config, error) {
 	if cfg.MinConns > 0 {
 		poolConfig.MinConns = int32(cfg.MinConns)
 	}
-	poolConfig.MaxConnLifetime = cfg.MaxLifetime
-	poolConfig.MaxConnIdleTime = cfg.MaxIdleTime
+	if cfg.MaxLifetime > 0 {
+		poolConfig.MaxConnLifetime = cfg.MaxLifetime
+	}
+	if cfg.MaxIdleTime > 0 {
+		poolConfig.MaxConnIdleTime = cfg.MaxIdleTime
+	}
 	if cfg.HealthCheckPeriod > 0 {
 		poolConfig.HealthCheckPeriod = cfg.HealthCheckPeriod
+	}
+	if poolConfig.MinConns < 0 || poolConfig.MinConns > poolConfig.MaxConns ||
+		poolConfig.MinIdleConns < 0 || poolConfig.MinIdleConns > poolConfig.MaxConns {
+		return nil, fmt.Errorf("postgres: minimum pool counts must be between 0 and MaxConns: %w", sdk.ErrInvalidInput)
+	}
+	if poolConfig.HealthCheckPeriod <= 0 || poolConfig.MaxConnLifetime < 0 ||
+		poolConfig.MaxConnIdleTime < 0 || poolConfig.MaxConnLifetimeJitter < 0 {
+		return nil, fmt.Errorf("postgres: pool durations must be nonnegative and HealthCheckPeriod must be positive: %w", sdk.ErrInvalidInput)
 	}
 	if tracer := cfg.queryTracer(); tracer != nil {
 		poolConfig.ConnConfig.Tracer = tracer
@@ -291,7 +322,11 @@ func (cfg Config) poolConfig(dsn string) (*pgxpool.Config, error) {
 // ping. Pool sizes are applied only when non-zero, leaving pgx's own defaults
 // in place otherwise. Every connection scans timestamptz in UTC and, unless the
 // host named a zone, runs with a UTC session time zone (see poolConfig).
-func Open(cfg Config) (*DB, error) {
+// The context bounds startup only; the caller owns the returned DB's lifetime.
+func Open(ctx context.Context, cfg Config) (*DB, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	dsn, err := cfg.connectionString()
 	if err != nil {
 		return nil, err
@@ -305,8 +340,11 @@ func Open(cfg Config) (*DB, error) {
 		return nil, err
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), cfg.ConnectTimeout)
+	ctx, cancel := context.WithTimeout(ctx, cfg.ConnectTimeout)
 	defer cancel()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 
 	pool, err := pgxpool.NewWithConfig(ctx, poolConfig)
 	if err != nil {

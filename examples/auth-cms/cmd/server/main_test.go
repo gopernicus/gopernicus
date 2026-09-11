@@ -11,8 +11,9 @@ import (
 	"github.com/gopernicus/gopernicus/examples/auth-cms/internal/authjobs"
 	"github.com/gopernicus/gopernicus/examples/auth-cms/internal/authmem"
 	auth "github.com/gopernicus/gopernicus/pockets/authentication"
+	delivery "github.com/gopernicus/gopernicus/pockets/authentication/logic/delivery"
 	"github.com/gopernicus/gopernicus/pockets/jobs"
-	jobsmem "github.com/gopernicus/gopernicus/pockets/jobs/memstore"
+	jobsmem "github.com/gopernicus/gopernicus/pockets/jobs/stores/memory"
 )
 
 // quietLog is a discarding logger so the console transports' dev WARN and the
@@ -43,13 +44,13 @@ func hostAllowedOrigins(t *testing.T) []string {
 // jobsDispatcher builds the generic-jobs delivery dispatcher over an in-memory fenced
 // queue — the jobs-mode delivery transport run() wires, reproduced here so a construction
 // test can satisfy the jobs-mode queue capability.
-func jobsDispatcher(t *testing.T) auth.DeliveryDispatcher {
+func jobsDispatcher(t *testing.T) delivery.Dispatcher {
 	t.Helper()
-	deliveryJobs, err := jobs.NewService(jobs.Repositories{FencedQueue: jobsmem.NewFencedQueue()}, jobs.Config{Logger: quietLog()})
+	deliveryJobs, err := jobs.New(jobs.Repositories{FencedQueue: jobsmem.NewFencedQueue()})
 	if err != nil {
 		t.Fatalf("jobs.NewService: %v", err)
 	}
-	return authjobs.NewDispatcher(deliveryJobs)
+	return authjobs.NewDispatcher(deliveryJobs.Queue)
 }
 
 // TestBuildAuthConfigConstructs proves the AV3-8.6 development wiring — bundled templ
@@ -78,8 +79,8 @@ func TestBuildAuthConfigConstructs(t *testing.T) {
 	if cfg.PublicAuthBaseURL == "" {
 		t.Fatal("Config.PublicAuthBaseURL empty: magic-link base URL not wired")
 	}
-	if cfg.DeliveryMode != auth.DeliveryModeJobs {
-		t.Fatalf("Config.DeliveryMode = %q, want %q", cfg.DeliveryMode, auth.DeliveryModeJobs)
+	if cfg.DeliveryMode != delivery.ModeJobs {
+		t.Fatalf("Config.DeliveryMode = %q, want %q", cfg.DeliveryMode, delivery.ModeJobs)
 	}
 	if !cfg.DeliveryJobsAcknowledged {
 		t.Fatal("Config.DeliveryJobsAcknowledged false: jobs delivery runtime lifecycle not affirmed")
@@ -87,7 +88,7 @@ func TestBuildAuthConfigConstructs(t *testing.T) {
 	// run() wires the generic-jobs dispatcher; reproduce it so the jobs-mode construction
 	// succeeds here.
 	cfg.DeliveryDispatcher = jobsDispatcher(t)
-	if _, err := auth.NewService(authmem.New().Repositories(), cfg); err != nil {
+	if _, err := auth.New(authmem.New().Repositories(), cfg.TokenSigner, cfg.RuntimeMode, cfg.DeliveryMode, cfg.options()...); err != nil {
 		t.Fatalf("auth.NewService over development wiring: %v", err)
 	}
 }
@@ -104,8 +105,8 @@ func TestDeliveryRuntimeStartStop(t *testing.T) {
 	}
 	// Flip to the self-contained bounded in-process runtime so RunDelivery owns the pool
 	// lifecycle without a generic-jobs composition.
-	cfg.DeliveryMode = auth.DeliveryModeInProcess
-	svc, err := auth.NewService(authmem.New().Repositories(), cfg)
+	cfg.DeliveryMode = delivery.ModeInProcess
+	svc, err := auth.New(authmem.New().Repositories(), cfg.TokenSigner, cfg.RuntimeMode, cfg.DeliveryMode, cfg.options()...)
 	if err != nil {
 		t.Fatalf("auth.NewService: %v", err)
 	}
@@ -113,7 +114,7 @@ func TestDeliveryRuntimeStartStop(t *testing.T) {
 	base := runtime.NumGoroutine()
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
-	go func() { done <- svc.RunDelivery(ctx) }()
+	go func() { done <- svc.Delivery.Run(ctx) }()
 
 	// Give the pool a moment to start its workers, then stop it.
 	time.Sleep(50 * time.Millisecond)

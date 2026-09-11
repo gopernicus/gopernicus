@@ -34,6 +34,7 @@ var canonicalMigrations = []string{
 	// invitation-metadata: append-only opaque host metadata column on invitations.
 	// It adds no table; the column is asserted below.
 	"0016_invitation_metadata.sql",
+	"0018_invitation_acceptance.sql",
 }
 
 // expectedTables are every CREATE TABLE the canonical set must define.
@@ -74,6 +75,7 @@ var expectedIndexes = []string{
 
 // expectedColumns are the schema additions to existing tables this task lands.
 var expectedColumns = []string{
+	"resolved_subject_type",  // invitations: durable acceptance binding
 	"auth_revision",          // users
 	"authenticated_at",       // sessions
 	"authentication_methods", // sessions

@@ -3,23 +3,17 @@ package firestore
 import (
 	"context"
 	"fmt"
-	"time"
 
 	firestoredb "github.com/gopernicus/gopernicus/integrations/datastores/firestore"
-	"github.com/gopernicus/gopernicus/pockets/authorization/domain/mutation"
-	"github.com/gopernicus/gopernicus/pockets/authorization/domain/relationship"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/mutations"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/relationships"
 	"github.com/gopernicus/gopernicus/sdk"
 )
 
-// mutationResult is what the read-and-evaluate phase produces: the domain
-// outcome, whether it changes rows (which drives the revision bump), the
-// COMPLETE staged write set, and the operation-specific annotation. Nothing here
-// has touched the database as a writer — the caller checks the budget and then
-// flushes, which is what keeps every read strictly before every write.
+// mutationResult owns the evaluated outcome, actual fact writes and role annotation.
 type mutationResult struct {
-	outcome              mutation.Outcome
-	changed              bool
-	writes               mutationWrites
+	outcome              mutations.Outcome
+	writes               factWrites
 	sameRoleGrantRemains bool
 }
 
@@ -30,12 +24,12 @@ type tupleReplacement struct {
 	relation string
 }
 
-// mutationWrites is the staged write set. It is built during the read phase and
+// factWrites is the staged write set. It is built during the read phase and
 // flushed once, through the SAME helpers every other write path in this package
-// uses (putTuple/replaceTuple/dropTuple own a tuple's three documents;
+// uses (putTuple/replaceTuple/dropTuple own a tuple's two documents;
 // putRole/dropRole own a role grant), so the mutation path cannot store a row
 // whose derived keys or claims disagree with itself.
-type mutationWrites struct {
+type factWrites struct {
 	drops     []relationshipDoc
 	replaces  []tupleReplacement
 	creates   []relationshipDoc
@@ -46,7 +40,11 @@ type mutationWrites struct {
 // flush queues every staged write. Deletes precede creates so a purge and a
 // grant in the same command could never race their own documents; no read may
 // follow any of it.
-func (m mutationWrites) flush(ctx context.Context, db *firestoredb.DB, w firestoredb.Writer) error {
+func (m factWrites) flush(ctx context.Context, db *firestoredb.DB, w firestoredb.Writer, enabled bool) error {
+	records, err := m.auditRecords(ctx, enabled)
+	if err != nil {
+		return err
+	}
 	for _, row := range m.drops {
 		if err := dropTuple(ctx, db, w, row); err != nil {
 			return err
@@ -72,7 +70,7 @@ func (m mutationWrites) flush(ctx context.Context, db *firestoredb.DB, w firesto
 			return err
 		}
 	}
-	return nil
+	return appendAudit(ctx, db, w, records)
 }
 
 // evaluate dispatches to the per-operation evaluator. Each one READS what it
@@ -82,25 +80,25 @@ func (m mutationWrites) flush(ctx context.Context, db *firestoredb.DB, w firesto
 // evaluateLocked and the SQL siblings' evaluate: same outcomes, same guardian,
 // same no-partial-batch rule, but every read hoisted ahead of every write
 // because a Firestore transaction refuses the other order.
-func (s *mutationStore) evaluate(ctx context.Context, r firestoredb.Reader, cmd mutation.Command) (mutationResult, error) {
+func (s *mutationStore) evaluate(ctx context.Context, r firestoredb.Reader, cmd mutations.Command) (mutationResult, error) {
 	switch cmd.Operation {
-	case mutation.OpGrant:
+	case mutations.OpGrant:
 		return s.grant(ctx, r, cmd)
-	case mutation.OpRevoke:
+	case mutations.OpRevoke:
 		return s.revoke(ctx, r, cmd)
-	case mutation.OpReplace:
+	case mutations.OpReplace:
 		return s.replace(ctx, r, cmd)
-	case mutation.OpPurge:
+	case mutations.OpPurge:
 		return s.purge(ctx, r, cmd, false)
-	case mutation.OpTeardown:
+	case mutations.OpTeardown:
 		return s.purge(ctx, r, cmd, true)
-	case mutation.OpRoleAssign:
+	case mutations.OpRoleAssign:
 		return s.roleAssign(ctx, r, cmd)
-	case mutation.OpRoleUnassign:
+	case mutations.OpRoleUnassign:
 		return s.roleUnassign(ctx, r, cmd)
 	default:
 		// Command.Validate rejects unknown operations before we reach here.
-		return mutationResult{outcome: mutation.OutcomeNoChange}, nil
+		return mutationResult{outcome: mutations.OutcomeNoChange}, nil
 	}
 }
 
@@ -116,14 +114,13 @@ func (s *mutationStore) evaluate(ctx context.Context, r firestoredb.Reader, cmd 
 // decide each row against `current` alone: a second row for the same subject
 // would otherwise be judged against a stale view and stage two Creates on one
 // document id.
-func (s *mutationStore) grant(ctx context.Context, r firestoredb.Reader, cmd mutation.Command) (mutationResult, error) {
-	rt, rid := cmd.Scope.Type, cmd.Scope.ID
+func (s *mutationStore) grant(ctx context.Context, r firestoredb.Reader, cmd mutations.Command) (mutationResult, error) {
+	rt, rid := cmd.Target.Type, cmd.Target.ID
 	current, err := resourceRows(ctx, s.db, r, rt, rid)
 	if err != nil {
 		return mutationResult{}, err
 	}
 
-	now := time.Now().UTC()
 	var adds []relationshipDoc
 	for _, row := range cmd.Relationships {
 		existing, ok := findSubject(current, row.Subject)
@@ -131,28 +128,28 @@ func (s *mutationStore) grant(ctx context.Context, r firestoredb.Reader, cmd mut
 			if existing.Relation == row.Relation {
 				continue // exact duplicate — no change for this row
 			}
-			return mutationResult{outcome: mutation.OutcomeSemanticConflict}, nil
+			return mutationResult{outcome: mutations.OutcomeSemanticConflict}, nil
 		}
-		adds = append(adds, newMutationRow(rt, rid, row, now))
+		adds = append(adds, newMutationRow(rt, rid, row))
 	}
 	if len(adds) == 0 {
-		return mutationResult{outcome: mutation.OutcomeNoChange}, nil
+		return mutationResult{outcome: mutations.OutcomeNoChange}, nil
 	}
 	if !s.invariantOK(rt, append(append([]relationshipDoc(nil), current...), adds...)) {
-		return mutationResult{outcome: mutation.OutcomeInvariantBlocked}, nil
+		return mutationResult{outcome: mutations.OutcomeInvariantBlocked}, nil
 	}
 	if err := assertClaimsFree(ctx, s.db, r, adds, nil); err != nil {
 		return mutationResult{}, err
 	}
-	return mutationResult{outcome: mutation.OutcomeApplied, changed: true, writes: mutationWrites{creates: adds}}, nil
+	return mutationResult{outcome: mutations.OutcomeApplied, writes: factWrites{creates: adds}}, nil
 }
 
 // revoke removes the command's exact relationship rows (the relation plus the
 // exact SubjectRef). Revoking rows none of which exist is a committed not_found
 // no-op; a revoke that would drop a protected relation below its guardian
 // minimum is invariant-blocked.
-func (s *mutationStore) revoke(ctx context.Context, r firestoredb.Reader, cmd mutation.Command) (mutationResult, error) {
-	rt, rid := cmd.Scope.Type, cmd.Scope.ID
+func (s *mutationStore) revoke(ctx context.Context, r firestoredb.Reader, cmd mutations.Command) (mutationResult, error) {
+	rt, rid := cmd.Target.Type, cmd.Target.ID
 	current, err := resourceRows(ctx, s.db, r, rt, rid)
 	if err != nil {
 		return mutationResult{}, err
@@ -172,12 +169,12 @@ func (s *mutationStore) revoke(ctx context.Context, r firestoredb.Reader, cmd mu
 		kept = append(kept, row)
 	}
 	if len(matched) == 0 {
-		return mutationResult{outcome: mutation.OutcomeNotFound}, nil
+		return mutationResult{outcome: mutations.OutcomeNotFound}, nil
 	}
 	if !s.invariantOK(rt, kept) {
-		return mutationResult{outcome: mutation.OutcomeInvariantBlocked}, nil
+		return mutationResult{outcome: mutations.OutcomeInvariantBlocked}, nil
 	}
-	return mutationResult{outcome: mutation.OutcomeApplied, changed: true, writes: mutationWrites{drops: matched}}, nil
+	return mutationResult{outcome: mutations.OutcomeApplied, writes: factWrites{drops: matched}}, nil
 }
 
 // replace atomically sets each row's subject to the row's relation on the
@@ -185,20 +182,17 @@ func (s *mutationStore) revoke(ctx context.Context, r firestoredb.Reader, cmd mu
 // visibility gap. A subject already at the target relation is a per-row no-op; a
 // replace-away that removes the last direct guardian is invariant-blocked.
 //
-// The row MOVES documents (the relation is part of the tuple's document id) but
-// keeps its relationship_id and created_at, so the change is invisible to the
-// listings' order and to the primary-key claim — the same identity the SQL
-// siblings' in-place UPDATE preserves. See replaceTuple.
-func (s *mutationStore) replace(ctx context.Context, r firestoredb.Reader, cmd mutation.Command) (mutationResult, error) {
-	rt, rid := cmd.Scope.Type, cmd.Scope.ID
+// The relation is part of natural identity, so replacement moves the document
+// and updates its natural sort position. See replaceTuple.
+func (s *mutationStore) replace(ctx context.Context, r firestoredb.Reader, cmd mutations.Command) (mutationResult, error) {
+	rt, rid := cmd.Target.Type, cmd.Target.ID
 	current, err := resourceRows(ctx, s.db, r, rt, rid)
 	if err != nil {
 		return mutationResult{}, err
 	}
 
-	now := time.Now().UTC()
 	next := append([]relationshipDoc(nil), current...)
-	var writes mutationWrites
+	var writes factWrites
 	for _, row := range cmd.Relationships {
 		idx := findSubjectIndex(next, row.Subject)
 		if idx >= 0 {
@@ -209,20 +203,20 @@ func (s *mutationStore) replace(ctx context.Context, r firestoredb.Reader, cmd m
 			next[idx].Relation = row.Relation
 			continue
 		}
-		created := newMutationRow(rt, rid, row, now)
+		created := newMutationRow(rt, rid, row)
 		writes.creates = append(writes.creates, created)
 		next = append(next, created)
 	}
 	if len(writes.replaces) == 0 && len(writes.creates) == 0 {
-		return mutationResult{outcome: mutation.OutcomeNoChange}, nil
+		return mutationResult{outcome: mutations.OutcomeNoChange}, nil
 	}
 	if !s.invariantOK(rt, next) {
-		return mutationResult{outcome: mutation.OutcomeInvariantBlocked}, nil
+		return mutationResult{outcome: mutations.OutcomeInvariantBlocked}, nil
 	}
 	if err := assertClaimsFree(ctx, s.db, r, writes.creates, writes.replaces); err != nil {
 		return mutationResult{}, err
 	}
-	return mutationResult{outcome: mutation.OutcomeApplied, changed: true, writes: writes}, nil
+	return mutationResult{outcome: mutations.OutcomeApplied, writes: writes}, nil
 }
 
 // purge removes every relationship on the resource. An ordinary purge
@@ -234,8 +228,8 @@ func (s *mutationStore) replace(ctx context.Context, r firestoredb.Reader, cmd m
 // The rows it removes are the rows it READ: a Firestore transaction has no count
 // aggregation, so the blast-radius bound and the teardown sweep are both
 // computed from the read set rather than from a COUNT(*).
-func (s *mutationStore) purge(ctx context.Context, r firestoredb.Reader, cmd mutation.Command, teardown bool) (mutationResult, error) {
-	rt, rid := cmd.Scope.Type, cmd.Scope.ID
+func (s *mutationStore) purge(ctx context.Context, r firestoredb.Reader, cmd mutations.Command, teardown bool) (mutationResult, error) {
+	rt, rid := cmd.Target.Type, cmd.Target.ID
 	rows, err := resourceRows(ctx, s.db, r, rt, rid)
 	if err != nil {
 		return mutationResult{}, err
@@ -248,30 +242,28 @@ func (s *mutationStore) purge(ctx context.Context, r firestoredb.Reader, cmd mut
 		}
 	}
 	if len(rows) == 0 && len(roles) == 0 {
-		return mutationResult{outcome: mutation.OutcomeNoChange}, nil
+		return mutationResult{outcome: mutations.OutcomeNoChange}, nil
 	}
 	if !teardown {
 		// Blast-radius bound: an ordinary purge that would remove more than the
 		// service-sourced ceiling (EvaluationLimits.MaxBatchSize) is
 		// invariant-blocked. Teardown is the trusted, unbounded path.
 		if cmd.MaxAffectedRows > 0 && len(rows) > cmd.MaxAffectedRows {
-			return mutationResult{outcome: mutation.OutcomeInvariantBlocked}, nil
+			return mutationResult{outcome: mutations.OutcomeInvariantBlocked}, nil
 		}
 		if !s.invariantOK(rt, nil) {
-			return mutationResult{outcome: mutation.OutcomeInvariantBlocked}, nil
+			return mutationResult{outcome: mutations.OutcomeInvariantBlocked}, nil
 		}
 	}
 	return mutationResult{
-		outcome: mutation.OutcomeApplied,
-		changed: true,
-		writes:  mutationWrites{drops: rows, roleDrops: roles},
+		outcome: mutations.OutcomeApplied,
+		writes:  factWrites{drops: rows, roleDrops: roles},
 	}, nil
 }
 
 // roleAssign assigns the command's role rows at the command's scope (a resource
 // scope is a scoped assignment; a subject scope is a global assignment).
-// Exact-duplicate assignments are a no-op that leaves the stored row — and its
-// original created_at — untouched.
+// Exact-duplicate assignments leave the stored row untouched.
 //
 // DEPENDS ON Command.Validate (mutation.go, the role branch), which rejects a
 // command carrying the same (subject_type, subject_id, role) row twice before it
@@ -280,8 +272,8 @@ func (s *mutationStore) purge(ctx context.Context, r firestoredb.Reader, cmd mut
 // one document id, since the id is exactly that triple plus the command's one
 // scope. If Validate ever relaxes it, this loop is where the duplicate would
 // become two Creates on one document.
-func (s *mutationStore) roleAssign(ctx context.Context, r firestoredb.Reader, cmd mutation.Command) (mutationResult, error) {
-	resourceType, resourceID := roleScopeOf(cmd.Scope)
+func (s *mutationStore) roleAssign(ctx context.Context, r firestoredb.Reader, cmd mutations.Command) (mutationResult, error) {
+	resourceType, resourceID := roleScopeOf(cmd.Target)
 	refs := newDocRefs(len(cmd.Roles))
 	paths := make([]string, len(cmd.Roles))
 	for i, row := range cmd.Roles {
@@ -291,7 +283,6 @@ func (s *mutationStore) roleAssign(ctx context.Context, r firestoredb.Reader, cm
 		return mutationResult{}, err
 	}
 
-	now := time.Now().UTC()
 	var adds []roleDoc
 	for i, row := range cmd.Roles {
 		if refs.exists(paths[i]) {
@@ -303,13 +294,12 @@ func (s *mutationStore) roleAssign(ctx context.Context, r firestoredb.Reader, cm
 			Role:         row.Role,
 			ResourceType: resourceType,
 			ResourceID:   resourceID,
-			CreatedAt:    now,
 		})
 	}
 	if len(adds) == 0 {
-		return mutationResult{outcome: mutation.OutcomeNoChange}, nil
+		return mutationResult{outcome: mutations.OutcomeNoChange}, nil
 	}
-	return mutationResult{outcome: mutation.OutcomeApplied, changed: true, writes: mutationWrites{roleAdds: adds}}, nil
+	return mutationResult{outcome: mutations.OutcomeApplied, writes: factWrites{roleAdds: adds}}, nil
 }
 
 // roleUnassign removes the command's exact role rows. Unassigning rows none of
@@ -321,9 +311,9 @@ func (s *mutationStore) roleAssign(ctx context.Context, r firestoredb.Reader, cm
 // documents are read HERE, in the read phase, because the write phase cannot
 // read — and the scoped removal cannot touch them, so reading them before the
 // removal is queued gives exactly the answer the memstore computes after it.
-func (s *mutationStore) roleUnassign(ctx context.Context, r firestoredb.Reader, cmd mutation.Command) (mutationResult, error) {
-	resourceType, resourceID := roleScopeOf(cmd.Scope)
-	scoped := cmd.Scope.Kind == mutation.ScopeResource
+func (s *mutationStore) roleUnassign(ctx context.Context, r firestoredb.Reader, cmd mutations.Command) (mutationResult, error) {
+	resourceType, resourceID := roleScopeOf(cmd.Target)
+	scoped := cmd.Target.Kind == mutations.TargetResource
 
 	refs := newDocRefs(len(cmd.Roles) * 2)
 	paths := make([]string, len(cmd.Roles))
@@ -356,19 +346,18 @@ func (s *mutationStore) roleUnassign(ctx context.Context, r firestoredb.Reader, 
 		})
 	}
 	if len(matched) == 0 {
-		return mutationResult{outcome: mutation.OutcomeNotFound, sameRoleGrantRemains: remains}, nil
+		return mutationResult{outcome: mutations.OutcomeNotFound, sameRoleGrantRemains: remains}, nil
 	}
 	return mutationResult{
-		outcome:              mutation.OutcomeApplied,
-		changed:              true,
-		writes:               mutationWrites{roleDrops: matched},
+		outcome:              mutations.OutcomeApplied,
+		writes:               factWrites{roleDrops: matched},
 		sameRoleGrantRemains: remains,
 	}, nil
 }
 
 // invariantOK reports whether the candidate post-state rows satisfy every
 // guardian rule for the resource type: each protected relation must retain at
-// least its minimum count of DIRECT anchors (concrete subjects with an EMPTY
+// least its minimum count of DIRECT guardians (concrete subjects with an EMPTY
 // userset relation, so a `group#member` owner never masks the loss of the final
 // direct guardian). It is the post-state rule that both blocks that loss AND
 // requires the establishing owner grant before any other command on a protected
@@ -397,43 +386,25 @@ func (s *mutationStore) invariantOK(resourceType string, rows []relationshipDoc)
 
 // resourceRows reads every relationship row of one resource through r — the
 // population every relationship evaluator reasons over, and the population the
-// guardian counts its direct anchors in.
+// guardian counts its direct guardians in.
 func resourceRows(ctx context.Context, db *firestoredb.DB, r firestoredb.Reader, resourceType, resourceID string) ([]relationshipDoc, error) {
 	return queryRelationships(ctx, r, db.Collection(collectionRelationships).
 		Where("resource_key", "==", resourceKey(resourceType, resourceID)))
 }
 
-// assertClaimsFree reads every document the staged writes will CREATE and
-// refuses if any is already taken. It runs in the READ phase because
-// putTuple/replaceTuple cannot discover a taken document in the write phase — a
-// transaction refuses a read after its first write, and Create's AlreadyExists
-// would arrive at commit, after the decision was made.
-//
-// Two kinds of write are covered, and they need different sets of documents:
-//
-//   - creates own all THREE of a tuple's documents (the row and both claims),
-//     so all three must be free;
-//   - replacements move a row to a new document id but Set both claims IN PLACE
-//     (neither claim id carries the relation, so both already exist by design).
-//     Only the new ROW document is checked — checking their claims would refuse
-//     the store's own consistent state.
-//
-// On a consistent store neither fires: the evaluator has just read the
-// resource's rows and established what holds which relation there, the claims
-// live and die with their row (putTuple/dropTuple), and the relationship_id is
-// freshly minted inside this attempt. A hit therefore means row/claim drift,
-// which is a store-integrity failure and not a domain outcome — so it is loud,
-// and it is sdk.ErrUnavailable rather than a conflict a caller would retry
-// forever.
+// assertClaimsFree checks the row and claim before a create, or the destination
+// row before a replacement. Replacement updates its existing subject claim in
+// place. A collision after the evaluator read the resource is store drift,
+// reported as unavailable rather than endlessly retried contention.
 func assertClaimsFree(ctx context.Context, db *firestoredb.DB, r firestoredb.Reader, rows []relationshipDoc, replacements []tupleReplacement) error {
 	if len(rows) == 0 && len(replacements) == 0 {
 		return nil
 	}
 	refs := newDocRefs(len(rows)*writesPerTuple + len(replacements))
-	paths := make([][3]string, len(rows))
+	paths := make([][2]string, len(rows))
 	for i, row := range rows {
-		tuple, subject, id := claimRefs(db, row)
-		paths[i] = [3]string{refs.add(tuple), refs.add(subject), refs.add(id)}
+		tuple, subject := claimRefs(db, row)
+		paths[i] = [2]string{refs.add(tuple), refs.add(subject)}
 	}
 	moved := make([]relationshipDoc, len(replacements))
 	movedPaths := make([]string, len(replacements))
@@ -441,7 +412,7 @@ func assertClaimsFree(ctx context.Context, db *firestoredb.DB, r firestoredb.Rea
 		next := rep.old
 		next.Relation = rep.relation
 		moved[i] = next
-		tuple, _, _ := claimRefs(db, next)
+		tuple, _ := claimRefs(db, next)
 		movedPaths[i] = refs.add(tuple)
 	}
 	if err := refs.read(ctx, r); err != nil {
@@ -469,27 +440,23 @@ func claimDriftError(row relationshipDoc, path string) error {
 		row.ResourceType, row.ResourceID, row.Relation, row.SubjectType, row.SubjectID, path, sdk.ErrUnavailable)
 }
 
-// newMutationRow builds the document for one new relationship row of a command.
-// The relationship_id is minted INSIDE the transaction callback, so a retried
-// attempt mints a fresh one rather than reusing an id a losing attempt claimed.
-func newMutationRow(resourceType, resourceID string, row mutation.RelationshipRow, now time.Time) relationshipDoc {
+// newMutationRow builds the natural tuple for a command relationship row.
+func newMutationRow(resourceType, resourceID string, row mutations.RelationshipRow) relationshipDoc {
 	return relationshipDoc{
-		RelationshipID:  firestoredb.NewID(),
 		ResourceType:    resourceType,
 		ResourceID:      resourceID,
 		Relation:        row.Relation,
 		SubjectType:     row.Subject.Type,
 		SubjectID:       row.Subject.ID,
 		SubjectRelation: row.Subject.Relation,
-		CreatedAt:       now,
 	}
 }
 
 // roleScopeOf maps a command scope to the role assignment's (resourceType,
 // resourceID): a resource scope is a scoped assignment; a subject scope is a
 // global assignment (the empty pair, stored as empty strings).
-func roleScopeOf(scope mutation.ScopeKey) (string, string) {
-	if scope.Kind == mutation.ScopeResource {
+func roleScopeOf(scope mutations.Target) (string, string) {
+	if scope.Kind == mutations.TargetResource {
 		return scope.Type, scope.ID
 	}
 	return "", ""
@@ -504,7 +471,7 @@ type relIdentity struct {
 	subjectRelation string
 }
 
-func relIdentityOf(relation string, subject relationship.SubjectRef) relIdentity {
+func relIdentityOf(relation string, subject relationships.SubjectRef) relIdentity {
 	return relIdentity{relation, subject.Type, subject.ID, subject.Relation}
 }
 
@@ -514,14 +481,14 @@ func rowIdentity(row relationshipDoc) relIdentity {
 
 // findSubject returns the row matching an exact SubjectRef (type, id, and
 // userset relation) REGARDLESS of its relation — the one-relation arbiter.
-func findSubject(rows []relationshipDoc, subject relationship.SubjectRef) (relationshipDoc, bool) {
+func findSubject(rows []relationshipDoc, subject relationships.SubjectRef) (relationshipDoc, bool) {
 	if i := findSubjectIndex(rows, subject); i >= 0 {
 		return rows[i], true
 	}
 	return relationshipDoc{}, false
 }
 
-func findSubjectIndex(rows []relationshipDoc, subject relationship.SubjectRef) int {
+func findSubjectIndex(rows []relationshipDoc, subject relationships.SubjectRef) int {
 	for i, row := range rows {
 		if row.SubjectType == subject.Type && row.SubjectID == subject.ID && row.SubjectRelation == subject.Relation {
 			return i

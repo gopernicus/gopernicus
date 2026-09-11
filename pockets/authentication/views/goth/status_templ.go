@@ -8,7 +8,7 @@ package goth
 import "github.com/a-h/templ"
 import templruntime "github.com/a-h/templ/runtime"
 
-import "github.com/gopernicus/gopernicus/pockets/authentication"
+import authentication "github.com/gopernicus/gopernicus/pockets/authentication/inbound/http"
 
 // statusBody renders a generic informational page (delivery status, a completed
 // action). Title/Detail are generic, enumeration-resistant copy.

@@ -6,7 +6,7 @@ A multi-port Redis connector wrapping exactly one third-party library —
 
 | type | sdk port | rail |
 |---|---|---|
-| `goredis.Bus` | `events.Bus` + `events.Broadcaster` | Redis Streams (durable) + pub/sub (fan-out) |
+| `goredis.Bus` | `events.Bus` + `events.Broadcaster` | Notifications via pub/sub; explicit reliable `SubscribeWork` via Streams |
 | `goredis.Cacher` | `cacher.Storer` | TTL cache over GET/MGET/SET/DEL/SCAN |
 | `goredis.Limiter` | `ratelimiter.Limiter` | sliding-window rate limit via an atomic Lua script |
 
@@ -32,32 +32,79 @@ like the pre-`sdk` gopernicus model.
 
 ## Construction — one client feeds all three
 
-The caller supplies and owns the `*redis.Client`; every facility's `Close` shuts
-down its own bookkeeping but **never closes the client**. A single client can
-back all three facilities.
+The caller supplies and owns the `*redis.Client`. The bus's `Close(ctx)` stops
+its own work; the cache and limiter have no Close method. None closes the shared
+client. A single client can back all three facilities.
 
 ```go
-rdb := redis.NewClient(&redis.Options{Addr: "localhost:6379"})
+rdb := redis.NewClient(&redis.Options{Addr: "localhost:6379", ContextTimeoutEnabled: true})
 defer rdb.Close()
 
-bus := goredis.New(rdb, logger, goredis.Options{
-    StreamPrefix:  "events:",
-    ConsumerGroup: "myapp",
-})
+bus := goredis.New(rdb,
+    goredis.WithLogger(logger),
+    goredis.WithStreamPrefix("events:"),
+    goredis.WithConsumerGroup("myapp"),
+)
 defer bus.Close(ctx)
 
 cache := goredis.NewCacher(rdb, goredis.WithCacheKeyPrefix("cache:"))
 limiter := goredis.NewLimiter(rdb, goredis.WithLimiterKeyPrefix("ratelimit:"))
 ```
 
-`Bus` takes a logger and an `Options` struct (with `env:` struct tags for
-`sdk/foundation/environment.ParseEnvTags`; a nil logger falls back to `slog.Default()`, and the
-zero `Options` takes the defaults `StreamPrefix: "events:"`,
-`ConsumerGroup: "default"`, `Workers: 4`, `BlockTimeout: 5s`, `BatchSize: 10`,
-`MaxLen: 0` = unbounded). `Cacher` and `Limiter` take functional options; each
-defaults its key prefix (`cache:`, `ratelimit:`) for namespacing a shared Redis.
+`New(rdb, opts ...BusOption)` keeps the required client explicit. Bus settings
+use `WithLogger`, `WithStreamPrefix`, `WithConsumerGroup`, `WithWorkers`,
+`WithQueueSize`, `WithBlockTimeout`, `WithRetryAfter`, and `WithHandlerTimeout`.
+No options uses `slog.Default()`, prefix `"events:"`, group `"default"`, 4 workers,
+a queue of 1000, block timeout 5s, retry after 1m, and handler timeout 30s.
+A nil logger, empty prefix/group, nonpositive worker/queue count, and zero
+individual durations select those defaults. Negative/fractional work durations
+remain errors at `SubscribeWork`; retry after must exceed handler timeout.
+
+Options configure private construction settings in order; the last value for a
+setting wins. All settings resolve before the publisher goroutines start. The
+stream namespace always receives an internal `v2:` suffix. Work reads one entry
+per available worker; there is no `BatchSize` or automatic `MaxLen` trimming.
+Hosts map their own environment-loaded bus policy to these options; the former
+exported `Options` record and its `EVENT_BUS_*` tags are removed.
+
+`Cacher` and `Limiter` retain `WithCacheKeyPrefix` and `WithLimiterKeyPrefix`.
+Their defaults are `cache:` and `ratelimit:`; explicit empty prefixes are allowed.
+Limiter construction appends its internal `v2:` suffix after resolving options.
+Options can be reused for new objects; they cannot mutate a running facility.
+`New`, `NewCacher`, `NewLimiter`, and `LoggingHook` panic with a specific diagnostic
+for a nil option. `Open` returns an error wrapping `sdk.ErrInvalidInput` for nil
+`ClientOption` or nested `LoggingOption` values before allocating a client.
+
+Connection `Config` and `ClientOption` remain separate from bus options.
+`WithLogging` and `WithTracing` append hooks in order, including repeated calls.
+`WithLogging` snapshots its `LoggingOption` slice; logger and tracer dependencies
+remain borrowed. Nil logger/tracer arguments keep their default/no-op meaning.
+
+## Rate limiting
+
+The limiter uses the SDK's anchored two-window counter approximation, including
+Burst. Limits are normalized to whole milliseconds; invalid keys/numeric ranges
+match `sdk.ErrInvalidInput`. A live key cannot change Window without Reset or
+expiration. Ceiling changes retain consumed quota. RetryAfter comes from Redis
+server time and is a retry checkpoint, not a reservation or earliest-admission
+promise. Cancellation reports the caller error; a completed remote write is not
+rolled back.
+
+The physical prefix is always the host prefix plus `v2:`. Default logical key
+`login:alice` therefore becomes `ratelimit:v2:login:alice`. This normally creates
+fresh budgets on upgrade; a colliding old record without a valid `window_ms` is
+rejected with `sdk.ErrConflict` and left intact by both Allow and Reset. The host
+owns rollout and old-key cleanup. There is no automatic data migration. See
+[AUDIT-011](../../../AUDIT.md#audit-011-rate-limiter-contract-and-adapter-corrections)
+for rolling-upgrade and namespace considerations. Old and new writers must have
+disjoint physical keys; choose a fresh host prefix if old logical v2:* keys could
+overlap. The format guard cannot detect an old writer overwriting new state.
 
 ## Connection — `Open` builds a client (bring-your-own stays first-class)
+
+`Open` enables go-redis's `ContextTimeoutEnabled`, so command deadlines also
+bound I/O on established connections. Set this option on borrowed clients when
+you need that behavior; adapters never mutate or close the shared client.
 
 Bring-your-own `redis.NewClient` is fully supported and shown above. When a host
 wants the module to build the client, `Open` constructs one from a `Config`,
@@ -82,13 +129,13 @@ if err != nil {
 }
 defer rdb.Close()
 
-bus := goredis.New(rdb, logger, goredis.Options{})
+bus := goredis.New(rdb, goredis.WithLogger(logger))
 cache := goredis.NewCacher(rdb)
 limiter := goredis.NewLimiter(rdb)
 ```
 
 `Config` fills zero fields with the documented defaults and carries `env:` struct
-tags for `sdk/foundation/environment.ParseEnvTags` (keys are namespaced by component — the host
+tags for `sdk/pkg/environment.ParseEnvTags` (keys are namespaced by component — the host
 passes its own app namespace):
 
 | field | env key | default |
@@ -119,68 +166,137 @@ client:
   to `tracing.Noop`. Spans carry the command **name only**, never argument
   values, so no key or value data leaks into traces.
 
-## Bus — delivery guarantees per path
+## Bus — notifications and reliable work
 
-| path | API | mechanism | guarantee |
-|---|---|---|---|
-| **streams** | `Emit` / `Subscribe` | XADD to a per-type stream; XReadGroup workers; XACK | **durable, at-least-once, competing consumers** — N processes sharing one `ConsumerGroup` split the load, each message to exactly one consumer across the group, unacked messages redelivered |
-| **broadcast** | `Emit` / `SubscribeBroadcast` | PUBLISH on every emit; SUBSCRIBE fan-out | **best-effort fan-out, no durability, no replay** — every process with a subscriber gets every event; an event published while a subscriber is offline is gone |
+| API | Completion and delivery |
+|---|---|
+| `Emit(ctx, event)` | Bounded asynchronous admission; encoding/publication failures are logged. Returns `events.ErrCapacity` when the queue is full. |
+| `Publish(ctx, event)` | Waits for XADD acceptance, then attempts best-effort pub/sub fanout. Returns acceptance errors; it does not wait for or force local handlers. |
+| `Subscribe(topic, handler)` / `SubscribeBroadcast(topic, handler)` | Notification fanout for an exact topic or `"*"`; waits for Redis subscription acknowledgment before success. No replay for disconnected subscribers. |
+| `SubscribeWork(ctx, topic, handler)` | Reliable competing-consumer work for one exact topic; validates configuration and creates its group before success. |
 
-Handlers **must be idempotent**: the streams rail is at-least-once, and `Emit`
-also mirrors to pub/sub, so the same event can be observed more than once (and a
-`WithSync` emit dispatches locally *and* streams the copy for competing
-consumers).
+A nil result from `Emit` confirms only queue admission. Use `Publish` as a checked
+outbox delivery callback. Both publication paths write one canonical
+`events.Record` envelope to Streams and mirror the same bytes to pub/sub. Envelope
+metadata is independent of payload encoding, so opaque binary payloads retain
+their ID, tenant and aggregate fields. JSON represents payload bytes as base64.
+For retries, create the record once and publish `record.Event()` to preserve its
+ID. Publication cancellation cannot undo a remote write that already succeeded.
 
-### Poison-pill policy: XACK-always
+Operations check their contexts before and after remote calls. Subscription setup
+uses a five-second context; prompt network interruption also depends on the
+caller-owned go-redis client's timeout and `ContextTimeoutEnabled` configuration.
+The bus does not change shared client settings.
 
-A stream message is **acknowledged unconditionally** — even when it fails to
-parse or a handler errors or panics. One bad message can therefore never block
-the group's pending list. There is deliberately **no in-bus retry**: durable
-retry is the outbox/jobs rail's responsibility (`pockets/jobs`), not this
-transport's. A handler that must not lose work commits it to that rail.
+Handlers must support concurrent calls and duplicate delivery. The caller keeps
+emitted event graphs immutable; asynchronous admission detaches cancellation but
+preserves context values. `Close(ctx)` refuses new work, drains admitted
+publications and waits for active callbacks. Every concurrent or repeated Close
+uses its own context to wait on the same completion. It never closes the caller's
+Redis client. The host owns shutdown; callbacks must not call Close themselves.
 
-### Wildcard (`"*"`) semantics
+### Reliable work and the pending-entry policy
 
-On the **broadcast** path, `"*"` fans out every event across every process — the
-natural pattern for SSE and metrics consumers.
+Instances sharing a `ConsumerGroup` compete for work and must deploy the same
+handler responsibilities for each topic. Put required steps in one composed
+handler: the first successful registration starts readers immediately, so several
+independent registration calls do not form an atomic startup boundary. Work
+subscriptions accept exact topics; wildcard fanout belongs to notifications.
 
-On the **streams** path, a `"*"` subscription receives events on topics **this
-process also emits** (the worker begins reading a stream once a local wildcard
-subscriber makes it relevant). Redis Streams consumer groups are per-stream, so
-cross-process wildcard fan-out is the broadcast path's job — not the
-competing-consumer streams path's. Exact-topic streams subscriptions have the
-full cross-process competing-consumer guarantee.
+Each worker claims one entry from one stream at a time. It alternates new reads
+with `XAUTOCLAIM` recovery of idle pending entries (Redis 6.2 or newer), keeping
+scan cursors so older pending work remains reachable. Unsubscribe removes the
+active topic when its final local registration leaves. Already claimed work with
+no current handler stays pending for a peer. If a group disappears, readers
+recreate it at `0`; retained entries can therefore be delivered again.
+
+`HandlerTimeout` covers the **entire selected-handler attempt**, and
+`RetryAfter` must exceed it. Both durations and `BlockTimeout` must be positive
+whole milliseconds. A timeout cancels the callback context; it cannot forcibly
+stop a callback that ignores cancellation. Such a callback may overlap a reclaim,
+so idempotency is required. There is no distributed exactly-once guarantee.
+
+Only successful completion of every selected handler permits XACK. Handler
+errors, panics, timeouts, cancellation, malformed envelopes, stream/type mismatch
+and missing handlers leave work pending. One callback panic does not skip other
+selected handlers. Failures are logged; reclaim retries them without preventing
+fresh work from being read.
+
+Permanent poison remains pending and observable until the host repairs it or
+makes an explicit terminal disposition using its Redis client. There is no
+automatic discard, maximum-attempt policy or DLQ framework. There is also no
+automatic stream trimming: hosts own retention, archival and deletion after
+acknowledgments, and should inspect pending state before removing entries.
+
+### Upgrade from the previous bus
+
+`EmitOption`/`WithSync`, `Options.BatchSize` and `Options.MaxLen` are removed.
+Replace checked publication with `Publish`. `Subscribe` now means notification
+fanout; migrate reliable work handlers to `SubscribeWork(ctx, exactTopic, handler)`.
+The previous unconditional acknowledgment of failed work is gone.
+
+All stream and broadcast prefixes append `v2:`, including custom prefixes. The
+new serialized Record format has no automatic old-message conversion or replay.
+Drain old streams with old code or stop old writers and coordinate the upgrade.
+Use disjoint physical namespaces during overlap; do not assume arbitrary old
+logical topics cannot collide with the new suffix. Retain visibility into old
+pending entries and use duplicate-safe replay with stable IDs. The adapter never
+automatically deletes or migrates old state. Existing outbox Record fields and
+payloads need no schema migration.
 
 ## Cacher
 
-Opaque `[]byte` values with per-key TTL (`0` = no expiry). `GetMany` is a single
-MGET round trip returning only the keys present; `DeletePattern` walks the
-keyspace with SCAN (glob syntax, e.g. `"users:*"`) so a large match set never
-blocks Redis. `Close` is a no-op (the caller owns the client).
+Opaque `[]byte` values with per-key TTL: zero means no expiry, negative is
+`sdk.ErrInvalidInput`, and positive TTL rounds **up** to milliseconds. Each Set
+replaces the previous TTL; driver-specific keep-TTL sentinels are not accepted.
+`GetMany` uses one MGET, returning present logical keys and independent bytes.
+Cancellation is checked before and after commands; prompt network interruption
+still depends on the host-owned client's timeout configuration. Cancellation can
+race a completed write and does not roll it back.
+
+`Cacher` also implements optional `cacher.PrefixDeleter`. `DeletePrefix(ctx,
+"users:")` deletes a **literal** prefix. Redis glob metacharacters in both the
+adapter namespace and the supplied prefix are escaped before a SCAN/DEL walk.
+An empty prefix clears this adapter's namespace; it does not mean the entire
+Redis database unless the host configured an empty adapter namespace. Deletion
+is best effort with concurrent writers, and SCAN COUNT is a hint, not a batch
+size or atomicity guarantee.
+
+There is no cache `Close`: the caller closes the Redis client it owns. Wrap this
+adapter with `cacher.New(store, cacher.WithNamespace("catalog:v1"))` for
+namespaced application-data caching and typed JSON load helpers. Adapter and
+service namespaces compose; they do not replace one another. For custom store
+verification, run `cachertest.Run` and the optional `cachertest.RunPrefix` suite.
 
 ## Limiter
 
 A distributed **sliding window** driven by an atomic Lua script that reads Redis
 server time — so instances agree on the window regardless of clock skew — and
 lets Redis expire idle keys via PEXPIRE. The script is cached by SHA (EVALSHA
-with an EVAL/reload fallback on NOSCRIPT). `Limit.Burst` is added to
-`Limit.Requests` to form the effective ceiling. `Close` is a no-op.
+with an EVAL fallback on NOSCRIPT). `Limit.Burst` is added to
+`Limit.Requests` to form the effective ceiling. The limiter has no Close method;
+the host owns the shared Redis client.
 
 ## Testing
 
 - **Hermetic** (`bus_test.go`, `cacher_test.go`, `limiter_test.go`,
   `client_test.go`, `hooks_test.go`, `go test ./...`): envelope encode/decode,
   option defaulting, `RemoteEvent` rehydration through `TypedHandler`'s
-  Unmarshaler slow path, close/subscribe guards, constructor defaults, Lua-reply
+  Unmarshaler slow path, bounded bus admission/shared shutdown, work-attempt
+  timeout and reclaim-cursor behavior, close/subscribe guards, constructor defaults, Lua-reply
   coercion, `Config` defaulting via the env tags, `Open`'s fail-fast against an
   unreachable address, `ClientOption` wiring, and the logging/tracing hooks
   driven directly with a fake `next` — **no Redis required**.
-- **Live** (`conformance_test.go`): the shared `sdk/capabilities/events/eventstest`,
+- **Live** (`conformance_test.go`, `bus_live_test.go`, `bus_lifecycle_live_test.go`): the shared `sdk/capabilities/events/eventstest`,
   `sdk/capabilities/cacher/cachertest`, and `sdk/capabilities/ratelimiter/ratelimitertest` suites plus a
   cross-instance broadcast fan-out test and an end-to-end `Open` round trip with
   hooks installed, **env-gated on `REDIS_TEST_ADDR`** with a loud skip so
-  `make check` stays hermetic. Every live client is built through `Open`, so the
-  leg proves `Open` against real Redis, not just the raw `redis.NewClient` path.
+  `make check` stays hermetic. Shared conformance clients use `Open`; bus setup
+  tests also use controlled raw clients to reproduce connection failure and
+  shutdown races. Bus regressions cover opaque envelope preservation, callback
+  failure/panic/timeout recovery, malformed pending entries, another consumer's
+  abandoned work, NOGROUP recreation, unsubscribe/peer recovery and subscription
+  readiness without setup sleeps.
 
 ```sh
 docker run --rm -d -p 6379:6379 redis:7

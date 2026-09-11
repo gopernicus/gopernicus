@@ -13,8 +13,10 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/gopernicus/gopernicus/sdk/capabilities/notify"
+
 	"github.com/gopernicus/gopernicus/sdk"
-	"github.com/gopernicus/gopernicus/sdk/capabilities/email"
+	"github.com/gopernicus/gopernicus/sdk/capabilities/notify/email"
 )
 
 // sendPayload mirrors the subset of SendGrid's v3 Mail Send JSON body this
@@ -64,7 +66,7 @@ func newFakeSendGrid(t *testing.T, cfg Config, respStatus int, respBody string) 
 	}))
 	t.Cleanup(srv.Close)
 	cfg.Host = srv.URL
-	return New(cfg), captured
+	return newTestSender(t, cfg), captured
 }
 
 func TestSend_ConstructsRequest(t *testing.T) {
@@ -160,11 +162,11 @@ func TestSend_InvalidMessageNeverCallsAPI(t *testing.T) {
 }
 
 func TestCapabilities_DefaultHostIsProductionCapable(t *testing.T) {
-	sender := New(Config{APIKey: "k"}) // empty Host: SendGrid's default endpoint
+	sender := newTestSender(t, Config{APIKey: "k"}) // empty Host: SendGrid's default endpoint
 
 	caps := sender.Capabilities()
-	if caps.TransportSecurity != email.TransportSecurityTLS {
-		t.Errorf("TransportSecurity = %q, want %q", caps.TransportSecurity, email.TransportSecurityTLS)
+	if caps.TransportSecurity != notify.TransportSecurityTLS {
+		t.Errorf("TransportSecurity = %q, want %q", caps.TransportSecurity, notify.TransportSecurityTLS)
 	}
 	if caps.DevelopmentOnly {
 		t.Error("DevelopmentOnly = true, want false for the default SendGrid host")
@@ -172,11 +174,11 @@ func TestCapabilities_DefaultHostIsProductionCapable(t *testing.T) {
 }
 
 func TestCapabilities_ExplicitHTTPSHostIsProductionCapable(t *testing.T) {
-	sender := New(Config{APIKey: "k", Host: "https://api.eu.sendgrid.com"})
+	sender := newTestSender(t, Config{APIKey: "k", Host: "https://api.eu.sendgrid.com"})
 
 	caps := sender.Capabilities()
-	if caps.TransportSecurity != email.TransportSecurityTLS {
-		t.Errorf("TransportSecurity = %q, want %q", caps.TransportSecurity, email.TransportSecurityTLS)
+	if caps.TransportSecurity != notify.TransportSecurityTLS {
+		t.Errorf("TransportSecurity = %q, want %q", caps.TransportSecurity, notify.TransportSecurityTLS)
 	}
 	if caps.DevelopmentOnly {
 		t.Error("DevelopmentOnly = true, want false for an explicit HTTPS host")
@@ -192,7 +194,7 @@ func TestCapabilities_NonHTTPSHostIsDevelopmentOnly(t *testing.T) {
 	if caps.DevelopmentOnly != true {
 		t.Error("DevelopmentOnly = false, want true for a non-HTTPS host")
 	}
-	if caps.TransportSecurity == email.TransportSecurityTLS {
+	if caps.TransportSecurity == notify.TransportSecurityTLS {
 		t.Errorf("TransportSecurity = %q, must not claim TLS for a non-HTTPS host", caps.TransportSecurity)
 	}
 }

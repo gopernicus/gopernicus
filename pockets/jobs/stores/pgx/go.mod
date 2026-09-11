@@ -3,9 +3,9 @@ module github.com/gopernicus/gopernicus/pockets/jobs/stores/pgx
 go 1.26.1
 
 require (
-	github.com/gopernicus/gopernicus/integrations/datastores/pgxdb v0.5.0
-	github.com/gopernicus/gopernicus/pockets/jobs v0.5.0
-	github.com/gopernicus/gopernicus/sdk v0.7.1
+	github.com/gopernicus/gopernicus/integrations/datastores/pgxdb v0.7.0
+	github.com/gopernicus/gopernicus/pockets/jobs v0.6.0
+	github.com/gopernicus/gopernicus/sdk v0.9.0
 	github.com/jackc/pgx/v5 v5.8.0
 )
 

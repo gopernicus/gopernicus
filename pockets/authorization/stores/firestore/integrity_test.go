@@ -8,23 +8,21 @@ import (
 	"testing"
 
 	gcfs "cloud.google.com/go/firestore"
-	"google.golang.org/api/iterator"
-
 	firestoredb "github.com/gopernicus/gopernicus/integrations/datastores/firestore"
-	"github.com/gopernicus/gopernicus/pockets/authorization/domain/mutation"
-	"github.com/gopernicus/gopernicus/pockets/authorization/domain/relationship"
-	"github.com/gopernicus/gopernicus/pockets/authorization/domain/role"
+	mutation "github.com/gopernicus/gopernicus/pockets/authorization/logic/mutations"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/relationships"
+	authroles "github.com/gopernicus/gopernicus/pockets/authorization/logic/roles"
 	"github.com/gopernicus/gopernicus/sdk"
+	"google.golang.org/api/iterator"
 )
 
 // The store-integrity leg (A7 fold, review finding "data #7"). Everything here
 // is about a property NO port assertion can see: this store keeps a relationship
-// tuple in THREE documents (the row plus the two claims that reproduce SQL
+// tuple in TWO documents (the row plus the subject claim that reproduce SQL
 // constraints a deterministic document id cannot carry), so the port can report
 // a perfectly correct answer while the collections behind it have drifted.
 //
-// A stranded subject claim blocks recreating a tuple that no longer exists; a
-// stranded id claim silently turns a later create into a no-op; a row whose
+// A stranded subject claim blocks recreating a removed tuple; a row whose
 // derived keys disagree with its own fields is invisible to every list and
 // lookup. The conformance suite passes in all three states, which is exactly why
 // these tests read the collections directly.
@@ -45,9 +43,9 @@ func TestPurgeAndTeardownDropBothClaimsForEveryRow(t *testing.T) {
 		name      string
 		operation mutation.Operation
 		// guardian is the policy the case runs under. An ordinary PURGE honors
-		// the guardian invariant, and the default policy protects `owner` on
+		// the guardian invariant, and DefaultGuardianPolicy protects `owner` on
 		// every resource type with a minimum of one direct anchor — so under it
-		// a purge of ANY resource ends invariant_blocked and removes nothing.
+		// a purge of ANY resource returns ErrInvariantBlocked and removes nothing.
 		// The purge case therefore runs under an empty policy, which is the
 		// supported host configuration for unprotected resources; teardown is
 		// the operation allowed to zero a protected scope and keeps the default.
@@ -58,8 +56,8 @@ func TestPurgeAndTeardownDropBothClaimsForEveryRow(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			db, _, rels := newMutations(t)
-			m := newMutationStore(db, tc.guardian)
-			roles := newRoleStore(db)
+			m := newMutationStore(db, tc.guardian, false)
+			roles := newRoleStore(db, false)
 
 			// Three rows on the resource, one of them a userset, plus a scoped
 			// role grant and a global one for the same subject and role. No
@@ -67,7 +65,7 @@ func TestPurgeAndTeardownDropBothClaimsForEveryRow(t *testing.T) {
 			// the invariant and would be blocked, which is a different test
 			// (storetest's guardian family) — what is under test here is the
 			// claim lifecycle of the rows that DO get removed.
-			seeded := []relationship.CreateRelationship{
+			seeded := []relationships.CreateRelationship{
 				ctf("doc", "d1", "editor", "user", "u1"),
 				ctf("doc", "d1", "viewer", "user", "u2"),
 				ctfUserset("doc", "d1", "viewer", "group", "g1", "member"),
@@ -75,9 +73,9 @@ func TestPurgeAndTeardownDropBothClaimsForEveryRow(t *testing.T) {
 			if err := rels.CreateRelationships(ctx, seeded); err != nil {
 				t.Fatalf("seed: %v", err)
 			}
-			scoped := role.Assignment{SubjectType: "user", SubjectID: "u1", Role: "editor", ResourceType: "doc", ResourceID: "d1"}
-			global := role.Assignment{SubjectType: "user", SubjectID: "u1", Role: "editor"}
-			for _, a := range []role.Assignment{scoped, global} {
+			scoped := authroles.Assignment{SubjectType: "user", SubjectID: "u1", Role: "editor", ResourceType: "doc", ResourceID: "d1"}
+			global := authroles.Assignment{SubjectType: "user", SubjectID: "u1", Role: "editor"}
+			for _, a := range []authroles.Assignment{scoped, global} {
 				if err := roles.Assign(ctx, a); err != nil {
 					t.Fatalf("Assign %+v: %v", a, err)
 				}
@@ -91,7 +89,7 @@ func TestPurgeAndTeardownDropBothClaimsForEveryRow(t *testing.T) {
 				assertTupleDocs(t, db, row, true)
 			}
 
-			cmd := mutation.Command{MutationID: mutID(t), Scope: docScope("d1"), Operation: tc.operation}
+			cmd := mutation.Command{Target: docScope("d1"), Operation: tc.operation}
 			rcpt, err := m.Apply(ctx, cmd, nil)
 			if err != nil {
 				t.Fatalf("%s: %v", tc.operation, err)
@@ -138,7 +136,7 @@ func TestPurgeAndTeardownDropBothClaimsForEveryRow(t *testing.T) {
 // Three invariants, and each one has a failure mode the conformance suite cannot
 // see:
 //
-//  1. one subject claim and one id claim per row, no more and no fewer. A
+//  1. one subject claim per row, no more and no fewer. A
 //     surplus claim blocks a future create; a missing one enforces nothing.
 //  2. every claim's tuple_id resolves to a row that exists. A claim pointing at
 //     a deleted row is an orphan that outlives it.
@@ -147,48 +145,51 @@ func TestPurgeAndTeardownDropBothClaimsForEveryRow(t *testing.T) {
 //     every list, lookup and check that filters on the key.
 func TestCollectionsHaveNoOrphansAfterTheWholeWritePortSurface(t *testing.T) {
 	ctx := context.Background()
-	db, m, rels := newMutations(t)
+	db, _, rels := newMutations(t)
+	m := newMutationStore(db, mutation.GuardianPolicy{}, false)
 
 	// create
-	if err := rels.CreateRelationships(ctx, []relationship.CreateRelationship{
+	if err := rels.CreateRelationships(ctx, []relationships.CreateRelationship{
 		ctf("doc", "d1", "owner", "user", "u1"),
 		ctf("doc", "d1", "viewer", "user", "u2"),
 		ctf("doc", "d2", "owner", "user", "u1"),
 		ctfUserset("doc", "d2", "viewer", "group", "g1", "member"),
 		ctf("group", "g1", "member", "user", "u3"),
+		ctf("doc", "survivor", "viewer", "user", "retained"),
 	}); err != nil {
 		t.Fatalf("CreateRelationships: %v", err)
 	}
 	// set (reconciliation: one surplus removed, one missing added)
-	if err := rels.SetRelationTargets(ctx, "doc", "d1", "viewer", []relationship.CreateRelationship{
+	if err := rels.SetRelationTargets(ctx, "doc", "d1", "viewer", []relationships.CreateRelationship{
 		ctf("doc", "d1", "viewer", "user", "u4"),
 	}); err != nil {
 		t.Fatalf("SetRelationTargets: %v", err)
 	}
 	// grant + replace + revoke through the mutation port
 	if _, err := m.Apply(ctx, mutation.Command{
-		MutationID: mutID(t), Scope: docScope("d2"), Operation: mutation.OpGrant,
+		Target: docScope("d2"), Operation: mutation.OpGrant,
 		Relationships: []mutation.RelationshipRow{{Relation: "viewer", Subject: user("u5")}},
 	}, nil); err != nil {
 		t.Fatalf("grant: %v", err)
 	}
 	if _, err := m.Apply(ctx, mutation.Command{
-		MutationID: mutID(t), Scope: docScope("d2"), Operation: mutation.OpReplace,
+		Target: docScope("d2"), Operation: mutation.OpReplace,
 		Relationships: []mutation.RelationshipRow{{Relation: "editor", Subject: user("u5")}},
 	}, nil); err != nil {
 		t.Fatalf("replace: %v", err)
 	}
 	if _, err := m.Apply(ctx, mutation.Command{
-		MutationID: mutID(t), Scope: docScope("d2"), Operation: mutation.OpRevoke,
+		Target: docScope("d2"), Operation: mutation.OpRevoke,
 		Relationships: []mutation.RelationshipRow{{Relation: "editor", Subject: user("u5")}},
 	}, nil); err != nil {
 		t.Fatalf("revoke: %v", err)
 	}
 	// purge one resource entirely, and delete another by resource
-	if _, err := m.Apply(ctx, mutation.Command{
-		MutationID: mutID(t), Scope: docScope("d2"), Operation: mutation.OpPurge,
-	}, nil); err != nil {
-		t.Fatalf("purge: %v", err)
+	purged, err := m.Apply(ctx, mutation.Command{
+		Target: docScope("d2"), Operation: mutation.OpPurge,
+	}, nil)
+	if err != nil || purged == nil || purged.Outcome != mutation.OutcomeApplied {
+		t.Fatalf("purge must remove the seeded rows: result=%+v error=%v", purged, err)
 	}
 	if err := rels.DeleteResourceRelationships(ctx, "group", "g1"); err != nil {
 		t.Fatalf("DeleteResourceRelationships: %v", err)
@@ -247,27 +248,10 @@ func assertNoOrphans(t *testing.T, db *firestoredb.DB) {
 		}
 	})
 
-	idClaims := 0
-	forEachDoc(t, r, db.Collection(collectionIDClaims).Query, func(snap *gcfs.DocumentSnapshot) {
-		idClaims++
-		var claim idClaimDoc
-		if err := snap.DataTo(&claim); err != nil {
-			t.Fatalf("decoding an id claim: %v", err)
-		}
-		row, ok := rowsByID[claim.TupleID]
-		if !ok {
-			t.Errorf("id claim %s points at tuple %s, which does not exist", snap.Ref.ID, claim.TupleID)
-			return
-		}
-		if claim.RelationshipID != row.RelationshipID {
-			t.Errorf("id claim %s records relationship_id %q, its row holds %q", snap.Ref.ID, claim.RelationshipID, row.RelationshipID)
-		}
-	})
-
 	// (1) one of each claim per row — counted, so a SURPLUS claim fails here
 	// even though every claim above resolved.
-	if len(rowsByID) != subjectClaims || len(rowsByID) != idClaims {
-		t.Fatalf("collections disagree: %d rows, %d subject claims, %d id claims", len(rowsByID), subjectClaims, idClaims)
+	if len(rowsByID) != subjectClaims {
+		t.Fatalf("collections disagree: %d rows, %d subject claims", len(rowsByID), subjectClaims)
 	}
 	if len(rowsByID) == 0 {
 		t.Fatal("the sweep found no rows — it would pass vacuously")
@@ -288,7 +272,7 @@ func storedResourceRows(t *testing.T, db *firestoredb.DB, resourceType, resource
 }
 
 // roleExistsAt reports whether an exact role grant document is present.
-func roleExistsAt(t *testing.T, db *firestoredb.DB, a role.Assignment) bool {
+func roleExistsAt(t *testing.T, db *firestoredb.DB, a authroles.Assignment) bool {
 	t.Helper()
 	ctx := context.Background()
 	snap, err := db.ReaderFrom(ctx).Get(ctx, roleRef(db, a.SubjectType, a.SubjectID, a.Role, a.ResourceType, a.ResourceID))

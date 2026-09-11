@@ -3,10 +3,10 @@ package authentication
 import (
 	"testing"
 
-	"github.com/gopernicus/gopernicus/sdk/foundation/environment"
+	"github.com/gopernicus/gopernicus/sdk/pkg/environment"
 )
 
-// TestConfigEnvTags pins the AUTH_* keys on the previously untagged Config
+// TestConfigEnvTags pins the AUTH_* keys on the previously untagged constructorConfig
 // fields hosts read from the environment today. The lists use the parser's
 // default comma separator. SessionCookie is deliberately NOT exercised here: it
 // is a nested struct, and this module's sdk pin predates nested-struct descent —
@@ -19,7 +19,7 @@ func TestConfigEnvTags(t *testing.T) {
 	t.Setenv("AUTH_REQUIRE_VERIFIED_EMAIL", "true")
 	t.Setenv("AUTH_PASSWORDLESS", "email,phone")
 
-	var cfg Config
+	var cfg constructorConfig
 	if err := environment.ParseEnvTags("", &cfg); err != nil {
 		t.Fatalf("ParseEnvTags: %v", err)
 	}

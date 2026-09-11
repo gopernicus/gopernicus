@@ -3,8 +3,12 @@ package events_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"reflect"
 	"testing"
 	"time"
+
+	"github.com/gopernicus/gopernicus/sdk"
 
 	"github.com/gopernicus/gopernicus/sdk/capabilities/events"
 )
@@ -153,12 +157,13 @@ func TestTypedHandler_SlowPath_RemoteEvent(t *testing.T) {
 		t.Fatalf("EncodeEvent() error = %v", err)
 	}
 
-	remote := events.RemoteEvent{
-		EventType:   original.Type(),
-		Occurred:    original.OccurredAt(),
-		Correlation: original.CorrelationID(),
-		Payload:     payload,
-	}
+	remote := events.Record{
+		EventID:       "remote-1",
+		Type:          original.Type(),
+		OccurredAt:    original.OccurredAt(),
+		CorrelationID: original.CorrelationID(),
+		Payload:       payload,
+	}.Event()
 
 	var received string
 	handler := events.TypedHandler(func(_ context.Context, e userCreated) error {
@@ -280,21 +285,22 @@ func TestNewRecord_NoMetadata(t *testing.T) {
 }
 
 // =============================================================================
-// RemoteEvent / DecodeRemoteMetadata
+// RemoteEvent
 // =============================================================================
 
 func TestRemoteEvent_Accessors(t *testing.T) {
 	now := time.Now().UTC()
 	tenant, agg, aggID := "t", "user", "u-1"
-	re := events.RemoteEvent{
-		EventType:   "user.created",
-		Occurred:    now,
-		Correlation: "corr-3",
-		Payload:     []byte(`{"x":1}`),
-		Tenant:      &tenant,
-		AggType:     &agg,
-		AggID:       &aggID,
-	}
+	re := events.Record{
+		EventID:       "remote-2",
+		Type:          "user.created",
+		OccurredAt:    now,
+		CorrelationID: "corr-3",
+		Payload:       []byte(`{"x":1}`),
+		TenantID:      &tenant,
+		AggregateType: &agg,
+		AggregateID:   &aggID,
+	}.Event()
 
 	if re.Type() != "user.created" || re.CorrelationID() != "corr-3" || !re.OccurredAt().Equal(now) {
 		t.Error("RemoteEvent Event accessors mismatch")
@@ -305,60 +311,6 @@ func TestRemoteEvent_Accessors(t *testing.T) {
 	enc, err := re.EncodeEvent()
 	if err != nil || string(enc) != `{"x":1}` {
 		t.Errorf("EncodeEvent() = %q, %v; want original payload", enc, err)
-	}
-}
-
-func TestDecodeRemoteMetadata(t *testing.T) {
-	evt := userCreated{
-		BaseEvent: events.NewBaseEvent("user.created").
-			WithAggregate("user", "u-2").
-			WithTenant("t-2"),
-		Email: "d@example.com",
-	}
-	payload, err := events.EncodeEvent(evt)
-	if err != nil {
-		t.Fatalf("EncodeEvent() error = %v", err)
-	}
-
-	tenant, aggType, aggID := events.DecodeRemoteMetadata(payload)
-	if tenant == nil || *tenant != "t-2" {
-		t.Errorf("tenant = %v, want %q", tenant, "t-2")
-	}
-	if aggType == nil || *aggType != "user" {
-		t.Errorf("aggType = %v, want %q", aggType, "user")
-	}
-	if aggID == nil || *aggID != "u-2" {
-		t.Errorf("aggID = %v, want %q", aggID, "u-2")
-	}
-}
-
-func TestDecodeRemoteMetadata_Absent(t *testing.T) {
-	tenant, aggType, aggID := events.DecodeRemoteMetadata([]byte(`{"type":"x"}`))
-	if tenant != nil || aggType != nil || aggID != nil {
-		t.Error("absent metadata should decode to nil pointers")
-	}
-}
-
-func TestDecodeRemoteMetadata_Garbage(t *testing.T) {
-	tenant, aggType, aggID := events.DecodeRemoteMetadata([]byte("not json"))
-	if tenant != nil || aggType != nil || aggID != nil {
-		t.Error("unparseable payload should decode to nil pointers")
-	}
-}
-
-// =============================================================================
-// Emit options
-// =============================================================================
-
-func TestApplyOptions_Default(t *testing.T) {
-	if events.ApplyOptions().Sync {
-		t.Error("default Sync should be false")
-	}
-}
-
-func TestApplyOptions_WithSync(t *testing.T) {
-	if !events.ApplyOptions(events.WithSync()).Sync {
-		t.Error("WithSync() should set Sync true")
 	}
 }
 
@@ -386,4 +338,92 @@ func TestNoop(t *testing.T) {
 
 func TestNoop_SatisfiesBroadcaster(t *testing.T) {
 	var _ events.Broadcaster = events.Noop{}
+}
+
+// borrowedEvent deliberately lends its buffers to expose snapshot alias bugs.
+type borrowedEvent struct {
+	events.BaseEvent
+	payload []byte
+	id      string
+}
+
+func (e borrowedEvent) EventID() string              { return e.id }
+func (e borrowedEvent) EncodeEvent() ([]byte, error) { return e.payload, nil }
+
+func TestRecord_SnapshotsAndPreservesIdentityAcrossReplay(t *testing.T) {
+	event := borrowedEvent{
+		BaseEvent: events.NewBaseEventWithCorrelation("opaque.updated", "shared-correlation").WithTenant("tenant").WithAggregate("widget", "123"),
+		payload:   []byte{0, 255, 128, 42}, id: "stable-event-id",
+	}
+	record, err := events.NewRecord(event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	event.payload[0] = 99
+	*event.TenantID() = "changed"
+	*event.AggregateType() = "changed"
+	*event.AggregateID() = "changed"
+	if record.Payload[0] != 0 || *record.TenantID != "tenant" || *record.AggregateType != "widget" || *record.AggregateID != "123" {
+		t.Fatal("NewRecord retained caller-owned payload or metadata")
+	}
+	remote := record.Event()
+	record.Payload[0] = 88
+	*record.TenantID = "mutated-record"
+	*record.AggregateType = "mutated-record"
+	*record.AggregateID = "mutated-record"
+	replay, err := events.NewRecord(remote)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if replay.EventID != "stable-event-id" || replay.CorrelationID != "shared-correlation" || replay.Payload[0] != 0 || *replay.TenantID != "tenant" || *replay.AggregateType != "widget" || *replay.AggregateID != "123" {
+		t.Fatalf("replay lost identity or snapshot: %+v", replay)
+	}
+	encoded, err := json.Marshal(replay)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded events.Record
+	if err := json.Unmarshal(encoded, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(decoded, replay) {
+		t.Fatalf("JSON envelope lost opaque bytes/metadata: %+v", decoded)
+	}
+	var target any
+	if err := remote.Unmarshal(&target); err == nil {
+		t.Fatal("opaque binary payload must not pretend to decode as JSON")
+	}
+}
+
+func TestRecord_Validation(t *testing.T) {
+	for _, rec := range []events.Record{{}, {EventID: "id"}, {EventID: "id", Type: "*"}, {Type: "created"}} {
+		if err := rec.Validate(); !errors.Is(err, sdk.ErrInvalidInput) {
+			t.Errorf("Validate(%+v) = %v", rec, err)
+		}
+	}
+	for _, evt := range []events.Event{nil, events.NewBaseEvent(""), events.NewBaseEvent("*")} {
+		if _, err := events.NewRecord(evt); !errors.Is(err, sdk.ErrInvalidInput) {
+			t.Errorf("NewRecord(%v) = %v", evt, err)
+		}
+	}
+	if err := (events.Record{EventID: "id", Type: "created"}).Validate(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestNoop_ValidatesAdmissions(t *testing.T) {
+	bus := events.Noop{}
+	for _, evt := range []events.Event{nil, events.NewBaseEvent(""), events.NewBaseEvent("*")} {
+		if err := bus.Emit(context.Background(), evt); !errors.Is(err, sdk.ErrInvalidInput) {
+			t.Errorf("Emit = %v", err)
+		}
+	}
+	if _, err := bus.Subscribe("valid", nil); !errors.Is(err, sdk.ErrInvalidInput) {
+		t.Errorf("Subscribe = %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := bus.Emit(ctx, events.NewBaseEvent("valid")); !errors.Is(err, context.Canceled) {
+		t.Errorf("Emit = %v", err)
+	}
 }

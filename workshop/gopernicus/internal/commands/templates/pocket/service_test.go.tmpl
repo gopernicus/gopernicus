@@ -1,0 +1,57 @@
+package {{.Agg}}_test
+
+import (
+    "context"
+    "errors"
+    "testing"
+
+    "{{.ModulePath}}"
+    "{{.ModulePath}}/logic/{{.Agg}}"
+    "{{.ModulePath}}/stores/memory"
+    "github.com/gopernicus/gopernicus/sdk"
+)
+
+func TestPublicConstruction(t *testing.T) {
+    if _, err := {{.Agg}}.NewService(nil); !errors.Is(err, {{.Agg}}.ErrStoreRequired) {
+        t.Fatalf("missing store: %v", err)
+    }
+    if _, err := {{.Pocket}}.NewService({{.Pocket}}.Repositories{}); !errors.Is(err, {{.Agg}}.ErrStoreRequired) {
+        t.Fatalf("missing pocket repository: %v", err)
+    }
+
+    svc, err := {{.Pocket}}.NewService({{.Pocket}}.Repositories{ {{.ReposField}}: memory.New{{.ReposField}}() })
+    if err != nil {
+        t.Fatal(err)
+    }
+    ctx := context.Background()
+    created, err := svc.Create(ctx, "first {{.Agg}}")
+    if err != nil {
+        t.Fatal(err)
+    }
+    got, err := svc.Get(ctx, created.ID)
+    if err != nil || got.Name != created.Name {
+        t.Fatalf("created entity: %#v, %v", got, err)
+    }
+    if err := svc.Delete(ctx, created.ID); err != nil {
+        t.Fatal(err)
+    }
+    if _, err := svc.Get(ctx, created.ID); !errors.Is(err, sdk.ErrNotFound) {
+        t.Fatalf("deleted entity: %v", err)
+    }
+}
+
+func TestConfiguredIDs(t *testing.T) {
+    repos := {{.Pocket}}.Repositories{ {{.ReposField}}: memory.New{{.ReposField}}() }
+    if _, err := {{.Pocket}}.NewService(repos, nil); !errors.Is(err, sdk.ErrInvalidInput) {
+        t.Fatalf("nil option: %v", err)
+    }
+    ids := sdk.NewIDGenerator(func() (string, error) { return "host-owned-id", nil })
+    svc, err := {{.Pocket}}.NewService(repos, {{.Agg}}.WithIDs(ids))
+    if err != nil {
+        t.Fatal(err)
+    }
+    created, err := svc.Create(context.Background(), "configured {{.Agg}}")
+    if err != nil || created.ID != "host-owned-id" {
+        t.Fatalf("configured ID: %#v, %v", created, err)
+    }
+}

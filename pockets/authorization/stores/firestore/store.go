@@ -4,11 +4,12 @@ import (
 	"context"
 	"embed"
 	"fmt"
+	"slices"
 
 	firestoredb "github.com/gopernicus/gopernicus/integrations/datastores/firestore"
 	"github.com/gopernicus/gopernicus/pockets/authorization"
-	"github.com/gopernicus/gopernicus/pockets/authorization/domain/mutation"
-	"github.com/gopernicus/gopernicus/pockets/authorization/domain/relationship"
+	mutation "github.com/gopernicus/gopernicus/pockets/authorization/logic/mutations"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/relationships"
 	"github.com/gopernicus/gopernicus/sdk"
 )
 
@@ -17,7 +18,7 @@ import (
 // with [ExportIndexes] and deploys it; the constructor probes the live database
 // for it at wiring time.
 //
-// Its 27 entries are DERIVED from the complete query matrix (SCHEMA.md §7) by
+// Its baseline entries are DERIVED from the complete query matrix (SCHEMA.md §7) by
 // the rules in SCHEMA.md §9.1, and indexes_test.go asserts the correspondence
 // both ways: a query with no index and an index no query needs both fail the
 // build. The emulator enforces no composite index, so an emulator-green run
@@ -54,16 +55,18 @@ type Option func(*config)
 type config struct {
 	guardian   mutation.GuardianPolicy
 	probeIndex bool
+	audit      bool
 }
 
-// WithGuardianPolicy overrides the default guardian invariant (owner protected
-// on every resource type, minimum one direct anchor) the atomic mutation
-// repository enforces inside its Firestore transaction. Supply an empty policy
-// to declare no invariant, or a narrower rule set to protect specific resource
-// types. It mirrors the memstore's and both SQL siblings' WithGuardianPolicy so
-// the guardian contract is wired identically across families.
+// WithAudit records actual tuple and role changes in the write transaction.
+// Each write requires an explicit audit source; recording is off by default.
+func WithAudit() Option { return func(c *config) { c.audit = true } }
+
+// WithGuardianPolicy selects the invariant enforced inside mutation transactions.
+// The default is empty. The option snapshots its rules for each constructed store.
 func WithGuardianPolicy(p mutation.GuardianPolicy) Option {
-	return func(c *config) { c.guardian = p }
+	p.Rules = slices.Clone(p.Rules)
+	return func(c *config) { c.guardian = mutation.GuardianPolicy{Rules: slices.Clone(p.Rules)} }
 }
 
 // WithoutIndexProbe skips the boot-time index probe (ruling R5). Two callers
@@ -93,28 +96,33 @@ func WithoutIndexProbe() Option {
 //
 // It does NOT deploy anything: the host owns its manifest and its deployment
 // (see [ExportIndexes]), exactly as the host owns migrations for the SQL stores.
-// The mutation repository defaults to the ratified guardian policy unless
-// [WithGuardianPolicy] overrides it.
-func Repositories(db *firestoredb.DB, opts ...Option) (authorization.Repositories, error) {
-	cfg, err := newConfig(db, opts)
+// The mutation repository protects only explicitly configured guardian rules.
+// ctx controls startup probing only; each probe is also bounded by
+// firestoredb.ProbeTimeout. db remains owned by the caller.
+func Repositories(ctx context.Context, db *firestoredb.DB, opts ...Option) (authorization.Repositories, error) {
+	cfg, err := newConfig(ctx, db, opts)
 	if err != nil {
 		return authorization.Repositories{}, err
 	}
 	return authorization.Repositories{
-		Relationships: newRelationshipStore(db),
-		Roles:         newRoleStore(db),
-		Mutations:     newMutationStore(db, cfg.guardian),
+		Relationships: newRelationshipStore(db, cfg.audit),
+		Roles:         newRoleStore(db, cfg.audit),
+		Mutations:     newMutationStore(db, cfg.guardian, cfg.audit),
+		Audit:         &auditStore{db: db},
 	}, nil
 }
 
 // RelationshipRepository returns only the relationship port, probing the same
 // manifest. It is the direct constructor for a baseline-only host that
 // intentionally does not wire the advanced mutation repository.
-func RelationshipRepository(db *firestoredb.DB, opts ...Option) (relationship.Storer, error) {
-	if _, err := newConfig(db, opts); err != nil {
+// ctx controls startup probing only; each probe is also bounded by
+// firestoredb.ProbeTimeout. db remains owned by the caller.
+func RelationshipRepository(ctx context.Context, db *firestoredb.DB, opts ...Option) (relationships.Storer, error) {
+	cfg, err := newConfig(ctx, db, opts)
+	if err != nil {
 		return nil, err
 	}
-	return newRelationshipStore(db), nil
+	return newRelationshipStore(db, cfg.audit), nil
 }
 
 // ExportIndexes MERGES this store's manifest into the host's own manifest at
@@ -132,21 +140,32 @@ func ExportIndexes(dst string) error {
 }
 
 // newConfig resolves the options and runs the boot probe.
-func newConfig(db *firestoredb.DB, opts []Option) (config, error) {
-	cfg := config{guardian: mutation.DefaultGuardianPolicy(), probeIndex: true}
+func newConfig(ctx context.Context, db *firestoredb.DB, opts []Option) (config, error) {
+	cfg := config{probeIndex: true}
 	for _, o := range opts {
+		if o == nil {
+			return config{}, fmt.Errorf("firestore pocket store: nil option: %w", sdk.ErrInvalidInput)
+		}
 		o(&cfg)
 	}
 	if db == nil {
 		return config{}, fmt.Errorf("authorization firestore store: nil database: %w", sdk.ErrInvalidInput)
 	}
+	if err := ctx.Err(); err != nil {
+		return config{}, err
+	}
 	if cfg.probeIndex {
-		// The constructor takes no context — neither do the SQL siblings' table
-		// probes — so the probe runs on Background and is bounded by the
-		// connector's ProbeTimeout (30s): an Admin API that never answers fails
-		// the boot instead of hanging it (SCHEMA.md §9.4).
-		if err := firestoredb.ProbeIndexesFS(context.Background(), db, IndexesFS, IndexesFile); err != nil {
+		probeCtx, cancel := context.WithTimeout(ctx, firestoredb.ProbeTimeout)
+		defer cancel()
+		if err := firestoredb.ProbeIndexesFS(probeCtx, db, IndexesFS, IndexesFile); err != nil {
 			return config{}, err
+		}
+		if cfg.audit {
+			auditCtx, cancelAudit := context.WithTimeout(ctx, firestoredb.ProbeTimeout)
+			defer cancelAudit()
+			if err := firestoredb.ProbeIndexesFS(auditCtx, db, AuditIndexesFS, AuditIndexesFile); err != nil {
+				return config{}, err
+			}
 		}
 	}
 	return cfg, nil

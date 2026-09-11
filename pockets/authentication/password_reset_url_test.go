@@ -3,6 +3,9 @@ package authentication
 import (
 	"errors"
 	"testing"
+
+	authlogic "github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication"
+	environment "github.com/gopernicus/gopernicus/sdk/pkg/environment"
 )
 
 // CHAU-5.1 — the reset landing URL's configuration contract.
@@ -15,25 +18,25 @@ import (
 func TestValidatePasswordResetURL(t *testing.T) {
 	tests := []struct {
 		name    string
-		mode    RuntimeMode
+		mode    environment.Mode
 		url     string
 		wantErr error
 	}{
-		{"https accepted in production", RuntimeModeProduction, "https://app.example.com/reset-password", nil},
-		{"https accepted in development", RuntimeModeDevelopment, "https://app.example.com/reset-password", nil},
-		{"http accepted in development", RuntimeModeDevelopment, "http://localhost:3000/reset-password", nil},
-		{"existing non-secret query accepted", RuntimeModeProduction, "https://app.example.com/reset?app=console", nil},
+		{"https accepted in production", environment.ModeProduction, "https://app.example.com/reset-password", nil},
+		{"https accepted in development", environment.ModeDevelopment, "https://app.example.com/reset-password", nil},
+		{"http accepted in development", environment.ModeDevelopment, "http://localhost:3000/reset-password", nil},
+		{"existing non-secret query accepted", environment.ModeProduction, "https://app.example.com/reset?app=console", nil},
 
-		{"http rejected in production", RuntimeModeProduction, "http://app.example.com/reset-password", ErrPasswordResetURLInsecure},
+		{"http rejected in production", environment.ModeProduction, "http://app.example.com/reset-password", ErrPasswordResetURLInsecure},
 
-		{"relative path rejected", RuntimeModeDevelopment, "/reset-password", ErrPasswordResetURLInvalid},
-		{"scheme-relative rejected", RuntimeModeDevelopment, "//app.example.com/reset", ErrPasswordResetURLInvalid},
-		{"no host rejected", RuntimeModeDevelopment, "https:///reset-password", ErrPasswordResetURLInvalid},
-		{"non-http scheme rejected", RuntimeModeDevelopment, "ftp://app.example.com/reset", ErrPasswordResetURLInvalid},
-		{"fragment rejected", RuntimeModeDevelopment, "https://app.example.com/reset#step2", ErrPasswordResetURLInvalid},
-		{"empty fragment marker rejected", RuntimeModeDevelopment, "https://app.example.com/reset#", ErrPasswordResetURLInvalid},
-		{"pre-existing token parameter rejected", RuntimeModeDevelopment, "https://app.example.com/reset?token=abc", ErrPasswordResetURLInvalid},
-		{"pre-existing empty token parameter rejected", RuntimeModeDevelopment, "https://app.example.com/reset?token=", ErrPasswordResetURLInvalid},
+		{"relative path rejected", environment.ModeDevelopment, "/reset-password", ErrPasswordResetURLInvalid},
+		{"scheme-relative rejected", environment.ModeDevelopment, "//app.example.com/reset", ErrPasswordResetURLInvalid},
+		{"no host rejected", environment.ModeDevelopment, "https:///reset-password", ErrPasswordResetURLInvalid},
+		{"non-http scheme rejected", environment.ModeDevelopment, "ftp://app.example.com/reset", ErrPasswordResetURLInvalid},
+		{"fragment rejected", environment.ModeDevelopment, "https://app.example.com/reset#step2", ErrPasswordResetURLInvalid},
+		{"empty fragment marker rejected", environment.ModeDevelopment, "https://app.example.com/reset#", ErrPasswordResetURLInvalid},
+		{"pre-existing token parameter rejected", environment.ModeDevelopment, "https://app.example.com/reset?token=abc", ErrPasswordResetURLInvalid},
+		{"pre-existing empty token parameter rejected", environment.ModeDevelopment, "https://app.example.com/reset?token=", ErrPasswordResetURLInvalid},
 	}
 
 	for _, tt := range tests {
@@ -56,12 +59,12 @@ func TestValidatePasswordResetURL(t *testing.T) {
 // builder's append use ONE constant. Two string literals could drift, and the
 // symptom would be a reset link the SPA cannot read.
 func TestPasswordResetTokenParamIsShared(t *testing.T) {
-	if PasswordResetTokenParam != "token" {
-		t.Fatalf("PasswordResetTokenParam = %q, want \"token\"", PasswordResetTokenParam)
+	if authlogic.PasswordResetTokenParam != "token" {
+		t.Fatalf("PasswordResetTokenParam = %q, want \"token\"", authlogic.PasswordResetTokenParam)
 	}
 	// The validator rejects exactly the parameter the builder appends.
-	if err := validatePasswordResetURL(RuntimeModeDevelopment,
-		"https://app.example.com/reset?"+PasswordResetTokenParam+"=x"); !errors.Is(err, ErrPasswordResetURLInvalid) {
+	if err := validatePasswordResetURL(environment.ModeDevelopment,
+		"https://app.example.com/reset?"+authlogic.PasswordResetTokenParam+"=x"); !errors.Is(err, ErrPasswordResetURLInvalid) {
 		t.Errorf("the validator does not reject the parameter the builder appends: %v", err)
 	}
 }

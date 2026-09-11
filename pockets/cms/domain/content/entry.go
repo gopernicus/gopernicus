@@ -4,8 +4,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gopernicus/gopernicus/sdk/foundation/cryptids"
-	"github.com/gopernicus/gopernicus/sdk/foundation/slug"
+	"github.com/gopernicus/gopernicus/sdk"
 )
 
 // Entry is the single dynamic content record on the frozen spine (plan §2/§3).
@@ -33,13 +32,13 @@ type Entry struct {
 }
 
 // NewEntry validates the spine inputs, generates a slug, mints its ID from ids
-// (empty under cryptids.Database — the store then assigns the key), and returns a
+// (empty under sdk.DatabaseID — the store then assigns the key), and returns a
 // new Entry of type typeSlug stamped with now. An empty status defaults to
 // draft; creating directly as published stamps PublishedAt. An empty template
 // defaults to "default". Fields and hierarchy are applied by the caller (the
 // service) after Registry field validation. Validation failures wrap
 // sdk.ErrInvalidInput.
-func NewEntry(ids cryptids.IDGenerator, typeSlug, title, excerpt, body, author string, status Status, template string, now time.Time) (Entry, error) {
+func NewEntry(ids sdk.IDGenerator, typeSlug, title, excerpt, body, author string, status Status, template string, now time.Time) (Entry, error) {
 	title = strings.TrimSpace(title)
 	if status == "" {
 		status = StatusDraft
@@ -55,7 +54,7 @@ func NewEntry(ids cryptids.IDGenerator, typeSlug, title, excerpt, body, author s
 	e := Entry{
 		ID:        ids.MustGenerate(),
 		Type:      typeSlug,
-		Slug:      slug.Make(title),
+		Slug:      sdk.Slugify(title),
 		Title:     title,
 		Status:    status,
 		Body:      body,
@@ -90,7 +89,7 @@ func (e *Entry) ApplyEdit(title, excerpt, body, author string, status Status, te
 
 	now = now.UTC()
 	e.Title = title
-	e.Slug = slug.Make(title)
+	e.Slug = sdk.Slugify(title)
 	e.Excerpt = strings.TrimSpace(excerpt)
 	e.Body = body
 	e.Author = strings.TrimSpace(author)

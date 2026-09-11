@@ -8,8 +8,8 @@ import (
 	"github.com/gopernicus/gopernicus/pockets/cms/domain/content"
 	"github.com/gopernicus/gopernicus/pockets/cms/domain/menus"
 	"github.com/gopernicus/gopernicus/pockets/cms/domain/taxonomy"
-	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
-	"github.com/gopernicus/gopernicus/sdk/foundation/web"
+	"github.com/gopernicus/gopernicus/sdk/pkg/list"
+	"github.com/gopernicus/gopernicus/sdk/pkg/web"
 )
 
 // homeEntryLimit caps how many recent entries the home page shows.
@@ -57,9 +57,9 @@ func (h *PublicHandlers) Home(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		page, err := h.svc.List(r.Context(), content.EntryQuery{
-			Type:        ct.Slug,
-			Status:      content.StatusPublished,
-			ListRequest: crud.ListRequest{Limit: crud.MaxLimit},
+			Type:    ct.Slug,
+			Status:  content.StatusPublished,
+			Request: list.Request{Limit: list.MaxLimit},
 		})
 		if err != nil {
 			h.renderError(w, r, err)
@@ -112,9 +112,9 @@ func (h *PublicHandlers) archive(w http.ResponseWriter, r *http.Request, kind ta
 		return
 	}
 	page, err := h.svc.ListByTerm(r.Context(), term.ID, content.EntryQuery{
-		Type:        archiveType,
-		Status:      content.StatusPublished,
-		ListRequest: crud.ListRequest{Cursor: r.URL.Query().Get("cursor")},
+		Type:    archiveType,
+		Status:  content.StatusPublished,
+		Request: list.Request{Cursor: r.URL.Query().Get("cursor")},
 	})
 	if err != nil {
 		h.renderError(w, r, err)

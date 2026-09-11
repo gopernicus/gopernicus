@@ -3,7 +3,7 @@
 // The ambient-refusal table (ruling R1), shared by the EMULATOR entrypoint
 // (conformance_test.go, integration && !live) and, from N6, the LIVE one
 // (integration && live) — one build tag, both builds. Duplicating a
-// fifty-eight-method table per leg is how one of the two copies silently loses a
+// port-method table per leg is how one of the two copies silently loses a
 // method.
 package firestore
 
@@ -15,28 +15,28 @@ import (
 
 	firestoredb "github.com/gopernicus/gopernicus/integrations/datastores/firestore"
 	auth "github.com/gopernicus/gopernicus/pockets/authentication"
-	"github.com/gopernicus/gopernicus/pockets/authentication/domain/apikey"
-	"github.com/gopernicus/gopernicus/pockets/authentication/domain/authgrant"
-	"github.com/gopernicus/gopernicus/pockets/authentication/domain/challenge"
-	"github.com/gopernicus/gopernicus/pockets/authentication/domain/contactchange"
-	"github.com/gopernicus/gopernicus/pockets/authentication/domain/identifier"
-	"github.com/gopernicus/gopernicus/pockets/authentication/domain/invitation"
-	"github.com/gopernicus/gopernicus/pockets/authentication/domain/oauthaccount"
-	"github.com/gopernicus/gopernicus/pockets/authentication/domain/oauthstate"
-	"github.com/gopernicus/gopernicus/pockets/authentication/domain/passwordless"
-	"github.com/gopernicus/gopernicus/pockets/authentication/domain/passwordreset"
-	"github.com/gopernicus/gopernicus/pockets/authentication/domain/securityevent"
-	"github.com/gopernicus/gopernicus/pockets/authentication/domain/serviceaccount"
-	"github.com/gopernicus/gopernicus/pockets/authentication/domain/session"
-	"github.com/gopernicus/gopernicus/pockets/authentication/domain/user"
-	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/apikey"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/authgrant"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/challenge"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/contactchange"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/identifier"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/oauthaccount"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/oauthstate"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/passwordless"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/passwordreset"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/securityevent"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/serviceaccount"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/session"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/user"
+	invitations "github.com/gopernicus/gopernicus/pockets/authentication/logic/invitations"
+	"github.com/gopernicus/gopernicus/sdk/pkg/list"
 )
 
 // portMethodCount is the number of methods the eighteen slots of
 // auth.Repositories declare across their eighteen distinct interfaces, at core
 // v0.10.0. It is asserted against the table below, so a port method added
 // upstream fails this module rather than silently escaping the R1 refusal.
-const portMethodCount = 58
+const portMethodCount = 64
 
 // assertAmbientRefusal drives every public port method inside BOTH kinds of
 // ambient transaction — a read-write Transact and a read-only ReadSnapshot — and
@@ -100,11 +100,21 @@ type portCall struct {
 func portCalls(r auth.Repositories) []portCall {
 	var (
 		zeroTime = time.Time{}
-		req      = crud.ListRequest{}
+		req      = list.Request{}
 	)
 	err1 := func(_ any, err error) error { return err }
 
 	return []portCall{
+		{name: "Users.Provision", call: func(ctx context.Context) error {
+			_, _, err := r.Users.Provision(ctx, user.User{}, identifier.Identifier{}, user.InitialCredentials{})
+			return err
+		}},
+		{name: "Passwords.Change", call: func(ctx context.Context) error { return err1(r.Passwords.Change(ctx, "", user.PasswordChange{})) }},
+		{name: "OAuthAccounts.Link", call: func(ctx context.Context) error {
+			_, _, err := r.OAuthAccounts.Link(ctx, oauthaccount.OAuthAccount{}, 0, "", time.Now())
+			return err
+		}},
+
 		// user.UserRepository — 3
 		{name: "Users.CreateWithPrimaryIdentifier", call: func(ctx context.Context) error {
 			_, _, err := r.Users.CreateWithPrimaryIdentifier(ctx, user.User{}, identifier.Identifier{})
@@ -230,9 +240,9 @@ func portCalls(r auth.Repositories) []portCall {
 			return err1(r.SecurityEvents.List(ctx, securityevent.ListFilter{}, req))
 		}},
 
-		// invitation.InvitationRepository — 6
+		// invitations.InvitationRepository — 6
 		{name: "Invitations.Create", call: func(ctx context.Context) error {
-			return err1(r.Invitations.Create(ctx, invitation.Invitation{}))
+			return err1(r.Invitations.Create(ctx, invitations.Invitation{}))
 		}},
 		{name: "Invitations.Get", call: func(ctx context.Context) error {
 			return err1(r.Invitations.Get(ctx, "inv1"))
@@ -246,8 +256,14 @@ func portCalls(r auth.Repositories) []portCall {
 		{name: "Invitations.ListBySubject", call: func(ctx context.Context) error {
 			return err1(r.Invitations.ListBySubject(ctx, "email", "a@example.com", req))
 		}},
+		{name: "Invitations.ClaimAcceptance", call: func(ctx context.Context) error {
+			return err1(r.Invitations.ClaimAcceptance(ctx, "inv1", invitations.Acceptance{}))
+		}},
+		{name: "Invitations.CompleteAcceptance", call: func(ctx context.Context) error {
+			return err1(r.Invitations.CompleteAcceptance(ctx, "inv1", invitations.Acceptance{}))
+		}},
 		{name: "Invitations.UpdateStatus", call: func(ctx context.Context) error {
-			return err1(r.Invitations.UpdateStatus(ctx, "inv1", invitation.StatusUpdate{}))
+			return err1(r.Invitations.UpdateStatus(ctx, "inv1", invitations.StatusUpdate{}))
 		}},
 
 		// challenge.Repository — 4
@@ -274,16 +290,17 @@ func portCalls(r auth.Repositories) []portCall {
 		{name: "ContactChanges.Create", call: func(ctx context.Context) error {
 			return err1(r.ContactChanges.Create(ctx, contactchange.PendingChange{}))
 		}},
+		{name: "ContactChanges.Get", call: func(ctx context.Context) error { return err1(r.ContactChanges.Get(ctx, "u1", identifier.KindEmail)) }},
 		{name: "ContactChanges.Consume", call: func(ctx context.Context) error {
-			return err1(r.ContactChanges.Consume(ctx, "u1", identifier.KindEmail))
+			return err1(r.ContactChanges.Consume(ctx, "u1", identifier.KindEmail, "pending"))
 		}},
 
 		// authgrant.Repository — 3
 		{name: "AuthenticationGrants.Create", call: func(ctx context.Context) error {
-			return err1(r.AuthenticationGrants.Create(ctx, authgrant.Grant{}))
+			return err1(r.AuthenticationGrants.Create(ctx, authgrant.Grant{}, 0, zeroTime))
 		}},
 		{name: "AuthenticationGrants.Consume", call: func(ctx context.Context) error {
-			return err1(r.AuthenticationGrants.Consume(ctx, "s1", "reauth", "ctx", zeroTime))
+			return err1(r.AuthenticationGrants.Consume(ctx, authgrant.Requirement{}, zeroTime))
 		}},
 		{name: "AuthenticationGrants.DeleteBySession", call: func(ctx context.Context) error {
 			return r.AuthenticationGrants.DeleteBySession(ctx, "s1")
@@ -310,7 +327,7 @@ func portCalls(r auth.Repositories) []portCall {
 
 		// session.ActiveUserRepository — 1
 		{name: "ActiveSessions.CreateForActiveUser", call: func(ctx context.Context) error {
-			return err1(r.ActiveSessions.CreateForActiveUser(ctx, session.Session{}))
+			return err1(r.ActiveSessions.CreateForActiveUser(ctx, session.Session{}, 0))
 		}},
 
 		// passwordless.Repository — 1

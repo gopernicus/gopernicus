@@ -9,16 +9,17 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/gopernicus/gopernicus/sdk/foundation/logging"
+	"github.com/gopernicus/gopernicus/sdk/pkg/logging"
 )
 
 // recSpan records everything the middleware does to a span. It does NOT
 // implement SpanIdentity.
 type recSpan struct {
-	name     string
-	attrs    map[string]string
-	err      error
-	finished bool
+	name        string
+	attrs       map[string]string
+	err         error
+	finished    bool
+	finishCount int
 }
 
 func (s *recSpan) SetAttributes(attrs ...Attribute) {
@@ -27,7 +28,7 @@ func (s *recSpan) SetAttributes(attrs ...Attribute) {
 	}
 }
 func (s *recSpan) RecordError(err error) { s.err = err }
-func (s *recSpan) Finish()               { s.finished = true }
+func (s *recSpan) Finish()               { s.finished = true; s.finishCount++ }
 
 // recTracer captures the spans it started.
 type recTracer struct {
@@ -164,7 +165,7 @@ func TestMiddleware_ClientErrorDoesNotRecord(t *testing.T) {
 
 func TestMiddleware_SpanIdentityStashesTraceAndSpanIDs(t *testing.T) {
 	var buf bytes.Buffer
-	log := slog.New(logging.NewTracingHandler(slog.NewJSONHandler(&buf, nil)))
+	log := slog.New(logging.NewContextHandler(slog.NewJSONHandler(&buf, nil)))
 	tr := &idTracer{traceID: "trace-abc", spanID: "span-123"}
 
 	mux := http.NewServeMux()
@@ -186,7 +187,7 @@ func TestMiddleware_SpanIdentityStashesTraceAndSpanIDs(t *testing.T) {
 
 func TestMiddleware_NoopPathCarriesNoIDs(t *testing.T) {
 	var buf bytes.Buffer
-	log := slog.New(logging.NewTracingHandler(slog.NewJSONHandler(&buf, nil)))
+	log := slog.New(logging.NewContextHandler(slog.NewJSONHandler(&buf, nil)))
 
 	// Nil tracer resolves to Noop, whose finisher does not satisfy SpanIdentity,
 	// so no trace/span IDs reach the context.

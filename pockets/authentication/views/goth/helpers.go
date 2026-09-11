@@ -7,8 +7,7 @@ import (
 	"unicode"
 
 	"github.com/a-h/templ"
-
-	"github.com/gopernicus/gopernicus/pockets/authentication"
+	inbound "github.com/gopernicus/gopernicus/pockets/authentication/inbound/http"
 	"github.com/gopernicus/gopernicus/ui/goth/components/forms"
 	"github.com/gopernicus/gopernicus/ui/goth/primitives"
 )
@@ -224,7 +223,7 @@ func statusText(status int) string {
 
 // fieldErrorText returns the message for the named field, or "" — used to flag the
 // composed FormField invalid and render its error region.
-func fieldErrorText(pc authentication.PageContext, field string) string {
+func fieldErrorText(pc inbound.PageContext, field string) string {
 	for _, fe := range pc.FieldErrors {
 		if fe.Field == field {
 			return fe.Message
@@ -235,7 +234,7 @@ func fieldErrorText(pc authentication.PageContext, field string) string {
 
 // fieldMessages projects the page context's field errors into the forms.ErrorSummary
 // message shape (each an in-page link to its field control).
-func fieldMessages(pc authentication.PageContext) []forms.FieldMessage {
+func fieldMessages(pc inbound.PageContext) []forms.FieldMessage {
 	out := make([]forms.FieldMessage, 0, len(pc.FieldErrors))
 	for _, fe := range pc.FieldErrors {
 		out = append(out, forms.FieldMessage{Message: fe.Message, FieldID: fe.Field})

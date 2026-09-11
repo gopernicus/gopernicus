@@ -7,8 +7,8 @@ import (
 	"time"
 
 	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
-	"github.com/gopernicus/gopernicus/pockets/authentication/domain/contactchange"
-	"github.com/gopernicus/gopernicus/pockets/authentication/domain/identifier"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/contactchange"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/identifier"
 	"github.com/gopernicus/gopernicus/sdk"
 )
 
@@ -25,7 +25,11 @@ type ContactChangeStore struct {
 var _ contactchange.Repository = (*ContactChangeStore)(nil)
 
 // NewContactChangeStore returns a ContactChangeStore backed by db.
+// It panics if db is nil; the caller owns the database lifecycle.
 func NewContactChangeStore(db *tursodb.DB) *ContactChangeStore {
+	if db == nil {
+		panic("authentication turso: NewContactChangeStore received a nil database")
+	}
 	return &ContactChangeStore{db: db}
 }
 
@@ -106,11 +110,16 @@ func (s *ContactChangeStore) Create(ctx context.Context, p contactchange.Pending
 	return p, nil
 }
 
+func (s *ContactChangeStore) Get(ctx context.Context, userID string, kind identifier.Kind) (contactchange.PendingChange, error) {
+	p, err := scanContactChange(s.db.QueryRow(ctx, `SELECT `+contactChangeReturning+` FROM contact_changes WHERE user_id = ? AND kind = ?`, userID, string(kind)))
+	return p, tursodb.MapError(err)
+}
+
 // Consume atomically deletes and returns the (userID, kind) pending change: live →
 // the PendingChange, expired → sdk.ErrExpired (row deleted), missing → sdk.ErrNotFound.
-func (s *ContactChangeStore) Consume(ctx context.Context, userID string, kind identifier.Kind) (contactchange.PendingChange, error) {
-	const q = `DELETE FROM contact_changes WHERE user_id = ? AND kind = ? RETURNING ` + contactChangeReturning
-	p, err := scanContactChange(s.db.QueryRow(ctx, q, userID, string(kind)))
+func (s *ContactChangeStore) Consume(ctx context.Context, userID string, kind identifier.Kind, expectedID string) (contactchange.PendingChange, error) {
+	const q = `DELETE FROM contact_changes WHERE user_id = ? AND kind = ? AND id = ? RETURNING ` + contactChangeReturning
+	p, err := scanContactChange(s.db.QueryRow(ctx, q, userID, string(kind), expectedID))
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return contactchange.PendingChange{}, sdk.ErrNotFound

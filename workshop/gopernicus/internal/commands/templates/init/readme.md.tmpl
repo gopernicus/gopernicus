@@ -47,20 +47,19 @@ go mod tidy
 
 ## Wiring a pocket
 
-A gopernicus pocket reaches this host only through the narrow `pocket.Mount` +
-`Register` surface — no init() registration, no service locator. Add the pocket
-module (and its store adapter, if it persists data) to `go.mod` at its tagged
-version, then wire it in the "mount your pockets here" block in
-`cmd/server/main.go`:
+Add the pocket module (and its store adapter, if it persists data) to `go.mod`
+at its tagged version, then wire it in the "mount your pockets here" block in
+`cmd/server/main.go`. Construct its services with the required inputs and
+optional `With...` options documented by that pocket. Hosts may call public use
+cases directly from handlers or workers; no init() registration or service
+locator is involved.
+
+For a pocket that supplies HTTP components, mount them on the host router:
 
 ```go
-mount := pocket.Mount{Router: router, Logger: log}
-repos := <store>.Repositories(db)        // or your own in-memory store
-svc, err := <pocket>.NewService(repos, <pocket>.Config{ /* ... */ })
-if err != nil {
+if err := components.Register(pockets.Mount{Router: router, Logger: log}); err != nil {
 	return err
 }
-svc.Register(mount)
 ```
 
 ## Migrations

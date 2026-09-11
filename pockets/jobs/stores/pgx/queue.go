@@ -9,10 +9,10 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
-	"github.com/gopernicus/gopernicus/pockets/jobs/domain/job"
+	job "github.com/gopernicus/gopernicus/pockets/jobs/logic/queue"
 	"github.com/gopernicus/gopernicus/sdk"
-	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
-	"github.com/gopernicus/gopernicus/sdk/foundation/workers"
+	"github.com/gopernicus/gopernicus/sdk/pkg/list"
+	"github.com/gopernicus/gopernicus/sdk/pkg/workers"
 )
 
 // DefaultLease is the stale-claim recovery window applied when no WithLease
@@ -106,7 +106,11 @@ func (r jobRow) toDomain() job.Job {
 
 // NewQueueStore returns a Queue backed by db, applying opts (WithLease,
 // WithSchema).
+// It panics if db is nil; the caller owns the database lifecycle.
 func NewQueueStore(db *pgxdb.DB, opts ...Option) *Queue {
+	if db == nil {
+		panic("jobs pgx: NewQueueStore received a nil database")
+	}
 	cfg := newConfig(opts)
 	return &Queue{db: db, lease: cfg.lease, schema: cfg.schema}
 }
@@ -213,8 +217,11 @@ func (q *Queue) Claim(ctx context.Context, workerID string, now time.Time, kinds
 
 // Complete marks the job done. A missing id yields sdk.ErrNotFound.
 func (q *Queue) Complete(ctx context.Context, jobID string, now time.Time) error {
-	q1 := `UPDATE ` + q.table("job_queue") + ` SET status = 'completed', completed_at = @now, updated_at = @now WHERE job_id = @job_id`
-	return q.execAffecting(ctx, q1, pgx.NamedArgs{"now": now.UTC(), "job_id": jobID})
+	return q.transition(ctx, jobID, job.StatusCompleted, func(tx *pgxdb.Tx) error {
+		query := `UPDATE ` + q.table("job_queue") + ` SET status = 'completed', completed_at = @now, updated_at = @now WHERE job_id = @job_id`
+		_, err := tx.Exec(ctx, query, pgx.NamedArgs{"now": now.UTC(), "job_id": jobID})
+		return err
+	})
 }
 
 // Fail increments retry_count and, in one statement, either reschedules the job
@@ -230,7 +237,10 @@ func (q *Queue) Fail(ctx context.Context, jobID string, now time.Time, reason st
 		    worker_name = CASE WHEN retry_count + 1 >= @max THEN worker_name ELSE NULL END,
 		    claimed_at = CASE WHEN retry_count + 1 >= @max THEN claimed_at ELSE NULL END
 		WHERE job_id = @job_id`
-	return q.execAffecting(ctx, fail, pgx.NamedArgs{"reason": reason, "now": now.UTC(), "max": maxAttempts, "job_id": jobID})
+	return q.transition(ctx, jobID, job.StatusDeadLetter, func(tx *pgxdb.Tx) error {
+		_, err := tx.Exec(ctx, fail, pgx.NamedArgs{"reason": reason, "now": now.UTC(), "max": maxAttempts, "job_id": jobID})
+		return err
+	})
 }
 
 // Get returns the job with the given id, or sdk.ErrNotFound.
@@ -246,7 +256,7 @@ func (q *Queue) Get(ctx context.Context, id string) (job.Job, error) {
 // List returns a cursor- or offset-paginated page of jobs matching the filter,
 // in the resolved order (default created_at DESC, job_id DESC). The Kind/Status
 // filter is shared by the page query and the WithCount total.
-func (q *Queue) List(ctx context.Context, f job.ListFilter, req crud.ListRequest) (crud.Page[job.Job], error) {
+func (q *Queue) List(ctx context.Context, f job.ListFilter, req list.Request) (list.Page[job.Job], error) {
 	where, args := jobFilter(f)
 	lq := pgxdb.ListQuery[jobRow]{
 		BaseSQL:      `SELECT ` + jobRowColumns + ` FROM ` + q.table("job_queue") + where,
@@ -259,9 +269,9 @@ func (q *Queue) List(ctx context.Context, f job.ListFilter, req crud.ListRequest
 	}
 	page, err := pgxdb.List(ctx, q.db, lq, req)
 	if err != nil {
-		return crud.Page[job.Job]{}, err
+		return list.Page[job.Job]{}, err
 	}
-	return crud.MapPage(page, jobRow.toDomain), nil
+	return list.MapPage(page, jobRow.toDomain), nil
 }
 
 // jobFilter composes the optional Kind and Status filters into a parameterized
@@ -282,17 +292,23 @@ func jobFilter(f job.ListFilter) (string, pgx.NamedArgs) {
 	return where, args
 }
 
-// execAffecting runs a write that must touch exactly one row, mapping zero rows
-// affected to sdk.ErrNotFound. Driver errors are already mapped by the connector.
-func (q *Queue) execAffecting(ctx context.Context, query string, args pgx.NamedArgs) error {
-	n, err := pgxdb.ExecAffecting(ctx, q.db, query, args)
-	if err != nil {
-		return err
-	}
-	if n == 0 {
-		return sdk.ErrNotFound
-	}
-	return nil
+// transition preserves terminal outcomes under concurrent late callbacks. This
+// is a state guard, not a lease fence: a stale running worker is still unfenced.
+func (q *Queue) transition(ctx context.Context, id string, repeated job.Status, update func(*pgxdb.Tx) error) error {
+	return q.db.InTx(ctx, func(tx *pgxdb.Tx) error {
+		query := `SELECT status FROM ` + q.table("job_queue") + ` WHERE job_id = @id FOR UPDATE`
+		var status job.Status
+		if err := tx.QueryRow(ctx, query, pgx.NamedArgs{"id": id}).Scan(&status); err != nil {
+			return pgxdb.MapError(err)
+		}
+		if status.Terminal() {
+			if status == repeated {
+				return nil
+			}
+			return sdk.ErrConflict
+		}
+		return update(tx)
+	})
 }
 
 // scanJob scans one job_queue row (jobSelect projection) positionally, mapping

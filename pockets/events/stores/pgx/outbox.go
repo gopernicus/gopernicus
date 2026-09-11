@@ -2,12 +2,14 @@ package pgx
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 
 	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
-	"github.com/gopernicus/gopernicus/pockets/events/domain/outbox"
+	"github.com/gopernicus/gopernicus/pockets/events/logic/outbox"
+	"github.com/gopernicus/gopernicus/sdk"
 	sdkevents "github.com/gopernicus/gopernicus/sdk/capabilities/events"
 )
 
@@ -96,6 +98,9 @@ func (s *Store) AppendTx(ctx context.Context, tx *pgxdb.Tx, recs ...sdkevents.Re
 	if len(recs) == 0 {
 		return nil
 	}
+	if tx == nil {
+		return fmt.Errorf("events outbox: transaction is required: %w", sdk.ErrInvalidInput)
+	}
 	return insertRecords(ctx, tx, s.table(outboxTable), recs...)
 }
 
@@ -164,12 +169,17 @@ func (s *Store) PurgePublished(ctx context.Context, before time.Time) (int, erro
 // for the oldest-first ordering guarantee. A UNIQUE constraint violation on
 // event_id is mapped to sdk.ErrAlreadyExists by the connector's Exec.
 func insertRecords(ctx context.Context, q pgxdb.Querier, table string, recs ...sdkevents.Record) error {
+	for _, rc := range recs {
+		if err := rc.Validate(); err != nil {
+			return err
+		}
+	}
 	n := len(recs)
 	eventIDs := make([]string, n)
 	types := make([]string, n)
 	occurred := make([]time.Time, n)
 	correlations := make([]string, n)
-	payloads := make([]string, n)
+	payloads := make([][]byte, n)
 	aggTypes := make([]*string, n)
 	aggIDs := make([]*string, n)
 	tenants := make([]*string, n)
@@ -178,15 +188,15 @@ func insertRecords(ctx context.Context, q pgxdb.Querier, table string, recs ...s
 		types[i] = rc.Type
 		occurred[i] = rc.OccurredAt.UTC()
 		correlations[i] = rc.CorrelationID
-		payloads[i] = payloadValue(rc.Payload)
+		payloads[i] = append([]byte{}, rc.Payload...)
 		aggTypes[i] = rc.AggregateType
 		aggIDs[i] = rc.AggregateID
 		tenants[i] = rc.TenantID
 	}
 
 	insert := `INSERT INTO ` + table + ` (` + outboxColumns + `)
-		SELECT event_id, event_type, occurred_at, correlation_id, payload::json, aggregate_type, aggregate_id, tenant_id, @created_at, NULL
-		FROM UNNEST(@event_ids::text[], @types::text[], @occurred::timestamptz[], @correlations::text[], @payloads::text[], @agg_types::text[], @agg_ids::text[], @tenants::text[])
+		SELECT event_id, event_type, occurred_at, correlation_id, payload, aggregate_type, aggregate_id, tenant_id, @created_at, NULL
+		FROM UNNEST(@event_ids::text[], @types::text[], @occurred::timestamptz[], @correlations::text[], @payloads::bytea[], @agg_types::text[], @agg_ids::text[], @tenants::text[])
 			AS r(event_id, event_type, occurred_at, correlation_id, payload, aggregate_type, aggregate_id, tenant_id)`
 	_, err := q.Exec(ctx, insert, pgx.NamedArgs{
 		"event_ids":    eventIDs,
@@ -200,14 +210,4 @@ func insertRecords(ctx context.Context, q pgxdb.Querier, table string, recs ...s
 		"created_at":   time.Now().UTC(),
 	})
 	return err
-}
-
-// payloadValue returns a non-empty JSON text for storage: the raw payload, or
-// "{}" when it is empty (the column is NOT NULL). It is stored into a JSON (not
-// JSONB) column, so these exact bytes round-trip verbatim.
-func payloadValue(p []byte) string {
-	if len(p) == 0 {
-		return "{}"
-	}
-	return string(p)
 }

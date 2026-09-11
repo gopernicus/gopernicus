@@ -31,14 +31,10 @@ func (d *denyingLimiter) Allow(_ context.Context, _ string, _ ratelimiter.Limit)
 	return ratelimiter.Result{Allowed: false, RetryAfter: d.retryAfter}, nil
 }
 
-func (d *denyingLimiter) Reset(_ context.Context, _ string) error { return nil }
-func (d *denyingLimiter) Close() error                            { return nil }
-
 func TestAcquireReturnsImmediatelyWhenAllowed(t *testing.T) {
 	t.Parallel()
 
 	mem := ratelimiter.NewMemory()
-	defer mem.Close()
 
 	if err := ratelimiter.Acquire(context.Background(), mem, "k", ratelimiter.PerMinute(10)); err != nil {
 		t.Fatalf("Acquire on an unexhausted limit: %v", err)
@@ -49,7 +45,6 @@ func TestAcquireBlocksUntilWindowResets(t *testing.T) {
 	t.Parallel()
 
 	mem := ratelimiter.NewMemory()
-	defer mem.Close()
 
 	limit := ratelimiter.Limit{Requests: 1, Window: 50 * time.Millisecond}
 	if err := ratelimiter.Acquire(context.Background(), mem, "k", limit); err != nil {
@@ -69,7 +64,6 @@ func TestAcquireHonorsContextCancellation(t *testing.T) {
 	t.Parallel()
 
 	mem := ratelimiter.NewMemory()
-	defer mem.Close()
 
 	limit := ratelimiter.Limit{Requests: 1, Window: time.Hour}
 	if err := ratelimiter.Acquire(context.Background(), mem, "k", limit); err != nil {
@@ -90,7 +84,7 @@ func TestAcquirePropagatesBackendError(t *testing.T) {
 	sentinel := errors.New("backend down")
 	d := &denyingLimiter{err: sentinel}
 
-	err := ratelimiter.Acquire(context.Background(), d, "k", ratelimiter.DefaultLimit())
+	err := ratelimiter.Acquire(context.Background(), d, "k", ratelimiter.PerMinute(100))
 	if !errors.Is(err, sentinel) {
 		t.Fatalf("Acquire = %v, want wrapped sentinel", err)
 	}
@@ -101,10 +95,35 @@ func TestAcquireClampsZeroRetryAfter(t *testing.T) {
 
 	d := &denyingLimiter{allowAfter: 3, retryAfter: 0}
 
-	if err := ratelimiter.Acquire(context.Background(), d, "k", ratelimiter.DefaultLimit()); err != nil {
+	if err := ratelimiter.Acquire(context.Background(), d, "k", ratelimiter.PerMinute(100)); err != nil {
 		t.Fatalf("Acquire: %v", err)
 	}
 	if d.calls != 4 {
 		t.Fatalf("Allow called %d times, want 4 (3 denials + 1 grant)", d.calls)
+	}
+}
+
+type cancelingAllower struct {
+	cancel context.CancelFunc
+	calls  int
+}
+
+func (a *cancelingAllower) Allow(context.Context, string, ratelimiter.Limit) (ratelimiter.Result, error) {
+	a.calls++
+	a.cancel()
+	return ratelimiter.Result{Allowed: true}, nil
+}
+
+func TestAcquireCancellationBeforeAndDuringGrant(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	a := &cancelingAllower{cancel: func() {}}
+	if err := ratelimiter.Acquire(ctx, a, "k", ratelimiter.PerMinute(1)); !errors.Is(err, context.Canceled) || a.calls != 0 {
+		t.Fatalf("calls=%d err=%v", a.calls, err)
+	}
+	ctx, cancel = context.WithCancel(context.Background())
+	a.cancel = cancel
+	if err := ratelimiter.Acquire(ctx, a, "k", ratelimiter.PerMinute(1)); !errors.Is(err, context.Canceled) {
+		t.Fatal(err)
 	}
 }
