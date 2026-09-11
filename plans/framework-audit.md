@@ -1,37 +1,28 @@
 # Gopernicus framework audit
 
-Active follow-up: [startup-release-segovia.md](startup-release-segovia.md).
-The owner approved startup/configuration cleanup, coordinated module releases,
-and Segovia v2 adoption. Remote Firestore work is preserved on its existing
-branch; the initial release excludes its three untagged modules and their
-unsatisfied live/reconciliation gates. CMS behavior remains deferred.
+Latest completed follow-up: [startup-release-segovia.md](startup-release-segovia.md).
+Startup cancellation/construction errors (AUDIT-032) and SQLite result completion
+(AUDIT-033) are fixed. All 34 coordinated module tags are published from
+`c3f8b4ad453021ba1e40c91572d8e4618c2d8382` on `audit-release-20260911`; public
+checksums/builds and released-pin scaffold generation pass without replacements.
+[AUDIT.md](../AUDIT.md) and the release manifest record exact published versions.
 
-Latest completed follow-up: [pocket-constructor-options.md](pocket-constructor-options.md),
-AUDIT-031. Non-CMS pocket roots and configurable services/HTTP/runtimes now use
-explicit required inputs plus named options for grouped policies. Constructor
-filenames use the noun consistently. Owned callers/docs, independent review,
-the exact final 42-module gate, actual-workspace guards, core race and host/docs
-checks passed. This supersedes the retained-pocket-Config choices below.
-The plan includes a copyable next-window prompt and exact verification evidence.
+Segovia v2 is upgraded on local branch `chore/gopernicus-audit-upgrade`, commit
+`9db497fd703601cf574bffc1c4371b9e70679cba`. The original checkout is on that branch, with
+owner plans preserved. Its full check, 320 live race tests, fresh/baseline SQL
+upgrade and real HTTP authentication/dashboard/SSE smoke pass. No consumer
+publication or deployment was performed. The plan above owns exact evidence.
 
-Next-phase direction (2026-09-11): the owner selected **Segovia v2** at
-`/Users/jrazmi/code/segovia/segovia/v2` as the first consumer. Finish the bounded
-startup-context and constructor-error-policy follow-up recorded in
-[constructor-options.md](constructor-options.md#separate-follow-ups-and-unverified-behavior),
-then prepare a coordinated release before its normal dependency upgrade.
-Segovia's `v2/AGENTS.md` requires tagged Gopernicus modules and no `replace`
-directives; its root `go.work` currently includes only `./v2`.
+Next work is a separately scoped rollout: Segovia's shared production limiter
+remains unwired and production correctly refuses to boot; verify provider posture
+and plan the breaking SQL cutover. Framework Firestore reconciliation/live gates
+remain held on their preserved newer remote branch. CMS behavior remains deferred.
+Do not repeat the completed audit or constructor phases.
 
-Release preparation must identify affected publishable modules, update sibling
-requirements and scaffold pins, reconcile AUDIT.md with the final APIs/schema
-steps, and verify the release dependency graph without workspace/local replacement
-overrides. The completed workspace checks do not prove published resolution:
-current module requirements still name older releases. Use RELEASING.md's
-module-prefixed tags and dependency order; verify published versions with
-`GOWORK=off` after publication. A temporary local consumer rehearsal can inform
-the release, but Segovia's committed upgrade must use tagged dependencies and
-preserve its append-only, upstream-exported migration ledgers. No versions, tags,
-remote state or consumer files changed during this sequencing review.
+Previous completed follow-up: [pocket-constructor-options.md](pocket-constructor-options.md),
+AUDIT-031. Explicit required inputs and grouped policy options replaced pocket
+construction bags. Current APIs and consumer usage are recorded in the later
+completed adoption above.
 
 Previous completed follow-up: [constructor-options.md](constructor-options.md),
 AUDIT-030. Constructor-wide review and selective functional options are implemented,
@@ -697,15 +688,20 @@ bounded review work, not a mandatory approval chain.
 
 ## Next-session handoff
 
-- **Current follow-up handoff:** [pocket-constructor-options.md](pocket-constructor-options.md),
+- **Current follow-up handoff:** [startup-release-segovia.md](startup-release-segovia.md),
+  COMPLETE. Published 34 framework tags; upgraded Segovia v2 locally at
+  9db497fd703601cf574bffc1c4371b9e70679cba. All public release and local consumer acceptance
+  gates pass. Remaining work: separate production limiter/cutover and deferred
+  Firestore reconciliation/live proof; CMS stays deferred.
+
+- **Previous follow-up handoff:** [pocket-constructor-options.md](pocket-constructor-options.md),
   COMPLETE, AUDIT-031. All four non-CMS pocket roots and configurable component
   constructors use explicit required inputs plus typed options and grouped policy
   records. Group replacement, capture/reuse, mode/model authority and lifecycle are
   verified. Constructor filenames are consistent. Exact-source 42-module checks,
   actual-workspace guards, core race, host HTTP/jobs and docs checks passed; no
   remaining implementation blocker. The plan contains a copyable handoff prompt.
-  Next: the bounded startup-context/error-policy follow-up, coordinated release
-  preparation, then Segovia v2 adoption using published tags, as recorded above.
+  Its then-next startup/release/Segovia sequence is now complete, as recorded above.
   CMS remains deferred; do not repeat the completed options work.
 
 - **Previous follow-up handoff:** [constructor-options.md](constructor-options.md),

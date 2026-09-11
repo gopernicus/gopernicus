@@ -12,11 +12,13 @@ or persisted data that consumers must account for. Keep entries after release
 and add the actual module version when known. Proposed changes stay in the
 [audit plan](plans/framework-audit.md) until implemented.
 
-## Coordinated release versions (publication pending)
+## Coordinated release versions (published 2026-09-11)
 
 These versions collect the implemented audit changes below. Entries retain their
 original implementation-time release status; this table records the coordinated
-release targets. Publication and verification are tracked in
+published versions at commit `c3f8b4ad453021ba1e40c91572d8e4618c2d8382`.
+All 34 published archives match the verified source hashes and build with
+`GOWORK=off` through the public Go proxy/checksum service. Details are tracked in
 [plans/startup-release-segovia.md](plans/startup-release-segovia.md).
 
 | Module directory | Version |

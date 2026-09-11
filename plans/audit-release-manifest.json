@@ -1,5 +1,5 @@
 {
-  "status": "ready",
+  "status": "published",
   "branch": "audit-release-20260911",
   "modules": [
     {
@@ -322,5 +322,8 @@
     "publication": "pending",
     "final_workspace_check": "passed",
     "live_sql_redis": "passed; disposable fixtures cleaned"
-  }
+  },
+  "commit": "c3f8b4ad453021ba1e40c91572d8e4618c2d8382",
+  "published_at": "2026-09-11",
+  "public_verification": "All 34 module ZIP/go.mod sums match the recorded hashes; all build with GOWORK=off, public proxy and sum.golang.org in a fresh cache."
 }

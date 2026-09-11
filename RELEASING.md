@@ -1,5 +1,18 @@
 # Releasing gopernicus modules
 
+## Coordinated audit release (2026-09-11)
+
+Published all 34 selected module tags from commit
+`c3f8b4ad453021ba1e40c91572d8e4618c2d8382` on `audit-release-20260911`.
+The [release manifest](plans/audit-release-manifest.json) records versions and
+verified ZIP/go.mod checksums; [AUDIT.md](AUDIT.md) is the consumer migration guide.
+All published modules resolve and build with `GOWORK=off`, normal public checksum
+verification and no local replacements. Remote main and the newer Firestore branch
+were preserved. Three Firestore first tags remain held; CMS is compatibility only.
+
+The implementation-time entries below retain their history; the coordinated
+manifest supplies their published versions. Segovia v2 adoption is in progress.
+
 ## Unreleased: Turso statement completion (2026-09-11)
 
 QueryOne now checks result closure before returning a row. SQLite can return an
@@ -20,7 +33,7 @@ retain simple signatures and reject nil borrowed databases explicitly.
 
 Migration: [AUDIT-032](AUDIT.md#audit-032-host-startup-cancellation-and-constructor-errors).
 Implementation/release plan: [startup-release-segovia.md](plans/startup-release-segovia.md).
-The coordinated release is being prepared; no new tags have been published.
+The coordinated SQL/core release is published; see the manifest above.
 Firestore first tags are held pending remote-work reconciliation and required
 live evidence. Segovia v2 is the first PostgreSQL-backed adopter.
 

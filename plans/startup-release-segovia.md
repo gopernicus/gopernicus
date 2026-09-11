@@ -1,6 +1,6 @@
 # Startup cleanup, coordinated release and Segovia v2 adoption
 
-Status: IN PROGRESS — 2026-09-11. The owner approved the sequence recorded in
+Status: COMPLETE — authorized startup cleanup, publication and local consumer adoption, 2026-09-11. The owner approved the sequence recorded in
 framework-audit.md: bounded startup/configuration cleanup, release preparation,
 commit/push/module publication, then Segovia v2 adoption. CMS behavioral work and
 production deployment remain outside scope.
@@ -153,7 +153,7 @@ consumer branch, failures and unverified provider behavior before handoff.
   fixed that verification setup, without weakening its parity test.
 - Final candidate source/hash proof:
   /tmp/gopernicus-release-candidate-source-match-final.json and
-  /tmp/gopernicus-release-expected-hashes.json. All34 candidate downloads match
+  /tmp/gopernicus-release-expected-hashes.json. All 34 candidate downloads match
   source; expected hashes are persisted in plans/audit-release-manifest.json.
 - Final corrected 42-module snapshot/guard check is running under
   /tmp/gopernicus-release-final-check-v2.py. Do not publish until it passes.
@@ -176,3 +176,63 @@ main/Firestore, pushes the release branch and dependency-ordered annotated tags,
 and records verified remote refs in /tmp/gopernicus-release-publication.json.
 After publication, verify real downloaded ZIP sums against the persisted expected
 hashes without the candidate proxy/cache or checksum exemptions, then adopt Segovia.
+
+
+### Published release and consumer implementation
+
+- Published branch audit-release-20260911 and all 34 annotated tags from
+  c3f8b4ad453021ba1e40c91572d8e4618c2d8382. Remote main/Firestore unchanged.
+  Evidence: /tmp/gopernicus-release-publication.json and .log.
+- Public download verification COMPLETE: all 34 ZIP/go.mod checksums equal
+  the manifest and all 34 build with GOWORK=off, fresh cache, public proxy and
+  sum.golang.org; no candidate/checksum exemptions. Evidence:
+  /tmp/gopernicus-release-published-v2/results.json and verification.log.
+  Initial public lookup hit transient unknown-revision negative caching; it
+  resolved after indexing. Initial failure retained in
+  /tmp/gopernicus-release-published/verification.log; no tags were changed.
+- Consumer branch chore/gopernicus-audit-upgrade is in isolated worktree
+  /tmp/segovia-gopernicus-upgrade, baseline main76b3d783. Original checkout
+  and its two owner plans untouched. Consumer plan:
+  .claude/plans/v2-gopernicus-audit-upgrade.md.
+- Segovia SDK domain tests pass against published modules. All five new
+  migration files copied from released modules; all previous bytes unchanged.
+  Assembly, disposable SQL upgrade and real HTTP checks remain in progress.
+
+
+### Completion and next-session record
+
+- Segovia adoption committed locally as `9db497fd703601cf574bffc1c4371b9e70679cba` on
+  `chore/gopernicus-audit-upgrade`. Its original checkout at
+  /Users/jrazmi/code/segovia/segovia is on that branch. The isolated /tmp worktree
+  is detached at the same commit. Both owner untracked plans were hash-verified
+  unchanged; v1/UI source/workspace boundaries unchanged. Consumer branch was not
+  pushed or deployed. Exact 97 changed paths: /tmp/segovia-upgrade-local-commit.json
+  and `git show --name-only 9db497fd703601cf574bffc1c4371b9e70679cba` in Segovia.
+- All 16 consumer framework modules match published versions and ZIP sums with
+  no replacements. `make check` PASS. Full live PostgreSQL race suite PASS:
+  320 tests/subtests, zero test skips/failures (three packages have no tests).
+  /tmp/segovia-upgrade-check-results.json and released-graph-proof.json.
+- Actual HTTP register/queued verification/login/refresh/logout, public/private
+  dashboard and invalid-credential behavior PASS. Open authenticated SSE terminates
+  cleanly on SIGTERM, exit 0; /tmp/segovia-auth-http-smoke-result.json.
+- Fresh and baseline-seeded schema rehearsals PASS: all 38 historical checksums
+  preserved, five exact new upstream files, 43 total entries, idempotent reapply,
+  seeded identities/tuples/roles/domain rows/jobs/schedules unchanged, legacy JSON
+  outbox bytes preserved in BYTEA. /tmp/segovia-upgrade-rehearsal/results.json.
+- Independent authorization review ship-ready; host model/guard policy and
+  transaction boundaries preserved. /tmp/segovia-authorization-independent-review.md.
+  The stale receipt assertion found in review was corrected and its targeted race
+  test passed; subsequent changes were only documentation/comments.
+- Public released-pin scaffold check also PASS for all three host and three
+  pocket/store shapes: /tmp/gopernicus-release-published-scaffold.log.
+- All owned server/database fixtures stopped; disposable PostgreSQL data removed.
+  Existing development/provider databases untouched. No live hosted-provider
+  calls or consumer UI/browser checks claimed; UI source was unchanged.
+- Production rollout is separate: choose/wire a shared limiter (Segovia correctly
+  refuses production without one), verify hosted provider credentials, stop old
+  writers before applying the breaking ledger additions, restart sensitive proof
+  flows and tuple cursors. These are explicit rollout prerequisites, not skipped
+  acceptance requirements for the completed code adoption.
+- Framework follow-up: reconcile newer remote Firestore work semantically and
+  satisfy its real live gate before first-tag release. CMS behavioral audit remains
+  deferred. Do not repeat completed SDK/pocket/options audits or the release.
