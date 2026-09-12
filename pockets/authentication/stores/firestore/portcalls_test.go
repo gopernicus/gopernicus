@@ -34,7 +34,7 @@ import (
 
 // portMethodCount is the number of methods the eighteen slots of
 // auth.Repositories declare across their eighteen distinct interfaces, at core
-// v0.10.0. It is asserted against the table below, so a port method added
+// v0.11.0. It is asserted against the table below, so a port method added
 // upstream fails this module rather than silently escaping the R1 refusal.
 const portMethodCount = 64
 
@@ -338,7 +338,7 @@ func portCalls(r auth.Repositories) []portCall {
 }
 
 // TestPortCallsCoverEveryPortMethod keeps the ambient-refusal table honest: the
-// eighteen ports declare portMethodCount methods at core v0.10.0, and a method
+// eighteen ports declare portMethodCount methods at core v0.11.0, and a method
 // missing from the table is a method whose refusal nothing asserts.
 func TestPortCallsCoverEveryPortMethod(t *testing.T) {
 	calls := portCalls(auth.Repositories{})

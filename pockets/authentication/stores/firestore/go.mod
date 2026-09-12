@@ -43,10 +43,3 @@ require (
 	google.golang.org/grpc v1.82.1 // indirect
 	google.golang.org/protobuf v1.36.11 // indirect
 )
-
-// PRE-TAG relative replace (RELEASING.md precondition 2): the connector's
-// v0.1.0 does not exist yet — it is cut by this milestone's first train. Both
-// the workspace and a GOWORK=off build resolve it here until then. The release
-// step (N8) DROPS this line, and cold verification is only meaningful after it
-// does.
-replace github.com/gopernicus/gopernicus/integrations/datastores/firestore => ../../../../integrations/datastores/firestore

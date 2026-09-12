@@ -30,6 +30,7 @@ pockets/                           shared host-contract module; requires SDK onl
 pockets/authentication/                      session-auth hexagon — public logic services and HTTP adapters; datastore-free
 pockets/authentication/stores/pgx/           auth's pgx store adapter, its own module
 pockets/authentication/stores/turso/         auth's Turso store adapter, its own module
+pockets/authentication/stores/firestore/     auth's Firestore store adapter (Native mode; no ambient-transaction join — ruling R1), its own module
 pockets/authentication/views/goth/           auth's bundled default views (ui/goth), its own module
 pockets/authorization/             IAM hexagon — independently wireable kinds (relationships/ReBAC + roles); datastore-free; public memstore/
 pockets/authorization/stores/pgx/  authorization's pgx store adapter, its own module

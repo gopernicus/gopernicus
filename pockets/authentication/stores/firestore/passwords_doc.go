@@ -28,6 +28,16 @@ func putPassword(ctx context.Context, db *firestoredb.DB, w firestoredb.Writer, 
 	return w.Set(ctx, passwordRef(db, userID), passwordDoc{UserID: userID, Hash: hash})
 }
 
+// dropPassword deletes the credential row. It is unguarded on purpose: the SQL
+// `DELETE FROM user_passwords WHERE user_id = ?` that CredentialMutations.Apply
+// runs affects zero rows when the user has no password and reports no error, so
+// removing an absent password is a successful no-op in all three families. It
+// also needs no read — the document id is derived from the user id, and a
+// Firestore delete has no precondition unless one is given.
+func dropPassword(ctx context.Context, db *firestoredb.DB, w firestoredb.Writer, userID string) error {
+	return w.Delete(ctx, passwordRef(db, userID))
+}
+
 // readPassword returns the stored hash, or sdk.ErrNotFound.
 func readPassword(ctx context.Context, db *firestoredb.DB, r firestoredb.Reader, userID string) (string, error) {
 	snap, err := r.Get(ctx, passwordRef(db, userID))
@@ -39,8 +49,4 @@ func readPassword(ctx context.Context, db *firestoredb.DB, r firestoredb.Reader,
 		return "", fmt.Errorf("authentication firestore store: decoding %s: %s: %w", collectionPasswords, err, sdk.ErrInvalidInput)
 	}
 	return row.Hash, nil
-}
-
-func dropPassword(ctx context.Context, db *firestoredb.DB, w firestoredb.Writer, userID string) error {
-	return w.Delete(ctx, passwordRef(db, userID))
 }

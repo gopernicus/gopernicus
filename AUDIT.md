@@ -58,8 +58,9 @@ All 34 published archives match the verified source hashes and build with
 | `pockets/jobs/stores/turso` | `v0.5.0` |
 | `workshop/gopernicus` | `v0.3.0` |
 
-The three Firestore modules are excluded pending reconciliation with newer
-remote work and their required live verification. CMS versions provide framework
+The three Firestore modules are excluded from that coordinated release. Their
+first tags are being prepared separately in [firestore-release.md](plans/firestore-release.md),
+including reconciliation with newer remote work and required live verification. CMS versions provide framework
 compatibility; its behavioral audit remains deferred. Examples are not tagged.
 
 For SQL hosts, review the authentication `0018`, authorization `0006`/`0007`,
@@ -4711,3 +4712,54 @@ retry after the lock is released. Connector build/race/vet and HTTP libsql fixtu
 checks pass. Twenty repeated concurrent-claim runs and all six SQLite
 integration/race suites also pass, with unchanged contention settings. Full
 release evidence is in [plans/startup-release-segovia.md](plans/startup-release-segovia.md).
+
+
+## AUDIT-034: Firestore first-release reconciliation
+
+- **Implemented:** 2026-09-11; local verification and independent review passed.
+- **Modules:** `integrations/datastores/firestore`,
+  `pockets/authentication/stores/firestore`,
+  `pockets/authorization/stores/firestore`; first tags target `v0.1.0`.
+- **Release:** not published. The required real Firestore run remains pending.
+- **Impact:** new opt-in adapters. Hosts using an unpublished Firestore branch
+  must adopt the current SDK/pocket APIs and persisted-state rules below.
+
+The completed Firestore authentication branch is reconciled with SDK `v0.9.0`,
+authentication `v0.11.0` and authorization `v0.13.0`. Use their public
+`logic/...` packages and current store contracts; do not restore retired
+`domain` or `sdk/foundation` imports to make an old adapter compile. Probing store
+constructors take the host startup context first. Existing SQL hosts do not need
+to change datastore or adopt these modules.
+
+Authentication now applies the audited credential-revision and owner binding to
+passwordless and password-reset proofs. Older or stale proofs are rejected;
+request a new proof through the current service instead of editing its payload.
+Credential mutations atomically revoke sessions, authentication grants and reset
+proofs. Foreign-user identifier mutation targets are rejected before any write.
+Invitation acceptance uses the current claim/complete protocol, binding both
+subject type and ID; accepting invitations continue to hold their uniqueness
+claim. Contact-change consumption compares the expected generation ID so an old
+confirmation cannot consume a replacement request. Refer to
+[the authentication schema](pockets/authentication/stores/firestore/SCHEMA.md)
+before carrying experimental persisted data into a host.
+
+Authorization retains natural tuples, metadata-free role facts and optional
+atomic change history. There are no scopes, mutation receipts or revision
+ledgers. Unpublished-schema upgrade and cleanup steps are explicit in
+[UPGRADE.md](pockets/authorization/stores/firestore/UPGRADE.md); construction never
+runs them automatically. The earlier authorization audit entries remain the
+migration guide for those API decisions.
+
+Both pocket adapters reject ambient host transactions. Authorization's SQL
+baseline writers support joining a host transaction; guarded authorization calls
+and authentication compositions retain their own documented boundaries.
+Hosts own database lifecycle and deployment of both
+composite indexes and field overrides, including the optional authorization audit
+manifest. `WithoutIndexProbe()` transfers index verification to the host; emulator
+success does not establish real index coverage. Do not apply TTL to claimed
+records whose deletion must also release uniqueness claims.
+
+Verification and release status are recorded in
+[firestore-release.md](plans/firestore-release.md) and
+[the Firestore release manifest](plans/firestore-release-manifest.json). These
+notes do not claim a live run or published tag before that evidence exists.

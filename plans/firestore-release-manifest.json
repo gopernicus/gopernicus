@@ -1,0 +1,55 @@
+{
+  "status": "local preparation complete; required real Firestore gate pending",
+  "branch": "firestore-release-20260911",
+  "version": "v0.1.0",
+  "base_commit": "c98f5618",
+  "merged_branch_commit": "1c0f06d93b64288f20f5da16d68d81249222fade",
+  "modules": [
+    {
+      "directory": "integrations/datastores/firestore",
+      "module": "github.com/gopernicus/gopernicus/integrations/datastores/firestore",
+      "version": "v0.1.0",
+      "tag": "integrations/datastores/firestore/v0.1.0",
+      "label": "connector",
+      "sum": "h1:LRHGuuBdQ1fVg4JbpMkXN8JF0VEJGBHN5iWMu1pdRK4=",
+      "go_mod_sum": "h1:tejAOkzU957PAxz35VfH+xwOFnDz/Fu6+F/ilhguoxY=",
+      "source_entries": 46,
+      "candidate_verified": true
+    },
+    {
+      "directory": "pockets/authorization/stores/firestore",
+      "module": "github.com/gopernicus/gopernicus/pockets/authorization/stores/firestore",
+      "version": "v0.1.0",
+      "tag": "pockets/authorization/stores/firestore/v0.1.0",
+      "label": "authorization",
+      "sum": "h1:RmXwLLGF+67/0OY9rrteWMPVQdXKqwaPH+rS+Da67m8=",
+      "go_mod_sum": "h1:9ITb2EOzZpfLaNv32V95pWh7FpnwB+fFrkEI6yEl6YI=",
+      "source_entries": 58,
+      "candidate_verified": true
+    },
+    {
+      "directory": "pockets/authentication/stores/firestore",
+      "module": "github.com/gopernicus/gopernicus/pockets/authentication/stores/firestore",
+      "version": "v0.1.0",
+      "tag": "pockets/authentication/stores/firestore/v0.1.0",
+      "label": "authentication",
+      "sum": "h1:OFYj6rSRGYcXAMpWLZs3RLS218vGLK9pOe2rsNLbp7g=",
+      "go_mod_sum": "h1:pKsoMv8gPv/qJKC4RnzZCIfP7kC3wOonKfy8wadMJYo=",
+      "source_entries": 72,
+      "candidate_verified": true
+    }
+  ],
+  "live_workflow_run": null,
+  "live_artifact": null,
+  "candidate_verification": "Fresh-cache downloads match final proxy ZIP bytes and all checkout source entries; GOWORK=off build/test/vet pass without replacements; public SDK/core checksum verification remains enabled.",
+  "verification": {
+    "workspace_make_check": "passed (42 modules; generation check and tagged vet)",
+    "actual_repository_guards": "passed",
+    "workflow_regression_tests": 25,
+    "connector_emulator_race": "331 pass outcomes; zero skips/failures",
+    "authorization_emulator_race": "361 pass outcomes; one documented ambient-family skip; zero failures",
+    "authentication_emulator_race": "382 passing leaves including217 shared conformance; zero skips/failures; final32 focused leaves passed",
+    "independent_review": "no remaining adapter code blocker",
+    "cloud_live": "not run; project and credentials pending"
+  }
+}

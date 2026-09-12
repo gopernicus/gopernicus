@@ -207,6 +207,17 @@ func readIdentifier(ctx context.Context, db *firestoredb.DB, r firestoredb.Reade
 // Absence at either hop is sdk.ErrNotFound, matching the SQL adapters' empty
 // result for `WHERE kind=? AND normalized_value=? AND replaced_at IS NULL AND
 // login_enabled=1`.
+//
+// THE ROW IS RE-VERIFIED AGAINST THE CLAIM'S PREDICATE, and that is not
+// belt-and-braces. In SQL the predicate IS the query: a row that stopped
+// matching stops being returned, whatever else went wrong. Here the claim is an
+// INDEX ENTRY the store maintains itself, so a claim that ever out-lived or
+// out-pointed its row would turn every lookup of that address into a lookup of
+// someone else's account — the one bug class that converts a claim-lifecycle
+// slip into an authentication bypass rather than a duplicate row. Re-checking
+// the four conjuncts of idx_user_identifiers_auth_claim on the row makes the
+// claim a fast PATH to the answer and the row the AUTHORITY for it; a mismatch
+// is sdk.ErrNotFound, exactly as the SQL predicate's empty result is.
 func readIdentifierByAuthClaim(ctx context.Context, db *firestoredb.DB, r firestoredb.Reader, kind, normalizedValue string) (identifierDoc, error) {
 	snap, err := r.Get(ctx, authClaimRef(db, kind, normalizedValue))
 	if err != nil {
@@ -216,13 +227,26 @@ func readIdentifierByAuthClaim(ctx context.Context, db *firestoredb.DB, r firest
 	if err := snap.DataTo(&claim); err != nil {
 		return identifierDoc{}, fmt.Errorf("authentication firestore store: decoding %s: %s: %w", collectionIdentifierClaims, err, sdk.ErrInvalidInput)
 	}
-	return readIdentifier(ctx, db, r, claim.IdentifierID)
+	row, err := readIdentifier(ctx, db, r, claim.IdentifierID)
+	if err != nil {
+		return identifierDoc{}, err
+	}
+	if row.Kind != kind || row.NormalizedValue != normalizedValue || !row.claimsAuth() {
+		return identifierDoc{}, sdk.ErrNotFound
+	}
+	return row, nil
 }
 
 // readPrimaryIdentifier resolves a user's ACTIVE PRIMARY row of a kind through
 // the primary claim — one document read instead of a query, and the seam the
 // directory projection is recomputed from. An absent claim is (zero, false, nil):
 // having no primary of a kind is a normal state, not an error.
+//
+// The row is re-verified against idx_user_identifiers_primary's own predicate
+// for the reason readIdentifierByAuthClaim states: a mis-pointed claim would
+// otherwise publish ANOTHER subject's address as this one's directory entry. A
+// mismatch reads as "no primary of that kind", which is the safe direction —
+// the projection clears rather than showing a row that is not the user's.
 func readPrimaryIdentifier(ctx context.Context, db *firestoredb.DB, r firestoredb.Reader, userID, kind string) (identifierDoc, bool, error) {
 	snap, err := r.Get(ctx, primaryClaimRef(db, userID, kind))
 	if errors.Is(err, sdk.ErrNotFound) {
@@ -241,6 +265,9 @@ func readPrimaryIdentifier(ctx context.Context, db *firestoredb.DB, r firestored
 	}
 	if err != nil {
 		return identifierDoc{}, false, err
+	}
+	if row.UserID != userID || row.Kind != kind || !row.claimsPrimary() {
+		return identifierDoc{}, false, nil
 	}
 	return row, true, nil
 }

@@ -24,9 +24,11 @@ import (
 // deliberately NOT here: they belong to projection.go, which is the only place
 // allowed to name them.
 const (
-	fieldUserDisplayName  = "display_name"
-	fieldUserUpdatedAt    = "updated_at"
-	fieldUserAuthRevision = "auth_revision"
+	fieldUserDisplayName     = "display_name"
+	fieldUserUpdatedAt       = "updated_at"
+	fieldUserAuthRevision    = "auth_revision"
+	fieldUserStatus          = "status"
+	fieldUserStatusChangedAt = "status_changed_at"
 )
 
 // userRef is the users document for a user id. The document id is the KeyHash of
@@ -110,6 +112,31 @@ func advanceUserRevision(ctx context.Context, db *firestoredb.DB, w firestoredb.
 		{Path: fieldUserUpdatedAt, Value: firestoredb.TruncateTime(now)},
 	}, projection.updates()...)
 	return w.Update(ctx, userRef(db, userID), updates)
+}
+
+// transitionUserStatus writes the LIFECYCLE half of a users document: the new
+// status, its transition time, the mutation time, and the revision the caller
+// already computed — as FIELD updates, so the directory projection survives
+// untouched (SCHEMA.md §6.3 row 14; every Summary field except the two
+// projection fields is written here).
+//
+// The revision is the caller's absolute value rather than a field increment for
+// the same reason advanceUserRevision takes one: this transaction read the
+// document to decide whether the status changes at all, so the read and the
+// write are one decision.
+//
+// It writes ONLY the users document. The session and grant revocation the
+// transition owes is the caller's, in the SAME transaction, through the helpers
+// that own those collections — an update-then-best-effort-delete is exactly what
+// the port forbids.
+func transitionUserStatus(ctx context.Context, db *firestoredb.DB, w firestoredb.Writer, userID string, status user.Status, revision int64, now time.Time) error {
+	stamp := firestoredb.TruncateTime(now)
+	return w.Update(ctx, userRef(db, userID), []gcfs.Update{
+		{Path: fieldUserStatus, Value: string(status)},
+		{Path: fieldUserStatusChangedAt, Value: stamp},
+		{Path: fieldUserUpdatedAt, Value: stamp},
+		{Path: fieldUserAuthRevision, Value: revision},
+	})
 }
 
 // readUser reads one users document through r, so the same code serves a

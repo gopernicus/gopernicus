@@ -33,5 +33,5 @@ func (v credentialRevocations) apply(ctx context.Context, db *firestoredb.DB, w 
 	if err := dropAuthGrants(ctx, db, w, v.grants); err != nil {
 		return err
 	}
-	return dropPasswordResetChallenges(ctx, db, w, plan, v.resets)
+	return dropChallenges(ctx, db, w, plan, v.resets)
 }

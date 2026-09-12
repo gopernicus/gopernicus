@@ -5,9 +5,9 @@
 // as firestoredb) owns how to talk to Firestore, and the HOST owns the
 // database's lifecycle and its index deployment.
 //
-// Repositories wires every repository slot, but several operations still return
-// errNotImplemented. README.md lists supported capabilities; a non-nil slot is
-// not proof of implementation. Enable only capabilities supported by this adapter.
+// Repositories implements every authentication repository slot. Startup probing
+// uses the caller's context, capped by the connector's ProbeTimeout. The caller
+// retains database ownership and controls enabled services through host policies.
 //
 // # Two family differences a host is choosing when it picks this store
 //
@@ -32,4 +32,11 @@
 // Firestore has no unique constraints either, so each of the thirteen tables'
 // UNIQUE indexes becomes a deterministic document id or a CLAIM document
 // written in the same transaction as its row (ruling R3, SCHEMA.md §5).
+//
+// README.md is the host-facing document: the full surface, the index
+// manifest's scaffold/deploy/probe cycle, the complete list of family
+// differences this store takes from the SQL siblings, why a Firestore TTL policy
+// is never a substitute for the ports' counted purges, the measured emulator
+// costs, and how to run the hermetic, emulator and live legs. SCHEMA.md is the
+// tracked derivation behind it.
 package firestore

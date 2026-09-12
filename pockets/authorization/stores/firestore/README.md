@@ -6,6 +6,10 @@ an optional transactional change history and its reader. The adapter owns the
 storage schema and queries; the [Firestore connector](../../../../integrations/datastores/firestore)
 owns vendor access. Hosts own database lifecycle, credentials and index deployment.
 
+These repositories reject ambient host transactions. A host needing one atomic
+transaction across its own rows and authorization writes should use the SQL
+adapters; see transaction behavior below.
+
 ## Wiring
 
 ```go
@@ -48,18 +52,18 @@ checks, affected fact reads and optional audit writes share a native Firestore
 transaction. All reads precede writes. Native transaction isolation protects
 both existing facts and negative predicates; there is no scope counter or
 anchor collection. Every command is evaluated against current state, including
-natural no-ops. Successful `mutation.Result` values describe that application.
+natural no-ops. Successful `mutations.Result` values describe that application.
 
 There are no caller-supplied mutation IDs, durable receipts or replay promises.
 Only definite aborted transactions retry internally. A guard or semantic
 validator refusal preserves its original error identity and stays terminal.
-Exhausted contention matches `mutation.ErrConcurrentMutation`; unavailable,
+Exhausted contention matches `mutations.ErrConcurrentMutation`; unavailable,
 deadline and unknown commit failures return without replay. A caller repeating a
 command after a lost reply must account for intervening state changes.
 
 The store rejects ambient connector transactions, including read snapshots,
 with `ErrAmbientTransactionUnsupported` (`sdk.ErrInvalidInput`). Atomic mutation
-calls also match `mutation.ErrGuardedInsideTransaction`. Firestore cannot observe
+calls also match `mutations.ErrGuardedInsideTransaction`. Firestore cannot observe
 its pending writes or issue reads after writes, so these repositories cannot
 provide the SQL adapters' ambient join contract. The connector still supports
 transactions over a host's own documents. Hosts requiring one transaction across
@@ -72,7 +76,7 @@ Recording is off by default. When enabled, raw and trusted callers must attach
 an explicit actor pair or system source:
 
 ```go
-ctx = authorization.WithAuditSource(ctx, authorization.AuditSource{
+ctx = audit.WithSource(ctx, audit.Source{
     System: "migration",
     Reason: "import access assignments",
 })
@@ -118,6 +122,13 @@ Hermetic query-matrix checks validate the manifest's declared shapes; a real
 Firestore run is needed to prove deployed coverage. See [SCHEMA.md](SCHEMA.md)
 for exact fields, index shapes and ordering contracts.
 
+The collection IDs `iam_relationships`, `iam_relationship_subjects`, `iam_roles`
+and `iam_audit` belong to this adapter. Do not reuse them for host data, including
+subcollection IDs: Firestore field overrides apply by collection group throughout
+the database. The adapter has no collection-prefix option. A dedicated database
+avoids collisions; legacy cleanup additionally reserves the retired collection
+names documented in UPGRADE.md.
+
 ## Capacity and costs
 
 The adapter never splits a transaction to fit backend limits. Firestore's native
@@ -152,5 +163,11 @@ legacy cleanup, callback identity, and guard races against raw writers. The
 ambient join family explicitly skips; separate tests verify the refusal.
 
 Real Firestore tests require the connector's disposable live-test configuration
-and deployed indexes. They are skipped when that configuration is absent. The
-emulator does not substitute for production index or concurrency-mode coverage.
+and both deployed manifests. A probe-enabled construction runs once per live test
+package, including the audit manifest; fixture constructors explicitly skip the
+already-verified probe to avoid repeating Admin API traffic. Required release
+runs set FIRESTORE_LIVE_REQUIRED=1: missing configuration or an unexpected skipped
+test fails. The ambient transaction family is the sole named allowed skip.
+The live-stores workflow archives the expected test roots, JSON outcomes, audit
+and ready index state; cite its run and artifact before tagging. The emulator
+does not substitute for production index or concurrency-mode coverage.

@@ -1,5 +1,12 @@
 # Gopernicus framework audit
 
+Active follow-up: [firestore-release.md](firestore-release.md). The owner requested
+the three first Firestore tags. The newer authentication branch is being merged
+with the published audit contracts on `firestore-release-20260911`. All three
+independent release candidates, emulator checks, the final workspace check and
+review pass. The required real-Firestore workflow gate awaits test configuration.
+No Firestore tag has been published. This plan owns the continuation state.
+
 Latest completed follow-up: [startup-release-segovia.md](startup-release-segovia.md).
 Startup cancellation/construction errors (AUDIT-032) and SQLite result completion
 (AUDIT-033) are fixed. All 34 coordinated module tags are published from
@@ -15,8 +22,8 @@ publication or deployment was performed. The plan above owns exact evidence.
 
 Next work is a separately scoped rollout: Segovia's shared production limiter
 remains unwired and production correctly refuses to boot; verify provider posture
-and plan the breaking SQL cutover. Framework Firestore reconciliation/live gates
-remain held on their preserved newer remote branch. CMS behavior remains deferred.
+and plan the breaking SQL cutover. Firestore release work is tracked separately
+above; its source branches remain preserved. CMS behavior remains deferred.
 Do not repeat the completed audit or constructor phases.
 
 Previous completed follow-up: [pocket-constructor-options.md](pocket-constructor-options.md),

@@ -40,6 +40,8 @@ github.com/googleapis/enterprise-certificate-proxy v0.3.17 h1:73NfMHdiqo9JFU9+7a
 github.com/googleapis/enterprise-certificate-proxy v0.3.17/go.mod h1:rSEsBUemEBZEexP2y6jPp16LUmUbjmSbcPMQizR0o4k=
 github.com/googleapis/gax-go/v2 v2.23.0 h1:Tchl7qkvE7Ip3y+ztvNufYFvkfqTe7NfLTYGIdJRLuE=
 github.com/googleapis/gax-go/v2 v2.23.0/go.mod h1:rBQKOVJCdb8IFEzg+FCwlt1LP/xMDGuqUXhUG+XMXEg=
+github.com/gopernicus/gopernicus/integrations/datastores/firestore v0.1.0 h1:LRHGuuBdQ1fVg4JbpMkXN8JF0VEJGBHN5iWMu1pdRK4=
+github.com/gopernicus/gopernicus/integrations/datastores/firestore v0.1.0/go.mod h1:tejAOkzU957PAxz35VfH+xwOFnDz/Fu6+F/ilhguoxY=
 github.com/gopernicus/gopernicus/pockets v0.1.0 h1:2WcybbfPw1km00DmG37CekPbxYmObyyj3T1Ec0eFSRY=
 github.com/gopernicus/gopernicus/pockets v0.1.0/go.mod h1:A2H/Tl9Pn2v2mFLOgkCQngMRFkMN10E1MEzGCQICsEw=
 github.com/gopernicus/gopernicus/pockets/authorization v0.13.0 h1:Up4wvL9x+R2IWA19kM8nNKn9Ku4KGo11IPvFtDXeGkc=

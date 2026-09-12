@@ -4,12 +4,9 @@
 // It runs the SAME shared suite as the emulator entrypoint, against a REAL
 // Firestore database, and it is the only leg that is release evidence:
 //
-//   - the emulator enforces NO composite index and keeps no index registry, so
-//     an emulator green says nothing about whether the shipped
-//     firestore.indexes.json actually covers this store's query matrix. Here the
-//     repositories are constructed WITHOUT WithoutIndexProbe, so every one of the
-//     ~130 fixtures re-runs the boot probe against the deployed manifest and a
-//     gap fails the suite at construction, naming the missing index (ruling R5);
+//   - the emulator enforces NO composite index and has no index registry. A
+//     probe-enabled construction checks both deployed manifests once per package;
+//     per-fixture constructors explicitly skip that already-completed check;
 //   - the emulator holds transaction locks for up to thirty seconds and "does
 //     not implement all transaction behavior", so its contention results are
 //     timing, not serializability.
@@ -34,6 +31,7 @@ package firestore
 
 import (
 	"context"
+	"sync"
 	"testing"
 
 	firestoredb "github.com/gopernicus/gopernicus/integrations/datastores/firestore"
@@ -59,27 +57,34 @@ var liveAllCollections = []string{
 	collectionAudit,
 }
 
-// newLiveRepos returns the per-fixture factory over ONE live client: each call
-// clears this store's collections and constructs the repository set afresh,
-// which is the "FRESH, empty Repositories per call" storetest requires. The
-// client is opened once, at the root, rather than per fixture — the suite calls
-// this factory well over a hundred times and a client per call would be a
-// hundred gRPC connections to prove nothing extra.
-//
-// The probe is deliberately NOT skipped: R5's claim is that the shipped manifest
-// covers this store's queries on a real database, and the only proof of that is
-// the probe passing against the deployed indexes. It costs one Admin API
-// ListIndexes per fixture; if a live run ever shows Admin quota pressure, hoist
-// the probe to a single root-level construction and say so HERE — do not quietly
-// pass WithoutIndexProbe, which would delete the proof.
+// The live target is fixed for this test process. Probe both manifests once;
+// fixture resets clear data only, leaving deployed indexes unchanged.
+var (
+	liveProbeOnce sync.Once
+	liveProbeErr  error
+)
+
+func probeLiveOnce(t *testing.T, db *firestoredb.DB) {
+	t.Helper()
+	liveProbeOnce.Do(func() {
+		_, liveProbeErr = Repositories(t.Context(), db, WithAudit())
+	})
+	if liveProbeErr != nil {
+		t.Fatalf("Repositories against %s with baseline and audit index probes enabled: %v", db.Target(), liveProbeErr)
+	}
+}
+
+// Each fixture owns an empty repository set and its supplied guardian policy.
+// Index verification is explicit above, rather than repeated after every reset.
 func newLiveRepos(t *testing.T, db *firestoredb.DB) func(*testing.T, mutations.GuardianPolicy) authorization.Repositories {
 	t.Helper()
+	probeLiveOnce(t, db)
 	return func(t *testing.T, policy mutations.GuardianPolicy) authorization.Repositories {
 		t.Helper()
 		firestoretest.ResetLive(t, db, liveAllCollections...)
-		repos, err := Repositories(t.Context(), db, WithGuardianPolicy(policy))
+		repos, err := Repositories(t.Context(), db, WithoutIndexProbe(), WithGuardianPolicy(policy))
 		if err != nil {
-			t.Fatalf("Repositories against %s (the index probe runs here — a missing composite fails construction, naming it): %v", db.Target(), err)
+			t.Fatalf("Repositories against %s: %v", db.Target(), err)
 		}
 		return repos
 	}
@@ -132,9 +137,10 @@ func TestAmbientTransactionRefusedLive(t *testing.T) {
 // test. Without live configuration OpenLive reports the verification gap.
 func TestAuditConformanceLive(t *testing.T) {
 	db := firestoretest.OpenLive(t)
+	probeLiveOnce(t, db)
 	storetest.RunAudit(t, func(t *testing.T, enabled bool) authorization.Repositories {
 		firestoretest.ResetLive(t, db, liveAllCollections...)
-		opts := []Option{}
+		opts := []Option{WithoutIndexProbe()}
 		if enabled {
 			opts = append(opts, WithAudit())
 		}

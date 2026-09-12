@@ -3,7 +3,6 @@ package firestore
 import (
 	"context"
 	"embed"
-	"errors"
 	"fmt"
 
 	firestoredb "github.com/gopernicus/gopernicus/integrations/datastores/firestore"
@@ -16,11 +15,15 @@ import (
 // with [ExportIndexes] and deploys it; the constructor probes the live database
 // for it at wiring time.
 //
-// PROVISIONAL at task N1. The shipped fragment covers the query shapes SCHEMA.md
-// §7 already pins, but the manifest's specification is the COMPLETE supported
-// query matrix, which task N5 derives (and proves live). Until N5 lands, treat a
-// green emulator run as no evidence at all about index coverage: the emulator
-// enforces no composite index.
+// The fragment is DERIVED from the complete supported query matrix (ruling R5),
+// not from the queries the tests happen to issue: queryMatrix in indexes_test.go
+// is the specification, and the derivation is checked both ways — a query with
+// no index and an index no query needs both fail the build. SCHEMA.md §8 states
+// the entry set, the derivation rules, and the 32-of-200 composite budget.
+//
+// A green EMULATOR run is still no evidence about index coverage — the emulator
+// enforces no composite index and keeps no index registry. Only the live leg
+// (indexes_live_test.go) proves the set, and as of N5 it has not run.
 //
 //go:embed firestore.indexes.json
 var IndexesFS embed.FS
@@ -39,12 +42,6 @@ const IndexesFile = "firestore.indexes.json"
 // fails instead. It wraps [sdk.ErrInvalidInput]: the wiring is wrong, and no
 // retry fixes it.
 var ErrAmbientTransactionUnsupported = fmt.Errorf("authentication firestore store: this store does not join an ambient firestore transaction — call it outside Transact (firestore-stores ruling R1): %w", sdk.ErrInvalidInput)
-
-// errNotImplemented is the N1 skeleton's answer from a port method whose body
-// lands in N2–N4. It deliberately wraps NO sdk sentinel: an unclassified error
-// surfaces as a 500 and fails every conformance case that expects a domain
-// outcome, so a half-built store can never be mistaken for a passing one.
-var errNotImplemented = errors.New("authentication firestore store: port method not implemented yet (firestore-stores task N1 skeleton — N2–N4 fill the bodies)")
 
 // Option configures the store set at construction.
 type Option func(*config)
@@ -70,15 +67,19 @@ func WithoutIndexProbe() Option {
 
 // Repositories returns the authentication repository set backed by db — ALL
 // EIGHTEEN slots wired — after probing the embedded index manifest against the
-// live database. The probe is this store's analogue of the SQL siblings' table
-// probe: a missing or still-building composite index fails at WIRING TIME,
-// naming the index and the console page, instead of failing the first production
-// query. Pass [WithoutIndexProbe] on the emulator (which keeps no index
-// registry, so the probe refuses) or where the credential cannot list indexes.
+// live database — every composite index AND every single-field override it
+// declares (SCHEMA.md §8.4). The probe is this store's analogue of the SQL
+// siblings' table probe: a missing or still-building composite index fails at
+// WIRING TIME, naming the index and the console page, instead of failing the
+// first production query. The caller's context and the connector's ProbeTimeout
+// bound startup probing. Pass
+// [WithoutIndexProbe] on the emulator (which keeps no index registry, so the
+// probe refuses with ErrProbeUnavailableOnEmulator rather than a silent skip) or
+// where the credential cannot list indexes.
 //
 // UserAdmin, ActiveSessions, and Passwordless are returned UNCONDITIONALLY,
 // mirroring turso (N-D4): a store adapter that can serve a capability always
-// offers it, and the host's Config decides whether anything mounts. It does NOT
+// offers it, and the host's policies decide whether anything mounts. It does NOT
 // deploy anything: the host owns its manifest and its deployment (see
 // [ExportIndexes]), exactly as the host owns migrations for the SQL stores.
 // ctx controls startup probing only; each probe is also bounded by
