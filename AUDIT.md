@@ -59,8 +59,10 @@ All 34 published archives match the verified source hashes and build with
 | `workshop/gopernicus` | `v0.3.0` |
 
 The three Firestore modules are excluded from that coordinated release. Their
-first tags are being prepared separately in [firestore-release.md](plans/firestore-release.md),
-including reconciliation with newer remote work and required live verification. CMS versions provide framework
+first tags are being prepared separately as emulator-verified `v0.1.0-beta.1`
+prereleases in [firestore-release.md](plans/firestore-release.md). Reconciliation
+is complete; the real GCP suite remains untested and required for unsuffixed
+`v0.1.0`. CMS versions provide framework
 compatibility; its behavioral audit remains deferred. Examples are not tagged.
 
 For SQL hosts, review the authentication `0018`, authorization `0006`/`0007`,

@@ -1,7 +1,104 @@
 # Firestore reconciliation and first releases
 
-Status: LOCAL PREPARATION COMPLETE; REQUIRED LIVE GATE PENDING — 2026-09-11. Owner explicitly requested releasing Firestore
+Status: v0.1.0-beta.1 VERIFIED, PUBLICATION PENDING; REAL GCP SUITE UNTESTED — 2026-09-13. Owner explicitly requested releasing Firestore
 following the coordinated framework release and Segovia adoption.
+
+## Emulator release preparation — 2026-09-13
+
+The owner asked to use emulator verification and publish either a prerelease or
+a release explicitly documenting that the real GCP suite has not run. The
+target is `v0.1.0-beta.1` for all three modules, the recommended default stated
+while awaiting an optional version preference. This supersedes waiting for GCP
+configuration as the only useful next step. RELEASING.md now permits this beta
+after emulator verification; unsuffixed `v0.1.0` retains the real GCP gate.
+Live tests must continue to report their actual status.
+
+1. Recreate an isolated emulator using the workflow's pinned image. Run all three
+   modules' build/test/vet, integration race suites and live compile/vet checks.
+   Audit failures and skips; only authorization's documented ambient family may
+   skip. Keep the real GCP suite explicitly unrun.
+2. Prepare the selected module versions and connector pins, update release notes
+   and module READMEs with emulator coverage and unverified GCP indexes, Admin API
+   probing, contention/isolation and backend limits. Preserve runtime safeguards.
+3. Rebuild independent candidate archives without module replacements, record
+   fresh hashes/evidence in tracked release records, and review the final diff.
+4. Publish the three selected tags in dependency order, verify public module
+   resolution/checksums, remove the workspace bootstrap after connector
+   availability, and stop the owned emulator. Preserve remote `main` and consumers.
+
+### Beta verification complete
+
+- Durable evidence: [firestore-release-verification.json](firestore-release-verification.json).
+  All three module build/test/vet and live compile/vet checks passed. Emulator
+  race suites passed: connector 331, authorization 361, authentication 422 test
+  outcomes; no failures, only authorization's documented `TestRunTransactional`
+  skip. Runtime/test sources and index manifests are unchanged since these runs;
+  subsequent module edits affect only README/SCHEMA documentation and beta pins/sums.
+- The full 42-module `make check` passed in the actual checkout in 132.5 seconds,
+  including generation consistency, tagged vet and repository guards; no source
+  files changed. The 25 workflow helper tests passed after the comment updates.
+- All three independent beta candidates passed `GOWORK=off` download/source
+  comparison, build/test/vet and live compile/vet without replacements. All 176
+  archive entries match checkout plus inherited licenses. Firestore downloads
+  are fresh; public third-party dependencies use cached downloads. Only the
+  unpublished Firestore paths have candidate checksum exemptions. Final sums and
+  source inventory hashes are in the release manifest; old v0.1.0 sums do not apply.
+- Named platform-sre review found no policy or candidate-tool blocker. Beta
+  READMEs and tag annotations disclose the unrun GCP suite; unsuffixed v0.1.0
+  retains its required live gate. Workflow changes are comments only.
+- Owned emulator `43b3397c4d9c29817f5ceaef9eee1b6c7585f12d51a4abd8e9d6a89ebbe5c523`
+  (`gopernicus-firestore-release-20260913`, pinned image, loopback port 49913)
+  was stopped after the tests. Existing user containers were not reset or stopped.
+- All logs/scripts are under `/tmp/firestore-release-20260913`; durable command
+  outcomes, source/hash summaries and raw-log hashes are in the tracked evidence.
+  The separate core/SQL credential-replacement follow-up remains outstanding.
+
+## Session recovery — 2026-09-13
+
+- The checkout was clean on `firestore-release-20260911` at
+  `11558785a8dcd8686bc5caa7a9d2144bee174809`, matching the remote branch. The merge
+  is complete, with parents `c98f5618` and `1c0f06d9`; earlier merge-in-progress
+  and commit/push instructions below are historical.
+- Read-only `git ls-remote origin` verification confirms all 34 tags in
+  `audit-release-manifest.json` point to
+  `c3f8b4ad453021ba1e40c91572d8e4618c2d8382`. The broad framework refactor is
+  published; do not repeat or move those tags. No Firestore tag exists remotely.
+- Independent named platform-sre review compared tracked source ownership using
+  the nearest `go.mod`, excluding nested modules. No file owned by any of the
+  34 published modules differs between the release commit and `11558785`.
+  All 76 subsequent changed paths are held Firestore sources or repository-level
+  CI/docs/plans/workspace files; no additional non-Firestore module release is
+  needed for the current checkout.
+- Remote `main` remains at `d97dfddd116c2d06c6960880333bf92aaa04714e`.
+  Module publication and default-branch integration are separate: the older
+  Firestore PRs #47, #48 and #49 remain open, and neither release branch has a
+  PR into `main`. The prior release plan preserved `main` because updates can
+  deploy documentation. Preserve that boundary until integration is agreed.
+- `gh run list --workflow live-stores.yml` shows no run for this release branch.
+  `gh secret list --json name` and `gh variable list --json name` both return
+  empty lists. The dedicated GCP test project/region and test credential location
+  were requested again. Do not dispatch the required gate with missing config.
+- Segovia remains on local `chore/gopernicus-audit-upgrade` at `9db497fd`, with
+  its two owner plans untracked. Its recorded adoption is intact; no consumer
+  files were changed during this recovery.
+- The previous `/tmp` candidate directory, publication helper, Go cache, test
+  logs, independent review and credential-ownership follow-up file no longer
+  exist. Tracked manifests and plans retain hashes and historical results;
+  this recovery did not rerun builds, tests, public downloads or live checks.
+  Recreate candidate verification and required evidence before first-tag
+  publication. Reconstruct the separate core/SQL credential-replacement finding
+  from source before its next authentication patch; its original temporary
+  report cannot be relied on as an available artifact.
+- Recovery edits are limited to this plan, `framework-audit.md`, and the stale
+  publication status in `audit-release-manifest.json`. No module code or pins
+  changed. Verification: remote refs against every manifest tag, GitHub PR/run/
+  configuration inventories, branch/consumer status, JSON parsing and
+  `git diff --check`.
+- Resume with the required live workflow once test configuration is available,
+  archive the tested commit/run/artifact, then publish the three manifest tags
+  in dependency order and verify public checksums. Remove the root `go.work`
+  bootstrap only after the connector is publicly available. Main-branch
+  integration remains outstanding, separately from the already published audit.
 
 ## Preconditions and scope
 

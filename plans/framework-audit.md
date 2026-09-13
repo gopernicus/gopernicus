@@ -1,11 +1,22 @@
 # Gopernicus framework audit
 
 Active follow-up: [firestore-release.md](firestore-release.md). The owner requested
-the three first Firestore tags. The newer authentication branch is being merged
-with the published audit contracts on `firestore-release-20260911`. All three
+the three first Firestore tags, now preparing emulator-verified `v0.1.0-beta.1`
+prereleases following the owner's 2026-09-13 direction. The newer authentication branch has been merged
+with the published audit contracts and pushed as `11558785` on
+`firestore-release-20260911`. All three
 independent release candidates, emulator checks, the final workspace check and
-review pass. The required real-Firestore workflow gate awaits test configuration.
+review passed in the prior release preparation. Fresh beta emulator/candidate
+checks, full 42-module check and release review now pass. Publication is pending.
+The real-Firestore workflow remains untested and required for
+unsuffixed `v0.1.0`; its missing configuration does not block this beta.
 No Firestore tag has been published. This plan owns the continuation state.
+
+Recovery check, 2026-09-13: all 34 coordinated tags still resolve remotely to
+the published audit commit. Remote `main` remains at `d97dfddd`; module publication
+is complete, integration into the default branch is not. Firestore CI secrets and
+variables remain empty, with no live run for the release branch. The active
+Firestore plan records the verified state and missing temporary evidence.
 
 Latest completed follow-up: [startup-release-segovia.md](startup-release-segovia.md).
 Startup cancellation/construction errors (AUDIT-032) and SQLite result completion

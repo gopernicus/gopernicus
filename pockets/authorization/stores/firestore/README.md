@@ -1,5 +1,12 @@
 # Firestore authorization store
 
+**Prerelease `v0.1.0-beta.1`: emulator verification only.** The real GCP
+Firestore suite has not run. Composite index deployment/readiness, Admin API
+index probing, production contention/snapshot behavior and backend limits remain
+unverified against GCP. Emulator tests cannot establish those properties. See
+the [release evidence](https://github.com/gopernicus/gopernicus/blob/firestore-release-20260911/plans/firestore-release-manifest.json).
+The unsuffixed `v0.1.0` release retains the required real-GCP verification gate.
+
 This module implements the authorization pocket's relationship, role and atomic
 mutation repositories on Google Cloud Firestore Native mode. It also supplies
 an optional transactional change history and its reader. The adapter owns the
@@ -165,9 +172,9 @@ ambient join family explicitly skips; separate tests verify the refusal.
 Real Firestore tests require the connector's disposable live-test configuration
 and both deployed manifests. A probe-enabled construction runs once per live test
 package, including the audit manifest; fixture constructors explicitly skip the
-already-verified probe to avoid repeating Admin API traffic. Required release
+already-verified probe to avoid repeating Admin API traffic. Required unsuffixed release
 runs set FIRESTORE_LIVE_REQUIRED=1: missing configuration or an unexpected skipped
 test fails. The ambient transaction family is the sole named allowed skip.
 The live-stores workflow archives the expected test roots, JSON outcomes, audit
-and ready index state; cite its run and artifact before tagging. The emulator
+and ready index state; cite its run and artifact before tagging `v0.1.0`. The emulator
 does not substitute for production index or concurrency-mode coverage.

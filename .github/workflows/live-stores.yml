@@ -55,9 +55,10 @@
 # provisioned for this repo. Until they do, the firestore-live job SKIPS LOUDLY
 # ("no live Firestore configuration — live Firestore behavior NOT verified") and
 # the firestore-emulator job carries the whole Firestore signal. That emulator
-# signal is NOT release evidence: the emulator enforces no composite indexes,
+# signal is evidence for the owner-directed v0.1.0-beta.1 prereleases only:
+# the real GCP suite remains untested. The emulator enforces no composite indexes,
 # keeps no index registry (ProbeIndexes refuses against it), and cannot produce
-# commit-contention exhaustion. The firestore-stores milestone's release gate is
+# commit-contention exhaustion. The unsuffixed v0.1.0 release gate remains
 # a required live run (workflow_dispatch input firestore_live_required: true,
 # which sets FIRESTORE_LIVE_REQUIRED=1 and turns every skip into a failure).
 #
@@ -314,7 +315,7 @@ jobs:
   # in the environment.
   #
   # Live configuration remains pending as of 2026-09-11. Local helper checks
-  # and emulator runs do not prove this job against GCP. Release evidence needs
+  # and emulator runs do not prove this job against GCP. Unsuffixed releases need
   # firestore_live_required: true plus the archived run ID and evidence artifact.
   firestore-live:
     runs-on: ubuntu-latest

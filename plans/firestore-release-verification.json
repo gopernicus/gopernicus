@@ -1,0 +1,407 @@
+{
+  "version": "v0.1.0-beta.1",
+  "verified_on": "2026-09-13",
+  "source_commit_before_release": "11558785a8dcd8686bc5caa7a9d2144bee174809",
+  "go_version": "go version go1.26.1 darwin/arm64",
+  "scope": "Emulator-verified prerelease. Real GCP suite has not run.",
+  "emulator": {
+    "environment": {
+      "endpoint": "127.0.0.1:49913",
+      "project": "gopernicus-release-test",
+      "container_id": "43b3397c4d9c29817f5ceaef9eee1b6c7585f12d51a4abd8e9d6a89ebbe5c523",
+      "image": "sha256:45a15cc163d2df13137478856b4b9bb90426100fa8aec542269460c10110b727",
+      "go_version": "go version go1.26.1 darwin/arm64"
+    },
+    "owned_container_stopped": true,
+    "runtime_and_test_source_unchanged_since_run": true,
+    "non_runtime_changes_since_run": [
+      "integrations/datastores/firestore/README.md",
+      "pockets/authorization/stores/firestore/go.mod",
+      "pockets/authorization/stores/firestore/go.sum",
+      "pockets/authorization/stores/firestore/README.md",
+      "pockets/authentication/stores/firestore/go.mod",
+      "pockets/authentication/stores/firestore/SCHEMA.md",
+      "pockets/authentication/stores/firestore/go.sum",
+      "pockets/authentication/stores/firestore/README.md"
+    ],
+    "modules": [
+      {
+        "module": "integrations/datastores/firestore",
+        "command": [
+          "go",
+          "test",
+          "-race",
+          "-p",
+          "1",
+          "-tags=integration",
+          "-count=1",
+          "-timeout=45m",
+          "-json",
+          "./..."
+        ],
+        "exit_code": 0,
+        "elapsed_seconds": 58.4,
+        "pass_outcomes": 331,
+        "failures": [],
+        "skips": [],
+        "skip_audit_passed": true,
+        "passed": true
+      },
+      {
+        "module": "pockets/authorization/stores/firestore",
+        "command": [
+          "go",
+          "test",
+          "-race",
+          "-p",
+          "1",
+          "-tags=integration",
+          "-count=1",
+          "-timeout=45m",
+          "-json",
+          "./..."
+        ],
+        "exit_code": 0,
+        "elapsed_seconds": 167.8,
+        "pass_outcomes": 361,
+        "failures": [],
+        "skips": [
+          "TestRunTransactional"
+        ],
+        "skip_audit_passed": true,
+        "passed": true
+      },
+      {
+        "module": "pockets/authentication/stores/firestore",
+        "command": [
+          "go",
+          "test",
+          "-race",
+          "-p",
+          "1",
+          "-tags=integration",
+          "-count=1",
+          "-timeout=45m",
+          "-json",
+          "./..."
+        ],
+        "exit_code": 0,
+        "elapsed_seconds": 153.7,
+        "pass_outcomes": 422,
+        "failures": [],
+        "skips": [],
+        "skip_audit_passed": true,
+        "passed": true
+      }
+    ]
+  },
+  "workspace": {
+    "command": "make check",
+    "exit_code": 0,
+    "elapsed_seconds": 132.5,
+    "changed_source_paths": [],
+    "gocache": "/tmp/gopernicus-audit-s1.aMLwCQ/cache",
+    "live_gcp_run": false
+  },
+  "workflow_helpers": {
+    "command": "python3 -B -m unittest discover -s .github/scripts -p 'test_firestore_*.py'",
+    "tests": 25,
+    "exit_code": 0
+  },
+  "candidate": {
+    "passed": true,
+    "source_entries": 176,
+    "source_unchanged_after_verification": true,
+    "environment": {
+      "GOFLAGS": "-mod=readonly",
+      "GONOSUMDB": "github.com/gopernicus/gopernicus/integrations/datastores/firestore,github.com/gopernicus/gopernicus/pockets/authorization/stores/firestore,github.com/gopernicus/gopernicus/pockets/authentication/stores/firestore",
+      "GOPROXY": "file:///private/tmp/firestore-release-20260913/candidate-v2/proxy,https://proxy.golang.org",
+      "GOSUMDB": "sum.golang.org",
+      "GOTOOLCHAIN": "local",
+      "GOWORK": "off"
+    },
+    "cache_scope": "Fresh Firestore downloads; cached public third-party dependencies.",
+    "modules": [
+      {
+        "module": "github.com/gopernicus/gopernicus/integrations/datastores/firestore",
+        "version": "v0.1.0-beta.1",
+        "sum": "h1:qd3ddP9TFn9ZFem2nzLEBCezBf7B7Xym6P1frAxhX+w=",
+        "go_mod_sum": "h1:tejAOkzU957PAxz35VfH+xwOFnDz/Fu6+F/ilhguoxY=",
+        "source_entries": 46,
+        "source_inventory_sha256": "8d8fb963cebc91929aaaf0beceb1b4ecf7fa99536b29b4405bb4eacf9fef9db9",
+        "framework_versions": {
+          "github.com/gopernicus/gopernicus/integrations/datastores/firestore": null,
+          "github.com/gopernicus/gopernicus/sdk": "v0.9.0"
+        },
+        "checks": [
+          {
+            "command": [
+              "go",
+              "mod",
+              "download",
+              "-json",
+              "github.com/gopernicus/gopernicus/integrations/datastores/firestore@v0.1.0-beta.1"
+            ],
+            "exit_code": 0
+          },
+          {
+            "command": [
+              "go",
+              "list",
+              "-m",
+              "-json",
+              "all"
+            ],
+            "exit_code": 0
+          },
+          {
+            "command": [
+              "go",
+              "build",
+              "./..."
+            ],
+            "exit_code": 0
+          },
+          {
+            "command": [
+              "go",
+              "test",
+              "-count=1",
+              "./..."
+            ],
+            "exit_code": 0
+          },
+          {
+            "command": [
+              "go",
+              "vet",
+              "./..."
+            ],
+            "exit_code": 0
+          },
+          {
+            "command": [
+              "go",
+              "test",
+              "-tags=integration,live",
+              "-run",
+              "^$",
+              "./..."
+            ],
+            "exit_code": 0
+          },
+          {
+            "command": [
+              "go",
+              "vet",
+              "-tags=integration,live",
+              "./..."
+            ],
+            "exit_code": 0
+          }
+        ]
+      },
+      {
+        "module": "github.com/gopernicus/gopernicus/pockets/authorization/stores/firestore",
+        "version": "v0.1.0-beta.1",
+        "sum": "h1:6t0E896WH1Cx9FpuFo6FBWZqEY0VIpDdzerAVG1wg0w=",
+        "go_mod_sum": "h1:oqhhyKMmRG6o0d3V4LY8S2slWa0IkgTUubPXqTqYwzI=",
+        "source_entries": 58,
+        "source_inventory_sha256": "4441f01a8b613ce39b6e170701c60d8454a3e99ce73cd71d6e8f94ad4bde4c10",
+        "framework_versions": {
+          "github.com/gopernicus/gopernicus/integrations/datastores/firestore": "v0.1.0-beta.1",
+          "github.com/gopernicus/gopernicus/pockets": "v0.1.0",
+          "github.com/gopernicus/gopernicus/pockets/authorization": "v0.13.0",
+          "github.com/gopernicus/gopernicus/pockets/authorization/stores/firestore": null,
+          "github.com/gopernicus/gopernicus/sdk": "v0.9.0"
+        },
+        "checks": [
+          {
+            "command": [
+              "go",
+              "mod",
+              "download",
+              "-json",
+              "github.com/gopernicus/gopernicus/pockets/authorization/stores/firestore@v0.1.0-beta.1"
+            ],
+            "exit_code": 0
+          },
+          {
+            "command": [
+              "go",
+              "list",
+              "-m",
+              "-json",
+              "all"
+            ],
+            "exit_code": 0
+          },
+          {
+            "command": [
+              "go",
+              "build",
+              "./..."
+            ],
+            "exit_code": 0
+          },
+          {
+            "command": [
+              "go",
+              "test",
+              "-count=1",
+              "./..."
+            ],
+            "exit_code": 0
+          },
+          {
+            "command": [
+              "go",
+              "vet",
+              "./..."
+            ],
+            "exit_code": 0
+          },
+          {
+            "command": [
+              "go",
+              "test",
+              "-tags=integration,live",
+              "-run",
+              "^$",
+              "./..."
+            ],
+            "exit_code": 0
+          },
+          {
+            "command": [
+              "go",
+              "vet",
+              "-tags=integration,live",
+              "./..."
+            ],
+            "exit_code": 0
+          }
+        ]
+      },
+      {
+        "module": "github.com/gopernicus/gopernicus/pockets/authentication/stores/firestore",
+        "version": "v0.1.0-beta.1",
+        "sum": "h1:arEeZ7Nl2+lEB7WPh6v6It4PoRG5LVHmfVsXIzGkR1s=",
+        "go_mod_sum": "h1:9GoB0p5wtiC/vq9GqNgzGWc8aPbQywiiFwHVWYrkAtw=",
+        "source_entries": 72,
+        "source_inventory_sha256": "bce016c16853d3ca9cbbaec1f986d3ee51fc4b97ada76e3583cac37680a790d4",
+        "framework_versions": {
+          "github.com/gopernicus/gopernicus/integrations/datastores/firestore": "v0.1.0-beta.1",
+          "github.com/gopernicus/gopernicus/pockets": "v0.1.0",
+          "github.com/gopernicus/gopernicus/pockets/authentication": "v0.11.0",
+          "github.com/gopernicus/gopernicus/pockets/authentication/stores/firestore": null,
+          "github.com/gopernicus/gopernicus/sdk": "v0.9.0"
+        },
+        "checks": [
+          {
+            "command": [
+              "go",
+              "mod",
+              "download",
+              "-json",
+              "github.com/gopernicus/gopernicus/pockets/authentication/stores/firestore@v0.1.0-beta.1"
+            ],
+            "exit_code": 0
+          },
+          {
+            "command": [
+              "go",
+              "list",
+              "-m",
+              "-json",
+              "all"
+            ],
+            "exit_code": 0
+          },
+          {
+            "command": [
+              "go",
+              "build",
+              "./..."
+            ],
+            "exit_code": 0
+          },
+          {
+            "command": [
+              "go",
+              "test",
+              "-count=1",
+              "./..."
+            ],
+            "exit_code": 0
+          },
+          {
+            "command": [
+              "go",
+              "vet",
+              "./..."
+            ],
+            "exit_code": 0
+          },
+          {
+            "command": [
+              "go",
+              "test",
+              "-tags=integration,live",
+              "-run",
+              "^$",
+              "./..."
+            ],
+            "exit_code": 0
+          },
+          {
+            "command": [
+              "go",
+              "vet",
+              "-tags=integration,live",
+              "./..."
+            ],
+            "exit_code": 0
+          }
+        ]
+      }
+    ]
+  },
+  "independent_review": "Named platform-sre: no release-policy or candidate-tool blocker. Full workspace and final metadata gates subsequently passed.",
+  "raw_log_hashes": {
+    "make-check.log": {
+      "sha256": "09bbd8b8f8bc49c41f9faf0e0261ef2f6c57e39274f7ad0da4a76c3b651dc3e4",
+      "bytes": 16906
+    },
+    "workflow-tests-final.log": {
+      "sha256": "32e11bafb28f7f0bd95c771d9fbcb215e829438664d766d27e713d573f749eed",
+      "bytes": 124
+    },
+    "connector-emulator.jsonl": {
+      "sha256": "d0be110ec9e7469719d587996422d198d58618020cf916aebbad4aa03f4d3907",
+      "bytes": 314148
+    },
+    "authorization-emulator.jsonl": {
+      "sha256": "8d9df2459bff35a9f32e88038666a675bcc5e3e4af8a641c114d91e17d5c1e90",
+      "bytes": 362269
+    },
+    "authentication-emulator.jsonl": {
+      "sha256": "64499a71a3647a37fe66742c5ef12c0f71ddb81e014811378571651e4deb3e6e",
+      "bytes": 417494
+    }
+  },
+  "real_gcp": {
+    "run": false,
+    "workflow_run": null,
+    "artifact": null,
+    "unverified": [
+      "composite index deployment and readiness",
+      "Admin API index probing",
+      "production contention and snapshot behavior",
+      "backend transaction and size limits"
+    ]
+  },
+  "public_verification": {
+    "status": "pending publication"
+  }
+}

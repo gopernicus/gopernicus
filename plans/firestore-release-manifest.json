@@ -1,55 +1,66 @@
 {
-  "status": "local preparation complete; required real Firestore gate pending",
+  "status": "beta candidate verified; publication pending; real GCP suite untested",
   "branch": "firestore-release-20260911",
-  "version": "v0.1.0",
+  "version": "v0.1.0-beta.1",
   "base_commit": "c98f5618",
   "merged_branch_commit": "1c0f06d93b64288f20f5da16d68d81249222fade",
   "modules": [
     {
       "directory": "integrations/datastores/firestore",
       "module": "github.com/gopernicus/gopernicus/integrations/datastores/firestore",
-      "version": "v0.1.0",
-      "tag": "integrations/datastores/firestore/v0.1.0",
+      "version": "v0.1.0-beta.1",
+      "tag": "integrations/datastores/firestore/v0.1.0-beta.1",
       "label": "connector",
-      "sum": "h1:LRHGuuBdQ1fVg4JbpMkXN8JF0VEJGBHN5iWMu1pdRK4=",
+      "sum": "h1:qd3ddP9TFn9ZFem2nzLEBCezBf7B7Xym6P1frAxhX+w=",
       "go_mod_sum": "h1:tejAOkzU957PAxz35VfH+xwOFnDz/Fu6+F/ilhguoxY=",
       "source_entries": 46,
-      "candidate_verified": true
+      "candidate_verified": true,
+      "source_inventory_sha256": "8d8fb963cebc91929aaaf0beceb1b4ecf7fa99536b29b4405bb4eacf9fef9db9"
     },
     {
       "directory": "pockets/authorization/stores/firestore",
       "module": "github.com/gopernicus/gopernicus/pockets/authorization/stores/firestore",
-      "version": "v0.1.0",
-      "tag": "pockets/authorization/stores/firestore/v0.1.0",
+      "version": "v0.1.0-beta.1",
+      "tag": "pockets/authorization/stores/firestore/v0.1.0-beta.1",
       "label": "authorization",
-      "sum": "h1:RmXwLLGF+67/0OY9rrteWMPVQdXKqwaPH+rS+Da67m8=",
-      "go_mod_sum": "h1:9ITb2EOzZpfLaNv32V95pWh7FpnwB+fFrkEI6yEl6YI=",
+      "sum": "h1:6t0E896WH1Cx9FpuFo6FBWZqEY0VIpDdzerAVG1wg0w=",
+      "go_mod_sum": "h1:oqhhyKMmRG6o0d3V4LY8S2slWa0IkgTUubPXqTqYwzI=",
       "source_entries": 58,
-      "candidate_verified": true
+      "candidate_verified": true,
+      "source_inventory_sha256": "4441f01a8b613ce39b6e170701c60d8454a3e99ce73cd71d6e8f94ad4bde4c10"
     },
     {
       "directory": "pockets/authentication/stores/firestore",
       "module": "github.com/gopernicus/gopernicus/pockets/authentication/stores/firestore",
-      "version": "v0.1.0",
-      "tag": "pockets/authentication/stores/firestore/v0.1.0",
+      "version": "v0.1.0-beta.1",
+      "tag": "pockets/authentication/stores/firestore/v0.1.0-beta.1",
       "label": "authentication",
-      "sum": "h1:OFYj6rSRGYcXAMpWLZs3RLS218vGLK9pOe2rsNLbp7g=",
-      "go_mod_sum": "h1:pKsoMv8gPv/qJKC4RnzZCIfP7kC3wOonKfy8wadMJYo=",
+      "sum": "h1:arEeZ7Nl2+lEB7WPh6v6It4PoRG5LVHmfVsXIzGkR1s=",
+      "go_mod_sum": "h1:9GoB0p5wtiC/vq9GqNgzGWc8aPbQywiiFwHVWYrkAtw=",
       "source_entries": 72,
-      "candidate_verified": true
+      "candidate_verified": true,
+      "source_inventory_sha256": "bce016c16853d3ca9cbbaec1f986d3ee51fc4b97ada76e3583cac37680a790d4"
     }
   ],
   "live_workflow_run": null,
   "live_artifact": null,
-  "candidate_verification": "Fresh-cache downloads match final proxy ZIP bytes and all checkout source entries; GOWORK=off build/test/vet pass without replacements; public SDK/core checksum verification remains enabled.",
+  "candidate_verification": "All 176 source entries match checkout and inherited licenses. Fresh Firestore candidate downloads match ZIP bytes and Go checksums. GOWORK=off build/test/vet and live compile/vet pass without replacements, using cached public third-party dependencies and normal published SDK/core checksum verification.",
   "verification": {
-    "workspace_make_check": "passed (42 modules; generation check and tagged vet)",
-    "actual_repository_guards": "passed",
+    "verified_on": "2026-09-13",
+    "workspace_make_check": "passed; 42 modules, generation consistency, tagged vet and actual repository guards; no source drift",
     "workflow_regression_tests": 25,
-    "connector_emulator_race": "331 pass outcomes; zero skips/failures",
-    "authorization_emulator_race": "361 pass outcomes; one documented ambient-family skip; zero failures",
-    "authentication_emulator_race": "382 passing leaves including217 shared conformance; zero skips/failures; final32 focused leaves passed",
-    "independent_review": "no remaining adapter code blocker",
-    "cloud_live": "not run; project and credentials pending"
-  }
+    "connector_emulator_race": "331 passing test outcomes; zero failures/skips",
+    "authorization_emulator_race": "361 passing test outcomes; only TestRunTransactional skipped (unsupported ambient family); zero failures",
+    "authentication_emulator_race": "422 passing test outcomes; zero failures/skips",
+    "independent_review": "no release-policy or candidate-tool blocker",
+    "cloud_live": "not run; explicitly unverified for this beta"
+  },
+  "release_policy": "Owner-directed emulator-verified beta; real GCP gate remains required for unsuffixed v0.1.0.",
+  "unverified_gcp": [
+    "composite index deployment and readiness",
+    "Admin API index probing",
+    "production contention and snapshot behavior",
+    "backend transaction and size limits"
+  ],
+  "verification_record": "plans/firestore-release-verification.json"
 }

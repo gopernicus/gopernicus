@@ -319,7 +319,7 @@
     "candidate_source_entries": 1737,
     "ui_browser_passed": 441,
     "firestore_live": "not run; first tags held",
-    "publication": "pending",
+    "publication": "passed; all 34 remote tags reverified at the recorded commit on 2026-09-13",
     "final_workspace_check": "passed",
     "live_sql_redis": "passed; disposable fixtures cleaned"
   },

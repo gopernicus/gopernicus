@@ -1,5 +1,12 @@
 # Authentication Firestore store
 
+**Prerelease `v0.1.0-beta.1`: emulator verification only.** The real GCP
+Firestore suite has not run. Composite index deployment/readiness, Admin API
+index probing, production contention/snapshot behavior and backend limits remain
+unverified against GCP. Emulator tests cannot establish those properties. See
+the [release evidence](https://github.com/gopernicus/gopernicus/blob/firestore-release-20260911/plans/firestore-release-manifest.json).
+The unsuffixed `v0.1.0` release retains the required real-GCP verification gate.
+
 This module implements all eighteen authentication repository ports over Google
 Cloud Firestore Native mode. The connector owns client access, this adapter owns
 its documents and queries, and the host owns database lifecycle and index deployment.
@@ -145,7 +152,7 @@ FIRESTORE_EMULATOR_HOST='<owned-emulator-endpoint>' \
 The emulator factory uses a process-specific named database. It clears that
 selected database between fixtures; never point it at a shared or existing database.
 
-Real Firestore verification remains required before publication. Run the four
+Real Firestore verification remains required before unsuffixed `v0.1.0`. Run the four
 live roots with `FIRESTORE_LIVE_REQUIRED=1`, a disposable non-default database,
 configured credentials and no emulator endpoint:
 
@@ -160,4 +167,4 @@ The roots are `TestConformanceLive`, `TestAmbientTransactionRefusedLive`,
 `TestIndexProbeAcceptsTheDeployedManifestLive` and
 `TestQueryMatrixExecutesAgainstTheDeployedIndexesLive`. No live skip is allowed
 for this module. A green emulator run or compile-only live test is insufficient
-release evidence; archive the required CI run and its live evidence artifact.
+evidence for that unsuffixed release; archive the required CI run and its live evidence artifact.

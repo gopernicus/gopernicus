@@ -46,6 +46,6 @@ use (
 )
 
 // First-tag bootstrap: the store modules require this unpublished connector
-// version. Keep its dependency graph local until v0.1.0 is available publicly.
+// version. Keep its dependency graph local until v0.1.0-beta.1 is available publicly.
 // Release archives exclude go.work; module go.mod files carry no replacement.
-replace github.com/gopernicus/gopernicus/integrations/datastores/firestore v0.1.0 => ./integrations/datastores/firestore
+replace github.com/gopernicus/gopernicus/integrations/datastores/firestore v0.1.0-beta.1 => ./integrations/datastores/firestore
