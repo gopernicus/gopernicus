@@ -1,10 +1,14 @@
 # Gopernicus framework audit
 
-Active follow-up: [firestore-release.md](firestore-release.md). The owner authorized
-unsuffixed `v0.1.0` with the explicitly untested real GCP suite, and requested a
-GPS-360-Go upgrade handoff. This supersedes the earlier v0.1.0 live-gate policy
-for this release. Final pins/candidates, full workspace checks and release review
-pass; publication is pending. Runtime/test/index source matches the emulator-tested beta.
+Latest completed follow-up: [firestore-release.md](firestore-release.md). All three
+Firestore `v0.1.0` tags are published at `10e5f97b32c043f8fdd71cbd733fbb09592c42f7`,
+with the owner's explicit acceptance of the untested real GCP suite. Final
+pins/candidates, full workspace checks, release review and fresh public
+checksum/source/build/test/vet checks pass. Runtime/test/index source matches the
+emulator-tested beta; the temporary workspace bootstrap is removed. The requested
+[GPS-360-Go upgrade handoff](gps-360-go-audit-upgrade-handoff.md) covers all 34 audit
+entries, intervening releases and the consumer's actual dependencies/migrations.
+The consumer repository was inspected read-only; its upgrade is a separate task.
 
 Latest completed Firestore milestone: all three
 Firestore modules are published as emulator-verified `v0.1.0-beta.1` from

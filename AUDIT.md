@@ -58,12 +58,12 @@ All 34 published archives match the verified source hashes and build with
 | `pockets/jobs/stores/turso` | `v0.5.0` |
 | `workshop/gopernicus` | `v0.3.0` |
 
-The three Firestore modules are excluded from that coordinated release. Their
-first tags are published separately as emulator-verified `v0.1.0-beta.1`
-prereleases from `973f94322a3a99b8699df8f266c33539c0c21ed8`, with public checksums
-and independent build/test/vet verified in [firestore-release.md](plans/firestore-release.md).
-The owner subsequently authorized `v0.1.0` with the known real GCP suite still
-untested; current promotion status is in that plan and the Firestore manifest.
+The three Firestore modules are excluded from that coordinated release. They
+are published separately as emulator-verified `v0.1.0` from
+`10e5f97b32c043f8fdd71cbd733fbb09592c42f7`, with public checksums and independent
+build/test/vet verified in [firestore-release.md](plans/firestore-release.md).
+The owner accepted this release with the real GCP suite still untested. Earlier
+`v0.1.0-beta.1` tags remain unchanged; the Firestore manifest records both versions.
 CMS versions provide framework
 compatibility; its behavioral audit remains deferred. Examples are not tagged.
 
@@ -4724,8 +4724,9 @@ release evidence is in [plans/startup-release-segovia.md](plans/startup-release-
 - **Modules:** `integrations/datastores/firestore`,
   `pockets/authentication/stores/firestore`,
   `pockets/authorization/stores/firestore`; first tags target `v0.1.0`.
-- **Release:** `v0.1.0-beta.1` is published; owner-authorized `v0.1.0` preparation
-  retains the known, untested real GCP suite. The manifest records current status.
+- **Release:** `v0.1.0` published 2026-09-13 at
+  `10e5f97b32c043f8fdd71cbd733fbb09592c42f7`. Emulator/source/public-module
+  verification passed; the owner accepted the known, untested real GCP suite.
 - **Impact:** new opt-in adapters. Hosts using an unpublished Firestore branch
   must adopt the current SDK/pocket APIs and persisted-state rules below.
 

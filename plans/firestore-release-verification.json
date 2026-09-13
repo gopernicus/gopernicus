@@ -429,11 +429,94 @@
     ]
   },
   "public_verification": {
-    "status": "pending v0.1.0 publication"
+    "status": "passed",
+    "source_unchanged_after_verification": true,
+    "source_entries": 176,
+    "cache_scope": "Fresh Firestore v0.1.0 downloads; cached public third-party dependencies.",
+    "environment": {
+      "GOWORK": "off",
+      "GOFLAGS": "-mod=readonly",
+      "GOTOOLCHAIN": "local",
+      "GOPROXY": "https://proxy.golang.org",
+      "GOSUMDB": "sum.golang.org",
+      "GONOSUMDB": "",
+      "GOPRIVATE": "",
+      "GONOPROXY": ""
+    },
+    "checks_per_module": [
+      "go mod download -json <module>@v0.1.0",
+      "go list -m -json all",
+      "go build ./...",
+      "go test -count=1 ./...",
+      "go vet ./...",
+      "go test -tags=integration,live -run '^$' ./...",
+      "go vet -tags=integration,live ./..."
+    ],
+    "modules": [
+      {
+        "module": "github.com/gopernicus/gopernicus/integrations/datastores/firestore",
+        "passed": true,
+        "sum": "h1:8wqgcqKTyJjVknJysuMdPECK1HBChJdcCCQ/apLISSU=",
+        "go_mod_sum": "h1:tejAOkzU957PAxz35VfH+xwOFnDz/Fu6+F/ilhguoxY="
+      },
+      {
+        "module": "github.com/gopernicus/gopernicus/pockets/authorization/stores/firestore",
+        "passed": true,
+        "sum": "h1:EfSg8DASJBnIf3JxpKNoyjfBegFyTLGAn+fX0nncsPw=",
+        "go_mod_sum": "h1:9ITb2EOzZpfLaNv32V95pWh7FpnwB+fFrkEI6yEl6YI="
+      },
+      {
+        "module": "github.com/gopernicus/gopernicus/pockets/authentication/stores/firestore",
+        "passed": true,
+        "sum": "h1:kh0befE8grPMd024kuG83AjG5d4WNaUAOy3ovfXrxBo=",
+        "go_mod_sum": "h1:pKsoMv8gPv/qJKC4RnzZCIfP7kC3wOonKfy8wadMJYo="
+      }
+    ]
   },
   "promoted_from": {
     "version": "v0.1.0-beta.1",
     "commit": "973f94322a3a99b8699df8f266c33539c0c21ed8",
     "emulator_evidence_reused_after_source_identity_check": true
+  },
+  "publication": {
+    "commit": "10e5f97b32c043f8fdd71cbd733fbb09592c42f7",
+    "branch": "firestore-release-20260911",
+    "main_preserved": "d97dfddd116c2d06c6960880333bf92aaa04714e",
+    "version": "v0.1.0",
+    "modules": [
+      {
+        "tag": "integrations/datastores/firestore/v0.1.0",
+        "target": "10e5f97b32c043f8fdd71cbd733fbb09592c42f7",
+        "tag_object": "62525c5746468b1042f2379891b757d289730d89",
+        "public_verified": true,
+        "sum": "h1:8wqgcqKTyJjVknJysuMdPECK1HBChJdcCCQ/apLISSU=",
+        "go_mod_sum": "h1:tejAOkzU957PAxz35VfH+xwOFnDz/Fu6+F/ilhguoxY="
+      },
+      {
+        "tag": "pockets/authorization/stores/firestore/v0.1.0",
+        "target": "10e5f97b32c043f8fdd71cbd733fbb09592c42f7",
+        "tag_object": "7796688321697e95ec7873af3f1ea83d0c330a24",
+        "public_verified": true,
+        "sum": "h1:EfSg8DASJBnIf3JxpKNoyjfBegFyTLGAn+fX0nncsPw=",
+        "go_mod_sum": "h1:9ITb2EOzZpfLaNv32V95pWh7FpnwB+fFrkEI6yEl6YI="
+      },
+      {
+        "tag": "pockets/authentication/stores/firestore/v0.1.0",
+        "target": "10e5f97b32c043f8fdd71cbd733fbb09592c42f7",
+        "tag_object": "f7141b76d32e294b1889ac878175184c54973eb9",
+        "public_verified": true,
+        "sum": "h1:kh0befE8grPMd024kuG83AjG5d4WNaUAOy3ovfXrxBo=",
+        "go_mod_sum": "h1:pKsoMv8gPv/qJKC4RnzZCIfP7kC3wOonKfy8wadMJYo="
+      }
+    ],
+    "real_gcp_suite": "not run; unverified",
+    "passed": true
+  },
+  "workspace_public_resolution": {
+    "bootstrap_removed": true,
+    "command": "go list -m -json all",
+    "modules": 348,
+    "replacements": [],
+    "exit_code": 0
   }
 }

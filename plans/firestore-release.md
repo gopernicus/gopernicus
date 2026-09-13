@@ -1,7 +1,37 @@
 # Firestore reconciliation and first releases
 
-Status: v0.1.0 VERIFIED, PUBLICATION PENDING; REAL GCP SUITE UNTESTED — 2026-09-13. Owner explicitly requested releasing Firestore
+Status: v0.1.0 PUBLISHED AND PUBLICLY VERIFIED; GPS-360-GO HANDOFF READY; REAL GCP SUITE UNTESTED — 2026-09-13. Owner explicitly requested releasing Firestore
 following the coordinated framework release and Segovia adoption.
+
+## v0.1.0 completion and handoff — 2026-09-13
+
+- All three annotated v0.1.0 tags are published from
+  `10e5f97b32c043f8fdd71cbd733fbb09592c42f7` in connector, authorization,
+  authentication order. The 34 coordinated audit tags and all beta tag objects
+  and targets are preserved. Real GCP verification remains explicitly unrun,
+  under the owner's accepted first-release exception recorded below.
+- Fresh public Firestore downloads match candidate ZIP/go.mod sums and all 176
+  source entries. Independent graph/build/test/vet and live compile/vet pass
+  with GOWORK=off, public proxy, sum.golang.org, no replacements and no checksum
+  exemptions. Third-party dependencies use cached public downloads.
+- Removed the root workspace bootstrap. The canonical public workspace graph
+  resolves 348 modules with zero replacements. Final manifests and verification
+  records contain exact release/tag-object hashes and all current outcomes.
+- The ready-to-paste prompt is
+  [gps-360-go-audit-upgrade-handoff.md](gps-360-go-audit-upgrade-handoff.md).
+  Read-only consumer inventory found 14 existing Gopernicus modules plus two
+  required split dependencies; current/cached-origin pins agree, but local main
+  is 27 commits behind the cached remote. The prompt requires fresh reconciliation,
+  every audit entry and intervening release review, five missing canonical SQL
+  migrations, vendoring and real application/CLI/runtime verification.
+- The consumer is PostgreSQL-backed; upgrading existing packages does not
+  require adopting Firestore. Its files, refs and databases were not changed.
+  Preserve its host policies, applied migration checksums and newer work.
+- Remaining separate work: consumer implementation using the prompt,
+  default-branch integration, real GCP verification, and the recorded core/SQL
+  credential-replacement follow-up. Do not repeat either release or claim
+  production deployment. Temporary detailed release evidence is under
+  `/tmp/firestore-release-20260913/stable`; durable evidence is tracked here.
 
 ## Unsuffixed release and GPS-360-Go handoff — 2026-09-13
 

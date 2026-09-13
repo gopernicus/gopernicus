@@ -44,7 +44,3 @@ use (
 	./ui/goth
 	./workshop/gopernicus
 )
-
-// First v0.1.0 tag bootstrap; remove after public connector verification.
-// Module archives exclude go.work and carry no replacements.
-replace github.com/gopernicus/gopernicus/integrations/datastores/firestore v0.1.0 => ./integrations/datastores/firestore
