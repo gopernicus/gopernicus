@@ -1,9 +1,9 @@
 {
   "schema_version": 1,
-  "status": "verified_candidate_ready_to_publish",
+  "status": "published_and_public_verified",
   "date": "2026-09-13",
   "release_branch": "gps360-upstream-fixes-20260913",
-  "release_commit": null,
+  "release_commit": "5fb8d51cb2355027c6a32a9b1bb617acb42b13db",
   "base_commit": "aa75aa0776d3398c75d35a58c54aa17479f65c91",
   "preserved_remote_main": "d97dfddd116c2d06c6960880333bf92aaa04714e",
   "modules": [
@@ -16,7 +16,9 @@
       "sum": "h1:fSVdk6VjaqnSztwH29s/QoyNm3qKaVK5ONitMczt8KA=",
       "go_mod_sum": "h1:m73aQqKrcCcr/XY5CwqUY5REpUg0Pwr1r3i+YfpAPJg=",
       "source_entries": 54,
-      "source_inventory_sha256": "f9eb2b0c909ff41b4938c4b8ebfae6ad046cd2f48bf99c7756855c10279733a0"
+      "source_inventory_sha256": "f9eb2b0c909ff41b4938c4b8ebfae6ad046cd2f48bf99c7756855c10279733a0",
+      "tag_object": "d185ff5aae25c4c7b7be0fa4478bac3de86a2aaa",
+      "published": true
     },
     {
       "label": "authcore",
@@ -27,7 +29,9 @@
       "sum": "h1:QPgKOti/1vfmDr+2TCN8iHxKycLe5QUKoilm6G9dNgQ=",
       "go_mod_sum": "h1:V4s8PuUv/BPWtuLigf9aVCYEcSA+tklqVUnMnTkxvg4=",
       "source_entries": 320,
-      "source_inventory_sha256": "dd5a7037196e9f919a2a7d913ffdfb00d3cea54c3c46315c31ab7995f788ec85"
+      "source_inventory_sha256": "dd5a7037196e9f919a2a7d913ffdfb00d3cea54c3c46315c31ab7995f788ec85",
+      "tag_object": "26440571e7c87d33a4c9d75fb8054d9bed36e298",
+      "published": true
     },
     {
       "label": "authpgx",
@@ -38,7 +42,9 @@
       "sum": "h1:WXdU+0eME4Yrl2/VT4+lDvwc5QO4cz3HXeTYHC/1RoM=",
       "go_mod_sum": "h1:XF8Sfvwg1DtLMjvKJY0wtd07eFEHxNfLM+pZXVC1Yh4=",
       "source_entries": 54,
-      "source_inventory_sha256": "6e6e9ccab219856f3f19da8dac6ac2cfb2dd58c9bdd1546785641a54ab73ed1c"
+      "source_inventory_sha256": "6e6e9ccab219856f3f19da8dac6ac2cfb2dd58c9bdd1546785641a54ab73ed1c",
+      "tag_object": "e01a6d682fe89da62759b6778b9ebd8e740b6468",
+      "published": true
     },
     {
       "label": "authturso",
@@ -49,7 +55,9 @@
       "sum": "h1:6q3kzeRqH4KQBZrY62C6UEJ224eNpMoNn1OAgCCxHdo=",
       "go_mod_sum": "h1:kClXmecocRP9J6N/oHNnI9XzGSlD6MX6ZYs/cX6jcVI=",
       "source_entries": 48,
-      "source_inventory_sha256": "b78cc786da52f18c076101c1bb5907cb9674d4acfd4d8d2ff7781fad4900b185"
+      "source_inventory_sha256": "b78cc786da52f18c076101c1bb5907cb9674d4acfd4d8d2ff7781fad4900b185",
+      "tag_object": "0ef77817b1f4f7f8ebec4f6881c0eedac3bf3bd5",
+      "published": true
     },
     {
       "label": "authfirestore",
@@ -60,7 +68,9 @@
       "sum": "h1:FJkuEYwMn3E2jwd11Yy9E7CSTm8KAJ0umBGWnunrJck=",
       "go_mod_sum": "h1:KwmzbxFHDJldMsbC5R95j46fJ6cplH+tZWpsXjC6t80=",
       "source_entries": 72,
-      "source_inventory_sha256": "4dd11c2cf9f20290c00500df56648d15ec7a1794ff028e4ab3da0baa3c8392f8"
+      "source_inventory_sha256": "4dd11c2cf9f20290c00500df56648d15ec7a1794ff028e4ab3da0baa3c8392f8",
+      "tag_object": "ba557508db6b5f8dc107f0864bcda6bc6ab26a7e",
+      "published": true
     }
   ],
   "candidate": {
@@ -343,5 +353,110 @@
     ]
   },
   "original_user_handoff_sha256": "6afdee8279ab6639309341270fa7c775e5444947136784215f81743007449f7a",
-  "public_verification": null
+  "public_verification": {
+    "passed": true,
+    "artifact": "/tmp/gps360-upstream-release-20260913/public-v1/results.json",
+    "artifact_sha256": "8e48b19915598dd424d46056229022af212c336bc161b9c2e89040223e4c29f3",
+    "environment": {
+      "GOCACHE": "/tmp/gopernicus-audit-s1.aMLwCQ/cache",
+      "GOFLAGS": "-mod=readonly",
+      "GOMODCACHE": "/private/tmp/gps360-upstream-release-20260913/public-v1/modcache",
+      "GONOPROXY": "",
+      "GONOSUMDB": "",
+      "GOPRIVATE": "",
+      "GOPROXY": "https://proxy.golang.org,direct",
+      "GOSUMDB": "sum.golang.org",
+      "GOTOOLCHAIN": "local",
+      "GOWORK": "off",
+      "go_version": "go version go1.26.1 darwin/arm64",
+      "runtime_environment": "build-only allowlist; no inherited database, emulator or cloud credential settings",
+      "seeded_external_cache_files": 5032
+    },
+    "no_replacements": true,
+    "source_matches_candidate": true,
+    "verified_module_count": 5,
+    "verified_source_entries": 548,
+    "checks": [
+      "normal public module downloads and checksums",
+      "exact source/archive and origin commit identity",
+      "versioned module graph",
+      "go build ./...",
+      "go test -count=1 ./...",
+      "go vet ./...",
+      "go test -tags=integration,live -run ^$ ./...",
+      "go vet -tags=integration,live ./..."
+    ],
+    "cache_propagation_note": "Initial pgxdb/authentication exact-version and checksum lookups returned cached 404 unknown revision responses. Existing tags were never moved or recreated. Verification resumed only after normal checksum service success, using Go standard GOPROXY=https://proxy.golang.org,direct with no checksum exemptions.",
+    "public_candidate_tool_sha256": "4cc894003b3630cdeda2795ae9dc013708691b8e3b5909e81d3c7a9ea829571b"
+  },
+  "original_checkout_preserved": true,
+  "example_public_verification": {
+    "passed": true,
+    "no_replacements": true,
+    "normal_public_checksums": true,
+    "gowork": "off",
+    "source_unchanged": true,
+    "checks": [
+      {
+        "command": [
+          "go",
+          "mod",
+          "download"
+        ],
+        "cwd": "/tmp/gps360-upstream-release-20260913/example-public",
+        "exit_code": 0,
+        "elapsed_seconds": 1.73,
+        "log": "/tmp/gps360-upstream-release-20260913/example-public-download.log"
+      },
+      {
+        "command": [
+          "go",
+          "list",
+          "-m",
+          "-json",
+          "all"
+        ],
+        "cwd": "/tmp/gps360-upstream-release-20260913/example-public",
+        "exit_code": 0,
+        "elapsed_seconds": 0.01,
+        "log": "/tmp/gps360-upstream-release-20260913/example-public-graph.log"
+      },
+      {
+        "command": [
+          "go",
+          "build",
+          "./..."
+        ],
+        "cwd": "/tmp/gps360-upstream-release-20260913/example-public",
+        "exit_code": 0,
+        "elapsed_seconds": 2.55,
+        "log": "/tmp/gps360-upstream-release-20260913/example-public-build.log"
+      },
+      {
+        "command": [
+          "go",
+          "test",
+          "-race",
+          "-count=1",
+          "./internal/authmem"
+        ],
+        "cwd": "/tmp/gps360-upstream-release-20260913/example-public",
+        "exit_code": 0,
+        "elapsed_seconds": 3.71,
+        "log": "/tmp/gps360-upstream-release-20260913/example-public-authmem-race.log"
+      },
+      {
+        "command": [
+          "go",
+          "vet",
+          "./..."
+        ],
+        "cwd": "/tmp/gps360-upstream-release-20260913/example-public",
+        "exit_code": 0,
+        "elapsed_seconds": 0.82,
+        "log": "/tmp/gps360-upstream-release-20260913/example-public-vet.log"
+      }
+    ]
+  },
+  "owned_fixture_cleanup": "Removed only the task-owned PostgreSQL, libSQL and Firestore emulator containers after label/ID checks; existing application containers preserved."
 }

@@ -1,6 +1,6 @@
 # GPS-360-Go upstream fixes — September 2026
 
-Status: implemented and verified; publication in progress, 2026-09-13. Release authorization includes
+Status: RELEASED and public-module verified, 2026-09-13. Release authorization includes
 patched module tags and consumer repinning instructions. No production or live
 GCP work is needed; related Firestore validation receives fresh emulator coverage
 and carries forward the user-accepted unverified live-GCP limitation.
@@ -131,3 +131,35 @@ remains unverified. These are consumer-reported results, not upstream reruns.
 - Shared credential conformance/reference, example authmem implementation and
   example core pin. Associated go.sum files updated by candidate sums/tidy.
 - RELEASING.md and the three follow-up plan/manifest/handoff files.
+
+### Publication
+
+All five annotated module tags were published at
+`5fb8d51cb2355027c6a32a9b1bb617acb42b13db` in dependency order:
+
+| Module | Published patch |
+|---|---|
+| integrations/datastores/pgxdb | v0.7.1 |
+| pockets/authentication | v0.11.1 |
+| pockets/authentication/stores/pgx | v0.6.1 |
+| pockets/authentication/stores/turso | v0.5.1 |
+| pockets/authentication/stores/firestore | v0.1.1 |
+
+Every public module passed independent download/source/checksum verification,
+versioned graph, build/test/vet and integration/live compile/vet with GOWORK=off,
+no replacements and no checksum exemptions. All 548 source entries matched the
+verified candidates. SQL parity tests used exact verified sibling archives, with
+imports still resolved through versioned module-cache dependencies.
+
+Public proxy/checksum propagation initially returned cached 404 responses for the
+pgxdb and core tags. Verification resumed after ordinary checksum verification
+succeeded; Go's standard proxy/direct fallback was reviewed and used. No tag was
+moved, recreated or forced. The original tag objects and remote main remain
+unchanged. The release branch contains the implementation and durable handoff;
+main was not merged or pushed. The original checkout's user-edited handoff was
+verified unchanged by SHA-256; the consumer repository was not edited.
+
+The changed auth-cms example also passed normal public-module download/graph,
+build, authmem race and vet checks with GOWORK=off and no replacements. Only the
+three task-owned PostgreSQL/libSQL/Firestore emulator containers were removed,
+after ID/label checks; existing application containers were preserved.

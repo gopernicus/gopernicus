@@ -1,8 +1,10 @@
 # GPS-360-Go — adopt upstream follow-up patches
 
-Use this prompt in `/Users/jrazmi/code/gps/three-sixty/gps-360-go`. Publication
-status and exact source/checksums are recorded in the adjacent
-`gps360-upstream-release-manifest.json`; only use versions marked published.
+Use this prompt in `/Users/jrazmi/code/gps/three-sixty/gps-360-go`. All five
+patches were published on 2026-09-13 from
+`5fb8d51cb2355027c6a32a9b1bb617acb42b13db` and passed normal public module
+checksum/source verification with no local replacements. Exact evidence is in
+the adjacent `gps360-upstream-release-manifest.json`.
 
 ---
 
@@ -61,10 +63,8 @@ contact-only unverified identifiers remain eligible.
 
 No new authentication migration is required. Retain the already applied audit
 migrations. Deploy patched core and store together, stopping old vulnerable
-writers during rollout. This patch does not repair previously corrupted data;
-if actual exploitation is suspected, report it and propose a host-specific audit
-before any data repair. The reproducer established credential metadata mutation,
-not a demonstrated account takeover.
+writers during rollout. The reproducer established credential metadata mutation, not a demonstrated
+account takeover.
 
 Retain and rerun the full reproducer from the consumer report as a permanent
 regression. Assert both users' identifiers and authentication revisions are

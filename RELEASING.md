@@ -1002,12 +1002,14 @@ the module's next-tag upgrade note below and tell hosts to re-derive their CSP h
 
 ## Upgrade notes (keyed to each module's next tag)
 
-### GPS-360-Go follow-ups — credential ownership and limiter schema (2026-09-13)
+### GPS-360-Go follow-ups — credential ownership and limiter schema (published 2026-09-13)
 
-Release preparation is tracked in [plans/gps360-upstream-followups.md](plans/gps360-upstream-followups.md).
+Published from `5fb8d51cb2355027c6a32a9b1bb617acb42b13db`; all five modules passed
+normal public checksum/source and independent build/test/vet verification.
+The release is tracked in [plans/gps360-upstream-followups.md](plans/gps360-upstream-followups.md).
 The patch set is pgxdb `v0.7.1`, authentication `v0.11.1`, authentication/pgx
 `v0.6.1`, authentication/turso `v0.5.1`, and authentication/firestore `v0.1.1`.
-Published source/checksum and verification evidence belongs in
+Published source/checksum and verification evidence is in
 [the release manifest](plans/gps360-upstream-release-manifest.json).
 
 The reported HTTP identifier-removal request could promote another user's
