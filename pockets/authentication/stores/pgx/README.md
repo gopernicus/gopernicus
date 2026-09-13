@@ -5,6 +5,13 @@ The auth pocket's **PostgreSQL** store adapter — the dialect sibling of
 datastore never pulls `pgx` into its module graph. It owns the SQL and the
 canonical migration files; the host owns its database lifecycle.
 
+**`v0.6.1` credential ownership patch:** use authentication core `v0.11.1` or
+later. Credential retirement and identifier-use changes validate owned, active
+targets under the owning user's transaction lock. A nominated replacement must
+be a distinct active identifier of the same user and kind, replacing a primary.
+Invalid input rolls back without credential, revision or revocation changes.
+This patch adds no migration. Stop old vulnerable writers during deployment.
+
 It ports the v3 repository bundle (15 ports over 13 canonical tables — users,
 passwords, sessions, oauth accounts/states, service accounts, api keys, security
 events, invitations, user identifiers, challenges, contact changes, and

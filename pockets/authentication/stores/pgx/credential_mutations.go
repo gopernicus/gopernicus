@@ -2,10 +2,12 @@ package pgx
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/credential"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/identifier"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/session"
 	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/jackc/pgx/v5"
@@ -18,8 +20,9 @@ import (
 // a single transaction: it locks the users row FOR UPDATE, rejects a stale
 // revision as sdk.ErrConflict, mutates exactly the targeted typed source, and
 // increments auth_revision exactly once — so a concurrent double-apply produces
-// exactly one winner and never a partial mutation. The policy is the service's
-// job before Apply; this store only serializes.
+// exactly one winner and never a partial mutation. The credential policy is the service's
+// job before Apply; this store also validates identifier ownership and eligibility
+// within the transaction.
 type CredentialMutationStore struct {
 	db *pgxdb.DB
 	qualified
@@ -131,19 +134,38 @@ func (s *CredentialMutationStore) Apply(ctx context.Context, userID string, expe
 				return err
 			}
 		case credential.RetireIdentifier:
+			target, err := s.mutationIdentifier(ctx, tx, userID, m.IdentifierID)
+			if err != nil {
+				return err
+			}
+
+			replacement, err := s.mutationIdentifier(ctx, tx, userID, m.ReplacementPrimaryID)
+			if err != nil {
+				return err
+			}
+			if err := m.Validate(userID, target, replacement); err != nil {
+				return err
+			}
 			if _, err := tx.Exec(ctx,
-				`UPDATE `+s.table(identifiersTable)+` SET replaced_at = @now, updated_at = @now WHERE id = @id AND replaced_at IS NULL`,
-				pgx.NamedArgs{"now": now, "id": m.IdentifierID}); err != nil {
+				`UPDATE `+s.table(identifiersTable)+` SET replaced_at = @now, updated_at = @now WHERE id = @id AND user_id = @user_id AND replaced_at IS NULL`,
+				pgx.NamedArgs{"now": now, "id": m.IdentifierID, "user_id": userID}); err != nil {
 				return err
 			}
 			if m.ReplacementPrimaryID != "" {
 				if _, err := tx.Exec(ctx,
-					`UPDATE `+s.table(identifiersTable)+` SET is_primary = TRUE, updated_at = @now WHERE id = @id`,
-					pgx.NamedArgs{"now": now, "id": m.ReplacementPrimaryID}); err != nil {
+					`UPDATE `+s.table(identifiersTable)+` SET is_primary = TRUE, updated_at = @now WHERE id = @id AND user_id = @user_id AND replaced_at IS NULL`,
+					pgx.NamedArgs{"now": now, "id": m.ReplacementPrimaryID, "user_id": userID}); err != nil {
 					return err
 				}
 			}
 		case credential.ChangeIdentifierUses:
+			target, err := s.mutationIdentifier(ctx, tx, userID, m.IdentifierID)
+			if err != nil {
+				return err
+			}
+			if err := m.Validate(userID, target); err != nil {
+				return err
+			}
 			if m.MakePrimary {
 				if _, err := tx.Exec(ctx,
 					`UPDATE `+s.table(identifiersTable)+` SET is_primary = FALSE, updated_at = @now
@@ -156,21 +178,24 @@ func (s *CredentialMutationStore) Apply(ctx context.Context, userID string, expe
 			args := pgx.NamedArgs{
 				"now":           now,
 				"identifier_id": m.IdentifierID,
+				"user_id":       userID,
 				"login":         m.Uses.Login,
 				"recovery":      m.Uses.Recovery,
 				"notification":  m.Uses.Notification,
 			}
 			q := `UPDATE ` + s.table(identifiersTable) + `
 				SET login_enabled = @login, recovery_enabled = @recovery, notification_enabled = @notification, updated_at = @now
-				WHERE id = @identifier_id`
+				WHERE id = @identifier_id AND user_id = @user_id AND replaced_at IS NULL`
 			if m.MakePrimary {
 				q = `UPDATE ` + s.table(identifiersTable) + `
 					SET login_enabled = @login, recovery_enabled = @recovery, notification_enabled = @notification, is_primary = TRUE, updated_at = @now
-					WHERE id = @identifier_id`
+					WHERE id = @identifier_id AND user_id = @user_id AND replaced_at IS NULL`
 			}
 			if _, err := tx.Exec(ctx, q, args); err != nil {
 				return err
 			}
+		default:
+			return sdk.ErrInvalidInput
 		}
 
 		if _, err := tx.Exec(ctx, `UPDATE `+s.table(usersTable)+` SET auth_revision = auth_revision + 1, updated_at = @now WHERE id = @id`,
@@ -179,4 +204,22 @@ func (s *CredentialMutationStore) Apply(ctx context.Context, userID string, expe
 		}
 		return revokeCredentialState(ctx, tx, s.qualified, userID)
 	})
+}
+
+// The owning user is already locked. Filter before locking identifier rows so a
+// caller cannot acquire another user's credential locks through a foreign ID.
+func (s *CredentialMutationStore) mutationIdentifier(ctx context.Context, tx *pgxdb.Tx, userID, id string) (identifier.Identifier, error) {
+	if id == "" {
+		return identifier.Identifier{}, nil
+	}
+	row, err := pgxdb.QueryOne[identifierRow](ctx, tx,
+		`SELECT `+identifierColumns+` FROM `+s.table(identifiersTable)+` WHERE id = @id AND user_id = @user_id AND replaced_at IS NULL FOR UPDATE`,
+		pgx.NamedArgs{"id": id, "user_id": userID})
+	if errors.Is(err, sdk.ErrNotFound) {
+		return identifier.Identifier{}, nil
+	}
+	if err != nil {
+		return identifier.Identifier{}, err
+	}
+	return row.toDomain(), nil
 }

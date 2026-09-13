@@ -7,7 +7,7 @@ reproduces. Firestore has no DDL and no unique constraints, so the schema IS
 this document plus `firestore.indexes.json` (the access paths) — nothing in the
 datastore records it.
 
-Reconciled for authentication **v0.11.0** and SDK **v0.9.0** on 2026-09-11.
+Reconciled for authentication **v0.11.1** and SDK **v0.9.0** on 2026-09-13.
 The current public repository contracts, SQL migration definitions through
 `0018_invitation_acceptance.sql`, and this adapter's code are authoritative.
 The original [Firestore design](../../../../.claude/plans/firestore-stores/authentication.md)
@@ -18,7 +18,7 @@ tracks actual verification and publication status.
 
 | Thing | Value |
 |---|---|
-| Pocket core | `pockets/authentication v0.11.0` |
+| Pocket core | `pockets/authentication v0.11.1` |
 | SDK | `v0.9.0` |
 | Connector | `integrations/datastores/firestore v0.1.0`; emulator verified, real GCP suite untested |
 | SQL tables | 13; current migration definitions through 0018 |
@@ -195,10 +195,13 @@ All identifier targets and replacements must belong to the acting user. Foreign
 targets, nil/typed-nil mutations and unknown variants return `sdk.ErrInvalidInput`
 without changing either user's data; supported pointer variants are accepted.
 
-An ABSENT target is a successful no-op that still advances `auth_revision` in all
-three families: the SQL statement behind every kind affects zero rows rather than
-erroring, and this store reproduces that rather than inventing a `sdk.ErrNotFound`
-the port does not describe.
+Removing an absent password or unlinking an absent provider still advances
+`auth_revision` and revokes the required proof/session state. Identifier mutations
+instead reject missing or retired targets with `sdk.ErrInvalidInput` and no
+writes. A nominated replacement must be distinct, active, owned by the same user
+and of the same kind, replacing a primary identifier. Promotion preserves use
+and verification flags; enabling login or recovery on an unverified identifier
+returns `identifier.ErrVerificationRequired` without writes.
 
 ### `passwordreset.Repository` — 1
 

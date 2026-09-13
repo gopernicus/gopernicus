@@ -26,7 +26,7 @@ const undefinedLimiterColumn = "42703"
 // Invalid legacy/policy state preserves every stored column and consumes no quota.
 const allowSQL = `
 WITH admission AS (
-    INSERT INTO ratelimit_windows AS w
+    INSERT INTO %s AS w
         (key, window_start, request_count, prev_count, last_allowed, updated_at, expires_at, window_ms)
     VALUES (@key::text, TIMESTAMPTZ 'epoch', 0, 0, FALSE,
             TIMESTAMPTZ 'epoch', TIMESTAMPTZ 'epoch', @window_ms::bigint)
@@ -92,16 +92,16 @@ FROM admission a`
 // their RETURNING rows are unused by the final compatibility check.
 const resetSQL = `
 WITH deleted AS (
-    DELETE FROM ratelimit_windows
+    DELETE FROM %[1]s
     WHERE key = @key AND window_ms > 0 AND window_ms <= @max_window_ms
     RETURNING key
 )
 SELECT EXISTS (
-    SELECT 1 FROM ratelimit_windows
+    SELECT 1 FROM %[1]s
     WHERE key = @key AND (window_ms <= 0 OR window_ms > @max_window_ms)
 )`
 
-const limiterProbeSQL = `SELECT window_ms FROM ratelimit_windows LIMIT 0`
+const limiterProbeSQL = `SELECT window_ms FROM %s LIMIT 0`
 
 var _ ratelimiter.Limiter = (*Limiter)(nil)
 
@@ -110,6 +110,10 @@ var _ ratelimiter.Limiter = (*Limiter)(nil)
 type Limiter struct {
 	db        *DB
 	keyPrefix string
+	table     string
+	allowSQL  string
+	resetSQL  string
+	probeSQL  string
 }
 
 // LimiterOption configures construction of a Limiter. Options apply in order.
@@ -117,12 +121,20 @@ type LimiterOption func(*limiterConfig)
 
 type limiterConfig struct {
 	keyPrefix string
+	schema    Schema
 }
 
 // WithLimiterKeyPrefix selects the host namespace (default "ratelimit:"). An
 // internal "v2:" suffix is always appended, including to custom/empty prefixes.
 func WithLimiterKeyPrefix(prefix string) LimiterOption {
 	return func(cfg *limiterConfig) { cfg.keyPrefix = prefix }
+}
+
+// WithLimiterSchema qualifies all limiter statements with schema. The zero
+// Schema preserves unqualified table names. The host applies the table DDL
+// before startup; the limiter never changes the pool's search_path.
+func WithLimiterSchema(schema Schema) LimiterOption {
+	return func(cfg *limiterConfig) { cfg.schema = schema }
 }
 
 // NewLimiter wraps the caller's DB. It creates no schema and owns no lifecycle.
@@ -135,7 +147,15 @@ func NewLimiter(db *DB, opts ...LimiterOption) *Limiter {
 		}
 		opt(&cfg)
 	}
-	return &Limiter{db: db, keyPrefix: cfg.keyPrefix + limiterKeyVersion}
+	table := cfg.schema.Table(limiterTable)
+	return &Limiter{
+		db:        db,
+		keyPrefix: cfg.keyPrefix + limiterKeyVersion,
+		table:     table,
+		allowSQL:  fmt.Sprintf(allowSQL, table),
+		resetSQL:  fmt.Sprintf(resetSQL, table),
+		probeSQL:  fmt.Sprintf(limiterProbeSQL, table),
+	}
 }
 
 // Allow normalizes the policy and records a request for a nonempty key. The
@@ -162,7 +182,7 @@ func (l *Limiter) Allow(ctx context.Context, key string, limit ratelimiter.Limit
 		var allowed bool
 		var remaining, retry int64
 		var resetAt time.Time
-		err = l.db.QueryRow(ctx, allowSQL, args).Scan(&marker, &allowed, &remaining, &resetAt, &retry)
+		err = l.db.QueryRow(ctx, l.allowSQL, args).Scan(&marker, &allowed, &remaining, &resetAt, &retry)
 		if ctx.Err() != nil {
 			return ratelimiter.Result{}, ctx.Err()
 		}
@@ -197,7 +217,7 @@ func (l *Limiter) Reset(ctx context.Context, key string) error {
 		return fmt.Errorf("pgxdb: rate limit key is empty: %w", sdk.ErrInvalidInput)
 	}
 	var incompatible bool
-	err := l.db.QueryRow(ctx, resetSQL, jackpgx.NamedArgs{"key": l.keyPrefix + key, "max_window_ms": ratelimiter.MaxWindow.Milliseconds()}).Scan(&incompatible)
+	err := l.db.QueryRow(ctx, l.resetSQL, jackpgx.NamedArgs{"key": l.keyPrefix + key, "max_window_ms": ratelimiter.MaxWindow.Milliseconds()}).Scan(&incompatible)
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
@@ -224,14 +244,14 @@ func (l *Limiter) StatusCheck(ctx context.Context) error {
 		ctx, cancel = context.WithTimeout(ctx, time.Second)
 		defer cancel()
 	}
-	_, err := l.db.Exec(ctx, limiterProbeSQL)
+	_, err := l.db.Exec(ctx, l.probeSQL)
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && (pgErr.Code == undefinedTable || pgErr.Code == undefinedLimiterColumn) {
-			return fmt.Errorf("pgxdb: rate limit table %q or window_ms column is missing; apply the reference migration: %w", limiterTable, sdk.ErrNotFound)
+			return fmt.Errorf("pgxdb: rate limit table %q or window_ms column is missing; apply the reference migration: %w", l.table, sdk.ErrNotFound)
 		}
 		return fmt.Errorf("pgxdb: checking rate limit table: %w", MapError(err))
 	}

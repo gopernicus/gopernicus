@@ -48,7 +48,7 @@ host-controlled streams; export copies only direct SQL files.
 | `MigrateOption` / `WithSchema(s)` | the only `RunMigrations` option: run this stream inside `s` — create the schema if absent, `SET LOCAL search_path` for the transaction, and keep the stream's `schema_migrations` ledger in `s`. No option = today's unqualified stream, byte-for-byte |
 | `Schema` / `NewSchema(name) (Schema, error)` | validated Postgres schema name; the zero value means "no schema" and renders bare names. Rejection wraps `ErrInvalidInput` (empty, >63 bytes, non-identifier, reserved `pg_` prefix, `information_schema`); `public` is valid |
 | `(Schema).Table(t)` / `IsZero()` / `String()` | `"<schema>".t` for a set schema, bare `t` for the zero value; the one qualifier used by the runner's ledger statements and by every pgx store's `WithSchema` |
-| `NewLimiter(db, opts…) *Limiter` / `WithLimiterKeyPrefix` | a durable `sdk/capabilities/ratelimiter.Limiter` over the caller-owned `*DB` — atomic admission against the host-owned `ratelimit_windows` table (see below) |
+| `NewLimiter(db, opts…) *Limiter` / `WithLimiterKeyPrefix` / `WithLimiterSchema` | a durable `sdk/capabilities/ratelimiter.Limiter` over the caller-owned `*DB` — atomic admission against the host-owned `ratelimit_windows` table, optionally qualified with a validated `Schema` (see below) |
 | `(*Limiter).StatusCheck(ctx) error` | boot probe for the host-owned table and required window_ms column; call it before serving |
 | `Collect[T](ctx, q, sql, args…) ([]T, error)` | parent-bounded, unpaginated read: every row scanned into a db-tagged `T` via strict `RowToStructByName`, both the query and the collect error through `MapError`, and no rows as an empty NON-NIL `[]T` so the caller marshals `[]` and never `null`. Not a paging primitive — an unbounded result set belongs on `List` |
 | `List[T]` / `ListQuery[T]` | the shared paginated-SELECT helper implementing the `sdk/pkg/list` list standards (see below) |
@@ -214,10 +214,10 @@ or qualify every DDL statement yourself. A pool-wide `search_path` pin in the
 DSN is the thing this option replaces: it is global, hidden, and it relocates
 the host's own unqualified statements too.
 
-**Do NOT include the limiter DDL in a schema-scoped stream.** The
-`ratelimit_windows` reference DDL below is host-schema SQL and the limiter's own
-statements are unqualified; merging it into a schema-scoped stream relocates the
-table away from the limiter, which then fails at `(*Limiter).StatusCheck`.
+The limiter DDL can share a schema-scoped host stream when the limiter is
+constructed with `WithLimiterSchema(s)` for that same schema. Without that option,
+its statements stay unqualified. See the [qualified limiter DDL](#schema-selection-on-a-shared-pool)
+below; changing a migration stream alone does not configure the limiter.
 
 ### Required grants
 
@@ -437,6 +437,67 @@ That guard cannot identify an old writer that updates a new row while preserving
 its positive `window_ms`. The connector never migrates or deletes legacy state
 automatically; any intentional quota reset or legacy cleanup is host-owned.
 
+### Schema selection on a shared pool
+
+`WithLimiterSchema(s)` qualifies admission, reset and startup probes with the
+validated schema, without changing `search_path` or opening another pool. Two
+limiters on the same `*DB` can use different schemas and the same key prefix;
+their windows remain independent. A missing selected schema, table or
+`window_ms` column fails the startup probe with `sdk.ErrNotFound`, even when a
+compatible table exists in `public` or another schema. The zero `Schema` keeps
+the default unqualified behavior. Repeated options use the last schema.
+
+For example, a host choosing `auth` applies this DDL in its own migration ledger
+before application startup:
+
+```sql
+CREATE SCHEMA IF NOT EXISTS "auth";
+CREATE TABLE "auth".ratelimit_windows (
+    key           TEXT        PRIMARY KEY,
+    window_start  TIMESTAMPTZ NOT NULL,
+    request_count BIGINT      NOT NULL,
+    prev_count    BIGINT      NOT NULL,
+    last_allowed  BOOLEAN     NOT NULL,
+    updated_at    TIMESTAMPTZ NOT NULL,
+    expires_at    TIMESTAMPTZ NOT NULL,
+    window_ms     BIGINT      NOT NULL DEFAULT 0
+);
+CREATE INDEX ratelimit_windows_expires_at_idx
+    ON "auth".ratelimit_windows (expires_at);
+```
+
+Postgres puts this index in the table's schema. The application's database role
+needs `USAGE` on the schema and `SELECT`, `INSERT`, `UPDATE`, `DELETE` on the
+table. The migration role creates the schema/table/index; runtime constructors
+do not apply DDL. After the migration, compose the limiter on the existing pool:
+
+```go
+schema, err := pgxdb.NewSchema("auth")
+if err != nil {
+    return err
+}
+limiter := pgxdb.NewLimiter(db, pgxdb.WithLimiterSchema(schema))
+if err := limiter.StatusCheck(ctx); err != nil {
+    return fmt.Errorf("rate limiter is not usable: %w", err)
+}
+// Supply limiter to the host's middleware and authentication configuration.
+```
+
+If the selected table already exists without `window_ms`, apply
+`ALTER TABLE "auth".ratelimit_windows ADD COLUMN window_ms BIGINT NOT NULL DEFAULT 0;`
+instead of recreating it. The `v2:` namespace and legacy-state rules above apply
+equally to qualified tables. An already compatible table needs no DDL change.
+Qualify the host's pruning statement too:
+`DELETE FROM "auth".ratelimit_windows WHERE expires_at < now();`.
+
+Selecting a new schema does not move or copy existing unqualified windows. A new
+table starts empty budgets; coordinate that reset across application instances.
+If preserving live quota, migrate the existing table/state under a host-owned
+cutover while writers are stopped, and switch every instance to the same schema.
+Keep the previous table/state until the host's rollback and retention policy
+permits removal. Rolling back the option selects the old unqualified table again;
+it does not transfer budgets accumulated in the selected schema.
+
 **`UNLOGGED` is a real option.** `CREATE UNLOGGED TABLE ratelimit_windows`
 roughly halves the WAL this table generates and keeps its contents out of base
 backups. The cost: an unlogged table is **truncated** on crash recovery, and it
@@ -601,7 +662,9 @@ its own session zone while scans stay UTC), and the limiter legs (the shared
 also bounds the returned `RetryAfter`/`Remaining`, the only place a stale
 server clock is reachable — server time, burst, prefix isolation, context
 cancellation, pool-survives-`Close`, `Allow`/`Reset` error-kind parity,
-`StatusCheck` against a present and a missing table, and the pruning statement —
+`StatusCheck` against a present and a missing table, shared-pool schema isolation
+for admission/reset/probes with no fallback for missing schemas/tables/columns,
+and the pruning statement —
 the limiter legs create the reference table themselves, playing the host that
 migrated it). Unset, they skip loudly
 (`POSTGRES_TEST_DSN not set — postgres conformance NOT verified`, plus a
@@ -659,7 +722,7 @@ retry callbacks; portable consumers must allow for connectors that do.
 Cancellation racing a commit cannot undo a commit already accepted by a server.
 
 Limiter options configure private construction settings in order; the last prefix
-wins and the internal `v2:` suffix is appended afterward, including to an empty
-prefix. They cannot change a live limiter. `NewLimiter` panics on a nil option.
+and schema win, and the internal `v2:` suffix is appended afterward, including to
+an empty prefix. They cannot change a live limiter. `NewLimiter` panics on a nil option.
 `RunMigrations` rejects a nil `MigrateOption` with `sdk.ErrInvalidInput` before
 accessing the database; repeated `WithSchema` uses the last schema.

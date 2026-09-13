@@ -17,7 +17,9 @@ type MutationRepository interface {
 	// on success, and revoking sessions, grants and password-reset challenges.
 	// A stale expectedAuthRevision returns sdk.ErrConflict; a caller acting on
 	// authentication proof must obtain fresh proof rather than rebasing it.
-	// An unknown user returns sdk.ErrNotFound.
+	// An unknown user returns sdk.ErrNotFound. Identifier mutations must validate
+	// active ownership and replacement eligibility within the same transaction
+	// (see RetireIdentifier.Validate and ChangeIdentifierUses.Validate).
 	// A conflict or any failure leaves the user's credential state unchanged — the
 	// mutation is never partially applied.
 	Apply(ctx context.Context, userID string, expectedAuthRevision int64, mutation Mutation) error

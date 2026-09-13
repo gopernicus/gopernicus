@@ -1,17 +1,20 @@
 # Authentication Firestore store
 
-**Release `v0.1.0`: emulator verification only.** The real GCP
+**Release `v0.1.1`: emulator verification only.** The real GCP
 Firestore suite has not run. Composite index deployment/readiness, Admin API
 index probing, production contention/snapshot behavior and backend limits remain
 unverified against GCP. Emulator tests cannot establish those properties. See
-the [release evidence](https://github.com/gopernicus/gopernicus/blob/firestore-release-20260911/plans/firestore-release-manifest.json).
-The owner accepted this known verification gap for `v0.1.0`; publication does
-not establish real GCP coverage. The live suite remains an open follow-up.
+the [patch release evidence](https://github.com/gopernicus/gopernicus/blob/gps360-upstream-fixes-20260913/plans/gps360-upstream-release-manifest.json).
+This patch carries forward the known verification gap accepted for `v0.1.0`;
+publication does not establish real GCP coverage. The live suite remains open.
 
 This module implements all eighteen authentication repository ports over Google
 Cloud Firestore Native mode. The connector owns client access, this adapter owns
 its documents and queries, and the host owns database lifecycle and index deployment.
-It targets authentication v0.11.0 and SDK v0.9.0.
+It targets authentication v0.11.1 and SDK v0.9.0. The `v0.1.1` patch tightens
+identifier replacement eligibility and identifier-use validation inside the
+transaction. The earlier foreign-owner protection remains in place. No document
+schema or index migration is required.
 
 ## Construction
 
@@ -71,7 +74,10 @@ The current contracts include:
   grant runs; `CompleteAcceptance` finalizes that durable claim. Matching claims
   resume after expiry, repeated completion preserves `AcceptedAt`, and an
   accepting invitation cannot be resent, cancelled or declined.
-- Credential mutations reject foreign identifier/replacement targets and
+- Credential mutations reject foreign, missing or retired identifier targets.
+  A replacement must be distinct, active, owned by the same user and of the same
+  kind, and may only replace a primary identifier. Invalid mutations change no
+  credential, revision or revocation state. The adapter also rejects
   nil or typed-nil variants. Pointer variants of supported mutations are accepted.
 
 An expired challenge, OAuth state or matching contact-change generation is deleted

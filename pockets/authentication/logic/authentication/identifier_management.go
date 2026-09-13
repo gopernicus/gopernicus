@@ -280,20 +280,29 @@ func (s *Service) RemoveIdentifier(ctx context.Context, in IdentifierRemoveInput
 	if err != nil {
 		return err
 	}
-	if _, err := s.RequireRecentAuthentication(ctx, in.SessionID, in.UserID, authgrant.PurposeRemoveIdentifier, in.IdentifierID, RecentAuthPolicy{}); err != nil {
+	replacementID := in.ReplacementID
+	if target.IsPrimary && replacementID == "" {
+		replacementID = s.selectReplacementPrimary(ctx, in.UserID, target)
+	}
+	var replacement identifier.Identifier
+	if replacementID != "" {
+		replacement, err = s.ownedActiveIdentifier(ctx, in.UserID, replacementID)
+		if err != nil {
+			return err
+		}
+	}
+	mutation := credential.RetireIdentifier{IdentifierID: target.ID, ReplacementPrimaryID: replacementID}
+	if err := mutation.Validate(in.UserID, target, replacement); err != nil {
 		return err
 	}
-	replacement := in.ReplacementID
-	if target.IsPrimary && replacement == "" {
-		replacement = s.selectReplacementPrimary(ctx, in.UserID, target)
+	// Reject invalid input before a recent-authentication grant can be consumed.
+	if _, err := s.RequireRecentAuthentication(ctx, in.SessionID, in.UserID, authgrant.PurposeRemoveIdentifier, in.IdentifierID, RecentAuthPolicy{}); err != nil {
+		return err
 	}
 	// Capture recipients before the removal so the remaining verified channels are
 	// notified (never the just-removed address).
 	recipients := s.verifiedContactChannels(ctx, in.UserID, target.NormalizedValue)
-	if err := s.applyCredentialMutationAtRevision(ctx, in.UserID, owner.AuthRevision, credential.RetireIdentifier{
-		IdentifierID:         in.IdentifierID,
-		ReplacementPrimaryID: replacement,
-	}); err != nil {
+	if err := s.applyCredentialMutationAtRevision(ctx, in.UserID, owner.AuthRevision, mutation); err != nil {
 		return err
 	}
 	s.recordSecurityEvent(ctx, securityEventInput{

@@ -199,7 +199,8 @@ type UnlinkOAuth struct {
 // RetireIdentifier retires the identifier IdentifierID (design §5.5). When the
 // retired identifier was primary, ReplacementPrimaryID names the identifier
 // promoted to primary in the same atomic operation; it is empty when the retired
-// identifier was not primary.
+// identifier was not primary. Validate defines ownership and eligibility checks
+// that the repository must enforce atomically.
 type RetireIdentifier struct {
 	IdentifierID         string
 	ReplacementPrimaryID string

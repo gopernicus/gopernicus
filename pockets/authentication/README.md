@@ -33,6 +33,23 @@ milestone — executed through `.claude/plans/authv3/`).
 
 ## Authentication audit adoption
 
+**Credential ownership patch (`v0.11.1`).** Upgrade this core together with the
+PostgreSQL store `v0.6.1`, Turso store `v0.5.1`, or Firestore store `v0.1.1`.
+Identifier removal now rejects foreign, missing, retired, self or wrong-kind
+replacement identifiers, and rejects a replacement for a secondary identifier.
+The core validates before consuming a step-up grant; stores repeat ownership and
+eligibility checks inside their mutation transaction. Invalid input changes no
+credential, authentication revision or revocation state. Valid same-user primary
+replacement remains supported, including contact-only unverified identifiers;
+enabling login or recovery still requires verification. Identifier-use changes
+also enforce target ownership and activity inside the store transaction.
+
+No authentication schema migration is added by these patches. Stop old vulnerable
+writers when deploying. Disabling password or delivery features does not disable
+the authenticated identifier-management routes. Custom credential stores must
+implement the updated `credential.MutationRepository` validation contract and pass the
+shared `stores/storetest` regressions.
+
 The current changes and custom-store migration are recorded in
 [AUDIT-022](../../AUDIT.md#audit-022-authentication-proof-lifecycle-and-host-api).
 Upgrade core and adapters together; apply invitation migration `0018` before the

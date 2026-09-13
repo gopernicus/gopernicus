@@ -1,0 +1,347 @@
+{
+  "schema_version": 1,
+  "status": "verified_candidate_ready_to_publish",
+  "date": "2026-09-13",
+  "release_branch": "gps360-upstream-fixes-20260913",
+  "release_commit": null,
+  "base_commit": "aa75aa0776d3398c75d35a58c54aa17479f65c91",
+  "preserved_remote_main": "d97dfddd116c2d06c6960880333bf92aaa04714e",
+  "modules": [
+    {
+      "label": "pgxdb",
+      "directory": "integrations/datastores/pgxdb",
+      "module": "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb",
+      "version": "v0.7.1",
+      "tag": "integrations/datastores/pgxdb/v0.7.1",
+      "sum": "h1:fSVdk6VjaqnSztwH29s/QoyNm3qKaVK5ONitMczt8KA=",
+      "go_mod_sum": "h1:m73aQqKrcCcr/XY5CwqUY5REpUg0Pwr1r3i+YfpAPJg=",
+      "source_entries": 54,
+      "source_inventory_sha256": "f9eb2b0c909ff41b4938c4b8ebfae6ad046cd2f48bf99c7756855c10279733a0"
+    },
+    {
+      "label": "authcore",
+      "directory": "pockets/authentication",
+      "module": "github.com/gopernicus/gopernicus/pockets/authentication",
+      "version": "v0.11.1",
+      "tag": "pockets/authentication/v0.11.1",
+      "sum": "h1:QPgKOti/1vfmDr+2TCN8iHxKycLe5QUKoilm6G9dNgQ=",
+      "go_mod_sum": "h1:V4s8PuUv/BPWtuLigf9aVCYEcSA+tklqVUnMnTkxvg4=",
+      "source_entries": 320,
+      "source_inventory_sha256": "dd5a7037196e9f919a2a7d913ffdfb00d3cea54c3c46315c31ab7995f788ec85"
+    },
+    {
+      "label": "authpgx",
+      "directory": "pockets/authentication/stores/pgx",
+      "module": "github.com/gopernicus/gopernicus/pockets/authentication/stores/pgx",
+      "version": "v0.6.1",
+      "tag": "pockets/authentication/stores/pgx/v0.6.1",
+      "sum": "h1:WXdU+0eME4Yrl2/VT4+lDvwc5QO4cz3HXeTYHC/1RoM=",
+      "go_mod_sum": "h1:XF8Sfvwg1DtLMjvKJY0wtd07eFEHxNfLM+pZXVC1Yh4=",
+      "source_entries": 54,
+      "source_inventory_sha256": "6e6e9ccab219856f3f19da8dac6ac2cfb2dd58c9bdd1546785641a54ab73ed1c"
+    },
+    {
+      "label": "authturso",
+      "directory": "pockets/authentication/stores/turso",
+      "module": "github.com/gopernicus/gopernicus/pockets/authentication/stores/turso",
+      "version": "v0.5.1",
+      "tag": "pockets/authentication/stores/turso/v0.5.1",
+      "sum": "h1:6q3kzeRqH4KQBZrY62C6UEJ224eNpMoNn1OAgCCxHdo=",
+      "go_mod_sum": "h1:kClXmecocRP9J6N/oHNnI9XzGSlD6MX6ZYs/cX6jcVI=",
+      "source_entries": 48,
+      "source_inventory_sha256": "b78cc786da52f18c076101c1bb5907cb9674d4acfd4d8d2ff7781fad4900b185"
+    },
+    {
+      "label": "authfirestore",
+      "directory": "pockets/authentication/stores/firestore",
+      "module": "github.com/gopernicus/gopernicus/pockets/authentication/stores/firestore",
+      "version": "v0.1.1",
+      "tag": "pockets/authentication/stores/firestore/v0.1.1",
+      "sum": "h1:FJkuEYwMn3E2jwd11Yy9E7CSTm8KAJ0umBGWnunrJck=",
+      "go_mod_sum": "h1:KwmzbxFHDJldMsbC5R95j46fJ6cplH+tZWpsXjC6t80=",
+      "source_entries": 72,
+      "source_inventory_sha256": "4dd11c2cf9f20290c00500df56648d15ec7a1794ff028e4ab3da0baa3c8392f8"
+    }
+  ],
+  "candidate": {
+    "passed": true,
+    "no_replacements": true,
+    "gowork": "off",
+    "public_dependencies_checksum_verified": true,
+    "candidate_exemptions": [
+      "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb",
+      "github.com/gopernicus/gopernicus/pockets/authentication",
+      "github.com/gopernicus/gopernicus/pockets/authentication/stores/firestore",
+      "github.com/gopernicus/gopernicus/pockets/authentication/stores/pgx",
+      "github.com/gopernicus/gopernicus/pockets/authentication/stores/turso"
+    ],
+    "artifact": "/tmp/gps360-upstream-release-20260913/candidate-v2/results.json",
+    "artifact_sha256": "a4304e42cf6ae4bc3ca484443d873d68111622657e37caa03941d8bafe50af70",
+    "source_unchanged": true,
+    "checks": [
+      "independent go mod tidy (zero drift)",
+      "download/archive/source/hash identity",
+      "versioned module graph",
+      "go build ./...",
+      "go test -count=1 ./...",
+      "go vet ./...",
+      "go test -tags=integration,live -run ^$ ./...",
+      "go vet -tags=integration,live ./..."
+    ],
+    "layout": "Exact verified module copies in repository layout support existing sibling SQL migration parity tests. GOWORK=off imports resolve pinned module-cache dependencies; nested modules remain excluded from parent archives."
+  },
+  "workspace": {
+    "command": [
+      "make",
+      "check"
+    ],
+    "cwd": "/tmp/gopernicus-gps360-followups-20260913",
+    "exit_code": 0,
+    "elapsed_seconds": 133.88,
+    "changed_source_paths": [],
+    "gocache": "/tmp/gopernicus-audit-s1.aMLwCQ/cache",
+    "candidate": "/private/tmp/gps360-upstream-release-20260913/candidate-v2/results.json",
+    "passed": true,
+    "live_gcp_run": false
+  },
+  "final_candidate_runtime_regressions": {
+    "passed": true,
+    "checks": [
+      {
+        "label": "authcore",
+        "command": [
+          "go",
+          "test",
+          "-race",
+          "-count=1",
+          "-json",
+          "-run",
+          "TestIdentifierRemove",
+          "./..."
+        ],
+        "cwd": "/private/tmp/gps360-upstream-release-20260913/candidate-v2/verification/pockets/authentication",
+        "exit_code": 0,
+        "test_passes": 12,
+        "skips": [],
+        "failures": [],
+        "elapsed_seconds": 8.81,
+        "log": "/tmp/gps360-upstream-release-20260913/final-regressions-authcore.jsonl",
+        "passed": true
+      },
+      {
+        "label": "authpgx",
+        "command": [
+          "go",
+          "test",
+          "-race",
+          "-count=1",
+          "-json",
+          "-run",
+          "TestConformance_Postgres/IdentifierMutations|TestIdentifierRemovalHTTP_Postgres",
+          "./..."
+        ],
+        "cwd": "/private/tmp/gps360-upstream-release-20260913/candidate-v2/verification/pockets/authentication/stores/pgx",
+        "exit_code": 0,
+        "test_passes": 22,
+        "skips": [],
+        "failures": [],
+        "elapsed_seconds": 10.46,
+        "log": "/tmp/gps360-upstream-release-20260913/final-regressions-authpgx.jsonl",
+        "passed": true
+      },
+      {
+        "label": "authturso",
+        "command": [
+          "go",
+          "test",
+          "-race",
+          "-count=1",
+          "-json",
+          "-tags=integration",
+          "-run",
+          "TestConformance_Turso/IdentifierMutations",
+          "./..."
+        ],
+        "cwd": "/private/tmp/gps360-upstream-release-20260913/candidate-v2/verification/pockets/authentication/stores/turso",
+        "exit_code": 0,
+        "test_passes": 18,
+        "skips": [],
+        "failures": [],
+        "elapsed_seconds": 13.27,
+        "log": "/tmp/gps360-upstream-release-20260913/final-regressions-authturso.jsonl",
+        "passed": true
+      },
+      {
+        "label": "authfirestore",
+        "command": [
+          "go",
+          "test",
+          "-race",
+          "-count=1",
+          "-json",
+          "-tags=integration",
+          "-run",
+          "^TestConformance$/IdentifierMutations",
+          "./..."
+        ],
+        "cwd": "/private/tmp/gps360-upstream-release-20260913/candidate-v2/verification/pockets/authentication/stores/firestore",
+        "exit_code": 0,
+        "test_passes": 18,
+        "skips": [],
+        "failures": [],
+        "elapsed_seconds": 13.74,
+        "log": "/tmp/gps360-upstream-release-20260913/final-regressions-authfirestore.jsonl",
+        "passed": true
+      },
+      {
+        "label": "pgxdb",
+        "command": [
+          "go",
+          "test",
+          "-race",
+          "-count=1",
+          "-json",
+          "-run",
+          "TestLive_LimiterSchema",
+          "./..."
+        ],
+        "cwd": "/private/tmp/gps360-upstream-release-20260913/candidate-v2/verification/integrations/datastores/pgxdb",
+        "exit_code": 0,
+        "test_passes": 6,
+        "skips": [],
+        "failures": [],
+        "elapsed_seconds": 8.49,
+        "log": "/tmp/gps360-upstream-release-20260913/final-regressions-pgxdb.jsonl",
+        "passed": true
+      },
+      {
+        "label": "authpgx-schema",
+        "command": [
+          "go",
+          "test",
+          "-race",
+          "-count=1",
+          "-json",
+          "-run",
+          "TestConformance_Postgres/IdentifierMutations|TestIdentifierRemovalHTTP_Postgres",
+          "./..."
+        ],
+        "cwd": "/private/tmp/gps360-upstream-release-20260913/candidate-v2/verification/pockets/authentication/stores/pgx",
+        "exit_code": 0,
+        "test_passes": 22,
+        "skips": [],
+        "failures": [],
+        "elapsed_seconds": 3.39,
+        "log": "/tmp/gps360-upstream-release-20260913/final-regressions-authpgx-schema.jsonl",
+        "passed": true
+      }
+    ],
+    "live_gcp_run": false,
+    "source_unchanged": true
+  },
+  "full_race_suites": [
+    {
+      "module": "pockets/authentication",
+      "command": "go test -race ./... -count=1",
+      "passed": true,
+      "log": "/tmp/gps360-credential-core-race.log"
+    },
+    {
+      "module": "pockets/authentication/stores/pgx",
+      "command": "go test -race ./... -count=1",
+      "fixture": "owned PostgreSQL 17; gopernicus_auth database",
+      "passed": true,
+      "elapsed_seconds": 18.814,
+      "log": "/tmp/gps360-credential-pgx-race.log"
+    },
+    {
+      "module": "pockets/authentication/stores/turso",
+      "command": "go test -tags=integration -race ./... -count=1",
+      "fixture": "owned local libSQL server",
+      "passed": true,
+      "elapsed_seconds": 41.479,
+      "log": "/tmp/gps360-credential-turso-race.log"
+    },
+    {
+      "module": "pockets/authentication/stores/firestore",
+      "command": "go test -tags=integration -race ./... -count=1",
+      "fixture": "owned Firestore emulator",
+      "passed": true,
+      "elapsed_seconds": 135.128,
+      "log": "/tmp/gps360-credential-firestore-race.log"
+    },
+    {
+      "module": "integrations/datastores/pgxdb",
+      "command": "go test -race -count=1 -json ./...",
+      "fixture": "owned PostgreSQL 17; gopernicus_limiter database",
+      "passed": true,
+      "test_passes": 279,
+      "skips": 0,
+      "log": "/tmp/gopernicus-limiter-live-race-20260913.json"
+    }
+  ],
+  "full_race_source_note": "Full authentication races preceded final test-only fixture compatibility/recovery-backup refinements and documentation comments. Production behavior was unchanged; focused races were rerun, then exact final candidate archive regressions above passed with zero skips.",
+  "original_bug_reproduced": {
+    "http": "Temporary Go overlay of original core RemoveIdentifier and PostgreSQL Apply produced HTTP 200 and persisted state changes with password/delivery disabled. New source returns 404 without those changes; valid same-user case returns 200. Token cryptography is a stub; middleware/session/recent-auth/repositories are real.",
+    "http_red_log": "/tmp/gps360-http-baseline/red.json",
+    "core_red_log": "/tmp/gps360-credential-core-red.log",
+    "sql_red_log": "/tmp/gps360-credential-red.log"
+  },
+  "review": {
+    "roles": [
+      "implementer",
+      "platform-sre"
+    ],
+    "code_security": "approved; Firestore SCHEMA stale no-op documentation corrected",
+    "candidate_tool_sha256": "3330b8e6fcbdfc2b53bce8a8509c7c9793464d2c015e3f1e23cf8f0fae4e78df",
+    "publisher_sha256": "f8a10bdcebc69617ee28fc3036b0856cab620a687c528080b59220b9256ff45f",
+    "tool_selfchecks": {
+      "passed": true,
+      "fixture": "/tmp/gps360-upstream-release-20260913/tool-selfcheck-736z71dk",
+      "checks": [
+        "Published SDK ZIP/go.mod checksum algorithm matches",
+        "Runtime DB/emulator/credential inputs omitted; exact configured candidate exception list",
+        "Graph validation rejects unintended authcore descendant exemptions",
+        "Nearest go.mod ownership and inherited LICENSE; untracked nested/owned handling",
+        "Only exact candidate @v caches omitted; nested sibling artifacts preserved",
+        "Explicit dependency sum updater preserves external checksums",
+        "Partial module or final-source failure cannot inherit candidate success; only complete verification passes",
+        "All archives materialized at exact relative module paths; both SQL sibling parity fixtures available"
+      ]
+    }
+  },
+  "limitations": [
+    "Real Google OAuth and real GCP were not exercised.",
+    "Firestore live index deployment/readiness, Admin API probes, production contention/snapshot behavior and backend limits remain unverified. The patch carries forward the user-accepted initial-release gap; fresh emulator evidence is not GCP evidence.",
+    "PostgreSQL optional non-C collation fixture was not configured; this is unrelated to the changed credential and limiter paths.",
+    "Full authentication race logs are nonverbose and do not establish total skip counts. Final candidate targeted runtime logs explicitly record zero skips.",
+    "Generic candidate/public tests and make check are hermetic; live datastore coverage comes from the separately recorded owned-fixture runs."
+  ],
+  "migrations": {
+    "authentication": "No new SQL migration, document schema or index change. Repin core+store together and stop old vulnerable writers.",
+    "limiter": "Existing compatible limiter tables need no DDL. GPS360 adopts a new host-owned qualified auth.ratelimit_windows table/index before boot, probes with WithLimiterSchema(authSchema), and qualifies pruning. No automatic migration, search_path change or counter relocation.",
+    "handoff": "plans/gps360-upstream-repin-handoff.md"
+  },
+  "consumer_report": {
+    "source": "gps-360-go/workshop/migrations/UPGRADE-gopernicus-audit-2026-09.md",
+    "attribution": "Consumer-reported prior verification; not upstream reruns",
+    "passed": [
+      "builds",
+      "full tests",
+      "vet",
+      "race checks",
+      "guards",
+      "parity",
+      "fresh and seeded migrations",
+      "storage emulators",
+      "50 runtime checks",
+      "manual browser check with synthetic OAuth provider"
+    ],
+    "unverified": [
+      "live Google OAuth",
+      "real GCP"
+    ]
+  },
+  "original_user_handoff_sha256": "6afdee8279ab6639309341270fa7c775e5444947136784215f81743007449f7a",
+  "public_verification": null
+}

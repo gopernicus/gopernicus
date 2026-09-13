@@ -25,8 +25,8 @@ github.com/gopernicus/gopernicus/integrations/datastores/turso v0.4.0 h1:lrL06XA
 github.com/gopernicus/gopernicus/integrations/datastores/turso v0.4.0/go.mod h1:83vKGYZCHOoTnCSWM/ClCLOvBlXOgkvGh3SPfn+dOOE=
 github.com/gopernicus/gopernicus/pockets v0.1.0 h1:2WcybbfPw1km00DmG37CekPbxYmObyyj3T1Ec0eFSRY=
 github.com/gopernicus/gopernicus/pockets v0.1.0/go.mod h1:A2H/Tl9Pn2v2mFLOgkCQngMRFkMN10E1MEzGCQICsEw=
-github.com/gopernicus/gopernicus/pockets/authentication v0.11.0 h1:jab1wiCCmtWQzneyghsH0ChL+n58u1YnsyVi+sZhoVU=
-github.com/gopernicus/gopernicus/pockets/authentication v0.11.0/go.mod h1:V4s8PuUv/BPWtuLigf9aVCYEcSA+tklqVUnMnTkxvg4=
+github.com/gopernicus/gopernicus/pockets/authentication v0.11.1 h1:QPgKOti/1vfmDr+2TCN8iHxKycLe5QUKoilm6G9dNgQ=
+github.com/gopernicus/gopernicus/pockets/authentication v0.11.1/go.mod h1:V4s8PuUv/BPWtuLigf9aVCYEcSA+tklqVUnMnTkxvg4=
 github.com/gopernicus/gopernicus/pockets/authentication/views/goth v0.4.0 h1:v6viwFqh1l7YIq4BMGIeMmzmi5M+ZvnNai9Rj0NM5h0=
 github.com/gopernicus/gopernicus/pockets/authentication/views/goth v0.4.0/go.mod h1:wPFspru4nROeZVEbPlaekrwP3hGciDluPbkzf1RSrVY=
 github.com/gopernicus/gopernicus/pockets/authorization v0.13.0 h1:Up4wvL9x+R2IWA19kM8nNKn9Ku4KGo11IPvFtDXeGkc=

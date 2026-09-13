@@ -1002,6 +1002,44 @@ the module's next-tag upgrade note below and tell hosts to re-derive their CSP h
 
 ## Upgrade notes (keyed to each module's next tag)
 
+### GPS-360-Go follow-ups — credential ownership and limiter schema (2026-09-13)
+
+Release preparation is tracked in [plans/gps360-upstream-followups.md](plans/gps360-upstream-followups.md).
+The patch set is pgxdb `v0.7.1`, authentication `v0.11.1`, authentication/pgx
+`v0.6.1`, authentication/turso `v0.5.1`, and authentication/firestore `v0.1.1`.
+Published source/checksum and verification evidence belongs in
+[the release manifest](plans/gps360-upstream-release-manifest.json).
+
+The reported HTTP identifier-removal request could promote another user's
+identifier without changing that user's authentication revision, even with
+password and delivery disabled. Core validation now rejects an invalid
+replacement before consuming a recent-authentication grant. Atomic store
+validation protects both retirement and identifier-use changes, including direct
+repository callers. Targets must be owned and active; an explicit replacement
+must be distinct, active and of the same owner and kind, replacing a primary.
+Contact-only unverified identifiers remain valid replacements. Login/recovery
+use changes retain their verification requirement. Invalid mutations leave no
+partial credential, revision or revocation changes. This is a confirmed
+cross-user credential-metadata mutation; account takeover was not demonstrated.
+
+Repin core and the affected adapter together and stop old vulnerable writers
+during rollout. These authentication patches add no migration. Custom stores
+must implement the clarified atomic validation contract and shared regressions.
+Firestore `v0.1.0` already rejected foreign ownership; `v0.1.1` adds the remaining
+eligibility checks. Its changed source requires fresh emulator/race evidence;
+the real GCP suite remains unrun, with the same index/Admin API/production
+contention and backend-limit verification gap disclosed for the initial release.
+
+`pgxdb.WithLimiterSchema(pgxdb.Schema)` qualifies admission, reset and startup
+probes on the existing host pool. Its zero value preserves unqualified behavior;
+the algorithm and `v2:` key namespace are unchanged. Existing compatible limiter
+tables require no migration. A host adopting a new selected schema applies the
+qualified table/index DDL before startup and probes that schema. No automatic
+DDL, search-path changes or counter relocation occurs. Schema changes require a
+coordinated cutover to avoid split quotas; host-owned pruning must be qualified.
+See [qualified DDL and wiring](integrations/datastores/pgxdb/README.md#schema-selection-on-a-shared-pool)
+and the [consumer repinning handoff](plans/gps360-upstream-repin-handoff.md).
+
 ### Firestore — v0.1.0 (published 2026-09-13; real GCP suite untested)
 
 The release plan is [plans/firestore-release.md](plans/firestore-release.md).

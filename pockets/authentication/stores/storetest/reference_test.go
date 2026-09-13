@@ -1987,6 +1987,11 @@ func (r refCredentialMutations) snapshotLocked(userID string) credential.MethodS
 		}
 	}
 	set.Identifiers = append(set.Identifiers, r.identifiers[userID]...)
+	for _, it := range r.userIdentifiers {
+		if it.UserID == userID && it.Active() {
+			set.Identifiers = append(set.Identifiers, credential.IdentifierMethod{ID: it.ID, Kind: string(it.Kind), Uses: credential.IdentifierUses{Login: it.LoginEnabled, Recovery: it.RecoveryEnabled, Notification: it.NotificationEnabled}, Verified: it.Verified(), Primary: it.IsPrimary})
+		}
+	}
 	return set
 }
 
@@ -2038,8 +2043,38 @@ func (r refCredentialMutations) Apply(_ context.Context, userID string, expected
 		}
 		r.oauthAccounts = kept
 	case credential.RetireIdentifier:
+		target := r.mutationIdentifierLocked(userID, m.IdentifierID)
+		replacement := r.mutationIdentifierLocked(userID, m.ReplacementPrimaryID)
+		if err := m.Validate(userID, target, replacement); err != nil {
+			return err
+		}
+		if _, ok := r.userIdentifiers[target.ID]; ok {
+			target.Retire(time.Now())
+			r.userIdentifiers[target.ID] = target
+		}
+		if _, ok := r.userIdentifiers[replacement.ID]; ok && m.ReplacementPrimaryID != "" {
+			replacement.MakePrimary(time.Now())
+			r.userIdentifiers[replacement.ID] = replacement
+		}
 		r.identifiers[userID] = retireRefIdentifier(r.identifiers[userID], m.IdentifierID, m.ReplacementPrimaryID)
 	case credential.ChangeIdentifierUses:
+		target := r.mutationIdentifierLocked(userID, m.IdentifierID)
+		if err := m.Validate(userID, target); err != nil {
+			return err
+		}
+		if _, ok := r.userIdentifiers[target.ID]; ok {
+			if m.MakePrimary {
+				for id, it := range r.userIdentifiers {
+					if it.UserID == userID && it.Kind == target.Kind && it.Active() {
+						it.IsPrimary = false
+						r.userIdentifiers[id] = it
+					}
+				}
+				target.MakePrimary(time.Now())
+			}
+			_ = target.SetUses(identifier.Uses{Login: m.Uses.Login, Recovery: m.Uses.Recovery, Notification: m.Uses.Notification}, time.Now())
+			r.userIdentifiers[target.ID] = target
+		}
 		r.identifiers[userID] = changeRefIdentifierUses(r.identifiers[userID], m.IdentifierID, m.Uses, m.MakePrimary)
 	}
 	if _, ok := r.users[userID]; ok {
@@ -2161,4 +2196,21 @@ func applyWithPolicy(repo refCredentialMutations, policy credential.DefaultPolic
 		}
 	}
 	return false
+}
+
+func (r refCredentialMutations) mutationIdentifierLocked(userID, id string) identifier.Identifier {
+	if it, ok := r.userIdentifiers[id]; ok {
+		return it
+	}
+	// The original policy-race fixture seeds projections without persistence rows.
+	for _, m := range r.identifiers[userID] {
+		if m.ID == id {
+			it := identifier.Identifier{ID: id, UserID: userID, Kind: identifier.Kind(m.Kind), IsPrimary: m.Primary}
+			if m.Verified {
+				it.VerifiedAt = suiteBase
+			}
+			return it
+		}
+	}
+	return identifier.Identifier{}
 }

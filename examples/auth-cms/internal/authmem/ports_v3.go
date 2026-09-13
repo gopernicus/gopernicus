@@ -501,8 +501,14 @@ func (r credentialMutationRepo) Apply(_ context.Context, userID string, expected
 		}
 		r.oauthAccounts = kept
 	case credential.RetireIdentifier:
+		if err := m.Validate(userID, r.identifiers[m.IdentifierID], r.identifiers[m.ReplacementPrimaryID]); err != nil {
+			return err
+		}
 		r.retireIdentifierRowLocked(userID, m.IdentifierID, m.ReplacementPrimaryID)
 	case credential.ChangeIdentifierUses:
+		if err := m.Validate(userID, r.identifiers[m.IdentifierID]); err != nil {
+			return err
+		}
 		r.changeIdentifierUsesRowLocked(userID, m.IdentifierID, m.Uses, m.MakePrimary)
 	}
 	// auth_revision rides the user row: bump it there when the row exists.

@@ -222,23 +222,25 @@ func (s *credentialMutationStore) stage(ctx context.Context, r firestoredb.Reade
 		if err != nil {
 			return credentialWrites{}, err
 		}
-		if (hasRetired && retired.UserID != userRow.ID) || (hasPromoted && promoted.UserID != userRow.ID) {
+		if !hasRetired || !retired.Active || (m.ReplacementPrimaryID != "" && (!hasPromoted || !promoted.Active)) {
 			return credentialWrites{}, sdk.ErrInvalidInput
+		}
+		target, err := retired.toDomain()
+		if err != nil {
+			return credentialWrites{}, err
+		}
+		replacement, err := promoted.toDomain()
+		if err != nil {
+			return credentialWrites{}, err
+		}
+		if err := m.Validate(userRow.ID, target, replacement); err != nil {
+			return credentialWrites{}, err
 		}
 		if err := staged.readProjectionInput(ctx, s.db, r, userRow.ID); err != nil {
 			return credentialWrites{}, err
 		}
-		// An already-retired row is a no-op, matching the SQL
-		// `WHERE id = ? AND replaced_at IS NULL` that affects no row.
-		if hasRetired && retired.Active {
-			staged.stageIdentifier(retired, retireRow(now))
-		}
-		// The promotion is UNCONDITIONAL, as in the SQL: it does not demote
-		// anything, because the row it replaces is the one being retired. If a
-		// DIFFERENT row still holds the (user, kind) primary claim, this
-		// promotion collides with it at commit and the whole mutation rolls back
-		// as sdk.ErrAlreadyExists — which is exactly what the partial unique
-		// index does to the equivalent UPDATE.
+		staged.stageIdentifier(retired, retireRow(now))
+		// Validation proves the retiring primary owns the claim transferred here.
 		if hasPromoted {
 			staged.stageIdentifier(promoted, promoteRow(now))
 		}
@@ -251,11 +253,15 @@ func (s *credentialMutationStore) stage(ctx context.Context, r firestoredb.Reade
 		if err := staged.readProjectionInput(ctx, s.db, r, userRow.ID); err != nil {
 			return credentialWrites{}, err
 		}
-		if !hasTarget {
-			break
-		}
-		if target.UserID != userRow.ID {
+		if !hasTarget || !target.Active {
 			return credentialWrites{}, sdk.ErrInvalidInput
+		}
+		targetIdentifier, err := target.toDomain()
+		if err != nil {
+			return credentialWrites{}, err
+		}
+		if err := m.Validate(userRow.ID, targetIdentifier); err != nil {
+			return credentialWrites{}, err
 		}
 		if m.MakePrimary {
 			// Promotion DEMOTES the current primary of the SAME KIND, which the

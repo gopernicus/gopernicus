@@ -2,10 +2,12 @@ package turso
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/credential"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/identifier"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/session"
 	"github.com/gopernicus/gopernicus/sdk"
 )
@@ -132,19 +134,38 @@ func (s *CredentialMutationStore) Apply(ctx context.Context, userID string, expe
 				return err
 			}
 		case credential.RetireIdentifier:
+			target, err := s.mutationIdentifier(ctx, tx, userID, m.IdentifierID)
+			if err != nil {
+				return err
+			}
+
+			replacement, err := s.mutationIdentifier(ctx, tx, userID, m.ReplacementPrimaryID)
+			if err != nil {
+				return err
+			}
+			if err := m.Validate(userID, target, replacement); err != nil {
+				return err
+			}
 			if _, err := tx.Exec(ctx,
-				`UPDATE user_identifiers SET replaced_at = ?, updated_at = ? WHERE id = ? AND replaced_at IS NULL`,
-				now, now, m.IdentifierID); err != nil {
+				`UPDATE user_identifiers SET replaced_at = ?, updated_at = ? WHERE id = ? AND user_id = ? AND replaced_at IS NULL`,
+				now, now, m.IdentifierID, userID); err != nil {
 				return err
 			}
 			if m.ReplacementPrimaryID != "" {
 				if _, err := tx.Exec(ctx,
-					`UPDATE user_identifiers SET is_primary = 1, updated_at = ? WHERE id = ?`,
-					now, m.ReplacementPrimaryID); err != nil {
+					`UPDATE user_identifiers SET is_primary = 1, updated_at = ? WHERE id = ? AND user_id = ? AND replaced_at IS NULL`,
+					now, m.ReplacementPrimaryID, userID); err != nil {
 					return err
 				}
 			}
 		case credential.ChangeIdentifierUses:
+			target, err := s.mutationIdentifier(ctx, tx, userID, m.IdentifierID)
+			if err != nil {
+				return err
+			}
+			if err := m.Validate(userID, target); err != nil {
+				return err
+			}
 			if m.MakePrimary {
 				if _, err := tx.Exec(ctx,
 					`UPDATE user_identifiers SET is_primary = 0, updated_at = ?
@@ -156,17 +177,19 @@ func (s *CredentialMutationStore) Apply(ctx context.Context, userID string, expe
 			}
 			q := `UPDATE user_identifiers
 				SET login_enabled = ?, recovery_enabled = ?, notification_enabled = ?, updated_at = ?
-				WHERE id = ?`
+				WHERE id = ? AND user_id = ? AND replaced_at IS NULL`
 			if m.MakePrimary {
 				q = `UPDATE user_identifiers
 					SET login_enabled = ?, recovery_enabled = ?, notification_enabled = ?, is_primary = 1, updated_at = ?
-					WHERE id = ?`
+					WHERE id = ? AND user_id = ? AND replaced_at IS NULL`
 			}
 			if _, err := tx.Exec(ctx, q,
 				tursodb.BoolToInt(m.Uses.Login), tursodb.BoolToInt(m.Uses.Recovery), tursodb.BoolToInt(m.Uses.Notification),
-				now, m.IdentifierID); err != nil {
+				now, m.IdentifierID, userID); err != nil {
 				return err
 			}
+		default:
+			return sdk.ErrInvalidInput
 		}
 
 		if _, err := tx.Exec(ctx, `UPDATE users SET auth_revision = auth_revision + 1, updated_at = ? WHERE id = ?`,
@@ -175,4 +198,19 @@ func (s *CredentialMutationStore) Apply(ctx context.Context, userID string, expe
 		}
 		return revokeCredentialState(ctx, tx, userID)
 	})
+}
+
+func (s *CredentialMutationStore) mutationIdentifier(ctx context.Context, tx *tursodb.Tx, userID, id string) (identifier.Identifier, error) {
+	if id == "" {
+		return identifier.Identifier{}, nil
+	}
+	row, err := tursodb.QueryOne[identifierRow](ctx, tx,
+		`SELECT `+identifierColumns+` FROM user_identifiers WHERE id = ? AND user_id = ? AND replaced_at IS NULL`, id, userID)
+	if errors.Is(err, sdk.ErrNotFound) {
+		return identifier.Identifier{}, nil
+	}
+	if err != nil {
+		return identifier.Identifier{}, err
+	}
+	return row.toDomain(), nil
 }
