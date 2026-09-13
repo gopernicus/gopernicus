@@ -1,11 +1,12 @@
 # integrations/datastores/firestore
 
-**Prerelease `v0.1.0-beta.1`: emulator verification only.** The real GCP
+**Release `v0.1.0`: emulator verification only.** The real GCP
 Firestore suite has not run. Composite index deployment/readiness, Admin API
 index probing, production contention/snapshot behavior and backend limits remain
 unverified against GCP. Emulator tests cannot establish those properties. See
 the [release evidence](https://github.com/gopernicus/gopernicus/blob/firestore-release-20260911/plans/firestore-release-manifest.json).
-The unsuffixed `v0.1.0` release retains the required real-GCP verification gate.
+The owner accepted this known verification gap for `v0.1.0`; publication does
+not establish real GCP coverage. The live suite remains an open follow-up.
 
 The datastore connector for Google Cloud Firestore (**Native mode**). It wraps
 the `cloud.google.com/go/firestore` client behind the same connector shape as
@@ -607,7 +608,7 @@ collections it is named, and treats naming none as a fatal error — a reset tha
 clears nothing before a conformance run is a false green waiting to happen.
 Missing live configuration SKIPS an ordinary run loudly and **FAILS it when
 `FIRESTORE_LIVE_REQUIRED=1`**, naming exactly what is missing. That is the
-unsuffixed release gate: a train cannot pass because the only leg proving production
+required live-run gate: an explicitly required run cannot pass because the only leg proving production
 behavior quietly did not run. Live tests build under `integration && live` and
 are named `Test…Live`.
 

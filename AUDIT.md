@@ -62,8 +62,9 @@ The three Firestore modules are excluded from that coordinated release. Their
 first tags are published separately as emulator-verified `v0.1.0-beta.1`
 prereleases from `973f94322a3a99b8699df8f266c33539c0c21ed8`, with public checksums
 and independent build/test/vet verified in [firestore-release.md](plans/firestore-release.md).
-The real GCP suite remains untested and required for unsuffixed
-`v0.1.0`. CMS versions provide framework
+The owner subsequently authorized `v0.1.0` with the known real GCP suite still
+untested; current promotion status is in that plan and the Firestore manifest.
+CMS versions provide framework
 compatibility; its behavioral audit remains deferred. Examples are not tagged.
 
 For SQL hosts, review the authentication `0018`, authorization `0006`/`0007`,
@@ -4723,7 +4724,8 @@ release evidence is in [plans/startup-release-segovia.md](plans/startup-release-
 - **Modules:** `integrations/datastores/firestore`,
   `pockets/authentication/stores/firestore`,
   `pockets/authorization/stores/firestore`; first tags target `v0.1.0`.
-- **Release:** not published. The required real Firestore run remains pending.
+- **Release:** `v0.1.0-beta.1` is published; owner-authorized `v0.1.0` preparation
+  retains the known, untested real GCP suite. The manifest records current status.
 - **Impact:** new opt-in adapters. Hosts using an unpublished Firestore branch
   must adopt the current SDK/pocket APIs and persisted-state rules below.
 

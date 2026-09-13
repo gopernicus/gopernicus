@@ -1,6 +1,12 @@
 # Gopernicus framework audit
 
-Latest completed follow-up: [firestore-release.md](firestore-release.md). All three
+Active follow-up: [firestore-release.md](firestore-release.md). The owner authorized
+unsuffixed `v0.1.0` with the explicitly untested real GCP suite, and requested a
+GPS-360-Go upgrade handoff. This supersedes the earlier v0.1.0 live-gate policy
+for this release. Final pins/candidates, full workspace checks and release review
+pass; publication is pending. Runtime/test/index source matches the emulator-tested beta.
+
+Latest completed Firestore milestone: all three
 Firestore modules are published as emulator-verified `v0.1.0-beta.1` from
 `973f94322a3a99b8699df8f266c33539c0c21ed8`, following the owner's 2026-09-13
 direction. The newer authentication branch was reconciled with the published
@@ -9,8 +15,8 @@ check, independent candidate/public module checks and release review pass.
 The temporary workspace bootstrap is removed; public checksums and builds pass
 without replacements or checksum exemptions. Durable evidence is in
 [firestore-release-verification.json](firestore-release-verification.json).
-The real-Firestore workflow remains untested and required for unsuffixed
-`v0.1.0`. Default-branch integration and that later live release remain separate.
+The real-Firestore workflow remains untested. Default-branch integration and
+that live-verification follow-up remain separate from the authorized release.
 
 Recovery check, 2026-09-13: all 34 coordinated tags still resolve remotely to
 the published audit commit. Remote `main` remains at `d97dfddd`; module publication

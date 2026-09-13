@@ -20,7 +20,7 @@ tracks actual verification and publication status.
 |---|---|
 | Pocket core | `pockets/authentication v0.11.0` |
 | SDK | `v0.9.0` |
-| Connector | `integrations/datastores/firestore v0.1.0-beta.1`; emulator verified, real GCP suite untested |
+| Connector | `integrations/datastores/firestore v0.1.0`; emulator verified, real GCP suite untested |
 | SQL tables | 13; current migration definitions through 0018 |
 | Collections | 13 row collections and 7 uniqueness-claim collections |
 

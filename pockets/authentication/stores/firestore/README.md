@@ -1,11 +1,12 @@
 # Authentication Firestore store
 
-**Prerelease `v0.1.0-beta.1`: emulator verification only.** The real GCP
+**Release `v0.1.0`: emulator verification only.** The real GCP
 Firestore suite has not run. Composite index deployment/readiness, Admin API
 index probing, production contention/snapshot behavior and backend limits remain
 unverified against GCP. Emulator tests cannot establish those properties. See
 the [release evidence](https://github.com/gopernicus/gopernicus/blob/firestore-release-20260911/plans/firestore-release-manifest.json).
-The unsuffixed `v0.1.0` release retains the required real-GCP verification gate.
+The owner accepted this known verification gap for `v0.1.0`; publication does
+not establish real GCP coverage. The live suite remains an open follow-up.
 
 This module implements all eighteen authentication repository ports over Google
 Cloud Firestore Native mode. The connector owns client access, this adapter owns
@@ -152,7 +153,7 @@ FIRESTORE_EMULATOR_HOST='<owned-emulator-endpoint>' \
 The emulator factory uses a process-specific named database. It clears that
 selected database between fixtures; never point it at a shared or existing database.
 
-Real Firestore verification remains required before unsuffixed `v0.1.0`. Run the four
+Real Firestore verification remains an open follow-up for `v0.1.0`. Run the four
 live roots with `FIRESTORE_LIVE_REQUIRED=1`, a disposable non-default database,
 configured credentials and no emulator endpoint:
 
@@ -166,5 +167,6 @@ FIRESTORE_EMULATOR_HOST= FIRESTORE_LIVE_REQUIRED=1 \
 The roots are `TestConformanceLive`, `TestAmbientTransactionRefusedLive`,
 `TestIndexProbeAcceptsTheDeployedManifestLive` and
 `TestQueryMatrixExecutesAgainstTheDeployedIndexesLive`. No live skip is allowed
-for this module. A green emulator run or compile-only live test is insufficient
-evidence for that unsuffixed release; archive the required CI run and its live evidence artifact.
+for this module when the live suite is run. A green emulator run or compile-only
+live test does not establish real GCP coverage. Archive the required CI run and
+its live evidence artifact when available; no such result is claimed for `v0.1.0`.

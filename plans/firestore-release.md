@@ -1,7 +1,55 @@
 # Firestore reconciliation and first releases
 
-Status: v0.1.0-beta.1 PUBLISHED AND PUBLICLY VERIFIED; REAL GCP SUITE UNTESTED — 2026-09-13. Owner explicitly requested releasing Firestore
+Status: v0.1.0 VERIFIED, PUBLICATION PENDING; REAL GCP SUITE UNTESTED — 2026-09-13. Owner explicitly requested releasing Firestore
 following the coordinated framework release and Segovia adoption.
+
+## Unsuffixed release and GPS-360-Go handoff — 2026-09-13
+
+After the beta publication and disclosure of the untested real GCP suite, the
+owner instructed: "go ahead and release", then requested a handoff prompt for
+upgrading all applicable Gopernicus packages in GPS-360-Go through AUDIT.md.
+Proceed with unsuffixed `v0.1.0` for the three Firestore modules, explicitly
+retaining the known GCP verification gap. This authorization supersedes the
+earlier live-gate requirement for this first release; it does not turn any unrun
+test into a pass or alter runtime/workflow safeguards. Preserve the beta tags.
+
+1. Change the two stores' connector pins to v0.1.0; update module READMEs,
+   schema/release notes and manifests to describe the actual verification scope.
+2. Rebuild isolated v0.1.0 candidates, update store checksums in dependency order,
+   and run replacement-free build/test/vet/live compile/vet plus the full
+   workspace check. Reuse today's emulator race evidence only after confirming
+   all runtime/test/index source is unchanged; do not rerun unchanged behavior
+   without a new concern. Temporary root workspace bootstrap is pre-tag only.
+3. Review and publish all three immutable v0.1.0 tags in dependency order; verify
+   public checksums/source/builds with GOWORK=off and no exemptions/replacements.
+   Remove the bootstrap, update evidence and push the release branch. Preserve
+   remote main and all consumer repositories.
+4. Inspect `/Users/jrazmi/code/gps/three-sixty/gps-360-go` read-only and write
+   `plans/gps-360-go-audit-upgrade-handoff.md`. Use authoritative release manifests
+   and all AUDIT-001–034 entries, including superseding decisions. Include the
+   target's actual dependencies, current branch state, migration/behavior checks
+   and exact final release versions. This turn prepares the prompt, not consumer
+   changes or deployment.
+
+### v0.1.0 verification complete
+
+- Stable candidate archives passed source/ZIP/checksum matching, independent
+  graph/build/test/vet and live compile/vet with GOWORK=off and no replacements.
+  All 176 entries match final source; only unpublished Firestore paths have
+  candidate checksum exemptions. Published SDK/core checksums remain verified.
+- Full `make check` with final v0.1.0 pins passed in 43.3 seconds, including all
+  42 modules, generation consistency, tagged vet and guards, with no source drift.
+  All 25 workflow helper tests passed after final comment changes.
+- Today's beta emulator race evidence is reused after proving all runtime,
+  tests and index source bytes identical. Source changes are README/SCHEMA and
+  version pins/sums only. No emulator was restarted and no GCP suite was run.
+- Named platform-sre reviewed the release exception, docs, pins, candidate tool
+  and publisher: no blocker. Publisher preserves all 34 audit tags and the exact
+  beta tag objects/targets, checks the clean release commit and final evidence,
+  publishes in dependency order and verifies public checksums without exemptions.
+- Final stable evidence is under `/tmp/firestore-release-20260913/stable` and
+  in the tracked manifest/verification record. GPS-360-Go remains untouched;
+  the prompt is being prepared from its local and remote-tracking inventories.
 
 ## Completed beta publication — 2026-09-13
 

@@ -8,11 +8,11 @@ The [release manifest](plans/audit-release-manifest.json) records versions and
 verified ZIP/go.mod checksums; [AUDIT.md](AUDIT.md) is the consumer migration guide.
 All published modules resolve and build with `GOWORK=off`, normal public checksum
 verification and no local replacements. Remote main and the newer Firestore branch
-were preserved. The three Firestore modules are now published as emulator-verified
-`v0.1.0-beta.1` prereleases from `973f94322a3a99b8699df8f266c33539c0c21ed8`;
-[firestore-release.md](plans/firestore-release.md) records their public checksums
-and independent build/test/vet verification. The real GCP suite is untested and remains required
-for unsuffixed `v0.1.0`. CMS is compatibility only.
+were preserved. The three Firestore modules' verified `v0.1.0-beta.1` tags remain
+at `973f94322a3a99b8699df8f266c33539c0c21ed8`; owner-authorized `v0.1.0`
+releases are being prepared in [firestore-release.md](plans/firestore-release.md).
+The owner accepted the explicitly untested real GCP suite for this release.
+CMS is compatibility only.
 
 The implementation-time entries below retain their history; the coordinated
 manifest supplies their published versions. Segovia v2 adoption is complete in
@@ -39,8 +39,8 @@ retain simple signatures and reject nil borrowed databases explicitly.
 Migration: [AUDIT-032](AUDIT.md#audit-032-host-startup-cancellation-and-constructor-errors).
 Implementation/release plan: [startup-release-segovia.md](plans/startup-release-segovia.md).
 The coordinated SQL/core release is published; see the manifest above.
-Firestore beta tags are published; unsuffixed v0.1.0 awaits required live
-evidence. Segovia v2 is the first PostgreSQL-backed adopter.
+Firestore beta tags are published; v0.1.0 preparation retains the disclosed,
+owner-accepted gap in real GCP verification. Segovia v2 is the first PostgreSQL-backed adopter.
 
 ## Unreleased: Consistent pocket construction (2026-09-11)
 
@@ -1001,14 +1001,14 @@ the module's next-tag upgrade note below and tell hosts to re-derive their CSP h
 
 ## Upgrade notes (keyed to each module's next tag)
 
-### Firestore — v0.1.0-beta.1 prereleases (published 2026-09-13)
+### Firestore — v0.1.0 (preparing; real GCP suite untested)
 
 The release plan is [plans/firestore-release.md](plans/firestore-release.md).
 These are three new, opt-in modules; existing SQL hosts do not need to adopt them.
-Published all three tags from `973f94322a3a99b8699df8f266c33539c0c21ed8` in
-dependency order after emulator and isolated module checks passed. Fresh public
-downloads match the manifest and build/test/vet with normal checksum verification
-and no replacements. The full real GCP suite has not run. Index deployment/readiness, Admin API
+The owner authorized unsuffixed `v0.1.0` after the verified beta publication,
+accepting the known real GCP testing gap. Promote in dependency order after
+checking final pins, source identity and isolated candidate/public modules.
+The full real GCP suite has not run. Index deployment/readiness, Admin API
 probing, production contention/snapshot behavior and backend limits remain
 unverified against GCP. This limitation belongs in each module README and tag
 annotation; it must not be reported as a passing or completed live check.
@@ -1016,11 +1016,11 @@ annotation; it must not be reported as a passing or completed live check.
 | Module | Direct framework dependencies |
 |---|---|
 | `integrations/datastores/firestore` | `sdk v0.9.0` |
-| `pockets/authorization/stores/firestore` | connector `v0.1.0-beta.1`, authorization `v0.13.0`, SDK `v0.9.0` |
-| `pockets/authentication/stores/firestore` | connector `v0.1.0-beta.1`, authentication `v0.11.0`, SDK `v0.9.0` |
+| `pockets/authorization/stores/firestore` | connector `v0.1.0`, authorization `v0.13.0`, SDK `v0.9.0` |
+| `pockets/authentication/stores/firestore` | connector `v0.1.0`, authentication `v0.11.0`, SDK `v0.9.0` |
 
-The store modules have no connector replacements, and the temporary root
-`go.work` bootstrap was removed after public connector verification. Verify candidate archives and then public downloads with
+The store modules have no connector replacements. Remove the temporary root
+`go.work` bootstrap after public v0.1.0 connector verification. Verify candidate archives and then public downloads with
 `GOWORK=off` and no replacement directives; do not rewrite the already-published
 SDK or pocket tags to accommodate an older Firestore implementation.
 
@@ -1083,17 +1083,20 @@ required manifests through the Admin API. `WithoutIndexProbe()` transfers index
 verification to the host and is required for the emulator, which cannot prove
 composite coverage. Constructors never provision a database or deploy indexes.
 
-**Prerelease gate.** For `v0.1.0-beta.1`, record all three modules' build/test/vet,
+**v0.1.0 release gate (owner exception).** Record all three modules' build/test/vet,
 emulator integration race suites, live-tag compilation/vet, workflow helper
 tests, the full `make check` gate and isolated candidate/public module checks. Audit all
 emulator skips; only authorization's documented `TestRunTransactional` ambient
 family may skip. Publish exact module versions and checksum evidence, with
 `live_workflow_run` and `live_artifact` unset and the real GCP suite marked unrun.
-This owner-directed prerelease exception does not weaken the live workflow,
+Today's emulator race evidence may be reused for this promotion only after
+proving runtime/test/index source identity; final pins and archives are rechecked.
+This owner-directed release exception does not weaken the live workflow,
 runtime index probes, transaction guards or conformance assertions.
 
-**Required unsuffixed release gate.** Before `v0.1.0`, record a passing `live-stores`
-workflow dispatch with `firestore_live_required: true`, the run ID and its
+**Outstanding real GCP verification.** The owner accepted this untested scope for
+`v0.1.0`; it remains open after publication. To establish live coverage, record a
+passing `live-stores` dispatch with `firestore_live_required: true`, the run ID and its
 `firestore-live-evidence-<run id>-<attempt>` artifact. It must use a disposable,
 run-owned named database, never `(default)`, with the full index manifests ready,
 and run `-tags='integration,live' -run 'Live$'`. Missing configuration, missing
@@ -1102,7 +1105,7 @@ nested under a passing parent. Only authorization's `TestRunTransactionalLive`
 family may skip because ambient joins are unsupported. Connector and
 authentication allow no skipped live cases. The archived JSON results, derived
 expected roots, audit and index state are the release evidence. Emulator results
-alone cannot satisfy this gate.
+alone cannot establish real GCP coverage.
 
 ### pockets/authorization — v0.12.0 @ `1439407` (+ stores/pgx v0.7.0, stores/turso v0.6.0 @ `340f6f2`) — tagged 2026-09-09: `FilterAuthorized` decides the candidate SET in one evaluation (minor; BREAKING store port; no schema)
 
