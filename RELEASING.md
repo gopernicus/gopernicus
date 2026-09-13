@@ -8,9 +8,10 @@ The [release manifest](plans/audit-release-manifest.json) records versions and
 verified ZIP/go.mod checksums; [AUDIT.md](AUDIT.md) is the consumer migration guide.
 All published modules resolve and build with `GOWORK=off`, normal public checksum
 verification and no local replacements. Remote main and the newer Firestore branch
-were preserved. The three Firestore first tags are being prepared in
-[firestore-release.md](plans/firestore-release.md) as emulator-verified
-`v0.1.0-beta.1` prereleases. The real GCP suite is untested and remains required
+were preserved. The three Firestore modules are now published as emulator-verified
+`v0.1.0-beta.1` prereleases from `973f94322a3a99b8699df8f266c33539c0c21ed8`;
+[firestore-release.md](plans/firestore-release.md) records their public checksums
+and independent build/test/vet verification. The real GCP suite is untested and remains required
 for unsuffixed `v0.1.0`. CMS is compatibility only.
 
 The implementation-time entries below retain their history; the coordinated
@@ -38,8 +39,8 @@ retain simple signatures and reject nil borrowed databases explicitly.
 Migration: [AUDIT-032](AUDIT.md#audit-032-host-startup-cancellation-and-constructor-errors).
 Implementation/release plan: [startup-release-segovia.md](plans/startup-release-segovia.md).
 The coordinated SQL/core release is published; see the manifest above.
-Firestore first tags are held pending remote-work reconciliation and required
-live evidence. Segovia v2 is the first PostgreSQL-backed adopter.
+Firestore beta tags are published; unsuffixed v0.1.0 awaits required live
+evidence. Segovia v2 is the first PostgreSQL-backed adopter.
 
 ## Unreleased: Consistent pocket construction (2026-09-11)
 
@@ -1000,13 +1001,14 @@ the module's next-tag upgrade note below and tell hosts to re-derive their CSP h
 
 ## Upgrade notes (keyed to each module's next tag)
 
-### Firestore — v0.1.0-beta.1 prereleases (preparing; no tags published)
+### Firestore — v0.1.0-beta.1 prereleases (published 2026-09-13)
 
 The release plan is [plans/firestore-release.md](plans/firestore-release.md).
 These are three new, opt-in modules; existing SQL hosts do not need to adopt them.
-The owner selected emulator-based release preparation on 2026-09-13. Publish
-these prereleases in dependency order after emulator and isolated module checks
-pass. The full real GCP suite has not run. Index deployment/readiness, Admin API
+Published all three tags from `973f94322a3a99b8699df8f266c33539c0c21ed8` in
+dependency order after emulator and isolated module checks passed. Fresh public
+downloads match the manifest and build/test/vet with normal checksum verification
+and no replacements. The full real GCP suite has not run. Index deployment/readiness, Admin API
 probing, production contention/snapshot behavior and backend limits remain
 unverified against GCP. This limitation belongs in each module README and tag
 annotation; it must not be reported as a passing or completed live check.
@@ -1017,8 +1019,8 @@ annotation; it must not be reported as a passing or completed live check.
 | `pockets/authorization/stores/firestore` | connector `v0.1.0-beta.1`, authorization `v0.13.0`, SDK `v0.9.0` |
 | `pockets/authentication/stores/firestore` | connector `v0.1.0-beta.1`, authentication `v0.11.0`, SDK `v0.9.0` |
 
-The store modules have no connector replacements. Remove the temporary root
-`go.work` bootstrap after public connector verification. Verify candidate archives and then public downloads with
+The store modules have no connector replacements, and the temporary root
+`go.work` bootstrap was removed after public connector verification. Verify candidate archives and then public downloads with
 `GOWORK=off` and no replacement directives; do not rewrite the already-published
 SDK or pocket tags to accommodate an older Firestore implementation.
 

@@ -1,7 +1,30 @@
 # Firestore reconciliation and first releases
 
-Status: v0.1.0-beta.1 VERIFIED, PUBLICATION PENDING; REAL GCP SUITE UNTESTED — 2026-09-13. Owner explicitly requested releasing Firestore
+Status: v0.1.0-beta.1 PUBLISHED AND PUBLICLY VERIFIED; REAL GCP SUITE UNTESTED — 2026-09-13. Owner explicitly requested releasing Firestore
 following the coordinated framework release and Segovia adoption.
+
+## Completed beta publication — 2026-09-13
+
+- All three annotated `v0.1.0-beta.1` tags are published at
+  `973f94322a3a99b8699df8f266c33539c0c21ed8`, in connector, authorization,
+  authentication order. Each tag annotation and module README explicitly state
+  that the real GCP suite has not run. Unsuffixed v0.1.0 remains live-gated.
+- Fresh public Firestore downloads match all candidate ZIP/go.mod checksums and
+  all 176 source entries. Independent graph/build/test/vet and live compile/vet
+  pass with `GOWORK=off`, `proxy.golang.org`, `sum.golang.org`, no replacements,
+  and no checksum exemptions. Third-party dependencies use cached public downloads.
+- Root `go.work` no longer has the connector bootstrap. The canonical workspace
+  resolves through the public proxy: 348 modules, zero replacements. No module
+  source changed after candidate verification. The owned emulator is stopped.
+- Exact tags, tag-object hashes, public sums and current verification outcomes
+  are persisted in `firestore-release-manifest.json` and
+  `firestore-release-verification.json`. Temporary detailed evidence:
+  `/tmp/firestore-release-20260913/{publication,public-v1}`.
+- The release branch is published; remote `main` stays at `d97dfddd` and consumers
+  are unchanged. Remaining separately scoped work: default-branch integration,
+  real GCP verification before unsuffixed v0.1.0, and the core/SQL credential
+  replacement follow-up before the next authentication patch. The prior recovery
+  and v0.1.0 preparation records below are historical; do not repeat beta publication.
 
 ## Emulator release preparation — 2026-09-13
 

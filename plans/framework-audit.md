@@ -1,16 +1,16 @@
 # Gopernicus framework audit
 
-Active follow-up: [firestore-release.md](firestore-release.md). The owner requested
-the three first Firestore tags, now preparing emulator-verified `v0.1.0-beta.1`
-prereleases following the owner's 2026-09-13 direction. The newer authentication branch has been merged
-with the published audit contracts and pushed as `11558785` on
-`firestore-release-20260911`. All three
-independent release candidates, emulator checks, the final workspace check and
-review passed in the prior release preparation. Fresh beta emulator/candidate
-checks, full 42-module check and release review now pass. Publication is pending.
-The real-Firestore workflow remains untested and required for
-unsuffixed `v0.1.0`; its missing configuration does not block this beta.
-No Firestore tag has been published. This plan owns the continuation state.
+Latest completed follow-up: [firestore-release.md](firestore-release.md). All three
+Firestore modules are published as emulator-verified `v0.1.0-beta.1` from
+`973f94322a3a99b8699df8f266c33539c0c21ed8`, following the owner's 2026-09-13
+direction. The newer authentication branch was reconciled with the published
+audit contracts in `11558785`. Fresh emulator race suites, the full 42-module
+check, independent candidate/public module checks and release review pass.
+The temporary workspace bootstrap is removed; public checksums and builds pass
+without replacements or checksum exemptions. Durable evidence is in
+[firestore-release-verification.json](firestore-release-verification.json).
+The real-Firestore workflow remains untested and required for unsuffixed
+`v0.1.0`. Default-branch integration and that later live release remain separate.
 
 Recovery check, 2026-09-13: all 34 coordinated tags still resolve remotely to
 the published audit commit. Remote `main` remains at `d97dfddd`; module publication

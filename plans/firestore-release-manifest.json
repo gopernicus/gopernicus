@@ -1,5 +1,5 @@
 {
-  "status": "beta candidate verified; publication pending; real GCP suite untested",
+  "status": "published beta; emulator verified; real GCP suite untested",
   "branch": "firestore-release-20260911",
   "version": "v0.1.0-beta.1",
   "base_commit": "c98f5618",
@@ -15,7 +15,8 @@
       "go_mod_sum": "h1:tejAOkzU957PAxz35VfH+xwOFnDz/Fu6+F/ilhguoxY=",
       "source_entries": 46,
       "candidate_verified": true,
-      "source_inventory_sha256": "8d8fb963cebc91929aaaf0beceb1b4ecf7fa99536b29b4405bb4eacf9fef9db9"
+      "source_inventory_sha256": "8d8fb963cebc91929aaaf0beceb1b4ecf7fa99536b29b4405bb4eacf9fef9db9",
+      "tag_object": "a2c1f917b4e74b9fe4355e25a89bb435b0fffdd1"
     },
     {
       "directory": "pockets/authorization/stores/firestore",
@@ -27,7 +28,8 @@
       "go_mod_sum": "h1:oqhhyKMmRG6o0d3V4LY8S2slWa0IkgTUubPXqTqYwzI=",
       "source_entries": 58,
       "candidate_verified": true,
-      "source_inventory_sha256": "4441f01a8b613ce39b6e170701c60d8454a3e99ce73cd71d6e8f94ad4bde4c10"
+      "source_inventory_sha256": "4441f01a8b613ce39b6e170701c60d8454a3e99ce73cd71d6e8f94ad4bde4c10",
+      "tag_object": "b84a6fde5161a211de937f3dd1a8a9d4af018fd8"
     },
     {
       "directory": "pockets/authentication/stores/firestore",
@@ -39,7 +41,8 @@
       "go_mod_sum": "h1:9GoB0p5wtiC/vq9GqNgzGWc8aPbQywiiFwHVWYrkAtw=",
       "source_entries": 72,
       "candidate_verified": true,
-      "source_inventory_sha256": "bce016c16853d3ca9cbbaec1f986d3ee51fc4b97ada76e3583cac37680a790d4"
+      "source_inventory_sha256": "bce016c16853d3ca9cbbaec1f986d3ee51fc4b97ada76e3583cac37680a790d4",
+      "tag_object": "bce445657c4114578641f3c5a026d882cdcdbf77"
     }
   ],
   "live_workflow_run": null,
@@ -53,7 +56,8 @@
     "authorization_emulator_race": "361 passing test outcomes; only TestRunTransactional skipped (unsupported ambient family); zero failures",
     "authentication_emulator_race": "422 passing test outcomes; zero failures/skips",
     "independent_review": "no release-policy or candidate-tool blocker",
-    "cloud_live": "not run; explicitly unverified for this beta"
+    "cloud_live": "not run; explicitly unverified for this beta",
+    "canonical_workspace_public_resolution": "passed after removing the root go.work bootstrap; 348 modules, zero replacements"
   },
   "release_policy": "Owner-directed emulator-verified beta; real GCP gate remains required for unsuffixed v0.1.0.",
   "unverified_gcp": [
@@ -62,5 +66,8 @@
     "production contention and snapshot behavior",
     "backend transaction and size limits"
   ],
-  "verification_record": "plans/firestore-release-verification.json"
+  "verification_record": "plans/firestore-release-verification.json",
+  "commit": "973f94322a3a99b8699df8f266c33539c0c21ed8",
+  "published_at": "2026-09-13",
+  "public_verification": "All three fresh public Firestore downloads match candidate Go ZIP/go.mod checksums and all 176 source entries. GOWORK=off build/test/vet and live compile/vet pass without replacements or checksum exemptions, using proxy.golang.org and sum.golang.org with cached third-party dependencies."
 }
