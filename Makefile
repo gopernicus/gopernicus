@@ -1,15 +1,21 @@
 # gopernicus — framework monorepo (sdk + integrations + pockets + examples)
 #
-# Multi-module workspace (go.work), 39 modules. templ is pinned via the `tool`
+# Multi-module workspace (go.work), 40 modules. templ is pinned via the `tool`
 # directive in pockets/cms/views/goth/go.mod (where the .templ sources live),
 # so `go tool templ` is reproducible.
 
-MODULES = sdk integrations/cryptids/bcrypt integrations/cryptids/golang-jwt integrations/cryptids/google-uuid integrations/datastores/pgxdb integrations/datastores/turso integrations/email/sendgrid integrations/filestorage/gcs integrations/filestorage/s3 integrations/kvstores/goredis integrations/notify/mailer integrations/oauth/github integrations/oauth/google integrations/scheduling/robfig-cron integrations/tracing/otel pockets/authentication pockets/authentication/stores/pgx pockets/authentication/stores/turso pockets/authentication/views/goth pockets/authorization pockets/authorization/stores/pgx pockets/authorization/stores/turso pockets/cms pockets/cms/stores/pgx pockets/cms/stores/turso pockets/cms/views/goth pockets/events pockets/events/stores/pgx pockets/events/stores/turso pockets/jobs pockets/jobs/stores/pgx pockets/jobs/stores/turso ui/goth examples/auth-cms examples/cms examples/goth-showcase examples/jobs-minimal examples/minimal workshop/gopernicus
+MODULES = sdk integrations/cryptids/bcrypt integrations/cryptids/golang-jwt integrations/cryptids/google-uuid integrations/datastores/pgxdb integrations/datastores/turso integrations/datastores/firestore integrations/email/sendgrid integrations/filestorage/gcs integrations/filestorage/s3 integrations/kvstores/goredis integrations/notify/mailer integrations/oauth/github integrations/oauth/google integrations/scheduling/robfig-cron integrations/tracing/otel pockets/authentication pockets/authentication/stores/pgx pockets/authentication/stores/turso pockets/authentication/views/goth pockets/authorization pockets/authorization/stores/pgx pockets/authorization/stores/turso pockets/cms pockets/cms/stores/pgx pockets/cms/stores/turso pockets/cms/views/goth pockets/events pockets/events/stores/pgx pockets/events/stores/turso pockets/jobs pockets/jobs/stores/pgx pockets/jobs/stores/turso ui/goth examples/auth-cms examples/cms examples/goth-showcase examples/jobs-minimal examples/minimal workshop/gopernicus
 
 # STORE_MODULES carry env-gated live conformance suites (storetest against a real
 # database). `make check`/`make test` run them hermetically (loud skips); `make
 # test-stores` runs them EXPECTING the datastore env vars set.
 STORE_MODULES = pockets/cms/stores/pgx pockets/cms/stores/turso pockets/authentication/stores/pgx pockets/authentication/stores/turso pockets/jobs/stores/pgx pockets/jobs/stores/turso pockets/events/stores/pgx pockets/events/stores/turso pockets/authorization/stores/pgx pockets/authorization/stores/turso
+
+# INTEGRATION_TAG_MODULES carry `-tags=integration` sources `make check` must keep
+# COMPILING even though they never RUN without their datastore env: the turso (and,
+# as those trains land, firestore) stores, plus the firestore connector itself —
+# which lives in MODULES, not STORE_MODULES, so it is named explicitly.
+INTEGRATION_TAG_MODULES = $(filter %/turso %/firestore,$(STORE_MODULES)) integrations/datastores/firestore
 
 .PHONY: generate generate-ui-assets build vet test test-stores test-ui-browser docs-install docs docs-build run migrate check tidy guard warm-scaffold-cache \
 	guard-sdk-stdlib guard-pocket-isolation guard-sdk-no-outward guard-no-legacy-path \
@@ -18,7 +24,8 @@ STORE_MODULES = pockets/cms/stores/pgx pockets/cms/stores/turso pockets/authenti
 	guard-workshop-boundary guard-sdk-layering guard-integration-no-inward \
 	guard-auth-no-delivery-repo guard-auth-no-request-time-provider \
 	guard-authorization-no-delivery-repo guard-authorization-rolesvc-no-engine guard-ui-no-inward guard-ui-require-whitelist \
-	guard-no-legacy-features-path guard-crud-no-nethttp guard-violation-message-not-error
+	guard-no-legacy-features-path guard-crud-no-nethttp guard-violation-message-not-error \
+	guard-firestore-mediation
 
 # Regenerate *_templ.go from .templ sources. Each bundled views/templ module pins
 # its own templ tool; generation runs inside each so the tool version is
@@ -53,11 +60,22 @@ test:
 # the datastore env vars set (vs `make check`/`make test`, which skip loudly and
 # stay hermetic). It fails loudly if POSTGRES_TEST_DSN is unset — this milestone's
 # proof is the live postgres run. The turso leg is `-tags=integration` and skips
-# loudly without TURSO_DATABASE_URL/TURSO_AUTH_TOKEN.
+# loudly without TURSO_DATABASE_URL/TURSO_AUTH_TOKEN. The firestore connector leg
+# is `-tags=integration` too and skips loudly without FIRESTORE_EMULATOR_HOST;
+# its live-project leg is CI-only (live-stores.yml), since it needs a disposable
+# GCP database.
 #
-# Spin a local postgres and run:
+# Spin a local postgres and a Firestore emulator, then run:
 #   docker run --rm -d -p 5432:5432 -e POSTGRES_PASSWORD=postgres postgres:17
-#   POSTGRES_TEST_DSN='postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable' make test-stores
+#   docker run --rm -d -p 8080:8080 gcr.io/google.com/cloudsdktool/google-cloud-cli:emulators \
+#     gcloud emulators firestore start --host-port=0.0.0.0:8080 --project=gopernicus-test
+# The floating :emulators tag is deliberate for local runs (convenience, not a
+# gate); CI pins that image BY DIGEST in .github/workflows/live-stores.yml, and
+# bumping the digest there means re-running C3's contention measurements. If
+# 8080 is already taken locally, publish another port
+# (`-p 8081:8080` … FIRESTORE_EMULATOR_HOST=127.0.0.1:8081).
+#   POSTGRES_TEST_DSN='postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable' \
+#     FIRESTORE_EMULATOR_HOST=127.0.0.1:8080 FIRESTORE_PROJECT_ID=gopernicus-test make test-stores
 # pgx-leg runs one pgx store module's live suite twice: once unqualified (the
 # default every existing host runs) and once with POSTGRES_TEST_SCHEMA set, so
 # every statement is proven both bare and schema-qualified
@@ -94,6 +112,9 @@ test-stores:
 	$(call pgx-leg,pockets/authorization/stores/pgx)
 	@echo "== pockets/authorization/stores/turso (live, -tags=integration) =="
 	@cd pockets/authorization/stores/turso && go test -tags=integration ./...
+	@echo "== integrations/datastores/firestore (emulator, -tags=integration) =="
+	@if [ -z "$$FIRESTORE_EMULATOR_HOST" ]; then echo "   FIRESTORE_EMULATOR_HOST not set — the emulator cases SKIP loudly (Firestore emulator conformance NOT verified)"; fi
+	@cd integrations/datastores/firestore && go test -tags=integration -count=1 -timeout 15m ./...
 
 # test-ui-browser runs the ui/goth three-engine Playwright + axe harness
 # (Chromium, Firefox, WebKit) against the zero-datastore examples/goth-showcase
@@ -134,14 +155,15 @@ tidy:
 # Layering guards — each enforces one architectural boundary from the
 # constitution (00-overview.md) or the feature-standard charter (FS rules,
 # 2026-07-07); every target must print nothing and exit 0 on a clean tree.
-# `make guard` runs all twenty-two.
+# `make guard` runs all twenty-three.
 guard: guard-sdk-stdlib guard-pocket-isolation guard-sdk-no-outward guard-no-legacy-path \
 	guard-pocket-core-sdk-only guard-pocket-transport-sdk-web guard-pocket-no-cross-pocket \
 	guard-store-no-foreign-pocket guard-no-underlying guard-no-lax-scan \
 	guard-workshop-boundary guard-sdk-layering guard-integration-no-inward \
 	guard-auth-no-delivery-repo guard-auth-no-request-time-provider \
 	guard-authorization-no-delivery-repo guard-authorization-rolesvc-no-engine guard-ui-no-inward guard-ui-require-whitelist \
-	guard-no-legacy-features-path guard-crud-no-nethttp guard-violation-message-not-error
+	guard-no-legacy-features-path guard-crud-no-nethttp guard-violation-message-not-error \
+	guard-firestore-mediation
 
 # G1: sdk imports only the standard library (also enforced structurally by
 # sdk/go.mod having no require block).
@@ -308,6 +330,39 @@ guard-violation-message-not-error:
 	@echo "== guard: sdk.Violation messages never wrap a raw error string (G23) =="
 	@! grep -rn --include='*.go' -E '(Refuse\(|\.Add\().*err\.Error\(\)' sdk/ pockets/ integrations/ examples/ | grep -vE '^[^:]+:[0-9]+:[[:space:]]*//' || { echo "ERROR (G23): a violation message wraps a raw error string — sdk.Violation.Message is caller-facing text only, never err.Error() from a store or driver"; exit 1; }
 
+# G24 (firestore-stores C8): a pockets/*/stores/firestore adapter reaches
+# Firestore ONLY through the connector's tx-aware seams. The connector hands out
+# the vendor's own *DocumentRef / *CollectionRef / Query values — they are how a
+# query is BUILT — and every one of them carries its own I/O methods. So a store
+# can call ref.Get(ctx) or q.Documents(ctx) directly, run OUTSIDE the ambient
+# transaction, and silently split an atomic unit. No import guard sees that: the
+# import itself is legitimate. This one greps for the calls, in two parts.
+#
+# (a) the vendor identifiers a store may name at all: the TYPES and VALUES that
+# build a query or describe a write. Anything else under gcfs. — a client
+# constructor, an option, a transaction type — means the store is doing the
+# connector's job. Where/OrderBy/Limit/StartAfter are METHODS on Query and never
+# appear as gcfs.X, so query building is unaffected.
+#
+# (b) the I/O verbs, forbidden on every receiver EXCEPT the connector's seams
+# (a Reader/Writer value, or ReaderFrom/WriterFrom inline). Those are the calls
+# that must not be issued on a raw reference, collection, or query.
+#
+# The glob passes trivially today — no pockets/*/stores/firestore exists yet —
+# and that is the point of landing it with the connector: the first store train
+# is born under it. An empty glob must not error, hence the [ -d ] skip.
+guard-firestore-mediation:
+	@echo "== guard: firestore store adapters issue I/O only through the connector's Reader/Writer (G24) =="
+	@fail=0; for d in pockets/*/stores/firestore/; do \
+		[ -d "$$d" ] || continue; \
+		names=$$(grep -rno --include='*.go' -E 'gcfs\.[A-Za-z_][A-Za-z0-9_]*' $$d \
+			| grep -vE 'gcfs\.(Query|CollectionRef|CollectionGroupRef|DocumentRef|DocumentSnapshot|DocumentIterator|Update|Precondition|SetOption|Merge|MergeAll|Exists|LastUpdateTime|Delete|DocumentID|ServerTimestamp|Asc|Desc|Direction)$$' || true); \
+		if [ -n "$$names" ]; then echo "ERROR (G24): a firestore store adapter names a vendor symbol outside the query/write vocabulary — client lifecycle, transactions and options belong to integrations/datastores/firestore:"; echo "$$names"; fail=1; fi; \
+		io=$$(grep -rn --include='*.go' -E '\.(Documents|GetAll|NewDoc|Add|Snapshots|BulkWriter)\(|\.(Get|Create|Set|Update|Delete)\(ctx' $$d \
+			| grep -vE '(ReaderFrom\(|WriterFrom\(|(^|[^A-Za-z0-9_])(r|w|reader|writer|[A-Za-z]+(Reader|Writer))\.)' || true); \
+		if [ -n "$$io" ]; then echo "ERROR (G24): a firestore store adapter issues vendor I/O directly — build the reference or query, then run it through db.ReaderFrom(ctx) / db.WriterFrom(ctx):"; echo "$$io"; fail=1; fi; \
+	done; exit $$fail
+
 # G13 (sdk-layering, 2026-07-10, folded steward finding): integrations never
 # import inward — no pockets/, examples/, or workshop/. Load-bearing now that
 # COMPOSING integrations (zero external deps, e.g. notify/mailer) are
@@ -465,7 +520,7 @@ guard-no-legacy-features-path:
 # <<< LEGACY-PATTERNS
 
 # CI-style gate: templ generation must be a no-op (no drift), then per-module
-# vet/build/test across all MODULES, then the twenty-one layering guards. Drift
+# vet/build/test across all MODULES, then the twenty-three layering guards. Drift
 # is checked via `git diff` when this tree is a git repo; this repo IS a git
 # repo (as of phase 2), so that branch runs. The before/after checksum branch
 # remains as a fallback for gitless checkouts of *_templ.go.
@@ -497,6 +552,8 @@ check:
 	@$(MAKE) warm-scaffold-cache
 	@for m in $(MODULES); do echo "== $$m =="; (cd $$m && go vet ./... && go build ./... && go test ./...) || exit 1; done
 	@echo "== integration-tag vet (compile-only, no DB) =="
-	@for m in $(filter %/turso,$(STORE_MODULES)); do echo "== vet -tags=integration $$m =="; (cd $$m && go vet -tags=integration ./...) || exit 1; done
+	@for m in $(INTEGRATION_TAG_MODULES); do echo "== vet -tags=integration $$m =="; (cd $$m && go vet -tags=integration ./...) || exit 1; done
+	@echo "== vet -tags=integration,live integrations/datastores/firestore =="
+	@cd integrations/datastores/firestore && go vet -tags='integration,live' ./...
 	@$(MAKE) guard
 	@echo "all checks passed"

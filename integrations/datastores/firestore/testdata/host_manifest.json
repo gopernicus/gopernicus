@@ -1,0 +1,28 @@
+{
+  "indexes": [
+    {
+      "collectionGroup": "posts",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "author", "arrayConfig": "CONTAINS" },
+        { "fieldPath": "timestamp", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "iam_relationships",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "resource_key", "order": "ASCENDING" },
+        { "fieldPath": "relationship_id", "order": "ASCENDING" }
+      ]
+    }
+  ],
+  "fieldOverrides": [
+    {
+      "collectionGroup": "posts",
+      "fieldPath": "big_map",
+      "ttl": false,
+      "indexes": []
+    }
+  ]
+}

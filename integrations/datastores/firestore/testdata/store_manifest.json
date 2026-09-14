@@ -1,0 +1,38 @@
+{
+  "indexes": [
+    {
+      "collectionGroup": "iam_relationships",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "resource_key", "order": "ASCENDING" },
+        { "fieldPath": "relationship_id", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "iam_relationships",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "resource_key", "order": "ASCENDING" },
+        { "fieldPath": "relationship_id", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "iam_role_assignments",
+      "queryScope": "COLLECTION_GROUP",
+      "fields": [
+        { "fieldPath": "subject_key", "order": "ASCENDING" },
+        { "fieldPath": "role_key", "order": "ASCENDING" },
+        { "fieldPath": "__name__", "order": "ASCENDING" }
+      ]
+    }
+  ],
+  "fieldOverrides": [
+    {
+      "collectionGroup": "iam_relationships",
+      "fieldPath": "subject_key",
+      "indexes": [
+        { "order": "ASCENDING", "queryScope": "COLLECTION_GROUP" }
+      ]
+    }
+  ]
+}
