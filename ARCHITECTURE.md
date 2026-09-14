@@ -33,6 +33,7 @@ worked example `examples/cms`.
     authorization/        module github.com/gopernicus/gopernicus/pockets/authorization              — IAM hexagon: independently wireable kinds (relationships/ReBAC + roles; datastore-free; public memstore/)
       stores/pgx/         module …/pockets/authorization/stores/pgx            — authorization's pgx store adapter
       stores/turso/       module …/pockets/authorization/stores/turso          — authorization's Turso store adapter
+      stores/firestore/   module …/pockets/authorization/stores/firestore      — authorization's Firestore store adapter (Native mode; index manifest instead of migrations; joins no ambient transaction)
     cms/                  module github.com/gopernicus/gopernicus/pockets/cms                — the CMS hexagon (datastore-free)
       stores/pgx/         module …/pockets/cms/stores/pgx              — the CMS pocket's pgx store adapter
       stores/turso/       module …/pockets/cms/stores/turso            — the CMS pocket's Turso store adapter
@@ -56,7 +57,7 @@ worked example `examples/cms`.
       cmd/
 ```
 
-**Forty modules today.** `sdk` is the kernel; `integrations/*` are reusable
+**Forty-one modules today.** `sdk` is the kernel; `integrations/*` are reusable
 third-party connectors (one external dependency each, each its own module);
 `pockets/<name>` is a datastore-free pocket core with its store adapters as
 sibling modules — one per supported store implementation; `examples/*` are host apps that
@@ -242,9 +243,9 @@ ui-goth GOTH-0.2, adding the UI-implementation row):
 | kind | definition | examples | swap unit |
 |---|---|---|---|
 | **sdk facility** | a capability **port** + a conformance suite, usually with a first-party stdlib default — defaults are OPTIONAL (sdk-work-protocol, 2026-07-13): the implementation of record may instead be an integration (`oauth`) or a pocket (`work` → `pockets/jobs`); its state is opaque to the host (no host-owned schema, no migrations, no routes) | `cacher`+`Memory`, `email`+`Console`/`SMTP`, `notify`+`Console`/`MailerBridge`, `ratelimiter`+`Memory`, `filestorage`+`Disk`, `workers` (pool + `Runner[T]`), `work` (no default) | a config value — the swap is invisible outside the process |
-| **integration** | a third-party backend for a port; isolates exactly one external dependency — a third-party library or an external vendor's live API contract — **or implements one sdk capability port by composing other sdk packages** (zero external deps, never importing pockets/, examples/, or another integration; guard G13; `notify/mailer`, 2026-07-10); one module | `datastores/turso`, `datastores/pgxdb`, `kvstores/goredis` | a module import in the host's `main` |
+| **integration** | a third-party backend for a port; isolates exactly one external dependency — a third-party library or an external vendor's live API contract — **or implements one sdk capability port by composing other sdk packages** (zero external deps, never importing pockets/, examples/, or another integration; guard G13; `notify/mailer`, 2026-07-10); one module. The isolation unit is the vendor client library **plus the companion modules its API forces on the caller** (`google.golang.org/api/option`, `grpc/codes`+`status` beside `cloud.google.com/go/firestore`) — never a second backend | `datastores/turso`, `datastores/pgxdb`, `datastores/firestore`, `kvstores/goredis` | a module import in the host's `main` |
 | **pocket** | a mountable domain module: own entities, **own durable schema + migrations**, and/or **own route surface**; its core module requires **sdk only** (FS1, 2026-07-07) | `cms`, `auth`, `jobs`; next: `events` | `NewService` + a `svc.Register` call |
-| **store module** | a pocket's store implementation — SQL + migrations written against one driver package's API (`stores/<package>`) | `cms/stores/turso`, `cms/stores/pgx` | a module import + one `Open` call |
+| **store module** | a pocket's store implementation — persistence written against one driver package's API (`stores/<package>`) plus its scaffold artifact: SQL migrations for the SQL families, an index manifest (`firestore.indexes.json`, exported and boot-probed) for Firestore (R5) | `cms/stores/turso`, `cms/stores/pgx`, `authorization/stores/firestore` | a module import + one `Open` call |
 | **views module** | a pocket's bundled presentation default — the implementation of the core's `Views` port, written against one view package's API (`views/<package>`; FS3, 2026-07-07 — amends R6's four-kind table). Nil `Config.Views` → the pocket's HTML surface is not registered, uniformly | `cms/views/goth` (landed at feature-standard B2, 2026-07-07; migrated templ→ui/goth at ui-goth GOTH-7.3, 2026-07-18) | a module import + one `Config` field |
 | **workshop tool** | a developer-time tool that EMITS the other kinds' anatomies and never links them (guard G11: nothing imports `workshop/`, workshop imports no pocket/example); its output is verified by scaffold-compile tests inside `make check`, not by runtime coupling | `workshop/gopernicus` (the scaffolding CLI: `init` / `new pocket` / `db` verbs; workshop-v2-scaffolding, 2026-07-09) | a `go install` — never a runtime dependency |
 | **UI implementation** | a reusable presentation system for ONE rendering/runtime family (ui-goth GOTH-0.2, 2026-07-17): it owns view-library dependencies, semantic tokens, primitives/components, interaction controllers, and distributable assets, and owns NO domain schema and NO routes. Its `go.mod` may require its own view/runtime libraries (templ and its pinned inputs) plus `sdk`; it never imports a pocket, integration, example, or workshop package (guard G17). A pocket reaches a UI implementation only through that pocket's own `views/<pkg>` adapter module — never the reverse; the UI implementation never registers routes, installs middleware, or writes HTTP response headers (the host composes assets + route registration) | `ui/goth` (templ + plain CSS + Alpine + optional HTMX); later `ui/react`, `ui/vue` | a host/view-adapter import plus theme/bundle configuration |
@@ -344,7 +345,13 @@ in-memory, any Postgres host) mount the same domain logic. The supported
 store-implementation set is **{turso, pgx}**, shipped out of the box at each
 pocket's v1 with behavioral parity proven by the pocket's `storetest`
 conformance suite rather than asserted (ratified DP1 — the charter's §3 has
-the full rule). `pockets/cms` demonstrates it: content, taxonomy, menus,
+the full rule). Firestore is an OPTIONAL third family rather than a DP1
+requirement, and it does not join the host's ambient `crud.Transactor`: a
+Firestore transaction requires every read to precede every write and never
+observes its own pending writes, so its stores return no transactor and fail
+loud when handed one, which is a documented family difference rather than a
+defect (ruling R1 — see [`pockets/README.md`](pockets/README.md)).
+`pockets/cms` demonstrates it: content, taxonomy, menus,
 media, and messaging, with ports and entities public, services + HTTP
 internal (`pockets/cms/internal/*`), and both store implementations passing one
 suite.
