@@ -385,3 +385,54 @@ func TestCacheMalformedLatePollLatches(t *testing.T) {
 		t.Fatalf("malformed poll did not latch: %v", err)
 	}
 }
+
+// A logger is host code: it may inspect runtime state while handling a record.
+// Neither the readiness mutex nor the serialized-poll gate may surround it.
+func TestCacheTransitionHandlerCanInspectRuntime(t *testing.T) {
+	for _, action := range []string{"poll", "close", "latch"} {
+		t.Run(action, func(t *testing.T) {
+			r, source, _ := newTestCacheRuntime(t)
+			handler := &inspectingCacheHandler{Handler: slog.NewTextHandler(&bytes.Buffer{}, nil), runtime: r}
+			r.log = slog.New(handler)
+			source.observe = func(context.Context) (CacheVersion, error) { return CacheVersion{}, errors.New("unavailable") }
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				switch action {
+				case "poll":
+					_ = r.Poll(t.Context())
+				case "close":
+					_ = r.Close()
+				case "latch":
+					r.latch()
+				}
+			}()
+			select {
+			case <-done:
+				if !handler.called || handler.gateHeld {
+					t.Fatalf("handler called=%v poll gate held=%v", handler.called, handler.gateHeld)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("logging handler deadlocked while inspecting cache stats")
+			}
+		})
+	}
+}
+
+type inspectingCacheHandler struct {
+	slog.Handler
+	runtime          *CacheRuntime
+	called, gateHeld bool
+}
+
+func (h *inspectingCacheHandler) Handle(context.Context, slog.Record) error {
+	_ = h.runtime.Stats()
+	h.called = true
+	select {
+	case h.runtime.pollGate <- struct{}{}:
+		<-h.runtime.pollGate
+	default:
+		h.gateHeld = true
+	}
+	return nil
+}

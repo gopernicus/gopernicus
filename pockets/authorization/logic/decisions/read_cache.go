@@ -167,12 +167,14 @@ func (r *CacheRuntime) Stats() CacheStats {
 	return out
 }
 func (r *CacheRuntime) Close() error {
+	var event string
+	defer func() { r.emitTransition(event) }()
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if !r.closed {
 		r.closed = true
 		r.stats.Ready = false
-		r.transitionLocked("closed")
+		event = r.transitionLocked("closed")
 		close(r.done)
 		if r.pollCancel != nil {
 			r.pollCancel()
@@ -181,6 +183,8 @@ func (r *CacheRuntime) Close() error {
 	return nil
 }
 func (r *CacheRuntime) Poll(ctx context.Context) error {
+	var event string
+	defer func() { r.emitTransition(event) }()
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -231,9 +235,9 @@ func (r *CacheRuntime) Poll(ctx context.Context) error {
 		r.stats.PollFailures++
 		if errors.Is(err, ErrCacheVersion) {
 			r.latched = true
-			r.transitionLocked("latched")
+			event = r.transitionLocked("latched")
 		} else {
-			r.transitionLocked("unavailable")
+			event = r.transitionLocked("unavailable")
 		}
 		return err
 	}
@@ -242,10 +246,10 @@ func (r *CacheRuntime) Poll(ctx context.Context) error {
 	r.observedAt = start
 	r.stats.Ready = r.now().Before(start.Add(r.policy.MaxStaleness))
 	if !r.stats.Ready {
-		r.transitionLocked("unavailable")
+		event = r.transitionLocked("unavailable")
 		return ErrCacheNotReady
 	}
-	r.transitionLocked("healthy")
+	event = r.transitionLocked("healthy")
 	return nil
 }
 
@@ -284,8 +288,9 @@ func (r *CacheRuntime) latch() {
 	r.mu.Lock()
 	r.latched = true
 	r.stats.Ready = false
-	r.transitionLocked("latched")
+	event := r.transitionLocked("latched")
 	r.mu.Unlock()
+	r.emitTransition(event)
 }
 func (r *CacheRuntime) count(update func(*CacheStats)) { r.mu.Lock(); update(&r.stats); r.mu.Unlock() }
 
@@ -322,20 +327,28 @@ func newCacheRuntime(cfg config) (*CacheRuntime, error) {
 // Repeated states never log. Transient flapping is capped at one record per
 // minute; permanent latching and closure each get one additional lifecycle record.
 // No backend error text, keys, namespace or principal data enters these records.
-func (r *CacheRuntime) transitionLocked(state string) {
+func (r *CacheRuntime) transitionLocked(state string) string {
 	if state == r.logState {
-		return
+		return ""
 	}
 	previous := r.logState
 	r.logState = state
 	if r.log == nil || (previous == "" && state == "healthy") {
-		return
+		return ""
 	}
 	now := r.now()
 	if state != "latched" && state != "closed" && !r.lastLog.IsZero() && now.Sub(r.lastLog) < time.Minute {
-		return
+		return ""
 	}
 	r.lastLog = now
+	return state
+}
+
+// Host handlers may inspect this runtime; never call them under either lock.
+func (r *CacheRuntime) emitTransition(state string) {
+	if state == "" {
+		return
+	}
 	if state == "unavailable" || state == "latched" {
 		r.log.Warn("authorization cache state changed", "state", state)
 	} else {
