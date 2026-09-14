@@ -22,10 +22,12 @@ use (
 	./integrations/scheduling/robfig-cron
 	./integrations/tracing/otel
 	./pockets/authentication
+	./pockets/authentication/stores/firestore
 	./pockets/authentication/stores/pgx
 	./pockets/authentication/stores/turso
 	./pockets/authentication/views/goth
 	./pockets/authorization
+	./pockets/authorization/stores/firestore
 	./pockets/authorization/stores/pgx
 	./pockets/authorization/stores/turso
 	./pockets/cms
