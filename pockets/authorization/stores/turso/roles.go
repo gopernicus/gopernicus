@@ -109,12 +109,14 @@ func (r roleRow) toDomain() roles.Assignment {
 // assignment joins the same host transaction the relationship tuples beside it
 // do.
 type roleStore struct {
-	audit bool
-	db    *tursodb.DB
+	cacheBinding string
+	readQuerier  tursodb.Querier
+	audit        bool
+	db           *tursodb.DB
 }
 
 func newRoleStore(db *tursodb.DB, cfg config) *roleStore {
-	return &roleStore{db: db, audit: cfg.audit}
+	return &roleStore{db: db, cacheBinding: cfg.cacheBinding, audit: cfg.audit}
 }
 
 var _ roles.Storer = (*roleStore)(nil)
@@ -153,7 +155,7 @@ func (s *roleStore) Unassign(ctx context.Context, subjectType, subjectID, roleNa
 // never the store's.
 func (s *roleStore) HasExactRole(ctx context.Context, subjectType, subjectID, roleName, resourceType, resourceID string) (bool, error) {
 	const q = `SELECT EXISTS(SELECT 1 FROM iam_roles WHERE subject_type = ? AND subject_id = ? AND role = ? AND resource_type = ? AND resource_id = ?)`
-	return existsQuery(ctx, s.db.QuerierFrom(ctx), q, subjectType, subjectID, roleName, resourceType, resourceID)
+	return existsQuery(ctx, s.cacheReader(ctx), q, subjectType, subjectID, roleName, resourceType, resourceID)
 }
 
 // ListBySubject pages a subject's assignments by role_key in byte order.

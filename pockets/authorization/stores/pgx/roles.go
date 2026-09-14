@@ -101,13 +101,15 @@ func rolesBaseSQL(schema pgxdb.Schema, innerWhere string) string {
 // when the context carries one, the pool otherwise — so a role assignment joins
 // the same host transaction the relationship tuples beside it do.
 type roleStore struct {
-	audit  bool
-	db     *pgxdb.DB
-	schema pgxdb.Schema
+	cacheBinding string
+	readQuerier  pgxdb.Querier
+	audit        bool
+	db           *pgxdb.DB
+	schema       pgxdb.Schema
 }
 
 func newRoleStore(db *pgxdb.DB, cfg config) *roleStore {
-	return &roleStore{db: db, schema: cfg.schema, audit: cfg.audit}
+	return &roleStore{db: db, cacheBinding: cfg.cacheBinding, schema: cfg.schema, audit: cfg.audit}
 }
 
 // table renders name under the store's schema — the one chokepoint every
@@ -161,7 +163,7 @@ func (s *roleStore) Unassign(ctx context.Context, subjectType, subjectID, roleNa
 func (s *roleStore) HasExactRole(ctx context.Context, subjectType, subjectID, roleName, resourceType, resourceID string) (bool, error) {
 	q := `SELECT EXISTS (SELECT 1 FROM ` + s.table("iam_roles") + ` WHERE subject_type = @subject_type AND subject_id = @subject_id AND role = @role AND resource_type = @resource_type AND resource_id = @resource_id)`
 	var ok bool
-	if err := s.db.QuerierFrom(ctx).QueryRow(ctx, q, pgx.NamedArgs{
+	if err := s.cacheReader(ctx).QueryRow(ctx, q, pgx.NamedArgs{
 		"subject_type":  subjectType,
 		"subject_id":    subjectID,
 		"role":          roleName,

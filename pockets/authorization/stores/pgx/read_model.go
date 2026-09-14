@@ -12,14 +12,18 @@ import (
 )
 
 func (s *relationshipStore) ForModel(model relationships.ReadModel) relationships.Reader {
-	return &relationshipStore{db: s.db, schema: s.schema, model: &model, audit: s.audit}
+	return &relationshipStore{db: s.db, cacheBinding: s.cacheBinding, readQuerier: s.readQuerier, schema: s.schema, model: &model, audit: s.audit}
 }
 
 func (s *relationshipStore) reader(ctx context.Context) pgxdb.Querier {
-	if s.model == nil {
-		return s.db.QuerierFrom(ctx)
+	q := s.readQuerier
+	if q == nil {
+		q = s.db.QuerierFrom(ctx)
 	}
-	return modelQuerier{Querier: s.db.QuerierFrom(ctx), schema: s.schema, model: *s.model}
+	if s.model == nil {
+		return q
+	}
+	return modelQuerier{Querier: q, schema: s.schema, model: *s.model}
 }
 
 // Only the adapter's static relationship READ statements use this wrapper.

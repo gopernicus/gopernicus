@@ -132,3 +132,51 @@ WithSchema(schema) qualifies every runtime table and audit query. Apply migratio
 Set POSTGRES_TEST_DSN and run `go test -race -count=1 ./...`. Repeat with POSTGRES_TEST_SCHEMA to exercise a named schema. The optional non-C locale proof requires its documented locale fixture.
 Live tests include shared fact/mutation/audit conformance, exact userset deltas,
 ambient savepoint recovery, retained readers, pagination and populated upgrades.
+
+## Optional authorization read caching
+
+Export `CacheMigrationsFS` / `CacheMigrationsDir` using
+`ExportCacheMigrations(dst)` as the separate **authorization-cache** source.
+The host must first finish **authorization** through 0007 in the same authority.
+The source/version ledger does not order different sources. Base migration
+exports and the historical 0001–0007 inventory are unchanged. Constructors never
+apply either source.
+
+`Repositories(ctx, db, WithCacheReads())` validates the singleton and full owned
+trigger definitions and returns `CacheSource` with matching fact-reader bindings.
+Use the bundle; the relationship-only constructor rejects this option. Supply the
+source and readers together, plus a cacher and an explicit positive MaxStaleness
+to the authorization decision service. Unconfigured readers remain direct and
+need no optional schema. The runtime starts cold; the host owns polling and close.
+
+Installing this migration changes every ordinary relationship/role writer,
+including older and nil-cacher writers. Facts and generation advance atomically;
+missing metadata or overflow fails the write. Cache entries are immutable per
+epoch/generation; no deletion is needed for correctness. A stale observation may
+return a revoked grant within the caller's explicitly accepted freshness bound.
+Keep strict checks and guarded mutations on direct readers.
+
+Snapshot callbacks are sequential and must not escape to goroutines. Retained
+readers fail with `decisions.ErrSnapshotClosed`; caller ambient transactions
+bypass caching and the snapshot source refuses ambient use. Store and cache
+clients remain borrowed.
+
+Before disabling triggers, importing with trigger bypass, restoring or cloning:
+fence and drain every cache reader, perform maintenance, rotate the epoch to a
+new random 32-character lowercase hex value, validate schema and triggers, then
+reconstruct readers. Never reset generation within an epoch. Rollback disables
+all readers before removing the optional source; removing only this process's
+cacher does not remove database-wide invalidation overhead. Runtime identities
+must not be able to disable triggers or perform DDL.
+
+Enabled construction resolves all fact/head tables to one durable schema and
+freezes that schema, so later search_path changes cannot move reads. Mixed schemas
+are rejected. Writers need schema USAGE, ordinary fact permissions, SELECT on
+`iam_cache_invalidation` and UPDATE(generation). The trigger uses SECURITY INVOKER
+and addresses the head using its fact table's schema. Observe and snapshots must
+use a primary connection. PostgreSQL 17 is the verified fixture baseline.
+
+The v1 cache capability rejects row-level security and table inheritance on
+facts/head metadata: these can change the visible fact set without this head's
+triggers advancing. Introducing either requires fencing readers and a new
+validated protocol; they remain available to unconfigured direct stores.

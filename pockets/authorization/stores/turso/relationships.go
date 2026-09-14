@@ -50,13 +50,15 @@ capped AS MATERIALIZED (
 // relationshipStore reads through the ambient querier and routes all writes
 // through a join-or-own transaction so facts and optional history commit together.
 type relationshipStore struct {
-	audit bool
-	model *relationships.ReadModel
-	db    *tursodb.DB
+	cacheBinding string
+	readQuerier  tursodb.Querier
+	audit        bool
+	model        *relationships.ReadModel
+	db           *tursodb.DB
 }
 
 func newRelationshipStore(db *tursodb.DB, cfg config) *relationshipStore {
-	return &relationshipStore{db: db, audit: cfg.audit}
+	return &relationshipStore{db: db, cacheBinding: cfg.cacheBinding, audit: cfg.audit}
 }
 
 var _ relationships.Storer = (*relationshipStore)(nil)

@@ -11,14 +11,21 @@ import (
 )
 
 func (s *relationshipStore) ForModel(model relationships.ReadModel) relationships.Reader {
-	return &relationshipStore{db: s.db, model: &model, audit: s.audit}
+	return &relationshipStore{db: s.db, cacheBinding: s.cacheBinding, readQuerier: s.readQuerier, model: &model, audit: s.audit}
 }
 
 func (s *relationshipStore) reader(ctx context.Context) tursodb.Querier {
-	if s.model == nil {
-		return s.db.QuerierFrom(ctx)
+	q := s.readQuerier
+	if q == nil {
+		q = s.db.QuerierFrom(ctx)
 	}
-	return modelQuerier{Querier: s.db.QuerierFrom(ctx), model: *s.model}
+	if s.cacheBinding != "" {
+		q = mainCacheQuerier{Querier: q}
+	}
+	if s.model == nil {
+		return q
+	}
+	return modelQuerier{Querier: q, model: *s.model}
 }
 
 // This wrapper only receives the adapter's static relationship READ statements.

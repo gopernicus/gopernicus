@@ -64,8 +64,10 @@ const MigrationsDir = "migrations"
 type Option func(*config)
 
 type config struct {
-	audit    bool
-	guardian mutation.GuardianPolicy
+	cacheReads   bool
+	cacheBinding string
+	audit        bool
+	guardian     mutation.GuardianPolicy
 }
 
 // WithAudit enables atomic recording of actual authorization fact changes.
@@ -101,17 +103,29 @@ func Repositories(ctx context.Context, db *tursodb.DB, opts ...Option) (authoriz
 		}
 		o(&cfg)
 	}
+	var source *cacheSource
+	if cfg.cacheReads {
+		var err error
+		source, err = prepareCacheSource(ctx, db, &cfg)
+		if err != nil {
+			return authorization.Repositories{}, err
+		}
+	}
 	for _, table := range []string{"iam_relationships", "iam_roles", "iam_audit"} {
 		if err := probeTable(ctx, db, table); err != nil {
 			return authorization.Repositories{}, err
 		}
 	}
-	return authorization.Repositories{
+	repos := authorization.Repositories{
 		Relationships: newRelationshipStore(db, cfg),
 		Roles:         newRoleStore(db, cfg),
 		Mutations:     newMutationStore(db, cfg),
 		Audit:         &auditStore{db: db},
-	}, nil
+	}
+	if source != nil {
+		repos.CacheSource = source
+	}
+	return repos, nil
 }
 
 // RelationshipRepository returns only the relationship port after probing only
@@ -127,6 +141,9 @@ func RelationshipRepository(ctx context.Context, db *tursodb.DB, opts ...Option)
 			return nil, fmt.Errorf("authorization store: nil option: %w", sdk.ErrInvalidInput)
 		}
 		opt(&cfg)
+	}
+	if cfg.cacheReads {
+		return nil, fmt.Errorf("authorization: WithCacheReads requires Repositories bundle: %w", sdk.ErrInvalidInput)
 	}
 	if err := probeTable(ctx, db, "iam_relationships"); err != nil {
 		return nil, err

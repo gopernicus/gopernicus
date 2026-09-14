@@ -74,9 +74,11 @@ var storeTables = []string{"iam_relationships", "iam_roles", "iam_audit"}
 type Option func(*config)
 
 type config struct {
-	audit    bool
-	guardian mutation.GuardianPolicy
-	schema   pgxdb.Schema
+	cacheReads   bool
+	cacheBinding string
+	audit        bool
+	guardian     mutation.GuardianPolicy
+	schema       pgxdb.Schema
 }
 
 // WithAudit enables atomic recording of actual authorization fact changes.
@@ -124,17 +126,29 @@ func Repositories(ctx context.Context, db *pgxdb.DB, opts ...Option) (authorizat
 		}
 		o(&cfg)
 	}
+	var source *cacheSource
+	if cfg.cacheReads {
+		var err error
+		source, err = prepareCacheSource(ctx, db, &cfg)
+		if err != nil {
+			return authorization.Repositories{}, err
+		}
+	}
 	for _, table := range storeTables {
 		if err := probe(ctx, db, cfg.schema.Table(table)); err != nil {
 			return authorization.Repositories{}, err
 		}
 	}
-	return authorization.Repositories{
+	repos := authorization.Repositories{
 		Relationships: newRelationshipStore(db, cfg),
 		Roles:         newRoleStore(db, cfg),
 		Mutations:     newMutationStore(db, cfg),
 		Audit:         &auditStore{db: db, schema: cfg.schema},
-	}, nil
+	}
+	if source != nil {
+		repos.CacheSource = source
+	}
+	return repos, nil
 }
 
 // RelationshipRepository returns only the relationship port after probing both fact tables
@@ -153,6 +167,9 @@ func RelationshipRepository(ctx context.Context, db *pgxdb.DB, opts ...Option) (
 			return nil, fmt.Errorf("authorization store: nil option: %w", sdk.ErrInvalidInput)
 		}
 		o(&cfg)
+	}
+	if cfg.cacheReads {
+		return nil, fmt.Errorf("authorization: WithCacheReads requires Repositories bundle: %w", sdk.ErrInvalidInput)
 	}
 	if err := probe(ctx, db, cfg.schema.Table("iam_relationships")); err != nil {
 		return nil, err

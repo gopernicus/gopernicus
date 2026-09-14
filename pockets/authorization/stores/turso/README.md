@@ -127,3 +127,48 @@ Repositories probes both fact tables and iam_audit before serving requests. The 
 Set TURSO_DATABASE_URL and TURSO_AUTH_TOKEN, then run `go test -tags=integration -race -count=1 ./...` against a disposable database.
 Live tests include shared fact/mutation/audit conformance, exact userset deltas,
 ambient savepoint recovery, retained readers, pagination and populated upgrades.
+
+## Optional authorization read caching
+
+Export `CacheMigrationsFS` / `CacheMigrationsDir` using
+`ExportCacheMigrations(dst)` as the separate **authorization-cache** source.
+The host must first finish **authorization** through 0007 in the same authority.
+The source/version ledger does not order different sources. Base migration
+exports and the historical 0001–0007 inventory are unchanged. Constructors never
+apply either source.
+
+`Repositories(ctx, db, WithCacheReads())` validates the singleton and full owned
+trigger definitions and returns `CacheSource` with matching fact-reader bindings.
+Use the bundle; the relationship-only constructor rejects this option. Supply the
+source and readers together, plus a cacher and an explicit positive MaxStaleness
+to the authorization decision service. Unconfigured readers remain direct and
+need no optional schema. The runtime starts cold; the host owns polling and close.
+
+Installing this migration changes every ordinary relationship/role writer,
+including older and nil-cacher writers. Facts and generation advance atomically;
+missing metadata or overflow fails the write. Cache entries are immutable per
+epoch/generation; no deletion is needed for correctness. A stale observation may
+return a revoked grant within the caller's explicitly accepted freshness bound.
+Keep strict checks and guarded mutations on direct readers.
+
+Snapshot callbacks are sequential and must not escape to goroutines. Retained
+readers fail with `decisions.ErrSnapshotClosed`; caller ambient transactions
+bypass caching and the snapshot source refuses ambient use. Store and cache
+clients remain borrowed.
+
+Before disabling triggers, importing with trigger bypass, restoring or cloning:
+fence and drain every cache reader, perform maintenance, rotate the epoch to a
+new random 32-character lowercase hex value, validate schema and triggers, then
+reconstruct readers. Never reset generation within an epoch. Rollback disables
+all readers before removing the optional source; removing only this process's
+cacher does not remove database-wide invalidation overhead. Runtime identities
+must not be able to disable triggers or perform DDL.
+
+Enabled read queries explicitly select main facts, so TEMP objects cannot shadow
+them. The supported local fixture uses the pinned libSQL file driver and SQLite
+WAL, with multiple connections for concurrent read/write snapshots. Snapshot
+conformance also passes over HTTP against owned primary `sqld 0.24.33`. Turso Cloud
+and replica routing have not been certified by these local tests. Do not enable
+cache reads on a deployment without proven authoritative head and snapshot
+routing. SQLite deferred transactions are not engine-enforced read-only; only
+check-reader capabilities are exposed to callbacks.
