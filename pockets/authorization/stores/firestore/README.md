@@ -180,3 +180,41 @@ The live-stores workflow archives the expected test roots, JSON outcomes, audit
 and ready index state; record its run and artifact when available. Release `v0.1.0`
 has no real GCP result. The emulator
 does not substitute for production index or concurrency-mode coverage.
+
+## Optional authorization read caching
+
+Caching is an explicit bounded-staleness mode. An ordinary repository remains
+uncached and performs no invalidation-metadata I/O. `WithCacheInvalidation()`
+requires atomic head maintenance by this bundle's relationship, role and mutation
+writers. `WithCacheReads()` implies that participation and additionally exposes
+`Repositories.CacheSource`, with a common binding on its readers. A single-kind
+`RelationshipRepository` accepts writer-only invalidation, but cache readers must
+use the complete bundle.
+
+Before activation, fence readers and writers, upgrade **every writer**, then call
+`InitializeCacheInvalidation(ctx, db)`. This explicit maintenance operation creates
+`iam_cache_invalidation/head` once; subsequent calls validate without resetting it.
+Construct all writers with `WithCacheInvalidation()` even when they have no cacher.
+Construct cache readers with `WithCacheReads()`, and supply the bundle's source,
+ordinary repositories, cacher and an explicit positive `MaxStaleness` to the core.
+The host owns polling, shutdown and acceptance of delayed revocation observation.
+No constructor initializes metadata, starts a worker or owns the DB/cacher.
+
+Firestore has no synchronous trigger enforcing participation by old Go binaries
+or external Admin clients. Installing the head alone does not make caching safe.
+Prevent obsolete writers from retaining access. Server-client writes bypass
+Security Rules, so rules cannot enforce this protocol. Admin edits, imports and
+`UpgradeTupleStorage` remain fenced maintenance operations. Drain cache readers
+before disabling writer participation or deleting metadata. Missing/malformed
+metadata and generation exhaustion abort enabled fact changes atomically.
+
+Observe performs a fresh point read; ReadSnapshot reads the head first and reuses
+one connector read-only transaction for every query family and role probe. Its
+callback runs once. Callback readers are sequential capabilities; retained readers
+and model-scoped views fail with `decisions.ErrSnapshotClosed` after exit. Caller
+ambient transactions remain refused. Reconstruct sources and readers after a
+fenced restore/clone and explicit epoch rotation; initialization is not rotation.
+
+Emulator coverage verifies protocol mechanics, not production index availability,
+transaction contention or strong consistency on Google Cloud. Real-GCP verification
+and measured retry/billing costs remain required before claiming adoption ready.

@@ -53,9 +53,13 @@ var errAmbientMutation = fmt.Errorf("%w (%w)", ErrAmbientTransactionUnsupported,
 type Option func(*config)
 
 type config struct {
-	guardian   mutation.GuardianPolicy
-	probeIndex bool
-	audit      bool
+	cacheInvalidation bool
+	cacheReads        bool
+	cacheBinding      string
+	cacheEpoch        string
+	guardian          mutation.GuardianPolicy
+	probeIndex        bool
+	audit             bool
 }
 
 // WithAudit records actual tuple and role changes in the write transaction.
@@ -104,12 +108,16 @@ func Repositories(ctx context.Context, db *firestoredb.DB, opts ...Option) (auth
 	if err != nil {
 		return authorization.Repositories{}, err
 	}
-	return authorization.Repositories{
-		Relationships: newRelationshipStore(db, cfg.audit),
-		Roles:         newRoleStore(db, cfg.audit),
-		Mutations:     newMutationStore(db, cfg.guardian, cfg.audit),
-		Audit:         &auditStore{db: db},
-	}, nil
+	rel := newRelationshipStore(db, cfg.audit)
+	rol := newRoleStore(db, cfg.audit)
+	mut := newMutationStore(db, cfg.guardian, cfg.audit)
+	rel.cacheEpoch, rol.cacheEpoch, mut.cacheEpoch = cfg.cacheEpoch, cfg.cacheEpoch, cfg.cacheEpoch
+	rel.binding, rol.binding = cfg.cacheBinding, cfg.cacheBinding
+	repos := authorization.Repositories{Relationships: rel, Roles: rol, Mutations: mut, Audit: &auditStore{db: db}}
+	if cfg.cacheReads {
+		repos.CacheSource = &cacheSource{db: db, binding: cfg.cacheBinding, epoch: cfg.cacheEpoch}
+	}
+	return repos, nil
 }
 
 // RelationshipRepository returns only the relationship port, probing the same
@@ -122,7 +130,12 @@ func RelationshipRepository(ctx context.Context, db *firestoredb.DB, opts ...Opt
 	if err != nil {
 		return nil, err
 	}
-	return newRelationshipStore(db, cfg.audit), nil
+	if cfg.cacheReads {
+		return nil, fmt.Errorf("authorization cache reads require Repositories bundle: %w", sdk.ErrInvalidInput)
+	}
+	store := newRelationshipStore(db, cfg.audit)
+	store.cacheEpoch = cfg.cacheEpoch
+	return store, nil
 }
 
 // ExportIndexes MERGES this store's manifest into the host's own manifest at
@@ -166,6 +179,21 @@ func newConfig(ctx context.Context, db *firestoredb.DB, opts []Option) (config, 
 			if err := firestoredb.ProbeIndexesFS(auditCtx, db, AuditIndexesFS, AuditIndexesFile); err != nil {
 				return config{}, err
 			}
+		}
+	}
+	if cfg.cacheInvalidation {
+		if err := refuseAmbient(ctx); err != nil {
+			return config{}, err
+		}
+		probeCtx, cancel := context.WithTimeout(ctx, firestoredb.ProbeTimeout)
+		defer cancel()
+		version, err := readCacheHead(probeCtx, db, db.ReaderFrom(probeCtx))
+		if err != nil {
+			return config{}, err
+		}
+		cfg.cacheEpoch = version.Epoch
+		if cfg.cacheReads {
+			cfg.cacheBinding = cacheBinding(db, version)
 		}
 	}
 	return cfg, nil

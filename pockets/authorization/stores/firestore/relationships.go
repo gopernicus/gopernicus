@@ -16,9 +16,11 @@ var _ relationships.Storer = (*relationshipStore)(nil)
 // collection and its subject claim collection (SCHEMA.md §5). Every method refuses
 // an ambient transaction first (R1); the bodies land in A2a–A2d.
 type relationshipStore struct {
-	model *relationships.ReadModel
-	db    *firestoredb.DB
-	audit bool
+	binding    string
+	cacheEpoch string
+	model      *relationships.ReadModel
+	db         *firestoredb.DB
+	audit      bool
 }
 
 func newRelationshipStore(db *firestoredb.DB, enabled bool) *relationshipStore {
@@ -234,7 +236,7 @@ func (s *relationshipStore) CreateRelationships(ctx context.Context, relationshi
 		}
 	}
 	return retryTransact(ctx, s.db, func(ctx context.Context) error {
-		return createRelationships(ctx, s.db, relationships, s.audit)
+		return createRelationships(ctx, s.db, relationships, s.audit, s.cacheEpoch)
 	})
 }
 
@@ -261,7 +263,7 @@ func (s *relationshipStore) SetRelationTargets(ctx context.Context, resourceType
 		return err
 	}
 	return retryTransact(ctx, s.db, func(ctx context.Context) error {
-		return setRelationTargets(ctx, s.db, resourceType, resourceID, relation, desired, s.audit)
+		return setRelationTargets(ctx, s.db, resourceType, resourceID, relation, desired, s.audit, s.cacheEpoch)
 	})
 }
 
@@ -288,7 +290,7 @@ func (s *relationshipStore) DeleteRelationshipTarget(ctx context.Context, resour
 		if err != nil {
 			return err
 		}
-		return (factWrites{drops: []relationshipDoc{row}}).flush(ctx, s.db, s.db.WriterFrom(ctx), s.audit)
+		return (factWrites{drops: []relationshipDoc{row}}).flush(ctx, s.db, s.db.WriterFrom(ctx), s.audit, s.cacheEpoch)
 	})
 }
 
@@ -305,7 +307,7 @@ func (s *relationshipStore) DeleteResourceRelationships(ctx context.Context, res
 	return retryTransact(ctx, s.db, func(ctx context.Context) error {
 		return dropMatching(ctx, s.db,
 			s.db.Collection(collectionRelationships).Where("resource_key", "==", resourceKey(resourceType, resourceID)),
-			nil, s.audit)
+			nil, s.audit, s.cacheEpoch)
 	})
 }
 
@@ -328,7 +330,7 @@ func (s *relationshipStore) DeleteRelationship(ctx context.Context, resourceType
 				Where("relation", "==", relation),
 			func(row relationshipDoc) bool {
 				return row.SubjectType == subjectType && row.SubjectID == subjectID
-			}, s.audit)
+			}, s.audit, s.cacheEpoch)
 	})
 }
 
@@ -346,7 +348,7 @@ func (s *relationshipStore) DeleteByResourceAndSubject(ctx context.Context, reso
 			s.db.Collection(collectionRelationships).Where("resource_key", "==", resourceKey(resourceType, resourceID)),
 			func(row relationshipDoc) bool {
 				return row.SubjectType == subjectType && row.SubjectID == subjectID
-			}, s.audit)
+			}, s.audit, s.cacheEpoch)
 	})
 }
 

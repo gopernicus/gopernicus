@@ -96,3 +96,22 @@ even when a write would be a no-op. All writers must use the enabled repositorie
 if the host requires complete coverage; out-of-band database edits bypass audit.
 The `Audit` reader remains available after recording is disabled. Hosts retain,
 archive and delete history according to their own policy; no TTL is configured.
+
+## Cache invalidation activation and rollback
+
+1. Fence cache readers and all fact writers, including scripts and Admin clients.
+2. Upgrade every writer to a version supporting `WithCacheInvalidation()` and
+   prevent obsolete binaries from retaining write access.
+3. Explicitly call `InitializeCacheInvalidation`; it creates or validates the head
+   and never rotates or resets existing metadata.
+4. Configure writer participation on every bundle, including nil-cacher processes.
+   Use `WithCacheReads()` on reader bundles and choose an accepted positive
+   `MaxStaleness` in the host. Resume only after snapshot/poll verification.
+
+For rollback, drain all cache readers before removing writer participation.
+For restore, clone, bulk imports, Admin edits or `UpgradeTupleStorage`, keep readers
+and writers fenced, complete maintenance, explicitly replace the epoch with a new
+random 32-character lowercase hexadecimal value and validate metadata before
+reconstructing sources/readers. Do not treat the initializer as epoch rotation.
+Security Rules cannot force this behavior on the server clients used by this
+adapter. Unlike SQL trigger activation, this is a deployment-wide writer contract.

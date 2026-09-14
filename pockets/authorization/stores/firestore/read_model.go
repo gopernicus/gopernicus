@@ -9,7 +9,7 @@ import (
 )
 
 func (s *relationshipStore) ForModel(model relationships.ReadModel) relationships.Reader {
-	return &relationshipStore{db: s.db, model: &model, audit: s.audit}
+	return &relationshipStore{db: s.db, model: &model, audit: s.audit, cacheEpoch: s.cacheEpoch, binding: s.binding}
 }
 
 func firstReadModel(models []*relationships.ReadModel) *relationships.ReadModel {

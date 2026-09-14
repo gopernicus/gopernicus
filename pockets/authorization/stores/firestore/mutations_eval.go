@@ -40,10 +40,18 @@ type factWrites struct {
 // flush queues every staged write. Deletes precede creates so a purge and a
 // grant in the same command could never race their own documents; no read may
 // follow any of it.
-func (m factWrites) flush(ctx context.Context, db *firestoredb.DB, w firestoredb.Writer, enabled bool) error {
+func (m factWrites) flush(ctx context.Context, db *firestoredb.DB, w firestoredb.Writer, enabled bool, invalidation string) error {
 	records, err := m.auditRecords(ctx, enabled)
 	if err != nil {
 		return err
+	}
+	changed := len(m.drops)+len(m.replaces)+len(m.creates)+len(m.roleDrops)+len(m.roleAdds) > 0
+	var head cacheHead
+	if invalidation != "" && changed {
+		head, err = nextCacheHead(ctx, db, invalidation)
+		if err != nil {
+			return err
+		}
 	}
 	for _, row := range m.drops {
 		if err := dropTuple(ctx, db, w, row); err != nil {
@@ -67,6 +75,11 @@ func (m factWrites) flush(ctx context.Context, db *firestoredb.DB, w firestoredb
 	}
 	for _, row := range m.roleAdds {
 		if err := putRole(ctx, db, w, row); err != nil {
+			return err
+		}
+	}
+	if invalidation != "" && changed {
+		if err := writeCacheHead(ctx, db, w, head); err != nil {
 			return err
 		}
 	}

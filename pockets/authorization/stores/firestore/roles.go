@@ -18,8 +18,10 @@ var _ roles.Storer = (*roleStore)(nil)
 // transaction first (R1), and every document it touches is addressed through
 // grants.go — the file that owns the collection.
 type roleStore struct {
-	db    *firestoredb.DB
-	audit bool
+	binding    string
+	cacheEpoch string
+	db         *firestoredb.DB
+	audit      bool
 }
 
 func newRoleStore(db *firestoredb.DB, enabled bool) *roleStore {
@@ -47,7 +49,7 @@ func (s *roleStore) Assign(ctx context.Context, a roles.Assignment) error {
 			return nil
 		}
 		row := newRoleDoc(a)
-		return (factWrites{roleAdds: []roleDoc{row}}).flush(ctx, s.db, s.db.WriterFrom(ctx), s.audit)
+		return (factWrites{roleAdds: []roleDoc{row}}).flush(ctx, s.db, s.db.WriterFrom(ctx), s.audit, s.cacheEpoch)
 	})
 }
 
@@ -66,7 +68,7 @@ func (s *roleStore) Unassign(ctx context.Context, subjectType, subjectID, roleNa
 			return err
 		}
 		row := roleDoc{SubjectType: subjectType, SubjectID: subjectID, Role: roleName, ResourceType: resourceType, ResourceID: resourceID}
-		return (factWrites{roleDrops: []roleDoc{row}}).flush(ctx, s.db, s.db.WriterFrom(ctx), s.audit)
+		return (factWrites{roleDrops: []roleDoc{row}}).flush(ctx, s.db, s.db.WriterFrom(ctx), s.audit, s.cacheEpoch)
 	})
 }
 
