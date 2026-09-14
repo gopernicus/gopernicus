@@ -1,6 +1,6 @@
 # Authorization cache release — 2026-09-14
 
-Status: PREPARING; FINAL PUBLICATION BLOCKED BY QUALIFICATION GAPS.
+Status: PUBLICATION AUTHORIZED WITH DISCLOSED QUALIFICATION EXCEPTION.
 
 The owner authorized pushing and releasing the implemented authorization cache.
 The implementation is locally merged into `firestore-release-20260911` at
@@ -93,3 +93,15 @@ and retain all failed/unmeasured evidence; do not rewrite results as passed.
   No module tags were created. Final remaining action requires exact destination
   approval and either fulfillment or explicit owner acceptance of the recorded
   qualification gaps. No failed benchmark result will be relabeled as passed.
+
+
+## Owner release exception — 2026-09-14
+
+After the exact GitHub destination, six-module scope and verification gaps were
+presented, the owner replied: “yeah go ahead and release as the next semvar of
+ auth”. This authorizes the requested push to
+`https://github.com/gopernicus/gopernicus.git` and the six prepared minor releases,
+including authorization core `v0.14.0`, with the missing real-GCP/Turso Cloud
+verification and failed/incomplete performance acceptance explicitly accepted
+for publication. These results remain unverified/failed, not passed. This does
+not authorize host activation, database migrations or deployment.

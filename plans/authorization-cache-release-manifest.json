@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "status": "candidate_verified_publication_blocked",
+  "status": "publication_authorized_with_qualification_exception",
   "date": "2026-09-14",
   "release_branch": "authorization-cache-20260914",
   "remote": "https://github.com/gopernicus/gopernicus.git",
@@ -91,8 +91,7 @@
   "unresolved": [
     "real GCP cache conformance not executed",
     "Turso Cloud authoritative routing not verified",
-    "provisional performance acceptance failed; Firestore scheduled-load cache matrix incomplete",
-    "automatic approval review rejected push; exact destination approval required"
+    "provisional performance acceptance failed; Firestore scheduled-load cache matrix incomplete"
   ],
   "changed_files_from_implementation_base": [
     ".github/scripts/authorization_cache_fixture/fixture_test.go.tmpl",
@@ -217,5 +216,15 @@
     "log_sha256": "c0543a279a13a85561cedbd474e63966ca9b8e167a4f556d982a680f8ad3db54",
     "environment": "candidate proxy and isolated module cache from candidate report, GOWORK set to repository go.work; public dependencies retain sum.golang.org verification",
     "plain_public_proxy_attempt": "failed as expected because proposed versions are not yet published; retained /private/tmp/authorization-cache-release-make-check.log"
+  },
+  "owner_exception": {
+    "accepted": true,
+    "scope": "six prepared module releases and push to https://github.com/gopernicus/gopernicus.git",
+    "unverified": [
+      "real GCP cache conformance",
+      "Turso Cloud authoritative routing"
+    ],
+    "performance": "provisional acceptance failed; Firestore scheduled-load cache matrix incomplete",
+    "host_activation_authorized": false
   }
 }

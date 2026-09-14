@@ -15,8 +15,8 @@ Firestore release's accepted verification exception does not approve this featur
 
 Candidate versions and qualification status: [release plan](plans/authorization-cache-release.md)
 and [candidate manifest](plans/authorization-cache-release-manifest.json). Exact
-versioned candidates pass isolated consumer checks; final publication remains
-blocked by the stated cloud/performance gates.
+versioned candidates pass isolated consumer checks; the owner accepted the stated cloud/performance verification gaps for
+publication on 2026-09-14. These gaps remain open for host adoption.
 
 Migration: [AUDIT-035](AUDIT.md#audit-035-optional-bounded-staleness-authorization-read-cache).
 Optional SQL installation and Firestore writer activation require distinct host
