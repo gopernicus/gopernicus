@@ -1,6 +1,6 @@
 # Authorization cache release — 2026-09-14
 
-Status: TAGS PUBLISHED; PUBLIC CONSUMER VERIFICATION PENDING.
+Status: PUBLISHED AND PUBLICLY VERIFIED.
 
 The owner authorized pushing and releasing the implemented authorization cache.
 The implementation is locally merged into `firestore-release-20260911` at
@@ -118,3 +118,17 @@ not authorize host activation, database migrations or deployment.
   No checksum exemption or tag replacement was used.
 - Remote evidence:
   `/private/tmp/authorization-cache-publication-20260914/remote-published.json`.
+
+
+## Completed public verification
+
+All six modules passed standard public checksum and source-archive verification,
+GOWORK=off build/test/vet, integration-only and integration/live compilation.
+Every public Origin matches the release commit and expected tag/subdirectory.
+No checksum exemptions or candidate cache entries were used. Evidence:
+`/private/tmp/authorization-cache-public-20260914-3/results.json`.
+Public proxy propagation failures remain preserved as earlier attempts.
+
+A subsequent owner request merges the full cache release into main and publishes
+fresh patch versions: [main integration plan](authorization-cache-main-release.md).
+The original tags remain fixed.

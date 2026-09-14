@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "status": "published_public_verification_pending",
+  "status": "published_and_public_verified",
   "date": "2026-09-14",
   "release_branch": "authorization-cache-20260914",
   "remote": "https://github.com/gopernicus/gopernicus.git",
@@ -246,5 +246,15 @@
     "host_activation_authorized": false
   },
   "release_commit": "9e67a165fb3c042c60e3b9bc32eb56374d5c5c80",
-  "remote_refs_preserved": true
+  "remote_refs_preserved": true,
+  "public_verification": {
+    "passed": true,
+    "report": "/private/tmp/authorization-cache-public-20260914-3/results.json",
+    "sha256": "7f8a11a4fe4788bfd62220751d80adeea1791b0c5396dc8d90c30a3c0b778e0f",
+    "gowork": "off",
+    "no_replacements": true,
+    "checksum_exemptions": [],
+    "origin_commit": "9e67a165fb3c042c60e3b9bc32eb56374d5c5c80",
+    "all_six_origins_verified": true
+  }
 }

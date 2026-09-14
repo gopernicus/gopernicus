@@ -1,6 +1,6 @@
 # Authorization cache integration and release from main — 2026-09-14
 
-Status: IN PROGRESS. Owner explicitly requested integrating all cache work into
+Status: VERIFIED; READY TO PUSH MAIN. Owner explicitly requested integrating all cache work into
 updated main, adapting to newly merged work where needed, then publishing fresh
 versions from main. Existing tags remain immutable. Prior accepted cloud and
 performance verification gaps persist; no host deployment is authorized.
@@ -60,3 +60,32 @@ These patch tags establish the requested release from main with coordinated
 pins; no new feature or performance improvement is claimed. All existing release
 exceptions remain disclosed. No authentication/SDK/Redis-adapter rerelease is
 required solely for this cache train.
+
+
+## Execution evidence
+
+- Named backend lead confirmed whole-tree equality and ancestor relation.
+- Merge commit `dda6699debb17544c05723c7a41ec4e17255a5ce` has the exact main
+  commit as second parent; its tree matches its first parent. The only difference
+  from the prior cache branch is this new plan. No production adaptation is needed.
+  Evidence: `/private/tmp/authorization-cache-main-merge-evidence.json`.
+- Original release public verification is now recorded as passed in its manifest.
+  The source/checksum results do not waive the documented cloud/performance gaps.
+
+- All six new candidate artifacts passed isolated tidy, versioned dependency
+  graphs, build/test/vet and both integration-only and integration/live
+  compilation. No new versions were queried on public services before tagging.
+  Evidence: `/private/tmp/authorization-cache-main-candidate-20260914/results.json`.
+- Full framework source comparison against the prior published release shows
+  only six store go.mod/go.sum changes. All production algorithms, migrations,
+  HTTP handlers, fixtures and test source are unchanged, so prior successful
+  owned live/race/multi-process/mounted-HTTP checks remain applicable. The
+  unchanged performance matrix is not rerun or relabeled as passed.
+- [Main release manifest](authorization-cache-main-release-manifest.json) records
+  module versions/checksums and merge evidence.
+
+- `make check` passed all 42 modules, generated-file checks, tagged-test
+  compilation and unchanged architecture guards using the candidate proxy.
+  Log: `/private/tmp/authorization-cache-main-make-check.log`.
+- Remote main was rechecked at `437da308`; integration will use a normal
+  fast-forward push, never force. Source inventory is checked again before tags.

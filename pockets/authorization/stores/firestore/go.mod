@@ -5,7 +5,7 @@ go 1.26.1
 require (
 	cloud.google.com/go/firestore v1.25.0
 	github.com/gopernicus/gopernicus/integrations/datastores/firestore v0.1.0
-	github.com/gopernicus/gopernicus/pockets/authorization v0.14.0
+	github.com/gopernicus/gopernicus/pockets/authorization v0.14.1
 	github.com/gopernicus/gopernicus/sdk v0.9.0
 	google.golang.org/api v0.287.1
 )

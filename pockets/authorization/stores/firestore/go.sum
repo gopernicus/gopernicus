@@ -44,8 +44,6 @@ github.com/gopernicus/gopernicus/integrations/datastores/firestore v0.1.0 h1:8wq
 github.com/gopernicus/gopernicus/integrations/datastores/firestore v0.1.0/go.mod h1:tejAOkzU957PAxz35VfH+xwOFnDz/Fu6+F/ilhguoxY=
 github.com/gopernicus/gopernicus/pockets v0.1.0 h1:2WcybbfPw1km00DmG37CekPbxYmObyyj3T1Ec0eFSRY=
 github.com/gopernicus/gopernicus/pockets v0.1.0/go.mod h1:A2H/Tl9Pn2v2mFLOgkCQngMRFkMN10E1MEzGCQICsEw=
-github.com/gopernicus/gopernicus/pockets/authorization v0.14.0 h1:E0gBX5iVpWjA+g7KdlMYzPhiYFRdvMmw57l40pfodEE=
-github.com/gopernicus/gopernicus/pockets/authorization v0.14.0/go.mod h1:SWt/blN2Csf2p8dohOtJXbINP/BT5Z3oV9/GOxkFXGo=
 github.com/gopernicus/gopernicus/sdk v0.9.0 h1:g7rTlx/W8Dzb0VwsGJhfhas2hK2L7I61BELPuGQCLZY=
 github.com/gopernicus/gopernicus/sdk v0.9.0/go.mod h1:z0bypQiCybwPoxoDfzhYvB1BtH2av549QR84GacngaE=
 github.com/planetscale/vtprotobuf v0.6.1-0.20240319094008-0393e58bdf10 h1:GFCKgmp0tecUJ0sJuv4pzYCqS9+RGSn52M3FUwPs+uo=
@@ -100,3 +98,5 @@ google.golang.org/protobuf v1.36.11 h1:fV6ZwhNocDyBLK0dj+fg8ektcVegBBuEolpbTQyBN
 google.golang.org/protobuf v1.36.11/go.mod h1:HTf+CrKn2C3g5S8VImy6tdcUvCska2kB7j23XfzDpco=
 gopkg.in/yaml.v3 v3.0.1 h1:fxVm/GzAzEWqLHuvctI91KS9hhNmmWOoWu0XTYJS7CA=
 gopkg.in/yaml.v3 v3.0.1/go.mod h1:K4uyk7z7BCEPqu6E+C64Yfv1cQ7kz7rIZviUmN+EgEM=
+github.com/gopernicus/gopernicus/pockets/authorization v0.14.1 h1:TM/ZyPCBN4FYmdcNNP0ohZNzALI5rX6kd4vI/lTFKGw=
+github.com/gopernicus/gopernicus/pockets/authorization v0.14.1/go.mod h1:SWt/blN2Csf2p8dohOtJXbINP/BT5Z3oV9/GOxkFXGo=

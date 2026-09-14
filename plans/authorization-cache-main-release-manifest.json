@@ -1,0 +1,106 @@
+{
+  "schema_version": 1,
+  "date": "2026-09-14",
+  "status": "verified_ready_to_push_main",
+  "main_before": "437da308c0e106acde5aab9cd3214f144749530b",
+  "integration_branch": "authorization-cache-main-20260914",
+  "merge_commit": "dda6699debb17544c05723c7a41ec4e17255a5ce",
+  "identical_main_ancestor": "1c0f06d9",
+  "production_changes_from_previous_release": [],
+  "dependency_files_changed": [
+    "pockets/authorization/stores/firestore/go.mod",
+    "pockets/authorization/stores/firestore/go.sum",
+    "pockets/authorization/stores/pgx/go.mod",
+    "pockets/authorization/stores/pgx/go.sum",
+    "pockets/authorization/stores/turso/go.mod",
+    "pockets/authorization/stores/turso/go.sum"
+  ],
+  "modules": [
+    {
+      "directory": "integrations/datastores/turso",
+      "module": "github.com/gopernicus/gopernicus/integrations/datastores/turso",
+      "version": "v0.5.1",
+      "tag": "integrations/datastores/turso/v0.5.1",
+      "sum": "h1:BZSjtyjo6f3yjMOQaUX0yA1RzjlJImCkmu+24LPOff8=",
+      "go_mod_sum": "h1:83vKGYZCHOoTnCSWM/ClCLOvBlXOgkvGh3SPfn+dOOE=",
+      "source_inventory_sha256": "2af78b832782c934ba054882c58ecb2493b195133eaa3c9d0be8f9c17be63e08",
+      "source_entries": 44
+    },
+    {
+      "directory": "integrations/datastores/pgxdb",
+      "module": "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb",
+      "version": "v0.8.1",
+      "tag": "integrations/datastores/pgxdb/v0.8.1",
+      "sum": "h1:GtbygnajNLOsUNgOH2OkbdHVb6h8rPegOi7uXmNioPo=",
+      "go_mod_sum": "h1:m73aQqKrcCcr/XY5CwqUY5REpUg0Pwr1r3i+YfpAPJg=",
+      "source_inventory_sha256": "e6b05e808e25635cd343d93cdd72ce6c373e58554413094d65296462c3404768",
+      "source_entries": 55
+    },
+    {
+      "directory": "pockets/authorization",
+      "module": "github.com/gopernicus/gopernicus/pockets/authorization",
+      "version": "v0.14.1",
+      "tag": "pockets/authorization/v0.14.1",
+      "sum": "h1:TM/ZyPCBN4FYmdcNNP0ohZNzALI5rX6kd4vI/lTFKGw=",
+      "go_mod_sum": "h1:SWt/blN2Csf2p8dohOtJXbINP/BT5Z3oV9/GOxkFXGo=",
+      "source_inventory_sha256": "61c0dab04b2a1d2bb51c93c77de4d5dde15955d9588f61b62fc368577af87b7f",
+      "source_entries": 191
+    },
+    {
+      "directory": "pockets/authorization/stores/turso",
+      "module": "github.com/gopernicus/gopernicus/pockets/authorization/stores/turso",
+      "version": "v0.8.1",
+      "tag": "pockets/authorization/stores/turso/v0.8.1",
+      "sum": "h1:FoJpRXyhRy9cdlgYkcgx3ygUnW0pvwGysJl6t9EoKXo=",
+      "go_mod_sum": "h1:YxI+rqQsn/NhDTOX78wbcnN0zHDQyuUeArakLfDShwk=",
+      "source_inventory_sha256": "7ff3892fab796af6662834c5adf73a557903d65a0241a712b0c47e10c78fdd29",
+      "source_entries": 40
+    },
+    {
+      "directory": "pockets/authorization/stores/pgx",
+      "module": "github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx",
+      "version": "v0.9.1",
+      "tag": "pockets/authorization/stores/pgx/v0.9.1",
+      "sum": "h1:MIHsoZTBqYX3kurOstEpGC/rrz+dRXtkB3xYlKrFxM8=",
+      "go_mod_sum": "h1:OSWwvEM4OEwwNYGlOE1InSzhCeFb32IbZt+yaER1F6Y=",
+      "source_inventory_sha256": "229c593e1d120335ff54ff4724058053ccc0fe5009f5bdde158e1619e7b12803",
+      "source_entries": 46
+    },
+    {
+      "directory": "pockets/authorization/stores/firestore",
+      "module": "github.com/gopernicus/gopernicus/pockets/authorization/stores/firestore",
+      "version": "v0.2.1",
+      "tag": "pockets/authorization/stores/firestore/v0.2.1",
+      "sum": "h1:jQ8X7hNubkp185b0ZKZfLpI58KguZcQUa4OY/L6zVRo=",
+      "go_mod_sum": "h1:6Mgz19qun8wQOZaUY7T1buEt+hXGaS/0ra0yk4Z+P/Y=",
+      "source_inventory_sha256": "17861b6589f39acbf633326ec7254650933160794708d926fde29a69b95b22d8",
+      "source_entries": 65
+    }
+  ],
+  "candidate": {
+    "passed": true,
+    "gowork": "off",
+    "no_replacements": true,
+    "report": "/private/tmp/authorization-cache-main-candidate-20260914/results.json",
+    "sha256": "d1e69c98eb102b1f8767580662b74998d435518e20d1e472963c9178a6c11ae1"
+  },
+  "owner_accepted_gaps": [
+    "real GCP cache verification not run",
+    "Turso Cloud authoritative routing not verified",
+    "provisional performance acceptance failed; Firestore scheduled-load cache matrix incomplete"
+  ],
+  "prior_live_correctness": {
+    "source_identical": true,
+    "all_mode_report": "/private/tmp/authorization-cache-final-all-busy-timeout.json",
+    "passed": true
+  },
+  "scope": "merge into main then release fresh patch versions; no host activation or deployment",
+  "workspace": {
+    "passed": true,
+    "command": "make check",
+    "log": "/private/tmp/authorization-cache-main-make-check.log",
+    "sha256": "09d3ab416b9a767ffa0e80dea885e3ce50bfc9858d286d88297abebf5f03cbfb",
+    "candidate_proxy": true,
+    "all_42_modules": true
+  }
+}
