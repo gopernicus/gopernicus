@@ -18,7 +18,7 @@ import (
 	"github.com/gopernicus/gopernicus/pockets/authorization/stores/storetest"
 )
 
-func cacheFixture(t *testing.T, install bool) (*pgxdb.DB, config) {
+func cacheFixture(t testing.TB, install bool) (*pgxdb.DB, config) {
 	t.Helper()
 	ctx := context.Background()
 	dsn := os.Getenv("POSTGRES_TEST_DSN")

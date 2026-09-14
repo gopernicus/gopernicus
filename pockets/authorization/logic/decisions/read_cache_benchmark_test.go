@@ -3,6 +3,8 @@ package decisions_test
 import (
 	"context"
 	"fmt"
+	"io"
+	"log/slog"
 	"testing"
 	"time"
 
@@ -18,6 +20,9 @@ import (
 // BenchmarkReadCacheMemory isolates coordinator CPU/allocation cost. Durable
 // latency and two-process cache locality belong to the owned host fixture.
 func BenchmarkReadCacheMemory(b *testing.B) {
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(io.Discard, nil)))
+	b.Cleanup(func() { slog.SetDefault(previous) })
 	for _, mode := range []string{"direct", "bypass", "warm", "miss"} {
 		for _, path := range []string{"check-allow", "check-deny", "through", "role", "explain", "batch-1", "batch-10", "batch-100", "batch-500", "filter"} {
 			b.Run(mode+"/"+path, func(b *testing.B) {
@@ -84,6 +89,15 @@ func BenchmarkReadCacheMemory(b *testing.B) {
 				}
 				if err := run(); err != nil {
 					b.Fatal(err)
+				}
+				if mode == "warm" && path != "filter" {
+					before := c.ReadCache.Stats().HitComplete
+					if err := run(); err != nil {
+						b.Fatal(err)
+					}
+					if c.ReadCache.Stats().HitComplete != before+1 {
+						b.Fatal("warm fixture did not complete from cache")
+					}
 				}
 				b.ReportAllocs()
 				b.ResetTimer()

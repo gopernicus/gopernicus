@@ -17,7 +17,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-func cacheFixture(t *testing.T, install bool, poolSize ...int) (*tursodb.DB, config) {
+func cacheFixture(t testing.TB, install bool, poolSize ...int) (*tursodb.DB, config) {
 	t.Helper()
 	ctx := context.Background()
 	connections := 4
