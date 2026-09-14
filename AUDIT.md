@@ -4769,3 +4769,32 @@ Verification and release status are recorded in
 [firestore-release.md](plans/firestore-release.md) and
 [the Firestore release manifest](plans/firestore-release-manifest.json). These
 notes do not claim a live run or published tag before that evidence exists.
+
+
+## AUDIT-035: Optional bounded-staleness authorization read cache
+
+- **Implemented:** 2026-09-14; unreleased.
+- **Modules:** authorization core and its Turso, PostgreSQL and Firestore stores;
+  Turso and PostgreSQL connectors.
+- **Impact:** opt-in decision caching, additive read-snapshot APIs and optional
+  invalidation metadata. Base migration inventories remain unchanged.
+
+Authorization accepts a borrowed SDK cacher plus explicit positive `MaxStaleness`.
+`Check`, `CheckBatch` and `CheckExplain` use generation-bound fact entries with
+whole-operation snapshot fallback. Nil cacher preserves direct behavior;
+authentication, guards and enumeration remain uncached.
+
+SQL adapters export a separate `authorization-cache` migration source whose
+triggers invalidate atomically for ordinary writers. PostgreSQL freezes the
+resolved schema and rejects unsupported RLS/inheritance. Firestore requires
+explicit initialization and participation by every writer. Memory publishes facts
+and generation under one shared lock.
+
+Hosts own migration application, freshness acceptance, polling, shutdown and
+restore/clone epoch fencing. Added exported struct fields can affect unkeyed
+consumer literals; prefer keyed literals and compile consumers before upgrading.
+
+This records implemented behavior, not release/adoption approval. Real GCP, Turso
+Cloud authority and representative performance acceptance remain open. See the
+[implementation plan](plans/authorization-cacher-implementation.md) and
+[public wiring](pockets/authorization/README.md#optional-authorization-read-cache).

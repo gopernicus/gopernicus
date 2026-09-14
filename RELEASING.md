@@ -1,5 +1,22 @@
 # Releasing gopernicus modules
 
+## Unreleased: Authorization read caching (2026-09-14)
+
+Prepare dependency-ordered releases: changed Turso/PostgreSQL connectors →
+authorization core → authorization Turso/PostgreSQL/Firestore stores. Determine
+versions from then-current final tags; no prospective versions are assigned or
+published here. No SDK or Redis adapter release is required solely for this feature.
+
+Before release, complete the [implementation plan](plans/authorization-cacher-implementation.md),
+isolated `GOWORK=off` consumer builds, migration export checks and public wiring
+compilation. Real GCP verification, Turso Cloud authoritative routing and
+representative performance/adoption acceptance remain pending. The earlier
+Firestore release's accepted verification exception does not approve this feature.
+
+Migration: [AUDIT-035](AUDIT.md#audit-035-optional-bounded-staleness-authorization-read-cache).
+Optional SQL installation and Firestore writer activation require distinct host
+rollout plans. Publication, deployment and host adoption remain separate work.
+
 ## Coordinated audit release (2026-09-11)
 
 Published all 34 selected module tags from commit

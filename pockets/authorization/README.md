@@ -60,7 +60,7 @@ result, err := components.Decisions.Check(ctx, authmodel.CheckRequest{
 ```
 
 `Components` contains `Decisions`, `Relationships`, `Roles`, `Mutations`, `HTTP`,
-`RelationshipWriter` and `SystemMutator`. Give request handlers the concrete
+`RelationshipWriter`, `SystemMutator` and optional `ReadCache`. Give request handlers the concrete
 service or narrow local interface they need. Retain the full bundle and trusted
 writers at host composition.
 
@@ -91,6 +91,7 @@ per-kind ports stay in `Repositories`; optional policy uses these named values:
 | `WithRoleModel` | Complete role permission model; empty restores opaque role facts |
 | `WithLimits` | Common `model.EvaluationLimits`; zero dimensions default when used |
 | `WithGuard` | Actor-facing atomic mutation policy; nil disables actor writes |
+| `WithCacher` | Borrowed `cacher.Storer` and `decisions.CachePolicy`; nil disables caching and ignores policy/source |
 | `WithLogger` | Borrowed operational logger; nil uses `slog.Default()` |
 | `WithRoleRoutes` | Complete `authorizationhttp.RoleRoutes` gate, assignment policy and listing defaults |
 
@@ -330,3 +331,93 @@ migrations and dialect requirements are documented in:
 The package reorganization changes imports, construction and receiver ownership;
 it changes no SQL schema, tuple format, cursor encoding or audit storage format.
 Consumer migration notes live in the repository's `AUDIT.md`.
+
+## Optional authorization read cache
+
+`WithCacher(store, policy)` enables cache-first `Decisions.Check`, `CheckBatch`
+and `CheckExplain` when the repository bundle provides a compatible `CacheSource`.
+Every participating reader must expose the same store binding. A nonnil cacher
+requires a nonempty `Namespace` and an explicit positive `MaxStaleness`; there is
+no default revocation delay. Typed-nil cachers are rejected.
+
+`MaxStaleness` bounds the age of an authoritative head observation. Completed
+revocations can remain unobserved within that interval. `EntryTTL` controls storage
+reclamation, not permission freshness. Keep a separately constructed uncached
+service for decisions that require authoritative reads.
+
+Each operation selects one store generation. Any missing, invalid or unavailable
+cache entry abandons the entire attempt and evaluates once in a consistent durable
+snapshot, including both permission kinds in a heterogeneous batch. Cache-fill
+failures preserve a successful durable result. Final decisions are not cached.
+Cold, expired, closed or unhealthy runtimes bypass directly without filling.
+
+Relationship/role services, mutation guards, lookup/filter operations, audit reads
+and authentication remain direct. Nil cacher allocates no runtime and requires no
+cache schema. The following helper accepts a prepared repository bundle and a
+staleness value chosen by the adopting host:
+
+```go
+import (
+    "time"
+
+    "github.com/gopernicus/gopernicus/pockets/authorization"
+    "github.com/gopernicus/gopernicus/pockets/authorization/logic/decisions"
+    "github.com/gopernicus/gopernicus/pockets/authorization/logic/relationships"
+    "github.com/gopernicus/gopernicus/sdk/capabilities/cacher"
+)
+
+func cachedAuthorization(
+    repos authorization.Repositories,
+    model relationships.Schema,
+    maxStaleness time.Duration,
+) (authorization.Components, error) {
+    return authorization.New(repos,
+        authorization.WithRelationshipModel(model),
+        authorization.WithCacher(
+            cacher.NewMemory(cacher.WithMaxEntries(4096)),
+            decisions.CachePolicy{
+                Namespace:    "my-app/authorization",
+                MaxStaleness: maxStaleness,
+            },
+        ),
+    )
+}
+```
+
+Root and decision constructors perform no cache/database I/O and start no worker.
+Store constructors with cache reads enabled do perform startup probes.
+`Components.ReadCache` starts cold. The host calls `Poll(ctx)` initially and at
+`PollInterval()`, handles errors and inspects aggregate `Stats()`. Every process
+polls independently, including processes sharing Redis. Poll failure disables
+hits; a subsequent valid poll can recover. Epoch changes, malformed metadata and
+generation regression permanently disable that runtime until reconstruction.
+
+Resources are borrowed. At shutdown, cancel the host polling loop, call
+`ReadCache.Close()`, join the polling goroutine and drain requests before closing
+the cacher or database. Close cancels an active poll; it does not join host
+workers or drain requests. Snapshot callbacks and their `ForChecks` readers are
+sequential capabilities and must not escape into goroutines. Retained readers
+fail after callback success, failure, cancellation or panic.
+
+For SQL, apply base migrations through 0007 before the separate optional
+`authorization-cache` source in the same database/schema, then construct the
+bundle with the store's `WithCacheReads()`. Installation activates atomic triggers
+for ordinary writers, including older and nil-cacher SQL processes. This changes
+writer cost and PostgreSQL privilege requirements even before cache activation.
+See the [PostgreSQL](stores/pgx/README.md) and [Turso](stores/turso/README.md) runbooks.
+
+[Firestore](stores/firestore/README.md) requires explicit head initialization and
+`WithCacheInvalidation()` on **every writer**; `WithCacheReads()` implies it.
+Upgrade and configure all writers before enabling readers. Old binaries and
+external writers gain no server-trigger protection. Memory uses the shared
+`memory.New(memory.WithCacheReads())` bundle and is a process-local authority.
+
+Fence readers around schema/trigger changes, restore, cloning and metadata
+maintenance. Rotate the epoch before reopening a restored/cloned authority;
+runtime checks cannot detect every historical restore. Follow each store's
+migration, privilege and activation instructions.
+
+Real GCP cache verification, Turso Cloud authoritative routing and representative
+performance/adoption acceptance remain release gates. Local SQL and emulator
+success do not certify these deployment properties. Evidence and outstanding
+requirements are recorded in the [implementation plan](../../plans/authorization-cacher-implementation.md).
