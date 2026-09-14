@@ -17,6 +17,7 @@ import (
 // Components contains independently usable services and separately held trusted writers.
 // Give request code only the services it needs; keep trusted writers at host composition.
 type Components struct {
+	ReadCache          *decisions.CacheRuntime
 	Decisions          *decisions.Service
 	Relationships      *relationships.Service
 	Roles              *roles.Service
@@ -39,7 +40,7 @@ func New(repos Repositories, opts ...Option) (Components, error) {
 	for _, dep := range []struct {
 		name  string
 		value any
-	}{{"Repositories.Relationships", repos.Relationships}, {"Repositories.Roles", repos.Roles}, {"Repositories.Mutations", repos.Mutations}, {"Repositories.Audit", repos.Audit}, {"WithGuard", cfg.Guard}} {
+	}{{"Repositories.Relationships", repos.Relationships}, {"Repositories.Roles", repos.Roles}, {"Repositories.Mutations", repos.Mutations}, {"Repositories.Audit", repos.Audit}, {"WithGuard", cfg.Guard}, {"WithCacher", cfg.Cacher}} {
 		if isTypedNil(dep.value) {
 			return Components{}, fmt.Errorf("authorization: %s is typed nil: %w", dep.name, sdk.ErrInvalidInput)
 		}
@@ -89,6 +90,9 @@ func New(repos Repositories, opts ...Option) (Components, error) {
 		}
 		comps.Roles = svc
 	}
+	if cfg.Cacher != nil && !hasRel && !cfg.RoleModel.IsSet() {
+		return Components{}, fmt.Errorf("authorization: caching requires a decision model: %w", sdk.ErrInvalidInput)
+	}
 	if hasRel || cfg.RoleModel.IsSet() {
 		var err error
 		var roleReader decisions.RoleReader
@@ -96,14 +100,16 @@ func New(repos Repositories, opts ...Option) (Components, error) {
 			roleReader = comps.Roles
 		}
 		comps.Decisions, err = decisions.NewService(
-			decisions.Readers{Relationships: comps.Relationships, Roles: roleReader},
+			decisions.Readers{Relationships: comps.Relationships, Roles: roleReader, CacheSource: repos.CacheSource},
 			decisions.WithRoleModel(cfg.RoleModel),
 			decisions.WithLimits(cfg.Limits),
+			decisions.WithCacher(cfg.Cacher, cfg.CachePolicy),
 		)
 		if err != nil {
 			return Components{}, err
 		}
 	}
+	comps.ReadCache = comps.Decisions.ReadCache()
 	mut, err := mutations.NewService(
 		repos.Mutations,
 		mutations.Services{Relationships: comps.Relationships, Roles: comps.Roles},

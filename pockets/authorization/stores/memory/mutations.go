@@ -2,6 +2,8 @@ package memory
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"slices"
 
 	mutation "github.com/gopernicus/gopernicus/pockets/authorization/logic/mutations"
@@ -28,6 +30,7 @@ type Option func(*storeConfig)
 type storeConfig struct {
 	guardian    mutation.GuardianPolicy
 	recordAudit bool
+	cacheReads  bool
 }
 
 // WithGuardianPolicy installs the host's relationship invariants. The option
@@ -53,6 +56,11 @@ func New(opts ...Option) *Store {
 	}
 	st := newState()
 	st.recordAudit = cfg.recordAudit
+	if cfg.cacheReads {
+		var epoch [16]byte
+		_, _ = rand.Read(epoch[:])
+		st.cacheEpoch = hex.EncodeToString(epoch[:])
+	}
 	s := &Store{rel: &Relationships{st: st}, rol: &Roles{st: st}}
 	s.mut = &Mutations{st: st, rels: s.rel, roles: s.rol, guardian: cfg.guardian}
 	return s

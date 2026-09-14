@@ -66,8 +66,12 @@ func (e *roleEngine) Check(ctx context.Context, req authmodel.CheckRequest) (aut
 // SAME evaluation code as Check — an explain cannot reach a different decision
 // or spend more probes.
 func (e *roleEngine) CheckExplain(ctx context.Context, req authmodel.CheckRequest) (authmodel.CheckResult, authmodel.Explanation, error) {
+	return e.checkExplain(ctx, req, e.probe.HasExactRole)
+}
+
+func (e *roleEngine) checkExplain(ctx context.Context, req authmodel.CheckRequest, readExact exactRoleReader) (authmodel.CheckResult, authmodel.Explanation, error) {
 	var steps []authmodel.ExplainStep
-	res, err := e.check(ctx, req, &steps, e.probe.HasExactRole)
+	res, err := e.check(ctx, req, &steps, readExact)
 	return res, authmodel.Explanation{Decision: res.ReasonCode, Steps: steps}, err
 }
 
@@ -77,11 +81,15 @@ func (e *roleEngine) CheckExplain(ctx context.Context, req authmodel.CheckReques
 // gate belongs to the composite, which owns the ONE decision surface, so it is
 // deliberately not applied twice here.
 func (e *roleEngine) CheckBatch(ctx context.Context, reqs []authmodel.CheckRequest) ([]authmodel.CheckResult, error) {
+	return e.checkBatch(ctx, reqs, e.probe.HasExactRole)
+}
+
+func (e *roleEngine) checkBatch(ctx context.Context, reqs []authmodel.CheckRequest, readExact exactRoleReader) ([]authmodel.CheckResult, error) {
 	if len(reqs) == 0 {
 		return nil, nil
 	}
 	results := make([]authmodel.CheckResult, len(reqs))
-	readExact := memoRoleReads(e.probe.HasExactRole)
+	readExact = memoRoleReads(readExact)
 	for i, req := range reqs {
 		res, err := e.check(ctx, req, nil, readExact)
 		if err != nil {

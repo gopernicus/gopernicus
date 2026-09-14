@@ -1,4 +1,4 @@
-package decisions
+package decisions_test
 
 import (
 	"context"
@@ -7,6 +7,8 @@ import (
 	"reflect"
 	"testing"
 	"time"
+
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/decisions"
 
 	authmodel "github.com/gopernicus/gopernicus/pockets/authorization/logic/model"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/roles"
@@ -33,7 +35,7 @@ func (p errProbe) LookupResourceIDsBySubjectAndRoles(ctx context.Context, subjec
 // smallPages forces a tiny page size onto the listing so the engine's
 // cursor-following walk is exercised over several pages.
 type smallPages struct {
-	inner roleProbe
+	inner decisions.RoleReader
 	limit int
 	pages int
 }
@@ -112,10 +114,10 @@ func resolvedLimits(t *testing.T, in authmodel.EvaluationLimits) authmodel.Evalu
 
 // newTestEngine builds the role engine over the in-core role store and a REAL
 // roles.Service, so the Q5 scope rule under test is the shipped one.
-func newTestEngine(t *testing.T, model authmodel.RoleModel, limits authmodel.EvaluationLimits) (*roleEngine, *testRoles) {
+func newTestEngine(t *testing.T, model authmodel.RoleModel, limits authmodel.EvaluationLimits) (*decisions.RoleEngineForTest, *testRoles) {
 	t.Helper()
 	svc := newTestRoles(t, memory.NewRoles())
-	return newRoleEngine(svc, mustCompile(t, model, nil), resolvedLimits(t, limits)), svc
+	return decisions.NewRoleEngineForTest(svc, mustCompile(t, model, nil), resolvedLimits(t, limits)), svc
 }
 
 func assign(t *testing.T, svc *testRoles, subjectID, roleName, resourceType, resourceID string) {
@@ -256,7 +258,7 @@ func TestRoleEngineCheckRejectsMalformedRequest(t *testing.T) {
 
 func TestRoleEngineCheckStoreErrorIsNeverAnAllow(t *testing.T) {
 	boom := errors.New("store is down")
-	engine := newRoleEngine(errProbe{err: boom}, mustCompile(t, orgModel(), nil),
+	engine := decisions.NewRoleEngineForTest(errProbe{err: boom}, mustCompile(t, orgModel(), nil),
 		resolvedLimits(t, authmodel.EvaluationLimits{}))
 
 	res, err := engine.Check(context.Background(), orgRequest("u1", "view", "org-1"))
@@ -292,7 +294,7 @@ func TestRoleEngineCheckReasonIsDeterministicAcrossSourceOrder(t *testing.T) {
 			},
 		}}
 		svc := newTestRoles(t, memory.NewRoles())
-		engine := newRoleEngine(svc, mustCompile(t, model, nil), resolvedLimits(t, authmodel.EvaluationLimits{}))
+		engine := decisions.NewRoleEngineForTest(svc, mustCompile(t, model, nil), resolvedLimits(t, authmodel.EvaluationLimits{}))
 		// steward and viewer both grant view; sorted order probes steward first.
 		assign(t, svc, "u1", "steward", "organization", "org-1")
 		assign(t, svc, "u1", "viewer", "organization", "org-1")
@@ -520,7 +522,7 @@ func TestRoleEngineLookupResourcesGlobalNonGrantingRoleIsNotUnrestricted(t *test
 func TestRoleEngineLookupResourcesWalksEveryPage(t *testing.T) {
 	svc := newTestRoles(t, memory.NewRoles())
 	paging := &smallPages{inner: svc, limit: 2}
-	engine := newRoleEngine(paging, mustCompile(t, orgModel(), nil), resolvedLimits(t, authmodel.EvaluationLimits{}))
+	engine := decisions.NewRoleEngineForTest(paging, mustCompile(t, orgModel(), nil), resolvedLimits(t, authmodel.EvaluationLimits{}))
 
 	var want []string
 	for i := 0; i < 7; i++ {
@@ -617,7 +619,7 @@ func TestRoleEngineLookupResourcesRejectsMalformedArguments(t *testing.T) {
 
 func TestRoleEngineLookupResourcesEmptyPageClaimingHasMoreTerminates(t *testing.T) {
 	probe := &stallProbe{}
-	engine := newRoleEngine(probe, mustCompile(t, orgModel(), nil), resolvedLimits(t, authmodel.EvaluationLimits{}))
+	engine := decisions.NewRoleEngineForTest(probe, mustCompile(t, orgModel(), nil), resolvedLimits(t, authmodel.EvaluationLimits{}))
 
 	// The deadline is a safety net only: a correct walk stops on the first
 	// empty page and never observes it.
@@ -643,7 +645,7 @@ func TestRoleEngineLookupResourcesSkipsHalfScopedRows(t *testing.T) {
 		{SubjectType: "user", SubjectID: "u1", Role: "viewer", ResourceType: "organization", ResourceID: ""},
 		{SubjectType: "user", SubjectID: "u1", Role: "viewer", ResourceType: "organization", ResourceID: "org-1"},
 	}}
-	engine := newRoleEngine(probe, mustCompile(t, orgModel(), nil), resolvedLimits(t, authmodel.EvaluationLimits{}))
+	engine := decisions.NewRoleEngineForTest(probe, mustCompile(t, orgModel(), nil), resolvedLimits(t, authmodel.EvaluationLimits{}))
 
 	res, err := engine.LookupResources(context.Background(), authmodel.PrincipalRef{Type: "user", ID: "u1"}, "view", "organization")
 	if err != nil {
@@ -671,7 +673,7 @@ func TestRoleEngineDeclaresPermission(t *testing.T) {
 	}
 }
 
-var _ roleProbe = (*testRoles)(nil)
+var _ decisions.RoleReader = (*testRoles)(nil)
 
 // =============================================================================
 // LookupResourcesPage (the roles kind's paged enumeration)
@@ -776,7 +778,7 @@ func TestRoleEngineLookupResourcesPageUndeclaredPairAndBadArguments(t *testing.T
 // access".
 func TestRoleEngineLookupResourcesPageStoreErrorIsNeverAnAllow(t *testing.T) {
 	boom := errors.New("store exploded")
-	engine := newRoleEngine(errProbe{err: boom}, mustCompile(t, orgModel(), nil),
+	engine := decisions.NewRoleEngineForTest(errProbe{err: boom}, mustCompile(t, orgModel(), nil),
 		resolvedLimits(t, authmodel.EvaluationLimits{}))
 	if _, err := engine.LookupResourcesPage(context.Background(), authmodel.PrincipalRef{Type: "user", ID: "u1"},
 		"view", "organization", "", 2); !errors.Is(err, boom) {

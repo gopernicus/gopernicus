@@ -48,6 +48,7 @@ type kind interface {
 // and vice versa. A single-kind host's composite is a pass-through: identical
 // decisions, reasons, traces, and zero-length values.
 type Service struct {
+	readCache     *CacheRuntime
 	relationships *relationships.Service // nil = the relationship kind is off
 	roles         *roleEngine            // nil = the roles kind carries no model
 	// undeclared answers a pair NO model declares, so that "no rules defined" is
@@ -159,13 +160,40 @@ func (c *Service) ownerWithName(resourceType, permission string) (kind, string) 
 // relationship engine when it is wired, else from the roles engine) rather than
 // consulting both kinds.
 func (c *Service) Check(ctx context.Context, req authmodel.CheckRequest) (authmodel.CheckResult, error) {
+	if c == nil || c.readCache == nil {
+		return c.check(ctx, nil, nil, req)
+	}
+	if err := req.Validate(); err != nil {
+		return authmodel.CheckResult{}, err
+	}
+	out, err := c.readCache.run(ctx, func(ctx context.Context, reads CheckReads) (operationResult, error) {
+		if reads == nil {
+			result, err := c.check(ctx, nil, nil, req)
+			return operationResult{result: result}, err
+		}
+		result, err := c.check(ctx, reads, reads.HasExactRole, req)
+		return operationResult{result: result}, err
+	})
+	return out.result, err
+}
+
+func (c *Service) check(ctx context.Context, source relationships.CheckReadSource, readRole exactRoleReader, req authmodel.CheckRequest) (authmodel.CheckResult, error) {
 	if c == nil {
 		return authmodel.CheckResult{}, authmodel.ErrNoDecisionKind
 	}
 	if err := req.Validate(); err != nil {
 		return authmodel.CheckResult{}, err
 	}
-	return c.owner(req.Resource.Type, req.Permission).Check(ctx, req)
+	if c.ownedByRelationships(req.Resource.Type, req.Permission) {
+		if source != nil {
+			return c.relationships.CheckWith(ctx, source, req)
+		}
+		return c.relationships.Check(ctx, req)
+	}
+	if readRole == nil {
+		readRole = c.roles.probe.HasExactRole
+	}
+	return c.roles.check(ctx, req, nil, readRole)
 }
 
 // CheckExplain evaluates req as Check does and returns the owning kind's trace.
@@ -173,13 +201,40 @@ func (c *Service) Check(ctx context.Context, req authmodel.CheckRequest) (authmo
 // are the owning kind's alone — an explain never shows the work of a kind that
 // did not decide.
 func (c *Service) CheckExplain(ctx context.Context, req authmodel.CheckRequest) (authmodel.CheckResult, authmodel.Explanation, error) {
+	if c == nil || c.readCache == nil {
+		return c.checkExplain(ctx, nil, nil, req)
+	}
+	if err := req.Validate(); err != nil {
+		return authmodel.CheckResult{}, authmodel.Explanation{}, err
+	}
+	out, err := c.readCache.run(ctx, func(ctx context.Context, reads CheckReads) (operationResult, error) {
+		if reads == nil {
+			result, trace, err := c.checkExplain(ctx, nil, nil, req)
+			return operationResult{result: result, explanation: trace}, err
+		}
+		result, trace, err := c.checkExplain(ctx, reads, reads.HasExactRole, req)
+		return operationResult{result: result, explanation: trace}, err
+	})
+	return out.result, out.explanation, err
+}
+
+func (c *Service) checkExplain(ctx context.Context, source relationships.CheckReadSource, readRole exactRoleReader, req authmodel.CheckRequest) (authmodel.CheckResult, authmodel.Explanation, error) {
 	if c == nil {
 		return authmodel.CheckResult{}, authmodel.Explanation{}, authmodel.ErrNoDecisionKind
 	}
 	if err := req.Validate(); err != nil {
 		return authmodel.CheckResult{}, authmodel.Explanation{}, err
 	}
-	return c.owner(req.Resource.Type, req.Permission).CheckExplain(ctx, req)
+	if c.ownedByRelationships(req.Resource.Type, req.Permission) {
+		if source != nil {
+			return c.relationships.CheckExplainWith(ctx, source, req)
+		}
+		return c.relationships.CheckExplain(ctx, req)
+	}
+	if readRole == nil {
+		readRole = c.roles.probe.HasExactRole
+	}
+	return c.roles.checkExplain(ctx, req, readRole)
 }
 
 // CheckBatch evaluates many checks, each on its owning model.
@@ -192,6 +247,32 @@ func (c *Service) CheckExplain(ctx context.Context, req authmodel.CheckRequest) 
 // engine's own (optimisable) batch path and the roles subset runs sequentially,
 // and the two are merged back by index.
 func (c *Service) CheckBatch(ctx context.Context, reqs []authmodel.CheckRequest) ([]authmodel.CheckResult, error) {
+	if c == nil || c.readCache == nil {
+		return c.checkBatch(ctx, nil, nil, reqs)
+	}
+	if len(reqs) == 0 {
+		return nil, nil
+	}
+	if len(reqs) > c.limits.MaxBatchSize {
+		return nil, authmodel.ErrEvaluationLimit
+	}
+	for _, req := range reqs {
+		if err := req.Validate(); err != nil {
+			return nil, err
+		}
+	}
+	out, err := c.readCache.run(ctx, func(ctx context.Context, reads CheckReads) (operationResult, error) {
+		if reads == nil {
+			results, err := c.checkBatch(ctx, nil, nil, reqs)
+			return operationResult{batch: results}, err
+		}
+		results, err := c.checkBatch(ctx, reads, reads.HasExactRole, reqs)
+		return operationResult{batch: results}, err
+	})
+	return out.batch, err
+}
+
+func (c *Service) checkBatch(ctx context.Context, source relationships.CheckReadSource, readRole exactRoleReader, reqs []authmodel.CheckRequest) ([]authmodel.CheckResult, error) {
 	if c == nil {
 		return nil, authmodel.ErrNoDecisionKind
 	}
@@ -225,7 +306,13 @@ func (c *Service) CheckBatch(ctx context.Context, reqs []authmodel.CheckRequest)
 	// Each subset is dispatched only when non-empty: an engine's own zero-length
 	// identity ((nil, nil)) must never be mistaken for a subset's answers.
 	if len(relReqs) > 0 {
-		out, err := c.relationships.CheckBatch(ctx, relReqs)
+		var out []authmodel.CheckResult
+		var err error
+		if source == nil {
+			out, err = c.relationships.CheckBatch(ctx, relReqs)
+		} else {
+			out, err = c.relationships.CheckBatchWith(ctx, source, relReqs)
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -234,7 +321,10 @@ func (c *Service) CheckBatch(ctx context.Context, reqs []authmodel.CheckRequest)
 		}
 	}
 	if len(roleReqs) > 0 {
-		out, err := c.roles.CheckBatch(ctx, roleReqs)
+		if readRole == nil {
+			readRole = c.roles.probe.HasExactRole
+		}
+		out, err := c.roles.checkBatch(ctx, roleReqs, readRole)
 		if err != nil {
 			return nil, err
 		}
@@ -280,7 +370,8 @@ func (c *Service) FilterAuthorized(ctx context.Context, principal authmodel.Prin
 		}
 	}
 
-	results, err := c.CheckBatch(ctx, reqs)
+	// Filtering always uses direct readers, independent of public decision orchestration.
+	results, err := c.checkBatch(ctx, nil, nil, reqs)
 	if err != nil {
 		return nil, err
 	}

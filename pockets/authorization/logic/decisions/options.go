@@ -4,6 +4,8 @@ import (
 	"maps"
 	"slices"
 
+	"github.com/gopernicus/gopernicus/sdk/capabilities/cacher"
+
 	authmodel "github.com/gopernicus/gopernicus/pockets/authorization/logic/model"
 )
 
@@ -31,4 +33,10 @@ func WithRoleModel(model authmodel.RoleModel) Option {
 // Otherwise each zero dimension uses its safe default. Negative values fail.
 func WithLimits(limits authmodel.EvaluationLimits) Option {
 	return func(cfg *config) { cfg.Limits = limits }
+}
+
+// WithCacher requests optional bounded-staleness reads. An untyped nil disables
+// the feature; a nonnil store requires an explicit policy and matching bindings.
+func WithCacher(store cacher.Storer, policy CachePolicy) Option {
+	return func(cfg *config) { cfg.cacher = store; cfg.cachePolicy = policy }
 }

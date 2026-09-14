@@ -80,12 +80,23 @@ type PermissionReader interface {
 	GetRelationTargets(ctx context.Context, resourceType, resourceID, relation string) ([]RelationTarget, error)
 }
 
+// CheckReader is the model-scoped read surface for decision operations.
+type CheckReader interface {
+	PermissionReader
+	CheckBatchDirect(ctx context.Context, resourceType string, resourceIDs []string, relation, subjectType, subjectID string, maxExpansionStates int) (map[string]bool, error)
+}
+
+// CheckReadSource supplies an operation's reads scoped to the service's model.
+// Readers retain their source's lifetime and must not escape that lifetime.
+type CheckReadSource interface {
+	ForChecks(ReadModel) CheckReader
+}
+
 // Reader is the model-scoped permission and enumeration surface. Raw Storer
 // methods retain their fact-inspection semantics; permission engines must use
 // ForModel and never substitute those raw methods if a scoped reader is missing.
 type Reader interface {
-	PermissionReader
-	CheckBatchDirect(ctx context.Context, resourceType string, resourceIDs []string, relation, subjectType, subjectID string, maxExpansionStates int) (map[string]bool, error)
+	CheckReader
 	LookupResourceIDs(ctx context.Context, resourceType string, relations []string, subjectType, subjectID, after string, limit int) ([]string, error)
 	LookupResourceIDsByRelationTarget(ctx context.Context, resourceType, relation, targetType string, targetIDs []string, after string, limit int) ([]string, error)
 	LookupDescendantResourceIDs(ctx context.Context, resourceType string, relations []string, subjectType string, rootIDs []string, after string, limit int) ([]string, error)

@@ -5,6 +5,9 @@ import (
 	"maps"
 	"slices"
 
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/decisions"
+	"github.com/gopernicus/gopernicus/sdk/capabilities/cacher"
+
 	authorizationhttp "github.com/gopernicus/gopernicus/pockets/authorization/inbound/http"
 	authmodel "github.com/gopernicus/gopernicus/pockets/authorization/logic/model"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/mutations"
@@ -94,4 +97,10 @@ func cloneRoleModel(model authmodel.RoleModel) authmodel.RoleModel {
 		model.ResourceTypes[name] = resource
 	}
 	return model
+}
+
+// WithCacher requests bounded-staleness decision reads over an optional source.
+// Nil disables caching, including policy validation and runtime allocation.
+func WithCacher(store cacher.Storer, policy decisions.CachePolicy) Option {
+	return func(cfg *config) { cfg.Cacher = store; cfg.CachePolicy = policy }
 }

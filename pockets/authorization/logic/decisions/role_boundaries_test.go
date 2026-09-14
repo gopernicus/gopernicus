@@ -1,10 +1,12 @@
-package decisions
+package decisions_test
 
 import (
 	"context"
 	"errors"
 	"fmt"
 	"testing"
+
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/decisions"
 
 	authmodel "github.com/gopernicus/gopernicus/pockets/authorization/logic/model"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/roles"
@@ -86,7 +88,7 @@ func TestRoleEngineBudgetAppliesToCheckExplainAndBatch(t *testing.T) {
 		for _, method := range []string{"check", "explain", "batch"} {
 			t.Run(fmt.Sprintf("steps%d/%s", steps, method), func(t *testing.T) {
 				probe := &roleBoundaryProbe{}
-				e := newRoleEngine(probe, mustCompile(t, orgModel(), nil), resolvedLimits(t, authmodel.EvaluationLimits{MaxEvaluationSteps: steps}))
+				e := decisions.NewRoleEngineForTest(probe, mustCompile(t, orgModel(), nil), resolvedLimits(t, authmodel.EvaluationLimits{MaxEvaluationSteps: steps}))
 				req := orgRequest("u", "view", "o")
 				var err error
 				switch method {
@@ -134,7 +136,7 @@ func TestRoleLookupBoundaries(t *testing.T) {
 			if permission == "unknown" {
 				cancel()
 			}
-			e := newRoleEngine(probe, mustCompile(t, orgModel(), nil), resolvedLimits(t, authmodel.EvaluationLimits{}))
+			e := decisions.NewRoleEngineForTest(probe, mustCompile(t, orgModel(), nil), resolvedLimits(t, authmodel.EvaluationLimits{}))
 			var err error
 			var got authmodel.LookupResult
 			if page {
@@ -150,7 +152,7 @@ func TestRoleLookupBoundaries(t *testing.T) {
 	}
 	maxInt := int(^uint(0) >> 1)
 	probe := &roleBoundaryProbe{}
-	e := newRoleEngine(probe, mustCompile(t, orgModel(), nil), resolvedLimits(t, authmodel.EvaluationLimits{MaxLookupResults: maxInt - 1}))
+	e := decisions.NewRoleEngineForTest(probe, mustCompile(t, orgModel(), nil), resolvedLimits(t, authmodel.EvaluationLimits{MaxLookupResults: maxInt - 1}))
 	if _, err := e.LookupResourcesPage(context.Background(), principal, "view", "organization", "", maxInt-1); err != nil {
 		t.Fatal(err)
 	}
@@ -172,10 +174,10 @@ func TestRoleLookupBoundaries(t *testing.T) {
 
 func TestRoleBudgetStillChargesMemoHits(t *testing.T) {
 	probe := &roleBoundaryProbe{}
-	engine := newRoleEngine(probe, mustCompile(t, orgModel(), nil), resolvedLimits(t, authmodel.EvaluationLimits{MaxEvaluationSteps: 3}))
-	read := memoRoleReads(probe.HasExactRole)
+	engine := decisions.NewRoleEngineForTest(probe, mustCompile(t, orgModel(), nil), resolvedLimits(t, authmodel.EvaluationLimits{MaxEvaluationSteps: 3}))
+	read := decisions.MemoRoleReadsForTest(probe.HasExactRole)
 	for attempt := 0; attempt < 2; attempt++ {
-		got, err := engine.check(context.Background(), orgRequest("u", "view", "o"), nil, read)
+		got, err := decisions.RoleCheckForTest(engine, context.Background(), orgRequest("u", "view", "o"), nil, read)
 		if !errors.Is(err, authmodel.ErrEvaluationLimit) || got.ReasonCode != "" || probe.reads != 4 {
 			t.Fatalf("attempt=%d result=%+v err=%v reads=%d; cache hits must still consume steps", attempt, got, err, probe.reads)
 		}
@@ -188,7 +190,7 @@ func TestRoleEnumerationChargesAllGrantorsBeforeReading(t *testing.T) {
 			for _, steps := range []int{3, 4} {
 				t.Run(fmt.Sprintf("page%t/global%t/steps%d", page, unrestricted, steps), func(t *testing.T) {
 					probe := &roleBoundaryProbe{unrestricted: unrestricted}
-					engine := newRoleEngine(probe, mustCompile(t, orgModel(), nil), resolvedLimits(t, authmodel.EvaluationLimits{MaxEvaluationSteps: steps}))
+					engine := decisions.NewRoleEngineForTest(probe, mustCompile(t, orgModel(), nil), resolvedLimits(t, authmodel.EvaluationLimits{MaxEvaluationSteps: steps}))
 					var got authmodel.LookupResult
 					var err error
 					principal := authmodel.PrincipalRef{Type: "user", ID: "u"}

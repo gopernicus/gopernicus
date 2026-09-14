@@ -4,6 +4,9 @@ import (
 	"errors"
 	"log/slog"
 
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/decisions"
+	"github.com/gopernicus/gopernicus/sdk/capabilities/cacher"
+
 	authorizationhttp "github.com/gopernicus/gopernicus/pockets/authorization/inbound/http"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/audit"
 	authmodel "github.com/gopernicus/gopernicus/pockets/authorization/logic/model"
@@ -37,6 +40,8 @@ var (
 // Repositories is the set of outbound ports the pocket needs. Each kind is
 // nil-safe: a nil field turns that kind OFF structurally.
 type Repositories struct {
+	// CacheSource optionally certifies consistent read snapshots for these repositories.
+	CacheSource decisions.CacheSource
 	// Relationships backs the ReBAC kind; nil = the relationship kind is off.
 	Relationships relationships.Storer
 	// Roles backs the roles kind; nil = the roles kind is off.
@@ -52,6 +57,8 @@ type Repositories struct {
 }
 
 type config struct {
+	Cacher                    cacher.Storer
+	CachePolicy               decisions.CachePolicy
 	Logger                    *slog.Logger
 	RelationshipModel         relationships.Schema
 	Limits                    authmodel.EvaluationLimits

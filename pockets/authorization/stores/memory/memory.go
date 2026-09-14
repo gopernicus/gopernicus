@@ -37,11 +37,13 @@ type relRow struct {
 // state shares one serialization boundary for tuple, role and optional audit
 // publication. A write stages owned fact slices before making anything visible.
 type state struct {
-	mu           sync.Mutex
-	rel          []relRow
-	role         []roleRow
-	recordAudit  bool
-	auditRecords []audit.Record
+	cacheEpoch      string
+	cacheGeneration int64
+	mu              sync.Mutex
+	rel             []relRow
+	role            []roleRow
+	recordAudit     bool
+	auditRecords    []audit.Record
 }
 
 func newState() *state { return &state{} }

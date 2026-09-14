@@ -1,4 +1,4 @@
-package decisions
+package decisions_test
 
 import (
 	"context"
@@ -6,6 +6,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/decisions"
 
 	authmodel "github.com/gopernicus/gopernicus/pockets/authorization/logic/model"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/relationships"
@@ -90,20 +92,20 @@ func newRelationshipEngine(t *testing.T, store relationships.Storer, limits auth
 
 // newBothKinds builds the both-kinds composite over REAL engines and in-core
 // stores, with the pair split over the "project" type.
-func newBothKinds(t *testing.T, limits authmodel.EvaluationLimits) (*Service, *testRelationships, *testRoles) {
+func newBothKinds(t *testing.T, limits authmodel.EvaluationLimits) (*decisions.Service, *testRelationships, *testRoles) {
 	t.Helper()
 	resolved := resolvedLimits(t, limits)
 	eng := newRelationshipEngine(t, memory.NewRelationships(), limits)
 	roles := newTestRoles(t, memory.NewRoles())
-	return newComposite(eng.Service, roles, mustCompile(t, compositeRoleModel(), eng), resolved), eng, roles
+	return decisions.NewCompositeForTest(eng.Service, roles, mustCompile(t, compositeRoleModel(), eng), resolved), eng, roles
 }
 
 // newRolesOnly builds the roles-only-with-model composite: no relationship kind
 // at all, so the role model answers every declared pair and owns the fallback.
-func newRolesOnly(t *testing.T, limits authmodel.EvaluationLimits) (*Service, *testRoles) {
+func newRolesOnly(t *testing.T, limits authmodel.EvaluationLimits) (*decisions.Service, *testRoles) {
 	t.Helper()
 	roles := newTestRoles(t, memory.NewRoles())
-	return newComposite(nil, roles, mustCompile(t, compositeRoleModel(), nil), resolvedLimits(t, limits)), roles
+	return decisions.NewCompositeForTest(nil, roles, mustCompile(t, compositeRoleModel(), nil), resolvedLimits(t, limits)), roles
 }
 
 func grant(t *testing.T, eng *testRelationships, resourceType, resourceID, relation, subjectType, subjectID string) {
@@ -135,11 +137,11 @@ func request(subjectID, permission, resourceType, resourceID string) authmodel.C
 // rather than receiving a composite that would deny everything.
 func TestNewCompositeWithoutAModelBearingKindIsNil(t *testing.T) {
 	roles := newTestRoles(t, memory.NewRoles())
-	if c := newComposite(nil, roles, nil, resolvedLimits(t, authmodel.EvaluationLimits{})); c != nil {
+	if c := decisions.NewCompositeForTest(nil, roles, nil, resolvedLimits(t, authmodel.EvaluationLimits{})); c != nil {
 		t.Fatalf("a roles service with no model must not yield a decider, got %+v", c)
 	}
-	if c := newComposite(nil, nil, nil, resolvedLimits(t, authmodel.EvaluationLimits{})); c != nil {
-		t.Fatalf("no kind at all must not yield a decider, got %+v", c)
+	if c := decisions.NewCompositeForTest(nil, nil, nil, resolvedLimits(t, authmodel.EvaluationLimits{})); c != nil {
+		t.Fatalf("no decisions.KindForTest at all must not yield a decider, got %+v", c)
 	}
 }
 
@@ -234,7 +236,7 @@ func TestCompositeUndeclaredPairDenies(t *testing.T) {
 func TestCompositeValidatesBeforeTouchingAStore(t *testing.T) {
 	boom := errors.New("store exploded")
 	eng := newRelationshipEngine(t, errRelationships{err: boom}, authmodel.EvaluationLimits{})
-	c := newComposite(eng.Service, errProbe{err: boom}, mustCompile(t, compositeRoleModel(), eng),
+	c := decisions.NewCompositeForTest(eng.Service, errProbe{err: boom}, mustCompile(t, compositeRoleModel(), eng),
 		resolvedLimits(t, authmodel.EvaluationLimits{}))
 
 	for name, req := range map[string]authmodel.CheckRequest{
@@ -261,7 +263,7 @@ func TestCompositeOwnerOnlyErrors(t *testing.T) {
 	t.Run("failing roles probe cannot affect a relationship-owned pair", func(t *testing.T) {
 		eng := newRelationshipEngine(t, memory.NewRelationships(), authmodel.EvaluationLimits{})
 		grant(t, eng, "project", "p1", "viewer", "user", "u1")
-		c := newComposite(eng.Service, errProbe{err: boom}, mustCompile(t, compositeRoleModel(), eng), limits)
+		c := decisions.NewCompositeForTest(eng.Service, errProbe{err: boom}, mustCompile(t, compositeRoleModel(), eng), limits)
 
 		res, err := c.Check(ctx, request("u1", "view", "project", "p1"))
 		if err != nil || !res.Allowed {
@@ -276,7 +278,7 @@ func TestCompositeOwnerOnlyErrors(t *testing.T) {
 		eng := newRelationshipEngine(t, errRelationships{err: boom}, authmodel.EvaluationLimits{})
 		roles := newTestRoles(t, memory.NewRoles())
 		assign(t, roles, "u2", "auditor", "project", "p1")
-		c := newComposite(eng.Service, roles, mustCompile(t, compositeRoleModel(), eng), limits)
+		c := decisions.NewCompositeForTest(eng.Service, roles, mustCompile(t, compositeRoleModel(), eng), limits)
 
 		res, err := c.Check(ctx, request("u2", "audit", "project", "p1"))
 		if err != nil || !res.Allowed {
@@ -330,7 +332,7 @@ func TestCompositeCheckBatchGroupsAndMerges(t *testing.T) {
 func TestCompositeCheckBatchZeroLength(t *testing.T) {
 	boom := errors.New("store exploded")
 	eng := newRelationshipEngine(t, errRelationships{err: boom}, authmodel.EvaluationLimits{})
-	c := newComposite(eng.Service, errProbe{err: boom}, mustCompile(t, compositeRoleModel(), eng),
+	c := decisions.NewCompositeForTest(eng.Service, errProbe{err: boom}, mustCompile(t, compositeRoleModel(), eng),
 		resolvedLimits(t, authmodel.EvaluationLimits{}))
 
 	for name, reqs := range map[string][]authmodel.CheckRequest{
@@ -385,7 +387,7 @@ func TestCompositeCheckBatchChargesMaxBatchSizeOnce(t *testing.T) {
 func TestCompositeCheckBatchValidatesEveryRequestFirst(t *testing.T) {
 	boom := errors.New("store exploded")
 	eng := newRelationshipEngine(t, errRelationships{err: boom}, authmodel.EvaluationLimits{})
-	c := newComposite(eng.Service, errProbe{err: boom}, mustCompile(t, compositeRoleModel(), eng),
+	c := decisions.NewCompositeForTest(eng.Service, errProbe{err: boom}, mustCompile(t, compositeRoleModel(), eng),
 		resolvedLimits(t, authmodel.EvaluationLimits{}))
 
 	reqs := []authmodel.CheckRequest{
@@ -521,7 +523,7 @@ func TestCompositeLookupResourcesDispatches(t *testing.T) {
 func TestCompositeLookupResourcesValidatesArguments(t *testing.T) {
 	boom := errors.New("store exploded")
 	eng := newRelationshipEngine(t, errRelationships{err: boom}, authmodel.EvaluationLimits{})
-	c := newComposite(eng.Service, errProbe{err: boom}, mustCompile(t, compositeRoleModel(), eng),
+	c := decisions.NewCompositeForTest(eng.Service, errProbe{err: boom}, mustCompile(t, compositeRoleModel(), eng),
 		resolvedLimits(t, authmodel.EvaluationLimits{}))
 	good := authmodel.PrincipalRef{Type: "user", ID: "u1"}
 
@@ -598,7 +600,7 @@ func TestCompositeLookupResourcesInTruncates(t *testing.T) {
 
 // pageThrough walks LookupResourcesIn to exhaustion at a page size, following
 // NextCursor, and returns the concatenation.
-func pageThrough(t *testing.T, c *Service, principal authmodel.PrincipalRef, permission, resourceType string, limit int) []string {
+func pageThrough(t *testing.T, c *decisions.Service, principal authmodel.PrincipalRef, permission, resourceType string, limit int) []string {
 	t.Helper()
 	all := []string{}
 	cursor := ""
@@ -677,7 +679,7 @@ func TestCompositeLookupResourcesInRefusesAForeignCursor(t *testing.T) {
 	}
 
 	cases := map[string]authmodel.LookupRequest{
-		"another owning kind": {Principal: u1, Permission: "audit", ResourceType: "project", Limit: 1, After: minted.NextCursor},
+		"another owning decisions.KindForTest": {Principal: u1, Permission: "audit", ResourceType: "project", Limit: 1, After: minted.NextCursor},
 		"another principal": {Principal: authmodel.PrincipalRef{Type: "user", ID: "u2"}, Permission: "view",
 			ResourceType: "project", Limit: 1, After: minted.NextCursor},
 		"another resource type": {Principal: u1, Permission: "enter", ResourceType: "org", Limit: 1, After: minted.NextCursor},
@@ -702,7 +704,7 @@ func TestCompositeLookupResourcesInRefusesACursorAfterAModelChange(t *testing.T)
 	roleStore := memory.NewRoles()
 	eng := newRelationshipEngine(t, store, authmodel.EvaluationLimits{})
 	roles := newTestRoles(t, roleStore)
-	c := newComposite(eng.Service, roles, mustCompile(t, compositeRoleModel(), eng), limits)
+	c := decisions.NewCompositeForTest(eng.Service, roles, mustCompile(t, compositeRoleModel(), eng), limits)
 	for _, id := range []string{"p1", "p2", "p3"} {
 		grant(t, eng, "project", id, "viewer", "user", "u1")
 		assign(t, roles, "u1", "auditor", "project", id)
@@ -735,17 +737,17 @@ func TestCompositeLookupResourcesInRefusesACursorAfterAModelChange(t *testing.T)
 
 	cases := map[string]struct {
 		permission string
-		rebuild    func() *Service
+		rebuild    func() *decisions.Service
 	}{
-		"role model changed": {"audit", func() *Service {
-			return newComposite(eng.Service, roles, mustCompile(t, changedRoles, eng), limits)
+		"role model changed": {"audit", func() *decisions.Service {
+			return decisions.NewCompositeForTest(eng.Service, roles, mustCompile(t, changedRoles, eng), limits)
 		}},
-		"relationship schema changed": {"view", func() *Service {
+		"relationship schema changed": {"view", func() *decisions.Service {
 			changed, err := relationships.NewService(store, changedSchema)
 			if err != nil {
 				t.Fatalf("authorizersvc.NewService: %v", err)
 			}
-			return newComposite(changed.Service, roles, mustCompile(t, compositeRoleModel(), changed.Service), limits)
+			return decisions.NewCompositeForTest(changed.Service, roles, mustCompile(t, compositeRoleModel(), changed.Service), limits)
 		}},
 	}
 	for name, tc := range cases {
@@ -881,7 +883,7 @@ func TestCompositeLookupResourcesInPassesUnrestrictedThrough(t *testing.T) {
 func TestCompositeLookupResourcesInValidates(t *testing.T) {
 	boom := errors.New("store exploded")
 	eng := newRelationshipEngine(t, errRelationships{err: boom}, authmodel.EvaluationLimits{})
-	c := newComposite(eng.Service, errProbe{err: boom}, mustCompile(t, compositeRoleModel(), eng),
+	c := decisions.NewCompositeForTest(eng.Service, errProbe{err: boom}, mustCompile(t, compositeRoleModel(), eng),
 		resolvedLimits(t, authmodel.EvaluationLimits{}))
 	good := authmodel.PrincipalRef{Type: "user", ID: "u1"}
 
@@ -913,7 +915,7 @@ func TestCompositeSingleKindEquivalence(t *testing.T) {
 	ctx := context.Background()
 	store := memory.NewRelationships()
 	eng := newRelationshipEngine(t, store, authmodel.EvaluationLimits{})
-	c := newComposite(eng.Service, nil, nil, resolvedLimits(t, authmodel.EvaluationLimits{}))
+	c := decisions.NewCompositeForTest(eng.Service, nil, nil, resolvedLimits(t, authmodel.EvaluationLimits{}))
 
 	grant(t, eng, "project", "p1", "viewer", "user", "u1")
 	grant(t, eng, "project", "p2", "org", "org", "o1")
@@ -1002,7 +1004,7 @@ func sameError(got, want error) bool {
 
 // compile-time proof that both kinds satisfy the composite's dispatch contract.
 var (
-	_ kind      = (*testRelationships)(nil)
-	_ kind      = (*roleEngine)(nil)
-	_ roleProbe = (*testRoles)(nil)
+	_ decisions.KindForTest = (*testRelationships)(nil)
+	_ decisions.KindForTest = (*decisions.RoleEngineForTest)(nil)
+	_ decisions.RoleReader  = (*testRoles)(nil)
 )

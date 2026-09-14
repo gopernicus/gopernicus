@@ -109,6 +109,26 @@ func (s *Service) Check(ctx context.Context, req authmodel.CheckRequest) (authmo
 	return s.check(ctx, req, newBudget(s.limits, newMemoReader(s.reader)))
 }
 
+// CheckWith evaluates using operation-specific reads and fresh evaluation state.
+func (s *Service) CheckWith(ctx context.Context, source CheckReadSource, req authmodel.CheckRequest) (authmodel.CheckResult, error) {
+	reader, err := s.checkReader(source)
+	if err != nil {
+		return authmodel.CheckResult{}, err
+	}
+	return s.check(ctx, req, newBudget(s.limits, newMemoReader(reader)))
+}
+
+func (s *Service) checkReader(source CheckReadSource) (CheckReader, error) {
+	if isNilReader(source) {
+		return nil, fmt.Errorf("authorization: nil check read source: %w", sdk.ErrInvalidInput)
+	}
+	reader := source.ForChecks(s.readModel)
+	if isNilReader(reader) {
+		return nil, fmt.Errorf("authorization: nil model-scoped check reader: %w", sdk.ErrInvalidInput)
+	}
+	return reader, nil
+}
+
 // EvaluateWith runs the ordinary permission evaluation for req over reader
 // instead of the service's own store: the same compiled schema, the same
 // resolved limits, the same walk (direct relations, exact usersets, every
@@ -147,6 +167,19 @@ func (s *Service) check(ctx context.Context, req authmodel.CheckRequest, b *budg
 // all requests share subject, permission, and resource type with no
 // through-relations; otherwise it falls back to sequential checks.
 func (s *Service) CheckBatch(ctx context.Context, reqs []authmodel.CheckRequest) ([]authmodel.CheckResult, error) {
+	return s.checkBatch(ctx, s.reader, reqs)
+}
+
+// CheckBatchWith evaluates a batch over one operation-specific read source.
+func (s *Service) CheckBatchWith(ctx context.Context, source CheckReadSource, reqs []authmodel.CheckRequest) ([]authmodel.CheckResult, error) {
+	reader, err := s.checkReader(source)
+	if err != nil {
+		return nil, err
+	}
+	return s.checkBatch(ctx, reader, reqs)
+}
+
+func (s *Service) checkBatch(ctx context.Context, reader CheckReader, reqs []authmodel.CheckRequest) ([]authmodel.CheckResult, error) {
 	if len(reqs) == 0 {
 		return nil, nil
 	}
@@ -174,17 +207,17 @@ func (s *Service) CheckBatch(ctx context.Context, reqs []authmodel.CheckRequest)
 	}
 
 	if !canBatch {
-		return s.checkBatchSequential(ctx, reqs)
+		return s.checkBatchSequential(ctx, reader, reqs)
 	}
 
 	checks := s.compiled.permissionChecks(first.Resource.Type, first.Permission)
 	for _, check := range checks {
 		if check.Through != "" {
-			return s.checkBatchSequential(ctx, reqs)
+			return s.checkBatchSequential(ctx, reader, reqs)
 		}
 	}
 
-	return s.checkBatchOptimized(ctx, reqs)
+	return s.checkBatchOptimized(ctx, reader, reqs)
 }
 
 // FilterAuthorized preserves input order and duplicates. It uses CheckBatch's
@@ -374,9 +407,9 @@ func (s *Service) checkThrough(ctx context.Context, req authmodel.CheckRequest, 
 // longer re-read the shared container's targets and re-run its direct check —
 // while the per-request budget keeps depth/state/fan-out charging, and therefore
 // every result and every ErrEvaluationLimit, identical to a standalone Check.
-func (s *Service) checkBatchSequential(ctx context.Context, reqs []authmodel.CheckRequest) ([]authmodel.CheckResult, error) {
+func (s *Service) checkBatchSequential(ctx context.Context, source CheckReader, reqs []authmodel.CheckRequest) ([]authmodel.CheckResult, error) {
 	results := make([]authmodel.CheckResult, len(reqs))
-	reader := newMemoReader(s.reader)
+	reader := newMemoReader(source)
 	for i, req := range reqs {
 		result, err := s.check(ctx, req, newBudget(s.limits, reader))
 		if err != nil {
@@ -387,7 +420,7 @@ func (s *Service) checkBatchSequential(ctx context.Context, reqs []authmodel.Che
 	return results, nil
 }
 
-func (s *Service) checkBatchOptimized(ctx context.Context, reqs []authmodel.CheckRequest) ([]authmodel.CheckResult, error) {
+func (s *Service) checkBatchOptimized(ctx context.Context, reader CheckReader, reqs []authmodel.CheckRequest) ([]authmodel.CheckResult, error) {
 	if len(reqs) == 0 {
 		return nil, nil
 	}
@@ -435,7 +468,7 @@ func (s *Service) checkBatchOptimized(ctx context.Context, reqs []authmodel.Chec
 		if check.Relation == "" {
 			continue
 		}
-		batchResults, err := s.reader.CheckBatchDirect(
+		batchResults, err := reader.CheckBatchDirect(
 			ctx, first.Resource.Type, resourceIDs, check.Relation, first.Principal.Type, first.Principal.ID, s.limits.MaxGraphStates,
 		)
 		if err != nil {
@@ -609,4 +642,15 @@ func (s *Service) ListRelationshipsByResource(ctx context.Context, resourceType,
 // CountByResourceAndRelation counts DIRECT tuples for a resource+relation.
 func (s *Service) CountByResourceAndRelation(ctx context.Context, resourceType, resourceID, relation string) (int, error) {
 	return s.store.CountByResourceAndRelation(ctx, resourceType, resourceID, relation)
+}
+
+// CacheBinding forwards an optional store identity without enabling caching.
+func (s *Service) CacheBinding() string {
+	if s == nil {
+		return ""
+	}
+	if bound, ok := s.store.(interface{ CacheBinding() string }); ok {
+		return bound.CacheBinding()
+	}
+	return ""
 }

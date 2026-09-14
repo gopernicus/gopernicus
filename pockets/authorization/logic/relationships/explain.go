@@ -28,7 +28,20 @@ func (t *explainTrace) explanation(decision authmodel.Reason) authmodel.Explanat
 // infrastructure errors; a store/limit failure returns the error and the partial
 // steps gathered so far.
 func (s *Service) CheckExplain(ctx context.Context, req authmodel.CheckRequest) (authmodel.CheckResult, authmodel.Explanation, error) {
-	b := newBudget(s.limits, newMemoReader(s.reader))
+	return s.checkExplain(ctx, s.reader, req)
+}
+
+// CheckExplainWith traces evaluation using operation-specific model-scoped reads.
+func (s *Service) CheckExplainWith(ctx context.Context, source CheckReadSource, req authmodel.CheckRequest) (authmodel.CheckResult, authmodel.Explanation, error) {
+	reader, err := s.checkReader(source)
+	if err != nil {
+		return authmodel.CheckResult{}, authmodel.Explanation{}, err
+	}
+	return s.checkExplain(ctx, reader, req)
+}
+
+func (s *Service) checkExplain(ctx context.Context, reader CheckReader, req authmodel.CheckRequest) (authmodel.CheckResult, authmodel.Explanation, error) {
+	b := newBudget(s.limits, newMemoReader(reader))
 	b.trace = &explainTrace{}
 	res, err := s.check(ctx, req, b)
 	return res, b.trace.explanation(res.ReasonCode), err

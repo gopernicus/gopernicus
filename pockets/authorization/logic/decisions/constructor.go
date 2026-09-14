@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"reflect"
 
+	"github.com/gopernicus/gopernicus/sdk/capabilities/cacher"
+
 	authmodel "github.com/gopernicus/gopernicus/pockets/authorization/logic/model"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/relationships"
 	"github.com/gopernicus/gopernicus/sdk"
@@ -18,9 +20,12 @@ type RoleReader interface{ roleProbe }
 type Readers struct {
 	Relationships *relationships.Service
 	Roles         RoleReader
+	CacheSource   CacheSource
 }
 
 type config struct {
+	cacher      cacher.Storer
+	cachePolicy CachePolicy
 	Readers
 	RoleModel authmodel.RoleModel
 	Limits    authmodel.EvaluationLimits
@@ -67,7 +72,13 @@ func NewService(readers Readers, opts ...Option) (*Service, error) {
 			return nil, err
 		}
 	}
-	return newComposite(cfg.Relationships, cfg.Roles, compiled, limits), nil
+	runtime, err := newCacheRuntime(cfg)
+	if err != nil {
+		return nil, err
+	}
+	service := newComposite(cfg.Relationships, cfg.Roles, compiled, limits)
+	service.readCache = runtime
+	return service, nil
 }
 
 // Limits returns the immutable resolved budget for host adapters.

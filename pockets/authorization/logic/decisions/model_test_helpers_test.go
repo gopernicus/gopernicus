@@ -1,4 +1,4 @@
-package decisions
+package decisions_test
 
 import (
 	"testing"
