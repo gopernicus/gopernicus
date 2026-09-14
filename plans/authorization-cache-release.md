@@ -62,3 +62,34 @@ Earlier Firestore release exceptions do not cover this feature. Pushing the
 source does not certify final-release qualification. No tag has been cut by this
 release task. If the owner accepts a release exception, record its exact scope
 and retain all failed/unmeasured evidence; do not rewrite results as passed.
+
+
+## Prepared evidence and publication state
+
+- Six versioned candidates passed isolated tidy (no drift), no-replacement module
+  graphs, build/test/vet and integration/integration+live compilation. Candidate
+  archives match source inventories; public dependencies retain checksum checks.
+  Exact proposed versions and hashes are in
+  [authorization-cache-release-manifest.json](authorization-cache-release-manifest.json).
+- Final verification runner and plans committed as `9dfa5e95` and merged into the
+  original checkout. Other owner plan changes are untouched. The original
+  requested implementation plan was backed up before merging its status updates.
+- Parent verification PostgreSQL and both containers were stopped only after
+  exact PID/data-directory and container-label checks. Evidence was retained.
+- `git push -u origin authorization-cache-20260914` was rejected by automatic
+  approval review: exact external destination approval/trust was not established,
+  and release gates remain unmet. No remote write or tag occurred. Do not retry
+  through another transport; obtain explicit approval for the named destination.
+- Candidate dependency pins remain on the release worktree until publication;
+  merging unpublished requirements into the everyday checkout would make normal
+  public dependency resolution fail. The implementation there remains available.
+
+- Candidate code/pins commit: `8688160a`. Final `make check` passed all 42 modules,
+  generation/tag-compilation checks and architecture guards using the verified
+  candidate proxy. The initial plain-public-proxy run could not resolve the
+  deliberately unpublished versions; no dependency resolution failure was hidden.
+  Final log: `/private/tmp/authorization-cache-release-make-check-candidate.log`.
+- Candidate source inventory was rechecked successfully after preparation.
+  No module tags were created. Final remaining action requires exact destination
+  approval and either fulfillment or explicit owner acceptance of the recorded
+  qualification gaps. No failed benchmark result will be relabeled as passed.

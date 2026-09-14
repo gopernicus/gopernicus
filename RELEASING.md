@@ -13,6 +13,11 @@ compilation. Real GCP verification, Turso Cloud authoritative routing and
 representative performance/adoption acceptance remain pending. The earlier
 Firestore release's accepted verification exception does not approve this feature.
 
+Candidate versions and qualification status: [release plan](plans/authorization-cache-release.md)
+and [candidate manifest](plans/authorization-cache-release-manifest.json). Exact
+versioned candidates pass isolated consumer checks; final publication remains
+blocked by the stated cloud/performance gates.
+
 Migration: [AUDIT-035](AUDIT.md#audit-035-optional-bounded-staleness-authorization-read-cache).
 Optional SQL installation and Firestore writer activation require distinct host
 rollout plans. Publication, deployment and host adoption remain separate work.
