@@ -1,0 +1,13 @@
+package main
+
+import (
+	"testing"
+
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/relationships"
+)
+
+func TestFixtureModel(t *testing.T) {
+	if _, err := relationships.Compile(schema()); err != nil {
+		t.Fatal(err)
+	}
+}

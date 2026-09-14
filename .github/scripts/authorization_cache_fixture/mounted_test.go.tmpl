@@ -1,0 +1,505 @@
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"html"
+	"io"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"os"
+	"path/filepath"
+	"regexp"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	bcrypt "github.com/gopernicus/gopernicus/integrations/cryptids/bcrypt"
+	"github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
+	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
+	"github.com/gopernicus/gopernicus/integrations/kvstores/goredis"
+	"github.com/gopernicus/gopernicus/pockets"
+	auth "github.com/gopernicus/gopernicus/pockets/authentication"
+	authhttp "github.com/gopernicus/gopernicus/pockets/authentication/inbound/http"
+	authlogic "github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/identifier"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/passwordreset"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/protection"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/user"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/delivery"
+	authpg "github.com/gopernicus/gopernicus/pockets/authentication/stores/pgx"
+	authturso "github.com/gopernicus/gopernicus/pockets/authentication/stores/turso"
+	"github.com/gopernicus/gopernicus/pockets/authorization"
+	authorizationhttp "github.com/gopernicus/gopernicus/pockets/authorization/inbound/http"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/decisions"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/relationships"
+	authzpg "github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx"
+	authzturso "github.com/gopernicus/gopernicus/pockets/authorization/stores/turso"
+	"github.com/gopernicus/gopernicus/sdk"
+	"github.com/gopernicus/gopernicus/sdk/capabilities/cacher"
+	"github.com/gopernicus/gopernicus/sdk/capabilities/notify/email"
+	"github.com/gopernicus/gopernicus/sdk/capabilities/ratelimiter"
+	"github.com/gopernicus/gopernicus/sdk/pkg/cryptids"
+	"github.com/gopernicus/gopernicus/sdk/pkg/environment"
+	"github.com/gopernicus/gopernicus/sdk/pkg/web"
+	"github.com/redis/go-redis/v9"
+)
+
+// Cryptography is isolated here; credentials and live sessions use real stores.
+type mountedSigner struct {
+	mu     sync.Mutex
+	claims map[string]map[string]any
+}
+
+func (s *mountedSigner) Sign(claims map[string]any, _ time.Time) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	token := fmt.Sprintf("mounted.fixture.%d", len(s.claims)+1)
+	s.claims[token] = claims
+	return token, nil
+}
+func (s *mountedSigner) Verify(token string) (map[string]any, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	claims, ok := s.claims[token]
+	if !ok {
+		return nil, sdk.ErrUnauthorized
+	}
+	return claims, nil
+}
+
+type mountedMailbox struct{ messages chan email.Message }
+
+func (m *mountedMailbox) Send(ctx context.Context, msg email.Message) error {
+	select {
+	case m.messages <- msg:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+type observedPasswordResets struct {
+	passwordreset.Repository
+	t *testing.T
+}
+
+func (r observedPasswordResets) Redeem(ctx context.Context, in passwordreset.RedeemInput) (passwordreset.RedeemResult, error) {
+	result, err := r.Repository.Redeem(ctx, in)
+	if err != nil {
+		r.t.Logf("password reset repository failure: %T: %v", err, err)
+	}
+	return result, err
+}
+
+func mountedRepositories(t *testing.T) (auth.Repositories, authorization.Repositories) {
+	t.Helper()
+	ctx := context.Background()
+	switch os.Getenv("FIXTURE_BACKEND") {
+	case "pgx":
+		db, err := pgxdb.Open(ctx, pgxdb.Config{DSN: os.Getenv("FIXTURE_DSN")})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { db.Close() })
+		schemas := make([]pgxdb.Schema, 2)
+		for i := range schemas {
+			name := fmt.Sprintf("mounted_%d_%d", time.Now().UnixNano(), i)
+			schemas[i], err = pgxdb.NewSchema(name)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := db.Exec(ctx, "CREATE SCHEMA "+name); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() {
+				if _, err := db.Exec(context.Background(), "DROP SCHEMA "+name+" CASCADE"); err != nil {
+					t.Error(err)
+				}
+			})
+		}
+		if err := pgxdb.RunMigrations(ctx, db, authpg.MigrationsFS, authpg.MigrationsDir, pgxdb.WithSchema(schemas[0])); err != nil {
+			t.Fatal(err)
+		}
+		if err := pgxdb.RunMigrations(ctx, db, authzpg.MigrationsFS, authzpg.MigrationsDir, pgxdb.WithSchema(schemas[1])); err != nil {
+			t.Fatal(err)
+		}
+		data, err := authzpg.CacheMigrationsFS.ReadFile(authzpg.CacheMigrationsDir + "/0001_iam_cache_invalidation.sql")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := db.InTx(ctx, func(tx *pgxdb.Tx) error {
+			name := schemas[1].Table("")
+			if _, err := tx.Exec(ctx, "SET LOCAL search_path TO "+name[:len(name)-1]); err != nil {
+				return err
+			}
+			_, err := tx.Exec(ctx, string(data))
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		a, err := authpg.Repositories(ctx, db, authpg.WithSchema(schemas[0]))
+		if err != nil {
+			t.Fatal(err)
+		}
+		z, err := authzpg.Repositories(ctx, db, authzpg.WithSchema(schemas[1]), authzpg.WithCacheReads())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return a, z
+	case "turso":
+		open := func(name string) *tursodb.DB {
+			db, err := tursodb.Open(ctx, tursodb.Config{URL: "file:" + filepath.Join(t.TempDir(), name) + "?_pragma=busy_timeout%285000%29", MaxOpenConns: 4})
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { db.Close() })
+			if _, err := db.Exec(ctx, "PRAGMA journal_mode=WAL"); err != nil {
+				t.Fatal(err)
+			}
+			return db
+		}
+		adb, zdb := open("authentication.db"), open("authorization.db")
+		if err := tursodb.RunMigrations(ctx, adb, authturso.MigrationsFS, authturso.MigrationsDir); err != nil {
+			t.Fatal(err)
+		}
+		if err := tursodb.RunMigrations(ctx, zdb, authzturso.MigrationsFS, authzturso.MigrationsDir); err != nil {
+			t.Fatal(err)
+		}
+		data, err := authzturso.CacheMigrationsFS.ReadFile(authzturso.CacheMigrationsDir + "/0001_iam_cache_invalidation.sql")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := zdb.InTx(ctx, func(tx *tursodb.Tx) error { _, err := tx.Exec(ctx, string(data)); return err }); err != nil {
+			t.Fatal(err)
+		}
+		a, err := authturso.Repositories(ctx, adb)
+		if err != nil {
+			t.Fatal(err)
+		}
+		z, err := authzturso.Repositories(ctx, zdb, authzturso.WithCacheReads())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return a, z
+	default:
+		t.Fatal("owned mounted backend is required")
+		return auth.Repositories{}, authorization.Repositories{}
+	}
+}
+
+func TestMountedAuthenticationWithAuthorizationCache(t *testing.T) {
+	if os.Getenv("FIXTURE_MOUNTED") != "1" {
+		t.Fatal("mounted fixture must be run by its owned-process runner")
+	}
+	for _, cacheKind := range []string{"direct", "lru", "redis"} {
+		t.Run(cacheKind, func(t *testing.T) { mountedAuthentication(t, cacheKind) })
+	}
+}
+
+func mountedAuthentication(t *testing.T, cacheKind string) {
+	ctx := context.Background()
+	a, z := mountedRepositories(t)
+	a.PasswordResets = observedPasswordResets{Repository: a.PasswordResets, t: t}
+	hasher := bcrypt.New(bcrypt.WithCost(4))
+	const initial = "fixture-password-original"
+	const changed = "fixture-password-replacement"
+	const reset = "fixture-password-reset-final"
+	now := time.Now().UTC()
+	_, _, err := a.Users.CreateWithPrimaryIdentifier(ctx,
+		user.User{ID: "fixture-user", DisplayName: "Fixture", Status: user.StatusActive, CreatedAt: now, UpdatedAt: now},
+		identifier.Identifier{ID: "fixture-email", Kind: identifier.KindEmail, NormalizedValue: "fixture@example.invalid", LoginEnabled: true, RecoveryEnabled: true, NotificationEnabled: true, IsPrimary: true, VerifiedAt: now, CreatedAt: now, UpdatedAt: now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	hash, err := hasher.HashPassword(initial)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Passwords.Set(ctx, "fixture-user", hash); err != nil {
+		t.Fatal(err)
+	}
+	key := []byte("0123456789abcdef0123456789abcdef")
+	protector, err := protection.NewHMACChallengeProtector(protection.HMACKeyRing{Active: "fixture", Keys: map[string][]byte{"fixture": key}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyer, err := protection.NewHMACIdentifierKeyer(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encrypter, err := cryptids.NewAESGCM(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mailbox := &mountedMailbox{messages: make(chan email.Message, 8)}
+	signer := &mountedSigner{claims: make(map[string]map[string]any)}
+	newAuthentication := func() *auth.Components {
+		components, err := auth.New(a, signer, environment.ModeDevelopment, delivery.ModeInProcess,
+			auth.WithPassword(auth.PasswordConfig{Hasher: hasher, RequireVerifiedEmail: true}),
+			auth.WithAbuseProtection(auth.AbuseProtectionConfig{AuthenticationLimits: authlogic.AuthenticationLimits{Login: authlogic.RequestBudget{PerSubject: ratelimiter.PerMinute(20)}}}),
+			auth.WithIdentity(auth.IdentityConfig{ChallengeProtector: protector, IdentifierKeyer: keyer}),
+			auth.WithDelivery(auth.DeliveryConfig{Mailer: mailbox, MailFrom: "fixture@example.invalid", DeliveryEncrypter: encrypter}),
+			auth.WithLinks(auth.LinksConfig{PublicAuthBaseURL: "http://127.0.0.1", PasswordResetURL: "http://127.0.0.1/reset"}),
+			auth.WithLogger(slog.New(slog.NewTextHandler(io.Discard, nil))))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return components
+	}
+	components := newAuthentication()
+	runtimeCtx, stop := context.WithCancel(ctx)
+	done := make(chan error, 1)
+	go func() { done <- components.Delivery.Run(runtimeCtx) }()
+	t.Cleanup(func() {
+		stop()
+		select {
+		case <-done:
+		case <-time.After(10 * time.Second):
+			t.Error("delivery worker did not stop")
+		}
+	})
+	var store cacher.Storer = cacher.NewMemory()
+	if cacheKind == "redis" {
+		client := redis.NewClient(&redis.Options{Addr: os.Getenv("FIXTURE_REDIS")})
+		t.Cleanup(func() { client.Close() })
+		store = goredis.NewCacher(client)
+	}
+	bytes := &faultCache{Storer: store}
+	cacheOption := authorization.WithCacher(bytes, decisions.CachePolicy{Namespace: fmt.Sprintf("mounted/%s/%d", cacheKind, time.Now().UnixNano()), MaxStaleness: time.Minute})
+	if cacheKind == "direct" {
+		cacheOption = authorization.WithCacher(nil, decisions.CachePolicy{})
+	}
+	permissions, err := authorization.New(z, authorization.WithRelationshipModel(schema()), cacheOption)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if permissions.ReadCache != nil {
+		t.Cleanup(func() { permissions.ReadCache.Close() })
+	}
+	if err := permissions.RelationshipWriter.CreateRelationships(ctx, []relationships.CreateRelationship{{ResourceType: "document", ResourceID: "fixture-document", Relation: "viewer", SubjectType: "user", SubjectID: "fixture-user"}}); err != nil {
+		t.Fatal(err)
+	}
+	// Keep exercising authentication when a not-yet-implemented cache runtime fails;
+	// the mounted test remains failed and cannot falsely certify enabled caching.
+	if permissions.ReadCache != nil {
+		if err := permissions.ReadCache.Poll(ctx); err != nil {
+			t.Errorf("authorization cache poll: %v", err)
+		}
+	}
+	router := web.NewWebHandler()
+	components.HTTP.Register(pockets.Mount{Router: router})
+	gates := authorizationhttp.NewGates(permissions.Decisions, permissions.Decisions, 100)
+	router.Handle("GET", "/fixture/protected", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusNoContent) }, components.HTTP.RequirePrincipal(authhttp.Live()), gates.RequirePermissionFixed("document", "view", "fixture-document"))
+	request := func(method, path, body string, cookies []*http.Cookie) *httptest.ResponseRecorder {
+		t.Helper()
+		req := httptest.NewRequest(method, path, strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		for _, cookie := range cookies {
+			req.AddCookie(cookie)
+		}
+		req.AddCookie(&http.Cookie{Name: "__Host-auth_csrf", Value: "fixture-csrf"})
+		req.Header.Set("X-CSRF-Token", "fixture-csrf")
+		req.Header.Set("Sec-Fetch-Site", "same-origin")
+		before := bytes.calls.Load()
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		if strings.HasPrefix(path, "/auth/") && bytes.calls.Load() != before {
+			t.Errorf("authentication route %s accessed authorization byte cache", path)
+		}
+		return rec
+	}
+	status := func(rec *httptest.ResponseRecorder, want int) {
+		t.Helper()
+		if rec.Code != want {
+			t.Fatalf("HTTP status=%d want=%d body=%s", rec.Code, want, rec.Body.String())
+		}
+	}
+	login := func(password string) []*http.Cookie {
+		t.Helper()
+		body, _ := json.Marshal(map[string]string{"email": "fixture@example.invalid", "password": password})
+		rec := request("POST", "/auth/login", string(body), nil)
+		status(rec, 200)
+		cookies := rec.Result().Cookies()
+		if len(cookies) == 0 {
+			t.Fatal("login omitted session cookies")
+		}
+		return cookies
+	}
+	protected := func(cookies []*http.Cookie, want int) {
+		t.Helper()
+		status(request("GET", "/fixture/protected", "", cookies), want)
+	}
+	bearerProtected := func(cookies []*http.Cookie, want int) {
+		t.Helper()
+		token := ""
+		for _, cookie := range cookies {
+			if strings.HasPrefix(cookie.Value, "mounted.fixture.") {
+				token = cookie.Value
+			}
+		}
+		if token == "" {
+			t.Fatal("access token absent")
+		}
+		req := httptest.NewRequest("GET", "/fixture/protected", nil)
+		req.Header.Set("Authorization", "Bearer "+token)
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		status(rec, want)
+	}
+	first, other := login(initial), login(initial)
+	rotating := login(initial)
+	status(request("POST", "/auth/refresh", "{}", rotating), 200)
+	status(request("POST", "/auth/refresh", "{}", rotating), 200)
+	bearerProtected(first, 204)
+	// A foreign replacement may not retire the actor's primary identifier.
+	_, _, err = a.Users.CreateWithPrimaryIdentifier(ctx, user.User{ID: "foreign", Status: user.StatusActive, CreatedAt: now, UpdatedAt: now}, identifier.Identifier{ID: "foreign-email", Kind: identifier.KindEmail, NormalizedValue: "foreign@example.invalid", LoginEnabled: true, RecoveryEnabled: true, NotificationEnabled: true, IsPrimary: true, VerifiedAt: now, CreatedAt: now, UpdatedAt: now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeUser, err := a.Users.Get(ctx, "fixture-user")
+	if err != nil {
+		t.Fatal(err)
+	}
+	status(request("DELETE", "/auth/identifiers/fixture-email?replacement=foreign-email", "", first), 404)
+	afterUser, err := a.Users.Get(ctx, "fixture-user")
+	if err != nil {
+		t.Fatal(err)
+	}
+	own, err := a.Identifiers.Get(ctx, "fixture-email")
+	if err != nil {
+		t.Fatal(err)
+	}
+	foreign, err := a.Identifiers.Get(ctx, "foreign-email")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if beforeUser.AuthRevision != afterUser.AuthRevision || !own.Active() || !own.IsPrimary || foreign.UserID != "foreign" {
+		t.Fatal("invalid replacement changed credential state")
+	}
+
+	protected(first, 204)
+	protected(first, 204)
+	if permissions.ReadCache != nil && permissions.ReadCache.Stats().HitComplete == 0 {
+		t.Error("mounted authorization requests never hit cache")
+	}
+	if os.Getenv("FIXTURE_MOUNTED_BENCHMARK") == "1" {
+		for repeat := 0; repeat < 3; repeat++ {
+			measured, err := runBenchmark(ctx, 60, 20*time.Millisecond, func(ctx context.Context, index int) error {
+				rec := request("GET", "/fixture/protected", "", first)
+				if rec.Code != 204 {
+					return fmt.Errorf("mounted benchmark status %d", rec.Code)
+				}
+				return nil
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			payload, _ := json.Marshal(map[string]any{"pid": os.Getpid(), "backend": os.Getenv("FIXTURE_BACKEND"), "cache": cacheKind, "repeat": repeat, "measurements": measured})
+			t.Log("MOUNTED_BENCHMARK " + string(payload))
+		}
+	}
+	// Cache failure cannot change credential revocation or fresh-session admission.
+	bytes.fail.Store(true)
+	status(request("POST", "/auth/logout", "{}", first), 200)
+	protected(first, 401)
+	bearerProtected(first, 401)
+	protected(other, 204)
+	body, _ := json.Marshal(map[string]string{"current_password": initial, "new_password": changed})
+	replacement := request("POST", "/auth/password/change", string(body), other)
+	status(replacement, 200)
+	protected(other, 401)
+	current := replacement.Result().Cookies()
+	protected(current, 204)
+	wrong, _ := json.Marshal(map[string]string{"email": "fixture@example.invalid", "password": initial})
+	status(request("POST", "/auth/login", string(wrong), nil), 401)
+	current = login(changed)
+	status(request("POST", "/auth/password/forgot", `{"email":"fixture@example.invalid"}`, nil), 202)
+	var message email.Message
+	select {
+	case message = <-mailbox.messages:
+	case <-time.After(10 * time.Second):
+		t.Fatal("fake delivery did not receive reset")
+	}
+	token := ""
+	for _, link := range regexp.MustCompile(`https?://[^\s<>"']+`).FindAllString(message.Text+" "+html.UnescapeString(message.HTML), -1) {
+		parsed, err := url.Parse(link)
+		if err == nil && parsed.Query().Get("token") != "" {
+			token = parsed.Query().Get("token")
+			break
+		}
+	}
+	if token == "" {
+		t.Fatal("fake delivery omitted reset token")
+	}
+	// Rejection must preserve the outstanding reset proof for later consumption.
+	status(request("DELETE", "/auth/identifiers/fixture-email?replacement=foreign-email", "", current), 404)
+	resetBody, _ := json.Marshal(map[string]string{"token": token, "password": reset})
+	// Independent service instances race the same one-time reset proof.
+	secondInstance := newAuthentication()
+	secondRouter := web.NewWebHandler()
+	secondInstance.HTTP.Register(pockets.Mount{Router: secondRouter})
+	ready := make(chan struct{})
+	results := make(chan *httptest.ResponseRecorder, 2)
+	beforeReset := bytes.calls.Load()
+	for _, handler := range []http.Handler{router, secondRouter} {
+		go func(handler http.Handler) {
+			<-ready
+			req := httptest.NewRequest("POST", "/auth/password/reset", strings.NewReader(string(resetBody)))
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("Sec-Fetch-Site", "same-origin")
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+			results <- rec
+		}(handler)
+	}
+	close(ready)
+	successes := 0
+	for range 2 {
+		select {
+		case result := <-results:
+			code := result.Code
+			if code == 200 {
+				successes++
+			} else if code < 400 || code >= 500 {
+				t.Errorf("unexpected reset race status %d: %s", code, result.Body.String())
+			}
+		case <-time.After(10 * time.Second):
+			t.Fatal("reset race timed out")
+		}
+	}
+	if successes != 1 {
+		t.Fatalf("one-time reset proof had %d winners", successes)
+	}
+	if bytes.calls.Load() != beforeReset {
+		t.Error("password reset accessed authorization byte cache")
+	}
+
+	protected(current, 401)
+	// Single-use reset proof and replacement password are both authoritative.
+	replay := request("POST", "/auth/password/reset", string(resetBody), nil)
+	if replay.Code < 400 || replay.Code >= 500 {
+		t.Fatal("reset token replay succeeded")
+	}
+	bytes.fail.Store(false)
+	fresh := login(reset)
+	protected(fresh, 204)
+	protected(fresh, 204)
+	if _, err := a.UserAdmin.SetStatus(ctx, "fixture-user", user.StatusDeactivated, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	protected(fresh, 401)
+	bearerProtected(fresh, 401)
+	disabledBody, _ := json.Marshal(map[string]string{"email": "fixture@example.invalid", "password": reset})
+	if rec := request("POST", "/auth/login", string(disabledBody), nil); rec.Code < 400 || rec.Code >= 500 {
+		t.Fatal("disabled login was not authoritatively rejected")
+	}
+	t.Log("mounted login, cookie/bearer Live, refresh/grace, foreign replacement refusal, logout, password replacement, concurrent reset, replay denial, and disable verified")
+	if permissions.ReadCache != nil && permissions.ReadCache.Stats().CacheErrors == 0 {
+		t.Error("mounted cache outage was not exercised")
+	}
+}
