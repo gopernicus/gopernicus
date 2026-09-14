@@ -34,11 +34,22 @@ type Tx struct {
 // BEGIN and rejects non-default isolation via sql.TxOptions, so the mode is
 // driven explicitly over a pinned *sql.Conn.
 func (d *DB) Begin(ctx context.Context) (*Tx, error) {
+	return d.begin(ctx, "BEGIN IMMEDIATE")
+}
+
+// BeginRead starts a pinned deferred transaction for repeatable snapshot reads.
+// SQLite does not enforce read-only access; callers must expose only read APIs.
+// Authoritative reads require a primary route, not an unverified replica.
+func (d *DB) BeginRead(ctx context.Context) (*Tx, error) {
+	return d.begin(ctx, "BEGIN DEFERRED")
+}
+
+func (d *DB) begin(ctx context.Context, statement string) (*Tx, error) {
 	conn, err := d.db.Conn(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("beginning transaction: %w", err)
 	}
-	if _, err := conn.ExecContext(ctx, "BEGIN IMMEDIATE"); err != nil {
+	if _, err := conn.ExecContext(ctx, statement); err != nil {
 		// A transport error may leave BEGIN's outcome unknown.
 		if discardErr := discardConn(conn); discardErr != nil {
 			return nil, fmt.Errorf("discard failed: %w (begin error: %w)", discardErr, MapError(err))

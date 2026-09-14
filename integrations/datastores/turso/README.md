@@ -139,3 +139,17 @@ Cancellation racing a commit cannot undo a commit already accepted by a server.
 A failed manual COMMIT is rolled back before its connection is released. Failed
 rollback or uncertain BEGIN disposes of the physical connection. Empty offset
 pages now serialize `items: []`, matching cursor pages.
+
+### Read snapshots
+
+`BeginRead(ctx)` pins a connection and starts `BEGIN DEFERRED`. The first read
+establishes a repeatable snapshot; explicitly commit or roll back on every path.
+Cleanup follows `Begin`, including cancellation and discarding unresolved
+connections. SQLite does not enforce read-only transactions: expose read-only
+application capabilities to snapshot callbacks. `Begin` still uses
+`BEGIN IMMEDIATE` for writers.
+
+Local file/WAL snapshot behavior and HTTP snapshots against an isolated primary
+libSQL server `sqld 0.24.33 (6f451a1f)` are tested through the pinned driver. This does not establish authoritative routing for Turso
+Cloud or replicas. Authorization cache observations and fills require a proven
+primary route; leave caching disabled on uncertified deployments.

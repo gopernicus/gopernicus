@@ -726,3 +726,12 @@ and schema win, and the internal `v2:` suffix is appended afterward, including t
 an empty prefix. They cannot change a live limiter. `NewLimiter` panics on a nil option.
 `RunMigrations` rejects a nil `MigrateOption` with `sdk.ErrInvalidInput` before
 accessing the database; repeated `WithSchema` uses the last schema.
+
+### Read snapshots
+
+`BeginRead(ctx)` starts an engine-enforced read-only transaction at repeatable-read
+isolation. The first query establishes the snapshot shared by subsequent queries.
+Call `Commit` on success and `Rollback` on error or panic; cleanup retains the
+existing independent cancellation context. `Begin` and `Transact` retain their
+existing writer semantics. Security freshness observations require a primary
+connection, not a lagging read replica.

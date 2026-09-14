@@ -28,6 +28,16 @@ func (d *DB) Begin(ctx context.Context) (*Tx, error) {
 	return &Tx{tx: tx, ctx: ctx}, nil
 }
 
+// BeginRead starts an engine-enforced read-only, repeatable-read transaction.
+// Every query observes the snapshot established by the first statement.
+func (d *DB) BeginRead(ctx context.Context) (*Tx, error) {
+	tx, err := d.pool.BeginTx(ctx, jackpgx.TxOptions{IsoLevel: jackpgx.RepeatableRead, AccessMode: jackpgx.ReadOnly})
+	if err != nil {
+		return nil, fmt.Errorf("beginning read transaction: %w", err)
+	}
+	return &Tx{tx: tx, ctx: ctx}, nil
+}
+
 // Commit commits using the Begin context and cleans up a failed commit.
 func (t *Tx) Commit() error {
 	err := t.ctx.Err()

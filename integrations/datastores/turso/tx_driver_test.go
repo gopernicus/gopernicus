@@ -56,7 +56,7 @@ func (c *txDriverConn) ExecContext(ctx context.Context, query string, _ []driver
 		return nil, err
 	}
 	switch query {
-	case "BEGIN IMMEDIATE":
+	case "BEGIN IMMEDIATE", "BEGIN DEFERRED":
 		c.active = true
 		if d.beginErr != nil {
 			return nil, d.beginErr
