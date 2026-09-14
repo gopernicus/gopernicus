@@ -1,6 +1,6 @@
 # Authorization cache release — 2026-09-14
 
-Status: PUBLICATION AUTHORIZED WITH DISCLOSED QUALIFICATION EXCEPTION.
+Status: TAGS PUBLISHED; PUBLIC CONSUMER VERIFICATION PENDING.
 
 The owner authorized pushing and releasing the implemented authorization cache.
 The implementation is locally merged into `firestore-release-20260911` at
@@ -105,3 +105,16 @@ including authorization core `v0.14.0`, with the missing real-GCP/Turso Cloud
 verification and failed/incomplete performance acceptance explicitly accepted
 for publication. These results remain unverified/failed, not passed. This does
 not authorize host activation, database migrations or deployment.
+
+
+## Publication
+
+- Release commit: `9e67a165fb3c042c60e3b9bc32eb56374d5c5c80`.
+- Branch pushed to the explicitly approved `origin`. All six annotated tags
+  published in connector/core/store dependency order and independently verified
+  against that commit. Existing remote main and prior tags remain unchanged.
+- The public Go proxy lists all six versions. Its earlier negative lookup cache
+  delayed normal checksum downloads; public verification is still required.
+  No checksum exemption or tag replacement was used.
+- Remote evidence:
+  `/private/tmp/authorization-cache-publication-20260914/remote-published.json`.

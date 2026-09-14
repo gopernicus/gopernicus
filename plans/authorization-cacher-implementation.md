@@ -1,6 +1,6 @@
 # Optional authorization read caching: implementation plan
 
-Status: IMPLEMENTED; RELEASE QUALIFICATION INCOMPLETE — 2026-09-14.
+Status: IMPLEMENTED AND TAGGED WITH OWNER-ACCEPTED VERIFICATION GAPS — 2026-09-14.
 The owner requested implementation, local merge, and then push/release in the
 Codex session. Local correctness verification passed. Real-cloud verification
 and performance acceptance remain open. Host adoption, deployment and live cloud
@@ -1620,3 +1620,12 @@ adoption must use the intended query mix, mutation rate and actual deployment.
   Release preparation is tracked in [authorization-cache-release.md](authorization-cache-release.md).
   Real GCP, Turso Cloud authoritative routing and representative performance
   acceptance remain explicit release gates. Local passing tests do not waive them.
+
+
+### Publication follow-up
+
+The owner explicitly accepted the stated cloud/performance qualification gaps
+and authorized the exact GitHub destination and six-module release. All six tags,
+including authorization core `v0.14.0`, are published from `9e67a165`; remote
+identities and preservation of prior refs passed. Public consumer verification
+is tracked in the release plan. No host adoption or deployment was performed.

@@ -1,26 +1,28 @@
 # Releasing gopernicus modules
 
-## Unreleased: Authorization read caching (2026-09-14)
+## Authorization read caching (published 2026-09-14)
 
-Prepare dependency-ordered releases: changed Turso/PostgreSQL connectors →
-authorization core → authorization Turso/PostgreSQL/Firestore stores. Determine
-versions from then-current final tags; no prospective versions are assigned or
-published here. No SDK or Redis adapter release is required solely for this feature.
+Published six dependency-ordered module tags from
+`9e67a165fb3c042c60e3b9bc32eb56374d5c5c80` on `authorization-cache-20260914`:
+Turso connector `v0.5.0`, PostgreSQL connector `v0.8.0`, authorization core
+`v0.14.0`, and authorization stores Turso `v0.8.0`, PostgreSQL `v0.9.0`,
+Firestore `v0.2.0`. No SDK, Redis adapter or authentication release was needed.
 
-Before release, complete the [implementation plan](plans/authorization-cacher-implementation.md),
-isolated `GOWORK=off` consumer builds, migration export checks and public wiring
-compilation. Real GCP verification, Turso Cloud authoritative routing and
-representative performance/adoption acceptance remain pending. The earlier
-Firestore release's accepted verification exception does not approve this feature.
+Local correctness, repository-wide checks and isolated versioned consumer
+build/test/vet passed. Remote tag identities match the verified source. Public
+checksum/consumer verification is pending Go proxy indexing; see the
+[release plan](plans/authorization-cache-release.md) and
+[release manifest](plans/authorization-cache-release-manifest.json).
 
-Candidate versions and qualification status: [release plan](plans/authorization-cache-release.md)
-and [candidate manifest](plans/authorization-cache-release-manifest.json). Exact
-versioned candidates pass isolated consumer checks; the owner accepted the stated cloud/performance verification gaps for
-publication on 2026-09-14. These gaps remain open for host adoption.
+The owner explicitly accepted this feature's unexecuted real-GCP/Turso Cloud
+verification and failed/incomplete representative performance acceptance for
+publication. These gaps remain open and are not recorded as passed. The earlier
+Firestore exception was not reused. Caching remains opt-in; host adoption must
+choose its freshness policy and validate its deployment and workload.
 
 Migration: [AUDIT-035](AUDIT.md#audit-035-optional-bounded-staleness-authorization-read-cache).
 Optional SQL installation and Firestore writer activation require distinct host
-rollout plans. Publication, deployment and host adoption remain separate work.
+rollout plans. No host activation, migration or deployment was performed.
 
 ## Coordinated audit release (2026-09-11)
 

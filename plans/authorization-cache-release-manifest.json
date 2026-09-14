@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "status": "publication_authorized_with_qualification_exception",
+  "status": "published_public_verification_pending",
   "date": "2026-09-14",
   "release_branch": "authorization-cache-20260914",
   "remote": "https://github.com/gopernicus/gopernicus.git",
@@ -15,7 +15,10 @@
       "go_mod_sum": "h1:83vKGYZCHOoTnCSWM/ClCLOvBlXOgkvGh3SPfn+dOOE=",
       "zip_sha256": "7c60bd72ede69eaa2dde01508ff5b27554a6da85a0b07547b2f3c6be892fac32",
       "source_inventory_sha256": "2af78b832782c934ba054882c58ecb2493b195133eaa3c9d0be8f9c17be63e08",
-      "source_entries": 44
+      "source_entries": 44,
+      "published": true,
+      "tag_object": "684915720020d7e194235d4375d570eaef0f8408",
+      "release_commit": "9e67a165fb3c042c60e3b9bc32eb56374d5c5c80"
     },
     {
       "directory": "integrations/datastores/pgxdb",
@@ -26,7 +29,10 @@
       "go_mod_sum": "h1:m73aQqKrcCcr/XY5CwqUY5REpUg0Pwr1r3i+YfpAPJg=",
       "zip_sha256": "c2ce7d5c1475d3a0fce7527e841bfe361d5fc62e2c575eff10c6139888fb4075",
       "source_inventory_sha256": "e6b05e808e25635cd343d93cdd72ce6c373e58554413094d65296462c3404768",
-      "source_entries": 55
+      "source_entries": 55,
+      "published": true,
+      "tag_object": "7044aec3f8f67b330d3680670b097d04707e856e",
+      "release_commit": "9e67a165fb3c042c60e3b9bc32eb56374d5c5c80"
     },
     {
       "directory": "pockets/authorization",
@@ -37,7 +43,10 @@
       "go_mod_sum": "h1:SWt/blN2Csf2p8dohOtJXbINP/BT5Z3oV9/GOxkFXGo=",
       "zip_sha256": "12b9ecebff99745a626d2f6b8047c26682398de0296628cd2509c7be1521a27c",
       "source_inventory_sha256": "61c0dab04b2a1d2bb51c93c77de4d5dde15955d9588f61b62fc368577af87b7f",
-      "source_entries": 191
+      "source_entries": 191,
+      "published": true,
+      "tag_object": "186a32ce6972fbc51a4090f66c1c5eefd3ddf3c7",
+      "release_commit": "9e67a165fb3c042c60e3b9bc32eb56374d5c5c80"
     },
     {
       "directory": "pockets/authorization/stores/turso",
@@ -48,7 +57,10 @@
       "go_mod_sum": "h1:1cT93Bdtb6N2Wm7O9fURr0GdmviYDxDoOezl74S3lLs=",
       "zip_sha256": "bdc2830134460dea75a7bda1e55eb2d65d5a2fa924b5c0b24136e23a529d7d19",
       "source_inventory_sha256": "e61204a7eb79b596c6f5a6b6d19687e1d5cf1257bef4d1f93e1bb199b509ca4c",
-      "source_entries": 40
+      "source_entries": 40,
+      "published": true,
+      "tag_object": "5a232e696308145b3ecbbef81dd01b9fda1dd0a5",
+      "release_commit": "9e67a165fb3c042c60e3b9bc32eb56374d5c5c80"
     },
     {
       "directory": "pockets/authorization/stores/pgx",
@@ -59,7 +71,10 @@
       "go_mod_sum": "h1:hGjlU9kajKxvRTVj35z1MBp6ql1nFHSy1sy/4+gwuBU=",
       "zip_sha256": "6013d06c9eda8a16f586f648a1456e5b94407708c1b367e8cc3a3777898a5687",
       "source_inventory_sha256": "aee66c5990a552310273398d1f2df9d38b410008c42d80c1d410a15367eacbf3",
-      "source_entries": 46
+      "source_entries": 46,
+      "published": true,
+      "tag_object": "0a7ba381c2a3f9e97d7b848560e8ecae1a84760b",
+      "release_commit": "9e67a165fb3c042c60e3b9bc32eb56374d5c5c80"
     },
     {
       "directory": "pockets/authorization/stores/firestore",
@@ -70,7 +85,10 @@
       "go_mod_sum": "h1:9lj5SBqeyzjgkSao7uxUHiSZtjYrvbcTQaEpo/rpCe0=",
       "zip_sha256": "a694d006b6900cda45b82e613d75fdc9fd8780cac7dfa92eb641ee0109f42dce",
       "source_inventory_sha256": "9e69cef39af2993d17b9a611abdefc8a3932a651930d21b9fe2179b4de95a990",
-      "source_entries": 65
+      "source_entries": 65,
+      "published": true,
+      "tag_object": "7be290b4c68ebff0ba208807082bf72ea25630b8",
+      "release_commit": "9e67a165fb3c042c60e3b9bc32eb56374d5c5c80"
     }
   ],
   "candidate": {
@@ -226,5 +244,7 @@
     ],
     "performance": "provisional acceptance failed; Firestore scheduled-load cache matrix incomplete",
     "host_activation_authorized": false
-  }
+  },
+  "release_commit": "9e67a165fb3c042c60e3b9bc32eb56374d5c5c80",
+  "remote_refs_preserved": true
 }
