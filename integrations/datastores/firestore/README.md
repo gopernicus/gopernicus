@@ -493,8 +493,20 @@ multikey/vector/search modes; and whether an index is wide enough for a query
 the manifest never described. The probe proves the manifest was deployed.
 The store's query matrix — run live — proves the manifest is right.
 
-Firestore allows 200 composite indexes per database without billing enabled and
-1,000 with it; a manifest is a shared budget across every store a host mounts.
+A manifest spends **two** per-database budgets, and every store a host mounts
+shares both: Firestore allows **200 composite indexes** per database without
+billing enabled (1,000 with) and, separately, **200 single-field
+configurations** (1,000 with) — the budget every `fieldOverrides` entry spends,
+shared with TTL policies (an indexing exemption and a TTL policy on the *same*
+field count as one configuration). Deploying a manifest therefore takes two
+commands, not one: `gcloud firestore indexes composite create` per composite and
+`gcloud firestore indexes fields update <fieldPath> --collection-group=<cg>
+--index=order=…` (or `--disable-indexes` for an override with an empty `indexes`
+array) per field override. `ProbeIndexes` checks both halves, so a run that
+deployed only the composites fails at construction on a field the manifest
+declares. Both commands accept `--async`, and readiness is read back separately:
+`indexes composite list` for the composites, `indexes fields list` for the field
+configuration — the former never returns single-field indexes.
 
 ## Helpers — time, ids, keys
 

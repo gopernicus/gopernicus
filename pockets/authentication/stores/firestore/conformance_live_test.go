@@ -1,6 +1,6 @@
 //go:build integration && live
 
-// The LIVE conformance entrypoint (C-D8's second factory, milestone task A6).
+// The LIVE conformance entrypoint (C-D8's second factory, milestone task N6).
 // It runs the SAME shared suite as the emulator entrypoint, against a REAL
 // Firestore database, and it is the only leg that is release evidence:
 //
@@ -11,8 +11,10 @@
 //     the deployed manifest fails the suite at construction, naming the missing
 //     index (ruling R5);
 //   - the emulator holds transaction locks for up to thirty seconds and "does
-//     not implement all transaction behavior", so its contention results are
-//     timing, not serializability.
+//     not implement all transaction behavior", so its results for this pocket's
+//     contended families — the deactivate-versus-mint fence, the concurrent
+//     grant consume, the concurrent redemption, the purge/Replace handshake —
+//     are timing, not serializability.
 //
 // Configuration is firestoretest's: FIRESTORE_LIVE_PROJECT_ID +
 // FIRESTORE_LIVE_DATABASE_ID (a disposable, run-owned database — never
@@ -23,9 +25,14 @@
 //	FIRESTORE_EMULATOR_HOST= FIRESTORE_LIVE_REQUIRED=1 \
 //	  FIRESTORE_LIVE_PROJECT_ID='<test-project>' FIRESTORE_LIVE_DATABASE_ID='<run-owned-db>' \
 //	  GOOGLE_APPLICATION_CREDENTIALS='<sa.json>' \
-//	  go test -json -count=1 -tags='integration,live' -timeout 30m -run 'Live$' ./...
+//	  go test -json -count=1 -tags='integration,live' -timeout 45m -run 'Live$' ./...
 //
-// NOT RUN as of A6: no live GCP project exists for this repository yet. This
+// This pocket has NO RunTransactional family, so unlike the authorization
+// store's live leg this one has NO allowed skip: both roots below must PASS on
+// a required run, and .github/workflows/live-stores.yml carries an EMPTY
+// allow-list for this module to say so mechanically.
+//
+// NOT RUN as of N6: no live GCP project exists for this repository yet. This
 // file compiles (go vet -tags='integration,live'), skips loudly unconfigured,
 // and fails under FIRESTORE_LIVE_REQUIRED=1 — but nothing in it has executed
 // against Firestore, so the index manifest, the probe's live verdict, and the
@@ -38,23 +45,41 @@ import (
 
 	firestoredb "github.com/gopernicus/gopernicus/integrations/datastores/firestore"
 	"github.com/gopernicus/gopernicus/integrations/datastores/firestore/firestoretest"
-	"github.com/gopernicus/gopernicus/pockets/authorization"
-	"github.com/gopernicus/gopernicus/pockets/authorization/storetest"
-	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
+	auth "github.com/gopernicus/gopernicus/pockets/authentication"
+	"github.com/gopernicus/gopernicus/pockets/authentication/storetest"
 )
 
-// liveAllCollections is the COMPLETE set of collections this store owns, and the
-// only documents a live reset may delete. A live database is never emptied
-// wholesale (that is what the emulator's clear endpoint is for), so the sweep is
-// named collection by collection: a collection missing from this list would
-// survive between fixtures and leak state across the suite.
+// liveAllCollections is the COMPLETE set of collections this store owns — the
+// thirteen row collections mirroring the SQL tables and the seven CLAIM
+// collections that stand in for its unique indexes (SCHEMA.md §5) — and the only
+// documents a live reset may delete. A live database is never emptied wholesale
+// (that is what the emulator's clear endpoint is for), so the sweep is named
+// collection by collection: a collection missing from this list would survive
+// between fixtures and leak state across the suite. A LEAKED CLAIM is the worst
+// of those leaks, because it does not look like leftover data — it looks like a
+// duplicate-detection bug in the store.
 var liveAllCollections = []string{
-	collectionRelationships,
-	collectionSubjectClaims,
-	collectionIDClaims,
-	collectionRoles,
-	collectionScopes,
-	collectionMutations,
+	collectionUsers,
+	collectionPasswords,
+	collectionIdentifiers,
+	collectionSessions,
+	collectionOAuthAccounts,
+	collectionOAuthStates,
+	collectionServiceAccounts,
+	collectionAPIKeys,
+	collectionSecurityEvents,
+	collectionInvitations,
+	collectionChallenges,
+	collectionContactChanges,
+	collectionAuthGrants,
+
+	collectionIdentifierClaims,
+	collectionIdentifierPrimaries,
+	collectionRefreshHashClaims,
+	collectionAPIKeyHashClaims,
+	collectionInvitationTokens,
+	collectionInvitationPending,
+	collectionChallengeDigests,
 }
 
 // liveProbeOnce memoizes the ONE probe-enabled construction this package makes,
@@ -70,8 +95,8 @@ var (
 // The probe is never skipped here — R5's claim is that the shipped manifest
 // covers this store's queries on a real database, and the only proof of that is
 // a probe passing against the deployed indexes. But one construction proves it
-// exactly as well as a hundred do, and a hundred cost a hundred Admin API
-// ListIndexes plus a hundred GetField per declared field override against a
+// exactly as well as two hundred do, and two hundred cost two hundred Admin API
+// ListIndexes plus two hundred GetField per declared field override against a
 // shared project's Admin quota. So the proof is hoisted here and the fixtures
 // below pass WithoutIndexProbe() EXPLICITLY, which is a stated exemption rather
 // than a quiet one; TestIndexProbeAcceptsTheDeployedManifestLive asserts the
@@ -87,16 +112,16 @@ func probeLiveOnce(t *testing.T, db *firestoredb.DB) {
 }
 
 // newLiveRepos returns the per-fixture factory over ONE live client: each call
-// clears this store's six collections and constructs the repository set afresh,
-// which is the "FRESH, empty Repositories per call" storetest requires. The
-// client is opened once, at the root, rather than per fixture — the suite calls
-// this factory well over a hundred times and a client per call would be a
+// clears this store's twenty collections and constructs the repository set
+// afresh, which is the "FRESH, empty Repositories per call" storetest requires.
+// The client is opened once, at the root, rather than per fixture — the suite
+// calls this factory once per leaf and a client per call would be a couple of
 // hundred gRPC connections to prove nothing extra. The probe is hoisted for the
 // same reason (probeLiveOnce, above); the per-fixture constructions skip it.
-func newLiveRepos(t *testing.T, db *firestoredb.DB) func(*testing.T) authorization.Repositories {
+func newLiveRepos(t *testing.T, db *firestoredb.DB) func(*testing.T) auth.Repositories {
 	t.Helper()
 	probeLiveOnce(t, db)
-	return func(t *testing.T) authorization.Repositories {
+	return func(t *testing.T) auth.Repositories {
 		t.Helper()
 		firestoretest.ResetLive(t, db, liveAllCollections...)
 		repos, err := Repositories(db, WithoutIndexProbe())
@@ -107,12 +132,11 @@ func newLiveRepos(t *testing.T, db *firestoredb.DB) func(*testing.T) authorizati
 	}
 }
 
-// TestConformanceLive is the full shared suite — every family, including the
-// v0.12.0 set reads and the mutation families — against a real Firestore
-// database with the manifest deployed and the package's one probe-enabled
-// construction behind it. NOTHING here is skipped: R1's ambient family
-// (TestRunTransactionalLive) is the one allowed skip of this leg, and it is a
-// separate root so this one's verdict is unambiguous.
+// TestConformanceLive is the full shared suite — all eighteen ports, the search
+// group (R4) and the concurrency family — against a real Firestore database with
+// the manifest deployed and the package's one probe-enabled construction behind
+// it. NOTHING here is skipped: this pocket has no ambient family, so there is no
+// R1 exception to carve out and no allowed skip at all.
 //
 // The client is opened at the ROOT on purpose. firestoretest.OpenLive skips (or,
 // when required, fails) the test it is handed, so opening it inside the factory
@@ -123,28 +147,13 @@ func TestConformanceLive(t *testing.T) {
 	storetest.Run(t, newLiveRepos(t, db))
 }
 
-// TestRunTransactionalLive is the ONE allowed skip of the live leg (ruling R1),
-// and the audit step in .github/workflows/live-stores.yml allows it BY NAME. The
-// store hands the harness no crud.Transactor, because a Firestore transaction
-// requires every read to precede every write and never observes its own pending
-// writes — the exact property the ambient family proves from both sides. Real
-// Firestore does not change that; it is a family difference, so this skip is the
-// same on the emulator and live.
-func TestRunTransactionalLive(t *testing.T) {
-	db := firestoretest.OpenLive(t)
-	t.Log("firestore: this store supplies NO crud.Transactor — the ambient-transaction family is a KNOWN FAMILY DIFFERENCE (firestore-stores ruling R1), not a defect. It is the only test root this leg is allowed to skip, and live-stores.yml allows it by name.")
-	newRepos := newLiveRepos(t, db)
-	storetest.RunTransactional(t, func(t *testing.T) (authorization.Repositories, crud.Transactor) {
-		return newRepos(t), nil
-	})
-}
-
-// TestAmbientTransactionRefusedLive is R1's other half on a real database: every
-// public port method handed a context carrying a connector transaction fails
-// loud instead of running on the client beside the host's transaction. The
-// emulator proves the same refusal, but the refusal is the store's side of the
-// contract a host reads in the README, so the live leg asserts it too rather
-// than assuming the emulator's transaction plumbing behaves like production's.
+// TestAmbientTransactionRefusedLive is ruling R1 on a real database: each of the
+// fifty-eight public port methods handed a context carrying a connector
+// transaction fails loud instead of running on the client beside the host's
+// transaction. The emulator proves the same refusal, but the refusal is the
+// store's side of the contract a host reads in the README, so the live leg
+// asserts it too rather than assuming the emulator's transaction plumbing
+// behaves like production's.
 func TestAmbientTransactionRefusedLive(t *testing.T) {
 	db := firestoretest.OpenLive(t)
 	repos := newLiveRepos(t, db)(t)
