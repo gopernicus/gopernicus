@@ -428,14 +428,69 @@ func TestTupleCacheConstructor(t *testing.T) {
 	if _, err := NewTupleCache(nil, "namespace"); !errors.Is(err, sdk.ErrInvalidInput) {
 		t.Fatalf("nil client: %v", err)
 	}
-	if _, err := NewTupleCache(redis.NewClient(&redis.Options{}), ""); !errors.Is(err, sdk.ErrInvalidInput) {
-		t.Fatalf("empty namespace: %v", err)
+	client := redis.NewClient(&redis.Options{Dialer: func(context.Context, string, string) (net.Conn, error) {
+		t.Fatal("constructor performed I/O")
+		return nil, errors.New("unexpected dial")
+	}})
+	t.Cleanup(func() { _ = client.Close() })
+	for _, namespace := range []string{"", "test:{raw}:sets", "app}", "{app", "app name", "app\n", "app\x00", "app*", "app?", "app[1]", "app\\name", "caf\u00e9", "app\xff"} {
+		if cache, err := NewTupleCache(client, namespace); cache != nil || !errors.Is(err, sdk.ErrInvalidInput) {
+			t.Fatalf("invalid namespace %q: %v/%v", namespace, cache, err)
+		}
+	}
+	for _, namespace := range []string{"segovia-v2:dev:authorization", "App_1.2/relationships", "app:build:123"} {
+		cache, err := NewTupleCache(client, namespace)
+		if err != nil || cache.key != "tuplecache:{"+namespace+"}" {
+			t.Fatalf("readable namespace %q: %+v/%v", namespace, cache, err)
+		}
+	}
+}
+
+func TestTupleCacheReadableNamespaces(t *testing.T) {
+	client, _ := startRedis(t, "", false)
+	ctx := t.Context()
+	// The previous adapter's hash for namespace "segovia" is a different key.
+	const legacy = "gopernicus:tuplecache:{c2Vnb3ZpYQ}:mirror"
+	if err := client.HSet(ctx, legacy, "sentinel", "old").Err(); err != nil {
+		t.Fatal(err)
+	}
+	state := tuplecache.State{Binding: "store", Receipt: "initial"}
+	var caches []*TupleCache
+	var wantKeys []string
+	namespaces := []string{"segovia", "segovia-v2:dev:authorization", "segovia-v2.dev.authorization", "my-app/relationships"}
+	for _, namespace := range namespaces {
+		cache, err := NewTupleCache(client, namespace)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got, err := cache.State(ctx); err != nil || got != (tuplecache.State{}) {
+			t.Fatalf("fresh namespace inherited a mirror: %+v/%v", got, err)
+		}
+		row := tuple("space", "a", "viewer", "user", namespace, "")
+		if err := cache.Publish(ctx, tuplecache.State{}, state, tuplecache.Snapshot{Full: true, Tuples: []relationships.CreateRelationship{row}}, time.Minute); err != nil {
+			t.Fatal(err)
+		}
+		caches = append(caches, cache)
+		wantKeys = append(wantKeys, "tuplecache:{"+namespace+"}")
+	}
+	for i, cache := range caches {
+		row := tuple("space", "a", "viewer", "user", namespaces[i], "")
+		assertSets(t, cache, state, []tuplecache.SetKey{forward(row)}, [][]relationships.SubjectRef{{subject(row)}})
+	}
+	keys, err := client.Keys(ctx, "tuplecache:*").Result()
+	slices.Sort(keys)
+	slices.Sort(wantKeys)
+	if err != nil || !slices.Equal(keys, wantKeys) {
+		t.Fatalf("readable mirrors or build cleanup: %v/%v, want %v", keys, err, wantKeys)
+	}
+	if got, err := client.HGet(ctx, legacy, "sentinel").Result(); err != nil || got != "old" {
+		t.Fatalf("legacy hash changed: %q/%v", got, err)
 	}
 }
 
 func newCache(t *testing.T, client *redis.Client) *TupleCache {
 	t.Helper()
-	c, err := NewTupleCache(client, "test:{raw}:sets")
+	c, err := NewTupleCache(client, "test:raw:sets")
 	if err != nil {
 		t.Fatal(err)
 	}

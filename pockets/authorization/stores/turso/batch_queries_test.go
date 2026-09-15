@@ -187,6 +187,10 @@ func TestThroughBatchSQLiteTupleCache(t *testing.T) {
 	for i, id := range ids {
 		requests[i] = authmodel.CheckRequest{Principal: authmodel.PrincipalRef{Type: "user", ID: "alice"}, Permission: "view", Resource: authmodel.Resource{Type: "dashboard", ID: id}}
 	}
+	// Unsorted candidates, a duplicate and an absent resource exercise the
+	// public filter's projection as well as its TupleCache routing.
+	candidates := append([]string{ids[127], "missing", ids[0]}, ids...)
+	allowedIDs := append([]string{ids[127], ids[0]}, ids...)
 	check := func(want bool, wantSQL int) {
 		t.Helper()
 		*count = 0
@@ -202,13 +206,34 @@ func TestThroughBatchSQLiteTupleCache(t *testing.T) {
 		if *count != wantSQL {
 			t.Fatalf("permission SQL: got %d want %d", *count, wantSQL)
 		}
+		*count = 0
+		before := components.TupleCache.Stats()
+		filtered, err := components.Decisions.FilterAuthorized(t.Context(), requests[0].Principal, "view", "dashboard", candidates)
+		wantIDs := []string{}
+		if want {
+			wantIDs = allowedIDs
+		}
+		if err != nil || filtered == nil || !slices.Equal(filtered, wantIDs) {
+			t.Fatalf("filter: %v/%v, want %v", filtered, err, wantIDs)
+		}
+		after := components.TupleCache.Stats()
+		if *count != wantSQL {
+			t.Fatalf("filter permission SQL: got %d want %d", *count, wantSQL)
+		}
+		if wantSQL == 0 && (after.Hits != before.Hits+1 || after.Fallbacks != before.Fallbacks) {
+			t.Fatalf("filter did not use cache: %+v -> %+v", before, after)
+		}
+		if wantSQL != 0 && (after.Fallbacks != before.Fallbacks+1 || after.Hits != before.Hits) {
+			t.Fatalf("filter did not use durable snapshot: %+v -> %+v", before, after)
+		}
+		t.Logf("filter: %d permission SQL queries, %d cache hits, %d durable fallbacks", *count, after.Hits-before.Hits, after.Fallbacks-before.Fallbacks)
 	}
 	check(true, 4) // Initial requests use one durable snapshot; they never fill Redis.
 	if err := components.TupleCache.Poll(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	check(true, 0)
-	if stats := components.TupleCache.Stats(); stats.Hits != 1 || stats.Rebuilds != 1 {
+	if stats := components.TupleCache.Stats(); stats.Hits != 2 || stats.Rebuilds != 1 {
 		t.Fatalf("cache not serving: %+v", stats)
 	}
 	first, err := backend.State(t.Context())
@@ -227,6 +252,10 @@ func TestThroughBatchSQLiteTupleCache(t *testing.T) {
 		t.Fatal(err)
 	}
 	check(false, 0)
+	if err := components.TupleCache.Close(); err != nil {
+		t.Fatal(err)
+	}
+	check(false, 7) // Revoked grants require exploring the remaining Through branches.
 	second, err := backend.State(t.Context())
 	if err != nil {
 		t.Fatal(err)

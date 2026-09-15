@@ -1,0 +1,57 @@
+{
+  "status": "candidate verified; publication pending",
+  "date": "2026-09-15",
+  "modules": [
+    {
+      "directory": "pockets/authorization",
+      "module": "github.com/gopernicus/gopernicus/pockets/authorization",
+      "version": "v0.15.1",
+      "tag": "pockets/authorization/v0.15.1",
+      "sum": "h1:zpdxNnngtuxKJaKvNsOyVXnafQYo+MdWUzNEaEnXLQk=",
+      "go_mod_sum": "h1:SWt/blN2Csf2p8dohOtJXbINP/BT5Z3oV9/GOxkFXGo=",
+      "source_inventory_sha256": "75b377cfc8d8c6d6a9130732d090db4f2027ad3d57578bada20bbd7ad1e363f2",
+      "source_entries": 185
+    },
+    {
+      "directory": "pockets/authorization/stores/goredis",
+      "module": "github.com/gopernicus/gopernicus/pockets/authorization/stores/goredis",
+      "version": "v0.2.0",
+      "tag": "pockets/authorization/stores/goredis/v0.2.0",
+      "sum": "h1:9waTuWHIR+OxvszmJAUExIDs9L2QAc7GYa6kX8YOBGA=",
+      "go_mod_sum": "h1:4igerX8Mr7Zzl2c6zvIbOEjJ/YE6ESBXUwgeDgYkCCk=",
+      "source_inventory_sha256": "e1bf5a0c6c6a8b21c77f06728f63c3ff9ad838a6b43d89868c8262a82b30e4f3",
+      "source_entries": 7
+    }
+  ],
+  "candidate": {
+    "passed": true,
+    "gowork": "off",
+    "no_replacements": true,
+    "report": "/tmp/gopernicus-filter-tuple-cache/candidate/results.json",
+    "sha256": "49303f17c2c2b28ee2337a67135f34358b0d44a8daf32b4e1b923f72116f6471"
+  },
+  "consumer_candidate": {
+    "passed": true,
+    "gowork": "off",
+    "no_replacements": true,
+    "checksum_exemptions": [],
+    "report": "/tmp/gopernicus-filter-tuple-cache/consumer/candidate-results.json",
+    "sha256": "196a166e58f3b48520835723c304f7fd26fbf24ca2a5ae49c17e04a4be42ea73"
+  },
+  "scope": "Publish core filter fix and readable Redis adapter for Segovia; no host deployment",
+  "unverified": [
+    "Segovia application benchmark",
+    "live remote Turso/PostgreSQL/Firestore",
+    "production load and capacity"
+  ],
+  "retained_versions": {
+    "pockets/authorization/stores/turso": "v0.9.0"
+  },
+  "workspace": {
+    "passed": true,
+    "command": "make check",
+    "log": "/tmp/gopernicus-filter-tuple-cache/release-make-check.log",
+    "sha256": "cf699d8b5e9173b24fa88b6c17546ba914d66ab6f3c6f3f2fc94550754370db2",
+    "candidate_proxy": true
+  }
+}

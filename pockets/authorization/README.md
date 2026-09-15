@@ -208,11 +208,11 @@ work still grow with the graph. Custom readers without the optional capability
 retain sequential checks with shared fact reads. The batch does not enumerate
 the principal's entire accessible resource set.
 
-The optional cross-request cache preserves batched reads for `CheckBatch`,
-including cold-cache snapshot retries. `FilterAuthorized` and lookups retain
-their existing durable-read behavior. Cached target sets use the same model,
-generation and entry-size/fill limits as other cached facts; oversized entries
-are skipped and the operation falls back to durable reads.
+Optional TupleCache preserves batched reads for `Decisions.CheckBatch` and
+`Decisions.FilterAuthorized`, including durable snapshot retries when the mirror
+is unavailable or changes during evaluation. Cached raw tuples are filtered by
+the current model on every operation. Lookups retain their durable-read behavior;
+see [Optional TupleCache](#optional-tuplecache) for freshness and capacity limits.
 
 Three list workflows are supported:
 
@@ -366,6 +366,9 @@ role facts or authorized-resource lists are cached.
 `CheckBatch`, `CheckExplain` and `FilterAuthorized`. Permission evaluation and model
 filtering run on every call. Lookups/enumeration, direct relationship and role
 services, mutation guards, audit and authentication retain their durable paths.
+Candidate filtering uses the same cached batch path on relationship-only hosts;
+one filter call validates one mirror receipt and retries the entire candidate
+batch against the durable store if the mirror is unavailable or changes.
 A role read in a cached operation retries the whole operation in one authoritative
 snapshot, including relationship reads in a mixed batch.
 

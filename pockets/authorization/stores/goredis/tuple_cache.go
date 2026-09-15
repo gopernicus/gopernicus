@@ -33,13 +33,23 @@ type TupleCache struct {
 }
 
 // NewTupleCache constructs a backend without I/O or background goroutines.
+// The namespace is used verbatim in tuplecache:{<namespace>} and must contain
+// only ASCII letters, digits, colons, periods, underscores, hyphens or slashes.
 func NewTupleCache(client *redis.Client, namespace string) (*TupleCache, error) {
 	if client == nil || namespace == "" {
 		return nil, fmt.Errorf("tuple cache requires a Redis client and namespace: %w", sdk.ErrInvalidInput)
 	}
-	// Encode the host namespace so braces and separators cannot alias another
-	// namespace. Temporary rebuild hashes use this same Redis cluster hash tag.
-	key := "gopernicus:tuplecache:{" + base64.RawURLEncoding.EncodeToString([]byte(namespace)) + "}:mirror"
+	for _, ch := range namespace {
+		switch {
+		case ch >= 'a' && ch <= 'z', ch >= 'A' && ch <= 'Z', ch >= '0' && ch <= '9':
+		case ch == ':', ch == '.', ch == '_', ch == '-', ch == '/':
+		default:
+			return nil, fmt.Errorf("tuple cache namespace must contain only ASCII letters, digits or :._-/: %w", sdk.ErrInvalidInput)
+		}
+	}
+	// Keep the namespace readable. Rejecting braces prevents it from escaping
+	// the hash tag shared by the mirror and its temporary rebuild hashes.
+	key := "tuplecache:{" + namespace + "}"
 	return &TupleCache{client: client, key: key}, nil
 }
 

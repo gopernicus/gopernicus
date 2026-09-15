@@ -1,5 +1,21 @@
 # Releasing gopernicus modules
 
+## Authorization cached filters and readable Redis keys (release in progress 2026-09-15)
+
+Selected versions: authorization core `v0.15.1` and go-redis adapter `v0.2.0`.
+Relationship-owned `Decisions.FilterAuthorized` now uses TupleCache through
+`CheckBatch`, including whole-operation durable fallback. The Redis adapter pins
+the fixed core and uses `tuplecache:{<namespace>}` with the namespace verbatim.
+Accepted characters are ASCII letters, digits and `:._-/`.
+
+Segovia can retain Turso store `v0.9.0`. No SQL migration is needed. Restart the
+single dev server after updating both modules; its relay reconstructs the new
+hash automatically. Old base64-named hashes are left untouched. Multiple readers
+and relays sharing a source should switch together to avoid maintaining two mirrors.
+See [release plan](plans/authorization-filter-tuple-cache-release.md),
+[implementation verification](plans/authorization-filter-tuple-cache.md) and
+[AUDIT-037](AUDIT.md#audit-037-raw-authorization-tuplecache-replaces-generation-caching).
+
 ## Authorization TupleCache and Through batching (published 2026-09-15)
 
 Published from main `83d48957714e53e6c1dbcc1d2a62ef4650c448e8`: authorization core `v0.15.0`, Turso store `v0.9.0`, PostgreSQL

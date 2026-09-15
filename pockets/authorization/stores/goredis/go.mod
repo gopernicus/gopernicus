@@ -3,7 +3,7 @@ module github.com/gopernicus/gopernicus/pockets/authorization/stores/goredis
 go 1.26.1
 
 require (
-	github.com/gopernicus/gopernicus/pockets/authorization v0.15.0
+	github.com/gopernicus/gopernicus/pockets/authorization v0.15.1
 	github.com/gopernicus/gopernicus/sdk v0.9.0
 	github.com/redis/go-redis/v9 v9.18.0
 )

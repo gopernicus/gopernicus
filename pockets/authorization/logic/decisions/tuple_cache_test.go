@@ -3,6 +3,7 @@ package decisions
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 	"time"
 
@@ -25,16 +26,108 @@ type testTupleSource struct {
 	tuplecache.Source
 	binding    string
 	durableErr error
+	tuples     []relationships.CreateRelationship
+	durable    func(context.Context, func(context.Context, tuplecache.CheckReads) error) error
+	reads      int
+	ambient    bool
 }
 
 func (s *testTupleSource) Binding() string                       { return s.binding }
-func (s *testTupleSource) CacheableContext(context.Context) bool { return true }
+func (s *testTupleSource) CacheableContext(context.Context) bool { return !s.ambient }
 func (s *testTupleSource) Snapshot(context.Context, string) (tuplecache.Snapshot, error) {
-	return tuplecache.Snapshot{Full: true}, nil
+	return tuplecache.Snapshot{Full: true, Tuples: s.tuples}, nil
 }
 func (s *testTupleSource) Acknowledge(context.Context, string, string, []string) error { return nil }
-func (s *testTupleSource) ReadSnapshot(context.Context, func(context.Context, tuplecache.CheckReads) error) error {
+func (s *testTupleSource) ReadSnapshot(ctx context.Context, fn func(context.Context, tuplecache.CheckReads) error) error {
+	s.reads++
+	if s.durableErr == nil && s.durable != nil {
+		return s.durable(ctx, fn)
+	}
 	return s.durableErr
+}
+
+type filterValidationBackend struct {
+	tuplecache.Backend
+	fail bool
+}
+
+func (b *filterValidationBackend) Read(ctx context.Context, state tuplecache.State, keys []tuplecache.SetKey) ([][]relationships.SubjectRef, error) {
+	if b.fail && len(keys) == 0 {
+		return nil, tuplecache.ErrUnavailable
+	}
+	return b.Backend.Read(ctx, state, keys)
+}
+
+func TestTupleCacheFilterValidationAndFallback(t *testing.T) {
+	store := memory.New()
+	grant := relationships.CreateRelationship{ResourceType: "space", ResourceID: "s1", Relation: "viewer", SubjectType: "user", SubjectID: "alice"}
+	if err := store.Relationships().CreateRelationships(t.Context(), []relationships.CreateRelationship{grant}); err != nil {
+		t.Fatal(err)
+	}
+	raw := &boundTupleRelationships{Relationships: store.Relationships(), binding: "store"}
+	parts, err := relationships.NewService(raw, relationships.Schema{ResourceTypes: map[string]relationships.ResourceTypeDef{
+		"space": {Relations: map[string]relationships.RelationDef{"viewer": {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "user"}}}}, Permissions: map[string]relationships.PermissionRule{"view": relationships.AnyOf(relationships.Direct("viewer"))}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := &testTupleSource{binding: "store", tuples: []relationships.CreateRelationship{grant}, durable: store.ReadSnapshot}
+	backend := &filterValidationBackend{Backend: memory.NewTupleCache()}
+	service, err := NewService(Readers{Relationships: parts.Service, TupleSource: source}, WithTupleCache(backend, tuplecache.Policy{MaxStaleness: time.Minute}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cache := service.TupleCache()
+	t.Cleanup(func() { _ = cache.Close() })
+	if err := cache.Poll(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	alice := authmodel.PrincipalRef{Type: "user", ID: "alice"}
+	for _, tc := range []struct {
+		name string
+		ids  []string
+		want error
+	}{
+		{"empty", nil, nil},
+		{"invalid later ID", []string{"s1", ""}, sdk.ErrInvalidInput},
+		{"oversized before validation", make([]string, service.Limits().MaxBatchSize+1), authmodel.ErrEvaluationLimit},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			before := cache.Stats()
+			ids, err := service.FilterAuthorized(t.Context(), alice, "view", "space", tc.ids)
+			if ids != nil || !errors.Is(err, tc.want) || cache.Stats() != before || source.reads != 0 {
+				t.Fatalf("filter should return before reads: %v/%v, stats %+v -> %+v, snapshots %d", ids, err, before, cache.Stats(), source.reads)
+			}
+		})
+	}
+	ids, err := service.FilterAuthorized(t.Context(), alice, "view", "space", []string{"s1", "missing", "s1"})
+	if err != nil || !slices.Equal(ids, []string{"s1", "s1"}) || cache.Stats().Hits != 1 || source.reads != 0 {
+		t.Fatalf("warm direct filter: %v/%v, stats %+v, snapshots %d", ids, err, cache.Stats(), source.reads)
+	}
+	// Let cached evaluation grant, then invalidate the final receipt check.
+	// The durable retry must discard those provisional grants after revocation.
+	if err := store.Relationships().DeleteRelationshipTarget(t.Context(), "space", "s1", "viewer", grant.Subject()); err != nil {
+		t.Fatal(err)
+	}
+	backend.fail = true
+	ids, err = service.FilterAuthorized(t.Context(), alice, "view", "space", []string{"s1"})
+	if err != nil || ids == nil || len(ids) != 0 || source.reads != 1 || cache.Stats().Fallbacks != 1 {
+		t.Fatalf("durable retry retained cached grant: %v/%v, stats %+v, snapshots %d", ids, err, cache.Stats(), source.reads)
+	}
+	source.durableErr = errors.New("durable snapshot failed")
+	ids, err = service.FilterAuthorized(t.Context(), alice, "view", "space", []string{"s1"})
+	if ids != nil || !errors.Is(err, source.durableErr) || source.reads != 2 {
+		t.Fatalf("failed retry leaked provisional IDs: %v/%v, snapshots %d", ids, err, source.reads)
+	}
+	// Ambient operations use the existing reader, even while Redis could grant
+	// from the stale mirror and the standalone snapshot path would fail.
+	backend.fail = false
+	source.ambient = true
+	before := cache.Stats()
+	ids, err = service.FilterAuthorized(t.Context(), alice, "view", "space", []string{"s1"})
+	if err != nil || ids == nil || len(ids) != 0 || source.reads != 2 || cache.Stats() != before {
+		t.Fatalf("ambient filter used mirror or standalone snapshot: %v/%v, stats %+v -> %+v", ids, err, before, cache.Stats())
+	}
 }
 
 func TestTupleCacheConstructionRequiresBoundRawSource(t *testing.T) {

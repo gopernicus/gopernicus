@@ -344,7 +344,8 @@ func (c *Service) checkBatch(ctx context.Context, source relationships.CheckRead
 // Each kind preserves input order and duplicate IDs. Relationship candidates
 // use the ordinary root-relative evaluator with call-local read reuse and
 // batched pending reads where supported. Roles use CheckBatch with
-// call-local exact/global fact reuse. Neither path caches across requests.
+// call-local exact/global fact reuse. When TupleCache is configured, filtering
+// uses CheckBatch's cached raw reads and whole-operation durable fallback.
 func (c *Service) FilterAuthorized(ctx context.Context, principal authmodel.PrincipalRef, permission, resourceType string, resourceIDs []string) ([]string, error) {
 	if c == nil {
 		return nil, authmodel.ErrNoDecisionKind
@@ -358,7 +359,7 @@ func (c *Service) FilterAuthorized(ctx context.Context, principal authmodel.Prin
 	if len(resourceIDs) > c.limits.MaxBatchSize {
 		return nil, authmodel.ErrEvaluationLimit
 	}
-	if c.ownedByRelationships(resourceType, permission) {
+	if c.tupleCache == nil && c.ownedByRelationships(resourceType, permission) {
 		return c.relationships.FilterAuthorized(ctx, principal, permission, resourceType, resourceIDs)
 	}
 
@@ -371,7 +372,8 @@ func (c *Service) FilterAuthorized(ctx context.Context, principal authmodel.Prin
 		}
 	}
 
-	// Filtering always uses direct readers, independent of public decision orchestration.
+	// Keep candidate checks inside one operation so TupleCache validates the
+	// entire batch against one receipt and retries it together when necessary.
 	results, err := c.CheckBatch(ctx, reqs)
 	if err != nil {
 		return nil, err

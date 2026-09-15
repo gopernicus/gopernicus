@@ -14,6 +14,32 @@ of the client, its connection settings, persistence, memory capacity, and shutdo
 Compose the backend with `tuplecache.New(source, backend, ...)` and drive that
 runtime's poll function through the host's worker lifecycle.
 
+## Redis key
+
+The mirror key is `tuplecache:{<namespace>}`. The namespace is stored verbatim:
+`segovia-v2:dev:authorization` produces
+`tuplecache:{segovia-v2:dev:authorization}`. It may contain ASCII letters, digits
+and `:._-/`; empty namespaces or other characters return `sdk.ErrInvalidInput`.
+Colons are allowed. Braces are reserved for the surrounding Redis hash tag, which
+keeps the mirror and temporary `:build:<nonce>` hashes in the same slot.
+This key layout does not add Redis Cluster support.
+
+For example, inspect the mirror with:
+
+```sh
+redis-cli --scan --pattern 'tuplecache:*'
+redis-cli HLEN 'tuplecache:{segovia-v2:dev:authorization}'
+```
+
+Earlier versions used `gopernicus:tuplecache:{<base64url(namespace)>}:mirror`.
+The new name addresses a fresh hash; the next successful relay poll rebuilds it
+automatically from authoritative tuples. For a single dev server, restart with
+the updated adapter. No SQL migration or manual Redis conversion is required.
+If several readers/relays share a source, stop the old versions before starting
+the new ones: two mirrors would compete over the same source delivery receipt.
+Old hashes are left untouched and have no TTL; remove them separately once no
+old process uses them.
+
 ## Stored data
 
 One Redis hash contains both metadata and raw forward/reverse relationship sets:
