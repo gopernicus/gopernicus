@@ -1,5 +1,5 @@
 {
-  "status": "candidates and consumer verified; publication pending",
+  "status": "published and publicly verified",
   "date": "2026-09-15",
   "modules": [
     {
@@ -10,7 +10,10 @@
       "source_inventory_sha256": "8db4aab75f6f6f999c47eb496799bafd3e09a23c6a62ca97ecdeaf95b5ada810",
       "sum": "h1:0g7TOQBbWv8dHzKsVqgbr80NYWw6nfSQH8hHz/IHC40=",
       "tag": "pockets/authorization/v0.16.0",
-      "version": "v0.16.0"
+      "version": "v0.16.0",
+      "published": true,
+      "tag_object": "50d5b09673566d39fa58087def7007231dfc0227",
+      "release_commit": "bd534a495010abe8720febffb8d2caf1b0497577"
     },
     {
       "directory": "pockets/authorization/stores/turso",
@@ -20,7 +23,10 @@
       "source_inventory_sha256": "4bbd58391936f77e69462002bbf6be543a7d74ee512a88511580fcf8fbcdf664",
       "sum": "h1:BGVwiZdrO/+50bDAFKaGPrNtTifDlU00ugbhrikkM+k=",
       "tag": "pockets/authorization/stores/turso/v0.10.0",
-      "version": "v0.10.0"
+      "version": "v0.10.0",
+      "published": true,
+      "tag_object": "469d58ea3f9d1fa3d496b0baee61ded5c1ee6e0e",
+      "release_commit": "bd534a495010abe8720febffb8d2caf1b0497577"
     },
     {
       "directory": "pockets/authorization/stores/pgx",
@@ -30,7 +36,10 @@
       "source_inventory_sha256": "55b787e785566e4b38352097841e6351bba439d5eba8638e117598e82aebab74",
       "sum": "h1:TWwLo2Oc66IJLs506tVYaj1iDUlHG7nrLi0d6w45N70=",
       "tag": "pockets/authorization/stores/pgx/v0.11.0",
-      "version": "v0.11.0"
+      "version": "v0.11.0",
+      "published": true,
+      "tag_object": "1ce6921903d1782191fea7d05d549d1bd46f17a4",
+      "release_commit": "bd534a495010abe8720febffb8d2caf1b0497577"
     }
   ],
   "candidate": {
@@ -66,5 +75,54 @@
     "candidate_proxy": true,
     "log": "/tmp/gopernicus-lookup-snapshots/release-make-check.log",
     "sha256": "417ff00ef4644f211c8c0fe5066033270be92d18062ae42caa9dc860330c619d"
+  },
+  "release_commit": "bd534a495010abe8720febffb8d2caf1b0497577",
+  "publication": {
+    "release_commit": "bd534a495010abe8720febffb8d2caf1b0497577",
+    "main_push_verified": true,
+    "tags": [
+      {
+        "tag": "pockets/authorization/v0.16.0",
+        "tag_object": "50d5b09673566d39fa58087def7007231dfc0227",
+        "commit": "bd534a495010abe8720febffb8d2caf1b0497577"
+      },
+      {
+        "tag": "pockets/authorization/stores/turso/v0.10.0",
+        "tag_object": "469d58ea3f9d1fa3d496b0baee61ded5c1ee6e0e",
+        "commit": "bd534a495010abe8720febffb8d2caf1b0497577"
+      },
+      {
+        "tag": "pockets/authorization/stores/pgx/v0.11.0",
+        "tag_object": "1ce6921903d1782191fea7d05d549d1bd46f17a4",
+        "commit": "bd534a495010abe8720febffb8d2caf1b0497577"
+      }
+    ],
+    "passed": true,
+    "prior_tags_preserved": true
+  },
+  "ci": {
+    "passed": false,
+    "run_id": 35029677164,
+    "url": "https://github.com/gopernicus/gopernicus/actions/runs/35029677164",
+    "failure": "Unchanged SDK filestorage TestDisk_Conformance/RangeEdges: Linux seek at MaxInt64 returns EINVAL. No SDK source changed in this release.",
+    "report": "/tmp/gopernicus-lookup-snapshots/release-ci-failed.log",
+    "sha256": "53c53f0597183378b5748e23946060822a1239cb18c2c036c38d6daf91ecea80"
+  },
+  "public_verification": {
+    "passed": true,
+    "gowork": "off",
+    "no_replacements": true,
+    "checksum_exemptions": [],
+    "source_matches_candidates": true,
+    "report": "/tmp/gopernicus-lookup-snapshots/public-confirmed/results.json",
+    "sha256": "42829d6c250b5eaf9bf1ef5e48ea6c2f23952186d2dd62877a00da4e23861994"
+  },
+  "consumer_public": {
+    "passed": true,
+    "gowork": "off",
+    "no_replacements": true,
+    "checksum_exemptions": [],
+    "report": "/tmp/gopernicus-lookup-snapshots/consumer/public-results.json",
+    "sha256": "29dd86f4c72525ce2af0ea3fff964065d6ce1032faabd072e2706e9afa03e55a"
   }
 }

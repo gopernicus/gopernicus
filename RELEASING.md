@@ -1,9 +1,9 @@
 # Releasing gopernicus modules
 
-## Authorization consistent lookup reads (release in progress 2026-09-15)
+## Authorization consistent lookup reads (published 2026-09-15)
 
-Targets: authorization core `v0.16.0`, Turso store `v0.10.0`, PostgreSQL store
-`v0.11.0`. Both SQL stores pin the new core. Lookup candidate discovery,
+Published from main `bd534a495010abe8720febffb8d2caf1b0497577`: authorization core
+`v0.16.0`, Turso store `v0.10.0`, PostgreSQL store `v0.11.0`. Both SQL stores pin the new core. Lookup candidate discovery,
 verification batches and page lookahead now share one durable read snapshot.
 The pocket retries discovered-grant mismatches twice; persistent contention
 returns `model.ErrEnumerationContended` / `sdk.ErrUnavailable` (HTTP 503).
@@ -14,6 +14,13 @@ pending writes and isolation; separate page calls do not share a snapshot.
 See [release plan](plans/authorization-lookup-snapshots-release.md),
 [implementation verification](plans/authorization-lookup-snapshots.md) and
 [AUDIT-038](AUDIT.md#audit-038-consistent-authorization-lookup-reads).
+
+All three public archives match the verified candidates and passed normal checksum
+verification and independent versioned build/test/vet. The published consumer
+passed SQLite/PostgreSQL concurrent lookup and existing SQLite/Redis cache checks.
+Local full-workspace and race checks passed. GitHub Linux CI still fails the
+unchanged SDK file-storage RangeEdges case disclosed in the preceding release.
+See the [release manifest](plans/authorization-lookup-snapshots-release-manifest.json).
 
 ## Authorization cached filters and readable Redis keys (published 2026-09-15)
 

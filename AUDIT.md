@@ -4904,7 +4904,9 @@ query-count evidence is in [authorization-through-batching.md](plans/authorizati
 ## AUDIT-038: Consistent authorization lookup reads
 
 - **Implemented:** 2026-09-15.
-- **Release:** in progress; core v0.16.0, Turso store v0.10.0, PostgreSQL store v0.11.0.
+- **Release:** published from `bd534a495010abe8720febffb8d2caf1b0497577`; core
+  v0.16.0, Turso store v0.10.0, PostgreSQL store v0.11.0. Public archives and
+  versioned SQL/Redis consumer verification passed with normal Go checksums.
 - **Impact:** per-call snapshot reads and transient enumeration errors; no data migration.
 
 `LookupAllResourceIDs` and `LookupResourceIDPage` previously performed reverse

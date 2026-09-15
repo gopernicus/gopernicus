@@ -1,6 +1,6 @@
 # Authorization consistent lookup release — 2026-09-15
 
-Status: IN PROGRESS. The owner explicitly requested publication of the completed
+Status: PUBLISHED AND PUBLICLY VERIFIED. The owner explicitly requested publication of the completed
 lookup fix so Segovia can adopt it. No host edits or deployment are included.
 
 ## Scope and versions
@@ -42,8 +42,8 @@ No schema migration or connector release is required.
 
 - [x] Prepare release notes, pins and verified candidates.
 - [x] Verify standalone consumer and final workspace.
-- [ ] Commit/push source and publish tags.
-- [ ] Verify public artifacts and consumer, record release completion.
+- [x] Commit/push source and publish tags.
+- [x] Verify public artifacts and consumer, record release completion.
 
 ## Limits and adoption
 
@@ -79,4 +79,42 @@ RELEASING.md and AUDIT.md. Evidence root: `/tmp/gopernicus-lookup-snapshots`.
 - Final workspace `make check` passed with release pins, including all module
   build/test/vet, generation drift checks, tagged compilation and guards.
   Log: `release-make-check.log`. Source matches verified candidate inventories.
-- Publication pending.
+- Release source committed and pushed to main as `bd534a495010abe8720febffb8d2caf1b0497577`.
+  All three annotated tags were published dependency-first at that commit. Remote
+  tag objects/commits match; all prior tags and owner file hashes are preserved.
+  Receipt: `publication/publication.json`. Public verification passed after checksum indexing completed.
+
+- Initial normal public downloads resolved the correct tag and source commit,
+  but the checksum service returned indexing-time unknown revision for core.
+  Normal public verification subsequently passed; no bypass was used.
+- GitHub CI run [35029677164](https://github.com/gopernicus/gopernicus/actions/runs/35029677164)
+  failed the unchanged SDK `TestDisk_Conformance/RangeEdges` case: Linux rejects
+  seek at MaxInt64 with EINVAL. SDK has no source diff from pre-release main.
+  This is the same failure disclosed by the previous release. Log:
+  `release-ci-failed.log`; local full workspace checks passed.
+
+- The proxy's core .info metadata omits Origin.Ref after commit-based resolution.
+  The verifier checks the live annotated remote tag object and peeled commit
+  against the publication receipt in that case. Normal public checksum, exact
+  archive/source, repository, subdirectory and commit checks remain mandatory.
+  This verification-tool correction changes no released source or checksum.
+
+## Public verification and completion
+
+All three public module archives match the verified candidates and release commit
+`bd534a495010abe8720febffb8d2caf1b0497577`. Normal public checksum and Git origin
+verification, independent versioned build/test/vet, tagged compilation and module
+graph checks passed with GOWORK=off and no replacements or checksum exemptions.
+Report: `public-confirmed/results.json`.
+
+The standalone consumer repeated its successful SQLite/PostgreSQL lookup tests
+against public versions: controlled interleavings, snapshot lifetimes, ambient
+transactions and 1,024 lookups with 16 readers/two writers per SQL backend. Redis
+v0.2.0 stayed compatible: warm filters used zero SQL; revocation and mirror
+restore/loss recovery passed. Reports: `consumer/public-results.json`,
+`consumer/public-lookup.log` and `consumer/public-behavior.log`.
+The disposable Redis and PostgreSQL fixtures were stopped after verification.
+
+Release complete. Segovia adoption and its /home HTTP benchmark remain host work.
+The unchanged Linux SDK CI failure remains disclosed. No host files, caches or
+services were modified.

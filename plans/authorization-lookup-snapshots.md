@@ -1,6 +1,6 @@
 # Authorization: consistent lookup reads under concurrent writes
 
-Status: COMPLETE locally — 2026-09-15. Publication is tracked in the
+Status: COMPLETE AND RELEASED — 2026-09-15. Publication is tracked in the
 [release plan](authorization-lookup-snapshots-release.md).
 
 ## Preconditions and scope
@@ -129,3 +129,6 @@ Evidence directory: `/tmp/gopernicus-lookup-snapshots` (`results.json`, logs).
 No unresolved implementation failures.
 Final `git diff --check` and goimports checks passed. The three owner files'
 SHA-256 checksums still match the prior release's preservation record.
+
+Published core v0.16.0, Turso v0.10.0 and PostgreSQL v0.11.0 with normal public
+checksum/source and independent consumer verification. See the release plan.
