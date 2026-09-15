@@ -16,7 +16,7 @@ worked example `examples/cms`.
     cryptids/google-uuid/ module …/integrations/cryptids/google-uuid    — a connector (google/uuid v4/v7)
     datastores/firestore/ module …/integrations/datastores/firestore    — a connector (cloud.google.com/go/firestore; Native mode: documents, transactions, index manifest)
     datastores/pgxdb/       module …/integrations/datastores/pgxdb          — a connector (jackc/pgx v5; multi-port: transaction.Transactor + ratelimiter)
-    datastores/turso/     module …/integrations/datastores/turso        — a connector (sdk + libsql)
+    datastores/turso/     module …/integrations/datastores/turso        — a connector (sdk + libsql); its opt-in localfile package adds modernc.org/sqlite because libsql's file: mode delegates to a registered SQLite driver
     email/sendgrid/       module …/integrations/email/sendgrid          — a connector (sendgrid/sendgrid-go)
     filestorage/gcs/      module …/integrations/filestorage/gcs         — a connector (cloud.google.com/go/storage)
     filestorage/s3/       module …/integrations/filestorage/s3          — a connector (aws-sdk-go-v2 service/s3; S3-compatible endpoints)

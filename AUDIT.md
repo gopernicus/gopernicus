@@ -4798,3 +4798,27 @@ This records implemented behavior, not release/adoption approval. Real GCP, Turs
 Cloud authority and representative performance acceptance remain open. See the
 [implementation plan](plans/authorization-cacher-implementation.md) and
 [public wiring](pockets/authorization/README.md#optional-authorization-read-cache).
+
+## AUDIT-036: Turso local file profile and env-tagged config
+
+- **Implemented:** 2026-09-15; unreleased.
+- **Modules:** Turso connector (`integrations/datastores/turso`), new sibling
+  package `turso/localfile`.
+- **Impact:** additive env tags on `Config` (pgxdb's `DB_*` names plus
+  `DB_BUSY_TIMEOUT`), a new `Config.BusyTimeout` field, and a behavior change for
+  `file:` URLs: `Open` creates the parent directory and, unless the URL names a
+  `_pragma`, appends `busy_timeout`, `foreign_keys(1)` and `journal_mode(WAL)` so
+  every pooled connection carries them. Hosted URLs are unchanged.
+
+The pinned libsql driver has no SQLite engine and resolves a `file:` URL through a
+registered `sqlite`/`sqlite3` driver. `turso/localfile` registers the pure-Go
+`modernc.org/sqlite` (already a module requirement) for hosts that opt in; without
+it `Open` fails naming the import. Hosted-only hosts never link the engine. This
+moves the boundary file two adopting hosts carried byte-for-byte into the connector.
+Added exported struct fields can affect unkeyed consumer literals; prefer keyed
+literals.
+
+This records implemented behavior, not release approval. See the
+[plan](plans/turso-local-file-profile.md) and the
+[connector README](integrations/datastores/turso/README.md#local-file-profile--file-urls-the-localfile-driver-package-env-tags).
+
