@@ -3,9 +3,9 @@ package relationships
 import "context"
 
 // RelationSetReader is an optional batch-read capability. The authorization
-// engines do not require it: Reader and Storer contain the decision and
-// enumeration operations they use. Callers may assert this interface when they
-// need set equivalents of CheckRelationWithGroupExpansion and GetRelationTargets.
+// engines do not require it: readers without it retain sequential batch checks.
+// CheckBatch uses it to combine pending direct and Through reads while each
+// request retains ordinary Check semantics and its own evaluation budget.
 //
 // Assert it on the same view whose semantics the caller needs. On a Reader
 // returned by ForModel, every expansion edge and returned tuple must satisfy

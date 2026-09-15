@@ -81,7 +81,7 @@ func (r resourceRelationshipRow) toDomain() relationships.ResourceRelationship {
 // relationshipStore reads through the ambient querier and routes all writes
 // through a join-or-own transaction so facts and optional history commit together.
 type relationshipStore struct {
-	cacheBinding string
+	tupleBinding string
 	readQuerier  pgxdb.Querier
 	audit        bool
 	model        *relationships.ReadModel
@@ -90,7 +90,7 @@ type relationshipStore struct {
 }
 
 func newRelationshipStore(db *pgxdb.DB, cfg config) *relationshipStore {
-	return &relationshipStore{db: db, cacheBinding: cfg.cacheBinding, schema: cfg.schema, audit: cfg.audit}
+	return &relationshipStore{db: db, tupleBinding: cfg.tupleBinding, schema: cfg.schema, audit: cfg.audit}
 }
 
 // table renders name under the store's schema — the one chokepoint every

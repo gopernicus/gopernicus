@@ -5,32 +5,27 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
-	"github.com/gopernicus/gopernicus/pockets/authorization/logic/decisions"
-	"github.com/gopernicus/gopernicus/pockets/authorization/logic/relationships"
-	"github.com/gopernicus/gopernicus/sdk"
 	"strings"
 	"sync/atomic"
+
+	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/relationships"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuplecache"
+	"github.com/gopernicus/gopernicus/sdk"
 )
 
-type cacheSource struct {
-	db    *tursodb.DB
-	cfg   config
-	epoch string
+type tupleSource struct {
+	db      *tursodb.DB
+	cfg     config
+	binding string
 }
 
-func (s *cacheSource) CacheBinding() string { return s.cfg.cacheBinding }
-func (s *cacheSource) CacheableContext(ctx context.Context) bool {
+func (s *tupleSource) Binding() string { return s.cfg.tupleBinding }
+func (s *tupleSource) CacheableContext(ctx context.Context) bool {
 	_, ambient := tursodb.TxFromContext(ctx)
 	return !ambient
 }
-func (s *cacheSource) Observe(ctx context.Context) (decisions.CacheVersion, error) {
-	if !s.CacheableContext(ctx) {
-		return decisions.CacheVersion{}, fmt.Errorf("authorization cache: ambient observation: %w", sdk.ErrInvalidInput)
-	}
-	return s.readHead(ctx, s.db)
-}
-func (s *cacheSource) ReadSnapshot(ctx context.Context, fn func(context.Context, decisions.CacheVersion, decisions.CheckReads) error) (err error) {
+func (s *tupleSource) ReadSnapshot(ctx context.Context, fn func(context.Context, tuplecache.CheckReads) error) (err error) {
 	if !s.CacheableContext(ctx) || fn == nil {
 		return fmt.Errorf("authorization cache: ambient transaction or nil callback: %w", sdk.ErrInvalidInput)
 	}
@@ -43,7 +38,7 @@ func (s *cacheSource) ReadSnapshot(ctx context.Context, fn func(context.Context,
 			err = errors.Join(err, rollbackErr)
 		}
 	}()
-	version, err := s.readHead(ctx, tx)
+	_, _, err = s.readHead(ctx, tx)
 	if err != nil {
 		return err
 	}
@@ -51,7 +46,7 @@ func (s *cacheSource) ReadSnapshot(ctx context.Context, fn func(context.Context,
 	view.rel.readQuerier = tx
 	view.role.readQuerier = tx
 	defer view.closed.Store(true)
-	if err = fn(ctx, version, view); err != nil {
+	if err = fn(ctx, view); err != nil {
 		return err
 	}
 	view.closed.Store(true)
@@ -70,7 +65,7 @@ type cacheSnapshot struct {
 
 func (s *cacheSnapshot) check(ctx context.Context) error {
 	if s.closed.Load() {
-		return decisions.ErrSnapshotClosed
+		return tuplecache.ErrSnapshotClosed
 	}
 	if err := s.ctx.Err(); err != nil {
 		return err
@@ -92,6 +87,20 @@ type cacheCheckReader struct {
 	reader relationships.Reader
 }
 
+func (s *cacheCheckReader) FilterRelation(ctx context.Context, rt string, ids []string, rel, st, sid string, limit int) ([]string, error) {
+	if err := s.view.check(ctx); err != nil {
+		return nil, err
+	}
+	return s.reader.(relationships.RelationSetReader).FilterRelation(ctx, rt, ids, rel, st, sid, limit)
+}
+
+func (s *cacheCheckReader) RelationTargetsFor(ctx context.Context, rt string, ids []string, rel string) (map[string][]relationships.RelationTarget, error) {
+	if err := s.view.check(ctx); err != nil {
+		return nil, err
+	}
+	return s.reader.(relationships.RelationSetReader).RelationTargetsFor(ctx, rt, ids, rel)
+}
+
 func (s *cacheCheckReader) CheckRelationWithGroupExpansion(ctx context.Context, rt, rid, relation, st, sid string, limit int) (bool, error) {
 	if err := s.view.check(ctx); err != nil {
 		return false, err
@@ -110,14 +119,14 @@ func (s *cacheCheckReader) CheckBatchDirect(ctx context.Context, rt string, ids 
 	}
 	return s.reader.CheckBatchDirect(ctx, rt, ids, relation, st, sid, limit)
 }
-func (s *relationshipStore) CacheBinding() string { return s.cacheBinding }
-func (s *roleStore) CacheBinding() string         { return s.cacheBinding }
+func (s *relationshipStore) TupleCacheBinding() string { return s.tupleBinding }
+func (s *roleStore) TupleCacheBinding() string         { return s.tupleBinding }
 func (s *roleStore) cacheReader(ctx context.Context) tursodb.Querier {
 	q := s.readQuerier
 	if q == nil {
 		q = s.db.QuerierFrom(ctx)
 	}
-	if s.cacheBinding != "" {
+	if s.tupleBinding != "" {
 		q = mainCacheQuerier{Querier: q}
 	}
 	return q

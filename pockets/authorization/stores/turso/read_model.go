@@ -11,7 +11,7 @@ import (
 )
 
 func (s *relationshipStore) ForModel(model relationships.ReadModel) relationships.Reader {
-	return &relationshipStore{db: s.db, cacheBinding: s.cacheBinding, readQuerier: s.readQuerier, model: &model, audit: s.audit}
+	return &relationshipStore{db: s.db, tupleBinding: s.tupleBinding, readQuerier: s.readQuerier, model: &model, audit: s.audit}
 }
 
 func (s *relationshipStore) reader(ctx context.Context) tursodb.Querier {
@@ -19,7 +19,7 @@ func (s *relationshipStore) reader(ctx context.Context) tursodb.Querier {
 	if q == nil {
 		q = s.db.QuerierFrom(ctx)
 	}
-	if s.cacheBinding != "" {
+	if s.tupleBinding != "" {
 		q = mainCacheQuerier{Querier: q}
 	}
 	if s.model == nil {

@@ -218,16 +218,16 @@ func TestFilterAuthorizedReusesSharedParentReads(t *testing.T) {
 		if err != nil || len(allowed) != 0 {
 			t.Fatalf("n=%d allowed=%v err=%v", n, allowed, err)
 		}
-		got := 0
+		got := store.setReads()
 		for _, count := range store.directCalls {
 			got += count
 		}
 		for _, count := range store.targetsCalls {
 			got += count
 		}
-		want := 6*n + 3
+		want := 9 // one set read per branch/hop, independent of candidate count
 		if got != want {
-			t.Fatalf("n=%d physical reads=%d want%d (candidate reads plus shared ancestors)", n, got, want)
+			t.Fatalf("n=%d physical reads=%d want%d (batched candidates plus shared ancestors)", n, got, want)
 		}
 	}
 }
@@ -262,10 +262,8 @@ func BenchmarkFilterAuthorizedDeniedCandidates(b *testing.B) {
 	}
 }
 
-// BenchmarkCheckBatchDeniedCandidates is the SAME work through the per-request
-// path FilterAuthorized used to take (CheckBatch over N requests, memoized
-// reader). Its reads/op is the "before" number the set evaluation is measured
-// against; CheckBatch keeps this shape deliberately (R2).
+// BenchmarkCheckBatchDeniedCandidates measures the same batched reads through
+// CheckBatch, including both set reads and compatibility per-resource reads.
 func BenchmarkCheckBatchDeniedCandidates(b *testing.B) {
 	for _, n := range []int{50, 300} {
 		b.Run(fmt.Sprintf("n=%d", n), func(b *testing.B) {
@@ -284,7 +282,7 @@ func BenchmarkCheckBatchDeniedCandidates(b *testing.B) {
 				if _, err := svc.CheckBatch(context.Background(), reqs); err != nil {
 					b.Fatalf("CheckBatch: %v", err)
 				}
-				reads = store.perResourceReads()
+				reads = store.setReads() + store.perResourceReads()
 			}
 			b.ReportMetric(float64(reads), "reads/op")
 		})

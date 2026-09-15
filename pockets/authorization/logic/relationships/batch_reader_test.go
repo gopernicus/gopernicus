@@ -270,9 +270,8 @@ func TestCheckBatchIsIndependentOfLookupBudget(t *testing.T) {
 	}
 }
 
-// TestCheckBatchSharesContainerReads is the B4 optimization itself: over a
-// 1-container / N-item batch the container's two reads happen ONCE, while each
-// distinct candidate still reads its own Through edge.
+// TestCheckBatchSharesContainerReads batches candidate edges and reuses the
+// shared container facts without changing each request's evaluation.
 func TestCheckBatchSharesContainerReads(t *testing.T) {
 	const n = 50
 
@@ -297,23 +296,11 @@ func TestCheckBatchSharesContainerReads(t *testing.T) {
 		}
 	}
 
-	if got := store.calls(store.targetsCalls, targetsCallKey("org", "o1", "tenant")); got != 1 {
-		t.Fatalf("GetRelationTargets(org:o1#tenant) called %d times, want 1 (shared container read)", got)
+	if len(store.targetsCalls) != 0 || len(store.directCalls) != 0 {
+		t.Fatalf("batch fell back to individual reads: %v/%v", store.targetsCalls, store.directCalls)
 	}
-	if got := store.calls(store.directCalls, directCallKey("org", "o1", "admin", "user", "u1")); got != 1 {
-		t.Fatalf("CheckRelationWithGroupExpansion(org:o1#admin) called %d times, want 1 (shared container check)", got)
-	}
-	total := 0
-	for i := 0; i < n; i++ {
-		key := targetsCallKey("post", fmt.Sprintf("p%d", i), "org")
-		got := store.calls(store.targetsCalls, key)
-		if got != 1 {
-			t.Fatalf("GetRelationTargets(%s) called %d times, want 1", key, got)
-		}
-		total += got
-	}
-	if total != n {
-		t.Fatalf("candidate Through reads = %d, want %d (one per distinct candidate)", total, n)
+	if store.setTargetsCalls != 2 || store.setDirectCalls != 1 {
+		t.Fatalf("batch reads=%d targets/%d direct, want 2/1", store.setTargetsCalls, store.setDirectCalls)
 	}
 }
 

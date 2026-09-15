@@ -64,8 +64,8 @@ const MigrationsDir = "migrations"
 type Option func(*config)
 
 type config struct {
-	cacheReads   bool
-	cacheBinding string
+	tupleCache   bool
+	tupleBinding string
 	audit        bool
 	guardian     mutation.GuardianPolicy
 }
@@ -103,10 +103,10 @@ func Repositories(ctx context.Context, db *tursodb.DB, opts ...Option) (authoriz
 		}
 		o(&cfg)
 	}
-	var source *cacheSource
-	if cfg.cacheReads {
+	var source *tupleSource
+	if cfg.tupleCache {
 		var err error
-		source, err = prepareCacheSource(ctx, db, &cfg)
+		source, err = prepareTupleSource(ctx, db, &cfg)
 		if err != nil {
 			return authorization.Repositories{}, err
 		}
@@ -123,7 +123,7 @@ func Repositories(ctx context.Context, db *tursodb.DB, opts ...Option) (authoriz
 		Audit:         &auditStore{db: db},
 	}
 	if source != nil {
-		repos.CacheSource = source
+		repos.TupleSource = source
 	}
 	return repos, nil
 }
@@ -142,8 +142,8 @@ func RelationshipRepository(ctx context.Context, db *tursodb.DB, opts ...Option)
 		}
 		opt(&cfg)
 	}
-	if cfg.cacheReads {
-		return nil, fmt.Errorf("authorization: WithCacheReads requires Repositories bundle: %w", sdk.ErrInvalidInput)
+	if cfg.tupleCache {
+		return nil, fmt.Errorf("authorization: WithTupleCache requires Repositories bundle: %w", sdk.ErrInvalidInput)
 	}
 	if err := probeTable(ctx, db, "iam_relationships"); err != nil {
 		return nil, err

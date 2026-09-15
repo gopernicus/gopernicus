@@ -202,7 +202,3 @@ func sourceWithoutComments(name string) (string, error) {
 	}
 	return out.String(), nil
 }
-
-func TestCacheMetadataHasOneOwner(t *testing.T) {
-	assertCollectionOwnership(t, map[string]bool{"cache_invalidation.go": true}, []string{"collectionCacheInvalidation", "iam_cache_invalidation"}, "cache metadata belongs to the optional invalidation protocol")
-}

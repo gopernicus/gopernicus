@@ -3,13 +3,10 @@ package memory
 import (
 	"context"
 	"fmt"
-	"math"
 	"slices"
 	"sort"
 	"strings"
 	"time"
-
-	"github.com/gopernicus/gopernicus/pockets/authorization/logic/decisions"
 
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/audit"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/relationships"
@@ -38,12 +35,10 @@ func (s *state) write(ctx context.Context, apply func(*state) error) error {
 		return err
 	}
 	var changes []audit.Change
-	if s.recordAudit || s.cacheEpoch != "" {
+	if s.recordAudit {
 		changes = stateChanges(s, next)
 	}
-	if s.cacheEpoch != "" && len(changes) > 0 && s.cacheGeneration == math.MaxInt64 {
-		return decisions.ErrCacheVersion
-	}
+
 	var records []audit.Record
 	if s.recordAudit {
 		var err error
@@ -55,9 +50,7 @@ func (s *state) write(ctx context.Context, apply func(*state) error) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if s.cacheEpoch != "" && len(changes) > 0 {
-		s.cacheGeneration++
-	}
+
 	s.rel, s.role = next.rel, next.role
 	s.auditRecords = append(s.auditRecords, records...)
 	return nil

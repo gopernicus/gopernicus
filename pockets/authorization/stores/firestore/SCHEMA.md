@@ -239,22 +239,9 @@ streams only as far as needed. Raw list counts use server aggregation when
 available; snapshot-bound counts iterate the same ordered population. A failed
 or truncated graph expansion is an error, never a partial allow or deny.
 
-## Optional cache invalidation metadata
+## Cache metadata
 
-The store additionally reserves `iam_cache_invalidation/head` when hosts enable
-cache invalidation. It is one fixed document, with no composite index requirement:
-
-| Field | Type | Constraint |
-|---|---|---|
-| `protocol` | signed integer | exactly 1 |
-| `epoch` | string | 32 lowercase hexadecimal characters |
-| `generation` | signed integer | nonnegative; never wraps or resets within an epoch |
-
-The common fact flush reads and validates the head before queuing any write, then
-writes `generation + 1` atomically with actual tuple, subject-claim, role and
-optional audit changes. Every retry rebuilds its reads and writes. No-op operations
-need not advance the head; audit settings do not control invalidation. There are
-no delivery payloads, acknowledgements or historical generations to clean up.
-Metadata belongs exclusively to `cache_invalidation.go`; normal collection
-ownership tests enforce that seam. This collection is independent of retired
-mutation ledgers and is never created by ordinary constructors.
+This adapter has no active cache metadata or TupleCache source. The previous
+`iam_cache_invalidation/head` document is obsolete; after old cache-enabled
+processes have stopped, the host may remove it. Ordinary writes do not read or
+update it.

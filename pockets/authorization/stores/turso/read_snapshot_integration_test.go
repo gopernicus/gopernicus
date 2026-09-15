@@ -11,11 +11,11 @@ import (
 	"github.com/gopernicus/gopernicus/pockets/authorization/stores/storetest"
 )
 
-func TestCacheLiveSnapshots(t *testing.T) {
+func TestTupleCacheLiveSnapshots(t *testing.T) {
 	url, token := requireTursoEnv(t)
 	db := openAndMigrate(t, url, token)
 	ctx := context.Background()
-	data, err := CacheMigrationsFS.ReadFile(CacheMigrationsDir + "/0001_iam_cache_invalidation.sql")
+	data, err := CacheMigrationsFS.ReadFile(CacheMigrationsDir + "/0002_iam_tuple_cache.sql")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -23,20 +23,19 @@ func TestCacheLiveSnapshots(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		for _, table := range []string{"iam_relationships", "iam_roles"} {
-			for _, op := range []string{"insert", "delete", "update"} {
-				if _, err := db.Exec(ctx, "DROP TRIGGER "+table+"_cache_"+op); err != nil {
-					t.Error(err)
-				}
+		for _, op := range []string{"insert", "delete", "update"} {
+			if _, err := db.Exec(ctx, "DROP TRIGGER iam_relationships_tuple_"+op); err != nil {
+				t.Error(err)
 			}
 		}
-		if _, err := db.Exec(ctx, "DROP TABLE iam_cache_invalidation"); err != nil {
+		if _, err := db.Exec(ctx, "DROP TABLE iam_tuple_outbox; DROP TABLE iam_tuple_cache"); err != nil {
 			t.Error(err)
 		}
+
 	})
 	storetest.RunReadSnapshots(t, func(t *testing.T) authorization.Repositories {
 		truncate(t, db)
-		repos, err := Repositories(ctx, db, WithCacheReads())
+		repos, err := Repositories(ctx, db, WithTupleCache())
 		if err != nil {
 			t.Fatal(err)
 		}

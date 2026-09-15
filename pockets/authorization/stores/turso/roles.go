@@ -109,14 +109,14 @@ func (r roleRow) toDomain() roles.Assignment {
 // assignment joins the same host transaction the relationship tuples beside it
 // do.
 type roleStore struct {
-	cacheBinding string
+	tupleBinding string
 	readQuerier  tursodb.Querier
 	audit        bool
 	db           *tursodb.DB
 }
 
 func newRoleStore(db *tursodb.DB, cfg config) *roleStore {
-	return &roleStore{db: db, cacheBinding: cfg.cacheBinding, audit: cfg.audit}
+	return &roleStore{db: db, tupleBinding: cfg.tupleBinding, audit: cfg.audit}
 }
 
 var _ roles.Storer = (*roleStore)(nil)

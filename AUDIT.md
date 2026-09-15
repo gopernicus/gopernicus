@@ -4773,6 +4773,8 @@ notes do not claim a live run or published tag before that evidence exists.
 
 ## AUDIT-035: Optional bounded-staleness authorization read cache
 
+> Historical: replaced by AUDIT-037 below.
+
 - **Implemented:** 2026-09-14; unreleased.
 - **Modules:** authorization core and its Turso, PostgreSQL and Firestore stores;
   Turso and PostgreSQL connectors.
@@ -4797,7 +4799,7 @@ consumer literals; prefer keyed literals and compile consumers before upgrading.
 This records implemented behavior, not release/adoption approval. Real GCP, Turso
 Cloud authority and representative performance acceptance remain open. See the
 [implementation plan](plans/authorization-cacher-implementation.md) and
-[public wiring](pockets/authorization/README.md#optional-authorization-read-cache).
+[public wiring](pockets/authorization/README.md#optional-tuplecache).
 
 ## AUDIT-036: Turso local file profile and env-tagged config
 
@@ -4823,3 +4825,64 @@ This records implemented behavior, not release approval. See the
 [plan](plans/turso-local-file-profile.md) and the
 [connector README](integrations/datastores/turso/README.md#local-file-profile--file-urls-the-localfile-driver-package-env-tags).
 
+
+## AUDIT-037: Raw authorization TupleCache replaces generation caching
+
+- **Implemented:** 2026-09-15; unreleased. Supersedes AUDIT-035.
+- **Modules:** authorization core; Turso, PostgreSQL and Firestore stores; new
+  `pockets/authorization/stores/goredis` adapter.
+- **Impact:** breaking cache API replacement and optional SQL migration 0002.
+  Base tuple, role and audit schema inventories remain unchanged.
+
+The configured Turso or PostgreSQL store is authoritative. Redis holds a complete
+raw relationship mirror with forward/reverse indexes. Complete before/after
+mutations commit into a transactional outbox; delivery atomically updates affected
+indexes, then deletes exactly the acknowledged events. Rebuilds read current
+source tuples, including after processed events have been deleted. No decision,
+expanded membership or role fact is cached. Ordinary writes do not invalidate
+unrelated data or change tuple-key namespaces.
+
+Replace root `WithCacher` with `WithTupleCache(backend, tuplecache.Policy{...})`,
+`Components.ReadCache` with `Components.TupleCache`, and SQL `WithCacheReads` with
+`WithTupleCache`. Repository `CacheSource` becomes `TupleSource`. A host-owned
+`*redis.Client` is accepted by `stores/goredis.NewTupleCache(client, namespace)`;
+the generic SDK cacher cannot supply the required atomic mirror operations.
+`memory.NewTupleCache()` supplies a reference backend. Firestore and the standalone
+memory authority no longer expose the previous cache options; use durable reads.
+
+Stop old cache-enabled binaries before applying the separate
+**authorization-cache** source through 0002, after base **authorization** through
+0007. Historical optional migration 0001 is unchanged. Install 0002 in the same
+database/schema, then construct the participating SQL repository bundle. The
+migration removes old generation metadata/triggers and installs complete tuple
+capture. PostgreSQL runtime writer permissions and SQLite raw REPLACE settings
+are documented in their adapter runbooks. Constructors do not migrate.
+
+Every runtime begins with durable reads until its first successful poll. Hosts
+supervise the relay worker, call `Notify()` after the outer commit for prompt
+asynchronous delivery, retain periodic polling for missed hints, and handle delivery
+errors separately from committed mutations. `MaxStaleness` is explicit and positive.
+Processes sharing the mirror must choose the same bound; mismatched policies fail
+binding validation. Stop/drain old runtimes and rebuild a fresh namespace when
+changing the shared bound. One source delivery stream should use one shared mirror.
+
+The decision service's checks and ordered candidate filter use raw cached reads.
+Enumeration, direct relationship/role services and mutation guards remain durable.
+Any role read, unavailable/expired mirror or publication during a check retries the
+whole operation in an authoritative snapshot. These semantics accept bounded delay
+after commit; they do not promise immediate revocation before delivery.
+
+Local real PostgreSQL, SQLite and Redis checks exercised capture, rollback,
+revocation, steady unrelated writes, disposable outbox recovery and restored Redis
+data. Full details, commands and deployment limitations are retained in the
+[TupleCache plan](plans/authorization-tuple-cache.md) and
+[host wiring guide](pockets/authorization/README.md#optional-tuplecache).
+Remote Turso/replica routing, live Firestore cleanup and application-scale capacity
+are unverified. No release or host adoption is implied by these local checks.
+
+The same core release includes the completed Through batching change: verification
+reads are batched across candidate resources while retaining depth/search limits,
+canonical ordering and existing decision semantics. The 366-space lookup, 50-item
+page and 128-dashboard filter are important host acceptance cases; their actual
+query counts must be remeasured on the host dataset. The framework's synthetic
+query-count evidence is in [authorization-through-batching.md](plans/authorization-through-batching.md).

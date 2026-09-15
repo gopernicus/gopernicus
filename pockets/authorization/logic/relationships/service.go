@@ -163,9 +163,9 @@ func (s *Service) check(ctx context.Context, req authmodel.CheckRequest, b *budg
 	return s.checkPermission(ctx, req, checks, 0, b, make(map[stateKey]bool))
 }
 
-// CheckBatch evaluates multiple checks. It uses an optimized batch query when
-// all requests share subject, permission, and resource type with no
-// through-relations; otherwise it falls back to sequential checks.
+// CheckBatch evaluates multiple checks with independent per-request budgets.
+// Readers with RelationSetReader batch pending Through and direct reads across
+// the ordinary checks. Other readers retain sequential, memoized evaluation.
 func (s *Service) CheckBatch(ctx context.Context, reqs []authmodel.CheckRequest) ([]authmodel.CheckResult, error) {
 	return s.checkBatch(ctx, s.reader, reqs)
 }
@@ -207,13 +207,13 @@ func (s *Service) checkBatch(ctx context.Context, reader CheckReader, reqs []aut
 	}
 
 	if !canBatch {
-		return s.checkBatchSequential(ctx, reader, reqs)
+		return s.checkBatchTraversal(ctx, reader, reqs)
 	}
 
 	checks := s.compiled.permissionChecks(first.Resource.Type, first.Permission)
 	for _, check := range checks {
 		if check.Through != "" {
-			return s.checkBatchSequential(ctx, reader, reqs)
+			return s.checkBatchTraversal(ctx, reader, reqs)
 		}
 	}
 
@@ -644,13 +644,13 @@ func (s *Service) CountByResourceAndRelation(ctx context.Context, resourceType, 
 	return s.store.CountByResourceAndRelation(ctx, resourceType, resourceID, relation)
 }
 
-// CacheBinding forwards an optional store identity without enabling caching.
-func (s *Service) CacheBinding() string {
+// TupleCacheBinding forwards an optional store identity without enabling caching.
+func (s *Service) TupleCacheBinding() string {
 	if s == nil {
 		return ""
 	}
-	if bound, ok := s.store.(interface{ CacheBinding() string }); ok {
-		return bound.CacheBinding()
+	if bound, ok := s.store.(interface{ TupleCacheBinding() string }); ok {
+		return bound.TupleCacheBinding()
 	}
 	return ""
 }

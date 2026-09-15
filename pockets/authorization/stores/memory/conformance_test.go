@@ -55,10 +55,3 @@ func TestAudit(t *testing.T) {
 		return authorization.Repositories{Relationships: store.Relationships(), Roles: store.Roles(), Mutations: store.Mutations(), Audit: store.Audit()}
 	})
 }
-
-func TestReadSnapshots(t *testing.T) {
-	storetest.RunReadSnapshots(t, func(t *testing.T) authorization.Repositories {
-		store := memory.New(memory.WithCacheReads())
-		return authorization.Repositories{Relationships: store.Relationships(), Roles: store.Roles(), Mutations: store.Mutations(), CacheSource: store.CacheSource()}
-	})
-}

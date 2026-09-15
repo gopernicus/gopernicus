@@ -13,8 +13,7 @@ import (
 
 	"github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
 	"github.com/gopernicus/gopernicus/pockets/authorization"
-	"github.com/gopernicus/gopernicus/pockets/authorization/logic/decisions"
-	"github.com/gopernicus/gopernicus/pockets/authorization/logic/roles"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuplecache"
 	"github.com/gopernicus/gopernicus/pockets/authorization/stores/storetest"
 )
 
@@ -46,24 +45,31 @@ func cacheFixture(t testing.TB, install bool) (*pgxdb.DB, config) {
 	cfg := config{schema: schema}
 
 	if install {
-		data, err := CacheMigrationsFS.ReadFile(CacheMigrationsDir + "/0001_iam_cache_invalidation.sql")
+		files, err := CacheMigrationsFS.ReadDir(CacheMigrationsDir)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := db.InTx(ctx, func(tx *pgxdb.Tx) error {
-			if _, err := tx.Exec(ctx, "SET LOCAL search_path TO "+cfg.schema.Table("")[:len(cfg.schema.Table(""))-1]); err != nil {
-				return err
+		for _, file := range files {
+			data, err := CacheMigrationsFS.ReadFile(CacheMigrationsDir + "/" + file.Name())
+			if err != nil {
+				t.Fatal(err)
 			}
-			_, err := tx.Exec(ctx, string(data))
-			return err
-		}); err != nil {
-			t.Fatal(err)
+			if err := db.InTx(ctx, func(tx *pgxdb.Tx) error {
+				if _, err := tx.Exec(ctx, "SET LOCAL search_path TO "+cfg.schema.Table("")[:len(cfg.schema.Table(""))-1]); err != nil {
+					return err
+				}
+				_, err := tx.Exec(ctx, string(data))
+				return err
+			}); err != nil {
+				t.Fatal(err)
+			}
 		}
 	}
+
 	return db, cfg
 }
 func cacheOptions(cfg config) []Option {
-	return []Option{func(c *config) { *c = cfg }, WithCacheReads()}
+	return []Option{func(c *config) { *c = cfg }, WithTupleCache()}
 }
 func cacheTable(cfg config, name string) string { return cfg.schema.Table(name) }
 func TestCacheSnapshots(t *testing.T) {
@@ -76,19 +82,19 @@ func TestCacheSnapshots(t *testing.T) {
 		return repos
 	})
 }
-func TestCacheInstallationAndHeadFailures(t *testing.T) {
+func TestTupleCacheInstallationAndIdentityFailures(t *testing.T) {
 	ctx := context.Background()
 	t.Run("optional", func(t *testing.T) {
 		db, cfg := cacheFixture(t, false)
 		repos, err := Repositories(ctx, db, func(c *config) { *c = cfg })
-		if err != nil || repos.CacheSource != nil {
-			t.Fatalf("direct construction: %v/%v", repos.CacheSource, err)
+		if err != nil || repos.TupleSource != nil {
+			t.Fatalf("direct construction: %v/%v", repos.TupleSource, err)
 		}
 		if _, err := Repositories(ctx, db, cacheOptions(cfg)...); err == nil {
 			t.Fatal("missing migration accepted")
 		}
 	})
-	for _, kind := range []string{"missing", "overflow", "changed epoch"} {
+	for _, kind := range []string{"missing", "changed identity"} {
 		t.Run(kind, func(t *testing.T) {
 			db, cfg := cacheFixture(t, true)
 			repos, err := Repositories(ctx, db, cacheOptions(cfg)...)
@@ -98,39 +104,24 @@ func TestCacheInstallationAndHeadFailures(t *testing.T) {
 			if _, err := RelationshipRepository(ctx, db, cacheOptions(cfg)...); err == nil {
 				t.Fatal("partial constructor accepted")
 			}
-			table := cacheTable(cfg, "iam_cache_invalidation")
-			query := "DELETE FROM " + table
-			if kind == "overflow" {
-				query = "UPDATE " + table + " SET generation=9223372036854775807"
-			}
-			if kind == "changed epoch" {
-				query = "UPDATE " + table + " SET epoch='ffffffffffffffffffffffffffffffff'"
+			query := "DELETE FROM " + cacheTable(cfg, "iam_tuple_cache")
+			if kind == "changed identity" {
+				query = "UPDATE " + cacheTable(cfg, "iam_tuple_cache") + " SET identity='ffffffffffffffffffffffffffffffff'"
 			}
 			if _, err := db.Exec(ctx, query); err != nil {
 				t.Fatal(err)
 			}
-			if kind == "changed epoch" {
-				if _, err := repos.CacheSource.Observe(ctx); !errors.Is(err, decisions.ErrCacheVersion) {
-					t.Fatalf("epoch: %v", err)
-				}
-				return
-			}
-			// These are ordinary writers with no caching option; triggers still protect facts.
-			direct := newRoleStore(db, cfg)
-			if err := direct.Assign(ctx, roles.Assignment{SubjectType: "user", SubjectID: "u", Role: "viewer"}); err == nil {
-				t.Fatal("invalid head allowed fact commit")
-			}
-			var n int
-			if err := db.QueryRow(ctx, "SELECT count(*) FROM "+cacheTable(cfg, "iam_roles")).Scan(&n); err != nil || n != 0 {
-				t.Fatalf("partial commit: %d/%v", n, err)
+			if _, err := repos.TupleSource.Snapshot(ctx, ""); !errors.Is(err, tuplecache.ErrUnavailable) {
+				t.Fatalf("invalid identity: %v", err)
 			}
 		})
 	}
 }
-func TestCacheTriggerTamper(t *testing.T) {
+
+func TestTupleCacheTriggerTamper(t *testing.T) {
 	ctx := context.Background()
 	db, cfg := cacheFixture(t, true)
-	if _, err := db.Exec(ctx, "CREATE OR REPLACE FUNCTION "+cfg.schema.Table("iam_advance_cache_generation")+"() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NULL; END $$"); err != nil {
+	if _, err := db.Exec(ctx, "CREATE OR REPLACE FUNCTION "+cfg.schema.Table("iam_capture_tuple_change")+"() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NULL; END $$"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := Repositories(ctx, db, cacheOptions(cfg)...); err == nil {
@@ -143,7 +134,7 @@ func TestCacheMigrationExport(t *testing.T) {
 		t.Fatal(err)
 	}
 	files, err := CacheMigrationsFS.ReadDir(CacheMigrationsDir)
-	if err != nil || len(files) != 1 {
+	if err != nil || len(files) != 2 {
 		t.Fatalf("inventory %v/%v", files, err)
 	}
 	data, err := CacheMigrationsFS.ReadFile(CacheMigrationsDir + "/" + files[0].Name())

@@ -4,10 +4,9 @@ import (
 	"fmt"
 	"reflect"
 
-	"github.com/gopernicus/gopernicus/sdk/capabilities/cacher"
-
 	authmodel "github.com/gopernicus/gopernicus/pockets/authorization/logic/model"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/relationships"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuplecache"
 	"github.com/gopernicus/gopernicus/sdk"
 )
 
@@ -20,12 +19,12 @@ type RoleReader interface{ roleProbe }
 type Readers struct {
 	Relationships *relationships.Service
 	Roles         RoleReader
-	CacheSource   CacheSource
+	TupleSource   tuplecache.Source
 }
 
 type config struct {
-	cacher      cacher.Storer
-	cachePolicy CachePolicy
+	backend     tuplecache.Backend
+	tuplePolicy tuplecache.Policy
 	Readers
 	RoleModel authmodel.RoleModel
 	Limits    authmodel.EvaluationLimits
@@ -72,12 +71,12 @@ func NewService(readers Readers, opts ...Option) (*Service, error) {
 			return nil, err
 		}
 	}
-	runtime, err := newCacheRuntime(cfg)
+	runtime, err := newTupleCache(cfg)
 	if err != nil {
 		return nil, err
 	}
 	service := newComposite(cfg.Relationships, cfg.Roles, compiled, limits)
-	service.readCache = runtime
+	service.tupleCache = runtime
 	return service, nil
 }
 

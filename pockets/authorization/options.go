@@ -5,13 +5,11 @@ import (
 	"maps"
 	"slices"
 
-	"github.com/gopernicus/gopernicus/pockets/authorization/logic/decisions"
-	"github.com/gopernicus/gopernicus/sdk/capabilities/cacher"
-
 	authorizationhttp "github.com/gopernicus/gopernicus/pockets/authorization/inbound/http"
 	authmodel "github.com/gopernicus/gopernicus/pockets/authorization/logic/model"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/mutations"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/relationships"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuplecache"
 )
 
 // Option configures construction. Options apply in order; each replaces its
@@ -99,8 +97,8 @@ func cloneRoleModel(model authmodel.RoleModel) authmodel.RoleModel {
 	return model
 }
 
-// WithCacher requests bounded-staleness decision reads over an optional source.
-// Nil disables caching, including policy validation and runtime allocation.
-func WithCacher(store cacher.Storer, policy decisions.CachePolicy) Option {
-	return func(cfg *config) { cfg.Cacher = store; cfg.CachePolicy = policy }
+// WithTupleCache enables a maintained raw relationship mirror. The backend is
+// borrowed; the host drives Components.TupleCache.Poll and owns its lifecycle.
+func WithTupleCache(backend tuplecache.Backend, policy tuplecache.Policy) Option {
+	return func(cfg *config) { cfg.TupleBackend = backend; cfg.TuplePolicy = policy }
 }

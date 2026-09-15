@@ -1,5 +1,7 @@
 # Optional authorization read caching: implementation plan
 
+> Superseded for active implementation by [Authorization TupleCache](authorization-tuple-cache.md) on 2026-09-15. The owner selected raw tuple mirroring and retirement of this global-generation cache. This document remains historical.
+
 Status: IMPLEMENTED AND TAGGED WITH OWNER-ACCEPTED VERIFICATION GAPS — 2026-09-14.
 The owner requested implementation, local merge, and then push/release in the
 Codex session. Local correctness verification passed. Real-cloud verification

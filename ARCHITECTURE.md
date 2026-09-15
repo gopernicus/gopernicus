@@ -34,6 +34,7 @@ worked example `examples/cms`.
       stores/pgx/         module …/pockets/authorization/stores/pgx            — authorization's pgx store adapter
       stores/turso/       module …/pockets/authorization/stores/turso          — authorization's Turso store adapter
       stores/firestore/   module …/pockets/authorization/stores/firestore      — authorization's Firestore store adapter (Native mode; index manifest instead of migrations; joins no ambient transaction)
+      stores/goredis/     module …/pockets/authorization/stores/goredis        — authorization raw TupleCache mirror (redis/go-redis v9; no authoritative SQL driver)
     cms/                  module github.com/gopernicus/gopernicus/pockets/cms                — the CMS hexagon (datastore-free)
       stores/pgx/         module …/pockets/cms/stores/pgx              — the CMS pocket's pgx store adapter
       stores/turso/       module …/pockets/cms/stores/turso            — the CMS pocket's Turso store adapter
@@ -57,7 +58,7 @@ worked example `examples/cms`.
       cmd/
 ```
 
-**Forty-two modules today.** `sdk` is the kernel; `integrations/*` are reusable
+**Forty-three modules today.** `sdk` is the kernel; `integrations/*` are reusable
 third-party connectors (one external dependency each, each its own module);
 `pockets/<name>` is a datastore-free pocket core with its driver adapters as
 sibling modules. Memory and store conformance are packages in the core module

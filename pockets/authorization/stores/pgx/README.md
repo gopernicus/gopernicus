@@ -133,50 +133,61 @@ Set POSTGRES_TEST_DSN and run `go test -race -count=1 ./...`. Repeat with POSTGR
 Live tests include shared fact/mutation/audit conformance, exact userset deltas,
 ambient savepoint recovery, retained readers, pagination and populated upgrades.
 
-## Optional authorization read caching
+## Optional TupleCache source
+
+SQLite/Turso and PostgreSQL are alternative authoritative stores. Redis is a
+maintained mirror of raw relationships; the store remains the source of truth.
+PostgreSQL captures committed tuple changes and supplies consistent source
+snapshots through `Repositories(ctx, db, WithTupleCache())`, which returns
+`TupleSource` with matching `TupleCacheBinding` values on its fact readers.
+Use the repository bundle; the relationship-only constructor rejects this option.
+Unconfigured stores remain direct and need no optional schema.
 
 Export `CacheMigrationsFS` / `CacheMigrationsDir` using
 `ExportCacheMigrations(dst)` as the separate **authorization-cache** source.
-The host must first finish **authorization** through 0007 in the same authority.
-The source/version ledger does not order different sources. Base migration
-exports and the historical 0001–0007 inventory are unchanged. Constructors never
-apply either source.
+First apply **authorization** through 0007 in the same schema, then both optional
+migrations. Historical 0001 remains unchanged; 0002 removes its counter triggers,
+function and table, and installs `iam_tuple_cache` and `iam_tuple_outbox`.
+Constructors never migrate. Stop old cache-enabled binaries before this upgrade;
+they cannot run against the replacement schema. Use a new Redis namespace and
+let old cache entries expire.
 
-`Repositories(ctx, db, WithCacheReads())` validates the singleton and full owned
-trigger definitions and returns `CacheSource` with matching fact-reader bindings.
-Use the bundle; the relationship-only constructor rejects this option. Supply the
-source and readers together, plus a cacher and an explicit positive MaxStaleness
-to the authorization decision service. Unconfigured readers remain direct and
-need no optional schema. The runtime starts cold; the host owns polling and close.
+`iam_tuple_cache` holds a stable store identity and acknowledged delivery receipt;
+these do not invalidate unrelated raw sets. Every ordinary relationship INSERT,
+DELETE and changed UPDATE records complete old/new tuples atomically in the
+outbox, including raw SQL and writers without WithTupleCache or audit enabled.
+No-op writes create no work. TRUNCATE records a rebuild instruction. Role changes
+create no tuple work: role and mixed-kind checks use durable snapshots.
 
-Installing this migration changes every ordinary relationship/role writer,
-including older and nil-cacher writers. Facts and generation advance atomically;
-missing metadata or overflow fails the write. Cache entries are immutable per
-epoch/generation; no deletion is needed for correctness. A stale observation may
-return a revoked grant within the caller's explicitly accepted freshness bound.
-Keep strict checks and guarded mutations on direct readers.
+Source snapshots read the receipt and all committed pending events in one
+repeatable-read snapshot. Missing or mismatching Redis receipts and pending
+TRUNCATE instructions also read all current tuples for a complete rebuild. A
+rebuild does not replay its pending changes over the already-current tuples.
+After Redis publication succeeds, acknowledge its receipt and delete exactly the
+captured event IDs in one SQL transaction. PostgreSQL sequences allocate IDs
+before commit; never use a maximum ID as a commit watermark. Pending work retries
+safely, and reconstruction uses current source tuples after old work is deleted.
 
-Snapshot callbacks are sequential and must not escape to goroutines. Retained
-readers fail with `decisions.ErrSnapshotClosed`; caller ambient transactions
-bypass caching and the snapshot source refuses ambient use. Store and cache
-clients remain borrowed.
+Read-snapshot callbacks are sequential and must not escape to goroutines.
+Retained readers fail with `tuplecache.ErrSnapshotClosed`; ambient transactions
+bypass caching and source operations reject ambient use. Read and delivery
+snapshots must use a primary connection. The host owns relay lifecycle, Redis
+readiness/freshness configuration and all client lifecycles.
 
-Before disabling triggers, importing with trigger bypass, restoring or cloning:
-fence and drain every cache reader, perform maintenance, rotate the epoch to a
-new random 32-character lowercase hex value, validate schema and triggers, then
-reconstruct readers. Never reset generation within an epoch. Rollback disables
-all readers before removing the optional source; removing only this process's
-cacher does not remove database-wide invalidation overhead. Runtime identities
-must not be able to disable triggers or perform DDL.
+Enabled construction resolves fact and TupleCache tables to one durable schema
+and freezes it against later search_path changes. It validates owned trigger
+bodies and enabled state and rejects RLS, inheritance and temporary/unlogged
+fact or cache tables. Trigger functions use SECURITY INVOKER and qualify their
+outbox by the fact table's schema. Writers need ordinary fact permissions, SELECT
+on `iam_tuple_cache`, and INSERT
+on `iam_tuple_outbox` (its generated identity needs no separate sequence grant).
+Relays need SELECT on
+facts and both TupleCache tables, UPDATE(receipt) on `iam_tuple_cache`, and DELETE
+on `iam_tuple_outbox`. Runtime identities must not disable triggers or perform DDL.
 
-Enabled construction resolves all fact/head tables to one durable schema and
-freezes that schema, so later search_path changes cannot move reads. Mixed schemas
-are rejected. Writers need schema USAGE, ordinary fact permissions, SELECT on
-`iam_cache_invalidation` and UPDATE(generation). The trigger uses SECURITY INVOKER
-and addresses the head using its fact table's schema. Observe and snapshots must
-use a primary connection. PostgreSQL 17 is the verified fixture baseline.
-
-The v1 cache capability rejects row-level security and table inheritance on
-facts/head metadata: these can change the visible fact set without this head's
-triggers advancing. Introducing either requires fencing readers and a new
-validated protocol; they remain available to unconfigured direct stores.
+Before trigger-bypassing imports, database restoration or cloning, stop/drain
+TupleCache readers and relays. Perform maintenance, replace the store identity
+with a new random 32-character lowercase hex value and clear its receipt, then
+reconstruct source bindings and rebuild Redis from current source tuples. This
+keeps restored/cloned stores from accepting an unrelated historical mirror.
+PostgreSQL 17 is the fixture baseline.

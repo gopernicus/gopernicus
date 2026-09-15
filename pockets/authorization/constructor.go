@@ -11,13 +11,14 @@ import (
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/mutations"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/relationships"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/roles"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuplecache"
 	"github.com/gopernicus/gopernicus/sdk"
 )
 
 // Components contains independently usable services and separately held trusted writers.
 // Give request code only the services it needs; keep trusted writers at host composition.
 type Components struct {
-	ReadCache          *decisions.CacheRuntime
+	TupleCache         *tuplecache.TupleCache
 	Decisions          *decisions.Service
 	Relationships      *relationships.Service
 	Roles              *roles.Service
@@ -40,7 +41,7 @@ func New(repos Repositories, opts ...Option) (Components, error) {
 	for _, dep := range []struct {
 		name  string
 		value any
-	}{{"Repositories.Relationships", repos.Relationships}, {"Repositories.Roles", repos.Roles}, {"Repositories.Mutations", repos.Mutations}, {"Repositories.Audit", repos.Audit}, {"WithGuard", cfg.Guard}, {"WithCacher", cfg.Cacher}} {
+	}{{"Repositories.Relationships", repos.Relationships}, {"Repositories.Roles", repos.Roles}, {"Repositories.Mutations", repos.Mutations}, {"Repositories.Audit", repos.Audit}, {"Repositories.TupleSource", repos.TupleSource}, {"WithGuard", cfg.Guard}, {"WithTupleCache", cfg.TupleBackend}} {
 		if isTypedNil(dep.value) {
 			return Components{}, fmt.Errorf("authorization: %s is typed nil: %w", dep.name, sdk.ErrInvalidInput)
 		}
@@ -90,7 +91,7 @@ func New(repos Repositories, opts ...Option) (Components, error) {
 		}
 		comps.Roles = svc
 	}
-	if cfg.Cacher != nil && !hasRel && !cfg.RoleModel.IsSet() {
+	if cfg.TupleBackend != nil && !hasRel && !cfg.RoleModel.IsSet() {
 		return Components{}, fmt.Errorf("authorization: caching requires a decision model: %w", sdk.ErrInvalidInput)
 	}
 	if hasRel || cfg.RoleModel.IsSet() {
@@ -100,16 +101,16 @@ func New(repos Repositories, opts ...Option) (Components, error) {
 			roleReader = comps.Roles
 		}
 		comps.Decisions, err = decisions.NewService(
-			decisions.Readers{Relationships: comps.Relationships, Roles: roleReader, CacheSource: repos.CacheSource},
+			decisions.Readers{Relationships: comps.Relationships, Roles: roleReader, TupleSource: repos.TupleSource},
 			decisions.WithRoleModel(cfg.RoleModel),
 			decisions.WithLimits(cfg.Limits),
-			decisions.WithCacher(cfg.Cacher, cfg.CachePolicy),
+			decisions.WithTupleCache(cfg.TupleBackend, cfg.TuplePolicy),
 		)
 		if err != nil {
 			return Components{}, err
 		}
 	}
-	comps.ReadCache = comps.Decisions.ReadCache()
+	comps.TupleCache = comps.Decisions.TupleCache()
 	mut, err := mutations.NewService(
 		repos.Mutations,
 		mutations.Services{Relationships: comps.Relationships, Roles: comps.Roles},

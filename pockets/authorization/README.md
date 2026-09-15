@@ -194,6 +194,26 @@ evaluation returns `model.ErrEvaluationLimit` (`sdk.ErrUnavailable`), never a
 complete-looking truncated result. Store query counts remain adapter telemetry,
 not an interchangeable semantic budget.
 
+Relationship `CheckBatch` batches both direct checks and `Through` reads when
+the model-scoped reader implements `relationships.RelationSetReader` (the bundled
+stores and their cache snapshots do). Compatible pending reads are fetched
+together, then the ordinary evaluator resumes each request with its own depth,
+cycle state, work budget and short-circuit order. This also accelerates
+`FilterAuthorized` and lookup verification; no verification bypass is needed.
+The relations may have any declared name and may target different resource types.
+
+Read counts depend on the encountered branches, traversal stages and adapter
+chunks instead of one read per candidate per hop. Data volume and evaluation
+work still grow with the graph. Custom readers without the optional capability
+retain sequential checks with shared fact reads. The batch does not enumerate
+the principal's entire accessible resource set.
+
+The optional cross-request cache preserves batched reads for `CheckBatch`,
+including cold-cache snapshot retries. `FilterAuthorized` and lookups retain
+their existing durable-read behavior. Cached target sets use the same model,
+generation and entry-size/fill limits as other cached facts; oversized entries
+are skipped and the operation falls back to durable reads.
+
 Three list workflows are supported:
 
 1. `Decisions.LookupAllResourceIDs` returns a bounded complete `ResourceSet` for
@@ -332,92 +352,124 @@ The package reorganization changes imports, construction and receiver ownership;
 it changes no SQL schema, tuple format, cursor encoding or audit storage format.
 Consumer migration notes live in the repository's `AUDIT.md`.
 
-## Optional authorization read cache
+## Optional TupleCache
 
-`WithCacher(store, policy)` enables cache-first `Decisions.Check`, `CheckBatch`
-and `CheckExplain` when the repository bundle provides a compatible `CacheSource`.
-Every participating reader must expose the same store binding. A nonnil cacher
-requires a nonempty `Namespace` and an explicit positive `MaxStaleness`; there is
-no default revocation delay. Typed-nil cachers are rejected.
+TupleCache maintains **raw relationships** in Redis. The configured Turso or
+PostgreSQL store remains authoritative. Each tuple mutation commits its complete
+before/after payload into a transactional outbox. Delivery updates only the raw
+forward/reverse sets containing that tuple, then deletes the acknowledged events.
+Redis population and recovery read current authoritative tuples; processed events
+are not needed for reconstruction. No permission answers, expanded memberships,
+role facts or authorized-resource lists are cached.
 
-`MaxStaleness` bounds the age of an authoritative head observation. Completed
-revocations can remain unobserved within that interval. `EntryTTL` controls storage
-reclamation, not permission freshness. Keep a separately constructed uncached
-service for decisions that require authoritative reads.
+`WithTupleCache(backend, policy)` enables raw cached reads for `Decisions.Check`,
+`CheckBatch`, `CheckExplain` and `FilterAuthorized`. Permission evaluation and model
+filtering run on every call. Lookups/enumeration, direct relationship and role
+services, mutation guards, audit and authentication retain their durable paths.
+A role read in a cached operation retries the whole operation in one authoritative
+snapshot, including relationship reads in a mixed batch.
 
-Each operation selects one store generation. Any missing, invalid or unavailable
-cache entry abandons the entire attempt and evaluates once in a consistent durable
-snapshot, including both permission kinds in a heterogeneous batch. Cache-fill
-failures preserve a successful durable result. Final decisions are not cached.
-Cold, expired, closed or unhealthy runtimes bypass directly without filling.
+### Construction and delivery
 
-Relationship/role services, mutation guards, lookup/filter operations, audit reads
-and authentication remain direct. Nil cacher allocates no runtime and requires no
-cache schema. The following helper accepts a prepared repository bundle and a
-staleness value chosen by the adopting host:
+Apply the base **authorization** migrations through 0007, then the separate
+optional **authorization-cache** source through 0002 in the same database/schema.
+Construct the SQL repository bundle with its store's `WithTupleCache()` option.
+This validates the schema and supplies `Repositories.TupleSource`. Ordinary SQL
+writers are captured by the installed triggers, including processes without the
+cache option. See the [Turso](stores/turso/README.md) and
+[PostgreSQL](stores/pgx/README.md) runbooks for privileges and raw-write constraints.
 
 ```go
-import (
-    "time"
-
-    "github.com/gopernicus/gopernicus/pockets/authorization"
-    "github.com/gopernicus/gopernicus/pockets/authorization/logic/decisions"
-    "github.com/gopernicus/gopernicus/pockets/authorization/logic/relationships"
-    "github.com/gopernicus/gopernicus/sdk/capabilities/cacher"
-)
-
-func cachedAuthorization(
-    repos authorization.Repositories,
-    model relationships.Schema,
-    maxStaleness time.Duration,
-) (authorization.Components, error) {
-    return authorization.New(repos,
-        authorization.WithRelationshipModel(model),
-        authorization.WithCacher(
-            cacher.NewMemory(cacher.WithMaxEntries(4096)),
-            decisions.CachePolicy{
-                Namespace:    "my-app/authorization",
-                MaxStaleness: maxStaleness,
-            },
-        ),
-    )
+// repos comes from the configured SQL store with its WithTupleCache() option.
+// client is a host-owned *redis.Client. Choose maxStaleness explicitly.
+backend, err := goredis.NewTupleCache(client, "my-app/relationships")
+if err != nil {
+    return err
 }
+components, err := authorization.New(repos,
+    authorization.WithRelationshipModel(model),
+    authorization.WithTupleCache(backend, tuplecache.Policy{
+        MaxStaleness: maxStaleness,
+    }),
+)
+if err != nil {
+    return err
+}
+relay := components.TupleCache
+pool := workers.NewPool(relay.Poll,
+    workers.WithPollInterval(relay.PollInterval()),
+    workers.WithIdleInterval(relay.PollInterval()),
+    workers.WithWakeChannel(relay.WakeChannel()),
+)
+// Run pool.Run(ctx) as a supervised host worker and handle its returned error.
+// After the OUTERMOST tuple-writing transaction successfully commits:
+relay.Notify()
 ```
 
-Root and decision constructors perform no cache/database I/O and start no worker.
-Store constructors with cache reads enabled do perform startup probes.
-`Components.ReadCache` starts cold. The host calls `Poll(ctx)` initially and at
-`PollInterval()`, handles errors and inspects aggregate `Stats()`. Every process
-polls independently, including processes sharing Redis. Poll failure disables
-hits; a subsequent valid poll can recover. Epoch changes, malformed metadata and
-generation regression permanently disable that runtime until reconstruction.
+The imports are `pockets/authorization`, `pockets/authorization/logic/tuplecache`,
+`pockets/authorization/stores/goredis` and `sdk/pkg/workers` under the framework
+module prefix. [Redis adapter details](stores/goredis/README.md) document storage,
+persistence and capacity. `memory.NewTupleCache()` is a reference backend for
+local tests; the standalone memory and Firestore authorities have no TupleSource.
 
-Resources are borrowed. At shutdown, cancel the host polling loop, call
-`ReadCache.Close()`, join the polling goroutine and drain requests before closing
-the cacher or database. Close cancels an active poll; it does not join host
-workers or drain requests. Snapshot callbacks and their `ForChecks` readers are
-sequential capabilities and must not escape into goroutines. Retained readers
-fail after callback success, failure, cancellation or panic.
+Constructors start no goroutines. Each runtime uses durable reads until its first
+successful `Poll`. `Notify()` is a non-blocking, coalesced channel hint, not a second
+copy of the mutation; the outbox is the durable queue. The host sends the hint only
+after its outer transaction commits. Periodic polling handles external writers,
+lost notifications and failed deliveries. A committed SQL mutation stays committed
+if Redis delivery fails. Call `Poll(ctx)` after commit when the caller must await
+that publication, and handle any error as a delivery error, not a rolled-back
+mutation. Concurrent local Poll calls may return `workers.ErrNoWork`.
 
-For SQL, apply base migrations through 0007 before the separate optional
-`authorization-cache` source in the same database/schema, then construct the
-bundle with the store's `WithCacheReads()`. Installation activates atomic triggers
-for ordinary writers, including older and nil-cacher SQL processes. This changes
-writer cost and PostgreSQL privilege requirements even before cache activation.
-See the [PostgreSQL](stores/pgx/README.md) and [Turso](stores/turso/README.md) runbooks.
+### Read guarantees and limits
 
-[Firestore](stores/firestore/README.md) requires explicit head initialization and
-`WithCacheInvalidation()` on **every writer**; `WithCacheReads()` implies it.
-Upgrade and configure all writers before enabling readers. Old binaries and
-external writers gain no server-trigger protection. Memory uses the shared
-`memory.New(memory.WithCacheReads())` bundle and is a process-local authority.
+`MaxStaleness` is a required positive host choice: a committed revocation can
+remain unseen while delivery is pending, within that bound. Eligibility is measured
+from the start of an authoritative source observation, not from a later Redis
+write. A stuck relay cannot extend it. An expired/unavailable mirror causes a
+whole-operation durable snapshot retry. A publication during evaluation also
+causes a whole-operation retry, so one returned decision cannot mix publications.
+Ambient source transactions bypass Redis and retain their existing store view.
 
-Fence readers around schema/trigger changes, restore, cloning and metadata
-maintenance. Rotate the epoch before reopening a restored/cloned authority;
-runtime checks cannot detect every historical restore. Follow each store's
-migration, privilege and activation instructions.
+Processes sharing one mirror **must use the same MaxStaleness**. The stable mirror
+binding includes this policy; a mismatch returns `tuplecache.ErrBinding` instead
+of letting one process weaken another's bound. Use one Redis mirror/namespace per
+source delivery stream. Multiple relay processes may share it; independently
+maintained namespaces for the same source compete over its delivery receipt and
+cause repeated rebuilds. To change the shared policy, stop/drain old runtimes and
+rebuild into a fresh namespace before reopening readers.
 
-Real GCP cache verification, Turso Cloud authoritative routing and representative
-performance/adoption acceptance remain release gates. Local SQL and emulator
-success do not certify these deployment properties. Evidence and outstanding
-requirements are recorded in the [implementation plan](../../plans/authorization-cacher-implementation.md).
+Delivery receipts coordinate atomic publication, operation consistency and recovery.
+They are not generations in tuple keys: unchanged sets remain available after
+ordinary mutations, without refilling. An empty or older restored Redis mirror is
+rebuilt from current source tuples, even when the original outbox rows are gone.
+A restored Redis dataset can still be served within its previously certified
+freshness interval before the relay detects it. For stricter reads, use an
+uncached service against the authoritative store.
+
+The Redis adapter keeps the complete mirror in one hash on one shard. It reads
+and decodes whole relation sets before the evaluator charges its graph-state
+budget; that budget is not a memory/byte bound. Large sets and large pending
+batches need host capacity measurements. A full snapshot/build taking longer than
+MaxStaleness stays unavailable rather than publishing already-expired authority.
+SQL remains the fallback. This implementation does not support Redis Cluster.
+
+At shutdown cancel and join the host worker, close the runtime, and drain requests
+before closing the borrowed Redis client or database. `Close()` stops cache use;
+it does not own or join workers. Snapshot callback readers are sequential and
+must not escape into goroutines or outlive the callback. Inspect `Stats()` for
+hits, durable fallbacks, publications, rebuilds and poll failures.
+
+### Upgrade from the previous cache
+
+Stop old cache-enabled binaries before applying optional migration 0002. It removes
+the global counter and replaces generation triggers with complete tuple capture;
+published migration 0001 remains unchanged. Replace `WithCacher` / `ReadCache` /
+`WithCacheReads` with the APIs above and give Redis a fresh dedicated namespace.
+Old cache keys may expire separately. Firestore and memory hosts should remove the
+old cache options and use durable reads. Do not modify optional delivery metadata
+or bypass triggers while readers/relays are running; follow the store runbooks for
+authoritative restores, cloning and imports.
+
+Local SQL/Redis behavior and outstanding deployment checks are recorded in the
+[TupleCache implementation plan](../../plans/authorization-tuple-cache.md).

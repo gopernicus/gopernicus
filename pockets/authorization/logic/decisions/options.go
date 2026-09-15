@@ -4,9 +4,8 @@ import (
 	"maps"
 	"slices"
 
-	"github.com/gopernicus/gopernicus/sdk/capabilities/cacher"
-
 	authmodel "github.com/gopernicus/gopernicus/pockets/authorization/logic/model"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuplecache"
 )
 
 // Option configures construction of a decision service. Options apply in order,
@@ -35,8 +34,10 @@ func WithLimits(limits authmodel.EvaluationLimits) Option {
 	return func(cfg *config) { cfg.Limits = limits }
 }
 
-// WithCacher requests optional bounded-staleness reads. An untyped nil disables
-// the feature; a nonnil store requires an explicit policy and matching bindings.
-func WithCacher(store cacher.Storer, policy CachePolicy) Option {
-	return func(cfg *config) { cfg.cacher = store; cfg.cachePolicy = policy }
+// WithTupleCache uses raw relationships from the supplied maintained mirror.
+func WithTupleCache(backend tuplecache.Backend, policy tuplecache.Policy) Option {
+	return func(cfg *config) {
+		cfg.backend = backend
+		cfg.tuplePolicy = policy
+	}
 }

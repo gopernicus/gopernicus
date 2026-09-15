@@ -128,47 +128,67 @@ Set TURSO_DATABASE_URL and TURSO_AUTH_TOKEN, then run `go test -tags=integration
 Live tests include shared fact/mutation/audit conformance, exact userset deltas,
 ambient savepoint recovery, retained readers, pagination and populated upgrades.
 
-## Optional authorization read caching
+## Optional TupleCache source
 
-Export `CacheMigrationsFS` / `CacheMigrationsDir` using
+The configured store remains authoritative. This adapter implements the same
+`tuplecache.Source` contract as PostgreSQL; Redis holds a reconstructible raw
+relationship mirror. Permission decisions and roles are not cached.
+
+Export `CacheMigrationsFS` / `CacheMigrationsDir` with
 `ExportCacheMigrations(dst)` as the separate **authorization-cache** source.
-The host must first finish **authorization** through 0007 in the same authority.
-The source/version ledger does not order different sources. Base migration
-exports and the historical 0001–0007 inventory are unchanged. Constructors never
-apply either source.
+First apply **authorization** through 0007 in the same database. The source/version
+ledger does not order different sources; constructors never apply migrations.
+The historical optional 0001 remains unchanged. Optional 0002 replaces its global
+counter and relationship/role triggers with a tuple mutation outbox and a stable
+store binding plus delivery receipt.
 
-`Repositories(ctx, db, WithCacheReads())` validates the singleton and full owned
-trigger definitions and returns `CacheSource` with matching fact-reader bindings.
-Use the bundle; the relationship-only constructor rejects this option. Supply the
-source and readers together, plus a cacher and an explicit positive MaxStaleness
-to the authorization decision service. Unconfigured readers remain direct and
-need no optional schema. The runtime starts cold; the host owns polling and close.
+Stop old generation-cache readers before upgrading to 0002. Old cache-enabled
+binaries cannot run against the replacement schema. Give the new Redis backend a
+dedicated namespace; old cache entries may expire independently.
 
-Installing this migration changes every ordinary relationship/role writer,
-including older and nil-cacher writers. Facts and generation advance atomically;
-missing metadata or overflow fails the write. Cache entries are immutable per
-epoch/generation; no deletion is needed for correctness. A stale observation may
-return a revoked grant within the caller's explicitly accepted freshness bound.
-Keep strict checks and guarded mutations on direct readers.
+`Repositories(ctx, db, WithTupleCache())` verifies the owned tables and complete
+trigger definitions and exposes `TupleSource` with matching reader bindings. The
+relationship-only constructor rejects this option. Unconfigured repositories
+remain durable and need no optional schema. Supply the bundle's source and readers
+together with a TupleCache backend and an explicit positive freshness bound.
+The host owns worker scheduling, notification, polling and backend lifecycle.
+Construction starts no background work.
 
-Snapshot callbacks are sequential and must not escape to goroutines. Retained
-readers fail with `decisions.ErrSnapshotClosed`; caller ambient transactions
-bypass caching and the snapshot source refuses ambient use. Store and cache
-clients remain borrowed.
+Installing 0002 captures complete before/after tuple identities for ordinary
+`INSERT`, `UPDATE` and `DELETE`, including framework batch/replace APIs, with the
+fact change in the same transaction. It captures writes from other processes and
+writers without `WithTupleCache` or audit enabled. No-op updates append no work.
+Raw SQLite `INSERT OR REPLACE` requires `PRAGMA recursive_triggers = ON` on **every
+writer connection**, because SQLite otherwise suppresses its implicit delete
+triggers. Raw REPLACE without that setting is unsupported; ordinary upserts and
+the framework's `SetRelationTargets` do not require it. Runtime identities must
+not disable triggers, modify delivery tables, or perform DDL.
 
-Before disabling triggers, importing with trigger bypass, restoring or cloning:
-fence and drain every cache reader, perform maintenance, rotate the epoch to a
-new random 32-character lowercase hex value, validate schema and triggers, then
-reconstruct readers. Never reset generation within an epoch. Rollback disables
-all readers before removing the optional source; removing only this process's
-cacher does not remove database-wide invalidation overhead. Runtime identities
-must not be able to disable triggers or perform DDL.
+A source snapshot captures the acknowledged delivery receipt and all committed
+pending changes together. If Redis is empty or its receipt differs, that snapshot
+also contains all current tuples, in deterministic order, for a full rebuild.
+Processed events are disposable work, not rebuild history. After successful
+atomic Redis publication, acknowledgement compares the old receipt and deletes
+only the exact captured event IDs in one SQL transaction. Writes committed after
+capture remain pending. The receipt never invalidates unrelated cached sets.
 
-Enabled read queries explicitly select main facts, so TEMP objects cannot shadow
-them. The supported local fixture uses the pinned libSQL file driver and SQLite
-WAL, with multiple connections for concurrent read/write snapshots. Snapshot
-conformance also passes over HTTP against owned primary `sqld 0.24.33`. Turso Cloud
-and replica routing have not been certified by these local tests. Do not enable
-cache reads on a deployment without proven authoritative head and snapshot
-routing. SQLite deferred transactions are not engine-enforced read-only; only
-check-reader capabilities are exposed to callbacks.
+Read callbacks expose one durable relationship/role snapshot. They are sequential
+and must not escape to goroutines; retained readers fail with
+`tuplecache.ErrSnapshotClosed`. Source snapshot/delivery operations reject ambient
+transactions, while ordinary transaction-bound reads retain their existing path.
+All enabled read queries explicitly use `main`, so TEMP tables cannot shadow the
+validated facts or delivery metadata. SQLite deferred transactions are not
+engine-enforced read-only; callbacks expose only check-reader capabilities.
+
+Redis loss or restoration is repaired from this source's tuples, even after all
+original events have been deleted. Before restoring/cloning the authoritative
+store or importing with trigger bypass, fence and drain readers and delivery
+workers, perform maintenance, rotate `iam_tuple_cache.binding` to a fresh random
+32-character lowercase hex value and clear its receipt, validate schema/triggers,
+then reconstruct repositories and the mirror. This identity distinguishes stores
+and restores; it is not an invalidation generation.
+
+Local tests use SQLite WAL and multiple connections to prove committed mutation
+capture, rollback, exact acknowledgement, rebuild and snapshot isolation. Remote
+Turso and replica routing require deployment-specific verification: configure an
+authoritative primary route for source reads and delivery acknowledgement.

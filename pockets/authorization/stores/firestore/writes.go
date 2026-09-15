@@ -111,7 +111,7 @@ func newRow(c relationships.CreateRelationship) relationshipDoc {
 // An existing exact tuple or subject claim makes the input a silent no-op.
 // Within a batch, the first row for each exact subject/resource wins. Every
 // retry rebuilds its own read set and pending rows.
-func createRelationships(ctx context.Context, db *firestoredb.DB, in []relationships.CreateRelationship, enabled bool, invalidation string) error {
+func createRelationships(ctx context.Context, db *firestoredb.DB, in []relationships.CreateRelationship, enabled bool) error {
 	rows := make([]relationshipDoc, len(in))
 	paths := make([][2]string, len(in))
 	refs := newDocRefs(len(in) * writesPerTuple)
@@ -136,7 +136,7 @@ func createRelationships(ctx context.Context, db *firestoredb.DB, in []relations
 		claimed[paths[i][1]] = struct{}{}
 		writes.creates = append(writes.creates, row)
 	}
-	return writes.flush(ctx, db, db.WriterFrom(ctx), enabled, invalidation)
+	return writes.flush(ctx, db, db.WriterFrom(ctx), enabled)
 }
 
 // desiredTargets folds SetRelationTargets' input into the distinct desired
@@ -180,7 +180,7 @@ func desiredTargets(resourceType, resourceID, relationName string, in []relation
 // so the callback returns sdk.ErrConflict and the transaction rolls back with
 // nothing changed. The claim document answers that question without a second
 // query: its Relation field IS the relation the subject holds.
-func setRelationTargets(ctx context.Context, db *firestoredb.DB, resourceType, resourceID, relationName string, desired []relationships.CreateRelationship, enabled bool, invalidation string) error {
+func setRelationTargets(ctx context.Context, db *firestoredb.DB, resourceType, resourceID, relationName string, desired []relationships.CreateRelationship, enabled bool) error {
 	r := db.ReaderFrom(ctx)
 	current, err := queryRelationships(ctx, r, db.Collection(collectionRelationships).
 		Where("resource_key", "==", resourceKey(resourceType, resourceID)).
@@ -232,7 +232,7 @@ func setRelationTargets(ctx context.Context, db *firestoredb.DB, resourceType, r
 		}
 	}
 
-	return (factWrites{drops: surplus, creates: missing}).flush(ctx, db, db.WriterFrom(ctx), enabled, invalidation)
+	return (factWrites{drops: surplus, creates: missing}).flush(ctx, db, db.WriterFrom(ctx), enabled)
 }
 
 // dropMatching is the delete family's ONE body: inside a transaction, read the
@@ -245,7 +245,7 @@ func setRelationTargets(ctx context.Context, db *firestoredb.DB, resourceType, r
 // relation), which is a bounded population, and every delete therefore rides
 // the two index shapes the store already needs — resource_key alone, and
 // (resource_key, relation) — instead of adding a composite per delete variant.
-func dropMatching(ctx context.Context, db *firestoredb.DB, query gcfs.Query, match func(relationshipDoc) bool, enabled bool, invalidation string) error {
+func dropMatching(ctx context.Context, db *firestoredb.DB, query gcfs.Query, match func(relationshipDoc) bool, enabled bool) error {
 	rows, err := queryRelationships(ctx, db.ReaderFrom(ctx), query)
 	if err != nil {
 		return err
@@ -259,5 +259,5 @@ func dropMatching(ctx context.Context, db *firestoredb.DB, query gcfs.Query, mat
 	if len(matched) == 0 {
 		return nil
 	}
-	return (factWrites{drops: matched}).flush(ctx, db, db.WriterFrom(ctx), enabled, invalidation)
+	return (factWrites{drops: matched}).flush(ctx, db, db.WriterFrom(ctx), enabled)
 }

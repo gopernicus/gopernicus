@@ -1,0 +1,86 @@
+{
+  "schema_version": 1,
+  "date": "2026-09-15",
+  "status": "candidate_verified",
+  "main_before": "4fb076155d98a58bc46e08a97154f1259ed938e9",
+  "modules": [
+    {
+      "directory": "pockets/authorization",
+      "module": "github.com/gopernicus/gopernicus/pockets/authorization",
+      "version": "v0.15.0",
+      "tag": "pockets/authorization/v0.15.0",
+      "sum": "h1:6Zjn6DoaZsDKkAI1EdfQWSBJuYjM+5OV748y0qbRJj8=",
+      "go_mod_sum": "h1:SWt/blN2Csf2p8dohOtJXbINP/BT5Z3oV9/GOxkFXGo=",
+      "source_inventory_sha256": "2f53660867b03b213d53091ad427e7a89893ab6092c8de441f0f423a260013ee",
+      "source_entries": 185
+    },
+    {
+      "directory": "pockets/authorization/stores/turso",
+      "module": "github.com/gopernicus/gopernicus/pockets/authorization/stores/turso",
+      "version": "v0.9.0",
+      "tag": "pockets/authorization/stores/turso/v0.9.0",
+      "sum": "h1:Bfui0tauWCH5orOwHUyjbpQjhqfWualTVfx+Fm3geWY=",
+      "go_mod_sum": "h1:Xky1RZZGRoHYeAT3w7ek2Rc1yWr+hMMW3qINTZPCvjU=",
+      "source_inventory_sha256": "94b1a5f90be31856bb8403ad8a579a7a56f83e2cee2d14cbaca3d18327c46e12",
+      "source_entries": 40
+    },
+    {
+      "directory": "pockets/authorization/stores/pgx",
+      "module": "github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx",
+      "version": "v0.10.0",
+      "tag": "pockets/authorization/stores/pgx/v0.10.0",
+      "sum": "h1:F//oY10q1NRUfKJbDW4vsJ70nbqeRpMs8OjvlVH1cxo=",
+      "go_mod_sum": "h1:8JiK0Od+mZHjZsn6raBhGbzdKgZhLorxR57xIb8Giek=",
+      "source_inventory_sha256": "6ed427bfa69285142e26b2d81135a3964c3c206b78edce764b3a780c24c37902",
+      "source_entries": 48
+    },
+    {
+      "directory": "pockets/authorization/stores/firestore",
+      "module": "github.com/gopernicus/gopernicus/pockets/authorization/stores/firestore",
+      "version": "v0.3.0",
+      "tag": "pockets/authorization/stores/firestore/v0.3.0",
+      "sum": "h1:JQWPmhRU0daTHl/eSNuMah7ZyhiTEyMKc3zSLLawYP4=",
+      "go_mod_sum": "h1:4ekA8fnfD6M0y/6hMt+38hXiq3HGHaiCVbNFC7xSu3U=",
+      "source_inventory_sha256": "1fdb2baf81b13dd3b13970a810c9e850807a9f926bc2de33c0c898059336e5a5",
+      "source_entries": 58
+    },
+    {
+      "directory": "pockets/authorization/stores/goredis",
+      "module": "github.com/gopernicus/gopernicus/pockets/authorization/stores/goredis",
+      "version": "v0.1.0",
+      "tag": "pockets/authorization/stores/goredis/v0.1.0",
+      "sum": "h1:NtQKmp2VGR9YJsOF04uD6VTPvU2bSIUde5H/PiCvn7M=",
+      "go_mod_sum": "h1:LcOcTgmX3qQNtSxmGJgl/ZBdwBIemFNQlpMDsz8qtyQ=",
+      "source_inventory_sha256": "994a04a0e95f32501956f13727bf145b5a2b4f45ace984d059acf404753b4619",
+      "source_entries": 7
+    }
+  ],
+  "candidate": {
+    "passed": true,
+    "report": "/private/tmp/tuple-cache-candidate-20260915-2/results.json",
+    "sha256": "fb8faa62ca54571f99d48ccbcee4d9f4cf64c61d49dc2c447042726be7c72c9c",
+    "gowork": "off",
+    "no_replacements": true
+  },
+  "scope": "upstream release and Segovia adoption/benchmark handoff; no host deployment",
+  "unverified": [
+    "remote Turso primary/replica routing",
+    "non-C PostgreSQL locale",
+    "live Firestore cleanup",
+    "representative application concurrent load and capacity"
+  ],
+  "publication": {
+    "passed": false
+  },
+  "public_verification": {
+    "passed": false
+  },
+  "workspace": {
+    "passed": true,
+    "command": "make check",
+    "modules": 43,
+    "candidate_proxy": true,
+    "log": "/private/tmp/tuple-cache-release-make-check.log",
+    "sha256": "d39365f8fda0ced9b5dd1b4f0afae653573cabd0092d46ad6948cb15dda064ae"
+  }
+}

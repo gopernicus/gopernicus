@@ -1,5 +1,27 @@
 # Releasing gopernicus modules
 
+## Authorization TupleCache and Through batching (release in preparation, 2026-09-15)
+
+Selected versions: authorization core `v0.15.0`, Turso store `v0.9.0`, PostgreSQL
+store `v0.10.0`, Firestore store `v0.3.0`, new go-redis store `v0.1.0`.
+The raw TupleCache replaces the previous generation cache; stores pin the new core.
+Turso uses already published connector `v0.6.0`. The same core release includes
+set-based Through verification, preserving existing evaluation limits and results.
+
+This is a breaking pre-v1 cache API and optional SQL migration upgrade. Hosts stop
+old cache-enabled binaries before optional `authorization-cache` migration 0002,
+use a fresh Redis namespace, wire the new runtime and retain a shared explicit
+freshness bound. The configured Turso or PostgreSQL store remains authoritative.
+Firestore retires old cache APIs and remains durable-only. There is no DecisionCache.
+See [AUDIT-037](AUDIT.md#audit-037-raw-authorization-tuplecache-replaces-generation-caching),
+the [release plan](plans/authorization-tuple-cache-release.md) and
+[Segovia handoff prompt](plans/segovia-tuple-cache-adoption-prompt.md).
+
+Publication and public verification are pending. Local SQL/Redis correctness,
+race and full repository checks passed; remote Turso routing, live Firestore and
+representative application capacity remain unverified. No host deployment is
+part of this release.
+
 ## Turso local file profile (published 2026-09-15)
 
 Published `integrations/datastores/turso` `v0.6.0` from main commit

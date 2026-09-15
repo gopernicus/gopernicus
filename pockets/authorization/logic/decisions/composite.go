@@ -10,6 +10,7 @@ import (
 	"github.com/gopernicus/gopernicus/pockets/authorization/internal/decisioncursor"
 	authmodel "github.com/gopernicus/gopernicus/pockets/authorization/logic/model"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/relationships"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuplecache"
 	"github.com/gopernicus/gopernicus/sdk"
 )
 
@@ -48,7 +49,7 @@ type kind interface {
 // and vice versa. A single-kind host's composite is a pass-through: identical
 // decisions, reasons, traces, and zero-length values.
 type Service struct {
-	readCache     *CacheRuntime
+	tupleCache    *tuplecache.TupleCache
 	relationships *relationships.Service // nil = the relationship kind is off
 	roles         *roleEngine            // nil = the roles kind carries no model
 	// undeclared answers a pair NO model declares, so that "no rules defined" is
@@ -160,13 +161,13 @@ func (c *Service) ownerWithName(resourceType, permission string) (kind, string) 
 // relationship engine when it is wired, else from the roles engine) rather than
 // consulting both kinds.
 func (c *Service) Check(ctx context.Context, req authmodel.CheckRequest) (authmodel.CheckResult, error) {
-	if c == nil || c.readCache == nil {
+	if c == nil || c.tupleCache == nil {
 		return c.check(ctx, nil, nil, req)
 	}
 	if err := req.Validate(); err != nil {
 		return authmodel.CheckResult{}, err
 	}
-	out, err := c.readCache.run(ctx, func(ctx context.Context, reads CheckReads) (operationResult, error) {
+	out, err := c.runTupleCache(ctx, func(ctx context.Context, reads tuplecache.CheckReads) (operationResult, error) {
 		if reads == nil {
 			result, err := c.check(ctx, nil, nil, req)
 			return operationResult{result: result}, err
@@ -201,13 +202,13 @@ func (c *Service) check(ctx context.Context, source relationships.CheckReadSourc
 // are the owning kind's alone — an explain never shows the work of a kind that
 // did not decide.
 func (c *Service) CheckExplain(ctx context.Context, req authmodel.CheckRequest) (authmodel.CheckResult, authmodel.Explanation, error) {
-	if c == nil || c.readCache == nil {
+	if c == nil || c.tupleCache == nil {
 		return c.checkExplain(ctx, nil, nil, req)
 	}
 	if err := req.Validate(); err != nil {
 		return authmodel.CheckResult{}, authmodel.Explanation{}, err
 	}
-	out, err := c.readCache.run(ctx, func(ctx context.Context, reads CheckReads) (operationResult, error) {
+	out, err := c.runTupleCache(ctx, func(ctx context.Context, reads tuplecache.CheckReads) (operationResult, error) {
 		if reads == nil {
 			result, trace, err := c.checkExplain(ctx, nil, nil, req)
 			return operationResult{result: result, explanation: trace}, err
@@ -247,7 +248,7 @@ func (c *Service) checkExplain(ctx context.Context, source relationships.CheckRe
 // engine's own (optimisable) batch path and the roles subset runs sequentially,
 // and the two are merged back by index.
 func (c *Service) CheckBatch(ctx context.Context, reqs []authmodel.CheckRequest) ([]authmodel.CheckResult, error) {
-	if c == nil || c.readCache == nil {
+	if c == nil || c.tupleCache == nil {
 		return c.checkBatch(ctx, nil, nil, reqs)
 	}
 	if len(reqs) == 0 {
@@ -261,7 +262,7 @@ func (c *Service) CheckBatch(ctx context.Context, reqs []authmodel.CheckRequest)
 			return nil, err
 		}
 	}
-	out, err := c.readCache.run(ctx, func(ctx context.Context, reads CheckReads) (operationResult, error) {
+	out, err := c.runTupleCache(ctx, func(ctx context.Context, reads tuplecache.CheckReads) (operationResult, error) {
 		if reads == nil {
 			results, err := c.checkBatch(ctx, nil, nil, reqs)
 			return operationResult{batch: results}, err
@@ -341,8 +342,8 @@ func (c *Service) checkBatch(ctx context.Context, source relationships.CheckRead
 // before any validation or store call. No IDs is (nil, nil).
 //
 // Each kind preserves input order and duplicate IDs. Relationship candidates
-// use the ordinary root-relative evaluator with call-local read reuse; direct
-// homogeneous branches batch only unresolved IDs. Roles use CheckBatch with
+// use the ordinary root-relative evaluator with call-local read reuse and
+// batched pending reads where supported. Roles use CheckBatch with
 // call-local exact/global fact reuse. Neither path caches across requests.
 func (c *Service) FilterAuthorized(ctx context.Context, principal authmodel.PrincipalRef, permission, resourceType string, resourceIDs []string) ([]string, error) {
 	if c == nil {
@@ -371,7 +372,7 @@ func (c *Service) FilterAuthorized(ctx context.Context, principal authmodel.Prin
 	}
 
 	// Filtering always uses direct readers, independent of public decision orchestration.
-	results, err := c.checkBatch(ctx, nil, nil, reqs)
+	results, err := c.CheckBatch(ctx, reqs)
 	if err != nil {
 		return nil, err
 	}

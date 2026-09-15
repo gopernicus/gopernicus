@@ -55,7 +55,6 @@ var liveAllCollections = []string{
 	collectionSubjectClaims,
 	collectionRoles,
 	collectionAudit,
-	collectionCacheInvalidation,
 }
 
 // The live target is fixed for this test process. Probe both manifests once;

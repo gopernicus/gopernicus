@@ -98,5 +98,5 @@ google.golang.org/protobuf v1.36.11 h1:fV6ZwhNocDyBLK0dj+fg8ektcVegBBuEolpbTQyBN
 google.golang.org/protobuf v1.36.11/go.mod h1:HTf+CrKn2C3g5S8VImy6tdcUvCska2kB7j23XfzDpco=
 gopkg.in/yaml.v3 v3.0.1 h1:fxVm/GzAzEWqLHuvctI91KS9hhNmmWOoWu0XTYJS7CA=
 gopkg.in/yaml.v3 v3.0.1/go.mod h1:K4uyk7z7BCEPqu6E+C64Yfv1cQ7kz7rIZviUmN+EgEM=
-github.com/gopernicus/gopernicus/pockets/authorization v0.14.1 h1:TM/ZyPCBN4FYmdcNNP0ohZNzALI5rX6kd4vI/lTFKGw=
-github.com/gopernicus/gopernicus/pockets/authorization v0.14.1/go.mod h1:SWt/blN2Csf2p8dohOtJXbINP/BT5Z3oV9/GOxkFXGo=
+github.com/gopernicus/gopernicus/pockets/authorization v0.15.0 h1:6Zjn6DoaZsDKkAI1EdfQWSBJuYjM+5OV748y0qbRJj8=
+github.com/gopernicus/gopernicus/pockets/authorization v0.15.0/go.mod h1:SWt/blN2Csf2p8dohOtJXbINP/BT5Z3oV9/GOxkFXGo=

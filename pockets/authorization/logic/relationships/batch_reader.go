@@ -27,7 +27,7 @@ type directKey struct {
 }
 
 // memoReader is the batch-local PermissionReader that shares successful store
-// READS across the requests of one sequential batch (B4). It caches nothing but
+// READS across the requests of one batch. It caches nothing but
 // the two relationship reads the walk makes, keyed by their exact arguments —
 // no decision, no budget, no enumeration is shared. Each request still runs the
 // ordinary evaluator with its OWN fresh budget, so depth, distinct graph states
@@ -44,8 +44,8 @@ type directKey struct {
 // canceled. Cached slices are copied on store and on every return, so a caller
 // ranging or mutating a returned slice can never reach memo state.
 //
-// A memoReader is NOT safe for concurrent use: one batch evaluates on one
-// goroutine, exactly like the budget it rides beside.
+// A memoReader is NOT safe for concurrent use. Batch iterators access the shared
+// maps sequentially, and datastore calls run on the scheduling goroutine.
 type memoReader struct {
 	inner   PermissionReader
 	targets map[targetsKey][]RelationTarget

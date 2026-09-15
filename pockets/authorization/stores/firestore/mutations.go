@@ -21,10 +21,9 @@ var errCallbackRefused = errors.New("authorization firestore store: callback ref
 // validates document and query reads at commit, including negative predicates.
 // The complete write plan is evaluated before its first write.
 type mutationStore struct {
-	cacheEpoch string
-	db         *firestoredb.DB
-	guardian   mutation.GuardianPolicy
-	audit      bool
+	db       *firestoredb.DB
+	guardian mutation.GuardianPolicy
+	audit    bool
 }
 
 func newMutationStore(db *firestoredb.DB, guardian mutation.GuardianPolicy, enabled bool) *mutationStore {
@@ -118,7 +117,7 @@ func (s *mutationStore) applyTx(ctx context.Context, cmd mutation.Command, guard
 	if err := ctx.Err(); err != nil {
 		return nil, false, err
 	}
-	if err := result.writes.flush(ctx, s.db, s.db.WriterFrom(ctx), s.audit, s.cacheEpoch); err != nil {
+	if err := result.writes.flush(ctx, s.db, s.db.WriterFrom(ctx), s.audit); err != nil {
 		return nil, false, err
 	}
 	return &mutation.Result{Outcome: result.outcome, SameRoleGrantRemains: result.sameRoleGrantRemains}, false, nil

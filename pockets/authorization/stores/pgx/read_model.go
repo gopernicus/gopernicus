@@ -12,7 +12,7 @@ import (
 )
 
 func (s *relationshipStore) ForModel(model relationships.ReadModel) relationships.Reader {
-	return &relationshipStore{db: s.db, cacheBinding: s.cacheBinding, readQuerier: s.readQuerier, schema: s.schema, model: &model, audit: s.audit}
+	return &relationshipStore{db: s.db, tupleBinding: s.tupleBinding, readQuerier: s.readQuerier, schema: s.schema, model: &model, audit: s.audit}
 }
 
 func (s *relationshipStore) reader(ctx context.Context) pgxdb.Querier {

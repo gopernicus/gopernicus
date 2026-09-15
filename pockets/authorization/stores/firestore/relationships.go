@@ -16,11 +16,9 @@ var _ relationships.Storer = (*relationshipStore)(nil)
 // collection and its subject claim collection (SCHEMA.md §5). Every method refuses
 // an ambient transaction first (R1); the bodies land in A2a–A2d.
 type relationshipStore struct {
-	binding    string
-	cacheEpoch string
-	model      *relationships.ReadModel
-	db         *firestoredb.DB
-	audit      bool
+	model *relationships.ReadModel
+	db    *firestoredb.DB
+	audit bool
 }
 
 func newRelationshipStore(db *firestoredb.DB, enabled bool) *relationshipStore {
@@ -145,17 +143,27 @@ func (s *relationshipStore) RelationTargetsFor(ctx context.Context, resourceType
 		return out, nil
 	}
 	err := s.db.ReadSnapshot(ctx, func(ctx context.Context, r firestoredb.Reader) error {
-		clear(out)
-		return scanCandidates(ctx, s.db, r, resourceType, ids, relation, func(row relationshipDoc) {
-			if !permits(s.model, row) {
-				return
-			}
+		var err error
+		out, err = relationTargetsFor(ctx, s.db, r, resourceType, ids, relation, s.model)
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func relationTargetsFor(ctx context.Context, db *firestoredb.DB, r firestoredb.Reader, rt string, ids []string, rel string, model *relationships.ReadModel) (map[string][]relationships.RelationTarget, error) {
+	out := make(map[string][]relationships.RelationTarget, len(ids))
+	if len(ids) == 0 {
+		return out, nil
+	}
+	err := scanCandidates(ctx, db, r, rt, ids, rel, func(row relationshipDoc) {
+		if permits(model, row) {
 			out[row.ResourceID] = append(out[row.ResourceID], relationships.RelationTarget{
-				Type:     row.SubjectType,
-				ID:       row.SubjectID,
-				Relation: row.SubjectRelation,
+				Type: row.SubjectType, ID: row.SubjectID, Relation: row.SubjectRelation,
 			})
-		})
+		}
 	})
 	if err != nil {
 		return nil, err
@@ -236,7 +244,7 @@ func (s *relationshipStore) CreateRelationships(ctx context.Context, relationshi
 		}
 	}
 	return retryTransact(ctx, s.db, func(ctx context.Context) error {
-		return createRelationships(ctx, s.db, relationships, s.audit, s.cacheEpoch)
+		return createRelationships(ctx, s.db, relationships, s.audit)
 	})
 }
 
@@ -263,7 +271,7 @@ func (s *relationshipStore) SetRelationTargets(ctx context.Context, resourceType
 		return err
 	}
 	return retryTransact(ctx, s.db, func(ctx context.Context) error {
-		return setRelationTargets(ctx, s.db, resourceType, resourceID, relation, desired, s.audit, s.cacheEpoch)
+		return setRelationTargets(ctx, s.db, resourceType, resourceID, relation, desired, s.audit)
 	})
 }
 
@@ -290,7 +298,7 @@ func (s *relationshipStore) DeleteRelationshipTarget(ctx context.Context, resour
 		if err != nil {
 			return err
 		}
-		return (factWrites{drops: []relationshipDoc{row}}).flush(ctx, s.db, s.db.WriterFrom(ctx), s.audit, s.cacheEpoch)
+		return (factWrites{drops: []relationshipDoc{row}}).flush(ctx, s.db, s.db.WriterFrom(ctx), s.audit)
 	})
 }
 
@@ -307,7 +315,7 @@ func (s *relationshipStore) DeleteResourceRelationships(ctx context.Context, res
 	return retryTransact(ctx, s.db, func(ctx context.Context) error {
 		return dropMatching(ctx, s.db,
 			s.db.Collection(collectionRelationships).Where("resource_key", "==", resourceKey(resourceType, resourceID)),
-			nil, s.audit, s.cacheEpoch)
+			nil, s.audit)
 	})
 }
 
@@ -330,7 +338,7 @@ func (s *relationshipStore) DeleteRelationship(ctx context.Context, resourceType
 				Where("relation", "==", relation),
 			func(row relationshipDoc) bool {
 				return row.SubjectType == subjectType && row.SubjectID == subjectID
-			}, s.audit, s.cacheEpoch)
+			}, s.audit)
 	})
 }
 
@@ -348,7 +356,7 @@ func (s *relationshipStore) DeleteByResourceAndSubject(ctx context.Context, reso
 			s.db.Collection(collectionRelationships).Where("resource_key", "==", resourceKey(resourceType, resourceID)),
 			func(row relationshipDoc) bool {
 				return row.SubjectType == subjectType && row.SubjectID == subjectID
-			}, s.audit, s.cacheEpoch)
+			}, s.audit)
 	})
 }
 

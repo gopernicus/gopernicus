@@ -101,7 +101,7 @@ func rolesBaseSQL(schema pgxdb.Schema, innerWhere string) string {
 // when the context carries one, the pool otherwise — so a role assignment joins
 // the same host transaction the relationship tuples beside it do.
 type roleStore struct {
-	cacheBinding string
+	tupleBinding string
 	readQuerier  pgxdb.Querier
 	audit        bool
 	db           *pgxdb.DB
@@ -109,7 +109,7 @@ type roleStore struct {
 }
 
 func newRoleStore(db *pgxdb.DB, cfg config) *roleStore {
-	return &roleStore{db: db, cacheBinding: cfg.cacheBinding, schema: cfg.schema, audit: cfg.audit}
+	return &roleStore{db: db, tupleBinding: cfg.tupleBinding, schema: cfg.schema, audit: cfg.audit}
 }
 
 // table renders name under the store's schema — the one chokepoint every

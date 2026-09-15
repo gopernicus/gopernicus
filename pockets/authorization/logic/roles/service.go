@@ -194,13 +194,13 @@ func validateResourceScope(resourceType, resourceID string) error {
 	return nil
 }
 
-// CacheBinding forwards an optional store identity without enabling caching.
-func (s *Service) CacheBinding() string {
+// TupleCacheBinding forwards an optional store identity without enabling caching.
+func (s *Service) TupleCacheBinding() string {
 	if s == nil {
 		return ""
 	}
-	if bound, ok := s.store.(interface{ CacheBinding() string }); ok {
-		return bound.CacheBinding()
+	if bound, ok := s.store.(interface{ TupleCacheBinding() string }); ok {
+		return bound.TupleCacheBinding()
 	}
 	return ""
 }

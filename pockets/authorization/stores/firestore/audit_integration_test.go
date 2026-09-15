@@ -190,7 +190,7 @@ func TestAuditWriteFailureRollsBackFactsAndClaims(t *testing.T) {
 	calls := 0
 	row := newRow(ctf("doc", "d1", "viewer", "user", "u1"))
 	err := db.Transact(ctx, func(ctx context.Context) error {
-		return (factWrites{creates: []relationshipDoc{row}}).flush(ctx, db, failingAuditWriter{Writer: db.WriterFrom(ctx), failure: refusal, calls: &calls}, true, "")
+		return (factWrites{creates: []relationshipDoc{row}}).flush(ctx, db, failingAuditWriter{Writer: db.WriterFrom(ctx), failure: refusal, calls: &calls}, true)
 	})
 	if !errors.Is(err, refusal) || calls != 1 {
 		t.Fatalf("audit error=%v calls=%d", err, calls)
@@ -208,7 +208,7 @@ func TestAuditNativeSizeFailureRollsBackFacts(t *testing.T) {
 	// Inject an oversized stored payload at the audit writer boundary to exercise
 	// the native commit refusal after the fact and claim have been queued.
 	err := db.Transact(ctx, func(ctx context.Context) error {
-		return (factWrites{creates: []relationshipDoc{row}}).flush(ctx, db, failingAuditWriter{Writer: db.WriterFrom(ctx), calls: &calls, oversized: true}, true, "")
+		return (factWrites{creates: []relationshipDoc{row}}).flush(ctx, db, failingAuditWriter{Writer: db.WriterFrom(ctx), calls: &calls, oversized: true}, true)
 	})
 	if err == nil {
 		t.Fatal("native Firestore accepted oversized audit commit")
