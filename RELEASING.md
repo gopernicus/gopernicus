@@ -1,5 +1,15 @@
 # Releasing gopernicus modules
 
+## Unreleased: Turso local file profile (2026-09-15)
+
+Turso connector only, proposed `v0.6.0` (minor: additive `Config` env tags and
+`BusyTimeout`, the new `turso/localfile` driver package, and a behavior change for
+`file:` URLs that carry no `_pragma`). No other module changes; adopting hosts bump
+the connector, delete their local copies of the boundary file and rename their
+`AUTH_DATABASE_*` keys to the namespaced `AUTH_DB_*`. See
+[AUDIT-036](AUDIT.md#audit-036-turso-local-file-profile-and-env-tagged-config) and
+the [plan](plans/turso-local-file-profile.md). Not yet tagged.
+
 ## Authorization cache rerelease from main (published 2026-09-14)
 
 The owner requested joining the full cache release with current main and cutting

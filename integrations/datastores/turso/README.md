@@ -29,6 +29,50 @@ filename order, skipping directories and names beginning with `_`.
 `ExportMigrations` copies direct `.sql` files, including underscore-prefixed SQL
 for the host to manage, and skips documentation and nested directories.
 
+## Local file profile — `file:` URLs, the `localfile` driver package, env tags
+
+`Config` carries env tags that mirror the pgxdb connector's `DB_*` names
+(`DB_URL`, `DB_AUTH_TOKEN`, `DB_MAX_CONNS`, `DB_MAX_IDLE_CONNS`,
+`DB_MAX_CONN_LIFETIME`, `DB_CONNECT_TIMEOUT`, `DB_BUSY_TIMEOUT`, `DB_LOG_QUERIES`).
+A host reads them with `environment.ParseEnvTags(namespace, &cfg)`; a non-empty
+namespace prefixes every key, so a host that keeps its authentication and
+authorization stores in their own database reads `AUTH_DB_URL` and friends with
+namespace `"AUTH"`. The connector knows no namespace.
+
+A `file:` URL opens a local SQLite database. The pinned libsql driver carries no
+SQLite engine: it hands a `file:` URL to whatever `database/sql` driver is
+registered as `sqlite` or `sqlite3`. Import the sibling package for the pure-Go
+(no cgo) one, beside the code that opens the database; hosts that only open hosted
+URLs never import it and never link the engine. Without it, `Open` fails naming
+the import.
+
+```go
+import (
+    tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
+    _ "github.com/gopernicus/gopernicus/integrations/datastores/turso/localfile" // file: URLs
+    "github.com/gopernicus/gopernicus/sdk/pkg/environment"
+)
+
+func openAuthDatabase(ctx context.Context) (*tursodb.DB, error) {
+    var cfg tursodb.Config
+    if err := environment.ParseEnvTags("AUTH", &cfg); err != nil {
+        return nil, err
+    }
+    return tursodb.Open(ctx, cfg) // AUTH_DB_URL, AUTH_DB_AUTH_TOKEN, AUTH_DB_MAX_CONNS, AUTH_DB_BUSY_TIMEOUT
+}
+```
+
+For a `file:` URL, `Open` applies the local file profile: the parent directory is
+created if missing, and unless the URL already names a `_pragma` (an explicit
+opt-out, left untouched) three are appended — `busy_timeout(<BusyTimeout>)`,
+`foreign_keys(1)` and `journal_mode(WAL)`. The driver applies `_pragma=` DSN
+parameters on every new pooled connection, which is the only way the setting holds
+on every connection of the pool; a single `PRAGMA` statement on one connection would
+not. `BusyTimeout` defaults to 5s and is never applied as zero (a zero busy timeout
+yields `SQLITE_BUSY` under ordinary concurrent use). Hosted URLs are untouched.
+`MaxOpenConns` keeps `database/sql`'s zero-means-unlimited; hosts running a local
+file set a small bound (the reference hosts use 4).
+
 ## Single-row statement completion
 
 `QueryOne` closes its result before returning a successful row. SQLite may yield
