@@ -1,14 +1,19 @@
 # Releasing gopernicus modules
 
-## Unreleased: Turso local file profile (2026-09-15)
+## Turso local file profile (published 2026-09-15)
 
-Turso connector only, proposed `v0.6.0` (minor: additive `Config` env tags and
-`BusyTimeout`, the new `turso/localfile` driver package, and a behavior change for
-`file:` URLs that carry no `_pragma`). No other module changes; adopting hosts bump
-the connector, delete their local copies of the boundary file and rename their
-`AUTH_DATABASE_*` keys to the namespaced `AUTH_DB_*`. See
-[AUDIT-036](AUDIT.md#audit-036-turso-local-file-profile-and-env-tagged-config) and
-the [plan](plans/turso-local-file-profile.md). Not yet tagged.
+Published `integrations/datastores/turso` `v0.6.0` from main commit
+`943b8bf989aa1d63e61e8092f7ed12b669e452a5` (PR #51): additive `Config` env tags
+(`DB_*`) and `BusyTimeout`, the local file profile in `Open` for `file:` URLs, and
+the new `turso/localfile` driver package. No other module changed; existing tags are
+unchanged. Candidate verification with the workspace off, every Turso-backed store
+suite and the repository guards passed before tagging; standard public
+checksum/origin verification and an isolated versioned consumer passed after
+tagging, with no bypass. See the [release plan](plans/turso-local-file-profile-release.md),
+[manifest](plans/turso-local-file-profile-release-manifest.json) and
+[AUDIT-036](AUDIT.md#audit-036-turso-local-file-profile-and-env-tagged-config).
+Adopting hosts bump the connector, delete their local copies of the boundary file
+and rename their `AUTH_DATABASE_*` keys to the namespaced `AUTH_DB_*`.
 
 ## Authorization cache rerelease from main (published 2026-09-14)
 

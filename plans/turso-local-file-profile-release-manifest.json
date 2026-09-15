@@ -1,0 +1,81 @@
+{
+  "schema_version": 1,
+  "date": "2026-09-15",
+  "status": "published_and_public_verified",
+  "scope": "Turso connector minor release from main; no other module; no host adoption or deployment",
+  "plan": "plans/turso-local-file-profile.md",
+  "audit": "AUDIT-036",
+  "pull_request": "https://github.com/gopernicus/gopernicus/pull/51",
+  "release_commit": "943b8bf989aa1d63e61e8092f7ed12b669e452a5",
+  "release_commit_tree_equals_reviewed_branch_tree": true,
+  "modules": [
+    {
+      "directory": "integrations/datastores/turso",
+      "module": "github.com/gopernicus/gopernicus/integrations/datastores/turso",
+      "version": "v0.6.0",
+      "tag": "integrations/datastores/turso/v0.6.0",
+      "tag_object": "7b87bd5f4eb3843a2e223574ff0e833dd880a102",
+      "release_commit": "943b8bf989aa1d63e61e8092f7ed12b669e452a5",
+      "source_inventory_sha256": "76f8572e5bc85787e2e7b7b6c8bba641405408b85ae4f3093ffa861d7d86ba6b",
+      "source_entries": 48,
+      "published": true,
+      "sum": "h1:XsGlUV/dCr8et4Cc3xPi28mU30IzgoU75WC4R+Z567E=",
+      "go_mod_sum": "h1:83vKGYZCHOoTnCSWM/ClCLOvBlXOgkvGh3SPfn+dOOE="
+    }
+  ],
+  "prior_tags_preserved": true,
+  "candidate": {
+    "passed": true,
+    "gowork": "off",
+    "no_replacements": true,
+    "checks": [
+      "go build ./...",
+      "go vet ./...",
+      "go test -count=1 ./... (turso, turso/localfile, turso/internal/nodrivertest)"
+    ],
+    "store_suites_integration_tag": [
+      "pockets/authorization/stores/turso",
+      "pockets/authentication/stores/turso",
+      "pockets/cms/stores/turso",
+      "pockets/events/stores/turso",
+      "pockets/jobs/stores/turso"
+    ],
+    "guards": "make guard exit 0 (includes TestIntegrationBoundaries)",
+    "go_mod_tidy_changes": false
+  },
+  "public_verification": {
+    "passed": true,
+    "proxy_retries": 0,
+    "proxy_time": "2026-09-15T05:01:21Z",
+    "origin": {
+      "vcs": "git",
+      "url": "https://github.com/gopernicus/gopernicus",
+      "subdir": "integrations/datastores/turso",
+      "hash": "943b8bf989aa1d63e61e8092f7ed12b669e452a5",
+      "ref": "refs/tags/integrations/datastores/turso/v0.6.0"
+    },
+    "checksum_bypass": false,
+    "workspace": "off",
+    "replace_directives": false,
+    "isolated_consumer": {
+      "module": "example.com/turso-consumer",
+      "imports": [
+        "integrations/datastores/turso",
+        "integrations/datastores/turso/localfile",
+        "sdk/pkg/environment"
+      ],
+      "checks": [
+        "go mod download -json",
+        "go mod tidy",
+        "go build ./...",
+        "go vet ./...",
+        "go test -count=1 ./..."
+      ],
+      "test": "ok"
+    }
+  },
+  "owner_accepted_gaps": [
+    "hosted Turso (libsql://) not exercised by this release's tests; the profile applies only to file: URLs"
+  ],
+  "local_checkout_branch": "main"
+}

@@ -4801,7 +4801,8 @@ Cloud authority and representative performance acceptance remain open. See the
 
 ## AUDIT-036: Turso local file profile and env-tagged config
 
-- **Implemented:** 2026-09-15; unreleased.
+- **Implemented:** 2026-09-15; released as `integrations/datastores/turso` `v0.6.0`
+  from main `943b8bf9` the same day.
 - **Modules:** Turso connector (`integrations/datastores/turso`), new sibling
   package `turso/localfile`.
 - **Impact:** additive env tags on `Config` (pgxdb's `DB_*` names plus
