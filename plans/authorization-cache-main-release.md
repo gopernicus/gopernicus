@@ -1,6 +1,6 @@
 # Authorization cache integration and release from main — 2026-09-14
 
-Status: VERIFIED; READY TO PUSH MAIN. Owner explicitly requested integrating all cache work into
+Status: MERGED INTO MAIN AND PUBLISHED; PUBLIC VERIFICATION PENDING. Owner explicitly requested integrating all cache work into
 updated main, adapting to newly merged work where needed, then publishing fresh
 versions from main. Existing tags remain immutable. Prior accepted cloud and
 performance verification gaps persist; no host deployment is authorized.
@@ -89,3 +89,17 @@ required solely for this cache train.
   Log: `/private/tmp/authorization-cache-main-make-check.log`.
 - Remote main was rechecked at `437da308`; integration will use a normal
   fast-forward push, never force. Source inventory is checked again before tags.
+
+
+## Publication from main
+
+- Verified integration commit `5aa0b29e23f5fd411bdb40b3a7abaea4fa531a1a`
+  was fast-forwarded to remote main before any new patch tag was created.
+- All six annotated patch tags point to that exact main commit. Complete cache
+  ancestry is included; all pre-existing remote tags were verified unchanged.
+  Evidence: `/private/tmp/authorization-cache-main-publication-20260914/remote-published.json`.
+- The user's usual checkout now tracks main at the release commit. Original
+  owner plan/handoff contents were verified preserved after switching branches.
+- Standard public checksum/consumer verification is pending proxy propagation;
+  no checksum bypass or tag replacement was used. Prior local/candidate checks
+  remain passed; this public gate is recorded separately.

@@ -1,17 +1,20 @@
 # Releasing gopernicus modules
 
-## Authorization cache rerelease from main (preparing 2026-09-14)
+## Authorization cache rerelease from main (published 2026-09-14)
 
 The owner requested joining the full cache release with current main and cutting
 fresh patch versions from the verified main commit. Main's Firestore squash tree
 exactly matches an already included ancestor; the integration retains all later
 cache/audit/security changes. No production algorithm change is required.
 
-Planned versions: Turso connector `v0.5.1`, PostgreSQL connector `v0.8.1`,
+Published from main commit `5aa0b29e23f5fd411bdb40b3a7abaea4fa531a1a`:
+Turso connector `v0.5.1`, PostgreSQL connector `v0.8.1`,
 authorization core `v0.14.1`, and authorization stores Turso `v0.8.1`, PostgreSQL
 `v0.9.1`, Firestore `v0.2.1`. Existing tags remain immutable. Prior accepted
 cloud/performance gaps remain disclosed; no new verification claim is implied.
-See [main integration plan](plans/authorization-cache-main-release.md).
+All candidate and repository checks passed. Public consumer verification awaits
+proxy indexing. See [main integration plan](plans/authorization-cache-main-release.md)
+and [manifest](plans/authorization-cache-main-release-manifest.json).
 
 ## Authorization read caching (published 2026-09-14)
 

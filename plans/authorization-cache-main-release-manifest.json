@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "date": "2026-09-14",
-  "status": "verified_ready_to_push_main",
+  "status": "published_from_main_public_verification_pending",
   "main_before": "437da308c0e106acde5aab9cd3214f144749530b",
   "integration_branch": "authorization-cache-main-20260914",
   "merge_commit": "dda6699debb17544c05723c7a41ec4e17255a5ce",
@@ -24,7 +24,10 @@
       "sum": "h1:BZSjtyjo6f3yjMOQaUX0yA1RzjlJImCkmu+24LPOff8=",
       "go_mod_sum": "h1:83vKGYZCHOoTnCSWM/ClCLOvBlXOgkvGh3SPfn+dOOE=",
       "source_inventory_sha256": "2af78b832782c934ba054882c58ecb2493b195133eaa3c9d0be8f9c17be63e08",
-      "source_entries": 44
+      "source_entries": 44,
+      "published": true,
+      "tag_object": "8617c8c955cfbdeaa904126dd1a1a9576abc673d",
+      "release_commit": "5aa0b29e23f5fd411bdb40b3a7abaea4fa531a1a"
     },
     {
       "directory": "integrations/datastores/pgxdb",
@@ -34,7 +37,10 @@
       "sum": "h1:GtbygnajNLOsUNgOH2OkbdHVb6h8rPegOi7uXmNioPo=",
       "go_mod_sum": "h1:m73aQqKrcCcr/XY5CwqUY5REpUg0Pwr1r3i+YfpAPJg=",
       "source_inventory_sha256": "e6b05e808e25635cd343d93cdd72ce6c373e58554413094d65296462c3404768",
-      "source_entries": 55
+      "source_entries": 55,
+      "published": true,
+      "tag_object": "45f959566dfafa10545d0f8048e022349fcc8294",
+      "release_commit": "5aa0b29e23f5fd411bdb40b3a7abaea4fa531a1a"
     },
     {
       "directory": "pockets/authorization",
@@ -44,7 +50,10 @@
       "sum": "h1:TM/ZyPCBN4FYmdcNNP0ohZNzALI5rX6kd4vI/lTFKGw=",
       "go_mod_sum": "h1:SWt/blN2Csf2p8dohOtJXbINP/BT5Z3oV9/GOxkFXGo=",
       "source_inventory_sha256": "61c0dab04b2a1d2bb51c93c77de4d5dde15955d9588f61b62fc368577af87b7f",
-      "source_entries": 191
+      "source_entries": 191,
+      "published": true,
+      "tag_object": "7a82cfb16f7bb5921be63d69f1e4dd55f919ee90",
+      "release_commit": "5aa0b29e23f5fd411bdb40b3a7abaea4fa531a1a"
     },
     {
       "directory": "pockets/authorization/stores/turso",
@@ -54,7 +63,10 @@
       "sum": "h1:FoJpRXyhRy9cdlgYkcgx3ygUnW0pvwGysJl6t9EoKXo=",
       "go_mod_sum": "h1:YxI+rqQsn/NhDTOX78wbcnN0zHDQyuUeArakLfDShwk=",
       "source_inventory_sha256": "7ff3892fab796af6662834c5adf73a557903d65a0241a712b0c47e10c78fdd29",
-      "source_entries": 40
+      "source_entries": 40,
+      "published": true,
+      "tag_object": "421ce2cc0dcdbd18f5e49fbf325441593ace3c47",
+      "release_commit": "5aa0b29e23f5fd411bdb40b3a7abaea4fa531a1a"
     },
     {
       "directory": "pockets/authorization/stores/pgx",
@@ -64,7 +76,10 @@
       "sum": "h1:MIHsoZTBqYX3kurOstEpGC/rrz+dRXtkB3xYlKrFxM8=",
       "go_mod_sum": "h1:OSWwvEM4OEwwNYGlOE1InSzhCeFb32IbZt+yaER1F6Y=",
       "source_inventory_sha256": "229c593e1d120335ff54ff4724058053ccc0fe5009f5bdde158e1619e7b12803",
-      "source_entries": 46
+      "source_entries": 46,
+      "published": true,
+      "tag_object": "99953f954d8db07c8c2323e8cb032dddf88d5731",
+      "release_commit": "5aa0b29e23f5fd411bdb40b3a7abaea4fa531a1a"
     },
     {
       "directory": "pockets/authorization/stores/firestore",
@@ -74,7 +89,10 @@
       "sum": "h1:jQ8X7hNubkp185b0ZKZfLpI58KguZcQUa4OY/L6zVRo=",
       "go_mod_sum": "h1:6Mgz19qun8wQOZaUY7T1buEt+hXGaS/0ra0yk4Z+P/Y=",
       "source_inventory_sha256": "17861b6589f39acbf633326ec7254650933160794708d926fde29a69b95b22d8",
-      "source_entries": 65
+      "source_entries": 65,
+      "published": true,
+      "tag_object": "dd6b30da09d57a6ee1185f49ec4235b1950b30e3",
+      "release_commit": "5aa0b29e23f5fd411bdb40b3a7abaea4fa531a1a"
     }
   ],
   "candidate": {
@@ -102,5 +120,10 @@
     "sha256": "09d3ab416b9a767ffa0e80dea885e3ce50bfc9858d286d88297abebf5f03cbfb",
     "candidate_proxy": true,
     "all_42_modules": true
-  }
+  },
+  "release_commit": "5aa0b29e23f5fd411bdb40b3a7abaea4fa531a1a",
+  "main_push_verified": true,
+  "complete_cache_ancestry_in_main": true,
+  "prior_tags_preserved": true,
+  "local_checkout_branch": "main"
 }
