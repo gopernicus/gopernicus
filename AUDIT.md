@@ -4828,13 +4828,16 @@ This records implemented behavior, not release approval. See the
 
 ## AUDIT-037: Raw authorization TupleCache replaces generation caching
 
-- **Follow-up release in progress (2026-09-15):** core v0.15.1 fixes the
+- **Follow-up released (2026-09-15):** core v0.15.1 fixes the
   relationship-owned `FilterAuthorized` bypass of TupleCache. Redis adapter
   v0.2.0 pins that core and uses readable `tuplecache:{<namespace>}` keys;
   namespaces accept ASCII letters, digits and `:._-/`. Existing Turso v0.9.0
   remains compatible. No SQL migration; restart the single dev server and let
   its relay rebuild the new hash. See the
   [follow-up release plan](plans/authorization-filter-tuple-cache-release.md).
+  Published from `26c7ff55`; both archives and the SQLite/Redis consumer
+  passed public checksum/source and versioned build/test/vet checks. The unchanged
+  Linux SDK `RangeEdges` CI failure remains disclosed in the release plan.
 - **Implemented and released:** 2026-09-15. Supersedes AUDIT-035.
   Core v0.15.0; Turso v0.9.0; PostgreSQL v0.10.0; Firestore v0.3.0;
   new go-redis adapter v0.1.0. Source: `83d48957` on main.

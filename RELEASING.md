@@ -1,8 +1,9 @@
 # Releasing gopernicus modules
 
-## Authorization cached filters and readable Redis keys (release in progress 2026-09-15)
+## Authorization cached filters and readable Redis keys (published 2026-09-15)
 
-Selected versions: authorization core `v0.15.1` and go-redis adapter `v0.2.0`.
+Published from main `26c7ff55fc728cac88724309028f11d99c953db9`: authorization core
+`v0.15.1` and go-redis adapter `v0.2.0`.
 Relationship-owned `Decisions.FilterAuthorized` now uses TupleCache through
 `CheckBatch`, including whole-operation durable fallback. The Redis adapter pins
 the fixed core and uses `tuplecache:{<namespace>}` with the namespace verbatim.
@@ -15,6 +16,13 @@ and relays sharing a source should switch together to avoid maintaining two mirr
 See [release plan](plans/authorization-filter-tuple-cache-release.md),
 [implementation verification](plans/authorization-filter-tuple-cache.md) and
 [AUDIT-037](AUDIT.md#audit-037-raw-authorization-tuplecache-replaces-generation-caching).
+
+Both published archives passed normal public checksum/source verification and
+isolated versioned build/test/vet. The published SQLite/Redis consumer passed
+warm filtering with zero SQL, revocation and mirror recovery using Turso v0.9.0.
+Local full-workspace and relevant race checks passed. GitHub Linux CI still fails
+the unchanged SDK file-storage `RangeEdges` case disclosed by the previous release.
+See the [release manifest](plans/authorization-filter-tuple-cache-release-manifest.json).
 
 ## Authorization TupleCache and Through batching (published 2026-09-15)
 

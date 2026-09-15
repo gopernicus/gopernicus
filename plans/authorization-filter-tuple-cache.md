@@ -105,3 +105,9 @@ relay poll rebuild `tuplecache:{<AUTH_CACHE_NAMESPACE>}`. No SQL migration or
 manual cache conversion is required. Re-run the host's 128-dashboard filter
 benchmark and verify returned IDs, SQL counts and TupleCache hit deltas.
 Segovia itself, remote Turso, PostgreSQL and Firestore were not exercised here.
+
+## Release
+
+Published authorization core v0.15.1 and go-redis adapter v0.2.0 from
+`26c7ff55fc728cac88724309028f11d99c953db9`; normal public downloads and an isolated
+SQLite/Redis consumer passed. See the [release plan](authorization-filter-tuple-cache-release.md).

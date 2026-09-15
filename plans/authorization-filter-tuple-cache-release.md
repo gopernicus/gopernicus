@@ -1,6 +1,6 @@
 # Authorization filter and readable Redis key release — 2026-09-15
 
-Status: IN PROGRESS. The owner explicitly requested publication so Segovia can
+Status: PUBLISHED AND PUBLICLY VERIFIED. The owner explicitly requested publication so Segovia can
 adopt the completed fixes. Host edits and deployment remain separate.
 
 ## Scope and versions
@@ -46,8 +46,8 @@ Other unchanged modules and tags remain unchanged.
 
 - [x] Prepare release notes, module pins and exact candidate verification.
 - [x] Verify final workspace and standalone consumer.
-- [ ] Commit/push release source and annotated tags.
-- [ ] Verify public downloads, source/checksums and consumer; record evidence.
+- [x] Commit/push release source and annotated tags.
+- [x] Verify public downloads, source/checksums and consumer; record evidence.
 
 ## Verification limits and adoption
 
@@ -89,3 +89,32 @@ Task evidence root: `/tmp/gopernicus-filter-tuple-cache`.
 - Final workspace `make check` passed, including build/test/vet, generated-artifact
   drift checks, tagged compilation and layering guards. Candidate source inventory
   still matches. Log: `release-make-check.log` under the task evidence root.
+- Release source committed and pushed to main as
+  `26c7ff55fc728cac88724309028f11d99c953db9`. Both annotated nested tags were
+  published dependency-first at that commit; remote tag objects and peeled
+  commits match. All prior tags and owner edits are preserved.
+- Initial public download resolved the correct Git tag/commit but the checksum
+  service returned an indexing-time unknown revision. Normal downloads were
+  retried with checksum verification enabled; the indexing delay resolved.
+  No bypass was used.
+- GitHub release CI run `35025825443` failed in the unchanged SDK
+  `TestDisk_Conformance/RangeEdges`: Linux rejects seek at MaxInt64 with EINVAL.
+  The SDK has no diff between pre-release main and the release commit. This is
+  the same failure disclosed by the preceding release, not a newly claimed fix.
+  Log: `release-ci-failed.log`; run inventory: `release-ci.json` under the task root.
+
+## Public verification
+
+Both published module archives match the tested candidates and release commit
+`26c7ff55fc728cac88724309028f11d99c953db9`. Normal public checksum verification,
+independent module graphs, build/test/vet and tagged checks passed with GOWORK=off
+and no replacements or checksum exemptions. Evidence: `public-verified/results.json`.
+
+The standalone consumer repeated its successful SQLite/Redis filtering and recovery
+checks against published versions. Warm filters and filters after revocation used
+zero SQL; all 100 unrelated write/publication cycles kept cache hits without rebuilds.
+Turso v0.9.0 remains compatible. Evidence: `consumer/public-results.json` and
+`consumer/public-behavior.log`. The temporary Redis process stopped.
+
+The release is complete. Segovia adoption/benchmarking and the unchanged Linux SDK
+CI failure remain separate. No host files, services or caches were modified.
