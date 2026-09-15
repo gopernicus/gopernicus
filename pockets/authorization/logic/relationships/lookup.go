@@ -51,11 +51,16 @@ func (s *Service) LookupResources(ctx context.Context, principal authmodel.Princ
 	if err := authmodel.ValidateRefField("resource type", resourceType); err != nil {
 		return authmodel.LookupResult{}, err
 	}
-	result, err := s.lookupResources(ctx, principal, permission, resourceType, newBudget(s.limits, newMemoReader(s.reader)), make(map[nodeKey]bool), make(map[nodeKey]authmodel.LookupResult))
-	if err != nil {
-		return authmodel.LookupResult{}, err
+	if len(s.compiled.permissionChecks(resourceType, permission)) == 0 {
+		return authmodel.LookupResult{IDs: []string{}}, nil
 	}
-	return s.verifyLookup(ctx, principal, permission, resourceType, result)
+	return s.runLookup(ctx, func(ctx context.Context, view *Service) (authmodel.LookupResult, error) {
+		result, err := view.lookupResources(ctx, principal, permission, resourceType, newBudget(view.limits, newMemoReader(view.reader)), make(map[nodeKey]bool), make(map[nodeKey]authmodel.LookupResult))
+		if err != nil {
+			return authmodel.LookupResult{}, err
+		}
+		return view.verifyLookup(ctx, principal, permission, resourceType, result)
+	})
 }
 
 // lookupResources enumerates the resource IDs of resourceType the principal can
@@ -318,11 +323,16 @@ func (s *Service) LookupResourcesPage(ctx context.Context, principal authmodel.P
 		return authmodel.LookupResult{}, fmt.Errorf("authorization: lookup page limit exceeds MaxLookupResults: %w", sdk.ErrInvalidInput)
 	}
 
-	checks := s.compiled.permissionChecks(resourceType, permission)
-	if len(checks) == 0 {
+	if len(s.compiled.permissionChecks(resourceType, permission)) == 0 {
 		return authmodel.LookupResult{IDs: []string{}}, nil
 	}
+	return s.runLookup(ctx, func(ctx context.Context, view *Service) (authmodel.LookupResult, error) {
+		return view.lookupResourcesPage(ctx, principal, permission, resourceType, after, limit)
+	})
+}
 
+func (s *Service) lookupResourcesPage(ctx context.Context, principal authmodel.PrincipalRef, permission, resourceType, after string, limit int) (authmodel.LookupResult, error) {
+	checks := s.compiled.permissionChecks(resourceType, permission)
 	b := newBudget(s.limits, newMemoReader(s.reader))
 	stack := make(map[nodeKey]bool)
 	memo := make(map[nodeKey]authmodel.LookupResult)
@@ -458,7 +468,7 @@ func (s *Service) verifyLookup(ctx context.Context, principal authmodel.Principa
 		}
 		for _, decision := range decisions {
 			if !decision.Allowed {
-				return authmodel.LookupResult{}, fmt.Errorf("authorization: relationships changed during enumeration: %w", sdk.ErrConflict)
+				return authmodel.LookupResult{}, errEnumerationChanged
 			}
 		}
 		start = end

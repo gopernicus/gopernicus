@@ -4900,3 +4900,35 @@ canonical ordering and existing decision semantics. The 366-space lookup, 50-ite
 page and 128-dashboard filter are important host acceptance cases; their actual
 query counts must be remeasured on the host dataset. The framework's synthetic
 query-count evidence is in [authorization-through-batching.md](plans/authorization-through-batching.md).
+
+## AUDIT-038: Consistent authorization lookup reads
+
+- **Implemented:** 2026-09-15.
+- **Release:** in progress; core v0.16.0, Turso store v0.10.0, PostgreSQL store v0.11.0.
+- **Impact:** per-call snapshot reads and transient enumeration errors; no data migration.
+
+`LookupAllResourceIDs` and `LookupResourceIDPage` previously performed reverse
+candidate discovery and forward verification across separate reads. Revocation
+between those phases could return sdk.ErrConflict (HTTP 409). The guard compared
+discovered grants to verification results, not a global relationship revision.
+
+The SQL and memory adapters now provide `relationships.LookupSnapshotter` on their
+model-scoped reader. Each ordinary call uses one snapshot for discovery, all
+verification batches and page lookahead. SQL preserves an existing caller-owned
+transaction's pending writes and isolation without finishing it. Separate calls,
+including subsequent pages, take independent views.
+
+When a discovered grant fails verification, the pocket retries the complete call
+up to twice with fresh attempt-local state. Three mismatches return
+`model.ErrEnumerationContended`, wrapping sdk.ErrUnavailable (HTTP 503), with no
+partial result or cursor. Store errors, cancellation and evaluation limits are
+returned immediately. Custom readers without snapshots and Firestore retain this
+bounded retry fallback. Hosts may attach Retry-After via errors.Is.
+
+Upgrade core plus the configured SQL adapter for snapshot behavior. Existing
+TupleCache wiring, Redis v0.2.0, schemas and connector versions remain compatible.
+The fix requires no cache rebuild or migration. The implementation's full local
+checks and 16-reader/2-writer SQL regressions passed; Segovia HTTP benchmarking,
+remote Turso/sqld and live Firestore remain unverified. See the
+[release plan](plans/authorization-lookup-snapshots-release.md) for publication and
+[implementation plan](plans/authorization-lookup-snapshots.md) for exact evidence.

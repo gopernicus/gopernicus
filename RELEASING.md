@@ -1,5 +1,20 @@
 # Releasing gopernicus modules
 
+## Authorization consistent lookup reads (release in progress 2026-09-15)
+
+Targets: authorization core `v0.16.0`, Turso store `v0.10.0`, PostgreSQL store
+`v0.11.0`. Both SQL stores pin the new core. Lookup candidate discovery,
+verification batches and page lookahead now share one durable read snapshot.
+The pocket retries discovered-grant mismatches twice; persistent contention
+returns `model.ErrEnumerationContended` / `sdk.ErrUnavailable` (HTTP 503).
+
+Upgrade core and the configured SQL adapter together. No migration, cache rebuild
+or new configuration is required. Existing ambient transactions retain their
+pending writes and isolation; separate page calls do not share a snapshot.
+See [release plan](plans/authorization-lookup-snapshots-release.md),
+[implementation verification](plans/authorization-lookup-snapshots.md) and
+[AUDIT-038](AUDIT.md#audit-038-consistent-authorization-lookup-reads).
+
 ## Authorization cached filters and readable Redis keys (published 2026-09-15)
 
 Published from main `26c7ff55fc728cac88724309028f11d99c953db9`: authorization core

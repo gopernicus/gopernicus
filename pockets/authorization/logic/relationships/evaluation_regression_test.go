@@ -65,7 +65,7 @@ func (r changedLookupReader) LookupResourceIDs(ctx context.Context, rt string, r
 	return ids, err
 }
 
-func TestLookupPageReturnsConflictWhenDiscoveredGrantChanges(t *testing.T) {
+func TestLookupPageRetriesWhenDiscoveredGrantChanges(t *testing.T) {
 	schema := setHierarchySchema()
 	def := schema.ResourceTypes["space"]
 	def.Permissions["view"] = AnyOf(Direct("viewer"))
@@ -75,7 +75,7 @@ func TestLookupPageReturnsConflictWhenDiscoveredGrantChanges(t *testing.T) {
 	}}}
 	svc := newLimitedService(t, store, schema, authmodel.EvaluationLimits{})
 	page, err := svc.LookupResourcesPage(context.Background(), setPrincipal, "view", "space", "", 1)
-	if !errors.Is(err, sdk.ErrConflict) || len(page.IDs) != 0 || page.HasMore {
+	if err != nil || page.IDs == nil || len(page.IDs) != 0 || page.HasMore {
 		t.Fatalf("page=%v error=%v", page, err)
 	}
 }

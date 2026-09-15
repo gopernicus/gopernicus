@@ -1,0 +1,70 @@
+{
+  "status": "candidates and consumer verified; publication pending",
+  "date": "2026-09-15",
+  "modules": [
+    {
+      "directory": "pockets/authorization",
+      "go_mod_sum": "h1:SWt/blN2Csf2p8dohOtJXbINP/BT5Z3oV9/GOxkFXGo=",
+      "module": "github.com/gopernicus/gopernicus/pockets/authorization",
+      "source_entries": 194,
+      "source_inventory_sha256": "8db4aab75f6f6f999c47eb496799bafd3e09a23c6a62ca97ecdeaf95b5ada810",
+      "sum": "h1:0g7TOQBbWv8dHzKsVqgbr80NYWw6nfSQH8hHz/IHC40=",
+      "tag": "pockets/authorization/v0.16.0",
+      "version": "v0.16.0"
+    },
+    {
+      "directory": "pockets/authorization/stores/turso",
+      "go_mod_sum": "h1:fXL2HiJtSv2dYbL3hVVO3H+LO6tNS6/pJm/evmeErJs=",
+      "module": "github.com/gopernicus/gopernicus/pockets/authorization/stores/turso",
+      "source_entries": 42,
+      "source_inventory_sha256": "4bbd58391936f77e69462002bbf6be543a7d74ee512a88511580fcf8fbcdf664",
+      "sum": "h1:BGVwiZdrO/+50bDAFKaGPrNtTifDlU00ugbhrikkM+k=",
+      "tag": "pockets/authorization/stores/turso/v0.10.0",
+      "version": "v0.10.0"
+    },
+    {
+      "directory": "pockets/authorization/stores/pgx",
+      "go_mod_sum": "h1:Erf4RoU0D5xakMhW4hrl4UTPdEQ2vj7GFA3LotUQTBg=",
+      "module": "github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx",
+      "source_entries": 50,
+      "source_inventory_sha256": "55b787e785566e4b38352097841e6351bba439d5eba8638e117598e82aebab74",
+      "sum": "h1:TWwLo2Oc66IJLs506tVYaj1iDUlHG7nrLi0d6w45N70=",
+      "tag": "pockets/authorization/stores/pgx/v0.11.0",
+      "version": "v0.11.0"
+    }
+  ],
+  "candidate": {
+    "passed": true,
+    "gowork": "off",
+    "no_replacements": true,
+    "report": "/tmp/gopernicus-lookup-snapshots/candidate/results.json",
+    "sha256": "d54441bbb8f0dbb952a2f7f8aa554ce6cfc39ba38d8d548cd166d5e16433f25f"
+  },
+  "consumer_candidate": {
+    "passed": true,
+    "gowork": "off",
+    "no_replacements": true,
+    "checksum_exemptions": [],
+    "report": "/tmp/gopernicus-lookup-snapshots/consumer/candidate-results.json",
+    "sha256": "344062e6c855c810a2a00dcb013d4734b1a1dc217fbfd064cad7c976f0d99e12"
+  },
+  "scope": "Release durable lookup snapshots and bounded contention retries; no host deployment",
+  "retained_versions": {
+    "pockets/authorization/stores/goredis": "v0.2.0",
+    "integrations/datastores/turso": "v0.6.0",
+    "integrations/datastores/pgxdb": "v0.8.1"
+  },
+  "unverified": [
+    "Segovia /home HTTP benchmark",
+    "remote Turso/sqld",
+    "Firestore emulator/live",
+    "production load and capacity"
+  ],
+  "workspace": {
+    "passed": true,
+    "command": "make check",
+    "candidate_proxy": true,
+    "log": "/tmp/gopernicus-lookup-snapshots/release-make-check.log",
+    "sha256": "417ff00ef4644f211c8c0fe5066033270be92d18062ae42caa9dc860330c619d"
+  }
+}

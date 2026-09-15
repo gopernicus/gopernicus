@@ -230,6 +230,23 @@ Cursors bind the query, principal, resource type, permission, owning model and
 model digest. Reusing them for a changed query or model fails with an invalid
 cursor error. They are continuation state, not authorization grants.
 
+Relationship lookups use one durable read snapshot per call in the Turso
+(SQLite), PostgreSQL and memory adapters. Candidate discovery, verification
+batches and page lookahead see the same state. A concurrent revocation is visible
+to the next call; separate pages do not share a snapshot. SQL lookups inside an
+ambient transaction retain that transaction's pending writes and isolation level
+without committing or rolling it back.
+
+Custom model-scoped readers can implement `relationships.LookupSnapshotter`.
+Readers without it (including Firestore), and ambient transactions with weaker
+isolation, retain discovery/verification checks. If a discovered grant is denied
+during verification, the pocket retries the entire lookup twice with fresh
+attempt-local state. Three mismatches return `model.ErrEnumerationContended`,
+wrapping `sdk.ErrUnavailable` (HTTP 503), with no partial IDs or cursor. Hosts can
+use `errors.Is` to add `Retry-After`. Store errors, cancellation and exhausted
+evaluation budgets are returned immediately. Unrelated writes do not themselves
+invalidate enumeration; there is no global relationship revision guard.
+
 The host owns content ordering, SQL joins, counts and pagination semantics.
 `examples/auth-cms` exercises separate-store ID filtering, ordered candidates and
 SQL pushdown. Do not join authorization rows with ad hoc semantics: a correct
