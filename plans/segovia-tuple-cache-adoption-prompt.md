@@ -1,5 +1,8 @@
 # Segovia: adopt and benchmark the released TupleCache
 
+Release source: `83d48957714e53e6c1dbcc1d2a62ef4650c448e8` on gopernicus main.
+All five published modules passed normal public checksum/source verification.
+
 Implement the released gopernicus TupleCache and Through batching changes in
 Segovia, then benchmark them on our representative dataset. Do the implementation
 and measurements, not just a design proposal.

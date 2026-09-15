@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "date": "2026-09-15",
-  "status": "candidate_verified",
+  "status": "published_from_main_and_public_verified",
   "main_before": "4fb076155d98a58bc46e08a97154f1259ed938e9",
   "modules": [
     {
@@ -12,7 +12,10 @@
       "sum": "h1:6Zjn6DoaZsDKkAI1EdfQWSBJuYjM+5OV748y0qbRJj8=",
       "go_mod_sum": "h1:SWt/blN2Csf2p8dohOtJXbINP/BT5Z3oV9/GOxkFXGo=",
       "source_inventory_sha256": "2f53660867b03b213d53091ad427e7a89893ab6092c8de441f0f423a260013ee",
-      "source_entries": 185
+      "source_entries": 185,
+      "published": true,
+      "tag_object": "fcbd99f6123895c99542c4a96d7ddd42f33369a3",
+      "release_commit": "83d48957714e53e6c1dbcc1d2a62ef4650c448e8"
     },
     {
       "directory": "pockets/authorization/stores/turso",
@@ -22,7 +25,10 @@
       "sum": "h1:Bfui0tauWCH5orOwHUyjbpQjhqfWualTVfx+Fm3geWY=",
       "go_mod_sum": "h1:Xky1RZZGRoHYeAT3w7ek2Rc1yWr+hMMW3qINTZPCvjU=",
       "source_inventory_sha256": "94b1a5f90be31856bb8403ad8a579a7a56f83e2cee2d14cbaca3d18327c46e12",
-      "source_entries": 40
+      "source_entries": 40,
+      "published": true,
+      "tag_object": "8cf29277e4289f9028a19dfe798a179d0104730f",
+      "release_commit": "83d48957714e53e6c1dbcc1d2a62ef4650c448e8"
     },
     {
       "directory": "pockets/authorization/stores/pgx",
@@ -32,7 +38,10 @@
       "sum": "h1:F//oY10q1NRUfKJbDW4vsJ70nbqeRpMs8OjvlVH1cxo=",
       "go_mod_sum": "h1:8JiK0Od+mZHjZsn6raBhGbzdKgZhLorxR57xIb8Giek=",
       "source_inventory_sha256": "6ed427bfa69285142e26b2d81135a3964c3c206b78edce764b3a780c24c37902",
-      "source_entries": 48
+      "source_entries": 48,
+      "published": true,
+      "tag_object": "d2e5ba3668300941f608b34cf5228328521dde79",
+      "release_commit": "83d48957714e53e6c1dbcc1d2a62ef4650c448e8"
     },
     {
       "directory": "pockets/authorization/stores/firestore",
@@ -42,7 +51,10 @@
       "sum": "h1:JQWPmhRU0daTHl/eSNuMah7ZyhiTEyMKc3zSLLawYP4=",
       "go_mod_sum": "h1:4ekA8fnfD6M0y/6hMt+38hXiq3HGHaiCVbNFC7xSu3U=",
       "source_inventory_sha256": "1fdb2baf81b13dd3b13970a810c9e850807a9f926bc2de33c0c898059336e5a5",
-      "source_entries": 58
+      "source_entries": 58,
+      "published": true,
+      "tag_object": "53cdec40f49e5f5f6f35f25612ed7c3f982ae256",
+      "release_commit": "83d48957714e53e6c1dbcc1d2a62ef4650c448e8"
     },
     {
       "directory": "pockets/authorization/stores/goredis",
@@ -52,7 +64,10 @@
       "sum": "h1:NtQKmp2VGR9YJsOF04uD6VTPvU2bSIUde5H/PiCvn7M=",
       "go_mod_sum": "h1:LcOcTgmX3qQNtSxmGJgl/ZBdwBIemFNQlpMDsz8qtyQ=",
       "source_inventory_sha256": "994a04a0e95f32501956f13727bf145b5a2b4f45ace984d059acf404753b4619",
-      "source_entries": 7
+      "source_entries": 7,
+      "published": true,
+      "tag_object": "f70f989ee8f808a293c924bb336fe91339274286",
+      "release_commit": "83d48957714e53e6c1dbcc1d2a62ef4650c448e8"
     }
   ],
   "candidate": {
@@ -70,10 +85,48 @@
     "representative application concurrent load and capacity"
   ],
   "publication": {
-    "passed": false
+    "release_commit": "83d48957714e53e6c1dbcc1d2a62ef4650c448e8",
+    "main_push_verified": true,
+    "tags": [
+      {
+        "tag": "pockets/authorization/v0.15.0",
+        "tag_object": "fcbd99f6123895c99542c4a96d7ddd42f33369a3",
+        "commit": "83d48957714e53e6c1dbcc1d2a62ef4650c448e8"
+      },
+      {
+        "tag": "pockets/authorization/stores/turso/v0.9.0",
+        "tag_object": "8cf29277e4289f9028a19dfe798a179d0104730f",
+        "commit": "83d48957714e53e6c1dbcc1d2a62ef4650c448e8"
+      },
+      {
+        "tag": "pockets/authorization/stores/pgx/v0.10.0",
+        "tag_object": "d2e5ba3668300941f608b34cf5228328521dde79",
+        "commit": "83d48957714e53e6c1dbcc1d2a62ef4650c448e8"
+      },
+      {
+        "tag": "pockets/authorization/stores/firestore/v0.3.0",
+        "tag_object": "53cdec40f49e5f5f6f35f25612ed7c3f982ae256",
+        "commit": "83d48957714e53e6c1dbcc1d2a62ef4650c448e8"
+      },
+      {
+        "tag": "pockets/authorization/stores/goredis/v0.1.0",
+        "tag_object": "f70f989ee8f808a293c924bb336fe91339274286",
+        "commit": "83d48957714e53e6c1dbcc1d2a62ef4650c448e8"
+      }
+    ],
+    "passed": true,
+    "prior_tags_preserved": true
   },
   "public_verification": {
-    "passed": false
+    "passed": true,
+    "report": "/private/tmp/tuple-cache-public-20260915-2/results.json",
+    "sha256": "cdd0334ed58de44b77d446f764231c058f96a4f8a09bcb8f734bed245a60446c",
+    "gowork": "off",
+    "checksum_exemptions": [],
+    "no_replacements": true,
+    "all_five_origins_match_release_commit": true,
+    "source_unchanged": true,
+    "initial_sumdb_indexing_delay_resolved": true
   },
   "workspace": {
     "passed": true,
@@ -82,5 +135,45 @@
     "candidate_proxy": true,
     "log": "/private/tmp/tuple-cache-release-make-check.log",
     "sha256": "d39365f8fda0ced9b5dd1b4f0afae653573cabd0092d46ad6948cb15dda064ae"
+  },
+  "release_commit": "83d48957714e53e6c1dbcc1d2a62ef4650c448e8",
+  "ci": {
+    "passed": false,
+    "run_id": 35011217829,
+    "log": "/private/tmp/tuple-cache-release-ci-failed.log",
+    "failure": "Unchanged SDK filestorage TestDisk_Conformance/RangeEdges: Linux seek at MaxInt64 returns EINVAL. SDK has no diff between baseline and release; this is outside the five released modules.",
+    "module_source_unchanged": true
+  },
+  "consumer": {
+    "passed": true,
+    "checks": [
+      {
+        "name": "tidy",
+        "exit_code": 0
+      },
+      {
+        "name": "build",
+        "exit_code": 0
+      },
+      {
+        "name": "vet",
+        "exit_code": 0
+      },
+      {
+        "name": "real_sqlite_redis_behavior",
+        "exit_code": 0
+      }
+    ],
+    "gowork": "off",
+    "no_replacements": true,
+    "checksum_exemptions": [],
+    "source": "published versioned modules",
+    "report": "/private/tmp/tuple-cache-release-consumer/results.json",
+    "sha256": "d25e12eae0b1bf1c849d738f1fff78dcc4b2fcd6e58a9a467dc7f445821248b6",
+    "behavior_log": "/private/tmp/tuple-cache-release-consumer/behavior.log",
+    "real_sqlite_redis": true,
+    "checks_under_serial_writes": 36600,
+    "sql_during_those_checks": 0,
+    "redis_fixture_stopped": true
   }
 }

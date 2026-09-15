@@ -4828,7 +4828,11 @@ This records implemented behavior, not release approval. See the
 
 ## AUDIT-037: Raw authorization TupleCache replaces generation caching
 
-- **Implemented:** 2026-09-15; unreleased. Supersedes AUDIT-035.
+- **Implemented and released:** 2026-09-15. Supersedes AUDIT-035.
+  Core v0.15.0; Turso v0.9.0; PostgreSQL v0.10.0; Firestore v0.3.0;
+  new go-redis adapter v0.1.0. Source: `83d48957` on main.
+  All five published archives passed public checksum/source and isolated
+  build/test/vet verification; see the release manifest.
 - **Modules:** authorization core; Turso, PostgreSQL and Firestore stores; new
   `pockets/authorization/stores/goredis` adapter.
 - **Impact:** breaking cache API replacement and optional SQL migration 0002.

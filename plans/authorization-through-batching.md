@@ -123,3 +123,8 @@ All Go commands use `GOCACHE=/tmp/gopernicus-through-batching/cache`.
 - Final adoption check: point Segovia at these framework changes, rerun its
   `AUTH_DB_LOG_QUERIES=true` 366-space lookup, page-of-50 and 128-dashboard
   filtering workloads, and compare returned IDs as well as queries and latency.
+
+## Release
+
+Included in authorization core v0.15.0 and coordinated store releases from main
+`83d48957`; see [the TupleCache release plan](authorization-tuple-cache-release.md).

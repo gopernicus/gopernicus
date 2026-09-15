@@ -1,6 +1,6 @@
 # Authorization TupleCache release — 2026-09-15
 
-Status: VERIFIED CANDIDATE; PUBLICATION PENDING. The owner explicitly requested release, followed by a prompt
+Status: PUBLISHED FROM MAIN AND PUBLICLY VERIFIED. The owner explicitly requested release, followed by a prompt
 for Segovia adoption and benchmarking. This authorizes module publication; it
 does not authorize host migrations, production mutations or deployment here.
 
@@ -76,3 +76,45 @@ DecisionCache, no immediate-revocation claim before asynchronous delivery.
   integration/live compilation and architecture guards using the candidate proxy.
   Log: `/private/tmp/tuple-cache-release-make-check.log`. Candidate inventories
   were rechecked unchanged. Unrelated owner plans remain unstaged.
+
+## Publication
+
+- Source commit `83d48957714e53e6c1dbcc1d2a62ef4650c448e8` was fast-forwarded to
+  main, followed by all five dependency-ordered annotated tags at that commit.
+  Existing remote tags were checked unchanged. All original owner plan contents
+  were hash-verified preserved and remain uncommitted.
+- Evidence: `/private/tmp/tuple-cache-publication-20260915/publication.json`.
+- Initial public verification resolved the exact release origin but sum.golang.org
+  had not indexed the new revision. This remains pending; no checksum bypass or
+  candidate cache was used for public verification.
+
+## Remote CI observation
+
+The GitHub Linux `check` run 35011217829 fails in unchanged SDK
+`filestorage.TestDisk_Conformance/RangeEdges`: seeking to MaxInt64 returns EINVAL.
+SDK has no diff between baseline `4fb07615` and release `83d48957`; the source
+last changed in `c3f8b4ad`. The local macOS full gate passed. This remote global
+CI failure is not reported as green, and no unrelated SDK patch or retag is
+folded into the five-module authorization release. Log:
+`/private/tmp/tuple-cache-release-ci-failed.log`.
+
+## Final public verification
+
+All five module archives passed normal public proxy/sumdb verification. ZIP and
+go.mod checksums, complete file inventories and origins match the verified
+candidate and main release commit `83d48957714e53e6c1dbcc1d2a62ef4650c448e8`.
+Independent versioned module graphs, build/test/vet and integration/live compile
+checks passed with GOWORK=off, no replacements and no checksum exemptions.
+The initial checksum-service indexing delay cleared. Evidence:
+`/private/tmp/tuple-cache-public-20260915-2/results.json`.
+
+A standalone versioned consumer also tidied, built, vetted and exercised actual
+SQLite and Redis with the workspace disabled. Its 366-resource warm checks and
+100 serial unrelated mutation/publication cycles used zero SQL during checks;
+revocation, disposed outbox, old-Redis restoration and empty-mirror rebuild passed.
+The temporary Redis process stopped. This does not replace the concurrent host
+benchmark required by the Segovia prompt. Evidence:
+`/private/tmp/tuple-cache-release-consumer/results.json` and `behavior.log`.
+
+The five-module release and handoff are complete. The unchanged SDK Linux CI
+failure above and deployment/application-scale checks remain explicitly open.

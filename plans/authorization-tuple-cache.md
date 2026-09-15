@@ -1,7 +1,9 @@
 # Authorization TupleCache
 
 Status: COMPLETE for upstream implementation and local verification — 2026-09-15.
-Unreleased; host adoption and deployment-specific checks remain below. The owner selected raw tuple caching
+Released from main `83d48957`; public verification is tracked in
+[the release plan](authorization-tuple-cache-release.md). Host adoption and
+deployment-specific checks remain below. The owner selected raw tuple caching
 before any DecisionCache, and retirement of the previous global-generation
 cache. The owner clarified that Redis holds a maintained raw tuple mirror,
 reconstructed from the configured store when necessary; processed outbox events
