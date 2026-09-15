@@ -12,8 +12,8 @@ Turso connector `v0.5.1`, PostgreSQL connector `v0.8.1`,
 authorization core `v0.14.1`, and authorization stores Turso `v0.8.1`, PostgreSQL
 `v0.9.1`, Firestore `v0.2.1`. Existing tags remain immutable. Prior accepted
 cloud/performance gaps remain disclosed; no new verification claim is implied.
-All candidate and repository checks passed. Public consumer verification awaits
-proxy indexing. See [main integration plan](plans/authorization-cache-main-release.md)
+All candidate, repository and six-module public checksum/source/build/test/vet
+checks passed after proxy indexing. See [main integration plan](plans/authorization-cache-main-release.md)
 and [manifest](plans/authorization-cache-main-release-manifest.json).
 
 ## Authorization read caching (published 2026-09-14)

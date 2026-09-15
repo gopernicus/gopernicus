@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "date": "2026-09-14",
-  "status": "published_from_main_public_verification_pending",
+  "status": "published_from_main_and_public_verified",
   "main_before": "437da308c0e106acde5aab9cd3214f144749530b",
   "integration_branch": "authorization-cache-main-20260914",
   "merge_commit": "dda6699debb17544c05723c7a41ec4e17255a5ce",
@@ -125,5 +125,16 @@
   "main_push_verified": true,
   "complete_cache_ancestry_in_main": true,
   "prior_tags_preserved": true,
-  "local_checkout_branch": "main"
+  "local_checkout_branch": "main",
+  "public_verification": {
+    "passed": true,
+    "report": "/private/tmp/authorization-cache-main-public-20260914/results.json",
+    "sha256": "fbd8220c3c5ba058817a1d69ac13a94bb727fdd774eb28130f31a25352e8d00e",
+    "origins_report": "/private/tmp/authorization-cache-main-public-20260914/publication-verification.json",
+    "all_six_origins_match_release_commit": true,
+    "gowork": "off",
+    "no_replacements": true,
+    "checksum_exemptions": [],
+    "source_unchanged": true
+  }
 }

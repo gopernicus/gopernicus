@@ -1,6 +1,6 @@
 # Authorization cache integration and release from main — 2026-09-14
 
-Status: MERGED INTO MAIN AND PUBLISHED; PUBLIC VERIFICATION PENDING. Owner explicitly requested integrating all cache work into
+Status: MERGED INTO MAIN, PUBLISHED AND PUBLICLY VERIFIED. Owner explicitly requested integrating all cache work into
 updated main, adapting to newly merged work where needed, then publishing fresh
 versions from main. Existing tags remain immutable. Prior accepted cloud and
 performance verification gaps persist; no host deployment is authorized.
@@ -103,3 +103,18 @@ required solely for this cache train.
 - Standard public checksum/consumer verification is pending proxy propagation;
   no checksum bypass or tag replacement was used. Prior local/candidate checks
   remain passed; this public gate is recorded separately.
+
+
+## Final public verification
+
+All six patch modules passed standard public checksum/source verification and
+isolated dependency graphs, build/test/vet, integration-only and integration/live
+compilation. Every Origin matches main release commit `5aa0b29e` and its exact
+tag/subdirectory. No replacements, checksum exemptions or candidate cache entries
+were used. Source remained unchanged. Evidence:
+`/private/tmp/authorization-cache-main-public-20260914/results.json` and its
+`publication-verification.json`. The Go proxy delay cleared before these checks;
+failed readiness probes were not treated as successful verification.
+
+Main integration and the rerelease are complete. Only the previously accepted
+cloud/performance qualification gaps remain; no host deployment was performed.
