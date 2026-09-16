@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"reflect"
 	"sync/atomic"
@@ -27,7 +28,22 @@ type Option func(*Policy)
 
 func WithPolicy(policy Policy) Option { return func(p *Policy) { *p = policy } }
 
-type Stats struct{ Hits, Fallbacks, Publications, Rebuilds, PollFailures uint64 }
+// PollStats describes the last completed delivery attempt. Changes and Tuples
+// are the captured snapshot sizes, not a live query of the source's backlog.
+type PollStats struct {
+	StartedAt                                       time.Time
+	Duration, SnapshotDuration, PublicationDuration time.Duration
+	Changes, Tuples                                 int
+	Full                                            bool
+	FailureStage                                    string
+}
+
+type Stats struct {
+	Hits, Fallbacks, Publications, Rebuilds, PollFailures uint64
+	CapacityFallbacks, CapacityFailures, PollConflicts    uint64
+	LastSuccessfulPoll                                    time.Time
+	LastPoll                                              PollStats
+}
 
 // TupleCache borrows its source/backend. The host drives Poll (a workers.WorkFunc)
 // and may wake that same worker after commit. Constructors start no goroutines.
@@ -40,6 +56,9 @@ type TupleCache struct {
 	wake                                              chan struct{}
 	closed, ready                                     atomic.Bool
 	hits, fallbacks, publications, rebuilds, failures atomic.Uint64
+	capacityFallbacks, capacityFailures, conflicts    atomic.Uint64
+	lastSuccess                                       atomic.Int64
+	lastPoll                                          atomic.Pointer[PollStats]
 }
 
 func New(source Source, backend Backend, opts ...Option) (*TupleCache, error) {
@@ -103,12 +122,33 @@ func (c *TupleCache) Notify() {
 // WakeChannel connects Notify to workers.WithWakeChannel. Do not close it.
 func (c *TupleCache) WakeChannel() <-chan struct{} { return c.wake }
 func (c *TupleCache) Stats() Stats {
-	return Stats{c.hits.Load(), c.fallbacks.Load(), c.publications.Load(), c.rebuilds.Load(), c.failures.Load()}
+	stats := Stats{
+		Hits: c.hits.Load(), Fallbacks: c.fallbacks.Load(), Publications: c.publications.Load(),
+		Rebuilds: c.rebuilds.Load(), PollFailures: c.failures.Load(),
+		CapacityFallbacks: c.capacityFallbacks.Load(), CapacityFailures: c.capacityFailures.Load(),
+		PollConflicts: c.conflicts.Load(),
+	}
+	if nanos := c.lastSuccess.Load(); nanos != 0 {
+		stats.LastSuccessfulPoll = time.Unix(0, nanos)
+	}
+	if poll := c.lastPoll.Load(); poll != nil {
+		stats.LastPoll = *poll
+	}
+	return stats
 }
 
 // Poll uses a consistent source snapshot for each complete publication. SQL
 // acknowledgements delete exact event IDs; sequence gaps are never skipped.
-func (c *TupleCache) Poll(ctx context.Context) (err error) {
+func (c *TupleCache) Poll(ctx context.Context) error { return c.poll(ctx, false) }
+
+// Rebuild replaces the mirror from current authoritative facts, bypassing the
+// decoding of obsolete outbox payloads in the bundled SQL sources. It retains
+// the same freshness bound, publication gate and exact-ID acknowledgement as
+// Poll. Hosts can use it after a backlog exceeds delta publication capacity.
+// A concurrent local delivery returns workers.ErrNoWork; retry after it finishes.
+func (c *TupleCache) Rebuild(ctx context.Context) error { return c.poll(ctx, true) }
+
+func (c *TupleCache) poll(ctx context.Context, rebuild bool) (err error) {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -124,10 +164,24 @@ func (c *TupleCache) Poll(ctx context.Context) (err error) {
 	default:
 		return workers.ErrNoWork
 	}
+	report := PollStats{StartedAt: time.Now()}
+	stage := "state"
+	succeeded := false
 	defer func() {
-		if err != nil {
+		report.Duration = time.Since(report.StartedAt)
+		if !succeeded {
 			c.failures.Add(1)
+			report.FailureStage = stage
+			if errors.Is(err, ErrCapacity) {
+				c.capacityFailures.Add(1)
+			}
+			if errors.Is(err, ErrConflict) {
+				c.conflicts.Add(1)
+			}
+		} else {
+			c.lastSuccess.Store(time.Now().UnixNano())
 		}
+		c.lastPoll.Store(&report)
 	}()
 	ctx, cancel := context.WithTimeout(ctx, c.policy.PollTimeout)
 	defer cancel()
@@ -139,9 +193,19 @@ func (c *TupleCache) Poll(ctx context.Context) (err error) {
 		return ErrBinding
 	}
 	started := time.Now()
-	snapshot, err := c.source.Snapshot(ctx, before.Receipt)
+	stage = "snapshot"
+	receipt := before.Receipt
+	if rebuild {
+		receipt = ""
+	}
+	snapshot, err := c.source.Snapshot(ctx, receipt)
+	report.SnapshotDuration = time.Since(started)
 	if err != nil {
 		return err
+	}
+	report.Changes, report.Tuples, report.Full = len(snapshot.Changes), len(snapshot.Tuples), snapshot.Full
+	if rebuild && !snapshot.Full {
+		return ErrUnavailable
 	}
 	if !snapshot.Full && (before.Binding != c.Binding() || before.Receipt == "" || before.Receipt != snapshot.Receipt) {
 		return ErrConflict
@@ -155,6 +219,7 @@ func (c *TupleCache) Poll(ctx context.Context) (err error) {
 		next = State{Binding: c.Binding(), Receipt: hex.EncodeToString(b[:])}
 	}
 	remaining := c.policy.MaxStaleness - time.Since(started)
+	stage = "freshness"
 	if remaining <= 0 {
 		return ErrUnavailable
 	}
@@ -164,17 +229,23 @@ func (c *TupleCache) Poll(ctx context.Context) (err error) {
 	if c.closed.Load() {
 		return ErrUnavailable
 	}
-	if err := c.backend.Publish(ctx, before, next, snapshot, remaining); err != nil {
+	stage = "publication"
+	publishing := time.Now()
+	err = c.backend.Publish(ctx, before, next, snapshot, remaining)
+	report.PublicationDuration = time.Since(publishing)
+	if err != nil {
 		return err
 	}
 	if next == before {
 		c.ready.Store(true)
+		succeeded = true
 		return nil
 	}
 	ids := make([]string, len(snapshot.Changes))
 	for i, change := range snapshot.Changes {
 		ids[i] = change.ID
 	}
+	stage = "acknowledgement"
 	if err := c.source.Acknowledge(ctx, snapshot.Receipt, next.Receipt, ids); err != nil {
 		return err
 	}
@@ -183,6 +254,7 @@ func (c *TupleCache) Poll(ctx context.Context) (err error) {
 		c.rebuilds.Add(1)
 	}
 	c.ready.Store(true)
+	succeeded = true
 	return nil
 }
 
@@ -208,6 +280,9 @@ func (c *TupleCache) Run(ctx context.Context, evaluate func(context.Context, Che
 			c.hits.Add(1)
 			return err
 		}
+		if errors.Is(err, ErrCapacity) {
+			c.capacityFallbacks.Add(1)
+		}
 	}
 	if err := ctx.Err(); err != nil {
 		return err
@@ -220,13 +295,19 @@ func (c *TupleCache) attempt(ctx context.Context, evaluate func(context.Context,
 	cacheCtx, cancel := context.WithTimeout(ctx, c.policy.ReadTimeout)
 	defer cancel()
 	state, err := c.backend.State(cacheCtx)
-	if err != nil || state.Binding != c.Binding() || state.Receipt == "" {
-		return false, nil
+	if err != nil {
+		return false, err
+	}
+	if state.Binding != c.Binding() || state.Receipt == "" {
+		return false, ErrUnavailable
 	}
 	reader := &cachedReads{ctx: cacheCtx, backend: c.backend, state: state, sets: make(map[SetKey][]relationships.SubjectRef)}
 	defer func() { reader.closed = true }()
 	err = evaluate(cacheCtx, reader)
 	_, validationErr := c.backend.Read(cacheCtx, state, nil)
 	valid := !reader.failed && validationErr == nil && cacheCtx.Err() == nil && !c.closed.Load()
+	if !valid {
+		return false, errors.Join(err, reader.failure, validationErr, cacheCtx.Err())
+	}
 	return valid, err
 }

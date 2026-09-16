@@ -27,12 +27,31 @@ func (s *tupleSource) Snapshot(ctx context.Context, mirroredReceipt string) (tup
 		return snapshot, err
 	}
 	snapshot.Full = mirroredReceipt == "" || mirroredReceipt != snapshot.Receipt
-	rows, err := tx.Query(ctx, "SELECT id::text, before_tuple, after_tuple, reset FROM "+s.cfg.schema.Table("iam_tuple_outbox")+" ORDER BY id")
+	if !snapshot.Full {
+		if err := tx.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM "+s.cfg.schema.Table("iam_tuple_outbox")+" WHERE reset)").Scan(&snapshot.Full); err != nil {
+			return snapshot, err
+		}
+	}
+	columns := "id::text, before_tuple, after_tuple, reset"
+	if snapshot.Full {
+		// Current facts replace all pending changes. Only their exact identities
+		// are needed for acknowledgement, even if obsolete payloads are invalid.
+		columns = "id::text"
+	}
+	rows, err := tx.Query(ctx, "SELECT "+columns+" FROM "+s.cfg.schema.Table("iam_tuple_outbox")+" ORDER BY id")
 	if err != nil {
 		return snapshot, err
 	}
 	for rows.Next() {
 		var change tuplecache.Change
+		if snapshot.Full {
+			if err := rows.Scan(&change.ID); err != nil {
+				rows.Close()
+				return snapshot, err
+			}
+			snapshot.Changes = append(snapshot.Changes, change)
+			continue
+		}
 		var before, after []byte
 		var reset bool
 		if err := rows.Scan(&change.ID, &before, &after, &reset); err != nil {
@@ -53,7 +72,6 @@ func (s *tupleSource) Snapshot(ctx context.Context, mirroredReceipt string) (tup
 			rows.Close()
 			return snapshot, tuplecache.ErrUnavailable
 		}
-		snapshot.Full = snapshot.Full || reset
 		snapshot.Changes = append(snapshot.Changes, change)
 	}
 	rows.Close()
@@ -73,7 +91,7 @@ func (s *tupleSource) Snapshot(ctx context.Context, mirroredReceipt string) (tup
 			}
 			if err := tuple.Validate(); err != nil {
 				rows.Close()
-				return snapshot, err
+				return snapshot, fmt.Errorf("tuple cache current fact: %w: %v", tuplecache.ErrUnavailable, err)
 			}
 			snapshot.Tuples = append(snapshot.Tuples, tuple)
 		}

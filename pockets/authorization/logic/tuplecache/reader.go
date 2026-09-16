@@ -14,6 +14,7 @@ type cachedReads struct {
 	state          State
 	sets           map[SetKey][]relationships.SubjectRef
 	failed, closed bool
+	failure        error
 }
 
 func (r *cachedReads) ForChecks(model relationships.ReadModel) relationships.CheckReader {
@@ -59,6 +60,7 @@ func (r *cachedReads) read(ctx context.Context, keys []SetKey) ([][]relationship
 		values, err := r.backend.Read(ctx, r.state, missing)
 		if err != nil {
 			r.failed = true
+			r.failure = err
 			return nil, err
 		}
 		if len(values) != len(missing) {

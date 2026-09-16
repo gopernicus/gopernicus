@@ -5,7 +5,16 @@ This module implements `logic/tuplecache.Backend` over a host-owned
 implementation of `tuplecache.Source`; this module contains no SQL assumptions.
 
 ```go
-backend, err := goredis.NewTupleCache(client, "my-relationship-store")
+client := redis.NewClient(&redis.Options{
+    Addr: "localhost:6379",
+    ContextTimeoutEnabled: true,
+})
+backend, err := goredis.NewTupleCache(client, "my-relationship-store",
+    goredis.WithLimits(goredis.Limits{
+        MaxReadBytes: 1 << 20,
+        MaxMutationBytes: 4 << 20,
+    }),
+)
 ```
 
 The namespace is required and must belong exclusively to one tuple store. The
@@ -13,6 +22,11 @@ constructor starts no goroutines and performs no I/O. The host retains ownership
 of the client, its connection settings, persistence, memory capacity, and shutdown.
 Compose the backend with `tuplecache.New(source, backend, ...)` and drive that
 runtime's poll function through the host's worker lifecycle.
+
+The client must enable `ContextTimeoutEnabled`; otherwise construction returns
+`sdk.ErrInvalidInput`. This ensures the runtime's `ReadTimeout` also bounds Redis
+socket I/O. Construction never mutates the borrowed client's options. Host hooks
+and custom dialers remain responsible for honoring context deadlines themselves.
 
 ## Redis key
 
@@ -63,7 +77,8 @@ while the complete mirror has the expected receipt and remains eligible.
 
 ## Atomicity, freshness, and recovery
 
-Delta publication validates and transforms all affected sets before writing.
+Delta publication checks encoded size, then validates and transforms all affected
+sets before writing.
 The Lua script applies the whole captured source batch atomically. It removes
 the complete marker before modifying fields and restores it last, so an
 operational error during mutation leaves an unavailable mirror instead of
@@ -98,10 +113,52 @@ work, not the rebuild source.
 The complete mirror occupies one Redis hash and therefore one Redis shard. A
 large relation set is encoded as one field value; mutations decode and encode
 the touched sets, and a captured transaction is published as one Lua script.
-Capacity and script duration must be measured against the host's relationship
-sizes. This is not a partitioned or Redis Cluster adapter.
+
+`WithLimits(Limits{...})` replaces the complete record. Zero fields select finite
+defaults; negative values and nil options return `sdk.ErrInvalidInput`.
+
+| Limit | Default | Accounting |
+|---|---:|---|
+| `MaxReadBytes` | 1 MiB | Aggregate raw JSON bytes returned by one `Read`, including repeated keys and two bytes per absent set. |
+| `MaxMutationBytes` | 4 MiB | Incoming delta JSON plus each distinct existing touched field value. Full rebuilds bound each field name plus value, and each upload chunk, separately. |
+
+Reads check field lengths inside the same Lua script before fetching values or
+decoding JSON. Deltas bound incoming encoding incrementally in Go, then check
+existing field lengths before Lua decodes or transforms any tuple set. An
+over-limit operation returns `tuplecache.ErrCapacity`, which also matches
+`tuplecache.ErrUnavailable`. A permission decision retries from the authoritative
+snapshot; a failed publication preserves the old mirror and leaves pending work
+unacknowledged. Results are never truncated.
+
+Full rebuilds allow the entire mirror to exceed these per-operation limits. They
+reject an oversized individual field before creating a temporary hash, and send
+bounded chunks. A rebuild can recover an oversized pending delta batch when its
+current individual fields fit: invoke the runtime's `Rebuild(ctx)`. A set near
+the mutation limit may be rebuildable but too large to update by delta because
+the delta includes both existing data and incoming operations. Raise limits only
+after measuring the workload or keep those decisions on durable reads.
+
+Limits bound encoded work, not Redis/Go memory byte for byte, total full-source
+snapshot memory, or wall-clock script duration. Full rebuilds still materialize
+the complete source and both indexes in Go. JSON decoding has additional allocation
+overhead, and Lua runs synchronously on the Redis server. Capacity and script
+duration must be measured against the host's relationship sizes. This is not a
+partitioned or Redis Cluster adapter.
 
 Run `go build ./...`, `go test ./...`, `go test -race ./...`, and `go vet ./...`
 from this module. Tests launch isolated `redis-server` processes using private
 Unix sockets, including an AOF restart proof. They skip explicitly when the
 executable is unavailable; they do not connect to a host or production Redis.
+
+Run retained high-cardinality benchmarks with:
+
+```sh
+go test -run '^$' -bench '^BenchmarkTupleCache$' -benchmem -benchtime=1s -count=3
+```
+
+The matrix uses 100, 1,000, 10,000 and 100,000 documents assigned to one principal,
+measuring accepted/rejected reverse-set reads, accepted/rejected single-tuple
+changes to that hot set, and full rebuilds. Accepted benchmarks explicitly raise
+limits to 16 MiB to expose costs beyond defaults; rejected benchmarks set a limit
+below the encoded operation size. Fixture creation and Redis process startup are
+excluded. `B/op` and `allocs/op` measure the Go client, not Redis Lua allocations.

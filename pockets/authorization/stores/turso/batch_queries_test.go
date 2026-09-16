@@ -298,6 +298,9 @@ func TestThroughBatchSQLiteTupleCache(t *testing.T) {
 
 func BenchmarkThroughBatchSQLite(b *testing.B) {
 	repos, ids, count := batchQueryFixture(b, 366)
+	if err := repos.Relationships.CreateRelationships(b.Context(), []relationships.CreateRelationship{{ResourceType: "space", ResourceID: "direct", Relation: "viewer", SubjectType: "user", SubjectID: "alice"}}); err != nil {
+		b.Fatal(err)
+	}
 	for _, mode := range []string{"sequential", "batched"} {
 		b.Run(mode, func(b *testing.B) {
 			store := repos.Relationships
@@ -309,18 +312,47 @@ func BenchmarkThroughBatchSQLite(b *testing.B) {
 				b.Fatal(err)
 			}
 			principal := authmodel.PrincipalRef{Type: "user", ID: "alice"}
-			b.ReportAllocs()
-			b.ResetTimer()
-			queries := 0
-			for b.Loop() {
-				*count = 0
-				got, err := parts.Service.FilterAuthorized(context.Background(), principal, "view", "dashboard", ids)
-				if err != nil || len(got) != len(ids) {
-					b.Fatalf("filter: %d/%v", len(got), err)
-				}
-				queries = *count
+			requests := make([]authmodel.CheckRequest, len(ids))
+			for i, id := range ids {
+				requests[i] = authmodel.CheckRequest{Principal: principal, Permission: "view", Resource: authmodel.Resource{Type: "dashboard", ID: id}}
 			}
-			b.ReportMetric(float64(queries), "queries/op")
+			for _, operation := range []string{"direct", "through", "batch", "filter"} {
+				b.Run(operation, func(b *testing.B) {
+					b.ReportAllocs()
+					queries := 0
+					for b.Loop() {
+						*count = 0
+						switch operation {
+						case "direct", "through":
+							req := requests[0]
+							if operation == "direct" {
+								req.Resource = authmodel.Resource{Type: "space", ID: "direct"}
+							}
+							result, err := parts.Service.Check(b.Context(), req)
+							if err != nil || !result.Allowed {
+								b.Fatalf("check: %+v/%v", result, err)
+							}
+						case "batch":
+							results, err := parts.Service.CheckBatch(b.Context(), requests)
+							if err != nil || len(results) != len(requests) {
+								b.Fatalf("batch: %d/%v", len(results), err)
+							}
+							for _, result := range results {
+								if !result.Allowed {
+									b.Fatal("expected allowed batch")
+								}
+							}
+						case "filter":
+							got, err := parts.Service.FilterAuthorized(b.Context(), principal, "view", "dashboard", ids)
+							if err != nil || len(got) != len(ids) {
+								b.Fatalf("filter: %d/%v", len(got), err)
+							}
+						}
+						queries = *count
+					}
+					b.ReportMetric(float64(queries), "queries/op")
+				})
+			}
 		})
 	}
 }

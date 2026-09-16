@@ -1,5 +1,32 @@
 # Releasing gopernicus modules
 
+## Authorization consistency and TupleCache hardening (release in progress 2026-09-15)
+
+Selected versions: authorization core `v0.17.0`, Turso store `v0.11.0`, PostgreSQL
+store `v0.12.0`, go-redis adapter `v0.3.0`. Ordinary relationship Check, Explain,
+Batch and Filter operations now use one durable snapshot in supported readers.
+TupleCache adds `Rebuild(ctx)`, capacity errors, and delivery diagnostics; SQL
+full snapshots capture current facts plus exact event IDs without decoding
+obsolete event payloads.
+
+Upgrade core and the configured SQL store together. Cached hosts also upgrade
+Redis and set `redis.Options.ContextTimeoutEnabled=true` before construction.
+Hosts using `integrations/kvstores/goredis.Open` already receive that setting.
+Redis now defaults to 1 MiB per raw read and 4 MiB per delta budget. Oversized
+reads fall back to SQL; oversized accumulated deltas may recover with an explicit
+rebuild when current facts fit. No schema migration, Redis key change or mandatory
+cache rebuild is required. Existing source consumers must tolerate ID-only
+Changes on Full snapshots. Relation exclusivity remains unchanged.
+
+Local repository/race and real SQL-to-Redis checks passed before release.
+Candidate/public verification and publication are recorded in the
+[release plan](plans/authorization-review-hardening-release.md) and manifest.
+See [AUDIT-039](AUDIT.md#audit-039-authorization-consistency-and-tuplecache-hardening)
+and the [benchmark report](pockets/authorization/BENCHMARKS.md). Remote Turso,
+Firestore, non-C PostgreSQL locale and production-scale load remain unverified.
+The previous release's unchanged Linux SDK RangeEdges CI failure remains outside
+this authorization change; the release record will report current CI separately.
+
 ## Authorization consistent lookup reads (published 2026-09-15)
 
 Published from main `bd534a495010abe8720febffb8d2caf1b0497577`: authorization core

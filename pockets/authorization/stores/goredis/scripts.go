@@ -34,8 +34,14 @@ return {binding, receipt}
 local binding, receipt, until_ms = state(KEYS[1])
 local remaining = until_ms - now_ms()
 if binding == '' or binding ~= ARGV[1] or receipt ~= ARGV[2] or remaining <= 0 then return {0} end
+local bytes = 0
+for i = 4, #ARGV do
+  local size = redis.call('HSTRLEN', KEYS[1], ARGV[i])
+  bytes = bytes + math.max(size, 2)
+  if bytes > tonumber(ARGV[3]) then return {-2} end
+end
 local result = {remaining}
-for i = 3, #ARGV do
+for i = 4, #ARGV do
   result[#result+1] = redis.call('HGET', KEYS[1], ARGV[i]) or '[]'
 end
 return result
@@ -71,6 +77,17 @@ local binding = state(KEYS[1])
 if binding == '' then return -1 end
 local deadline = tonumber(ARGV[5])
 if not deadline or deadline <= now_ms() then return -1 end
+-- Bound incoming operations and distinct existing fields before decoding either.
+-- Field names are passed separately so no JSON decode is needed for this check.
+local max_bytes, bytes, allowed = tonumber(ARGV[7]), #ARGV[6], {}
+if bytes > max_bytes then return -2 end
+for i = 8, #ARGV do
+  if not allowed[ARGV[i]] then
+    bytes = bytes + redis.call('HSTRLEN', KEYS[1], ARGV[i])
+    if bytes > max_bytes then return -2 end
+    allowed[ARGV[i]] = true
+  end
+end
 local function encoded(s, required)
   if type(s) ~= 'string' or (required and s == '') then return false end
   if s:find('[^A-Za-z0-9_%-]') then return false end
@@ -119,7 +136,7 @@ for _, op in ipairs(operations) do
     not valid_ref(op.resource, true) or not valid_ref(op.subject, false) then return -1 end
   local forward = 'f:' .. cjson.encode(op.resource)
   local reverse = 'r:' .. cjson.encode(op.subject)
-  if op.forward ~= forward or op.reverse ~= reverse then return -1 end
+  if op.forward ~= forward or op.reverse ~= reverse or not allowed[forward] or not allowed[reverse] then return -1 end
   local f = load_set(forward, false)
   local r = load_set(reverse, true)
   local sk, rk = cjson.encode(op.subject), cjson.encode(op.resource)

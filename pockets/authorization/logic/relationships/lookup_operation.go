@@ -27,6 +27,7 @@ func (s *Service) runLookup(ctx context.Context, evaluate func(context.Context, 
 				}
 				view := *s
 				view.reader = reader
+				view.inSnapshot = true
 				var evaluateErr error
 				result, evaluateErr = evaluate(ctx, &view)
 				return evaluateErr

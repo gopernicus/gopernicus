@@ -125,7 +125,7 @@ func (s *tupleSource) Snapshot(ctx context.Context, mirroredReceipt string) (tup
 		return tuplecache.Snapshot{}, err
 	}
 	snapshot := tuplecache.Snapshot{Receipt: receipt, Full: mirroredReceipt == "" || mirroredReceipt != receipt}
-	snapshot.Changes, err = readTupleChanges(ctx, tx)
+	snapshot.Changes, err = readTupleChanges(ctx, tx, snapshot.Full)
 	if err != nil {
 		return tuplecache.Snapshot{}, err
 	}
@@ -141,8 +141,14 @@ func (s *tupleSource) Snapshot(ctx context.Context, mirroredReceipt string) (tup
 	return snapshot, nil
 }
 
-func readTupleChanges(ctx context.Context, q tursodb.Querier) ([]tuplecache.Change, error) {
-	rows, err := q.Query(ctx, "SELECT id, before_tuple, after_tuple FROM main.iam_tuple_outbox ORDER BY id")
+func readTupleChanges(ctx context.Context, q tursodb.Querier, full bool) ([]tuplecache.Change, error) {
+	columns := "id, before_tuple, after_tuple"
+	if full {
+		// Rebuilds replace pending changes with current facts; retain only the
+		// exact event identities needed to acknowledge this source snapshot.
+		columns = "id"
+	}
+	rows, err := q.Query(ctx, "SELECT "+columns+" FROM main.iam_tuple_outbox ORDER BY id")
 	if err != nil {
 		return nil, err
 	}
@@ -150,6 +156,16 @@ func readTupleChanges(ctx context.Context, q tursodb.Querier) ([]tuplecache.Chan
 	var changes []tuplecache.Change
 	for rows.Next() {
 		var id int64
+		if full {
+			if err := rows.Scan(&id); err != nil {
+				return nil, tursodb.MapError(err)
+			}
+			if id <= 0 {
+				return nil, tuplecache.ErrUnavailable
+			}
+			changes = append(changes, tuplecache.Change{ID: strconv.FormatInt(id, 10)})
+			continue
+		}
 		var before, after sql.NullString
 		if err := rows.Scan(&id, &before, &after); err != nil {
 			return nil, tursodb.MapError(err)
@@ -194,12 +210,11 @@ func decodeTuple(value sql.NullString) (*relationships.CreateRelationship, error
 		}
 		fields[i] = field
 	}
-	for _, field := range fields[:5] {
-		if field == "" {
-			return nil, tuplecache.ErrUnavailable
-		}
+	tuple := &relationships.CreateRelationship{ResourceType: fields[0], ResourceID: fields[1], Relation: fields[2], SubjectType: fields[3], SubjectID: fields[4], SubjectRelation: fields[5]}
+	if err := tuple.Validate(); err != nil {
+		return nil, fmt.Errorf("tuple cache payload: %w: %v", tuplecache.ErrUnavailable, err)
 	}
-	return &relationships.CreateRelationship{ResourceType: fields[0], ResourceID: fields[1], Relation: fields[2], SubjectType: fields[3], SubjectID: fields[4], SubjectRelation: fields[5]}, nil
+	return tuple, nil
 }
 
 func readAllTuples(ctx context.Context, q tursodb.Querier) ([]relationships.CreateRelationship, error) {
@@ -214,6 +229,9 @@ ORDER BY resource_type, resource_id, relation, subject_type, subject_id, subject
 		var tuple relationships.CreateRelationship
 		if err := rows.Scan(&tuple.ResourceType, &tuple.ResourceID, &tuple.Relation, &tuple.SubjectType, &tuple.SubjectID, &tuple.SubjectRelation); err != nil {
 			return nil, tursodb.MapError(err)
+		}
+		if err := tuple.Validate(); err != nil {
+			return nil, fmt.Errorf("tuple cache current fact: %w: %v", tuplecache.ErrUnavailable, err)
 		}
 		tuples = append(tuples, tuple)
 	}

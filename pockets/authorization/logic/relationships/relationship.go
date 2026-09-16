@@ -244,10 +244,8 @@ type Storer interface {
 	// Relationship CRUD
 	// -------------------------------------------------------------------
 
-	// CreateRelationships inserts a batch of tuples. It is error-only (no
-	// RETURNING): the id is minted by the engine (Q6). An empty-id batch omits
-	// the id column so the DDL DEFAULT fills each key; a populated batch inserts
-	// the ids verbatim. A second, different relation for the same subject on the
+	// CreateRelationships inserts a batch of naturally keyed tuples. A second,
+	// different relation for the same exact subject on the
 	// same resource — and an exact-duplicate tuple — is a SILENT NO-OP under the
 	// bare ON CONFLICT DO NOTHING (nil error, existing row unchanged, never
 	// ErrAlreadyExists). An empty batch is nil.

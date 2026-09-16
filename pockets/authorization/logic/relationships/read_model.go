@@ -103,7 +103,8 @@ type Reader interface {
 }
 
 // LookupSnapshotter is an optional capability of a model-scoped Reader. It
-// supplies one consistent view for an entire enumeration and its verification.
+// supplies one consistent view for an entire permission check, batch or
+// enumeration and its verification. The name is retained for adapter compatibility.
 // The callback runs once, sequentially; its reader preserves the model and may
 // only be used during the callback. Implementations close it on every exit.
 // SQL adapters borrow an ambient transaction without changing its isolation or

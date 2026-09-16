@@ -60,7 +60,7 @@ result, err := components.Decisions.Check(ctx, authmodel.CheckRequest{
 ```
 
 `Components` contains `Decisions`, `Relationships`, `Roles`, `Mutations`, `HTTP`,
-`RelationshipWriter`, `SystemMutator` and optional `ReadCache`. Give request handlers the concrete
+`RelationshipWriter`, `SystemMutator` and optional `TupleCache`. Give request handlers the concrete
 service or narrow local interface they need. Retain the full bundle and trusted
 writers at host composition.
 
@@ -91,7 +91,7 @@ per-kind ports stay in `Repositories`; optional policy uses these named values:
 | `WithRoleModel` | Complete role permission model; empty restores opaque role facts |
 | `WithLimits` | Common `model.EvaluationLimits`; zero dimensions default when used |
 | `WithGuard` | Actor-facing atomic mutation policy; nil disables actor writes |
-| `WithCacher` | Borrowed `cacher.Storer` and `decisions.CachePolicy`; nil disables caching and ignores policy/source |
+| `WithTupleCache` | Borrowed `tuplecache.Backend` and `tuplecache.Policy`; requires a bound `Repositories.TupleSource` and explicit positive `MaxStaleness` |
 | `WithLogger` | Borrowed operational logger; nil uses `slog.Default()` |
 | `WithRoleRoutes` | Complete `authorizationhttp.RoleRoutes` gate, assignment policy and listing defaults |
 
@@ -157,6 +157,13 @@ userset `group:g1#member` are different subjects. Only the exact userset expands
 implicitly mean group membership. The current schema controls every permission
 read, including reads inside mutation guards and lookup validation.
 
+The stores currently allow one relation per exact resource/subject pair, including
+the subject's optional relation. For example, the same concrete user cannot be
+both `owner` and `billing_contact` on one resource. Baseline `CreateRelationships`
+silently preserves an existing different relation; guarded commands report the
+conflict. Model exclusive membership levels deliberately; independent relations
+would require a separate schema/API migration.
+
 `relationships.Through("parent", "view")` follows navigation to another
 resource's permission. Self-referential hierarchies are supported; graph cycles
 and work limits are handled by the evaluator. `relationships.AnyOf` groups alternative permission checks.
@@ -184,6 +191,18 @@ administrator or self-access rules belong in host policy.
 `Check`, `CheckExplain`, `CheckBatch` and `FilterAuthorized` fail closed on errors.
 A denied result is different from an indeterminate error. `ReasonCode` gives a
 stable classification; explanation traces describe the owning evaluator.
+
+Ordinary relationship checks, explanations, batches and candidate filtering use
+one durable snapshot in the bundled PostgreSQL, Turso/SQLite and memory readers,
+independently of TupleCache or its optional migrations. A Through check cannot
+combine a removed parent edge with a newly granted permission from another
+committed state. Snapshot completion/cancellation failures discard provisional
+results. SQL calls inside an ambient transaction preserve its isolation level,
+pending writes and ownership; the pocket does not upgrade or finish it.
+Custom readers can provide the existing `relationships.LookupSnapshotter`
+capability for both checks and enumeration. Readers without it retain their
+own read-consistency contract. Ordinary mixed role/relationship batches retain
+per-kind read semantics; they do not promise a shared cross-kind snapshot.
 
 ## Lists and evaluation budgets
 
@@ -401,7 +420,8 @@ cache option. See the [Turso](stores/turso/README.md) and
 
 ```go
 // repos comes from the configured SQL store with its WithTupleCache() option.
-// client is a host-owned *redis.Client. Choose maxStaleness explicitly.
+// client is host-owned and requires redis.Options.ContextTimeoutEnabled=true.
+// Choose maxStaleness explicitly.
 backend, err := goredis.NewTupleCache(client, "my-app/relationships")
 if err != nil {
     return err
@@ -467,18 +487,52 @@ A restored Redis dataset can still be served within its previously certified
 freshness interval before the relay detects it. For stricter reads, use an
 uncached service against the authoritative store.
 
-The Redis adapter keeps the complete mirror in one hash on one shard. It reads
-and decodes whole relation sets before the evaluator charges its graph-state
-budget; that budget is not a memory/byte bound. Large sets and large pending
-batches need host capacity measurements. A full snapshot/build taking longer than
-MaxStaleness stays unavailable rather than publishing already-expired authority.
-SQL remains the fallback. This implementation does not support Redis Cluster.
+The Redis adapter keeps the complete mirror in one hash on one shard. Its
+default physical limits reject a raw read above 1 MiB before fetching/decoding
+the values, and a delta publication above 4 MiB of input plus affected existing
+sets before Lua transforms them. Configure these through `goredis.WithLimits`.
+Over-limit reads retry durably; no result is truncated. Full rebuilds bound each
+encoded field and upload chunk by the publication limit, while the source and
+builder still materialize the complete current graph. These are per-read and
+per-publication limits, not a total-operation or total-mirror memory bound.
+
+Large sets and large pending batches still need host capacity measurements.
+A full snapshot/build taking longer than MaxStaleness stays unavailable rather
+than publishing already-expired authority. SQL remains the fallback. This
+implementation does not support Redis Cluster. A publication on an unrelated
+resource can still force an in-flight operation to retry against SQL because
+the mirror uses one receipt; benchmark overlapping reads and writes.
+
+### Recovery from a large delivery backlog
+
+If `Poll` returns `tuplecache.ErrCapacity` for an oversized accumulated delta,
+the committed facts and pending outbox work remain intact. Call
+`components.TupleCache.Rebuild(ctx)` from the host's administrative/worker
+lifecycle. It uses the same publication gate, freshness bound and receipt checks
+as Poll, but reads current facts and only the captured pending event IDs. This
+avoids replaying/decoding obsolete tuple payloads; it acknowledges those exact IDs
+only after successful publication. A concurrent local delivery returns
+`workers.ErrNoWork`; retry after that delivery finishes.
+
+Rebuild can recover a large history of transient changes when the current graph
+fits. It cannot make a current oversized set fit, or overcome a build that takes
+longer than MaxStaleness. Size the limits and freshness policy against recovery
+measurements; do not delete pending rows or split one SQL transaction into
+partially visible publications. Full snapshot memory still grows with current
+facts and captured event IDs.
 
 At shutdown cancel and join the host worker, close the runtime, and drain requests
 before closing the borrowed Redis client or database. `Close()` stops cache use;
 it does not own or join workers. Snapshot callback readers are sequential and
-must not escape into goroutines or outlive the callback. Inspect `Stats()` for
-hits, durable fallbacks, publications, rebuilds and poll failures.
+must not escape into goroutines or outlive the callback. `Stats()` exposes hits,
+durable/capacity fallbacks, publications, rebuilds, poll/capacity failures and
+publication conflicts. `LastSuccessfulPoll` and `LastPoll` expose observation
+timing, snapshot/publication durations, captured tuple/event counts and the
+failure stage. Captured counts are the last attempt's sizes, not a live backlog
+gauge. Monitor them alongside database backlog age/size and Redis latency.
+
+See [verification and benchmarks](BENCHMARKS.md) for the complete test matrix,
+repeatable commands, local measurements and remaining deployment checks.
 
 ### Upgrade from the previous cache
 

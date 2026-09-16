@@ -4934,3 +4934,42 @@ checks and 16-reader/2-writer SQL regressions passed; Segovia HTTP benchmarking,
 remote Turso/sqld and live Firestore remain unverified. See the
 [release plan](plans/authorization-lookup-snapshots-release.md) for publication and
 [implementation plan](plans/authorization-lookup-snapshots.md) for exact evidence.
+
+## AUDIT-039: Authorization consistency and TupleCache hardening
+
+- **Implemented:** 2026-09-15.
+- **Release:** in progress; core v0.17.0, Turso v0.11.0, PostgreSQL v0.12.0,
+  Redis v0.3.0. See [release record](plans/authorization-review-hardening-release.md).
+- **Impact:** coherent permission reads, Redis client configuration and capacity
+  limits, explicit rebuild and diagnostics; no data migration.
+
+Ordinary relationship Check, Explain, Batch and Filter operations now use the
+existing optional `LookupSnapshotter` capability. Bundled memory/SQL readers
+prevent a Through check from combining a parent edge and grant from incompatible
+states. Errors at snapshot completion discard provisional decisions. Explicit
+callback readers and caller-owned transactions retain their existing ownership
+and isolation. Ordinary mixed RBAC/ReBAC batches still have per-kind consistency.
+
+The Redis constructor now requires `ContextTimeoutEnabled=true` on its borrowed
+client so runtime deadlines bound socket I/O. Enable this before upgrading the
+Redis adapter; the constructor rejects an incompatible client without mutating it.
+The bundled `integrations/kvstores/goredis.Open` already enables this option.
+`WithLimits` defaults to 1 MiB per raw read and 4 MiB per delta budget. Excess
+encoded work returns `tuplecache.ErrCapacity` (also matching ErrUnavailable)
+before expensive decoding or Lua transformation. Permission reads retry durably;
+failed publications preserve the previous receipt and committed outbox work.
+
+`TupleCache.Rebuild(ctx)` publishes current facts through the same receipt and
+freshness protocol and acknowledges only captured event IDs. SQL full snapshots
+may therefore contain `Change{ID: ...}` entries without Before/After payloads;
+custom consumers should use Tuples for Full snapshots. Rebuild can bypass a large
+obsolete delta backlog, but cannot make oversized current sets fit or bound total
+graph memory. Stats add capacity/conflict counts, timing and last-poll evidence.
+
+Upgrade core and the selected SQL store together; cached hosts also adopt Redis
+v0.3.0. No namespace/schema change, forced cache reset or automatic background
+worker is introduced. Relation exclusivity, one independently maintained mirror
+per source, the shared receipt and guarded-writer serialization remain unchanged.
+Retained [tests and benchmarks](pockets/authorization/BENCHMARKS.md) cover local
+actual PostgreSQL/SQLite/Redis behavior. Warm Redis is not universally faster than
+batched SQL; measure the host workload before activating or enlarging the cache.

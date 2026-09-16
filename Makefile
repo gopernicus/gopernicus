@@ -12,10 +12,11 @@ MODULES = sdk pockets integrations/cryptids/bcrypt integrations/cryptids/golang-
 STORE_MODULES = pockets/cms/stores/pgx pockets/cms/stores/turso pockets/authentication/stores/firestore pockets/authentication/stores/pgx pockets/authentication/stores/turso pockets/jobs/stores/pgx pockets/jobs/stores/turso pockets/events/stores/pgx pockets/events/stores/turso pockets/authorization/stores/pgx pockets/authorization/stores/turso pockets/authorization/stores/firestore
 
 # INTEGRATION_TAG_MODULES carry `-tags=integration` sources `make check` must keep
-# COMPILING even though they never RUN without their datastore env: the turso (and,
-# as those trains land, firestore) stores, plus the firestore connector itself —
-# which lives in MODULES, not STORE_MODULES, so it is named explicitly.
-INTEGRATION_TAG_MODULES = $(filter %/turso %/firestore,$(STORE_MODULES)) integrations/datastores/firestore
+# COMPILING: the Turso/Firestore external-store suites, Firestore connector, and
+# authorization's SQL-to-Redis suite (local SQLite plus env-gated PostgreSQL).
+# Connector and Redis modules are named explicitly because they are not in
+# STORE_MODULES. Execution of these tagged suites is a separate verification leg.
+INTEGRATION_TAG_MODULES = $(filter %/turso %/firestore,$(STORE_MODULES)) integrations/datastores/firestore pockets/authorization/stores/goredis
 # LIVE_TAG_MODULES carry `integration && live` sources — the firestore family only
 # (a live GCP project is the one backend no hermetic or emulator leg can stand in
 # for). `make check` vets them compile-only so the live leg cannot rot between the

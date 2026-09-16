@@ -13,6 +13,7 @@ import (
 
 var (
 	ErrUnavailable    = fmt.Errorf("tuple cache unavailable: %w", sdk.ErrUnavailable)
+	ErrCapacity       = fmt.Errorf("tuple cache physical capacity exceeded: %w", ErrUnavailable)
 	ErrConflict       = fmt.Errorf("tuple cache publication changed: %w", sdk.ErrConflict)
 	ErrBinding        = fmt.Errorf("tuple cache store or freshness policy binding mismatch: %w", sdk.ErrInvalidInput)
 	ErrSnapshotClosed = fmt.Errorf("tuple cache snapshot closed: %w", sdk.ErrUnavailable)
@@ -30,7 +31,8 @@ type SetKey struct {
 }
 
 // Change retains the complete mutation. Nil Before/After denotes create/delete.
-// Both nil may identify a reset only in a Full snapshot.
+// Both nil is valid only in a Full snapshot: it may identify a reset or an
+// ID-only acknowledgement entry whose payload is already reflected in Tuples.
 // ID is an opaque durable outbox identity, not a commit-order revision.
 type Change struct {
 	ID     string
@@ -39,7 +41,8 @@ type Change struct {
 }
 
 // Snapshot contains all committed pending changes visible in one source snapshot.
-// Full also includes all current tuples. Receipt is the source's acknowledged
+// Full also includes all current tuples and may contain ID-only Changes.
+// Receipt is the source's acknowledged
 // delivery receipt. A full rebuild must not reapply Changes to Tuples.
 type Snapshot struct {
 	Receipt string

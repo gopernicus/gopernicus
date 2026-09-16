@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"reflect"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -249,11 +250,16 @@ func TestTupleSourceMalformedPayloadAndMissingIdentity(t *testing.T) {
 	for _, payload := range []string{`{"resource_type":"document"}`, `{"resource_type":"document","resource_id":"a","relation":"viewer","subject_type":"user","subject_id":"alice","subject_relation":null}`, `[]`} {
 		t.Run(payload, func(t *testing.T) {
 			db, cfg, source := tupleFixture(t)
+			ackSnapshot(t, source, tupleSnapshot(t, source, ""), "initial")
 			if _, err := db.Exec(t.Context(), "INSERT INTO "+cacheTable(cfg, "iam_tuple_outbox")+" (after_tuple) VALUES ($1::jsonb)", payload); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := source.Snapshot(t.Context(), ""); !errors.Is(err, tuplecache.ErrUnavailable) {
+			if _, err := source.Snapshot(t.Context(), "initial"); !errors.Is(err, tuplecache.ErrUnavailable) {
 				t.Fatalf("malformed event: %v", err)
+			}
+			full := tupleSnapshot(t, source, "")
+			if !full.Full || len(full.Tuples) != 0 || len(full.Changes) != 1 || full.Changes[0].Before != nil || full.Changes[0].After != nil {
+				t.Fatalf("full recovery decoded obsolete event: %+v", full)
 			}
 		})
 	}
@@ -261,6 +267,23 @@ func TestTupleSourceMalformedPayloadAndMissingIdentity(t *testing.T) {
 	tupleExec(t, db, "DELETE FROM "+cacheTable(cfg, "iam_tuple_cache"))
 	if _, err := db.Exec(t.Context(), tupleInsert(cacheTable(cfg, "iam_relationships"), "missing")); err == nil {
 		t.Fatal("missing source identity allowed mutation")
+	}
+}
+
+func TestTupleSourceRejectsMalformedCurrentFacts(t *testing.T) {
+	for _, id := range []string{"control\n", strings.Repeat("x", 257)} {
+		t.Run(id, func(t *testing.T) {
+			db, cfg, source := tupleFixture(t)
+			ackSnapshot(t, source, tupleSnapshot(t, source, ""), "initial")
+			if _, err := db.Exec(t.Context(), "INSERT INTO "+cacheTable(cfg, "iam_relationships")+" VALUES ('document',$1,'viewer','user','alice','')", id); err != nil {
+				t.Fatal(err)
+			}
+			for _, receipt := range []string{"initial", ""} {
+				if _, err := source.Snapshot(t.Context(), receipt); !errors.Is(err, tuplecache.ErrUnavailable) {
+					t.Fatalf("malformed fact with receipt %q: %v", receipt, err)
+				}
+			}
+		})
 	}
 }
 
@@ -275,5 +298,61 @@ func TestTupleSourceAcknowledgementRollback(t *testing.T) {
 	}
 	if got := tupleSnapshot(t, source, ""); !reflect.DeepEqual(before, got) {
 		t.Fatalf("failed acknowledgement committed receipt: %+v", got)
+	}
+}
+
+func TestTupleSourceFullRecoveryPreservesLateWork(t *testing.T) {
+	db, cfg, source := tupleFixture(t)
+	ackSnapshot(t, source, tupleSnapshot(t, source, ""), "initial")
+	table := cacheTable(cfg, "iam_relationships")
+	late, err := db.Begin(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer late.Rollback()
+	tupleExec(t, late, tupleInsert(table, "late"))
+	tupleExec(t, db, tupleInsert(table, "current"))
+	// A corrupt obsolete event cannot be replayed, but current facts remain usable.
+	tupleExec(t, db, "INSERT INTO "+cacheTable(cfg, "iam_tuple_outbox")+" (after_tuple) VALUES ('{}')")
+	if _, err := source.Snapshot(t.Context(), "initial"); !errors.Is(err, tuplecache.ErrUnavailable) {
+		t.Fatalf("delta accepted malformed payload: %v", err)
+	}
+	full := tupleSnapshot(t, source, "")
+	if !full.Full || len(full.Tuples) != 1 || full.Tuples[0].ResourceID != "current" || len(full.Changes) != 2 {
+		t.Fatalf("full recovery: %+v", full)
+	}
+	for _, change := range full.Changes {
+		if change.Before != nil || change.After != nil {
+			t.Fatalf("full recovery retained payload: %+v", change)
+		}
+	}
+	if err := late.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	ackSnapshot(t, source, full, "rebuilt")
+	remaining := tupleSnapshot(t, source, "rebuilt")
+	if remaining.Full || len(remaining.Changes) != 1 || remaining.Changes[0].After.ResourceID != "late" {
+		t.Fatalf("full acknowledgement lost late lower event ID: %+v", remaining)
+	}
+	lateID, _ := strconv.ParseInt(remaining.Changes[0].ID, 10, 64)
+	firstCapturedID, _ := strconv.ParseInt(full.Changes[0].ID, 10, 64)
+	if lateID >= firstCapturedID {
+		t.Fatal("fixture did not capture an older uncommitted event")
+	}
+}
+
+func TestTupleSourceResetSkipsObsoletePayloads(t *testing.T) {
+	db, cfg, source := tupleFixture(t)
+	ackSnapshot(t, source, tupleSnapshot(t, source, ""), "initial")
+	tupleExec(t, db, "INSERT INTO "+cacheTable(cfg, "iam_tuple_outbox")+" (after_tuple) VALUES ('{}')")
+	tupleExec(t, db, "TRUNCATE "+cacheTable(cfg, "iam_relationships"))
+	tupleExec(t, db, tupleInsert(cacheTable(cfg, "iam_relationships"), "current"))
+	full := tupleSnapshot(t, source, "initial")
+	if !full.Full || len(full.Tuples) != 1 || full.Tuples[0].ResourceID != "current" || len(full.Changes) != 3 {
+		t.Fatalf("reset did not recover past obsolete payload: %+v", full)
+	}
+	ackSnapshot(t, source, full, "reset")
+	if got := tupleSnapshot(t, source, "reset"); got.Full || len(got.Changes) != 0 {
+		t.Fatalf("reset work remains: %+v", got)
 	}
 }

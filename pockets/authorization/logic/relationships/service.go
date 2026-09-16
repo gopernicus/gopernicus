@@ -47,11 +47,12 @@ type ModelPermissionReader interface {
 // source at construction, so a later mutation of the caller's Schema cannot alter
 // any decision.
 type Service struct {
-	store     Storer
-	reader    Reader
-	readModel ReadModel
-	compiled  *CompiledSchema
-	limits    authmodel.EvaluationLimits
+	store      Storer
+	reader     Reader
+	readModel  ReadModel
+	compiled   *CompiledSchema
+	limits     authmodel.EvaluationLimits
+	inSnapshot bool
 }
 
 // newService compiles the schema and validates the limits,
@@ -105,8 +106,21 @@ func (s *Service) DeclaresPermission(resourceType, permission string) bool {
 // host runs them in its own Check closure before delegating here. This keeps
 // the engine a pure schema evaluator and fails closed — a host that omits a
 // bypass recipe simply gets no bypass.
+// Readers implementing LookupSnapshotter supply one consistent operation view.
 func (s *Service) Check(ctx context.Context, req authmodel.CheckRequest) (authmodel.CheckResult, error) {
-	return s.check(ctx, req, newBudget(s.limits, newMemoReader(s.reader)))
+	if err := req.Validate(); err != nil {
+		return authmodel.CheckResult{}, err
+	}
+	var result authmodel.CheckResult
+	err := s.withCheckReader(ctx, s.DeclaresPermission(req.Resource.Type, req.Permission), func(ctx context.Context, reader CheckReader) error {
+		var err error
+		result, err = s.check(ctx, req, newBudget(s.limits, newMemoReader(reader)))
+		return err
+	})
+	if err != nil {
+		return authmodel.CheckResult{}, err
+	}
+	return result, nil
 }
 
 // CheckWith evaluates using operation-specific reads and fresh evaluation state.
@@ -166,8 +180,31 @@ func (s *Service) check(ctx context.Context, req authmodel.CheckRequest, b *budg
 // CheckBatch evaluates multiple checks with independent per-request budgets.
 // Readers with RelationSetReader batch pending Through and direct reads across
 // the ordinary checks. Other readers retain sequential, memoized evaluation.
+// LookupSnapshotter readers keep all requests in one operation view.
 func (s *Service) CheckBatch(ctx context.Context, reqs []authmodel.CheckRequest) ([]authmodel.CheckResult, error) {
-	return s.checkBatch(ctx, s.reader, reqs)
+	if len(reqs) == 0 {
+		return nil, nil
+	}
+	if len(reqs) > s.limits.MaxBatchSize {
+		return nil, authmodel.ErrEvaluationLimit
+	}
+	needsReads := false
+	for _, req := range reqs {
+		if err := req.Validate(); err != nil {
+			return nil, err
+		}
+		needsReads = needsReads || s.DeclaresPermission(req.Resource.Type, req.Permission)
+	}
+	var results []authmodel.CheckResult
+	err := s.withCheckReader(ctx, needsReads, func(ctx context.Context, reader CheckReader) error {
+		var err error
+		results, err = s.checkBatch(ctx, reader, reqs)
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	return results, nil
 }
 
 // CheckBatchWith evaluates a batch over one operation-specific read source.

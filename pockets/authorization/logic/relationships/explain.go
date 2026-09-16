@@ -2,6 +2,7 @@ package relationships
 
 import (
 	"context"
+	"errors"
 
 	authmodel "github.com/gopernicus/gopernicus/pockets/authorization/logic/model"
 )
@@ -26,9 +27,29 @@ func (t *explainTrace) explanation(decision authmodel.Reason) authmodel.Explanat
 // more permissive evaluator, cannot change the decision, and fails with the same
 // limit class (ErrEvaluationLimit) on the same input. The trace excludes raw
 // infrastructure errors; a store/limit failure returns the error and the partial
-// steps gathered so far.
+// steps gathered so far. Snapshot completion failures and cancellation discard
+// the provisional decision and trace.
 func (s *Service) CheckExplain(ctx context.Context, req authmodel.CheckRequest) (authmodel.CheckResult, authmodel.Explanation, error) {
-	return s.checkExplain(ctx, s.reader, req)
+	if err := req.Validate(); err != nil {
+		return authmodel.CheckResult{}, authmodel.Explanation{}, err
+	}
+	var result authmodel.CheckResult
+	var explanation authmodel.Explanation
+	var evaluationErr error
+	err := s.withCheckReader(ctx, s.DeclaresPermission(req.Resource.Type, req.Permission), func(ctx context.Context, reader CheckReader) error {
+		result, explanation, evaluationErr = s.checkExplain(ctx, reader, req)
+		return evaluationErr
+	})
+	if err != nil {
+		// An evaluator failure may retain its partial trace. A failed snapshot
+		// completion or cancellation cannot expose a provisional decision/trace.
+		if evaluationErr != nil && errors.Is(err, evaluationErr) && ctx.Err() == nil &&
+			!errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+			return authmodel.CheckResult{}, explanation, err
+		}
+		return authmodel.CheckResult{}, authmodel.Explanation{}, err
+	}
+	return result, explanation, nil
 }
 
 // CheckExplainWith traces evaluation using operation-specific model-scoped reads.

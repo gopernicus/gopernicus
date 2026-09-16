@@ -62,7 +62,7 @@ func (s *source) ReadSnapshot(ctx context.Context, fn func(context.Context, tupl
 	s.durable++
 	return s.store.ReadSnapshot(ctx, fn)
 }
-func fixture(t *testing.T, tuples []relationships.CreateRelationship, backend tuplecache.Backend) (*tuplecache.TupleCache, *source) {
+func fixture(t testing.TB, tuples []relationships.CreateRelationship, backend tuplecache.Backend) (*tuplecache.TupleCache, *source) {
 	t.Helper()
 	s := &source{store: memory.New(), tuples: tuples}
 	if err := s.store.Relationships().CreateRelationships(t.Context(), tuples); err != nil {

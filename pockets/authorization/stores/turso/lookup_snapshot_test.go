@@ -9,6 +9,23 @@ import (
 	"github.com/gopernicus/gopernicus/pockets/authorization/stores/storetest"
 )
 
+func TestCheckSnapshots(t *testing.T) {
+	storetest.RunCheckSnapshots(t, checkSnapshotFixture)
+}
+
+func TestCheckAmbient(t *testing.T) {
+	storetest.RunCheckAmbient(t, checkSnapshotFixture)
+}
+
+func checkSnapshotFixture(t *testing.T) (authorization.Repositories, transaction.Transactor) {
+	db, _ := cacheFixture(t, false)
+	repos, err := Repositories(t.Context(), db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return repos, db
+}
+
 func TestLookupSnapshots(t *testing.T) {
 	storetest.RunLookupSnapshots(t, func(t *testing.T) authorization.Repositories {
 		db, _ := cacheFixture(t, false)

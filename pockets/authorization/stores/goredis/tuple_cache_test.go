@@ -428,7 +428,7 @@ func TestTupleCacheConstructor(t *testing.T) {
 	if _, err := NewTupleCache(nil, "namespace"); !errors.Is(err, sdk.ErrInvalidInput) {
 		t.Fatalf("nil client: %v", err)
 	}
-	client := redis.NewClient(&redis.Options{Dialer: func(context.Context, string, string) (net.Conn, error) {
+	client := redis.NewClient(&redis.Options{ContextTimeoutEnabled: true, Dialer: func(context.Context, string, string) (net.Conn, error) {
 		t.Fatal("constructor performed I/O")
 		return nil, errors.New("unexpected dial")
 	}})
@@ -488,7 +488,7 @@ func TestTupleCacheReadableNamespaces(t *testing.T) {
 	}
 }
 
-func newCache(t *testing.T, client *redis.Client) *TupleCache {
+func newCache(t testing.TB, client *redis.Client) *TupleCache {
 	t.Helper()
 	c, err := NewTupleCache(client, "test:raw:sets")
 	if err != nil {
@@ -540,7 +540,7 @@ type testRedis struct {
 	stop func()
 }
 
-func startRedis(t *testing.T, dir string, persistence bool) (*redis.Client, testRedis) {
+func startRedis(t testing.TB, dir string, persistence bool) (*redis.Client, testRedis) {
 	t.Helper()
 	binary, err := exec.LookPath("redis-server")
 	if err != nil {
@@ -570,7 +570,7 @@ func startRedis(t *testing.T, dir string, persistence bool) (*redis.Client, test
 	var once sync.Once
 	stop := func() { once.Do(func() { _ = cmd.Process.Kill(); _ = cmd.Wait() }) }
 	t.Cleanup(stop)
-	client := redis.NewClient(&redis.Options{Network: "unix", Addr: socket, MaxRetries: -1})
+	client := redis.NewClient(&redis.Options{Network: "unix", Addr: socket, MaxRetries: -1, ContextTimeoutEnabled: true})
 	t.Cleanup(func() { _ = client.Close() })
 	deadline := time.Now().Add(5 * time.Second)
 	for {
