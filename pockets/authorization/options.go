@@ -35,8 +35,9 @@ func WithGuard(guard mutations.MutationGuard) Option {
 	return func(cfg *config) { cfg.Guard = guard }
 }
 
-// WithLogger sets the borrowed operational logger. Nil captures slog.Default
-// at construction; later registration never substitutes Mount.Logger.
+// WithLogger sets the borrowed operational logger for mutations and DEBUG
+// decision records. Nil captures slog.Default at construction; later registration
+// never substitutes Mount.Logger. The host's handler controls levels and output.
 func WithLogger(logger *slog.Logger) Option {
 	return func(cfg *config) { cfg.Logger = logger }
 }

@@ -2,6 +2,7 @@ package decisions
 
 import (
 	"fmt"
+	"log/slog"
 
 	authmodel "github.com/gopernicus/gopernicus/pockets/authorization/logic/model"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/relationships"
@@ -11,6 +12,7 @@ import (
 )
 
 type config struct {
+	logger     *slog.Logger
 	model      Model
 	limits     authmodel.EvaluationLimits
 	backend    tuplecache.Backend
@@ -21,6 +23,7 @@ type config struct {
 
 // Service evaluates exact membership and graph policy over one canonical view.
 type Service struct {
+	logger      *slog.Logger
 	store       tuples.Reader
 	facts       tuples.Reader
 	reader      Reader
@@ -52,7 +55,10 @@ func NewService(reader tuples.Reader, opts ...Option) (*Service, error) {
 	if err != nil {
 		return nil, err
 	}
-	s := &Service{store: reader, facts: reader, compiled: compiled, readModel: compiled.readModel(), limits: limits, diagnostic: cfg.diagnostic}
+	if cfg.logger == nil {
+		cfg.logger = slog.Default()
+	}
+	s := &Service{logger: cfg.logger, store: reader, facts: reader, compiled: compiled, readModel: compiled.readModel(), limits: limits, diagnostic: cfg.diagnostic}
 	s.reader = s.graphReader(reader)
 	if cfg.backend != nil {
 		if isNilReader(cfg.backend) || isNilReader(cfg.source) {

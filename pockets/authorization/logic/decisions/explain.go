@@ -34,6 +34,13 @@ func (t *explainTrace) explanation(decision authmodel.Reason) authmodel.Explanat
 // steps gathered so far. Snapshot completion failures and cancellation discard
 // the provisional decision and trace.
 func (s *Service) CheckExplain(ctx context.Context, req authmodel.CheckRequest) (authmodel.CheckResult, authmodel.Explanation, error) {
+	log := s.startDecisionLog(ctx, false)
+	result, explanation, err := s.checkExplainOperation(ctx, req)
+	log.check(ctx, "CheckExplain", req, result, err)
+	return result, explanation, err
+}
+
+func (s *Service) checkExplainOperation(ctx context.Context, req authmodel.CheckRequest) (authmodel.CheckResult, authmodel.Explanation, error) {
 	if err := req.Validate(); err != nil {
 		return authmodel.CheckResult{}, authmodel.Explanation{}, err
 	}
@@ -64,6 +71,13 @@ func (s *Service) CheckExplain(ctx context.Context, req authmodel.CheckRequest) 
 
 // CheckExplainWith traces evaluation using operation-specific model-scoped reads.
 func (s *Service) CheckExplainWith(ctx context.Context, source tuples.Reader, req authmodel.CheckRequest) (authmodel.CheckResult, authmodel.Explanation, error) {
+	log := s.startDecisionLog(ctx, true)
+	result, explanation, err := s.checkExplainWith(ctx, source, req)
+	log.check(ctx, "CheckExplainWith", req, result, err)
+	return result, explanation, err
+}
+
+func (s *Service) checkExplainWith(ctx context.Context, source tuples.Reader, req authmodel.CheckRequest) (authmodel.CheckResult, authmodel.Explanation, error) {
 	if isNilReader(source) {
 		return authmodel.CheckResult{}, authmodel.Explanation{}, fmt.Errorf("nil tuple reader: %w", sdk.ErrInvalidInput)
 	}

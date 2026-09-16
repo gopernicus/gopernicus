@@ -12,6 +12,13 @@ import (
 )
 
 func (s *Service) LookupResourcesIn(ctx context.Context, req authmodel.LookupRequest) (authmodel.LookupResult, error) {
+	log := s.startDecisionLog(ctx, false)
+	result, err := s.lookupResourcesIn(ctx, req)
+	log.lookup(ctx, "LookupResourcesIn", req.Principal, req.Permission, req.ResourceType, req.Limit, result, err)
+	return result, err
+}
+
+func (s *Service) lookupResourcesIn(ctx context.Context, req authmodel.LookupRequest) (authmodel.LookupResult, error) {
 	if err := req.Validate(); err != nil {
 		return authmodel.LookupResult{}, err
 	}
@@ -31,7 +38,7 @@ func (s *Service) LookupResourcesIn(ctx context.Context, req authmodel.LookupReq
 			return authmodel.LookupResult{}, err
 		}
 	}
-	result, err := s.LookupResourcesPage(ctx, req.Principal, req.Permission, req.ResourceType, after, limit)
+	result, err := s.lookupResourcesPageOperation(ctx, req.Principal, req.Permission, req.ResourceType, after, limit)
 	if err != nil {
 		return authmodel.LookupResult{}, err
 	}

@@ -67,7 +67,7 @@ func New(repos Repositories, opts ...Option) (Components, error) {
 	if comps.log == nil {
 		comps.log = slog.Default()
 	}
-	decisionOptions := []decisions.Option{decisions.WithLimits(cfg.Limits), decisions.WithDiagnosticObserver(cfg.DiagnosticObserver), decisions.WithTupleCache(cfg.TupleBackend, repos.TupleSource, cfg.TuplePolicy)}
+	decisionOptions := []decisions.Option{decisions.WithLogger(comps.log), decisions.WithLimits(cfg.Limits), decisions.WithDiagnosticObserver(cfg.DiagnosticObserver), decisions.WithTupleCache(cfg.TupleBackend, repos.TupleSource, cfg.TuplePolicy)}
 	if cfg.ModelOption != nil {
 		decisionOptions = append(decisionOptions, cfg.ModelOption)
 	}

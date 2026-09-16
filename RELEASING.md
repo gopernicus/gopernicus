@@ -1,5 +1,20 @@
 # Releasing gopernicus modules
 
+## Host denial responses and decision logging (v0.19.0 candidate)
+
+Authorization `Require` accepts optional per-policy `WithDeniedHandler` to let
+hosts render a denial as 404 or their normal JSON/HTML response. Its default
+remains 403; authentication and evaluation errors keep their existing mapping.
+Ordinary one-argument calls remain source-compatible; code assigning the method
+to an exact non-variadic function type must update that type.
+
+The existing root `WithLogger` now also supplies DEBUG decision-operation records;
+standalone services accept `decisions.WithLogger`. Host slog handlers control
+enablement, formatting and redaction. The decision-service interface, SQL schema,
+cache protocol and module dependencies are unchanged. Core `v0.19.0` is selected
+for the pre-v1 method-signature change; current SQL/Redis adapters remain compatible.
+Publication is authorized and candidate verification is in progress. See [AUDIT-045](AUDIT.md#audit-045-host-denial-responses-and-decision-logging).
+
 ## Unified authorization tuples (published 2026-09-16)
 
 Published from main `66d70c511a74b28b1019e526acfc1382044395ad` in one coordinated train:

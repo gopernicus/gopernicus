@@ -12,12 +12,26 @@ import (
 // Evaluate validates every branch, then evaluates fixed resource bindings in one
 // coherent operation. Runtime slots require EvaluateResolved.
 func (s *Service) Evaluate(ctx context.Context, principal authmodel.PrincipalRef, expr Expression) (authmodel.CheckResult, error) {
-	return s.EvaluateResolved(ctx, principal, expr, nil)
+	log := s.startDecisionLog(ctx, false)
+	result, err := s.evaluate(ctx, principal, expr)
+	log.check(ctx, "Evaluate", authmodel.CheckRequest{Principal: principal}, result, err)
+	return result, err
+}
+
+func (s *Service) evaluate(ctx context.Context, principal authmodel.PrincipalRef, expr Expression) (authmodel.CheckResult, error) {
+	return s.evaluateResolved(ctx, principal, expr, nil)
 }
 
 // EvaluateResolved evaluates one expression with lazily resolved resource inputs.
 // Inputs are pinned across cache fallback; facts and budgets are fresh per attempt.
 func (s *Service) EvaluateResolved(ctx context.Context, principal authmodel.PrincipalRef, expr Expression, resolve ResourceResolver) (authmodel.CheckResult, error) {
+	log := s.startDecisionLog(ctx, false)
+	result, err := s.evaluateResolved(ctx, principal, expr, resolve)
+	log.check(ctx, "EvaluateResolved", authmodel.CheckRequest{Principal: principal}, result, err)
+	return result, err
+}
+
+func (s *Service) evaluateResolved(ctx context.Context, principal authmodel.PrincipalRef, expr Expression, resolve ResourceResolver) (authmodel.CheckResult, error) {
 	if err := principal.Validate(); err != nil {
 		return authmodel.CheckResult{}, err
 	}
@@ -46,6 +60,13 @@ func (s *Service) EvaluateResolved(ctx context.Context, principal authmodel.Prin
 }
 
 func (s *Service) EvaluateExpressionWith(ctx context.Context, reader tuples.Reader, principal authmodel.PrincipalRef, expr Expression) (authmodel.CheckResult, error) {
+	log := s.startDecisionLog(ctx, true)
+	result, err := s.evaluateExpressionWith(ctx, reader, principal, expr)
+	log.check(ctx, "EvaluateExpressionWith", authmodel.CheckRequest{Principal: principal}, result, err)
+	return result, err
+}
+
+func (s *Service) evaluateExpressionWith(ctx context.Context, reader tuples.Reader, principal authmodel.PrincipalRef, expr Expression) (authmodel.CheckResult, error) {
 	if err := principal.Validate(); err != nil {
 		return authmodel.CheckResult{}, err
 	}

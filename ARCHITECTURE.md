@@ -729,7 +729,11 @@ lazily, are pinned across cache fallback, and never enter compiled models.
 HTTP owns principal extraction, request resolvers and response mapping; the
 decision engine owns validation, short-circuiting and authorization reads.
 `Adapter.Require` is the single HTTP policy entry point; its decision dependency
-requires expression validation and evaluation directly.
+requires expression validation and evaluation directly. Hosts choose denied
+response presentation per mounted policy; authentication and evaluation errors
+remain distinct. Decision DEBUG logging observes completed public operations,
+not recursive checks or snapshot attempts, and uses the host's borrowed logger
+without extra authorization reads.
 
 Authorization authorities are the in-core memory store and the PostgreSQL and
 SQLite/Turso adapters. Redis is an optional mirror of durable facts. Firestore

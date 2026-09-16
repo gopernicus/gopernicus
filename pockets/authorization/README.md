@@ -301,7 +301,7 @@ Custom resolvers must be read-only, concurrency-safe and respect the request
 context. They execute while the authorization snapshot is open; their external
 reads do not automatically join it. Leave connection-pool capacity for such input
 reads or use an independent source. Authentication runs before the guard. Missing
-principal returns 401, denial 403, evaluation exhaustion 503, and other errors
+principal returns 401, denial 403 by default, evaluation exhaustion 503, and other errors
 500, with no internal error details. The handler runs after successful snapshot
 completion and receives the original request.
 
@@ -323,6 +323,60 @@ inside one `All(...)` or `Any(...)` so every reached branch shares the snapshot
 and budget. `authorizationhttp.New(Services{Decisions: service})` also supports
 standalone use; the decision dependency requires only `ValidateExpression` and
 `EvaluateResolved`. The evaluator owns model validation and evaluation limits.
+
+### Host denial responses
+
+Choose the denied response per mounted policy. For a route that conceals resource
+existence, reuse the framework's predicates and supply the host's 404 handler:
+
+```go
+guard := components.HTTP.Require(
+    authorizationhttp.Can("view", authorizationhttp.Path("document", "documentID")),
+    authorizationhttp.WithDeniedHandler(http.NotFoundHandler()),
+)
+```
+
+A custom `http.HandlerFunc` can write the host's usual JSON or HTML response.
+Use the same renderer as other not-found responses. The hook runs only after an
+error-free denial and successful completion of the decision operation; it receives
+the original request and never continues to the protected handler. A caller-owned
+ambient transaction may still be open. Authentication and
+evaluation failures keep their 401/500/503 responses. Handlers are borrowed and
+must support concurrent requests; nil handlers/options panic at mount.
+
+This response applies to the complete policy. It does not identify which branch
+denied access. A route that must distinguish failed visibility (404) from failed
+action permission (403) needs an explicit policy for that distinction; do not
+inspect `CheckResult.Reason` or perform another lookup in the response handler
+and assume both decisions share a snapshot.
+
+### Decision logging
+
+The existing logger option also enables decision records when its handler accepts
+DEBUG. Hosts own the format, filtering, request correlation and redaction:
+
+```go
+logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
+    Level: slog.LevelDebug,
+}))
+components, err := authorization.New(repositories, authorization.WithLogger(logger))
+```
+
+Standalone decision services accept `decisions.WithLogger(logger)`. Nil captures
+`slog.Default()` at construction. Each completed public decision operation emits
+one `authorization decision` record with its operation, final outcome and duration.
+Delegating methods, nested predicates, cache fallback and lookup retries do not
+produce duplicate records. Batch/filter/lookup records contain aggregate counts;
+expressions, result ID lists, traces and raw error messages are not logged.
+Validation and evaluation failures are error outcomes, separate from denials.
+Single-check metadata includes bounded principal/resource identifiers; hosts can
+redact these through their `slog.Handler`.
+
+Logging performs no extra authorization reads and does not obtain explanations.
+Disabled DEBUG skips timing and attribute construction. Caller-bound `*With`
+operations describe evaluation inside the caller's view, not a committed
+transaction. These operational records are separate from durable mutation audit
+and from `WithDiagnosticObserver`'s scoped-denial transition probes.
 
 ### Bundled role administration
 

@@ -1,6 +1,8 @@
 package decisions
 
 import (
+	"log/slog"
+
 	authmodel "github.com/gopernicus/gopernicus/pockets/authorization/logic/model"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuplecache"
 )
@@ -19,4 +21,11 @@ func WithLimits(limits authmodel.EvaluationLimits) Option {
 }
 func WithTupleCache(backend tuplecache.Backend, source tuplecache.Source, policy tuplecache.Policy) Option {
 	return func(c *config) { c.backend = backend; c.source = source; c.policy = policy }
+}
+
+// WithLogger supplies the borrowed decision logger. Nil captures slog.Default at
+// construction. DEBUG records describe completed evaluations; bound calls do
+// not claim that the caller's transaction committed. Hosts own redaction.
+func WithLogger(logger *slog.Logger) Option {
+	return func(c *config) { c.logger = logger }
 }

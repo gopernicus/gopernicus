@@ -5270,3 +5270,42 @@ Architecture/backend reviews found no blocking issue or lost security invariant.
 See the [executed plan](plans/authorization-one-middleware.md),
 [verification record](plans/authorization-one-middleware-verification.json), and
 [benchmarks](pockets/authorization/BENCHMARKS.md).
+
+## AUDIT-045: Host denial responses and decision logging
+
+**Release status:** implemented and verified; core `v0.19.0` release candidate.
+
+Hosts can retain the framework's `Require`, `Path`, `Can`, `All` and `Any`
+vocabulary while choosing the denied HTTP response with
+`Require(predicate, WithDeniedHandler(handler))`. Default behavior remains JSON
+403; a host can supply its usual not-found renderer to conceal resource existence.
+The handler runs only for a completed, error-free denial, after decision-operation
+completion and cancellation checks. A caller-owned ambient transaction may still
+be open. The handler receives no downstream handler. Authentication,
+evaluation errors and exhausted budgets retain their existing 401/500/503 mapping.
+Invalid options and nil handlers panic at mount. Options affect one mounted policy.
+
+The hook applies to the whole expression. It does not classify visibility denial
+versus action denial within a compound policy. Debug `Reason` strings are not
+such a contract, and a second read in a handler does not share the completed
+snapshot.
+
+The existing root `WithLogger` also configures decision-service DEBUG records;
+direct construction supports `decisions.WithLogger`. Hosts control logging via
+their slog handler, without service pass-through wrappers. One record describes
+the final public operation, including failures and read-free results. Internal
+delegation, cache attempts, recursive checks and lookup retries do not create
+duplicates. Batches and lookups use aggregate counts. Logging performs no extra
+reads and emits no raw error messages, expressions, traces or result ID lists.
+Bound caller-owned evaluations do not claim transaction completion. This is
+operational logging; durable mutation audit and transition diagnostics remain
+separate contracts.
+
+Verification: the complete 42-module `make check` (build/test/vet, generated
+artifact checks and architecture guards), full authorization core race suite,
+focused HTTP race tests and real loopback HTTP logger wiring passed. Nine
+benchmark workloads produced all 27 required samples. Named architecture and
+backend reviews found no blockers. SQL/Redis live integration and remote Turso
+were not rerun for this transport/logging-only change. See the
+[executed plan](plans/authorization-host-policy.md) and
+[verification record](plans/authorization-host-policy-verification.json).

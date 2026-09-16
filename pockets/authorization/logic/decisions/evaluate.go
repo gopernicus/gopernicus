@@ -13,6 +13,13 @@ import (
 // Check evaluates a named permission in one coherent canonical tuple view.
 // The compiled expression defines exact membership, graph checks and composition.
 func (s *Service) Check(ctx context.Context, req authmodel.CheckRequest) (authmodel.CheckResult, error) {
+	log := s.startDecisionLog(ctx, false)
+	result, err := s.checkRequest(ctx, req)
+	log.check(ctx, "Check", req, result, err)
+	return result, err
+}
+
+func (s *Service) checkRequest(ctx context.Context, req authmodel.CheckRequest) (authmodel.CheckResult, error) {
 	if err := req.Validate(); err != nil {
 		return authmodel.CheckResult{}, err
 	}
@@ -36,6 +43,13 @@ func (s *Service) Check(ctx context.Context, req authmodel.CheckRequest) (authmo
 
 // EvaluateWith evaluates inside an already coherent, caller-owned view.
 func (s *Service) EvaluateWith(ctx context.Context, reader tuples.Reader, req authmodel.CheckRequest) (authmodel.CheckResult, error) {
+	log := s.startDecisionLog(ctx, true)
+	result, err := s.evaluateWith(ctx, reader, req)
+	log.check(ctx, "EvaluateWith", req, result, err)
+	return result, err
+}
+
+func (s *Service) evaluateWith(ctx context.Context, reader tuples.Reader, req authmodel.CheckRequest) (authmodel.CheckResult, error) {
 	if isNilReader(reader) {
 		return authmodel.CheckResult{}, fmt.Errorf("nil bound tuple reader: %w", sdk.ErrInvalidInput)
 	}
@@ -43,7 +57,14 @@ func (s *Service) EvaluateWith(ctx context.Context, reader tuples.Reader, req au
 	return view.check(ctx, req, newBudget(view.limits, newMemoReader(view.reader)))
 }
 func (s *Service) CheckWith(ctx context.Context, reader tuples.Reader, req authmodel.CheckRequest) (authmodel.CheckResult, error) {
-	return s.EvaluateWith(ctx, reader, req)
+	log := s.startDecisionLog(ctx, true)
+	result, err := s.checkWith(ctx, reader, req)
+	log.check(ctx, "CheckWith", req, result, err)
+	return result, err
+}
+
+func (s *Service) checkWith(ctx context.Context, reader tuples.Reader, req authmodel.CheckRequest) (authmodel.CheckResult, error) {
+	return s.evaluateWith(ctx, reader, req)
 }
 
 // check is the single evaluation funnel shared by Check and CheckExplain. The
@@ -70,6 +91,13 @@ func (s *Service) check(ctx context.Context, req authmodel.CheckRequest, b *budg
 // the ordinary checks. Other readers retain sequential, memoized evaluation.
 // Canonical tuple snapshots keep all requests in one operation view.
 func (s *Service) CheckBatch(ctx context.Context, reqs []authmodel.CheckRequest) ([]authmodel.CheckResult, error) {
+	log := s.startDecisionLog(ctx, false)
+	result, err := s.checkBatchOperation(ctx, reqs)
+	log.batch(ctx, "CheckBatch", len(reqs), result, err)
+	return result, err
+}
+
+func (s *Service) checkBatchOperation(ctx context.Context, reqs []authmodel.CheckRequest) ([]authmodel.CheckResult, error) {
 	if len(reqs) == 0 {
 		return nil, nil
 	}
@@ -107,6 +135,13 @@ func (s *Service) CheckBatch(ctx context.Context, reqs []authmodel.CheckRequest)
 
 // CheckBatchWith evaluates a batch over one operation-specific read source.
 func (s *Service) CheckBatchWith(ctx context.Context, reader tuples.Reader, reqs []authmodel.CheckRequest) ([]authmodel.CheckResult, error) {
+	log := s.startDecisionLog(ctx, true)
+	result, err := s.checkBatchWith(ctx, reader, reqs)
+	log.batch(ctx, "CheckBatchWith", len(reqs), result, err)
+	return result, err
+}
+
+func (s *Service) checkBatchWith(ctx context.Context, reader tuples.Reader, reqs []authmodel.CheckRequest) ([]authmodel.CheckResult, error) {
 	if isNilReader(reader) {
 		return nil, fmt.Errorf("nil bound tuple reader: %w", sdk.ErrInvalidInput)
 	}
@@ -161,6 +196,13 @@ func (s *Service) checkBatch(ctx context.Context, reader CheckReader, reqs []aut
 // FilterAuthorized preserves input order and duplicates. It uses CheckBatch's
 // same root-relative depth, short-circuit rules and per-request work limits.
 func (s *Service) FilterAuthorized(ctx context.Context, principal authmodel.PrincipalRef, permission, resourceType string, resourceIDs []string) ([]string, error) {
+	log := s.startDecisionLog(ctx, false)
+	result, err := s.filterAuthorized(ctx, principal, permission, resourceType, resourceIDs)
+	log.filter(ctx, principal, permission, resourceType, len(resourceIDs), len(result), err)
+	return result, err
+}
+
+func (s *Service) filterAuthorized(ctx context.Context, principal authmodel.PrincipalRef, permission, resourceType string, resourceIDs []string) ([]string, error) {
 	if len(resourceIDs) == 0 {
 		return nil, nil
 	}
@@ -171,7 +213,7 @@ func (s *Service) FilterAuthorized(ctx context.Context, principal authmodel.Prin
 	for i, id := range resourceIDs {
 		requests[i] = authmodel.CheckRequest{Principal: principal, Permission: permission, Resource: authmodel.Resource{Type: resourceType, ID: id}}
 	}
-	results, err := s.CheckBatch(ctx, requests)
+	results, err := s.checkBatchOperation(ctx, requests)
 	if err != nil {
 		return nil, err
 	}

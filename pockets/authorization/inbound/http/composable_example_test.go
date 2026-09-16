@@ -54,3 +54,23 @@ func ExampleAdapter_Require() {
 	// 204
 	// 204
 }
+
+func ExampleWithDeniedHandler() {
+	components, err := authorization.New(authorization.Repositories{Tuples: memory.NewTuples()})
+	if err != nil {
+		panic(err)
+	}
+	guard := components.HTTP.Require(
+		authorizationhttp.HasRole("viewer", authorizationhttp.Fixed("document", "one")),
+		authorizationhttp.WithDeniedHandler(http.NotFoundHandler()),
+	)
+	handler := guard(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	r := httptest.NewRequest(http.MethodGet, "/documents/one", nil)
+	r = r.WithContext(sdk.WithPrincipal(r.Context(), sdk.Principal{Type: "user", ID: "outsider"}))
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, r)
+	fmt.Println(response.Code)
+	// Output: 404
+}

@@ -23,6 +23,42 @@ The cross-store suite lives in `stores/goredis/end_to_end_test.go` under the
 includes them in the Redis adapter's module dependency graph. Ordinary adapter
 runtime code does not import SQL drivers.
 
+## Host response and logging follow-up — 2026-09-16 (unreleased)
+
+Focused follow-up after the unified release: nine workloads, three one-second
+samples each, Go 1.26.1 on Apple M4 Pro / Darwin arm64. HTTP includes memory
+snapshots and response recorders. Logging uses JSON slog with output discarded;
+these figures exclude output I/O and are not production capacity measurements.
+The unlogged control calls the same private evaluator, isolating wrapper/logging
+cost. The exact-role case uses the deterministic in-memory test tuple fixture.
+The read-free case is an unknown-permission denial.
+
+| Workload | Median ns/op (range) | B/op | allocs/op |
+| --- | ---: | ---: | ---: |
+| Logging: read_free_check/unlogged | 40.52 (40.4–41.08) | 0 | 0 |
+| Logging: read_free_check/debug_disabled | 48.62 (48.38–49.08) | 0 | 0 |
+| Logging: read_free_check/debug_enabled | 869.8 (854.7–928.9) | 1425 | 5 |
+| Logging: exact_role_evaluate/unlogged | 670.6 (665.1–675.1) | 3088 | 20 |
+| Logging: exact_role_evaluate/debug_disabled | 705.2 (702.8–708.5) | 3088 | 20 |
+| Logging: exact_role_evaluate/debug_enabled | 1299 (1295–1446) | 3459 | 23 |
+| HTTP: global | 808.5 (806.9–824.9) | 3320 | 28 |
+| HTTP: two_exact_roles | 1416 (1409–1562) | 4616 | 34 |
+| HTTP: mixed | 2329 (2305–2348) | 7864 | 44 |
+
+Disabled DEBUG adds no allocations in either logging workload. The full owned
+109-case cache/store matrix below remains the prior release's measurement; this
+follow-up did not rerun that matrix. The new logging cases are standalone and
+do not change the owned runner's explicitly selected inventory.
+
+Run from `pockets/authorization`:
+
+```sh
+go test -run '^$' -bench '^(BenchmarkDecisionLogging|BenchmarkComposableGuard)$' -benchmem -benchtime=1s -count=3 ./logic/decisions ./inbound/http
+```
+
+All raw samples, source hashes, verification commands and limits are in
+[the verification record](../../plans/authorization-host-policy-verification.json).
+
 ## Run verification
 
 Run from the repository root unless a subshell changes directories. Go is pinned

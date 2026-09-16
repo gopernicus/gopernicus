@@ -1,0 +1,326 @@
+{
+  "status": "CANDIDATE VERIFIED; PUBLICATION PENDING",
+  "date": "2026-09-16",
+  "scope": "Host denial response customization and passive DEBUG decision logging",
+  "modules": [
+    {
+      "module": "github.com/gopernicus/gopernicus/pockets/authorization",
+      "directory": "pockets/authorization",
+      "version": "v0.19.0",
+      "tag": "pockets/authorization/v0.19.0",
+      "sum": "h1:vwoK0z58akTq6O6CRyadkW7zTW5AZGrdkGi8wYZZs64=",
+      "go_mod_sum": "h1:SWt/blN2Csf2p8dohOtJXbINP/BT5Z3oV9/GOxkFXGo=",
+      "source_entries": 227,
+      "source_inventory_sha256": "65e5c58f3da1a29e15fad037ff131972d8dfb37ebb32d4b4c42c84b33eb4b590"
+    }
+  ],
+  "candidate": {
+    "passed": true,
+    "environment": {
+      "GOCACHE": "/tmp/gopernicus-authorization-hardening/cache",
+      "GOFLAGS": "-mod=readonly",
+      "GOMODCACHE": "/private/tmp/gopernicus-authorization-host-policy-release/candidate/modcache",
+      "GONOPROXY": "",
+      "GONOSUMDB": "github.com/gopernicus/gopernicus/pockets/authorization",
+      "GOPRIVATE": "",
+      "GOPROXY": "file:///private/tmp/gopernicus-authorization-host-policy-release/candidate/proxy,https://proxy.golang.org",
+      "GOSUMDB": "sum.golang.org",
+      "GOTOOLCHAIN": "local",
+      "GOWORK": "off",
+      "go_version": "go version go1.26.1 darwin/arm64",
+      "runtime_environment": "build-only allowlist; no inherited database, emulator or cloud credential settings",
+      "seeded_external_cache_files": 0
+    },
+    "verified_modules": [
+      {
+        "checks": [
+          {
+            "command": [
+              "go",
+              "mod",
+              "download",
+              "-json",
+              "github.com/gopernicus/gopernicus/pockets/authorization@v0.19.0"
+            ],
+            "cwd": "/private/tmp/gopernicus-authorization-host-policy-release/candidate/download-context",
+            "elapsed_seconds": 0.04,
+            "exit_code": 0,
+            "log": "/private/tmp/gopernicus-authorization-host-policy-release/candidate/authzcore-download.log"
+          },
+          {
+            "command": [
+              "go",
+              "list",
+              "-m",
+              "-json",
+              "all"
+            ],
+            "cwd": "/private/tmp/gopernicus-authorization-host-policy-release/candidate/verification/pockets/authorization",
+            "elapsed_seconds": 0.23,
+            "exit_code": 0,
+            "log": "/private/tmp/gopernicus-authorization-host-policy-release/candidate/authzcore-module-graph.log"
+          },
+          {
+            "command": [
+              "go",
+              "build",
+              "./..."
+            ],
+            "cwd": "/private/tmp/gopernicus-authorization-host-policy-release/candidate/verification/pockets/authorization",
+            "elapsed_seconds": 1.11,
+            "exit_code": 0,
+            "log": "/private/tmp/gopernicus-authorization-host-policy-release/candidate/authzcore-build.log"
+          },
+          {
+            "command": [
+              "go",
+              "test",
+              "-count=1",
+              "./..."
+            ],
+            "cwd": "/private/tmp/gopernicus-authorization-host-policy-release/candidate/verification/pockets/authorization",
+            "elapsed_seconds": 2.49,
+            "exit_code": 0,
+            "log": "/private/tmp/gopernicus-authorization-host-policy-release/candidate/authzcore-test.log"
+          },
+          {
+            "command": [
+              "go",
+              "vet",
+              "./..."
+            ],
+            "cwd": "/private/tmp/gopernicus-authorization-host-policy-release/candidate/verification/pockets/authorization",
+            "elapsed_seconds": 0.48,
+            "exit_code": 0,
+            "log": "/private/tmp/gopernicus-authorization-host-policy-release/candidate/authzcore-vet.log"
+          },
+          {
+            "command": [
+              "go",
+              "test",
+              "-race",
+              "-count=1",
+              "./..."
+            ],
+            "cwd": "/private/tmp/gopernicus-authorization-host-policy-release/candidate/verification/pockets/authorization",
+            "elapsed_seconds": 4.84,
+            "exit_code": 0,
+            "log": "/private/tmp/gopernicus-authorization-host-policy-release/candidate/authzcore-race.log"
+          },
+          {
+            "command": [
+              "go",
+              "test",
+              "-tags=integration",
+              "-run",
+              "^$",
+              "./..."
+            ],
+            "cwd": "/private/tmp/gopernicus-authorization-host-policy-release/candidate/verification/pockets/authorization",
+            "elapsed_seconds": 1.94,
+            "exit_code": 0,
+            "log": "/private/tmp/gopernicus-authorization-host-policy-release/candidate/authzcore-integration-compile.log"
+          },
+          {
+            "command": [
+              "go",
+              "test",
+              "-tags=integration,live",
+              "-run",
+              "^$",
+              "./..."
+            ],
+            "cwd": "/private/tmp/gopernicus-authorization-host-policy-release/candidate/verification/pockets/authorization",
+            "elapsed_seconds": 1.91,
+            "exit_code": 0,
+            "log": "/private/tmp/gopernicus-authorization-host-policy-release/candidate/authzcore-tagged-compile.log"
+          },
+          {
+            "command": [
+              "go",
+              "vet",
+              "-tags=integration,live",
+              "./..."
+            ],
+            "cwd": "/private/tmp/gopernicus-authorization-host-policy-release/candidate/verification/pockets/authorization",
+            "elapsed_seconds": 0.45,
+            "exit_code": 0,
+            "log": "/private/tmp/gopernicus-authorization-host-policy-release/candidate/authzcore-tagged-vet.log"
+          }
+        ],
+        "download": {
+          "Dir": "/private/tmp/gopernicus-authorization-host-policy-release/candidate/modcache/github.com/gopernicus/gopernicus/pockets/authorization@v0.19.0",
+          "GoMod": "/private/tmp/gopernicus-authorization-host-policy-release/candidate/modcache/cache/download/github.com/gopernicus/gopernicus/pockets/authorization/@v/v0.19.0.mod",
+          "GoModSum": "h1:SWt/blN2Csf2p8dohOtJXbINP/BT5Z3oV9/GOxkFXGo=",
+          "Info": "/private/tmp/gopernicus-authorization-host-policy-release/candidate/modcache/cache/download/github.com/gopernicus/gopernicus/pockets/authorization/@v/v0.19.0.info",
+          "Path": "github.com/gopernicus/gopernicus/pockets/authorization",
+          "Sum": "h1:vwoK0z58akTq6O6CRyadkW7zTW5AZGrdkGi8wYZZs64=",
+          "Version": "v0.19.0",
+          "Zip": "/private/tmp/gopernicus-authorization-host-policy-release/candidate/modcache/cache/download/github.com/gopernicus/gopernicus/pockets/authorization/@v/v0.19.0.zip"
+        },
+        "framework_versions": {
+          "github.com/gopernicus/gopernicus/pockets": "v0.1.0",
+          "github.com/gopernicus/gopernicus/pockets/authorization": null,
+          "github.com/gopernicus/gopernicus/sdk": "v0.9.0"
+        },
+        "label": "authzcore",
+        "module": "github.com/gopernicus/gopernicus/pockets/authorization",
+        "passed": true
+      }
+    ],
+    "source_unchanged_after_verification": true
+  },
+  "consumer_candidate": {
+    "checks": [
+      {
+        "command": [
+          "go",
+          "mod",
+          "tidy"
+        ],
+        "cwd": "/tmp/gopernicus-authorization-host-policy-release/consumer",
+        "elapsed_seconds": 0.61,
+        "exit_code": 0,
+        "log": "/tmp/gopernicus-authorization-host-policy-release/consumer-candidate-tidy.log"
+      },
+      {
+        "command": [
+          "go",
+          "mod",
+          "verify"
+        ],
+        "cwd": "/tmp/gopernicus-authorization-host-policy-release/consumer",
+        "elapsed_seconds": 0.03,
+        "exit_code": 0,
+        "log": "/tmp/gopernicus-authorization-host-policy-release/consumer-candidate-verify.log"
+      },
+      {
+        "command": [
+          "go",
+          "build",
+          "./..."
+        ],
+        "cwd": "/tmp/gopernicus-authorization-host-policy-release/consumer",
+        "elapsed_seconds": 0.01,
+        "exit_code": 0,
+        "log": "/tmp/gopernicus-authorization-host-policy-release/consumer-candidate-build.log"
+      },
+      {
+        "command": [
+          "go",
+          "test",
+          "-race",
+          "-count=1",
+          "-v",
+          "./..."
+        ],
+        "cwd": "/tmp/gopernicus-authorization-host-policy-release/consumer",
+        "elapsed_seconds": 2.42,
+        "exit_code": 0,
+        "log": "/tmp/gopernicus-authorization-host-policy-release/consumer-candidate-test.log"
+      },
+      {
+        "command": [
+          "go",
+          "vet",
+          "./..."
+        ],
+        "cwd": "/tmp/gopernicus-authorization-host-policy-release/consumer",
+        "elapsed_seconds": 0.61,
+        "exit_code": 0,
+        "log": "/tmp/gopernicus-authorization-host-policy-release/consumer-candidate-vet.log"
+      },
+      {
+        "command": [
+          "go",
+          "list",
+          "-m",
+          "-json",
+          "all"
+        ],
+        "cwd": "/tmp/gopernicus-authorization-host-policy-release/consumer",
+        "elapsed_seconds": 0.01,
+        "exit_code": 0,
+        "log": "/tmp/gopernicus-authorization-host-policy-release/consumer-candidate-graph.log"
+      }
+    ],
+    "passed": true,
+    "scope": "Actual HTTP403/404/204/401 responses and exactly4 host-tagged DEBUG records; GOWORK=off, no replacements",
+    "selected_versions": {
+      "example.com/authorization-host-policy-release-consumer": null,
+      "github.com/gopernicus/gopernicus/pockets": "v0.1.0",
+      "github.com/gopernicus/gopernicus/pockets/authorization": "v0.19.0",
+      "github.com/gopernicus/gopernicus/sdk": "v0.9.0"
+    }
+  },
+  "implementation_verification": {
+    "path": "plans/authorization-host-policy-verification.json",
+    "sha256": "75f78b4580da47c595d58632f0ffb6be376be74d3e5e5295d771fd4f88049f2b",
+    "checks": {
+      "benchmarks": {
+        "command": [
+          "go",
+          "test",
+          "-run",
+          "^$",
+          "-bench",
+          "^(BenchmarkDecisionLogging|BenchmarkComposableGuard)$",
+          "-benchmem",
+          "-benchtime=1s",
+          "-count=3",
+          "./logic/decisions",
+          "./inbound/http"
+        ],
+        "cwd": "/Users/jrazmi/code/gopernicus-ecosystem/gopernicus/pockets/authorization",
+        "elapsed_seconds": 33.35742408398073,
+        "environment": "PATH/HOME/TMPDIR only plus explicit Go settings; no inherited datastore targets",
+        "exit_code": 0,
+        "passed": true
+      },
+      "core-race": {
+        "command": [
+          "go",
+          "test",
+          "-race",
+          "./..."
+        ],
+        "cwd": "/Users/jrazmi/code/gopernicus-ecosystem/gopernicus/pockets/authorization",
+        "elapsed_seconds": 3.4974967500020284,
+        "environment": "PATH/HOME/TMPDIR only plus explicit Go settings; no inherited datastore targets",
+        "exit_code": 0,
+        "passed": true
+      },
+      "workspace": {
+        "command": [
+          "make",
+          "check"
+        ],
+        "cwd": "/Users/jrazmi/code/gopernicus-ecosystem/gopernicus",
+        "elapsed_seconds": 68.92307729198365,
+        "environment": "PATH/HOME/TMPDIR only plus explicit Go settings; no inherited datastore targets",
+        "exit_code": 0,
+        "passed": true
+      }
+    },
+    "go_source_files_rechecked": 306,
+    "workspace_gate_reused": "All authorization Go files and inventory match the full 42-module gate; no dependency or other workspace code changes"
+  },
+  "review": "Named platform/SRE: ship-ready; no concrete blockers",
+  "compatibility": [
+    "Require is variadic; exact method/function/interface types must adapt; ordinary calls remain compatible",
+    "Default denied response remains JSON 403; customization applies to the whole mounted policy",
+    "Existing WithLogger supplies decision DEBUG records; host slog controls output and redaction",
+    "DecisionService, module dependencies, SQL schema, cache protocol, store and connector versions unchanged"
+  ],
+  "unverified": [
+    "Per-policy denial response only; no same-route visibility/action branch classification",
+    "Live SQL/Redis and remote Turso suites not rerun for presentation/logging-only changes",
+    "Focused benchmarks discard logging output and are not production capacity estimates",
+    "Existing full109-case cache/store measurements remain prior-release evidence"
+  ],
+  "preserved_owner_files": [
+    "plans/cacher-design.md",
+    "plans/gps-360-go-audit-upgrade-handoff.md",
+    "plans/segovia-v2-audit-upgrade-handoff.md"
+  ]
+}

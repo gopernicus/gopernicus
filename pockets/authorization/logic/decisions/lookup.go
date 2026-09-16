@@ -39,10 +39,17 @@ type ResourceIDPageRequest = authmodel.LookupRequest
 // returns ErrEvaluationLimit without a partial result. Apply the successful set
 // together with tenant/search predicates before business sorting or pagination.
 func (s *Service) LookupAllResourceIDs(ctx context.Context, principal authmodel.PrincipalRef, permission, resourceType string) (ResourceSet, error) {
+	log := s.startDecisionLog(ctx, false)
+	result, err := s.lookupAllResourceIDs(ctx, principal, permission, resourceType)
+	log.lookup(ctx, "LookupAllResourceIDs", principal, permission, resourceType, 0, authmodel.LookupResult{IDs: result.IDs, Unrestricted: result.Unrestricted}, err)
+	return result, err
+}
+
+func (s *Service) lookupAllResourceIDs(ctx context.Context, principal authmodel.PrincipalRef, permission, resourceType string) (ResourceSet, error) {
 	if s == nil {
 		return ResourceSet{}, authmodel.ErrNoDecisionKind
 	}
-	result, err := s.LookupResources(ctx, principal, permission, resourceType)
+	result, err := s.lookupResourcesOperation(ctx, principal, permission, resourceType)
 	if err != nil {
 		return ResourceSet{}, err
 	}
@@ -53,10 +60,17 @@ func (s *Service) LookupAllResourceIDs(ctx context.Context, principal authmodel.
 // MaxLookupResults. Intermediate graph limits still apply on every page;
 // pagination does not bypass evaluation errors or guarantee bounded database I/O.
 func (s *Service) LookupResourceIDPage(ctx context.Context, req ResourceIDPageRequest) (ResourceIDPage, error) {
+	log := s.startDecisionLog(ctx, false)
+	result, err := s.lookupResourceIDPage(ctx, req)
+	log.lookup(ctx, "LookupResourceIDPage", req.Principal, req.Permission, req.ResourceType, req.Limit, authmodel.LookupResult{IDs: result.IDs, Unrestricted: result.Unrestricted, HasMore: result.HasMore}, err)
+	return result, err
+}
+
+func (s *Service) lookupResourceIDPage(ctx context.Context, req ResourceIDPageRequest) (ResourceIDPage, error) {
 	if s == nil {
 		return ResourceIDPage{}, authmodel.ErrNoDecisionKind
 	}
-	result, err := s.LookupResourcesIn(ctx, req)
+	result, err := s.lookupResourcesIn(ctx, req)
 	if err != nil {
 		return ResourceIDPage{}, err
 	}

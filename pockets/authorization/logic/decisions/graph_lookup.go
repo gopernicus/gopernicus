@@ -41,6 +41,13 @@ import (
 // direct-only roots. The earlier D1(b) divergence (org-derived roots enumerated
 // but their descendants omitted) is removed.
 func (s *Service) LookupResources(ctx context.Context, principal authmodel.PrincipalRef, permission, resourceType string) (authmodel.LookupResult, error) {
+	log := s.startDecisionLog(ctx, false)
+	result, err := s.lookupResourcesOperation(ctx, principal, permission, resourceType)
+	log.lookup(ctx, "LookupResources", principal, permission, resourceType, 0, result, err)
+	return result, err
+}
+
+func (s *Service) lookupResourcesOperation(ctx context.Context, principal authmodel.PrincipalRef, permission, resourceType string) (authmodel.LookupResult, error) {
 	if err := ctx.Err(); err != nil {
 		return authmodel.LookupResult{}, err
 	}
@@ -309,6 +316,13 @@ func (s *Service) expandSelfHierarchy(ctx context.Context, resourceType string, 
 // Cancellation is checked before each store call, and the arguments are
 // validated exactly as LookupResources validates them.
 func (s *Service) LookupResourcesPage(ctx context.Context, principal authmodel.PrincipalRef, permission, resourceType, after string, limit int) (authmodel.LookupResult, error) {
+	log := s.startDecisionLog(ctx, false)
+	result, err := s.lookupResourcesPageOperation(ctx, principal, permission, resourceType, after, limit)
+	log.lookup(ctx, "LookupResourcesPage", principal, permission, resourceType, limit, result, err)
+	return result, err
+}
+
+func (s *Service) lookupResourcesPageOperation(ctx context.Context, principal authmodel.PrincipalRef, permission, resourceType, after string, limit int) (authmodel.LookupResult, error) {
 	if err := ctx.Err(); err != nil {
 		return authmodel.LookupResult{}, err
 	}
@@ -467,7 +481,7 @@ func (s *Service) verifyLookup(ctx context.Context, principal authmodel.Principa
 		for i, id := range result.IDs[start:end] {
 			requests[i] = authmodel.CheckRequest{Principal: principal, Permission: permission, Resource: authmodel.Resource{Type: resourceType, ID: id}}
 		}
-		decisions, err := s.CheckBatch(ctx, requests)
+		decisions, err := s.checkBatchOperation(ctx, requests)
 		if err != nil {
 			return authmodel.LookupResult{}, err
 		}

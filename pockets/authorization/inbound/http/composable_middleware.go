@@ -16,11 +16,22 @@ import (
 // branch at mount, then evaluates the entire expression in one tuple snapshot
 // with shared budgets and ordered short-circuiting. Resource inputs are lazy and
 // memoized for the request, including cache fallback. Missing authentication is
-// 401; denial is 403; evaluation exhaustion is 503; other errors are 500. Errors
-// always fail closed. Invalid configuration panics before traffic.
-func (a *Adapter) Require(predicate Predicate) web.Middleware {
+// 401; denial is 403 unless WithDeniedHandler is supplied; evaluation exhaustion
+// is 503; other errors are 500. Errors always fail closed. Invalid configuration
+// panics before traffic.
+func (a *Adapter) Require(predicate Predicate, opts ...RequireOption) web.Middleware {
 	if a == nil || a.decisions == nil || typedNil(a.decisions) {
 		panic("authorization: Require requires a decision service")
+	}
+	cfg := requireConfig{deniedHandler: http.HandlerFunc(denyForbidden)}
+	for _, opt := range opts {
+		if opt == nil {
+			panic("authorization: Require: nil option")
+		}
+		opt(&cfg)
+	}
+	if cfg.deniedHandler == nil || typedNil(cfg.deniedHandler) {
+		panic("authorization: Require: nil denied handler")
 	}
 	evaluator := a.decisions
 	expression, resolvers, err := lowerPredicate(predicate)
@@ -61,10 +72,14 @@ func (a *Adapter) Require(predicate Predicate) web.Middleware {
 				return
 			}
 			if !result.Allowed {
-				web.RespondJSONError(w, web.ErrForbidden("permission denied"))
+				cfg.deniedHandler.ServeHTTP(w, r)
 				return
 			}
 			next.ServeHTTP(w, r)
 		})
 	}
+}
+
+func denyForbidden(w http.ResponseWriter, _ *http.Request) {
+	web.RespondJSONError(w, web.ErrForbidden("permission denied"))
 }

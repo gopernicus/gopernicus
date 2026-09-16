@@ -105,6 +105,13 @@ type FilterPageRequest[T any] struct {
 //
 // Items is always a non-nil slice, so an empty page marshals "items":[].
 func FilterPage[T any](ctx context.Context, s *Service, req FilterPageRequest[T]) (FilteredPage[T], error) {
+	log := s.startDecisionLog(ctx, false)
+	result, err := filterPageOperation(ctx, s, req)
+	log.page(ctx, req.Principal, req.Permission, req.ResourceType, req.Limit, len(result.Items), result.HasMore, result.ScanLimitReached, err)
+	return result, err
+}
+
+func filterPageOperation[T any](ctx context.Context, s *Service, req FilterPageRequest[T]) (FilteredPage[T], error) {
 	if s == nil {
 		return FilteredPage[T]{}, authmodel.ErrNoDecisionKind
 	}
@@ -216,7 +223,7 @@ func filterPage[T any](ctx context.Context, s *Service, req FilterPageRequest[T]
 		for i, candidate := range page.Items {
 			ids[i] = req.ID(candidate.Item)
 		}
-		allowedIDs, err := s.FilterAuthorized(ctx, req.Principal, req.Permission, req.ResourceType, ids)
+		allowedIDs, err := s.filterAuthorized(ctx, req.Principal, req.Permission, req.ResourceType, ids)
 		if err != nil {
 			return FilteredPage[T]{}, err
 		}
