@@ -1,6 +1,6 @@
 # Inbound authorization and integrity release
 
-Status: IN PROGRESS. Owner authorized push to main and release.
+Status: PUBLISHED AND PUBLICLY VERIFIED. Owner authorized push to main and release.
 
 ## Scope and versions
 
@@ -40,9 +40,9 @@ No SQL schema or cache protocol change. No host adoption or data migration.
   replacements; test versioned auth-cms and a standalone inbound/integrity consumer.
   Run final full make check with release pins. Verify unchanged adapters remain
   compatible; SQL/Redis end-to-end if available using disposable local data.
-- [ ] R3 Named platform/SRE review; verify staged source equals verified archives.
+- [x] R3 Named platform/SRE review; verify staged source equals verified archives.
   Commit and push main normally, confirm remote main, then push four annotated tags.
-- [ ] R4 Verify public archive inventories, normal Go checksums, Git origin,
+- [x] R4 Verify public archive inventories, normal Go checksums, Git origin,
   versioned build/test/vet and consumer behavior. Inspect actual GitHub CI, record
   durable publication evidence, and push root documentation receipt separately.
 
@@ -78,3 +78,30 @@ Temporary harness/fixture setup errors (consumer package setup, readonly module
 copies and missing sibling migration directories) were corrected; final checks
 passed without production source changes. Prior live SQL/race and benchmark
 evidence remains valid: all 1917 implementation inputs matched before pin changes.
+
+## Publication receipt
+
+- Release commit: `f989b89567504273099e07ae885a07db9d54184e`, pushed normally to main before all four
+  annotated module tags. Every prior remote tag is preserved; no force pushes.
+- Candidate and public checks passed with GOWORK=off and no replacements. All
+  637 public archive entries, Go checksums and Git origins match the candidates.
+  Public verification uses sum.golang.org without exemptions.
+- Public standalone consumer and auth-CMS race tests passed. Published Redis
+  with the new core and SQL adapters passed real SQLite/Redis delivery/recovery,
+  model-free roles and final-revocation race cases.
+- Named platform/SRE final review: ship-ready, no blockers. Reviewer independently
+  matched all 637 candidate entries to source. Final staged inventory contained
+  203 task files and matched the verified working content.
+- GitHub [main CI](https://github.com/gopernicus/gopernicus/actions/runs/35146615264)
+  and all four tag checks failed the existing SDK TestDisk_Conformance/RangeEdges
+  test: Linux rejects seeking to MaxInt64 with EINVAL. SDK and the check workflow
+  are unchanged; the remote workspace gate did not complete. The local complete
+  gate passed. [Docs deployment](https://github.com/gopernicus/gopernicus/actions/runs/35146615300)
+  passed. The manifest includes all run links and their actual failure lines.
+- Owner plan files and Python cache were excluded from commits. No host adoption,
+  datastore migration or production mutation. Remote Turso and live authentication
+  datastore suites remain unverified.
+
+The subsequent root-documentation receipt commit records this publication and
+does not change module archives or move tags. Durable evidence:
+[release manifest](authorization-integrity-release-manifest.json).

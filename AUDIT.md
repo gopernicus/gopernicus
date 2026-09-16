@@ -5316,7 +5316,10 @@ were not rerun for this transport/logging-only change. See the
 
 ## AUDIT-046: Inbound authorization ownership
 
-**Release status:** implemented and verified; uncommitted and unreleased.
+**Release status:** published in authentication `v0.12.0`, authorization `v0.20.0`,
+PostgreSQL authorization store `v0.14.0` and Turso authorization store `v0.13.0`
+from `f989b89567504273099e07ae885a07db9d54184e`. The final boundary is documented in AUDIT-047.
+
 
 Host access-policy callbacks belong to inbound adapters. Authentication's
 invitation and user-administration callbacks, types and options move to
@@ -5361,7 +5364,12 @@ and live PostgreSQL listing/mutation checks passed. See the
 
 ## AUDIT-047: Principal admission and tuple integrity
 
-**Release status:** implemented and verified; uncommitted and unreleased.
+**Release status:** published in authentication `v0.12.0`, authorization `v0.20.0`,
+PostgreSQL authorization store `v0.14.0` and Turso authorization store `v0.13.0`
+from `f989b89567504273099e07ae885a07db9d54184e`. See the
+[release record](plans/authorization-integrity-release.md) and
+[manifest](plans/authorization-integrity-release-manifest.json).
+
 
 The owner's explicit ruling supersedes AUDIT-046's retained transactional
 principal guard and invitation-issuer exception. All principal permission checks
@@ -5383,8 +5391,8 @@ construction and authenticated audit attribution. Invitation issuer management
 moves inbound over a single prepared target; authentication proof stays in logic.
 
 Permission revocation cannot retract work admitted earlier. This is deliberate
-admission semantics, independent of serialized integrity at commit. No migration,
-cache protocol or module dependency change is required.
+admission semantics, independent of serialized integrity at commit. No schema migration,
+cache protocol change or new third-party dependency is required.
 
 Verification: final frozen-source 42-module `make check`, core/authentication/
 example race suites, memory/local SQLite/disposable PostgreSQL races, separate
@@ -5393,3 +5401,10 @@ documentation production build passed. The changed writer benchmarks have 20
 fresh samples. Named architecture and backend reviews have no remaining blockers.
 See the [executed plan](plans/authorization-integrity-policy.md) and
 [verification record](plans/authorization-integrity-policy-verification.json).
+
+Release verification additionally passed independent versioned candidates and
+public archives, auth-CMS/standalone consumer races, unchanged adapter/view
+compatibility and real SQLite/Redis races. All public checksums and 637 archive
+entries matched. GitHub main/tag CI hit the existing unchanged Linux SDK
+RangeEdges failure; the remote workspace gate did not complete. Remote Turso and
+live authentication datastore suites remain unverified.

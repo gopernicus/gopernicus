@@ -1,10 +1,11 @@
 # Releasing gopernicus modules
 
-## Inbound authorization ownership and integrity (release candidate)
+## Inbound authorization ownership and integrity (published 2026-09-16)
 
 Coordinated breaking pre-v1 release: authentication `v0.12.0`, authorization
 `v0.20.0`, PostgreSQL authorization store `v0.14.0`, and Turso authorization store
-`v0.13.0`. All four tags will identify one verified main commit. Unchanged Redis,
+`v0.13.0`. All four annotated tags identify main commit
+`f989b89567504273099e07ae885a07db9d54184e`. Unchanged Redis,
 authentication stores/views, SDK and connectors retain their existing versions.
 Upgrade the authorization core and its PostgreSQL/Turso adapter together. Hosts
 relying on integrity enforcement for every writer must drain or replace all older
@@ -53,11 +54,25 @@ consistency and recipient proof, without checking the caller's permission.
 
 An admitted operation may finish after permission revocation. Integrity always
 uses the write's serialized state. Upgrade core and adapters together; the API
-breaks are intentional. No schema, cache protocol or dependency changes. Current
-verification is recorded in AUDIT-047 and the integrity-policy execution record;
+breaks are intentional. No schema or cache protocol change. SQL adapter and
+example pins are updated for this release. Implementation verification is recorded
+in AUDIT-047 and the integrity-policy execution record;
 AUDIT-046 preserves the earlier checkpoint and its then-unsettled exception.
 The [API adoption map](pockets/authorization/stores/UPGRADE.md#adopting-the-inbound-and-integrity-api)
 lists removed names, current replacements and host verification cases.
+
+All 637 public archive entries match the verified candidates, with normal Go
+checksum and Git-origin verification. Independent versioned build/test/vet,
+standalone consumer and auth-CMS races, SQLite/Redis integration races, and the
+final local 42-module make check passed. Unchanged authentication adapters/views
+and Redis passed compatibility checks. See the
+[release record](plans/authorization-integrity-release.md) and
+[checksum manifest](plans/authorization-integrity-release-manifest.json).
+
+GitHub [main CI](https://github.com/gopernicus/gopernicus/actions/runs/35146615264)
+and all four tag checks failed the existing Linux SDK RangeEdges test; SDK is
+unchanged. The remote workspace gate did not complete. Docs deployment passed.
+Remote Turso and live authentication datastore suites remain unverified.
 
 ## Host denial responses and decision logging (v0.19.0, published 2026-09-16)
 
