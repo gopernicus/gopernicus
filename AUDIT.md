@@ -5273,7 +5273,10 @@ See the [executed plan](plans/authorization-one-middleware.md),
 
 ## AUDIT-045: Host denial responses and decision logging
 
-**Release status:** implemented and verified; core `v0.19.0` release candidate.
+**Release status:** core `v0.19.0` published from main
+`68866b39e3d68830dd97d4e1d4232ef390d0d23c`; public archive, checksums and HTTP
+consumer verified. GitHub CI retains the pre-existing Linux SDK `RangeEdges`
+failure. See the [release record](plans/authorization-host-policy-release.md).
 
 Hosts can retain the framework's `Require`, `Path`, `Can`, `All` and `Any`
 vocabulary while choosing the denied HTTP response with

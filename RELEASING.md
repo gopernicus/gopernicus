@@ -1,6 +1,6 @@
 # Releasing gopernicus modules
 
-## Host denial responses and decision logging (v0.19.0 candidate)
+## Host denial responses and decision logging (v0.19.0, published 2026-09-16)
 
 Authorization `Require` accepts optional per-policy `WithDeniedHandler` to let
 hosts render a denial as 404 or their normal JSON/HTML response. Its default
@@ -13,7 +13,13 @@ standalone services accept `decisions.WithLogger`. Host slog handlers control
 enablement, formatting and redaction. The decision-service interface, SQL schema,
 cache protocol and module dependencies are unchanged. Core `v0.19.0` is selected
 for the pre-v1 method-signature change; current SQL/Redis adapters remain compatible.
-Publication is authorized and candidate verification is in progress. See [AUDIT-045](AUDIT.md#audit-045-host-denial-responses-and-decision-logging).
+Published from main `68866b39e3d68830dd97d4e1d4232ef390d0d23c` as annotated tag
+`pockets/authorization/v0.19.0`. Public checksums and all 227 archive entries match
+the candidate. Independent build/test/vet/race and a real HTTP consumer passed.
+GitHub main/tag CI both hit the existing Linux SDK `RangeEdges` failure; SDK is
+unchanged. See [AUDIT-045](AUDIT.md#audit-045-host-denial-responses-and-decision-logging),
+the [release record](plans/authorization-host-policy-release.md) and
+[checksum manifest](plans/authorization-host-policy-release-manifest.json).
 
 ## Unified authorization tuples (published 2026-09-16)
 
