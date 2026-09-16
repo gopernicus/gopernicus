@@ -13,7 +13,7 @@ local function state(key)
   if typ ~= 'hash' then error('tuple mirror has incorrect Redis type') end
   local m = redis.call('HMGET', key, '!schema', '!binding', '!receipt', '!until')
   local until_ms = tonumber(m[4])
-  if m[1] ~= '1' or not m[2] or m[2] == '' or not m[3] or m[3] == '' or
+  if m[1] ~= '2' or not m[2] or m[2] == '' or not m[3] or m[3] == '' or
     not until_ms or until_ms <= 0 or until_ms > 9007199254740991 or until_ms ~= math.floor(until_ms) then
     return '', '', 0
   end
@@ -65,7 +65,7 @@ if not matches(KEYS[1], ARGV[1], ARGV[2]) then return 0 end
 local deadline = tonumber(ARGV[5])
 if not deadline or deadline <= now_ms() then return -1 end
 if redis.call('TYPE', KEYS[2]).ok ~= 'hash' or redis.call('HGET', KEYS[2], '!prepared') ~= '1' then return -1 end
-redis.call('HSET', KEYS[2], '!schema', '1', '!binding', ARGV[3], '!receipt', ARGV[4], '!until', ARGV[5])
+redis.call('HSET', KEYS[2], '!schema', '2', '!binding', ARGV[3], '!receipt', ARGV[4], '!until', ARGV[5])
 redis.call('HDEL', KEYS[2], '!prepared')
 redis.call('RENAME', KEYS[2], KEYS[1])
 redis.call('PERSIST', KEYS[1])
@@ -104,44 +104,51 @@ local function array(a)
   end
   return true
 end
-local function valid_ref(ref, resource)
-  return array(ref) and #ref == 3 and encoded(ref[1], true) and encoded(ref[2], true) and encoded(ref[3], resource)
+local function valid_tuple(t)
+  if not array(t) or #t ~= 7 or (t[1] ~= '1' and t[1] ~= '2') then return false end
+  if t[1] == '1' and (t[2] ~= '' or t[3] ~= '') then return false end
+  for i = 2, 7 do
+    if type(t[i]) ~= 'string' or #t[i] > 342 or not encoded(t[i], i == 4 or i == 5 or i == 6 or (t[1] == '2' and i <= 3)) then return false end
+  end
+  return true
+end
+local function fields(t)
+  return 'f:' .. cjson.encode({t[1], t[2], t[3], t[4]}), 'r:' .. cjson.encode({t[5], t[6], t[7]})
 end
 local operations = cjson.decode(ARGV[6])
 if not array(operations) then return -1 end
 local sets, order = {}, {}
-local function load_set(field, resource)
+local function load_set(field)
   if sets[field] then return sets[field] end
   local value = redis.call('HGET', KEYS[1], field)
-  local refs = {}
+  local facts = {}
   if value then
     if value:sub(1, 1) ~= '[' then error('invalid tuple set') end
     local decoded = cjson.decode(value)
     if not array(decoded) then error('invalid tuple set') end
-    for _, ref in ipairs(decoded) do
-      if not valid_ref(ref, resource) then error('invalid tuple reference') end
-      local identity = cjson.encode(ref)
-      if refs[identity] then error('duplicate tuple reference') end
-      refs[identity] = ref
+    for _, fact in ipairs(decoded) do
+      if not valid_tuple(fact) then error('invalid canonical tuple') end
+      local f, r = fields(fact)
+      if field ~= f and field ~= r then error('misplaced canonical tuple') end
+      local identity = cjson.encode(fact)
+      if facts[identity] then error('duplicate canonical tuple') end
+      facts[identity] = fact
     end
   end
-  sets[field] = refs
+  sets[field] = facts
   order[#order+1] = field
-  return refs
+  return facts
 end
--- Decode, validate, and transform all affected fields before changing Redis.
--- Redis does not roll back a script that errors after its first write.
+-- Validate and transform all affected fields before changing Redis: Lua errors
+-- after writes are not rolled back by Redis.
 for _, op in ipairs(operations) do
-  if type(op) ~= 'table' or type(op.remove) ~= 'boolean' or
-    not valid_ref(op.resource, true) or not valid_ref(op.subject, false) then return -1 end
-  local forward = 'f:' .. cjson.encode(op.resource)
-  local reverse = 'r:' .. cjson.encode(op.subject)
+  if type(op) ~= 'table' or type(op.remove) ~= 'boolean' or not valid_tuple(op.tuple) then return -1 end
+  local forward, reverse = fields(op.tuple)
   if op.forward ~= forward or op.reverse ~= reverse or not allowed[forward] or not allowed[reverse] then return -1 end
-  local f = load_set(forward, false)
-  local r = load_set(reverse, true)
-  local sk, rk = cjson.encode(op.subject), cjson.encode(op.resource)
-  if op.remove then f[sk], r[rk] = nil, nil
-  else f[sk], r[rk] = op.subject, op.resource end
+  local f, r = load_set(forward), load_set(reverse)
+  local identity = cjson.encode(op.tuple)
+  if op.remove then f[identity], r[identity] = nil, nil
+  else f[identity], r[identity] = op.tuple, op.tuple end
 end
 local values, deleted = {}, {}
 for _, field in ipairs(order) do
@@ -156,7 +163,7 @@ if deadline <= now_ms() then return -1 end
 redis.call('HDEL', KEYS[1], '!schema')
 for _, pair in ipairs(values) do redis.call('HSET', KEYS[1], pair[1], pair[2]) end
 for _, field in ipairs(deleted) do redis.call('HDEL', KEYS[1], field) end
-redis.call('HSET', KEYS[1], '!schema', '1', '!binding', ARGV[3], '!receipt', ARGV[4], '!until', ARGV[5])
+redis.call('HSET', KEYS[1], '!schema', '2', '!binding', ARGV[3], '!receipt', ARGV[4], '!until', ARGV[5])
 return 1
 `)
 )

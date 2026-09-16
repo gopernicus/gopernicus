@@ -10,8 +10,8 @@ import (
 	"time"
 
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/relationships"
-	"github.com/gopernicus/gopernicus/pockets/authorization/logic/roles"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuplecache"
+	tuplefacts "github.com/gopernicus/gopernicus/pockets/authorization/logic/tuples"
 	"github.com/gopernicus/gopernicus/pockets/authorization/stores/memory"
 	"github.com/gopernicus/gopernicus/sdk"
 )
@@ -19,7 +19,7 @@ import (
 type source struct {
 	store                    *memory.Store
 	receipt                  string
-	tuples                   []relationships.CreateRelationship
+	tuples                   []tuplefacts.Tuple
 	pending                  []tuplecache.Change
 	snapshots, durable, acks int
 	ackErr, snapshotErr      error
@@ -60,15 +60,16 @@ func (s *source) Acknowledge(_ context.Context, before, next string, ids []strin
 }
 func (s *source) ReadSnapshot(ctx context.Context, fn func(context.Context, tuplecache.CheckReads) error) error {
 	s.durable++
-	return s.store.ReadSnapshot(ctx, fn)
+	return s.store.Tuples().ReadTupleSnapshot(ctx, fn)
 }
-func fixture(t testing.TB, tuples []relationships.CreateRelationship, backend tuplecache.Backend) (*tuplecache.TupleCache, *source) {
+func fixture(t testing.TB, tuples []tuplefacts.Tuple, backend tuplecache.Backend, opts ...tuplecache.Option) (*tuplecache.TupleCache, *source) {
 	t.Helper()
 	s := &source{store: memory.New(), tuples: tuples}
-	if err := s.store.Relationships().CreateRelationships(t.Context(), tuples); err != nil {
+	if err := s.store.Tuples().ApplyTuples(t.Context(), tuplefacts.Changes{Add: tuples}); err != nil {
 		t.Fatal(err)
 	}
-	c, err := tuplecache.New(s, backend, tuplecache.WithPolicy(tuplecache.Policy{MaxStaleness: time.Second}))
+	opts = append([]tuplecache.Option{tuplecache.WithPolicy(tuplecache.Policy{MaxStaleness: time.Second})}, opts...)
+	c, err := tuplecache.New(s, backend, opts...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -77,14 +78,14 @@ func fixture(t testing.TB, tuples []relationships.CreateRelationship, backend tu
 }
 
 var directModel = relationships.NewReadModel([]relationships.SubjectRule{{ResourceType: "space", Relation: "viewer", SubjectType: "user"}})
-var grant = relationships.CreateRelationship{ResourceType: "space", ResourceID: "s", Relation: "viewer", SubjectType: "user", SubjectID: "alice"}
+var grant = tupleFact("space", "s", "viewer", "user", "alice", "")
 
 func allowed(t *testing.T, c *tuplecache.TupleCache, want bool) {
 	t.Helper()
 	var got bool
 	err := c.Run(t.Context(), func(ctx context.Context, reads tuplecache.CheckReads) error {
 		var err error
-		got, err = reads.ForChecks(directModel).CheckRelationWithGroupExpansion(ctx, "space", "s", "viewer", "user", "alice", 100)
+		got, err = graph(reads, directModel).CheckRelationWithGroupExpansion(ctx, "space", "s", "viewer", "user", "alice", 100)
 		return err
 	})
 	if err != nil || got != want {
@@ -99,7 +100,7 @@ func poll(t *testing.T, c *tuplecache.TupleCache) {
 }
 func revoke(t *testing.T, s *source) {
 	t.Helper()
-	if err := s.store.Relationships().DeleteRelationshipTarget(t.Context(), "space", "s", "viewer", grant.Subject()); err != nil {
+	if err := s.store.Tuples().ApplyTuples(t.Context(), tuplefacts.Changes{Remove: []tuplefacts.Tuple{grant}}); err != nil {
 		t.Fatal(err)
 	}
 	s.tuples = nil
@@ -108,7 +109,7 @@ func revoke(t *testing.T, s *source) {
 
 func TestBootstrapDeliveryAndRecovery(t *testing.T) {
 	backend := memory.NewTupleCache()
-	c, s := fixture(t, []relationships.CreateRelationship{grant}, backend)
+	c, s := fixture(t, []tuplefacts.Tuple{grant}, backend)
 	allowed(t, c, true)
 	if s.durable != 1 {
 		t.Fatal("uninitialized cache served data")
@@ -145,7 +146,7 @@ func TestBootstrapDeliveryAndRecovery(t *testing.T) {
 
 func TestAcknowledgementFailureAndRedisRestore(t *testing.T) {
 	backend := memory.NewTupleCache()
-	c, s := fixture(t, []relationships.CreateRelationship{grant}, backend)
+	c, s := fixture(t, []tuplefacts.Tuple{grant}, backend)
 	poll(t, c)
 	old, _ := backend.State(t.Context())
 	revoke(t, s)
@@ -164,7 +165,7 @@ func TestAcknowledgementFailureAndRedisRestore(t *testing.T) {
 	}
 	// Restore an old complete Redis snapshot while the SQL outbox is empty.
 	state, _ := backend.State(t.Context())
-	if err := backend.Publish(t.Context(), state, old, tuplecache.Snapshot{Full: true, Tuples: []relationships.CreateRelationship{grant}}, time.Second); err != nil {
+	if err := backend.Publish(t.Context(), state, old, tuplecache.Snapshot{Full: true, Tuples: []tuplefacts.Tuple{grant}}, time.Second); err != nil {
 		t.Fatal(err)
 	}
 	poll(t, c)
@@ -180,7 +181,7 @@ type hookedBackend struct {
 	fail      bool
 }
 
-func (b *hookedBackend) Read(ctx context.Context, state tuplecache.State, keys []tuplecache.SetKey) ([][]relationships.SubjectRef, error) {
+func (b *hookedBackend) Read(ctx context.Context, state tuplecache.State, keys []tuplecache.SetKey) ([][]tuplefacts.Tuple, error) {
 	if b.fail {
 		return nil, tuplecache.ErrUnavailable
 	}
@@ -194,7 +195,7 @@ func (b *hookedBackend) Read(ctx context.Context, state tuplecache.State, keys [
 }
 func TestPublicationDuringCheckRetriesWholeSnapshot(t *testing.T) {
 	backend := &hookedBackend{Backend: memory.NewTupleCache()}
-	c, s := fixture(t, []relationships.CreateRelationship{grant}, backend)
+	c, s := fixture(t, []tuplefacts.Tuple{grant}, backend)
 	poll(t, c)
 	backend.afterRead = func() { revoke(t, s); poll(t, c) }
 	allowed(t, c, false)
@@ -210,7 +211,7 @@ func TestPublicationDuringCheckRetriesWholeSnapshot(t *testing.T) {
 
 func TestExpiryAndSlowObservationDoNotExtendStaleAuthority(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		c, s := fixture(t, []relationships.CreateRelationship{grant}, memory.NewTupleCache())
+		c, s := fixture(t, []tuplefacts.Tuple{grant}, memory.NewTupleCache())
 		poll(t, c)
 		revoke(t, s)
 		s.snapshotErr = errors.New("source disconnected")
@@ -234,8 +235,8 @@ func TestExpiryAndSlowObservationDoNotExtendStaleAuthority(t *testing.T) {
 	})
 }
 
-func TestCallbackLifetimePanicCancellationAndRoleFallback(t *testing.T) {
-	c, s := fixture(t, []relationships.CreateRelationship{grant}, memory.NewTupleCache())
+func TestCallbackLifetimePanicCancellationAndGlobalRole(t *testing.T) {
+	c, s := fixture(t, []tuplefacts.Tuple{grant}, memory.NewTupleCache())
 	poll(t, c)
 	var escaped relationships.CheckReader
 	func() {
@@ -245,7 +246,7 @@ func TestCallbackLifetimePanicCancellationAndRoleFallback(t *testing.T) {
 			}
 		}()
 		_ = c.Run(t.Context(), func(_ context.Context, reads tuplecache.CheckReads) error {
-			escaped = reads.ForChecks(directModel)
+			escaped = graph(reads, directModel)
 			panic("callback panic")
 		})
 	}()
@@ -258,43 +259,54 @@ func TestCallbackLifetimePanicCancellationAndRoleFallback(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	err := c.Run(ctx, func(_ context.Context, reads tuplecache.CheckReads) error {
 		cancel()
-		_, err := reads.ForChecks(directModel).GetRelationTargets(context.Background(), "space", "s", "viewer")
+		_, err := graph(reads, directModel).GetRelationTargets(context.Background(), "space", "s", "viewer")
 		return err
 	})
 	if !errors.Is(err, context.Canceled) || s.durable != 0 {
 		t.Fatalf("cancel: %v durable=%d", err, s.durable)
 	}
-	if err := s.store.Roles().Assign(t.Context(), roles.Assignment{SubjectType: "user", SubjectID: "alice", Role: "admin"}); err != nil {
+	globalRole := tuplefacts.Tuple{Scope: tuplefacts.Global(), Relation: "admin", Subject: tuplefacts.SubjectRef{Type: "user", ID: "alice"}}
+	if err := s.store.Tuples().ApplyTuples(t.Context(), tuplefacts.Changes{Add: []tuplefacts.Tuple{globalRole}}); err != nil {
 		t.Fatal(err)
 	}
+	s.tuples = append(s.tuples, globalRole)
+	s.pending = []tuplecache.Change{{ID: "global-role", After: &globalRole}}
+	poll(t, c)
 	var hasRole bool
 	if err := c.Run(t.Context(), func(ctx context.Context, reads tuplecache.CheckReads) error {
 		var err error
-		hasRole, err = reads.HasExactRole(ctx, "user", "alice", "admin", "", "")
+		hasRole, err = reads.Contains(ctx, globalRole)
 		return err
-	}); err != nil || !hasRole || s.durable != 1 {
-		t.Fatalf("durable roles: %v/%v/%d", hasRole, err, s.durable)
+	}); err != nil || !hasRole || s.durable != 0 {
+		t.Fatalf("cached global role: %v/%v/%d", hasRole, err, s.durable)
 	}
 	s.ambient = true
-	if err := c.Run(t.Context(), func(_ context.Context, reads tuplecache.CheckReads) error {
-		if reads != nil {
-			t.Fatal("ambient callback did not use caller view")
+	if err := c.ReadTupleSnapshot(t.Context(), func(ctx context.Context, reads tuplecache.CheckReads) error {
+		if reads == nil {
+			t.Fatal("ambient callback did not receive a bound reader")
 		}
-		return nil
+		held, err := reads.Contains(ctx, globalRole)
+		if err != nil || !held {
+			t.Fatalf("ambient authoritative role: %v/%v", held, err)
+		}
+		return err
 	}); err != nil {
 		t.Fatal(err)
+	}
+	if s.durable != 1 {
+		t.Fatal("ambient operation did not borrow durable snapshot")
 	}
 }
 
 func TestRawReaderParityModelsCyclesBudgetsAndBatches(t *testing.T) {
-	tuples := []relationships.CreateRelationship{
+	tuples := []tuplefacts.Tuple{
 		grant,
-		{ResourceType: "group", ResourceID: "g", Relation: "member", SubjectType: "user", SubjectID: "alice"},
-		{ResourceType: "group", ResourceID: "h", Relation: "member", SubjectType: "group", SubjectID: "g", SubjectRelation: "member"},
-		{ResourceType: "group", ResourceID: "g", Relation: "member", SubjectType: "group", SubjectID: "h", SubjectRelation: "member"},
-		{ResourceType: "space", ResourceID: "shared", Relation: "viewer", SubjectType: "group", SubjectID: "h", SubjectRelation: "member"},
-		{ResourceType: "space", ResourceID: "admin-only", Relation: "viewer", SubjectType: "group", SubjectID: "g", SubjectRelation: "admin"},
-		{ResourceType: "project", ResourceID: "p", Relation: "owner", SubjectType: "group", SubjectID: "h", SubjectRelation: "member"},
+		tupleFact("group", "g", "member", "user", "alice", ""),
+		tupleFact("group", "h", "member", "group", "g", "member"),
+		tupleFact("group", "g", "member", "group", "h", "member"),
+		tupleFact("space", "shared", "viewer", "group", "h", "member"),
+		tupleFact("space", "admin-only", "viewer", "group", "g", "admin"),
+		tupleFact("project", "p", "owner", "group", "h", "member"),
 	}
 	c, s := fixture(t, tuples, memory.NewTupleCache())
 	poll(t, c)
@@ -314,7 +326,7 @@ func TestRawReaderParityModelsCyclesBudgetsAndBatches(t *testing.T) {
 				var got map[string]bool
 				err := c.Run(t.Context(), func(ctx context.Context, reads tuplecache.CheckReads) error {
 					var err error
-					got, err = reads.ForChecks(model).CheckBatchDirect(ctx, "space", ids, "viewer", "user", "alice", limit)
+					got, err = graph(reads, model).CheckBatchDirect(ctx, "space", ids, "viewer", "user", "alice", limit)
 					return err
 				})
 				if !errors.Is(err, wantErr) || !reflect.DeepEqual(got, want) {
@@ -327,7 +339,7 @@ func TestRawReaderParityModelsCyclesBudgetsAndBatches(t *testing.T) {
 		t.Fatal("parity tests silently fell back")
 	}
 	if err := c.Run(t.Context(), func(ctx context.Context, reads tuplecache.CheckReads) error {
-		r := reads.ForChecks(wide).(relationships.RelationSetReader)
+		r := graph(reads, wide).(relationships.RelationSetReader)
 		got, err := r.RelationTargetsFor(ctx, "space", []string{"shared", "shared", "absent"}, "viewer")
 		if err != nil || len(got["shared"]) != 1 || len(got["absent"]) != 0 {
 			t.Fatalf("duplicate/empty forward sets: %v/%v", got, err)
@@ -352,6 +364,9 @@ func TestPolicyBindingStartupAndWake(t *testing.T) {
 		}
 	}
 	c, s := fixture(t, nil, b)
+	if c.Binding() != "protocol:2/test-store/max-staleness:1000000000" {
+		t.Fatalf("protocol is absent from shared binding: %q", c.Binding())
+	}
 	c.Notify()
 	c.Notify()
 	select {
@@ -386,7 +401,7 @@ func TestPolicyBindingStartupAndWake(t *testing.T) {
 func TestSharedMirrorRejectsDifferentFreshnessPolicies(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		backend := memory.NewTupleCache()
-		short, s := fixture(t, []relationships.CreateRelationship{grant}, backend)
+		short, s := fixture(t, []tuplefacts.Tuple{grant}, backend)
 		poll(t, short)
 		long, err := tuplecache.New(s, backend, tuplecache.WithPolicy(tuplecache.Policy{MaxStaleness: 5 * time.Minute}))
 		if err != nil {
@@ -404,4 +419,11 @@ func TestSharedMirrorRejectsDifferentFreshnessPolicies(t *testing.T) {
 			t.Fatal("mismatched policy or expired runtime served stale grant")
 		}
 	})
+}
+
+func tupleFact(rt, rid, rel, st, sid, sr string) tuplefacts.Tuple {
+	return tuplefacts.Tuple{Scope: tuplefacts.On(rt, rid), Relation: rel, Subject: tuplefacts.SubjectRef{Type: st, ID: sid, Relation: sr}}
+}
+func graph(reader tuplecache.CheckReads, model relationships.ReadModel) relationships.CheckReader {
+	return reader.(relationships.CheckReadSource).ForChecks(model)
 }

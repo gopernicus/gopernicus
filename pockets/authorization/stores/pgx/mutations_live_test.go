@@ -7,23 +7,25 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/gopernicus/gopernicus/pockets/authorization/stores/storetest"
+
 	"github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
-	"github.com/gopernicus/gopernicus/pockets/authorization"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/audit"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/mutations"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/relationships"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuples"
 	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/pkg/list"
 )
 
-func liveRepos(t *testing.T) (*pgxdb.DB, authorization.Repositories) { return liveReposWith(t) }
-func liveReposNoGuardian(t *testing.T) (*pgxdb.DB, authorization.Repositories) {
+func liveRepos(t *testing.T) (*pgxdb.DB, storetest.Repositories) { return liveReposWith(t) }
+func liveReposNoGuardian(t *testing.T) (*pgxdb.DB, storetest.Repositories) {
 	return liveReposWith(t)
 }
-func liveReposWith(t *testing.T, opts ...Option) (*pgxdb.DB, authorization.Repositories) {
+func liveReposWith(t *testing.T, opts ...Option) (*pgxdb.DB, storetest.Repositories) {
 	t.Helper()
 	db := openAndMigrate(t, requireDSN(t))
-	repos, err := Repositories(context.Background(), db, append(storeOptions(t), opts...)...)
+	repos, err := testRepositories(context.Background(), db, append(storeOptions(t), opts...)...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -49,7 +51,7 @@ func edge(op mutations.Operation, target mutations.Target, relation string, subj
 func auditContext() context.Context {
 	return audit.WithSource(context.Background(), audit.Source{System: "sql-test", Reason: "test change"})
 }
-func auditRecords(t *testing.T, r authorization.Repositories) []audit.Record {
+func auditRecords(t *testing.T, r storetest.Repositories) []audit.Record {
 	t.Helper()
 	page, err := r.Audit.List(context.Background(), audit.Filter{}, list.Request{Limit: 100})
 	if err != nil {
@@ -103,7 +105,7 @@ func TestMutationConcurrentNaturalNoOpsAndAudit(t *testing.T) {
 	}
 	seen := map[string]bool{}
 	for _, r := range records {
-		if r.Change.Relationship == nil || r.Change.Relationship.SubjectRelation != "" || seen[r.ID] {
+		if r.Change.Tuple.Scope.Kind != tuples.ResourceScope || r.Change.Tuple.Subject.Relation != "" || seen[r.ID] {
 			t.Fatalf("invalid/duplicate record: %+v", r)
 		}
 		seen[r.ID] = true

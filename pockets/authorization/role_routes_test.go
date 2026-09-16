@@ -15,6 +15,8 @@ import (
 	"github.com/gopernicus/gopernicus/pockets"
 	authorizationhttp "github.com/gopernicus/gopernicus/pockets/authorization/inbound/http"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/mutations"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/roles"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuples"
 	"github.com/gopernicus/gopernicus/pockets/authorization/stores/memory"
 	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/pkg/list"
@@ -50,17 +52,16 @@ func TestNewServiceRoleRoutesConstructionMatrix(t *testing.T) {
 		wantErr error
 	}{
 		{
-			name: "gate without the roles kind",
+			name: "gate with canonical authority",
 			repos: func(s *memory.Store) Repositories {
-				return Repositories{Relationships: &relFake{}, Mutations: s.Mutations()}
+				return Repositories{Mutations: s.Mutations(), Tuples: memory.NewTuples()}
 			},
-			cfg:     []Option{WithRelationshipModel(validModel()), WithGuard(allowRoleRouteGuard{}), WithRoleRoutes(authorizationhttp.RoleRoutes{Gate: passRoleRouteGate})},
-			wantErr: authorizationhttp.ErrRoleRoutesGateWithoutRoles,
+			cfg: []Option{WithModel(validModel()), WithGuard(allowRoleRouteGuard{}), WithRoleRoutes(authorizationhttp.RoleRoutes{Gate: passRoleRouteGate})},
 		},
 		{
 			name: "gate without a guard",
 			repos: func(s *memory.Store) Repositories {
-				return Repositories{Roles: s.Roles(), Mutations: s.Mutations()}
+				return Repositories{Tuples: s.Tuples(), Mutations: s.Mutations()}
 			},
 			cfg:     []Option{WithRoleRoutes(authorizationhttp.RoleRoutes{Gate: passRoleRouteGate})},
 			wantErr: authorizationhttp.ErrRoleRoutesGateWithoutGuard,
@@ -68,7 +69,7 @@ func TestNewServiceRoleRoutesConstructionMatrix(t *testing.T) {
 		{
 			name: "assignment policy without the routes",
 			repos: func(s *memory.Store) Repositories {
-				return Repositories{Roles: s.Roles(), Mutations: s.Mutations()}
+				return Repositories{Tuples: s.Tuples(), Mutations: s.Mutations()}
 			},
 			cfg:     []Option{WithGuard(allowRoleRouteGuard{}), WithRoleRoutes(authorizationhttp.RoleRoutes{AssignmentPolicy: refuseAssignment})},
 			wantErr: authorizationhttp.ErrRoleRouteAssignmentPolicyWithoutRoutes,
@@ -76,14 +77,14 @@ func TestNewServiceRoleRoutesConstructionMatrix(t *testing.T) {
 		{
 			name: "unknown list strategy",
 			repos: func(s *memory.Store) Repositories {
-				return Repositories{Roles: s.Roles(), Mutations: s.Mutations()}
+				return Repositories{Tuples: s.Tuples(), Mutations: s.Mutations()}
 			},
 			cfg:     []Option{WithGuard(allowRoleRouteGuard{}), WithRoleRoutes(authorizationhttp.RoleRoutes{Gate: passRoleRouteGate, ListStrategy: "keyset"})},
 			wantErr: authorizationhttp.ErrInvalidListStrategy,
 		},
 		{
 			name:  "unknown list strategy is rejected even when orphaned by no gate",
-			repos: func(s *memory.Store) Repositories { return Repositories{Roles: s.Roles()} },
+			repos: func(s *memory.Store) Repositories { return Repositories{Tuples: s.Tuples()} },
 			cfg:   []Option{WithRoleRoutes(authorizationhttp.RoleRoutes{ListStrategy: "keyset"})},
 			// An invalid enum is a typo, never a posture — the orphan rule silences
 			// only a VALID unused value.
@@ -92,27 +93,27 @@ func TestNewServiceRoleRoutesConstructionMatrix(t *testing.T) {
 		{
 			name: "gate with roles and a guard",
 			repos: func(s *memory.Store) Repositories {
-				return Repositories{Roles: s.Roles(), Mutations: s.Mutations()}
+				return Repositories{Tuples: s.Tuples(), Mutations: s.Mutations()}
 			},
 			cfg: []Option{WithGuard(allowRoleRouteGuard{}), WithRoleRoutes(authorizationhttp.RoleRoutes{Gate: passRoleRouteGate})},
 		},
 		{
 			name: "gate with an assignment policy and an offset strategy",
 			repos: func(s *memory.Store) Repositories {
-				return Repositories{Roles: s.Roles(), Mutations: s.Mutations()}
+				return Repositories{Tuples: s.Tuples(), Mutations: s.Mutations()}
 			},
 			cfg: []Option{WithGuard(allowRoleRouteGuard{}), WithRoleRoutes(authorizationhttp.RoleRoutes{Gate: passRoleRouteGate, AssignmentPolicy: refuseAssignment, ListStrategy: list.StrategyOffset})},
 		},
 		{
 			name: "no gate at all is unchanged",
 			repos: func(s *memory.Store) Repositories {
-				return Repositories{Roles: s.Roles(), Mutations: s.Mutations()}
+				return Repositories{Tuples: s.Tuples(), Mutations: s.Mutations()}
 			},
 			cfg: []Option{WithGuard(allowRoleRouteGuard{})},
 		},
 		{
 			name:  "a valid but unused list strategy is a silent cosmetic orphan",
-			repos: func(s *memory.Store) Repositories { return Repositories{Roles: s.Roles()} },
+			repos: func(s *memory.Store) Repositories { return Repositories{Tuples: s.Tuples()} },
 			cfg:   []Option{WithRoleRoutes(authorizationhttp.RoleRoutes{ListStrategy: list.StrategyOffset})},
 		},
 	}
@@ -135,7 +136,7 @@ func TestNewServiceRoleRoutesConstructionMatrix(t *testing.T) {
 // the Service, so Register has everything the mount needs.
 func TestServiceCapturesRoleRouteConfig(t *testing.T) {
 	store := memory.New()
-	comps, err := New(Repositories{Roles: store.Roles(), Mutations: store.Mutations()}, WithGuard(allowRoleRouteGuard{}), WithRoleRoutes(authorizationhttp.RoleRoutes{Gate: passRoleRouteGate, AssignmentPolicy: refuseAssignment, ListStrategy: list.StrategyOffset}))
+	comps, err := New(Repositories{Tuples: store.Tuples(), Mutations: store.Mutations()}, WithGuard(allowRoleRouteGuard{}), WithRoleRoutes(authorizationhttp.RoleRoutes{Gate: passRoleRouteGate, AssignmentPolicy: refuseAssignment, ListStrategy: list.StrategyOffset}))
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
@@ -243,7 +244,7 @@ func newRoleAdminHost(t *testing.T, gate web.Middleware, policy authorizationhtt
 	store := memory.New()
 	guard := &recordingRoleGuard{}
 	logs := &bytes.Buffer{}
-	comps, err := New(Repositories{Roles: store.Roles(), Mutations: store.Mutations()}, WithGuard(guard), WithLogger(slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug}))), WithRoleRoutes(authorizationhttp.RoleRoutes{Gate: gate, AssignmentPolicy: policy}))
+	comps, err := New(Repositories{Tuples: store.Tuples(), Mutations: store.Mutations()}, WithGuard(guard), WithLogger(slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug}))), WithRoleRoutes(authorizationhttp.RoleRoutes{Gate: gate, AssignmentPolicy: policy}))
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
@@ -282,7 +283,6 @@ var bundledRoleRoutes = []struct{ method, path string }{
 	{"POST", "/authorization/roles/unassign"},
 	{"GET", "/authorization/roles/by-subject?subject_type=user&subject_id=u-1"},
 	{"GET", "/authorization/roles/by-resource?resource_type=organization&resource_id=o-1"},
-	{"GET", "/authorization/roles/effective?resource_type=organization&resource_id=o-1"},
 }
 
 // TestRegisterWithoutGateMountsNothing proves deny-by-absence: with no gate the
@@ -292,7 +292,7 @@ func TestRegisterWithoutGateMountsNothing(t *testing.T) {
 	for _, rt := range bundledRoleRoutes {
 		var rec *httptest.ResponseRecorder
 		if rt.method == "POST" {
-			rec = postRole(t, host.handler, rt.path, `{"subject_type":"user","subject_id":"u-1","role":"viewer"}`)
+			rec = postRole(t, host.handler, rt.path, `{"subject_type":"user","subject_id":"u-1","role":"viewer","scope":{"kind":"global"}}`)
 		} else {
 			rec = getRole(t, host.handler, rt.path)
 		}
@@ -312,7 +312,7 @@ func TestRegisterWithoutGateMountsNothing(t *testing.T) {
 // wiring fails Register rather than booting route-free.
 func TestRegisterWithGateAndNilRouterIsLoud(t *testing.T) {
 	store := memory.New()
-	comps, err := New(Repositories{Roles: store.Roles(), Mutations: store.Mutations()}, WithGuard(&recordingRoleGuard{}), WithRoleRoutes(authorizationhttp.RoleRoutes{Gate: passRoleRouteGate}))
+	comps, err := New(Repositories{Tuples: store.Tuples(), Mutations: store.Mutations()}, WithGuard(&recordingRoleGuard{}), WithRoleRoutes(authorizationhttp.RoleRoutes{Gate: passRoleRouteGate}))
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
@@ -325,7 +325,7 @@ func TestRegisterWithGateAndNilRouterIsLoud(t *testing.T) {
 // every host that sets no gate.
 func TestRegisterWithoutGateStillToleratesAZeroMount(t *testing.T) {
 	store := memory.New()
-	comps, err := New(Repositories{Roles: store.Roles()})
+	comps, err := New(Repositories{Tuples: store.Tuples()})
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
@@ -342,7 +342,7 @@ func TestBundledRoutesRefuseThroughADenyingGate(t *testing.T) {
 	for _, rt := range bundledRoleRoutes {
 		var rec *httptest.ResponseRecorder
 		if rt.method == "POST" {
-			rec = postRole(t, host.handler, rt.path, `{"subject_type":"user","subject_id":"u-1","role":"viewer"}`)
+			rec = postRole(t, host.handler, rt.path, `{"subject_type":"user","subject_id":"u-1","role":"viewer","scope":{"kind":"global"}}`)
 		} else {
 			rec = getRole(t, host.handler, rt.path)
 		}
@@ -368,7 +368,7 @@ func TestBundledRoutesRefuseThroughADenyingGate(t *testing.T) {
 func TestBundledWritesRequireAStashedPrincipal(t *testing.T) {
 	host := newRoleAdminHost(t, passRoleRouteGate, nil)
 	for _, path := range []string{"/authorization/roles", "/authorization/roles/unassign"} {
-		rec := postRole(t, host.handler, path, `{"subject_type":"user","subject_id":"u-1","role":"viewer"}`)
+		rec := postRole(t, host.handler, path, `{"subject_type":"user","subject_id":"u-1","role":"viewer","scope":{"kind":"global"}}`)
 		if rec.Code != http.StatusUnauthorized {
 			t.Errorf("POST %s = %d, want 401", path, rec.Code)
 		}
@@ -384,12 +384,12 @@ func TestBundledRoleLifecycle(t *testing.T) {
 	// A GLOBAL viewer grant, so the later scoped unassign has a fallback to
 	// report honestly.
 	if rec := postRole(t, host.handler, "/authorization/roles",
-		`{"subject_type":"user","subject_id":"u-1","role":"viewer"}`); rec.Code != http.StatusOK {
+		`{"subject_type":"user","subject_id":"u-1","role":"viewer","scope":{"kind":"global"}}`); rec.Code != http.StatusOK {
 		t.Fatalf("global assign = %d, body %s", rec.Code, rec.Body.String())
 	}
 
 	rec := postRole(t, host.handler, "/authorization/roles",
-		`{"subject_type":"user","subject_id":"u-1","role":"viewer","resource_type":"organization","resource_id":"o-1"}`)
+		`{"subject_type":"user","subject_id":"u-1","role":"viewer","scope":{"kind":"resource","resource_type":"organization","resource_id":"o-1"}}`)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("assign = %d, body %s", rec.Code, rec.Body.String())
 	}
@@ -399,7 +399,7 @@ func TestBundledRoleLifecycle(t *testing.T) {
 	}
 
 	replay := postRole(t, host.handler, "/authorization/roles",
-		`{"subject_type":"user","subject_id":"u-1","role":"viewer","resource_type":"organization","resource_id":"o-1"}`)
+		`{"subject_type":"user","subject_id":"u-1","role":"viewer","scope":{"kind":"resource","resource_type":"organization","resource_id":"o-1"}}`)
 	if replay.Code != http.StatusOK {
 		t.Fatalf("replay = %d, body %s", replay.Code, replay.Body.String())
 	}
@@ -426,32 +426,27 @@ func TestBundledRoleLifecycle(t *testing.T) {
 		t.Fatalf("by-subject items = %d, want the global and the scoped grant", len(page.Items))
 	}
 
-	effective := getRole(t, host.handler, "/authorization/roles/effective?resource_type=organization&resource_id=o-1")
-	if effective.Code != http.StatusOK {
-		t.Fatalf("effective = %d, body %s", effective.Code, effective.Body.String())
+	scoped := getRole(t, host.handler, "/authorization/roles/by-resource?resource_type=organization&resource_id=o-1")
+	if scoped.Code != http.StatusOK {
+		t.Fatalf("scope list: %d, %s", scoped.Code, scoped.Body.String())
 	}
-	var grants struct {
-		Items []struct {
-			Role   string `json:"role"`
-			Direct bool   `json:"direct"`
-			Global bool   `json:"global"`
-		} `json:"items"`
+	var scopedPage struct {
+		Items []roles.Assignment `json:"items"`
 	}
-	if err := json.Unmarshal(effective.Body.Bytes(), &grants); err != nil {
-		t.Fatalf("decode: %v", err)
+	if err := json.Unmarshal(scoped.Body.Bytes(), &scopedPage); err != nil {
+		t.Fatal(err)
 	}
-	if len(grants.Items) != 1 || !grants.Items[0].Direct || !grants.Items[0].Global {
-		t.Fatalf("effective grants = %+v, want one grant held both directly and globally", grants.Items)
+	if len(scopedPage.Items) != 1 || scopedPage.Items[0].Scope != tuples.On("organization", "o-1") {
+		t.Fatalf("exact scope list: %+v", scopedPage.Items)
 	}
 
 	unassign := postRole(t, host.handler, "/authorization/roles/unassign",
-		`{"subject_type":"user","subject_id":"u-1","role":"viewer","resource_type":"organization","resource_id":"o-1"}`)
+		`{"subject_type":"user","subject_id":"u-1","role":"viewer","scope":{"kind":"resource","resource_type":"organization","resource_id":"o-1"}}`)
 	if unassign.Code != http.StatusOK {
 		t.Fatalf("unassign = %d, body %s", unassign.Code, unassign.Body.String())
 	}
 	var removed struct {
-		Outcome              string `json:"outcome"`
-		SameRoleGrantRemains bool   `json:"same_role_grant_remains"`
+		Outcome string `json:"outcome"`
 	}
 	if err := json.Unmarshal(unassign.Body.Bytes(), &removed); err != nil {
 		t.Fatalf("decode: %v", err)
@@ -459,8 +454,18 @@ func TestBundledRoleLifecycle(t *testing.T) {
 	if removed.Outcome != string(mutations.OutcomeApplied) {
 		t.Errorf("unassign outcome = %q, want applied", removed.Outcome)
 	}
-	if !removed.SameRoleGrantRemains {
-		t.Error("same_role_grant_remains = false, but the global viewer grant still satisfies the scoped check")
+	if strings.Contains(unassign.Body.String(), "same_role_grant_remains") {
+		t.Fatal("unassign inferred policy beyond its exact fact")
+	}
+	listing = getRole(t, host.handler, "/authorization/roles/by-subject?subject_type=user&subject_id=u-1")
+	var remaining struct {
+		Items []roles.Assignment `json:"items"`
+	}
+	if err := json.Unmarshal(listing.Body.Bytes(), &remaining); err != nil {
+		t.Fatal(err)
+	}
+	if len(remaining.Items) != 1 || remaining.Items[0].Scope != tuples.Global() {
+		t.Fatalf("exact unassign changed another scope: %+v", remaining.Items)
 	}
 }
 
@@ -492,7 +497,7 @@ func TestRoleRouteAssignmentPolicyRefusalNeverReachesTheGuard(t *testing.T) {
 	host := newRoleAdminHost(t, authenticatedGate(sdk.Principal{Type: "user", ID: "admin-1"}), policy)
 
 	rec := postRole(t, host.handler, "/authorization/roles",
-		`{"subject_type":"user","subject_id":"u-1","role":"steward","resource_type":"organization","resource_id":"o-1"}`)
+		`{"subject_type":"user","subject_id":"u-1","role":"steward","scope":{"kind":"resource","resource_type":"organization","resource_id":"o-1"}}`)
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("refused assign = %d, body %s", rec.Code, rec.Body.String())
 	}
@@ -505,7 +510,7 @@ func TestRoleRouteAssignmentPolicyRefusalNeverReachesTheGuard(t *testing.T) {
 	}
 
 	if allowed := postRole(t, host.handler, "/authorization/roles",
-		`{"subject_type":"user","subject_id":"u-1","role":"viewer","resource_type":"organization","resource_id":"o-1"}`); allowed.Code != http.StatusOK {
+		`{"subject_type":"user","subject_id":"u-1","role":"viewer","scope":{"kind":"resource","resource_type":"organization","resource_id":"o-1"}}`); allowed.Code != http.StatusOK {
 		t.Fatalf("allowed assign = %d, body %s", allowed.Code, allowed.Body.String())
 	}
 	if len(seen) != 2 {
@@ -527,7 +532,7 @@ func TestRoleRouteAssignmentPolicyIsNotConsultedOnUnassign(t *testing.T) {
 	host := newRoleAdminHost(t, authenticatedGate(sdk.Principal{Type: "user", ID: "admin-1"}), policy)
 
 	if rec := postRole(t, host.handler, "/authorization/roles/unassign",
-		`{"subject_type":"user","subject_id":"u-1","role":"viewer","resource_type":"organization","resource_id":"o-1"}`); rec.Code != http.StatusOK {
+		`{"subject_type":"user","subject_id":"u-1","role":"viewer","scope":{"kind":"resource","resource_type":"organization","resource_id":"o-1"}}`); rec.Code != http.StatusOK {
 		t.Fatalf("unassign = %d, body %s", rec.Code, rec.Body.String())
 	}
 	if calls != 0 {
@@ -540,7 +545,7 @@ func TestRoleRouteAssignmentPolicyIsNotConsultedOnUnassign(t *testing.T) {
 func TestBundledAssignForwardsTheActorToTheGuard(t *testing.T) {
 	host := newRoleAdminHost(t, authenticatedGate(sdk.Principal{Type: "service_account", ID: "sa-7"}), nil)
 	if rec := postRole(t, host.handler, "/authorization/roles",
-		`{"subject_type":"user","subject_id":"u-1","role":"viewer","resource_type":"organization","resource_id":"o-1"}`); rec.Code != http.StatusOK {
+		`{"subject_type":"user","subject_id":"u-1","role":"viewer","scope":{"kind":"resource","resource_type":"organization","resource_id":"o-1"}}`); rec.Code != http.StatusOK {
 		t.Fatalf("assign = %d, body %s", rec.Code, rec.Body.String())
 	}
 	if len(host.guard.attempts) != 1 {
@@ -563,7 +568,7 @@ func TestBundledAssignForwardsTheActorToTheGuard(t *testing.T) {
 func TestBundledHalfScopedPairIs400(t *testing.T) {
 	host := newRoleAdminHost(t, authenticatedGate(sdk.Principal{Type: "user", ID: "admin-1"}), nil)
 	rec := postRole(t, host.handler, "/authorization/roles",
-		`{"subject_type":"user","subject_id":"u-1","role":"viewer","resource_type":"organization"}`)
+		`{"subject_type":"user","subject_id":"u-1","role":"viewer","scope":{"kind":"resource","resource_type":"organization","resource_id":""}}`)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("half-scoped assign = %d, body %s", rec.Code, rec.Body.String())
 	}

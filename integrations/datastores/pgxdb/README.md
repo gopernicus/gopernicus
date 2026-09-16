@@ -735,3 +735,19 @@ Call `Commit` on success and `Rollback` on error or panic; cleanup retains the
 existing independent cancellation context. `Begin` and `Transact` retain their
 existing writer semantics. Security freshness observations require a primary
 connection, not a lagging read replica.
+
+`TransactSnapshot(ctx, fn)` provides the same ambient transaction context as
+`Transact`, with explicit read-write REPEATABLE READ isolation. Use it when a
+workflow needs multiple reads from one snapshot together with its own pending
+writes. It commits on success and retains the same error, panic and cancellation
+cleanup rules as `Transact`. Both methods reject nesting, including nesting one
+inside the other. Neither retries a callback; serialization failures return to
+the caller.
+
+`Tx.SnapshotIsolation(ctx)` queries `transaction_isolation` on that transaction.
+It returns true for REPEATABLE READ or SERIALIZABLE, false for weaker isolation,
+and an error when isolation cannot be read. It does not infer isolation from
+pool configuration or alter a transaction after work has begun. A repository
+that requires a coherent multi-read result can use this check before reading
+from an ambient transaction. Ordinary `Transact` continues using the server's
+default isolation; callers opt into `TransactSnapshot` explicitly.

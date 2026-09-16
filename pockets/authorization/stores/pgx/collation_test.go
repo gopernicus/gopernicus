@@ -12,8 +12,8 @@
 //     schema reports collation_name = 'C' for every inventoried column.
 //   - TestCollationControlsOrdering_NonC (live, POSTGRES_NON_C_TEST_DSN): on a
 //     NON-C database, the column collation — not the cluster default — controls
-//     the ordering, proven through the store's real ListEffectiveByResource query
-//     path (ordered by the derived grant_key over collated iam_roles columns).
+//     the ordering, proven through the store's real ListRoleAssignmentsByScope query
+//     path (ordered by the canonical tuple_key over collated iam_tuples columns).
 package pgx
 
 import (
@@ -22,6 +22,8 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuples"
 
 	"github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/roles"
@@ -36,16 +38,16 @@ type collatedColumn struct {
 	Why    string
 }
 
-// Role key columns retain their contractual C collation. Relationship tuple
-// ordering pins C on the derived expression instead, avoiding changes to the
-// recursive CTE's column collations. The surrogate relationship ID is removed
-// by migration 0006.
+// Canonical fields participate in exact identity and byte-order pagination.
 var contractualCollatedColumns = []collatedColumn{
-	{"iam_roles", "subject_type", "feeds derived role_key/grant_key ordering key"},
-	{"iam_roles", "subject_id", "feeds derived role_key/grant_key ordering key"},
-	{"iam_roles", "role", "feeds derived role_key/grant_key ordering key"},
-	{"iam_roles", "resource_type", "feeds derived role_key ordering key"},
-	{"iam_roles", "resource_id", "feeds derived role_key ordering key"},
+	{"iam_tuples", "subject_type", "feeds canonical tuple_key ordering key"},
+	{"iam_tuples", "subject_id", "feeds canonical tuple identity"},
+	{"iam_tuples", "relation", "feeds canonical tuple_key ordering key"},
+	{"iam_tuples", "resource_type", "feeds canonical tuple_key ordering key"},
+	{"iam_tuples", "resource_id", "feeds canonical tuple_key ordering key"},
+	{"iam_tuples", "subject_relation", "distinguishes exact usersets"},
+	{"iam_audit", "id", "audit tie-break key"},
+	{"iam_audit", "encoding", "canonical audit encoding"},
 }
 
 // resetCanonicalSchema drops the canonical tables and clears their ledger rows,
@@ -55,7 +57,7 @@ func resetCanonicalSchema(t *testing.T, db *pgxdb.DB) {
 	t.Helper()
 	ctx := context.Background()
 	ensureSchema(t, db)
-	for _, tbl := range []string{"iam_audit", "iam_mutations", "iam_scopes", "iam_roles", "iam_relationships"} {
+	for _, tbl := range []string{"iam_audit", "iam_tuples"} {
 		if _, err := db.Exec(ctx, "DROP TABLE IF EXISTS "+qualify(t, tbl)+" CASCADE"); err != nil {
 			t.Fatalf("drop %s: %v", tbl, err)
 		}
@@ -91,6 +93,10 @@ func tableCreateBody(t *testing.T, sql, table string) string {
 	t.Helper()
 	head := "CREATE TABLE IF NOT EXISTS " + table + " ("
 	i := strings.Index(sql, head)
+	if i < 0 {
+		head = "CREATE TABLE " + table + " ("
+		i = strings.Index(sql, head)
+	}
 	if i < 0 {
 		t.Fatalf("no CREATE TABLE for %q", table)
 	}
@@ -173,9 +179,9 @@ func TestContractualCollation_Catalog(t *testing.T) {
 
 // TestCollationControlsOrdering_NonC proves on a NON-C database that the column
 // collation, not the cluster default, controls ordering. It exercises
-// ListEffectiveByResource — a representative inventoried ordering path, ordered by
-// the derived grant_key (subject_type||chr(1)||subject_id||chr(1)||role over the
-// collated iam_roles columns) — with two subject ids whose byte order ('B' < 'a')
+// ListRoleAssignmentsByScope — a representative inventoried ordering path, ordered by
+// the canonical tuple_key (subject_type||chr(1)||subject_id||chr(1)||role over the
+// collated iam_tuples columns) — with two subject ids whose byte order ('B' < 'a')
 // is the reverse of the locale order ('a' < 'B'). The representative generalizes:
 // TestContractualCollation_Catalog proves every inventoried column shares the
 // same 'C' catalog collation.
@@ -197,34 +203,37 @@ func TestCollationControlsOrdering_NonC(t *testing.T) {
 
 	resetCanonicalSchema(t, db)
 
-	repos, err := Repositories(context.Background(), db, storeOptions(t)...)
+	repos, err := testRepositories(context.Background(), db, storeOptions(t)...)
 	if err != nil {
 		t.Fatalf("Repositories: %v", err)
 	}
-	roleStore := repos.Roles
+	roleStore, err := roles.NewService(repos.Tuples)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	// Two viewer grants scoped to one resource, differing only in subject_id. 'B'
 	// (0x42) sorts before 'a' (0x61) byte-wise; en_US.utf8 sorts 'a' before 'B'.
-	// The grant_key differs at that byte, so the derived-key ORDER BY reveals the
+	// The tuple_key differs at that byte, so the derived-key ORDER BY reveals the
 	// winning collation.
 	for _, a := range []roles.Assignment{
-		{SubjectType: "user", SubjectID: "aaa-collate-proof", Role: "viewer", ResourceType: "doc", ResourceID: "d-collate-proof"},
-		{SubjectType: "user", SubjectID: "BBB-collate-proof", Role: "viewer", ResourceType: "doc", ResourceID: "d-collate-proof"},
+		{Scope: tuples.On("doc", "d-collate-proof"), SubjectType: "user", SubjectID: "aaa-collate-proof", Role: "viewer"},
+		{Scope: tuples.On("doc", "d-collate-proof"), SubjectType: "user", SubjectID: "BBB-collate-proof", Role: "viewer"},
 	} {
-		if err := roleStore.Assign(ctx, a); err != nil {
+		if err := assignRole(repos.Tuples, ctx, a); err != nil {
 			t.Fatalf("Assign %s: %v", a.SubjectID, err)
 		}
 	}
 
-	page, err := roleStore.ListEffectiveByResource(ctx, "doc", "d-collate-proof", list.Request{})
+	page, err := roleStore.ListRoleAssignmentsByScope(ctx, tuples.On("doc", "d-collate-proof"), list.Request{})
 	if err != nil {
-		t.Fatalf("ListEffectiveByResource: %v", err)
+		t.Fatalf("ListRoleAssignmentsByScope: %v", err)
 	}
 	got := make([]string, 0, len(page.Items))
 	for _, g := range page.Items {
 		got = append(got, g.SubjectID)
 	}
-	// ListEffectiveByResource orders by grant_key ASC; under COLLATE "C" that is
+	// ListRoleAssignmentsByScope orders by tuple_key ASC; under COLLATE "C" that is
 	// byte order: "BBB…" (0x42) before "aaa…" (0x61). A non-C cluster default
 	// would invert this.
 	want := []string{"BBB-collate-proof", "aaa-collate-proof"}

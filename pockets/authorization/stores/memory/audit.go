@@ -3,10 +3,12 @@ package memory
 import (
 	"context"
 	"fmt"
-	"slices"
+	"maps"
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuples"
 
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/audit"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/relationships"
@@ -30,7 +32,7 @@ func (s *state) write(ctx context.Context, apply func(*state) error) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	next := &state{rel: slices.Clone(s.rel), role: slices.Clone(s.role)}
+	next := &state{facts: maps.Clone(s.facts)}
 	if err := apply(next); err != nil {
 		return err
 	}
@@ -51,52 +53,32 @@ func (s *state) write(ctx context.Context, apply func(*state) error) error {
 		return err
 	}
 
-	s.rel, s.role = next.rel, next.role
+	s.facts = next.facts
 	s.auditRecords = append(s.auditRecords, records...)
 	return nil
 }
 
 func stateChanges(before, after *state) []audit.Change {
-	var changes []audit.Change
-	beforeRel, afterRel := map[relRow]bool{}, map[relRow]bool{}
-	for _, r := range before.rel {
-		beforeRel[r] = true
-	}
-	for _, r := range after.rel {
-		afterRel[r] = true
-	}
-	for r := range beforeRel {
-		if !afterRel[r] {
-			value := r.toRelationship()
-			changes = append(changes, audit.Change{Action: audit.ActionRemoved, Relationship: &value})
+	var out []audit.Change
+	for t := range before.facts {
+		if _, ok := after.facts[t]; !ok {
+			out = append(out, audit.Change{Action: audit.ActionRemoved, Tuple: t})
 		}
 	}
-	for r := range afterRel {
-		if !beforeRel[r] {
-			value := r.toRelationship()
-			changes = append(changes, audit.Change{Action: audit.ActionAdded, Relationship: &value})
+	for t := range after.facts {
+		if _, ok := before.facts[t]; !ok {
+			out = append(out, audit.Change{Action: audit.ActionAdded, Tuple: t})
 		}
 	}
-	beforeRole, afterRole := map[roleRow]bool{}, map[roleRow]bool{}
-	for _, r := range before.role {
-		beforeRole[r] = true
+	return out
+}
+func (s *state) applyLocked(c tuples.Changes) {
+	for _, t := range c.Remove {
+		delete(s.facts, t)
 	}
-	for _, r := range after.role {
-		afterRole[r] = true
+	for _, t := range c.Add {
+		s.facts[t] = struct{}{}
 	}
-	for r := range beforeRole {
-		if !afterRole[r] {
-			value := r.toAssignment()
-			changes = append(changes, audit.Change{Action: audit.ActionRemoved, Role: &value})
-		}
-	}
-	for r := range afterRole {
-		if !beforeRole[r] {
-			value := r.toAssignment()
-			changes = append(changes, audit.Change{Action: audit.ActionAdded, Role: &value})
-		}
-	}
-	return changes
 }
 
 func (r relRow) toRelationship() relationships.CreateRelationship {
@@ -200,26 +182,11 @@ func (a *Audit) List(ctx context.Context, filter audit.Filter, req list.Request)
 	return page, nil
 }
 
-func cloneAuditRecord(r audit.Record) audit.Record {
-	if r.Change.Relationship != nil {
-		value := *r.Change.Relationship
-		r.Change.Relationship = &value
-	}
-	if r.Change.Role != nil {
-		value := *r.Change.Role
-		r.Change.Role = &value
-	}
-	return r
-}
+func cloneAuditRecord(r audit.Record) audit.Record { return r }
 func auditMatches(r audit.Record, f audit.Filter) bool {
 	if f.ActorType != "" && (r.Source.ActorType != f.ActorType || r.Source.ActorID != f.ActorID) {
 		return false
 	}
-	var rt, rid, st, sid string
-	if c := r.Change.Relationship; c != nil {
-		rt, rid, st, sid = c.ResourceType, c.ResourceID, c.SubjectType, c.SubjectID
-	} else if c := r.Change.Role; c != nil {
-		rt, rid, st, sid = c.ResourceType, c.ResourceID, c.SubjectType, c.SubjectID
-	}
-	return (f.ResourceType == "" || (rt == f.ResourceType && rid == f.ResourceID)) && (f.SubjectType == "" || (st == f.SubjectType && sid == f.SubjectID))
+	t := r.Change.Tuple
+	return (f.ResourceType == "" || (t.Scope.Kind == tuples.ResourceScope && t.Scope.Type == f.ResourceType && t.Scope.ID == f.ResourceID)) && (f.SubjectType == "" || (t.Subject.Type == f.SubjectType && t.Subject.ID == f.SubjectID))
 }

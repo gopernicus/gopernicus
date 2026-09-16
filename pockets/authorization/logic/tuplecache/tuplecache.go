@@ -1,4 +1,4 @@
-// Package tuplecache maintains a reconstructible mirror of raw relationships.
+// Package tuplecache maintains a reconstructible mirror of canonical authorization tuples.
 // It stores neither permission decisions nor expanded group memberships.
 package tuplecache
 
@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/gopernicus/gopernicus/pockets/authorization/logic/relationships"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuples"
 	"github.com/gopernicus/gopernicus/sdk"
 )
 
@@ -16,19 +16,18 @@ var (
 	ErrCapacity       = fmt.Errorf("tuple cache physical capacity exceeded: %w", ErrUnavailable)
 	ErrConflict       = fmt.Errorf("tuple cache publication changed: %w", sdk.ErrConflict)
 	ErrBinding        = fmt.Errorf("tuple cache store or freshness policy binding mismatch: %w", sdk.ErrInvalidInput)
-	ErrSnapshotClosed = fmt.Errorf("tuple cache snapshot closed: %w", sdk.ErrUnavailable)
+	ErrSnapshotClosed = tuples.ErrSnapshotClosed
 )
 
 // State is a delivery receipt, never a cache-key namespace. An empty State
 // means no complete mirror exists. A receipt identifies one atomic publication.
 type State struct{ Binding, Receipt string }
 
-// SetKey selects a raw index. Reverse selects tuples whose exact subject is Ref;
-// otherwise Ref identifies the resource type, ID and relation.
-type SetKey struct {
-	Reverse bool
-	Ref     relationships.SubjectRef
-}
+// Protocol versions every canonical snapshot and backend namespace.
+const Protocol = 2
+
+// SetKey selects a canonical forward or reverse raw index.
+type SetKey = tuples.SetKey
 
 // Change retains the complete mutation. Nil Before/After denotes create/delete.
 // Both nil is valid only in a Full snapshot: it may identify a reset or an
@@ -36,8 +35,8 @@ type SetKey struct {
 // ID is an opaque durable outbox identity, not a commit-order revision.
 type Change struct {
 	ID     string
-	Before *relationships.CreateRelationship
-	After  *relationships.CreateRelationship
+	Before *tuples.Tuple
+	After  *tuples.Tuple
 }
 
 // Snapshot contains all committed pending changes visible in one source snapshot.
@@ -47,19 +46,17 @@ type Change struct {
 type Snapshot struct {
 	Receipt string
 	Full    bool
-	Tuples  []relationships.CreateRelationship
+	Tuples  []tuples.Tuple
 	Changes []Change
 }
 
 // CheckReads is borrowed only for the duration of a source snapshot callback.
-type CheckReads interface {
-	relationships.CheckReadSource
-	HasExactRole(context.Context, string, string, string, string, string) (bool, error)
-}
+type CheckReads = tuples.Reader
 
-// Source owns authoritative facts and atomic mutation capture. Implementations
-// reject ambient transactions for delivery/snapshot operations. Ordinary guarded
-// writes keep their existing transaction-bound readers.
+// Source owns authoritative facts and atomic mutation capture. Delivery Snapshot
+// and Acknowledge reject ambient transactions. ReadSnapshot borrows a suitable
+// ambient tuple snapshot or rejects insufficient isolation; it never detaches
+// reads from pending writes. Guarded mutations retain their serialized readers.
 type Source interface {
 	Binding() string
 	CacheableContext(context.Context) bool
@@ -80,7 +77,7 @@ type Backend interface {
 	// Read returns one complete set per key, in input order. An empty set is
 	// known absence only in a complete, unexpired mirror matching expected.
 	// Empty keys validate eligibility without reading any tuple fields.
-	Read(ctx context.Context, expected State, keys []SetKey) ([][]relationships.SubjectRef, error)
+	Read(ctx context.Context, expected State, keys []SetKey) ([][]tuples.Tuple, error)
 	// Publish compares expected atomically. Full replaces all data from Tuples;
 	// otherwise apply Changes in order, updating only affected index fields.
 	// validFor is the remaining eligibility period, measured on backend time.

@@ -12,17 +12,17 @@ import (
 	"github.com/gopernicus/gopernicus/sdk"
 )
 
-// CacheMigrationsFS is the optional authorization-cache source. Apply the base
-// authorization source through 0007 in the same schema before this source.
+// TupleCacheMigrationsFS holds optional raw tuple capture. Apply after the
+// primary authorization migrations in the same database/schema.
 //
-//go:embed cache_migrations/*.sql
-var CacheMigrationsFS embed.FS
+//go:embed tuple_cache_migrations/*.sql
+var TupleCacheMigrationsFS embed.FS
 
-const CacheMigrationsDir = "cache_migrations"
-const CacheMigrationSource = "authorization-cache"
+const TupleCacheMigrationsDir = "tuple_cache_migrations"
+const TupleCacheMigrationSource = "authorization-cache-v2"
 
-func ExportCacheMigrations(dst string) error {
-	return pgxdb.ExportMigrations(CacheMigrationsFS, CacheMigrationsDir, dst)
+func ExportTupleCacheMigrations(dst string) error {
+	return pgxdb.ExportMigrations(TupleCacheMigrationsFS, TupleCacheMigrationsDir, dst)
 }
 
 // WithTupleCache exposes an authoritative raw tuple source and read snapshots.
@@ -38,7 +38,7 @@ func prepareTupleSource(ctx context.Context, db *pgxdb.DB, cfg *config) (*tupleS
 		return nil, err
 	}
 	defer tx.Rollback()
-	names := []string{cfg.schema.Table("iam_relationships"), cfg.schema.Table("iam_roles"), cfg.schema.Table("iam_tuple_cache"), cfg.schema.Table("iam_tuple_outbox")}
+	names := []string{cfg.schema.Table("iam_tuples"), cfg.schema.Table("iam_tuple_cache"), cfg.schema.Table("iam_tuple_outbox")}
 	rows, err := tx.Query(ctx, `SELECT n.nspname, c.relkind::text, c.relpersistence::text, c.relrowsecurity, c.relforcerowsecurity,
 EXISTS (SELECT 1 FROM pg_catalog.pg_inherits i WHERE i.inhparent=c.oid OR i.inhrelid=c.oid)
 FROM unnest($1::text[]) names(name)
@@ -66,7 +66,7 @@ JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace`, names)
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	if count != 4 {
+	if count != 3 {
 		return nil, fmt.Errorf("authorization-cache requires fact/tuple cache tables in one schema: %w", tuplecache.ErrUnavailable)
 	}
 	cfg.schema, err = pgxdb.NewSchema(resolved)
@@ -88,7 +88,7 @@ JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace`, names)
 	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
-	cfg.tupleBinding = fmt.Sprintf("%x", sha256.Sum256([]byte("pgx/authorization-tuples/v1/"+resolved+"/"+identity)))
+	cfg.tupleBinding = fmt.Sprintf("%x", sha256.Sum256([]byte("pgx/authorization-tuples/v2/"+resolved+"/"+identity)))
 	source.cfg, source.identity = *cfg, identity
 	return source, nil
 }
@@ -124,7 +124,7 @@ func probeTupleDefinitions(ctx context.Context, q pgxdb.Querier, schema pgxdb.Sc
 	if err != nil {
 		return err
 	}
-	wantConstraints := map[string]bool{"PRIMARY KEY (slot)": true, "CHECK ((slot = 1))": true, "CHECK ((protocol = 1))": true, "CHECK ((identity ~ '^[0-9a-f]{32}$'::text))": true}
+	wantConstraints := map[string]bool{"PRIMARY KEY (slot)": true, "CHECK ((slot = 1))": true, "CHECK ((protocol = 2))": true, "CHECK ((identity ~ '^[0-9a-f]{32}$'::text))": true}
 	for rows.Next() {
 		var def string
 		var validated bool
@@ -185,7 +185,7 @@ func probeTupleDefinitions(ctx context.Context, q pgxdb.Querier, schema pgxdb.Sc
 	if !primary {
 		return tuplecache.ErrUnavailable
 	}
-	data, err := CacheMigrationsFS.ReadFile(CacheMigrationsDir + "/0002_iam_tuple_cache.sql")
+	data, err := TupleCacheMigrationsFS.ReadFile(TupleCacheMigrationsDir + "/0002_iam_tuple_cache.sql")
 	if err != nil {
 		return err
 	}
@@ -197,7 +197,7 @@ func probeTupleDefinitions(ctx context.Context, q pgxdb.Querier, schema pgxdb.Sc
 	if err := q.QueryRow(ctx, "SELECT pg_catalog.quote_ident($1)", schema.String()).Scan(&quoted); err != nil {
 		return err
 	}
-	for _, table := range []string{"iam_relationships"} {
+	for _, table := range []string{"iam_tuples"} {
 		for _, op := range []string{"INSERT", "DELETE", "UPDATE", "TRUNCATE"} {
 			name := table + "_tuple_" + strings.ToLower(op)
 			var definition, source, language, fnSchema, fnName string
@@ -242,7 +242,7 @@ func (s *tupleSource) readReceipt(ctx context.Context, q pgxdb.Querier) (string,
 			return "", "", err
 		}
 		count++
-		if count != 1 || slot != 1 || protocol != 1 || len(identity) != 32 || strings.Trim(identity, "0123456789abcdef") != "" || s.identity != "" && s.identity != identity {
+		if count != 1 || slot != 1 || protocol != 2 || len(identity) != 32 || strings.Trim(identity, "0123456789abcdef") != "" || s.identity != "" && s.identity != identity {
 			return "", "", tuplecache.ErrUnavailable
 		}
 	}

@@ -1,19 +1,6 @@
-// Package storetest is the exported conformance suite for the authorization
-// pocket's two kinds. Run drives BOTH a relationship.Storer and a role.Storer
-// (bundled in an authorization.Repositories) so every backend — the in-core
-// memstore, the dialect adapters (pockets/authorization/stores/{turso,pgx}) —
-// runs the SAME suite and authorizes identically.
-//
-// Two layers: (a) the port contracts directly against each Storer, and (b) the
-// engine/service constructed over the stores under test, asserting authorization
-// OUTCOMES — this is what proves the memstore and the SQL stores authorize
-// identically. A nil kind in the Repositories skips that kind's families with a
-// loud t.Skip (deny-by-absence extended to conformance), so a single-kind host
-// store can still prove conformance.
-//
-// The suite imports stdlib + sdk + this pocket only (guards G2/FS1 keep drivers
-// out), so pockets/authorization's own `go test ./...` runs it against the
-// memstore reference hermetically.
+// Package storetest verifies canonical tuple authority and its authorization
+// facades across memory and SQL adapters. It exercises raw contracts and public
+// outcomes using the same fixtures, without importing datastore drivers.
 package storetest
 
 import (
@@ -29,62 +16,61 @@ import (
 	"github.com/gopernicus/gopernicus/sdk/pkg/list"
 )
 
+// Repositories supplies the canonical production bundle and the optional raw
+// graph adapter under test. Relationships is never passed to authorization.New;
+// services derive their raw facades from the embedded canonical tuple authority.
+type Repositories struct {
+	authorization.Repositories
+	Relationships relationships.Storer
+}
+
 // Run executes the full conformance suite. factory returns fresh, empty
 // repositories on each call and installs the supplied guardian policy. Read-model
 // families use an empty policy; mutation families explicitly protect owner.
-func Run(t *testing.T, factory func(t *testing.T, policy mutations.GuardianPolicy) authorization.Repositories) {
-	newRepos := func(t *testing.T) authorization.Repositories { return factory(t, mutations.GuardianPolicy{}) }
+func Run(t *testing.T, factory func(t *testing.T, policy mutations.GuardianPolicy) Repositories) {
+	newRepos := func(t *testing.T) Repositories {
+		r := factory(t, mutations.GuardianPolicy{})
+		if r.Tuples == nil {
+			t.Fatal("canonical tuple repository is required")
+		}
+		return r
+	}
+	t.Run("Tuples", func(t *testing.T) { runTupleContracts(t, newRepos) })
+	t.Run("RelationshipFacades", func(t *testing.T) { runRelationshipFacades(t, newRepos) })
 	t.Run("ReadModel", func(t *testing.T) {
 		if newRepos(t).Relationships == nil {
-			t.Skip("relationship kind not wired")
+			t.Skip("relationship facade not wired")
 		}
 		runReadModel(t, newRepos)
 	})
 	t.Run("Relationship", func(t *testing.T) {
 		if newRepos(t).Relationships == nil {
-			t.Skip("relationship kind not wired")
+			t.Skip("relationship facade not wired")
 		}
 		runRelationshipContracts(t, newRepos)
 	})
 	t.Run("Adversarial", func(t *testing.T) {
 		if newRepos(t).Relationships == nil {
-			t.Skip("relationship kind not wired")
+			t.Skip("relationship facade not wired")
 		}
 		runAdversarial(t, newRepos)
 	})
 	t.Run("Budget", func(t *testing.T) {
 		if newRepos(t).Relationships == nil {
-			t.Skip("relationship kind not wired")
+			t.Skip("relationship facade not wired")
 		}
 		runBudget(t, newRepos)
 	})
-	// The Parity oracle has one arm per model-bearing kind; each arm is gated on
-	// its own kind so a single-kind backend still runs the arm it can.
-	//
-	// The naming asymmetry below is deliberate: the "Relationships"/"Roles"
-	// subtests exist ONLY as loud SKIP stubs when a kind is unwired, so an
-	// unwired kind is reported rather than silent. A WIRED arm mounts its cases
-	// FLAT under Parity (Parity/CheckLookupOracle; Parity/RolesCheckLookupOracle,
-	// Parity/RolesMultiPageWalk), so -run 'Parity/Roles' on a wired backend
-	// selects the Roles* cases by prefix. Renaming shipped subtest paths to make
-	// this symmetric is not worth breaking existing -run invocations.
 	t.Run("Parity", func(t *testing.T) {
 		repos := newRepos(t)
 		if repos.Relationships == nil {
-			t.Run("Relationships", func(t *testing.T) { t.Skip("relationship kind not wired") })
+			t.Run("Relationships", func(t *testing.T) { t.Skip("relationship facade not wired") })
 		} else {
 			runParity(t, newRepos)
 		}
-		if repos.Roles == nil {
-			t.Run("Roles", func(t *testing.T) { t.Skip("roles kind not wired") })
-		} else {
-			runRolesParity(t, newRepos)
-		}
+		runRolesParity(t, newRepos)
 	})
 	t.Run("Roles", func(t *testing.T) {
-		if newRepos(t).Roles == nil {
-			t.Skip("roles kind not wired")
-		}
 		runRoles(t, newRepos)
 		t.Run("Decision", func(t *testing.T) {
 			runRolesDecision(t, newRepos)
@@ -92,8 +78,8 @@ func Run(t *testing.T, factory func(t *testing.T, policy mutations.GuardianPolic
 	})
 	t.Run("Composed", func(t *testing.T) {
 		repos := newRepos(t)
-		if repos.Relationships == nil || repos.Roles == nil {
-			t.Skip("pair-ownership dispatch needs BOTH kinds wired")
+		if repos.Relationships == nil {
+			t.Skip("relationship facade is required for the cross-facade fixture")
 		}
 		runComposed(t, newRepos)
 	})
@@ -101,7 +87,7 @@ func Run(t *testing.T, factory func(t *testing.T, policy mutations.GuardianPolic
 		if newRepos(t).Mutations == nil {
 			t.Skip("mutation repository not wired")
 		}
-		runMutations(t, func(t *testing.T) authorization.Repositories {
+		runMutations(t, func(t *testing.T) Repositories {
 			return factory(t, mutations.DefaultGuardianPolicy())
 		})
 	})
@@ -119,7 +105,7 @@ func mustCreate(t *testing.T, s relationships.Storer, tuples ...relationships.Cr
 }
 
 // runRelationshipContracts is layer (a): the relationship.Storer port contract.
-func runRelationshipContracts(t *testing.T, newRepos func(t *testing.T) authorization.Repositories) {
+func runRelationshipContracts(t *testing.T, newRepos func(t *testing.T) Repositories) {
 	ctx := context.Background()
 
 	t.Run("CRUDRoundTrip", func(t *testing.T) {
@@ -155,20 +141,19 @@ func runRelationshipContracts(t *testing.T, newRepos func(t *testing.T) authoriz
 		}
 	})
 
-	t.Run("SecondRelationSilentNoOp", func(t *testing.T) {
+	t.Run("IndependentRelationsCoexist", func(t *testing.T) {
 		s := newRepos(t).Relationships
 		mustCreate(t, s, ct("doc", "d1", "owner", "user", "u1"))
-		// A SECOND, different relation for the same subject on the same resource is
-		// a SILENT NO-OP (nil error), NOT ErrAlreadyExists — the existing relation
-		// is unchanged on re-read.
+		// A second relation for the same subject on the same resource is
+		// independent: both facts remain visible.
 		if err := s.CreateRelationships(ctx, []relationships.CreateRelationship{ct("doc", "d1", "member", "user", "u1")}); err != nil {
-			t.Fatalf("second relation must be a nil no-op, got %v", err)
+			t.Fatalf("independent relation must succeed, got %v", err)
 		}
 		if ok, _ := s.CheckRelationExists(ctx, "doc", "d1", "owner", "user", "u1"); !ok {
 			t.Fatalf("existing owner relation must be unchanged")
 		}
-		if ok, _ := s.CheckRelationExists(ctx, "doc", "d1", "member", "user", "u1"); ok {
-			t.Fatalf("second relation must have been skipped")
+		if ok, _ := s.CheckRelationExists(ctx, "doc", "d1", "member", "user", "u1"); !ok {
+			t.Fatalf("independent member relation was skipped")
 		}
 	})
 
@@ -197,16 +182,14 @@ func runRelationshipContracts(t *testing.T, newRepos func(t *testing.T) authoriz
 		if len(relations) != 2 || !relations["member"] || !relations["admin"] {
 			t.Fatalf("group:eng#member and group:eng#admin must both persist, got %+v", targets)
 		}
-		// The one-relation rule still holds PER subject reference: re-creating the
-		// SAME reference (group:eng#member) with a DIFFERENT relation is the silent
-		// no-op — it must not gain the new relation nor drop the existing one.
+		// An independent relation for an exact userset is a separate fact.
 		if err := s.CreateRelationships(ctx, []relationships.CreateRelationship{
 			ctUserset("doc", "d1", "owner", "group", "eng", "member"),
 		}); err != nil {
 			t.Fatalf("second relation for an existing subject reference must be a nil no-op, got %v", err)
 		}
-		if n, _ := s.CountByResourceAndRelation(ctx, "doc", "d1", "owner"); n != 0 {
-			t.Fatalf("the group:eng#member reference must stay viewer, not gain owner, got %d owner rows", n)
+		if n, _ := s.CountByResourceAndRelation(ctx, "doc", "d1", "owner"); n != 1 {
+			t.Fatalf("independent userset owner missing: %d", n)
 		}
 	})
 
@@ -288,8 +271,8 @@ func runRelationshipContracts(t *testing.T, newRepos func(t *testing.T) authoriz
 		specSetRelationTargetsConcurrentCallsDoNotUnion(t, newRepos(t).Relationships)
 	})
 
-	t.Run("SetRelationTargetsConflictRollsBack", func(t *testing.T) {
-		specSetRelationTargetsConflictRollsBack(t, newRepos(t).Relationships)
+	t.Run("SetRelationTargetsPreservesOtherRelations", func(t *testing.T) {
+		specSetRelationTargetsPreservesOtherRelations(t, newRepos(t).Relationships)
 	})
 
 	t.Run("CheckBatchDirect", func(t *testing.T) {
@@ -445,11 +428,8 @@ func specSetRelationTargetsConcurrentCallsDoNotUnion(t *testing.T, s relationshi
 	}
 }
 
-// specSetRelationTargetsConflictRollsBack is the standalone conflict body: a
-// desired target already holding a different relation is sdk.ErrConflict and the
-// store's OWN transaction rolls back unchanged. Shared by Run and by
-// RunTransactional's StandaloneUnchanged (see above).
-func specSetRelationTargetsConflictRollsBack(t *testing.T, s relationships.Storer) {
+// Reconciliation changes only its selected relation.
+func specSetRelationTargetsPreservesOtherRelations(t *testing.T, s relationships.Storer) {
 	ctx := context.Background()
 	mustCreate(t, s,
 		ct("space", "child", "parent", "space", "keep"),
@@ -458,12 +438,15 @@ func specSetRelationTargetsConflictRollsBack(t *testing.T, s relationships.Store
 	err := s.SetRelationTargets(ctx, "space", "child", "parent", []relationships.CreateRelationship{
 		ct("space", "child", "parent", "space", "occupied"),
 	})
-	if !errors.Is(err, sdk.ErrConflict) {
-		t.Fatalf("desired target holding another relation: want conflict, got %v", err)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := s.CheckRelationExists(ctx, "space", "child", "owner", "space", "occupied"); err != nil || !ok {
+		t.Fatalf("reconcile removed independent owner: %v/%v", ok, err)
 	}
 	targets, err := s.GetRelationTargets(ctx, "space", "child", "parent")
-	if err != nil || len(targets) != 1 || targets[0].ID != "keep" {
-		t.Fatalf("conflicting reconciliation changed prior state: %+v err=%v", targets, err)
+	if err != nil || len(targets) != 1 || targets[0].ID != "occupied" {
+		t.Fatalf("reconciliation failed: %+v err=%v", targets, err)
 	}
 }
 

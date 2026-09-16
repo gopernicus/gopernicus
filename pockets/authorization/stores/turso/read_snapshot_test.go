@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
-	"github.com/gopernicus/gopernicus/pockets/authorization"
 	"github.com/gopernicus/gopernicus/pockets/authorization/stores/storetest"
 	_ "modernc.org/sqlite"
 )
@@ -32,7 +31,7 @@ func cacheFixture(t testing.TB, install bool, poolSize ...int) (*tursodb.DB, con
 	cfg := config{}
 
 	if install {
-		data, err := CacheMigrationsFS.ReadFile(CacheMigrationsDir + "/0002_iam_tuple_cache.sql")
+		data, err := TupleCacheMigrationsFS.ReadFile(TupleCacheMigrationsDir + "/0002_iam_tuple_cache.sql")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -46,9 +45,9 @@ func cacheOptions(cfg config) []Option {
 	return []Option{func(c *config) { *c = cfg }, WithTupleCache()}
 }
 func TestTupleCacheSnapshots(t *testing.T) {
-	storetest.RunReadSnapshots(t, func(t *testing.T) authorization.Repositories {
+	storetest.RunReadSnapshots(t, func(t *testing.T) storetest.Repositories {
 		db, cfg := cacheFixture(t, true)
-		repos, err := Repositories(context.Background(), db, cacheOptions(cfg)...)
+		repos, err := testRepositories(context.Background(), db, cacheOptions(cfg)...)
 		if err != nil {
 			t.Fatal(err)
 		}

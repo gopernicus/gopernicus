@@ -17,7 +17,6 @@ import (
 	"github.com/gopernicus/gopernicus/pockets/authorization"
 	decisions "github.com/gopernicus/gopernicus/pockets/authorization/logic/decisions"
 	model "github.com/gopernicus/gopernicus/pockets/authorization/logic/model"
-	relationships "github.com/gopernicus/gopernicus/pockets/authorization/logic/relationships"
 	"github.com/gopernicus/gopernicus/pockets/authorization/stores/memory"
 	authzpgx "github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx"
 	"github.com/gopernicus/gopernicus/sdk"
@@ -25,7 +24,7 @@ import (
 
 // This opt-in fixture creates only unique test schemas in the explicitly named
 // scratch database. It never reuses the application's authorization schema.
-func postgresFixture(t *testing.T) (*Postgres, relationships.Storer, pgxdb.Schema) {
+func postgresFixture(t *testing.T) (*Postgres, *testAuthorizationStore, pgxdb.Schema) {
 	t.Helper()
 	dsn := os.Getenv("AUTHORIZATION_LISTING_TEST_DSN")
 	if dsn == "" {
@@ -68,12 +67,16 @@ func postgresFixture(t *testing.T) (*Postgres, relationships.Storer, pgxdb.Schem
 	if err != nil {
 		t.Fatal(err)
 	}
-	return store, rel, authSchema
+	tuples, err := authzpgx.Repositories(context.Background(), db, authzpgx.WithSchema(authSchema))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return store, &testAuthorizationStore{Storer: rel, Tuples: tuples.Tuples}, authSchema
 }
 
 func testSQLListing(t *testing.T, store *Postgres, schema pgxdb.Schema, az authorization.Components, bypass Bypass) *SQLListing {
 	t.Helper()
-	l, err := NewSQLListing(store, schema, az.Relationships, testCodec(t), bypass)
+	l, err := NewSQLListing(store, schema, az.Decisions, testCodec(t), bypass)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -90,7 +93,7 @@ func TestPostgresListingHTTP(t *testing.T) {
 	grant(t, rel, "01", "90", "30", "20", "other", "unicode")
 	az := testAuthorizer(t, rel, model.EvaluationLimits{})
 	// Same business SQL over grants in another store is the portable deployment.
-	remote := memory.New().Relationships()
+	remote := newMemoryAuthorizationStore()
 	grant(t, remote, "01", "90", "30", "20", "other", "unicode")
 	remoteAZ := testAuthorizer(t, remote, model.EvaluationLimits{})
 	for _, tt := range []struct {
@@ -123,34 +126,34 @@ func TestPostgresListingHTTP(t *testing.T) {
 }
 
 func TestSQLListingRejectsUnsupportedModels(t *testing.T) {
-	user := []relationships.SubjectTypeRef{{Type: "user"}}
+	user := []decisions.SubjectTypeRef{{Type: "user"}}
 	for _, tt := range []struct {
 		name      string
-		resources []relationships.ResourceSchema
-		roles     model.RoleModel
+		resources []decisions.ResourceSchema
 	}{
-		{"extra_or", []relationships.ResourceSchema{{Name: "document", Def: relationships.ResourceTypeDef{
-			Relations:   map[string]relationships.RelationDef{"viewer": {AllowedSubjects: user}, "owner": {AllowedSubjects: user}},
-			Permissions: map[string]relationships.PermissionRule{"view": relationships.AnyOf(relationships.Direct("viewer"), relationships.Direct("owner"))},
-		}}}, model.RoleModel{}},
-		{"userset", []relationships.ResourceSchema{
-			{Name: "document", Def: relationships.ResourceTypeDef{Relations: map[string]relationships.RelationDef{"viewer": {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "group", Relation: "member"}}}}, Permissions: map[string]relationships.PermissionRule{"view": relationships.AnyOf(relationships.Direct("viewer"))}}},
-			{Name: "group", Def: relationships.ResourceTypeDef{Relations: map[string]relationships.RelationDef{"member": {AllowedSubjects: user}}}},
-		}, model.RoleModel{}},
-		{"through", []relationships.ResourceSchema{
-			{Name: "document", Def: relationships.ResourceTypeDef{Relations: map[string]relationships.RelationDef{"parent": {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "folder"}}}}, Permissions: map[string]relationships.PermissionRule{"view": relationships.AnyOf(relationships.Through("parent", "view"))}}},
-			{Name: "folder", Def: relationships.ResourceTypeDef{Relations: map[string]relationships.RelationDef{"viewer": {AllowedSubjects: user}}, Permissions: map[string]relationships.PermissionRule{"view": relationships.AnyOf(relationships.Direct("viewer"))}}},
-		}, model.RoleModel{}},
-		{"role_owned", []relationships.ResourceSchema{{Name: "document", Def: relationships.ResourceTypeDef{Relations: map[string]relationships.RelationDef{"viewer": {AllowedSubjects: user}}}}}, model.RoleModel{ResourceTypes: map[string]model.RoleTypeDef{"document": {Roles: []string{"reader"}, Permissions: map[string][]string{"view": {"reader"}}}}}},
+		{"extra_or", []decisions.ResourceSchema{{Name: "document", Def: decisions.ResourceTypeDef{
+			Relations:   map[string]decisions.RelationDef{"viewer": {AllowedSubjects: user}, "owner": {AllowedSubjects: user}},
+			Permissions: map[string]decisions.Expression{"view": decisions.AnyOf(decisions.Direct("viewer"), decisions.Direct("owner"))},
+		}}}},
+		{"userset", []decisions.ResourceSchema{
+			{Name: "document", Def: decisions.ResourceTypeDef{Relations: map[string]decisions.RelationDef{"viewer": {AllowedSubjects: []decisions.SubjectTypeRef{{Type: "group", Relation: "member"}}}}, Permissions: map[string]decisions.Expression{"view": decisions.AnyOf(decisions.Direct("viewer"))}}},
+			{Name: "group", Def: decisions.ResourceTypeDef{Relations: map[string]decisions.RelationDef{"member": {AllowedSubjects: user}}}},
+		}},
+		{"through", []decisions.ResourceSchema{
+			{Name: "document", Def: decisions.ResourceTypeDef{Relations: map[string]decisions.RelationDef{"parent": {AllowedSubjects: []decisions.SubjectTypeRef{{Type: "folder"}}}}, Permissions: map[string]decisions.Expression{"view": decisions.AnyOf(decisions.Through("parent", "view"))}}},
+			{Name: "folder", Def: decisions.ResourceTypeDef{Relations: map[string]decisions.RelationDef{"viewer": {AllowedSubjects: user}}, Permissions: map[string]decisions.Expression{"view": decisions.AnyOf(decisions.Direct("viewer"))}}},
+		}},
+		{"exact_role", []decisions.ResourceSchema{{Name: "document", Def: decisions.ResourceTypeDef{Relations: map[string]decisions.RelationDef{"viewer": {AllowedSubjects: user}}, Permissions: map[string]decisions.Expression{"view": decisions.RoleIn("viewer")}}}}},
+		{"all", []decisions.ResourceSchema{{Name: "document", Def: decisions.ResourceTypeDef{Relations: map[string]decisions.RelationDef{"viewer": {AllowedSubjects: user}}, Permissions: map[string]decisions.Expression{"view": decisions.All(decisions.Direct("viewer"), decisions.Role("active"))}}}}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			store := memory.New()
-			components, err := authorization.New(authorization.Repositories{Relationships: store.Relationships(), Roles: store.Roles()}, authorization.WithRelationshipModel(relationships.NewSchema(tt.resources)), authorization.WithRoleModel(tt.roles))
+			components, err := authorization.New(authorization.Repositories{Tuples: store.Tuples()}, authorization.WithModel(decisions.NewSchema(tt.resources)))
 			if err != nil {
 				t.Fatal(err)
 			}
 			// Construction validates policy before any SQL runs.
-			if _, err := NewSQLListing(&Postgres{}, pgxdb.Schema{}, components.Relationships, testCodec(t), nil); err == nil {
+			if _, err := NewSQLListing(&Postgres{}, pgxdb.Schema{}, components.Decisions, testCodec(t), nil); err == nil {
 				t.Fatal("unsupported permission accepted")
 			}
 		})
@@ -233,10 +236,10 @@ func TestPostgresLargeListingAndQueryPlan(t *testing.T) {
 		name    string
 		divisor int
 	}{{"dense", 2}, {"sparse", 100}} {
-		if _, err := store.db.Exec(t.Context(), `DELETE FROM `+schema.Table("iam_relationships")+` WHERE resource_id::int % $1 <> 0`, tt.divisor); err != nil {
+		if _, err := store.db.Exec(t.Context(), `DELETE FROM `+schema.Table("iam_tuples")+` WHERE resource_id::int % $1 <> 0`, tt.divisor); err != nil {
 			t.Fatal(err)
 		}
-		for _, table := range []string{schema.Table("iam_relationships"), store.schema.Table("documents")} {
+		for _, table := range []string{schema.Table("iam_tuples"), store.schema.Table("documents")} {
 			if _, err := store.db.Exec(t.Context(), "ANALYZE "+table); err != nil {
 				t.Fatal(err)
 			}

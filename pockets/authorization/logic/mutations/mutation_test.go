@@ -17,8 +17,7 @@ func TestMutationCommandValidateAccepts(t *testing.T) {
 	subScope := Target{Kind: TargetSubject, Type: "user", ID: "u1"}
 	ok := []Command{
 		grantCmd(t),
-		{Target: resScope, Operation: OpReplace,
-			Relationships: []RelationshipRow{{Relation: "member", Subject: relationships.SubjectRef{Type: "user", ID: "u1"}}}},
+		{Target: resScope, Operation: OpReconcile, Relation: "member", Subjects: []relationships.SubjectRef{{Type: "user", ID: "u1"}}},
 		{Target: resScope, Operation: OpRevoke,
 			Relationships: []RelationshipRow{{Relation: "owner", Subject: relationships.SubjectRef{Type: "user", ID: "u1"}}}},
 		{Target: resScope, Operation: OpPurge},
@@ -62,11 +61,27 @@ func TestMutationCommandValidateRejects(t *testing.T) {
 		"global role subject mismatch": {Target: subScope, Operation: OpRoleAssign,
 			Roles: []RoleRow{{SubjectType: "user", SubjectID: "someone-else", Role: "admin"}}},
 		"unknown operation": {Target: resScope, Operation: "detonate", Relationships: []RelationshipRow{rel}},
-		"grant duplicate subject different relation": {Target: resScope, Operation: OpGrant,
-			Relationships: []RelationshipRow{
-				{Relation: "owner", Subject: relationships.SubjectRef{Type: "user", ID: "u1"}},
-				{Relation: "member", Subject: relationships.SubjectRef{Type: "user", ID: "u1"}},
-			}},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			err := c.Validate()
+			if err == nil {
+				t.Fatalf("command %q must be rejected", name)
+			}
+			if !errors.Is(err, sdk.ErrInvalidInput) {
+				t.Fatalf("want ErrInvalidInput, got %v", err)
+			}
+		})
+	}
+}
+
+func TestDuplicateAndIndependentLabelsAreValid(t *testing.T) {
+	resScope := Target{Kind: TargetResource, Type: "doc", ID: "d1"}
+	cases := map[string]Command{"grant duplicate subject different relation": {Target: resScope, Operation: OpGrant,
+		Relationships: []RelationshipRow{
+			{Relation: "owner", Subject: relationships.SubjectRef{Type: "user", ID: "u1"}},
+			{Relation: "member", Subject: relationships.SubjectRef{Type: "user", ID: "u1"}},
+		}},
 		"grant duplicate subject same relation": {Target: resScope, Operation: OpGrant,
 			Relationships: []RelationshipRow{
 				{Relation: "owner", Subject: relationships.SubjectRef{Type: "user", ID: "u1"}},
@@ -85,12 +100,8 @@ func TestMutationCommandValidateRejects(t *testing.T) {
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
-			err := c.Validate()
-			if err == nil {
-				t.Fatalf("command %q must be rejected", name)
-			}
-			if !errors.Is(err, sdk.ErrInvalidInput) {
-				t.Fatalf("want ErrInvalidInput, got %v", err)
+			if err := c.Validate(); err != nil {
+				t.Fatal(err)
 			}
 		})
 	}

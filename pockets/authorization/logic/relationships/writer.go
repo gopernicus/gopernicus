@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	authmodel "github.com/gopernicus/gopernicus/pockets/authorization/logic/model"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuples"
 	"github.com/gopernicus/gopernicus/sdk"
 )
 
@@ -12,7 +13,7 @@ import (
 // current schema additions but bypasses actor guards and guardian minimums.
 // Stores preserve their own atomic fact/audit and ambient transaction contracts.
 type RelationshipWriter struct {
-	store   Storer
+	store   tuples.Storer
 	service *Service
 }
 
@@ -22,9 +23,11 @@ type Components struct {
 	RelationshipWriter *RelationshipWriter
 }
 
-// NewService validates the store, schema and budgets and returns both capabilities.
-// The host controls which callers receive the separate trusted writer.
-func NewService(store Storer, schema Schema, opts ...Option) (Components, error) {
+// NewService separates raw views from the trusted writer capability.
+func NewService(store tuples.Storer, opts ...Option) (Components, error) {
+	if isNilReader(store) {
+		return Components{}, fmt.Errorf("authorization: tuple store is required: %w", sdk.ErrInvalidInput)
+	}
 	cfg := serviceConfig{}
 	for _, opt := range opts {
 		if opt == nil {
@@ -32,10 +35,10 @@ func NewService(store Storer, schema Schema, opts ...Option) (Components, error)
 		}
 		opt(&cfg)
 	}
-	svc, err := newService(store, schema, cfg)
-	if err != nil {
-		return Components{}, err
+	if cfg.validator != nil && isNilReader(cfg.validator) {
+		return Components{}, sdk.ErrInvalidInput
 	}
+	svc := &Service{store: store, validator: cfg.validator}
 	return Components{Service: svc, RelationshipWriter: &RelationshipWriter{store: store, service: svc}}, nil
 }
 
@@ -44,27 +47,26 @@ func (s *RelationshipWriter) CreateRelationships(ctx context.Context, relationsh
 		return err
 	}
 
-	out := make([]CreateRelationship, len(relationships))
-	copy(out, relationships)
-	return s.store.CreateRelationships(ctx, out)
+	out := make([]tuples.Tuple, len(relationships))
+	for i, row := range relationships {
+		out[i] = row.Tuple()
+	}
+	return s.store.ApplyTuples(ctx, tuples.Changes{Add: out})
 }
 
 func (s *RelationshipWriter) SetRelationTargets(ctx context.Context, resource authmodel.Resource, relationName string, targets []SubjectRef) error {
-	if err := authmodel.ValidateRefField("resource type", resource.Type); err != nil {
+	if err := tuples.ValidateRefField("resource type", resource.Type); err != nil {
 		return err
 	}
-	if err := authmodel.ValidateRefField("resource id", resource.ID); err != nil {
+	if err := tuples.ValidateRefField("resource id", resource.ID); err != nil {
 		return err
 	}
-	if err := authmodel.ValidateRefField("relation", relationName); err != nil {
-		return err
-	}
-	if err := s.service.ValidateRelationName(resource.Type, relationName); err != nil {
+	if err := tuples.ValidateRefField("relation", relationName); err != nil {
 		return err
 	}
 
 	seen := make(map[SubjectRef]struct{}, len(targets))
-	rows := make([]CreateRelationship, 0, len(targets))
+	subjects := make([]SubjectRef, 0, len(targets))
 	for _, target := range targets {
 		if _, ok := seen[target]; ok {
 			continue
@@ -86,33 +88,33 @@ func (s *RelationshipWriter) SetRelationTargets(ctx context.Context, resource au
 			return fmt.Errorf("relationship %s:%s#%s@%s: %w",
 				row.ResourceType, row.ResourceID, row.Relation, row.Subject(), err)
 		}
-		rows = append(rows, row)
+		subjects = append(subjects, target)
 	}
-	return s.store.SetRelationTargets(ctx, resource.Type, resource.ID, relationName, rows)
+	return s.store.ReconcileTuples(ctx, tuples.On(resource.Type, resource.ID), relationName, subjects)
 }
 
 func (s *RelationshipWriter) DeleteResourceRelationships(ctx context.Context, resource authmodel.Resource) error {
-	if err := authmodel.ValidateRefField("resource type", resource.Type); err != nil {
+	if err := tuples.ValidateRefField("resource type", resource.Type); err != nil {
 		return err
 	}
-	if err := authmodel.ValidateRefField("resource id", resource.ID); err != nil {
+	if err := tuples.ValidateRefField("resource id", resource.ID); err != nil {
 		return err
 	}
-	return s.store.DeleteResourceRelationships(ctx, resource.Type, resource.ID)
+	return s.store.DeleteScope(ctx, tuples.On(resource.Type, resource.ID))
 }
 
 func (s *RelationshipWriter) DeleteRelationship(ctx context.Context, resource authmodel.Resource, relationName string, target SubjectRef) error {
-	if err := authmodel.ValidateRefField("resource type", resource.Type); err != nil {
+	if err := tuples.ValidateRefField("resource type", resource.Type); err != nil {
 		return err
 	}
-	if err := authmodel.ValidateRefField("resource id", resource.ID); err != nil {
+	if err := tuples.ValidateRefField("resource id", resource.ID); err != nil {
 		return err
 	}
-	if err := authmodel.ValidateRefField("relation", relationName); err != nil {
+	if err := tuples.ValidateRefField("relation", relationName); err != nil {
 		return err
 	}
 	if err := target.Validate(); err != nil {
 		return err
 	}
-	return s.store.DeleteRelationshipTarget(ctx, resource.Type, resource.ID, relationName, target)
+	return s.store.ApplyTuples(ctx, tuples.Changes{Remove: []tuples.Tuple{{Scope: tuples.On(resource.Type, resource.ID), Relation: relationName, Subject: target}}})
 }

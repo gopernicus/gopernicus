@@ -19,9 +19,6 @@ func (s *relationshipStore) reader(ctx context.Context) tursodb.Querier {
 	if q == nil {
 		q = s.db.QuerierFrom(ctx)
 	}
-	if s.tupleBinding != "" {
-		q = mainCacheQuerier{Querier: q}
-	}
 	if s.model == nil {
 		return q
 	}
@@ -36,10 +33,10 @@ type modelQuerier struct {
 }
 
 func (q modelQuerier) scoped(query string, args []any) (string, []any) {
-	query = strings.ReplaceAll(query, "iam_relationships", "authorization_model_relationships")
+	query = strings.ReplaceAll(query, "(SELECT * FROM main.iam_tuples WHERE scope_kind=2)", "authorization_model_relationships")
 	query = strings.TrimSpace(query)
 	prefix := `WITH RECURSIVE authorization_model_relationships AS NOT MATERIALIZED (
-	SELECT stored.* FROM iam_relationships stored
+	SELECT stored.* FROM (SELECT * FROM main.iam_tuples WHERE scope_kind=2) stored
 	JOIN json_each(?) model ON
 	stored.resource_type = json_extract(model.value, '$.resource_type') AND
 	stored.relation = json_extract(model.value, '$.relation') AND

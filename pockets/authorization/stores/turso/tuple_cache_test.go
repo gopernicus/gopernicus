@@ -12,18 +12,18 @@ import (
 	"testing"
 
 	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
-	"github.com/gopernicus/gopernicus/pockets/authorization"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/mutations"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/relationships"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuplecache"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuples"
 	"github.com/gopernicus/gopernicus/pockets/authorization/stores/storetest"
 	"github.com/gopernicus/gopernicus/sdk"
 )
 
 func TestTupleCacheEnabledConformance(t *testing.T) {
-	storetest.Run(t, func(t *testing.T, policy mutations.GuardianPolicy) authorization.Repositories {
+	storetest.Run(t, func(t *testing.T, policy mutations.GuardianPolicy) storetest.Repositories {
 		db, cfg := cacheFixture(t, true)
-		repos, err := Repositories(context.Background(), db, append(cacheOptions(cfg), WithGuardianPolicy(policy))...)
+		repos, err := testRepositories(context.Background(), db, append(cacheOptions(cfg), WithGuardianPolicy(policy))...)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -32,10 +32,10 @@ func TestTupleCacheEnabledConformance(t *testing.T) {
 }
 
 func TestTupleCacheEnabledAuditConformance(t *testing.T) {
-	storetest.RunAudit(t, func(t *testing.T, enabled bool) authorization.Repositories {
+	storetest.RunAudit(t, func(t *testing.T, enabled bool) storetest.Repositories {
 		db, cfg := cacheFixture(t, true)
 		cfg.audit = enabled
-		repos, err := Repositories(context.Background(), db, cacheOptions(cfg)...)
+		repos, err := testRepositories(context.Background(), db, cacheOptions(cfg)...)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -46,7 +46,7 @@ func TestTupleCacheEnabledAuditConformance(t *testing.T) {
 func tupleTestSource(t *testing.T) (*tursodb.DB, tuplecache.Source) {
 	t.Helper()
 	db, cfg := cacheFixture(t, true)
-	repos, err := Repositories(t.Context(), db, cacheOptions(cfg)...)
+	repos, err := testRepositories(t.Context(), db, cacheOptions(cfg)...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -83,13 +83,13 @@ func TestTupleCacheRawMutations(t *testing.T) {
 		t.Fatal(err)
 	}
 	original := relationships.CreateRelationship{ResourceType: "document", ResourceID: "doc:\"#@", Relation: "viewer", SubjectType: "group", SubjectID: "team:\"#@", SubjectRelation: "member"}
-	mustTupleExec(t, db, `INSERT INTO iam_relationships VALUES (?, ?, ?, ?, ?, ?)`, original.ResourceType, original.ResourceID, original.Relation, original.SubjectType, original.SubjectID, original.SubjectRelation)
+	mustTupleExec(t, db, `INSERT INTO iam_tuples VALUES (2,?, ?, ?, ?, ?, ?)`, original.ResourceType, original.ResourceID, original.Relation, original.SubjectType, original.SubjectID, original.SubjectRelation)
 	first := mustTupleSnapshot(t, source, "initial")
-	if first.Full || len(first.Changes) != 1 || first.Changes[0].Before != nil || *first.Changes[0].After != original {
+	if first.Full || len(first.Changes) != 1 || first.Changes[0].Before != nil || *first.Changes[0].After != original.Tuple() {
 		t.Fatalf("raw create: %+v", first)
 	}
-	mustTupleExec(t, db, `INSERT INTO iam_relationships VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING`, original.ResourceType, original.ResourceID, original.Relation, original.SubjectType, original.SubjectID, original.SubjectRelation)
-	mustTupleExec(t, db, `UPDATE iam_relationships SET resource_id = resource_id`)
+	mustTupleExec(t, db, `INSERT INTO iam_tuples VALUES (2,?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING`, original.ResourceType, original.ResourceID, original.Relation, original.SubjectType, original.SubjectID, original.SubjectRelation)
+	mustTupleExec(t, db, `UPDATE iam_tuples SET resource_id = resource_id`)
 	if got := mustTupleSnapshot(t, source, "initial"); len(got.Changes) != 1 {
 		t.Fatalf("no-op appended work: %+v", got)
 	}
@@ -99,13 +99,13 @@ func TestTupleCacheRawMutations(t *testing.T) {
 		next := before
 		fields := []*string{&next.ResourceType, &next.ResourceID, &next.Relation, &next.SubjectType, &next.SubjectID, &next.SubjectRelation}
 		*fields[i] = "changed-" + column
-		mustTupleExec(t, db, "UPDATE iam_relationships SET "+column+"=?", *fields[i])
+		mustTupleExec(t, db, "UPDATE iam_tuples SET "+column+"=?", *fields[i])
 		got := mustTupleSnapshot(t, source, "initial")
 		change := got.Changes[len(got.Changes)-1]
-		if change.Before == nil || change.After == nil || *change.Before != before || *change.After != next {
+		if change.Before == nil || change.After == nil || *change.Before != before.Tuple() || *change.After != next.Tuple() {
 			t.Fatalf("%s: %+v", column, got)
 		}
-		if full := mustTupleSnapshot(t, source, ""); len(full.Tuples) != 1 || full.Tuples[0] != next {
+		if full := mustTupleSnapshot(t, source, ""); len(full.Tuples) != 1 || full.Tuples[0] != next.Tuple() {
 			t.Fatalf("current %s: %+v", column, full)
 		}
 		before = next
@@ -113,7 +113,7 @@ func TestTupleCacheRawMutations(t *testing.T) {
 	pending := mustTupleSnapshot(t, source, "initial")
 	injected := errors.New("rollback")
 	if err := db.InTx(t.Context(), func(tx *tursodb.Tx) error {
-		if _, err := tx.Exec(t.Context(), "DELETE FROM iam_relationships"); err != nil {
+		if _, err := tx.Exec(t.Context(), "DELETE FROM iam_tuples"); err != nil {
 			return err
 		}
 		var count int
@@ -130,30 +130,31 @@ func TestTupleCacheRawMutations(t *testing.T) {
 	if got := mustTupleSnapshot(t, source, "initial"); !reflect.DeepEqual(got, pending) {
 		t.Fatalf("rollback changed facts or events: %+v", got)
 	}
-	mustTupleExec(t, db, "DELETE FROM iam_relationships")
+	mustTupleExec(t, db, "DELETE FROM iam_tuples")
 	got := mustTupleSnapshot(t, source, "initial")
 	change := got.Changes[len(got.Changes)-1]
-	if len(got.Tuples) != 0 || change.Before == nil || *change.Before != before || change.After != nil {
+	if len(got.Tuples) != 0 || change.Before == nil || *change.Before != before.Tuple() || change.After != nil {
 		t.Fatalf("delete: %+v", got)
 	}
-	// Roles remain durable and do not produce raw relationship work.
-	mustTupleExec(t, db, `INSERT INTO iam_roles VALUES ('user','alice','admin','','')`)
-	if next := mustTupleSnapshot(t, source, "initial"); !reflect.DeepEqual(got, next) {
-		t.Fatalf("role appended relationship event: %+v", next)
+	// Global role facts share the same change stream.
+	mustTupleExec(t, db, `INSERT INTO main.iam_tuples VALUES(1,'','','admin','user','alice','')`)
+	if next := mustTupleSnapshot(t, source, "initial"); len(next.Changes) != len(got.Changes)+1 || next.Changes[len(next.Changes)-1].After.Scope != tuples.Global() {
+		t.Fatalf("global role missing: %+v", next)
 	}
+
 }
 
 func TestTupleCacheAcknowledgeAndRebuild(t *testing.T) {
 	db, source := tupleTestSource(t)
-	mustTupleExec(t, db, `INSERT INTO iam_relationships VALUES ('document','a','viewer','user','alice','')`)
+	mustTupleExec(t, db, `INSERT INTO iam_tuples VALUES (2,'document','a','viewer','user','alice','')`)
 	first := mustTupleSnapshot(t, source, "")
 	// A commit after capture must survive acknowledgement of the captured IDs.
-	mustTupleExec(t, db, `INSERT INTO iam_relationships VALUES ('document','b','viewer','user','alice','')`)
+	mustTupleExec(t, db, `INSERT INTO iam_tuples VALUES (2,'document','b','viewer','user','alice','')`)
 	if err := source.Acknowledge(t.Context(), "", "r1", tupleChangeIDs(first)); err != nil {
 		t.Fatal(err)
 	}
 	next := mustTupleSnapshot(t, source, "r1")
-	if next.Full || len(next.Tuples) != 0 || len(next.Changes) != 1 || next.Changes[0].After.ResourceID != "b" {
+	if next.Full || len(next.Tuples) != 0 || len(next.Changes) != 1 || next.Changes[0].After.Scope.ID != "b" {
 		t.Fatalf("exact ack: %+v", next)
 	}
 	if err := source.Acknowledge(t.Context(), "", "loser", tupleChangeIDs(next)); !errors.Is(err, tuplecache.ErrConflict) {
@@ -174,12 +175,12 @@ func TestTupleCacheAcknowledgeAndRebuild(t *testing.T) {
 		if !rebuilt.Full || len(rebuilt.Tuples) != 2 || len(rebuilt.Changes) != 0 {
 			t.Fatalf("rebuild depended on disposed events: %+v", rebuilt)
 		}
-		if rebuilt.Tuples[0].ResourceID != "a" || rebuilt.Tuples[1].ResourceID != "b" {
+		if rebuilt.Tuples[0].Scope.ID != "a" || rebuilt.Tuples[1].Scope.ID != "b" {
 			t.Fatalf("nondeterministic rebuild: %+v", rebuilt.Tuples)
 		}
 	}
-	mustTupleExec(t, db, `DELETE FROM iam_relationships WHERE resource_id='a'`)
-	mustTupleExec(t, db, `INSERT INTO iam_relationships VALUES ('document','a','editor','user','alice','')`)
+	mustTupleExec(t, db, `DELETE FROM iam_tuples WHERE resource_id='a'`)
+	mustTupleExec(t, db, `INSERT INTO iam_tuples VALUES (2,'document','a','editor','user','alice','')`)
 	recreated := mustTupleSnapshot(t, source, "r2")
 	if len(recreated.Changes) != 2 || recreated.Changes[0].Before.Relation != "viewer" || recreated.Changes[0].After != nil || recreated.Changes[1].Before != nil || recreated.Changes[1].After.Relation != "editor" {
 		t.Fatalf("delete/recreate ordering: %+v", recreated)
@@ -191,7 +192,7 @@ func TestTupleCacheAcknowledgeAndRebuild(t *testing.T) {
 
 func TestTupleCacheOrdinaryWriterReconciliation(t *testing.T) {
 	db, source := tupleTestSource(t)
-	direct, err := Repositories(t.Context(), db)
+	direct, err := testRepositories(t.Context(), db)
 	if err != nil || direct.TupleSource != nil {
 		t.Fatalf("ordinary writer: %v", err)
 	}
@@ -214,7 +215,7 @@ func TestTupleCacheOrdinaryWriterReconciliation(t *testing.T) {
 		t.Fatal(err)
 	}
 	changed := mustTupleSnapshot(t, source, "created")
-	if len(changed.Changes) != 2 || changed.Changes[0].Before == nil || *changed.Changes[0].Before != alice || changed.Changes[0].After != nil || changed.Changes[1].Before != nil || changed.Changes[1].After == nil || *changed.Changes[1].After != carol {
+	if len(changed.Changes) != 2 || changed.Changes[0].Before == nil || *changed.Changes[0].Before != alice.Tuple() || changed.Changes[0].After != nil || changed.Changes[1].Before != nil || changed.Changes[1].After == nil || *changed.Changes[1].After != carol.Tuple() {
 		t.Fatalf("replace events: %+v", changed)
 	}
 	if err := direct.Relationships.SetRelationTargets(t.Context(), "document", "d1", "viewer", []relationships.CreateRelationship{bob, carol, bob}); err != nil {
@@ -228,11 +229,11 @@ func TestTupleCacheOrdinaryWriterReconciliation(t *testing.T) {
 func TestTupleCacheSourcePreconditions(t *testing.T) {
 	t.Run("optional", func(t *testing.T) {
 		db, cfg := cacheFixture(t, false)
-		repos, err := Repositories(t.Context(), db)
+		repos, err := testRepositories(t.Context(), db)
 		if err != nil || repos.TupleSource != nil {
 			t.Fatalf("direct: %+v/%v", repos, err)
 		}
-		if _, err := Repositories(t.Context(), db, cacheOptions(cfg)...); err == nil {
+		if _, err := testRepositories(t.Context(), db, cacheOptions(cfg)...); err == nil {
 			t.Fatal("missing migration accepted")
 		}
 	})
@@ -246,30 +247,30 @@ func TestTupleCacheSourcePreconditions(t *testing.T) {
 			if err := source.Acknowledge(t.Context(), "", "next", nil); err == nil {
 				t.Fatal("invalid metadata acknowledged")
 			}
-			if err := source.ReadSnapshot(t.Context(), func(context.Context, tuplecache.CheckReads) error { return nil }); err == nil {
-				t.Fatal("restored binding accepted")
+			if err := source.ReadSnapshot(t.Context(), func(context.Context, tuplecache.CheckReads) error { return nil }); err != nil {
+				t.Fatal(err)
 			}
 		})
 	}
 	t.Run("missing metadata rejects write", func(t *testing.T) {
 		db, _ := tupleTestSource(t)
 		mustTupleExec(t, db, "DELETE FROM iam_tuple_cache")
-		if _, err := db.Exec(t.Context(), `INSERT INTO iam_relationships VALUES ('document','a','viewer','user','alice','')`); err == nil {
+		if _, err := db.Exec(t.Context(), `INSERT INTO iam_tuples VALUES (2,'document','a','viewer','user','alice','')`); err == nil {
 			t.Fatal("untracked commit accepted")
 		}
 	})
 	for _, trigger := range []string{"insert", "delete", "update"} {
 		t.Run("tamper "+trigger, func(t *testing.T) {
 			db, _ := tupleTestSource(t)
-			mustTupleExec(t, db, "DROP TRIGGER iam_relationships_tuple_"+trigger+"; CREATE TRIGGER iam_relationships_tuple_"+trigger+" AFTER UPDATE ON iam_relationships BEGIN SELECT 1; END;")
-			if _, err := Repositories(t.Context(), db, WithTupleCache()); err == nil {
+			mustTupleExec(t, db, "DROP TRIGGER iam_tuples_tuple_"+trigger+"; CREATE TRIGGER iam_tuples_tuple_"+trigger+" AFTER UPDATE ON iam_tuples BEGIN SELECT 1; END;")
+			if _, err := testRepositories(t.Context(), db, WithTupleCache()); err == nil {
 				t.Fatal("altered trigger accepted")
 			}
 		})
 	}
 	t.Run("invalid ack", func(t *testing.T) {
 		_, source := tupleTestSource(t)
-		for _, ids := range [][]string{{"0"}, {"-1"}, {"01"}, {"1); DELETE FROM iam_relationships;"}} {
+		for _, ids := range [][]string{{"0"}, {"-1"}, {"01"}, {"1); DELETE FROM iam_tuples;"}} {
 			if err := source.Acknowledge(t.Context(), "", "next", ids); !errors.Is(err, sdk.ErrInvalidInput) {
 				t.Fatalf("invalid id %v: %v", ids, err)
 			}
@@ -292,10 +293,10 @@ func TestTupleCacheAmbientAndAcknowledgementRollback(t *testing.T) {
 		if err := source.Acknowledge(ctx, "", "next", nil); !errors.Is(err, sdk.ErrInvalidInput) {
 			t.Fatalf("ambient acknowledgement: %v", err)
 		}
-		if err := source.ReadSnapshot(ctx, func(context.Context, tuplecache.CheckReads) error { return nil }); !errors.Is(err, sdk.ErrInvalidInput) {
+		if err := source.ReadSnapshot(ctx, func(context.Context, tuplecache.CheckReads) error { return nil }); err != nil {
 			t.Fatalf("ambient reader: %v", err)
 		}
-		if _, err := Repositories(ctx, db, WithTupleCache()); !errors.Is(err, sdk.ErrInvalidInput) {
+		if _, err := testRepositories(ctx, db, WithTupleCache()); !errors.Is(err, sdk.ErrInvalidInput) {
 			t.Fatalf("ambient construction: %v", err)
 		}
 		return nil
@@ -306,7 +307,7 @@ func TestTupleCacheAmbientAndAcknowledgementRollback(t *testing.T) {
 	if _, err := RelationshipRepository(t.Context(), db, WithTupleCache()); !errors.Is(err, sdk.ErrInvalidInput) {
 		t.Fatalf("partial constructor: %v", err)
 	}
-	mustTupleExec(t, db, `INSERT INTO iam_relationships VALUES ('document','d1','viewer','user','alice','')`)
+	mustTupleExec(t, db, `INSERT INTO iam_tuples VALUES (2,'document','d1','viewer','user','alice','')`)
 	captured := mustTupleSnapshot(t, source, "")
 	mustTupleExec(t, db, `CREATE TRIGGER reject_ack BEFORE DELETE ON iam_tuple_outbox BEGIN SELECT RAISE(ABORT, 'injected ack failure'); END;`)
 	if err := source.Acknowledge(t.Context(), "", "next", tupleChangeIDs(captured)); err == nil {
@@ -347,7 +348,7 @@ func TestTupleCacheRejectsMalformedCurrentFacts(t *testing.T) {
 			if err := source.Acknowledge(t.Context(), "", "initial", nil); err != nil {
 				t.Fatal(err)
 			}
-			mustTupleExec(t, db, `INSERT INTO iam_relationships VALUES ('document',?,'viewer','user','alice','')`, id)
+			mustTupleExec(t, db, `INSERT INTO iam_tuples VALUES (2,'document',?,'viewer','user','alice','')`, id)
 			for _, receipt := range []string{"initial", ""} {
 				if _, err := source.Snapshot(t.Context(), receipt); !errors.Is(err, tuplecache.ErrUnavailable) {
 					t.Fatalf("malformed fact with receipt %q: %v", receipt, err)
@@ -362,13 +363,13 @@ func TestTupleCacheFullRecoveryPreservesLateWork(t *testing.T) {
 	if err := source.Acknowledge(t.Context(), "", "initial", nil); err != nil {
 		t.Fatal(err)
 	}
-	mustTupleExec(t, db, `INSERT INTO iam_relationships VALUES ('document','current','viewer','user','alice','')`)
+	mustTupleExec(t, db, `INSERT INTO iam_tuples VALUES (2,'document','current','viewer','user','alice','')`)
 	mustTupleExec(t, db, `INSERT INTO iam_tuple_outbox(after_tuple) VALUES ('{}')`)
 	if _, err := source.Snapshot(t.Context(), "initial"); !errors.Is(err, tuplecache.ErrUnavailable) {
 		t.Fatalf("delta accepted malformed payload: %v", err)
 	}
 	full := mustTupleSnapshot(t, source, "")
-	if !full.Full || len(full.Tuples) != 1 || full.Tuples[0].ResourceID != "current" || len(full.Changes) != 2 {
+	if !full.Full || len(full.Tuples) != 1 || full.Tuples[0].Scope.ID != "current" || len(full.Changes) != 2 {
 		t.Fatalf("full recovery: %+v", full)
 	}
 	for _, change := range full.Changes {
@@ -376,25 +377,23 @@ func TestTupleCacheFullRecoveryPreservesLateWork(t *testing.T) {
 			t.Fatalf("full recovery retained payload: %+v", change)
 		}
 	}
-	mustTupleExec(t, db, `INSERT INTO iam_relationships VALUES ('document','late','viewer','user','alice','')`)
+	mustTupleExec(t, db, `INSERT INTO iam_tuples VALUES (2,'document','late','viewer','user','alice','')`)
 	if err := source.Acknowledge(t.Context(), full.Receipt, "rebuilt", tupleChangeIDs(full)); err != nil {
 		t.Fatal(err)
 	}
 	remaining := mustTupleSnapshot(t, source, "rebuilt")
-	if remaining.Full || len(remaining.Changes) != 1 || remaining.Changes[0].After.ResourceID != "late" {
+	if remaining.Full || len(remaining.Changes) != 1 || remaining.Changes[0].After.Scope.ID != "late" {
 		t.Fatalf("full acknowledgement lost later commit: %+v", remaining)
 	}
 }
 
 func TestTupleCacheTempShadowCannotGrant(t *testing.T) {
 	db, cfg := cacheFixture(t, true, 1)
-	mustTupleExec(t, db, `CREATE TEMP TABLE iam_roles AS SELECT * FROM main.iam_roles;
-INSERT INTO temp.iam_roles VALUES ('user','shadow','admin','','');
-CREATE TEMP TABLE iam_tuple_cache AS SELECT * FROM main.iam_tuple_cache;
+	mustTupleExec(t, db, `CREATE TEMP TABLE iam_tuple_cache AS SELECT * FROM main.iam_tuple_cache;
 UPDATE temp.iam_tuple_cache SET receipt='shadow';
-CREATE TEMP TABLE iam_relationships AS SELECT * FROM main.iam_relationships;
-INSERT INTO temp.iam_relationships VALUES ('document','d1','viewer','user','shadow','');`)
-	repos, err := Repositories(t.Context(), db, cacheOptions(cfg)...)
+CREATE TEMP TABLE iam_tuples AS SELECT * FROM main.iam_tuples;
+INSERT INTO temp.iam_tuples VALUES (2,'document','d1','viewer','user','shadow',''),(1,'','','admin','user','shadow','');`)
+	repos, err := testRepositories(t.Context(), db, cacheOptions(cfg)...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -403,11 +402,11 @@ INSERT INTO temp.iam_relationships VALUES ('document','d1','viewer','user','shad
 		t.Fatalf("TEMP tuple source selected: %+v", got)
 	}
 	err = repos.TupleSource.ReadSnapshot(t.Context(), func(ctx context.Context, reads tuplecache.CheckReads) error {
-		if allowed, err := reads.HasExactRole(ctx, "user", "shadow", "admin", "", ""); err != nil || allowed {
+		if allowed, err := reads.Contains(ctx, tuples.Tuple{Scope: tuples.Global(), Relation: "admin", Subject: tuples.SubjectRef{Type: "user", ID: "shadow"}}); err != nil || allowed {
 			t.Fatalf("TEMP role: %v/%v", allowed, err)
 		}
 		model := relationships.NewReadModel([]relationships.SubjectRule{{ResourceType: "document", Relation: "viewer", SubjectType: "user"}})
-		if allowed, err := reads.ForChecks(model).CheckRelationWithGroupExpansion(ctx, "document", "d1", "viewer", "user", "shadow", 100); err != nil || allowed {
+		if allowed, err := reads.(relationships.CheckReadSource).ForChecks(model).CheckRelationWithGroupExpansion(ctx, "document", "d1", "viewer", "user", "shadow", 100); err != nil || allowed {
 			t.Fatalf("TEMP relation: %v/%v", allowed, err)
 		}
 		return nil
@@ -417,34 +416,17 @@ INSERT INTO temp.iam_relationships VALUES ('document','d1','viewer','user','shad
 	}
 }
 
-func TestTupleCacheMigrationUpgradeAndExport(t *testing.T) {
-	db, _ := cacheFixture(t, false)
-	for _, name := range []string{"0001_iam_cache_invalidation.sql", "0002_iam_tuple_cache.sql"} {
-		data, err := CacheMigrationsFS.ReadFile(CacheMigrationsDir + "/" + name)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := db.InTx(t.Context(), func(tx *tursodb.Tx) error { _, err := tx.Exec(t.Context(), string(data)); return err }); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if _, err := Repositories(t.Context(), db, WithTupleCache()); err != nil {
-		t.Fatal(err)
-	}
-	var old int
-	if err := db.QueryRow(t.Context(), `SELECT count(*) FROM main.sqlite_schema WHERE name='iam_cache_invalidation' OR name LIKE '%_cache_insert' OR name LIKE '%_cache_update' OR name LIKE '%_cache_delete'`).Scan(&old); err != nil || old != 0 {
-		t.Fatalf("old objects remain: %d/%v", old, err)
-	}
+func TestTupleCacheMigrationExport(t *testing.T) {
 	dst := t.TempDir()
-	if err := ExportCacheMigrations(dst); err != nil {
+	if err := ExportTupleCacheMigrations(dst); err != nil {
 		t.Fatal(err)
 	}
-	files, err := CacheMigrationsFS.ReadDir(CacheMigrationsDir)
-	if err != nil || len(files) != 2 {
+	files, err := TupleCacheMigrationsFS.ReadDir(TupleCacheMigrationsDir)
+	if err != nil || len(files) != 1 {
 		t.Fatalf("inventory %v/%v", files, err)
 	}
 	for _, file := range files {
-		canonical, err := CacheMigrationsFS.ReadFile(CacheMigrationsDir + "/" + file.Name())
+		canonical, err := TupleCacheMigrationsFS.ReadFile(TupleCacheMigrationsDir + "/" + file.Name())
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -464,8 +446,8 @@ func TestTupleCachePayloadRejectsIdentityNormalization(t *testing.T) {
 		}
 	}
 	// A real replacement character is a distinct valid ID; retain it exactly.
-	tuple, err := decodeTuple(sql.NullString{String: `["space","s","viewer","user","�",""]`, Valid: true})
-	if err != nil || tuple.SubjectID != "�" {
+	tuple, err := decodeTuple(sql.NullString{String: `[2,"space","s","viewer","user","�",""]`, Valid: true})
+	if err != nil || tuple.Subject.ID != "�" {
 		t.Fatalf("valid opaque identity: %+v/%v", tuple, err)
 	}
 }

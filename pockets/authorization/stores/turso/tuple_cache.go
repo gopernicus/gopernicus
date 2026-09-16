@@ -13,22 +13,22 @@ import (
 	"unicode/utf8"
 
 	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
-	"github.com/gopernicus/gopernicus/pockets/authorization/logic/relationships"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuplecache"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuples"
 	"github.com/gopernicus/gopernicus/sdk"
 )
 
-// CacheMigrationsFS is the optional authorization-cache source. Hosts must apply
-// authorization through 0007 first and own application of both sources.
+// TupleCacheMigrationsFS holds optional raw tuple capture. Apply after the
+// primary authorization migrations in the same database/schema.
 //
-//go:embed cache_migrations/*.sql
-var CacheMigrationsFS embed.FS
+//go:embed tuple_cache_migrations/*.sql
+var TupleCacheMigrationsFS embed.FS
 
-const CacheMigrationsDir = "cache_migrations"
-const CacheMigrationSource = "authorization-cache"
+const TupleCacheMigrationsDir = "tuple_cache_migrations"
+const TupleCacheMigrationSource = "authorization-cache-v2"
 
-func ExportCacheMigrations(dst string) error {
-	return tursodb.ExportMigrations(CacheMigrationsFS, CacheMigrationsDir, dst)
+func ExportTupleCacheMigrations(dst string) error {
+	return tursodb.ExportMigrations(TupleCacheMigrationsFS, TupleCacheMigrationsDir, dst)
 }
 
 // WithTupleCache probes and exposes the authoritative tuple source. Installing
@@ -45,26 +45,26 @@ func prepareTupleSource(ctx context.Context, db *tursodb.DB, cfg *config) (*tupl
 		return nil, err
 	}
 	defer tx.Rollback()
-	data, err := CacheMigrationsFS.ReadFile(CacheMigrationsDir + "/0002_iam_tuple_cache.sql")
+	data, err := TupleCacheMigrationsFS.ReadFile(TupleCacheMigrationsDir + "/0002_iam_tuple_cache.sql")
 	if err != nil {
 		return nil, err
 	}
 	// Preserve literals when checking owned SQL; SQLite removes only the final
 	// semicolon from these canonical CREATE definitions in sqlite_schema.
-	definitions := regexp.MustCompile(`(?s)CREATE TABLE (iam_tuple_\w+) \(.*?\n\);|CREATE TRIGGER (\w+).*?\nEND;`).FindAllStringSubmatch(string(data), -1)
+	definitions := regexp.MustCompile(`(?s)CREATE TABLE main\.(iam_tuple_\w+) \(.*?\n\);|CREATE TRIGGER main\.(\w+).*?\nEND;`).FindAllStringSubmatch(string(data), -1)
 	if len(definitions) != 5 {
 		return nil, tuplecache.ErrUnavailable
 	}
 	for _, def := range definitions {
 		name, kind, table := def[1], "table", def[1]
 		if name == "" {
-			name, kind, table = def[2], "trigger", "iam_relationships"
+			name, kind, table = def[2], "trigger", "iam_tuples"
 		}
 		var actual string
 		if err := tx.QueryRow(ctx, "SELECT sql FROM main.sqlite_schema WHERE name=? AND type=? AND tbl_name=?", name, kind, table).Scan(&actual); err != nil {
 			return nil, fmt.Errorf("authorization TupleCache definition %s missing: %w", name, err)
 		}
-		if strings.TrimSpace(actual) != strings.TrimSuffix(def[0], ";") {
+		if strings.TrimSpace(actual) != strings.TrimSuffix(strings.Replace(def[0], "main.", "", 1), ";") {
 			return nil, fmt.Errorf("authorization TupleCache definition %s incompatible: %w", name, tuplecache.ErrUnavailable)
 		}
 	}
@@ -76,7 +76,7 @@ func prepareTupleSource(ctx context.Context, db *tursodb.DB, cfg *config) (*tupl
 	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
-	cfg.tupleBinding = fmt.Sprintf("%x", sha256.Sum256([]byte("turso/main/authorization-tuples/v1/"+binding)))
+	cfg.tupleBinding = fmt.Sprintf("%x", sha256.Sum256([]byte("turso/main/authorization-tuples/v2/"+binding)))
 	source.cfg, source.binding = *cfg, binding
 	return source, nil
 }
@@ -95,7 +95,7 @@ func (s *tupleSource) readHead(ctx context.Context, q tursodb.Querier) (binding,
 			return "", "", fmt.Errorf("%w: %v", tuplecache.ErrUnavailable, err)
 		}
 		count++
-		if count != 1 || slot != 1 || protocol != 1 || slotType != "integer" || protocolType != "integer" || bindingType != "text" || receiptType != "text" {
+		if count != 1 || slot != 1 || protocol != 2 || slotType != "integer" || protocolType != "integer" || bindingType != "text" || receiptType != "text" {
 			return "", "", tuplecache.ErrUnavailable
 		}
 	}
@@ -189,7 +189,7 @@ func readTupleChanges(ctx context.Context, q tursodb.Querier, full bool) ([]tupl
 	return changes, tursodb.MapError(rows.Err())
 }
 
-func decodeTuple(value sql.NullString) (*relationships.CreateRelationship, error) {
+func decodeTuple(value sql.NullString) (*tuples.Tuple, error) {
 	if !value.Valid {
 		return nil, nil
 	}
@@ -199,43 +199,47 @@ func decodeTuple(value sql.NullString) (*relationships.CreateRelationship, error
 		return nil, tuplecache.ErrUnavailable
 	}
 	var values []any
-	if err := json.Unmarshal([]byte(value.String), &values); err != nil || len(values) != 6 {
+	if err := json.Unmarshal([]byte(value.String), &values); err != nil || len(values) != 7 {
 		return nil, tuplecache.ErrUnavailable
 	}
 	var fields [6]string
-	for i, value := range values {
+	kind, ok := values[0].(float64)
+	if !ok || (kind != 1 && kind != 2) {
+		return nil, tuplecache.ErrUnavailable
+	}
+	for i, value := range values[1:] {
 		field, ok := value.(string)
 		if !ok {
 			return nil, tuplecache.ErrUnavailable
 		}
 		fields[i] = field
 	}
-	tuple := &relationships.CreateRelationship{ResourceType: fields[0], ResourceID: fields[1], Relation: fields[2], SubjectType: fields[3], SubjectID: fields[4], SubjectRelation: fields[5]}
+	tuple := &tuples.Tuple{Scope: tuples.Scope{Kind: tuples.ScopeKind(kind), Type: fields[0], ID: fields[1]}, Relation: fields[2], Subject: tuples.SubjectRef{Type: fields[3], ID: fields[4], Relation: fields[5]}}
 	if err := tuple.Validate(); err != nil {
 		return nil, fmt.Errorf("tuple cache payload: %w: %v", tuplecache.ErrUnavailable, err)
 	}
 	return tuple, nil
 }
 
-func readAllTuples(ctx context.Context, q tursodb.Querier) ([]relationships.CreateRelationship, error) {
-	rows, err := q.Query(ctx, `SELECT resource_type, resource_id, relation, subject_type, subject_id, subject_relation FROM main.iam_relationships
-ORDER BY resource_type, resource_id, relation, subject_type, subject_id, subject_relation`)
+func readAllTuples(ctx context.Context, q tursodb.Querier) ([]tuples.Tuple, error) {
+	rows, err := q.Query(ctx, `SELECT scope_kind, resource_type, resource_id, relation, subject_type, subject_id, subject_relation FROM main.iam_tuples
+ORDER BY scope_kind,resource_type, resource_id, relation, subject_type, subject_id, subject_relation`)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var tuples []relationships.CreateRelationship
+	var facts []tuples.Tuple
 	for rows.Next() {
-		var tuple relationships.CreateRelationship
-		if err := rows.Scan(&tuple.ResourceType, &tuple.ResourceID, &tuple.Relation, &tuple.SubjectType, &tuple.SubjectID, &tuple.SubjectRelation); err != nil {
+		var tuple tuples.Tuple
+		if err := rows.Scan(&tuple.Scope.Kind, &tuple.Scope.Type, &tuple.Scope.ID, &tuple.Relation, &tuple.Subject.Type, &tuple.Subject.ID, &tuple.Subject.Relation); err != nil {
 			return nil, tursodb.MapError(err)
 		}
 		if err := tuple.Validate(); err != nil {
 			return nil, fmt.Errorf("tuple cache current fact: %w: %v", tuplecache.ErrUnavailable, err)
 		}
-		tuples = append(tuples, tuple)
+		facts = append(facts, tuple)
 	}
-	return tuples, tursodb.MapError(rows.Err())
+	return facts, tursodb.MapError(rows.Err())
 }
 
 func (s *tupleSource) Acknowledge(ctx context.Context, expectedReceipt, receipt string, ids []string) error {

@@ -12,7 +12,7 @@ Pockets are optional, reusable hexagons. Each core is datastore-free and require
 | Pocket | Capability | HTTP surface | Durable stores | Memory posture |
 |---|---|---|---|---|
 | [Authentication](authentication.md) | human/machine identity, sessions, credentials, recovery, OAuth, delivery | `/auth/*` JSON; optional HTML | pgx, Turso | example-local full reference |
-| [Authorization](authorization.md) | relationship/ReBAC and roles, guarded mutations | optional role administration and reusable permission middleware | pgx, Turso, Firestore | public `stores/memory` |
+| [Authorization](authorization.md) | relationship/ReBAC and roles, guarded mutations | optional role administration and reusable permission middleware | pgx, Turso | public `stores/memory` |
 | [CMS](cms.md) | content registry, taxonomy, menus, media, inquiries | JSON + optional HTML/admin | pgx, Turso | example-local reference |
 | [Events](events.md) | durable outbox drain + authenticated SSE gateway | `/events` streams | pgx, Turso | `storetest` reference |
 | [Jobs](jobs.md) | durable queue, schedules, keyed/fenced work | none today; namespace reserved | pgx, Turso | public `stores/memory` |

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"sync/atomic"
 
 	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/audit"
@@ -72,14 +73,10 @@ func (m *mutationStore) apply(ctx context.Context, cmd mutations.Command, guard 
 		if err := outcome.Rejection(); err != nil {
 			return err
 		}
-		remains, err := sameRoleGrantRemains(ctx, tx, cmd)
-		if err != nil {
-			return err
-		}
 		if err := appendAudit(ctx, w, config{audit: m.audit}); err != nil {
 			return err
 		}
-		result = &mutations.Result{Outcome: outcome, SameRoleGrantRemains: remains}
+		result = &mutations.Result{Outcome: outcome}
 		return nil
 	}
 	err := ownedTransaction(ctx, m.db, attempt)
@@ -89,23 +86,10 @@ func (m *mutationStore) apply(ctx context.Context, cmd mutations.Command, guard 
 	return result, nil
 }
 
-func sameRoleGrantRemains(ctx context.Context, tx *tursodb.Tx, cmd mutations.Command) (bool, error) {
-	if cmd.Operation != mutations.OpRoleUnassign || cmd.Target.Kind != mutations.TargetResource {
-		return false, nil
-	}
-	for _, row := range cmd.Roles {
-		ok, err := hasExactRoleTx(ctx, tx, row.SubjectType, row.SubjectID, row.Role, "", "")
-		if err != nil {
-			return false, err
-		}
-		if ok {
-			return true, nil
-		}
-	}
-	return false, nil
-}
-
 func runGuard(ctx context.Context, guard mutations.Guard, view *decisionView) (err error) {
+	view.closed = &atomic.Bool{}
+	view.viewContext = ctx
+	defer view.closed.Store(true)
 	defer func() {
 		if r := recover(); r != nil {
 			err = fmt.Errorf("authorization turso store: guard panicked: %v: %w", r, sdk.ErrUnavailable)

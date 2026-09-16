@@ -297,7 +297,7 @@ A **host pocket** `pockets/<name>/{logic,inbound,outbound}` is this
 application's wrap, extension, or bridge of one or more FRAMEWORK POCKETS,
 laid out as its own hexagon even where that is a little redundant. The
 reference host's `pockets/auth` is the worked example: `logic` is `model.go`
-alone — principals, resources, permissions, roles, and the `RoleModel()` the
+alone — principals, resources, permissions, roles, and the unified `decisions.Model` the
 authorization engine runs; `inbound` is whoami plus steward-only role
 administration; `outbound` is the framework's pgx stores placed in the host's
 `auth` schema.

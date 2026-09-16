@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuples"
+
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/mutations"
 	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -78,7 +80,7 @@ func TestDecisionViewHasRoleValidatesBeforeReading(t *testing.T) {
 		scope                 mutations.Target
 		role, subjectType, id string
 	}{
-		{"scope kind", mutations.Target{Kind: "unknown", Type: "doc", ID: "d1"}, "admin", "user", "alice"},
+		{"scope kind", mutations.Target{Kind: "unknown", Type: "", ID: "d1"}, "admin", "user", "alice"},
 		{"scope id", mutations.Target{Kind: mutations.TargetSubject, Type: "user"}, "admin", "user", "alice"},
 		{"role", valid, "", "user", "alice"},
 		{"subject type", valid, "admin", "", "alice"},
@@ -86,7 +88,7 @@ func TestDecisionViewHasRoleValidatesBeforeReading(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			view := newDecisionView(nil, testSchema(t))
-			if _, err := view.HasRole(context.Background(), tc.scope, tc.role, tc.subjectType, tc.id); !errors.Is(err, sdk.ErrInvalidInput) {
+			if _, err := view.Contains(context.Background(), tuples.Tuple{Scope: tuples.Scope{Kind: tuples.ResourceScope, Type: tc.scope.Type, ID: tc.scope.ID}, Relation: tc.role, Subject: tuples.SubjectRef{Type: tc.subjectType, ID: tc.id}}); !errors.Is(err, sdk.ErrInvalidInput) {
 				t.Fatalf("invalid role read: %v", err)
 			}
 		})

@@ -7,8 +7,8 @@ import (
 	"testing/synctest"
 	"time"
 
-	"github.com/gopernicus/gopernicus/pockets/authorization/logic/relationships"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuplecache"
+	tuplefacts "github.com/gopernicus/gopernicus/pockets/authorization/logic/tuples"
 	"github.com/gopernicus/gopernicus/pockets/authorization/stores/memory"
 	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/pkg/workers"
@@ -20,7 +20,7 @@ type capacityBackend struct {
 	maxChanges              int
 }
 
-func (b *capacityBackend) Read(ctx context.Context, state tuplecache.State, keys []tuplecache.SetKey) ([][]relationships.SubjectRef, error) {
+func (b *capacityBackend) Read(ctx context.Context, state tuplecache.State, keys []tuplecache.SetKey) ([][]tuplefacts.Tuple, error) {
 	if len(keys) > 0 && b.readError != nil {
 		return nil, b.readError
 	}
@@ -39,7 +39,7 @@ func (b *capacityBackend) Publish(ctx context.Context, before, next tuplecache.S
 
 func TestRebuildRecoversRejectedDelta(t *testing.T) {
 	backend := &capacityBackend{Backend: memory.NewTupleCache(), maxChanges: 0}
-	c, s := fixture(t, []relationships.CreateRelationship{grant}, backend)
+	c, s := fixture(t, []tuplefacts.Tuple{grant}, backend)
 	poll(t, c)
 	before, err := backend.State(t.Context())
 	if err != nil {
@@ -71,7 +71,7 @@ func TestRebuildRecoversRejectedDelta(t *testing.T) {
 
 func TestCapacityReadFallsBackWithoutGrantingStaleData(t *testing.T) {
 	backend := &capacityBackend{Backend: memory.NewTupleCache()}
-	c, s := fixture(t, []relationships.CreateRelationship{grant}, backend)
+	c, s := fixture(t, []tuplefacts.Tuple{grant}, backend)
 	poll(t, c)
 	revoke(t, s)
 	backend.readError = tuplecache.ErrCapacity
@@ -81,7 +81,7 @@ func TestCapacityReadFallsBackWithoutGrantingStaleData(t *testing.T) {
 	}
 	// Even a callback that ignores a backend error cannot certify its result.
 	if err := c.Run(t.Context(), func(ctx context.Context, reads tuplecache.CheckReads) error {
-		_, _ = reads.ForChecks(directModel).GetRelationTargets(ctx, "space", "s", "viewer")
+		_, _ = graph(reads, directModel).GetRelationTargets(ctx, "space", "s", "viewer")
 		return nil
 	}); err != nil {
 		t.Fatal(err)
@@ -93,7 +93,7 @@ func TestCapacityReadFallsBackWithoutGrantingStaleData(t *testing.T) {
 
 func TestRebuildPreservesFailureAndAcknowledgementProtocol(t *testing.T) {
 	backend := &capacityBackend{Backend: memory.NewTupleCache()}
-	c, s := fixture(t, []relationships.CreateRelationship{grant}, backend)
+	c, s := fixture(t, []tuplefacts.Tuple{grant}, backend)
 	poll(t, c)
 	revoke(t, s)
 	backend.publishError = tuplecache.ErrConflict
@@ -122,7 +122,7 @@ func TestRebuildPreservesFailureAndAcknowledgementProtocol(t *testing.T) {
 
 func TestRebuildSharesDeliveryGateAndFreshness(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		c, s := fixture(t, []relationships.CreateRelationship{grant}, memory.NewTupleCache())
+		c, s := fixture(t, []tuplefacts.Tuple{grant}, memory.NewTupleCache())
 		poll(t, c)
 		entered, release := make(chan struct{}), make(chan struct{})
 		s.beforeSnapshot = func() { close(entered); <-release }

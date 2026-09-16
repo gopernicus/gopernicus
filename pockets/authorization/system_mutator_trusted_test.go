@@ -5,6 +5,8 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuples"
+
 	authmodel "github.com/gopernicus/gopernicus/pockets/authorization/logic/model"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/mutations"
 	"github.com/gopernicus/gopernicus/pockets/authorization/stores/memory"
@@ -19,10 +21,8 @@ func newTrustedComponents(t *testing.T) Components {
 	t.Helper()
 	st := memory.New(memory.WithGuardianPolicy(mutations.GuardianPolicy{}))
 	comps, err := New(Repositories{
-		Relationships: st.Relationships(),
-		Roles:         st.Roles(),
-		Mutations:     st.Mutations(),
-	}, WithRelationshipModel(lifecycleModel()))
+		Tuples: st.Tuples(), Mutations: st.Mutations(),
+	}, WithModel(lifecycleModel()))
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
@@ -67,11 +67,11 @@ func TestSystemMutatorTrustedRunsSemanticValidator(t *testing.T) {
 
 		ResourceType: "doc",
 		ResourceID:   "d1",
-		Relation:     "nonexistent_relation",
-		Subject:      subjU("u1"),
+		Relation:     "editor",
+		Subject:      tuples.SubjectRef{Type: "service", ID: "s1"},
 	})
 	if err == nil {
-		t.Fatalf("trusted grant of an unknown relation must be rejected by the semantic validator")
+		t.Fatalf("trusted grant with a disallowed subject must be rejected by the semantic validator")
 	}
 }
 
@@ -84,13 +84,13 @@ func TestSystemMutatorAssignRoleTrusted(t *testing.T) {
 	if _, err := comps.SystemMutator.AssignRole(ctx, mutations.AssignRoleCommand{
 
 		Subject: authmodel.PrincipalRef{Type: "user", ID: "u1"},
-		Role:    "auditor",
+		Role:    "auditor", Scope: tuples.Global(),
 	}); err != nil {
 		t.Fatalf("AssignRole: %v", err)
 	}
-	ok, err := comps.Roles.HasRole(ctx, authmodel.PrincipalRef{Type: "user", ID: "u1"}, "auditor", "doc", "d1")
+	ok, err := comps.Roles.HasRole(ctx, authmodel.PrincipalRef{Type: "user", ID: "u1"}, "auditor")
 	if err != nil || !ok {
-		t.Fatalf("global trusted role not visible via HasRole fallback: ok=%v err=%v", ok, err)
+		t.Fatalf("global trusted role not visible via exact HasRole: ok=%v err=%v", ok, err)
 	}
 }
 

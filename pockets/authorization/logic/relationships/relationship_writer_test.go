@@ -8,6 +8,8 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/decisions"
+
 	"github.com/gopernicus/gopernicus/pockets/authorization"
 
 	"github.com/gopernicus/gopernicus/pockets"
@@ -19,27 +21,28 @@ import (
 	"github.com/gopernicus/gopernicus/sdk/pkg/web"
 )
 
-func baselineModel() relationships.Schema {
-	return relationships.NewSchema([]relationships.ResourceSchema{
-		{Name: "doc", Def: relationships.ResourceTypeDef{
-			Relations: map[string]relationships.RelationDef{
-				"viewer": {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "user"}}},
+func baselineModel() decisions.Model {
+	return decisions.NewSchema([]decisions.ResourceSchema{
+		{Name: "doc", Def: decisions.ResourceTypeDef{
+			Relations: map[string]decisions.RelationDef{
+				"viewer": {AllowedSubjects: []decisions.SubjectTypeRef{{Type: "user"}}},
 			},
-			Permissions: map[string]relationships.PermissionRule{"view": relationships.AnyOf(relationships.Direct("viewer"))},
+			Permissions: map[string]decisions.Expression{"view": decisions.AnyOf(decisions.Direct("viewer"))},
 		}},
-		{Name: "space", Def: relationships.ResourceTypeDef{
-			Relations: map[string]relationships.RelationDef{
-				"parent": {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "space"}}},
+		{Name: "space", Def: decisions.ResourceTypeDef{
+			Relations: map[string]decisions.RelationDef{
+				"parent": {AllowedSubjects: []decisions.SubjectTypeRef{{Type: "space"}}},
 			},
-			Permissions: map[string]relationships.PermissionRule{"in_parent": relationships.AnyOf(relationships.Direct("parent"))},
+			Permissions: map[string]decisions.Expression{"in_parent": decisions.AnyOf(decisions.Direct("parent"))},
 		}},
 	})
 }
 
 func newBaseline(t *testing.T) (authorization.Components, *memory.Relationships) {
 	t.Helper()
-	rels := memory.NewRelationships()
-	comps, err := authorization.New(authorization.Repositories{Relationships: rels}, authorization.WithRelationshipModel(baselineModel()))
+	store := memory.New()
+	rels := store.Relationships()
+	comps, err := authorization.New(authorization.Repositories{Tuples: store.Tuples()}, authorization.WithModel(baselineModel()))
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}

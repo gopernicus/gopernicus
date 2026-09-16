@@ -3,6 +3,8 @@ package model
 import (
 	"fmt"
 
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuples"
+
 	"github.com/gopernicus/gopernicus/sdk"
 )
 
@@ -41,13 +43,13 @@ func (r CheckRequest) Validate() error {
 	if err := r.Principal.Validate(); err != nil {
 		return err
 	}
-	if err := ValidateRefField("permission", r.Permission); err != nil {
+	if err := tuples.ValidateRefField("permission", r.Permission); err != nil {
 		return err
 	}
-	if err := ValidateRefField("resource type", r.Resource.Type); err != nil {
+	if err := tuples.ValidateRefField("resource type", r.Resource.Type); err != nil {
 		return err
 	}
-	return ValidateRefField("resource id", r.Resource.ID)
+	return tuples.ValidateRefField("resource id", r.Resource.ID)
 }
 
 // CheckResult is the outcome of a permission check.
@@ -114,10 +116,10 @@ func (r LookupRequest) Validate() error {
 	if err := r.Principal.Validate(); err != nil {
 		return err
 	}
-	if err := ValidateRefField("permission", r.Permission); err != nil {
+	if err := tuples.ValidateRefField("permission", r.Permission); err != nil {
 		return err
 	}
-	if err := ValidateRefField("resource type", r.ResourceType); err != nil {
+	if err := tuples.ValidateRefField("resource type", r.ResourceType); err != nil {
 		return err
 	}
 	if r.Limit < 0 {
@@ -126,24 +128,17 @@ func (r LookupRequest) Validate() error {
 	return nil
 }
 
-// LookupResult is the enumeration result of LookupResources.
+// LookupResult is the enumeration result of a named permission expression.
+// Successful results have non-nil IDs. Unrestricted means the expression grants
+// access to every resource ID of the requested type; IDs is then empty and the
+// host skips authorization-ID filtering. This must follow from explicit policy,
+// such as a satisfied global Role branch, never implicit scope fallback.
 //
-// Contract: IDs is ALWAYS a non-nil slice. Unrestricted reports that the
-// principal may access EVERY resource of the type because a role that grants
-// the permission is held GLOBALLY — in which case IDs is empty and the host
-// must skip ID filtering entirely rather than treat the empty slice as "none".
-// Only the roles kind produces Unrestricted; the relationship kind is pure
-// tuple enumeration and never does.
+// Empty IDs with Unrestricted false means no matching resource. All/Any combine
+// finite and unrestricted results by intersection/union, respectively.
 //
-// An empty IDs with Unrestricted false means the subject has access to no
-// resource of that type. There is no admin/unrestricted bypass in the
-// relationship engine: a host that wants admin-sees-everything checks for it in
-// its own closure BEFORE calling LookupResources and then skips ID filtering.
-//
-// HasMore reports that the PAGED surface (LookupResourcesIn) has at least one
-// more ID after this page, and NextCursor is the opaque continuation to pass
-// back as LookupRequest.After. NextCursor is set only when HasMore is true; an
-// Unrestricted answer and the classic LookupResources never set either.
+// HasMore and NextCursor describe a paged result. NextCursor is the opaque value
+// to pass as LookupRequest.After. Unrestricted and unpaged results have no cursor.
 type LookupResult struct {
 	IDs          []string
 	Unrestricted bool

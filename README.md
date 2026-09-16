@@ -35,7 +35,7 @@ pockets/authentication/views/goth/           auth's bundled default views (ui/go
 pockets/authorization/             IAM hexagon — independently wireable kinds (relationships/ReBAC + roles); datastore-free; public memstore/
 pockets/authorization/stores/pgx/  authorization's pgx store adapter, its own module
 pockets/authorization/stores/turso/ authorization's Turso store adapter, its own module
-pockets/authorization/stores/firestore/ authorization's Firestore store adapter (Native mode; no ambient-transaction join — ruling R1), its own module
+pockets/authorization/stores/goredis/ authorization's Redis tuple mirror, its own module
 pockets/cms/                       the CMS hexagon — datastore-free; domain/ public rim, internal/ interior
 pockets/cms/stores/pgx/            the CMS pocket's pgx store adapter, its own module
 pockets/cms/stores/turso/          the CMS pocket's Turso store adapter, its own module

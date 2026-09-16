@@ -6,9 +6,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -16,9 +18,10 @@ import (
 	"github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
 	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
 	"github.com/gopernicus/gopernicus/pockets/authorization"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/decisions"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/model"
-	"github.com/gopernicus/gopernicus/pockets/authorization/logic/relationships"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuplecache"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuples"
 	pgxstore "github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx"
 	tursostore "github.com/gopernicus/gopernicus/pockets/authorization/stores/turso"
 	_ "modernc.org/sqlite"
@@ -59,11 +62,9 @@ func endToEndRepositories(t testing.TB, dialect string) authorization.Repositori
 		if err := tursodb.RunMigrations(ctx, db, tursostore.MigrationsFS, tursostore.MigrationsDir); err != nil {
 			t.Fatal(err)
 		}
-		data, err := tursostore.CacheMigrationsFS.ReadFile(tursostore.CacheMigrationsDir + "/0002_iam_tuple_cache.sql")
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := db.InTx(ctx, func(tx *tursodb.Tx) error { _, err := tx.Exec(ctx, string(data)); return err }); err != nil {
+		if err := db.InTx(ctx, func(tx *tursodb.Tx) error {
+			return applyCacheBaseline(tursostore.TupleCacheMigrationsFS, tursostore.TupleCacheMigrationsDir, func(script string) error { _, err := tx.Exec(ctx, script); return err })
+		}); err != nil {
 			t.Fatal(err)
 		}
 		repos, err := tursostore.Repositories(ctx, db, tursostore.WithTupleCache())
@@ -101,16 +102,7 @@ func endToEndRepositories(t testing.TB, dialect string) authorization.Repositori
 		if _, err := tx.Exec(ctx, "SET LOCAL search_path TO "+name); err != nil {
 			return err
 		}
-		for _, file := range []string{"0001_iam_cache_invalidation.sql", "0002_iam_tuple_cache.sql"} {
-			data, err := pgxstore.CacheMigrationsFS.ReadFile(pgxstore.CacheMigrationsDir + "/" + file)
-			if err != nil {
-				return err
-			}
-			if _, err := tx.Exec(ctx, string(data)); err != nil {
-				return err
-			}
-		}
-		return nil
+		return applyCacheBaseline(pgxstore.TupleCacheMigrationsFS, pgxstore.TupleCacheMigrationsDir, func(script string) error { _, err := tx.Exec(ctx, script); return err })
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -121,25 +113,25 @@ func endToEndRepositories(t testing.TB, dialect string) authorization.Repositori
 	return repos
 }
 
-func endToEndModel() relationships.Schema {
-	return relationships.Schema{ResourceTypes: map[string]relationships.ResourceTypeDef{
-		"group":    {Relations: map[string]relationships.RelationDef{"member": {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "user"}, {Type: "group", Relation: "member"}}}}},
-		"space":    {Relations: map[string]relationships.RelationDef{"viewer": {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "group", Relation: "member"}}}}, Permissions: map[string]relationships.PermissionRule{"view": relationships.AnyOf(relationships.Direct("viewer"))}},
-		"document": {Relations: map[string]relationships.RelationDef{"parent": {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "space"}}}}, Permissions: map[string]relationships.PermissionRule{"view": relationships.AnyOf(relationships.Through("parent", "view"))}},
+func endToEndModel() decisions.Model {
+	return decisions.Model{ResourceTypes: map[string]decisions.ResourceTypeDef{
+		"group":    {Relations: map[string]decisions.RelationDef{"member": {AllowedSubjects: []decisions.SubjectTypeRef{{Type: "user"}, {Type: "group", Relation: "member"}}}}},
+		"space":    {Relations: map[string]decisions.RelationDef{"viewer": {AllowedSubjects: []decisions.SubjectTypeRef{{Type: "group", Relation: "member"}}}}, Permissions: map[string]decisions.Expression{"view": decisions.Any(decisions.Direct("viewer"))}},
+		"document": {Relations: map[string]decisions.RelationDef{"parent": {AllowedSubjects: []decisions.SubjectTypeRef{{Type: "space"}}}}, Permissions: map[string]decisions.Expression{"view": decisions.Any(decisions.Through("parent", "view"))}},
 	}}
 }
 
-func endToEndSeed(t testing.TB, repos authorization.Repositories, count int) ([]model.CheckRequest, []string, relationships.CreateRelationship) {
+func endToEndSeed(t testing.TB, repos authorization.Repositories, count int) ([]model.CheckRequest, []string, tuples.Tuple) {
 	t.Helper()
-	member := relationships.CreateRelationship{ResourceType: "group", ResourceID: "engineering", Relation: "member", SubjectType: "user", SubjectID: "alice"}
-	tuples := []relationships.CreateRelationship{member, {ResourceType: "space", ResourceID: "main", Relation: "viewer", SubjectType: "group", SubjectID: "engineering", SubjectRelation: "member"}}
+	member := tuple("group", "engineering", "member", "user", "alice", "")
+	facts := []tuples.Tuple{member, tuple("space", "main", "viewer", "group", "engineering", "member")}
 	requests, ids := make([]model.CheckRequest, count), make([]string, count)
 	for i := range requests {
 		ids[i] = fmt.Sprintf("d%04d", i)
-		tuples = append(tuples, relationships.CreateRelationship{ResourceType: "document", ResourceID: ids[i], Relation: "parent", SubjectType: "space", SubjectID: "main"})
+		facts = append(facts, tuple("document", ids[i], "parent", "space", "main", ""))
 		requests[i] = model.CheckRequest{Principal: model.PrincipalRef{Type: "user", ID: "alice"}, Resource: model.Resource{Type: "document", ID: ids[i]}, Permission: "view"}
 	}
-	if err := repos.Relationships.CreateRelationships(t.Context(), tuples); err != nil {
+	if err := repos.Tuples.ApplyTuples(t.Context(), tuples.Changes{Add: facts}); err != nil {
 		t.Fatal(err)
 	}
 	return requests, ids, member
@@ -153,11 +145,11 @@ func TestSQLRedisDeliveryRecovery(t *testing.T) {
 			source := &observedSource{Source: repos.TupleSource}
 			repos.TupleSource = source
 			client, _ := startRedis(t, "", false)
-			backend, err := NewTupleCache(client, "sql-redis", WithLimits(Limits{MaxMutationBytes: 16384}))
+			backend, err := NewTupleCache(client, "sql-redis", WithLimits(Limits{MaxMutationBytes: 32768}))
 			if err != nil {
 				t.Fatal(err)
 			}
-			components, err := authorization.New(repos, authorization.WithRelationshipModel(endToEndModel()), authorization.WithTupleCache(backend, tuplecache.Policy{MaxStaleness: time.Minute}))
+			components, err := authorization.New(repos, authorization.WithModel(endToEndModel()), authorization.WithTupleCache(backend, tuplecache.Policy{MaxStaleness: time.Minute}))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -189,7 +181,7 @@ func TestSQLRedisDeliveryRecovery(t *testing.T) {
 			if source.reads.Load() != 2 {
 				t.Fatal("warm checks used SQL")
 			}
-			if err := repos.Relationships.DeleteRelationshipTarget(t.Context(), member.ResourceType, member.ResourceID, member.Relation, member.Subject()); err != nil {
+			if err := repos.Tuples.ApplyTuples(t.Context(), tuples.Changes{Remove: []tuples.Tuple{member}}); err != nil {
 				t.Fatal(err)
 			}
 			check(true) // The explicitly accepted delivery lag is observable.
@@ -197,7 +189,7 @@ func TestSQLRedisDeliveryRecovery(t *testing.T) {
 				t.Fatal(err)
 			}
 			check(false)
-			if err := repos.Relationships.CreateRelationships(t.Context(), []relationships.CreateRelationship{member}); err != nil {
+			if err := repos.Tuples.ApplyTuples(t.Context(), tuples.Changes{Add: []tuples.Tuple{member}}); err != nil {
 				t.Fatal(err)
 			}
 			source.failAck.Store(true)
@@ -221,15 +213,15 @@ func TestSQLRedisDeliveryRecovery(t *testing.T) {
 			}
 			// Large obsolete backlog, small current graph. Delta cannot fit the
 			// configured publication limit; explicit rebuild must still recover.
-			transient := make([]relationships.CreateRelationship, 100)
+			transient := make([]tuples.Tuple, 100)
 			for i := range transient {
-				transient[i] = relationships.CreateRelationship{ResourceType: "space", ResourceID: fmt.Sprint("transient-", i), Relation: "viewer", SubjectType: "user", SubjectID: "bob"}
+				transient[i] = tuple("space", fmt.Sprint("transient-", i), "viewer", "user", "bob", "")
 			}
-			if err := repos.Relationships.CreateRelationships(t.Context(), transient); err != nil {
+			if err := repos.Tuples.ApplyTuples(t.Context(), tuples.Changes{Add: transient}); err != nil {
 				t.Fatal(err)
 			}
-			for _, tuple := range transient {
-				if err := repos.Relationships.DeleteResourceRelationships(t.Context(), tuple.ResourceType, tuple.ResourceID); err != nil {
+			for _, fact := range transient {
+				if err := repos.Tuples.DeleteScope(t.Context(), fact.Scope); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -260,11 +252,11 @@ func TestSQLRedisDeliveryRecovery(t *testing.T) {
 			if err != nil || snapshot.Full || len(snapshot.Changes) != 0 {
 				t.Fatalf("recovery left work or inconsistent receipt: %+v/%v", snapshot, err)
 			}
-			limited, err := NewTupleCache(client, "sql-redis", WithLimits(Limits{MaxReadBytes: 128, MaxMutationBytes: 16384}))
+			limited, err := NewTupleCache(client, "sql-redis", WithLimits(Limits{MaxReadBytes: 128, MaxMutationBytes: 32768}))
 			if err != nil {
 				t.Fatal(err)
 			}
-			bounded, err := authorization.New(repos, authorization.WithRelationshipModel(endToEndModel()), authorization.WithTupleCache(limited, tuplecache.Policy{MaxStaleness: time.Minute}))
+			bounded, err := authorization.New(repos, authorization.WithModel(endToEndModel()), authorization.WithTupleCache(limited, tuplecache.Policy{MaxStaleness: time.Minute}))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -285,6 +277,121 @@ func TestSQLRedisDeliveryRecovery(t *testing.T) {
 	}
 }
 
+func TestSQLRedisModelFreeRoleReads(t *testing.T) {
+	for _, dialect := range []string{"sqlite", "postgres"} {
+		t.Run(dialect, func(t *testing.T) {
+			repos := endToEndRepositories(t, dialect)
+			principal := model.PrincipalRef{Type: "user", ID: "alice"}
+			resource := model.Resource{Type: "space", ID: "a"}
+			owner := tuple("space", "a", "owner", "user", "alice", "")
+			member := owner
+			member.Relation = "member"
+			global := owner
+			global.Scope, global.Relation = tuples.Global(), "admin"
+			globalUserset := global
+			globalUserset.Relation = "opaque-team-role"
+			globalUserset.Subject = tuples.SubjectRef{Type: "group", ID: "engineering", Relation: "member"}
+			if err := repos.Tuples.ApplyTuples(t.Context(), tuples.Changes{Add: []tuples.Tuple{owner, member, global, globalUserset}}); err != nil {
+				t.Fatal(err)
+			}
+			source := &observedSource{Source: repos.TupleSource}
+			repos.TupleSource = source
+			client, _ := startRedis(t, "", false)
+			backend := newCache(t, client)
+			components, err := authorization.New(repos, authorization.WithTupleCache(backend, tuplecache.Policy{MaxStaleness: time.Minute}))
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = components.TupleCache.Close() })
+			check := func(wantAdmin, wantOwner bool) {
+				t.Helper()
+				if held, err := components.Roles.HasRole(t.Context(), principal, "admin"); err != nil || held != wantAdmin {
+					t.Fatalf("global exact role: %v/%v", held, err)
+				}
+				if held, err := components.Roles.HasRoleIn(t.Context(), principal, "owner", resource); err != nil || held != wantOwner {
+					t.Fatalf("scoped exact owner: %v/%v", held, err)
+				}
+				if held, err := components.Roles.HasRoleIn(t.Context(), principal, "member", resource); err != nil || !held {
+					t.Fatalf("independent member: %v/%v", held, err)
+				}
+				if held, err := components.Roles.HasRoleIn(t.Context(), principal, "admin", resource); err != nil || held {
+					t.Fatalf("implicit global fallback: %v/%v", held, err)
+				}
+				if held, err := components.Roles.HasRole(t.Context(), principal, "opaque-team-role"); err != nil || held {
+					t.Fatalf("userset expanded by exact role: %v/%v", held, err)
+				}
+			}
+			check(true, true)
+			if source.reads.Load() != 5 {
+				t.Fatalf("cold roles used %d durable snapshots", source.reads.Load())
+			}
+			if err := components.TupleCache.Poll(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			check(true, true)
+			if source.reads.Load() != 5 {
+				t.Fatal("warm model-free roles used SQL")
+			}
+			if err := repos.Tuples.ApplyTuples(t.Context(), tuples.Changes{Remove: []tuples.Tuple{owner, global}}); err != nil {
+				t.Fatal(err)
+			}
+			check(true, true) // Explicitly accepted delivery lag applies to roles too.
+			if err := components.TupleCache.Poll(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			check(false, false)
+			if source.reads.Load() != 5 {
+				t.Fatal("delivered revocation did not use the shared mirror")
+			}
+		})
+	}
+}
+
+func TestSQLRedisEventOrderPreservesFinalRevocation(t *testing.T) {
+	for _, dialect := range []string{"sqlite", "postgres"} {
+		t.Run(dialect, func(t *testing.T) {
+			repos := endToEndRepositories(t, dialect)
+			fact := tuples.Tuple{Scope: tuples.Global(), Relation: "admin", Subject: tuples.SubjectRef{Type: "user", ID: "alice"}}
+			if err := repos.Tuples.ApplyTuples(t.Context(), tuples.Changes{Add: []tuples.Tuple{fact}}); err != nil {
+				t.Fatal(err)
+			}
+			client, _ := startRedis(t, "", false)
+			components, err := authorization.New(repos, authorization.WithTupleCache(newCache(t, client), tuplecache.Policy{MaxStaleness: time.Minute}))
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = components.TupleCache.Close() })
+			if err := components.TupleCache.Poll(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			principal := model.PrincipalRef{Type: "user", ID: "alice"}
+			if held, err := components.Roles.HasRole(t.Context(), principal, "admin"); err != nil || !held {
+				t.Fatalf("bootstrap role: %v/%v", held, err)
+			}
+			// IDs 2..22 alternate revoke/grant, ending revoked. Lexical replay
+			// ends at ID 9 (a grant), incorrectly resurrecting authority.
+			for i := range 21 {
+				change := tuples.Changes{Remove: []tuples.Tuple{fact}}
+				if i%2 != 0 {
+					change = tuples.Changes{Add: []tuples.Tuple{fact}}
+				}
+				if err := repos.Tuples.ApplyTuples(t.Context(), change); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := components.TupleCache.Poll(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			if held, err := components.Roles.HasRole(t.Context(), principal, "admin"); err != nil || held {
+				t.Fatalf("numeric event replay resurrected revoked role: %v/%v", held, err)
+			}
+			if stats := components.TupleCache.Stats(); stats.Hits != 2 || stats.Fallbacks != 0 {
+				t.Fatalf("revocation must be proved in warm mirror: %+v", stats)
+			}
+		})
+	}
+}
+
 func BenchmarkSQLRedisDecisions(b *testing.B) {
 	for _, dialect := range []string{"sqlite", "postgres"} {
 		for _, posture := range []string{"sql", "cold", "warm"} {
@@ -297,7 +404,7 @@ func BenchmarkSQLRedisDecisions(b *testing.B) {
 					if err != nil {
 						b.Fatal(err)
 					}
-					opts := []authorization.Option{authorization.WithRelationshipModel(endToEndModel())}
+					opts := []authorization.Option{authorization.WithModel(endToEndModel())}
 					if posture != "sql" {
 						opts = append(opts, authorization.WithTupleCache(backend, tuplecache.Policy{MaxStaleness: time.Hour}))
 					}
@@ -347,4 +454,83 @@ func BenchmarkSQLRedisDecisions(b *testing.B) {
 			}
 		}
 	}
+}
+
+func BenchmarkSQLRedisRoleReads(b *testing.B) {
+	for _, dialect := range []string{"sqlite", "postgres"} {
+		for _, size := range []int{1, 16, 128} {
+			for _, posture := range []string{"sql", "cold", "warm"} {
+				b.Run(fmt.Sprintf("%s/roles=%d/%s", dialect, size, posture), func(b *testing.B) {
+					repos := endToEndRepositories(b, dialect)
+					facts, leaves := make([]tuples.Tuple, size), make([]decisions.Expression, size)
+					principal := model.PrincipalRef{Type: "user", ID: "alice"}
+					resource := model.Resource{Type: "document", ID: "one"}
+					for i := range facts {
+						label := fmt.Sprintf("role-%03d", i)
+						facts[i] = tuples.Tuple{Scope: tuples.Global(), Relation: label, Subject: tuples.SubjectRef{Type: principal.Type, ID: principal.ID}}
+						leaves[i] = decisions.Role(label)
+						if i%2 != 0 {
+							facts[i].Scope = tuples.On(resource.Type, resource.ID)
+							leaves[i] = decisions.RoleIn(label, resource)
+						}
+					}
+					if err := repos.Tuples.ApplyTuples(b.Context(), tuples.Changes{Add: facts}); err != nil {
+						b.Fatal(err)
+					}
+					var opts []authorization.Option
+					if posture != "sql" {
+						client, _ := startRedis(b, "", false)
+						opts = append(opts, authorization.WithTupleCache(newCache(b, client), tuplecache.Policy{MaxStaleness: time.Hour}))
+					}
+					components, err := authorization.New(repos, opts...)
+					if err != nil {
+						b.Fatal(err)
+					}
+					if components.TupleCache != nil {
+						b.Cleanup(func() { _ = components.TupleCache.Close() })
+						if posture == "warm" {
+							if err := components.TupleCache.Poll(b.Context()); err != nil {
+								b.Fatal(err)
+							}
+						}
+					}
+					expression := decisions.All(leaves...)
+					b.ReportAllocs()
+					for b.Loop() {
+						result, err := components.Decisions.Evaluate(b.Context(), principal, expression)
+						if err != nil || !result.Allowed {
+							b.Fatalf("model-free exact conjunction: %+v/%v", result, err)
+						}
+					}
+					if cache := components.TupleCache; cache != nil {
+						stats := cache.Stats()
+						b.ReportMetric(float64(stats.Hits)/float64(b.N), "cache_hits/op")
+						b.ReportMetric(float64(stats.Fallbacks)/float64(b.N), "fallbacks/op")
+					}
+				})
+			}
+		}
+	}
+}
+
+// Fresh canonical caches have a separate baseline; legacy cache migrations
+// reference tables removed by the canonical base migration.
+func applyCacheBaseline(source fs.FS, dir string, apply func(string) error) error {
+	entries, err := fs.ReadDir(source, dir)
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".sql") {
+			continue
+		}
+		data, err := fs.ReadFile(source, dir+"/"+entry.Name())
+		if err != nil {
+			return err
+		}
+		if err := apply(string(data)); err != nil {
+			return err
+		}
+	}
+	return nil
 }

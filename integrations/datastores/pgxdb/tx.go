@@ -82,6 +82,17 @@ func (t *Tx) QueryRow(ctx context.Context, query string, args ...any) jackpgx.Ro
 	return t.tx.QueryRow(ctx, query, args...)
 }
 
+// SnapshotIsolation reports whether this transaction currently uses repeatable
+// read or serializable isolation. It queries the bound transaction rather than
+// assuming the pool's defaults and never changes its isolation level.
+func (t *Tx) SnapshotIsolation(ctx context.Context) (bool, error) {
+	var isolation string
+	if err := t.QueryRow(ctx, "SHOW transaction_isolation").Scan(&isolation); err != nil {
+		return false, fmt.Errorf("reading transaction isolation: %w", MapError(err))
+	}
+	return isolation == string(jackpgx.RepeatableRead) || isolation == string(jackpgx.Serializable), nil
+}
+
 // InTx commits when fn returns nil and rolls back on errors or panics. Callback
 // errors remain unchanged unless cleanup also fails; panic values are preserved.
 func (d *DB) InTx(ctx context.Context, fn func(tx *Tx) error) error {

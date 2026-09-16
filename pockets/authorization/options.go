@@ -2,13 +2,11 @@ package authorization
 
 import (
 	"log/slog"
-	"maps"
-	"slices"
 
 	authorizationhttp "github.com/gopernicus/gopernicus/pockets/authorization/inbound/http"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/decisions"
 	authmodel "github.com/gopernicus/gopernicus/pockets/authorization/logic/model"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/mutations"
-	"github.com/gopernicus/gopernicus/pockets/authorization/logic/relationships"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuplecache"
 )
 
@@ -16,19 +14,11 @@ import (
 // complete setting or group. New validates the final settings. Nil is invalid.
 type Option func(*config)
 
-// WithRelationshipModel replaces the relationship schema with a snapshot.
-// A nonempty schema and Repositories.Relationships must be supplied together.
-func WithRelationshipModel(model relationships.Schema) Option {
-	snapshot := cloneRelationshipModel(model)
-	return func(cfg *config) { cfg.RelationshipModel = snapshot }
-}
-
-// WithRoleModel replaces the role permission model with a snapshot. A set model
-// requires Repositories.Roles. An unset model leaves role facts opaque; it does
-// not contribute decisions. Models must declare disjoint permission coordinates.
-func WithRoleModel(model authmodel.RoleModel) Option {
-	snapshot := cloneRoleModel(model)
-	return func(cfg *config) { cfg.RoleModel = snapshot }
+// WithModel snapshots the one named permission and explicit shape model.
+// Exact role reads and ad-hoc expressions require no named model.
+func WithModel(model decisions.Model) Option {
+	option := decisions.WithModel(model)
+	return func(cfg *config) { cfg.ModelOption = option }
 }
 
 // WithLimits replaces the common decision/mutation evaluation budget. Zero
@@ -66,39 +56,15 @@ func WithRoleRoutes(routes authorizationhttp.RoleRoutes) Option {
 	}
 }
 
-func cloneRelationshipModel(model relationships.Schema) relationships.Schema {
-	model.ResourceTypes = maps.Clone(model.ResourceTypes)
-	for name, resource := range model.ResourceTypes {
-		resource.Relations = maps.Clone(resource.Relations)
-		for name, relation := range resource.Relations {
-			relation.AllowedSubjects = slices.Clone(relation.AllowedSubjects)
-			resource.Relations[name] = relation
-		}
-		resource.Permissions = maps.Clone(resource.Permissions)
-		for name, permission := range resource.Permissions {
-			permission.AnyOf = slices.Clone(permission.AnyOf)
-			resource.Permissions[name] = permission
-		}
-		model.ResourceTypes[name] = resource
-	}
-	return model
-}
-
-func cloneRoleModel(model authmodel.RoleModel) authmodel.RoleModel {
-	model.ResourceTypes = maps.Clone(model.ResourceTypes)
-	for name, resource := range model.ResourceTypes {
-		resource.Roles = slices.Clone(resource.Roles)
-		resource.Permissions = maps.Clone(resource.Permissions)
-		for name, roles := range resource.Permissions {
-			resource.Permissions[name] = slices.Clone(roles)
-		}
-		model.ResourceTypes[name] = resource
-	}
-	return model
-}
-
-// WithTupleCache enables a maintained raw relationship mirror. The backend is
+// WithTupleCache enables a maintained raw canonical tuple mirror. The backend is
 // borrowed; the host drives Components.TupleCache.Poll and owns its lifecycle.
 func WithTupleCache(backend tuplecache.Backend, policy tuplecache.Policy) Option {
 	return func(cfg *config) { cfg.TupleBackend = backend; cfg.TuplePolicy = policy }
+}
+
+// WithDiagnosticObserver enables bounded transition observations for scoped
+// denials with a global grant. The default is disabled and adds no reads.
+// Events contain only a low-cardinality code, never principal/resource IDs.
+func WithDiagnosticObserver(observer decisions.DiagnosticObserver) Option {
+	return func(cfg *config) { cfg.DiagnosticObserver = observer }
 }

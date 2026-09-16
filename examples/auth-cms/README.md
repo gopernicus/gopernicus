@@ -116,17 +116,17 @@ carries the ratified guardian minimum (`owner`, min-1). At boot the host seeds
 roles-kind `auditor` assignment on `project:demo`, through the **trusted
 `SystemMutator`** (`seedAuthorization`) — platform-admin is DATA (a tuple over
 a `platform` resource type), never a Config field, and establishing the first owner is
-inherently trusted. **`Check` is pure schema evaluation**: the engine grants no bypass,
-so the host runs the platform-admin recipe itself — an `admin` permission `Check` on
-`platform/main`, first, in its own closure (`isPlatformAdmin` in `membership.go`). A
+inherently trusted. **`Check` is pure schema evaluation**: the engine grants no bypass.
+The membership route explicitly composes platform administration and project access
+with `Require(Any(Can(...), Can(...)))` in one snapshot. A
 member gets `view` on `project/demo` the moment the invitation is accepted (the Granter
 writes the tuple through the baseline writer). Demo routes are READ-ONLY (AZ3-4.1
 removed the session-only mutation routes — see below); the guarded actor path and
 `SystemMutator` composition are proven by `authorization_test.go`, not a browser flow.
 
-- `GET /demo/members-only` — gated through the host closure: platform admin (via
-  `isPlatformAdmin`) OR `authorizer.Check` (`view` on `project/demo`) → 200,
-  otherwise 403.
+- `GET /demo/members-only` — one policy accepts platform `admin` on `platform/main`
+  or `view` on `project/demo` → 200; denial → 403. A reached evaluation error fails
+  the whole policy closed, even if a later branch could allow.
 - `GET /demo/my-projects` — the relationship kind's **enumeration** via
   `authorizer.LookupAllResourceIDs(..., "view", "project")` (pure, no bypass), returned
   as `{"admin", "ids"}` where `admin` is the host-composed platform-admin flag: a
@@ -135,36 +135,23 @@ removed the session-only mutation routes — see below); the guarded actor path 
   `admin`). This is a **demo-only host surface** exercising a **flagship-specific
   API** — enumeration is NEVER a consumer seam (§2.4); consumer seams are Check-only.
 
-**The roles kind** is **independently wireable** — a roles-only host would wire
-`authorization.Repositories{Roles: …}` alone, with or without a model. Here it
-rides alongside the relationship kind and **bears its own model**
-(`authorization.WithRoleModel`, `authzRoleModel()`): on the SAME `project` type the `auditor`
-role grants `audit`. The two models share the TYPE but never a (type, permission)
-**pair** — `view`/`manage_access` are relationship-owned, `audit` is role-owned — so
-the ONE decision surface **dispatches** each pair to its owning model (a pair in both
-would fail construction with `ErrModelConflict`). Two kinds, one surface, no
-entanglement. Assignment rims stay **opaque strings**; with a model wired, assigning
-an undeclared `(type, role)` is refused with `ErrInvalidRoleModel` instead of storing
-a silent no-grant. Demo routes:
+**Exact roles share the canonical tuple authority.** A roles-only host supplies
+`Repositories.Tuples` and needs no permission model. This example uses one
+`authorization.WithModel(authzSchema())`: `view` and `manage_access` use declared
+relationship predicates, while `audit` uses exact `RoleIn("auditor")`.
 
-- `GET /demo/audit` — gated through the pocket's coordinate gate
-  `authz.HTTP.RequirePermissionFixed("project", "audit", "demo")`: 403 without a
-  granting role, 200 with one. The host writes **no** role check of its own — the
-  role model decides, and the pair is checked for legality at route registration.
-  On success the handler drives a `ListRoleAssignmentsByResource` read-back. The
-  gate keeps the roles kind's **global fallback** (a GLOBAL `auditor` grant
-  satisfies the scoped check), but the listing is **direct-scope only** — so a
-  subject allowed via a global grant is allowed yet does NOT appear in the read-back
-  (the documented v1 enumeration-vs-decision divergence, visible in the JSON).
-  A globally assigned role grants only the role-owned pairs its model entry names:
-  it is not a bypass, and `isPlatformAdmin` remains the host recipe for
-  admin-sees-everything on the relationship-owned routes.
-Role assignment has **no shipped HTTP surface** on this host: AZ3-4.1 removed the
-session-only `POST /demo/roles/{assign,unassign}` and `POST /demo/admin/bootstrap`
-routes (a shipped route must never mutate authorization with session presence alone,
-and authentication does not yet export a public sensitive-operation protector). Boot
-seeding runs through the trusted `SystemMutator`; the browser-driven role-assignment
-surface is deferred with the AZADM packet.
+- `GET /demo/audit` uses the pocket's coordinate permission gate and returns 200
+  only for a scoped auditor on project/demo. A global auditor alone receives 403.
+  The handler lists concrete assignments in that exact resource scope.
+- Independent labels coexist. Accepting a member invitation preserves an existing
+  owner fact on the same subject and project; both grant their declared permissions.
+- Opaque role labels need no catalog entry. Explicit subject-shape constraints,
+  the atomic mutation guard and guardian invariants still apply.
+
+Boot seeding uses the separately held trusted `SystemMutator`. Bundled role
+administration is mounted behind the host's live-session and platform-admin gate
+(see Leg 7b). The retired session-only `/demo/roles/*` and bootstrap endpoints
+remain absent.
 
 ## Wiring
 
@@ -416,7 +403,7 @@ curl -i -c ojar -b ojar http://localhost:8082/auth/oauth/linked  # 200 -> [{"pro
 routes (`/auth/service-accounts…`, `/auth/api-keys/{id}/revoke`) are mounted only
 because this host sets `auth.AdministrationConfig.MachineRoutesGate` (`main.go`, right after
 `buildAuthConfig`) to
-`authz.HTTP.RequirePermissionFixed("platform", "admin", "main")` — the coordinate
+`authz.HTTP.Require(authorizationhttp.Can("admin", authorizationhttp.Fixed("platform", "main")))` — the coordinate
 `authzSchema()` already declares. Each route therefore runs
 `RequireUser` → `RequireLiveSession` → (on the three POSTs) the browser-safe
 `Origin`/CSRF gate → that gate: no credential is **401**, an API-key
@@ -690,8 +677,7 @@ curl -s -b cjar http://localhost:8082/demo/my-projects                          
 curl -N --max-time 2 -b bjar http://localhost:8082/events/project/demo            # 200 (member)
 curl -N --max-time 2 -b cjar http://localhost:8082/events/project/demo            # 403 (non-member)
 
-# roles kind — /demo/audit gates on the ROLE MODEL (RequirePermissionFixed on the
-# role-owned project/audit pair; global fallback + direct-scope read-back):
+# /demo/audit requires exact scoped auditor membership in the unified model:
 curl -i -b bjar http://localhost:8082/demo/audit                                  # 403 (no granting role)
 ```
 
@@ -702,15 +688,15 @@ bundled role-administration routes under `/authorization/*`. The gate
 (`roleAdministrationGate`, `cmd/server/authorization.go`) is the ENTIRE chain the
 pocket requires: `authSvc.HTTP.RequireAccessTokenLive()` (a live human session, which
 stashes the principal the routes read back) composed with
-`authz.HTTP.RequirePermissionFixed("platform", "admin", "main")` — the same
+`authz.HTTP.Require(authorizationhttp.Can("admin", authorizationhttp.Fixed("platform", "main")))` — the same
 platform-admin coordinate `MachineRoutesGate` names. It is assigned through
 `deferredMiddleware` because the authorization pocket is built before `authSvc`
 exists; an unassigned gate fails closed with a 500, never an open door.
 
 The guarded actor-mutation path (manage_access + platform-admin over the
 `DecisionView`), the trusted `SystemMutator` seeding/invitation flow, the
-last-owner guardian minimum, the roles kind's global fallback, and the
-enumeration-vs-decision divergence remain proven in
+last-owner guardian minimum, exact global/scoped separation, and owner/member
+coexistence remain proven in
 `cmd/server/authorization_test.go`; the bundled routes are proven end to end —
 real session, real permission, real FS9 bodies — in
 `cmd/server/role_routes_proof_test.go`.
@@ -718,14 +704,14 @@ real session, real permission, real FS9 bodies — in
 ### Leg 7b — the bundled role-administration routes
 
 ```sh
-# no credential -> 401 on all five (the gate's authenticating layer)
+# no credential -> 401 on all four (the gate's authenticating layer)
 curl -i http://localhost:8082/authorization/roles/by-resource?resource_type=project\&resource_id=demo
 #  -> 401 {"message":"authentication required","code":"unauthenticated"}
 
-# signed in but NOT a platform admin -> 403 on all five, the real FS9 denial body
+# signed in but NOT a platform admin -> 403 on all four, the real FS9 denial body
 curl -i -b cjar -X POST http://localhost:8082/authorization/roles \
   -H 'Content-Type: application/json' \
-  -d '{"subject_type":"user","subject_id":"grantee-1","role":"auditor","resource_type":"project","resource_id":"demo"}'
+  -d '{"subject_type":"user","subject_id":"grantee-1","role":"auditor","scope":{"kind":"resource","resource_type":"project","resource_id":"demo"}}'
 #  -> 403 {"message":"permission denied","code":"permission_denied"}
 ```
 
@@ -740,27 +726,27 @@ registered user through the `SystemMutator` and then walks the whole flow over H
 # assign -> 200 with the outcome
 curl -sX POST http://localhost:8082/authorization/roles -b adminjar \
   -H 'Content-Type: application/json' \
-  -d '{"subject_type":"user","subject_id":"grantee-1","role":"auditor","resource_type":"project","resource_id":"demo"}'
+  -d '{"subject_type":"user","subject_id":"grantee-1","role":"auditor","scope":{"kind":"resource","resource_type":"project","resource_id":"demo"}}'
 #  -> {"outcome":"applied"}
 
 # repeat the same request -> 200 {"outcome":"no_change"}
 # list it
 curl -s -b adminjar 'http://localhost:8082/authorization/roles/by-subject?subject_type=user&subject_id=grantee-1'
-# the enumeration that agrees with HasRole
-curl -s -b adminjar 'http://localhost:8082/authorization/roles/effective?resource_type=project&resource_id=demo'
-# unassign -> 200 {"outcome":"applied","same_role_grant_remains":false}
+# exact resource assignments
+curl -s -b adminjar 'http://localhost:8082/authorization/roles/by-resource?resource_type=project&resource_id=demo'
+# unassign -> 200 {"outcome":"applied"}
 curl -sX POST http://localhost:8082/authorization/roles/unassign -b adminjar \
   -H 'Content-Type: application/json' \
-  -d '{"subject_type":"user","subject_id":"grantee-1","role":"auditor","resource_type":"project","resource_id":"demo"}'
+  -d '{"subject_type":"user","subject_id":"grantee-1","role":"auditor","scope":{"kind":"resource","resource_type":"project","resource_id":"demo"}}'
 ```
 
-Refusals a client will meet: a role the host `RoleModel` does not declare → **400**;
-a half-scoped `resource_type`/`resource_id` pair → **400**; a listing missing either
+Refusals a client will meet: missing/invalid explicit scope or a partial resource
+coordinate pair → **400**; a listing missing either
 of its query values, or carrying `q` → **400**; successful outcomes
-(`applied`, `no_change`, `not_found`) → **200**. Semantic and guardian conflicts
+(`applied`, `no_change`, `not_found`) → **200**. Guardian conflicts
 return **409**; retired mutation IDs and expected revisions are rejected as unknown fields.
 
-Omit `authorization.WithRoleRoutes(...)` in `newAuthorization` and all five paths
+Omit `authorization.WithRoleRoutes(...)` in `newAuthorization` and all four paths
 answer **404**. This intentional headless
 configuration is logged informationally, without a missing-route warning. The
 host passes its logger through `authorization.WithLogger` at construction.
@@ -915,7 +901,7 @@ unwired kind (e.g. `slack`) fails 400; email is always-on via the Mailer.
   `/auth/api-keys/{id}/revoke` (mounted ONLY because this host names a
   `AdministrationConfig.MachineRoutesGate`; each runs `RequireUser` + `RequireLiveSession` +
   (POSTs only) the browser-safe `Origin`/CSRF gate +
-  `RequirePermissionFixed("platform","admin","main")` — see Leg 2); invitations
+  `Require(Can("admin", Fixed("platform", "main")))` — see Leg 2); invitations
   `/auth/invitations/…`. Because
   `BrowserConfig.Views` is wired, the HTML GET pages (`/auth/{login,register,verify,
   password/forgot,password/reset,account,step-up,magic,…}`) mount alongside the
@@ -926,7 +912,7 @@ unwired kind (e.g. `slack`) fails 400; email is always-on via the Mailer.
   `GET /authorization/roles/{by-subject,by-resource,effective}` — mounted ONLY
   because this host supplies `RoleRoutes.Gate`, which composes
   `RequireAccessTokenLive()` with
-  `RequirePermissionFixed("platform","admin","main")` (see Leg 7b). The rest of
+  `Require(Can("admin", Fixed("platform", "main")))` (see Leg 7b). The rest of
   `/authorization/*` stays reserved.
 - **cms**: public site (`GET /`, published singles, contact) ungated; admin CRUD
   (`/articles`, `/pages`, `/terms`, `/menus`, `/media`, …) gated by
@@ -936,8 +922,8 @@ unwired kind (e.g. `slack`) fails 400; email is always-on via the Mailer.
   `GET /demo/members-only` (RequirePrincipal + engine-Check gated: member/owner →
   200, resolved non-member → 403), `GET /demo/my-projects` (the relationship
   kind's `LookupAllResourceIDs` enumeration → `{admin, ids}`), `GET /demo/audit`
-  (the roles kind's ROLE-MODEL gate, `RequirePermissionFixed("project", "audit",
-  "demo")`, + a direct-scope `ListRoleAssignmentsByResource` read-back), and `GET /debug/security-events`
+  (the scoped predicate `Require(Can("audit", Fixed("project", "demo")))`
+  + a direct-scope `ListRoleAssignmentsByScope` read-back), and `GET /debug/security-events`
   (`AUTH_DEBUG=1` + `RequireUser`). The demo routes are READ-ONLY: AZ3-4.1 removed the
   session-only `POST /demo/roles/{assign,unassign}` and `POST /demo/admin/bootstrap`
   mutation routes; role assignment now rides the POCKET's own bundled

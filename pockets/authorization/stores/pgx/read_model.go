@@ -36,10 +36,10 @@ type modelQuerier struct {
 }
 
 func (q modelQuerier) scoped(query string, args []any) (string, []any) {
-	query = strings.ReplaceAll(query, q.schema.Table("iam_relationships"), "authorization_model_relationships")
+	query = strings.ReplaceAll(query, resourceTupleTable(q.schema), "authorization_model_relationships")
 	query = strings.TrimSpace(query)
 	prefix := `WITH RECURSIVE authorization_model_relationships AS NOT MATERIALIZED (
-	SELECT stored.* FROM ` + q.schema.Table("iam_relationships") + ` stored
+	SELECT stored.* FROM ` + resourceTupleTable(q.schema) + ` stored
 	JOIN jsonb_to_recordset(@authorization_read_model::jsonb) AS model(resource_type text, relation text, subject_type text, subject_relation text)
 	USING (resource_type, relation, subject_type, subject_relation)
 )`

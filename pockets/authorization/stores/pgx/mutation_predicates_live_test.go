@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuples"
+
 	"github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/mutations"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/relationships"
@@ -113,7 +115,7 @@ func TestMutationNegativeMembershipWriteSkewLive(t *testing.T) {
 	}
 }
 
-func TestSetRelationTargetsConcurrentConflictRollsBackLive(t *testing.T) {
+func TestSetRelationTargetsConcurrentDifferentLabelsCoexistLive(t *testing.T) {
 	for _, tc := range []struct {
 		name                  string
 		ambient, competingSet bool
@@ -180,15 +182,15 @@ func TestSetRelationTargetsConcurrentConflictRollsBackLive(t *testing.T) {
 			if err := <-competitorDone; err != nil {
 				t.Fatal(err)
 			}
-			if err := <-done; !errors.Is(err, sdk.ErrConflict) {
-				t.Fatalf("concurrent different relation must conflict: %v", err)
+			if err := <-done; err != nil {
+				t.Fatalf("concurrent different label failed: %v", err)
 			}
 			targets, err := repos.Relationships.GetRelationTargets(ctx, "doc", "d1", "reader")
-			if err != nil || len(targets) != 1 || targets[0].ID != "old" {
+			if err != nil || len(targets) != 1 || targets[0].ID != "new" {
 				t.Fatalf("conflict changed the original set: %+v, %v", targets, err)
 			}
-			if exists, err := repos.Relationships.CheckRelationExists(ctx, "doc", "d1", "marker", "user", "host-before-set"); err != nil || exists {
-				t.Fatalf("host work preceding a failed reconciliation committed: %v, %v", exists, err)
+			if exists, err := repos.Relationships.CheckRelationExists(ctx, "doc", "d1", "marker", "user", "host-before-set"); err != nil || exists != tc.ambient {
+				t.Fatalf("host work preceding reconciliation mismatch: %v, %v", exists, err)
 			}
 		})
 	}
@@ -202,7 +204,7 @@ func waitForAuthorizationLock(t *testing.T, ctx context.Context, db *pgxdb.DB, d
 		var blocked bool
 		if err := db.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM pg_stat_activity
 			WHERE datname = current_database() AND wait_event_type = 'Lock'
-			AND query LIKE '%LOCK TABLE %iam_relationships%')`).Scan(&blocked); err != nil {
+			AND query LIKE '%LOCK TABLE %iam_tuples%')`).Scan(&blocked); err != nil {
 			t.Fatal(err)
 		}
 		if blocked {
@@ -240,10 +242,10 @@ func TestGuardWaitsForRawAuthorizationWriters(t *testing.T) {
 					case "relationship":
 						err = repos.Relationships.CreateRelationships(ctx, []relationships.CreateRelationship{{ResourceType: "group", ResourceID: "g", Relation: "member", SubjectType: "user", SubjectID: "alice"}})
 					case "role":
-						err = repos.Roles.Assign(ctx, roles.Assignment{SubjectType: "user", SubjectID: "alice", Role: "blocked"})
+						err = assignRole(repos.Tuples, ctx, roles.Assignment{Scope: tuples.Global(), SubjectType: "user", SubjectID: "alice", Role: "blocked"})
 					case "direct_sql":
 						tx, _ := pgxdb.TxFromContext(ctx)
-						_, err = tx.Exec(ctx, `INSERT INTO `+qualify(t, "iam_relationships")+` (resource_type,resource_id,relation,subject_type,subject_id,subject_relation) VALUES ('group','g','member','user','alice','')`)
+						_, err = tx.Exec(ctx, `INSERT INTO `+qualify(t, "iam_tuples")+` (scope_kind,resource_type,resource_id,relation,subject_type,subject_id,subject_relation) VALUES (2,'group','g','member','user','alice','')`)
 					}
 					ready <- err
 					if err != nil {
@@ -266,7 +268,7 @@ func TestGuardWaitsForRawAuthorizationWriters(t *testing.T) {
 					var blocked bool
 					var err error
 					if mode == "role" {
-						blocked, err = view.HasRole(ctx, mutations.Target{Kind: mutations.TargetSubject, Type: "user", ID: "someone-else"}, "blocked", "user", "alice")
+						blocked, err = view.Contains(ctx, roleFact("user", "alice", "blocked", "", ""))
 					} else {
 						blocked, err = view.CheckRelationBounded(ctx, scopeOf("doc", "d"), "blocked", "user", "alice", 8)
 					}

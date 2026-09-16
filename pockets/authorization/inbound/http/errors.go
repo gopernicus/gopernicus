@@ -22,8 +22,6 @@ func errorResponse(err error) (*web.Error, bool) {
 		return web.NewError(http.StatusConflict, "concurrent authorization change").WithCode(string(authmodel.ReasonConcurrentMutation)), true
 	case errors.Is(err, mutations.ErrInvariantBlocked):
 		return web.NewError(http.StatusConflict, "invariant conflict").WithCode(string(authmodel.ReasonInvariantConflict)), true
-	case errors.Is(err, mutations.ErrSemanticConflict):
-		return web.NewError(http.StatusConflict, "relationship conflict").WithCode(string(authmodel.ReasonSemanticConflict)), true
 	case errors.Is(err, authmodel.ErrUnknownSymbol):
 		return web.NewError(http.StatusBadRequest, "unknown model symbol").WithCode(string(authmodel.ReasonUnknownSymbol)), true
 	case errors.Is(err, authmodel.ErrInvalidRequest):

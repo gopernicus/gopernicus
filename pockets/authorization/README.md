@@ -1,549 +1,426 @@
 # Authorization
 
-Authorization provides opt-in relationship and role services. A host can use
-relationship permissions, opaque role assignments, modeled role permissions, or
-both permission models. Hosts own the policy, repositories and HTTP middleware.
-The pocket provides no default allow policy and performs no startup migrations.
+One tuple authority supports exact roles and optional relationship-based access
+control (ReBAC). A subject can be both `owner` and `member` of a resource: adding
+one fact never replaces the other. Applications choose how those facts grant
+permissions. The pocket supplies no default allow policy and runs no migrations
+at startup.
 
-## Public packages
+## Packages and capabilities
 
 | Package | Owns |
 | --- | --- |
-| `authorization` | `New`, typed `Option` values, `Repositories`, named `Components`, optional mounting |
-| `logic/relationships` | Tuple/subject types, schema DSL/compiler, store ports, ReBAC/read `Service`, trusted `RelationshipWriter` |
-| `logic/roles` | Assignment types, store ports, role read `Service`, separately constructed trusted raw `Writer` |
-| `logic/decisions` | Permission `Service` across models, complete-ID/paged-ID helpers and `FilterPage` |
-| `logic/mutations` | Atomic commands/ports, guarded `Service`, `MutationGuard`, `DecisionView`, guardian policy, trusted `SystemMutator` |
-| `logic/model` | Principals, resources, checks/results, explanations, budgets, immutable role permission models |
-| `logic/audit` | Committed audit records, attribution and reader port |
-| `inbound/http` (`authorizationhttp`) | Validated `Adapter`, permission middleware, optional role handlers |
-| `stores/memory` | In-memory reference stores |
-| `stores/storetest` | Shared store conformance suites |
+| `authorization` | `New`, options, repositories and named components |
+| `logic/tuples` | Canonical facts, exact raw reads, snapshots and trusted storage ports |
+| `logic/roles` | Exact concrete membership, assignment listing and trusted role writer |
+| `logic/relationships` | Resource-scoped fact facade, graph read ports and trusted relationship writer |
+| `logic/decisions` | One model/compiler and evaluator for roles, graph traversal, All/Any, check/explain/batch/filter/lookup |
+| `logic/model` | Principals, resources, result/reason vocabulary and evaluation budgets |
+| `logic/mutations` | Guarded commands, serialized decision view, guardian policy and trusted system mutator |
+| `logic/audit` | Canonical committed changes, attribution and history reader |
+| `inbound/http` | Composable authorization guards and optional role administration |
+| `stores/memory`, `stores/storetest` | Reference authority and shared conformance suites |
 
-`stores/pgx`, `stores/turso` and `stores/firestore` are separate adapter modules.
-The core imports no store technology. Public services own their contracts and
-behavior; the root composes them without a parallel forwarding service.
-`internal/decisioncursor` contains shared cursor encoding mechanics only.
+PostgreSQL, Turso/SQLite and Redis adapters are separate modules. PostgreSQL and
+Turso persist the authority; Redis provides an optional raw TupleCache mirror.
+The authorization Firestore adapter is removed. The shared Firestore connector
+and authentication Firestore adapter remain separate supported modules.
 
-## Compose once, pass the capabilities callers need
+## Canonical identity
 
 ```go
-import (
-    "github.com/gopernicus/gopernicus/pockets/authorization"
-    authmodel "github.com/gopernicus/gopernicus/pockets/authorization/logic/model"
-    "github.com/gopernicus/gopernicus/pockets/authorization/logic/relationships"
-)
-
-components, err := authorization.New(repos,
-    authorization.WithRelationshipModel(relationships.NewSchema([]relationships.ResourceSchema{{
-        Name: "document",
-        Def: relationships.ResourceTypeDef{
-            Relations: map[string]relationships.RelationDef{
-                "viewer": {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "user"}}},
-            },
-            Permissions: map[string]relationships.PermissionRule{
-                "view": relationships.AnyOf(relationships.Direct("viewer")),
-            },
-        },
-    }})),
-    authorization.WithGuard(hostMutationGuard),
-)
-if err != nil {
-    return err
+fact := tuples.Tuple{
+    Scope: tuples.On("project", "p1"),
+    Relation: "owner",
+    Subject: tuples.SubjectRef{Type: "user", ID: "u1"},
 }
+```
 
-result, err := components.Decisions.Check(ctx, authmodel.CheckRequest{
-    Principal: authmodel.PrincipalRef{Type: "user", ID: userID},
-    Permission: "view",
-    Resource: authmodel.Resource{Type: "document", ID: documentID},
+The complete scope, relation and exact subject identify a fact. `tuples.Global()`
+is an explicit global scope; `tuples.On(type, id)` is an exact resource scope.
+Zero scope and partially populated resource coordinates are invalid. Global
+scope is never a wildcard or an implicit graph root.
+
+A concrete `group:g1` and a userset `group:g1#member` are different subjects.
+Reference strings are exact, valid UTF-8, control-free and at most 256 bytes;
+there is no trimming or case folding. SQL stores one row in `iam_tuples`, unique
+on the full identity. Exact re-insertion is idempotent; distinct labels coexist.
+There are no separate role rows, synthetic fact IDs or creation timestamps.
+
+`roles.Assignment.Tuple()` and `relationships.CreateRelationship.Tuple()` produce
+the same identity. A resource role written through either facade participates in
+model-permitted graph checks, Through traversal, lookup and guardian counts.
+Writer origin never filters authorization reads.
+
+## Exact roles need no model
+
+```go
+store := memory.New()
+components, err := authorization.New(authorization.Repositories{
+    Tuples: store.Tuples(),
+})
+if err != nil { return err }
+
+principal := model.PrincipalRef{Type: "user", ID: userID}
+resource := model.Resource{Type: "project", ID: projectID}
+global, err := components.Roles.HasRole(ctx, principal, "admin")
+scoped, err := components.Roles.HasRoleIn(ctx, principal, "owner", resource)
+either, err := components.Roles.HasRoleInOrGlobal(ctx, principal, "admin", resource)
+```
+
+`HasRole` checks one exact global fact. `HasRoleIn` checks one exact resource
+fact. Neither expands usersets, traverses relationships or consults a role
+catalog. `HasRoleInOrGlobal` is the explicit convenience for both probes in one
+snapshot. A global grant alone **does not** satisfy `HasRoleIn`.
+
+Use one expression when several facts jointly control a decision; separate
+calls joined with Go's `&&` may sample different committed states:
+
+```go
+result, err := components.Decisions.Evaluate(ctx, principal,
+    decisions.All(
+        decisions.Role("active"),
+        decisions.Any(decisions.Role("admin"), decisions.RoleIn("owner", resource)),
+    ),
+)
+```
+
+`ListRoleAssignmentsBySubject` selects an exact concrete subject.
+`ListRoleAssignmentsByScope` selects concrete facts in exactly that scope.
+Listings are views of canonical facts, without writer provenance or implied
+global applicability. No effective-grants API merges scopes.
+
+## One optional permission model
+
+```go
+policy := decisions.Model{ResourceTypes: map[string]decisions.ResourceTypeDef{
+    "project": {
+        Relations: map[string]decisions.RelationDef{
+            "owner": {AllowedSubjects: []decisions.SubjectTypeRef{{Type: "user"}}},
+            "member": {AllowedSubjects: []decisions.SubjectTypeRef{{Type: "user"}}},
+        },
+        Permissions: map[string]decisions.Expression{
+            "view": decisions.Any(decisions.Direct("owner"), decisions.Direct("member")),
+            "audit": decisions.RoleIn("auditor"),
+            "manage": decisions.Any(decisions.Role("admin"), decisions.RoleIn("owner")),
+        },
+    },
+}}
+components, err := authorization.New(repos,
+    authorization.WithModel(policy),
+    authorization.WithGuard(hostGuard),
+)
+if err != nil { return err }
+result, err := components.Decisions.Check(ctx, model.CheckRequest{
+    Principal: principal, Permission: "view", Resource: resource,
 })
 ```
 
-`Components` contains `Decisions`, `Relationships`, `Roles`, `Mutations`, `HTTP`,
-`RelationshipWriter`, `SystemMutator` and optional `TupleCache`. Give request handlers the concrete
-service or narrow local interface they need. Retain the full bundle and trusted
-writers at host composition.
+`Role(label)` means exact global membership. `RoleIn(label)` within a named
+permission means exact membership on the checked resource; ad hoc `Evaluate`
+requires an explicit resource. `Direct(relation)` expands only model-permitted
+exact usersets. `Through(relation, permission)` follows resource targets to their
+permission. `Permission(name)` references another named permission. All and Any
+compose these operations; global applicability must appear explicitly in policy.
 
-- A relationship repository requires a relationship schema, and vice versa.
-- A roles repository can be used without a role model. `Roles` then supports
-  opaque role checks and listing; no role permission engine is created.
-- `RoleModel` requires a roles repository. A host with neither a relationship
-  schema nor a role model has no `Decisions` component.
-- A missing relationship or roles repository leaves that named component nil.
-- A nil `Guard` disables actor-facing mutations. A nonnil guard requires an
-  atomic mutation repository. Baseline writes do not require that repository.
-- `Logger` is captured at construction, defaulting to `slog.Default()`.
-  Mounting does not replace it.
+The complete expression is validated before reads, including skipped branches.
+Empty or malformed All/Any is invalid. Evaluation preserves declaration order:
+All stops on false, Any on true, and an encountered error aborts. An unread branch
+cannot introduce a datastore error. Graph cycles, depth, fan-out and work have
+finite configured bounds. Limit exhaustion is `model.ErrEvaluationLimit`, an
+indeterminate error wrapping `sdk.ErrUnavailable`; it never becomes an allow or
+an apparently complete truncated result.
 
-Typed-nil dependencies are rejected at construction. Permission methods on a nil
-`Decisions` component report `model.ErrNoDecisionKind`; ordinary nil role reads
-report `roles.ErrRolesNotConfigured`. Prefer selecting the services your host
-actually configured at boot.
+Model options capture maps/slices when created. Compiled models and their public
+snapshots are immutable. Named permissions do not impose a role catalog:
+structurally valid opaque labels remain legal. Explicit relation subject-shape
+constraints apply to additions through every model-bound writer and mutation
+facade. Raw tuple stores apply structural validation only.
 
-## Construction options
+## Construction and snapshots
 
-The root constructor is `New(repos Repositories, opts ...Option)`. Required
-per-kind ports stay in `Repositories`; optional policy uses these named values:
+`Repositories.Tuples` is required and supplies roles, the resource fact facade
+and decisions. `Mutations` adds the atomic mutation capability. `Audit` is an
+optional history reader. A nil guard disables actor writes; a guard requires `Mutations`.
+`Decisions`, `Roles` and `Relationships` are available without a named model.
 
-| Option | Value and behavior |
-| --- | --- |
-| `WithRelationshipModel` | Complete relationship schema; required with the relationship repository |
-| `WithRoleModel` | Complete role permission model; empty restores opaque role facts |
-| `WithLimits` | Common `model.EvaluationLimits`; zero dimensions default when used |
-| `WithGuard` | Actor-facing atomic mutation policy; nil disables actor writes |
-| `WithTupleCache` | Borrowed `tuplecache.Backend` and `tuplecache.Policy`; requires a bound `Repositories.TupleSource` and explicit positive `MaxStaleness` |
-| `WithLogger` | Borrowed operational logger; nil uses `slog.Default()` |
-| `WithRoleRoutes` | Complete `authorizationhttp.RoleRoutes` gate, assignment policy and listing defaults |
+Options replace whole values in order: `WithModel`, `WithLimits`, `WithGuard`,
+`WithLogger`, `WithRoleRoutes`, and `WithTupleCache`. Nil options and typed-nil
+dependencies fail construction. Limits default finite zero dimensions and reject
+negative values. No constructor starts a worker or owns a database connection.
 
-Options apply in order and replace their entire value/group. They do not merge
-nonzero fields. Replacing role routes with `RoleRoutes{}` removes the prior gate
-and assignment policy, leaving handlers disabled. An assignment policy without a
-gate is invalid. A nonzero invalid list strategy fails even with no gate; a valid
-orphaned strategy is ignored. Limits on an opaque, unguarded roles-only host retain
-the existing unused-budget behavior.
-
-All four construction families reject nil options with an error wrapping
-`sdk.ErrInvalidInput`. A valid option carrying a nil logger, guard or disabled
-route gate keeps its documented meaning. Source model maps/slices are captured
-by value; services, immutable compiled models and callbacks remain borrowed.
-There is no supported option application against a running service.
-
-## Construct services directly
-
-The same implementations are available without root composition:
+Direct construction uses the same services:
 
 ```go
-relationshipParts, err := relationships.NewService(
-    relationshipStore, relationshipSchema, relationships.WithLimits(limits),
-)
+checks, err := decisions.NewService(tupleStore, decisions.WithModel(policy))
 if err != nil { return err }
-
-roleService, err := roles.NewService(roleStore)
+roleReads, err := roles.NewService(tupleStore)
 if err != nil { return err }
-
-decisionService, err := decisions.NewService(decisions.Readers{
-    Relationships: relationshipParts.Service,
-    Roles: roleService,
-}, decisions.WithRoleModel(roleModel))
-if err != nil { return err }
-
-mutationParts, err := mutations.NewService(mutationRepository, mutations.Services{
-    Relationships: relationshipParts.Service,
-    Roles: roleService,
-},
-    mutations.WithRoleModel(decisionService.CompiledRoleModel()),
-    mutations.WithGuard(hostMutationGuard),
+writes, err := mutations.NewService(mutationRepository, checks,
+    mutations.WithGuard(hostGuard),
 )
 if err != nil { return err }
 ```
 
-Imports in this example are the corresponding `logic/roles`, `logic/decisions`
-and `logic/mutations` packages. Services with a supplied relationship engine
-inherit its limits when their entire `Limits` value is zero. Explicit limits
-must resolve to exactly the engine's limits; mismatched budgets fail construction.
-A mutation service also rejects an independently compiled role model that
-conflicts with the supplied relationship model.
+Mutation services inherit the supplied decision service's limits; explicit limits
+must match. `relationships.NewService` accepts the canonical tuple store and an optional
+`WithValidator(checks.CompiledModel())`. Its result separates read service and
+trusted writer. `roles.NewWriter` offers the same optional validation seam.
+Root composition binds the model to both writers.
 
-`relationships.NewService` and `mutations.NewService` return small capability
-bundles because their trusted writers must be held separately. `roles.NewService`
-and `decisions.NewService` return their actual service and an error.
+All reads contributing to one role check, expression, permission check, explain,
+batch, filter or lookup operation use one coherent tuple view. Failed snapshot
+completion and cancellation discard provisional results. Custom decision readers
+must provide `tuples.Snapshotter`; guards supply their serialized callback view.
+Borrowed readers are sequential, callback-scoped, and fail after closure.
 
-## Models and decisions
+A PostgreSQL ambient transaction must actually use REPEATABLE READ or SERIALIZABLE.
+Use `pgxdb.DB.TransactSnapshot` for a read-write REPEATABLE READ workflow. The
+adapter inspects the bound transaction's isolation and rejects default READ
+COMMITTED with `tuples.ErrSnapshotIsolation` before evaluation. SQLite's ambient
+BEGIN IMMEDIATE is suitable. Both preserve pending writes and leave commit or
+rollback to the host. No detached transaction or silent isolation upgrade occurs.
+Raw writes continue to join ordinary ambient transactions; guarded mutations
+reject ambient transactions because they own their serialized write boundary.
 
-Relationship tuples are keyed by resource type, resource ID, relation, subject
-type, subject ID and optional subject relation. A concrete `group:g1` and a
-userset `group:g1#member` are different subjects. Only the exact userset expands;
-`#member` never expands `#admin`, and a concrete group reference does not
-implicitly mean group membership. The current schema controls every permission
-read, including reads inside mutation guards and lookup validation.
+## Lists and budgets
 
-The stores currently allow one relation per exact resource/subject pair, including
-the subject's optional relation. For example, the same concrete user cannot be
-both `owner` and `billing_contact` on one resource. Baseline `CreateRelationships`
-silently preserves an existing different relation; guarded commands report the
-conflict. Model exclusive membership levels deliberately; independent relations
-would require a separate schema/API migration.
+`Check`, `CheckExplain`, `CheckBatch` and `FilterAuthorized` share evaluator
+semantics. Compatible exact probes and graph reads are batched inside the same
+view. Reads and evaluation still grow with input and graph size.
+`LookupAllResourceIDs`, paged lookup and `FilterPage` distinguish finite results
+from explicit unrestricted policy. All/Any combine result sets by intersection
+and union. Authorization IDs are not a business-row ordering or pagination key;
+apply tenant/search/order constraints in the host's query or supply candidates to
+`FilterPage`.
 
-`relationships.Through("parent", "view")` follows navigation to another
-resource's permission. Self-referential hierarchies are supported; graph cycles
-and work limits are handled by the evaluator. `relationships.AnyOf` groups alternative permission checks.
+`model.EvaluationLimits` bounds depth, states, steps, relation targets, input batch,
+lookup output and candidate scanning. Raw `tuples.Query.After` is a pointer to
+its last returned tuple; custom adapters need no private cursor codec.
+`tuples.Compare` orders scope kind, resource type/ID, relation and exact subject
+components in byte order. User-facing list cursors remain opaque and versioned;
+malformed and obsolete encodings are rejected. PostgreSQL pins query expressions
+to C; SQLite uses BINARY.
 
-Model options snapshot their source maps and slices when created; constructors
-compile independent immutable models. Changing the input maps after option
-creation or construction cannot change decisions. `Relationships.GetSchema()`
-returns an immutable snapshot; its collection accessors return copies.
-`SchemaDigest()` and `GetSchema()` return values directly, without an error.
+Relationship listings exclude global facts and retain both concrete and userset
+subjects. Subject and resource filters are applied before pagination, and facade
+projections preserve tuple cursors and counts.
 
-A `model.RoleModel` declares roles and the permissions they grant per resource
-type. An exact scoped role grant is checked first, then the principal's global
-assignment. A global assignment applies only to permissions whose model names
-that role. Resource-independent permissions can use a singleton resource type.
-Opaque role reads and unassignment remain useful for inspecting/removing old
-facts; modeled permission decisions and guarded assignments use the current
-model.
+## Writes, invariants and audit
 
-Each `(resource type, permission)` pair belongs to exactly one model. Declaring
-it in both is `model.ErrModelConflict`. A type may exist in both models with
-different permissions. The decision service dispatches to the owning model;
-it does not combine unrelated role and relationship answers. Host-specific
-administrator or self-access rules belong in host policy.
+Keep trusted capabilities at host composition:
 
-`Check`, `CheckExplain`, `CheckBatch` and `FilterAuthorized` fail closed on errors.
-A denied result is different from an indeterminate error. `ReasonCode` gives a
-stable classification; explanation traces describe the owning evaluator.
+| Capability | Behavior |
+| --- | --- |
+| `RelationshipWriter`, `RoleWriter` | Exact/desired-state raw writes; validate bound shape rules; bypass actor guards and guardian minima |
+| `Mutations` | Actor-facing writes authorized by a host guard inside the serialized operation |
+| `SystemMutator` | Trusted atomic commands; bypass actor guard, retain shape rules and guardian minima |
+| Raw `tuples.Storer` | Structurally validated authoritative storage, intended for adapter/provisioning code |
 
-Ordinary relationship checks, explanations, batches and candidate filtering use
-one durable snapshot in the bundled PostgreSQL, Turso/SQLite and memory readers,
-independently of TupleCache or its optional migrations. A Through check cannot
-combine a removed parent edge with a newly granted permission from another
-committed state. Snapshot completion/cancellation failures discard provisional
-results. SQL calls inside an ambient transaction preserve its isolation level,
-pending writes and ownership; the pocket does not upgrade or finish it.
-Custom readers can provide the existing `relationships.LookupSnapshotter`
-capability for both checks and enumeration. Readers without it retain their
-own read-consistency contract. Ordinary mixed role/relationship batches retain
-per-kind read semantics; they do not promise a shared cross-kind snapshot.
+A guard must read through its supplied `mutations.DecisionView`, never an outer
+service. Check, exact roles, graph membership and proposed facts then share the
+write boundary. Guard callbacks must avoid side effects; supported adapters do
+not replay a started callback.
+Current guards and invariants run even for a natural no-op.
 
-## Lists and evaluation budgets
+Typed role assignment/unassignment commands require explicit `Scope`.
+`OpBatch` applies exact additions and removals atomically; use it for a swap.
+`OpReconcile` replaces subjects for one named scope/relation and leaves other
+labels intact. Duplicates within one set are idempotent. A fact in both add and
+remove sets is invalid. Commands and affected rows are bounded; adapters never
+split an atomic request into separate commits. Ambiguous `OpReplace` is removed.
 
-`model.EvaluationLimits` bounds traversal depth, distinct graph states,
-evaluation steps, relation fan-out, batch size, lookup results and candidate
-scanning. Zero fields select finite defaults; negatives are rejected. Exhausted
-evaluation returns `model.ErrEvaluationLimit` (`sdk.ErrUnavailable`), never a
-complete-looking truncated result. Store query counts remain adapter telemetry,
-not an interchangeable semantic budget.
+Guardian rules count concrete canonical anchors through every guarded facade,
+including role unassignment. Usersets cannot stand in for an anchor. Opaque labels
+need no model, but an explicit userset-only subject constraint cannot support a
+concrete guardian minimum. Trusted `TeardownResourceAuthorization` is the explicit
+minimum exception and requires a bounded reason. It removes resource facts while
+preserving global facts.
 
-Relationship `CheckBatch` batches both direct checks and `Through` reads when
-the model-scoped reader implements `relationships.RelationSetReader` (the bundled
-stores and their cache snapshots do). Compatible pending reads are fetched
-together, then the ordinary evaluator resumes each request with its own depth,
-cycle state, work budget and short-circuit order. This also accelerates
-`FilterAuthorized` and lookup verification; no verification bypass is needed.
-The relations may have any declared name and may target different resource types.
+Results contain `applied`, `no_change` or `not_found`. Rejections are errors;
+`semantic_conflict` and `SameRoleGrantRemains` are removed. Applications can enforce
+exclusive memberships with a guard when their own policy needs them.
 
-Read counts depend on the encountered branches, traversal stages and adapter
-chunks instead of one read per candidate per hop. Data volume and evaluation
-work still grow with the graph. Custom readers without the optional capability
-retain sequential checks with shared fact reads. The batch does not enumerate
-the principal's entire accessible resource set.
+Store `WithAudit()` records one canonical `Change{Action, Tuple}` delta in the
+same commit as facts. Exact duplicates, no-ops, denies and rollbacks add no
+history. Audit failure rolls back facts. Actor commands supply authenticated
+attribution; trusted calls use `audit.WithSource(ctx, audit.Source{System: ...})`.
+Audit records use `tuple/v2`, with event grouping, source and time. Hosts own
+retention and audit access.
 
-Optional TupleCache preserves batched reads for `Decisions.CheckBatch` and
-`Decisions.FilterAuthorized`, including durable snapshot retries when the mirror
-is unavailable or changes during evaluation. Cached raw tuples are filtered by
-the current model on every operation. Lookups retain their durable-read behavior;
-see [Optional TupleCache](#optional-tuplecache) for freshness and capacity limits.
+## HTTP
 
-Three list workflows are supported:
+### Composable route guards
 
-1. `Decisions.LookupAllResourceIDs` returns a bounded complete `ResourceSet` for
-   hosts that can filter their own storage query with IDs. It fails when the
-   complete set exceeds the configured cap.
-2. `Decisions.LookupResourceIDPage` enumerates one page of authorized IDs. Treat
-   it as enumeration, not as permission to claim a globally complete set.
-3. `decisions.FilterPage` scans a host-owned ordered candidate source, checks
-   authorization in batches, and fills a visible page within a scan budget.
-   Resume using its cursor. `ScanLimitReached` identifies a partial page that
-   ended at the scan budget rather than at the end of the underlying collection.
-
-Cursors bind the query, principal, resource type, permission, owning model and
-model digest. Reusing them for a changed query or model fails with an invalid
-cursor error. They are continuation state, not authorization grants.
-
-Relationship lookups use one durable read snapshot per call in the Turso
-(SQLite), PostgreSQL and memory adapters. Candidate discovery, verification
-batches and page lookahead see the same state. A concurrent revocation is visible
-to the next call; separate pages do not share a snapshot. SQL lookups inside an
-ambient transaction retain that transaction's pending writes and isolation level
-without committing or rolling it back.
-
-Custom model-scoped readers can implement `relationships.LookupSnapshotter`.
-Readers without it (including Firestore), and ambient transactions with weaker
-isolation, retain discovery/verification checks. If a discovered grant is denied
-during verification, the pocket retries the entire lookup twice with fresh
-attempt-local state. Three mismatches return `model.ErrEnumerationContended`,
-wrapping `sdk.ErrUnavailable` (HTTP 503), with no partial IDs or cursor. Hosts can
-use `errors.Is` to add `Retry-After`. Store errors, cancellation and exhausted
-evaluation budgets are returned immediately. Unrelated writes do not themselves
-invalidate enumeration; there is no global relationship revision guard.
-
-The host owns content ordering, SQL joins, counts and pagination semantics.
-`examples/auth-cms` exercises separate-store ID filtering, ordered candidates and
-SQL pushdown. Do not join authorization rows with ad hoc semantics: a correct
-join must preserve exact usersets, scope fallback, current model ownership and
-limit behavior. Shared helpers make the separate-store paths usable without
-making a particular database mandatory.
-
-## Choose the write capability deliberately
-
-`relationships.RelationshipWriter` supports trusted baseline state operations:
-`CreateRelationships`, `SetRelationTargets`, `DeleteRelationship`, and
-`DeleteResourceRelationships`. The last three take a `model.Resource`.
-Additions validate the current schema. These operations bypass actor guards and
-guardian minimums; they are intended for host-managed facts and provisioning.
-They use the store's ambient transaction and audit contracts. A read service
-cannot return or manufacture its writer.
-
-`roles.Writer` is an explicit trusted raw role writer constructed from a raw
-`roles.Storer`. It validates tuple structure, but has no role model, guard or
-guardian policy. Ordinary actor-facing assignment and unassignment belong to
-`mutations.Service`.
-
-The guarded mutation service provides typed assignment, unassignment, grant,
-revoke, replace and resource-purge operations. The host guard receives an actor,
-an immutable proposed change and a `mutations.DecisionView`. It must authorize
-against that view: its reads execute within the repository's atomic operation,
-so checks and changes cannot race each other through unrelated outer reads.
-Repository retries receive a fresh proposed change. There is no mutation receipt
-ledger or idempotency key; repeated commands apply normal tuple/no-op semantics.
-
-`mutations.Result` reports the committed outcome (`applied`, `no_change` or
-`not_found`). Policy, semantic and invariant failures are errors.
-`mutations.ReasonFor` classifies mutation errors. Unassignment also reports
-whether the same role remains effective through another scope.
-
-Guardian rules protect configured minimum anchor counts. Rules must match the
-host model. Actor purge is bounded by `MaxBatchSize` and keeps guardian rules.
-Trusted resource deletion uses `SystemMutator.TeardownResourceAuthorization`
-with a required bounded reason. `SystemMutator.Apply` cannot bypass that reason
-requirement by submitting a generic teardown command.
-
-## HTTP adapters and host-owned routes
+Use `Require` with `All` (every check) and `Any` (at least one check):
 
 ```go
 import authorizationhttp "github.com/gopernicus/gopernicus/pockets/authorization/inbound/http"
 
-adapter, err := authorizationhttp.New(authorizationhttp.Services{
-    Decisions: components.Decisions,
-    Roles: components.Roles,
-    Mutations: components.Mutations,
-}, authorizationhttp.WithRoleRoutes(authorizationhttp.RoleRoutes{
-    Gate: hostRoleAdministrationMiddleware,
-}))
-if err != nil { return err }
+organization := authorizationhttp.Path("organization", "organizationID")
+document := authorizationhttp.Path("document", "documentID")
 
-mux.Handle("POST /admin/roles", adapter.AssignRole())
-mux.Handle("GET /admin/roles", adapter.RolesBySubject())
-mux.Handle("GET /documents/{id}", adapter.RequirePermissionOn(
-    "document", "view", "id",
-)(documentHandler))
+guard := components.HTTP.Require(authorizationhttp.Any(
+    authorizationhttp.HasRole("admin", authorizationhttp.Global()),
+    authorizationhttp.All(
+        authorizationhttp.HasRole("member", organization),
+        authorizationhttp.HasRelationship("editor", document),
+        authorizationhttp.Can("publish", document),
+    ),
+))
+router.PATCH("/organizations/{organizationID}/documents/{documentID}", handler, guard)
 ```
 
-Pass only configured services; omit absent optional interface fields instead of
-putting typed-nil pointers in them. Root composition handles this wiring.
+| Predicate | Meaning |
+| --- | --- |
+| `HasRole(label, target)` | Exact concrete membership; no userset expansion or implicit global fallback; no model required |
+| `HasRelationship(label, target)` | Declared relation membership with model-permitted userset expansion (`Direct`) |
+| `Can(permission, target)` | Declared named permission, including its explicit traversal rules |
 
-The adapter validates dependencies, budgets, role-route posture and list strategy.
-Individual role handler builders retain the configured gate, including when the
-host chooses different routes. A nil gate disables all five role handlers, whose
-individual builders then return not-found handlers. The host gate is responsible
-for authentication, authorization and browser-origin/CSRF protection when needed.
-Handlers still reject requests without a concrete SDK principal.
+Targets are explicit: `Global()` for a global role, `Fixed(type, id)` for a known
+resource, `Path(type, parameter)` for a route parameter, or `Resource(type,
+resolver)` for a custom request input. Graph and named-permission predicates
+require a resource target. The immediate roles-service APIs remain separate:
+`Roles.HasRole` reads global membership and `Roles.HasRoleIn` reads scoped membership.
 
-For bundled paths, use `adapter.Register(router)` or root
-`components.Register(mount)`. Pass `authorization.WithRoleRoutes(authorizationhttp.RoleRoutes{Gate: gate})`
-to root construction to enable:
+`Require` validates all branches at mount, including branches that might later
+short-circuit. Invalid labels, undeclared graph/permission coordinates, missing
+resolvers, zero targets and empty `All`/`Any` groups panic before traffic. The
+predicate tree has the same depth/node bounds as core expressions.
 
-| Method | Bundled path |
+One request evaluates the complete policy in one coherent tuple operation with
+a shared evaluation budget. Checks run in declaration order: `All` stops at its
+first denial, `Any` at its first allowance, and either stops on an encountered
+error. Skipped branches do not resolve their resource inputs or read tuples.
+Reusing a target value resolves it once per request, including a cache fallback;
+independently constructed targets are separate inputs. A resolved resource must
+match its declared type. Only a resolver's `ErrAlternativeNotApplicable` makes
+that predicate false; other failures abort the policy.
+
+Custom resolvers must be read-only, concurrency-safe and respect the request
+context. They execute while the authorization snapshot is open; their external
+reads do not automatically join it. Leave connection-pool capacity for such input
+reads or use an independent source. Authentication runs before the guard. Missing
+principal returns 401, denial 403, evaluation exhaustion 503, and other errors
+500, with no internal error details. The handler runs after successful snapshot
+completion and receives the original request.
+
+Transport-independent callers can use the same engine:
+
+```go
+result, err := components.Decisions.Evaluate(ctx, principal, decisions.Any(
+    decisions.Role("admin"),
+    decisions.On(documentResource, decisions.Permission("publish")),
+))
+```
+
+`decisions.BindResource(type, key, leaf)` and `EvaluateResolved` provide lazy
+inputs outside HTTP. Bindings apply to individual leaves. Runtime slots are
+rejected in named models; existing model digests remain unchanged.
+
+`Adapter.Require` is the single middleware entry point. Express compound policy
+inside one `All(...)` or `Any(...)` so every reached branch shares the snapshot
+and budget. `authorizationhttp.New(Services{Decisions: service})` also supports
+standalone use; the decision dependency requires only `ValidateExpression` and
+`EvaluateResolved`. The evaluator owns model validation and evaluation limits.
+
+### Bundled role administration
+
+A host gate enables bundled role administration and must provide authentication,
+authorization and any required browser-origin/CSRF protection. A nil gate leaves
+all role handlers disabled. `RoleRoutes.AssignmentPolicy` is an optional pre-check;
+the atomic mutation guard remains authoritative.
+
+| Method | Bundled route |
 | --- | --- |
 | POST | `/authorization/roles` |
 | POST | `/authorization/roles/unassign` |
 | GET | `/authorization/roles/by-subject` |
 | GET | `/authorization/roles/by-resource` |
-| GET | `/authorization/roles/effective` |
 
-A role gate requires role reads and guarded writes. An assignment-only legality
-policy can use `RoleRoutes.AssignmentPolicy`; it requires
-enabled role routes and supplements the atomic guard. The default list strategy
-is cursor; offset is also supported. List strategy is validated even when routes
-are disabled. Enabled bundled routes require a usable router.
+Assignment JSON names scope explicitly:
 
-Permission middleware includes `RequirePermission`, `RequirePermissionOn`,
-`RequirePermissionFixed` and `RequireAnyPermission`, with `FixedResource`,
-`PathResource` and `GateSpec` helpers. Static invalid coordinates fail during
-route setup. Runtime errors use `RespondError`: no principal is 401, a denied
-permission is 403, an exhausted evaluation is 503, and an infrastructure failure
-is 500. Host custom routes can call the same mapper.
+```json
+{"subject_type":"user","subject_id":"u1","role":"owner","scope":{"kind":"resource","resource_type":"project","resource_id":"p1"}}
+```
 
-## Stores, audit and upgrades
+Global scope is `{"kind":"global"}`. Omitted scope, partial coordinates and old
+flat resource fields are invalid. Unassignment returns only `outcome`; the
+`/roles/effective` route and `same_role_grant_remains` field are removed.
 
-Relationships and role assignments are composite-keyed facts without synthetic
-IDs or creation timestamps. Their deterministic raw listing order uses the tuple
-fields. Role listings distinguish exact assignment rows from effective grants
-that merge scoped and global provenance.
-
-Committed audit history is opt-in at store construction. `iam_audit` records
-applied changes and attribution atomically with the write. It is neither an
-idempotent receipt ledger nor a denied-attempt log. Hosts own audit access,
-retention and export; `Repositories.Audit` supplies reads when available.
-
-Run the shared `stores/storetest` suites for store correctness. Host-owned
-migrations and dialect requirements are documented in:
-
-- [Store upgrade runbook](stores/UPGRADE.md)
-- [Store conversion guidance](stores/CONVERSION.md)
-- [PostgreSQL](stores/pgx/README.md)
-- [Turso](stores/turso/README.md)
-- [Firestore](stores/firestore/README.md) and its [upgrade guide](stores/firestore/UPGRADE.md)
-
-The package reorganization changes imports, construction and receiver ownership;
-it changes no SQL schema, tuple format, cursor encoding or audit storage format.
-Consumer migration notes live in the repository's `AUDIT.md`.
+Hosts can construct the public HTTP adapter directly and mount its gated handlers
+on their own paths.
 
 ## Optional TupleCache
 
-TupleCache maintains **raw relationships** in Redis. The configured Turso or
-PostgreSQL store remains authoritative. Each tuple mutation commits its complete
-before/after payload into a transactional outbox. Delivery updates only the raw
-forward/reverse sets containing that tuple, then deletes the acknowledged events.
-Redis population and recovery read current authoritative tuples; processed events
-are not needed for reconstruction. No permission answers, expanded memberships,
-role facts or authorized-resource lists are cached.
+TupleCache mirrors **all raw canonical facts**, including global and resource
+roles and usersets. SQL remains authoritative. It caches no permission answers,
+expanded memberships or business-resource lists. A model change therefore does
+not require rewriting cached facts.
 
-`WithTupleCache(backend, policy)` enables raw cached reads for `Decisions.Check`,
-`CheckBatch`, `CheckExplain` and `FilterAuthorized`. Permission evaluation and model
-filtering run on every call. Lookups/enumeration, direct relationship and role
-services, mutation guards, audit and authentication retain their durable paths.
-Candidate filtering uses the same cached batch path on relationship-only hosts;
-one filter call validates one mirror receipt and retries the entire candidate
-batch against the durable store if the mirror is unavailable or changes.
-A role read in a cached operation retries the whole operation in one authoritative
-snapshot, including relationship reads in a mixed batch.
+SQL triggers capture each committed canonical delta in the same transaction.
+The relay publishes full before/after facts into Redis forward/reverse sets and
+acknowledges exact event IDs only after publication. Full recovery reads current
+SQL facts. Ordinary SQL-only writers participate through those same triggers.
 
-### Construction and delivery
+Construct the SQL repositories with their store `WithTupleCache()` option after
+applying the optional cache baseline in the [schema setup guide](stores/UPGRADE.md).
+Then construct `goredis.NewTupleCache(client, namespace)` and pass
+`authorization.WithTupleCache(backend, tuplecache.Policy{MaxStaleness: bound})`.
+The Redis client must enable context timeouts. Run `components.TupleCache.Poll`
+as a supervised host worker; `Notify()` after the outermost commit is only a
+coalesced wake-up hint. Constructors start no goroutines.
 
-Apply the base **authorization** migrations through 0007, then the separate
-optional **authorization-cache** source through 0002 in the same database/schema.
-Construct the SQL repository bundle with its store's `WithTupleCache()` option.
-This validates the schema and supplies `Repositories.TupleSource`. Ordinary SQL
-writers are captured by the installed triggers, including processes without the
-cache option. See the [Turso](stores/turso/README.md) and
-[PostgreSQL](stores/pgx/README.md) runbooks for privileges and raw-write constraints.
+A positive `MaxStaleness` is required. A revocation may remain unseen while
+publication is pending within that bound. Eligibility starts at the authoritative
+observation, so a delayed relay cannot extend it. Missing/expired/oversized cache
+reads or a concurrent publication retry the **whole operation** on a durable
+snapshot. Exact role reads use this same runtime. Ambient transactions bypass
+Redis and borrow the coherent SQL view; guards and audit remain durable.
 
-```go
-// repos comes from the configured SQL store with its WithTupleCache() option.
-// client is host-owned and requires redis.Options.ContextTimeoutEnabled=true.
-// Choose maxStaleness explicitly.
-backend, err := goredis.NewTupleCache(client, "my-app/relationships")
-if err != nil {
-    return err
-}
-components, err := authorization.New(repos,
-    authorization.WithRelationshipModel(model),
-    authorization.WithTupleCache(backend, tuplecache.Policy{
-        MaxStaleness: maxStaleness,
-    }),
-)
-if err != nil {
-    return err
-}
-relay := components.TupleCache
-pool := workers.NewPool(relay.Poll,
-    workers.WithPollInterval(relay.PollInterval()),
-    workers.WithIdleInterval(relay.PollInterval()),
-    workers.WithWakeChannel(relay.WakeChannel()),
-)
-// Run pool.Run(ctx) as a supervised host worker and handle its returned error.
-// After the OUTERMOST tuple-writing transaction successfully commits:
-relay.Notify()
-```
+Protocol 2 is part of the Redis key prefix and wire format. Scope kind is explicit.
+Processes sharing a delivery stream share one mirror and MaxStaleness policy;
+source/policy mismatches fail with `tuplecache.ErrBinding`. An empty/restored mirror
+rebuilds from SQL, even after its original events were acknowledged. Use a fresh
+source identity/namespace when restoring or cloning authoritative data as directed
+by the adapter runbook.
 
-The imports are `pockets/authorization`, `pockets/authorization/logic/tuplecache`,
-`pockets/authorization/stores/goredis` and `sdk/pkg/workers` under the framework
-module prefix. [Redis adapter details](stores/goredis/README.md) document storage,
-persistence and capacity. `memory.NewTupleCache()` is a reference backend for
-local tests; the standalone memory and Firestore authorities have no TupleSource.
+The Redis adapter uses one complete hash on one shard; Redis Cluster is unsupported.
+Default limits reject reads above 1 MiB and delta publication inputs plus affected
+sets above 4 MiB. Over-limit reads fall back; no partial result escapes. Full
+rebuilds bound fields/upload chunks but still materialize current facts and event
+IDs. A rebuild longer than MaxStaleness cannot publish usable authority. One global
+receipt means an unrelated publication can force a durable retry.
 
-Constructors start no goroutines. Each runtime uses durable reads until its first
-successful `Poll`. `Notify()` is a non-blocking, coalesced channel hint, not a second
-copy of the mutation; the outbox is the durable queue. The host sends the hint only
-after its outer transaction commits. Periodic polling handles external writers,
-lost notifications and failed deliveries. A committed SQL mutation stays committed
-if Redis delivery fails. Call `Poll(ctx)` after commit when the caller must await
-that publication, and handle any error as a delivery error, not a rolled-back
-mutation. Concurrent local Poll calls may return `workers.ErrNoWork`.
+For an oversized historical backlog, `Rebuild(ctx)` reads current facts and exact
+pending IDs without decoding every obsolete payload. It publishes before
+acknowledging. It cannot make a currently oversized set fit or bypass freshness.
+Do not delete backlog rows or split one transaction into partial publications.
 
-### Read guarantees and limits
+At shutdown cancel/join workers, close the runtime and drain requests before
+closing borrowed clients. `Stats`, `LastPoll` and `LastSuccessfulPoll` expose
+fallbacks, capacity failures, publication conflicts, timings and captured counts.
+Measure SQL fallback and rebuild capacity alongside Redis latency.
 
-`MaxStaleness` is a required positive host choice: a committed revocation can
-remain unseen while delivery is pending, within that bound. Eligibility is measured
-from the start of an authoritative source observation, not from a later Redis
-write. A stuck relay cannot extend it. An expired/unavailable mirror causes a
-whole-operation durable snapshot retry. A publication during evaluation also
-causes a whole-operation retry, so one returned decision cannot mix publications.
-Ambient source transactions bypass Redis and retain their existing store view.
+## Schema setup and verification
 
-Processes sharing one mirror **must use the same MaxStaleness**. The stable mirror
-binding includes this policy; a mismatch returns `tuplecache.ErrBinding` instead
-of letting one process weaken another's bound. Use one Redis mirror/namespace per
-source delivery stream. Multiple relay processes may share it; independently
-maintained namespaces for the same source compete over its delivery receipt and
-cause repeated rebuilds. To change the shared policy, stop/drain old runtimes and
-rebuild into a fresh namespace before reopening readers.
+SQL adapters ship a fresh `0001_iam_tuples.sql` defining canonical facts and audit.
+TupleCache adds one optional `0002_iam_tuple_cache.sql` source after the base.
+Hosts own pre-boot application of both. There is no bundled old-schema conversion,
+preflight or downgrade stream.
 
-Delivery receipts coordinate atomic publication, operation consistency and recovery.
-They are not generations in tuple keys: unchanged sets remain available after
-ordinary mutations, without refilling. An empty or older restored Redis mirror is
-rebuilt from current source tuples, even when the original outbox rows are gone.
-A restored Redis dataset can still be served within its previously certified
-freshness interval before the relay detects it. For stricter reads, use an
-uncached service against the authoritative store.
+The optional `WithDiagnosticObserver` can count
+`decisions.DiagnosticGlobalGrantNotApplied` (`global_grant_not_applied`) when a
+scoped-only expression denies despite a matching global fact. It is disabled by
+default. An enabled owned operation probes at most eight matching global facts
+inside its existing snapshot and emits at most one event after successful
+completion. Events contain no IDs or labels; probe failures never grant access.
+Serialized guard views do not emit because their caller owns completion.
 
-The Redis adapter keeps the complete mirror in one hash on one shard. Its
-default physical limits reject a raw read above 1 MiB before fetching/decoding
-the values, and a delta publication above 4 MiB of input plus affected existing
-sets before Lua transforms them. Configure these through `goredis.WithLimits`.
-Over-limit reads retry durably; no result is truncated. Full rebuilds bound each
-encoded field and upload chunk by the publication limit, while the source and
-builder still materialize the complete current graph. These are per-read and
-per-publication limits, not a total-operation or total-mirror memory bound.
+- [Schema setup](stores/UPGRADE.md)
+- [PostgreSQL](stores/pgx/README.md), [Turso](stores/turso/README.md), [Redis](stores/goredis/README.md)
+- [Conformance and benchmarks](BENCHMARKS.md)
+- Repository [AUDIT.md](../../AUDIT.md) records consumer-visible changes.
 
-Large sets and large pending batches still need host capacity measurements.
-A full snapshot/build taking longer than MaxStaleness stays unavailable rather
-than publishing already-expired authority. SQL remains the fallback. This
-implementation does not support Redis Cluster. A publication on an unrelated
-resource can still force an in-flight operation to retry against SQL because
-the mirror uses one receipt; benchmark overlapping reads and writes.
-
-### Recovery from a large delivery backlog
-
-If `Poll` returns `tuplecache.ErrCapacity` for an oversized accumulated delta,
-the committed facts and pending outbox work remain intact. Call
-`components.TupleCache.Rebuild(ctx)` from the host's administrative/worker
-lifecycle. It uses the same publication gate, freshness bound and receipt checks
-as Poll, but reads current facts and only the captured pending event IDs. This
-avoids replaying/decoding obsolete tuple payloads; it acknowledges those exact IDs
-only after successful publication. A concurrent local delivery returns
-`workers.ErrNoWork`; retry after that delivery finishes.
-
-Rebuild can recover a large history of transient changes when the current graph
-fits. It cannot make a current oversized set fit, or overcome a build that takes
-longer than MaxStaleness. Size the limits and freshness policy against recovery
-measurements; do not delete pending rows or split one SQL transaction into
-partially visible publications. Full snapshot memory still grows with current
-facts and captured event IDs.
-
-At shutdown cancel and join the host worker, close the runtime, and drain requests
-before closing the borrowed Redis client or database. `Close()` stops cache use;
-it does not own or join workers. Snapshot callback readers are sequential and
-must not escape into goroutines or outlive the callback. `Stats()` exposes hits,
-durable/capacity fallbacks, publications, rebuilds, poll/capacity failures and
-publication conflicts. `LastSuccessfulPoll` and `LastPoll` expose observation
-timing, snapshot/publication durations, captured tuple/event counts and the
-failure stage. Captured counts are the last attempt's sizes, not a live backlog
-gauge. Monitor them alongside database backlog age/size and Redis latency.
-
-See [verification and benchmarks](BENCHMARKS.md) for the complete test matrix,
-repeatable commands, local measurements and remaining deployment checks.
-
-### Upgrade from the previous cache
-
-Stop old cache-enabled binaries before applying optional migration 0002. It removes
-the global counter and replaces generation triggers with complete tuple capture;
-published migration 0001 remains unchanged. Replace `WithCacher` / `ReadCache` /
-`WithCacheReads` with the APIs above and give Redis a fresh dedicated namespace.
-Old cache keys may expire separately. Firestore and memory hosts should remove the
-old cache options and use durable reads. Do not modify optional delivery metadata
-or bypass triggers while readers/relays are running; follow the store runbooks for
-authoritative restores, cloning and imports.
-
-Local SQL/Redis behavior and outstanding deployment checks are recorded in the
-[TupleCache implementation plan](../../plans/authorization-tuple-cache.md).
+Run the shared `stores/storetest` suites for custom adapters. Local tests and
+benchmarks do not establish a production latency or capacity guarantee.

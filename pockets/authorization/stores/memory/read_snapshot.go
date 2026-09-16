@@ -3,25 +3,29 @@ package memory
 import (
 	"context"
 	"fmt"
-	"slices"
+	"maps"
 	"sync/atomic"
+
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuples"
 
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/relationships"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuplecache"
 	"github.com/gopernicus/gopernicus/sdk"
 )
 
-// ReadSnapshot evaluates against an owned, callback-scoped copy of this store.
 func (s *Store) ReadSnapshot(ctx context.Context, fn func(context.Context, tuplecache.CheckReads) error) error {
+	return s.tup.ReadTupleSnapshot(ctx, fn)
+}
+func (t *Tuples) ReadTupleSnapshot(ctx context.Context, fn func(context.Context, tuples.Reader) error) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 	if fn == nil {
 		return fmt.Errorf("authorization: nil snapshot callback: %w", sdk.ErrInvalidInput)
 	}
-	s.rel.st.mu.Lock()
-	snapshot := &state{rel: slices.Clone(s.rel.st.rel), role: slices.Clone(s.rel.st.role)}
-	s.rel.st.mu.Unlock()
+	t.st.mu.Lock()
+	snapshot := &state{facts: maps.Clone(t.st.facts)}
+	t.st.mu.Unlock()
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -41,7 +45,7 @@ type snapshotReads struct {
 
 func (s *snapshotReads) check(ctx context.Context) error {
 	if s.closed.Load() {
-		return tuplecache.ErrSnapshotClosed
+		return tuples.ErrSnapshotClosed
 	}
 	if err := s.ctx.Err(); err != nil {
 		return err
@@ -51,11 +55,32 @@ func (s *snapshotReads) check(ctx context.Context) error {
 func (s *snapshotReads) ForChecks(model relationships.ReadModel) relationships.CheckReader {
 	return &snapshotCheckReader{view: s, reader: (&Relationships{st: s.st}).ForModel(model)}
 }
-func (s *snapshotReads) HasExactRole(ctx context.Context, st, sid, role, rt, rid string) (bool, error) {
+func (s *snapshotReads) Contains(ctx context.Context, t tuples.Tuple) (bool, error) {
 	if err := s.check(ctx); err != nil {
 		return false, err
 	}
-	return (&Roles{st: s.st}).HasExactRole(ctx, st, sid, role, rt, rid)
+	return (&Tuples{st: s.st}).Contains(ctx, t)
+}
+func (s *snapshotReads) ContainsMany(ctx context.Context, t []tuples.Tuple) ([]bool, error) {
+	if err := s.check(ctx); err != nil {
+		return nil, err
+	}
+	return (&Tuples{st: s.st}).ContainsMany(ctx, t)
+}
+func (s *snapshotReads) ReadSets(ctx context.Context, k []tuples.SetKey, n int) ([][]tuples.Tuple, error) {
+	if err := s.check(ctx); err != nil {
+		return nil, err
+	}
+	return (&Tuples{st: s.st}).ReadSets(ctx, k, n)
+}
+func (s *snapshotReads) Lookup(ctx context.Context, q tuples.Query) ([]tuples.Tuple, error) {
+	if err := s.check(ctx); err != nil {
+		return nil, err
+	}
+	return (&Tuples{st: s.st}).Lookup(ctx, q)
+}
+func (s *snapshotReads) ForModel(m relationships.ReadModel) relationships.Reader {
+	return &snapshotCheckReader{view: s, reader: (&Relationships{st: s.st}).ForModel(m)}
 }
 
 type snapshotCheckReader struct {

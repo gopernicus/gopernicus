@@ -2,692 +2,157 @@ package authorizationhttp
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
-	"net/http/httptest"
-	"slices"
-	"strings"
+	"reflect"
 	"testing"
 
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/decisions"
 	authmodel "github.com/gopernicus/gopernicus/pockets/authorization/logic/model"
-	"github.com/gopernicus/gopernicus/pockets/authorization/logic/relationships"
-	"github.com/gopernicus/gopernicus/pockets/authorization/stores/memory"
 	"github.com/gopernicus/gopernicus/sdk"
 )
 
-// erroringStore is a fakeStore whose direct-relation check fails, exercising the
-// engine-error → 500 fail-closed leg (the relFake precedent, an erroring
-// relationship.Storer).
-type erroringStore struct{ relationships.Storer }
-
-func (erroringStore) CheckRelationWithGroupExpansion(ctx context.Context, resourceType, resourceID, relation, subjectType, subjectID string, maxExpansionStates int) (bool, error) {
-	return false, errors.New("store exploded")
+// This substitute deliberately implements no Check, Limits or model-inspection API.
+type narrowDecisions struct {
+	validate func(decisions.Expression) error
+	evaluate func(context.Context, authmodel.PrincipalRef, decisions.Expression, decisions.ResourceResolver) (authmodel.CheckResult, error)
 }
 
-// markerHandler asserts the wrapped middleware forwards the ORIGINAL request
-// (it reads a header the test set upstream) and records that it ran.
-func markerHandler(ran *bool) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		*ran = true
-		w.Header().Set("X-Saw-Marker", r.Header.Get("X-Marker"))
-		w.WriteHeader(http.StatusOK)
+func (s *narrowDecisions) ValidateExpression(e decisions.Expression) error { return s.validate(e) }
+func (s *narrowDecisions) EvaluateResolved(ctx context.Context, p authmodel.PrincipalRef, e decisions.Expression, resolve decisions.ResourceResolver) (authmodel.CheckResult, error) {
+	return s.evaluate(ctx, p, e, resolve)
+}
+
+var _ DecisionService = (*narrowDecisions)(nil)
+
+func TestRequireNarrowDecisionService(t *testing.T) {
+	var validated decisions.Expression
+	validations, evaluations, resolutions := 0, 0, 0
+	target := Resource("document", func(r *http.Request) (authmodel.Resource, error) {
+		resolutions++
+		if r.Header.Get("X-Input") != "one" {
+			t.Fatal("resolver lost request input")
+		}
+		return authmodel.Resource{Type: "document", ID: r.Header.Get("X-Input")}, nil
 	})
-}
-
-func TestRequirePermission(t *testing.T) {
-	ownerTuple := relationships.CreateRelationship{
-		ResourceType: "post", ResourceID: "p1", Relation: "owner", SubjectType: "user", SubjectID: "u1",
-	}
-
-	tests := []struct {
-		name          string
-		store         relationships.Storer
-		resource      ResourceResolver
-		withPrincipal bool
-		principal     sdk.Principal
-		wantStatus    int
-		wantNext      bool
-	}{
-		{
-			name:       "no principal → 401",
-			store:      relationshipStore(t, ownerTuple),
-			resource:   FixedResource("post", "p1"),
-			wantStatus: http.StatusUnauthorized,
-		},
-		{
-			name:          "principal without grant → 403",
-			store:         relationshipStore(t, ownerTuple),
-			resource:      FixedResource("post", "p1"),
-			withPrincipal: true,
-			principal:     sdk.Principal{Type: "user", ID: "u2"},
-			wantStatus:    http.StatusForbidden,
-		},
-		{
-			name:          "granted → next runs",
-			store:         relationshipStore(t, ownerTuple),
-			resource:      FixedResource("post", "p1"),
-			withPrincipal: true,
-			principal:     sdk.Principal{Type: "user", ID: "u1"},
-			wantStatus:    http.StatusOK,
-			wantNext:      true,
-		},
-		{
-			name:          "engine error → 500 fail closed",
-			store:         erroringStore{Storer: relationshipStore(t, ownerTuple)},
-			resource:      FixedResource("post", "p1"),
-			withPrincipal: true,
-			principal:     sdk.Principal{Type: "user", ID: "u1"},
-			wantStatus:    http.StatusInternalServerError,
-		},
-		{
-			name:  "resolver error → 500 fail closed",
-			store: relationshipStore(t, ownerTuple),
-			resource: func(*http.Request) (authmodel.Resource, error) {
-				return authmodel.Resource{}, errors.New("cannot resolve")
-			},
-			withPrincipal: true,
-			principal:     sdk.Principal{Type: "user", ID: "u1"},
-			wantStatus:    http.StatusInternalServerError,
+	service := &narrowDecisions{
+		validate: func(e decisions.Expression) error { validations++; validated = e; return nil },
+		evaluate: func(ctx context.Context, p authmodel.PrincipalRef, e decisions.Expression, resolve decisions.ResourceResolver) (authmodel.CheckResult, error) {
+			evaluations++
+			if p != (authmodel.PrincipalRef{Type: "user", ID: "alice"}) || !reflect.DeepEqual(e, validated) {
+				t.Fatalf("operation input: %+v/%+v", p, e)
+			}
+			if len(e.AllOf) != 2 || e.AllOf[0].RoleName != "employee" || e.AllOf[1].NamedPermission != "edit" {
+				t.Fatalf("lowered expression: %+v", e)
+			}
+			got, err := resolve(ctx, e.AllOf[1].ResourceSlot.Key)
+			if err != nil || got != (authmodel.Resource{Type: "document", ID: "one"}) {
+				t.Fatalf("resolved input: %+v/%v", got, err)
+			}
+			return authmodel.CheckResult{Allowed: true}, nil
 		},
 	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			svc, err := relationships.NewService(tt.store, testSchema())
-			if err != nil {
-				t.Fatalf("NewService: %v", err)
-			}
-
-			ran := false
-			gate := NewGates(svc.Service, svc.Service, authmodel.DefaultMaxBatchSize).RequirePermission("delete", tt.resource)
-			handler := gate(markerHandler(&ran))
-
-			req := httptest.NewRequest(http.MethodGet, "/gated", nil)
-			req.Header.Set("X-Marker", "kilroy")
-			if tt.withPrincipal {
-				req = req.WithContext(sdk.WithPrincipal(req.Context(), tt.principal))
-			}
-
-			rec := httptest.NewRecorder()
-			handler.ServeHTTP(rec, req)
-
-			if rec.Code != tt.wantStatus {
-				t.Fatalf("status: want %d, got %d (body %q)", tt.wantStatus, rec.Code, rec.Body.String())
-			}
-			if ran != tt.wantNext {
-				t.Fatalf("next ran: want %v, got %v", tt.wantNext, ran)
-			}
-			if tt.wantNext && rec.Header().Get("X-Saw-Marker") != "kilroy" {
-				t.Fatalf("next did not see the original request header: got %q", rec.Header().Get("X-Saw-Marker"))
-			}
-		})
-	}
-}
-
-// TestRequirePermissionCoordinates: the coordinate forms are RequirePermission
-// over inbound.PathResource/inbound.FixedResource, and their coordinates are checked at
-// registration — an undeclared pair or a nameless parameter panics when the
-// route is mounted, never at request time.
-func TestRequirePermissionCoordinates(t *testing.T) {
-	ownerTuple := relationships.CreateRelationship{
-		ResourceType: "post", ResourceID: "p1", Relation: "owner", SubjectType: "user", SubjectID: "u1",
-	}
-	svc, err := relationships.NewService(relationshipStore(t, ownerTuple), testSchema())
+	adapter, err := New(Services{Decisions: service})
 	if err != nil {
-		t.Fatalf("NewService: %v", err)
-	}
-	call := func(gate func(http.Handler) http.Handler, principal *sdk.Principal, pathValue string) (int, bool) {
-		ran := false
-		req := httptest.NewRequest(http.MethodGet, "/gated", nil)
-		if pathValue != "" {
-			req.SetPathValue("postID", pathValue)
-		}
-		if principal != nil {
-			req = req.WithContext(sdk.WithPrincipal(req.Context(), *principal))
-		}
-		rec := httptest.NewRecorder()
-		gate(markerHandler(&ran)).ServeHTTP(rec, req)
-		return rec.Code, ran
-	}
-	owner := &sdk.Principal{Type: "user", ID: "u1"}
-	stranger := &sdk.Principal{Type: "user", ID: "u2"}
-
-	on := NewGates(svc.Service, svc.Service, authmodel.DefaultMaxBatchSize).RequirePermissionOn("post", "delete", "postID")
-	if code, ran := call(on, owner, "p1"); code != http.StatusOK || !ran {
-		t.Fatalf("owner on p1: %d ran=%v", code, ran)
-	}
-	if code, ran := call(on, stranger, "p1"); code != http.StatusForbidden || ran {
-		t.Fatalf("stranger on p1: %d ran=%v", code, ran)
-	}
-	if code, ran := call(on, owner, ""); code != http.StatusInternalServerError || ran {
-		t.Fatalf("empty path value must fail closed: %d ran=%v", code, ran)
-	}
-	fixed := NewGates(svc.Service, svc.Service, authmodel.DefaultMaxBatchSize).RequirePermissionFixed("post", "delete", "p1")
-	if code, ran := call(fixed, owner, ""); code != http.StatusOK || !ran {
-		t.Fatalf("fixed owner: %d ran=%v", code, ran)
-	}
-
-	for name, mount := range map[string]func(){
-		"undeclared permission": func() {
-			NewGates(svc.Service, svc.Service, authmodel.DefaultMaxBatchSize).RequirePermissionOn("post", "fly", "postID")
-		},
-		"undeclared resource": func() {
-			NewGates(svc.Service, svc.Service, authmodel.DefaultMaxBatchSize).RequirePermissionOn("comet", "delete", "postID")
-		},
-		"empty parameter": func() {
-			NewGates(svc.Service, svc.Service, authmodel.DefaultMaxBatchSize).RequirePermissionOn("post", "delete", "")
-		},
-		"empty fixed id": func() {
-			NewGates(svc.Service, svc.Service, authmodel.DefaultMaxBatchSize).RequirePermissionFixed("post", "delete", "")
-		},
-	} {
-		t.Run(name, func(t *testing.T) {
-			defer func() {
-				if recover() == nil {
-					t.Fatal("must panic at registration")
-				}
-			}()
-			mount()
-		})
-	}
-}
-
-// stubChecker answers every check with a fixed result/error — the Checker half
-// of the extracted gate body, with no engine behind it.
-type stubChecker struct {
-	result authmodel.CheckResult
-	err    error
-	seen   authmodel.CheckRequest
-}
-
-func (c *stubChecker) Check(ctx context.Context, req authmodel.CheckRequest) (authmodel.CheckResult, error) {
-	c.seen = req
-	return c.result, c.err
-}
-
-// stubDeclarer declares exactly the pairs it was given.
-type stubDeclarer map[string]bool
-
-func (d stubDeclarer) DeclaresPermission(resourceType, permission string) bool {
-	return d[resourceType+"/"+permission]
-}
-
-// TestGatesLadder: the package-level builder over stub Checker/Declarer walks
-// the SAME 401/403/500/503 ladder the Service methods do — it is the one
-// implementation, so a sibling composite mounting it cannot drift.
-func TestGatesLadder(t *testing.T) {
-	tests := []struct {
-		name          string
-		checker       *stubChecker
-		resource      ResourceResolver
-		withPrincipal bool
-		wantStatus    int
-		wantNext      bool
-	}{
-		{
-			name:       "no principal → 401",
-			checker:    &stubChecker{result: authmodel.CheckResult{Allowed: true}},
-			resource:   FixedResource("post", "p1"),
-			wantStatus: http.StatusUnauthorized,
-		},
-		{
-			name:          "denied → 403",
-			checker:       &stubChecker{result: authmodel.CheckResult{Allowed: false, ReasonCode: authmodel.ReasonDenied}},
-			resource:      FixedResource("post", "p1"),
-			withPrincipal: true,
-			wantStatus:    http.StatusForbidden,
-		},
-		{
-			name:          "allowed → next runs",
-			checker:       &stubChecker{result: authmodel.CheckResult{Allowed: true}},
-			resource:      FixedResource("post", "p1"),
-			withPrincipal: true,
-			wantStatus:    http.StatusOK,
-			wantNext:      true,
-		},
-		{
-			name:          "check error → 500 fail closed",
-			checker:       &stubChecker{err: errors.New("decider exploded")},
-			resource:      FixedResource("post", "p1"),
-			withPrincipal: true,
-			wantStatus:    http.StatusInternalServerError,
-		},
-		{
-			name:          "evaluation limit → 503 fail closed",
-			checker:       &stubChecker{err: authmodel.ErrEvaluationLimit},
-			resource:      FixedResource("post", "p1"),
-			withPrincipal: true,
-			wantStatus:    http.StatusServiceUnavailable,
-		},
-		{
-			name:    "resolver error → 500 fail closed",
-			checker: &stubChecker{result: authmodel.CheckResult{Allowed: true}},
-			resource: func(*http.Request) (authmodel.Resource, error) {
-				return authmodel.Resource{}, errors.New("cannot resolve")
-			},
-			withPrincipal: true,
-			wantStatus:    http.StatusInternalServerError,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			gates := NewGates(tt.checker, stubDeclarer{"post/delete": true}, authmodel.DefaultMaxBatchSize)
-
-			ran := false
-			handler := gates.RequirePermission("delete", tt.resource)(markerHandler(&ran))
-
-			req := httptest.NewRequest(http.MethodGet, "/gated", nil)
-			req.Header.Set("X-Marker", "kilroy")
-			if tt.withPrincipal {
-				req = req.WithContext(sdk.WithPrincipal(req.Context(), sdk.Principal{Type: "user", ID: "u1"}))
-			}
-
-			rec := httptest.NewRecorder()
-			handler.ServeHTTP(rec, req)
-
-			if rec.Code != tt.wantStatus {
-				t.Fatalf("status: want %d, got %d (body %q)", tt.wantStatus, rec.Code, rec.Body.String())
-			}
-			if ran != tt.wantNext {
-				t.Fatalf("next ran: want %v, got %v", tt.wantNext, ran)
-			}
-			if tt.wantNext && rec.Header().Get("X-Saw-Marker") != "kilroy" {
-				t.Fatalf("next did not see the original request header: got %q", rec.Header().Get("X-Saw-Marker"))
-			}
-		})
-	}
-}
-
-// TestGatesCoordinates: the builder's coordinate forms carry the principal's
-// coordinates into the Checker and run the legality check through the Declarer,
-// panicking at mount for a pair no model declares.
-func TestGatesCoordinates(t *testing.T) {
-	checker := &stubChecker{result: authmodel.CheckResult{Allowed: true}}
-	gates := NewGates(checker, stubDeclarer{"post/delete": true}, authmodel.DefaultMaxBatchSize)
-
-	ran := false
-	req := httptest.NewRequest(http.MethodGet, "/gated", nil)
-	req.SetPathValue("postID", "p1")
-	req = req.WithContext(sdk.WithPrincipal(req.Context(), sdk.Principal{Type: "user", ID: "u1"}))
-	rec := httptest.NewRecorder()
-	gates.RequirePermissionOn("post", "delete", "postID")(markerHandler(&ran)).ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK || !ran {
-		t.Fatalf("coordinate gate: %d ran=%v", rec.Code, ran)
-	}
-	want := authmodel.CheckRequest{
-		Principal:  authmodel.PrincipalRef{Type: "user", ID: "u1"},
-		Permission: "delete",
-		Resource:   authmodel.Resource{Type: "post", ID: "p1"},
-	}
-	if checker.seen != want {
-		t.Fatalf("check request: want %+v, got %+v", want, checker.seen)
-	}
-
-	for name, mount := range map[string]func(){
-		"undeclared permission": func() { gates.RequirePermissionOn("post", "fly", "postID") },
-		"undeclared resource":   func() { gates.RequirePermissionOn("comet", "delete", "postID") },
-		"empty parameter":       func() { gates.RequirePermissionOn("post", "delete", "") },
-		"empty fixed id":        func() { gates.RequirePermissionFixed("post", "delete", "") },
-	} {
-		t.Run(name, func(t *testing.T) {
-			defer func() {
-				if recover() == nil {
-					t.Fatal("must panic at registration")
-				}
-			}()
-			mount()
-		})
-	}
-}
-
-// scriptedChecker answers each Check from a per-(resource, permission) script and
-// records, IN ORDER, the coordinates it was consulted on — the counting Checker
-// that proves short-circuit, in-order evaluation, and never-consulted
-// alternatives.
-type scriptedChecker struct {
-	answers map[string]authmodel.CheckResult
-	errs    map[string]error
-	seen    []string
-}
-
-func (c *scriptedChecker) Check(ctx context.Context, req authmodel.CheckRequest) (authmodel.CheckResult, error) {
-	key := req.Resource.Type + ":" + req.Resource.ID + "/" + req.Permission
-	c.seen = append(c.seen, key)
-	if err := c.errs[key]; err != nil {
-		return authmodel.CheckResult{}, err
-	}
-	return c.answers[key], nil
-}
-
-// TestGatesRequireAnyPermission: the disjunction walks the one shared ladder —
-// 401, strictly in-order evaluation, short-circuit on the first allow, the
-// inbound.ErrAlternativeNotApplicable skip, whole-request fail-closed on any other
-// resolver error / type disagreement / Check error, and 403 when every
-// alternative denied or did not apply.
-func TestGatesRequireAnyPermission(t *testing.T) {
-	allow := authmodel.CheckResult{Allowed: true}
-	deny := authmodel.CheckResult{Allowed: false, ReasonCode: authmodel.ReasonDenied}
-	declarer := stubDeclarer{"post/delete": true, "org/admin": true}
-
-	post := GateSpec{ResourceType: "post", Permission: "delete", Resource: FixedResource("post", "p1")}
-	org := GateSpec{ResourceType: "org", Permission: "admin", Resource: FixedResource("org", "o1")}
-	notApplicable := func(spec GateSpec) GateSpec {
-		spec.Resource = func(*http.Request) (authmodel.Resource, error) {
-			return authmodel.Resource{}, fmt.Errorf("the row names no organization: %w", ErrAlternativeNotApplicable)
-		}
-		return spec
-	}
-	broken := func(spec GateSpec) GateSpec {
-		spec.Resource = func(*http.Request) (authmodel.Resource, error) {
-			return authmodel.Resource{}, errors.New("store exploded")
-		}
-		return spec
-	}
-	mistyped := func(spec GateSpec) GateSpec {
-		spec.Resource = func(*http.Request) (authmodel.Resource, error) {
-			return authmodel.Resource{Type: "comet", ID: "c1"}, nil
-		}
-		return spec
-	}
-
-	tests := []struct {
-		name          string
-		alternatives  []GateSpec
-		answers       map[string]authmodel.CheckResult
-		errs          map[string]error
-		withPrincipal bool
-		wantStatus    int
-		wantNext      bool
-		wantSeen      []string
-	}{
-		{
-			name:         "no principal → 401 before any Check",
-			alternatives: []GateSpec{post, org},
-			answers:      map[string]authmodel.CheckResult{"post:p1/delete": allow},
-			wantStatus:   http.StatusUnauthorized,
-		},
-		{
-			name:          "first alternative allows → short-circuits, second never consulted",
-			alternatives:  []GateSpec{post, org},
-			answers:       map[string]authmodel.CheckResult{"post:p1/delete": allow, "org:o1/admin": allow},
-			withPrincipal: true,
-			wantStatus:    http.StatusOK,
-			wantNext:      true,
-			wantSeen:      []string{"post:p1/delete"},
-		},
-		{
-			name:          "second alternative allows after a deny → in order, next runs",
-			alternatives:  []GateSpec{post, org},
-			answers:       map[string]authmodel.CheckResult{"post:p1/delete": deny, "org:o1/admin": allow},
-			withPrincipal: true,
-			wantStatus:    http.StatusOK,
-			wantNext:      true,
-			wantSeen:      []string{"post:p1/delete", "org:o1/admin"},
-		},
-		{
-			name:          "every alternative denies → 403",
-			alternatives:  []GateSpec{post, org},
-			answers:       map[string]authmodel.CheckResult{"post:p1/delete": deny, "org:o1/admin": deny},
-			withPrincipal: true,
-			wantStatus:    http.StatusForbidden,
-			wantSeen:      []string{"post:p1/delete", "org:o1/admin"},
-		},
-		{
-			name:          "single alternative allows → RequirePermission behavior",
-			alternatives:  []GateSpec{post},
-			answers:       map[string]authmodel.CheckResult{"post:p1/delete": allow},
-			withPrincipal: true,
-			wantStatus:    http.StatusOK,
-			wantNext:      true,
-			wantSeen:      []string{"post:p1/delete"},
-		},
-		{
-			name:          "single alternative denies → RequirePermission behavior",
-			alternatives:  []GateSpec{post},
-			answers:       map[string]authmodel.CheckResult{"post:p1/delete": deny},
-			withPrincipal: true,
-			wantStatus:    http.StatusForbidden,
-			wantSeen:      []string{"post:p1/delete"},
-		},
-		{
-			name: "duplicate pair with different resolvers is legal and evaluated independently",
-			alternatives: []GateSpec{
-				post,
-				{ResourceType: "post", Permission: "delete", Resource: FixedResource("post", "p2")},
-			},
-			answers:       map[string]authmodel.CheckResult{"post:p1/delete": deny, "post:p2/delete": allow},
-			withPrincipal: true,
-			wantStatus:    http.StatusOK,
-			wantNext:      true,
-			wantSeen:      []string{"post:p1/delete", "post:p2/delete"},
-		},
-		{
-			name:          "first alternative Check error → 500, the allowing second never reached",
-			alternatives:  []GateSpec{post, org},
-			answers:       map[string]authmodel.CheckResult{"org:o1/admin": allow},
-			errs:          map[string]error{"post:p1/delete": errors.New("decider exploded")},
-			withPrincipal: true,
-			wantStatus:    http.StatusInternalServerError,
-			wantSeen:      []string{"post:p1/delete"},
-		},
-		{
-			name:          "second alternative Check error after a deny → 500",
-			alternatives:  []GateSpec{post, org},
-			answers:       map[string]authmodel.CheckResult{"post:p1/delete": deny},
-			errs:          map[string]error{"org:o1/admin": errors.New("decider exploded")},
-			withPrincipal: true,
-			wantStatus:    http.StatusInternalServerError,
-			wantSeen:      []string{"post:p1/delete", "org:o1/admin"},
-		},
-		{
-			name:          "evaluation limit → 503 fail closed",
-			alternatives:  []GateSpec{post, org},
-			answers:       map[string]authmodel.CheckResult{"org:o1/admin": allow},
-			errs:          map[string]error{"post:p1/delete": authmodel.ErrEvaluationLimit},
-			withPrincipal: true,
-			wantStatus:    http.StatusServiceUnavailable,
-			wantSeen:      []string{"post:p1/delete"},
-		},
-		{
-			name:          "non-sentinel resolver error → 500, the allowing second never reached",
-			alternatives:  []GateSpec{broken(post), org},
-			answers:       map[string]authmodel.CheckResult{"org:o1/admin": allow},
-			withPrincipal: true,
-			wantStatus:    http.StatusInternalServerError,
-		},
-		{
-			name:          "non-sentinel resolver error after a deny → 500",
-			alternatives:  []GateSpec{post, broken(org)},
-			answers:       map[string]authmodel.CheckResult{"post:p1/delete": deny},
-			withPrincipal: true,
-			wantStatus:    http.StatusInternalServerError,
-			wantSeen:      []string{"post:p1/delete"},
-		},
-		{
-			name:          "resolved type disagrees with the declared pair → 500 fail closed",
-			alternatives:  []GateSpec{mistyped(post), org},
-			answers:       map[string]authmodel.CheckResult{"org:o1/admin": allow},
-			withPrincipal: true,
-			wantStatus:    http.StatusInternalServerError,
-		},
-		{
-			name:          "not-applicable sentinel skips to the alternative that allows",
-			alternatives:  []GateSpec{notApplicable(post), org},
-			answers:       map[string]authmodel.CheckResult{"org:o1/admin": allow},
-			withPrincipal: true,
-			wantStatus:    http.StatusOK,
-			wantNext:      true,
-			wantSeen:      []string{"org:o1/admin"},
-		},
-		{
-			name:          "not-applicable on every alternative → 403, no Check consulted",
-			alternatives:  []GateSpec{notApplicable(post), notApplicable(org)},
-			withPrincipal: true,
-			wantStatus:    http.StatusForbidden,
-		},
-		{
-			name:          "not-applicable then a deny → 403",
-			alternatives:  []GateSpec{notApplicable(post), org},
-			answers:       map[string]authmodel.CheckResult{"org:o1/admin": deny},
-			withPrincipal: true,
-			wantStatus:    http.StatusForbidden,
-			wantSeen:      []string{"org:o1/admin"},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			checker := &scriptedChecker{answers: tt.answers, errs: tt.errs}
-			gates := NewGates(checker, declarer, authmodel.DefaultMaxBatchSize)
-
-			ran := false
-			handler := gates.RequireAnyPermission(tt.alternatives...)(markerHandler(&ran))
-
-			req := httptest.NewRequest(http.MethodGet, "/gated", nil)
-			req.Header.Set("X-Marker", "kilroy")
-			if tt.withPrincipal {
-				req = req.WithContext(sdk.WithPrincipal(req.Context(), sdk.Principal{Type: "user", ID: "u1"}))
-			}
-
-			rec := httptest.NewRecorder()
-			handler.ServeHTTP(rec, req)
-
-			if rec.Code != tt.wantStatus {
-				t.Fatalf("status: want %d, got %d (body %q)", tt.wantStatus, rec.Code, rec.Body.String())
-			}
-			if ran != tt.wantNext {
-				t.Fatalf("next ran: want %v, got %v", tt.wantNext, ran)
-			}
-			if tt.wantNext && rec.Header().Get("X-Saw-Marker") != "kilroy" {
-				t.Fatalf("next did not see the original request header: got %q", rec.Header().Get("X-Saw-Marker"))
-			}
-			if !slices.Equal(checker.seen, tt.wantSeen) {
-				t.Fatalf("checks consulted: want %v, got %v", tt.wantSeen, checker.seen)
-			}
-		})
-	}
-}
-
-// TestGatesRequireAnyPermissionRegistration: every legality fault is a MOUNT
-// panic naming the alternative's index and pair — never a gate that quietly
-// checks something no model grants, and never an uncapped N-Check route line.
-func TestGatesRequireAnyPermissionRegistration(t *testing.T) {
-	post := GateSpec{ResourceType: "post", Permission: "delete", Resource: FixedResource("post", "p1")}
-	gates := NewGates(&stubChecker{result: authmodel.CheckResult{Allowed: true}}, stubDeclarer{"post/delete": true, "org/admin": true}, 2)
-
-	for name, tc := range map[string]struct {
-		mount func()
-		want  string
-	}{
-		"zero alternatives": {
-			mount: func() { gates.RequireAnyPermission() },
-			want:  "at least one alternative",
-		},
-		"nil resolver": {
-			mount: func() {
-				gates.RequireAnyPermission(post, GateSpec{ResourceType: "org", Permission: "admin"})
-			},
-			want: `alternative 2 of 2 ("org", "admin") needs a Resource resolver`,
-		},
-		"undeclared permission": {
-			mount: func() {
-				gates.RequireAnyPermission(post, GateSpec{ResourceType: "post", Permission: "fly", Resource: FixedResource("post", "p1")})
-			},
-			want: `alternative 2 of 2: the model declares no permission "fly" on resource type "post"`,
-		},
-		"undeclared resource type": {
-			mount: func() {
-				gates.RequireAnyPermission(GateSpec{ResourceType: "comet", Permission: "delete", Resource: FixedResource("comet", "c1")})
-			},
-			want: `alternative 1 of 1: the model declares no permission "delete" on resource type "comet"`,
-		},
-		"over the alternatives cap": {
-			mount: func() { gates.RequireAnyPermission(post, post, post) },
-			want:  "at most 2 alternatives",
-		},
-	} {
-		t.Run(name, func(t *testing.T) {
-			defer func() {
-				got, ok := recover().(string)
-				if !ok {
-					t.Fatal("must panic at registration with a string message")
-				}
-				if !strings.Contains(got, tc.want) {
-					t.Fatalf("panic message: want it to contain %q, got %q", tc.want, got)
-				}
-			}()
-			tc.mount()
-		})
-	}
-}
-
-// TestRelationshipGatesRequireAnyPermission mounts the shared inbound gates
-// against the compiled relationship schema — the disjunction admits on
-// either real grant, and an undeclared pair panics at mount.
-func TestRelationshipGatesRequireAnyPermission(t *testing.T) {
-	svc, err := relationships.NewService(relationshipStore(t, relationships.CreateRelationship{ResourceType: "post", ResourceID: "p2", Relation: "owner", SubjectType: "user", SubjectID: "u1"}), testSchema())
-	if err != nil {
-		t.Fatalf("NewService: %v", err)
-	}
-
-	gate := NewGates(svc.Service, svc.Service, authmodel.DefaultMaxBatchSize).RequireAnyPermission(
-		GateSpec{ResourceType: "post", Permission: "delete", Resource: FixedResource("post", "p1")},
-		GateSpec{ResourceType: "post", Permission: "delete", Resource: FixedResource("post", "p2")},
-	)
-	call := func(principal sdk.Principal) (int, bool) {
-		ran := false
-		req := httptest.NewRequest(http.MethodGet, "/gated", nil)
-		req = req.WithContext(sdk.WithPrincipal(req.Context(), principal))
-		rec := httptest.NewRecorder()
-		gate(markerHandler(&ran)).ServeHTTP(rec, req)
-		return rec.Code, ran
-	}
-	if code, ran := call(sdk.Principal{Type: "user", ID: "u1"}); code != http.StatusOK || !ran {
-		t.Fatalf("owner of the second alternative: %d ran=%v", code, ran)
-	}
-	if code, ran := call(sdk.Principal{Type: "user", ID: "u2"}); code != http.StatusForbidden || ran {
-		t.Fatalf("stranger: %d ran=%v", code, ran)
-	}
-
-	t.Run("undeclared pair panics at mount", func(t *testing.T) {
-		defer func() {
-			if recover() == nil {
-				t.Fatal("must panic at registration")
-			}
-		}()
-		NewGates(svc.Service, svc.Service, authmodel.DefaultMaxBatchSize).RequireAnyPermission(GateSpec{ResourceType: "post", Permission: "fly", Resource: FixedResource("post", "p1")})
-	})
-}
-
-func (s erroringStore) ForModel(relationships.ReadModel) relationships.Reader { return s }
-
-func testSchema() relationships.Schema {
-	return relationships.NewSchema([]relationships.ResourceSchema{
-		{Name: "org", Def: relationships.ResourceTypeDef{
-			Relations:   map[string]relationships.RelationDef{"admin": {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "user"}}}},
-			Permissions: map[string]relationships.PermissionRule{"manage": relationships.AnyOf(relationships.Direct("admin"))},
-		}},
-		{Name: "post", Def: relationships.ResourceTypeDef{
-			Relations: map[string]relationships.RelationDef{
-				"owner": {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "user"}}},
-				"org":   {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "org"}}},
-			},
-			Permissions: map[string]relationships.PermissionRule{
-				"view":   relationships.AnyOf(relationships.Direct("owner"), relationships.Through("org", "manage")),
-				"delete": relationships.AnyOf(relationships.Direct("owner")),
-			},
-		}},
-	})
-}
-
-func relationshipStore(t *testing.T, rows ...relationships.CreateRelationship) relationships.Storer {
-	t.Helper()
-	store := memory.NewRelationships()
-	if err := store.CreateRelationships(t.Context(), rows); err != nil {
 		t.Fatal(err)
 	}
-	return store
+	gate := adapter.Require(All(HasRole("employee", Global()), Can("edit", target)))
+	if validations != 1 || evaluations != 0 || resolutions != 0 {
+		t.Fatal("mount performed evaluation or input I/O")
+	}
+	rec, calls := serveGuard(gate, guardRequest(""))
+	if rec.Code != 401 || calls != 0 || evaluations != 0 || resolutions != 0 {
+		t.Fatal("anonymous request reached evaluation")
+	}
+	req := guardRequest("alice")
+	req.Header.Set("X-Input", "one")
+	rec, calls = serveGuard(gate, req)
+	if rec.Code != 204 || calls != 1 || evaluations != 1 || resolutions != 1 {
+		t.Fatalf("status=%d next=%d evaluated=%d resolved=%d", rec.Code, calls, evaluations, resolutions)
+	}
+}
+
+func TestRequireDecisionErrorsAndResponseBodies(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		result    authmodel.CheckResult
+		err       error
+		principal string
+		status    int
+		message   string
+	}{
+		{"anonymous", authmodel.CheckResult{Allowed: true}, nil, "", 401, "authentication required"},
+		{"deny", authmodel.CheckResult{}, nil, "alice", 403, "permission denied"},
+		{"allow", authmodel.CheckResult{Allowed: true}, nil, "alice", 204, ""},
+		{"error discards allow", authmodel.CheckResult{Allowed: true}, errors.New("private provider details"), "alice", 500, "internal error"},
+		{"wrapped budget", authmodel.CheckResult{Allowed: true}, fmt.Errorf("exhausted: %w", authmodel.ErrEvaluationLimit), "alice", 503, "authorization temporarily unavailable"},
+		{"evaluation sentinel is error", authmodel.CheckResult{Allowed: true}, decisions.ErrResourceNotApplicable, "alice", 500, "internal error"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			service := &narrowDecisions{validate: func(decisions.Expression) error { return nil }, evaluate: func(context.Context, authmodel.PrincipalRef, decisions.Expression, decisions.ResourceResolver) (authmodel.CheckResult, error) {
+				return tc.result, tc.err
+			}}
+			adapter, err := New(Services{Decisions: service})
+			if err != nil {
+				t.Fatal(err)
+			}
+			rec, next := serveGuard(adapter.Require(HasRole("admin", Global())), guardRequest(tc.principal))
+			if rec.Code != tc.status || next != boolInt(tc.status == 204) {
+				t.Fatalf("status=%d next=%d body=%s", rec.Code, next, rec.Body)
+			}
+			if tc.message != "" {
+				var body map[string]any
+				if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+					t.Fatal(err)
+				}
+				want := map[string]any{"message": tc.message}
+				if code := map[int]string{401: "unauthenticated", 403: "permission_denied", 500: "internal"}[tc.status]; code != "" {
+					want["code"] = code
+				}
+				if !reflect.DeepEqual(body, want) {
+					t.Fatalf("error body: %s", rec.Body)
+				}
+			}
+		})
+	}
+}
+
+func TestRequireCustomValidationAndCancellation(t *testing.T) {
+	t.Run("validation aborts mount", func(t *testing.T) {
+		adapter, err := New(Services{Decisions: &narrowDecisions{validate: func(decisions.Expression) error { return errors.New("unsupported policy") }}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() {
+			if recover() == nil {
+				t.Fatal("invalid policy mounted")
+			}
+		}()
+		adapter.Require(HasRole("admin", Global()))
+	})
+	t.Run("typed nil custom service", func(t *testing.T) {
+		adapter, err := New(Services{Decisions: (*narrowDecisions)(nil)})
+		if adapter != nil || !errors.Is(err, sdk.ErrInvalidInput) {
+			t.Fatalf("adapter=%v error=%v", adapter, err)
+		}
+	})
+	t.Run("canceled result cannot allow", func(t *testing.T) {
+		req := guardRequest("alice")
+		ctx, cancel := context.WithCancel(req.Context())
+		defer cancel()
+		req = req.WithContext(ctx)
+		adapter, err := New(Services{Decisions: &narrowDecisions{validate: func(decisions.Expression) error { return nil }, evaluate: func(context.Context, authmodel.PrincipalRef, decisions.Expression, decisions.ResourceResolver) (authmodel.CheckResult, error) {
+			cancel()
+			return authmodel.CheckResult{Allowed: true}, nil
+		}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		rec, next := serveGuard(adapter.Require(HasRole("admin", Global())), req)
+		if rec.Code != http.StatusInternalServerError || next != 0 {
+			t.Fatalf("status=%d next=%d", rec.Code, next)
+		}
+	})
 }

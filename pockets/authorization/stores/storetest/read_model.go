@@ -14,31 +14,31 @@ import (
 	"github.com/gopernicus/gopernicus/sdk"
 )
 
-func runReadModel(t *testing.T, newRepos func(*testing.T) authorization.Repositories) {
+func runReadModel(t *testing.T, newRepos func(*testing.T) Repositories) {
 	for _, mode := range []string{"direct_subject", "direct_relation", "userset_subject", "userset_relation", "intermediate_membership", "nested_userset", "through_target_type"} {
 		t.Run(mode, func(t *testing.T) { specCurrentReadModel(t, newRepos(t), mode) })
 	}
 	t.Run("ContainmentMethodsAndZeroModel", func(t *testing.T) { specReadModelContainment(t, newRepos(t)) })
 }
 
-func readModelFixture() relationships.Schema {
-	users := relationships.RelationDef{AllowedSubjects: []relationships.SubjectTypeRef{{Type: "user"}}}
-	return relationships.Schema{ResourceTypes: map[string]relationships.ResourceTypeDef{
-		"doc": {Relations: map[string]relationships.RelationDef{
+func readModelFixture() decisions.Model {
+	users := decisions.RelationDef{AllowedSubjects: []decisions.SubjectTypeRef{{Type: "user"}}}
+	return decisions.Model{ResourceTypes: map[string]decisions.ResourceTypeDef{
+		"doc": {Relations: map[string]decisions.RelationDef{
 			"owner": users, "member": users,
-			"viewer": {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "user"}, {Type: "service_account"}, {Type: "group", Relation: "member"}, {Type: "group", Relation: "admin"}}},
-			"parent": {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "space"}, {Type: "folder"}}},
-		}, Permissions: map[string]relationships.PermissionRule{"view": relationships.AnyOf(relationships.Direct("owner"), relationships.Direct("viewer"), relationships.Through("parent", "view"))}},
-		"group": {Relations: map[string]relationships.RelationDef{
-			"member": {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "user"}, {Type: "group", Relation: "member"}, {Type: "service_account"}}},
+			"viewer": {AllowedSubjects: []decisions.SubjectTypeRef{{Type: "user"}, {Type: "service_account"}, {Type: "group", Relation: "member"}, {Type: "group", Relation: "admin"}}},
+			"parent": {AllowedSubjects: []decisions.SubjectTypeRef{{Type: "space"}, {Type: "folder"}}},
+		}, Permissions: map[string]decisions.Expression{"view": decisions.AnyOf(decisions.Direct("owner"), decisions.Direct("viewer"), decisions.Through("parent", "view"))}},
+		"group": {Relations: map[string]decisions.RelationDef{
+			"member": {AllowedSubjects: []decisions.SubjectTypeRef{{Type: "user"}, {Type: "group", Relation: "member"}, {Type: "service_account"}}},
 			"admin":  users,
 		}},
-		"space":  {Relations: map[string]relationships.RelationDef{"viewer": users}, Permissions: map[string]relationships.PermissionRule{"view": relationships.AnyOf(relationships.Direct("viewer"))}},
-		"folder": {Relations: map[string]relationships.RelationDef{"viewer": users}, Permissions: map[string]relationships.PermissionRule{"view": relationships.AnyOf(relationships.Direct("viewer"))}},
+		"space":  {Relations: map[string]decisions.RelationDef{"viewer": users}, Permissions: map[string]decisions.Expression{"view": decisions.AnyOf(decisions.Direct("viewer"))}},
+		"folder": {Relations: map[string]decisions.RelationDef{"viewer": users}, Permissions: map[string]decisions.Expression{"view": decisions.AnyOf(decisions.Direct("viewer"))}},
 	}}
 }
 
-func fixtureReadModel(schema relationships.Schema) relationships.ReadModel {
+func fixtureReadModel(schema decisions.Model) relationships.ReadModel {
 	var rules []relationships.SubjectRule
 	for resourceType, def := range schema.ResourceTypes {
 		for relation, def := range def.Relations {
@@ -64,7 +64,7 @@ func (staleModelGuard) AuthorizeMutation(ctx context.Context, attempt mutations.
 	return nil
 }
 
-func specCurrentReadModel(t *testing.T, repos authorization.Repositories, mode string) {
+func specCurrentReadModel(t *testing.T, repos Repositories, mode string) {
 	ctx := context.Background()
 	current := readModelFixture()
 	doc, group := current.ResourceTypes["doc"], current.ResourceTypes["group"]
@@ -73,34 +73,34 @@ func specCurrentReadModel(t *testing.T, repos authorization.Repositories, mode s
 	switch mode {
 	case "direct_subject":
 		rows = append(rows, ct("doc", "stale", "viewer", "user", "u1"))
-		doc.Relations["viewer"] = relationships.RelationDef{AllowedSubjects: []relationships.SubjectTypeRef{{Type: "service_account"}}}
+		doc.Relations["viewer"] = decisions.RelationDef{AllowedSubjects: []decisions.SubjectTypeRef{{Type: "service_account"}}}
 	case "direct_relation":
 		rows = append(rows, ct("doc", "stale", "viewer", "user", "u1"))
 		delete(doc.Relations, "viewer")
-		doc.Permissions["view"] = relationships.AnyOf(relationships.Direct("owner"), relationships.Through("parent", "view"))
+		doc.Permissions["view"] = decisions.AnyOf(decisions.Direct("owner"), decisions.Through("parent", "view"))
 	case "userset_subject", "intermediate_membership":
 		rows = append(rows, ctUserset("doc", "stale", "viewer", "group", "g1", "member"), ct("group", "g1", "member", "user", "u1"))
 		if mode == "userset_subject" {
-			doc.Relations["viewer"] = relationships.RelationDef{AllowedSubjects: []relationships.SubjectTypeRef{{Type: "user"}}}
+			doc.Relations["viewer"] = decisions.RelationDef{AllowedSubjects: []decisions.SubjectTypeRef{{Type: "user"}}}
 		} else {
-			group.Relations["member"] = relationships.RelationDef{AllowedSubjects: []relationships.SubjectTypeRef{{Type: "service_account"}}}
+			group.Relations["member"] = decisions.RelationDef{AllowedSubjects: []decisions.SubjectTypeRef{{Type: "service_account"}}}
 		}
 	case "userset_relation":
 		rows = append(rows, ctUserset("doc", "stale", "viewer", "group", "g1", "admin"), ct("group", "g1", "admin", "user", "u1"))
-		doc.Relations["viewer"] = relationships.RelationDef{AllowedSubjects: []relationships.SubjectTypeRef{{Type: "user"}, {Type: "group", Relation: "member"}}}
+		doc.Relations["viewer"] = decisions.RelationDef{AllowedSubjects: []decisions.SubjectTypeRef{{Type: "user"}, {Type: "group", Relation: "member"}}}
 		delete(group.Relations, "admin")
 	case "nested_userset":
 		rows = append(rows, ctUserset("doc", "stale", "viewer", "group", "outer", "member"), ctUserset("group", "outer", "member", "group", "inner", "member"), ct("group", "inner", "member", "user", "u1"))
-		group.Relations["member"] = relationships.RelationDef{AllowedSubjects: []relationships.SubjectTypeRef{{Type: "user"}}}
+		group.Relations["member"] = decisions.RelationDef{AllowedSubjects: []decisions.SubjectTypeRef{{Type: "user"}}}
 	case "through_target_type":
 		rows = append(rows, ct("doc", "stale", "parent", "space", "s1"), ct("space", "s1", "viewer", "user", "u1"))
-		doc.Relations["parent"] = relationships.RelationDef{AllowedSubjects: []relationships.SubjectTypeRef{{Type: "folder"}}}
+		doc.Relations["parent"] = decisions.RelationDef{AllowedSubjects: []decisions.SubjectTypeRef{{Type: "folder"}}}
 		relation, subjectType, subjectID = "parent", "space", "s1"
 	}
 	mustCreate(t, repos.Relationships, rows...)
 	principal := authmodel.PrincipalRef{Type: "user", ID: "u1"}
 	request := authmodel.CheckRequest{Principal: principal, Permission: "view", Resource: authmodel.Resource{Type: "doc", ID: "stale"}}
-	old, err := authorization.New(authorization.Repositories{Relationships: repos.Relationships}, authorization.WithRelationshipModel(readModelFixture()))
+	old, err := authorization.New(authorization.Repositories{Tuples: repos.Tuples}, authorization.WithModel(readModelFixture()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -140,11 +140,11 @@ func specCurrentReadModel(t *testing.T, repos authorization.Repositories, mode s
 	if targets, err := repos.Relationships.GetRelationTargets(ctx, "doc", "stale", relation); err != nil || len(targets) != 1 {
 		t.Fatalf("raw stored fact changed: %v %v", targets, err)
 	}
-	cfg := []authorization.Option{authorization.WithRelationshipModel(current)}
+	cfg := []authorization.Option{authorization.WithModel(current)}
 	if repos.Mutations != nil {
 		cfg = append(cfg, authorization.WithGuard(staleModelGuard{}))
 	}
-	components, err := authorization.New(authorization.Repositories{Relationships: repos.Relationships, Mutations: repos.Mutations}, cfg...)
+	components, err := authorization.New(authorization.Repositories{Tuples: repos.Tuples, Mutations: repos.Mutations}, cfg...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -192,7 +192,7 @@ func specCurrentReadModel(t *testing.T, repos authorization.Repositories, mode s
 	}
 }
 
-func specReadModelContainment(t *testing.T, repos authorization.Repositories) {
+func specReadModelContainment(t *testing.T, repos Repositories) {
 	ctx := context.Background()
 	mustCreate(t, repos.Relationships,
 		ct("doc", "good", "parent", "doc", "root"), ct("doc", "stale", "retired_parent", "doc", "root"),

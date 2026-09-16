@@ -10,6 +10,7 @@ import (
 	authmodel "github.com/gopernicus/gopernicus/pockets/authorization/logic/model"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/mutations"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/roles"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuples"
 	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/pkg/list"
 	"github.com/gopernicus/gopernicus/sdk/pkg/web"
@@ -37,11 +38,10 @@ const (
 // roleCommandRequest is the shared body of both writes. The two domain commands
 // are field-identical, so one wire struct describes both honestly.
 type roleCommandRequest struct {
-	SubjectType  string `json:"subject_type"`
-	SubjectID    string `json:"subject_id"`
-	Role         string `json:"role"`
-	ResourceType string `json:"resource_type"`
-	ResourceID   string `json:"resource_id"`
+	SubjectType string       `json:"subject_type"`
+	SubjectID   string       `json:"subject_id"`
+	Role        string       `json:"role"`
+	Scope       tuples.Scope `json:"scope"`
 }
 
 // Success responses describe this application. Refusals return a domain error.
@@ -49,46 +49,22 @@ type assignResponse struct {
 	Outcome mutations.Outcome `json:"outcome"`
 }
 type unassignResponse struct {
-	Outcome              mutations.Outcome `json:"outcome"`
-	SameRoleGrantRemains bool              `json:"same_role_grant_remains"`
+	Outcome mutations.Outcome `json:"outcome"`
 }
 
 type assignmentResponse struct {
-	SubjectType  string `json:"subject_type"`
-	SubjectID    string `json:"subject_id"`
-	Role         string `json:"role"`
-	ResourceType string `json:"resource_type"`
-	ResourceID   string `json:"resource_id"`
+	SubjectType string       `json:"subject_type"`
+	SubjectID   string       `json:"subject_id"`
+	Role        string       `json:"role"`
+	Scope       tuples.Scope `json:"scope"`
 }
 
 func newAssignmentResponse(a roles.Assignment) assignmentResponse {
 	return assignmentResponse{
-		SubjectType:  a.SubjectType,
-		SubjectID:    a.SubjectID,
-		Role:         a.Role,
-		ResourceType: a.ResourceType,
-		ResourceID:   a.ResourceID,
-	}
-}
-
-// effectiveGrantResponse carries the grant identity plus its provenance. A
-// global grant is never rewritten as a scoped row, so there is no resource pair
-// here.
-type effectiveGrantResponse struct {
-	SubjectType string `json:"subject_type"`
-	SubjectID   string `json:"subject_id"`
-	Role        string `json:"role"`
-	Direct      bool   `json:"direct"`
-	Global      bool   `json:"global"`
-}
-
-func newEffectiveGrantResponse(g roles.EffectiveGrant) effectiveGrantResponse {
-	return effectiveGrantResponse{
-		SubjectType: g.SubjectType,
-		SubjectID:   g.SubjectID,
-		Role:        g.Role,
-		Direct:      g.Direct,
-		Global:      g.Global,
+		SubjectType: a.SubjectType,
+		SubjectID:   a.SubjectID,
+		Role:        a.Role,
+		Scope:       a.Scope,
 	}
 }
 
@@ -121,8 +97,7 @@ func newPageResponse[E any, T any](p list.Page[E], mapFn func(E) T) pageResponse
 // Handlers
 // ---------------------------------------------------------------------------
 
-// assignRole grants a principal a role, globally (both resource fields empty) or
-// scoped to a resource (both set). The host gate has already authenticated and
+// assignRole grants a principal a role, in an explicit global or resource scope. The host gate has already authenticated and
 // authorized the request; this handler derives the ACTOR from the principal the
 // gate stashed and forwards the command.
 func (h *Adapter) assignRole(w http.ResponseWriter, r *http.Request) {
@@ -136,7 +111,7 @@ func (h *Adapter) assignRole(w http.ResponseWriter, r *http.Request) {
 	}
 	cmd := mutations.AssignRoleCommand{
 		Subject: authmodel.PrincipalRef{Type: body.SubjectType, ID: body.SubjectID},
-		Role:    body.Role, ResourceType: body.ResourceType, ResourceID: body.ResourceID,
+		Role:    body.Role, Scope: body.Scope,
 	}
 	if h.assignmentPolicy != nil {
 		if err := h.assignmentPolicy(r.Context(), cmd); err != nil {
@@ -170,7 +145,7 @@ func (h *Adapter) unassignRole(w http.ResponseWriter, r *http.Request) {
 	}
 	cmd := mutations.UnassignRoleCommand{
 		Subject: authmodel.PrincipalRef{Type: body.SubjectType, ID: body.SubjectID},
-		Role:    body.Role, ResourceType: body.ResourceType, ResourceID: body.ResourceID,
+		Role:    body.Role, Scope: body.Scope,
 	}
 	result, err := h.mutations.UnassignRole(r.Context(), mutations.Actor{PrincipalRef: authmodel.PrincipalRef{Type: actor.Type, ID: actor.ID}}, cmd)
 	if err != nil {
@@ -178,8 +153,7 @@ func (h *Adapter) unassignRole(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	web.RespondJSONOK(w, unassignResponse{
-		Outcome:              result.Outcome,
-		SameRoleGrantRemains: result.SameRoleGrantRemains,
+		Outcome: result.Outcome,
 	})
 }
 
@@ -214,32 +188,12 @@ func (h *Adapter) listByResource(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	page, err := h.roles.ListRoleAssignmentsByResource(r.Context(), resourceType, resourceID, req)
+	page, err := h.roles.ListRoleAssignmentsByScope(r.Context(), tuples.On(resourceType, resourceID), req)
 	if err != nil {
 		RespondError(w, err)
 		return
 	}
 	web.RespondJSONOK(w, newPageResponse(page, newAssignmentResponse))
-}
-
-// listEffectiveByResource pages the EFFECTIVE role grants on a resource — the
-// enumeration that agrees with HasRole, which is what an administration UI
-// needs.
-func (h *Adapter) listEffectiveByResource(w http.ResponseWriter, r *http.Request) {
-	resourceType, resourceID, ok := requiredPair(w, r, queryResourceType, queryResourceID)
-	if !ok {
-		return
-	}
-	req, ok := h.parseListRequest(w, r, roles.EffectiveOrderFields, roles.DefaultEffectiveOrder)
-	if !ok {
-		return
-	}
-	page, err := h.roles.ListEffectiveRoleGrantsByResource(r.Context(), resourceType, resourceID, req)
-	if err != nil {
-		RespondError(w, err)
-		return
-	}
-	web.RespondJSONOK(w, newPageResponse(page, newEffectiveGrantResponse))
 }
 
 // ---------------------------------------------------------------------------
@@ -268,6 +222,10 @@ func decodeRoleCommand(w http.ResponseWriter, r *http.Request) (roleCommandReque
 	}
 	var body roleCommandRequest
 	if !strictJSONBody(w, r, &body, maxJSONBodyBytes) {
+		return roleCommandRequest{}, false
+	}
+	if err := body.Scope.Validate(); err != nil {
+		RespondError(w, err)
 		return roleCommandRequest{}, false
 	}
 	return body, true

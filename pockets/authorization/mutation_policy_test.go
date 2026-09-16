@@ -62,10 +62,8 @@ func newProofComponents(t *testing.T, guard mutations.MutationGuard) Components 
 	t.Helper()
 	st := memory.New(memory.WithGuardianPolicy(mutations.GuardianPolicy{}))
 	comps, err := New(Repositories{
-		Relationships: st.Relationships(),
-		Roles:         st.Roles(),
-		Mutations:     st.Mutations(),
-	}, WithRelationshipModel(lifecycleModel()), WithGuard(guard))
+		Tuples: st.Tuples(), Mutations: st.Mutations(),
+	}, WithModel(lifecycleModel()), WithGuard(guard))
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
@@ -341,10 +339,8 @@ func newDefaultGuardianComponents(t *testing.T) Components {
 	t.Helper()
 	st := memory.New(memory.WithGuardianPolicy(mutations.DefaultGuardianPolicy()))
 	comps, err := New(Repositories{
-		Relationships: st.Relationships(),
-		Roles:         st.Roles(),
-		Mutations:     st.Mutations(),
-	}, WithRelationshipModel(lifecycleModel()))
+		Tuples: st.Tuples(), Mutations: st.Mutations(),
+	}, WithModel(lifecycleModel()))
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}

@@ -7,7 +7,12 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+
+	authorizationhttp "github.com/gopernicus/gopernicus/pockets/authorization/inbound/http"
+
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuples"
 
 	"github.com/gopernicus/gopernicus/pockets"
 	auth "github.com/gopernicus/gopernicus/pockets/authentication"
@@ -83,7 +88,7 @@ func newRoleRoutesHost(t *testing.T, withGate bool) *roleRoutesHost {
 	}
 	gate.set(roleAdministrationGate(
 		svc.HTTP.RequireAccessTokenLive(),
-		comps.HTTP.RequirePermissionFixed(platformResourceType, "admin", platformResourceID),
+		comps.HTTP.Require(authorizationhttp.Can("admin", authorizationhttp.Fixed(platformResourceType, platformResourceID))),
 	))
 
 	if err := seedAuthorization(context.Background(), comps.SystemMutator); err != nil {
@@ -122,17 +127,15 @@ func (h *roleRoutesHost) makePlatformAdmin(userID string) {
 
 // roleAdminRoutes is the full bundled surface, as a client addresses it.
 var roleAdminRoutes = []struct{ method, path, body string }{
-	{"POST", "/authorization/roles", `{"subject_type":"user","subject_id":"` + roleGrantee + `","role":"` + demoRole + `","resource_type":"` + demoResourceType + `","resource_id":"` + demoResourceID + `"}`},
-	{"POST", "/authorization/roles/unassign", `{"subject_type":"user","subject_id":"` + roleGrantee + `","role":"` + demoRole + `","resource_type":"` + demoResourceType + `","resource_id":"` + demoResourceID + `"}`},
+	{"POST", "/authorization/roles", `{"subject_type":"user","subject_id":"` + roleGrantee + `","role":"` + demoRole + `","scope":{"kind":"resource","resource_type":"` + demoResourceType + `","resource_id":"` + demoResourceID + `"}}`},
+	{"POST", "/authorization/roles/unassign", `{"subject_type":"user","subject_id":"` + roleGrantee + `","role":"` + demoRole + `","scope":{"kind":"resource","resource_type":"` + demoResourceType + `","resource_id":"` + demoResourceID + `"}}`},
 	{"GET", "/authorization/roles/by-subject?subject_type=user&subject_id=" + roleGrantee, ""},
 	{"GET", "/authorization/roles/by-resource?resource_type=" + demoResourceType + "&resource_id=" + demoResourceID, ""},
-	{"GET", "/authorization/roles/effective?resource_type=" + demoResourceType + "&resource_id=" + demoResourceID, ""},
 }
 
 // mutationEnvelope is the assign/unassign response as a client reads it.
 type mutationEnvelope struct {
-	Outcome              string `json:"outcome"`
-	SameRoleGrantRemains bool   `json:"same_role_grant_remains"`
+	Outcome string `json:"outcome"`
 }
 
 func TestRoleRoutesPlatformAdminDrivesTheLifecycle(t *testing.T) {
@@ -141,7 +144,7 @@ func TestRoleRoutesPlatformAdminDrivesTheLifecycle(t *testing.T) {
 	host.makePlatformAdmin(admin.userIDFor())
 
 	body := `{"subject_type":"user","subject_id":"` + roleGrantee +
-		`","role":"` + demoRole + `","resource_type":"` + demoResourceType + `","resource_id":"` + demoResourceID + `"}`
+		`","role":"` + demoRole + `","scope":{"kind":"resource","resource_type":"` + demoResourceType + `","resource_id":"` + demoResourceID + `"}}`
 
 	resp, payload := admin.do("POST", "/authorization/roles", body, nil)
 	if resp.StatusCode != http.StatusOK {
@@ -167,24 +170,24 @@ func TestRoleRoutesPlatformAdminDrivesTheLifecycle(t *testing.T) {
 	}
 	var listing struct {
 		Items []struct {
-			Role       string `json:"role"`
-			ResourceID string `json:"resource_id"`
+			Role  string       `json:"role"`
+			Scope tuples.Scope `json:"scope"`
 		} `json:"items"`
 	}
 	if err := json.Unmarshal(payload, &listing); err != nil {
 		t.Fatalf("decode listing: %v", err)
 	}
-	if len(listing.Items) != 1 || listing.Items[0].Role != demoRole || listing.Items[0].ResourceID != demoResourceID {
+	if len(listing.Items) != 1 || listing.Items[0].Role != demoRole || listing.Items[0].Scope.ID != demoResourceID {
 		t.Fatalf("by-subject items = %+v, want the one grant just assigned", listing.Items)
 	}
 
 	resp, payload = admin.do("GET", "/authorization/roles/effective?resource_type="+demoResourceType+"&resource_id="+demoResourceID, "", nil)
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("effective = %d, want 200; body=%s", resp.StatusCode, payload)
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("retired effective route = %d, want 404; body=%s", resp.StatusCode, payload)
 	}
 
 	unassignBody := `{"subject_type":"user","subject_id":"` + roleGrantee +
-		`","role":"` + demoRole + `","resource_type":"` + demoResourceType + `","resource_id":"` + demoResourceID + `"}`
+		`","role":"` + demoRole + `","scope":{"kind":"resource","resource_type":"` + demoResourceType + `","resource_id":"` + demoResourceID + `"}}`
 	resp, payload = admin.do("POST", "/authorization/roles/unassign", unassignBody, nil)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("unassign = %d, want 200; body=%s", resp.StatusCode, payload)
@@ -193,8 +196,8 @@ func TestRoleRoutesPlatformAdminDrivesTheLifecycle(t *testing.T) {
 	if removed.Outcome != "applied" {
 		t.Errorf("unassign outcome = %q, want applied", removed.Outcome)
 	}
-	if removed.SameRoleGrantRemains {
-		t.Error("same_role_grant_remains = true, but there is no global grant of this role")
+	if strings.Contains(string(payload), "same_role_grant_remains") {
+		t.Fatal("retired response field present")
 	}
 
 	resp, payload = admin.do("GET", "/authorization/roles/by-subject?subject_type=user&subject_id="+roleGrantee, "", nil)
@@ -267,19 +270,17 @@ func TestRoleRoutesAreNotMountedWithoutAGate(t *testing.T) {
 	}
 }
 
-// TestRoleRoutesRejectAnUndeclaredRole proves the RoleModel's assign-time rule
-// reaches a client as a 400, not a 500: the bundled route cannot store a role the
-// host's model does not declare.
-func TestRoleRoutesRejectAnUndeclaredRole(t *testing.T) {
+// Structurally valid labels need no permission-model catalog entry.
+func TestRoleRoutesAcceptOpaqueLabel(t *testing.T) {
 	host := newRoleRoutesHost(t, true)
 	admin := host.signUp(roleAdminEmail)
 	host.makePlatformAdmin(admin.userIDFor())
 
 	resp, payload := admin.do("POST", "/authorization/roles",
-		`{"subject_type":"user","subject_id":"`+roleGrantee+`","role":"not-in-the-model","resource_type":"`+
-			demoResourceType+`","resource_id":"`+demoResourceID+`"}`, nil)
-	if resp.StatusCode != http.StatusBadRequest {
-		t.Fatalf("undeclared role = %d, want 400; body=%s", resp.StatusCode, payload)
+		`{"subject_type":"user","subject_id":"`+roleGrantee+`","role":"not-in-the-model","scope":{"kind":"resource","resource_type":"`+
+			demoResourceType+`","resource_id":"`+demoResourceID+`"}}`, nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("opaque role = %d, want 200; body=%s", resp.StatusCode, payload)
 	}
 }
 
@@ -291,7 +292,7 @@ func TestRoleRoutesRejectAHalfScopedPair(t *testing.T) {
 	host.makePlatformAdmin(admin.userIDFor())
 
 	resp, payload := admin.do("POST", "/authorization/roles",
-		`{"subject_type":"user","subject_id":"`+roleGrantee+`","role":"`+demoRole+`","resource_type":"`+demoResourceType+`"}`, nil)
+		`{"subject_type":"user","subject_id":"`+roleGrantee+`","role":"`+demoRole+`","scope":{"kind":"resource","resource_type":"`+demoResourceType+`"}}`, nil)
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("half-scoped pair = %d, want 400; body=%s", resp.StatusCode, payload)
 	}

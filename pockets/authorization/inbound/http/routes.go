@@ -9,9 +9,11 @@ import (
 	"reflect"
 
 	"github.com/gopernicus/gopernicus/pockets"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/decisions"
 	authmodel "github.com/gopernicus/gopernicus/pockets/authorization/logic/model"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/mutations"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/roles"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuples"
 	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/pkg/list"
 	"github.com/gopernicus/gopernicus/sdk/pkg/web"
@@ -22,29 +24,30 @@ const (
 	pathUnassignRole    = "/authorization/roles/unassign"
 	pathRolesBySubject  = "/authorization/roles/by-subject"
 	pathRolesByResource = "/authorization/roles/by-resource"
-	pathRolesEffective  = "/authorization/roles/effective"
 )
 
 var (
-	ErrRoleRoutesGateWithoutRoles             = errors.New("authorization: RoleRoutes.Gate set but Repositories.Roles is nil (no roles kind to administer)")
+	ErrRoleRoutesGateWithoutRoles             = errors.New("authorization: RoleRoutes.Gate set but Roles service is nil")
 	ErrRoleRoutesGateWithoutGuard             = errors.New("authorization: RoleRoutes.Gate requires WithGuard (the bundled role writes are guarded; without a guard every one of them fails closed)")
 	ErrRoleRouteAssignmentPolicyWithoutRoutes = errors.New("authorization: RoleRoutes.AssignmentPolicy requires RoleRoutes.Gate (a policy consulted only by the bundled assign route would never run)")
 	ErrInvalidListStrategy                    = errors.New(`authorization: RoleRoutes.ListStrategy must be "cursor" or "offset"`)
 	ErrRoleRoutesWithoutRouter                = errors.New("authorization: RoleRoutes.Gate is set but Mount.Router is nil (the bundled role-administration routes have nowhere to mount)")
 )
 
-// DecisionService supplies permission checks, model coordinates and resolved budgets.
+// DecisionService validates a policy and evaluates it as one coherent operation.
+// ValidateExpression checks the entire tree without I/O. EvaluateResolved must
+// be safe for concurrent requests, use one coherent snapshot and shared budgets,
+// and short-circuit in order. It resolves inputs lazily and memoizes each input
+// across whole-operation cache fallback. Errors discard provisional decisions.
 type DecisionService interface {
-	Checker
-	DeclaresPermission(string, string) bool
-	Limits() authmodel.EvaluationLimits
+	ValidateExpression(decisions.Expression) error
+	EvaluateResolved(context.Context, authmodel.PrincipalRef, decisions.Expression, decisions.ResourceResolver) (authmodel.CheckResult, error)
 }
 
 // RoleReader is the role listing surface used by the bundled handlers.
 type RoleReader interface {
 	ListRoleAssignmentsBySubject(context.Context, authmodel.PrincipalRef, list.Request) (list.Page[roles.Assignment], error)
-	ListRoleAssignmentsByResource(context.Context, string, string, list.Request) (list.Page[roles.Assignment], error)
-	ListEffectiveRoleGrantsByResource(context.Context, string, string, list.Request) (list.Page[roles.EffectiveGrant], error)
+	ListRoleAssignmentsByScope(context.Context, tuples.Scope, list.Request) (list.Page[roles.Assignment], error)
 }
 
 // RoleWriter is actor-facing only. Its implementation must enforce its guard atomically.
@@ -120,16 +123,7 @@ func New(services Services, opts ...Option) (*Adapter, error) {
 	if err := ValidateListStrategy(cfg.ListStrategy); err != nil {
 		return nil, err
 	}
-	if cfg.Decisions != nil {
-		limits := cfg.Decisions.Limits()
-		resolved, err := limits.Resolve()
-		if err != nil {
-			return nil, err
-		}
-		if limits != resolved {
-			return nil, fmt.Errorf("authorization HTTP: decision service must supply resolved limits: %w", sdk.ErrInvalidInput)
-		}
-	}
+
 	return &Adapter{decisions: cfg.Decisions, roles: cfg.Roles, mutations: cfg.Mutations, gate: cfg.Gate, assignmentPolicy: cfg.AssignmentPolicy, listStrategy: cfg.ListStrategy}, nil
 }
 func ValidateListStrategy(strategy list.Strategy) error {
@@ -151,7 +145,6 @@ func (a *Adapter) Register(r pockets.RouteRegistrar) error {
 	r.Handle("POST", pathUnassignRole, a.unassignRole, a.gate)
 	r.Handle("GET", pathRolesBySubject, a.listBySubject, a.gate)
 	r.Handle("GET", pathRolesByResource, a.listByResource, a.gate)
-	r.Handle("GET", pathRolesEffective, a.listEffectiveByResource, a.gate)
 	return nil
 }
 
@@ -167,9 +160,6 @@ func (a *Adapter) AssignRole() http.Handler      { return a.handler(a.assignRole
 func (a *Adapter) UnassignRole() http.Handler    { return a.handler(a.unassignRole) }
 func (a *Adapter) RolesBySubject() http.Handler  { return a.handler(a.listBySubject) }
 func (a *Adapter) RolesByResource() http.Handler { return a.handler(a.listByResource) }
-func (a *Adapter) EffectiveRolesByResource() http.Handler {
-	return a.handler(a.listEffectiveByResource)
-}
 func typedNil(v any) bool {
 	if v == nil {
 		return false

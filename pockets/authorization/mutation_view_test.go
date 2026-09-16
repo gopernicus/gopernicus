@@ -6,6 +6,9 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/decisions"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuples"
+
 	authmodel "github.com/gopernicus/gopernicus/pockets/authorization/logic/model"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/mutations"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/relationships"
@@ -17,51 +20,51 @@ import (
 // dashboard's manage is inherited from its space, a space's from its parent
 // space or its tenant, and a tenant's admins may be a group userset. The actor
 // who legitimately manages a dashboard often holds NO direct tuple on it.
-func tenancyModel() relationships.Schema {
-	return relationships.NewSchema([]relationships.ResourceSchema{
+func tenancyModel() decisions.Model {
+	return decisions.NewSchema([]decisions.ResourceSchema{
 		{
 			Name: "group",
-			Def: relationships.ResourceTypeDef{
-				Relations: map[string]relationships.RelationDef{
-					"member": {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "user"}, {Type: "group", Relation: "member"}}},
+			Def: decisions.ResourceTypeDef{
+				Relations: map[string]decisions.RelationDef{
+					"member": {AllowedSubjects: []decisions.SubjectTypeRef{{Type: "user"}, {Type: "group", Relation: "member"}}},
 				},
 			},
 		},
 		{
 			Name: "tenant",
-			Def: relationships.ResourceTypeDef{
-				Relations: map[string]relationships.RelationDef{
-					"owner": {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "user"}}},
-					"admin": {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "user"}, {Type: "group", Relation: "member"}}},
+			Def: decisions.ResourceTypeDef{
+				Relations: map[string]decisions.RelationDef{
+					"owner": {AllowedSubjects: []decisions.SubjectTypeRef{{Type: "user"}}},
+					"admin": {AllowedSubjects: []decisions.SubjectTypeRef{{Type: "user"}, {Type: "group", Relation: "member"}}},
 				},
-				Permissions: map[string]relationships.PermissionRule{
-					"manage": relationships.AnyOf(relationships.Direct("owner"), relationships.Direct("admin")),
+				Permissions: map[string]decisions.Expression{
+					"manage": decisions.AnyOf(decisions.Direct("owner"), decisions.Direct("admin")),
 				},
 			},
 		},
 		{
 			Name: "space",
-			Def: relationships.ResourceTypeDef{
-				Relations: map[string]relationships.RelationDef{
-					"tenant":  {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "tenant"}}},
-					"parent":  {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "space"}}},
-					"manager": {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "user"}}},
+			Def: decisions.ResourceTypeDef{
+				Relations: map[string]decisions.RelationDef{
+					"tenant":  {AllowedSubjects: []decisions.SubjectTypeRef{{Type: "tenant"}}},
+					"parent":  {AllowedSubjects: []decisions.SubjectTypeRef{{Type: "space"}}},
+					"manager": {AllowedSubjects: []decisions.SubjectTypeRef{{Type: "user"}}},
 				},
-				Permissions: map[string]relationships.PermissionRule{
-					"manage": relationships.AnyOf(relationships.Direct("manager"), relationships.Through("parent", "manage"), relationships.Through("tenant", "manage")),
+				Permissions: map[string]decisions.Expression{
+					"manage": decisions.AnyOf(decisions.Direct("manager"), decisions.Through("parent", "manage"), decisions.Through("tenant", "manage")),
 				},
 			},
 		},
 		{
 			Name: "dashboard",
-			Def: relationships.ResourceTypeDef{
-				Relations: map[string]relationships.RelationDef{
-					"space":  {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "space"}}},
-					"owner":  {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "user"}}},
-					"viewer": {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "user"}}},
+			Def: decisions.ResourceTypeDef{
+				Relations: map[string]decisions.RelationDef{
+					"space":  {AllowedSubjects: []decisions.SubjectTypeRef{{Type: "space"}}},
+					"owner":  {AllowedSubjects: []decisions.SubjectTypeRef{{Type: "user"}}},
+					"viewer": {AllowedSubjects: []decisions.SubjectTypeRef{{Type: "user"}}},
 				},
-				Permissions: map[string]relationships.PermissionRule{
-					"manage": relationships.AnyOf(relationships.Direct("owner"), relationships.Through("space", "manage")),
+				Permissions: map[string]decisions.Expression{
+					"manage": decisions.AnyOf(decisions.Direct("owner"), decisions.Through("space", "manage")),
 				},
 			},
 		},
@@ -117,9 +120,7 @@ func newTenancyHost(t *testing.T, guard mutations.MutationGuard, opts ...Option)
 	seedTenancy(t, st)
 	opts = append(opts, WithGuard(guard))
 	comps, err := New(Repositories{
-		Relationships: st.Relationships(),
-		Roles:         st.Roles(),
-		Mutations:     st.Mutations(),
+		Tuples: st.Tuples(), Mutations: st.Mutations(),
 	}, opts...)
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
@@ -156,7 +157,7 @@ func TestCheckPermissionInheritedThroughHierarchy(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			guard := &permissionGuard{permission: "manage"}
-			svc, _ := newTenancyHost(t, guard, WithRelationshipModel(tenancyModel()))
+			svc, _ := newTenancyHost(t, guard, WithModel(tenancyModel()))
 			rcpt, err := grantViewer(t, svc, tc.who)
 			if err != nil {
 				t.Fatalf("GrantRelationship: %v (check err %v)", err, guard.checkErr)
@@ -173,7 +174,7 @@ func TestCheckPermissionInheritedThroughHierarchy(t *testing.T) {
 
 func TestCheckPermissionDeniesWithoutAuthorityAndWritesNothing(t *testing.T) {
 	guard := &permissionGuard{permission: "manage"}
-	svc, st := newTenancyHost(t, guard, WithRelationshipModel(tenancyModel()))
+	svc, st := newTenancyHost(t, guard, WithModel(tenancyModel()))
 	_, err := grantViewer(t, svc, "stranger")
 	if !errors.Is(err, sdk.ErrForbidden) {
 		t.Fatalf("want forbidden, got %v", err)
@@ -185,12 +186,12 @@ func TestCheckPermissionDeniesWithoutAuthorityAndWritesNothing(t *testing.T) {
 }
 
 func TestCheckPermissionRoleOwnershipDeniesWithoutAssignments(t *testing.T) {
-	roles := authmodel.RoleModel{ResourceTypes: map[string]authmodel.RoleTypeDef{
-		"dashboard": {Roles: []string{"publisher"}, Permissions: map[string][]string{"publish": {"publisher"}}},
+	roles := decisions.Model{ResourceTypes: map[string]decisions.ResourceTypeDef{
+		"dashboard": {Permissions: map[string]decisions.Expression{"publish": decisions.Any(decisions.RoleIn("publisher"), decisions.Role("publisher"))}},
 	}}
 	t.Run("mixed model", func(t *testing.T) {
 		guard := &permissionGuard{permission: "publish"}
-		svc, st := newTenancyHost(t, guard, WithRelationshipModel(tenancyModel()), WithRoleModel(roles))
+		svc, st := newTenancyHost(t, guard, WithModel(tenancyModel()), WithModel(roles))
 		_, err := grantViewer(t, svc, "dash-owner")
 		if !errors.Is(err, sdk.ErrForbidden) {
 			t.Fatalf("want denied role permission, got %v", err)
@@ -200,12 +201,12 @@ func TestCheckPermissionRoleOwnershipDeniesWithoutAssignments(t *testing.T) {
 	t.Run("roles only", func(t *testing.T) {
 		st := memory.New(memory.WithGuardianPolicy(mutations.GuardianPolicy{}))
 		guard := &permissionGuard{permission: "publish"}
-		comps, err := New(Repositories{Roles: st.Roles(), Mutations: st.Mutations()}, WithRoleModel(roles), WithGuard(guard))
+		comps, err := New(Repositories{Tuples: st.Tuples(), Mutations: st.Mutations()}, WithModel(roles), WithGuard(guard))
 		if err != nil {
 			t.Fatalf("NewService: %v", err)
 		}
 		_, err = comps.Mutations.AssignRole(context.Background(), actor("dash-owner"), mutations.AssignRoleCommand{
-			ResourceType: "dashboard", ResourceID: "d1", Role: "publisher", Subject: authmodel.PrincipalRef{Type: "user", ID: "u2"},
+			Role: "publisher", Subject: authmodel.PrincipalRef{Type: "user", ID: "u2"}, Scope: tuples.On("dashboard", "d1"),
 		})
 		if !errors.Is(err, sdk.ErrForbidden) {
 			t.Fatalf("roles-only deployment must deny without a granting role, got %v", err)
@@ -214,12 +215,12 @@ func TestCheckPermissionRoleOwnershipDeniesWithoutAssignments(t *testing.T) {
 	t.Run("roles only, undeclared pair", func(t *testing.T) {
 		st := memory.New(memory.WithGuardianPolicy(mutations.GuardianPolicy{}))
 		guard := &permissionGuard{permission: "manage"}
-		comps, err := New(Repositories{Roles: st.Roles(), Mutations: st.Mutations()}, WithRoleModel(roles), WithGuard(guard))
+		comps, err := New(Repositories{Tuples: st.Tuples(), Mutations: st.Mutations()}, WithModel(roles), WithGuard(guard))
 		if err != nil {
 			t.Fatalf("NewService: %v", err)
 		}
 		_, err = comps.Mutations.AssignRole(context.Background(), actor("dash-owner"), mutations.AssignRoleCommand{
-			ResourceType: "dashboard", ResourceID: "d1", Role: "publisher", Subject: authmodel.PrincipalRef{Type: "user", ID: "u2"},
+			Role: "publisher", Subject: authmodel.PrincipalRef{Type: "user", ID: "u2"}, Scope: tuples.On("dashboard", "d1"),
 		})
 		if !errors.Is(err, sdk.ErrForbidden) || guard.checkErr != nil || guard.allowed {
 			t.Fatalf("undeclared pair must deny: err=%v, check=%v, allowed=%v", err, guard.checkErr, guard.allowed)
@@ -231,7 +232,7 @@ func TestCheckPermissionRejectsMalformedInput(t *testing.T) {
 	t.Run("empty resource type", func(t *testing.T) {
 		subj := authmodel.Resource{ID: "u1"}
 		guard := &permissionGuard{permission: "manage", scope: &subj}
-		svc, st := newTenancyHost(t, guard, WithRelationshipModel(tenancyModel()))
+		svc, st := newTenancyHost(t, guard, WithModel(tenancyModel()))
 		_, err := grantViewer(t, svc, "dash-owner")
 		if !errors.Is(err, sdk.ErrInvalidInput) {
 			t.Fatalf("want ErrInvalidRequest, got %v", err)
@@ -240,7 +241,7 @@ func TestCheckPermissionRejectsMalformedInput(t *testing.T) {
 	})
 	t.Run("empty permission", func(t *testing.T) {
 		guard := &permissionGuard{permission: ""}
-		svc, st := newTenancyHost(t, guard, WithRelationshipModel(tenancyModel()))
+		svc, st := newTenancyHost(t, guard, WithModel(tenancyModel()))
 		_, err := grantViewer(t, svc, "dash-owner")
 		if !errors.Is(err, sdk.ErrInvalidInput) {
 			t.Fatalf("want invalid input, got %v", err)
@@ -267,7 +268,7 @@ func TestCheckPermissionBudgetErrorsPropagateWithoutWrites(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			guard := &permissionGuard{permission: "manage"}
-			svc, st := newTenancyHost(t, guard, WithRelationshipModel(tenancyModel()), WithLimits(tc.limits))
+			svc, st := newTenancyHost(t, guard, WithModel(tenancyModel()), WithLimits(tc.limits))
 			_, err := grantViewer(t, svc, tc.who)
 			if !errors.Is(err, authmodel.ErrEvaluationLimit) || !errors.Is(err, sdk.ErrUnavailable) {
 				t.Fatalf("want ErrEvaluationLimit (unavailable), got %v", err)
@@ -286,7 +287,7 @@ func TestCheckPermissionBudgetErrorsPropagateWithoutWrites(t *testing.T) {
 func TestCheckPermissionMatchesReadSideCheck(t *testing.T) {
 	for _, who := range []string{"dash-owner", "space-manager", "tenant-owner", "group-admin", "stranger", "reader"} {
 		guard := &permissionGuard{permission: "manage"}
-		svc, _ := newTenancyHost(t, guard, WithRelationshipModel(tenancyModel()))
+		svc, _ := newTenancyHost(t, guard, WithModel(tenancyModel()))
 		want, err := svc.Decisions.Check(context.Background(), authmodel.CheckRequest{
 			Principal: authmodel.PrincipalRef{Type: "user", ID: who}, Permission: "manage", Resource: authmodel.Resource{Type: "dashboard", ID: "d1"},
 		})

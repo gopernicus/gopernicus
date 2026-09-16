@@ -7,7 +7,6 @@ import (
 	"testing"
 
 	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
-	"github.com/gopernicus/gopernicus/pockets/authorization"
 	"github.com/gopernicus/gopernicus/pockets/authorization/stores/storetest"
 )
 
@@ -15,7 +14,7 @@ func TestTupleCacheLiveSnapshots(t *testing.T) {
 	url, token := requireTursoEnv(t)
 	db := openAndMigrate(t, url, token)
 	ctx := context.Background()
-	data, err := CacheMigrationsFS.ReadFile(CacheMigrationsDir + "/0002_iam_tuple_cache.sql")
+	data, err := TupleCacheMigrationsFS.ReadFile(TupleCacheMigrationsDir + "/0002_iam_tuple_cache.sql")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -24,7 +23,7 @@ func TestTupleCacheLiveSnapshots(t *testing.T) {
 	}
 	t.Cleanup(func() {
 		for _, op := range []string{"insert", "delete", "update"} {
-			if _, err := db.Exec(ctx, "DROP TRIGGER iam_relationships_tuple_"+op); err != nil {
+			if _, err := db.Exec(ctx, "DROP TRIGGER iam_tuples_tuple_"+op); err != nil {
 				t.Error(err)
 			}
 		}
@@ -33,9 +32,9 @@ func TestTupleCacheLiveSnapshots(t *testing.T) {
 		}
 
 	})
-	storetest.RunReadSnapshots(t, func(t *testing.T) authorization.Repositories {
+	storetest.RunReadSnapshots(t, func(t *testing.T) storetest.Repositories {
 		truncate(t, db)
-		repos, err := Repositories(ctx, db, WithTupleCache())
+		repos, err := testRepositories(ctx, db, WithTupleCache())
 		if err != nil {
 			t.Fatal(err)
 		}

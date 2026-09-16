@@ -1,0 +1,1999 @@
+{
+  "date": "2026-09-15",
+  "status": "implemented and verified; uncommitted and unreleased",
+  "branch": "main",
+  "starting_head": "1e1308733cd8c23995497134052b2ef16c1f5b30",
+  "scope": "authorization cleanup and fresh PostgreSQL/SQLite migrations",
+  "workspace_module_count": 42,
+  "checks": [
+    {
+      "command": "env -i PATH=\"$PATH\" HOME=\"$HOME\" TMPDIR=\"${TMPDIR:-/tmp}\" GOCACHE=/tmp/gopernicus-authorization-hardening/cache GOENV=off GOPROXY=off GOTOOLCHAIN=local make check",
+      "result": "passed",
+      "output_tail": [
+        "== guard: no authentication producer calls a provider on the request path (AV3D-2.4) ==",
+        "== guard: authorization owns no bespoke jobs/delivery table/repository (AZ3-5.3) ==",
+        "== guard: authorization roles imports no relationship, decision or cache engine (G19) ==",
+        "== guard: ui/* implementations import no pockets/integrations/examples/workshop ==",
+        "== guard: ui/* go.mod requires only templ + sdk, and never imports pockets (G5 analogue) ==",
+        "== guard: the retired features/ tier vocabulary never returns (G20) ==",
+        "== guard: sdk/pkg/list never imports net/http (G21) ==",
+        "== guard: sdk.Violation messages never wrap a raw error string (G23) ==",
+        "== guard: firestore store adapters issue I/O only through the connector's Reader/Writer (G24) ==",
+        "== guard: pocket domain and logic are transport independent ==",
+        "ok  \tgithub.com/gopernicus/gopernicus/workshop/gopernicus/internal/commands\t0.249s",
+        "== guard: authorization tuple vocabulary imports no authorization consumer (G26) ==",
+        "== guard: authorization decisions imports no mutation layer (G27) ==",
+        "all checks passed"
+      ]
+    },
+    {
+      "command": "env -i PATH=\"$PATH\" HOME=\"$HOME\" TMPDIR=\"${TMPDIR:-/tmp}\" GOCACHE=/tmp/gopernicus-authorization-hardening/cache GOENV=off GOPROXY=off GOTOOLCHAIN=local go test -race ./...",
+      "cwd": "pockets/authorization",
+      "result": "passed; independently repeated uncached in owned runner"
+    },
+    {
+      "command": "go build ./...; go test ./...; go vet ./...",
+      "cwd": [
+        "pockets/authorization/stores/pgx",
+        "pockets/authorization/stores/turso"
+      ],
+      "result": "passed in sanitized offline environment; live PostgreSQL subsequently verified by owned runner"
+    },
+    {
+      "command": "env -i PATH=\"$PATH\" HOME=\"$HOME\" TMPDIR=\"${TMPDIR:-/tmp}\" PYTHONDONTWRITEBYTECODE=1 python3 -B -m unittest discover -s .github/scripts -p test_authorization_cache_verify.py",
+      "result": "12 passed",
+      "output": "............\n----------------------------------------------------------------------\nRan 12 tests in 1.129s\n\nOK\n{\"mode\": \"all\", \"status\": \"failed\", \"coverage\": \"owned local canonical SQL/Redis/HTTP suites; remote Turso unverified\", \"error\": \"injected\", \"cleanup\": \"passed\"}\n",
+      "note": "The printed injected failure is an intentional cleanup-safety test."
+    },
+    {
+      "command": "pnpm run typecheck; pnpm run build",
+      "cwd": "workshop/documentation",
+      "result": "passed",
+      "output": "$ docusaurus build\n[INFO] [en] Creating an optimized production build...\n[webpackbar] \u2139 Compiling Client\n[webpackbar] \u2139 Compiling Server\n[webpackbar] \u2714 Server: Compiled successfully in 522.34ms\n[webpackbar] \u2714 Client: Compiled successfully in 684.92ms\n[SUCCESS] Generated static files in \"build\".\n[INFO] Use `npm run serve` command to test your build locally.\n\u250c\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2510\n\u2502           @docusaurus/core update check failed            \u2502\n\u2502            Try running with sudo or get access            \u2502\n\u2502           to the local update config store via            \u2502\n\u2502 sudo chown -R $USER:$(id -gn $USER) /Users/jrazmi/.config \u2502\n\u2514\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2518\n",
+      "note": "Optional Docusaurus update-config write unavailable; production documentation build succeeded."
+    },
+    {
+      "command": "goimports -l [changed Go files]; git diff --check; shasum -a 256 -c /tmp/gopernicus-authorization-unified-tuples/owner-files.sha256",
+      "result": "passed"
+    }
+  ],
+  "owned_verification": {
+    "command": "python3 -B .github/scripts/authorization_cache_verify.py --mode all --postgres-bin /opt/homebrew/opt/postgresql@17/bin --report /tmp/gopernicus-authorization-cleanup/owned-verification.json",
+    "status": "passed",
+    "cleanup": "passed",
+    "source_sha256": "8dc2ecf09710312761ab4a7837ae87aeefd8bf0c5499c7631214c9c2a7021d56",
+    "postgres_version": "17.4",
+    "locale": "en_US.UTF-8",
+    "suites": [
+      {
+        "suite": "integrations/datastores/pgxdb",
+        "schema": "authorization_named",
+        "passed": 301,
+        "skipped": []
+      },
+      {
+        "suite": "pockets/authorization",
+        "schema": "authorization_named",
+        "passed": 1275,
+        "skipped": [
+          null,
+          "TestTransactional"
+        ]
+      },
+      {
+        "suite": "pockets/authorization/stores/pgx",
+        "schema": "public",
+        "passed": 553,
+        "skipped": []
+      },
+      {
+        "suite": "pockets/authorization/stores/pgx",
+        "schema": "authorization_named",
+        "passed": 553,
+        "skipped": []
+      },
+      {
+        "suite": "pockets/authorization/stores/turso",
+        "schema": "authorization_named",
+        "passed": 542,
+        "skipped": []
+      },
+      {
+        "suite": "pockets/authorization/stores/goredis",
+        "schema": "authorization_named",
+        "passed": 52,
+        "skipped": []
+      },
+      {
+        "suite": "examples/auth-cms",
+        "schema": "authorization_named",
+        "passed": 522,
+        "skipped": [
+          null,
+          null,
+          null
+        ]
+      }
+    ],
+    "required_behavior_passes": [
+      {
+        "command": [
+          "go",
+          "test",
+          "-json",
+          "-race",
+          "-count=1",
+          "./..."
+        ],
+        "passed": [
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/memory",
+            "test": "TestConformance/Tuples/RoleWrittenFactsParticipateInGraphAndLookup"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/memory",
+            "test": "TestConformance/Tuples/BulkExactSetsAndCanonicalCursor"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/memory",
+            "test": "TestConformance/Tuples/CanonicalQueryFiltersAndListingCursors/resource_only"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/memory",
+            "test": "TestConformance/Tuples/CanonicalQueryFiltersAndListingCursors/subject_type"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/memory",
+            "test": "TestConformance/Tuples/CanonicalQueryFiltersAndListingCursors/subject_id"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/memory",
+            "test": "TestConformance/Tuples/CanonicalQueryFiltersAndListingCursors/subject_pair_includes_usersets"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/memory",
+            "test": "TestConformance/Tuples/CanonicalQueryFiltersAndListingCursors/exact_subject"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/memory",
+            "test": "TestConformance/Tuples/CanonicalQueryFiltersAndListingCursors/combined_filters"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/memory",
+            "test": "TestConformance/Tuples/CanonicalQueryFiltersAndListingCursors/ASC"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/memory",
+            "test": "TestConformance/Tuples/CanonicalQueryFiltersAndListingCursors/DESC"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/memory",
+            "test": "TestConformance/Tuples/CanonicalQueryFiltersAndListingCursors"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/memory",
+            "test": "TestConformance/Tuples/AtomicValidationAndScopeDeletion"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/memory",
+            "test": "TestConformance/Tuples/SnapshotLifetime/success"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/memory",
+            "test": "TestConformance/Tuples/SnapshotLifetime/error"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/memory",
+            "test": "TestConformance/Tuples/SnapshotLifetime/cancel"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/memory",
+            "test": "TestConformance/Tuples/SnapshotLifetime/panic"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/memory",
+            "test": "TestConformance/Tuples/CompoundChecksRequireSnapshot"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/memory",
+            "test": "TestConformance/Tuples/ModelFreeAllUsesOneSnapshot"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/memory",
+            "test": "TestConformance/Tuples/ModelFreeAnyUsesOneSnapshot"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/memory",
+            "test": "TestConformance/Tuples/SnapshotCompletionErrorDiscardsAllow"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/memory",
+            "test": "TestConformance/Tuples"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/memory",
+            "test": "TestConformance/RelationshipFacades/OneAuthority"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/memory",
+            "test": "TestConformance/RelationshipFacades/FilteredPages"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/memory",
+            "test": "TestConformance/RelationshipFacades/RejectEmptySelectors"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/memory",
+            "test": "TestConformance/RelationshipFacades"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/memory",
+            "test": "TestLookupSnapshotLifecycle/lifetime/success"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/memory",
+            "test": "TestLookupSnapshotLifecycle/lifetime/error"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/memory",
+            "test": "TestLookupSnapshotLifecycle/lifetime/cancel"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/memory",
+            "test": "TestLookupSnapshotLifecycle/lifetime/panic"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/memory",
+            "test": "TestLookupSnapshotLifecycle/scope_and_invalid_calls"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/memory",
+            "test": "TestLookupSnapshotLifecycle"
+          }
+        ]
+      },
+      {
+        "command": [
+          "go",
+          "test",
+          "-json",
+          "-race",
+          "-count=1",
+          "./..."
+        ],
+        "passed": [
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx",
+            "test": "TestCanonicalConstructorsRejectPartialSchemas/partial_identity"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx",
+            "test": "TestCanonicalConstructorsRejectPartialSchemas/missing_column"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx",
+            "test": "TestCanonicalConstructorsRejectPartialSchemas/missing_scope_check"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx",
+            "test": "TestCanonicalConstructorsRejectPartialSchemas/unvalidated_check"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx",
+            "test": "TestCanonicalConstructorsRejectPartialSchemas/exclusive_label_index"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx",
+            "test": "TestCanonicalConstructorsRejectPartialSchemas/audit_missing_encoding"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx",
+            "test": "TestCanonicalConstructorsRejectPartialSchemas/audit_bad_source_check"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx",
+            "test": "TestCanonicalConstructorsRejectPartialSchemas/wrong_type"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx",
+            "test": "TestCanonicalConstructorsRejectPartialSchemas/nullable_relation"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx",
+            "test": "TestCanonicalConstructorsRejectPartialSchemas/wrong_collation"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx",
+            "test": "TestCanonicalConstructorsRejectPartialSchemas/same_name_permissive_check"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx",
+            "test": "TestCanonicalConstructorsRejectPartialSchemas/row_security"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx",
+            "test": "TestCanonicalConstructorsRejectPartialSchemas/audit_missing_encoding_check"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx",
+            "test": "TestCanonicalConstructorsRejectPartialSchemas/missing_primary_key"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx",
+            "test": "TestCanonicalConstructorsRejectPartialSchemas"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx",
+            "test": "TestCanonicalSQLRejectsWeakAmbientSnapshot"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx",
+            "test": "TestCollationControlsOrdering_NonC"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx",
+            "test": "TestConformance/Tuples/RoleWrittenFactsParticipateInGraphAndLookup"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx",
+            "test": "TestConformance/Tuples/BulkExactSetsAndCanonicalCursor"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx",
+            "test": "TestConformance/Tuples/CanonicalQueryFiltersAndListingCursors/resource_only"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx",
+            "test": "TestConformance/Tuples/CanonicalQueryFiltersAndListingCursors/subject_type"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx",
+            "test": "TestConformance/Tuples/CanonicalQueryFiltersAndListingCursors/subject_id"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx",
+            "test": "TestConformance/Tuples/CanonicalQueryFiltersAndListingCursors/subject_pair_includes_usersets"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx",
+            "test": "TestConformance/Tuples/CanonicalQueryFiltersAndListingCursors/exact_subject"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx",
+            "test": "TestConformance/Tuples/CanonicalQueryFiltersAndListingCursors/combined_filters"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx",
+            "test": "TestConformance/Tuples/CanonicalQueryFiltersAndListingCursors/ASC"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx",
+            "test": "TestConformance/Tuples/CanonicalQueryFiltersAndListingCursors/DESC"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx",
+            "test": "TestConformance/Tuples/CanonicalQueryFiltersAndListingCursors"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx",
+            "test": "TestConformance/Tuples/AtomicValidationAndScopeDeletion"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx",
+            "test": "TestConformance/Tuples/SnapshotLifetime/success"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx",
+            "test": "TestConformance/Tuples/SnapshotLifetime/error"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx",
+            "test": "TestConformance/Tuples/SnapshotLifetime/cancel"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx",
+            "test": "TestConformance/Tuples/SnapshotLifetime/panic"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx",
+            "test": "TestConformance/Tuples/CompoundChecksRequireSnapshot"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx",
+            "test": "TestConformance/Tuples/ModelFreeAllUsesOneSnapshot"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx",
+            "test": "TestConformance/Tuples/ModelFreeAnyUsesOneSnapshot"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx",
+            "test": "TestConformance/Tuples/SnapshotCompletionErrorDiscardsAllow"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx",
+            "test": "TestConformance/Tuples"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx",
+            "test": "TestConformance/RelationshipFacades/OneAuthority"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx",
+            "test": "TestConformance/RelationshipFacades/FilteredPages"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx",
+            "test": "TestConformance/RelationshipFacades/RejectEmptySelectors"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx",
+            "test": "TestConformance/RelationshipFacades"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx",
+            "test": "TestFreshCanonicalSchema"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx",
+            "test": "TestFreshCacheInstallationOrderAndRollback/LateCacheFailurePreservesAuthority"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx",
+            "test": "TestFreshCacheInstallationOrderAndRollback"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx",
+            "test": "TestCheckAmbient/commit=false"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx",
+            "test": "TestCheckAmbient/commit=true"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx",
+            "test": "TestCheckAmbient"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx",
+            "test": "TestLookupSnapshotLifecycle/lifetime/success"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx",
+            "test": "TestLookupSnapshotLifecycle/lifetime/error"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx",
+            "test": "TestLookupSnapshotLifecycle/lifetime/cancel"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx",
+            "test": "TestLookupSnapshotLifecycle/lifetime/panic"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx",
+            "test": "TestLookupSnapshotLifecycle/scope_and_invalid_calls"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx",
+            "test": "TestLookupSnapshotLifecycle"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx",
+            "test": "TestLookupAmbient/commit=false"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx",
+            "test": "TestLookupAmbient/commit=true"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx",
+            "test": "TestLookupAmbient"
+          }
+        ]
+      },
+      {
+        "command": [
+          "go",
+          "test",
+          "-json",
+          "-race",
+          "-count=1",
+          "./..."
+        ],
+        "passed": [
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx",
+            "test": "TestCanonicalConstructorsRejectPartialSchemas/audit_bad_source_check"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx",
+            "test": "TestCanonicalConstructorsRejectPartialSchemas/missing_primary_key"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx",
+            "test": "TestCanonicalConstructorsRejectPartialSchemas/partial_identity"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx",
+            "test": "TestCanonicalConstructorsRejectPartialSchemas/missing_column"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx",
+            "test": "TestCanonicalConstructorsRejectPartialSchemas/wrong_type"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx",
+            "test": "TestCanonicalConstructorsRejectPartialSchemas/nullable_relation"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx",
+            "test": "TestCanonicalConstructorsRejectPartialSchemas/wrong_collation"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx",
+            "test": "TestCanonicalConstructorsRejectPartialSchemas/same_name_permissive_check"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx",
+            "test": "TestCanonicalConstructorsRejectPartialSchemas/unvalidated_check"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx",
+            "test": "TestCanonicalConstructorsRejectPartialSchemas/missing_scope_check"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx",
+            "test": "TestCanonicalConstructorsRejectPartialSchemas/exclusive_label_index"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx",
+            "test": "TestCanonicalConstructorsRejectPartialSchemas/row_security"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx",
+            "test": "TestCanonicalConstructorsRejectPartialSchemas/audit_missing_encoding"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx",
+            "test": "TestCanonicalConstructorsRejectPartialSchemas/audit_missing_encoding_check"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx",
+            "test": "TestCanonicalConstructorsRejectPartialSchemas"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx",
+            "test": "TestCanonicalSQLRejectsWeakAmbientSnapshot"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx",
+            "test": "TestCollationControlsOrdering_NonC"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx",
+            "test": "TestConformance/Tuples/RoleWrittenFactsParticipateInGraphAndLookup"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx",
+            "test": "TestConformance/Tuples/BulkExactSetsAndCanonicalCursor"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx",
+            "test": "TestConformance/Tuples/CanonicalQueryFiltersAndListingCursors/resource_only"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx",
+            "test": "TestConformance/Tuples/CanonicalQueryFiltersAndListingCursors/subject_type"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx",
+            "test": "TestConformance/Tuples/CanonicalQueryFiltersAndListingCursors/subject_id"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx",
+            "test": "TestConformance/Tuples/CanonicalQueryFiltersAndListingCursors/subject_pair_includes_usersets"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx",
+            "test": "TestConformance/Tuples/CanonicalQueryFiltersAndListingCursors/exact_subject"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx",
+            "test": "TestConformance/Tuples/CanonicalQueryFiltersAndListingCursors/combined_filters"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx",
+            "test": "TestConformance/Tuples/CanonicalQueryFiltersAndListingCursors/ASC"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx",
+            "test": "TestConformance/Tuples/CanonicalQueryFiltersAndListingCursors/DESC"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx",
+            "test": "TestConformance/Tuples/CanonicalQueryFiltersAndListingCursors"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx",
+            "test": "TestConformance/Tuples/AtomicValidationAndScopeDeletion"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx",
+            "test": "TestConformance/Tuples/SnapshotLifetime/success"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx",
+            "test": "TestConformance/Tuples/SnapshotLifetime/error"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx",
+            "test": "TestConformance/Tuples/SnapshotLifetime/cancel"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx",
+            "test": "TestConformance/Tuples/SnapshotLifetime/panic"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx",
+            "test": "TestConformance/Tuples/CompoundChecksRequireSnapshot"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx",
+            "test": "TestConformance/Tuples/ModelFreeAllUsesOneSnapshot"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx",
+            "test": "TestConformance/Tuples/ModelFreeAnyUsesOneSnapshot"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx",
+            "test": "TestConformance/Tuples/SnapshotCompletionErrorDiscardsAllow"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx",
+            "test": "TestConformance/Tuples"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx",
+            "test": "TestConformance/RelationshipFacades/OneAuthority"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx",
+            "test": "TestConformance/RelationshipFacades/FilteredPages"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx",
+            "test": "TestConformance/RelationshipFacades/RejectEmptySelectors"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx",
+            "test": "TestConformance/RelationshipFacades"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx",
+            "test": "TestFreshCanonicalSchema"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx",
+            "test": "TestFreshCacheInstallationOrderAndRollback/LateCacheFailurePreservesAuthority"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx",
+            "test": "TestFreshCacheInstallationOrderAndRollback"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx",
+            "test": "TestCheckAmbient/commit=false"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx",
+            "test": "TestCheckAmbient/commit=true"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx",
+            "test": "TestCheckAmbient"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx",
+            "test": "TestLookupSnapshotLifecycle/lifetime/success"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx",
+            "test": "TestLookupSnapshotLifecycle/lifetime/error"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx",
+            "test": "TestLookupSnapshotLifecycle/lifetime/cancel"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx",
+            "test": "TestLookupSnapshotLifecycle/lifetime/panic"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx",
+            "test": "TestLookupSnapshotLifecycle/scope_and_invalid_calls"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx",
+            "test": "TestLookupSnapshotLifecycle"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx",
+            "test": "TestLookupAmbient/commit=false"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx",
+            "test": "TestLookupAmbient/commit=true"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx",
+            "test": "TestLookupAmbient"
+          }
+        ]
+      },
+      {
+        "command": [
+          "go",
+          "test",
+          "-json",
+          "-race",
+          "-count=1",
+          "-tags=integration",
+          "./..."
+        ],
+        "passed": [
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/turso",
+            "test": "TestCanonicalConstructorsRejectPartialSchemas/missing_primary_key"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/turso",
+            "test": "TestCanonicalConstructorsRejectPartialSchemas/partial_identity"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/turso",
+            "test": "TestCanonicalConstructorsRejectPartialSchemas/missing_column"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/turso",
+            "test": "TestCanonicalConstructorsRejectPartialSchemas/wrong_type"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/turso",
+            "test": "TestCanonicalConstructorsRejectPartialSchemas/nullable_column"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/turso",
+            "test": "TestCanonicalConstructorsRejectPartialSchemas/wrong_collation"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/turso",
+            "test": "TestCanonicalConstructorsRejectPartialSchemas/permissive_refs"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/turso",
+            "test": "TestCanonicalConstructorsRejectPartialSchemas/permissive_scope"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/turso",
+            "test": "TestCanonicalConstructorsRejectPartialSchemas/audit_encoding_check"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/turso",
+            "test": "TestCanonicalConstructorsRejectPartialSchemas/audit_source_check"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/turso",
+            "test": "TestCanonicalConstructorsRejectPartialSchemas/exclusive_label_index"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/turso",
+            "test": "TestCanonicalConstructorsRejectPartialSchemas"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/turso",
+            "test": "TestConformance/Tuples/RoleWrittenFactsParticipateInGraphAndLookup"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/turso",
+            "test": "TestConformance/Tuples/BulkExactSetsAndCanonicalCursor"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/turso",
+            "test": "TestConformance/Tuples/CanonicalQueryFiltersAndListingCursors/resource_only"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/turso",
+            "test": "TestConformance/Tuples/CanonicalQueryFiltersAndListingCursors/subject_type"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/turso",
+            "test": "TestConformance/Tuples/CanonicalQueryFiltersAndListingCursors/subject_id"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/turso",
+            "test": "TestConformance/Tuples/CanonicalQueryFiltersAndListingCursors/subject_pair_includes_usersets"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/turso",
+            "test": "TestConformance/Tuples/CanonicalQueryFiltersAndListingCursors/exact_subject"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/turso",
+            "test": "TestConformance/Tuples/CanonicalQueryFiltersAndListingCursors/combined_filters"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/turso",
+            "test": "TestConformance/Tuples/CanonicalQueryFiltersAndListingCursors/ASC"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/turso",
+            "test": "TestConformance/Tuples/CanonicalQueryFiltersAndListingCursors/DESC"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/turso",
+            "test": "TestConformance/Tuples/CanonicalQueryFiltersAndListingCursors"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/turso",
+            "test": "TestConformance/Tuples/AtomicValidationAndScopeDeletion"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/turso",
+            "test": "TestConformance/Tuples/SnapshotLifetime/success"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/turso",
+            "test": "TestConformance/Tuples/SnapshotLifetime/error"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/turso",
+            "test": "TestConformance/Tuples/SnapshotLifetime/cancel"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/turso",
+            "test": "TestConformance/Tuples/SnapshotLifetime/panic"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/turso",
+            "test": "TestConformance/Tuples/CompoundChecksRequireSnapshot"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/turso",
+            "test": "TestConformance/Tuples/ModelFreeAllUsesOneSnapshot"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/turso",
+            "test": "TestConformance/Tuples/ModelFreeAnyUsesOneSnapshot"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/turso",
+            "test": "TestConformance/Tuples/SnapshotCompletionErrorDiscardsAllow"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/turso",
+            "test": "TestConformance/Tuples"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/turso",
+            "test": "TestConformance/RelationshipFacades/OneAuthority"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/turso",
+            "test": "TestConformance/RelationshipFacades/FilteredPages"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/turso",
+            "test": "TestConformance/RelationshipFacades/RejectEmptySelectors"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/turso",
+            "test": "TestConformance/RelationshipFacades"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/turso",
+            "test": "TestFreshCanonicalSchema"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/turso",
+            "test": "TestFreshCacheInstallationOrderAndRollback/LateCacheFailurePreservesAuthority"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/turso",
+            "test": "TestFreshCacheInstallationOrderAndRollback"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/turso",
+            "test": "TestCheckAmbient/commit=false"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/turso",
+            "test": "TestCheckAmbient/commit=true"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/turso",
+            "test": "TestCheckAmbient"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/turso",
+            "test": "TestLookupSnapshotLifecycle/lifetime/success"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/turso",
+            "test": "TestLookupSnapshotLifecycle/lifetime/error"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/turso",
+            "test": "TestLookupSnapshotLifecycle/lifetime/cancel"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/turso",
+            "test": "TestLookupSnapshotLifecycle/lifetime/panic"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/turso",
+            "test": "TestLookupSnapshotLifecycle/scope_and_invalid_calls"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/turso",
+            "test": "TestLookupSnapshotLifecycle"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/turso",
+            "test": "TestLookupAmbient/commit=false"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/turso",
+            "test": "TestLookupAmbient/commit=true"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/turso",
+            "test": "TestLookupAmbient"
+          }
+        ]
+      },
+      {
+        "command": [
+          "go",
+          "test",
+          "-json",
+          "-race",
+          "-count=1",
+          "-tags=integration",
+          "./..."
+        ],
+        "passed": [
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/goredis",
+            "test": "TestSQLRedisDeliveryRecovery/sqlite"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/goredis",
+            "test": "TestSQLRedisDeliveryRecovery/postgres"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/goredis",
+            "test": "TestSQLRedisDeliveryRecovery"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/goredis",
+            "test": "TestSQLRedisModelFreeRoleReads/sqlite"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/goredis",
+            "test": "TestSQLRedisModelFreeRoleReads/postgres"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/goredis",
+            "test": "TestSQLRedisModelFreeRoleReads"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/goredis",
+            "test": "TestSQLRedisEventOrderPreservesFinalRevocation/sqlite"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/goredis",
+            "test": "TestSQLRedisEventOrderPreservesFinalRevocation/postgres"
+          },
+          {
+            "package": "github.com/gopernicus/gopernicus/pockets/authorization/stores/goredis",
+            "test": "TestSQLRedisEventOrderPreservesFinalRevocation"
+          }
+        ]
+      }
+    ],
+    "raw_report_sha256": "58ef7335ca39a6c37391467e9f911b39012b7c42a4da57ad891c105abb03b7b1"
+  },
+  "public_consumer": {
+    "command": "env -i PATH=\"$PATH\" HOME=\"$HOME\" TMPDIR=\"${TMPDIR:-/tmp}\" GOCACHE=/tmp/gopernicus-authorization-hardening/cache GOWORK=off GOENV=off GOPROXY=off GOTOOLCHAIN=local go run .",
+    "result": "passed",
+    "source": "package main\nimport (\n \"context\"\n \"encoding/json\"\n \"os\"\n\n \"github.com/gopernicus/gopernicus/pockets/authorization\"\n \"github.com/gopernicus/gopernicus/pockets/authorization/logic/decisions\"\n \"github.com/gopernicus/gopernicus/pockets/authorization/logic/model\"\n \"github.com/gopernicus/gopernicus/pockets/authorization/logic/relationships\"\n \"github.com/gopernicus/gopernicus/pockets/authorization/logic/roles\"\n \"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuples\"\n \"github.com/gopernicus/gopernicus/pockets/authorization/stores/memory\"\n)\nfunc must(err error) {if err !=nil {panic(err)}}\nfunc main(){\n ctx:=context.Background()\n authority:=memory.NewTuples()\n policy:=decisions.Model{ResourceTypes:map[string]decisions.ResourceTypeDef{\"doc\":{\n Relations:map[string]decisions.RelationDef{\"viewer\":{AllowedSubjects:[]decisions.SubjectTypeRef{{Type:\"user\"}}}},\n Permissions:map[string]decisions.Expression{\"view\":decisions.All(decisions.RoleIn(\"owner\"), decisions.Direct(\"viewer\"))},\n }}}\n c,err:=authorization.New(authorization.Repositories{Tuples:authority},authorization.WithModel(policy));must(err)\n owner:=roles.Assignment{SubjectType:\"user\",SubjectID:\"alice\",Role:\"owner\",Scope:tuples.On(\"doc\",\"d\")}\n must(c.RoleWriter.AssignRole(ctx,owner))\n must(c.RelationshipWriter.CreateRelationships(ctx,[]relationships.CreateRelationship{{ResourceType:\"doc\",ResourceID:\"d\",Relation:\"viewer\",SubjectType:\"user\",SubjectID:\"alice\"}}))\n req:=model.CheckRequest{Principal:model.PrincipalRef{Type:\"user\",ID:\"alice\"},Permission:\"view\",Resource:model.Resource{Type:\"doc\",ID:\"d\"}}\n result,err:=c.Decisions.Check(ctx,req);must(err);if !result.Allowed{panic(\"shared authority denied\")}\n var after *tuples.Tuple; var all []tuples.Tuple\n for {page,err:=authority.Lookup(ctx,tuples.Query{After:after,Limit:1});must(err);if len(page)==0{break};if after!=nil&&tuples.Compare(*after,page[0])>=0{panic(\"unordered continuation\")};all=append(all,page[0]);last:=page[len(page)-1];after=&last}\n if len(all)!=2{panic(\"incomplete raw pagination\")}\n must(c.RoleWriter.UnassignRole(ctx,roles.Assignment{SubjectType:\"user\",SubjectID:\"alice\",Role:\"viewer\",Scope:tuples.On(\"doc\",\"d\")}))\n revoked,err:=c.Decisions.Check(ctx,req);must(err);if revoked.Allowed{panic(\"revocation invisible\")}\n must(json.NewEncoder(os.Stdout).Encode(map[string]any{\"public_typed_pagination\":len(all),\"mixed_decision_allowed\":result.Allowed,\"role_revoke_visible_to_relationship_decision\":!revoked.Allowed,\"private_imports\":false}))\n}\n",
+    "go_mod": "module example.com/authorization-consumer\n\ngo 1.26.1\n\nrequire (\n github.com/gopernicus/gopernicus/pockets/authorization v0.0.0\n github.com/gopernicus/gopernicus/pockets v0.1.0\n github.com/gopernicus/gopernicus/sdk v0.9.0\n)\nreplace github.com/gopernicus/gopernicus/pockets/authorization => /Users/jrazmi/code/gopernicus-ecosystem/gopernicus/pockets/authorization\nreplace github.com/gopernicus/gopernicus/pockets => /Users/jrazmi/code/gopernicus-ecosystem/gopernicus/pockets\nreplace github.com/gopernicus/gopernicus/sdk => /Users/jrazmi/code/gopernicus-ecosystem/gopernicus/sdk\n",
+    "output": {
+      "mixed_decision_allowed": true,
+      "private_imports": false,
+      "public_typed_pagination": 2,
+      "role_revoke_visible_to_relationship_decision": true
+    }
+  },
+  "limits": [
+    "Remote Turso was not run; local SQLite exercises the Turso adapter.",
+    "Memory TestTransactional intentionally skipped: memory has no host transaction.Transactor; null skip entries are packages without tests.",
+    "Prior 106-case benchmark samples are historical; no new performance measurements made.",
+    "Earlier sandbox-only socket/cache-permission failures were resolved with sanitized local verification invocations.",
+    "No application database, commit, tag, deployment or publication changed."
+  ],
+  "changed_files": [
+    {
+      "path": ".github/scripts/__pycache__/authorization_cache_verify.cpython-312.pyc",
+      "status": "added",
+      "sha256": "2cc8bb121c9549f030ddbb9c117bc561f79367aa6288bf487f480dedf9f07978"
+    },
+    {
+      "path": ".github/scripts/__pycache__/test_authorization_cache_verify.cpython-312.pyc",
+      "status": "added",
+      "sha256": "db6826e4cb7f46c54632f59b041f03fc58671495dc0538ad53cb262e2887e672"
+    },
+    {
+      "path": ".github/scripts/authorization_cache_verify.py",
+      "status": "modified",
+      "sha256": "fc23da24cd23f03c2124ed985b2a1f13f0e91cd02b55f90f9865eee2c585bef4"
+    },
+    {
+      "path": "ARCHITECTURE.md",
+      "status": "modified",
+      "sha256": "aae356ce22ff6f0e445e2992e12d330ed416c254f23d1bae0a4115df7c7ca2f6"
+    },
+    {
+      "path": "AUDIT.md",
+      "status": "modified",
+      "sha256": "80ab7ac081d1cfa4b22b926011251722c19c7777c91de0f9eefea27964d18fe6"
+    },
+    {
+      "path": "RELEASING.md",
+      "status": "modified",
+      "sha256": "aaad54e91f3954da3e129196cfe7219c46a6c7cbd082415555da173405c6a35b"
+    },
+    {
+      "path": "examples/auth-cms/cmd/server/authorization.go",
+      "status": "modified",
+      "sha256": "ee56902f3279c3106fa1af49ef896c7612a1d313842845a92fad886765684fb2"
+    },
+    {
+      "path": "examples/auth-cms/cmd/server/authorization_test.go",
+      "status": "modified",
+      "sha256": "894fa6ef83cfc80371de1db7a57e2aefcb1a8ee96d4723b2e10d1a8df58524bd"
+    },
+    {
+      "path": "examples/auth-cms/cmd/server/az3_proof_protocol_test.go",
+      "status": "modified",
+      "sha256": "1c02e792c2c3ee242d51cce6a1363e3e7f096ef9009a94293c5e8765bd5b023e"
+    },
+    {
+      "path": "examples/auth-cms/internal/outbound/domains/documents/listing_test.go",
+      "status": "modified",
+      "sha256": "89c67b775fe1453ec84bda5f8285a79f4f022ce57f1f278bb341065731e2d11e"
+    },
+    {
+      "path": "examples/auth-cms/internal/outbound/domains/documents/postgres_test.go",
+      "status": "modified",
+      "sha256": "fa048f7c6930ddb62a2a5ff4314bc78642207c9e097428f931fa06c13ef30b11"
+    },
+    {
+      "path": "plans/authorization-cleanup.md",
+      "status": "added",
+      "sha256": "afceae75b5ffdf94f3afee53f84e92153742236ed07196785aa34dcf9a0abae2"
+    },
+    {
+      "path": "pockets/authorization/BENCHMARKS.md",
+      "status": "modified",
+      "sha256": "337de22aa1c87ca52827ad3efc4c7b5f4c2dae89802e31eda5eec6f42714d91e"
+    },
+    {
+      "path": "pockets/authorization/README.md",
+      "status": "modified",
+      "sha256": "77d8e2a3ccd47624539cded32ffce045d8aeb19f3fde7cdac9ce0344300d1701"
+    },
+    {
+      "path": "pockets/authorization/audit_test.go",
+      "status": "modified",
+      "sha256": "7eb48c9cd2919a5ee07871ceb72355fcb59e1f19b61299f38cb32cc214d83ae4"
+    },
+    {
+      "path": "pockets/authorization/authorization_test.go",
+      "status": "modified",
+      "sha256": "486cdb119857ada7a36241d82e77c4c426c228d4f6f0c1fc613e0090b636d0d1"
+    },
+    {
+      "path": "pockets/authorization/canonical_composition_test.go",
+      "status": "modified",
+      "sha256": "f4da7a1cca0cf25bd62dd527ba6e99517f08bb2a1e5ff01a6c3ed36ac138098a"
+    },
+    {
+      "path": "pockets/authorization/config.go",
+      "status": "modified",
+      "sha256": "f709ed25eb068a3d90fcb49fce6464a8615fc107c65f5916ed6b043a04823508"
+    },
+    {
+      "path": "pockets/authorization/constructor.go",
+      "status": "modified",
+      "sha256": "8ca359eae8a6e33fc8e670a2bf1aa9d1eb6fdd3ca3490d97c5511c5dc2a5ce35"
+    },
+    {
+      "path": "pockets/authorization/constructor_options_test.go",
+      "status": "modified",
+      "sha256": "1e716b45c815cc15e4737c7c8abcd7442fcb2935af9ca834114e60a76e7db752"
+    },
+    {
+      "path": "pockets/authorization/constructor_policy_test.go",
+      "status": "modified",
+      "sha256": "9e1885ae7bed2a966dca0ccb0df2b206c028185d220b9fc80cfdbbf862a13d77"
+    },
+    {
+      "path": "pockets/authorization/inbound/http/adapter_gates.go",
+      "status": "modified",
+      "sha256": "f69661dfdc1b520b950350ef447ed971570083eece5dd3b5726b2a58b4622eed"
+    },
+    {
+      "path": "pockets/authorization/inbound/http/composite_middleware_test.go",
+      "status": "modified",
+      "sha256": "e4194bce9b14e363aee005dc4374f08cf9589932947513d5d6e940015c807668"
+    },
+    {
+      "path": "pockets/authorization/inbound/http/fixture_test.go",
+      "status": "modified",
+      "sha256": "671f0a7072ffa3c1ff79e5dd2bee9745bdfec98cff3a872ab631dc788b63bfe9"
+    },
+    {
+      "path": "pockets/authorization/inbound/http/middleware.go",
+      "status": "modified",
+      "sha256": "047590d7deb3f95970cfd52a762c39469e8c8b3ae0fe4f0a414823ac07f18c64"
+    },
+    {
+      "path": "pockets/authorization/internal/tuplekey/key.go",
+      "status": "modified",
+      "sha256": "a8a0d29d630b850f50c662199b0c788561654464403d6c2012849523ce04dd3f"
+    },
+    {
+      "path": "pockets/authorization/internal/tuplekey/key_test.go",
+      "status": "modified",
+      "sha256": "8cca9e5718352505111cbedda1ec612bf91976782947c8eab897e3318c8d51ff"
+    },
+    {
+      "path": "pockets/authorization/logic/audit/audit.go",
+      "status": "modified",
+      "sha256": "114c39e4c50fa54e8d0e753ed160c656cd414c294ebc0fe5e45f6d092e42aeaf"
+    },
+    {
+      "path": "pockets/authorization/logic/decisions/budget_test.go",
+      "status": "modified",
+      "sha256": "cbb0e7deef5e4006daad6652874fc409b2b700cada25e904f6ab9a651d401db5"
+    },
+    {
+      "path": "pockets/authorization/logic/decisions/compiled_model.go",
+      "status": "modified",
+      "sha256": "a99559f83159cd571cfe5afecf090f13c46a32565e1e65d6034f391958f3de9f"
+    },
+    {
+      "path": "pockets/authorization/logic/decisions/compiler.go",
+      "status": "modified",
+      "sha256": "9a5cd94dd623a0311a534e9aab84f2011537dc1425738e58f4bdbcba78fd6943"
+    },
+    {
+      "path": "pockets/authorization/logic/decisions/evaluate.go",
+      "status": "modified",
+      "sha256": "59f8fc22f2d7cf8615e7e4a4f6c1f495db32b2c88d12b0afab52683d37eac29b"
+    },
+    {
+      "path": "pockets/authorization/logic/decisions/expression.go",
+      "status": "modified",
+      "sha256": "70e67b9b0315652d0692e0c1dfbf7e48a5fe65e2a560a9de27f958c717b5e6db"
+    },
+    {
+      "path": "pockets/authorization/logic/decisions/expression_lookup.go",
+      "status": "modified",
+      "sha256": "bb2b48ee36bab502ef28a6e28b229b6c1f8aa0264a13ac5f161b5758cba9781a"
+    },
+    {
+      "path": "pockets/authorization/logic/decisions/expression_test.go",
+      "status": "modified",
+      "sha256": "64c87738b96dc404c87d6abd0eea7a8fd97ffb1800f86b37e2cec260200f76bf"
+    },
+    {
+      "path": "pockets/authorization/logic/decisions/graph_check_operation_test.go",
+      "status": "modified",
+      "sha256": "24d753d8057e43d5ca8cf29d911191d08e1bb59e8d7ad5536b83e652502a05cf"
+    },
+    {
+      "path": "pockets/authorization/logic/decisions/graph_fixture_test.go",
+      "status": "modified",
+      "sha256": "944589a8af6e99576ae3548a2c760d639caab99f2325cc729eadcc14dc352b58"
+    },
+    {
+      "path": "pockets/authorization/logic/decisions/graph_lookup_operation_test.go",
+      "status": "modified",
+      "sha256": "dfe22502bbcf93eea7d43eebd2ad6d14c1509bde96640cc7d25697f8559bf3dd"
+    },
+    {
+      "path": "pockets/authorization/logic/decisions/graph_wiring_immutable_test.go",
+      "status": "modified",
+      "sha256": "95fba1fb96c0f186773ffcb356dba657b08cc2512fb90408bae2d28bf20e5fb0"
+    },
+    {
+      "path": "pockets/authorization/logic/decisions/hierarchy_test.go",
+      "status": "modified",
+      "sha256": "78685ea01991267cc5870d116a0ae007c3b31cecfb000e23988d89f5cb1ace13"
+    },
+    {
+      "path": "pockets/authorization/logic/decisions/userset_test.go",
+      "status": "modified",
+      "sha256": "31d62b86678683250dc97b9ea775739994061957a969c76613d75edfab87970f"
+    },
+    {
+      "path": "pockets/authorization/logic/model/check.go",
+      "status": "modified",
+      "sha256": "8e33f118656118edd79315d1aada79b8ab31d74f2070502dc1d6449b2cd9f7a3"
+    },
+    {
+      "path": "pockets/authorization/logic/relationships/read_model.go",
+      "status": "modified",
+      "sha256": "951d4459efd03d91a32e2ceca5aae1df77a9e084763fb80b88c09a1d48c8add8"
+    },
+    {
+      "path": "pockets/authorization/logic/relationships/relationship.go",
+      "status": "modified",
+      "sha256": "f981e6b097faf3ebfd27772343bcd09a6ba2b2a52c038651b0389233308e2543"
+    },
+    {
+      "path": "pockets/authorization/logic/relationships/relationship_writer_test.go",
+      "status": "modified",
+      "sha256": "19b8844a242f21e0768d1fdd226506c856f92136d66c3bc852399f9d7a0544cd"
+    },
+    {
+      "path": "pockets/authorization/logic/relationships/service.go",
+      "status": "modified",
+      "sha256": "9afb80318916fa68c8fa4d3db6c18a4ef76a9e54999022d53cbc02387582f554"
+    },
+    {
+      "path": "pockets/authorization/logic/relationships/writer.go",
+      "status": "modified",
+      "sha256": "e5e56e688571ba2b482293210c9bc0984186ddb8a79a172627099abe65db2714"
+    },
+    {
+      "path": "pockets/authorization/logic/roles/service.go",
+      "status": "modified",
+      "sha256": "9c0e1a74b822fa724c0a89dcb1886174a720184bef7f1ffb0416439876635184"
+    },
+    {
+      "path": "pockets/authorization/logic/tuplecache/canonical_test.go",
+      "status": "modified",
+      "sha256": "8840c6a92a8db8690d25627eda39242fa8e5ff1ff24426b720eb875c4686b35e"
+    },
+    {
+      "path": "pockets/authorization/logic/tuplecache/reader.go",
+      "status": "modified",
+      "sha256": "0b62f0302acd58772f97185280404ce5f8907eb07a387ab9f7534db1f53457c9"
+    },
+    {
+      "path": "pockets/authorization/logic/tuples/compare_test.go",
+      "status": "added",
+      "sha256": "7ea62a0c0896f15e750d96f907055642b094c2c4d70fae39c1487b8dc968934c"
+    },
+    {
+      "path": "pockets/authorization/logic/tuples/store.go",
+      "status": "modified",
+      "sha256": "015f6ece5f9cfba5215557f5de389dfb1b59e15b2f1b45ecf25c3b0fa7fdfcb2"
+    },
+    {
+      "path": "pockets/authorization/logic/tuples/store_test.go",
+      "status": "modified",
+      "sha256": "540ada51ca56480f0d37be23b86cbd8817d323b6e99cc523948a9b62788c38c4"
+    },
+    {
+      "path": "pockets/authorization/logic/tuples/tuple.go",
+      "status": "modified",
+      "sha256": "50b64490efd47ebd8f06b44f26ad9a0a3bdf5b79d38c21007b7e664a5f8821e1"
+    },
+    {
+      "path": "pockets/authorization/middleware_test.go",
+      "status": "modified",
+      "sha256": "d608483fabccf59f8bd1c4608e67b08c7a9e6c997eccb38627fea429b06a25d2"
+    },
+    {
+      "path": "pockets/authorization/mutation_contract_test.go",
+      "status": "modified",
+      "sha256": "e71e5d6e0a8e255be170b5a1cc5fe49ff7ea438266eac9d15867dd97e1951d84"
+    },
+    {
+      "path": "pockets/authorization/mutation_policy_test.go",
+      "status": "modified",
+      "sha256": "e0753d9f75e794dfd081edea40a2ae90051f5ab561d1f68df188457bcbcbff9e"
+    },
+    {
+      "path": "pockets/authorization/mutation_service_test.go",
+      "status": "modified",
+      "sha256": "4bf5f1aa17e1d9f5fd4e94f35b6df80bb34e51fbf3587d852f28673ec8dd7501"
+    },
+    {
+      "path": "pockets/authorization/mutation_view_test.go",
+      "status": "modified",
+      "sha256": "0ced14c1de27421a2ce2444e354405805987c6fc4c44ba6aa39832ae5fae844e"
+    },
+    {
+      "path": "pockets/authorization/public_construction_test.go",
+      "status": "modified",
+      "sha256": "553df652665ebcfeab6930fb695c1805a121852b6f1e10906cb398823f68c8ea"
+    },
+    {
+      "path": "pockets/authorization/relationship_mutations_test.go",
+      "status": "modified",
+      "sha256": "81c8e739e98ce4068d58e09aa2b7c48ce20bbc4f062def0d0331ac14761386d4"
+    },
+    {
+      "path": "pockets/authorization/role_mutations_test.go",
+      "status": "modified",
+      "sha256": "11c6929fd9055df3eb157eb3e7c0341dcd521ea761df8a90940ea71cdacc5914"
+    },
+    {
+      "path": "pockets/authorization/role_routes_test.go",
+      "status": "modified",
+      "sha256": "4651ce2a8c06f3a3c5e8dd0d83c8e3902add9497bf53e120265c00a1ce69449e"
+    },
+    {
+      "path": "pockets/authorization/stores/CONVERSION.md",
+      "status": "deleted",
+      "sha256": null
+    },
+    {
+      "path": "pockets/authorization/stores/UPGRADE.md",
+      "status": "modified",
+      "sha256": "a3a7d85757f2f89f1f00f3630643f318bbab897b05ec15ef7181ada58e85d5c4"
+    },
+    {
+      "path": "pockets/authorization/stores/goredis/README.md",
+      "status": "modified",
+      "sha256": "bfecd5e463f7a5ffad67c2900ed627d9caa3dee130d1b455308c5e13b327eb0d"
+    },
+    {
+      "path": "pockets/authorization/stores/memory/conformance_test.go",
+      "status": "modified",
+      "sha256": "d759d0c8b12e0b67d3b924c76f505d917a83e2c096572be96b99c1acbc0d3898"
+    },
+    {
+      "path": "pockets/authorization/stores/memory/lookup_snapshot.go",
+      "status": "modified",
+      "sha256": "3a10d4e2aacff34f36358f54ec8160cf8f3d98ba16e9b5f1353e731cea633b44"
+    },
+    {
+      "path": "pockets/authorization/stores/memory/lookup_snapshot_test.go",
+      "status": "modified",
+      "sha256": "ff0c1eb83baa90aeb26666e3ec2b0008952ce3bec95e7454a9b7e7fb93c3b0b2"
+    },
+    {
+      "path": "pockets/authorization/stores/memory/pagination.go",
+      "status": "modified",
+      "sha256": "9e55c5e2bd31ecf00e64a27c2d2b4ee936d35e81e22034d04bfbf51efb6efd11"
+    },
+    {
+      "path": "pockets/authorization/stores/memory/tuples.go",
+      "status": "modified",
+      "sha256": "ea83cd762686859ce7571340b8a05eb19fadf4272bc31035d2afc369c91c89d3"
+    },
+    {
+      "path": "pockets/authorization/stores/pgx/README.md",
+      "status": "modified",
+      "sha256": "c221677cacd39675314258e5a52f8db6377f89ab33c6d34267f390651357f97d"
+    },
+    {
+      "path": "pockets/authorization/stores/pgx/audit_live_test.go",
+      "status": "modified",
+      "sha256": "ae02e404e44e7ee6198c074587f97832b94fc4ad96bfd6c801ee9629a94792fd"
+    },
+    {
+      "path": "pockets/authorization/stores/pgx/backup_downgrade_test.go",
+      "status": "deleted",
+      "sha256": null
+    },
+    {
+      "path": "pockets/authorization/stores/pgx/cache_migrations/0001_iam_cache_invalidation.sql",
+      "status": "deleted",
+      "sha256": null
+    },
+    {
+      "path": "pockets/authorization/stores/pgx/cache_migrations/0002_iam_tuple_cache.sql",
+      "status": "deleted",
+      "sha256": null
+    },
+    {
+      "path": "pockets/authorization/stores/pgx/cache_migrations/0003_iam_tuples.sql",
+      "status": "deleted",
+      "sha256": null
+    },
+    {
+      "path": "pockets/authorization/stores/pgx/canonical_migration_test.go",
+      "status": "deleted",
+      "sha256": null
+    },
+    {
+      "path": "pockets/authorization/stores/pgx/canonical_schema_test.go",
+      "status": "modified",
+      "sha256": "5995690a401e04c6311a0089b8c6e7931e2a29c550ec988f0ecd80a23f66b2d7"
+    },
+    {
+      "path": "pockets/authorization/stores/pgx/canonical_test.go",
+      "status": "modified",
+      "sha256": "5414da8270812c607b9ca42c31a3a37929cb2140bf0f5a9a64583e6d8340d046"
+    },
+    {
+      "path": "pockets/authorization/stores/pgx/collation_test.go",
+      "status": "modified",
+      "sha256": "8deae44b2feee5485983088a9deb5589aa77e6d25d60bd3c7ac9610ed3250021"
+    },
+    {
+      "path": "pockets/authorization/stores/pgx/conformance_test.go",
+      "status": "modified",
+      "sha256": "909f0526c79be0d32ddb6335a8ebe0c2d9a3b78377818f20e70d3f6c4f447b3a"
+    },
+    {
+      "path": "pockets/authorization/stores/pgx/constructor_options_test.go",
+      "status": "modified",
+      "sha256": "a5d71e94adda1f3b9d22419ec5d8c80b7d71da8abfe46649eaaf281b1df9fe66"
+    },
+    {
+      "path": "pockets/authorization/stores/pgx/constructor_preconditions_test.go",
+      "status": "modified",
+      "sha256": "6dfa65cba6d7f79c3b04c57a32d18354fc6744757c750482aff412a405acdb5c"
+    },
+    {
+      "path": "pockets/authorization/stores/pgx/decisions_benchmark_test.go",
+      "status": "modified",
+      "sha256": "08678ff65ce3c46a282d6622c390b982d5a47200ec700704b0fdc898e088287f"
+    },
+    {
+      "path": "pockets/authorization/stores/pgx/explain_live_test.go",
+      "status": "modified",
+      "sha256": "672d679da713bd25f65e5413f36c53fd8d3580c14f1a5726910ffd69ae0e7549"
+    },
+    {
+      "path": "pockets/authorization/stores/pgx/fresh_schema_test.go",
+      "status": "added",
+      "sha256": "c7bfa47777f9df332ad23d743fb3a9a99f19e84e49f746c67943027bbfad64c0"
+    },
+    {
+      "path": "pockets/authorization/stores/pgx/lookup_snapshot.go",
+      "status": "modified",
+      "sha256": "bdbf30897abb330be175bcdb58681ca9f8f5446cf94de629c54b16186b037498"
+    },
+    {
+      "path": "pockets/authorization/stores/pgx/lookup_snapshot_test.go",
+      "status": "modified",
+      "sha256": "dc0fbf4489148c1176090cd60e816f6293cb92c7a724a0bffccc156e7aa27ae2"
+    },
+    {
+      "path": "pockets/authorization/stores/pgx/migrations/0001_iam_relationships.sql",
+      "status": "deleted",
+      "sha256": null
+    },
+    {
+      "path": "pockets/authorization/stores/pgx/migrations/0001_iam_tuples.sql",
+      "status": "added",
+      "sha256": "69fcbfb7f6332d06ec868072ddc0d90e23f599cc175ff366a06333aa60c09338"
+    },
+    {
+      "path": "pockets/authorization/stores/pgx/migrations/0002_iam_roles.sql",
+      "status": "deleted",
+      "sha256": null
+    },
+    {
+      "path": "pockets/authorization/stores/pgx/migrations/0003_iam_scopes.sql",
+      "status": "deleted",
+      "sha256": null
+    },
+    {
+      "path": "pockets/authorization/stores/pgx/migrations/0004_iam_mutations.sql",
+      "status": "deleted",
+      "sha256": null
+    },
+    {
+      "path": "pockets/authorization/stores/pgx/migrations/0005_iam_lookup_keyset.sql",
+      "status": "deleted",
+      "sha256": null
+    },
+    {
+      "path": "pockets/authorization/stores/pgx/migrations/0006_iam_tuple_identity.sql",
+      "status": "deleted",
+      "sha256": null
+    },
+    {
+      "path": "pockets/authorization/stores/pgx/migrations/0007_iam_audit.sql",
+      "status": "deleted",
+      "sha256": null
+    },
+    {
+      "path": "pockets/authorization/stores/pgx/migrations/0008_iam_tuples.sql",
+      "status": "deleted",
+      "sha256": null
+    },
+    {
+      "path": "pockets/authorization/stores/pgx/migrations_test.go",
+      "status": "modified",
+      "sha256": "4e1cafee03f3278f34b8436c306cf26df45a612407e7d4ed0e48118ce8c3f46f"
+    },
+    {
+      "path": "pockets/authorization/stores/pgx/mutations_live_test.go",
+      "status": "modified",
+      "sha256": "b9c37053178ce053eeb80cee17eda6ae7976fc802e954beac9246eb7ed152421"
+    },
+    {
+      "path": "pockets/authorization/stores/pgx/postgres.go",
+      "status": "modified",
+      "sha256": "371e241be6a7e43c0903a248fc6e6d0fa8c7580c1658a18c8556bf267fe9e28b"
+    },
+    {
+      "path": "pockets/authorization/stores/pgx/read_snapshot_test.go",
+      "status": "modified",
+      "sha256": "16457e70116860c94263554319c14bd09e2f0445baf38e9a7fe1a85629c1ccd4"
+    },
+    {
+      "path": "pockets/authorization/stores/pgx/relationships.go",
+      "status": "modified",
+      "sha256": "7c66f6cb90cd3ee5caec920d81f863232bda9b6363ee5deae8d16107a8a6dad7"
+    },
+    {
+      "path": "pockets/authorization/stores/pgx/repositories_test.go",
+      "status": "added",
+      "sha256": "dc95d2cba42f3129b3bc3bfac56f758bbdbc2683cb3112d5e6f1c25d30f18a08"
+    },
+    {
+      "path": "pockets/authorization/stores/pgx/schema.go",
+      "status": "modified",
+      "sha256": "40f946df465a4d2c21d24ac87018c14fb189b10e0c615fec89231af59924990e"
+    },
+    {
+      "path": "pockets/authorization/stores/pgx/schema_probe_test.go",
+      "status": "modified",
+      "sha256": "0ced32dc3047808e40d201ff50d267314e8f92f12b03f5aab9779f60569fed63"
+    },
+    {
+      "path": "pockets/authorization/stores/pgx/scripts/.gitignore",
+      "status": "deleted",
+      "sha256": null
+    },
+    {
+      "path": "pockets/authorization/stores/pgx/scripts/README.md",
+      "status": "deleted",
+      "sha256": null
+    },
+    {
+      "path": "pockets/authorization/stores/pgx/scripts/authorization_backup.py",
+      "status": "deleted",
+      "sha256": null
+    },
+    {
+      "path": "pockets/authorization/stores/pgx/scripts/schema_signatures.json",
+      "status": "deleted",
+      "sha256": null
+    },
+    {
+      "path": "pockets/authorization/stores/pgx/scripts/test_authorization_backup.py",
+      "status": "deleted",
+      "sha256": null
+    },
+    {
+      "path": "pockets/authorization/stores/pgx/tuple_cache.go",
+      "status": "modified",
+      "sha256": "9a457754c9776a78ac3ca8f0347ed56c23a91001b32ca192bd118e23660e76bf"
+    },
+    {
+      "path": "pockets/authorization/stores/pgx/tuple_cache_behavior_test.go",
+      "status": "modified",
+      "sha256": "dd0b88b664ae92ef0d97202e150b246bc8b4f741a4ceadf7a6e20ac9c4a19df3"
+    },
+    {
+      "path": "pockets/authorization/stores/pgx/tuple_cache_migrations/0001_iam_tuple_cache.sql",
+      "status": "deleted",
+      "sha256": null
+    },
+    {
+      "path": "pockets/authorization/stores/pgx/tuple_cache_migrations/0002_iam_tuple_cache.sql",
+      "status": "added",
+      "sha256": "970da8d41c1143f4650b1bdc36826b42fde2d312d191cfc0cf9b70ea910b9ba9"
+    },
+    {
+      "path": "pockets/authorization/stores/pgx/tuple_cache_test.go",
+      "status": "modified",
+      "sha256": "de1d5b27225ba1c2338e4fdcbb86fa4df087e409cf5cbbe2e17d30e280610daa"
+    },
+    {
+      "path": "pockets/authorization/stores/pgx/tuple_source_benchmark_test.go",
+      "status": "modified",
+      "sha256": "8dacf605ba078c0e04d821cd82555ada352a3c6925758fb5831148d0d0a1bc5b"
+    },
+    {
+      "path": "pockets/authorization/stores/pgx/tuple_source_test.go",
+      "status": "modified",
+      "sha256": "7bb55f70c4d9790a60694d68bac8c7e76973e84751c0cfb4b3c2d793daa3fe78"
+    },
+    {
+      "path": "pockets/authorization/stores/pgx/tuple_upgrade_test.go",
+      "status": "deleted",
+      "sha256": null
+    },
+    {
+      "path": "pockets/authorization/stores/pgx/tuples.go",
+      "status": "modified",
+      "sha256": "dfedca0b90b24794edc82c6466856a59265badb2d3df070159b02c9237e10313"
+    },
+    {
+      "path": "pockets/authorization/stores/pgx/upgrade_runbook_test.go",
+      "status": "deleted",
+      "sha256": null
+    },
+    {
+      "path": "pockets/authorization/stores/storetest/adversarial.go",
+      "status": "modified",
+      "sha256": "3a0a321dbbfeb8a7b84fe29010adaa7bad0e91a462a050a2997a58a95cb70018"
+    },
+    {
+      "path": "pockets/authorization/stores/storetest/audit.go",
+      "status": "modified",
+      "sha256": "55ff4baa5a86fc9283252bfc261246a3dbc396bb2053f81183d93aeddaf2a617"
+    },
+    {
+      "path": "pockets/authorization/stores/storetest/budget.go",
+      "status": "modified",
+      "sha256": "b2d45ac8b93cc5af91983ff7f1bd611f16a435441f4af125e855746efc59c3d8"
+    },
+    {
+      "path": "pockets/authorization/stores/storetest/check_snapshot.go",
+      "status": "modified",
+      "sha256": "55f00d916da961ac6db171ca3e6a2bc709fdb26cedf592b1b3dc335020228451"
+    },
+    {
+      "path": "pockets/authorization/stores/storetest/guarded_roles.go",
+      "status": "modified",
+      "sha256": "75e9cb8c1a4f60d71c7492dd36e319ef25745547b889ca49593430342673e3ee"
+    },
+    {
+      "path": "pockets/authorization/stores/storetest/keyset.go",
+      "status": "modified",
+      "sha256": "82f7f5f6c85e02ff3d6984201991d73886e3882ba9537a67b22af48e3073f8f3"
+    },
+    {
+      "path": "pockets/authorization/stores/storetest/lookup_snapshot.go",
+      "status": "modified",
+      "sha256": "2dfe6cc650929c68d79569b72ef533823c842cc7baea908958aff18628f595a7"
+    },
+    {
+      "path": "pockets/authorization/stores/storetest/lookup_snapshot_concurrent.go",
+      "status": "modified",
+      "sha256": "54117990270b5ca6183e8711b4843df893b8cb37ecec0627420bea54e8a5c413"
+    },
+    {
+      "path": "pockets/authorization/stores/storetest/lookup_snapshot_lifecycle.go",
+      "status": "modified",
+      "sha256": "8c5206da97e3beb3e31eecde0f0d14b6a41ecca65d3e7f37667236fc3a95f5f7"
+    },
+    {
+      "path": "pockets/authorization/stores/storetest/lookup_snapshot_transaction.go",
+      "status": "modified",
+      "sha256": "b95e8b5e163ef29df764fb69ae2fb2f51caecf9408a11e0115e5fb7ad75cf613"
+    },
+    {
+      "path": "pockets/authorization/stores/storetest/mutation_cancellation.go",
+      "status": "modified",
+      "sha256": "4407b6755418c8c3db637246b233690c0f91b1dee119a8719559064820b40203"
+    },
+    {
+      "path": "pockets/authorization/stores/storetest/mutation_contract.go",
+      "status": "modified",
+      "sha256": "608b17485ca84cde5ca6f5c2b7801839169b65b82348fecd418fe76ace03016c"
+    },
+    {
+      "path": "pockets/authorization/stores/storetest/mutations.go",
+      "status": "modified",
+      "sha256": "b02b5c0a61b9cef43616886902f0d8624cb44f865524a45356488cca345dd95d"
+    },
+    {
+      "path": "pockets/authorization/stores/storetest/mutations_permission.go",
+      "status": "modified",
+      "sha256": "719f3854b05d02cef516a0e3cb5e7f306bde506010316c16d887097f1c0b724e"
+    },
+    {
+      "path": "pockets/authorization/stores/storetest/natural_order.go",
+      "status": "modified",
+      "sha256": "2603ce0bf3f91b52db3b4152eac3d4013847c307ffa32f2a11f782ad682ee978"
+    },
+    {
+      "path": "pockets/authorization/stores/storetest/oracle.go",
+      "status": "modified",
+      "sha256": "7399b10e0f22fbd37a3193ca684aee761c97a9ea6cbfc80fe868b4d54827ce8c"
+    },
+    {
+      "path": "pockets/authorization/stores/storetest/read_model.go",
+      "status": "modified",
+      "sha256": "8ff4c32f57600092274503b8695ddb2321d74c416633d469c9cf1ecd3322c0a8"
+    },
+    {
+      "path": "pockets/authorization/stores/storetest/read_snapshot.go",
+      "status": "modified",
+      "sha256": "c7189c76a81a4e81ac24ccc4306798e65b8692c4b9a8c2b6ce91bf285ab30753"
+    },
+    {
+      "path": "pockets/authorization/stores/storetest/reference_validation.go",
+      "status": "modified",
+      "sha256": "b8e1be28224ee46b264cad692a4be817750a3ad8657fec7998f756def9218e3f"
+    },
+    {
+      "path": "pockets/authorization/stores/storetest/relationship_facades.go",
+      "status": "added",
+      "sha256": "d9db7a2065b339f908fe2bc3ee3484713064fd862d24adab2041cb77c761eb36"
+    },
+    {
+      "path": "pockets/authorization/stores/storetest/roles.go",
+      "status": "modified",
+      "sha256": "52b5c4dba5f87198f6f65b3e29f06302dec858c2acf4fd188796678d7187e213"
+    },
+    {
+      "path": "pockets/authorization/stores/storetest/roles_decision.go",
+      "status": "modified",
+      "sha256": "6a7c1c46ea0b708678f93c50466f4b5040f051d41fe80316cdffdc2f12851af2"
+    },
+    {
+      "path": "pockets/authorization/stores/storetest/setreads.go",
+      "status": "modified",
+      "sha256": "ea924fa8e164eabd9d5253937a6aef18910ba5de69799a755f0431bf3a0c2adc"
+    },
+    {
+      "path": "pockets/authorization/stores/storetest/storetest.go",
+      "status": "modified",
+      "sha256": "a4c1c8630b68bbd27fa908d733bfaac75f9d2070a3c66321f2b7945fa93ac212"
+    },
+    {
+      "path": "pockets/authorization/stores/storetest/transactional.go",
+      "status": "modified",
+      "sha256": "f7da3336c2c79b73eb284cd470fbadb1cee4c04d6116cca789645f5ccd685437"
+    },
+    {
+      "path": "pockets/authorization/stores/storetest/tuples.go",
+      "status": "modified",
+      "sha256": "945dafbb460a7c6977e7b51fadf40b3e1e5e4f32fad73fcde7d805aad22e271e"
+    },
+    {
+      "path": "pockets/authorization/stores/turso/README.md",
+      "status": "modified",
+      "sha256": "16e8e91813e480503f22eb9cfd641d1e17a1ef64bf086d766512f9899bc1961c"
+    },
+    {
+      "path": "pockets/authorization/stores/turso/audit_live_test.go",
+      "status": "modified",
+      "sha256": "b14182108eb0210a6a51a4f17b36ae36a39939d4d26771c9a3a0d0edac7529c1"
+    },
+    {
+      "path": "pockets/authorization/stores/turso/backup_downgrade_test.go",
+      "status": "deleted",
+      "sha256": null
+    },
+    {
+      "path": "pockets/authorization/stores/turso/batch_queries_test.go",
+      "status": "modified",
+      "sha256": "42ea6cc514f78f3c8cdd42d5e97bcbf931d985820f113422b8c98d7da4d75592"
+    },
+    {
+      "path": "pockets/authorization/stores/turso/cache_migrations/0001_iam_cache_invalidation.sql",
+      "status": "deleted",
+      "sha256": null
+    },
+    {
+      "path": "pockets/authorization/stores/turso/cache_migrations/0002_iam_tuple_cache.sql",
+      "status": "deleted",
+      "sha256": null
+    },
+    {
+      "path": "pockets/authorization/stores/turso/cache_migrations/0003_iam_tuples.sql",
+      "status": "deleted",
+      "sha256": null
+    },
+    {
+      "path": "pockets/authorization/stores/turso/canonical_migration_test.go",
+      "status": "deleted",
+      "sha256": null
+    },
+    {
+      "path": "pockets/authorization/stores/turso/canonical_schema_test.go",
+      "status": "modified",
+      "sha256": "2c766ed2249bfb066a6181ab962f1f7cb4a8490eb1ce901c633523ad6da9439b"
+    },
+    {
+      "path": "pockets/authorization/stores/turso/canonical_test.go",
+      "status": "modified",
+      "sha256": "d78deb335ecf2f8ff1fee94af447edf634159e6d5e112cd0ffc31468efa4025e"
+    },
+    {
+      "path": "pockets/authorization/stores/turso/conformance_test.go",
+      "status": "modified",
+      "sha256": "eacf9b219528d54e93c267fab45c665f3f52457a608a5f9cfd7e51fd29995021"
+    },
+    {
+      "path": "pockets/authorization/stores/turso/constructor_options_test.go",
+      "status": "modified",
+      "sha256": "1a3cd04803dd19b8daf864c0e2619704b943b264a27fda024be35c9fcc671d8b"
+    },
+    {
+      "path": "pockets/authorization/stores/turso/constructor_preconditions_test.go",
+      "status": "modified",
+      "sha256": "6d99d3119c543d3340024e4ec80a5eb077351c07393eb9b0c0f47570a8678eaf"
+    },
+    {
+      "path": "pockets/authorization/stores/turso/fresh_schema_test.go",
+      "status": "added",
+      "sha256": "614891ff87637e0aed702176a2b51e7e754261e0665a7badf3cff3ed4ba8662d"
+    },
+    {
+      "path": "pockets/authorization/stores/turso/lookup_snapshot.go",
+      "status": "modified",
+      "sha256": "abb2e201b453070a02d360865b0b73261da7cce9674f766b81ef6622c32b26e5"
+    },
+    {
+      "path": "pockets/authorization/stores/turso/lookup_snapshot_test.go",
+      "status": "modified",
+      "sha256": "016d3553b32d3349ad882584fa862004ad1aa119976760eec52198c1ec3ce342"
+    },
+    {
+      "path": "pockets/authorization/stores/turso/migrations/0001_iam_relationships.sql",
+      "status": "deleted",
+      "sha256": null
+    },
+    {
+      "path": "pockets/authorization/stores/turso/migrations/0001_iam_tuples.sql",
+      "status": "added",
+      "sha256": "e4b679af41bcae7f49295c9ba76b750861d91753160347c4bf7659e145250272"
+    },
+    {
+      "path": "pockets/authorization/stores/turso/migrations/0002_iam_roles.sql",
+      "status": "deleted",
+      "sha256": null
+    },
+    {
+      "path": "pockets/authorization/stores/turso/migrations/0003_iam_scopes.sql",
+      "status": "deleted",
+      "sha256": null
+    },
+    {
+      "path": "pockets/authorization/stores/turso/migrations/0004_iam_mutations.sql",
+      "status": "deleted",
+      "sha256": null
+    },
+    {
+      "path": "pockets/authorization/stores/turso/migrations/0005_iam_lookup_keyset.sql",
+      "status": "deleted",
+      "sha256": null
+    },
+    {
+      "path": "pockets/authorization/stores/turso/migrations/0006_iam_tuple_identity.sql",
+      "status": "deleted",
+      "sha256": null
+    },
+    {
+      "path": "pockets/authorization/stores/turso/migrations/0007_iam_audit.sql",
+      "status": "deleted",
+      "sha256": null
+    },
+    {
+      "path": "pockets/authorization/stores/turso/migrations/0008_iam_tuples.sql",
+      "status": "deleted",
+      "sha256": null
+    },
+    {
+      "path": "pockets/authorization/stores/turso/migrations_test.go",
+      "status": "modified",
+      "sha256": "89632eab9823a106fb18487da6e331bdc9ca2db0e59df5c26e88bb6cc7e70d38"
+    },
+    {
+      "path": "pockets/authorization/stores/turso/mutations_live_test.go",
+      "status": "modified",
+      "sha256": "a36e64fe6093a62ede5b4e247ee5c2b88f5396a4d001a7d0a661b9a68dedd6fb"
+    },
+    {
+      "path": "pockets/authorization/stores/turso/read_snapshot_integration_test.go",
+      "status": "modified",
+      "sha256": "a9326ed83122be59b7ffa26f33089f0f5a1a0deca43fec4beabc72846d90db8f"
+    },
+    {
+      "path": "pockets/authorization/stores/turso/read_snapshot_test.go",
+      "status": "modified",
+      "sha256": "b966a4f07416ba06c52729c0f4f7273528632dc93c929e8c3d35fbcc80ac7694"
+    },
+    {
+      "path": "pockets/authorization/stores/turso/repositories_test.go",
+      "status": "added",
+      "sha256": "21b036090f194eb53cdfde29ce6a4efa467542cf5d7226e0f68b3fa18a0607a3"
+    },
+    {
+      "path": "pockets/authorization/stores/turso/schema.go",
+      "status": "modified",
+      "sha256": "6c1966ff9a8a8a01b2beca802d51406affff0d386e2e454db56d0a281fb34052"
+    },
+    {
+      "path": "pockets/authorization/stores/turso/schema_probe_test.go",
+      "status": "modified",
+      "sha256": "6b7b807d2d20773d80e7105fd6faf743965764213d46ac269da7b9a1914198c4"
+    },
+    {
+      "path": "pockets/authorization/stores/turso/scripts/.gitignore",
+      "status": "deleted",
+      "sha256": null
+    },
+    {
+      "path": "pockets/authorization/stores/turso/scripts/README.md",
+      "status": "deleted",
+      "sha256": null
+    },
+    {
+      "path": "pockets/authorization/stores/turso/scripts/authorization_backup.py",
+      "status": "deleted",
+      "sha256": null
+    },
+    {
+      "path": "pockets/authorization/stores/turso/scripts/test_authorization_backup.py",
+      "status": "deleted",
+      "sha256": null
+    },
+    {
+      "path": "pockets/authorization/stores/turso/tuple_cache.go",
+      "status": "modified",
+      "sha256": "71918432501ac2b8e2489a152a997f958f5c77cee16eb6cd0b58b781b51eeaf7"
+    },
+    {
+      "path": "pockets/authorization/stores/turso/tuple_cache_migrations/0001_iam_tuple_cache.sql",
+      "status": "deleted",
+      "sha256": null
+    },
+    {
+      "path": "pockets/authorization/stores/turso/tuple_cache_migrations/0002_iam_tuple_cache.sql",
+      "status": "added",
+      "sha256": "d23793078112b85c859ccd290d815270f1c3bf7e47a39f0648daebcf751cf843"
+    },
+    {
+      "path": "pockets/authorization/stores/turso/tuple_cache_test.go",
+      "status": "modified",
+      "sha256": "e0f16784dc93dc4c47e05cd161ba2030aebcbe9f55561379492959e943401968"
+    },
+    {
+      "path": "pockets/authorization/stores/turso/tuple_source_benchmark_test.go",
+      "status": "modified",
+      "sha256": "4a002d2d77955bbccae9ff19ffb1e1f3f57a78c49d1f35bcee7e3095f5aebec9"
+    },
+    {
+      "path": "pockets/authorization/stores/turso/tuple_upgrade_test.go",
+      "status": "deleted",
+      "sha256": null
+    },
+    {
+      "path": "pockets/authorization/stores/turso/tuples.go",
+      "status": "modified",
+      "sha256": "3c354818b803a9cf05a4f697540c329c8d9fe03e85c3b6f05fa9e2be96e5f0b2"
+    },
+    {
+      "path": "pockets/authorization/stores/turso/turso.go",
+      "status": "modified",
+      "sha256": "b2f1c5b4de13be5940b87175bbfd2de06b99712e638b3bca483a163c23ee0ca5"
+    },
+    {
+      "path": "pockets/authorization/stores/turso/writes_benchmark_test.go",
+      "status": "modified",
+      "sha256": "0e0f0bc3e34fd014adec291a8a176f2ba796069fafc5e10f643a0f067c17edd1"
+    },
+    {
+      "path": "pockets/authorization/system_mutator_trusted_test.go",
+      "status": "modified",
+      "sha256": "075fb875e33fff56858294dbc04e4e259296e573b8f7e9f74b402e0013984c1e"
+    },
+    {
+      "path": "workshop/documentation/docs/pockets/authorization.md",
+      "status": "modified",
+      "sha256": "1a2c60d8bdf5f9bfc527b0093c50dade31b427b7f24f8fcb0df2a598e019b060"
+    }
+  ]
+}

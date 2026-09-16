@@ -2,107 +2,108 @@ package decisions
 
 import (
 	"fmt"
-	"reflect"
 
 	authmodel "github.com/gopernicus/gopernicus/pockets/authorization/logic/model"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/relationships"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuplecache"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuples"
 	"github.com/gopernicus/gopernicus/sdk"
 )
 
-// RoleReader is the role fact port consumed by permission evaluation.
-type RoleReader interface{ roleProbe }
-
-// Readers supplies the model-bearing services for permission evaluation. A
-// relationship service or a roles reader paired with WithRoleModel is required.
-// Services are borrowed; construction never changes their models or limits.
-type Readers struct {
-	Relationships *relationships.Service
-	Roles         RoleReader
-	TupleSource   tuplecache.Source
-}
-
 type config struct {
-	backend     tuplecache.Backend
-	tuplePolicy tuplecache.Policy
-	Readers
-	RoleModel authmodel.RoleModel
-	Limits    authmodel.EvaluationLimits
+	model      Model
+	limits     authmodel.EvaluationLimits
+	backend    tuplecache.Backend
+	source     tuplecache.Source
+	policy     tuplecache.Policy
+	diagnostic DiagnosticObserver
 }
 
-// NewService compiles the role model and validates all decision dependencies.
-func NewService(readers Readers, opts ...Option) (*Service, error) {
-	cfg := config{Readers: readers}
+// Service evaluates exact membership and graph policy over one canonical view.
+type Service struct {
+	store       tuples.Reader
+	facts       tuples.Reader
+	reader      Reader
+	readModel   ReadModel
+	compiled    *CompiledModel
+	limits      authmodel.EvaluationLimits
+	inSnapshot  bool
+	tupleCache  *tuplecache.TupleCache
+	diagnostic  DiagnosticObserver
+	diagnostics *operationDiagnostics
+}
+
+func NewService(reader tuples.Reader, opts ...Option) (*Service, error) {
+	if isNilReader(reader) {
+		return nil, fmt.Errorf("authorization: tuple reader required: %w", sdk.ErrInvalidInput)
+	}
+	cfg := config{}
 	for _, opt := range opts {
 		if opt == nil {
-			return nil, fmt.Errorf("authorization decisions: nil option: %w", sdk.ErrInvalidInput)
+			return nil, fmt.Errorf("authorization: nil option: %w", sdk.ErrInvalidInput)
 		}
 		opt(&cfg)
 	}
-	if typedNil(cfg.Roles) {
-		return nil, fmt.Errorf("authorization: role reader is typed nil: %w", sdk.ErrInvalidInput)
-	}
-	if cfg.RoleModel.IsSet() && cfg.Roles == nil {
-		return nil, fmt.Errorf("authorization: role model requires role reader: %w", sdk.ErrInvalidInput)
-	}
-	if cfg.Relationships == nil && !cfg.RoleModel.IsSet() {
-		return nil, authmodel.ErrNoDecisionKind
-	}
-	limits, err := cfg.Limits.Resolve()
+	limits, err := cfg.limits.Resolve()
 	if err != nil {
 		return nil, err
 	}
-	if cfg.Relationships != nil {
-		if cfg.Limits == (authmodel.EvaluationLimits{}) {
-			limits = cfg.Relationships.Limits()
-		}
-		if limits != cfg.Relationships.Limits() {
-			return nil, fmt.Errorf("%w: decision and relationship services must share limits", authmodel.ErrInvalidLimits)
-		}
+	compiled, err := Compile(cfg.model)
+	if err != nil {
+		return nil, err
 	}
-	var declared authmodel.Declarer
-	if cfg.Relationships != nil {
-		declared = cfg.Relationships
-	}
-	var compiled *authmodel.CompiledRoleModel
-	if cfg.RoleModel.IsSet() {
-		compiled, err = authmodel.CompileRoleModel(cfg.RoleModel, declared)
+	s := &Service{store: reader, facts: reader, compiled: compiled, readModel: compiled.readModel(), limits: limits, diagnostic: cfg.diagnostic}
+	s.reader = s.graphReader(reader)
+	if cfg.backend != nil {
+		if isNilReader(cfg.backend) || isNilReader(cfg.source) {
+			return nil, fmt.Errorf("authorization: cache source and backend required: %w", sdk.ErrInvalidInput)
+		}
+		binding, ok := reader.(interface{ TupleCacheBinding() string })
+		if !ok || binding.TupleCacheBinding() != cfg.source.Binding() {
+			return nil, tuplecache.ErrBinding
+		}
+		s.tupleCache, err = tuplecache.New(cfg.source, cfg.backend, tuplecache.WithPolicy(cfg.policy))
 		if err != nil {
 			return nil, err
 		}
 	}
-	runtime, err := newTupleCache(cfg)
-	if err != nil {
-		return nil, err
-	}
-	service := newComposite(cfg.Relationships, cfg.Roles, compiled, limits)
-	service.tupleCache = runtime
-	return service, nil
+	return s, nil
 }
-
-// Limits returns the immutable resolved budget for host adapters.
 func (s *Service) Limits() authmodel.EvaluationLimits {
 	if s == nil {
 		return authmodel.EvaluationLimits{}
 	}
 	return s.limits
 }
-
-// CompiledRoleModel returns the immutable role model used by decisions and guarded writes.
-func (s *Service) CompiledRoleModel() *authmodel.CompiledRoleModel {
-	if s == nil || s.roles == nil {
+func (s *Service) CompiledModel() *CompiledModel {
+	if s == nil {
 		return nil
 	}
-	return s.roles.model
+	return s.compiled
 }
-func typedNil(v any) bool {
-	if v == nil {
-		return false
+func (s *Service) DeclaresPermission(rt, p string) bool {
+	return s != nil && s.compiled.declaresPermission(rt, p)
+}
+func (s *Service) graphReader(facts tuples.Reader) Reader {
+	if r, ok := facts.(interface {
+		ForModel(relationships.ReadModel) relationships.Reader
+	}); ok {
+		if view := r.ForModel(s.readModel); !isNilReader(view) {
+			return view
+		}
 	}
-	r := reflect.ValueOf(v)
-	switch r.Kind() {
-	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
-		return r.IsNil()
+	fallback := &tupleGraphReader{facts: facts, model: s.readModel}
+	if checks, ok := facts.(CheckReadSource); ok {
+		if reader := checks.ForChecks(s.readModel); !isNilReader(reader) {
+			return &checkGraphReader{tupleGraphReader: fallback, checks: reader}
+		}
 	}
-	return false
+	return fallback
+}
+func (s *Service) bound(facts tuples.Reader) *Service {
+	v := *s
+	v.facts = &memoFacts{Reader: facts, values: map[tuples.Tuple]bool{}}
+	v.reader = v.graphReader(facts)
+	v.inSnapshot = true
+	return &v
 }

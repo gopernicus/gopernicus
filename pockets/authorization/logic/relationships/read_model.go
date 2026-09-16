@@ -101,14 +101,3 @@ type Reader interface {
 	LookupResourceIDsByRelationTarget(ctx context.Context, resourceType, relation, targetType string, targetIDs []string, after string, limit int) ([]string, error)
 	LookupDescendantResourceIDs(ctx context.Context, resourceType string, relations []string, subjectType string, rootIDs []string, after string, limit int) ([]string, error)
 }
-
-// LookupSnapshotter is an optional capability of a model-scoped Reader. It
-// supplies one consistent view for an entire permission check, batch or
-// enumeration and its verification. The name is retained for adapter compatibility.
-// The callback runs once, sequentially; its reader preserves the model and may
-// only be used during the callback. Implementations close it on every exit.
-// SQL adapters borrow an ambient transaction without changing its isolation or
-// finishing it; otherwise they own a read snapshot for this call.
-type LookupSnapshotter interface {
-	ReadLookupSnapshot(context.Context, func(context.Context, Reader) error) error
-}

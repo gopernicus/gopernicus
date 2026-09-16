@@ -14,13 +14,13 @@ import (
 	"github.com/gopernicus/gopernicus/sdk/capabilities/transaction"
 )
 
-// RunLookupAmbient verifies that lookups join the host's pending transaction
-// without committing it or replacing its view with an independent snapshot.
-func RunLookupAmbient(t *testing.T, factory func(*testing.T) (authorization.Repositories, transaction.Transactor)) {
+// RunLookupAmbient requires a snapshot-capable transactor. Lookups borrow its
+// pending transaction without committing it or opening an independent snapshot.
+func RunLookupAmbient(t *testing.T, factory func(*testing.T) (Repositories, transaction.Transactor)) {
 	for _, commit := range []bool{false, true} {
 		t.Run(fmt.Sprintf("commit=%v", commit), func(t *testing.T) {
 			repos, tx := factory(t)
-			components, err := authorization.New(repos, authorization.WithRelationshipModel(lookupSnapshotSchema()))
+			components, err := authorization.New(repos.Repositories, authorization.WithModel(lookupSnapshotSchema()))
 			if err != nil {
 				t.Fatal(err)
 			}

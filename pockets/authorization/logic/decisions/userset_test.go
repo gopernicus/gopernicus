@@ -4,6 +4,8 @@ import (
 	"context"
 	"testing"
 
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/decisions"
+
 	"github.com/gopernicus/gopernicus/pockets/authorization"
 
 	authmodel "github.com/gopernicus/gopernicus/pockets/authorization/logic/model"
@@ -16,22 +18,22 @@ import (
 // org#member usersets as DISTINCT allowed subjects; group carries member (nested)
 // and admin; org carries member. It exercises the exact-pair validator and the
 // relation-aware userset expansion together.
-func usersetSchema() relationships.Schema {
-	return relationships.NewSchema([]relationships.ResourceSchema{
-		{Name: "group", Def: relationships.ResourceTypeDef{
-			Relations: map[string]relationships.RelationDef{
-				"member": {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "user"}, {Type: "group", Relation: "member"}}},
-				"admin":  {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "user"}}},
+func usersetSchema() decisions.Model {
+	return decisions.NewSchema([]decisions.ResourceSchema{
+		{Name: "group", Def: decisions.ResourceTypeDef{
+			Relations: map[string]decisions.RelationDef{
+				"member": {AllowedSubjects: []decisions.SubjectTypeRef{{Type: "user"}, {Type: "group", Relation: "member"}}},
+				"admin":  {AllowedSubjects: []decisions.SubjectTypeRef{{Type: "user"}}},
 			},
 		}},
-		{Name: "org", Def: relationships.ResourceTypeDef{
-			Relations: map[string]relationships.RelationDef{
-				"member": {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "group", Relation: "member"}}},
+		{Name: "org", Def: decisions.ResourceTypeDef{
+			Relations: map[string]decisions.RelationDef{
+				"member": {AllowedSubjects: []decisions.SubjectTypeRef{{Type: "group", Relation: "member"}}},
 			},
 		}},
-		{Name: "doc", Def: relationships.ResourceTypeDef{
-			Relations: map[string]relationships.RelationDef{
-				"viewer": {AllowedSubjects: []relationships.SubjectTypeRef{
+		{Name: "doc", Def: decisions.ResourceTypeDef{
+			Relations: map[string]decisions.RelationDef{
+				"viewer": {AllowedSubjects: []decisions.SubjectTypeRef{
 					{Type: "user"},
 					{Type: "group"},
 					{Type: "group", Relation: "member"},
@@ -39,7 +41,7 @@ func usersetSchema() relationships.Schema {
 					{Type: "org", Relation: "member"},
 				}},
 			},
-			Permissions: map[string]relationships.PermissionRule{"view": relationships.AnyOf(relationships.Direct("viewer"))},
+			Permissions: map[string]decisions.Expression{"view": decisions.AnyOf(decisions.Direct("viewer"))},
 		}},
 	})
 }
@@ -49,8 +51,9 @@ func usersetSchema() relationships.Schema {
 // was removed at AZ3-3.4) and exercise the engine via the Service.
 func usersetService(t *testing.T) (authorization.Components, *memory.Relationships) {
 	t.Helper()
-	store := memory.NewRelationships()
-	comps, err := authorization.New(authorization.Repositories{Relationships: store}, authorization.WithRelationshipModel(usersetSchema()))
+	authority := memory.New()
+	store := authority.Relationships()
+	comps, err := authorization.New(authorization.Repositories{Tuples: authority.Tuples()}, authorization.WithModel(usersetSchema()))
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}

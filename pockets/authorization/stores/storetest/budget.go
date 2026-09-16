@@ -6,6 +6,8 @@ import (
 	"sort"
 	"testing"
 
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/decisions"
+
 	"github.com/gopernicus/gopernicus/pockets/authorization"
 	authmodel "github.com/gopernicus/gopernicus/pockets/authorization/logic/model"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/relationships"
@@ -16,40 +18,40 @@ import (
 // whose view is reachable through TWO sibling relations to the same group#view
 // target (the sibling-Through lookup case). It is separate from fixtureSchema so
 // the adversarial userset cases are not perturbed.
-func budgetSchema() relationships.Schema {
-	return relationships.NewSchema([]relationships.ResourceSchema{
-		{Name: "folder", Def: relationships.ResourceTypeDef{
-			Relations: map[string]relationships.RelationDef{
-				"parent": {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "folder"}}},
-				"viewer": {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "user"}}},
+func budgetSchema() decisions.Model {
+	return decisions.NewSchema([]decisions.ResourceSchema{
+		{Name: "folder", Def: decisions.ResourceTypeDef{
+			Relations: map[string]decisions.RelationDef{
+				"parent": {AllowedSubjects: []decisions.SubjectTypeRef{{Type: "folder"}}},
+				"viewer": {AllowedSubjects: []decisions.SubjectTypeRef{{Type: "user"}}},
 			},
-			Permissions: map[string]relationships.PermissionRule{
-				"view": relationships.AnyOf(relationships.Direct("viewer"), relationships.Through("parent", "view")),
-			},
-		}},
-		{Name: "group", Def: relationships.ResourceTypeDef{
-			Relations: map[string]relationships.RelationDef{
-				"viewer": {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "user"}}},
-			},
-			Permissions: map[string]relationships.PermissionRule{
-				"view": relationships.AnyOf(relationships.Direct("viewer")),
+			Permissions: map[string]decisions.Expression{
+				"view": decisions.AnyOf(decisions.Direct("viewer"), decisions.Through("parent", "view")),
 			},
 		}},
-		{Name: "doc", Def: relationships.ResourceTypeDef{
-			Relations: map[string]relationships.RelationDef{
-				"primary":   {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "group"}}},
-				"secondary": {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "group"}}},
+		{Name: "group", Def: decisions.ResourceTypeDef{
+			Relations: map[string]decisions.RelationDef{
+				"viewer": {AllowedSubjects: []decisions.SubjectTypeRef{{Type: "user"}}},
 			},
-			Permissions: map[string]relationships.PermissionRule{
-				"view": relationships.AnyOf(relationships.Through("primary", "view"), relationships.Through("secondary", "view")),
+			Permissions: map[string]decisions.Expression{
+				"view": decisions.AnyOf(decisions.Direct("viewer")),
+			},
+		}},
+		{Name: "doc", Def: decisions.ResourceTypeDef{
+			Relations: map[string]decisions.RelationDef{
+				"primary":   {AllowedSubjects: []decisions.SubjectTypeRef{{Type: "group"}}},
+				"secondary": {AllowedSubjects: []decisions.SubjectTypeRef{{Type: "group"}}},
+			},
+			Permissions: map[string]decisions.Expression{
+				"view": decisions.AnyOf(decisions.Through("primary", "view"), decisions.Through("secondary", "view")),
 			},
 		}},
 	})
 }
 
-func newBudgetService(t *testing.T, repos authorization.Repositories, limits authmodel.EvaluationLimits) authorization.Components {
+func newBudgetService(t *testing.T, repos Repositories, limits authmodel.EvaluationLimits) authorization.Components {
 	t.Helper()
-	comps, err := authorization.New(repos, authorization.WithRelationshipModel(budgetSchema()), authorization.WithLimits(limits))
+	comps, err := authorization.New(repos.Repositories, authorization.WithModel(budgetSchema()), authorization.WithLimits(limits))
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
@@ -59,7 +61,7 @@ func newBudgetService(t *testing.T, repos authorization.Repositories, limits aut
 // runBudget is layer (b): the bounded-evaluation dimensions that must produce the
 // SAME allow/deny/error class on every store dialect. Exhaustion is always
 // ErrEvaluationLimit — never a deny, never a truncated list.
-func runBudget(t *testing.T, newRepos func(t *testing.T) authorization.Repositories) {
+func runBudget(t *testing.T, newRepos func(t *testing.T) Repositories) {
 	ctx := context.Background()
 
 	t.Run("DepthBoundaryParity", func(t *testing.T) {
@@ -251,7 +253,7 @@ func mustSeed2(t *testing.T, s relationships.Storer, tuples []relationships.Crea
 // mustSeed seeds valid tuples through the relationship.Storer PORT (the sanctioned
 // fixture-seeding path — the raw write path was removed from Service at AZ3-3.4). The
 // port skips schema validation, which is fine for known-valid budget fixtures.
-func mustSeed(t *testing.T, repos authorization.Repositories, tuples []relationships.CreateRelationship) {
+func mustSeed(t *testing.T, repos Repositories, tuples []relationships.CreateRelationship) {
 	t.Helper()
 	if err := repos.Relationships.CreateRelationships(context.Background(), tuples); err != nil {
 		t.Fatalf("CreateRelationships: %v", err)

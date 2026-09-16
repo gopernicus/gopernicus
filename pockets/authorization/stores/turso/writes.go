@@ -8,8 +8,7 @@ import (
 
 	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/audit"
-	"github.com/gopernicus/gopernicus/pockets/authorization/logic/relationships"
-	"github.com/gopernicus/gopernicus/pockets/authorization/logic/roles"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuples"
 )
 
 // writeTx collects only rows the database actually changed. Its caller appends
@@ -20,7 +19,7 @@ type writeTx struct {
 	changes []audit.Change
 }
 
-func (tx *writeTx) relationships(ctx context.Context, action audit.Action, query string, args ...any) (int64, error) {
+func (tx *writeTx) tuples(ctx context.Context, action audit.Action, query string, args ...any) (int64, error) {
 	if !tx.audit {
 		result, err := tx.Exec(ctx, query, args...)
 		if err != nil {
@@ -28,46 +27,37 @@ func (tx *writeTx) relationships(ctx context.Context, action audit.Action, query
 		}
 		return result.RowsAffected()
 	}
-	rows, err := tx.Query(ctx, query+` RETURNING resource_type, resource_id, relation, subject_type, subject_id, subject_relation`, args...)
+	rows, err := tx.Query(ctx, query+` RETURNING `+tupleColumns, args...)
 	if err != nil {
 		return 0, err
 	}
 	defer rows.Close()
 	var n int64
 	for rows.Next() {
-		var fact relationships.CreateRelationship
-		if err := rows.Scan(&fact.ResourceType, &fact.ResourceID, &fact.Relation, &fact.SubjectType, &fact.SubjectID, &fact.SubjectRelation); err != nil {
+		var fact tuples.Tuple
+		if err := rows.Scan(&fact.Scope.Kind, &fact.Scope.Type, &fact.Scope.ID, &fact.Relation, &fact.Subject.Type, &fact.Subject.ID, &fact.Subject.Relation); err != nil {
 			return 0, tursodb.MapError(err)
 		}
-		tx.changes = append(tx.changes, audit.Change{Action: action, Relationship: &fact})
+		tx.changes = append(tx.changes, audit.Change{Action: action, Tuple: fact})
 		n++
 	}
 	return n, tursodb.MapError(rows.Err())
 }
-
-func (tx *writeTx) roles(ctx context.Context, action audit.Action, query string, args ...any) (int64, error) {
-	if !tx.audit {
-		result, err := tx.Exec(ctx, query, args...)
-		if err != nil {
-			return 0, err
+func applyTupleChanges(ctx context.Context, tx *writeTx, cfg config, changes tuples.Changes) error {
+	table := "main.iam_tuples"
+	for _, fact := range changes.Remove {
+		args := &tupleArgs{}
+		if _, err := tx.tuples(ctx, audit.ActionRemoved, `DELETE FROM `+table+` WHERE `+tuplePredicate(args, fact), args.params()...); err != nil {
+			return err
 		}
-		return result.RowsAffected()
 	}
-	rows, err := tx.Query(ctx, query+` RETURNING subject_type, subject_id, role, resource_type, resource_id`, args...)
-	if err != nil {
-		return 0, err
-	}
-	defer rows.Close()
-	var n int64
-	for rows.Next() {
-		var fact roles.Assignment
-		if err := rows.Scan(&fact.SubjectType, &fact.SubjectID, &fact.Role, &fact.ResourceType, &fact.ResourceID); err != nil {
-			return 0, tursodb.MapError(err)
+	for _, fact := range changes.Add {
+		args := &tupleArgs{}
+		if _, err := tx.tuples(ctx, audit.ActionAdded, `INSERT INTO `+table+` (`+tupleColumns+`) VALUES `+args.fact(fact)+` ON CONFLICT DO NOTHING`, args.params()...); err != nil {
+			return err
 		}
-		tx.changes = append(tx.changes, audit.Change{Action: action, Role: &fact})
-		n++
 	}
-	return n, tursodb.MapError(rows.Err())
+	return nil
 }
 
 func runWrite(ctx context.Context, db *tursodb.DB, cfg config, fn func(*writeTx) error) error {

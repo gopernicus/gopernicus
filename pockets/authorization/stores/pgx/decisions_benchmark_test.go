@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/gopernicus/gopernicus/pockets/authorization"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/decisions"
 	authmodel "github.com/gopernicus/gopernicus/pockets/authorization/logic/model"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/mutations"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/relationships"
@@ -17,19 +18,19 @@ import (
 // The graph has 366 documents sharing one userset-backed parent grant.
 func BenchmarkDecisionsPostgres(b *testing.B) {
 	db, cfg := cacheFixture(b, false)
-	repos, err := Repositories(b.Context(), db, WithSchema(cfg.schema))
+	repos, err := testRepositories(b.Context(), db, WithSchema(cfg.schema))
 	if err != nil {
 		b.Fatal(err)
 	}
-	schema := relationships.Schema{ResourceTypes: map[string]relationships.ResourceTypeDef{
-		"group": {Relations: map[string]relationships.RelationDef{"member": {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "user"}}}}},
+	schema := decisions.Model{ResourceTypes: map[string]decisions.ResourceTypeDef{
+		"group": {Relations: map[string]decisions.RelationDef{"member": {AllowedSubjects: []decisions.SubjectTypeRef{{Type: "user"}}}}},
 		"space": {
-			Relations:   map[string]relationships.RelationDef{"viewer": {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "user"}, {Type: "group", Relation: "member"}}}},
-			Permissions: map[string]relationships.PermissionRule{"view": relationships.AnyOf(relationships.Direct("viewer"))},
+			Relations:   map[string]decisions.RelationDef{"viewer": {AllowedSubjects: []decisions.SubjectTypeRef{{Type: "user"}, {Type: "group", Relation: "member"}}}},
+			Permissions: map[string]decisions.Expression{"view": decisions.AnyOf(decisions.Direct("viewer"))},
 		},
 		"document": {
-			Relations:   map[string]relationships.RelationDef{"parent": {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "space"}}}},
-			Permissions: map[string]relationships.PermissionRule{"view": relationships.AnyOf(relationships.Through("parent", "view"))},
+			Relations:   map[string]decisions.RelationDef{"parent": {AllowedSubjects: []decisions.SubjectTypeRef{{Type: "space"}}}},
+			Permissions: map[string]decisions.Expression{"view": decisions.AnyOf(decisions.Through("parent", "view"))},
 		},
 	}}
 	tuples := []relationships.CreateRelationship{
@@ -48,7 +49,7 @@ func BenchmarkDecisionsPostgres(b *testing.B) {
 	if err := repos.Relationships.CreateRelationships(b.Context(), tuples); err != nil {
 		b.Fatal(err)
 	}
-	components, err := authorization.New(repos, authorization.WithRelationshipModel(schema))
+	components, err := authorization.New(repos.Repositories, authorization.WithModel(schema))
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -91,7 +92,7 @@ func BenchmarkDecisionsPostgres(b *testing.B) {
 // serializes the guarded read and actual alternating grant/revoke on every call.
 func BenchmarkGuardedWriterContentionPostgres(b *testing.B) {
 	db, cfg := cacheFixture(b, false)
-	repos, err := Repositories(b.Context(), db, WithSchema(cfg.schema))
+	repos, err := testRepositories(b.Context(), db, WithSchema(cfg.schema))
 	if err != nil {
 		b.Fatal(err)
 	}

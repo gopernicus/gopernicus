@@ -1,0 +1,75 @@
+{
+  "date": "2026-09-15",
+  "status": "audit complete; implementation not performed",
+  "branch": "main",
+  "head": "1e1308733cd8c23995497134052b2ef16c1f5b30",
+  "private_import_probe": {
+    "module": "example.com/authorization-adapter",
+    "public_import_build_exit": 0,
+    "private_import_build_exit": 1,
+    "command": "env -i PATH=\"$PATH\" HOME=\"$HOME\" GOWORK=off GOENV=off GOPROXY=off GOTOOLCHAIN=local GOCACHE=/tmp/gopernicus-authorization-hardening/cache go build -mod=mod ./...",
+    "error": "probe.go:3:8: use of internal package github.com/gopernicus/gopernicus/pockets/authorization/internal/tuplekey not allowed",
+    "go_mod": "module example.com/authorization-adapter\n\ngo 1.26.1\n\nrequire github.com/gopernicus/gopernicus/pockets/authorization v0.0.0\n\nrequire github.com/gopernicus/gopernicus/sdk v0.9.0 // indirect\n\nreplace github.com/gopernicus/gopernicus/pockets/authorization => /Users/jrazmi/code/gopernicus-ecosystem/gopernicus/pockets/authorization\n\nreplace github.com/gopernicus/gopernicus/sdk => /Users/jrazmi/code/gopernicus-ecosystem/gopernicus/sdk\n\nreplace github.com/gopernicus/gopernicus/pockets => /Users/jrazmi/code/gopernicus-ecosystem/gopernicus/pockets\n",
+    "private_probe": "package adapter\nimport \"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuples\"\nimport \"github.com/gopernicus/gopernicus/pockets/authorization/internal/tuplekey\"\nvar Query = tuples.Query{After: tuplekey.Encode(tuples.Tuple{}), Limit: 1}\n"
+  },
+  "memory_probes": {
+    "command": "env -i PATH=\"$PATH\" HOME=\"$HOME\" GOENV=off GOPROXY=off GOTOOLCHAIN=local GOCACHE=/tmp/gopernicus-authorization-hardening/cache go run /tmp/gopernicus-authorization-cleanup-audit/probes.go",
+    "cwd": "pockets/authorization",
+    "exit_code": 0,
+    "source": "package main\n\nimport (\n\t\"context\"\n\t\"encoding/json\"\n\t\"os\"\n\n\t\"github.com/gopernicus/gopernicus/pockets/authorization\"\n\t\"github.com/gopernicus/gopernicus/pockets/authorization/logic/decisions\"\n\t\"github.com/gopernicus/gopernicus/pockets/authorization/logic/model\"\n\t\"github.com/gopernicus/gopernicus/pockets/authorization/logic/relationships\"\n\t\"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuples\"\n\t\"github.com/gopernicus/gopernicus/pockets/authorization/stores/memory\"\n\t\"github.com/gopernicus/gopernicus/sdk/pkg/list\"\n)\n\nfunc must(err error) { if err != nil { panic(err) } }\nfunc main() {\n\tctx:=context.Background()\n\tstore:=memory.NewTuples()\n\tprincipal:=model.PrincipalRef{Type:\"user\",ID:\"alice\"}\n\tfact:=tuples.Tuple{Scope:tuples.On(\"doc\",\"one\"), Relation:\"viewer\", Subject:tuples.SubjectRef{Type:\"user\",ID:\"alice\"}}\n\tsecond:=fact\n\tsecond.Scope.ID=\"two\"\n\tmust(store.ApplyTuples(ctx,tuples.Changes{Add:[]tuples.Tuple{fact,second}}))\n\tpage,err:=store.ListTuples(ctx,tuples.Query{},list.Request{Limit:1})\n\tmust(err)\n\tif page.NextCursor==\"\" {panic(\"missing continuation\")}\n\tcur,err:=list.DecodeCursor(page.NextCursor,\"tuple_key\")\n\tmust(err)\n\tbadPK,err:=list.EncodeCursor(\"tuple_key\",cur.OrderValue,\"different-key\")\n\tmust(err)\n\t_,badPKErr:=store.ListTuples(ctx,tuples.Query{},list.Request{Limit:1,Cursor:badPK})\n\toldField,err:=list.EncodeCursor(\"role_key\",cur.OrderValue,cur.PK)\n\tmust(err)\n\t_,oldFieldErr:=store.ListTuples(ctx,tuples.Query{},list.Request{Limit:1,Cursor:oldField})\n\tpolicy:=decisions.Model{ResourceTypes:map[string]decisions.ResourceTypeDef{\"doc\":{\n\t\tRelations:map[string]decisions.RelationDef{\"viewer\":{AllowedSubjects:[]decisions.SubjectTypeRef{{Type:\"user\"}}}},\n\t\tPermissions:map[string]decisions.Expression{\"read\":decisions.Any(decisions.Direct(\"viewer\"),decisions.Role(\"admin\"))},\n\t}}}\n\tservice,err:=decisions.NewService(store,decisions.WithModel(policy));must(err)\n\tresult,err:=service.Check(ctx,model.CheckRequest{Principal:principal,Permission:\"read\",Resource:model.Resource{Type:\"doc\",ID:\"one\"}});must(err)\n\tother:=memory.New()\n\tseparate:=memory.New()\n\tcomponents,err:=authorization.New(authorization.Repositories{Tuples:other.Tuples(),Relationships:separate.Relationships()},authorization.WithModel(policy));must(err)\n\tmust(components.RelationshipWriter.CreateRelationships(ctx,[]relationships.CreateRelationship{{ResourceType:\"doc\",ResourceID:\"one\",Relation:\"viewer\",SubjectType:\"user\",SubjectID:\"alice\"}}))\n\tread,err:=components.Decisions.Check(ctx,model.CheckRequest{Principal:principal,Permission:\"read\",Resource:model.Resource{Type:\"doc\",ID:\"one\"}});must(err)\n\tmust(json.NewEncoder(os.Stdout).Encode(map[string]any{\n\t\t\"memory_accepts_mismatched_cursor_pk\":badPKErr==nil,\n\t\t\"memory_accepts_old_cursor_field\":oldFieldErr==nil,\n\t\t\"mixed_policy_check_allows\":result.Allowed,\n\t\t\"reported_permissions_for_viewer\":service.GetPermissionsForRelation(\"doc\",\"viewer\"),\n\t\t\"separate_authorities_constructor_accepted\":true,\n\t\t\"relationship_write_visible_to_decisions\":read.Allowed,\n\t}))\n}\n",
+    "output": {
+      "memory_accepts_mismatched_cursor_pk": true,
+      "memory_accepts_old_cursor_field": true,
+      "mixed_policy_check_allows": true,
+      "relationship_write_visible_to_decisions": false,
+      "reported_permissions_for_viewer": null,
+      "separate_authorities_constructor_accepted": true
+    },
+    "limits": "Memory-only reproduction. SQL cursor rejection follows explicit validator code inspection; no SQL server contacted."
+  },
+  "checks": [
+    {
+      "command": "GOCACHE=/tmp/gopernicus-authorization-hardening/cache go test ./internal/tuplekey ./internal/decisioncursor ./logic/tuples",
+      "cwd": "pockets/authorization",
+      "result": "passed (cached)"
+    },
+    {
+      "command": "make guard-authorization-tuples-leaf guard-authorization-rolesvc-no-engine guard-authorization-decisions-no-mutations",
+      "result": "passed (architecture reviewer)"
+    }
+  ],
+  "reviews": {
+    "lead-backend-engineer": "readonly; introspection reproduction, dead references and retired snapshot capability confirmed",
+    "architecture-steward": "readonly; public pagination boundary, graph port ownership and compatibility constraints reviewed"
+  },
+  "source_sha256": {
+    "pockets/authorization/internal/tuplekey/key.go": "41c12316cdc3114023c6b7ba535243a23be647d5e1c40124368635df9c419d49",
+    "pockets/authorization/logic/tuples/store.go": "bc5bd487bcb3b46e382f1784745b23d0c6f82bf716ce1eaa49568e68722f818d",
+    "pockets/authorization/stores/memory/pagination.go": "58883d978043a9244119c0aa91859f73459e8bbe2ba171fb1707b2edd8579989",
+    "pockets/authorization/stores/pgx/tuples.go": "d45399435ce55931394f999abca285bc20748fca953a9ff903bdd16a0e1e2034",
+    "pockets/authorization/stores/turso/tuples.go": "0a7ff9c9eb5fa813aef25abce8369177610faa74c495e0cf2bcfae01fa06d38f",
+    "pockets/authorization/logic/decisions/compiled_model.go": "5843dda893eccaa5f04153e6f65bbf630897b3d536fb23b088f92238862fbcba",
+    "pockets/authorization/logic/decisions/compiler.go": "6f5681bbe3aec75b7e9010d8d89f618582b6e79b2143929c3eece925e4041e5f",
+    "pockets/authorization/logic/decisions/evaluate.go": "ac3cb334712420151ca4c0e4f0301aafa6374cbcb66adb6003594750f371cda3",
+    "pockets/authorization/logic/decisions/ports.go": "241050ce82980066159a0a97edc3ab63b7c4968fb4adfd8f2a2767357086141c",
+    "pockets/authorization/logic/relationships/read_model.go": "19648fade9203ad4b44434573de121ccd731d7e3f7bc933ce192a9e60323f9f8",
+    "pockets/authorization/logic/relationships/relationship.go": "edd93fd89a581077c3a3c3454933051c9375e6c8d3a601b6ab4f831bd5cfc3c8",
+    "pockets/authorization/logic/audit/audit.go": "b82070dd4389b1d132ed94c524dce72ff74b7a81b3ccdb0e0b2e18be632f56d8",
+    "pockets/authorization/logic/roles/service.go": "b1d946fb3f10ceba2f1da1cbeef556612b119065dabd5c7e01d0d408bfb5744e",
+    "pockets/authorization/logic/tuplecache/reader.go": "396758c48e5b4caa32f7fac91e1fcd63b98020014860de8b9a224a23378531d3",
+    "pockets/authorization/config.go": "539b72d32eabb43c36ff696c15a00edfd4e7283554e3ad939a4352e3cc8dda92",
+    "pockets/authorization/constructor.go": "4813cd8a1fe1e8c83acc0806fc6f7c2a9e17a71da3b4d278da130c7828ca9589"
+  },
+  "not_run": [
+    "live SQL/Redis",
+    "full workspace suite",
+    "race suites",
+    "benchmarks",
+    "staticcheck (installed binary incompatible with required Go toolchain)"
+  ],
+  "production_changes": [],
+  "report_files": [
+    "plans/authorization-cleanup-audit.md",
+    "plans/authorization-cleanup-audit-evidence.json"
+  ]
+}

@@ -1,15 +1,15 @@
 # gopernicus — framework monorepo (sdk + integrations + pockets + examples)
 #
-# Multi-module workspace (go.work), 43 modules. templ is pinned via the `tool`
+# Multi-module workspace (go.work), 42 modules. templ is pinned via the `tool`
 # directive in pockets/cms/views/goth/go.mod (where the .templ sources live),
 # so `go tool templ` is reproducible.
 
-MODULES = sdk pockets integrations/cryptids/bcrypt integrations/cryptids/golang-jwt integrations/cryptids/google-uuid integrations/datastores/pgxdb integrations/datastores/turso integrations/datastores/firestore integrations/email/sendgrid integrations/filestorage/gcs integrations/filestorage/s3 integrations/kvstores/goredis integrations/oauth/github integrations/oauth/google integrations/scheduling/robfig-cron integrations/tracing/otel pockets/authentication pockets/authentication/stores/firestore pockets/authentication/stores/pgx pockets/authentication/stores/turso pockets/authentication/views/goth pockets/authorization pockets/authorization/stores/pgx pockets/authorization/stores/turso pockets/authorization/stores/firestore pockets/authorization/stores/goredis pockets/cms pockets/cms/stores/pgx pockets/cms/stores/turso pockets/cms/views/goth pockets/events pockets/events/stores/pgx pockets/events/stores/turso pockets/jobs pockets/jobs/stores/pgx pockets/jobs/stores/turso ui/goth examples/auth-cms examples/cms examples/goth-showcase examples/jobs-minimal examples/minimal workshop/gopernicus
+MODULES = sdk pockets integrations/cryptids/bcrypt integrations/cryptids/golang-jwt integrations/cryptids/google-uuid integrations/datastores/pgxdb integrations/datastores/turso integrations/datastores/firestore integrations/email/sendgrid integrations/filestorage/gcs integrations/filestorage/s3 integrations/kvstores/goredis integrations/oauth/github integrations/oauth/google integrations/scheduling/robfig-cron integrations/tracing/otel pockets/authentication pockets/authentication/stores/firestore pockets/authentication/stores/pgx pockets/authentication/stores/turso pockets/authentication/views/goth pockets/authorization pockets/authorization/stores/pgx pockets/authorization/stores/turso pockets/authorization/stores/goredis pockets/cms pockets/cms/stores/pgx pockets/cms/stores/turso pockets/cms/views/goth pockets/events pockets/events/stores/pgx pockets/events/stores/turso pockets/jobs pockets/jobs/stores/pgx pockets/jobs/stores/turso ui/goth examples/auth-cms examples/cms examples/goth-showcase examples/jobs-minimal examples/minimal workshop/gopernicus
 
 # STORE_MODULES carry env-gated live conformance suites (storetest against a real
 # database). `make check`/`make test` run them hermetically (loud skips); `make
 # test-stores` runs them EXPECTING the datastore env vars set.
-STORE_MODULES = pockets/cms/stores/pgx pockets/cms/stores/turso pockets/authentication/stores/firestore pockets/authentication/stores/pgx pockets/authentication/stores/turso pockets/jobs/stores/pgx pockets/jobs/stores/turso pockets/events/stores/pgx pockets/events/stores/turso pockets/authorization/stores/pgx pockets/authorization/stores/turso pockets/authorization/stores/firestore
+STORE_MODULES = pockets/cms/stores/pgx pockets/cms/stores/turso pockets/authentication/stores/firestore pockets/authentication/stores/pgx pockets/authentication/stores/turso pockets/jobs/stores/pgx pockets/jobs/stores/turso pockets/events/stores/pgx pockets/events/stores/turso pockets/authorization/stores/pgx pockets/authorization/stores/turso
 
 # INTEGRATION_TAG_MODULES carry `-tags=integration` sources `make check` must keep
 # COMPILING: the Turso/Firestore external-store suites, Firestore connector, and
@@ -32,7 +32,7 @@ LIVE_TAG_MODULES = $(filter %/firestore,$(INTEGRATION_TAG_MODULES))
 	guard-auth-no-delivery-repo guard-auth-no-request-time-provider \
 	guard-authorization-no-delivery-repo guard-authorization-rolesvc-no-engine guard-ui-no-inward guard-ui-require-whitelist \
 	guard-no-legacy-features-path guard-list-no-nethttp guard-violation-message-not-error \
-	guard-firestore-mediation guard-pocket-logic
+	guard-firestore-mediation guard-pocket-logic guard-authorization-tuples-leaf guard-authorization-decisions-no-mutations
 
 # Regenerate *_templ.go from .templ sources. Each bundled views/templ module pins
 # its own templ tool; generation runs inside each so the tool version is
@@ -122,9 +122,6 @@ test-stores:
 	@echo "== integrations/datastores/firestore (emulator, -tags=integration) =="
 	@if [ -z "$$FIRESTORE_EMULATOR_HOST" ]; then echo "   FIRESTORE_EMULATOR_HOST not set — the emulator cases SKIP loudly (Firestore emulator conformance NOT verified)"; fi
 	@cd integrations/datastores/firestore && go test -tags=integration -count=1 -timeout 15m ./...
-	@echo "== pockets/authorization/stores/firestore (emulator, -tags=integration) =="
-	@if [ -z "$$FIRESTORE_EMULATOR_HOST" ]; then echo "   FIRESTORE_EMULATOR_HOST not set — the emulator cases SKIP loudly (Firestore emulator conformance NOT verified)"; fi
-	@cd pockets/authorization/stores/firestore && go test -tags=integration -count=1 -timeout 30m ./...
 	@echo "== pockets/authentication/stores/firestore (emulator, -tags=integration) =="
 	@if [ -z "$$FIRESTORE_EMULATOR_HOST" ]; then echo "   FIRESTORE_EMULATOR_HOST not set — the emulator cases SKIP loudly (Firestore emulator conformance NOT verified)"; fi
 	@cd pockets/authentication/stores/firestore && go test -tags=integration -count=1 -timeout 45m ./...
@@ -176,7 +173,7 @@ guard: guard-sdk-stdlib guard-pocket-isolation guard-sdk-no-outward guard-no-leg
 	guard-auth-no-delivery-repo guard-auth-no-request-time-provider \
 	guard-authorization-no-delivery-repo guard-authorization-rolesvc-no-engine guard-ui-no-inward guard-ui-require-whitelist \
 	guard-no-legacy-features-path guard-list-no-nethttp guard-violation-message-not-error \
-	guard-firestore-mediation guard-pocket-logic
+	guard-firestore-mediation guard-pocket-logic guard-authorization-tuples-leaf guard-authorization-decisions-no-mutations
 
 # G1: sdk imports only the standard library (also enforced structurally by
 # sdk/go.mod having no require block).
@@ -375,9 +372,8 @@ guard-violation-message-not-error:
 # widen the regex — the alternative is an AST pass, which is what the store's own
 # claim/role/mutation ownership tests are for.
 #
-# The glob was empty when this guard landed with the connector, which was the
-# point: the first store train (pockets/authorization/stores/firestore) was born
-# under it. An empty glob must not error, hence the [ -d ] skip.
+# An optional adapter family may have no installed pocket stores. An empty
+# glob must not error, hence the [ -d ] skip.
 guard-firestore-mediation:
 	@echo "== guard: firestore store adapters issue I/O only through the connector's Reader/Writer (G24) =="
 	@fail=0; for d in pockets/*/stores/firestore/; do \
@@ -447,13 +443,20 @@ guard-authorization-no-delivery-repo:
 	@! grep -rnE 'domain/deliveryjob|package deliveryjob' --include='*.go' pockets/authorization || { echo "ERROR (AZ3-5.3): a bespoke deliveryjob domain package appeared in authorization — the v3 kernel ships no effects/delivery domain"; exit 1; }
 
 # G19 (authorization-roles-model, 2026-08-26): the roles domain service
-# (logic/roles) never imports the relationship engine or composite decider.
+# (logic/roles) never imports the relationship engine, composite decider or cache.
 # The decision surface composes downward onto roles; the leaf must not import
 # the composition that consumes it.
 guard-authorization-rolesvc-no-engine:
-	@echo "== guard: authorization roles imports neither relationships nor decisions (G19) =="
+	@echo "== guard: authorization roles imports no relationship, decision or cache engine (G19) =="
 	@test -d pockets/authorization/logic/roles
-	@! grep -rnE 'logic/(relationships|decisions)["`/]' --include='*.go' pockets/authorization/logic/roles || { echo "ERROR (G19): roles imports the relationship engine or composite decider — roles is a leaf; decisions composes onto it, never the reverse"; exit 1; }
+	@! grep -rnE 'logic/(relationships|decisions|tuplecache)["`/]' --include='*.go' pockets/authorization/logic/roles || { echo "ERROR (G19): roles imports the relationship engine, composite decider or cache — decisions composes onto roles, never the reverse"; exit 1; }
+
+# G26: canonical tuple vocabulary sits below every authorization consumer, including
+# the model and cache. Keep its tests on the same side of that boundary.
+guard-authorization-tuples-leaf:
+	@echo "== guard: authorization tuple vocabulary imports no authorization consumer (G26) =="
+	@test -d pockets/authorization/logic/tuples
+	@! (grep -rnE '"github.com/gopernicus/gopernicus/pockets/authorization(/|")' --include='*.go' pockets/authorization/logic/tuples | grep -vE '"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuples(/[^" ]+)?"') || { echo "ERROR (G26): tuple vocabulary imports an authorization consumer — roles, relationships, models and caches depend on tuples, never the reverse"; exit 1; }
 
 # G17 (ui-goth GOTH-0.2, 2026-07-17): the seventh module kind — a UI
 # implementation (a reusable presentation system for one rendering/runtime
@@ -588,3 +591,8 @@ check:
 	@for m in $(LIVE_TAG_MODULES); do echo "== vet -tags=integration,live $$m =="; (cd $$m && go vet -tags='integration,live' ./...) || exit 1; done
 	@$(MAKE) guard
 	@echo "all checks passed"
+
+# G27: guards consume the decision evaluator; decision evaluation cannot import mutations.
+guard-authorization-decisions-no-mutations:
+	@echo "== guard: authorization decisions imports no mutation layer (G27) =="
+	@! grep -rnE 'logic/mutations["`/]' --include='*.go' pockets/authorization/logic/decisions || { echo "ERROR (G27): decisions imports mutations — mutation guards depend on decisions, never the reverse"; exit 1; }

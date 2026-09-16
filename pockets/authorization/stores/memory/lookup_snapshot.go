@@ -1,38 +1,6 @@
 package memory
 
-import (
-	"context"
-	"fmt"
-	"slices"
-
-	"github.com/gopernicus/gopernicus/pockets/authorization/logic/relationships"
-	"github.com/gopernicus/gopernicus/sdk"
-)
-
-var _ relationships.LookupSnapshotter = (*Relationships)(nil)
-
-// ReadLookupSnapshot owns one model-scoped relationship view for the callback.
-func (s *Relationships) ReadLookupSnapshot(ctx context.Context, fn func(context.Context, relationships.Reader) error) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	if fn == nil {
-		return fmt.Errorf("authorization: nil lookup snapshot callback: %w", sdk.ErrInvalidInput)
-	}
-	s.st.mu.Lock()
-	snapshot := &state{rel: slices.Clone(s.st.rel)}
-	s.st.mu.Unlock()
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	view := &snapshotReads{ctx: ctx, st: snapshot}
-	defer view.closed.Store(true)
-	reader := &Relationships{st: snapshot, model: s.model}
-	if err := fn(ctx, &snapshotCheckReader{view: view, reader: reader}); err != nil {
-		return err
-	}
-	return ctx.Err()
-}
+import "context"
 
 func (s *snapshotCheckReader) LookupResourceIDs(ctx context.Context, rt string, relations []string, st, sid, after string, limit int) ([]string, error) {
 	if err := s.view.check(ctx); err != nil {

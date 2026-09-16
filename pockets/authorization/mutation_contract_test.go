@@ -5,11 +5,13 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/decisions"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuples"
+
 	authmodel "github.com/gopernicus/gopernicus/pockets/authorization/logic/model"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/mutations"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/relationships"
 	"github.com/gopernicus/gopernicus/pockets/authorization/stores/memory"
-	"github.com/gopernicus/gopernicus/sdk"
 )
 
 type contractGuard func(context.Context, mutations.MutationAttempt, mutations.DecisionView) error
@@ -29,7 +31,7 @@ func TestGuardCannotRewriteProposedMutation(t *testing.T) {
 		}
 		return nil
 	})
-	comps, err := New(Repositories{Relationships: store.Relationships(), Roles: store.Roles(), Mutations: store.Mutations()}, WithRelationshipModel(lifecycleModel()), WithGuard(guard))
+	comps, err := New(Repositories{Tuples: store.Tuples(), Mutations: store.Mutations()}, WithModel(lifecycleModel()), WithGuard(guard))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -53,52 +55,48 @@ func TestGuardCannotRewriteProposedMutation(t *testing.T) {
 			}
 		}
 	}
-	if _, err := comps.Mutations.AssignRole(ctx, actorU1(), mutations.AssignRoleCommand{Subject: actorU1().PrincipalRef, Role: "viewer"}); err != nil {
+	if _, err := comps.Mutations.AssignRole(ctx, actorU1(), mutations.AssignRoleCommand{Subject: actorU1().PrincipalRef, Role: "viewer", Scope: tuples.Global()}); err != nil {
 		t.Fatal(err)
 	}
-	if ok, err := comps.Roles.HasRole(ctx, actorU1().PrincipalRef, "admin", "", ""); err != nil || ok {
+	if ok, err := comps.Roles.HasRole(ctx, actorU1().PrincipalRef, "admin"); err != nil || ok {
 		t.Fatalf("guard rewrote role: %v, %v", ok, err)
 	}
-	if ok, err := comps.Roles.HasRole(ctx, actorU1().PrincipalRef, "viewer", "", ""); err != nil || !ok {
+	if ok, err := comps.Roles.HasRole(ctx, actorU1().PrincipalRef, "viewer"); err != nil || !ok {
 		t.Fatalf("requested role missing: %v, %v", ok, err)
 	}
 }
 
-func TestGuardianPolicyMustFitHostModel(t *testing.T) {
-	for _, tc := range []struct {
-		name string
-		rule mutations.GuardianRule
-	}{
-		{"unknown type", mutations.GuardianRule{ResourceType: "missing", Relation: "owner"}},
-		{"unknown relation", mutations.GuardianRule{ResourceType: "doc", Relation: "missing"}},
-		{"negative minimum", mutations.GuardianRule{ResourceType: "doc", Relation: "owner", MinAnchors: -1}},
-		{"invalid relation", mutations.GuardianRule{ResourceType: "doc", Relation: "bad#relation"}},
+func TestGuardianPolicyValidatesShapeWithoutRequiringModelCatalog(t *testing.T) {
+	for name, rule := range map[string]mutations.GuardianRule{
+		"negative minimum": {ResourceType: "doc", Relation: "owner", MinAnchors: -1},
+		"invalid relation": {ResourceType: "doc", Relation: "bad\n"},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			st := memory.New(memory.WithGuardianPolicy(mutations.GuardianPolicy{Rules: []mutations.GuardianRule{tc.rule}}))
-			_, err := New(Repositories{Relationships: st.Relationships(), Mutations: st.Mutations()}, WithRelationshipModel(lifecycleModel()))
-			if !errors.Is(err, mutations.ErrInvalidGuardianPolicy) || !errors.Is(err, sdk.ErrInvalidInput) {
-				t.Fatalf("construction accepted impossible policy: %v", err)
+		t.Run(name, func(t *testing.T) {
+			st := memory.New(memory.WithGuardianPolicy(mutations.GuardianPolicy{Rules: []mutations.GuardianRule{rule}}))
+			_, err := New(Repositories{Tuples: st.Tuples(), Mutations: st.Mutations()}, WithModel(lifecycleModel()))
+			if !errors.Is(err, mutations.ErrInvalidGuardianPolicy) {
+				t.Fatalf("invalid guardian: %v", err)
 			}
 		})
 	}
-	model := lifecycleModel()
-	model.ResourceTypes["group"] = relationships.ResourceTypeDef{Relations: map[string]relationships.RelationDef{"member": {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "user"}}}}}
-	model.ResourceTypes["doc"].Relations["owner"] = relationships.RelationDef{AllowedSubjects: []relationships.SubjectTypeRef{{Type: "group", Relation: "member"}}}
-	st := memory.New(memory.WithGuardianPolicy(mutations.GuardianPolicy{Rules: []mutations.GuardianRule{{ResourceType: "doc", Relation: "owner"}}}))
-	if _, err := New(Repositories{Relationships: st.Relationships(), Mutations: st.Mutations()}, WithRelationshipModel(model)); !errors.Is(err, mutations.ErrInvalidGuardianPolicy) {
-		t.Fatalf("userset-only guardian cannot have a concrete anchor: %v", err)
+	st := memory.New(memory.WithGuardianPolicy(mutations.GuardianPolicy{Rules: []mutations.GuardianRule{{ResourceType: "opaque", Relation: "custodian", MinAnchors: 1}}}))
+	comps, err := New(Repositories{Tuples: st.Tuples(), Mutations: st.Mutations()}, WithModel(lifecycleModel()), WithGuard(&stubGuard{}))
+	if err != nil {
+		t.Fatal(err)
 	}
-	st = memory.New(memory.WithGuardianPolicy(mutations.DefaultGuardianPolicy()))
-	if _, err := New(Repositories{Relationships: st.Relationships(), Mutations: st.Mutations()}, WithRelationshipModel(model)); !errors.Is(err, mutations.ErrInvalidGuardianPolicy) {
-		t.Fatalf("wildcard must fit every resource type: %v", err)
+	cmd := mutations.AssignRoleCommand{Subject: prinU("u1"), Role: "custodian", Scope: tuples.On("opaque", "one")}
+	if _, err := comps.Mutations.AssignRole(context.Background(), actorU1(), cmd); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := comps.Mutations.UnassignRole(context.Background(), actorU1(), mutations.UnassignRoleCommand(cmd)); !errors.Is(err, mutations.ErrInvariantBlocked) {
+		t.Fatalf("opaque guardian bypass: %v", err)
 	}
 }
 
 func TestEmptyGuardianIsDefaultAndSupportsReaderOnlyModel(t *testing.T) {
 	st := memory.New()
-	model := relationships.NewSchema([]relationships.ResourceSchema{{Name: "doc", Def: relationships.ResourceTypeDef{Relations: map[string]relationships.RelationDef{"reader": {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "user"}}}}}}})
-	comps, err := New(Repositories{Relationships: st.Relationships(), Mutations: st.Mutations()}, WithRelationshipModel(model))
+	model := decisions.NewSchema([]decisions.ResourceSchema{{Name: "doc", Def: decisions.ResourceTypeDef{Relations: map[string]decisions.RelationDef{"reader": {AllowedSubjects: []decisions.SubjectTypeRef{{Type: "user"}}}}}}})
+	comps, err := New(Repositories{Mutations: st.Mutations(), Tuples: st.Tuples()}, WithModel(model))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,11 +122,11 @@ func TestOpaqueRoleGuardUsesResolvedFactLimits(t *testing.T) {
 		_, err := view.CheckRelation(ctx, actorU1().PrincipalRef, "member", authmodel.Resource{Type: "group", ID: "g1"})
 		return err
 	})
-	comps, err := New(Repositories{Roles: memory.NewRoles(), Mutations: repo}, WithGuard(guard), WithLimits(authmodel.EvaluationLimits{MaxGraphStates: 3}))
+	comps, err := New(Repositories{Tuples: memory.NewTuples(), Mutations: repo}, WithGuard(guard), WithLimits(authmodel.EvaluationLimits{MaxGraphStates: 3}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = comps.Mutations.AssignRole(context.Background(), actorU1(), mutations.AssignRoleCommand{Subject: actorU1().PrincipalRef, Role: "viewer"})
+	_, err = comps.Mutations.AssignRole(context.Background(), actorU1(), mutations.AssignRoleCommand{Subject: actorU1().PrincipalRef, Role: "viewer", Scope: tuples.Global()})
 	if !errors.Is(err, authmodel.ErrEvaluationLimit) || adapter.bound != 3 {
 		t.Fatalf("raw fact ignored host budget: bound=%d err=%v", adapter.bound, err)
 	}

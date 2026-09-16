@@ -2,51 +2,49 @@ package tuplecache
 
 import (
 	"context"
+	"fmt"
 	"slices"
-	"sort"
 
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/relationships"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuples"
+	"github.com/gopernicus/gopernicus/sdk"
 )
 
 type cachedReads struct {
 	ctx            context.Context
 	backend        Backend
 	state          State
-	sets           map[SetKey][]relationships.SubjectRef
+	sets           map[SetKey][]tuples.Tuple
 	failed, closed bool
 	failure        error
 }
 
+var _ tuples.Reader = (*cachedReads)(nil)
+
 func (r *cachedReads) ForChecks(model relationships.ReadModel) relationships.CheckReader {
 	return &checkReader{raw: r, model: model}
 }
-
-func (r *cachedReads) HasExactRole(ctx context.Context, _ string, _ string, _ string, _ string, _ string) (bool, error) {
-	if err := r.check(ctx); err != nil {
-		return false, err
-	}
-	r.failed = true
-	return false, ErrUnavailable
-}
-
 func (r *cachedReads) check(ctx context.Context) error {
 	if r.closed {
 		return ErrSnapshotClosed
 	}
 	if err := r.ctx.Err(); err != nil {
-		r.failed = true
-		return err
+		return r.fail(err)
 	}
 	if err := ctx.Err(); err != nil {
-		r.failed = true
-		return err
+		return r.fail(err)
 	}
 	return nil
 }
-
-func (r *cachedReads) read(ctx context.Context, keys []SetKey) ([][]relationships.SubjectRef, error) {
+func (r *cachedReads) fail(err error) error { r.failed = true; r.failure = err; return err }
+func (r *cachedReads) read(ctx context.Context, keys []SetKey) ([][]tuples.Tuple, error) {
 	if err := r.check(ctx); err != nil {
 		return nil, err
+	}
+	for _, key := range keys {
+		if err := key.Validate(); err != nil {
+			return nil, err
+		}
 	}
 	var missing []SetKey
 	seen := make(map[SetKey]bool)
@@ -59,37 +57,104 @@ func (r *cachedReads) read(ctx context.Context, keys []SetKey) ([][]relationship
 	if len(missing) > 0 {
 		values, err := r.backend.Read(ctx, r.state, missing)
 		if err != nil {
-			r.failed = true
-			r.failure = err
-			return nil, err
+			return nil, r.fail(err)
 		}
 		if len(values) != len(missing) {
-			r.failed = true
-			return nil, ErrUnavailable
+			return nil, r.fail(ErrUnavailable)
 		}
-		for i, refs := range values {
-			for _, ref := range refs {
-				if ref.Validate() != nil || (missing[i].Reverse && ref.Relation == "") {
-					r.failed = true
-					return nil, ErrUnavailable
+		for i, facts := range values {
+			for _, fact := range facts {
+				key := missing[i]
+				if fact.Validate() != nil || (key.Reverse && fact.Subject != key.Subject) || (!key.Reverse && (fact.Scope != key.Scope || fact.Relation != key.Relation)) {
+					return nil, r.fail(ErrUnavailable)
 				}
 			}
-			refs = slices.Clone(refs)
-			sort.Slice(refs, func(i, j int) bool {
-				if refs[i].Type != refs[j].Type {
-					return refs[i].Type < refs[j].Type
-				}
-				if refs[i].ID != refs[j].ID {
-					return refs[i].ID < refs[j].ID
-				}
-				return refs[i].Relation < refs[j].Relation
-			})
-			r.sets[missing[i]] = slices.Compact(refs)
+			facts = slices.Clone(facts)
+			slices.SortFunc(facts, tuples.Compare)
+			r.sets[missing[i]] = slices.Compact(facts)
 		}
 	}
-	out := make([][]relationships.SubjectRef, len(keys))
+	out := make([][]tuples.Tuple, len(keys))
 	for i, key := range keys {
 		out[i] = slices.Clone(r.sets[key])
+	}
+	return out, nil
+}
+func (r *cachedReads) Contains(ctx context.Context, fact tuples.Tuple) (bool, error) {
+	out, err := r.ContainsMany(ctx, []tuples.Tuple{fact})
+	if err != nil {
+		return false, err
+	}
+	return out[0], nil
+}
+func (r *cachedReads) ContainsMany(ctx context.Context, facts []tuples.Tuple) ([]bool, error) {
+	if err := r.check(ctx); err != nil {
+		return nil, err
+	}
+	keys := make([]SetKey, len(facts))
+	for i, fact := range facts {
+		if err := fact.Validate(); err != nil {
+			return nil, err
+		}
+		keys[i] = SetKey{Scope: fact.Scope, Relation: fact.Relation}
+	}
+	sets, err := r.read(ctx, keys)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]bool, len(facts))
+	for i, fact := range facts {
+		out[i] = slices.Contains(sets[i], fact)
+	}
+	return out, nil
+}
+func (r *cachedReads) ReadSets(ctx context.Context, keys []SetKey, maxResults int) ([][]tuples.Tuple, error) {
+	if maxResults < 0 {
+		return nil, fmt.Errorf("negative tuple set limit: %w", sdk.ErrInvalidInput)
+	}
+	out, err := r.read(ctx, keys)
+	if err != nil {
+		return nil, err
+	}
+	if maxResults > 0 {
+		remaining := maxResults
+		for _, set := range out {
+			if len(set) > remaining {
+				return nil, tuples.ErrReadLimit
+			}
+			remaining -= len(set)
+		}
+	}
+	return out, nil
+}
+func (r *cachedReads) Lookup(ctx context.Context, q tuples.Query) ([]tuples.Tuple, error) {
+	if err := r.check(ctx); err != nil {
+		return nil, err
+	}
+	if err := q.Validate(); err != nil {
+		return nil, err
+	}
+	var key SetKey
+	switch {
+	case q.Subject != nil:
+		key = SetKey{Reverse: true, Subject: *q.Subject}
+	case q.Scope != nil && q.Relation != "":
+		key = SetKey{Scope: *q.Scope, Relation: q.Relation}
+	default:
+		return nil, r.fail(ErrUnavailable)
+	}
+	sets, err := r.read(ctx, []SetKey{key})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]tuples.Tuple, 0)
+	for _, fact := range sets[0] {
+		if q.Matches(fact) && (q.After == nil || tuples.Compare(fact, *q.After) > 0) {
+			out = append(out, fact)
+			if q.Limit > 0 && len(out) == q.Limit {
+				break
+			}
+		}
 	}
 	return out, nil
 }
@@ -108,7 +173,7 @@ func (r *checkReader) RelationTargetsFor(ctx context.Context, rt string, ids []s
 	ids = slices.Compact(slices.Sorted(slices.Values(ids)))
 	keys := make([]SetKey, len(ids))
 	for i, id := range ids {
-		keys[i] = SetKey{Ref: relationships.SubjectRef{Type: rt, ID: id, Relation: relation}}
+		keys[i] = SetKey{Scope: tuples.On(rt, id), Relation: relation}
 	}
 	sets, err := r.raw.read(ctx, keys)
 	if err != nil {
@@ -116,7 +181,8 @@ func (r *checkReader) RelationTargetsFor(ctx context.Context, rt string, ids []s
 	}
 	out := make(map[string][]relationships.RelationTarget, len(ids))
 	for i, refs := range sets {
-		for _, ref := range refs {
+		for _, fact := range refs {
+			ref := fact.Subject
 			if r.model.Allows(rt, relation, ref.Type, ref.Relation) {
 				out[ids[i]] = append(out[ids[i]], ref)
 			}
@@ -134,7 +200,7 @@ func (r *checkReader) reachable(ctx context.Context, st, sid string, limit int) 
 	for len(frontier) > 0 {
 		keys := make([]SetKey, len(frontier))
 		for i, ref := range frontier {
-			keys[i] = SetKey{Reverse: true, Ref: ref}
+			keys[i] = SetKey{Reverse: true, Subject: ref}
 		}
 		sets, err := r.raw.read(ctx, keys)
 		if err != nil {
@@ -142,7 +208,11 @@ func (r *checkReader) reachable(ctx context.Context, st, sid string, limit int) 
 		}
 		var next []relationships.SubjectRef
 		for i, refs := range sets {
-			for _, ref := range refs {
+			for _, fact := range refs {
+				if fact.Scope.Kind != tuples.ResourceScope {
+					continue
+				}
+				ref := tuples.SubjectRef{Type: fact.Scope.Type, ID: fact.Scope.ID, Relation: fact.Relation}
 				if err := ctx.Err(); err != nil {
 					return nil, err
 				}

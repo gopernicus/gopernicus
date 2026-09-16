@@ -3,14 +3,13 @@ package storetest
 import (
 	"context"
 	"fmt"
-	"slices"
+
 	"testing"
 
 	"github.com/gopernicus/gopernicus/pockets/authorization"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/decisions"
 	authmodel "github.com/gopernicus/gopernicus/pockets/authorization/logic/model"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/mutations"
-	"github.com/gopernicus/gopernicus/pockets/authorization/logic/relationships"
 	"github.com/gopernicus/gopernicus/sdk/pkg/list"
 )
 
@@ -22,85 +21,53 @@ import (
 // enough for a live remote dialect run.
 const rolesWalkAssignments = 2*list.MaxLimit + 5
 
-// decisionRoleModel is the roles-decision fixture. One resource type with two
+// rolePolicyModel is the roles-decision fixture. One resource type with two
 // permissions of DIFFERENT grantor sets is the whole point: a globally held
 // viewer is unrestricted for view and holds nothing on audit, so "a global role
 // is data, not a bypass" is provable on every dialect.
-func decisionRoleModel() authmodel.RoleModel {
-	return authmodel.RoleModel{ResourceTypes: map[string]authmodel.RoleTypeDef{
-		"project": {
-			Roles: []string{"auditor", "viewer"},
-			Permissions: map[string][]string{
-				"audit": {"auditor"},
-				"view":  {"auditor", "viewer"},
-			},
-		},
-	}}
+func rolePolicyModel() decisions.Model {
+	return decisions.Model{ResourceTypes: map[string]decisions.ResourceTypeDef{"project": {Permissions: map[string]decisions.Expression{
+		"audit": decisions.RoleIn("auditor"),
+		"view":  decisions.Any(decisions.RoleIn("auditor"), decisions.RoleIn("viewer"), decisions.Role("viewer")),
+	}}}}
 }
 
-// composedSchema is the pair-split fixture's RELATIONSHIP half: project/view is
-// relationship-owned (auth-cms's shape).
-func composedSchema() relationships.Schema {
-	return relationships.NewSchema([]relationships.ResourceSchema{
-		{Name: "project", Def: relationships.ResourceTypeDef{
-			Relations: map[string]relationships.RelationDef{
-				"viewer": {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "user"}}},
+// composedSchema is a graph branch in the unified permission policy.
+func composedSchema() decisions.Model {
+	return decisions.NewSchema([]decisions.ResourceSchema{
+		{Name: "project", Def: decisions.ResourceTypeDef{
+			Relations: map[string]decisions.RelationDef{
+				"viewer": {AllowedSubjects: []decisions.SubjectTypeRef{{Type: "user"}}},
 			},
-			Permissions: map[string]relationships.PermissionRule{
-				"view": relationships.AnyOf(relationships.Direct("viewer")),
+			Permissions: map[string]decisions.Expression{
+				"view": decisions.AnyOf(decisions.Direct("viewer")),
 			},
 		}},
 	})
 }
 
-// composedRoleModel is the ROLE half of the SAME resource type: project/audit is
-// role-owned. The two halves share the type and declare disjoint permissions —
-// the only split D1 rule 4 permits, and the shape the composite dispatches on.
-func composedRoleModel() authmodel.RoleModel {
-	return authmodel.RoleModel{ResourceTypes: map[string]authmodel.RoleTypeDef{
-		"project": {Roles: []string{"auditor"}, Permissions: map[string][]string{"audit": {"auditor"}}},
-	}}
-}
-
-// newRoleModelService builds the pocket Service over the stores under test with
-// a role model configured, so the decision surface is answered by the ROLES kind
-// on whichever dialect is running. cfg carries the model(s); the budget is the
-// oracle's generous one so no assertion is masked by exhaustion.
-func newRoleModelService(t *testing.T, repos authorization.Repositories, opts ...authorization.Option) authorization.Components {
+// newDecisionService constructs the public surface with generous oracle limits.
+func newDecisionService(t *testing.T, repos Repositories, opts ...authorization.Option) authorization.Components {
 	t.Helper()
 	opts = append(opts, authorization.WithLimits(generousLimits()))
-	comps, err := authorization.New(repos, opts...)
+	comps, err := authorization.New(repos.Repositories, opts...)
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
 	return comps
 }
 
-// rolesOnly is repos with the relationship kind UNWIRED. The roles-decision legs
-// assert what the roles kind decides ALONE, so they run the same roles-only host
-// wiring on a both-kinds backend as on a roles-only one (Model and Relationships
-// are wired together or not at all).
-func rolesOnly(repos authorization.Repositories) authorization.Repositories {
-	repos.Relationships = nil
-	return repos
-}
-
-// grantRole seeds ONE modeled (resourceType, role) assignment through the
-// high-integrity mutation path — the seam D8's assign-time model validation runs
-// on — falling back to the raw role.Storer port (the runRoles precedent) when a
-// backend wires the roles kind without a mutation repository, since the family
-// is gated on Repositories.Roles alone.
-func grantRole(t *testing.T, repos authorization.Repositories, mutator *mutations.SystemMutator, subjectType, subjectID, roleName, resourceType, resourceID string) {
+// grantRole seeds through guarded mutation when that capability is supplied.
+func grantRole(t *testing.T, repos Repositories, mutator *mutations.SystemMutator, subjectType, subjectID, roleName, resourceType, resourceID string) {
 	t.Helper()
 	if repos.Mutations == nil {
-		assign(t, repos.Roles, subjectType, subjectID, roleName, resourceType, resourceID)
+		assign(t, repos.Tuples, subjectType, subjectID, roleName, resourceType, resourceID)
 		return
 	}
 	result, err := mutator.AssignRole(context.Background(), mutations.AssignRoleCommand{
-		Subject:      authmodel.PrincipalRef{Type: subjectType, ID: subjectID},
-		Role:         roleName,
-		ResourceType: resourceType,
-		ResourceID:   resourceID,
+		Subject: authmodel.PrincipalRef{Type: subjectType, ID: subjectID},
+		Role:    roleName, Scope: fixtureScope(resourceType,
+			resourceID),
 	})
 	if err != nil {
 		t.Fatalf("AssignRole(%s on %s/%s): %v", roleName, resourceType, resourceID, err)
@@ -138,20 +105,18 @@ func projectLookup(t *testing.T, svc authorization.Components, subjectID, permis
 	return res
 }
 
-// runRolesDecision is the Roles/Decision family: the roles kind answering the
-// DECISION surface (layer (b)) over the store under test. It runs wherever the
-// roles kind is wired, with or without the relationship kind.
-func runRolesDecision(t *testing.T, newRepos func(t *testing.T) authorization.Repositories) {
+// runRolesDecision exercises exact leaves in the unified decision surface.
+func runRolesDecision(t *testing.T, newRepos func(t *testing.T) Repositories) {
 	t.Run("DirectGrantAllows", func(t *testing.T) {
-		repos := rolesOnly(newRepos(t))
-		comps := newRoleModelService(t, repos, authorization.WithRoleModel(decisionRoleModel()))
+		repos := newRepos(t)
+		comps := newDecisionService(t, repos, authorization.WithModel(rolePolicyModel()))
 		grantRole(t, repos, comps.SystemMutator, "user", "u1", "auditor", "project", "p1")
 
-		if res := projectCheck(t, comps, "u1", "audit", "p1"); !res.Allowed || res.Reason != "role:auditor@direct" {
+		if res := projectCheck(t, comps, "u1", "audit", "p1"); !res.Allowed || res.ReasonCode != authmodel.ReasonGranted {
 			t.Fatalf("direct grant: %+v, want allowed with reason role:auditor@direct", res)
 		}
 		// The grant is scoped: another project of the same type is denied.
-		if res := projectCheck(t, comps, "u1", "audit", "p2"); res.Allowed || res.Reason != "no matching role" {
+		if res := projectCheck(t, comps, "u1", "audit", "p2"); res.Allowed || res.ReasonCode != authmodel.ReasonDenied {
 			t.Fatalf("unscoped project: %+v, want denied with reason no matching role", res)
 		}
 		look := projectLookup(t, comps, "u1", "audit")
@@ -160,14 +125,14 @@ func runRolesDecision(t *testing.T, newRepos func(t *testing.T) authorization.Re
 		}
 	})
 
-	t.Run("GlobalGrantSatisfiesScopedCheck", func(t *testing.T) {
-		repos := rolesOnly(newRepos(t))
-		comps := newRoleModelService(t, repos, authorization.WithRoleModel(decisionRoleModel()))
+	t.Run("ExplicitGlobalBranchSatisfiesScopedPermission", func(t *testing.T) {
+		repos := newRepos(t)
+		comps := newDecisionService(t, repos, authorization.WithModel(rolePolicyModel()))
 		grantRole(t, repos, comps.SystemMutator, "user", "u1", "viewer", "", "")
 
 		for _, projectID := range []string{"p1", "p2"} {
 			res := projectCheck(t, comps, "u1", "view", projectID)
-			if !res.Allowed || res.Reason != "role:viewer@global" {
+			if !res.Allowed || res.ReasonCode != authmodel.ReasonGranted {
 				t.Fatalf("global grant on project:%s: %+v, want allowed with reason role:viewer@global", projectID, res)
 			}
 		}
@@ -178,12 +143,11 @@ func runRolesDecision(t *testing.T, newRepos func(t *testing.T) authorization.Re
 	})
 
 	t.Run("UndeclaredPairDenies", func(t *testing.T) {
-		repos := rolesOnly(newRepos(t))
-		comps := newRoleModelService(t, repos, authorization.WithRoleModel(decisionRoleModel()))
+		repos := newRepos(t)
+		comps := newDecisionService(t, repos, authorization.WithModel(rolePolicyModel()))
 		grantRole(t, repos, comps.SystemMutator, "user", "u1", "auditor", "project", "p1")
 
-		// "delete" is declared by no model, so no role can ever grant it — the
-		// relationship engine's wording, from the roles kind.
+		// No expression declares delete, so it cannot grant access.
 		if res := projectCheck(t, comps, "u1", "delete", "p1"); res.Allowed || res.Reason != "no rules defined" {
 			t.Fatalf("undeclared pair: %+v, want denied with reason no rules defined", res)
 		}
@@ -193,8 +157,8 @@ func runRolesDecision(t *testing.T, newRepos func(t *testing.T) authorization.Re
 	})
 
 	t.Run("GlobalRoleIsUnrestrictedOnlyForItsDeclaredPairs", func(t *testing.T) {
-		repos := rolesOnly(newRepos(t))
-		comps := newRoleModelService(t, repos, authorization.WithRoleModel(decisionRoleModel()))
+		repos := newRepos(t)
+		comps := newDecisionService(t, repos, authorization.WithModel(rolePolicyModel()))
 		// viewer is held GLOBALLY; the model lists it on view and NOT on audit.
 		grantRole(t, repos, comps.SystemMutator, "user", "u1", "viewer", "", "")
 
@@ -219,13 +183,13 @@ func runRolesDecision(t *testing.T, newRepos func(t *testing.T) authorization.Re
 // by LookupAllResourceIDs and every looked-up ID passes Check — the same invariant the
 // relationship arm proves, now across a MULTI-PAGE ListBySubject walk so each
 // dialect's cursor behaviour is pinned.
-func runRolesParity(t *testing.T, newRepos func(t *testing.T) authorization.Repositories) {
+func runRolesParity(t *testing.T, newRepos func(t *testing.T) Repositories) {
 	ctx := context.Background()
 	universe := []string{"p1", "p2", "p3", "p_absent"}
 
 	t.Run("RolesCheckLookupOracle", func(t *testing.T) {
-		repos := rolesOnly(newRepos(t))
-		comps := newRoleModelService(t, repos, authorization.WithRoleModel(decisionRoleModel()))
+		repos := newRepos(t)
+		comps := newDecisionService(t, repos, authorization.WithModel(rolePolicyModel()))
 		svc := comps
 
 		grantRole(t, repos, comps.SystemMutator, "user", "u_auditor", "auditor", "project", "p1")
@@ -261,8 +225,8 @@ func runRolesParity(t *testing.T, newRepos func(t *testing.T) authorization.Repo
 	})
 
 	t.Run("RolesMultiPageWalk", func(t *testing.T) {
-		repos := rolesOnly(newRepos(t))
-		comps := newRoleModelService(t, repos, authorization.WithRoleModel(decisionRoleModel()))
+		repos := newRepos(t)
+		comps := newDecisionService(t, repos, authorization.WithModel(rolePolicyModel()))
 		svc := comps
 
 		// Seed through the raw role port: this case covers enumeration over many
@@ -271,13 +235,13 @@ func runRolesParity(t *testing.T, newRepos func(t *testing.T) authorization.Repo
 		for i := 0; i < rolesWalkAssignments; i++ {
 			id := walkProjectID(i)
 			walked = append(walked, id)
-			assign(t, repos.Roles, "user", "u_walk", "auditor", "project", id)
+			assign(t, repos.Tuples, "user", "u_walk", "auditor", "project", id)
 		}
 		// A non-granting assignment inside the same walk: viewer does not grant
 		// audit, so the walk must filter by role, not merely by resource type.
-		assign(t, repos.Roles, "user", "u_walk", "viewer", "project", "p_view_only")
+		assign(t, repos.Tuples, "user", "u_walk", "viewer", "project", "p_view_only")
 		// A granting role on ANOTHER resource type must not leak into this type.
-		assign(t, repos.Roles, "user", "u_walk", "auditor", "dataset", "ds1")
+		assign(t, repos.Tuples, "user", "u_walk", "auditor", "dataset", "ds1")
 
 		sweep := append(append([]string(nil), walked...), "p_view_only", "p_absent")
 		assertCheckLookupParity(t, ctx, svc, authmodel.PrincipalRef{Type: "user", ID: "u_walk"}, "audit", "project", sweep)
@@ -303,83 +267,32 @@ func walkProjectID(i int) string {
 	return fmt.Sprintf("pw-%03d", i)
 }
 
-// runComposed is the Composed family: ONE resource type split by PERMISSION
-// across the two kinds (auth-cms's shape). It proves the composite dispatches
-// each pair to the model that declares it on the store under test — never a
-// union, never a cross-kind widening.
-func runComposed(t *testing.T, newRepos func(t *testing.T) authorization.Repositories) {
-	t.Run("PairOwnershipDispatch", func(t *testing.T) {
+// runComposed proves exact and graph policy leaves share one fact authority.
+func runComposed(t *testing.T, newRepos func(*testing.T) Repositories) {
+	t.Run("SharedFactsAndExpressionAlgebra", func(t *testing.T) {
 		repos := newRepos(t)
-		comps := newRoleModelService(t, repos, authorization.WithRelationshipModel(composedSchema()), authorization.WithRoleModel(composedRoleModel()))
-		svc := comps
-
-		// u_tuple holds the relationship and NO role; u_role holds the role and NO
-		// relationship.
-		mustCreate(t, repos.Relationships, ct("project", "p1", "viewer", "user", "u_tuple"))
-		grantRole(t, repos, comps.SystemMutator, "user", "u_role", "auditor", "project", "p1")
-
-		for _, tc := range []struct {
-			subject, permission string
-			want                bool
-		}{
-			{"u_tuple", "view", true},   // relationship-owned pair, tuple held
-			{"u_tuple", "audit", false}, // role-owned pair, no role
-			{"u_role", "audit", true},   // role-owned pair, role held
-			{"u_role", "view", false},   // relationship-owned pair, no tuple
-		} {
-			if res := projectCheck(t, svc, tc.subject, tc.permission, "p1"); res.Allowed != tc.want {
-				t.Fatalf("Check(%s, %s, project:p1) = %v (reason %q), want %v", tc.subject, tc.permission, res.Allowed, res.Reason, tc.want)
+		model := composedSchema()
+		rt := model.ResourceTypes["project"]
+		rt.Permissions["audit"] = decisions.RoleIn("auditor")
+		rt.Permissions["both"] = decisions.All(decisions.Direct("viewer"), decisions.RoleIn("auditor"))
+		rt.Permissions["either"] = decisions.Any(decisions.Direct("viewer"), decisions.RoleIn("auditor"))
+		model.ResourceTypes["project"] = rt
+		comps := newDecisionService(t, repos, authorization.WithModel(model))
+		assign(t, repos.Tuples, "user", "u", "viewer", "project", "p1")
+		mustCreate(t, repos.Relationships, ct("project", "p1", "auditor", "user", "u"))
+		for _, permission := range []string{"view", "audit", "both", "either"} {
+			if result := projectCheck(t, comps, "u", permission, "p1"); !result.Allowed {
+				t.Fatalf("%s denied shared facts: %+v", permission, result)
 			}
 		}
-
-		// Enumeration dispatches the same way: each pair returns ONLY its owning
-		// kind's IDs.
-		for _, tc := range []struct {
-			subject, permission string
-			want                []string
-		}{
-			{"u_tuple", "view", []string{"p1"}},
-			{"u_tuple", "audit", nil},
-			{"u_role", "audit", []string{"p1"}},
-			{"u_role", "view", nil},
-		} {
-			look := projectLookup(t, svc, tc.subject, tc.permission)
-			if look.Unrestricted || !idsEqual(look.IDs, tc.want) {
-				t.Fatalf("LookupAllResourceIDs(%s, %s) = %+v, want IDs %v and not unrestricted", tc.subject, tc.permission, look, tc.want)
-			}
+		if err := unassignRole(t.Context(), repos.Tuples, "user", "u", "viewer", "project", "p1"); err != nil {
+			t.Fatal(err)
 		}
-	})
-
-	t.Run("PagedPairOwnershipDispatch", func(t *testing.T) {
-		repos := newRepos(t)
-		comps := newRoleModelService(t, repos, authorization.WithRelationshipModel(composedSchema()), authorization.WithRoleModel(composedRoleModel()))
-		svc := comps
-
-		// Each principal holds TWO resources under its own kind, so each owner has
-		// a real continuation to follow.
-		mustCreate(t, repos.Relationships,
-			ct("project", "p1", "viewer", "user", "u_tuple"),
-			ct("project", "p2", "viewer", "user", "u_tuple"),
-		)
-		grantRole(t, repos, comps.SystemMutator, "user", "u_role", "auditor", "project", "p1")
-		grantRole(t, repos, comps.SystemMutator, "user", "u_role", "auditor", "project", "p2")
-
-		tupleHolder := authmodel.PrincipalRef{Type: "user", ID: "u_tuple"}
-		roleHolder := authmodel.PrincipalRef{Type: "user", ID: "u_role"}
-		want := []string{"p1", "p2"}
-		if got := assertPagedParityAt(t, svc, tupleHolder, "view", "project", []int{1, 2}); !slices.Equal(got, want) {
-			t.Fatalf("relationship-owned paging = %v, want %v", got, want)
+		if projectCheck(t, comps, "u", "view", "p1").Allowed || projectCheck(t, comps, "u", "both", "p1").Allowed {
+			t.Fatal("revoked shared viewer remains")
 		}
-		if got := assertPagedParityAt(t, svc, roleHolder, "audit", "project", []int{1, 2}); !slices.Equal(got, want) {
-			t.Fatalf("role-owned paging = %v, want %v", got, want)
+		if !projectCheck(t, comps, "u", "either", "p1").Allowed {
+			t.Fatal("independent auditor removed")
 		}
-
-		// A cursor's fingerprint binds the OWNING KIND, not only the query: a
-		// relationship-owned continuation is refused on the role-owned permission
-		// of the SAME resource type.
-		cursor := firstPage(t, svc, tupleHolder, "view", "project", 1).NextCursor
-		assertRefusedCursor(t, svc, "on the role-owned permission of the same type", decisions.ResourceIDPageRequest{
-			Principal: tupleHolder, Permission: "audit", ResourceType: "project", Limit: 1, After: cursor,
-		})
 	})
 }

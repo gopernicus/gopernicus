@@ -11,7 +11,7 @@ import (
 )
 
 func TestNilOptionRejectedBeforeProbe(t *testing.T) {
-	if _, err := Repositories(context.Background(), &pgxdb.DB{}, nil); !errors.Is(err, sdk.ErrInvalidInput) {
+	if _, err := testRepositories(context.Background(), &pgxdb.DB{}, nil); !errors.Is(err, sdk.ErrInvalidInput) {
 		t.Fatalf("Repositories nil option: %v", err)
 	}
 	if _, err := RelationshipRepository(context.Background(), &pgxdb.DB{}, nil); !errors.Is(err, sdk.ErrInvalidInput) {

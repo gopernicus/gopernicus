@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/relationships"
-	"github.com/gopernicus/gopernicus/pockets/authorization/logic/roles"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuples"
 	"github.com/gopernicus/gopernicus/sdk"
 )
 
@@ -27,36 +27,36 @@ func TestSourceValidation(t *testing.T) {
 }
 func TestRecordsOwnCanonicalNetChanges(t *testing.T) {
 	ctx := WithSource(context.Background(), Source{System: "sync"})
-	a := relationships.CreateRelationship{ResourceType: "doc", ResourceID: "d", Relation: "viewer", SubjectType: "group", SubjectID: "g", SubjectRelation: "member"}
+	a := (relationships.CreateRelationship{ResourceType: "doc", ResourceID: "d", Relation: "viewer", SubjectType: "group", SubjectID: "g", SubjectRelation: "member"}).Tuple()
 	b := a
-	b.SubjectRelation = "admin"
-	roleGrant := roles.Assignment{SubjectType: "user", SubjectID: "u", Role: "editor"}
+	b.Subject.Relation = "admin"
+	roleGrant := tuples.Tuple{Scope: tuples.Global(), Relation: "editor", Subject: tuples.SubjectRef{Type: "user", ID: "u"}}
 	now := time.Date(2026, 9, 11, 1, 2, 3, 123456789, time.FixedZone("test", 3600))
-	records, err := NewRecords(ctx, []Change{{Action: ActionAdded, Relationship: &a}, {Action: ActionAdded, Relationship: &b}, {Action: ActionRemoved, Relationship: &a}, {Action: ActionAdded, Role: &roleGrant}, {Action: ActionAdded, Relationship: &b}}, now)
+	records, err := NewRecords(ctx, []Change{{Action: ActionAdded, Tuple: a}, {Action: ActionAdded, Tuple: b}, {Action: ActionRemoved, Tuple: a}, {Action: ActionAdded, Tuple: roleGrant}, {Action: ActionAdded, Tuple: b}}, now)
 	if err != nil || len(records) != 2 {
 		t.Fatalf("net changes: %+v %v", records, err)
 	}
-	if records[0].Change.Relationship == nil || *records[0].Change.Relationship != b || records[1].Change.Role == nil {
+	if records[0].Change.Tuple != roleGrant || records[1].Change.Tuple != b {
 		t.Fatalf("canonical changes: %+v", records)
 	}
 	for i, r := range records {
-		if r.EventID != records[0].EventID || r.ID == "" || !r.OccurredAt.Equal(now.UTC().Truncate(time.Microsecond)) || r.OccurredAt.Location() != time.UTC {
+		if r.Encoding != EncodingTuple || r.EventID != records[0].EventID || r.ID == "" || !r.OccurredAt.Equal(now.UTC().Truncate(time.Microsecond)) || r.OccurredAt.Location() != time.UTC {
 			t.Fatalf("record %d malformed: %+v", i, r)
 		}
 	}
 	if !strings.HasSuffix(records[0].ID, ":00000000000000000001") || !strings.HasSuffix(records[1].ID, ":00000000000000000002") {
 		t.Fatalf("ordinal format: %+v", records)
 	}
-	b.SubjectID = "changed"
-	roleGrant.Role = "changed"
-	if records[0].Change.Relationship.SubjectID != "g" || records[1].Change.Role.Role != "editor" {
+	b.Subject.ID = "changed"
+	roleGrant.Relation = "changed"
+	if records[1].Change.Tuple.Subject.ID != "g" || records[0].Change.Tuple.Relation != "editor" {
 		t.Fatal("input aliases retained history")
 	}
-	second, err := NewRecords(ctx, []Change{{Action: ActionAdded, Relationship: &a}}, now)
+	second, err := NewRecords(ctx, []Change{{Action: ActionAdded, Tuple: a}}, now)
 	if err != nil || second[0].EventID == records[0].EventID {
 		t.Fatalf("operation reused event id: %v", err)
 	}
-	empty, err := NewRecords(ctx, []Change{{Action: ActionAdded, Relationship: &a}, {Action: ActionRemoved, Relationship: &a}}, now)
+	empty, err := NewRecords(ctx, []Change{{Action: ActionAdded, Tuple: a}, {Action: ActionRemoved, Tuple: a}}, now)
 	if err != nil || len(empty) != 0 {
 		t.Fatalf("opposing changes not canceled: %+v %v", empty, err)
 	}
@@ -68,9 +68,8 @@ func TestRecordsOwnCanonicalNetChanges(t *testing.T) {
 }
 func TestChangeAndFilterValidation(t *testing.T) {
 	ctx := WithSource(context.Background(), Source{System: "sync"})
-	a := relationships.CreateRelationship{ResourceType: "doc", ResourceID: "d", Relation: "viewer", SubjectType: "user", SubjectID: "u"}
-	r := roles.Assignment{SubjectType: "user", SubjectID: "u", Role: "editor"}
-	for _, c := range []Change{{Action: ActionAdded}, {Action: ActionAdded, Relationship: &a, Role: &r}, {Action: "changed", Relationship: &a}, {Action: ActionRemoved, Role: &roles.Assignment{}}} {
+	a := (relationships.CreateRelationship{ResourceType: "doc", ResourceID: "d", Relation: "viewer", SubjectType: "user", SubjectID: "u"}).Tuple()
+	for _, c := range []Change{{Action: ActionAdded}, {Action: ActionAdded, Tuple: tuples.Tuple{Scope: tuples.Global(), Relation: "owner"}}, {Action: "changed", Tuple: a}, {Action: ActionRemoved, Tuple: tuples.Tuple{}}} {
 		if _, err := NewRecords(ctx, []Change{c}, time.Now()); !errors.Is(err, sdk.ErrInvalidInput) {
 			t.Fatalf("invalid change accepted: %+v %v", c, err)
 		}

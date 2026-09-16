@@ -1,10 +1,7 @@
-// Package memory is the public in-core reference implementation of BOTH
-// authorization kinds — relationship.Storer (a Go graph-walk ReBAC engine) and
-// role.Storer (plain maps). It is mutex-backed and honest: group expansion is
-// re-implemented as a real transitive walk (unbounded but cycle-safe via a
-// visited set, mirroring the SQL stores' recursive CTE, which terminates by
-// UNION dedup alone), unique-tuple enforcement is genuine, and counts are
-// direct-only.
+// Package memory provides one mutex-backed canonical authorization authority.
+// Tuple, relationship, mutation and audit views share its facts and write
+// boundary. Model-scoped userset expansion mirrors the SQL recursive closure;
+// exact roles read the same facts without expansion.
 //
 // It exists because the pocket's zero-infra consumer proof (examples) and the
 // conformance suite (storetest) run on it — the pockets/jobs/stores/memory
@@ -13,10 +10,11 @@ package memory
 
 import (
 	"context"
-	"fmt"
 	"sort"
-	"strings"
 	"sync"
+
+	"github.com/gopernicus/gopernicus/pockets/authorization/internal/tuplekey"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuples"
 
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/audit"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/relationships"
@@ -38,13 +36,21 @@ type relRow struct {
 // publication. A write stages owned fact slices before making anything visible.
 type state struct {
 	mu           sync.Mutex
-	rel          []relRow
-	role         []roleRow
+	facts        map[tuples.Tuple]struct{}
 	recordAudit  bool
 	auditRecords []audit.Record
 }
 
-func newState() *state { return &state{} }
+func newState() *state { return &state{facts: make(map[tuples.Tuple]struct{})} }
+func (s *state) relationshipRows() []relRow {
+	out := make([]relRow, 0, len(s.facts))
+	for t := range s.facts {
+		if t.Scope.Kind == tuples.ResourceScope {
+			out = append(out, relRow{resourceType: t.Scope.Type, resourceID: t.Scope.ID, relation: t.Relation, subjectType: t.Subject.Type, subjectID: t.Subject.ID, subjectRelation: t.Subject.Relation})
+		}
+	}
+	return out
+}
 
 // Relationships is the in-core relationship.Storer.
 type Relationships struct {
@@ -61,122 +67,26 @@ func NewRelationships() *Relationships {
 
 var _ relationships.Storer = (*Relationships)(nil)
 
-// CreateRelationships inserts tuples with the ON CONFLICT DO NOTHING mirror on
-// the unique-SUBJECT key (resource_type, resource_id, subject_type, subject_id,
-// subject_relation) — the honest mirror of idx_iam_relationships_unique_subject,
-// which excludes the relation. A subject REFERENCE (its type, id, AND userset
-// relation) holds at most one relation on a resource, so a second row for the
-// SAME subject reference — same relation or different — is skipped silently (nil
-// error, the existing tuple unchanged).
-// Because the key includes subject_relation, distinct usersets on one resource
-// (group:eng#member vs group:eng#admin) are DIFFERENT subject references and BOTH
-// persist. The validated full tuple is its identity.
+// CreateRelationships inserts exact canonical facts, including independent labels.
 func (r *Relationships) CreateRelationships(ctx context.Context, in []relationships.CreateRelationship) error {
-	return r.st.write(ctx, func(next *state) error {
-		return (&Relationships{st: next}).createRelationshipsLocked(ctx, in)
-	})
+	changes := tuples.Changes{}
+	for _, row := range in {
+		changes.Add = append(changes.Add, row.Tuple())
+	}
+	return (&Tuples{st: r.st}).ApplyTuples(ctx, changes)
 }
-
-func (r *Relationships) createRelationshipsLocked(ctx context.Context, in []relationships.CreateRelationship) error {
-	if len(in) == 0 {
-		return nil
-	}
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	for _, c := range in {
-		if err := c.Validate(); err != nil {
+func (r *Relationships) SetRelationTargets(ctx context.Context, rt, id, relation string, in []relationships.CreateRelationship) error {
+	subjects := make([]tuples.SubjectRef, 0, len(in))
+	for _, row := range in {
+		if row.ResourceType != rt || row.ResourceID != id || row.Relation != relation {
+			return sdk.ErrInvalidInput
+		}
+		if err := row.Validate(); err != nil {
 			return err
 		}
+		subjects = append(subjects, row.Subject())
 	}
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	for _, c := range in {
-		if r.hasSubjectResource(c.SubjectType, c.SubjectID, c.SubjectRelation, c.ResourceType, c.ResourceID) {
-			continue // DO NOTHING
-		}
-		r.st.rel = append(r.st.rel, relRow{
-			resourceType:    c.ResourceType,
-			resourceID:      c.ResourceID,
-			relation:        c.Relation,
-			subjectType:     c.SubjectType,
-			subjectID:       c.SubjectID,
-			subjectRelation: c.SubjectRelation,
-		})
-	}
-	return nil
-}
-
-// SetRelationTargets atomically reconciles one resource+relation under the
-// store's shared mutex. Existing desired tuples remain unchanged;
-// surplus rows are removed and missing rows are added. A desired subject already
-// holding a different relation makes the requested state impossible under the
-// one-relation rule, so the method fails before changing anything.
-func (r *Relationships) SetRelationTargets(ctx context.Context, resourceType, resourceID, relationName string, in []relationships.CreateRelationship) error {
-	return r.st.write(ctx, func(next *state) error {
-		return (&Relationships{st: next}).setRelationTargetsLocked(ctx, resourceType, resourceID, relationName, in)
-	})
-}
-
-func (r *Relationships) setRelationTargetsLocked(ctx context.Context, resourceType, resourceID, relationName string, in []relationships.CreateRelationship) error {
-
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	desired := make(map[relationships.SubjectRef]struct{}, len(in))
-	for _, c := range in {
-		if err := c.Validate(); err != nil {
-			return err
-		}
-		if c.ResourceType != resourceType || c.ResourceID != resourceID || c.Relation != relationName {
-			return fmt.Errorf("authorization memstore: SetRelationTargets row is outside requested scope: %w", sdk.ErrInvalidInput)
-		}
-		desired[c.Subject()] = struct{}{}
-	}
-	for _, row := range r.st.rel {
-		ref := relationships.SubjectRef{Type: row.subjectType, ID: row.subjectID, Relation: row.subjectRelation}
-		if row.resourceType == resourceType && row.resourceID == resourceID && row.relation != relationName {
-			if _, ok := desired[ref]; ok {
-				return fmt.Errorf("authorization memstore: target %s already holds relation %q on %s:%s: %w",
-					ref, row.relation, resourceType, resourceID, sdk.ErrConflict)
-			}
-		}
-	}
-
-	existing := make(map[relationships.SubjectRef]struct{}, len(desired))
-	r.st.rel = keepRows(r.st.rel, func(row relRow) bool {
-		if row.resourceType != resourceType || row.resourceID != resourceID || row.relation != relationName {
-			return true
-		}
-		ref := relationships.SubjectRef{Type: row.subjectType, ID: row.subjectID, Relation: row.subjectRelation}
-		if _, ok := desired[ref]; ok {
-			existing[ref] = struct{}{}
-			return true
-		}
-		return false
-	})
-
-	for ref := range desired {
-		if _, ok := existing[ref]; ok {
-			continue
-		}
-		r.st.rel = append(r.st.rel, relRow{
-			resourceType: resourceType, resourceID: resourceID, relation: relationName,
-			subjectType: ref.Type, subjectID: ref.ID, subjectRelation: ref.Relation,
-		})
-	}
-	return nil
-}
-
-func (r *Relationships) hasSubjectResource(subjectType, subjectID, subjectRelation, resourceType, resourceID string) bool {
-	for _, row := range r.st.rel {
-		if row.subjectType == subjectType && row.subjectID == subjectID && row.subjectRelation == subjectRelation &&
-			row.resourceType == resourceType && row.resourceID == resourceID {
-			return true
-		}
-	}
-	return false
+	return (&Tuples{st: r.st}).ReconcileTuples(ctx, tuples.On(rt, id), relation, subjects)
 }
 
 // reachable is a subject reference reached during userset expansion — a
@@ -208,7 +118,7 @@ func (r *Relationships) expandReachable(ctx context.Context, subjectType, subjec
 		}
 		cur := queue[0]
 		queue = queue[1:]
-		for _, row := range r.st.rel {
+		for _, row := range r.st.relationshipRows() {
 			if ctx.Err() != nil {
 				return seen, false
 			}
@@ -251,7 +161,7 @@ func (r *Relationships) CheckRelationWithGroupExpansion(ctx context.Context, res
 	if overflow {
 		return false, relationships.ErrExpansionBudgetExceeded
 	}
-	for _, row := range r.st.rel {
+	for _, row := range r.st.relationshipRows() {
 		if !r.allows(row) {
 			continue
 		}
@@ -272,7 +182,7 @@ func (r *Relationships) checkRelationExpandedLocked(ctx context.Context, resourc
 	if overflow {
 		return false, true
 	}
-	for _, row := range r.st.rel {
+	for _, row := range r.st.relationshipRows() {
 		if !r.allows(row) {
 			continue
 		}
@@ -290,7 +200,7 @@ func (r *Relationships) checkRelationExpandedLocked(ctx context.Context, resourc
 func (r *Relationships) CheckRelationExists(ctx context.Context, resourceType, resourceID, relation, subjectType, subjectID string) (bool, error) {
 	r.st.mu.Lock()
 	defer r.st.mu.Unlock()
-	for _, row := range r.st.rel {
+	for _, row := range r.st.relationshipRows() {
 		if row.resourceType == resourceType && row.resourceID == resourceID && row.relation == relation &&
 			row.subjectType == subjectType && row.subjectID == subjectID && row.subjectRelation == "" {
 			return true, nil
@@ -314,7 +224,7 @@ func (r *Relationships) GetRelationTargets(ctx context.Context, resourceType, re
 // DecisionView uses for a Through hop against the held snapshot.
 func (r *Relationships) getRelationTargetsLocked(resourceType, resourceID, relation string) []relationships.RelationTarget {
 	var out []relationships.RelationTarget
-	for _, row := range r.st.rel {
+	for _, row := range r.st.relationshipRows() {
 		if !r.allows(row) {
 			continue
 		}
@@ -377,7 +287,7 @@ func (r *Relationships) RelationTargetsFor(ctx context.Context, resourceType str
 	for _, id := range resourceIDs {
 		want[id] = true
 	}
-	for _, row := range r.st.rel {
+	for _, row := range r.st.relationshipRows() {
 		if !r.allows(row) {
 			continue
 		}
@@ -414,7 +324,7 @@ func (r *Relationships) CheckBatchDirect(ctx context.Context, resourceType strin
 	if overflow {
 		return nil, relationships.ErrExpansionBudgetExceeded
 	}
-	for _, row := range r.st.rel {
+	for _, row := range r.st.relationshipRows() {
 		if !r.allows(row) {
 			continue
 		}
@@ -431,7 +341,7 @@ func (r *Relationships) CountByResourceAndRelation(ctx context.Context, resource
 	r.st.mu.Lock()
 	defer r.st.mu.Unlock()
 	n := 0
-	for _, row := range r.st.rel {
+	for _, row := range r.st.relationshipRows() {
 		if row.resourceType == resourceType && row.resourceID == resourceID && row.relation == relation {
 			n++
 		}
@@ -439,63 +349,32 @@ func (r *Relationships) CountByResourceAndRelation(ctx context.Context, resource
 	return n, nil
 }
 
-// DeleteResourceRelationships removes every tuple for a resource.
-func (r *Relationships) DeleteResourceRelationships(ctx context.Context, resourceType, resourceID string) error {
+// DeleteResourceRelationships removes every canonical fact scoped to the resource.
+func (r *Relationships) DeleteResourceRelationships(ctx context.Context, rt, id string) error {
+	return (&Tuples{st: r.st}).DeleteScope(ctx, tuples.On(rt, id))
+}
+func (r *Relationships) DeleteRelationshipTarget(ctx context.Context, rt, id, relation string, subject relationships.SubjectRef) error {
+	return (&Tuples{st: r.st}).ApplyTuples(ctx, tuples.Changes{Remove: []tuples.Tuple{{Scope: tuples.On(rt, id), Relation: relation, Subject: subject}}})
+}
+func (r *Relationships) DeleteRelationship(ctx context.Context, rt, id, relation, st, sid string) error {
+	return r.DeleteRelationshipTarget(ctx, rt, id, relation, relationships.SubjectRef{Type: st, ID: sid})
+}
+func (r *Relationships) DeleteByResourceAndSubject(ctx context.Context, rt, id, st, sid string) error {
+	scope := tuples.On(rt, id)
+	if err := scope.Validate(); err != nil {
+		return err
+	}
+	if err := (tuples.SubjectRef{Type: st, ID: sid}).Validate(); err != nil {
+		return err
+	}
 	return r.st.write(ctx, func(next *state) error {
-		return (&Relationships{st: next}).deleteResourceRelationshipsLocked(ctx, resourceType, resourceID)
+		for t := range next.facts {
+			if t.Scope == scope && t.Subject.Type == st && t.Subject.ID == sid {
+				delete(next.facts, t)
+			}
+		}
+		return nil
 	})
-}
-
-func (r *Relationships) deleteResourceRelationshipsLocked(ctx context.Context, resourceType, resourceID string) error {
-	r.st.rel = keepRows(r.st.rel, func(row relRow) bool {
-		return !(row.resourceType == resourceType && row.resourceID == resourceID)
-	})
-	return nil
-}
-
-// DeleteRelationshipTarget removes one exact tuple, including subject_relation.
-func (r *Relationships) DeleteRelationshipTarget(ctx context.Context, resourceType, resourceID, relationName string, target relationships.SubjectRef) error {
-	return r.st.write(ctx, func(next *state) error {
-		return (&Relationships{st: next}).deleteRelationshipTargetLocked(ctx, resourceType, resourceID, relationName, target)
-	})
-}
-
-func (r *Relationships) deleteRelationshipTargetLocked(ctx context.Context, resourceType, resourceID, relationName string, target relationships.SubjectRef) error {
-	r.st.rel = keepRows(r.st.rel, func(row relRow) bool {
-		return !(row.resourceType == resourceType && row.resourceID == resourceID && row.relation == relationName &&
-			row.subjectType == target.Type && row.subjectID == target.ID && row.subjectRelation == target.Relation)
-	})
-	return nil
-}
-
-// DeleteRelationship removes one exact tuple.
-func (r *Relationships) DeleteRelationship(ctx context.Context, resourceType, resourceID, relation, subjectType, subjectID string) error {
-	return r.st.write(ctx, func(next *state) error {
-		return (&Relationships{st: next}).deleteRelationshipLocked(ctx, resourceType, resourceID, relation, subjectType, subjectID)
-	})
-}
-
-func (r *Relationships) deleteRelationshipLocked(ctx context.Context, resourceType, resourceID, relation, subjectType, subjectID string) error {
-	r.st.rel = keepRows(r.st.rel, func(row relRow) bool {
-		return !(row.resourceType == resourceType && row.resourceID == resourceID && row.relation == relation &&
-			row.subjectType == subjectType && row.subjectID == subjectID)
-	})
-	return nil
-}
-
-// DeleteByResourceAndSubject removes every relation a subject holds on a resource.
-func (r *Relationships) DeleteByResourceAndSubject(ctx context.Context, resourceType, resourceID, subjectType, subjectID string) error {
-	return r.st.write(ctx, func(next *state) error {
-		return (&Relationships{st: next}).deleteByResourceAndSubjectLocked(ctx, resourceType, resourceID, subjectType, subjectID)
-	})
-}
-
-func (r *Relationships) deleteByResourceAndSubjectLocked(ctx context.Context, resourceType, resourceID, subjectType, subjectID string) error {
-	r.st.rel = keepRows(r.st.rel, func(row relRow) bool {
-		return !(row.resourceType == resourceType && row.resourceID == resourceID &&
-			row.subjectType == subjectType && row.subjectID == subjectID)
-	})
-	return nil
 }
 
 // LookupResourceIDs returns the distinct resource IDs where the subject has any
@@ -569,7 +448,7 @@ func (r *Relationships) LookupDescendantResourceIDs(ctx context.Context, resourc
 			return nil, err
 		}
 		next := map[string]bool{}
-		for _, row := range r.st.rel {
+		for _, row := range r.st.relationshipRows() {
 			if !r.allows(row) {
 				continue
 			}
@@ -619,7 +498,7 @@ func (r *Relationships) ListRelationshipsBySubject(ctx context.Context, subjectT
 	r.st.mu.Lock()
 	defer r.st.mu.Unlock()
 	var items []relationships.SubjectRelationship
-	for _, row := range r.st.rel {
+	for _, row := range r.st.relationshipRows() {
 		if row.subjectType != subjectType || row.subjectID != subjectID {
 			continue
 		}
@@ -646,7 +525,7 @@ func (r *Relationships) ListRelationshipsByResource(ctx context.Context, resourc
 	r.st.mu.Lock()
 	defer r.st.mu.Unlock()
 	var items []relationships.ResourceRelationship
-	for _, row := range r.st.rel {
+	for _, row := range r.st.relationshipRows() {
 		if row.resourceType != resourceType || row.resourceID != resourceID {
 			continue
 		}
@@ -673,7 +552,7 @@ func (r *Relationships) ListRelationshipsByResource(ctx context.Context, resourc
 func (r *Relationships) distinctResourceIDs(pred func(relRow) bool) []string {
 	seen := map[string]bool{}
 	var out []string
-	for _, row := range r.st.rel {
+	for _, row := range r.st.relationshipRows() {
 		if !r.allows(row) {
 			continue
 		}
@@ -699,5 +578,5 @@ func keepRows(rows []relRow, keep func(relRow) bool) []relRow {
 // tupleKey orders the exact six-field relationship identity. Input validation
 // forbids the delimiter in every component, including the optional userset.
 func tupleKey(resourceType, resourceID, relation, subjectType, subjectID, subjectRelation string) string {
-	return strings.Join([]string{resourceType, resourceID, relation, subjectType, subjectID, subjectRelation}, "\x01")
+	return tuplekey.Encode(tuples.Tuple{Scope: tuples.On(resourceType, resourceID), Relation: relation, Subject: tuples.SubjectRef{Type: subjectType, ID: subjectID, Relation: subjectRelation}})
 }

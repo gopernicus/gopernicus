@@ -7,7 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gopernicus/gopernicus/pockets/authorization"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuples"
+
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/mutations"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/relationships"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/roles"
@@ -29,7 +30,7 @@ const visibilityTimeout = 15 * time.Second
 var errInjected = errors.New("storetest: injected host failure")
 
 // RunTransactional executes the ambient-transaction family: the proof that
-// every baseline relationship and role write (and every read) JOINS the
+// every baseline relationship and role write and raw exact read JOIN the
 // connector's Transact-owned transaction when the context carries one, so a
 // host's application row and the tuple that projects it commit or roll back
 // together — and that the guarded mutation path refuses to run inside one.
@@ -39,7 +40,9 @@ var errInjected = errors.New("storetest: injected host failure")
 // transactor). A nil transactor skips the family loudly — the in-core memstore
 // has no connector and no transaction concept, so the pocket's own hermetic run
 // reports the family as skipped rather than silently green. A nil Relationships
-// kind skips the family; a nil Roles or Mutations kind skips only its own specs.
+// facade skips the family; a nil Tuples or Mutations repository skips its specs.
+// Compound tuple listings require the snapshot-capable transactor exercised by
+// RunSnapshotCheckAmbient; this family also accepts ordinary READ COMMITTED.
 //
 // Each spec creates its fixture ONCE, before entering Transact, and makes its
 // "outside" visibility checks through those SAME repositories with a bounded
@@ -53,17 +56,17 @@ var errInjected = errors.New("storetest: injected host failure")
 // back"), so every spec proves the join from BOTH sides: the ambient read sees
 // the uncommitted change, the outside read does not, the injected error undoes
 // it, and a nil callback persists it.
-func RunTransactional(t *testing.T, newRepos func(t *testing.T) (authorization.Repositories, transaction.Transactor)) {
+func RunTransactional(t *testing.T, newRepos func(t *testing.T) (Repositories, transaction.Transactor)) {
 	repos, tx := newRepos(t)
 	if tx == nil {
 		t.Skip("no transaction.Transactor supplied — ambient-transaction family NOT verified")
 	}
 	if repos.Relationships == nil {
-		t.Skip("relationship kind not wired")
+		t.Skip("graph view not wired")
 	}
 	t.Run("CreateJoinsTransaction", func(t *testing.T) { specCreateJoinsTransaction(t, newRepos) })
 	t.Run("SetRelationTargetsJoinsTransaction", func(t *testing.T) { specSetRelationTargetsJoinsTransaction(t, newRepos) })
-	t.Run("SetRelationTargetsConflictRollsBackHostWork", func(t *testing.T) { specSetRelationTargetsConflictRollsBackHostWork(t, newRepos) })
+	t.Run("ReconciliationHostRollback", func(t *testing.T) { specSetRelationTargetsPreservesOtherRelationsHostWork(t, newRepos) })
 	t.Run("DeletesJoinTransaction", func(t *testing.T) { specDeletesJoinTransaction(t, newRepos) })
 	t.Run("RolesJoinTransaction", func(t *testing.T) { specRolesJoinTransaction(t, newRepos) })
 	t.Run("ReadsJoinTransaction", func(t *testing.T) { specReadsJoinTransaction(t, newRepos) })
@@ -129,20 +132,20 @@ func setTargetsAt(ctx context.Context, s relationships.Storer, ids ...string) er
 	return s.SetRelationTargets(ctx, "space", "child", "parent", rows)
 }
 
-// hasExactAt is a HasExactRole probe with an explicit context.
-func hasExactAt(t *testing.T, ctx context.Context, s roles.Storer, st, sid, roleName, rt, rid string) bool {
+// hasExactAt is a canonical exact role probe with an explicit context.
+func hasExactAt(t *testing.T, ctx context.Context, s tuples.Storer, st, sid, roleName, rt, rid string) bool {
 	t.Helper()
-	ok, err := s.HasExactRole(ctx, st, sid, roleName, rt, rid)
+	ok, err := s.Contains(ctx, roleFact(st, sid, roleName, rt, rid))
 	if err != nil {
-		t.Fatalf("HasExactRole: %v", err)
+		t.Fatalf("canonical exact role: %v", err)
 	}
 	return ok
 }
 
 // assignAt is assign with an explicit context.
-func assignAt(t *testing.T, ctx context.Context, s roles.Storer, st, sid, roleName, rt, rid string) {
+func assignAt(t *testing.T, ctx context.Context, s tuples.Storer, st, sid, roleName, rt, rid string) {
 	t.Helper()
-	if err := s.Assign(ctx, roles.Assignment{SubjectType: st, SubjectID: sid, Role: roleName, ResourceType: rt, ResourceID: rid}); err != nil {
+	if err := assignRole(ctx, s, roles.Assignment{SubjectType: st, SubjectID: sid, Role: roleName, Scope: fixtureScope(rt, rid)}); err != nil {
 		t.Fatalf("Assign: %v", err)
 	}
 }
@@ -162,7 +165,7 @@ func equalStrings(a, b []string) bool {
 // specCreateJoinsTransaction: CreateRelationships inside Transact is visible to
 // the ambient reader, invisible outside, gone after an injected error, and
 // present after a nil callback.
-func specCreateJoinsTransaction(t *testing.T, newRepos func(t *testing.T) (authorization.Repositories, transaction.Transactor)) {
+func specCreateJoinsTransaction(t *testing.T, newRepos func(t *testing.T) (Repositories, transaction.Transactor)) {
 	repos, tx := newRepos(t)
 	s := repos.Relationships
 	tuple := ct("doc", "d1", "owner", "user", "u1")
@@ -199,7 +202,7 @@ func specCreateJoinsTransaction(t *testing.T, newRepos func(t *testing.T) (autho
 // while the transaction is open, GetRelationTargets on the SAME store sees the
 // new state with the ambient context and the old state with the outside
 // context; the injected error restores old, the nil callback persists new.
-func specSetRelationTargetsJoinsTransaction(t *testing.T, newRepos func(t *testing.T) (authorization.Repositories, transaction.Transactor)) {
+func specSetRelationTargetsJoinsTransaction(t *testing.T, newRepos func(t *testing.T) (Repositories, transaction.Transactor)) {
 	repos, tx := newRepos(t)
 	s := repos.Relationships
 	if err := setTargetsAt(outside(t), s, "old"); err != nil {
@@ -233,11 +236,8 @@ func specSetRelationTargetsJoinsTransaction(t *testing.T, newRepos func(t *testi
 	}
 }
 
-// specSetRelationTargetsConflictRollsBackHostWork: the store's own conflict
-// sentinel, propagated from the callback, undoes the host's EARLIER write in the
-// same transaction — the D15 property (never a tuple beside a row that was
-// rolled back, never a row beside a tuple that was refused).
-func specSetRelationTargetsConflictRollsBackHostWork(t *testing.T, newRepos func(t *testing.T) (authorization.Repositories, transaction.Transactor)) {
+// A host error after reconciliation rolls back both facts and earlier host work.
+func specSetRelationTargetsPreservesOtherRelationsHostWork(t *testing.T, newRepos func(t *testing.T) (Repositories, transaction.Transactor)) {
 	repos, tx := newRepos(t)
 	s := repos.Relationships
 	createAt(t, outside(t), s, ct("space", "child", "owner", "space", "occupied"))
@@ -248,18 +248,22 @@ func specSetRelationTargetsConflictRollsBackHostWork(t *testing.T, newRepos func
 		if !existsAt(t, ctx, s, "doc", "d1", "owner", "user", "u1") {
 			t.Fatalf("ambient read must see the host's earlier write")
 		}
-		// "occupied" already holds owner on the resource: the desired parent
-		// state is impossible under one-relation-per-subject → sdk.ErrConflict.
-		return setTargetsAt(ctx, s, "occupied")
+		if err := setTargetsAt(ctx, s, "occupied"); err != nil {
+			return err
+		}
+		if !existsAt(t, ctx, s, "space", "child", "owner", "space", "occupied") {
+			t.Fatal("independent owner lost")
+		}
+		return errInjected
 	})
-	if !errors.Is(err, sdk.ErrConflict) {
-		t.Fatalf("Transact must surface the store's conflict, got %v", err)
+	if !errors.Is(err, errInjected) {
+		t.Fatalf("Transact must surface the host error, got %v", err)
 	}
 	if existsAt(t, outside(t), s, "doc", "d1", "owner", "user", "u1") {
-		t.Fatalf("the host's earlier write survived the propagated conflict — atomicity split")
+		t.Fatalf("the host's earlier write survived the host rollback — atomicity split")
 	}
 	if got := targetIDsAt(t, outside(t), s, "space", "child", "parent"); len(got) != 0 {
-		t.Fatalf("conflicting reconciliation must leave the parent relation untouched, got %v", got)
+		t.Fatalf("rolled-back reconciliation must leave the parent relation untouched, got %v", got)
 	}
 	if !existsAt(t, outside(t), s, "space", "child", "owner", "space", "occupied") {
 		t.Fatalf("the seeded owner tuple must survive")
@@ -269,7 +273,7 @@ func specSetRelationTargetsConflictRollsBackHostWork(t *testing.T, newRepos func
 // specDeletesJoinTransaction exercises each delete method separately: the
 // ambient read sees the deletion, the outside read still sees the seeded tuple,
 // rollback leaves it in place, and a nil callback removes it.
-func specDeletesJoinTransaction(t *testing.T, newRepos func(t *testing.T) (authorization.Repositories, transaction.Transactor)) {
+func specDeletesJoinTransaction(t *testing.T, newRepos func(t *testing.T) (Repositories, transaction.Transactor)) {
 	type deleteCase struct {
 		name    string
 		seed    []relationships.CreateRelationship
@@ -360,15 +364,15 @@ func specDeletesJoinTransaction(t *testing.T, newRepos func(t *testing.T) (autho
 }
 
 // specRolesJoinTransaction exercises Assign and Unassign separately with the
-// same four-way shape. Skipped when the roles kind is not wired.
-func specRolesJoinTransaction(t *testing.T, newRepos func(t *testing.T) (authorization.Repositories, transaction.Transactor)) {
-	if repos, _ := newRepos(t); repos.Roles == nil {
-		t.Skip("roles kind not wired")
+// same four-way shape. Skipped when the exact-role view is not wired.
+func specRolesJoinTransaction(t *testing.T, newRepos func(t *testing.T) (Repositories, transaction.Transactor)) {
+	if repos, _ := newRepos(t); repos.Tuples == nil {
+		t.Skip("exact-role view not wired")
 	}
 
 	t.Run("Assign", func(t *testing.T) {
 		repos, tx := newRepos(t)
-		s := repos.Roles
+		s := repos.Tuples
 		err := transact(tx, func(ctx context.Context) error {
 			assignAt(t, ctx, s, "user", "u1", "editor", "doc", "d1")
 			if !hasExactAt(t, ctx, s, "user", "u1", "editor", "doc", "d1") {
@@ -398,10 +402,10 @@ func specRolesJoinTransaction(t *testing.T, newRepos func(t *testing.T) (authori
 
 	t.Run("Unassign", func(t *testing.T) {
 		repos, tx := newRepos(t)
-		s := repos.Roles
+		s := repos.Tuples
 		assignAt(t, outside(t), s, "user", "u1", "editor", "doc", "d1")
 		err := transact(tx, func(ctx context.Context) error {
-			if err := s.Unassign(ctx, "user", "u1", "editor", "doc", "d1"); err != nil {
+			if err := unassignRole(ctx, s, "user", "u1", "editor", "doc", "d1"); err != nil {
 				t.Fatalf("ambient Unassign: %v", err)
 			}
 			if hasExactAt(t, ctx, s, "user", "u1", "editor", "doc", "d1") {
@@ -419,7 +423,7 @@ func specRolesJoinTransaction(t *testing.T, newRepos func(t *testing.T) (authori
 			t.Fatalf("rollback must restore the assignment — Unassign did not join the transaction")
 		}
 		if err := transact(tx, func(ctx context.Context) error {
-			return s.Unassign(ctx, "user", "u1", "editor", "doc", "d1")
+			return unassignRole(ctx, s, "user", "u1", "editor", "doc", "d1")
 		}); err != nil {
 			t.Fatalf("commit shape: %v", err)
 		}
@@ -570,20 +574,20 @@ type roleSnapshot struct {
 	hasExact        bool
 	bySubject       []string // resource IDs of u1's assignments
 	byResource      []string // subject IDs assigned directly at doc:d2
-	effective       []string // "subject/role/provenance" at doc:d2
+	global          []string // exact global concrete assignments
 	bySubjectTotal  int64
 	byResourceTotal int64
-	effectiveTotal  int64
+	globalTotal     int64
 }
 
-func snapshotRoles(t *testing.T, ctx context.Context, s roles.Storer) roleSnapshot {
+func snapshotRoles(t *testing.T, ctx context.Context, s tuples.Storer) roleSnapshot {
 	t.Helper()
 	var snap roleSnapshot
 	snap.hasExact = hasExactAt(t, ctx, s, "user", "u1", "editor", "doc", "d2")
 	// One-at-a-time cursor walk with a count on the first page (see walkSubject).
 	cursor := ""
 	for page := 0; page < 10; page++ {
-		p, err := s.ListBySubject(ctx, "user", "u1", list.Request{Limit: 1, Cursor: cursor, WithCount: page == 0})
+		p, err := roleListSubject(ctx, s, "user", "u1", list.Request{Limit: 1, Cursor: cursor, WithCount: page == 0})
 		if err != nil {
 			t.Fatalf("ListBySubject page %d: %v", page, err)
 		}
@@ -594,7 +598,7 @@ func snapshotRoles(t *testing.T, ctx context.Context, s roles.Storer) roleSnapsh
 			snap.bySubjectTotal = *p.Total
 		}
 		for _, it := range p.Items {
-			snap.bySubject = append(snap.bySubject, it.ResourceID)
+			snap.bySubject = append(snap.bySubject, it.Scope.ID)
 		}
 		if !p.HasMore {
 			break
@@ -602,7 +606,7 @@ func snapshotRoles(t *testing.T, ctx context.Context, s roles.Storer) roleSnapsh
 		cursor = p.NextCursor
 	}
 	sort.Strings(snap.bySubject)
-	byRes, err := s.ListByResource(ctx, "doc", "d2", list.Request{WithCount: true})
+	byRes, err := roleListResource(ctx, s, "doc", "d2", list.Request{WithCount: true})
 	if err != nil {
 		t.Fatalf("ListByResource: %v", err)
 	}
@@ -610,22 +614,22 @@ func snapshotRoles(t *testing.T, ctx context.Context, s roles.Storer) roleSnapsh
 	for _, it := range byRes.Items {
 		snap.byResource = append(snap.byResource, it.SubjectID)
 	}
-	eff, err := s.ListEffectiveByResource(ctx, "doc", "d2", list.Request{WithCount: true})
+	global, err := roleListResource(ctx, s, "", "", list.Request{WithCount: true})
 	if err != nil {
-		t.Fatalf("ListEffectiveByResource: %v", err)
+		t.Fatal(err)
 	}
-	snap.effectiveTotal = *eff.Total
-	for _, g := range eff.Items {
-		snap.effective = append(snap.effective, g.SubjectID+"/"+g.Role+"/"+g.Provenance())
+	snap.globalTotal = *global.Total
+	for _, g := range global.Items {
+		snap.global = append(snap.global, g.SubjectID+"/"+g.Role)
 	}
-	sort.Strings(snap.effective)
+	sort.Strings(snap.global)
 	return snap
 }
 
 func assertRoleSnapshot(t *testing.T, label string, got, want roleSnapshot) {
 	t.Helper()
 	if got.hasExact != want.hasExact {
-		t.Errorf("%s HasExactRole = %v, want %v", label, got.hasExact, want.hasExact)
+		t.Errorf("%s canonical exact role = %v, want %v", label, got.hasExact, want.hasExact)
 	}
 	if !equalStrings(got.bySubject, want.bySubject) || got.bySubjectTotal != want.bySubjectTotal {
 		t.Errorf("%s ListBySubject = %v (total %d), want %v (total %d)", label, got.bySubject, got.bySubjectTotal, want.bySubject, want.bySubjectTotal)
@@ -633,8 +637,8 @@ func assertRoleSnapshot(t *testing.T, label string, got, want roleSnapshot) {
 	if !equalStrings(got.byResource, want.byResource) || got.byResourceTotal != want.byResourceTotal {
 		t.Errorf("%s ListByResource = %v (total %d), want %v (total %d)", label, got.byResource, got.byResourceTotal, want.byResource, want.byResourceTotal)
 	}
-	if !equalStrings(got.effective, want.effective) || got.effectiveTotal != want.effectiveTotal {
-		t.Errorf("%s ListEffectiveByResource = %v (total %d), want %v (total %d)", label, got.effective, got.effectiveTotal, want.effective, want.effectiveTotal)
+	if !equalStrings(got.global, want.global) || got.globalTotal != want.globalTotal {
+		t.Errorf("%s ListGlobalRoleAssignments = %v (total %d), want %v (total %d)", label, got.global, got.globalTotal, want.global, want.globalTotal)
 	}
 }
 
@@ -643,10 +647,10 @@ func assertRoleSnapshot(t *testing.T, label string, got, want roleSnapshot) {
 // committed state under the outside context — including the group-expansion
 // CTEs (both budget branches), the connector-backed listings with a count and a
 // cursor follow-up, and the three lookups. Roles are asserted only when wired.
-func specReadsJoinTransaction(t *testing.T, newRepos func(t *testing.T) (authorization.Repositories, transaction.Transactor)) {
+func specReadsJoinTransaction(t *testing.T, newRepos func(t *testing.T) (Repositories, transaction.Transactor)) {
 	repos, tx := newRepos(t)
 	s := repos.Relationships
-	roles := repos.Roles
+	roles := repos.Tuples
 
 	// Committed baseline.
 	createAt(t, outside(t), s,
@@ -660,7 +664,7 @@ func specReadsJoinTransaction(t *testing.T, newRepos func(t *testing.T) (authori
 		exists:         false,
 		targets:        nil,
 		count:          0,
-		bySubject:      []string{"d1"}, bySubjectTotal: 1,
+		bySubject:      []string{"d1", "d1"}, bySubjectTotal: 2,
 		byResource: nil, byResourceTotal: 0,
 		lookup:      []string{"d1"},
 		byTarget:    []string{"s2"},
@@ -673,27 +677,21 @@ func specReadsJoinTransaction(t *testing.T, newRepos func(t *testing.T) (authori
 		exists:         true,
 		targets:        []string{"u1"},
 		count:          1,
-		bySubject:      []string{"d1", "d2", "eng"}, bySubjectTotal: 3, // the group membership is u1's row too
-		byResource: []string{"u1"}, byResourceTotal: 1,
+		bySubject:      []string{"d1", "d1", "d2", "d2", "eng"}, bySubjectTotal: 5, // the group membership is u1's row too
+		byResource: []string{"u1", "u1"}, byResourceTotal: 2,
 		lookup:      []string{"d1", "d2", "d3"},
 		byTarget:    []string{"s2", "s3"},
 		descendants: []string{"s2", "s3"},
 	}
-	var committedRoles, ambientRoles roleSnapshot
+	var committedRoles roleSnapshot
 	if roles != nil {
 		assignAt(t, outside(t), roles, "user", "u1", "editor", "doc", "d1")
 		assignAt(t, outside(t), roles, "user", "u3", "admin", "", "")
 		committedRoles = roleSnapshot{
 			hasExact:  false,
-			bySubject: []string{"d1"}, bySubjectTotal: 1,
+			bySubject: []string{"d1", "d1"}, bySubjectTotal: 2,
 			byResource: nil, byResourceTotal: 0,
-			effective: []string{"u3/admin/global"}, effectiveTotal: 1,
-		}
-		ambientRoles = roleSnapshot{
-			hasExact:  true,
-			bySubject: []string{"d1", "d2"}, bySubjectTotal: 2,
-			byResource: []string{"u1"}, byResourceTotal: 1,
-			effective: []string{"u1/editor/direct", "u3/admin/global"}, effectiveTotal: 2,
+			global: []string{"u3/admin"}, globalTotal: 1,
 		}
 	}
 	assertRelationshipSnapshot(t, "committed baseline (outside)", snapshotRelationships(t, outside(t), s), committed)
@@ -716,7 +714,9 @@ func specReadsJoinTransaction(t *testing.T, newRepos func(t *testing.T) (authori
 		assertRelationshipSnapshot(t, "ambient", snapshotRelationships(t, ctx, s), ambient)
 		assertRelationshipSnapshot(t, "outside (transaction open)", snapshotRelationships(t, outside(t), s), committed)
 		if roles != nil {
-			assertRoleSnapshot(t, "ambient", snapshotRoles(t, ctx, roles), ambientRoles)
+			if held, err := roles.Contains(ctx, roleFact("user", "u1", "editor", "doc", "d2")); err != nil || !held {
+				t.Fatalf("ambient exact role read lost pending write: %v/%v", held, err)
+			}
 			assertRoleSnapshot(t, "outside (transaction open)", snapshotRoles(t, outside(t), roles), committedRoles)
 		}
 		return errInjected
@@ -739,7 +739,7 @@ func specReadsJoinTransaction(t *testing.T, newRepos func(t *testing.T) (authori
 // also rolls back the host's preceding baseline write. Skipped when the
 // mutation repository is not wired. Adapter-local tests additionally assert the
 // that refused commands leave no authorization facts.
-func specMutationRefusesAmbientTransaction(t *testing.T, newRepos func(t *testing.T) (authorization.Repositories, transaction.Transactor)) {
+func specMutationRefusesAmbientTransaction(t *testing.T, newRepos func(t *testing.T) (Repositories, transaction.Transactor)) {
 	if repos, _ := newRepos(t); repos.Mutations == nil {
 		t.Skip("mutation repository not wired")
 	}
@@ -818,16 +818,16 @@ func specMutationRefusesAmbientTransaction(t *testing.T, newRepos func(t *testin
 }
 
 // specStandaloneUnchanged re-proves the two standalone SetRelationTargets
-// properties — concurrent callers serialize to one winner, a conflict rolls the
-// store's OWN transaction back — through the ambient-aware dispatch with no
+// properties — concurrent callers serialize to one winner and independent
+// relations survive reconciliation — through ambient-aware dispatch with no
 // transaction in the context.
-func specStandaloneUnchanged(t *testing.T, newRepos func(t *testing.T) (authorization.Repositories, transaction.Transactor)) {
+func specStandaloneUnchanged(t *testing.T, newRepos func(t *testing.T) (Repositories, transaction.Transactor)) {
 	t.Run("SetRelationTargetsConcurrentCallsDoNotUnion", func(t *testing.T) {
 		repos, _ := newRepos(t)
 		specSetRelationTargetsConcurrentCallsDoNotUnion(t, repos.Relationships)
 	})
-	t.Run("SetRelationTargetsConflictRollsBack", func(t *testing.T) {
+	t.Run("SetRelationTargetsPreservesOtherRelations", func(t *testing.T) {
 		repos, _ := newRepos(t)
-		specSetRelationTargetsConflictRollsBack(t, repos.Relationships)
+		specSetRelationTargetsPreservesOtherRelations(t, repos.Relationships)
 	})
 }

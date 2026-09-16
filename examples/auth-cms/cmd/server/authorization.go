@@ -7,6 +7,9 @@ import (
 	"net/http"
 	"sync/atomic"
 
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/decisions"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuples"
+
 	authorization "github.com/gopernicus/gopernicus/pockets/authorization"
 	authorizationhttp "github.com/gopernicus/gopernicus/pockets/authorization/inbound/http"
 	audit "github.com/gopernicus/gopernicus/pockets/authorization/logic/audit"
@@ -37,60 +40,39 @@ const (
 // (owner/member relations; `view` = AnyOf(owner, member); the new `manage_access` =
 // Direct(owner) permission the host MutationGuard enforces) and the flat `platform`
 // admin-list type backing the platform-admin data tuple.
-func authzSchema() relationships.Schema {
-	return relationships.NewSchema([]relationships.ResourceSchema{
-		{Name: "document", Def: relationships.ResourceTypeDef{
-			Relations: map[string]relationships.RelationDef{
-				"viewer": {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "user"}}},
+func authzSchema() decisions.Model {
+	return decisions.NewSchema([]decisions.ResourceSchema{
+		{Name: "document", Def: decisions.ResourceTypeDef{
+			Relations: map[string]decisions.RelationDef{
+				"viewer": {AllowedSubjects: []decisions.SubjectTypeRef{{Type: "user"}}},
 			},
-			Permissions: map[string]relationships.PermissionRule{
-				"view": relationships.AnyOf(relationships.Direct("viewer")),
-			},
-		}},
-		{Name: demoResourceType, Def: relationships.ResourceTypeDef{
-			Relations: map[string]relationships.RelationDef{
-				"owner":  {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "user"}}},
-				"member": {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "user"}}},
-			},
-			Permissions: map[string]relationships.PermissionRule{
-				demoPermission:   relationships.AnyOf(relationships.Direct("owner"), relationships.Direct("member")),
-				manageAccessPerm: relationships.AnyOf(relationships.Direct("owner")),
+			Permissions: map[string]decisions.Expression{
+				"view": decisions.AnyOf(decisions.Direct("viewer")),
 			},
 		}},
-		{Name: platformResourceType, Def: relationships.ResourceTypeDef{
-			Relations: map[string]relationships.RelationDef{
-				"admin": {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "user"}}},
+		{Name: demoResourceType, Def: decisions.ResourceTypeDef{
+			Relations: map[string]decisions.RelationDef{
+				"owner":  {AllowedSubjects: []decisions.SubjectTypeRef{{Type: "user"}}},
+				"member": {AllowedSubjects: []decisions.SubjectTypeRef{{Type: "user"}}},
+			},
+			Permissions: map[string]decisions.Expression{
+				demoAuditPermission: decisions.RoleIn(demoRole),
+				demoPermission:      decisions.AnyOf(decisions.Direct("owner"), decisions.Direct("member")),
+				manageAccessPerm:    decisions.AnyOf(decisions.Direct("owner")),
+			},
+		}},
+		{Name: platformResourceType, Def: decisions.ResourceTypeDef{
+			Relations: map[string]decisions.RelationDef{
+				"admin": {AllowedSubjects: []decisions.SubjectTypeRef{{Type: "user"}}},
 			},
 			// The `admin` permission makes platform-admin an ordinary schema-declared
 			// check the host runs first in its own Check closure (see requireMembership /
 			// demoMyProjects). The engine no longer bypasses on this tuple.
-			Permissions: map[string]relationships.PermissionRule{
-				"admin": relationships.AnyOf(relationships.Direct("admin")),
+			Permissions: map[string]decisions.Expression{
+				"admin": decisions.AnyOf(decisions.Direct("admin")),
 			},
 		}},
 	})
-}
-
-// authzRoleModel builds the host's ROLES-kind permission model — the second
-// model-bearing kind this host wires. On the SAME `project` resource type the
-// relationship schema owns, the opaque `auditor` role grants the `audit`
-// permission (the /demo/audit gate).
-//
-// The two models share the resource TYPE but never a (type, permission) PAIR:
-// `project/view` and `project/manage_access` stay relationship-owned, `project/audit`
-// is role-owned. That split is exactly what NewService's pair-ownership rule permits
-// — a pair declared by both models would fail construction with ErrModelConflict —
-// and it is what makes each decision dispatch to exactly one model, so the two
-// recipes stay demonstrable side by side without entangling.
-func authzRoleModel() model.RoleModel {
-	return model.RoleModel{
-		ResourceTypes: map[string]model.RoleTypeDef{
-			demoResourceType: {
-				Roles:       []string{demoRole},
-				Permissions: map[string][]string{demoAuditPermission: {demoRole}},
-			},
-		},
-	}
 }
 
 // authzGuardianPolicy is the host's guardian invariant: the ratified owner minimum
@@ -110,26 +92,18 @@ func authzGuardianPolicy() mutations.GuardianPolicy {
 	}
 }
 
-// newAuthorization composes the guarded authorization pocket this host runs — the
-// testable composition seam run() and the guarded-composition tests share (the
-// buildAuthConfig precedent). BOTH kinds ride one shared-state memstore bundle (so the
-// trusted SystemMutator writes and the read side observe the same state), and BOTH
-// bear a model — the relationship Schema and the RoleModel — so the ONE decision
-// surface dispatches each (type, permission) pair to its owning model. It runs under
-// the project-scoped guardian minimum, with the host MutationGuard wired through authorization.WithGuard.
-// The returned Components hold the actor-facing Service and the separately held trusted
-// SystemMutator apart, by construction.
+// newAuthorization binds one canonical authority and one explicit permission model.
+// Exact role predicates and graph predicates share the same decision snapshot.
+// The actor-facing service and trusted SystemMutator are separate capabilities.
 func newAuthorization(roleRoutesGate web.Middleware, logger *slog.Logger) (authorization.Components, error) {
 	store := authzmem.New(authzmem.WithGuardianPolicy(authzGuardianPolicy()))
 	return authorization.New(
 		authorization.Repositories{
-			Relationships: store.Relationships(),
-			Roles:         store.Roles(),
-			Mutations:     store.Mutations(),
+			Tuples:    store.Tuples(),
+			Mutations: store.Mutations(),
 		},
 		authorization.WithLogger(logger),
-		authorization.WithRelationshipModel(authzSchema()),
-		authorization.WithRoleModel(authzRoleModel()),
+		authorization.WithModel(authzSchema()),
 		authorization.WithGuard(hostMutationGuard{}),
 		// The gate enables bundled role administration; a nil gate leaves every
 		// role route disabled, including in the headless composition tests.
@@ -226,17 +200,13 @@ func seedAuthorization(ctx context.Context, system *mutations.SystemMutator) err
 			return err
 		}
 	}
-	// The ROLES-kind seed, on the same trusted seam: the demo owner also holds `auditor` on project:demo, so the
-	// role-model gate on /demo/audit is answerable at boot. The (project, auditor)
-	// pair must be declared by authzRoleModel — with a model wired, an undeclared
-	// pair is refused with ErrInvalidRoleModel rather than stored as a silent
-	// no-grant.
+	// The same canonical authority stores this scoped auditor fact. The permission
+	// model explicitly checks it; global auditor facts do not satisfy this policy.
 	if _, err := system.AssignRole(ctx, mutations.AssignRoleCommand{
 
-		Subject:      model.PrincipalRef{Type: seedOwnerSubject.Type, ID: seedOwnerSubject.ID},
-		Role:         demoRole,
-		ResourceType: demoResourceType,
-		ResourceID:   demoResourceID,
+		Subject: model.PrincipalRef{Type: seedOwnerSubject.Type, ID: seedOwnerSubject.ID},
+		Role:    demoRole,
+		Scope:   tuples.On(demoResourceType, demoResourceID),
 	}); err != nil {
 		return err
 	}

@@ -15,9 +15,9 @@ func TestBoundedExpansionStopsProducingStatesAtCap(t *testing.T) {
 	db := openAndMigrate(t, requireDSN(t))
 	schema := testSchema(t)
 	ctx := context.Background()
-	_, err := db.Exec(ctx, `INSERT INTO `+schema.Table("iam_relationships")+`
-	(resource_type,resource_id,relation,subject_type,subject_id,subject_relation)
-	SELECT 'group', 'g'||i::text, 'member', 'user', 'u1', ''
+	_, err := db.Exec(ctx, `INSERT INTO `+schema.Table("iam_tuples")+`
+	(scope_kind,resource_type,resource_id,relation,subject_type,subject_id,subject_relation)
+	SELECT 2,'group', 'g'||i::text, 'member', 'user', 'u1', ''
 	FROM generate_series(1, 5000) i`)
 	if err != nil {
 		t.Fatal(err)

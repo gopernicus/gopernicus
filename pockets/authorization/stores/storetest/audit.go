@@ -8,7 +8,6 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/gopernicus/gopernicus/pockets/authorization"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/audit"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/mutations"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/relationships"
@@ -20,7 +19,7 @@ import (
 // RunAudit exercises optional change recording on all three write surfaces.
 // factory returns a fresh bundle with an empty guardian policy and recording
 // enabled exactly when requested. Audit must always be supplied for reads.
-func RunAudit(t *testing.T, factory func(*testing.T, bool) authorization.Repositories) {
+func RunAudit(t *testing.T, factory func(*testing.T, bool) Repositories) {
 	t.Run("Disabled", func(t *testing.T) {
 		r := factory(t, false)
 		requireAudit(t, r)
@@ -39,7 +38,7 @@ func RunAudit(t *testing.T, factory func(*testing.T, bool) authorization.Reposit
 		if err := r.Relationships.CreateRelationships(context.Background(), []relationships.CreateRelationship{a}); !errors.Is(err, sdk.ErrInvalidInput) {
 			t.Fatalf("unattributed raw write: %v", err)
 		}
-		if err := r.Roles.Assign(context.Background(), roles.Assignment{SubjectType: "user", SubjectID: "u", Role: "editor"}); !errors.Is(err, sdk.ErrInvalidInput) {
+		if err := assignRole(context.Background(), r.Tuples, roles.Assignment{SubjectType: "user", SubjectID: "u", Role: "editor", Scope: fixtureScope("", "")}); !errors.Is(err, sdk.ErrInvalidInput) {
 			t.Fatalf("unattributed role: %v", err)
 		}
 		if got, err := r.Mutations.Apply(context.Background(), grant("d", "viewer", "u"), nil); got != nil || !errors.Is(err, sdk.ErrInvalidInput) {
@@ -55,27 +54,39 @@ func RunAudit(t *testing.T, factory func(*testing.T, bool) authorization.Reposit
 		}
 	})
 	t.Run("RawChanges", func(t *testing.T) { specRawAudit(t, factory(t, true)) })
+	t.Run("OneDeltaAcrossFacades", func(t *testing.T) {
+		r := factory(t, true)
+		ctx := audit.WithSource(t.Context(), audit.Source{System: "canonical-fixture"})
+		row := ct("doc", "d", "owner", "user", "u")
+		a := roles.Assignment{Scope: fixtureScope("doc", "d"), Role: "owner", SubjectType: "user", SubjectID: "u"}
+		expectAuditChanges(t, r, func() error { return r.Relationships.CreateRelationships(ctx, []relationships.CreateRelationship{row}) }, []audit.Change{addedRelationship(row)})
+		expectAuditChanges(t, r, func() error { return assignRole(ctx, r.Tuples, a) }, nil)
+		expectAuditChanges(t, r, func() error { return unassignRole(ctx, r.Tuples, "user", "u", "owner", "doc", "d") }, []audit.Change{removedRelationship(row)})
+		if held, err := r.Tuples.Contains(ctx, row.Tuple()); err != nil || held {
+			t.Fatalf("facade revoke retained duplicate fact: %v/%v", held, err)
+		}
+	})
 	t.Run("MutationChanges", func(t *testing.T) { specMutationAudit(t, factory(t, true)) })
 	t.Run("PurgeBound", func(t *testing.T) { specAuditPurgeBound(t, factory(t, true)) })
 	t.Run("PagingAndOwnership", func(t *testing.T) { specAuditPaging(t, factory(t, true)) })
 }
-func requireAudit(t *testing.T, r authorization.Repositories) {
+func requireAudit(t *testing.T, r Repositories) {
 	t.Helper()
-	if r.Audit == nil || r.Relationships == nil || r.Roles == nil || r.Mutations == nil {
+	if r.Audit == nil || r.Relationships == nil || r.Tuples == nil || r.Mutations == nil {
 		t.Fatal("audit factory must wire reader and all writers")
 	}
 }
 func addedRelationship(r relationships.CreateRelationship) audit.Change {
-	return audit.Change{Action: audit.ActionAdded, Relationship: &r}
+	return audit.Change{Action: audit.ActionAdded, Tuple: r.Tuple()}
 }
 func removedRelationship(r relationships.CreateRelationship) audit.Change {
-	return audit.Change{Action: audit.ActionRemoved, Relationship: &r}
+	return audit.Change{Action: audit.ActionRemoved, Tuple: r.Tuple()}
 }
 func addedRole(r roles.Assignment) audit.Change {
-	return audit.Change{Action: audit.ActionAdded, Role: &r}
+	return audit.Change{Action: audit.ActionAdded, Tuple: r.Tuple()}
 }
 func removedRole(r roles.Assignment) audit.Change {
-	return audit.Change{Action: audit.ActionRemoved, Role: &r}
+	return audit.Change{Action: audit.ActionRemoved, Tuple: r.Tuple()}
 }
 func readAudit(t *testing.T, r audit.Reader) []audit.Record {
 	t.Helper()
@@ -98,7 +109,7 @@ func changeStrings(t *testing.T, changes []audit.Change) []string {
 	slices.Sort(out)
 	return out
 }
-func expectAuditChanges(t *testing.T, r authorization.Repositories, write func() error, want []audit.Change) {
+func expectAuditChanges(t *testing.T, r Repositories, write func() error, want []audit.Change) {
 	t.Helper()
 	before := map[string]bool{}
 	for _, row := range readAudit(t, r.Audit) {
@@ -126,7 +137,7 @@ func expectAuditChanges(t *testing.T, r authorization.Repositories, write func()
 		t.Fatalf("actual deltas=%+v want=%+v", changeStrings(t, changes), changeStrings(t, want))
 	}
 }
-func specRawAudit(t *testing.T, r authorization.Repositories) {
+func specRawAudit(t *testing.T, r Repositories) {
 	requireAudit(t, r)
 	ctx := audit.WithSource(context.Background(), audit.Source{System: "sync", Reason: "projection"})
 	a := ct("doc", "d", "viewer", "user", "u")
@@ -139,11 +150,11 @@ func specRawAudit(t *testing.T, r authorization.Repositories) {
 	expectAuditChanges(t, r, func() error {
 		return r.Relationships.CreateRelationships(ctx, []relationships.CreateRelationship{a, b})
 	}, nil)
-	conflict := a
-	conflict.Relation = "editor"
+	independent := a
+	independent.Relation = "editor"
 	expectAuditChanges(t, r, func() error {
-		return r.Relationships.CreateRelationships(ctx, []relationships.CreateRelationship{conflict})
-	}, nil)
+		return r.Relationships.CreateRelationships(ctx, []relationships.CreateRelationship{independent})
+	}, []audit.Change{addedRelationship(independent)})
 	expectAuditChanges(t, r, func() error {
 		return r.Relationships.SetRelationTargets(ctx, "doc", "d", "viewer", []relationships.CreateRelationship{c})
 	}, []audit.Change{removedRelationship(a), removedRelationship(b), addedRelationship(c)})
@@ -163,17 +174,17 @@ func specRawAudit(t *testing.T, r authorization.Repositories) {
 			}
 		}, []audit.Change{removedRelationship(a)})
 	}
-	global := roles.Assignment{SubjectType: "user", SubjectID: "u", Role: "editor"}
-	expectAuditChanges(t, r, func() error { return r.Roles.Assign(ctx, global) }, []audit.Change{addedRole(global)})
-	expectAuditChanges(t, r, func() error { return r.Roles.Assign(ctx, global) }, nil)
-	expectAuditChanges(t, r, func() error { return r.Roles.Unassign(ctx, "user", "u", "editor", "", "") }, []audit.Change{removedRole(global)})
+	global := roles.Assignment{SubjectType: "user", SubjectID: "u", Role: "editor", Scope: fixtureScope("", "")}
+	expectAuditChanges(t, r, func() error { return assignRole(ctx, r.Tuples, global) }, []audit.Change{addedRole(global)})
+	expectAuditChanges(t, r, func() error { return assignRole(ctx, r.Tuples, global) }, nil)
+	expectAuditChanges(t, r, func() error { return unassignRole(ctx, r.Tuples, "user", "u", "editor", "", "") }, []audit.Change{removedRole(global)})
 	for _, row := range readAudit(t, r.Audit) {
 		if row.Source != (audit.Source{System: "sync", Reason: "projection"}) {
 			t.Fatalf("source lost: %+v", row.Source)
 		}
 	}
 }
-func specMutationAudit(t *testing.T, r authorization.Repositories) {
+func specMutationAudit(t *testing.T, r Repositories) {
 	requireAudit(t, r)
 	ctx := audit.WithSource(context.Background(), audit.Source{ActorType: "user", ActorID: "actor"})
 	apply := func(cmd mutations.Command) func() error {
@@ -184,13 +195,13 @@ func specMutationAudit(t *testing.T, r authorization.Repositories) {
 	b.Relation = "editor"
 	expectAuditChanges(t, r, apply(grant("d", "viewer", "u")), []audit.Change{addedRelationship(a)})
 	expectAuditChanges(t, r, apply(grant("d", "viewer", "u")), nil)
-	expectAuditChanges(t, r, apply(replace("d", "editor", "u")), []audit.Change{removedRelationship(a), addedRelationship(b)})
+	expectAuditChanges(t, r, apply(swap("d", "viewer", "editor", "u")), []audit.Change{removedRelationship(a), addedRelationship(b)})
 	expectAuditChanges(t, r, apply(revoke("d", "editor", "u")), []audit.Change{removedRelationship(b)})
 	expectAuditChanges(t, r, apply(revoke("d", "editor", "u")), nil)
 	expectAuditChanges(t, r, apply(grant("d", "viewer", "u")), []audit.Change{addedRelationship(a)})
 	expectAuditChanges(t, r, apply(mutations.Command{Target: resTarget("d"), Operation: mutations.OpPurge}), []audit.Change{removedRelationship(a)})
 	expectAuditChanges(t, r, apply(grant("d", "viewer", "u")), []audit.Change{addedRelationship(a)})
-	assignment := roles.Assignment{SubjectType: "user", SubjectID: "u", Role: "editor", ResourceType: "doc", ResourceID: "d"}
+	assignment := roles.Assignment{SubjectType: "user", SubjectID: "u", Role: "editor", Scope: fixtureScope("doc", "d")}
 	roleCmd := mutations.Command{Target: resTarget("d"), Operation: mutations.OpRoleAssign, Roles: []mutations.RoleRow{{SubjectType: "user", SubjectID: "u", Role: "editor"}}}
 	expectAuditChanges(t, r, apply(roleCmd), []audit.Change{addedRole(assignment)})
 	roleCmd.Operation = mutations.OpRoleUnassign
@@ -206,7 +217,7 @@ func specMutationAudit(t *testing.T, r authorization.Repositories) {
 	}
 	expectAuditChanges(t, r, apply(mutations.Command{Target: resTarget("d"), Operation: mutations.OpTeardown}), []audit.Change{removedRelationship(a), removedRole(assignment)})
 }
-func specAuditPaging(t *testing.T, r authorization.Repositories) {
+func specAuditPaging(t *testing.T, r Repositories) {
 	requireAudit(t, r)
 	ctx := audit.WithSource(context.Background(), audit.Source{ActorType: "user", ActorID: "actor"})
 	rows := []relationships.CreateRelationship{ct("doc", "a", "viewer", "user", "u"), ct("doc", "b", "viewer", "user", "u"), ctUserset("doc", "a", "viewer", "group", "g", "member"), ct("doc", "c", "viewer", "user", "u")}
@@ -250,7 +261,7 @@ func specAuditPaging(t *testing.T, r authorization.Repositories) {
 		}
 	}
 	first := readAudit(t, r.Audit)
-	first[0].Change.Relationship.SubjectID = "changed"
+	first[0].Change.Tuple.Subject.ID = "changed"
 	if reflect.DeepEqual(first, readAudit(t, r.Audit)) {
 		t.Fatal("reader returned retained pointer storage")
 	}
@@ -277,7 +288,7 @@ func specAuditPaging(t *testing.T, r authorization.Repositories) {
 	}
 }
 
-func specAuditPurgeBound(t *testing.T, r authorization.Repositories) {
+func specAuditPurgeBound(t *testing.T, r Repositories) {
 	requireAudit(t, r)
 	ctx := audit.WithSource(context.Background(), audit.Source{System: "test"})
 	rows := []relationships.CreateRelationship{ct("doc", "bounded", "viewer", "user", "a"), ct("doc", "bounded", "viewer", "user", "b")}

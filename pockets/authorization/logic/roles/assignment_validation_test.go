@@ -6,26 +6,39 @@ import (
 	"testing"
 
 	authmodel "github.com/gopernicus/gopernicus/pockets/authorization/logic/model"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuples"
 	"github.com/gopernicus/gopernicus/sdk"
 )
 
-func TestAssignmentValidationRejectsNaturalKeySeparatorsBeforeStore(t *testing.T) {
-	ctx := context.Background()
-	for i, field := range []string{"subject type", "subject id", "role", "resource type", "resource id"} {
-		t.Run(field, func(t *testing.T) {
-			args := []string{"user", "u1", "editor", "doc", "d1"}
-			args[i] = "a\x01b"
-			store := &fakeRoleStore{err: errors.New("store must not be called")}
-			svc := newRoleFixture(t, store)
-			if err := svc.AssignRole(ctx, args[0], args[1], args[2], args[3], args[4]); !errors.Is(err, sdk.ErrInvalidInput) {
-				t.Fatalf("AssignRole = %v", err)
-			}
-			if err := svc.UnassignRole(ctx, args[0], args[1], args[2], args[3], args[4]); !errors.Is(err, sdk.ErrInvalidInput) {
-				t.Fatalf("UnassignRole = %v", err)
-			}
-			if _, err := svc.HasRole(ctx, authmodel.PrincipalRef{Type: args[0], ID: args[1]}, args[2], args[3], args[4]); !errors.Is(err, sdk.ErrInvalidInput) {
-				t.Fatalf("HasRole = %v", err)
-			}
-		})
+func TestValidationBeforeStore(t *testing.T) {
+	for _, a := range []Assignment{
+		{SubjectType: "bad\x01type", SubjectID: "u", Role: "owner", Scope: tuples.Global()},
+		{SubjectType: "user", SubjectID: "bad\x00id", Role: "owner", Scope: tuples.Global()},
+		{SubjectType: "user", SubjectID: "u", Role: "", Scope: tuples.Global()},
+		{SubjectType: "user", SubjectID: "u", Role: "owner"},
+		{SubjectType: "user", SubjectID: "u", Role: "owner", Scope: tuples.On("doc", "")},
+	} {
+		f := &fakeRoleStore{}
+		s := newRoleFixture(t, f)
+		if e := s.AssignRole(context.Background(), a); !errors.Is(e, sdk.ErrInvalidInput) {
+			t.Fatalf("assign %+v: %v", a, e)
+		}
+		if e := s.UnassignRole(context.Background(), a); !errors.Is(e, sdk.ErrInvalidInput) {
+			t.Fatalf("unassign %+v: %v", a, e)
+		}
+		if f.writes != 0 {
+			t.Fatal("invalid assignment reached store")
+		}
+	}
+	f := &fakeRoleStore{}
+	s := newRoleFixture(t, f)
+	if _, e := s.HasRole(context.Background(), authmodel.PrincipalRef{Type: "user", ID: "u"}, "bad\nrole"); !errors.Is(e, sdk.ErrInvalidInput) {
+		t.Fatal(e)
+	}
+	if _, e := s.HasRoleIn(context.Background(), authmodel.PrincipalRef{Type: "user", ID: "u"}, "owner", authmodel.Resource{}); !errors.Is(e, sdk.ErrInvalidInput) {
+		t.Fatal(e)
+	}
+	if f.snapshots != 0 {
+		t.Fatal("invalid check opened snapshot")
 	}
 }

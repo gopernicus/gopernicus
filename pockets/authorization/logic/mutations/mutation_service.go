@@ -10,8 +10,9 @@ import (
 	"unicode/utf8"
 
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/audit"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/decisions"
 	authmodel "github.com/gopernicus/gopernicus/pockets/authorization/logic/model"
-	"github.com/gopernicus/gopernicus/pockets/authorization/logic/relationships"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuples"
 	"github.com/gopernicus/gopernicus/sdk"
 )
 
@@ -29,6 +30,9 @@ var (
 type ProposedChange struct {
 	Relationships []RelationshipRow
 	Roles         []RoleRow
+	Tuples        tuples.Changes
+	Relation      string
+	Subjects      []tuples.SubjectRef
 }
 
 // MutationAttempt is the request the host guard must authorize.
@@ -48,13 +52,13 @@ type MutationGuard interface {
 	AuthorizeMutation(context.Context, MutationAttempt, DecisionView) error
 }
 
-func composeGuard(actor Actor, guard MutationGuard, cmd Command, engine *relationships.Service, roleModel *authmodel.CompiledRoleModel, limits authmodel.EvaluationLimits) Guard {
+func composeGuard(actor Actor, guard MutationGuard, cmd Command, engine *decisions.Service, limits authmodel.EvaluationLimits) Guard {
 	return func(ctx context.Context, view StoreDecisionView) error {
 		attempt := MutationAttempt{
 			Actor: actor, Operation: cmd.Operation, Target: cmd.Target,
-			Change: ProposedChange{Relationships: slices.Clone(cmd.Relationships), Roles: slices.Clone(cmd.Roles)},
+			Change: ProposedChange{Relationships: slices.Clone(cmd.Relationships), Roles: slices.Clone(cmd.Roles), Tuples: tuples.Changes{Add: slices.Clone(cmd.Tuples.Add), Remove: slices.Clone(cmd.Tuples.Remove)}, Relation: cmd.Relation, Subjects: slices.Clone(cmd.Subjects)},
 		}
-		return guard.AuthorizeMutation(ctx, attempt, permissionView{store: view, engine: engine, roleModel: roleModel, limits: limits})
+		return guard.AuthorizeMutation(ctx, attempt, permissionView{store: view, engine: engine, limits: limits})
 	}
 }
 
@@ -62,10 +66,9 @@ func composeGuard(actor Actor, guard MutationGuard, cmd Command, engine *relatio
 // It bypasses the host guard, while retaining current-model validation and
 // guardian invariants. When recording is enabled, supply WithAuditSource.
 type SystemMutator struct {
-	mutations     MutationRepository
-	log           *slog.Logger
-	relationships *relationships.Service
-	roleModel     *authmodel.CompiledRoleModel
+	mutations MutationRepository
+	log       *slog.Logger
+	decisions *decisions.Service
 }
 
 // Apply validates and applies a trusted command. Resource teardown must use its
@@ -80,7 +83,7 @@ func (m *SystemMutator) Apply(ctx context.Context, cmd Command) (*Result, error)
 	if err := cmd.Validate(); err != nil {
 		return nil, err
 	}
-	return m.mutations.Apply(ctx, cmd, semanticValidatorFor(m.relationships, m.roleModel))
+	return m.mutations.Apply(ctx, cmd, semanticValidatorFor(m.decisions))
 }
 
 func (m *SystemMutator) GrantRelationship(ctx context.Context, cmd GrantRelationshipCommand) (*Result, error) {
@@ -139,7 +142,7 @@ func (m *SystemMutator) TeardownResourceAuthorization(ctx context.Context, cmd T
 		source.Reason = reason
 		ctx = audit.WithSource(ctx, source)
 	}
-	result, err := m.mutations.Apply(ctx, command, semanticValidatorFor(m.relationships, m.roleModel))
+	result, err := m.mutations.Apply(ctx, command, semanticValidatorFor(m.decisions))
 	logger := m.log
 	if logger == nil {
 		logger = slog.Default()
@@ -162,10 +165,9 @@ func (s *Service) applyMutation(ctx context.Context, actor Actor, cmd Command) (
 	if err := actor.Validate(); err != nil {
 		return nil, err
 	}
-	if cmd.Operation == OpPurge {
-		cmd.MaxAffectedRows = s.maxBatchSize
-	} else {
-		cmd.MaxAffectedRows = 0
+	cmd.MaxAffectedRows = s.maxBatchSize
+	if len(cmd.Relationships)+len(cmd.Roles)+len(cmd.Tuples.Add)+len(cmd.Tuples.Remove)+len(cmd.Subjects) > s.maxBatchSize {
+		return nil, authmodel.ErrEvaluationLimit
 	}
 	if err := cmd.Validate(); err != nil {
 		return nil, err
@@ -176,72 +178,28 @@ func (s *Service) applyMutation(ctx context.Context, actor Actor, cmd Command) (
 		source.Reason = supplied.Reason
 	}
 	ctx = audit.WithSource(ctx, source)
-	guard := composeGuard(actor, s.guard, cmd, s.relationships, s.roleModel, s.limits)
-	return s.mutations.ApplyGuarded(ctx, cmd, guard, semanticValidatorFor(s.relationships, s.roleModel))
+	guard := composeGuard(actor, s.guard, cmd, s.decisions, s.limits)
+	return s.mutations.ApplyGuarded(ctx, cmd, guard, semanticValidatorFor(s.decisions))
 }
 
-// schemaValidatorFor validates additions against the current relationship model.
-// Removed model declarations must not prevent removing their stored facts.
-func schemaValidatorFor(eng *relationships.Service) SemanticValidator {
-	if eng == nil {
+// semanticValidatorFor applies explicit canonical shape constraints through every facade.
+func semanticValidatorFor(engine *decisions.Service) SemanticValidator {
+	if engine == nil || engine.CompiledModel() == nil {
 		return nil
 	}
 	return func(cmd Command) error {
-		switch cmd.Operation {
-		case OpGrant, OpReplace:
-			for _, row := range cmd.Relationships {
-				if err := eng.ValidateRelation(cmd.Target.Type, row.Relation, row.Subject.Type, row.Subject.Relation); err != nil {
-					return err
-				}
+		for _, t := range cmd.Requested().Add {
+			if err := engine.CompiledModel().ValidateTuple(t); err != nil {
+				return err
 			}
 		}
 		return nil
 	}
 }
 
-// roleModelValidatorFor checks additions against the current role model.
-// Removals remain possible after a role is removed from that model.
-func roleModelValidatorFor(model *authmodel.CompiledRoleModel) SemanticValidator {
-	if model == nil {
-		return nil
-	}
-	return func(cmd Command) error {
-		if cmd.Operation != OpRoleAssign {
-			return nil
-		}
-		resourceType := ""
-		if cmd.Target.Kind == TargetResource {
-			resourceType = cmd.Target.Type
-		}
-		for _, row := range cmd.Roles {
-			if model.DeclaresRole(resourceType, row.Role) {
-				continue
-			}
-			if resourceType == "" {
-				return fmt.Errorf("%w: role %q is declared by no resource type, so it cannot be assigned globally", authmodel.ErrInvalidRoleModel, row.Role)
-			}
-			return fmt.Errorf("%w: role %q is not declared on resource type %q", authmodel.ErrInvalidRoleModel, row.Role, resourceType)
-		}
-		return nil
-	}
-}
-
-// semanticValidatorFor applies the current models to every command.
-func semanticValidatorFor(eng *relationships.Service, model *authmodel.CompiledRoleModel) SemanticValidator {
-	schema := schemaValidatorFor(eng)
-	roles := roleModelValidatorFor(model)
-	switch {
-	case schema == nil:
-		return roles
-	case roles == nil:
-		return schema
-	}
-	return func(cmd Command) error {
-		if err := schema(cmd); err != nil {
-			return err
-		}
-		return roles(cmd)
-	}
+// Apply performs a guarded exact batch or reconciliation with the ordinary policy.
+func (s *Service) Apply(ctx context.Context, actor Actor, cmd Command) (*Result, error) {
+	return s.applyMutation(ctx, actor, cmd)
 }
 
 // logger is fixed at construction, with a fallback for internal test instances.

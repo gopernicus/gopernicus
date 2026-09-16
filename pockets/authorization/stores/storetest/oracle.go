@@ -6,6 +6,8 @@ import (
 	"sort"
 	"testing"
 
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/decisions"
+
 	"github.com/gopernicus/gopernicus/pockets/authorization"
 	authmodel "github.com/gopernicus/gopernicus/pockets/authorization/logic/model"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/relationships"
@@ -23,32 +25,32 @@ import (
 //
 // doc.view is the rich permission; org.view is a plain Direct so the non-self
 // Through has a real target permission to resolve.
-func oracleSchema() relationships.Schema {
-	return relationships.NewSchema([]relationships.ResourceSchema{
-		{Name: "group", Def: relationships.ResourceTypeDef{
-			Relations: map[string]relationships.RelationDef{
-				"member": {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "user"}, {Type: "group", Relation: "member"}}},
+func oracleSchema() decisions.Model {
+	return decisions.NewSchema([]decisions.ResourceSchema{
+		{Name: "group", Def: decisions.ResourceTypeDef{
+			Relations: map[string]decisions.RelationDef{
+				"member": {AllowedSubjects: []decisions.SubjectTypeRef{{Type: "user"}, {Type: "group", Relation: "member"}}},
 			},
 		}},
-		{Name: "org", Def: relationships.ResourceTypeDef{
-			Relations: map[string]relationships.RelationDef{
-				"admin": {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "user"}}},
+		{Name: "org", Def: decisions.ResourceTypeDef{
+			Relations: map[string]decisions.RelationDef{
+				"admin": {AllowedSubjects: []decisions.SubjectTypeRef{{Type: "user"}}},
 			},
-			Permissions: map[string]relationships.PermissionRule{
-				"view": relationships.AnyOf(relationships.Direct("admin")),
+			Permissions: map[string]decisions.Expression{
+				"view": decisions.AnyOf(decisions.Direct("admin")),
 			},
 		}},
-		{Name: "doc", Def: relationships.ResourceTypeDef{
-			Relations: map[string]relationships.RelationDef{
-				"viewer": {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "user"}, {Type: "group", Relation: "member"}}},
-				"parent": {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "doc"}}},
-				"org":    {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "org"}}},
+		{Name: "doc", Def: decisions.ResourceTypeDef{
+			Relations: map[string]decisions.RelationDef{
+				"viewer": {AllowedSubjects: []decisions.SubjectTypeRef{{Type: "user"}, {Type: "group", Relation: "member"}}},
+				"parent": {AllowedSubjects: []decisions.SubjectTypeRef{{Type: "doc"}}},
+				"org":    {AllowedSubjects: []decisions.SubjectTypeRef{{Type: "org"}}},
 			},
-			Permissions: map[string]relationships.PermissionRule{
-				"view": relationships.AnyOf(
-					relationships.Direct("viewer"),
-					relationships.Through("org", "view"),
-					relationships.Through("parent", "view"),
+			Permissions: map[string]decisions.Expression{
+				"view": decisions.AnyOf(
+					decisions.Direct("viewer"),
+					decisions.Through("org", "view"),
+					decisions.Through("parent", "view"),
 				),
 			},
 		}},
@@ -150,7 +152,7 @@ func generousLimits() authmodel.EvaluationLimits {
 // — on whichever store dialect is under test. It also proves LookupAllResourceIDs
 // output is sorted with each ID exactly once, and that limit exhaustion is an
 // error rather than a truncated-complete list.
-func runParity(t *testing.T, newRepos func(t *testing.T) authorization.Repositories) {
+func runParity(t *testing.T, newRepos func(t *testing.T) Repositories) {
 	ctx := context.Background()
 
 	t.Run("CheckLookupOracle", func(t *testing.T) {
@@ -294,9 +296,9 @@ func assertCheckLookupParity(t *testing.T, ctx context.Context, svc authorizatio
 	}
 }
 
-func newOracleService(t *testing.T, repos authorization.Repositories, limits authmodel.EvaluationLimits) authorization.Components {
+func newOracleService(t *testing.T, repos Repositories, limits authmodel.EvaluationLimits) authorization.Components {
 	t.Helper()
-	comps, err := authorization.New(repos, authorization.WithRelationshipModel(oracleSchema()), authorization.WithLimits(limits))
+	comps, err := authorization.New(repos.Repositories, authorization.WithModel(oracleSchema()), authorization.WithLimits(limits))
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}

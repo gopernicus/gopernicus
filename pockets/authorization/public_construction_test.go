@@ -11,14 +11,13 @@ import (
 	authmodel "github.com/gopernicus/gopernicus/pockets/authorization/logic/model"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/mutations"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/relationships"
-	"github.com/gopernicus/gopernicus/pockets/authorization/logic/roles"
 	"github.com/gopernicus/gopernicus/pockets/authorization/stores/memory"
 )
 
 func TestDirectServicesShareTraversalBudget(t *testing.T) {
 	ctx := context.Background()
 	store := memory.New(memory.WithGuardianPolicy(mutations.GuardianPolicy{}))
-	rel, err := relationships.NewService(store.Relationships(), hierarchySchema(), relationships.WithLimits(authmodel.EvaluationLimits{MaxGraphStates: 1}))
+	rel, err := relationships.NewService(store.Tuples())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -30,13 +29,11 @@ func TestDirectServicesShareTraversalBudget(t *testing.T) {
 		t.Fatal(err)
 	}
 	query := authmodel.CheckRequest{Principal: actorU1().PrincipalRef, Permission: "view", Resource: authmodel.Resource{Type: "space", ID: "leaf"}}
-	decision, err := decisions.NewService(decisions.Readers{Relationships: rel.Service})
+	decision, err := decisions.NewService(store.Tuples(), decisions.WithModel(hierarchySchema()), decisions.WithLimits(authmodel.EvaluationLimits{MaxGraphStates: 1}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if decision.Limits() != rel.Service.Limits() {
-		t.Fatal("decision budget did not inherit the supplied engine budget")
-	}
+
 	if got, err := decision.Check(ctx, query); got.Allowed || !errors.Is(err, authmodel.ErrEvaluationLimit) {
 		t.Fatalf("traversal exceeded inherited budget: decision=%+v err=%v", got, err)
 	}
@@ -49,7 +46,7 @@ func TestDirectServicesShareTraversalBudget(t *testing.T) {
 		}
 		return err
 	})
-	mutation, err := mutations.NewService(store.Mutations(), mutations.Services{Relationships: rel.Service}, mutations.WithGuard(guard))
+	mutation, err := mutations.NewService(store.Mutations(), decision, mutations.WithGuard(guard))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -63,76 +60,67 @@ func TestDirectServicesShareTraversalBudget(t *testing.T) {
 	}
 	for _, limit := range []int{2, authmodel.DefaultMaxGraphStates} {
 		bad := authmodel.EvaluationLimits{MaxGraphStates: limit}
-		if _, err := decisions.NewService(decisions.Readers{Relationships: rel.Service}, decisions.WithLimits(bad)); !errors.Is(err, authmodel.ErrInvalidLimits) {
-			t.Errorf("decision mismatch %d: %v", limit, err)
-		}
-		if _, err := mutations.NewService(store.Mutations(), mutations.Services{Relationships: rel.Service}, mutations.WithLimits(bad), mutations.WithGuard(guard)); !errors.Is(err, authmodel.ErrInvalidLimits) {
+
+		if _, err := mutations.NewService(store.Mutations(), decision, mutations.WithLimits(bad), mutations.WithGuard(guard)); !errors.Is(err, authmodel.ErrInvalidLimits) {
 			t.Errorf("mutation mismatch %d: %v", limit, err)
 		}
 	}
 }
 
-func TestDirectMutationServiceRejectsConflictingCompiledModel(t *testing.T) {
+// One explicit expression controls a permission; its role and graph leaves may coexist.
+func TestDirectModelComposesExactRoleAndGraph(t *testing.T) {
 	store := memory.New()
-	rel, err := relationships.NewService(store.Relationships(), hierarchySchema())
+	m := hierarchySchema()
+	resource := m.ResourceTypes["space"]
+	resource.Permissions["view"] = decisions.Any(decisions.RoleIn("viewer"), decisions.Direct("viewer"))
+	m.ResourceTypes["space"] = resource
+	engine, err := decisions.NewService(store.Tuples(), decisions.WithModel(m))
 	if err != nil {
 		t.Fatal(err)
 	}
-	roleService, err := roles.NewService(store.Roles())
-	if err != nil {
+	if _, err := mutations.NewService(store.Mutations(), engine, mutations.WithGuard(&stubGuard{})); err != nil {
 		t.Fatal(err)
-	}
-	overlapping := authmodel.RoleModel{ResourceTypes: map[string]authmodel.RoleTypeDef{"space": {Roles: []string{"viewer"}, Permissions: map[string][]string{"view": {"viewer"}}}}}
-	independentlyCompiled, err := authmodel.CompileRoleModel(overlapping, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := mutations.NewService(store.Mutations(), mutations.Services{Relationships: rel.Service, Roles: roleService}, mutations.WithRoleModel(independentlyCompiled), mutations.WithGuard(&stubGuard{})); !errors.Is(err, authmodel.ErrModelConflict) {
-		t.Fatalf("guard accepted ambiguous permission owner: %v", err)
-	}
-	if _, err := decisions.NewService(decisions.Readers{Relationships: rel.Service, Roles: roleService}, decisions.WithRoleModel(overlapping)); !errors.Is(err, authmodel.ErrModelConflict) {
-		t.Fatalf("ordinary decisions accepted ambiguous owner: %v", err)
 	}
 }
 
-func hierarchySchema() relationships.Schema {
-	return relationships.NewSchema([]relationships.ResourceSchema{{
+func hierarchySchema() decisions.Model {
+	return decisions.NewSchema([]decisions.ResourceSchema{{
 		Name: "space",
-		Def: relationships.ResourceTypeDef{
-			Relations: map[string]relationships.RelationDef{
-				"parent": {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "space"}}},
-				"viewer": {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "user"}}},
+		Def: decisions.ResourceTypeDef{
+			Relations: map[string]decisions.RelationDef{
+				"parent": {AllowedSubjects: []decisions.SubjectTypeRef{{Type: "space"}}},
+				"viewer": {AllowedSubjects: []decisions.SubjectTypeRef{{Type: "user"}}},
 			},
-			Permissions: map[string]relationships.PermissionRule{
-				"view": relationships.AnyOf(relationships.Direct("viewer"), relationships.Through("parent", "view")),
+			Permissions: map[string]decisions.Expression{
+				"view": decisions.AnyOf(decisions.Direct("viewer"), decisions.Through("parent", "view")),
 			},
 		},
 	}})
 }
 
-func TestRelationshipConstructionOptionsValidateFinalBudget(t *testing.T) {
-	store := memory.NewRelationships()
+func TestDecisionConstructionOptionsValidateFinalBudget(t *testing.T) {
+	store := memory.New().Tuples()
 	limits := authmodel.EvaluationLimits{MaxGraphStates: 1}
-	opts := relationships.WithLimits(limits)
+	opts := decisions.WithLimits(limits)
 	limits.MaxGraphStates = -1
-	rel, err := relationships.NewService(store, hierarchySchema(), opts)
+	rel, err := decisions.NewService(store, decisions.WithModel(hierarchySchema()), opts)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rel.Service.Limits().MaxGraphStates != 1 {
+	if rel.Limits().MaxGraphStates != 1 {
 		t.Fatal("mutating the caller's budget changed the option")
 	}
-	reset, err := relationships.NewService(store, hierarchySchema(), opts, relationships.WithLimits(authmodel.EvaluationLimits{}))
+	reset, err := decisions.NewService(store, decisions.WithModel(hierarchySchema()), opts, decisions.WithLimits(authmodel.EvaluationLimits{}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if reset.Service.Limits().MaxGraphStates != authmodel.DefaultMaxGraphStates {
+	if reset.Limits().MaxGraphStates != authmodel.DefaultMaxGraphStates {
 		t.Fatal("zero budget did not restore defaults")
 	}
-	if _, err := relationships.NewService(store, hierarchySchema(), relationships.WithLimits(limits)); !errors.Is(err, authmodel.ErrInvalidLimits) {
+	if _, err := decisions.NewService(store, decisions.WithModel(hierarchySchema()), decisions.WithLimits(limits)); !errors.Is(err, authmodel.ErrInvalidLimits) {
 		t.Fatalf("negative budget: %v", err)
 	}
-	if _, err := relationships.NewService(store, hierarchySchema(), nil); !errors.Is(err, sdk.ErrInvalidInput) {
+	if _, err := decisions.NewService(store, decisions.WithModel(hierarchySchema()), nil); !errors.Is(err, sdk.ErrInvalidInput) {
 		t.Fatalf("nil option: %v", err)
 	}
 }

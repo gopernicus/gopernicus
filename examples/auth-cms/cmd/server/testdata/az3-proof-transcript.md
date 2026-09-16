@@ -13,20 +13,20 @@ History contains committed fact changes, including trusted setup. Guard denials,
 - command: Service.GrantRelationship(actor=user:ordinary, grant project:p1#owner <- user:ordinary)
 - result: rejected, errors.Is(sdk.ErrForbidden)=true (guard denied before Apply)
 - stored-row check: user:ordinary has manage_access on project:p1 = false (no owner row committed)
-- audit: added project:p1#owner <- user:manager#; source=proof-setup; reason=
-- audit: added project:p1#member <- user:ordinary#; source=proof-setup; reason=
+- audit: added scope=2:project:p1#owner <- user:manager#; source=proof-setup; reason=
+- audit: added scope=2:project:p1#member <- user:ordinary#; source=proof-setup; reason=
 
 ## 2. Authorized manager grants an exact group#member subject
 
 - command: Service.GrantRelationship(actor=user:manager, grant doc:d2#viewer <- group:eng#member)
 - result: outcome=applied
-- live schema digest: 13e967a6b71e1657… (current model)
+- live schema digest: 3e180118a8502823… (current model)
 - stored viewer target(s): group:eng#member
 - Check(user:alice member-of-eng, view, doc:d2) = true (member gains access)
 - Check(user:stranger, view, doc:d2) = false (non-member denied)
-- audit: added group:eng#member <- user:alice#; source=proof-setup; reason=
-- audit: added doc:d2#owner <- user:manager#; source=proof-setup; reason=
-- audit: added doc:d2#viewer <- group:eng#member; source=user:manager; reason=
+- audit: added scope=2:group:eng#member <- user:alice#; source=proof-setup; reason=
+- audit: added scope=2:doc:d2#owner <- user:manager#; source=proof-setup; reason=
+- audit: added scope=2:doc:d2#viewer <- group:eng#member; source=user:manager; reason=
 
 ## 3. A group#admin grant does not authorize an ordinary member
 
@@ -34,10 +34,10 @@ History contains committed fact changes, including trusted setup. Guard denials,
 - result: outcome=applied
 - Check(user:alice group:eng#member, view, doc:d3) = false (member does NOT satisfy the admin userset)
 - Check(user:carol group:eng#admin, view, doc:d3) = true (admin satisfies it)
-- audit: added group:eng#member <- user:alice#; source=proof-setup; reason=
-- audit: added group:eng#admin <- user:carol#; source=proof-setup; reason=
-- audit: added doc:d3#owner <- user:manager#; source=proof-setup; reason=
-- audit: added doc:d3#viewer <- group:eng#admin; source=user:manager; reason=
+- audit: added scope=2:group:eng#member <- user:alice#; source=proof-setup; reason=
+- audit: added scope=2:group:eng#admin <- user:carol#; source=proof-setup; reason=
+- audit: added scope=2:doc:d3#owner <- user:manager#; source=proof-setup; reason=
+- audit: added scope=2:doc:d3#viewer <- group:eng#admin; source=user:manager; reason=
 
 ## 4. Decision APIs reject userset-valued callers
 
@@ -52,7 +52,7 @@ History contains committed fact changes, including trusted setup. Guard denials,
 
 - command: NewService(schema{ space.view = AnyOf(Direct(viewer), Through(parent, view)); space.parent allows space#member })
 - result: construction FAILED, errors.Is(sdk.ErrInvalidInput)=true
-- compile error: authorization schema: invalid input: schema compilation failed with 1 error(s):
+- compile error: schema compilation failed with 1 error(s):
   - space.parent: relation is used by a Through traversal and must contain concrete resource subjects only, but allows userset space#member
 
 ## 6. Non-self Through-root hierarchy: Check and Lookup return the same descendants
@@ -62,22 +62,17 @@ History contains committed fact changes, including trusted setup. Guard denials,
 - LookupAllResourceIDs(user:u1, view, space).IDs = [leaf mid root]
 - parity: each Lookup id is Check-allowed = true
 
-## 7. A global role appears in effective role enumeration
+## 7. Global grants are exact facts
 
-- command: SystemMutator.AssignRole(user:dave, role=auditor, GLOBAL) — no direct scoped row on project:p7
-- ListEffectiveRoleGrantsByResource(project:p7): user:dave/auditor present, provenance=global (direct=false global=true)
-- HasRole(user:dave, auditor, project:p7) = true (scoped global fallback agrees with enumeration)
+- HasRole=true; HasRoleIn=false; global assignments=1
 
-## 8. A scoped revoke while a global remains reports same_role_grant_remains
+## 8. Scoped revocation preserves global identity
 
-- setup: user:erin holds auditor GLOBALLY and scoped on project:p8
-- command: Service.UnassignRole(actor=user:manager, user:erin/auditor scoped on project:p8)
-- result: outcome=applied same_role_grant_remains=true (computed inside the atomic critical section)
-- HasRole(user:erin, auditor, project:p8) after revoke = true (global fallback retains it)
-- audit: added project:p8#owner <- user:manager#; source=proof-setup; reason=
-- audit: added role auditor for user:erin at :; source=proof-setup; reason=
-- audit: added role auditor for user:erin at project:p8; source=user:manager; reason=
-- audit: removed role auditor for user:erin at project:p8; source=user:manager; reason=
+- outcome=applied; scoped=false; global=true
+- audit: added scope=2:project:p8#owner <- user:manager#; source=proof-setup; reason=
+- audit: added scope=1::#auditor <- user:erin#; source=proof; reason=
+- audit: added scope=2:project:p8#auditor <- user:erin#; source=proof; reason=
+- audit: removed scope=2:project:p8#auditor <- user:erin#; source=user:manager; reason=
 
 ## 9. Two concurrent last-owner revokes produce one success / one invariant block
 
@@ -86,15 +81,15 @@ History contains committed fact changes, including trusted setup. Guard denials,
 - invariant: every round produced exactly one applied + one invariant_blocked, with exactly one owner remaining (total remaining owners across rounds = 16 = rounds)
 - run under -race: the memstore's single shared lock is the one database arbiter; the two owners can never both be removed
 
-## 10. Conflicting grants return errors without changing history
+## 10. Independent labels coexist
 
-- owner-to-member grant without replace: semantic_conflict; original owner and audit count unchanged
+- owner plus member: one new canonical fact; original owner preserved
 
 ## 11. Repeated grants report current state and add no duplicate history
 
 - first: applied; repeated call: no_change; one added member fact in history
-- audit: added project:p11#owner <- user:manager#; source=proof-setup; reason=
-- audit: added project:p11#member <- user:frank#; source=user:manager; reason=
+- audit: added scope=2:project:p11#owner <- user:manager#; source=proof-setup; reason=
+- audit: added scope=2:project:p11#member <- user:frank#; source=user:manager; reason=
 
 ## 12. Resource teardown is possible only through the separately held SystemMutator with a recorded reason
 
@@ -103,8 +98,8 @@ History contains committed fact changes, including trusted setup. Guard denials,
 - command: SystemMutator.TeardownResourceAuthorization(project:p12, reason=<recorded>)
 - result: outcome=applied (the one op allowed to remove the last owner)
 - stored-row check after teardown: owner rows=0 member rows=0
-- audit: added project:p12#owner <- user:manager#; source=proof-setup; reason=
-- audit: added project:p12#member <- user:someone#; source=proof-setup; reason=
-- audit: removed project:p12#member <- user:someone#; source=proof-cleanup; reason=az3-4.2 proof: project p12 destroyed by owner request
-- audit: removed project:p12#owner <- user:manager#; source=proof-cleanup; reason=az3-4.2 proof: project p12 destroyed by owner request
+- audit: added scope=2:project:p12#owner <- user:manager#; source=proof-setup; reason=
+- audit: added scope=2:project:p12#member <- user:someone#; source=proof-setup; reason=
+- audit: removed scope=2:project:p12#member <- user:someone#; source=proof-cleanup; reason=az3-4.2 proof: project p12 destroyed by owner request
+- audit: removed scope=2:project:p12#owner <- user:manager#; source=proof-cleanup; reason=az3-4.2 proof: project p12 destroyed by owner request
 

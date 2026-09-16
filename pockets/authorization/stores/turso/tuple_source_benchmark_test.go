@@ -13,12 +13,12 @@ func BenchmarkTupleSourceBacklog(b *testing.B) {
 			for _, full := range []bool{false, true} {
 				b.Run(fmt.Sprintf("full=%t", full), func(b *testing.B) {
 					db, cfg := cacheFixture(b, true)
-					repos, err := Repositories(b.Context(), db, cacheOptions(cfg)...)
+					repos, err := testRepositories(b.Context(), db, cacheOptions(cfg)...)
 					if err != nil {
 						b.Fatal(err)
 					}
 					source := repos.TupleSource
-					if _, err := db.Exec(b.Context(), `INSERT INTO iam_relationships VALUES ('document','current','viewer','user','alice','')`); err != nil {
+					if _, err := db.Exec(b.Context(), `INSERT INTO iam_tuples VALUES (2,'document','current','viewer','user','alice','')`); err != nil {
 						b.Fatal(err)
 					}
 					initial, err := source.Snapshot(b.Context(), "")
@@ -29,10 +29,10 @@ func BenchmarkTupleSourceBacklog(b *testing.B) {
 						b.Fatal(err)
 					}
 					if _, err := db.Exec(b.Context(), `WITH RECURSIVE ids(i) AS (SELECT 1 WHERE ? > 0 UNION ALL SELECT i+1 FROM ids WHERE i < ?)
-INSERT INTO iam_relationships SELECT 'document','obsolete-'||i,'viewer','user','alice','' FROM ids`, count, count); err != nil {
+INSERT INTO iam_tuples SELECT 2,'document','obsolete-'||i,'viewer','user','alice','' FROM ids`, count, count); err != nil {
 						b.Fatal(err)
 					}
-					if _, err := db.Exec(b.Context(), "DELETE FROM iam_relationships WHERE resource_id <> 'current'"); err != nil {
+					if _, err := db.Exec(b.Context(), "DELETE FROM iam_tuples WHERE resource_id <> 'current'"); err != nil {
 						b.Fatal(err)
 					}
 					receipt := "initial"

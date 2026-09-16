@@ -18,10 +18,11 @@ import (
 // budgetService builds a memstore-backed Service over model with the given
 // evaluation limits, returning it together with the backing relationship store so
 // tests SEED via the store PORT (the raw Service write path was removed at AZ3-3.4).
-func budgetService(t *testing.T, model relationships.Schema, limits authmodel.EvaluationLimits) (authorization.Components, *memory.Relationships) {
+func budgetService(t *testing.T, model decisions.Model, limits authmodel.EvaluationLimits) (authorization.Components, *memory.Relationships) {
 	t.Helper()
-	store := memory.NewRelationships()
-	comps, err := authorization.New(authorization.Repositories{Relationships: store}, authorization.WithRelationshipModel(model), authorization.WithLimits(limits))
+	authority := memory.New()
+	store := authority.Relationships()
+	comps, err := authorization.New(authorization.Repositories{Tuples: authority.Tuples()}, authorization.WithModel(model), authorization.WithLimits(limits))
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
@@ -30,16 +31,16 @@ func budgetService(t *testing.T, model relationships.Schema, limits authmodel.Ev
 
 // folderHierarchy is a self-referential folder tree: view is granted directly
 // (viewer) or inherited up the parent chain (Through to another folder's view).
-func folderHierarchy() relationships.Schema {
-	return relationships.NewSchema([]relationships.ResourceSchema{{
+func folderHierarchy() decisions.Model {
+	return decisions.NewSchema([]decisions.ResourceSchema{{
 		Name: "folder",
-		Def: relationships.ResourceTypeDef{
-			Relations: map[string]relationships.RelationDef{
-				"parent": {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "folder"}}},
-				"viewer": {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "user"}}},
+		Def: decisions.ResourceTypeDef{
+			Relations: map[string]decisions.RelationDef{
+				"parent": {AllowedSubjects: []decisions.SubjectTypeRef{{Type: "folder"}}},
+				"viewer": {AllowedSubjects: []decisions.SubjectTypeRef{{Type: "user"}}},
 			},
-			Permissions: map[string]relationships.PermissionRule{
-				"view": relationships.AnyOf(relationships.Direct("viewer"), relationships.Through("parent", "view")),
+			Permissions: map[string]decisions.Expression{
+				"view": decisions.AnyOf(decisions.Direct("viewer"), decisions.Through("parent", "view")),
 			},
 		},
 	}})
@@ -134,16 +135,16 @@ func TestDiamondGraphStateDedup(t *testing.T) {
 	ctx := context.Background()
 	// t0 -> a and t0 -> b (via left/right); a -> z and b -> z (both via left);
 	// z has no grant, so the whole tree is explored and z is reached twice.
-	model := relationships.NewSchema([]relationships.ResourceSchema{{
+	model := decisions.NewSchema([]decisions.ResourceSchema{{
 		Name: "node",
-		Def: relationships.ResourceTypeDef{
-			Relations: map[string]relationships.RelationDef{
-				"left":   {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "node"}}},
-				"right":  {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "node"}}},
-				"viewer": {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "user"}}},
+		Def: decisions.ResourceTypeDef{
+			Relations: map[string]decisions.RelationDef{
+				"left":   {AllowedSubjects: []decisions.SubjectTypeRef{{Type: "node"}}},
+				"right":  {AllowedSubjects: []decisions.SubjectTypeRef{{Type: "node"}}},
+				"viewer": {AllowedSubjects: []decisions.SubjectTypeRef{{Type: "user"}}},
 			},
-			Permissions: map[string]relationships.PermissionRule{
-				"view": relationships.AnyOf(relationships.Direct("viewer"), relationships.Through("left", "view"), relationships.Through("right", "view")),
+			Permissions: map[string]decisions.Expression{
+				"view": decisions.AnyOf(decisions.Direct("viewer"), decisions.Through("left", "view"), decisions.Through("right", "view")),
 			},
 		},
 	}})
@@ -245,11 +246,11 @@ func TestBudgetBatchSizeRejected(t *testing.T) {
 // ErrEvaluationLimit rather than a truncated slice presented as complete.
 func TestBudgetLookupResultsExhaustion(t *testing.T) {
 	ctx := context.Background()
-	model := relationships.NewSchema([]relationships.ResourceSchema{{
+	model := decisions.NewSchema([]decisions.ResourceSchema{{
 		Name: "doc",
-		Def: relationships.ResourceTypeDef{
-			Relations:   map[string]relationships.RelationDef{"viewer": {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "user"}}}},
-			Permissions: map[string]relationships.PermissionRule{"view": relationships.AnyOf(relationships.Direct("viewer"))},
+		Def: decisions.ResourceTypeDef{
+			Relations:   map[string]decisions.RelationDef{"viewer": {AllowedSubjects: []decisions.SubjectTypeRef{{Type: "user"}}}},
+			Permissions: map[string]decisions.Expression{"view": decisions.AnyOf(decisions.Direct("viewer"))},
 		},
 	}})
 	tuples := []relationships.CreateRelationship{
@@ -297,11 +298,11 @@ func TestBudgetLookupResultsBeatsASmallLimit(t *testing.T) {
 	principal := authmodel.PrincipalRef{Type: "user", ID: "u1"}
 
 	t.Run("a top-level enumeration over the budget pages", func(t *testing.T) {
-		model := relationships.NewSchema([]relationships.ResourceSchema{{
+		model := decisions.NewSchema([]decisions.ResourceSchema{{
 			Name: "doc",
-			Def: relationships.ResourceTypeDef{
-				Relations:   map[string]relationships.RelationDef{"viewer": {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "user"}}}},
-				Permissions: map[string]relationships.PermissionRule{"view": relationships.AnyOf(relationships.Direct("viewer"))},
+			Def: decisions.ResourceTypeDef{
+				Relations:   map[string]decisions.RelationDef{"viewer": {AllowedSubjects: []decisions.SubjectTypeRef{{Type: "user"}}}},
+				Permissions: map[string]decisions.Expression{"view": decisions.AnyOf(decisions.Direct("viewer"))},
 			},
 		}})
 		svc, store := budgetService(t, model, authmodel.EvaluationLimits{MaxLookupResults: 2})
@@ -351,14 +352,14 @@ func TestBudgetLookupResultsBeatsASmallLimit(t *testing.T) {
 	})
 
 	t.Run("an intermediate node over the budget fails on every page", func(t *testing.T) {
-		model := relationships.NewSchema([]relationships.ResourceSchema{
-			{Name: "org", Def: relationships.ResourceTypeDef{
-				Relations:   map[string]relationships.RelationDef{"admin": {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "user"}}}},
-				Permissions: map[string]relationships.PermissionRule{"manage": relationships.AnyOf(relationships.Direct("admin"))},
+		model := decisions.NewSchema([]decisions.ResourceSchema{
+			{Name: "org", Def: decisions.ResourceTypeDef{
+				Relations:   map[string]decisions.RelationDef{"admin": {AllowedSubjects: []decisions.SubjectTypeRef{{Type: "user"}}}},
+				Permissions: map[string]decisions.Expression{"manage": decisions.AnyOf(decisions.Direct("admin"))},
 			}},
-			{Name: "post", Def: relationships.ResourceTypeDef{
-				Relations:   map[string]relationships.RelationDef{"org": {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "org"}}}},
-				Permissions: map[string]relationships.PermissionRule{"view": relationships.AnyOf(relationships.Through("org", "manage"))},
+			{Name: "post", Def: decisions.ResourceTypeDef{
+				Relations:   map[string]decisions.RelationDef{"org": {AllowedSubjects: []decisions.SubjectTypeRef{{Type: "org"}}}},
+				Permissions: map[string]decisions.Expression{"view": decisions.AnyOf(decisions.Through("org", "manage"))},
 			}},
 		})
 		svc, store := budgetService(t, model, authmodel.EvaluationLimits{MaxLookupResults: 2})
@@ -438,18 +439,18 @@ func TestCancelBeforeStoreCall(t *testing.T) {
 // stack/memo split reuses the completed sub-result instead of suppressing it.
 func TestSiblingThroughLookupNotSuppressed(t *testing.T) {
 	ctx := context.Background()
-	model := relationships.NewSchema([]relationships.ResourceSchema{
-		{Name: "group", Def: relationships.ResourceTypeDef{
-			Relations:   map[string]relationships.RelationDef{"viewer": {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "user"}}}},
-			Permissions: map[string]relationships.PermissionRule{"view": relationships.AnyOf(relationships.Direct("viewer"))},
+	model := decisions.NewSchema([]decisions.ResourceSchema{
+		{Name: "group", Def: decisions.ResourceTypeDef{
+			Relations:   map[string]decisions.RelationDef{"viewer": {AllowedSubjects: []decisions.SubjectTypeRef{{Type: "user"}}}},
+			Permissions: map[string]decisions.Expression{"view": decisions.AnyOf(decisions.Direct("viewer"))},
 		}},
-		{Name: "doc", Def: relationships.ResourceTypeDef{
-			Relations: map[string]relationships.RelationDef{
-				"primary":   {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "group"}}},
-				"secondary": {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "group"}}},
+		{Name: "doc", Def: decisions.ResourceTypeDef{
+			Relations: map[string]decisions.RelationDef{
+				"primary":   {AllowedSubjects: []decisions.SubjectTypeRef{{Type: "group"}}},
+				"secondary": {AllowedSubjects: []decisions.SubjectTypeRef{{Type: "group"}}},
 			},
-			Permissions: map[string]relationships.PermissionRule{
-				"view": relationships.AnyOf(relationships.Through("primary", "view"), relationships.Through("secondary", "view")),
+			Permissions: map[string]decisions.Expression{
+				"view": decisions.AnyOf(decisions.Through("primary", "view"), decisions.Through("secondary", "view")),
 			},
 		}},
 	})

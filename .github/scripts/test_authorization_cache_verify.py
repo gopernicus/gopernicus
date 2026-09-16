@@ -1,23 +1,16 @@
 from pathlib import Path
+import json
 import subprocess
 import socket
 import sys
 import tempfile
 import unittest
 
-from authorization_cache_verify import OwnedFixture, clean_environment, generate, main, run_adapter_cache_tests, run_mounted_tests, live_environment, benchmark_acceptance
+from authorization_cache_verify import OwnedFixture, clean_environment, generate, main, run_adapter_cache_tests, run_mounted_tests, checked_tests, parse_benchmarks, benchmark_cases
 from unittest.mock import patch
 
 
 class OwnedFixtureTests(unittest.TestCase):
-    def test_benchmark_acceptance_includes_mounted_errors(self):
-        events = [{"benchmark": {"provisional_acceptance": True}}, {"mounted_benchmark": {"measurements": {"Errors": {}}}}]
-        self.assertTrue(benchmark_acceptance(events))
-        events[1]["mounted_benchmark"]["measurements"]["Errors"] = {"HTTP 500": 1}
-        self.assertFalse(benchmark_acceptance(events))
-        self.assertFalse(benchmark_acceptance([]))
-        self.assertFalse(benchmark_acceptance([events[0], {"mounted_benchmark_failure": "reset race 500"}]))
-
     def test_environment_is_allowlisted(self):
         env = clean_environment({"PATH": "/bin", "DATABASE_URL": "production", "POSTGRES_TEST_DSN": "production", "GOFLAGS": "-modfile=unsafe", "GOENV": "unsafe", "GOOGLE_APPLICATION_CREDENTIALS": "secret", "FIRESTORE_EMULATOR_HOST": "production"}, Path("/tmp/owned"))
         self.assertEqual(env["PATH"], "/bin")
@@ -109,70 +102,60 @@ class OwnedFixtureTests(unittest.TestCase):
             finally:
                 fixture.cleanup()
 
-    def test_adapter_tests_reject_skips_and_restore_environment(self):
+    def test_adapter_tests_require_named_proofs_and_both_schemas(self):
         fixture = OwnedFixture()
         try:
-            with patch.object(fixture, "run", return_value='{"Action":"skip","Test":"TestCacheSnapshots"}'):
-                with self.assertRaises(RuntimeError):
-                    run_adapter_cache_tests(fixture)
-            self.assertEqual(fixture.env["GOWORK"], "off")
-            with patch.object(fixture, "run", return_value='{"Action":"pass","Test":"TestCacheSnapshots"}'):
+            calls=[]
+            def checked(f, module, extra=(), require=(), reject_skips=False):
+                self.assertTrue(require)
+                self.assertTrue(reject_skips)
+                calls.append((module,f.env.get("POSTGRES_TEST_SCHEMA"),extra))
+            with patch("authorization_cache_verify.checked_tests", side_effect=checked):
                 run_adapter_cache_tests(fixture)
-            self.assertEqual(fixture.events[-1]["passed"], 1)
+            self.assertEqual([c[1] for c in calls[:2]], [None,"authorization_named"])
+            self.assertIn("-tags=integration",calls[2][2])
         finally:
             fixture.cleanup()
 
-    def test_mounted_requires_all_cases_and_cleans_environment(self):
+    def test_required_tests_and_nested_skips_are_not_success(self):
         fixture = OwnedFixture()
-        fixture.env["FIXTURE_BACKEND"] = "pgx"
         try:
-            for output in ('{"Action":"skip","Test":"TestMounted"}', '{"Action":"pass","Test":"TestMounted"}'):
-                with patch.object(fixture, "run", return_value=output):
+            cases = [
+                [{"Action":"pass","Test":"TestOther"}],
+                [{"Action":"pass","Test":"TestProof"},{"Action":"skip","Test":"TestProof/required"}],
+            ]
+            for events in cases:
+                with patch.object(fixture, "run", return_value="\n".join(map(json.dumps,events))):
                     with self.assertRaises(RuntimeError):
-                        run_mounted_tests(fixture)
-                self.assertNotIn("FIXTURE_MOUNTED", fixture.env)
-            output = "\n".join('{"Action":"pass","Test":"' + name + '"}' for name in ("TestMounted/direct", "TestMounted/lru", "TestMounted/redis", "TestMounted"))
+                        checked_tests(fixture,"module",require=("TestProof",),reject_skips=True)
+        finally:
+            fixture.cleanup()
+
+    def test_benchmark_matrix_rejects_missing_or_short_samples(self):
+        name="BenchmarkTupleCache/tuples=100/read_allowed"
+        row=f"{name}-14 100 12.5 ns/op 24 B/op 2 allocs/op\n"
+        self.assertEqual(len(parse_benchmarks(row*5,{name})[name]),5)
+        for output, expected in [(row,{name}), (row*5,{name,"BenchmarkMissingRedis"}), (row*6,{name})]:
+            with self.assertRaises(RuntimeError):
+                parse_benchmarks(output,expected)
+        interleaved=f"{name}-14 2026/09/15 migration log\nnext log\n100 12.5 ns/op 24 B/op 2 allocs/op\n"
+        self.assertEqual(len(parse_benchmarks(interleaved*5,{name})[name]),5)
+        modules=["pockets/authorization", "pockets/authorization/stores/pgx", "pockets/authorization/stores/turso", "pockets/authorization/stores/goredis"]
+        self.assertEqual([len(benchmark_cases(m)) for m in modules],[25,12,16,56])
+
+    def test_mounted_requires_named_behavior_proofs(self):
+        fixture = OwnedFixture()
+        try:
+            with patch.object(fixture, "run", return_value='{"Action":"pass","Test":"TestUnrelated"}'):
+                with self.assertRaises(RuntimeError):
+                    run_mounted_tests(fixture)
+            output = "\n".join(json.dumps({"Action":"pass", "Test":name}) for name in
+                ("TestInvitationMemberAndOwnerCoexist", "TestDemoAuditRouteUsesScopedPredicate", "TestRoleRoutesPlatformAdminDrivesTheLifecycle", "TestMembershipPolicySharesSnapshotAndFailsClosed"))
             with patch.object(fixture, "run", return_value=output):
                 run_mounted_tests(fixture)
-            self.assertEqual(fixture.events[-1]["mounted_backend"], "pgx")
+            self.assertEqual(fixture.events[-1]["suite"], "examples/auth-cms")
         finally:
             fixture.cleanup()
-
-    def test_container_cleanup_requires_owner_label(self):
-        fixture = OwnedFixture()
-        cidfile = fixture.root / "owned.cid"
-        identity = "a" * 64
-        cidfile.write_text(identity)
-        fixture.container_files.append(cidfile)
-        try:
-            with patch.object(fixture, "run", return_value='[{"Config":{"Labels":{"authorization-cache-owner":"someone-else"}}}]'):
-                with self.assertRaises(RuntimeError):
-                    fixture.cleanup()
-            self.assertTrue(fixture.root.exists())
-            with patch.object(fixture, "run", side_effect=['[{"Config":{"Labels":{"authorization-cache-owner":"' + fixture.token + '"}}}]', ""]) as run:
-                fixture.cleanup()
-                self.assertEqual(run.call_args_list[-1].args[0], ["docker", "rm", "--force", identity])
-        finally:
-            if fixture.root.exists():
-                fixture.container_files.clear()
-                fixture.cleanup()
-
-
-    def test_live_missing_configuration_refuses_before_startup(self):
-        with tempfile.TemporaryDirectory() as root, patch.dict("os.environ", {}, clear=True), patch("authorization_cache_verify.OwnedFixture") as start:
-            self.assertEqual(main(["--mode", "firestore-live", "--report", str(Path(root)/"report.json")]), 1)
-            start.assert_not_called()
-
-    def test_live_requires_owned_nondefault_target_and_explicit_credentials(self):
-        with tempfile.TemporaryDirectory() as root:
-            credential = Path(root)/"synthetic.json"
-            credential.write_text("not a credential; this test never calls a provider")
-            valid = {"FIRESTORE_LIVE_PROJECT_ID":"fixture-project", "FIRESTORE_LIVE_DATABASE_ID":"ci-fixture", "FIRESTORE_LIVE_OWNED":"ci-fixture", "GOOGLE_APPLICATION_CREDENTIALS":str(credential)}
-            self.assertEqual(live_environment(valid)["FIRESTORE_LIVE_REQUIRED"], "1")
-            for changes in ({"FIRESTORE_LIVE_DATABASE_ID":"(default)"}, {"FIRESTORE_LIVE_OWNED":"other"}, {"GOOGLE_APPLICATION_CREDENTIALS":""}, {"FIRESTORE_EMULATOR_HOST":"127.0.0.1:1234"}):
-                with self.assertRaises(ValueError):
-                    live_environment({**valid, **changes})
-
 
 
 if __name__ == "__main__":

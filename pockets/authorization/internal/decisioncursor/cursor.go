@@ -8,6 +8,8 @@ import (
 	"encoding/json"
 	"io"
 
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuples"
+
 	authmodel "github.com/gopernicus/gopernicus/pockets/authorization/logic/model"
 )
 
@@ -85,7 +87,7 @@ func DecodeLookupCursor(cursor, wantFingerprint string) (string, error) {
 	if decoded.Fingerprint == "" || decoded.Fingerprint != wantFingerprint {
 		return "", authmodel.ErrInvalidCursor
 	}
-	if err := authmodel.ValidateRefField("cursor id", decoded.LastID); err != nil {
+	if err := tuples.ValidateRefField("cursor id", decoded.LastID); err != nil {
 		return "", authmodel.ErrInvalidCursor
 	}
 	return decoded.LastID, nil

@@ -8,20 +8,19 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuples"
+
 	"github.com/gopernicus/gopernicus/pockets"
 	authorizationhttp "github.com/gopernicus/gopernicus/pockets/authorization/inbound/http"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/audit"
 	authmodel "github.com/gopernicus/gopernicus/pockets/authorization/logic/model"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/mutations"
-	"github.com/gopernicus/gopernicus/pockets/authorization/logic/relationships"
-	"github.com/gopernicus/gopernicus/pockets/authorization/logic/roles"
 	"github.com/gopernicus/gopernicus/pockets/authorization/stores/memory"
 	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/pkg/web"
 )
 
-type nilRelationshipDependency struct{ relationships.Storer }
-type nilRoleDependency struct{ roles.Storer }
+type nilRoleDependency struct{ tuples.Storer }
 type nilAuditReader struct{ audit.Reader }
 
 func TestNewServiceRejectsTypedNilDependencies(t *testing.T) {
@@ -29,17 +28,13 @@ func TestNewServiceRejectsTypedNilDependencies(t *testing.T) {
 		name string
 		set  func(*Repositories, *[]Option)
 	}{
-		{"Repositories.Relationships", func(repos *Repositories, opts *[]Option) {
-			repos.Relationships = (*nilRelationshipDependency)(nil)
-			*opts = append(*opts, WithRelationshipModel(lifecycleModel()))
-		}},
-		{"Repositories.Roles", func(repos *Repositories, _ *[]Option) { repos.Roles = (*nilRoleDependency)(nil) }},
+		{"Repositories.Tuples", func(repos *Repositories, _ *[]Option) { repos.Tuples = (*nilRoleDependency)(nil) }},
 		{"Repositories.Mutations", func(repos *Repositories, _ *[]Option) { repos.Mutations = (*stubMutationRepo)(nil) }},
 		{"WithGuard", func(_ *Repositories, opts *[]Option) { *opts = append(*opts, WithGuard((*stubGuard)(nil))) }},
 		{"Repositories.Audit", func(repos *Repositories, _ *[]Option) { repos.Audit = (*nilAuditReader)(nil) }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			repos := Repositories{Roles: memory.New().Roles()}
+			repos := Repositories{Tuples: memory.New().Tuples()}
 			cfg := []Option{}
 			tc.set(&repos, &cfg)
 			components, err := New(repos, cfg...)
@@ -55,7 +50,7 @@ func TestNewServiceRejectsTypedNilDependencies(t *testing.T) {
 
 func TestNewServicePreservesOptionalNilAndCapturesDefaultLogger(t *testing.T) {
 	logger := slog.Default()
-	components, err := New(Repositories{Roles: memory.New().Roles()})
+	components, err := New(Repositories{Tuples: memory.New().Tuples()})
 	if err != nil {
 		t.Fatalf("roles-only optional nil wiring: %v", err)
 	}
@@ -66,7 +61,7 @@ func TestNewServicePreservesOptionalNilAndCapturesDefaultLogger(t *testing.T) {
 		t.Fatalf("intentional headless Register: %v", err)
 	}
 	_, err = components.Mutations.AssignRole(context.Background(), actorU1(), mutations.AssignRoleCommand{
-		Role: "viewer", Subject: authmodel.PrincipalRef{Type: "user", ID: "u1"},
+		Role: "viewer", Subject: authmodel.PrincipalRef{Type: "user", ID: "u1"}, Scope: tuples.Global(),
 	})
 	if !errors.Is(err, mutations.ErrMutationsNotConfigured) {
 		t.Fatalf("unwired actor writes = %v; want read-only posture", err)
@@ -77,7 +72,7 @@ func TestConstructorLoggerAppliesHeadlesslyAndSurvivesMount(t *testing.T) {
 	var configured, mounted bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&configured, nil))
 	store := memory.New(memory.WithGuardianPolicy(mutations.GuardianPolicy{}))
-	components, err := New(Repositories{Relationships: store.Relationships(), Roles: store.Roles(), Mutations: store.Mutations()}, WithRelationshipModel(lifecycleModel()), WithGuard(&stubGuard{}), WithLogger(logger))
+	components, err := New(Repositories{Tuples: store.Tuples(), Mutations: store.Mutations()}, WithModel(lifecycleModel()), WithGuard(&stubGuard{}), WithLogger(logger))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -111,7 +106,7 @@ func TestConstructorLoggerAppliesHeadlesslyAndSurvivesMount(t *testing.T) {
 
 func TestRegisterRejectsTypedNilRouterWhenRoutesConfigured(t *testing.T) {
 	store := memory.New()
-	components, err := New(Repositories{Roles: store.Roles(), Mutations: store.Mutations()}, WithGuard(&stubGuard{}), WithRoleRoutes(authorizationhttp.RoleRoutes{Gate: passRoleRouteGate}))
+	components, err := New(Repositories{Tuples: store.Tuples(), Mutations: store.Mutations()}, WithGuard(&stubGuard{}), WithRoleRoutes(authorizationhttp.RoleRoutes{Gate: passRoleRouteGate}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -123,11 +118,15 @@ func TestRegisterRejectsTypedNilRouterWhenRoutesConfigured(t *testing.T) {
 func TestPermissionGatesRejectInvalidInputsAtMount(t *testing.T) {
 	components := newGPSHost(t, memory.New(), gpsRoleModel())
 	for name, mount := range map[string]func(){
-		"nil resolver":       func() { components.HTTP.RequirePermission("view", nil) },
-		"invalid permission": func() { components.HTTP.RequirePermission("bad\n", authorizationhttp.FixedResource("page", "1")) },
-		"invalid fixed ID":   func() { components.HTTP.RequirePermissionFixed("page", "view", "bad\n") },
+		"nil resolver": func() {
+			components.HTTP.Require(authorizationhttp.Can("view", authorizationhttp.Resource("page", nil)))
+		},
+		"invalid permission": func() { components.HTTP.Require(authorizationhttp.Can("bad\n", authorizationhttp.Fixed("page", "1"))) },
+		"invalid fixed ID": func() {
+			components.HTTP.Require(authorizationhttp.Can("view", authorizationhttp.Fixed("page", "bad\n")))
+		},
 		"oversized fixed ID": func() {
-			components.HTTP.RequirePermissionFixed("page", "view", strings.Repeat("x", authmodel.MaxRefFieldLen+1))
+			components.HTTP.Require(authorizationhttp.Can("view", authorizationhttp.Fixed("page", strings.Repeat("x", tuples.MaxRefFieldLen+1))))
 		},
 	} {
 		t.Run(name, func(t *testing.T) {

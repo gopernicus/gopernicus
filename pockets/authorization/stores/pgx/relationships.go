@@ -2,12 +2,11 @@ package pgx
 
 import (
 	"context"
-	"errors"
-	"fmt"
 
 	"github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/audit"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/relationships"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuples"
 	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/pkg/list"
 	"github.com/jackc/pgx/v5"
@@ -31,10 +30,10 @@ import (
 // storetest suite is the equivalence proof.
 func reachableCTE(schema pgxdb.Schema) string {
 	return `WITH RECURSIVE reachable(atype, aid, arelation) AS (
-	SELECT @subject_type::text, @subject_id::text, ''::text
+	SELECT @subject_type::text COLLATE "C", @subject_id::text COLLATE "C", ''::text COLLATE "C"
 	UNION
 	SELECT r.resource_type, r.resource_id, r.relation
-	FROM ` + schema.Table("iam_relationships") + ` r
+	FROM ` + resourceTupleTable(schema) + ` r
 	JOIN reachable ON r.subject_type = reachable.atype AND r.subject_id = reachable.aid AND r.subject_relation = reachable.arelation
 )`
 }
@@ -52,7 +51,7 @@ capped AS MATERIALIZED (
 }
 
 // tupleKeyExpr preserves the complete tuple in byte-order listing cursors.
-const tupleKeyExpr = "(resource_type || chr(1) || resource_id || chr(1) || relation || chr(1) || subject_type || chr(1) || subject_id || chr(1) || subject_relation) COLLATE \"C\""
+const tupleKeyExpr = canonicalTupleKeyExpr
 
 type subjectRelationshipRow struct {
 	ResourceType    string `db:"resource_type"`
@@ -95,7 +94,10 @@ func newRelationshipStore(db *pgxdb.DB, cfg config) *relationshipStore {
 
 // table renders name under the store's schema — the one chokepoint every
 // statement on this store goes through.
-func (s *relationshipStore) table(name string) string { return s.schema.Table(name) }
+func resourceTupleTable(schema pgxdb.Schema) string {
+	return "(SELECT * FROM " + schema.Table("iam_tuples") + " WHERE scope_kind=2)"
+}
+func (s *relationshipStore) resourceTable() string { return resourceTupleTable(s.schema) }
 
 var _ relationships.Storer = (*relationshipStore)(nil)
 
@@ -109,7 +111,7 @@ func (s *relationshipStore) CheckRelationWithGroupExpansion(ctx context.Context,
 		q := reachableCTE(s.schema) + `
 SELECT EXISTS (
 	SELECT 1
-	FROM ` + s.table("iam_relationships") + ` r
+	FROM ` + s.resourceTable() + ` r
 	JOIN reachable ON r.subject_type = reachable.atype AND r.subject_id = reachable.aid AND r.subject_relation = reachable.arelation
 	WHERE r.resource_type = @resource_type AND r.resource_id = @resource_id AND r.relation = @relation
 )`
@@ -131,7 +133,7 @@ SELECT
 	(SELECT count(*) FROM capped) AS state_count,
 	EXISTS (
 		SELECT 1
-		FROM ` + s.table("iam_relationships") + ` r
+		FROM ` + s.resourceTable() + ` r
 		JOIN capped ON r.subject_type = capped.atype AND r.subject_id = capped.aid AND r.subject_relation = capped.arelation
 		WHERE r.resource_type = @resource_type AND r.resource_id = @resource_id AND r.relation = @relation
 	) AS matched`
@@ -172,7 +174,7 @@ func (s *relationshipStore) GetRelationTargets(ctx context.Context, resourceType
 // the DecisionView's RelationTargets on the mutation transaction. Same
 // statement, same row order, same mapping.
 func relationTargets(ctx context.Context, q rowQuerier, schema pgxdb.Schema, resourceType, resourceID, relation string) ([]relationships.RelationTarget, error) {
-	stmt := `SELECT subject_type, subject_id, subject_relation FROM ` + schema.Table("iam_relationships") + ` WHERE resource_type = @resource_type AND resource_id = @resource_id AND relation = @relation`
+	stmt := `SELECT subject_type, subject_id, subject_relation FROM ` + resourceTupleTable(schema) + ` WHERE resource_type = @resource_type AND resource_id = @resource_id AND relation = @relation`
 	rows, err := q.Query(ctx, stmt, pgx.NamedArgs{"resource_type": resourceType, "resource_id": resourceID, "relation": relation})
 	if err != nil {
 		return nil, pgxdb.MapError(err)
@@ -202,7 +204,7 @@ func relationTargets(ctx context.Context, q rowQuerier, schema pgxdb.Schema, res
 // tuple with the same type/id does not satisfy a concrete probe). Used for the
 // platform-admin data-tuple check and last-owner counting.
 func (s *relationshipStore) CheckRelationExists(ctx context.Context, resourceType, resourceID, relation, subjectType, subjectID string) (bool, error) {
-	q := `SELECT EXISTS (SELECT 1 FROM ` + s.table("iam_relationships") + ` WHERE resource_type = @resource_type AND resource_id = @resource_id AND relation = @relation AND subject_type = @subject_type AND subject_id = @subject_id AND subject_relation = '')`
+	q := `SELECT EXISTS (SELECT 1 FROM ` + s.resourceTable() + ` WHERE resource_type = @resource_type AND resource_id = @resource_id AND relation = @relation AND subject_type = @subject_type AND subject_id = @subject_id AND subject_relation = '')`
 	var ok bool
 	if err := s.db.QuerierFrom(ctx).QueryRow(ctx, q, pgx.NamedArgs{
 		"resource_type": resourceType,
@@ -234,7 +236,7 @@ func (s *relationshipStore) CheckBatchDirect(ctx context.Context, resourceType s
 	if maxExpansionStates <= 0 {
 		q := reachableCTE(s.schema) + `
 SELECT DISTINCT r.resource_id
-FROM ` + s.table("iam_relationships") + ` r
+FROM ` + s.resourceTable() + ` r
 JOIN reachable ON r.subject_type = reachable.atype AND r.subject_id = reachable.aid AND r.subject_relation = reachable.arelation
 WHERE r.resource_type = @resource_type AND r.relation = @relation AND r.resource_id = ANY(@resource_ids::text[])`
 		matched, err := queryStrings(ctx, s.reader(ctx), q, pgx.NamedArgs{
@@ -259,7 +261,7 @@ WHERE r.resource_type = @resource_type AND r.relation = @relation AND r.resource
 cnt AS (SELECT count(*) AS n FROM capped),
 matches AS (
 	SELECT DISTINCT r.resource_id AS rid
-	FROM ` + s.table("iam_relationships") + ` r
+	FROM ` + s.resourceTable() + ` r
 	JOIN capped ON r.subject_type = capped.atype AND r.subject_id = capped.aid AND r.subject_relation = capped.arelation
 	WHERE r.resource_type = @resource_type AND r.relation = @relation AND r.resource_id = ANY(@resource_ids::text[])
 )
@@ -306,7 +308,7 @@ FROM cnt LEFT JOIN matches m ON true`
 // CheckRelationWithGroupExpansion in ONE statement. The whole id set binds as a
 // SINGLE text[] parameter (`resource_id = ANY(@resource_ids)`), so PostgreSQL's
 // bind-parameter ceiling is never the bound here and no chunking is needed; the
-// 0005 index (resource_type, relation, resource_id COLLATE "C") serves both the
+// canonical lookup index (resource_type, relation, resource_id COLLATE "C") serves both the
 // equality columns and the ordered output.
 //
 // COLLATE "C" is pinned on the projected/ordered expression for the same reason
@@ -324,7 +326,7 @@ func (s *relationshipStore) FilterRelation(ctx context.Context, resourceType str
 	if maxExpansionStates <= 0 {
 		q := reachableCTE(s.schema) + `
 SELECT DISTINCT r.resource_id COLLATE "C" AS resource_id
-FROM ` + s.table("iam_relationships") + ` r
+FROM ` + s.resourceTable() + ` r
 JOIN reachable ON r.subject_type = reachable.atype AND r.subject_id = reachable.aid AND r.subject_relation = reachable.arelation
 WHERE r.resource_type = @resource_type AND r.relation = @relation AND r.resource_id = ANY(@resource_ids::text[])
 ORDER BY r.resource_id COLLATE "C"`
@@ -344,7 +346,7 @@ ORDER BY r.resource_id COLLATE "C"`
 cnt AS (SELECT count(*) AS n FROM capped),
 matches AS (
 	SELECT DISTINCT r.resource_id COLLATE "C" AS rid
-	FROM ` + s.table("iam_relationships") + ` r
+	FROM ` + s.resourceTable() + ` r
 	JOIN capped ON r.subject_type = capped.atype AND r.subject_id = capped.aid AND r.subject_relation = capped.arelation
 	WHERE r.resource_type = @resource_type AND r.relation = @relation AND r.resource_id = ANY(@resource_ids::text[])
 )
@@ -398,7 +400,7 @@ func (s *relationshipStore) RelationTargetsFor(ctx context.Context, resourceType
 		return out, nil
 	}
 
-	q := `SELECT resource_id, subject_type, subject_id, subject_relation FROM ` + s.table("iam_relationships") + `
+	q := `SELECT resource_id, subject_type, subject_id, subject_relation FROM ` + s.resourceTable() + `
 WHERE resource_type = @resource_type AND relation = @relation AND resource_id = ANY(@resource_ids::text[])`
 	rows, err := s.reader(ctx).Query(ctx, q, pgx.NamedArgs{
 		"resource_type": resourceType,
@@ -427,186 +429,51 @@ WHERE resource_type = @resource_type AND relation = @relation AND resource_id = 
 	return out, nil
 }
 
-// CreateRelationships inserts full tuples as one batch. Exact duplicates and
-// competing relations for an already-related subject retain the existing row.
+func (s *relationshipStore) tuples() *tupleStore {
+	return newTupleStore(s.db, config{schema: s.schema, audit: s.audit, tupleBinding: s.tupleBinding})
+}
 func (s *relationshipStore) CreateRelationships(ctx context.Context, in []relationships.CreateRelationship) error {
-	return s.write(ctx, func(tx *writeTx) error { return createRelationships(ctx, tx, s.schema, in) })
-}
-
-func createRelationships(ctx context.Context, db *writeTx, schema pgxdb.Schema, in []relationships.CreateRelationship) error {
-	return insertRelationships(ctx, db, schema, in, false)
-}
-
-func insertRelationships(ctx context.Context, db *writeTx, schema pgxdb.Schema, in []relationships.CreateRelationship, exactConflictsOnly bool) error {
-	if len(in) == 0 {
-		return nil
+	changes := tuples.Changes{Add: make([]tuples.Tuple, len(in))}
+	for i, row := range in {
+		changes.Add[i] = row.Tuple()
 	}
-	for _, row := range in {
+	return s.tuples().ApplyTuples(ctx, changes)
+}
+func (s *relationshipStore) SetRelationTargets(ctx context.Context, rt, rid, relation string, in []relationships.CreateRelationship) error {
+	subjects := make([]tuples.SubjectRef, len(in))
+	for i, row := range in {
 		if err := row.Validate(); err != nil {
 			return err
 		}
-	}
-
-	n := len(in)
-	resourceTypes := make([]string, n)
-	resourceIDs := make([]string, n)
-	relations := make([]string, n)
-	subjectTypes := make([]string, n)
-	subjectIDs := make([]string, n)
-	subjectRelations := make([]string, n)
-	for i, c := range in {
-		resourceTypes[i] = c.ResourceType
-		resourceIDs[i] = c.ResourceID
-		relations[i] = c.Relation
-		subjectTypes[i] = c.SubjectType
-		subjectIDs[i] = c.SubjectID
-		subjectRelations[i] = c.SubjectRelation
-	}
-
-	args := pgx.NamedArgs{
-		"resource_types":    resourceTypes,
-		"resource_ids":      resourceIDs,
-		"relations":         relations,
-		"subject_types":     subjectTypes,
-		"subject_ids":       subjectIDs,
-		"subject_relations": subjectRelations,
-	}
-
-	q := `INSERT INTO ` + schema.Table("iam_relationships") + ` (resource_type, resource_id, relation, subject_type, subject_id, subject_relation)
-SELECT rt, rid, rel, st, sid, sr
-FROM UNNEST(@resource_types::text[], @resource_ids::text[], @relations::text[], @subject_types::text[], @subject_ids::text[], @subject_relations::text[])
-    AS u(rt, rid, rel, st, sid, sr)`
-	if exactConflictsOnly {
-		q += ` ON CONFLICT (resource_type, resource_id, relation, subject_type, subject_id, subject_relation) DO NOTHING`
-	} else {
-		q += ` ON CONFLICT DO NOTHING`
-	}
-
-	if _, err := db.relationships(ctx, audit.ActionAdded, q, args); err != nil {
-		if exactConflictsOnly && errors.Is(err, sdk.ErrAlreadyExists) {
-			return fmt.Errorf("authorization pgx store: a desired target conflicts with an existing relationship: %w", sdk.ErrConflict)
+		if row.ResourceType != rt || row.ResourceID != rid || row.Relation != relation {
+			return sdk.ErrInvalidInput
 		}
+		subjects[i] = row.Subject()
+	}
+	return s.tuples().ReconcileTuples(ctx, tuples.On(rt, rid), relation, subjects)
+}
+func (s *relationshipStore) DeleteResourceRelationships(ctx context.Context, rt, rid string) error {
+	return s.tuples().DeleteScope(ctx, tuples.On(rt, rid))
+}
+func (s *relationshipStore) DeleteRelationshipTarget(ctx context.Context, rt, rid, relation string, subject relationships.SubjectRef) error {
+	return s.tuples().ApplyTuples(ctx, tuples.Changes{Remove: []tuples.Tuple{{Scope: tuples.On(rt, rid), Relation: relation, Subject: subject}}})
+}
+func (s *relationshipStore) DeleteRelationship(ctx context.Context, rt, rid, relation, st, sid string) error {
+	return s.DeleteRelationshipTarget(ctx, rt, rid, relation, tuples.SubjectRef{Type: st, ID: sid})
+}
+func (s *relationshipStore) DeleteByResourceAndSubject(ctx context.Context, rt, rid, st, sid string) error {
+	scope := tuples.On(rt, rid)
+	subject := tuples.SubjectRef{Type: st, ID: sid}
+	if err := scope.Validate(); err != nil {
 		return err
 	}
-	return nil
-}
-
-// SetRelationTargets atomically reconciles one resource and relation. Ambient
-// calls use a savepoint; locks remain held until the host transaction ends.
-func (s *relationshipStore) SetRelationTargets(ctx context.Context, resourceType, resourceID, relationName string, in []relationships.CreateRelationship) error {
-	desired := make(map[relationships.SubjectRef]relationships.CreateRelationship, len(in))
-	for _, c := range in {
-		if err := c.Validate(); err != nil {
-			return err
-		}
-		if c.ResourceType != resourceType || c.ResourceID != resourceID || c.Relation != relationName {
-			return fmt.Errorf("authorization pgx store: SetRelationTargets row is outside requested scope: %w", sdk.ErrInvalidInput)
-		}
-		desired[c.Subject()] = c
-	}
-	rows := make([]relationships.CreateRelationship, 0, len(desired))
-	for _, c := range desired {
-		rows = append(rows, c)
-	}
-
-	return s.write(ctx, func(tx *writeTx) error {
-		return s.setRelationTargetsTx(ctx, tx, resourceType, resourceID, relationName, rows)
-	})
-}
-
-func (s *relationshipStore) setRelationTargetsTx(ctx context.Context, tx *writeTx, resourceType, resourceID, relationName string, rows []relationships.CreateRelationship) error {
-	if len(rows) == 0 {
-		_, err := tx.relationships(ctx, audit.ActionRemoved, `DELETE FROM `+s.table("iam_relationships")+` WHERE resource_type = @resource_type AND resource_id = @resource_id AND relation = @relation`, pgx.NamedArgs{
-			"resource_type": resourceType, "resource_id": resourceID, "relation": relationName,
-		})
-		return pgxdb.MapError(err)
-	}
-
-	subjectTypes := make([]string, len(rows))
-	subjectIDs := make([]string, len(rows))
-	subjectRelations := make([]string, len(rows))
-	for i, c := range rows {
-		subjectTypes[i], subjectIDs[i], subjectRelations[i] = c.SubjectType, c.SubjectID, c.SubjectRelation
-	}
-	args := pgx.NamedArgs{
-		"resource_type": resourceType, "resource_id": resourceID, "relation": relationName,
-		"subject_types": subjectTypes, "subject_ids": subjectIDs, "subject_relations": subjectRelations,
-	}
-	conflictQ := `SELECT EXISTS (
-	SELECT 1 FROM ` + s.table("iam_relationships") + ` r
-	JOIN UNNEST(@subject_types::text[], @subject_ids::text[], @subject_relations::text[]) AS d(st, sid, sr)
-	  ON r.subject_type = d.st AND r.subject_id = d.sid AND r.subject_relation = d.sr
-	WHERE r.resource_type = @resource_type AND r.resource_id = @resource_id AND r.relation <> @relation
-)`
-	var conflict bool
-	if err := tx.QueryRow(ctx, conflictQ, args).Scan(&conflict); err != nil {
-		return pgxdb.MapError(err)
-	}
-	if conflict {
-		return fmt.Errorf("authorization pgx store: a desired target already holds a different relation on %s:%s: %w", resourceType, resourceID, sdk.ErrConflict)
-	}
-
-	deleteQ := `DELETE FROM ` + s.table("iam_relationships") + ` r
-WHERE r.resource_type = @resource_type AND r.resource_id = @resource_id AND r.relation = @relation
-  AND NOT EXISTS (
-	SELECT 1 FROM UNNEST(@subject_types::text[], @subject_ids::text[], @subject_relations::text[]) AS d(st, sid, sr)
-	WHERE r.subject_type = d.st AND r.subject_id = d.sid AND r.subject_relation = d.sr
-  )`
-	if _, err := tx.relationships(ctx, audit.ActionRemoved, deleteQ, args); err != nil {
-		return pgxdb.MapError(err)
-	}
-	// Exact duplicates are harmless; any other unique conflict must abort this
-	// reconciliation, including a competing relation inserted after the probe.
-	return insertRelationships(ctx, tx, s.schema, rows, true)
-}
-
-// DeleteResourceRelationships removes every tuple for a resource (idempotent).
-func (s *relationshipStore) DeleteResourceRelationships(ctx context.Context, resourceType, resourceID string) error {
-	q := `DELETE FROM ` + s.table("iam_relationships") + ` WHERE resource_type = @resource_type AND resource_id = @resource_id`
-	return s.write(ctx, func(tx *writeTx) error {
-		_, err := tx.relationships(ctx, audit.ActionRemoved, q, pgx.NamedArgs{"resource_type": resourceType, "resource_id": resourceID})
+	if err := subject.Validate(); err != nil {
 		return err
-	})
-}
-
-// DeleteRelationshipTarget removes one exact tuple, including subject_relation.
-func (s *relationshipStore) DeleteRelationshipTarget(ctx context.Context, resourceType, resourceID, relationName string, target relationships.SubjectRef) error {
-	q := `DELETE FROM ` + s.table("iam_relationships") + ` WHERE resource_type = @resource_type AND resource_id = @resource_id AND relation = @relation AND subject_type = @subject_type AND subject_id = @subject_id AND subject_relation = @subject_relation`
+	}
 	return s.write(ctx, func(tx *writeTx) error {
-		_, err := tx.relationships(ctx, audit.ActionRemoved, q, pgx.NamedArgs{
-			"resource_type": resourceType, "resource_id": resourceID, "relation": relationName,
-			"subject_type": target.Type, "subject_id": target.ID, "subject_relation": target.Relation,
-		})
-		return err
-	})
-}
-
-// DeleteRelationship removes one exact tuple (idempotent — absent is nil).
-func (s *relationshipStore) DeleteRelationship(ctx context.Context, resourceType, resourceID, relation, subjectType, subjectID string) error {
-	q := `DELETE FROM ` + s.table("iam_relationships") + ` WHERE resource_type = @resource_type AND resource_id = @resource_id AND relation = @relation AND subject_type = @subject_type AND subject_id = @subject_id`
-	return s.write(ctx, func(tx *writeTx) error {
-		_, err := tx.relationships(ctx, audit.ActionRemoved, q, pgx.NamedArgs{
-			"resource_type": resourceType,
-			"resource_id":   resourceID,
-			"relation":      relation,
-			"subject_type":  subjectType,
-			"subject_id":    subjectID,
-		})
-		return err
-	})
-}
-
-// DeleteByResourceAndSubject removes every relation a subject holds on a resource
-// (idempotent).
-func (s *relationshipStore) DeleteByResourceAndSubject(ctx context.Context, resourceType, resourceID, subjectType, subjectID string) error {
-	q := `DELETE FROM ` + s.table("iam_relationships") + ` WHERE resource_type = @resource_type AND resource_id = @resource_id AND subject_type = @subject_type AND subject_id = @subject_id`
-	return s.write(ctx, func(tx *writeTx) error {
-		_, err := tx.relationships(ctx, audit.ActionRemoved, q, pgx.NamedArgs{
-			"resource_type": resourceType,
-			"resource_id":   resourceID,
-			"subject_type":  subjectType,
-			"subject_id":    subjectID,
-		})
+		a := &tupleArgs{}
+		where := "scope_kind=2 AND resource_type=" + a.ref(rt) + " AND resource_id=" + a.ref(rid) + " AND subject_type=" + a.ref(st) + " AND subject_id=" + a.ref(sid)
+		_, err := tx.tuples(ctx, audit.ActionRemoved, "DELETE FROM "+s.tuples().table()+" WHERE "+where, a.params()...)
 		return err
 	})
 }
@@ -614,7 +481,7 @@ func (s *relationshipStore) DeleteByResourceAndSubject(ctx context.Context, reso
 // CountByResourceAndRelation counts DIRECT tuples only — never expanded
 // membership (the §2.5 security pin: last-owner protection depends on it).
 func (s *relationshipStore) CountByResourceAndRelation(ctx context.Context, resourceType, resourceID, relation string) (int, error) {
-	q := `SELECT COUNT(*) FROM ` + s.table("iam_relationships") + ` WHERE resource_type = @resource_type AND resource_id = @resource_id AND relation = @relation`
+	q := `SELECT COUNT(*) FROM ` + s.resourceTable() + ` WHERE resource_type = @resource_type AND resource_id = @resource_id AND relation = @relation`
 	var n int
 	if err := s.db.QuerierFrom(ctx).QueryRow(ctx, q, pgx.NamedArgs{"resource_type": resourceType, "resource_id": resourceID, "relation": relation}).Scan(&n); err != nil {
 		return 0, pgxdb.MapError(err)
@@ -626,12 +493,15 @@ func (s *relationshipStore) CountByResourceAndRelation(ctx context.Context, reso
 func relationshipsBaseSQL(schema pgxdb.Schema, columns, where string) string {
 	return `SELECT ` + columns + `, tuple_key FROM (
     SELECT ` + columns + `, ` + tupleKeyExpr + ` AS tuple_key
-    FROM ` + schema.Table("iam_relationships") + where + `
+    FROM ` + resourceTupleTable(schema) + where + `
 ) AS r WHERE 1 = 1`
 }
 
 // ListRelationshipsBySubject pages complete tuple identities in byte order.
 func (s *relationshipStore) ListRelationshipsBySubject(ctx context.Context, subjectType, subjectID string, filter relationships.SubjectRelationshipFilter, req list.Request) (list.Page[relationships.SubjectRelationship], error) {
+	if err := validateTupleCursor(req); err != nil {
+		return list.Page[relationships.SubjectRelationship]{}, err
+	}
 	where := " WHERE subject_type = @subject_type AND subject_id = @subject_id"
 	args := pgx.NamedArgs{"subject_type": subjectType, "subject_id": subjectID}
 	if filter.ResourceType != nil {
@@ -660,6 +530,9 @@ func (s *relationshipStore) ListRelationshipsBySubject(ctx context.Context, subj
 
 // ListRelationshipsByResource pages complete tuple identities in byte order.
 func (s *relationshipStore) ListRelationshipsByResource(ctx context.Context, resourceType, resourceID string, filter relationships.ResourceRelationshipFilter, req list.Request) (list.Page[relationships.ResourceRelationship], error) {
+	if err := validateTupleCursor(req); err != nil {
+		return list.Page[relationships.ResourceRelationship]{}, err
+	}
 	where := " WHERE resource_type = @resource_type AND resource_id = @resource_id"
 	args := pgx.NamedArgs{"resource_type": resourceType, "resource_id": resourceID}
 	if filter.SubjectType != nil {
@@ -690,25 +563,14 @@ func (s *relationshipStore) ListRelationshipsByResource(ctx context.Context, res
 // It is split from the method so the EXPLAIN test can plan the exact statement
 // the store runs.
 //
-// Every lookup statement in this file pins COLLATE "C" PER QUERY rather than
-// leaning on the column's collation. The three lookups are KEYSET reads whose
-// output the ENGINE merges across streams with Go string comparison
-// (relationship.Storer's Bounding note), so both the order and the `> after`
-// predicate must be RAW BYTE order — a locale-collated order would skip or
-// repeat IDs across pages. iam_relationships.resource_id is DELIBERATELY left
-// uncollated in 0001 (it is a recursion column of the reachable
-// userset-expansion CTE, and pinning it in the DDL raises a recursive-term
-// collation mismatch, SQLSTATE 42P21), so the byte-order contract is pinned
-// here, at every comparison and ORDER BY that carries it, and matched by the
-// 0005 index's `resource_id COLLATE "C"` column so the keyset predicate
-// range-scans instead of sorting. The collated expression is also what the
-// SELECT list projects: PostgreSQL requires a SELECT DISTINCT query's ORDER BY
-// expression to appear in the select list, and the projected value is
-// byte-identical either way (collation governs comparison, not the text).
+// Lookups pin byte ordering in their projection, cursor comparison and ORDER BY.
+// The canonical columns and recursive anchors also use C collation, so compound
+// queries remain compatible under non-C database defaults. SELECT DISTINCT must
+// project the same collated expression used by ORDER BY.
 func (s *relationshipStore) lookupResourceIDsSQL(resourceType string, relations []string, subjectType, subjectID, after string, limit int) (string, pgx.NamedArgs) {
 	q := reachableCTE(s.schema) + `
 SELECT DISTINCT r.resource_id COLLATE "C" AS resource_id
-FROM ` + s.table("iam_relationships") + ` r
+FROM ` + s.resourceTable() + ` r
 JOIN reachable ON r.subject_type = reachable.atype AND r.subject_id = reachable.aid AND r.subject_relation = reachable.arelation
 WHERE r.resource_type = @resource_type AND r.relation = ANY(@relations::text[])
   AND (@after::text = '' OR r.resource_id COLLATE "C" > @after::text)
@@ -742,7 +604,7 @@ func (s *relationshipStore) LookupResourceIDs(ctx context.Context, resourceType 
 // lookupResourceIDsByRelationTargetSQL renders the relation-target keyset lookup
 // and its args (split from the method for the EXPLAIN test).
 func (s *relationshipStore) lookupResourceIDsByRelationTargetSQL(resourceType, relation, targetType string, targetIDs []string, after string, limit int) (string, pgx.NamedArgs) {
-	q := `SELECT DISTINCT resource_id COLLATE "C" AS resource_id FROM ` + s.table("iam_relationships") + `
+	q := `SELECT DISTINCT resource_id COLLATE "C" AS resource_id FROM ` + s.resourceTable() + `
 WHERE resource_type = @resource_type AND relation = @relation AND subject_type = @target_type AND subject_id = ANY(@target_ids::text[]) AND subject_relation = ''
   AND (@after::text = '' OR resource_id COLLATE "C" > @after::text)
 ORDER BY resource_id COLLATE "C"` + limitClause(limit)
@@ -773,11 +635,11 @@ func (s *relationshipStore) LookupResourceIDsByRelationTarget(ctx context.Contex
 func (s *relationshipStore) lookupDescendantResourceIDsSQL(resourceType string, relations []string, subjectType string, rootIDs []string, after string, limit int) (string, pgx.NamedArgs) {
 	q := `WITH RECURSIVE descendants(rid) AS (
 	SELECT r.resource_id
-	FROM ` + s.table("iam_relationships") + ` r
+	FROM ` + s.resourceTable() + ` r
 	WHERE r.resource_type = @resource_type AND r.relation = ANY(@relations::text[]) AND r.subject_type = @subject_type AND r.subject_relation = '' AND r.subject_id = ANY(@root_ids::text[])
 	UNION
 	SELECT r.resource_id
-	FROM ` + s.table("iam_relationships") + ` r
+	FROM ` + s.resourceTable() + ` r
 	JOIN descendants d ON r.subject_id = d.rid
 	WHERE r.resource_type = @resource_type AND r.relation = ANY(@relations::text[]) AND r.subject_type = @subject_type AND r.subject_relation = ''
 )

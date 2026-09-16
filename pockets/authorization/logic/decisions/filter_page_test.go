@@ -8,7 +8,6 @@ import (
 	"testing"
 
 	"github.com/gopernicus/gopernicus/pockets/authorization"
-	"github.com/gopernicus/gopernicus/pockets/authorization/stores/memory"
 
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/decisions"
 	authmodel "github.com/gopernicus/gopernicus/pockets/authorization/logic/model"
@@ -19,15 +18,15 @@ import (
 
 // filterPageSchema is the flat postfilter shape: a doc's `view` is granted
 // directly to a viewer, so FilterAuthorized takes the batched direct path.
-func filterPageSchema() relationships.Schema {
-	return relationships.NewSchema([]relationships.ResourceSchema{{
+func filterPageSchema() decisions.Model {
+	return decisions.NewSchema([]decisions.ResourceSchema{{
 		Name: "doc",
-		Def: relationships.ResourceTypeDef{
-			Relations: map[string]relationships.RelationDef{
-				"viewer": {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "user"}}},
+		Def: decisions.ResourceTypeDef{
+			Relations: map[string]decisions.RelationDef{
+				"viewer": {AllowedSubjects: []decisions.SubjectTypeRef{{Type: "user"}}},
 			},
-			Permissions: map[string]relationships.PermissionRule{
-				"view": relationships.AnyOf(relationships.Direct("viewer")),
+			Permissions: map[string]decisions.Expression{
+				"view": decisions.AnyOf(decisions.Direct("viewer")),
 			},
 		},
 	}})
@@ -35,27 +34,27 @@ func filterPageSchema() relationships.Schema {
 
 // filterPageThroughSchema is the container→items shape: a doc inherits `view`
 // from its parent folder, so FilterAuthorized takes the SEQUENTIAL Check path.
-func filterPageThroughSchema() relationships.Schema {
-	return relationships.NewSchema([]relationships.ResourceSchema{
+func filterPageThroughSchema() decisions.Model {
+	return decisions.NewSchema([]decisions.ResourceSchema{
 		{
 			Name: "folder",
-			Def: relationships.ResourceTypeDef{
-				Relations: map[string]relationships.RelationDef{
-					"viewer": {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "user"}}},
+			Def: decisions.ResourceTypeDef{
+				Relations: map[string]decisions.RelationDef{
+					"viewer": {AllowedSubjects: []decisions.SubjectTypeRef{{Type: "user"}}},
 				},
-				Permissions: map[string]relationships.PermissionRule{
-					"view": relationships.AnyOf(relationships.Direct("viewer")),
+				Permissions: map[string]decisions.Expression{
+					"view": decisions.AnyOf(decisions.Direct("viewer")),
 				},
 			},
 		},
 		{
 			Name: "doc",
-			Def: relationships.ResourceTypeDef{
-				Relations: map[string]relationships.RelationDef{
-					"parent": {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "folder"}}},
+			Def: decisions.ResourceTypeDef{
+				Relations: map[string]decisions.RelationDef{
+					"parent": {AllowedSubjects: []decisions.SubjectTypeRef{{Type: "folder"}}},
 				},
-				Permissions: map[string]relationships.PermissionRule{
-					"view": relationships.AnyOf(relationships.Through("parent", "view")),
+				Permissions: map[string]decisions.Expression{
+					"view": decisions.AnyOf(decisions.Through("parent", "view")),
 				},
 			},
 		},
@@ -558,13 +557,10 @@ func TestFilterPageInvalidRequest(t *testing.T) {
 // TestFilterPageNoDecisionKind proves a host with no model-bearing kind fails
 // closed on the wiring fault before it pulls a single candidate.
 func TestFilterPageNoDecisionKind(t *testing.T) {
-	comps, err := authorization.New(authorization.Repositories{Roles: memory.NewRoles()})
-	if err != nil {
-		t.Fatalf("NewService roles-only: %v", err)
-	}
+	var decisionService *decisions.Service
 	src := &candidateRecorder{ids: docIDs(4)}
 
-	if _, err := decisions.FilterPage(context.Background(), comps.Decisions, filterPageRequest(src, 3, "")); !errors.Is(err, authmodel.ErrNoDecisionKind) {
+	if _, err := decisions.FilterPage(context.Background(), decisionService, filterPageRequest(src, 3, "")); !errors.Is(err, authmodel.ErrNoDecisionKind) {
 		t.Fatalf("want ErrNoDecisionKind, got %v", err)
 	}
 	if len(src.limits) != 0 {

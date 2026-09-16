@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gopernicus/gopernicus/pockets/authorization/logic/relationships"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuplecache"
+	tuplefacts "github.com/gopernicus/gopernicus/pockets/authorization/logic/tuples"
 )
 
 // Each fixture has N documents granted to one principal: small forward sets and
@@ -17,7 +17,7 @@ func BenchmarkTupleCache(b *testing.B) {
 		b.Run(fmt.Sprintf("tuples=%d", size), func(b *testing.B) {
 			client, _ := startRedis(b, "", false)
 			ctx := b.Context()
-			rows := make([]relationships.CreateRelationship, size)
+			rows := make([]tuplefacts.Tuple, size)
 			for i := range rows {
 				rows[i] = tuple("doc", fmt.Sprintf("%06d", i), "viewer", "user", "alice", "")
 			}
@@ -27,7 +27,7 @@ func BenchmarkTupleCache(b *testing.B) {
 				b.Fatal(err)
 			}
 			keys := []tuplecache.SetKey{reverse(rows[0])}
-			bytes := client.HStrLen(ctx, c.key, setField(true, toWire(subject(rows[0])))).Val()
+			bytes := client.HStrLen(ctx, c.key, setField(reverse(rows[0]))).Val()
 			// Preload scripts to exclude EVALSHA's initial NOSCRIPT retry.
 			if _, err := c.Read(ctx, state, keys); err != nil {
 				b.Fatal(err)

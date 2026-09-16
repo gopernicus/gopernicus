@@ -7,16 +7,15 @@ import (
 	"testing"
 
 	"github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
-	"github.com/gopernicus/gopernicus/pockets/authorization"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/mutations"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/relationships"
 	"github.com/gopernicus/gopernicus/pockets/authorization/stores/storetest"
 )
 
 func TestCacheEnabledConformance(t *testing.T) {
-	storetest.Run(t, func(t *testing.T, policy mutations.GuardianPolicy) authorization.Repositories {
+	storetest.Run(t, func(t *testing.T, policy mutations.GuardianPolicy) storetest.Repositories {
 		db, cfg := cacheFixture(t, true)
-		repos, err := Repositories(context.Background(), db, append(cacheOptions(cfg), WithGuardianPolicy(policy))...)
+		repos, err := testRepositories(context.Background(), db, append(cacheOptions(cfg), WithGuardianPolicy(policy))...)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -26,14 +25,14 @@ func TestCacheEnabledConformance(t *testing.T) {
 
 func TestCacheRejectsRLS(t *testing.T) {
 	ctx := context.Background()
-	for _, table := range []string{"iam_relationships", "iam_roles", "iam_tuple_cache", "iam_tuple_outbox"} {
+	for _, table := range []string{"iam_tuples", "iam_tuple_cache", "iam_tuple_outbox"} {
 		for _, mode := range []string{"ENABLE", "FORCE"} {
 			t.Run(table+mode, func(t *testing.T) {
 				db, cfg := cacheFixture(t, true)
 				if _, err := db.Exec(ctx, "ALTER TABLE "+cacheTable(cfg, table)+" "+mode+" ROW LEVEL SECURITY"); err != nil {
 					t.Fatal(err)
 				}
-				if _, err := Repositories(ctx, db, cacheOptions(cfg)...); err == nil {
+				if _, err := testRepositories(ctx, db, cacheOptions(cfg)...); err == nil {
 					t.Fatal("RLS-enabled authority accepted")
 				}
 			})
@@ -44,10 +43,10 @@ func TestCacheRejectsRLS(t *testing.T) {
 func TestCacheRejectsInheritedAuthority(t *testing.T) {
 	ctx := context.Background()
 	db, cfg := cacheFixture(t, true)
-	if _, err := db.Exec(ctx, "CREATE TABLE "+cacheTable(cfg, "child_roles")+" () INHERITS ("+cacheTable(cfg, "iam_roles")+")"); err != nil {
+	if _, err := db.Exec(ctx, "CREATE TABLE "+cacheTable(cfg, "child_roles")+" () INHERITS ("+cacheTable(cfg, "iam_tuples")+")"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Repositories(ctx, db, cacheOptions(cfg)...); err == nil {
+	if _, err := testRepositories(ctx, db, cacheOptions(cfg)...); err == nil {
 		t.Fatal("inherited facts accepted")
 	}
 }
@@ -80,7 +79,7 @@ func TestCacheSchemaFrozenAndMixed(t *testing.T) {
 	_, second := cacheFixture(t, true)
 	db := cacheConnection(t, cacheSchemaName(first))
 	// The zero-schema constructor resolves the connection search path once.
-	repos, err := Repositories(ctx, db, WithTupleCache())
+	repos, err := testRepositories(ctx, db, WithTupleCache())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -99,7 +98,7 @@ func TestCacheSchemaFrozenAndMixed(t *testing.T) {
 		t.Fatalf("authority changed after SET search_path: %v/%v", after, err)
 	}
 	var count int
-	if err := db.QueryRow(ctx, "SELECT count(*) FROM "+cacheTable(second, "iam_relationships")).Scan(&count); err != nil || count != 0 {
+	if err := db.QueryRow(ctx, "SELECT count(*) FROM "+cacheTable(second, "iam_tuples")).Scan(&count); err != nil || count != 0 {
 		t.Fatalf("write escaped frozen schema: %d/%v", count, err)
 	}
 	// Resolving facts and the head from different schemas cannot certify one authority.
@@ -109,16 +108,16 @@ func TestCacheSchemaFrozenAndMixed(t *testing.T) {
 	if _, err := db.Exec(ctx, "SET search_path TO "+cacheSchemaName(first)+","+cacheSchemaName(second)); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Repositories(ctx, db, WithTupleCache()); err == nil {
+	if _, err := testRepositories(ctx, db, WithTupleCache()); err == nil {
 		t.Fatal("mixed-schema authority accepted")
 	}
 }
 
 func TestCacheEnabledAuditConformance(t *testing.T) {
-	storetest.RunAudit(t, func(t *testing.T, enabled bool) authorization.Repositories {
+	storetest.RunAudit(t, func(t *testing.T, enabled bool) storetest.Repositories {
 		db, cfg := cacheFixture(t, true)
 		cfg.audit = enabled
-		repos, err := Repositories(context.Background(), db, cacheOptions(cfg)...)
+		repos, err := testRepositories(context.Background(), db, cacheOptions(cfg)...)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -131,10 +130,10 @@ func TestTupleCacheRejectsDisabledCapture(t *testing.T) {
 	for _, op := range []string{"insert", "update", "delete", "truncate"} {
 		t.Run(op, func(t *testing.T) {
 			db, cfg := cacheFixture(t, true)
-			if _, err := db.Exec(ctx, "ALTER TABLE "+cacheTable(cfg, "iam_relationships")+" DISABLE TRIGGER iam_relationships_tuple_"+op); err != nil {
+			if _, err := db.Exec(ctx, "ALTER TABLE "+cacheTable(cfg, "iam_tuples")+" DISABLE TRIGGER iam_tuples_tuple_"+op); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := Repositories(ctx, db, cacheOptions(cfg)...); err == nil {
+			if _, err := testRepositories(ctx, db, cacheOptions(cfg)...); err == nil {
 				t.Fatal("disabled capture accepted")
 			}
 		})
@@ -147,7 +146,7 @@ func TestTupleCacheRejectsOutboxIdentityTamper(t *testing.T) {
 	if _, err := db.Exec(ctx, "ALTER TABLE "+cacheTable(cfg, "iam_tuple_outbox")+" ALTER COLUMN id DROP IDENTITY"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Repositories(ctx, db, cacheOptions(cfg)...); err == nil {
+	if _, err := testRepositories(ctx, db, cacheOptions(cfg)...); err == nil {
 		t.Fatal("missing event identity accepted")
 	}
 }

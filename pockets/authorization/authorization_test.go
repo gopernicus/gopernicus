@@ -11,111 +11,20 @@ import (
 
 	"github.com/gopernicus/gopernicus/pockets"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/decisions"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuples"
+
 	authmodel "github.com/gopernicus/gopernicus/pockets/authorization/logic/model"
-	"github.com/gopernicus/gopernicus/pockets/authorization/logic/mutations"
-	"github.com/gopernicus/gopernicus/pockets/authorization/logic/relationships"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/roles"
 	"github.com/gopernicus/gopernicus/pockets/authorization/stores/memory"
 	"github.com/gopernicus/gopernicus/sdk"
-	"github.com/gopernicus/gopernicus/sdk/pkg/list"
 )
 
-// relFake is a trivial relationship.Storer for socket wiring/delegation tests.
-type relFake struct{ checkCalls int }
-
-func (f *relFake) ForModel(relationships.ReadModel) relationships.Reader { return f }
-
-func (f *relFake) CheckRelationWithGroupExpansion(ctx context.Context, resourceType, resourceID, relation, subjectType, subjectID string, maxExpansionStates int) (bool, error) {
-	f.checkCalls++
-	return false, nil
-}
-func (f *relFake) GetRelationTargets(ctx context.Context, resourceType, resourceID, relation string) ([]relationships.RelationTarget, error) {
-	return nil, nil
-}
-func (f *relFake) FilterRelation(ctx context.Context, resourceType string, resourceIDs []string, relation, subjectType, subjectID string, maxExpansionStates int) ([]string, error) {
-	for range resourceIDs {
-		f.checkCalls++
-	}
-	return nil, nil
-}
-func (f *relFake) RelationTargetsFor(ctx context.Context, resourceType string, resourceIDs []string, relation string) (map[string][]relationships.RelationTarget, error) {
-	return nil, nil
-}
-func (f *relFake) CheckRelationExists(ctx context.Context, resourceType, resourceID, relation, subjectType, subjectID string) (bool, error) {
-	return false, nil
-}
-func (f *relFake) CheckBatchDirect(ctx context.Context, resourceType string, resourceIDs []string, relation, subjectType, subjectID string, maxExpansionStates int) (map[string]bool, error) {
-	return map[string]bool{}, nil
-}
-func (f *relFake) CreateRelationships(ctx context.Context, relationships []relationships.CreateRelationship) error {
-	return nil
-}
-func (f *relFake) SetRelationTargets(ctx context.Context, resourceType, resourceID, relationName string, targets []relationships.CreateRelationship) error {
-	return nil
-}
-func (f *relFake) DeleteRelationshipTarget(ctx context.Context, resourceType, resourceID, relationName string, target relationships.SubjectRef) error {
-	return nil
-}
-func (f *relFake) DeleteResourceRelationships(ctx context.Context, resourceType, resourceID string) error {
-	return nil
-}
-func (f *relFake) DeleteRelationship(ctx context.Context, resourceType, resourceID, relation, subjectType, subjectID string) error {
-	return nil
-}
-func (f *relFake) DeleteByResourceAndSubject(ctx context.Context, resourceType, resourceID, subjectType, subjectID string) error {
-	return nil
-}
-func (f *relFake) CountByResourceAndRelation(ctx context.Context, resourceType, resourceID, relation string) (int, error) {
-	return 0, nil
-}
-func (f *relFake) ListRelationshipsBySubject(ctx context.Context, subjectType, subjectID string, filter relationships.SubjectRelationshipFilter, req list.Request) (list.Page[relationships.SubjectRelationship], error) {
-	return list.Page[relationships.SubjectRelationship]{}, nil
-}
-func (f *relFake) ListRelationshipsByResource(ctx context.Context, resourceType, resourceID string, filter relationships.ResourceRelationshipFilter, req list.Request) (list.Page[relationships.ResourceRelationship], error) {
-	return list.Page[relationships.ResourceRelationship]{}, nil
-}
-func (f *relFake) LookupResourceIDs(ctx context.Context, resourceType string, relations []string, subjectType, subjectID, after string, limit int) ([]string, error) {
-	return nil, nil
-}
-func (f *relFake) LookupResourceIDsByRelationTarget(ctx context.Context, resourceType, relation, targetType string, targetIDs []string, after string, limit int) ([]string, error) {
-	return nil, nil
-}
-func (f *relFake) LookupDescendantResourceIDs(ctx context.Context, resourceType string, relations []string, subjectType string, rootIDs []string, after string, limit int) ([]string, error) {
-	return nil, nil
-}
-
-// roleFake is a trivial role.Storer for socket wiring/delegation tests.
-type roleFake struct {
-	hasCalls int
-}
-
-func (f *roleFake) Assign(ctx context.Context, a roles.Assignment) error { return nil }
-func (f *roleFake) Unassign(ctx context.Context, subjectType, subjectID, roleName, resourceType, resourceID string) error {
-	return nil
-}
-func (f *roleFake) HasExactRole(ctx context.Context, subjectType, subjectID, roleName, resourceType, resourceID string) (bool, error) {
-	f.hasCalls++
-	return false, nil
-}
-func (f *roleFake) ListBySubject(ctx context.Context, subjectType, subjectID string, req list.Request) (list.Page[roles.Assignment], error) {
-	return list.Page[roles.Assignment]{}, nil
-}
-func (f *roleFake) ListByResource(ctx context.Context, resourceType, resourceID string, req list.Request) (list.Page[roles.Assignment], error) {
-	return list.Page[roles.Assignment]{}, nil
-}
-func (f *roleFake) LookupResourceIDsBySubjectAndRoles(ctx context.Context, subjectType, subjectID, resourceType string, roles []string, after string, limit int) ([]string, bool, error) {
-	return nil, false, nil
-}
-func (f *roleFake) ListEffectiveByResource(ctx context.Context, resourceType, resourceID string, req list.Request) (list.Page[roles.EffectiveGrant], error) {
-	return list.Page[roles.EffectiveGrant]{}, nil
-}
-
-func validModel() relationships.Schema {
-	return relationships.NewSchema([]relationships.ResourceSchema{{
+func validModel() decisions.Model {
+	return decisions.NewSchema([]decisions.ResourceSchema{{
 		Name: "post",
-		Def: relationships.ResourceTypeDef{
-			Relations:   map[string]relationships.RelationDef{"owner": {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "user"}}}},
-			Permissions: map[string]relationships.PermissionRule{"delete": relationships.AnyOf(relationships.Direct("owner"))},
+		Def: decisions.ResourceTypeDef{
+			Relations:   map[string]decisions.RelationDef{"owner": {AllowedSubjects: []decisions.SubjectTypeRef{{Type: "user"}}}},
+			Permissions: map[string]decisions.Expression{"delete": decisions.AnyOf(decisions.Direct("owner"))},
 		},
 	}})
 }
@@ -124,7 +33,7 @@ func validModel() relationships.Schema {
 // and returns a coarse Explanation whose Decision matches the CheckResult's stable
 // ReasonCode; an unwired relationship kind fails closed with the kind sentinel.
 func TestExplainPublicSurface(t *testing.T) {
-	comps, err := New(Repositories{Relationships: &relFake{}}, WithRelationshipModel(validModel()))
+	comps, err := New(Repositories{Tuples: memory.NewTuples()}, WithModel(validModel()))
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
@@ -136,13 +45,13 @@ func TestExplainPublicSurface(t *testing.T) {
 		t.Fatalf("CheckExplain: %v", err)
 	}
 	if res.Allowed || res.ReasonCode != authmodel.ReasonDenied {
-		t.Fatalf("relFake denies: allowed=%v code=%q", res.Allowed, res.ReasonCode)
+		t.Fatalf("empty tuple store denies: allowed=%v code=%q", res.Allowed, res.ReasonCode)
 	}
 	if expl.Decision != res.ReasonCode {
 		t.Fatalf("Explanation.Decision %q != ReasonCode %q", expl.Decision, res.ReasonCode)
 	}
 
-	rolesOnly, err := New(Repositories{Roles: &roleFake{}})
+	rolesOnly, err := New(Repositories{Tuples: memory.NewTuples()})
 	if err != nil {
 		t.Fatalf("NewService roles-only: %v", err)
 	}
@@ -151,8 +60,8 @@ func TestExplainPublicSurface(t *testing.T) {
 	// relationship kind".
 	if _, _, err := rolesOnly.Decisions.CheckExplain(context.Background(), authmodel.CheckRequest{
 		Principal: authmodel.PrincipalRef{Type: "user", ID: "u1"}, Permission: "delete", Resource: authmodel.Resource{Type: "post", ID: "p1"},
-	}); !errors.Is(err, authmodel.ErrNoDecisionKind) {
-		t.Fatalf("unwired CheckExplain: want ErrNoDecisionKind, got %v", err)
+	}); err != nil {
+		t.Fatalf("undeclared CheckExplain: %v", err)
 	}
 }
 
@@ -164,131 +73,100 @@ func TestNewServiceZeroKinds(t *testing.T) {
 }
 
 func TestNewServicePartialWiring(t *testing.T) {
-	// Relationships without a Model.
-	if _, err := New(Repositories{Relationships: &relFake{}}); !errors.Is(err, ErrModelRequired) {
-		t.Fatalf("rel-without-model: want ErrModelRequired, got %v", err)
+	for _, model := range []decisions.Model{{}, validModel()} {
+		if _, err := New(Repositories{Tuples: memory.NewTuples()}, WithModel(model)); err != nil {
+			t.Fatalf("canonical facts with optional model: %v", err)
+		}
 	}
-	// Model without Relationships.
-	if _, err := New(Repositories{Roles: &roleFake{}}, WithRelationshipModel(validModel())); !errors.Is(err, ErrModelRequired) {
-		t.Fatalf("model-without-rel: want ErrModelRequired, got %v", err)
+	if _, err := New(Repositories{}, WithModel(validModel())); !errors.Is(err, ErrNoKindConfigured) {
+		t.Fatalf("missing tuple authority: %v", err)
 	}
 }
 
 func TestNewServiceInvalidModel(t *testing.T) {
-	bad := relationships.NewSchema([]relationships.ResourceSchema{{
+	bad := decisions.NewSchema([]decisions.ResourceSchema{{
 		Name: "post",
-		Def: relationships.ResourceTypeDef{
-			Relations:   map[string]relationships.RelationDef{"owner": {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "user"}}}},
-			Permissions: map[string]relationships.PermissionRule{"delete": relationships.AnyOf(relationships.Direct("nonexistent"))},
+		Def: decisions.ResourceTypeDef{
+			Relations:   map[string]decisions.RelationDef{"owner": {AllowedSubjects: []decisions.SubjectTypeRef{{Type: "user"}}}},
+			Permissions: map[string]decisions.Expression{"delete": decisions.AnyOf(decisions.Direct("nonexistent"))},
 		},
 	}})
-	_, err := New(Repositories{Relationships: &relFake{}}, WithRelationshipModel(bad))
+	_, err := New(Repositories{Tuples: memory.NewTuples()}, WithModel(bad))
 	if err == nil || !strings.Contains(err.Error(), "schema") {
 		t.Fatalf("want a schema validation error, got %v", err)
 	}
 }
 
-// TestNewInvalidModelIsReportedBeforeInvalidLimits pins the v0.2.0
-// construction ORDER on a relationship-only host: when both the Model and the
-// Limits are bad, the schema is diagnosed first. The decision surface's budget
-// is resolved only after the relationship engine is built, so gaining a second
-// model-bearing kind did not move the boot error a host already sees.
-func TestNewServiceInvalidModelIsReportedBeforeInvalidLimits(t *testing.T) {
-	bad := relationships.NewSchema([]relationships.ResourceSchema{{
-		Name: "post",
-		Def: relationships.ResourceTypeDef{
-			Relations:   map[string]relationships.RelationDef{"owner": {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "user"}}}},
-			Permissions: map[string]relationships.PermissionRule{"delete": relationships.AnyOf(relationships.Direct("nonexistent"))},
-		},
-	}})
-	cfg := []Option{WithRelationshipModel(bad), WithLimits(authmodel.EvaluationLimits{MaxBatchSize: -1})}
-	_, err := New(Repositories{Relationships: &relFake{}}, cfg...)
-	if err == nil || !strings.Contains(err.Error(), "schema") {
-		t.Fatalf("want a schema validation error, got %v", err)
-	}
-	if errors.Is(err, authmodel.ErrInvalidLimits) {
-		t.Fatalf("the schema must be diagnosed before the budget, got %v", err)
+func TestConstructionRejectsInvalidModelAndLimits(t *testing.T) {
+	bad := decisions.Model{ResourceTypes: map[string]decisions.ResourceTypeDef{"post": {Permissions: map[string]decisions.Expression{"delete": decisions.Direct("missing")}}}}
+	_, err := New(Repositories{Tuples: memory.NewTuples()}, WithModel(bad), WithLimits(authmodel.EvaluationLimits{MaxBatchSize: -1}))
+	if !errors.Is(err, sdk.ErrInvalidInput) {
+		t.Fatalf("invalid constructor inputs: %v", err)
 	}
 }
 
 func TestNewServiceRolesOnlySucceeds(t *testing.T) {
-	if _, err := New(Repositories{Roles: &roleFake{}}); err != nil {
+	if _, err := New(Repositories{Tuples: memory.NewTuples()}); err != nil {
 		t.Fatalf("roles-only wiring should succeed with no model: %v", err)
 	}
 }
 
 func TestNewServiceRelationshipsOnlySucceeds(t *testing.T) {
-	if _, err := New(Repositories{Relationships: &relFake{}}, WithRelationshipModel(validModel())); err != nil {
+	if _, err := New(Repositories{Tuples: memory.NewTuples()}, WithModel(validModel())); err != nil {
 		t.Fatalf("relationships-only wiring should succeed: %v", err)
 	}
 }
 
-func TestUnwiredRelationshipSentinel(t *testing.T) {
-	comps, err := New(Repositories{Roles: &roleFake{}})
+func TestCanonicalAuthoritySuppliesEveryRawFacade(t *testing.T) {
+	comps, err := New(Repositories{Tuples: memory.NewTuples()})
 	if err != nil {
-		t.Fatalf("NewService: %v", err)
+		t.Fatal(err)
 	}
-	svc := comps
-	// Check is a DECISION method: with no model-bearing kind it reports
-	// ErrNoDecisionKind. The relationship-kind sentinel below still governs every
-	// relationship-only method.
-	if _, err := svc.Decisions.Check(context.Background(), authmodel.CheckRequest{}); !errors.Is(err, authmodel.ErrNoDecisionKind) {
-		t.Fatalf("Check: want ErrNoDecisionKind, got %v", err)
+	if comps.Relationships == nil || comps.RelationshipWriter == nil {
+		t.Fatal("canonical authority must supply the relationship facade and writer")
 	}
-	if _, err := svc.Mutations.GrantRelationship(context.Background(), mutations.Actor{PrincipalRef: authmodel.PrincipalRef{Type: "user", ID: "u1"}}, mutations.GrantRelationshipCommand{}); !errors.Is(err, relationships.ErrRelationshipsNotConfigured) {
-		t.Fatalf("GrantRelationship: want ErrRelationshipsNotConfigured, got %v", err)
-	}
-	if svc.Relationships != nil {
-		t.Fatal("unconfigured relationships must be absent")
+	if comps.Roles == nil || comps.Decisions == nil {
+		t.Fatal("canonical read surfaces must be present")
 	}
 }
 
-func TestUnwiredRolesSentinel(t *testing.T) {
-	comps, err := New(Repositories{Relationships: &relFake{}}, WithRelationshipModel(validModel()))
+func TestCanonicalAuthorityAlwaysSuppliesExactRoleChecks(t *testing.T) {
+	comps, err := New(Repositories{Tuples: memory.NewTuples()}, WithModel(validModel()))
 	if err != nil {
-		t.Fatalf("NewService: %v", err)
+		t.Fatal(err)
 	}
-	svc := comps
-	if _, err := svc.Mutations.AssignRole(context.Background(), mutations.Actor{PrincipalRef: authmodel.PrincipalRef{Type: "user", ID: "u1"}}, mutations.AssignRoleCommand{}); !errors.Is(err, roles.ErrRolesNotConfigured) {
-		t.Fatalf("AssignRole: want ErrRolesNotConfigured, got %v", err)
-	}
-	if _, err := svc.Roles.HasRole(context.Background(), authmodel.PrincipalRef{Type: "user", ID: "u1"}, "editor", "", ""); !errors.Is(err, roles.ErrRolesNotConfigured) {
-		t.Fatalf("HasRole: want ErrRolesNotConfigured, got %v", err)
+	got, err := comps.Roles.HasRole(context.Background(), authmodel.PrincipalRef{Type: "user", ID: "u1"}, "editor")
+	if err != nil || got {
+		t.Fatalf("empty authority: %v, %v", got, err)
 	}
 }
 
-func TestDelegationSmokeBothKinds(t *testing.T) {
-	rel := &relFake{}
-	roles := &roleFake{}
-	comps, err := New(Repositories{Relationships: rel, Roles: roles}, WithRelationshipModel(validModel()))
+func TestRoleAndGraphChecksUseOneAuthority(t *testing.T) {
+	store := memory.New()
+	ctx := context.Background()
+	fact := tuples.Tuple{Scope: tuples.On("post", "p1"), Relation: "owner", Subject: tuples.SubjectRef{Type: "user", ID: "u1"}}
+	if err := store.Tuples().ApplyTuples(ctx, tuples.Changes{Add: []tuples.Tuple{fact}}); err != nil {
+		t.Fatal(err)
+	}
+	comps, err := New(Repositories{Tuples: store.Tuples()}, WithModel(validModel()))
 	if err != nil {
-		t.Fatalf("NewService: %v", err)
+		t.Fatal(err)
 	}
-	svc := comps
-	if _, err := svc.Decisions.Check(context.Background(), authmodel.CheckRequest{
-		Principal: authmodel.PrincipalRef{Type: "user", ID: "u1"}, Permission: "delete", Resource: authmodel.Resource{Type: "post", ID: "p1"},
-	}); err != nil {
-		t.Fatalf("Check: %v", err)
+	principal := authmodel.PrincipalRef{Type: "user", ID: "u1"}
+	got, err := comps.Decisions.Check(ctx, authmodel.CheckRequest{Principal: principal, Permission: "delete", Resource: authmodel.Resource{Type: "post", ID: "p1"}})
+	if err != nil || !got.Allowed {
+		t.Fatalf("graph check: %+v, %v", got, err)
 	}
-	if rel.checkCalls == 0 {
-		t.Fatalf("Check did not reach the relationship store")
-	}
-	// Roles-kind delegation smoke via a READ (HasRole): the raw write path was
-	// removed from Service (AZ3-3.4), and the guarded AssignRole needs the atomic
-	// mutation repository not wired here. The roles-kind write delegation is proven
-	// by the guarded role tests and storetest.
-	if _, err := svc.Roles.HasRole(context.Background(), authmodel.PrincipalRef{Type: "user", ID: "u1"}, "editor", "", ""); err != nil {
-		t.Fatalf("HasRole: %v", err)
-	}
-	if roles.hasCalls == 0 {
-		t.Fatalf("HasRole did not reach the role store")
+	held, err := comps.Roles.HasRoleIn(ctx, principal, "owner", authmodel.Resource{Type: "post", ID: "p1"})
+	if err != nil || !held {
+		t.Fatalf("exact scoped check: %v, %v", held, err)
 	}
 }
 
 // TestConstructionDefaultLimits proves a relationships wiring with a zero
 // WithLimits succeeds: every budget field resolves to its safe default.
 func TestConstructionDefaultLimits(t *testing.T) {
-	if _, err := New(Repositories{Relationships: &relFake{}}, WithRelationshipModel(validModel())); err != nil {
+	if _, err := New(Repositories{Tuples: memory.NewTuples()}, WithModel(validModel())); err != nil {
 		t.Fatalf("zero Limits should resolve to defaults, got %v", err)
 	}
 }
@@ -296,14 +174,14 @@ func TestConstructionDefaultLimits(t *testing.T) {
 // TestConstructionExplicitLimits proves a positive, fully specified WithLimits
 // is accepted.
 func TestConstructionExplicitLimits(t *testing.T) {
-	cfg := []Option{WithRelationshipModel(validModel()), WithLimits(authmodel.EvaluationLimits{
+	cfg := []Option{WithModel(validModel()), WithLimits(authmodel.EvaluationLimits{
 		MaxThroughDepth:    5,
 		MaxGraphStates:     500,
 		MaxRelationTargets: 50,
 		MaxBatchSize:       50,
 		MaxLookupResults:   50,
 	})}
-	if _, err := New(Repositories{Relationships: &relFake{}}, cfg...); err != nil {
+	if _, err := New(Repositories{Tuples: memory.NewTuples()}, cfg...); err != nil {
 		t.Fatalf("explicit positive Limits should be accepted, got %v", err)
 	}
 }
@@ -320,7 +198,7 @@ func TestConstructionNegativeLimitRejected(t *testing.T) {
 	}
 	for name, limits := range cases {
 		t.Run(name, func(t *testing.T) {
-			_, err := New(Repositories{Relationships: &relFake{}}, WithRelationshipModel(validModel()), WithLimits(limits))
+			_, err := New(Repositories{Tuples: memory.NewTuples()}, WithModel(validModel()), WithLimits(limits))
 			if !errors.Is(err, authmodel.ErrInvalidLimits) {
 				t.Fatalf("negative %s: want ErrInvalidLimits, got %v", name, err)
 			}
@@ -332,15 +210,15 @@ func TestConstructionNegativeLimitRejected(t *testing.T) {
 // a roles-only wiring is a silently orphaned tuning field (the auth MailFrom
 // precedent): it is not validated and not an error, because no relationship
 // engine consumes it. Even a negative limit is ignored when the kind is off.
-func TestConstructionOrphanedLimitsUnderRolesOnly(t *testing.T) {
-	cfg := []Option{WithLimits(authmodel.EvaluationLimits{MaxThroughDepth: -1, MaxBatchSize: -1})}
-	if _, err := New(Repositories{Roles: &roleFake{}}, cfg...); err != nil {
-		t.Fatalf("orphaned Limits under roles-only wiring must be ignored, got %v", err)
+func TestModelFreeDecisionsValidateLimits(t *testing.T) {
+	_, err := New(Repositories{Tuples: memory.NewTuples()}, WithLimits(authmodel.EvaluationLimits{MaxThroughDepth: -1, MaxBatchSize: -1}))
+	if !errors.Is(err, authmodel.ErrInvalidLimits) {
+		t.Fatalf("model-free limits: %v", err)
 	}
 }
 
 func TestRegister(t *testing.T) {
-	comps, err := New(Repositories{Roles: &roleFake{}})
+	comps, err := New(Repositories{Tuples: memory.NewTuples()})
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
@@ -360,26 +238,25 @@ func TestRegister(t *testing.T) {
 // -----------------------------------------------------------------------------
 
 // projectRoleModel is the roles-kind fixture: one type, one role, one permission.
-func projectRoleModel() authmodel.RoleModel {
-	return authmodel.RoleModel{ResourceTypes: map[string]authmodel.RoleTypeDef{
-		"project": {Roles: []string{"auditor"}, Permissions: map[string][]string{"audit": {"auditor"}}},
+func projectRoleModel() decisions.Model {
+	return decisions.Model{ResourceTypes: map[string]decisions.ResourceTypeDef{
+		"project": {Permissions: map[string]decisions.Expression{"audit": decisions.Any(decisions.RoleIn("auditor"), decisions.Role("auditor"))}},
 	}}
 }
 
 func assignment(subjectID, roleName, resourceType, resourceID string) roles.Assignment {
 	return roles.Assignment{
-		SubjectType: "user", SubjectID: subjectID, Role: roleName,
-		ResourceType: resourceType, ResourceID: resourceID,
+		SubjectType: "user", SubjectID: subjectID, Role: roleName, Scope: fixtureScope(resourceType, resourceID),
 	}
 }
 
 // newSeededRoles builds an in-core role store already holding the assignments —
 // the decision-surface tests read roles, they do not exercise the write path.
-func newSeededRoles(t *testing.T, assignments ...roles.Assignment) roles.Storer {
+func newSeededRoles(t *testing.T, assignments ...roles.Assignment) tuples.Storer {
 	t.Helper()
-	store := memory.NewRoles()
+	store := memory.NewTuples()
 	for _, a := range assignments {
-		if err := store.Assign(context.Background(), a); err != nil {
+		if err := store.ApplyTuples(context.Background(), tuples.Changes{Add: []tuples.Tuple{a.Tuple()}}); err != nil {
 			t.Fatalf("seed %+v: %v", a, err)
 		}
 	}
@@ -398,46 +275,31 @@ func projectRequest(subjectID, permission, projectID string) authmodel.CheckRequ
 // rule: a model with no roles repository could never decide anything, so it fails
 // boot — while a roles repository with NO model stays the valid opaque posture
 // (TestNewRolesOnlySucceeds).
-func TestConstructionRoleModelWithoutRolesRepo(t *testing.T) {
-	_, err := New(Repositories{Relationships: &relFake{}}, WithRelationshipModel(validModel()), WithRoleModel(projectRoleModel()))
-	if !errors.Is(err, ErrRoleModelWithoutRoles) {
-		t.Fatalf("want ErrRoleModelWithoutRoles, got %v", err)
+func TestExactExpressionsNeedOnlyCanonicalAuthority(t *testing.T) {
+	if _, err := New(Repositories{Tuples: memory.NewTuples()}, WithModel(projectRoleModel())); err != nil {
+		t.Fatal(err)
 	}
 }
 
 // TestConstructionInvalidRoleModel proves a structurally invalid model is a loud
 // boot failure naming the offending symbol.
-func TestConstructionInvalidRoleModel(t *testing.T) {
-	bad := authmodel.RoleModel{ResourceTypes: map[string]authmodel.RoleTypeDef{
-		"project": {Roles: []string{"auditor"}, Permissions: map[string][]string{"audit": {"inspector"}}},
-	}}
-	_, err := New(Repositories{Roles: &roleFake{}}, WithRoleModel(bad))
-	if !errors.Is(err, authmodel.ErrInvalidRoleModel) {
-		t.Fatalf("want ErrInvalidRoleModel, got %v", err)
-	}
-	if !strings.Contains(err.Error(), "inspector") {
-		t.Fatalf("the message must name the offending symbol, got %v", err)
+func TestExactExpressionsRejectMalformedLabels(t *testing.T) {
+	bad := decisions.Model{ResourceTypes: map[string]decisions.ResourceTypeDef{"project": {Permissions: map[string]decisions.Expression{"audit": decisions.RoleIn("")}}}}
+	if _, err := New(Repositories{Tuples: memory.NewTuples()}, WithModel(bad)); !errors.Is(err, sdk.ErrInvalidInput) {
+		t.Fatalf("malformed label: %v", err)
 	}
 }
 
 // TestConstructionModelConflict proves pair ownership is enforced at boot: a
 // resource TYPE may appear in both models, but a (type, permission) PAIR may not
 // — that overlap is what would make the decision surface a merge.
-func TestConstructionModelConflict(t *testing.T) {
-	conflicting := authmodel.RoleModel{ResourceTypes: map[string]authmodel.RoleTypeDef{
-		"post": {Roles: []string{"auditor"}, Permissions: map[string][]string{"delete": {"auditor"}}},
-	}}
-	_, err := New(Repositories{Relationships: &relFake{}, Roles: &roleFake{}}, WithRelationshipModel(validModel()), WithRoleModel(conflicting))
-	if !errors.Is(err, authmodel.ErrModelConflict) {
-		t.Fatalf("want ErrModelConflict, got %v", err)
+func TestWithModelReplacesOneWholeModel(t *testing.T) {
+	comps, err := New(Repositories{Tuples: memory.NewTuples()}, WithModel(validModel()), WithModel(projectRoleModel()))
+	if err != nil {
+		t.Fatal(err)
 	}
-
-	// The same TYPE with a DIFFERENT permission is legal — the auth-cms split.
-	split := authmodel.RoleModel{ResourceTypes: map[string]authmodel.RoleTypeDef{
-		"post": {Roles: []string{"auditor"}, Permissions: map[string][]string{"audit": {"auditor"}}},
-	}}
-	if _, err := New(Repositories{Relationships: &relFake{}, Roles: &roleFake{}}, WithRelationshipModel(validModel()), WithRoleModel(split)); err != nil {
-		t.Fatalf("a type shared by both models with distinct permissions must construct: %v", err)
+	if comps.Decisions.DeclaresPermission("post", "delete") || !comps.Decisions.DeclaresPermission("project", "audit") {
+		t.Fatal("models were merged instead of replaced")
 	}
 }
 
@@ -446,40 +308,29 @@ func TestConstructionModelConflict(t *testing.T) {
 // diagnosis ("wire a model"), not the relationship kind's sentinel. Every other
 // relationship-kind method keeps ErrRelationshipsNotConfigured
 // (TestUnwiredRelationshipSentinel).
-func TestDecisionSurfaceWithoutAModelBearingKind(t *testing.T) {
-	comps, err := New(Repositories{Roles: &roleFake{}})
+func TestModelFreeExactExpressionsAndUnknownPermissions(t *testing.T) {
+	store := newSeededRoles(t, assignment("u1", "auditor", "", ""))
+	comps, err := New(Repositories{Tuples: store})
 	if err != nil {
-		t.Fatalf("NewService: %v", err)
+		t.Fatal(err)
 	}
-	svc := comps
 	ctx := context.Background()
 	principal := authmodel.PrincipalRef{Type: "user", ID: "u1"}
-
-	if _, err := svc.Decisions.Check(ctx, projectRequest("u1", "audit", "p1")); !errors.Is(err, authmodel.ErrNoDecisionKind) {
-		t.Fatalf("Check: want ErrNoDecisionKind, got %v", err)
+	got, err := comps.Decisions.Evaluate(ctx, principal, decisions.Role("auditor"))
+	if err != nil || !got.Allowed {
+		t.Fatalf("model-free exact check: %+v, %v", got, err)
 	}
-	if _, err := svc.Decisions.CheckBatch(ctx, []authmodel.CheckRequest{projectRequest("u1", "audit", "p1")}); !errors.Is(err, authmodel.ErrNoDecisionKind) {
-		t.Fatalf("CheckBatch: want ErrNoDecisionKind, got %v", err)
+	got, err = comps.Decisions.Check(ctx, projectRequest("u1", "audit", "p1"))
+	if err != nil || got.Allowed {
+		t.Fatalf("undeclared permission: %+v, %v", got, err)
 	}
-	if _, _, err := svc.Decisions.CheckExplain(ctx, projectRequest("u1", "audit", "p1")); !errors.Is(err, authmodel.ErrNoDecisionKind) {
-		t.Fatalf("CheckExplain: want ErrNoDecisionKind, got %v", err)
+	batch, err := comps.Decisions.CheckBatch(ctx, []authmodel.CheckRequest{projectRequest("u1", "audit", "p1")})
+	if err != nil || len(batch) != 1 || batch[0].Allowed {
+		t.Fatalf("undeclared batch: %+v, %v", batch, err)
 	}
-	if _, err := svc.Decisions.FilterAuthorized(ctx, principal, "audit", "project", []string{"p1"}); !errors.Is(err, authmodel.ErrNoDecisionKind) {
-		t.Fatalf("FilterAuthorized: want ErrNoDecisionKind, got %v", err)
-	}
-	if _, err := svc.Decisions.LookupAllResourceIDs(ctx, principal, "audit", "project"); !errors.Is(err, authmodel.ErrNoDecisionKind) {
-		t.Fatalf("LookupAllResourceIDs: want ErrNoDecisionKind, got %v", err)
-	}
-	// The wiring sentinel is reported BEFORE the request is validated: an unwired
-	// decider is the operator's fault, not the caller's.
-	if _, err := svc.Decisions.LookupResourceIDPage(ctx, decisions.ResourceIDPageRequest{Principal: principal, Permission: "audit", ResourceType: "project", Limit: -1}); !errors.Is(err, authmodel.ErrNoDecisionKind) {
-		t.Fatalf("LookupResourceIDPage: want ErrNoDecisionKind, got %v", err)
-	}
-	// The wiring sentinel is reported BEFORE the zero-length shortcut, exactly as
-	// the relationship-kind sentinel was: a modelless host learns it is
-	// misconfigured even on a call with nothing to decide.
-	if _, err := svc.Decisions.FilterAuthorized(ctx, principal, "audit", "project", nil); !errors.Is(err, authmodel.ErrNoDecisionKind) {
-		t.Fatalf("FilterAuthorized with no IDs: want ErrNoDecisionKind, got %v", err)
+	lookup, err := comps.Decisions.LookupAllResourceIDs(ctx, principal, "audit", "project")
+	if err != nil || lookup.Unrestricted || len(lookup.IDs) != 0 {
+		t.Fatalf("undeclared lookup: %+v, %v", lookup, err)
 	}
 }
 
@@ -494,7 +345,7 @@ func TestLookupResourcesInThroughTheFacade(t *testing.T) {
 		assignment("u1", "auditor", "project", "p2"),
 		assignment("u1", "auditor", "project", "p3"),
 	)
-	comps, err := New(Repositories{Roles: roles}, WithRoleModel(projectRoleModel()))
+	comps, err := New(Repositories{Tuples: roles}, WithModel(projectRoleModel()))
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
@@ -599,7 +450,7 @@ func TestRolesOnlyWithModelDecides(t *testing.T) {
 		assignment("u1", "auditor", "project", "p1"),
 		assignment("u2", "auditor", "", ""), // globally held
 	)
-	comps, err := New(Repositories{Roles: roles}, WithRoleModel(projectRoleModel()))
+	comps, err := New(Repositories{Tuples: roles}, WithModel(projectRoleModel()))
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
@@ -641,8 +492,8 @@ func TestRolesOnlyWithModelDecides(t *testing.T) {
 	}
 
 	_, expl, err := svc.Decisions.CheckExplain(ctx, projectRequest("u1", "audit", "p1"))
-	if err != nil || len(expl.Steps) != 1 || expl.Steps[0].Kind != authmodel.ExplainKindRole ||
-		expl.Steps[0].Role != "auditor" || expl.Steps[0].Scope != authmodel.ExplainScopeDirect {
+	if err != nil || len(expl.Steps) != 1 || expl.Steps[0].Kind != "exact" ||
+		expl.Steps[0].Relation != "auditor" || expl.Steps[0].ResourceType != "project" || expl.Steps[0].ResourceID != "p1" {
 		t.Fatalf("role explain trace: got %+v err=%v", expl, err)
 	}
 }
@@ -651,12 +502,12 @@ func TestRolesOnlyWithModelDecides(t *testing.T) {
 // DECISION SURFACE's: with a role model wired, a negative limit fails boot (it is
 // no longer an orphaned setting) and MaxBatchSize is captured and charged.
 func TestConstructionLimitsUnderRolesAndModel(t *testing.T) {
-	_, err := New(Repositories{Roles: &roleFake{}}, WithRoleModel(projectRoleModel()), WithLimits(authmodel.EvaluationLimits{MaxBatchSize: -1}))
+	_, err := New(Repositories{Tuples: memory.NewTuples()}, WithModel(projectRoleModel()), WithLimits(authmodel.EvaluationLimits{MaxBatchSize: -1}))
 	if !errors.Is(err, authmodel.ErrInvalidLimits) {
 		t.Fatalf("negative limit under roles+model: want ErrInvalidLimits, got %v", err)
 	}
 
-	comps, err := New(Repositories{Roles: newSeededRoles(t)}, WithRoleModel(projectRoleModel()), WithLimits(authmodel.EvaluationLimits{MaxBatchSize: 2}))
+	comps, err := New(Repositories{Tuples: newSeededRoles(t)}, WithModel(projectRoleModel()), WithLimits(authmodel.EvaluationLimits{MaxBatchSize: 2}))
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
@@ -681,13 +532,13 @@ func TestRegisterLogsRoleModelPresence(t *testing.T) {
 		cfg  []Option
 		want string
 	}{
-		"with a role model":    {[]Option{WithRoleModel(projectRoleModel())}, `"role_model":true`},
-		"without a role model": {[]Option{}, `"role_model":false`},
+		"with a role model":    {[]Option{WithModel(projectRoleModel())}, `"model":true`},
+		"without a role model": {[]Option{}, `"model":true`},
 	} {
 		t.Run(name, func(t *testing.T) {
 			var buf bytes.Buffer
 			tc.cfg = append(tc.cfg, WithLogger(slog.New(slog.NewJSONHandler(&buf, nil))))
-			comps, err := New(Repositories{Roles: &roleFake{}}, tc.cfg...)
+			comps, err := New(Repositories{Tuples: memory.NewTuples()}, tc.cfg...)
 			if err != nil {
 				t.Fatalf("NewService: %v", err)
 			}
@@ -702,4 +553,11 @@ func TestRegisterLogsRoleModelPresence(t *testing.T) {
 			}
 		})
 	}
+}
+
+func fixtureScope(resourceType, resourceID string) tuples.Scope {
+	if resourceType == "" && resourceID == "" {
+		return tuples.Global()
+	}
+	return tuples.On(resourceType, resourceID)
 }

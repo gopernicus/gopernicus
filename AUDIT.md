@@ -4975,3 +4975,292 @@ per source, the shared receipt and guarded-writer serialization remain unchanged
 Retained [tests and benchmarks](pockets/authorization/BENCHMARKS.md) cover local
 actual PostgreSQL/SQLite/Redis behavior. Warm Redis is not universally faster than
 batched SQL; measure the host workload before activating or enlarging the cache.
+
+
+## AUDIT-040: Retire the authorization Firestore adapter
+
+- **Status:** implemented, unreleased.
+- **Module:** `pockets/authorization/stores/firestore` removed from the current
+  workspace; no new version of that module is planned for unified tuples.
+- **Old behavior:** authorization shipped memory, PostgreSQL, SQLite/Turso and
+  Firestore authorities, plus an optional Redis tuple mirror.
+- **New behavior:** authorization ships memory, PostgreSQL and SQLite/Turso
+  authorities. Redis remains an optional mirror. The shared Firestore connector
+  and authentication Firestore adapter remain available.
+
+The adapter source, workspace entry, authorization-specific Firestore CI legs,
+cache-verification fixture mode and current supported-store documentation were
+removed together. Existing tags and historical release/audit records remain.
+No hosted database, collection, index or application deployment was changed.
+
+Consumers importing the removed module must select a supported authorization
+store before adopting the forthcoming unified tuple contracts. Existing
+published Firestore versions remain available with their original contracts;
+there is no automatic Firestore-to-SQL data migration in this change.
+
+**Verification:** the full 42-module `make check` and authorization core race
+tests pass. The Python script suite passes all 36 tests after removing the
+Firestore-specific helper modes. Remote datastore suites were not run; remaining
+connector/authentication Firestore behavior is unchanged. See the
+[execution record](plans/authorization-firestore-retirement.md) for commands,
+scope and the pre-existing generated cache-fixture limitation.
+
+## AUDIT-041: Canonical authorization tuple values
+
+- **Status:** implemented, unreleased; foundation only.
+- **Module:** `pockets/authorization`.
+- **New API:** `logic/tuples` owns `Scope`, `SubjectRef`, `Tuple` and structural
+  reference validation. `Global()` is explicit, `On(type, id)` is resource-scoped,
+  and a zero/partial/mixed scope is invalid. `Assignment.Tuple()` and
+  `CreateRelationship.Tuple()` expose canonical values; the relationship
+  `SubjectRef` is a true alias of the canonical subject type.
+
+The complete comparable tuple identifies a fact, including its scope and exact
+userset relation. Shared structural validation preserves bounded UTF-8, opaque
+strings and the SDK invalid-input error kind. Assignment validation now checks
+scope before subject and label fields. Consequently error precedence and text
+change: a partial scope can report `resource type must not be empty` instead of
+`role resource scope requires both type and id`. Callers should classify errors
+by kind, not parse their text.
+
+This foundation does not merge the authoritative stores or change role lookup,
+global fallback, graph evaluation or cache semantics. The temporary reference
+validation forwarders in `logic/model` will be removed when their callers move
+to the canonical package in the unified-contract change.
+
+**Verification:** core build/test/vet and race checks, canonical conversion tests,
+new boundary/table tests, a focused fuzz run, and the original 43-module full
+check passed. The tuple leaf dependency guard is G26. Current retirement-era
+workspace verification is recorded with AUDIT-040.
+
+## AUDIT-042: Unified authorization tuples and explicit policy scopes
+
+**Historical implementation record:** the persistence upgrade path and its
+verification below describe the pre-cleanup implementation. The owner replaced
+that path with a fresh schema before release; [AUDIT-043](#audit-043-authorization-cleanup-and-fresh-sql-schema)
+is authoritative for current setup, raw pagination and facade construction.
+
+**Release status:** implemented and verified; coordinated release candidate.
+Selected versions: core `v0.18.0`, pgx `v0.13.0`, Turso `v0.12.0`, Redis `v0.4.0`,
+and PostgreSQL connector `v0.9.0`.
+Core, PostgreSQL, Turso and Redis ship together with
+the `integrations/datastores/pgxdb` snapshot-transaction prerequisite. No application
+must first deploy v0.17.0 binaries; apply supported migration prefixes offline.
+
+**User-visible behavior:** a subject can hold owner and member simultaneously.
+Role and relationship facades address one full-identity fact in `iam_tuples`.
+There is no one-label-per-subject constraint or writer-origin namespace. Role
+facts can participate in declared graph traversal, lookup and guardian counts.
+
+**Compile-visible policy change:** replace `RoleModel`, `CompiledRoleModel`,
+`WithRoleModel` and `WithRelationshipModel` with `decisions.Model` and `WithModel`.
+Graph model/compiler/builder APIs move from `relationships` to `decisions`.
+`HasRole(ctx, principal, label)` is exact global membership;
+`HasRoleIn(ctx, principal, label, resource)` is exact scoped membership.
+Neither falls back or expands usersets. Named policies explicitly compose
+`Role`, `RoleIn`, `Direct`, `Through`, `Permission`, `All` and `Any`.
+A formerly global-admin-only subject is denied by a scoped-only policy after
+upgrade. The new model declaration forces that policy to be reviewed at compile
+time. `HasRoleInOrGlobal` is an explicit two-scope convenience.
+
+The old RoleModel catalog is removed. Opaque labels remain valid without a
+permission entry; explicit subject-shape constraints apply across model-bound
+write facades. Replace `Repositories.Roles` with required `Repositories.Tuples`.
+Role assignments and HTTP bodies require explicit scope. Global scope is
+`{"kind":"global"}`; a resource scope includes both coordinates.
+
+**Mutations and audit:** replace `OpReplace`/`ReplaceRelationship` with an exact
+`OpBatch` remove/add delta, or a named-relation `OpReconcile`. Duplicates within
+one side are idempotent; a fact in both sides is invalid. Guardians apply through
+all guarded facades, including roles. `semantic_conflict`, `SameRoleGrantRemains`,
+`same_role_grant_remains`, `EffectiveGrant`, provenance flags and the effective
+role listing route are removed. Hosts storing the old operation string in their
+own audit tables must retain its historical meaning and adopt the new command
+encoding deliberately. New audit changes contain Action + Tuple and encoding
+`tuple/v2`; migration preserves original historical records and encodings without
+deduplicating equal historical events.
+
+**Coherent views:** every evaluation uses one snapshot. PostgreSQL default READ
+COMMITTED ambient decisions now fail with `tuples.ErrSnapshotIsolation` before
+reads. Use `pgxdb.TransactSnapshot` (read-write REPEATABLE READ) or a proven
+SERIALIZABLE transaction; the adapter inspects actual isolation on the bound
+transaction. Pending writes remain visible. SQLite BEGIN IMMEDIATE remains
+supported. Custom stores implement `tuples.Reader` and `tuples.Snapshotter`;
+`RunSnapshotCheckAmbient` replaces the old unconditional ambient check contract.
+
+**Persistence and cache:** base 0008 preflights, copies and canonically deduplicates
+facts, converts audit payloads and drops both old tables in one migration
+transaction. Earlier shipped migrations stay immutable. Full-key C/BINARY ordering
+and explicit C collation in PostgreSQL recursive query inputs are required.
+Old binaries cannot boot against retained stale authority because the old tables
+are gone. Tuple cursors change version and must be restarted.
+
+Existing cache installations complete the old prefix through 0002 while old fact
+tables still exist, then apply base 0008 and cache 0003. Fresh/durable-only hosts
+apply base 0008 then `authorization-cache-v2`'s fresh baseline; do not run legacy
+cache 0001/0002 against the canonical schema. Protocol 2 includes explicit scope
+and a versioned Redis prefix. Roles use the same raw mirror and whole-operation
+fallback as graph checks. Stop all readers, writers and relays before cutover.
+The first incompatible committed fence in the selected route is the restart
+boundary: a legacy cache-prefix upgrade may precede base 0008; base 0008 itself
+fences old durable binaries; cache 0003 rotates protocol/binding additionally.
+See [the upgrade runbook](pockets/authorization/stores/UPGRADE.md) for backup-based
+downgrade and refusal after canonical facts or audit change.
+
+**Read-only impact preflight, before 0008:** qualify tables with the host's schema
+where applicable. This lists potentially affected global grants; only the host's
+permission model and usage can establish exact access impact.
+
+```sql
+SELECT subject_type, subject_id, role
+FROM iam_roles
+WHERE resource_type = '' AND resource_id = ''
+ORDER BY subject_type, subject_id, role;
+```
+
+During transition, opt in with `WithDiagnosticObserver` and count the code
+`global_grant_not_applied`. Disabled means no extra reads. Enabled operations
+probe at most eight exact global facts in the same snapshot and emit at most one
+low-cardinality event after successful completion; no IDs or labels are exposed.
+Diagnostics never turn a denial into an allow and are not an exhaustive report.
+Caller-owned guard views do not emit this operation-completion diagnostic.
+
+**Explanation shape:** exact predicates emit `ExplainKindExact`, the canonical
+label in `Relation`, and the explicit scope in `Scope` on both grant and deny.
+Graph trace steps also carry their resource scope. The obsolete role-only
+`Role` field and direct/global provenance constants are removed.
+
+**Verification:** full 42-module `make check`, core/connector/adapter race suites,
+PostgreSQL 17.4 non-C locale in default and named schemas, SQLite integration,
+real SQL-to-Redis delivery, applied migration/downgrade rehearsals and CMS HTTP
+flows pass. SQL/Redis proofs had no skips. The benchmark record contains 106
+cases with five samples each. Independent backend and SRE reviews have no
+remaining blockers. Remote Turso and production load remain unverified; release
+pinning/archive checks and publication await the separate release instruction.
+See the [executed plan](plans/authorization-unified-tuples.md) and
+[verification record](plans/authorization-unified-tuples-verification.json).
+
+
+## AUDIT-043: Authorization cleanup and fresh SQL schema
+
+**Release status:** implemented and verified; coordinated release candidate.
+Selected versions: core `v0.18.0`, pgx `v0.13.0`, Turso `v0.12.0`, Redis `v0.4.0`,
+and PostgreSQL connector `v0.9.0`.
+This entry supersedes AUDIT-042's unreleased conversion/downgrade design. The
+published release entries and their verification remain historical records.
+
+**Schema setup:** authorization PostgreSQL and SQLite/Turso now ship one fresh
+`migrations/0001_iam_tuples.sql` containing `iam_tuples` and `iam_audit`, with
+full-identity constraints and required indexes. The optional source contains
+only `tuple_cache_migrations/0002_iam_tuple_cache.sql`, applied after the base
+in the same database/schema. It may be installed over populated canonical facts;
+the first mirror publication loads the current authority.
+
+Use `ExportMigrations` for the base and `ExportTupleCacheMigrations` for the
+optional `authorization-cache-v2` source. `CacheMigrationsFS`,
+`CacheMigrationsDir`, `ExportCacheMigrations` and the legacy cache migration tree
+are removed. Bundled split-table conversion, preflight, backup/downgrade scripts
+and old audit encodings are removed. Audit records use `tuple/v2`. Protocol-2
+Redis keys, explicit freshness and receipt semantics remain unchanged.
+
+The framework defines its canonical schema directly. There is no automatic
+in-place upgrade from an old authorization schema; application data adoption is
+host-owned. See [schema setup](pockets/authorization/stores/UPGRADE.md).
+
+**Raw pagination:** replace encoded `Query.After` strings with a pointer to the
+last returned `tuples.Tuple`. `tuples.Compare` specifies the seven-component
+byte order. Raw lookup callers and custom adapters no longer need an internal
+codec. User-facing listing cursors retain their version-2 wire format, with
+consistent refusal of wrong fields, unequal order/primary keys and obsolete
+encodings. Audit deduplication uses comparable tuple identity.
+
+**One authority:** remove `Repositories.Relationships` from root wiring.
+`relationships.NewService` takes `tuples.Storer`; root composition constructs
+role and relationship services/writers from the same required tuple authority.
+Relationship listings select resource-scoped facts, preserve concrete/userset
+identity and apply component filters before pagination. `Query.ResourceOnly`,
+`SubjectType` and `SubjectID` provide those filters; contradictory exact filters
+are invalid. Compound SQL lists use canonical snapshot isolation.
+
+**Retired APIs:** `GetPermissionsForRelation` and its incomplete reverse index
+are removed because arbitrary expressions cannot be represented by that index.
+Use the compiled model snapshot for policy inspection. The unused
+`roles.ErrInvalidRoleAssignment` sentinel is removed; canonical validation errors
+remain classifiable through `sdk.ErrInvalidInput`.
+`LookupSnapshotter`/`ReadLookupSnapshot` are replaced by `tuples.Snapshotter` /
+`ReadTupleSnapshot`, including adapter conformance. Optimized graph readers,
+flat graph execution projections and legacy HTTP gate behavior remain supported.
+
+**Verification:** the full 42-module build/test/vet gate and guards passed.
+Core race tests, documentation typecheck/build, the external public-pagination
+consumer and all 12 owned-runner safety tests passed. Owned PostgreSQL 17.4 in
+public/named schemas with a non-C locale, local SQLite, real Redis and CMS HTTP
+suites passed with race detection, including fresh installation/rollback and
+facade/snapshot contracts; fixture cleanup passed. No SQL/Redis test skipped.
+Memory's ambient-transaction test intentionally skips because it has no host
+transactor. Remote Turso and new performance measurements were not run.
+See the [executed plan](plans/authorization-cleanup.md) and
+[verification record](plans/authorization-cleanup-verification.json).
+
+
+## AUDIT-044: One authorization middleware API
+
+**Release status:** implemented and verified; coordinated release candidate.
+Selected versions: core `v0.18.0`, pgx `v0.13.0`, Turso `v0.12.0`, Redis `v0.4.0`,
+and PostgreSQL connector `v0.9.0`.
+
+Authorization HTTP exposes `Adapter.Require(Predicate)` as its only policy
+middleware. Compose `All`/`Any` over `HasRole`, `HasRelationship`, and `Can`, using
+explicit `Global`, `Fixed`, `Path`, or custom `Resource` targets. Roles-only
+policies still need no model. Immediate decision/role service methods remain.
+
+### Update route declarations
+
+The examples below use `authorizationhttp` predicate and target builders.
+
+| Removed API | Replacement |
+| --- | --- |
+| `RequirePermission(permission, resolver)` | `Require(Can(permission, Resource(resourceType, resolver)))` |
+| `RequirePermissionOn(resourceType, permission, parameter)` | `Require(Can(permission, Path(resourceType, parameter)))` |
+| `RequirePermissionFixed(resourceType, permission, id)` | `Require(Can(permission, Fixed(resourceType, id)))` |
+| `RequireAnyPermission(GateSpec{...}, ...)` | `Require(Any(Can(...), ...))` |
+| `NewGates(checker, declarer, maxAlternatives)` | `authorizationhttp.New(authorizationhttp.Services{Decisions: evaluator})` |
+| `FixedResource` / `PathResource` | `Fixed` / `Path` targets |
+
+`Gates`, `GateSpec`, HTTP `Checker`, the optional `ExpressionEvaluator` capability,
+and the orphan model/decision `Declarer` interfaces are removed. Concrete
+`DeclaresPermission` inspection methods remain. The HTTP `DecisionService`
+requires exactly `ValidateExpression` and `EvaluateResolved`; custom services
+must honor their coherent-evaluation contract. No runtime capability assertion
+or separately supplied declarer/budget remains. Decision services stay optional
+for HTTP adapters used only for bundled role administration; mounting Require
+without one is a configuration error.
+
+### Compound behavior
+
+All reached leaves in one Require share one snapshot and evaluation budget.
+Validation checks the whole tree before traffic, including unused branches.
+Reached resolver/evaluation errors abort the policy; Any never converts errors
+into denials and proceeds to a later grant. No principal is 401, denial is 403,
+budget exhaustion is 503, other errors are 500. Lazy resources are memoized across
+cache fallback. Expression node/depth limits bound policy construction;
+MaxBatchSize continues to bound batch/purge operations, not HTTP alternatives.
+
+The auth-cms membership route now expresses platform administrator or project
+member as one policy. A failed administrator check cannot fall through to a
+successful membership check. Named audit, machine and role administration gates
+also use Require. This change adds no migration or cache protocol revision.
+
+### Verification
+
+The existing composable guard benchmark now participates in the owned runner:
+109 required cases, five one-second samples each (545 valid samples), all passed
+with successful owned-fixture cleanup. The full 42-module build/test/vet gate,
+architecture guards, documentation checks, runner safety tests, and race-enabled
+PostgreSQL/SQLite/Redis/CMS HTTP suites passed. No SQL/Redis check skipped.
+Memory's ambient-transaction test intentionally skips; no-test packages also
+produce skip entries. Remote Turso and production capacity remain unverified.
+Architecture/backend reviews found no blocking issue or lost security invariant.
+See the [executed plan](plans/authorization-one-middleware.md),
+[verification record](plans/authorization-one-middleware-verification.json), and
+[benchmarks](pockets/authorization/BENCHMARKS.md).

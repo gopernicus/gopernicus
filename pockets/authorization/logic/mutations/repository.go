@@ -4,17 +4,18 @@ import (
 	"context"
 
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/relationships"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuples"
 )
 
 // StoreDecisionView reads authorization state within the command's serialized
 // transaction or memory critical section. All reads, including absent matches
 // and userset expansion, belong to that boundary. No revision counters are used.
 type StoreDecisionView interface {
+	tuples.Reader
 	ForModel(relationships.ReadModel) relationships.PermissionReader
 	CheckRelation(ctx context.Context, target Target, relation, subjectType, subjectID string) (bool, error)
 	CheckRelationBounded(ctx context.Context, target Target, relation, subjectType, subjectID string, maxExpansionStates int) (bool, error)
 	RelationTargets(ctx context.Context, target Target, relation string) ([]relationships.RelationTarget, error)
-	HasRole(ctx context.Context, target Target, role, subjectType, subjectID string) (bool, error)
 }
 
 // Guard runs synchronously inside the write boundary. It may read authorization

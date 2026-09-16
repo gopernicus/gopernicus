@@ -6,6 +6,8 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuples"
+
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/audit"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/mutations"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/relationships"
@@ -27,13 +29,13 @@ func TestAuditPreparationFailureDoesNotPublishFacts(t *testing.T) {
 	// Exercise the publication boundary with a candidate audit cannot represent.
 	// The candidate must never replace the valid stored state.
 	err = store.rel.st.write(ctx, func(next *state) error {
-		next.role = append(next.role, roleRow{subjectType: "user", subjectID: "u", role: "bad\x01role"})
+		next.facts[tuples.Tuple{Scope: tuples.Global(), Relation: "bad\x01role", Subject: tuples.SubjectRef{Type: "user", ID: "u"}}] = struct{}{}
 		return nil
 	})
 	if !errors.Is(err, sdk.ErrInvalidInput) {
 		t.Fatalf("audit preparation accepted invalid fact: %v", err)
 	}
-	if len(store.rel.st.role) != 0 {
+	if len(store.rel.st.facts) != 1 {
 		t.Fatal("failed audit preparation published candidate role")
 	}
 	after, err := store.Audit().List(ctx, audit.Filter{}, list.Request{})
@@ -41,7 +43,7 @@ func TestAuditPreparationFailureDoesNotPublishFacts(t *testing.T) {
 		t.Fatalf("failed audit changed history: %+v %v", after, err)
 	}
 	canceled, cancel := context.WithCancel(ctx)
-	err = store.rel.st.write(canceled, func(next *state) error { next.rel = nil; cancel(); return nil })
+	err = store.rel.st.write(canceled, func(next *state) error { clear(next.facts); cancel(); return nil })
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("canceled candidate: %v", err)
 	}
@@ -64,7 +66,7 @@ func TestAuditReadsRetainedHistoryWhenRecordingDisabled(t *testing.T) {
 		t.Fatal(err)
 	}
 	page, err := store.Audit().List(context.Background(), audit.Filter{}, list.Request{})
-	if err != nil || len(page.Items) != 1 || page.Items[0].Change.Relationship.ResourceID != "d" {
+	if err != nil || len(page.Items) != 1 || page.Items[0].Change.Tuple.Scope.ID != "d" {
 		t.Fatalf("disabled reader lost retained history: %+v %v", page, err)
 	}
 }
@@ -113,7 +115,7 @@ func TestRawWriterCanceledBehindGuardCannotPublish(t *testing.T) {
 		t.Fatalf("blocked raw write ignored cancellation: %v", err)
 	}
 	page, err := store.Audit().List(ctx, audit.Filter{}, list.Request{})
-	if err != nil || len(page.Items) != 1 || page.Items[0].Change.Relationship.Relation != "owner" {
+	if err != nil || len(page.Items) != 1 || page.Items[0].Change.Tuple.Relation != "owner" {
 		t.Fatalf("raw writer leaked a fact/audit: %+v %v", page, err)
 	}
 }

@@ -6,22 +6,17 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gopernicus/gopernicus/pockets/authorization"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/relationships"
-	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuplecache"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuples"
 	"github.com/gopernicus/gopernicus/sdk"
 )
 
 // RunLookupSnapshotLifecycle checks model scope and cleanup on every callback exit.
-func RunLookupSnapshotLifecycle(t *testing.T, factory func(*testing.T) authorization.Repositories) {
+func RunLookupSnapshotLifecycle(t *testing.T, factory func(*testing.T) Repositories) {
 	for _, exit := range []string{"success", "error", "cancel", "panic"} {
 		t.Run("lifetime/"+exit, func(t *testing.T) {
 			repos := factory(t)
-			scoped := repos.Relationships.ForModel(relationships.ReadModel{})
-			source, ok := scoped.(relationships.LookupSnapshotter)
-			if !ok {
-				t.Fatal("model-scoped reader does not provide lookup snapshots")
-			}
+			source := repos.Tuples
 			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
 			failure := errors.New("callback failure")
@@ -37,7 +32,8 @@ func RunLookupSnapshotLifecycle(t *testing.T, factory func(*testing.T) authoriza
 						panicked = true
 					}
 				}()
-				got = source.ReadLookupSnapshot(ctx, func(ctx context.Context, r relationships.Reader) error {
+				got = source.ReadTupleSnapshot(ctx, func(ctx context.Context, facts tuples.Reader) error {
+					r := snapshotGraphReader(t, facts, relationships.ReadModel{})
 					retained = r
 					switch exit {
 					case "error":
@@ -58,12 +54,13 @@ func RunLookupSnapshotLifecycle(t *testing.T, factory func(*testing.T) authoriza
 			if !errors.Is(got, want) {
 				t.Fatalf("got %v want %v", got, want)
 			}
-			assertLookupReaderError(t, t.Context(), retained, tuplecache.ErrSnapshotClosed)
+			assertLookupReaderError(t, t.Context(), retained, tuples.ErrSnapshotClosed)
 			// A fresh callback after every exit proves the adapter cleaned up. SQL
 			// SQLite fixture uses one connection, so leaked transactions time out.
 			fresh, stop := context.WithTimeout(t.Context(), 5*time.Second)
 			defer stop()
-			if err := source.ReadLookupSnapshot(fresh, func(ctx context.Context, r relationships.Reader) error {
+			if err := source.ReadTupleSnapshot(fresh, func(ctx context.Context, facts tuples.Reader) error {
+				r := snapshotGraphReader(t, facts, relationships.ReadModel{})
 				_, err := r.LookupResourceIDs(ctx, "space", []string{"viewer"}, "user", "alice", "", 10)
 				return err
 			}); err != nil {
@@ -74,7 +71,7 @@ func RunLookupSnapshotLifecycle(t *testing.T, factory func(*testing.T) authoriza
 	t.Run("scope and invalid calls", func(t *testing.T) {
 		repos := factory(t)
 		row := relationships.CreateRelationship{ResourceType: "space", ResourceID: "a", Relation: "viewer", SubjectType: "user", SubjectID: "alice"}
-		if err := repos.Relationships.CreateRelationships(t.Context(), []relationships.CreateRelationship{row}); err != nil {
+		if err := repos.Tuples.ApplyTuples(t.Context(), tuples.Changes{Add: []tuples.Tuple{row.Tuple()}}); err != nil {
 			t.Fatal(err)
 		}
 		for _, allowed := range []bool{false, true} {
@@ -82,8 +79,9 @@ func RunLookupSnapshotLifecycle(t *testing.T, factory func(*testing.T) authoriza
 			if allowed {
 				model = relationships.NewReadModel([]relationships.SubjectRule{{ResourceType: "space", Relation: "viewer", SubjectType: "user"}})
 			}
-			source := repos.Relationships.ForModel(model).(relationships.LookupSnapshotter)
-			if err := source.ReadLookupSnapshot(t.Context(), func(ctx context.Context, r relationships.Reader) error {
+			source := repos.Tuples
+			if err := source.ReadTupleSnapshot(t.Context(), func(ctx context.Context, facts tuples.Reader) error {
+				r := snapshotGraphReader(t, facts, model)
 				ids, err := r.LookupResourceIDs(ctx, "space", []string{"viewer"}, "user", "alice", "", 10)
 				if err != nil || (len(ids) == 1) != allowed {
 					t.Fatalf("scoped lookup=%v/%v allowed=%v", ids, err, allowed)
@@ -102,14 +100,25 @@ func RunLookupSnapshotLifecycle(t *testing.T, factory func(*testing.T) authoriza
 			}
 			canceled, cancel := context.WithCancel(t.Context())
 			cancel()
-			if err := source.ReadLookupSnapshot(canceled, func(context.Context, relationships.Reader) error { t.Fatal("canceled callback ran"); return nil }); !errors.Is(err, context.Canceled) {
+			if err := source.ReadTupleSnapshot(canceled, func(context.Context, tuples.Reader) error { t.Fatal("canceled callback ran"); return nil }); !errors.Is(err, context.Canceled) {
 				t.Fatal(err)
 			}
-			if err := source.ReadLookupSnapshot(t.Context(), nil); !errors.Is(err, sdk.ErrInvalidInput) {
+			if err := source.ReadTupleSnapshot(t.Context(), nil); !errors.Is(err, sdk.ErrInvalidInput) {
 				t.Fatal(err)
 			}
 		}
 	})
+}
+
+func snapshotGraphReader(t *testing.T, facts tuples.Reader, model relationships.ReadModel) relationships.Reader {
+	t.Helper()
+	source, ok := facts.(interface {
+		ForModel(relationships.ReadModel) relationships.Reader
+	})
+	if !ok {
+		t.Fatal("canonical snapshot lost model-scoped graph reads")
+	}
+	return source.ForModel(model)
 }
 
 func assertLookupReaderError(t *testing.T, ctx context.Context, r relationships.Reader, want error) {

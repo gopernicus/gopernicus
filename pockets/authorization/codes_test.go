@@ -73,7 +73,7 @@ func TestVocabularyReasonFor(t *testing.T) {
 // TestNoDecisionKindIsAWiringFaultNotADeny pins the sentinel's taxonomy and its
 // transport mapping. ErrNoDecisionKind reports a SERVER-SIDE WIRING FAULT — a
 // deployment whose decision surface bears no model — so it wraps no sdk taxonomy
-// kind and surfaces as a 500, consistent with the RequirePermission gates that
+// kind and surfaces as a 500, consistent with the Require middleware that
 // panic at mount for the same wiring. It is never a 403: a host that wired no
 // model must not be told "denied", which would imply some other principal could
 // succeed. It deliberately DIFFERS from ErrMutationsNotConfigured (400), the

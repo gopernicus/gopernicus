@@ -6,14 +6,15 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/decisions"
 	authmodel "github.com/gopernicus/gopernicus/pockets/authorization/logic/model"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/relationships"
-	"github.com/gopernicus/gopernicus/pockets/authorization/logic/roles"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuples"
 	"github.com/gopernicus/gopernicus/sdk"
-	"github.com/gopernicus/gopernicus/sdk/pkg/list"
 )
 
 type stubDecisionView struct {
+	tuples.Reader
 	reads []Target
 }
 
@@ -44,9 +45,16 @@ func (v *stubDecisionView) RelationTargets(_ context.Context, scope Target, _ st
 	return nil, nil
 }
 
-func (v *stubDecisionView) HasRole(_ context.Context, scope Target, _, _, _ string) (bool, error) {
-	v.reads = append(v.reads, scope)
+func (v *stubDecisionView) Contains(_ context.Context, t tuples.Tuple) (bool, error) {
+	target := Target{Kind: TargetResource, Type: t.Scope.Type, ID: t.Scope.ID}
+	if t.Scope.Kind == tuples.GlobalScope {
+		target = Target{Kind: TargetSubject, Type: t.Subject.Type, ID: t.Subject.ID}
+	}
+	v.reads = append(v.reads, target)
 	return false, nil
+}
+func (v *stubDecisionView) ReadTupleSnapshot(ctx context.Context, fn func(context.Context, tuples.Reader) error) error {
+	return fn(ctx, v)
 }
 
 // stubMutationRepo runs guards through its view, proving the guarded write path
@@ -127,105 +135,9 @@ func teardownSeamCommand(t *testing.T) Command {
 	}
 }
 
-type relFake struct{ checkCalls int }
-
-func (f *relFake) ForModel(relationships.ReadModel) relationships.Reader { return f }
-
-func (f *relFake) CheckRelationWithGroupExpansion(ctx context.Context, resourceType, resourceID, relation, subjectType, subjectID string, maxExpansionStates int) (bool, error) {
-	f.checkCalls++
-	return false, nil
+func validModel() decisions.Model {
+	return decisions.Model{ResourceTypes: map[string]decisions.ResourceTypeDef{"post": {Relations: map[string]decisions.RelationDef{"owner": {AllowedSubjects: []decisions.SubjectTypeRef{{Type: "user"}}}}, Permissions: map[string]decisions.Expression{"delete": decisions.Any(decisions.Direct("owner"))}}}}
 }
-func (f *relFake) GetRelationTargets(ctx context.Context, resourceType, resourceID, relation string) ([]relationships.RelationTarget, error) {
-	return nil, nil
-}
-func (f *relFake) FilterRelation(ctx context.Context, resourceType string, resourceIDs []string, relation, subjectType, subjectID string, maxExpansionStates int) ([]string, error) {
-	for range resourceIDs {
-		f.checkCalls++
-	}
-	return nil, nil
-}
-func (f *relFake) RelationTargetsFor(ctx context.Context, resourceType string, resourceIDs []string, relation string) (map[string][]relationships.RelationTarget, error) {
-	return nil, nil
-}
-func (f *relFake) CheckRelationExists(ctx context.Context, resourceType, resourceID, relation, subjectType, subjectID string) (bool, error) {
-	return false, nil
-}
-func (f *relFake) CheckBatchDirect(ctx context.Context, resourceType string, resourceIDs []string, relation, subjectType, subjectID string, maxExpansionStates int) (map[string]bool, error) {
-	return map[string]bool{}, nil
-}
-func (f *relFake) CreateRelationships(ctx context.Context, relationships []relationships.CreateRelationship) error {
-	return nil
-}
-func (f *relFake) SetRelationTargets(ctx context.Context, resourceType, resourceID, relationName string, targets []relationships.CreateRelationship) error {
-	return nil
-}
-func (f *relFake) DeleteRelationshipTarget(ctx context.Context, resourceType, resourceID, relationName string, target relationships.SubjectRef) error {
-	return nil
-}
-func (f *relFake) DeleteResourceRelationships(ctx context.Context, resourceType, resourceID string) error {
-	return nil
-}
-func (f *relFake) DeleteRelationship(ctx context.Context, resourceType, resourceID, relation, subjectType, subjectID string) error {
-	return nil
-}
-func (f *relFake) DeleteByResourceAndSubject(ctx context.Context, resourceType, resourceID, subjectType, subjectID string) error {
-	return nil
-}
-func (f *relFake) CountByResourceAndRelation(ctx context.Context, resourceType, resourceID, relation string) (int, error) {
-	return 0, nil
-}
-func (f *relFake) ListRelationshipsBySubject(ctx context.Context, subjectType, subjectID string, filter relationships.SubjectRelationshipFilter, req list.Request) (list.Page[relationships.SubjectRelationship], error) {
-	return list.Page[relationships.SubjectRelationship]{}, nil
-}
-func (f *relFake) ListRelationshipsByResource(ctx context.Context, resourceType, resourceID string, filter relationships.ResourceRelationshipFilter, req list.Request) (list.Page[relationships.ResourceRelationship], error) {
-	return list.Page[relationships.ResourceRelationship]{}, nil
-}
-func (f *relFake) LookupResourceIDs(ctx context.Context, resourceType string, relations []string, subjectType, subjectID, after string, limit int) ([]string, error) {
-	return nil, nil
-}
-func (f *relFake) LookupResourceIDsByRelationTarget(ctx context.Context, resourceType, relation, targetType string, targetIDs []string, after string, limit int) ([]string, error) {
-	return nil, nil
-}
-func (f *relFake) LookupDescendantResourceIDs(ctx context.Context, resourceType string, relations []string, subjectType string, rootIDs []string, after string, limit int) ([]string, error) {
-	return nil, nil
-}
-
-// roleFake is a trivial role.Storer for socket wiring/delegation tests.
-type roleFake struct {
-	hasCalls int
-}
-
-func (f *roleFake) Assign(ctx context.Context, a roles.Assignment) error { return nil }
-func (f *roleFake) Unassign(ctx context.Context, subjectType, subjectID, roleName, resourceType, resourceID string) error {
-	return nil
-}
-func (f *roleFake) HasExactRole(ctx context.Context, subjectType, subjectID, roleName, resourceType, resourceID string) (bool, error) {
-	f.hasCalls++
-	return false, nil
-}
-func (f *roleFake) ListBySubject(ctx context.Context, subjectType, subjectID string, req list.Request) (list.Page[roles.Assignment], error) {
-	return list.Page[roles.Assignment]{}, nil
-}
-func (f *roleFake) ListByResource(ctx context.Context, resourceType, resourceID string, req list.Request) (list.Page[roles.Assignment], error) {
-	return list.Page[roles.Assignment]{}, nil
-}
-func (f *roleFake) LookupResourceIDsBySubjectAndRoles(ctx context.Context, subjectType, subjectID, resourceType string, roles []string, after string, limit int) ([]string, bool, error) {
-	return nil, false, nil
-}
-func (f *roleFake) ListEffectiveByResource(ctx context.Context, resourceType, resourceID string, req list.Request) (list.Page[roles.EffectiveGrant], error) {
-	return list.Page[roles.EffectiveGrant]{}, nil
-}
-
-func validModel() relationships.Schema {
-	return relationships.NewSchema([]relationships.ResourceSchema{{
-		Name: "post",
-		Def: relationships.ResourceTypeDef{
-			Relations:   map[string]relationships.RelationDef{"owner": {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "user"}}}},
-			Permissions: map[string]relationships.PermissionRule{"delete": relationships.AnyOf(relationships.Direct("owner"))},
-		},
-	}})
-}
-
 func TestGuardRetryReceivesFreshProposal(t *testing.T) {
 	cmd := validGrantCommand(t)
 	cmd.Roles = []RoleRow{{Role: "reader", SubjectType: "user", SubjectID: "u1"}}
@@ -240,7 +152,7 @@ func TestGuardRetryReceivesFreshProposal(t *testing.T) {
 		attempt.Change.Roles[0].Role = "admin"
 		return nil
 	})
-	callback := composeGuard(actorU1(), guard, cmd, nil, nil, authmodel.EvaluationLimits{})
+	callback := composeGuard(actorU1(), guard, cmd, nil, authmodel.EvaluationLimits{})
 	for range 2 {
 		if err := callback(context.Background(), &stubDecisionView{}); err != nil {
 			t.Fatal(err)
@@ -257,7 +169,7 @@ func TestGuardComposesIntoMutationGuard(t *testing.T) {
 	guard := &stubGuard{}
 	cmd := validGrantCommand(t)
 	actor := actorU1()
-	closure := composeGuard(actor, guard, cmd, nil, nil, authmodel.EvaluationLimits{MaxGraphStates: authmodel.DefaultMaxGraphStates, MaxRelationTargets: authmodel.DefaultMaxRelationTargets})
+	closure := composeGuard(actor, guard, cmd, nil, authmodel.EvaluationLimits{MaxGraphStates: authmodel.DefaultMaxGraphStates, MaxRelationTargets: authmodel.DefaultMaxRelationTargets})
 
 	view := &stubDecisionView{}
 	if err := closure(context.Background(), view); err != nil {
@@ -282,7 +194,7 @@ func TestGuardReadsUseRepositoryView(t *testing.T) {
 	depScope := Target{Kind: TargetResource, Type: "doc", ID: "d1"}
 	guard := &stubGuard{readScope: &depScope}
 	repo := &stubMutationRepo{view: &stubDecisionView{}, receipt: &Result{Outcome: OutcomeApplied}}
-	comps := mustComponents(t, testRepositories{Roles: &roleFake{}, Mutations: repo}, testConfig{Guard: guard})
+	comps := mustComponents(t, testRepositories{Mutations: repo}, testConfig{Guard: guard})
 
 	if _, err := comps.Service.applyMutation(context.Background(), actorU1(), validGrantCommand(t)); err != nil {
 		t.Fatalf("ApplyMutation: %v", err)
@@ -304,7 +216,7 @@ func TestGuardReadsUseRepositoryView(t *testing.T) {
 // SystemMutator remains available.
 func TestConstructionNilGuardIsReadOnlyPosture(t *testing.T) {
 	repo := &stubMutationRepo{receipt: &Result{Outcome: OutcomeApplied}}
-	comps := mustComponents(t, testRepositories{Roles: &roleFake{}, Mutations: repo}, testConfig{})
+	comps := mustComponents(t, testRepositories{Mutations: repo}, testConfig{})
 
 	if _, err := comps.Service.applyMutation(context.Background(), actorU1(), validGrantCommand(t)); !errors.Is(err, ErrMutationsNotConfigured) {
 		t.Fatalf("read-only actor mutation: want ErrMutationsNotConfigured, got %v", err)
@@ -323,7 +235,7 @@ func TestConstructionNilGuardIsReadOnlyPosture(t *testing.T) {
 // TestConstructionReadOnlyWithoutMutations proves both actor and trusted paths
 // fail closed with no Mutations repository wired at all.
 func TestConstructionReadOnlyWithoutMutations(t *testing.T) {
-	comps := mustComponents(t, testRepositories{Roles: &roleFake{}}, testConfig{})
+	comps := mustComponents(t, testRepositories{}, testConfig{})
 	if _, err := comps.Service.applyMutation(context.Background(), actorU1(), validGrantCommand(t)); !errors.Is(err, ErrMutationsNotConfigured) {
 		t.Fatalf("actor path: want ErrMutationsNotConfigured, got %v", err)
 	}
@@ -335,7 +247,7 @@ func TestConstructionReadOnlyWithoutMutations(t *testing.T) {
 func TestConstructionFullActorMutationPostureApplies(t *testing.T) {
 	guard := &stubGuard{}
 	repo := &stubMutationRepo{view: &stubDecisionView{}, receipt: &Result{Outcome: OutcomeApplied}}
-	comps := mustComponents(t, testRepositories{Roles: &roleFake{}, Mutations: repo}, testConfig{Guard: guard})
+	comps := mustComponents(t, testRepositories{Mutations: repo}, testConfig{Guard: guard})
 
 	receipt, err := comps.Service.applyMutation(context.Background(), actorU1(), validGrantCommand(t))
 	if err != nil {
@@ -351,7 +263,7 @@ func TestConstructionFullActorMutationPostureApplies(t *testing.T) {
 
 func TestActorSeamRejectsTrustedTeardown(t *testing.T) {
 	repo := &stubMutationRepo{view: &stubDecisionView{}, receipt: &Result{Outcome: OutcomeApplied}}
-	comps := mustComponents(t, testRepositories{Roles: &roleFake{}, Mutations: repo}, testConfig{Guard: &stubGuard{}})
+	comps := mustComponents(t, testRepositories{Mutations: repo}, testConfig{Guard: &stubGuard{}})
 
 	_, err := comps.Service.applyMutation(context.Background(), actorU1(), teardownSeamCommand(t))
 	if !errors.Is(err, ErrTrustedOperationRequired) {
@@ -374,7 +286,7 @@ func TestActorSeamRejectsTrustedTeardown(t *testing.T) {
 // bound — a caller cannot smuggle its own blast-radius ceiling in.
 func TestActorPurgeBoundNormalizedToMaxBatchSize(t *testing.T) {
 	repo := &stubMutationRepo{view: &stubDecisionView{}, receipt: &Result{Outcome: OutcomeApplied}}
-	comps := mustComponents(t, testRepositories{Relationships: &relFake{}, Mutations: repo}, testConfig{
+	comps := mustComponents(t, testRepositories{Mutations: repo}, testConfig{
 		RelationshipModel: validModel(), Guard: &stubGuard{}, Limits: authmodel.EvaluationLimits{MaxBatchSize: 5},
 	})
 	ctx := context.Background()
@@ -402,8 +314,8 @@ func TestActorPurgeBoundNormalizedToMaxBatchSize(t *testing.T) {
 	if _, err := comps.Service.applyMutation(ctx, actorU1(), grant); err != nil {
 		t.Fatalf("grant: %v", err)
 	}
-	if repo.gotCmd.MaxAffectedRows != 0 {
-		t.Fatalf("non-purge bound not zeroed: got %d want 0", repo.gotCmd.MaxAffectedRows)
+	if repo.gotCmd.MaxAffectedRows != 5 {
+		t.Fatalf("grant bound not forced to maxBatchSize: got %d want 5", repo.gotCmd.MaxAffectedRows)
 	}
 }
 
@@ -413,35 +325,20 @@ func (f contractGuard) AuthorizeMutation(ctx context.Context, attempt MutationAt
 	return f(ctx, attempt, view)
 }
 
-type testRepositories struct {
-	Relationships relationships.Storer
-	Roles         roles.Storer
-	Mutations     MutationRepository
-}
+type testRepositories struct{ Mutations MutationRepository }
 type testConfig struct {
-	RelationshipModel relationships.Schema
+	RelationshipModel decisions.Model
 	Guard             MutationGuard
 	Limits            authmodel.EvaluationLimits
 }
 
 func mustComponents(t *testing.T, repos testRepositories, cfg testConfig) Components {
 	t.Helper()
-	services := Services{}
-	if repos.Relationships != nil {
-		parts, err := relationships.NewService(repos.Relationships, cfg.RelationshipModel, relationships.WithLimits(cfg.Limits))
-		if err != nil {
-			t.Fatal(err)
-		}
-		services.Relationships = parts.Service
+	engine, err := decisions.NewService(&stubDecisionView{}, decisions.WithModel(cfg.RelationshipModel), decisions.WithLimits(cfg.Limits))
+	if err != nil {
+		t.Fatal(err)
 	}
-	if repos.Roles != nil {
-		svc, err := roles.NewService(repos.Roles)
-		if err != nil {
-			t.Fatal(err)
-		}
-		services.Roles = svc
-	}
-	parts, err := NewService(repos.Mutations, services, WithGuard(cfg.Guard), WithLimits(cfg.Limits))
+	parts, err := NewService(repos.Mutations, engine, WithGuard(cfg.Guard), WithLimits(cfg.Limits))
 	if err != nil {
 		t.Fatal(err)
 	}

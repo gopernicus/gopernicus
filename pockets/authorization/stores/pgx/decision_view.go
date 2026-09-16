@@ -10,6 +10,7 @@ import (
 )
 
 type decisionView struct {
+	*tupleStore
 	tx     *pgxdb.Tx
 	schema pgxdb.Schema
 }
@@ -17,7 +18,7 @@ type decisionView struct {
 var _ mutations.StoreDecisionView = (*decisionView)(nil)
 
 func newDecisionView(tx *pgxdb.Tx, schema pgxdb.Schema) *decisionView {
-	return &decisionView{tx: tx, schema: schema}
+	return &decisionView{tx: tx, schema: schema, tupleStore: &tupleStore{cfg: config{schema: schema}, readQuerier: tx}}
 }
 
 func (v *decisionView) CheckRelation(ctx context.Context, target mutations.Target, relation, subjectType, subjectID string) (bool, error) {
@@ -29,7 +30,7 @@ func (v *decisionView) CheckRelationBounded(ctx context.Context, target mutation
 }
 
 func (v *decisionView) checkRelationWithReader(ctx context.Context, target mutations.Target, relation, subjectType, subjectID string, maxExpansionStates int, reader pgxdb.Querier) (bool, error) {
-	if err := ctx.Err(); err != nil {
+	if err := v.check(ctx); err != nil {
 		return false, err
 	}
 	if err := target.Validate(); err != nil {
@@ -45,7 +46,7 @@ func (v *decisionView) checkRelationWithReader(ctx context.Context, target mutat
 	}
 	query := cte + `
 SELECT (SELECT count(*) FROM ` + from + `),
- EXISTS (SELECT 1 FROM ` + v.schema.Table("iam_relationships") + ` r JOIN ` + from + ` s
+ EXISTS (SELECT 1 FROM ` + resourceTupleTable(v.schema) + ` r JOIN ` + from + ` s
  ON r.subject_type=s.atype AND r.subject_id=s.aid AND r.subject_relation=s.arelation
  WHERE r.resource_type=@resource_type AND r.resource_id=@resource_id AND r.relation=@relation)`
 	err := reader.QueryRow(ctx, query, args).Scan(&count, &allowed)
@@ -59,26 +60,11 @@ SELECT (SELECT count(*) FROM ` + from + `),
 }
 
 func (v *decisionView) RelationTargets(ctx context.Context, target mutations.Target, relation string) ([]relationships.RelationTarget, error) {
+	if err := v.check(ctx); err != nil {
+		return nil, err
+	}
 	if err := target.Validate(); err != nil {
 		return nil, err
 	}
 	return relationTargets(ctx, v.tx, v.schema, target.Type, target.ID, relation)
-}
-
-func (v *decisionView) HasRole(ctx context.Context, target mutations.Target, role, subjectType, subjectID string) (bool, error) {
-	if err := ctx.Err(); err != nil {
-		return false, err
-	}
-	if err := target.Validate(); err != nil {
-		return false, err
-	}
-	if err := (mutations.RoleRow{SubjectType: subjectType, SubjectID: subjectID, Role: role}).Validate(); err != nil {
-		return false, err
-	}
-	rt, rid := roleScope(target)
-	ok, err := hasExactRole(ctx, v.tx, v.schema, subjectType, subjectID, role, rt, rid)
-	if err != nil || ok || target.Kind == mutations.TargetSubject {
-		return ok, err
-	}
-	return hasExactRole(ctx, v.tx, v.schema, subjectType, subjectID, role, "", "")
 }

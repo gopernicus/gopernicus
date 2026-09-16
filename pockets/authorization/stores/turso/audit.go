@@ -3,57 +3,42 @@ package turso
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/audit"
-	"github.com/gopernicus/gopernicus/pockets/authorization/logic/relationships"
-	"github.com/gopernicus/gopernicus/pockets/authorization/logic/roles"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuples"
 	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/pkg/list"
 )
 
-const auditColumns = "id, event_id, occurred_at, actor_type, actor_id, system_source, reason, action, fact_kind, resource_type, resource_id, subject_type, subject_id, relation, subject_relation, role"
+const auditColumns = "id, event_id, occurred_at, actor_type, actor_id, system_source, reason, action, encoding, scope_kind, resource_type, resource_id, relation, subject_type, subject_id, subject_relation"
 
 type auditRow struct {
-	ID              string       `db:"id"`
-	EventID         string       `db:"event_id"`
-	OccurredAt      tursodb.Time `db:"occurred_at"`
-	ActorType       string       `db:"actor_type"`
-	ActorID         string       `db:"actor_id"`
-	System          string       `db:"system_source"`
-	Reason          string       `db:"reason"`
-	Action          string       `db:"action"`
-	Kind            string       `db:"fact_kind"`
-	ResourceType    string       `db:"resource_type"`
-	ResourceID      string       `db:"resource_id"`
-	SubjectType     string       `db:"subject_type"`
-	SubjectID       string       `db:"subject_id"`
-	Relation        string       `db:"relation"`
-	SubjectRelation string       `db:"subject_relation"`
-	Role            string       `db:"role"`
+	ID              string           `db:"id"`
+	EventID         string           `db:"event_id"`
+	OccurredAt      tursodb.Time     `db:"occurred_at"`
+	ActorType       string           `db:"actor_type"`
+	ActorID         string           `db:"actor_id"`
+	System          string           `db:"system_source"`
+	Reason          string           `db:"reason"`
+	Action          string           `db:"action"`
+	Encoding        string           `db:"encoding"`
+	ScopeKind       tuples.ScopeKind `db:"scope_kind"`
+	ResourceType    string           `db:"resource_type"`
+	ResourceID      string           `db:"resource_id"`
+	Relation        string           `db:"relation"`
+	SubjectType     string           `db:"subject_type"`
+	SubjectID       string           `db:"subject_id"`
+	SubjectRelation string           `db:"subject_relation"`
 }
 
 func (r auditRow) toDomain() audit.Record {
-	record := audit.Record{
-		ID: r.ID, EventID: r.EventID, OccurredAt: r.OccurredAt.Time.UTC(),
+	return audit.Record{ID: r.ID, EventID: r.EventID, OccurredAt: r.OccurredAt.Time.UTC(), Encoding: r.Encoding,
 		Source: audit.Source{ActorType: r.ActorType, ActorID: r.ActorID, System: r.System, Reason: r.Reason},
-		Change: audit.Change{Action: audit.Action(r.Action)},
-	}
-	if r.Kind == "relationship" {
-		record.Change.Relationship = &relationships.CreateRelationship{
-			ResourceType: r.ResourceType, ResourceID: r.ResourceID, Relation: r.Relation,
-			SubjectType: r.SubjectType, SubjectID: r.SubjectID, SubjectRelation: r.SubjectRelation,
-		}
-	} else {
-		record.Change.Role = &roles.Assignment{
-			ResourceType: r.ResourceType, ResourceID: r.ResourceID, Role: r.Role,
-			SubjectType: r.SubjectType, SubjectID: r.SubjectID,
-		}
-	}
-	return record
+		Change: audit.Change{Action: audit.Action(r.Action), Tuple: tuples.Tuple{Scope: tuples.Scope{Kind: r.ScopeKind, Type: r.ResourceType, ID: r.ResourceID}, Relation: r.Relation, Subject: tuples.SubjectRef{Type: r.SubjectType, ID: r.SubjectID, Relation: r.SubjectRelation}}}}
 }
-
 func appendAudit(ctx context.Context, tx *writeTx, cfg config) error {
 	if !cfg.audit {
 		return nil
@@ -63,25 +48,13 @@ func appendAudit(ctx context.Context, tx *writeTx, cfg config) error {
 		return err
 	}
 	for _, r := range records {
-		row := auditRow{ID: r.ID, EventID: r.EventID, ActorType: r.Source.ActorType, ActorID: r.Source.ActorID, System: r.Source.System, Reason: r.Source.Reason, Action: string(r.Change.Action)}
-		if fact := r.Change.Relationship; fact != nil {
-			row.Kind = "relationship"
-			row.ResourceType = fact.ResourceType
-			row.ResourceID = fact.ResourceID
-			row.SubjectType = fact.SubjectType
-			row.SubjectID = fact.SubjectID
-			row.Relation = fact.Relation
-			row.SubjectRelation = fact.SubjectRelation
-		} else {
-			fact := r.Change.Role
-			row.Kind = "role"
-			row.ResourceType = fact.ResourceType
-			row.ResourceID = fact.ResourceID
-			row.SubjectType = fact.SubjectType
-			row.SubjectID = fact.SubjectID
-			row.Role = fact.Role
+		f := r.Change.Tuple
+		a := &tupleArgs{}
+		values := []string{}
+		for _, value := range []any{r.ID, r.EventID, tursodb.FormatTime(r.OccurredAt), r.Source.ActorType, r.Source.ActorID, r.Source.System, r.Source.Reason, string(r.Change.Action), r.Encoding, int(f.Scope.Kind), f.Scope.Type, f.Scope.ID, f.Relation, f.Subject.Type, f.Subject.ID, f.Subject.Relation} {
+			values = append(values, a.bind(value))
 		}
-		if _, err := tx.Exec(ctx, `INSERT INTO iam_audit (`+auditColumns+`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, row.ID, row.EventID, tursodb.FormatTime(r.OccurredAt), row.ActorType, row.ActorID, row.System, row.Reason, row.Action, row.Kind, row.ResourceType, row.ResourceID, row.SubjectType, row.SubjectID, row.Relation, row.SubjectRelation, row.Role); err != nil {
+		if _, err := tx.Exec(ctx, `INSERT INTO `+"main.iam_audit"+` (`+auditColumns+`) VALUES (`+strings.Join(values, ",")+`)`, a.params()...); err != nil {
 			return err
 		}
 	}
@@ -123,7 +96,7 @@ func (s *auditStore) List(ctx context.Context, filter audit.Filter, req list.Req
 		}
 	}
 	q := tursodb.ListQuery[auditRow]{
-		BaseSQL:      `SELECT ` + auditColumns + ` FROM iam_audit` + where,
+		BaseSQL:      `SELECT ` + auditColumns + ` FROM main.iam_audit` + where,
 		Args:         args,
 		OrderFields:  audit.OrderFields,
 		DefaultOrder: audit.DefaultOrder,

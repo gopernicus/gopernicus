@@ -53,7 +53,7 @@ func TestDirectHandlersRetainGateAndDisabledPosture(t *testing.T) {
 	}
 	h := http.NewServeMux()
 	h.Handle("POST /host-owned/roles", a.AssignRole())
-	rec := doJSON(t, h, "POST", "/host-owned/roles", `{"subject_type":"user","subject_id":"u-2","role":"viewer"}`)
+	rec := doJSON(t, h, "POST", "/host-owned/roles", `{"subject_type":"user","subject_id":"u-2","role":"viewer","scope":{"kind":"global"}}`)
 	if rec.Code != http.StatusOK || gates != 1 || stub.assignActor.ID != "admin-1" {
 		t.Fatalf("own route bypassed policy or actor: status=%d gates=%d actor=%+v body=%s", rec.Code, gates, stub.assignActor, rec.Body.String())
 	}
@@ -64,7 +64,7 @@ func TestDirectHandlersRetainGateAndDisabledPosture(t *testing.T) {
 	if err := disabled.Register(nil); err != nil {
 		t.Fatal(err)
 	}
-	for _, handler := range []http.Handler{disabled.AssignRole(), disabled.UnassignRole(), disabled.RolesBySubject(), disabled.RolesByResource(), disabled.EffectiveRolesByResource()} {
+	for _, handler := range []http.Handler{disabled.AssignRole(), disabled.UnassignRole(), disabled.RolesBySubject(), disabled.RolesByResource()} {
 		response := httptest.NewRecorder()
 		handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/own-route", nil))
 		if response.Code != http.StatusNotFound {

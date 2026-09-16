@@ -9,7 +9,7 @@ client := redis.NewClient(&redis.Options{
     Addr: "localhost:6379",
     ContextTimeoutEnabled: true,
 })
-backend, err := goredis.NewTupleCache(client, "my-relationship-store",
+backend, err := goredis.NewTupleCache(client, "my-tuple-store",
     goredis.WithLimits(goredis.Limits{
         MaxReadBytes: 1 << 20,
         MaxMutationBytes: 4 << 20,
@@ -30,9 +30,9 @@ and custom dialers remain responsible for honoring context deadlines themselves.
 
 ## Redis key
 
-The mirror key is `tuplecache:{<namespace>}`. The namespace is stored verbatim:
+The protocol-2 mirror key is `tuplecache:v2:{<namespace>}`. The namespace is stored verbatim:
 `segovia-v2:dev:authorization` produces
-`tuplecache:{segovia-v2:dev:authorization}`. It may contain ASCII letters, digits
+`tuplecache:v2:{segovia-v2:dev:authorization}`. It may contain ASCII letters, digits
 and `:._-/`; empty namespaces or other characters return `sdk.ErrInvalidInput`.
 Colons are allowed. Braces are reserved for the surrounding Redis hash tag, which
 keeps the mirror and temporary `:build:<nonce>` hashes in the same slot.
@@ -42,32 +42,40 @@ For example, inspect the mirror with:
 
 ```sh
 redis-cli --scan --pattern 'tuplecache:*'
-redis-cli HLEN 'tuplecache:{segovia-v2:dev:authorization}'
+redis-cli HLEN 'tuplecache:v2:{segovia-v2:dev:authorization}'
 ```
 
-Earlier versions used `gopernicus:tuplecache:{<base64url(namespace)>}:mirror`.
-The new name addresses a fresh hash; the next successful relay poll rebuilds it
-automatically from authoritative tuples. For a single dev server, restart with
-the updated adapter. No SQL migration or manual Redis conversion is required.
-If several readers/relays share a source, stop the old versions before starting
-the new ones: two mirrors would compete over the same source delivery receipt.
-Old hashes are left untouched and have no TTL; remove them separately once no
-old process uses them.
+Protocol 2 uses `!schema=2` and includes the protocol in the runtime binding.
+Apply the authoritative adapter's fresh base and optional cache schema before
+constructing the source. The first successful poll rebuilds the mirror from
+current canonical tuples. One authoritative source receipt belongs to one mirror.
+See the SQL adapter's [schema setup guide](../UPGRADE.md).
 
 ## Stored data
 
-One Redis hash contains both metadata and raw forward/reverse relationship sets:
+One Redis hash contains metadata and raw forward/reverse canonical tuple sets:
 
-- A forward field selects resource type, ID, and relation and contains exact
-  subject references.
+- A forward field selects explicit global or resource scope and a relation.
 - A reverse field selects the exact subject type, ID, and subject relation and
-  contains resource type, ID, and relation references.
-- References are JSON arrays of three URL-base64 components, preserving opaque
-  string bytes and avoiding ambiguity from tuple punctuation.
+  includes matching global and resource facts.
+- Both indexes contain complete seven-field facts: scope kind, resource type,
+  resource ID, relation, subject type, subject ID, and subject relation. The six
+  string components use URL-base64 inside JSON arrays. Global resource type and
+  ID are empty; zero or unknown scope kinds are invalid.
 
-No permission decisions, expanded memberships, role facts, or model-specific
-answers are stored. The authorization evaluator still applies its compiled model
-and traverses the graph on each operation.
+The mirror stores role and relationship facts together. There is no writer-origin
+classification: identical scope, relation and subject form one fact. Independent
+relations coexist. Exact role reads need no graph model and never expand usersets.
+Global scope is not a wildcard or a graph intermediary. Optional graph evaluation
+still applies its compiled model and traverses the facts for each operation.
+No decisions or expanded memberships are cached.
+
+`TupleCache.ReadTupleSnapshot` implements `tuples.Snapshotter`, allowing roles and
+composed decisions to share the same runtime. All cached reads require the host's
+explicit freshness policy. Indexed raw lookups use forward or reverse sets;
+queries requiring an unindexed scan retry the whole operation in a durable
+snapshot. Ambient transactions always use the source's bound durable view and
+must satisfy its snapshot-isolation requirements.
 
 Publications compare the binding and delivery receipt atomically. Ordinary
 changes update only the index fields that contain changed tuples; receipts are
@@ -142,7 +150,7 @@ Limits bound encoded work, not Redis/Go memory byte for byte, total full-source
 snapshot memory, or wall-clock script duration. Full rebuilds still materialize
 the complete source and both indexes in Go. JSON decoding has additional allocation
 overhead, and Lua runs synchronously on the Redis server. Capacity and script
-duration must be measured against the host's relationship sizes. This is not a
+duration must be measured against the host's tuple-set sizes. This is not a
 partitioned or Redis Cluster adapter.
 
 Run `go build ./...`, `go test ./...`, `go test -race ./...`, and `go vet ./...`

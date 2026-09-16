@@ -12,6 +12,10 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuples"
+
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/decisions"
+
 	authorization "github.com/gopernicus/gopernicus/pockets/authorization"
 	audit2 "github.com/gopernicus/gopernicus/pockets/authorization/logic/audit"
 	authzmem "github.com/gopernicus/gopernicus/pockets/authorization/stores/memory"
@@ -24,7 +28,6 @@ import (
 	model "github.com/gopernicus/gopernicus/pockets/authorization/logic/model"
 	mutations "github.com/gopernicus/gopernicus/pockets/authorization/logic/mutations"
 	relationships "github.com/gopernicus/gopernicus/pockets/authorization/logic/relationships"
-	roles "github.com/gopernicus/gopernicus/pockets/authorization/logic/roles"
 )
 
 const proofTranscriptPath = "testdata/az3-proof-transcript.md"
@@ -99,13 +102,8 @@ func auditLines(records []audit2.Record) []string {
 		if source == "" {
 			source = e.Source.ActorType + ":" + e.Source.ActorID
 		}
-		fact := ""
-		if row := e.Change.Relationship; row != nil {
-			fact = fmt.Sprintf("%s:%s#%s <- %s:%s#%s", row.ResourceType, row.ResourceID, row.Relation, row.SubjectType, row.SubjectID, row.SubjectRelation)
-		}
-		if row := e.Change.Role; row != nil {
-			fact = fmt.Sprintf("role %s for %s:%s at %s:%s", row.Role, row.SubjectType, row.SubjectID, row.ResourceType, row.ResourceID)
-		}
+		row := e.Change.Tuple
+		fact := fmt.Sprintf("scope=%v:%s:%s#%s <- %s:%s#%s", row.Scope.Kind, row.Scope.Type, row.Scope.ID, row.Relation, row.Subject.Type, row.Subject.ID, row.Subject.Relation)
 		out = append(out, fmt.Sprintf("audit: %s %s; source=%s; reason=%s", e.Change.Action, fact, source, e.Source.Reason))
 	}
 	return out
@@ -115,7 +113,7 @@ func auditLines(records []audit2.Record) []string {
 // Composition and command helpers
 // -----------------------------------------------------------------------------
 
-func proofComposition(t *testing.T, schema relationships.Schema, history *capturedHistory) authorization.Components {
+func proofComposition(t *testing.T, schema decisions.Model, history *capturedHistory) authorization.Components {
 	t.Helper()
 	// Small proof models omit the project's protected scope. Install its rule
 	// only in fixtures that declare that resource type.
@@ -129,10 +127,9 @@ func proofComposition(t *testing.T, schema relationships.Schema, history *captur
 		history.t = t
 	}
 	comps, err := authorization.New(authorization.Repositories{
-		Relationships: store.Relationships(),
-		Roles:         store.Roles(),
-		Mutations:     store.Mutations(),
-	}, authorization.WithRelationshipModel(schema), authorization.WithGuard(hostMutationGuard{}))
+		Tuples:    store.Tuples(),
+		Mutations: store.Mutations(),
+	}, authorization.WithModel(schema), authorization.WithGuard(hostMutationGuard{}))
 	if err != nil {
 		t.Fatalf("proofComposition: %v", err)
 	}
@@ -180,31 +177,31 @@ func check(t *testing.T, svc authorization.Components, userID, permission, resou
 // proofUsersetSchema adds a userset-bearing group/doc pair to the host's project +
 // platform types so the real hostMutationGuard (manage_access = owner) authorizes a
 // manager granting an exact userset subject on a doc.
-func proofUsersetSchema() relationships.Schema {
-	return relationships.NewSchema([]relationships.ResourceSchema{
-		{Name: "platform", Def: relationships.ResourceTypeDef{
-			Relations:   map[string]relationships.RelationDef{"admin": {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "user"}}}},
-			Permissions: map[string]relationships.PermissionRule{"admin": relationships.AnyOf(relationships.Direct("admin"))},
+func proofUsersetSchema() decisions.Model {
+	return decisions.NewSchema([]decisions.ResourceSchema{
+		{Name: "platform", Def: decisions.ResourceTypeDef{
+			Relations:   map[string]decisions.RelationDef{"admin": {AllowedSubjects: []decisions.SubjectTypeRef{{Type: "user"}}}},
+			Permissions: map[string]decisions.Expression{"admin": decisions.AnyOf(decisions.Direct("admin"))},
 		}},
-		{Name: "group", Def: relationships.ResourceTypeDef{
-			Relations: map[string]relationships.RelationDef{
-				"member": {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "user"}, {Type: "group", Relation: "member"}}},
-				"admin":  {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "user"}}},
+		{Name: "group", Def: decisions.ResourceTypeDef{
+			Relations: map[string]decisions.RelationDef{
+				"member": {AllowedSubjects: []decisions.SubjectTypeRef{{Type: "user"}, {Type: "group", Relation: "member"}}},
+				"admin":  {AllowedSubjects: []decisions.SubjectTypeRef{{Type: "user"}}},
 			},
 		}},
-		{Name: "doc", Def: relationships.ResourceTypeDef{
-			Relations: map[string]relationships.RelationDef{
-				"owner": {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "user"}}},
-				"viewer": {AllowedSubjects: []relationships.SubjectTypeRef{
+		{Name: "doc", Def: decisions.ResourceTypeDef{
+			Relations: map[string]decisions.RelationDef{
+				"owner": {AllowedSubjects: []decisions.SubjectTypeRef{{Type: "user"}}},
+				"viewer": {AllowedSubjects: []decisions.SubjectTypeRef{
 					{Type: "user"},
 					{Type: "group"},
 					{Type: "group", Relation: "member"},
 					{Type: "group", Relation: "admin"},
 				}},
 			},
-			Permissions: map[string]relationships.PermissionRule{
-				"view":          relationships.AnyOf(relationships.Direct("viewer")),
-				"manage_access": relationships.AnyOf(relationships.Direct("owner")),
+			Permissions: map[string]decisions.Expression{
+				"view":          decisions.AnyOf(decisions.Direct("viewer")),
+				"manage_access": decisions.AnyOf(decisions.Direct("owner")),
 			},
 		}},
 	})
@@ -213,20 +210,20 @@ func proofUsersetSchema() relationships.Schema {
 // proofHierarchySchema is the non-self Through-root hierarchy: a space inherits
 // `view` up its `parent` chain AND from its owning `org` (a NON-self Through). Used
 // for point 6's Check/Lookup parity.
-func proofHierarchySchema() relationships.Schema {
-	return relationships.NewSchema([]relationships.ResourceSchema{
-		{Name: "org", Def: relationships.ResourceTypeDef{
-			Relations:   map[string]relationships.RelationDef{"admin": {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "user"}}}},
-			Permissions: map[string]relationships.PermissionRule{"view": relationships.AnyOf(relationships.Direct("admin"))},
+func proofHierarchySchema() decisions.Model {
+	return decisions.NewSchema([]decisions.ResourceSchema{
+		{Name: "org", Def: decisions.ResourceTypeDef{
+			Relations:   map[string]decisions.RelationDef{"admin": {AllowedSubjects: []decisions.SubjectTypeRef{{Type: "user"}}}},
+			Permissions: map[string]decisions.Expression{"view": decisions.AnyOf(decisions.Direct("admin"))},
 		}},
-		{Name: "space", Def: relationships.ResourceTypeDef{
-			Relations: map[string]relationships.RelationDef{
-				"parent": {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "space"}}},
-				"viewer": {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "user"}}},
-				"org":    {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "org"}}},
+		{Name: "space", Def: decisions.ResourceTypeDef{
+			Relations: map[string]decisions.RelationDef{
+				"parent": {AllowedSubjects: []decisions.SubjectTypeRef{{Type: "space"}}},
+				"viewer": {AllowedSubjects: []decisions.SubjectTypeRef{{Type: "user"}}},
+				"org":    {AllowedSubjects: []decisions.SubjectTypeRef{{Type: "org"}}},
 			},
-			Permissions: map[string]relationships.PermissionRule{
-				"view": relationships.AnyOf(relationships.Direct("viewer"), relationships.Through("org", "view"), relationships.Through("parent", "view")),
+			Permissions: map[string]decisions.Expression{
+				"view": decisions.AnyOf(decisions.Direct("viewer"), decisions.Through("org", "view"), decisions.Through("parent", "view")),
 			},
 		}},
 	})
@@ -335,7 +332,7 @@ func proofPoint02(t *testing.T, tr *proofTranscript) {
 	if err != nil {
 		t.Fatalf("GetRelationTargets: %v", err)
 	}
-	digest := svc.Relationships.SchemaDigest()
+	digest := svc.Decisions.SchemaDigest()
 
 	tr.add(2, "Authorized manager grants an exact group#member subject",
 		"command: Service.GrantRelationship(actor=user:manager, grant doc:d2#viewer <- group:eng#member)",
@@ -441,25 +438,24 @@ func proofPoint04(t *testing.T, tr *proofTranscript) {
 func proofPoint05(t *testing.T, tr *proofTranscript) {
 	// space.parent is used by Through("parent","view") but allows a userset
 	// (space#member) — must be rejected at compile (NewService).
-	bad := relationships.NewSchema([]relationships.ResourceSchema{{
-		Name: "space", Def: relationships.ResourceTypeDef{
-			Relations: map[string]relationships.RelationDef{
-				"parent": {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "space", Relation: "member"}}},
-				"member": {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "user"}}},
-				"viewer": {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "user"}}},
+	bad := decisions.NewSchema([]decisions.ResourceSchema{{
+		Name: "space", Def: decisions.ResourceTypeDef{
+			Relations: map[string]decisions.RelationDef{
+				"parent": {AllowedSubjects: []decisions.SubjectTypeRef{{Type: "space", Relation: "member"}}},
+				"member": {AllowedSubjects: []decisions.SubjectTypeRef{{Type: "user"}}},
+				"viewer": {AllowedSubjects: []decisions.SubjectTypeRef{{Type: "user"}}},
 			},
-			Permissions: map[string]relationships.PermissionRule{
-				"view": relationships.AnyOf(relationships.Direct("viewer"), relationships.Through("parent", "view")),
+			Permissions: map[string]decisions.Expression{
+				"view": decisions.AnyOf(decisions.Direct("viewer"), decisions.Through("parent", "view")),
 			},
 		},
 	}})
 
 	store := authzmem.New(authzmem.WithGuardianPolicy(authzGuardianPolicy()))
 	_, err := authorization.New(authorization.Repositories{
-		Relationships: store.Relationships(),
-		Roles:         store.Roles(),
-		Mutations:     store.Mutations(),
-	}, authorization.WithRelationshipModel(bad), authorization.WithGuard(hostMutationGuard{}))
+		Tuples:    store.Tuples(),
+		Mutations: store.Mutations(),
+	}, authorization.WithModel(bad), authorization.WithGuard(hostMutationGuard{}))
 	if err == nil {
 		t.Fatal("a Through relation allowing a userset target must fail schema compile")
 	}
@@ -522,98 +518,56 @@ func proofPoint06(t *testing.T, tr *proofTranscript) {
 	)
 }
 
-// 7. A global role appears in effective role enumeration.
+// 7. Global grants are explicit and never broaden scoped membership.
 func proofPoint07(t *testing.T, tr *proofTranscript) {
-	sink := &capturedHistory{}
-	comps := proofComposition(t, authzSchema(), sink)
-	svc, sm := comps, comps.SystemMutator
-	ctx := context.Background()
-
-	// A GLOBAL role assignment (trusted-only blast radius) with NO direct scoped row.
-	if _, err := sm.AssignRole(audit2.WithSource(ctx, audit2.Source{System: "proof-setup"}), mutations.AssignRoleCommand{
-		Subject: model.PrincipalRef{Type: "user", ID: "dave"}, Role: "auditor",
-	}); err != nil {
-		t.Fatalf("global AssignRole: %v", err)
+	comps := proofComposition(t, authzSchema(), nil)
+	ctx := audit2.WithSource(context.Background(), audit2.Source{System: "proof"})
+	p := model.PrincipalRef{Type: "user", ID: "dave"}
+	if _, err := comps.SystemMutator.AssignRole(ctx, mutations.AssignRoleCommand{Subject: p, Role: "auditor", Scope: tuples.Global()}); err != nil {
+		t.Fatal(err)
 	}
-
-	page, err := svc.Roles.ListEffectiveRoleGrantsByResource(ctx, "project", "p7", list.Request{})
-	if err != nil {
-		t.Fatalf("ListEffectiveRoleGrantsByResource: %v", err)
+	global, err := comps.Roles.HasRole(ctx, p, "auditor")
+	if err != nil || !global {
+		t.Fatalf("global: %v %v", global, err)
 	}
-	var found *roles.EffectiveGrant
-	for i := range page.Items {
-		if page.Items[i].SubjectID == "dave" && page.Items[i].Role == "auditor" {
-			found = &page.Items[i]
-		}
+	scoped, err := comps.Roles.HasRoleIn(ctx, p, "auditor", model.Resource{Type: "project", ID: "p7"})
+	if err != nil || scoped {
+		t.Fatalf("scoped inherited global: %v %v", scoped, err)
 	}
-	if found == nil {
-		t.Fatal("global role grant did not appear in the resource's effective enumeration")
+	page, err := comps.Roles.ListRoleAssignmentsByScope(ctx, tuples.Global(), list.Request{})
+	if err != nil || len(page.Items) != 1 {
+		t.Fatalf("global list: %+v %v", page, err)
 	}
-	if found.Direct || !found.Global {
-		t.Fatalf("effective grant provenance: want direct=false global=true, got direct=%v global=%v", found.Direct, found.Global)
-	}
-	hasRole, err := svc.Roles.HasRole(ctx, model.PrincipalRef{Type: "user", ID: "dave"}, "auditor", "project", "p7")
-	if err != nil {
-		t.Fatalf("HasRole: %v", err)
-	}
-	if !hasRole {
-		t.Fatal("scoped HasRole global fallback disagreed with the effective enumeration")
-	}
-
-	tr.add(7, "A global role appears in effective role enumeration",
-		"command: SystemMutator.AssignRole(user:dave, role=auditor, GLOBAL) — no direct scoped row on project:p7",
-		fmt.Sprintf("ListEffectiveRoleGrantsByResource(project:p7): user:dave/auditor present, provenance=%s (direct=%v global=%v)", found.Provenance(), found.Direct, found.Global),
-		fmt.Sprintf("HasRole(user:dave, auditor, project:p7) = %v (scoped global fallback agrees with enumeration)", hasRole),
-	)
+	tr.add(7, "Global grants are exact facts", fmt.Sprintf("HasRole=%v; HasRoleIn=%v; global assignments=%d", global, scoped, len(page.Items)))
 }
 
-// 8. A scoped revoke while a global remains reports same_role_grant_remains.
+// 8. Scoped revoke removes the scoped fact and preserves an independent global fact.
 func proofPoint08(t *testing.T, tr *proofTranscript) {
 	sink := &capturedHistory{}
 	comps := proofComposition(t, authzSchema(), sink)
-	svc, sm := comps, comps.SystemMutator
-	ctx := context.Background()
-
-	trustGrant(t, sm, "project", "p8", "owner", subj("user", "manager"))
-	// erin holds BOTH a global auditor and a scoped auditor on project:p8.
-	if _, err := sm.AssignRole(audit2.WithSource(ctx, audit2.Source{System: "proof-setup"}), mutations.AssignRoleCommand{
-		Subject: model.PrincipalRef{Type: "user", ID: "erin"}, Role: "auditor",
-	}); err != nil {
-		t.Fatalf("global AssignRole: %v", err)
+	ctx := audit2.WithSource(context.Background(), audit2.Source{System: "proof"})
+	p := model.PrincipalRef{Type: "user", ID: "erin"}
+	resource := model.Resource{Type: "project", ID: "p8"}
+	trustGrant(t, comps.SystemMutator, "project", "p8", "owner", subj("user", "manager"))
+	for _, scope := range []tuples.Scope{tuples.Global(), tuples.On("project", "p8")} {
+		if _, err := comps.SystemMutator.AssignRole(ctx, mutations.AssignRoleCommand{Subject: p, Role: "auditor", Scope: scope}); err != nil {
+			t.Fatal(err)
+		}
 	}
-	if _, err := svc.Mutations.AssignRole(ctx, proofActor("manager"), mutations.AssignRoleCommand{
-		Subject: model.PrincipalRef{Type: "user", ID: "erin"}, Role: "auditor",
-		ResourceType: "project", ResourceID: "p8",
-	}); err != nil {
-		t.Fatalf("scoped AssignRole: %v", err)
+	result, err := comps.Mutations.UnassignRole(ctx, proofActor("manager"), mutations.UnassignRoleCommand{Subject: p, Role: "auditor", Scope: tuples.On("project", "p8")})
+	if err != nil || result.Outcome != mutations.OutcomeApplied {
+		t.Fatalf("revoke: %+v %v", result, err)
 	}
-
-	// The manager revokes the SCOPED assignment; the global still confers the role.
-	result, err := svc.Mutations.UnassignRole(ctx, proofActor("manager"), mutations.UnassignRoleCommand{
-		Subject: model.PrincipalRef{Type: "user", ID: "erin"}, Role: "auditor",
-		ResourceType: "project", ResourceID: "p8",
-	})
-	if err != nil {
-		t.Fatalf("scoped UnassignRole: %v", err)
+	scoped, err := comps.Roles.HasRoleIn(ctx, p, "auditor", resource)
+	if err != nil || scoped {
+		t.Fatalf("scoped after revoke: %v %v", scoped, err)
 	}
-	if !result.SameRoleGrantRemains {
-		t.Fatal("scoped revoke while a global remains must report same_role_grant_remains=true")
+	global, err := comps.Roles.HasRole(ctx, p, "auditor")
+	if err != nil || !global {
+		t.Fatalf("global after revoke: %v %v", global, err)
 	}
-	stillHas, err := svc.Roles.HasRole(ctx, model.PrincipalRef{Type: "user", ID: "erin"}, "auditor", "project", "p8")
-	if err != nil {
-		t.Fatalf("HasRole after scoped revoke: %v", err)
-	}
-	if !stillHas {
-		t.Fatal("global fallback should still confer the role after the scoped revoke")
-	}
-
-	tr.add(8, "A scoped revoke while a global remains reports same_role_grant_remains",
-		"setup: user:erin holds auditor GLOBALLY and scoped on project:p8",
-		"command: Service.UnassignRole(actor=user:manager, user:erin/auditor scoped on project:p8)",
-		fmt.Sprintf("result: outcome=%s same_role_grant_remains=%v (computed inside the atomic critical section)", result.Outcome, result.SameRoleGrantRemains),
-		fmt.Sprintf("HasRole(user:erin, auditor, project:p8) after revoke = %v (global fallback retains it)", stillHas),
-	)
-	tr.add(8, "A scoped revoke while a global remains reports same_role_grant_remains", auditLines(sink.all())...)
+	tr.add(8, "Scoped revocation preserves global identity", fmt.Sprintf("outcome=%s; scoped=%v; global=%v", result.Outcome, scoped, global))
+	tr.add(8, "Canonical audit", auditLines(sink.all())...)
 }
 
 // 9. Two concurrent last-owner revokes produce one success / one invariant block.
@@ -694,13 +648,16 @@ func proofPoint10(t *testing.T, tr *proofTranscript) {
 	trustGrant(t, comps.SystemMutator, "project", "p10", "owner", subj("user", "manager"))
 	before := len(history.all())
 	result, err := comps.Mutations.GrantRelationship(context.Background(), proofActor("manager"), mutations.GrantRelationshipCommand{ResourceType: "project", ResourceID: "p10", Relation: "member", Subject: subj("user", "manager")})
-	if !errors.Is(err, mutations.ErrSemanticConflict) || result != nil {
-		t.Fatalf("conflict: %+v, %v", result, err)
+	if err != nil || result == nil || result.Outcome != mutations.OutcomeApplied {
+		t.Fatalf("coexistence: %+v %v", result, err)
 	}
-	if len(history.all()) != before {
-		t.Fatal("refused change added history")
+	if len(history.all()) != before+1 {
+		t.Fatal("new canonical fact missing history")
 	}
-	tr.add(10, "Conflicting grants return errors without changing history", "owner-to-member grant without replace: semantic_conflict; original owner and audit count unchanged")
+	if !check(t, comps, "manager", "manage_access", "project", "p10") {
+		t.Fatal("member displaced owner")
+	}
+	tr.add(10, "Independent labels coexist", "owner plus member: one new canonical fact; original owner preserved")
 }
 
 func proofPoint11(t *testing.T, tr *proofTranscript) {

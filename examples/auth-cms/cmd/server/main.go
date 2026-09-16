@@ -50,6 +50,8 @@ import (
 	"syscall"
 	"time"
 
+	authorizationhttp "github.com/gopernicus/gopernicus/pockets/authorization/inbound/http"
+
 	"github.com/gopernicus/gopernicus/examples/auth-cms/internal/authjobs"
 	"github.com/gopernicus/gopernicus/examples/auth-cms/internal/authmem"
 	"github.com/gopernicus/gopernicus/examples/auth-cms/internal/authpages"
@@ -316,7 +318,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 	// session, platform admin. Set here rather than
 	// in buildAuthConfig because the gate is a method value on the authorizer, which the
 	// composition seam does not receive (the DeliveryMode post-set precedent below).
-	authCfg.MachineRoutesGate = authzComponents.HTTP.RequirePermissionFixed(platformResourceType, "admin", platformResourceID)
+	authCfg.MachineRoutesGate = authzComponents.HTTP.Require(authorizationhttp.Can("admin", authorizationhttp.Fixed(platformResourceType, platformResourceID)))
 	// Apply the selected delivery mode to the auth config. buildAuthConfig returns the
 	// jobs-mode posture (in-memory fenced queue on this host); AUTH_DELIVERY_MODE=in_process flips
 	// it to the bounded EPHEMERAL pool here — and announces that posture LOUDLY. Neither mode
@@ -364,7 +366,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 	// request can reach the routes ahead of their gate (which fails closed anyway).
 	roleRoutesGate.set(roleAdministrationGate(
 		authSvc.HTTP.RequireAccessTokenLive(),
-		authzComponents.HTTP.RequirePermissionFixed(platformResourceType, "admin", platformResourceID),
+		authzComponents.HTTP.Require(authorizationhttp.Can("admin", authorizationhttp.Fixed(platformResourceType, platformResourceID))),
 	))
 	// Boot fails LOUDLY if the chain never landed, matching the construction-matrix
 	// posture the pockets already give this host: a gate is a security control, and

@@ -1,0 +1,230 @@
+{
+  "date": "2026-09-15",
+  "status": "implemented and verified, unreleased",
+  "branch": "main",
+  "starting_head": "1e1308733cd8c23995497134052b2ef16c1f5b30",
+  "workspace_module_count": 42,
+  "checks": [
+    {
+      "command": "env -i PATH=\"$PATH\" HOME=\"$HOME\" TMPDIR=\"${TMPDIR:-/tmp}\" GOCACHE=/tmp/gopernicus-authorization-hardening/cache GOENV=off GOPROXY=off GOTOOLCHAIN=local make check",
+      "result": "passed",
+      "output_tail": [
+        "== guard: authorization roles imports no relationship, decision or cache engine (G19) ==",
+        "== guard: ui/* implementations import no pockets/integrations/examples/workshop ==",
+        "== guard: ui/* go.mod requires only templ + sdk, and never imports pockets (G5 analogue) ==",
+        "== guard: the retired features/ tier vocabulary never returns (G20) ==",
+        "== guard: sdk/pkg/list never imports net/http (G21) ==",
+        "== guard: sdk.Violation messages never wrap a raw error string (G23) ==",
+        "== guard: firestore store adapters issue I/O only through the connector's Reader/Writer (G24) ==",
+        "== guard: pocket domain and logic are transport independent ==",
+        "ok  \tgithub.com/gopernicus/gopernicus/workshop/gopernicus/internal/commands\t0.237s",
+        "== guard: authorization tuple vocabulary imports no authorization consumer (G26) ==",
+        "== guard: authorization decisions imports no mutation layer (G27) ==",
+        "all checks passed"
+      ]
+    },
+    {
+      "command": "GOCACHE=/tmp/gopernicus-authorization-hardening/cache go test -race ./logic/decisions ./stores/memory -count=1",
+      "cwd": "pockets/authorization",
+      "result": "passed (core implementer)"
+    },
+    {
+      "command": "GOCACHE=/tmp/gopernicus-go-build go test -race ./inbound/http -count=1",
+      "cwd": "pockets/authorization",
+      "result": "passed"
+    },
+    {
+      "command": "go build ./...; go test ./... -count=1; go vet ./...",
+      "cwd": "pockets/authorization",
+      "result": "passed (core implementer), independently repeated by make check"
+    },
+    {
+      "command": "pnpm run build",
+      "cwd": "workshop/documentation",
+      "result": "passed",
+      "note": "Docusaurus optional update check could not write user config; build itself succeeded."
+    },
+    {
+      "command": "goimports -l [14 changed Go files]; git diff --check",
+      "result": "passed, no output"
+    }
+  ],
+  "http_proof": {
+    "command": "GOCACHE=/tmp/gopernicus-go-build go run /tmp/gopernicus-authorization-composable-guards/http_fixture.go",
+    "cwd": "pockets/authorization",
+    "result": "passed",
+    "requests": [
+      {
+        "user": "",
+        "path": "/documents/one",
+        "status": 401
+      },
+      {
+        "user": "outsider",
+        "path": "/documents/one",
+        "status": 403
+      },
+      {
+        "user": "alice",
+        "path": "/documents/one",
+        "status": 204
+      },
+      {
+        "user": "alice",
+        "path": "/documents/two",
+        "status": 403
+      },
+      {
+        "user": "admin",
+        "path": "/documents/two",
+        "status": 204
+      },
+      {
+        "user": "admin",
+        "path": "/lazy",
+        "status": 204
+      },
+      {
+        "user": "outsider",
+        "path": "/lazy",
+        "status": 500
+      }
+    ],
+    "broken_resolver_calls": 1,
+    "source": "package main\n\nimport (\n\t\"context\"\n\t\"encoding/json\"\n\t\"errors\"\n\t\"fmt\"\n\t\"net\"\n\t\"net/http\"\n\t\"os\"\n\t\"sync/atomic\"\n\t\"time\"\n\n\t\"github.com/gopernicus/gopernicus/pockets/authorization\"\n\tauthorizationhttp \"github.com/gopernicus/gopernicus/pockets/authorization/inbound/http\"\n\t\"github.com/gopernicus/gopernicus/pockets/authorization/logic/decisions\"\n\t\"github.com/gopernicus/gopernicus/pockets/authorization/logic/model\"\n\t\"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuples\"\n\t\"github.com/gopernicus/gopernicus/pockets/authorization/stores/memory\"\n\t\"github.com/gopernicus/gopernicus/sdk\"\n)\n\nfunc main() {\n\tif err := run(); err != nil { fmt.Fprintln(os.Stderr, err); os.Exit(1) }\n}\n\nfunc run() error {\n\tctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)\n\tdefer cancel()\n\tstore := memory.NewTuples()\n\terr := store.ApplyTuples(ctx, tuples.Changes{Add: []tuples.Tuple{\n\t\t{Scope: tuples.Global(), Relation: \"admin\", Subject: tuples.SubjectRef{Type:\"user\", ID:\"admin\"}},\n\t\t{Scope: tuples.On(\"organization\", \"acme\"), Relation: \"member\", Subject: tuples.SubjectRef{Type:\"user\", ID:\"alice\"}},\n\t\t{Scope: tuples.On(\"group\", \"editors\"), Relation: \"member\", Subject: tuples.SubjectRef{Type:\"user\", ID:\"alice\"}},\n\t\t{Scope: tuples.On(\"document\", \"one\"), Relation: \"editor\", Subject: tuples.SubjectRef{Type:\"group\", ID:\"editors\", Relation:\"member\"}},\n\t}})\n\tif err != nil { return err }\n\tpolicy := decisions.Model{ResourceTypes: map[string]decisions.ResourceTypeDef{\n\t\t\"group\": {Relations:map[string]decisions.RelationDef{\"member\":{AllowedSubjects:[]decisions.SubjectTypeRef{{Type:\"user\"}}}}},\n\t\t\"document\": {Relations:map[string]decisions.RelationDef{\"editor\":{AllowedSubjects:[]decisions.SubjectTypeRef{{Type:\"user\"},{Type:\"group\",Relation:\"member\"}}}}, Permissions:map[string]decisions.Expression{\"edit\":decisions.Direct(\"editor\")}},\n\t}}\n\tcomponents, err := authorization.New(authorization.Repositories{Tuples:store}, authorization.WithModel(policy))\n\tif err != nil { return err }\n\tdocument := authorizationhttp.Path(\"document\", \"documentID\")\n\tguard := components.HTTP.Require(authorizationhttp.Any(\n\t\tauthorizationhttp.HasRole(\"admin\", authorizationhttp.Global()),\n\t\tauthorizationhttp.All(\n\t\t\tauthorizationhttp.HasRole(\"member\", authorizationhttp.Fixed(\"organization\", \"acme\")),\n\t\t\tauthorizationhttp.HasRelationship(\"editor\", document),\n\t\t\tauthorizationhttp.Can(\"edit\", document),\n\t\t),\n\t))\n\tvar brokenReads atomic.Int64\n\tbroken := authorizationhttp.Resource(\"document\", func(*http.Request)(model.Resource,error){\n\t\tbrokenReads.Add(1)\n\t\treturn model.Resource{}, errors.New(\"fixture resolver failure\")\n\t})\n\tlazy := components.HTTP.Require(authorizationhttp.Any(\n\t\tauthorizationhttp.HasRole(\"admin\", authorizationhttp.Global()),\n\t\tauthorizationhttp.HasRole(\"owner\", broken),\n\t))\n\tnext := http.HandlerFunc(func(w http.ResponseWriter,r *http.Request){w.WriteHeader(http.StatusNoContent)})\n\tmux := http.NewServeMux()\n\tmux.Handle(\"GET /documents/{documentID}\",guard(next))\n\tmux.Handle(\"GET /lazy\",lazy(next))\n\t// This is fixture-only identity injection, bound exclusively to loopback.\n\tserver := &http.Server{Handler:http.HandlerFunc(func(w http.ResponseWriter,r *http.Request){\n\t\tif user := r.Header.Get(\"X-Test-User\"); user != \"\" { r = r.WithContext(sdk.WithPrincipal(r.Context(),sdk.Principal{Type:\"user\",ID:user})) }\n\t\tmux.ServeHTTP(w,r)\n\t}), ReadHeaderTimeout:time.Second}\n\tlistener, err := net.Listen(\"tcp\", \"127.0.0.1:0\")\n\tif err != nil { return err }\n\tdefer server.Close()\n\tgo server.Serve(listener)\n\ttransport := &http.Transport{Proxy:nil}\n\tdefer transport.CloseIdleConnections()\n\tclient := &http.Client{Timeout:2*time.Second, Transport:transport}\n\ttype result struct { User, Path string; Status int }\n\tresults := []result{}\n\tfor _, tc := range []struct{user,path string; want int}{\n\t\t{\"\",\"/documents/one\",401}, {\"outsider\",\"/documents/one\",403},\n\t\t{\"alice\",\"/documents/one\",204}, {\"alice\",\"/documents/two\",403},\n\t\t{\"admin\",\"/documents/two\",204}, {\"admin\",\"/lazy\",204}, {\"outsider\",\"/lazy\",500},\n\t} {\n\t\treq, err := http.NewRequestWithContext(ctx,http.MethodGet,\"http://\"+listener.Addr().String()+tc.path,nil)\n\t\tif err != nil { return err }\n\t\treq.Header.Set(\"X-Test-User\",tc.user)\n\t\tresponse,err:=client.Do(req)\n\t\tif err!=nil{return err}\n\t\tresponse.Body.Close()\n\t\tif response.StatusCode!=tc.want{return fmt.Errorf(\"%s %s: got %d, want %d\",tc.user,tc.path,response.StatusCode,tc.want)}\n\t\tif tc.user==\"admin\" && tc.path==\"/lazy\" && brokenReads.Load()!=0 {return errors.New(\"skipped resolver ran\")}\n\t\tresults=append(results,result{tc.user,tc.path,response.StatusCode})\n\t}\n\tif brokenReads.Load()!=1{return errors.New(\"resolver call count mismatch\")}\n\treturn json.NewEncoder(os.Stdout).Encode(struct{Passed bool; Requests []result; BrokenResolverCalls int64}{true,results,brokenReads.Load()})\n}\n"
+  },
+  "benchmarks": {
+    "command": "go test ./inbound/http -run '^$' -bench '^BenchmarkComposableGuard$' -benchmem -count=5",
+    "cwd": "pockets/authorization",
+    "result": "passed",
+    "sample_count": 15,
+    "raw_output": "goos: darwin\ngoarch: arm64\npkg: github.com/gopernicus/gopernicus/pockets/authorization/inbound/http\ncpu: Apple M4 Pro\nBenchmarkComposableGuard/global-14         \t  611373\t      1741 ns/op\t    3320 B/op\t      28 allocs/op\nBenchmarkComposableGuard/global-14         \t  812785\t      1371 ns/op\t    3320 B/op\t      28 allocs/op\nBenchmarkComposableGuard/global-14         \t 1000000\t      1036 ns/op\t    3320 B/op\t      28 allocs/op\nBenchmarkComposableGuard/global-14         \t 1000000\t      1027 ns/op\t    3320 B/op\t      28 allocs/op\nBenchmarkComposableGuard/global-14         \t 1000000\t      1431 ns/op\t    3320 B/op\t      28 allocs/op\nBenchmarkComposableGuard/two_exact_roles-14         \t  732856\t      1908 ns/op\t    4616 B/op\t      34 allocs/op\nBenchmarkComposableGuard/two_exact_roles-14         \t  722685\t      2634 ns/op\t    4616 B/op\t      34 allocs/op\nBenchmarkComposableGuard/two_exact_roles-14         \t  432048\t      3081 ns/op\t    4616 B/op\t      34 allocs/op\nBenchmarkComposableGuard/two_exact_roles-14         \t  689491\t      2460 ns/op\t    4616 B/op\t      34 allocs/op\nBenchmarkComposableGuard/two_exact_roles-14         \t  720727\t      1795 ns/op\t    4616 B/op\t      34 allocs/op\nBenchmarkComposableGuard/mixed-14                   \t  413954\t      2866 ns/op\t    7864 B/op\t      44 allocs/op\nBenchmarkComposableGuard/mixed-14                   \t  407114\t      3115 ns/op\t    7864 B/op\t      44 allocs/op\nBenchmarkComposableGuard/mixed-14                   \t  403639\t      2911 ns/op\t    7864 B/op\t      44 allocs/op\nBenchmarkComposableGuard/mixed-14                   \t  421141\t      2742 ns/op\t    7864 B/op\t      44 allocs/op\nBenchmarkComposableGuard/mixed-14                   \t  465685\t      2813 ns/op\t    7864 B/op\t      44 allocs/op\nPASS\nok  \tgithub.com/gopernicus/gopernicus/pockets/authorization/inbound/http\t19.559s\n",
+    "limits": "Local memory authority and HTTP recorder, with concurrent verification load; no SQL/cache or production throughput claim."
+  },
+  "independent_review": {
+    "agent": "lead-backend-engineer",
+    "result": "no remaining blockers",
+    "resolved_finding": "On/BindResource must not erase a malformed non-role CurrentResource marker; fixed and regression tested"
+  },
+  "owner_changes_preserved": [
+    "plans/cacher-design.md",
+    "plans/gps-360-go-audit-upgrade-handoff.md",
+    "plans/segovia-v2-audit-upgrade-handoff.md"
+  ],
+  "limits": [
+    "Legacy RequireAnyPermission and stacked gates retain independent operations; coherent composition uses Require.",
+    "Custom resource reads do not automatically join the authorization tuple snapshot.",
+    "Remote Turso, production load and release archives are not verified by this extension.",
+    "No commit, tag, publication or application datastore mutation."
+  ],
+  "owned_rehearsal": {
+    "command": "python3 -B .github/scripts/authorization_cache_verify.py --mode all --postgres-bin /opt/homebrew/opt/postgresql@17/bin --report /tmp/gopernicus-authorization-composable-guards/owned-verification.json",
+    "status": "passed",
+    "cleanup": "passed",
+    "source_sha256": "f13ec649715a3627b7fee6a3e29620cdb7bbc5349568bfa639127345a415dab3",
+    "coverage": "owned local canonical SQL/Redis/HTTP suites; remote Turso unverified",
+    "suites": [
+      {
+        "suite": "integrations/datastores/pgxdb",
+        "schema": "authorization_named",
+        "passed": 301,
+        "skipped": []
+      },
+      {
+        "suite": "pockets/authorization",
+        "schema": "authorization_named",
+        "passed": 1253,
+        "skipped": [
+          null,
+          "TestTransactional"
+        ]
+      },
+      {
+        "suite": "pockets/authorization/stores/pgx",
+        "schema": "public",
+        "passed": 550,
+        "skipped": []
+      },
+      {
+        "suite": "pockets/authorization/stores/pgx",
+        "schema": "authorization_named",
+        "passed": 550,
+        "skipped": []
+      },
+      {
+        "suite": "pockets/authorization/stores/turso",
+        "schema": "authorization_named",
+        "passed": 550,
+        "skipped": []
+      },
+      {
+        "suite": "pockets/authorization/stores/goredis",
+        "schema": "authorization_named",
+        "passed": 52,
+        "skipped": []
+      },
+      {
+        "suite": "examples/auth-cms",
+        "schema": "authorization_named",
+        "passed": 522,
+        "skipped": [
+          null,
+          null,
+          null
+        ]
+      }
+    ],
+    "note": "All commands run with -race -count=1. Null skip entries identify packages without test files. The memory TestTransactional skip is intentional because that store does not expose a host transaction.Transactor. SQL and Redis suites have no skipped behavioral tests. Only benchmark documentation changed inside source modules after this snapshot; Go code is unchanged."
+  },
+  "changed_files": [
+    "pockets/authorization/logic/decisions/model.go",
+    "pockets/authorization/logic/decisions/resource_binding.go",
+    "pockets/authorization/logic/decisions/expression_validation.go",
+    "pockets/authorization/logic/decisions/expression.go",
+    "pockets/authorization/logic/decisions/budget.go",
+    "pockets/authorization/logic/decisions/evaluate.go",
+    "pockets/authorization/logic/decisions/resource_binding_test.go",
+    "pockets/authorization/logic/decisions/tuple_cache_test.go",
+    "pockets/authorization/inbound/http/predicates.go",
+    "pockets/authorization/inbound/http/composable_middleware.go",
+    "pockets/authorization/inbound/http/composable_middleware_test.go",
+    "pockets/authorization/inbound/http/composable_example_test.go",
+    "pockets/authorization/inbound/http/composable_benchmark_test.go",
+    "pockets/authorization/inbound/http/adapter_gates.go",
+    "pockets/authorization/README.md",
+    "pockets/authorization/BENCHMARKS.md",
+    "workshop/documentation/docs/pockets/authorization.md",
+    "ARCHITECTURE.md",
+    "RELEASING.md",
+    "plans/authorization-composable-guards.md",
+    "plans/authorization-composable-guards-verification.json"
+  ],
+  "file_sha256": {
+    "pockets/authorization/logic/decisions/model.go": "af6e5ac46121d3d88d1635fe5edb5d6e52c386c7bd9dbc9321b2ccac12e54f15",
+    "pockets/authorization/logic/decisions/resource_binding.go": "125e99423f94d21ce2724ca4e8092447c73c49c3bcaaa607ec5d17d19fd59be5",
+    "pockets/authorization/logic/decisions/expression_validation.go": "7570e132423b0cb1b71b2729f6743a7ffc45284b10938b0a6b30b861b3d2b163",
+    "pockets/authorization/logic/decisions/expression.go": "9376c4dfc819f7cbb8d6ea84d2be8b87094da1a76968f0517a6f3cc862601156",
+    "pockets/authorization/logic/decisions/budget.go": "a1ba594be87590039701594f45494ff258fa47b505d1c05c732890c8ddab900e",
+    "pockets/authorization/logic/decisions/evaluate.go": "ac3cb334712420151ca4c0e4f0301aafa6374cbcb66adb6003594750f371cda3",
+    "pockets/authorization/logic/decisions/resource_binding_test.go": "80533c2a98cf65df3d256b4b459521d17d7763ff7507c8f81001691b50995814",
+    "pockets/authorization/logic/decisions/tuple_cache_test.go": "9ef26108f60917788620749d158870f97846307af756edd710eb057ed5e5d777",
+    "pockets/authorization/inbound/http/predicates.go": "c7714aa5e087ea7643f39a6d8f537c75a440aac3ddbcb4d25d52bcd4a99b077b",
+    "pockets/authorization/inbound/http/composable_middleware.go": "d042bd91ef568c6b0f7d0def4a5598846ea053ad2452b78a526b3ea8fff04849",
+    "pockets/authorization/inbound/http/composable_middleware_test.go": "8616c4ddcf141e0e806382590b26f603d96adfd8de1809ef225e9fe9c4e8e77b",
+    "pockets/authorization/inbound/http/composable_example_test.go": "e527443b5ce77492fd6b6d9ed64ca9263210bdd8bbe9d9a5043e24a6ed19e84d",
+    "pockets/authorization/inbound/http/composable_benchmark_test.go": "b1da650695e919568844bd671665a80e52505fd07fe18fd71158564f4e2897ef",
+    "pockets/authorization/inbound/http/adapter_gates.go": "5da1507658867f3f9e26f0328940ea490030485900bf5fd0618cbb3ef03ccb6a",
+    "pockets/authorization/README.md": "81e11cd443048e0de2bece6906519f3367ea1c87d3c2bf1e48278ae8f00a67f4",
+    "pockets/authorization/BENCHMARKS.md": "adff670f71b10ed75090ca23de5e3e71ce65e5295d488b679406598ca9c8dbf8",
+    "workshop/documentation/docs/pockets/authorization.md": "4789a48546425d13a384f3817efd67c9c22b57bc209fbcdc2a2e347ff1193838",
+    "ARCHITECTURE.md": "e454a1e45846f1718c8143cc58ace642bf70cc322d041e69f042f741c819c699",
+    "RELEASING.md": "f2a7e6527e22fe5a0f318d702ff7a5cfca6f88d6618daabfa2ab2acff3a58fda",
+    "plans/authorization-composable-guards.md": "ef6810b5b2e9d019c5f54ba7cfd9cd1a20b76f118bdc68c2c2d2ecd68e05a628"
+  },
+  "new_coverage": {
+    "test_functions": 21,
+    "public_example": 1,
+    "benchmark_shapes": 3,
+    "benchmark_samples": 15
+  }
+}

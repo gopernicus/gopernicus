@@ -1,5 +1,55 @@
 # Releasing gopernicus modules
 
+## Unified authorization tuples (release candidate 2026-09-16)
+
+One breaking release train must include these five artifacts from one reviewed
+commit, dependency-first: `integrations/datastores/pgxdb`, `pockets/authorization`,
+`pockets/authorization/stores/pgx`, `pockets/authorization/stores/turso`, and
+`pockets/authorization/stores/goredis`. Do not tag a partial core/store checkpoint.
+Selected versions: PostgreSQL connector `v0.9.0`, core `v0.18.0`, PostgreSQL
+store `v0.13.0`, Turso store `v0.12.0`, Redis store `v0.4.0`. Publication is
+authorized; candidate and public archive verification follow the normal process.
+
+The canonical authority is `iam_tuples`; roles and relationships address the same
+facts, independent labels coexist, global membership is exact and global policy
+is explicit. The one `decisions.Model` replaces split declarations at compile time.
+The authorization schema is a fresh base `0001_iam_tuples.sql` containing tuples
+and audit, plus optional `tuple_cache_migrations/0002_iam_tuple_cache.sql`.
+There is no legacy conversion/downgrade stream. Rehearse both fresh installation
+and cache installation over populated canonical facts before tagging.
+See [AUDIT-043](AUDIT.md#audit-043-authorization-cleanup-and-fresh-sql-schema)
+and the [schema setup guide](pockets/authorization/stores/UPGRADE.md).
+
+Authorization HTTP uses only `Adapter.Require` with composable predicates.
+Remove calls to the former permission middleware and `NewGates`; use the
+two-method decision contract for custom HTTP adapters. Compound policies share
+one snapshot and budget. See [AUDIT-044](AUDIT.md#audit-044-one-authorization-middleware-api).
+
+The raw tuple continuation is now `Query.After *Tuple`, ordered by
+`tuples.Compare`. `Repositories.Relationships` is removed; the root derives both
+fact facades from `Repositories.Tuples`. `GetPermissionsForRelation`,
+`LookupSnapshotter`/`ReadLookupSnapshot` and the unused
+`roles.ErrInvalidRoleAssignment` sentinel are retired. Custom stores provide
+canonical tuple snapshots, retaining optimized graph reads as optional capabilities.
+
+The core also adds composable HTTP `Require` guards with `All`/`Any`, exact
+`HasRole`, userset-aware `HasRelationship` and named `Can` predicates. Mixed
+resources share one decision operation and lazy input resolution. The middleware
+consolidation requires no further migration or cache protocol change; immediate
+roles-service APIs retain their contracts.
+
+The authorization Firestore module is removed from the workspace and CI matrix.
+Do not publish another authorization Firestore tag. The shared Firestore connector
+and authentication Firestore adapter remain. Published historical versions are
+not retracted, and no application data is changed by repository removal.
+
+Release validation includes the full 42-module make check, core/adapter race
+suites, non-C PostgreSQL and named-schema checks, fresh base/cache installation
+proofs, actual SQLite/PostgreSQL-to-Redis integration and measured benchmarks.
+Remote Turso conformance requires an independently pinned
+`AUTHORIZATION_TURSO_DISPOSABLE_URL` matching its supplied URL before any delete.
+A missing fixture is an explicit skip, never evidence of live verification.
+
 ## Authorization consistency and TupleCache hardening (published 2026-09-15)
 
 Published from main `373ef0668dfdf17a56ba002bb344197d6779e374`: authorization core

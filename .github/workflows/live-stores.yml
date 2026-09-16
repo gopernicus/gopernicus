@@ -131,6 +131,9 @@ jobs:
           # turso legs skip loudly, which is correct until jrazmi uploads them.
           TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
           TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
+          # Independently pinned disposable playground; authorization refuses a
+          # supplied URL unless it exactly matches this explicit fixture target.
+          AUTHORIZATION_TURSO_DISPOSABLE_URL: ${{ vars.AUTHORIZATION_TURSO_DISPOSABLE_URL }}
         run: make test-stores
 
   # Job B — goredis conformance (-race) against redis, plus pgxdb's env-gated
@@ -196,16 +199,16 @@ jobs:
 
   # Job C — the Firestore emulator suites: the CONNECTOR
   # (integrations/datastores/firestore) and every pocket store train built on it
-  # (pockets/authorization/stores/firestore, pockets/authentication/stores/firestore),
+  # (pockets/authentication/stores/firestore),
   # all -tags=integration. The connector is in MODULES and the stores in
   # STORE_MODULES, so `make test-stores` reaches them, but this job runs the
   # modules directly — the postgres/turso legs have no business gating the
   # Firestore ones.
   #
   # Each module opens its OWN emulator database (the connector its default one,
-  # the authorization store "authorization", the authentication store
-  # "authentication"): firestoretest.Reset clears a WHOLE database, so two suites
-  # sharing one would delete each other's rows and the failure would arrive as a
+  # the authentication store "authentication"): firestoretest.Reset clears a
+  # WHOLE database, so two suites sharing one would delete each other's rows and
+  # the failure would arrive as a
   # flake.
   #
   # The emulator is a background docker step (see the header) with a readiness
@@ -255,16 +258,6 @@ jobs:
           FIRESTORE_EMULATOR_HOST: 127.0.0.1:8080
           FIRESTORE_PROJECT_ID: gopernicus-test
         run: go test -tags=integration -count=1 -timeout 15m ./...
-      # 30 minutes, not the connector's 15: the shared authorization conformance
-      # suite runs ~130 fixtures, several of them concurrent transaction specs,
-      # and the emulator holds a contended lock for up to thirty seconds. The
-      # Makefile's test-stores leg carries the same timeout for the same reason.
-      - name: authorization firestore store emulator suite (-tags=integration)
-        working-directory: pockets/authorization/stores/firestore
-        env:
-          FIRESTORE_EMULATOR_HOST: 127.0.0.1:8080
-          FIRESTORE_PROJECT_ID: gopernicus-test
-        run: go test -tags=integration -count=1 -timeout 30m ./...
       # Authentication includes atomic proof consumption and revocation races;
       # allow time for the emulator's contended transaction locks to settle.
       - name: authentication firestore store emulator suite (-tags=integration)
@@ -329,19 +322,18 @@ jobs:
     #   composite index deploy, waited to READY        up to 20 min (loop below)
     #   single-field configuration deploy, settled     up to 10 min (loop below)
     #   connector live suite (its own -timeout 30m)    up to 30 min
-    #   authorization store live suite (-timeout 30m)  up to 30 min
     #   authentication store live suite (-timeout 45m) up to 45 min
     #                                                  -----------------------
-    #                                                  up to 140 min
+    #                                                  up to 110 min
     #
-    # The three go-test steps DO NOT share a budget: each carries its own
+    # The two go-test steps DO NOT share a budget: each carries its own
     # -timeout and they run in sequence, so this ceiling has to cover their sum
-    # PLUS both deploy waits. 150 is that sum with a small margin — the point at
+    # PLUS both deploy waits. 120 is that sum with a small margin — the point at
     # which something is wrong and the run should be killed with its cleanup step
     # still reachable, rather than burning the 6-hour default. A ceiling below
     # the sum is worse than none: it kills a healthy long run in the middle of
     # the last suite and reports it as a live-store failure.
-    timeout-minutes: 150
+    timeout-minutes: 120
     # One live run at a time, repo-wide: two concurrent dispatches would race for
     # index quota in the shared test project and (with FIRESTORE_LIVE_DATABASE_PIN
     # set) for the same database's documents. cancel-in-progress is FALSE on
@@ -364,8 +356,6 @@ jobs:
       # that adds its live step, because a store whose composites were never
       # deployed fails live as FAILED_PRECONDITION that reads like a store bug.
       FIRESTORE_LIVE_INDEXES: >-
-        pockets/authorization/stores/firestore/firestore.indexes.json
-        pockets/authorization/stores/firestore/firestore.audit.indexes.json
         pockets/authentication/stores/firestore/firestore.indexes.json
       # Force-unset. Nothing else in this job writes FIRESTORE_EMULATOR_HOST —
       # this line exists so that a value inherited from anywhere (a future
@@ -785,28 +775,6 @@ jobs:
             --prefix "$RUNNER_TEMP/firestore-live" \
             --minimum 11 --status "${FIRESTORE_LIVE_STATUS:-1}"
 
-      - name: authorization store live suite (-tags='integration,live')
-        if: ${{ !cancelled() && env.LIVE_CONFIGURED == '1' && env.FIRESTORE_INDEXES_READY == '1' }}
-        working-directory: pockets/authorization/stores/firestore
-        run: |
-          set +e
-          go test -json -count=1 -tags='integration,live' -timeout 30m -run 'Live$' ./... \
-            > "$RUNNER_TEMP/firestore-authorization-live.json"
-          status=$?
-          set -e
-          echo "go test exit status: $status"
-          echo "FIRESTORE_AUTHORIZATION_LIVE_STATUS=$status" >> "$GITHUB_ENV"
-          exit 0
-
-      - name: audit the authorization store live tests and skips
-        if: ${{ !cancelled() && env.LIVE_CONFIGURED == '1' && env.FIRESTORE_INDEXES_READY == '1' }}
-        working-directory: pockets/authorization/stores/firestore
-        run: |
-          python3 "$GITHUB_WORKSPACE/.github/scripts/firestore_live_audit.py" \
-            --prefix "$RUNNER_TEMP/firestore-authorization-live" \
-            --minimum 10 --status "${FIRESTORE_AUTHORIZATION_LIVE_STATUS:-1}" \
-            --allow-skip TestRunTransactionalLive
-
       - name: authentication store live suite (-tags='integration,live')
         if: ${{ !cancelled() && env.LIVE_CONFIGURED == '1' && env.FIRESTORE_INDEXES_READY == '1' }}
         working-directory: pockets/authentication/stores/firestore
@@ -848,10 +816,6 @@ jobs:
             ${{ runner.temp }}/firestore-live-expected.txt
             ${{ runner.temp }}/firestore-live-allowed.txt
             ${{ runner.temp }}/firestore-live-audit.txt
-            ${{ runner.temp }}/firestore-authorization-live.json
-            ${{ runner.temp }}/firestore-authorization-live-expected.txt
-            ${{ runner.temp }}/firestore-authorization-live-allowed.txt
-            ${{ runner.temp }}/firestore-authorization-live-audit.txt
             ${{ runner.temp }}/firestore-authentication-live.json
             ${{ runner.temp }}/firestore-authentication-live-expected.txt
             ${{ runner.temp }}/firestore-authentication-live-allowed.txt

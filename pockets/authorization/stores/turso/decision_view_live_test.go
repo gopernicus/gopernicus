@@ -7,6 +7,8 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuples"
+
 	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/mutations"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/relationships"
@@ -40,17 +42,17 @@ func TestDecisionViewBoundedCheckMatchesReadSide(t *testing.T) {
 func TestDecisionViewGlobalRoleUsesCheckedPrincipal(t *testing.T) {
 	ctx := context.Background()
 	db, repos := liveRepos(t)
-	if err := repos.Roles.Assign(ctx, roles.Assignment{SubjectType: "user", SubjectID: "alice", Role: "admin"}); err != nil {
+	if err := assignRole(repos.Tuples, ctx, roles.Assignment{Scope: tuples.Global(), SubjectType: "user", SubjectID: "alice", Role: "admin"}); err != nil {
 		t.Fatal(err)
 	}
-	for _, target := range []mutations.Target{scopeOf("doc", "x"), {Kind: mutations.TargetSubject, Type: "user", ID: "bob"}} {
+	for range 2 {
 		if err := db.InTx(ctx, func(tx *tursodb.Tx) error {
 			view := newDecisionView(tx)
-			yes, err := view.HasRole(ctx, target, "admin", "user", "alice")
+			yes, err := view.Contains(ctx, roleFact("user", "alice", "admin", "", ""))
 			if err != nil || !yes {
 				t.Fatalf("alice global grant lost: %v %v", yes, err)
 			}
-			no, err := view.HasRole(ctx, target, "admin", "user", "bob")
+			no, err := view.Contains(ctx, roleFact("user", "bob", "admin", "", ""))
 			if err != nil || no {
 				t.Fatalf("bob inherited alice grant: %v %v", no, err)
 			}

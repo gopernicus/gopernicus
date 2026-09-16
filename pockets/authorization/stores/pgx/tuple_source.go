@@ -7,8 +7,8 @@ import (
 	"strconv"
 
 	"github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
-	"github.com/gopernicus/gopernicus/pockets/authorization/logic/relationships"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuplecache"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuples"
 	"github.com/gopernicus/gopernicus/sdk"
 )
 
@@ -32,13 +32,15 @@ func (s *tupleSource) Snapshot(ctx context.Context, mirroredReceipt string) (tup
 			return snapshot, err
 		}
 	}
-	columns := "id::text, before_tuple, after_tuple, reset"
+	columns := "o.id::text, o.before_tuple, o.after_tuple, o.reset"
 	if snapshot.Full {
 		// Current facts replace all pending changes. Only their exact identities
 		// are needed for acknowledgement, even if obsolete payloads are invalid.
-		columns = "id::text"
+		columns = "o.id::text"
 	}
-	rows, err := tx.Query(ctx, "SELECT "+columns+" FROM "+s.cfg.schema.Table("iam_tuple_outbox")+" ORDER BY id")
+	// Qualify the numeric source column: ORDER BY id otherwise resolves the
+	// text output alias and reorders grant/revoke events across digit boundaries.
+	rows, err := tx.Query(ctx, "SELECT "+columns+" FROM "+s.cfg.schema.Table("iam_tuple_outbox")+" o ORDER BY o.id")
 	if err != nil {
 		return snapshot, err
 	}
@@ -79,13 +81,13 @@ func (s *tupleSource) Snapshot(ctx context.Context, mirroredReceipt string) (tup
 		return snapshot, err
 	}
 	if snapshot.Full {
-		rows, err := tx.Query(ctx, "SELECT resource_type,resource_id,relation,subject_type,subject_id,subject_relation FROM "+s.cfg.schema.Table("iam_relationships")+" ORDER BY resource_type COLLATE \"C\",resource_id COLLATE \"C\",relation COLLATE \"C\",subject_type COLLATE \"C\",subject_id COLLATE \"C\",subject_relation COLLATE \"C\"")
+		rows, err := tx.Query(ctx, "SELECT scope_kind,resource_type,resource_id,relation,subject_type,subject_id,subject_relation FROM "+s.cfg.schema.Table("iam_tuples")+" ORDER BY scope_kind,resource_type COLLATE \"C\",resource_id COLLATE \"C\",relation COLLATE \"C\",subject_type COLLATE \"C\",subject_id COLLATE \"C\",subject_relation COLLATE \"C\"")
 		if err != nil {
 			return snapshot, err
 		}
 		for rows.Next() {
-			var tuple relationships.CreateRelationship
-			if err := rows.Scan(&tuple.ResourceType, &tuple.ResourceID, &tuple.Relation, &tuple.SubjectType, &tuple.SubjectID, &tuple.SubjectRelation); err != nil {
+			var tuple tuples.Tuple
+			if err := rows.Scan(&tuple.Scope.Kind, &tuple.Scope.Type, &tuple.Scope.ID, &tuple.Relation, &tuple.Subject.Type, &tuple.Subject.ID, &tuple.Subject.Relation); err != nil {
 				rows.Close()
 				return snapshot, err
 			}
@@ -103,11 +105,12 @@ func (s *tupleSource) Snapshot(ctx context.Context, mirroredReceipt string) (tup
 	return snapshot, tx.Commit()
 }
 
-func decodeTuple(data []byte) (*relationships.CreateRelationship, error) {
+func decodeTuple(data []byte) (*tuples.Tuple, error) {
 	if data == nil {
 		return nil, nil
 	}
 	var row struct {
+		ScopeKind       *int    `json:"scope_kind"`
 		ResourceType    *string `json:"resource_type"`
 		ResourceID      *string `json:"resource_id"`
 		Relation        *string `json:"relation"`
@@ -118,10 +121,10 @@ func decodeTuple(data []byte) (*relationships.CreateRelationship, error) {
 	if err := json.Unmarshal(data, &row); err != nil {
 		return nil, fmt.Errorf("tuple cache payload: %w: %v", tuplecache.ErrUnavailable, err)
 	}
-	if row.ResourceType == nil || row.ResourceID == nil || row.Relation == nil || row.SubjectType == nil || row.SubjectID == nil || row.SubjectRelation == nil {
+	if row.ScopeKind == nil || (*row.ScopeKind != 1 && *row.ScopeKind != 2) || row.ResourceType == nil || row.ResourceID == nil || row.Relation == nil || row.SubjectType == nil || row.SubjectID == nil || row.SubjectRelation == nil {
 		return nil, tuplecache.ErrUnavailable
 	}
-	tuple := &relationships.CreateRelationship{ResourceType: *row.ResourceType, ResourceID: *row.ResourceID, Relation: *row.Relation, SubjectType: *row.SubjectType, SubjectID: *row.SubjectID, SubjectRelation: *row.SubjectRelation}
+	tuple := &tuples.Tuple{Scope: tuples.Scope{Kind: tuples.ScopeKind(*row.ScopeKind), Type: *row.ResourceType, ID: *row.ResourceID}, Relation: *row.Relation, Subject: tuples.SubjectRef{Type: *row.SubjectType, ID: *row.SubjectID, Relation: *row.SubjectRelation}}
 	if err := tuple.Validate(); err != nil {
 		return nil, fmt.Errorf("tuple cache payload: %w: %v", tuplecache.ErrUnavailable, err)
 	}
@@ -142,7 +145,7 @@ func (s *tupleSource) Acknowledge(ctx context.Context, expectedReceipt, receipt 
 		eventIDs[i] = parsed
 	}
 	return s.db.InTx(ctx, func(tx *pgxdb.Tx) error {
-		result, err := tx.Exec(ctx, "UPDATE "+s.cfg.schema.Table("iam_tuple_cache")+" SET receipt=$1 WHERE slot=1 AND protocol=1 AND identity=$2 AND receipt=$3", receipt, s.identity, expectedReceipt)
+		result, err := tx.Exec(ctx, "UPDATE "+s.cfg.schema.Table("iam_tuple_cache")+" SET receipt=$1 WHERE slot=1 AND protocol=2 AND identity=$2 AND receipt=$3", receipt, s.identity, expectedReceipt)
 		if err != nil {
 			return err
 		}

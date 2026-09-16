@@ -96,7 +96,7 @@ func assertKeysetSweep(t *testing.T, name string, lookup func(after string, limi
 // runRelationshipKeyset is the Relationship/LookupKeyset family: the keyset
 // contract of the three relationship lookup methods (after exclusive, limit
 // capping, distinct ids in byte order) plus the union-relation descendant walk.
-func runRelationshipKeyset(t *testing.T, newRepos func(t *testing.T) authorization.Repositories) {
+func runRelationshipKeyset(t *testing.T, newRepos func(t *testing.T) Repositories) {
 	ctx := context.Background()
 
 	t.Run("Direct", func(t *testing.T) {
@@ -190,80 +190,24 @@ func runRelationshipKeyset(t *testing.T, newRepos func(t *testing.T) authorizati
 	})
 }
 
-// runRolesKeyset is the Roles/RolesLookupKeyset family: the keyset contract of
-// role.Storer.LookupResourceIDsBySubjectAndRoles, including the two answers no
-// other lookup has — a global grant of a QUERIED role is unrestricted with no
-// ids at all, and an empty role set is nothing.
-func runRolesKeyset(t *testing.T, newRepos func(t *testing.T) authorization.Repositories) {
-	ctx := context.Background()
-	queried := []string{"auditor", "viewer"}
-
-	t.Run("Scoped", func(t *testing.T) {
-		s := newRepos(t).Roles
-		for _, id := range keysetIDs {
-			assign(t, s, "user", "u1", "auditor", "project", id)
-		}
-		// project:a is granted by a SECOND queried role: it must be returned ONCE.
-		assign(t, s, "user", "u1", "viewer", "project", "a")
-		// A role OUTSIDE the queried set grants nothing here.
-		assign(t, s, "user", "u1", "editor", "project", "p_unlisted")
-		// A queried role on ANOTHER resource type never leaks in.
-		assign(t, s, "user", "u1", "auditor", "dataset", "ds1")
-
-		assertKeysetSweep(t, "LookupResourceIDsBySubjectAndRoles", func(after string, limit int) ([]string, error) {
-			ids, unrestricted, err := s.LookupResourceIDsBySubjectAndRoles(ctx, "user", "u1", "project", queried, after, limit)
-			if unrestricted {
-				t.Fatalf("scoped grants must never report unrestricted")
-			}
-			return ids, err
-		})
-	})
-
-	t.Run("GlobalQueriedRoleIsUnrestricted", func(t *testing.T) {
-		s := newRepos(t).Roles
-		assign(t, s, "user", "u1", "viewer", "", "")
-		assign(t, s, "user", "u1", "auditor", "project", "p1")
-
-		ids, unrestricted, err := s.LookupResourceIDsBySubjectAndRoles(ctx, "user", "u1", "project", queried, "", 100)
-		if err != nil {
-			t.Fatalf("LookupResourceIDsBySubjectAndRoles: %v", err)
-		}
-		if !unrestricted {
-			t.Fatalf("a global grant of a queried role must be unrestricted, got ids %v", ids)
-		}
-		if ids != nil {
-			t.Fatalf("unrestricted names no ids to page, got %v", ids)
-		}
-	})
-
-	t.Run("GlobalUnqueriedRoleIsNotUnrestricted", func(t *testing.T) {
-		s := newRepos(t).Roles
-		// Held globally, but the query does not name it: it grants nothing.
-		assign(t, s, "user", "u1", "editor", "", "")
-		assign(t, s, "user", "u1", "auditor", "project", "p1")
-
-		ids, unrestricted, err := s.LookupResourceIDsBySubjectAndRoles(ctx, "user", "u1", "project", queried, "", 100)
-		if err != nil {
-			t.Fatalf("LookupResourceIDsBySubjectAndRoles: %v", err)
-		}
-		if unrestricted {
-			t.Fatalf("a global grant of an UNQUERIED role must not be unrestricted")
-		}
-		if want := []string{"p1"}; !slices.Equal(ids, want) {
-			t.Fatalf("scoped page = %v, want %v", ids, want)
-		}
-	})
-
-	t.Run("EmptyRolesIsNothing", func(t *testing.T) {
-		s := newRepos(t).Roles
-		// Even a global grant: with no roles queried there is nothing to satisfy.
-		assign(t, s, "user", "u1", "viewer", "", "")
-
-		ids, unrestricted, err := s.LookupResourceIDsBySubjectAndRoles(ctx, "user", "u1", "project", nil, "", 100)
-		if err != nil || unrestricted || ids != nil {
-			t.Fatalf("empty roles must be (nil, false, nil), got (%v, %v, %v)", ids, unrestricted, err)
-		}
-	})
+// runRolesKeyset exercises exact-scoped role lookup through the unified model.
+func runRolesKeyset(t *testing.T, newRepos func(*testing.T) Repositories) {
+	r := newRepos(t)
+	for _, id := range keysetIDs {
+		assign(t, r.Tuples, "user", "u1", "auditor", "project", id)
+	}
+	assign(t, r.Tuples, "user", "u1", "viewer", "project", "a")
+	assign(t, r.Tuples, "user", "u1", "auditor", "", "")
+	svc := newDecisionService(t, r, authorization.WithModel(rolePolicyModel()))
+	got := assertPagedParityAt(t, svc, authmodel.PrincipalRef{Type: "user", ID: "u1"}, "audit", "project", []int{1, 2, 3})
+	want := slices.Clone(keysetIDs)
+	slices.Sort(want)
+	if !slices.Equal(got, want) {
+		t.Fatalf("scoped keyset %v want %v", got, keysetIDs)
+	}
+	if projectLookup(t, svc, "u1", "audit").Unrestricted {
+		t.Fatal("global auditor implicitly widened scoped policy")
+	}
 }
 
 // =============================================================================
@@ -415,32 +359,32 @@ func assertRefusedCursor(t *testing.T, svc authorization.Components, what string
 // same-permission self relations so one hierarchy path can ALTERNATE them —
 // while doc.edit and org.view give the cursor-binding cases a different
 // permission and a different resource type to present a cursor against.
-func pagingSchema() relationships.Schema {
-	return relationships.NewSchema([]relationships.ResourceSchema{
-		{Name: "org", Def: relationships.ResourceTypeDef{
-			Relations: map[string]relationships.RelationDef{
-				"admin": {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "user"}}},
+func pagingSchema() decisions.Model {
+	return decisions.NewSchema([]decisions.ResourceSchema{
+		{Name: "org", Def: decisions.ResourceTypeDef{
+			Relations: map[string]decisions.RelationDef{
+				"admin": {AllowedSubjects: []decisions.SubjectTypeRef{{Type: "user"}}},
 			},
-			Permissions: map[string]relationships.PermissionRule{
-				"view": relationships.AnyOf(relationships.Direct("admin")),
+			Permissions: map[string]decisions.Expression{
+				"view": decisions.AnyOf(decisions.Direct("admin")),
 			},
 		}},
-		{Name: "doc", Def: relationships.ResourceTypeDef{
-			Relations: map[string]relationships.RelationDef{
-				"viewer": {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "user"}}},
-				"editor": {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "user"}}},
-				"parent": {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "doc"}}},
-				"folder": {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "doc"}}},
-				"org":    {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "org"}}},
+		{Name: "doc", Def: decisions.ResourceTypeDef{
+			Relations: map[string]decisions.RelationDef{
+				"viewer": {AllowedSubjects: []decisions.SubjectTypeRef{{Type: "user"}}},
+				"editor": {AllowedSubjects: []decisions.SubjectTypeRef{{Type: "user"}}},
+				"parent": {AllowedSubjects: []decisions.SubjectTypeRef{{Type: "doc"}}},
+				"folder": {AllowedSubjects: []decisions.SubjectTypeRef{{Type: "doc"}}},
+				"org":    {AllowedSubjects: []decisions.SubjectTypeRef{{Type: "org"}}},
 			},
-			Permissions: map[string]relationships.PermissionRule{
-				"view": relationships.AnyOf(
-					relationships.Direct("viewer"),
-					relationships.Through("org", "view"),
-					relationships.Through("parent", "view"),
-					relationships.Through("folder", "view"),
+			Permissions: map[string]decisions.Expression{
+				"view": decisions.AnyOf(
+					decisions.Direct("viewer"),
+					decisions.Through("org", "view"),
+					decisions.Through("parent", "view"),
+					decisions.Through("folder", "view"),
 				),
-				"edit": relationships.AnyOf(relationships.Direct("editor")),
+				"edit": decisions.AnyOf(decisions.Direct("editor")),
 			},
 		}},
 	})
@@ -449,18 +393,18 @@ func pagingSchema() relationships.Schema {
 // changedPagingSchema is pagingSchema after a deploy adds one relation. doc.view
 // is untouched, so the enumeration is identical — the only thing that changed is
 // the schema DIGEST, which is exactly what a cursor is bound to.
-func changedPagingSchema() relationships.Schema {
+func changedPagingSchema() decisions.Model {
 	schema := pagingSchema()
 	doc := schema.ResourceTypes["doc"]
-	doc.Relations["commenter"] = relationships.RelationDef{AllowedSubjects: []relationships.SubjectTypeRef{{Type: "user"}}}
-	doc.Permissions["edit"] = relationships.AnyOf(relationships.Direct("editor"), relationships.Direct("commenter"))
+	doc.Relations["commenter"] = decisions.RelationDef{AllowedSubjects: []decisions.SubjectTypeRef{{Type: "user"}}}
+	doc.Permissions["edit"] = decisions.AnyOf(decisions.Direct("editor"), decisions.Direct("commenter"))
 	schema.ResourceTypes["doc"] = doc
 	return schema
 }
 
-func newPagingService(t *testing.T, repos authorization.Repositories, schema relationships.Schema, limits authmodel.EvaluationLimits) authorization.Components {
+func newPagingService(t *testing.T, repos Repositories, schema decisions.Model, limits authmodel.EvaluationLimits) authorization.Components {
 	t.Helper()
-	comps, err := authorization.New(repos, authorization.WithRelationshipModel(schema), authorization.WithLimits(limits))
+	comps, err := authorization.New(repos.Repositories, authorization.WithModel(schema), authorization.WithLimits(limits))
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
@@ -468,10 +412,10 @@ func newPagingService(t *testing.T, repos authorization.Repositories, schema rel
 }
 
 // runLookupPagedParity is the Parity/LookupPagedParity family (plan A5): the
-// relationship kind's PAGED enumeration proved equal to its plain one over the
+// graph view's PAGED enumeration proved equal to its plain one over the
 // union of pages, plus the cursor-binding and budget boundaries that make the
 // continuation safe to hand a client.
-func runLookupPagedParity(t *testing.T, newRepos func(t *testing.T) authorization.Repositories) {
+func runLookupPagedParity(t *testing.T, newRepos func(t *testing.T) Repositories) {
 	ctx := context.Background()
 
 	t.Run("OracleUniverse", func(t *testing.T) {
@@ -586,16 +530,16 @@ func runLookupPagedParity(t *testing.T, newRepos func(t *testing.T) authorizatio
 	})
 }
 
-// runRolesPagedParity is the Parity/RolesPagedParity family: the roles kind's
+// runRolesPagedParity is the Parity/RolesPagedParity family: the exact-role view's
 // paged enumeration over its own indexed resource-id lookup, proved equal to the
 // plain assignment walk, plus the answers only this kind has (a global grant) and
 // its own model-digest cursor binding.
-func runRolesPagedParity(t *testing.T, newRepos func(t *testing.T) authorization.Repositories) {
+func runRolesPagedParity(t *testing.T, newRepos func(t *testing.T) Repositories) {
 	ctx := context.Background()
 
 	t.Run("ScopedWalk", func(t *testing.T) {
-		repos := rolesOnly(newRepos(t))
-		comps := newRoleModelService(t, repos, authorization.WithRoleModel(decisionRoleModel()))
+		repos := newRepos(t)
+		comps := newDecisionService(t, repos, authorization.WithModel(rolePolicyModel()))
 
 		// The same multi-page fixture RolesMultiPageWalk seeds, now paged by the
 		// DECISION surface rather than internally: more assignments than one
@@ -605,12 +549,12 @@ func runRolesPagedParity(t *testing.T, newRepos func(t *testing.T) authorization
 		for i := 0; i < rolesWalkAssignments; i++ {
 			id := walkProjectID(i)
 			want = append(want, id)
-			assign(t, repos.Roles, "user", "u_walk", "auditor", "project", id)
+			assign(t, repos.Tuples, "user", "u_walk", "auditor", "project", id)
 		}
 		// A non-granting role and another resource type inside the same subject's
 		// assignments: neither may enter any page.
-		assign(t, repos.Roles, "user", "u_walk", "viewer", "project", "p_view_only")
-		assign(t, repos.Roles, "user", "u_walk", "auditor", "dataset", "ds1")
+		assign(t, repos.Tuples, "user", "u_walk", "viewer", "project", "p_view_only")
+		assign(t, repos.Tuples, "user", "u_walk", "auditor", "dataset", "ds1")
 
 		got := assertPagedParityAt(t, comps, authmodel.PrincipalRef{Type: "user", ID: "u_walk"}, "audit", "project", []int{1, 7, 50})
 		if !slices.Equal(got, want) {
@@ -619,12 +563,12 @@ func runRolesPagedParity(t *testing.T, newRepos func(t *testing.T) authorization
 	})
 
 	t.Run("DuplicateGrantingRolesAppearOnce", func(t *testing.T) {
-		repos := rolesOnly(newRepos(t))
-		comps := newRoleModelService(t, repos, authorization.WithRoleModel(decisionRoleModel()))
+		repos := newRepos(t)
+		comps := newDecisionService(t, repos, authorization.WithModel(rolePolicyModel()))
 		// project/view is granted by BOTH auditor and viewer; u1 holds both on p1.
-		assign(t, repos.Roles, "user", "u1", "auditor", "project", "p1")
-		assign(t, repos.Roles, "user", "u1", "viewer", "project", "p1")
-		assign(t, repos.Roles, "user", "u1", "auditor", "project", "p2")
+		assign(t, repos.Tuples, "user", "u1", "auditor", "project", "p1")
+		assign(t, repos.Tuples, "user", "u1", "viewer", "project", "p1")
+		assign(t, repos.Tuples, "user", "u1", "auditor", "project", "p2")
 
 		got := assertPagedParityAt(t, comps, authmodel.PrincipalRef{Type: "user", ID: "u1"}, "view", "project", []int{1, 2})
 		if want := []string{"p1", "p2"}; !slices.Equal(got, want) {
@@ -633,8 +577,8 @@ func runRolesPagedParity(t *testing.T, newRepos func(t *testing.T) authorization
 	})
 
 	t.Run("GlobalGrantHasNoPage", func(t *testing.T) {
-		repos := rolesOnly(newRepos(t))
-		comps := newRoleModelService(t, repos, authorization.WithRoleModel(decisionRoleModel()))
+		repos := newRepos(t)
+		comps := newDecisionService(t, repos, authorization.WithModel(rolePolicyModel()))
 		grantRole(t, repos, comps.SystemMutator, "user", "u_global", "viewer", "", "")
 
 		res, err := comps.Decisions.LookupResourceIDPage(ctx, decisions.ResourceIDPageRequest{
@@ -648,35 +592,31 @@ func runRolesPagedParity(t *testing.T, newRepos func(t *testing.T) authorization
 		}
 	})
 
-	t.Run("CursorRefusedAfterRoleModelChange", func(t *testing.T) {
-		repos := rolesOnly(newRepos(t))
-		comps := newRoleModelService(t, repos, authorization.WithRoleModel(decisionRoleModel()))
+	t.Run("CursorRefusedAfterPolicyChange", func(t *testing.T) {
+		repos := newRepos(t)
+		comps := newDecisionService(t, repos, authorization.WithModel(rolePolicyModel()))
 		grantRole(t, repos, comps.SystemMutator, "user", "u1", "auditor", "project", "p1")
 		grantRole(t, repos, comps.SystemMutator, "user", "u1", "auditor", "project", "p2")
 
 		principal := authmodel.PrincipalRef{Type: "user", ID: "u1"}
 		cursor := firstPage(t, comps, principal, "audit", "project", 1).NextCursor
 
-		// The roles kind binds its cursors to a deterministic digest of its own
+		// The exact-role view binds its cursors to a deterministic digest of its own
 		// compiled model, symmetrically with the relationship schema digest.
-		changed := newRoleModelService(t, repos, authorization.WithRoleModel(changedDecisionRoleModel()))
+		changed := newDecisionService(t, repos, authorization.WithModel(changedRolePolicyModel()))
 		assertRefusedCursor(t, changed, "after a role-model change", decisions.ResourceIDPageRequest{
 			Principal: principal, Permission: "audit", ResourceType: "project", Limit: 1, After: cursor,
 		})
 	})
 }
 
-// changedDecisionRoleModel is decisionRoleModel after a deploy adds one role to
+// changedRolePolicyModel is rolePolicyModel after a deploy adds one role to
 // the same resource type — a different compiled model, and therefore a different
 // digest and a different cursor fingerprint.
-func changedDecisionRoleModel() authmodel.RoleModel {
-	return authmodel.RoleModel{ResourceTypes: map[string]authmodel.RoleTypeDef{
-		"project": {
-			Roles: []string{"auditor", "steward", "viewer"},
-			Permissions: map[string][]string{
-				"audit": {"auditor", "steward"},
-				"view":  {"auditor", "viewer"},
-			},
-		},
-	}}
+func changedRolePolicyModel() decisions.Model {
+	model := rolePolicyModel()
+	rt := model.ResourceTypes["project"]
+	rt.Permissions["audit"] = decisions.Any(decisions.RoleIn("auditor"), decisions.RoleIn("steward"))
+	model.ResourceTypes["project"] = rt
+	return model
 }

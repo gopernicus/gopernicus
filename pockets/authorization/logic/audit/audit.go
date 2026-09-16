@@ -10,9 +10,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	authmodel "github.com/gopernicus/gopernicus/pockets/authorization/logic/model"
-	"github.com/gopernicus/gopernicus/pockets/authorization/logic/relationships"
-	"github.com/gopernicus/gopernicus/pockets/authorization/logic/roles"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuples"
 	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/pkg/list"
 )
@@ -35,13 +33,13 @@ func (s Source) Validate() error {
 		return fmt.Errorf("audit source requires exactly one actor or system: %w", sdk.ErrInvalidInput)
 	}
 	if actor {
-		if err := authmodel.ValidateRefField("audit actor type", s.ActorType); err != nil {
+		if err := tuples.ValidateRefField("audit actor type", s.ActorType); err != nil {
 			return err
 		}
-		if err := authmodel.ValidateRefField("audit actor id", s.ActorID); err != nil {
+		if err := tuples.ValidateRefField("audit actor id", s.ActorID); err != nil {
 			return err
 		}
-	} else if err := authmodel.ValidateRefField("audit system", s.System); err != nil {
+	} else if err := tuples.ValidateRefField("audit system", s.System); err != nil {
 		return err
 	}
 	if len(s.Reason) > MaxReasonLen || !utf8.ValidString(s.Reason) || strings.ContainsRune(s.Reason, 0) {
@@ -73,31 +71,26 @@ const (
 	ActionRemoved Action = "removed"
 )
 
-// Change names exactly one complete tuple or role assignment. Replacement is
-// represented by removal of the old fact and addition of the new fact.
+// Change identifies one canonical fact delta. A swap is one removal and one addition.
 type Change struct {
-	Action       Action                            `json:"action"`
-	Relationship *relationships.CreateRelationship `json:"relationship,omitempty"`
-	Role         *roles.Assignment                 `json:"role,omitempty"`
+	Action Action       `json:"action"`
+	Tuple  tuples.Tuple `json:"tuple"`
 }
 
 func (c Change) Validate() error {
 	if c.Action != ActionAdded && c.Action != ActionRemoved {
 		return fmt.Errorf("invalid audit action %q: %w", c.Action, sdk.ErrInvalidInput)
 	}
-	if (c.Relationship == nil) == (c.Role == nil) {
-		return fmt.Errorf("audit change requires exactly one relationship or role: %w", sdk.ErrInvalidInput)
-	}
-	if c.Relationship != nil {
-		return c.Relationship.Validate()
-	}
-	return c.Role.Validate()
+	return c.Tuple.Validate()
 }
+
+const EncodingTuple = "tuple/v2"
 
 // Record stores one actual fact change. EventID groups the records of one
 // changed operation; it is generated internally and carries no replay semantics.
 // ID appends a colon and a one-based, 20-digit ordinal to that event ID.
 type Record struct {
+	Encoding   string    `json:"encoding"`
 	ID         string    `json:"id"`
 	EventID    string    `json:"event_id"`
 	OccurredAt time.Time `json:"occurred_at"`
@@ -123,10 +116,10 @@ func (f Filter) Validate() error {
 		if pair.a == "" && pair.b == "" {
 			continue
 		}
-		if err := authmodel.ValidateRefField("audit filter "+pair.name+" type", pair.a); err != nil {
+		if err := tuples.ValidateRefField("audit filter "+pair.name+" type", pair.a); err != nil {
 			return err
 		}
-		if err := authmodel.ValidateRefField("audit filter "+pair.name+" id", pair.b); err != nil {
+		if err := tuples.ValidateRefField("audit filter "+pair.name+" id", pair.b); err != nil {
 			return err
 		}
 	}
@@ -138,8 +131,8 @@ var DefaultOrder = list.NewOrder("occurred_at", list.DESC)
 
 // Reader lists retained history even when recording new changes is disabled.
 // Records order by occurred_at then ID in the requested direction (default DESC).
-// Both cursor and offset strategies support optional totals. Returned records
-// own their pointer fields; mutating a result cannot change retained history.
+// Both cursor and offset strategies support optional totals. Records contain
+// owned values; mutating a result cannot change retained history.
 // Hosts own access control, retention and presentation; no audit HTTP route is
 // installed by this capability.
 type Reader interface {
@@ -162,7 +155,7 @@ func NewRecords(ctx context.Context, changes []Change, now time.Time) ([]Record,
 		change         Change
 		added, removed bool
 	}
-	byKey := make(map[string]delta, len(changes))
+	byKey := make(map[tuples.Tuple]delta, len(changes))
 	for _, c := range changes {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -170,9 +163,9 @@ func NewRecords(ctx context.Context, changes []Change, now time.Time) ([]Record,
 		if err := c.Validate(); err != nil {
 			return nil, err
 		}
-		key := factKey(c)
+		key := c.Tuple
 		d := byKey[key]
-		d.change = cloneChange(c)
+		d.change = c
 		if c.Action == ActionAdded {
 			d.added = true
 		} else {
@@ -180,13 +173,13 @@ func NewRecords(ctx context.Context, changes []Change, now time.Time) ([]Record,
 		}
 		byKey[key] = d
 	}
-	keys := make([]string, 0, len(byKey))
+	keys := make([]tuples.Tuple, 0, len(byKey))
 	for key, d := range byKey {
 		if d.added != d.removed {
 			keys = append(keys, key)
 		}
 	}
-	slices.Sort(keys)
+	slices.SortFunc(keys, tuples.Compare)
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -206,29 +199,10 @@ func NewRecords(ctx context.Context, changes []Change, now time.Time) ([]Record,
 		} else {
 			d.change.Action = ActionRemoved
 		}
-		out = append(out, Record{ID: fmt.Sprintf("%s:%020d", eventID, i+1), EventID: eventID, OccurredAt: occurredAt, Source: source, Change: d.change})
+		out = append(out, Record{Encoding: EncodingTuple, ID: fmt.Sprintf("%s:%020d", eventID, i+1), EventID: eventID, OccurredAt: occurredAt, Source: source, Change: d.change})
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	return out, nil
-}
-
-func factKey(c Change) string {
-	if r := c.Relationship; r != nil {
-		return strings.Join([]string{"relationship", r.ResourceType, r.ResourceID, r.Relation, r.SubjectType, r.SubjectID, r.SubjectRelation}, "\x01")
-	}
-	r := c.Role
-	return strings.Join([]string{"role", r.SubjectType, r.SubjectID, r.Role, r.ResourceType, r.ResourceID}, "\x01")
-}
-func cloneChange(c Change) Change {
-	if c.Relationship != nil {
-		r := *c.Relationship
-		c.Relationship = &r
-	}
-	if c.Role != nil {
-		r := *c.Role
-		c.Role = &r
-	}
-	return c
 }

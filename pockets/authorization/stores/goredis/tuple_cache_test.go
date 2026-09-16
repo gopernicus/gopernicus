@@ -15,8 +15,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gopernicus/gopernicus/pockets/authorization/logic/relationships"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuplecache"
+	tuplefacts "github.com/gopernicus/gopernicus/pockets/authorization/logic/tuples"
 	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/redis/go-redis/v9"
 )
@@ -36,11 +36,11 @@ func TestTupleCacheRawSetsAndTargetedChanges(t *testing.T) {
 	}
 	// Full tuples already represent these changes. A reset event with no payload
 	// is deliberately allowed here and must not be re-applied.
-	if err := c.Publish(ctx, tuplecache.State{}, state, tuplecache.Snapshot{Full: true, Tuples: []relationships.CreateRelationship{a, a, b}, Changes: []tuplecache.Change{{}}}, time.Minute); err != nil {
+	if err := c.Publish(ctx, tuplecache.State{}, state, tuplecache.Snapshot{Full: true, Tuples: []tuplefacts.Tuple{a, a, b}, Changes: []tuplecache.Change{{}}}, time.Minute); err != nil {
 		t.Fatal(err)
 	}
-	assertSets(t, c, state, []tuplecache.SetKey{forward(a), reverse(a), forward(tuple("space", "missing", "viewer", "user", "x", ""))}, [][]relationships.SubjectRef{{subject(a)}, {resource(a)}, {}})
-	untouched := client.HGet(ctx, c.key, setField(false, toWire(resource(b)))).Val()
+	assertSets(t, c, state, []tuplecache.SetKey{forward(a), reverse(a), forward(tuple("space", "missing", "viewer", "user", "x", ""))}, [][]tuplefacts.Tuple{{a}, {a}, {}})
+	untouched := client.HGet(ctx, c.key, setField(forward(b))).Val()
 	updated := tuple("space", "a", "viewer", "team", "engineering", "member")
 	membership := tuple("team", "engineering", "member", "user", "alice", "")
 	next := tuplecache.State{Binding: "store", Receipt: "updated"}
@@ -48,8 +48,8 @@ func TestTupleCacheRawSetsAndTargetedChanges(t *testing.T) {
 	if err := c.Publish(ctx, state, next, tuplecache.Snapshot{Changes: changes}, time.Minute); err != nil {
 		t.Fatal(err)
 	}
-	assertSets(t, c, next, []tuplecache.SetKey{forward(updated), reverse(a), reverse(updated), reverse(membership)}, [][]relationships.SubjectRef{{subject(updated)}, {resource(membership)}, {resource(updated)}, {resource(membership)}})
-	if got := client.HGet(ctx, c.key, setField(false, toWire(resource(b)))).Val(); got != untouched {
+	assertSets(t, c, next, []tuplecache.SetKey{forward(updated), reverse(a), reverse(updated), reverse(membership)}, [][]tuplefacts.Tuple{{updated}, {membership}, {updated}, {membership}})
+	if got := client.HGet(ctx, c.key, setField(forward(b))).Val(); got != untouched {
 		t.Fatal("unrelated set changed")
 	}
 	if _, err := c.Read(ctx, state, nil); !errors.Is(err, tuplecache.ErrUnavailable) {
@@ -62,8 +62,8 @@ func TestTupleCacheRawSetsAndTargetedChanges(t *testing.T) {
 	if err := c.Publish(ctx, next, last, tuplecache.Snapshot{Changes: []tuplecache.Change{{Before: &updated}, {Before: &updated}}}, time.Minute); err != nil {
 		t.Fatal(err)
 	}
-	assertSets(t, c, last, []tuplecache.SetKey{forward(updated), reverse(updated)}, [][]relationships.SubjectRef{{}, {}})
-	if client.HExists(ctx, c.key, setField(false, toWire(resource(updated)))).Val() {
+	assertSets(t, c, last, []tuplecache.SetKey{forward(updated), reverse(updated)}, [][]tuplefacts.Tuple{{}, {}})
+	if client.HExists(ctx, c.key, setField(forward(updated))).Val() {
 		t.Fatal("empty index field retained")
 	}
 }
@@ -71,23 +71,23 @@ func TestTupleCacheRawSetsAndTargetedChanges(t *testing.T) {
 func TestTupleCacheExactOpaqueReferences(t *testing.T) {
 	client, _ := startRedis(t, "", false)
 	c := newCache(t, client)
-	tuples := []relationships.CreateRelationship{
-		tuple("sp:ace", "a#b@\"\\\x00\xff", "view#er", "team", "a:b", "member"),
+	tuples := []tuplefacts.Tuple{
+		tuple("sp:ace", "a#b@\"\\é", "view#er", "team", "a:b", "member"),
 		tuple("sp", "ace:a#b", "view#er", "team:a", "b", "member"),
-		tuple("space", "\xfb\xff", "viewer", "user", "\xff\xff", ""),
+		tuple("space", "東京", "viewer", "user", "éé", ""),
 	}
 	state := tuplecache.State{Binding: "store", Receipt: "opaque"}
 	if err := c.Publish(context.Background(), tuplecache.State{}, state, tuplecache.Snapshot{Full: true, Tuples: tuples}, time.Minute); err != nil {
 		t.Fatal(err)
 	}
 	for _, row := range tuples {
-		assertSets(t, c, state, []tuplecache.SetKey{forward(row), reverse(row)}, [][]relationships.SubjectRef{{subject(row)}, {resource(row)}})
+		assertSets(t, c, state, []tuplecache.SetKey{forward(row), reverse(row)}, [][]tuplefacts.Tuple{{row}, {row}})
 	}
 	next := tuplecache.State{Binding: "store", Receipt: "opaque-delta"}
 	if err := c.Publish(context.Background(), state, next, tuplecache.Snapshot{Changes: []tuplecache.Change{{Before: &tuples[2]}}}, time.Minute); err != nil {
 		t.Fatal(err)
 	}
-	assertSets(t, c, next, []tuplecache.SetKey{forward(tuples[2]), reverse(tuples[2])}, [][]relationships.SubjectRef{{}, {}})
+	assertSets(t, c, next, []tuplecache.SetKey{forward(tuples[2]), reverse(tuples[2])}, [][]tuplefacts.Tuple{{}, {}})
 }
 
 func TestTupleCacheCASAndAtomicIndexes(t *testing.T) {
@@ -96,7 +96,7 @@ func TestTupleCacheCASAndAtomicIndexes(t *testing.T) {
 	ctx := context.Background()
 	row := tuple("space", "a", "viewer", "user", "alice", "")
 	state := tuplecache.State{Binding: "store", Receipt: "first"}
-	if err := c.Publish(ctx, tuplecache.State{}, state, tuplecache.Snapshot{Full: true, Tuples: []relationships.CreateRelationship{row}}, time.Minute); err != nil {
+	if err := c.Publish(ctx, tuplecache.State{}, state, tuplecache.Snapshot{Full: true, Tuples: []tuplefacts.Tuple{row}}, time.Minute); err != nil {
 		t.Fatal(err)
 	}
 	results := make(chan error, 2)
@@ -120,7 +120,7 @@ func TestTupleCacheCASAndAtomicIndexes(t *testing.T) {
 		t.Fatalf("publication winners %d conflicts %d", successes, conflicts)
 	}
 	state, _ = c.State(ctx)
-	assertSets(t, c, state, []tuplecache.SetKey{forward(row), reverse(row)}, [][]relationships.SubjectRef{{}, {}})
+	assertSets(t, c, state, []tuplecache.SetKey{forward(row), reverse(row)}, [][]tuplefacts.Tuple{{}, {}})
 	var wg sync.WaitGroup
 	done := make(chan struct{})
 	readErrors := make(chan error, 1)
@@ -176,7 +176,7 @@ func TestTupleCacheReadinessAndRebuild(t *testing.T) {
 	ctx := context.Background()
 	row := tuple("space", "a", "viewer", "user", "alice", "")
 	state := tuplecache.State{Binding: "store", Receipt: "first"}
-	if err := c.Publish(ctx, tuplecache.State{}, state, tuplecache.Snapshot{Full: true, Tuples: []relationships.CreateRelationship{row}}, time.Minute); err != nil {
+	if err := c.Publish(ctx, tuplecache.State{}, state, tuplecache.Snapshot{Full: true, Tuples: []tuplefacts.Tuple{row}}, time.Minute); err != nil {
 		t.Fatal(err)
 	}
 	if err := client.HSet(ctx, c.key, "!until", 1).Err(); err != nil {
@@ -191,7 +191,7 @@ func TestTupleCacheReadinessAndRebuild(t *testing.T) {
 	if err := c.Publish(ctx, state, state, tuplecache.Snapshot{}, time.Minute); err != nil {
 		t.Fatal(err)
 	}
-	assertSets(t, c, state, []tuplecache.SetKey{forward(row)}, [][]relationships.SubjectRef{{subject(row)}})
+	assertSets(t, c, state, []tuplecache.SetKey{forward(row)}, [][]tuplefacts.Tuple{{row}})
 	if err := client.Del(ctx, c.key).Err(); err != nil {
 		t.Fatal(err)
 	}
@@ -208,17 +208,17 @@ func TestTupleCacheReadinessAndRebuild(t *testing.T) {
 	if err := c.Publish(ctx, tuplecache.State{}, rebuilt, tuplecache.Snapshot{Full: true}, time.Minute); err != nil {
 		t.Fatal(err)
 	}
-	assertSets(t, c, rebuilt, []tuplecache.SetKey{forward(row)}, [][]relationships.SubjectRef{{}})
+	assertSets(t, c, rebuilt, []tuplecache.SetKey{forward(row)}, [][]tuplefacts.Tuple{{}})
 	if err := client.HSet(ctx, c.key, "!receipt", "").Err(); err != nil {
 		t.Fatal(err)
 	}
 	if got, err := c.State(ctx); err != nil || got != (tuplecache.State{}) {
 		t.Fatalf("corrupt mirror: %v %v", got, err)
 	}
-	if err := c.Publish(ctx, tuplecache.State{}, state, tuplecache.Snapshot{Full: true, Tuples: []relationships.CreateRelationship{row}}, time.Minute); err != nil {
+	if err := c.Publish(ctx, tuplecache.State{}, state, tuplecache.Snapshot{Full: true, Tuples: []tuplefacts.Tuple{row}}, time.Minute); err != nil {
 		t.Fatal(err)
 	}
-	assertSets(t, c, state, []tuplecache.SetKey{forward(row)}, [][]relationships.SubjectRef{{subject(row)}})
+	assertSets(t, c, state, []tuplecache.SetKey{forward(row)}, [][]tuplefacts.Tuple{{row}})
 }
 
 func TestTupleCacheRejectsInvalidDataBeforeMutation(t *testing.T) {
@@ -229,7 +229,7 @@ func TestTupleCacheRejectsInvalidDataBeforeMutation(t *testing.T) {
 	other := tuple("space", "b", "viewer", "user", "bob", "")
 	state := tuplecache.State{Binding: "store", Receipt: "first"}
 	next := tuplecache.State{Binding: "store", Receipt: "next"}
-	if err := c.Publish(ctx, tuplecache.State{}, state, tuplecache.Snapshot{Full: true, Tuples: []relationships.CreateRelationship{row, other}}, time.Minute); err != nil {
+	if err := c.Publish(ctx, tuplecache.State{}, state, tuplecache.Snapshot{Full: true, Tuples: []tuplefacts.Tuple{row, other}}, time.Minute); err != nil {
 		t.Fatal(err)
 	}
 	for _, test := range []struct {
@@ -239,7 +239,7 @@ func TestTupleCacheRejectsInvalidDataBeforeMutation(t *testing.T) {
 		want           error
 	}{
 		{"empty change", state, next, tuplecache.Snapshot{Changes: []tuplecache.Change{{}}}, sdk.ErrInvalidInput},
-		{"invalid tuple", state, next, tuplecache.Snapshot{Full: true, Tuples: []relationships.CreateRelationship{{}}}, sdk.ErrInvalidInput},
+		{"invalid tuple", state, next, tuplecache.Snapshot{Full: true, Tuples: []tuplefacts.Tuple{{}}}, sdk.ErrInvalidInput},
 		{"receipt reused", state, state, tuplecache.Snapshot{Changes: []tuplecache.Change{{Before: &row}}}, sdk.ErrInvalidInput},
 		{"wrong binding", state, tuplecache.State{Binding: "other", Receipt: "next"}, tuplecache.Snapshot{}, tuplecache.ErrBinding},
 		{"stale writer", tuplecache.State{Binding: "store", Receipt: "old"}, next, tuplecache.Snapshot{Full: true}, tuplecache.ErrConflict},
@@ -254,7 +254,7 @@ func TestTupleCacheRejectsInvalidDataBeforeMutation(t *testing.T) {
 			}
 		})
 	}
-	field := setField(false, toWire(resource(other)))
+	field := setField(forward(other))
 	if err := client.HSet(ctx, c.key, field, `[["bad"]]`).Err(); err != nil {
 		t.Fatal(err)
 	}
@@ -276,7 +276,7 @@ func TestTupleCacheRestartPersistence(t *testing.T) {
 	ctx := context.Background()
 	row := tuple("space", "a", "viewer", "user", "alice", "")
 	state := tuplecache.State{Binding: "store", Receipt: "persisted"}
-	if err := c.Publish(ctx, tuplecache.State{}, state, tuplecache.Snapshot{Full: true, Tuples: []relationships.CreateRelationship{row}}, time.Minute); err != nil {
+	if err := c.Publish(ctx, tuplecache.State{}, state, tuplecache.Snapshot{Full: true, Tuples: []tuplefacts.Tuple{row}}, time.Minute); err != nil {
 		t.Fatal(err)
 	}
 	server.stop()
@@ -285,7 +285,7 @@ func TestTupleCacheRestartPersistence(t *testing.T) {
 	if got, err := c.State(ctx); err != nil || got != state {
 		t.Fatalf("restored state: %v %v", got, err)
 	}
-	assertSets(t, c, state, []tuplecache.SetKey{forward(row), reverse(row)}, [][]relationships.SubjectRef{{subject(row)}, {resource(row)}})
+	assertSets(t, c, state, []tuplecache.SetKey{forward(row), reverse(row)}, [][]tuplefacts.Tuple{{row}, {row}})
 }
 
 func TestTupleCachePublicationDoesNotRefreshLongBuild(t *testing.T) {
@@ -299,7 +299,7 @@ func TestTupleCachePublicationDoesNotRefreshLongBuild(t *testing.T) {
 	client.AddHook(delayHook{command: "evalsha", script: buildScript.Hash(), duration: 80 * time.Millisecond})
 	row := tuple("space", "a", "viewer", "user", "alice", "")
 	next := tuplecache.State{Binding: "store", Receipt: "late"}
-	if err := c.Publish(ctx, state, next, tuplecache.Snapshot{Full: true, Tuples: []relationships.CreateRelationship{row}}, 40*time.Millisecond); !errors.Is(err, tuplecache.ErrUnavailable) {
+	if err := c.Publish(ctx, state, next, tuplecache.Snapshot{Full: true, Tuples: []tuplefacts.Tuple{row}}, 40*time.Millisecond); !errors.Is(err, tuplecache.ErrUnavailable) {
 		t.Fatalf("late full publication: %v", err)
 	}
 	if got, err := c.State(ctx); err != nil || got != state {
@@ -315,13 +315,13 @@ func TestTupleCacheBatchesBeyondRebuildChunk(t *testing.T) {
 	client, _ := startRedis(t, "", false)
 	c := newCache(t, client)
 	ctx := context.Background()
-	tuples := make([]relationships.CreateRelationship, 600)
+	tuples := make([]tuplefacts.Tuple, 600)
 	keys := make([]tuplecache.SetKey, len(tuples))
-	want := make([][]relationships.SubjectRef, len(tuples))
+	want := make([][]tuplefacts.Tuple, len(tuples))
 	for i := range tuples {
 		tuples[i] = tuple("space", fmt.Sprint(i), "viewer", "user", "alice", "")
 		keys[i] = forward(tuples[i])
-		want[i] = []relationships.SubjectRef{subject(tuples[i])}
+		want[i] = []tuplefacts.Tuple{tuples[i]}
 	}
 	state := tuplecache.State{Binding: "store", Receipt: "full"}
 	if err := c.Publish(ctx, tuplecache.State{}, state, tuplecache.Snapshot{Full: true, Tuples: tuples}, time.Minute); err != nil {
@@ -331,7 +331,7 @@ func TestTupleCacheBatchesBeyondRebuildChunk(t *testing.T) {
 	changes := make([]tuplecache.Change, len(tuples))
 	for i := range tuples {
 		changes[i].Before = &tuples[i]
-		want[i] = []relationships.SubjectRef{}
+		want[i] = []tuplefacts.Tuple{}
 	}
 	next := tuplecache.State{Binding: "store", Receipt: "deleted"}
 	if err := c.Publish(ctx, state, next, tuplecache.Snapshot{Changes: changes}, time.Minute); err != nil {
@@ -349,7 +349,7 @@ func TestTupleCacheInterruptedScriptLeavesUnavailableMirror(t *testing.T) {
 	ctx := context.Background()
 	row := tuple("space", "a", "viewer", "user", "alice", "")
 	state := tuplecache.State{Binding: "store", Receipt: "first"}
-	if err := c.Publish(ctx, tuplecache.State{}, state, tuplecache.Snapshot{Full: true, Tuples: []relationships.CreateRelationship{row}}, time.Minute); err != nil {
+	if err := c.Publish(ctx, tuplecache.State{}, state, tuplecache.Snapshot{Full: true, Tuples: []tuplefacts.Tuple{row}}, time.Minute); err != nil {
 		t.Fatal(err)
 	}
 	// Fail a Redis command after the script has removed the complete marker.
@@ -375,7 +375,7 @@ func TestTupleCacheInterruptedScriptLeavesUnavailableMirror(t *testing.T) {
 	if err := c.Publish(ctx, tuplecache.State{}, next, tuplecache.Snapshot{Full: true}, time.Minute); err != nil {
 		t.Fatal(err)
 	}
-	assertSets(t, c, next, []tuplecache.SetKey{forward(row), reverse(row)}, [][]relationships.SubjectRef{{}, {}})
+	assertSets(t, c, next, []tuplecache.SetKey{forward(row), reverse(row)}, [][]tuplefacts.Tuple{{}, {}})
 }
 
 func TestTupleCacheLostTemporaryHashIsNotRecreated(t *testing.T) {
@@ -440,7 +440,7 @@ func TestTupleCacheConstructor(t *testing.T) {
 	}
 	for _, namespace := range []string{"segovia-v2:dev:authorization", "App_1.2/relationships", "app:build:123"} {
 		cache, err := NewTupleCache(client, namespace)
-		if err != nil || cache.key != "tuplecache:{"+namespace+"}" {
+		if err != nil || cache.key != "tuplecache:v2:{"+namespace+"}" {
 			t.Fatalf("readable namespace %q: %+v/%v", namespace, cache, err)
 		}
 	}
@@ -467,15 +467,15 @@ func TestTupleCacheReadableNamespaces(t *testing.T) {
 			t.Fatalf("fresh namespace inherited a mirror: %+v/%v", got, err)
 		}
 		row := tuple("space", "a", "viewer", "user", namespace, "")
-		if err := cache.Publish(ctx, tuplecache.State{}, state, tuplecache.Snapshot{Full: true, Tuples: []relationships.CreateRelationship{row}}, time.Minute); err != nil {
+		if err := cache.Publish(ctx, tuplecache.State{}, state, tuplecache.Snapshot{Full: true, Tuples: []tuplefacts.Tuple{row}}, time.Minute); err != nil {
 			t.Fatal(err)
 		}
 		caches = append(caches, cache)
-		wantKeys = append(wantKeys, "tuplecache:{"+namespace+"}")
+		wantKeys = append(wantKeys, "tuplecache:v2:{"+namespace+"}")
 	}
 	for i, cache := range caches {
 		row := tuple("space", "a", "viewer", "user", namespaces[i], "")
-		assertSets(t, cache, state, []tuplecache.SetKey{forward(row)}, [][]relationships.SubjectRef{{subject(row)}})
+		assertSets(t, cache, state, []tuplecache.SetKey{forward(row)}, [][]tuplefacts.Tuple{{row}})
 	}
 	keys, err := client.Keys(ctx, "tuplecache:*").Result()
 	slices.Sort(keys)
@@ -497,22 +497,16 @@ func newCache(t testing.TB, client *redis.Client) *TupleCache {
 	return c
 }
 
-func tuple(rt, rid, relation, st, sid, sr string) relationships.CreateRelationship {
-	return relationships.CreateRelationship{ResourceType: rt, ResourceID: rid, Relation: relation, SubjectType: st, SubjectID: sid, SubjectRelation: sr}
+func tuple(rt, rid, relation, st, sid, sr string) tuplefacts.Tuple {
+	return tuplefacts.Tuple{Scope: tuplefacts.On(rt, rid), Relation: relation, Subject: tuplefacts.SubjectRef{Type: st, ID: sid, Relation: sr}}
 }
-func resource(t relationships.CreateRelationship) relationships.SubjectRef {
-	return relationships.SubjectRef{Type: t.ResourceType, ID: t.ResourceID, Relation: t.Relation}
+func forward(t tuplefacts.Tuple) tuplecache.SetKey {
+	return tuplecache.SetKey{Scope: t.Scope, Relation: t.Relation}
 }
-func subject(t relationships.CreateRelationship) relationships.SubjectRef {
-	return relationships.SubjectRef{Type: t.SubjectType, ID: t.SubjectID, Relation: t.SubjectRelation}
+func reverse(t tuplefacts.Tuple) tuplecache.SetKey {
+	return tuplecache.SetKey{Reverse: true, Subject: t.Subject}
 }
-func forward(t relationships.CreateRelationship) tuplecache.SetKey {
-	return tuplecache.SetKey{Ref: resource(t)}
-}
-func reverse(t relationships.CreateRelationship) tuplecache.SetKey {
-	return tuplecache.SetKey{Reverse: true, Ref: subject(t)}
-}
-func assertSets(t *testing.T, c *TupleCache, state tuplecache.State, keys []tuplecache.SetKey, want [][]relationships.SubjectRef) {
+func assertSets(t *testing.T, c *TupleCache, state tuplecache.State, keys []tuplecache.SetKey, want [][]tuplefacts.Tuple) {
 	t.Helper()
 	got, err := c.Read(context.Background(), state, keys)
 	if err != nil {
@@ -529,8 +523,8 @@ func assertSets(t *testing.T, c *TupleCache, state tuplecache.State, keys []tupl
 		}
 	}
 }
-func sortRefs(refs []relationships.SubjectRef) {
-	slices.SortFunc(refs, func(a, b relationships.SubjectRef) int {
+func sortRefs(refs []tuplefacts.Tuple) {
+	slices.SortFunc(refs, func(a, b tuplefacts.Tuple) int {
 		return bytes.Compare([]byte(fmt.Sprintf("%q", a)), []byte(fmt.Sprintf("%q", b)))
 	})
 }

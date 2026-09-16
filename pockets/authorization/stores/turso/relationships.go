@@ -3,14 +3,13 @@ package turso
 import (
 	"context"
 	"database/sql"
-	"fmt"
 	"slices"
 	"sort"
-	"strings"
 
 	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/audit"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/relationships"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuples"
 	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/pkg/list"
 )
@@ -34,7 +33,7 @@ const reachableCTE = `WITH RECURSIVE reachable(atype, aid, arelation) AS (
 	SELECT ?, ?, ''
 	UNION
 	SELECT r.resource_type, r.resource_id, r.relation
-	FROM iam_relationships r
+	FROM (SELECT * FROM main.iam_tuples WHERE scope_kind=2) r
 	JOIN reachable ON r.subject_type = reachable.atype AND r.subject_id = reachable.aid AND r.subject_relation = reachable.arelation
 )`
 
@@ -64,7 +63,7 @@ func newRelationshipStore(db *tursodb.DB, cfg config) *relationshipStore {
 var _ relationships.Storer = (*relationshipStore)(nil)
 
 // tupleKeyExpr preserves the complete tuple in byte-order listing cursors.
-const tupleKeyExpr = "(resource_type || char(1) || resource_id || char(1) || relation || char(1) || subject_type || char(1) || subject_id || char(1) || subject_relation) COLLATE BINARY"
+const tupleKeyExpr = canonicalTupleKeyExpr
 
 type subjectRelationshipRow struct {
 	ResourceType    string `db:"resource_type"`
@@ -100,7 +99,7 @@ func (s *relationshipStore) CheckRelationWithGroupExpansion(ctx context.Context,
 		query := reachableCTE + `
 SELECT EXISTS(
 	SELECT 1
-	FROM iam_relationships r
+	FROM (SELECT * FROM main.iam_tuples WHERE scope_kind=2) r
 	JOIN reachable ON r.subject_type = reachable.atype AND r.subject_id = reachable.aid AND r.subject_relation = reachable.arelation
 	WHERE r.resource_type = ? AND r.resource_id = ? AND r.relation = ?
 )`
@@ -112,7 +111,7 @@ SELECT
 	(SELECT count(*) FROM capped),
 	EXISTS(
 		SELECT 1
-		FROM iam_relationships r
+		FROM (SELECT * FROM main.iam_tuples WHERE scope_kind=2) r
 		JOIN capped ON r.subject_type = capped.atype AND r.subject_id = capped.aid AND r.subject_relation = capped.arelation
 		WHERE r.resource_type = ? AND r.resource_id = ? AND r.relation = ?
 	)`
@@ -148,7 +147,7 @@ func (s *relationshipStore) GetRelationTargets(ctx context.Context, resourceType
 // the DecisionView's RelationTargets on the mutation transaction. Same
 // statement, same row order, same mapping.
 func relationTargets(ctx context.Context, q rowQuerier, resourceType, resourceID, relation string) ([]relationships.RelationTarget, error) {
-	const stmt = `SELECT subject_type, subject_id, subject_relation FROM iam_relationships WHERE resource_type = ? AND resource_id = ? AND relation = ?`
+	const stmt = `SELECT subject_type, subject_id, subject_relation FROM (SELECT * FROM main.iam_tuples WHERE scope_kind=2) WHERE resource_type = ? AND resource_id = ? AND relation = ?`
 	rows, err := q.Query(ctx, stmt, resourceType, resourceID, relation)
 	if err != nil {
 		return nil, err
@@ -178,7 +177,7 @@ func relationTargets(ctx context.Context, q rowQuerier, resourceType, resourceID
 // tuple with the same type/id does not satisfy a concrete probe). Used for the
 // platform-admin data-tuple check and last-owner counting.
 func (s *relationshipStore) CheckRelationExists(ctx context.Context, resourceType, resourceID, relation, subjectType, subjectID string) (bool, error) {
-	const q = `SELECT EXISTS(SELECT 1 FROM iam_relationships WHERE resource_type = ? AND resource_id = ? AND relation = ? AND subject_type = ? AND subject_id = ? AND subject_relation = '')`
+	const q = `SELECT EXISTS(SELECT 1 FROM (SELECT * FROM main.iam_tuples WHERE scope_kind=2) WHERE resource_type = ? AND resource_id = ? AND relation = ? AND subject_type = ? AND subject_id = ? AND subject_relation = '')`
 	return existsQuery(ctx, s.db.QuerierFrom(ctx), q, resourceType, resourceID, relation, subjectType, subjectID)
 }
 
@@ -204,7 +203,7 @@ func (s *relationshipStore) CheckBatchDirect(ctx context.Context, resourceType s
 		}
 		query := reachableCTE + `
 SELECT DISTINCT r.resource_id
-FROM iam_relationships r
+FROM (SELECT * FROM main.iam_tuples WHERE scope_kind=2) r
 JOIN reachable ON r.subject_type = reachable.atype AND r.subject_id = reachable.aid AND r.subject_relation = reachable.arelation
 WHERE r.resource_type = ? AND r.relation = ? AND r.resource_id IN ` + inClause(len(resourceIDs))
 
@@ -228,7 +227,7 @@ WHERE r.resource_type = ? AND r.relation = ? AND r.resource_id IN ` + inClause(l
 cnt AS (SELECT count(*) AS n FROM capped),
 matches AS (
 	SELECT DISTINCT r.resource_id AS rid
-	FROM iam_relationships r
+	FROM (SELECT * FROM main.iam_tuples WHERE scope_kind=2) r
 	JOIN capped ON r.subject_type = capped.atype AND r.subject_id = capped.aid AND r.subject_relation = capped.arelation
 	WHERE r.resource_type = ? AND r.relation = ? AND r.resource_id IN ` + inClause(len(resourceIDs)) + `
 )
@@ -323,7 +322,7 @@ func (s *relationshipStore) filterRelationChunk(ctx context.Context, resourceTyp
 		}
 		query := reachableCTE + `
 SELECT DISTINCT r.resource_id
-FROM iam_relationships r
+FROM (SELECT * FROM main.iam_tuples WHERE scope_kind=2) r
 JOIN reachable ON r.subject_type = reachable.atype AND r.subject_id = reachable.aid AND r.subject_relation = reachable.arelation
 WHERE r.resource_type = ? AND r.relation = ? AND r.resource_id IN ` + inClause(len(resourceIDs)) + `
 ORDER BY r.resource_id`
@@ -341,7 +340,7 @@ ORDER BY r.resource_id`
 cnt AS (SELECT count(*) AS n FROM capped),
 matches AS (
 	SELECT DISTINCT r.resource_id AS rid
-	FROM iam_relationships r
+	FROM (SELECT * FROM main.iam_tuples WHERE scope_kind=2) r
 	JOIN capped ON r.subject_type = capped.atype AND r.subject_id = capped.aid AND r.subject_relation = capped.arelation
 	WHERE r.resource_type = ? AND r.relation = ? AND r.resource_id IN ` + inClause(len(resourceIDs)) + `
 )
@@ -402,7 +401,7 @@ func (s *relationshipStore) relationTargetsForChunk(ctx context.Context, resourc
 	for _, id := range resourceIDs {
 		args = append(args, id)
 	}
-	query := `SELECT resource_id, subject_type, subject_id, subject_relation FROM iam_relationships
+	query := `SELECT resource_id, subject_type, subject_id, subject_relation FROM (SELECT * FROM main.iam_tuples WHERE scope_kind=2)
 WHERE resource_type = ? AND relation = ? AND resource_id IN ` + inClause(len(resourceIDs))
 
 	rows, err := s.reader(ctx).Query(ctx, query, args...)
@@ -425,135 +424,51 @@ WHERE resource_type = ? AND relation = ? AND resource_id IN ` + inClause(len(res
 	return tursodb.MapError(rows.Err())
 }
 
-// CreateRelationships inserts full tuples as one batch. Exact duplicates and
-// competing relations for an already-related subject retain the existing row.
-func (s *relationshipStore) CreateRelationships(ctx context.Context, in []relationships.CreateRelationship) error {
-	return s.write(ctx, func(tx *writeTx) error { return createRelationships(ctx, tx, in) })
+func (s *relationshipStore) tuples() *tupleStore {
+	return newTupleStore(s.db, config{audit: s.audit, tupleBinding: s.tupleBinding})
 }
-
-func createRelationships(ctx context.Context, db *writeTx, in []relationships.CreateRelationship) error {
-	if len(in) == 0 {
-		return nil
+func (s *relationshipStore) CreateRelationships(ctx context.Context, in []relationships.CreateRelationship) error {
+	changes := tuples.Changes{Add: make([]tuples.Tuple, len(in))}
+	for i, row := range in {
+		changes.Add[i] = row.Tuple()
 	}
-	for _, row := range in {
+	return s.tuples().ApplyTuples(ctx, changes)
+}
+func (s *relationshipStore) SetRelationTargets(ctx context.Context, rt, rid, relation string, in []relationships.CreateRelationship) error {
+	subjects := make([]tuples.SubjectRef, len(in))
+	for i, row := range in {
 		if err := row.Validate(); err != nil {
 			return err
 		}
-	}
-
-	const cols = "resource_type, resource_id, relation, subject_type, subject_id, subject_relation"
-	const row = "(?, ?, ?, ?, ?, ?)"
-	var buf strings.Builder
-	fmt.Fprintf(&buf, "INSERT INTO iam_relationships (%s) VALUES ", cols)
-	args := make([]any, 0, len(in)*6)
-	for i, c := range in {
-		if i > 0 {
-			buf.WriteString(", ")
+		if row.ResourceType != rt || row.ResourceID != rid || row.Relation != relation {
+			return sdk.ErrInvalidInput
 		}
-		buf.WriteString(row)
-		args = append(args, c.ResourceType, c.ResourceID, c.Relation, c.SubjectType, c.SubjectID, c.SubjectRelation)
+		subjects[i] = row.Subject()
 	}
-	buf.WriteString(" ON CONFLICT DO NOTHING")
-
-	if _, err := db.relationships(ctx, audit.ActionAdded, buf.String(), args...); err != nil {
+	return s.tuples().ReconcileTuples(ctx, tuples.On(rt, rid), relation, subjects)
+}
+func (s *relationshipStore) DeleteResourceRelationships(ctx context.Context, rt, rid string) error {
+	return s.tuples().DeleteScope(ctx, tuples.On(rt, rid))
+}
+func (s *relationshipStore) DeleteRelationshipTarget(ctx context.Context, rt, rid, relation string, subject relationships.SubjectRef) error {
+	return s.tuples().ApplyTuples(ctx, tuples.Changes{Remove: []tuples.Tuple{{Scope: tuples.On(rt, rid), Relation: relation, Subject: subject}}})
+}
+func (s *relationshipStore) DeleteRelationship(ctx context.Context, rt, rid, relation, st, sid string) error {
+	return s.DeleteRelationshipTarget(ctx, rt, rid, relation, tuples.SubjectRef{Type: st, ID: sid})
+}
+func (s *relationshipStore) DeleteByResourceAndSubject(ctx context.Context, rt, rid, st, sid string) error {
+	scope := tuples.On(rt, rid)
+	subject := tuples.SubjectRef{Type: st, ID: sid}
+	if err := scope.Validate(); err != nil {
 		return err
 	}
-	return nil
-}
-
-// SetRelationTargets atomically reconciles one resource and relation. Ambient
-// calls use a savepoint; locks remain held until the host transaction ends.
-func (s *relationshipStore) SetRelationTargets(ctx context.Context, resourceType, resourceID, relationName string, in []relationships.CreateRelationship) error {
-	desired := make(map[relationships.SubjectRef]relationships.CreateRelationship, len(in))
-	for _, c := range in {
-		if err := c.Validate(); err != nil {
-			return err
-		}
-		if c.ResourceType != resourceType || c.ResourceID != resourceID || c.Relation != relationName {
-			return fmt.Errorf("authorization turso store: SetRelationTargets row is outside requested scope: %w", sdk.ErrInvalidInput)
-		}
-		desired[c.Subject()] = c
-	}
-	rows := make([]relationships.CreateRelationship, 0, len(desired))
-	for _, c := range desired {
-		rows = append(rows, c)
-	}
-
-	return s.write(ctx, func(tx *writeTx) error {
-		return s.setRelationTargetsTx(ctx, tx, resourceType, resourceID, relationName, rows)
-	})
-}
-
-func (s *relationshipStore) setRelationTargetsTx(ctx context.Context, tx *writeTx, resourceType, resourceID, relationName string, rows []relationships.CreateRelationship) error {
-	if len(rows) == 0 {
-		_, err := tx.relationships(ctx, audit.ActionRemoved, `DELETE FROM iam_relationships WHERE resource_type = ? AND resource_id = ? AND relation = ?`, resourceType, resourceID, relationName)
-		return tursodb.MapError(err)
-	}
-
-	var predicate strings.Builder
-	args := make([]any, 0, len(rows)*3)
-	for i, c := range rows {
-		if i > 0 {
-			predicate.WriteString(" OR ")
-		}
-		predicate.WriteString("(subject_type = ? AND subject_id = ? AND subject_relation = ?)")
-		args = append(args, c.SubjectType, c.SubjectID, c.SubjectRelation)
-	}
-	pred := predicate.String()
-
-	conflictArgs := []any{resourceType, resourceID, relationName}
-	conflictArgs = append(conflictArgs, args...)
-	var conflict bool
-	conflictQ := `SELECT EXISTS (SELECT 1 FROM iam_relationships WHERE resource_type = ? AND resource_id = ? AND relation <> ? AND (` + pred + `))`
-	if err := tx.QueryRow(ctx, conflictQ, conflictArgs...).Scan(&conflict); err != nil {
-		return tursodb.MapError(err)
-	}
-	if conflict {
-		return fmt.Errorf("authorization turso store: a desired target already holds a different relation on %s:%s: %w", resourceType, resourceID, sdk.ErrConflict)
-	}
-
-	deleteArgs := []any{resourceType, resourceID, relationName}
-	deleteArgs = append(deleteArgs, args...)
-	deleteQ := `DELETE FROM iam_relationships WHERE resource_type = ? AND resource_id = ? AND relation = ? AND NOT (` + pred + `)`
-	if _, err := tx.relationships(ctx, audit.ActionRemoved, deleteQ, deleteArgs...); err != nil {
-		return tursodb.MapError(err)
-	}
-	return createRelationships(ctx, tx, rows)
-}
-
-// DeleteResourceRelationships removes every tuple for a resource (idempotent).
-func (s *relationshipStore) DeleteResourceRelationships(ctx context.Context, resourceType, resourceID string) error {
-	const q = `DELETE FROM iam_relationships WHERE resource_type = ? AND resource_id = ?`
-	return s.write(ctx, func(tx *writeTx) error {
-		_, err := tx.relationships(ctx, audit.ActionRemoved, q, resourceType, resourceID)
+	if err := subject.Validate(); err != nil {
 		return err
-	})
-}
-
-// DeleteRelationshipTarget removes one exact tuple, including subject_relation.
-func (s *relationshipStore) DeleteRelationshipTarget(ctx context.Context, resourceType, resourceID, relationName string, target relationships.SubjectRef) error {
-	const q = `DELETE FROM iam_relationships WHERE resource_type = ? AND resource_id = ? AND relation = ? AND subject_type = ? AND subject_id = ? AND subject_relation = ?`
+	}
 	return s.write(ctx, func(tx *writeTx) error {
-		_, err := tx.relationships(ctx, audit.ActionRemoved, q, resourceType, resourceID, relationName, target.Type, target.ID, target.Relation)
-		return err
-	})
-}
-
-// DeleteRelationship removes one exact tuple (idempotent — absent is nil).
-func (s *relationshipStore) DeleteRelationship(ctx context.Context, resourceType, resourceID, relation, subjectType, subjectID string) error {
-	const q = `DELETE FROM iam_relationships WHERE resource_type = ? AND resource_id = ? AND relation = ? AND subject_type = ? AND subject_id = ?`
-	return s.write(ctx, func(tx *writeTx) error {
-		_, err := tx.relationships(ctx, audit.ActionRemoved, q, resourceType, resourceID, relation, subjectType, subjectID)
-		return err
-	})
-}
-
-// DeleteByResourceAndSubject removes every relation a subject holds on a resource
-// (idempotent).
-func (s *relationshipStore) DeleteByResourceAndSubject(ctx context.Context, resourceType, resourceID, subjectType, subjectID string) error {
-	const q = `DELETE FROM iam_relationships WHERE resource_type = ? AND resource_id = ? AND subject_type = ? AND subject_id = ?`
-	return s.write(ctx, func(tx *writeTx) error {
-		_, err := tx.relationships(ctx, audit.ActionRemoved, q, resourceType, resourceID, subjectType, subjectID)
+		a := &tupleArgs{}
+		where := "scope_kind=2 AND resource_type=" + a.ref(rt) + " AND resource_id=" + a.ref(rid) + " AND subject_type=" + a.ref(st) + " AND subject_id=" + a.ref(sid)
+		_, err := tx.tuples(ctx, audit.ActionRemoved, "DELETE FROM "+s.tuples().table()+" WHERE "+where, a.params()...)
 		return err
 	})
 }
@@ -561,7 +476,7 @@ func (s *relationshipStore) DeleteByResourceAndSubject(ctx context.Context, reso
 // CountByResourceAndRelation counts DIRECT tuples only — never expanded
 // membership (the §2.5 security pin: last-owner protection depends on it).
 func (s *relationshipStore) CountByResourceAndRelation(ctx context.Context, resourceType, resourceID, relation string) (int, error) {
-	const q = `SELECT COUNT(*) FROM iam_relationships WHERE resource_type = ? AND resource_id = ? AND relation = ?`
+	const q = `SELECT COUNT(*) FROM (SELECT * FROM main.iam_tuples WHERE scope_kind=2) WHERE resource_type = ? AND resource_id = ? AND relation = ?`
 	var n int
 	if err := s.db.QuerierFrom(ctx).QueryRow(ctx, q, resourceType, resourceID, relation).Scan(&n); err != nil {
 		return 0, tursodb.MapError(err)
@@ -573,12 +488,15 @@ func (s *relationshipStore) CountByResourceAndRelation(ctx context.Context, reso
 func relationshipsBaseSQL(columns, where string) string {
 	return `SELECT ` + columns + `, tuple_key FROM (
     SELECT ` + columns + `, ` + tupleKeyExpr + ` AS tuple_key
-    FROM iam_relationships ` + where + `
+    FROM (SELECT * FROM main.iam_tuples WHERE scope_kind=2) ` + where + `
 ) AS r WHERE 1 = 1`
 }
 
 // ListRelationshipsBySubject pages complete tuple identities in byte order.
 func (s *relationshipStore) ListRelationshipsBySubject(ctx context.Context, subjectType, subjectID string, filter relationships.SubjectRelationshipFilter, req list.Request) (list.Page[relationships.SubjectRelationship], error) {
+	if err := validateTupleCursor(req); err != nil {
+		return list.Page[relationships.SubjectRelationship]{}, err
+	}
 	where := "WHERE subject_type = ? AND subject_id = ?"
 	args := []any{subjectType, subjectID}
 	if filter.ResourceType != nil {
@@ -607,6 +525,9 @@ func (s *relationshipStore) ListRelationshipsBySubject(ctx context.Context, subj
 
 // ListRelationshipsByResource pages complete tuple identities in byte order.
 func (s *relationshipStore) ListRelationshipsByResource(ctx context.Context, resourceType, resourceID string, filter relationships.ResourceRelationshipFilter, req list.Request) (list.Page[relationships.ResourceRelationship], error) {
+	if err := validateTupleCursor(req); err != nil {
+		return list.Page[relationships.ResourceRelationship]{}, err
+	}
 	where := "WHERE resource_type = ? AND resource_id = ?"
 	args := []any{resourceType, resourceID}
 	if filter.SubjectType != nil {
@@ -651,7 +572,7 @@ func lookupResourceIDsSQL(resourceType string, relations []string, subjectType, 
 	args = append(args, after, after)
 	query := reachableCTE + `
 SELECT DISTINCT r.resource_id
-FROM iam_relationships r
+FROM (SELECT * FROM main.iam_tuples WHERE scope_kind=2) r
 JOIN reachable ON r.subject_type = reachable.atype AND r.subject_id = reachable.aid AND r.subject_relation = reachable.arelation
 WHERE r.resource_type = ? AND r.relation IN ` + inClause(len(relations)) + `
   AND (? = '' OR r.resource_id > ?)
@@ -682,7 +603,7 @@ func lookupResourceIDsByRelationTargetSQL(resourceType, relation, targetType str
 		args = append(args, id)
 	}
 	args = append(args, after, after)
-	query := `SELECT DISTINCT resource_id FROM iam_relationships
+	query := `SELECT DISTINCT resource_id FROM (SELECT * FROM main.iam_tuples WHERE scope_kind=2)
 WHERE resource_type = ? AND relation = ? AND subject_type = ? AND subject_id IN ` + inClause(len(targetIDs)) + ` AND subject_relation = ''
   AND (? = '' OR resource_id > ?)
 ORDER BY resource_id`
@@ -722,11 +643,11 @@ func lookupDescendantResourceIDsSQL(resourceType string, relations []string, sub
 	args = append(args, subjectType, after, after)
 	query := `WITH RECURSIVE descendants(rid) AS (
 	SELECT r.resource_id
-	FROM iam_relationships r
+	FROM (SELECT * FROM main.iam_tuples WHERE scope_kind=2) r
 	WHERE r.resource_type = ? AND r.relation IN ` + inClause(len(relations)) + ` AND r.subject_type = ? AND r.subject_relation = '' AND r.subject_id IN ` + inClause(len(rootIDs)) + `
 	UNION
 	SELECT r.resource_id
-	FROM iam_relationships r
+	FROM (SELECT * FROM main.iam_tuples WHERE scope_kind=2) r
 	JOIN descendants d ON r.subject_id = d.rid
 	WHERE r.resource_type = ? AND r.relation IN ` + inClause(len(relations)) + ` AND r.subject_type = ? AND r.subject_relation = ''
 )

@@ -13,13 +13,14 @@ import (
 	"github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/relationships"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuplecache"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuples"
 	"github.com/gopernicus/gopernicus/sdk"
 )
 
 func tupleFixture(t *testing.T) (*pgxdb.DB, config, tuplecache.Source) {
 	t.Helper()
 	db, cfg := cacheFixture(t, true)
-	repos, err := Repositories(context.Background(), db, cacheOptions(cfg)...)
+	repos, err := testRepositories(context.Background(), db, cacheOptions(cfg)...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -53,13 +54,13 @@ func tupleExec(t *testing.T, q pgxdb.Querier, query string) {
 	}
 }
 func tupleInsert(table, id string) string {
-	return "INSERT INTO " + table + " (resource_type,resource_id,relation,subject_type,subject_id,subject_relation) VALUES ('document','" + id + "','viewer','user','alice','')"
+	return "INSERT INTO " + table + " (scope_kind,resource_type,resource_id,relation,subject_type,subject_id,subject_relation) VALUES (2,'document','" + id + "','viewer','user','alice','')"
 }
 
 func TestTupleSourceCaptureAndRecovery(t *testing.T) {
 	ctx := context.Background()
 	db, cfg, source := tupleFixture(t)
-	table := cacheTable(cfg, "iam_relationships")
+	table := cacheTable(cfg, "iam_tuples")
 	snapshot := tupleSnapshot(t, source, "")
 	if !snapshot.Full || len(snapshot.Tuples) != 0 {
 		t.Fatalf("empty rebuild: %+v", snapshot)
@@ -69,7 +70,7 @@ func TestTupleSourceCaptureAndRecovery(t *testing.T) {
 	tupleExec(t, db, tupleInsert(table, "one")+" ON CONFLICT DO NOTHING")
 	tupleExec(t, db, "UPDATE "+table+" SET subject_id=subject_id")
 	snapshot = tupleSnapshot(t, source, "initial")
-	original := relationships.CreateRelationship{ResourceType: "document", ResourceID: "one", Relation: "viewer", SubjectType: "user", SubjectID: "alice"}
+	original := (relationships.CreateRelationship{ResourceType: "document", ResourceID: "one", Relation: "viewer", SubjectType: "user", SubjectID: "alice"}).Tuple()
 	if snapshot.Full || len(snapshot.Changes) != 1 || snapshot.Changes[0].Before != nil || !reflect.DeepEqual(snapshot.Changes[0].After, &original) {
 		t.Fatalf("insert/noop: %+v", snapshot)
 	}
@@ -77,14 +78,14 @@ func TestTupleSourceCaptureAndRecovery(t *testing.T) {
 	// Update all six tuple fields and capture both exact identities.
 	tupleExec(t, db, "UPDATE "+table+" SET resource_type='space',resource_id='two',relation='member',subject_type='team',subject_id='engineering',subject_relation='member'")
 	snapshot = tupleSnapshot(t, source, "inserted")
-	updated := relationships.CreateRelationship{ResourceType: "space", ResourceID: "two", Relation: "member", SubjectType: "team", SubjectID: "engineering", SubjectRelation: "member"}
+	updated := (relationships.CreateRelationship{ResourceType: "space", ResourceID: "two", Relation: "member", SubjectType: "team", SubjectID: "engineering", SubjectRelation: "member"}).Tuple()
 	if len(snapshot.Changes) != 1 || !reflect.DeepEqual(snapshot.Changes[0].Before, &original) || !reflect.DeepEqual(snapshot.Changes[0].After, &updated) {
 		t.Fatalf("update: %+v", snapshot)
 	}
 	ackSnapshot(t, source, snapshot, "updated")
 	// Processed history is gone; recovery comes from current facts.
 	snapshot = tupleSnapshot(t, source, "")
-	if !snapshot.Full || len(snapshot.Changes) != 0 || !reflect.DeepEqual(snapshot.Tuples, []relationships.CreateRelationship{updated}) {
+	if !snapshot.Full || len(snapshot.Changes) != 0 || !reflect.DeepEqual(snapshot.Tuples, []tuples.Tuple{updated}) {
 		t.Fatalf("rebuild without history: %+v", snapshot)
 	}
 	snapshot = tupleSnapshot(t, source, "restored-old-receipt")
@@ -116,11 +117,57 @@ func TestTupleSourceCaptureAndRecovery(t *testing.T) {
 	}
 }
 
+func TestTupleSourceNumericEventOrderAcrossDigits(t *testing.T) {
+	for _, first := range []int{9, 99} {
+		t.Run(strconv.Itoa(first), func(t *testing.T) {
+			db := canonicalFixture(t, true)
+			repos, err := testRepositories(t.Context(), db, WithTupleCache())
+			if err != nil {
+				t.Fatal(err)
+			}
+			source := repos.TupleSource
+			ackSnapshot(t, source, tupleSnapshot(t, source, ""), "initial")
+			tupleExec(t, db, fmt.Sprintf("ALTER TABLE iam_tuple_outbox ALTER COLUMN id RESTART WITH %d", first))
+			fact := tuples.Tuple{Scope: tuples.Global(), Relation: "admin", Subject: tuples.SubjectRef{Type: "user", ID: "alice"}}
+			if err := repos.Tuples.ApplyTuples(t.Context(), tuples.Changes{Add: []tuples.Tuple{fact}}); err != nil {
+				t.Fatal(err)
+			}
+			if err := repos.Tuples.ApplyTuples(t.Context(), tuples.Changes{Remove: []tuples.Tuple{fact}}); err != nil {
+				t.Fatal(err)
+			}
+			for _, receipt := range []string{"initial", ""} {
+				snapshot := tupleSnapshot(t, source, receipt)
+				if len(snapshot.Changes) != 2 || snapshot.Changes[0].ID != strconv.Itoa(first) || snapshot.Changes[1].ID != strconv.Itoa(first+1) {
+					t.Fatalf("receipt %q event order: %+v", receipt, snapshot)
+				}
+				if snapshot.Full {
+					if len(snapshot.Tuples) != 0 {
+						t.Fatalf("revoked fact in full snapshot: %+v", snapshot)
+					}
+					continue
+				}
+				present := false
+				for _, change := range snapshot.Changes {
+					if change.Before != nil && *change.Before == fact {
+						present = false
+					}
+					if change.After != nil && *change.After == fact {
+						present = true
+					}
+				}
+				if present {
+					t.Fatal("numeric grant/revoke replay resurrected revoked admin")
+				}
+			}
+		})
+	}
+}
+
 func TestTupleSourceCommittedVisibilityAndExactAcknowledgements(t *testing.T) {
 	ctx := context.Background()
 	db, cfg, source := tupleFixture(t)
 	ackSnapshot(t, source, tupleSnapshot(t, source, ""), "initial")
-	table := cacheTable(cfg, "iam_relationships")
+	table := cacheTable(cfg, "iam_tuples")
 	first, err := db.Begin(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -134,7 +181,7 @@ func TestTupleSourceCommittedVisibilityAndExactAcknowledgements(t *testing.T) {
 	// Different tuples do not require this transaction to commit in ID order.
 	tupleExec(t, db, tupleInsert(table, "fast"))
 	fast := tupleSnapshot(t, source, "initial")
-	if fast.Full || len(fast.Changes) != 1 || fast.Changes[0].After.ResourceID != "fast" {
+	if fast.Full || len(fast.Changes) != 1 || fast.Changes[0].After.Scope.ID != "fast" {
 		t.Fatalf("uncommitted change visible: %+v", fast)
 	}
 	fastID, _ := strconv.ParseInt(fast.Changes[0].ID, 10, 64)
@@ -166,17 +213,17 @@ func TestTupleSourceCommittedVisibilityAndExactAcknowledgements(t *testing.T) {
 
 func TestTupleSourceTruncateAndRoleWrites(t *testing.T) {
 	db, cfg, source := tupleFixture(t)
-	table := cacheTable(cfg, "iam_relationships")
+	table := cacheTable(cfg, "iam_tuples")
 	tupleExec(t, db, tupleInsert(table, "one"))
 	ackSnapshot(t, source, tupleSnapshot(t, source, ""), "one")
-	tupleExec(t, db, "INSERT INTO "+cacheTable(cfg, "iam_roles")+" (subject_type,subject_id,role,resource_type,resource_id) VALUES ('user','alice','admin','','')")
-	if got := tupleSnapshot(t, source, "one"); len(got.Changes) != 0 {
-		t.Fatal("role write generated tuple work")
+	tupleExec(t, db, "INSERT INTO "+cacheTable(cfg, "iam_tuples")+" VALUES (1,'','','admin','user','alice','')")
+	if got := tupleSnapshot(t, source, "one"); len(got.Changes) != 1 || got.Changes[0].After.Scope.Kind != tuples.GlobalScope {
+		t.Fatal("role write did not generate tuple work")
 	}
 	tupleExec(t, db, "TRUNCATE "+table)
 	tupleExec(t, db, tupleInsert(table, "after"))
 	snapshot := tupleSnapshot(t, source, "one")
-	if !snapshot.Full || len(snapshot.Changes) != 2 || len(snapshot.Tuples) != 1 || snapshot.Tuples[0].ResourceID != "after" {
+	if !snapshot.Full || len(snapshot.Changes) != 3 || len(snapshot.Tuples) != 1 || snapshot.Tuples[0].Scope.ID != "after" {
 		t.Fatalf("truncate rebuild: %+v", snapshot)
 	}
 	ackSnapshot(t, source, snapshot, "truncated")
@@ -220,14 +267,14 @@ func TestTupleSourceInvokerPrivileges(t *testing.T) {
 	schema := cacheSchemaName(cfg)
 	for _, query := range []string{
 		"GRANT USAGE ON SCHEMA " + schema + " TO " + name,
-		"GRANT SELECT,INSERT,UPDATE,DELETE ON " + cacheTable(cfg, "iam_relationships") + "," + cacheTable(cfg, "iam_roles") + " TO " + name,
+		"GRANT SELECT,INSERT,UPDATE,DELETE ON " + cacheTable(cfg, "iam_tuples") + "," + cacheTable(cfg, "iam_tuples") + " TO " + name,
 		"GRANT SELECT ON " + cacheTable(cfg, "iam_audit") + "," + cacheTable(cfg, "iam_tuple_cache") + "," + cacheTable(cfg, "iam_tuple_outbox") + " TO " + name,
 	} {
 		tupleExec(t, admin, query)
 	}
 	db := cacheConnection(t, schema)
 	tupleExec(t, db, "SET ROLE "+name)
-	insert := tupleInsert(cacheTable(cfg, "iam_relationships"), "invoker")
+	insert := tupleInsert(cacheTable(cfg, "iam_tuples"), "invoker")
 	for _, grant := range []string{"", "GRANT INSERT ON " + cacheTable(cfg, "iam_tuple_outbox") + " TO " + name} {
 		if grant != "" {
 			tupleExec(t, admin, grant)
@@ -241,7 +288,7 @@ func TestTupleSourceInvokerPrivileges(t *testing.T) {
 			t.Fatal("incomplete invoker permissions allowed mutation")
 		}
 	}
-	if _, err := Repositories(ctx, db, cacheOptions(cfg)...); err != nil {
+	if _, err := testRepositories(ctx, db, cacheOptions(cfg)...); err != nil {
 		t.Fatalf("least privilege constructor: %v", err)
 	}
 }
@@ -265,7 +312,7 @@ func TestTupleSourceMalformedPayloadAndMissingIdentity(t *testing.T) {
 	}
 	db, cfg, _ := tupleFixture(t)
 	tupleExec(t, db, "DELETE FROM "+cacheTable(cfg, "iam_tuple_cache"))
-	if _, err := db.Exec(t.Context(), tupleInsert(cacheTable(cfg, "iam_relationships"), "missing")); err == nil {
+	if _, err := db.Exec(t.Context(), tupleInsert(cacheTable(cfg, "iam_tuples"), "missing")); err == nil {
 		t.Fatal("missing source identity allowed mutation")
 	}
 }
@@ -275,7 +322,7 @@ func TestTupleSourceRejectsMalformedCurrentFacts(t *testing.T) {
 		t.Run(id, func(t *testing.T) {
 			db, cfg, source := tupleFixture(t)
 			ackSnapshot(t, source, tupleSnapshot(t, source, ""), "initial")
-			if _, err := db.Exec(t.Context(), "INSERT INTO "+cacheTable(cfg, "iam_relationships")+" VALUES ('document',$1,'viewer','user','alice','')", id); err != nil {
+			if _, err := db.Exec(t.Context(), "INSERT INTO "+cacheTable(cfg, "iam_tuples")+" VALUES (2,'document',$1,'viewer','user','alice','')", id); err != nil {
 				t.Fatal(err)
 			}
 			for _, receipt := range []string{"initial", ""} {
@@ -289,7 +336,7 @@ func TestTupleSourceRejectsMalformedCurrentFacts(t *testing.T) {
 
 func TestTupleSourceAcknowledgementRollback(t *testing.T) {
 	db, cfg, source := tupleFixture(t)
-	tupleExec(t, db, tupleInsert(cacheTable(cfg, "iam_relationships"), "one"))
+	tupleExec(t, db, tupleInsert(cacheTable(cfg, "iam_tuples"), "one"))
 	before := tupleSnapshot(t, source, "")
 	tupleExec(t, db, "CREATE FUNCTION "+cfg.schema.Table("reject_ack")+"() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'injected acknowledgement failure'; END; $$")
 	tupleExec(t, db, "CREATE TRIGGER reject_ack BEFORE DELETE ON "+cacheTable(cfg, "iam_tuple_outbox")+" FOR EACH ROW EXECUTE FUNCTION "+cfg.schema.Table("reject_ack")+"()")
@@ -304,7 +351,7 @@ func TestTupleSourceAcknowledgementRollback(t *testing.T) {
 func TestTupleSourceFullRecoveryPreservesLateWork(t *testing.T) {
 	db, cfg, source := tupleFixture(t)
 	ackSnapshot(t, source, tupleSnapshot(t, source, ""), "initial")
-	table := cacheTable(cfg, "iam_relationships")
+	table := cacheTable(cfg, "iam_tuples")
 	late, err := db.Begin(t.Context())
 	if err != nil {
 		t.Fatal(err)
@@ -318,7 +365,7 @@ func TestTupleSourceFullRecoveryPreservesLateWork(t *testing.T) {
 		t.Fatalf("delta accepted malformed payload: %v", err)
 	}
 	full := tupleSnapshot(t, source, "")
-	if !full.Full || len(full.Tuples) != 1 || full.Tuples[0].ResourceID != "current" || len(full.Changes) != 2 {
+	if !full.Full || len(full.Tuples) != 1 || full.Tuples[0].Scope.ID != "current" || len(full.Changes) != 2 {
 		t.Fatalf("full recovery: %+v", full)
 	}
 	for _, change := range full.Changes {
@@ -331,7 +378,7 @@ func TestTupleSourceFullRecoveryPreservesLateWork(t *testing.T) {
 	}
 	ackSnapshot(t, source, full, "rebuilt")
 	remaining := tupleSnapshot(t, source, "rebuilt")
-	if remaining.Full || len(remaining.Changes) != 1 || remaining.Changes[0].After.ResourceID != "late" {
+	if remaining.Full || len(remaining.Changes) != 1 || remaining.Changes[0].After.Scope.ID != "late" {
 		t.Fatalf("full acknowledgement lost late lower event ID: %+v", remaining)
 	}
 	lateID, _ := strconv.ParseInt(remaining.Changes[0].ID, 10, 64)
@@ -345,10 +392,10 @@ func TestTupleSourceResetSkipsObsoletePayloads(t *testing.T) {
 	db, cfg, source := tupleFixture(t)
 	ackSnapshot(t, source, tupleSnapshot(t, source, ""), "initial")
 	tupleExec(t, db, "INSERT INTO "+cacheTable(cfg, "iam_tuple_outbox")+" (after_tuple) VALUES ('{}')")
-	tupleExec(t, db, "TRUNCATE "+cacheTable(cfg, "iam_relationships"))
-	tupleExec(t, db, tupleInsert(cacheTable(cfg, "iam_relationships"), "current"))
+	tupleExec(t, db, "TRUNCATE "+cacheTable(cfg, "iam_tuples"))
+	tupleExec(t, db, tupleInsert(cacheTable(cfg, "iam_tuples"), "current"))
 	full := tupleSnapshot(t, source, "initial")
-	if !full.Full || len(full.Tuples) != 1 || full.Tuples[0].ResourceID != "current" || len(full.Changes) != 3 {
+	if !full.Full || len(full.Tuples) != 1 || full.Tuples[0].Scope.ID != "current" || len(full.Changes) != 3 {
 		t.Fatalf("reset did not recover past obsolete payload: %+v", full)
 	}
 	ackSnapshot(t, source, full, "reset")

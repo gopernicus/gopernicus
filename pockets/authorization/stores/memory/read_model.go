@@ -27,13 +27,13 @@ func (v *decisionView) ForModel(model relationships.ReadModel) relationships.Per
 }
 
 func (r modelDecisionReader) CheckRelationWithGroupExpansion(ctx context.Context, resourceType, resourceID, relation, subjectType, subjectID string, maxExpansionStates int) (bool, error) {
-	if err := ctx.Err(); err != nil {
+	if err := r.view.check(ctx); err != nil {
 		return false, err
 	}
 	v := r.view
 	rels := Relationships{st: v.m.rels.st, model: &r.model}
 	ok, overflow := rels.checkRelationExpandedLocked(ctx, resourceType, resourceID, relation, subjectType, subjectID, maxExpansionStates)
-	if err := ctx.Err(); err != nil {
+	if err := r.view.check(ctx); err != nil {
 		return false, err
 	}
 	if overflow {

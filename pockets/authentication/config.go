@@ -762,7 +762,7 @@ type AdministrationConfig struct {
 	// A single middleware, not the []web.Middleware of cms.AdminMiddleware /
 	// events.StreamMiddleware: nil is the unambiguous "no policy" — an empty
 	// non-nil slice would mean "mounted, ungated", the very bug this field closes.
-	// Typical: authorizer.RequirePermissionFixed("platform", "steward", "global").
+	// Typical: authorizer.Require(authorizationhttp.Can("steward", authorizationhttp.Fixed("platform", "global"))).
 	MachineRoutesGate web.Middleware
 	// UserAdminCheck is the host authorization seam for user administration
 	// (CHAU-1.1), and the switch that MOUNTS the bundled admin routes.

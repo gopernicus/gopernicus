@@ -7,66 +7,16 @@ import (
 	"testing"
 )
 
-// canonicalMigrations is the frozen authorization-v3 canonical filename set. Both
-// dialect trees carry byte-for-byte identical filename SETS (the standing
-// invariant); the turso sibling asserts this same slice, so the two trees cannot
-// drift apart.
-var canonicalMigrations = []string{
-	"0001_iam_relationships.sql",
-	"0002_iam_roles.sql",
-	"0003_iam_scopes.sql",
-	"0004_iam_mutations.sql",
-	"0005_iam_lookup_keyset.sql",
-	"0006_iam_tuple_identity.sql",
-	"0007_iam_audit.sql",
-}
-
-// expectedTables are every CREATE TABLE the canonical set must define.
-var expectedTables = []string{
-	"iam_audit",
-	"iam_relationships",
-	"iam_roles",
-	"iam_scopes",
-	"iam_mutations",
-}
-
-// expectedConstraints are the named CHECK/consistency constraints AZ3-2.1 lands:
-// non-empty structural columns on every table, the valid-scope-kind and
-// nonnegative-revision anchors on iam_scopes/iam_mutations, the persisted-outcome
-// set on iam_mutations, and the consistent global/scoped role pair on iam_roles.
+// Both dialects install the same canonical tables and access paths.
+var canonicalMigrations = []string{"0001_iam_tuples.sql"}
+var expectedTables = []string{"iam_tuples", "iam_audit"}
 var expectedConstraints = []string{
-	"ck_iam_audit_action", "ck_iam_audit_fact", "ck_iam_audit_source",
-	"ck_iam_relationships_nonempty",
-	"ck_iam_roles_nonempty",
-	"ck_iam_roles_scope_pair",
-	"ck_iam_scopes_kind",
-	"ck_iam_scopes_nonempty",
-	"ck_iam_scopes_revision",
-	"ck_iam_mutations_kind",
-	"ck_iam_mutations_outcome",
-	"ck_iam_mutations_revision",
-	"ck_iam_mutations_nonempty",
+	"ck_iam_tuples_scope", "ck_iam_tuples_refs", "ck_iam_audit_action",
+	"ck_iam_audit_encoding", "ck_iam_audit_scope", "ck_iam_audit_tuple", "ck_iam_audit_source",
 }
-
-// expectedIndexes are the relation-aware access-path indexes the ratified reads
-// depend on: the exact-tuple unique, the one-relation-per-exact-SubjectRef unique
-// (WITHOUT relation, so a subject holds one relation but usersets stay distinct),
-// the resource/subject/type-relation secondaries feeding the recursive-CTE reads
-// (AZ3-1.1), the roles unique/subject/resource secondaries feeding the
-// effective-role GROUP BY (AZ3-1.5), and the two 0005 keyset paths the paged
-// lookups range-scan (authorization-lookup-paging, A6).
 var expectedIndexes = []string{
+	"idx_iam_tuples_subject", "idx_iam_tuples_relation_resource",
 	"idx_iam_audit_time", "idx_iam_audit_resource", "idx_iam_audit_subject", "idx_iam_audit_actor",
-	"idx_iam_relationships_unique_tuple",
-	"idx_iam_relationships_unique_subject",
-	"idx_iam_relationships_resource",
-	"idx_iam_relationships_subject",
-	"idx_iam_relationships_type_relation",
-	"idx_iam_roles_unique",
-	"idx_iam_roles_subject",
-	"idx_iam_roles_resource",
-	"idx_iam_relationships_type_relation_resource",
-	"idx_iam_roles_subject_resource_lookup",
 }
 
 func migrationNames(t *testing.T) []string {
@@ -99,10 +49,7 @@ func migrationsSQL(t *testing.T) string {
 	return all.String()
 }
 
-// TestMigrationInventory asserts the embedded pgx tree is exactly the canonical
-// filename set and that every expected table, constraint, and access-path index is
-// present. It proves the shape of iam_scopes and iam_mutations even though no Go
-// consumer wires them yet.
+// TestMigrationInventory pins the complete fresh schema, constraints and indexes.
 func TestMigrationInventory(t *testing.T) {
 	names := migrationNames(t)
 	if len(names) != len(canonicalMigrations) {
@@ -116,7 +63,7 @@ func TestMigrationInventory(t *testing.T) {
 
 	sql := migrationsSQL(t)
 	for _, tbl := range expectedTables {
-		if !strings.Contains(sql, "CREATE TABLE IF NOT EXISTS "+tbl+" (") {
+		if !strings.Contains(sql, "CREATE TABLE "+tbl+" (") {
 			t.Errorf("missing CREATE TABLE for %q", tbl)
 		}
 	}

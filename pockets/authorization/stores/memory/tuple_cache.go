@@ -8,8 +8,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/gopernicus/gopernicus/pockets/authorization/logic/relationships"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuplecache"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuples"
 	"github.com/gopernicus/gopernicus/sdk"
 )
 
@@ -19,7 +19,7 @@ type TupleCache struct {
 	mu    sync.Mutex
 	state tuplecache.State
 	until time.Time
-	sets  map[tuplecache.SetKey][]relationships.SubjectRef
+	sets  map[tuplecache.SetKey][]tuples.Tuple
 }
 
 func NewTupleCache() *TupleCache { return &TupleCache{} }
@@ -33,7 +33,7 @@ func (c *TupleCache) State(ctx context.Context) (tuplecache.State, error) {
 	return c.state, nil
 }
 
-func (c *TupleCache) Read(ctx context.Context, expected tuplecache.State, keys []tuplecache.SetKey) ([][]relationships.SubjectRef, error) {
+func (c *TupleCache) Read(ctx context.Context, expected tuplecache.State, keys []tuplecache.SetKey) ([][]tuples.Tuple, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if err := ctx.Err(); err != nil {
@@ -42,8 +42,11 @@ func (c *TupleCache) Read(ctx context.Context, expected tuplecache.State, keys [
 	if expected != c.state || c.state.Receipt == "" || !time.Now().Before(c.until) {
 		return nil, tuplecache.ErrUnavailable
 	}
-	out := make([][]relationships.SubjectRef, len(keys))
+	out := make([][]tuples.Tuple, len(keys))
 	for i, key := range keys {
+		if err := key.Validate(); err != nil {
+			return nil, err
+		}
 		out[i] = slices.Clone(c.sets[key])
 	}
 	return out, nil
@@ -70,7 +73,7 @@ func (c *TupleCache) Publish(ctx context.Context, expected, next tuplecache.Stat
 			if change.Before == nil && change.After == nil {
 				return fmt.Errorf("tuple cache: empty change: %w", sdk.ErrInvalidInput)
 			}
-			for _, t := range []*relationships.CreateRelationship{change.Before, change.After} {
+			for _, t := range []*tuples.Tuple{change.Before, change.After} {
 				if t != nil {
 					if err := t.Validate(); err != nil {
 						return err
@@ -89,19 +92,18 @@ func (c *TupleCache) Publish(ctx context.Context, expected, next tuplecache.Stat
 	}
 	sets := maps.Clone(c.sets)
 	if sets == nil || snapshot.Full {
-		sets = make(map[tuplecache.SetKey][]relationships.SubjectRef)
+		sets = make(map[tuplecache.SetKey][]tuples.Tuple)
 	}
-	mutate := func(t relationships.CreateRelationship, add bool) {
-		resource := relationships.SubjectRef{Type: t.ResourceType, ID: t.ResourceID, Relation: t.Relation}
-		subject := t.Subject()
-		for key, ref := range map[tuplecache.SetKey]relationships.SubjectRef{{Ref: resource}: subject, {Reverse: true, Ref: subject}: resource} {
+	mutate := func(t tuples.Tuple, add bool) {
+		for _, key := range []tuplecache.SetKey{{Scope: t.Scope, Relation: t.Relation}, {Reverse: true, Subject: t.Subject}} {
+			ref := t
 			refs := slices.Clone(sets[key])
 			if add {
 				if !slices.Contains(refs, ref) {
 					refs = append(refs, ref)
 				}
 			} else {
-				refs = slices.DeleteFunc(refs, func(r relationships.SubjectRef) bool { return r == ref })
+				refs = slices.DeleteFunc(refs, func(r tuples.Tuple) bool { return r == ref })
 			}
 			if len(refs) == 0 {
 				delete(sets, key)

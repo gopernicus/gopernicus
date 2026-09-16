@@ -3,8 +3,10 @@ package pgxdb
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"github.com/gopernicus/gopernicus/sdk/capabilities/transaction"
+	jackpgx "github.com/jackc/pgx/v5"
 )
 
 // ErrNestedTransact reports a nested Transact call. Pass the active callback
@@ -31,7 +33,25 @@ func (d *DB) Transact(ctx context.Context, fn func(ctx context.Context) error) e
 	})
 }
 
-// TxFromContext returns the transaction stashed by an enclosing Transact, or
+// TransactSnapshot runs fn in a read-write, repeatable-read transaction. Reads
+// share the snapshot established by the first data statement and see this
+// transaction's own writes. It uses Transact's ambient context and cleanup rules;
+// nested transactions are rejected and callbacks are never retried.
+func (d *DB) TransactSnapshot(ctx context.Context, fn func(ctx context.Context) error) error {
+	if _, ok := TxFromContext(ctx); ok {
+		return ErrNestedTransact
+	}
+	driver, err := d.pool.BeginTx(ctx, jackpgx.TxOptions{IsoLevel: jackpgx.RepeatableRead, AccessMode: jackpgx.ReadWrite})
+	if err != nil {
+		return fmt.Errorf("beginning snapshot transaction: %w", err)
+	}
+	tx := &Tx{tx: driver, ctx: ctx}
+	return tx.run(func(tx *Tx) error {
+		return fn(context.WithValue(ctx, txCtxKey{}, tx))
+	})
+}
+
+// TxFromContext returns the transaction stashed by Transact or TransactSnapshot, or
 // (nil, false) outside one. It is the connector-owned typed helper the
 // transaction.Transactor contract prescribes in place of any sdk-owned untyped stash.
 func TxFromContext(ctx context.Context) (*Tx, bool) {

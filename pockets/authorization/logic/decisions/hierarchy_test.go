@@ -5,6 +5,8 @@ import (
 	"sort"
 	"testing"
 
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/decisions"
+
 	"github.com/gopernicus/gopernicus/pockets/authorization"
 
 	authmodel "github.com/gopernicus/gopernicus/pockets/authorization/logic/model"
@@ -16,16 +18,16 @@ import (
 // is granted directly (viewer) or inherited up the `parent` chain (Through to
 // another space's `view`). The `parent` relation targets the space type itself
 // — the exact self-loop the validator now sanctions.
-func hierarchySchema() relationships.Schema {
-	return relationships.NewSchema([]relationships.ResourceSchema{{
+func hierarchySchema() decisions.Model {
+	return decisions.NewSchema([]decisions.ResourceSchema{{
 		Name: "space",
-		Def: relationships.ResourceTypeDef{
-			Relations: map[string]relationships.RelationDef{
-				"parent": {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "space"}}},
-				"viewer": {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "user"}}},
+		Def: decisions.ResourceTypeDef{
+			Relations: map[string]decisions.RelationDef{
+				"parent": {AllowedSubjects: []decisions.SubjectTypeRef{{Type: "space"}}},
+				"viewer": {AllowedSubjects: []decisions.SubjectTypeRef{{Type: "user"}}},
 			},
-			Permissions: map[string]relationships.PermissionRule{
-				"view": relationships.AnyOf(relationships.Direct("viewer"), relationships.Through("parent", "view")),
+			Permissions: map[string]decisions.Expression{
+				"view": decisions.AnyOf(decisions.Direct("viewer"), decisions.Through("parent", "view")),
 			},
 		},
 	}})
@@ -34,10 +36,11 @@ func hierarchySchema() relationships.Schema {
 // hierarchyService builds the engine and returns it together with the backing
 // relationship store, so tests SEED via the store PORT (the raw Service write path
 // was removed at AZ3-3.4) and exercise the engine via the Service.
-func hierarchyService(t *testing.T, model relationships.Schema) (authorization.Components, *memory.Relationships) {
+func hierarchyService(t *testing.T, model decisions.Model) (authorization.Components, *memory.Relationships) {
 	t.Helper()
-	store := memory.NewRelationships()
-	comps, err := authorization.New(authorization.Repositories{Relationships: store}, authorization.WithRelationshipModel(model))
+	authority := memory.New()
+	store := authority.Relationships()
+	comps, err := authorization.New(authorization.Repositories{Tuples: authority.Tuples()}, authorization.WithModel(model))
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
@@ -108,24 +111,24 @@ func TestHierarchyLookupOrgSeededRootExpandsDescendants(t *testing.T) {
 
 	// Extended schema: an org grants view via `admin`, and a space may inherit
 	// view from its org (non-self Through) in addition to its parent chain.
-	model := relationships.NewSchema([]relationships.ResourceSchema{
+	model := decisions.NewSchema([]decisions.ResourceSchema{
 		{
 			Name: "org",
-			Def: relationships.ResourceTypeDef{
-				Relations:   map[string]relationships.RelationDef{"admin": {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "user"}}}},
-				Permissions: map[string]relationships.PermissionRule{"view": relationships.AnyOf(relationships.Direct("admin"))},
+			Def: decisions.ResourceTypeDef{
+				Relations:   map[string]decisions.RelationDef{"admin": {AllowedSubjects: []decisions.SubjectTypeRef{{Type: "user"}}}},
+				Permissions: map[string]decisions.Expression{"view": decisions.AnyOf(decisions.Direct("admin"))},
 			},
 		},
 		{
 			Name: "space",
-			Def: relationships.ResourceTypeDef{
-				Relations: map[string]relationships.RelationDef{
-					"parent": {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "space"}}},
-					"viewer": {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "user"}}},
-					"org":    {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "org"}}},
+			Def: decisions.ResourceTypeDef{
+				Relations: map[string]decisions.RelationDef{
+					"parent": {AllowedSubjects: []decisions.SubjectTypeRef{{Type: "space"}}},
+					"viewer": {AllowedSubjects: []decisions.SubjectTypeRef{{Type: "user"}}},
+					"org":    {AllowedSubjects: []decisions.SubjectTypeRef{{Type: "org"}}},
 				},
-				Permissions: map[string]relationships.PermissionRule{
-					"view": relationships.AnyOf(relationships.Direct("viewer"), relationships.Through("org", "view"), relationships.Through("parent", "view")),
+				Permissions: map[string]decisions.Expression{
+					"view": decisions.AnyOf(decisions.Direct("viewer"), decisions.Through("org", "view"), decisions.Through("parent", "view")),
 				},
 			},
 		},
@@ -170,16 +173,16 @@ func TestHierarchyLookupOrgSeededRootExpandsDescendants(t *testing.T) {
 // walk from the roots would miss b. The engine's fixpoint loop must find it.
 func TestHierarchyLookupMultipleSelfRelationsFixpoint(t *testing.T) {
 	ctx := context.Background()
-	model := relationships.NewSchema([]relationships.ResourceSchema{{
+	model := decisions.NewSchema([]decisions.ResourceSchema{{
 		Name: "doc",
-		Def: relationships.ResourceTypeDef{
-			Relations: map[string]relationships.RelationDef{
-				"parent": {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "doc"}}},
-				"folder": {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "doc"}}},
-				"viewer": {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "user"}}},
+		Def: decisions.ResourceTypeDef{
+			Relations: map[string]decisions.RelationDef{
+				"parent": {AllowedSubjects: []decisions.SubjectTypeRef{{Type: "doc"}}},
+				"folder": {AllowedSubjects: []decisions.SubjectTypeRef{{Type: "doc"}}},
+				"viewer": {AllowedSubjects: []decisions.SubjectTypeRef{{Type: "user"}}},
 			},
-			Permissions: map[string]relationships.PermissionRule{
-				"view": relationships.AnyOf(relationships.Direct("viewer"), relationships.Through("parent", "view"), relationships.Through("folder", "view")),
+			Permissions: map[string]decisions.Expression{
+				"view": decisions.AnyOf(decisions.Direct("viewer"), decisions.Through("parent", "view"), decisions.Through("folder", "view")),
 			},
 		},
 	}})

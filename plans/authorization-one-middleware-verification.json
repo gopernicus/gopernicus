@@ -1,0 +1,444 @@
+{
+  "date": "2026-09-16",
+  "status": "implemented and verified; uncommitted and unreleased",
+  "branch": "main",
+  "starting_head": "1e1308733cd8c23995497134052b2ef16c1f5b30",
+  "plan": "plans/authorization-one-middleware.md",
+  "scope": "One Adapter.Require HTTP policy API, framework caller migration, retained security semantics, final benchmark refresh",
+  "workspace_modules": 42,
+  "checks": [
+    {
+      "command": "env -i PATH=\"$PATH\" HOME=\"$HOME\" TMPDIR=\"${TMPDIR:-/tmp}\" GOCACHE=/tmp/gopernicus-authorization-hardening/cache GOENV=off GOPROXY=off GOTOOLCHAIN=local make check",
+      "status": "passed",
+      "output_sha256": "19cd2dc5a86a9331dec8518d29e80fffae8b36b063b0a23889f3b77da333e9f4"
+    },
+    {
+      "command": "env -i PATH=\"$PATH\" HOME=\"$HOME\" TMPDIR=\"${TMPDIR:-/tmp}\" PYTHONDONTWRITEBYTECODE=1 python3 -B -m unittest discover -s .github/scripts -p test_authorization_cache_verify.py",
+      "status": "passed",
+      "output_sha256": "8b9ebfaf113d51d21f2750d0d6a864db50e366e663ab6b65fc4cc794a8695076"
+    },
+    {
+      "command": "pnpm typecheck (workshop/documentation)",
+      "status": "passed",
+      "output_sha256": "8366207267355d3e3d5bf3bf6e8c94c5f93f6078c34f08973fa2b38cdda6cc92"
+    },
+    {
+      "command": "pnpm build (workshop/documentation)",
+      "status": "passed",
+      "output_sha256": "1bcc93f8b0b556d7d646f5d1d92c74f56f94cedcbda4a74ef3a0ec0ea233360e"
+    },
+    {
+      "command": "goimports -l <23 changed Go files>; git diff --check",
+      "status": "passed"
+    },
+    {
+      "command": "python3 -B -m unittest test_authorization_cache_verify.OwnedFixtureTests.test_benchmark_matrix_rejects_missing_or_short_samples",
+      "status": "passed",
+      "scope": "after adding benchmark progress messages"
+    }
+  ],
+  "owned_verification": {
+    "status": "passed",
+    "cleanup": "passed",
+    "source_sha256": "ead72aa1e31822ee84d56a88f2fe41d2632dd88d79e6933051d88ceaf65a4d9c",
+    "suites": [
+      {
+        "suite": "integrations/datastores/pgxdb",
+        "schema": "authorization_named",
+        "passed": 301,
+        "skipped": []
+      },
+      {
+        "suite": "pockets/authorization",
+        "schema": "authorization_named",
+        "passed": 1231,
+        "skipped": [
+          null,
+          "TestTransactional"
+        ]
+      },
+      {
+        "suite": "pockets/authorization/stores/pgx",
+        "schema": "public",
+        "passed": 555,
+        "skipped": []
+      },
+      {
+        "suite": "pockets/authorization/stores/pgx",
+        "schema": "authorization_named",
+        "passed": 555,
+        "skipped": []
+      },
+      {
+        "suite": "pockets/authorization/stores/turso",
+        "schema": "authorization_named",
+        "passed": 542,
+        "skipped": []
+      },
+      {
+        "suite": "pockets/authorization/stores/goredis",
+        "schema": "authorization_named",
+        "passed": 52,
+        "skipped": []
+      },
+      {
+        "suite": "examples/auth-cms",
+        "schema": "authorization_named",
+        "passed": 528,
+        "skipped": [
+          null,
+          null,
+          null
+        ]
+      }
+    ],
+    "commands": [
+      {
+        "command": [
+          "/opt/homebrew/opt/postgresql@17/bin/postgres",
+          "--version"
+        ],
+        "returncode": 0,
+        "stdout_sha256": "4409726d58d716bebe4b1cd92f3b53845434df564c04608e9ea78c5886f9758d",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "command": [
+          "/opt/homebrew/opt/postgresql@17/bin/initdb",
+          "-D",
+          "/private/var/folders/qm/bjn1lmt54tlf9fc8vblm1hc80000gp/T/authorization-cache-zc448vzj/pgdata",
+          "-U",
+          "fixture",
+          "-A",
+          "trust",
+          "--encoding=UTF8",
+          "--locale=en_US.UTF-8"
+        ],
+        "returncode": 0,
+        "stdout_sha256": "3c2b611bb30aaf720b189ca98fdf21d3666df646d2c51fc1cd3266ffc8ef28f4",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "command": [
+          "/opt/homebrew/opt/postgresql@17/bin/psql",
+          "-h",
+          "127.0.0.1",
+          "-p",
+          "55382",
+          "-U",
+          "fixture",
+          "-d",
+          "postgres",
+          "-Atc",
+          "SHOW data_directory"
+        ],
+        "returncode": 0,
+        "stdout_sha256": "6caee5025bf2907793935cae35bb1c16ec071f002ccf9c4f0adda2371accb7ca",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "command": [
+          "/opt/homebrew/opt/postgresql@17/bin/createdb",
+          "-h",
+          "127.0.0.1",
+          "-p",
+          "55382",
+          "-U",
+          "fixture",
+          "authorization_fixture"
+        ],
+        "returncode": 0,
+        "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "command": [
+          "go",
+          "test",
+          "-json",
+          "-race",
+          "-count=1",
+          "./..."
+        ],
+        "returncode": 0,
+        "stdout_sha256": "1ba61d5d9aee9e379dd52503b5888f9a3dda7ae0f4a566145aeda1295da167a9",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "command": [
+          "go",
+          "test",
+          "-json",
+          "-race",
+          "-count=1",
+          "./..."
+        ],
+        "returncode": 0,
+        "stdout_sha256": "8d2836e5de9f557693736a80a1093143fdd99318f4ce3b9ffe75e05c8a240aaf",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "command": [
+          "go",
+          "test",
+          "-json",
+          "-race",
+          "-count=1",
+          "./..."
+        ],
+        "returncode": 0,
+        "stdout_sha256": "8cb97f787eef400384b435fe8afa148a9d9b39c53240e4aee283a6cfbf1f646f",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "command": [
+          "go",
+          "test",
+          "-json",
+          "-race",
+          "-count=1",
+          "./..."
+        ],
+        "returncode": 0,
+        "stdout_sha256": "17658908530765c0becffa3fb7a9a9d1ece86d0770bd7441101bc5276a5bafa9",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "command": [
+          "go",
+          "test",
+          "-json",
+          "-race",
+          "-count=1",
+          "-tags=integration",
+          "./..."
+        ],
+        "returncode": 0,
+        "stdout_sha256": "b8610bd0cbf4f617a54b6b74e9ca29ad843cac62698f498549c97ae25ff61b48",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "command": [
+          "go",
+          "test",
+          "-json",
+          "-race",
+          "-count=1",
+          "-tags=integration",
+          "./..."
+        ],
+        "returncode": 0,
+        "stdout_sha256": "122d4a8238f698715a58e303db0ee82708de5b8b10c6c7c9982eb786996521f5",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "command": [
+          "go",
+          "test",
+          "-json",
+          "-race",
+          "-count=1",
+          "./..."
+        ],
+        "returncode": 0,
+        "stdout_sha256": "31cf52adaa59e019d0e78a621e694545a4a7cbd906d8fa8c36129732ae522ad6",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    ]
+  },
+  "benchmarks": {
+    "record": "plans/authorization-one-middleware-benchmarks.json",
+    "cases": 109,
+    "samples_per_case": 5,
+    "valid_samples": 545,
+    "benchtime": "1s",
+    "status": "passed",
+    "cleanup": "passed"
+  },
+  "source_notes": "Owned tests and benchmarks used the same module snapshot. Subsequent edits only publish benchmark results and root-level execution/audit records; all Go, SQL and module/workspace files match the tested code hash set.",
+  "tested_code_files": 1816,
+  "tested_code_manifest_sha256": "b43e59fc078d81557bb62ecb8ea828a2c49b5435d074c439cdf9153f1836417d",
+  "reviews": {
+    "architecture_steward": "Aligned; orphan declarations and HTTP budget claims removed; role-only adapter remains optional; narrow semantic contract documented.",
+    "lead_backend_engineer": "No confirmed blocker; no substantive security invariant lost from deleted legacy tests; host first-error-fails-closed regression reviewed."
+  },
+  "limits": [
+    "Remote Turso not exercised",
+    "Local repeated benchmarks are not production capacity or tail latency evidence",
+    "Memory TestTransactional intentionally skipped because memory has no host transactor; null skip entries denote no-test packages",
+    "Documentation build succeeded with an optional Docusaurus local update-config warning",
+    "No external host application adoption or publishing performed"
+  ],
+  "changed_files": [
+    {
+      "path": ".github/scripts/authorization_cache_verify.py",
+      "before_sha256": "fc23da24cd23f03c2124ed985b2a1f13f0e91cd02b55f90f9865eee2c585bef4",
+      "after_sha256": "cc1ca62024c1c391b22c6ba1a8e1e2721ef989cec71792c75815f32e32eabf77"
+    },
+    {
+      "path": ".github/scripts/test_authorization_cache_verify.py",
+      "before_sha256": "ef9f900de3905d563d7900386b61bfd93f85ac828f1f552d8c95e4b622140b66",
+      "after_sha256": "8a2d005ef5a6bd6dccb375618de0105f69220b9655a8dca4a6fbed8a74a55fba"
+    },
+    {
+      "path": "ARCHITECTURE.md",
+      "before_sha256": "aae356ce22ff6f0e445e2992e12d330ed416c254f23d1bae0a4115df7c7ca2f6",
+      "after_sha256": "c218997442cb7850acf10c42dc245c787fe2893064888a72659ab8c3d38a640d"
+    },
+    {
+      "path": "AUDIT.md",
+      "before_sha256": "80ab7ac081d1cfa4b22b926011251722c19c7777c91de0f9eefea27964d18fe6",
+      "after_sha256": "27067cd9cf427ce085a9bc56f67af14d11e954ce2880fd7d2638506067c0fc4b"
+    },
+    {
+      "path": "RELEASING.md",
+      "before_sha256": "aaad54e91f3954da3e129196cfe7219c46a6c7cbd082415555da173405c6a35b",
+      "after_sha256": "76460e77e2da40c315cd3b0ed563a4a9b73dddf13204ce00ef5eebe9c08120a5"
+    },
+    {
+      "path": "examples/auth-cms/README.md",
+      "before_sha256": "01a5586c5c7845367da1e2c864f7ad77dca1bc22bbf34c0afc27eb74c1482f69",
+      "after_sha256": "05063950dbf9c1190b0cc6af0e0f6dbed3d8d19d3183476d7905c95550261dca"
+    },
+    {
+      "path": "examples/auth-cms/cmd/server/apikey_search_test.go",
+      "before_sha256": "fd131b378682cda9fef6b1d3051eb66937b097ca317443b5d0f18c1bb922ee1e",
+      "after_sha256": "ffdf3970b2d4cd62545614fdd7fa7167f8021f01e0c3f5249c02b9b3425a9419"
+    },
+    {
+      "path": "examples/auth-cms/cmd/server/demo.go",
+      "before_sha256": "18f85d44bab1c73a89d610eec88728deb57dee20822ae641260ac6fcba0e1834",
+      "after_sha256": "be76b378dd3efb730ec0907c4d28944bc854fb851041987be947509bfb4410c5"
+    },
+    {
+      "path": "examples/auth-cms/cmd/server/main.go",
+      "before_sha256": "439411c26de13589a8a85bf6151517a4379929af31a51f7ee097726f7a2888d6",
+      "after_sha256": "55b755fc8dc0a2c4d6f2c46fb3c4c8b74d37366e38986a115e37e340b9f5afd3"
+    },
+    {
+      "path": "examples/auth-cms/cmd/server/membership.go",
+      "before_sha256": "c24a3d44b8356a447e1ce5f70999f210b1a30aa680ef3488f8ec01b45f1a2c18",
+      "after_sha256": "b1d5bae21fad7233c9c9297c889bc19cf5ed0dc4cb23e4a433dbcf45b70dbd98"
+    },
+    {
+      "path": "examples/auth-cms/cmd/server/membership_middleware_test.go",
+      "before_sha256": null,
+      "after_sha256": "4e7efb49d7dd26f4a309fba31668c617c8b3a8ddd9c58d0d7df79d999ee1dcc7"
+    },
+    {
+      "path": "examples/auth-cms/cmd/server/role_routes_proof_test.go",
+      "before_sha256": "787960c7f43716c672f89cf3a2827f71b09e2fe24f0ed2b31631c707e89714fb",
+      "after_sha256": "c55d795d5345625ae4c4342c0e999261731d96db68085396386f6bdc17fc4743"
+    },
+    {
+      "path": "pockets/authentication/README.md",
+      "before_sha256": "bea556522514c4bfca53c8c02ce7d920177480b5087c07322e84225e0611f403",
+      "after_sha256": "2392d8cd6ace02ee9c93e60df84f15b25d4469eac673672685696b4e2854fad5"
+    },
+    {
+      "path": "pockets/authentication/config.go",
+      "before_sha256": "a6009bf7466bc015be45b6bed5a172058efe336fde25afa302495081142e245f",
+      "after_sha256": "c4c367cfe6a46754a753f785e7361ba94ccb1ea67b36ee8cf4485c37b1c463e8"
+    },
+    {
+      "path": "pockets/authorization/BENCHMARKS.md",
+      "before_sha256": "337de22aa1c87ca52827ad3efc4c7b5f4c2dae89802e31eda5eec6f42714d91e",
+      "after_sha256": "6e694468d0ceace80543e465e5a34f7a9e5bcaf27818c251c06eb1e3cc7e284c"
+    },
+    {
+      "path": "pockets/authorization/README.md",
+      "before_sha256": "77d8e2a3ccd47624539cded32ffce045d8aeb19f3fde7cdac9ce0344300d1701",
+      "after_sha256": "3e299d0b3bba37df900543f690c1ffbdacedcbf6b9f0df1ca411c3d5b8b99c68"
+    },
+    {
+      "path": "pockets/authorization/codes_test.go",
+      "before_sha256": "f617550fcbb90a68e911fc6db4d83c47c4324a4bfb305092d2fd7695b21e0dcd",
+      "after_sha256": "b8af93b91dcf5241cde3daeca11c023b5a80a567520e183447d692932bc5bc4e"
+    },
+    {
+      "path": "pockets/authorization/constructor_policy_test.go",
+      "before_sha256": "9e1885ae7bed2a966dca0ccb0df2b206c028185d220b9fc80cfdbbf862a13d77",
+      "after_sha256": "2ac97cee136568b19dd79ffd9f5ea784e6c7c67d8e4761c71ea56c4d3ed940fe"
+    },
+    {
+      "path": "pockets/authorization/inbound/http/adapter_gates.go",
+      "before_sha256": "f69661dfdc1b520b950350ef447ed971570083eece5dd3b5726b2a58b4622eed",
+      "after_sha256": null
+    },
+    {
+      "path": "pockets/authorization/inbound/http/composable_middleware.go",
+      "before_sha256": "d042bd91ef568c6b0f7d0def4a5598846ea053ad2452b78a526b3ea8fff04849",
+      "after_sha256": "deab1c940469d5cc1e3b1a6afa4b7e64be8a5398cfd77a4f99d0d7e4edf01aac"
+    },
+    {
+      "path": "pockets/authorization/inbound/http/composable_middleware_test.go",
+      "before_sha256": "8616c4ddcf141e0e806382590b26f603d96adfd8de1809ef225e9fe9c4e8e77b",
+      "after_sha256": "2ec72bb3d6e568350fc12bc85c622e164d295a7a90445f9ca60bbc5f7f8c1f1f"
+    },
+    {
+      "path": "pockets/authorization/inbound/http/composite_middleware_test.go",
+      "before_sha256": "e4194bce9b14e363aee005dc4374f08cf9589932947513d5d6e940015c807668",
+      "after_sha256": "83a594ed2c410875b105ca0e19a1061e269bef9e6c707311d8e9f473113499cf"
+    },
+    {
+      "path": "pockets/authorization/inbound/http/fixture_test.go",
+      "before_sha256": "671f0a7072ffa3c1ff79e5dd2bee9745bdfec98cff3a872ab631dc788b63bfe9",
+      "after_sha256": "7b99ba55c66b2d9a550064079b4f64ccfe2c6e69e4d6ecff462f2058cdf89a61"
+    },
+    {
+      "path": "pockets/authorization/inbound/http/middleware.go",
+      "before_sha256": "047590d7deb3f95970cfd52a762c39469e8c8b3ae0fe4f0a414823ac07f18c64",
+      "after_sha256": "8bcb0c9eb69f8d2b4601bb16dc02fdd15c3b9589ac17a48098c3b0a2a5eb4bf0"
+    },
+    {
+      "path": "pockets/authorization/inbound/http/middleware_test.go",
+      "before_sha256": "ee7779f2f6a533d1963fce5f94b38e9bb296fb7269ae58df7e0702a3fd0c902f",
+      "after_sha256": "febd9f43239c1f7a9cbde21285eed4a5231fa952a655d296a6a059afebba0de8"
+    },
+    {
+      "path": "pockets/authorization/inbound/http/predicates.go",
+      "before_sha256": "c7714aa5e087ea7643f39a6d8f537c75a440aac3ddbcb4d25d52bcd4a99b077b",
+      "after_sha256": "042870fe83beb81a00cd41158a7dc3cff7212e522c792ad67d9579397d259389"
+    },
+    {
+      "path": "pockets/authorization/inbound/http/routes.go",
+      "before_sha256": "20fe2b2edfa6d9771173c58854e9609a7d3203f475262b3bec91280d3edc863d",
+      "after_sha256": "8c2ca53760d0ffe1e3ae468cfa64e1736c8186d992527f08c0f58858e94f1a28"
+    },
+    {
+      "path": "pockets/authorization/logic/decisions/compiler.go",
+      "before_sha256": "9a5cd94dd623a0311a534e9aab84f2011537dc1425738e58f4bdbcba78fd6943",
+      "after_sha256": "b1a52ade571e74b9e83107c4fe32a1060423cca5ccee56323ed91a5940030b61"
+    },
+    {
+      "path": "pockets/authorization/logic/decisions/model.go",
+      "before_sha256": "af6e5ac46121d3d88d1635fe5edb5d6e52c386c7bd9dbc9321b2ccac12e54f15",
+      "after_sha256": "8e466347f81382c014f07fc309bc61e3929151dba248fd0b8643486a52fdc427"
+    },
+    {
+      "path": "pockets/authorization/logic/model/check.go",
+      "before_sha256": "8e33f118656118edd79315d1aada79b8ab31d74f2070502dc1d6449b2cd9f7a3",
+      "after_sha256": "5c7b6a1dd715c9843cee6f7f5d05b17f831be20971ef78529739e78fb0f0f27e"
+    },
+    {
+      "path": "pockets/authorization/logic/model/limits.go",
+      "before_sha256": "3567331cb5672ad97a908b53157f6791e62faada1fb17ce85594afce22f7ac3d",
+      "after_sha256": "0f8db6967266054af28bd8a0ddf197b924fd5d26c8ab1d05475586a75eb80cd1"
+    },
+    {
+      "path": "pockets/authorization/middleware_test.go",
+      "before_sha256": "d608483fabccf59f8bd1c4608e67b08c7a9e6c997eccb38627fea429b06a25d2",
+      "after_sha256": "74c7f919cdd4c4746bd076bad3b4d55ac2b8489581d1d9e1462a4c1d531e7109"
+    },
+    {
+      "path": "pockets/authorization/roles_gate_test.go",
+      "before_sha256": "af5980fbfbff77b2e82d81ccd47794a77787ec46e5cb90eed92347aa4c279c3e",
+      "after_sha256": "458d9d418888fe9e8edde02756514a817acc5ae93411b572d9d7257c98dff12c"
+    },
+    {
+      "path": "workshop/documentation/docs/pockets/authorization.md",
+      "before_sha256": "1a2c60d8bdf5f9bfc527b0093c50dade31b427b7f24f8fcb0df2a598e019b060",
+      "after_sha256": "e26243f49d869ca3fa80bbd2ad82b9b21822d9cd6dfed60036e6d8fa2c61112e"
+    }
+  ]
+}

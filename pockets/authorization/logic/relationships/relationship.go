@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	authmodel "github.com/gopernicus/gopernicus/pockets/authorization/logic/model"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuples"
 	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/pkg/list"
 )
@@ -30,41 +30,7 @@ var ErrExpansionBudgetExceeded = fmt.Errorf("relationship: group-expansion budge
 // normalization is applied. Consequently group, group#member, and group#admin
 // are three DISTINCT SubjectRefs that never compare equal — the userset relation
 // is load-bearing, not decorative.
-type SubjectRef struct {
-	Type     string
-	ID       string
-	Relation string // "" = concrete subject; non-empty = the exact userset relation
-}
-
-// IsUserset reports whether the ref names a userset (a non-empty Relation).
-func (s SubjectRef) IsUserset() bool { return s.Relation != "" }
-
-// String renders the canonical Type:ID(#Relation) form for logs and debug
-// output. It is not a parse target.
-func (s SubjectRef) String() string {
-	if s.Relation == "" {
-		return s.Type + ":" + s.ID
-	}
-	return s.Type + ":" + s.ID + "#" + s.Relation
-}
-
-// Validate reports whether the ref is structurally usable: Type and ID must be
-// present and well formed; Relation is optional but, when present, must be well
-// formed too (see [ValidateRefField]). It applies no schema knowledge.
-func (s SubjectRef) Validate() error {
-	if err := authmodel.ValidateRefField("subject type", s.Type); err != nil {
-		return err
-	}
-	if err := authmodel.ValidateRefField("subject id", s.ID); err != nil {
-		return err
-	}
-	if s.Relation != "" {
-		if err := authmodel.ValidateRefField("subject relation", s.Relation); err != nil {
-			return err
-		}
-	}
-	return nil
-}
+type SubjectRef = tuples.SubjectRef
 
 // CreateRelationship is one tuple to create, the input to
 // [Storer.CreateRelationships].
@@ -91,16 +57,17 @@ func (c CreateRelationship) Subject() SubjectRef {
 // It does NOT consult the schema — schema conformance is the engine's
 // ValidateRelationships.
 func (c CreateRelationship) Validate() error {
-	if err := authmodel.ValidateRefField("resource type", c.ResourceType); err != nil {
-		return err
+	return c.Tuple().Validate()
+}
+
+// Tuple returns the canonical resource-scoped fact, preserving the exact subject
+// including its userset relation. Conversion does not validate the references;
+// missing resource coordinates remain invalid and never imply global scope.
+func (c CreateRelationship) Tuple() tuples.Tuple {
+	return tuples.Tuple{
+		Scope: tuples.On(c.ResourceType, c.ResourceID), Relation: c.Relation,
+		Subject: c.Subject(),
 	}
-	if err := authmodel.ValidateRefField("resource id", c.ResourceID); err != nil {
-		return err
-	}
-	if err := authmodel.ValidateRefField("relation", c.Relation); err != nil {
-		return err
-	}
-	return c.Subject().Validate()
 }
 
 // RelationTarget is a subject holding a relation on a resource, returned by
@@ -142,11 +109,11 @@ type ResourceRelationshipFilter struct {
 	Relation    *string // filter to a specific relation (e.g. "owner")
 }
 
-// Storer is the storage contract for the relationship kind — the raw fact
-// and model-scoped read surface the engine needs for permission checks, tuple CRUD, direct counts,
-// listing, and resource lookup. It is intentionally lean: business logic
-// (last-owner guards, role-change validation) lives on the engine, not the
-// store.
+// Storer is a resource-scoped facade over canonical tuples. The same facts may
+// also be written or read through exact role APIs. Different relation labels
+// coexist; the full scope, relation and exact subject identify a fact. Trusted
+// raw writes bypass actor guards and guardian policy. Guarded mutations enforce
+// those rules inside the serialized repository boundary.
 //
 // # Bounding (AZ3-1.3, AZ3-5.7 F4)
 //
@@ -182,11 +149,9 @@ type ResourceRelationshipFilter struct {
 // size) are engine-scoped and are not threaded here.
 //
 // The listing methods are list-typed (design §9): a list.Request in, a
-// list.Page[T] out. Default ordering is tuple_key ASC: the validated full tuple
-// (resource_type, resource_id, relation, subject_type, subject_id, subject_relation)
-// joined with U+0001 and compared in byte order. Control characters are forbidden
-// in tuple fields, making the key unambiguous. Listings expose the tuple fields,
-// not a synthetic public identifier.
+// list.Page[T] out. Default ordering is the full canonical tuple identity in
+// byte order, exposed through opaque tuple_key cursors. Resource scope is fixed
+// for these listings. Listings expose fact fields, not surrogate identifiers.
 //
 // Ambient transactions. When ctx carries the connector's Transact-owned
 // transaction (sdk/capabilities/transaction.Transactor — the connector stashes the
@@ -194,8 +159,8 @@ type ResourceRelationshipFilter struct {
 // it), EVERY method of the store — reads and writes alike — runs ON that
 // transaction and never opens, commits, or rolls back one of its own; the
 // enclosing Transact decides the outcome from its callback's return value. A
-// host must return a write error from that callback (SetRelationTargets'
-// conflict included) to roll the whole workflow back; returning nil requests
+// host must return a write error from that callback to roll the whole workflow
+// back; returning nil requests
 // commit of everything before it. Outside an ambient transaction behavior is
 // unchanged. A SetRelationTargets that must serialize concurrent callers does
 // so with a lock scoped to the ambient transaction, so the serialization lasts
@@ -244,11 +209,9 @@ type Storer interface {
 	// Relationship CRUD
 	// -------------------------------------------------------------------
 
-	// CreateRelationships inserts a batch of naturally keyed tuples. A second,
-	// different relation for the same exact subject on the
-	// same resource — and an exact-duplicate tuple — is a SILENT NO-OP under the
-	// bare ON CONFLICT DO NOTHING (nil error, existing row unchanged, never
-	// ErrAlreadyExists). An empty batch is nil.
+	// CreateRelationships inserts a batch of full-identity facts atomically.
+	// Exact duplicates are idempotent; different relations for the same resource
+	// and subject coexist. An empty batch adds no facts.
 	CreateRelationships(ctx context.Context, relationships []CreateRelationship) error
 
 	// SetRelationTargets atomically makes the stored targets for exactly one
@@ -260,11 +223,8 @@ type Storer interface {
 	// merge into an accidental union. Store adapters must provide real transaction
 	// or lock atomicity; a delete-then-create implementation is non-conforming.
 	//
-	// The engine validates and de-duplicates the rows before calling this method.
-	// Store implementations should nevertheless reject a desired target that is
-	// already related to the resource under a different relation, because the
-	// one-relation-per-subject invariant would otherwise make the requested state
-	// impossible. The whole operation must then roll back unchanged.
+	// The writer validates and de-duplicates rows. Other relation labels are
+	// independent facts and must remain unchanged, even for the same subject.
 	SetRelationTargets(ctx context.Context, resourceType, resourceID, relation string, targets []CreateRelationship) error
 
 	// DeleteRelationshipTarget removes one exact tuple, including the userset

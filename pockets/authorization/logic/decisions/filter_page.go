@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuples"
+
 	authmodel "github.com/gopernicus/gopernicus/pockets/authorization/logic/model"
 	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/pkg/list"
@@ -109,10 +111,10 @@ func FilterPage[T any](ctx context.Context, s *Service, req FilterPageRequest[T]
 	if err := req.Principal.Validate(); err != nil {
 		return FilteredPage[T]{}, err
 	}
-	if err := authmodel.ValidateRefField("permission", req.Permission); err != nil {
+	if err := tuples.ValidateRefField("permission", req.Permission); err != nil {
 		return FilteredPage[T]{}, err
 	}
-	if err := authmodel.ValidateRefField("resource type", req.ResourceType); err != nil {
+	if err := tuples.ValidateRefField("resource type", req.ResourceType); err != nil {
 		return FilteredPage[T]{}, err
 	}
 	if req.ID == nil {
@@ -136,6 +138,19 @@ func FilterPage[T any](ctx context.Context, s *Service, req FilterPageRequest[T]
 		return FilteredPage[T]{}, fmt.Errorf("authorization: FilterPage BatchSize must be between zero and MaxBatchSize: %w", sdk.ErrInvalidInput)
 	}
 
+	var result FilteredPage[T]
+	err := s.withOperation(ctx, func(ctx context.Context, view *Service) error {
+		var e error
+		result, e = filterPage(ctx, view, req, limit)
+		return e
+	})
+	if err != nil {
+		return FilteredPage[T]{}, err
+	}
+	return result, nil
+}
+
+func filterPage[T any](ctx context.Context, s *Service, req FilterPageRequest[T], limit int) (FilteredPage[T], error) {
 	maxScan := s.limits.MaxFilterScan
 	out := make([]T, 0, limit)
 	cursor := req.Cursor

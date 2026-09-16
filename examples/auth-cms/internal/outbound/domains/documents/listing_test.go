@@ -14,6 +14,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuples"
+
 	inbound "github.com/gopernicus/gopernicus/examples/auth-cms/internal/inbound/domains/documents"
 	domain "github.com/gopernicus/gopernicus/examples/auth-cms/internal/logic/domains/documents"
 	"github.com/gopernicus/gopernicus/pockets/authorization"
@@ -24,12 +26,22 @@ import (
 	"github.com/gopernicus/gopernicus/sdk"
 )
 
+type testAuthorizationStore struct {
+	relationships.Storer
+	Tuples tuples.Storer
+}
+
+func newMemoryAuthorizationStore() *testAuthorizationStore {
+	s := memory.New()
+	return &testAuthorizationStore{Storer: s.Relationships(), Tuples: s.Tuples()}
+}
+
 var alice = sdk.Principal{Type: "user", ID: "alice"}
 
-func documentModel() relationships.Schema {
-	return relationships.NewSchema([]relationships.ResourceSchema{{Name: "document", Def: relationships.ResourceTypeDef{
-		Relations:   map[string]relationships.RelationDef{"viewer": {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "user"}}}},
-		Permissions: map[string]relationships.PermissionRule{"view": relationships.AnyOf(relationships.Direct("viewer"))},
+func documentModel() decisions.Model {
+	return decisions.NewSchema([]decisions.ResourceSchema{{Name: "document", Def: decisions.ResourceTypeDef{
+		Relations:   map[string]decisions.RelationDef{"viewer": {AllowedSubjects: []decisions.SubjectTypeRef{{Type: "user"}}}},
+		Permissions: map[string]decisions.Expression{"view": decisions.AnyOf(decisions.Direct("viewer"))},
 	}}})
 }
 
@@ -42,9 +54,9 @@ func testCodec(t *testing.T) *CursorCodec {
 	return c
 }
 
-func testAuthorizer(t *testing.T, store relationships.Storer, limits model.EvaluationLimits) authorization.Components {
+func testAuthorizer(t *testing.T, store *testAuthorizationStore, limits model.EvaluationLimits) authorization.Components {
 	t.Helper()
-	c, err := authorization.New(authorization.Repositories{Relationships: store}, authorization.WithRelationshipModel(documentModel()), authorization.WithLimits(limits))
+	c, err := authorization.New(authorization.Repositories{Tuples: store.Tuples}, authorization.WithModel(documentModel()), authorization.WithLimits(limits))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -222,7 +234,7 @@ func verifyListingHTTP(t *testing.T, lister domain.Lister) {
 }
 
 func TestMemoryListingHTTP(t *testing.T) {
-	store := memory.New().Relationships()
+	store := newMemoryAuthorizationStore()
 	grant(t, store, "01", "90", "30", "20", "other", "unicode")
 	az := testAuthorizer(t, store, model.EvaluationLimits{})
 	for _, strategy := range []Strategy{CompleteSet, Candidates} {
@@ -233,7 +245,7 @@ func TestMemoryListingHTTP(t *testing.T) {
 }
 
 func TestListingSparseContinuationIsPrivate(t *testing.T) {
-	store := memory.New().Relationships()
+	store := newMemoryAuthorizationStore()
 	grant(t, store, "visible")
 	az := testAuthorizer(t, store, model.EvaluationLimits{MaxFilterScan: 2})
 	reader := testMemory(t, []domain.Document{
@@ -261,7 +273,7 @@ func TestListingSparseContinuationIsPrivate(t *testing.T) {
 }
 
 func TestListingBypassPreservesBusinessQueryAndErrors(t *testing.T) {
-	store := memory.New().Relationships()
+	store := newMemoryAuthorizationStore()
 	az := testAuthorizer(t, store, model.EvaluationLimits{})
 	for _, strategy := range []Strategy{CompleteSet, Candidates} {
 		t.Run(string(strategy), func(t *testing.T) {
@@ -285,7 +297,7 @@ func (r failedReader) read(context.Context, domain.Query, position, int, decisio
 }
 
 func TestListingDoesNotTurnStorageFailureIntoEmptySuccess(t *testing.T) {
-	store := memory.New().Relationships()
+	store := newMemoryAuthorizationStore()
 	grant(t, store, "01")
 	az := testAuthorizer(t, store, model.EvaluationLimits{})
 	for _, strategy := range []Strategy{CompleteSet, Candidates} {
@@ -295,7 +307,7 @@ func TestListingDoesNotTurnStorageFailureIntoEmptySuccess(t *testing.T) {
 }
 
 func TestListingCompleteSetOverflowDoesNotUsePartialIDs(t *testing.T) {
-	store := memory.New().Relationships()
+	store := newMemoryAuthorizationStore()
 	docs, ids := largeFixture(1005)
 	grant(t, store, ids...)
 	az := testAuthorizer(t, store, model.EvaluationLimits{})
@@ -340,7 +352,7 @@ func TestCandidatePullMeasurements(t *testing.T) {
 	for _, divisor := range []int{1, 2, 100} {
 		t.Run(fmt.Sprintf("one_in_%d", divisor), func(t *testing.T) {
 			docs, ids := largeFixture(1000)
-			store := memory.New().Relationships()
+			store := newMemoryAuthorizationStore()
 			var permitted []string
 			for i, id := range ids {
 				if (i+1)%divisor == 0 {

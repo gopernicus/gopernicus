@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuples"
+
 	"github.com/gopernicus/gopernicus/pockets"
 	invitations "github.com/gopernicus/gopernicus/pockets/authentication/logic/invitations"
 	authorization "github.com/gopernicus/gopernicus/pockets/authorization"
@@ -200,7 +202,7 @@ func TestHostMutationGuardGlobalMutationTrustedOnly(t *testing.T) {
 
 		Subject: model.PrincipalRef{Type: "user", ID: "u-target"},
 		Role:    "auditor",
-		// empty scope pair = GLOBAL
+		Scope:   tuples.Global(),
 	})
 	if !errors.Is(err, sdk.ErrForbidden) {
 		t.Fatalf("non-admin global role assign: want forbidden, got %v", err)
@@ -230,8 +232,8 @@ func demoGrant(operationID, relation, subjectID string) invitations.GrantInput {
 }
 
 func TestBaselineInvitationGranterNeedsNoMutationLifecycle(t *testing.T) {
-	rels := authzmem.NewRelationships()
-	comps, err := authorization.New(authorization.Repositories{Relationships: rels}, authorization.WithRelationshipModel(authzSchema()))
+	store := authzmem.New()
+	comps, err := authorization.New(authorization.Repositories{Tuples: store.Tuples()}, authorization.WithModel(authzSchema()))
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
@@ -334,35 +336,37 @@ func TestInvitationReinviteAfterRevokeRestoresTuple(t *testing.T) {
 	}
 }
 
-// TestInvitationGrantDifferentRelationConflicts proves adversarial case 3: an existing
-// DIFFERENT relation for the subject makes a grant a semantic conflict — the host Granter
-// returns a loud error wrapping sdk.ErrConflict (it does NOT ReplaceRelationship), so
-// authentication never records the invitation as accepted and no relation is upgraded.
-func TestInvitationGrantDifferentRelationConflicts(t *testing.T) {
+// Accepting member preserves an existing owner on the same subject/resource.
+func TestInvitationMemberAndOwnerCoexist(t *testing.T) {
 	comps := hostAuthz(t)
-	svc, sm := comps, comps.SystemMutator
 	ctx := context.Background()
-	if err := seedAuthorization(ctx, sm); err != nil {
-		t.Fatalf("seedAuthorization: %v", err)
+	if err := seedAuthorization(ctx, comps.SystemMutator); err != nil {
+		t.Fatal(err)
 	}
-	g, _ := hostGranter(sm, resourceKey(demoResourceType, demoResourceID))
-
-	// The subject already holds member on project:demo.
-	if err := g.Grant(ctx, demoGrant("inv-member", "member", "conflictee")); err != nil {
-		t.Fatalf("seed member grant: %v", err)
-	}
-
-	// A DIFFERENT relation (owner) for the same subject is the one-relation conflict.
-	err := g.Grant(ctx, demoGrant("inv-owner", "owner", "conflictee"))
-	if !errors.Is(err, sdk.ErrConflict) {
-		t.Fatalf("conflicting relation grant: want sdk.ErrConflict, got %v", err)
-	}
-	// State is not advanced: the subject still holds only member (no owner ⇒ no manage_access).
-	if allowed(t, svc, "conflictee", manageAccessPerm, demoResourceID) {
-		t.Fatal("refused conflict nonetheless wrote an owner row (manage_access satisfied)")
-	}
-	if !allowed(t, svc, "conflictee", demoPermission, demoResourceID) {
-		t.Fatal("the original member tuple was disturbed by the refused conflict")
+	reg := newHostResourceRegistry(resourceKey(demoResourceType, demoResourceID))
+	raw := relationshipGranter{writer: comps.RelationshipWriter, reader: comps.Relationships, exists: reg.Exists}
+	guarded, _ := hostGranter(comps.SystemMutator, resourceKey(demoResourceType, demoResourceID))
+	for name, g := range map[string]invitations.Granter{"raw": raw, "guarded": guarded} {
+		t.Run(name, func(t *testing.T) {
+			id := "owner-" + name
+			if err := g.Grant(ctx, demoGrant("owner", "owner", id)); err != nil {
+				t.Fatal(err)
+			}
+			for range 2 {
+				if err := g.Grant(ctx, demoGrant("member", "member", id)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for _, role := range []string{"owner", "member"} {
+				ok, err := comps.Roles.HasRoleIn(ctx, model.PrincipalRef{Type: "user", ID: id}, role, model.Resource{Type: demoResourceType, ID: demoResourceID})
+				if err != nil || !ok {
+					t.Fatalf("missing %s: %v", role, err)
+				}
+			}
+			if !allowed(t, comps, id, manageAccessPerm, demoResourceID) {
+				t.Fatal("invitation displaced owner")
+			}
+		})
 	}
 }
 
@@ -483,7 +487,7 @@ func TestHostAuthorizationHasNoRawWriteOrSystemActor(t *testing.T) {
 	}
 	// Every actor-facing mutation method takes an Actor (never a privilege flag).
 	actorType := reflect.TypeOf(mutations.Actor{})
-	for _, name := range []string{"GrantRelationship", "RevokeRelationship", "ReplaceRelationship", "AssignRole", "UnassignRole"} {
+	for _, name := range []string{"GrantRelationship", "RevokeRelationship", "AssignRole", "UnassignRole"} {
 		m, ok := svcType.MethodByName(name)
 		if !ok {
 			t.Fatalf("Service.%s (guarded) must exist", name)
@@ -543,31 +547,15 @@ func TestAuthorizationPosturesDemonstrable(t *testing.T) {
 // one decision surface.
 // =============================================================================
 
-// TestHostModelsSplitOneTypeByPermission proves the host's two models are legal
-// together and that the split is what makes them legal: `project` appears in BOTH
-// the relationship Schema and the RoleModel, but no (type, permission) PAIR does —
-// `view`/`manage_access` are relationship-owned, `audit` is role-owned. Declaring a
-// relationship-owned pair in the RoleModel is a construction error, so the pair
-// ownership this host relies on cannot rot silently.
-func TestHostModelsSplitOneTypeByPermission(t *testing.T) {
-	if _, err := newAuthorization(nil, nil); err != nil {
-		t.Fatalf("production wiring (Schema + RoleModel over one resource type): %v", err)
+func TestHostUnifiedModelDeclaresGraphAndExactPermissions(t *testing.T) {
+	c, err := newAuthorization(nil, nil)
+	if err != nil {
+		t.Fatal(err)
 	}
-
-	store := authzmem.New(authzmem.WithGuardianPolicy(authzGuardianPolicy()))
-	conflicting := authzRoleModel()
-	conflicting.ResourceTypes[demoResourceType] = model.RoleTypeDef{
-		Roles:       []string{demoRole},
-		Permissions: map[string][]string{demoPermission: {demoRole}}, // relationship-owned pair
-	}
-	_, err := authorization.New(authorization.Repositories{
-		Relationships: store.Relationships(),
-		Roles:         store.Roles(),
-		Mutations:     store.Mutations(),
-	}, authorization.WithRelationshipModel(authzSchema()), authorization.WithRoleModel(conflicting), authorization.WithGuard(hostMutationGuard{}))
-	if !errors.Is(err, model.ErrModelConflict) {
-		t.Fatalf("RoleModel claiming the relationship-owned pair (%s, %s): want ErrModelConflict, got %v",
-			demoResourceType, demoPermission, err)
+	for _, p := range []string{demoPermission, manageAccessPerm, demoAuditPermission} {
+		if !c.Decisions.DeclaresPermission(demoResourceType, p) {
+			t.Fatalf("undeclared %s", p)
+		}
 	}
 }
 
@@ -628,10 +616,9 @@ func (h *demoAuditHost) assignAuditor(userID, resourceType, resourceID string) {
 	h.t.Helper()
 	if _, err := h.comps.SystemMutator.AssignRole(context.Background(), mutations.AssignRoleCommand{
 
-		Subject:      model.PrincipalRef{Type: "user", ID: userID},
-		Role:         demoRole,
-		ResourceType: resourceType,
-		ResourceID:   resourceID,
+		Subject: model.PrincipalRef{Type: "user", ID: userID},
+		Role:    demoRole,
+		Scope:   testRoleScope(resourceType, resourceID),
 	}); err != nil {
 		h.t.Fatalf("AssignRole(%s, %s, %s/%s): %v", userID, demoRole, resourceType, resourceID, err)
 	}
@@ -644,21 +631,9 @@ func (h *demoAuditHost) get(c *linkClient, path string) (int, []byte) {
 	return resp.StatusCode, body
 }
 
-// TestDemoAuditRouteIsGatedByTheRoleModel is the composed both-kinds assertion: the
-// /demo/audit route is gated by the ROLE MODEL (RequirePermissionFixed on the
-// role-owned project/audit pair — the host writes no HasRole gate of its own),
-// while the relationship-owned project/view routes are unaffected. It proves the
-// dispatch has no cross-kind widening in either direction:
-//
-//   - an `auditor` with NO relationship tuple passes /demo/audit and is still 403 on
-//     the relationship-owned /demo/members-only;
-//   - a project/view tuple-holder WITHOUT the role passes /demo/members-only and is
-//     403 on /demo/audit;
-//   - a GLOBALLY assigned `auditor` passes the scoped role-owned gate (the roles
-//     kind's global fallback) yet is NOT a platform admin — isPlatformAdmin stays
-//     false and the relationship-owned gate still refuses it. Universal bypass
-//     remains the host recipe, never a consequence of the role model.
-func TestDemoAuditRouteIsGatedByTheRoleModel(t *testing.T) {
+// The named audit permission checks scoped membership. A global auditor alone
+// is denied, while the platform-admin recipe remains independently composed.
+func TestDemoAuditRouteUsesScopedPredicate(t *testing.T) {
 	h := newDemoAuditHost(t)
 
 	// No credential at all: the route's RequirePrincipal answers before any decision.
@@ -706,14 +681,13 @@ func TestDemoAuditRouteIsGatedByTheRoleModel(t *testing.T) {
 		t.Fatalf("GET /demo/audit as a project/view holder without the role = %d, want 403; body=%s", code, body)
 	}
 
-	// (3) A GLOBAL auditor: allowed on the role-owned pair through the global
-	// fallback, absent from the DIRECT-scope read-back, and NOT a platform admin.
+	// (3) A global auditor does not satisfy scoped audit policy or platform admin.
 	global := h.signUp("role-model-global@example.com")
 	globalID := h.principalID(global)
 	h.assignAuditor(globalID, "", "")
 	code, body = h.get(global, "/demo/audit")
-	if code != http.StatusOK {
-		t.Fatalf("GET /demo/audit as a global auditor = %d, want 200; body=%s", code, body)
+	if code != http.StatusForbidden {
+		t.Fatalf("GET /demo/audit as a global auditor = %d, want 403; body=%s", code, body)
 	}
 	if strings.Contains(string(body), globalID) {
 		t.Fatalf("global auditor %s must not appear in the DIRECT-scope read-back: %s", globalID, body)
@@ -730,4 +704,12 @@ func TestDemoAuditRouteIsGatedByTheRoleModel(t *testing.T) {
 	if !isPlatformAdmin(context.Background(), h.comps.Decisions, "user", seedOwnerSubject.ID) {
 		t.Fatal("the seeded platform admin recipe stopped governing the relationship-owned kind")
 	}
+}
+
+// Historical table-driven fixture coordinates are converted explicitly at the boundary.
+func testRoleScope(rt, id string) tuples.Scope {
+	if rt == "" && id == "" {
+		return tuples.Global()
+	}
+	return tuples.On(rt, id)
 }

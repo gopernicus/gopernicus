@@ -2,11 +2,15 @@ package authorization
 
 import (
 	"context"
-	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	authorizationhttp "github.com/gopernicus/gopernicus/pockets/authorization/inbound/http"
+
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/decisions"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuples"
 
 	authmodel "github.com/gopernicus/gopernicus/pockets/authorization/logic/model"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/mutations"
@@ -25,23 +29,23 @@ const testPrincipalHeader = "X-Test-Principal"
 // its globally assigned steward listed EXPLICITLY on each permission it should
 // grant. Nothing here is a bypass — delete steward from one permission's grantor
 // list and it stops granting that one permission (proved below).
-func gpsRoleModel() authmodel.RoleModel {
-	return authmodel.RoleModel{
-		ResourceTypes: map[string]authmodel.RoleTypeDef{
-			"platform": {Roles: []string{"steward", "developer"},
-				Permissions: map[string][]string{
-					"steward": {"steward"}, "developer": {"steward", "developer"},
-					"delete": {"steward"}, "partnership_financials": {"steward"}, "changelog_viewer": {"steward"},
+func gpsRoleModel() decisions.Model {
+	return decisions.Model{
+		ResourceTypes: map[string]decisions.ResourceTypeDef{
+			"platform": {
+				Permissions: map[string]decisions.Expression{
+					"steward": decisions.Any(decisions.RoleIn("steward"), decisions.Role("steward")), "developer": decisions.Any(decisions.RoleIn("steward"), decisions.Role("steward"), decisions.RoleIn("developer"), decisions.Role("developer")),
+					"delete": decisions.Any(decisions.RoleIn("steward"), decisions.Role("steward")), "partnership_financials": decisions.Any(decisions.RoleIn("steward"), decisions.Role("steward")), "changelog_viewer": decisions.Any(decisions.RoleIn("steward"), decisions.Role("steward")),
 				}},
-			"organization": {Roles: []string{"viewer", "contributor", "report_editor", "report_publisher", "steward"},
-				Permissions: map[string][]string{
-					"view":           {"viewer", "contributor", "report_editor", "report_publisher", "steward"},
-					"contribute":     {"contributor", "steward"},
-					"report_edit":    {"report_editor", "report_publisher", "steward"},
-					"report_publish": {"report_publisher", "steward"},
+			"organization": {
+				Permissions: map[string]decisions.Expression{
+					"view":           decisions.Any(decisions.RoleIn("viewer"), decisions.Role("viewer"), decisions.RoleIn("contributor"), decisions.Role("contributor"), decisions.RoleIn("report_editor"), decisions.Role("report_editor"), decisions.RoleIn("report_publisher"), decisions.Role("report_publisher"), decisions.RoleIn("steward"), decisions.Role("steward")),
+					"contribute":     decisions.Any(decisions.RoleIn("contributor"), decisions.Role("contributor"), decisions.RoleIn("steward"), decisions.Role("steward")),
+					"report_edit":    decisions.Any(decisions.RoleIn("report_editor"), decisions.Role("report_editor"), decisions.RoleIn("report_publisher"), decisions.Role("report_publisher"), decisions.RoleIn("steward"), decisions.Role("steward")),
+					"report_publish": decisions.Any(decisions.RoleIn("report_publisher"), decisions.Role("report_publisher"), decisions.RoleIn("steward"), decisions.Role("steward")),
 				}},
-			"section": {Roles: []string{"member", "steward"}, Permissions: map[string][]string{"enter": {"member", "steward"}}},
-			"page":    {Roles: []string{"viewer", "steward"}, Permissions: map[string][]string{"view": {"viewer", "steward"}}},
+			"section": {Permissions: map[string]decisions.Expression{"enter": decisions.Any(decisions.RoleIn("member"), decisions.Role("member"), decisions.RoleIn("steward"), decisions.Role("steward"))}},
+			"page":    {Permissions: map[string]decisions.Expression{"view": decisions.Any(decisions.RoleIn("viewer"), decisions.Role("viewer"), decisions.RoleIn("steward"), decisions.Role("steward"))}},
 		},
 	}
 }
@@ -50,9 +54,9 @@ func gpsRoleModel() authmodel.RoleModel {
 // kind and the atomic mutation repository, no relationship kind, the D1 model as
 // WithRoleModel. model is passed so the negative half can boot the SAME
 // assignments under a model with one grantor removed.
-func newGPSHost(t *testing.T, store *memory.Store, model authmodel.RoleModel) Components {
+func newGPSHost(t *testing.T, store *memory.Store, model decisions.Model) Components {
 	t.Helper()
-	comps, err := New(Repositories{Roles: store.Roles(), Mutations: store.Mutations()}, WithRoleModel(model))
+	comps, err := New(Repositories{Tuples: store.Tuples(), Mutations: store.Mutations()}, WithModel(model))
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
@@ -63,10 +67,9 @@ func assignGPSRole(t *testing.T, mutator *mutations.SystemMutator, subjectType, 
 	t.Helper()
 	receipt, err := mutator.AssignRole(context.Background(), mutations.AssignRoleCommand{
 
-		Subject:      authmodel.PrincipalRef{Type: subjectType, ID: subjectID},
-		Role:         roleName,
-		ResourceType: resourceType,
-		ResourceID:   resourceID,
+		Subject: authmodel.PrincipalRef{Type: subjectType, ID: subjectID},
+		Role:    roleName, Scope: fixtureScope(resourceType,
+			resourceID),
 	})
 	if err != nil {
 		t.Fatalf("AssignRole(%s %s:%s on %s/%s): %v", roleName, subjectType, subjectID, resourceType, resourceID, err)
@@ -109,11 +112,11 @@ func TestRoleGatesWithRealEngine(t *testing.T) {
 	group := router.Group("/api/v1", injectTestPrincipal)
 	noContent := func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) }
 	// One route per D1 resource type, each mounted in coordinates.
-	group.Handle(http.MethodGet, "/orgs/{id}", noContent, svc.HTTP.RequirePermissionOn("organization", "view", "id"))
-	group.Handle(http.MethodGet, "/orgs/{id}/publish", noContent, svc.HTTP.RequirePermissionOn("organization", "report_publish", "id"))
-	group.Handle(http.MethodGet, "/sections/{id}", noContent, svc.HTTP.RequirePermissionOn("section", "enter", "id"))
-	group.Handle(http.MethodGet, "/pages/{id}", noContent, svc.HTTP.RequirePermissionOn("page", "view", "id"))
-	group.Handle(http.MethodGet, "/platform", noContent, svc.HTTP.RequirePermissionFixed("platform", "steward", "global"))
+	group.Handle(http.MethodGet, "/orgs/{id}", noContent, svc.HTTP.Require(authorizationhttp.Can("view", authorizationhttp.Path("organization", "id"))))
+	group.Handle(http.MethodGet, "/orgs/{id}/publish", noContent, svc.HTTP.Require(authorizationhttp.Can("report_publish", authorizationhttp.Path("organization", "id"))))
+	group.Handle(http.MethodGet, "/sections/{id}", noContent, svc.HTTP.Require(authorizationhttp.Can("enter", authorizationhttp.Path("section", "id"))))
+	group.Handle(http.MethodGet, "/pages/{id}", noContent, svc.HTTP.Require(authorizationhttp.Can("view", authorizationhttp.Path("page", "id"))))
+	group.Handle(http.MethodGet, "/platform", noContent, svc.HTTP.Require(authorizationhttp.Can("steward", authorizationhttp.Fixed("platform", "global"))))
 
 	do := func(principal, path string) int {
 		req := httptest.NewRequest(http.MethodGet, path, nil)
@@ -189,7 +192,7 @@ func TestRoleGatesWithRealEngine(t *testing.T) {
 		if err != nil || !res.Allowed {
 			t.Fatalf("CheckExplain(steward): res=%+v err=%v", res, err)
 		}
-		if res.Reason != "role:steward@global" {
+		if res.ReasonCode != authmodel.ReasonGranted {
 			t.Fatalf("reason = %q, want role:steward@global", res.Reason)
 		}
 		if explanation.Decision != res.ReasonCode {
@@ -197,15 +200,15 @@ func TestRoleGatesWithRealEngine(t *testing.T) {
 		}
 		var granting *authmodel.ExplainStep
 		for i := range explanation.Steps {
-			if explanation.Steps[i].Role == "steward" {
+			if explanation.Steps[i].Relation == "steward" && explanation.Steps[i].Outcome == authmodel.ReasonGranted {
 				granting = &explanation.Steps[i]
 			}
 		}
 		if granting == nil {
 			t.Fatalf("no steward step in the trace: %+v", explanation.Steps)
 		}
-		if granting.Kind != authmodel.ExplainKindRole || granting.Scope != authmodel.ExplainScopeGlobal {
-			t.Fatalf("steward step = %+v, want kind %q scope %q", *granting, authmodel.ExplainKindRole, authmodel.ExplainScopeGlobal)
+		if granting.Kind != authmodel.ExplainKindExact || granting.Scope != tuples.Global() || granting.ResourceType != "" || granting.ResourceID != "" {
+			t.Fatalf("steward step = %+v, want exact global scope", *granting)
 		}
 	})
 
@@ -215,7 +218,7 @@ func TestRoleGatesWithRealEngine(t *testing.T) {
 				t.Fatalf("a pair the model never declares must panic at registration, not 500 per request")
 			}
 		}()
-		_ = svc.HTTP.RequirePermissionOn("organization", "fly", "id")
+		_ = svc.HTTP.Require(authorizationhttp.Can("fly", authorizationhttp.Path("organization", "id")))
 	})
 }
 
@@ -227,10 +230,16 @@ func TestRoleGatesRefuseNonsenseAtBoot(t *testing.T) {
 	svc := comps
 
 	for name, mount := range map[string]func(){
-		"undeclared pair":  func() { _ = svc.HTTP.RequirePermissionOn("organization", "steward", "id") },
-		"unknown resource": func() { _ = svc.HTTP.RequirePermissionFixed("galaxy", "view", "x") },
-		"empty parameter":  func() { _ = svc.HTTP.RequirePermissionOn("organization", "view", "") },
-		"empty fixed id":   func() { _ = svc.HTTP.RequirePermissionFixed("platform", "steward", "") },
+		"undeclared pair": func() {
+			_ = svc.HTTP.Require(authorizationhttp.Can("steward", authorizationhttp.Path("organization", "id")))
+		},
+		"unknown resource": func() { _ = svc.HTTP.Require(authorizationhttp.Can("view", authorizationhttp.Fixed("galaxy", "x"))) },
+		"empty parameter": func() {
+			_ = svc.HTTP.Require(authorizationhttp.Can("view", authorizationhttp.Path("organization", "")))
+		},
+		"empty fixed id": func() {
+			_ = svc.HTTP.Require(authorizationhttp.Can("steward", authorizationhttp.Fixed("platform", "")))
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			defer func() {
@@ -255,7 +264,7 @@ func TestStewardGrantsOnlyWhatTheModelNames(t *testing.T) {
 
 	narrowed := gpsRoleModel()
 	organization := narrowed.ResourceTypes["organization"]
-	organization.Permissions["report_publish"] = []string{"report_publisher"}
+	organization.Permissions["report_publish"] = decisions.Any(decisions.RoleIn("report_publisher"), decisions.Role("report_publisher"))
 	narrowed.ResourceTypes["organization"] = organization
 	svc := newGPSHost(t, store, narrowed)
 
@@ -275,7 +284,7 @@ func TestStewardGrantsOnlyWhatTheModelNames(t *testing.T) {
 
 	// Every permission that still names steward is unaffected.
 	view := authmodel.CheckRequest{Principal: boss, Permission: "view", Resource: authmodel.Resource{Type: "organization", ID: "org-1"}}
-	if res, err := svc.Decisions.Check(ctx, view); err != nil || !res.Allowed || res.Reason != "role:steward@global" {
+	if res, err := svc.Decisions.Check(ctx, view); err != nil || !res.Allowed || res.ReasonCode != authmodel.ReasonGranted {
 		t.Fatalf("view under the narrowed model: res=%+v err=%v, want allowed via role:steward@global", res, err)
 	}
 	if look, err := svc.Decisions.LookupAllResourceIDs(ctx, boss, "view", "organization"); err != nil || !look.Unrestricted {
@@ -283,23 +292,15 @@ func TestStewardGrantsOnlyWhatTheModelNames(t *testing.T) {
 	}
 }
 
-// TestAssigningAnUndeclaredRoleIsLoud is the D8 trap the model closes: a typo'd
-// role name is refused at assign time on the trusted seam instead of becoming a
-// permanently silent no-grant.
-func TestAssigningAnUndeclaredRoleIsLoud(t *testing.T) {
+func TestOpaqueRoleDoesNotGrantNamedPermission(t *testing.T) {
 	comps := newGPSHost(t, memory.New(), gpsRoleModel())
-
-	_, err := comps.SystemMutator.AssignRole(context.Background(), mutations.AssignRoleCommand{
-
-		Subject:      authmodel.PrincipalRef{Type: "user", ID: "member"},
-		Role:         "vewer",
-		ResourceType: "organization",
-		ResourceID:   "org-1",
-	})
-	if !errors.Is(err, authmodel.ErrInvalidRoleModel) {
-		t.Fatalf("assigning a role the model does not declare: got %v, want ErrInvalidRoleModel", err)
+	ctx := context.Background()
+	_, err := comps.SystemMutator.AssignRole(ctx, mutations.AssignRoleCommand{Subject: prinU("member"), Role: "vewer", Scope: tuples.On("organization", "org-1")})
+	if err != nil {
+		t.Fatal(err)
 	}
-	if !strings.Contains(err.Error(), "vewer") {
-		t.Fatalf("the message must name the offending role, got %v", err)
+	result, err := comps.Decisions.Check(ctx, authmodel.CheckRequest{Principal: prinU("member"), Permission: "view", Resource: authmodel.Resource{Type: "organization", ID: "org-1"}})
+	if err != nil || result.Allowed {
+		t.Fatalf("opaque label implied permission: %+v, %v", result, err)
 	}
 }

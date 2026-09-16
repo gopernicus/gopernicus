@@ -9,10 +9,7 @@ import (
 // Guarded relationship writes authorize and apply one command atomically.
 // Successful calls return applied, no_change or not_found; refusals return errors.
 
-// GrantRelationshipCommand grants a subject a single relation on a resource. Under
-// the one-relation rule a different relation for a subject already related to the
-// resource is a semantic_conflict (use ReplaceRelationship); an exact-duplicate grant
-// is a no_change result.
+// GrantRelationshipCommand adds one independent relation. Exact duplicates are no-ops.
 type GrantRelationshipCommand struct {
 	ResourceType string
 	ResourceID   string
@@ -23,16 +20,6 @@ type GrantRelationshipCommand struct {
 // RevokeRelationshipCommand removes a subject's exact relation on a resource.
 // Revoking an absent tuple is a committed not_found no-op, not an error.
 type RevokeRelationshipCommand struct {
-	ResourceType string
-	ResourceID   string
-	Relation     string
-	Subject      relationships.SubjectRef
-}
-
-// ReplaceRelationshipCommand atomically sets the subject's relation on the resource
-// to Relation, whatever it currently holds — the sanctioned answer to a one-relation
-// conflict, with no delete/create visibility gap.
-type ReplaceRelationshipCommand struct {
 	ResourceType string
 	ResourceID   string
 	Relation     string
@@ -52,32 +39,12 @@ type PurgeResourceAuthorizationCommand struct {
 
 // GrantRelationship runs a guarded grant on behalf of actor.
 func (s *Service) GrantRelationship(ctx context.Context, actor Actor, cmd GrantRelationshipCommand) (*Result, error) {
-	if s.relationships == nil {
-		return nil, relationships.ErrRelationshipsNotConfigured
-	}
 	return s.applyMutation(ctx, actor, grantRelationshipCommand(cmd))
 }
 
 // RevokeRelationship runs a guarded revoke on behalf of actor.
 func (s *Service) RevokeRelationship(ctx context.Context, actor Actor, cmd RevokeRelationshipCommand) (*Result, error) {
-	if s.relationships == nil {
-		return nil, relationships.ErrRelationshipsNotConfigured
-	}
 	return s.applyMutation(ctx, actor, revokeRelationshipCommand(cmd))
-}
-
-// ReplaceRelationship runs a guarded atomic replace on behalf of actor.
-func (s *Service) ReplaceRelationship(ctx context.Context, actor Actor, cmd ReplaceRelationshipCommand) (*Result, error) {
-	if s.relationships == nil {
-		return nil, relationships.ErrRelationshipsNotConfigured
-	}
-	return s.applyMutation(ctx, actor, Command{
-
-		Target: resourceTarget(cmd.ResourceType, cmd.ResourceID),
-
-		Operation:     OpReplace,
-		Relationships: []RelationshipRow{{Relation: cmd.Relation, Subject: cmd.Subject}},
-	})
 }
 
 // PurgeResourceAuthorization runs a guarded bulk purge on behalf of actor. The guard
@@ -85,9 +52,6 @@ func (s *Service) ReplaceRelationship(ctx context.Context, actor Actor, cmd Repl
 // host can require elevated authority for bulk removal; the affected rows are bounded
 // by the resolved EvaluationLimits.MaxBatchSize.
 func (s *Service) PurgeResourceAuthorization(ctx context.Context, actor Actor, cmd PurgeResourceAuthorizationCommand) (*Result, error) {
-	if s.relationships == nil {
-		return nil, relationships.ErrRelationshipsNotConfigured
-	}
 	return s.applyMutation(ctx, actor, Command{
 
 		Target: resourceTarget(cmd.ResourceType, cmd.ResourceID),

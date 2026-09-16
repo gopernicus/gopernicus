@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuples"
+
 	golangjwt "github.com/gopernicus/gopernicus/integrations/cryptids/golang-jwt"
 	auth "github.com/gopernicus/gopernicus/pockets/authentication"
 	authenticationhttp "github.com/gopernicus/gopernicus/pockets/authentication/inbound/http"
@@ -45,26 +47,19 @@ import (
 //   - GET /demo/my-projects — RequireAccessTokenOrAPIKey-gated: the relationship kind's
 //     LookupAllResourceIDs enumeration (demonstration (b)); {admin, ids} (admin flag
 //     is the host-composed platform-admin recipe, not an engine bypass).
-//   - GET /demo/audit — RequireAccessTokenOrAPIKey + ROLE-MODEL gated: the pocket's
-//     coordinate gate asks `audit` on project/demo, a pair the RoleModel owns
-//     (the `auditor` role grants it), so the host writes no role check of its own.
-//     200 with a driven ListRoleAssignmentsByResource read-back, 403 without a
-//     granting role.
+//   - GET /demo/audit checks exact scoped auditor membership through the unified
+//     project/audit permission. It lists concrete assignments in that same scope.
 func registerDemoRoutes(router *web.WebHandler, authentication *authenticationhttp.Adapter, authorizer *decisions.Service, roleReader *roles.Service, authorization *authorizationhttp.Adapter) {
 	principal := authentication.RequireAccessTokenOrAPIKey()
 	router.Handle("GET", "/demo/whoami", demoWhoami(), principal)
 	router.Handle("GET", "/demo/members-only", demoMembersOnly(),
-		principal, requireMembership(authorizer, authorization))
+		principal, requireMembership(authorization))
 	router.Handle("GET", "/demo/my-projects", demoMyProjects(authorizer), principal)
 	router.Handle("GET", "/demo/audit", demoAudit(roleReader),
-		principal, authorization.RequirePermissionFixed(demoResourceType, demoAuditPermission, demoResourceID))
+		principal, authorization.Require(authorizationhttp.Can(demoAuditPermission, authorizationhttp.Fixed(demoResourceType, demoResourceID))))
 }
 
-// The audit route's role-model vocabulary: `auditor` is the role the host declares
-// on the `project` type in authzRoleModel, and `audit` is the permission it grants —
-// the role-OWNED pair (project, audit), disjoint from the relationship-owned
-// (project, view). The rim stays opaque: a stored role the model cannot express is
-// simply never a grantor.
+// The audit permission explicitly checks scoped auditor membership.
 const (
 	demoRole            = "auditor"
 	demoAuditPermission = "audit"
@@ -100,19 +95,12 @@ func demoMyProjects(authorizer *decisions.Service) http.HandlerFunc {
 	}
 }
 
-// demoAudit (authorization-v1 Z4, the roles-kind leg) is reached only when the
-// RequirePermissionFixed("project", "audit", "demo") gate mounted on the route has
-// already allowed: the ROLE MODEL decides, so this handler writes no role check —
-// there is no host-side HasRole gate to drift from the model. The gate keeps the
-// roles kind's GLOBAL fallback (a global `auditor` grant satisfies the scoped
-// check), and on success the response carries a DRIVEN
-// ListRoleAssignmentsByResource read-back. That listing is DIRECT-SCOPE ONLY: a
-// subject who passes the gate via a GLOBAL grant is allowed yet never appears in
-// the resource's listing — the documented v1 enumeration-vs-decision divergence,
-// visible right here.
+// demoAudit lists concrete assignments after the route policy checks the
+// named audit permission on the same project scope. A global auditor grant
+// does not satisfy this scoped policy.
 func demoAudit(roleReader *roles.Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		page, err := roleReader.ListRoleAssignmentsByResource(r.Context(), demoResourceType, demoResourceID, list.Request{})
+		page, err := roleReader.ListRoleAssignmentsByScope(r.Context(), tuples.On(demoResourceType, demoResourceID), list.Request{})
 		if err != nil {
 			writeHostJSON(w, http.StatusInternalServerError, map[string]string{"error": "list assignments failed"})
 			return

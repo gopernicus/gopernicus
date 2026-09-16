@@ -8,9 +8,11 @@ import (
 	"time"
 
 	"github.com/gopernicus/gopernicus/pockets/authorization"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/decisions"
 	authmodel "github.com/gopernicus/gopernicus/pockets/authorization/logic/model"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/relationships"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuplecache"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuples"
 	"github.com/gopernicus/gopernicus/pockets/authorization/stores/memory"
 )
 
@@ -26,34 +28,34 @@ func (s *tupleSnapshotCounter) ReadSnapshot(ctx context.Context, fn func(context
 
 func TestPostgresTupleCacheBatchAndRevocation(t *testing.T) {
 	db, cfg := cacheFixture(t, true)
-	repos, err := Repositories(t.Context(), db, cacheOptions(cfg)...)
+	repos, err := testRepositories(t.Context(), db, cacheOptions(cfg)...)
 	if err != nil {
 		t.Fatal(err)
 	}
 	source := &tupleSnapshotCounter{Source: repos.TupleSource}
 	repos.TupleSource = source
-	model := relationships.Schema{ResourceTypes: map[string]relationships.ResourceTypeDef{
-		"group":    {Relations: map[string]relationships.RelationDef{"member": {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "user"}, {Type: "group", Relation: "member"}}}}},
-		"space":    {Relations: map[string]relationships.RelationDef{"viewer": {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "group", Relation: "member"}}}}, Permissions: map[string]relationships.PermissionRule{"view": relationships.AnyOf(relationships.Direct("viewer"))}},
-		"document": {Relations: map[string]relationships.RelationDef{"parent": {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "space"}}}}, Permissions: map[string]relationships.PermissionRule{"view": relationships.AnyOf(relationships.Through("parent", "view"))}},
+	model := decisions.Model{ResourceTypes: map[string]decisions.ResourceTypeDef{
+		"group":    {Relations: map[string]decisions.RelationDef{"member": {AllowedSubjects: []decisions.SubjectTypeRef{{Type: "user"}, {Type: "group", Relation: "member"}}}}},
+		"space":    {Relations: map[string]decisions.RelationDef{"viewer": {AllowedSubjects: []decisions.SubjectTypeRef{{Type: "group", Relation: "member"}}}}, Permissions: map[string]decisions.Expression{"view": decisions.AnyOf(decisions.Direct("viewer"))}},
+		"document": {Relations: map[string]decisions.RelationDef{"parent": {AllowedSubjects: []decisions.SubjectTypeRef{{Type: "space"}}}}, Permissions: map[string]decisions.Expression{"view": decisions.AnyOf(decisions.Through("parent", "view"))}},
 	}}
-	tuples := []relationships.CreateRelationship{
+	facts := []relationships.CreateRelationship{
 		{ResourceType: "group", ResourceID: "engineering", Relation: "member", SubjectType: "user", SubjectID: "alice"},
 		{ResourceType: "space", ResourceID: "main", Relation: "viewer", SubjectType: "group", SubjectID: "engineering", SubjectRelation: "member"},
 	}
 	requests := make([]authmodel.CheckRequest, 128)
 	for i := range requests {
 		id := fmt.Sprint(i)
-		tuples = append(tuples, relationships.CreateRelationship{ResourceType: "document", ResourceID: id, Relation: "parent", SubjectType: "space", SubjectID: "main"})
+		facts = append(facts, relationships.CreateRelationship{ResourceType: "document", ResourceID: id, Relation: "parent", SubjectType: "space", SubjectID: "main"})
 		requests[i] = authmodel.CheckRequest{Principal: authmodel.PrincipalRef{Type: "user", ID: "alice"}, Resource: authmodel.Resource{Type: "document", ID: id}, Permission: "view"}
 	}
-	if err := repos.Relationships.CreateRelationships(t.Context(), tuples); err != nil {
+	if err := repos.Relationships.CreateRelationships(t.Context(), facts); err != nil {
 		t.Fatal(err)
 	}
 	backend := memory.NewTupleCache()
 	newComponents := func(backend tuplecache.Backend) authorization.Components {
 		t.Helper()
-		components, err := authorization.New(repos, authorization.WithRelationshipModel(model), authorization.WithTupleCache(backend, tuplecache.Policy{MaxStaleness: time.Minute}))
+		components, err := authorization.New(repos.Repositories, authorization.WithModel(model), authorization.WithTupleCache(backend, tuplecache.Policy{MaxStaleness: time.Minute}))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -88,7 +90,7 @@ func TestPostgresTupleCacheBatchAndRevocation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	unchangedKey := tuplecache.SetKey{Ref: relationships.SubjectRef{Type: "space", ID: "main", Relation: "viewer"}}
+	unchangedKey := tuplecache.SetKey{Scope: tuples.On("space", "main"), Relation: "viewer"}
 	before, err := backend.Read(t.Context(), state, []tuplecache.SetKey{unchangedKey})
 	if err != nil {
 		t.Fatal(err)

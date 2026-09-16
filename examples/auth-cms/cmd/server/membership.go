@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"net/http"
 	"sync"
 
 	invitations "github.com/gopernicus/gopernicus/pockets/authentication/logic/invitations"
@@ -102,12 +101,8 @@ var _ invitations.Granter = relationshipGranter{}
 // a since-deleted resource fails loudly (sdk.ErrNotFound) and writes nothing; nil could
 // otherwise grant access to a resource that no longer exists.
 //
-// The writer validates the tuple against the compiled schema. Its raw create is
-// idempotent; afterward this adapter performs the Granter contract's detached
-// exact-state check so a pre-existing different relation is a loud conflict, never
-// an implicit upgrade/downgrade. A concurrent later write may of course win after
-// that check: this is the ordinary application race posture chosen for project
-// member invitations.
+// The writer validates explicit subject-shape constraints and adds the exact fact
+// idempotently. Accepting member preserves any existing owner fact on this resource.
 func (g relationshipGranter) Grant(ctx context.Context, in invitations.GrantInput) error {
 	if g.exists == nil {
 		return fmt.Errorf("auth-cms: relationshipGranter resource-existence seam is not wired")
@@ -133,17 +128,7 @@ func (g relationshipGranter) Grant(ctx context.Context, in invitations.GrantInpu
 	}}); err != nil {
 		return err
 	}
-	targets, err := g.reader.GetRelationTargets(ctx, in.ResourceType, in.ResourceID, in.Relation)
-	if err != nil {
-		return err
-	}
-	for _, target := range targets {
-		if target.Type == in.SubjectType && target.ID == in.SubjectID && target.Relation == "" {
-			return nil
-		}
-	}
-	return fmt.Errorf("auth-cms: %s:%s already holds a different relation on %s:%s; grant of %q refused (no implicit replace): %w",
-		in.SubjectType, in.SubjectID, in.ResourceType, in.ResourceID, in.Relation, sdk.ErrConflict)
+	return nil
 }
 
 // guardedRelationshipGranter is the opt-in high-integrity invitation posture.
@@ -233,11 +218,8 @@ func hostInviteCheck(authorizer *decisions.Service) invitations.InviteCheck {
 // missing tuple yields false. A host that wants admin-sees-everything runs this
 // FIRST in its own closure, before the resource-specific check.
 //
-// It stays host policy even now that the roles kind bears a model: a globally
-// assigned role can grant only the role-OWNED permissions whose RoleModel entry
-// explicitly lists it (here, `auditor` → project/audit), never a
-// relationship-owned permission and never a permission added later. Universal
-// bypass is therefore this closure's job, not the model's.
+// Global role facts apply only when the named permission expression explicitly
+// includes them. This host keeps its platform-admin shortcut in this closure.
 func isPlatformAdmin(ctx context.Context, authorizer *decisions.Service, subjectType, subjectID string) bool {
 	res, err := authorizer.Check(ctx, model.CheckRequest{
 		Principal:  model.PrincipalRef{Type: subjectType, ID: subjectID},
@@ -247,29 +229,11 @@ func isPlatformAdmin(ctx context.Context, authorizer *decisions.Service, subject
 	return err == nil && res.Allowed
 }
 
-// requireMembership gates a route on the caller — already resolved by
-// the route authenticator into ctx — holding the demo `view` permission on the demo
-// resource. The Check/401/403/500 leg is now the POCKET's exported builder
-// (authorizer.RequirePermission, whose responses carry the FS9 web.Error shape);
-// platform-admin stays HOST composition, run FIRST in this closure via the
-// isPlatformAdmin recipe (the engine grants no bypass). The gate is built once
-// at registration — a roles-only wiring would panic here at boot, not per
-// request. Per request it reads the principal ONCE through the exported
-// auth.Service.CurrentPrincipal port (zero import into pocket internals): a
-// present admin passes straight to next; every other case — non-admin principal
-// or none at all — falls through to the builder-gated handler (its 403/500 or
-// 401 legs respectively).
-func requireMembership(authorizer *decisions.Service, gates *authorizationhttp.Adapter) web.Middleware {
-	gate := gates.RequirePermission(demoPermission, authorizationhttp.FixedResource(demoResourceType, demoResourceID))
-	return func(next http.Handler) http.Handler {
-		gated := gate(next)
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			// Platform-admin recipe: host runs it first (engine grants no bypass).
-			if p, ok := sdk.PrincipalFromContext(r.Context()); ok && isPlatformAdmin(r.Context(), authorizer, p.Type, p.ID) {
-				next.ServeHTTP(w, r)
-				return
-			}
-			gated.ServeHTTP(w, r)
-		})
-	}
+// requireMembership accepts a platform administrator or a demo project member
+// within one authorization snapshot and shared evaluation budget.
+func requireMembership(gates *authorizationhttp.Adapter) web.Middleware {
+	return gates.Require(authorizationhttp.Any(
+		authorizationhttp.Can("admin", authorizationhttp.Fixed(platformResourceType, platformResourceID)),
+		authorizationhttp.Can(demoPermission, authorizationhttp.Fixed(demoResourceType, demoResourceID)),
+	))
 }

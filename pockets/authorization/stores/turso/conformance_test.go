@@ -4,8 +4,10 @@
 //
 //	go test -tags=integration ./...
 //
-// They require TURSO_DATABASE_URL and TURSO_AUTH_TOKEN in the environment (or a
-// .env loaded by the caller). Absent those, the tests skip loudly — a silent
+// They require TURSO_DATABASE_URL, TURSO_AUTH_TOKEN for remote databases, and
+// AUTHORIZATION_TURSO_DISPOSABLE_URL naming the exact same disposable URL.
+// The suite migrates and deletes authorization data; application URLs must not
+// be used. Absent connection settings, the tests skip loudly — a silent
 // green here would claim dialect conformance nothing verified. The shared
 // storetest.Run suite is the executable form of BOTH kinds' port contracts
 // (relationship.Storer + role.Storer) plus the engine-over-store adversarial and
@@ -16,10 +18,10 @@ package turso
 import (
 	"context"
 	"os"
+	"strings"
 	"testing"
 
 	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
-	"github.com/gopernicus/gopernicus/pockets/authorization"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/mutations"
 	"github.com/gopernicus/gopernicus/pockets/authorization/stores/storetest"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/transaction"
@@ -29,7 +31,7 @@ import (
 // so every leaf subtest starts from a clean, isolated store — including the v3
 // optional audit history so every test observes only its own changes.
 // No FKs between them, so order is immaterial.
-var authorizationTables = []string{"iam_relationships", "iam_roles", "iam_audit"}
+var authorizationTables = []string{"iam_tuples", "iam_audit"}
 
 // TestConformance runs the shared authorization conformance suite (both kinds)
 // against a live Turso/libSQL database. Each newRepos call opens a connection,
@@ -39,9 +41,9 @@ var authorizationTables = []string{"iam_relationships", "iam_roles", "iam_audit"
 func TestConformance(t *testing.T) {
 	url, token := requireTursoEnv(t)
 
-	storetest.Run(t, func(t *testing.T, policy mutations.GuardianPolicy) authorization.Repositories {
+	storetest.Run(t, func(t *testing.T, policy mutations.GuardianPolicy) storetest.Repositories {
 		db := openAndMigrate(t, url, token)
-		repos, err := Repositories(context.Background(), db, WithGuardianPolicy(policy))
+		repos, err := testRepositories(context.Background(), db, WithGuardianPolicy(policy))
 		if err != nil {
 			t.Fatalf("Repositories: %v", err)
 		}
@@ -57,9 +59,9 @@ func TestConformance(t *testing.T) {
 func TestTransactional(t *testing.T) {
 	url, token := requireTursoEnv(t)
 
-	storetest.RunTransactional(t, func(t *testing.T) (authorization.Repositories, transaction.Transactor) {
+	storetest.RunTransactional(t, func(t *testing.T) (storetest.Repositories, transaction.Transactor) {
 		db := openAndMigrate(t, url, token)
-		repos, err := Repositories(context.Background(), db)
+		repos, err := testRepositories(context.Background(), db)
 		if err != nil {
 			t.Fatalf("Repositories: %v", err)
 		}
@@ -72,8 +74,14 @@ func requireTursoEnv(t *testing.T) (url, token string) {
 	t.Helper()
 	url = os.Getenv("TURSO_DATABASE_URL")
 	token = os.Getenv("TURSO_AUTH_TOKEN")
-	if url == "" || token == "" {
-		t.Skip("TURSO_DATABASE_URL/TURSO_AUTH_TOKEN not set — turso conformance NOT verified")
+	if url == "" {
+		t.Skip("TURSO_DATABASE_URL not set — turso conformance NOT verified")
+	}
+	if err := validateDisposableTursoURL(url, os.Getenv(disposableTursoURLEnv)); err != nil {
+		t.Fatal(err)
+	}
+	if token == "" && !strings.HasPrefix(url, "file:") {
+		t.Skip("TURSO_AUTH_TOKEN not set — remote turso conformance NOT verified")
 	}
 	return url, token
 }
@@ -82,6 +90,9 @@ func requireTursoEnv(t *testing.T) (url, token string) {
 // truncates both tables so the returned repositories start empty and isolated.
 func openAndMigrate(t *testing.T, url, token string) *tursodb.DB {
 	t.Helper()
+	if err := validateDisposableTursoURL(url, os.Getenv(disposableTursoURLEnv)); err != nil {
+		t.Fatal(err)
+	}
 	db, err := tursodb.Open(context.Background(), tursodb.Config{URL: url, AuthToken: token})
 	if err != nil {
 		t.Fatalf("connect: %v", err)
@@ -108,7 +119,7 @@ func truncate(t *testing.T, db *tursodb.DB) {
 }
 
 func TestAuditConformance(t *testing.T) {
-	storetest.RunAudit(t, func(t *testing.T, enabled bool) authorization.Repositories {
+	storetest.RunAudit(t, func(t *testing.T, enabled bool) storetest.Repositories {
 		var opts []Option
 		if enabled {
 			opts = append(opts, WithAudit())

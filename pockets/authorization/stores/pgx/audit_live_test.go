@@ -3,11 +3,10 @@ package pgx
 import (
 	"context"
 	"errors"
-	"io/fs"
-	"reflect"
 	"testing"
-	"testing/fstest"
 	"time"
+
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuples"
 
 	"github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/audit"
@@ -48,6 +47,7 @@ func TestAuditRawRelationshipDeltas(t *testing.T) {
 				removed = 1
 				err = repos.Relationships.DeleteRelationshipTarget(ctx, "doc", "d", "viewer", member.Subject())
 			case "five-field":
+				removed = 1
 				err = repos.Relationships.DeleteRelationship(ctx, "doc", "d", "viewer", "group", "g")
 			case "resource-subject":
 				err = repos.Relationships.DeleteByResourceAndSubject(ctx, "doc", "d", "group", "g")
@@ -74,7 +74,7 @@ func TestAuditRawRelationshipDeltas(t *testing.T) {
 					t.Fatalf("event/source/time mismatch: %+v", r)
 				}
 				if r.Change.Action == audit.ActionRemoved {
-					removals[r.Change.Relationship.SubjectRelation] = true
+					removals[r.Change.Tuple.Subject.Relation] = true
 				}
 			}
 			if len(removals) != removed {
@@ -94,7 +94,9 @@ func TestAuditRoleAndMutationDeltas(t *testing.T) {
 	}
 	apply(grantCmd("d", "viewer", "alice"))
 	replacement := grantCmd("d", "editor", "alice")
-	replacement.Operation = mutations.OpReplace
+	replacement.Operation = mutations.OpBatch
+	replacement.Relationships = nil
+	replacement.Tuples = tuples.Changes{Remove: []tuples.Tuple{roleFact("user", "alice", "viewer", "doc", "d")}, Add: []tuples.Tuple{roleFact("user", "alice", "editor", "doc", "d")}}
 	apply(replacement)
 	if got := len(auditRecords(t, repos)); got != 3 {
 		t.Fatalf("replace must record old removal+new addition: %d", got)
@@ -103,16 +105,15 @@ func TestAuditRoleAndMutationDeltas(t *testing.T) {
 	if got := len(auditRecords(t, repos)); got != 3 {
 		t.Fatalf("replace no-op recorded: %d", got)
 	}
-	scoped := roles.Assignment{SubjectType: "user", SubjectID: "alice", Role: "admin", ResourceType: "doc", ResourceID: "d"}
+	scoped := roles.Assignment{Scope: tuples.On("doc", "d"), SubjectType: "user", SubjectID: "alice", Role: "admin"}
 	global := scoped
-	global.ResourceType = ""
-	global.ResourceID = ""
+	global.Scope = tuples.Global()
 	for _, a := range []roles.Assignment{scoped, global, global} {
-		if err := repos.Roles.Assign(ctx, a); err != nil {
+		if err := assignRole(repos.Tuples, ctx, a); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err := repos.Roles.Unassign(ctx, "user", "alice", "admin", "doc", "d"); err != nil {
+	if err := removeRole(repos.Tuples, ctx, "user", "alice", "admin", "doc", "d"); err != nil {
 		t.Fatal(err)
 	}
 	assign := mutations.Command{Target: scopeOf("doc", "d"), Operation: mutations.OpRoleAssign, Roles: []mutations.RoleRow{{SubjectType: "user", SubjectID: "alice", Role: "admin"}}}
@@ -126,7 +127,7 @@ func TestAuditRoleAndMutationDeltas(t *testing.T) {
 	if records[0].EventID != records[1].EventID {
 		t.Fatal("teardown did not group relationship and scoped role removal")
 	}
-	if ok, err := repos.Roles.HasExactRole(ctx, "user", "alice", "admin", "", ""); err != nil || !ok {
+	if ok, err := hasRoleTuple(repos.Tuples, ctx, "user", "alice", "admin", "", ""); err != nil || !ok {
 		t.Fatalf("teardown removed global role: %v %v", ok, err)
 	}
 	apply(teardown)
@@ -151,14 +152,14 @@ func TestAuditFailureRollsBackOwnedAndAmbientWrites(t *testing.T) {
 				})
 				write := func(ctx context.Context) error {
 					if kind == "role" {
-						return repos.Roles.Assign(ctx, roles.Assignment{SubjectType: "user", SubjectID: "failed", Role: "reader"})
+						return assignRole(repos.Tuples, ctx, roles.Assignment{Scope: tuples.Global(), SubjectType: "user", SubjectID: "failed", Role: "reader"})
 					}
 					return repos.Relationships.CreateRelationships(ctx, []relationships.CreateRelationship{{ResourceType: "doc", ResourceID: "failed", Relation: "viewer", SubjectType: "user", SubjectID: "alice"}})
 				}
 				if ambient {
 					err := db.Transact(ctx, func(ctx context.Context) error {
 						tx, _ := pgxdb.TxFromContext(ctx)
-						if _, err := tx.Exec(ctx, `INSERT INTO `+qualify(t, "iam_roles")+` (subject_type,subject_id,role,resource_type,resource_id) VALUES ('user','host-marker','reader','','')`); err != nil {
+						if _, err := tx.Exec(ctx, `INSERT INTO `+qualify(t, "iam_tuples")+` (scope_kind,resource_type,resource_id,relation,subject_type,subject_id,subject_relation) VALUES (1,'','','reader','user','host-marker','')`); err != nil {
 							return err
 						}
 						if err := write(ctx); err == nil {
@@ -169,7 +170,7 @@ func TestAuditFailureRollsBackOwnedAndAmbientWrites(t *testing.T) {
 					if err != nil {
 						t.Fatalf("savepoint did not preserve usable host transaction: %v", err)
 					}
-					if ok, err := repos.Roles.HasExactRole(ctx, "user", "host-marker", "reader", "", ""); err != nil || !ok {
+					if ok, err := hasRoleTuple(repos.Tuples, ctx, "user", "host-marker", "reader", "", ""); err != nil || !ok {
 						t.Fatalf("unrelated host work lost: %v %v", ok, err)
 					}
 				} else if err := write(ctx); err == nil {
@@ -178,7 +179,7 @@ func TestAuditFailureRollsBackOwnedAndAmbientWrites(t *testing.T) {
 				if ok, err := repos.Relationships.CheckRelationExists(ctx, "doc", "failed", "viewer", "user", "alice"); err != nil || ok {
 					t.Fatalf("failed audit left relationship: %v %v", ok, err)
 				}
-				if ok, err := repos.Roles.HasExactRole(ctx, "user", "failed", "reader", "", ""); err != nil || ok {
+				if ok, err := hasRoleTuple(repos.Tuples, ctx, "user", "failed", "reader", "", ""); err != nil || ok {
 					t.Fatalf("failed audit left role: %v %v", ok, err)
 				}
 			})
@@ -190,7 +191,7 @@ func TestAuditAmbientRollbackAndDisabledReader(t *testing.T) {
 	ctx := auditContext()
 	stop := errors.New("host rollback")
 	err := db.Transact(ctx, func(ctx context.Context) error {
-		if err := repos.Roles.Assign(ctx, roles.Assignment{SubjectType: "user", SubjectID: "alice", Role: "reader"}); err != nil {
+		if err := assignRole(repos.Tuples, ctx, roles.Assignment{Scope: tuples.Global(), SubjectType: "user", SubjectID: "alice", Role: "reader"}); err != nil {
 			return err
 		}
 		page, err := repos.Audit.List(ctx, audit.Filter{}, list.Request{Limit: 10})
@@ -205,17 +206,17 @@ func TestAuditAmbientRollbackAndDisabledReader(t *testing.T) {
 	if len(auditRecords(t, repos)) != 0 {
 		t.Fatal("host rollback left history")
 	}
-	if err := repos.Roles.Assign(ctx, roles.Assignment{SubjectType: "user", SubjectID: "alice", Role: "reader"}); err != nil {
+	if err := assignRole(repos.Tuples, ctx, roles.Assignment{Scope: tuples.Global(), SubjectType: "user", SubjectID: "alice", Role: "reader"}); err != nil {
 		t.Fatal(err)
 	}
-	off, err := Repositories(context.Background(), db, storeOptions(t)...)
+	off, err := testRepositories(context.Background(), db, storeOptions(t)...)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := off.Roles.Assign(context.Background(), roles.Assignment{SubjectType: "user", SubjectID: "bob", Role: "reader"}); err != nil {
+	if err := assignRole(off.Tuples, context.Background(), roles.Assignment{Scope: tuples.Global(), SubjectType: "user", SubjectID: "bob", Role: "reader"}); err != nil {
 		t.Fatal(err)
 	}
-	if records := auditRecords(t, off); len(records) != 1 || records[0].Change.Role.SubjectID != "alice" {
+	if records := auditRecords(t, off); len(records) != 1 || records[0].Change.Tuple.Subject.ID != "alice" {
 		t.Fatalf("disabled recording lost retained reader or wrote history: %+v", records)
 	}
 }
@@ -223,7 +224,7 @@ func TestAuditListingEqualTimestampPagination(t *testing.T) {
 	db, repos := liveReposWith(t, WithAudit())
 	ctx := auditContext()
 	for _, id := range []string{"c", "a", "b"} {
-		if err := repos.Roles.Assign(ctx, roles.Assignment{SubjectType: "user", SubjectID: id, Role: "reader"}); err != nil {
+		if err := assignRole(repos.Tuples, ctx, roles.Assignment{Scope: tuples.Global(), SubjectType: "user", SubjectID: id, Role: "reader"}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -260,68 +261,16 @@ func TestAuditListingEqualTimestampPagination(t *testing.T) {
 		}
 	}
 	page, err := repos.Audit.List(ctx, audit.Filter{SubjectType: "user", SubjectID: "b"}, list.Request{Limit: 10})
-	if err != nil || len(page.Items) != 1 || page.Items[0].Change.Role.SubjectID != "b" {
+	if err != nil || len(page.Items) != 1 || page.Items[0].Change.Tuple.Subject.ID != "b" {
 		t.Fatalf("subject filter %+v %v", page, err)
 	}
 	copy := page.Items[0]
-	copy.Change.Role.SubjectID = "caller-change"
+	copy.Change.Tuple.Subject.ID = "caller-change"
 	again, err := repos.Audit.List(ctx, audit.Filter{SubjectType: "user", SubjectID: "b"}, list.Request{Limit: 10})
-	if err != nil || again.Items[0].Change.Role.SubjectID != "b" {
+	if err != nil || again.Items[0].Change.Tuple.Subject.ID != "b" {
 		t.Fatal("returned fact ownership")
 	}
 }
-func TestAuditUpgradeDropsLedgersPreservesFacts(t *testing.T) {
-	ctx := context.Background()
-	db := tupleUpgradeLegacy(t)
-	if _, err := db.Exec(ctx, qualifySQL(t, `INSERT INTO iam_relationships (relationship_id,resource_type,resource_id,relation,subject_type,subject_id,subject_relation,created_at) VALUES ('legacy','doc','d','viewer','group','g','member','2026-01-01T00:00:00Z')`)); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := db.Exec(ctx, qualifySQL(t, `INSERT INTO iam_roles (subject_type,subject_id,role,resource_type,resource_id,created_at) VALUES ('user','alice','reader','doc','d','2026-01-01T00:00:00Z')`)); err != nil {
-		t.Fatal(err)
-	}
-	before := fstest.MapFS{}
-	for _, name := range canonicalMigrations {
-		if name >= "0007_" {
-			continue
-		}
-		data, err := fs.ReadFile(MigrationsFS, MigrationsDir+"/"+name)
-		if err != nil {
-			t.Fatal(err)
-		}
-		before[MigrationsDir+"/"+name] = &fstest.MapFile{Data: data}
-	}
-	if err := pgxdb.RunMigrations(ctx, db, before, MigrationsDir, migrateOptions(t)...); err != nil {
-		t.Fatal(err)
-	}
-	for _, statement := range []string{`INSERT INTO iam_scopes(scope_kind,scope_type,scope_id,revision) VALUES('resource','doc','d',8)`, `INSERT INTO iam_mutations(mutation_id,scope_kind,scope_type,scope_id,operation,payload_encoding,payload_digest,outcome,revision,schema_digest,created_at) VALUES('old-receipt','resource','doc','d','grant','v','digest','applied',8,'schema','2026-01-01T00:00:00Z')`} {
-		if _, err := db.Exec(ctx, qualifySQL(t, statement)); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err := pgxdb.RunMigrations(ctx, db, MigrationsFS, MigrationsDir, migrateOptions(t)...); err != nil {
-		t.Fatal(err)
-	}
-	repos, err := Repositories(context.Background(), db, storeOptions(t)...)
-	if err != nil {
-		t.Fatal(err)
-	}
-	targets, err := repos.Relationships.GetRelationTargets(ctx, "doc", "d", "viewer")
-	if err != nil || !reflect.DeepEqual(targets, []relationships.RelationTarget{{Type: "group", ID: "g", Relation: "member"}}) {
-		t.Fatalf("upgrade lost exact tuple: %+v %v", targets, err)
-	}
-	if ok, err := repos.Roles.HasExactRole(ctx, "user", "alice", "reader", "doc", "d"); err != nil || !ok {
-		t.Fatalf("upgrade lost role: %v %v", ok, err)
-	}
-	if len(auditRecords(t, repos)) != 0 {
-		t.Fatal("upgrade invented actor/delta history from receipts")
-	}
-	for _, table := range []string{"iam_scopes", "iam_mutations"} {
-		if err := pgxdb.ProbeTable(ctx, db, qualify(t, table)); err == nil {
-			t.Fatalf("retired table remains: %s", table)
-		}
-	}
-}
-
 func TestAuditModelReaderRetainsRecordingConfiguration(t *testing.T) {
 	_, repos := liveReposWith(t, WithAudit())
 	bound := repos.Relationships.ForModel(relationships.NewReadModel(nil))

@@ -26,7 +26,6 @@ import (
 	"testing"
 
 	"github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
-	"github.com/gopernicus/gopernicus/pockets/authorization"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/mutations"
 	"github.com/gopernicus/gopernicus/pockets/authorization/stores/storetest"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/transaction"
@@ -36,16 +35,16 @@ import (
 // so every leaf subtest starts from a clean, isolated store — including the v3
 // optional audit history so every test observes only its own changes.
 // No FKs between them, so order is immaterial.
-var authorizationTables = []string{"iam_relationships", "iam_roles", "iam_audit"}
+var authorizationTables = []string{"iam_tuples", "iam_audit"}
 
 // fixtureTables are the relation names a hand-rolled fixture statement may name:
 // the pocket's own tables plus the migration ledger the destructive fixtures
 // clear. qualifySQL rewrites exactly these under the test schema.
-var fixtureTables = append(append([]string(nil), authorizationTables...), "schema_migrations", "iam_scopes", "iam_mutations")
+var fixtureTables = append(append([]string(nil), authorizationTables...), "schema_migrations")
 
 // fixtureTableRE matches a bare fixtureTables name on word boundaries, so index
-// and constraint names that merely embed one (idx_iam_roles_unique,
-// ck_iam_relationships_nonempty) are left alone.
+// and constraint names that merely embed one (idx_iam_tuples_subject,
+// ck_iam_tuples_refs) are left alone.
 var fixtureTableRE = regexp.MustCompile(`\b(` + strings.Join(fixtureTables, "|") + `)\b`)
 
 // dropTestSchemaOnce drops the leg's schema exactly once per process, before the
@@ -71,9 +70,9 @@ var testSchemaOnce = sync.OnceValues(func() (pgxdb.Schema, error) {
 func TestConformance(t *testing.T) {
 	dsn := requireDSN(t)
 
-	storetest.Run(t, func(t *testing.T, policy mutations.GuardianPolicy) authorization.Repositories {
+	storetest.Run(t, func(t *testing.T, policy mutations.GuardianPolicy) storetest.Repositories {
 		db := openAndMigrate(t, dsn)
-		repos, err := Repositories(context.Background(), db, append(storeOptions(t), WithGuardianPolicy(policy))...)
+		repos, err := testRepositories(context.Background(), db, append(storeOptions(t), WithGuardianPolicy(policy))...)
 		if err != nil {
 			t.Fatalf("Repositories: %v", err)
 		}
@@ -89,9 +88,9 @@ func TestConformance(t *testing.T) {
 func TestTransactional(t *testing.T) {
 	dsn := requireDSN(t)
 
-	storetest.RunTransactional(t, func(t *testing.T) (authorization.Repositories, transaction.Transactor) {
+	storetest.RunTransactional(t, func(t *testing.T) (storetest.Repositories, transaction.Transactor) {
 		db := openAndMigrate(t, dsn)
-		repos, err := Repositories(context.Background(), db, storeOptions(t)...)
+		repos, err := testRepositories(context.Background(), db, storeOptions(t)...)
 		if err != nil {
 			t.Fatalf("Repositories: %v", err)
 		}
@@ -213,7 +212,7 @@ func truncate(t *testing.T, db *pgxdb.DB) {
 }
 
 func TestAuditConformance(t *testing.T) {
-	storetest.RunAudit(t, func(t *testing.T, enabled bool) authorization.Repositories {
+	storetest.RunAudit(t, func(t *testing.T, enabled bool) storetest.Repositories {
 		var opts []Option
 		if enabled {
 			opts = append(opts, WithAudit())

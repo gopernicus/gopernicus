@@ -15,15 +15,13 @@ import (
 // dialect stores prove the same suite live). Each newRepos call returns a fresh,
 // empty pair wiring BOTH kinds.
 func TestConformance(t *testing.T) {
-	storetest.Run(t, func(t *testing.T, policy mutations.GuardianPolicy) authorization.Repositories {
+	storetest.Run(t, func(t *testing.T, policy mutations.GuardianPolicy) storetest.Repositories {
 		// One bundle so the atomic mutation repository shares its lock and snapshot
 		// with the relationship/role read path (a grant via Apply is visible to
 		// Check and to the raw stores). The default guardian policy protects owner.
 		store := memory.New(memory.WithGuardianPolicy(policy))
-		return authorization.Repositories{
-			Relationships: store.Relationships(),
-			Roles:         store.Roles(),
-			Mutations:     store.Mutations(),
+		return storetest.Repositories{Repositories: authorization.Repositories{Tuples: store.Tuples(),
+			Mutations: store.Mutations()}, Relationships: store.Relationships(),
 		}
 	})
 }
@@ -34,24 +32,22 @@ func TestConformance(t *testing.T) {
 // the family skips LOUDLY here rather than reporting a green nothing verified.
 // The dialect stores run it live over their connector's transaction.Transactor.
 func TestTransactional(t *testing.T) {
-	storetest.RunTransactional(t, func(t *testing.T) (authorization.Repositories, transaction.Transactor) {
+	storetest.RunTransactional(t, func(t *testing.T) (storetest.Repositories, transaction.Transactor) {
 		store := memory.New()
-		return authorization.Repositories{
-			Relationships: store.Relationships(),
-			Roles:         store.Roles(),
-			Mutations:     store.Mutations(),
+		return storetest.Repositories{Repositories: authorization.Repositories{Tuples: store.Tuples(),
+			Mutations: store.Mutations()}, Relationships: store.Relationships(),
 		}, nil
 	})
 }
 
 // TestAudit runs the shared per-fact history contract against the real memory bundle.
 func TestAudit(t *testing.T) {
-	storetest.RunAudit(t, func(t *testing.T, enabled bool) authorization.Repositories {
+	storetest.RunAudit(t, func(t *testing.T, enabled bool) storetest.Repositories {
 		var opts []memory.Option
 		if enabled {
 			opts = append(opts, memory.WithAudit())
 		}
 		store := memory.New(opts...)
-		return authorization.Repositories{Relationships: store.Relationships(), Roles: store.Roles(), Mutations: store.Mutations(), Audit: store.Audit()}
+		return storetest.Repositories{Repositories: authorization.Repositories{Tuples: store.Tuples(), Mutations: store.Mutations(), Audit: store.Audit()}, Relationships: store.Relationships()}
 	})
 }

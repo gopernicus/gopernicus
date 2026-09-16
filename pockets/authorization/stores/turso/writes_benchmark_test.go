@@ -15,7 +15,7 @@ import (
 // serializes the guarded read and actual alternating grant/revoke on every call.
 func BenchmarkGuardedWriterContentionSQLite(b *testing.B) {
 	db, _ := cacheFixture(b, false, 8)
-	repos, err := Repositories(b.Context(), db)
+	repos, err := testRepositories(b.Context(), db)
 	if err != nil {
 		b.Fatal(err)
 	}

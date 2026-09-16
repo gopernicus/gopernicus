@@ -5,7 +5,6 @@ import (
 
 	"github.com/gopernicus/gopernicus/sdk/capabilities/transaction"
 
-	"github.com/gopernicus/gopernicus/pockets/authorization"
 	"github.com/gopernicus/gopernicus/pockets/authorization/stores/storetest"
 )
 
@@ -14,12 +13,12 @@ func TestCheckSnapshots(t *testing.T) {
 }
 
 func TestCheckAmbient(t *testing.T) {
-	storetest.RunCheckAmbient(t, checkSnapshotFixture)
+	storetest.RunSnapshotCheckAmbient(t, checkSnapshotFixture)
 }
 
-func checkSnapshotFixture(t *testing.T) (authorization.Repositories, transaction.Transactor) {
+func checkSnapshotFixture(t *testing.T) (storetest.Repositories, transaction.Transactor) {
 	db, _ := cacheFixture(t, false)
-	repos, err := Repositories(t.Context(), db)
+	repos, err := testRepositories(t.Context(), db)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -27,9 +26,9 @@ func checkSnapshotFixture(t *testing.T) (authorization.Repositories, transaction
 }
 
 func TestLookupSnapshots(t *testing.T) {
-	storetest.RunLookupSnapshots(t, func(t *testing.T) authorization.Repositories {
+	storetest.RunLookupSnapshots(t, func(t *testing.T) storetest.Repositories {
 		db, _ := cacheFixture(t, false)
-		repos, err := Repositories(t.Context(), db)
+		repos, err := testRepositories(t.Context(), db)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -38,9 +37,9 @@ func TestLookupSnapshots(t *testing.T) {
 }
 
 func TestLookupSnapshotLifecycle(t *testing.T) {
-	storetest.RunLookupSnapshotLifecycle(t, func(t *testing.T) authorization.Repositories {
+	storetest.RunLookupSnapshotLifecycle(t, func(t *testing.T) storetest.Repositories {
 		db, _ := cacheFixture(t, false, 1)
-		repos, err := Repositories(t.Context(), db)
+		repos, err := testRepositories(t.Context(), db)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -49,9 +48,9 @@ func TestLookupSnapshotLifecycle(t *testing.T) {
 }
 
 func TestLookupAmbient(t *testing.T) {
-	storetest.RunLookupAmbient(t, func(t *testing.T) (authorization.Repositories, transaction.Transactor) {
+	storetest.RunLookupAmbient(t, func(t *testing.T) (storetest.Repositories, transaction.Transactor) {
 		db, _ := cacheFixture(t, false)
-		repos, err := Repositories(t.Context(), db)
+		repos, err := testRepositories(t.Context(), db)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -61,7 +60,7 @@ func TestLookupAmbient(t *testing.T) {
 
 func TestLookupConcurrent(t *testing.T) {
 	db, _ := cacheFixture(t, false, 20)
-	repos, err := Repositories(t.Context(), db)
+	repos, err := testRepositories(t.Context(), db)
 	if err != nil {
 		t.Fatal(err)
 	}

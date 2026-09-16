@@ -17,8 +17,6 @@ func ReasonFor(err error) (authmodel.Reason, bool) {
 		return authmodel.ReasonConcurrentMutation, true
 	case errors.Is(err, ErrInvariantBlocked):
 		return authmodel.ReasonInvariantConflict, true
-	case errors.Is(err, ErrSemanticConflict):
-		return authmodel.ReasonSemanticConflict, true
 	case errors.Is(err, authmodel.ErrUnknownSymbol):
 		return authmodel.ReasonUnknownSymbol, true
 	case errors.Is(err, authmodel.ErrInvalidRequest), errors.Is(err, sdk.ErrInvalidInput):

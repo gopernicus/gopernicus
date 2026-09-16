@@ -8,9 +8,11 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/decisions"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuples"
+
 	authmodel "github.com/gopernicus/gopernicus/pockets/authorization/logic/model"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/mutations"
-	"github.com/gopernicus/gopernicus/pockets/authorization/logic/roles"
 	"github.com/gopernicus/gopernicus/pockets/authorization/stores/memory"
 	"github.com/gopernicus/gopernicus/sdk"
 )
@@ -44,7 +46,7 @@ func TestAssignRoleApplies(t *testing.T) {
 	ctx := context.Background()
 
 	rcpt, err := svc.Mutations.AssignRole(ctx, actorU1(), mutations.AssignRoleCommand{
-		Subject: prinU("u2"), Role: "editor", ResourceType: "doc", ResourceID: "d1",
+		Subject: prinU("u2"), Role: "editor", Scope: tuples.On("doc", "d1"),
 	})
 	if err != nil {
 		t.Fatalf("AssignRole: %v", err)
@@ -55,7 +57,7 @@ func TestAssignRoleApplies(t *testing.T) {
 	if len(guard.seen) != 1 || guard.seen[0].Operation != mutations.OpRoleAssign || guard.seen[0].Target.Kind != mutations.TargetResource {
 		t.Fatalf("guard did not observe a scoped role-assign attempt: %+v", guard.seen)
 	}
-	if ok, err := svc.Roles.HasRole(ctx, prinU("u2"), "editor", "doc", "d1"); err != nil || !ok {
+	if ok, err := svc.Roles.HasRoleIn(ctx, prinU("u2"), "editor", authmodel.Resource{Type: "doc", ID: "d1"}); err != nil || !ok {
 		t.Fatalf("assign not visible to HasRole: ok=%v err=%v", ok, err)
 	}
 }
@@ -71,18 +73,19 @@ func TestGlobalRoleGuardSeparateAction(t *testing.T) {
 
 	// A scoped assignment is allowed.
 	if _, err := svc.Mutations.AssignRole(ctx, actorU1(), mutations.AssignRoleCommand{
-		Subject: prinU("u2"), Role: "editor", ResourceType: "doc", ResourceID: "d1",
+		Subject: prinU("u2"), Role: "editor", Scope: tuples.On("doc", "d1"),
 	}); err != nil {
 		t.Fatalf("scoped assign must be allowed while global is denied: %v", err)
 	}
 	// The same role globally is denied — the larger blast radius the guard gates.
 	_, err := svc.Mutations.AssignRole(ctx, actorU1(), mutations.AssignRoleCommand{
-		Subject: prinU("u2"), Role: "editor", // global: both resource fields empty
+		Subject: prinU("u2"), Role: "editor", Scope: // global: both resource fields empty
+		tuples.Global(),
 	})
 	if !errors.Is(err, sdk.ErrForbidden) {
 		t.Fatalf("global role assign with a global-denying guard: want forbidden, got %v", err)
 	}
-	if ok, _ := svc.Roles.HasRole(ctx, prinU("u2"), "editor", "", ""); ok {
+	if ok, _ := svc.Roles.HasRole(ctx, prinU("u2"), "editor"); ok {
 		t.Fatalf("denied global assign changed state")
 	}
 
@@ -101,82 +104,44 @@ func TestGlobalRoleGuardSeparateAction(t *testing.T) {
 	}
 }
 
-// TestUnassignRoleSameRoleGrantRemains proves the core acceptance: a scoped unassign
-// that leaves a GLOBAL grant for the same role reports SameRoleGrantRemains=true (the
-// caller cannot mistake removal of one scoped row for removal of effective access),
-// while a scoped unassign with no global grant reports false. The annotation is
-// computed inside the repository's atomic critical section.
-func TestUnassignRoleSameRoleGrantRemains(t *testing.T) {
+func TestUnassignRoleRemovesOnlyItsExactScope(t *testing.T) {
 	svc := newGuardedLifecycle(t, &roleScopeGuard{}, authmodel.EvaluationLimits{})
 	ctx := context.Background()
-
-	// u2: both a global and a scoped editor grant.
-	if _, err := svc.Mutations.AssignRole(ctx, actorU1(), mutations.AssignRoleCommand{
-		Subject: prinU("u2"), Role: "editor", // global
-	}); err != nil {
-		t.Fatalf("seed global: %v", err)
+	for _, scope := range []tuples.Scope{tuples.Global(), tuples.On("doc", "d1")} {
+		if _, err := svc.Mutations.AssignRole(ctx, actorU1(), mutations.AssignRoleCommand{Subject: prinU("u2"), Role: "editor", Scope: scope}); err != nil {
+			t.Fatal(err)
+		}
 	}
-	if _, err := svc.Mutations.AssignRole(ctx, actorU1(), mutations.AssignRoleCommand{
-		Subject: prinU("u2"), Role: "editor", ResourceType: "doc", ResourceID: "d1",
-	}); err != nil {
-		t.Fatalf("seed scoped: %v", err)
+	result, err := svc.Mutations.UnassignRole(ctx, actorU1(), mutations.UnassignRoleCommand{Subject: prinU("u2"), Role: "editor", Scope: tuples.On("doc", "d1")})
+	if err != nil || result.Outcome != mutations.OutcomeApplied {
+		t.Fatalf("unassign: %+v, %v", result, err)
 	}
-
-	res, err := svc.Mutations.UnassignRole(ctx, actorU1(), mutations.UnassignRoleCommand{
-		Subject: prinU("u2"), Role: "editor", ResourceType: "doc", ResourceID: "d1",
-	})
-	if err != nil {
-		t.Fatalf("UnassignRole: %v", err)
+	if held, err := svc.Roles.HasRoleIn(ctx, prinU("u2"), "editor", authmodel.Resource{Type: "doc", ID: "d1"}); err != nil || held {
+		t.Fatalf("removed scoped fact: %v, %v", held, err)
 	}
-	if res.Outcome != mutations.OutcomeApplied {
-		t.Fatalf("want applied receipt, got %+v", res)
-	}
-	if !res.SameRoleGrantRemains {
-		t.Fatalf("scoped unassign with a surviving global grant must report SameRoleGrantRemains=true")
-	}
-	// The scoped row is gone but the role still resolves via the global fallback.
-	if ok, err := svc.Roles.HasRole(ctx, prinU("u2"), "editor", "doc", "d1"); err != nil || !ok {
-		t.Fatalf("global grant must still confer the role after a scoped unassign: ok=%v err=%v", ok, err)
-	}
-
-	// u3: only a scoped grant — its removal leaves no equivalent grant.
-	if _, err := svc.Mutations.AssignRole(ctx, actorU1(), mutations.AssignRoleCommand{
-		Subject: prinU("u3"), Role: "editor", ResourceType: "doc", ResourceID: "d1",
-	}); err != nil {
-		t.Fatalf("seed u3 scoped: %v", err)
-	}
-	res3, err := svc.Mutations.UnassignRole(ctx, actorU1(), mutations.UnassignRoleCommand{
-		Subject: prinU("u3"), Role: "editor", ResourceType: "doc", ResourceID: "d1",
-	})
-	if err != nil {
-		t.Fatalf("UnassignRole u3: %v", err)
-	}
-	if res3.SameRoleGrantRemains {
-		t.Fatalf("scoped unassign with no global grant must report SameRoleGrantRemains=false")
-	}
-	if ok, _ := svc.Roles.HasRole(ctx, prinU("u3"), "editor", "doc", "d1"); ok {
-		t.Fatalf("u3 should have lost the role entirely")
+	if held, err := svc.Roles.HasRole(ctx, prinU("u2"), "editor"); err != nil || !held {
+		t.Fatalf("surviving global fact: %v, %v", held, err)
 	}
 }
 
-func TestRepeatedUnassignRecomputesGlobalFallback(t *testing.T) {
+func TestRepeatedUnassignReportsExactFactState(t *testing.T) {
 	svc := newGuardedLifecycle(t, &roleScopeGuard{}, authmodel.EvaluationLimits{})
 	ctx := context.Background()
-	assign := mutations.AssignRoleCommand{Subject: prinU("u2"), Role: "editor", ResourceType: "doc", ResourceID: "d1"}
+	assign := mutations.AssignRoleCommand{Subject: prinU("u2"), Role: "editor", Scope: tuples.On("doc", "d1")}
 	if _, err := svc.Mutations.AssignRole(ctx, actorU1(), assign); err != nil {
 		t.Fatal(err)
 	}
 	cmd := mutations.UnassignRoleCommand(assign)
 	first, err := svc.Mutations.UnassignRole(ctx, actorU1(), cmd)
-	if err != nil || first.Outcome != mutations.OutcomeApplied || first.SameRoleGrantRemains {
+	if err != nil || first.Outcome != mutations.OutcomeApplied {
 		t.Fatalf("first: %+v, %v", first, err)
 	}
-	assign.ResourceType, assign.ResourceID = "", ""
+	assign.Scope = tuples.Global()
 	if _, err := svc.Mutations.AssignRole(ctx, actorU1(), assign); err != nil {
 		t.Fatal(err)
 	}
 	next, err := svc.Mutations.UnassignRole(ctx, actorU1(), cmd)
-	if err != nil || next.Outcome != mutations.OutcomeNotFound || !next.SameRoleGrantRemains {
+	if err != nil || next.Outcome != mutations.OutcomeNotFound {
 		t.Fatalf("current global fallback: %+v, %v", next, err)
 	}
 }
@@ -185,12 +150,12 @@ func TestAssignRoleIdempotentDuplicate(t *testing.T) {
 	svc := newGuardedLifecycle(t, &roleScopeGuard{}, authmodel.EvaluationLimits{})
 	ctx := context.Background()
 	if _, err := svc.Mutations.AssignRole(ctx, actorU1(), mutations.AssignRoleCommand{
-		Subject: prinU("u2"), Role: "editor", ResourceType: "doc", ResourceID: "d1",
+		Subject: prinU("u2"), Role: "editor", Scope: tuples.On("doc", "d1"),
 	}); err != nil {
 		t.Fatalf("first assign: %v", err)
 	}
 	dup, err := svc.Mutations.AssignRole(ctx, actorU1(), mutations.AssignRoleCommand{
-		Subject: prinU("u2"), Role: "editor", ResourceType: "doc", ResourceID: "d1",
+		Subject: prinU("u2"), Role: "editor", Scope: tuples.On("doc", "d1"),
 	})
 	if err != nil || dup.Outcome != mutations.OutcomeNoChange {
 		t.Fatalf("duplicate assign must be no_change, got outcome=%v err=%v", dup.Outcome, err)
@@ -203,16 +168,16 @@ func TestRoleGuardedDenialCommitsNothing(t *testing.T) {
 	ctx := context.Background()
 
 	if _, err := svc.Mutations.AssignRole(ctx, actorU1(), mutations.AssignRoleCommand{
-		Subject: prinU("u2"), Role: "editor", ResourceType: "doc", ResourceID: "d1",
+		Subject: prinU("u2"), Role: "editor", Scope: tuples.On("doc", "d1"),
 	}); !errors.Is(err, sdk.ErrForbidden) {
 		t.Fatalf("denied assign: want forbidden, got %v", err)
 	}
-	if ok, _ := svc.Roles.HasRole(ctx, prinU("u2"), "editor", "doc", "d1"); ok {
+	if ok, _ := svc.Roles.HasRoleIn(ctx, prinU("u2"), "editor", authmodel.Resource{Type: "doc", ID: "d1"}); ok {
 		t.Fatalf("denial reached Apply and wrote an assignment")
 	}
 	guard.err = nil
 	rcpt, err := svc.Mutations.AssignRole(ctx, actorU1(), mutations.AssignRoleCommand{
-		Subject: prinU("u2"), Role: "editor", ResourceType: "doc", ResourceID: "d1",
+		Subject: prinU("u2"), Role: "editor", Scope: tuples.On("doc", "d1"),
 	})
 	if err != nil || rcpt.Outcome != mutations.OutcomeApplied {
 		t.Fatalf("post-denial retry should apply fresh, got %+v err=%v", rcpt, err)
@@ -225,13 +190,13 @@ func TestRoleGuardedHalfScopedRejected(t *testing.T) {
 	svc := newGuardedLifecycle(t, &roleScopeGuard{}, authmodel.EvaluationLimits{})
 	ctx := context.Background()
 	if _, err := svc.Mutations.AssignRole(ctx, actorU1(), mutations.AssignRoleCommand{
-		Subject: prinU("u2"), Role: "editor", ResourceType: "doc", // no ResourceID
-	}); !errors.Is(err, mutations.ErrHalfScopedRoleScope) {
+		Subject: prinU("u2"), Role: "editor", Scope: tuples.On("doc", ""), // no ResourceID
+	}); !errors.Is(err, sdk.ErrInvalidInput) {
 		t.Fatalf("half-scoped role: want ErrHalfScopedRoleScope, got %v", err)
 	}
 	if _, err := svc.Mutations.UnassignRole(ctx, actorU1(), mutations.UnassignRoleCommand{
-		Subject: prinU("u2"), Role: "editor", ResourceID: "d1", // no ResourceType
-	}); !errors.Is(err, mutations.ErrHalfScopedRoleScope) {
+		Subject: prinU("u2"), Role: "editor", Scope: tuples.On("", "d1"), // no ResourceType
+	}); !errors.Is(err, sdk.ErrInvalidInput) {
 		t.Fatalf("half-scoped role unassign: want ErrHalfScopedRoleScope, got %v", err)
 	}
 }
@@ -241,32 +206,24 @@ func TestRoleGuardedHalfScopedRejected(t *testing.T) {
 func TestRoleGuardedReadOnlyPosture(t *testing.T) {
 	st := memory.New(memory.WithGuardianPolicy(mutations.GuardianPolicy{}))
 	comps, err := New(Repositories{
-		Relationships: st.Relationships(), Roles: st.Roles(), Mutations: st.Mutations(),
-	}, WithRelationshipModel(lifecycleModel())) // no Guard → read-only posture
+		Tuples: st.Tuples(), Mutations: st.Mutations(),
+	}, WithModel(lifecycleModel())) // no Guard → read-only posture
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
 	if _, err := comps.Mutations.AssignRole(context.Background(), actorU1(), mutations.AssignRoleCommand{
-		Subject: prinU("u2"), Role: "editor", ResourceType: "doc", ResourceID: "d1",
+		Subject: prinU("u2"), Role: "editor", Scope: tuples.On("doc", "d1"),
 	}); !errors.Is(err, mutations.ErrMutationsNotConfigured) {
 		t.Fatalf("read-only assign: want ErrMutationsNotConfigured, got %v", err)
 	}
 }
 
-// TestRoleGuardedUnwiredKind proves the guarded role methods fail closed with the
-// roles-kind sentinel when the roles kind is off.
-func TestRoleGuardedUnwiredKind(t *testing.T) {
-	st := memory.New(memory.WithGuardianPolicy(mutations.GuardianPolicy{}))
-	comps, err := New(Repositories{
-		Relationships: st.Relationships(), Mutations: st.Mutations(), // no Roles
-	}, WithRelationshipModel(lifecycleModel()), WithGuard(&roleScopeGuard{}))
-	if err != nil {
-		t.Fatalf("NewService: %v", err)
-	}
-	if _, err := comps.Mutations.AssignRole(context.Background(), actorU1(), mutations.AssignRoleCommand{
-		Subject: prinU("u2"), Role: "editor", ResourceType: "doc", ResourceID: "d1",
-	}); !errors.Is(err, roles.ErrRolesNotConfigured) {
-		t.Fatalf("unwired roles assign: want ErrRolesNotConfigured, got %v", err)
+func TestRoleWritesShareDeclaredRelationshipConstraints(t *testing.T) {
+	svc := newGuardedLifecycle(t, &roleScopeGuard{}, authmodel.EvaluationLimits{})
+	ctx := context.Background()
+	_, err := svc.Mutations.AssignRole(ctx, actorU1(), mutations.AssignRoleCommand{Subject: authmodel.PrincipalRef{Type: "service", ID: "s1"}, Role: "editor", Scope: tuples.On("doc", "d1")})
+	if !errors.Is(err, sdk.ErrInvalidInput) {
+		t.Fatalf("role facade bypassed editor subject constraint: %v", err)
 	}
 }
 
@@ -276,8 +233,8 @@ func TestRoleGuardedUnwiredKind(t *testing.T) {
 // userset-rejection path — the type prevents it.
 func TestRoleCommandRejectsUsersetSubjectsStructurally(t *testing.T) {
 	for _, typ := range []reflect.Type{
-		reflect.TypeOf(mutations.AssignRoleCommand{}),
-		reflect.TypeOf(mutations.UnassignRoleCommand{}),
+		reflect.TypeOf(mutations.AssignRoleCommand{Scope: tuples.Global()}),
+		reflect.TypeOf(mutations.UnassignRoleCommand{Scope: tuples.Global()}),
 		reflect.TypeOf(mutations.RoleRow{}),
 		reflect.TypeOf(authmodel.PrincipalRef{}),
 	} {
@@ -287,30 +244,20 @@ func TestRoleCommandRejectsUsersetSubjectsStructurally(t *testing.T) {
 			}
 		}
 	}
-	if reflect.TypeOf(mutations.AssignRoleCommand{}.Subject) != reflect.TypeOf(authmodel.PrincipalRef{}) {
+	if reflect.TypeOf(mutations.AssignRoleCommand{Scope: tuples.Global()}.Subject) != reflect.TypeOf(authmodel.PrincipalRef{}) {
 		t.Fatalf("AssignRoleCommand.Subject must be a concrete PrincipalRef")
 	}
 }
 
-// docRoleModel is the roles half of the lifecycle fixture: it shares the "doc"
-// resource type with lifecycleModel but owns a DIFFERENT permission, the pair
-// split construction permits.
-func docRoleModel() authmodel.RoleModel {
-	return authmodel.RoleModel{ResourceTypes: map[string]authmodel.RoleTypeDef{
-		"doc": {Roles: []string{"auditor"}, Permissions: map[string][]string{"audit": {"auditor"}}},
-	}}
+func docRoleModel() decisions.Model {
+	return decisions.Model{ResourceTypes: map[string]decisions.ResourceTypeDef{"doc": {Permissions: map[string]decisions.Expression{"audit": decisions.Any(decisions.RoleIn("auditor"), decisions.Role("auditor"))}}}}
 }
 
-// newRoleModelComponents builds the full lifecycle bundle (guarded Service +
-// trusted SystemMutator) over ONE memstore state with the given role model, so
-// the three write paths can be compared on the same fixture.
-func newRoleModelComponents(t *testing.T, st *memory.Store, model authmodel.RoleModel) Components {
+func newRoleModelComponents(t *testing.T, st *memory.Store, model decisions.Model) Components {
 	t.Helper()
 	comps, err := New(Repositories{
-		Relationships: st.Relationships(),
-		Roles:         st.Roles(),
-		Mutations:     st.Mutations(),
-	}, WithRelationshipModel(lifecycleModel()), WithGuard(&roleScopeGuard{}), WithRoleModel(model))
+		Tuples: st.Tuples(), Mutations: st.Mutations(),
+	}, WithGuard(&roleScopeGuard{}), WithModel(model))
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
@@ -321,60 +268,17 @@ func newRoleModelStore() *memory.Store {
 	return memory.New(memory.WithGuardianPolicy(mutations.GuardianPolicy{}))
 }
 
-// TestAssignRoleValidatesAgainstTheRoleModel proves the D8 matrix: a scoped
-// assignment needs the role on THAT type, a global one needs it on ANY type, and
-// an undeclared pair is refused with ErrInvalidRoleModel naming the symbols —
-// before any row is written.
-func TestAssignRoleValidatesAgainstTheRoleModel(t *testing.T) {
+func TestNamedPermissionsDoNotImposeARoleCatalog(t *testing.T) {
 	comps := newRoleModelComponents(t, newRoleModelStore(), docRoleModel())
-	svc := comps
 	ctx := context.Background()
-
-	if _, err := svc.Mutations.AssignRole(ctx, actorU1(), mutations.AssignRoleCommand{
-		Subject: prinU("u2"), Role: "auditor", ResourceType: "doc", ResourceID: "d1",
-	}); err != nil {
-		t.Fatalf("declared scoped assignment: %v", err)
+	for _, scope := range []tuples.Scope{tuples.Global(), tuples.On("doc", "d1"), tuples.On("project", "p1")} {
+		if _, err := comps.Mutations.AssignRole(ctx, actorU1(), mutations.AssignRoleCommand{Subject: prinU("u2"), Role: "opaque", Scope: scope}); err != nil {
+			t.Fatalf("opaque fact at %+v: %v", scope, err)
+		}
 	}
-	if _, err := svc.Mutations.AssignRole(ctx, actorU1(), mutations.AssignRoleCommand{
-		Subject: prinU("u2"), Role: "auditor", // global
-	}); err != nil {
-		t.Fatalf("declared global assignment: %v", err)
-	}
-
-	cases := map[string]struct {
-		cmd       mutations.AssignRoleCommand
-		wantNamed []string
-	}{
-		"typo'd role on a modeled type": {
-			mutations.AssignRoleCommand{Subject: prinU("u3"), Role: "audtor", ResourceType: "doc", ResourceID: "d1"},
-			[]string{"audtor", "doc"},
-		},
-		"declared role on an unmodeled type": {
-			mutations.AssignRoleCommand{Subject: prinU("u3"), Role: "auditor", ResourceType: "project", ResourceID: "p1"},
-			[]string{"auditor", "project"},
-		},
-		"typo'd role assigned globally": {
-			mutations.AssignRoleCommand{Subject: prinU("u3"), Role: "audtor"},
-			[]string{"audtor"},
-		},
-	}
-	for name, tc := range cases {
-		t.Run(name, func(t *testing.T) {
-			cmd := tc.cmd
-
-			_, err := svc.Mutations.AssignRole(ctx, actorU1(), cmd)
-			if !errors.Is(err, authmodel.ErrInvalidRoleModel) {
-				t.Fatalf("want ErrInvalidRoleModel, got %v", err)
-			}
-			for _, symbol := range tc.wantNamed {
-				if !strings.Contains(err.Error(), symbol) {
-					t.Fatalf("message must name %q, got %v", symbol, err)
-				}
-			}
-			if ok, err := svc.Roles.HasRole(ctx, cmd.Subject, cmd.Role, cmd.ResourceType, cmd.ResourceID); err != nil || ok {
-				t.Fatalf("a refused assignment must write nothing: ok=%v err=%v", ok, err)
-			}
-		})
+	got, err := comps.Decisions.Check(ctx, authmodel.CheckRequest{Principal: prinU("u2"), Permission: "audit", Resource: authmodel.Resource{Type: "doc", ID: "d1"}})
+	if err != nil || got.Allowed {
+		t.Fatalf("opaque labels do not imply permission: %+v, %v", got, err)
 	}
 }
 
@@ -383,19 +287,23 @@ func TestAssignRoleValidatesAgainstTheRoleModel(t *testing.T) {
 // method, and the generic trusted Apply all refuse the same undeclared pair,
 // because the rule lives in the validator the repository runs.
 func TestAssignRoleModelValidationParity(t *testing.T) {
-	comps := newRoleModelComponents(t, newRoleModelStore(), docRoleModel())
+	model := docRoleModel()
+	def := model.ResourceTypes["doc"]
+	def.Relations = map[string]decisions.RelationDef{"audtor": {AllowedSubjects: []decisions.SubjectTypeRef{{Type: "service"}}}}
+	model.ResourceTypes["doc"] = def
+	comps := newRoleModelComponents(t, newRoleModelStore(), model)
 	ctx := context.Background()
 
 	paths := map[string]func() error{
 		"Service.AssignRole (guarded)": func() error {
 			_, err := comps.Mutations.AssignRole(ctx, actorU1(), mutations.AssignRoleCommand{
-				Subject: prinU("u2"), Role: "audtor", ResourceType: "doc", ResourceID: "d1",
+				Subject: prinU("u2"), Role: "audtor", Scope: tuples.On("doc", "d1"),
 			})
 			return err
 		},
 		"SystemMutator.AssignRole (trusted)": func() error {
 			_, err := comps.SystemMutator.AssignRole(ctx, mutations.AssignRoleCommand{
-				Subject: prinU("u2"), Role: "audtor", ResourceType: "doc", ResourceID: "d1",
+				Subject: prinU("u2"), Role: "audtor", Scope: tuples.On("doc", "d1"),
 			})
 			return err
 		},
@@ -411,12 +319,12 @@ func TestAssignRoleModelValidationParity(t *testing.T) {
 	}
 	for name, run := range paths {
 		t.Run(name, func(t *testing.T) {
-			if err := run(); !errors.Is(err, authmodel.ErrInvalidRoleModel) {
-				t.Fatalf("want ErrInvalidRoleModel, got %v", err)
+			if err := run(); !errors.Is(err, sdk.ErrInvalidInput) {
+				t.Fatalf("want invalid input, got %v", err)
 			}
 		})
 	}
-	if ok, err := comps.Roles.HasRole(ctx, prinU("u2"), "audtor", "doc", "d1"); err != nil || ok {
+	if ok, err := comps.Roles.HasRoleIn(ctx, prinU("u2"), "audtor", authmodel.Resource{Type: "doc", ID: "d1"}); err != nil || ok {
 		t.Fatalf("no write path may have applied the undeclared role: ok=%v err=%v", ok, err)
 	}
 }
@@ -424,10 +332,10 @@ func TestAssignRoleModelValidationParity(t *testing.T) {
 // TestAssignRoleWithoutARoleModelStaysOpaque proves hosts with no model are
 // untouched: role names remain opaque strings the core does not judge.
 func TestAssignRoleWithoutARoleModelStaysOpaque(t *testing.T) {
-	comps := newRoleModelComponents(t, newRoleModelStore(), authmodel.RoleModel{})
+	comps := newRoleModelComponents(t, newRoleModelStore(), decisions.Model{})
 	ctx := context.Background()
 	if _, err := comps.Mutations.AssignRole(ctx, actorU1(), mutations.AssignRoleCommand{
-		Subject: prinU("u2"), Role: "anything-goes", ResourceType: "doc", ResourceID: "d1",
+		Subject: prinU("u2"), Role: "anything-goes", Scope: tuples.On("doc", "d1"),
 	}); err != nil {
 		t.Fatalf("with no model every role stays assignable: %v", err)
 	}
@@ -440,22 +348,21 @@ func TestUnassignRoleStaysOpaqueUnderARoleModel(t *testing.T) {
 	st := newRoleModelStore()
 	ctx := context.Background()
 	// A row from before the model (or from a model that has since dropped it).
-	if err := st.Roles().Assign(ctx, roles.Assignment{
-		SubjectType: "user", SubjectID: "u2", Role: "legacy", ResourceType: "doc", ResourceID: "d1",
-	}); err != nil {
-		t.Fatalf("seed legacy row: %v", err)
+	if err := st.Tuples().ApplyTuples(ctx, tuples.Changes{Add: []tuples.Tuple{{Scope: tuples.On("doc", "d1"), Relation: "legacy", Subject: tuples.SubjectRef{Type: "user", ID: "u2"}}}}); err != nil {
+		t.Fatal(err)
 	}
+
 	comps := newRoleModelComponents(t, st, docRoleModel())
 
-	if ok, err := comps.Roles.HasRole(ctx, prinU("u2"), "legacy", "doc", "d1"); err != nil || !ok {
+	if ok, err := comps.Roles.HasRoleIn(ctx, prinU("u2"), "legacy", authmodel.Resource{Type: "doc", ID: "d1"}); err != nil || !ok {
 		t.Fatalf("reads stay opaque: ok=%v err=%v", ok, err)
 	}
 	if _, err := comps.SystemMutator.UnassignRole(ctx, mutations.UnassignRoleCommand{
-		Subject: prinU("u2"), Role: "legacy", ResourceType: "doc", ResourceID: "d1",
+		Subject: prinU("u2"), Role: "legacy", Scope: tuples.On("doc", "d1"),
 	}); err != nil {
 		t.Fatalf("an undeclared role must stay removable: %v", err)
 	}
-	if ok, err := comps.Roles.HasRole(ctx, prinU("u2"), "legacy", "doc", "d1"); err != nil || ok {
+	if ok, err := comps.Roles.HasRoleIn(ctx, prinU("u2"), "legacy", authmodel.Resource{Type: "doc", ID: "d1"}); err != nil || ok {
 		t.Fatalf("legacy row was not removed: ok=%v err=%v", ok, err)
 	}
 }
@@ -465,7 +372,7 @@ func TestRepeatedRoleAssignmentUsesCurrentModel(t *testing.T) {
 	ctx := context.Background()
 
 	cmd := mutations.AssignRoleCommand{
-		Subject: prinU("u2"), Role: "auditor", ResourceType: "doc", ResourceID: "d1",
+		Subject: prinU("u2"), Role: "auditor", Scope: tuples.On("doc", "d1"),
 	}
 
 	before := newRoleModelComponents(t, st, docRoleModel())
@@ -475,24 +382,24 @@ func TestRepeatedRoleAssignmentUsesCurrentModel(t *testing.T) {
 	}
 
 	// The host narrows the model: "auditor" is gone.
-	narrowed := authmodel.RoleModel{ResourceTypes: map[string]authmodel.RoleTypeDef{
-		"doc": {Roles: []string{"reviewer"}, Permissions: map[string][]string{"audit": {"reviewer"}}},
+	narrowed := decisions.Model{ResourceTypes: map[string]decisions.ResourceTypeDef{
+		"doc": {Permissions: map[string]decisions.Expression{"audit": decisions.Any(decisions.RoleIn("reviewer"), decisions.Role("reviewer"))}},
 	}}
 	after := newRoleModelComponents(t, st, narrowed)
 
 	result, err := after.SystemMutator.AssignRole(ctx, cmd)
-	if !errors.Is(err, authmodel.ErrInvalidRoleModel) || result != nil {
+	if err != nil || result.Outcome != mutations.OutcomeNoChange {
 		t.Fatalf("trusted repeated assign: %+v, %v", result, err)
 	}
 	result, err = after.Mutations.AssignRole(ctx, actorU1(), cmd)
-	if !errors.Is(err, authmodel.ErrInvalidRoleModel) || result != nil {
+	if err != nil || result.Outcome != mutations.OutcomeNoChange {
 		t.Fatalf("guarded repeated assign: %+v, %v", result, err)
 	}
-	// A NEW assignment of the dropped role is refused under the narrowed model.
+	// Permission grantors change independently of assignable facts.
 	fresh := cmd
 
 	fresh.Subject = prinU("u3")
-	if _, err := after.SystemMutator.AssignRole(ctx, fresh); !errors.Is(err, authmodel.ErrInvalidRoleModel) {
-		t.Fatalf("first application under the narrowed model: want ErrInvalidRoleModel, got %v", err)
+	if _, err := after.SystemMutator.AssignRole(ctx, fresh); err != nil {
+		t.Fatalf("first application under the narrowed model: want invalid input, got %v", err)
 	}
 }

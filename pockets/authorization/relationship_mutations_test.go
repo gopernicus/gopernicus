@@ -6,17 +6,15 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/decisions"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuples"
+
 	authmodel "github.com/gopernicus/gopernicus/pockets/authorization/logic/model"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/mutations"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/relationships"
 	"github.com/gopernicus/gopernicus/pockets/authorization/stores/memory"
 	"github.com/gopernicus/gopernicus/sdk"
 )
-
-// -----------------------------------------------------------------------------
-// Service-level guarded relationship lifecycle, over the REAL memstore bundle
-// (shared-state relationship + mutation repositories) — not a stub.
-// -----------------------------------------------------------------------------
 
 // opGuard is a host MutationGuard that records every attempt and denies a
 // configurable set of operations, proving the guard distinguishes bulk purge from a
@@ -40,16 +38,16 @@ func (g *opGuard) AuthorizeMutation(_ context.Context, attempt mutations.Mutatio
 
 // lifecycleModel declares a resource type with the relations the lifecycle tests
 // grant/replace; "edit" is a permission over owner/editor.
-func lifecycleModel() relationships.Schema {
-	return relationships.NewSchema([]relationships.ResourceSchema{{
+func lifecycleModel() decisions.Model {
+	return decisions.NewSchema([]decisions.ResourceSchema{{
 		Name: "doc",
-		Def: relationships.ResourceTypeDef{
-			Relations: map[string]relationships.RelationDef{
-				"owner":  {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "user"}}},
-				"editor": {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "user"}}},
-				"viewer": {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "user"}}},
+		Def: decisions.ResourceTypeDef{
+			Relations: map[string]decisions.RelationDef{
+				"owner":  {AllowedSubjects: []decisions.SubjectTypeRef{{Type: "user"}}},
+				"editor": {AllowedSubjects: []decisions.SubjectTypeRef{{Type: "user"}}},
+				"viewer": {AllowedSubjects: []decisions.SubjectTypeRef{{Type: "user"}}},
 			},
-			Permissions: map[string]relationships.PermissionRule{"edit": relationships.AnyOf(relationships.Direct("owner"), relationships.Direct("editor"))},
+			Permissions: map[string]decisions.Expression{"edit": decisions.AnyOf(decisions.Direct("owner"), decisions.Direct("editor"))},
 		},
 	}})
 }
@@ -61,10 +59,8 @@ func newGuardedLifecycle(t *testing.T, guard mutations.MutationGuard, limits aut
 	t.Helper()
 	st := memory.New(memory.WithGuardianPolicy(mutations.GuardianPolicy{}))
 	comps, err := New(Repositories{
-		Relationships: st.Relationships(),
-		Roles:         st.Roles(),
-		Mutations:     st.Mutations(),
-	}, WithRelationshipModel(lifecycleModel()), WithGuard(guard), WithLimits(limits))
+		Tuples: st.Tuples(), Mutations: st.Mutations(),
+	}, WithModel(lifecycleModel()), WithGuard(guard), WithLimits(limits))
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
@@ -117,36 +113,27 @@ func TestGrantRelationshipRepeatedCallReportsCurrentState(t *testing.T) {
 	}
 }
 
-// TestGrantRelationshipConflictThenReplace proves the one-relation rule: a different
-// relation for an already-related subject is a semantic_conflict (not a silent
-// overwrite), and ReplaceRelationship resolves it atomically.
-func TestGrantRelationshipConflictThenReplace(t *testing.T) {
+func TestIndependentRelationshipLabelsAndExactAtomicSwap(t *testing.T) {
 	svc := newGuardedLifecycle(t, &opGuard{}, authmodel.EvaluationLimits{})
 	ctx := context.Background()
-
-	if _, err := svc.Mutations.GrantRelationship(ctx, actorU1(), mutations.GrantRelationshipCommand{
-		ResourceType: "doc", ResourceID: "d1", Relation: "viewer", Subject: subjU("u2"),
-	}); err != nil {
-		t.Fatalf("seed viewer: %v", err)
+	for _, label := range []string{"viewer", "editor"} {
+		got, err := svc.Mutations.GrantRelationship(ctx, actorU1(), mutations.GrantRelationshipCommand{ResourceType: "doc", ResourceID: "d1", Relation: label, Subject: subjU("u2")})
+		if err != nil || got.Outcome != mutations.OutcomeApplied {
+			t.Fatalf("grant %s: %+v, %v", label, got, err)
+		}
 	}
-
-	conflict, err := svc.Mutations.GrantRelationship(ctx, actorU1(), mutations.GrantRelationshipCommand{
-		ResourceType: "doc", ResourceID: "d1", Relation: "editor", Subject: subjU("u2"),
-	})
-	if !errors.Is(err, mutations.ErrSemanticConflict) || conflict != nil {
-		t.Fatalf("conflicting grant: receipt=%+v err=%v", conflict, err)
+	fact := func(label string) tuples.Tuple {
+		return tuples.Tuple{Scope: tuples.On("doc", "d1"), Relation: label, Subject: subjU("u2")}
 	}
-
-	replaced, err := svc.Mutations.ReplaceRelationship(ctx, actorU1(), mutations.ReplaceRelationshipCommand{
-		ResourceType: "doc", ResourceID: "d1", Relation: "editor", Subject: subjU("u2"),
-	})
-	if err != nil || replaced.Outcome != mutations.OutcomeApplied {
-		t.Fatalf("replace: outcome=%v err=%v", replaced.Outcome, err)
+	result, err := svc.Mutations.Apply(ctx, actorU1(), mutations.Command{Target: mutations.Target{Kind: mutations.TargetResource, Type: "doc", ID: "d1"}, Operation: mutations.OpBatch, Tuples: tuples.Changes{Remove: []tuples.Tuple{fact("viewer")}, Add: []tuples.Tuple{fact("owner")}}})
+	if err != nil || result.Outcome != mutations.OutcomeApplied {
+		t.Fatalf("atomic swap: %+v, %v", result, err)
 	}
-	editors, _ := svc.Relationships.GetRelationTargets(ctx, "doc", "d1", "editor")
-	viewers, _ := svc.Relationships.GetRelationTargets(ctx, "doc", "d1", "viewer")
-	if len(editors) != 1 || len(viewers) != 0 {
-		t.Fatalf("replace not atomic: editors=%+v viewers=%+v", editors, viewers)
+	for label, want := range map[string]bool{"viewer": false, "editor": true, "owner": true} {
+		got, err := svc.Roles.HasRoleIn(ctx, prinU("u2"), label, authmodel.Resource{Type: "doc", ID: "d1"})
+		if err != nil || got != want {
+			t.Fatalf("%s = %v, %v; want %v", label, got, err, want)
+		}
 	}
 }
 
@@ -264,8 +251,8 @@ func TestGuardDenialCommitsNothing(t *testing.T) {
 func TestGrantReadOnlyPosture(t *testing.T) {
 	st := memory.New(memory.WithGuardianPolicy(mutations.GuardianPolicy{}))
 	comps, err := New(Repositories{
-		Relationships: st.Relationships(), Roles: st.Roles(), Mutations: st.Mutations(),
-	}, WithRelationshipModel(lifecycleModel())) // no Guard → read-only posture
+		Tuples: st.Tuples(), Mutations: st.Mutations(),
+	}, WithModel(lifecycleModel())) // no Guard → read-only posture
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
@@ -276,32 +263,30 @@ func TestGrantReadOnlyPosture(t *testing.T) {
 	}
 }
 
-// TestGrantUnwiredRelationshipKind proves the typed relationship mutations fail closed
-// with the relationship-kind sentinel when the kind is off.
-func TestGrantUnwiredRelationshipKind(t *testing.T) {
+func TestGuardedRelationshipWriteNeedsNoRawFacade(t *testing.T) {
 	st := memory.New()
-	comps, err := New(Repositories{Roles: st.Roles(), Mutations: st.Mutations()}, WithGuard(&opGuard{}))
+	comps, err := New(Repositories{Tuples: st.Tuples(), Mutations: st.Mutations()}, WithGuard(&opGuard{}))
 	if err != nil {
-		t.Fatalf("NewService: %v", err)
+		t.Fatal(err)
 	}
-	if _, err := comps.Mutations.GrantRelationship(context.Background(), actorU1(), mutations.GrantRelationshipCommand{
-		ResourceType: "doc", ResourceID: "d1", Relation: "editor", Subject: subjU("u2"),
-	}); !errors.Is(err, relationships.ErrRelationshipsNotConfigured) {
-		t.Fatalf("unwired grant: want ErrRelationshipsNotConfigured, got %v", err)
+	got, err := comps.Mutations.GrantRelationship(context.Background(), actorU1(), mutations.GrantRelationshipCommand{ResourceType: "doc", ResourceID: "d1", Relation: "editor", Subject: subjU("u2")})
+	if err != nil || got.Outcome != mutations.OutcomeApplied {
+		t.Fatalf("canonical grant: %+v, %v", got, err)
 	}
 }
 
-func TestGrantSemanticValidatorRejectsUnknownRelation(t *testing.T) {
+func TestGrantSemanticValidatorConstrainsDeclaredSubjectShapes(t *testing.T) {
 	svc := newGuardedLifecycle(t, &opGuard{}, authmodel.EvaluationLimits{})
 	ctx := context.Background()
-	_, err := svc.Mutations.GrantRelationship(ctx, actorU1(), mutations.GrantRelationshipCommand{
-		ResourceType: "doc", ResourceID: "d1", Relation: "bogus", Subject: subjU("u2"),
-	})
-	if err == nil {
-		t.Fatalf("grant of an undeclared relation must be rejected by the semantic validator")
+	_, err := svc.Mutations.GrantRelationship(ctx, actorU1(), mutations.GrantRelationshipCommand{ResourceType: "doc", ResourceID: "d1", Relation: "editor", Subject: relationships.SubjectRef{Type: "service", ID: "s1"}})
+	if !errors.Is(err, sdk.ErrInvalidInput) {
+		t.Fatalf("declared subject constraint: %v", err)
 	}
-	if targets, _ := svc.Relationships.GetRelationTargets(ctx, "doc", "d1", "bogus"); len(targets) != 0 {
-		t.Fatalf("rejected grant wrote a row: %+v", targets)
+	if targets, _ := svc.Relationships.GetRelationTargets(ctx, "doc", "d1", "editor"); len(targets) != 0 {
+		t.Fatalf("invalid grant wrote facts: %+v", targets)
+	}
+	if _, err := svc.Mutations.GrantRelationship(ctx, actorU1(), mutations.GrantRelationshipCommand{ResourceType: "doc", ResourceID: "d1", Relation: "opaque", Subject: subjU("u2")}); err != nil {
+		t.Fatalf("unconstrained opaque label: %v", err)
 	}
 }
 
@@ -310,8 +295,8 @@ func TestRepeatedGrantUsesCurrentSchema(t *testing.T) {
 	ctx := context.Background()
 
 	svcOld, err := New(Repositories{
-		Relationships: st.Relationships(), Roles: st.Roles(), Mutations: st.Mutations(),
-	}, WithRelationshipModel(lifecycleModel()), WithGuard(&opGuard{}))
+		Tuples: st.Tuples(), Mutations: st.Mutations(),
+	}, WithModel(lifecycleModel()), WithGuard(&opGuard{}))
 	if err != nil {
 		t.Fatalf("NewService old: %v", err)
 	}
@@ -322,35 +307,35 @@ func TestRepeatedGrantUsesCurrentSchema(t *testing.T) {
 		t.Fatalf("original grant: %v", err)
 	}
 
-	// A newer schema WITHOUT the editor relation, sharing the same store.
-	newerModel := relationships.NewSchema([]relationships.ResourceSchema{{
+	// A newer model constrains editor to service subjects, sharing the same facts.
+	newerModel := decisions.NewSchema([]decisions.ResourceSchema{{
 		Name: "doc",
-		Def: relationships.ResourceTypeDef{
-			Relations:   map[string]relationships.RelationDef{"owner": {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "user"}}}},
-			Permissions: map[string]relationships.PermissionRule{"edit": relationships.AnyOf(relationships.Direct("owner"))},
+		Def: decisions.ResourceTypeDef{
+			Relations:   map[string]decisions.RelationDef{"owner": {AllowedSubjects: []decisions.SubjectTypeRef{{Type: "user"}}}, "editor": {AllowedSubjects: []decisions.SubjectTypeRef{{Type: "service"}}}},
+			Permissions: map[string]decisions.Expression{"edit": decisions.AnyOf(decisions.Direct("owner"))},
 		},
 	}})
 	svcNew, err := New(Repositories{
-		Relationships: st.Relationships(), Roles: st.Roles(), Mutations: st.Mutations(),
-	}, WithRelationshipModel(newerModel), WithGuard(&opGuard{}))
+		Tuples: st.Tuples(), Mutations: st.Mutations(),
+	}, WithModel(newerModel), WithGuard(&opGuard{}))
 	if err != nil {
 		t.Fatalf("NewService newer: %v", err)
 	}
 
 	result, err := svcNew.Mutations.GrantRelationship(ctx, actorU1(), cmd)
 	if err == nil || result != nil {
-		t.Fatalf("repeated grant of removed relation: %+v, %v", result, err)
+		t.Fatalf("repeated grant of disallowed subject shape: %+v, %v", result, err)
 	}
 	if _, err := svcNew.SystemMutator.GrantRelationship(ctx, cmd); err == nil {
 		t.Fatal("trusted grant bypassed current schema")
 	}
 	if _, err := svcNew.Mutations.RevokeRelationship(ctx, actorU1(), mutations.RevokeRelationshipCommand(cmd)); err != nil {
-		t.Fatalf("removed relation must stay revocable: %v", err)
+		t.Fatalf("disallowed subject shape must stay revocable: %v", err)
 	}
-	// A NEW command with the now-undeclared relation is rejected by the current schema.
+	// A NEW command with the now-disallowed subject shape is rejected by the current schema.
 	if _, err := svcNew.Mutations.GrantRelationship(ctx, actorU1(), mutations.GrantRelationshipCommand{
 		ResourceType: "doc", ResourceID: "d1", Relation: "editor", Subject: subjU("u9"),
 	}); err == nil {
-		t.Fatalf("a fresh grant of the undeclared relation must be rejected")
+		t.Fatalf("a fresh grant of the disallowed subject shape must be rejected")
 	}
 }

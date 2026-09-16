@@ -6,50 +6,58 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuples"
+
 	"github.com/gopernicus/gopernicus/pockets/authorization"
 	authmodel "github.com/gopernicus/gopernicus/pockets/authorization/logic/model"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/relationships"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/transaction"
+	"github.com/gopernicus/gopernicus/sdk/pkg/list"
 )
 
-type interleavedCheckStore struct {
-	relationships.Storer
+type interleavedTupleStore struct {
+	tuples.Storer
 	after func() error
 }
 
-func (s interleavedCheckStore) ForModel(model relationships.ReadModel) relationships.Reader {
-	return interleavedCheckReader{Reader: s.Storer.ForModel(model), after: s.after}
-}
-
-type interleavedCheckReader struct {
-	relationships.Reader
-	after func() error
-}
-
-func (r interleavedCheckReader) GetRelationTargets(ctx context.Context, rt, id, rel string) ([]relationships.RelationTarget, error) {
-	targets, err := r.Reader.GetRelationTargets(ctx, rt, id, rel)
-	if err == nil {
-		err = r.after()
-	}
-	return targets, err
-}
-
-func (r interleavedCheckReader) FilterRelation(ctx context.Context, rt string, ids []string, rel, st, sid string, limit int) ([]string, error) {
-	return r.Reader.(relationships.RelationSetReader).FilterRelation(ctx, rt, ids, rel, st, sid, limit)
-}
-
-func (r interleavedCheckReader) RelationTargetsFor(ctx context.Context, rt string, ids []string, rel string) (map[string][]relationships.RelationTarget, error) {
-	targets, err := r.Reader.(relationships.RelationSetReader).RelationTargetsFor(ctx, rt, ids, rel)
-	if err == nil {
-		err = r.after()
-	}
-	return targets, err
-}
-
-func (r interleavedCheckReader) ReadLookupSnapshot(ctx context.Context, fn func(context.Context, relationships.Reader) error) error {
-	return r.Reader.(relationships.LookupSnapshotter).ReadLookupSnapshot(ctx, func(ctx context.Context, reader relationships.Reader) error {
-		return fn(ctx, interleavedCheckReader{Reader: reader, after: r.after})
+func (s interleavedTupleStore) ReadTupleSnapshot(ctx context.Context, fn func(context.Context, tuples.Reader) error) error {
+	return s.Storer.ReadTupleSnapshot(ctx, func(ctx context.Context, r tuples.Reader) error {
+		return fn(ctx, interleavedTupleReader{Reader: r, after: s.after})
 	})
+}
+
+type interleavedTupleReader struct {
+	tuples.Reader
+	after func() error
+}
+
+func (r interleavedTupleReader) Contains(ctx context.Context, f tuples.Tuple) (bool, error) {
+	out, e := r.Reader.Contains(ctx, f)
+	if e == nil {
+		e = r.after()
+	}
+	return out, e
+}
+func (r interleavedTupleReader) ContainsMany(ctx context.Context, f []tuples.Tuple) ([]bool, error) {
+	out, e := r.Reader.ContainsMany(ctx, f)
+	if e == nil {
+		e = r.after()
+	}
+	return out, e
+}
+func (r interleavedTupleReader) ReadSets(ctx context.Context, k []tuples.SetKey, n int) ([][]tuples.Tuple, error) {
+	out, e := r.Reader.ReadSets(ctx, k, n)
+	if e == nil {
+		e = r.after()
+	}
+	return out, e
+}
+func (r interleavedTupleReader) Lookup(ctx context.Context, q tuples.Query) ([]tuples.Tuple, error) {
+	out, e := r.Reader.Lookup(ctx, q)
+	if e == nil {
+		e = r.after()
+	}
+	return out, e
 }
 
 type permissionChecks interface {
@@ -90,9 +98,9 @@ func checkSnapshotOperation(ctx context.Context, service permissionChecks, opera
 // edge before granting its target must not produce an impossible in-flight grant.
 // SQL fixtures commit the writer atomically on a separate connection. Memory's
 // separate writes also have no granting intermediate state.
-func RunCheckSnapshots(t *testing.T, factory func(*testing.T) (authorization.Repositories, transaction.Transactor)) {
+func RunCheckSnapshots(t *testing.T, factory func(*testing.T) (Repositories, transaction.Transactor)) {
 	t.Helper()
-	for _, surface := range []string{"relationships", "decisions"} {
+	for _, surface := range []string{"decisions"} {
 		for _, operation := range []string{"Check", "CheckExplain", "CheckBatch", "FilterAuthorized"} {
 			t.Run(surface+"/"+operation, func(t *testing.T) {
 				repos, tx := factory(t)
@@ -106,7 +114,7 @@ func RunCheckSnapshots(t *testing.T, factory func(*testing.T) (authorization.Rep
 					t.Fatal(err)
 				}
 				armed, changed := false, false
-				repos.Relationships = interleavedCheckStore{Storer: writer, after: func() error {
+				repos.Tuples = interleavedTupleStore{Storer: repos.Tuples, after: func() error {
 					if !armed || changed {
 						return nil
 					}
@@ -124,11 +132,11 @@ func RunCheckSnapshots(t *testing.T, factory func(*testing.T) (authorization.Rep
 					}
 					return change(ctx)
 				}}
-				components, err := authorization.New(repos, authorization.WithRelationshipModel(lookupSnapshotSchema()))
+				components, err := authorization.New(repos.Repositories, authorization.WithModel(lookupSnapshotSchema()))
 				if err != nil {
 					t.Fatal(err)
 				}
-				var service permissionChecks = components.Relationships
+				var service permissionChecks = components.Decisions
 				if surface == "decisions" {
 					service = components.Decisions
 				}
@@ -153,14 +161,14 @@ func RunCheckSnapshots(t *testing.T, factory func(*testing.T) (authorization.Rep
 	}
 }
 
-// RunCheckAmbient proves ordinary decision snapshots preserve the host's pending
+// RunSnapshotCheckAmbient requires a snapshot-capable transactor and proves decision snapshots preserve the host's pending
 // writes and leave both commit and rollback to the enclosing transaction.
-func RunCheckAmbient(t *testing.T, factory func(*testing.T) (authorization.Repositories, transaction.Transactor)) {
+func RunSnapshotCheckAmbient(t *testing.T, factory func(*testing.T) (Repositories, transaction.Transactor)) {
 	t.Helper()
 	for _, commit := range []bool{false, true} {
 		t.Run(fmt.Sprintf("commit=%v", commit), func(t *testing.T) {
 			repos, tx := factory(t)
-			components, err := authorization.New(repos, authorization.WithRelationshipModel(lookupSnapshotSchema()))
+			components, err := authorization.New(repos.Repositories, authorization.WithModel(lookupSnapshotSchema()))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -172,6 +180,27 @@ func RunCheckAmbient(t *testing.T, factory func(*testing.T) (authorization.Repos
 				}
 				if err := repos.Relationships.CreateRelationships(ctx, rows); err != nil {
 					return err
+				}
+				page, err := roleListSubject(ctx, repos.Tuples, "user", "alice", list.Request{WithCount: true})
+				if err != nil || len(page.Items) != 1 || (page.Total == nil || *page.Total != 1) {
+					return fmt.Errorf("role listing lost pending fact: %+v/%v", page, err)
+				}
+				outside, err := roleListSubject(t.Context(), repos.Tuples, "user", "alice", list.Request{WithCount: true})
+				if err != nil || len(outside.Items) != 0 || (outside.Total == nil || *outside.Total != 0) {
+					return fmt.Errorf("role listing committed borrowed transaction: %+v/%v", outside, err)
+				}
+				for _, view := range []struct {
+					ctx  context.Context
+					want int
+				}{{ctx, 1}, {t.Context(), 0}} {
+					rels, err := components.Relationships.ListRelationshipsBySubject(view.ctx, "user", "alice", relationships.SubjectRelationshipFilter{}, list.Request{WithCount: true})
+					if err != nil || len(rels.Items) != view.want || rels.Total == nil || *rels.Total != int64(view.want) {
+						return fmt.Errorf("relationship listing lost transaction ownership: %+v/%v; want %d", rels, err, view.want)
+					}
+					count, err := components.Relationships.CountByResourceAndRelation(view.ctx, "space", "p", "viewer")
+					if err != nil || count != view.want {
+						return fmt.Errorf("relationship count lost transaction ownership: %d/%v; want %d", count, err, view.want)
+					}
 				}
 				for _, operation := range []string{"Check", "CheckExplain", "CheckBatch", "FilterAuthorized"} {
 					if allowed, err := checkSnapshotOperation(ctx, components.Decisions, operation); err != nil || !allowed {
@@ -192,6 +221,14 @@ func RunCheckAmbient(t *testing.T, factory func(*testing.T) (authorization.Repos
 			}
 			if !errors.Is(err, want) {
 				t.Fatalf("transaction=%v; want %v", err, want)
+			}
+			page, err := roleListSubject(t.Context(), repos.Tuples, "user", "alice", list.Request{WithCount: true})
+			if err != nil || (len(page.Items) == 1) != commit {
+				t.Fatalf("role listing after transaction: %+v/%v; committed=%v", page, err, commit)
+			}
+			count, err := components.Relationships.CountByResourceAndRelation(t.Context(), "space", "p", "viewer")
+			if err != nil || (count == 1) != commit {
+				t.Fatalf("relationship count after transaction: %d/%v; committed=%v", count, err, commit)
 			}
 			if allowed, err := checkSnapshotOperation(t.Context(), components.Decisions, "CheckBatch"); err != nil || allowed != commit {
 				t.Fatalf("after transaction: %v/%v; committed=%v", allowed, err, commit)

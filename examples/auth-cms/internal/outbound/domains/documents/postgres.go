@@ -9,7 +9,6 @@ import (
 	"github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
 	decisions "github.com/gopernicus/gopernicus/pockets/authorization/logic/decisions"
 	model2 "github.com/gopernicus/gopernicus/pockets/authorization/logic/model"
-	"github.com/gopernicus/gopernicus/pockets/authorization/logic/relationships"
 	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/jackc/pgx/v5"
 )
@@ -55,8 +54,8 @@ func (p *Postgres) querySQL(query domain.Query, after position, limit int, filte
 		// selected permission. It is an EXISTS predicate, so grants cannot multiply
 		// business rows or corrupt LIMIT/count semantics.
 		predicates = append(predicates, `@principal_type::text = 'user' AND EXISTS (
-			SELECT 1 FROM `+authorizationSchema.Table("iam_relationships")+` g
-			WHERE g.resource_type='document' AND g.resource_id=d.id AND g.relation='viewer'
+			SELECT 1 FROM `+authorizationSchema.Table("iam_tuples")+` g
+			WHERE g.scope_kind=2 AND g.resource_type='document' AND g.resource_id=d.id AND g.relation='viewer'
 			AND g.subject_type=@principal_type AND g.subject_id=@principal_id AND g.subject_relation='')`)
 		args["principal_type"], args["principal_id"] = principal.Type, principal.ID
 	}
@@ -114,7 +113,7 @@ type SQLListing struct {
 // usersets, additional OR branches and role-owned view are rejected at construction.
 // The host must supply the same authorization database/schema used by authorizer;
 // this example does not discover, synchronize or copy another store's grants.
-func NewSQLListing(store *Postgres, authorizationSchema pgxdb.Schema, authorizer *relationships.Service, codec *CursorCodec, bypass Bypass) (*SQLListing, error) {
+func NewSQLListing(store *Postgres, authorizationSchema pgxdb.Schema, authorizer *decisions.Service, codec *CursorCodec, bypass Bypass) (*SQLListing, error) {
 	if store == nil || authorizer == nil || codec == nil {
 		return nil, fmt.Errorf("documents: incomplete SQL listing: %w", sdk.ErrInvalidInput)
 	}

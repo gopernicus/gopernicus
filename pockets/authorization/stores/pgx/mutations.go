@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math/rand/v2"
 	"slices"
+	"sync/atomic"
 	"time"
 
 	"github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
@@ -121,14 +122,10 @@ func (m *mutationStore) apply(ctx context.Context, cmd mutations.Command, guard 
 		if err := outcome.Rejection(); err != nil {
 			return err
 		}
-		remains, err := sameRoleGrantRemains(ctx, tx, m.schema, cmd)
-		if err != nil {
-			return err
-		}
 		if err := appendAudit(ctx, w, config{audit: m.audit, schema: m.schema}); err != nil {
 			return err
 		}
-		result = &mutations.Result{Outcome: outcome, SameRoleGrantRemains: remains}
+		result = &mutations.Result{Outcome: outcome}
 		return nil
 	}
 	err := retryMutation(ctx, func() (error, bool) {
@@ -143,23 +140,10 @@ func (m *mutationStore) apply(ctx context.Context, cmd mutations.Command, guard 
 	return result, nil
 }
 
-func sameRoleGrantRemains(ctx context.Context, tx *pgxdb.Tx, schema pgxdb.Schema, cmd mutations.Command) (bool, error) {
-	if cmd.Operation != mutations.OpRoleUnassign || cmd.Target.Kind != mutations.TargetResource {
-		return false, nil
-	}
-	for _, row := range cmd.Roles {
-		ok, err := hasExactRole(ctx, tx, schema, row.SubjectType, row.SubjectID, row.Role, "", "")
-		if err != nil {
-			return false, err
-		}
-		if ok {
-			return true, nil
-		}
-	}
-	return false, nil
-}
-
 func runGuard(ctx context.Context, guard mutations.Guard, view *decisionView) (err error) {
+	view.closed = &atomic.Bool{}
+	view.viewContext = ctx
+	defer view.closed.Store(true)
 	defer func() {
 		if r := recover(); r != nil {
 			err = fmt.Errorf("authorization pgx store: guard panicked: %v: %w", r, sdk.ErrUnavailable)

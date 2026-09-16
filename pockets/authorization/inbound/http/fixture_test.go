@@ -1,46 +1,21 @@
 package authorizationhttp
 
 import (
-	"testing"
+	"context"
 
-	"github.com/gopernicus/gopernicus/pockets/authorization/logic/decisions"
-	authmodel "github.com/gopernicus/gopernicus/pockets/authorization/logic/model"
-	"github.com/gopernicus/gopernicus/pockets/authorization/logic/relationships"
-	"github.com/gopernicus/gopernicus/pockets/authorization/logic/roles"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuples"
+	"github.com/gopernicus/gopernicus/pockets/authorization/stores/memory"
 )
 
-type testRoles struct {
-	*roles.Service
-	*roles.Writer
+type failedFacts struct {
+	*memory.Tuples
+	err error
 }
 
-func newTestRoles(t *testing.T, store roles.Storer) *testRoles {
-	t.Helper()
-	svc, err := roles.NewService(store)
-	if err != nil {
-		t.Fatal(err)
-	}
-	writer, err := roles.NewWriter(store)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return &testRoles{svc, writer}
+func (f *failedFacts) Contains(context.Context, tuples.Tuple) (bool, error) { return false, f.err }
+func (f *failedFacts) ContainsMany(context.Context, []tuples.Tuple) ([]bool, error) {
+	return nil, f.err
 }
-
-type testRelationships struct {
-	*relationships.Service
-	*relationships.RelationshipWriter
-}
-
-func newDecisionFixture(t *testing.T, rel *testRelationships, roleReader decisions.RoleReader, roleModel authmodel.RoleModel, limits authmodel.EvaluationLimits) *decisions.Service {
-	t.Helper()
-	var service *relationships.Service
-	if rel != nil {
-		service = rel.Service
-	}
-	svc, err := decisions.NewService(decisions.Readers{Relationships: service, Roles: roleReader}, decisions.WithRoleModel(roleModel), decisions.WithLimits(limits))
-	if err != nil {
-		t.Fatal(err)
-	}
-	return svc
+func (f *failedFacts) ReadTupleSnapshot(ctx context.Context, fn func(context.Context, tuples.Reader) error) error {
+	return fn(ctx, f)
 }

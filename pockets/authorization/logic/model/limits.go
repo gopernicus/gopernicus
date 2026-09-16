@@ -20,8 +20,8 @@ const (
 	// DefaultMaxGraphStates bounds the distinct (resource, permission) states an
 	// expanded decision graph may visit before it is declared indeterminate.
 	DefaultMaxGraphStates = 10000
-	// DefaultMaxRelationTargets bounds the fan-out (relation targets / expanded
-	// group members) considered at a single relation hop.
+	// DefaultMaxRelationTargets bounds navigational Through fan-out. Membership
+	// expansion uses MaxGraphStates instead.
 	DefaultMaxRelationTargets = 1000
 	// DefaultMaxBatchSize bounds the checks accepted in one CheckBatch /
 	// FilterAuthorized call.
@@ -57,7 +57,7 @@ var (
 // Resolution rules (see Resolve):
 //   - a ZERO field resolves to its Default*; zero NEVER means unlimited.
 //   - a NEGATIVE field is a construction error (ErrInvalidLimits).
-//   - depth, graph-state and lookup-result bounds must leave room for +1.
+//   - step, depth, graph-state and lookup-result bounds must leave room for +1.
 //   - an explicit unlimited mode is deliberately absent from v3; adding one
 //     would require a separately named opt-in, never a magic zero/negative.
 //
@@ -72,35 +72,28 @@ var (
 //   - MaxThroughDepth: charged per Through hop; the boundary is `>` (depth ==
 //     MaxThroughDepth is the last permitted hop).
 //   - MaxEvaluationSteps: frames, rules and targets visited by one root decision,
-//     including repeats. Role decisions charge the root and visited grantors;
-//     role enumeration charges the root and all compiled grantors before reading.
+//     including repeats. Expressions charge visited nodes in evaluation order;
+//     enumeration also charges discovery and candidate evaluation work.
 //   - MaxGraphStates: distinct expanded (resource, permission) states across
 //     nested checks; diamonds charge each state once.
 //   - MaxRelationTargets: per-hop navigational relation fan-out.
 //   - MaxBatchSize: an over-size CheckBatch/FilterAuthorized is rejected before
 //     any store call.
-//   - MaxLookupResults: every Lookup store call fetches at most
-//     MaxLookupResults+1 so overflow is distinguishable from a complete bounded
-//     result; an overflowing Lookup returns ErrEvaluationLimit, never a truncated
-//     slice presented as complete.
+//   - MaxLookupResults: each enumerated result set is bounded. Result reads use
+//     MaxLookupResults+1 to distinguish overflow from completeness; raw candidate
+//     discovery uses the remaining step budget. An overflowing unpaged Lookup
+//     returns ErrEvaluationLimit, never a truncated slice presented as complete.
 //   - MaxFilterScan: clamps every source request of one FilterPage and ends the
 //     call at the bound with a partial page and a continuation — it is the one
 //     dimension whose exhaustion is a partial PAGE, not ErrEvaluationLimit,
 //     because the continuation makes it resumable.
-//   - MaxBatchSize AGAIN, at MOUNT rather than per decision: a
-//     RequireAnyPermission gate declaring more alternatives than MaxBatchSize
-//     PANICS at registration. It is the one enforcement here that is neither a
-//     per-decision charge nor an ErrEvaluationLimit — a route table is static, so
-//     an over-wide gate is a wiring bug that must fail before traffic, not a
-//     runtime indeterminate.
 //
 // Cancellation contract: no store call begins after ctx cancellation or budget
 // exhaustion is observed.
 type EvaluationLimits struct {
 	// MaxEvaluationSteps bounds frames, rules and targets visited by one root
-	// decision, including repeats (0 selects the default). Role decisions charge
-	// one root plus visited grantors; enumeration charges one root plus all
-	// compiled grantors, even when a single Check could allow earlier.
+	// decision, including repeats (0 selects the default). Expressions preserve
+	// ordered short-circuiting; enumeration also charges its discovery work.
 	MaxEvaluationSteps int
 	// MaxThroughDepth bounds navigational Through recursion (0 -> default). Past
 	// the bound (depth > MaxThroughDepth), Check returns ErrEvaluationLimit.
@@ -109,13 +102,8 @@ type EvaluationLimits struct {
 	MaxGraphStates int
 	// MaxRelationTargets bounds per-hop relation fan-out (0 -> default).
 	MaxRelationTargets int
-	// MaxBatchSize bounds one CheckBatch/FilterAuthorized (0 -> default). It has
-	// THREE consumers, so tune it against all of them: the batch decision APIs
-	// above; the actor-facing OpPurge blast-radius bound the mutation seam forces
-	// onto every purge command; and the number of alternatives ONE
-	// RequireAnyPermission gate may declare, which is checked at MOUNT and PANICS
-	// when exceeded. A host that narrows this to 1 therefore cannot register any
-	// two-alternative gate — the panic fires at boot, before traffic.
+	// MaxBatchSize bounds one CheckBatch/FilterAuthorized (0 -> default) and
+	// the actor-facing purge blast radius.
 	MaxBatchSize int
 	// MaxLookupResults bounds one LookupResources; enumeration fetches at most
 	// MaxLookupResults+1 to distinguish overflow from completeness (0 -> default).
@@ -161,6 +149,7 @@ func (l EvaluationLimits) Resolve() (EvaluationLimits, error) {
 		name  string
 		value int
 	}{
+		{"MaxEvaluationSteps", out.MaxEvaluationSteps},
 		{"MaxThroughDepth", out.MaxThroughDepth},
 		{"MaxGraphStates", out.MaxGraphStates},
 		{"MaxLookupResults", out.MaxLookupResults},

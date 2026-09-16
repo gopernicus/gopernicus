@@ -1,7 +1,6 @@
 package storetest
 
 import (
-	"context"
 	"slices"
 	"testing"
 
@@ -12,41 +11,10 @@ import (
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/roles"
 )
 
-type interleavedLookupStore struct {
-	relationships.Storer
-	after func() error
-}
-
-func (s interleavedLookupStore) ForModel(model relationships.ReadModel) relationships.Reader {
-	return interleavedLookupReader{Reader: s.Storer.ForModel(model), after: s.after}
-}
-
-type interleavedLookupReader struct {
-	relationships.Reader
-	after func() error
-}
-
-func (r interleavedLookupReader) LookupResourceIDs(ctx context.Context, rt string, relations []string, st, sid, after string, limit int) ([]string, error) {
-	ids, err := r.Reader.LookupResourceIDs(ctx, rt, relations, st, sid, after, limit)
-	if err == nil {
-		err = r.after()
-	}
-	return ids, err
-}
-
-func (r interleavedLookupReader) ReadLookupSnapshot(ctx context.Context, fn func(context.Context, relationships.Reader) error) error {
-	if source, ok := r.Reader.(relationships.LookupSnapshotter); ok {
-		return source.ReadLookupSnapshot(ctx, func(ctx context.Context, reader relationships.Reader) error {
-			return fn(ctx, interleavedLookupReader{Reader: reader, after: r.after})
-		})
-	}
-	return fn(ctx, r)
-}
-
 // RunLookupSnapshots commits a write after reverse discovery and before forward
 // verification. SQL factories use separate connections for that write while the
 // lookup's read transaction remains open; no sleeps or probabilistic race needed.
-func RunLookupSnapshots(t *testing.T, factory func(*testing.T) authorization.Repositories) {
+func RunLookupSnapshots(t *testing.T, factory func(*testing.T) Repositories) {
 	t.Helper()
 	for _, resourceType := range []string{"space", "document"} {
 		for _, page := range []bool{false, true} {
@@ -71,7 +39,7 @@ func RunLookupSnapshots(t *testing.T, factory func(*testing.T) authorization.Rep
 					}
 					writer := repos.Relationships
 					changed := false
-					repos.Relationships = interleavedLookupStore{Storer: writer, after: func() error {
+					repos.Tuples = interleavedTupleStore{Storer: repos.Tuples, after: func() error {
 						if changed {
 							return nil
 						}
@@ -82,13 +50,13 @@ func RunLookupSnapshots(t *testing.T, factory func(*testing.T) authorization.Rep
 						case "unrelated relationship":
 							return writer.CreateRelationships(ctx, []relationships.CreateRelationship{{ResourceType: "space", ResourceID: "elsewhere", Relation: "viewer", SubjectType: "user", SubjectID: "bob"}})
 						default:
-							return repos.Roles.Assign(ctx, roles.Assignment{SubjectType: "user", SubjectID: "bob", Role: "admin"})
+							return assignRole(ctx, repos.Tuples, roles.Assignment{SubjectType: "user", SubjectID: "bob", Role: "admin", Scope: fixtureScope("", "")})
 						}
 					}}
 
 					// Each discovered resource gets its own verification batch; a
 					// paged call also verifies the withheld lookahead in that snapshot.
-					components, err := authorization.New(repos, authorization.WithRelationshipModel(lookupSnapshotSchema()), authorization.WithLimits(authmodel.EvaluationLimits{MaxBatchSize: 1}))
+					components, err := authorization.New(repos.Repositories, authorization.WithModel(lookupSnapshotSchema()), authorization.WithLimits(authmodel.EvaluationLimits{MaxBatchSize: 1}))
 					if err != nil {
 						t.Fatal(err)
 					}
@@ -123,10 +91,10 @@ func RunLookupSnapshots(t *testing.T, factory func(*testing.T) authorization.Rep
 	}
 }
 
-func lookupSnapshotSchema() relationships.Schema {
-	return relationships.Schema{ResourceTypes: map[string]relationships.ResourceTypeDef{
-		"group":    {Relations: map[string]relationships.RelationDef{"member": {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "user"}}}}},
-		"space":    {Relations: map[string]relationships.RelationDef{"viewer": {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "user"}, {Type: "group", Relation: "member"}}}}, Permissions: map[string]relationships.PermissionRule{"view": relationships.AnyOf(relationships.Direct("viewer"))}},
-		"document": {Relations: map[string]relationships.RelationDef{"parent": {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "space"}}}}, Permissions: map[string]relationships.PermissionRule{"view": relationships.AnyOf(relationships.Through("parent", "view"))}},
+func lookupSnapshotSchema() decisions.Model {
+	return decisions.Model{ResourceTypes: map[string]decisions.ResourceTypeDef{
+		"group":    {Relations: map[string]decisions.RelationDef{"member": {AllowedSubjects: []decisions.SubjectTypeRef{{Type: "user"}}}}},
+		"space":    {Relations: map[string]decisions.RelationDef{"viewer": {AllowedSubjects: []decisions.SubjectTypeRef{{Type: "user"}, {Type: "group", Relation: "member"}}}}, Permissions: map[string]decisions.Expression{"view": decisions.AnyOf(decisions.Direct("viewer"))}},
+		"document": {Relations: map[string]decisions.RelationDef{"parent": {AllowedSubjects: []decisions.SubjectTypeRef{{Type: "space"}}}}, Permissions: map[string]decisions.Expression{"view": decisions.AnyOf(decisions.Through("parent", "view"))}},
 	}}
 }

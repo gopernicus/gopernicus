@@ -8,13 +8,15 @@ import (
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/relationships"
 )
 
-type decisionView struct{ tx *tursodb.Tx }
+type decisionView struct {
+	*tupleStore
+	tx *tursodb.Tx
+}
 
 var _ mutations.StoreDecisionView = (*decisionView)(nil)
 
-func newDecisionView(tx *tursodb.Tx) *decisionView { return &decisionView{tx: tx} }
-func (v *decisionView) CheckRelation(ctx context.Context, target mutations.Target, relation, subjectType, subjectID string) (bool, error) {
-	return v.CheckRelationBounded(ctx, target, relation, subjectType, subjectID, 0)
+func newDecisionView(tx *tursodb.Tx) *decisionView {
+	return &decisionView{tx: tx, tupleStore: &tupleStore{readQuerier: tx}}
 }
 
 func (v *decisionView) CheckRelationBounded(ctx context.Context, target mutations.Target, relation, subjectType, subjectID string, maxExpansionStates int) (bool, error) {
@@ -22,7 +24,7 @@ func (v *decisionView) CheckRelationBounded(ctx context.Context, target mutation
 }
 
 func (v *decisionView) checkRelationWithReader(ctx context.Context, target mutations.Target, relation, subjectType, subjectID string, maxExpansionStates int, reader tursodb.Querier) (bool, error) {
-	if err := ctx.Err(); err != nil {
+	if err := v.check(ctx); err != nil {
 		return false, err
 	}
 	if err := target.Validate(); err != nil {
@@ -39,7 +41,7 @@ func (v *decisionView) checkRelationWithReader(ctx context.Context, target mutat
 	args = append(args, target.Type, target.ID, relation)
 	query := cte + `
 SELECT (SELECT count(*) FROM ` + from + `),
- EXISTS (SELECT 1 FROM iam_relationships r JOIN ` + from + ` s
+ EXISTS (SELECT 1 FROM (SELECT * FROM main.iam_tuples WHERE scope_kind=2) r JOIN ` + from + ` s
  ON r.subject_type=s.atype AND r.subject_id=s.aid AND r.subject_relation=s.arelation
  WHERE r.resource_type=? AND r.resource_id=? AND r.relation=?)`
 	err := reader.QueryRow(ctx, query, args...).Scan(&count, &allowed)
@@ -53,26 +55,15 @@ SELECT (SELECT count(*) FROM ` + from + `),
 }
 
 func (v *decisionView) RelationTargets(ctx context.Context, target mutations.Target, relation string) ([]relationships.RelationTarget, error) {
+	if err := v.check(ctx); err != nil {
+		return nil, err
+	}
 	if err := target.Validate(); err != nil {
 		return nil, err
 	}
 	return relationTargets(ctx, v.tx, target.Type, target.ID, relation)
 }
 
-func (v *decisionView) HasRole(ctx context.Context, target mutations.Target, role, subjectType, subjectID string) (bool, error) {
-	if err := ctx.Err(); err != nil {
-		return false, err
-	}
-	if err := target.Validate(); err != nil {
-		return false, err
-	}
-	if err := (mutations.RoleRow{SubjectType: subjectType, SubjectID: subjectID, Role: role}).Validate(); err != nil {
-		return false, err
-	}
-	rt, rid := roleScope(target)
-	ok, err := hasExactRoleTx(ctx, v.tx, subjectType, subjectID, role, rt, rid)
-	if err != nil || ok || target.Kind == mutations.TargetSubject {
-		return ok, err
-	}
-	return hasExactRoleTx(ctx, v.tx, subjectType, subjectID, role, "", "")
+func (v *decisionView) CheckRelation(ctx context.Context, target mutations.Target, relation, st, sid string) (bool, error) {
+	return v.CheckRelationBounded(ctx, target, relation, st, sid, 0)
 }

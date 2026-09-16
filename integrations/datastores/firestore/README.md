@@ -549,11 +549,10 @@ configuration — the former never returns single-field indexes.
 
   `KeyHash` is mandatory for natural/claim ids, not a style choice. Document ids
   must be valid UTF-8, ≤ 1500 bytes, contain no `/`, and must not be `.`, `..`,
-  or match `__.*__` — and port-legal input in both pockets violates all three of
-  the interesting rules (authorization's six-component relationship tuple alone
-  reaches 1536 bytes and any component may contain a slash; authentication
-  bounds no identifier length at all). A hash is fixed-width, slash-free, and
-  never reserved. The original components stay in document FIELDS and in
+  or match `__.*__` — and port-legal input can violate these rules:
+  authentication bounds no identifier length and permits reserved characters.
+  A hash is fixed-width, slash-free, and never reserved. The original components
+  stay in document FIELDS and in
   returned values: a `KeyHash` is an identity, never a projection **and never a
   sort key** — ordering follows the port's own order fields, which are
   timestamps and short ids and need no hashing.
@@ -591,11 +590,10 @@ follow, and neither is optional:
 1. Tests that call `Open` or `Reset` must NOT run in parallel with each other
    across packages (`go test` runs different PACKAGES concurrently by default;
    either give the package its own database, or run those packages with `-p 1`).
-2. **Every pocket store train opens its own database** —
-   `OpenDatabase(t, "authorization")` in `pockets/authorization/stores/firestore`,
-   `OpenDatabase(t, "authentication")` in its authentication twin. The emulator
-   serves named databases side by side and the clear endpoint is scoped to one,
-   so the two store suites and this connector's own suite cannot clobber one
+2. **Every pocket store train opens its own database** — for example,
+   `OpenDatabase(t, "authentication")` in `pockets/authentication/stores/firestore`.
+   The emulator serves named databases side by side and the clear endpoint is scoped to one,
+   so the store suite and this connector's own suite cannot clobber one
    another even when they run at the same time.
 
 **Live.** `OpenLive(t)` uses `FIRESTORE_LIVE_PROJECT_ID` +

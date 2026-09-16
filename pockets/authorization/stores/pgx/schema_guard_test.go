@@ -102,8 +102,7 @@ func TestWithSchema(t *testing.T) {
 		name  string
 		table func(cfg config) string
 	}{
-		{"relationshipStore", func(cfg config) string { return newRelationshipStore(nil, cfg).table("iam_relationships") }},
-		{"roleStore", func(cfg config) string { return newRoleStore(nil, cfg).table("iam_roles") }},
+		{"tupleStore", func(cfg config) string { return newTupleStore(nil, cfg).table() }},
 		{"mutationStore", func(cfg config) string { return newMutationStore(nil, cfg).table("iam_audit") }},
 	} {
 		bare := tc.table(zero)
@@ -123,10 +122,10 @@ func TestWithSchema(t *testing.T) {
 		{"reachableCTE", reachableCTE},
 		{"boundedReachableCTE", boundedReachableCTE},
 	} {
-		if got := tc.cte(pgxdb.Schema{}); !strings.Contains(got, "FROM iam_relationships r") {
+		if got := tc.cte(pgxdb.Schema{}); !strings.Contains(got, "FROM iam_tuples WHERE scope_kind=2) r") {
 			t.Errorf("%s: the zero Schema must render the bare table, got %q", tc.name, got)
 		}
-		if got := tc.cte(schema); !strings.Contains(got, `FROM "auth".iam_relationships r`) {
+		if got := tc.cte(schema); !strings.Contains(got, `FROM "auth".iam_tuples WHERE scope_kind=2) r`) {
 			t.Errorf("%s: WithSchema must qualify the table, got %q", tc.name, got)
 		}
 	}

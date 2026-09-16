@@ -51,9 +51,6 @@ const (
 	// last-owner/guardian minimum). Maps to sdk.ErrConflict.
 	ReasonInvariantConflict Reason = "invariant_conflict"
 
-	// ReasonSemanticConflict identifies a rejected relationship grant.
-	ReasonSemanticConflict Reason = "semantic_conflict"
-
 	// ReasonInfrastructure — an unclassified backing-store or transport failure.
 	// Maps to HTTP 500; it wraps no sdk sentinel, so it never leaks as a specific
 	// client-actionable code.
@@ -64,7 +61,7 @@ const (
 // the single point that keeps CheckResult.ReasonCode and the explain trace in
 // lockstep: a granted decision is ReasonGranted, a denied one ReasonDenied.
 
-var ErrNoDecisionKind = errors.New("authorization: no decision-capable kind is configured (set WithRelationshipModel for the relationship kind or WithRoleModel for the roles kind)")
+var ErrNoDecisionKind = errors.New("authorization: no decision service is configured")
 var ErrInfrastructure = errors.New("authorization: infrastructure failure")
 
 func PrincipalFrom(p sdk.Principal) PrincipalRef { return PrincipalRef{Type: p.Type, ID: p.ID} }

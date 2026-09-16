@@ -10,8 +10,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/gopernicus/gopernicus/pockets/authorization/logic/relationships"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuplecache"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuples"
 	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/redis/go-redis/v9"
 )
@@ -25,7 +25,7 @@ const (
 
 var _ tuplecache.Backend = (*TupleCache)(nil)
 
-// TupleCache stores raw forward and reverse relationship sets in one Redis hash.
+// TupleCache stores raw forward and reverse canonical tuple sets in one Redis hash.
 // The client and its lifecycle belong to the host. The namespace must be dedicated
 // to one authoritative tuple store; arbitrary writes to this hash are unsupported.
 type TupleCache struct {
@@ -52,7 +52,7 @@ type Option func(*config)
 func WithLimits(limits Limits) Option { return func(c *config) { c.limits = limits } }
 
 // NewTupleCache constructs a backend without I/O or background goroutines.
-// The namespace is used verbatim in tuplecache:{<namespace>} and must contain
+// The namespace is used verbatim in tuplecache:v2:{<namespace>} and must contain
 // only ASCII letters, digits, colons, periods, underscores, hyphens or slashes.
 // The borrowed client must enable redis.Options.ContextTimeoutEnabled so the
 // runtime's read deadline also bounds socket I/O. The client is never modified.
@@ -89,7 +89,7 @@ func NewTupleCache(client *redis.Client, namespace string, opts ...Option) (*Tup
 	}
 	// Keep the namespace readable. Rejecting braces prevents it from escaping
 	// the hash tag shared by the mirror and its temporary rebuild hashes.
-	key := "tuplecache:{" + namespace + "}"
+	key := "tuplecache:v2:{" + namespace + "}"
 	return &TupleCache{client: client, key: key, limits: cfg.limits}, nil
 }
 
@@ -104,7 +104,7 @@ func (c *TupleCache) State(ctx context.Context) (tuplecache.State, error) {
 	return tuplecache.State{Binding: values[0], Receipt: values[1]}, nil
 }
 
-func (c *TupleCache) Read(ctx context.Context, expected tuplecache.State, keys []tuplecache.SetKey) ([][]relationships.SubjectRef, error) {
+func (c *TupleCache) Read(ctx context.Context, expected tuplecache.State, keys []tuplecache.SetKey) ([][]tuples.Tuple, error) {
 	if expected.Binding == "" || expected.Receipt == "" {
 		return nil, tuplecache.ErrUnavailable
 	}
@@ -116,10 +116,10 @@ func (c *TupleCache) Read(ctx context.Context, expected tuplecache.State, keys [
 	args := make([]any, 3, 3+len(keys))
 	args[0], args[1], args[2] = expected.Binding, expected.Receipt, c.limits.MaxReadBytes
 	for _, key := range keys {
-		if !validRef(key.Ref, !key.Reverse) {
+		if key.Validate() != nil {
 			return nil, fmt.Errorf("invalid tuple set key: %w", sdk.ErrInvalidInput)
 		}
-		args = append(args, setField(key.Reverse, toWire(key.Ref)))
+		args = append(args, setField(key))
 	}
 	started := time.Now()
 	values, err := readScript.Run(ctx, c.client, []string{c.key}, args...).Slice()
@@ -136,13 +136,13 @@ func (c *TupleCache) Read(ctx context.Context, expected tuplecache.State, keys [
 	if !ok || remaining <= 0 || time.Since(started).Milliseconds() >= remaining {
 		return nil, tuplecache.ErrUnavailable
 	}
-	result := make([][]relationships.SubjectRef, len(keys))
+	result := make([][]tuples.Tuple, len(keys))
 	for i, value := range values[1:] {
 		s, ok := value.(string)
 		if !ok {
 			return nil, tuplecache.ErrUnavailable
 		}
-		refs, err := decodeSet(s, keys[i].Reverse)
+		refs, err := decodeSet(s, keys[i])
 		if err != nil {
 			return nil, unavailable(err)
 		}
@@ -197,7 +197,7 @@ func (c *TupleCache) Publish(ctx context.Context, expected, next tuplecache.Stat
 	return publicationError(status, err)
 }
 
-func (c *TupleCache) publishFull(ctx context.Context, expected, next tuplecache.State, tuples []relationships.CreateRelationship, deadline int64) error {
+func (c *TupleCache) publishFull(ctx context.Context, expected, next tuplecache.State, tuples []tuples.Tuple, deadline int64) error {
 	sets, err := fullSets(tuples, c.limits.MaxMutationBytes)
 	if err != nil {
 		return err
@@ -266,43 +266,48 @@ func publicationError(status int, err error) error {
 	}
 }
 
-// Base64 preserves exact Go string bytes, including invalid UTF-8, while keeping
-// Redis Lua's JSON codec independent from tuple syntax and Unicode normalization.
-type wireRef [3]string
+// Base64 keeps Lua JSON independent of reference syntax and Unicode normalization.
+// Scope kind is explicit; the remaining six entries preserve validated UTF-8 bytes.
+type wireTuple [7]string
 
 type wireChange struct {
-	Remove   bool    `json:"remove"`
-	Forward  string  `json:"forward"`
-	Subject  wireRef `json:"subject"`
-	Reverse  string  `json:"reverse"`
-	Resource wireRef `json:"resource"`
+	Remove  bool      `json:"remove"`
+	Forward string    `json:"forward"`
+	Reverse string    `json:"reverse"`
+	Tuple   wireTuple `json:"tuple"`
 }
 
-func toWire(ref relationships.SubjectRef) wireRef {
-	return wireRef{base64.RawURLEncoding.EncodeToString([]byte(ref.Type)), base64.RawURLEncoding.EncodeToString([]byte(ref.ID)), base64.RawURLEncoding.EncodeToString([]byte(ref.Relation))}
-}
-
-func setField(reverse bool, ref wireRef) string {
-	data, _ := json.Marshal(ref)
-	if reverse {
-		return "r:" + string(data)
+func toWire(t tuples.Tuple) wireTuple {
+	kind := "1"
+	if t.Scope.Kind == tuples.ResourceScope {
+		kind = "2"
 	}
-	return "f:" + string(data)
-}
-
-func tupleRefs(tuple relationships.CreateRelationship) (relationships.SubjectRef, relationships.SubjectRef, error) {
-	resource := relationships.SubjectRef{Type: tuple.ResourceType, ID: tuple.ResourceID, Relation: tuple.Relation}
-	subject := relationships.SubjectRef{Type: tuple.SubjectType, ID: tuple.SubjectID, Relation: tuple.SubjectRelation}
-	if !validRef(resource, true) || !validRef(subject, false) {
-		return resource, subject, fmt.Errorf("invalid raw relationship: %w", sdk.ErrInvalidInput)
+	w := wireTuple{kind}
+	for i, v := range []string{t.Scope.Type, t.Scope.ID, t.Relation, t.Subject.Type, t.Subject.ID, t.Subject.Relation} {
+		w[i+1] = base64.RawURLEncoding.EncodeToString([]byte(v))
 	}
-	return resource, subject, nil
+	return w
 }
-
-func validRef(ref relationships.SubjectRef, relationRequired bool) bool {
-	return ref.Type != "" && ref.ID != "" && (!relationRequired || ref.Relation != "")
+func setField(key tuplecache.SetKey) string {
+	var value any
+	prefix := "f:"
+	if key.Reverse {
+		prefix = "r:"
+		value = []string{b64(key.Subject.Type), b64(key.Subject.ID), b64(key.Subject.Relation)}
+	} else {
+		kind := "1"
+		if key.Scope.Kind == tuples.ResourceScope {
+			kind = "2"
+		}
+		value = []string{kind, b64(key.Scope.Type), b64(key.Scope.ID), b64(key.Relation)}
+	}
+	encoded, _ := json.Marshal(value)
+	return prefix + string(encoded)
 }
-
+func b64(v string) string { return base64.RawURLEncoding.EncodeToString([]byte(v)) }
+func tupleFields(t tuples.Tuple) (string, string) {
+	return setField(tuplecache.SetKey{Scope: t.Scope, Relation: t.Relation}), setField(tuplecache.SetKey{Reverse: true, Subject: t.Subject})
+}
 func changesWire(changes []tuplecache.Change, maxBytes int) ([]byte, []string, error) {
 	if maxBytes < 2 {
 		return nil, nil, tuplecache.ErrCapacity
@@ -315,33 +320,32 @@ func changesWire(changes []tuplecache.Change, maxBytes int) ([]byte, []string, e
 			return nil, nil, fmt.Errorf("empty tuple change %d: %w", i, sdk.ErrInvalidInput)
 		}
 		for _, part := range []struct {
-			tuple  *relationships.CreateRelationship
+			tuple  *tuples.Tuple
 			remove bool
 		}{{change.Before, true}, {change.After, false}} {
 			if part.tuple == nil {
 				continue
 			}
-			resource, subject, err := tupleRefs(*part.tuple)
+			if err := part.tuple.Validate(); err != nil {
+				return nil, nil, err
+			}
+			forward, reverse := tupleFields(*part.tuple)
+			encoded, err := json.Marshal(wireChange{Remove: part.remove, Forward: forward, Reverse: reverse, Tuple: toWire(*part.tuple)})
 			if err != nil {
 				return nil, nil, err
 			}
-			if !refsFit(maxBytes-len(payload)-1, resource, subject) {
+			comma := 0
+			if len(payload) > 1 {
+				comma = 1
+			}
+			if len(encoded)+comma > maxBytes-len(payload)-1 {
 				return nil, nil, tuplecache.ErrCapacity
 			}
-			r, s := toWire(resource), toWire(subject)
-			op := wireChange{Remove: part.remove, Forward: setField(false, r), Subject: s, Reverse: setField(true, s), Resource: r}
-			encoded, err := json.Marshal(op)
-			if err != nil {
-				return nil, nil, err
-			}
-			if len(payload) > 1 {
+			if comma != 0 {
 				payload = append(payload, ',')
 			}
-			if len(encoded) > maxBytes-len(payload)-1 {
-				return nil, nil, tuplecache.ErrCapacity
-			}
 			payload = append(payload, encoded...)
-			for _, field := range []string{op.Forward, op.Reverse} {
+			for _, field := range []string{forward, reverse} {
 				if !seen[field] {
 					fields = append(fields, field)
 					seen[field] = true
@@ -351,34 +355,20 @@ func changesWire(changes []tuplecache.Change, maxBytes int) ([]byte, []string, e
 	}
 	return append(payload, ']'), fields, nil
 }
-
-// Raw bytes are a lower bound on their encoded form. Check them before base64
-// and JSON allocate for a single arbitrarily large opaque identifier.
-func refsFit(remaining int, refs ...relationships.SubjectRef) bool {
-	for _, ref := range refs {
-		for _, part := range []string{ref.Type, ref.ID, ref.Relation} {
-			if len(part) > remaining {
-				return false
-			}
-			remaining -= len(part)
-		}
-	}
-	return true
-}
-
-func fullSets(tuples []relationships.CreateRelationship, maxBytes int) (map[string][]wireRef, error) {
-	sets := make(map[string][]wireRef)
-	seen := make(map[string]map[wireRef]bool)
+func fullSets(facts []tuples.Tuple, maxBytes int) (map[string][]wireTuple, error) {
+	sets := make(map[string][]wireTuple)
+	seen := make(map[string]map[wireTuple]bool)
 	sizes := make(map[string]int)
-	add := func(field string, ref wireRef) error {
+	add := func(field string, fact wireTuple) error {
 		if seen[field] == nil {
-			seen[field] = make(map[wireRef]bool)
+			seen[field] = make(map[wireTuple]bool)
 			sizes[field] = len(field) + 2
 		}
-		if !seen[field][ref] {
-			// Base64 characters need no JSON escaping. Account for the array,
-			// quotes and separators exactly without marshaling the growing set.
-			size := 10 + len(ref[0]) + len(ref[1]) + len(ref[2])
+		if !seen[field][fact] {
+			size := 22
+			for _, part := range fact {
+				size += len(part)
+			}
 			if len(sets[field]) > 0 {
 				size++
 			}
@@ -386,58 +376,61 @@ func fullSets(tuples []relationships.CreateRelationship, maxBytes int) (map[stri
 				return tuplecache.ErrCapacity
 			}
 			sizes[field] += size
-			sets[field] = append(sets[field], ref)
-			seen[field][ref] = true
+			sets[field] = append(sets[field], fact)
+			seen[field][fact] = true
 		}
 		return nil
 	}
-	for _, tuple := range tuples {
-		resource, subject, err := tupleRefs(tuple)
-		if err != nil {
+	for _, fact := range facts {
+		if err := fact.Validate(); err != nil {
 			return nil, err
 		}
-		if !refsFit(maxBytes, resource, subject) {
-			return nil, tuplecache.ErrCapacity
-		}
-		r, s := toWire(resource), toWire(subject)
-		if err := add(setField(false, r), s); err != nil {
+		forward, reverse := tupleFields(fact)
+		wire := toWire(fact)
+		if err := add(forward, wire); err != nil {
 			return nil, err
 		}
-		if err := add(setField(true, s), r); err != nil {
+		if err := add(reverse, wire); err != nil {
 			return nil, err
 		}
 	}
 	return sets, nil
 }
-
-func decodeSet(value string, resourceRefs bool) ([]relationships.SubjectRef, error) {
-	var refs [][]string
-	if err := json.Unmarshal([]byte(value), &refs); err != nil {
+func decodeSet(value string, key tuplecache.SetKey) ([]tuples.Tuple, error) {
+	var encoded [][]string
+	if err := json.Unmarshal([]byte(value), &encoded); err != nil {
 		return nil, err
 	}
-	if refs == nil {
+	if encoded == nil {
 		return nil, fmt.Errorf("null tuple set")
 	}
-	result := make([]relationships.SubjectRef, 0, len(refs))
-	seen := make(map[relationships.SubjectRef]bool, len(refs))
-	for _, parts := range refs {
-		if len(parts) != 3 {
-			return nil, fmt.Errorf("invalid tuple reference length")
+	result := make([]tuples.Tuple, 0, len(encoded))
+	seen := make(map[tuples.Tuple]bool, len(encoded))
+	for _, parts := range encoded {
+		if len(parts) != 7 || (parts[0] != "1" && parts[0] != "2") {
+			return nil, fmt.Errorf("invalid canonical tuple shape")
 		}
-		decoded := [3]string{}
-		for i, part := range parts {
-			b, err := base64.RawURLEncoding.Strict().DecodeString(part)
+		var decoded [6]string
+		for i, part := range parts[1:] {
+			bytes, err := base64.RawURLEncoding.Strict().DecodeString(part)
 			if err != nil {
 				return nil, err
 			}
-			decoded[i] = string(b)
+			decoded[i] = string(bytes)
 		}
-		ref := relationships.SubjectRef{Type: decoded[0], ID: decoded[1], Relation: decoded[2]}
-		if !validRef(ref, resourceRefs) || seen[ref] {
-			return nil, fmt.Errorf("invalid or duplicate tuple reference")
+		kind := tuples.GlobalScope
+		if parts[0] == "2" {
+			kind = tuples.ResourceScope
 		}
-		seen[ref] = true
-		result = append(result, ref)
+		fact := tuples.Tuple{Scope: tuples.Scope{Kind: kind, Type: decoded[0], ID: decoded[1]}, Relation: decoded[2], Subject: tuples.SubjectRef{Type: decoded[3], ID: decoded[4], Relation: decoded[5]}}
+		if err := fact.Validate(); err != nil {
+			return nil, err
+		}
+		if seen[fact] || (key.Reverse && fact.Subject != key.Subject) || (!key.Reverse && (fact.Scope != key.Scope || fact.Relation != key.Relation)) {
+			return nil, fmt.Errorf("duplicate or misplaced canonical tuple")
+		}
+		seen[fact] = true
+		result = append(result, fact)
 	}
 	return result, nil
 }

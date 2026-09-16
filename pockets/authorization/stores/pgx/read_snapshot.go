@@ -2,15 +2,10 @@ package pgx
 
 import (
 	"context"
-	"errors"
-	"fmt"
-	"sync/atomic"
 
 	"github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/relationships"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuplecache"
-	"github.com/gopernicus/gopernicus/sdk"
-	jackpgx "github.com/jackc/pgx/v5"
 )
 
 type tupleSource struct {
@@ -24,64 +19,20 @@ func (s *tupleSource) CacheableContext(ctx context.Context) bool {
 	_, ambient := pgxdb.TxFromContext(ctx)
 	return !ambient
 }
-func (s *tupleSource) ReadSnapshot(ctx context.Context, fn func(context.Context, tuplecache.CheckReads) error) (err error) {
-	if !s.CacheableContext(ctx) || fn == nil {
-		return fmt.Errorf("authorization cache: ambient transaction or nil callback: %w", sdk.ErrInvalidInput)
-	}
-	tx, err := s.db.BeginRead(ctx)
-	if err != nil {
-		return err
-	}
-	defer func() {
-		if rollbackErr := tx.Rollback(); err != nil && rollbackErr != nil && !errors.Is(rollbackErr, jackpgx.ErrTxClosed) {
-			err = errors.Join(err, rollbackErr)
-		}
-	}()
-	if _, _, err := s.readReceipt(ctx, tx); err != nil {
-		return err
-	}
-	view := &cacheSnapshot{ctx: ctx, rel: newRelationshipStore(s.db, s.cfg), role: newRoleStore(s.db, s.cfg)}
-	view.rel.readQuerier = tx
-	view.role.readQuerier = tx
-	defer view.closed.Store(true)
-	if err = fn(ctx, view); err != nil {
-		return err
-	}
-	view.closed.Store(true)
-	if err = ctx.Err(); err != nil {
-		return err
-	}
-	return tx.Commit()
+func (s *tupleSource) ReadSnapshot(ctx context.Context, fn func(context.Context, tuplecache.CheckReads) error) error {
+	return newTupleStore(s.db, s.cfg).ReadTupleSnapshot(ctx, fn)
 }
-
-type cacheSnapshot struct {
-	ctx    context.Context
-	closed atomic.Bool
-	rel    *relationshipStore
-	role   *roleStore
+func (s *tupleStore) ForChecks(model relationships.ReadModel) relationships.CheckReader {
+	return s.ForModel(model)
 }
-
-func (s *cacheSnapshot) check(ctx context.Context) error {
-	if s.closed.Load() {
-		return tuplecache.ErrSnapshotClosed
-	}
-	if err := s.ctx.Err(); err != nil {
-		return err
-	}
-	return ctx.Err()
-}
-func (s *cacheSnapshot) ForChecks(model relationships.ReadModel) relationships.CheckReader {
-	return &cacheCheckReader{view: s, reader: s.rel.ForModel(model)}
-}
-func (s *cacheSnapshot) HasExactRole(ctx context.Context, st, sid, role, rt, rid string) (bool, error) {
-	if err := s.check(ctx); err != nil {
-		return false, err
-	}
-	return s.role.HasExactRole(ctx, st, sid, role, rt, rid)
+func (s *tupleStore) ForModel(model relationships.ReadModel) relationships.Reader {
+	rel := newRelationshipStore(s.db, s.cfg)
+	rel.readQuerier = s.readQuerier
+	return &cacheCheckReader{view: s, reader: rel.ForModel(model)}
 }
 
 type cacheCheckReader struct {
-	view   *cacheSnapshot
+	view   *tupleStore
 	reader relationships.Reader
 }
 
@@ -118,12 +69,3 @@ func (s *cacheCheckReader) CheckBatchDirect(ctx context.Context, rt string, ids 
 	return s.reader.CheckBatchDirect(ctx, rt, ids, relation, st, sid, limit)
 }
 func (s *relationshipStore) TupleCacheBinding() string { return s.tupleBinding }
-func (s *roleStore) TupleCacheBinding() string         { return s.tupleBinding }
-func (s *roleStore) cacheReader(ctx context.Context) pgxdb.Querier {
-	q := s.readQuerier
-	if q == nil {
-		q = s.db.QuerierFrom(ctx)
-	}
-
-	return q
-}

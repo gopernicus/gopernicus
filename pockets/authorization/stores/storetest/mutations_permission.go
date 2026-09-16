@@ -8,6 +8,8 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/decisions"
+
 	"github.com/gopernicus/gopernicus/pockets/authorization"
 	authmodel "github.com/gopernicus/gopernicus/pockets/authorization/logic/model"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/mutations"
@@ -27,43 +29,43 @@ import (
 // from the space, space.manage from the parent space or the tenant, tenant.admin
 // may be a group userset. Every type declares `owner` so seeds satisfy the
 // default guardian (owner-first) policy the conformance repositories carry.
-func permissionModel() relationships.Schema {
-	user := []relationships.SubjectTypeRef{{Type: "user"}}
-	return relationships.NewSchema([]relationships.ResourceSchema{
-		{Name: "group", Def: relationships.ResourceTypeDef{
-			Relations: map[string]relationships.RelationDef{
+func permissionModel() decisions.Model {
+	user := []decisions.SubjectTypeRef{{Type: "user"}}
+	return decisions.NewSchema([]decisions.ResourceSchema{
+		{Name: "group", Def: decisions.ResourceTypeDef{
+			Relations: map[string]decisions.RelationDef{
 				"owner":  {AllowedSubjects: user},
-				"member": {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "user"}, {Type: "group", Relation: "member"}}},
+				"member": {AllowedSubjects: []decisions.SubjectTypeRef{{Type: "user"}, {Type: "group", Relation: "member"}}},
 			},
 		}},
-		{Name: "tenant", Def: relationships.ResourceTypeDef{
-			Relations: map[string]relationships.RelationDef{
+		{Name: "tenant", Def: decisions.ResourceTypeDef{
+			Relations: map[string]decisions.RelationDef{
 				"owner": {AllowedSubjects: user},
-				"admin": {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "user"}, {Type: "group", Relation: "member"}}},
+				"admin": {AllowedSubjects: []decisions.SubjectTypeRef{{Type: "user"}, {Type: "group", Relation: "member"}}},
 			},
-			Permissions: map[string]relationships.PermissionRule{
-				"manage": relationships.AnyOf(relationships.Direct("owner"), relationships.Direct("admin")),
+			Permissions: map[string]decisions.Expression{
+				"manage": decisions.AnyOf(decisions.Direct("owner"), decisions.Direct("admin")),
 			},
 		}},
-		{Name: "space", Def: relationships.ResourceTypeDef{
-			Relations: map[string]relationships.RelationDef{
+		{Name: "space", Def: decisions.ResourceTypeDef{
+			Relations: map[string]decisions.RelationDef{
 				"owner":   {AllowedSubjects: user},
-				"tenant":  {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "tenant"}}},
-				"parent":  {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "space"}}},
+				"tenant":  {AllowedSubjects: []decisions.SubjectTypeRef{{Type: "tenant"}}},
+				"parent":  {AllowedSubjects: []decisions.SubjectTypeRef{{Type: "space"}}},
 				"manager": {AllowedSubjects: user},
 			},
-			Permissions: map[string]relationships.PermissionRule{
-				"manage": relationships.AnyOf(relationships.Direct("manager"), relationships.Through("parent", "manage"), relationships.Through("tenant", "manage")),
+			Permissions: map[string]decisions.Expression{
+				"manage": decisions.AnyOf(decisions.Direct("manager"), decisions.Through("parent", "manage"), decisions.Through("tenant", "manage")),
 			},
 		}},
-		{Name: "dashboard", Def: relationships.ResourceTypeDef{
-			Relations: map[string]relationships.RelationDef{
+		{Name: "dashboard", Def: decisions.ResourceTypeDef{
+			Relations: map[string]decisions.RelationDef{
 				"owner":  {AllowedSubjects: user},
-				"space":  {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "space"}}},
+				"space":  {AllowedSubjects: []decisions.SubjectTypeRef{{Type: "space"}}},
 				"viewer": {AllowedSubjects: user},
 			},
-			Permissions: map[string]relationships.PermissionRule{
-				"manage": relationships.AnyOf(relationships.Direct("owner"), relationships.Through("space", "manage")),
+			Permissions: map[string]decisions.Expression{
+				"manage": decisions.AnyOf(decisions.Direct("owner"), decisions.Through("space", "manage")),
 			},
 		}},
 	})
@@ -137,11 +139,11 @@ func seedTenancy(t *testing.T, m mutations.MutationRepository, suffix string) {
 	}
 }
 
-func newPermissionService(t *testing.T, repos authorization.Repositories, guard mutations.MutationGuard, model relationships.Schema, limits authmodel.EvaluationLimits) authorization.Components {
+func newPermissionService(t *testing.T, repos Repositories, guard mutations.MutationGuard, model decisions.Model, limits authmodel.EvaluationLimits) authorization.Components {
 	t.Helper()
 	comps, err := authorization.New(authorization.Repositories{
-		Relationships: repos.Relationships, Roles: repos.Roles, Mutations: repos.Mutations,
-	}, authorization.WithRelationshipModel(model), authorization.WithGuard(guard), authorization.WithLimits(limits))
+		Tuples: repos.Tuples, Mutations: repos.Mutations,
+	}, authorization.WithModel(model), authorization.WithGuard(guard), authorization.WithLimits(limits))
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
@@ -155,7 +157,7 @@ func grantDashboardViewer(t *testing.T, svc authorization.Components, suffix, wh
 	})
 }
 
-func viewerRowExists(t *testing.T, repos authorization.Repositories, suffix, reader string) bool {
+func viewerRowExists(t *testing.T, repos Repositories, suffix, reader string) bool {
 	t.Helper()
 	ok, err := repos.Relationships.CheckRelationExists(context.Background(), "dashboard", "d"+suffix, "viewer", "user", reader)
 	if err != nil {
@@ -168,11 +170,11 @@ func viewerRowExists(t *testing.T, repos authorization.Repositories, suffix, rea
 // what the read-side Check answers — direct owner, one Through hop, three
 // Through hops, and a userset reached through a container — and observes all
 // navigated targets; a principal with no authority is denied and writes nothing.
-func specGuardedPermissionThrough(t *testing.T, newRepos func(t *testing.T) authorization.Repositories) {
+func specGuardedPermissionThrough(t *testing.T, newRepos func(t *testing.T) Repositories) {
 	ctx := context.Background()
 	repos := newRepos(t)
 	if repos.Relationships == nil {
-		t.Skip("relationship kind not wired")
+		t.Skip("graph view not wired")
 	}
 	seedTenancy(t, repos.Mutations, "")
 	cases := []struct {
@@ -219,29 +221,29 @@ func specGuardedPermissionThrough(t *testing.T, newRepos func(t *testing.T) auth
 // expansionModel: doc.view is inherited from the folder (one Through hop), and
 // the folder's viewer may be a group userset — so the guard's direct read on the
 // folder expands a membership chain inside the store adapter.
-func expansionModel() relationships.Schema {
-	user := []relationships.SubjectTypeRef{{Type: "user"}}
-	return relationships.NewSchema([]relationships.ResourceSchema{
-		{Name: "group", Def: relationships.ResourceTypeDef{
-			Relations: map[string]relationships.RelationDef{
+func expansionModel() decisions.Model {
+	user := []decisions.SubjectTypeRef{{Type: "user"}}
+	return decisions.NewSchema([]decisions.ResourceSchema{
+		{Name: "group", Def: decisions.ResourceTypeDef{
+			Relations: map[string]decisions.RelationDef{
 				"owner":  {AllowedSubjects: user},
-				"member": {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "user"}, {Type: "group", Relation: "member"}}},
+				"member": {AllowedSubjects: []decisions.SubjectTypeRef{{Type: "user"}, {Type: "group", Relation: "member"}}},
 			},
 		}},
-		{Name: "folder", Def: relationships.ResourceTypeDef{
-			Relations: map[string]relationships.RelationDef{
+		{Name: "folder", Def: decisions.ResourceTypeDef{
+			Relations: map[string]decisions.RelationDef{
 				"owner":  {AllowedSubjects: user},
-				"viewer": {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "user"}, {Type: "group", Relation: "member"}}},
+				"viewer": {AllowedSubjects: []decisions.SubjectTypeRef{{Type: "user"}, {Type: "group", Relation: "member"}}},
 			},
-			Permissions: map[string]relationships.PermissionRule{"view": relationships.AnyOf(relationships.Direct("viewer"))},
+			Permissions: map[string]decisions.Expression{"view": decisions.AnyOf(decisions.Direct("viewer"))},
 		}},
-		{Name: "doc", Def: relationships.ResourceTypeDef{
-			Relations: map[string]relationships.RelationDef{
+		{Name: "doc", Def: decisions.ResourceTypeDef{
+			Relations: map[string]decisions.RelationDef{
 				"owner":  {AllowedSubjects: user},
-				"folder": {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "folder"}}},
+				"folder": {AllowedSubjects: []decisions.SubjectTypeRef{{Type: "folder"}}},
 				"viewer": {AllowedSubjects: user},
 			},
-			Permissions: map[string]relationships.PermissionRule{"view": relationships.AnyOf(relationships.Direct("viewer"), relationships.Through("folder", "view"))},
+			Permissions: map[string]decisions.Expression{"view": decisions.AnyOf(decisions.Direct("viewer"), decisions.Through("folder", "view"))},
 		}},
 	})
 }
@@ -250,11 +252,11 @@ func expansionModel() relationships.Schema {
 // at exactly the budget the read-side Check overflows at — through a container
 // — and an over-budget guard is ErrEvaluationLimit that persists no row, no
 // or result.
-func specGuardedPermissionExpansionParity(t *testing.T, newRepos func(t *testing.T) authorization.Repositories) {
+func specGuardedPermissionExpansionParity(t *testing.T, newRepos func(t *testing.T) Repositories) {
 	ctx := context.Background()
 	repos := newRepos(t)
 	if repos.Relationships == nil {
-		t.Skip("relationship kind not wired")
+		t.Skip("graph view not wired")
 	}
 	m := repos.Mutations
 	// alice -> g1#member -> g2#member -> g3#member; folder:f#viewer@g3#member;
@@ -308,10 +310,10 @@ func specGuardedPermissionExpansionParity(t *testing.T, newRepos func(t *testing
 // as stale/denied with no row and no result — never a committed stale allow.
 // Portable across the three stores: the deterministic interleaving proof is
 // pgx-specific (see stores/pgx mutations_permission_live_test.go).
-func specGuardedPermissionThroughRevokeRaces(t *testing.T, newRepos func(t *testing.T) authorization.Repositories) {
+func specGuardedPermissionThroughRevokeRaces(t *testing.T, newRepos func(t *testing.T) Repositories) {
 	repos := newRepos(t)
 	if repos.Relationships == nil {
-		t.Skip("relationship kind not wired")
+		t.Skip("graph view not wired")
 	}
 	m := repos.Mutations
 	const rounds = 6

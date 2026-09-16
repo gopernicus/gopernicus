@@ -16,7 +16,7 @@ import (
 
 // RunLookupConcurrent exercises complete and paged lookups with relevant
 // concurrent membership changes. Each committed state grants both IDs or neither.
-func RunLookupConcurrent(t *testing.T, repos authorization.Repositories) {
+func RunLookupConcurrent(t *testing.T, repos Repositories) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
 	defer cancel()
@@ -29,7 +29,7 @@ func RunLookupConcurrent(t *testing.T, repos authorization.Repositories) {
 	if err := repos.Relationships.CreateRelationships(ctx, rows); err != nil {
 		t.Fatal(err)
 	}
-	components, err := authorization.New(repos, authorization.WithRelationshipModel(lookupSnapshotSchema()), authorization.WithLimits(authmodel.EvaluationLimits{MaxBatchSize: 1}))
+	components, err := authorization.New(repos.Repositories, authorization.WithModel(lookupSnapshotSchema()), authorization.WithLimits(authmodel.EvaluationLimits{MaxBatchSize: 1}))
 	if err != nil {
 		t.Fatal(err)
 	}

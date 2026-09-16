@@ -1,0 +1,3563 @@
+{
+  "date": "2026-09-16",
+  "status": "passed",
+  "cleanup": "passed",
+  "command": "python3 -B .github/scripts/authorization_cache_verify.py --mode benchmark --postgres-bin /opt/homebrew/opt/postgresql@17/bin --report <report.json>",
+  "source_sha256": "ead72aa1e31822ee84d56a88f2fe41d2632dd88d79e6933051d88ceaf65a4d9c",
+  "cases": 109,
+  "samples_per_case": 5,
+  "valid_samples": 545,
+  "benchtime": "1s",
+  "benchmem": true,
+  "environment": "Apple M4 Pro, darwin/arm64, Go 1.26.1, PostgreSQL 17.4 en_US.UTF-8 over loopback TCP, Redis 8.4.0 private Unix sockets, local SQLite through modernc.org/sqlite v1.52.0",
+  "limits": [
+    "Local measurements, not production capacity",
+    "Remote Turso unverified",
+    "Five repeated samples do not establish tail latency",
+    "Go allocations exclude Redis server memory",
+    "Setup and compilation excluded from timing",
+    "Benchmark families ran sequentially after verification completed"
+  ],
+  "commands": [
+    {
+      "command": [
+        "go",
+        "test",
+        "-run=^$",
+        "-bench=Benchmark(CanonicalRoleReads|TupleCachePublicationOverlap|RoleBatchReads|CheckBatchThrough|FilterAuthorizedDeniedCandidates|CheckBatchDeniedCandidates|ComposableGuard)$",
+        "-benchmem",
+        "-benchtime=1s",
+        "-count=5",
+        "./..."
+      ],
+      "returncode": 0,
+      "stdout_sha256": "32355c4e1be548beed12342fd859e4a5751dc1db5b9c2163d5f70884da1ed38a",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "go",
+        "test",
+        "-run=^$",
+        "-bench=Benchmark(DecisionsPostgres|TupleSourceBacklog|GuardedWriterContentionPostgres)",
+        "-benchmem",
+        "-benchtime=1s",
+        "-count=5",
+        "./..."
+      ],
+      "returncode": 0,
+      "stdout_sha256": "a33fc27421f349667366fd0cc4b004a20bccba705d05bed8e95e49615c99bb74",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "go",
+        "test",
+        "-run=^$",
+        "-bench=Benchmark(ThroughBatchSQLite|TupleSourceBacklog|GuardedWriterContentionSQLite)",
+        "-benchmem",
+        "-benchtime=1s",
+        "-count=5",
+        "./..."
+      ],
+      "returncode": 0,
+      "stdout_sha256": "34f9cf859ed0aba0e2d67e52985be6fef31bd104a3335dd1b0409eeb208501e8",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "go",
+        "test",
+        "-tags=integration",
+        "-run=^$",
+        "-bench=Benchmark(TupleCache|SQLRedis)",
+        "-benchmem",
+        "-benchtime=1s",
+        "-count=5",
+        "./..."
+      ],
+      "returncode": 0,
+      "stdout_sha256": "b0703bd61084138f571f386edc5801b3913466de6c3f79da14d6f513f8775b82",
+      "stderr": ""
+    }
+  ],
+  "benchmarks": [
+    {
+      "module": "pockets/authorization",
+      "cases": 25,
+      "samples": {
+        "BenchmarkComposableGuard/global": [
+          {
+            "ns/op": 826.6,
+            "B/op": 3320.0,
+            "allocs/op": 28.0
+          },
+          {
+            "ns/op": 815.3,
+            "B/op": 3320.0,
+            "allocs/op": 28.0
+          },
+          {
+            "ns/op": 898.4,
+            "B/op": 3320.0,
+            "allocs/op": 28.0
+          },
+          {
+            "ns/op": 816.7,
+            "B/op": 3320.0,
+            "allocs/op": 28.0
+          },
+          {
+            "ns/op": 817.7,
+            "B/op": 3320.0,
+            "allocs/op": 28.0
+          }
+        ],
+        "BenchmarkComposableGuard/two_exact_roles": [
+          {
+            "ns/op": 1410.0,
+            "B/op": 4616.0,
+            "allocs/op": 34.0
+          },
+          {
+            "ns/op": 1421.0,
+            "B/op": 4616.0,
+            "allocs/op": 34.0
+          },
+          {
+            "ns/op": 1423.0,
+            "B/op": 4616.0,
+            "allocs/op": 34.0
+          },
+          {
+            "ns/op": 1417.0,
+            "B/op": 4616.0,
+            "allocs/op": 34.0
+          },
+          {
+            "ns/op": 1410.0,
+            "B/op": 4616.0,
+            "allocs/op": 34.0
+          }
+        ],
+        "BenchmarkComposableGuard/mixed": [
+          {
+            "ns/op": 2501.0,
+            "B/op": 7864.0,
+            "allocs/op": 44.0
+          },
+          {
+            "ns/op": 2518.0,
+            "B/op": 7864.0,
+            "allocs/op": 44.0
+          },
+          {
+            "ns/op": 2396.0,
+            "B/op": 7864.0,
+            "allocs/op": 44.0
+          },
+          {
+            "ns/op": 2368.0,
+            "B/op": 7864.0,
+            "allocs/op": 44.0
+          },
+          {
+            "ns/op": 2383.0,
+            "B/op": 7864.0,
+            "allocs/op": 44.0
+          }
+        ],
+        "BenchmarkRoleBatchReads/requests_1": [
+          {
+            "ns/op": 1061.0,
+            "B/op": 3560.0,
+            "allocs/op": 20.0
+          },
+          {
+            "ns/op": 1039.0,
+            "B/op": 3560.0,
+            "allocs/op": 20.0
+          },
+          {
+            "ns/op": 1040.0,
+            "B/op": 3560.0,
+            "allocs/op": 20.0
+          },
+          {
+            "ns/op": 1034.0,
+            "B/op": 3560.0,
+            "allocs/op": 20.0
+          },
+          {
+            "ns/op": 1176.0,
+            "B/op": 3560.0,
+            "allocs/op": 20.0
+          }
+        ],
+        "BenchmarkRoleBatchReads/requests_20": [
+          {
+            "ns/op": 43028.0,
+            "B/op": 67917.0,
+            "allocs/op": 403.0
+          },
+          {
+            "ns/op": 42227.0,
+            "B/op": 67913.0,
+            "allocs/op": 403.0
+          },
+          {
+            "ns/op": 42202.0,
+            "B/op": 67913.0,
+            "allocs/op": 403.0
+          },
+          {
+            "ns/op": 43012.0,
+            "B/op": 67913.0,
+            "allocs/op": 403.0
+          },
+          {
+            "ns/op": 42853.0,
+            "B/op": 67913.0,
+            "allocs/op": 403.0
+          }
+        ],
+        "BenchmarkRoleBatchReads/requests_128": [
+          {
+            "ns/op": 222425.0,
+            "B/op": 403079.0,
+            "allocs/op": 2261.0
+          },
+          {
+            "ns/op": 206490.0,
+            "B/op": 403058.0,
+            "allocs/op": 2261.0
+          },
+          {
+            "ns/op": 218895.0,
+            "B/op": 403057.0,
+            "allocs/op": 2261.0
+          },
+          {
+            "ns/op": 206301.0,
+            "B/op": 403056.0,
+            "allocs/op": 2261.0
+          },
+          {
+            "ns/op": 204946.0,
+            "B/op": 403056.0,
+            "allocs/op": 2261.0
+          }
+        ],
+        "BenchmarkCheckBatchThrough/container-direct": [
+          {
+            "ns/op": 10717719.0,
+            "B/op": 26243282.0,
+            "allocs/op": 11650.0
+          },
+          {
+            "ns/op": 10831570.0,
+            "B/op": 26243201.0,
+            "allocs/op": 11650.0
+          },
+          {
+            "ns/op": 10623345.0,
+            "B/op": 26243200.0,
+            "allocs/op": 11650.0
+          },
+          {
+            "ns/op": 10587265.0,
+            "B/op": 26243112.0,
+            "allocs/op": 11650.0
+          },
+          {
+            "ns/op": 10301722.0,
+            "B/op": 26243174.0,
+            "allocs/op": 11649.0
+          }
+        ],
+        "BenchmarkCheckBatchThrough/container-through": [
+          {
+            "ns/op": 10469897.0,
+            "B/op": 26243062.0,
+            "allocs/op": 11649.0
+          },
+          {
+            "ns/op": 11042021.0,
+            "B/op": 26243086.0,
+            "allocs/op": 11650.0
+          },
+          {
+            "ns/op": 10641970.0,
+            "B/op": 26243090.0,
+            "allocs/op": 11650.0
+          },
+          {
+            "ns/op": 10634130.0,
+            "B/op": 26243143.0,
+            "allocs/op": 11650.0
+          },
+          {
+            "ns/op": 10735649.0,
+            "B/op": 26243118.0,
+            "allocs/op": 11650.0
+          }
+        ],
+        "BenchmarkFilterAuthorizedDeniedCandidates/n=50": [
+          {
+            "ns/op": 393020.0,
+            "reads/op": 9.0,
+            "B/op": 575076.0,
+            "allocs/op": 2248.0
+          },
+          {
+            "ns/op": 396701.0,
+            "reads/op": 9.0,
+            "B/op": 575030.0,
+            "allocs/op": 2248.0
+          },
+          {
+            "ns/op": 390885.0,
+            "reads/op": 9.0,
+            "B/op": 575061.0,
+            "allocs/op": 2248.0
+          },
+          {
+            "ns/op": 393072.0,
+            "reads/op": 9.0,
+            "B/op": 575024.0,
+            "allocs/op": 2248.0
+          },
+          {
+            "ns/op": 390252.0,
+            "reads/op": 9.0,
+            "B/op": 575063.0,
+            "allocs/op": 2248.0
+          }
+        ],
+        "BenchmarkFilterAuthorizedDeniedCandidates/n=300": [
+          {
+            "ns/op": 2307476.0,
+            "reads/op": 9.0,
+            "B/op": 3205770.0,
+            "allocs/op": 10647.0
+          },
+          {
+            "ns/op": 2109460.0,
+            "reads/op": 9.0,
+            "B/op": 3205784.0,
+            "allocs/op": 10647.0
+          },
+          {
+            "ns/op": 2133405.0,
+            "reads/op": 9.0,
+            "B/op": 3205573.0,
+            "allocs/op": 10646.0
+          },
+          {
+            "ns/op": 2118533.0,
+            "reads/op": 9.0,
+            "B/op": 3205618.0,
+            "allocs/op": 10646.0
+          },
+          {
+            "ns/op": 2171242.0,
+            "reads/op": 9.0,
+            "B/op": 3205871.0,
+            "allocs/op": 10647.0
+          }
+        ],
+        "BenchmarkCheckBatchDeniedCandidates/n=50": [
+          {
+            "ns/op": 416473.0,
+            "reads/op": 9.0,
+            "B/op": 569880.0,
+            "allocs/op": 2246.0
+          },
+          {
+            "ns/op": 410607.0,
+            "reads/op": 9.0,
+            "B/op": 569921.0,
+            "allocs/op": 2246.0
+          },
+          {
+            "ns/op": 411876.0,
+            "reads/op": 9.0,
+            "B/op": 569924.0,
+            "allocs/op": 2246.0
+          },
+          {
+            "ns/op": 427644.0,
+            "reads/op": 9.0,
+            "B/op": 570109.0,
+            "allocs/op": 2246.0
+          },
+          {
+            "ns/op": 398678.0,
+            "reads/op": 9.0,
+            "B/op": 570016.0,
+            "allocs/op": 2246.0
+          }
+        ],
+        "BenchmarkCheckBatchDeniedCandidates/n=300": [
+          {
+            "ns/op": 2133388.0,
+            "reads/op": 9.0,
+            "B/op": 3176353.0,
+            "allocs/op": 10645.0
+          },
+          {
+            "ns/op": 2149640.0,
+            "reads/op": 9.0,
+            "B/op": 3176560.0,
+            "allocs/op": 10645.0
+          },
+          {
+            "ns/op": 2123241.0,
+            "reads/op": 9.0,
+            "B/op": 3176346.0,
+            "allocs/op": 10645.0
+          },
+          {
+            "ns/op": 2224205.0,
+            "reads/op": 9.0,
+            "B/op": 3176167.0,
+            "allocs/op": 10644.0
+          },
+          {
+            "ns/op": 2131752.0,
+            "reads/op": 9.0,
+            "B/op": 3176365.0,
+            "allocs/op": 10645.0
+          }
+        ],
+        "BenchmarkTupleCachePublicationOverlap/warm": [
+          {
+            "ns/op": 1471.0,
+            "cache_hits/op": 1.0,
+            "fallbacks/op": 0.0,
+            "publications/op": 0.0,
+            "B/op": 3312.0,
+            "allocs/op": 24.0
+          },
+          {
+            "ns/op": 1531.0,
+            "cache_hits/op": 1.0,
+            "fallbacks/op": 0.0,
+            "publications/op": 0.0,
+            "B/op": 3312.0,
+            "allocs/op": 24.0
+          },
+          {
+            "ns/op": 1420.0,
+            "cache_hits/op": 1.0,
+            "fallbacks/op": 0.0,
+            "publications/op": 0.0,
+            "B/op": 3312.0,
+            "allocs/op": 24.0
+          },
+          {
+            "ns/op": 1433.0,
+            "cache_hits/op": 1.0,
+            "fallbacks/op": 0.0,
+            "publications/op": 0.0,
+            "B/op": 3312.0,
+            "allocs/op": 24.0
+          },
+          {
+            "ns/op": 1422.0,
+            "cache_hits/op": 1.0,
+            "fallbacks/op": 0.0,
+            "publications/op": 0.0,
+            "B/op": 3312.0,
+            "allocs/op": 24.0
+          }
+        ],
+        "BenchmarkTupleCachePublicationOverlap/idle_poll_during_read": [
+          {
+            "ns/op": 2176.0,
+            "cache_hits/op": 1.0,
+            "fallbacks/op": 0.0,
+            "publications/op": 0.0,
+            "B/op": 4904.0,
+            "allocs/op": 32.0
+          },
+          {
+            "ns/op": 2173.0,
+            "cache_hits/op": 1.0,
+            "fallbacks/op": 0.0,
+            "publications/op": 0.0,
+            "B/op": 4904.0,
+            "allocs/op": 32.0
+          },
+          {
+            "ns/op": 2153.0,
+            "cache_hits/op": 1.0,
+            "fallbacks/op": 0.0,
+            "publications/op": 0.0,
+            "B/op": 4904.0,
+            "allocs/op": 32.0
+          },
+          {
+            "ns/op": 2150.0,
+            "cache_hits/op": 1.0,
+            "fallbacks/op": 0.0,
+            "publications/op": 0.0,
+            "B/op": 4904.0,
+            "allocs/op": 32.0
+          },
+          {
+            "ns/op": 2300.0,
+            "cache_hits/op": 1.0,
+            "fallbacks/op": 0.0,
+            "publications/op": 0.0,
+            "B/op": 4904.0,
+            "allocs/op": 32.0
+          }
+        ],
+        "BenchmarkTupleCachePublicationOverlap/unrelated_publication_during_read": [
+          {
+            "ns/op": 3114.0,
+            "cache_hits/op": 0.0,
+            "fallbacks/op": 1.0,
+            "publications/op": 1.0,
+            "B/op": 7128.0,
+            "allocs/op": 49.0
+          },
+          {
+            "ns/op": 3127.0,
+            "cache_hits/op": 0.0,
+            "fallbacks/op": 1.0,
+            "publications/op": 1.0,
+            "B/op": 7128.0,
+            "allocs/op": 49.0
+          },
+          {
+            "ns/op": 3121.0,
+            "cache_hits/op": 0.0,
+            "fallbacks/op": 1.0,
+            "publications/op": 1.0,
+            "B/op": 7128.0,
+            "allocs/op": 49.0
+          },
+          {
+            "ns/op": 3133.0,
+            "cache_hits/op": 0.0,
+            "fallbacks/op": 1.0,
+            "publications/op": 1.0,
+            "B/op": 7128.0,
+            "allocs/op": 49.0
+          },
+          {
+            "ns/op": 3140.0,
+            "cache_hits/op": 0.0,
+            "fallbacks/op": 1.0,
+            "publications/op": 1.0,
+            "B/op": 7128.0,
+            "allocs/op": 49.0
+          }
+        ],
+        "BenchmarkTupleCachePublicationOverlap/capacity_fallback": [
+          {
+            "ns/op": 1172.0,
+            "cache_hits/op": 0.0,
+            "fallbacks/op": 1.0,
+            "publications/op": 0.0,
+            "B/op": 3384.0,
+            "allocs/op": 27.0
+          },
+          {
+            "ns/op": 1170.0,
+            "cache_hits/op": 0.0,
+            "fallbacks/op": 1.0,
+            "publications/op": 0.0,
+            "B/op": 3384.0,
+            "allocs/op": 27.0
+          },
+          {
+            "ns/op": 1259.0,
+            "cache_hits/op": 0.0,
+            "fallbacks/op": 1.0,
+            "publications/op": 0.0,
+            "B/op": 3384.0,
+            "allocs/op": 27.0
+          },
+          {
+            "ns/op": 1195.0,
+            "cache_hits/op": 0.0,
+            "fallbacks/op": 1.0,
+            "publications/op": 0.0,
+            "B/op": 3384.0,
+            "allocs/op": 27.0
+          },
+          {
+            "ns/op": 1191.0,
+            "cache_hits/op": 0.0,
+            "fallbacks/op": 1.0,
+            "publications/op": 0.0,
+            "B/op": 3384.0,
+            "allocs/op": 27.0
+          }
+        ],
+        "BenchmarkCanonicalRoleReads/roles=1/durable": [
+          {
+            "ns/op": 231.4,
+            "cache_hits/op": 0.0,
+            "fallbacks/op": 0.0,
+            "B/op": 1201.0,
+            "allocs/op": 6.0
+          },
+          {
+            "ns/op": 230.7,
+            "cache_hits/op": 0.0,
+            "fallbacks/op": 0.0,
+            "B/op": 1201.0,
+            "allocs/op": 6.0
+          },
+          {
+            "ns/op": 234.2,
+            "cache_hits/op": 0.0,
+            "fallbacks/op": 0.0,
+            "B/op": 1201.0,
+            "allocs/op": 6.0
+          },
+          {
+            "ns/op": 230.9,
+            "cache_hits/op": 0.0,
+            "fallbacks/op": 0.0,
+            "B/op": 1201.0,
+            "allocs/op": 6.0
+          },
+          {
+            "ns/op": 230.4,
+            "cache_hits/op": 0.0,
+            "fallbacks/op": 0.0,
+            "B/op": 1201.0,
+            "allocs/op": 6.0
+          }
+        ],
+        "BenchmarkCanonicalRoleReads/roles=1/cold": [
+          {
+            "ns/op": 240.1,
+            "cache_hits/op": 0.0,
+            "fallbacks/op": 1.0,
+            "B/op": 1201.0,
+            "allocs/op": 6.0
+          },
+          {
+            "ns/op": 254.7,
+            "cache_hits/op": 0.0,
+            "fallbacks/op": 1.0,
+            "B/op": 1201.0,
+            "allocs/op": 6.0
+          },
+          {
+            "ns/op": 237.7,
+            "cache_hits/op": 0.0,
+            "fallbacks/op": 1.0,
+            "B/op": 1201.0,
+            "allocs/op": 6.0
+          },
+          {
+            "ns/op": 239.2,
+            "cache_hits/op": 0.0,
+            "fallbacks/op": 1.0,
+            "B/op": 1201.0,
+            "allocs/op": 6.0
+          },
+          {
+            "ns/op": 234.5,
+            "cache_hits/op": 0.0,
+            "fallbacks/op": 1.0,
+            "B/op": 1201.0,
+            "allocs/op": 6.0
+          }
+        ],
+        "BenchmarkCanonicalRoleReads/roles=1/warm": [
+          {
+            "ns/op": 858.6,
+            "cache_hits/op": 1.0,
+            "fallbacks/op": 0.0,
+            "B/op": 2225.0,
+            "allocs/op": 16.0
+          },
+          {
+            "ns/op": 850.9,
+            "cache_hits/op": 1.0,
+            "fallbacks/op": 0.0,
+            "B/op": 2225.0,
+            "allocs/op": 16.0
+          },
+          {
+            "ns/op": 855.0,
+            "cache_hits/op": 1.0,
+            "fallbacks/op": 0.0,
+            "B/op": 2225.0,
+            "allocs/op": 16.0
+          },
+          {
+            "ns/op": 854.6,
+            "cache_hits/op": 1.0,
+            "fallbacks/op": 0.0,
+            "B/op": 2225.0,
+            "allocs/op": 16.0
+          },
+          {
+            "ns/op": 936.9,
+            "cache_hits/op": 1.0,
+            "fallbacks/op": 0.0,
+            "B/op": 2225.0,
+            "allocs/op": 16.0
+          }
+        ],
+        "BenchmarkCanonicalRoleReads/roles=16/durable": [
+          {
+            "ns/op": 1529.0,
+            "cache_hits/op": 0.0,
+            "fallbacks/op": 0.0,
+            "B/op": 4328.0,
+            "allocs/op": 8.0
+          },
+          {
+            "ns/op": 1523.0,
+            "cache_hits/op": 0.0,
+            "fallbacks/op": 0.0,
+            "B/op": 4328.0,
+            "allocs/op": 8.0
+          },
+          {
+            "ns/op": 1515.0,
+            "cache_hits/op": 0.0,
+            "fallbacks/op": 0.0,
+            "B/op": 4328.0,
+            "allocs/op": 8.0
+          },
+          {
+            "ns/op": 1502.0,
+            "cache_hits/op": 0.0,
+            "fallbacks/op": 0.0,
+            "B/op": 4328.0,
+            "allocs/op": 8.0
+          },
+          {
+            "ns/op": 1516.0,
+            "cache_hits/op": 0.0,
+            "fallbacks/op": 0.0,
+            "B/op": 4328.0,
+            "allocs/op": 8.0
+          }
+        ],
+        "BenchmarkCanonicalRoleReads/roles=16/cold": [
+          {
+            "ns/op": 1501.0,
+            "cache_hits/op": 0.0,
+            "fallbacks/op": 1.0,
+            "B/op": 4328.0,
+            "allocs/op": 8.0
+          },
+          {
+            "ns/op": 1504.0,
+            "cache_hits/op": 0.0,
+            "fallbacks/op": 1.0,
+            "B/op": 4328.0,
+            "allocs/op": 8.0
+          },
+          {
+            "ns/op": 1610.0,
+            "cache_hits/op": 0.0,
+            "fallbacks/op": 1.0,
+            "B/op": 4328.0,
+            "allocs/op": 8.0
+          },
+          {
+            "ns/op": 1544.0,
+            "cache_hits/op": 0.0,
+            "fallbacks/op": 1.0,
+            "B/op": 4328.0,
+            "allocs/op": 8.0
+          },
+          {
+            "ns/op": 1522.0,
+            "cache_hits/op": 0.0,
+            "fallbacks/op": 1.0,
+            "B/op": 4328.0,
+            "allocs/op": 8.0
+          }
+        ],
+        "BenchmarkCanonicalRoleReads/roles=16/warm": [
+          {
+            "ns/op": 10140.0,
+            "cache_hits/op": 1.0,
+            "fallbacks/op": 0.0,
+            "B/op": 27136.0,
+            "allocs/op": 75.0
+          },
+          {
+            "ns/op": 10077.0,
+            "cache_hits/op": 1.0,
+            "fallbacks/op": 0.0,
+            "B/op": 27136.0,
+            "allocs/op": 75.0
+          },
+          {
+            "ns/op": 10242.0,
+            "cache_hits/op": 1.0,
+            "fallbacks/op": 0.0,
+            "B/op": 27136.0,
+            "allocs/op": 75.0
+          },
+          {
+            "ns/op": 10081.0,
+            "cache_hits/op": 1.0,
+            "fallbacks/op": 0.0,
+            "B/op": 27136.0,
+            "allocs/op": 75.0
+          },
+          {
+            "ns/op": 10073.0,
+            "cache_hits/op": 1.0,
+            "fallbacks/op": 0.0,
+            "B/op": 27136.0,
+            "allocs/op": 75.0
+          }
+        ],
+        "BenchmarkCanonicalRoleReads/roles=128/durable": [
+          {
+            "ns/op": 11176.0,
+            "cache_hits/op": 0.0,
+            "fallbacks/op": 0.0,
+            "B/op": 33112.0,
+            "allocs/op": 8.0
+          },
+          {
+            "ns/op": 12052.0,
+            "cache_hits/op": 0.0,
+            "fallbacks/op": 0.0,
+            "B/op": 33112.0,
+            "allocs/op": 8.0
+          },
+          {
+            "ns/op": 11267.0,
+            "cache_hits/op": 0.0,
+            "fallbacks/op": 0.0,
+            "B/op": 33112.0,
+            "allocs/op": 8.0
+          },
+          {
+            "ns/op": 11076.0,
+            "cache_hits/op": 0.0,
+            "fallbacks/op": 0.0,
+            "B/op": 33112.0,
+            "allocs/op": 8.0
+          },
+          {
+            "ns/op": 11082.0,
+            "cache_hits/op": 0.0,
+            "fallbacks/op": 0.0,
+            "B/op": 33112.0,
+            "allocs/op": 8.0
+          }
+        ],
+        "BenchmarkCanonicalRoleReads/roles=128/cold": [
+          {
+            "ns/op": 11165.0,
+            "cache_hits/op": 0.0,
+            "fallbacks/op": 1.0,
+            "B/op": 33112.0,
+            "allocs/op": 8.0
+          },
+          {
+            "ns/op": 11195.0,
+            "cache_hits/op": 0.0,
+            "fallbacks/op": 1.0,
+            "B/op": 33112.0,
+            "allocs/op": 8.0
+          },
+          {
+            "ns/op": 11079.0,
+            "cache_hits/op": 0.0,
+            "fallbacks/op": 1.0,
+            "B/op": 33112.0,
+            "allocs/op": 8.0
+          },
+          {
+            "ns/op": 11021.0,
+            "cache_hits/op": 0.0,
+            "fallbacks/op": 1.0,
+            "B/op": 33112.0,
+            "allocs/op": 8.0
+          },
+          {
+            "ns/op": 11791.0,
+            "cache_hits/op": 0.0,
+            "fallbacks/op": 1.0,
+            "B/op": 33112.0,
+            "allocs/op": 8.0
+          }
+        ],
+        "BenchmarkCanonicalRoleReads/roles=128/warm": [
+          {
+            "ns/op": 83526.0,
+            "cache_hits/op": 1.0,
+            "fallbacks/op": 0.0,
+            "B/op": 239920.0,
+            "allocs/op": 426.0
+          },
+          {
+            "ns/op": 84849.0,
+            "cache_hits/op": 1.0,
+            "fallbacks/op": 0.0,
+            "B/op": 239920.0,
+            "allocs/op": 426.0
+          },
+          {
+            "ns/op": 84331.0,
+            "cache_hits/op": 1.0,
+            "fallbacks/op": 0.0,
+            "B/op": 239920.0,
+            "allocs/op": 426.0
+          },
+          {
+            "ns/op": 84515.0,
+            "cache_hits/op": 1.0,
+            "fallbacks/op": 0.0,
+            "B/op": 239920.0,
+            "allocs/op": 426.0
+          },
+          {
+            "ns/op": 85007.0,
+            "cache_hits/op": 1.0,
+            "fallbacks/op": 0.0,
+            "B/op": 239920.0,
+            "allocs/op": 426.0
+          }
+        ]
+      }
+    },
+    {
+      "module": "pockets/authorization/stores/pgx",
+      "cases": 12,
+      "samples": {
+        "BenchmarkDecisionsPostgres/direct": [
+          {
+            "ns/op": 148650.0,
+            "B/op": 14689.0,
+            "allocs/op": 113.0
+          },
+          {
+            "ns/op": 140259.0,
+            "B/op": 14662.0,
+            "allocs/op": 113.0
+          },
+          {
+            "ns/op": 135074.0,
+            "B/op": 14662.0,
+            "allocs/op": 113.0
+          },
+          {
+            "ns/op": 132338.0,
+            "B/op": 14666.0,
+            "allocs/op": 113.0
+          },
+          {
+            "ns/op": 134519.0,
+            "B/op": 14666.0,
+            "allocs/op": 113.0
+          }
+        ],
+        "BenchmarkDecisionsPostgres/through": [
+          {
+            "ns/op": 176233.0,
+            "B/op": 21920.0,
+            "allocs/op": 177.0
+          },
+          {
+            "ns/op": 175194.0,
+            "B/op": 21917.0,
+            "allocs/op": 177.0
+          },
+          {
+            "ns/op": 173810.0,
+            "B/op": 21919.0,
+            "allocs/op": 177.0
+          },
+          {
+            "ns/op": 172756.0,
+            "B/op": 21919.0,
+            "allocs/op": 177.0
+          },
+          {
+            "ns/op": 195705.0,
+            "B/op": 21918.0,
+            "allocs/op": 177.0
+          }
+        ],
+        "BenchmarkDecisionsPostgres/batch": [
+          {
+            "ns/op": 1713442.0,
+            "B/op": 936091.0,
+            "allocs/op": 10875.0
+          },
+          {
+            "ns/op": 1743845.0,
+            "B/op": 935784.0,
+            "allocs/op": 10874.0
+          },
+          {
+            "ns/op": 1729589.0,
+            "B/op": 935779.0,
+            "allocs/op": 10874.0
+          },
+          {
+            "ns/op": 1722784.0,
+            "B/op": 935738.0,
+            "allocs/op": 10874.0
+          },
+          {
+            "ns/op": 1772454.0,
+            "B/op": 935783.0,
+            "allocs/op": 10874.0
+          }
+        ],
+        "BenchmarkDecisionsPostgres/filter": [
+          {
+            "ns/op": 1721434.0,
+            "B/op": 974691.0,
+            "allocs/op": 10876.0
+          },
+          {
+            "ns/op": 1685551.0,
+            "B/op": 974648.0,
+            "allocs/op": 10876.0
+          },
+          {
+            "ns/op": 1959445.0,
+            "B/op": 974698.0,
+            "allocs/op": 10876.0
+          },
+          {
+            "ns/op": 1684464.0,
+            "B/op": 974645.0,
+            "allocs/op": 10876.0
+          },
+          {
+            "ns/op": 1767058.0,
+            "B/op": 974663.0,
+            "allocs/op": 10876.0
+          }
+        ],
+        "BenchmarkGuardedWriterContentionPostgres/tenants=1": [
+          {
+            "ns/op": 211274.0,
+            "B/op": 14081.0,
+            "allocs/op": 190.0
+          },
+          {
+            "ns/op": 213336.0,
+            "B/op": 14079.0,
+            "allocs/op": 190.0
+          },
+          {
+            "ns/op": 190365.0,
+            "B/op": 14080.0,
+            "allocs/op": 190.0
+          },
+          {
+            "ns/op": 191460.0,
+            "B/op": 14084.0,
+            "allocs/op": 190.0
+          },
+          {
+            "ns/op": 205675.0,
+            "B/op": 14080.0,
+            "allocs/op": 190.0
+          }
+        ],
+        "BenchmarkGuardedWriterContentionPostgres/tenants=8": [
+          {
+            "ns/op": 176279.0,
+            "B/op": 14074.0,
+            "allocs/op": 190.0
+          },
+          {
+            "ns/op": 178889.0,
+            "B/op": 14075.0,
+            "allocs/op": 190.0
+          },
+          {
+            "ns/op": 173535.0,
+            "B/op": 14071.0,
+            "allocs/op": 190.0
+          },
+          {
+            "ns/op": 172282.0,
+            "B/op": 14072.0,
+            "allocs/op": 190.0
+          },
+          {
+            "ns/op": 176301.0,
+            "B/op": 14075.0,
+            "allocs/op": 190.0
+          }
+        ],
+        "BenchmarkTupleSourceBacklog/transient-tuples=0/full=false": [
+          {
+            "ns/op": 127801.0,
+            "events/op": 0.0,
+            "B/op": 2746.0,
+            "allocs/op": 53.0
+          },
+          {
+            "ns/op": 124799.0,
+            "events/op": 0.0,
+            "B/op": 2745.0,
+            "allocs/op": 53.0
+          },
+          {
+            "ns/op": 140601.0,
+            "events/op": 0.0,
+            "B/op": 2745.0,
+            "allocs/op": 53.0
+          },
+          {
+            "ns/op": 126264.0,
+            "events/op": 0.0,
+            "B/op": 2743.0,
+            "allocs/op": 53.0
+          },
+          {
+            "ns/op": 125109.0,
+            "events/op": 0.0,
+            "B/op": 2747.0,
+            "allocs/op": 53.0
+          }
+        ],
+        "BenchmarkTupleSourceBacklog/transient-tuples=0/full=true": [
+          {
+            "ns/op": 121827.0,
+            "events/op": 0.0,
+            "B/op": 3585.0,
+            "allocs/op": 64.0
+          },
+          {
+            "ns/op": 110864.0,
+            "events/op": 0.0,
+            "B/op": 3585.0,
+            "allocs/op": 64.0
+          },
+          {
+            "ns/op": 111579.0,
+            "events/op": 0.0,
+            "B/op": 3584.0,
+            "allocs/op": 64.0
+          },
+          {
+            "ns/op": 121640.0,
+            "events/op": 0.0,
+            "B/op": 3585.0,
+            "allocs/op": 64.0
+          },
+          {
+            "ns/op": 127248.0,
+            "events/op": 0.0,
+            "B/op": 3585.0,
+            "allocs/op": 64.0
+          }
+        ],
+        "BenchmarkTupleSourceBacklog/transient-tuples=1000/full=false": [
+          {
+            "ns/op": 3293449.0,
+            "events/op": 2000.0,
+            "B/op": 1924072.0,
+            "allocs/op": 50060.0
+          },
+          {
+            "ns/op": 3264811.0,
+            "events/op": 2000.0,
+            "B/op": 1924043.0,
+            "allocs/op": 50060.0
+          },
+          {
+            "ns/op": 3227381.0,
+            "events/op": 2000.0,
+            "B/op": 1924051.0,
+            "allocs/op": 50060.0
+          },
+          {
+            "ns/op": 3226292.0,
+            "events/op": 2000.0,
+            "B/op": 1924062.0,
+            "allocs/op": 50060.0
+          },
+          {
+            "ns/op": 3231469.0,
+            "events/op": 2000.0,
+            "B/op": 1924050.0,
+            "allocs/op": 50060.0
+          }
+        ],
+        "BenchmarkTupleSourceBacklog/transient-tuples=1000/full=true": [
+          {
+            "ns/op": 456423.0,
+            "events/op": 2000.0,
+            "B/op": 299821.0,
+            "allocs/op": 6071.0
+          },
+          {
+            "ns/op": 446827.0,
+            "events/op": 2000.0,
+            "B/op": 299824.0,
+            "allocs/op": 6071.0
+          },
+          {
+            "ns/op": 448337.0,
+            "events/op": 2000.0,
+            "B/op": 299816.0,
+            "allocs/op": 6071.0
+          },
+          {
+            "ns/op": 485870.0,
+            "events/op": 2000.0,
+            "B/op": 299821.0,
+            "allocs/op": 6071.0
+          },
+          {
+            "ns/op": 452265.0,
+            "events/op": 2000.0,
+            "B/op": 299823.0,
+            "allocs/op": 6071.0
+          }
+        ],
+        "BenchmarkTupleSourceBacklog/transient-tuples=10000/full=false": [
+          {
+            "ns/op": 30031599.0,
+            "events/op": 20000.0,
+            "B/op": 20700317.0,
+            "allocs/op": 500069.0
+          },
+          {
+            "ns/op": 30150870.0,
+            "events/op": 20000.0,
+            "B/op": 20700316.0,
+            "allocs/op": 500069.0
+          },
+          {
+            "ns/op": 30892159.0,
+            "events/op": 20000.0,
+            "B/op": 20700346.0,
+            "allocs/op": 500069.0
+          },
+          {
+            "ns/op": 30243606.0,
+            "events/op": 20000.0,
+            "B/op": 20700337.0,
+            "allocs/op": 500069.0
+          },
+          {
+            "ns/op": 31262702.0,
+            "events/op": 20000.0,
+            "B/op": 20700362.0,
+            "allocs/op": 500069.0
+          }
+        ],
+        "BenchmarkTupleSourceBacklog/transient-tuples=10000/full=true": [
+          {
+            "ns/op": 3411201.0,
+            "events/op": 20000.0,
+            "B/op": 4329378.0,
+            "allocs/op": 60080.0
+          },
+          {
+            "ns/op": 3385619.0,
+            "events/op": 20000.0,
+            "B/op": 4329380.0,
+            "allocs/op": 60080.0
+          },
+          {
+            "ns/op": 3410510.0,
+            "events/op": 20000.0,
+            "B/op": 4329399.0,
+            "allocs/op": 60080.0
+          },
+          {
+            "ns/op": 3446238.0,
+            "events/op": 20000.0,
+            "B/op": 4329414.0,
+            "allocs/op": 60080.0
+          },
+          {
+            "ns/op": 3374164.0,
+            "events/op": 20000.0,
+            "B/op": 4329405.0,
+            "allocs/op": 60080.0
+          }
+        ]
+      }
+    },
+    {
+      "module": "pockets/authorization/stores/turso",
+      "cases": 16,
+      "samples": {
+        "BenchmarkThroughBatchSQLite/sequential/direct": [
+          {
+            "ns/op": 341152.0,
+            "queries/op": 8.0,
+            "B/op": 39206.0,
+            "allocs/op": 669.0
+          },
+          {
+            "ns/op": 337315.0,
+            "queries/op": 8.0,
+            "B/op": 39153.0,
+            "allocs/op": 669.0
+          },
+          {
+            "ns/op": 340014.0,
+            "queries/op": 8.0,
+            "B/op": 39155.0,
+            "allocs/op": 669.0
+          },
+          {
+            "ns/op": 338553.0,
+            "queries/op": 8.0,
+            "B/op": 39149.0,
+            "allocs/op": 669.0
+          },
+          {
+            "ns/op": 338328.0,
+            "queries/op": 8.0,
+            "B/op": 39146.0,
+            "allocs/op": 669.0
+          }
+        ],
+        "BenchmarkThroughBatchSQLite/sequential/through": [
+          {
+            "ns/op": 813725.0,
+            "queries/op": 19.0,
+            "B/op": 87337.0,
+            "allocs/op": 1498.0
+          },
+          {
+            "ns/op": 801414.0,
+            "queries/op": 19.0,
+            "B/op": 87334.0,
+            "allocs/op": 1498.0
+          },
+          {
+            "ns/op": 798188.0,
+            "queries/op": 19.0,
+            "B/op": 87346.0,
+            "allocs/op": 1498.0
+          },
+          {
+            "ns/op": 798826.0,
+            "queries/op": 19.0,
+            "B/op": 87329.0,
+            "allocs/op": 1498.0
+          },
+          {
+            "ns/op": 794251.0,
+            "queries/op": 19.0,
+            "B/op": 87331.0,
+            "allocs/op": 1498.0
+          }
+        ],
+        "BenchmarkThroughBatchSQLite/sequential/batch": [
+          {
+            "ns/op": 46173522.0,
+            "queries/op": 1078.0,
+            "B/op": 6110365.0,
+            "allocs/op": 88079.0
+          },
+          {
+            "ns/op": 46169846.0,
+            "queries/op": 1078.0,
+            "B/op": 6103923.0,
+            "allocs/op": 88067.0
+          },
+          {
+            "ns/op": 45675347.0,
+            "queries/op": 1078.0,
+            "B/op": 6104838.0,
+            "allocs/op": 88069.0
+          },
+          {
+            "ns/op": 45677138.0,
+            "queries/op": 1078.0,
+            "B/op": 6103491.0,
+            "allocs/op": 88067.0
+          },
+          {
+            "ns/op": 47595348.0,
+            "queries/op": 1078.0,
+            "B/op": 6103293.0,
+            "allocs/op": 88066.0
+          }
+        ],
+        "BenchmarkThroughBatchSQLite/sequential/filter": [
+          {
+            "ns/op": 46333783.0,
+            "queries/op": 1078.0,
+            "B/op": 6142807.0,
+            "allocs/op": 88070.0
+          },
+          {
+            "ns/op": 45865408.0,
+            "queries/op": 1078.0,
+            "B/op": 6142277.0,
+            "allocs/op": 88068.0
+          },
+          {
+            "ns/op": 45742993.0,
+            "queries/op": 1078.0,
+            "B/op": 6142214.0,
+            "allocs/op": 88068.0
+          },
+          {
+            "ns/op": 45824058.0,
+            "queries/op": 1078.0,
+            "B/op": 6142168.0,
+            "allocs/op": 88068.0
+          },
+          {
+            "ns/op": 46028548.0,
+            "queries/op": 1078.0,
+            "B/op": 6142198.0,
+            "allocs/op": 88068.0
+          }
+        ],
+        "BenchmarkThroughBatchSQLite/batched/direct": [
+          {
+            "ns/op": 1017506.0,
+            "queries/op": 1.0,
+            "B/op": 8310.0,
+            "allocs/op": 107.0
+          },
+          {
+            "ns/op": 1014219.0,
+            "queries/op": 1.0,
+            "B/op": 8302.0,
+            "allocs/op": 107.0
+          },
+          {
+            "ns/op": 1044632.0,
+            "queries/op": 1.0,
+            "B/op": 8308.0,
+            "allocs/op": 107.0
+          },
+          {
+            "ns/op": 1021365.0,
+            "queries/op": 1.0,
+            "B/op": 8305.0,
+            "allocs/op": 107.0
+          },
+          {
+            "ns/op": 1021562.0,
+            "queries/op": 1.0,
+            "B/op": 8315.0,
+            "allocs/op": 107.0
+          }
+        ],
+        "BenchmarkThroughBatchSQLite/batched/through": [
+          {
+            "ns/op": 2143991.0,
+            "queries/op": 5.0,
+            "B/op": 20071.0,
+            "allocs/op": 291.0
+          },
+          {
+            "ns/op": 2140727.0,
+            "queries/op": 5.0,
+            "B/op": 20081.0,
+            "allocs/op": 291.0
+          },
+          {
+            "ns/op": 2141931.0,
+            "queries/op": 5.0,
+            "B/op": 20079.0,
+            "allocs/op": 291.0
+          },
+          {
+            "ns/op": 2141714.0,
+            "queries/op": 5.0,
+            "B/op": 20079.0,
+            "allocs/op": 291.0
+          },
+          {
+            "ns/op": 2138384.0,
+            "queries/op": 5.0,
+            "B/op": 20073.0,
+            "allocs/op": 291.0
+          }
+        ],
+        "BenchmarkThroughBatchSQLite/batched/batch": [
+          {
+            "ns/op": 13674019.0,
+            "queries/op": 5.0,
+            "B/op": 1981867.0,
+            "allocs/op": 20503.0
+          },
+          {
+            "ns/op": 14346148.0,
+            "queries/op": 5.0,
+            "B/op": 1981818.0,
+            "allocs/op": 20502.0
+          },
+          {
+            "ns/op": 13829794.0,
+            "queries/op": 5.0,
+            "B/op": 1981873.0,
+            "allocs/op": 20503.0
+          },
+          {
+            "ns/op": 13729727.0,
+            "queries/op": 5.0,
+            "B/op": 1981886.0,
+            "allocs/op": 20503.0
+          },
+          {
+            "ns/op": 13662496.0,
+            "queries/op": 5.0,
+            "B/op": 1981919.0,
+            "allocs/op": 20503.0
+          }
+        ],
+        "BenchmarkThroughBatchSQLite/batched/filter": [
+          {
+            "ns/op": 13631128.0,
+            "queries/op": 5.0,
+            "B/op": 2020802.0,
+            "allocs/op": 20505.0
+          },
+          {
+            "ns/op": 13711397.0,
+            "queries/op": 5.0,
+            "B/op": 2020778.0,
+            "allocs/op": 20505.0
+          },
+          {
+            "ns/op": 13732525.0,
+            "queries/op": 5.0,
+            "B/op": 2020811.0,
+            "allocs/op": 20505.0
+          },
+          {
+            "ns/op": 13580395.0,
+            "queries/op": 5.0,
+            "B/op": 2020786.0,
+            "allocs/op": 20505.0
+          },
+          {
+            "ns/op": 13763666.0,
+            "queries/op": 5.0,
+            "B/op": 2020814.0,
+            "allocs/op": 20505.0
+          }
+        ],
+        "BenchmarkTupleSourceBacklog/transient-tuples=0/full=false": [
+          {
+            "ns/op": 16348.0,
+            "events/op": 0.0,
+            "B/op": 3520.0,
+            "allocs/op": 97.0
+          },
+          {
+            "ns/op": 15831.0,
+            "events/op": 0.0,
+            "B/op": 3520.0,
+            "allocs/op": 97.0
+          },
+          {
+            "ns/op": 15773.0,
+            "events/op": 0.0,
+            "B/op": 3520.0,
+            "allocs/op": 97.0
+          },
+          {
+            "ns/op": 15624.0,
+            "events/op": 0.0,
+            "B/op": 3520.0,
+            "allocs/op": 97.0
+          },
+          {
+            "ns/op": 15709.0,
+            "events/op": 0.0,
+            "B/op": 3520.0,
+            "allocs/op": 97.0
+          }
+        ],
+        "BenchmarkTupleSourceBacklog/transient-tuples=0/full=true": [
+          {
+            "ns/op": 25521.0,
+            "events/op": 0.0,
+            "B/op": 4920.0,
+            "allocs/op": 137.0
+          },
+          {
+            "ns/op": 25175.0,
+            "events/op": 0.0,
+            "B/op": 4920.0,
+            "allocs/op": 137.0
+          },
+          {
+            "ns/op": 25033.0,
+            "events/op": 0.0,
+            "B/op": 4920.0,
+            "allocs/op": 137.0
+          },
+          {
+            "ns/op": 26182.0,
+            "events/op": 0.0,
+            "B/op": 4920.0,
+            "allocs/op": 137.0
+          },
+          {
+            "ns/op": 25320.0,
+            "events/op": 0.0,
+            "B/op": 4920.0,
+            "allocs/op": 137.0
+          }
+        ],
+        "BenchmarkTupleSourceBacklog/transient-tuples=1000/full=false": [
+          {
+            "ns/op": 2123045.0,
+            "events/op": 2000.0,
+            "B/op": 1938669.0,
+            "allocs/op": 53759.0
+          },
+          {
+            "ns/op": 2113195.0,
+            "events/op": 2000.0,
+            "B/op": 1938671.0,
+            "allocs/op": 53759.0
+          },
+          {
+            "ns/op": 2103456.0,
+            "events/op": 2000.0,
+            "B/op": 1938671.0,
+            "allocs/op": 53759.0
+          },
+          {
+            "ns/op": 2116889.0,
+            "events/op": 2000.0,
+            "B/op": 1938671.0,
+            "allocs/op": 53759.0
+          },
+          {
+            "ns/op": 2115547.0,
+            "events/op": 2000.0,
+            "B/op": 1938670.0,
+            "allocs/op": 53759.0
+          }
+        ],
+        "BenchmarkTupleSourceBacklog/transient-tuples=1000/full=true": [
+          {
+            "ns/op": 281227.0,
+            "events/op": 2000.0,
+            "B/op": 243308.0,
+            "allocs/op": 5798.0
+          },
+          {
+            "ns/op": 295000.0,
+            "events/op": 2000.0,
+            "B/op": 243307.0,
+            "allocs/op": 5798.0
+          },
+          {
+            "ns/op": 283119.0,
+            "events/op": 2000.0,
+            "B/op": 243309.0,
+            "allocs/op": 5798.0
+          },
+          {
+            "ns/op": 287021.0,
+            "events/op": 2000.0,
+            "B/op": 243310.0,
+            "allocs/op": 5798.0
+          },
+          {
+            "ns/op": 290245.0,
+            "events/op": 2000.0,
+            "B/op": 243308.0,
+            "allocs/op": 5798.0
+          }
+        ],
+        "BenchmarkTupleSourceBacklog/transient-tuples=10000/full=false": [
+          {
+            "ns/op": 20669727.0,
+            "events/op": 20000.0,
+            "B/op": 20714969.0,
+            "allocs/op": 539768.0
+          },
+          {
+            "ns/op": 20845048.0,
+            "events/op": 20000.0,
+            "B/op": 20714959.0,
+            "allocs/op": 539768.0
+          },
+          {
+            "ns/op": 21143943.0,
+            "events/op": 20000.0,
+            "B/op": 20714954.0,
+            "allocs/op": 539768.0
+          },
+          {
+            "ns/op": 20631811.0,
+            "events/op": 20000.0,
+            "B/op": 20714969.0,
+            "allocs/op": 539768.0
+          },
+          {
+            "ns/op": 21639917.0,
+            "events/op": 20000.0,
+            "B/op": 20714978.0,
+            "allocs/op": 539768.0
+          }
+        ],
+        "BenchmarkTupleSourceBacklog/transient-tuples=10000/full=true": [
+          {
+            "ns/op": 2734011.0,
+            "events/op": 20000.0,
+            "B/op": 3755524.0,
+            "allocs/op": 59807.0
+          },
+          {
+            "ns/op": 2723646.0,
+            "events/op": 20000.0,
+            "B/op": 3755516.0,
+            "allocs/op": 59807.0
+          },
+          {
+            "ns/op": 2722065.0,
+            "events/op": 20000.0,
+            "B/op": 3755519.0,
+            "allocs/op": 59807.0
+          },
+          {
+            "ns/op": 2692087.0,
+            "events/op": 20000.0,
+            "B/op": 3755534.0,
+            "allocs/op": 59807.0
+          },
+          {
+            "ns/op": 2726113.0,
+            "events/op": 20000.0,
+            "B/op": 3755539.0,
+            "allocs/op": 59807.0
+          }
+        ],
+        "BenchmarkGuardedWriterContentionSQLite/tenants=1": [
+          {
+            "ns/op": 128791.0,
+            "B/op": 6838.0,
+            "allocs/op": 135.0
+          },
+          {
+            "ns/op": 149330.0,
+            "B/op": 6811.0,
+            "allocs/op": 135.0
+          },
+          {
+            "ns/op": 149632.0,
+            "B/op": 6812.0,
+            "allocs/op": 135.0
+          },
+          {
+            "ns/op": 149066.0,
+            "B/op": 6817.0,
+            "allocs/op": 135.0
+          },
+          {
+            "ns/op": 144753.0,
+            "B/op": 6812.0,
+            "allocs/op": 135.0
+          }
+        ],
+        "BenchmarkGuardedWriterContentionSQLite/tenants=8": [
+          {
+            "ns/op": 394771.0,
+            "B/op": 6779.0,
+            "allocs/op": 134.0
+          },
+          {
+            "ns/op": 378840.0,
+            "B/op": 6790.0,
+            "allocs/op": 134.0
+          },
+          {
+            "ns/op": 297767.0,
+            "B/op": 6783.0,
+            "allocs/op": 134.0
+          },
+          {
+            "ns/op": 521807.0,
+            "B/op": 6783.0,
+            "allocs/op": 134.0
+          },
+          {
+            "ns/op": 383396.0,
+            "B/op": 6785.0,
+            "allocs/op": 134.0
+          }
+        ]
+      }
+    },
+    {
+      "module": "pockets/authorization/stores/goredis",
+      "cases": 56,
+      "samples": {
+        "BenchmarkSQLRedisDecisions/sqlite/sql/check": [
+          {
+            "ns/op": 383529.0,
+            "B/op": 11464.0,
+            "allocs/op": 158.0
+          },
+          {
+            "ns/op": 389370.0,
+            "B/op": 11430.0,
+            "allocs/op": 157.0
+          },
+          {
+            "ns/op": 380576.0,
+            "B/op": 11419.0,
+            "allocs/op": 157.0
+          },
+          {
+            "ns/op": 384079.0,
+            "B/op": 11429.0,
+            "allocs/op": 158.0
+          },
+          {
+            "ns/op": 379131.0,
+            "B/op": 11419.0,
+            "allocs/op": 157.0
+          }
+        ],
+        "BenchmarkSQLRedisDecisions/sqlite/sql/batch128": [
+          {
+            "ns/op": 1526725.0,
+            "B/op": 349487.0,
+            "allocs/op": 4196.0
+          },
+          {
+            "ns/op": 1484082.0,
+            "B/op": 349412.0,
+            "allocs/op": 4196.0
+          },
+          {
+            "ns/op": 1514884.0,
+            "B/op": 349381.0,
+            "allocs/op": 4196.0
+          },
+          {
+            "ns/op": 1497687.0,
+            "B/op": 349376.0,
+            "allocs/op": 4196.0
+          },
+          {
+            "ns/op": 1525578.0,
+            "B/op": 349376.0,
+            "allocs/op": 4196.0
+          }
+        ],
+        "BenchmarkSQLRedisDecisions/sqlite/sql/filter128": [
+          {
+            "ns/op": 1519647.0,
+            "B/op": 362569.0,
+            "allocs/op": 4198.0
+          },
+          {
+            "ns/op": 1519687.0,
+            "B/op": 362598.0,
+            "allocs/op": 4198.0
+          },
+          {
+            "ns/op": 1503186.0,
+            "B/op": 362568.0,
+            "allocs/op": 4198.0
+          },
+          {
+            "ns/op": 1506679.0,
+            "B/op": 362565.0,
+            "allocs/op": 4198.0
+          },
+          {
+            "ns/op": 1520538.0,
+            "B/op": 362577.0,
+            "allocs/op": 4198.0
+          }
+        ],
+        "BenchmarkSQLRedisDecisions/sqlite/cold/check": [
+          {
+            "ns/op": 381997.0,
+            "cache_hits/op": 0.0,
+            "fallbacks/op": 1.0,
+            "B/op": 11419.0,
+            "allocs/op": 157.0
+          },
+          {
+            "ns/op": 380669.0,
+            "cache_hits/op": 0.0,
+            "fallbacks/op": 1.0,
+            "B/op": 11418.0,
+            "allocs/op": 157.0
+          },
+          {
+            "ns/op": 391640.0,
+            "cache_hits/op": 0.0,
+            "fallbacks/op": 1.0,
+            "B/op": 11418.0,
+            "allocs/op": 157.0
+          },
+          {
+            "ns/op": 381119.0,
+            "cache_hits/op": 0.0,
+            "fallbacks/op": 1.0,
+            "B/op": 11421.0,
+            "allocs/op": 157.0
+          },
+          {
+            "ns/op": 384639.0,
+            "cache_hits/op": 0.0,
+            "fallbacks/op": 1.0,
+            "B/op": 11421.0,
+            "allocs/op": 157.0
+          }
+        ],
+        "BenchmarkSQLRedisDecisions/sqlite/cold/batch128": [
+          {
+            "ns/op": 1491523.0,
+            "cache_hits/op": 0.0,
+            "fallbacks/op": 1.0,
+            "B/op": 349366.0,
+            "allocs/op": 4196.0
+          },
+          {
+            "ns/op": 1490309.0,
+            "cache_hits/op": 0.0,
+            "fallbacks/op": 1.0,
+            "B/op": 349371.0,
+            "allocs/op": 4196.0
+          },
+          {
+            "ns/op": 1497866.0,
+            "cache_hits/op": 0.0,
+            "fallbacks/op": 1.0,
+            "B/op": 349374.0,
+            "allocs/op": 4196.0
+          },
+          {
+            "ns/op": 1538379.0,
+            "cache_hits/op": 0.0,
+            "fallbacks/op": 1.0,
+            "B/op": 349390.0,
+            "allocs/op": 4196.0
+          },
+          {
+            "ns/op": 1515717.0,
+            "cache_hits/op": 0.0,
+            "fallbacks/op": 1.0,
+            "B/op": 349364.0,
+            "allocs/op": 4196.0
+          }
+        ],
+        "BenchmarkSQLRedisDecisions/sqlite/cold/filter128": [
+          {
+            "ns/op": 1540135.0,
+            "cache_hits/op": 0.0,
+            "fallbacks/op": 1.0,
+            "B/op": 362566.0,
+            "allocs/op": 4198.0
+          },
+          {
+            "ns/op": 1536580.0,
+            "cache_hits/op": 0.0,
+            "fallbacks/op": 1.0,
+            "B/op": 362561.0,
+            "allocs/op": 4198.0
+          },
+          {
+            "ns/op": 1530647.0,
+            "cache_hits/op": 0.0,
+            "fallbacks/op": 1.0,
+            "B/op": 362568.0,
+            "allocs/op": 4198.0
+          },
+          {
+            "ns/op": 1492384.0,
+            "cache_hits/op": 0.0,
+            "fallbacks/op": 1.0,
+            "B/op": 362565.0,
+            "allocs/op": 4198.0
+          },
+          {
+            "ns/op": 1488889.0,
+            "cache_hits/op": 0.0,
+            "fallbacks/op": 1.0,
+            "B/op": 362562.0,
+            "allocs/op": 4198.0
+          }
+        ],
+        "BenchmarkSQLRedisDecisions/sqlite/warm/check": [
+          {
+            "ns/op": 117698.0,
+            "cache_hits/op": 1.0,
+            "fallbacks/op": 0.0,
+            "B/op": 14905.0,
+            "allocs/op": 295.0
+          },
+          {
+            "ns/op": 117884.0,
+            "cache_hits/op": 1.0,
+            "fallbacks/op": 0.0,
+            "B/op": 14906.0,
+            "allocs/op": 295.0
+          },
+          {
+            "ns/op": 117744.0,
+            "cache_hits/op": 1.0,
+            "fallbacks/op": 0.0,
+            "B/op": 14905.0,
+            "allocs/op": 295.0
+          },
+          {
+            "ns/op": 119946.0,
+            "cache_hits/op": 1.0,
+            "fallbacks/op": 0.0,
+            "B/op": 14905.0,
+            "allocs/op": 295.0
+          },
+          {
+            "ns/op": 123490.0,
+            "cache_hits/op": 1.0,
+            "fallbacks/op": 0.0,
+            "B/op": 14906.0,
+            "allocs/op": 295.0
+          }
+        ],
+        "BenchmarkSQLRedisDecisions/sqlite/warm/batch128": [
+          {
+            "ns/op": 953909.0,
+            "cache_hits/op": 1.0,
+            "fallbacks/op": 0.0,
+            "B/op": 688909.0,
+            "allocs/op": 7896.0
+          },
+          {
+            "ns/op": 941260.0,
+            "cache_hits/op": 1.0,
+            "fallbacks/op": 0.0,
+            "B/op": 688896.0,
+            "allocs/op": 7896.0
+          },
+          {
+            "ns/op": 964712.0,
+            "cache_hits/op": 1.0,
+            "fallbacks/op": 0.0,
+            "B/op": 688905.0,
+            "allocs/op": 7896.0
+          },
+          {
+            "ns/op": 945933.0,
+            "cache_hits/op": 1.0,
+            "fallbacks/op": 0.0,
+            "B/op": 688907.0,
+            "allocs/op": 7896.0
+          },
+          {
+            "ns/op": 933171.0,
+            "cache_hits/op": 1.0,
+            "fallbacks/op": 0.0,
+            "B/op": 688897.0,
+            "allocs/op": 7896.0
+          }
+        ],
+        "BenchmarkSQLRedisDecisions/sqlite/warm/filter128": [
+          {
+            "ns/op": 926650.0,
+            "cache_hits/op": 1.0,
+            "fallbacks/op": 0.0,
+            "B/op": 702114.0,
+            "allocs/op": 7898.0
+          },
+          {
+            "ns/op": 947356.0,
+            "cache_hits/op": 1.0,
+            "fallbacks/op": 0.0,
+            "B/op": 702098.0,
+            "allocs/op": 7898.0
+          },
+          {
+            "ns/op": 997228.0,
+            "cache_hits/op": 1.0,
+            "fallbacks/op": 0.0,
+            "B/op": 702100.0,
+            "allocs/op": 7898.0
+          },
+          {
+            "ns/op": 927540.0,
+            "cache_hits/op": 1.0,
+            "fallbacks/op": 0.0,
+            "B/op": 702082.0,
+            "allocs/op": 7898.0
+          },
+          {
+            "ns/op": 947906.0,
+            "cache_hits/op": 1.0,
+            "fallbacks/op": 0.0,
+            "B/op": 702100.0,
+            "allocs/op": 7898.0
+          }
+        ],
+        "BenchmarkSQLRedisDecisions/postgres/sql/check": [
+          {
+            "ns/op": 174669.0,
+            "B/op": 21661.0,
+            "allocs/op": 177.0
+          },
+          {
+            "ns/op": 172036.0,
+            "B/op": 21661.0,
+            "allocs/op": 177.0
+          },
+          {
+            "ns/op": 173217.0,
+            "B/op": 21661.0,
+            "allocs/op": 177.0
+          },
+          {
+            "ns/op": 172335.0,
+            "B/op": 21660.0,
+            "allocs/op": 177.0
+          },
+          {
+            "ns/op": 179215.0,
+            "B/op": 21661.0,
+            "allocs/op": 177.0
+          }
+        ],
+        "BenchmarkSQLRedisDecisions/postgres/sql/batch128": [
+          {
+            "ns/op": 933306.0,
+            "B/op": 350371.0,
+            "allocs/op": 3954.0
+          },
+          {
+            "ns/op": 935847.0,
+            "B/op": 350378.0,
+            "allocs/op": 3954.0
+          },
+          {
+            "ns/op": 930030.0,
+            "B/op": 350342.0,
+            "allocs/op": 3954.0
+          },
+          {
+            "ns/op": 948193.0,
+            "B/op": 350364.0,
+            "allocs/op": 3954.0
+          },
+          {
+            "ns/op": 943472.0,
+            "B/op": 350352.0,
+            "allocs/op": 3954.0
+          }
+        ],
+        "BenchmarkSQLRedisDecisions/postgres/sql/filter128": [
+          {
+            "ns/op": 943265.0,
+            "B/op": 363561.0,
+            "allocs/op": 3956.0
+          },
+          {
+            "ns/op": 960407.0,
+            "B/op": 363546.0,
+            "allocs/op": 3956.0
+          },
+          {
+            "ns/op": 954392.0,
+            "B/op": 363554.0,
+            "allocs/op": 3956.0
+          },
+          {
+            "ns/op": 1037637.0,
+            "B/op": 363556.0,
+            "allocs/op": 3956.0
+          },
+          {
+            "ns/op": 951715.0,
+            "B/op": 363551.0,
+            "allocs/op": 3956.0
+          }
+        ],
+        "BenchmarkSQLRedisDecisions/postgres/cold/check": [
+          {
+            "ns/op": 180973.0,
+            "cache_hits/op": 0.0,
+            "fallbacks/op": 1.0,
+            "B/op": 21662.0,
+            "allocs/op": 177.0
+          },
+          {
+            "ns/op": 172506.0,
+            "cache_hits/op": 0.0,
+            "fallbacks/op": 1.0,
+            "B/op": 21659.0,
+            "allocs/op": 177.0
+          },
+          {
+            "ns/op": 174560.0,
+            "cache_hits/op": 0.0,
+            "fallbacks/op": 1.0,
+            "B/op": 21661.0,
+            "allocs/op": 177.0
+          },
+          {
+            "ns/op": 174453.0,
+            "cache_hits/op": 0.0,
+            "fallbacks/op": 1.0,
+            "B/op": 21661.0,
+            "allocs/op": 177.0
+          },
+          {
+            "ns/op": 175136.0,
+            "cache_hits/op": 0.0,
+            "fallbacks/op": 1.0,
+            "B/op": 21661.0,
+            "allocs/op": 177.0
+          }
+        ],
+        "BenchmarkSQLRedisDecisions/postgres/cold/batch128": [
+          {
+            "ns/op": 925283.0,
+            "cache_hits/op": 0.0,
+            "fallbacks/op": 1.0,
+            "B/op": 350350.0,
+            "allocs/op": 3954.0
+          },
+          {
+            "ns/op": 995926.0,
+            "cache_hits/op": 0.0,
+            "fallbacks/op": 1.0,
+            "B/op": 350369.0,
+            "allocs/op": 3954.0
+          },
+          {
+            "ns/op": 946089.0,
+            "cache_hits/op": 0.0,
+            "fallbacks/op": 1.0,
+            "B/op": 350349.0,
+            "allocs/op": 3954.0
+          },
+          {
+            "ns/op": 960071.0,
+            "cache_hits/op": 0.0,
+            "fallbacks/op": 1.0,
+            "B/op": 350357.0,
+            "allocs/op": 3954.0
+          },
+          {
+            "ns/op": 942611.0,
+            "cache_hits/op": 0.0,
+            "fallbacks/op": 1.0,
+            "B/op": 350347.0,
+            "allocs/op": 3954.0
+          }
+        ],
+        "BenchmarkSQLRedisDecisions/postgres/cold/filter128": [
+          {
+            "ns/op": 943346.0,
+            "cache_hits/op": 0.0,
+            "fallbacks/op": 1.0,
+            "B/op": 363561.0,
+            "allocs/op": 3956.0
+          },
+          {
+            "ns/op": 955779.0,
+            "cache_hits/op": 0.0,
+            "fallbacks/op": 1.0,
+            "B/op": 363562.0,
+            "allocs/op": 3956.0
+          },
+          {
+            "ns/op": 905854.0,
+            "cache_hits/op": 0.0,
+            "fallbacks/op": 1.0,
+            "B/op": 363538.0,
+            "allocs/op": 3956.0
+          },
+          {
+            "ns/op": 968962.0,
+            "cache_hits/op": 0.0,
+            "fallbacks/op": 1.0,
+            "B/op": 363550.0,
+            "allocs/op": 3956.0
+          },
+          {
+            "ns/op": 982689.0,
+            "cache_hits/op": 0.0,
+            "fallbacks/op": 1.0,
+            "B/op": 363556.0,
+            "allocs/op": 3956.0
+          }
+        ],
+        "BenchmarkSQLRedisDecisions/postgres/warm/check": [
+          {
+            "ns/op": 118998.0,
+            "cache_hits/op": 1.0,
+            "fallbacks/op": 0.0,
+            "B/op": 14905.0,
+            "allocs/op": 295.0
+          },
+          {
+            "ns/op": 118833.0,
+            "cache_hits/op": 1.0,
+            "fallbacks/op": 0.0,
+            "B/op": 14903.0,
+            "allocs/op": 295.0
+          },
+          {
+            "ns/op": 117148.0,
+            "cache_hits/op": 1.0,
+            "fallbacks/op": 0.0,
+            "B/op": 14903.0,
+            "allocs/op": 295.0
+          },
+          {
+            "ns/op": 116907.0,
+            "cache_hits/op": 1.0,
+            "fallbacks/op": 0.0,
+            "B/op": 14902.0,
+            "allocs/op": 295.0
+          },
+          {
+            "ns/op": 118731.0,
+            "cache_hits/op": 1.0,
+            "fallbacks/op": 0.0,
+            "B/op": 14904.0,
+            "allocs/op": 295.0
+          }
+        ],
+        "BenchmarkSQLRedisDecisions/postgres/warm/batch128": [
+          {
+            "ns/op": 935561.0,
+            "cache_hits/op": 1.0,
+            "fallbacks/op": 0.0,
+            "B/op": 688865.0,
+            "allocs/op": 7896.0
+          },
+          {
+            "ns/op": 1037298.0,
+            "cache_hits/op": 1.0,
+            "fallbacks/op": 0.0,
+            "B/op": 688862.0,
+            "allocs/op": 7896.0
+          },
+          {
+            "ns/op": 948040.0,
+            "cache_hits/op": 1.0,
+            "fallbacks/op": 0.0,
+            "B/op": 688859.0,
+            "allocs/op": 7896.0
+          },
+          {
+            "ns/op": 955882.0,
+            "cache_hits/op": 1.0,
+            "fallbacks/op": 0.0,
+            "B/op": 688852.0,
+            "allocs/op": 7896.0
+          },
+          {
+            "ns/op": 946822.0,
+            "cache_hits/op": 1.0,
+            "fallbacks/op": 0.0,
+            "B/op": 688863.0,
+            "allocs/op": 7896.0
+          }
+        ],
+        "BenchmarkSQLRedisDecisions/postgres/warm/filter128": [
+          {
+            "ns/op": 949773.0,
+            "cache_hits/op": 1.0,
+            "fallbacks/op": 0.0,
+            "B/op": 702083.0,
+            "allocs/op": 7898.0
+          },
+          {
+            "ns/op": 962209.0,
+            "cache_hits/op": 1.0,
+            "fallbacks/op": 0.0,
+            "B/op": 702070.0,
+            "allocs/op": 7898.0
+          },
+          {
+            "ns/op": 953515.0,
+            "cache_hits/op": 1.0,
+            "fallbacks/op": 0.0,
+            "B/op": 702068.0,
+            "allocs/op": 7898.0
+          },
+          {
+            "ns/op": 939110.0,
+            "cache_hits/op": 1.0,
+            "fallbacks/op": 0.0,
+            "B/op": 702056.0,
+            "allocs/op": 7898.0
+          },
+          {
+            "ns/op": 1049851.0,
+            "cache_hits/op": 1.0,
+            "fallbacks/op": 0.0,
+            "B/op": 702078.0,
+            "allocs/op": 7898.0
+          }
+        ],
+        "BenchmarkSQLRedisRoleReads/sqlite/roles=1/sql": [
+          {
+            "ns/op": 21811.0,
+            "B/op": 6144.0,
+            "allocs/op": 104.0
+          },
+          {
+            "ns/op": 21893.0,
+            "B/op": 6144.0,
+            "allocs/op": 104.0
+          },
+          {
+            "ns/op": 21839.0,
+            "B/op": 6144.0,
+            "allocs/op": 104.0
+          },
+          {
+            "ns/op": 21451.0,
+            "B/op": 6144.0,
+            "allocs/op": 104.0
+          },
+          {
+            "ns/op": 21627.0,
+            "B/op": 6144.0,
+            "allocs/op": 104.0
+          }
+        ],
+        "BenchmarkSQLRedisRoleReads/sqlite/roles=1/cold": [
+          {
+            "ns/op": 21673.0,
+            "cache_hits/op": 0.0,
+            "fallbacks/op": 1.0,
+            "B/op": 6144.0,
+            "allocs/op": 104.0
+          },
+          {
+            "ns/op": 21986.0,
+            "cache_hits/op": 0.0,
+            "fallbacks/op": 1.0,
+            "B/op": 6144.0,
+            "allocs/op": 104.0
+          },
+          {
+            "ns/op": 22073.0,
+            "cache_hits/op": 0.0,
+            "fallbacks/op": 1.0,
+            "B/op": 6144.0,
+            "allocs/op": 104.0
+          },
+          {
+            "ns/op": 21867.0,
+            "cache_hits/op": 0.0,
+            "fallbacks/op": 1.0,
+            "B/op": 6144.0,
+            "allocs/op": 104.0
+          },
+          {
+            "ns/op": 21957.0,
+            "cache_hits/op": 0.0,
+            "fallbacks/op": 1.0,
+            "B/op": 6144.0,
+            "allocs/op": 104.0
+          }
+        ],
+        "BenchmarkSQLRedisRoleReads/sqlite/roles=1/warm": [
+          {
+            "ns/op": 56144.0,
+            "cache_hits/op": 1.0,
+            "fallbacks/op": 0.0,
+            "B/op": 6870.0,
+            "allocs/op": 114.0
+          },
+          {
+            "ns/op": 55022.0,
+            "cache_hits/op": 1.0,
+            "fallbacks/op": 0.0,
+            "B/op": 6871.0,
+            "allocs/op": 114.0
+          },
+          {
+            "ns/op": 54876.0,
+            "cache_hits/op": 1.0,
+            "fallbacks/op": 0.0,
+            "B/op": 6871.0,
+            "allocs/op": 114.0
+          },
+          {
+            "ns/op": 55324.0,
+            "cache_hits/op": 1.0,
+            "fallbacks/op": 0.0,
+            "B/op": 6871.0,
+            "allocs/op": 114.0
+          },
+          {
+            "ns/op": 55317.0,
+            "cache_hits/op": 1.0,
+            "fallbacks/op": 0.0,
+            "B/op": 6870.0,
+            "allocs/op": 114.0
+          }
+        ],
+        "BenchmarkSQLRedisRoleReads/sqlite/roles=16/sql": [
+          {
+            "ns/op": 214745.0,
+            "B/op": 45522.0,
+            "allocs/op": 703.0
+          },
+          {
+            "ns/op": 211391.0,
+            "B/op": 45521.0,
+            "allocs/op": 703.0
+          },
+          {
+            "ns/op": 212782.0,
+            "B/op": 45521.0,
+            "allocs/op": 703.0
+          },
+          {
+            "ns/op": 211196.0,
+            "B/op": 45521.0,
+            "allocs/op": 703.0
+          },
+          {
+            "ns/op": 211126.0,
+            "B/op": 45521.0,
+            "allocs/op": 703.0
+          }
+        ],
+        "BenchmarkSQLRedisRoleReads/sqlite/roles=16/cold": [
+          {
+            "ns/op": 216172.0,
+            "cache_hits/op": 0.0,
+            "fallbacks/op": 1.0,
+            "B/op": 45522.0,
+            "allocs/op": 703.0
+          },
+          {
+            "ns/op": 216385.0,
+            "cache_hits/op": 0.0,
+            "fallbacks/op": 1.0,
+            "B/op": 45523.0,
+            "allocs/op": 703.0
+          },
+          {
+            "ns/op": 211244.0,
+            "cache_hits/op": 0.0,
+            "fallbacks/op": 1.0,
+            "B/op": 45521.0,
+            "allocs/op": 703.0
+          },
+          {
+            "ns/op": 215247.0,
+            "cache_hits/op": 0.0,
+            "fallbacks/op": 1.0,
+            "B/op": 45521.0,
+            "allocs/op": 703.0
+          },
+          {
+            "ns/op": 213997.0,
+            "cache_hits/op": 0.0,
+            "fallbacks/op": 1.0,
+            "B/op": 45521.0,
+            "allocs/op": 703.0
+          }
+        ],
+        "BenchmarkSQLRedisRoleReads/sqlite/roles=16/warm": [
+          {
+            "ns/op": 368912.0,
+            "cache_hits/op": 1.0,
+            "fallbacks/op": 0.0,
+            "B/op": 54561.0,
+            "allocs/op": 999.0
+          },
+          {
+            "ns/op": 367095.0,
+            "cache_hits/op": 1.0,
+            "fallbacks/op": 0.0,
+            "B/op": 54558.0,
+            "allocs/op": 999.0
+          },
+          {
+            "ns/op": 368237.0,
+            "cache_hits/op": 1.0,
+            "fallbacks/op": 0.0,
+            "B/op": 54558.0,
+            "allocs/op": 999.0
+          },
+          {
+            "ns/op": 371948.0,
+            "cache_hits/op": 1.0,
+            "fallbacks/op": 0.0,
+            "B/op": 54557.0,
+            "allocs/op": 999.0
+          },
+          {
+            "ns/op": 370196.0,
+            "cache_hits/op": 1.0,
+            "fallbacks/op": 0.0,
+            "B/op": 54558.0,
+            "allocs/op": 999.0
+          }
+        ],
+        "BenchmarkSQLRedisRoleReads/sqlite/roles=128/sql": [
+          {
+            "ns/op": 1649031.0,
+            "B/op": 350525.0,
+            "allocs/op": 5133.0
+          },
+          {
+            "ns/op": 1644262.0,
+            "B/op": 350525.0,
+            "allocs/op": 5133.0
+          },
+          {
+            "ns/op": 1641307.0,
+            "B/op": 350524.0,
+            "allocs/op": 5133.0
+          },
+          {
+            "ns/op": 1644152.0,
+            "B/op": 350521.0,
+            "allocs/op": 5133.0
+          },
+          {
+            "ns/op": 1644107.0,
+            "B/op": 350524.0,
+            "allocs/op": 5133.0
+          }
+        ],
+        "BenchmarkSQLRedisRoleReads/sqlite/roles=128/cold": [
+          {
+            "ns/op": 1660224.0,
+            "cache_hits/op": 0.0,
+            "fallbacks/op": 1.0,
+            "B/op": 350521.0,
+            "allocs/op": 5133.0
+          },
+          {
+            "ns/op": 1671111.0,
+            "cache_hits/op": 0.0,
+            "fallbacks/op": 1.0,
+            "B/op": 350526.0,
+            "allocs/op": 5133.0
+          },
+          {
+            "ns/op": 1659112.0,
+            "cache_hits/op": 0.0,
+            "fallbacks/op": 1.0,
+            "B/op": 350528.0,
+            "allocs/op": 5133.0
+          },
+          {
+            "ns/op": 1663878.0,
+            "cache_hits/op": 0.0,
+            "fallbacks/op": 1.0,
+            "B/op": 350525.0,
+            "allocs/op": 5133.0
+          },
+          {
+            "ns/op": 1651781.0,
+            "cache_hits/op": 0.0,
+            "fallbacks/op": 1.0,
+            "B/op": 350522.0,
+            "allocs/op": 5133.0
+          }
+        ],
+        "BenchmarkSQLRedisRoleReads/sqlite/roles=128/warm": [
+          {
+            "ns/op": 2716712.0,
+            "cache_hits/op": 1.0,
+            "fallbacks/op": 0.0,
+            "B/op": 436063.0,
+            "allocs/op": 7509.0
+          },
+          {
+            "ns/op": 2768380.0,
+            "cache_hits/op": 1.0,
+            "fallbacks/op": 0.0,
+            "B/op": 436059.0,
+            "allocs/op": 7509.0
+          },
+          {
+            "ns/op": 2751404.0,
+            "cache_hits/op": 1.0,
+            "fallbacks/op": 0.0,
+            "B/op": 436067.0,
+            "allocs/op": 7509.0
+          },
+          {
+            "ns/op": 2732607.0,
+            "cache_hits/op": 1.0,
+            "fallbacks/op": 0.0,
+            "B/op": 436059.0,
+            "allocs/op": 7508.0
+          },
+          {
+            "ns/op": 2759293.0,
+            "cache_hits/op": 1.0,
+            "fallbacks/op": 0.0,
+            "B/op": 436063.0,
+            "allocs/op": 7509.0
+          }
+        ],
+        "BenchmarkSQLRedisRoleReads/postgres/roles=1/sql": [
+          {
+            "ns/op": 107577.0,
+            "B/op": 7232.0,
+            "allocs/op": 112.0
+          },
+          {
+            "ns/op": 108951.0,
+            "B/op": 7232.0,
+            "allocs/op": 112.0
+          },
+          {
+            "ns/op": 111475.0,
+            "B/op": 7233.0,
+            "allocs/op": 112.0
+          },
+          {
+            "ns/op": 116782.0,
+            "B/op": 7231.0,
+            "allocs/op": 112.0
+          },
+          {
+            "ns/op": 106507.0,
+            "B/op": 7230.0,
+            "allocs/op": 112.0
+          }
+        ],
+        "BenchmarkSQLRedisRoleReads/postgres/roles=1/cold": [
+          {
+            "ns/op": 106773.0,
+            "cache_hits/op": 0.0,
+            "fallbacks/op": 1.0,
+            "B/op": 7226.0,
+            "allocs/op": 112.0
+          },
+          {
+            "ns/op": 105507.0,
+            "cache_hits/op": 0.0,
+            "fallbacks/op": 1.0,
+            "B/op": 7228.0,
+            "allocs/op": 112.0
+          },
+          {
+            "ns/op": 104741.0,
+            "cache_hits/op": 0.0,
+            "fallbacks/op": 1.0,
+            "B/op": 7227.0,
+            "allocs/op": 112.0
+          },
+          {
+            "ns/op": 104953.0,
+            "cache_hits/op": 0.0,
+            "fallbacks/op": 1.0,
+            "B/op": 7227.0,
+            "allocs/op": 112.0
+          },
+          {
+            "ns/op": 107479.0,
+            "cache_hits/op": 0.0,
+            "fallbacks/op": 1.0,
+            "B/op": 7229.0,
+            "allocs/op": 112.0
+          }
+        ],
+        "BenchmarkSQLRedisRoleReads/postgres/roles=1/warm": [
+          {
+            "ns/op": 60737.0,
+            "cache_hits/op": 1.0,
+            "fallbacks/op": 0.0,
+            "B/op": 6871.0,
+            "allocs/op": 114.0
+          },
+          {
+            "ns/op": 55629.0,
+            "cache_hits/op": 1.0,
+            "fallbacks/op": 0.0,
+            "B/op": 6870.0,
+            "allocs/op": 114.0
+          },
+          {
+            "ns/op": 55786.0,
+            "cache_hits/op": 1.0,
+            "fallbacks/op": 0.0,
+            "B/op": 6870.0,
+            "allocs/op": 114.0
+          },
+          {
+            "ns/op": 55750.0,
+            "cache_hits/op": 1.0,
+            "fallbacks/op": 0.0,
+            "B/op": 6870.0,
+            "allocs/op": 114.0
+          },
+          {
+            "ns/op": 55005.0,
+            "cache_hits/op": 1.0,
+            "fallbacks/op": 0.0,
+            "B/op": 6870.0,
+            "allocs/op": 114.0
+          }
+        ],
+        "BenchmarkSQLRedisRoleReads/postgres/roles=16/sql": [
+          {
+            "ns/op": 615178.0,
+            "B/op": 73004.0,
+            "allocs/op": 1131.0
+          },
+          {
+            "ns/op": 591252.0,
+            "B/op": 72988.0,
+            "allocs/op": 1131.0
+          },
+          {
+            "ns/op": 606380.0,
+            "B/op": 73008.0,
+            "allocs/op": 1131.0
+          },
+          {
+            "ns/op": 670787.0,
+            "B/op": 72996.0,
+            "allocs/op": 1131.0
+          },
+          {
+            "ns/op": 598834.0,
+            "B/op": 72987.0,
+            "allocs/op": 1131.0
+          }
+        ],
+        "BenchmarkSQLRedisRoleReads/postgres/roles=16/cold": [
+          {
+            "ns/op": 601912.0,
+            "cache_hits/op": 0.0,
+            "fallbacks/op": 1.0,
+            "B/op": 72975.0,
+            "allocs/op": 1131.0
+          },
+          {
+            "ns/op": 598375.0,
+            "cache_hits/op": 0.0,
+            "fallbacks/op": 1.0,
+            "B/op": 72972.0,
+            "allocs/op": 1131.0
+          },
+          {
+            "ns/op": 592007.0,
+            "cache_hits/op": 0.0,
+            "fallbacks/op": 1.0,
+            "B/op": 72970.0,
+            "allocs/op": 1131.0
+          },
+          {
+            "ns/op": 608036.0,
+            "cache_hits/op": 0.0,
+            "fallbacks/op": 1.0,
+            "B/op": 72979.0,
+            "allocs/op": 1131.0
+          },
+          {
+            "ns/op": 588895.0,
+            "cache_hits/op": 0.0,
+            "fallbacks/op": 1.0,
+            "B/op": 72971.0,
+            "allocs/op": 1131.0
+          }
+        ],
+        "BenchmarkSQLRedisRoleReads/postgres/roles=16/warm": [
+          {
+            "ns/op": 375460.0,
+            "cache_hits/op": 1.0,
+            "fallbacks/op": 0.0,
+            "B/op": 54559.0,
+            "allocs/op": 999.0
+          },
+          {
+            "ns/op": 413511.0,
+            "cache_hits/op": 1.0,
+            "fallbacks/op": 0.0,
+            "B/op": 54560.0,
+            "allocs/op": 999.0
+          },
+          {
+            "ns/op": 372047.0,
+            "cache_hits/op": 1.0,
+            "fallbacks/op": 0.0,
+            "B/op": 54558.0,
+            "allocs/op": 999.0
+          },
+          {
+            "ns/op": 372015.0,
+            "cache_hits/op": 1.0,
+            "fallbacks/op": 0.0,
+            "B/op": 54557.0,
+            "allocs/op": 999.0
+          },
+          {
+            "ns/op": 372771.0,
+            "cache_hits/op": 1.0,
+            "fallbacks/op": 0.0,
+            "B/op": 54559.0,
+            "allocs/op": 999.0
+          }
+        ],
+        "BenchmarkSQLRedisRoleReads/postgres/roles=128/sql": [
+          {
+            "ns/op": 4284727.0,
+            "B/op": 574958.0,
+            "allocs/op": 8700.0
+          },
+          {
+            "ns/op": 4181714.0,
+            "B/op": 574990.0,
+            "allocs/op": 8700.0
+          },
+          {
+            "ns/op": 4268413.0,
+            "B/op": 574981.0,
+            "allocs/op": 8700.0
+          },
+          {
+            "ns/op": 4330523.0,
+            "B/op": 574991.0,
+            "allocs/op": 8700.0
+          },
+          {
+            "ns/op": 4537705.0,
+            "B/op": 574929.0,
+            "allocs/op": 8700.0
+          }
+        ],
+        "BenchmarkSQLRedisRoleReads/postgres/roles=128/cold": [
+          {
+            "ns/op": 4284623.0,
+            "cache_hits/op": 0.0,
+            "fallbacks/op": 1.0,
+            "B/op": 574824.0,
+            "allocs/op": 8699.0
+          },
+          {
+            "ns/op": 4275312.0,
+            "cache_hits/op": 0.0,
+            "fallbacks/op": 1.0,
+            "B/op": 574808.0,
+            "allocs/op": 8699.0
+          },
+          {
+            "ns/op": 4270825.0,
+            "cache_hits/op": 0.0,
+            "fallbacks/op": 1.0,
+            "B/op": 574815.0,
+            "allocs/op": 8699.0
+          },
+          {
+            "ns/op": 4260652.0,
+            "cache_hits/op": 0.0,
+            "fallbacks/op": 1.0,
+            "B/op": 574786.0,
+            "allocs/op": 8699.0
+          },
+          {
+            "ns/op": 4262144.0,
+            "cache_hits/op": 0.0,
+            "fallbacks/op": 1.0,
+            "B/op": 574783.0,
+            "allocs/op": 8699.0
+          }
+        ],
+        "BenchmarkSQLRedisRoleReads/postgres/roles=128/warm": [
+          {
+            "ns/op": 2697718.0,
+            "cache_hits/op": 1.0,
+            "fallbacks/op": 0.0,
+            "B/op": 436055.0,
+            "allocs/op": 7509.0
+          },
+          {
+            "ns/op": 2750525.0,
+            "cache_hits/op": 1.0,
+            "fallbacks/op": 0.0,
+            "B/op": 436054.0,
+            "allocs/op": 7509.0
+          },
+          {
+            "ns/op": 3005065.0,
+            "cache_hits/op": 1.0,
+            "fallbacks/op": 0.0,
+            "B/op": 436074.0,
+            "allocs/op": 7509.0
+          },
+          {
+            "ns/op": 2704013.0,
+            "cache_hits/op": 1.0,
+            "fallbacks/op": 0.0,
+            "B/op": 436046.0,
+            "allocs/op": 7508.0
+          },
+          {
+            "ns/op": 2763143.0,
+            "cache_hits/op": 1.0,
+            "fallbacks/op": 0.0,
+            "B/op": 436065.0,
+            "allocs/op": 7509.0
+          }
+        ],
+        "BenchmarkTupleCache/tuples=100/read_allowed": [
+          {
+            "ns/op": 117654.0,
+            "B/op": 81712.0,
+            "allocs/op": 1944.0
+          },
+          {
+            "ns/op": 116600.0,
+            "B/op": 81712.0,
+            "allocs/op": 1944.0
+          },
+          {
+            "ns/op": 118431.0,
+            "B/op": 81712.0,
+            "allocs/op": 1944.0
+          },
+          {
+            "ns/op": 116633.0,
+            "B/op": 81712.0,
+            "allocs/op": 1944.0
+          },
+          {
+            "ns/op": 118624.0,
+            "B/op": 81712.0,
+            "allocs/op": 1944.0
+          }
+        ],
+        "BenchmarkTupleCache/tuples=100/read_rejected": [
+          {
+            "ns/op": 18016.0,
+            "B/op": 672.0,
+            "allocs/op": 24.0
+          },
+          {
+            "ns/op": 16545.0,
+            "B/op": 672.0,
+            "allocs/op": 24.0
+          },
+          {
+            "ns/op": 16820.0,
+            "B/op": 672.0,
+            "allocs/op": 24.0
+          },
+          {
+            "ns/op": 16635.0,
+            "B/op": 672.0,
+            "allocs/op": 24.0
+          },
+          {
+            "ns/op": 16502.0,
+            "B/op": 672.0,
+            "allocs/op": 24.0
+          }
+        ],
+        "BenchmarkTupleCache/tuples=100/delta_rejected": [
+          {
+            "ns/op": 30024.0,
+            "B/op": 2331.0,
+            "allocs/op": 54.0
+          },
+          {
+            "ns/op": 30343.0,
+            "B/op": 2331.0,
+            "allocs/op": 54.0
+          },
+          {
+            "ns/op": 30545.0,
+            "B/op": 2331.0,
+            "allocs/op": 54.0
+          },
+          {
+            "ns/op": 32825.0,
+            "B/op": 2332.0,
+            "allocs/op": 54.0
+          },
+          {
+            "ns/op": 30009.0,
+            "B/op": 2331.0,
+            "allocs/op": 54.0
+          }
+        ],
+        "BenchmarkTupleCache/tuples=100/delta_allowed": [
+          {
+            "ns/op": 415535.0,
+            "B/op": 2349.0,
+            "allocs/op": 54.0
+          },
+          {
+            "ns/op": 418225.0,
+            "B/op": 2348.0,
+            "allocs/op": 54.0
+          },
+          {
+            "ns/op": 414122.0,
+            "B/op": 2348.0,
+            "allocs/op": 54.0
+          },
+          {
+            "ns/op": 409050.0,
+            "B/op": 2347.0,
+            "allocs/op": 54.0
+          },
+          {
+            "ns/op": 410147.0,
+            "B/op": 2348.0,
+            "allocs/op": 54.0
+          }
+        ],
+        "BenchmarkTupleCache/tuples=100/rebuild": [
+          {
+            "ns/op": 308913.0,
+            "B/op": 300632.0,
+            "allocs/op": 2819.0
+          },
+          {
+            "ns/op": 313063.0,
+            "B/op": 300513.0,
+            "allocs/op": 2819.0
+          },
+          {
+            "ns/op": 328302.0,
+            "B/op": 300830.0,
+            "allocs/op": 2819.0
+          },
+          {
+            "ns/op": 306809.0,
+            "B/op": 300551.0,
+            "allocs/op": 2819.0
+          },
+          {
+            "ns/op": 308462.0,
+            "B/op": 300594.0,
+            "allocs/op": 2819.0
+          }
+        ],
+        "BenchmarkTupleCache/tuples=1000/read_allowed": [
+          {
+            "ns/op": 1020248.0,
+            "B/op": 863871.0,
+            "allocs/op": 19050.0
+          },
+          {
+            "ns/op": 1009131.0,
+            "B/op": 863869.0,
+            "allocs/op": 19050.0
+          },
+          {
+            "ns/op": 1015099.0,
+            "B/op": 863865.0,
+            "allocs/op": 19050.0
+          },
+          {
+            "ns/op": 1011489.0,
+            "B/op": 863870.0,
+            "allocs/op": 19050.0
+          },
+          {
+            "ns/op": 1018850.0,
+            "B/op": 863866.0,
+            "allocs/op": 19050.0
+          }
+        ],
+        "BenchmarkTupleCache/tuples=1000/read_rejected": [
+          {
+            "ns/op": 18186.0,
+            "B/op": 672.0,
+            "allocs/op": 24.0
+          },
+          {
+            "ns/op": 16574.0,
+            "B/op": 672.0,
+            "allocs/op": 24.0
+          },
+          {
+            "ns/op": 16328.0,
+            "B/op": 672.0,
+            "allocs/op": 24.0
+          },
+          {
+            "ns/op": 16791.0,
+            "B/op": 672.0,
+            "allocs/op": 24.0
+          },
+          {
+            "ns/op": 16492.0,
+            "B/op": 672.0,
+            "allocs/op": 24.0
+          }
+        ],
+        "BenchmarkTupleCache/tuples=1000/delta_rejected": [
+          {
+            "ns/op": 29974.0,
+            "B/op": 2331.0,
+            "allocs/op": 54.0
+          },
+          {
+            "ns/op": 29994.0,
+            "B/op": 2331.0,
+            "allocs/op": 54.0
+          },
+          {
+            "ns/op": 30269.0,
+            "B/op": 2331.0,
+            "allocs/op": 54.0
+          },
+          {
+            "ns/op": 33358.0,
+            "B/op": 2332.0,
+            "allocs/op": 54.0
+          },
+          {
+            "ns/op": 30220.0,
+            "B/op": 2331.0,
+            "allocs/op": 54.0
+          }
+        ],
+        "BenchmarkTupleCache/tuples=1000/delta_allowed": [
+          {
+            "ns/op": 3907915.0,
+            "B/op": 2353.0,
+            "allocs/op": 54.0
+          },
+          {
+            "ns/op": 3880111.0,
+            "B/op": 2353.0,
+            "allocs/op": 54.0
+          },
+          {
+            "ns/op": 3851927.0,
+            "B/op": 2353.0,
+            "allocs/op": 54.0
+          },
+          {
+            "ns/op": 3861539.0,
+            "B/op": 2350.0,
+            "allocs/op": 54.0
+          },
+          {
+            "ns/op": 3827479.0,
+            "B/op": 2353.0,
+            "allocs/op": 54.0
+          }
+        ],
+        "BenchmarkTupleCache/tuples=1000/rebuild": [
+          {
+            "ns/op": 2723217.0,
+            "B/op": 3381427.0,
+            "allocs/op": 27212.0
+          },
+          {
+            "ns/op": 2767585.0,
+            "B/op": 3386669.0,
+            "allocs/op": 27213.0
+          },
+          {
+            "ns/op": 2809896.0,
+            "B/op": 3383990.0,
+            "allocs/op": 27213.0
+          },
+          {
+            "ns/op": 2723180.0,
+            "B/op": 3386259.0,
+            "allocs/op": 27213.0
+          },
+          {
+            "ns/op": 2724102.0,
+            "B/op": 3381040.0,
+            "allocs/op": 27212.0
+          }
+        ],
+        "BenchmarkTupleCache/tuples=10000/read_allowed": [
+          {
+            "ns/op": 9727729.0,
+            "B/op": 8493756.0,
+            "allocs/op": 190087.0
+          },
+          {
+            "ns/op": 9763644.0,
+            "B/op": 8493769.0,
+            "allocs/op": 190087.0
+          },
+          {
+            "ns/op": 9821200.0,
+            "B/op": 8493758.0,
+            "allocs/op": 190088.0
+          },
+          {
+            "ns/op": 9753804.0,
+            "B/op": 8493783.0,
+            "allocs/op": 190088.0
+          },
+          {
+            "ns/op": 9842742.0,
+            "B/op": 8493690.0,
+            "allocs/op": 190087.0
+          }
+        ],
+        "BenchmarkTupleCache/tuples=10000/read_rejected": [
+          {
+            "ns/op": 18470.0,
+            "B/op": 672.0,
+            "allocs/op": 24.0
+          },
+          {
+            "ns/op": 16616.0,
+            "B/op": 672.0,
+            "allocs/op": 24.0
+          },
+          {
+            "ns/op": 16709.0,
+            "B/op": 672.0,
+            "allocs/op": 24.0
+          },
+          {
+            "ns/op": 16826.0,
+            "B/op": 672.0,
+            "allocs/op": 24.0
+          },
+          {
+            "ns/op": 16908.0,
+            "B/op": 672.0,
+            "allocs/op": 24.0
+          }
+        ],
+        "BenchmarkTupleCache/tuples=10000/delta_rejected": [
+          {
+            "ns/op": 30234.0,
+            "B/op": 2330.0,
+            "allocs/op": 54.0
+          },
+          {
+            "ns/op": 30018.0,
+            "B/op": 2330.0,
+            "allocs/op": 54.0
+          },
+          {
+            "ns/op": 30229.0,
+            "B/op": 2330.0,
+            "allocs/op": 54.0
+          },
+          {
+            "ns/op": 33378.0,
+            "B/op": 2331.0,
+            "allocs/op": 54.0
+          },
+          {
+            "ns/op": 30146.0,
+            "B/op": 2330.0,
+            "allocs/op": 54.0
+          }
+        ],
+        "BenchmarkTupleCache/tuples=10000/delta_allowed": [
+          {
+            "ns/op": 39396754.0,
+            "B/op": 2536.0,
+            "allocs/op": 54.0
+          },
+          {
+            "ns/op": 39172609.0,
+            "B/op": 2536.0,
+            "allocs/op": 54.0
+          },
+          {
+            "ns/op": 39142296.0,
+            "B/op": 2537.0,
+            "allocs/op": 54.0
+          },
+          {
+            "ns/op": 39055590.0,
+            "B/op": 2494.0,
+            "allocs/op": 54.0
+          },
+          {
+            "ns/op": 38794794.0,
+            "B/op": 2522.0,
+            "allocs/op": 54.0
+          }
+        ],
+        "BenchmarkTupleCache/tuples=10000/rebuild": [
+          {
+            "ns/op": 24909707.0,
+            "B/op": 33706728.0,
+            "allocs/op": 270856.0
+          },
+          {
+            "ns/op": 25699432.0,
+            "B/op": 33756223.0,
+            "allocs/op": 270861.0
+          },
+          {
+            "ns/op": 27306136.0,
+            "B/op": 33756196.0,
+            "allocs/op": 270860.0
+          },
+          {
+            "ns/op": 24929253.0,
+            "B/op": 33662678.0,
+            "allocs/op": 270855.0
+          },
+          {
+            "ns/op": 25236740.0,
+            "B/op": 33664652.0,
+            "allocs/op": 270857.0
+          }
+        ],
+        "BenchmarkTupleCache/tuples=100000/read_allowed": [
+          {
+            "ns/op": 99730361.0,
+            "B/op": 84114108.0,
+            "allocs/op": 1900322.0
+          },
+          {
+            "ns/op": 99233576.0,
+            "B/op": 84114130.0,
+            "allocs/op": 1900323.0
+          },
+          {
+            "ns/op": 98936670.0,
+            "B/op": 84114129.0,
+            "allocs/op": 1900323.0
+          },
+          {
+            "ns/op": 99390254.0,
+            "B/op": 84114094.0,
+            "allocs/op": 1900322.0
+          },
+          {
+            "ns/op": 99373872.0,
+            "B/op": 84114116.0,
+            "allocs/op": 1900323.0
+          }
+        ],
+        "BenchmarkTupleCache/tuples=100000/read_rejected": [
+          {
+            "ns/op": 18593.0,
+            "B/op": 672.0,
+            "allocs/op": 24.0
+          },
+          {
+            "ns/op": 16757.0,
+            "B/op": 672.0,
+            "allocs/op": 24.0
+          },
+          {
+            "ns/op": 16680.0,
+            "B/op": 672.0,
+            "allocs/op": 24.0
+          },
+          {
+            "ns/op": 16863.0,
+            "B/op": 672.0,
+            "allocs/op": 24.0
+          },
+          {
+            "ns/op": 16639.0,
+            "B/op": 672.0,
+            "allocs/op": 24.0
+          }
+        ],
+        "BenchmarkTupleCache/tuples=100000/delta_rejected": [
+          {
+            "ns/op": 30115.0,
+            "B/op": 2328.0,
+            "allocs/op": 54.0
+          },
+          {
+            "ns/op": 30004.0,
+            "B/op": 2328.0,
+            "allocs/op": 54.0
+          },
+          {
+            "ns/op": 30368.0,
+            "B/op": 2328.0,
+            "allocs/op": 54.0
+          },
+          {
+            "ns/op": 33556.0,
+            "B/op": 2328.0,
+            "allocs/op": 54.0
+          },
+          {
+            "ns/op": 30239.0,
+            "B/op": 2329.0,
+            "allocs/op": 54.0
+          }
+        ],
+        "BenchmarkTupleCache/tuples=100000/delta_allowed": [
+          {
+            "ns/op": 449564722.0,
+            "B/op": 4277.0,
+            "allocs/op": 61.0
+          },
+          {
+            "ns/op": 451781708.0,
+            "B/op": 4352.0,
+            "allocs/op": 61.0
+          },
+          {
+            "ns/op": 438057708.0,
+            "B/op": 3701.0,
+            "allocs/op": 55.0
+          },
+          {
+            "ns/op": 448124653.0,
+            "B/op": 4277.0,
+            "allocs/op": 61.0
+          },
+          {
+            "ns/op": 448444972.0,
+            "B/op": 3989.0,
+            "allocs/op": 58.0
+          }
+        ],
+        "BenchmarkTupleCache/tuples=100000/rebuild": [
+          {
+            "ns/op": 286587604.0,
+            "B/op": 327242508.0,
+            "allocs/op": 2706236.0
+          },
+          {
+            "ns/op": 302499792.0,
+            "B/op": 327242234.0,
+            "allocs/op": 2706243.0
+          },
+          {
+            "ns/op": 277035417.0,
+            "B/op": 327240556.0,
+            "allocs/op": 2706236.0
+          },
+          {
+            "ns/op": 282278875.0,
+            "B/op": 327239960.0,
+            "allocs/op": 2706228.0
+          },
+          {
+            "ns/op": 279622386.0,
+            "B/op": 327252722.0,
+            "allocs/op": 2706215.0
+          }
+        ]
+      }
+    }
+  ]
+}

@@ -3,8 +3,8 @@ module github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx
 go 1.26.1
 
 require (
-	github.com/gopernicus/gopernicus/integrations/datastores/pgxdb v0.8.1
-	github.com/gopernicus/gopernicus/pockets/authorization v0.17.0
+	github.com/gopernicus/gopernicus/integrations/datastores/pgxdb v0.9.0
+	github.com/gopernicus/gopernicus/pockets/authorization v0.18.0
 	github.com/gopernicus/gopernicus/sdk v0.9.0
 	github.com/jackc/pgx/v5 v5.8.0
 )

@@ -7,14 +7,13 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/gopernicus/gopernicus/pockets/authorization"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/relationships"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/roles"
 	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/pkg/list"
 )
 
-func runRelationshipNaturalOrder(t *testing.T, newRepos func(*testing.T) authorization.Repositories) {
+func runRelationshipNaturalOrder(t *testing.T, newRepos func(*testing.T) Repositories) {
 	ctx := context.Background()
 	s := newRepos(t).Relationships
 	rows := []relationships.CreateRelationship{
@@ -71,43 +70,45 @@ func runRelationshipNaturalOrder(t *testing.T, newRepos func(*testing.T) authori
 	}
 }
 
-func runRoleNaturalOrder(t *testing.T, newRepos func(*testing.T) authorization.Repositories) {
+func runRoleNaturalOrder(t *testing.T, newRepos func(*testing.T) Repositories) {
 	ctx := context.Background()
-	s := newRepos(t).Roles
+	s := newRepos(t).Tuples
 	rows := []roles.Assignment{
-		{SubjectType: "user", SubjectID: "u", Role: "admin"},
-		{SubjectType: "user", SubjectID: "u", Role: "admin", ResourceType: "doc", ResourceID: "a"},
-		{SubjectType: "user", SubjectID: "u", Role: "admin", ResourceType: "doc", ResourceID: "a-"},
-		{SubjectType: "user", SubjectID: "u", Role: "admin", ResourceType: "folder", ResourceID: "a"},
-		{SubjectType: "user", SubjectID: "u", Role: "viewer", ResourceType: "doc", ResourceID: "a"},
-		{SubjectType: "group", SubjectID: "g", Role: "viewer", ResourceType: "doc", ResourceID: "a"},
-		{SubjectType: "user", SubjectID: "u-", Role: "admin", ResourceType: "doc", ResourceID: "a"},
-		{SubjectType: "user", SubjectID: "é", Role: "admin", ResourceType: "doc", ResourceID: "a"},
+		{SubjectType: "user", SubjectID: "u", Role: "admin", Scope: fixtureScope("", "")},
+		{SubjectType: "user", SubjectID: "u", Role: "admin", Scope: fixtureScope("doc", "a")},
+		{SubjectType: "user", SubjectID: "u", Role: "admin", Scope: fixtureScope("doc", "a-")},
+		{SubjectType: "user", SubjectID: "u", Role: "admin", Scope: fixtureScope("folder", "a")},
+		{SubjectType: "user", SubjectID: "u", Role: "viewer", Scope: fixtureScope("doc", "a")},
+		{SubjectType: "group", SubjectID: "g", Role: "viewer", Scope: fixtureScope("doc", "a")},
+		{SubjectType: "user", SubjectID: "u-", Role: "admin", Scope: fixtureScope("doc", "a")},
+		{SubjectType: "user", SubjectID: "é", Role: "admin", Scope: fixtureScope("doc", "a")},
 	}
 	for i := len(rows) - 1; i >= 0; i-- {
-		if err := s.Assign(ctx, rows[i]); err != nil {
+		if err := assignRole(ctx, s, rows[i]); err != nil {
 			t.Fatal(err)
 		}
 	}
 	bySubject := func(req list.Request) (list.Page[roles.Assignment], error) {
-		return s.ListBySubject(ctx, "user", "u", req)
+		return roleListSubject(ctx, s, "user", "u", req)
 	}
 	byResource := func(req list.Request) (list.Page[roles.Assignment], error) {
-		return s.ListByResource(ctx, "doc", "a", req)
+		return roleListResource(ctx, s, "doc", "a", req)
 	}
-	t.Run("Subject", func(t *testing.T) { assertNaturalPages(t, "role_key", bySubject, rows[:5]) })
+	t.Run("Subject", func(t *testing.T) {
+		assertNaturalPages(t, "tuple_key", bySubject, []roles.Assignment{rows[0], rows[1], rows[4], rows[2], rows[3]})
+	})
 	t.Run("Resource", func(t *testing.T) {
-		assertNaturalPages(t, "role_key", byResource, []roles.Assignment{rows[5], rows[1], rows[4], rows[6], rows[7]})
+		assertNaturalPages(t, "tuple_key", byResource, []roles.Assignment{rows[1], rows[6], rows[7], rows[5], rows[4]})
 	})
 	before, err := bySubject(list.Request{Limit: 2})
 	if err != nil {
 		t.Fatal(err)
 	}
 	a := rows[1]
-	if err := s.Unassign(ctx, a.SubjectType, a.SubjectID, a.Role, a.ResourceType, a.ResourceID); err != nil {
+	if err := unassignRole(ctx, s, a.SubjectType, a.SubjectID, a.Role, a.Scope.Type, a.Scope.ID); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Assign(ctx, a); err != nil {
+	if err := assignRole(ctx, s, a); err != nil {
 		t.Fatal(err)
 	}
 	after, err := bySubject(list.Request{Limit: 2})

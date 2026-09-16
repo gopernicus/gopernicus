@@ -34,11 +34,10 @@
 //     across packages. One emulator, one database, one clock — and go test runs
 //     different PACKAGES concurrently by default. Either give the package its
 //     own database (rule 2) or run those packages with -p 1.
-//  2. Every pocket store train opens its OWN database:
-//     OpenDatabase(t, "authorization") in pockets/authorization/stores/firestore,
-//     OpenDatabase(t, "authentication") in its authentication twin. The
-//     emulator serves named databases side by side and the clear endpoint is
-//     scoped to one of them, so the two store suites and this connector's own
+//  2. Every pocket store train opens its OWN database: for example,
+//     OpenDatabase(t, "authentication") in pockets/authentication/stores/firestore.
+//     The emulator serves named databases side by side and the clear endpoint is
+//     scoped to one of them, so the store suite and this connector's own
 //     suite cannot clobber one another even when they run at the same time.
 //
 // Open itself stays on the database named by FIRESTORE_DATABASE_ID (the default
@@ -129,8 +128,8 @@ func EmulatorDatabase() string {
 //
 // This is the isolation seam: the emulator serves named databases side by side
 // and Reset's clear endpoint is scoped to one of them, so every pocket store
-// train opens its own — OpenDatabase(t, "authorization"),
-// OpenDatabase(t, "authentication") — and no suite can clear another's rows.
+// train opens its own — for example, OpenDatabase(t, "authentication") — and
+// no suite can clear another's rows.
 func OpenDatabase(t testing.TB, databaseID string) *firestore.DB {
 	t.Helper()
 

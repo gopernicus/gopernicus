@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	authorizationhttp "github.com/gopernicus/gopernicus/pockets/authorization/inbound/http"
+
 	mutations "github.com/gopernicus/gopernicus/pockets/authorization/logic/mutations"
 	listing "github.com/gopernicus/gopernicus/sdk/pkg/list"
 )
@@ -49,7 +51,7 @@ func newMachineHost(t *testing.T) *machineHost {
 	if err != nil {
 		t.Fatalf("newAuthorization: %v", err)
 	}
-	gate := components.HTTP.RequirePermissionFixed(platformResourceType, "admin", platformResourceID)
+	gate := components.HTTP.Require(authorizationhttp.Can("admin", authorizationhttp.Fixed(platformResourceType, platformResourceID)))
 
 	return &machineHost{
 		linkHost: newLinkHostTuned(t, func(cfg *authenticationConfig) { cfg.MachineRoutesGate = gate }),

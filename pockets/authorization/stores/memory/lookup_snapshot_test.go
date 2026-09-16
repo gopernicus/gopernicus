@@ -10,28 +10,28 @@ import (
 )
 
 func TestCheckSnapshots(t *testing.T) {
-	storetest.RunCheckSnapshots(t, func(t *testing.T) (authorization.Repositories, transaction.Transactor) {
+	storetest.RunCheckSnapshots(t, func(t *testing.T) (storetest.Repositories, transaction.Transactor) {
 		store := memory.New()
-		return authorization.Repositories{Relationships: store.Relationships(), Roles: store.Roles(), Mutations: store.Mutations()}, nil
+		return storetest.Repositories{Repositories: authorization.Repositories{Tuples: store.Tuples(), Mutations: store.Mutations()}, Relationships: store.Relationships()}, nil
 	})
 }
 
 func TestLookupSnapshots(t *testing.T) {
-	storetest.RunLookupSnapshots(t, func(t *testing.T) authorization.Repositories {
+	storetest.RunLookupSnapshots(t, func(t *testing.T) storetest.Repositories {
 		store := memory.New()
-		return authorization.Repositories{Relationships: store.Relationships(), Roles: store.Roles(), Mutations: store.Mutations()}
+		return storetest.Repositories{Repositories: authorization.Repositories{Tuples: store.Tuples(), Mutations: store.Mutations()}, Relationships: store.Relationships()}
 	})
 }
 
 func TestLookupSnapshotLifecycle(t *testing.T) {
-	storetest.RunLookupSnapshotLifecycle(t, func(t *testing.T) authorization.Repositories {
+	storetest.RunLookupSnapshotLifecycle(t, func(t *testing.T) storetest.Repositories {
 		store := memory.New()
-		return authorization.Repositories{Relationships: store.Relationships(), Roles: store.Roles(), Mutations: store.Mutations()}
+		return storetest.Repositories{Repositories: authorization.Repositories{Tuples: store.Tuples(), Mutations: store.Mutations()}, Relationships: store.Relationships()}
 	})
 }
 
 func TestLookupConcurrent(t *testing.T) {
 	store := memory.New()
-	repos := authorization.Repositories{Relationships: store.Relationships(), Roles: store.Roles(), Mutations: store.Mutations()}
+	repos := storetest.Repositories{Repositories: authorization.Repositories{Tuples: store.Tuples(), Mutations: store.Mutations()}, Relationships: store.Relationships()}
 	storetest.RunLookupConcurrent(t, repos)
 }

@@ -30,10 +30,9 @@ worked example `examples/cms`.
       stores/pgx/         module …/pockets/authentication/stores/pgx             — auth's pgx store adapter
       stores/turso/       module …/pockets/authentication/stores/turso           — auth's Turso store adapter
       stores/firestore/   module …/pockets/authentication/stores/firestore       — auth's Firestore store adapter (Native mode; index manifest instead of migrations; joins no ambient transaction)
-    authorization/        module github.com/gopernicus/gopernicus/pockets/authorization              — IAM hexagon: independently wireable kinds (relationships/ReBAC + roles; datastore-free; public stores/memory)
+    authorization/        module github.com/gopernicus/gopernicus/pockets/authorization              — IAM hexagon: canonical tuple authority, exact roles and optional graph permissions (datastore-free; public stores/memory)
       stores/pgx/         module …/pockets/authorization/stores/pgx            — authorization's pgx store adapter
       stores/turso/       module …/pockets/authorization/stores/turso          — authorization's Turso store adapter
-      stores/firestore/   module …/pockets/authorization/stores/firestore      — authorization's Firestore store adapter (Native mode; index manifest instead of migrations; joins no ambient transaction)
       stores/goredis/     module …/pockets/authorization/stores/goredis        — authorization raw TupleCache mirror (redis/go-redis v9; no authoritative SQL driver)
     cms/                  module github.com/gopernicus/gopernicus/pockets/cms                — the CMS hexagon (datastore-free)
       stores/pgx/         module …/pockets/cms/stores/pgx              — the CMS pocket's pgx store adapter
@@ -58,7 +57,7 @@ worked example `examples/cms`.
       cmd/
 ```
 
-**Forty-three modules today.** `sdk` is the kernel; `integrations/*` are reusable
+**Forty-two modules today.** `sdk` is the kernel; `integrations/*` are reusable
 third-party connectors (one external dependency each, each its own module);
 `pockets/<name>` is a datastore-free pocket core with its driver adapters as
 sibling modules. Memory and store conformance are packages in the core module
@@ -229,8 +228,8 @@ HTTP middleware sorts onto the same three tiers, ratified so nobody
 |---|---|---|
 | **pkg — pure HTTP mechanism** | `sdk/pkg/web` | `Panics`, `Logger`, `RequestID`, `TrustProxies`, `CORSMiddleware`/`CORSWithConfig`, `DefaultHeadersMiddleware`, `NoStore` — no capability port behind them, stdlib only, FLAT. `CORSMiddleware`/`DefaultHeadersMiddleware` are AVAILABLE host middleware, kept deliberately (owner call, 2026-07-11): expected wiring for any API-serving or browser-facing host, NOT prune candidates even though no example wires them yet. |
 | **capability×pkg composition** | the capability that owns the semantics | `cacher.Pages`, `tracing.Middleware`, `ratelimiter.Middleware` — a capability producing a `web.Middleware`; web stays agnostic of the capability, the capability legally depends on web (capability → pkg). |
-| **identity/authorization gate** | the owning pocket's public `inbound/http` adapter | `authentication.RequireAccessToken()` and `authorization.RequirePermission` assemble HTTP adapters over transport-independent credential/decision logic. Hosts inject them through config seams — `[]web.Middleware` (`cms.Config.AdminMiddleware`, `events.Config.StreamMiddleware`) or a SINGULAR `web.Middleware` (`authentication.Config.MachineRoutesGate`) — or at route registration. Singular vs slice is a deliberate posture choice, not drift: with a slice, nil and an empty slice both mean "mounted, ungated", which is fine for a surface that mounts regardless; the singular seam is for a surface whose routes should NOT mount without a policy — nil is the unambiguous "no policy" (the machine lifecycle routes stay unmounted), where an empty slice would have meant "mounted, ungated". |
-| **host recipe** | a host closure | platform-admin/self-access short-circuits (auth-cms's `isPlatformAdmin`, composed by its `requireMembership` gate) — each authorization engine evaluates only what its own model declares; bypasses are host composition, run first in the host's own closure, and fail closed. The roles kind's model does not change this: a globally held role is DATA that grants exactly the role-owned permissions whose model entries name it, never relationship-owned or later-added ones, so a universal admin bypass stays a host recipe and the pocket ships no `Superuser` primitive. |
+| **identity/authorization gate** | the owning pocket's public `inbound/http` adapter | `authentication.RequireAccessToken()` and `authorizationhttp.Adapter.Require` assemble HTTP adapters over transport-independent credential/decision logic. Hosts inject them through config seams — `[]web.Middleware` (`cms.Config.AdminMiddleware`, `events.Config.StreamMiddleware`) or a SINGULAR `web.Middleware` (`authentication.Config.MachineRoutesGate`) — or at route registration. Singular vs slice is a deliberate posture choice, not drift: with a slice, nil and an empty slice both mean "mounted, ungated", which is fine for a surface that mounts regardless; the singular seam is for a surface whose routes should NOT mount without a policy — nil is the unambiguous "no policy" (the machine lifecycle routes stay unmounted), where an empty slice would have meant "mounted, ungated". |
+| **host policy** | an explicit permission expression, composable guard or host closure | Hosts declare platform-admin alternatives with `Any` and exact role predicates, or compose application-specific checks such as self-access in a closure. Global facts grant only policies that explicitly apply them. Exact scoped role reads have no global fallback. The pocket ships no `Superuser` primitive. |
 
 Response-writer wrappers preserve `http.ResponseController` operations and
 forward errors through `web.RecordError`/`Unwrap`. Shared StatusRecorders retain
@@ -246,8 +245,8 @@ SILENTLY by design: it takes no logger and emits nothing on the limiter-error
 branch. A host wanting visibility wraps its `Allower` with a logging/metrics
 decorator (the `Allower` seam is the observability point) and/or relies on
 limiter-side alerting; silent fail-open must never be mistaken for a monitored
-state. `authorization.RequirePermission` fails CLOSED (engine or resolver error
-→ 500). The opposition is intentional — do not harmonize them.
+state. `authorizationhttp.Adapter.Require` fails CLOSED (budget exhaustion → 503;
+other engine or resolver errors → 500). The opposition is intentional — do not harmonize them.
 
 ## Host HTML cross-origin posture (CSRF, ratified 2026-07-20)
 
@@ -327,7 +326,7 @@ ui-goth GOTH-0.2, adding the UI-implementation row):
 | **sdk facility** | a capability **port** + a conformance suite, usually with a first-party stdlib default — defaults are OPTIONAL (sdk-work-protocol, 2026-07-13): the implementation of record may instead be an integration (`oauth`) or a pocket (`work` → `pockets/jobs`); its state is opaque to the host (no host-owned schema, no migrations, no routes) | `cacher`+`Memory`, `notify/email`+`Console`/`SMTP`, `notify.Send`+selected `Delivery` values, `ratelimiter`+`Memory`, `filestorage`+`Disk`, `workers` (pool + `Runner[T]`), `work` (no default) | a config value — the swap is invisible outside the process |
 | **integration** | a third-party backend for a port; isolates exactly one external dependency — a third-party library or an external vendor's live API contract (never importing pockets/, examples/, or another integration; guard G13); one module. The isolation unit is the vendor client library **plus the companion modules its API forces on the caller** (`google.golang.org/api/option`, `grpc/codes`+`status` beside `cloud.google.com/go/firestore`) — never a second backend | `datastores/turso`, `datastores/pgxdb`, `datastores/firestore`, `kvstores/goredis` | a module import in the host's `main` |
 | **pocket** | a domain module: own entities, **own durable schema + migrations**, and/or **own route surface**; its core module requires **SDK and shared pockets only** (FS1) | `cms`, `authentication`, `authorization`, `jobs`, `events` | explicit service/component construction and optional HTTP registration |
-| **store module** | a pocket's store implementation — persistence written against one driver package's API (`stores/<package>`) plus its scaffold artifact: SQL migrations for the SQL families, an index manifest (`firestore.indexes.json`, exported and boot-probed) for Firestore (R5) | `cms/stores/turso`, `cms/stores/pgx`, `authorization/stores/firestore` | a module import + one `Open` call |
+| **store module** | a pocket's store implementation — persistence written against one driver package's API (`stores/<package>`) plus its scaffold artifact: SQL migrations for the SQL families, an index manifest (`firestore.indexes.json`, exported and boot-probed) for Firestore (R5) | `cms/stores/turso`, `cms/stores/pgx`, `authentication/stores/firestore` | a module import + one `Open` call |
 | **views module** | a pocket's bundled presentation default — the implementation of the core's `Views` port, written against one view package's API (`views/<package>`; FS3, 2026-07-07 — amends R6's four-kind table). Nil `Config.Views` → the pocket's HTML surface is not registered, uniformly | `cms/views/goth` (landed at feature-standard B2, 2026-07-07; migrated templ→ui/goth at ui-goth GOTH-7.3, 2026-07-18) | a module import + one `Config` field |
 | **workshop tool** | a developer-time tool that EMITS the other kinds' anatomies and never links them (guard G11: nothing imports `workshop/`, workshop imports no pocket/example); its output is verified by scaffold-compile tests inside `make check`, not by runtime coupling | `workshop/gopernicus` (the scaffolding CLI: `init` / `new pocket` / `db` verbs; workshop-v2-scaffolding, 2026-07-09) | a `go install` — never a runtime dependency |
 | **UI implementation** | a reusable presentation system for ONE rendering/runtime family (ui-goth GOTH-0.2, 2026-07-17): it owns view-library dependencies, semantic tokens, primitives/components, interaction controllers, and distributable assets, and owns NO domain schema and NO routes. Its `go.mod` may require its own view/runtime libraries (templ and its pinned inputs) plus `sdk`; it never imports a pocket, integration, example, or workshop package (guard G17). A pocket reaches a UI implementation only through that pocket's own `views/<pkg>` adapter module — never the reverse; the UI implementation never registers routes, installs middleware, or writes HTTP response headers (the host composes assets + route registration) | `ui/goth` (templ + plain CSS + Alpine + optional HTMX); later `ui/react`, `ui/vue` | a host/view-adapter import plus theme/bundle configuration |
@@ -712,17 +711,45 @@ integration to start native server spans and receive typed status. OTel owns
 export, root/parent sampling and explicitly configured inbound W3C trust. No
 vendor types, global propagator, automatic baggage or tracing DSL enter the SDK.
 
+### Authorization tuple vocabulary
+
+`pockets/authorization/logic/tuples` owns canonical scope, subject and tuple
+values and their structural reference validation. It is a leaf within the
+authorization pocket: models, roles, relationships, mutations and caches may
+consume it; it imports none of those consumers. The Makefile's
+`guard-authorization-tuples-leaf` (G26) enforces this direction.
+Mutation guards consume the decision evaluator; decisions never import mutations
+(`guard-authorization-decisions-no-mutations`, G27). Graph-specific query
+ports and policy evaluation stay with their consumers.
+
+Composable HTTP guards lower `All`/`Any`, exact role, relationship and named
+permission predicates to the existing decision evaluator. One compound policy
+shares one tuple snapshot and semantic budget. Request resource slots resolve
+lazily, are pinned across cache fallback, and never enter compiled models.
+HTTP owns principal extraction, request resolvers and response mapping; the
+decision engine owns validation, short-circuiting and authorization reads.
+`Adapter.Require` is the single HTTP policy entry point; its decision dependency
+requires expression validation and evaluation directly.
+
+Authorization authorities are the in-core memory store and the PostgreSQL and
+SQLite/Turso adapters. Redis is an optional mirror of durable facts. Firestore
+is not an authorization store implementation. Authorization ships a fresh base
+SQL schema defining tuples and audit directly, plus one optional TupleCache
+source. Hosts apply these before boot; no split-table conversion or downgrade
+stream is bundled.
+
 ### Authorization mutation ownership
 
-Authorization tuples and role assignments are plain facts with natural keys.
+Role assignments and relationships are views of one canonical tuple fact with
+a full natural key. Root composition constructs both facades from Tuples; it
+accepts no independently wired relationship authority.
 The pocket keeps host guards and guardian rules inside its mutation transaction.
 Supported raw writers participate in transaction isolation but remain trusted
 capabilities that do not enforce the guard or guardian rules. The host places
 these capabilities explicitly.
 
 Optional store `WithAudit()` records actual committed fact changes in `iam_audit`
-(or the corresponding Firestore collection), in the same transaction as the
-facts. Attribution is actor or explicit system metadata; the host owns retention
+in the same transaction as the facts. Attribution is actor or explicit system metadata; the host owns retention
 and reader access. Scope revision counters, request receipt ledgers and the old
 best-effort audit sink are removed (AUDIT-026). This stays in the authorization
 pocket, not a generic SDK audit subsystem.

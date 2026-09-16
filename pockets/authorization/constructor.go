@@ -25,6 +25,7 @@ type Components struct {
 	Mutations          *mutations.Service
 	HTTP               *authorizationhttp.Adapter
 	RelationshipWriter *relationships.RelationshipWriter
+	RoleWriter         *roles.Writer
 	SystemMutator      *mutations.SystemMutator
 	log                *slog.Logger
 }
@@ -41,28 +42,18 @@ func New(repos Repositories, opts ...Option) (Components, error) {
 	for _, dep := range []struct {
 		name  string
 		value any
-	}{{"Repositories.Relationships", repos.Relationships}, {"Repositories.Roles", repos.Roles}, {"Repositories.Mutations", repos.Mutations}, {"Repositories.Audit", repos.Audit}, {"Repositories.TupleSource", repos.TupleSource}, {"WithGuard", cfg.Guard}, {"WithTupleCache", cfg.TupleBackend}} {
+	}{{"Repositories.Tuples", repos.Tuples}, {"Repositories.Mutations", repos.Mutations}, {"Repositories.Audit", repos.Audit}, {"Repositories.TupleSource", repos.TupleSource}, {"WithGuard", cfg.Guard}, {"WithTupleCache", cfg.TupleBackend}} {
 		if isTypedNil(dep.value) {
 			return Components{}, fmt.Errorf("authorization: %s is typed nil: %w", dep.name, sdk.ErrInvalidInput)
 		}
 	}
-	hasRel, hasRoles := repos.Relationships != nil, repos.Roles != nil
-	if !hasRel && !hasRoles {
+	if repos.Tuples == nil {
 		return Components{}, ErrNoKindConfigured
-	}
-	if hasRel != (len(cfg.RelationshipModel.ResourceTypes) > 0) {
-		return Components{}, ErrModelRequired
-	}
-	if cfg.RoleModel.IsSet() && !hasRoles {
-		return Components{}, ErrRoleModelWithoutRoles
 	}
 	if cfg.Guard != nil && repos.Mutations == nil {
 		return Components{}, mutations.ErrGuardWithoutMutations
 	}
 	// Validate the optional route posture before any model work, preserving boot errors.
-	if cfg.RoleRoutesGate != nil && !hasRoles {
-		return Components{}, authorizationhttp.ErrRoleRoutesGateWithoutRoles
-	}
 	if cfg.RoleRoutesGate != nil && cfg.Guard == nil {
 		return Components{}, authorizationhttp.ErrRoleRoutesGateWithoutGuard
 	}
@@ -76,45 +67,36 @@ func New(repos Repositories, opts ...Option) (Components, error) {
 	if comps.log == nil {
 		comps.log = slog.Default()
 	}
-	if hasRel {
-		parts, err := relationships.NewService(repos.Relationships, cfg.RelationshipModel, relationships.WithLimits(cfg.Limits))
-		if err != nil {
-			return Components{}, err
-		}
-		comps.Relationships = parts.Service
-		comps.RelationshipWriter = parts.RelationshipWriter
+	decisionOptions := []decisions.Option{decisions.WithLimits(cfg.Limits), decisions.WithDiagnosticObserver(cfg.DiagnosticObserver), decisions.WithTupleCache(cfg.TupleBackend, repos.TupleSource, cfg.TuplePolicy)}
+	if cfg.ModelOption != nil {
+		decisionOptions = append(decisionOptions, cfg.ModelOption)
 	}
-	if hasRoles {
-		svc, err := roles.NewService(repos.Roles)
-		if err != nil {
-			return Components{}, err
-		}
-		comps.Roles = svc
-	}
-	if cfg.TupleBackend != nil && !hasRel && !cfg.RoleModel.IsSet() {
-		return Components{}, fmt.Errorf("authorization: caching requires a decision model: %w", sdk.ErrInvalidInput)
-	}
-	if hasRel || cfg.RoleModel.IsSet() {
-		var err error
-		var roleReader decisions.RoleReader
-		if comps.Roles != nil {
-			roleReader = comps.Roles
-		}
-		comps.Decisions, err = decisions.NewService(
-			decisions.Readers{Relationships: comps.Relationships, Roles: roleReader, TupleSource: repos.TupleSource},
-			decisions.WithRoleModel(cfg.RoleModel),
-			decisions.WithLimits(cfg.Limits),
-			decisions.WithTupleCache(cfg.TupleBackend, cfg.TuplePolicy),
-		)
-		if err != nil {
-			return Components{}, err
-		}
+	var err error
+	comps.Decisions, err = decisions.NewService(repos.Tuples, decisionOptions...)
+	if err != nil {
+		return Components{}, err
 	}
 	comps.TupleCache = comps.Decisions.TupleCache()
+	roleOptions := []roles.Option{}
+	if comps.TupleCache != nil {
+		roleOptions = append(roleOptions, roles.WithSnapshots(comps.TupleCache))
+	}
+	comps.Roles, err = roles.NewService(repos.Tuples, roleOptions...)
+	if err != nil {
+		return Components{}, err
+	}
+	comps.RoleWriter, err = roles.NewWriter(repos.Tuples, roles.WithValidator(comps.Decisions.CompiledModel()))
+	if err != nil {
+		return Components{}, err
+	}
+	parts, err := relationships.NewService(repos.Tuples, relationships.WithValidator(comps.Decisions.CompiledModel()))
+	if err != nil {
+		return Components{}, err
+	}
+	comps.Relationships, comps.RelationshipWriter = parts.Service, parts.RelationshipWriter
 	mut, err := mutations.NewService(
 		repos.Mutations,
-		mutations.Services{Relationships: comps.Relationships, Roles: comps.Roles},
-		mutations.WithRoleModel(comps.Decisions.CompiledRoleModel()),
+		comps.Decisions,
 		mutations.WithGuard(cfg.Guard),
 		mutations.WithLimits(cfg.Limits),
 		mutations.WithLogger(comps.log),
@@ -150,7 +132,7 @@ func (c Components) Register(m pockets.Mount) error {
 	if c.HTTP == nil {
 		return fmt.Errorf("authorization: components are not initialized: %w", sdk.ErrInvalidInput)
 	}
-	c.log.Info("registered authorization pocket", "relationships", c.Relationships != nil, "roles", c.Roles != nil, "role_model", c.Decisions.CompiledRoleModel() != nil, "baseline_relationship_writes", c.RelationshipWriter != nil, "actor_mutations", c.Mutations.Guarded(), "role_routes", c.HTTP.RoutesEnabled())
+	c.log.Info("registered authorization pocket", "relationships", c.Relationships != nil, "roles", c.Roles != nil, "model", c.Decisions.CompiledModel() != nil, "baseline_relationship_writes", c.RelationshipWriter != nil, "actor_mutations", c.Mutations.Guarded(), "role_routes", c.HTTP.RoutesEnabled())
 	return c.HTTP.Register(m.Router)
 }
 func isTypedNil(value any) bool {

@@ -13,12 +13,12 @@ func BenchmarkTupleSourceBacklog(b *testing.B) {
 			for _, full := range []bool{false, true} {
 				b.Run(fmt.Sprintf("full=%t", full), func(b *testing.B) {
 					db, cfg := cacheFixture(b, true)
-					repos, err := Repositories(b.Context(), db, cacheOptions(cfg)...)
+					repos, err := testRepositories(b.Context(), db, cacheOptions(cfg)...)
 					if err != nil {
 						b.Fatal(err)
 					}
 					source := repos.TupleSource
-					table := cacheTable(cfg, "iam_relationships")
+					table := cacheTable(cfg, "iam_tuples")
 					if _, err := db.Exec(b.Context(), tupleInsert(table, "current")); err != nil {
 						b.Fatal(err)
 					}
@@ -29,7 +29,7 @@ func BenchmarkTupleSourceBacklog(b *testing.B) {
 					if err := source.Acknowledge(b.Context(), initial.Receipt, "initial", []string{initial.Changes[0].ID}); err != nil {
 						b.Fatal(err)
 					}
-					if _, err := db.Exec(b.Context(), "INSERT INTO "+table+" SELECT 'document','obsolete-'||i,'viewer','user','alice','' FROM generate_series(1,$1::integer) i", count); err != nil {
+					if _, err := db.Exec(b.Context(), "INSERT INTO "+table+" SELECT 2,'document','obsolete-'||i,'viewer','user','alice','' FROM generate_series(1,$1::integer) i", count); err != nil {
 						b.Fatal(err)
 					}
 					if _, err := db.Exec(b.Context(), "DELETE FROM "+table+" WHERE resource_id <> 'current'"); err != nil {

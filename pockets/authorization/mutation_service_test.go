@@ -10,6 +10,8 @@ import (
 	authmodel "github.com/gopernicus/gopernicus/pockets/authorization/logic/model"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/mutations"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/relationships"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuples"
+	"github.com/gopernicus/gopernicus/pockets/authorization/stores/memory"
 	"github.com/gopernicus/gopernicus/sdk"
 )
 
@@ -171,7 +173,7 @@ func mustComponents(t *testing.T, repos Repositories, opts ...Option) Components
 // TestConstructionReturnsComponents proves New returns the bundle: a
 // host-facing Service and a separately held SystemMutator, both non-nil.
 func TestConstructionReturnsComponents(t *testing.T) {
-	comps := mustComponents(t, Repositories{Relationships: &relFake{}, Roles: &roleFake{}}, WithRelationshipModel(validModel()))
+	comps := mustComponents(t, Repositories{Tuples: memory.NewTuples()}, WithModel(validModel()))
 	if comps.Mutations == nil {
 		t.Fatalf("Components is nil")
 	}
@@ -183,7 +185,7 @@ func TestConstructionReturnsComponents(t *testing.T) {
 // TestConstructionGuardWithoutMutationsFails proves a guard with no atomic write
 // path is a half-enabled system that fails at boot.
 func TestConstructionGuardWithoutMutationsFails(t *testing.T) {
-	_, err := New(Repositories{Roles: &roleFake{}}, WithGuard(&stubGuard{}))
+	_, err := New(Repositories{Tuples: memory.NewTuples()}, WithGuard(&stubGuard{}))
 	if !errors.Is(err, mutations.ErrGuardWithoutMutations) {
 		t.Fatalf("want ErrGuardWithoutMutations, got %v", err)
 	}
@@ -251,7 +253,7 @@ func teardownCmd(t *testing.T, reason string) mutations.TeardownResourceAuthoriz
 // before any write.
 func TestTeardownReasonRequired(t *testing.T) {
 	repo := &stubMutationRepo{receipt: &mutations.Result{Outcome: mutations.OutcomeApplied}}
-	comps := mustComponents(t, Repositories{Roles: &roleFake{}, Mutations: repo})
+	comps := mustComponents(t, Repositories{Tuples: memory.NewTuples(), Mutations: repo})
 
 	for _, reason := range []string{"", "   ", "bad\x00reason", string([]byte{0xff})} {
 		if _, err := comps.SystemMutator.TeardownResourceAuthorization(context.Background(), teardownCmd(t, reason)); !errors.Is(err, mutations.ErrTeardownReasonRequired) {
@@ -267,7 +269,7 @@ func TestTeardownReasonRequired(t *testing.T) {
 // record must stay bounded).
 func TestTeardownReasonTooLong(t *testing.T) {
 	repo := &stubMutationRepo{receipt: &mutations.Result{Outcome: mutations.OutcomeApplied}}
-	comps := mustComponents(t, Repositories{Roles: &roleFake{}, Mutations: repo})
+	comps := mustComponents(t, Repositories{Tuples: memory.NewTuples(), Mutations: repo})
 
 	long := strings.Repeat("x", mutations.MaxTeardownReasonLen+1)
 	if _, err := comps.SystemMutator.TeardownResourceAuthorization(context.Background(), teardownCmd(t, long)); !errors.Is(err, mutations.ErrTeardownReasonRequired) {
@@ -280,7 +282,7 @@ func TestTeardownReasonTooLong(t *testing.T) {
 
 // TestTeardownNotConfigured proves teardown fails closed with no atomic write path.
 func TestTeardownNotConfigured(t *testing.T) {
-	comps := mustComponents(t, Repositories{Roles: &roleFake{}})
+	comps := mustComponents(t, Repositories{Tuples: memory.NewTuples()})
 	if _, err := comps.SystemMutator.TeardownResourceAuthorization(context.Background(), teardownCmd(t, "why")); !errors.Is(err, mutations.ErrMutationsNotConfigured) {
 		t.Fatalf("want ErrMutationsNotConfigured, got %v", err)
 	}
@@ -344,7 +346,7 @@ func TestActorPurgeCannotWidenBound(t *testing.T) {
 // TeardownResourceAuthorization with a reason still reaches the trusted Apply path.
 func TestSystemMutatorApplyRejectsTeardown(t *testing.T) {
 	repo := &stubMutationRepo{receipt: &mutations.Result{Outcome: mutations.OutcomeApplied}}
-	comps := mustComponents(t, Repositories{Roles: &roleFake{}, Mutations: repo})
+	comps := mustComponents(t, Repositories{Tuples: memory.NewTuples(), Mutations: repo})
 
 	_, err := comps.SystemMutator.Apply(context.Background(), teardownSeamCommand(t))
 	if !errors.Is(err, mutations.ErrTeardownViaTypedMethod) {
@@ -367,7 +369,7 @@ func TestSystemMutatorApplyRejectsTeardown(t *testing.T) {
 
 func TestSystemMutatorRevokeRelationship(t *testing.T) {
 	repo := &stubMutationRepo{receipt: &mutations.Result{Outcome: mutations.OutcomeApplied}}
-	comps := mustComponents(t, Repositories{Roles: &roleFake{}, Mutations: repo})
+	comps := mustComponents(t, Repositories{Tuples: memory.NewTuples(), Mutations: repo})
 
 	cmd := mutations.RevokeRelationshipCommand{
 
@@ -395,4 +397,22 @@ func TestSystemMutatorRevokeRelationship(t *testing.T) {
 	if !errors.Is(err, mutations.ErrInvariantBlocked) || rec != nil {
 		t.Fatalf("guardian refusal: receipt=%+v err=%v", rec, err)
 	}
+}
+
+func (v *stubDecisionView) Contains(_ context.Context, f tuples.Tuple) (bool, error) {
+	v.reads = append(v.reads, mutations.Target{Kind: mutations.TargetResource, Type: f.Scope.Type, ID: f.Scope.ID})
+	return false, nil
+}
+func (v *stubDecisionView) ContainsMany(ctx context.Context, fs []tuples.Tuple) ([]bool, error) {
+	out := make([]bool, len(fs))
+	for i, f := range fs {
+		out[i], _ = v.Contains(ctx, f)
+	}
+	return out, nil
+}
+func (v *stubDecisionView) ReadSets(_ context.Context, keys []tuples.SetKey, _ int) ([][]tuples.Tuple, error) {
+	return make([][]tuples.Tuple, len(keys)), nil
+}
+func (v *stubDecisionView) Lookup(context.Context, tuples.Query) ([]tuples.Tuple, error) {
+	return nil, nil
 }

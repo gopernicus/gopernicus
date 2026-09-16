@@ -1,168 +1,207 @@
 ---
 title: Authorization
-description: Relationship-based authorization, roles, bounded evaluation, and guarded mutation.
+description: Exact roles and relationship permissions over one canonical tuple authority.
 ---
 
 # Authorization
 
-`pockets/authorization` is the flagship IAM pocket. It offers independently wireable authorization kinds:
+A user can hold both `owner` and `member` on the same project. Authorization stores
+these as independent facts and lets the host decide which facts grant permission.
+Exact roles need no graph model. Applications that need relationship traversal can
+use the same facts through one permission evaluator.
 
-- **relationships**: schema-driven ReBAC with direct relations, exact usersets, group expansion, and through traversal;
-- **roles**: opaque role assignments, either global or attached to a resource, with optional permission rules supplied by the host.
+Other pockets accept narrow check collaborators; this pocket remains optional.
+Hosts own policy, database connections, migrations and HTTP gates.
 
-## Choose a posture first
-
-Authorization is supported, not required.
-
-| Posture | Host choice | Pocket dependency |
-|---|---|---|
-| none | leave consuming authorization seams nil; gated subsystems stay absent | none |
-| host-authored | supply a narrow check closure over host data | none |
-| flagship | construct this pocket with relationships, roles, or both | authorization core + chosen store |
-
-Other pockets accept check-shaped collaborators. They do not require the flagship module.
-
-## Construction returns components
+## One fact model
 
 ```go
-components, err := authorization.New(repos,
-    authorization.WithRelationshipModel(relationshipModel),
-    authorization.WithRoleModel(roleModel),
-)
-if err != nil {
-    return err
-}
-
-if err := components.Register(mount); err != nil {
-    return err
+fact := tuples.Tuple{
+    Scope: tuples.On("project", "p1"),
+    Relation: "owner",
+    Subject: tuples.SubjectRef{Type: "user", ID: "u1"},
 }
 ```
 
-The root assembles public components with distinct responsibilities:
+The whole scope, relation and subject identify the fact. Exact duplicates are
+idempotent; different labels coexist. `tuples.Global()` explicitly names global
+scope. Zero scope is invalid. Global grants are never wildcards.
 
-| Component | Public owner | Purpose |
-|---|---|---|
-| `Decisions` | `logic/decisions.Service` | check, explain, lookup and filtered list operations |
-| `Relationships` | `logic/relationships.Service` | relationship reads, schema and ReBAC evaluation |
-| `Roles` | `logic/roles.Service` | role assignment reads |
-| `Mutations` | `logic/mutations.Service` | atomic actor-facing guarded changes |
-| `HTTP` | `inbound/http.Adapter` | permission middleware and optional role administration routes |
-| `RelationshipWriter` / `SystemMutator` | separate writer types | explicitly held trusted changes |
+Concrete `group:g1` and userset `group:g1#member` are different subjects. A userset
+expands only where the model permits that exact relation. Role and relationship
+facades read and write the same canonical authority, `iam_tuples` in SQL.
 
-Only configured components are present. Shared principal, check and role-model
-vocabulary lives in `logic/model`; persistence ports live with their owners.
-Hosts may construct these public services and adapters directly. Their state
-and implementation helpers remain private.
-
-Bundled role-administration routes mount only with a configured host gate and
-guarded mutation service. `Register` starts no background work. A host can skip
-bundled routes and use the public middleware on its own routes.
-
-## Constructor options
-
-Repositories remain explicit in `New(repos, opts ...Option)`. Models and budgets
-are coherent values: `WithRelationshipModel(schema)`, `WithRoleModel(roleModel)`
-and `WithLimits(model.EvaluationLimits{...})`. Use `WithGuard` for actor policy and
-`WithLogger` for diagnostics. `WithRoleRoutes(authorizationhttp.RoleRoutes{...})`
-groups the optional gate, assignment pre-check and listing strategy.
-
-Every option replaces its entire setting or group. `WithRoleRoutes(RoleRoutes{})`
-clears a previous gate and assignment policy, leaving handlers disabled. An
-assignment policy without a gate fails construction; an invalid list strategy
-fails even without a gate. Nil options return `sdk.ErrInvalidInput` errors.
-Model options snapshot source maps and slices when created; constructed services
-compile immutable models. Host services, callbacks and loggers remain borrowed.
-
-Focused constructors use the same convention:
+## Exact membership
 
 ```go
-checks, err := decisions.NewService(
-    decisions.Readers{Relationships: relationshipService, Roles: roleService},
-    decisions.WithRoleModel(roleModel),
-)
+components, err := authorization.New(repos) // repos.Tuples is required
 if err != nil { return err }
 
-writes, err := mutations.NewService(
-    mutationRepository,
-    mutations.Services{Relationships: relationshipService, Roles: roleService},
-    mutations.WithRoleModel(checks.CompiledRoleModel()),
+held, err := components.Roles.HasRole(ctx, principal, "admin")
+heldHere, err := components.Roles.HasRoleIn(ctx, principal, "owner", resource)
+```
+
+`HasRole` checks exact global membership. `HasRoleIn` checks exact membership on
+one resource, with no global fallback or userset expansion. The explicit
+`HasRoleInOrGlobal` helper probes both scopes in one snapshot.
+
+Use one expression when facts jointly govern a result:
+
+```go
+result, err := components.Decisions.Evaluate(ctx, principal,
+    decisions.All(
+        decisions.Role("active"),
+        decisions.Any(decisions.Role("admin"), decisions.RoleIn("owner", resource)),
+    ),
+)
+```
+
+Separate calls joined with Go's `&&` can observe different committed states.
+The expression evaluates against one coherent view.
+
+## Named permissions and graph traversal
+
+`authorization.WithModel(decisions.Model{...})` adds one optional model. Resource
+relations declare allowed subject shapes; named permissions contain expressions.
+
+| Expression | Meaning |
+| --- | --- |
+| `Role("admin")` | Exact global fact |
+| `RoleIn("owner")` | Exact fact on the resource being checked |
+| `Direct("member")` | Model-permitted concrete/userset membership |
+| `Through("parent", "view")` | Follow resource targets to their permission |
+| `Permission("edit")` | Another named permission |
+| `All(...)`, `Any(...)` | Ordered conjunction/disjunction |
+
+The entire expression is validated before I/O. Evaluation short-circuits in
+order, honors cancellation and rejects empty/malformed expressions. Depth,
+states, steps, relation fan-out, batches, lookup results and candidate scans are
+bounded. Errors fail closed; exhausted budgets return an indeterminate error,
+never a partial allow.
+
+Models are immutable snapshots. A permission label does not create an implicit
+write-time role catalog. Structurally valid opaque assignments remain legal;
+explicit subject-shape constraints are enforced through model-bound writers.
+
+## Components and construction
+
+| Component | Purpose |
+| --- | --- |
+| `Decisions` | Evaluate, check, explain, batch, filter and lookup |
+| `Roles` | Exact checks and concrete assignment listings |
+| `Relationships` | Resource-scoped fact facade over the canonical tuples |
+| `Mutations` | Optional guarded actor writes |
+| `HTTP` | Permission middleware and optional role administration |
+| `RelationshipWriter`, `RoleWriter`, `SystemMutator` | Separately held trusted capabilities |
+| `TupleCache` | Optional raw mirror runtime |
+
+`Repositories.Tuples` is required and backs both role and relationship facades.
+`Mutations` and `Audit` are optional capabilities. `WithGuard` requires an atomic mutation repository; nil
+disables actor writes. Options replace whole values in order. Nil options and
+typed-nil dependencies fail construction. Constructors start no workers.
+
+Focused constructors take canonical ports directly:
+
+```go
+checks, err := decisions.NewService(tupleStore, decisions.WithModel(policy))
+if err != nil { return err }
+writes, err := mutations.NewService(mutationRepository, checks,
     mutations.WithGuard(hostGuard),
 )
-if err != nil { return err }
-
-adapter, err := authorizationhttp.New(
-    authorizationhttp.Services{Decisions: checks, Roles: roleService, Mutations: writes.Service},
-    authorizationhttp.WithRoleRoutes(authorizationhttp.RoleRoutes{Gate: hostGate}),
-)
-if err != nil { return err }
 ```
 
-Services with relationships inherit that service's limits when `WithLimits` is
-omitted or entirely zero. Explicit limits must resolve to the same budget.
-Only supply initialized interface-valued services; typed-nil dependencies fail
-construction. The root assembly handles optional component wiring automatically.
+All contributing reads share one snapshot. PostgreSQL ambient decisions require
+REPEATABLE READ or SERIALIZABLE; `pgxdb.TransactSnapshot` provides a read-write
+REPEATABLE READ workflow. Default READ COMMITTED is rejected before evaluation.
+SQLite BEGIN IMMEDIATE preserves the host's pending writes. Callback readers
+cannot outlive the callback. Guarded writes use their own serialized boundary.
 
-## Relationship model
+## Writes and audit
 
-The host registers an immutable schema as code/data. A resource declares legal relations and permissions derived from them. Checks are pure evaluation against that compiled schema and relationship tuples.
+Trusted raw writers bypass actor guards and guardian minima. Guarded commands
+must authorize through the supplied `DecisionView`; outer checks would introduce
+a check-then-write race. `SystemMutator` bypasses the actor guard while retaining
+shape validation and guardian invariants.
 
-Platform-admin and self-access are not hidden engine bypasses. Model platform administration as data and compose any self rule in the host's check closure before calling the engine.
+Use an exact `OpBatch` remove/add delta for a swap, or `OpReconcile` for the
+subjects of one named relation. Other labels remain intact. Command and affected
+row bounds preserve atomicity. `OpReplace` is removed.
 
-The engine distinguishes exact usersets. A relation to `group:eng#member` does not accidentally grant through `group:eng#admin`. Evaluation is cycle-safe, cancellation-aware, and bounded by configured depth/state/result limits.
+Guardian rules count concrete canonical facts through every guarded facade,
+including role unassignment. Resource teardown is a separately held trusted
+operation with a required reason. Global facts survive resource teardown.
 
-If an evaluation limit is reached, the result is indeterminate—not a denial that may be cached as policy truth. HTTP gates fail closed and can report service unavailable for limit exhaustion.
+Store `WithAudit()` records one canonical `Change{Action, Tuple}` delta atomically.
+No-op, denied and rolled-back writes add no history. Trusted writes supply
+`audit.WithSource`; actor writes use authenticated attribution. Hosts own audit
+access and retention.
 
-## Nil semantics
+## HTTP
 
-| Field | Meaning |
-|---|---|
-| `Repositories.Relationships` | relationship kind off when nil; requires `WithRelationshipModel` when present |
-| `Repositories.Roles` | role kind off when nil |
-| both kinds nil | construction error |
-| `Repositories.Mutations` | optional high-integrity mutation path; required with guard/system mutation |
-| `WithGuard` | nil disables actor-facing guarded mutations; never default-allow |
-| Store `WithAudit()` | optional atomic change history for raw, trusted and guarded writes; host owns access and retention |
-| `WithLimits` | zero fields choose safe defaults; negative values error |
-
-## Middleware gate
-
-The HTTP adapter produces SDK web middleware for either model-bearing kind:
+Compose route policy with the public `inbound/http` adapter:
 
 ```go
-router.GET(
-    "/projects/{id}",
-    showProject,
-    authenticationComponents.HTTP.RequireAccessToken(),
-    components.HTTP.RequirePermissionOn("project", "view", "id"),
-)
+document := authorizationhttp.Path("document", "documentID")
+guard := components.HTTP.Require(authorizationhttp.Any(
+    authorizationhttp.HasRole("admin", authorizationhttp.Global()),
+    authorizationhttp.All(
+        authorizationhttp.HasRole("reviewer", document),
+        authorizationhttp.Can("publish", document),
+    ),
+))
 ```
 
-`RequirePermissionOn` resolves the named path parameter and validates the
-resource/permission pair at route registration. `RequirePermissionFixed` covers
-fixed resources; `RequirePermission` accepts a custom resolver. A roles-only host
-without a role permission model cannot build permission gates. The public
-`authorizationhttp.New` constructor accepts a narrow decision-service contract
-for hosts constructing adapters independently.
+`All` requires every check; `Any` requires at least one. `HasRole(label, target)`
+checks exact concrete membership and works without a model.
+`HasRelationship(label, target)` checks a declared relation with userset expansion;
+`Can(permission, target)` checks a declared named permission. Use `Global`,
+`Fixed(type, id)`, `Path(type, parameter)` or `Resource(type, resolver)` targets.
+Only exact roles accept global scope.
 
-No principal returns 401, a false decision returns 403, evaluation-limit exhaustion returns 503, and resolver/infrastructure errors fail closed.
+`Require` validates every branch at mount and evaluates one coherent tuple
+snapshot with one shared budget. Checks and resource resolution are ordered and
+short-circuit; encountered errors abort. Reuse a target value to resolve it once
+per request, including cache fallback. Custom resolvers are read-only and must
+respect cancellation; their own datastore reads do not automatically join the
+tuple snapshot. Only resolver `ErrAlternativeNotApplicable` means a false check.
 
-## Mutation paths
+No principal returns 401; denial returns 403; budget exhaustion returns 503;
+other errors return 500 and fail closed. Empty groups and malformed or undeclared
+checks are rejected at registration. `Adapter.Require` is the single middleware
+entry point. Put compound policy inside one `All` or `Any` expression to share
+one snapshot and evaluation budget. HTTP depends only on expression validation
+and evaluation; the decision service owns the policy rules and limits.
 
-The pocket exposes two relationship write postures:
+Bundled role routes require a host authentication/authorization gate and guarded
+mutations. Assignment JSON uses explicit scope:
 
-- a baseline desired-state `RelationshipWriter` for trusted host workflows;
-- optional guarded mutations with current-model validation, guardian protection and atomic writes; store-level `WithAudit()` records actual committed additions/removals with actor or system attribution.
+```json
+{"subject_type":"user","subject_id":"u1","role":"owner","scope":{"kind":"resource","resource_type":"project","resource_id":"p1"}}
+```
 
-Use guarded mutations for actor-facing access changes and sensitive administrative workflows. Use the trusted system surface only for bootstrap, migrations, or workflows whose authorization was already proven elsewhere.
+Global scope is `{"kind":"global"}`. The old flat resource fields, effective-role
+route and `same_role_grant_remains` field are removed.
 
-## Stores and conformance
+## Stores and TupleCache
 
-The public `stores/memory`, pgx, Turso and Firestore stores all run the same conformance suite. It covers adversarial graph shapes, exact usersets, cycles, bounded evaluation, role scoping, state convergence, raw/guarded concurrency, atomic audit history, last-owner invariants, and check/lookup parity.
+Memory, PostgreSQL and Turso/SQLite share conformance tests. Authorization
+Firestore is removed; unrelated Firestore modules remain.
 
-Store constructors probe required tables at boot. Export the authorization migration source into the host's ledger and apply it before constructing repositories.
+TupleCache optionally mirrors raw global/resource facts in Redis. SQL remains
+authoritative; permission answers are evaluated on every operation. Roles and
+graph expressions share cache freshness. Expired, unavailable or changing mirrors
+retry the whole operation against SQL. Guards remain durable.
 
-Audit readers are exposed as `Repositories.Audit`. Trusted/raw calls use
-`audit.WithSource(ctx, audit.Source{System: "bootstrap"})` from `logic/audit`
-when recording is enabled. Guarded calls attribute changes to their actor. No-op,
-denied and rolled-back changes add no history. SQL migration `0007` removes the
-receipt/revision tables and adds `iam_audit`; see the repository’s `AUDIT.md` entry AUDIT-026.
+A positive host-chosen `MaxStaleness` bounds revocation lag. The host supervises
+polling, shutdown and capacity. Cache protocol 2 has a versioned Redis prefix and
+explicit scope. Upgrade core, SQL adapter, Redis adapter and the required pgxdb
+connector together. SQL setup applies one fresh `0001_iam_tuples.sql` containing
+facts and audit, then optionally `tuple_cache_migrations/0002_iam_tuple_cache.sql`.
+There is no bundled old-schema conversion or downgrade stream.
+
+Raw tuple lookup resumes from `Query.After *Tuple`; `tuples.Compare` defines the
+canonical order. User-facing list cursors remain opaque and versioned. Custom
+adapters need no private tuple-key import.
+
+See the repository's `pockets/authorization/README.md`, `stores/UPGRADE.md` and
+`BENCHMARKS.md` for complete APIs, schema setup and verification.

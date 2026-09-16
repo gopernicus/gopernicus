@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuples"
+
 	authmodel "github.com/gopernicus/gopernicus/pockets/authorization/logic/model"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/mutations"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/roles"
@@ -25,7 +27,6 @@ var roleRoutes = []struct{ method, path string }{
 	{"POST", "/authorization/roles/unassign"},
 	{"GET", "/authorization/roles/by-subject?subject_type=user&subject_id=u-1"},
 	{"GET", "/authorization/roles/by-resource?resource_type=organization&resource_id=o-1"},
-	{"GET", "/authorization/roles/effective?resource_type=organization&resource_id=o-1"},
 }
 
 // stubRoleAdmin records what the handlers forwarded and returns canned answers.
@@ -40,11 +41,10 @@ type stubRoleAdmin struct {
 	listSubject   [2]string
 	listScope     [2]string
 
-	receipt   *mutations.Result
-	remains   bool
-	err       error
-	page      list.Page[roles.Assignment]
-	effective list.Page[roles.EffectiveGrant]
+	receipt *mutations.Result
+	remains bool
+	err     error
+	page    list.Page[roles.Assignment]
 }
 
 func (s *stubRoleAdmin) AssignRole(_ context.Context, actor mutations.Actor, req mutations.AssignRoleCommand) (*mutations.Result, error) {
@@ -59,7 +59,7 @@ func (s *stubRoleAdmin) UnassignRole(_ context.Context, actor mutations.Actor, r
 	if s.receipt == nil {
 		return mutations.UnassignRoleResult{}, s.err
 	}
-	return mutations.UnassignRoleResult{Outcome: s.receipt.Outcome, SameRoleGrantRemains: s.remains}, s.err
+	return mutations.UnassignRoleResult{Outcome: s.receipt.Outcome}, s.err
 }
 
 func (s *stubRoleAdmin) ListRoleAssignmentsBySubject(_ context.Context, subject authmodel.PrincipalRef, req list.Request) (list.Page[roles.Assignment], error) {
@@ -68,16 +68,10 @@ func (s *stubRoleAdmin) ListRoleAssignmentsBySubject(_ context.Context, subject 
 	return s.page, s.err
 }
 
-func (s *stubRoleAdmin) ListRoleAssignmentsByResource(_ context.Context, resourceType, resourceID string, req list.Request) (list.Page[roles.Assignment], error) {
-	s.listScope = [2]string{resourceType, resourceID}
+func (s *stubRoleAdmin) ListRoleAssignmentsByScope(_ context.Context, scope tuples.Scope, req list.Request) (list.Page[roles.Assignment], error) {
+	s.listScope = [2]string{scope.Type, scope.ID}
 	s.listReq = req
 	return s.page, s.err
-}
-
-func (s *stubRoleAdmin) ListEffectiveRoleGrantsByResource(_ context.Context, resourceType, resourceID string, req list.Request) (list.Page[roles.EffectiveGrant], error) {
-	s.listScope = [2]string{resourceType, resourceID}
-	s.listReq = req
-	return s.effective, s.err
 }
 
 // testReceipt is a fully-populated receipt so the wire projection can be
@@ -144,7 +138,7 @@ func TestGateWrapsEveryRoute(t *testing.T) {
 	stub := &stubRoleAdmin{receipt: testReceipt()}
 	h := newFixture(stub, counting, "")
 	for _, rt := range roleRoutes {
-		doJSON(t, h, rt.method, rt.path, `{"subject_type":"user","subject_id":"u-1","role":"viewer"}`)
+		doJSON(t, h, rt.method, rt.path, `{"subject_type":"user","subject_id":"u-1","role":"viewer","scope":{"kind":"global"}}`)
 	}
 	if seen != len(roleRoutes) {
 		t.Fatalf("gate ran on %d routes, want %d", seen, len(roleRoutes))
@@ -162,7 +156,7 @@ func TestGateDenialIsTheOnlyResponse(t *testing.T) {
 	stub := &stubRoleAdmin{receipt: testReceipt()}
 	h := newFixture(stub, deny, "")
 	for _, rt := range roleRoutes {
-		rec := doJSON(t, h, rt.method, rt.path, `{"subject_type":"user","subject_id":"u-1","role":"viewer"}`)
+		rec := doJSON(t, h, rt.method, rt.path, `{"subject_type":"user","subject_id":"u-1","role":"viewer","scope":{"kind":"global"}}`)
 		if rec.Code != http.StatusForbidden {
 			t.Errorf("%s %s = %d, want 403", rt.method, rt.path, rec.Code)
 		}
@@ -178,7 +172,7 @@ func TestMissingPrincipalIs401(t *testing.T) {
 	stub := &stubRoleAdmin{receipt: testReceipt()}
 	h := newFixture(stub, passGate, "")
 	for _, path := range []string{"/authorization/roles", "/authorization/roles/unassign"} {
-		rec := doJSON(t, h, "POST", path, `{"subject_type":"user","subject_id":"u-1","role":"viewer"}`)
+		rec := doJSON(t, h, "POST", path, `{"subject_type":"user","subject_id":"u-1","role":"viewer","scope":{"kind":"global"}}`)
 		if rec.Code != http.StatusUnauthorized {
 			t.Errorf("POST %s = %d, want 401", path, rec.Code)
 		}
@@ -192,14 +186,14 @@ func TestMissingPrincipalIs401(t *testing.T) {
 func TestAssignForwardsActorAndCommand(t *testing.T) {
 	stub := &stubRoleAdmin{receipt: testReceipt()}
 	h := newFixture(stub, adminGate(), "")
-	body := `{"subject_type":"user","subject_id":"u-1","role":"viewer","resource_type":"organization","resource_id":"o-1"}`
+	body := `{"subject_type":"user","subject_id":"u-1","role":"viewer","scope":{"kind":"resource","resource_type":"organization","resource_id":"o-1"}}`
 	rec := doJSON(t, h, "POST", "/authorization/roles", body)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
 	}
 	want := mutations.AssignRoleCommand{
 		Subject: authmodel.PrincipalRef{Type: "user", ID: "u-1"},
-		Role:    "viewer", ResourceType: "organization", ResourceID: "o-1",
+		Role:    "viewer", Scope: tuples.On("organization", "o-1"),
 	}
 	if stub.assignActor.PrincipalRef != (authmodel.PrincipalRef{Type: "user", ID: "admin-1"}) {
 		t.Errorf("actor = %+v", stub.assignActor)
@@ -213,7 +207,7 @@ func TestAssignForwardsActorAndCommand(t *testing.T) {
 // documented fields, and none of the integrity digests.
 func TestAssignResultWireShape(t *testing.T) {
 	h := newFixture(&stubRoleAdmin{receipt: testReceipt()}, adminGate(), "")
-	rec := doJSON(t, h, "POST", "/authorization/roles", `{"subject_type":"user","subject_id":"u-1","role":"viewer"}`)
+	rec := doJSON(t, h, "POST", "/authorization/roles", `{"subject_type":"user","subject_id":"u-1","role":"viewer","scope":{"kind":"global"}}`)
 	var got map[string]any
 	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
 		t.Fatal(err)
@@ -225,27 +219,15 @@ func TestAssignResultWireShape(t *testing.T) {
 
 // TestUnassignCarriesSameRoleGrantRemains proves the annotation is top-level on
 // the unassign envelope and honest about its value.
-func TestUnassignCarriesSameRoleGrantRemains(t *testing.T) {
-	for _, remains := range []bool{true, false} {
-		stub := &stubRoleAdmin{receipt: testReceipt(), remains: remains}
-		h := newFixture(stub, adminGate(), "")
-		rec := doJSON(t, h, "POST", "/authorization/roles/unassign", `{"subject_type":"user","subject_id":"u-1","role":"viewer","resource_type":"organization","resource_id":"o-1"}`)
-		if rec.Code != http.StatusOK {
-			t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
-		}
-		var got struct {
-			MutationResult       map[string]any `json:"receipt"`
-			SameRoleGrantRemains bool           `json:"same_role_grant_remains"`
-		}
-		if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
-			t.Fatalf("decode: %v", err)
-		}
-		if got.SameRoleGrantRemains != remains {
-			t.Errorf("same_role_grant_remains = %v, want %v", got.SameRoleGrantRemains, remains)
-		}
-		if _, inReceipt := got.MutationResult["same_role_grant_remains"]; inReceipt {
-			t.Error("same_role_grant_remains is inside the receipt; it belongs top-level only")
-		}
+func TestUnassignReturnsOnlyExactOutcome(t *testing.T) {
+	h := newFixture(&stubRoleAdmin{receipt: testReceipt()}, adminGate(), "")
+	rec := doJSON(t, h, "POST", "/authorization/roles/unassign", `{"subject_type":"user","subject_id":"u-1","role":"viewer","scope":{"kind":"global"}}`)
+	var result map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if rec.Code != 200 || len(result) != 1 || result["outcome"] != "applied" {
+		t.Fatalf("obsolete fallback annotation: %d %s", rec.Code, rec.Body.String())
 	}
 }
 
@@ -261,7 +243,7 @@ func TestCommittedOutcomesReturnFlatResults(t *testing.T) {
 		receipt.Outcome = outcome
 		stub := &stubRoleAdmin{receipt: receipt}
 		h := newFixture(stub, adminGate(), "")
-		rec := doJSON(t, h, "POST", "/authorization/roles", `{"subject_type":"user","subject_id":"u-1","role":"viewer"}`)
+		rec := doJSON(t, h, "POST", "/authorization/roles", `{"subject_type":"user","subject_id":"u-1","role":"viewer","scope":{"kind":"global"}}`)
 		if rec.Code != http.StatusOK {
 			t.Errorf("outcome %q → %d, want 200", outcome, rec.Code)
 		}
@@ -285,7 +267,7 @@ func TestServiceErrorsMapThroughDomainError(t *testing.T) {
 		want int
 	}{
 		{"malformed command", fmt.Errorf("missing subject: %w", sdk.ErrInvalidInput), http.StatusBadRequest},
-		{"semantic conflict", mutations.ErrSemanticConflict, http.StatusConflict},
+
 		{"invariant refusal", mutations.ErrInvariantBlocked, http.StatusConflict},
 		{"guard denial", fmt.Errorf("denied: %w", sdk.ErrForbidden), http.StatusForbidden},
 		{"unwrapped policy error", fmt.Errorf("host policy blew up"), http.StatusInternalServerError},
@@ -294,7 +276,7 @@ func TestServiceErrorsMapThroughDomainError(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			stub := &stubRoleAdmin{err: tc.err}
 			h := newFixture(stub, adminGate(), "")
-			rec := doJSON(t, h, "POST", "/authorization/roles", `{"subject_type":"user","subject_id":"u-1","role":"viewer"}`)
+			rec := doJSON(t, h, "POST", "/authorization/roles", `{"subject_type":"user","subject_id":"u-1","role":"viewer","scope":{"kind":"global"}}`)
 			if rec.Code != tc.want {
 				t.Errorf("status = %d, want %d (body %s)", rec.Code, tc.want, rec.Body.String())
 			}
@@ -349,10 +331,6 @@ func TestListingsRequireBothQueryValues(t *testing.T) {
 		"/authorization/roles/by-resource?resource_type=organization",
 		"/authorization/roles/by-resource?resource_id=o-1",
 		"/authorization/roles/by-resource?resource_type=&resource_id=",
-		"/authorization/roles/effective",
-		"/authorization/roles/effective?resource_type=organization",
-		"/authorization/roles/effective?resource_id=o-1",
-		"/authorization/roles/effective?resource_type=&resource_id=",
 	}
 	for _, path := range cases {
 		stub := &stubRoleAdmin{}
@@ -373,7 +351,6 @@ func TestListingsRejectSearch(t *testing.T) {
 	paths := []string{
 		"/authorization/roles/by-subject?subject_type=user&subject_id=u-1&q=admin",
 		"/authorization/roles/by-resource?resource_type=organization&resource_id=o-1&q=admin",
-		"/authorization/roles/effective?resource_type=organization&resource_id=o-1&q=admin",
 	}
 	for _, path := range paths {
 		stub := &stubRoleAdmin{}
@@ -399,14 +376,11 @@ func TestListingsParseOrderAgainstTheirAllowList(t *testing.T) {
 		wantCode  int
 	}{
 		{"by-subject default", "/authorization/roles/by-subject?subject_type=user&subject_id=u-1", roles.DefaultOrder, http.StatusOK},
-		{"by-subject explicit", "/authorization/roles/by-subject?subject_type=user&subject_id=u-1&order=role_key:asc", list.NewOrder("role_key", list.ASC), http.StatusOK},
+		{"by-subject explicit", "/authorization/roles/by-subject?subject_type=user&subject_id=u-1&order=tuple_key:asc", list.NewOrder("tuple_key", list.ASC), http.StatusOK},
 		{"by-subject unknown field", "/authorization/roles/by-subject?subject_type=user&subject_id=u-1&order=grant_key", list.Order{}, http.StatusBadRequest},
 		{"by-subject retired timestamp", "/authorization/roles/by-subject?subject_type=user&subject_id=u-1&order=created_at", list.Order{}, http.StatusBadRequest},
 		{"by-resource default", "/authorization/roles/by-resource?resource_type=organization&resource_id=o-1", roles.DefaultOrder, http.StatusOK},
 		{"by-resource retired timestamp", "/authorization/roles/by-resource?resource_type=organization&resource_id=o-1&order=created_at", list.Order{}, http.StatusBadRequest},
-		{"effective default", "/authorization/roles/effective?resource_type=organization&resource_id=o-1", roles.DefaultEffectiveOrder, http.StatusOK},
-		{"effective explicit", "/authorization/roles/effective?resource_type=organization&resource_id=o-1&order=grant_key:desc", list.NewOrder("grant_key", list.DESC), http.StatusOK},
-		{"effective rejects the raw field", "/authorization/roles/effective?resource_type=organization&resource_id=o-1&order=role_key", list.Order{}, http.StatusBadRequest},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -453,73 +427,17 @@ func TestListingsParseLimitAndStrategy(t *testing.T) {
 // page envelope.
 func TestListingWireShapes(t *testing.T) {
 	total := int64(2)
-	stub := &stubRoleAdmin{
-		page: list.Page[roles.Assignment]{
-			Items: []roles.Assignment{{
-				SubjectType: "user", SubjectID: "u-1", Role: "viewer",
-				ResourceType: "organization", ResourceID: "o-1",
-			}},
-			NextCursor: "cur", HasMore: true, Total: &total,
-		},
-		effective: list.Page[roles.EffectiveGrant]{
-			Items: []roles.EffectiveGrant{{SubjectType: "user", SubjectID: "u-2", Role: "steward", Direct: false, Global: true}},
-		},
+	stub := &stubRoleAdmin{page: list.Page[roles.Assignment]{Items: []roles.Assignment{{SubjectType: "user", SubjectID: "u-1", Role: "viewer", Scope: tuples.On("organization", "o-1")}}, NextCursor: "cur", HasMore: true, Total: &total}}
+	rec := doJSON(t, newFixture(stub, adminGate(), ""), "GET", "/authorization/roles/by-subject?subject_type=user&subject_id=u-1", "")
+	var got pageResponse[assignmentResponse]
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
 	}
-	h := newFixture(stub, adminGate(), "")
-
-	rec := doJSON(t, h, "GET", "/authorization/roles/by-subject?subject_type=user&subject_id=u-1", "")
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	if rec.Code != 200 || got.NextCursor != "cur" || !got.HasMore || got.Total == nil || *got.Total != 2 || len(got.Items) != 1 || got.Items[0].Scope != tuples.On("organization", "o-1") {
+		t.Fatalf("wire: %d %s", rec.Code, rec.Body.String())
 	}
-	var raw struct {
-		Items      []map[string]any `json:"items"`
-		NextCursor string           `json:"next_cursor"`
-		HasMore    bool             `json:"has_more"`
-		Total      *int64           `json:"total"`
-	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &raw); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-	if raw.NextCursor != "cur" || !raw.HasMore || raw.Total == nil || *raw.Total != total {
-		t.Errorf("page envelope = %+v, want the list.Page projection", raw)
-	}
-	wantItem := map[string]any{
-		"subject_type": "user", "subject_id": "u-1", "role": "viewer",
-		"resource_type": "organization", "resource_id": "o-1",
-	}
-	if len(raw.Items) != 1 {
-		t.Fatalf("items = %d, want 1", len(raw.Items))
-	}
-	if len(raw.Items[0]) != len(wantItem) {
-		t.Errorf("assignment has %d fields %v, want exactly %d", len(raw.Items[0]), raw.Items[0], len(wantItem))
-	}
-	for k, v := range wantItem {
-		if raw.Items[0][k] != v {
-			t.Errorf("assignment[%q] = %v, want %v", k, raw.Items[0][k], v)
-		}
-	}
-
-	rec = doJSON(t, h, "GET", "/authorization/roles/effective?resource_type=organization&resource_id=o-1", "")
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
-	}
-	var grants struct {
-		Items []map[string]any `json:"items"`
-	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &grants); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-	wantGrant := map[string]any{"subject_type": "user", "subject_id": "u-2", "role": "steward", "direct": false, "global": true}
-	if len(grants.Items) != 1 {
-		t.Fatalf("items = %d, want 1", len(grants.Items))
-	}
-	if len(grants.Items[0]) != len(wantGrant) {
-		t.Errorf("effective grant has %d fields %v, want exactly %d", len(grants.Items[0]), grants.Items[0], len(wantGrant))
-	}
-	for k, v := range wantGrant {
-		if grants.Items[0][k] != v {
-			t.Errorf("grant[%q] = %v, want %v", k, grants.Items[0][k], v)
-		}
+	if strings.Contains(rec.Body.String(), "direct") || strings.Contains(rec.Body.String(), "grant_remains") {
+		t.Fatalf("obsolete provenance: %s", rec.Body.String())
 	}
 }
 
@@ -537,21 +455,17 @@ func TestListingsForwardTheirScope(t *testing.T) {
 	if stub.listScope != [2]string{"section", "s-4"} {
 		t.Errorf("by-resource forwarded %v", stub.listScope)
 	}
-	doJSON(t, h, "GET", "/authorization/roles/effective?resource_type=page&resource_id=p-2", "")
-	if stub.listScope != [2]string{"page", "p-2"} {
-		t.Errorf("effective forwarded %v", stub.listScope)
-	}
+
 }
 
 // TestDomainErrorsUsePocketCodes proves every role endpoint maps the same
 // domain failure to the same public status and stable authorization code.
 func TestDomainErrorsUsePocketCodes(t *testing.T) {
 	routes := []struct{ method, path, body string }{
-		{"POST", "/authorization/roles", `{"subject_type":"user","subject_id":"u-1","role":"viewer"}`},
-		{"POST", "/authorization/roles/unassign", `{"subject_type":"user","subject_id":"u-1","role":"viewer"}`},
+		{"POST", "/authorization/roles", `{"subject_type":"user","subject_id":"u-1","role":"viewer","scope":{"kind":"global"}}`},
+		{"POST", "/authorization/roles/unassign", `{"subject_type":"user","subject_id":"u-1","role":"viewer","scope":{"kind":"global"}}`},
 		{"GET", "/authorization/roles/by-subject?subject_type=user&subject_id=u-1", ""},
 		{"GET", "/authorization/roles/by-resource?resource_type=organization&resource_id=o-1", ""},
-		{"GET", "/authorization/roles/effective?resource_type=organization&resource_id=o-1", ""},
 	}
 	for _, rt := range routes {
 		h := newFixture(&stubRoleAdmin{err: fmt.Errorf("write aborted: %w", mutations.ErrConcurrentMutation)}, adminGate(), "")
@@ -568,10 +482,28 @@ func TestDomainErrorsUsePocketCodes(t *testing.T) {
 // TestOtherDomainErrorsUseSDKMapping preserves ordinary host-domain failures.
 func TestOtherDomainErrorsUseSDKMapping(t *testing.T) {
 	h := newFixture(&stubRoleAdmin{err: fmt.Errorf("denied: %w", sdk.ErrForbidden)}, adminGate(), "")
-	rec := doJSON(t, h, "POST", "/authorization/roles", `{"subject_type":"user","subject_id":"u-1","role":"viewer"}`)
+	rec := doJSON(t, h, "POST", "/authorization/roles", `{"subject_type":"user","subject_id":"u-1","role":"viewer","scope":{"kind":"global"}}`)
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("status = %d, want 403 (body %s)", rec.Code, rec.Body.String())
 	}
 }
 
 func (s *stubRoleAdmin) Guarded() bool { return true }
+
+func TestRoleHTTPRequiresExplicitScopeAndRetiresEffectiveListing(t *testing.T) {
+	stub := &stubRoleAdmin{receipt: testReceipt()}
+	h := newFixture(stub, adminGate(), "")
+	for _, body := range []string{`{"subject_type":"user","subject_id":"a","role":"viewer"}`, `{"subject_type":"user","subject_id":"a","role":"viewer","resource_type":"doc","resource_id":"one"}`, `{"subject_type":"user","subject_id":"a","role":"viewer","scope":{"kind":"global","resource_type":"doc"}}`} {
+		rec := doJSON(t, h, "POST", "/authorization/roles", body)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("implicit scope accepted: %d %s", rec.Code, rec.Body.String())
+		}
+	}
+	if stub.assignActor.ID != "" {
+		t.Fatal("invalid scope reached mutation")
+	}
+	rec := doJSON(t, h, "GET", "/authorization/roles/effective?resource_type=doc&resource_id=one", "")
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("retired effective route=%d", rec.Code)
+	}
+}

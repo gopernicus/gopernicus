@@ -5,11 +5,10 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/gopernicus/gopernicus/pockets/authorization"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/mutations"
 )
 
-func specCallbackCancellation(t *testing.T, newRepos func(*testing.T) authorization.Repositories, inGuard bool) {
+func specCallbackCancellation(t *testing.T, newRepos func(*testing.T) Repositories, inGuard bool) {
 	repos := newRepos(t)
 	m := repos.Mutations
 	mustApply(t, m, grant("d1", "owner", "u1"))

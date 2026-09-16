@@ -10,7 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/gopernicus/gopernicus/pockets/authorization/logic/relationships"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuples"
 	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/pkg/workers"
 )
@@ -87,7 +87,7 @@ func New(source Source, backend Backend, opts ...Option) (*TupleCache, error) {
 	// Shared eligibility must mean the same thing to every process. Bind the
 	// freshness policy as well as the source identity, so a more permissive
 	// relay cannot silently extend another host's revocation bound.
-	binding := fmt.Sprintf("%s/max-staleness:%d", source.Binding(), p.MaxStaleness)
+	binding := fmt.Sprintf("protocol:%d/%s/max-staleness:%d", Protocol, source.Binding(), p.MaxStaleness)
 	return &TupleCache{source: source, backend: backend, policy: p, binding: binding, gate: make(chan struct{}, 1), wake: make(chan struct{}, 1)}, nil
 }
 
@@ -258,9 +258,18 @@ func (c *TupleCache) poll(ctx context.Context, rebuild bool) (err error) {
 	return nil
 }
 
+var _ tuples.Snapshotter = (*TupleCache)(nil)
+
+// ReadTupleSnapshot supplies one coherent canonical view, with the same explicit
+// freshness policy and whole-operation durable retry as Run. The callback may
+// execute twice and must not publish results until this method returns nil.
+func (c *TupleCache) ReadTupleSnapshot(ctx context.Context, evaluate func(context.Context, tuples.Reader) error) error {
+	return c.Run(ctx, evaluate)
+}
+
 // Run evaluates over raw cached reads or retries once inside a durable snapshot.
 // Callbacks must be read-only and cannot retain their readers. No result is
-// cached. Ambient transactions bypass Redis and receive nil to use their views.
+// cached. Ambient transactions bypass Redis and borrow the source's bound view.
 func (c *TupleCache) Run(ctx context.Context, evaluate func(context.Context, CheckReads) error) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -269,7 +278,7 @@ func (c *TupleCache) Run(ctx context.Context, evaluate func(context.Context, Che
 		return fmt.Errorf("tuple cache: nil callback: %w", sdk.ErrInvalidInput)
 	}
 	if !c.source.CacheableContext(ctx) {
-		return evaluate(ctx, nil)
+		return c.source.ReadSnapshot(ctx, evaluate)
 	}
 	if !c.closed.Load() && c.ready.Load() {
 		valid, err := c.attempt(ctx, evaluate)
@@ -301,7 +310,7 @@ func (c *TupleCache) attempt(ctx context.Context, evaluate func(context.Context,
 	if state.Binding != c.Binding() || state.Receipt == "" {
 		return false, ErrUnavailable
 	}
-	reader := &cachedReads{ctx: cacheCtx, backend: c.backend, state: state, sets: make(map[SetKey][]relationships.SubjectRef)}
+	reader := &cachedReads{ctx: cacheCtx, backend: c.backend, state: state, sets: make(map[SetKey][]tuples.Tuple)}
 	defer func() { reader.closed = true }()
 	err = evaluate(cacheCtx, reader)
 	_, validationErr := c.backend.Read(cacheCtx, state, nil)

@@ -5,19 +5,38 @@ import (
 	"fmt"
 	"reflect"
 
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuples"
 	"github.com/gopernicus/gopernicus/sdk"
 )
 
-// Writer performs trusted raw role assignments against a caller-owned repository.
-// It applies structural validation, without a permission model or actor guard.
-// Ordinary actor writes use mutations.Service instead.
-type Writer struct{ store Storer }
+// TupleValidator validates explicit relation and subject-shape constraints.
+type TupleValidator interface{ ValidateTuple(tuples.Tuple) error }
 
-func NewWriter(store Storer) (*Writer, error) {
+// Writer holds trusted raw membership changes; request-facing writes use guards.
+type Writer struct {
+	store     tuples.Storer
+	validator TupleValidator
+}
+type WriterOption func(*Writer)
+
+// WithValidator enforces explicit subject-shape constraints on additions.
+func WithValidator(v TupleValidator) WriterOption { return func(w *Writer) { w.validator = v } }
+
+func NewWriter(store tuples.Storer, opts ...WriterOption) (*Writer, error) {
 	if isNil(store) {
-		return nil, fmt.Errorf("authorization: roles store is required: %w", sdk.ErrInvalidInput)
+		return nil, fmt.Errorf("authorization: tuple store is required: %w", sdk.ErrInvalidInput)
 	}
-	return &Writer{store: store}, nil
+	w := &Writer{store: store}
+	for _, opt := range opts {
+		if opt == nil {
+			return nil, sdk.ErrInvalidInput
+		}
+		opt(w)
+	}
+	if w.validator != nil && isNil(w.validator) {
+		return nil, sdk.ErrInvalidInput
+	}
+	return w, nil
 }
 func isNil(v any) bool {
 	if v == nil {
@@ -30,22 +49,20 @@ func isNil(v any) bool {
 	}
 	return false
 }
-func (s *Writer) AssignRole(ctx context.Context, subjectType, subjectID, roleName, resourceType, resourceID string) error {
-	if err := validateAssignment(subjectType, subjectID, roleName, resourceType, resourceID); err != nil {
+func (w *Writer) AssignRole(ctx context.Context, a Assignment) error {
+	if err := a.Validate(); err != nil {
 		return err
 	}
-	return s.store.Assign(ctx, Assignment{
-		SubjectType:  subjectType,
-		SubjectID:    subjectID,
-		Role:         roleName,
-		ResourceType: resourceType,
-		ResourceID:   resourceID,
-	})
+	if w.validator != nil {
+		if err := w.validator.ValidateTuple(a.Tuple()); err != nil {
+			return err
+		}
+	}
+	return w.store.ApplyTuples(ctx, tuples.Changes{Add: []tuples.Tuple{a.Tuple()}})
 }
-
-func (s *Writer) UnassignRole(ctx context.Context, subjectType, subjectID, roleName, resourceType, resourceID string) error {
-	if err := validateAssignment(subjectType, subjectID, roleName, resourceType, resourceID); err != nil {
+func (w *Writer) UnassignRole(ctx context.Context, a Assignment) error {
+	if err := a.Validate(); err != nil {
 		return err
 	}
-	return s.store.Unassign(ctx, subjectType, subjectID, roleName, resourceType, resourceID)
+	return w.store.ApplyTuples(ctx, tuples.Changes{Remove: []tuples.Tuple{a.Tuple()}})
 }

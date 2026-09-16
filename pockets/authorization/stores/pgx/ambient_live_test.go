@@ -100,7 +100,7 @@ func waitForAuthorizationWaiter(t *testing.T, db *pgxdb.DB) {
 	deadline := time.Now().Add(ambientWait)
 	for {
 		var n int
-		if err := db.QueryRow(context.Background(), `SELECT count(*) FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND wait_event = 'relation' AND query LIKE '%LOCK TABLE %iam_relationships%'`).Scan(&n); err != nil {
+		if err := db.QueryRow(context.Background(), `SELECT count(*) FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND wait_event = 'relation' AND query LIKE '%LOCK TABLE %iam_tuples%'`).Scan(&n); err != nil {
 			t.Fatalf("pg_stat_activity: %v", err)
 		}
 		if n >= 1 {

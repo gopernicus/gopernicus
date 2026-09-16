@@ -1,10 +1,10 @@
 package mutations
 
 // GuardianRule requires a minimum number of concrete subjects on a relationship
-// after each ordinary relationship command. A userset (group#member) is not a
+// after each ordinary canonical command. A userset (group#member) is not a
 // concrete anchor. An empty ResourceType applies to every resource type; a zero
 // MinAnchors means one. Negative minima are invalid.
-// Role commands do not use relationship guardian rules.
+// Role and relationship facades enforce the same canonical guardian counts.
 type GuardianRule struct {
 	ResourceType string
 	Relation     string
@@ -16,7 +16,7 @@ type GuardianRule struct {
 // default to an empty policy. authorization.NewService validates the repository's
 // policy against its relationship model before exposing mutation capabilities.
 //
-// An ordinary relationship command must leave every configured minimum satisfied.
+// An ordinary canonical command must leave every configured minimum satisfied.
 // A fresh protected scope therefore needs an establishing guardian grant first.
 // OpTeardown is the only operation exempt from these minimums.
 type GuardianPolicy struct {

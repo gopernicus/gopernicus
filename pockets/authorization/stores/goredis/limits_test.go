@@ -2,6 +2,7 @@ package goredis
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -10,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gopernicus/gopernicus/pockets/authorization/logic/relationships"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuplecache"
+	tuplefacts "github.com/gopernicus/gopernicus/pockets/authorization/logic/tuples"
 	"github.com/gopernicus/gopernicus/pockets/authorization/stores/memory"
 	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/redis/go-redis/v9"
@@ -58,11 +59,11 @@ func TestTupleCacheReadCapacityBoundaries(t *testing.T) {
 	ctx := t.Context()
 	row := tuple("space", "a", "viewer", "user", "alice", "")
 	state := tuplecache.State{Binding: "store", Receipt: "initial"}
-	if err := c.Publish(ctx, tuplecache.State{}, state, tuplecache.Snapshot{Full: true, Tuples: []relationships.CreateRelationship{row}}, time.Minute); err != nil {
+	if err := c.Publish(ctx, tuplecache.State{}, state, tuplecache.Snapshot{Full: true, Tuples: []tuplefacts.Tuple{row}}, time.Minute); err != nil {
 		t.Fatal(err)
 	}
-	f := setField(false, toWire(resource(row)))
-	r := setField(true, toWire(subject(row)))
+	f := setField(forward(row))
+	r := setField(reverse(row))
 	size := len(client.HGet(ctx, c.key, f).Val())
 	other := len(client.HGet(ctx, c.key, r).Val())
 	for _, test := range []struct {
@@ -77,8 +78,8 @@ func TestTupleCacheReadCapacityBoundaries(t *testing.T) {
 		{"aggregate exceeds", size + other - 1, []tuplecache.SetKey{forward(row), reverse(row)}, true},
 		{"duplicate keys count twice", size, []tuplecache.SetKey{forward(row), forward(row)}, true},
 		{"empty eligibility read", 1, nil, false},
-		{"absent set exact", 2, []tuplecache.SetKey{{Ref: relationships.SubjectRef{Type: "space", ID: "absent", Relation: "viewer"}}}, false},
-		{"absent set over", 1, []tuplecache.SetKey{{Ref: relationships.SubjectRef{Type: "space", ID: "absent", Relation: "viewer"}}}, true},
+		{"absent set exact", 2, []tuplecache.SetKey{{Scope: tuplefacts.On("space", "absent"), Relation: "viewer"}}, false},
+		{"absent set over", 1, []tuplecache.SetKey{{Scope: tuplefacts.On("space", "absent"), Relation: "viewer"}}, true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			limited := cacheWithLimits(t, client, Limits{MaxReadBytes: test.limit})
@@ -108,7 +109,7 @@ func TestTupleCacheDeltaCapacityIsAtomic(t *testing.T) {
 	row := tuple("space", "a", "viewer", "user", "alice", "")
 	state := tuplecache.State{Binding: "store", Receipt: "initial"}
 	next := tuplecache.State{Binding: "store", Receipt: "next"}
-	if err := c.Publish(ctx, tuplecache.State{}, state, tuplecache.Snapshot{Full: true, Tuples: []relationships.CreateRelationship{row}}, time.Minute); err != nil {
+	if err := c.Publish(ctx, tuplecache.State{}, state, tuplecache.Snapshot{Full: true, Tuples: []tuplefacts.Tuple{row}}, time.Minute); err != nil {
 		t.Fatal(err)
 	}
 	changes := []tuplecache.Change{{Before: &row}, {Before: &row}}
@@ -155,7 +156,7 @@ func TestTupleCacheDeltaCapacityIsAtomic(t *testing.T) {
 	if err := limited.Publish(ctx, state, next, tuplecache.Snapshot{Changes: changes}, time.Minute); err != nil {
 		t.Fatalf("exact boundary with deduplicated touched fields: %v", err)
 	}
-	assertSets(t, c, next, []tuplecache.SetKey{forward(row), reverse(row)}, [][]relationships.SubjectRef{{}, {}})
+	assertSets(t, c, next, []tuplecache.SetKey{forward(row), reverse(row)}, [][]tuplefacts.Tuple{{}, {}})
 }
 
 func TestTupleCacheFullCapacityAndChunking(t *testing.T) {
@@ -166,7 +167,7 @@ func TestTupleCacheFullCapacityAndChunking(t *testing.T) {
 	if err := c.Publish(ctx, tuplecache.State{}, state, tuplecache.Snapshot{Full: true}, time.Minute); err != nil {
 		t.Fatal(err)
 	}
-	tuples := make([]relationships.CreateRelationship, 50)
+	tuples := make([]tuplefacts.Tuple, 50)
 	for i := range tuples {
 		tuples[i] = tuple("space", fmt.Sprintf("%03d", i), "viewer", "user", fmt.Sprintf("%03d", i), "")
 	}
@@ -176,7 +177,11 @@ func TestTupleCacheFullCapacityAndChunking(t *testing.T) {
 	}
 	maxField := 0
 	for field, refs := range sets {
-		maxField = max(maxField, len(field)+2+10+len(refs[0][0])+len(refs[0][1])+len(refs[0][2]))
+		encoded, err := json.Marshal(refs)
+		if err != nil {
+			t.Fatal(err)
+		}
+		maxField = max(maxField, len(field)+len(encoded))
 	}
 	next := tuplecache.State{Binding: "store", Receipt: "chunked"}
 	before := client.HGetAll(ctx, c.key).Val()
@@ -214,19 +219,19 @@ func TestTupleCacheFullCapacityAndChunking(t *testing.T) {
 		t.Fatalf("expected many bounded uploads, got %d", chunks)
 	}
 	for _, row := range tuples {
-		assertSets(t, c, next, []tuplecache.SetKey{forward(row), reverse(row)}, [][]relationships.SubjectRef{{subject(row)}, {resource(row)}})
+		assertSets(t, c, next, []tuplecache.SetKey{forward(row), reverse(row)}, [][]tuplefacts.Tuple{{row}, {row}})
 	}
 }
 
 func TestTupleCacheOversizedInputEncoding(t *testing.T) {
 	row := tuple("space", strings.Repeat("x", 100000), "viewer", "user", "alice", "")
-	if _, _, err := changesWire([]tuplecache.Change{{After: &row}}, 100); !errors.Is(err, tuplecache.ErrCapacity) {
+	if _, _, err := changesWire([]tuplecache.Change{{After: &row}}, 100); !errors.Is(err, sdk.ErrInvalidInput) {
 		t.Fatalf("huge identifier delta: %v", err)
 	}
-	if _, err := fullSets([]relationships.CreateRelationship{row}, 100); !errors.Is(err, tuplecache.ErrCapacity) {
+	if _, err := fullSets([]tuplefacts.Tuple{row}, 100); !errors.Is(err, sdk.ErrInvalidInput) {
 		t.Fatalf("huge identifier full: %v", err)
 	}
-	row.ResourceID = "a"
+	row.Scope.ID = "a"
 	changes := make([]tuplecache.Change, 100000)
 	for i := range changes {
 		changes[i].After = &row
@@ -246,8 +251,8 @@ func TestTupleCachePausedServerAndCapacityFallBack(t *testing.T) {
 			}
 			backend := cacheWithLimits(t, client, limits)
 			row := tuple("space", "a", "viewer", "user", "alice", "")
-			source := &redisTestSource{store: memory.New(), tuples: []relationships.CreateRelationship{row}}
-			if err := source.store.Relationships().CreateRelationships(t.Context(), source.tuples); err != nil {
+			source := &redisTestSource{store: memory.New(), tuples: []tuplefacts.Tuple{row}}
+			if err := source.store.Tuples().ApplyTuples(t.Context(), tuplefacts.Changes{Add: source.tuples}); err != nil {
 				t.Fatal(err)
 			}
 			runtime, err := tuplecache.New(source, backend, tuplecache.WithPolicy(tuplecache.Policy{MaxStaleness: time.Minute, ReadTimeout: 20 * time.Millisecond}))
@@ -273,10 +278,9 @@ func TestTupleCachePausedServerAndCapacityFallBack(t *testing.T) {
 			}
 			started := time.Now()
 			var allowed bool
-			model := relationships.NewReadModel([]relationships.SubjectRule{{ResourceType: "space", Relation: "viewer", SubjectType: "user"}})
 			err = runtime.Run(t.Context(), func(ctx context.Context, reads tuplecache.CheckReads) error {
 				var err error
-				allowed, err = reads.ForChecks(model).CheckRelationWithGroupExpansion(ctx, "space", "a", "viewer", "user", "alice", 100)
+				allowed, err = reads.Contains(ctx, row)
 				return err
 			})
 			elapsed := time.Since(started)
@@ -305,7 +309,7 @@ func cacheWithLimits(t testing.TB, client *redis.Client, limits Limits) *TupleCa
 
 type redisTestSource struct {
 	store   *memory.Store
-	tuples  []relationships.CreateRelationship
+	tuples  []tuplefacts.Tuple
 	receipt string
 	reads   int
 }
@@ -334,5 +338,5 @@ func (s *redisTestSource) Acknowledge(_ context.Context, expected, next string, 
 }
 func (s *redisTestSource) ReadSnapshot(ctx context.Context, fn func(context.Context, tuplecache.CheckReads) error) error {
 	s.reads++
-	return s.store.ReadSnapshot(ctx, fn)
+	return s.store.Tuples().ReadTupleSnapshot(ctx, fn)
 }

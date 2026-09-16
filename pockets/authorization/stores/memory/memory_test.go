@@ -4,8 +4,9 @@ import (
 	"context"
 	"testing"
 
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuples"
+
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/relationships"
-	authroles "github.com/gopernicus/gopernicus/pockets/authorization/logic/roles"
 	"github.com/gopernicus/gopernicus/sdk/pkg/list"
 )
 
@@ -65,18 +66,17 @@ func TestGroupExpansionCycleSafe(t *testing.T) {
 	}
 }
 
-func TestUniqueSubjectResourceDoNothing(t *testing.T) {
+func TestIndependentRelationsCoexist(t *testing.T) {
 	r := NewRelationships()
 	mustCreate(t, r, rel("doc", "d1", "owner", "user", "u1"))
-	// A SECOND, different relation for the same subject on the same resource is
-	// a silent no-op — the existing "owner" row survives, no "member" appears.
+	// Owner and member coexist for the same subject and resource.
 	mustCreate(t, r, rel("doc", "d1", "member", "user", "u1"))
 
 	if ok, _ := r.CheckRelationExists(context.Background(), "doc", "d1", "owner", "user", "u1"); !ok {
 		t.Fatalf("original owner relation must survive")
 	}
-	if ok, _ := r.CheckRelationExists(context.Background(), "doc", "d1", "member", "user", "u1"); ok {
-		t.Fatalf("second relation must have been skipped (one-relation-per-subject-per-resource)")
+	if ok, _ := r.CheckRelationExists(context.Background(), "doc", "d1", "member", "user", "u1"); !ok {
+		t.Fatalf("independent member relation missing")
 	}
 	if n, _ := r.CountByResourceAndRelation(context.Background(), "doc", "d1", "owner"); n != 1 {
 		t.Fatalf("owner count must be 1, got %d", n)
@@ -186,56 +186,35 @@ func TestListingEmptyPage(t *testing.T) {
 	}
 }
 
-// ---- roles kind ----
-
-func TestRoleAssignIdempotentPreservesExactAssignment(t *testing.T) {
-	roles := NewRoles()
-	a := authroles.Assignment{SubjectType: "user", SubjectID: "u1", Role: "editor", ResourceType: "doc", ResourceID: "d1"}
-	if err := roles.Assign(context.Background(), a); err != nil {
-		t.Fatalf("assign: %v", err)
+func TestCanonicalFactIdentityAndExactScopes(t *testing.T) {
+	store := NewTuples()
+	ctx := t.Context()
+	global := tuples.Tuple{Scope: tuples.Global(), Relation: "editor", Subject: tuples.SubjectRef{Type: "user", ID: "u1"}}
+	scoped := global
+	scoped.Scope = tuples.On("doc", "d1")
+	for range 2 {
+		if err := store.ApplyTuples(ctx, tuples.Changes{Add: []tuples.Tuple{global, global}}); err != nil {
+			t.Fatal(err)
+		}
 	}
-	first, _ := roles.ListBySubject(context.Background(), "user", "u1", list.Request{})
-
-	if err := roles.Assign(context.Background(), a); err != nil {
-		t.Fatalf("re-assign: %v", err)
+	got, err := store.ContainsMany(ctx, []tuples.Tuple{global, scoped})
+	if err != nil || len(got) != 2 || !got[0] || got[1] {
+		t.Fatalf("exact scope %v/%v", got, err)
 	}
-	second, _ := roles.ListBySubject(context.Background(), "user", "u1", list.Request{})
-	if len(second.Items) != 1 {
-		t.Fatalf("duplicate assign must keep one row, got %d", len(second.Items))
+	if err := store.ApplyTuples(ctx, tuples.Changes{Add: []tuples.Tuple{scoped}}); err != nil {
+		t.Fatal(err)
 	}
-	if second.Items[0] != first.Items[0] || second.Items[0] != a {
-		t.Fatalf("duplicate assign changed the tuple: first=%+v second=%+v", first.Items, second.Items)
+	rows, err := store.Lookup(ctx, tuples.Query{Subject: &global.Subject})
+	if err != nil || len(rows) != 2 {
+		t.Fatalf("duplicate identity: %v/%v", rows, err)
 	}
-}
-
-func TestRoleHasExactScope(t *testing.T) {
-	roles := NewRoles()
-	// A global grant does NOT satisfy a scoped store lookup and vice versa.
-	if err := roles.Assign(context.Background(), authroles.Assignment{SubjectType: "user", SubjectID: "u1", Role: "editor"}); err != nil {
-		t.Fatalf("assign global: %v", err)
+	for range 2 {
+		if err := store.ApplyTuples(ctx, tuples.Changes{Remove: []tuples.Tuple{scoped}}); err != nil {
+			t.Fatal(err)
+		}
 	}
-	if ok, _ := roles.HasExactRole(context.Background(), "user", "u1", "editor", "doc", "d1"); ok {
-		t.Fatalf("global grant must NOT satisfy a scoped exact lookup")
-	}
-	if ok, _ := roles.HasExactRole(context.Background(), "user", "u1", "editor", "", ""); !ok {
-		t.Fatalf("global grant must satisfy the exact global lookup")
-	}
-}
-
-func TestRoleUnassignIdempotent(t *testing.T) {
-	roles := NewRoles()
-	// Unassign of an absent assignment is nil; repeat is nil.
-	if err := roles.Unassign(context.Background(), "user", "u1", "editor", "", ""); err != nil {
-		t.Fatalf("unassign absent: %v", err)
-	}
-	_ = roles.Assign(context.Background(), authroles.Assignment{SubjectType: "user", SubjectID: "u1", Role: "editor"})
-	if err := roles.Unassign(context.Background(), "user", "u1", "editor", "", ""); err != nil {
-		t.Fatalf("unassign: %v", err)
-	}
-	if err := roles.Unassign(context.Background(), "user", "u1", "editor", "", ""); err != nil {
-		t.Fatalf("repeat unassign: %v", err)
-	}
-	if ok, _ := roles.HasExactRole(context.Background(), "user", "u1", "editor", "", ""); ok {
-		t.Fatalf("assignment should be gone")
+	got, err = store.ContainsMany(ctx, []tuples.Tuple{global, scoped})
+	if err != nil || len(got) != 2 || !got[0] || got[1] {
+		t.Fatalf("exact revoke %v/%v", got, err)
 	}
 }

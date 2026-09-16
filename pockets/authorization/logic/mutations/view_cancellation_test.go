@@ -5,6 +5,8 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuples"
+
 	authmodel "github.com/gopernicus/gopernicus/pockets/authorization/logic/model"
 )
 
@@ -15,7 +17,7 @@ type cancelingFactView struct {
 	calls  int
 }
 
-func (v *cancelingFactView) HasRole(context.Context, Target, string, string, string) (bool, error) {
+func (v *cancelingFactView) Contains(context.Context, tuples.Tuple) (bool, error) {
 	v.calls++
 	v.cancel()
 	return v.held, nil
@@ -39,10 +41,10 @@ func TestDecisionViewRawFactsObserveSuccessfulReadCancellation(t *testing.T) {
 		read func(context.Context, DecisionView) (bool, error)
 	}{
 		{"global role", func(ctx context.Context, view DecisionView) (bool, error) {
-			return view.HasGlobalRole(ctx, principal, "owner")
+			return view.HasRole(ctx, principal, "owner")
 		}},
 		{"resource role", func(ctx context.Context, view DecisionView) (bool, error) {
-			return view.HasRole(ctx, principal, "owner", resource)
+			return view.HasRoleIn(ctx, principal, "owner", resource)
 		}},
 		{"relationship", func(ctx context.Context, view DecisionView) (bool, error) {
 			return view.CheckRelation(ctx, principal, "owner", resource)

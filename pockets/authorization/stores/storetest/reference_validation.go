@@ -5,13 +5,12 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/gopernicus/gopernicus/pockets/authorization"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/relationships"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/roles"
 	"github.com/gopernicus/gopernicus/sdk"
 )
 
-func runRelationshipReferenceValidation(t *testing.T, newRepos func(*testing.T) authorization.Repositories) {
+func runRelationshipReferenceValidation(t *testing.T, newRepos func(*testing.T) Repositories) {
 	ctx := context.Background()
 	s := newRepos(t).Relationships
 	good := ct("doc", "good", "viewer", "user", "u")
@@ -31,20 +30,20 @@ func runRelationshipReferenceValidation(t *testing.T, newRepos func(*testing.T) 
 	}
 }
 
-func runRoleReferenceValidation(t *testing.T, newRepos func(*testing.T) authorization.Repositories) {
+func runRoleReferenceValidation(t *testing.T, newRepos func(*testing.T) Repositories) {
 	ctx := context.Background()
-	s := newRepos(t).Roles
+	s := newRepos(t).Tuples
 	for i, name := range []string{"subject type", "subject id", "role", "resource type", "resource id"} {
 		t.Run(name, func(t *testing.T) {
-			bad := roles.Assignment{SubjectType: "user", SubjectID: "u", Role: "editor", ResourceType: "doc", ResourceID: "d"}
-			fields := []*string{&bad.SubjectType, &bad.SubjectID, &bad.Role, &bad.ResourceType, &bad.ResourceID}
+			bad := roles.Assignment{SubjectType: "user", SubjectID: "u", Role: "editor", Scope: fixtureScope("doc", "d")}
+			fields := []*string{&bad.SubjectType, &bad.SubjectID, &bad.Role, &bad.Scope.Type, &bad.Scope.ID}
 			*fields[i] = "a\x01b"
-			if err := s.Assign(ctx, bad); !errors.Is(err, sdk.ErrInvalidInput) {
+			if err := assignRole(ctx, s, bad); !errors.Is(err, sdk.ErrInvalidInput) {
 				t.Fatalf("Assign must reject a key separator: %v", err)
 			}
 		})
 	}
-	if err := s.Assign(ctx, roles.Assignment{SubjectType: "user", SubjectID: "u", Role: "editor", ResourceType: "doc"}); !errors.Is(err, sdk.ErrInvalidInput) {
+	if err := assignRole(ctx, s, roles.Assignment{SubjectType: "user", SubjectID: "u", Role: "editor", Scope: fixtureScope("doc", "")}); !errors.Is(err, sdk.ErrInvalidInput) {
 		t.Fatalf("Assign must reject a half-scoped grant: %v", err)
 	}
 }

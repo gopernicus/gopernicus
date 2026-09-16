@@ -8,6 +8,7 @@ import (
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/audit"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/mutations"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/relationships"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuples"
 	"github.com/gopernicus/gopernicus/pockets/authorization/stores/memory"
 	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/pkg/list"
@@ -16,7 +17,7 @@ import (
 func auditHost(t *testing.T, guard mutations.MutationGuard) (Components, *memory.Store) {
 	t.Helper()
 	store := memory.New(memory.WithAudit())
-	components, err := New(Repositories{Relationships: store.Relationships(), Roles: store.Roles(), Mutations: store.Mutations(), Audit: store.Audit()}, WithRelationshipModel(lifecycleModel()), WithGuard(guard))
+	components, err := New(Repositories{Tuples: store.Tuples(), Mutations: store.Mutations(), Audit: store.Audit()}, WithModel(lifecycleModel()), WithGuard(guard))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -50,19 +51,25 @@ func TestGuardedAuditUsesActorAndRecordsOnlyCommittedChanges(t *testing.T) {
 	}
 	guard.err = nil
 	cmd.Relation = "editor"
-	if got, err := components.Mutations.GrantRelationship(ctx, actorU1(), cmd); !errors.Is(err, mutations.ErrSemanticConflict) || got != nil {
-		t.Fatalf("conflict: %+v, %v", got, err)
+	if got, err := components.Mutations.GrantRelationship(ctx, actorU1(), cmd); err != nil || got == nil || got.Outcome != mutations.OutcomeApplied {
+		t.Fatalf("independent fact: %+v, %v", got, err)
 	}
 	records := auditRecords(t, store)
-	if len(records) != 1 {
-		t.Fatalf("only applied change belongs in history: %+v", records)
+	if len(records) != 2 {
+		t.Fatalf("only applied facts belong in history: %+v", records)
 	}
-	got := records[0]
-	if got.Source != (audit.Source{ActorType: "user", ActorID: "u1", Reason: "support ticket 42"}) {
-		t.Fatalf("attribution: %+v", got.Source)
+	labels := map[string]bool{}
+	for _, got := range records {
+		if got.Source != (audit.Source{ActorType: "user", ActorID: "u1", Reason: "support ticket 42"}) {
+			t.Fatalf("attribution: %+v", got.Source)
+		}
+		if got.Change.Action != audit.ActionAdded || got.Change.Tuple.Subject.ID != "u2" {
+			t.Fatalf("actual change: %+v", got.Change)
+		}
+		labels[got.Change.Tuple.Relation] = true
 	}
-	if got.Change.Action != audit.ActionAdded || got.Change.Relationship == nil || got.Change.Relationship.Relation != "viewer" || got.Change.Relationship.SubjectID != "u2" {
-		t.Fatalf("actual change: %+v", got.Change)
+	if !labels["viewer"] || !labels["editor"] {
+		t.Fatalf("coexisting facts: %v", labels)
 	}
 }
 
@@ -80,7 +87,7 @@ func TestTrustedAuditRequiresSourceAndTeardownRecordsReason(t *testing.T) {
 	if _, err := components.SystemMutator.GrantRelationship(ctx, grant); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := components.SystemMutator.AssignRole(ctx, mutations.AssignRoleCommand{Subject: prinU("u2"), Role: "reader", ResourceType: "doc", ResourceID: "d1"}); err != nil {
+	if _, err := components.SystemMutator.AssignRole(ctx, mutations.AssignRoleCommand{Subject: prinU("u2"), Role: "reader", Scope: tuples.On("doc", "d1")}); err != nil {
 		t.Fatal(err)
 	}
 	ctx = audit.WithSource(ctx, audit.Source{System: "resource-cleanup", Reason: "old reason"})

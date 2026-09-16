@@ -7,14 +7,15 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/gopernicus/gopernicus/pockets/authorization"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuples"
+
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/mutations"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/relationships"
 	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/pkg/list"
 )
 
-func runMutations(t *testing.T, newRepos func(*testing.T) authorization.Repositories) {
+func runMutations(t *testing.T, newRepos func(*testing.T) Repositories) {
 	t.Run("StateTransitions", func(t *testing.T) { specStateTransitions(t, newRepos) })
 	t.Run("NoPartialBatch", func(t *testing.T) { specNoPartialBatch(t, newRepos) })
 	t.Run("PurgeBlockedTeardownClears", func(t *testing.T) { specPurgeTeardown(t, newRepos) })
@@ -26,6 +27,7 @@ func runMutations(t *testing.T, newRepos func(*testing.T) authorization.Reposito
 	t.Run("ConcurrentNegativeGuards", func(t *testing.T) { specConcurrentNegativeGuards(t, newRepos) })
 	t.Run("ConcurrentReplaceNoAbsentState", func(t *testing.T) { specReplaceNoAbsentState(t, newRepos) })
 	t.Run("GuardianEstablishesMinimum", func(t *testing.T) { specGuardianEstablish(t, newRepos) })
+	t.Run("GuardianCountsCanonicalFactsAcrossFacades", func(t *testing.T) { specCrossFacadeGuardian(t, newRepos) })
 	t.Run("GuardCancellation", func(t *testing.T) { specCallbackCancellation(t, newRepos, true) })
 	t.Run("ValidatorCancellation", func(t *testing.T) { specCallbackCancellation(t, newRepos, false) })
 	t.Run("GuardedPermissionWalksThrough", func(t *testing.T) { specGuardedPermissionThrough(t, newRepos) })
@@ -49,10 +51,8 @@ func revoke(resourceID, relation, subjectID string) mutations.Command {
 	c.Operation = mutations.OpRevoke
 	return c
 }
-func replace(resourceID, relation, subjectID string) mutations.Command {
-	c := grant(resourceID, relation, subjectID)
-	c.Operation = mutations.OpReplace
-	return c
+func swap(resourceID, before, after, subjectID string) mutations.Command {
+	return mutations.Command{Target: resTarget(resourceID), Operation: mutations.OpBatch, Tuples: tuples.Changes{Remove: []tuples.Tuple{roleFact("user", subjectID, before, "doc", resourceID)}, Add: []tuples.Tuple{roleFact("user", subjectID, after, "doc", resourceID)}}}
 }
 func mustApply(t *testing.T, m mutations.MutationRepository, cmd mutations.Command) *mutations.Result {
 	t.Helper()
@@ -69,7 +69,7 @@ func mustReject(t *testing.T, m mutations.MutationRepository, cmd mutations.Comm
 		t.Fatalf("Apply(%+v): %+v %v, want %v", cmd, r, err, want)
 	}
 }
-func relationExists(t *testing.T, r authorization.Repositories, resourceID, relation, subject string) bool {
+func relationExists(t *testing.T, r Repositories, resourceID, relation, subject string) bool {
 	t.Helper()
 	ok, err := r.Relationships.CheckRelationExists(context.Background(), "doc", resourceID, relation, "user", subject)
 	if err != nil {
@@ -77,7 +77,7 @@ func relationExists(t *testing.T, r authorization.Repositories, resourceID, rela
 	}
 	return ok
 }
-func specStateTransitions(t *testing.T, newRepos func(*testing.T) authorization.Repositories) {
+func specStateTransitions(t *testing.T, newRepos func(*testing.T) Repositories) {
 	r := newRepos(t)
 	m := r.Mutations
 	owner := grant("d", "owner", "owner")
@@ -88,7 +88,7 @@ func specStateTransitions(t *testing.T, newRepos func(*testing.T) authorization.
 		outcome mutations.Outcome
 	}{
 		{viewer, mutations.OutcomeApplied}, {viewer, mutations.OutcomeNoChange},
-		{replace("d", "editor", "u"), mutations.OutcomeApplied},
+		{swap("d", "viewer", "editor", "u"), mutations.OutcomeApplied},
 		{revoke("d", "viewer", "u"), mutations.OutcomeNotFound},
 		{revoke("d", "editor", "u"), mutations.OutcomeApplied},
 		{revoke("d", "editor", "u"), mutations.OutcomeNotFound},
@@ -101,30 +101,29 @@ func specStateTransitions(t *testing.T, newRepos func(*testing.T) authorization.
 	if !relationExists(t, r, "d", "viewer", "u") || relationExists(t, r, "d", "editor", "u") {
 		t.Fatal("state-based repeated command failed to restore viewer")
 	}
-	mustReject(t, m, grant("d", "editor", "u"), mutations.ErrSemanticConflict)
+	mustApply(t, m, grant("d", "editor", "u"))
 	if !relationExists(t, r, "d", "viewer", "u") {
-		t.Fatal("conflict removed original fact")
+		t.Fatal("independent grant removed original fact")
 	}
 }
-func specNoPartialBatch(t *testing.T, newRepos func(*testing.T) authorization.Repositories) {
+func specNoPartialBatch(t *testing.T, newRepos func(*testing.T) Repositories) {
 	r := newRepos(t)
 	m := r.Mutations
 	mustApply(t, m, grant("d", "owner", "owner"))
-	mustApply(t, m, grant("d", "viewer", "exists"))
-	cmd := grant("d", "viewer", "new")
-	cmd.Relationships = append(cmd.Relationships, mutations.RelationshipRow{Relation: "editor", Subject: userRef("exists")})
-	mustReject(t, m, cmd, mutations.ErrSemanticConflict)
-	if relationExists(t, r, "d", "viewer", "new") || !relationExists(t, r, "d", "viewer", "exists") {
-		t.Fatal("conflicting batch partially changed facts")
+	cmd := mutations.Command{Target: resTarget("d"), Operation: mutations.OpBatch, Tuples: tuples.Changes{Add: []tuples.Tuple{roleFact("user", "new", "viewer", "doc", "d"), roleFact("user", "other", "viewer", "doc", "escapes")}}}
+	mustReject(t, m, cmd, sdk.ErrInvalidInput)
+	if relationExists(t, r, "d", "viewer", "new") {
+		t.Fatal("invalid batch partially committed")
 	}
-	for _, op := range []mutations.Operation{mutations.OpGrant, mutations.OpRevoke, mutations.OpReplace} {
-		cmd := grant("d", "viewer", "duplicate")
-		cmd.Operation = op
-		cmd.Relationships = append(cmd.Relationships, cmd.Relationships[0])
-		mustReject(t, m, cmd, sdk.ErrInvalidInput)
+	duplicate := grant("d", "viewer", "duplicate")
+	duplicate.Relationships = append(duplicate.Relationships, duplicate.Relationships[0])
+	mustApply(t, m, duplicate)
+	count, err := r.Relationships.CountByResourceAndRelation(t.Context(), "doc", "d", "viewer")
+	if err != nil || count != 1 {
+		t.Fatalf("duplicate full fact: %d/%v", count, err)
 	}
 }
-func specPurgeTeardown(t *testing.T, newRepos func(*testing.T) authorization.Repositories) {
+func specPurgeTeardown(t *testing.T, newRepos func(*testing.T) Repositories) {
 	r := newRepos(t)
 	m := r.Mutations
 	mustApply(t, m, grant("d", "owner", "owner"))
@@ -137,7 +136,7 @@ func specPurgeTeardown(t *testing.T, newRepos func(*testing.T) authorization.Rep
 	if result.Outcome != mutations.OutcomeApplied || relationExists(t, r, "d", "owner", "owner") {
 		t.Fatal("teardown retained relationships")
 	}
-	held, err := r.Roles.HasExactRole(context.Background(), "user", "u", "editor", "doc", "d")
+	held, err := r.Tuples.Contains(context.Background(), roleFact("user", "u", "editor", "doc", "d"))
 	if err != nil || held {
 		t.Fatalf("teardown retained role: %v %v", held, err)
 	}
@@ -145,7 +144,7 @@ func specPurgeTeardown(t *testing.T, newRepos func(*testing.T) authorization.Rep
 		t.Fatalf("empty teardown: %+v", got)
 	}
 }
-func specCurrentValidation(t *testing.T, newRepos func(*testing.T) authorization.Repositories) {
+func specCurrentValidation(t *testing.T, newRepos func(*testing.T) Repositories) {
 	r := newRepos(t)
 	m := r.Mutations
 	cmd := grant("d", "owner", "owner")
@@ -161,31 +160,33 @@ func specCurrentValidation(t *testing.T, newRepos func(*testing.T) authorization
 		t.Fatal("refused no-op removed original")
 	}
 }
-func specRoleTargets(t *testing.T, newRepos func(*testing.T) authorization.Repositories) {
+func specRoleTargets(t *testing.T, newRepos func(*testing.T) Repositories) {
 	r := newRepos(t)
 	m := r.Mutations
 	rows := []mutations.RoleRow{{SubjectType: "user", SubjectID: "u", Role: "editor"}}
 	global := mutations.Command{Target: mutations.Target{Kind: mutations.TargetSubject, Type: "user", ID: "u"}, Operation: mutations.OpRoleAssign, Roles: rows}
 	local := mutations.Command{Target: resTarget("d"), Operation: mutations.OpRoleAssign, Roles: rows}
 	mustApply(t, m, global)
+	mustApply(t, m, grant("d", "owner", "owner"))
 	mustApply(t, m, local)
 	local.Operation = mutations.OpRoleUnassign
-	if result := mustApply(t, m, local); !result.SameRoleGrantRemains || result.Outcome != mutations.OutcomeApplied {
-		t.Fatalf("global fallback annotation lost: %+v", result)
+	if result := mustApply(t, m, local); result.Outcome != mutations.OutcomeApplied {
+		t.Fatalf("scoped revoke did not apply: %+v", result)
 	}
-	if result := mustApply(t, m, local); !result.SameRoleGrantRemains || result.Outcome != mutations.OutcomeNotFound {
-		t.Fatalf("current no-op annotation lost: %+v", result)
+	if result := mustApply(t, m, local); result.Outcome != mutations.OutcomeNotFound {
+		t.Fatalf("repeated scoped revoke did not report not-found: %+v", result)
 	}
 	global.Operation = mutations.OpRoleUnassign
 	mustApply(t, m, global)
-	if result := mustApply(t, m, local); result.SameRoleGrantRemains {
-		t.Fatalf("removed global still effective: %+v", result)
+	mustApply(t, m, local)
+	if hasExact(t, r.Tuples, "user", "u", "editor", "", "") {
+		t.Fatal("global revoke retained fact")
 	}
 	bad := global
 	bad.Roles = []mutations.RoleRow{{SubjectType: "user", SubjectID: "someone-else", Role: "editor"}}
 	mustReject(t, m, bad, sdk.ErrInvalidInput)
 }
-func specGuardianEstablish(t *testing.T, newRepos func(*testing.T) authorization.Repositories) {
+func specGuardianEstablish(t *testing.T, newRepos func(*testing.T) Repositories) {
 	r := newRepos(t)
 	m := r.Mutations
 	mustReject(t, m, grant("d", "viewer", "member"), mutations.ErrInvariantBlocked)
@@ -194,13 +195,13 @@ func specGuardianEstablish(t *testing.T, newRepos func(*testing.T) authorization
 	mustReject(t, m, group, mutations.ErrInvariantBlocked)
 	owner := grant("d", "owner", "owner")
 	mustApply(t, m, owner)
-	mustReject(t, m, replace("d", "viewer", "owner"), mutations.ErrInvariantBlocked)
+	mustReject(t, m, swap("d", "owner", "viewer", "owner"), mutations.ErrInvariantBlocked)
 	mustReject(t, m, revoke("d", "owner", "owner"), mutations.ErrInvariantBlocked)
 	if !relationExists(t, r, "d", "owner", "owner") {
 		t.Fatal("guardian block changed owner")
 	}
 }
-func specConcurrentOwnerRevokes(t *testing.T, newRepos func(*testing.T) authorization.Repositories) {
+func specConcurrentOwnerRevokes(t *testing.T, newRepos func(*testing.T) Repositories) {
 	r := newRepos(t)
 	m := r.Mutations
 	for round := 0; round < 6; round++ {
@@ -228,7 +229,7 @@ func specConcurrentOwnerRevokes(t *testing.T, newRepos func(*testing.T) authoriz
 		}
 	}
 }
-func specConcurrentGrants(t *testing.T, newRepos func(*testing.T) authorization.Repositories) {
+func specConcurrentGrants(t *testing.T, newRepos func(*testing.T) Repositories) {
 	r := newRepos(t)
 	m := r.Mutations
 	mustApply(t, m, grant("d", "owner", "owner"))
@@ -268,7 +269,7 @@ func specConcurrentGrants(t *testing.T, newRepos func(*testing.T) authorization.
 		t.Fatalf("duplicate writers: rows=%d applied=%d err=%v", n, applied, err)
 	}
 }
-func specConcurrentNegativeGuards(t *testing.T, newRepos func(*testing.T) authorization.Repositories) {
+func specConcurrentNegativeGuards(t *testing.T, newRepos func(*testing.T) Repositories) {
 	r := newRepos(t)
 	m := r.Mutations
 	for round := 0; round < 6; round++ {
@@ -305,7 +306,7 @@ func specConcurrentNegativeGuards(t *testing.T, newRepos func(*testing.T) author
 		}
 	}
 }
-func specReplaceNoAbsentState(t *testing.T, newRepos func(*testing.T) authorization.Repositories) {
+func specReplaceNoAbsentState(t *testing.T, newRepos func(*testing.T) Repositories) {
 	r := newRepos(t)
 	m := r.Mutations
 	mustApply(t, m, grant("d", "owner", "owner"))
@@ -327,12 +328,14 @@ func specReplaceNoAbsentState(t *testing.T, newRepos func(*testing.T) authorizat
 			}
 		}
 	}()
+	previous := "viewer"
 	for i := 0; i < 10; i++ {
 		relation := "viewer"
 		if i%2 == 0 {
 			relation = "editor"
 		}
-		mustApply(t, m, replace("d", relation, "u"))
+		mustApply(t, m, swap("d", previous, relation, "u"))
+		previous = relation
 	}
 	wg.Wait()
 	select {

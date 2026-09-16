@@ -7,7 +7,6 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/gopernicus/gopernicus/pockets/authorization"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/relationships"
 )
 
@@ -32,7 +31,7 @@ const seedChunk = 100
 // the optional RelationSetReader methods and their parity with the required
 // per-resource siblings. Only these optional subtests skip when unsupported;
 // the ordinary relationship, model-scoping and budget families still run.
-func runRelationshipSetReads(t *testing.T, newRepos func(t *testing.T) authorization.Repositories) {
+func runRelationshipSetReads(t *testing.T, newRepos func(t *testing.T) Repositories) {
 	ctx := context.Background()
 
 	t.Run("FilterRelationIsSortedDistinctSubset", func(t *testing.T) {

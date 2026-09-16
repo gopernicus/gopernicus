@@ -9,11 +9,16 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gopernicus/gopernicus/pockets/authorization/stores/storetest"
+
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/decisions"
+
 	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
 	"github.com/gopernicus/gopernicus/pockets/authorization"
 	authmodel "github.com/gopernicus/gopernicus/pockets/authorization/logic/model"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/relationships"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuplecache"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuples"
 	"github.com/gopernicus/gopernicus/pockets/authorization/stores/memory"
 )
 
@@ -33,11 +38,11 @@ func (q batchQueryCounter) QueryRow(ctx context.Context, query string, args ...a
 	return q.Querier.QueryRow(ctx, query, args...)
 }
 
-type sequentialBatchStore struct{ relationships.Storer }
-type sequentialBatchReader struct{ relationships.Reader }
+type sequentialBatchStore struct{ tuples.Storer }
+type rawBatchReader struct{ tuples.Reader }
 
-func (s sequentialBatchStore) ForModel(model relationships.ReadModel) relationships.Reader {
-	return sequentialBatchReader{s.Storer.ForModel(model)}
+func (s sequentialBatchStore) ReadTupleSnapshot(ctx context.Context, fn func(context.Context, tuples.Reader) error) error {
+	return s.Storer.ReadTupleSnapshot(ctx, func(ctx context.Context, r tuples.Reader) error { return fn(ctx, rawBatchReader{r}) })
 }
 
 type countedBatchSource struct {
@@ -47,47 +52,46 @@ type countedBatchSource struct {
 
 func (s countedBatchSource) ReadSnapshot(ctx context.Context, fn func(context.Context, tuplecache.CheckReads) error) error {
 	return s.Source.ReadSnapshot(ctx, func(ctx context.Context, reads tuplecache.CheckReads) error {
-		snapshot := reads.(*cacheSnapshot)
-		snapshot.rel.readQuerier = batchQueryCounter{snapshot.rel.readQuerier, s.count}
+		snapshot := reads.(*tupleStore)
+		snapshot.readQuerier = batchQueryCounter{snapshot.readQuerier, s.count}
 		return fn(ctx, reads)
 	})
 }
 
-func batchQuerySchema() relationships.Schema {
-	return relationships.Schema{ResourceTypes: map[string]relationships.ResourceTypeDef{
-		"group": {Relations: map[string]relationships.RelationDef{
-			"member": {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "user"}, {Type: "group", Relation: "member"}}},
-			"admin":  {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "user"}, {Type: "group", Relation: "member"}}},
+func batchQuerySchema() decisions.Model {
+	return decisions.Model{ResourceTypes: map[string]decisions.ResourceTypeDef{
+		"group": {Relations: map[string]decisions.RelationDef{
+			"member": {AllowedSubjects: []decisions.SubjectTypeRef{{Type: "user"}, {Type: "group", Relation: "member"}}},
+			"admin":  {AllowedSubjects: []decisions.SubjectTypeRef{{Type: "user"}, {Type: "group", Relation: "member"}}},
 		}},
 		"tenant": {
-			Relations:   map[string]relationships.RelationDef{"owner": {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "user"}, {Type: "group", Relation: "admin"}}}},
-			Permissions: map[string]relationships.PermissionRule{"manage": relationships.AnyOf(relationships.Direct("owner"))},
+			Relations:   map[string]decisions.RelationDef{"owner": {AllowedSubjects: []decisions.SubjectTypeRef{{Type: "user"}, {Type: "group", Relation: "admin"}}}},
+			Permissions: map[string]decisions.Expression{"manage": decisions.AnyOf(decisions.Direct("owner"))},
 		},
 		"space": {
-			Relations: map[string]relationships.RelationDef{
-				"parent": {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "space"}}},
-				"tenant": {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "tenant"}}},
-				"viewer": {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "user"}, {Type: "group", Relation: "member"}}},
+			Relations: map[string]decisions.RelationDef{
+				"parent": {AllowedSubjects: []decisions.SubjectTypeRef{{Type: "space"}}},
+				"tenant": {AllowedSubjects: []decisions.SubjectTypeRef{{Type: "tenant"}}},
+				"viewer": {AllowedSubjects: []decisions.SubjectTypeRef{{Type: "user"}, {Type: "group", Relation: "member"}}},
 			},
-			Permissions: map[string]relationships.PermissionRule{"view": relationships.AnyOf(relationships.Direct("viewer"), relationships.Through("parent", "view"), relationships.Through("tenant", "manage"))},
+			Permissions: map[string]decisions.Expression{"view": decisions.AnyOf(decisions.Direct("viewer"), decisions.Through("parent", "view"), decisions.Through("tenant", "manage"))},
 		},
 		"dashboard": {
-			Relations:   map[string]relationships.RelationDef{"container": {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "space"}}}},
-			Permissions: map[string]relationships.PermissionRule{"view": relationships.AnyOf(relationships.Through("container", "view"))},
+			Relations:   map[string]decisions.RelationDef{"container": {AllowedSubjects: []decisions.SubjectTypeRef{{Type: "space"}}}},
+			Permissions: map[string]decisions.Expression{"view": decisions.AnyOf(decisions.Through("container", "view"))},
 		},
 	}}
 }
 
-func batchQueryFixture(t testing.TB, n int) (authorization.Repositories, []string, *int) {
+func batchQueryFixture(t testing.TB, n int) (storetest.Repositories, []string, *int) {
 	t.Helper()
 	db, cfg := cacheFixture(t, true)
-	repos, err := Repositories(context.Background(), db, cacheOptions(cfg)...)
+	repos, err := testRepositories(context.Background(), db, cacheOptions(cfg)...)
 	if err != nil {
 		t.Fatal(err)
 	}
 	count := new(int)
-	rel := repos.Relationships.(*relationshipStore)
-	rel.readQuerier = batchQueryCounter{db, count}
+	repos.Tuples = countedTupleStore{Storer: repos.Tuples, count: count}
 	repos.TupleSource = countedBatchSource{repos.TupleSource, count}
 	var tuples []relationships.CreateRelationship
 	add := func(rt, id, relation, st, sid, sr string) {
@@ -120,43 +124,43 @@ func TestThroughBatchSQLiteQueryCounts(t *testing.T) {
 	for _, n := range []int{50, 128, 366, 600} {
 		t.Run(fmt.Sprint(n), func(t *testing.T) {
 			repos, ids, count := batchQueryFixture(t, n)
-			fast, err := relationships.NewService(repos.Relationships, batchQuerySchema())
+			fast, err := decisions.NewService(repos.Tuples, decisions.WithModel(batchQuerySchema()))
 			if err != nil {
 				t.Fatal(err)
 			}
-			before, err := relationships.NewService(sequentialBatchStore{repos.Relationships}, batchQuerySchema())
+			before, err := decisions.NewService(sequentialBatchStore{repos.Tuples}, decisions.WithModel(batchQuerySchema()))
 			if err != nil {
 				t.Fatal(err)
 			}
 			alice := authmodel.PrincipalRef{Type: "user", ID: "alice"}
 			operations := []struct {
 				name string
-				run  func(*relationships.Service) ([]string, error)
+				run  func(*decisions.Service) ([]string, error)
 			}{
-				{"lookup", func(s *relationships.Service) ([]string, error) {
+				{"lookup", func(s *decisions.Service) ([]string, error) {
 					r, e := s.LookupResources(t.Context(), alice, "view", "space")
 					return r.IDs, e
 				}},
-				{"page50", func(s *relationships.Service) ([]string, error) {
+				{"page50", func(s *decisions.Service) ([]string, error) {
 					r, e := s.LookupResourcesPage(t.Context(), alice, "view", "space", "", 50)
 					if e == nil && r.HasMore != (n > 50) {
 						t.Fatalf("HasMore=%v", r.HasMore)
 					}
 					return r.IDs, e
 				}},
-				{"filter", func(s *relationships.Service) ([]string, error) {
+				{"filter", func(s *decisions.Service) ([]string, error) {
 					return s.FilterAuthorized(t.Context(), alice, "view", "dashboard", ids)
 				}},
 			}
 			for _, op := range operations {
 				*count = 0
-				want, err := op.run(before.Service)
+				want, err := op.run(before)
 				oldCount := *count
 				if err != nil {
 					t.Fatal(err)
 				}
 				*count = 0
-				got, err := op.run(fast.Service)
+				got, err := op.run(fast)
 				newCount := *count
 				if err != nil || !slices.Equal(got, want) || len(got) == 0 {
 					t.Fatalf("%s: %v/%v", op.name, got, err)
@@ -167,7 +171,7 @@ func TestThroughBatchSQLiteQueryCounts(t *testing.T) {
 				t.Logf("%s: %d -> %d permission SQL queries (%d results)", op.name, oldCount, newCount, len(got))
 			}
 			// Real SQL group expansion keeps the exact userset relation.
-			denied, err := fast.Service.FilterAuthorized(t.Context(), authmodel.PrincipalRef{Type: "user", ID: "bob"}, "view", "dashboard", ids)
+			denied, err := fast.FilterAuthorized(t.Context(), authmodel.PrincipalRef{Type: "user", ID: "bob"}, "view", "dashboard", ids)
 			if err != nil || len(denied) != 0 {
 				t.Fatalf("member treated as admin: %v/%v", denied, err)
 			}
@@ -178,7 +182,7 @@ func TestThroughBatchSQLiteQueryCounts(t *testing.T) {
 func TestThroughBatchSQLiteTupleCache(t *testing.T) {
 	repos, ids, count := batchQueryFixture(t, 128)
 	backend := memory.NewTupleCache()
-	components, err := authorization.New(repos, authorization.WithRelationshipModel(batchQuerySchema()), authorization.WithTupleCache(backend, tuplecache.Policy{MaxStaleness: time.Minute}))
+	components, err := authorization.New(repos.Repositories, authorization.WithModel(batchQuerySchema()), authorization.WithTupleCache(backend, tuplecache.Policy{MaxStaleness: time.Minute}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -228,7 +232,7 @@ func TestThroughBatchSQLiteTupleCache(t *testing.T) {
 		}
 		t.Logf("filter: %d permission SQL queries, %d cache hits, %d durable fallbacks", *count, after.Hits-before.Hits, after.Fallbacks-before.Fallbacks)
 	}
-	check(true, 4) // Initial requests use one durable snapshot; they never fill Redis.
+	check(true, 5) // Initial requests use one durable snapshot; they never fill Redis.
 	if err := components.TupleCache.Poll(t.Context()); err != nil {
 		t.Fatal(err)
 	}
@@ -240,7 +244,7 @@ func TestThroughBatchSQLiteTupleCache(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	untouched := tuplecache.SetKey{Ref: relationships.SubjectRef{Type: "space", ID: ids[0], Relation: "tenant"}}
+	untouched := tuplecache.SetKey{Scope: tuples.On("space", ids[0]), Relation: "tenant"}
 	before, err := backend.Read(t.Context(), first, []tuplecache.SetKey{untouched})
 	if err != nil {
 		t.Fatal(err)
@@ -255,7 +259,7 @@ func TestThroughBatchSQLiteTupleCache(t *testing.T) {
 	if err := components.TupleCache.Close(); err != nil {
 		t.Fatal(err)
 	}
-	check(false, 7) // Revoked grants require exploring the remaining Through branches.
+	check(false, 6) // Revoked grants require exploring the remaining Through branches.
 	second, err := backend.State(t.Context())
 	if err != nil {
 		t.Fatal(err)
@@ -273,7 +277,7 @@ func TestThroughBatchSQLiteTupleCache(t *testing.T) {
 	}
 	// A fresh Redis-equivalent mirror reconstructs from current SQL, after all
 	// original events and the revocation event have been disposed.
-	restored, err := authorization.New(repos, authorization.WithRelationshipModel(batchQuerySchema()), authorization.WithTupleCache(memory.NewTupleCache(), tuplecache.Policy{MaxStaleness: time.Minute}))
+	restored, err := authorization.New(repos.Repositories, authorization.WithModel(batchQuerySchema()), authorization.WithTupleCache(memory.NewTupleCache(), tuplecache.Policy{MaxStaleness: time.Minute}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -303,11 +307,11 @@ func BenchmarkThroughBatchSQLite(b *testing.B) {
 	}
 	for _, mode := range []string{"sequential", "batched"} {
 		b.Run(mode, func(b *testing.B) {
-			store := repos.Relationships
+			store := repos.Tuples
 			if mode == "sequential" {
 				store = sequentialBatchStore{store}
 			}
-			parts, err := relationships.NewService(store, batchQuerySchema())
+			parts, err := decisions.NewService(store, decisions.WithModel(batchQuerySchema()))
 			if err != nil {
 				b.Fatal(err)
 			}
@@ -328,12 +332,12 @@ func BenchmarkThroughBatchSQLite(b *testing.B) {
 							if operation == "direct" {
 								req.Resource = authmodel.Resource{Type: "space", ID: "direct"}
 							}
-							result, err := parts.Service.Check(b.Context(), req)
+							result, err := parts.Check(b.Context(), req)
 							if err != nil || !result.Allowed {
 								b.Fatalf("check: %+v/%v", result, err)
 							}
 						case "batch":
-							results, err := parts.Service.CheckBatch(b.Context(), requests)
+							results, err := parts.CheckBatch(b.Context(), requests)
 							if err != nil || len(results) != len(requests) {
 								b.Fatalf("batch: %d/%v", len(results), err)
 							}
@@ -343,7 +347,7 @@ func BenchmarkThroughBatchSQLite(b *testing.B) {
 								}
 							}
 						case "filter":
-							got, err := parts.Service.FilterAuthorized(b.Context(), principal, "view", "dashboard", ids)
+							got, err := parts.FilterAuthorized(b.Context(), principal, "view", "dashboard", ids)
 							if err != nil || len(got) != len(ids) {
 								b.Fatalf("filter: %d/%v", len(got), err)
 							}
@@ -355,4 +359,20 @@ func BenchmarkThroughBatchSQLite(b *testing.B) {
 			}
 		})
 	}
+}
+
+type countedTupleStore struct {
+	tuples.Storer
+	count *int
+}
+
+func (s countedTupleStore) TupleCacheBinding() string {
+	return s.Storer.(interface{ TupleCacheBinding() string }).TupleCacheBinding()
+}
+func (s countedTupleStore) ReadTupleSnapshot(ctx context.Context, fn func(context.Context, tuples.Reader) error) error {
+	return s.Storer.ReadTupleSnapshot(ctx, func(ctx context.Context, r tuples.Reader) error {
+		view := r.(*tupleStore)
+		view.readQuerier = batchQueryCounter{view.readQuerier, s.count}
+		return fn(ctx, view)
+	})
 }

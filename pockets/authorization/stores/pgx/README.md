@@ -1,193 +1,160 @@
 # Authorization on PostgreSQL
 
-This adapter supplies relationship, role, atomic mutation and audit-reader ports
-from one store. Hosts own database connections and apply the complete
-`authorization` migration source before construction. The framework does not
-migrate at boot.
+One canonical `iam_tuples` table supplies `Repositories.Tuples`, the relationship
+facade, atomic mutations and optional audit recording. The roles service consumes
+the same tuple port. There is no independent role repository or role table.
+Hosts own connections and apply migrations before constructing the repositories;
+constructors validate the applied canonical columns, full identity primary key,
+shape/encoding constraints and byte collations before returning ports. Partial
+schemas, retained legacy authorities and extra uniqueness rules are rejected.
+Constructors start no workers.
 
 ```go
-repos, err := pgx.Repositories(ctx, db, pgx.WithSchema(schema), pgx.WithAudit())
-if err != nil {
-    return err
-}
-ctx = authorization.WithAuditSource(ctx, authorization.AuditSource{
-    System: "document-sync",
-    Reason: "project current document access",
-})
-err = repos.Relationships.CreateRelationships(ctx, tuples)
+repos, err := pgx.Repositories(ctx, db, pgx.WithAudit())
+if err != nil { return err }
+ctx = audit.WithSource(ctx, audit.Source{System: "access-sync"})
+err = repos.Tuples.ApplyTuples(ctx, tuples.Changes{Add: []tuples.Tuple{
+    {Scope: tuples.On("document", "d1"), Relation: "owner",
+      Subject: tuples.SubjectRef{Type: "user", ID: "alice"}},
+}})
 ```
 
-Use `WithAudit()` only when new changes should be recorded. The default is off;
-`repos.Audit` still lists previously retained history. `WithGuardianPolicy(policy)`
-installs explicit relationship invariants; its default is empty.
-`GuardianPolicy()` returns a defensive snapshot and `authorization.New`
-validates configured rules against the host relationship model.
+## Identity and policy
 
-`RelationshipRepository(ctx, db, opts...)` supports baseline-only host composition
-without constructing a mutation repository. It accepts the same store options.
-It probes both fact tables because writes lock both; WithAudit also requires iam_audit.
+Full identity is `(scope_kind, resource_type, resource_id, relation,
+subject_type, subject_id, subject_relation)`. Global scope is explicitly
+`tuples.Global()` (SQL kind 1, empty resource coordinates); a resource scope is
+`tuples.On(type, id)` (kind 2, both coordinates required). Missing coordinates
+never imply global scope. Both `iam_tuples` and `iam_audit` store `scope_kind` as
+`SMALLINT`. Reference values are exact UTF-8 strings, at most 256 bytes per
+field and free of control characters. No normalization is performed.
 
-## Writes and history
+Multiple labels can coexist for one subject/resource. Exact duplicate adds and
+absent removes are idempotent. A concrete subject and its `#member`/`#admin`
+usersets remain distinct. Global usersets are structurally valid facts; global
+scope never invents a resource node or implicit graph traversal.
 
-Raw relationship and role methods are trusted state-writing ports. They join an
-ambient connector transaction or own a transaction. `SetRelationTargets` applies
-one desired relation set atomically; a conflicting existing relation returns
-`sdk.ErrConflict` and preserves the previous set. Raw relationship creates retain
-an existing subject relation on conflict. Atomic commands apply current model
-validation, optional guards and configured guardian invariants on every call.
+`HasRole` checks exact global concrete membership. `HasRoleIn` checks exact
+resource membership. Global fallback must be explicitly composed, for example
+`HasRoleInOrGlobal` or a decisions expression. A graph model is optional. Models
+filter graph reads and compose exact role predicates through the one decisions
+service. Neither roles nor named permissions are separately cached decisions.
 
-Successful commands return `mutation.Result` containing the current Outcome and
-SameRoleGrantRemains annotation. Semantic and invariant refusals return an error
-and a nil result. There are no durable operation IDs, receipts, replay tokens,
-expected revisions or revision counters. Repeating a command evaluates current
-state and policy; natural tuple duplicates remain no-ops.
+## Writes, guards and audit
 
-With recording enabled, every supported raw or command write requires a valid
-source before work, including no-op attempts. Supply either an actor type/ID pair
-or an explicit system name, with an optional bounded reason. Actor-facing service
-methods replace attribution with their validated actor. Source metadata never
-confers permission.
+`ApplyTuples` applies one validated add/remove delta atomically. `ReconcileTuples`
+and `SetRelationTargets` replace only one scope/relation set and preserve every
+other label. Resource deletion/teardown sees all facts, regardless of which
+facade wrote them. Trusted raw writes join ambient transactions; request-facing
+writes should use the guarded mutation service.
 
-Each actual added or removed tuple/role produces one `audit.Record`; EventID
-only groups the records of a changed call. Records preserve the complete six-field
-relationship identity or five-field role identity. Replacements record removal
-and addition, broad deletes record every removed fact, and resource teardown
-includes scoped roles. No-ops, refused operations and rollbacks record nothing.
-Timestamps use UTC microseconds and describe when the operation records its
-changes, rather than a separate commit-order sequence.
+Mutation guards, current-model validation, guardian checks, actual changes and
+audit share one write boundary. Guardian rules apply to role writes and no-op
+attempts too. Explicit batch changes replace the retired ambiguous Replace
+operation. Rejected operations return an error and nil result; successful results
+contain only the current Outcome. Guarded mutation commands reject ambient host
+transactions. There are no replay tokens, revisions or durable operation receipts.
 
-Facts and their audit records use the same transaction. Ambient operations use a
-savepoint: an audit failure rolls back that operation even when the host handles
-its error and commits other work. Failure to restore the savepoint aborts the
-host transaction. Multiple calls in one host transaction produce separate event
-groups that commit or roll back together. Guarded/command methods refuse an
-ambient transaction with `ErrGuardedInsideTransaction`.
+`WithAudit()` requires a valid source even for no-op writes. One actual canonical
+addition/removal produces one `audit.Change{Action, Tuple}`, encoded `tuple/v2`.
+A fact written through both facades is recorded once. Events group changes within
+one call; UTC microsecond timestamps are not commit-order watermarks. Atomic swaps
+record both removal and addition. No-ops, refusals and rollbacks record nothing.
+Ambient failures roll back an operation savepoint, preserving unrelated host work.
 
-`repos.Audit.List(ctx, audit.Filter{...}, list.Request{...})` supports exact
-optional resource, subject and actor pairs, standard cursor/offset pagination
-and totals. Each filter pair is both-or-neither. Ordering defaults to
-`occurred_at DESC` with record ID as the tiebreak; ASC is also supported. Hosts
-own access control, retention, presentation and export. No audit HTTP route is
-installed. Direct database edits and writes through a separately constructed
-store with recording disabled are outside recorded coverage.
+`repos.Audit.List` reads canonical `tuple/v2` records. Recording defaults off;
+existing canonical history remains readable. Hosts own audit access, retention
+and export. Raw SQL outside recording-enabled adapters is outside audit coverage.
 
-## Concurrency
+## Concurrency and snapshots
 
-Every mutation-owned transaction explicitly uses READ COMMITTED and takes
-`SHARE ROW EXCLUSIVE` locks on the schema-qualified relationship table followed
-by the role table, before guard or state reads. Raw writes take the same locks.
-These locks also conflict with ordinary SQL INSERT/UPDATE/DELETE, so negative
-membership checks, nested usersets and global-role reads stay stable through
-commit without revision anchors. Ordinary SELECTs remain concurrent.
+PostgreSQL mutation-owned transactions use READ COMMITTED and lock `iam_tuples`
+with SHARE ROW EXCLUSIVE before reading guards or current facts. Raw writes take
+the same lock. It conflicts with ordinary SQL writers, including absent-row
+predicates, but permits ordinary readers. This deliberately serializes writers
+per schema. Ambient writes keep their locks until the host commits.
 
-This deliberately serializes authorization writers per schema. An ambient host
-transaction retains the locks until its own commit; keep such workflows short.
-The adapter preserves an ambient transaction's isolation level and captures its
-actual INSERT/DELETE RETURNING rows. Host transactions that already acquired
-locks in another order can deadlock. Their caller owns rollback/retry. Owned
-trusted writes have bounded, cancellation-aware retries for PostgreSQL's definite
-40001/40P01 transaction aborts; guarded writes report
-`mutation.ErrConcurrentMutation` without rerunning the guard. Unknown commit or
-transport failures never replay internally.
+Trusted owned operations retry only definite PostgreSQL serialization/deadlock
+aborts (40001/40P01). Guard callbacks are never replayed. Unknown commit/transport
+outcomes are never automatically retried. Hosts own retries for ambient work.
 
-## Reads and tuple identity
+Use `db.TransactSnapshot(ctx, fn)` for host workflows making compound authorization
+reads: it is read-write REPEATABLE READ and sees pending writes. Ordinary
+`db.Transact` retains its normal isolation. Canonical compound reads inspect an
+ambient transaction's actual isolation and reject READ COMMITTED/READ UNCOMMITTED
+with `tuples.ErrSnapshotIsolation` before invoking the callback. REPEATABLE READ
+and SERIALIZABLE are accepted.
 
-Relationships use the full tuple as their SQL primary key:
-resource type, resource ID, relation, subject type, subject ID, subject relation.
-Roles retain their natural five-field key. Neither fact type stores a surrogate
-relationship ID or CreatedAt. The independent one-relation-per-exact-subject
-constraint remains; distinct userset relations remain distinct subjects.
+`ReadTupleSnapshot` pins its view before entering the synchronous callback,
+including when the callback's first action lets another writer commit. Bulk exact
+membership, set reads and tuple pagination share that view across transport
+batches. Completion errors discard provisional answers. Escaped readers fail with
+`tuples.ErrSnapshotClosed`, including optimized graph readers. Callbacks must not
+escape into goroutines.
 
-Relationship lists order by `tuple_key ASC`; role lists by `role_key ASC`.
-Keys join canonical fields with U+0001, which validation forbids inside a field.
-PostgreSQL ordering expressions explicitly use COLLATE "C".
-Model-bound readers filter persisted facts through the current host model.
-Recursive userset expansion retains exact userset relation identity, detects
-cycles and enforces the same expansion-state budget in ordinary and guarded
-reads. Physical scan cost remains planner-dependent.
+Tuple lists use a versioned complete identity key in byte order. Old tuple/role
+cursor encodings fail explicitly. ReadSets preserves input order and repeated
+keys, and refuses an exceeded total result bound without returning partial sets.
 
-## Migration and deployment
+`WithSchema(schema)` qualifies every runtime table. Apply migrations with the
+matching `pgxdb.WithSchema(schema)`. Cache construction resolves and freezes the
+actual schema even for a search-path constructor. It rejects mixed schemas,
+RLS, inheritance, temporary/unlogged facts, altered or disabled capture triggers.
+Canonical reference columns and recursive CTE anchors use COLLATE "C", keeping
+identity and order byte-exact under non-C database locales.
 
-Export the canonical files with `ExportMigrations(dst)` and apply them using the
-host's runner. Fresh databases apply 0001 through 0007. Keep earlier deployed
-migration files unchanged.
+## Schema setup
 
-0006 removes relationship IDs and fact timestamps, preserving full tuple keys.
-It rejects legacy U+0001 separators before dropping metadata; repair those
-records explicitly and rerun. 0007 drops `iam_scopes` and `iam_mutations`, creates
-`iam_audit` and its time/resource/subject/actor listing indexes. Old receipts do
-not contain enough information to reconstruct actor-attributed fact history;
-the migration does not invent it.
+The fresh base is `migrations/0001_iam_tuples.sql`. It creates `iam_tuples` and
+`iam_audit` directly, with their constraints and indexes. Export it using
+`ExportMigrations(dst)` or apply `MigrationsFS` / `MigrationsDir` through the
+host's pre-boot migration runner.
 
-Stop old writers before upgrading. Archive legacy receipt/revision tables first
-if needed, apply the complete migration source, then deploy the new binary.
-An old binary cannot operate against the new schema. Rollback requires a
-compatible backup or a deliberate host migration; do not resume old writers
-against partially upgraded tables.
+TupleCache adds one optional file,
+`tuple_cache_migrations/0002_iam_tuple_cache.sql`, exposed by
+`TupleCacheMigrationsFS` / `TupleCacheMigrationsDir` and
+`ExportTupleCacheMigrations(dst)`. Its source name is `authorization-cache-v2`.
+Apply the base first, then this source in the same schema/database. It can be
+installed over populated canonical facts; the first relay publication loads
+current facts into the mirror.
 
-WithSchema(schema) qualifies every runtime table and audit query. Apply migrations with the matching pgxdb.WithSchema(schema); constructor probes catch missing tables before serving requests.
+There is no legacy migration prefix or bundled conversion/downgrade procedure.
+For ordered host setup and construction, see the [schema setup guide](../UPGRADE.md).
+
+## Optional TupleCache
+
+`Repositories(ctx, db, WithTupleCache())` exposes `TupleSource` and matching
+`TupleCacheBinding` on the canonical reader. Global, scoped, concrete and userset changes all enter the
+same outbox, including ordinary SQL writes and writers without cache/audit options.
+No-op updates generate no work. PostgreSQL TRUNCATE requests a full rebuild.
+
+Delivery snapshots include one consistent receipt, exact pending event IDs and
+current canonical facts for a rebuild. Changed/missing receipts force a rebuild;
+processed outbox rows are disposable work. After successful atomic Redis
+publication, acknowledgement compares the old receipt and deletes only captured
+IDs. Sequence maxima are never commit watermarks. Later commits survive.
+
+Ambient contexts bypass Redis and use canonical durable snapshots with pending
+writes. Delivery `Snapshot` and `Acknowledge` reject ambient transactions. Relay
+lifecycle, primary routing, freshness policy and client lifecycle remain host-owned.
+A new protocol requires a fresh Redis namespace; protocol1 bytes cannot be used.
+
+Before trigger-bypassing imports, restore or cloning, stop/drain readers and
+relays. Rotate the store's 32-character lowercase-hex identity, clear its receipt,
+reconstruct repository bindings, and rebuild Redis before resuming readers.
 
 ## Verification
 
-Set POSTGRES_TEST_DSN and run `go test -race -count=1 ./...`. Repeat with POSTGRES_TEST_SCHEMA to exercise a named schema. The optional non-C locale proof requires its documented locale fixture.
-Live tests include shared fact/mutation/audit conformance, exact userset deltas,
-ambient savepoint recovery, retained readers, pagination and populated upgrades.
+Use an explicitly disposable local database:
 
-## Optional TupleCache source
+```sh
+POSTGRES_TEST_DSN='postgres://fixture@localhost:5432/authorization_test?sslmode=disable' go test -race -count=1 ./...
+```
 
-SQLite/Turso and PostgreSQL are alternative authoritative stores. Redis is a
-maintained mirror of raw relationships; the store remains the source of truth.
-PostgreSQL captures committed tuple changes and supplies consistent source
-snapshots through `Repositories(ctx, db, WithTupleCache())`, which returns
-`TupleSource` with matching `TupleCacheBinding` values on its fact readers.
-Use the repository bundle; the relationship-only constructor rejects this option.
-Unconfigured stores remain direct and need no optional schema.
+Repeat with `POSTGRES_TEST_SCHEMA=authorization_test` for schema qualification and
+`POSTGRES_NON_C_TEST_DSN` pointing at a disposable non-C UTF-8 database for the
+collation proof. Tests include a million-row query-plan measurement.
 
-Export `CacheMigrationsFS` / `CacheMigrationsDir` using
-`ExportCacheMigrations(dst)` as the separate **authorization-cache** source.
-First apply **authorization** through 0007 in the same schema, then both optional
-migrations. Historical 0001 remains unchanged; 0002 removes its counter triggers,
-function and table, and installs `iam_tuple_cache` and `iam_tuple_outbox`.
-Constructors never migrate. Stop old cache-enabled binaries before this upgrade;
-they cannot run against the replacement schema. Use a new Redis namespace and
-let old cache entries expire.
-
-`iam_tuple_cache` holds a stable store identity and acknowledged delivery receipt;
-these do not invalidate unrelated raw sets. Every ordinary relationship INSERT,
-DELETE and changed UPDATE records complete old/new tuples atomically in the
-outbox, including raw SQL and writers without WithTupleCache or audit enabled.
-No-op writes create no work. TRUNCATE records a rebuild instruction. Role changes
-create no tuple work: role and mixed-kind checks use durable snapshots.
-
-Source snapshots read the receipt and all committed pending events in one
-repeatable-read snapshot. Missing or mismatching Redis receipts and pending
-TRUNCATE instructions also read all current tuples for a complete rebuild. A
-rebuild does not replay its pending changes over the already-current tuples.
-After Redis publication succeeds, acknowledge its receipt and delete exactly the
-captured event IDs in one SQL transaction. PostgreSQL sequences allocate IDs
-before commit; never use a maximum ID as a commit watermark. Pending work retries
-safely, and reconstruction uses current source tuples after old work is deleted.
-
-Read-snapshot callbacks are sequential and must not escape to goroutines.
-Retained readers fail with `tuplecache.ErrSnapshotClosed`; ambient transactions
-bypass caching and source operations reject ambient use. Read and delivery
-snapshots must use a primary connection. The host owns relay lifecycle, Redis
-readiness/freshness configuration and all client lifecycles.
-
-Enabled construction resolves fact and TupleCache tables to one durable schema
-and freezes it against later search_path changes. It validates owned trigger
-bodies and enabled state and rejects RLS, inheritance and temporary/unlogged
-fact or cache tables. Trigger functions use SECURITY INVOKER and qualify their
-outbox by the fact table's schema. Writers need ordinary fact permissions, SELECT
-on `iam_tuple_cache`, and INSERT
-on `iam_tuple_outbox` (its generated identity needs no separate sequence grant).
-Relays need SELECT on
-facts and both TupleCache tables, UPDATE(receipt) on `iam_tuple_cache`, and DELETE
-on `iam_tuple_outbox`. Runtime identities must not disable triggers or perform DDL.
-
-Before trigger-bypassing imports, database restoration or cloning, stop/drain
-TupleCache readers and relays. Perform maintenance, replace the store identity
-with a new random 32-character lowercase hex value and clear its receipt, then
-reconstruct source bindings and rebuild Redis from current source tuples. This
-keeps restored/cloned stores from accepting an unrelated historical mirror.
-PostgreSQL 17 is the fixture baseline.
+The suites cover canonical identity, cross-facade audit/guardians, snapshots,
+ambient savepoint recovery, transport batches, keyset pagination, fresh schema
+installation, applied-schema validation and cache protocol binding.

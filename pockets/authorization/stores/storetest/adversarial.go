@@ -4,6 +4,8 @@ import (
 	"context"
 	"testing"
 
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/decisions"
+
 	"github.com/gopernicus/gopernicus/pockets/authorization"
 	authmodel "github.com/gopernicus/gopernicus/pockets/authorization/logic/model"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/relationships"
@@ -19,22 +21,22 @@ import (
 // `org#member` userset as DISTINCT allowed subjects, so the exact-pair validator
 // and relation-aware expansion are both exercised. The only permission is "view";
 // subjects are user/service_account/group; resources are doc/group/org/platform.
-func fixtureSchema() relationships.Schema {
-	return relationships.NewSchema([]relationships.ResourceSchema{
-		{Name: "group", Def: relationships.ResourceTypeDef{
-			Relations: map[string]relationships.RelationDef{
-				"member": {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "user"}, {Type: "group", Relation: "member"}}},
-				"admin":  {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "user"}}},
+func fixtureSchema() decisions.Model {
+	return decisions.NewSchema([]decisions.ResourceSchema{
+		{Name: "group", Def: decisions.ResourceTypeDef{
+			Relations: map[string]decisions.RelationDef{
+				"member": {AllowedSubjects: []decisions.SubjectTypeRef{{Type: "user"}, {Type: "group", Relation: "member"}}},
+				"admin":  {AllowedSubjects: []decisions.SubjectTypeRef{{Type: "user"}}},
 			},
 		}},
-		{Name: "org", Def: relationships.ResourceTypeDef{
-			Relations: map[string]relationships.RelationDef{
-				"member": {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "group", Relation: "member"}}},
+		{Name: "org", Def: decisions.ResourceTypeDef{
+			Relations: map[string]decisions.RelationDef{
+				"member": {AllowedSubjects: []decisions.SubjectTypeRef{{Type: "group", Relation: "member"}}},
 			},
 		}},
-		{Name: "doc", Def: relationships.ResourceTypeDef{
-			Relations: map[string]relationships.RelationDef{
-				"viewer": {AllowedSubjects: []relationships.SubjectTypeRef{
+		{Name: "doc", Def: decisions.ResourceTypeDef{
+			Relations: map[string]decisions.RelationDef{
+				"viewer": {AllowedSubjects: []decisions.SubjectTypeRef{
 					{Type: "user"},
 					{Type: "group"},
 					{Type: "group", Relation: "member"},
@@ -42,28 +44,28 @@ func fixtureSchema() relationships.Schema {
 					{Type: "org", Relation: "member"},
 				}},
 			},
-			Permissions: map[string]relationships.PermissionRule{
-				"view": relationships.AnyOf(relationships.Direct("viewer")),
+			Permissions: map[string]decisions.Expression{
+				"view": decisions.AnyOf(decisions.Direct("viewer")),
 			},
 		}},
-		{Name: "platform", Def: relationships.ResourceTypeDef{
-			Relations: map[string]relationships.RelationDef{
-				"admin": {AllowedSubjects: []relationships.SubjectTypeRef{{Type: "user"}, {Type: "service_account"}}},
+		{Name: "platform", Def: decisions.ResourceTypeDef{
+			Relations: map[string]decisions.RelationDef{
+				"admin": {AllowedSubjects: []decisions.SubjectTypeRef{{Type: "user"}, {Type: "service_account"}}},
 			},
 		}},
 	})
 }
 
 // newServiceFor builds the pocket Service over the stores under test, supplying
-// the fixture Model only when the relationship kind is wired (so a roles-only
+// the fixture Model only when the graph view is wired (so a roles-only
 // backend still constructs).
-func newServiceFor(t *testing.T, repos authorization.Repositories) authorization.Components {
+func newServiceFor(t *testing.T, repos Repositories) authorization.Components {
 	t.Helper()
 	cfg := []authorization.Option{}
 	if repos.Relationships != nil {
-		cfg = append(cfg, authorization.WithRelationshipModel(fixtureSchema()))
+		cfg = append(cfg, authorization.WithModel(fixtureSchema()))
 	}
-	comps, err := authorization.New(repos, cfg...)
+	comps, err := authorization.New(repos.Repositories, cfg...)
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
@@ -92,7 +94,7 @@ func mustView(t *testing.T, svc authorization.Components, subjectType, subjectID
 }
 
 // runAdversarial is layer (b): engine/service outcomes over the stores under test.
-func runAdversarial(t *testing.T, newRepos func(t *testing.T) authorization.Repositories) {
+func runAdversarial(t *testing.T, newRepos func(t *testing.T) Repositories) {
 	ctx := context.Background()
 
 	t.Run("MembershipCycle", func(t *testing.T) {
