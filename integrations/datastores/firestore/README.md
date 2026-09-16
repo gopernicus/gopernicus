@@ -658,10 +658,11 @@ gcloud firestore databases create \
 # --query-scope is omitted because its default is `collection`; pass
 # `--query-scope=collection-group` for a collection-group index.
 gcloud firestore indexes composite create \
-  --collection-group=iam_relationships \
+  --collection-group=api_keys \
   --database="ci-$GITHUB_RUN_ID" --project="$FIRESTORE_LIVE_PROJECT_ID" \
-  --field-config=field-path=resource_key,order=ascending \
-  --field-config=field-path=created_at,order=descending
+  --field-config=field-path=service_account_id,order=ascending \
+  --field-config=field-path=created_at,order=descending \
+  --field-config=field-path=id,order=descending
 
 # wait: every expected index must be READY and none CREATING before any query
 # runs (a query against a building index is a FAILED_PRECONDITION that reads

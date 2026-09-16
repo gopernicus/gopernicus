@@ -22,7 +22,7 @@ The reference host is **gps-360-go**, a private production application built on 
 
 ## The eleven rules
 
-Rule ids are the **H series** (H = host), H0 through H10. They police a host; the repository's own Makefile `G` guards police the framework. `gopernicus guard --list`, shipping in `workshop/gopernicus` v0.3.0, prints these same eleven lines, so the binary and the contract cannot drift.
+Rule ids are the **H series** (H = host), H0 through H10. They police a host; the repository's own Makefile `G` guards police the framework. A `gopernicus guard` command that checks a host against these rules is planned but has not shipped.
 
 | id | the rule, in one line |
 |---|---|

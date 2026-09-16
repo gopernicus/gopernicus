@@ -62,7 +62,7 @@ POSTGRES_TEST_DSN='postgres://postgres:postgres@localhost:5432/postgres?sslmode=
   make test-stores
 ```
 
-Turso legs need `TURSO_DATABASE_URL` and `TURSO_AUTH_TOKEN` and compile with `-tags=integration`. Use disposable databases. Some suites exercise concurrency, claims, and migration state destructively within their own test data.
+Turso legs need `TURSO_DATABASE_URL` and `TURSO_AUTH_TOKEN` and compile with `-tags=integration`. Firestore legs (the connector and the authentication store) run against `FIRESTORE_EMULATOR_HOST` and skip loudly when it is unset; the authentication leg is slow, with a 45-minute timeout. Use disposable databases. Some suites exercise concurrency, claims, and migration state destructively within their own test data.
 
 ## Architecture guards
 
@@ -85,7 +85,7 @@ If a guard fails, fix the dependency direction. Pocket guards follow actual modu
 
 ## Scaffold compile proofs
 
-Workshop templates are not Go files and therefore evade many whole-tree scans. Dedicated tests emit a host and pocket into temporary directories, rewrite local pre-tag replacements, disable workspace resolution, build, and run memory conformance.
+Workshop templates are not Go files and therefore evade many whole-tree scans. Dedicated tests emit a host and pocket into temporary directories, point their framework requirements at this checkout, disable workspace resolution, build, and run memory conformance.
 
 Update these proofs whenever a template changes its module requirements or emitted anatomy.
 

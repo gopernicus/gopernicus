@@ -4,6 +4,16 @@ Authorization ships a fresh canonical SQL schema for PostgreSQL and SQLite/Turso
 Hosts export and apply it before constructing repositories. Framework constructors
 validate the applied schema; they do not create tables or run migrations.
 
+## Adopting the outcome cleanup (v0.22.0)
+
+`mutations.OutcomeInvariantBlocked` and `Outcome.Rejection` are removed. No
+production path ever produced that outcome: integrity refusals are returned as
+the `ErrInvariantBlocked` error (wrapping `sdk.ErrConflict`) with no result, and
+`Outcome.Valid` now accepts only `applied`, `no_change` and `not_found`. Upgrade
+authorization core to `v0.22.0` with PostgreSQL store `v0.16.0` or Turso store
+`v0.15.0`. No SQL migration, cursor/cache format, configuration or dependency
+change is required.
+
 ## Adopting the internal cleanup (v0.21.0)
 
 The authorization core removes `decisions.Service.ValidateRelation`,

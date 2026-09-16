@@ -14,7 +14,7 @@ The host's `main` package chooses the router, middleware, pocket modules, reposi
 
 :::info Main branch
 
-The documentation follows the repository's `main` branch. Module tags and public APIs are still evolving, so pages distinguish current behavior from planned work.
+The documentation follows the repository's `main` branch. Modules are tagged individually and APIs are pre-1.0; [AUDIT.md](https://github.com/gopernicus/gopernicus/blob/main/AUDIT.md) records every breaking change with its migration. Pages distinguish current behavior from planned work.
 
 :::
 
@@ -62,10 +62,6 @@ The packages can be composed at different boundaries:
 | API plus Go UI | HTTP packages plus an optional UI package and pocket view adapter | page composition, theme choices, asset routes, and lifecycle |
 
 These are composition choices, not separate editions. See [React and TanStack](ui/react.md) for the API-only client pattern and [GOTH UI](ui/goth.md) for the optional Go presentation package.
-
-## Earlier design notes
-
-The repository grew from an earlier layered design with Core, Bridge, Infrastructure, App, and schema-driven generation. The current package layout uses SDK tiers, pocket cores, sibling adapters, integrations, and host-owned composition. The [architecture overview](architecture/overview.md) documents the current rules; the [Workshop pages](workshop/overview.md) document what the CLI does today and the generation work that remains planned.
 
 ## Where to begin
 

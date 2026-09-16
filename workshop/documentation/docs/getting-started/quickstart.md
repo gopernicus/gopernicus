@@ -27,7 +27,7 @@ Stop the server with `Ctrl+C`; the host cancels its context and lets `web.Run` p
 
 ## Follow the composition root
 
-The useful file is `examples/minimal/cmd/server/main.go`. Its `run` function performs the complete composition:
+The useful file is `examples/minimal/cmd/server/main.go`. Its `run` function performs the composition:
 
 1. construct an in-memory implementation of `cms.Repositories`;
 2. construct the host's `web.WebHandler` and middleware stack;
@@ -35,7 +35,7 @@ The useful file is `examples/minimal/cmd/server/main.go`. Its `run` function per
 4. build a `ui/goth` bundle and serve its embedded assets;
 5. create the CMS view adapter;
 6. call `cms.Register` with repositories and host-selected capabilities;
-7. register the host's health route;
+7. mount the host's own catalog hexagon (`internal/logic`, `inbound`, `outbound`) at `GET /catalog.json`, seed demo entries, and register the health route;
 8. run the server until its context is canceled.
 
 The core wiring looks like this:

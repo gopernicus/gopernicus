@@ -1,5 +1,32 @@
 # Releasing gopernicus modules
 
+## Linux filestorage fix, authorization outcome cleanup and docs pass (2026-09-16)
+
+SDK patch `v0.9.1`: `filestorage.Disk.DownloadRange` clamps its seek offset to the
+current file size. Seeking to `MaxInt64` succeeds on macOS but fails with
+`EINVAL` on Linux, which made `TestDisk_Conformance/RangeEdges` fail on every
+GitHub Linux run since the coordinated 2026-09-11 release. The contract already
+says offsets at or beyond EOF read as empty. Verified in a `golang:1.26` Linux
+container: the test fails before the change and passes after it.
+
+Authorization `v0.22.0`, PostgreSQL store `v0.16.0` and Turso store `v0.15.0`
+remove the unreachable `mutations.OutcomeInvariantBlocked` and
+`Outcome.Rejection`. `Plan` reports integrity refusals as the `ErrInvariantBlocked`
+error, never as an outcome; the stores drop their dead `Rejection` calls. No
+schema, cursor/cache protocol, configuration or dependency change. Adapter and
+auth-cms pins stay at `v0.21.0`, which remains a compatible minimum. See
+[API adoption](pockets/authorization/stores/UPGRADE.md#adopting-the-outcome-cleanup-v0220).
+
+The same commit carries a documentation pass: the Docusaurus authorization page
+is rewritten around the authorization-versus-integrity boundary, the tuple
+authority, audit and the TupleCache outbox, and nineteen site pages plus the
+root, authorization and Firestore connector READMEs lose stale claims (module
+count, release line, removed `web.Decode`, `authpgx.Repositories` context
+parameter, Turso local-file profile, Firestore store coverage, the unshipped
+`gopernicus guard` command).
+
+Verification is recorded in [plans/docs-pass-2026-09.md](plans/docs-pass-2026-09.md).
+
 ## Authorization internal cleanup (published 2026-09-16)
 
 Authorization core and PostgreSQL/Turso adapters consolidate raw relationship

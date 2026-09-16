@@ -36,7 +36,7 @@ The claimed namespace is `/auth/*`. The JSON surface includes:
 - step-up and credential/identifier management;
 - passwordless code and magic-link flows when enabled;
 - OAuth login/link/unlink when providers are wired;
-- service accounts and API keys when both repositories are wired;
+- service account and API key lifecycle routes when both repositories are wired and `MachineRoutesGate` is set (API-key authentication itself needs only the repositories);
 - invitations when a granter and host authorization check are wired;
 - user administration when the host explicitly supplies `UserAdminCheck`.
 
@@ -71,8 +71,8 @@ Services still enforce data validation, token/session consistency and recipient
 identity proof. These establish valid authentication evidence or data, rather
 than deciding what the caller may do. Quotas and last-active-admin rules require
 an atomic operation owned by the relevant domain; a preliminary access check
-cannot preserve them under concurrent writes. Authorization tuple minima count
-grants, not active user accounts.
+cannot preserve them under concurrent writes. The authorization store's
+`IntegrityPolicy` counts grants, not active user accounts.
 
 Admission does not hold a permission snapshot through application execution.
 Later revocation cannot retract admitted work. An invitation admitted at issuance
@@ -106,9 +106,8 @@ application authorization. `AuthenticationLimits` provides independent subject a
 IP budgets for password login, reset starts and sensitive proofs.
 
 Authentication SQL stores own their focused atomic operations; they do not generally
-join host ambient transactions. Firestore still has unimplemented challenge, recovery,
-credential-management, invitation and machine-identity operations; a non-nil
-repository slot does not imply full support.
+join host ambient transactions. The Firestore store implements all repository
+ports but has been verified only against the emulator, not real GCP Firestore.
 
 ## Minimal development wiring
 
@@ -222,7 +221,7 @@ Production has no implicit mode and fails closed on incomplete security wiring. 
 
 ## Persistence and views
 
-Both pgx and Turso store modules implement the pocket repositories and export the authentication migration set. The host owns its final migration ledger and upgrades.
+The pgx and Turso store modules implement the pocket repositories and export the authentication migration set; the Firestore store module implements the same repositories and exports an index manifest instead. The host owns its final migration ledger and upgrades.
 
 The pocket core imports neither store nor UI. `pockets/authentication/views/goth` maps the technology-neutral `Views` port onto `ui/goth`; hosts can embed that default and override pages, or implement the port with another renderer.
 

@@ -73,7 +73,7 @@ Workshop's pocket scaffold has no routes or placeholder `Register` method. If th
 
 1. place the public adapter in `inbound/http`, with private handler helpers;
 2. accept only the one-method `pockets.RouteRegistrar`;
-3. use `web.Decode`, responders, render, and error mapping;
+3. use `web.DecodeJSON`, responders, render, and error mapping;
 4. document the literal route table and conventional namespace;
 5. expose use cases through public logic services and middleware through the adapter;
 6. start no process-owned goroutine from `Register`.

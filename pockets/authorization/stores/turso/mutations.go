@@ -54,9 +54,6 @@ func (m *mutationStore) Apply(ctx context.Context, cmd mutations.Command, valida
 		if err != nil {
 			return err
 		}
-		if err := outcome.Rejection(); err != nil {
-			return err
-		}
 		if err := appendAudit(ctx, w, config{audit: m.audit}); err != nil {
 			return err
 		}

@@ -27,12 +27,15 @@ Or use the symmetric Turso connector. Pass the host's startup context to `Open`;
 the configured connection timeout is an additional upper bound. Canceling that
 context after a successful return does not close the database. Hosts own
 `DB.Close`. Connector config may carry environment tags, and pgx also honors
-standard `PG*` defaults while parsing its connection string.
+standard `PG*` defaults while parsing its connection string. A Turso host that
+points at a local `file:` URL must blank-import
+`integrations/datastores/turso/localfile` so the pure-Go SQLite driver is
+registered; `Open` fails naming that import otherwise.
 
 ## Choose or implement stores
 
 ```go
-authRepos, err := authpgx.Repositories(db)
+authRepos, err := authpgx.Repositories(ctx, db)   // validates the applied schema at startup
 if err != nil {
     return err
 }
@@ -107,7 +110,7 @@ The application server does not migrate automatically. This prevents replicas fr
 
 ## Transactions stay behind ports
 
-Use SDK `transaction.Transactor` or pocket-declared atomic repository methods when a use case spans several writes. Do not pull a connector's raw underlying handle into logic as a service-locator shortcut.
+Use SDK `transaction.Transactor` or pocket-declared atomic repository methods when a use case spans several writes. Do not pull a connector's raw underlying handle into logic as a service-locator shortcut. For work that must observe one consistent state, both SQL connectors offer snapshot transactions: `pgxdb.DB.TransactSnapshot` (read-write, REPEATABLE READ) and turso `DB.BeginRead` (a pinned read snapshot). Authorization decisions inside an ambient PostgreSQL transaction require that isolation level.
 
 An atomic domain operation should be one port method when all implementations must guarantee the same invariant—for example authentication's user + primary identifier creation or authorization's atomic tuple command.
 
@@ -122,7 +125,7 @@ transaction, does not automatically become atomic with a later write.
 
 ## Prove parity
 
-Hermetic `make check` lets live datastore suites skip loudly. Milestone/release proof runs them against real PostgreSQL and Turso with race detection where applicable.
+Hermetic `make check` lets live datastore suites skip loudly. Milestone/release proof runs them against real PostgreSQL and Turso, and the Firestore emulator, with race detection where applicable.
 
 ```bash
 POSTGRES_TEST_DSN='postgres://…?sslmode=disable' make test-stores

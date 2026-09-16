@@ -305,6 +305,16 @@ func (s *Disk) DownloadRange(ctx context.Context, key string, offset, length int
 	if err != nil {
 		return nil, fmt.Errorf("disk: download range %q: %w", key, err)
 	}
+	// Offsets at or beyond EOF read as empty. Seeking past the filesystem's
+	// maximum file size fails with EINVAL on Linux, so clamp to the current size.
+	info, err := f.Stat()
+	if err != nil {
+		_ = f.Close()
+		return nil, err
+	}
+	if offset > info.Size() {
+		offset = info.Size()
+	}
 	if _, err := f.Seek(offset, io.SeekStart); err != nil {
 		_ = f.Close()
 		return nil, err

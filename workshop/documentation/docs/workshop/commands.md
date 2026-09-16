@@ -33,7 +33,7 @@ The command emits:
 - `Makefile` and `.env.example`;
 - host migration ledger `workshop/migrations/primary`;
 - a datastore-specific migration runner when `--db` is not `none`;
-- a README with pre-tag dependency instructions.
+- a README that pins released framework tags, with local `replace` directives shown as an optional development step.
 
 It mounts no pocket. Add only the modules your host needs.
 

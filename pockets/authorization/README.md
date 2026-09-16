@@ -18,6 +18,7 @@ at startup.
 | `logic/model` | Principals, resources, result/reason vocabulary and evaluation budgets |
 | `logic/mutations` | Principal-free commands, tuple-shape validation and atomic integrity policy |
 | `logic/audit` | Canonical committed changes, attribution and history reader |
+| `logic/tuplecache` | Optional raw fact mirror runtime: `Policy`, `Source`, `Backend`, poll/rebuild |
 | `inbound/http` | Composable authorization guards and optional role administration |
 | `stores/memory`, `stores/storetest` | Reference authority and shared conformance suites |
 
@@ -141,7 +142,9 @@ policy, without named-model shape constraints.
 
 `Repositories.Tuples` is required and supplies roles, the resource fact facade
 and decisions. `Mutations` adds the atomic mutation capability. `Audit` is an
-optional history reader. Without `Repositories.Mutations`, `Components.Mutations`
+optional history reader. `TupleSource` supplies authoritative snapshots and
+committed changes to the optional TupleCache; the SQL adapters' `Repositories`
+constructors populate it when their `WithTupleCache()` option is set. Without `Repositories.Mutations`, `Components.Mutations`
 is nil and raw writers remain available. Direct `mutations.NewService(nil)`
 returns `ErrMutationsNotConfigured`; it never constructs an unusable writer.
 `Decisions`, `Roles` and `Relationships` are available without a named model.

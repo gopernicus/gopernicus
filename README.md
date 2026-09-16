@@ -32,7 +32,7 @@ pockets/authentication/stores/pgx/           auth's pgx store adapter, its own m
 pockets/authentication/stores/turso/         auth's Turso store adapter, its own module
 pockets/authentication/stores/firestore/     auth's Firestore store adapter (Native mode; no ambient-transaction join — ruling R1), its own module
 pockets/authentication/views/goth/           auth's bundled default views (ui/goth), its own module
-pockets/authorization/             IAM hexagon — independently wireable kinds (relationships/ReBAC + roles); datastore-free; public memstore/
+pockets/authorization/             IAM hexagon — one canonical tuple authority for exact roles and optional graph permissions; datastore-free; public stores/memory
 pockets/authorization/stores/pgx/  authorization's pgx store adapter, its own module
 pockets/authorization/stores/turso/ authorization's Turso store adapter, its own module
 pockets/authorization/stores/goredis/ authorization's Redis tuple mirror, its own module

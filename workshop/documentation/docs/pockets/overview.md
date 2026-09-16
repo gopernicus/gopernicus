@@ -11,8 +11,8 @@ Pockets are optional, reusable hexagons. Each core is datastore-free and require
 
 | Pocket | Capability | HTTP surface | Durable stores | Memory posture |
 |---|---|---|---|---|
-| [Authentication](authentication.md) | human/machine identity, sessions, credentials, recovery, OAuth, delivery | `/auth/*` JSON; optional HTML | pgx, Turso | example-local full reference |
-| [Authorization](authorization.md) | relationship/ReBAC and roles, atomic integrity | optional role administration and reusable permission middleware | pgx, Turso | public `stores/memory` |
+| [Authentication](authentication.md) | human/machine identity, sessions, credentials, recovery, OAuth, delivery | `/auth/*` JSON; optional HTML | pgx, Turso, Firestore (emulator-verified) | example-local full reference |
+| [Authorization](authorization.md) | roles and relationships as one tuple table, integrity policy, audit, optional Redis cache | `Require` route guards; optional role administration | pgx, Turso (+ Redis mirror) | public `stores/memory` |
 | [CMS](cms.md) | content registry, taxonomy, menus, media, inquiries | JSON + optional HTML/admin | pgx, Turso | example-local reference |
 | [Events](events.md) | durable outbox drain + authenticated SSE gateway | `/events` streams | pgx, Turso | `storetest` reference |
 | [Jobs](jobs.md) | durable queue, schedules, keyed/fenced work | none today; namespace reserved | pgx, Turso | public `stores/memory` |
@@ -35,9 +35,9 @@ mount bundled routes, use supported handlers or middleware on host routes, or
 call the logic services directly from another transport.
 
 - Authentication assembles authentication, invitations, delivery and HTTP.
-- Authorization separates decisions, relationship reads, role reads and principal-free
-  mutations from its public HTTP adapter. Inbound owns access policy; all ordinary
-  writers enforce configured store integrity.
+- Authorization assembles decisions, role and relationship reads, principal-free
+  writers and the HTTP guard adapter. Inbound answers "may this principal act";
+  the store's integrity policy answers "is the data still acceptable".
 - Events assembles a filtered streams service and optional HTTP adapter; its
   outbox poller remains host-driven.
 - Jobs assembles queue and schedule services; the host constructs and runs workers.
@@ -52,6 +52,7 @@ A core's public `Repositories` can be filled by:
 
 - a shipped `stores/pgx` module;
 - a shipped `stores/turso` module;
+- a shipped `stores/firestore` (authentication) or `stores/goredis` mirror (authorization) module where one exists;
 - a public or example memory implementation;
 - your own adapter.
 

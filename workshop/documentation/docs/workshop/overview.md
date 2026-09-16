@@ -16,7 +16,7 @@ cd workshop/gopernicus
 go run . --help
 ```
 
-Once the module has a released tag, the intended installation shape is:
+Install the released CLI with:
 
 ```bash
 go install github.com/gopernicus/gopernicus/workshop/gopernicus@latest
@@ -48,7 +48,7 @@ Workshop describes architecture; it is never an application service.
 
 ## Template verification
 
-`make check` emits a temporary host and pocket, rewrites pre-tag replaces for the checkout, builds them with workspace resolution disabled, runs the emitted memory store's conformance tests, and checks emitted guard shapes.
+`make check` emits a temporary host and pocket, points their framework requirements at this checkout, builds them with workspace resolution disabled, runs the emitted memory store's conformance tests, and checks emitted guard shapes.
 
 This compile proof is essential because repository grep guards cannot inspect `.tmpl` source as compiled Go. A stale template fails CI.
 

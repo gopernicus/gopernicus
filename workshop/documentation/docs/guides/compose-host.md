@@ -114,6 +114,8 @@ if err := cms.Register(mount, cmsRepos, cms.Config{
 
 When service signatures do not structurally match, write a small adapter in `cmd` or host `internal` code. Do not solve the mismatch by making pocket cores import one another.
 
+Route policy follows the same pattern. The authorization pocket's `components.HTTP.Require(...)` is an ordinary `web.Middleware`, so it can gate host routes, a CMS admin surface, or authentication's `MachineRoutesGate`. `examples/auth-cms/cmd/server/main.go` is the runnable version of this whole step, with authentication, authorization, CMS, events and jobs composed together.
+
 ## 6. Start host-owned runtimes
 
 Build jobs, delivery, and outbox pollers during composition, but start them only after construction is complete. Capture their errors and use the same cancellation tree.

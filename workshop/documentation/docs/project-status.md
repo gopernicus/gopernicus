@@ -5,7 +5,7 @@ description: What Gopernicus ships today, what is deferred, and how to read stab
 
 # Project status & scope
 
-Gopernicus is an open-source, actively developed multi-module repository released under the [MIT License](https://github.com/gopernicus/gopernicus/blob/main/LICENSE). The current `go.work` composes 39 modules across the SDK, integrations, pocket cores and adapters, UI, examples, and Workshop CLI. The code has extensive boundary guards and conformance tests, but the public distribution and documentation should still be treated as pre-stable until module tags establish a release line.
+Gopernicus is an open-source, actively developed multi-module repository released under the [MIT License](https://github.com/gopernicus/gopernicus/blob/main/LICENSE). The current `go.work` composes 42 modules across the SDK, integrations, pocket cores and adapters, UI, examples, and Workshop CLI. Modules are tagged and released individually; [RELEASING.md](https://github.com/gopernicus/gopernicus/blob/main/RELEASING.md) records each release and [AUDIT.md](https://github.com/gopernicus/gopernicus/blob/main/AUDIT.md) is the consumer migration guide for breaking changes. The code has extensive boundary guards and conformance tests, but APIs are still pre-1.0 and may change between minor tags.
 
 ## Available today
 
@@ -13,8 +13,8 @@ Gopernicus is an open-source, actively developed multi-module repository release
 - web server/router helpers, middleware, JSON and HTML responses, SSE, static files, and server lifecycle;
 - reusable capabilities for cache, email, events, file storage, notification, OAuth, rate limiting, tracing, and work submission;
 - authentication, authorization, CMS, events, and jobs pocket cores;
-- PostgreSQL and Turso store modules for every shipped durable pocket;
-- reusable integrations for databases, cryptography/IDs, email, object storage, Redis, OAuth, scheduling, and OpenTelemetry;
+- PostgreSQL and Turso store modules for every shipped durable pocket, a Firestore store for authentication, and a Redis tuple mirror for authorization;
+- reusable integrations for databases (PostgreSQL, Turso, Firestore), cryptography/IDs, email, object storage, Redis, OAuth, scheduling, and OpenTelemetry;
 - complete `ui/goth` component system and pocket view adapters;
 - an API-only host shape and a React/TanStack client integration guide;
 - zero-infrastructure and datastore-backed example hosts;
@@ -39,7 +39,8 @@ Workshop generation is planned work. The current roadmap includes store adapters
 
 Gopernicus is currently maintained by jrazmi and contributors. It is open source, but the
 contribution model is still being figured out. There is no formal contributor
-guide, support commitment, or release process yet. If you want to propose a
+guide or support commitment yet; the release process is documented in
+`RELEASING.md`. If you want to propose a
 change, an issue or pull request is the best place to start; please include the
 problem, the affected package boundaries, and any compatibility concerns.
 
@@ -54,7 +55,7 @@ Gopernicus is developed with AI tools used as an engineering assistant — for c
 - Jobs handlers are at-least-once and should be idempotent where possible.
 - Query logging in the datastore connectors includes arguments and is development-only.
 - Console email and notification implementations are development-only; production posture checks fail closed on unsafe or metadata-less senders.
-- Real consumers should pin module tags when available rather than relying on this repository's `go.work` replacements.
+- Real consumers should pin released module tags rather than relying on this repository's `go.work` replacements. Read `AUDIT.md` before moving across a breaking tag.
 
 ## Sources of truth
 
@@ -62,7 +63,7 @@ When documentation and code disagree, use this order while the public surface is
 
 1. public Go types and doc comments;
 2. conformance tests and executable examples;
-3. `ARCHITECTURE.md`, `pockets/README.md`, and `sdk/README.md`;
+3. `ARCHITECTURE.md`, `examples/README.md` (the host contract), `pockets/README.md`, `sdk/README.md`, and `AUDIT.md` for migrations;
 4. this site;
 5. historical plans and decision notes.
 

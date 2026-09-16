@@ -13,7 +13,7 @@ gopernicus/
 │   ├── pkg/              mechanism and vocabulary
 │   └── capabilities/            ports plus shared policy
 ├── integrations/                reusable technology connectors
-│   ├── datastores/{pgxdb,turso}
+│   ├── datastores/{pgxdb,turso,firestore}
 │   ├── cryptids/*
 │   ├── filestorage/*
 │   ├── kvstores/goredis
@@ -23,8 +23,9 @@ gopernicus/
 │   │   ├── logic/               public services, owned types and ports
 │   │   ├── inbound/http/        public HTTP adapter and middleware
 │   │   ├── stores/storetest/    exported repository conformance
-│   │   ├── stores/{pgx,turso}/  independent store modules
+│   │   ├── stores/{pgx,turso,firestore}/  independent store modules
 │   │   └── views/goth/          independent presentation module
+│   ├── authorization/           core with public stores/memory; stores/{pgx,turso,goredis} modules
 │   └── ...
 ├── ui/goth/                     optional Go presentation system
 ├── examples/                    complete composition roots
@@ -106,4 +107,4 @@ If a claimed boundary cannot be demonstrated by a host with the unwanted depende
 
 ## Workspace versus consumer modules
 
-Inside this repository, `go.work` makes imports resolve to sibling directories. An external application should require the modules it uses and pin their released tags. Pre-tag development may require temporary `replace` directives; Workshop's emitted README explains that posture.
+Inside this repository, `go.work` makes imports resolve to sibling directories. An external application requires the modules it uses and pins their released tags; the shipped examples do exactly that with no `replace` directives.

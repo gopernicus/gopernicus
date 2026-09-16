@@ -10,7 +10,7 @@ Every example is a real host module, not documentation-only pseudocode. Together
 | Example | Run | What it proves |
 |---|---|---|
 | `examples/minimal` | `go run ./cmd/server` | CMS + optional GOTH on an in-memory store; no external infrastructure |
-| `examples/cms` | `make migrate && go run ./cmd/server` from its module | CMS on Turso, disk media, custom theme, optional OpenTelemetry |
+| `examples/cms` | `make migrate` from the repository root, then `go run ./cmd/server` from its module | CMS on Turso, disk media, custom theme, optional OpenTelemetry |
 | `examples/auth-cms` | `go run ./cmd/server` | authentication + authorization + CMS + events + jobs composed in one host |
 | `examples/jobs-minimal` | `go run ./cmd/server` | queue, retry, dead-letter, interval schedule, wake, and graceful drain in memory |
 | `examples/goth-showcase` | `go run ./cmd/server` | GOTH catalog and browser behavior without a pocket dependency |

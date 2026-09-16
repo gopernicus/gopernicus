@@ -30,9 +30,6 @@ func (m *mutationStore) evaluate(ctx context.Context, tx *writeTx, cmd mutations
 	if err != nil {
 		return "", false, err
 	}
-	if err := outcome.Rejection(); err != nil {
-		return outcome, false, err
-	}
 	if err := applyTupleChanges(ctx, tx, cfg, delta); err != nil {
 		return "", false, err
 	}

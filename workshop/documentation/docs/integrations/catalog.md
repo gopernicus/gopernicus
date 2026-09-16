@@ -12,14 +12,20 @@ Integrations isolate concrete technology at the edge of the dependency graph. A 
 | Module | Technology | Surface |
 |---|---|---|
 | `integrations/datastores/pgxdb` | pgx v5 / PostgreSQL | connection pool, transactions, error mapping, status, migrations, CRUD list toolkit, durable rate limiter |
-| `integrations/datastores/turso` | libSQL / Turso | symmetric database wrapper, transactions, error mapping, status, migrations, CRUD list toolkit |
+| `integrations/datastores/turso` | libSQL / Turso, or a local SQLite file | symmetric database wrapper, transactions and read snapshots, error mapping, status, migrations, CRUD list toolkit; `file:` URLs need the sibling `turso/localfile` driver import |
 | `integrations/datastores/firestore` | Firestore Native mode | document I/O, transactional snapshots, error mapping, listing and index-manifest tooling |
 
 Datastore integrations own how to talk to a database. They do not own pocket tables or SQL; those live in pocket `stores/<dialect>` modules.
 
 SQL connectors support host-driven migration runners over flat directories.
 PostgreSQL configuration has environment tags for host parsers; pgx's DSN parser
-also honors standard `PG*` defaults. Turso configuration is supplied explicitly.
+also honors standard `PG*` defaults. Turso configuration carries `DB_*` environment
+tags too; a `file:` URL selects a local SQLite profile (WAL, foreign keys, busy
+timeout) and requires a blank import of `integrations/datastores/turso/localfile`
+to register the pure-Go driver. Both SQL connectors offer snapshot transactions
+for work that must see one consistent state: `pgxdb.DB.TransactSnapshot` runs a
+read-write REPEATABLE READ transaction, and turso `DB.BeginRead` opens a pinned
+read snapshot.
 Firestore has its own document/index lifecycle rather than SQL migrations.
 
 Omitted PostgreSQL pool lifetimes retain DSN/driver defaults; positive fields
