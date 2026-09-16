@@ -38,12 +38,9 @@ var apiKeySearchNames = []string{
 // five routes are not mounted at all, so every test below would 404.
 type machineHost struct {
 	*linkHost
-	system *mutations.SystemMutator
+	system *mutations.Service
 }
 
-// newMachineHost boots the in_process host with the REAL platform-admin gate on the
-// machine-identity routes, and holds the trusted SystemMutator apart so a test can seed
-// the tuple that passes it.
 func newMachineHost(t *testing.T) *machineHost {
 	t.Helper()
 
@@ -55,7 +52,7 @@ func newMachineHost(t *testing.T) *machineHost {
 
 	return &machineHost{
 		linkHost: newLinkHostTuned(t, func(cfg *authenticationConfig) { cfg.MachineRoutesGate = gate }),
-		system:   components.SystemMutator,
+		system:   components.Mutations,
 	}
 }
 
@@ -67,10 +64,6 @@ func (c *linkClient) mutate(path, body string) (*http.Response, []byte) {
 	return c.do("POST", path, body, http.Header{"X-CSRF-Token": {c.csrfToken()}})
 }
 
-// signUpPlatformAdmin onboards a user and grants it platform:main#admin through the
-// trusted SystemMutator — the tuple the gate reads. The grant is DATA, not config: the
-// same signUp without it produces a user the gate refuses (see
-// TestMachineRoutesGateRefusesANonAdmin).
 func (h *machineHost) signUpPlatformAdmin(email string) *linkClient {
 	h.t.Helper()
 	c := h.signUp(email)

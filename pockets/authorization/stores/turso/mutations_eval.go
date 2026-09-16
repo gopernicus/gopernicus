@@ -26,7 +26,7 @@ func (m *mutationStore) evaluate(ctx context.Context, tx *writeTx, cmd mutations
 	if err != nil {
 		return "", false, err
 	}
-	delta, outcome, err := mutations.Plan(cmd, before, m.guardian)
+	delta, outcome, err := mutations.Plan(cmd, before, m.integrity)
 	if err != nil {
 		return "", false, err
 	}

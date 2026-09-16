@@ -1,5 +1,29 @@
 # Authorization verification and benchmarks
 
+## Tuple-writer refresh (unreleased, 2026-09-16)
+
+`BenchmarkTupleWriterContentionPostgres` and `BenchmarkTupleWriterContentionSQLite`
+replace the retired guarded-writer benchmark. These measure alternating grant/
+revoke through the principal-free atomic command service, with the default empty
+integrity policy and audit disabled. They do not measure inbound permission
+checks or configured minimum-subject checks. Different tenant IDs still share
+one store write boundary.
+
+Five 500 ms samples per case on the local machine, PostgreSQL 17 in a disposable
+loopback container and local SQLite, with concurrent verification workloads:
+these are smoke baselines, not isolated performance comparisons with older runs.
+
+| Store | Workers | Median µs/op | Range µs/op | Median B/op |
+| --- | ---: | ---: | ---: | ---: |
+| pgx | 1 | 1108.2 | 1032.5–1306.0 | 8,432 |
+| pgx | 8 | 813.6 | 765.0–1282.0 | 8,434 |
+| turso | 1 | 77.7 | 69.7–78.1 | 4,370 |
+| turso | 8 | 496.7 | 474.1–668.5 | 4,371 |
+
+All 20 samples passed. Raw samples and commands are retained in the
+[integrity verification record](../../plans/authorization-integrity-policy-verification.json).
+The historical matrix below retains its original workload and measurements.
+
 ## What the suite proves
 
 SQL remains authoritative. TupleCache is an optional, bounded-staleness mirror
@@ -10,13 +34,13 @@ paths and recovery between them.
 | --- | --- |
 | Coherent decisions | Deterministic rewrites must never combine incompatible states across exact global/scoped predicates or graph traversal; Check, Explain, Batch, Filter and All/Any use one tuple snapshot |
 | Composable route guards | Model-free exact roles, mixed relationship/permission leaves, whole-tree mount validation, lazy per-request targets, shared budgets, concurrent requests, resolver errors and input reuse across whole-operation fallback |
-| Canonical authority | Owner and member coexist; both facades see the same fact; exact full-key deduplication, bulk reads, scope deletion, cross-facade guardian enforcement and one audit delta |
+| Canonical authority | Owner and member coexist; both facades see the same fact; exact full-key deduplication, bulk reads, scope deletion, cross-facade integrity enforcement and one audit delta |
 | Snapshot lifecycle | Validation before reads, unknown/empty requests, cancellation, callback/completion failures, escaped-reader refusal, ambient commit/rollback ownership, unsuitable PostgreSQL READ COMMITTED rejection |
 | Redis protocol 2 | Real Redis processes; seven-component scope-aware identities, global usersets, protocol/binding fences, receipt conflicts, expiry, loss/restart, malformed data, paused-server deadlines, byte boundaries and atomic publication |
 | Runtime and recovery | Capacity fallback after revocation, ignored callback read errors, explicit rebuild, failed acknowledgement, conflicting publishers, shared delivery gate, freshness expiry and poll diagnostics |
 | SQL delivery sources | Real triggers, exact captured event IDs, reset detection, current-fact validation, ID-only full snapshots despite obsolete malformed event payloads |
 | SQL → Redis | Actual SQLite and PostgreSQL sources with actual Redis; cold/warm batches and filters, bounded revocation lag, delivery, lost mirror, failed acknowledgement, over-capacity backlog and explicit rebuild |
-| Existing contracts | Model validation, guarded writes, audit, adapter conformance, fresh schema installation, lookup behavior and architecture guards remain covered by the repository suites |
+| Existing contracts | Model validation, integrity writes, audit, adapter conformance, fresh schema installation, lookup behavior and architecture guards remain covered by the repository suites |
 
 The cross-store suite lives in `stores/goredis/end_to_end_test.go` under the
 `integration` tag. Its SQL dependencies are test-only imports, although Go still
@@ -214,7 +238,10 @@ a full rebuild took 282.3 ms and allocated 327.2 MB. Go figures exclude Redis
 server memory. Exact role probes can encounter the same set-size limits when a
 role has many assignees. Keep configured bounds deliberate.
 
-Writer benchmarks exercise actual guarded writes with one or eight workers.
+The writer samples in this historical matrix exercised guarded writes with one
+or eight workers. That API has since been removed; current
+`BenchmarkTupleWriterContention` measures principal-free atomic commands. The
+old writer timings do not certify the new implementation.
 PostgreSQL still serializes authorization writes per schema; different tenant
 IDs do not remove that lock. SQLite also serializes writers. These fixtures
 measure the current design rather than promise linear write scaling.
@@ -472,8 +499,8 @@ for raw single reads and writes, while compound authorization reads require a
 verified REPEATABLE READ or SERIALIZABLE ambient transaction.
 
 One optional mirror serves all raw facts. Cached reads consciously accept the
-configured freshness window; guarded writes use authoritative serialized views.
-The receipt still covers the whole mirror, and SQL guarded writes remain
+configured freshness window; integrity writes use current serialized facts.
+The receipt still covers the whole mirror, and SQL tuple writes remain
 serialized. These are architectural tradeoffs, not performance promises.
 
 ## Historical HTTP benchmark record

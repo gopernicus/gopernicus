@@ -9,13 +9,13 @@ import (
 	mutation "github.com/gopernicus/gopernicus/pockets/authorization/logic/mutations"
 )
 
-func TestGuardianOptionSnapshotsPolicy(t *testing.T) {
-	policy := mutation.GuardianPolicy{Rules: []mutation.GuardianRule{{ResourceType: "doc", Relation: "owner", MinAnchors: 1}}}
-	option := WithGuardianPolicy(policy)
+func TestIntegrityOptionSnapshotsPolicy(t *testing.T) {
+	policy := mutation.IntegrityPolicy{Rules: []mutation.IntegrityRule{{ResourceType: "doc", Relation: "owner", MinSubjects: 1}}}
+	option := WithIntegrityPolicy(policy)
 	policy.Rules[0].ResourceType = "changed-before-construction"
 	first, second := New(option), New(option)
 	for _, store := range []*Store{first, second} {
-		snapshot := store.Mutations().GuardianPolicy()
+		snapshot := store.Mutations().IntegrityPolicy()
 		snapshot.Rules[0].ResourceType = "changed-snapshot"
 		ctx := context.Background()
 		cmd := grantOwner(t, "d1", "owner")
@@ -24,11 +24,11 @@ func TestGuardianOptionSnapshotsPolicy(t *testing.T) {
 		}
 		cmd.Operation = mutation.OpRevoke
 		if result, err := store.Mutations().Apply(ctx, cmd, nil); !errors.Is(err, mutation.ErrInvariantBlocked) || result != nil {
-			t.Fatalf("caller changed guardian policy: %+v, %v", result, err)
+			t.Fatalf("caller changed integrity policy: %+v, %v", result, err)
 		}
 	}
-	first.mut.guardian.Rules[0].ResourceType = "first-store-only"
-	if got := second.mut.guardian.MinDirectAnchors("doc", "owner"); got != 1 {
+	first.mut.integrity.Rules[0].ResourceType = "first-store-only"
+	if got := second.mut.integrity.MinDirectSubjects("doc", "owner"); got != 1 {
 		t.Fatalf("reused option shared policy between stores: %d", got)
 	}
 }

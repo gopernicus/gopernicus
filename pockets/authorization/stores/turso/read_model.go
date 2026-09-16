@@ -6,12 +6,11 @@ import (
 	"strings"
 
 	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
-	"github.com/gopernicus/gopernicus/pockets/authorization/logic/mutations"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/relationships"
 )
 
 func (s *relationshipStore) ForModel(model relationships.ReadModel) relationships.Reader {
-	return &relationshipStore{db: s.db, tupleBinding: s.tupleBinding, readQuerier: s.readQuerier, model: &model, audit: s.audit}
+	return &relationshipStore{db: s.db, tupleBinding: s.tupleBinding, readQuerier: s.readQuerier, model: &model, audit: s.audit, integrity: s.integrity}
 }
 
 func (s *relationshipStore) reader(ctx context.Context) tursodb.Querier {
@@ -61,26 +60,4 @@ func (q modelQuerier) Query(ctx context.Context, query string, args ...any) (*sq
 func (q modelQuerier) QueryRow(ctx context.Context, query string, args ...any) *sql.Row {
 	query, args = q.scoped(query, args)
 	return q.Querier.QueryRow(ctx, query, args...)
-}
-
-type modelDecisionReader struct {
-	view  *decisionView
-	model relationships.ReadModel
-}
-
-func (v *decisionView) ForModel(model relationships.ReadModel) relationships.PermissionReader {
-	return modelDecisionReader{view: v, model: model}
-}
-
-func (r modelDecisionReader) CheckRelationWithGroupExpansion(ctx context.Context, resourceType, resourceID, relation, subjectType, subjectID string, maxExpansionStates int) (bool, error) {
-	return r.view.checkRelationWithReader(ctx, mutations.Target{Kind: mutations.TargetResource, Type: resourceType, ID: resourceID}, relation, subjectType, subjectID, maxExpansionStates,
-		modelQuerier{Querier: r.view.tx, model: r.model})
-}
-
-func (r modelDecisionReader) GetRelationTargets(ctx context.Context, resourceType, resourceID, relation string) ([]relationships.RelationTarget, error) {
-	targets, err := r.view.RelationTargets(ctx, mutations.Target{Kind: mutations.TargetResource, Type: resourceType, ID: resourceID}, relation)
-	if err != nil {
-		return nil, err
-	}
-	return r.model.FilterTargets(resourceType, relation, targets), nil
 }

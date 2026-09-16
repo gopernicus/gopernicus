@@ -103,7 +103,7 @@ func TestWithSchema(t *testing.T) {
 		table func(cfg config) string
 	}{
 		{"tupleStore", func(cfg config) string { return newTupleStore(nil, cfg).table() }},
-		{"mutationStore", func(cfg config) string { return newMutationStore(nil, cfg).table("iam_audit") }},
+		{"mutationStore", func(cfg config) string { return newMutationStore(nil, cfg).schema.Table("iam_audit") }},
 	} {
 		bare := tc.table(zero)
 		if strings.ContainsAny(bare, `".`) {

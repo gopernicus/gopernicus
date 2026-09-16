@@ -13,17 +13,17 @@ cmd/
 internal/
   logic/
     domains/<domain>/     entities, ports, and domain services
-    app/                  workflows spanning domains
+    compositions/<name>/  workflows over domain services
   inbound/
-    http/                 global router/middleware plumbing
+    middleware/           host-custom HTTP middleware
+    wire/                 shared HTTP/JSON conventions
     domains/<domain>/     domain handlers
     views/                optional host-owned pages and view models
   outbound/
-    database/             app repositories
-    providers/            vendor adapters
+    domains/<domain>/     adapters for that domain's ports
 ```
 
-Directory names are guidance; the dependency direction is the contract.
+The [Host contract](host-contract.md) defines this layout and its dependency rules.
 
 ## Logic has two tiers
 
@@ -43,14 +43,18 @@ Keep related entities, ports, and services together until size creates a real re
 
 ### Application workflows
 
-`internal/logic/app` coordinates several domains or performs host-level policy:
+`internal/logic/compositions/<name>` coordinates already-admitted domain services:
 
 - onboarding that creates an account, organization, and membership;
-- a publication workflow spanning content, authorization, and notifications;
-- transactional coordination over several repositories;
+- a publication workflow with its own business invariant;
 - a host-facing service boundary consumed by multiple transports.
 
-An app workflow imports domain packages inward. Domains do not import `app` back.
+A composition declares the domain-service interfaces it consumes. It imports
+domains inward and holds no repository or transaction handle; domains do not
+import compositions back. Atomic data operations belong behind the owning domain's
+port. A host-specific bridge of framework pockets lives in a host pocket under
+`pockets/<name>`, rather than importing them into `internal/logic`.
+Principal access policy belongs at inbound, before invoking these workflows.
 
 ## Where a port lives
 
@@ -71,10 +75,16 @@ Promote a port into the SDK only when it has multiple real implementations or a 
 
 HTTP handlers translate between transport and use cases:
 
-1. parse path, query, form, or JSON input;
-2. call a logic service;
-3. map domain errors to an HTTP result;
-4. render a view or serialize a response.
+1. authenticate the caller and parse the actual path, query, form or JSON command;
+2. invoke the principal's access policy over that exact command or query;
+3. call the admitted logic service or composition;
+4. map domain errors and render a response.
+
+Middleware can authorize route-bound inputs; a handler can prepare a body-based
+command before authorizing it. RPC, CLI and job entry points own the equivalent
+admission boundary. An admitted operation may finish after permission revocation.
+Logic defines data invariants such as `IntegrityPolicy`; outbound stores enforce
+them atomically with the write. They do not repeat the caller's permission check.
 
 Handlers should not write SQL, choose providers, or hold domain invariants. Use `sdk/pkg/web` for HTTP mechanism without moving application routes into the SDK.
 
@@ -82,7 +92,8 @@ A useful inbound split is:
 
 ```text
 internal/inbound/
-  http/                   router construction and global middleware
+  middleware/             host-custom HTTP middleware
+  wire/                   shared HTTP/JSON conventions
   domains/orders/         order handlers and transport models
   views/
     components/           reusable host components
@@ -90,15 +101,16 @@ internal/inbound/
     pages/                route-level rendering
 ```
 
-Pocket cores use a related but library-safe anatomy: their inbound code remains internal, while third-party view implementations live in sibling modules.
+Framework pockets expose their optional HTTP adapters in public `inbound/http`;
+third-party view implementations live in sibling modules. CMS retains its earlier
+layout pending its separate audit.
 
 ## Outbound owns technology
 
 Outbound packages turn domain ports into database queries or provider calls. They may know both the consumer's contract and the chosen technology.
 
 ```text
-internal/outbound/database/orderspgx/
-internal/outbound/providers/stripe/
+internal/outbound/domains/orders/
 ```
 
 Use a reusable Gopernicus integration where its generic seam fits. Keep app-specific mapping in the host. A database connector may own transactions and error mapping; an order repository still owns order SQL.

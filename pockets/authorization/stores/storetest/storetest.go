@@ -25,11 +25,11 @@ type Repositories struct {
 }
 
 // Run executes the full conformance suite. factory returns fresh, empty
-// repositories on each call and installs the supplied guardian policy. Read-model
+// repositories on each call and installs the supplied integrity policy. Read-model
 // families use an empty policy; mutation families explicitly protect owner.
-func Run(t *testing.T, factory func(t *testing.T, policy mutations.GuardianPolicy) Repositories) {
+func Run(t *testing.T, factory func(t *testing.T, policy mutations.IntegrityPolicy) Repositories) {
 	newRepos := func(t *testing.T) Repositories {
-		r := factory(t, mutations.GuardianPolicy{})
+		r := factory(t, mutations.IntegrityPolicy{})
 		if r.Tuples == nil {
 			t.Fatal("canonical tuple repository is required")
 		}
@@ -83,12 +83,15 @@ func Run(t *testing.T, factory func(t *testing.T, policy mutations.GuardianPolic
 		}
 		runComposed(t, newRepos)
 	})
+	t.Run("RawIntegrity", func(t *testing.T) {
+		runRawIntegrity(t, func(t *testing.T) Repositories { return factory(t, mutations.DefaultIntegrityPolicy()) })
+	})
 	t.Run("Mutations", func(t *testing.T) {
 		if newRepos(t).Mutations == nil {
 			t.Skip("mutation repository not wired")
 		}
 		runMutations(t, func(t *testing.T) Repositories {
-			return factory(t, mutations.DefaultGuardianPolicy())
+			return factory(t, mutations.DefaultIntegrityPolicy())
 		})
 	})
 }

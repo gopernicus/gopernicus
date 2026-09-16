@@ -13,6 +13,8 @@ import (
 	"sort"
 	"sync"
 
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/mutations"
+
 	"github.com/gopernicus/gopernicus/pockets/authorization/internal/tuplekey"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuples"
 
@@ -35,6 +37,7 @@ type relRow struct {
 // state shares one serialization boundary for tuple, role and optional audit
 // publication. A write stages owned fact slices before making anything visible.
 type state struct {
+	integrity    mutations.IntegrityPolicy
 	mu           sync.Mutex
 	facts        map[tuples.Tuple]struct{}
 	recordAudit  bool
@@ -175,7 +178,7 @@ func (r *Relationships) CheckRelationWithGroupExpansion(ctx context.Context, res
 
 // checkRelationExpandedLocked evaluates against the held snapshot without
 // recursively locking. The shared write lock protects every traversed fact,
-// including absent memberships, until the guarded write is published.
+// including absent memberships, until the snapshot read is published.
 // A positive expansion bound fails closed when exceeded.
 func (r *Relationships) checkRelationExpandedLocked(ctx context.Context, resourceType, resourceID, relation, subjectType, subjectID string, maxExpansionStates int) (ok, overflow bool) {
 	reached, overflow := r.expandReachable(ctx, subjectType, subjectID, maxExpansionStates)
@@ -367,7 +370,7 @@ func (r *Relationships) DeleteByResourceAndSubject(ctx context.Context, rt, id, 
 	if err := (tuples.SubjectRef{Type: st, ID: sid}).Validate(); err != nil {
 		return err
 	}
-	return r.st.write(ctx, func(next *state) error {
+	return r.st.writeScopes(ctx, []tuples.Scope{tuples.On(rt, id)}, func(next *state) error {
 		for t := range next.facts {
 			if t.Scope == scope && t.Subject.Type == st && t.Subject.ID == sid {
 				delete(next.facts, t)

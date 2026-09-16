@@ -41,7 +41,6 @@ type authenticationFixture struct {
 	Passwords            user.PasswordRepository
 	Sessions             session.SessionRepository
 	UserAdmin            user.AdminRepository
-	UserAdminCheck       authlogic.UserAdminCheck
 	PasswordlessRedeem   passwordless.Repository
 	ProvisionOnRedeem    bool
 	ActiveSessions       session.ActiveUserRepository
@@ -105,7 +104,6 @@ func newPublicFixture(cfg authenticationFixture) (*authlogic.Components, error) 
 		authlogic.WithPasswordless(authlogic.PasswordlessConfig{Passwordless: cfg.Passwordless, ProvisionOnRedeem: cfg.ProvisionOnRedeem}),
 		authlogic.WithLinks(authlogic.LinksConfig{PublicAuthBaseURL: cfg.PublicAuthBaseURL, PasswordResetURL: cfg.PasswordResetURL, OAuthLinkBaseURL: cfg.OAuthLinkBaseURL, RedirectAllowlist: cfg.RedirectAllowlist}),
 		authlogic.WithChallengeProtector(cfg.Protector),
-		authlogic.WithUserAdminCheck(cfg.UserAdminCheck),
 		authlogic.WithInvitations(cfg.Invitations),
 		authlogic.WithLimits(cfg.AuthenticationLimits),
 		authlogic.WithClock(cfg.Clock),

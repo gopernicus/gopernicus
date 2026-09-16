@@ -1,0 +1,456 @@
+{
+  "status": "IMPLEMENTED AND VERIFIED; UNCOMMITTED AND UNRELEASED",
+  "date": "2026-09-16",
+  "starting_commit": "22c712e2100ff58e0b8a3a53528a9b43ae69c942",
+  "changed_files": [
+    "ARCHITECTURE.md",
+    "AUDIT.md",
+    "Makefile",
+    "RELEASING.md",
+    "examples/README.md",
+    "examples/auth-cms/cmd/server/authorization_test.go",
+    "examples/auth-cms/cmd/server/documents.go",
+    "examples/auth-cms/cmd/server/documents_test.go",
+    "examples/auth-cms/cmd/server/membership.go",
+    "examples/auth-cms/cmd/server/passwordless_provision_test.go",
+    "examples/auth-cms/cmd/server/user_admin_test.go",
+    "examples/auth-cms/internal/inbound/domains/documents/cursor.go",
+    "examples/auth-cms/internal/inbound/domains/documents/cursor_test.go",
+    "examples/auth-cms/internal/inbound/domains/documents/http.go",
+    "examples/auth-cms/internal/inbound/domains/documents/listing.go",
+    "examples/auth-cms/internal/inbound/domains/documents/sql_listing.go",
+    "examples/auth-cms/internal/logic/domains/documents/documents.go",
+    "examples/auth-cms/internal/logic/domains/documents/documents_test.go",
+    "examples/auth-cms/internal/outbound/domains/documents/README.md",
+    "examples/auth-cms/internal/outbound/domains/documents/cursor.go",
+    "examples/auth-cms/internal/outbound/domains/documents/listing.go",
+    "examples/auth-cms/internal/outbound/domains/documents/listing_test.go",
+    "examples/auth-cms/internal/outbound/domains/documents/memory.go",
+    "examples/auth-cms/internal/outbound/domains/documents/postgres.go",
+    "examples/auth-cms/internal/outbound/domains/documents/postgres_test.go",
+    "plans/authorization-inbound-policy-verification.json",
+    "plans/authorization-inbound-policy.md",
+    "pockets/README.md",
+    "pockets/authentication/README.md",
+    "pockets/authentication/auth_test.go",
+    "pockets/authentication/config.go",
+    "pockets/authentication/constructor.go",
+    "pockets/authentication/inbound/http/adapter.go",
+    "pockets/authentication/inbound/http/constructor_fixture_test.go",
+    "pockets/authentication/inbound/http/credential_fence_test.go",
+    "pockets/authentication/inbound/http/host_policy.go",
+    "pockets/authentication/inbound/http/host_policy_test.go",
+    "pockets/authentication/inbound/http/invitation.go",
+    "pockets/authentication/inbound/http/invitation_test.go",
+    "pockets/authentication/inbound/http/options.go",
+    "pockets/authentication/inbound/http/principal_posture_test.go",
+    "pockets/authentication/inbound/http/resend.go",
+    "pockets/authentication/inbound/http/route_policy.go",
+    "pockets/authentication/inbound/http/routes.go",
+    "pockets/authentication/inbound/http/sessions.go",
+    "pockets/authentication/inbound/http/useradmin.go",
+    "pockets/authentication/logic/authentication/constructor.go",
+    "pockets/authentication/logic/authentication/constructor_fixture_test.go",
+    "pockets/authentication/logic/authentication/options.go",
+    "pockets/authentication/logic/authentication/resend.go",
+    "pockets/authentication/logic/authentication/service.go",
+    "pockets/authentication/logic/authentication/user/status.go",
+    "pockets/authentication/logic/authentication/useradmin.go",
+    "pockets/authentication/logic/invitations/authorized_test.go",
+    "pockets/authentication/logic/invitations/constructor.go",
+    "pockets/authentication/logic/invitations/options.go",
+    "pockets/authentication/logic/invitations/service.go",
+    "pockets/authorization/README.md",
+    "pockets/authorization/inbound/http/admission_test.go",
+    "pockets/authorization/inbound/http/composable_middleware.go",
+    "pockets/authorization/logic/mutations/mutation_service.go"
+  ],
+  "checks": {
+    "workspace": {
+      "passed": true,
+      "checks": [
+        {
+          "command": [
+            "make",
+            "check"
+          ],
+          "cwd": "/Users/jrazmi/code/gopernicus-ecosystem/gopernicus",
+          "exit_code": 0,
+          "elapsed_seconds": 70.86
+        }
+      ],
+      "environment": "PATH/HOME/TMPDIR plus explicit Go settings; no datastore settings"
+    },
+    "authorization": {
+      "passed": true,
+      "checks": [
+        {
+          "command": [
+            "go",
+            "build",
+            "./..."
+          ],
+          "cwd": "/Users/jrazmi/code/gopernicus-ecosystem/gopernicus/pockets/authorization",
+          "exit_code": 0,
+          "elapsed_seconds": 0.56
+        },
+        {
+          "command": [
+            "go",
+            "test",
+            "./..."
+          ],
+          "cwd": "/Users/jrazmi/code/gopernicus-ecosystem/gopernicus/pockets/authorization",
+          "exit_code": 0,
+          "elapsed_seconds": 1.92
+        },
+        {
+          "command": [
+            "go",
+            "vet",
+            "./..."
+          ],
+          "cwd": "/Users/jrazmi/code/gopernicus-ecosystem/gopernicus/pockets/authorization",
+          "exit_code": 0,
+          "elapsed_seconds": 0.38
+        },
+        {
+          "command": [
+            "go",
+            "test",
+            "-race",
+            "./..."
+          ],
+          "cwd": "/Users/jrazmi/code/gopernicus-ecosystem/gopernicus/pockets/authorization",
+          "exit_code": 0,
+          "elapsed_seconds": 3.98
+        }
+      ],
+      "environment": "PATH/HOME/TMPDIR plus explicit Go settings; no datastore settings"
+    },
+    "authentication": {
+      "passed": true,
+      "commands": [
+        [
+          "go",
+          "build",
+          "./..."
+        ],
+        [
+          "go",
+          "test",
+          "./..."
+        ],
+        [
+          "go",
+          "vet",
+          "./..."
+        ],
+        [
+          "go",
+          "test",
+          "-race",
+          "./..."
+        ],
+        [
+          "go",
+          "test",
+          "./inbound/http",
+          "./logic/invitations",
+          "-run",
+          "PreparedCreate|HTTPPolicy|HTTPListPolicy",
+          "-count=1"
+        ]
+      ],
+      "environment": "PATH/HOME/TMPDIR plus explicit Go settings; no datastore settings",
+      "verified_by": "named implementer; source frozen before final workspace gate"
+    },
+    "example": [
+      {
+        "command": [
+          "go",
+          "build",
+          "./..."
+        ],
+        "exit_code": 0,
+        "seconds": 1.11
+      },
+      {
+        "command": [
+          "go",
+          "test",
+          "./..."
+        ],
+        "exit_code": 0,
+        "seconds": 17.26
+      },
+      {
+        "command": [
+          "go",
+          "vet",
+          "./..."
+        ],
+        "exit_code": 0,
+        "seconds": 0.53
+      },
+      {
+        "command": [
+          "go",
+          "test",
+          "-race",
+          "./..."
+        ],
+        "exit_code": 0,
+        "seconds": 77.07
+      }
+    ],
+    "listing_postgres": {
+      "command": [
+        "go",
+        "test",
+        "-race",
+        "-count=1",
+        "-v",
+        "./internal/outbound/domains/documents"
+      ],
+      "passed": true,
+      "exit_code": 0,
+      "elapsed_seconds": 11.06,
+      "fixture": {
+        "container": "f8f88a8bd4e6723118c7ae420aa5f15a16ea7cd6e41f211d619be489acee9df4",
+        "image": "postgres:17-alpine",
+        "host": "127.0.0.1",
+        "port": 64045,
+        "database": "inbound_authorization_test",
+        "user": "gopernicus_test",
+        "no_host_binds": true,
+        "identity_verified": true
+      },
+      "no_skipped_tests": true,
+      "passed_tests": [
+        "--- PASS: TestMemoryListingHTTP (0.01s)",
+        "--- PASS: TestListingSparseContinuationIsPrivate (0.00s)",
+        "--- PASS: TestListingBypassPreservesBusinessQueryAndErrors (0.00s)",
+        "--- PASS: TestListingDoesNotTurnStorageFailureIntoEmptySuccess (0.00s)",
+        "--- PASS: TestListingCompleteSetOverflowDoesNotUsePartialIDs (6.16s)",
+        "--- PASS: TestCandidatePullMeasurements (0.84s)",
+        "--- PASS: TestMemoryListingRevocationAndMoveBetweenPages (0.00s)",
+        "--- PASS: TestListingExpandingUnicodeNameCanContinue (0.00s)",
+        "--- PASS: TestPostgresListingHTTP (0.22s)",
+        "--- PASS: TestSQLListingRejectsUnsupportedModels (0.00s)",
+        "--- PASS: TestPostgresListingRevocationAndMoveBetweenPages (0.10s)",
+        "--- PASS: TestPostgresLargeListingAndQueryPlan (2.02s)",
+        "--- PASS: TestPostgresEnforcesSelectedMembershipBeforePaging (0.00s)",
+        "--- PASS: TestPostgresRestrictionFailuresDoNotIssueSQL (0.00s)"
+      ]
+    },
+    "mutation_postgres": {
+      "command": [
+        "go",
+        "test",
+        "-race",
+        "-count=1",
+        "-v",
+        "-run",
+        "^(TestConformance|TestMutationNegativeMembershipWriteSkewLive|TestGuardWaitsForRawAuthorizationWriters)$/^Mutations$/",
+        "./..."
+      ],
+      "passed": true,
+      "exit_code": 0,
+      "elapsed_seconds": 3.81,
+      "fixture": {
+        "container": "f8f88a8bd4e6723118c7ae420aa5f15a16ea7cd6e41f211d619be489acee9df4",
+        "image": "postgres:17-alpine",
+        "host": "127.0.0.1",
+        "port": 64045,
+        "database": "inbound_authorization_test",
+        "user": "gopernicus_test",
+        "no_host_binds": true,
+        "identity_verified": true
+      },
+      "no_skipped_tests": true,
+      "passed_tests": [
+        "--- PASS: TestConformance (1.44s)",
+        "--- PASS: TestMutationNegativeMembershipWriteSkewLive (0.00s)",
+        "--- PASS: TestGuardWaitsForRawAuthorizationWriters (0.00s)"
+      ]
+    },
+    "mutation_predicates_postgres": {
+      "command": [
+        "go",
+        "test",
+        "-race",
+        "-count=1",
+        "-v",
+        "-run",
+        "^(TestMutationNegativeMembershipWriteSkewLive|TestGuardWaitsForRawAuthorizationWriters)$",
+        "./..."
+      ],
+      "passed": true,
+      "exit_code": 0,
+      "elapsed_seconds": 2.12,
+      "fixture": {
+        "container": "f8f88a8bd4e6723118c7ae420aa5f15a16ea7cd6e41f211d619be489acee9df4",
+        "image": "postgres:17-alpine",
+        "host": "127.0.0.1",
+        "port": 64045,
+        "database": "inbound_authorization_test",
+        "user": "gopernicus_test",
+        "no_host_binds": true,
+        "identity_verified": true
+      },
+      "no_skipped_tests": true,
+      "passed_tests": [
+        "--- PASS: TestMutationNegativeMembershipWriteSkewLive (0.24s)",
+        "    --- PASS: TestMutationNegativeMembershipWriteSkewLive/direct (0.11s)",
+        "    --- PASS: TestMutationNegativeMembershipWriteSkewLive/nested_cycle (0.07s)",
+        "    --- PASS: TestMutationNegativeMembershipWriteSkewLive/current_model (0.06s)",
+        "--- PASS: TestGuardWaitsForRawAuthorizationWriters (0.16s)",
+        "    --- PASS: TestGuardWaitsForRawAuthorizationWriters/relationship (0.05s)",
+        "    --- PASS: TestGuardWaitsForRawAuthorizationWriters/role (0.06s)",
+        "    --- PASS: TestGuardWaitsForRawAuthorizationWriters/direct_sql (0.05s)"
+      ]
+    },
+    "formatter": {
+      "passed": true,
+      "command": [
+        "goimports",
+        "-l"
+      ],
+      "changed_go_files": 48
+    },
+    "guard_synthetic": [
+      {
+        "case": "callback-type",
+        "rejected": true,
+        "passed": true
+      },
+      {
+        "case": "callback-field",
+        "rejected": true,
+        "passed": true
+      },
+      {
+        "case": "admin-option",
+        "rejected": true,
+        "passed": true
+      },
+      {
+        "case": "wrapper",
+        "rejected": true,
+        "passed": true
+      },
+      {
+        "case": "attribution",
+        "rejected": false,
+        "passed": true
+      },
+      {
+        "case": "decision-import",
+        "rejected": true,
+        "passed": true
+      },
+      {
+        "case": "model-import",
+        "rejected": true,
+        "passed": true
+      },
+      {
+        "case": "domain-filter",
+        "rejected": false,
+        "passed": true
+      },
+      {
+        "case": "test-exemption",
+        "rejected": false,
+        "passed": true
+      }
+    ]
+  },
+  "reviews": {
+    "backend": "I1: no confirmed blockers; prepared commands, exact targets, policy errors/cancellation and identity/lifecycle invariants reviewed",
+    "architecture": "I2/G28: aligned, no blockers; three strategies, storage enforcement, cursor privacy and concurrency boundaries reviewed"
+  },
+  "concurrency_contract": [
+    "Ordinary requests authorize at admission; admitted handlers may complete after revocation",
+    "Cached admission retains configured MaxStaleness eligibility",
+    "Guarded authorization mutations retain atomic serialized guard, invariant, change and enabled audit; no detached precheck replaces them",
+    "FilterPage uses one authorization snapshot across all pulls; business-source reads and optional bypass policy are separate operations",
+    "Continuation re-evaluates authority; no generic cross-store check/business-write atomicity"
+  ],
+  "source_verification": {
+    "go_build_inputs": 1745,
+    "inventory_sha256": "b6731662e43e74923cd090ac3861decde2778efc572b676e84cedae2d75342b4",
+    "unchanged_during_final_gate": true,
+    "changed_go_sha256": {
+      "examples/auth-cms/cmd/server/authorization_test.go": "b7aac5caa98fd9c8d7ebc49245976221ffb831523a8565a8c1dbad69b23070ec",
+      "examples/auth-cms/cmd/server/documents.go": "7f8c18e15844f07d322e6d5392bc78cabe4e1c05316f8e110c2770bc49139fb8",
+      "examples/auth-cms/cmd/server/documents_test.go": "cb81a13398d0d108d9dfdd751d85eba9237e674ff3c569d08882ea92d4adcf53",
+      "examples/auth-cms/cmd/server/membership.go": "3143329801f5ce913bf093ecf110d0193e5701679a1f057f461ee14b2ea0a399",
+      "examples/auth-cms/cmd/server/passwordless_provision_test.go": "be2a8345aa5e1eb90025b221de71a81fab9b455e1bd96d0eb6af93e6bd7eee15",
+      "examples/auth-cms/cmd/server/user_admin_test.go": "a73271cbbc224ce8e9f3e6e7a10ddedc894d14f55336909246b48a400d5293b9",
+      "examples/auth-cms/internal/inbound/domains/documents/cursor.go": "6a5f3a510e457afb717615c02ed96c4481cac1d0f33203355a76abf548a30ab2",
+      "examples/auth-cms/internal/inbound/domains/documents/cursor_test.go": "faee3f6b1d1644067ae783d7659be1b8a032ec46d5b9f7b8e5e2643d59fcc10e",
+      "examples/auth-cms/internal/inbound/domains/documents/http.go": "cfec4d6a0d1874969ecacc5cf8409ad497dfb33d0602ecaff6a5643571bac831",
+      "examples/auth-cms/internal/inbound/domains/documents/listing.go": "ff356e680a6e46f56c260cafe1351c62adb74ae1d4e785cf05e6d0f391706d2b",
+      "examples/auth-cms/internal/inbound/domains/documents/sql_listing.go": "30bd1fe2c9faffd2803a8ee92046c7709fac3ff85f63f1399129474cced9f9bb",
+      "examples/auth-cms/internal/logic/domains/documents/documents.go": "21e802b986a2fc7138d9092deaa8502776f9a13f58a875734fa4b8305a74b904",
+      "examples/auth-cms/internal/logic/domains/documents/documents_test.go": "b72c51da56ace58eb2cd09ac228ecbedb5f6827bdaa43fe6b4c11739110f3c0a",
+      "examples/auth-cms/internal/outbound/domains/documents/listing_test.go": "18ba0a8a43fdc76005fcbaa96c2f61eebcaf83a46b9c684241a3483e2eeaa409",
+      "examples/auth-cms/internal/outbound/domains/documents/memory.go": "818be55db831040a61f37957e2306ecdda53b3142a4297dc3da204df4e4fc59a",
+      "examples/auth-cms/internal/outbound/domains/documents/postgres.go": "31b9cc2eb074b68d21ebacb96d922cdc960cca0847a2d69d578ff882e07d9d7f",
+      "examples/auth-cms/internal/outbound/domains/documents/postgres_test.go": "3d3cecf27c4f7bff28808a1c366d149081511231e88d1bb77ca4c875f9209a86",
+      "pockets/authentication/auth_test.go": "cd1b7dcf56c3dbdb2b04c11468a4d3953e7de12e7356a0c1e94464eddbd871b9",
+      "pockets/authentication/config.go": "39425504818e97307569401216935356f9168896ec5ac769c64e4f0a49a1c824",
+      "pockets/authentication/constructor.go": "056491ef45595d73c770b09783dbb74ad772d1bcadf1c83d4cb314b03f15a6d8",
+      "pockets/authentication/inbound/http/adapter.go": "996e679f33d9fc1f7ec523b73b14482a9dc3353d27767546c2a7987e5b40072c",
+      "pockets/authentication/inbound/http/constructor_fixture_test.go": "667c0619d73a2c0235d6183461d2e22f20a3118f0778d08e59007ccbcdd6e4ff",
+      "pockets/authentication/inbound/http/credential_fence_test.go": "5012b407b15c737be51e73b6bd1aeaefcaaa506365a3c5eec2c1f96b0a611606",
+      "pockets/authentication/inbound/http/host_policy.go": "91b7a47e9c8b7fcec437e17abdd74e58b22d20cb544df5c20290dfcc2929f780",
+      "pockets/authentication/inbound/http/host_policy_test.go": "b47bfc5962baadc2f248e8bd7cf572801a13073ca5982575d329117fc957c49d",
+      "pockets/authentication/inbound/http/invitation.go": "99ed0e892eb7a678cd301649827682f41748d88e7519d9a2a421c1e799eb9d9b",
+      "pockets/authentication/inbound/http/invitation_test.go": "5e32bdb46d385d9861f2c5b2090f57601280b3cbe1697204e69b8db130f3a7d8",
+      "pockets/authentication/inbound/http/options.go": "521cac053475f0b88206b1938836260c932d7f50afa8afb935c5015c5bbfc9b4",
+      "pockets/authentication/inbound/http/principal_posture_test.go": "d6b8c41451e0c85303b49ef756d6e45219fc0714ffcfc736effd8ec95b734504",
+      "pockets/authentication/inbound/http/resend.go": "d93e1cd628bd65b037e390b465ac563c26b2991a8921c7f2fb7c38e7ce495165",
+      "pockets/authentication/inbound/http/route_policy.go": "c9341729ba78c518045657f7cad9092206aa1e20afb41b1d221bb5789d865ac5",
+      "pockets/authentication/inbound/http/routes.go": "7c55b329a88fbe2fa36f6b32bbf6c53a0c11681e58a022688ecb0aee49932cdc",
+      "pockets/authentication/inbound/http/sessions.go": "29cf472bd8a9b980289f32f04245b7c46cb810df363d6777e084fcd4573deaf5",
+      "pockets/authentication/inbound/http/useradmin.go": "64e2db1f61996f3f9a61a0ab90494baae30f96487ccdf7e4ce6fefad8ddfadfb",
+      "pockets/authentication/logic/authentication/constructor.go": "f10336d363aa8b7fb18ad30296646d4c53a5b53011a38f1e1f0942a8b4f35975",
+      "pockets/authentication/logic/authentication/constructor_fixture_test.go": "29188319e9e50ccf15fb609a21142f7981cac1154c02ebed4b9c4a4303393a4a",
+      "pockets/authentication/logic/authentication/options.go": "8f9c91ae7a23dd3079bdf52a6183c77f9ce8b8d6810c84a739d3511cf8b41f16",
+      "pockets/authentication/logic/authentication/resend.go": "656f373599b23bcf23fc8fa8f768db60f5565cb57c60764f84a231a9937ff9c9",
+      "pockets/authentication/logic/authentication/service.go": "9fae8be56bce6196ab97f882f14d4422d9caff5e5fd6ff32a860f2d6bceada88",
+      "pockets/authentication/logic/authentication/user/status.go": "a9798e67ced34af9e9448395c5dda4e5511f529a3801327def0ae309a4f51bda",
+      "pockets/authentication/logic/authentication/useradmin.go": "3fb05c7d9aceb80789481fa093e17d74207a607e963b6cae1b3a6f4cda60dcaf",
+      "pockets/authentication/logic/invitations/authorized_test.go": "c025ea61ba277bc70bb96251d5be0f58ed7e2400ca6a87e5a2658058c63567b8",
+      "pockets/authentication/logic/invitations/constructor.go": "702c186032446ba6e957e9100e5dd43f2267e4aea38f1ec55e7e27f271384fa8",
+      "pockets/authentication/logic/invitations/options.go": "b21f1c340af680e0baff92cd72a60fa2b7d3950715b8db465eb37c243c644ca0",
+      "pockets/authentication/logic/invitations/service.go": "0cea55f41e222d6e1543085b472a2f2ddb49c829e8cd0812abfa692e119af9a3",
+      "pockets/authorization/inbound/http/admission_test.go": "c64fff9722cdfd319a55f08fb01606e06fbf19dadf6adcb64491aee1a7adbc9d",
+      "pockets/authorization/inbound/http/composable_middleware.go": "a1425d7e9e6dfea71c95a5deeb414643dc754ab64217027ed9d47351feafdd34",
+      "pockets/authorization/logic/mutations/mutation_service.go": "09c04f1a9630b8417a0653881342dbf39b0cb93dae41542052c0938e232d2b12"
+    }
+  },
+  "owner_files_preserved": [
+    "plans/cacher-design.md",
+    "plans/gps-360-go-audit-upgrade-handoff.md",
+    "plans/segovia-v2-audit-upgrade-handoff.md"
+  ],
+  "fixture_cleanup": {
+    "owned_container_removed": "f8f88a8bd4e6723118c7ae420aa5f15a16ea7cd6e41f211d619be489acee9df4",
+    "passed": true
+  },
+  "verification_notes": [
+    "Initial focused auth/document HTTP tests needed owned-loopback sandbox allowance and passed after escalation",
+    "The first PG mutation command ran the Mutations conformance family; its slash filter excluded nested standalone predicate cases. The separate mutation_predicates_postgres command executed all6 such subtests with no skips",
+    "Initial formatter invocation used a repository-relative path from the module cwd; corrected before verification"
+  ],
+  "limits": [
+    "No live authentication datastore, Redis or remote Turso suite rerun; schema/storage protocols unchanged",
+    "Benchmarks not rerun; this change relocates policy without replacing the listing algorithms",
+    "Identity proofs and invitation issuer-bound lifecycle checks remain domain rules",
+    "No commits, tags, publishing, host adoption or deployment"
+  ]
+}

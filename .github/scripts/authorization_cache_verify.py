@@ -295,10 +295,10 @@ def benchmark_cases(module):
         )
     if module.endswith("/pgx"):
         return (backlog | {f"BenchmarkDecisionsPostgres/{op}" for op in ("direct", "through", "batch", "filter")}
-                | {f"BenchmarkGuardedWriterContentionPostgres/tenants={n}" for n in (1, 8)})
+                | {f"BenchmarkTupleWriterContentionPostgres/tenants={n}" for n in (1, 8)})
     if module.endswith("/turso"):
         return (backlog | {f"BenchmarkThroughBatchSQLite/{mode}/{op}" for mode in ("sequential", "batched") for op in ("direct", "through", "batch", "filter")}
-                | {f"BenchmarkGuardedWriterContentionSQLite/tenants={n}" for n in (1, 8)})
+                | {f"BenchmarkTupleWriterContentionSQLite/tenants={n}" for n in (1, 8)})
     if module.endswith("/goredis"):
         return (
             {f"BenchmarkTupleCache/tuples={size}/{op}" for size in (100, 1000, 10000, 100000) for op in ("read_allowed", "read_rejected", "delta_allowed", "delta_rejected", "rebuild")}
@@ -334,8 +334,8 @@ def parse_benchmarks(output, expected):
 def run_benchmarks(fixture):
     jobs = (
         ("pockets/authorization", (), "Benchmark(CanonicalRoleReads|TupleCachePublicationOverlap|RoleBatchReads|CheckBatchThrough|FilterAuthorizedDeniedCandidates|CheckBatchDeniedCandidates|ComposableGuard)$"),
-        ("pockets/authorization/stores/pgx", (), "Benchmark(DecisionsPostgres|TupleSourceBacklog|GuardedWriterContentionPostgres)"),
-        ("pockets/authorization/stores/turso", (), "Benchmark(ThroughBatchSQLite|TupleSourceBacklog|GuardedWriterContentionSQLite)"),
+        ("pockets/authorization/stores/pgx", (), "Benchmark(DecisionsPostgres|TupleSourceBacklog|TupleWriterContentionPostgres)"),
+        ("pockets/authorization/stores/turso", (), "Benchmark(ThroughBatchSQLite|TupleSourceBacklog|TupleWriterContentionSQLite)"),
         ("pockets/authorization/stores/goredis", ("-tags=integration",), "Benchmark(TupleCache|SQLRedis)"),
     )
     for module, tags, pattern in jobs:

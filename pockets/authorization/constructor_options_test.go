@@ -54,25 +54,24 @@ func TestModelOptionsSnapshotBeforeConstructionAndConcurrentReuse(t *testing.T) 
 	wg.Wait()
 }
 
-func TestOptionsReplaceModelsRoutesAndGuardAsWholeValues(t *testing.T) {
+func TestOptionsReplaceModelsAndRoutesAsWholeValues(t *testing.T) {
 	store := memory.New()
 	comps, err := New(Repositories{Tuples: store.Tuples(), Mutations: store.Mutations()},
 		WithModel(projectRoleModel()), WithModel(decisions.Model{}),
-		WithGuard(&stubGuard{}), WithGuard(nil),
-		WithRoleRoutes(authorizationhttp.RoleRoutes{Gate: passRoleRouteGate, AssignmentPolicy: refuseAssignment}),
+		WithRoleRoutes(authorizationhttp.RoleRoutes{Gate: passRoleRouteGate, WritePolicy: refuseAssignment}),
 		WithRoleRoutes(authorizationhttp.RoleRoutes{}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if comps.Decisions.DeclaresPermission("project", "audit") || comps.Mutations.Guarded() || comps.HTTP.RoutesEnabled() {
+	if comps.Decisions.DeclaresPermission("project", "audit") || comps.HTTP.RoutesEnabled() {
 		t.Fatal("replacement merged an earlier policy")
 	}
 	_, err = New(Repositories{Tuples: store.Tuples()}, WithRoleRoutes(authorizationhttp.RoleRoutes{ListStrategy: "unknown"}))
 	if !errors.Is(err, authorizationhttp.ErrInvalidListStrategy) {
 		t.Fatalf("orphan invalid listing policy: %v", err)
 	}
-	_, err = New(Repositories{Tuples: store.Tuples()}, WithRoleRoutes(authorizationhttp.RoleRoutes{Gate: passRoleRouteGate}), WithRoleRoutes(authorizationhttp.RoleRoutes{AssignmentPolicy: refuseAssignment}))
-	if !errors.Is(err, authorizationhttp.ErrRoleRouteAssignmentPolicyWithoutRoutes) {
+	_, err = New(Repositories{Tuples: store.Tuples()}, WithRoleRoutes(authorizationhttp.RoleRoutes{Gate: passRoleRouteGate}), WithRoleRoutes(authorizationhttp.RoleRoutes{WritePolicy: refuseAssignment}))
+	if !errors.Is(err, authorizationhttp.ErrRoleWritePolicyWithoutRoutes) {
 		t.Fatalf("route replacement retained old gate: %v", err)
 	}
 }
@@ -81,7 +80,7 @@ func TestConstructionFamiliesRejectNilOptions(t *testing.T) {
 	store := memory.New()
 	_, rootErr := New(Repositories{Tuples: store.Tuples()}, nil)
 	_, decisionErr := decisions.NewService(store.Tuples(), nil)
-	_, mutationErr := mutations.NewService(nil, nil, nil)
+	_, mutationErr := mutations.NewService(nil, nil)
 	_, httpErr := authorizationhttp.New(authorizationhttp.Services{}, nil)
 	for name, err := range map[string]error{"root": rootErr, "decisions": decisionErr, "mutations": mutationErr, "HTTP": httpErr} {
 		if !errors.Is(err, sdk.ErrInvalidInput) {

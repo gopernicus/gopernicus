@@ -55,7 +55,7 @@ func TestNamedPermissionGatesValidateKnownCoordinates(t *testing.T) {
 // Request-facing services must not expose a path to separately held trusted writers.
 func TestPublicServicesKeepTrustedCapabilitiesSeparate(t *testing.T) {
 	comps := mustComponents(t, Repositories{Tuples: memory.NewTuples()}, WithModel(validModel()))
-	trusted := map[reflect.Type]bool{reflect.TypeOf(&relationships.RelationshipWriter{}): true, reflect.TypeOf(&roles.Writer{}): true, reflect.TypeOf(&mutations.SystemMutator{}): true}
+	trusted := map[reflect.Type]bool{reflect.TypeOf(&relationships.RelationshipWriter{}): true, reflect.TypeOf(&roles.Writer{}): true, reflect.TypeOf(&mutations.Service{}): true}
 	for _, service := range []any{comps.Decisions, comps.Relationships, comps.Roles, comps.Mutations, comps.HTTP} {
 		typ := reflect.TypeOf(service)
 		for i := 0; i < typ.NumMethod(); i++ {

@@ -73,8 +73,8 @@ type constructorConfig struct {
 	AccessTokenTTL                time.Duration `env:"AUTH_ACCESS_TOKEN_TTL" default:"15m"`
 	RefreshTTL                    time.Duration `env:"AUTH_REFRESH_TTL" default:"168h"`
 	Granter                       invitations.Granter
-	InviteCheck                   invitations.InviteCheck
-	UserAdminCheck                authlogic.UserAdminCheck
+	InviteCheck                   inbound.InviteCheck
+	UserAdminCheck                inbound.UserAdminCheck
 	MemberCheck                   invitations.MemberCheck
 	BodySenders                   map[string]delivery.BodySender
 	Views                         inbound.Views
@@ -730,7 +730,7 @@ type InvitationsConfig struct {
 	// (invitations off) is the contradictory ErrInviteCheckWithoutGranter. A nil
 	// return authorizes; a denial or infrastructure error fails closed through the
 	// normal web/sdk mapping.
-	InviteCheck invitations.InviteCheck
+	InviteCheck inbound.InviteCheck
 	// MemberCheck is the optional duplicate-membership predicate for the direct-add
 	// path (known invitee + AutoAccept). Nil → no dup check (idempotent grants
 	// absorb duplicates). Meaningful only when Granter is wired.
@@ -785,7 +785,7 @@ type AdministrationConfig struct {
 	// A denial or an infrastructure error both fail closed. The resolved Principal
 	// reaches the check verbatim, including a machine principal: whether a service
 	// account may administer users is the host's decision, not the pocket's.
-	UserAdminCheck authlogic.UserAdminCheck
+	UserAdminCheck inbound.UserAdminCheck
 	// ListStrategy is the DEFAULT pagination strategy the pocket's JSON list
 	// endpoints (service accounts, API keys, invitations) apply when a request
 	// names neither a cursor nor an offset param (sdk/pkg/list ParseListRequest).

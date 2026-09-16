@@ -91,9 +91,7 @@ func New(repos Repositories, signer cryptids.JWTSigner, runtimeMode environment.
 	if d.RuntimeMode == environment.ModeProduction && nilDependency(d.IdentifierKeyer) {
 		return nil, fmt.Errorf("authentication: production requires an IdentifierKeyer: %w", sdk.ErrInvalidInput)
 	}
-	if d.UserAdminCheck != nil && nilDependency(d.UserAdmin) {
-		return nil, fmt.Errorf("authentication: UserAdminCheck requires UserAdmin: %w", sdk.ErrInvalidInput)
-	}
+
 	if len(d.Passwordless) > 0 && (nilDependency(d.Challenges) || nilDependency(d.Protector) || d.Deliver == nil || nilDependency(d.Queue) || strings.TrimSpace(d.PublicAuthBaseURL) == "") {
 		return nil, fmt.Errorf("authentication: passwordless requires challenges, delivery and a public URL: %w", sdk.ErrInvalidInput)
 	}

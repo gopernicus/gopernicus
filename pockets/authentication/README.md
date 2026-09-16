@@ -178,8 +178,10 @@ if err := httpAuth.Register(pockets.Mount{Router: router}); err != nil { return 
 `RequireLive` validates its backing session. The SDK principal context alone never
 supplies credential proof. The HTTP adapter keeps its credential service, cookie
 configuration and resolved route policy private. Trusted administrative/invitation
-methods still require host authorization; use the policy-carrying invitation methods
-when calling from an untrusted request.
+methods require authorization by their caller. Bundled HTTP handlers own the
+`authenticationhttp.InviteCheck` and `authenticationhttp.UserAdminCheck` callbacks;
+root configuration forwards them only to the HTTP adapter. Direct adapters use
+`WithInviteCheck` and `WithUserAdminCheck`. Domain services contain no host policy.
 
 ## The identifier model (design §2.2)
 
@@ -418,17 +420,18 @@ by default, immediate revocation), only decline is public:**
   relation, identifier_kind?, auto_accept?, redirect?, metadata?}` → 201 pending
   (or immediate direct-add for a known email invitee). After live-session
   validation and principal resolution, the handler drives the pocket's
-  AUTHORIZED create operation: the service validates the metadata, normalizes the
-  invitee identifier, runs the invitee lookup, and only then poses the required
-  host `InviteCheck` — with the exact requested relation AND the normalized
-  invitee context — before any row exists or a grant is attempted. A denial fails
-  closed with no side effect.
-- `GET /auth/invitations/{resource_type}/{resource_id}` — drives the AUTHORIZED
-  list operation, which poses `InviteCheck` with `InviteList` (empty relation, no
-  invitee context) before reading; `GET /auth/invitations/mine`.
+  preparation operation: the service validates and copies metadata, normalizes
+  the coordinates and identifier, and resolves the invitee once. The HTTP handler
+  poses `InviteCheck`, then executes that exact prepared command. Denial writes
+  no row and attempts no grant.
+- `GET /auth/invitations/{resource_type}/{resource_id}` — the HTTP handler poses
+  `InviteCheck` with `InviteList` before calling the policy-free listing service;
+  `GET /auth/invitations/mine` remains identity-bound.
 - `POST /auth/invitations/accept` — `{token}` → grant through the Granter.
   Acceptance does NOT re-run inviter authority (issuance-time authority, below).
-- `POST /auth/invitations/{id}/{cancel,resend}` — `InvitedBy == caller` checks.
+- `POST /auth/invitations/{id}/{cancel,resend}` — the HTTP adapter checks
+  `InvitedBy == caller` against one prepared target before executing it. A denial
+  performs no update or delivery.
 - `POST /auth/invitations/{id}/decline` — public, token-authorized, IP-limited
   (the one invitation route with no session gate).
 
@@ -436,7 +439,7 @@ Every response built from an invitation row is `{id, resource_type, resource_id,
 relation, identifier, invited_by, status, auto_accept, resolved_subject_id?,
 expires_at, accepted_at?, created_at}`. It carries **no token** — the secret is
 only ever in the mail. `invited_by` is the owning user id, the same value
-cancel/resend ownership is enforced on, so a resource list can hide actions on
+the HTTP adapter enforces cancel/resend admission on, so a resource list can hide actions on
 another admin's rows; it is a rendering hint, never authority.
 
 There are **two projections**, deliberately separate types rather than one shared
@@ -515,42 +518,45 @@ type Granter interface{ Grant(context.Context, GrantInput) error }
   `ErrInvalidInput`); nil/empty persists as `{}`. It is **untrusted** inviter
   input, never an authorization claim by itself: `InvitationsConfig.InviteCheck` receives the
   same metadata — alongside the normalized invitee context, below — so a host can
-  authorize the complete invitation at issuance, and a `Granter` applying any
-  security-sensitive side effect from it MUST revalidate. The resource-owner
-  response projection echoes it back; the recipient `/mine` projection never does.
+  authorize the complete invitation at issuance. A `Granter` validates metadata
+  shape, resource existence and domain constraints when applying its effects;
+  metadata itself never grants permission. This does not repeat the inviter's
+  permission check at acceptance. The resource-owner response projection echoes
+  it back; the recipient `/mine` projection never does.
 - **Strengthened success contract.** `Grant` returns nil ONLY when the EXACT
-  requested relation was applied or is already exactly present. A different
-  existing relation, an invariant refusal, a missing/deleted host resource, and
-  any infrastructure error all fail loud — there is **no implicit replace**. A host
-  baseline adapter verifies the exact resulting tuple (accepting ordinary detached
-  race semantics); a guarded adapter maps its authorization receipt outcome
-  (applied / no_change → nil; semantic_conflict / invariant_blocked / anything
-  else → a loud error).
+  requested relation was applied or is already exactly present. Another relation
+  alone does not fulfill that request; independent labels can coexist and there
+  is **no implicit replace**. An integrity refusal, a missing/deleted host resource
+  or an infrastructure error must propagate. The authorization pocket's
+  `GrantRelationship` returns `applied` or `no_change` on success; refusals return
+  errors, including `ErrInvariantBlocked`. Raw and command writers both enforce
+  configured `IntegrityPolicy`. Their idempotency is state-based: there is no
+  durable command receipt or `OperationID` ledger in the tuple writer. Hosts must
+  separately deduplicate any additional effects.
 - **Required `InviteCheck`.** Whenever a `Granter` enables invitations,
   `InvitationsConfig.InviteCheck` is REQUIRED at construction — nil → `ErrInviteCheckRequired`;
   an `InviteCheck` wired with no `Granter` → `ErrInviteCheckWithoutGranter`. It is
-  posed by the pocket's own AUTHORIZED invitation operations (which the shipped
-  create/list routes drive) after live-session validation, principal resolution,
-  request parsing, metadata validation, identifier normalization, and the invitee
-  lookup — and always before any invitation row exists or a grant is attempted. The
-  host therefore sees the caller, resource, action, validated relation, and the
-  normalized invitee context a route wrapper cannot, and can refuse, e.g., an
-  editor inviting a co-owner or a routing value that conflicts with the invitee's
-  existing state. Host-direct `invitations.Service.Create`/`invitations.Service.ListByResource` are trusted
-  composition calls that deliberately skip it; a host writing its OWN handlers
-  instead calls the policy-carrying twins `invitations.Service.CreateAuthorized` /
-  `invitations.Service.ListByResourceAuthorized`, which pose `InviteCheck` exactly as the
-  shipped routes do — the principal they take is the resolved caller (the inviter),
-  never the invitee. Denial (wrap `sdk.ErrForbidden`) or an infrastructure error
-  fails closed.
+  posed by the HTTP adapter after live-session validation, principal resolution,
+  request parsing and domain preparation, before any row or grant. The host sees
+  the caller, resource, action, normalized relation and invitee context, including
+  its resolved subject and copied metadata. Denial or error fails closed.
+  Headless callers authorize their own commands. To inspect before execution,
+  call `invitations.Service.PrepareCreate`, inspect `PreparedCreate.Input()` and
+  `ResolvedSubjectID()`, authorize, then call `CreatePrepared` on the same service.
+  `Input()` returns a defensive copy; zero or foreign-service values are rejected.
+  Preparation is not an authorization capability or a transaction snapshot: hosts
+  own wider concurrency requirements. `Create` remains a policy-free convenience;
+  `ListByResource` remains a policy-free read. The former `Authorized` methods and
+  service policy options have been removed.
 - **The invitee context on `InviteCheckRequest`.** For `InviteCreate` the request
   carries `Identifier` (the pocket-normalized invitee identifier),
   `IdentifierKind` (the normalized kind), and `ResolvedSubjectID` (the existing
-  subject the identifier resolves to). This is what makes per-subject policy —
-  eligibility, quota/deduplication, account compatibility over `Metadata` —
-  decidable at ISSUANCE rather than at grant time, where the refusal would land on
-  the invitee (or, on the best-effort resolve-on-registration path, be silent). The
-  lookup is **email-kind only**: `ResolvedSubjectID == ""` means unknown OR not
+  subject the identifier resolves to). Inbound can use that context to decide
+  whether the principal may issue this invitation, so an access denial reaches
+  the inviter before anything is persisted or granted. Quotas, deduplication and
+  account-compatibility rules that must hold under concurrency remain data
+  invariants, enforced atomically by their owning logic/store operation; a policy
+  callback is not that transaction. The lookup is **email-kind only**: `ResolvedSubjectID == ""` means unknown OR not
   resolvable for that kind, and must NEVER be read as proof the invitee is new —
   `IdentifierKind` is what disambiguates. For `InviteList`, `Relation`, `Metadata`,
   `Identifier`, `IdentifierKind`, and `ResolvedSubjectID` are all empty.
@@ -560,13 +566,35 @@ type Granter interface{ Grant(context.Context, GrantInput) error }
   issued invitation. Deleted-resource refusal at acceptance is the Granter's duty —
   only the host knows whether the target still exists.
 
-The host chooses posture per resource type/relation. Ordinary folder/document
-sharing should normally use a trusted application-side relationship writer and
-accept ordinary state-write races. Tenant/account owner or administrator grants
-can opt into a guarded lifecycle when atomic authority checks, last-owner rules,
-audit evidence, or durable idempotency justify it. `InviteCheck` remains required
-in both cases: choosing simpler tuple-write semantics does not make invitation
-authority optional.
+### Invitation management and authentication proof
+
+For cancellation or resend, call `PrepareManagement(ctx, id)` and inspect the
+opaque value's `ID()` and `InvitedBy()`. The inbound adapter admits the caller,
+then passes that same value to `Cancel(ctx, prepared)` or
+`Resend(ctx, prepared, redirect)`. Preparation reads once. Execution rejects
+zero or foreign-service values and uses the observed token hash with the store's
+atomic lifecycle transition; stale commands conflict before delivery. These
+principal-free services do not decide issuer access. Other inbound adapters must
+supply their own admission policy before invoking them.
+
+Credential and redemption checks remain in authentication logic:
+
+- Logout selects a session through a verified refresh/access credential. It does
+  not accept a caller-selected target session or compare a management principal.
+- `CurrentSessionID` binds the current session to this service's verified
+  credential and principal proof. Recent-authentication grants bind the user,
+  session, purpose and credential revision; these are proof consistency checks.
+- Identifier replacement/removal and OAuth linking preserve account ownership,
+  active credential state and token/revision binding. They cannot attach another
+  account's credential to the command's subject.
+- Invitation acceptance and automatic resolution require verified recipient
+  identity. Decline requires its token. None re-evaluates inviter permissions.
+
+Host principal access decisions run at inbound. Where grants need data rules
+such as minimum administrators, configure the tuple writer's `IntegrityPolicy`;
+its serialized integrity check is separate from the invitation's admission.
+Revocation after admission does not retract an admitted operation. `InviteCheck`
+remains required for bundled invitation create/list routes.
 
 ## Cross-origin SPA bootstrap (`GET /auth/csrf`)
 
@@ -1808,18 +1836,30 @@ consequences worth knowing:
 
 ### Wiring it
 
+In this example, `authorizer` is a `*decisions.Service` whose model declares
+`platform.admin`; `model` is `authorization/logic/model`. Define the callback in
+the host's inbound package and wire its configuration from `cmd`:
+
 ```go
-cfg.UserAdminCheck = func(ctx context.Context, req authlogic.UserAdminCheckRequest) error {
-	// The host answers with ITS OWN policy. authentication never invents a role
-	// named "admin", never interprets a role string, and never imports
-	// pockets/authorization.
-	if err := authorizer.Check(ctx, req.Principal, "platform:main", "admin"); err != nil {
-		return err // a denial wraps sdk.ErrForbidden; an infra error fails closed too
-	}
-	// req.Action is one of list / read / deactivate / reactivate /
-	// resend-verification; req.TargetUserID is empty only for list.
-	return nil
+administration := authentication.AdministrationConfig{
+    UserAdminCheck: func(ctx context.Context, req authenticationhttp.UserAdminCheckRequest) error {
+        result, err := authorizer.Check(ctx, model.CheckRequest{
+            Principal: model.PrincipalFrom(req.Principal),
+            Permission: "admin",
+            Resource: model.Resource{Type: "platform", ID: "main"},
+        })
+        if err != nil {
+            return err
+        }
+        if !result.Allowed {
+            return sdk.ErrForbidden
+        }
+        // req.Action distinguishes list/read/deactivate/reactivate/resend-verification.
+        // req.TargetUserID is empty only for list.
+        return nil
+    },
 }
+// Pass authentication.WithAdministration(administration) to authentication.New.
 ```
 
 A nil return authorizes. A denial and an infrastructure error **both** fail
@@ -1828,9 +1868,13 @@ The resolved `Principal` reaches the check verbatim, machine principals included
 whether a service account may administer users is the host's call.
 
 **Self-deactivation is not generically forbidden.** A host policy may allow an
-administrator to act on their own account, and it may refuse. If your product
-has a last-admin invariant, it lives in this check — the pocket does not know
-what an admin is and cannot enforce it for you.
+administrator to act on their own account, and it may refuse. A last-admin data
+invariant belongs in the owning domain's logic and serialized write operation,
+not in `UserAdminCheck`: two requests could both pass a preliminary count.
+Tuple `IntegrityPolicy` protects the number of concrete grants; it does not count
+active authentication accounts. A rule preserving a last *active* administrator
+must coordinate account status and membership in the host's data operation. The
+authentication pocket cannot infer that application-specific rule.
 
 ### Using it without the bundled routes
 
@@ -2574,12 +2618,13 @@ canonical migration set is still `0001–0016`.
 
 **Source-compatibility:** keyed struct literals and `InviteCheck` implementations
 are unaffected. An **unkeyed composite literal** of `InviteCheckRequest` no longer
-compiles — switch it to keyed fields. This is the only breaking edge.
+compiles — switch it to keyed fields. The later inbound-policy change also moves
+the callback types into `inbound/http` and removes the service policy wrappers.
 
 **Behavior deltas:**
 
-- The shipped create/list routes now drive the pocket's authorized invitation
-  operations, so `InviteCheck` is posed AFTER metadata validation, identifier
+- The shipped create/list routes pose `InviteCheck` in the HTTP adapter after
+  domain preparation: metadata validation, identifier
   normalization, and the invitee lookup instead of immediately after parsing. A
   malformed identifier or invalid metadata is now rejected before the policy is
   asked, and a refusal still leaves no row and no grant on both the pending and

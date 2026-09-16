@@ -1,0 +1,106 @@
+{
+  "scope": "Documentation completion after inbound authorization and IntegrityPolicy refactor; no implementation changes in this pass.",
+  "base_head": "22c712e2100ff58e0b8a3a53528a9b43ae69c942",
+  "branch": "main",
+  "status": "complete; uncommitted",
+  "changed_documentation_sha256": {
+    "RELEASING.md": "11357e38f36d3215b35705421f7b41c918cee09ba0a83bcd41820fdb903b5534",
+    "examples/auth-cms/README.md": "924197357a95da080c154061b274fe4455d36cc5b1a74428983291b9c2b18c92",
+    "pockets/authentication/README.md": "09e289d7ea92f70c6dfec0cf3f131bbd048080ff6a356b4e0f912a86da48a6e4",
+    "pockets/authorization/README.md": "36a2d05407996c8b8f84f0775ed47a94de032cc54524b3b8e27f4c097ea8ee17",
+    "pockets/authorization/stores/UPGRADE.md": "5acbe87161b600ac2c079d55d284565b2f4c3c3d5edb5e208ec3d690811f14be",
+    "workshop/documentation/docs/architecture/hexagonal-apps.md": "f8fe6d4a48382240cd47b368c0a46209c1c8d9b33492c5d8691ee8b0929cee37",
+    "workshop/documentation/docs/pockets/authentication.md": "cf740c198eab3d34e5ee0dc180e7aae33f61d238ff6a57d76db4501b7134c674",
+    "workshop/documentation/docs/pockets/authorization.md": "793185a8bb2fd6241aa47c1707958590f927e987375e28acfde2978f0d8119a2"
+  },
+  "verification": {
+    "documentation_build": {
+      "cwd": "workshop/documentation",
+      "command": "env -i PATH=\"/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin\" HOME=\"$HOME\" TMPDIR=\"$TMPDIR\" CI=true node node_modules/@docusaurus/core/bin/docusaurus.mjs build",
+      "exit_code": 0,
+      "output": "[INFO] [en] Creating an optimized production build...\n[info] [webpackbar] Compiling Client\n[info] [webpackbar] Compiling Server\n[success] [webpackbar] Server: Compiled successfully in 514.43ms\n[success] [webpackbar] Client: Compiled successfully in 687.95ms\n[SUCCESS] Generated static files in \"build\".\n[INFO] Use `npm run serve` command to test your build locally.\n"
+    },
+    "documentation_typecheck": {
+      "cwd": "workshop/documentation",
+      "command": "env -i PATH=\"/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin\" HOME=\"$HOME\" TMPDIR=\"$TMPDIR\" CI=true node node_modules/typescript/bin/tsc --noEmit",
+      "exit_code": 0,
+      "output": ""
+    },
+    "go_documentation_examples": {
+      "cwd": ".",
+      "command": "env -i PATH=\"$PATH\" HOME=\"$HOME\" TMPDIR=\"$TMPDIR\" GOENV=off GOTOOLCHAIN=local GOCACHE=/tmp/gopernicus-authorization-hardening/cache go run /tmp/gopernicus-authorization-docs/examples.go",
+      "exit_code": 0,
+      "output": "PASS: documented admin check handles deny/allow; Require returns 404 without invoking protected handler; three decisions emit three DEBUG records; nil writer and atomic integrity behavior match docs\n",
+      "reproduce": "Write source below to a temporary .go file and run it from the repository Go workspace. No database or listener required.",
+      "source": "package main\n\nimport (\n\t\"bytes\"\n\t\"context\"\n\t\"errors\"\n\t\"fmt\"\n\t\"log/slog\"\n\t\"net/http\"\n\t\"net/http/httptest\"\n\n\t\"github.com/gopernicus/gopernicus/pockets/authentication\"\n\tauthenticationhttp \"github.com/gopernicus/gopernicus/pockets/authentication/inbound/http\"\n\t\"github.com/gopernicus/gopernicus/pockets/authorization\"\n\tauthorizationhttp \"github.com/gopernicus/gopernicus/pockets/authorization/inbound/http\"\n\t\"github.com/gopernicus/gopernicus/pockets/authorization/logic/decisions\"\n\t\"github.com/gopernicus/gopernicus/pockets/authorization/logic/model\"\n\t\"github.com/gopernicus/gopernicus/pockets/authorization/logic/mutations\"\n\t\"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuples\"\n\t\"github.com/gopernicus/gopernicus/pockets/authorization/stores/memory\"\n\t\"github.com/gopernicus/gopernicus/sdk\"\n)\n\nfunc main() {\n\tctx := context.Background()\n\tstore := memory.New(memory.WithIntegrityPolicy(mutations.IntegrityPolicy{Rules: []mutations.IntegrityRule{{ResourceType: \"project\", Relation: \"owner\", MinSubjects: 1}}}))\n\tschema := decisions.Model{ResourceTypes: map[string]decisions.ResourceTypeDef{\n\t\t\"platform\": {Relations: map[string]decisions.RelationDef{\"admin\": {AllowedSubjects: []decisions.SubjectTypeRef{{Type: \"user\"}}}}, Permissions: map[string]decisions.Expression{\"admin\": decisions.Direct(\"admin\")}},\n\t\t\"document\": {Permissions: map[string]decisions.Expression{\"view\": decisions.RoleIn(\"viewer\")}},\n\t}}\n\tvar logs bytes.Buffer\n\tlogger := slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))\n\tcomponents, err := authorization.New(authorization.Repositories{Tuples: store.Tuples(), Mutations: store.Mutations()}, authorization.WithModel(schema), authorization.WithLogger(logger))\n\tmust(err)\n\tauthorizer := components.Decisions\n\tadministration := authentication.AdministrationConfig{\n\t\tUserAdminCheck: func(ctx context.Context, req authenticationhttp.UserAdminCheckRequest) error {\n\t\t\tresult, err := authorizer.Check(ctx, model.CheckRequest{Principal: model.PrincipalFrom(req.Principal), Permission: \"admin\", Resource: model.Resource{Type: \"platform\", ID: \"main\"}})\n\t\t\tif err != nil {\n\t\t\t\treturn err\n\t\t\t}\n\t\t\tif !result.Allowed {\n\t\t\t\treturn sdk.ErrForbidden\n\t\t\t}\n\t\t\treturn nil\n\t\t},\n\t}\n\t_ = authentication.WithAdministration(administration)\n\treq := authenticationhttp.UserAdminCheckRequest{Principal: sdk.Principal{Type: \"user\", ID: \"alice\"}}\n\tif err := administration.UserAdminCheck(ctx, req); !errors.Is(err, sdk.ErrForbidden) {\n\t\tpanic(fmt.Sprintf(\"expected admin denial: %v\", err))\n\t}\n\t_, err = components.Mutations.GrantRelationship(ctx, mutations.GrantRelationshipCommand{ResourceType: \"platform\", ResourceID: \"main\", Relation: \"admin\", Subject: tuples.SubjectRef{Type: \"user\", ID: \"alice\"}})\n\tmust(err)\n\tmust(administration.UserAdminCheck(ctx, req))\n\tguard := components.HTTP.Require(authorizationhttp.Can(\"view\", authorizationhttp.Path(\"document\", \"documentID\")), authorizationhttp.WithDeniedHandler(http.NotFoundHandler()))\n\tcalled := false\n\thandler := guard(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { called = true }))\n\trequest := httptest.NewRequest(\"GET\", \"/documents/d1\", nil)\n\trequest.SetPathValue(\"documentID\", \"d1\")\n\trequest = request.WithContext(sdk.WithPrincipal(request.Context(), req.Principal))\n\tresult := httptest.NewRecorder()\n\thandler.ServeHTTP(result, request)\n\tif result.Code != 404 || called {\n\t\tpanic(fmt.Sprintf(\"denial hook status=%d handler=%v\", result.Code, called))\n\t}\n\tif bytes.Count(logs.Bytes(), []byte(`\"msg\":\"authorization decision\"`)) != 3 {\n\t\tpanic(\"expected one DEBUG line for each of the three decisions\")\n\t}\n\t_, err = mutations.NewService(nil)\n\tif !errors.Is(err, mutations.ErrMutationsNotConfigured) {\n\t\tpanic(\"nil repository accepted\")\n\t}\n\treadsOnly, err := authorization.New(authorization.Repositories{Tuples: store.Tuples()})\n\tmust(err)\n\tif readsOnly.Mutations != nil {\n\t\tpanic(\"missing repository exposed writer\")\n\t}\n\tcompiled, err := decisions.Compile(schema)\n\tmust(err)\n\twrites, err := mutations.NewService(store.Mutations(), mutations.WithModel(compiled))\n\tmust(err)\n\t_, err = writes.GrantRelationship(ctx, mutations.GrantRelationshipCommand{ResourceType: \"project\", ResourceID: \"p1\", Relation: \"owner\", Subject: tuples.SubjectRef{Type: \"user\", ID: \"alice\"}})\n\tmust(err)\n\t_, err = writes.RevokeRelationship(ctx, mutations.RevokeRelationshipCommand{ResourceType: \"project\", ResourceID: \"p1\", Relation: \"owner\", Subject: tuples.SubjectRef{Type: \"user\", ID: \"alice\"}})\n\tif !errors.Is(err, sdk.ErrConflict) {\n\t\tpanic(\"last owner was removed\")\n\t}\n\tfmt.Println(\"PASS: documented admin check handles deny/allow; Require returns 404 without invoking protected handler; three decisions emit three DEBUG records; nil writer and atomic integrity behavior match docs\")\n}\nfunc must(err error) {\n\tif err != nil {\n\t\tpanic(err)\n\t}\n}\n"
+    },
+    "rendered_html": {
+      "result": "passed",
+      "assertions": {
+        "pockets/authorization": {
+          "text": [
+            "WithDeniedHandler(http.NotFoundHandler())",
+            "ErrMutationsNotConfigured",
+            "RoleRoutes.WritePolicy"
+          ],
+          "anchors": [
+            "host-denial-responses",
+            "decision-logging"
+          ]
+        },
+        "pockets/authentication": {
+          "text": [
+            "PrepareManagement",
+            "CreatePrepared",
+            "grants, not active user accounts."
+          ],
+          "anchors": [
+            "inbound-access-policy-and-data-integrity"
+          ]
+        },
+        "architecture/hexagonal-apps": {
+          "text": [
+            "internal/logic/compositions/<name>",
+            "Principal access policy belongs at inbound",
+            "An admitted operation may finish after permission revocation."
+          ],
+          "anchors": [
+            "inbound-is-an-adapter"
+          ]
+        }
+      },
+      "method": "Python HTMLParser: joined text nodes, normalized whitespace, checked content and heading IDs in generated HTML."
+    },
+    "release_adoption_link": "Target file and heading verified; documentation build uses broken-link errors.",
+    "git_diff_check": "passed",
+    "full_go_build_test_vet": "Not repeated for Markdown-only updates; prior implementation verification is preserved in plans/authorization-integrity-policy-verification.json."
+  },
+  "independent_review": {
+    "agent": "architecture_steward",
+    "result": "All five findings resolved; no remaining scoped findings.",
+    "resolved": [
+      "Inbound admission and host composition placement",
+      "Invitation granter guarantees and removed receipt/probe claims",
+      "Concurrent quota/dedup enforcement ownership",
+      "Current CheckRequest admin example",
+      "Concrete tuple minima versus last-active-admin account invariants"
+    ]
+  },
+  "preservation": {
+    "method": "SHA256 comparison against beginning-of-turn tracked and visible untracked file snapshot; existing deleted files remain deleted.",
+    "result": "Only the eight listed existing Markdown files changed; prior code, SQL, dependency manifests, lockfiles and owner plans unchanged.",
+    "owner_plans_sha256": {
+      "plans/cacher-design.md": "47ce5336e9298531d98a53fb33d39215e281a1c55ab939eb74da4e6aa5537757",
+      "plans/gps-360-go-audit-upgrade-handoff.md": "6afdee8279ab6639309341270fa7c775e5444947136784215f81743007449f7a",
+      "plans/segovia-v2-audit-upgrade-handoff.md": "e131e1b81fabacc24b0be9dffc2a79a30ddc1cbca06af0959ea8f46428aec3a3"
+    },
+    "branch_and_head": "unchanged",
+    "additional_records": [
+      "plans/authorization-integrity-docs.md",
+      "plans/authorization-integrity-docs-verification.json"
+    ]
+  },
+  "verification_fixture_corrections": "The temporary harness initially used a nonexistent model.SubjectRef fixture; corrected to tuples.SubjectRef before a successful run. HTML checks were corrected to join syntax-highlighted text nodes and assert wording actually present. No documentation or runtime defect was masked.",
+  "remaining_failures": [],
+  "publishing": "No commit, push, deployment or release."
+}

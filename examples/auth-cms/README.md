@@ -102,27 +102,25 @@ history:
   `events.WithAuthorization` seam now delegates to `authorizer.Check`, and the
   invitation `Granter` is the engine's `relationshipGranter`.
 
-**The relationship kind (GUARDED, AZ3-4.1).** `main` declares a schema
-(`authorization.NewSchema`) with a `project` resource type (`owner`/`member`
-relations, `view` = `AnyOf(owner, member)`, and `manage_access` = `Direct(owner)` —
-the permission the host `MutationGuard` enforces) and a flat `platform` admin-list
-type (`admin` relation + `admin` permission). The composition is guarded: actor-facing
-writes pass a host `MutationGuard` (`guard.go`) that reads `manage_access` (its backing
-`owner` relation) plus the platform-admin short-circuit **only through the mutation
-repository's dependency-tracking `DecisionView`**, and the ownable `project` type
-carries the ratified guardian minimum (`owner`, min-1). At boot the host seeds
-`project:demo#owner@user:demo-owner` (establishing the guardian minimum FIRST) and the
-**platform-admin data tuple** `platform:main#admin@user:demo-owner`, plus the
-roles-kind `auditor` assignment on `project:demo`, through the **trusted
-`SystemMutator`** (`seedAuthorization`) — platform-admin is DATA (a tuple over
-a `platform` resource type), never a Config field, and establishing the first owner is
-inherently trusted. **`Check` is pure schema evaluation**: the engine grants no bypass.
-The membership route explicitly composes platform administration and project access
-with `Require(Any(Can(...), Can(...)))` in one snapshot. A
-member gets `view` on `project/demo` the moment the invitation is accepted (the Granter
-writes the tuple through the baseline writer). Demo routes are READ-ONLY (AZ3-4.1
-removed the session-only mutation routes — see below); the guarded actor path and
-`SystemMutator` composition are proven by `authorization_test.go`, not a browser flow.
+**Principal admission and data integrity.** `authzSchema` declares project
+`view` and `manage_access` permissions and platform administration. The host's
+principal policies live in `pockets/access/inbound`: access management admits a
+platform administrator or a resource owner within one decision snapshot. Bundled
+role writes call this policy after validating the exact command and before the
+principal-free tuple writer runs. Revocation after admission affects later calls;
+it does not retract an admitted operation.
+
+`authzIntegrityPolicy` requires one concrete project owner. Logic defines that
+minimum and the memory store checks it under the same lock as the write. Two
+concurrent last-owner removals produce one success and one integrity conflict.
+Ordinary role, relationship and canonical tuple writers enforce the same policy.
+Explicit resource teardown requires a reason and is the exception to the minimum.
+
+Boot seeding uses `Components.Mutations` to establish the project owner, platform
+admin and scoped auditor facts before serving. Platform administration remains
+data, and the permission engine grants no implicit bypass. Read demos use
+inbound gates; the same principal-free writer serves boot, invitation and admitted
+HTTP operations.
 
 - `GET /demo/members-only` — one policy accepts platform `admin` on `platform/main`
   or `view` on `project/demo` → 200; denial → 403. A reached evaluation error fails
@@ -146,9 +144,9 @@ relationship predicates, while `audit` uses exact `RoleIn("auditor")`.
 - Independent labels coexist. Accepting a member invitation preserves an existing
   owner fact on the same subject and project; both grant their declared permissions.
 - Opaque role labels need no catalog entry. Explicit subject-shape constraints,
-  the atomic mutation guard and guardian invariants still apply.
+  inbound admission and atomic integrity validation still apply.
 
-Boot seeding uses the separately held trusted `SystemMutator`. Bundled role
+Boot seeding uses `Components.Mutations`. Bundled role
 administration is mounted behind the host's live-session and platform-admin gate
 (see Leg 7b). The retired session-only `/demo/roles/*` and bootstrap endpoints
 remain absent.
@@ -180,15 +178,14 @@ remain absent.
   (per-instance keys can't cross-verify). API clients recover a dead access JWT via
   `POST /auth/refresh` (refresh tokens are store-backed).
 - **Granter**: `relationshipGranter` (`cmd/server/membership.go`) — the ordinary
-  collaboration adapter. It validates the target resource still exists, writes
-  through `RelationshipWriter.CreateRelationships`, then performs the detached
-  exact-state check required by the Granter contract. It intentionally ignores
-  `OperationID`: no request ledger is needed, and a
-  re-grant after deletion restores current state. A separately named
-  `guardedRelationshipGranter` in the same file demonstrates the sensitive posture:
-  it calls `SystemMutator` to enforce guardian rules and supplies an explicit
-  audit source for hosts that enable recording. The host can select either posture per resource type/relation.
-- **InviteCheck** (`hostInviteCheck`, `cmd/server/membership.go`) — the required
+  collaboration adapter. It validates the target resource still exists and writes
+  the exact fact through `RelationshipWriter.CreateRelationships`. It intentionally
+  ignores `OperationID`: the write is state-based, and a re-grant after deletion
+  restores current state. `integrityRelationshipGranter` in the same file uses
+  `Components.Mutations.GrantRelationship` and supplies explicit system audit
+  attribution. Both writers enforce the store's configured `IntegrityPolicy`;
+  neither makes a principal permission decision or keeps an operation ledger.
+- **InviteCheck** (`Policy.Invite`, `pockets/access/inbound/policy.go`) — the required
   relation-aware host authorization policy the pocket calls from its parsed
   create/list invitation handlers (`auth.InvitationsConfig.InviteCheck`): a platform admin may
   invite any relation, owner-granting is otherwise reserved to platform admins (the
@@ -311,8 +308,8 @@ remain absent.
 | `OAuthConfig.Providers` | the fake provider | OAuth routes not registered (deny-by-absence) |
 | `New`'s `signer` argument | golang-jwt HS256 over `AUTH_JWT_SECRET` (or ephemeral dev key) | REQUIRED — nil is `ErrTokenSignerRequired` at construction (no nil variant) |
 | `OAuthConfig.TokenEncrypter` | AES-GCM iff `AUTH_TOKEN_ENCRYPTER_KEY` | provider tokens not persisted (login/link still work) |
-| `InvitationsConfig.Granter` | engine `relationshipGranter` (baseline `RelationshipWriter`, structured `GrantInput`; guarded alternative also demonstrated) | invitation routes not registered (deny-by-absence) |
-| `InvitationsConfig.InviteCheck` | relation-aware `hostInviteCheck` (platform-admin bypass, owner-grant reserved, else `manage_access`) | REQUIRED once `Granter` is wired — nil is `ErrInviteCheckRequired`; set without a `Granter` is `ErrInviteCheckWithoutGranter` |
+| `InvitationsConfig.Granter` | engine `relationshipGranter` (baseline `RelationshipWriter`, structured `GrantInput`; atomic command alternative also demonstrated) | invitation routes not registered (deny-by-absence) |
+| `InvitationsConfig.InviteCheck` | inbound `Policy.Invite` (platform-admin bypass, owner-grant reserved, else `manage_access`) | REQUIRED once `Granter` is wired — nil is `ErrInviteCheckRequired`; set without a `Granter` is `ErrInviteCheckWithoutGranter` |
 | `New`'s `runtimeMode` argument | `development` (explicit) | REQUIRED, no default — empty is `ErrRuntimeModeRequired` |
 | `New`'s `deliveryMode` argument | `jobs` (explicit) | REQUIRED, no default — empty is `ErrDeliveryModeRequired`, unknown is `ErrDeliveryModeInvalid` |
 | `IdentityConfig.ChallengeProtector` | HMAC key ring (`AUTH_CHALLENGE_PEPPER` or ephemeral) | REQUIRED once `Challenges` wired — `ErrChallengeProtectorRequired` |
@@ -421,8 +418,8 @@ unset; the bundled lifecycle routes are NOT mounted (404) — set a gate or serv
 own routes over the Service methods"
 ```
 
-The tuple is **data**, and this proof host grants it at boot through the trusted
-`SystemMutator` only — to the synthetic `user:demo-owner`
+The tuple is **data**, and this proof host grants it at boot through
+`Components.Mutations` — to the synthetic `user:demo-owner`
 (`seedAuthorization`, `authorization.go`), which is *not* a signable-in account: the
 host seeds no real user, and AZ3-4.1 retired the request-time
 `POST /demo/admin/bootstrap` promotion route. So `admin@example.com` from Leg 0 is
@@ -430,7 +427,7 @@ host seeds no real user, and AZ3-4.1 retired the request-time
 cannot be promoted by restarting with its id either. The executable end-to-end proof of
 this leg is therefore the host test `newMachineHost` /
 `TestMachineRoutesGateRefusesANonAdmin` in `cmd/server/apikey_search_test.go`, which
-grants `platform:main#admin` to the signed-up user through the same `SystemMutator` and
+grants `platform:main#admin` to the signed-up user through the same `Components.Mutations` and
 then drives the curls below over real HTTP. To run them by hand, add a grant for your
 registered id beside the seed's and rebuild.
 
@@ -660,11 +657,11 @@ and the process exits nonzero rather than continuing to admit work against a dea
 delivery runtime. A normal signal-driven shutdown (the delivery context is canceled by
 the ordered stop above) takes the quiet path and is never treated as a failure.
 
-### Leg 7 — the authorization flagship (guarded, AZ3-4.1)
+### Leg 7 — the authorization flagship (inbound admission and integrity)
 
 The `project:demo` owner, the `platform:main#admin` data tuple, and the `auditor` role
-on `project:demo` are **boot-seeded for `user:demo-owner`** through the trusted
-`SystemMutator` (`seedAuthorization`) — the
+on `project:demo` are **boot-seeded for `user:demo-owner`** through
+`Components.Mutations` (`seedAuthorization`) — the
 host no longer self-bootstraps the caller through a session-only route. The READ demos
 below still drive live off invitation-granted membership; `<BID>`/`<CID>` are B/C's
 principal ids from `GET /demo/whoami`.
@@ -682,7 +679,7 @@ curl -i -b bjar http://localhost:8082/demo/audit                                
 ```
 
 **Role assignment now HAS an HTTP surface** — the pocket's own, not a host route.
-The host supplies `authorization.WithRoleRoutes(authorizationhttp.RoleRoutes{Gate: gate})`,
+The host supplies `authorizationhttp.WithRoleRoutes(authorizationhttp.RoleRoutes{Gate: gate, WritePolicy: access.New(authorizer).RoleWrite})`,
 so `Register` mounts the
 bundled role-administration routes under `/authorization/*`. The gate
 (`roleAdministrationGate`, `cmd/server/authorization.go`) is the ENTIRE chain the
@@ -693,13 +690,10 @@ platform-admin coordinate `MachineRoutesGate` names. It is assigned through
 `deferredMiddleware` because the authorization pocket is built before `authSvc`
 exists; an unassigned gate fails closed with a 500, never an open door.
 
-The guarded actor-mutation path (manage_access + platform-admin over the
-`DecisionView`), the trusted `SystemMutator` seeding/invitation flow, the
-last-owner guardian minimum, exact global/scoped separation, and owner/member
-coexistence remain proven in
-`cmd/server/authorization_test.go`; the bundled routes are proven end to end —
-real session, real permission, real FS9 bodies — in
-`cmd/server/role_routes_proof_test.go`.
+The inbound access policy, shared writer for seeding and invitations,
+last-owner integrity minimum, exact scope separation, and owner/member coexistence
+are exercised in `cmd/server/authorization_test.go`. The bundled role routes are
+proven over real HTTP sessions in `cmd/server/role_routes_proof_test.go`.
 
 ### Leg 7b — the bundled role-administration routes
 
@@ -720,7 +714,7 @@ boot-seeds for the synthetic `user:demo-owner` (`seedAuthorization`) — establi
 the first admin is inherently trusted, so a freshly registered browser account is a
 403 by design. The authorized walkthrough is therefore driven in
 `TestRoleRoutesPlatformAdminDrivesTheLifecycle`, which seeds the tuple for a REAL
-registered user through the `SystemMutator` and then walks the whole flow over HTTP:
+registered user through the `Components.Mutations` and then walks the whole flow over HTTP:
 
 ```sh
 # assign -> 200 with the outcome
@@ -743,7 +737,7 @@ curl -sX POST http://localhost:8082/authorization/roles/unassign -b adminjar \
 Refusals a client will meet: missing/invalid explicit scope or a partial resource
 coordinate pair → **400**; a listing missing either
 of its query values, or carrying `q` → **400**; successful outcomes
-(`applied`, `no_change`, `not_found`) → **200**. Guardian conflicts
+(`applied`, `no_change`, `not_found`) → **200**. Integrity conflicts
 return **409**; retired mutation IDs and expected revisions are rejected as unknown fields.
 
 Omit `authorization.WithRoleRoutes(...)` in `newAuthorization` and all four paths

@@ -447,6 +447,7 @@ func (s *tupleStore) ReconcileTuples(ctx context.Context, scope tuples.Scope, re
 		desired[tuples.Tuple{Scope: scope, Relation: relation, Subject: subject}] = struct{}{}
 	}
 	return runWrite(ctx, s.db, s.cfg, func(tx *writeTx) error {
+		tx.touch(scope)
 		reader := *s
 		reader.readQuerier = tx.Tx
 		remaining := maps.Clone(desired)
@@ -473,6 +474,7 @@ func (s *tupleStore) DeleteScope(ctx context.Context, scope tuples.Scope) error 
 		return err
 	}
 	return runWrite(ctx, s.db, s.cfg, func(tx *writeTx) error {
+		tx.touch(scope)
 		a := &tupleArgs{}
 		where, err := tupleWhere(a, tuples.Query{Scope: &scope})
 		if err != nil {

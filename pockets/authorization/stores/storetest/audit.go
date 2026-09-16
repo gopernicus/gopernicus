@@ -17,7 +17,7 @@ import (
 )
 
 // RunAudit exercises optional change recording on all three write surfaces.
-// factory returns a fresh bundle with an empty guardian policy and recording
+// factory returns a fresh bundle with an empty integrity policy and recording
 // enabled exactly when requested. Audit must always be supplied for reads.
 func RunAudit(t *testing.T, factory func(*testing.T, bool) Repositories) {
 	t.Run("Disabled", func(t *testing.T) {
@@ -209,11 +209,11 @@ func specMutationAudit(t *testing.T, r Repositories) {
 	roleCmd.Operation = mutations.OpRoleAssign
 	expectAuditChanges(t, r, apply(roleCmd), []audit.Change{addedRole(assignment)})
 	before := readAudit(t, r.Audit)
-	if result, err := r.Mutations.ApplyGuarded(ctx, grant("d", "viewer", "other"), func(context.Context, mutations.StoreDecisionView) error { return sdk.ErrForbidden }, nil); result != nil || !errors.Is(err, sdk.ErrForbidden) {
-		t.Fatalf("denial: %+v %v", result, err)
+	if result, err := r.Mutations.Apply(ctx, grant("d", "viewer", "other"), func(mutations.Command) error { return sdk.ErrInvalidInput }); result != nil || !errors.Is(err, sdk.ErrInvalidInput) {
+		t.Fatalf("invalid command: %+v %v", result, err)
 	}
 	if !reflect.DeepEqual(before, readAudit(t, r.Audit)) {
-		t.Fatal("denied command recorded history")
+		t.Fatal("invalid command recorded history")
 	}
 	expectAuditChanges(t, r, apply(mutations.Command{Target: resTarget("d"), Operation: mutations.OpTeardown}), []audit.Change{removedRelationship(a), removedRole(assignment)})
 }

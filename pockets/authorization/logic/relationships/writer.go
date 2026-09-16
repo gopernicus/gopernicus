@@ -10,7 +10,8 @@ import (
 )
 
 // RelationshipWriter is a separately held trusted capability. It validates
-// current schema additions but bypasses actor guards and guardian minimums.
+// current schema additions. Configured store IntegrityPolicy applies to every write;
+// caller access is admitted by inbound.
 // Stores preserve their own atomic fact/audit and ambient transaction contracts.
 type RelationshipWriter struct {
 	store   tuples.Storer

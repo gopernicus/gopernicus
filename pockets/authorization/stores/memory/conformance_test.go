@@ -15,11 +15,11 @@ import (
 // dialect stores prove the same suite live). Each newRepos call returns a fresh,
 // empty pair wiring BOTH kinds.
 func TestConformance(t *testing.T) {
-	storetest.Run(t, func(t *testing.T, policy mutations.GuardianPolicy) storetest.Repositories {
+	storetest.Run(t, func(t *testing.T, policy mutations.IntegrityPolicy) storetest.Repositories {
 		// One bundle so the atomic mutation repository shares its lock and snapshot
 		// with the relationship/role read path (a grant via Apply is visible to
-		// Check and to the raw stores). The default guardian policy protects owner.
-		store := memory.New(memory.WithGuardianPolicy(policy))
+		// Check and to the raw stores). The default integrity policy protects owner.
+		store := memory.New(memory.WithIntegrityPolicy(policy))
 		return storetest.Repositories{Repositories: authorization.Repositories{Tuples: store.Tuples(),
 			Mutations: store.Mutations()}, Relationships: store.Relationships(),
 		}

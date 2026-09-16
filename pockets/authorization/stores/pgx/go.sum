@@ -31,5 +31,5 @@ gopkg.in/yaml.v3 v3.0.1 h1:fxVm/GzAzEWqLHuvctI91KS9hhNmmWOoWu0XTYJS7CA=
 gopkg.in/yaml.v3 v3.0.1/go.mod h1:K4uyk7z7BCEPqu6E+C64Yfv1cQ7kz7rIZviUmN+EgEM=
 github.com/gopernicus/gopernicus/integrations/datastores/pgxdb v0.9.0 h1:KQBxTSyAUjnv99C6PNkfwrshdojQmXLfOSzyiq1Hego=
 github.com/gopernicus/gopernicus/integrations/datastores/pgxdb v0.9.0/go.mod h1:m73aQqKrcCcr/XY5CwqUY5REpUg0Pwr1r3i+YfpAPJg=
-github.com/gopernicus/gopernicus/pockets/authorization v0.18.0 h1:RT8U8z2CkxDwq0MLYMKtoxKoWLvaM/7wqzoGSensKEM=
-github.com/gopernicus/gopernicus/pockets/authorization v0.18.0/go.mod h1:SWt/blN2Csf2p8dohOtJXbINP/BT5Z3oV9/GOxkFXGo=
+github.com/gopernicus/gopernicus/pockets/authorization v0.20.0 h1:gElAhFv/CPfPa3C4nmRbVRpHPhVMevtf8yuMzkGY5vI=
+github.com/gopernicus/gopernicus/pockets/authorization v0.20.0/go.mod h1:SWt/blN2Csf2p8dohOtJXbINP/BT5Z3oV9/GOxkFXGo=

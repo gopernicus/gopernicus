@@ -17,11 +17,6 @@ import (
 // to the host query. Hosts supply a stable shared key across application instances.
 type CursorCodec struct{ aead cipher.AEAD }
 
-type position struct {
-	NameKey string `json:"name_key"`
-	ID      string `json:"id"`
-}
-
 func NewCursorCodec(key []byte) (*CursorCodec, error) {
 	block, err := aes.NewCipher(key)
 	if err != nil {
@@ -34,7 +29,7 @@ func NewCursorCodec(key []byte) (*CursorCodec, error) {
 	return &CursorCodec{aead: aead}, nil
 }
 
-func cursorBinding(principal sdk.Principal, query domain.Query) []byte {
+func cursorBinding(principal sdk.Principal, query Query) []byte {
 	// Limit is deliberately absent: a client can resize a page while preserving
 	// its principal, tenant, search, ordering and permission.
 	data, _ := json.Marshal(struct {
@@ -47,7 +42,7 @@ func cursorBinding(principal sdk.Principal, query domain.Query) []byte {
 	return data
 }
 
-func (c *CursorCodec) encode(p position, binding []byte) (string, error) {
+func (c *CursorCodec) encode(p domain.Position, binding []byte) (string, error) {
 	plain, err := json.Marshal(p)
 	if err != nil {
 		return "", err
@@ -60,23 +55,23 @@ func (c *CursorCodec) encode(p position, binding []byte) (string, error) {
 	return base64.RawURLEncoding.EncodeToString(sealed), nil
 }
 
-func (c *CursorCodec) decode(token string, binding []byte) (position, error) {
+func (c *CursorCodec) decode(token string, binding []byte) (domain.Position, error) {
 	if token == "" {
-		return position{}, nil
+		return domain.Position{}, nil
 	}
 	bad := fmt.Errorf("documents: invalid continuation; restart the query: %w", sdk.ErrInvalidInput)
 	sealed, err := base64.RawURLEncoding.DecodeString(token)
 	if err != nil || len(sealed) < c.aead.NonceSize()+c.aead.Overhead() {
-		return position{}, bad
+		return domain.Position{}, bad
 	}
 	nonce := sealed[:c.aead.NonceSize()]
 	plain, err := c.aead.Open(nil, nonce, sealed[c.aead.NonceSize():], binding)
 	if err != nil {
-		return position{}, bad
+		return domain.Position{}, bad
 	}
-	var p position
+	var p domain.Position
 	if err := json.Unmarshal(plain, &p); err != nil || p.ID == "" {
-		return position{}, bad
+		return domain.Position{}, bad
 	}
 	return p, nil
 }

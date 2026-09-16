@@ -7,19 +7,19 @@ import (
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuples"
 )
 
-func (s *Service) AssignRole(ctx context.Context, actor Actor, cmd AssignRoleCommand) (*Result, error) {
+func (s *Service) AssignRole(ctx context.Context, cmd AssignRoleCommand) (*Result, error) {
 	c, err := assignRoleCommand(cmd)
 	if err != nil {
 		return nil, err
 	}
-	return s.applyMutation(ctx, actor, c)
+	return s.Apply(ctx, c)
 }
-func (s *Service) UnassignRole(ctx context.Context, actor Actor, cmd UnassignRoleCommand) (UnassignRoleResult, error) {
+func (s *Service) UnassignRole(ctx context.Context, cmd UnassignRoleCommand) (UnassignRoleResult, error) {
 	c, err := unassignRoleCommand(cmd)
 	if err != nil {
 		return UnassignRoleResult{}, err
 	}
-	r, err := s.applyMutation(ctx, actor, c)
+	r, err := s.Apply(ctx, c)
 	if err != nil {
 		return UnassignRoleResult{}, err
 	}

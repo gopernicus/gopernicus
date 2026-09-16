@@ -33,7 +33,7 @@ var errInjected = errors.New("storetest: injected host failure")
 // every baseline relationship and role write and raw exact read JOIN the
 // connector's Transact-owned transaction when the context carries one, so a
 // host's application row and the tuple that projects it commit or roll back
-// together — and that the guarded mutation path refuses to run inside one.
+// together — and that the atomic mutation path refuses to run inside one.
 //
 // newRepos returns a FRESH, empty Repositories and the transaction.Transactor of the
 // SAME connector the repositories were built over (the connector's *DB is the
@@ -730,9 +730,9 @@ func specReadsJoinTransaction(t *testing.T, newRepos func(t *testing.T) (Reposit
 	}
 }
 
-// specMutationRefusesAmbientTransaction: Apply and ApplyGuarded, called inside
-// Transact, return mutation.ErrGuardedInsideTransaction (wrapping
-// sdk.ErrInvalidInput) with a nil result, run neither the guard nor the
+// specMutationRefusesAmbientTransaction: Apply, called inside
+// Transact, return mutation.ErrMutationInsideTransaction (wrapping
+// sdk.ErrInvalidInput) with a nil result, do not run the
 // semantic validator, and change no mutation state — checked while the outer
 // transaction is still OPEN (so the assertion does not rely on the rollback to
 // hide effects) and again after it. Returning the refusal from the callback
@@ -743,78 +743,61 @@ func specMutationRefusesAmbientTransaction(t *testing.T, newRepos func(t *testin
 	if repos, _ := newRepos(t); repos.Mutations == nil {
 		t.Skip("mutation repository not wired")
 	}
-	for _, guarded := range []bool{false, true} {
-		guarded := guarded
-		name := "Apply"
-		if guarded {
-			name = "ApplyGuarded"
-		}
-		t.Run(name, func(t *testing.T) {
-			repos, tx := newRepos(t)
-			s, m := repos.Relationships, repos.Mutations
+	t.Run("Apply", func(t *testing.T) {
+		repos, tx := newRepos(t)
+		s, m := repos.Relationships, repos.Mutations
 
-			// Committed: doc:M has an owner, so a viewer grant is legitimate.
-			mustApply(t, m, grant("M", "owner", "u1"))
+		// Committed: doc:M has an owner, so a viewer grant is legitimate.
+		mustApply(t, m, grant("M", "owner", "u1"))
 
-			hostRow := ct("doc", "d1", "owner", "user", "u1")
-			var validateRan, guardRan bool
-			cmd := grant("M", "viewer", "u2")
-			err := transact(tx, func(ctx context.Context) error {
-				createAt(t, ctx, s, hostRow)
+		hostRow := ct("doc", "d1", "owner", "user", "u1")
+		var validateRan bool
+		cmd := grant("M", "viewer", "u2")
+		err := transact(tx, func(ctx context.Context) error {
+			createAt(t, ctx, s, hostRow)
 
-				validate := func(mutations.Command) error { validateRan = true; return nil }
-				var rcpt *mutations.Result
-				var err error
-				if guarded {
-					guard := func(context.Context, mutations.StoreDecisionView) error { guardRan = true; return nil }
-					rcpt, err = m.ApplyGuarded(ctx, cmd, guard, validate)
-				} else {
-					rcpt, err = m.Apply(ctx, cmd, validate)
-				}
-				if !errors.Is(err, mutations.ErrGuardedInsideTransaction) {
-					t.Fatalf("%s inside Transact must refuse with ErrGuardedInsideTransaction, got %v", name, err)
-				}
-				if !errors.Is(err, sdk.ErrInvalidInput) {
-					t.Fatalf("the refusal must wrap sdk.ErrInvalidInput, got %v", err)
-				}
-				if rcpt != nil {
-					t.Fatalf("the refusal must return a nil result, got %+v", rcpt)
-				}
-				if validateRan {
-					t.Fatalf("the semantic validator must not run before the refusal")
-				}
-				if guardRan {
-					t.Fatalf("the guard must not run before the refusal")
-				}
-				// While the transaction is still open: no mutation tuple on either
-				// side; the host's baseline write is visible only ambiently.
-				if existsAt(t, ctx, s, "doc", "M", "viewer", "user", "u2") {
-					t.Fatalf("refused mutation wrote its tuple onto the ambient transaction")
-				}
-				if existsAt(t, outside(t), s, "doc", "M", "viewer", "user", "u2") {
-					t.Fatalf("refused mutation wrote its tuple on its own connection (atomicity split)")
-				}
-				if !existsAt(t, ctx, s, "doc", "d1", "owner", "user", "u1") {
-					t.Fatalf("the host's baseline write must remain visible ambiently")
-				}
-				return err
-			})
-			if !errors.Is(err, mutations.ErrGuardedInsideTransaction) {
-				t.Fatalf("Transact must return the refusal, got %v", err)
+			validate := func(mutations.Command) error { validateRan = true; return nil }
+			rcpt, err := m.Apply(ctx, cmd, validate)
+			if !errors.Is(err, mutations.ErrMutationInsideTransaction) {
+				t.Fatalf("Apply inside Transact must refuse with ErrMutationInsideTransaction, got %v", err)
 			}
-			if existsAt(t, outside(t), s, "doc", "d1", "owner", "user", "u1") {
-				t.Fatalf("returning the refusal must roll back the host's preceding baseline write")
+			if !errors.Is(err, sdk.ErrInvalidInput) {
+				t.Fatalf("the refusal must wrap sdk.ErrInvalidInput, got %v", err)
+			}
+			if rcpt != nil {
+				t.Fatalf("the refusal must return a nil result, got %+v", rcpt)
+			}
+			if validateRan {
+				t.Fatalf("the semantic validator must not run before the refusal")
+			}
+			// While the transaction is still open: no mutation tuple on either
+			// side; the host's baseline write is visible only ambiently.
+			if existsAt(t, ctx, s, "doc", "M", "viewer", "user", "u2") {
+				t.Fatalf("refused mutation wrote its tuple onto the ambient transaction")
 			}
 			if existsAt(t, outside(t), s, "doc", "M", "viewer", "user", "u2") {
-				t.Fatalf("refused mutation left its tuple behind")
+				t.Fatalf("refused mutation wrote its tuple on its own connection (atomicity split)")
 			}
-			// The refused command changes nothing and can apply outside Transact.
-			rcpt := mustApply(t, m, cmd)
-			if rcpt.Outcome != mutations.OutcomeApplied {
-				t.Fatalf("refused mutation changed facts before the later application")
+			if !existsAt(t, ctx, s, "doc", "d1", "owner", "user", "u1") {
+				t.Fatalf("the host's baseline write must remain visible ambiently")
 			}
+			return err
 		})
-	}
+		if !errors.Is(err, mutations.ErrMutationInsideTransaction) {
+			t.Fatalf("Transact must return the refusal, got %v", err)
+		}
+		if existsAt(t, outside(t), s, "doc", "d1", "owner", "user", "u1") {
+			t.Fatalf("returning the refusal must roll back the host's preceding baseline write")
+		}
+		if existsAt(t, outside(t), s, "doc", "M", "viewer", "user", "u2") {
+			t.Fatalf("refused mutation left its tuple behind")
+		}
+		// The refused command changes nothing and can apply outside Transact.
+		rcpt := mustApply(t, m, cmd)
+		if rcpt.Outcome != mutations.OutcomeApplied {
+			t.Fatalf("refused mutation changed facts before the later application")
+		}
+	})
 }
 
 // specStandaloneUnchanged re-proves the two standalone SetRelationTargets

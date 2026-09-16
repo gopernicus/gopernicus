@@ -48,7 +48,7 @@ const (
 	ReasonConcurrentMutation Reason = "concurrent_mutation"
 
 	// ReasonInvariantConflict — a protected invariant blocked the write (e.g.
-	// last-owner/guardian minimum). Maps to sdk.ErrConflict.
+	// last-owner/integrity minimum). Maps to sdk.ErrConflict.
 	ReasonInvariantConflict Reason = "invariant_conflict"
 
 	// ReasonInfrastructure — an unclassified backing-store or transport failure.

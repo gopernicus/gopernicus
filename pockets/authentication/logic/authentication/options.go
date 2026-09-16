@@ -307,13 +307,6 @@ func WithChallengeProtector(value challengeProtector) Option {
 	}
 }
 
-// WithUserAdminCheck replaces UserAdminCheck for this constructor.
-func WithUserAdminCheck(value UserAdminCheck) Option {
-	return func(c *constructorConfig) {
-		c.UserAdminCheck = value
-	}
-}
-
 // WithInvitations replaces Invitations for this constructor.
 func WithInvitations(value invitationResolver) Option {
 	return func(c *constructorConfig) {

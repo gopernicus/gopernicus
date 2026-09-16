@@ -63,7 +63,7 @@ func newGPSHost(t *testing.T, store *memory.Store, model decisions.Model) Compon
 	return comps
 }
 
-func assignGPSRole(t *testing.T, mutator *mutations.SystemMutator, subjectType, subjectID, roleName, resourceType, resourceID string) {
+func assignGPSRole(t *testing.T, mutator *mutations.Service, subjectType, subjectID, roleName, resourceType, resourceID string) {
 	t.Helper()
 	receipt, err := mutator.AssignRole(context.Background(), mutations.AssignRoleCommand{
 
@@ -103,10 +103,10 @@ func TestRoleGatesWithRealEngine(t *testing.T) {
 	comps := newGPSHost(t, store, gpsRoleModel())
 	svc := comps
 
-	assignGPSRole(t, comps.SystemMutator, "user", "member", "viewer", "organization", "org-1")
-	assignGPSRole(t, comps.SystemMutator, "user", "member", "report_editor", "organization", "org-1") // several roles on one subject is normal
-	assignGPSRole(t, comps.SystemMutator, "service_account", "sa-1", "viewer", "organization", "org-1")
-	assignGPSRole(t, comps.SystemMutator, "user", "boss", "steward", "", "") // platform roles are global
+	assignGPSRole(t, comps.Mutations, "user", "member", "viewer", "organization", "org-1")
+	assignGPSRole(t, comps.Mutations, "user", "member", "report_editor", "organization", "org-1") // several roles on one subject is normal
+	assignGPSRole(t, comps.Mutations, "service_account", "sa-1", "viewer", "organization", "org-1")
+	assignGPSRole(t, comps.Mutations, "user", "boss", "steward", "", "") // platform roles are global
 
 	router := web.NewWebHandler()
 	group := router.Group("/api/v1", injectTestPrincipal)
@@ -260,7 +260,7 @@ func TestRoleGatesRefuseNonsenseAtBoot(t *testing.T) {
 func TestStewardGrantsOnlyWhatTheModelNames(t *testing.T) {
 	store := memory.New()
 	full := newGPSHost(t, store, gpsRoleModel())
-	assignGPSRole(t, full.SystemMutator, "user", "boss", "steward", "", "")
+	assignGPSRole(t, full.Mutations, "user", "boss", "steward", "", "")
 
 	narrowed := gpsRoleModel()
 	organization := narrowed.ResourceTypes["organization"]
@@ -295,7 +295,7 @@ func TestStewardGrantsOnlyWhatTheModelNames(t *testing.T) {
 func TestOpaqueRoleDoesNotGrantNamedPermission(t *testing.T) {
 	comps := newGPSHost(t, memory.New(), gpsRoleModel())
 	ctx := context.Background()
-	_, err := comps.SystemMutator.AssignRole(ctx, mutations.AssignRoleCommand{Subject: prinU("member"), Role: "vewer", Scope: tuples.On("organization", "org-1")})
+	_, err := comps.Mutations.AssignRole(ctx, mutations.AssignRoleCommand{Subject: prinU("member"), Role: "vewer", Scope: tuples.On("organization", "org-1")})
 	if err != nil {
 		t.Fatal(err)
 	}

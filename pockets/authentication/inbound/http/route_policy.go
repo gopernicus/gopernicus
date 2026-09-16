@@ -53,7 +53,7 @@ type BundledRouteAuthentication struct {
 	MachineLifecycle RoutePrincipalStrategy
 	// UserAdministration gates every /auth/admin/users route.
 	// Default: RequireAccessTokenOrAPIKeyLive() — a machine principal reaches
-	// authlogic.WithUserAdminCheck and the host decides.
+	// WithUserAdminCheck and the host decides.
 	UserAdministration RoutePrincipalStrategy
 	// Invitations gates the authenticated invitation routes.
 	// Default: RequireAccessTokenOrAPIKeyLive().

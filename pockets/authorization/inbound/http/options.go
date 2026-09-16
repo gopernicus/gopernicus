@@ -5,7 +5,7 @@ package authorizationhttp
 type Option func(*config)
 
 // WithRoleRoutes replaces the complete bundled role route policy. A nil Gate
-// disables all handlers. AssignmentPolicy requires Gate; invalid ListStrategy
+// disables all handlers. WritePolicy requires Gate; invalid ListStrategy
 // fails even when routes are disabled. Middleware and callback values are borrowed.
 func WithRoleRoutes(routes RoleRoutes) Option {
 	return func(cfg *config) { cfg.RoleRoutes = routes }

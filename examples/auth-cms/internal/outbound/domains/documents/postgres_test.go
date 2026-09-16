@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	inbound "github.com/gopernicus/gopernicus/examples/auth-cms/internal/inbound/domains/documents"
 	domain "github.com/gopernicus/gopernicus/examples/auth-cms/internal/logic/domains/documents"
 	migrations "github.com/gopernicus/gopernicus/examples/auth-cms/workshop/migrations/documents"
 	"github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
@@ -63,7 +64,7 @@ func postgresFixture(t *testing.T) (*Postgres, *testAuthorizationStore, pgxdb.Sc
 	if err != nil {
 		t.Fatal(err)
 	}
-	store, err := NewPostgres(db, docSchema)
+	store, err := NewPostgres(db, docSchema, WithMembershipSchema(authSchema))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,9 +75,13 @@ func postgresFixture(t *testing.T) (*Postgres, *testAuthorizationStore, pgxdb.Sc
 	return store, &testAuthorizationStore{Storer: rel, Tuples: tuples.Tuples}, authSchema
 }
 
-func testSQLListing(t *testing.T, store *Postgres, schema pgxdb.Schema, az authorization.Components, bypass Bypass) *SQLListing {
+func testSQLListing(t *testing.T, store *Postgres, schema pgxdb.Schema, az authorization.Components, bypass inbound.Bypass) *inbound.SQLListing {
 	t.Helper()
-	l, err := NewSQLListing(store, schema, az.Decisions, testCodec(t), bypass)
+	service, err := domain.New(store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	l, err := inbound.NewSQLListing(service, az.Decisions, testCodec(t), bypass)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -98,12 +103,12 @@ func TestPostgresListingHTTP(t *testing.T) {
 	remoteAZ := testAuthorizer(t, remote, model.EvaluationLimits{})
 	for _, tt := range []struct {
 		name   string
-		lister domain.Lister
+		lister inbound.Lister
 	}{
-		{"same_db_complete", testListing(t, store, az, CompleteSet, 0, nil)},
-		{"same_db_candidates", testListing(t, store, az, Candidates, 3, nil)},
-		{"different_stores_complete", testListing(t, store, remoteAZ, CompleteSet, 0, nil)},
-		{"different_stores_candidates", testListing(t, store, remoteAZ, Candidates, 3, nil)},
+		{"same_db_complete", testListing(t, store, az, inbound.CompleteSet, 0, nil)},
+		{"same_db_candidates", testListing(t, store, az, inbound.Candidates, 3, nil)},
+		{"different_stores_complete", testListing(t, store, remoteAZ, inbound.CompleteSet, 0, nil)},
+		{"different_stores_candidates", testListing(t, store, remoteAZ, inbound.Candidates, 3, nil)},
 		{"same_db_exists", testSQLListing(t, store, schema, az, nil)},
 	} {
 		t.Run(tt.name, func(t *testing.T) { verifyListingHTTP(t, tt.lister) })
@@ -111,15 +116,15 @@ func TestPostgresListingHTTP(t *testing.T) {
 	// Duplicate creation remains idempotent, and EXISTS cannot multiply rows.
 	grant(t, rel, "20", "20")
 	sqlListing := testSQLListing(t, store, schema, az, nil)
-	if got := walkHTTP(t, listingServer(t, sqlListing), alice.ID, domain.Query{TenantID: "a", Search: "beta", Limit: 1}); !slices.Equal(got, []string{"20", "30"}) {
+	if got := walkHTTP(t, listingServer(t, sqlListing), alice.ID, inbound.Query{TenantID: "a", Search: "beta", Limit: 1}); !slices.Equal(got, []string{"20", "30"}) {
 		t.Fatalf("duplicate grants: %v", got)
 	}
 	bypass := testSQLListing(t, store, schema, az, func(context.Context, sdk.Principal) (bool, error) { return true, nil })
-	if got := walkHTTP(t, listingServer(t, bypass), alice.ID, domain.Query{TenantID: "a", Search: "beta", Limit: 1}); !slices.Equal(got, []string{"20", "30"}) {
+	if got := walkHTTP(t, listingServer(t, bypass), alice.ID, inbound.Query{TenantID: "a", Search: "beta", Limit: 1}); !slices.Equal(got, []string{"20", "30"}) {
 		t.Fatalf("SQL bypass removed tenant/search: %v", got)
 	}
 	// A machine is not an allowed concrete subject in this selected policy.
-	page, err := sqlListing.ListVisible(t.Context(), sdk.Principal{Type: "machine", ID: alice.ID}, domain.Query{TenantID: "a", Limit: 2})
+	page, err := sqlListing.ListVisible(t.Context(), sdk.Principal{Type: "machine", ID: alice.ID}, inbound.Query{TenantID: "a", Limit: 2})
 	if err != nil || len(page.Items) != 0 {
 		t.Fatalf("unsupported principal gained access: %+v %v", page, err)
 	}
@@ -153,7 +158,7 @@ func TestSQLListingRejectsUnsupportedModels(t *testing.T) {
 				t.Fatal(err)
 			}
 			// Construction validates policy before any SQL runs.
-			if _, err := NewSQLListing(&Postgres{}, pgxdb.Schema{}, components.Decisions, testCodec(t), nil); err == nil {
+			if _, err := inbound.NewSQLListing(&Postgres{}, components.Decisions, testCodec(t), nil); err == nil {
 				t.Fatal("unsupported permission accepted")
 			}
 		})
@@ -171,17 +176,17 @@ func TestPostgresListingRevocationAndMoveBetweenPages(t *testing.T) {
 			}
 			grant(t, rel, "a", "b", "c")
 			az := testAuthorizer(t, rel, model.EvaluationLimits{})
-			var lister domain.Lister
+			var lister inbound.Lister
 			switch strategy {
 			case "complete":
-				lister = testListing(t, store, az, CompleteSet, 0, nil)
+				lister = testListing(t, store, az, inbound.CompleteSet, 0, nil)
 			case "candidates":
-				lister = testListing(t, store, az, Candidates, 0, nil)
+				lister = testListing(t, store, az, inbound.Candidates, 0, nil)
 			case "exists":
 				lister = testSQLListing(t, store, schema, az, nil)
 			}
 			server := listingServer(t, lister)
-			query := domain.Query{TenantID: "a", Limit: 1}
+			query := inbound.Query{TenantID: "a", Limit: 1}
 			first := getPage(t, server, alice.ID, query, 200)
 			if !slices.Equal(documentIDs(first.Items), []string{"a"}) {
 				t.Fatalf("first page: %+v", first)
@@ -210,16 +215,16 @@ func TestPostgresLargeListingAndQueryPlan(t *testing.T) {
 	}
 	grant(t, rel, ids...)
 	az := testAuthorizer(t, rel, model.EvaluationLimits{})
-	complete := testListing(t, store, az, CompleteSet, 0, nil)
-	if page, err := complete.ListVisible(t.Context(), alice, domain.Query{TenantID: "a", Limit: 50}); !errors.Is(err, model.ErrEvaluationLimit) || len(page.Items) != 0 {
+	complete := testListing(t, store, az, inbound.CompleteSet, 0, nil)
+	if page, err := complete.ListVisible(t.Context(), alice, inbound.Query{TenantID: "a", Limit: 50}); !errors.Is(err, model.ErrEvaluationLimit) || len(page.Items) != 0 {
 		t.Fatalf("complete overflow: %+v %v", page, err)
 	}
 	sqlListing := testSQLListing(t, store, schema, az, nil)
-	candidates := testListing(t, store, az, Candidates, 0, nil)
+	candidates := testListing(t, store, az, inbound.Candidates, 0, nil)
 	want := slices.Clone(ids)
 	slices.Reverse(want)
-	for _, lister := range []domain.Lister{candidates, sqlListing} {
-		got := walkHTTP(t, listingServer(t, lister), alice.ID, domain.Query{TenantID: "a", Limit: 50})
+	for _, lister := range []inbound.Lister{candidates, sqlListing} {
+		got := walkHTTP(t, listingServer(t, lister), alice.ID, inbound.Query{TenantID: "a", Limit: 50})
 		if !slices.Equal(got, want) {
 			t.Fatalf("large listing order/count: %d IDs, want %d", len(got), len(want))
 		}
@@ -227,11 +232,11 @@ func TestPostgresLargeListingAndQueryPlan(t *testing.T) {
 	// The bounded complete strategy and EXISTS agree once the host explicitly
 	// sizes its complete-set budget for this dataset. No overflow fallback occurs.
 	wide := testAuthorizer(t, rel, model.EvaluationLimits{MaxLookupResults: 1100})
-	if got := walkHTTP(t, listingServer(t, testListing(t, store, wide, CompleteSet, 0, nil)), alice.ID, domain.Query{TenantID: "a", Limit: 50}); !slices.Equal(got, want) {
+	if got := walkHTTP(t, listingServer(t, testListing(t, store, wide, inbound.CompleteSet, 0, nil)), alice.ID, inbound.Query{TenantID: "a", Limit: 50}); !slices.Equal(got, want) {
 		t.Fatalf("bounded complete order/count: %d", len(got))
 	}
-	query := domain.Query{TenantID: "a", Limit: 50}
-	sql, args := store.querySQL(query, position{}, 50, decisions.ResourceSet{Unrestricted: true}, &alice, schema)
+	query := inbound.Query{TenantID: "a", Limit: 50}
+	sql, args := store.querySQL(domain.Query{TenantID: "a", Limit: 50}, domain.Position{}, 50, domain.Restriction{Membership: &domain.ExactMembership{SubjectType: alice.Type, SubjectID: alice.ID, Relation: "viewer"}})
 	for _, tt := range []struct {
 		name    string
 		divisor int
@@ -272,5 +277,52 @@ func TestPostgresLargeListingAndQueryPlan(t *testing.T) {
 			t.Fatalf("%s predicate/check mismatch: %v / %v", tt.name, documentIDs(got.Items), documentIDs(portable.Items))
 		}
 		t.Logf("%s visible first page: %d; SQL execution %.3fms (one local run, not a production benchmark)", tt.name, len(got.Items), plan[0].ExecutionTime)
+	}
+}
+
+func TestPostgresEnforcesSelectedMembershipBeforePaging(t *testing.T) {
+	schema, err := pgxdb.NewSchema("authorization_fixture")
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := &Postgres{membershipSchema: &schema}
+	subject := "alice' OR true --"
+	relation := "editor' OR true --"
+	sql, args := store.querySQL(domain.Query{TenantID: "a", Search: "beta", Desc: true}, domain.Position{NameKey: "gamma", ID: "7"}, 2,
+		domain.Restriction{Membership: &domain.ExactMembership{SubjectType: "machine", SubjectID: subject, Relation: relation}})
+	for _, fragment := range []string{
+		`g.scope_kind=2`, `g.resource_type='document'`, `g.resource_id=d.id`, `g.relation=@relation`,
+		`g.subject_type=@subject_type`, `g.subject_id=@subject_id`, `g.subject_relation=''`,
+		`d.tenant_id = @tenant`, `strpos(d.name_key, @search) > 0`, `COLLATE "C"`, `DESC LIMIT @limit`,
+	} {
+		if !strings.Contains(sql, fragment) {
+			t.Fatalf("missing %q in %s", fragment, sql)
+		}
+	}
+	if strings.Contains(sql, subject) || strings.Contains(sql, relation) || strings.Contains(sql, "JOIN") || strings.Contains(sql, "ANY(@ids") || strings.Index(sql, "EXISTS") > strings.Index(sql, "ORDER BY") {
+		t.Fatalf("unsafe or incorrectly paged membership predicate: %s", sql)
+	}
+	if args["subject_type"] != "machine" || args["subject_id"] != subject || args["relation"] != relation || args["limit"] != 3 || args["tenant"] != "a" || args["search"] != "beta" {
+		t.Fatalf("selected data predicate changed: %+v", args)
+	}
+}
+
+func TestPostgresRestrictionFailuresDoNotIssueSQL(t *testing.T) {
+	// No database connection is present: all these cases must finish before I/O.
+	store := &Postgres{}
+	query := domain.Query{TenantID: "a", Limit: 1}
+	rows, more, err := store.Read(t.Context(), query, domain.Position{}, 1, domain.Restriction{})
+	if err != nil || more || rows == nil || len(rows) != 0 {
+		t.Fatalf("zero restriction: %+v %v %v", rows, more, err)
+	}
+	membership := &domain.ExactMembership{SubjectType: "user", SubjectID: "alice", Relation: "viewer"}
+	for _, restriction := range []domain.Restriction{
+		{Membership: membership},
+		{Unrestricted: true, Membership: membership},
+		{Unrestricted: true, IDs: []string{"a"}},
+	} {
+		if _, _, err := store.Read(t.Context(), query, domain.Position{}, 1, restriction); !errors.Is(err, sdk.ErrInvalidInput) {
+			t.Fatalf("bad/unconfigured restriction %+v: %v", restriction, err)
+		}
 	}
 }

@@ -19,26 +19,14 @@ func runMutations(t *testing.T, newRepos func(*testing.T) Repositories) {
 	t.Run("StateTransitions", func(t *testing.T) { specStateTransitions(t, newRepos) })
 	t.Run("NoPartialBatch", func(t *testing.T) { specNoPartialBatch(t, newRepos) })
 	t.Run("PurgeBlockedTeardownClears", func(t *testing.T) { specPurgeTeardown(t, newRepos) })
-	t.Run("CurrentGuardAndModelEveryApplication", func(t *testing.T) { specCurrentValidation(t, newRepos) })
-	t.Run("GlobalRoleIdentity", func(t *testing.T) { specGlobalRoleIdentity(t, newRepos) })
+	t.Run("CurrentModelEveryApplication", func(t *testing.T) { specCurrentValidation(t, newRepos) })
 	t.Run("RoleAssignUnassignTargets", func(t *testing.T) { specRoleTargets(t, newRepos) })
 	t.Run("ConcurrentTwoOwnerRevokes", func(t *testing.T) { specConcurrentOwnerRevokes(t, newRepos) })
 	t.Run("ConcurrentIdenticalGrants", func(t *testing.T) { specConcurrentGrants(t, newRepos) })
-	t.Run("ConcurrentNegativeGuards", func(t *testing.T) { specConcurrentNegativeGuards(t, newRepos) })
 	t.Run("ConcurrentReplaceNoAbsentState", func(t *testing.T) { specReplaceNoAbsentState(t, newRepos) })
-	t.Run("GuardianEstablishesMinimum", func(t *testing.T) { specGuardianEstablish(t, newRepos) })
-	t.Run("GuardianCountsCanonicalFactsAcrossFacades", func(t *testing.T) { specCrossFacadeGuardian(t, newRepos) })
-	t.Run("GuardCancellation", func(t *testing.T) { specCallbackCancellation(t, newRepos, true) })
-	t.Run("ValidatorCancellation", func(t *testing.T) { specCallbackCancellation(t, newRepos, false) })
-	t.Run("GuardedPermissionWalksThrough", func(t *testing.T) { specGuardedPermissionThrough(t, newRepos) })
-	t.Run("GuardedPermissionExpansionBudgetParity", func(t *testing.T) { specGuardedPermissionExpansionParity(t, newRepos) })
-	t.Run("ConcurrentGuardedPermissionThroughRevokeRaces", func(t *testing.T) { specGuardedPermissionThroughRevokeRaces(t, newRepos) })
-	for _, global := range []bool{false, true} {
-		t.Run(fmt.Sprintf("GuardedRoleRevokeRace/global%v", global), func(t *testing.T) { specGuardedRoleRevokeRace(t, newRepos, global) })
-	}
-	for _, mode := range []string{"scoped", "global", "both", "absent", "removed_from_model"} {
-		t.Run("GuardedRolePermission/"+mode, func(t *testing.T) { specGuardedRolePermission(t, newRepos, mode) })
-	}
+	t.Run("IntegrityEstablishesMinimum", func(t *testing.T) { specIntegrityEstablish(t, newRepos) })
+	t.Run("IntegrityCountsCanonicalFactsAcrossFacades", func(t *testing.T) { specCrossFacadeIntegrity(t, newRepos) })
+	t.Run("ValidatorCancellation", func(t *testing.T) { specCallbackCancellation(t, newRepos) })
 }
 func resTarget(id string) mutations.Target {
 	return mutations.Target{Kind: mutations.TargetResource, Type: "doc", ID: id}
@@ -153,9 +141,6 @@ func specCurrentValidation(t *testing.T, newRepos func(*testing.T) Repositories)
 	if result, err := m.Apply(context.Background(), cmd, func(mutations.Command) error { return reject }); result != nil || !errors.Is(err, reject) {
 		t.Fatalf("no-op skipped current model: %+v %v", result, err)
 	}
-	if result, err := m.ApplyGuarded(context.Background(), cmd, func(context.Context, mutations.StoreDecisionView) error { return sdk.ErrForbidden }, nil); result != nil || !errors.Is(err, sdk.ErrForbidden) {
-		t.Fatalf("no-op skipped guard: %+v %v", result, err)
-	}
 	if !relationExists(t, r, "d", "owner", "owner") {
 		t.Fatal("refused no-op removed original")
 	}
@@ -186,7 +171,7 @@ func specRoleTargets(t *testing.T, newRepos func(*testing.T) Repositories) {
 	bad.Roles = []mutations.RoleRow{{SubjectType: "user", SubjectID: "someone-else", Role: "editor"}}
 	mustReject(t, m, bad, sdk.ErrInvalidInput)
 }
-func specGuardianEstablish(t *testing.T, newRepos func(*testing.T) Repositories) {
+func specIntegrityEstablish(t *testing.T, newRepos func(*testing.T) Repositories) {
 	r := newRepos(t)
 	m := r.Mutations
 	mustReject(t, m, grant("d", "viewer", "member"), mutations.ErrInvariantBlocked)
@@ -198,7 +183,7 @@ func specGuardianEstablish(t *testing.T, newRepos func(*testing.T) Repositories)
 	mustReject(t, m, swap("d", "owner", "viewer", "owner"), mutations.ErrInvariantBlocked)
 	mustReject(t, m, revoke("d", "owner", "owner"), mutations.ErrInvariantBlocked)
 	if !relationExists(t, r, "d", "owner", "owner") {
-		t.Fatal("guardian block changed owner")
+		t.Fatal("integrity block changed owner")
 	}
 }
 func specConcurrentOwnerRevokes(t *testing.T, newRepos func(*testing.T) Repositories) {
@@ -269,43 +254,6 @@ func specConcurrentGrants(t *testing.T, newRepos func(*testing.T) Repositories) 
 		t.Fatalf("duplicate writers: rows=%d applied=%d err=%v", n, applied, err)
 	}
 }
-func specConcurrentNegativeGuards(t *testing.T, newRepos func(*testing.T) Repositories) {
-	r := newRepos(t)
-	m := r.Mutations
-	for round := 0; round < 6; round++ {
-		a, b := fmt.Sprintf("a%d", round), fmt.Sprintf("b%d", round)
-		mustApply(t, m, grant(a, "owner", "owner"))
-		mustApply(t, m, grant(b, "owner", "owner"))
-		start := make(chan struct{})
-		errs := make(chan error, 2)
-		for _, pair := range [][2]string{{a, b}, {b, a}} {
-			go func() {
-				<-start
-				_, err := m.ApplyGuarded(context.Background(), grant(pair[0], "viewer", "u"), func(ctx context.Context, v mutations.StoreDecisionView) error {
-					exists, err := v.CheckRelation(ctx, resTarget(pair[1]), "viewer", "user", "u")
-					if err != nil {
-						return err
-					}
-					if exists {
-						return sdk.ErrForbidden
-					}
-					return nil
-				}, nil)
-				errs <- err
-			}()
-		}
-		close(start)
-		for range 2 {
-			err := <-errs
-			if err != nil && !errors.Is(err, sdk.ErrForbidden) && !errors.Is(err, mutations.ErrConcurrentMutation) {
-				t.Fatal(err)
-			}
-		}
-		if relationExists(t, r, a, "viewer", "u") && relationExists(t, r, b, "viewer", "u") {
-			t.Fatal("negative guard write skew committed both grants")
-		}
-	}
-}
 func specReplaceNoAbsentState(t *testing.T, newRepos func(*testing.T) Repositories) {
 	r := newRepos(t)
 	m := r.Mutations
@@ -343,4 +291,30 @@ func specReplaceNoAbsentState(t *testing.T, newRepos func(*testing.T) Repositori
 		t.Fatal(err)
 	default:
 	}
+}
+
+func specCrossFacadeIntegrity(t *testing.T, factory func(*testing.T) Repositories) {
+	r := factory(t)
+	owner := mutations.Command{Target: resTarget("d"), Operation: mutations.OpRoleAssign, Roles: []mutations.RoleRow{{SubjectType: "user", SubjectID: "u", Role: "owner"}}}
+	mustApply(t, r.Mutations, owner)
+	if result := mustApply(t, r.Mutations, grant("d", "owner", "u")); result.Outcome != mutations.OutcomeNoChange {
+		t.Fatalf("second facade created a second owner: %+v", result)
+	}
+	if n, err := r.Relationships.CountByResourceAndRelation(t.Context(), "doc", "d", "owner"); err != nil || n != 1 {
+		t.Fatalf("canonical integrity count: %d/%v", n, err)
+	}
+	owner.Operation = mutations.OpRoleUnassign
+	mustReject(t, r.Mutations, owner, mutations.ErrInvariantBlocked)
+	mustReject(t, r.Mutations, revoke("d", "owner", "u"), mutations.ErrInvariantBlocked)
+	mustReject(t, r.Mutations, swap("d", "owner", "viewer", "u"), mutations.ErrInvariantBlocked)
+	second := owner
+	second.Operation = mutations.OpRoleAssign
+	second.Roles = []mutations.RoleRow{{SubjectType: "user", SubjectID: "other", Role: "owner"}}
+	mustApply(t, r.Mutations, second)
+	mustApply(t, r.Mutations, swap("d", "owner", "viewer", "u"))
+	if !hasExact(t, r.Tuples, "user", "u", "viewer", "doc", "d") || hasExact(t, r.Tuples, "user", "u", "owner", "doc", "d") {
+		t.Fatal("atomic swap did not publish its exact delta")
+	}
+	second.Operation = mutations.OpRoleUnassign
+	mustReject(t, r.Mutations, second, mutations.ErrInvariantBlocked)
 }

@@ -162,7 +162,7 @@ func (s *Service) recordVerificationResend(ctx context.Context, status string) {
 // issuance has its own delivery key and a secret-free receipt the operator can poll.
 //
 // TRUSTED: it applies NO authorization. The bundled handler runs
-// Config.UserAdminCheck (action resend-verification) first; a host calling this
+// an inbound administration policy (action resend-verification) first; a host calling this
 // from its own console owns that decision itself.
 func (s *Service) ResendVerificationForUser(ctx context.Context, actor Principal, userID string) (StepUpReceipt, error) {
 	if s.queue == nil || s.deliver == nil {

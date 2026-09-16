@@ -73,3 +73,14 @@ func WithRouteAuthentication(value BundledRouteAuthentication) Option {
 		c.RouteAuth = value
 	}
 }
+
+// WithInviteCheck sets the required policy for bundled invitation create/list routes.
+func WithInviteCheck(check InviteCheck) Option {
+	return func(c *adapterConfig) { c.InviteCheck = check }
+}
+
+// WithUserAdminCheck enables user administration routes with the supplied policy.
+// Nil leaves the routes unmounted, even when the repository is available.
+func WithUserAdminCheck(check UserAdminCheck) Option {
+	return func(c *adapterConfig) { c.UserAdminCheck = check }
+}

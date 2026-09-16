@@ -190,3 +190,31 @@ func auditMatches(r audit.Record, f audit.Filter) bool {
 	t := r.Change.Tuple
 	return (f.ResourceType == "" || (t.Scope.Kind == tuples.ResourceScope && t.Scope.Type == f.ResourceType && t.Scope.ID == f.ResourceID)) && (f.SubjectType == "" || (t.Subject.Type == f.SubjectType && t.Subject.ID == f.SubjectID))
 }
+
+func (s *state) writeScopes(ctx context.Context, scopes []tuples.Scope, apply func(*state) error) error {
+	return s.write(ctx, func(next *state) error {
+		if err := apply(next); err != nil {
+			return err
+		}
+		if len(s.integrity.Rules) == 0 {
+			return nil
+		}
+		seen := make(map[tuples.Scope]bool, len(scopes))
+		for _, scope := range scopes {
+			if seen[scope] || scope.Kind != tuples.ResourceScope {
+				continue
+			}
+			seen[scope] = true
+			facts := []tuples.Tuple{}
+			for fact := range next.facts {
+				if fact.Scope == scope {
+					facts = append(facts, fact)
+				}
+			}
+			if err := s.integrity.ValidateState(scope, facts); err != nil {
+				return err
+			}
+		}
+		return ctx.Err()
+	})
+}

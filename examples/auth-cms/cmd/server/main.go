@@ -50,6 +50,8 @@ import (
 	"syscall"
 	"time"
 
+	access "github.com/gopernicus/gopernicus/examples/auth-cms/pockets/access/inbound"
+
 	authorizationhttp "github.com/gopernicus/gopernicus/pockets/authorization/inbound/http"
 
 	"github.com/gopernicus/gopernicus/examples/auth-cms/internal/authjobs"
@@ -64,7 +66,6 @@ import (
 	delivery "github.com/gopernicus/gopernicus/pockets/authentication/logic/delivery"
 	invitations "github.com/gopernicus/gopernicus/pockets/authentication/logic/invitations"
 	authgoth "github.com/gopernicus/gopernicus/pockets/authentication/views/goth"
-	model "github.com/gopernicus/gopernicus/pockets/authorization/logic/model"
 	"github.com/gopernicus/gopernicus/pockets/cms"
 	"github.com/gopernicus/gopernicus/pockets/cms/domain/content"
 	"github.com/gopernicus/gopernicus/pockets/cms/domain/menus"
@@ -242,44 +243,20 @@ func run(ctx context.Context, log *slog.Logger) error {
 
 	mount := pockets.Mount{Router: router, Logger: log, Events: bus}
 
-	// The authorization pocket (authorization-v1 Z4 commit 2 — the FLAGSHIP
-	// posture), now GUARDED (AZ3-4.1): BOTH kinds wired, memstore-backed, so the host
-	// stays zero-infra (no driver in the graph — GOWORK=off go list -m all still has no
-	// libsql). newAuthorization composes the schema (manage_access declared), the
-	// project-scoped guardian minimum, and the host MutationGuard (manage_access +
-	// platform-admin over the DecisionView) — the testable composition seam run() and
-	// the guarded-composition tests share.
-	//
-	// The bundled role-administration routes (/authorization/roles*) need a gate
-	// composed from BOTH pockets, and the authorization pocket is built first (the
-	// authorizer is an input to the auth config below). roleRoutesGate is that
-	// ordering seam: named here, resolved per request, assigned once right after
-	// authSvc exists and long before the host serves.
 	roleRoutesGate := &deferredMiddleware{}
 	authzComponents, err := newAuthorization(roleRoutesGate.middleware, log)
 	if err != nil {
 		return err
 	}
-	// Actor-facing writes are GUARDED (Config.Guard = hostMutationGuard): HTTP handlers
-	// receive only the Service, and every actor-facing mutation is authorized inside the
-	// atomic boundary. The advanced SystemMutator is held apart for the sensitive
-	// boot owner/platform-admin seed. The baseline RelationshipWriter is separately
-	// passed to the ordinary-member invitation adapter. Neither capability is
-	// recoverable from Service or automatically exposed through HTTP.
+
 	authorizer := authzComponents.Decisions
-	systemMutator := authzComponents.SystemMutator
+	tupleWriter := authzComponents.Mutations
 	relationshipWriter := authzComponents.RelationshipWriter
 	if err := authzComponents.Register(mount); err != nil {
 		return err
 	}
-	// Bootstrap the ownable scope through the TRUSTED SystemMutator BEFORE serving:
-	// establish project:demo#owner (the guardian minimum) and the platform:main#admin
-	// data tuple, so the host runs under the ratified owner-minimum posture with an owner
-	// already in place and invitation member-grants are never invariant-blocked
-	// (member-first on a fresh protected resource is blocked by design). This replaces
-	// the retired session-only POST /demo/admin/bootstrap route (AZ3-4.1): first owner is
-	// inherently a trusted operation (it cannot yet prove it manages the resource).
-	if err := seedAuthorization(ctx, systemMutator); err != nil {
+
+	if err := seedAuthorization(ctx, tupleWriter); err != nil {
 		return err
 	}
 
@@ -376,7 +353,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 	if !roleRoutesGate.installed() {
 		return errRoleRoutesGateNotInstalled
 	}
-	if err := registerDocumentRoutes(ctx, router, authSvc.HTTP.RequireAccessTokenLive(), authorizer, systemMutator); err != nil {
+	if err := registerDocumentRoutes(ctx, router, authSvc.HTTP.RequireAccessTokenLive(), authorizer, tupleWriter); err != nil {
 		return err
 	}
 
@@ -492,11 +469,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 		eventspocket.WithVisibility(func(context.Context, sdk.Principal, sdkevents.Event) (bool, error) { return true, nil }),
 		eventspocket.WithStreamMiddleware(authSvc.HTTP.RequireAccessToken()),
 		eventspocket.WithAuthorization(func(ctx context.Context, p sdk.Principal, resourceType, resourceID string) (bool, error) {
-			result, err := authorizer.Check(ctx, model.CheckRequest{
-				Principal: model.PrincipalRef{Type: p.Type, ID: p.ID}, Permission: demoPermission,
-				Resource: model.Resource{Type: resourceType, ID: resourceID},
-			})
-			return result.Allowed, err
+			return access.New(authorizer).Can(ctx, p, demoPermission, resourceType, resourceID)
 		}),
 	}
 	if durableOutbox() {
@@ -558,13 +531,6 @@ func run(ctx context.Context, log *slog.Logger) error {
 			"outbox", "in-memory (internal/outboxmem)", "trigger", "POST /outbox-demo")
 	}
 
-	// Host-local demo + debug routes (host code, not pocket surface). The demo routes
-	// are READ-ONLY (AZ3-4.1): the session-only authorization-mutation routes
-	// (POST /demo/roles/{assign,unassign}, POST /demo/admin/bootstrap) were REMOVED — no
-	// shipped HTTP route mutates authorization with session presence alone. Trusted
-	// seeding runs at boot (seedAuthorization) and ordinary invitation acceptance rides
-	// the baseline RelationshipWriter (membership.go); the guarded actor path is proven by
-	// authorization_test.go, not a browser flow.
 	registerDemoRoutes(router, authSvc.HTTP, authorizer, authzComponents.Roles, authzComponents.HTTP)
 	registerDebugRoutes(router, authSvc.HTTP, authRepos, log)
 

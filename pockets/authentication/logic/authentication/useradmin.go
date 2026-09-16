@@ -11,59 +11,6 @@ import (
 	"github.com/gopernicus/gopernicus/sdk/pkg/list"
 )
 
-// UserAdminAction is the user-administration operation a host UserAdminCheck
-// policy is asked about (coordination-hub-auth-upstream CHAU-1.1). The set is
-// closed: a new administrative capability adds a value here, so a host policy's
-// default arm always sees an action it can recognize or refuse.
-type UserAdminAction string
-
-const (
-	// UserAdminList is the paginated directory read. It carries no target user.
-	UserAdminList UserAdminAction = "list"
-	// UserAdminRead is a single-user directory read; the target is the user read.
-	UserAdminRead UserAdminAction = "read"
-	// UserAdminDeactivate denies the target subject every new session.
-	UserAdminDeactivate UserAdminAction = "deactivate"
-	// UserAdminReactivate returns the target subject to the active posture.
-	UserAdminReactivate UserAdminAction = "reactivate"
-	// UserAdminResendVerification re-issues the target's registration
-	// verification challenge (the authorized counterpart to the enumeration-safe
-	// public resend).
-	UserAdminResendVerification UserAdminAction = "resend-verification"
-)
-
-// UserAdminCheckRequest is the parsed, principal-resolved authorization question
-// the pocket poses to a host UserAdminCheck. TargetUserID is empty for
-// UserAdminList and set for every other action.
-//
-// The Principal reaches the policy VERBATIM — including a machine principal from
-// an API key. The pocket does not pre-decide whether a service account may
-// administer users; that is exactly the decision the host owns.
-type UserAdminCheckRequest struct {
-	Principal    sdk.Principal
-	Action       UserAdminAction
-	TargetUserID string
-}
-
-// UserAdminCheck is the host authorization seam for user administration. It is
-// the InviteCheck precedent applied to the user directory: the pocket owns
-// session validation, principal resolution, and request parsing, then asks the
-// host one question it can answer with its own roles, tenancy, or policy engine.
-//
-// Authentication NEVER invents a role named "admin" and never interprets a role
-// string. It does not import pockets/authorization. A host that has an
-// authorization pocket wires a closure over it; a host with a hard-coded
-// operator list wires that instead.
-//
-// A nil return authorizes. A denial (wrap sdk.ErrForbidden) or an infrastructure
-// error BOTH fail closed — the pocket never distinguishes "policy said no" from
-// "policy could not answer" by proceeding.
-//
-// Wiring a nil UserAdminCheck leaves the bundled admin routes UNMOUNTED even when
-// the repositories are present, so a store adapter may return a complete bundle
-// without an authorization surface appearing anywhere.
-type UserAdminCheck func(ctx context.Context, req UserAdminCheckRequest) error
-
 // ErrUserAdminUnavailable is returned by the user-administration service methods
 // when the administration repository is not wired. It wraps sdk.ErrNotFound so a
 // transport maps it to 404 — an unwired capability is absent, not forbidden.
@@ -72,27 +19,8 @@ var ErrUserAdminUnavailable = fmt.Errorf("auth: user administration repository i
 
 // UserAdminEnabled reports whether the administration repository is wired. The
 // transport registers the bundled admin routes only when this is true AND a host
-// UserAdminCheck is configured (deny-by-absence, the Providers precedent).
+// inbound policy is configured (deny-by-absence).
 func (s *Service) UserAdminEnabled() bool { return s.userAdmin != nil }
-
-// UserAdminAuthorized reports whether a host authorization policy is wired.
-func (s *Service) UserAdminAuthorized() bool { return s.userAdminCheck != nil }
-
-// AuthorizeUserAdmin runs the host UserAdminCheck for one action/target and
-// returns its verdict. It FAILS CLOSED on a nil check: a caller that reached this
-// method without a configured policy gets sdk.ErrForbidden rather than an
-// allow-by-default. The bundled handlers call it after live-session validation
-// and principal resolution, before any target resolution or mutation.
-func (s *Service) AuthorizeUserAdmin(ctx context.Context, principal Principal, action UserAdminAction, targetUserID string) error {
-	if s.userAdminCheck == nil {
-		return fmt.Errorf("auth: user administration is not authorized by this host: %w", sdk.ErrForbidden)
-	}
-	return s.userAdminCheck(ctx, UserAdminCheckRequest{
-		Principal:    principal,
-		Action:       action,
-		TargetUserID: targetUserID,
-	})
-}
 
 // userDeactivated reports whether userID is a KNOWN subject in the deactivated
 // posture.
@@ -123,7 +51,7 @@ func (s *Service) userDeactivated(ctx context.Context, userID string) (bool, err
 // ListUsers returns a page of the operator directory.
 //
 // TRUSTED: it applies NO authorization. The bundled HTTP handler calls
-// AuthorizeUserAdmin first; a host calling this directly from its own transport
+// its host policy first; a host calling this directly from its own transport
 // or console owns that decision itself.
 func (s *Service) ListUsers(ctx context.Context, req list.Request) (list.Page[user.Summary], error) {
 	if s.userAdmin == nil {

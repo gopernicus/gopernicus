@@ -5,10 +5,6 @@ import (
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuples"
 )
 
-type Actor struct{ authmodel.PrincipalRef }
-
-func (a Actor) Validate() error { return a.PrincipalRef.Validate() }
-
 // AssignRoleCommand grants exact concrete membership in an explicit scope.
 type AssignRoleCommand struct {
 	Subject authmodel.PrincipalRef

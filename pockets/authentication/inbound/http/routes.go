@@ -20,17 +20,14 @@ import (
 // users share an IP bucket — multi-instance hosts wire a shared limiter.
 const refreshAttemptsPerMinute = 30
 
-// handlers holds the services the route handlers delegate to. inv is nil when no
-// Granter is wired (invitations off); its routes are then never registered. The
-// host's invitation authorization seam is NOT held here: the create/list handlers
-// call inv's authorized operations, which pose InviteCheck over the fully prepared
-// request (design §6/D3). listStrategy is the transport-edge DefaultStrategy the
-// list handlers pass to list.ParseRequest (host-configured via
-// authentication.WithListStrategy).
+// handlers holds services and inbound host policies. listStrategy controls list
+// request parsing; domain services enforce their own business invariants.
 type handlers struct {
-	svc          authService
-	inv          InvitationService
-	listStrategy list.Strategy
+	inviteCheck    InviteCheck
+	userAdminCheck UserAdminCheck
+	svc            authService
+	inv            InvitationService
+	listStrategy   list.Strategy
 	// mutation is the browser-safe-mutation policy (design §9.1) applied to
 	// cookie-authenticated sensitive routes (step-up and, in later phase-6 tasks,
 	// credential/identifier management).
@@ -54,6 +51,8 @@ type handlers struct {
 // views, the HTML policy, the machine gate) named at the call site instead of
 // growing another positional parameter each release.
 type mountDeps struct {
+	InviteCheck    InviteCheck
+	UserAdminCheck UserAdminCheck
 	// Auth is the domain service every handler delegates to. Required.
 	Auth authService
 	// Invitations is the invitation service, a GENUINE nil interface when no
@@ -118,7 +117,7 @@ type RouteAuthentication struct {
 //   - MachineLifecycle — RequireAccessTokenLive(): a key never creates, reads,
 //     mints, or revokes keys;
 //   - UserAdministration — RequireAccessTokenOrAPIKeyLive(): a machine principal
-//     deliberately REACHES authlogic.WithUserAdminCheck, and the host decides;
+//     deliberately REACHES WithUserAdminCheck, and the host decides;
 //   - Invitations — RequireAccessTokenOrAPIKeyLive(): an act-as-user key acts as
 //     its effective human principal, while a self-acting service account fails
 //     the handlers' CurrentUser requirement;
@@ -178,7 +177,7 @@ func mount(r pockets.RouteRegistrar, d mountDeps) {
 	// one (authentication.BrowserConfig.BundledRouteAuth), the audited default otherwise.
 	auth := d.RouteAuth.withDefaults(svc)
 	r = clientInfoRegistrar{inner: r}
-	h := &handlers{svc: svc, inv: inv, listStrategy: d.ListStrategy, mutation: d.Mutation, views: views, htmlPolicy: d.HTMLPolicy}
+	h := &handlers{inviteCheck: d.InviteCheck, userAdminCheck: d.UserAdminCheck, svc: svc, inv: inv, listStrategy: d.ListStrategy, mutation: d.Mutation, views: views, htmlPolicy: d.HTMLPolicy}
 	// The password credential's routes register only when the posture is on
 	// (deny-by-absence, like machine identity and the token endpoint): a
 	// PasswordFlowsDisabled host answers 404 for every one of them.
@@ -317,7 +316,7 @@ func mount(r pockets.RouteRegistrar, d mountDeps) {
 	// auth already rejected a check wired without the repositories
 	// (ErrUserAdminReposRequired), so reaching here with one and not the other is
 	// impossible — the belt-and-braces conjunction keeps the invariant local.
-	if svc.UserAdminEnabled() && svc.UserAdminAuthorized() {
+	if svc.UserAdminEnabled() && d.UserAdminCheck != nil {
 		mountUserAdmin(r, h, auth.UserAdministration, browserSafe)
 	}
 

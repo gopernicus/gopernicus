@@ -166,7 +166,6 @@ type constructorConfig struct {
 	Passwords               user.PasswordRepository
 	Sessions                session.SessionRepository
 	UserAdmin               user.AdminRepository
-	UserAdminCheck          UserAdminCheck
 	PasswordlessRedeem      passwordless.Repository
 	ProvisionOnRedeem       bool
 	ActiveSessions          session.ActiveUserRepository
@@ -316,11 +315,9 @@ type Service struct {
 	oauthLinkBase string
 
 	// User-administration state (CHAU-1.1). userAdmin is the optional directory +
-	// atomic lifecycle repository; userAdminCheck is the host authorization seam.
 	// Both nil → the subsystem is off. The repository alone enables the TRUSTED
 	// service methods; the bundled admin ROUTES additionally require the check.
-	userAdmin      user.AdminRepository
-	userAdminCheck UserAdminCheck
+	userAdmin user.AdminRepository
 	// activeSessions is the optional fenced session-minting capability (CHAU-1.1):
 	// it inserts a session only while the owning user is atomically proven active.
 	// Nil → mintSession falls back to the ordinary sessions.Create, which cannot
@@ -418,7 +415,6 @@ func newService(d constructorConfig) *Service {
 		passwordResetURL:   d.PasswordResetURL,
 		oauthLinkBase:      d.OAuthLinkBaseURL,
 		userAdmin:          d.UserAdmin,
-		userAdminCheck:     d.UserAdminCheck,
 		activeSessions:     d.ActiveSessions,
 		passwordlessRedeem: d.PasswordlessRedeem,
 		provisionOnRedeem:  d.ProvisionOnRedeem,

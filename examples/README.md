@@ -126,7 +126,7 @@ row says otherwise — `_test.go` exemptions are named here, never implied.
 | **H2** two tiers | `internal/logic/domains/<d>` | as H1 | `internal/logic/compositions/*`, and **another domain's package**. Structural typing gives a domain the narrow interface it needs without the import; the reference host has zero domain→domain edges. **This absolute form is a HOST rule** — ARCHITECTURE.md §"The tier rules" keeps its "or only a narrow read-port / by ID" allowance for POCKET interiors. |
 | **H3** compositions | `internal/logic/compositions/<c>` | as H1, plus the five rules below | — |
 | **H4** inbound | `internal/inbound/**` | `internal/logic`, `sdk`, framework pocket cores + their `views/<pkg>`, `ui/*`, host `pockets/*/{logic,inbound}`, third-party view technology | `internal/outbound/**`, `internal/integrations/**` (`_test.go` exempt), host `pockets/*/outbound`. An inbound composition importing a host pocket's *inbound* is sanctioned — the reference's client-hub composition does exactly that. |
-| **H5** driven side | `internal/outbound/domains/<d>` | among HOST packages: only `internal/logic/domains/<d>`, `internal/integrations/*`, and host `pockets/*` (the adapter for a domain-declared authorization or notification port); framework freely — `sdk`, `integrations/*`, framework pocket cores and stores | `internal/inbound/**`; any OTHER `internal/logic/domains/<x>` — an adapter serves one domain, and SQL joining across domains is exactly the anti-pattern the peers rule exists for. `_test.go` and `workshop/**` are exempt. |
+| **H5** driven side | `internal/outbound/domains/<d>` | among HOST packages: only `internal/logic/domains/<d>`, `internal/integrations/*`, and host `pockets/*` (for example, an adapter for a domain-declared notification port); framework freely — `sdk`, `integrations/*`, framework pocket cores and stores | `internal/inbound/**`; any OTHER `internal/logic/domains/<x>` — an adapter serves one domain, and SQL joining across domains is exactly the anti-pattern the peers rule exists for. `_test.go` and `workshop/**` are exempt. |
 | **H5** (cont.) | `internal/integrations/<tech>` | stdlib, `sdk`, third-party, framework `integrations/*` | `internal/logic`, `internal/inbound`, `internal/outbound`, host `pockets/*`, and framework `github.com/gopernicus/gopernicus/pockets/*` — a technology adapter that knows a pocket is a driven adapter wearing the wrong hat. |
 | **H6** host pockets | `<host-module>/pockets/<n>/*` | §5 | §5; and across all its production packages a host pocket must carry at least one framework-pocket rim import. |
 | **H7** naming adapters | everything EXCEPT `cmd/**`, `internal/outbound/**`, `internal/integrations/**`, host `pockets/*/outbound/**`, `workshop/**` | — | framework `pockets/*/stores/*`, `github.com/gopernicus/gopernicus/integrations/...`, and the recognized database drivers. `workshop/**` is exempt because migration runners, seeders, and test harnesses are REQUIRED to name adapters — migrations are host-owned and applied pre-boot. Rule text and implementation list the same recognized drivers; an unknown driver is a review finding until a later minor adds it. |
@@ -195,6 +195,16 @@ identifier `RowToStructByNameLax`), so comments and split-token tricks are
 irrelevant in both directions. These mirror this repo's own G9/G10.
 
 ## 4. Inbound anatomy — inside `internal/inbound/` (ratified 2026-07-08)
+
+Inbound owns application access policy: resolve the caller and actual command or
+query, authorize it, then invoke logic. Domain services do not invoke host role or
+permission callbacks. They still enforce validation, tenant restrictions and
+business invariants. Collection handlers arrange permitted data restrictions;
+storage applies those restrictions before pagination without choosing policy.
+Every entry point owns principal admission. Authorization's tuple writers
+serialize data integrity and committed changes; they do not repeat permission
+checks. Ordinary route admission does not hold a snapshot through subsequent
+application work.
 
 > **Amendment 2026-08-27 (host-layout-contract, ruling 1 — the reference wins):** in the tree and prose below, the transport-plumbing package is `middleware/` (gps-360-go's charter forbids a package named `http`) and `wire/` — the API's HTTP+JSON conventions, one flat package — is a sanctioned sibling. Those two names are the only edits to the 2026-07-08 text.
 

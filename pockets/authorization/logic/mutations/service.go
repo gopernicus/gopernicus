@@ -10,67 +10,53 @@ import (
 	"github.com/gopernicus/gopernicus/sdk"
 )
 
-var ErrMutationsNotConfigured = fmt.Errorf("authorization: actor-facing mutations are not configured (no MutationGuard): %w", sdk.ErrInvalidInput)
+var ErrMutationsNotConfigured = fmt.Errorf("authorization: atomic tuple writes are not configured: %w", sdk.ErrInvalidInput)
 
 type config struct {
-	Guard  MutationGuard
+	Model  *decisions.CompiledModel
 	Limits authmodel.EvaluationLimits
 	Logger *slog.Logger
 }
+
+// Service applies data commands. Access policy belongs to the calling inbound adapter.
 type Service struct {
-	decisions    *decisions.Service
-	guard        MutationGuard
+	model        *decisions.CompiledModel
 	mutations    MutationRepository
 	maxBatchSize int
-	limits       authmodel.EvaluationLimits
 	log          *slog.Logger
 }
-type Components struct {
-	Service       *Service
-	SystemMutator *SystemMutator
-}
 
-func NewService(repo MutationRepository, engine *decisions.Service, opts ...Option) (Components, error) {
-	cfg := config{}
+func NewService(repo MutationRepository, opts ...Option) (*Service, error) {
+	var cfg config
 	for _, opt := range opts {
 		if opt == nil {
-			return Components{}, fmt.Errorf("authorization mutations: nil option: %w", sdk.ErrInvalidInput)
+			return nil, fmt.Errorf("authorization mutations: nil option: %w", sdk.ErrInvalidInput)
 		}
 		opt(&cfg)
 	}
-	if typedNil(repo) || typedNil(cfg.Guard) {
-		return Components{}, fmt.Errorf("authorization: typed nil mutation dependency: %w", sdk.ErrInvalidInput)
+	if typedNil(repo) {
+		return nil, fmt.Errorf("authorization: typed nil mutation repository: %w", sdk.ErrInvalidInput)
 	}
-	if cfg.Guard != nil && repo == nil {
-		return Components{}, ErrGuardWithoutMutations
+	if repo == nil {
+		return nil, ErrMutationsNotConfigured
 	}
 	limits, err := cfg.Limits.Resolve()
 	if err != nil {
-		return Components{}, err
+		return nil, err
 	}
-	if engine != nil {
-		if cfg.Limits == (authmodel.EvaluationLimits{}) {
-			limits = engine.Limits()
-		}
-		if limits != engine.Limits() {
-			return Components{}, authmodel.ErrInvalidLimits
-		}
+	if err := validateIntegrityPolicy(repo.IntegrityPolicy()); err != nil {
+		return nil, err
 	}
-	if repo != nil {
-		if err := validateGuardianPolicy(repo.GuardianPolicy()); err != nil {
-			return Components{}, err
-		}
-		if err := validateGuardianModel(repo.GuardianPolicy(), engine); err != nil {
-			return Components{}, err
-		}
+	if err := validateIntegrityModel(repo.IntegrityPolicy(), cfg.Model); err != nil {
+		return nil, err
 	}
+
 	logger := cfg.Logger
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return Components{Service: &Service{decisions: engine, guard: cfg.Guard, mutations: repo, maxBatchSize: limits.MaxBatchSize, limits: limits, log: logger}, SystemMutator: &SystemMutator{mutations: repo, log: logger, decisions: engine}}, nil
+	return &Service{model: cfg.Model, mutations: repo, maxBatchSize: limits.MaxBatchSize, log: logger}, nil
 }
-func (s *Service) Guarded() bool { return s != nil && s.guard != nil && s.mutations != nil }
 func typedNil(v any) bool {
 	if v == nil {
 		return false

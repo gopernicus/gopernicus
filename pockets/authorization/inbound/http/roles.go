@@ -1,11 +1,14 @@
 package authorizationhttp
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
 	"mime"
 	"net/http"
+
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/audit"
 
 	authmodel "github.com/gopernicus/gopernicus/pockets/authorization/logic/model"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/mutations"
@@ -113,13 +116,11 @@ func (h *Adapter) assignRole(w http.ResponseWriter, r *http.Request) {
 		Subject: authmodel.PrincipalRef{Type: body.SubjectType, ID: body.SubjectID},
 		Role:    body.Role, Scope: body.Scope,
 	}
-	if h.assignmentPolicy != nil {
-		if err := h.assignmentPolicy(r.Context(), cmd); err != nil {
-			RespondError(w, err)
-			return
-		}
+	if err := h.admitRoleWrite(r.Context(), RoleWriteRequest{Principal: actor, Operation: mutations.OpRoleAssign, Subject: cmd.Subject, Role: cmd.Role, Scope: cmd.Scope}); err != nil {
+		RespondError(w, err)
+		return
 	}
-	result, err := h.mutations.AssignRole(r.Context(), mutations.Actor{PrincipalRef: authmodel.PrincipalRef{Type: actor.Type, ID: actor.ID}}, cmd)
+	result, err := h.mutations.AssignRole(roleAuditContext(r.Context(), actor), cmd)
 	if err != nil {
 		RespondError(w, err)
 		return
@@ -147,7 +148,11 @@ func (h *Adapter) unassignRole(w http.ResponseWriter, r *http.Request) {
 		Subject: authmodel.PrincipalRef{Type: body.SubjectType, ID: body.SubjectID},
 		Role:    body.Role, Scope: body.Scope,
 	}
-	result, err := h.mutations.UnassignRole(r.Context(), mutations.Actor{PrincipalRef: authmodel.PrincipalRef{Type: actor.Type, ID: actor.ID}}, cmd)
+	if err := h.admitRoleWrite(r.Context(), RoleWriteRequest{Principal: actor, Operation: mutations.OpRoleUnassign, Subject: cmd.Subject, Role: cmd.Role, Scope: cmd.Scope}); err != nil {
+		RespondError(w, err)
+		return
+	}
+	result, err := h.mutations.UnassignRole(roleAuditContext(r.Context(), actor), cmd)
 	if err != nil {
 		RespondError(w, err)
 		return
@@ -207,7 +212,7 @@ func (h *Adapter) listByResource(w http.ResponseWriter, r *http.Request) {
 // credential and adds none.
 func currentPrincipal(w http.ResponseWriter, r *http.Request) (sdk.Principal, bool) {
 	p, ok := sdk.PrincipalFromContext(r.Context())
-	if !ok {
+	if !ok || (authmodel.PrincipalRef{Type: p.Type, ID: p.ID}).Validate() != nil {
 		web.RespondJSONError(w, web.ErrUnauthorized("authentication required"))
 		return sdk.Principal{}, false
 	}
@@ -224,7 +229,7 @@ func decodeRoleCommand(w http.ResponseWriter, r *http.Request) (roleCommandReque
 	if !strictJSONBody(w, r, &body, maxJSONBodyBytes) {
 		return roleCommandRequest{}, false
 	}
-	if err := body.Scope.Validate(); err != nil {
+	if err := (tuples.Tuple{Scope: body.Scope, Relation: body.Role, Subject: tuples.SubjectRef{Type: body.SubjectType, ID: body.SubjectID}}).Validate(); err != nil {
 		RespondError(w, err)
 		return roleCommandRequest{}, false
 	}
@@ -310,4 +315,23 @@ func strictJSONBody(w http.ResponseWriter, r *http.Request, dst any, maxBytes in
 		web.RespondJSONError(w, web.ErrBadRequest(message))
 	}
 	return false
+}
+
+// The authenticated principal owns actor attribution, regardless of prior context metadata.
+func roleAuditContext(ctx context.Context, p sdk.Principal) context.Context {
+	source := audit.Source{ActorType: p.Type, ActorID: p.ID}
+	if supplied, err := audit.SourceFromContext(ctx); err == nil {
+		source.Reason = supplied.Reason
+	}
+	return audit.WithSource(ctx, source)
+}
+
+func (h *Adapter) admitRoleWrite(ctx context.Context, request RoleWriteRequest) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := h.writePolicy(ctx, request); err != nil {
+		return err
+	}
+	return ctx.Err()
 }

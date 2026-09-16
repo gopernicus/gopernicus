@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"sync/atomic"
 
+	access "github.com/gopernicus/gopernicus/examples/auth-cms/pockets/access/inbound"
+
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/decisions"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuples"
 
@@ -22,24 +24,12 @@ import (
 
 // Host-owned authorization policy vocabulary.
 const (
-	// platformResourceType / platformResourceID name the `platform` resource whose
-	// `admin` relation is the platform-admin DATA tuple (platform:main#admin) — data,
-	// never Config. The host composes the platform-admin recipe itself (isPlatformAdmin
-	// on the read side, hostMutationGuard on the write side); the engine grants no bypass.
 	platformResourceType = "platform"
 	platformResourceID   = "main"
 
-	// manageAccessPerm is the schema-declared permission that means "may manage this
-	// resource's authorization data" — Direct(owner). The host MutationGuard authorizes
-	// actor-facing writes against it (reading its single backing relation, manageRelation,
-	// through the DecisionView; see guard.go).
 	manageAccessPerm = "manage_access"
 )
 
-// authzSchema builds the host's ReBAC schema (AZ3-4.1): the ownable `project` type
-// (owner/member relations; `view` = AnyOf(owner, member); the new `manage_access` =
-// Direct(owner) permission the host MutationGuard enforces) and the flat `platform`
-// admin-list type backing the platform-admin data tuple.
 func authzSchema() decisions.Model {
 	return decisions.NewSchema([]decisions.ResourceSchema{
 		{Name: "document", Def: decisions.ResourceTypeDef{
@@ -75,40 +65,40 @@ func authzSchema() decisions.Model {
 	})
 }
 
-// authzGuardianPolicy is the host's guardian invariant: the ratified owner minimum
-// (DefaultGuardianPolicy's owner, min-1 direct anchor) applied to the ownable `project`
+// authzIntegrityPolicy is the host's integrity invariant: the ratified owner minimum
+// (DefaultIntegrityPolicy's owner, min-1 direct anchor) applied to the ownable `project`
 // resource type. It deliberately does NOT extend to `platform` — the honest documented
 // reason for narrowing the default: `platform` is a flat admin-list type with no `owner`
 // relation, so an owner-minimum on it is nonsensical and would invariant-block the
 // platform-admin data tuple. The last-owner protection that matters — project:demo
 // keeping at least one direct owner after every ordinary command — runs at full default
 // strength. This is the sanctioned "host narrows it to specific resource types" path,
-// not a weakened posture: the empty GuardianPolicy the pre-AZ3-4.1 demo wired (which
+// not a weakened posture: the empty IntegrityPolicy the pre-AZ3-4.1 demo wired (which
 // disabled last-owner protection entirely to let member invitations precede an owner) is
 // gone, replaced by a boot-time owner seed + this real invariant.
-func authzGuardianPolicy() mutations.GuardianPolicy {
-	return mutations.GuardianPolicy{
-		Rules: []mutations.GuardianRule{{ResourceType: demoResourceType, Relation: "owner", MinAnchors: 1}},
+func authzIntegrityPolicy() mutations.IntegrityPolicy {
+	return mutations.IntegrityPolicy{
+		Rules: []mutations.IntegrityRule{{ResourceType: demoResourceType, Relation: "owner", MinSubjects: 1}},
 	}
 }
 
-// newAuthorization binds one canonical authority and one explicit permission model.
-// Exact role predicates and graph predicates share the same decision snapshot.
-// The actor-facing service and trusted SystemMutator are separate capabilities.
 func newAuthorization(roleRoutesGate web.Middleware, logger *slog.Logger) (authorization.Components, error) {
-	store := authzmem.New(authzmem.WithGuardianPolicy(authzGuardianPolicy()))
-	return authorization.New(
+	store := authzmem.New(authzmem.WithIntegrityPolicy(authzIntegrityPolicy()))
+	components, err := authorization.New(
 		authorization.Repositories{
 			Tuples:    store.Tuples(),
 			Mutations: store.Mutations(),
 		},
 		authorization.WithLogger(logger),
 		authorization.WithModel(authzSchema()),
-		authorization.WithGuard(hostMutationGuard{}),
-		// The gate enables bundled role administration; a nil gate leaves every
-		// role route disabled, including in the headless composition tests.
-		authorization.WithRoleRoutes(authorizationhttp.RoleRoutes{Gate: roleRoutesGate}),
 	)
+	if err != nil {
+		return authorization.Components{}, err
+	}
+	if roleRoutesGate != nil {
+		components.HTTP, err = authorizationhttp.New(authorizationhttp.Services{Decisions: components.Decisions, Roles: components.Roles, Mutations: components.Mutations}, authorizationhttp.WithRoleRoutes(authorizationhttp.RoleRoutes{Gate: roleRoutesGate, WritePolicy: access.New(components.Decisions).RoleWrite}))
+	}
+	return components, err
 }
 
 // roleAdministrationGate composes the D6 chain the bundled /authorization/* routes
@@ -144,11 +134,6 @@ type deferredMiddleware struct {
 	chain atomic.Pointer[web.Middleware]
 }
 
-// errRoleRoutesGateNotInstalled is the boot failure for a role-routes gate that
-// was never assigned. It is deliberately a BOOT error rather than only the
-// middleware's request-time 500: an unassigned gate is a wiring fault the
-// operator must fix, so it fails construction like the pocket's own
-// ErrRoleRoutesGateWithoutGuard rather than surfacing as production 500s.
 var errRoleRoutesGateNotInstalled = errors.New("auth-cms: the role-administration gate was never installed; /authorization/roles* would answer 500")
 
 // set installs the real chain. It must be called before the host serves.
@@ -173,7 +158,7 @@ func (d *deferredMiddleware) middleware(next http.Handler) http.Handler {
 }
 
 // seedOwnerSubject is the boot-seeded demo owner/platform-admin principal. This proof
-// host seeds no real user (registration is part of the proof flow), so the guardian
+// host seeds no real user (registration is part of the proof flow), so the integrity
 // minimum is established for a documented synthetic principal at boot rather than by a
 // browser-driven "become owner" route. The ROLE-assignment half of that deferral is
 // now closed: the pocket's bundled /authorization/roles* surface is mounted behind
@@ -182,13 +167,7 @@ func (d *deferredMiddleware) middleware(next http.Handler) http.Handler {
 // manages the resource.
 var seedOwnerSubject = relationships.SubjectRef{Type: "user", ID: "demo-owner"}
 
-// seedAuthorization establishes the ownable scope through the TRUSTED SystemMutator
-// before the host serves: project:demo#owner (the guardian minimum, granted FIRST so a
-// later member invitation is not member-first-blocked) and the platform:main#admin data
-// tuple. Repeated seeding leaves existing identical grants unchanged. It is the trusted bootstrap the
-// retired POST /demo/admin/bootstrap route used to perform per-request; establishing the
-// first owner is inherently trusted (it cannot yet prove it manages the resource).
-func seedAuthorization(ctx context.Context, system *mutations.SystemMutator) error {
+func seedAuthorization(ctx context.Context, system *mutations.Service) error {
 	ctx = audit.WithSource(ctx, audit.Source{System: "bootstrap"})
 	grants := []mutations.GrantRelationshipCommand{
 		{ResourceType: demoResourceType, ResourceID: demoResourceID, Relation: "owner", Subject: seedOwnerSubject},

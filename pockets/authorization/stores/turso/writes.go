@@ -17,6 +17,13 @@ type writeTx struct {
 	*tursodb.Tx
 	audit   bool
 	changes []audit.Change
+	scopes  map[tuples.Scope]struct{}
+}
+
+func (tx *writeTx) touch(scope tuples.Scope) {
+	if tx.scopes != nil && scope.Kind == tuples.ResourceScope {
+		tx.scopes[scope] = struct{}{}
+	}
 }
 
 func (tx *writeTx) tuples(ctx context.Context, action audit.Action, query string, args ...any) (int64, error) {
@@ -46,12 +53,14 @@ func (tx *writeTx) tuples(ctx context.Context, action audit.Action, query string
 func applyTupleChanges(ctx context.Context, tx *writeTx, cfg config, changes tuples.Changes) error {
 	table := "main.iam_tuples"
 	for _, fact := range changes.Remove {
+		tx.touch(fact.Scope)
 		args := &tupleArgs{}
 		if _, err := tx.tuples(ctx, audit.ActionRemoved, `DELETE FROM `+table+` WHERE `+tuplePredicate(args, fact), args.params()...); err != nil {
 			return err
 		}
 	}
 	for _, fact := range changes.Add {
+		tx.touch(fact.Scope)
 		args := &tupleArgs{}
 		if _, err := tx.tuples(ctx, audit.ActionAdded, `INSERT INTO `+table+` (`+tupleColumns+`) VALUES `+args.fact(fact)+` ON CONFLICT DO NOTHING`, args.params()...); err != nil {
 			return err
@@ -71,7 +80,13 @@ func runWrite(ctx context.Context, db *tursodb.DB, cfg config, fn func(*writeTx)
 	}
 	apply := func(tx *tursodb.Tx) error {
 		w := &writeTx{Tx: tx, audit: cfg.audit}
+		if len(cfg.integrity.Rules) > 0 {
+			w.scopes = make(map[tuples.Scope]struct{})
+		}
 		if err := fn(w); err != nil {
+			return err
+		}
+		if err := checkIntegrity(ctx, w, cfg); err != nil {
 			return err
 		}
 		return appendAudit(ctx, w, cfg)
@@ -140,4 +155,37 @@ func ownedTransaction(ctx context.Context, db *tursodb.DB, fn func(*tursodb.Tx) 
 	// Commit performs its own rollback/connection cleanup on failure.
 	committed = true
 	return err
+}
+
+// Validate post-state before publishing facts or audit under SQLite write intent.
+func checkIntegrity(ctx context.Context, tx *writeTx, cfg config) error {
+	for scope := range tx.scopes {
+		a := &tupleArgs{}
+		where, err := tupleWhere(a, tuples.Query{Scope: &scope})
+		if err != nil {
+			return err
+		}
+		rows, err := tx.Query(ctx, "SELECT "+tupleColumns+" FROM main.iam_tuples"+where, a.params()...)
+		if err != nil {
+			return err
+		}
+		facts := []tuples.Tuple{}
+		for rows.Next() {
+			var fact tuples.Tuple
+			if err := rows.Scan(&fact.Scope.Kind, &fact.Scope.Type, &fact.Scope.ID, &fact.Relation, &fact.Subject.Type, &fact.Subject.ID, &fact.Subject.Relation); err != nil {
+				rows.Close()
+				return err
+			}
+			facts = append(facts, fact)
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			return err
+		}
+		if err := cfg.integrity.ValidateState(scope, facts); err != nil {
+			return err
+		}
+	}
+	return ctx.Err()
 }

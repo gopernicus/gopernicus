@@ -71,32 +71,18 @@ func TestAuditReadsRetainedHistoryWhenRecordingDisabled(t *testing.T) {
 	}
 }
 
-func TestRawWriterCanceledBehindGuardCannotPublish(t *testing.T) {
+func TestRawWriterCanceledBehindWriteCannotPublish(t *testing.T) {
 	store := New(WithAudit())
 	ctx := audit.WithSource(context.Background(), audit.Source{System: "test"})
 	entered, release := make(chan struct{}), make(chan struct{})
-	guarded := make(chan error, 1)
+	writer := make(chan error, 1)
 	go func() {
-		_, err := store.Mutations().ApplyGuarded(ctx, grantOwner(t, "d", "owner"), func(ctx context.Context, v mutations.StoreDecisionView) error {
-			ok, err := v.CheckRelation(ctx, mutations.Target{Kind: mutations.TargetResource, Type: "doc", ID: "d"}, "viewer", "user", "u")
-			if err != nil {
-				return err
-			}
-			if ok {
-				return errors.New("unexpected initial viewer")
-			}
+		_, err := store.Mutations().Apply(ctx, grantOwner(t, "d", "owner"), func(mutations.Command) error {
 			close(entered)
 			<-release
-			ok, err = v.CheckRelation(ctx, mutations.Target{Kind: mutations.TargetResource, Type: "doc", ID: "d"}, "viewer", "user", "u")
-			if err != nil {
-				return err
-			}
-			if ok {
-				return errors.New("raw writer changed guard snapshot")
-			}
 			return nil
-		}, nil)
-		guarded <- err
+		})
+		writer <- err
 	}()
 	<-entered
 	base, cancel := context.WithCancel(ctx)
@@ -108,7 +94,7 @@ func TestRawWriterCanceledBehindGuardCannotPublish(t *testing.T) {
 	<-rawctx.checked
 	cancel()
 	close(release)
-	if err := <-guarded; err != nil {
+	if err := <-writer; err != nil {
 		t.Fatal(err)
 	}
 	if err := <-raw; !errors.Is(err, context.Canceled) {

@@ -30,7 +30,6 @@ func TestNewServiceRejectsTypedNilDependencies(t *testing.T) {
 	}{
 		{"Repositories.Tuples", func(repos *Repositories, _ *[]Option) { repos.Tuples = (*nilRoleDependency)(nil) }},
 		{"Repositories.Mutations", func(repos *Repositories, _ *[]Option) { repos.Mutations = (*stubMutationRepo)(nil) }},
-		{"WithGuard", func(_ *Repositories, opts *[]Option) { *opts = append(*opts, WithGuard((*stubGuard)(nil))) }},
 		{"Repositories.Audit", func(repos *Repositories, _ *[]Option) { repos.Audit = (*nilAuditReader)(nil) }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -41,7 +40,7 @@ func TestNewServiceRejectsTypedNilDependencies(t *testing.T) {
 			if !errors.Is(err, sdk.ErrInvalidInput) || !strings.Contains(err.Error(), tc.name+" is typed nil") {
 				t.Fatalf("NewService = %v; want named typed-nil boot failure", err)
 			}
-			if components.Decisions != nil || components.Roles != nil || components.SystemMutator != nil || components.RelationshipWriter != nil {
+			if components.Decisions != nil || components.Roles != nil || components.Mutations != nil || components.RelationshipWriter != nil {
 				t.Fatal("failed constructor returned usable components")
 			}
 		})
@@ -60,7 +59,7 @@ func TestNewServicePreservesOptionalNilAndCapturesDefaultLogger(t *testing.T) {
 	if err := components.Register(pockets.Mount{}); err != nil {
 		t.Fatalf("intentional headless Register: %v", err)
 	}
-	_, err = components.Mutations.AssignRole(context.Background(), actorU1(), mutations.AssignRoleCommand{
+	_, err = components.Mutations.AssignRole(context.Background(), mutations.AssignRoleCommand{
 		Role: "viewer", Subject: authmodel.PrincipalRef{Type: "user", ID: "u1"}, Scope: tuples.Global(),
 	})
 	if !errors.Is(err, mutations.ErrMutationsNotConfigured) {
@@ -71,13 +70,13 @@ func TestNewServicePreservesOptionalNilAndCapturesDefaultLogger(t *testing.T) {
 func TestConstructorLoggerAppliesHeadlesslyAndSurvivesMount(t *testing.T) {
 	var configured, mounted bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&configured, nil))
-	store := memory.New(memory.WithGuardianPolicy(mutations.GuardianPolicy{}))
-	components, err := New(Repositories{Tuples: store.Tuples(), Mutations: store.Mutations()}, WithModel(lifecycleModel()), WithGuard(&stubGuard{}), WithLogger(logger))
+	store := memory.New(memory.WithIntegrityPolicy(mutations.IntegrityPolicy{}))
+	components, err := New(Repositories{Tuples: store.Tuples(), Mutations: store.Mutations()}, WithModel(lifecycleModel()), WithLogger(logger))
 	if err != nil {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
-	_, err = components.Mutations.GrantRelationship(ctx, actorU1(), mutations.GrantRelationshipCommand{
+	_, err = components.Mutations.GrantRelationship(ctx, mutations.GrantRelationshipCommand{
 		ResourceType: "doc", ResourceID: "d1", Relation: "owner", Subject: subjU("u1"),
 	})
 	if err != nil {
@@ -90,7 +89,7 @@ func TestConstructorLoggerAppliesHeadlesslyAndSurvivesMount(t *testing.T) {
 	if strings.Contains(configured.String(), "level=WARN") || !strings.Contains(configured.String(), "role_routes=false") {
 		t.Fatalf("intentional headless mount must log its state without warning: %s", configured.String())
 	}
-	_, err = components.SystemMutator.TeardownResourceAuthorization(ctx, mutations.TeardownResourceAuthorizationCommand{
+	_, err = components.Mutations.TeardownResourceAuthorization(ctx, mutations.TeardownResourceAuthorizationCommand{
 		ResourceType: "doc", ResourceID: "d1", Reason: "test resource removed",
 	})
 	if err != nil {
@@ -106,7 +105,7 @@ func TestConstructorLoggerAppliesHeadlesslyAndSurvivesMount(t *testing.T) {
 
 func TestRegisterRejectsTypedNilRouterWhenRoutesConfigured(t *testing.T) {
 	store := memory.New()
-	components, err := New(Repositories{Tuples: store.Tuples(), Mutations: store.Mutations()}, WithGuard(&stubGuard{}), WithRoleRoutes(authorizationhttp.RoleRoutes{Gate: passRoleRouteGate}))
+	components, err := New(Repositories{Tuples: store.Tuples(), Mutations: store.Mutations()}, WithRoleRoutes(authorizationhttp.RoleRoutes{Gate: passRoleRouteGate, WritePolicy: allowRoleWrite}))
 	if err != nil {
 		t.Fatal(err)
 	}

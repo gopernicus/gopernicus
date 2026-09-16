@@ -24,7 +24,7 @@ type Repositories struct {
 	// Tuples is the single canonical authority used by roles, relationships and decisions.
 	Tuples tuples.Storer
 
-	// Mutations backs the optional high-integrity guarded write path. A
+	// Mutations backs atomic data commands and IntegrityPolicy. A
 	// nil field leaves baseline RelationshipWriter operations fully available.
 	// It is independent of the read/check ports above.
 	Mutations mutations.MutationRepository
@@ -34,14 +34,13 @@ type Repositories struct {
 }
 
 type config struct {
-	TupleBackend              tuplecache.Backend
-	TuplePolicy               tuplecache.Policy
-	Logger                    *slog.Logger
-	ModelOption               decisions.Option
-	DiagnosticObserver        decisions.DiagnosticObserver
-	Limits                    authmodel.EvaluationLimits
-	Guard                     mutations.MutationGuard
-	RoleRoutesGate            web.Middleware
-	RoleRouteAssignmentPolicy authorizationhttp.RoleRouteAssignmentPolicy
-	ListStrategy              list.Strategy
+	TupleBackend       tuplecache.Backend
+	TuplePolicy        tuplecache.Policy
+	Logger             *slog.Logger
+	ModelOption        decisions.Option
+	DiagnosticObserver decisions.DiagnosticObserver
+	Limits             authmodel.EvaluationLimits
+	RoleRoutesGate     web.Middleware
+	RoleWritePolicy    authorizationhttp.RoleWritePolicy
+	ListStrategy       list.Strategy
 }

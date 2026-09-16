@@ -10,7 +10,8 @@ schemas, retained legacy authorities and extra uniqueness rules are rejected.
 Constructors start no workers.
 
 ```go
-repos, err := pgx.Repositories(ctx, db, pgx.WithAudit())
+repos, err := pgx.Repositories(ctx, db, pgx.WithAudit(),
+    pgx.WithIntegrityPolicy(mutations.DefaultIntegrityPolicy()))
 if err != nil { return err }
 ctx = audit.WithSource(ctx, audit.Source{System: "access-sync"})
 err = repos.Tuples.ApplyTuples(ctx, tuples.Changes{Add: []tuples.Tuple{
@@ -40,20 +41,29 @@ resource membership. Global fallback must be explicitly composed, for example
 filter graph reads and compose exact role predicates through the one decisions
 service. Neither roles nor named permissions are separately cached decisions.
 
-## Writes, guards and audit
+## Writes, integrity and audit
 
-`ApplyTuples` applies one validated add/remove delta atomically. `ReconcileTuples`
-and `SetRelationTargets` replace only one scope/relation set and preserve every
-other label. Resource deletion/teardown sees all facts, regardless of which
-facade wrote them. Trusted raw writes join ambient transactions; request-facing
-writes should use the guarded mutation service.
+Inbound authorizes the exact command. The principal-free mutation service applies
+shape validation, configured integrity, changes and audit under one serialized
+write boundary. It does not invoke a principal guard or decision service.
+`WithIntegrityPolicy(mutations.IntegrityPolicy{Rules: ...})` installs data rules;
+the default is empty. `DefaultIntegrityPolicy()` explicitly requires one concrete
+`owner` per resource. Zero `MinSubjects` means one; an empty `ResourceType` matches
+all resource types. Usersets cannot satisfy a concrete-subject minimum.
 
-Mutation guards, current-model validation, guardian checks, actual changes and
-audit share one write boundary. Guardian rules apply to role writes and no-op
-attempts too. Explicit batch changes replace the retired ambiguous Replace
-operation. Rejected operations return an error and nil result; successful results
-contain only the current Outcome. Guarded mutation commands reject ambient host
-transactions. There are no replay tokens, revisions or durable operation receipts.
+Every ordinary writer honors this policy: atomic commands, role/relationship
+facades, raw `ApplyTuples`, reconciliation, scope deletion and natural no-ops.
+`ApplyTuples` applies an add/remove delta atomically. `ReconcileTuples` and
+`SetRelationTargets` replace only one scope/relation set. Seed all required
+subjects together when establishing a protected scope. Only the explicit
+`TeardownResourceAuthorization` command may remove the final protected facts;
+ordinary purge and `DeleteScope` return a conflict instead.
+
+Raw writes join supported ambient transactions. Atomic mutation commands own
+their boundary and reject ambient contexts. Rejected operations return an error
+and nil result; successful results contain only the current `Outcome`. There are
+no principal-guard callbacks, replay tokens, revisions or durable operation receipts.
+A permission revoked after inbound admission does not retract an admitted command.
 
 `WithAudit()` requires a valid source even for no-op writes. One actual canonical
 addition/removal produces one `audit.Change{Action, Tuple}`, encoded `tuple/v2`.
@@ -64,19 +74,22 @@ Ambient failures roll back an operation savepoint, preserving unrelated host wor
 
 `repos.Audit.List` reads canonical `tuple/v2` records. Recording defaults off;
 existing canonical history remains readable. Hosts own audit access, retention
-and export. Raw SQL outside recording-enabled adapters is outside audit coverage.
+and export. Raw SQL outside these adapters is outside integrity and audit coverage.
+Every adapter instance writing this authority must use the same integrity policy.
 
 ## Concurrency and snapshots
 
 PostgreSQL mutation-owned transactions use READ COMMITTED and lock `iam_tuples`
-with SHARE ROW EXCLUSIVE before reading guards or current facts. Raw writes take
+with SHARE ROW EXCLUSIVE before reading current facts. Raw writes take
 the same lock. It conflicts with ordinary SQL writers, including absent-row
 predicates, but permits ordinary readers. This deliberately serializes writers
-per schema. Ambient writes keep their locks until the host commits.
+per schema. Ambient writes keep their locks until the host commits. A stale
+REPEATABLE READ/SERIALIZABLE view cannot satisfy integrity using outdated facts;
+the write returns `ErrConcurrentMutation` and leaves the host to retry.
 
-Trusted owned operations retry only definite PostgreSQL serialization/deadlock
-aborts (40001/40P01). Guard callbacks are never replayed. Unknown commit/transport
-outcomes are never automatically retried. Hosts own retries for ambient work.
+Owned operations retry only definite PostgreSQL serialization/deadlock
+aborts (40001/40P01). Model validation is pure and may run again after an abort.
+Unknown commit/transport outcomes are never automatically retried. Hosts own retries for ambient work.
 
 Use `db.TransactSnapshot(ctx, fn)` for host workflows making compound authorization
 reads: it is read-write REPEATABLE READ and sees pending writes. Ordinary
@@ -155,6 +168,6 @@ Repeat with `POSTGRES_TEST_SCHEMA=authorization_test` for schema qualification a
 `POSTGRES_NON_C_TEST_DSN` pointing at a disposable non-C UTF-8 database for the
 collation proof. Tests include a million-row query-plan measurement.
 
-The suites cover canonical identity, cross-facade audit/guardians, snapshots,
+The suites cover canonical identity, cross-facade audit/integrity, snapshots,
 ambient savepoint recovery, transport batches, keyset pagination, fresh schema
 installation, applied-schema validation and cache protocol binding.

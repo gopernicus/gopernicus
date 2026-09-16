@@ -2,7 +2,6 @@ package authorization
 
 import (
 	"context"
-	"reflect"
 	"testing"
 
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuples"
@@ -12,14 +11,9 @@ import (
 	"github.com/gopernicus/gopernicus/pockets/authorization/stores/memory"
 )
 
-// newTrustedComponents builds a Components over the memstore bundle with the guardian
-// invariant disabled (empty policy — last-owner protection is AZ3-3.2's concern, not
-// these parity/idempotency cases) and both kinds plus the atomic mutation repository
-// wired. No Guard is configured: the actor path is read-only, and the trusted
-// SystemMutator is the write surface under test.
 func newTrustedComponents(t *testing.T) Components {
 	t.Helper()
-	st := memory.New(memory.WithGuardianPolicy(mutations.GuardianPolicy{}))
+	st := memory.New(memory.WithIntegrityPolicy(mutations.IntegrityPolicy{}))
 	comps, err := New(Repositories{
 		Tuples: st.Tuples(), Mutations: st.Mutations(),
 	}, WithModel(lifecycleModel()))
@@ -29,14 +23,11 @@ func newTrustedComponents(t *testing.T) Components {
 	return comps
 }
 
-// TestSystemMutatorGrantRelationshipTrustedApplies proves the trusted convenience
-// method commits an atomic grant (a bootstrap/invitation seam) that the read side
-// then honors, bypassing only the host guard.
-func TestSystemMutatorGrantRelationshipTrustedApplies(t *testing.T) {
+func TestTupleWriterGrantRelationshipTrustedApplies(t *testing.T) {
 	comps := newTrustedComponents(t)
 	ctx := context.Background()
 
-	rcpt, err := comps.SystemMutator.GrantRelationship(ctx, mutations.GrantRelationshipCommand{
+	rcpt, err := comps.Mutations.GrantRelationship(ctx, mutations.GrantRelationshipCommand{
 
 		ResourceType: "doc",
 		ResourceID:   "d1",
@@ -57,13 +48,9 @@ func TestSystemMutatorGrantRelationshipTrustedApplies(t *testing.T) {
 	}
 }
 
-// TestSystemMutatorTrustedRunsSemanticValidator proves the trusted path runs the
-// current-schema semantic validator inside Apply (parity): a grant of a relation the
-// schema does not accept is refused, exactly as the actor-facing path would refuse it
-// — a trusted caller is not a schema bypass.
-func TestSystemMutatorTrustedRunsSemanticValidator(t *testing.T) {
+func TestTupleWriterTrustedRunsSemanticValidator(t *testing.T) {
 	comps := newTrustedComponents(t)
-	_, err := comps.SystemMutator.GrantRelationship(context.Background(), mutations.GrantRelationshipCommand{
+	_, err := comps.Mutations.GrantRelationship(context.Background(), mutations.GrantRelationshipCommand{
 
 		ResourceType: "doc",
 		ResourceID:   "d1",
@@ -75,13 +62,11 @@ func TestSystemMutatorTrustedRunsSemanticValidator(t *testing.T) {
 	}
 }
 
-// TestSystemMutatorAssignRoleTrusted proves the trusted role assignment commits and
-// the read side then reports the role.
-func TestSystemMutatorAssignRoleTrusted(t *testing.T) {
+func TestTupleWriterAssignRoleTrusted(t *testing.T) {
 	comps := newTrustedComponents(t)
 	ctx := context.Background()
 
-	if _, err := comps.SystemMutator.AssignRole(ctx, mutations.AssignRoleCommand{
+	if _, err := comps.Mutations.AssignRole(ctx, mutations.AssignRoleCommand{
 
 		Subject: authmodel.PrincipalRef{Type: "user", ID: "u1"},
 		Role:    "auditor", Scope: tuples.Global(),
@@ -107,7 +92,7 @@ func TestTrustedDuplicateGrantReportsNoChange(t *testing.T) {
 		Subject:      subjU("u1"),
 	}
 
-	first, err := comps.SystemMutator.GrantRelationship(ctx, cmd)
+	first, err := comps.Mutations.GrantRelationship(ctx, cmd)
 	if err != nil {
 		t.Fatalf("first grant: %v", err)
 	}
@@ -115,42 +100,11 @@ func TestTrustedDuplicateGrantReportsNoChange(t *testing.T) {
 		t.Fatalf("first grant: want applied, got outcome=%s", first.Outcome)
 	}
 
-	replay, err := comps.SystemMutator.GrantRelationship(ctx, cmd)
+	replay, err := comps.Mutations.GrantRelationship(ctx, cmd)
 	if err != nil {
 		t.Fatalf("replay grant: %v", err)
 	}
 	if replay.Outcome != mutations.OutcomeNoChange {
 		t.Fatalf("duplicate grant: %+v", replay)
-	}
-}
-
-// TestBaselineWriterHeldApartFromService pins capability placement: the ordinary
-// Service exposes no baseline create/delete methods. Those normal state operations
-// live on Components.RelationshipWriter; AssignRole/UnassignRole remain guarded on
-// Service because the baseline capability is relationship-specific.
-func TestBaselineWriterHeldApartFromService(t *testing.T) {
-	svcType := reflect.TypeOf(&mutations.Service{})
-	removed := []string{
-		"CreateRelationships",
-		"DeleteRelationship",
-		"DeleteResourceRelationships",
-		"DeleteByResourceAndSubject",
-	}
-	for _, name := range removed {
-		if _, ok := svcType.MethodByName(name); ok {
-			t.Fatalf("Service.%s must stay on the separately held RelationshipWriter", name)
-		}
-	}
-
-	actorType := reflect.TypeOf(mutations.Actor{})
-	for _, name := range []string{"AssignRole", "UnassignRole"} {
-		m, ok := svcType.MethodByName(name)
-		if !ok {
-			t.Fatalf("Service.%s (guarded) must exist", name)
-		}
-		// method value signature: (*Service, context.Context, Actor, Command...)
-		if m.Type.NumIn() < 3 || m.Type.In(2) != actorType {
-			t.Fatalf("Service.%s must be the GUARDED form taking an Actor, got %s", name, m.Type)
-		}
 	}
 }

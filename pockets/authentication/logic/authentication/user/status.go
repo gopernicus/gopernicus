@@ -157,9 +157,9 @@ type StatusChange struct {
 // leave administration unimplemented.
 //
 // Presence of this port does NOT enable an HTTP surface. The bundled admin routes
-// mount only when the host also supplies Config.UserAdminCheck, so a store
+// mount only when the host also supplies an inbound administration policy, so a store
 // adapter may return a complete bundle without any authorization surface
-// appearing. See the Config.UserAdminCheck documentation.
+// appearing. See the an inbound administration policy documentation.
 //
 // Sentinel contract (the storetest conformance suite executes these):
 //   - GetSummary for an unknown id → sdk.ErrNotFound.

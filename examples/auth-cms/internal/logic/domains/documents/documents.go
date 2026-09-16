@@ -3,6 +3,7 @@ package documents
 import (
 	"context"
 	"fmt"
+	"math"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -43,50 +44,105 @@ type Query struct {
 	Search   string
 	Desc     bool
 	Limit    int
-	Cursor   string
 }
 
-type Page struct {
-	Items            []Document `json:"items"`
-	HasMore          bool       `json:"has_more"`
-	NextCursor       string     `json:"next_cursor,omitempty"`
-	ScanLimitReached bool       `json:"scan_limit_reached"`
+// Position is the persisted bytewise name/ID ordering used by storage.
+type Position struct {
+	NameKey string `json:"name_key"`
+	ID      string `json:"id"`
 }
 
-// Lister applies permission policy and the business query together. The domain
-// does not need to know whether its adapter uses IDs, candidate checks or SQL.
-type Lister interface {
-	ListVisible(context.Context, sdk.Principal, Query) (Page, error)
+type Row struct {
+	ID       string
+	TenantID string
+	Name     string
+	NameKey  string
 }
 
-type Service struct{ lister Lister }
+func (r Row) Document() Document {
+	return Document{ID: r.ID, TenantID: r.TenantID, Name: r.Name}
+}
 
-func New(lister Lister) (*Service, error) {
-	if lister == nil {
-		return nil, fmt.Errorf("documents: lister is required: %w", sdk.ErrInvalidInput)
+func (r Row) Position() Position { return Position{NameKey: r.NameKey, ID: r.ID} }
+
+// Restriction is data selected by the caller. Its zero value matches no rows.
+// Exactly one of the unrestricted, ID-set or exact-membership forms may be used.
+type Restriction struct {
+	Unrestricted bool
+	IDs          []string
+	Membership   *ExactMembership
+}
+
+type ExactMembership struct {
+	SubjectType string
+	SubjectID   string
+	Relation    string
+}
+
+func (r Restriction) Validate() error {
+	if (r.Unrestricted && (len(r.IDs) > 0 || r.Membership != nil)) || (len(r.IDs) > 0 && r.Membership != nil) {
+		return fmt.Errorf("documents: mixed restrictions: %w", sdk.ErrInvalidInput)
 	}
-	return &Service{lister: lister}, nil
+	for _, id := range r.IDs {
+		if !validText(id, 128) || strings.TrimSpace(id) == "" {
+			return fmt.Errorf("documents: invalid restricted ID: %w", sdk.ErrInvalidInput)
+		}
+	}
+	if m := r.Membership; m != nil {
+		for _, field := range []string{m.SubjectType, m.SubjectID, m.Relation} {
+			if !validText(field, 256) || strings.TrimSpace(field) == "" {
+				return fmt.Errorf("documents: invalid membership restriction: %w", sdk.ErrInvalidInput)
+			}
+		}
+	}
+	return nil
 }
 
-func (s *Service) ListVisible(ctx context.Context, principal sdk.Principal, query Query) (Page, error) {
-	if principal.Type == "" || principal.ID == "" {
-		return Page{}, sdk.ErrUnauthorized
+// Reader applies restrictions and tenant/search predicates before ordering and
+// pagination. It returns persisted sort values, without evaluating host policy.
+type Reader interface {
+	Read(context.Context, Query, Position, int, Restriction) ([]Row, bool, error)
+}
+
+type Service struct{ reader Reader }
+
+func New(reader Reader) (*Service, error) {
+	if reader == nil {
+		return nil, fmt.Errorf("documents: reader is required: %w", sdk.ErrInvalidInput)
 	}
+	return &Service{reader: reader}, nil
+}
+
+func (s *Service) Read(ctx context.Context, query Query, after Position, limit int, restriction Restriction) ([]Row, bool, error) {
 	if err := query.Normalize(); err != nil {
-		return Page{}, err
+		return nil, false, err
 	}
-	return s.lister.ListVisible(ctx, principal, query)
+	if err := restriction.Validate(); err != nil {
+		return nil, false, err
+	}
+	// Unicode lowercase can expand a name's UTF-8 bytes. Bound the persisted
+	// key by the largest encoding per input byte, not the original name bound.
+	if limit < 1 || limit == math.MaxInt || !validText(after.NameKey, 512*utf8.UTFMax) || !validText(after.ID, 128) || (after.ID == "" && after.NameKey != "") {
+		return nil, false, fmt.Errorf("documents: invalid read bounds: %w", sdk.ErrInvalidInput)
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, false, err
+	}
+	if !restriction.Unrestricted && len(restriction.IDs) == 0 && restriction.Membership == nil {
+		return []Row{}, false, nil
+	}
+	return s.reader.Read(ctx, query, after, limit, restriction)
 }
 
 // Normalize defines the host query independently from the permission strategy.
 func (q *Query) Normalize() error {
-	if !validText(q.TenantID, 128) || !validText(q.Search, 200) || len(q.Cursor) > 4096 {
-		return fmt.Errorf("documents: invalid tenant, search or cursor: %w", sdk.ErrInvalidInput)
+	if !validText(q.TenantID, 128) || !validText(q.Search, 200) {
+		return fmt.Errorf("documents: invalid tenant or search: %w", sdk.ErrInvalidInput)
 	}
 	q.TenantID = strings.TrimSpace(q.TenantID)
 	q.Search = strings.ToLower(strings.TrimSpace(q.Search))
 	if q.TenantID == "" {
-		return fmt.Errorf("documents: invalid tenant, search or cursor: %w", sdk.ErrInvalidInput)
+		return fmt.Errorf("documents: invalid tenant or search: %w", sdk.ErrInvalidInput)
 	}
 	if q.Limit == 0 {
 		q.Limit = 20

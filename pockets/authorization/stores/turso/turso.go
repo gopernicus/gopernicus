@@ -37,19 +37,19 @@ type config struct {
 	tupleCache   bool
 	tupleBinding string
 	audit        bool
-	guardian     mutation.GuardianPolicy
+	integrity    mutation.IntegrityPolicy
 }
 
 // WithAudit enables atomic recording of actual authorization fact changes.
 // Every write then requires an explicit valid audit source on its context.
 func WithAudit() Option { return func(c *config) { c.audit = true } }
 
-// WithGuardianPolicy installs the host's relationship invariants. The option
+// WithIntegrityPolicy installs the host's relationship invariants. The option
 // snapshots its input; the store defaults to an empty policy. NewService checks
 // the repository's policy against the host relationship model.
-func WithGuardianPolicy(p mutation.GuardianPolicy) Option {
+func WithIntegrityPolicy(p mutation.IntegrityPolicy) Option {
 	p.Rules = slices.Clone(p.Rules)
-	return func(c *config) { c.guardian = mutation.GuardianPolicy{Rules: slices.Clone(p.Rules)} }
+	return func(c *config) { c.integrity = mutation.IntegrityPolicy{Rules: slices.Clone(p.Rules)} }
 }
 
 // Repositories probes the canonical tuple and audit tables and returns all ports.
@@ -65,6 +65,9 @@ func Repositories(ctx context.Context, db *tursodb.DB, opts ...Option) (authoriz
 			return authorization.Repositories{}, fmt.Errorf("authorization store: nil option: %w", sdk.ErrInvalidInput)
 		}
 		o(&cfg)
+	}
+	if err := cfg.integrity.Validate(); err != nil {
+		return authorization.Repositories{}, err
 	}
 	var source *tupleSource
 	if cfg.tupleCache {
@@ -106,6 +109,9 @@ func RelationshipRepository(ctx context.Context, db *tursodb.DB, opts ...Option)
 			return nil, fmt.Errorf("authorization store: nil option: %w", sdk.ErrInvalidInput)
 		}
 		opt(&cfg)
+	}
+	if err := cfg.integrity.Validate(); err != nil {
+		return nil, err
 	}
 	if cfg.tupleCache {
 		return nil, fmt.Errorf("authorization: WithTupleCache requires Repositories bundle: %w", sdk.ErrInvalidInput)

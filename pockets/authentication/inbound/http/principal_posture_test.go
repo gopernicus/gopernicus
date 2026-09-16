@@ -33,7 +33,7 @@ import (
 // --- the user-administration repository (the only port the fixture still lacked) ---
 
 // memUserAdmin is an inert operator directory: the posture cases assert who
-// REACHES authlogic.WithUserAdminCheck, never what the directory holds.
+// REACHES WithUserAdminCheck, never what the directory holds.
 type memUserAdmin struct{}
 
 func (memUserAdmin) List(context.Context, list.Request) (list.Page[user.Summary], error) {
@@ -61,8 +61,8 @@ type postureFixture struct {
 	inv       *spyInvitationService
 
 	mu sync.Mutex
-	// adminChecks records every principal that reached authlogic.WithUserAdminCheck.
-	adminChecks []authlogic.UserAdminCheckRequest
+	// adminChecks records every principal that reached WithUserAdminCheck.
+	adminChecks []UserAdminCheckRequest
 	// machineGateRuns counts how often the host's machine gate ran, so a case can
 	// prove the authenticator refused BEFORE the host policy was consulted.
 	machineGateRuns int
@@ -99,8 +99,7 @@ func newPostureFixture(t *testing.T, routeAuth RouteAuthentication) *postureFixt
 		ServiceAccounts: &memServiceAccounts{m: map[string]serviceaccount.ServiceAccount{}},
 		APIKeys:         &memAPIKeys{m: map[string]apikey.APIKey{}},
 
-		UserAdmin:      memUserAdmin{},
-		UserAdminCheck: f.recordAdminCheck,
+		UserAdmin: memUserAdmin{},
 
 		OAuthAccounts:     &memOAuthAccounts{},
 		OAuthStates:       &memOAuthStates{m: map[string]oauthstate.State{}},
@@ -110,8 +109,9 @@ func newPostureFixture(t *testing.T, routeAuth RouteAuthentication) *postureFixt
 	})
 	h := web.NewWebHandler()
 	mount(h, mountDeps{
-		Auth:         f.svc,
-		Invitations:  f.inv,
+		Auth:        f.svc,
+		Invitations: f.inv,
+		InviteCheck: allowInviteCheck, UserAdminCheck: f.recordAdminCheck,
 		ListStrategy: list.StrategyCursor,
 		MachineGate:  f.countingMachineGate,
 		Views:        stubViews{},
@@ -124,7 +124,7 @@ func newPostureFixture(t *testing.T, routeAuth RouteAuthentication) *postureFixt
 // recordAdminCheck is the host user-administration policy: it records the
 // principal the pocket resolved and authorizes it, so a case asserts WHO reached
 // the seam rather than what the host decided.
-func (f *postureFixture) recordAdminCheck(_ context.Context, req authlogic.UserAdminCheckRequest) error {
+func (f *postureFixture) recordAdminCheck(_ context.Context, req UserAdminCheckRequest) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.adminChecks = append(f.adminChecks, req)
@@ -141,10 +141,10 @@ func (f *postureFixture) countingMachineGate(next http.Handler) http.Handler {
 	})
 }
 
-func (f *postureFixture) checks() []authlogic.UserAdminCheckRequest {
+func (f *postureFixture) checks() []UserAdminCheckRequest {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return append([]authlogic.UserAdminCheckRequest(nil), f.adminChecks...)
+	return append([]UserAdminCheckRequest(nil), f.adminChecks...)
 }
 
 func (f *postureFixture) gateRuns() int {
@@ -218,7 +218,7 @@ func (f *postureFixture) request(method, path, body, bearerToken string, cookie 
 
 // TestDefaultUserAdministrationAdmitsAMachinePrincipal pins the audit's
 // deliberate exception: user administration keeps its documented contract that a
-// machine principal REACHES authlogic.WithUserAdminCheck, and the host — not the pocket
+// machine principal REACHES WithUserAdminCheck, and the host — not the pocket
 // — decides whether a service account may administer users.
 func TestDefaultUserAdministrationAdmitsAMachinePrincipal(t *testing.T) {
 	f := newPostureFixture(t, RouteAuthentication{})
@@ -493,8 +493,9 @@ func newPostureFixtureWith(t *testing.T, base *postureFixture, routeAuth RouteAu
 	t.Helper()
 	h := web.NewWebHandler()
 	mount(h, mountDeps{
-		Auth:         base.svc,
-		Invitations:  base.inv,
+		Auth:        base.svc,
+		Invitations: base.inv,
+		InviteCheck: allowInviteCheck, UserAdminCheck: base.recordAdminCheck,
 		ListStrategy: list.StrategyCursor,
 		MachineGate:  base.countingMachineGate,
 		Views:        stubViews{},

@@ -5312,3 +5312,84 @@ backend reviews found no blockers. SQL/Redis live integration and remote Turso
 were not rerun for this transport/logging-only change. See the
 [executed plan](plans/authorization-host-policy.md) and
 [verification record](plans/authorization-host-policy-verification.json).
+
+
+## AUDIT-046: Inbound authorization ownership
+
+**Release status:** implemented and verified; uncommitted and unreleased.
+
+Host access-policy callbacks belong to inbound adapters. Authentication's
+invitation and user-administration callbacks, types and options move to
+`inbound/http`; application services no longer store or invoke them. Root
+configuration preserves fail-closed HTTP enablement. Service authorized twins
+and authorization forwarding methods are removed, making adoption compile-visible.
+
+Invitation preparation still owns normalization, metadata validation and invitee
+resolution. An opaque, service-bound prepared value lets inbound authorize the
+exact command subsequently executed, with defensive-copy inspection and no
+second lookup. Zero/foreign prepared values fail. No invitation row, grant or
+delivery is attempted on a denied policy. Identity proof, issuer-bound cancel/
+resend checks, verified ownership and lifecycle state transitions remain domain
+invariants. Existing issuance-time invitation authority is unchanged.
+
+The document example moves permission selection, bypass callbacks, the decision
+engine and encrypted cursors to inbound. Domain reads are principal-free and
+accept a validated data restriction: IDs, unrestricted, or exact membership.
+Zero restriction matches no rows and mixed forms reject. Outbound applies the
+selected restriction alongside tenant/search predicates before sorting/paging;
+PostgreSQL's selected membership predicate remains in the same SQL statement.
+Domain and storage never choose a host permission or invoke its evaluator.
+
+Ordinary inbound authorization admits an operation; it does not promise that
+permission remains true through a later business commit. A revocation cannot
+retract admitted work, and TupleCache may delay observing it within its configured
+eligibility window. Guarded tuple writes retain their stronger serialized guard/
+invariant/change/audit boundary and bypass cached authority. There is no automatic
+cross-store or business-write serialization. Candidate FilterPage holds one
+permission snapshot across every pull in that call, not a fresh snapshot per
+pull; business reads and the optional bypass check have separate boundaries.
+Continuation requests evaluate current permissions again.
+
+G28 prevents retired authentication callbacks returning to logic and decision
+engine imports returning to the document domain/storage. Verification includes
+an admitted-request/revocation interleaving, HTTP policy denials and exact-command
+execution, and existing listing/guarded-mutation tests. The full 42-module make check, authentication/authorization/example race suites,
+and live PostgreSQL listing/mutation checks passed. See the
+[executed plan](plans/authorization-inbound-policy.md) and
+[verification record](plans/authorization-inbound-policy-verification.json).
+
+
+## AUDIT-047: Principal admission and tuple integrity
+
+**Release status:** implemented and verified; uncommitted and unreleased.
+
+The owner's explicit ruling supersedes AUDIT-046's retained transactional
+principal guard and invitation-issuer exception. All principal permission checks
+run at inbound access points. Reusable evaluators remain logic; data writers
+never choose or reevaluate caller permissions.
+
+`IntegrityPolicy` names the independent data contract. Logic defines minimum
+concrete-subject rules; memory, PostgreSQL and SQLite enforce them atomically
+with every ordinary command and raw/facade write. Ordinary writes cannot remove
+the last protected subject; explicit reason-bearing teardown can. Integrity
+refusals remain conflicts, not permission denials. Audit facts and failed writes
+roll back together. PostgreSQL ambient repeatable-read validation locks rows to
+reject stale owner counts. Baseline ambient joining and savepoints remain.
+
+The guarded/system write split, actor inputs, guard callbacks and transactional
+permission views are removed. Bundled HTTP role administration requires an inbound
+exact-command write policy for both assign and unassign, preserving fail-closed
+construction and authenticated audit attribution. Invitation issuer management
+moves inbound over a single prepared target; authentication proof stays in logic.
+
+Permission revocation cannot retract work admitted earlier. This is deliberate
+admission semantics, independent of serialized integrity at commit. No migration,
+cache protocol or module dependency change is required.
+
+Verification: final frozen-source 42-module `make check`, core/authentication/
+example race suites, memory/local SQLite/disposable PostgreSQL races, separate
+non-C collation proof, HTTP behavior regressions, eight G29 synthetic cases and
+documentation production build passed. The changed writer benchmarks have 20
+fresh samples. Named architecture and backend reviews have no remaining blockers.
+See the [executed plan](plans/authorization-integrity-policy.md) and
+[verification record](plans/authorization-integrity-policy-verification.json).

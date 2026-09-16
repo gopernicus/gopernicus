@@ -711,6 +711,33 @@ integration to start native server spans and receive typed status. OTel owns
 export, root/parent sampling and explicitly configured inbound W3C trust. No
 vendor types, global propagator, automatic baggage or tracing DSL enter the SDK.
 
+### Inbound authorization ownership
+
+Inbound adapters authenticate callers, resolve the actual command or query, and
+invoke host authorization policy before calling application services. HTTP may
+authorize in middleware or in a handler after decoding and domain preparation;
+RPC, queue and other entry points own the equivalent boundary. Application
+services do not invoke host role/permission callbacks. Actor identity may still
+be an explicit input for attribution or identity-specific domain behavior.
+
+Domain validation, tenant restrictions, identity proofs and business invariants
+remain in logic. Collection authorization selects permitted data restrictions
+at inbound; business repositories enforce those restrictions together with
+tenant/search constraints before pagination. Executing an inbound-selected SQL
+membership predicate is data enforcement, not a repository choosing host policy.
+The reusable authorization evaluator remains transport-independent.
+`guard-inbound-authorization` (G28) prevents the retired authentication policy
+callbacks from returning to logic and keeps the decision engine out of the
+document example's domain and storage code. Invitation issuer access is checked
+at inbound; credential validity and recipient/token identity proof remain in logic.
+
+Ordinary inbound authorization admits one operation. It does not retain the
+decision snapshot through application execution, cancel admitted operations on
+revocation, or make a later business write atomic with the check. TupleCache's
+configured staleness bound also applies to admission. Tuple writes enforce data
+integrity against current serialized state; they do not recheck the caller's
+permissions. Every inbound access point owns its principal policy.
+
 ### Authorization tuple vocabulary
 
 `pockets/authorization/logic/tuples` owns canonical scope, subject and tuple
@@ -718,7 +745,8 @@ values and their structural reference validation. It is a leaf within the
 authorization pocket: models, roles, relationships, mutations and caches may
 consume it; it imports none of those consumers. The Makefile's
 `guard-authorization-tuples-leaf` (G26) enforces this direction.
-Mutation guards consume the decision evaluator; decisions never import mutations
+Tuple writes may consume compiled model shape validation; they never invoke the
+decision service. Decisions never import mutations
 (`guard-authorization-decisions-no-mutations`, G27). Graph-specific query
 ports and policy evaluation stay with their consumers.
 
@@ -742,15 +770,25 @@ SQL schema defining tuples and audit directly, plus one optional TupleCache
 source. Hosts apply these before boot; no split-table conversion or downgrade
 stream is bundled.
 
-### Authorization mutation ownership
+### Tuple writes and integrity
 
 Role assignments and relationships are views of one canonical tuple fact with
 a full natural key. Root composition constructs both facades from Tuples; it
 accepts no independently wired relationship authority.
-The pocket keeps host guards and guardian rules inside its mutation transaction.
-Supported raw writers participate in transaction isolation but remain trusted
-capabilities that do not enforce the guard or guardian rules. The host places
-these capabilities explicitly.
+`IntegrityPolicy` defines data rules, such as a minimum number of concrete
+subjects on a relation. Logic owns the pure post-state rule; every supported
+ordinary writer enforces it within the store's serialization boundary. Tuple,
+role and relationship facades cannot bypass configured integrity. Only explicit
+resource teardown can remove a protected scope's final subject. There is one
+principal-free command service, with no transactional principal guard or system
+mutator variant. G29 prevents those retired policy seams returning.
+
+Atomic commands own their transaction and reject ambient transactions. Raw writes
+retain ambient joining and savepoint rollback; a failed integrity check rolls
+back its facts and audit without discarding earlier host work. PostgreSQL locks
+post-state rows so stale repeatable-read snapshots fail serialization instead
+of counting deleted owners. SQLite write intent and memory's shared mutex give
+the corresponding serialization boundary. Store configuration is immutable.
 
 Optional store `WithAudit()` records actual committed fact changes in `iam_audit`
 in the same transaction as the facts. Attribution is actor or explicit system metadata; the host owns retention

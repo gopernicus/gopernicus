@@ -70,9 +70,9 @@ var testSchemaOnce = sync.OnceValues(func() (pgxdb.Schema, error) {
 func TestConformance(t *testing.T) {
 	dsn := requireDSN(t)
 
-	storetest.Run(t, func(t *testing.T, policy mutations.GuardianPolicy) storetest.Repositories {
+	storetest.Run(t, func(t *testing.T, policy mutations.IntegrityPolicy) storetest.Repositories {
 		db := openAndMigrate(t, dsn)
-		repos, err := testRepositories(context.Background(), db, append(storeOptions(t), WithGuardianPolicy(policy))...)
+		repos, err := testRepositories(context.Background(), db, append(storeOptions(t), WithIntegrityPolicy(policy))...)
 		if err != nil {
 			t.Fatalf("Repositories: %v", err)
 		}

@@ -143,7 +143,7 @@ type stubGranter struct{}
 func (stubGranter) Grant(context.Context, invitations.GrantInput) error { return nil }
 
 // allowInvite is a permissive InviteCheck for the construction matrix tests.
-func allowInvite(context.Context, invitations.InviteCheckRequest) error { return nil }
+func allowInvite(context.Context, inbound.InviteCheckRequest) error { return nil }
 
 // stubInvitations satisfies invitations.InvitationRepository for the construction
 // matrix tests: the both-present case drives Create through to the disabled-outbox
@@ -417,80 +417,23 @@ func TestNewServiceInvitationConstructionMatrix(t *testing.T) {
 	}
 }
 
-// TestInvitationAuthorizedFacadeDelegates proves the facade's policy-carrying
-// invitation twins are the AUTHORIZED path, not the trusted one: with invitations
-// off the component is nil, and with the subsystem wired each method reaches
-// the host InviteCheck carrying the caller's principal — CreateAuthorized after
-// preparation (the recorded identifier is normalized, the action is InviteCreate)
-// and ListByResourceAuthorized with the empty invitee context. A denial propagates
-// unwrapped, which the check-free Service.Create/ListByResource could never do.
-func TestInvitationAuthorizedFacadeDelegates(t *testing.T) {
-	base := constructorConfig{Hasher: stubHasher{}, Mailer: stubMailer{}, TokenSigner: stubSigner{}, RuntimeMode: environment.ModeDevelopment, DeliveryMode: delivery.ModeOff}
-	caller := sdk.Principal{Type: "user", ID: "inviter-1"}
-	ctx := context.Background()
-
-	off, err := newFixture(testRepositories(Repositories{}), base)
+func TestInvitationHeadlessOperationsDoNotInvokeHTTPPolicy(t *testing.T) {
+	cfg := constructorConfig{Hasher: stubHasher{}, Mailer: stubMailer{}, TokenSigner: stubSigner{}, RuntimeMode: environment.ModeDevelopment, DeliveryMode: delivery.ModeOff, Granter: stubGranter{}}
+	calls := 0
+	cfg.InviteCheck = func(context.Context, inbound.InviteCheckRequest) error { calls++; return sdk.ErrForbidden }
+	c, err := newFixture(testRepositories(Repositories{Invitations: stubInvitations{}, Identifiers: &memIdentifierRepo{}}), cfg)
 	if err != nil {
-		t.Fatalf("NewService (invitations off): %v", err)
+		t.Fatal(err)
 	}
-	if off.Invitations != nil {
-		t.Fatal("invitations component enabled without host policy")
+	prepared, err := c.Invitations.PrepareCreate(t.Context(), invitations.CreateInput{ResourceType: "project", ResourceID: "p1", Relation: "member", Identifier: "Invitee@X.com", InvitedBy: "inviter"})
+	if err != nil || prepared.Input().Identifier != "invitee@x.com" {
+		t.Fatalf("prepare=%+v/%v", prepared.Input(), err)
 	}
-	if off.Invitations != nil {
-		t.Fatal("invitations component enabled without host policy")
+	if _, err := c.Invitations.ListByResource(t.Context(), "project", "p1", listing.Request{}); err != nil {
+		t.Fatal(err)
 	}
-
-	denied := errors.New("host policy refused")
-	var posed []invitations.InviteCheckRequest
-	on := base
-	on.Granter = stubGranter{}
-	on.InviteCheck = func(_ context.Context, req invitations.InviteCheckRequest) error {
-		posed = append(posed, req)
-		return denied
-	}
-	// Identifiers backs the invitee lookup prepareCreate runs before the policy is
-	// posed; it holds no rows, so every invitee resolves to no existing subject.
-	svc, err := newFixture(testRepositories(Repositories{Invitations: stubInvitations{}, Identifiers: &memIdentifierRepo{}}), on)
-	if err != nil {
-		t.Fatalf("NewService (invitations on): %v", err)
-	}
-
-	if _, err := svc.Invitations.CreateAuthorized(ctx, caller, invitations.CreateInput{ResourceType: "project", ResourceID: "p1", Relation: "member", Identifier: "Invitee@X.com", InvitedBy: "inviter-1"}); !errors.Is(err, denied) {
-		t.Fatalf("CreateAuthorized: err=%v, want the host denial", err)
-	}
-	if len(posed) != 1 {
-		t.Fatalf("CreateAuthorized posed InviteCheck %d times, want 1", len(posed))
-	}
-	create := posed[0]
-	if create.Principal != caller {
-		t.Errorf("CreateAuthorized principal = %+v, want %+v", create.Principal, caller)
-	}
-	if create.Action != invitations.InviteCreate {
-		t.Errorf("CreateAuthorized action = %v, want InviteCreate", create.Action)
-	}
-	if create.Identifier != "invitee@x.com" {
-		t.Errorf("CreateAuthorized identifier = %q, want the normalized %q", create.Identifier, "invitee@x.com")
-	}
-	if create.Relation != "member" || create.ResourceType != "project" || create.ResourceID != "p1" {
-		t.Errorf("CreateAuthorized resource/relation = %q/%q/%q, want project/p1/member", create.ResourceType, create.ResourceID, create.Relation)
-	}
-
-	posed = nil
-	if _, err := svc.Invitations.ListByResourceAuthorized(ctx, caller, "project", "p1", listing.Request{}); !errors.Is(err, denied) {
-		t.Fatalf("ListByResourceAuthorized: err=%v, want the host denial", err)
-	}
-	if len(posed) != 1 {
-		t.Fatalf("ListByResourceAuthorized posed InviteCheck %d times, want 1", len(posed))
-	}
-	list := posed[0]
-	if list.Principal != caller {
-		t.Errorf("ListByResourceAuthorized principal = %+v, want %+v", list.Principal, caller)
-	}
-	if list.Action != invitations.InviteList {
-		t.Errorf("ListByResourceAuthorized action = %v, want InviteList", list.Action)
-	}
-	if list.Relation != "" || list.Identifier != "" || list.IdentifierKind != "" || list.ResolvedSubjectID != "" || len(list.Metadata) != 0 {
-		t.Errorf("ListByResourceAuthorized carried invitee context: %+v, want it empty", list)
+	if calls != 0 {
+		t.Fatalf("headless domain called HTTP policy %d times", calls)
 	}
 }
 

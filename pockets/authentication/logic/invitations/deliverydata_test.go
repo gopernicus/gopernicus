@@ -243,7 +243,7 @@ func TestResendHookErrorReturned(t *testing.T) {
 	wireSyncDeliveryHook(t, svc, mailer, nil, hook.hook)
 
 	inv := seedInvite(t, repo, "project", "p1", "member", "invitee@x.com", "inviter", "secret-a", false, time.Now().Add(time.Hour))
-	if _, err := svc.Resend(context.Background(), inv.ID, "inviter", ""); !errors.Is(err, hookErr) {
+	if _, err := svc.Resend(context.Background(), prepareManagement(t, svc, inv.ID), ""); !errors.Is(err, hookErr) {
 		t.Fatalf("Resend err=%v, want the hook error", err)
 	}
 	stored, _ := repo.Get(context.Background(), inv.ID)
@@ -255,7 +255,7 @@ func TestResendHookErrorReturned(t *testing.T) {
 	}
 	// Recovery: once the hook succeeds, the same owner can resend.
 	hook.err = nil
-	if _, err := svc.Resend(context.Background(), inv.ID, "inviter", ""); err != nil {
+	if _, err := svc.Resend(context.Background(), prepareManagement(t, svc, inv.ID), ""); err != nil {
 		t.Fatalf("Resend after recovery: %v", err)
 	}
 	if len(mailer.sent) != 1 {

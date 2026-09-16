@@ -14,10 +14,10 @@ import (
 	"github.com/gopernicus/gopernicus/sdk/pkg/list"
 )
 
-func auditHost(t *testing.T, guard mutations.MutationGuard) (Components, *memory.Store) {
+func auditHost(t *testing.T) (Components, *memory.Store) {
 	t.Helper()
 	store := memory.New(memory.WithAudit())
-	components, err := New(Repositories{Tuples: store.Tuples(), Mutations: store.Mutations(), Audit: store.Audit()}, WithModel(lifecycleModel()), WithGuard(guard))
+	components, err := New(Repositories{Tuples: store.Tuples(), Mutations: store.Mutations(), Audit: store.Audit()}, WithModel(lifecycleModel()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -33,25 +33,19 @@ func auditRecords(t *testing.T, store *memory.Store) []audit.Record {
 	return page.Items
 }
 
-func TestGuardedAuditUsesActorAndRecordsOnlyCommittedChanges(t *testing.T) {
-	guard := &stubGuard{}
-	components, store := auditHost(t, guard)
+func TestTupleAuditUsesSourceAndRecordsOnlyCommittedChanges(t *testing.T) {
+	components, store := auditHost(t)
 	// A caller cannot use metadata to attribute their guarded write to someone else.
-	ctx := audit.WithSource(context.Background(), audit.Source{System: "spoofed-system", Reason: "support ticket 42"})
+	ctx := audit.WithSource(context.Background(), audit.Source{ActorType: "user", ActorID: "u1", Reason: "support ticket 42"})
 	cmd := mutations.GrantRelationshipCommand{ResourceType: "doc", ResourceID: "d1", Relation: "viewer", Subject: subjU("u2")}
 	for _, want := range []mutations.Outcome{mutations.OutcomeApplied, mutations.OutcomeNoChange} {
-		got, err := components.Mutations.GrantRelationship(ctx, actorU1(), cmd)
+		got, err := components.Mutations.GrantRelationship(ctx, cmd)
 		if err != nil || got == nil || got.Outcome != want {
 			t.Fatalf("grant: %+v, %v", got, err)
 		}
 	}
-	guard.err = sdk.ErrForbidden
-	if got, err := components.Mutations.GrantRelationship(ctx, actorU1(), cmd); !errors.Is(err, sdk.ErrForbidden) || got != nil {
-		t.Fatalf("guard must run on repeated command: %+v, %v", got, err)
-	}
-	guard.err = nil
 	cmd.Relation = "editor"
-	if got, err := components.Mutations.GrantRelationship(ctx, actorU1(), cmd); err != nil || got == nil || got.Outcome != mutations.OutcomeApplied {
+	if got, err := components.Mutations.GrantRelationship(ctx, cmd); err != nil || got == nil || got.Outcome != mutations.OutcomeApplied {
 		t.Fatalf("independent fact: %+v, %v", got, err)
 	}
 	records := auditRecords(t, store)
@@ -74,24 +68,24 @@ func TestGuardedAuditUsesActorAndRecordsOnlyCommittedChanges(t *testing.T) {
 }
 
 func TestTrustedAuditRequiresSourceAndTeardownRecordsReason(t *testing.T) {
-	components, store := auditHost(t, &stubGuard{})
+	components, store := auditHost(t)
 	ctx := context.Background()
 	grant := mutations.GrantRelationshipCommand{ResourceType: "doc", ResourceID: "d1", Relation: "owner", Subject: subjU("u1")}
-	if got, err := components.SystemMutator.GrantRelationship(ctx, grant); !errors.Is(err, sdk.ErrInvalidInput) || got != nil {
+	if got, err := components.Mutations.GrantRelationship(ctx, grant); !errors.Is(err, sdk.ErrInvalidInput) || got != nil {
 		t.Fatalf("missing source: %+v, %v", got, err)
 	}
 	if len(auditRecords(t, store)) != 0 {
 		t.Fatal("refused change was recorded")
 	}
 	ctx = audit.WithSource(ctx, audit.Source{System: "bootstrap"})
-	if _, err := components.SystemMutator.GrantRelationship(ctx, grant); err != nil {
+	if _, err := components.Mutations.GrantRelationship(ctx, grant); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := components.SystemMutator.AssignRole(ctx, mutations.AssignRoleCommand{Subject: prinU("u2"), Role: "reader", Scope: tuples.On("doc", "d1")}); err != nil {
+	if _, err := components.Mutations.AssignRole(ctx, mutations.AssignRoleCommand{Subject: prinU("u2"), Role: "reader", Scope: tuples.On("doc", "d1")}); err != nil {
 		t.Fatal(err)
 	}
 	ctx = audit.WithSource(ctx, audit.Source{System: "resource-cleanup", Reason: "old reason"})
-	got, err := components.SystemMutator.TeardownResourceAuthorization(ctx, mutations.TeardownResourceAuthorizationCommand{ResourceType: "doc", ResourceID: "d1", Reason: "resource was deleted"})
+	got, err := components.Mutations.TeardownResourceAuthorization(ctx, mutations.TeardownResourceAuthorizationCommand{ResourceType: "doc", ResourceID: "d1", Reason: "resource was deleted"})
 	if err != nil || got == nil || got.Outcome != mutations.OutcomeApplied {
 		t.Fatalf("teardown: %+v, %v", got, err)
 	}
@@ -120,7 +114,7 @@ func TestTrustedAuditRequiresSourceAndTeardownRecordsReason(t *testing.T) {
 }
 
 func TestBaselineWriterParticipatesInAudit(t *testing.T) {
-	components, store := auditHost(t, nil)
+	components, store := auditHost(t)
 	rows := []relationships.CreateRelationship{{ResourceType: "doc", ResourceID: "d1", Relation: "viewer", SubjectType: "user", SubjectID: "u2"}}
 	if err := components.RelationshipWriter.CreateRelationships(context.Background(), rows); !errors.Is(err, sdk.ErrInvalidInput) {
 		t.Fatalf("raw source requirement: %v", err)
@@ -139,7 +133,7 @@ func TestBaselineWriterParticipatesInAudit(t *testing.T) {
 }
 
 func TestBaselineEmptyCreateEnforcesSourceAndCancellation(t *testing.T) {
-	components, store := auditHost(t, nil)
+	components, store := auditHost(t)
 	if err := components.RelationshipWriter.CreateRelationships(context.Background(), nil); !errors.Is(err, sdk.ErrInvalidInput) {
 		t.Fatalf("empty batch without source: %v", err)
 	}

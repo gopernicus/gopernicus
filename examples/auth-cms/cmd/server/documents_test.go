@@ -6,7 +6,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	documents "github.com/gopernicus/gopernicus/examples/auth-cms/internal/logic/domains/documents"
+	documents "github.com/gopernicus/gopernicus/examples/auth-cms/internal/inbound/domains/documents"
 	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/pkg/web"
 )
@@ -16,7 +16,7 @@ func TestDocumentRouteComposition(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := seedAuthorization(t.Context(), components.SystemMutator); err != nil {
+	if err := seedAuthorization(t.Context(), components.Mutations); err != nil {
 		t.Fatal(err)
 	}
 	router := web.NewWebHandler()
@@ -27,7 +27,7 @@ func TestDocumentRouteComposition(t *testing.T) {
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
-	if err := registerDocumentRoutes(t.Context(), router, authenticate, components.Decisions, components.SystemMutator); err != nil {
+	if err := registerDocumentRoutes(t.Context(), router, authenticate, components.Decisions, components.Mutations); err != nil {
 		t.Fatal(err)
 	}
 	server := httptest.NewServer(router)

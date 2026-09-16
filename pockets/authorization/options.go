@@ -6,7 +6,6 @@ import (
 	authorizationhttp "github.com/gopernicus/gopernicus/pockets/authorization/inbound/http"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/decisions"
 	authmodel "github.com/gopernicus/gopernicus/pockets/authorization/logic/model"
-	"github.com/gopernicus/gopernicus/pockets/authorization/logic/mutations"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuplecache"
 )
 
@@ -22,17 +21,10 @@ func WithModel(model decisions.Model) Option {
 }
 
 // WithLimits replaces the common decision/mutation evaluation budget. Zero
-// dimensions use safe defaults; negative dimensions fail when a model or guard
-// uses the budget. Zero never means unlimited.
+// dimensions use safe defaults; negative dimensions are invalid.
+// Zero never means unlimited.
 func WithLimits(limits authmodel.EvaluationLimits) Option {
 	return func(cfg *config) { cfg.Limits = limits }
-}
-
-// WithGuard sets the actor-facing mutation policy. Nil leaves actor writes
-// disabled while separately held trusted writers remain available. A nonnil
-// guard requires Repositories.Mutations and runs inside its atomic boundary.
-func WithGuard(guard mutations.MutationGuard) Option {
-	return func(cfg *config) { cfg.Guard = guard }
 }
 
 // WithLogger sets the borrowed operational logger for mutations and DEBUG
@@ -43,16 +35,17 @@ func WithLogger(logger *slog.Logger) Option {
 }
 
 // WithRoleRoutes replaces the complete bundled role route policy. Nil Gate
-// disables routes; a gate requires a roles repository and an actor guard.
+// disables routes; enabled routes require Roles, Mutations and WritePolicy.
 // The gate is the complete middleware stack: authenticate and set the SDK
-// principal, apply browser-origin defense for cookie credentials, then authorize.
+// principal, apply browser-origin defense for cookie credentials, then authorize
+// route access. WritePolicy additionally admits each validated exact command.
 // The pocket does not install an authenticator or CSRF layer beneath that gate.
-// AssignmentPolicy without Gate is invalid. ListStrategy is always validated,
+// WritePolicy without Gate is invalid. ListStrategy is always validated,
 // including when routes are disabled. The host owns the gate's middleware stack.
 func WithRoleRoutes(routes authorizationhttp.RoleRoutes) Option {
 	return func(cfg *config) {
 		cfg.RoleRoutesGate = routes.Gate
-		cfg.RoleRouteAssignmentPolicy = routes.AssignmentPolicy
+		cfg.RoleWritePolicy = routes.WritePolicy
 		cfg.ListStrategy = routes.ListStrategy
 	}
 }

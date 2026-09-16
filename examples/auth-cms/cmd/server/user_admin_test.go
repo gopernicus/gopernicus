@@ -10,9 +10,10 @@ import (
 	"sync"
 	"testing"
 
+	authenticationhttp "github.com/gopernicus/gopernicus/pockets/authentication/inbound/http"
+
 	"github.com/gopernicus/gopernicus/examples/auth-cms/internal/authmem"
 	auth "github.com/gopernicus/gopernicus/pockets/authentication"
-	authenticationlogic "github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication"
 	"github.com/gopernicus/gopernicus/sdk"
 
 	// CHAU-1.7 — the account-lifecycle proof, driven through EXPORTED host seams over
@@ -41,7 +42,7 @@ type adminHost struct {
 	allow map[string]bool
 	// asked records every question the policy was posed, so a test can prove the
 	// check ran BEFORE any target resolution or mutation.
-	asked []authenticationlogic.UserAdminCheckRequest
+	asked []authenticationhttp.UserAdminCheckRequest
 }
 
 func newAdminHost(t *testing.T) *adminHost {
@@ -51,7 +52,7 @@ func newAdminHost(t *testing.T) *adminHost {
 
 	sender := &recordingSender{}
 	svc := bootInProcess(t, sender, func(cfg *authenticationConfig) {
-		cfg.UserAdminCheck = func(_ context.Context, req authenticationlogic.UserAdminCheckRequest) error {
+		cfg.UserAdminCheck = func(_ context.Context, req authenticationhttp.UserAdminCheckRequest) error {
 			h.mu.Lock()
 			h.asked = append(h.asked, req)
 			allowed := h.allow[req.Principal.ID]
@@ -82,10 +83,10 @@ func (h *adminHost) authorize(userID string) {
 	h.allow[userID] = true
 }
 
-func (h *adminHost) questions() []authenticationlogic.UserAdminCheckRequest {
+func (h *adminHost) questions() []authenticationhttp.UserAdminCheckRequest {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	return append([]authenticationlogic.UserAdminCheckRequest(nil), h.asked...)
+	return append([]authenticationhttp.UserAdminCheckRequest(nil), h.asked...)
 }
 
 // adminUserResponse mirrors the published directory JSON.
@@ -266,23 +267,23 @@ func TestUserAdminLifecycleThroughHostSeams(t *testing.T) {
 	}
 
 	// 8. The host policy saw every action with the right target.
-	seen := map[authenticationlogic.UserAdminAction]string{}
+	seen := map[authenticationhttp.UserAdminAction]string{}
 	for _, q := range host.questions() {
 		seen[q.Action] = q.TargetUserID
 		if q.Principal.ID != adminID {
 			t.Errorf("policy was asked about principal %q, want the calling admin %q", q.Principal.ID, adminID)
 		}
 	}
-	for _, want := range []authenticationlogic.UserAdminAction{authenticationlogic.UserAdminList, authenticationlogic.UserAdminRead, authenticationlogic.UserAdminDeactivate, authenticationlogic.UserAdminReactivate} {
+	for _, want := range []authenticationhttp.UserAdminAction{authenticationhttp.UserAdminList, authenticationhttp.UserAdminRead, authenticationhttp.UserAdminDeactivate, authenticationhttp.UserAdminReactivate} {
 		if _, ok := seen[want]; !ok {
 			t.Errorf("the host policy was never asked about %q", want)
 		}
 	}
-	if seen[authenticationlogic.UserAdminList] != "" {
-		t.Errorf("the list action carried a target user %q, want none", seen[authenticationlogic.UserAdminList])
+	if seen[authenticationhttp.UserAdminList] != "" {
+		t.Errorf("the list action carried a target user %q, want none", seen[authenticationhttp.UserAdminList])
 	}
-	if seen[authenticationlogic.UserAdminDeactivate] != targetID {
-		t.Errorf("deactivate target = %q, want %q", seen[authenticationlogic.UserAdminDeactivate], targetID)
+	if seen[authenticationhttp.UserAdminDeactivate] != targetID {
+		t.Errorf("deactivate target = %q, want %q", seen[authenticationhttp.UserAdminDeactivate], targetID)
 	}
 }
 
@@ -379,7 +380,7 @@ func TestUserAdminCheckWithoutReposFailsLoudly(t *testing.T) {
 	cfg.DeliveryMode = delivery.ModeInProcess
 	cfg.DeliveryJobsAcknowledged = false
 	cfg.DeliveryEphemeralAcknowledged = true
-	cfg.UserAdminCheck = func(context.Context, authenticationlogic.UserAdminCheckRequest) error { return nil }
+	cfg.UserAdminCheck = func(context.Context, authenticationhttp.UserAdminCheckRequest) error { return nil }
 
 	repos := authmem.New().Repositories()
 	repos.ActiveSessions = nil // the fence is missing; the directory alone is not enough

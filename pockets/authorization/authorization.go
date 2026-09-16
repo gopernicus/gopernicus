@@ -1,15 +1,11 @@
 // Package authorization composes exact roles and optional graph permissions over
-// one canonical tuple authority. New returns independently usable read services,
-// one decision evaluator, guarded mutations and an optional HTTP adapter.
+// one canonical tuple authority. New returns read services, a decision evaluator,
+// one principal-free tuple write service and an optional HTTP adapter.
 //
-// Repositories.Tuples is required. WithModel supplies optional named expressions
-// and explicit relation subject-shape constraints. HasRole checks exact global
-// membership; HasRoleIn checks exact resource membership with no fallback.
+// Repositories.Tuples is required. WithModel supplies named expressions and
+// explicit subject-shape constraints. Principal access policy belongs to inbound;
+// data IntegrityPolicy is enforced atomically by the configured repository.
 //
-// Keep RelationshipWriter, RoleWriter and SystemMutator at host composition.
-// Actor-facing writes require a MutationGuard and serialized MutationRepository.
-// Guards read through their callback view; no default policy grants access.
-//
-// Register mounts role administration only when its host gate is configured.
+// Register mounts role administration only with a host Gate and WritePolicy.
 // Constructors own no connection, migration or background-worker lifecycle.
 package authorization

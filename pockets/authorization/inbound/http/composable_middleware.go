@@ -19,6 +19,11 @@ import (
 // 401; denial is 403 unless WithDeniedHandler is supplied; evaluation exhaustion
 // is 503; other errors are 500. Errors always fail closed. Invalid configuration
 // panics before traffic.
+//
+// Success authorizes admission to next. The decision operation completes before
+// next runs; later revocation does not cancel an admitted handler. A configured
+// tuple cache may delay observing revocation within its MaxStaleness bound.
+// Require does not make the check atomic with a subsequent business write.
 func (a *Adapter) Require(predicate Predicate, opts ...RequireOption) web.Middleware {
 	if a == nil || a.decisions == nil || typedNil(a.decisions) {
 		panic("authorization: Require requires a decision service")

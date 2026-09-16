@@ -134,7 +134,14 @@ func (t *Tuples) ApplyTuples(ctx context.Context, c tuples.Changes) error {
 	if len(c.Add)+len(c.Remove) > 4096 {
 		return fmt.Errorf("tuple batch too large: %w", sdk.ErrInvalidInput)
 	}
-	return t.st.write(ctx, func(next *state) error { next.applyLocked(c); return ctx.Err() })
+	scopes := make([]tuples.Scope, 0, len(c.Add)+len(c.Remove))
+	for _, fact := range c.Add {
+		scopes = append(scopes, fact.Scope)
+	}
+	for _, fact := range c.Remove {
+		scopes = append(scopes, fact.Scope)
+	}
+	return t.st.writeScopes(ctx, scopes, func(next *state) error { next.applyLocked(c); return ctx.Err() })
 }
 func (t *Tuples) ReconcileTuples(ctx context.Context, scope tuples.Scope, relation string, subjects []tuples.SubjectRef) error {
 	if err := scope.Validate(); err != nil {
@@ -153,7 +160,7 @@ func (t *Tuples) ReconcileTuples(ctx context.Context, scope tuples.Scope, relati
 		}
 		desired[tuples.Tuple{Scope: scope, Relation: relation, Subject: s}] = struct{}{}
 	}
-	return t.st.write(ctx, func(next *state) error {
+	return t.st.writeScopes(ctx, []tuples.Scope{scope}, func(next *state) error {
 		for f := range next.facts {
 			if f.Scope == scope && f.Relation == relation {
 				delete(next.facts, f)
@@ -169,7 +176,7 @@ func (t *Tuples) DeleteScope(ctx context.Context, scope tuples.Scope) error {
 	if err := scope.Validate(); err != nil {
 		return err
 	}
-	return t.st.write(ctx, func(next *state) error {
+	return t.st.writeScopes(ctx, []tuples.Scope{scope}, func(next *state) error {
 		for f := range next.facts {
 			if f.Scope == scope {
 				delete(next.facts, f)

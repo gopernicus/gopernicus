@@ -1,8 +1,7 @@
 // Package invitations implements resource invitation workflows and owns their
 // entities, repository ports and host grant policy. New constructs an independent
 // service; the pocket root also composes it with verified identity resolution.
-// CreateAuthorized and ListByResourceAuthorized require the host InviteCheck.
-// Trusted composition methods leave authorization to their caller.
+// Callers authorize commands before executing service operations.
 //
 // Grant coupling: the grant on accept / direct-add / resolve rides the
 // host-supplied Granter. Invitation VISIBILITY never touches a tuple — it rides
@@ -67,9 +66,6 @@ var (
 	// their active verified phone for a phone invitation) does not match the
 	// invitation identifier.
 	ErrIdentifierMismatch = fmt.Errorf("invitation identifier does not match: %w", sdk.ErrForbidden)
-	// ErrNotOwner is returned by Cancel/Resend when the caller is not the
-	// invitation's InvitedBy owner.
-	ErrNotOwner = fmt.Errorf("not the invitation owner: %w", sdk.ErrForbidden)
 	// ErrKindNotSupported is returned by Create for an identifier kind the host
 	// is not set up to deliver to (deny-by-absence, ruling 6): a kind is supported
 	// iff it is sdk.AddressKindEmail with the Mailer wired, OR a notifier of that
@@ -87,12 +83,6 @@ var (
 	// wraps no domain sentinel, so the transport maps it to 500 (an internal fault),
 	// never a caller-actionable status.
 	errEmptyOperationID = errors.New("invitation grant operation id is empty")
-	// errInviteCheckNotWired is the fail-closed guard on the AUTHORIZED operations:
-	// package auth requires an InviteCheck whenever a Granter enables invitations
-	// (ErrInviteCheckRequired), so reaching an authorized operation without one is a
-	// wiring bug — refused, never allowed by default. It wraps no domain sentinel, so
-	// the transport maps it to 500.
-	errInviteCheckNotWired = errors.New("invitation authorization check is not wired")
 )
 
 // deliveryQueue is the durable outbound outbox seam (design §6.1.1): invitation and
@@ -150,66 +140,6 @@ type Granter interface {
 // direct-add grant. Nil → no dup check (idempotent grants absorb duplicates).
 type MemberCheck func(ctx context.Context, resourceType, resourceID, subjectType, subjectID string) (bool, error)
 
-// InviteAction is the invitation operation a host authorization policy
-// (InviteCheck) is asked about (design §6/D3): creating an invitation or listing
-// a resource's invitations.
-type InviteAction string
-
-const (
-	// InviteCreate is the create-an-invitation action; the check carries the exact
-	// requested Relation so the host can prevent privilege escalation (e.g. an
-	// editor inviting an owner).
-	InviteCreate InviteAction = "create"
-	// InviteList is the list-a-resource's-invitations action; the check carries an
-	// empty Relation.
-	InviteList InviteAction = "list"
-)
-
-// InviteCheckRequest is the parsed, principal-resolved authorization question the
-// authorized invitation operations pose to the host policy (design §6/D3).
-// Relation is set for InviteCreate and empty for InviteList. The pocket owns
-// parsing, normalization, and the invitee lookup, so the host sees the caller,
-// resource, action, and — for create — the exact validated relation and the
-// complete invitee context, which a RouteRegistrar decorator cannot.
-type InviteCheckRequest struct {
-	Principal    sdk.Principal
-	Action       InviteAction
-	ResourceType string
-	ResourceID   string
-	Relation     string
-	// Metadata is the parsed, opaque host routing data of a create request (empty
-	// for InviteList). It is UNTRUSTED inviter-supplied input the pocket does not
-	// interpret, surfaced here so the host can authorize the COMPLETE invitation —
-	// including a routing key it will later act on in its Granter. It is a defensive
-	// copy; empty when the request carried none.
-	Metadata map[string]string
-	// Identifier is the pocket-normalized invitee identifier. It is empty for
-	// InviteList.
-	Identifier string
-	// IdentifierKind is the normalized identifier kind. It is empty for InviteList
-	// and makes an empty ResolvedSubjectID unambiguous for kinds the pocket cannot
-	// resolve today.
-	IdentifierKind string
-	// ResolvedSubjectID is the existing subject the identifier resolves to, or ""
-	// when it is unknown or the kind is not resolvable. The pocket's lookup is
-	// EMAIL-KIND ONLY today, so an empty value must never be read as proof that the
-	// invitee is new.
-	ResolvedSubjectID string
-}
-
-// InviteCheck is the host authorization seam the authorized invitation operations
-// (CreateAuthorized, ListByResourceAuthorized) call after live-session validation,
-// principal resolution, request parsing, metadata validation, identifier
-// normalization, and the invitee lookup — and always before any row exists or a
-// grant is attempted (design §6/D3). It is REQUIRED whenever a Granter enables
-// invitations — package auth rejects a nil InviteCheck at construction
-// (ErrInviteCheckRequired), never an allow-by-default. A nil return authorizes; a
-// denial (wrapping sdk.ErrForbidden) or an infrastructure error fails closed
-// through the normal web/sdk error path. Authority is issuance-time: a create-time
-// authorization is a durable capability and acceptance never re-runs inviter
-// authority.
-type InviteCheck func(ctx context.Context, req InviteCheckRequest) error
-
 // UserLookup resolves an invitee email to an existing user's subject id for the
 // direct-add path. It returns only a user with active verified email ownership.
 // found=false means no such verified owner (→ a pending invitation is
@@ -255,15 +185,25 @@ type CreateResult struct {
 	Invitation    Invitation
 }
 
-// preparedCreate is the result of create preparation: the normalized, validated
-// CreateInput and the subject the invitee identifier resolved to ("" when unknown
-// or the kind is not resolvable). It is what the authorization seam is shown and
-// what the side-effect path consumes, so the host authorizes exactly the
-// invitation the pocket would then act on.
-type preparedCreate struct {
+// PreparedCreate is an immutable command prepared by one Service. It carries
+// normalized input and the resolved invitee; it is not an authorization grant.
+// Execute it only after the caller's policy admits the inspected command.
+type PreparedCreate struct {
+	owner     *Service
 	input     CreateInput
 	subjectID string
 }
+
+// Input returns a defensive copy of the normalized command.
+func (p PreparedCreate) Input() CreateInput {
+	in := p.input
+	in.Metadata = CloneMetadata(in.Metadata)
+	return in
+}
+
+// ResolvedSubjectID is the verified email owner found during preparation, or
+// empty for an unknown email or an identifier kind without account resolution.
+func (p PreparedCreate) ResolvedSubjectID() string { return p.subjectID }
 
 // AcceptInput is the input to Accept. Token is the plaintext secret from the
 // invitation mail; SubjectType/SubjectID is the accepting caller; Identifier is
@@ -292,7 +232,6 @@ type constructorConfig struct {
 	Granter           Granter
 	MemberCheck       MemberCheck
 	UserLookup        UserLookup
-	InviteCheck       InviteCheck
 	CallerIdentifiers IdentifierLookup
 	Normalizer        identifier.Normalizer
 	Mailer            email.Sender
@@ -314,9 +253,6 @@ type Service struct {
 	granter     Granter
 	memberCheck MemberCheck
 	userLookup  UserLookup
-	// inviteCheck is the host invitation authorization policy (AccessConfig.InviteCheck),
-	// consulted by the authorized operations only.
-	inviteCheck InviteCheck
 	// callerIdentifiers resolves the accepting caller's active verified identifier
 	// value of a kind for the accept-time account match (AccessConfig.CallerIdentifiers).
 	callerIdentifiers IdentifierLookup
@@ -368,7 +304,6 @@ func newService(d constructorConfig) *Service {
 		granter:           d.Granter,
 		memberCheck:       d.MemberCheck,
 		userLookup:        d.UserLookup,
-		inviteCheck:       d.InviteCheck,
 		callerIdentifiers: d.CallerIdentifiers,
 		normalizer:        norm,
 		mailer:            d.Mailer,
@@ -386,69 +321,42 @@ func newService(d constructorConfig) *Service {
 	}
 }
 
-// Create invites Identifier to a resource. The identifier kind (default
-// sdk.AddressKindEmail) must be a supported kind (kindSupported) or Create fails
-// loudly with ErrKindNotSupported before touching the store. When AutoAccept is
-// set and the invitee is a known user (email kind only), it is a direct add — an
-// immediate grant with no pending record (MemberCheck may veto a duplicate).
-// Otherwise a pending invitation is minted and its secret delivered.
-//
-// This is the TRUSTED composition entry point: it never poses the host
-// InviteCheck. A caller driving it directly owns that authorization decision;
-// CreateAuthorized is the policy-carrying twin the shipped HTTP adapter uses.
+// Create prepares and executes an invitation command. The caller owns its
+// authorization; this convenience method performs no host-policy callback.
 func (s *Service) Create(ctx context.Context, in CreateInput) (CreateResult, error) {
-	prepared, err := s.prepareCreate(ctx, in)
+	prepared, err := s.PrepareCreate(ctx, in)
 	if err != nil {
 		return CreateResult{}, err
 	}
-	return s.createPrepared(ctx, prepared)
+	return s.CreatePrepared(ctx, prepared)
 }
 
-// CreateAuthorized is Create with the host invitation policy posed in between:
-// it prepares the request (metadata validation, kind default, identifier
-// normalization, supported-kind check, invitee lookup), poses InviteCheck with the
-// COMPLETE invitee context — normalized identifier, normalized kind, and the
-// resolved subject when the lookup found one — and only on a nil check calls the
-// side-effect path. A denial or an infrastructure error therefore leaves NO
-// pending row and attempts NO grant on either branch. principal is the resolved
-// caller (the inviter), never the invitee.
-func (s *Service) CreateAuthorized(ctx context.Context, principal sdk.Principal, in CreateInput) (CreateResult, error) {
-	prepared, err := s.prepareCreate(ctx, in)
-	if err != nil {
-		return CreateResult{}, err
-	}
-	if err := s.authorizeInvite(ctx, InviteCheckRequest{
-		Principal:    principal,
-		Action:       InviteCreate,
-		ResourceType: prepared.input.ResourceType,
-		ResourceID:   prepared.input.ResourceID,
-		Relation:     prepared.input.Relation,
-		// The policy gets its OWN clone: a check that mutates the map it is handed can
-		// never alter the value this call then persists and grants.
-		Metadata:          CloneMetadata(prepared.input.Metadata),
-		Identifier:        prepared.input.Identifier,
-		IdentifierKind:    prepared.input.IdentifierKind,
-		ResolvedSubjectID: prepared.subjectID,
-	}); err != nil {
-		return CreateResult{}, err
-	}
-	return s.createPrepared(ctx, prepared)
-}
-
-// prepareCreate runs every side-effect-free step of a create: host-metadata
+// PrepareCreate runs every side-effect-free step of a create: host-metadata
 // validation FIRST (an oversized/invalid map is rejected before anything else),
 // then the identifier kind default, the kind-aware normalization, the
 // deny-by-absence supported-kind check, and the invitee lookup.
-func (s *Service) prepareCreate(ctx context.Context, in CreateInput) (preparedCreate, error) {
+func (s *Service) PrepareCreate(ctx context.Context, in CreateInput) (PreparedCreate, error) {
+	if err := ctx.Err(); err != nil {
+		return PreparedCreate{}, err
+	}
 	// Validate host metadata FIRST — before identifier normalization, user lookup,
 	// or membership checks — so an oversized/invalid map is rejected with no side
 	// effects. The validated defensive copy is what the pending row or direct-add
 	// grant carries downstream.
 	metadata, err := ValidateMetadata(in.Metadata)
 	if err != nil {
-		return preparedCreate{}, err
+		return PreparedCreate{}, err
 	}
 	in.Metadata = metadata
+	in.ResourceType = strings.TrimSpace(in.ResourceType)
+	in.ResourceID = strings.TrimSpace(in.ResourceID)
+	in.Relation = strings.TrimSpace(in.Relation)
+	in.InvitedBy = strings.TrimSpace(in.InvitedBy)
+	for _, field := range []struct{ name, value string }{{"resource type", in.ResourceType}, {"resource id", in.ResourceID}, {"relation", in.Relation}, {"invited-by", in.InvitedBy}} {
+		if field.value == "" {
+			return PreparedCreate{}, fmt.Errorf("%s is required: %w", field.name, sdk.ErrInvalidInput)
+		}
+	}
 
 	kind := strings.TrimSpace(in.IdentifierKind)
 	if kind == "" {
@@ -458,7 +366,7 @@ func (s *Service) prepareCreate(ctx context.Context, in CreateInput) (preparedCr
 
 	normalized, err := s.normalizeIdentifier(in.Identifier, kind)
 	if err != nil {
-		return preparedCreate{}, err
+		return PreparedCreate{}, err
 	}
 	in.Identifier = normalized
 
@@ -466,7 +374,7 @@ func (s *Service) prepareCreate(ctx context.Context, in CreateInput) (preparedCr
 	// every other kind requires a wired notifier of that kind. Unsupported kinds
 	// never reach the store.
 	if !s.kindSupported(kind) {
-		return preparedCreate{}, ErrKindNotSupported
+		return PreparedCreate{}, ErrKindNotSupported
 	}
 
 	subjectID := ""
@@ -477,35 +385,34 @@ func (s *Service) prepareCreate(ctx context.Context, in CreateInput) (preparedCr
 	if s.userLookup != nil && kind == sdk.AddressKindEmail {
 		id, found, err := s.userLookup(ctx, normalized)
 		if err != nil {
-			return preparedCreate{}, fmt.Errorf("lookup invitee: %w", err)
+			return PreparedCreate{}, fmt.Errorf("lookup invitee: %w", err)
 		}
 		if found {
 			subjectID = id
 		}
 	}
-	return preparedCreate{input: in, subjectID: subjectID}, nil
+	if err := ctx.Err(); err != nil {
+		return PreparedCreate{}, err
+	}
+	return PreparedCreate{owner: s, input: in, subjectID: subjectID}, nil
 }
 
-// createPrepared is the create SIDE-EFFECT path: a known invitee on an
+// CreatePrepared is the create SIDE-EFFECT path: a known invitee on an
 // auto-accept request is granted immediately, everything else mints a pending
 //
-//	Nothing here validates or normalizes — prepareCreate already did.
-func (s *Service) createPrepared(ctx context.Context, p preparedCreate) (CreateResult, error) {
+//	Nothing here validates or normalizes — PrepareCreate already did.
+func (s *Service) CreatePrepared(ctx context.Context, p PreparedCreate) (CreateResult, error) {
+	if p.owner == nil || p.owner != s {
+		return CreateResult{}, fmt.Errorf("invitation prepared command belongs to another service: %w", sdk.ErrInvalidInput)
+	}
+	if err := ctx.Err(); err != nil {
+		return CreateResult{}, err
+	}
+
 	if p.input.AutoAccept && p.subjectID != "" {
 		return s.directAdd(ctx, p.input, p.subjectID)
 	}
 	return s.createPending(ctx, p.input, p.subjectID)
-}
-
-// authorizeInvite poses one question to the host invitation policy. It fails
-// CLOSED on an unwired check: package auth requires one whenever a Granter enables
-// invitations, so an authorized operation without a policy is a wiring bug, never
-// an allow.
-func (s *Service) authorizeInvite(ctx context.Context, req InviteCheckRequest) error {
-	if s.inviteCheck == nil {
-		return errInviteCheckNotWired
-	}
-	return s.inviteCheck(ctx, req)
 }
 
 // kindSupported reports whether the host can deliver an invitation of kind
@@ -677,22 +584,18 @@ func (s *Service) Decline(ctx context.Context, id, token string) error {
 	return nil
 }
 
-// Cancel marks a pending invitation cancelled. Authorization is a plain
-// ownership check — the caller must be the InvitedBy owner (design §6: no tuple,
-// no invitation-as-resource). A non-owner → ErrNotOwner.
-func (s *Service) Cancel(ctx context.Context, id, currentUserID string) error {
-	inv, err := s.invitations.Get(ctx, id)
+// Cancel marks the prepared invitation cancelled. The caller owns admission;
+// the repository checks the observed token and current lifecycle state atomically.
+func (s *Service) Cancel(ctx context.Context, prepared PreparedManagement) error {
+	inv, err := prepared.checked(ctx, s)
 	if err != nil {
 		return err
-	}
-	if inv.InvitedBy != currentUserID {
-		return ErrNotOwner
 	}
 	if inv.Status != StatusPending {
 		return ErrNotPending
 	}
 	now := s.now()
-	if _, err := s.invitations.UpdateStatus(ctx, id, StatusUpdate{
+	if _, err := s.invitations.UpdateStatus(ctx, inv.ID, StatusUpdate{
 		ExpectedTokenHash: inv.TokenHash,
 		Status:            StatusCancelled,
 		TokenHash:         inv.TokenHash,
@@ -702,20 +605,16 @@ func (s *Service) Cancel(ctx context.Context, id, currentUserID string) error {
 	}); err != nil {
 		return err
 	}
-	s.recordLifecycle(ctx, inv, securityevent.TypeInvitationCancelled, currentUserID)
+	s.recordLifecycle(ctx, inv, securityevent.TypeInvitationCancelled, inv.InvitedBy)
 	return nil
 }
 
-// Resend regenerates the secret and resets the expiry on an owner's pending (or
-// expired) invitation in place — no new record — and re-mails it. Authorization
-// is the InvitedBy ownership check.
-func (s *Service) Resend(ctx context.Context, id, currentUserID, redirectTo string) (Invitation, error) {
-	inv, err := s.invitations.Get(ctx, id)
+// Resend rotates the prepared invitation's secret and expiry, then queues delivery.
+// The caller owns admission; a stale prepared token conflicts before delivery.
+func (s *Service) Resend(ctx context.Context, prepared PreparedManagement, redirectTo string) (Invitation, error) {
+	inv, err := prepared.checked(ctx, s)
 	if err != nil {
 		return Invitation{}, err
-	}
-	if inv.InvitedBy != currentUserID {
-		return Invitation{}, ErrNotOwner
 	}
 	if inv.Status != StatusPending && inv.Status != StatusExpired {
 		return Invitation{}, ErrNotPending
@@ -726,7 +625,7 @@ func (s *Service) Resend(ctx context.Context, id, currentUserID, redirectTo stri
 		return Invitation{}, err
 	}
 	now := s.now()
-	updated, err := s.invitations.UpdateStatus(ctx, id, StatusUpdate{
+	updated, err := s.invitations.UpdateStatus(ctx, inv.ID, StatusUpdate{
 		ExpectedTokenHash: inv.TokenHash,
 		Status:            StatusPending,
 		TokenHash:         tokenHash,
@@ -747,28 +646,9 @@ func (s *Service) Resend(ctx context.Context, id, currentUserID, redirectTo stri
 // ListByResource returns a cursor-paginated page of a resource's invitations
 // (ordered created_at DESC, id DESC).
 //
-// This is the TRUSTED composition entry point: it never poses the host
-// InviteCheck. ListByResourceAuthorized is the policy-carrying twin the shipped
-// HTTP adapter uses.
+// The caller owns authorization before this read.
 func (s *Service) ListByResource(ctx context.Context, resourceType, resourceID string, req list.Request) (list.Page[Invitation], error) {
 	return s.invitations.ListByResource(ctx, resourceType, resourceID, req)
-}
-
-// ListByResourceAuthorized is ListByResource with the host invitation policy posed
-// first: an InviteList question carrying the resolved caller and the resource, and
-// — per the seam's contract — an empty Relation, Metadata, Identifier,
-// IdentifierKind, and ResolvedSubjectID (there is no invitee in a list). A denial
-// or an infrastructure error fails closed before the repository is read.
-func (s *Service) ListByResourceAuthorized(ctx context.Context, principal sdk.Principal, resourceType, resourceID string, req list.Request) (list.Page[Invitation], error) {
-	if err := s.authorizeInvite(ctx, InviteCheckRequest{
-		Principal:    principal,
-		Action:       InviteList,
-		ResourceType: resourceType,
-		ResourceID:   resourceID,
-	}); err != nil {
-		return list.Page[Invitation]{}, err
-	}
-	return s.ListByResource(ctx, resourceType, resourceID, req)
 }
 
 // Mine returns a cursor-paginated page of the invitations addressed to an

@@ -44,7 +44,42 @@ Optional subsystems are deny-by-absence: routes are not registered when their en
 
 `BrowserConfig.Views == nil` keeps the pocket JSON-only. Supplying the `pockets/authentication/views/goth` adapter adds HTML pages and form handling without changing JSON contracts.
 
-## Authentication proof and host policy
+## Inbound access policy and data integrity
+
+Every principal permission check runs at inbound, before the application service.
+`authentication/inbound/http` owns `InviteCheck`, `UserAdminCheck` and their
+request/action types. Root `WithInvitations` and `WithAdministration` wire these
+callbacks into HTTP; direct HTTP construction uses `WithInviteCheck` and
+`WithUserAdminCheck`. Logic stores no host access callback. Custom transports
+perform their own admission checks.
+
+For an invitation needing normalized recipient context, inbound calls
+`PrepareCreate`, authorizes the inspected `PreparedCreate.Input()` and
+`ResolvedSubjectID()`, then calls `CreatePrepared` with that same opaque value.
+The service normalizes and resolves once; inspection cannot rewrite execution.
+Plain `Create` and `ListByResource` remain policy-free service operations.
+
+Invitation cancel/resend follows the same boundary: `PrepareManagement(ctx, id)`
+returns the immutable target and issuer for inbound to check. After admission,
+call `Cancel(ctx, prepared)` or `Resend(ctx, prepared, redirect)`. Execution is
+bound to the originating service and observed token version; stale state is a
+conflict. The bundled handlers deny another issuer before any write or delivery.
+User-admin handlers call their policy before looking up the target account;
+actor fields in service calls provide audit attribution only.
+
+Services still enforce data validation, token/session consistency and recipient
+identity proof. These establish valid authentication evidence or data, rather
+than deciding what the caller may do. Quotas and last-active-admin rules require
+an atomic operation owned by the relevant domain; a preliminary access check
+cannot preserve them under concurrent writes. Authorization tuple minima count
+grants, not active user accounts.
+
+Admission does not hold a permission snapshot through application execution.
+Later revocation cannot retract admitted work. An invitation admitted at issuance
+remains an expiring capability; acceptance does not recheck the inviter's current
+permission. Its recipient proof, lifecycle and grant integrity still apply.
+
+## Authentication proof
 
 Credential changes atomically advance the user's authentication revision and revoke
 sessions. Login and grant admission check that revision inside the store, so stale

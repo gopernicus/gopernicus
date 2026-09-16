@@ -1,4 +1,4 @@
-// Package mutations owns atomic canonical fact commands and guarded writes.
+// Package mutations owns atomic canonical fact commands and data integrity.
 package mutations
 
 import (
@@ -10,10 +10,10 @@ import (
 )
 
 var (
-	ErrInvalidCommand           = fmt.Errorf("authorization mutation: invalid command: %w", sdk.ErrInvalidInput)
-	ErrConcurrentMutation       = fmt.Errorf("authorization mutation: concurrent change: %w", sdk.ErrConflict)
-	ErrInvariantBlocked         = fmt.Errorf("authorization mutation: invariant blocked: %w", sdk.ErrConflict)
-	ErrGuardedInsideTransaction = fmt.Errorf("authorization mutation: guarded mutation inside an ambient transaction: %w", sdk.ErrInvalidInput)
+	ErrInvalidCommand            = fmt.Errorf("authorization mutation: invalid command: %w", sdk.ErrInvalidInput)
+	ErrConcurrentMutation        = fmt.Errorf("authorization mutation: concurrent change: %w", sdk.ErrConflict)
+	ErrInvariantBlocked          = fmt.Errorf("authorization mutation: invariant blocked: %w", sdk.ErrConflict)
+	ErrMutationInsideTransaction = fmt.Errorf("authorization mutation: atomic tuple command inside an ambient transaction: %w", sdk.ErrInvalidInput)
 )
 
 const MaxCommandTuples = 4096

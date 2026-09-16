@@ -11,18 +11,6 @@ import (
 	"github.com/gopernicus/gopernicus/sdk/pkg/web"
 )
 
-// TestNoSessionOnlyAuthorizationMutationRoute is the permanent regression guard for the
-// AZ3-4.1 removal (checklist item 6/12): the host's demo HTTP surface ships NO session-only
-// authorization-mutation route. It drives the real registerDemoRoutes registration over
-// httptest and asserts the retired mutation paths are unregistered (404), while a retained
-// read route answers 405 to a POST — proving the router is live, so the 404s are a real
-// absence rather than a dead router. The SystemMutator reaches only boot seeding;
-// the baseline RelationshipWriter reaches only the invitation adapter. Neither is
-// automatically exposed by an ordinary HTTP route. This complements
-// TestHostSystemMutatorHeldApartFromService (which
-// pins that the Service handed to handlers cannot yield the SystemMutator) by pinning the
-// ROUTE surface itself — a future re-addition of a browser-driven mutation route regresses
-// here.
 func TestNoSessionOnlyAuthorizationMutationRoute(t *testing.T) {
 	authCfg, err := buildAuthConfig(quietLog(), nil)
 	if err != nil {

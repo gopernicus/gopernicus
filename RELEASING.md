@@ -1,5 +1,64 @@
 # Releasing gopernicus modules
 
+## Inbound authorization ownership and integrity (release candidate)
+
+Coordinated breaking pre-v1 release: authentication `v0.12.0`, authorization
+`v0.20.0`, PostgreSQL authorization store `v0.14.0`, and Turso authorization store
+`v0.13.0`. All four tags will identify one verified main commit. Unchanged Redis,
+authentication stores/views, SDK and connectors retain their existing versions.
+Upgrade the authorization core and its PostgreSQL/Turso adapter together. Hosts
+relying on integrity enforcement for every writer must drain or replace all older
+writing instances: the unchanged schema does not fence old binaries, whose raw
+writers can bypass the new minima. Configure the same policy on every new writer.
+
+Authentication host-policy callbacks move to `authentication/inbound/http`.
+`InviteCheck`, `UserAdminCheck` and their request/action types belong there;
+root configuration forwards them to HTTP, not domain services. Custom transports
+invoke their own policies. Remove service policy options and calls to
+`CreateAuthorized`, `ListByResourceAuthorized` and `AuthorizeUserAdmin`.
+
+For invitations that need normalized invitee context, call `PrepareCreate`,
+authorize its inspected command in inbound, then execute the same opaque value
+with `CreatePrepared`. Plain `Create` remains policy-free. Prepared values are
+short-lived domain preparation, not durable authorization receipts. The bundled
+HTTP adapter retains fail-closed policy wiring and preserves no-write-on-denial.
+User administration still checks policy before target lookup. Identity proofs,
+token/recipient proof and business invariants remain in services.
+
+The auth-cms document example now owns permission evaluation, bypass selection
+and encrypted cursors at inbound. Domain reads take explicit restrictions;
+storage enforces them before paging. Complete-set, candidate and same-statement
+SQL strategies remain supported.
+
+The owner subsequently settled concurrency: all principal authorization is inbound.
+`MutationGuard`, `WithGuard`, transactional `DecisionView`, `ApplyGuarded`, actor
+parameters on tuple commands and `SystemMutator` are removed. Construct one
+`mutations.Service` with the repository and optional compiled model/limits.
+`Components.Mutations` is now principal-free; inbound supplies audit attribution.
+Bundled role routes require `RoleRoutes.WritePolicy` for validated assign and
+unassign commands; `Gate` alone does not enable writes.
+
+`GuardianPolicy`/`GuardianRule`/`MinAnchors` become
+`IntegrityPolicy`/`IntegrityRule`/`MinSubjects`, configured through store
+`WithIntegrityPolicy`. Logic defines the data rule and stores enforce it inside
+the write boundary, including raw tuple/role/relationship facades that previously
+bypassed minima. Explicit reason-bearing resource teardown remains the exception.
+Integrity refusal remains a conflict (409), separate from principal denial.
+Atomic commands reject ambient transactions with `ErrMutationInsideTransaction`;
+raw writes still join ambient transactions and roll back failures to a savepoint.
+
+Invitation management now uses `PrepareManagement`, an inbound issuer check, and
+`Cancel`/`Resend` over that opaque prepared value. Services preserve token/status
+consistency and recipient proof, without checking the caller's permission.
+
+An admitted operation may finish after permission revocation. Integrity always
+uses the write's serialized state. Upgrade core and adapters together; the API
+breaks are intentional. No schema, cache protocol or dependency changes. Current
+verification is recorded in AUDIT-047 and the integrity-policy execution record;
+AUDIT-046 preserves the earlier checkpoint and its then-unsettled exception.
+The [API adoption map](pockets/authorization/stores/UPGRADE.md#adopting-the-inbound-and-integrity-api)
+lists removed names, current replacements and host verification cases.
+
 ## Host denial responses and decision logging (v0.19.0, published 2026-09-16)
 
 Authorization `Require` accepts optional per-policy `WithDeniedHandler` to let

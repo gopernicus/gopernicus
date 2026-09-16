@@ -7,17 +7,19 @@ import (
 	"strings"
 	"sync"
 
+	"fmt"
+
 	domain "github.com/gopernicus/gopernicus/examples/auth-cms/internal/logic/domains/documents"
-	decisions "github.com/gopernicus/gopernicus/pockets/authorization/logic/decisions"
+	"github.com/gopernicus/gopernicus/sdk"
 )
 
 type Memory struct {
 	mu   sync.RWMutex
-	rows map[string]row
+	rows map[string]domain.Row
 }
 
 func NewMemory(documents []domain.Document) (*Memory, error) {
-	m := &Memory{rows: make(map[string]row, len(documents))}
+	m := &Memory{rows: make(map[string]domain.Row, len(documents))}
 	for _, doc := range documents {
 		if err := m.Put(doc); err != nil {
 			return nil, err
@@ -32,11 +34,17 @@ func (m *Memory) Put(doc domain.Document) error {
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.rows[doc.ID] = row{ID: doc.ID, TenantID: doc.TenantID, Name: doc.Name, NameKey: strings.ToLower(doc.Name)}
+	m.rows[doc.ID] = domain.Row{ID: doc.ID, TenantID: doc.TenantID, Name: doc.Name, NameKey: strings.ToLower(doc.Name)}
 	return nil
 }
 
-func (m *Memory) read(ctx context.Context, query domain.Query, after position, limit int, filter decisions.ResourceSet) ([]row, bool, error) {
+func (m *Memory) Read(ctx context.Context, query domain.Query, after domain.Position, limit int, filter domain.Restriction) ([]domain.Row, bool, error) {
+	if err := filter.Validate(); err != nil {
+		return nil, false, err
+	}
+	if filter.Membership != nil {
+		return nil, false, fmt.Errorf("documents: memory has no membership source: %w", sdk.ErrInvalidInput)
+	}
 	if err := ctx.Err(); err != nil {
 		return nil, false, err
 	}
@@ -45,13 +53,13 @@ func (m *Memory) read(ctx context.Context, query domain.Query, after position, l
 		allowed[id] = true
 	}
 	m.mu.RLock()
-	rows := make([]row, 0)
+	rows := make([]domain.Row, 0)
 	for _, r := range m.rows {
 		if r.TenantID != query.TenantID || !strings.Contains(r.NameKey, query.Search) || (!filter.Unrestricted && !allowed[r.ID]) {
 			continue
 		}
 		if after.ID != "" {
-			order := comparePosition(rowPosition(r), after)
+			order := comparePosition(r.Position(), after)
 			if (!query.Desc && order <= 0) || (query.Desc && order >= 0) {
 				continue
 			}
@@ -62,8 +70,8 @@ func (m *Memory) read(ctx context.Context, query domain.Query, after position, l
 	if err := ctx.Err(); err != nil {
 		return nil, false, err
 	}
-	slices.SortFunc(rows, func(a, b row) int {
-		order := comparePosition(rowPosition(a), rowPosition(b))
+	slices.SortFunc(rows, func(a, b domain.Row) int {
+		order := comparePosition(a.Position(), b.Position())
 		if query.Desc {
 			return -order
 		}
@@ -76,7 +84,7 @@ func (m *Memory) read(ctx context.Context, query domain.Query, after position, l
 	return rows, more, nil
 }
 
-func comparePosition(a, b position) int {
+func comparePosition(a, b domain.Position) int {
 	if order := cmp.Compare(a.NameKey, b.NameKey); order != 0 {
 		return order
 	}

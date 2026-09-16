@@ -12,6 +12,8 @@ import (
 	"testing"
 	"time"
 
+	authenticationhttp "github.com/gopernicus/gopernicus/pockets/authentication/inbound/http"
+
 	"github.com/gopernicus/gopernicus/examples/auth-cms/internal/authmem"
 	auth "github.com/gopernicus/gopernicus/pockets/authentication"
 	invitations "github.com/gopernicus/gopernicus/pockets/authentication/logic/invitations"
@@ -68,7 +70,7 @@ func newProvisioningHostWithInvitations(t *testing.T) (*linkHost, *recordingGran
 	cfg.DeliveryEphemeralAcknowledged = true
 	cfg.Mailer = sender
 	cfg.PasswordlessProvisionOnRedeem = true
-	cfg.InviteCheck = func(context.Context, invitations.InviteCheckRequest) error { return nil }
+	cfg.InviteCheck = func(context.Context, authenticationhttp.InviteCheckRequest) error { return nil }
 
 	svc, err := auth.New(authmem.New().Repositories(), cfg.TokenSigner, cfg.RuntimeMode, cfg.DeliveryMode, cfg.options()...)
 	if err != nil {

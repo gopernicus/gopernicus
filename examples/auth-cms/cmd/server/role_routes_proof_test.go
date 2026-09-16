@@ -91,7 +91,7 @@ func newRoleRoutesHost(t *testing.T, withGate bool) *roleRoutesHost {
 		comps.HTTP.Require(authorizationhttp.Can("admin", authorizationhttp.Fixed(platformResourceType, platformResourceID))),
 	))
 
-	if err := seedAuthorization(context.Background(), comps.SystemMutator); err != nil {
+	if err := seedAuthorization(context.Background(), comps.Mutations); err != nil {
 		t.Fatalf("seedAuthorization: %v", err)
 	}
 
@@ -109,12 +109,9 @@ func newRoleRoutesHost(t *testing.T, withGate bool) *roleRoutesHost {
 	}
 }
 
-// makePlatformAdmin grants the platform:main#admin data tuple through the
-// trusted SystemMutator — the host recipe the gate's permission resolves
-// against. Platform admin stays DATA, never Config.
 func (h *roleRoutesHost) makePlatformAdmin(userID string) {
 	h.t.Helper()
-	if _, err := h.comps.SystemMutator.GrantRelationship(context.Background(), mutations.GrantRelationshipCommand{
+	if _, err := h.comps.Mutations.GrantRelationship(context.Background(), mutations.GrantRelationshipCommand{
 
 		ResourceType: platformResourceType,
 		ResourceID:   platformResourceID,

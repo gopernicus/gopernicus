@@ -112,7 +112,7 @@ type ResourceRelationshipFilter struct {
 // Storer is a resource-scoped facade over canonical tuples. The same facts may
 // also be written or read through exact role APIs. Different relation labels
 // coexist; the full scope, relation and exact subject identify a fact. Trusted
-// raw writes bypass actor guards and guardian policy. Guarded mutations enforce
+// raw writes retain the configured store IntegrityPolicy. Atomic commands enforce
 // those rules inside the serialized repository boundary.
 //
 // # Bounding (AZ3-1.3, AZ3-5.7 F4)

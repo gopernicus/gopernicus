@@ -8,21 +8,15 @@ import (
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/mutations"
 )
 
-func specCallbackCancellation(t *testing.T, newRepos func(*testing.T) Repositories, inGuard bool) {
+func specCallbackCancellation(t *testing.T, newRepos func(*testing.T) Repositories) {
 	repos := newRepos(t)
 	m := repos.Mutations
 	mustApply(t, m, grant("d1", "owner", "u1"))
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	cmd := grant("d1", "viewer", "u2")
-	var guard mutations.Guard
-	var validate mutations.SemanticValidator
-	if inGuard {
-		guard = func(context.Context, mutations.StoreDecisionView) error { cancel(); return nil }
-	} else {
-		validate = func(mutations.Command) error { cancel(); return nil }
-	}
-	result, err := m.ApplyGuarded(ctx, cmd, guard, validate)
+	validate := func(mutations.Command) error { cancel(); return nil }
+	result, err := m.Apply(ctx, cmd, validate)
 	if !errors.Is(err, context.Canceled) || result != nil {
 		t.Fatalf("callback cancellation: want nil result and context.Canceled; result=%+v err=%v", result, err)
 	}

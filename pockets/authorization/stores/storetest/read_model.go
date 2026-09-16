@@ -2,16 +2,13 @@ package storetest
 
 import (
 	"context"
-	"errors"
 	"slices"
 	"testing"
 
 	"github.com/gopernicus/gopernicus/pockets/authorization"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/decisions"
 	authmodel "github.com/gopernicus/gopernicus/pockets/authorization/logic/model"
-	"github.com/gopernicus/gopernicus/pockets/authorization/logic/mutations"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/relationships"
-	"github.com/gopernicus/gopernicus/sdk"
 )
 
 func runReadModel(t *testing.T, newRepos func(*testing.T) Repositories) {
@@ -48,20 +45,6 @@ func fixtureReadModel(schema decisions.Model) relationships.ReadModel {
 		}
 	}
 	return relationships.NewReadModel(rules)
-}
-
-type staleModelGuard struct{}
-
-func (staleModelGuard) AuthorizeMutation(ctx context.Context, attempt mutations.MutationAttempt, view mutations.DecisionView) error {
-	result, err := view.Check(ctx, authmodel.CheckRequest{Principal: attempt.Actor.PrincipalRef, Permission: "view", Resource: authmodel.Resource{Type: attempt.Target.Type, ID: attempt.Target.ID}})
-	ok := result.Allowed
-	if err != nil {
-		return err
-	}
-	if !ok {
-		return sdk.ErrForbidden
-	}
-	return nil
 }
 
 func specCurrentReadModel(t *testing.T, repos Repositories, mode string) {
@@ -141,9 +124,6 @@ func specCurrentReadModel(t *testing.T, repos Repositories, mode string) {
 		t.Fatalf("raw stored fact changed: %v %v", targets, err)
 	}
 	cfg := []authorization.Option{authorization.WithModel(current)}
-	if repos.Mutations != nil {
-		cfg = append(cfg, authorization.WithGuard(staleModelGuard{}))
-	}
 	components, err := authorization.New(authorization.Repositories{Tuples: repos.Tuples, Mutations: repos.Mutations}, cfg...)
 	if err != nil {
 		t.Fatal(err)
@@ -175,21 +155,7 @@ func specCurrentReadModel(t *testing.T, repos Repositories, mode string) {
 	if result, err := old.Decisions.Check(ctx, request); err != nil || !result.Allowed {
 		t.Fatalf("new reader mutated the old service's model: %+v %v", result, err)
 	}
-	if repos.Mutations == nil {
-		t.Run("Guarded", func(t *testing.T) { t.Skip("mutation repository not wired") })
-		return
-	}
-	command := mutations.GrantRelationshipCommand{ResourceType: "doc", ResourceID: "stale", Relation: "member", Subject: relationships.SubjectRef{Type: "user", ID: "recipient"}}
-	if _, err := svc.Mutations.GrantRelationship(ctx, mutations.Actor{PrincipalRef: principal}, command); !errors.Is(err, sdk.ErrForbidden) {
-		t.Fatalf("guard retained stale authority: %v", err)
-	}
-	if ok, err := repos.Relationships.CheckRelationExists(ctx, "doc", "stale", "member", "user", "recipient"); err != nil || ok {
-		t.Fatalf("denied guard wrote state: %v %v", ok, err)
-	}
-	command.ResourceID = "keep"
-	if _, err := svc.Mutations.GrantRelationship(ctx, mutations.Actor{PrincipalRef: principal}, command); err != nil {
-		t.Fatalf("current authority stopped granting: %v", err)
-	}
+
 }
 
 func specReadModelContainment(t *testing.T, repos Repositories) {

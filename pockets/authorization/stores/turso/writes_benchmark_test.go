@@ -1,7 +1,6 @@
 package turso
 
 import (
-	"context"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -12,8 +11,8 @@ import (
 )
 
 // Distinct tenant IDs remove row contention; SQLite's write intent still
-// serializes the guarded read and actual alternating grant/revoke on every call.
-func BenchmarkGuardedWriterContentionSQLite(b *testing.B) {
+// serializes integrity validation and actual alternating grant/revoke on every call.
+func BenchmarkTupleWriterContentionSQLite(b *testing.B) {
 	db, _ := cacheFixture(b, false, 8)
 	repos, err := testRepositories(b.Context(), db)
 	if err != nil {
@@ -36,12 +35,8 @@ func BenchmarkGuardedWriterContentionSQLite(b *testing.B) {
 				go func() {
 					defer wg.Done()
 					cmd := mutations.Command{Target: mutations.Target{Kind: mutations.TargetResource, Type: "tenant", ID: fmt.Sprintf("tenant-%d", i)}, Operation: mutations.OpGrant, Relationships: []mutations.RelationshipRow{{Relation: "viewer", Subject: relationships.SubjectRef{Type: "user", ID: "alice"}}}}
-					guard := func(ctx context.Context, view mutations.StoreDecisionView) error {
-						_, err := view.CheckRelation(ctx, cmd.Target, "viewer", "user", "alice")
-						return err
-					}
 					for next.Add(1) <= int64(b.N) {
-						if _, err := repos.Mutations.ApplyGuarded(b.Context(), cmd, guard, nil); err != nil {
+						if _, err := repos.Mutations.Apply(b.Context(), cmd, nil); err != nil {
 							errors <- err
 							return
 						}

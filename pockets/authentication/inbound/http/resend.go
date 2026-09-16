@@ -19,7 +19,7 @@ import (
 //     every target state.
 //   - POST /auth/admin/users/{id}/verification/resend is AUTHORIZED and may report
 //     real target state. It mounts with the rest of the admin surface, so it
-//     exists only when the host wired authlogic.WithUserAdminCheck.
+//     exists only when the host wired WithUserAdminCheck.
 
 // resendVerificationRequest is the public body.
 type resendVerificationRequest struct {
@@ -62,7 +62,7 @@ func (h *handlers) resendVerification(w http.ResponseWriter, r *http.Request) {
 // adminResendVerification re-issues the target's registration verification code.
 //
 // Unlike the public route it reports real state, because the caller has already
-// passed authlogic.WithUserAdminCheck: an unknown user is 404, an already-verified or
+// passed WithUserAdminCheck: an unknown user is 404, an already-verified or
 // deactivated account is a typed 409, and success returns a secret-free delivery
 // receipt the operator can poll through GET /auth/delivery/status.
 func (h *handlers) adminResendVerification(w http.ResponseWriter, r *http.Request) {
@@ -75,7 +75,7 @@ func (h *handlers) adminResendVerification(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	id := web.Param(r, "id")
-	principal, ok := h.adminPrincipal(w, r, authlogic.UserAdminResendVerification, id)
+	principal, ok := h.adminPrincipal(w, r, UserAdminResendVerification, id)
 	if !ok {
 		return
 	}

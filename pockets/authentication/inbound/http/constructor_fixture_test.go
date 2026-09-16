@@ -41,7 +41,6 @@ type authenticationFixture struct {
 	Passwords            user.PasswordRepository
 	Sessions             session.SessionRepository
 	UserAdmin            user.AdminRepository
-	UserAdminCheck       authlogic.UserAdminCheck
 	PasswordlessRedeem   passwordless.Repository
 	ProvisionOnRedeem    bool
 	ActiveSessions       session.ActiveUserRepository

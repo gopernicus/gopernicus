@@ -18,22 +18,19 @@ import (
 // rate-limited to blunt token-guessing and abuse (design §6).
 const declineAttemptsPerMinute = 10
 
-// InvitationService is the narrow surface the invitation handlers consume.
-// *invitations.Service satisfies it. It is separate from authService because
-// the Granter seam is injected into invitation service ONLY (design §6): a host with
-// no Granter passes a nil InvitationService and the routes are never registered.
-// Create and list are the AUTHORIZED operations (design §6/D3): the host
-// InviteCheck lives with the service, which poses it over the fully prepared
-// request, so no handler here owns invitation authorization. Accept interfaces,
-// return structs.
+// InvitationService supplies invitation preparation and policy-free use cases.
+// The adapter checks its policy against a prepared command before executing it.
+// A nil service leaves invitation routes unmounted.
 type InvitationService interface {
-	CreateAuthorized(ctx context.Context, principal sdk.Principal, in invitations.CreateInput) (invitations.CreateResult, error)
-	ListByResourceAuthorized(ctx context.Context, principal sdk.Principal, resourceType, resourceID string, req list.Request) (list.Page[invitations.Invitation], error)
+	PrepareCreate(ctx context.Context, in invitations.CreateInput) (invitations.PreparedCreate, error)
+	CreatePrepared(ctx context.Context, prepared invitations.PreparedCreate) (invitations.CreateResult, error)
+	ListByResource(ctx context.Context, resourceType, resourceID string, req list.Request) (list.Page[invitations.Invitation], error)
 	Mine(ctx context.Context, identifier string, req list.Request) (list.Page[invitations.Invitation], error)
 	Accept(ctx context.Context, in invitations.AcceptInput) (invitations.AcceptResult, error)
 	Decline(ctx context.Context, id, token string) error
-	Cancel(ctx context.Context, id, currentUserID string) error
-	Resend(ctx context.Context, id, currentUserID, redirectTo string) (invitations.Invitation, error)
+	PrepareManagement(ctx context.Context, id string) (invitations.PreparedManagement, error)
+	Cancel(ctx context.Context, prepared invitations.PreparedManagement) error
+	Resend(ctx context.Context, prepared invitations.PreparedManagement, redirectTo string) (invitations.Invitation, error)
 }
 
 // ---------------------------------------------------------------------------
@@ -78,10 +75,10 @@ type invitationResponse struct {
 	Relation     string `json:"relation"`
 	Identifier   string `json:"identifier"`
 	// InvitedBy is the user id that created the invitation — the same value the
-	// service enforces cancel/resend ownership on. It is an identifier, never a
+	// HTTP adapter enforces cancel/resend access on. It is an identifier, never a
 	// token or secret, and it is what lets a resource list distinguish the rows the
 	// current admin owns (and may cancel/resend) from another admin's rows. The
-	// server still enforces ownership regardless of what a client renders.
+	// HTTP adapter enforces issuer access regardless of what a client renders.
 	InvitedBy         string `json:"invited_by"`
 	Status            string `json:"status"`
 	AutoAccept        bool   `json:"auto_accept"`
@@ -170,14 +167,8 @@ func mountInvitations(r pockets.RouteRegistrar, h *handlers, invitations, declin
 	r.Handle("POST", "/auth/invitations/{id}/decline", h.declineInvitation, declineLimit)
 }
 
-// createInvitation invites an identifier to the path resource (live-session
-// gated). A direct add (known invitee + auto_accept) returns 200; a pending
-// invite 201. It calls the AUTHORIZED create operation with the resolved
-// principal: the service prepares the request (metadata validation, identifier
-// normalization, invitee lookup) and poses the host InviteCheck over that complete
-// context before any row exists or a grant is attempted (design §6/D3), so a
-// denial or infrastructure error fails closed through the normal web/sdk mapping
-// and a forbidden create never mutates.
+// createInvitation prepares once, authorizes the inspected command, then executes
+// that same command. Denial leaves no invitation row or grant on either path.
 func (h *handlers) createInvitation(w http.ResponseWriter, r *http.Request) {
 	var req createInvitationRequest
 	// The bounded strict decoder caps the body before decoding the unbounded
@@ -190,7 +181,7 @@ func (h *handlers) createInvitation(w http.ResponseWriter, r *http.Request) {
 		web.RespondJSONError(w, web.ErrUnauthorized("authentication required"))
 		return
 	}
-	res, err := h.inv.CreateAuthorized(r.Context(), sdk.Principal{Type: sdk.PrincipalTypeUser, ID: invitedBy}, invitations.CreateInput{
+	prepared, err := h.inv.PrepareCreate(r.Context(), invitations.CreateInput{
 		ResourceType:   web.Param(r, "resource_type"),
 		ResourceID:     web.Param(r, "resource_id"),
 		Relation:       req.Relation,
@@ -205,6 +196,16 @@ func (h *handlers) createInvitation(w http.ResponseWriter, r *http.Request) {
 		web.RespondJSONDomainError(w, err)
 		return
 	}
+	in := prepared.Input()
+	if err := h.checkInvite(r.Context(), InviteCheckRequest{Principal: sdk.Principal{Type: sdk.PrincipalTypeUser, ID: invitedBy}, Action: InviteCreate, ResourceType: in.ResourceType, ResourceID: in.ResourceID, Relation: in.Relation, Metadata: in.Metadata, Identifier: in.Identifier, IdentifierKind: in.IdentifierKind, ResolvedSubjectID: prepared.ResolvedSubjectID()}); err != nil {
+		web.RespondJSONDomainError(w, err)
+		return
+	}
+	res, err := h.inv.CreatePrepared(r.Context(), prepared)
+	if err != nil {
+		web.RespondJSONDomainError(w, err)
+		return
+	}
 	if res.DirectlyAdded {
 		web.RespondJSONOK(w, map[string]string{"status": "member_added"})
 		return
@@ -212,15 +213,8 @@ func (h *handlers) createInvitation(w http.ResponseWriter, r *http.Request) {
 	web.RespondJSONCreated(w, newInvitationResponse(res.Invitation))
 }
 
-// listResourceInvitations pages a resource's invitations (live-session gated).
-// It resolves CurrentUser both to keep the surface user-only (a service-account
-// principal that the Invitations authenticator admits is rejected here) and to
-// hand the AUTHORIZED list
-// operation its principal: the service poses the InviteList question (empty
-// Relation, no invitee context — design §6/D3) before reading. A denial or
-// infrastructure error fails closed through the normal web/sdk mapping. The page
-// carries the RESOURCE-OWNER projection, so an owner sees the host metadata they
-// supplied.
+// listResourceInvitations authorizes the user-only resource listing before the
+// service reads its owner-facing projection, which includes host metadata.
 func (h *handlers) listResourceInvitations(w http.ResponseWriter, r *http.Request) {
 	req, ok := h.parseListRequest(w, r, invitations.OrderFields, invitations.DefaultOrder)
 	if !ok {
@@ -231,8 +225,12 @@ func (h *handlers) listResourceInvitations(w http.ResponseWriter, r *http.Reques
 		web.RespondJSONError(w, web.ErrUnauthorized("authentication required"))
 		return
 	}
-	page, err := h.inv.ListByResourceAuthorized(r.Context(), sdk.Principal{Type: sdk.PrincipalTypeUser, ID: userID},
-		web.Param(r, "resource_type"), web.Param(r, "resource_id"), req)
+	resourceType, resourceID := web.Param(r, "resource_type"), web.Param(r, "resource_id")
+	if err := h.checkInvite(r.Context(), InviteCheckRequest{Principal: sdk.Principal{Type: sdk.PrincipalTypeUser, ID: userID}, Action: InviteList, ResourceType: resourceType, ResourceID: resourceID}); err != nil {
+		web.RespondJSONDomainError(w, err)
+		return
+	}
+	page, err := h.inv.ListByResource(r.Context(), resourceType, resourceID, req)
 	if err != nil {
 		web.RespondJSONDomainError(w, err)
 		return
@@ -311,7 +309,11 @@ func (h *handlers) cancelInvitation(w http.ResponseWriter, r *http.Request) {
 		web.RespondJSONError(w, web.ErrUnauthorized("authentication required"))
 		return
 	}
-	if err := h.inv.Cancel(r.Context(), web.Param(r, "id"), userID); err != nil {
+	prepared, ok := h.prepareInvitationManagement(w, r, userID)
+	if !ok {
+		return
+	}
+	if err := h.inv.Cancel(r.Context(), prepared); err != nil {
 		web.RespondJSONDomainError(w, err)
 		return
 	}
@@ -326,12 +328,36 @@ func (h *handlers) resendInvitation(w http.ResponseWriter, r *http.Request) {
 		web.RespondJSONError(w, web.ErrUnauthorized("authentication required"))
 		return
 	}
-	inv, err := h.inv.Resend(r.Context(), web.Param(r, "id"), userID, r.URL.Query().Get("redirect"))
+	prepared, ok := h.prepareInvitationManagement(w, r, userID)
+	if !ok {
+		return
+	}
+	inv, err := h.inv.Resend(r.Context(), prepared, r.URL.Query().Get("redirect"))
 	if err != nil {
 		web.RespondJSONDomainError(w, err)
 		return
 	}
 	web.RespondJSONOK(w, newInvitationResponse(inv))
+}
+
+// prepareInvitationManagement admits only the authenticated issuer of the exact
+// loaded target. The prepared value pins the row used by the subsequent mutation.
+func (h *handlers) prepareInvitationManagement(w http.ResponseWriter, r *http.Request, userID string) (invitations.PreparedManagement, bool) {
+	id := web.Param(r, "id")
+	prepared, err := h.inv.PrepareManagement(r.Context(), id)
+	if err != nil {
+		web.RespondJSONDomainError(w, err)
+		return invitations.PreparedManagement{}, false
+	}
+	if id == "" || prepared.ID() != id || userID == "" || prepared.InvitedBy() != userID {
+		web.RespondJSONDomainError(w, sdk.ErrForbidden)
+		return invitations.PreparedManagement{}, false
+	}
+	if err := r.Context().Err(); err != nil {
+		web.RespondJSONDomainError(w, err)
+		return invitations.PreparedManagement{}, false
+	}
+	return prepared, true
 }
 
 // declineInvitation declines a pending invitation (PUBLIC, IP-rate-limited). The

@@ -23,21 +23,14 @@ import (
 	"github.com/gopernicus/gopernicus/sdk/pkg/web"
 )
 
-// allowRoleRouteGuard is the permissive MutationGuard the role-route wiring
-// tests use where the guard's DECISION is not what is under test. The route
-// tests that care about denial supply their own.
-type allowRoleRouteGuard struct{}
-
-func (allowRoleRouteGuard) AuthorizeMutation(context.Context, mutations.MutationAttempt, mutations.DecisionView) error {
-	return nil
-}
+func allowRoleWrite(context.Context, authorizationhttp.RoleWriteRequest) error { return nil }
 
 // passRoleRouteGate is a no-op host gate: it authenticates and authorizes
 // nothing, and exists only so RoleRoutes carries a NON-NIL Gate.
 func passRoleRouteGate(next http.Handler) http.Handler { return next }
 
-// refuseAssignment is a stand-in RoleRouteAssignmentPolicy for the construction matrix.
-func refuseAssignment(context.Context, mutations.AssignRoleCommand) error {
+// refuseAssignment is a stand-in RoleWritePolicy for the construction matrix.
+func refuseAssignment(context.Context, authorizationhttp.RoleWriteRequest) error {
 	return sdk.ErrForbidden
 }
 
@@ -56,30 +49,30 @@ func TestNewServiceRoleRoutesConstructionMatrix(t *testing.T) {
 			repos: func(s *memory.Store) Repositories {
 				return Repositories{Mutations: s.Mutations(), Tuples: memory.NewTuples()}
 			},
-			cfg: []Option{WithModel(validModel()), WithGuard(allowRoleRouteGuard{}), WithRoleRoutes(authorizationhttp.RoleRoutes{Gate: passRoleRouteGate})},
+			cfg: []Option{WithModel(validModel()), WithRoleRoutes(authorizationhttp.RoleRoutes{Gate: passRoleRouteGate, WritePolicy: allowRoleWrite})},
 		},
 		{
-			name: "gate without a guard",
+			name: "gate without an exact write policy",
 			repos: func(s *memory.Store) Repositories {
 				return Repositories{Tuples: s.Tuples(), Mutations: s.Mutations()}
 			},
 			cfg:     []Option{WithRoleRoutes(authorizationhttp.RoleRoutes{Gate: passRoleRouteGate})},
-			wantErr: authorizationhttp.ErrRoleRoutesGateWithoutGuard,
+			wantErr: authorizationhttp.ErrRoleRoutesWithoutWritePolicy,
 		},
 		{
 			name: "assignment policy without the routes",
 			repos: func(s *memory.Store) Repositories {
 				return Repositories{Tuples: s.Tuples(), Mutations: s.Mutations()}
 			},
-			cfg:     []Option{WithGuard(allowRoleRouteGuard{}), WithRoleRoutes(authorizationhttp.RoleRoutes{AssignmentPolicy: refuseAssignment})},
-			wantErr: authorizationhttp.ErrRoleRouteAssignmentPolicyWithoutRoutes,
+			cfg:     []Option{WithRoleRoutes(authorizationhttp.RoleRoutes{WritePolicy: refuseAssignment})},
+			wantErr: authorizationhttp.ErrRoleWritePolicyWithoutRoutes,
 		},
 		{
 			name: "unknown list strategy",
 			repos: func(s *memory.Store) Repositories {
 				return Repositories{Tuples: s.Tuples(), Mutations: s.Mutations()}
 			},
-			cfg:     []Option{WithGuard(allowRoleRouteGuard{}), WithRoleRoutes(authorizationhttp.RoleRoutes{Gate: passRoleRouteGate, ListStrategy: "keyset"})},
+			cfg:     []Option{WithRoleRoutes(authorizationhttp.RoleRoutes{Gate: passRoleRouteGate, ListStrategy: "keyset"})},
 			wantErr: authorizationhttp.ErrInvalidListStrategy,
 		},
 		{
@@ -95,21 +88,21 @@ func TestNewServiceRoleRoutesConstructionMatrix(t *testing.T) {
 			repos: func(s *memory.Store) Repositories {
 				return Repositories{Tuples: s.Tuples(), Mutations: s.Mutations()}
 			},
-			cfg: []Option{WithGuard(allowRoleRouteGuard{}), WithRoleRoutes(authorizationhttp.RoleRoutes{Gate: passRoleRouteGate})},
+			cfg: []Option{WithRoleRoutes(authorizationhttp.RoleRoutes{Gate: passRoleRouteGate, WritePolicy: allowRoleWrite})},
 		},
 		{
 			name: "gate with an assignment policy and an offset strategy",
 			repos: func(s *memory.Store) Repositories {
 				return Repositories{Tuples: s.Tuples(), Mutations: s.Mutations()}
 			},
-			cfg: []Option{WithGuard(allowRoleRouteGuard{}), WithRoleRoutes(authorizationhttp.RoleRoutes{Gate: passRoleRouteGate, AssignmentPolicy: refuseAssignment, ListStrategy: list.StrategyOffset})},
+			cfg: []Option{WithRoleRoutes(authorizationhttp.RoleRoutes{Gate: passRoleRouteGate, WritePolicy: refuseAssignment, ListStrategy: list.StrategyOffset})},
 		},
 		{
 			name: "no gate at all is unchanged",
 			repos: func(s *memory.Store) Repositories {
 				return Repositories{Tuples: s.Tuples(), Mutations: s.Mutations()}
 			},
-			cfg: []Option{WithGuard(allowRoleRouteGuard{})},
+			cfg: []Option{},
 		},
 		{
 			name:  "a valid but unused list strategy is a silent cosmetic orphan",
@@ -136,7 +129,7 @@ func TestNewServiceRoleRoutesConstructionMatrix(t *testing.T) {
 // the Service, so Register has everything the mount needs.
 func TestServiceCapturesRoleRouteConfig(t *testing.T) {
 	store := memory.New()
-	comps, err := New(Repositories{Tuples: store.Tuples(), Mutations: store.Mutations()}, WithGuard(allowRoleRouteGuard{}), WithRoleRoutes(authorizationhttp.RoleRoutes{Gate: passRoleRouteGate, AssignmentPolicy: refuseAssignment, ListStrategy: list.StrategyOffset}))
+	comps, err := New(Repositories{Tuples: store.Tuples(), Mutations: store.Mutations()}, WithRoleRoutes(authorizationhttp.RoleRoutes{Gate: passRoleRouteGate, WritePolicy: refuseAssignment, ListStrategy: list.StrategyOffset}))
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
@@ -166,8 +159,8 @@ func TestValidateListStrategy(t *testing.T) {
 func TestRoleRouteSentinelsWrapNoSDKKind(t *testing.T) {
 	sentinels := []error{
 		authorizationhttp.ErrRoleRoutesGateWithoutRoles,
-		authorizationhttp.ErrRoleRoutesGateWithoutGuard,
-		authorizationhttp.ErrRoleRouteAssignmentPolicyWithoutRoutes,
+		authorizationhttp.ErrRoleRoutesWithoutWritePolicy,
+		authorizationhttp.ErrRoleWritePolicyWithoutRoutes,
 		authorizationhttp.ErrInvalidListStrategy,
 		authorizationhttp.ErrRoleRoutesWithoutRouter,
 	}
@@ -198,11 +191,11 @@ var _ web.Middleware = passRoleRouteGate
 // recordingRoleGuard allows every attempt and records what it saw, so a test can
 // prove a refused request never reached the guarded boundary.
 type recordingRoleGuard struct {
-	attempts []mutations.MutationAttempt
+	attempts []authorizationhttp.RoleWriteRequest
 	deny     bool
 }
 
-func (g *recordingRoleGuard) AuthorizeMutation(_ context.Context, attempt mutations.MutationAttempt, _ mutations.DecisionView) error {
+func (g *recordingRoleGuard) Check(_ context.Context, attempt authorizationhttp.RoleWriteRequest) error {
 	g.attempts = append(g.attempts, attempt)
 	if g.deny {
 		return fmt.Errorf("the host refused this mutation: %w", sdk.ErrForbidden)
@@ -239,12 +232,23 @@ func denyingRoleGate(http.Handler) http.Handler {
 // newRoleAdminHost builds a roles-only memstore host, registers it through the
 // real pockets.Mount, and returns the mounted router. A nil gate is the
 // deny-by-absence posture.
-func newRoleAdminHost(t *testing.T, gate web.Middleware, policy authorizationhttp.RoleRouteAssignmentPolicy) roleAdminHost {
+func newRoleAdminHost(t *testing.T, gate web.Middleware, policy authorizationhttp.RoleWritePolicy) roleAdminHost {
 	t.Helper()
 	store := memory.New()
 	guard := &recordingRoleGuard{}
 	logs := &bytes.Buffer{}
-	comps, err := New(Repositories{Tuples: store.Tuples(), Mutations: store.Mutations()}, WithGuard(guard), WithLogger(slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug}))), WithRoleRoutes(authorizationhttp.RoleRoutes{Gate: gate, AssignmentPolicy: policy}))
+	var combined authorizationhttp.RoleWritePolicy
+	if gate != nil {
+		combined = func(ctx context.Context, req authorizationhttp.RoleWriteRequest) error {
+			if policy != nil {
+				if err := policy(ctx, req); err != nil {
+					return err
+				}
+			}
+			return guard.Check(ctx, req)
+		}
+	}
+	comps, err := New(Repositories{Tuples: store.Tuples(), Mutations: store.Mutations()}, WithLogger(slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug}))), WithRoleRoutes(authorizationhttp.RoleRoutes{Gate: gate, WritePolicy: combined}))
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
@@ -312,7 +316,7 @@ func TestRegisterWithoutGateMountsNothing(t *testing.T) {
 // wiring fails Register rather than booting route-free.
 func TestRegisterWithGateAndNilRouterIsLoud(t *testing.T) {
 	store := memory.New()
-	comps, err := New(Repositories{Tuples: store.Tuples(), Mutations: store.Mutations()}, WithGuard(&recordingRoleGuard{}), WithRoleRoutes(authorizationhttp.RoleRoutes{Gate: passRoleRouteGate}))
+	comps, err := New(Repositories{Tuples: store.Tuples(), Mutations: store.Mutations()}, WithRoleRoutes(authorizationhttp.RoleRoutes{Gate: passRoleRouteGate, WritePolicy: allowRoleWrite}))
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
@@ -359,7 +363,7 @@ func TestBundledRoutesRefuseThroughADenyingGate(t *testing.T) {
 		}
 	}
 	if len(host.guard.attempts) != 0 {
-		t.Errorf("a gate-denied request reached the MutationGuard: %+v", host.guard.attempts)
+		t.Errorf("a gate-denied request reached the inbound policy: %+v", host.guard.attempts)
 	}
 }
 
@@ -374,7 +378,7 @@ func TestBundledWritesRequireAStashedPrincipal(t *testing.T) {
 		}
 	}
 	if len(host.guard.attempts) != 0 {
-		t.Error("an unauthenticated request reached the MutationGuard")
+		t.Error("an unauthenticated request reached the inbound policy")
 	}
 }
 
@@ -482,12 +486,12 @@ func decodeAssign(t *testing.T, rec *httptest.ResponseRecorder) assignWire {
 	return got
 }
 
-// TestRoleRouteAssignmentPolicyRefusalNeverReachesTheGuard proves the legality hook runs
+// TestRoleWritePolicyRefusalNeverReachesTheGuard proves the legality hook runs
 // before the guarded write and that a refusal wrapping sdk.ErrForbidden lands
 // 403 with nothing written.
-func TestRoleRouteAssignmentPolicyRefusalNeverReachesTheGuard(t *testing.T) {
-	var seen []mutations.AssignRoleCommand
-	policy := func(_ context.Context, cmd mutations.AssignRoleCommand) error {
+func TestRoleWritePolicyRefusalNeverReachesTheGuard(t *testing.T) {
+	var seen []authorizationhttp.RoleWriteRequest
+	policy := func(_ context.Context, cmd authorizationhttp.RoleWriteRequest) error {
 		seen = append(seen, cmd)
 		if cmd.Role == "steward" {
 			return fmt.Errorf("steward is not assignable through the bundled route: %w", sdk.ErrForbidden)
@@ -502,7 +506,7 @@ func TestRoleRouteAssignmentPolicyRefusalNeverReachesTheGuard(t *testing.T) {
 		t.Fatalf("refused assign = %d, body %s", rec.Code, rec.Body.String())
 	}
 	if len(host.guard.attempts) != 0 {
-		t.Error("a policy-refused assign reached the MutationGuard")
+		t.Error("a policy-refused assign reached the inbound policy")
 	}
 	listing := getRole(t, host.handler, "/authorization/roles/by-subject?subject_type=user&subject_id=u-1")
 	if !strings.Contains(listing.Body.String(), `"items":[]`) {
@@ -521,11 +525,11 @@ func TestRoleRouteAssignmentPolicyRefusalNeverReachesTheGuard(t *testing.T) {
 	}
 }
 
-// TestRoleRouteAssignmentPolicyIsNotConsultedOnUnassign pins the assign-only scope: the
+// TestRoleWritePolicyCoversUnassign pins the assign-only scope: the
 // unassign route never calls the hook, whatever it would have said.
-func TestRoleRouteAssignmentPolicyIsNotConsultedOnUnassign(t *testing.T) {
+func TestRoleWritePolicyCoversUnassign(t *testing.T) {
 	var calls int
-	policy := func(context.Context, mutations.AssignRoleCommand) error {
+	policy := func(context.Context, authorizationhttp.RoleWriteRequest) error {
 		calls++
 		return nil
 	}
@@ -535,8 +539,8 @@ func TestRoleRouteAssignmentPolicyIsNotConsultedOnUnassign(t *testing.T) {
 		`{"subject_type":"user","subject_id":"u-1","role":"viewer","scope":{"kind":"resource","resource_type":"organization","resource_id":"o-1"}}`); rec.Code != http.StatusOK {
 		t.Fatalf("unassign = %d, body %s", rec.Code, rec.Body.String())
 	}
-	if calls != 0 {
-		t.Errorf("RoleRouteAssignmentPolicy ran %d times on unassign, want 0", calls)
+	if calls != 1 {
+		t.Errorf("RoleWritePolicy ran %d times on unassign, want 1", calls)
 	}
 }
 
@@ -552,14 +556,14 @@ func TestBundledAssignForwardsTheActorToTheGuard(t *testing.T) {
 		t.Fatalf("guard saw %d attempts, want 1", len(host.guard.attempts))
 	}
 	attempt := host.guard.attempts[0]
-	if attempt.Actor.Type != "service_account" || attempt.Actor.ID != "sa-7" {
-		t.Errorf("actor = %+v, want the stashed principal", attempt.Actor)
+	if attempt.Principal.Type != "service_account" || attempt.Principal.ID != "sa-7" {
+		t.Errorf("actor = %+v, want the stashed principal", attempt.Principal)
 	}
 	if attempt.Operation != mutations.OpRoleAssign {
 		t.Errorf("operation = %q, want role_assign", attempt.Operation)
 	}
-	if attempt.Target != (mutations.Target{Kind: mutations.TargetResource, Type: "organization", ID: "o-1"}) {
-		t.Errorf("scope = %+v, want the resource scope", attempt.Target)
+	if attempt.Scope != tuples.On("organization", "o-1") {
+		t.Errorf("scope = %+v, want the resource scope", attempt.Scope)
 	}
 }
 

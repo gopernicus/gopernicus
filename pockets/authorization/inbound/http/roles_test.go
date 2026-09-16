@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/audit"
+
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuples"
 
 	authmodel "github.com/gopernicus/gopernicus/pockets/authorization/logic/model"
@@ -33,8 +35,8 @@ var roleRoutes = []struct{ method, path string }{
 // Commands and actors are the same types used by public Service callers; this
 // stub proves the transport derives them faithfully from the wire and principal.
 type stubRoleAdmin struct {
-	assignActor   mutations.Actor
-	unassignActor mutations.Actor
+	assignActor   authmodel.PrincipalRef
+	unassignActor authmodel.PrincipalRef
 	assignReq     mutations.AssignRoleCommand
 	unassignReq   mutations.UnassignRoleCommand
 	listReq       list.Request
@@ -47,14 +49,16 @@ type stubRoleAdmin struct {
 	page    list.Page[roles.Assignment]
 }
 
-func (s *stubRoleAdmin) AssignRole(_ context.Context, actor mutations.Actor, req mutations.AssignRoleCommand) (*mutations.Result, error) {
-	s.assignActor = actor
+func (s *stubRoleAdmin) AssignRole(ctx context.Context, req mutations.AssignRoleCommand) (*mutations.Result, error) {
+	source, _ := audit.SourceFromContext(ctx)
+	s.assignActor = authmodel.PrincipalRef{Type: source.ActorType, ID: source.ActorID}
 	s.assignReq = req
 	return s.receipt, s.err
 }
 
-func (s *stubRoleAdmin) UnassignRole(_ context.Context, actor mutations.Actor, req mutations.UnassignRoleCommand) (mutations.UnassignRoleResult, error) {
-	s.unassignActor = actor
+func (s *stubRoleAdmin) UnassignRole(ctx context.Context, req mutations.UnassignRoleCommand) (mutations.UnassignRoleResult, error) {
+	source, _ := audit.SourceFromContext(ctx)
+	s.unassignActor = authmodel.PrincipalRef{Type: source.ActorType, ID: source.ActorID}
 	s.unassignReq = req
 	if s.receipt == nil {
 		return mutations.UnassignRoleResult{}, s.err
@@ -99,7 +103,7 @@ func newFixture(svc interface {
 	RoleWriter
 }, gate web.Middleware, strategy list.Strategy) http.Handler {
 	h := web.NewWebHandler()
-	adapter, err := New(Services{Roles: svc, Mutations: svc}, WithRoleRoutes(RoleRoutes{Gate: gate, ListStrategy: strategy}))
+	adapter, err := New(Services{Roles: svc, Mutations: svc}, WithRoleRoutes(RoleRoutes{Gate: gate, WritePolicy: allowWrite, ListStrategy: strategy}))
 	if err != nil {
 		panic(err)
 	}
@@ -195,7 +199,7 @@ func TestAssignForwardsActorAndCommand(t *testing.T) {
 		Subject: authmodel.PrincipalRef{Type: "user", ID: "u-1"},
 		Role:    "viewer", Scope: tuples.On("organization", "o-1"),
 	}
-	if stub.assignActor.PrincipalRef != (authmodel.PrincipalRef{Type: "user", ID: "admin-1"}) {
+	if stub.assignActor != (authmodel.PrincipalRef{Type: "user", ID: "admin-1"}) {
 		t.Errorf("actor = %+v", stub.assignActor)
 	}
 	if stub.assignReq != want {
@@ -488,8 +492,6 @@ func TestOtherDomainErrorsUseSDKMapping(t *testing.T) {
 	}
 }
 
-func (s *stubRoleAdmin) Guarded() bool { return true }
-
 func TestRoleHTTPRequiresExplicitScopeAndRetiresEffectiveListing(t *testing.T) {
 	stub := &stubRoleAdmin{receipt: testReceipt()}
 	h := newFixture(stub, adminGate(), "")
@@ -507,3 +509,5 @@ func TestRoleHTTPRequiresExplicitScopeAndRetiresEffectiveListing(t *testing.T) {
 		t.Fatalf("retired effective route=%d", rec.Code)
 	}
 }
+
+func allowWrite(context.Context, RoleWriteRequest) error { return nil }

@@ -112,14 +112,10 @@ type AuthenticationService interface {
 	RemoveIdentifier(ctx context.Context, in authlogic.IdentifierRemoveInput) error
 	SetIdentifierUses(ctx context.Context, in authlogic.IdentifierUsesInput) error
 
-	// User administration (CHAU-1.1/1.6). UserAdminEnabled reports the repository
-	// capability and UserAdminAuthorized the host policy; Mount registers the admin
-	// routes only when BOTH are true (deny-by-absence). AuthorizeUserAdmin runs the
-	// host check and fails closed; the three data methods are TRUSTED and apply no
-	// authorization of their own, so a handler must call AuthorizeUserAdmin first.
+	// Administration methods are policy-free. The adapter checks its host policy
+	// before target reads or writes and mounts routes only when the capability
+	// and policy are both present.
 	UserAdminEnabled() bool
-	UserAdminAuthorized() bool
-	AuthorizeUserAdmin(ctx context.Context, principal authlogic.Principal, action authlogic.UserAdminAction, targetUserID string) error
 	ListUsers(ctx context.Context, req list.Request) (list.Page[user.Summary], error)
 	// ResendVerificationForUser is the authorized admin resend; the public,
 	// enumeration-safe twin is ResendVerification below.

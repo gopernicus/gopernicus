@@ -11,7 +11,7 @@ import (
 )
 
 // The user-administration surface (CHAU-1.6). Registered by Mount ONLY when the
-// host supplied authlogic.WithUserAdminCheck AND the administration/fenced-mint
+// host supplied WithUserAdminCheck AND the administration/fenced-mint
 // repositories are wired — deny-by-absence, the Providers precedent. A host that
 // wires nothing here has no admin routes at all, and every path below 404s.
 //
@@ -24,7 +24,7 @@ import (
 //  2. the browser-safe mutation gate (allowlisted Origin + double-submit CSRF) —
 //     on the POST mutations only; the GET reads are bearer-safe and carry no
 //     body, matching /auth/methods.
-//  3. authlogic.WithUserAdminCheck — the HOST's decision, run before any target
+//  3. WithUserAdminCheck — the HOST's decision, run before any target
 //     resolution or mutation, so an unauthorized caller cannot use timing or
 //     error shape to probe which user ids exist.
 //
@@ -73,8 +73,7 @@ func newUserSummaryResponse(s user.Summary) userSummaryResponse {
 }
 
 // mountUserAdmin registers the optional administrative user surface. Called from
-// Mount only when svc.UserAdminEnabled() and svc.UserAdminAuthorized() are both
-// true.
+// mount only when the administration capability and inbound policy are present.
 func mountUserAdmin(r pockets.RouteRegistrar, h *handlers, userAdministration, browserSafe web.Middleware) {
 	r.Handle("GET", "/auth/admin/users", h.adminListUsers, userAdministration)
 	r.Handle("GET", "/auth/admin/users/{id}", h.adminGetUser, userAdministration)
@@ -93,7 +92,7 @@ func mountUserAdmin(r pockets.RouteRegistrar, h *handlers, userAdministration, b
 //
 // A machine principal reaches the policy as a real principal: the pocket does
 // not pre-decide whether a service account may administer users.
-func (h *handlers) adminPrincipal(w http.ResponseWriter, r *http.Request, action authlogic.UserAdminAction, targetUserID string) (authlogic.Principal, bool) {
+func (h *handlers) adminPrincipal(w http.ResponseWriter, r *http.Request, action UserAdminAction, targetUserID string) (authlogic.Principal, bool) {
 	principal, ok := h.svc.CurrentPrincipal(r.Context())
 	if !ok {
 		// The UserAdministration authenticator already ran, so this is a wiring
@@ -101,7 +100,7 @@ func (h *handlers) adminPrincipal(w http.ResponseWriter, r *http.Request, action
 		web.RespondJSONError(w, web.ErrUnauthorized("authentication required"))
 		return authlogic.Principal{}, false
 	}
-	if err := h.svc.AuthorizeUserAdmin(r.Context(), principal, action, targetUserID); err != nil {
+	if err := h.checkUserAdmin(r.Context(), UserAdminCheckRequest{Principal: principal, Action: action, TargetUserID: targetUserID}); err != nil {
 		// A denial and an infrastructure error both stop here; the shared mapper
 		// turns sdk.ErrForbidden into 403 and anything else into 500, so a policy
 		// outage never reads as permission.
@@ -114,7 +113,7 @@ func (h *handlers) adminPrincipal(w http.ResponseWriter, r *http.Request, action
 // adminListUsers returns a page of the operator directory.
 func (h *handlers) adminListUsers(w http.ResponseWriter, r *http.Request) {
 	writeNoStore(w)
-	if _, ok := h.adminPrincipal(w, r, authlogic.UserAdminList, ""); !ok {
+	if _, ok := h.adminPrincipal(w, r, UserAdminList, ""); !ok {
 		return
 	}
 	req, ok := h.parseListRequest(w, r, user.OrderFields, user.DefaultOrder)
@@ -133,7 +132,7 @@ func (h *handlers) adminListUsers(w http.ResponseWriter, r *http.Request) {
 func (h *handlers) adminGetUser(w http.ResponseWriter, r *http.Request) {
 	writeNoStore(w)
 	id := web.Param(r, "id")
-	if _, ok := h.adminPrincipal(w, r, authlogic.UserAdminRead, id); !ok {
+	if _, ok := h.adminPrincipal(w, r, UserAdminRead, id); !ok {
 		return
 	}
 	summary, err := h.svc.GetUserSummary(r.Context(), id)
@@ -148,13 +147,13 @@ func (h *handlers) adminGetUser(w http.ResponseWriter, r *http.Request) {
 // already holds. Replaying it on an already-deactivated user is a 200 with
 // changed=false.
 func (h *handlers) adminDeactivateUser(w http.ResponseWriter, r *http.Request) {
-	h.adminSetStatus(w, r, authlogic.UserAdminDeactivate, user.StatusDeactivated)
+	h.adminSetStatus(w, r, UserAdminDeactivate, user.StatusDeactivated)
 }
 
 // adminReactivateUser returns the target to the active posture. It fabricates no
 // session — the user must authenticate again.
 func (h *handlers) adminReactivateUser(w http.ResponseWriter, r *http.Request) {
-	h.adminSetStatus(w, r, authlogic.UserAdminReactivate, user.StatusActive)
+	h.adminSetStatus(w, r, UserAdminReactivate, user.StatusActive)
 }
 
 // adminSetStatus is the shared body of the two lifecycle mutations. The target
@@ -164,7 +163,7 @@ func (h *handlers) adminReactivateUser(w http.ResponseWriter, r *http.Request) {
 // Self-transition is not generically forbidden — a host policy may allow or
 // refuse an administrator acting on their own account, and a last-admin
 // invariant lives in the host's policy, not here.
-func (h *handlers) adminSetStatus(w http.ResponseWriter, r *http.Request, action authlogic.UserAdminAction, status user.Status) {
+func (h *handlers) adminSetStatus(w http.ResponseWriter, r *http.Request, action UserAdminAction, status user.Status) {
 	writeNoStore(w)
 	if !requireJSON(w, r) {
 		return

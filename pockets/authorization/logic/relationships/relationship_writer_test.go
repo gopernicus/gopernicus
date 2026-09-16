@@ -73,7 +73,7 @@ func TestBaselineWriterWithoutMutationRepository(t *testing.T) {
 	if got := targets(t, comps, authmodel.Resource{Type: "doc", ID: "d1"}, "viewer"); len(got) != 1 || got[0].ID != "u1" {
 		t.Fatalf("created state not visible: %+v", got)
 	}
-	if _, err := comps.SystemMutator.GrantRelationship(context.Background(), mutations.GrantRelationshipCommand{}); !errors.Is(err, mutations.ErrMutationsNotConfigured) {
+	if _, err := comps.Mutations.GrantRelationship(context.Background(), mutations.GrantRelationshipCommand{}); !errors.Is(err, mutations.ErrMutationsNotConfigured) {
 		t.Fatalf("advanced path should remain unwired, got %v", err)
 	}
 }

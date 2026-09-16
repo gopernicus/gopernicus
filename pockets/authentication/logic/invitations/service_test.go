@@ -528,17 +528,14 @@ func TestResolveInvitationsRetryAndIdempotence(t *testing.T) {
 	}
 }
 
-func TestCancelOwnership(t *testing.T) {
+func TestCancelPreparedTarget(t *testing.T) {
 	repo := newFakeInvRepo()
 	granter := &fakeGranter{}
 	svc := newSvc(t, repo, granter, constructorConfig{})
 	inv := seedInvite(t, repo, "project", "p1", "member", "invitee@x.com", "owner", "s-a", false, time.Now().Add(time.Hour))
 
-	if err := svc.Cancel(context.Background(), inv.ID, "not-owner"); !errors.Is(err, sdk.ErrForbidden) {
-		t.Errorf("Cancel(non-owner): err=%v, want ErrForbidden", err)
-	}
-	if err := svc.Cancel(context.Background(), inv.ID, "owner"); err != nil {
-		t.Fatalf("Cancel(owner): %v", err)
+	if err := svc.Cancel(context.Background(), prepareManagement(t, svc, inv.ID)); err != nil {
+		t.Fatalf("Cancel: %v", err)
 	}
 	got, _ := repo.Get(context.Background(), inv.ID)
 	if got.Status != StatusCancelled {
@@ -546,7 +543,7 @@ func TestCancelOwnership(t *testing.T) {
 	}
 }
 
-func TestResendOwnership(t *testing.T) {
+func TestResendPreparedTarget(t *testing.T) {
 	repo := newFakeInvRepo()
 	granter := &fakeGranter{}
 	mailer := &recordingMailer{}
@@ -554,12 +551,9 @@ func TestResendOwnership(t *testing.T) {
 	inv := seedInvite(t, repo, "project", "p1", "member", "invitee@x.com", "owner", "s-a", false, time.Now().Add(time.Hour))
 	originalHash := inv.TokenHash
 
-	if _, err := svc.Resend(context.Background(), inv.ID, "not-owner", ""); !errors.Is(err, sdk.ErrForbidden) {
-		t.Errorf("Resend(non-owner): err=%v, want ErrForbidden", err)
-	}
-	updated, err := svc.Resend(context.Background(), inv.ID, "owner", "")
+	updated, err := svc.Resend(context.Background(), prepareManagement(t, svc, inv.ID), "")
 	if err != nil {
-		t.Fatalf("Resend(owner): %v", err)
+		t.Fatalf("Resend: %v", err)
 	}
 	if updated.TokenHash == originalHash {
 		t.Errorf("Resend did not regenerate the token hash")

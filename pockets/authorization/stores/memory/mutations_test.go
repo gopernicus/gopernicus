@@ -41,12 +41,12 @@ func TestMutationApplyVisibleToReads(t *testing.T) {
 	}
 }
 
-// TestMutationGuardianDirectAnchorOwner proves a group#member owner is NOT a
+// TestMutationIntegrityDirectAnchorOwner proves a group#member owner is NOT a
 // direct anchor: with only a concrete owner and a userset owner present, revoking
 // the concrete owner drops the direct-anchor count to zero and is blocked.
-func TestMutationGuardianDirectAnchorOwner(t *testing.T) {
+func TestMutationIntegrityDirectAnchorOwner(t *testing.T) {
 	ctx := context.Background()
-	store := New(WithGuardianPolicy(mutation.DefaultGuardianPolicy()))
+	store := New(WithIntegrityPolicy(mutation.DefaultIntegrityPolicy()))
 	m := store.Mutations()
 
 	// Concrete owner establishes the minimum.
@@ -78,10 +78,10 @@ func TestMutationGuardianDirectAnchorOwner(t *testing.T) {
 	}
 }
 
-// Empty guardian policy permits ordinary non-owner establishment.
-func TestMutationEmptyGuardianPolicyAllowsMemberFirst(t *testing.T) {
+// Empty integrity policy permits ordinary non-owner establishment.
+func TestMutationEmptyIntegrityPolicyAllowsMemberFirst(t *testing.T) {
 	ctx := context.Background()
-	store := New(WithGuardianPolicy(mutation.GuardianPolicy{}))
+	store := New(WithIntegrityPolicy(mutation.IntegrityPolicy{}))
 	m := store.Mutations()
 
 	member := mutation.Command{
@@ -95,6 +95,6 @@ func TestMutationEmptyGuardianPolicyAllowsMemberFirst(t *testing.T) {
 		t.Fatalf("apply: %v", err)
 	}
 	if rcpt.Outcome != mutation.OutcomeApplied {
-		t.Fatalf("an empty guardian policy must allow a member-first command, got %q", rcpt.Outcome)
+		t.Fatalf("an empty integrity policy must allow a member-first command, got %q", rcpt.Outcome)
 	}
 }

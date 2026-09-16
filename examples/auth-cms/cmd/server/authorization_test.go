@@ -6,9 +6,10 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
-	"reflect"
 	"strings"
 	"testing"
+
+	authenticationhttp "github.com/gopernicus/gopernicus/pockets/authentication/inbound/http"
 
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuples"
 
@@ -20,15 +21,6 @@ import (
 	"github.com/gopernicus/gopernicus/sdk"
 	sdkevents "github.com/gopernicus/gopernicus/sdk/capabilities/events"
 	"github.com/gopernicus/gopernicus/sdk/pkg/web"
-
-	// AZ3-4.1 host proof suite. Every case runs over the REAL guarded composition
-	// newAuthorization() builds — the same wiring run() serves: the shared-state memstore
-	// bundle, the project-scoped guardian minimum, and the host MutationGuard (manage_access
-	// + platform-admin over the DecisionView). It proves the composed HOST behavior: an
-	// untrusted actor cannot self-grant, both baseline and guarded invitation adapters
-	// are idempotent under their chosen semantics, write capabilities remain separately
-	// placed, and no caller can construct a system actor. There is no
-	// browser flow — the actor-facing HTTP mutation surface is deferred with AZADM.
 
 	model "github.com/gopernicus/gopernicus/pockets/authorization/logic/model"
 	relationships "github.com/gopernicus/gopernicus/pockets/authorization/logic/relationships"
@@ -45,10 +37,7 @@ func hostAuthz(t *testing.T) authorization.Components {
 	return comps
 }
 
-// seedTrustedOwner establishes a resource's owner through the trusted SystemMutator so an
-// actor can then prove manage_access through the guard (the first owner is inherently
-// trusted — it cannot yet prove it manages the resource).
-func seedTrustedOwner(t *testing.T, sm *mutations.SystemMutator, resourceID, userID string) {
+func seedTrustedOwner(t *testing.T, sm *mutations.Service, resourceID, userID string) {
 	t.Helper()
 	if _, err := sm.GrantRelationship(context.Background(), mutations.GrantRelationshipCommand{
 
@@ -61,9 +50,7 @@ func seedTrustedOwner(t *testing.T, sm *mutations.SystemMutator, resourceID, use
 	}
 }
 
-func actor(userID string) mutations.Actor {
-	return hostActor(sdk.Principal{Type: "user", ID: userID})
-}
+func actor(userID string) sdk.Principal { return sdk.Principal{Type: "user", ID: userID} }
 
 func allowed(t *testing.T, svc authorization.Components, userID, permission, resourceID string) bool {
 	t.Helper()
@@ -78,16 +65,12 @@ func allowed(t *testing.T, svc authorization.Components, userID, permission, res
 	return res.Allowed
 }
 
-// TestAuthorizationCompositionGuardedPosture proves newAuthorization() wires the GUARDED
-// actor-mutation posture (Config.Guard set), not the read-only one: an unauthorized
-// actor-facing grant fails with a policy denial (forbidden), NOT ErrMutationsNotConfigured
-// (which is the read-only/unwired posture). The SystemMutator is returned separately.
-func TestAuthorizationCompositionGuardedPosture(t *testing.T) {
+func TestAuthorizationCompositionInboundPolicy(t *testing.T) {
 	comps := hostAuthz(t)
-	if comps.Decisions == nil || comps.Mutations == nil || comps.SystemMutator == nil {
-		t.Fatal("guarded composition must return both Service and SystemMutator")
+	if comps.Decisions == nil || comps.Mutations == nil {
+		t.Fatal("guarded composition must return both Service and TupleWriter")
 	}
-	_, err := comps.Mutations.GrantRelationship(context.Background(), actor("nobody"), mutations.GrantRelationshipCommand{
+	_, err := admitGrantRelationship(context.Background(), comps, actor("nobody"), mutations.GrantRelationshipCommand{
 		ResourceType: demoResourceType, ResourceID: "p1", Relation: "member",
 		Subject: relationships.SubjectRef{Type: "user", ID: "x"},
 	})
@@ -99,16 +82,13 @@ func TestAuthorizationCompositionGuardedPosture(t *testing.T) {
 	}
 }
 
-// TestHostMutationGuardManageAccessAllowsAndDenies proves the host guard reads
-// manage_access (its backing owner relation) through the DecisionView: an owner actor's
-// grant commits, a non-owner actor's grant is denied and commits nothing.
-func TestHostMutationGuardManageAccessAllowsAndDenies(t *testing.T) {
+func TestHostAdmissionManageAccessAllowsAndDenies(t *testing.T) {
 	comps := hostAuthz(t)
-	svc, sm := comps, comps.SystemMutator
+	svc, sm := comps, comps.Mutations
 	seedTrustedOwner(t, sm, "p1", "u-owner")
 
 	// The owner may grant a member.
-	rcpt, err := svc.Mutations.GrantRelationship(context.Background(), actor("u-owner"), mutations.GrantRelationshipCommand{
+	rcpt, err := admitGrantRelationship(context.Background(), svc, actor("u-owner"), mutations.GrantRelationshipCommand{
 		ResourceType: demoResourceType, ResourceID: "p1", Relation: "member",
 		Subject: relationships.SubjectRef{Type: "user", ID: "u-member"},
 	})
@@ -120,7 +100,7 @@ func TestHostMutationGuardManageAccessAllowsAndDenies(t *testing.T) {
 	}
 
 	// A non-owner may not, and nothing is written.
-	_, err = svc.Mutations.GrantRelationship(context.Background(), actor("u-stranger"), mutations.GrantRelationshipCommand{
+	_, err = admitGrantRelationship(context.Background(), svc, actor("u-stranger"), mutations.GrantRelationshipCommand{
 		ResourceType: demoResourceType, ResourceID: "p1", Relation: "member",
 		Subject: relationships.SubjectRef{Type: "user", ID: "u-intruder"},
 	})
@@ -132,16 +112,16 @@ func TestHostMutationGuardManageAccessAllowsAndDenies(t *testing.T) {
 	}
 }
 
-// TestGuardedActorCannotSelfGrant proves an untrusted actor cannot self-escalate: a
+// TestInboundRejectsSelfGrant proves an untrusted actor cannot self-escalate: a
 // non-owner granting ITSELF owner (or a lesser relation) is denied by the guard before
 // Apply, and no row is written. This is the acceptance's "untrusted service calls cannot
 // self-grant".
-func TestGuardedActorCannotSelfGrant(t *testing.T) {
+func TestInboundRejectsSelfGrant(t *testing.T) {
 	comps := hostAuthz(t)
-	svc, sm := comps, comps.SystemMutator
+	svc, sm := comps, comps.Mutations
 	seedTrustedOwner(t, sm, "p1", "u-owner")
 
-	_, err := svc.Mutations.GrantRelationship(context.Background(), actor("u-evil"), mutations.GrantRelationshipCommand{
+	_, err := admitGrantRelationship(context.Background(), svc, actor("u-evil"), mutations.GrantRelationshipCommand{
 		ResourceType: demoResourceType, ResourceID: "p1", Relation: "owner",
 		Subject: relationships.SubjectRef{Type: "user", ID: "u-evil"},
 	})
@@ -153,21 +133,16 @@ func TestGuardedActorCannotSelfGrant(t *testing.T) {
 	}
 }
 
-// TestHostMutationGuardPlatformAdminShortCircuit proves the platform-admin recipe is
-// composed IN the host guard over the DecisionView: a platform admin who is NOT a project
-// owner may still drive an actor-facing grant. The short-circuit is removed by a trusted
-// teardown of the platform-admin scope — after which the same actor is denied, proving the
-// guard re-reads live authorization data through the view rather than caching a decision.
-func TestHostMutationGuardPlatformAdminShortCircuit(t *testing.T) {
+func TestHostAdmissionPlatformAdminShortCircuit(t *testing.T) {
 	comps := hostAuthz(t)
-	svc, sm := comps, comps.SystemMutator
+	svc, sm := comps, comps.Mutations
 	if err := seedAuthorization(context.Background(), sm); err != nil { // seeds platform:main#admin@user:demo-owner
 		t.Fatalf("seedAuthorization: %v", err)
 	}
 
 	// demo-owner is a platform admin but not an owner of project p2; the short-circuit
 	// lets it grant anyway.
-	rcpt, err := svc.Mutations.GrantRelationship(context.Background(), actor(seedOwnerSubject.ID), mutations.GrantRelationshipCommand{
+	rcpt, err := admitGrantRelationship(context.Background(), svc, actor(seedOwnerSubject.ID), mutations.GrantRelationshipCommand{
 		ResourceType: demoResourceType, ResourceID: "p2", Relation: "owner",
 		Subject: relationships.SubjectRef{Type: "user", ID: "u-p2-owner"},
 	})
@@ -183,7 +158,7 @@ func TestHostMutationGuardPlatformAdminShortCircuit(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("teardown platform admin: %v", err)
 	}
-	_, err = svc.Mutations.GrantRelationship(context.Background(), actor(seedOwnerSubject.ID), mutations.GrantRelationshipCommand{
+	_, err = admitGrantRelationship(context.Background(), svc, actor(seedOwnerSubject.ID), mutations.GrantRelationshipCommand{
 		ResourceType: demoResourceType, ResourceID: "p3", Relation: "member",
 		Subject: relationships.SubjectRef{Type: "user", ID: "u-x"},
 	})
@@ -192,13 +167,9 @@ func TestHostMutationGuardPlatformAdminShortCircuit(t *testing.T) {
 	}
 }
 
-// TestHostMutationGuardGlobalMutationTrustedOnly proves the guard refuses a global
-// (subject-scoped) actor mutation from a non-admin: global role mutation has a blast
-// radius that belongs to a trusted holder, so only a platform admin (short-circuit) or the
-// SystemMutator may drive it.
-func TestHostMutationGuardGlobalMutationTrustedOnly(t *testing.T) {
+func TestHostAdmissionGlobalMutationTrustedOnly(t *testing.T) {
 	comps := hostAuthz(t)
-	_, err := comps.Mutations.AssignRole(context.Background(), actor("u-nobody"), mutations.AssignRoleCommand{
+	_, err := admitAssignRole(context.Background(), comps, actor("u-nobody"), mutations.AssignRoleCommand{
 
 		Subject: model.PrincipalRef{Type: "user", ID: "u-target"},
 		Role:    "auditor",
@@ -209,12 +180,9 @@ func TestHostMutationGuardGlobalMutationTrustedOnly(t *testing.T) {
 	}
 }
 
-// hostGranter builds the reference relationshipGranter over sm plus a resource registry
-// seeded with the given resource keys — the exact wiring run() composes (the SystemMutator
-// and the host resource-existence seam).
-func hostGranter(sm *mutations.SystemMutator, existing ...string) (guardedRelationshipGranter, *hostResourceRegistry) {
+func hostGranter(sm *mutations.Service, existing ...string) (integrityRelationshipGranter, *hostResourceRegistry) {
 	reg := newHostResourceRegistry(existing...)
-	return guardedRelationshipGranter{system: sm, exists: reg.Exists}, reg
+	return integrityRelationshipGranter{system: sm, exists: reg.Exists}, reg
 }
 
 // demoGrant is a GrantInput on the demo resource, distinguished by its OperationID — the
@@ -258,14 +226,14 @@ func TestBaselineInvitationGranterNeedsNoMutationLifecycle(t *testing.T) {
 	if !allowed(t, comps, "invitee", demoPermission, demoResourceID) {
 		t.Fatal("baseline re-grant did not restore membership")
 	}
-	if _, err := comps.SystemMutator.GrantRelationship(ctx, mutations.GrantRelationshipCommand{}); !errors.Is(err, mutations.ErrMutationsNotConfigured) {
+	if _, err := comps.Mutations.GrantRelationship(ctx, mutations.GrantRelationshipCommand{}); !errors.Is(err, mutations.ErrMutationsNotConfigured) {
 		t.Fatalf("advanced mutation repository unexpectedly required/wired: %v", err)
 	}
 }
 
 func TestInvitationAcceptanceTrustedAndIdempotent(t *testing.T) {
 	comps := hostAuthz(t)
-	svc, sm := comps, comps.SystemMutator
+	svc, sm := comps, comps.Mutations
 	ctx := context.Background()
 	if err := seedAuthorization(ctx, sm); err != nil { // establish the owner minimum
 		t.Fatalf("seedAuthorization: %v", err)
@@ -300,7 +268,7 @@ func TestInvitationAcceptanceTrustedAndIdempotent(t *testing.T) {
 
 func TestInvitationReinviteAfterRevokeRestoresTuple(t *testing.T) {
 	comps := hostAuthz(t)
-	svc, sm := comps, comps.SystemMutator
+	svc, sm := comps, comps.Mutations
 	ctx := context.Background()
 	if err := seedAuthorization(ctx, sm); err != nil {
 		t.Fatalf("seedAuthorization: %v", err)
@@ -317,7 +285,7 @@ func TestInvitationReinviteAfterRevokeRestoresTuple(t *testing.T) {
 
 	// The demo owner (holds manage_access on project:demo) revokes T through the guarded
 	// actor path — the tuple is gone.
-	if _, err := svc.Mutations.RevokeRelationship(ctx, actor(seedOwnerSubject.ID), mutations.RevokeRelationshipCommand{
+	if _, err := admitRevokeRelationship(ctx, svc, actor(seedOwnerSubject.ID), mutations.RevokeRelationshipCommand{
 
 		ResourceType: demoResourceType, ResourceID: demoResourceID, Relation: "member",
 		Subject: relationships.SubjectRef{Type: "user", ID: "invitee"},
@@ -340,12 +308,12 @@ func TestInvitationReinviteAfterRevokeRestoresTuple(t *testing.T) {
 func TestInvitationMemberAndOwnerCoexist(t *testing.T) {
 	comps := hostAuthz(t)
 	ctx := context.Background()
-	if err := seedAuthorization(ctx, comps.SystemMutator); err != nil {
+	if err := seedAuthorization(ctx, comps.Mutations); err != nil {
 		t.Fatal(err)
 	}
 	reg := newHostResourceRegistry(resourceKey(demoResourceType, demoResourceID))
 	raw := relationshipGranter{writer: comps.RelationshipWriter, reader: comps.Relationships, exists: reg.Exists}
-	guarded, _ := hostGranter(comps.SystemMutator, resourceKey(demoResourceType, demoResourceID))
+	guarded, _ := hostGranter(comps.Mutations, resourceKey(demoResourceType, demoResourceID))
 	for name, g := range map[string]invitations.Granter{"raw": raw, "guarded": guarded} {
 		t.Run(name, func(t *testing.T) {
 			id := "owner-" + name
@@ -375,7 +343,7 @@ func TestInvitationMemberAndOwnerCoexist(t *testing.T) {
 // host knows the resource is gone, so the check is the Granter's duty (design D2).
 func TestInvitationGrantDeletedResourceNotFound(t *testing.T) {
 	comps := hostAuthz(t)
-	svc, sm := comps, comps.SystemMutator
+	svc, sm := comps, comps.Mutations
 	ctx := context.Background()
 
 	// A separate project the host once owned, then destroyed.
@@ -403,7 +371,7 @@ func TestInvitationGrantDeletedResourceNotFound(t *testing.T) {
 // proven in the authentication pocket's handler tests).
 func TestHostInviteCheckPermissionMapping(t *testing.T) {
 	comps := hostAuthz(t)
-	svc, sm := comps, comps.SystemMutator
+	svc, sm := comps, comps.Mutations
 	ctx := context.Background()
 	if err := seedAuthorization(ctx, sm); err != nil { // seeds platform:main#admin@demo-owner
 		t.Fatalf("seedAuthorization: %v", err)
@@ -412,16 +380,16 @@ func TestHostInviteCheckPermissionMapping(t *testing.T) {
 	check := hostInviteCheck(svc.Decisions)
 
 	create := func(subjectID, relation, resourceID string) error {
-		return check(ctx, invitations.InviteCheckRequest{
+		return check(ctx, authenticationhttp.InviteCheckRequest{
 			Principal:    sdk.Principal{Type: "user", ID: subjectID},
-			Action:       invitations.InviteCreate,
+			Action:       authenticationhttp.InviteCreate,
 			ResourceType: demoResourceType, ResourceID: resourceID, Relation: relation,
 		})
 	}
 	list := func(subjectID, resourceID string) error {
-		return check(ctx, invitations.InviteCheckRequest{
+		return check(ctx, authenticationhttp.InviteCheckRequest{
 			Principal:    sdk.Principal{Type: "user", ID: subjectID},
-			Action:       invitations.InviteList,
+			Action:       authenticationhttp.InviteList,
 			ResourceType: demoResourceType, ResourceID: resourceID,
 		})
 	}
@@ -450,61 +418,6 @@ func TestHostInviteCheckPermissionMapping(t *testing.T) {
 	}
 }
 
-// TestHostSystemMutatorHeldApartFromService proves ordinary host code cannot recover the
-// trusted SystemMutator from the actor-facing Service: no Service method returns a
-// *SystemMutator and no exported field holds one. HTTP handlers receive only the Service.
-func TestHostSystemMutatorHeldApartFromService(t *testing.T) {
-	smType := reflect.TypeOf(&mutations.SystemMutator{})
-	svcType := reflect.TypeOf(&mutations.Service{})
-	for i := 0; i < svcType.NumMethod(); i++ {
-		m := svcType.Method(i)
-		for o := 0; o < m.Type.NumOut(); o++ {
-			if m.Type.Out(o) == smType {
-				t.Fatalf("Service.%s returns a *SystemMutator: ordinary code could recover the trusted capability", m.Name)
-			}
-		}
-	}
-	// The struct's own fields are unexported, so a host cannot reach one by field access
-	// either (reflect sees them but cannot set/read across packages); the method scan above
-	// is the reachable-surface proof.
-}
-
-// TestHostAuthorizationHasNoRawWriteOrSystemActor proves the guarantee at the HOST scope:
-// the Service type this host hands to handlers exposes no raw create/delete write method,
-// and the Actor a host constructs carries no system/privilege synonym — trusted writes are
-// reachable ONLY through the separately held SystemMutator.
-func TestHostAuthorizationHasNoRawWriteOrSystemActor(t *testing.T) {
-	svcType := reflect.TypeOf(&mutations.Service{})
-	for _, name := range []string{
-		"CreateRelationships",
-		"DeleteRelationship",
-		"DeleteResourceRelationships",
-		"DeleteByResourceAndSubject",
-	} {
-		if _, ok := svcType.MethodByName(name); ok {
-			t.Fatalf("Service.%s must remain on the separately placed RelationshipWriter, not the handler-facing Service", name)
-		}
-	}
-	// Every actor-facing mutation method takes an Actor (never a privilege flag).
-	actorType := reflect.TypeOf(mutations.Actor{})
-	for _, name := range []string{"GrantRelationship", "RevokeRelationship", "AssignRole", "UnassignRole"} {
-		m, ok := svcType.MethodByName(name)
-		if !ok {
-			t.Fatalf("Service.%s (guarded) must exist", name)
-		}
-		if m.Type.NumIn() < 3 || m.Type.In(2) != actorType {
-			t.Fatalf("Service.%s must take an Actor as its first argument, got %s", name, m.Type)
-		}
-	}
-	// Actor carries no constructible system/privilege synonym.
-	for i := 0; i < actorType.NumField(); i++ {
-		n := strings.ToLower(actorType.Field(i).Name)
-		if strings.Contains(n, "system") || strings.Contains(n, "kind") || strings.Contains(n, "trust") {
-			t.Fatalf("Actor exposes a privilege field %q; trusted writes must go through SystemMutator", actorType.Field(i).Name)
-		}
-	}
-}
-
 // TestAuthorizationPosturesDemonstrable proves the two live postures this host composes
 // stay demonstrable over the guarded engine: the host-authored closure (isPlatformAdmin, a
 // host Check recipe that fails closed) and the flagship engine (authorizer.Check). The
@@ -512,7 +425,7 @@ func TestHostAuthorizationHasNoRawWriteOrSystemActor(t *testing.T) {
 // middle-posture git artifact (README), not an engine call.
 func TestAuthorizationPosturesDemonstrable(t *testing.T) {
 	comps := hostAuthz(t)
-	svc, sm := comps, comps.SystemMutator
+	svc, sm := comps, comps.Mutations
 	ctx := context.Background()
 	if err := seedAuthorization(ctx, sm); err != nil {
 		t.Fatalf("seedAuthorization: %v", err)
@@ -573,7 +486,7 @@ func newDemoAuditHost(t *testing.T) *demoAuditHost {
 	sender := &recordingSender{}
 	authSvc := bootInProcess(t, sender, nil)
 	comps := hostAuthz(t)
-	if err := seedAuthorization(context.Background(), comps.SystemMutator); err != nil {
+	if err := seedAuthorization(context.Background(), comps.Mutations); err != nil {
 		t.Fatalf("seedAuthorization: %v", err)
 	}
 	router := web.NewWebHandler()
@@ -609,12 +522,9 @@ func (h *demoAuditHost) principalID(c *linkClient) string {
 	return out.PrincipalID
 }
 
-// assignAuditor grants the modeled `auditor` role at the given scope through the
-// TRUSTED SystemMutator (an empty scope pair is a global assignment) — the only
-// role-assignment seam this host ships.
 func (h *demoAuditHost) assignAuditor(userID, resourceType, resourceID string) {
 	h.t.Helper()
-	if _, err := h.comps.SystemMutator.AssignRole(context.Background(), mutations.AssignRoleCommand{
+	if _, err := h.comps.Mutations.AssignRole(context.Background(), mutations.AssignRoleCommand{
 
 		Subject: model.PrincipalRef{Type: "user", ID: userID},
 		Role:    demoRole,
@@ -665,7 +575,7 @@ func TestDemoAuditRouteUsesScopedPredicate(t *testing.T) {
 	// role model, and still passes the relationship-owned gate.
 	member := h.signUp("role-model-member@example.com")
 	memberID := h.principalID(member)
-	if _, err := h.comps.SystemMutator.GrantRelationship(context.Background(), mutations.GrantRelationshipCommand{
+	if _, err := h.comps.Mutations.GrantRelationship(context.Background(), mutations.GrantRelationshipCommand{
 
 		ResourceType: demoResourceType,
 		ResourceID:   demoResourceID,

@@ -5,22 +5,20 @@ import (
 	"fmt"
 	"sync"
 
+	access "github.com/gopernicus/gopernicus/examples/auth-cms/pockets/access/inbound"
+
+	authenticationhttp "github.com/gopernicus/gopernicus/pockets/authentication/inbound/http"
+
 	invitations "github.com/gopernicus/gopernicus/pockets/authentication/logic/invitations"
 	authorizationhttp "github.com/gopernicus/gopernicus/pockets/authorization/inbound/http"
 	audit "github.com/gopernicus/gopernicus/pockets/authorization/logic/audit"
 	decisions "github.com/gopernicus/gopernicus/pockets/authorization/logic/decisions"
-	model "github.com/gopernicus/gopernicus/pockets/authorization/logic/model"
 	mutations "github.com/gopernicus/gopernicus/pockets/authorization/logic/mutations"
 	relationships "github.com/gopernicus/gopernicus/pockets/authorization/logic/relationships"
 	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/pkg/web"
 )
 
-// The demo resource the flagship checks against. An invitation created at
-// POST /auth/invitations/project/demo with relation "member" grants — through the
-// relationshipGranter → the trusted SystemMutator — the tuple
-// project:demo#member@user:<id>. The demo `view` permission is AnyOf(owner,
-// member), so both an owner and a member pass the gate.
 const (
 	demoResourceType = "project"
 	demoResourceID   = "demo"
@@ -131,20 +129,16 @@ func (g relationshipGranter) Grant(ctx context.Context, in invitations.GrantInpu
 	return nil
 }
 
-// guardedRelationshipGranter is the opt-in high-integrity invitation posture.
-// It consumes OperationID to derive durable mutation idempotency and maps guarded
-// atomic writes and guardian protection. A host can select this adapter for tenant/account owner or
-// administrator invitations while ordinary resource sharing uses relationshipGranter.
-type guardedRelationshipGranter struct {
-	system *mutations.SystemMutator
+type integrityRelationshipGranter struct {
+	system *mutations.Service
 	exists resourceExistsFn
 }
 
-var _ invitations.Granter = guardedRelationshipGranter{}
+var _ invitations.Granter = integrityRelationshipGranter{}
 
-func (g guardedRelationshipGranter) Grant(ctx context.Context, in invitations.GrantInput) error {
+func (g integrityRelationshipGranter) Grant(ctx context.Context, in invitations.GrantInput) error {
 	if g.exists == nil {
-		return fmt.Errorf("auth-cms: guardedRelationshipGranter resource-existence seam is not wired")
+		return fmt.Errorf("auth-cms: integrityRelationshipGranter resource-existence seam is not wired")
 	}
 	exists, err := g.exists(ctx, in.ResourceType, in.ResourceID)
 	if err != nil {
@@ -179,54 +173,13 @@ func (g guardedRelationshipGranter) Grant(ctx context.Context, in invitations.Gr
 //
 // A denial wraps sdk.ErrForbidden (→403); an authorizer infrastructure error fails CLOSED
 // (returned as-is, →500), never an allow.
-func hostInviteCheck(authorizer *decisions.Service) invitations.InviteCheck {
-	return func(ctx context.Context, req invitations.InviteCheckRequest) error {
-		// Platform-admin recipe: host runs it first (engine grants no bypass). isPlatformAdmin
-		// already fails closed to false on any probe error.
-		if isPlatformAdmin(ctx, authorizer, req.Principal.Type, req.Principal.ID) {
-			return nil
-		}
-		// Owner-granting is elevated: a member-capable manager cannot invite an owner.
-		if req.Action == invitations.InviteCreate && req.Relation == "owner" {
-			return fmt.Errorf("auth-cms: %s:%s may not invite an owner on %s:%s (owner grants are reserved to platform admins): %w",
-				req.Principal.Type, req.Principal.ID, req.ResourceType, req.ResourceID, sdk.ErrForbidden)
-		}
-		// Otherwise the caller must hold manage_access on the target resource — for both
-		// creating a non-owner invitation and listing a resource's invitations.
-		res, err := authorizer.Check(ctx, model.CheckRequest{
-			Principal:  model.PrincipalRef{Type: req.Principal.Type, ID: req.Principal.ID},
-			Permission: manageAccessPerm,
-			Resource:   model.Resource{Type: req.ResourceType, ID: req.ResourceID},
-		})
-		if err != nil {
-			// Fail closed: an authorizer failure denies, never allows.
-			return fmt.Errorf("auth-cms: invite authorization probe failed for %s:%s on %s:%s: %w",
-				req.Principal.Type, req.Principal.ID, req.ResourceType, req.ResourceID, err)
-		}
-		if !res.Allowed {
-			return fmt.Errorf("auth-cms: %s:%s lacks manage_access to %s invitations on %s:%s: %w",
-				req.Principal.Type, req.Principal.ID, req.Action, req.ResourceType, req.ResourceID, sdk.ErrForbidden)
-		}
-		return nil
-	}
+func hostInviteCheck(authorizer *decisions.Service) authenticationhttp.InviteCheck {
+	return access.New(authorizer).Invite
 }
 
-// isPlatformAdmin is the HOST-side platform-admin recipe (host composition —
-// the engine no longer bypasses on the platform:main#admin tuple). It runs an
-// ordinary schema-declared `admin` permission Check on platform/main, which the
-// host declares in its model (see main.go). It fails CLOSED: any error or a
-// missing tuple yields false. A host that wants admin-sees-everything runs this
-// FIRST in its own closure, before the resource-specific check.
-//
-// Global role facts apply only when the named permission expression explicitly
-// includes them. This host keeps its platform-admin shortcut in this closure.
 func isPlatformAdmin(ctx context.Context, authorizer *decisions.Service, subjectType, subjectID string) bool {
-	res, err := authorizer.Check(ctx, model.CheckRequest{
-		Principal:  model.PrincipalRef{Type: subjectType, ID: subjectID},
-		Permission: "admin",
-		Resource:   model.Resource{Type: "platform", ID: "main"},
-	})
-	return err == nil && res.Allowed
+	ok, err := access.New(authorizer).PlatformAdmin(ctx, sdk.Principal{Type: subjectType, ID: subjectID})
+	return err == nil && ok
 }
 
 // requireMembership accepts a platform administrator or a demo project member

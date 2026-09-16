@@ -293,7 +293,6 @@ func mustAuthenticationService(d authenticationFixture) *authlogic.Components {
 		authlogic.WithPasswordless(authlogic.PasswordlessConfig{Passwordless: d.Passwordless, ProvisionOnRedeem: d.ProvisionOnRedeem}),
 		authlogic.WithLinks(authlogic.LinksConfig{PublicAuthBaseURL: d.PublicAuthBaseURL, PasswordResetURL: d.PasswordResetURL, OAuthLinkBaseURL: d.OAuthLinkBaseURL, RedirectAllowlist: d.RedirectAllowlist}),
 		authlogic.WithChallengeProtector(d.Protector),
-		authlogic.WithUserAdminCheck(d.UserAdminCheck),
 		authlogic.WithInvitations(d.Invitations),
 		authlogic.WithLimits(d.AuthenticationLimits),
 		authlogic.WithClock(d.Clock),

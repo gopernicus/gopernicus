@@ -14,12 +14,11 @@ import (
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/mutations"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/relationships"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuples"
-	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/pkg/list"
 )
 
 func liveRepos(t *testing.T) (*pgxdb.DB, storetest.Repositories) { return liveReposWith(t) }
-func liveReposNoGuardian(t *testing.T) (*pgxdb.DB, storetest.Repositories) {
+func liveReposNoIntegrity(t *testing.T) (*pgxdb.DB, storetest.Repositories) {
 	return liveReposWith(t)
 }
 func liveReposWith(t *testing.T, opts ...Option) (*pgxdb.DB, storetest.Repositories) {
@@ -58,20 +57,6 @@ func auditRecords(t *testing.T, r storetest.Repositories) []audit.Record {
 		t.Fatal(err)
 	}
 	return page.Items
-}
-func TestMutationGuardPanicRollsBack(t *testing.T) {
-	_, repos := liveReposWith(t, WithAudit())
-	ctx := auditContext()
-	r, err := repos.Mutations.ApplyGuarded(ctx, grantCmd("panic", "viewer", "alice"), func(context.Context, mutations.StoreDecisionView) error { panic("guard failure") }, nil)
-	if r != nil || !errors.Is(err, sdk.ErrUnavailable) {
-		t.Fatalf("panic result=%+v err=%v", r, err)
-	}
-	if ok, err := repos.Relationships.CheckRelationExists(ctx, "doc", "panic", "viewer", "user", "alice"); err != nil || ok {
-		t.Fatalf("panic wrote fact: %v %v", ok, err)
-	}
-	if records := auditRecords(t, repos); len(records) != 0 {
-		t.Fatalf("panic recorded changes: %+v", records)
-	}
 }
 func TestMutationConcurrentNaturalNoOpsAndAudit(t *testing.T) {
 	_, repos := liveReposWith(t, WithAudit())
@@ -116,7 +101,7 @@ func TestMutationRefusesAmbientBeforeAnyWrite(t *testing.T) {
 	ctx := auditContext()
 	err := db.Transact(ctx, func(ctx context.Context) error {
 		r, err := repos.Mutations.Apply(ctx, grantCmd("ambient", "viewer", "alice"), nil)
-		if r != nil || !errors.Is(err, mutations.ErrGuardedInsideTransaction) {
+		if r != nil || !errors.Is(err, mutations.ErrMutationInsideTransaction) {
 			t.Fatalf("ambient result=%+v err=%v", r, err)
 		}
 		return nil

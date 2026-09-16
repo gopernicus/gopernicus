@@ -17,16 +17,10 @@ import (
 // Option configures New before construction. Nil options are invalid.
 type Option func(*constructorConfig)
 
-// AccessConfig supplies invitation authorization and membership checks.
+// AccessConfig supplies invitation membership and verified identity collaborators.
 type AccessConfig struct {
 	MemberCheck MemberCheck
 	UserLookup  UserLookup
-	// InviteCheck is the host authorization policy the AUTHORIZED operations pose
-	// their question to (design §6/D3). It is used ONLY by CreateAuthorized and
-	// ListByResourceAuthorized; the trusted Create/ListByResource composition methods
-	// stay check-free. Package auth requires it whenever a Granter enables
-	// invitations, so an authorized operation reached without one fails closed.
-	InviteCheck InviteCheck
 	// CallerIdentifiers resolves the accepting caller's active verified identifier
 	// value of a kind for the accept-time account match (design §7/V11). Wired by
 	// package auth from authlogic.ActiveVerifiedIdentifier; nil disables email/phone
@@ -39,7 +33,6 @@ func WithAccess(value AccessConfig) Option {
 	return func(c *constructorConfig) {
 		c.MemberCheck = value.MemberCheck
 		c.UserLookup = value.UserLookup
-		c.InviteCheck = value.InviteCheck
 		c.CallerIdentifiers = value.CallerIdentifiers
 	}
 }

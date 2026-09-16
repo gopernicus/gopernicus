@@ -21,9 +21,9 @@ import (
 )
 
 func TestTupleCacheEnabledConformance(t *testing.T) {
-	storetest.Run(t, func(t *testing.T, policy mutations.GuardianPolicy) storetest.Repositories {
+	storetest.Run(t, func(t *testing.T, policy mutations.IntegrityPolicy) storetest.Repositories {
 		db, cfg := cacheFixture(t, true)
-		repos, err := testRepositories(context.Background(), db, append(cacheOptions(cfg), WithGuardianPolicy(policy))...)
+		repos, err := testRepositories(context.Background(), db, append(cacheOptions(cfg), WithIntegrityPolicy(policy))...)
 		if err != nil {
 			t.Fatal(err)
 		}

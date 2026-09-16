@@ -6,14 +6,12 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuples"
-
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/mutations"
 	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
-func TestMutationRetryOnlyTrustedVendorConflicts(t *testing.T) {
+func TestMutationRetryOnlyDefiniteVendorAborts(t *testing.T) {
 	for _, code := range []string{serializationFailure, deadlockDetected} {
 		t.Run(code, func(t *testing.T) {
 			calls := 0
@@ -35,11 +33,9 @@ func TestMutationRetryOnlyTrustedVendorConflicts(t *testing.T) {
 		terminal bool
 		want     error
 	}{
-		{"guarded serialization", &pgconn.PgError{Code: serializationFailure}, true, mutations.ErrConcurrentMutation},
 		{"validator refusal", &pgconn.PgError{Code: serializationFailure}, true, mutations.ErrConcurrentMutation},
 		{"domain contention without vendor abort", mutations.ErrConcurrentMutation, false, mutations.ErrConcurrentMutation},
 
-		{"policy denial", sdk.ErrForbidden, true, sdk.ErrForbidden},
 		{"plain conflict", sdk.ErrConflict, false, sdk.ErrConflict},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -70,27 +66,5 @@ func TestMutationRetryCancellationAndBound(t *testing.T) {
 	})
 	if calls != mutationMaxRetries+1 || !errors.Is(err, mutations.ErrConcurrentMutation) {
 		t.Fatalf("exhausted retry: calls=%d err=%v", calls, err)
-	}
-}
-
-func TestDecisionViewHasRoleValidatesBeforeReading(t *testing.T) {
-	valid := mutations.Target{Kind: mutations.TargetResource, Type: "doc", ID: "d1"}
-	for _, tc := range []struct {
-		name                  string
-		scope                 mutations.Target
-		role, subjectType, id string
-	}{
-		{"scope kind", mutations.Target{Kind: "unknown", Type: "", ID: "d1"}, "admin", "user", "alice"},
-		{"scope id", mutations.Target{Kind: mutations.TargetSubject, Type: "user"}, "admin", "user", "alice"},
-		{"role", valid, "", "user", "alice"},
-		{"subject type", valid, "admin", "", "alice"},
-		{"subject id", valid, "admin", "user", ""},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			view := newDecisionView(nil, testSchema(t))
-			if _, err := view.Contains(context.Background(), tuples.Tuple{Scope: tuples.Scope{Kind: tuples.ResourceScope, Type: tc.scope.Type, ID: tc.scope.ID}, Relation: tc.role, Subject: tuples.SubjectRef{Type: tc.subjectType, ID: tc.id}}); !errors.Is(err, sdk.ErrInvalidInput) {
-				t.Fatalf("invalid role read: %v", err)
-			}
-		})
 	}
 }

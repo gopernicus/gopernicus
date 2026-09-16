@@ -207,10 +207,10 @@ func TestCanonicalSQLBulkAndSnapshots(t *testing.T) {
 		t.Fatalf("rollback: %v %v", held, err)
 	}
 }
-func TestCanonicalSQLGuardianAcrossRoleWrites(t *testing.T) {
+func TestCanonicalSQLIntegrityAcrossRoleWrites(t *testing.T) {
 	db := canonicalFixture(t, false)
-	policy := mutations.GuardianPolicy{Rules: []mutations.GuardianRule{{ResourceType: "doc", Relation: "owner", MinAnchors: 1}}}
-	repos, err := testRepositories(t.Context(), db, WithGuardianPolicy(policy))
+	policy := mutations.IntegrityPolicy{Rules: []mutations.IntegrityRule{{ResourceType: "doc", Relation: "owner", MinSubjects: 1}}}
+	repos, err := testRepositories(t.Context(), db, WithIntegrityPolicy(policy))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -220,10 +220,10 @@ func TestCanonicalSQLGuardianAcrossRoleWrites(t *testing.T) {
 	}
 	cmd := mutations.Command{Target: mutations.Target{Kind: mutations.TargetResource, Type: "doc", ID: "d"}, Operation: mutations.OpRoleUnassign, Roles: []mutations.RoleRow{{SubjectType: "user", SubjectID: "alice", Role: "owner"}}}
 	if result, err := repos.Mutations.Apply(t.Context(), cmd, nil); !errors.Is(err, mutations.ErrInvariantBlocked) || result != nil {
-		t.Fatalf("guardian bypass: %+v %v", result, err)
+		t.Fatalf("integrity bypass: %+v %v", result, err)
 	}
 	if held, err := repos.Tuples.Contains(t.Context(), owner); err != nil || !held {
-		t.Fatalf("lost guardian: %v %v", held, err)
+		t.Fatalf("lost integrity: %v %v", held, err)
 	}
 }
 

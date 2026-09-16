@@ -16,7 +16,7 @@ import (
 
 func TestDirectServicesShareTraversalBudget(t *testing.T) {
 	ctx := context.Background()
-	store := memory.New(memory.WithGuardianPolicy(mutations.GuardianPolicy{}))
+	store := memory.New(memory.WithIntegrityPolicy(mutations.IntegrityPolicy{}))
 	rel, err := relationships.NewService(store.Tuples())
 	if err != nil {
 		t.Fatal(err)
@@ -28,7 +28,7 @@ func TestDirectServicesShareTraversalBudget(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	query := authmodel.CheckRequest{Principal: actorU1().PrincipalRef, Permission: "view", Resource: authmodel.Resource{Type: "space", ID: "leaf"}}
+	query := authmodel.CheckRequest{Principal: prinU("u1"), Permission: "view", Resource: authmodel.Resource{Type: "space", ID: "leaf"}}
 	decision, err := decisions.NewService(store.Tuples(), decisions.WithModel(hierarchySchema()), decisions.WithLimits(authmodel.EvaluationLimits{MaxGraphStates: 1}))
 	if err != nil {
 		t.Fatal(err)
@@ -36,34 +36,6 @@ func TestDirectServicesShareTraversalBudget(t *testing.T) {
 
 	if got, err := decision.Check(ctx, query); got.Allowed || !errors.Is(err, authmodel.ErrEvaluationLimit) {
 		t.Fatalf("traversal exceeded inherited budget: decision=%+v err=%v", got, err)
-	}
-	var guardedRead bool
-	guard := contractGuard(func(ctx context.Context, _ mutations.MutationAttempt, view mutations.DecisionView) error {
-		guardedRead = true
-		got, err := view.Check(ctx, query)
-		if got.Allowed {
-			t.Error("guard traversal exceeded inherited budget")
-		}
-		return err
-	})
-	mutation, err := mutations.NewService(store.Mutations(), decision, mutations.WithGuard(guard))
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = mutation.Service.GrantRelationship(ctx, actorU1(), mutations.GrantRelationshipCommand{ResourceType: "space", ResourceID: "other", Relation: "viewer", Subject: subjU("u1")})
-	if !guardedRead || !errors.Is(err, authmodel.ErrEvaluationLimit) {
-		t.Fatalf("guard traversal escaped the shared budget: read=%t err=%v", guardedRead, err)
-	}
-	targets, err := rel.Service.GetRelationTargets(ctx, "space", "other", "viewer")
-	if err != nil || len(targets) != 0 {
-		t.Fatalf("failed guard wrote a tuple: targets=%v err=%v", targets, err)
-	}
-	for _, limit := range []int{2, authmodel.DefaultMaxGraphStates} {
-		bad := authmodel.EvaluationLimits{MaxGraphStates: limit}
-
-		if _, err := mutations.NewService(store.Mutations(), decision, mutations.WithLimits(bad), mutations.WithGuard(guard)); !errors.Is(err, authmodel.ErrInvalidLimits) {
-			t.Errorf("mutation mismatch %d: %v", limit, err)
-		}
 	}
 }
 
@@ -78,7 +50,7 @@ func TestDirectModelComposesExactRoleAndGraph(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := mutations.NewService(store.Mutations(), engine, mutations.WithGuard(&stubGuard{})); err != nil {
+	if _, err := mutations.NewService(store.Mutations(), mutations.WithModel(engine.CompiledModel())); err != nil {
 		t.Fatal(err)
 	}
 }

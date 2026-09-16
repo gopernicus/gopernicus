@@ -36,9 +36,12 @@ Logic never depends on HTTP, inbound or root composition. Domain types and ports
 belong with their owning service; a shared model package exists only when needed.
 Neither `domain` nor `internal` is a compulsory directory.
 
-Authorization's ordinary services retain guarded mutations; trusted relationship
-writers and system mutators remain separate capabilities. CMS retains its earlier
-API and directory layout while its audit is deferred.
+Inbound adapters own every application principal access check. Services accept
+admitted commands and enforce validation, data integrity and authentication proof.
+Authorization's principal-free mutation service validates tuple shape and applies
+`IntegrityPolicy` in the serialized store operation; ordinary raw and facade
+writers enforce the same configured minima. No application principal guard runs
+inside those writes. CMS retains its earlier API and layout pending audit.
 
 The `stores` directory itself contains no Go package or `go.mod`. Only the driver adapters are separate modules; memory and conformance remain in the core module. Importing a pocket does not automatically import those packages.
 

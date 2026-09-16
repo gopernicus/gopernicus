@@ -23,16 +23,48 @@ import (
 // allowInviteCheck authorizes every invitation operation. Wired where a test
 // exercises the routes past the host policy (the create/list allowed contract and
 // the revoked-session middleware gate, which denies before the handler body).
-func allowInviteCheck(context.Context, invitations.InviteCheckRequest) error { return nil }
+func allowInviteCheck(context.Context, InviteCheckRequest) error { return nil }
 
 // stubInvitationService satisfies InvitationService with inert methods — enough
 // to prove the routes register when a Granter is wired.
 type stubInvitationService struct{}
 
-func (stubInvitationService) CreateAuthorized(context.Context, sdk.Principal, invitations.CreateInput) (invitations.CreateResult, error) {
+// Preparation is real domain behavior even when execution is a transport spy.
+type unusedInvitationRepo struct {
+	invitations.InvitationRepository
+}
+type unusedInvitationGranter struct{ invitations.Granter }
+
+func (stubInvitationService) PrepareCreate(ctx context.Context, in invitations.CreateInput) (invitations.PreparedCreate, error) {
+	svc, err := invitations.New(unusedInvitationRepo{}, unusedInvitationGranter{}, invitations.WithDelivery(invitations.DeliveryConfig{Mailer: nopMailer{}}))
+	if err != nil {
+		return invitations.PreparedCreate{}, err
+	}
+	return svc.PrepareCreate(ctx, in)
+}
+
+type managementInvitationRepo struct {
+	invitations.InvitationRepository
+	invitation invitations.Invitation
+}
+
+func (r managementInvitationRepo) Get(context.Context, string) (invitations.Invitation, error) {
+	return r.invitation, nil
+}
+func preparedHTTPManagement(ctx context.Context, id, issuer string) (invitations.PreparedManagement, error) {
+	svc, err := invitations.New(managementInvitationRepo{invitation: invitations.Invitation{ID: id, InvitedBy: issuer}}, unusedInvitationGranter{})
+	if err != nil {
+		return invitations.PreparedManagement{}, err
+	}
+	return svc.PrepareManagement(ctx, id)
+}
+func (stubInvitationService) PrepareManagement(ctx context.Context, id string) (invitations.PreparedManagement, error) {
+	return preparedHTTPManagement(ctx, id, "u1")
+}
+func (stubInvitationService) CreatePrepared(context.Context, invitations.PreparedCreate) (invitations.CreateResult, error) {
 	return invitations.CreateResult{}, nil
 }
-func (stubInvitationService) ListByResourceAuthorized(context.Context, sdk.Principal, string, string, list.Request) (list.Page[invitations.Invitation], error) {
+func (stubInvitationService) ListByResource(context.Context, string, string, list.Request) (list.Page[invitations.Invitation], error) {
 	return list.Page[invitations.Invitation]{}, nil
 }
 func (stubInvitationService) Mine(context.Context, string, list.Request) (list.Page[invitations.Invitation], error) {
@@ -42,22 +74,18 @@ func (stubInvitationService) Accept(context.Context, invitations.AcceptInput) (i
 	return invitations.AcceptResult{}, nil
 }
 func (stubInvitationService) Decline(context.Context, string, string) error { return nil }
-func (stubInvitationService) Cancel(context.Context, string, string) error  { return nil }
-func (stubInvitationService) Resend(context.Context, string, string, string) (invitations.Invitation, error) {
+func (stubInvitationService) Cancel(context.Context, invitations.PreparedManagement) error {
+	return nil
+}
+func (stubInvitationService) Resend(context.Context, invitations.PreparedManagement, string) (invitations.Invitation, error) {
 	return invitations.Invitation{}, nil
 }
 
-// spyInvitationService records whether each use-case was reached and mimics the
-// real service's authorized operations: the host InviteCheck runs FIRST, and the
-// *Called flags mark the side-effect path, so a test asserting "a denied create
-// never touched the service" keeps its meaning now that the check lives in the
-// service (the ordering itself is pinned by the invitation service tests).
-// createResult is the configurable Create outcome the allowed-contract test
-// asserts on.
+// spyInvitationService records execution after the adapter's policy succeeds.
+// Preparation uses the real domain normalization path; results remain configurable.
 type spyInvitationService struct {
-	// inviteCheck is the host policy the authorized operations pose, mirroring the
-	// real service. Nil authorizes.
-	inviteCheck  invitations.InviteCheck
+	// Embed the domain preparation fixture.
+	stubInvitationService
 	createCalled bool
 	listCalled   bool
 	mineCalled   bool
@@ -77,38 +105,12 @@ type spyInvitationService struct {
 	resendResult invitations.Invitation
 }
 
-func (s *spyInvitationService) CreateAuthorized(ctx context.Context, principal sdk.Principal, in invitations.CreateInput) (invitations.CreateResult, error) {
-	s.lastPrincipal = principal
-	if s.inviteCheck != nil {
-		if err := s.inviteCheck(ctx, invitations.InviteCheckRequest{
-			Principal:      principal,
-			Action:         invitations.InviteCreate,
-			ResourceType:   in.ResourceType,
-			ResourceID:     in.ResourceID,
-			Relation:       in.Relation,
-			Metadata:       invitations.CloneMetadata(in.Metadata),
-			Identifier:     in.Identifier,
-			IdentifierKind: in.IdentifierKind,
-		}); err != nil {
-			return invitations.CreateResult{}, err
-		}
-	}
+func (s *spyInvitationService) CreatePrepared(_ context.Context, p invitations.PreparedCreate) (invitations.CreateResult, error) {
 	s.createCalled = true
-	s.lastCreate = in
+	s.lastCreate = p.Input()
 	return s.createResult, nil
 }
-func (s *spyInvitationService) ListByResourceAuthorized(ctx context.Context, principal sdk.Principal, resourceType, resourceID string, _ list.Request) (list.Page[invitations.Invitation], error) {
-	s.lastPrincipal = principal
-	if s.inviteCheck != nil {
-		if err := s.inviteCheck(ctx, invitations.InviteCheckRequest{
-			Principal:    principal,
-			Action:       invitations.InviteList,
-			ResourceType: resourceType,
-			ResourceID:   resourceID,
-		}); err != nil {
-			return list.Page[invitations.Invitation]{}, err
-		}
-	}
+func (s *spyInvitationService) ListByResource(context.Context, string, string, list.Request) (list.Page[invitations.Invitation], error) {
 	s.listCalled = true
 	return s.listPage, nil
 }
@@ -121,11 +123,18 @@ func (s *spyInvitationService) Accept(context.Context, invitations.AcceptInput) 
 	return invitations.AcceptResult{}, nil
 }
 func (s *spyInvitationService) Decline(context.Context, string, string) error { return nil }
-func (s *spyInvitationService) Cancel(context.Context, string, string) error {
+func (s *spyInvitationService) PrepareManagement(ctx context.Context, id string) (invitations.PreparedManagement, error) {
+	issuer := s.resendResult.InvitedBy
+	if issuer == "" {
+		issuer = "u1"
+	}
+	return preparedHTTPManagement(ctx, id, issuer)
+}
+func (s *spyInvitationService) Cancel(context.Context, invitations.PreparedManagement) error {
 	s.cancelCalled = true
 	return nil
 }
-func (s *spyInvitationService) Resend(context.Context, string, string, string) (invitations.Invitation, error) {
+func (s *spyInvitationService) Resend(context.Context, invitations.PreparedManagement, string) (invitations.Invitation, error) {
 	s.resendCalled = true
 	return s.resendResult, nil
 }
@@ -146,15 +155,14 @@ func newInvitationTestHandler(t *testing.T, inv InvitationService) http.Handler 
 		TokenSigner: newFakeSigner(),
 	})
 	h := web.NewWebHandler()
-	mount(h, mountDeps{Auth: svc, Invitations: inv, ListStrategy: list.StrategyCursor})
+	mount(h, mountDeps{Auth: svc, Invitations: inv, InviteCheck: allowInviteCheck, ListStrategy: list.StrategyCursor})
 	return h
 }
 
 // invitationFixture wires a real authlogic.Service over the mem stores with a spy
 // invitation service, a configurable InviteCheck, and a configurable limiter, so a
 // test can log in, revoke the session, and assert the policy/live-session gates.
-// The check is carried by the spy service (as the real service carries it), never
-// by the handlers.
+// The policy is carried by the handlers, independently of the service.
 type invitationFixture struct {
 	h         http.Handler
 	users     *memUsers
@@ -164,7 +172,7 @@ type invitationFixture struct {
 	inv       *spyInvitationService
 }
 
-func newInvitationFixture(t *testing.T, check invitations.InviteCheck, limiter ratelimiter.Limiter) invitationFixture {
+func newInvitationFixture(t *testing.T, check InviteCheck, limiter ratelimiter.Limiter) invitationFixture {
 	t.Helper()
 	return newInvitationFixtureWith(t, nil, check, limiter)
 }
@@ -172,7 +180,7 @@ func newInvitationFixture(t *testing.T, check invitations.InviteCheck, limiter r
 // newInvitationFixtureWith is newInvitationFixture with an explicit
 // InvitationService: nil mounts the recording spy (fixture.inv), and a supplied
 // service replaces it for tests that need service-side behavior (ownership).
-func newInvitationFixtureWith(t *testing.T, inv InvitationService, check invitations.InviteCheck, limiter ratelimiter.Limiter) invitationFixture {
+func newInvitationFixtureWith(t *testing.T, inv InvitationService, check InviteCheck, limiter ratelimiter.Limiter) invitationFixture {
 	t.Helper()
 	if limiter == nil {
 		limiter = ratelimiter.NewMemory()
@@ -181,7 +189,14 @@ func newInvitationFixtureWith(t *testing.T, inv InvitationService, check invitat
 	idents := newMemIdentifiers(users)
 	passwords := &memPasswords{m: map[string]string{}}
 	sessions := &memSessions{m: map[string]session.Session{}}
-	spy := &spyInvitationService{inviteCheck: check}
+	spy := &spyInvitationService{}
+	policy := func(ctx context.Context, req InviteCheckRequest) error {
+		spy.lastPrincipal = req.Principal
+		if check == nil {
+			return sdk.ErrForbidden
+		}
+		return check(ctx, req)
+	}
 	if inv == nil {
 		inv = spy
 	}
@@ -195,7 +210,7 @@ func newInvitationFixtureWith(t *testing.T, inv InvitationService, check invitat
 		TokenSigner: newFakeSigner(),
 	})
 	h := web.NewWebHandler()
-	mount(h, mountDeps{Auth: svc, Invitations: inv, ListStrategy: list.StrategyCursor})
+	mount(h, mountDeps{Auth: svc, Invitations: inv, InviteCheck: policy, ListStrategy: list.StrategyCursor})
 	return invitationFixture{h: h, users: users, idents: idents, passwords: passwords, sessions: sessions, inv: spy}
 }
 
@@ -273,8 +288,8 @@ func TestInvitationRoutesRegisteredWhenWired(t *testing.T) {
 func TestInvitationCreateRelationDeniedNeverReachesService(t *testing.T) {
 	// The policy authorizes creation but forbids the "owner" relation specifically —
 	// proving it sees the validated payload, not just the route.
-	relationAware := func(_ context.Context, req invitations.InviteCheckRequest) error {
-		if req.Action == invitations.InviteCreate && req.Relation == "owner" {
+	relationAware := func(_ context.Context, req InviteCheckRequest) error {
+		if req.Action == InviteCreate && req.Relation == "owner" {
 			return fmt.Errorf("cannot invite an owner: %w", sdk.ErrForbidden)
 		}
 		return nil
@@ -298,8 +313,8 @@ func TestInvitationCreateRelationDeniedNeverReachesService(t *testing.T) {
 // authorized create operation — with the SESSION caller as the principal — and
 // returns the pending-invitation contract (201 + the DTO).
 func TestInvitationCreateRelationAllowedReachesService(t *testing.T) {
-	relationAware := func(_ context.Context, req invitations.InviteCheckRequest) error {
-		if req.Action == invitations.InviteCreate && req.Relation == "owner" {
+	relationAware := func(_ context.Context, req InviteCheckRequest) error {
+		if req.Action == InviteCreate && req.Relation == "owner" {
 			return fmt.Errorf("cannot invite an owner: %w", sdk.ErrForbidden)
 		}
 		return nil
@@ -337,8 +352,8 @@ func TestInvitationCreateRelationAllowedReachesService(t *testing.T) {
 // drives the AUTHORIZED list operation and maps its refusal: a denied list is 403
 // and no page is read (design §6/D3).
 func TestInvitationListDeniedNeverReachesService(t *testing.T) {
-	denyList := func(_ context.Context, req invitations.InviteCheckRequest) error {
-		if req.Action == invitations.InviteList {
+	denyList := func(_ context.Context, req InviteCheckRequest) error {
+		if req.Action == InviteList {
 			if req.Relation != "" {
 				return errors.New("list check must carry an empty relation")
 			}
@@ -400,7 +415,7 @@ func TestInvitationCreateFailsClosed(t *testing.T) {
 	})
 
 	t.Run("policy denial", func(t *testing.T) {
-		deny := func(context.Context, invitations.InviteCheckRequest) error {
+		deny := func(context.Context, InviteCheckRequest) error {
 			return fmt.Errorf("denied: %w", sdk.ErrForbidden)
 		}
 		f := newInvitationFixture(t, deny, nil)
@@ -416,7 +431,7 @@ func TestInvitationCreateFailsClosed(t *testing.T) {
 	})
 
 	t.Run("policy infrastructure error", func(t *testing.T) {
-		boom := func(context.Context, invitations.InviteCheckRequest) error {
+		boom := func(context.Context, InviteCheckRequest) error {
 			return errors.New("policy backend unreachable")
 		}
 		f := newInvitationFixture(t, boom, nil)
@@ -581,12 +596,8 @@ func TestInvitationResponseCarriesInvitedBy(t *testing.T) {
 	})
 }
 
-// TestInvitationCancelResendOwnershipStaysServerEnforced proves the additive
-// invited_by field changed nothing about authorization: cancel and resend still
-// pass the SESSION caller's id to the service, which is the value ownership is
-// enforced on. A non-owner caller is refused (403) even though the list response
-// now tells every admin who owns a row; the field is a rendering hint, never
-// authority.
+// TestInvitationCancelResendOwnershipStaysServerEnforced checks issuer admission
+// in HTTP, independently of the policy-free lifecycle service.
 func TestInvitationCancelResendOwnershipStaysServerEnforced(t *testing.T) {
 	routes := []struct{ name, path string }{
 		{"cancel", "/auth/invitations/inv-1/cancel"},
@@ -612,32 +623,21 @@ func TestInvitationCancelResendOwnershipStaysServerEnforced(t *testing.T) {
 	}
 }
 
-// ownerAwareInvitationService enforces InvitedBy ownership like the real service,
-// so a handler test can assert the session caller id (never a client-supplied
-// value) is what cancel/resend authorize on.
+// ownerAwareInvitationService supplies the stored issuer without choosing access.
 type ownerAwareInvitationService struct {
 	stubInvitationService
 	owner string
 }
 
-func (s *ownerAwareInvitationService) Cancel(_ context.Context, _, currentUserID string) error {
-	if currentUserID != s.owner {
-		return fmt.Errorf("not the invitation owner: %w", sdk.ErrForbidden)
-	}
-	return nil
+func (s *ownerAwareInvitationService) PrepareManagement(ctx context.Context, id string) (invitations.PreparedManagement, error) {
+	return preparedHTTPManagement(ctx, id, s.owner)
 }
-
-func (s *ownerAwareInvitationService) Resend(_ context.Context, _, currentUserID, _ string) (invitations.Invitation, error) {
-	if currentUserID != s.owner {
-		return invitations.Invitation{}, fmt.Errorf("not the invitation owner: %w", sdk.ErrForbidden)
-	}
+func (s *ownerAwareInvitationService) Resend(context.Context, invitations.PreparedManagement, string) (invitations.Invitation, error) {
 	return invitations.Invitation{ID: "inv-1", InvitedBy: s.owner, Status: "pending"}, nil
 }
 
-// TestInvitationCreateForwardsMetadata proves an optional metadata object on the
-// create body reaches the authorized create operation's CreateInput verbatim —
-// the service then validates it and shows it to the host policy (pinned in
-// invitation service) — and that a created invitation carrying none omits the key.
+// TestInvitationCreateForwardsMetadata proves metadata survives preparation and
+// the inbound policy check, while a response carrying none omits the key.
 func TestInvitationCreateForwardsMetadata(t *testing.T) {
 	f := newInvitationFixture(t, allowInviteCheck, nil)
 	f.seedLoginUser("u1", "alice@example.com")

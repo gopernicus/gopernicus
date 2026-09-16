@@ -3,27 +3,20 @@ package mutations
 import (
 	"log/slog"
 
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/decisions"
 	authmodel "github.com/gopernicus/gopernicus/pockets/authorization/logic/model"
 )
 
-// Option configures construction of mutation services. Options apply in order,
-// replacing whole values; NewService validates final settings. Nil is invalid.
+// Option configures tuple writes. Options replace whole values in order; nil is invalid.
 type Option func(*config)
 
-// WithGuard selects the actor-facing mutation policy. Nil disables actor writes.
-// A nonnil guard requires the atomic mutation repository passed to NewService.
-func WithGuard(guard MutationGuard) Option {
-	return func(cfg *config) { cfg.Guard = guard }
-}
+// WithModel enforces declared tuple shapes; it makes no principal permission decision.
+func WithModel(model *decisions.CompiledModel) Option { return func(c *config) { c.Model = model } }
 
-// WithLimits replaces the evaluation budget. An entirely zero budget inherits
-// the decision service limits when present; explicit limits must match it.
-// Other zero dimensions default when a model or guard uses the budget.
+// WithLimits bounds requested and affected facts using MaxBatchSize.
 func WithLimits(limits authmodel.EvaluationLimits) Option {
-	return func(cfg *config) { cfg.Limits = limits }
+	return func(c *config) { c.Limits = limits }
 }
 
-// WithLogger supplies the borrowed operational logger. Nil uses slog.Default().
-func WithLogger(logger *slog.Logger) Option {
-	return func(cfg *config) { cfg.Logger = logger }
-}
+// WithLogger supplies the borrowed operational logger. Nil uses slog.Default.
+func WithLogger(logger *slog.Logger) Option { return func(c *config) { c.Logger = logger } }

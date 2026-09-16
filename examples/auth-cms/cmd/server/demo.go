@@ -27,28 +27,6 @@ import (
 	"github.com/gopernicus/gopernicus/sdk/pkg/web"
 )
 
-// registerDemoRoutes mounts the host-local demo routes (host code, NOT pocket
-// surface). Every route is READ-ONLY: AZ3-4.1 removed the session-only
-// authorization-mutation routes (POST /demo/roles/{assign,unassign}, POST
-// /demo/admin/bootstrap), because a shipped HTTP route must never mutate authorization
-// with session presence alone. Trusted seeding happens at boot (seedAuthorization) and
-// invitation acceptance rides the baseline RelationshipWriter (membership.go); the browser-driven
-// role-assignment surface is deferred until authentication exports a public
-// sensitive-operation protector (the AZADM packet), so the guarded actor-mutation path
-// is proven by authorization_test.go, not a browser flow.
-//
-//   - GET /demo/whoami — RequireAccessTokenOrAPIKey-gated: 200 for ANY valid credential
-//     class (session cookie, API-key bearer, or bearer JWT), echoing the resolved
-//     principal. A missing/invalid/expired/revoked credential → 401.
-//   - GET /demo/members-only — RequireAccessTokenOrAPIKey + engine-Check gated (the flagship
-//     posture): 200 only when the resolved principal holds `view` on project/demo
-//     through the authorization engine. A member (granted on invitation accept) → 200;
-//     an ungranted user → 403.
-//   - GET /demo/my-projects — RequireAccessTokenOrAPIKey-gated: the relationship kind's
-//     LookupAllResourceIDs enumeration (demonstration (b)); {admin, ids} (admin flag
-//     is the host-composed platform-admin recipe, not an engine bypass).
-//   - GET /demo/audit checks exact scoped auditor membership through the unified
-//     project/audit permission. It lists concrete assignments in that same scope.
 func registerDemoRoutes(router *web.WebHandler, authentication *authenticationhttp.Adapter, authorizer *decisions.Service, roleReader *roles.Service, authorization *authorizationhttp.Adapter) {
 	principal := authentication.RequireAccessTokenOrAPIKey()
 	router.Handle("GET", "/demo/whoami", demoWhoami(), principal)

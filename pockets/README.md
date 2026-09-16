@@ -27,6 +27,11 @@ A pocket exposes explicitly constructed services and optional inbound adapters
   alongside the types and ports they own. A host may construct those services
   directly or use the root's convenience constructor. Private fields and helpers
   encapsulate implementation; a forwarding façade is not required.
+- **Inbound access policy.** Inbound adapters invoke host permission callbacks
+  before application use cases. Services retain validation, identity proofs and
+  business invariants; actor inputs may support attribution. The authorization
+  engine is reusable logic invoked by inbound. Tuple writes enforce data
+  integrity atomically without invoking principal permission policy.
 - **Convenient composition.** A root constructor may return the one service it
   builds, or a `Components` value with named services, adapters and runtimes. A
   component bundle represents real assembly and lifecycle or capability boundaries;
@@ -44,13 +49,14 @@ to services and adapters, and adapters consume narrowly declared logic contracts
 
 ### Authorization capabilities
 
-Authorization's ordinary mutation service retains actor guards and atomic
-model/guardian validation. `RelationshipWriter` and `SystemMutator` are separate
-trusted capabilities handed out by the composition root only to code that needs
-them. They must remain unreachable through ordinary decision, relationship-read,
-role-read and guarded-mutation services. Splitting role and relationship services
-must not turn raw store assignment methods into ordinary guarded use cases or
-split one atomic guard/write/audit unit into independent writes.
+Authorization supplies a principal-free tuple command service. `IntegrityPolicy`
+defines post-state data rules; memory and SQL adapters enforce them atomically
+on every ordinary tuple, role and relationship writer. Explicit resource
+teardown is the sole minimum-subject exception. `RelationshipWriter` and
+`RoleWriter` remain convenient raw data facades, with the same configured
+integrity. Inbound owns all principal permission checks, including bundled role
+administration's exact-command `WritePolicy`. Audit attribution is data, not
+a permission decision. No `MutationGuard` or `SystemMutator` variant remains.
 
 This separation does not require every pocket to have the same components.
 CMS retains its earlier public API and directory layout until its deferred audit.

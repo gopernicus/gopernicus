@@ -579,7 +579,7 @@ func runRolesPagedParity(t *testing.T, newRepos func(t *testing.T) Repositories)
 	t.Run("GlobalGrantHasNoPage", func(t *testing.T) {
 		repos := newRepos(t)
 		comps := newDecisionService(t, repos, authorization.WithModel(rolePolicyModel()))
-		grantRole(t, repos, comps.SystemMutator, "user", "u_global", "viewer", "", "")
+		grantRole(t, repos, comps.Mutations, "user", "u_global", "viewer", "", "")
 
 		res, err := comps.Decisions.LookupResourceIDPage(ctx, decisions.ResourceIDPageRequest{
 			Principal: authmodel.PrincipalRef{Type: "user", ID: "u_global"}, Permission: "view", ResourceType: "project", Limit: 1,
@@ -595,8 +595,8 @@ func runRolesPagedParity(t *testing.T, newRepos func(t *testing.T) Repositories)
 	t.Run("CursorRefusedAfterPolicyChange", func(t *testing.T) {
 		repos := newRepos(t)
 		comps := newDecisionService(t, repos, authorization.WithModel(rolePolicyModel()))
-		grantRole(t, repos, comps.SystemMutator, "user", "u1", "auditor", "project", "p1")
-		grantRole(t, repos, comps.SystemMutator, "user", "u1", "auditor", "project", "p2")
+		grantRole(t, repos, comps.Mutations, "user", "u1", "auditor", "project", "p1")
+		grantRole(t, repos, comps.Mutations, "user", "u1", "auditor", "project", "p2")
 
 		principal := authmodel.PrincipalRef{Type: "user", ID: "u1"}
 		cursor := firstPage(t, comps, principal, "audit", "project", 1).NextCursor

@@ -8,9 +8,9 @@ import (
 )
 
 // Plan computes the one canonical delta over all facts in a target. Adapters
-// invoke it after the guard and semantic validation, inside their serialized
+// invoke it after semantic validation, inside their serialized
 // write boundary. It does no I/O and never changes before or cmd.
-func Plan(cmd Command, before []tuples.Tuple, policy GuardianPolicy) (tuples.Changes, Outcome, error) {
+func Plan(cmd Command, before []tuples.Tuple, policy IntegrityPolicy) (tuples.Changes, Outcome, error) {
 	if err := cmd.Validate(); err != nil {
 		return tuples.Changes{}, "", err
 	}
@@ -45,24 +45,13 @@ func Plan(cmd Command, before []tuples.Tuple, policy GuardianPolicy) (tuples.Cha
 	for _, t := range requested.Add {
 		next[t] = true
 	}
-	if cmd.Target.Kind == TargetResource && cmd.Operation != OpTeardown {
-		for _, rule := range policy.Rules {
-			if rule.ResourceType != "" && rule.ResourceType != cmd.Target.Type {
-				continue
-			}
-			min := rule.MinAnchors
-			if min < 1 {
-				min = 1
-			}
-			count := 0
-			for t := range next {
-				if t.Relation == rule.Relation && !t.Subject.IsUserset() {
-					count++
-				}
-			}
-			if count < min {
-				return tuples.Changes{}, "", ErrInvariantBlocked
-			}
+	if cmd.Operation != OpTeardown {
+		facts := make([]tuples.Tuple, 0, len(next))
+		for t := range next {
+			facts = append(facts, t)
+		}
+		if err := policy.ValidateState(cmd.Target.Scope(), facts); err != nil {
+			return tuples.Changes{}, "", err
 		}
 	}
 	var delta tuples.Changes

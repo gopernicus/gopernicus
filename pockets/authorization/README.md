@@ -16,7 +16,7 @@ at startup.
 | `logic/relationships` | Resource-scoped fact facade, graph read ports and trusted relationship writer |
 | `logic/decisions` | One model/compiler and evaluator for roles, graph traversal, All/Any, check/explain/batch/filter/lookup |
 | `logic/model` | Principals, resources, result/reason vocabulary and evaluation budgets |
-| `logic/mutations` | Guarded commands, serialized decision view, guardian policy and trusted system mutator |
+| `logic/mutations` | Principal-free commands, tuple-shape validation and atomic integrity policy |
 | `logic/audit` | Canonical committed changes, attribution and history reader |
 | `inbound/http` | Composable authorization guards and optional role administration |
 | `stores/memory`, `stores/storetest` | Reference authority and shared conformance suites |
@@ -49,7 +49,7 @@ There are no separate role rows, synthetic fact IDs or creation timestamps.
 
 `roles.Assignment.Tuple()` and `relationships.CreateRelationship.Tuple()` produce
 the same identity. A resource role written through either facade participates in
-model-permitted graph checks, Through traversal, lookup and guardian counts.
+model-permitted graph checks, Through traversal, lookup and integrity counts.
 Writer origin never filters authorization reads.
 
 ## Exact roles need no model
@@ -108,7 +108,6 @@ policy := decisions.Model{ResourceTypes: map[string]decisions.ResourceTypeDef{
 }}
 components, err := authorization.New(repos,
     authorization.WithModel(policy),
-    authorization.WithGuard(hostGuard),
 )
 if err != nil { return err }
 result, err := components.Decisions.Check(ctx, model.CheckRequest{
@@ -135,16 +134,19 @@ Model options capture maps/slices when created. Compiled models and their public
 snapshots are immutable. Named permissions do not impose a role catalog:
 structurally valid opaque labels remain legal. Explicit relation subject-shape
 constraints apply to additions through every model-bound writer and mutation
-facade. Raw tuple stores apply structural validation only.
+facade. Raw tuple stores apply structural validation and the configured integrity
+policy, without named-model shape constraints.
 
 ## Construction and snapshots
 
 `Repositories.Tuples` is required and supplies roles, the resource fact facade
 and decisions. `Mutations` adds the atomic mutation capability. `Audit` is an
-optional history reader. A nil guard disables actor writes; a guard requires `Mutations`.
+optional history reader. Without `Repositories.Mutations`, `Components.Mutations`
+is nil and raw writers remain available. Direct `mutations.NewService(nil)`
+returns `ErrMutationsNotConfigured`; it never constructs an unusable writer.
 `Decisions`, `Roles` and `Relationships` are available without a named model.
 
-Options replace whole values in order: `WithModel`, `WithLimits`, `WithGuard`,
+Options replace whole values in order: `WithModel`, `WithLimits`,
 `WithLogger`, `WithRoleRoutes`, and `WithTupleCache`. Nil options and typed-nil
 dependencies fail construction. Limits default finite zero dimensions and reject
 negative values. No constructor starts a worker or owns a database connection.
@@ -156,14 +158,17 @@ checks, err := decisions.NewService(tupleStore, decisions.WithModel(policy))
 if err != nil { return err }
 roleReads, err := roles.NewService(tupleStore)
 if err != nil { return err }
-writes, err := mutations.NewService(mutationRepository, checks,
-    mutations.WithGuard(hostGuard),
+compiled, err := decisions.Compile(policy)
+if err != nil { return err }
+writes, err := mutations.NewService(mutationRepository,
+    mutations.WithModel(compiled),
 )
 if err != nil { return err }
 ```
 
-Mutation services inherit the supplied decision service's limits; explicit limits
-must match. `relationships.NewService` accepts the canonical tuple store and an optional
+Mutation services accept an optional compiled shape model and `WithLimits`; they
+do not require a decision service or a principal. `relationships.NewService`
+accepts the canonical tuple store and an optional
 `WithValidator(checks.CompiledModel())`. Its result separates read service and
 trusted writer. `roles.NewWriter` offers the same optional validation seam.
 Root composition binds the model to both writers.
@@ -171,7 +176,7 @@ Root composition binds the model to both writers.
 All reads contributing to one role check, expression, permission check, explain,
 batch, filter or lookup operation use one coherent tuple view. Failed snapshot
 completion and cancellation discard provisional results. Custom decision readers
-must provide `tuples.Snapshotter`; guards supply their serialized callback view.
+must provide `tuples.Snapshotter`.
 Borrowed readers are sequential, callback-scoped, and fail after closure.
 
 A PostgreSQL ambient transaction must actually use REPEATABLE READ or SERIALIZABLE.
@@ -180,7 +185,7 @@ adapter inspects the bound transaction's isolation and rejects default READ
 COMMITTED with `tuples.ErrSnapshotIsolation` before evaluation. SQLite's ambient
 BEGIN IMMEDIATE is suitable. Both preserve pending writes and leave commit or
 rollback to the host. No detached transaction or silent isolation upgrade occurs.
-Raw writes continue to join ordinary ambient transactions; guarded mutations
+Raw writes continue to join ordinary ambient transactions; atomic mutation commands
 reject ambient transactions because they own their serialized write boundary.
 
 ## Lists and budgets
@@ -206,47 +211,71 @@ Relationship listings exclude global facts and retain both concrete and userset
 subjects. Subject and resource filters are applied before pagination, and facade
 projections preserve tuple cursors and counts.
 
-## Writes, invariants and audit
+## Writes, integrity and audit
 
-Keep trusted capabilities at host composition:
+Inbound adapters authorize the exact command before invoking a writer. Every
+writer is principal-free; application services do not repeat the access check.
+Configure data rules once on the store:
+
+```go
+integrity := mutations.IntegrityPolicy{Rules: []mutations.IntegrityRule{
+    {ResourceType: "project", Relation: "owner", MinSubjects: 1},
+}}
+store := memory.New(memory.WithIntegrityPolicy(integrity))
+components, err := authorization.New(authorization.Repositories{
+    Tuples: store.Tuples(), Mutations: store.Mutations(),
+})
+```
+
+SQL adapters offer the same `WithIntegrityPolicy` option. The default policy is
+empty. `DefaultIntegrityPolicy()` explicitly requires one concrete `owner` on
+every resource type. Empty `ResourceType` matches all resource types; zero
+`MinSubjects` means one, and negative values are invalid. Matching rules use the
+largest minimum. Resource minima do not apply to global facts.
 
 | Capability | Behavior |
 | --- | --- |
-| `RelationshipWriter`, `RoleWriter` | Exact/desired-state raw writes; validate bound shape rules; bypass actor guards and guardian minima |
-| `Mutations` | Actor-facing writes authorized by a host guard inside the serialized operation |
-| `SystemMutator` | Trusted atomic commands; bypass actor guard, retain shape rules and guardian minima |
-| Raw `tuples.Storer` | Structurally validated authoritative storage, intended for adapter/provisioning code |
+| `RelationshipWriter`, `RoleWriter` | Exact/desired-state writes; validate bound model shapes and enforce the store's integrity policy |
+| `Mutations` | Atomic commands with model-shape validation, integrity and optional audit in one serialized write boundary |
+| Raw `tuples.Storer` | Structural validation and the same configured integrity policy; joins supported ambient transactions |
 
-A guard must read through its supplied `mutations.DecisionView`, never an outer
-service. Check, exact roles, graph membership and proposed facts then share the
-write boundary. Guard callbacks must avoid side effects; supported adapters do
-not replay a started callback.
-Current guards and invariants run even for a natural no-op.
+There is one `mutations.Service`, with `Apply(ctx, command)` and typed methods
+such as `AssignRole(ctx, command)`. There is no principal guard, transactional
+permission view or separate system mutator. A pure `SemanticValidator` can enforce
+current-model tuple shapes in `MutationRepository.Apply`; it is not an access
+callback.
 
-Typed role assignment/unassignment commands require explicit `Scope`.
-`OpBatch` applies exact additions and removals atomically; use it for a swap.
-`OpReconcile` replaces subjects for one named scope/relation and leaves other
-labels intact. Duplicates within one set are idempotent. A fact in both add and
-remove sets is invalid. Commands and affected rows are bounded; adapters never
-split an atomic request into separate commits. Ambiguous `OpReplace` is removed.
+Integrity uses the current serialized post-state and applies through all ordinary
+write paths, including roles, relationships, raw `ApplyTuples`, reconciliation,
+`DeleteScope`, purge and natural no-ops. Concurrent removals cannot both delete
+the last required subject. Usersets do not satisfy a concrete-subject minimum.
+A fresh protected scope must establish all its required subjects in its first
+write, or in one batch. An explicit userset-only shape cannot support a concrete
+minimum. Direct SQL outside these adapters is outside this enforcement contract.
 
-Guardian rules count concrete canonical anchors through every guarded facade,
-including role unassignment. Usersets cannot stand in for an anchor. Opaque labels
-need no model, but an explicit userset-only subject constraint cannot support a
-concrete guardian minimum. Trusted `TeardownResourceAuthorization` is the explicit
-minimum exception and requires a bounded reason. It removes resource facts while
-preserving global facts.
+Typed role commands require an explicit `Scope`. `OpBatch` applies exact additions
+and removals atomically; use it for a swap. `OpReconcile` replaces subjects for one
+named scope/relation and leaves other labels intact. Duplicates within one set
+are idempotent. A fact in both add and remove sets is invalid. Commands and
+affected rows are bounded; adapters never split one command into separate commits.
 
-Results contain `applied`, `no_change` or `not_found`. Rejections are errors;
-`semantic_conflict` and `SameRoleGrantRemains` are removed. Applications can enforce
-exclusive memberships with a guard when their own policy needs them.
+`Mutations.TeardownResourceAuthorization` is the explicit integrity exception.
+It requires a bounded reason and removes resource facts while preserving global
+facts. The host must first delete or logically retire the resource; ordinary
+purge and raw scope deletion cannot bypass configured minima.
+
+Results contain `applied`, `no_change` or `not_found`. Integrity refusals return
+`ErrInvariantBlocked`, wrapping `sdk.ErrConflict`. Shape, cancellation and commit
+errors also return no successful result.
 
 Store `WithAudit()` records one canonical `Change{Action, Tuple}` delta in the
-same commit as facts. Exact duplicates, no-ops, denies and rollbacks add no
-history. Audit failure rolls back facts. Actor commands supply authenticated
-attribution; trusted calls use `audit.WithSource(ctx, audit.Source{System: ...})`.
-Audit records use `tuple/v2`, with event grouping, source and time. Hosts own
-retention and audit access.
+same commit as facts. Exact duplicates, no-ops, refusals and rollbacks add no
+history. Audit failure rolls back facts. Each recording-enabled write requires
+`audit.WithSource`: inbound supplies `ActorType`/`ActorID` from its authenticated
+principal, or a host workflow supplies `System`. Attribution is data, not access
+permission. Bundled role handlers supply authenticated attribution themselves.
+Records use `tuple/v2`, with event grouping, source and time. Hosts own retention
+and audit access.
 
 ## HTTP
 
@@ -324,6 +353,43 @@ and budget. `authorizationhttp.New(Services{Decisions: service})` also supports
 standalone use; the decision dependency requires only `ValidateExpression` and
 `EvaluateResolved`. The evaluator owns model validation and evaluation limits.
 
+### Authorization boundary and concurrency
+
+Application inbound adapters own permission checks. After `Require` admits a
+request, the handler can call application logic without another role or
+permission check. Logic still validates commands, enforces tenant restrictions
+and preserves business invariants. Other entry points (RPC, jobs, CLI) must
+explicitly authorize callers or be wired as trusted capabilities. For body-based
+policies, the inbound handler can prepare the command, authorize that exact
+command, then call the service.
+
+| Operation | Consistency boundary |
+| --- | --- |
+| `Require` | One coherent decision operation before the protected handler. An admitted request may finish after revocation; no transaction spans the handler automatically. |
+| Cached admission | The same decision semantics, with revocation visibility delayed by at most the configured eligibility bound. Use durable evaluation when this delay is unacceptable. |
+| Complete-set listing | One authorization snapshot supplies an ID restriction for the subsequent business query; these are separate reads. |
+| `FilterPage` | One authorization snapshot across all candidate pulls in that call. Business-source reads are not automatically in that snapshot. Continuations evaluate again. |
+| Same-database membership `EXISTS` | Facts and business rows in that SQL statement share its snapshot. A separate host bypass check does not share it. |
+| Atomic tuple command | Shape validation, current-state integrity, tuple changes and enabled audit share one serialized write operation after inbound admission. |
+
+Revocation is not cancellation: a successful ordinary check is not retracted
+while application code runs. With an uncached durable read, a decision beginning
+after a committed revoke observes it; a caller-owned older snapshot may instead
+observe its own transaction state. TupleCache has its documented staleness window.
+
+A tuple command admitted before a concurrent permission revoke may still commit.
+The mutation transaction does not re-check the caller. It evaluates configured
+integrity rules against the current serialized facts, so two removals cannot
+violate a minimum even if both callers were admitted earlier. This protects tuple
+data rules; it does not serialize unrelated business data or external effects.
+Unknown commit outcomes are never permission to blindly repeat an external effect.
+
+Opening an ambient transaction around middleware does not make admission and a
+later write one permission decision. Atomic mutation commands own their write
+boundary and reject ambient transactions. Raw writers join supported ambient
+transactions and still enforce configured integrity. See
+[Writes, integrity and audit](#writes-integrity-and-audit).
+
 ### Host denial responses
 
 Choose the denied response per mounted policy. For a route that conceals resource
@@ -363,7 +429,9 @@ components, err := authorization.New(repositories, authorization.WithLogger(logg
 ```
 
 Standalone decision services accept `decisions.WithLogger(logger)`. Nil captures
-`slog.Default()` at construction. Each completed public decision operation emits
+`slog.Default()` at construction. Direct role/relationship facade reads and raw
+store reads do not emit these decision-operation records. Each completed public
+`decisions.Service` operation emits
 one `authorization decision` record with its operation, final outcome and duration.
 Delegating methods, nested predicates, cache fallback and lookup retries do not
 produce duplicate records. Batch/filter/lookup records contain aggregate counts;
@@ -382,8 +450,20 @@ and from `WithDiagnosticObserver`'s scoped-denial transition probes.
 
 A host gate enables bundled role administration and must provide authentication,
 authorization and any required browser-origin/CSRF protection. A nil gate leaves
-all role handlers disabled. `RoleRoutes.AssignmentPolicy` is an optional pre-check;
-the atomic mutation guard remains authoritative.
+all role handlers disabled. Enabled routes also require `RoleRoutes.WritePolicy`
+and the role read/mutation services. `WritePolicy` without a gate is invalid.
+After strict decoding and validation, the callback receives one value-only
+`RoleWriteRequest` containing `Principal`, `Operation` (assign or unassign),
+`Subject`, `Role` and `Scope`. Returning nil admits the exact command; an error refuses
+before any write. The service subsequently enforces data integrity without a
+second principal check. A coarse gate alone never admits role writes.
+
+```go
+authorization.WithRoleRoutes(authorizationhttp.RoleRoutes{
+    Gate: hostRoleGate,
+    WritePolicy: hostRoleWritePolicy,
+})
+```
 
 | Method | Bundled route |
 | --- | --- |
@@ -430,7 +510,7 @@ publication is pending within that bound. Eligibility starts at the authoritativ
 observation, so a delayed relay cannot extend it. Missing/expired/oversized cache
 reads or a concurrent publication retry the **whole operation** on a durable
 snapshot. Exact role reads use this same runtime. Ambient transactions bypass
-Redis and borrow the coherent SQL view; guards and audit remain durable.
+Redis and borrow the coherent SQL view; integrity and audit remain durable.
 
 Protocol 2 is part of the Redis key prefix and wire format. Scope kind is explicit.
 Processes sharing a delivery stream share one mirror and MaxStaleness policy;
@@ -469,7 +549,7 @@ scoped-only expression denies despite a matching global fact. It is disabled by
 default. An enabled owned operation probes at most eight matching global facts
 inside its existing snapshot and emits at most one event after successful
 completion. Events contain no IDs or labels; probe failures never grant access.
-Serialized guard views do not emit because their caller owns completion.
+Caller-bound decision views do not emit because their caller owns completion.
 
 - [Schema setup](stores/UPGRADE.md)
 - [PostgreSQL](stores/pgx/README.md), [Turso](stores/turso/README.md), [Redis](stores/goredis/README.md)

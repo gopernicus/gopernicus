@@ -32,7 +32,7 @@ LIVE_TAG_MODULES = $(filter %/firestore,$(INTEGRATION_TAG_MODULES))
 	guard-auth-no-delivery-repo guard-auth-no-request-time-provider \
 	guard-authorization-no-delivery-repo guard-authorization-rolesvc-no-engine guard-ui-no-inward guard-ui-require-whitelist \
 	guard-no-legacy-features-path guard-list-no-nethttp guard-violation-message-not-error \
-	guard-firestore-mediation guard-pocket-logic guard-authorization-tuples-leaf guard-authorization-decisions-no-mutations
+	guard-firestore-mediation guard-pocket-logic guard-authorization-tuples-leaf guard-authorization-decisions-no-mutations guard-inbound-authorization guard-tuple-write-integrity
 
 # Regenerate *_templ.go from .templ sources. Each bundled views/templ module pins
 # its own templ tool; generation runs inside each so the tool version is
@@ -173,7 +173,7 @@ guard: guard-sdk-stdlib guard-pocket-isolation guard-sdk-no-outward guard-no-leg
 	guard-auth-no-delivery-repo guard-auth-no-request-time-provider \
 	guard-authorization-no-delivery-repo guard-authorization-rolesvc-no-engine guard-ui-no-inward guard-ui-require-whitelist \
 	guard-no-legacy-features-path guard-list-no-nethttp guard-violation-message-not-error \
-	guard-firestore-mediation guard-pocket-logic guard-authorization-tuples-leaf guard-authorization-decisions-no-mutations
+	guard-firestore-mediation guard-pocket-logic guard-authorization-tuples-leaf guard-authorization-decisions-no-mutations guard-inbound-authorization guard-tuple-write-integrity
 
 # G1: sdk imports only the standard library (also enforced structurally by
 # sdk/go.mod having no require block).
@@ -592,7 +592,18 @@ check:
 	@$(MAKE) guard
 	@echo "all checks passed"
 
-# G27: guards consume the decision evaluator; decision evaluation cannot import mutations.
+# G27: compiled schema validation may be used by writes; decisions never import mutations.
 guard-authorization-decisions-no-mutations:
 	@echo "== guard: authorization decisions imports no mutation layer (G27) =="
-	@! grep -rnE 'logic/mutations["`/]' --include='*.go' pockets/authorization/logic/decisions || { echo "ERROR (G27): decisions imports mutations — mutation guards depend on decisions, never the reverse"; exit 1; }
+	@! grep -rnE 'logic/mutations["`/]' --include='*.go' pockets/authorization/logic/decisions || { echo "ERROR (G27): decisions imports mutations — tuple writes consume compiled schemas, never the reverse"; exit 1; }
+
+# G28: application access policy is invoked at inbound, not by domain/storage services.
+guard-inbound-authorization:
+	@echo "== guard: host authorization callbacks stay at inbound (G28) =="
+	@! grep -rnE 'InviteCheck|inviteCheck|UserAdminCheck|userAdminCheck|CreateAuthorized|ListByResourceAuthorized|AuthorizeUserAdmin' --include='*.go' --exclude='*_test.go' pockets/authentication/logic || { echo "ERROR (G28): authentication logic retains an inbound host-policy callback or authorized wrapper"; exit 1; }
+	@! grep -rnE '"github.com/gopernicus/gopernicus/pockets/authorization/logic/(decisions|model)"' --include='*.go' --exclude='*_test.go' examples/auth-cms/internal/logic/domains/documents examples/auth-cms/internal/outbound/domains/documents || { echo "ERROR (G28): document logic/storage invokes the authorization engine; inbound selects query restrictions"; exit 1; }
+
+# G29: tuple writes enforce data integrity, never principal permission policy.
+guard-tuple-write-integrity:
+	@echo "== guard: tuple write services and stores contain no principal authorization (G29) =="
+	@! grep -rnE 'MutationGuard|AuthorizeMutation|ApplyGuarded|StoreDecisionView|SystemMutator|PrincipalFromContext|\*decisions.Service' --include='*.go' --exclude='*_test.go' pockets/authorization/logic/mutations pockets/authorization/stores/memory pockets/authorization/stores/pgx pockets/authorization/stores/turso || { echo "ERROR (G29): tuple writers retain principal policy; inbound admits commands, stores enforce IntegrityPolicy"; exit 1; }

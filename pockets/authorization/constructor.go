@@ -15,8 +15,8 @@ import (
 	"github.com/gopernicus/gopernicus/sdk"
 )
 
-// Components contains independently usable services and separately held trusted writers.
-// Give request code only the services it needs; keep trusted writers at host composition.
+// Components contains independently usable decision, read and data-write services.
+// Inbound access points authorize calls before invoking data writers.
 type Components struct {
 	TupleCache         *tuplecache.TupleCache
 	Decisions          *decisions.Service
@@ -26,7 +26,6 @@ type Components struct {
 	HTTP               *authorizationhttp.Adapter
 	RelationshipWriter *relationships.RelationshipWriter
 	RoleWriter         *roles.Writer
-	SystemMutator      *mutations.SystemMutator
 	log                *slog.Logger
 }
 
@@ -42,7 +41,7 @@ func New(repos Repositories, opts ...Option) (Components, error) {
 	for _, dep := range []struct {
 		name  string
 		value any
-	}{{"Repositories.Tuples", repos.Tuples}, {"Repositories.Mutations", repos.Mutations}, {"Repositories.Audit", repos.Audit}, {"Repositories.TupleSource", repos.TupleSource}, {"WithGuard", cfg.Guard}, {"WithTupleCache", cfg.TupleBackend}} {
+	}{{"Repositories.Tuples", repos.Tuples}, {"Repositories.Mutations", repos.Mutations}, {"Repositories.Audit", repos.Audit}, {"Repositories.TupleSource", repos.TupleSource}, {"WithTupleCache", cfg.TupleBackend}} {
 		if isTypedNil(dep.value) {
 			return Components{}, fmt.Errorf("authorization: %s is typed nil: %w", dep.name, sdk.ErrInvalidInput)
 		}
@@ -50,15 +49,8 @@ func New(repos Repositories, opts ...Option) (Components, error) {
 	if repos.Tuples == nil {
 		return Components{}, ErrNoKindConfigured
 	}
-	if cfg.Guard != nil && repos.Mutations == nil {
-		return Components{}, mutations.ErrGuardWithoutMutations
-	}
-	// Validate the optional route posture before any model work, preserving boot errors.
-	if cfg.RoleRoutesGate != nil && cfg.Guard == nil {
-		return Components{}, authorizationhttp.ErrRoleRoutesGateWithoutGuard
-	}
-	if cfg.RoleRouteAssignmentPolicy != nil && cfg.RoleRoutesGate == nil {
-		return Components{}, authorizationhttp.ErrRoleRouteAssignmentPolicyWithoutRoutes
+	if cfg.RoleRoutesGate != nil && repos.Mutations == nil {
+		return Components{}, authorizationhttp.ErrRoleRoutesWithoutMutations
 	}
 	if err := authorizationhttp.ValidateListStrategy(cfg.ListStrategy); err != nil {
 		return Components{}, err
@@ -94,17 +86,17 @@ func New(repos Repositories, opts ...Option) (Components, error) {
 		return Components{}, err
 	}
 	comps.Relationships, comps.RelationshipWriter = parts.Service, parts.RelationshipWriter
-	mut, err := mutations.NewService(
-		repos.Mutations,
-		comps.Decisions,
-		mutations.WithGuard(cfg.Guard),
-		mutations.WithLimits(cfg.Limits),
-		mutations.WithLogger(comps.log),
-	)
-	if err != nil {
-		return Components{}, err
+	if repos.Mutations != nil {
+		comps.Mutations, err = mutations.NewService(repos.Mutations, mutations.WithModel(comps.Decisions.CompiledModel()), mutations.WithLimits(cfg.Limits), mutations.WithLogger(comps.log))
+		if err != nil {
+			return Components{}, err
+		}
 	}
-	comps.Mutations, comps.SystemMutator = mut.Service, mut.SystemMutator
+	var roleWriter authorizationhttp.RoleWriter
+	if comps.Mutations != nil {
+		roleWriter = comps.Mutations
+	}
+
 	var decision authorizationhttp.DecisionService
 	if comps.Decisions != nil {
 		decision = comps.Decisions
@@ -114,11 +106,11 @@ func New(repos Repositories, opts ...Option) (Components, error) {
 		roleReader = comps.Roles
 	}
 	comps.HTTP, err = authorizationhttp.New(
-		authorizationhttp.Services{Decisions: decision, Roles: roleReader, Mutations: comps.Mutations},
+		authorizationhttp.Services{Decisions: decision, Roles: roleReader, Mutations: roleWriter},
 		authorizationhttp.WithRoleRoutes(authorizationhttp.RoleRoutes{
-			Gate:             cfg.RoleRoutesGate,
-			AssignmentPolicy: cfg.RoleRouteAssignmentPolicy,
-			ListStrategy:     cfg.ListStrategy,
+			Gate:         cfg.RoleRoutesGate,
+			WritePolicy:  cfg.RoleWritePolicy,
+			ListStrategy: cfg.ListStrategy,
 		}),
 	)
 	if err != nil {
@@ -132,7 +124,7 @@ func (c Components) Register(m pockets.Mount) error {
 	if c.HTTP == nil {
 		return fmt.Errorf("authorization: components are not initialized: %w", sdk.ErrInvalidInput)
 	}
-	c.log.Info("registered authorization pocket", "relationships", c.Relationships != nil, "roles", c.Roles != nil, "model", c.Decisions.CompiledModel() != nil, "baseline_relationship_writes", c.RelationshipWriter != nil, "actor_mutations", c.Mutations.Guarded(), "role_routes", c.HTTP.RoutesEnabled())
+	c.log.Info("registered authorization pocket", "relationships", c.Relationships != nil, "roles", c.Roles != nil, "model", c.Decisions.CompiledModel() != nil, "baseline_relationship_writes", c.RelationshipWriter != nil, "role_routes", c.HTTP.RoutesEnabled())
 	return c.HTTP.Register(m.Router)
 }
 func isTypedNil(value any) bool {

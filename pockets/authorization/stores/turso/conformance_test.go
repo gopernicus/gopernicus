@@ -41,9 +41,9 @@ var authorizationTables = []string{"iam_tuples", "iam_audit"}
 func TestConformance(t *testing.T) {
 	url, token := requireTursoEnv(t)
 
-	storetest.Run(t, func(t *testing.T, policy mutations.GuardianPolicy) storetest.Repositories {
+	storetest.Run(t, func(t *testing.T, policy mutations.IntegrityPolicy) storetest.Repositories {
 		db := openAndMigrate(t, url, token)
-		repos, err := testRepositories(context.Background(), db, WithGuardianPolicy(policy))
+		repos, err := testRepositories(context.Background(), db, WithIntegrityPolicy(policy))
 		if err != nil {
 			t.Fatalf("Repositories: %v", err)
 		}

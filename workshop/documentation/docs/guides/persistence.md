@@ -109,7 +109,16 @@ The application server does not migrate automatically. This prevents replicas fr
 
 Use SDK `transaction.Transactor` or pocket-declared atomic repository methods when a use case spans several writes. Do not pull a connector's raw underlying handle into logic as a service-locator shortcut.
 
-An atomic domain operation should be one port method when all implementations must guarantee the same invariant—for example authentication's user + primary identifier creation or authorization's guarded mutation apply.
+An atomic domain operation should be one port method when all implementations must guarantee the same invariant—for example authentication's user + primary identifier creation or authorization's atomic tuple command.
+
+Authorization separates inbound admission from write-time data integrity.
+Configure `WithIntegrityPolicy` on each writing store adapter; all ordinary raw and
+facade writes honor it, including writes joining ambient transactions. Atomic
+mutation commands own their serialized transaction and reject ambient contexts.
+Their current-state shape/integrity checks, fact delta and optional audit commit
+together, without a principal permission callback. Only explicit resource teardown
+bypasses configured minima. A prior permission check, even inside an ambient
+transaction, does not automatically become atomic with a later write.
 
 ## Prove parity
 

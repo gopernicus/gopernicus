@@ -8,13 +8,8 @@ import (
 	"testing"
 
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/decisions"
-	"github.com/gopernicus/gopernicus/pockets/authorization/logic/mutations"
 	"github.com/gopernicus/gopernicus/sdk"
 )
-
-type unguardedRoles struct{ stubRoleAdmin }
-
-func (*unguardedRoles) Guarded() bool { return false }
 
 func TestDirectAdapterRejectsInvalidWiring(t *testing.T) {
 	for _, tc := range []struct {
@@ -27,10 +22,10 @@ func TestDirectAdapterRejectsInvalidWiring(t *testing.T) {
 		{"typed nil writes", Services{Mutations: (*stubRoleAdmin)(nil)}, RoleRoutes{}, sdk.ErrInvalidInput},
 		{"typed nil decisions", Services{Decisions: (*decisions.Service)(nil)}, RoleRoutes{}, sdk.ErrInvalidInput},
 		{"gate without roles", Services{}, RoleRoutes{Gate: passGate}, ErrRoleRoutesGateWithoutRoles},
-		{"gate without writes", Services{Roles: &stubRoleAdmin{}}, RoleRoutes{Gate: passGate}, ErrRoleRoutesGateWithoutGuard},
-		{"unguarded writes", Services{Roles: &stubRoleAdmin{}, Mutations: &unguardedRoles{}}, RoleRoutes{Gate: passGate}, ErrRoleRoutesGateWithoutGuard},
+		{"gate without writes", Services{Roles: &stubRoleAdmin{}}, RoleRoutes{Gate: passGate}, ErrRoleRoutesWithoutMutations},
+		{"missing write policy", Services{Roles: &stubRoleAdmin{}, Mutations: &stubRoleAdmin{}}, RoleRoutes{Gate: passGate}, ErrRoleRoutesWithoutWritePolicy},
 		{"invalid list strategy", Services{}, RoleRoutes{ListStrategy: "unknown"}, ErrInvalidListStrategy},
-		{"unused assignment policy", Services{}, RoleRoutes{AssignmentPolicy: func(context.Context, mutations.AssignRoleCommand) error { return nil }}, ErrRoleRouteAssignmentPolicyWithoutRoutes},
+		{"unused assignment policy", Services{}, RoleRoutes{WritePolicy: func(context.Context, RoleWriteRequest) error { return nil }}, ErrRoleWritePolicyWithoutRoutes},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			a, err := New(tc.services, WithRoleRoutes(tc.routes))
@@ -47,7 +42,7 @@ func TestDirectHandlersRetainGateAndDisabledPosture(t *testing.T) {
 	gate := func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { gates++; adminGate()(next).ServeHTTP(w, r) })
 	}
-	a, err := New(Services{Roles: stub, Mutations: stub}, WithRoleRoutes(RoleRoutes{Gate: gate}))
+	a, err := New(Services{Roles: stub, Mutations: stub}, WithRoleRoutes(RoleRoutes{Gate: gate, WritePolicy: allowWrite}))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -449,7 +449,6 @@ func New(repos Repositories, signer cryptids.JWTSigner, runtimeMode environment.
 			invitations.WithAccess(invitations.AccessConfig{
 				MemberCheck: cfg.MemberCheck,
 				UserLookup:  userLookup(repos.Identifiers, idNormalizer),
-				InviteCheck: cfg.InviteCheck,
 				CallerIdentifiers: func(ctx context.Context, userID, kind string) (string, error) {
 					return authService.ActiveVerifiedIdentifier(ctx, userID, kind)
 				},
@@ -479,7 +478,6 @@ func New(repos Repositories, signer cryptids.JWTSigner, runtimeMode environment.
 		authlogic.WithPasswordless(authlogic.PasswordlessConfig{Passwordless: cfg.Passwordless, ProvisionOnRedeem: cfg.PasswordlessProvisionOnRedeem}),
 		authlogic.WithLinks(authlogic.LinksConfig{PublicAuthBaseURL: cfg.PublicAuthBaseURL, PasswordResetURL: cfg.PasswordResetURL, OAuthLinkBaseURL: cfg.OAuthLinkBaseURL, RedirectAllowlist: cfg.RedirectAllowlist}),
 		authlogic.WithChallengeProtector(cfg.ChallengeProtector),
-		authlogic.WithUserAdminCheck(cfg.UserAdminCheck),
 		authlogic.WithLimits(cfg.AuthenticationLimits),
 		authlogic.WithLogger(cfg.Logger),
 		authlogic.WithIDs(cfg.IDs),
@@ -546,6 +544,8 @@ func New(repos Repositories, signer cryptids.JWTSigner, runtimeMode environment.
 		cfg.RuntimeMode,
 		inbound.WithBrowser(inbound.BrowserConfig{RefreshCookiePath: cfg.RefreshCookiePath, AllowedOrigins: cfg.AllowedOrigins, Views: cfg.Views, HTMLPolicy: cfg.HTMLPolicy}),
 		inbound.WithInvitations(invSvc),
+		inbound.WithInviteCheck(cfg.InviteCheck),
+		inbound.WithUserAdminCheck(cfg.UserAdminCheck),
 		inbound.WithAuthenticatorPolicy(inbound.AuthenticatorPolicy{Cookie: cfg.SessionCookie, BrowserLoginPath: cfg.BrowserLoginPath, Limiter: limiter, Logger: cfg.Logger}),
 		inbound.WithListStrategy(listStrategy),
 		inbound.WithMachineGate(cfg.MachineRoutesGate),

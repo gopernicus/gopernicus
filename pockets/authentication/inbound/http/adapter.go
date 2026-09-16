@@ -18,8 +18,10 @@ import (
 
 // adapterConfig holds independently usable authentication/invitation services and
 // the HTTP policies for their bundled routes. Host middleware still owns
-// authorization of machine routes, and service policy owns user administration.
+// authorization of machine routes; this adapter owns invitation and user policies.
 type adapterConfig struct {
+	InviteCheck       InviteCheck
+	UserAdminCheck    UserAdminCheck
 	Authentication    AuthenticationService
 	Invitations       InvitationService
 	Authenticator     AuthenticatorPolicy
@@ -61,6 +63,15 @@ func New(service AuthenticationService, runtimeMode environment.Mode, opts ...Op
 	if cfg.MachineGate != nil && !cfg.Authentication.MachineEnabled() {
 		return nil, fmt.Errorf("authentication HTTP: machine gate requires machine service: %w", sdk.ErrInvalidInput)
 	}
+	if !nilDependency(cfg.Invitations) && cfg.InviteCheck == nil {
+		return nil, fmt.Errorf("authentication HTTP: invitations require InviteCheck: %w", sdk.ErrInvalidInput)
+	}
+	if nilDependency(cfg.Invitations) && cfg.InviteCheck != nil {
+		return nil, fmt.Errorf("authentication HTTP: InviteCheck requires invitations: %w", sdk.ErrInvalidInput)
+	}
+	if cfg.UserAdminCheck != nil && !cfg.Authentication.UserAdminEnabled() {
+		return nil, fmt.Errorf("authentication HTTP: UserAdminCheck requires user administration: %w", sdk.ErrInvalidInput)
+	}
 	if cfg.ListStrategy == "" {
 		cfg.ListStrategy = list.StrategyCursor
 	}
@@ -85,6 +96,7 @@ func New(service AuthenticationService, runtimeMode environment.Mode, opts ...Op
 		views = cfg.Views
 	}
 	auth.routes = &mountDeps{
+		InviteCheck: cfg.InviteCheck, UserAdminCheck: cfg.UserAdminCheck,
 		Auth:        &routedService{AuthenticationService: cfg.Authentication, Adapter: auth},
 		Invitations: inv, ListStrategy: cfg.ListStrategy,
 		Mutation: MutationSecurity{AllowedOrigins: append([]string(nil), cfg.AllowedOrigins...), SessionCookieName: auth.SessionCookieName()},

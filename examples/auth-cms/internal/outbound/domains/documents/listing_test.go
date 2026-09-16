@@ -45,9 +45,9 @@ func documentModel() decisions.Model {
 	}}})
 }
 
-func testCodec(t *testing.T) *CursorCodec {
+func testCodec(t *testing.T) *inbound.CursorCodec {
 	t.Helper()
-	c, err := NewCursorCodec([]byte("0123456789abcdef0123456789abcdef"))
+	c, err := inbound.NewCursorCodec([]byte("0123456789abcdef0123456789abcdef"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,9 +74,13 @@ func grant(t *testing.T, store relationships.Storer, ids ...string) {
 	}
 }
 
-func testListing(t *testing.T, reader Reader, az authorization.Components, strategy Strategy, batch int, bypass Bypass) *Listing {
+func testListing(t *testing.T, reader domain.Reader, az authorization.Components, strategy inbound.Strategy, batch int, bypass inbound.Bypass) *inbound.Listing {
 	t.Helper()
-	l, err := NewListing(reader, az.Decisions, testCodec(t), strategy, batch, bypass)
+	service, err := domain.New(reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	l, err := inbound.NewListing(service, az.Decisions, testCodec(t), strategy, batch, bypass)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,14 +98,10 @@ func documentIDs(items []domain.Document) []string {
 // Real HTTP exercises the handler, domain port, adapter, permission engine and
 // repository. The fixture middleware supplies a known identity; it is not shipped
 // host authentication or an impersonation route.
-func listingServer(t *testing.T, lister domain.Lister) *httptest.Server {
+func listingServer(t *testing.T, lister inbound.Lister) *httptest.Server {
 	t.Helper()
-	service, err := domain.New(lister)
-	if err != nil {
-		t.Fatal(err)
-	}
 	mux := http.NewServeMux()
-	mux.Handle("GET /tenants/{tenant}/documents", inbound.Handler(service))
+	mux.Handle("GET /tenants/{tenant}/documents", inbound.Handler(lister))
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if id := r.Header.Get("Fixture-Principal"); id != "" {
 			r = r.WithContext(sdk.WithPrincipal(r.Context(), sdk.Principal{Type: "user", ID: id}))
@@ -112,7 +112,7 @@ func listingServer(t *testing.T, lister domain.Lister) *httptest.Server {
 	return server
 }
 
-func getPage(t *testing.T, server *httptest.Server, principal string, query domain.Query, wantStatus int) domain.Page {
+func getPage(t *testing.T, server *httptest.Server, principal string, query inbound.Query, wantStatus int) inbound.Page {
 	t.Helper()
 	values := url.Values{"q": {query.Search}, "limit": {fmt.Sprint(query.Limit)}, "cursor": {query.Cursor}}
 	if query.Desc {
@@ -136,7 +136,7 @@ func getPage(t *testing.T, server *httptest.Server, principal string, query doma
 		t.Fatalf("status %d, want %d: %s", response.StatusCode, wantStatus, body)
 	}
 	if wantStatus != http.StatusOK {
-		return domain.Page{}
+		return inbound.Page{}
 	}
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(body, &fields); err != nil {
@@ -147,7 +147,7 @@ func getPage(t *testing.T, server *httptest.Server, principal string, query doma
 			t.Fatalf("unproved listing metadata %s: %s", name, body)
 		}
 	}
-	var page domain.Page
+	var page inbound.Page
 	if err := json.Unmarshal(body, &page); err != nil {
 		t.Fatal(err)
 	}
@@ -160,7 +160,7 @@ func getPage(t *testing.T, server *httptest.Server, principal string, query doma
 	return page
 }
 
-func walkHTTP(t *testing.T, server *httptest.Server, principal string, query domain.Query) []string {
+func walkHTTP(t *testing.T, server *httptest.Server, principal string, query inbound.Query) []string {
 	t.Helper()
 	ids := make([]string, 0)
 	seen := map[string]bool{}
@@ -197,30 +197,30 @@ func orderedFixture() []domain.Document {
 	}
 }
 
-func verifyListingHTTP(t *testing.T, lister domain.Lister) {
+func verifyListingHTTP(t *testing.T, lister inbound.Lister) {
 	t.Helper()
 	server := listingServer(t, lister)
 	for _, tt := range []struct {
-		query domain.Query
+		query inbound.Query
 		want  []string
 	}{
-		{domain.Query{TenantID: "a", Limit: 2}, []string{"90", "20", "30", "01", "unicode"}},
-		{domain.Query{TenantID: "a", Limit: 2, Desc: true}, []string{"unicode", "01", "30", "20", "90"}},
-		{domain.Query{TenantID: "a", Limit: 1, Search: " BETA "}, []string{"20", "30"}},
-		{domain.Query{TenantID: "b", Limit: 1}, []string{"other"}},
+		{inbound.Query{TenantID: "a", Limit: 2}, []string{"90", "20", "30", "01", "unicode"}},
+		{inbound.Query{TenantID: "a", Limit: 2, Desc: true}, []string{"unicode", "01", "30", "20", "90"}},
+		{inbound.Query{TenantID: "a", Limit: 1, Search: " BETA "}, []string{"20", "30"}},
+		{inbound.Query{TenantID: "b", Limit: 1}, []string{"other"}},
 	} {
 		if got := walkHTTP(t, server, alice.ID, tt.query); !slices.Equal(got, tt.want) {
 			t.Fatalf("query %+v: %v, want %v", tt.query, got, tt.want)
 		}
 	}
-	query := domain.Query{TenantID: "a", Limit: 2}
+	query := inbound.Query{TenantID: "a", Limit: 2}
 	getPage(t, server, "", query, http.StatusUnauthorized)
 	if got := walkHTTP(t, server, "nobody", query); len(got) != 0 {
 		t.Fatalf("no grants: %v", got)
 	}
 	page := getPage(t, server, alice.ID, query, http.StatusOK)
 	query.Cursor = page.NextCursor
-	for _, changed := range []domain.Query{
+	for _, changed := range []inbound.Query{
 		{TenantID: "b", Limit: 2, Cursor: query.Cursor},
 		{TenantID: "a", Search: "beta", Limit: 2, Cursor: query.Cursor},
 		{TenantID: "a", Desc: true, Limit: 2, Cursor: query.Cursor},
@@ -237,7 +237,7 @@ func TestMemoryListingHTTP(t *testing.T) {
 	store := newMemoryAuthorizationStore()
 	grant(t, store, "01", "90", "30", "20", "other", "unicode")
 	az := testAuthorizer(t, store, model.EvaluationLimits{})
-	for _, strategy := range []Strategy{CompleteSet, Candidates} {
+	for _, strategy := range []inbound.Strategy{inbound.CompleteSet, inbound.Candidates} {
 		t.Run(string(strategy), func(t *testing.T) {
 			verifyListingHTTP(t, testListing(t, testMemory(t, orderedFixture()), az, strategy, 3, nil))
 		})
@@ -252,8 +252,8 @@ func TestListingSparseContinuationIsPrivate(t *testing.T) {
 		{ID: "secret-one", TenantID: "a", Name: "aaa"}, {ID: "secret-two", TenantID: "a", Name: "bbb"},
 		{ID: "secret-three", TenantID: "a", Name: "ccc"}, {ID: "visible", TenantID: "a", Name: "ddd"},
 	})
-	server := listingServer(t, testListing(t, reader, az, Candidates, 2, nil))
-	query := domain.Query{TenantID: "a", Limit: 2}
+	server := listingServer(t, testListing(t, reader, az, inbound.Candidates, 2, nil))
+	query := inbound.Query{TenantID: "a", Limit: 2}
 	page := getPage(t, server, alice.ID, query, http.StatusOK)
 	if len(page.Items) != 0 || !page.HasMore || !page.ScanLimitReached {
 		t.Fatalf("expected resumable empty page: %+v", page)
@@ -275,24 +275,24 @@ func TestListingSparseContinuationIsPrivate(t *testing.T) {
 func TestListingBypassPreservesBusinessQueryAndErrors(t *testing.T) {
 	store := newMemoryAuthorizationStore()
 	az := testAuthorizer(t, store, model.EvaluationLimits{})
-	for _, strategy := range []Strategy{CompleteSet, Candidates} {
+	for _, strategy := range []inbound.Strategy{inbound.CompleteSet, inbound.Candidates} {
 		t.Run(string(strategy), func(t *testing.T) {
 			bypass := func(context.Context, sdk.Principal) (bool, error) { return true, nil }
 			server := listingServer(t, testListing(t, testMemory(t, orderedFixture()), az, strategy, 0, bypass))
-			got := walkHTTP(t, server, alice.ID, domain.Query{TenantID: "a", Search: "beta", Limit: 1})
+			got := walkHTTP(t, server, alice.ID, inbound.Query{TenantID: "a", Search: "beta", Limit: 1})
 			if !slices.Equal(got, []string{"20", "30"}) {
 				t.Fatalf("bypass removed business scope: %v", got)
 			}
 			bypassFailure := errors.New("policy backend unavailable")
 			bad := testListing(t, testMemory(t, orderedFixture()), az, strategy, 0, func(context.Context, sdk.Principal) (bool, error) { return false, bypassFailure })
-			getPage(t, listingServer(t, bad), alice.ID, domain.Query{TenantID: "a", Limit: 2}, http.StatusInternalServerError)
+			getPage(t, listingServer(t, bad), alice.ID, inbound.Query{TenantID: "a", Limit: 2}, http.StatusInternalServerError)
 		})
 	}
 }
 
 type failedReader struct{ err error }
 
-func (r failedReader) read(context.Context, domain.Query, position, int, decisions.ResourceSet) ([]row, bool, error) {
+func (r failedReader) Read(context.Context, domain.Query, domain.Position, int, domain.Restriction) ([]domain.Row, bool, error) {
 	return nil, false, r.err
 }
 
@@ -300,9 +300,9 @@ func TestListingDoesNotTurnStorageFailureIntoEmptySuccess(t *testing.T) {
 	store := newMemoryAuthorizationStore()
 	grant(t, store, "01")
 	az := testAuthorizer(t, store, model.EvaluationLimits{})
-	for _, strategy := range []Strategy{CompleteSet, Candidates} {
+	for _, strategy := range []inbound.Strategy{inbound.CompleteSet, inbound.Candidates} {
 		server := listingServer(t, testListing(t, failedReader{errors.New("offline")}, az, strategy, 0, nil))
-		getPage(t, server, alice.ID, domain.Query{TenantID: "a", Limit: 2}, http.StatusInternalServerError)
+		getPage(t, server, alice.ID, inbound.Query{TenantID: "a", Limit: 2}, http.StatusInternalServerError)
 	}
 }
 
@@ -312,13 +312,13 @@ func TestListingCompleteSetOverflowDoesNotUsePartialIDs(t *testing.T) {
 	grant(t, store, ids...)
 	az := testAuthorizer(t, store, model.EvaluationLimits{})
 	reader := testMemory(t, docs)
-	complete := testListing(t, reader, az, CompleteSet, 0, nil)
-	page, err := complete.ListVisible(t.Context(), alice, domain.Query{TenantID: "a", Limit: 50})
+	complete := testListing(t, reader, az, inbound.CompleteSet, 0, nil)
+	page, err := complete.ListVisible(t.Context(), alice, inbound.Query{TenantID: "a", Limit: 50})
 	if !errors.Is(err, model.ErrEvaluationLimit) || len(page.Items) != 0 {
 		t.Fatalf("overflow: %+v, %v", page, err)
 	}
-	candidates := testListing(t, reader, az, Candidates, 0, nil)
-	got := walkHTTP(t, listingServer(t, candidates), alice.ID, domain.Query{TenantID: "a", Limit: 50})
+	candidates := testListing(t, reader, az, inbound.Candidates, 0, nil)
+	got := walkHTTP(t, listingServer(t, candidates), alice.ID, inbound.Query{TenantID: "a", Limit: 50})
 	slices.Reverse(ids)
 	if !slices.Equal(got, ids) {
 		t.Fatalf("candidate order/count differs: got %d IDs, want %d", len(got), len(ids))
@@ -336,14 +336,14 @@ func largeFixture(n int) ([]domain.Document, []string) {
 }
 
 type countedReader struct {
-	Reader
+	domain.Reader
 	calls    int
 	returned int
 }
 
-func (r *countedReader) read(ctx context.Context, q domain.Query, p position, limit int, filter decisions.ResourceSet) ([]row, bool, error) {
+func (r *countedReader) Read(ctx context.Context, q domain.Query, p domain.Position, limit int, filter domain.Restriction) ([]domain.Row, bool, error) {
 	r.calls++
-	rows, more, err := r.Reader.read(ctx, q, p, limit, filter)
+	rows, more, err := r.Reader.Read(ctx, q, p, limit, filter)
 	r.returned += len(rows)
 	return rows, more, err
 }
@@ -364,7 +364,7 @@ func TestCandidatePullMeasurements(t *testing.T) {
 			var want []string
 			for _, batch := range []int{0, 20} {
 				reader := &countedReader{Reader: testMemory(t, docs)}
-				page, err := testListing(t, reader, az, Candidates, batch, nil).ListVisible(t.Context(), alice, domain.Query{TenantID: "a", Limit: 10})
+				page, err := testListing(t, reader, az, inbound.Candidates, batch, nil).ListVisible(t.Context(), alice, inbound.Query{TenantID: "a", Limit: 10})
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -389,31 +389,50 @@ func testMemory(t *testing.T, docs []domain.Document) *Memory {
 	return store
 }
 
-func TestDocumentValuesCannotProduceUnusableCursor(t *testing.T) {
-	codec := testCodec(t)
-	query := domain.Query{TenantID: "a", Limit: 1}
-	// Quotes and backslashes exercise worst-case JSON expansion within the bound.
-	doc := domain.Document{ID: strings.Repeat("x", 128), TenantID: "a", Name: strings.Repeat("\"\\", 256)}
-	if _, err := NewMemory([]domain.Document{doc}); err != nil {
-		t.Fatal(err)
+func TestMemoryListingRevocationAndMoveBetweenPages(t *testing.T) {
+	for _, strategy := range []inbound.Strategy{inbound.CompleteSet, inbound.Candidates} {
+		t.Run(string(strategy), func(t *testing.T) {
+			store := newMemoryAuthorizationStore()
+			grant(t, store, "a", "b", "c")
+			reader := testMemory(t, []domain.Document{{ID: "a", TenantID: "a", Name: "a"}, {ID: "b", TenantID: "a", Name: "b"}, {ID: "c", TenantID: "a", Name: "c"}})
+			server := listingServer(t, testListing(t, reader, testAuthorizer(t, store, model.EvaluationLimits{}), strategy, 1, nil))
+			query := inbound.Query{TenantID: "a", Limit: 1}
+			first := getPage(t, server, alice.ID, query, http.StatusOK)
+			if !slices.Equal(documentIDs(first.Items), []string{"a"}) || !first.HasMore {
+				t.Fatalf("first page: %+v", first)
+			}
+			if err := store.DeleteRelationship(t.Context(), "document", "b", "viewer", "user", alice.ID); err != nil {
+				t.Fatal(err)
+			}
+			if err := reader.Put(domain.Document{ID: "c", TenantID: "b", Name: "c"}); err != nil {
+				t.Fatal(err)
+			}
+			query.Cursor = first.NextCursor
+			if got := walkHTTP(t, server, alice.ID, query); len(got) != 0 {
+				t.Fatalf("continuation retained revoked/moved rows: %v", got)
+			}
+		})
 	}
-	token, err := codec.encode(position{NameKey: strings.ToLower(doc.Name), ID: doc.ID}, cursorBinding(alice, query))
-	if err != nil {
-		t.Fatal(err)
-	}
-	query.Cursor = token
-	if err := query.Normalize(); err != nil {
-		t.Fatalf("self-generated cursor refused: %v", err)
-	}
-	if _, err := codec.decode(token, cursorBinding(alice, query)); err != nil {
-		t.Fatal(err)
-	}
-	doc.Name = strings.Repeat("x", 4000)
-	if _, err := NewMemory([]domain.Document{doc}); !errors.Is(err, sdk.ErrInvalidInput) {
-		t.Fatalf("unbounded sort key accepted: %v", err)
-	}
-	query.Search = string([]byte{0xff})
-	if err := query.Normalize(); !errors.Is(err, sdk.ErrInvalidInput) {
-		t.Fatalf("invalid UTF-8 normalized into accepted search: %v", err)
+}
+
+func TestListingExpandingUnicodeNameCanContinue(t *testing.T) {
+	// 512 valid name bytes produce a 768-byte lowercase persisted key.
+	name := strings.Repeat("Ⱥ", 256)
+	for _, strategy := range []inbound.Strategy{inbound.CompleteSet, inbound.Candidates} {
+		t.Run(string(strategy), func(t *testing.T) {
+			store := newMemoryAuthorizationStore()
+			grant(t, store, "a", "b")
+			reader := testMemory(t, []domain.Document{{ID: "a", TenantID: "a", Name: name}, {ID: "b", TenantID: "a", Name: name}})
+			server := listingServer(t, testListing(t, reader, testAuthorizer(t, store, model.EvaluationLimits{}), strategy, 1, nil))
+			query := inbound.Query{TenantID: "a", Limit: 1}
+			first := getPage(t, server, alice.ID, query, http.StatusOK)
+			if !slices.Equal(documentIDs(first.Items), []string{"a"}) || len(first.NextCursor) > 4096 {
+				t.Fatalf("first page: %+v", first)
+			}
+			query.Cursor = first.NextCursor
+			if got := walkHTTP(t, server, alice.ID, query); !slices.Equal(got, []string{"b"}) {
+				t.Fatalf("expanding lowercase key continuation: %v", got)
+			}
+		})
 	}
 }

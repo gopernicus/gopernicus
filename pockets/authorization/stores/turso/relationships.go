@@ -6,6 +6,8 @@ import (
 	"slices"
 	"sort"
 
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/mutations"
+
 	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/audit"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/relationships"
@@ -49,6 +51,7 @@ capped AS MATERIALIZED (
 // relationshipStore reads through the ambient querier and routes all writes
 // through a join-or-own transaction so facts and optional history commit together.
 type relationshipStore struct {
+	integrity    mutations.IntegrityPolicy
 	tupleBinding string
 	readQuerier  tursodb.Querier
 	audit        bool
@@ -57,7 +60,7 @@ type relationshipStore struct {
 }
 
 func newRelationshipStore(db *tursodb.DB, cfg config) *relationshipStore {
-	return &relationshipStore{db: db, tupleBinding: cfg.tupleBinding, audit: cfg.audit}
+	return &relationshipStore{db: db, tupleBinding: cfg.tupleBinding, audit: cfg.audit, integrity: cfg.integrity}
 }
 
 var _ relationships.Storer = (*relationshipStore)(nil)
@@ -425,7 +428,7 @@ WHERE resource_type = ? AND relation = ? AND resource_id IN ` + inClause(len(res
 }
 
 func (s *relationshipStore) tuples() *tupleStore {
-	return newTupleStore(s.db, config{audit: s.audit, tupleBinding: s.tupleBinding})
+	return newTupleStore(s.db, config{audit: s.audit, integrity: s.integrity, tupleBinding: s.tupleBinding})
 }
 func (s *relationshipStore) CreateRelationships(ctx context.Context, in []relationships.CreateRelationship) error {
 	changes := tuples.Changes{Add: make([]tuples.Tuple, len(in))}
@@ -466,6 +469,7 @@ func (s *relationshipStore) DeleteByResourceAndSubject(ctx context.Context, rt, 
 		return err
 	}
 	return s.write(ctx, func(tx *writeTx) error {
+		tx.touch(scope)
 		a := &tupleArgs{}
 		where := "scope_kind=2 AND resource_type=" + a.ref(rt) + " AND resource_id=" + a.ref(rid) + " AND subject_type=" + a.ref(st) + " AND subject_id=" + a.ref(sid)
 		_, err := tx.tuples(ctx, audit.ActionRemoved, "DELETE FROM "+s.tuples().table()+" WHERE "+where, a.params()...)
@@ -682,5 +686,5 @@ func withLimit(query string, args []any, limit int) (string, []any) {
 }
 
 func (s *relationshipStore) write(ctx context.Context, fn func(*writeTx) error) error {
-	return runWrite(ctx, s.db, config{audit: s.audit}, fn)
+	return runWrite(ctx, s.db, config{audit: s.audit, integrity: s.integrity}, fn)
 }

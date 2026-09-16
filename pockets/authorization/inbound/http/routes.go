@@ -27,11 +27,12 @@ const (
 )
 
 var (
-	ErrRoleRoutesGateWithoutRoles             = errors.New("authorization: RoleRoutes.Gate set but Roles service is nil")
-	ErrRoleRoutesGateWithoutGuard             = errors.New("authorization: RoleRoutes.Gate requires WithGuard (the bundled role writes are guarded; without a guard every one of them fails closed)")
-	ErrRoleRouteAssignmentPolicyWithoutRoutes = errors.New("authorization: RoleRoutes.AssignmentPolicy requires RoleRoutes.Gate (a policy consulted only by the bundled assign route would never run)")
-	ErrInvalidListStrategy                    = errors.New(`authorization: RoleRoutes.ListStrategy must be "cursor" or "offset"`)
-	ErrRoleRoutesWithoutRouter                = errors.New("authorization: RoleRoutes.Gate is set but Mount.Router is nil (the bundled role-administration routes have nowhere to mount)")
+	ErrRoleRoutesGateWithoutRoles   = errors.New("authorization: RoleRoutes.Gate set but Roles service is nil")
+	ErrRoleRoutesWithoutMutations   = errors.New("authorization: RoleRoutes.Gate requires Mutations")
+	ErrRoleRoutesWithoutWritePolicy = errors.New("authorization: RoleRoutes.Gate requires RoleRoutes.WritePolicy")
+	ErrRoleWritePolicyWithoutRoutes = errors.New("authorization: RoleRoutes.WritePolicy requires RoleRoutes.Gate")
+	ErrInvalidListStrategy          = errors.New(`authorization: RoleRoutes.ListStrategy must be "cursor" or "offset"`)
+	ErrRoleRoutesWithoutRouter      = errors.New("authorization: RoleRoutes.Gate is set but Mount.Router is nil (the bundled role-administration routes have nowhere to mount)")
 )
 
 // DecisionService validates a policy and evaluates it as one coherent operation.
@@ -50,18 +51,28 @@ type RoleReader interface {
 	ListRoleAssignmentsByScope(context.Context, tuples.Scope, list.Request) (list.Page[roles.Assignment], error)
 }
 
-// RoleWriter is actor-facing only. Its implementation must enforce its guard atomically.
+// RoleWriter applies admitted data commands and enforces data integrity atomically.
 type RoleWriter interface {
-	AssignRole(context.Context, mutations.Actor, mutations.AssignRoleCommand) (*mutations.Result, error)
-	UnassignRole(context.Context, mutations.Actor, mutations.UnassignRoleCommand) (mutations.UnassignRoleResult, error)
-	Guarded() bool
+	AssignRole(context.Context, mutations.AssignRoleCommand) (*mutations.Result, error)
+	UnassignRole(context.Context, mutations.UnassignRoleCommand) (mutations.UnassignRoleResult, error)
 }
 
-// RoleRouteAssignmentPolicy optionally checks only bundled assignment commands.
-type RoleRouteAssignmentPolicy func(context.Context, mutations.AssignRoleCommand) error
+// RoleWriteRequest is the exact validated write admitted by the host. Its fields
+// are values, so the policy cannot alter the command that will be applied.
+type RoleWriteRequest struct {
+	Principal sdk.Principal
+	Operation mutations.Operation
+	Subject   authmodel.PrincipalRef
+	Role      string
+	Scope     tuples.Scope
+}
 
-// Services supplies the decision, role-read and guarded-write surfaces. Each
-// kind may be absent; enabled role routes require Roles and guarded Mutations.
+// RoleWritePolicy authorizes one assign or unassign at inbound, before the write.
+// Return nil to admit, or an error to refuse. Later revocation does not retract admission.
+type RoleWritePolicy func(context.Context, RoleWriteRequest) error
+
+// Services supplies decision, role-read and data-write surfaces. Each kind may
+// be absent; enabled role routes require Roles and Mutations.
 // The adapter borrows these services without changing their policy.
 type Services struct {
 	Decisions DecisionService
@@ -74,9 +85,9 @@ type Services struct {
 // browser-origin defense when needed, and authorization, in that order.
 type RoleRoutes struct {
 	Gate web.Middleware
-	// AssignmentPolicy checks legality before a bundled assignment. It requires
-	// Gate; it does not replace the mutation service's atomic actor guard.
-	AssignmentPolicy RoleRouteAssignmentPolicy
+	// WritePolicy authorizes each exact assign/unassign command after validation.
+	// It is required when Gate enables routes.
+	WritePolicy RoleWritePolicy
 	// ListStrategy is the default pagination mode. Empty uses cursor. Invalid
 	// values fail construction even when Gate is absent.
 	ListStrategy list.Strategy
@@ -89,12 +100,12 @@ type config struct {
 
 // Adapter owns validated HTTP dependencies. Its state is immutable after New.
 type Adapter struct {
-	decisions        DecisionService
-	roles            RoleReader
-	mutations        RoleWriter
-	gate             web.Middleware
-	assignmentPolicy RoleRouteAssignmentPolicy
-	listStrategy     list.Strategy
+	decisions    DecisionService
+	roles        RoleReader
+	mutations    RoleWriter
+	gate         web.Middleware
+	writePolicy  RoleWritePolicy
+	listStrategy list.Strategy
 }
 
 // New validates the final dependency and route policy before building an adapter.
@@ -114,17 +125,20 @@ func New(services Services, opts ...Option) (*Adapter, error) {
 	if cfg.Gate != nil && cfg.Roles == nil {
 		return nil, ErrRoleRoutesGateWithoutRoles
 	}
-	if cfg.Gate != nil && (cfg.Mutations == nil || !cfg.Mutations.Guarded()) {
-		return nil, ErrRoleRoutesGateWithoutGuard
+	if cfg.Gate != nil && cfg.Mutations == nil {
+		return nil, ErrRoleRoutesWithoutMutations
 	}
-	if cfg.AssignmentPolicy != nil && cfg.Gate == nil {
-		return nil, ErrRoleRouteAssignmentPolicyWithoutRoutes
+	if cfg.Gate != nil && cfg.WritePolicy == nil {
+		return nil, ErrRoleRoutesWithoutWritePolicy
+	}
+	if cfg.WritePolicy != nil && cfg.Gate == nil {
+		return nil, ErrRoleWritePolicyWithoutRoutes
 	}
 	if err := ValidateListStrategy(cfg.ListStrategy); err != nil {
 		return nil, err
 	}
 
-	return &Adapter{decisions: cfg.Decisions, roles: cfg.Roles, mutations: cfg.Mutations, gate: cfg.Gate, assignmentPolicy: cfg.AssignmentPolicy, listStrategy: cfg.ListStrategy}, nil
+	return &Adapter{decisions: cfg.Decisions, roles: cfg.Roles, mutations: cfg.Mutations, gate: cfg.Gate, writePolicy: cfg.WritePolicy, listStrategy: cfg.ListStrategy}, nil
 }
 func ValidateListStrategy(strategy list.Strategy) error {
 	switch strategy {

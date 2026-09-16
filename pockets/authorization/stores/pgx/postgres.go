@@ -43,7 +43,7 @@ type config struct {
 	tupleCache   bool
 	tupleBinding string
 	audit        bool
-	guardian     mutation.GuardianPolicy
+	integrity    mutation.IntegrityPolicy
 	schema       pgxdb.Schema
 }
 
@@ -51,12 +51,12 @@ type config struct {
 // Every write then requires an explicit valid audit source on its context.
 func WithAudit() Option { return func(c *config) { c.audit = true } }
 
-// WithGuardianPolicy installs the host's relationship invariants. The option
+// WithIntegrityPolicy installs the host's relationship invariants. The option
 // snapshots its input; the store defaults to an empty policy. NewService checks
 // the repository's policy against the host relationship model.
-func WithGuardianPolicy(p mutation.GuardianPolicy) Option {
+func WithIntegrityPolicy(p mutation.IntegrityPolicy) Option {
 	p.Rules = slices.Clone(p.Rules)
-	return func(c *config) { c.guardian = mutation.GuardianPolicy{Rules: slices.Clone(p.Rules)} }
+	return func(c *config) { c.integrity = mutation.IntegrityPolicy{Rules: slices.Clone(p.Rules)} }
 }
 
 // WithSchema places every table this store touches in s. The zero Schema is the
@@ -83,6 +83,9 @@ func Repositories(ctx context.Context, db *pgxdb.DB, opts ...Option) (authorizat
 			return authorization.Repositories{}, fmt.Errorf("authorization store: nil option: %w", sdk.ErrInvalidInput)
 		}
 		o(&cfg)
+	}
+	if err := cfg.integrity.Validate(); err != nil {
+		return authorization.Repositories{}, err
 	}
 	var source *tupleSource
 	if cfg.tupleCache {
@@ -124,6 +127,9 @@ func RelationshipRepository(ctx context.Context, db *pgxdb.DB, opts ...Option) (
 			return nil, fmt.Errorf("authorization store: nil option: %w", sdk.ErrInvalidInput)
 		}
 		o(&cfg)
+	}
+	if err := cfg.integrity.Validate(); err != nil {
+		return nil, err
 	}
 	if cfg.tupleCache {
 		return nil, fmt.Errorf("authorization: WithTupleCache requires Repositories bundle: %w", sdk.ErrInvalidInput)

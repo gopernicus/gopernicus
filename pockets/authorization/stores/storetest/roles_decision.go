@@ -57,8 +57,8 @@ func newDecisionService(t *testing.T, repos Repositories, opts ...authorization.
 	return comps
 }
 
-// grantRole seeds through guarded mutation when that capability is supplied.
-func grantRole(t *testing.T, repos Repositories, mutator *mutations.SystemMutator, subjectType, subjectID, roleName, resourceType, resourceID string) {
+// grantRole seeds through atomic mutation when that capability is supplied.
+func grantRole(t *testing.T, repos Repositories, mutator *mutations.Service, subjectType, subjectID, roleName, resourceType, resourceID string) {
 	t.Helper()
 	if repos.Mutations == nil {
 		assign(t, repos.Tuples, subjectType, subjectID, roleName, resourceType, resourceID)
@@ -110,7 +110,7 @@ func runRolesDecision(t *testing.T, newRepos func(t *testing.T) Repositories) {
 	t.Run("DirectGrantAllows", func(t *testing.T) {
 		repos := newRepos(t)
 		comps := newDecisionService(t, repos, authorization.WithModel(rolePolicyModel()))
-		grantRole(t, repos, comps.SystemMutator, "user", "u1", "auditor", "project", "p1")
+		grantRole(t, repos, comps.Mutations, "user", "u1", "auditor", "project", "p1")
 
 		if res := projectCheck(t, comps, "u1", "audit", "p1"); !res.Allowed || res.ReasonCode != authmodel.ReasonGranted {
 			t.Fatalf("direct grant: %+v, want allowed with reason role:auditor@direct", res)
@@ -128,7 +128,7 @@ func runRolesDecision(t *testing.T, newRepos func(t *testing.T) Repositories) {
 	t.Run("ExplicitGlobalBranchSatisfiesScopedPermission", func(t *testing.T) {
 		repos := newRepos(t)
 		comps := newDecisionService(t, repos, authorization.WithModel(rolePolicyModel()))
-		grantRole(t, repos, comps.SystemMutator, "user", "u1", "viewer", "", "")
+		grantRole(t, repos, comps.Mutations, "user", "u1", "viewer", "", "")
 
 		for _, projectID := range []string{"p1", "p2"} {
 			res := projectCheck(t, comps, "u1", "view", projectID)
@@ -145,7 +145,7 @@ func runRolesDecision(t *testing.T, newRepos func(t *testing.T) Repositories) {
 	t.Run("UndeclaredPairDenies", func(t *testing.T) {
 		repos := newRepos(t)
 		comps := newDecisionService(t, repos, authorization.WithModel(rolePolicyModel()))
-		grantRole(t, repos, comps.SystemMutator, "user", "u1", "auditor", "project", "p1")
+		grantRole(t, repos, comps.Mutations, "user", "u1", "auditor", "project", "p1")
 
 		// No expression declares delete, so it cannot grant access.
 		if res := projectCheck(t, comps, "u1", "delete", "p1"); res.Allowed || res.Reason != "no rules defined" {
@@ -160,7 +160,7 @@ func runRolesDecision(t *testing.T, newRepos func(t *testing.T) Repositories) {
 		repos := newRepos(t)
 		comps := newDecisionService(t, repos, authorization.WithModel(rolePolicyModel()))
 		// viewer is held GLOBALLY; the model lists it on view and NOT on audit.
-		grantRole(t, repos, comps.SystemMutator, "user", "u1", "viewer", "", "")
+		grantRole(t, repos, comps.Mutations, "user", "u1", "viewer", "", "")
 
 		if look := projectLookup(t, comps, "u1", "view"); !look.Unrestricted {
 			t.Fatalf("view lookup = %+v, want unrestricted (viewer grants view)", look)
@@ -192,10 +192,10 @@ func runRolesParity(t *testing.T, newRepos func(t *testing.T) Repositories) {
 		comps := newDecisionService(t, repos, authorization.WithModel(rolePolicyModel()))
 		svc := comps
 
-		grantRole(t, repos, comps.SystemMutator, "user", "u_auditor", "auditor", "project", "p1")
-		grantRole(t, repos, comps.SystemMutator, "user", "u_auditor", "auditor", "project", "p2")
-		grantRole(t, repos, comps.SystemMutator, "user", "u_viewer", "viewer", "project", "p1")
-		grantRole(t, repos, comps.SystemMutator, "user", "u_global", "viewer", "", "")
+		grantRole(t, repos, comps.Mutations, "user", "u_auditor", "auditor", "project", "p1")
+		grantRole(t, repos, comps.Mutations, "user", "u_auditor", "auditor", "project", "p2")
+		grantRole(t, repos, comps.Mutations, "user", "u_viewer", "viewer", "project", "p1")
+		grantRole(t, repos, comps.Mutations, "user", "u_global", "viewer", "", "")
 
 		// Scoped principals: the plain bidirectional oracle over the finite universe.
 		for _, principal := range []authmodel.PrincipalRef{
@@ -230,7 +230,7 @@ func runRolesParity(t *testing.T, newRepos func(t *testing.T) Repositories) {
 		svc := comps
 
 		// Seed through the raw role port: this case covers enumeration over many
-		// modeled assignments. Other cases exercise the guarded mutation seam.
+		// modeled assignments. Other cases exercise the atomic mutation seam.
 		walked := make([]string, 0, rolesWalkAssignments)
 		for i := 0; i < rolesWalkAssignments; i++ {
 			id := walkProjectID(i)

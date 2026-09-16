@@ -6,9 +6,6 @@ import (
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/relationships"
 )
 
-// Guarded relationship writes authorize and apply one command atomically.
-// Successful calls return applied, no_change or not_found; refusals return errors.
-
 // GrantRelationshipCommand adds one independent relation. Exact duplicates are no-ops.
 type GrantRelationshipCommand struct {
 	ResourceType string
@@ -27,62 +24,46 @@ type RevokeRelationshipCommand struct {
 }
 
 // PurgeResourceAuthorizationCommand removes every relationship on a resource. It is
-// bulk removal, not resource teardown: it still honors guardian invariants (a purge
+// bulk removal, not resource teardown: it still honors IntegrityPolicy (a purge
 // that would orphan a protected resource is invariant_blocked) and its affected rows
 // are bounded by the resolved EvaluationLimits.MaxBatchSize (a purge exceeding the
 // bound is invariant_blocked). Zeroing a protected scope for resource deletion is the
-// trusted SystemMutator teardown operation, not this command.
+// explicit Service teardown operation, not this command.
 type PurgeResourceAuthorizationCommand struct {
 	ResourceType string
 	ResourceID   string
 }
 
-// GrantRelationship runs a guarded grant on behalf of actor.
-func (s *Service) GrantRelationship(ctx context.Context, actor Actor, cmd GrantRelationshipCommand) (*Result, error) {
-	return s.applyMutation(ctx, actor, grantRelationshipCommand(cmd))
+// GrantRelationship applies one grant with shape and integrity validation.
+func (s *Service) GrantRelationship(ctx context.Context, cmd GrantRelationshipCommand) (*Result, error) {
+	return s.Apply(ctx, grantRelationshipCommand(cmd))
 }
 
-// RevokeRelationship runs a guarded revoke on behalf of actor.
-func (s *Service) RevokeRelationship(ctx context.Context, actor Actor, cmd RevokeRelationshipCommand) (*Result, error) {
-	return s.applyMutation(ctx, actor, revokeRelationshipCommand(cmd))
+// RevokeRelationship removes one exact fact with integrity validation.
+func (s *Service) RevokeRelationship(ctx context.Context, cmd RevokeRelationshipCommand) (*Result, error) {
+	return s.Apply(ctx, revokeRelationshipCommand(cmd))
 }
 
-// PurgeResourceAuthorization runs a guarded bulk purge on behalf of actor. The guard
-// distinguishes it from a single grant by MutationAttempt.Operation (OpPurge), so a
-// host can require elevated authority for bulk removal; the affected rows are bounded
-// by the resolved EvaluationLimits.MaxBatchSize.
-func (s *Service) PurgeResourceAuthorization(ctx context.Context, actor Actor, cmd PurgeResourceAuthorizationCommand) (*Result, error) {
-	return s.applyMutation(ctx, actor, Command{
-
-		Target: resourceTarget(cmd.ResourceType, cmd.ResourceID),
-
-		Operation:       OpPurge,
-		MaxAffectedRows: s.maxBatchSize,
+// PurgeResourceAuthorization removes a scope within MaxBatchSize while retaining
+// IntegrityPolicy. Teardown uses the separate explicit reason-bearing method.
+func (s *Service) PurgeResourceAuthorization(ctx context.Context, cmd PurgeResourceAuthorizationCommand) (*Result, error) {
+	return s.Apply(ctx, Command{
+		Target:    resourceTarget(cmd.ResourceType, cmd.ResourceID),
+		Operation: OpPurge,
 	})
 }
 
-// grantRelationshipCommand builds the actor-independent OpGrant command a single
-// relationship grant applies. Shared by the guarded Service.GrantRelationship and the
-// trusted SystemMutator.GrantRelationship so both build an identical command.
 func grantRelationshipCommand(cmd GrantRelationshipCommand) Command {
 	return Command{
-
-		Target: resourceTarget(cmd.ResourceType, cmd.ResourceID),
-
+		Target:        resourceTarget(cmd.ResourceType, cmd.ResourceID),
 		Operation:     OpGrant,
 		Relationships: []RelationshipRow{{Relation: cmd.Relation, Subject: cmd.Subject}},
 	}
 }
 
-// revokeRelationshipCommand builds the actor-independent OpRevoke command a
-// single relationship revoke applies. Shared by the guarded
-// Service.RevokeRelationship and the trusted SystemMutator.RevokeRelationship so
-// both build an identical command (the grant pair's symmetry).
 func revokeRelationshipCommand(cmd RevokeRelationshipCommand) Command {
 	return Command{
-
-		Target: resourceTarget(cmd.ResourceType, cmd.ResourceID),
-
+		Target:        resourceTarget(cmd.ResourceType, cmd.ResourceID),
 		Operation:     OpRevoke,
 		Relationships: []RelationshipRow{{Relation: cmd.Relation, Subject: cmd.Subject}},
 	}

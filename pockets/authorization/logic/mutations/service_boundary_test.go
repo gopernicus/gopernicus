@@ -3,344 +3,130 @@ package mutations
 import (
 	"context"
 	"errors"
-	"reflect"
 	"testing"
 
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/decisions"
 	authmodel "github.com/gopernicus/gopernicus/pockets/authorization/logic/model"
-	"github.com/gopernicus/gopernicus/pockets/authorization/logic/relationships"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuples"
 	"github.com/gopernicus/gopernicus/sdk"
 )
 
-type stubDecisionView struct {
-	tuples.Reader
-	reads []Target
-}
-
-func (v *stubDecisionView) ForModel(relationships.ReadModel) relationships.PermissionReader {
-	return v // This stub has no stored tuples; every model-scoped read denies.
-}
-
-func (v *stubDecisionView) CheckRelationWithGroupExpansion(ctx context.Context, resourceType, resourceID, relation, subjectType, subjectID string, limit int) (bool, error) {
-	return v.CheckRelationBounded(ctx, Target{Kind: TargetResource, Type: resourceType, ID: resourceID}, relation, subjectType, subjectID, limit)
-}
-
-func (v *stubDecisionView) GetRelationTargets(ctx context.Context, resourceType, resourceID, relation string) ([]relationships.RelationTarget, error) {
-	return v.RelationTargets(ctx, Target{Kind: TargetResource, Type: resourceType, ID: resourceID}, relation)
-}
-
-func (v *stubDecisionView) CheckRelation(_ context.Context, scope Target, _, _, _ string) (bool, error) {
-	v.reads = append(v.reads, scope)
-	return false, nil
-}
-
-func (v *stubDecisionView) CheckRelationBounded(_ context.Context, scope Target, _, _, _ string, _ int) (bool, error) {
-	v.reads = append(v.reads, scope)
-	return false, nil
-}
-
-func (v *stubDecisionView) RelationTargets(_ context.Context, scope Target, _ string) ([]relationships.RelationTarget, error) {
-	v.reads = append(v.reads, scope)
-	return nil, nil
-}
-
-func (v *stubDecisionView) Contains(_ context.Context, t tuples.Tuple) (bool, error) {
-	target := Target{Kind: TargetResource, Type: t.Scope.Type, ID: t.Scope.ID}
-	if t.Scope.Kind == tuples.GlobalScope {
-		target = Target{Kind: TargetSubject, Type: t.Subject.Type, ID: t.Subject.ID}
-	}
-	v.reads = append(v.reads, target)
-	return false, nil
-}
-func (v *stubDecisionView) ReadTupleSnapshot(ctx context.Context, fn func(context.Context, tuples.Reader) error) error {
-	return fn(ctx, v)
-}
-
-// stubMutationRepo runs guards through its view, proving the guarded write path
-// executes inside the repository (not the outer Service).
 type stubMutationRepo struct {
-	view            *stubDecisionView
-	receipt         *Result
-	applyErr        error
-	gotCmd          Command
-	applyGuarded    bool
-	applyTrusted    bool
-	guardGotNilView bool
+	policy IntegrityPolicy
+	got    Command
+	calls  int
 }
 
-func (r *stubMutationRepo) GuardianPolicy() GuardianPolicy {
-	return GuardianPolicy{}
-}
-
-func (r *stubMutationRepo) Apply(_ context.Context, cmd Command, _ SemanticValidator) (*Result, error) {
-	r.applyTrusted = true
-	r.gotCmd = cmd
-	if r.applyErr != nil {
-		return nil, r.applyErr
-	}
-	return r.receipt, nil
-}
-
-func (r *stubMutationRepo) ApplyGuarded(ctx context.Context, cmd Command, guard Guard, _ SemanticValidator) (*Result, error) {
-	r.applyGuarded = true
-	r.gotCmd = cmd
-	if r.view == nil {
-		r.guardGotNilView = true
-	}
-	if err := guard(ctx, r.view); err != nil {
+func (r *stubMutationRepo) IntegrityPolicy() IntegrityPolicy { return r.policy }
+func (r *stubMutationRepo) Apply(ctx context.Context, cmd Command, validate SemanticValidator) (*Result, error) {
+	r.calls++
+	r.got = cmd
+	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	return r.receipt, nil
-}
-
-// stubGuard captures what AuthorizeMutation received and optionally reads a scope
-// through the supplied view.
-type stubGuard struct {
-	gotAttempt MutationAttempt
-	gotView    DecisionView
-	readScope  *Target
-	err        error
-}
-
-func (g *stubGuard) AuthorizeMutation(ctx context.Context, attempt MutationAttempt, view DecisionView) error {
-	g.gotAttempt = attempt
-	g.gotView = view
-	if g.readScope != nil {
-		_, _ = view.CheckRelation(ctx, authmodel.PrincipalRef{Type: "user", ID: "u1"}, "owner", authmodel.Resource{Type: g.readScope.Type, ID: g.readScope.ID})
-	}
-	return g.err
-}
-
-func validGrantCommand(t *testing.T) Command {
-	t.Helper()
-	return Command{
-
-		Target:        Target{Kind: TargetResource, Type: "doc", ID: "d1"},
-		Operation:     OpGrant,
-		Relationships: []RelationshipRow{{Relation: "viewer", Subject: relationships.SubjectRef{Type: "user", ID: "u1"}}},
-	}
-}
-
-func actorU1() Actor {
-	return Actor{PrincipalRef: authmodel.PrincipalRef{Type: "user", ID: "u1"}}
-}
-
-func teardownSeamCommand(t *testing.T) Command {
-	t.Helper()
-	return Command{
-
-		Target:    Target{Kind: TargetResource, Type: "doc", ID: "d1"},
-		Operation: OpTeardown,
-	}
-}
-
-func validModel() decisions.Model {
-	return decisions.Model{ResourceTypes: map[string]decisions.ResourceTypeDef{"post": {Relations: map[string]decisions.RelationDef{"owner": {AllowedSubjects: []decisions.SubjectTypeRef{{Type: "user"}}}}, Permissions: map[string]decisions.Expression{"delete": decisions.Any(decisions.Direct("owner"))}}}}
-}
-func TestGuardRetryReceivesFreshProposal(t *testing.T) {
-	cmd := validGrantCommand(t)
-	cmd.Roles = []RoleRow{{Role: "reader", SubjectType: "user", SubjectID: "u1"}}
-	before := ProposedChange{Relationships: append([]RelationshipRow(nil), cmd.Relationships...), Roles: append([]RoleRow(nil), cmd.Roles...)}
-	calls := 0
-	guard := contractGuard(func(_ context.Context, attempt MutationAttempt, _ DecisionView) error {
-		calls++
-		if !reflect.DeepEqual(attempt.Change, before) {
-			t.Fatalf("attempt %d saw another callback's edits: %+v", calls, attempt.Change)
+	if validate != nil {
+		if err := validate(cmd); err != nil {
+			return nil, err
 		}
-		attempt.Change.Relationships[0].Relation = "owner"
-		attempt.Change.Roles[0].Role = "admin"
-		return nil
-	})
-	callback := composeGuard(actorU1(), guard, cmd, nil, authmodel.EvaluationLimits{})
-	for range 2 {
-		if err := callback(context.Background(), &stubDecisionView{}); err != nil {
+	}
+	return &Result{Outcome: OutcomeApplied}, nil
+}
+func validGrantCommand() Command {
+	return Command{Target: Target{Kind: TargetResource, Type: "doc", ID: "one"}, Operation: OpRoleAssign, Roles: []RoleRow{{SubjectType: "user", SubjectID: "u", Role: "viewer"}}}
+}
+func TestServiceAppliesWithoutPrincipalAndKeepsBounds(t *testing.T) {
+	repo := &stubMutationRepo{}
+	svc, err := NewService(repo, WithLimits(authmodel.EvaluationLimits{MaxBatchSize: 2}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := validGrantCommand()
+	cmd.MaxAffectedRows = 100
+	if _, err := svc.Apply(t.Context(), cmd); err != nil {
+		t.Fatal(err)
+	}
+	if repo.got.MaxAffectedRows != 2 {
+		t.Fatal("caller widened bound")
+	}
+	cmd.MaxAffectedRows = 1
+	if _, err := svc.Apply(t.Context(), cmd); err != nil {
+		t.Fatal(err)
+	}
+	if repo.got.MaxAffectedRows != 1 {
+		t.Fatal("caller tighter bound ignored")
+	}
+	cmd.Roles = append(cmd.Roles, cmd.Roles[0], cmd.Roles[0])
+	if _, err := svc.Apply(t.Context(), cmd); !errors.Is(err, authmodel.ErrEvaluationLimit) {
+		t.Fatalf("unbounded request: %v", err)
+	}
+}
+func TestServiceRetainsModelShapeValidationWithoutDecisions(t *testing.T) {
+	model, err := decisions.Compile(decisions.Model{ResourceTypes: map[string]decisions.ResourceTypeDef{"doc": {Relations: map[string]decisions.RelationDef{"viewer": {AllowedSubjects: []decisions.SubjectTypeRef{{Type: "service"}}}}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo := &stubMutationRepo{}
+	svc, err := NewService(repo, WithModel(model))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Apply(t.Context(), validGrantCommand()); !errors.Is(err, sdk.ErrInvalidInput) {
+		t.Fatalf("shape bypass: %v", err)
+	}
+}
+func TestServiceRejectsCanceledMalformedAndGenericTeardown(t *testing.T) {
+	repo := &stubMutationRepo{}
+	svc, _ := NewService(repo)
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if _, err := svc.Apply(ctx, validGrantCommand()); !errors.Is(err, context.Canceled) {
+		t.Fatal(err)
+	}
+	if _, err := svc.Apply(t.Context(), Command{}); !errors.Is(err, sdk.ErrInvalidInput) {
+		t.Fatal(err)
+	}
+	if _, err := svc.Apply(t.Context(), Command{Target: validGrantCommand().Target, Operation: OpTeardown}); !errors.Is(err, ErrTeardownViaTypedMethod) {
+		t.Fatal(err)
+	}
+	if repo.calls != 0 {
+		t.Fatal("invalid command reached repository")
+	}
+}
+func TestServiceConstructionAndUnconfigured(t *testing.T) {
+	for _, opts := range [][]Option{{nil}, {WithLimits(authmodel.EvaluationLimits{MaxBatchSize: -1})}} {
+		if _, err := NewService(nil, opts...); !errors.Is(err, sdk.ErrInvalidInput) {
 			t.Fatal(err)
 		}
 	}
-}
-
-// TestGuardComposesIntoMutationGuard proves Actor + MutationGuard fold into the
-// repository-level Guard closure: the closure carries the actor, operation, scope,
-// and proposed change into the MutationAttempt and hands the guard the
-// repository's view wrapped as the permission view (the store primitives pass
-// through; CheckPermission rides on top).
-func TestGuardComposesIntoMutationGuard(t *testing.T) {
-	guard := &stubGuard{}
-	cmd := validGrantCommand(t)
-	actor := actorU1()
-	closure := composeGuard(actor, guard, cmd, nil, authmodel.EvaluationLimits{MaxGraphStates: authmodel.DefaultMaxGraphStates, MaxRelationTargets: authmodel.DefaultMaxRelationTargets})
-
-	view := &stubDecisionView{}
-	if err := closure(context.Background(), view); err != nil {
-		t.Fatalf("closure returned %v", err)
-	}
-	if guard.gotAttempt.Actor != actor {
-		t.Fatalf("actor not propagated: got %+v", guard.gotAttempt.Actor)
-	}
-	if guard.gotAttempt.Operation != cmd.Operation || guard.gotAttempt.Target != cmd.Target {
-		t.Fatalf("operation/scope not propagated: %+v", guard.gotAttempt)
-	}
-	if len(guard.gotAttempt.Change.Relationships) != 1 {
-		t.Fatalf("proposed change not propagated: %+v", guard.gotAttempt.Change)
-	}
-	pv, ok := guard.gotView.(permissionView)
-	if !ok || pv.store != view {
-		t.Fatalf("repository view not passed through to the guard: got %T", guard.gotView)
-	}
-}
-
-func TestGuardReadsUseRepositoryView(t *testing.T) {
-	depScope := Target{Kind: TargetResource, Type: "doc", ID: "d1"}
-	guard := &stubGuard{readScope: &depScope}
-	repo := &stubMutationRepo{view: &stubDecisionView{}, receipt: &Result{Outcome: OutcomeApplied}}
-	comps := mustComponents(t, testRepositories{Mutations: repo}, testConfig{Guard: guard})
-
-	if _, err := comps.Service.applyMutation(context.Background(), actorU1(), validGrantCommand(t)); err != nil {
-		t.Fatalf("ApplyMutation: %v", err)
-	}
-	if !repo.applyGuarded {
-		t.Fatalf("ApplyMutation did not go through the repository ApplyGuarded boundary")
-	}
-	deps := repo.view.reads
-	if len(deps) != 1 || deps[0] != depScope {
-		t.Fatalf("guard dependency not recorded through the boundary view: %+v", deps)
-	}
-	if guard.gotView == nil {
-		t.Fatalf("guard did not receive the repository view")
-	}
-}
-
-// TestConstructionNilGuardIsReadOnlyPosture proves a nil Guard yields the
-// read-only posture: actor-facing ApplyMutation fails closed, while the trusted
-// SystemMutator remains available.
-func TestConstructionNilGuardIsReadOnlyPosture(t *testing.T) {
-	repo := &stubMutationRepo{receipt: &Result{Outcome: OutcomeApplied}}
-	comps := mustComponents(t, testRepositories{Mutations: repo}, testConfig{})
-
-	if _, err := comps.Service.applyMutation(context.Background(), actorU1(), validGrantCommand(t)); !errors.Is(err, ErrMutationsNotConfigured) {
-		t.Fatalf("read-only actor mutation: want ErrMutationsNotConfigured, got %v", err)
-	}
-	if repo.applyGuarded {
-		t.Fatalf("read-only posture must not reach the repository")
-	}
-	if _, err := comps.SystemMutator.Apply(context.Background(), validGrantCommand(t)); err != nil {
-		t.Fatalf("SystemMutator.Apply must remain available in read-only posture, got %v", err)
-	}
-	if !repo.applyTrusted {
-		t.Fatalf("SystemMutator.Apply did not reach the repository")
-	}
-}
-
-// TestConstructionReadOnlyWithoutMutations proves both actor and trusted paths
-// fail closed with no Mutations repository wired at all.
-func TestConstructionReadOnlyWithoutMutations(t *testing.T) {
-	comps := mustComponents(t, testRepositories{}, testConfig{})
-	if _, err := comps.Service.applyMutation(context.Background(), actorU1(), validGrantCommand(t)); !errors.Is(err, ErrMutationsNotConfigured) {
-		t.Fatalf("actor path: want ErrMutationsNotConfigured, got %v", err)
-	}
-	if _, err := comps.SystemMutator.Apply(context.Background(), validGrantCommand(t)); !errors.Is(err, ErrMutationsNotConfigured) {
-		t.Fatalf("system path: want ErrMutationsNotConfigured, got %v", err)
-	}
-}
-
-func TestConstructionFullActorMutationPostureApplies(t *testing.T) {
-	guard := &stubGuard{}
-	repo := &stubMutationRepo{view: &stubDecisionView{}, receipt: &Result{Outcome: OutcomeApplied}}
-	comps := mustComponents(t, testRepositories{Mutations: repo}, testConfig{Guard: guard})
-
-	receipt, err := comps.Service.applyMutation(context.Background(), actorU1(), validGrantCommand(t))
-	if err != nil {
-		t.Fatalf("ApplyMutation: %v", err)
-	}
-	if receipt == nil || receipt.Outcome != OutcomeApplied {
-		t.Fatalf("want applied receipt, got %+v", receipt)
-	}
-	if guard.gotAttempt.Actor != actorU1() {
-		t.Fatalf("guard did not receive the actor")
-	}
-}
-
-func TestActorSeamRejectsTrustedTeardown(t *testing.T) {
-	repo := &stubMutationRepo{view: &stubDecisionView{}, receipt: &Result{Outcome: OutcomeApplied}}
-	comps := mustComponents(t, testRepositories{Mutations: repo}, testConfig{Guard: &stubGuard{}})
-
-	_, err := comps.Service.applyMutation(context.Background(), actorU1(), teardownSeamCommand(t))
-	if !errors.Is(err, ErrTrustedOperationRequired) {
-		t.Fatalf("actor teardown: want ErrTrustedOperationRequired, got %v", err)
-	}
-	if !errors.Is(err, sdk.ErrInvalidInput) {
-		t.Fatalf("ErrTrustedOperationRequired must wrap sdk.ErrInvalidInput")
-	}
-	if errors.Is(err, sdk.ErrForbidden) || errors.Is(err, sdk.ErrUnavailable) {
-		t.Fatalf("ErrTrustedOperationRequired must not wrap ErrForbidden/ErrUnavailable")
-	}
-	if repo.applyGuarded || repo.applyTrusted {
-		t.Fatalf("rejected teardown must not reach the repository (guarded=%v trusted=%v)", repo.applyGuarded, repo.applyTrusted)
-	}
-}
-
-// TestActorPurgeBoundNormalizedToMaxBatchSize proves the seam deterministically
-// overwrites the caller-supplied MaxAffectedRows: an actor purge is forced to the
-// resolved EvaluationLimits.MaxBatchSize, and every other actor operation carries no
-// bound — a caller cannot smuggle its own blast-radius ceiling in.
-func TestActorPurgeBoundNormalizedToMaxBatchSize(t *testing.T) {
-	repo := &stubMutationRepo{view: &stubDecisionView{}, receipt: &Result{Outcome: OutcomeApplied}}
-	comps := mustComponents(t, testRepositories{Mutations: repo}, testConfig{
-		RelationshipModel: validModel(), Guard: &stubGuard{}, Limits: authmodel.EvaluationLimits{MaxBatchSize: 5},
-	})
-	ctx := context.Background()
-
-	purge := Command{
-
-		Target:          Target{Kind: TargetResource, Type: "post", ID: "p1"},
-		Operation:       OpPurge,
-		MaxAffectedRows: 999999,
-	}
-	if _, err := comps.Service.applyMutation(ctx, actorU1(), purge); err != nil {
-		t.Fatalf("purge: %v", err)
-	}
-	if repo.gotCmd.MaxAffectedRows != 5 {
-		t.Fatalf("purge bound not forced to maxBatchSize: got %d want 5", repo.gotCmd.MaxAffectedRows)
-	}
-
-	grant := Command{
-
-		Target:          Target{Kind: TargetResource, Type: "post", ID: "p1"},
-		Operation:       OpGrant,
-		Relationships:   []RelationshipRow{{Relation: "owner", Subject: relationships.SubjectRef{Type: "user", ID: "u1"}}},
-		MaxAffectedRows: 999999,
-	}
-	if _, err := comps.Service.applyMutation(ctx, actorU1(), grant); err != nil {
-		t.Fatalf("grant: %v", err)
-	}
-	if repo.gotCmd.MaxAffectedRows != 5 {
-		t.Fatalf("grant bound not forced to maxBatchSize: got %d want 5", repo.gotCmd.MaxAffectedRows)
-	}
-}
-
-type contractGuard func(context.Context, MutationAttempt, DecisionView) error
-
-func (f contractGuard) AuthorizeMutation(ctx context.Context, attempt MutationAttempt, view DecisionView) error {
-	return f(ctx, attempt, view)
-}
-
-type testRepositories struct{ Mutations MutationRepository }
-type testConfig struct {
-	RelationshipModel decisions.Model
-	Guard             MutationGuard
-	Limits            authmodel.EvaluationLimits
-}
-
-func mustComponents(t *testing.T, repos testRepositories, cfg testConfig) Components {
-	t.Helper()
-	engine, err := decisions.NewService(&stubDecisionView{}, decisions.WithModel(cfg.RelationshipModel), decisions.WithLimits(cfg.Limits))
-	if err != nil {
+	if _, err := NewService((*stubMutationRepo)(nil)); !errors.Is(err, sdk.ErrInvalidInput) {
 		t.Fatal(err)
 	}
-	parts, err := NewService(repos.Mutations, engine, WithGuard(cfg.Guard), WithLimits(cfg.Limits))
-	if err != nil {
+	svc, err := NewService(nil)
+	if !errors.Is(err, ErrMutationsNotConfigured) || svc != nil {
+		t.Fatalf("nil repository constructed writer: %v %v", svc, err)
+	}
+	if _, err := svc.Apply(t.Context(), validGrantCommand()); !errors.Is(err, ErrMutationsNotConfigured) {
 		t.Fatal(err)
 	}
-	return parts
+	repo := &stubMutationRepo{policy: IntegrityPolicy{Rules: []IntegrityRule{{Relation: "owner", MinSubjects: -1}}}}
+	if _, err := NewService(repo); !errors.Is(err, ErrInvalidIntegrityPolicy) {
+		t.Fatal(err)
+	}
+}
+func TestIntegrityStateDeduplicatesAndRejectsForeignFacts(t *testing.T) {
+	p := IntegrityPolicy{Rules: []IntegrityRule{{Relation: "owner", MinSubjects: 2}}}
+	scope := tuples.On("doc", "d")
+	f := tuples.Tuple{Scope: scope, Relation: "owner", Subject: tuples.SubjectRef{Type: "user", ID: "one"}}
+	if err := p.ValidateState(scope, []tuples.Tuple{f, f}); !errors.Is(err, ErrInvariantBlocked) {
+		t.Fatalf("duplicates inflated minimum: %v", err)
+	}
+	other := f
+	other.Subject.ID = "two"
+	if err := p.ValidateState(scope, []tuples.Tuple{f, other}); err != nil {
+		t.Fatal(err)
+	}
+	other.Scope = tuples.On("doc", "elsewhere")
+	if err := p.ValidateState(scope, []tuples.Tuple{f, other}); !errors.Is(err, sdk.ErrInvalidInput) {
+		t.Fatal(err)
+	}
 }

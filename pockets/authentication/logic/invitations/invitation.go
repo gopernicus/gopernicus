@@ -56,9 +56,9 @@ const (
 // of the pending-tuple uniqueness key so the same value can be invited across
 // kinds. ResolvedSubjectID is the subject the invite resolved to on acceptance
 // (empty while pending for an unknown invitee). InvitedBy is the user that
-// created it — the ONLY authorization anchor for cancel/resend (a plain ownership
-// column, never a tuple). AutoAccept marks an invite that grants automatically
-// when its invitee proves ownership of a matching email (verified resolution;
+// created it. The bundled HTTP adapter uses this issuer column for cancel/resend
+// admission; the domain does not choose caller permissions. AutoAccept grants
+// automatically when its invitee proves a matching email (verified resolution;
 // email-kind only). AcceptedAt is zero until accepted.
 type Invitation struct {
 	ID                  string

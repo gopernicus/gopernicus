@@ -9,7 +9,7 @@ import (
 )
 
 // New constructs invitation use cases over host-owned storage and grant policy.
-// Authorized operations additionally require InviteCheck; absence fails closed.
+// Its caller authorizes operations before invoking them.
 func New(repo InvitationRepository, granter Granter, opts ...Option) (*Service, error) {
 	d := constructorConfig{}
 	d.Invitations = repo

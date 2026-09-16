@@ -52,10 +52,10 @@ func TestClaimBlocksCancelResendAndAnotherSubjectWhileGrantRuns(t *testing.T) {
 		done <- err
 	}()
 	<-entered
-	if err := svc.Cancel(context.Background(), inv.ID, "owner"); !errors.Is(err, sdk.ErrConflict) {
+	if err := svc.Cancel(context.Background(), prepareManagement(t, svc, inv.ID)); !errors.Is(err, sdk.ErrConflict) {
 		t.Errorf("cancel=%v", err)
 	}
-	if _, err := svc.Resend(context.Background(), inv.ID, "owner", ""); !errors.Is(err, sdk.ErrConflict) {
+	if _, err := svc.Resend(context.Background(), prepareManagement(t, svc, inv.ID), ""); !errors.Is(err, sdk.ErrConflict) {
 		t.Errorf("resend=%v", err)
 	}
 	if _, err := svc.Accept(context.Background(), AcceptInput{Token: "secret", SubjectID: "another"}); !errors.Is(err, sdk.ErrConflict) {
@@ -95,7 +95,7 @@ func TestResendWinsAgainstAcceptanceOfPreviouslyReadToken(t *testing.T) {
 		done <- err
 	}()
 	<-reader.read
-	if _, err := svc.Resend(context.Background(), inv.ID, "owner", ""); err != nil {
+	if _, err := svc.Resend(context.Background(), prepareManagement(t, svc, inv.ID), ""); err != nil {
 		t.Fatal(err)
 	}
 	close(reader.resume)

@@ -6,13 +6,11 @@ import (
 	"fmt"
 	"math/rand/v2"
 	"slices"
-	"sync/atomic"
 	"time"
 
 	"github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/audit"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/mutations"
-	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
@@ -51,40 +49,30 @@ func mutationContention(err error) bool {
 }
 
 type mutationStore struct {
-	db       *pgxdb.DB
-	guardian mutations.GuardianPolicy
-	schema   pgxdb.Schema
-	audit    bool
+	db        *pgxdb.DB
+	integrity mutations.IntegrityPolicy
+	schema    pgxdb.Schema
+	audit     bool
 }
 
 func newMutationStore(db *pgxdb.DB, cfg config) *mutationStore {
-	return &mutationStore{db: db, guardian: cfg.guardian, schema: cfg.schema, audit: cfg.audit}
+	return &mutationStore{db: db, integrity: cfg.integrity, schema: cfg.schema, audit: cfg.audit}
 }
-
-func (m *mutationStore) table(name string) string { return m.schema.Table(name) }
 
 var _ mutations.MutationRepository = (*mutationStore)(nil)
 
-func (m *mutationStore) GuardianPolicy() mutations.GuardianPolicy {
-	return mutations.GuardianPolicy{Rules: slices.Clone(m.guardian.Rules)}
+func (m *mutationStore) IntegrityPolicy() mutations.IntegrityPolicy {
+	return mutations.IntegrityPolicy{Rules: slices.Clone(m.integrity.Rules)}
 }
 
-func (m *mutationStore) Apply(ctx context.Context, cmd mutations.Command, validate mutations.SemanticValidator) (*mutations.Result, error) {
-	return m.apply(ctx, cmd, nil, validate)
-}
-
-func (m *mutationStore) ApplyGuarded(ctx context.Context, cmd mutations.Command, guard mutations.Guard, validate mutations.SemanticValidator) (*mutations.Result, error) {
-	return m.apply(ctx, cmd, guard, validate)
-}
-
-// Guards and changes share one write-serialized transaction. No caller operation
+// Integrity checks and changes share one write-serialized transaction. No caller operation
 // token or durable result is retained; every call validates the current model.
-func (m *mutationStore) apply(ctx context.Context, cmd mutations.Command, guard mutations.Guard, validate mutations.SemanticValidator) (*mutations.Result, error) {
+func (m *mutationStore) Apply(ctx context.Context, cmd mutations.Command, validate mutations.SemanticValidator) (*mutations.Result, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	if _, ok := pgxdb.TxFromContext(ctx); ok {
-		return nil, mutations.ErrGuardedInsideTransaction
+		return nil, mutations.ErrMutationInsideTransaction
 	}
 	if err := cmd.Validate(); err != nil {
 		return nil, err
@@ -102,11 +90,6 @@ func (m *mutationStore) apply(ctx context.Context, cmd mutations.Command, guard 
 		}
 		if err := lockAuthorization(ctx, tx, m.schema); err != nil {
 			return err
-		}
-		if guard != nil {
-			if err := runGuard(ctx, guard, newDecisionView(tx, m.schema)); err != nil {
-				return err
-			}
 		}
 		if validate != nil {
 			if err := validate(cmd); err != nil {
@@ -132,24 +115,12 @@ func (m *mutationStore) apply(ctx context.Context, cmd mutations.Command, guard 
 		result = nil
 		validationFailed = false
 		err := m.db.InTx(ctx, attempt)
-		return err, guard != nil || validationFailed
+		return err, validationFailed
 	})
 	if err != nil {
 		return nil, err
 	}
 	return result, nil
-}
-
-func runGuard(ctx context.Context, guard mutations.Guard, view *decisionView) (err error) {
-	view.closed = &atomic.Bool{}
-	view.viewContext = ctx
-	defer view.closed.Store(true)
-	defer func() {
-		if r := recover(); r != nil {
-			err = fmt.Errorf("authorization pgx store: guard panicked: %v: %w", r, sdk.ErrUnavailable)
-		}
-	}()
-	return guard(ctx, view)
 }
 
 func mapMutationError(err error) error {

@@ -10,7 +10,8 @@ schemas, retained legacy authorities and extra uniqueness rules are rejected.
 Constructors start no workers.
 
 ```go
-repos, err := turso.Repositories(ctx, db, turso.WithAudit())
+repos, err := turso.Repositories(ctx, db, turso.WithAudit(),
+    turso.WithIntegrityPolicy(mutations.DefaultIntegrityPolicy()))
 if err != nil { return err }
 ctx = audit.WithSource(ctx, audit.Source{System: "access-sync"})
 err = repos.Tuples.ApplyTuples(ctx, tuples.Changes{Add: []tuples.Tuple{
@@ -39,20 +40,29 @@ resource membership. Global fallback must be explicitly composed, for example
 filter graph reads and compose exact role predicates through the one decisions
 service. Neither roles nor named permissions are separately cached decisions.
 
-## Writes, guards and audit
+## Writes, integrity and audit
 
-`ApplyTuples` applies one validated add/remove delta atomically. `ReconcileTuples`
-and `SetRelationTargets` replace only one scope/relation set and preserve every
-other label. Resource deletion/teardown sees all facts, regardless of which
-facade wrote them. Trusted raw writes join ambient transactions; request-facing
-writes should use the guarded mutation service.
+Inbound authorizes the exact command. The principal-free mutation service applies
+shape validation, configured integrity, changes and audit under one serialized
+write boundary. It does not invoke a principal guard or decision service.
+`WithIntegrityPolicy(mutations.IntegrityPolicy{Rules: ...})` installs data rules;
+the default is empty. `DefaultIntegrityPolicy()` explicitly requires one concrete
+`owner` per resource. Zero `MinSubjects` means one; an empty `ResourceType` matches
+all resource types. Usersets cannot satisfy a concrete-subject minimum.
 
-Mutation guards, current-model validation, guardian checks, actual changes and
-audit share one write boundary. Guardian rules apply to role writes and no-op
-attempts too. Explicit batch changes replace the retired ambiguous Replace
-operation. Rejected operations return an error and nil result; successful results
-contain only the current Outcome. Guarded mutation commands reject ambient host
-transactions. There are no replay tokens, revisions or durable operation receipts.
+Every ordinary writer honors this policy: atomic commands, role/relationship
+facades, raw `ApplyTuples`, reconciliation, scope deletion and natural no-ops.
+`ApplyTuples` applies an add/remove delta atomically. `ReconcileTuples` and
+`SetRelationTargets` replace only one scope/relation set. Seed all required
+subjects together when establishing a protected scope. Only the explicit
+`TeardownResourceAuthorization` command may remove the final protected facts;
+ordinary purge and `DeleteScope` return a conflict instead.
+
+Raw writes join supported ambient transactions. Atomic mutation commands own
+their boundary and reject ambient contexts. Rejected operations return an error
+and nil result; successful results contain only the current `Outcome`. There are
+no principal-guard callbacks, replay tokens, revisions or durable operation receipts.
+A permission revoked after inbound admission does not retract an admitted command.
 
 `WithAudit()` requires a valid source even for no-op writes. One actual canonical
 addition/removal produces one `audit.Change{Action, Tuple}`, encoded `tuple/v2`.
@@ -63,11 +73,12 @@ Ambient failures roll back an operation savepoint, preserving unrelated host wor
 
 `repos.Audit.List` reads canonical `tuple/v2` records. Recording defaults off;
 existing canonical history remains readable. Hosts own audit access, retention
-and export. Raw SQL outside recording-enabled adapters is outside audit coverage.
+and export. Raw SQL outside these adapters is outside integrity and audit coverage.
+Every adapter instance writing this authority must use the same integrity policy.
 
 ## Concurrency and snapshots
 
-Writes acquire SQLite's BEGIN IMMEDIATE before reading guards or current facts.
+Writes acquire SQLite's BEGIN IMMEDIATE before reading current facts.
 Ambient writes retain their write intent until the host commits. Only definite
 busy/locked errors acquiring the transaction are retried; a started callback or
 uncertain commit is never replayed. A 503 is not proof of an aborted transaction.
@@ -150,6 +161,6 @@ match the complete URL; malformed URLs and insecure non-loopback endpoints are
 rejected before Open/migration/deletion. Never use an application database.
 Remote primary/replica routing remains a deployment-specific verification.
 
-The suites cover canonical identity, cross-facade audit/guardians, snapshots,
+The suites cover canonical identity, cross-facade audit/integrity, snapshots,
 ambient savepoint recovery, transport batches, keyset pagination, fresh schema
 installation, applied-schema validation and cache protocol binding.

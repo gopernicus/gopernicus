@@ -1,10 +1,13 @@
 # Listing documents with authorization
 
-The host exposes one operation: `Documents.ListVisible(ctx, principal, query)`.
-Its [domain port](../../../logic/domains/documents/documents.go) owns the query
-and result. The [HTTP handler](../../../inbound/domains/documents/http.go) parses
-tenant, search, name sort, limit and cursor. This outbound adapter combines those
-business rules with the authorization pocket. The SDK gains no query planner.
+The [inbound listing adapter](../../../inbound/domains/documents/listing.go)
+owns `ListVisible(ctx, principal, query)`: it selects and evaluates permission
+policy, handles encrypted cursors, and exposes only permitted documents.
+The [domain service](../../../logic/domains/documents/documents.go) owns business
+validation and principal-free `Read(ctx, query, position, limit, restriction)`.
+Storage applies explicit ID, unrestricted or exact-membership restrictions before
+ordering and pagination. Zero restrictions match no rows; mixed restrictions fail.
+Neither the domain nor storage invokes an authorizer or host policy callback.
 
 [Server composition](../../../../cmd/server/documents.go) mounts
 `GET /demo/tenants/{tenant}/documents` behind live authentication, using memory
@@ -20,15 +23,15 @@ assigns access through its chosen trusted or guarded application workflow;
 there is no public bootstrap or impersonation route. The endpoint accepts only
 normal business query parameters; strategy selection happens at construction.
 
-## Choose the adapter
+## Choose the inbound strategy
 
 | Arrangement | Construction | Behavior |
 | --- | --- | --- |
-| Different stores, or same SQL database using separate queries | `NewListing(reader, authorizer, codec, CompleteSet, 0, bypass)` | Get a complete bounded `ResourceSet`, then apply it before tenant/search sorting and paging. |
-| Different stores, or same SQL database using separate queries | `NewListing(reader, authorizer, codec, Candidates, batchSize, bypass)` | Read business candidates in order, then batch-check their document IDs. |
-| Same PostgreSQL database with authorization in the business statement | `NewSQLListing(postgres, authorizationSchema, authorizer, codec, bypass)` | Apply a constrained permission `EXISTS` before business sorting and paging. |
+| Different stores, or same SQL database using separate queries | `inbound.NewListing(service, authorizer, codec, CompleteSet, 0, bypass)` | Get a complete bounded `ResourceSet`, then apply it before tenant/search sorting and paging. |
+| Different stores, or same SQL database using separate queries | `inbound.NewListing(service, authorizer, codec, Candidates, batchSize, bypass)` | Read business candidates in order, then batch-check their document IDs. |
+| Same PostgreSQL database with authorization in the business statement | `inbound.NewSQLListing(service, authorizer, codec, bypass)` | Apply a constrained permission `EXISTS` before business sorting and paging. |
 
-All implement the same domain `Lister`. `bypass` is an optional host policy
+All implement the same inbound `Lister`. `bypass` is an optional host policy
 function. A true result skips only the permission restriction; tenant, search,
 input validation and cursor binding still apply. Policy/storage errors propagate.
 
@@ -39,7 +42,7 @@ the maintained 1,005-grant fixture even for a requested business page of 50.
 Candidate and SQL strategies page that fixture correctly; an explicitly sized
 complete-set budget also returns the same name order.
 
-`Candidates` uses `authorization.FilterPage` and returns its forward-only
+`Candidates` uses `decisions.FilterPage` and returns its forward-only
 `ScanLimitReached` signal. A short or empty page can have `HasMore: true`; resume
 with `NextCursor` until `HasMore` is false. The cursor follows the last consumed
 candidate, including denied rows, and an unused overfetched suffix is reread.
@@ -47,7 +50,9 @@ No candidate totals/facets or previous-page claims are exposed.
 
 ## PostgreSQL setup and selected policy
 
-[postgres.go](postgres.go) contains the actual SQL and constructors.
+[postgres.go](postgres.go) contains storage SQL and constructors.
+[sql_listing.go](../../../inbound/domains/documents/sql_listing.go) validates the
+selected policy and creates an exact-membership restriction in inbound.
 [postgres_test.go](postgres_test.go) contains executable composition of the
 connector, migrations, authorizer, domain service and real HTTP server.
 The host owns the database lifecycle and applies migrations before boot:
@@ -59,30 +64,35 @@ The host owns the database lifecycle and applies migrations before boot:
    with `pgxdb.WithSchema(documentSchema)`. The example uses separate schemas
    and separate ledgers in one database; migration call order is explicit.
 3. Pass the same `*pgxdb.DB` to the document and authorization adapters.
-   `NewSQLListing` receives the authorization schema explicitly. It cannot
-   discover whether an unrelated authorizer uses another database.
-4. Supply a shared cursor key, choose the adapter, call `documents.New(lister)`,
-   and place its handler behind the host's identity middleware.
+   Configure `outbound.NewPostgres(db, documentSchema,
+   outbound.WithMembershipSchema(authorizationSchema))` for SQL membership reads.
+   An unconfigured reader rejects membership restrictions before I/O. This trusted
+   wiring cannot discover whether an unrelated authorizer uses another database.
+4. Construct `domain.New(store)`, supply an inbound shared cursor codec, choose
+   the inbound strategy, and place `inbound.Handler(lister)` behind identity
+   middleware. Memory storage supports IDs/unrestricted only and rejects exact
+   membership restrictions; it never silently ignores one.
 
-The SQL adapter accepts exactly this selected relationship permission:
+The inbound SQL listing constructor accepts exactly this selected relationship permission:
 
 ```go
 ResourceSchema{Name: "document", Def: ResourceTypeDef{
     Relations: map[string]RelationDef{
         "viewer": {AllowedSubjects: []SubjectTypeRef{{Type: "user"}}},
     },
-    Permissions: map[string]PermissionRule{
+    Permissions: map[string]Expression{
         "view": AnyOf(Direct("viewer")),
     },
 }}
 ```
 
-These are `authorization` types/functions. Other resource types and permissions
+These are `decisions` types/functions. Other resource types and permissions
 may coexist. A userset, Through rule, extra OR branch, changed allowed subject,
-or role-owned `document/view` fails SQL adapter construction. The implementation
+or role-owned `document/view` fails inbound SQL listing construction. The implementation
 does not silently omit unsupported policy branches. Concrete machine subjects
-receive no rows. The `EXISTS` uses canonical `iam_relationships` with exact
-concrete-user/viewer predicates, so grant rows cannot multiply document rows.
+receive no rows. The `EXISTS` uses canonical `iam_tuples` with exact
+subject/relation predicates chosen by inbound, so grant rows cannot multiply
+document rows. The data service does not map a principal to a policy.
 There is no general ReBAC-to-SQL compiler here.
 
 The selected predicate has permission/data parity with ordinary checks. It does
@@ -106,7 +116,7 @@ rejecting invalid UTF-8, controls and empty values. Both supplied writers enforc
 it. Hosts writing SQL elsewhere must preserve that validation and `name_key`;
 unbounded sort values could generate an unusably large cursor.
 
-[cursor.go](cursor.go) uses AES-GCM to encrypt the actual persisted sort key and
+[cursor.go](../../../inbound/domains/documents/cursor.go) uses AES-GCM to encrypt the actual persisted sort key and
 ID. This hides denied candidate values and rejects tampering. Associated data
 binds principal, tenant, normalized search, ordering and the selected permission.
 Page size can change. The accepted 4,096-byte token bound accommodates every
@@ -117,9 +127,12 @@ expire on restart. Key rotation requires restart-from-first-page handling.
 This cursor is not a data snapshot. New pages reapply current permission and
 business predicates; tests revoke a grant and move a document to another tenant
 between requests and verify neither row returns. Insertions or changes to sort
-keys may change a later page. Candidate checks are fresh for each source pull;
-there is no cross-pull or cross-request permission cache. A resource/grant can
-still change between separate reads. `HasMore` can reveal that candidates exist.
+keys may change a later page. One `FilterPage` invocation uses one authorization
+snapshot across all candidate pulls; business reads are separate. A continuation
+request starts a new evaluation under the authorizer's configured freshness.
+The optional bypass callback is a separate decision before the listing evaluation.
+This example does not enable TupleCache. A resource/grant can still change between
+separate reads. `HasMore` can reveal that candidates exist.
 
 Same-database separate queries use the connector's ambient context through the
 same connector instance. An ordinary PostgreSQL Read Committed transaction still
@@ -150,9 +163,9 @@ and latency.
 From this example module:
 
 ```sh
-go test -race ./internal/outbound/domains/documents -count=1
+go test -race ./internal/{inbound,logic,outbound}/domains/documents -count=1
 AUTHORIZATION_LISTING_TEST_DSN='postgres://...' \
-    go test -race ./internal/outbound/domains/documents -count=1 -v
+    go test -race ./internal/{inbound,logic,outbound}/domains/documents -count=1 -v
 ```
 
 The first command uses real local HTTP and memory; live PostgreSQL cases skip

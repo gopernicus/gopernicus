@@ -17,7 +17,7 @@ func TestCanonicalPlanCoexistenceSwapAndReconcile(t *testing.T) {
 	member.Relation = "member"
 	otherOwner := owner
 	otherOwner.Subject.ID = "bob"
-	policy := DefaultGuardianPolicy()
+	policy := DefaultIntegrityPolicy()
 	before := []tuples.Tuple{owner}
 	grant := Command{Target: target, Operation: OpRoleAssign, Roles: []RoleRow{{SubjectType: "user", SubjectID: "alice", Role: "member"}, {SubjectType: "user", SubjectID: "alice", Role: "member"}}}
 	delta, out, err := Plan(grant, before, policy)
@@ -27,7 +27,7 @@ func TestCanonicalPlanCoexistenceSwapAndReconcile(t *testing.T) {
 	swap := Command{Target: target, Operation: OpBatch, Tuples: tuples.Changes{Add: []tuples.Tuple{otherOwner}, Remove: []tuples.Tuple{owner}}}
 	delta, out, err = Plan(swap, []tuples.Tuple{owner, member}, policy)
 	if err != nil || out != OutcomeApplied || !reflect.DeepEqual(delta, swap.Tuples) {
-		t.Fatalf("atomic guardian transfer: %+v %s %v", delta, out, err)
+		t.Fatalf("atomic integrity transfer: %+v %s %v", delta, out, err)
 	}
 	reconcile := Command{Target: target, Operation: OpReconcile, Relation: "member", Subjects: []tuples.SubjectRef{{Type: "user", ID: "bob"}, {Type: "user", ID: "bob"}}}
 	newMember := member
@@ -41,7 +41,7 @@ func TestCanonicalPlanCoexistenceSwapAndReconcile(t *testing.T) {
 	}
 }
 
-func TestCanonicalGuardianAppliesToEveryFacadeAndNoop(t *testing.T) {
+func TestCanonicalIntegrityAppliesToEveryFacadeAndNoop(t *testing.T) {
 	target := Target{Kind: TargetResource, Type: "doc", ID: "d"}
 	owner := tuples.Tuple{Scope: target.Scope(), Relation: "owner", Subject: tuples.SubjectRef{Type: "user", ID: "alice"}}
 	userset := owner
@@ -56,14 +56,14 @@ func TestCanonicalGuardianAppliesToEveryFacadeAndNoop(t *testing.T) {
 	for name, cmd := range cases {
 		t.Run(name, func(t *testing.T) {
 			for _, before := range [][]tuples.Tuple{{owner}, nil} {
-				d, _, err := Plan(cmd, before, DefaultGuardianPolicy())
+				d, _, err := Plan(cmd, before, DefaultIntegrityPolicy())
 				if !errors.Is(err, ErrInvariantBlocked) || len(d.Add)+len(d.Remove) != 0 {
 					t.Fatalf("unprotected poststate: %+v %v", d, err)
 				}
 			}
 		})
 	}
-	d, out, err := Plan(Command{Target: target, Operation: OpTeardown}, []tuples.Tuple{owner}, DefaultGuardianPolicy())
+	d, out, err := Plan(Command{Target: target, Operation: OpTeardown}, []tuples.Tuple{owner}, DefaultIntegrityPolicy())
 	if err != nil || out != OutcomeApplied || len(d.Remove) != 1 {
 		t.Fatalf("explicit teardown: %+v %s %v", d, out, err)
 	}
@@ -80,16 +80,16 @@ func TestCanonicalCommandBoundsAndIdentity(t *testing.T) {
 	}
 	cmd.Tuples = tuples.Changes{Add: []tuples.Tuple{b}, Remove: []tuples.Tuple{a}}
 	cmd.MaxAffectedRows = 1
-	if d, _, err := Plan(cmd, []tuples.Tuple{a}, GuardianPolicy{}); !errors.Is(err, ErrInvariantBlocked) || len(d.Add)+len(d.Remove) != 0 {
+	if d, _, err := Plan(cmd, []tuples.Tuple{a}, IntegrityPolicy{}); !errors.Is(err, ErrInvariantBlocked) || len(d.Add)+len(d.Remove) != 0 {
 		t.Fatalf("partial over-limit delta: %+v %v", d, err)
 	}
 	cmd.MaxAffectedRows = 2
-	if _, _, err := Plan(cmd, []tuples.Tuple{a}, GuardianPolicy{}); err != nil {
+	if _, _, err := Plan(cmd, []tuples.Tuple{a}, IntegrityPolicy{}); err != nil {
 		t.Fatal(err)
 	}
 	foreign := a
 	foreign.Scope = tuples.Global()
-	if _, _, err := Plan(cmd, []tuples.Tuple{foreign}, GuardianPolicy{}); !errors.Is(err, sdk.ErrInvalidInput) {
+	if _, _, err := Plan(cmd, []tuples.Tuple{foreign}, IntegrityPolicy{}); !errors.Is(err, sdk.ErrInvalidInput) {
 		t.Fatalf("foreign target accepted: %v", err)
 	}
 	cmd.Tuples.Add = make([]tuples.Tuple, MaxCommandTuples+1)
@@ -101,28 +101,28 @@ func TestCanonicalCommandBoundsAndIdentity(t *testing.T) {
 	}
 }
 
-func TestGuardianModelMustPermitConcreteAnchor(t *testing.T) {
-	policy := DefaultGuardianPolicy()
+func TestIntegrityModelMustPermitConcreteAnchor(t *testing.T) {
+	policy := DefaultIntegrityPolicy()
 	m := decisions.Model{ResourceTypes: map[string]decisions.ResourceTypeDef{
 		"doc":   {Relations: map[string]decisions.RelationDef{"owner": {AllowedSubjects: []decisions.SubjectTypeRef{{Type: "group", Relation: "member"}}}}},
 		"group": {Relations: map[string]decisions.RelationDef{"member": {AllowedSubjects: []decisions.SubjectTypeRef{{Type: "user"}}}}},
 	}}
-	engine, err := decisions.NewService(&stubDecisionView{}, decisions.WithModel(m))
+	engine, err := decisions.Compile(m)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := validateGuardianModel(policy, engine); !errors.Is(err, ErrInvalidGuardianPolicy) {
-		t.Fatalf("impossible guardian: %v", err)
+	if err := validateIntegrityModel(policy, engine); !errors.Is(err, ErrInvalidIntegrityPolicy) {
+		t.Fatalf("impossible integrity: %v", err)
 	}
-	if err := validateGuardianModel(GuardianPolicy{Rules: []GuardianRule{{Relation: "opaque"}}}, engine); err != nil {
+	if err := validateIntegrityModel(IntegrityPolicy{Rules: []IntegrityRule{{Relation: "opaque"}}}, engine); err != nil {
 		t.Fatalf("opaque label: %v", err)
 	}
 	m.ResourceTypes["doc"].Relations["owner"] = decisions.RelationDef{AllowedSubjects: []decisions.SubjectTypeRef{{Type: "group", Relation: "member"}, {Type: "user"}}}
-	engine, err = decisions.NewService(&stubDecisionView{}, decisions.WithModel(m))
+	engine, err = decisions.Compile(m)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := validateGuardianModel(policy, engine); err != nil {
-		t.Fatalf("possible guardian: %v", err)
+	if err := validateIntegrityModel(policy, engine); err != nil {
+		t.Fatalf("possible integrity: %v", err)
 	}
 }
