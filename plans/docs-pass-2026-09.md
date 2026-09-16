@@ -1,6 +1,6 @@
 # Docs pass 2026-09-16: authorization first, then the whole site, plus the CI break
 
-Status: EXECUTED 2026-09-16, uncommitted (owner asked for the pass directly in-session; docs-only
+Status: EXECUTED AND PUBLISHED 2026-09-16 (owner asked for the pass directly in-session; docs-only
 edits plus one test fix, all reversible). Not ratified before execution. Verified: sdk build/vet/test
 green on macOS and in a linux/arm64 golang:1.26 container (RangeEdges fails before the fix, passes
 after); `pnpm typecheck && pnpm build` green with onBrokenLinks: throw; authorization page
@@ -64,3 +64,16 @@ tags in dependency order, each pushed alone; poll the proxy `.info` URL before a
 consumer module; record results below.
 
 ### Verification log
+
+Published 2026-09-16 from b0249fa08573cf5a9a4a4f4180c348e707d6787a. GitHub `check`
+run 35157268030 passed (first green Linux run since 2026-09-11) and the docs
+deploy run 35157268159 published the site. Cold verification from a scratch
+consumer with `GOWORK=off`, an empty module cache and `sum.golang.org`:
+`go mod tidy`, `go build`, `go run` and `go mod verify` all passed.
+
+| Module | Version | Checksum |
+| --- | --- | --- |
+| sdk | v0.9.1 | `h1:ze+f8SiL8hOxFD5dn+Hs5s78iWrUI2PpImZFWkfaVC8=` |
+| pockets/authorization | v0.22.0 | `h1:ism5EYEtJ0aLDHgfDsCI58EoNXYMmAVmwzV4oq+Hu4g=` |
+| pockets/authorization/stores/pgx | v0.16.0 | `h1:8+0HS8x81u2Hv+wKTuTkJAygs8+WdyaJetIiqZnxbtY=` |
+| pockets/authorization/stores/turso | v0.15.0 | `h1:XxXc5qHp1OPFqFaAFzJGdp91EfuqFgEyvTayxhD5rq4=` |

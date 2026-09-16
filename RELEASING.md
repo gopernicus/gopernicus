@@ -25,7 +25,10 @@ count, release line, removed `web.Decode`, `authpgx.Repositories` context
 parameter, Turso local-file profile, Firestore store coverage, the unshipped
 `gopernicus guard` command).
 
-Verification is recorded in [plans/docs-pass-2026-09.md](plans/docs-pass-2026-09.md).
+Published from `b0249fa08573cf5a9a4a4f4180c348e707d6787a`; the GitHub `check`
+run passed on Linux and the docs deploy succeeded. Cold-verified from a scratch
+consumer with `GOWORK=off` and an empty module cache against `sum.golang.org`.
+Checksums and run links are in [plans/docs-pass-2026-09.md](plans/docs-pass-2026-09.md).
 
 ## Authorization internal cleanup (published 2026-09-16)
 
