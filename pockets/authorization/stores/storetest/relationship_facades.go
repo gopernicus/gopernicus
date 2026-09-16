@@ -20,6 +20,7 @@ import (
 type tupleOnlyFacadeStore struct{ tuples.Storer }
 
 func runRelationshipFacades(t *testing.T, factory func(*testing.T) Repositories) {
+	t.Run("RawParity", func(t *testing.T) { runRawRelationshipFacadeParity(t, factory) })
 	t.Run("OneAuthority", func(t *testing.T) {
 		store := factory(t).Tuples
 		policy := decisions.Model{ResourceTypes: map[string]decisions.ResourceTypeDef{

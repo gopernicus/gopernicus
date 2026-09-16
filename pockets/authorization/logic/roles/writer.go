@@ -12,7 +12,8 @@ import (
 // TupleValidator validates explicit relation and subject-shape constraints.
 type TupleValidator interface{ ValidateTuple(tuples.Tuple) error }
 
-// Writer holds trusted raw membership changes; request-facing writes use guards.
+// Writer validates raw membership changes against optional model shapes.
+// The store enforces integrity; inbound access points authorize the caller.
 type Writer struct {
 	store     tuples.Storer
 	validator TupleValidator

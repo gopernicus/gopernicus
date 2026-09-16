@@ -5408,3 +5408,50 @@ compatibility and real SQLite/Redis races. All public checksums and 637 archive
 entries matched. GitHub main/tag CI hit the existing unchanged Linux SDK
 RangeEdges failure; the remote workspace gate did not complete. Remote Turso and
 live authentication datastore suites remain unverified.
+
+## AUDIT-048: Authorization internal cleanup
+
+**Release status:** release candidates prepared: authorization `v0.21.0`,
+PostgreSQL store `v0.15.0`, Turso store `v0.14.0`. SQL adapter and auth-cms pins
+are updated. No SQL schema, persisted cursor or cache protocol change. See the
+[release record](plans/authorization-internal-cleanup-release.md).
+
+Roles and relationships remain views of canonical tuples. Raw relationship
+stores delegate exact existence, counts and listings to the tuple-backed facade,
+removing independent projection/query implementations. Invalid selectors,
+unsupported nonblank search and canceled contexts now fail consistently rather
+than being silently accepted by some store methods. Omit optional filters to
+leave a dimension unconstrained; an explicit empty filter is invalid.
+
+Standalone raw listings/counts use one tuple snapshot. Raw SQL operations retain
+the host's ambient isolation, including READ COMMITTED; callers needing a stable
+multi-statement view must supply a snapshot transaction. The stricter snapshot
+requirement on root services and decisions is unchanged. Model-filtered graph
+reads, atomic writes, integrity and audit retain their existing boundaries.
+
+Removed public leftovers: `decisions.Service.ValidateRelation`,
+`ValidateRelationName`, `ValidateRelationships`, `decisions.CreateRelationship`
+and `relationships.ErrRelationshipsNotConfigured`. Use
+`CompiledModel.ValidateTuple` for declared shape validation and
+`relationships.CreateRelationship` for facade inputs. The old validators treated
+the model as a closed catalog and disagreed with current opaque-label writes.
+No production path returned the removed sentinel. `GetSchema` and `SchemaDigest`
+remain available. Four private dead helpers are removed and mutation planning
+uses the shared canonical tuple comparator.
+
+Repository and available local Segovia/GPS source searches found no production
+consumers of the removed APIs outside their obsolete implementation. Graph tests
+retain a local test-only alias; the obsolete error-identity assertion is removed.
+This does not establish compatibility with arbitrary external hosts. The retained
+aggregate relationship store interface and role APIs require no source migration.
+
+Verification and exact limits are recorded in the
+[implementation plan](plans/authorization-internal-cleanup.md). Consumer guidance:
+[API adoption](pockets/authorization/stores/UPGRADE.md#adopting-the-internal-cleanup-v0210).
+
+Verification passed the 42-module make check, core race suite, disposable
+PostgreSQL races in default/named schemas, tagged local SQLite and real
+PostgreSQL/SQLite-to-Redis races. Shared regressions cover raw/service parity,
+selectors, search, cancellation, usersets and pagination; existing transaction
+and graph-model cases pass. Remote Turso and external host compatibility remain
+unverified. Publication and public artifact verification are tracked in the release record.

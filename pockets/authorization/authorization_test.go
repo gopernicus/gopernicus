@@ -303,11 +303,7 @@ func TestWithModelReplacesOneWholeModel(t *testing.T) {
 	}
 }
 
-// TestDecisionSurfaceWithoutAModelBearingKind proves EVERY decision method on a
-// roles-only host with no role model reports ErrNoDecisionKind — the honest
-// diagnosis ("wire a model"), not the relationship kind's sentinel. Every other
-// relationship-kind method keeps ErrRelationshipsNotConfigured
-// (TestUnwiredRelationshipSentinel).
+// Exact role expressions work without a model; undeclared named permissions deny.
 func TestModelFreeExactExpressionsAndUnknownPermissions(t *testing.T) {
 	store := newSeededRoles(t, assignment("u1", "auditor", "", ""))
 	comps, err := New(Repositories{Tuples: store})

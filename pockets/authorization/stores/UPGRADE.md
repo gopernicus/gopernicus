@@ -4,6 +4,33 @@ Authorization ships a fresh canonical SQL schema for PostgreSQL and SQLite/Turso
 Hosts export and apply it before constructing repositories. Framework constructors
 validate the applied schema; they do not create tables or run migrations.
 
+## Adopting the internal cleanup (v0.21.0)
+
+The authorization core removes `decisions.Service.ValidateRelation`,
+`ValidateRelationName`, `ValidateRelationships`, the `decisions.CreateRelationship`
+alias and `relationships.ErrRelationshipsNotConfigured`. These were leftovers
+from the separate relationship engine. Use `CompiledModel.ValidateTuple` for
+current tuple-shape validation and `relationships.CreateRelationship` for the
+relationship facade's input. `GetSchema`, `SchemaDigest` and model snapshots
+remain available for schema inspection. No production path returned the removed
+error; remove checks for that sentinel. An undeclared label is legal for tuple
+writes unless an explicit shape constraint rejects its subject; validation is
+not a closed role/relation catalog.
+
+Raw relationship stores now share exact reads, counts and list projections with
+the canonical tuple facade. Empty/malformed selectors, nonblank unsupported search
+and canceled contexts return errors consistently. Do not rely on ignored search
+text or empty selector pointers; omit optional filters to leave them unconstrained.
+Raw standalone listings/counts use a coherent snapshot. Raw SQL operations still
+join the host transaction at its existing isolation, including PostgreSQL READ
+COMMITTED; root services and decision operations still require suitable snapshot
+isolation. Graph model filtering, atomic writes, integrity and audit are unchanged.
+
+Upgrade authorization core to `v0.21.0` with PostgreSQL store `v0.15.0` or
+Turso store `v0.14.0`. No SQL migration, cursor/cache format, configuration or
+new third-party dependency is required. Recheck host error handling and listings through any directly held raw
+relationship repository. No package rename or role API migration is required.
+
 ## Schema files
 
 | Source | File | Creates |

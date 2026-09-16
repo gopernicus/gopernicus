@@ -291,30 +291,3 @@ func detectUnsatisfiable(schema Model) []string {
 	}
 	return errs
 }
-
-// isSelfLoop reports whether check is a through-relation whose every target type
-// is the resource type itself and whose checked permission is permName — the
-// exact shape the cycle pass sanctions. A through with any non-self target, or that
-// checks a different permission, can bottom out elsewhere and is not a self-loop.
-func isSelfLoop(schema Model, resourceType, permName string, rtDef ResourceTypeDef, check Expression) bool {
-	if check.Through == "" || check.Permission != permName {
-		return false
-	}
-
-	rel, ok := rtDef.Relations[check.Through]
-	if !ok {
-		return false
-	}
-
-	targetTypes := getTargetResourceTypes(rel, schema)
-	if len(targetTypes) == 0 {
-		return false
-	}
-
-	for _, targetType := range targetTypes {
-		if targetType != resourceType {
-			return false
-		}
-	}
-	return true
-}

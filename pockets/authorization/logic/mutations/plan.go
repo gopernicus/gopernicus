@@ -2,7 +2,6 @@ package mutations
 
 import (
 	"slices"
-	"strings"
 
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuples"
 )
@@ -72,23 +71,8 @@ func Plan(cmd Command, before []tuples.Tuple, policy IntegrityPolicy) (tuples.Ch
 	if cmd.Operation != OpTeardown && len(delta.Add)+len(delta.Remove) > limit {
 		return tuples.Changes{}, "", ErrInvariantBlocked
 	}
-	// Full tuple ordering is deterministic without importing an outward key codec.
-	less := func(a, b tuples.Tuple) int {
-		if a.Scope.Kind < b.Scope.Kind {
-			return -1
-		}
-		if a.Scope.Kind > b.Scope.Kind {
-			return 1
-		}
-		for _, p := range [][2]string{{a.Scope.Type, b.Scope.Type}, {a.Scope.ID, b.Scope.ID}, {a.Relation, b.Relation}, {a.Subject.Type, b.Subject.Type}, {a.Subject.ID, b.Subject.ID}, {a.Subject.Relation, b.Subject.Relation}} {
-			if n := strings.Compare(p[0], p[1]); n != 0 {
-				return n
-			}
-		}
-		return 0
-	}
-	slices.SortFunc(delta.Add, less)
-	slices.SortFunc(delta.Remove, less)
+	slices.SortFunc(delta.Add, tuples.Compare)
+	slices.SortFunc(delta.Remove, tuples.Compare)
 	outcome := OutcomeApplied
 	if len(delta.Add)+len(delta.Remove) == 0 {
 		outcome = OutcomeNoChange

@@ -10,6 +10,7 @@ import (
 	"github.com/gopernicus/gopernicus/sdk"
 )
 
+type CreateRelationship = relationships.CreateRelationship
 type Storer = relationships.Storer
 type SubjectRef = relationships.SubjectRef
 type SubjectRelationshipFilter = relationships.SubjectRelationshipFilter

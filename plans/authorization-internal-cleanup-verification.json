@@ -1,0 +1,381 @@
+{
+  "status": "complete, uncommitted and unreleased",
+  "date": "2026-09-16",
+  "base_commit": "6bad23cc8d9432a42f7125bf98ed695a817d2d6d",
+  "plan": "plans/authorization-internal-cleanup.md",
+  "checks": [
+    {
+      "module": "pockets/authorization",
+      "label": "core-build",
+      "command": [
+        "go",
+        "build",
+        "./..."
+      ],
+      "exit_code": 0
+    },
+    {
+      "module": "pockets/authorization",
+      "label": "core-race",
+      "command": [
+        "go",
+        "test",
+        "-race",
+        "-json",
+        "-count=1",
+        "./..."
+      ],
+      "exit_code": 0,
+      "passed_named_tests": 1260,
+      "skips": [
+        "TestTransactional"
+      ],
+      "failures": []
+    },
+    {
+      "module": "pockets/authorization",
+      "label": "core-vet",
+      "command": [
+        "go",
+        "vet",
+        "./..."
+      ],
+      "exit_code": 0
+    },
+    {
+      "module": "pockets/authorization/stores/pgx",
+      "label": "pgx-build",
+      "command": [
+        "go",
+        "build",
+        "./..."
+      ],
+      "exit_code": 0
+    },
+    {
+      "module": "pockets/authorization/stores/pgx",
+      "label": "pgx-race",
+      "command": [
+        "go",
+        "test",
+        "-race",
+        "-json",
+        "-count=1",
+        "./..."
+      ],
+      "exit_code": 0,
+      "passed_named_tests": 537,
+      "skips": [],
+      "failures": []
+    },
+    {
+      "module": "pockets/authorization/stores/pgx",
+      "label": "pgx-named-race",
+      "command": [
+        "go",
+        "test",
+        "-race",
+        "-json",
+        "-count=1",
+        "./..."
+      ],
+      "exit_code": 0,
+      "passed_named_tests": 537,
+      "skips": [],
+      "failures": []
+    },
+    {
+      "module": "pockets/authorization/stores/pgx",
+      "label": "pgx-vet",
+      "command": [
+        "go",
+        "vet",
+        "./..."
+      ],
+      "exit_code": 0
+    },
+    {
+      "module": "pockets/authorization/stores/turso",
+      "label": "turso-build",
+      "command": [
+        "go",
+        "build",
+        "./..."
+      ],
+      "exit_code": 0
+    },
+    {
+      "module": "pockets/authorization/stores/turso",
+      "label": "turso-race",
+      "command": [
+        "go",
+        "test",
+        "-race",
+        "-tags=integration",
+        "-json",
+        "-count=1",
+        "./..."
+      ],
+      "exit_code": 0,
+      "passed_named_tests": 715,
+      "skips": [],
+      "failures": []
+    },
+    {
+      "module": "pockets/authorization/stores/turso",
+      "label": "turso-vet",
+      "command": [
+        "go",
+        "vet",
+        "-tags=integration",
+        "./..."
+      ],
+      "exit_code": 0
+    },
+    {
+      "module": "pockets/authorization/stores/goredis",
+      "label": "goredis-build",
+      "command": [
+        "go",
+        "build",
+        "./..."
+      ],
+      "exit_code": 0
+    },
+    {
+      "module": "pockets/authorization/stores/goredis",
+      "label": "goredis-race",
+      "command": [
+        "go",
+        "test",
+        "-race",
+        "-tags=integration",
+        "-json",
+        "-count=1",
+        "./..."
+      ],
+      "exit_code": 0,
+      "passed_named_tests": 52,
+      "skips": [],
+      "failures": []
+    },
+    {
+      "module": "pockets/authorization/stores/goredis",
+      "label": "goredis-vet",
+      "command": [
+        "go",
+        "vet",
+        "-tags=integration",
+        "./..."
+      ],
+      "exit_code": 0
+    },
+    {
+      "module": ".",
+      "command": [
+        "make",
+        "check"
+      ],
+      "exit_code": 0,
+      "module_count": 42,
+      "source_build_inputs_unchanged": 1743
+    },
+    {
+      "command": [
+        "goimports",
+        "-l",
+        "changed and new Go files"
+      ],
+      "exit_code": 0,
+      "output": ""
+    },
+    {
+      "command": [
+        "git",
+        "diff",
+        "--check"
+      ],
+      "exit_code": 0
+    }
+  ],
+  "fixtures": {
+    "postgres": {
+      "container": "45ecaa6b641f87aa7f173eed94a8d7411739e0ddd46545cf02b6b203ca6f2a21",
+      "name": "gopernicus-auth-cleanup-21704",
+      "port": "58868",
+      "image": "sha256:5c855ad7b85e68e48a62f34662853f38b57c1c1d80f3a927ab58034fd6d31c5e",
+      "labels": {
+        "codex.task": "authorization-internal-cleanup"
+      }
+    },
+    "postgres_removed": true,
+    "sqlite": "task-owned temporary file, exact disposable URL match, removed",
+    "redis": "test-owned local redis-server processes"
+  },
+  "preserved_file_hashes": {
+    "plans/cacher-design.md": "47ce5336e9298531d98a53fb33d39215e281a1c55ab939eb74da4e6aa5537757",
+    "plans/gps-360-go-audit-upgrade-handoff.md": "6afdee8279ab6639309341270fa7c775e5444947136784215f81743007449f7a",
+    "plans/segovia-v2-audit-upgrade-handoff.md": "e131e1b81fabacc24b0be9dffc2a79a30ddc1cbca06af0959ea8f46428aec3a3",
+    "plans/authorization-internal-structure-audit.md": "eb5f5c9e320b57456c0cdbf71b5f9f58f012123a8d4cdf0d2d55b1c768579177",
+    "plans/authorization-internal-structure-audit-evidence.json": "1c218b8f5243da952d6249bdbd74036d3f1b918a30b7a1a638162778d013f1c6",
+    ".github/scripts/__pycache__/test_authorization_cache_verify.cpython-312.pyc": "db6826e4cb7f46c54632f59b041f03fc58671495dc0538ad53cb262e2887e672",
+    ".github/scripts/__pycache__/authorization_cache_verify.cpython-312.pyc": "2cc8bb121c9549f030ddbb9c117bc561f79367aa6288bf487f480dedf9f07978"
+  },
+  "files_changed": [
+    {
+      "path": "AUDIT.md",
+      "status": "present",
+      "sha256": "82ca691ee3169ee9c2a15e79e63a403987340087961a2c4b62db2cdd651fa174"
+    },
+    {
+      "path": "RELEASING.md",
+      "status": "present",
+      "sha256": "a244916e33729050297a24263d44db6d97915e568605493c790f460a60ea1bc7"
+    },
+    {
+      "path": "plans/authorization-internal-cleanup-verification.json",
+      "status": "deleted"
+    },
+    {
+      "path": "plans/authorization-internal-cleanup.md",
+      "status": "present",
+      "sha256": "f3121c8528824d3f850a7f673f0e709c5e77c1866e0c3e98ead019934afaaf0b"
+    },
+    {
+      "path": "pockets/authorization/README.md",
+      "status": "present",
+      "sha256": "7e7d8705e05abb1de334c1bf90a2b0ce88a6063af6b4c81f4405da5a7163681a"
+    },
+    {
+      "path": "pockets/authorization/authorization_test.go",
+      "status": "present",
+      "sha256": "f99b5fb9ea7b0545c35485b4ea9ed504cc8e1afd8f1f3628a97408fe246c390a"
+    },
+    {
+      "path": "pockets/authorization/codes_test.go",
+      "status": "present",
+      "sha256": "7354a299e307a1b8dd65749711484b05554b2c048c26153ce67574f9f8b4ca09"
+    },
+    {
+      "path": "pockets/authorization/logic/decisions/compiled_model.go",
+      "status": "present",
+      "sha256": "71ba6e4e9ee936b88e2640570f5f8fb522303231b6f723fa7df2d04537dc0054"
+    },
+    {
+      "path": "pockets/authorization/logic/decisions/graph_fixture_test.go",
+      "status": "present",
+      "sha256": "546222683a944ac060e9beb51d94a504f78cb34352e4c5ba49c672ac3eb1a54f"
+    },
+    {
+      "path": "pockets/authorization/logic/decisions/ports.go",
+      "status": "present",
+      "sha256": "22357c8b19096949e2c254db42e703bd47f455425efcf471ddabc1bce8c2a327"
+    },
+    {
+      "path": "pockets/authorization/logic/decisions/schema_validator.go",
+      "status": "present",
+      "sha256": "5e8d38a0a02255df4da2fa145636081e3db3c86bd73080dad4fe1cf6414f262a"
+    },
+    {
+      "path": "pockets/authorization/logic/model/check.go",
+      "status": "present",
+      "sha256": "5424a118352493b926af080f6ece0fd3adaa94aec3fd6e42b8f711d7679ed2ca"
+    },
+    {
+      "path": "pockets/authorization/logic/mutations/plan.go",
+      "status": "present",
+      "sha256": "c919eafa1d0390cfeffc180fa7d2af396c2b1a15dada865b3237110dbb105f4c"
+    },
+    {
+      "path": "pockets/authorization/logic/relationships/errors.go",
+      "status": "deleted"
+    },
+    {
+      "path": "pockets/authorization/logic/relationships/order.go",
+      "status": "present",
+      "sha256": "1e9a062586d2841a0395989034be76df117e7f669cac66044475e56a6cc6cc34"
+    },
+    {
+      "path": "pockets/authorization/logic/relationships/relationship.go",
+      "status": "present",
+      "sha256": "98fc30b9c0c03265b07b17d8eb785ba719198de03b1c30f36e5d105ab116cc60"
+    },
+    {
+      "path": "pockets/authorization/logic/roles/writer.go",
+      "status": "present",
+      "sha256": "9a7ef61de29814216abe05cdb3e81fe5017a85ec853f33228baec8737ad5fa95"
+    },
+    {
+      "path": "pockets/authorization/logic/tuples/store.go",
+      "status": "present",
+      "sha256": "dbb8af1e4d1a6089587e5cfcb0b12be2631695fdc7771066f2e6ff3648718d3a"
+    },
+    {
+      "path": "pockets/authorization/stores/UPGRADE.md",
+      "status": "present",
+      "sha256": "40dc0ecd3243e608f590dc4c2282050fa7982ed6927790702b5adde10d75131f"
+    },
+    {
+      "path": "pockets/authorization/stores/memory/audit.go",
+      "status": "present",
+      "sha256": "3209871bc8a028cab10bc01ef317072c845d5313ea6178d32ba024f82f35579c"
+    },
+    {
+      "path": "pockets/authorization/stores/memory/memory.go",
+      "status": "present",
+      "sha256": "075202c7320267468163dcad1a1e12b91d5b56214b20bd667bfcc56b4a283f72"
+    },
+    {
+      "path": "pockets/authorization/stores/pgx/relationships.go",
+      "status": "present",
+      "sha256": "86898fa82a2915c56ea85400febf17ddab5215018cedb80bffce005c755036e4"
+    },
+    {
+      "path": "pockets/authorization/stores/storetest/raw_relationship_facades.go",
+      "status": "present",
+      "sha256": "866c3bf5526641784cac547079b29a52e2ccbddc82aee0dbe18b2666163b8162"
+    },
+    {
+      "path": "pockets/authorization/stores/storetest/relationship_facades.go",
+      "status": "present",
+      "sha256": "5a9eee8a9e37dba87023b58eb50b2da5257c0c9b163aa3e309ad71bcaab4b92e"
+    },
+    {
+      "path": "pockets/authorization/stores/turso/relationships.go",
+      "status": "present",
+      "sha256": "a0bee2d33c89a790307cea833e448fe91f81da8acdc7d2b5a6ef405967ad69a6"
+    }
+  ],
+  "public_api_removed": [
+    "decisions.Service.ValidateRelation",
+    "decisions.Service.ValidateRelationName",
+    "decisions.Service.ValidateRelationships",
+    "decisions.CreateRelationship",
+    "relationships.ErrRelationshipsNotConfigured"
+  ],
+  "behavior_changed": [
+    "raw facade selectors/search/cancellation now agree with canonical facade",
+    "standalone raw SQL listings/counts use coherent tuple snapshots"
+  ],
+  "behavior_preserved": [
+    "raw SQL ambient transaction isolation/joining",
+    "decision and root service snapshot requirements",
+    "graph model filtering and SQL fast paths",
+    "canonical identity/cursor/cache formats",
+    "atomic writes, integrity, audit"
+  ],
+  "remaining_test_failures": [],
+  "not_verified": [
+    "remote Turso",
+    "production-scale performance",
+    "browser flows",
+    "remote CI",
+    "arbitrary external-consumer compatibility"
+  ],
+  "not_performed": [
+    "schema changes",
+    "dependency/version changes",
+    "commit/push/tag/publication",
+    "downstream application migrations"
+  ]
+}

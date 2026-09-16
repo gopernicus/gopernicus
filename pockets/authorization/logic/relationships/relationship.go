@@ -54,8 +54,7 @@ func (c CreateRelationship) Subject() SubjectRef {
 
 // Validate reports whether the tuple is structurally well formed: resource
 // type/id, relation, and the subject reference are all present and well formed.
-// It does NOT consult the schema — schema conformance is the engine's
-// ValidateRelationships.
+// It does not consult a model; model-bound writers validate declared tuple shapes.
 func (c CreateRelationship) Validate() error {
 	return c.Tuple().Validate()
 }
@@ -167,6 +166,10 @@ type ResourceRelationshipFilter struct {
 // until the host's commit. The contract names the connector's ambient
 // transaction, not a dialect: a store over any connector honors it the same
 // way, and the storetest RunTransactional family is its executable form.
+// Standalone listings and counts use a coherent tuple snapshot. In an ambient
+// transaction, these raw methods retain the host's isolation, including READ
+// COMMITTED. Decision operations and the tuple-backed Service require suitable
+// snapshot isolation instead. Invalid selectors and nonblank search are rejected.
 type Storer interface {
 	// ForModel binds every permission read to the current immutable host model.
 	// The returned reader must use this store's same transaction context.
@@ -193,8 +196,8 @@ type Storer interface {
 
 	// CheckRelationExists reports whether a specific direct relationship tuple
 	// exists for a CONCRETE subject (no expansion; a stored userset tuple with the
-	// same type/id does not satisfy it). Used for the platform-admin data-tuple
-	// check and last-owner counting.
+	// same type/id does not satisfy it). This is raw fact inspection, not graph
+	// expansion or an integrity-policy count.
 	CheckRelationExists(ctx context.Context, resourceType, resourceID, relation, subjectType, subjectID string) (bool, error)
 
 	// CheckBatchDirect performs a batch permission check across resource IDs for
@@ -246,10 +249,9 @@ type Storer interface {
 	// Counts
 	// -------------------------------------------------------------------
 
-	// CountByResourceAndRelation counts DIRECT tuples for a resource+relation.
-	// It counts direct tuples ONLY, never expanded membership — a count
-	// divergence is a security divergence (design §2.5): last-owner protection
-	// depends on this being direct-only.
+	// CountByResourceAndRelation counts stored tuples for a resource+relation,
+	// including userset references, without expanding them. Integrity minima
+	// count only concrete subjects through IntegrityPolicy, not this method.
 	CountByResourceAndRelation(ctx context.Context, resourceType, resourceID, relation string) (int, error)
 
 	// -------------------------------------------------------------------

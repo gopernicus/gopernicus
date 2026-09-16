@@ -9,8 +9,8 @@ require (
 	github.com/gopernicus/gopernicus/integrations/datastores/turso v0.4.0
 	github.com/gopernicus/gopernicus/pockets/authentication v0.12.0
 	github.com/gopernicus/gopernicus/pockets/authentication/views/goth v0.4.0
-	github.com/gopernicus/gopernicus/pockets/authorization v0.20.0
-	github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx v0.14.0
+	github.com/gopernicus/gopernicus/pockets/authorization v0.21.0
+	github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx v0.15.0
 	github.com/gopernicus/gopernicus/pockets/cms v0.3.0
 	github.com/gopernicus/gopernicus/pockets/cms/views/goth v0.3.0
 	github.com/gopernicus/gopernicus/pockets/events v0.3.0

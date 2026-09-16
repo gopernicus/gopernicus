@@ -15,7 +15,6 @@ import (
 
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/mutations"
 
-	"github.com/gopernicus/gopernicus/pockets/authorization/internal/tuplekey"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuples"
 
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/audit"
@@ -176,40 +175,15 @@ func (r *Relationships) CheckRelationWithGroupExpansion(ctx context.Context, res
 	return false, nil
 }
 
-// checkRelationExpandedLocked evaluates against the held snapshot without
-// recursively locking. The shared write lock protects every traversed fact,
-// including absent memberships, until the snapshot read is published.
-// A positive expansion bound fails closed when exceeded.
-func (r *Relationships) checkRelationExpandedLocked(ctx context.Context, resourceType, resourceID, relation, subjectType, subjectID string, maxExpansionStates int) (ok, overflow bool) {
-	reached, overflow := r.expandReachable(ctx, subjectType, subjectID, maxExpansionStates)
-	if overflow {
-		return false, true
-	}
-	for _, row := range r.st.relationshipRows() {
-		if !r.allows(row) {
-			continue
-		}
-		if row.resourceType == resourceType && row.resourceID == resourceID && row.relation == relation &&
-			reached[reachable{row.subjectType, row.subjectID, row.subjectRelation}] {
-			return true, false
-		}
-	}
-	return false, false
-}
-
 // CheckRelationExists reports whether an exact direct tuple is present for a
 // CONCRETE subject (no expansion; a stored userset tuple with the same type/id
 // does not satisfy a concrete probe).
 func (r *Relationships) CheckRelationExists(ctx context.Context, resourceType, resourceID, relation, subjectType, subjectID string) (bool, error) {
-	r.st.mu.Lock()
-	defer r.st.mu.Unlock()
-	for _, row := range r.st.relationshipRows() {
-		if row.resourceType == resourceType && row.resourceID == resourceID && row.relation == relation &&
-			row.subjectType == subjectType && row.subjectID == subjectID && row.subjectRelation == "" {
-			return true, nil
-		}
+	view, err := r.rawView(ctx)
+	if err != nil {
+		return false, err
 	}
-	return false, nil
+	return view.Service.CheckRelationExists(ctx, resourceType, resourceID, relation, subjectType, subjectID)
 }
 
 // GetRelationTargets returns the subjects holding a relation on a resource.
@@ -339,17 +313,14 @@ func (r *Relationships) CheckBatchDirect(ctx context.Context, resourceType strin
 	return out, nil
 }
 
-// CountByResourceAndRelation counts DIRECT tuples only.
+// CountByResourceAndRelation counts stored facts, including userset references,
+// without graph expansion or model filtering.
 func (r *Relationships) CountByResourceAndRelation(ctx context.Context, resourceType, resourceID, relation string) (int, error) {
-	r.st.mu.Lock()
-	defer r.st.mu.Unlock()
-	n := 0
-	for _, row := range r.st.relationshipRows() {
-		if row.resourceType == resourceType && row.resourceID == resourceID && row.relation == relation {
-			n++
-		}
+	view, err := r.rawView(ctx)
+	if err != nil {
+		return 0, err
 	}
-	return n, nil
+	return view.Service.CountByResourceAndRelation(ctx, resourceType, resourceID, relation)
 }
 
 // DeleteResourceRelationships removes every canonical fact scoped to the resource.
@@ -498,56 +469,20 @@ func capIDs(ids []string, limit int) []string {
 
 // ListRelationshipsBySubject pages the resources a subject relates to.
 func (r *Relationships) ListRelationshipsBySubject(ctx context.Context, subjectType, subjectID string, filter relationships.SubjectRelationshipFilter, req list.Request) (list.Page[relationships.SubjectRelationship], error) {
-	r.st.mu.Lock()
-	defer r.st.mu.Unlock()
-	var items []relationships.SubjectRelationship
-	for _, row := range r.st.relationshipRows() {
-		if row.subjectType != subjectType || row.subjectID != subjectID {
-			continue
-		}
-		if filter.ResourceType != nil && *filter.ResourceType != row.resourceType {
-			continue
-		}
-		if filter.Relation != nil && *filter.Relation != row.relation {
-			continue
-		}
-		items = append(items, relationships.SubjectRelationship{
-			ResourceType:    row.resourceType,
-			ResourceID:      row.resourceID,
-			Relation:        row.relation,
-			SubjectRelation: row.subjectRelation,
-		})
+	view, err := r.rawView(ctx)
+	if err != nil {
+		return list.Page[relationships.SubjectRelationship]{}, err
 	}
-	return pageMemByKey(items, req, relationships.OrderFields, "tuple_key", func(s relationships.SubjectRelationship) string {
-		return tupleKey(s.ResourceType, s.ResourceID, s.Relation, subjectType, subjectID, s.SubjectRelation)
-	})
+	return view.Service.ListRelationshipsBySubject(ctx, subjectType, subjectID, filter, req)
 }
 
 // ListRelationshipsByResource pages the subjects related to a resource.
 func (r *Relationships) ListRelationshipsByResource(ctx context.Context, resourceType, resourceID string, filter relationships.ResourceRelationshipFilter, req list.Request) (list.Page[relationships.ResourceRelationship], error) {
-	r.st.mu.Lock()
-	defer r.st.mu.Unlock()
-	var items []relationships.ResourceRelationship
-	for _, row := range r.st.relationshipRows() {
-		if row.resourceType != resourceType || row.resourceID != resourceID {
-			continue
-		}
-		if filter.SubjectType != nil && *filter.SubjectType != row.subjectType {
-			continue
-		}
-		if filter.Relation != nil && *filter.Relation != row.relation {
-			continue
-		}
-		items = append(items, relationships.ResourceRelationship{
-			SubjectType:     row.subjectType,
-			SubjectID:       row.subjectID,
-			Relation:        row.relation,
-			SubjectRelation: row.subjectRelation,
-		})
+	view, err := r.rawView(ctx)
+	if err != nil {
+		return list.Page[relationships.ResourceRelationship]{}, err
 	}
-	return pageMemByKey(items, req, relationships.OrderFields, "tuple_key", func(s relationships.ResourceRelationship) string {
-		return tupleKey(resourceType, resourceID, s.Relation, s.SubjectType, s.SubjectID, s.SubjectRelation)
-	})
+	return view.Service.ListRelationshipsByResource(ctx, resourceType, resourceID, filter, req)
 }
 
 // distinctResourceIDs collects the sorted-distinct resource IDs of rows matching
@@ -568,18 +503,7 @@ func (r *Relationships) distinctResourceIDs(pred func(relRow) bool) []string {
 	return out
 }
 
-func keepRows(rows []relRow, keep func(relRow) bool) []relRow {
-	out := rows[:0:0]
-	for _, row := range rows {
-		if keep(row) {
-			out = append(out, row)
-		}
-	}
-	return out
-}
-
-// tupleKey orders the exact six-field relationship identity. Input validation
-// forbids the delimiter in every component, including the optional userset.
-func tupleKey(resourceType, resourceID, relation, subjectType, subjectID, subjectRelation string) string {
-	return tuplekey.Encode(tuples.Tuple{Scope: tuples.On(resourceType, resourceID), Relation: relation, Subject: tuples.SubjectRef{Type: subjectType, ID: subjectID, Relation: subjectRelation}})
+// rawView shares the canonical facade without applying graph-model filtering.
+func (r *Relationships) rawView(_ context.Context) (relationships.Components, error) {
+	return relationships.NewService(&Tuples{st: r.st})
 }

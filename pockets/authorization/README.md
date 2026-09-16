@@ -211,6 +211,13 @@ Relationship listings exclude global facts and retain both concrete and userset
 subjects. Subject and resource filters are applied before pagination, and facade
 projections preserve tuple cursors and counts.
 
+The raw store relationship facades share these tuple projections and reject
+invalid selectors and unsupported search. Their standalone listings/counts use a
+coherent snapshot. Raw SQL facades retain the host's ambient transaction isolation,
+including PostgreSQL READ COMMITTED; use a snapshot transaction when consistency
+across statements is required. Root `Relationships`, exact role checks and decision
+operations retain their stricter snapshot-isolation requirements.
+
 ## Writes, integrity and audit
 
 Inbound adapters authorize the exact command before invoking a writer. Every

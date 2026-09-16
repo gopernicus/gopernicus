@@ -11,7 +11,6 @@ import (
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuples"
 
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/audit"
-	"github.com/gopernicus/gopernicus/pockets/authorization/logic/relationships"
 	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/pkg/list"
 )
@@ -79,10 +78,6 @@ func (s *state) applyLocked(c tuples.Changes) {
 	for _, t := range c.Add {
 		s.facts[t] = struct{}{}
 	}
-}
-
-func (r relRow) toRelationship() relationships.CreateRelationship {
-	return relationships.CreateRelationship{ResourceType: r.resourceType, ResourceID: r.resourceID, Relation: r.relation, SubjectType: r.subjectType, SubjectID: r.subjectID, SubjectRelation: r.subjectRelation}
 }
 
 // Audit reads the bundle's retained history. It cannot append or erase records.

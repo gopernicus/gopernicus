@@ -1,0 +1,379 @@
+{
+  "date": "2026-09-16",
+  "status": "completed audit only",
+  "head": "6bad23cc8d9432a42f7125bf98ed695a817d2d6d",
+  "report": "plans/authorization-internal-structure-audit.md",
+  "runtime_changes": false,
+  "module_checks": [
+    {
+      "module": "pockets/authorization",
+      "command": [
+        "go",
+        "build",
+        "./..."
+      ],
+      "exit_code": 0
+    },
+    {
+      "module": "pockets/authorization",
+      "command": [
+        "go",
+        "test",
+        "-json",
+        "-count=1",
+        "./..."
+      ],
+      "exit_code": 0,
+      "skips": [
+        "TestTransactional"
+      ],
+      "failures": [],
+      "passed_named_tests": 1256,
+      "skip_count": 1
+    },
+    {
+      "module": "pockets/authorization",
+      "command": [
+        "go",
+        "vet",
+        "./..."
+      ],
+      "exit_code": 0
+    },
+    {
+      "module": "pockets/authorization/stores/pgx",
+      "command": [
+        "go",
+        "build",
+        "./..."
+      ],
+      "exit_code": 0
+    },
+    {
+      "module": "pockets/authorization/stores/pgx",
+      "command": [
+        "go",
+        "test",
+        "-json",
+        "-count=1",
+        "./..."
+      ],
+      "exit_code": 0,
+      "skips": [
+        "TestAmbientRowAndTupleCommitTogether",
+        "TestAuditRawRelationshipDeltas/exact",
+        "TestAuditRawRelationshipDeltas/five-field",
+        "TestAuditRawRelationshipDeltas/resource-subject",
+        "TestAuditRawRelationshipDeltas/resource",
+        "TestAuditRawRelationshipDeltas/set",
+        "TestAuditRoleAndMutationDeltas",
+        "TestAuditFailureRollsBackOwnedAndAmbientWrites/relationship/owned",
+        "TestAuditFailureRollsBackOwnedAndAmbientWrites/role/owned",
+        "TestAuditFailureRollsBackOwnedAndAmbientWrites/relationship/ambient",
+        "TestAuditFailureRollsBackOwnedAndAmbientWrites/role/ambient",
+        "TestAuditAmbientRollbackAndDisabledReader",
+        "TestAuditListingEqualTimestampPagination",
+        "TestAuditModelReaderRetainsRecordingConfiguration",
+        "TestCanonicalConstructorsRejectPartialSchemas/partial_identity",
+        "TestCanonicalConstructorsRejectPartialSchemas/exclusive_label_index",
+        "TestCanonicalConstructorsRejectPartialSchemas/audit_missing_encoding_check",
+        "TestCanonicalConstructorsRejectPartialSchemas/wrong_type",
+        "TestCanonicalConstructorsRejectPartialSchemas/tuple_integer_scope",
+        "TestCanonicalConstructorsRejectPartialSchemas/nullable_relation",
+        "TestCanonicalConstructorsRejectPartialSchemas/unvalidated_check",
+        "TestCanonicalConstructorsRejectPartialSchemas/missing_primary_key",
+        "TestCanonicalConstructorsRejectPartialSchemas/missing_column",
+        "TestCanonicalConstructorsRejectPartialSchemas/audit_integer_scope",
+        "TestCanonicalConstructorsRejectPartialSchemas/wrong_collation",
+        "TestCanonicalConstructorsRejectPartialSchemas/missing_scope_check",
+        "TestCanonicalConstructorsRejectPartialSchemas/same_name_permissive_check",
+        "TestCanonicalConstructorsRejectPartialSchemas/audit_bad_source_check",
+        "TestCanonicalConstructorsRejectPartialSchemas/row_security",
+        "TestCanonicalConstructorsRejectPartialSchemas/audit_missing_encoding",
+        "TestCanonicalSQLFactsAndCache",
+        "TestCanonicalSQLBulkAndSnapshots",
+        "TestCanonicalSQLIntegrityAcrossRoleWrites",
+        "TestCanonicalSQLRejectsWeakAmbientSnapshot",
+        "TestCanonicalReconcileRetryRetainsDesiredState",
+        "TestCanonicalSubjectMutationReadsOnlyItsTarget",
+        "TestContractualCollation_Catalog",
+        "TestCollationControlsOrdering_NonC",
+        "TestConformance",
+        "TestTransactional",
+        "TestAuditConformance/Disabled",
+        "TestAuditConformance/SourceRequired",
+        "TestAuditConformance/RawChanges",
+        "TestAuditConformance/OneDeltaAcrossFacades",
+        "TestAuditConformance/MutationChanges",
+        "TestAuditConformance/PurgeBound",
+        "TestAuditConformance/PagingAndOwnership",
+        "TestBoundedExpansionStopsProducingStatesAtCap",
+        "TestLookupPlansAtScale",
+        "TestFreshCanonicalSchema",
+        "TestFreshCacheInstallationOrderAndRollback",
+        "TestIntegrityRejectsStaleAmbientOwners",
+        "TestIntegrityFailurePreservesAmbientHostWork",
+        "TestCheckSnapshots/decisions/Check",
+        "TestCheckSnapshots/decisions/CheckExplain",
+        "TestCheckSnapshots/decisions/CheckBatch",
+        "TestCheckSnapshots/decisions/FilterAuthorized",
+        "TestCheckAmbient/commit=false",
+        "TestCheckAmbient/commit=true",
+        "TestLookupSnapshots/space/all/revoke_membership",
+        "TestLookupSnapshots/space/all/unrelated_relationship",
+        "TestLookupSnapshots/space/all/unrelated_role",
+        "TestLookupSnapshots/space/page/revoke_membership",
+        "TestLookupSnapshots/space/page/unrelated_relationship",
+        "TestLookupSnapshots/space/page/unrelated_role",
+        "TestLookupSnapshots/document/all/revoke_membership",
+        "TestLookupSnapshots/document/all/unrelated_relationship",
+        "TestLookupSnapshots/document/all/unrelated_role",
+        "TestLookupSnapshots/document/page/revoke_membership",
+        "TestLookupSnapshots/document/page/unrelated_relationship",
+        "TestLookupSnapshots/document/page/unrelated_role",
+        "TestLookupSnapshotLifecycle/lifetime/success",
+        "TestLookupSnapshotLifecycle/lifetime/error",
+        "TestLookupSnapshotLifecycle/lifetime/cancel",
+        "TestLookupSnapshotLifecycle/lifetime/panic",
+        "TestLookupSnapshotLifecycle/scope_and_invalid_calls",
+        "TestLookupAmbient/commit=false",
+        "TestLookupAmbient/commit=true",
+        "TestLookupConcurrent",
+        "TestMutationConcurrentNaturalNoOpsAndAudit",
+        "TestMutationRefusesAmbientBeforeAnyWrite",
+        "TestCacheSnapshots/snapshot_fact_isolation_and_lifetime",
+        "TestCacheSnapshots/close_on_error",
+        "TestCacheSnapshots/close_on_cancel",
+        "TestCacheSnapshots/close_on_panic",
+        "TestTupleCacheInstallationAndIdentityFailures/optional",
+        "TestTupleCacheInstallationAndIdentityFailures/missing",
+        "TestTupleCacheInstallationAndIdentityFailures/changed_identity",
+        "TestTupleCacheTriggerTamper",
+        "TestSetRelationTargetsConcurrentDifferentLabelsCoexistLive/create/standalone",
+        "TestSetRelationTargetsConcurrentDifferentLabelsCoexistLive/create/ambient",
+        "TestSetRelationTargetsConcurrentDifferentLabelsCoexistLive/set/standalone",
+        "TestSetRelationTargetsConcurrentDifferentLabelsCoexistLive/set/ambient",
+        "TestSchemaProbe",
+        "TestPostgresTupleCacheBatchAndRevocation",
+        "TestCacheEnabledConformance/Tuples/RoleWrittenFactsParticipateInGraphAndLookup",
+        "TestCacheEnabledConformance/Tuples/BulkExactSetsAndCanonicalCursor",
+        "TestCacheEnabledConformance/Tuples/CanonicalQueryFiltersAndListingCursors",
+        "TestCacheEnabledConformance/Tuples/AtomicValidationAndScopeDeletion",
+        "TestCacheEnabledConformance/Tuples/SnapshotLifetime/success",
+        "TestCacheEnabledConformance/Tuples/SnapshotLifetime/error",
+        "TestCacheEnabledConformance/Tuples/SnapshotLifetime/cancel",
+        "TestCacheEnabledConformance/Tuples/SnapshotLifetime/panic",
+        "TestCacheEnabledConformance/Tuples/CompoundChecksRequireSnapshot",
+        "TestCacheEnabledConformance/Tuples/ModelFreeAllUsesOneSnapshot",
+        "TestCacheEnabledConformance/Tuples/ModelFreeAnyUsesOneSnapshot",
+        "TestCacheEnabledConformance/Tuples/SnapshotCompletionErrorDiscardsAllow",
+        "TestCacheEnabledConformance/RelationshipFacades/OneAuthority",
+        "TestCacheEnabledConformance/RelationshipFacades/FilteredPages",
+        "TestCacheEnabledConformance/RelationshipFacades/RejectEmptySelectors",
+        "TestCacheEnabledConformance/ReadModel",
+        "TestCacheEnabledConformance/Relationship",
+        "TestCacheEnabledConformance/Adversarial",
+        "TestCacheEnabledConformance/Budget",
+        "TestCacheEnabledConformance/Parity",
+        "TestCacheEnabledConformance/Roles/NaturalOrder",
+        "TestCacheEnabledConformance/Roles/ReferenceValidation",
+        "TestCacheEnabledConformance/Roles/ExactScopeAndExplicitFallback",
+        "TestCacheEnabledConformance/Roles/KindFreeMembershipAndIndependentLabels",
+        "TestCacheEnabledConformance/Roles/ExactRolesNeverExpandUsersets",
+        "TestCacheEnabledConformance/Roles/ListPagination",
+        "TestCacheEnabledConformance/Roles/RolesLookupKeyset",
+        "TestCacheEnabledConformance/Roles/Decision/DirectGrantAllows",
+        "TestCacheEnabledConformance/Roles/Decision/ExplicitGlobalBranchSatisfiesScopedPermission",
+        "TestCacheEnabledConformance/Roles/Decision/UndeclaredPairDenies",
+        "TestCacheEnabledConformance/Roles/Decision/GlobalRoleIsUnrestrictedOnlyForItsDeclaredPairs",
+        "TestCacheEnabledConformance/Composed",
+        "TestCacheEnabledConformance/RawIntegrity/tuple",
+        "TestCacheEnabledConformance/RawIntegrity/reconcile",
+        "TestCacheEnabledConformance/RawIntegrity/scope",
+        "TestCacheEnabledConformance/RawIntegrity/relationship",
+        "TestCacheEnabledConformance/RawIntegrity/subject",
+        "TestCacheEnabledConformance/RawIntegrity/batch",
+        "TestCacheEnabledConformance/RawIntegrity/AddressedAbsentScope",
+        "TestCacheEnabledConformance/RawIntegrity/AtomicOwnerReplacement",
+        "TestCacheEnabledConformance/RawIntegrity/ConcurrentRawAndCommandRemoval",
+        "TestCacheEnabledConformance/Mutations",
+        "TestCacheRejectsRLS/iam_tuplesENABLE",
+        "TestCacheRejectsRLS/iam_tuplesFORCE",
+        "TestCacheRejectsRLS/iam_tuple_cacheENABLE",
+        "TestCacheRejectsRLS/iam_tuple_cacheFORCE",
+        "TestCacheRejectsRLS/iam_tuple_outboxENABLE",
+        "TestCacheRejectsRLS/iam_tuple_outboxFORCE",
+        "TestCacheRejectsInheritedAuthority",
+        "TestCacheSchemaFrozenAndMixed",
+        "TestCacheEnabledAuditConformance/Disabled",
+        "TestCacheEnabledAuditConformance/SourceRequired",
+        "TestCacheEnabledAuditConformance/RawChanges",
+        "TestCacheEnabledAuditConformance/OneDeltaAcrossFacades",
+        "TestCacheEnabledAuditConformance/MutationChanges",
+        "TestCacheEnabledAuditConformance/PurgeBound",
+        "TestCacheEnabledAuditConformance/PagingAndOwnership",
+        "TestTupleCacheRejectsDisabledCapture/insert",
+        "TestTupleCacheRejectsDisabledCapture/update",
+        "TestTupleCacheRejectsDisabledCapture/delete",
+        "TestTupleCacheRejectsDisabledCapture/truncate",
+        "TestTupleCacheRejectsOutboxIdentityTamper",
+        "TestTupleSourceCaptureAndRecovery",
+        "TestTupleSourceNumericEventOrderAcrossDigits/9",
+        "TestTupleSourceNumericEventOrderAcrossDigits/99",
+        "TestTupleSourceCommittedVisibilityAndExactAcknowledgements",
+        "TestTupleSourceTruncateAndRoleWrites",
+        "TestTupleSourceAmbientRejected",
+        "TestTupleSourceInvokerPrivileges",
+        "TestTupleSourceMalformedPayloadAndMissingIdentity/{\"resource_type\":\"document\"}",
+        "TestTupleSourceMalformedPayloadAndMissingIdentity/{\"resource_type\":\"document\",\"resource_id\":\"a\",\"relation\":\"viewer\",\"subject_type\":\"user\",\"subject_id\":\"alice\",\"subject_relation\":null}",
+        "TestTupleSourceMalformedPayloadAndMissingIdentity/[]",
+        "TestTupleSourceMalformedPayloadAndMissingIdentity",
+        "TestTupleSourceRejectsMalformedCurrentFacts/control_",
+        "TestTupleSourceRejectsMalformedCurrentFacts/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "TestTupleSourceAcknowledgementRollback",
+        "TestTupleSourceFullRecoveryPreservesLateWork",
+        "TestTupleSourceResetSkipsObsoletePayloads"
+      ],
+      "failures": [],
+      "passed_named_tests": 41,
+      "skip_count": 173
+    },
+    {
+      "module": "pockets/authorization/stores/pgx",
+      "command": [
+        "go",
+        "vet",
+        "./..."
+      ],
+      "exit_code": 0
+    },
+    {
+      "module": "pockets/authorization/stores/turso",
+      "command": [
+        "go",
+        "build",
+        "./..."
+      ],
+      "exit_code": 0
+    },
+    {
+      "module": "pockets/authorization/stores/turso",
+      "command": [
+        "go",
+        "test",
+        "-json",
+        "-count=1",
+        "./..."
+      ],
+      "exit_code": 0,
+      "skips": [],
+      "failures": [],
+      "passed_named_tests": 483,
+      "skip_count": 0
+    },
+    {
+      "module": "pockets/authorization/stores/turso",
+      "command": [
+        "go",
+        "vet",
+        "./..."
+      ],
+      "exit_code": 0
+    },
+    {
+      "module": "pockets/authorization/stores/goredis",
+      "command": [
+        "go",
+        "build",
+        "./..."
+      ],
+      "exit_code": 0
+    },
+    {
+      "module": "pockets/authorization/stores/goredis",
+      "command": [
+        "go",
+        "test",
+        "-json",
+        "-count=1",
+        "./..."
+      ],
+      "exit_code": 0,
+      "skips": [],
+      "failures": [],
+      "passed_named_tests": 43,
+      "skip_count": 0
+    },
+    {
+      "module": "pockets/authorization/stores/goredis",
+      "command": [
+        "go",
+        "vet",
+        "./..."
+      ],
+      "exit_code": 0
+    }
+  ],
+  "additional_passed_checks": [
+    {
+      "module": "pockets/authorization",
+      "command": [
+        "go",
+        "test",
+        "-race",
+        "-count=1",
+        "./..."
+      ]
+    },
+    {
+      "module": ".",
+      "command": [
+        "make",
+        "guard-authorization-no-delivery-repo",
+        "guard-authorization-rolesvc-no-engine",
+        "guard-authorization-tuples-leaf",
+        "guard-authorization-decisions-no-mutations",
+        "guard-inbound-authorization",
+        "guard-tuple-write-integrity"
+      ]
+    },
+    {
+      "module": ".",
+      "command": [
+        "git",
+        "diff",
+        "--check"
+      ]
+    }
+  ],
+  "reproduction": {
+    "description": "Public memory facade and model-free validation differences",
+    "output": "unsupported search: raw items=1 err=<nil>; facade items=0 invalid_input=true\nempty relation filter: raw err=<nil>; facade invalid_input=true\ncanceled existence: raw held=true err=<nil>; canonical held=false canceled=true\nmodel-free validation: decision legacy=relationship doc:d#viewer@user:alice: unknown resource type \"doc\": authorization relation: invalid input; compiled=<nil>; facade=<nil>\n",
+    "source": "package main\n\nimport (\n    \"context\"\n    \"errors\"\n    \"fmt\"\n\n    \"github.com/gopernicus/gopernicus/pockets/authorization\"\n    \"github.com/gopernicus/gopernicus/pockets/authorization/logic/relationships\"\n    \"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuples\"\n    \"github.com/gopernicus/gopernicus/pockets/authorization/stores/memory\"\n    \"github.com/gopernicus/gopernicus/sdk\"\n    \"github.com/gopernicus/gopernicus/sdk/pkg/list\"\n)\n\nfunc main() {\n    ctx := context.Background()\n    store := memory.New()\n    c, err := authorization.New(authorization.Repositories{Tuples: store.Tuples(), Mutations: store.Mutations()})\n    if err != nil { panic(err) }\n    row := relationships.CreateRelationship{ResourceType: \"doc\", ResourceID: \"d\", Relation: \"viewer\", SubjectType: \"user\", SubjectID: \"alice\"}\n    if err := c.RelationshipWriter.CreateRelationships(ctx, []relationships.CreateRelationship{row}); err != nil { panic(err) }\n\n    raw, rawErr := store.Relationships().ListRelationshipsByResource(ctx, \"doc\", \"d\", relationships.ResourceRelationshipFilter{}, list.Request{Search: \"absent\"})\n    facade, facadeErr := c.Relationships.ListRelationshipsByResource(ctx, \"doc\", \"d\", relationships.ResourceRelationshipFilter{}, list.Request{Search: \"absent\"})\n    fmt.Printf(\"unsupported search: raw items=%d err=%v; facade items=%d invalid_input=%t\\n\", len(raw.Items), rawErr, len(facade.Items), errors.Is(facadeErr, sdk.ErrInvalidInput))\n\n    empty := \"\"\n    filter := relationships.ResourceRelationshipFilter{Relation: &empty}\n    _, rawErr = store.Relationships().ListRelationshipsByResource(ctx, \"doc\", \"d\", filter, list.Request{})\n    _, facadeErr = c.Relationships.ListRelationshipsByResource(ctx, \"doc\", \"d\", filter, list.Request{})\n    fmt.Printf(\"empty relation filter: raw err=%v; facade invalid_input=%t\\n\", rawErr, errors.Is(facadeErr, sdk.ErrInvalidInput))\n\n    canceled, cancel := context.WithCancel(ctx)\n    cancel()\n    rawHeld, rawErr := store.Relationships().CheckRelationExists(canceled, \"doc\", \"d\", \"viewer\", \"user\", \"alice\")\n    canonicalHeld, canonicalErr := store.Tuples().Contains(canceled, tuples.Tuple{Scope: tuples.On(\"doc\", \"d\"), Relation: \"viewer\", Subject: tuples.SubjectRef{Type: \"user\", ID: \"alice\"}})\n    fmt.Printf(\"canceled existence: raw held=%t err=%v; canonical held=%t canceled=%t\\n\", rawHeld, rawErr, canonicalHeld, errors.Is(canonicalErr, context.Canceled))\n\n    oldErr := c.Decisions.ValidateRelationships([]relationships.CreateRelationship{row})\n    shapeErr := c.Decisions.CompiledModel().ValidateTuple(row.Tuple())\n    writerErr := c.Relationships.ValidateRelationships([]relationships.CreateRelationship{row})\n    fmt.Printf(\"model-free validation: decision legacy=%v; compiled=%v; facade=%v\\n\", oldErr, shapeErr, writerErr)\n}\n"
+  },
+  "dead_private_declarations": [
+    "logic/decisions/schema_validator.go:isSelfLoop",
+    "stores/memory/memory.go:checkRelationExpandedLocked",
+    "stores/memory/memory.go:keepRows",
+    "stores/memory/audit.go:relRow.toRelationship"
+  ],
+  "dead_code_method": "Declaration scan and repository-wide reference inspection, including tests. Exported API removals require downstream compatibility review.",
+  "resolved_environment_failures": [
+    "Sandbox blocked httptest loopback listener; unrestricted rerun passed.",
+    "Sandbox blocked public module metadata downloads; unrestricted rerun passed."
+  ],
+  "unavailable_check": "Installed staticcheck v0.6.1 binary was built with Go 1.25; repository requires Go 1.26.1. Its default cache was also restricted. No staticcheck pass is claimed.",
+  "not_run": [
+    "Live PostgreSQL",
+    "Remote Turso",
+    "Tagged SQL-to-Redis end-to-end suites",
+    "42-module make check",
+    "Browser/manual host flows",
+    "Load benchmarks",
+    "External consumer compatibility sweep"
+  ],
+  "files_created": [
+    "plans/authorization-internal-structure-audit.md",
+    "plans/authorization-internal-structure-audit-evidence.json"
+  ]
+}

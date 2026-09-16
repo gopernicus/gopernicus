@@ -162,8 +162,9 @@ func (c Changes) Validate() error {
 	return nil
 }
 
-// Storer is the canonical raw authority. Actor-facing writes use guarded
-// mutations; these trusted operations apply structural validation only.
+// Storer is the canonical raw authority. Writes apply structural validation and
+// the store's configured integrity policy. Model-bound facades additionally
+// validate declared tuple shapes; inbound access points own caller authorization.
 type Storer interface {
 	Reader
 	Snapshotter

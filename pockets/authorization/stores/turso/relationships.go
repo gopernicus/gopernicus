@@ -65,33 +65,6 @@ func newRelationshipStore(db *tursodb.DB, cfg config) *relationshipStore {
 
 var _ relationships.Storer = (*relationshipStore)(nil)
 
-// tupleKeyExpr preserves the complete tuple in byte-order listing cursors.
-const tupleKeyExpr = canonicalTupleKeyExpr
-
-type subjectRelationshipRow struct {
-	ResourceType    string `db:"resource_type"`
-	ResourceID      string `db:"resource_id"`
-	Relation        string `db:"relation"`
-	SubjectRelation string `db:"subject_relation"`
-	TupleKey        string `db:"tuple_key"`
-}
-
-func (r subjectRelationshipRow) toDomain() relationships.SubjectRelationship {
-	return relationships.SubjectRelationship{ResourceType: r.ResourceType, ResourceID: r.ResourceID, Relation: r.Relation, SubjectRelation: r.SubjectRelation}
-}
-
-type resourceRelationshipRow struct {
-	SubjectType     string `db:"subject_type"`
-	SubjectID       string `db:"subject_id"`
-	Relation        string `db:"relation"`
-	SubjectRelation string `db:"subject_relation"`
-	TupleKey        string `db:"tuple_key"`
-}
-
-func (r resourceRelationshipRow) toDomain() relationships.ResourceRelationship {
-	return relationships.ResourceRelationship{SubjectType: r.SubjectType, SubjectID: r.SubjectID, Relation: r.Relation, SubjectRelation: r.SubjectRelation}
-}
-
 // CheckRelationWithGroupExpansion reports whether the subject — or any group it
 // transitively belongs to — holds the relation on the resource. maxExpansionStates
 // bounds the group expansion (boundedReachableCTE): more than maxExpansionStates
@@ -131,9 +104,7 @@ SELECT
 	return matched != 0, nil
 }
 
-// rowQuerier is the Query seam shared by the pool (*tursodb.DB) and a
-// transaction (*tursodb.Tx), so one relation-targets reader serves the read side
-// and the mutation repository's transaction-bound DecisionView alike.
+// rowQuerier is the Query seam shared by pools and transaction-bound graph readers.
 type rowQuerier interface {
 	Query(ctx context.Context, query string, args ...any) (*sql.Rows, error)
 }
@@ -145,10 +116,7 @@ func (s *relationshipStore) GetRelationTargets(ctx context.Context, resourceType
 	return relationTargets(ctx, s.reader(ctx), resourceType, resourceID, relation)
 }
 
-// relationTargets is the one relation-targets read: the read-side
-// GetRelationTargets runs it on the ambient querier (pool or host transaction),
-// the DecisionView's RelationTargets on the mutation transaction. Same
-// statement, same row order, same mapping.
+// relationTargets reads through the supplied raw or model-filtered querier.
 func relationTargets(ctx context.Context, q rowQuerier, resourceType, resourceID, relation string) ([]relationships.RelationTarget, error) {
 	const stmt = `SELECT subject_type, subject_id, subject_relation FROM (SELECT * FROM main.iam_tuples WHERE scope_kind=2) WHERE resource_type = ? AND resource_id = ? AND relation = ?`
 	rows, err := q.Query(ctx, stmt, resourceType, resourceID, relation)
@@ -177,11 +145,13 @@ func relationTargets(ctx context.Context, q rowQuerier, resourceType, resourceID
 
 // CheckRelationExists reports whether an exact direct tuple is present for a
 // CONCRETE subject (no expansion; subject_relation must be empty — a stored userset
-// tuple with the same type/id does not satisfy a concrete probe). Used for the
-// platform-admin data-tuple check and last-owner counting.
+// tuple with the same type/id does not satisfy a concrete probe).
 func (s *relationshipStore) CheckRelationExists(ctx context.Context, resourceType, resourceID, relation, subjectType, subjectID string) (bool, error) {
-	const q = `SELECT EXISTS(SELECT 1 FROM (SELECT * FROM main.iam_tuples WHERE scope_kind=2) WHERE resource_type = ? AND resource_id = ? AND relation = ? AND subject_type = ? AND subject_id = ? AND subject_relation = '')`
-	return existsQuery(ctx, s.db.QuerierFrom(ctx), q, resourceType, resourceID, relation, subjectType, subjectID)
+	view, err := s.rawView(ctx)
+	if err != nil {
+		return false, err
+	}
+	return view.Service.CheckRelationExists(ctx, resourceType, resourceID, relation, subjectType, subjectID)
 }
 
 // CheckBatchDirect returns resourceID -> allowed for one relation across the
@@ -477,85 +447,32 @@ func (s *relationshipStore) DeleteByResourceAndSubject(ctx context.Context, rt, 
 	})
 }
 
-// CountByResourceAndRelation counts DIRECT tuples only — never expanded
-// membership (the §2.5 security pin: last-owner protection depends on it).
+// CountByResourceAndRelation counts stored facts, including userset references,
+// without graph expansion or model filtering.
 func (s *relationshipStore) CountByResourceAndRelation(ctx context.Context, resourceType, resourceID, relation string) (int, error) {
-	const q = `SELECT COUNT(*) FROM (SELECT * FROM main.iam_tuples WHERE scope_kind=2) WHERE resource_type = ? AND resource_id = ? AND relation = ?`
-	var n int
-	if err := s.db.QuerierFrom(ctx).QueryRow(ctx, q, resourceType, resourceID, relation).Scan(&n); err != nil {
-		return 0, tursodb.MapError(err)
+	view, err := s.rawView(ctx)
+	if err != nil {
+		return 0, err
 	}
-	return n, nil
-}
-
-// relationshipsBaseSQL exposes the computed key to the outer keyset predicate.
-func relationshipsBaseSQL(columns, where string) string {
-	return `SELECT ` + columns + `, tuple_key FROM (
-    SELECT ` + columns + `, ` + tupleKeyExpr + ` AS tuple_key
-    FROM (SELECT * FROM main.iam_tuples WHERE scope_kind=2) ` + where + `
-) AS r WHERE 1 = 1`
+	return view.Service.CountByResourceAndRelation(ctx, resourceType, resourceID, relation)
 }
 
 // ListRelationshipsBySubject pages complete tuple identities in byte order.
 func (s *relationshipStore) ListRelationshipsBySubject(ctx context.Context, subjectType, subjectID string, filter relationships.SubjectRelationshipFilter, req list.Request) (list.Page[relationships.SubjectRelationship], error) {
-	if err := validateTupleCursor(req); err != nil {
-		return list.Page[relationships.SubjectRelationship]{}, err
-	}
-	where := "WHERE subject_type = ? AND subject_id = ?"
-	args := []any{subjectType, subjectID}
-	if filter.ResourceType != nil {
-		where += " AND resource_type = ?"
-		args = append(args, *filter.ResourceType)
-	}
-	if filter.Relation != nil {
-		where += " AND relation = ?"
-		args = append(args, *filter.Relation)
-	}
-	q := tursodb.ListQuery[subjectRelationshipRow]{
-		BaseSQL:      relationshipsBaseSQL("resource_type, resource_id, relation, subject_relation", where),
-		Args:         args,
-		OrderFields:  relationships.OrderFields,
-		DefaultOrder: relationships.DefaultOrder,
-		PK:           "tuple_key",
-		OrderValueOf: func(r subjectRelationshipRow, _ string) any { return r.TupleKey },
-		PKOf:         func(r subjectRelationshipRow) string { return r.TupleKey },
-	}
-	page, err := tursodb.List(ctx, s.db.QuerierFrom(ctx), q, req)
+	view, err := s.rawView(ctx)
 	if err != nil {
 		return list.Page[relationships.SubjectRelationship]{}, err
 	}
-	return list.MapPage(page, subjectRelationshipRow.toDomain), nil
+	return view.Service.ListRelationshipsBySubject(ctx, subjectType, subjectID, filter, req)
 }
 
 // ListRelationshipsByResource pages complete tuple identities in byte order.
 func (s *relationshipStore) ListRelationshipsByResource(ctx context.Context, resourceType, resourceID string, filter relationships.ResourceRelationshipFilter, req list.Request) (list.Page[relationships.ResourceRelationship], error) {
-	if err := validateTupleCursor(req); err != nil {
-		return list.Page[relationships.ResourceRelationship]{}, err
-	}
-	where := "WHERE resource_type = ? AND resource_id = ?"
-	args := []any{resourceType, resourceID}
-	if filter.SubjectType != nil {
-		where += " AND subject_type = ?"
-		args = append(args, *filter.SubjectType)
-	}
-	if filter.Relation != nil {
-		where += " AND relation = ?"
-		args = append(args, *filter.Relation)
-	}
-	q := tursodb.ListQuery[resourceRelationshipRow]{
-		BaseSQL:      relationshipsBaseSQL("subject_type, subject_id, relation, subject_relation", where),
-		Args:         args,
-		OrderFields:  relationships.OrderFields,
-		DefaultOrder: relationships.DefaultOrder,
-		PK:           "tuple_key",
-		OrderValueOf: func(r resourceRelationshipRow, _ string) any { return r.TupleKey },
-		PKOf:         func(r resourceRelationshipRow) string { return r.TupleKey },
-	}
-	page, err := tursodb.List(ctx, s.db.QuerierFrom(ctx), q, req)
+	view, err := s.rawView(ctx)
 	if err != nil {
 		return list.Page[relationships.ResourceRelationship]{}, err
 	}
-	return list.MapPage(page, resourceRelationshipRow.toDomain), nil
+	return view.Service.ListRelationshipsByResource(ctx, resourceType, resourceID, filter, req)
 }
 
 // lookupResourceIDsSQL renders the direct-relation keyset lookup and its args.
@@ -687,4 +604,15 @@ func withLimit(query string, args []any, limit int) (string, []any) {
 
 func (s *relationshipStore) write(ctx context.Context, fn func(*writeTx) error) error {
 	return runWrite(ctx, s.db, config{audit: s.audit, integrity: s.integrity}, fn)
+}
+
+// rawView shares canonical projections while preserving the raw facade's ambient
+// joining contract. Standalone lists own a snapshot; an ambient host controls its
+// transaction's isolation. Decision snapshots retain their stricter requirements.
+func (s *relationshipStore) rawView(ctx context.Context) (relationships.Components, error) {
+	facts := s.tuples()
+	if tx, ok := tursodb.TxFromContext(ctx); ok {
+		facts.readQuerier = tx
+	}
+	return relationships.NewService(facts)
 }

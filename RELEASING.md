@@ -1,5 +1,20 @@
 # Releasing gopernicus modules
 
+## Authorization internal cleanup (release candidate)
+
+Authorization core and PostgreSQL/Turso adapters consolidate raw relationship
+reads over canonical tuples, reject invalid selectors/unsupported search and
+honor cancellation consistently. Standalone raw listings/counts now use snapshots;
+raw ambient transaction joining and decision isolation requirements are preserved.
+The obsolete decision-service validation trio, CreateRelationship alias and unused
+relationship error are removed. This is a pre-v1 source/accepted-input change;
+release authorization `v0.21.0`, PostgreSQL store `v0.15.0` and Turso store
+`v0.14.0` together. SQL adapter and auth-cms pins are updated. There is no schema,
+cursor/cache protocol or new third-party dependency change.
+
+See [API adoption](pockets/authorization/stores/UPGRADE.md#adopting-the-internal-cleanup-v0210)
+and [implementation/verification](plans/authorization-internal-cleanup.md).
+
 ## Inbound authorization ownership and integrity (published 2026-09-16)
 
 Coordinated breaking pre-v1 release: authentication `v0.12.0`, authorization

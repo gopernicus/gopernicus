@@ -10,8 +10,8 @@ import (
 
 // ErrInvalidCursor reports a LookupRequest.After the decision surface refuses:
 // malformed base64/JSON, an unknown cursor version, a fingerprint bound to a
-// DIFFERENT query (another principal, permission, resource type, owning kind,
-// or owning model), or a structurally invalid resource id inside it. It wraps
+// different query (another principal, permission, resource type or model), or a
+// structurally invalid resource id inside it. It wraps
 // sdk.ErrInvalidInput (HTTP 400) — a client presenting it restarts the
 // enumeration from page one; it is never an evaluation-budget outcome.
 var ErrInvalidCursor = fmt.Errorf("authorization: invalid lookup cursor: %w", sdk.ErrInvalidInput)
@@ -19,8 +19,6 @@ var ErrInvalidCursor = fmt.Errorf("authorization: invalid lookup cursor: %w", sd
 // =============================================================================
 // Core check types
 // =============================================================================
-
-// PrincipalRef is the concrete caller shared by checks and mutation commands.
 
 // Resource is what is being accessed.
 type Resource struct {
@@ -71,15 +69,9 @@ type CheckResult struct {
 // LookupRequest / LookupResult
 // =============================================================================
 
-// LookupRequest is the struct-input form of an enumeration query — what
-// LookupResourcesIn takes, beside CheckRequest in this same vocabulary. It is a
-// SIBLING of the positional LookupResources, never a replacement: that method
-// sits on host-defined ports and on the internal kind interface, so its
-// signature does not change, and a new field is additive here with zero
-// signature churn.
-//
-// LookupResourcesIn is PAGED. Limit is a PAGE SIZE and After is the previous
-// page's continuation:
+// LookupRequest selects one page of authorized resource IDs through
+// decisions.LookupResourceIDPage. Limit is the page size and After is the
+// previous page's continuation:
 //
 //   - Limit 0 means MaxLookupResults — one full page's worth. It does NOT mean
 //     unbounded (nothing here is), and it deliberately does NOT follow
@@ -87,17 +79,16 @@ type CheckResult struct {
 //   - Limit GREATER than MaxLookupResults is rejected by the decision surface
 //     (which knows the resolved limits) as sdk.ErrInvalidInput: the budget
 //     bounds the page size, so a page may not be asked to exceed it.
-//   - A negative Limit is a validation error wrapping sdk.ErrInvalidInput (a
-//     limit is not a reference, so it is not relationship.ErrInvalidRef), which
-//     hosts map to 400 through the pocket's error mapper.
+//   - A negative Limit is a validation error wrapping sdk.ErrInvalidInput,
+//     which hosts map to 400 through the pocket's error mapper.
 //   - Limit NEVER weakens the evaluation budget. The budget still bounds every
 //     INTERMEDIATE node and every self-hierarchy root set, so an enumeration
 //     whose intermediate work overflows is ErrEvaluationLimit on every page —
 //     never a short list presented as complete.
 //   - After is the NextCursor of the previous page; "" starts at the beginning.
 //     It is opaque: the decision surface decodes it against the query it is
-//     bound to (principal, permission, resource type, owning kind, owning model
-//     digest) and refuses a foreign or stale one with ErrInvalidCursor. A
+//     bound to (principal, permission, resource type and model digest) and
+//     refuses a foreign or stale one with ErrInvalidCursor. A
 //     non-empty After is validated by that decode, not by Validate below.
 //   - Unrestricted passes through untouched and IGNORES both fields: there are
 //     no IDs to page, and the host must skip ID filtering entirely.

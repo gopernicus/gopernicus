@@ -10,7 +10,6 @@ import (
 	authorizationhttp "github.com/gopernicus/gopernicus/pockets/authorization/inbound/http"
 	authmodel "github.com/gopernicus/gopernicus/pockets/authorization/logic/model"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/mutations"
-	"github.com/gopernicus/gopernicus/pockets/authorization/logic/relationships"
 	"github.com/gopernicus/gopernicus/sdk"
 )
 
@@ -90,12 +89,6 @@ func TestNoDecisionKindIsAWiringFaultNotADeny(t *testing.T) {
 	if sdk.IsExpected(authmodel.ErrNoDecisionKind) {
 		t.Fatalf("ErrNoDecisionKind must not be an expected sdk kind")
 	}
-	// It is a distinct identity: it does NOT wrap the relationship-kind sentinel,
-	// so a host branching on ErrRelationshipsNotConfigured cannot silently catch it.
-	if errors.Is(authmodel.ErrNoDecisionKind, relationships.ErrRelationshipsNotConfigured) {
-		t.Fatalf("ErrNoDecisionKind must be a clean identity, not a wrap of ErrRelationshipsNotConfigured")
-	}
-
 	rec := httptest.NewRecorder()
 	authorizationhttp.RespondError(rec, fmt.Errorf("Check: %w", authmodel.ErrNoDecisionKind))
 	if rec.Code == http.StatusForbidden {
