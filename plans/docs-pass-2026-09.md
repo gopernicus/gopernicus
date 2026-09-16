@@ -77,3 +77,22 @@ consumer with `GOWORK=off`, an empty module cache and `sum.golang.org`:
 | pockets/authorization | v0.22.0 | `h1:ism5EYEtJ0aLDHgfDsCI58EoNXYMmAVmwzV4oq+Hu4g=` |
 | pockets/authorization/stores/pgx | v0.16.0 | `h1:8+0HS8x81u2Hv+wKTuTkJAygs8+WdyaJetIiqZnxbtY=` |
 | pockets/authorization/stores/turso | v0.15.0 | `h1:XxXc5qHp1OPFqFaAFzJGdp91EfuqFgEyvTayxhD5rq4=` |
+
+## SDK pass (2026-09-16, owner-directed follow-up)
+
+Clarity rewrite of the four `docs/sdk/*` pages; the drift audit found them factually
+accurate, so facts were carried over and only structure changed:
+
+- overview: "What you get" import table, minimum Go version, the three guard targets
+  that enforce the tiers, contributor rules moved to the end.
+- pkg: "Which package" table with entry points and a pointer to the web page; each
+  section leads with the happy path; workers split into result table, middleware
+  boundaries, deferral/fencing, lifecycle.
+- capabilities: catalog links to per-capability sections, each opening with a
+  What/Default line; filestorage and cacher condensed; 499 → ~350 lines.
+- web: at-a-glance table; `web.Template` corrected to a function returning `Renderer`.
+- Cross-page anchors repointed (jobs → `pkg.md#workers`, catalog → `#filestorage`,
+  `#events`, cms → `#cacher`, architecture overview → `#rules-for-adding-to-the-sdk`).
+
+Verified: `pnpm typecheck && pnpm build` green (no broken links or anchors); every
+symbol named on the pages grepped in `sdk/`; capabilities and pkg pages screenshot-checked.

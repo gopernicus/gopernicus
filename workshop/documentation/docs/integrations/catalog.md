@@ -64,7 +64,7 @@ SDK also ships SMTP and console email implementations. Production hosts should r
 | `integrations/filestorage/gcs` | Google Cloud Storage | `Storer`, `SignedURLer`, client PUT sessions through `ResumableUploader` |
 | `integrations/filestorage/s3` | AWS SDK v2 / S3-compatible | `Storer`, `SignedURLer`; concrete `InitiateMultipartUpload` returns an S3 upload ID |
 
-Both use the [SDK storage contract](../sdk/capabilities.md#file-storage-and-object-ownership):
+Both use the [SDK storage contract](../sdk/capabilities.md#filestorage):
 canonical keys, literal prefixes, streaming replacement, stored-byte reads and
 consistent range/error rules. Hosts inject the adapter directly and own resource
 closure and error reporting. SDK `filestorage.Disk` remains the local default.
@@ -144,7 +144,7 @@ notification. Publish does not invoke local handlers. `Subscribe` and
 `SubscribeBroadcast` receive ephemeral fanout for an exact topic or `"*"`.
 Use `SubscribeWork(ctx, exactTopic, handler)` for reliable competing consumers.
 Instances in one ConsumerGroup must deploy the same handler responsibilities for
-each topic. See [SDK events](../sdk/capabilities.md#event-notification-and-checked-delivery)
+each topic. See [SDK events](../sdk/capabilities.md#events)
 for admission errors, event ownership and checked local dispatch.
 
 Work recovery requires **Redis 6.2 or newer**. Each worker claims one record at a

@@ -52,7 +52,7 @@ sdk/                          kernel: cross-cutting errors + context vocabulary
 The separate `pockets` module expresses the shared host/pocket composition contract.
 It depends on SDK and imports no concrete pockets.
 
-This makes package placement predictive. “Used by many things” is not enough to enter the SDK; the concern must pass the SDK [admission test](../sdk/overview.md#admission-test).
+This makes package placement predictive. “Used by many things” is not enough to enter the SDK; the concern must pass the SDK [admission test](../sdk/overview.md#rules-for-adding-to-the-sdk).
 
 ## Module taxonomy
 

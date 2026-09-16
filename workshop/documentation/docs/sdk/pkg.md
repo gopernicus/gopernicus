@@ -1,42 +1,33 @@
 ---
 title: SDK packages
-description: Pure mechanisms and vocabulary in the Gopernicus SDK.
+description: Pure mechanisms under sdk/pkg, which one to reach for, and the rules each enforces.
 ---
 
 # SDK packages
 
-Packages under `pkg/` provide reusable mechanism and data vocabulary without service semantics. The tier is flat: a package under `pkg/` may import the root SDK kernel but never another package under `pkg/`.
+Packages under `sdk/pkg/` provide reusable mechanism and data vocabulary with no
+service semantics. The tier is flat: a package here may import the root kernel
+but never another package under `pkg/`.
 
-## Catalog
+## Which package
 
-| Package | Purpose |
-|---|---|
-| `async` | bounded fire-and-forget pool for in-process side work |
-| `list` | listing requests/pages, ordering, search, cursor/offset pagination |
-| `cryptids` | AES-GCM encryption, SHA-256 digests, and a JWT signing/verifying contract |
-| `environment` | `.env` loading, tagged config parsing, and explicit deployment posture |
-| `logging` | `slog` construction and request/trace-aware handler |
-| `validation` | explicit field checks returning structured `sdk.Violation` data |
-| `web` | routing, middleware, JSON/HTML responses, SSE, static serving, server lifecycle |
-| `workers` | worker pools, runner mechanics, middleware, fencing, graceful drain |
+| Package | Reach for it when | Key entry points |
+|---|---|---|
+| `environment` | loading `.env`, parsing tagged config structs, reading secrets, choosing development vs production | `LoadEnv`, `ParseEnvTags`, `Secret`, `ParseMode` |
+| `logging` | you want a `*slog.Logger` that carries request/trace IDs from context | `New`, `NewContextHandler`, `Options` |
+| `web` | anything HTTP: routing, middleware, JSON and HTML responses, SSE, static files, server run | see the [Web package](web.md) page |
+| `list` | paginated listings at an HTTP edge or in a store adapter | `ParseQuery`, `ParseOrder`, `Request`, `Page[T]`, `TrimPage` |
+| `validation` | field checks that produce client-safe violations | `Required`, `MaxLength`, `Email`, `IfSet` |
+| `cryptids` | digests, AES-GCM envelopes, or the JWT signing contract | `SHA256`, `NewAESGCM`, `JWTSigner` |
+| `workers` | a worker pool or claim/process/complete runner over your own store | `NewPool`, `NewRunner`, `NewFencedRunner` |
+| `async` | bounded fire-and-forget tasks inside one process | `GoContext`, `Close`, `Wait` |
 
-## Common primitives
+Pointer reads, slugs, IDs and identity vocabulary are in the root package; see
+the [root API](overview.md#root-api).
 
-Pointer reads, slug generation, IDs and identity vocabulary live in root SDK.
-See the [root API guide](overview.md#root-api). Packages under `pkg/` remain for
-coherent APIs such as validation, environment configuration and cryptids.
+## environment
 
-## Environment and deployment posture
-
-`environment.LoadEnv` reads `.env` in the working directory; `LoadPath` accepts another path. Missing files are allowed, and existing process variables, including empty ones, are preserved. Always check the returned error. Earlier assignments remain applied if a later line fails.
-
-The format supports single-line `KEY=value` assignments, an optional `export ` prefix, and literal values. Single or double quotes preserve spaces and hashes; a space or tab followed by `#` outside quotes starts a comment. For example, `LABEL="value # inside" # note` loads `value # inside`. Malformed assignments, keys containing whitespace/NUL, unterminated quotes, and trailing text after a closing quote return errors with filename/line context. There is no escape processing, variable expansion, or multiline syntax.
-
-`ParseEnvTags` fills tagged scalar fields and string slices, including named string types, and descends into untagged nested structs. Untagged collaborator pointers/interfaces are skipped. Tagged unsupported types are errors even when their environment variable is absent. Parsing errors identify the full key, field path, and type without retaining rejected values. Numeric syntax/range errors remain matchable with `errors.Is`; application and enum validation remain the constructor's responsibility.
-
-Precedence is **nonempty env value > existing nonzero field > default tag**. Empty env values count as absent. Explicit `false`, zero, and empty slices cannot override nonzero defaults through a pre-seeded literal; apply such code overrides after parsing. A `required:"true"` field requires a nonempty env value even if the field was pre-seeded. `GetEnvOrDefault` deliberately uses raw lookup semantics instead: a present empty value wins over its fallback.
-
-`Secret(key, minBytes)` reads a hex-encoded secret with a minimum decoded-byte floor and returns nil when the key is unset or empty. The host owns whether a missing secret is allowed; its consuming constructor enforces exact key requirements. `web.ServerConfig`, `logging.Options`, and pocket configs already carry tags:
+**Load a file, then parse tags.**
 
 ```go
 type Config struct {
@@ -45,54 +36,78 @@ type Config struct {
     Timeout time.Duration `env:"TIMEOUT" default:"10s"`
 }
 
-if err := environment.LoadEnv(); err != nil {
+if err := environment.LoadEnv(); err != nil {   // .env in the working directory; LoadPath takes another path
     return err
 }
-
 var cfg Config
 if err := environment.ParseEnvTags("", &cfg); err != nil {
     return err
 }
+```
 
-logOpts := logging.Options{Format: "text"}  // this host's own default; env wins, KEY= keeps it
+`web.ServerConfig`, `logging.Options` and pocket configs already carry tags, so
+a host parses them the same way and can pre-seed its own defaults first:
+
+```go
+logOpts := logging.Options{Format: "text"}   // host default; env wins, KEY= keeps it
 if err := environment.ParseEnvTags("", &logOpts); err != nil {
     return err
 }
-srv := web.ServerConfig{Port: "8082"}
-if err := environment.ParseEnvTags("", &srv); err != nil {
-    return err
-}
-router.Use(web.TrustProxies(srv.TrustedProxyCount))
 ```
 
-Deployment posture is a required two-value vocabulary: development or production. `ParseMode` reads no implicit environment variable; the host decides which key supplies it. Preview, staging, and CI normally map to production posture because permissive behavior should be an explicit development choice.
+**File format.** Single-line `KEY=value`, optional `export ` prefix, literal
+values. Single or double quotes preserve spaces and hashes; a space or tab
+followed by `#` outside quotes starts a comment. Malformed lines, keys with
+whitespace or NUL, unterminated quotes and trailing text after a closing quote
+return errors with file and line context. There is no escaping, expansion or
+multiline syntax. Missing files are allowed; existing process variables,
+including empty ones, are preserved. Check the returned error: earlier lines
+stay applied if a later one fails.
 
-## Logging
+**Precedence** is nonempty env value, then existing nonzero field, then
+`default` tag. Empty env values count as absent, so an explicit `false`, zero or
+empty slice cannot override a nonzero default through a pre-seeded literal;
+apply such overrides in code after parsing. `required:"true"` needs a nonempty
+env value even if the field was pre-seeded. `ParseEnvTags` fills tagged scalars,
+string slices and named string types, descends into untagged nested structs and
+skips untagged pointers and interfaces; a tagged unsupported type is an error
+even when its variable is absent. Errors name the full key, field path and type
+without retaining rejected values. `GetEnvOrDefault` deliberately uses raw
+lookup: a present empty value wins over its fallback.
 
-`logging.New(logging.Options{})` returns a standard `*slog.Logger` with INFO level, JSON format, and STDERR output. Options carry `LOG_LEVEL`, `LOG_FORMAT`, and `LOG_OUTPUT` tags for explicit parsing by the host; logger construction reads no environment variables and does not change slog's global default. Unknown values retain those defaults.
+**Secrets and posture.** `Secret(key, minBytes)` reads a hex-encoded secret with
+a minimum decoded length and returns nil when unset or empty; the consuming
+constructor decides whether missing is allowed. Deployment posture is a required
+two-value vocabulary, development or production. `ParseMode` reads no implicit
+variable; the host names the key. Preview, staging and CI normally map to
+production, because permissive behavior should be an explicit development choice.
 
-Context-aware calls automatically include available `request_id`, `trace_id`, and `span_id` values from SDK context helpers. This adds correlation fields without starting a tracer or exporter. IDs follow the logger's current `WithGroup` group. Use `NewContextHandler` when constructing your own handler, or a plain standard handler if automatic IDs are unwanted:
+## logging
 
 ```go
 log := logging.New(logging.Options{Format: "text"})
 ctx := sdk.WithRequestID(context.Background(), "request-123")
-log.InfoContext(ctx, "request handled")
+log.InfoContext(ctx, "request handled")            // includes request_id
 
 custom := slog.New(logging.NewContextHandler(slog.NewJSONHandler(output, nil)))
 disabled := slog.New(slog.DiscardHandler)
 ```
 
-The host should create its configured logger once, pass it into `run(ctx, log)`, and use that same logger for returned startup errors. Errors before configuration is available can use the bootstrap logger. `slog.DiscardHandler` disables every level; ordinary Go argument expressions still evaluate, but disabled calls do not resolve `LogValuer` values.
+`logging.New` returns a standard `*slog.Logger`: INFO, JSON, STDERR by default.
+`Options` carries `LOG_LEVEL`, `LOG_FORMAT` and `LOG_OUTPUT` tags for the host
+to parse; construction reads no environment and leaves slog's global default
+alone. Unknown values keep the defaults. Context-aware calls add `request_id`,
+`trace_id` and `span_id` when present, under the logger's current `WithGroup`,
+without starting a tracer. Use `NewContextHandler` around your own handler, or a
+plain handler if you do not want the IDs.
 
-## Listing vocabulary
+Create the configured logger once, pass it into `run(ctx, log)`, and use it for
+returned startup errors. `slog.DiscardHandler` disables every level; argument
+expressions still evaluate, but disabled calls do not resolve `LogValuer`s.
 
-`pkg/list` supplies `Request`, `Page[T]`, `Limits`, ordering, search,
-cursor encoding and row mapping. Domain packages declare their own repository
-methods, filters and update inputs. Transactions live in the
-[`transaction` capability](capabilities.md#transactions).
+## list
 
-Use `ParseQuery` at an HTTP edge. It parses `limit`, `cursor`, `offset`, `count`
-and `q`; order has its own per-resource allow-list:
+**At the HTTP edge**, parse the query, then apply the resource's order allow-list:
 
 ```go
 req, err := list.ParseQuery(r.URL.Query(), list.QueryOptions{})
@@ -106,49 +121,42 @@ if err != nil {
 }
 ```
 
-Blank query values count as absent. Explicit invalid limits, offsets, booleans
-and strategies return errors wrapping `sdk.ErrInvalidInput`. Programmatic store
-calls use `Request.Validate` for strategy consistency and `NormalizedLimit` for
-defaults/clamping. Zero-value limits resolve to 25 by default, at most 100.
+`ParseQuery` reads `limit`, `cursor`, `offset`, `count` and `q`. Blank values
+are absent; invalid limits, offsets, booleans and strategies return errors
+wrapping `sdk.ErrInvalidInput`. Store code uses `Request.Validate` for strategy
+consistency and `NormalizedLimit` for defaults and clamping: zero resolves to 25,
+the ceiling is 100.
 
-Cursor mode is the default. Fetch `limit+1`, then `TrimPage` encodes the last
-returned item as `NextCursor` when another page exists. For previous navigation,
-fetch up to `limit+1` records **at or before the incoming boundary**, restore
-normal order, and call `MarkPrevPage`. Any record sets `HasPrev`; an extra
-predecessor supplies `PreviousCursor`. Otherwise an empty previous cursor opens
-the first page. Offset mode must be explicit and emits no cursors. `WithCount`
-requests the entire filtered count, excluding page boundaries.
+**Paging.** Cursor mode is the default and offset mode must be explicit (it
+emits no cursors). Fetch `limit+1`, then `TrimPage` encodes the last returned
+item as `NextCursor` when another page exists. For previous navigation, fetch up
+to `limit+1` records at or before the incoming boundary, restore normal order
+and call `MarkPrevPage`: any record sets `HasPrev`, an extra predecessor
+supplies `PreviousCursor`, and an empty previous cursor opens the first page.
+`WithCount` requests the whole filtered count.
 
-Cursors retain padded base64url JSON and tagged scalar/time values. Malformed
-tokens are invalid input, including malformed tokens for an old order field.
-A well-formed token for a different field resets to the first page. Convert
-named scalar types before encoding. Legacy untagged numbers are accepted only
-within ±(2^53−1); tagged integers preserve the full int64/uint64 range. Cursors
-are positions, not authorization credentials or signed tokens.
+Cursors are padded base64url JSON with tagged scalar and time values. Malformed
+tokens are invalid input; a well-formed token for a different order field resets
+to the first page. Convert named scalar types before encoding. Legacy untagged
+numbers are accepted only within ±(2^53−1); tagged integers keep the full
+int64/uint64 range. Cursors are positions, not credentials.
 
-SQL adapters order the projected SELECT output on every page and add search
-and cursor predicates outside that SELECT.
-Project each search/order/PK field under an unqualified output name, and include
-it in the store-local row scanner. `OrderValueOf` must return that projected
-value and type. For example, select `t.created_at AS created_at` and use
-`Column: "created_at"`; the inner `t` alias is unavailable outside the SELECT.
-Fixed order expressions also operate on projected fields.
+**In SQL adapters**, order the projected SELECT output on every page and add
+search and cursor predicates outside that SELECT. Project each search, order
+and primary-key field under an unqualified output name (`t.created_at AS
+created_at`, `Column: "created_at"`), include it in the row scanner, and return
+that projected value from `OrderValueOf`. Keyset ordering needs non-null order
+and key values across the matched population; use a non-null key or offset mode
+for nullable ordering. A cursor with a null order value, or a non-string
+case-folded value, is invalid input. The helper does not inspect the schema.
 
-SQL keyset ordering requires non-null order and PK values throughout the matched
-population. Use a non-null projected key or offset mode for nullable ordering.
-A SQL cursor with a null order value, or a non-string case-folded value, is
-invalid input. Other type compatibility belongs to `OrderValueOf` and the
-projected column; the generic helper does not inspect the database schema.
+`Items`, `MapItems`, `TrimPage`, `MapPage` and `MapPageErr` normalize empty
+items to `[]`; a directly constructed `Page[T]{}` emits `null`. Optional page
+fields are omitted and clients read missing flags as false. Domain packages
+declare their own repository methods, filters and update inputs; transactions
+live in the [`transaction` capability](capabilities.md#transactions).
 
-`Items`, `MapItems`, `TrimPage`, `MapPage` and `MapPageErr` normalize empty items
-to `[]`. A directly constructed zero `Page[T]{}` remains caller-owned and emits
-`null`. Optional page fields are omitted; clients read missing flags as false.
-
-## Field validation
-
-Use the same collector in request DTOs and domain code. Helper functions return
-nil for valid input or a field violation; `Err()` returns an ordinary Go error
-only when problems were collected.
+## validation
 
 ```go
 func (in *createWidget) Validate() error {
@@ -159,58 +167,39 @@ func (in *createWidget) Validate() error {
 }
 ```
 
-The returned error matches `sdk.ErrInvalidInput` through `errors.Is`, including
-after wrapping with `%w`. Web response helpers preserve every field, message,
-and optional code. Collect validation results before wrapping; `errors.Join`
-does not merge independent field lists into one validation response.
+Helpers return nil or one field violation; `Err()` returns an error only when
+problems were collected, and that error matches `sdk.ErrInvalidInput` through
+`errors.Is`, including after `%w` wrapping. Web responders preserve every field,
+message and optional code. Collect before wrapping: `errors.Join` does not
+merge independent field lists into one response.
 
-String length checks count Unicode code points, without normalizing text.
-Optional string checks accept empty strings; use `Required` for presence.
-Pointer variants skip nil, then apply the scalar rule. For custom optional
-checks, `IfSet` takes a callback returning `*sdk.Violation`.
+Length checks count Unicode code points without normalizing. Optional string
+checks accept empty strings; use `Required` for presence. Pointer variants skip
+nil. `IfSet` takes a callback returning `*sdk.Violation` for custom optional
+checks. Domain rules use `problems.Add(field, code, message)`; keep unexpected
+dependency errors as ordinary errors, since their messages do not belong in
+public violations. Password policy belongs to authentication or the host.
+`Email` accepts mail address syntax including display names; it is not
+authentication's bare-address normalization.
 
-Custom validators live in the consuming application. They can return a
-caller-facing `sdk.Violation`, or add a domain rule with
-`problems.Add(field, code, message)`. Keep unexpected dependency errors as
-ordinary errors; their internal messages do not belong in public violations.
-Password policy belongs in authentication or the host. The generic `Email`
-helper accepts mail address syntax, including display names; it does not apply
-authentication's bare-address normalization rules.
+## cryptids
 
-## Cryptographic primitives
+- `SHA256(value)` returns a lowercase hex digest for stable lookup, including high-entropy API keys. Password hashing stays behind authentication's host-selected `PasswordHasher`; bcrypt's cost is configurable.
+- `NewAESGCM(key)` takes a 32-byte key and keeps the raw-base64url nonce/ciphertext/tag envelope for stored data.
+- `JWTSigner` is the contract `integrations/cryptids/golang-jwt` implements. Signing owns `exp` and `iat`; verification requires numeric expiration, validates optional `nbf`/`iat`, and allows 60 seconds of clock tolerance. Dates must fall in years 0001 to 9999. Hosts keep their exact key bytes when migrating from SDK HS256.
 
-ID generation and identity projection are part of the [root SDK API](overview.md#root-api).
-`cryptids` supplies cryptographic contracts and helpers.
+## workers
 
-`cryptids.SHA256(value)` returns a lowercase hexadecimal digest for stable lookup, including high-entropy API keys. Password hashing belongs behind authentication's host-selected `PasswordHasher`; bcrypt's cost remains configurable.
+`workers` owns execution mechanics; the [jobs pocket](../pockets/jobs.md) is
+one implementation of a store for it, not a requirement.
 
-`cryptids.NewAESGCM(key)` uses a 32-byte key and preserves the raw-base64url nonce/ciphertext/tag envelope for stored data.
+| Type | Adds |
+|---|---|
+| `Pool` | calls a `WorkFunc` with bounded concurrency, polling, wake signals, panic recovery and logging |
+| `Runner[T]` | claim, process, complete and fail through your `JobStore[T]`; `Job` needs only `ID() string` |
+| `FencedRunner[T]` | lease ownership and durable retry; `FencedJob` also needs `RetryCount()` |
 
-`cryptids.JWTSigner` is implemented by `integrations/cryptids/golang-jwt`. Signing owns `exp` and `iat`; verification requires numeric expiration, validates optional `nbf`/`iat`, and allows 60 seconds of clock tolerance. Date values must be within calendar years 0001–9999. Hosts retain their exact effective key bytes when migrating from SDK HS256.
-
-## Workers versus jobs
-
-`pkg/workers` owns reusable execution mechanics. A `Pool` calls a
-`WorkFunc` with bounded concurrency, polling, wake signals, panic recovery and
-logging. `Runner[T]` adds claim/process/complete/fail through a host-supplied
-`JobStore[T]`. Its `Job` constraint needs only `ID() string`. Jobs may optionally
-implement `RetryLimitedJob` with `RetryLimit() int`: positive values override
-the ordinary runner's default failure ceiling, while nonpositive values keep
-that default. Permanent rejection still takes precedence. `FencedRunner[T]`
-adds lease ownership and durable retry; its `FencedJob` also needs `RetryCount()`.
-Neither runner requires the [jobs pocket](../pockets/jobs.md). Jobs supplies its
-aggregate, repositories, schedules and policy as one implementation.
-
-There are two middleware boundaries:
-
-| API | Wraps | Useful for |
-|---|---|---|
-| `Middleware`, installed with `WithMiddleware` | One `WorkFunc` iteration, including claim and persistence | Pausing polling, worker instrumentation, shutdown policy |
-| `JobMiddleware[T]`, composed with `ChainJobMiddleware` | `ProcessFunc[T](context.Context, T) error`, after claim and before persistence | A gate based on the claimed job, processing instrumentation, deadlines |
-
-The first supplied wrapper is outermost. Compose before running; shared
-middleware state must be safe for concurrent calls. A worker gate returns
-`ErrNoWork` to back off without claiming. A job gate uses an explicit outcome:
+**Happy path.** Process a job, gate it with middleware, run it in a pool:
 
 ```go
 func gate(next workers.ProcessFunc[Report]) workers.ProcessFunc[Report] {
@@ -228,53 +217,67 @@ pool := workers.NewPool(runner.WorkFunc())
 err := pool.Run(ctx)
 ```
 
-`Report` and `queue` are host types. A complete SDK-only example lives in
-`sdk/pkg/workers/example_test.go`.
+`Report` and `queue` are host types; `sdk/pkg/workers/example_test.go` is a
+complete SDK-only example.
 
-| Processing result | Runner action |
+**What a processing result means.**
+
+| Result | Runner action |
 |---|---|
-| `nil` | Complete, even if middleware skipped `next` |
-| `DeferUntil(futureTime, reason)` | Atomically release for later without spending a failure attempt |
-| `Reject(reason)` | Dead-letter immediately |
-| Other error or panic | Apply the runner's ordinary failure/retry policy |
+| `nil` | complete, even if middleware skipped `next` |
+| `DeferUntil(time, reason)` | release for later without spending a failure attempt |
+| `Reject(reason)` | dead-letter immediately |
+| other error or panic | the runner's ordinary failure/retry policy |
 
-Deferral requires the optional `JobDeferrer` or `FencedDeferrer` store port.
-Fenced deferral verifies the live lease and refunds only this claim's increment;
-previous attempts remain spent. Invalid or unsupported deferral returns an error
-and leaves the claim for store recovery. Ordinary queues have no lease token to
-protect a release from a stale worker; use fencing when ownership matters.
-Permanent rejection takes precedence if a wrapped/joined error also contains a
-deferral. The runner captures the execution ID before processing; middleware
-must not change it. A wrapper's after-processing code runs before persistence;
-`SetDeadLetterHook` is a separate hook that runs only after a successful fenced
+Jobs may implement `RetryLimitedJob` (`RetryLimit() int`): a positive value
+overrides the runner's default failure ceiling. Permanent rejection always wins,
+including over a wrapped deferral.
+
+**Two middleware boundaries.** `Middleware` (installed with `WithMiddleware`)
+wraps one `WorkFunc` iteration including claim and persistence; use it to pause
+polling, instrument workers or apply shutdown policy, and return `ErrNoWork` to
+back off without claiming. `JobMiddleware[T]` (composed with
+`ChainJobMiddleware`) wraps `ProcessFunc[T]` after claim and before
+persistence; use it for gates, processing instrumentation and deadlines. The
+first supplied wrapper is outermost. Compose before running; shared state must
+be safe for concurrent calls. The runner captures the execution ID before
+processing and middleware must not change it. A wrapper's after-processing code
+runs before persistence; `SetDeadLetterHook` runs only after a successful fenced
 failure transition.
 
-Unexpected persistence failures return to Pool and are logged. Fenced ownership
-conflicts are expected after expiry/replacement and are logged without retrying
-a stale write. Pool logs ordinary iteration failures; a fatal `ErrPoolShutdown`
-stops peers and returns from `Run` after drain, preserving its cause. A Pool is
-single-use: a later or concurrent `Run` returns `ErrAlreadyRun`. Poll and idle
-delays start after each iteration; a wake signal may run one sooner. Heartbeats
-report `successful_iterations` (nil returns), which are not a count of delivered
-jobs.
+**Deferral and fencing.** Deferral needs the optional `JobDeferrer` or
+`FencedDeferrer` store port. Fenced deferral verifies the live lease and refunds
+only this claim's increment; invalid or unsupported deferral returns an error
+and leaves the claim for store recovery. Ordinary queues have no lease token to
+protect a release from a stale worker, so use fencing when ownership matters.
+Fenced ownership conflicts after expiry or replacement are logged without
+retrying a stale write.
 
-Cancellation is cooperative. Pool waits for admitted iterations to return.
-A fenced runner leaves work reclaimable on parent cancellation. Its optional
-processing timeout covers the middleware chain, starts after Claim, and must be
-shorter than the lease; allow margin for store latency. Invalid configuration
-panics in `NewFencedRunner`; jobs' constructor returns a configuration error.
-Hosts must bound store calls separately.
+**Lifecycle.** Unexpected persistence failures return to the pool and are
+logged. A fatal `ErrPoolShutdown` stops peers and returns from `Run` after
+drain, preserving its cause. A pool is single-use; a later or concurrent `Run`
+returns `ErrAlreadyRun`. Poll and idle delays start after each iteration and a
+wake signal may run one sooner. Heartbeats (`WithHeartbeat`) report
+`successful_iterations`, which is not a count of delivered jobs. Cancellation is
+cooperative: the pool waits for admitted iterations, and a fenced runner leaves
+work reclaimable on parent cancellation. The optional fenced processing timeout
+covers the middleware chain, starts after claim, and must be shorter than the
+lease; invalid configuration panics in `NewFencedRunner`, while jobs' constructor
+returns an error instead. Bound store calls separately.
 
-## Async task lifetime
+## async
 
-`pkg/async` runs bounded in-process tasks. `GoContext` uses its context
-for admission; the callback owns the context it uses for work. `Close(ctx)` stops
-admission, wakes blocked submitters and waits for accepted tasks. Nil means all
-accepted tasks returned; a deadline returns `ctx.Err()` and tasks continue. A
-later Close can wait for that same drain. `Wait` is a batch barrier: finish all
-submissions before calling it. Hosts choose explicit concurrency/drop options
-and Close deadlines. Tasks can outlive a request and are lost on process exit.
+`GoContext` uses its context for admission; the callback owns the context it
+works with. `Close(ctx)` stops admission, wakes blocked submitters and waits for
+accepted tasks: nil means all returned, a deadline returns `ctx.Err()` while
+tasks continue, and a later `Close` can wait for the same drain. `Wait` is a
+batch barrier, so finish submitting before calling it. Hosts choose concurrency,
+drop options and close deadlines. Tasks can outlive a request and are lost on
+process exit.
 
-## SDK packages is not a miscellaneous drawer
+## Not a miscellaneous drawer
 
-To belong here, a package must be service-agnostic and stay flat. A helper that depends on another package under `pkg/` or encodes application policy belongs elsewhere. Common vocabulary and small, explicitly named primitives live in root SDK. A focused mechanism such as cryptids retains its own package and contracts; provider lifecycle and broader capability policy belong in capabilities.
+To belong here a package must be service-agnostic and stay flat. A helper that
+depends on another `pkg/` package or encodes application policy belongs
+elsewhere. Common vocabulary and small primitives live in the root package;
+provider lifecycle and broader policy live in capabilities.

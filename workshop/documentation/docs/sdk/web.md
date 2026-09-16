@@ -1,15 +1,29 @@
 ---
 title: Web package
-description: Routing, middleware, request/response helpers, JSON and HTML responses, SSE, static files, and server lifecycle.
+description: "The net/http transport kit: router, middleware, decode and respond, HTML, static files, SSE and server lifecycle."
 ---
 
 # Web package
 
-`sdk/pkg/web` is a `net/http`-native transport kit. It provides reusable HTTP mechanism and policy without owning application routes, pocket schemas, or view technology.
+`sdk/pkg/web` is a `net/http`-native transport kit. It supplies HTTP mechanism
+and policy without owning application routes, pocket schemas or view
+technology. Everything composes with plain `http.Handler` values.
+
+| Need | Use |
+|---|---|
+| a router with global, group and per-route middleware | `NewWebHandler`, `Group`, `GET`/`POST`/... |
+| pure HTTP middleware | `RequestID`, `Logger`, `Panics`, `TrustProxies`, `CORSMiddleware`, `DefaultHeadersMiddleware` |
+| decode and validate a JSON body | `DecodeJSON[T]`, `ReadBody` |
+| respond | `RespondJSON*`, `RespondJSONError`, `RespondJSONDomainError`, `Render`, redirect and no-content helpers |
+| serve embedded or SPA assets | `NewStaticFileServer`, `WithAssetPrefix`, `WithSPAMode` |
+| server-sent events | `NewSSEStream`, `WithHeartbeat` |
+| run the server | `Run`, `ServerConfig` |
+
+Middleware that needs a capability lives with that capability:
+`ratelimiter.Middleware`, `cacher.Pages`, `tracing.Middleware`. Authentication
+and authorization middleware come from their pockets.
 
 ## Router and middleware
-
-`WebHandler` wraps Go's `http.ServeMux` and supports global, group, and per-route middleware.
 
 ```go
 router := web.NewWebHandler()
@@ -27,15 +41,13 @@ admin.GET("/reports", listReports)
 admin.POST("/reports", createReport, requirePermission)
 ```
 
-Global middleware wraps the entire mux, including redirects, 404s, 405s, and `HandleRaw` registrations. Registration and `Use` are boot-time operations; do not mutate a handler after serving begins.
-
-Middleware runs outermost-first. Put tracing outside logging so access logs carry the traced context. Recorders forward errors through nested wrappers. Route groups copy their middleware, so siblings and later caller-slice changes cannot alter an existing group.
-
-Available pure HTTP middleware includes panic recovery, structured access logging, request IDs, proxy-aware client IP resolution, CORS, and default headers. Rate limiting, caching, and tracing middleware live with their capability owners.
+`WebHandler` wraps `http.ServeMux`. Global middleware wraps the entire mux,
+including redirects, 404s, 405s and `HandleRaw` registrations. Middleware runs
+outermost-first, so put tracing outside logging and access logs carry the traced
+context. Route groups copy their middleware; later changes to the caller's slice
+cannot alter an existing group. Registration and `Use` are boot-time operations.
 
 ## Decode, validate, respond
-
-`DecodeJSON[T]` rejects empty/invalid bodies and top-level JSON `null`. It supports both `Request` and `*Request` targets and calls `Validate() error` once when the decoded value or its address implements it. Request and domain validation both collect field problems with `sdk.ValidationError`.
 
 ```go
 type createWidget struct {
@@ -54,88 +66,98 @@ func create(w http.ResponseWriter, r *http.Request) {
         web.RespondJSONError(w, web.ErrValidation(err))
         return
     }
-
     widget, err := service.Create(r.Context(), in.Name)
     if err != nil {
         web.RespondJSONDomainError(w, err)
         return
     }
-
     _ = web.RespondJSONCreated(w, widget)
 }
 ```
 
-JSON responders report serialization/write failures through `RecordError` as well as their returned errors. `RespondJSONDomainError` maps SDK errors to status codes and records original 5xx causes without exposing them to clients. Redirect and no-content helpers remain available. Use standard `net/http` and `io` operations for text, bytes, files, and ordinary reader streaming.
+`DecodeJSON[T]` rejects empty or invalid bodies and top-level `null`, accepts
+unknown fields, works with `T` or `*T`, and calls `Validate() error` once when
+the value or its address implements it. `RespondJSONDomainError` maps root SDK
+errors to status codes and records original 5xx causes without exposing them.
+JSON responders report write failures through `RecordError` as well as their
+return value. For text, bytes, files and plain streaming, use `net/http` and
+`io` directly.
 
-`DecodeJSON` accepts unknown fields. The host chooses body limits, for example per route or group:
+**Body limits are the host's.** There is no implicit global limit or
+content-type check. Wrap a route or group:
 
 ```go
-// apiBodyLimit is chosen by the host; uploads can have a different limit.
 limitJSON := func(next http.Handler) http.Handler {
-    return http.MaxBytesHandler(next, apiBodyLimit)
+    return http.MaxBytesHandler(next, apiBodyLimit)   // uploads can use a different limit
 }
 api := router.Group("/api", limitJSON)
 api.POST("/widgets", create)
 ```
 
-Limit errors reach `ErrValidation` as HTTP 413. There is no implicit global limit or content-type check in `DecodeJSON`. For a stricter DTO contract, use a bounded `json.Decoder`, enable `DisallowUnknownFields`, and require EOF after one value; keep validation and client-safe error handling explicit.
+Limit errors reach `ErrValidation` as HTTP 413. For a stricter DTO contract,
+use a bounded `json.Decoder` with `DisallowUnknownFields` and require EOF after
+one value. `ReadBody` is a separate bounded object reader (1 MiB) with
+`Body.Has` and typed getters for exact declared keys and presence tracking; it
+rejects malformed trailing content and does not replace domain-owned PATCH or
+null semantics.
 
-`ReadBody` is a separate bounded object reader for exact declared keys and presence tracking. It retains its 1-MiB limit and `Body.Has`/typed getters. It rejects malformed trailing content; it does not replace domain-owned PATCH/null semantics.
+## HTML responses
 
-## HTML responses and optional view packages
-
-`Renderer` uses only standard-library types:
-
-```go
-type Renderer interface {
-    Render(context.Context, io.Writer) error
-}
-```
-
-`templ.Component` satisfies it implicitly, as does `web.Template` around `html/template`. The SDK can render either without importing the view library; an API-only host does not need to use this seam.
+`Renderer` is one standard-library method, `Render(context.Context, io.Writer)
+error`. `templ.Component` satisfies it implicitly, and `web.Template(t, name, data)`
+adapts an `html/template`, so the SDK renders either without importing a view
+library.
+An API-only host never touches this seam.
 
 ```go
 web.Render(r.Context(), w, http.StatusOK, page)
 ```
 
-Choose the status before rendering. Once the response header is sent, a mid-stream render failure cannot change the HTTP status. `Render` records the failure, and `cacher.Pages` refuses to cache that response.
-
-Panic recovery writes HTML 500 only before the response starts. A later panic aborts the response; `http.ErrAbortHandler` passes through without a panic stack log. Access logging retains the first recorded cause, including for a failed 200 response. Aborted requests include `aborted: true`; hijacked requests include `hijacked: true`. Status 0 means no final status was observed before abort or hijacking. Use `http.NewResponseController(w)` for flushing/hijacking through wrappers.
+Choose the status before rendering: once headers are sent, a mid-stream failure
+cannot change it. `Render` records the failure and `cacher.Pages` refuses to
+cache that response. Panic recovery writes an HTML 500 only before the response
+starts; a later panic aborts the response, and `http.ErrAbortHandler` passes
+through without a stack log. Access logs keep the first recorded cause, mark
+`aborted: true` or `hijacked: true`, and report status 0 when no final status
+was observed. Use `http.NewResponseController(w)` to flush or hijack through the
+wrappers.
 
 ## Static and SPA files
 
-`StaticFileServer` serves any `fs.FS`, supports immutable caching below a chosen asset prefix, and optionally falls back to `index.html` for an SPA.
-
 ```go
-static := web.NewStaticFileServer(
-    assets.FS,
-    web.WithAssetPrefix("dist/"),
-)
+static := web.NewStaticFileServer(assets.FS, web.WithAssetPrefix("dist/"))
 static.AddRoutes(router, "/assets/goth")
 ```
 
-GOTH uses this seam: the UI module exposes its embedded filesystem, while the host chooses its public route. The server can also be mounted directly as an `http.Handler`, resolving `r.URL.Path`.
+`StaticFileServer` serves any `fs.FS`, applies immutable caching below the
+chosen asset prefix, and can be mounted directly as an `http.Handler`. The GOTH
+UI module exposes its embedded filesystem this way while the host picks the
+public route. Only versioned assets belong under an immutable prefix.
+`WithSPAMode` serves `index.html` for missing paths, directories and the root,
+always with no-store headers. Seekable files get range and conditional
+responses through `http.ServeContent`; non-seekable files stream without
+ranges. MIME types follow the standard library.
 
-`WithSPAMode` serves `index.html` for missing paths, directories, and the root; index responses always have no-store headers, including direct `/index.html`. Other filesystem failures return 500. Only put versioned assets under an immutable asset prefix. MIME types follow the standard library and its platform registrations. Seekable files support range/conditional responses through `http.ServeContent`; non-seekable files stream without range support.
-
-## SSE and response streaming
-
-`SSEStream` reads a channel of `SSEEvent` values with optional heartbeats:
+## SSE and streaming
 
 ```go
 web.NewSSEStream(events, web.WithHeartbeat(15*time.Second)).ServeHTTP(w, r)
 ```
 
-Strings and byte slices are raw event data; other values are JSON encoded. Multiline data remains one event. Event names reject CR/LF; IDs reject CR/LF/NUL. Invalid metadata or serialization ends the stream with a recorded error before any bytes of that event are written. I/O can still interrupt a frame. Flushing and per-write deadlines work through the SDK response wrappers.
-
-The pocket or host owns stream authorization, event filtering, connection age, producer cancellation, and content negotiation. For ordinary byte streaming, write to the response and use `http.NewResponseController(w).Flush()` as needed.
+`SSEStream` reads a channel of `SSEEvent`. Strings and byte slices are raw
+data; other values are JSON encoded; multiline data stays one event. Event names
+reject CR/LF and IDs reject CR/LF/NUL. Invalid metadata or serialization ends
+the stream with a recorded error before any bytes of that event are written.
+The pocket or host owns stream authorization, filtering, connection age,
+producer cancellation and content negotiation. For plain byte streaming, write
+to the response and flush with `http.NewResponseController(w).Flush()`.
 
 ## Host-owned OpenAPI
 
-Serve a checked, host-owned OpenAPI document using ordinary routing. The SDK does not infer schemas or route metadata:
+The SDK infers no schemas or route metadata. Serve a checked, host-owned
+document with ordinary routing:
 
 ```go
-// openAPIDocument is the host's validated JSON document.
 router.GET("/openapi.json", func(w http.ResponseWriter, r *http.Request) {
     w.Header().Set("Content-Type", "application/json")
     _, err := w.Write(openAPIDocument)
@@ -143,11 +165,10 @@ router.GET("/openapi.json", func(w http.ResponseWriter, r *http.Request) {
 })
 ```
 
-Choose optional generation tooling when an application needs it; its dependency belongs in the host or an integration, keeping the SDK stdlib-only.
+Generation tooling, if any, is a host or integration dependency, keeping the
+SDK stdlib-only.
 
 ## Server lifecycle
-
-`web.Run` starts serving and returns on a startup failure or host cancellation. Cancellation begins a graceful drain using `ServerConfig.ShutdownTimeout`. If draining expires, it closes remaining connections and returns the shutdown error. Closing connections cancels their request contexts; normal draining does not.
 
 ```go
 cfg := web.ServerConfig{
@@ -158,10 +179,15 @@ cfg := web.ServerConfig{
     IdleTimeout:     120 * time.Second,
     ShutdownTimeout: 10 * time.Second,
 }
-
 return web.Run(ctx, router, cfg, log)
 ```
 
-The host owns the cancellation context and should stop producers/background runtimes in an order that prevents work from being acknowledged after its consumers have closed.
-
-Run does not manage hijacked connections or wait for handler goroutines that ignore cancellation. Hosts retain responsibility for those lifecycles.
+`ServerConfig` carries environment tags, so a host can parse it with
+`environment.ParseEnvTags` and then apply `web.TrustProxies(cfg.TrustedProxyCount)`.
+`Run` returns on a startup failure or when the host cancels its context.
+Cancellation starts a graceful drain bounded by `ShutdownTimeout`; if it
+expires, remaining connections are closed, which cancels their request
+contexts, and the shutdown error is returned. `Run` does not manage hijacked
+connections or wait for handler goroutines that ignore cancellation. Stop
+producers and background runtimes in an order that prevents work from being
+acknowledged after its consumers have closed.

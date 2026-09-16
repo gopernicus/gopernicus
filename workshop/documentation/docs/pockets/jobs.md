@@ -176,7 +176,7 @@ deferral cannot provide ownership fencing without a lease token.
 
 Execution deadlines belong around job processing. Middleware's after-processing
 code runs before persistence; terminal hooks remain separate and run only after
-a successful dead-letter transition. See the [SDK execution contract](../sdk/pkg.md#workers-versus-jobs)
+a successful dead-letter transition. See the [SDK execution contract](../sdk/pkg.md#workers)
 for composition and an example.
 
 ## Scheduling semantics

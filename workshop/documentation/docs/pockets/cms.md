@@ -87,7 +87,7 @@ Page keys are versioned beneath `page:`. A host using a prefix-capable adapter
 can call `DeletePrefix(ctx, "page:")` after content changes. CMS does not
 synchronously invalidate every write: an in-flight render can repopulate an
 invalidated entry, so TTL remains part of the freshness policy. See the
-[cache contract](../sdk/capabilities.md#caching-application-data-and-public-pages)
+[cache contract](../sdk/capabilities.md#cacher)
 for supported headers and middleware ordering.
 
 ## GOTH and custom themes
