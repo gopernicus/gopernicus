@@ -1,22 +1,25 @@
 # Releasing gopernicus modules
 
-## Unified authorization tuples (release candidate 2026-09-16)
+## Unified authorization tuples (published 2026-09-16)
 
-One breaking release train must include these five artifacts from one reviewed
-commit, dependency-first: `integrations/datastores/pgxdb`, `pockets/authorization`,
-`pockets/authorization/stores/pgx`, `pockets/authorization/stores/turso`, and
-`pockets/authorization/stores/goredis`. Do not tag a partial core/store checkpoint.
-Selected versions: PostgreSQL connector `v0.9.0`, core `v0.18.0`, PostgreSQL
-store `v0.13.0`, Turso store `v0.12.0`, Redis store `v0.4.0`. Publication is
-authorized; candidate and public archive verification follow the normal process.
+Published from main `66d70c511a74b28b1019e526acfc1382044395ad` in one coordinated train:
+PostgreSQL connector `v0.9.0`, authorization core `v0.18.0`, PostgreSQL store
+`v0.13.0`, Turso store `v0.12.0`, and Redis store `v0.4.0`. All five annotated tags
+point to this commit; public module archives match the verified candidates.
+See the [release record](plans/authorization-unified-release.md) and
+[checksum manifest](plans/authorization-unified-release-manifest.json).
+
+Independent versioned build/test/vet, public checksum verification, HTTP consumer,
+SQLite/Redis race tests and the local 42-module gate passed. GitHub Linux CI hit
+the existing SDK RangeEdges failure (SDK unchanged); remote Turso remains unverified.
 
 The canonical authority is `iam_tuples`; roles and relationships address the same
 facts, independent labels coexist, global membership is exact and global policy
 is explicit. The one `decisions.Model` replaces split declarations at compile time.
 The authorization schema is a fresh base `0001_iam_tuples.sql` containing tuples
 and audit, plus optional `tuple_cache_migrations/0002_iam_tuple_cache.sql`.
-There is no legacy conversion/downgrade stream. Rehearse both fresh installation
-and cache installation over populated canonical facts before tagging.
+There is no legacy conversion/downgrade stream. Both fresh installation
+and cache installation over populated canonical facts passed release verification.
 See [AUDIT-043](AUDIT.md#audit-043-authorization-cleanup-and-fresh-sql-schema)
 and the [schema setup guide](pockets/authorization/stores/UPGRADE.md).
 

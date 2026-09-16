@@ -1,5 +1,5 @@
 {
-  "status": "Candidate and final workspace verified; ready for authorized publication",
+  "status": "PUBLISHED AND PUBLICLY VERIFIED",
   "date": "2026-09-16",
   "scope": "Unified tuples, fresh SQL schema, explicit exact roles, coherent decisions, one HTTP Require API and protocol-2 Redis cache",
   "modules": [
@@ -11,7 +11,10 @@
       "sum": "h1:KQBxTSyAUjnv99C6PNkfwrshdojQmXLfOSzyiq1Hego=",
       "go_mod_sum": "h1:m73aQqKrcCcr/XY5CwqUY5REpUg0Pwr1r3i+YfpAPJg=",
       "source_entries": 57,
-      "source_inventory_sha256": "372dc9b67764ab66a21ed72ba128fd5ef091cbc00959fdd6c0ddcade9cae3d67"
+      "source_inventory_sha256": "372dc9b67764ab66a21ed72ba128fd5ef091cbc00959fdd6c0ddcade9cae3d67",
+      "published": true,
+      "tag_object": "688ce9f19f4df609c66068220640ecbeb0cb1d62",
+      "release_commit": "66d70c511a74b28b1019e526acfc1382044395ad"
     },
     {
       "directory": "pockets/authorization",
@@ -21,7 +24,10 @@
       "sum": "h1:RT8U8z2CkxDwq0MLYMKtoxKoWLvaM/7wqzoGSensKEM=",
       "go_mod_sum": "h1:SWt/blN2Csf2p8dohOtJXbINP/BT5Z3oV9/GOxkFXGo=",
       "source_entries": 221,
-      "source_inventory_sha256": "70875cc922f4ff7b8ed92dd1a138b3b4a8ca561bbf83831aeaf572cc7c1c100a"
+      "source_inventory_sha256": "70875cc922f4ff7b8ed92dd1a138b3b4a8ca561bbf83831aeaf572cc7c1c100a",
+      "published": true,
+      "tag_object": "cd1d934b2e6f6a21f9cf7e17c9565a3a2d6715fe",
+      "release_commit": "66d70c511a74b28b1019e526acfc1382044395ad"
     },
     {
       "directory": "pockets/authorization/stores/pgx",
@@ -31,7 +37,10 @@
       "sum": "h1:tJD/U018SpGSi//clV3PvzHDw+dRUz/Hi84/pauQDf0=",
       "go_mod_sum": "h1:KPtGnl4pwI2NW+l6Po3s7/SXV7IopinPxpfjw+t0L7k=",
       "source_entries": 48,
-      "source_inventory_sha256": "477ca4865a124ce207610b84b8d82b14ec95aeb177902d101572c919c10f8e08"
+      "source_inventory_sha256": "477ca4865a124ce207610b84b8d82b14ec95aeb177902d101572c919c10f8e08",
+      "published": true,
+      "tag_object": "79cddb3104918d3299b2354775a4bdad067b80c9",
+      "release_commit": "66d70c511a74b28b1019e526acfc1382044395ad"
     },
     {
       "directory": "pockets/authorization/stores/turso",
@@ -41,7 +50,10 @@
       "sum": "h1:9heC6LPtKI4Hk5uUpcSb6KhMWygcoYBKzfAzpiNmkPc=",
       "go_mod_sum": "h1:sS+jcqMbhTrLwYYSSfXVIchsdRAPaXk/onMBQoi7il8=",
       "source_entries": 42,
-      "source_inventory_sha256": "7e642b32df155ea63dd0474a30eb9cda58db8f368ddc9b24fe4240cdd1742581"
+      "source_inventory_sha256": "7e642b32df155ea63dd0474a30eb9cda58db8f368ddc9b24fe4240cdd1742581",
+      "published": true,
+      "tag_object": "c45b89585d2e2defac04f133a748ceb91802f278",
+      "release_commit": "66d70c511a74b28b1019e526acfc1382044395ad"
     },
     {
       "directory": "pockets/authorization/stores/goredis",
@@ -51,7 +63,10 @@
       "sum": "h1:mTQZwVo3aSBw8BtQABVO+O85/AkCw6UlP2p3leH00EM=",
       "go_mod_sum": "h1:J7Zw1rMxTLlBAqShZWkgAjHy9x6M1IrNY032jp4VnDk=",
       "source_entries": 11,
-      "source_inventory_sha256": "899b77cdfcb398d125184dba3142b13aba00ae1e6c638745b01d2887ba399664"
+      "source_inventory_sha256": "899b77cdfcb398d125184dba3142b13aba00ae1e6c638745b01d2887ba399664",
+      "published": true,
+      "tag_object": "6b0437ce22d21d201b5fc180aae98896f3bc6ea1",
+      "release_commit": "66d70c511a74b28b1019e526acfc1382044395ad"
     }
   ],
   "candidate": {
@@ -660,5 +675,848 @@
     "environment": "allowlisted; no external datastore settings; exact candidate pins",
     "exit_code": 0,
     "passed": true
+  },
+  "release_commit": "66d70c511a74b28b1019e526acfc1382044395ad",
+  "publication": {
+    "release_commit": "66d70c511a74b28b1019e526acfc1382044395ad",
+    "main_push_verified": true,
+    "tags": [
+      {
+        "tag": "integrations/datastores/pgxdb/v0.9.0",
+        "tag_object": "688ce9f19f4df609c66068220640ecbeb0cb1d62",
+        "commit": "66d70c511a74b28b1019e526acfc1382044395ad"
+      },
+      {
+        "tag": "pockets/authorization/v0.18.0",
+        "tag_object": "cd1d934b2e6f6a21f9cf7e17c9565a3a2d6715fe",
+        "commit": "66d70c511a74b28b1019e526acfc1382044395ad"
+      },
+      {
+        "tag": "pockets/authorization/stores/pgx/v0.13.0",
+        "tag_object": "79cddb3104918d3299b2354775a4bdad067b80c9",
+        "commit": "66d70c511a74b28b1019e526acfc1382044395ad"
+      },
+      {
+        "tag": "pockets/authorization/stores/turso/v0.12.0",
+        "tag_object": "c45b89585d2e2defac04f133a748ceb91802f278",
+        "commit": "66d70c511a74b28b1019e526acfc1382044395ad"
+      },
+      {
+        "tag": "pockets/authorization/stores/goredis/v0.4.0",
+        "tag_object": "6b0437ce22d21d201b5fc180aae98896f3bc6ea1",
+        "commit": "66d70c511a74b28b1019e526acfc1382044395ad"
+      }
+    ],
+    "passed": true,
+    "prior_tags_preserved": true
+  },
+  "consumer_public": {
+    "checks": [
+      {
+        "command": [
+          "go",
+          "mod",
+          "tidy"
+        ],
+        "cwd": "/tmp/gopernicus-authorization-unified-release/consumer",
+        "elapsed_seconds": 0.03,
+        "exit_code": 0,
+        "log": "/tmp/gopernicus-authorization-unified-release/consumer-public-tidy.log"
+      },
+      {
+        "command": [
+          "go",
+          "mod",
+          "verify"
+        ],
+        "cwd": "/tmp/gopernicus-authorization-unified-release/consumer",
+        "elapsed_seconds": 0.05,
+        "exit_code": 0,
+        "log": "/tmp/gopernicus-authorization-unified-release/consumer-public-verify.log"
+      },
+      {
+        "command": [
+          "go",
+          "build",
+          "./..."
+        ],
+        "cwd": "/tmp/gopernicus-authorization-unified-release/consumer",
+        "elapsed_seconds": 0.01,
+        "exit_code": 0,
+        "log": "/tmp/gopernicus-authorization-unified-release/consumer-public-build.log"
+      },
+      {
+        "command": [
+          "go",
+          "test",
+          "-count=1",
+          "./..."
+        ],
+        "cwd": "/tmp/gopernicus-authorization-unified-release/consumer",
+        "elapsed_seconds": 0.61,
+        "exit_code": 0,
+        "log": "/tmp/gopernicus-authorization-unified-release/consumer-public-test.log"
+      },
+      {
+        "command": [
+          "go",
+          "vet",
+          "./..."
+        ],
+        "cwd": "/tmp/gopernicus-authorization-unified-release/consumer",
+        "elapsed_seconds": 0.24,
+        "exit_code": 0,
+        "log": "/tmp/gopernicus-authorization-unified-release/consumer-public-vet.log"
+      },
+      {
+        "command": [
+          "go",
+          "list",
+          "-m",
+          "-json",
+          "all"
+        ],
+        "cwd": "/tmp/gopernicus-authorization-unified-release/consumer",
+        "elapsed_seconds": 0.01,
+        "exit_code": 0,
+        "log": "/tmp/gopernicus-authorization-unified-release/consumer-public-graph.log"
+      },
+      {
+        "command": [
+          "go",
+          "mod",
+          "tidy"
+        ],
+        "cwd": "/tmp/gopernicus-authorization-unified-release/authcms-public",
+        "elapsed_seconds": 0.32,
+        "exit_code": 0,
+        "log": "/tmp/gopernicus-authorization-unified-release/authcms-public-tidy.log"
+      },
+      {
+        "command": [
+          "go",
+          "mod",
+          "verify"
+        ],
+        "cwd": "/tmp/gopernicus-authorization-unified-release/authcms-public",
+        "elapsed_seconds": 1.16,
+        "exit_code": 0,
+        "log": "/tmp/gopernicus-authorization-unified-release/authcms-public-verify.log"
+      },
+      {
+        "command": [
+          "go",
+          "build",
+          "./..."
+        ],
+        "cwd": "/tmp/gopernicus-authorization-unified-release/authcms-public",
+        "elapsed_seconds": 2.83,
+        "exit_code": 0,
+        "log": "/tmp/gopernicus-authorization-unified-release/authcms-public-build.log"
+      },
+      {
+        "command": [
+          "go",
+          "test",
+          "-count=1",
+          "./..."
+        ],
+        "cwd": "/tmp/gopernicus-authorization-unified-release/authcms-public",
+        "elapsed_seconds": 17.75,
+        "exit_code": 0,
+        "log": "/tmp/gopernicus-authorization-unified-release/authcms-public-test.log"
+      },
+      {
+        "command": [
+          "go",
+          "vet",
+          "./..."
+        ],
+        "cwd": "/tmp/gopernicus-authorization-unified-release/authcms-public",
+        "elapsed_seconds": 0.75,
+        "exit_code": 0,
+        "log": "/tmp/gopernicus-authorization-unified-release/authcms-public-vet.log"
+      },
+      {
+        "command": [
+          "go",
+          "list",
+          "-m",
+          "-json",
+          "all"
+        ],
+        "cwd": "/tmp/gopernicus-authorization-unified-release/authcms-public",
+        "elapsed_seconds": 0.12,
+        "exit_code": 0,
+        "log": "/tmp/gopernicus-authorization-unified-release/authcms-public-graph.log"
+      }
+    ],
+    "passed": true,
+    "scope": "Standalone external HTTP All/Any example (401,403,204,204), versioned auth-cms build/tests; no replacements"
+  },
+  "public_e2e": {
+    "actual_sqlite_redis": true,
+    "check": {
+      "command": [
+        "go",
+        "test",
+        "-tags=integration",
+        "-race",
+        "-count=1",
+        "-run",
+        "^TestSQLRedis.*/sqlite$",
+        "-v",
+        "./..."
+      ],
+      "cwd": "/tmp/gopernicus-authorization-unified-release/public/verification/pockets/authorization/stores/goredis",
+      "elapsed_seconds": 12.45,
+      "exit_code": 0,
+      "log": "/tmp/gopernicus-authorization-unified-release/public/authzredis-e2e-race.log"
+    },
+    "gowork": "off",
+    "no_replacements": true,
+    "passed": true,
+    "postgres": "Implementation suite passed; not rerun in archive check"
+  },
+  "public_verification": {
+    "passed": true,
+    "environment": {
+      "GOCACHE": "/tmp/gopernicus-authorization-hardening/cache",
+      "GOFLAGS": "-mod=readonly",
+      "GOMODCACHE": "/private/tmp/gopernicus-authorization-unified-release/public/modcache",
+      "GONOPROXY": "",
+      "GONOSUMDB": "",
+      "GOPRIVATE": "",
+      "GOPROXY": "https://proxy.golang.org,direct",
+      "GOSUMDB": "sum.golang.org",
+      "GOTOOLCHAIN": "local",
+      "GOWORK": "off",
+      "go_version": "go version go1.26.1 darwin/arm64",
+      "runtime_environment": "build-only allowlist; no inherited database, emulator or cloud credential settings",
+      "seeded_external_cache_files": 5273
+    },
+    "source_unchanged_after_verification": true,
+    "modules": [
+      {
+        "module": "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb",
+        "download": {
+          "Dir": "/private/tmp/gopernicus-authorization-unified-release/public/modcache/github.com/gopernicus/gopernicus/integrations/datastores/pgxdb@v0.9.0",
+          "GoMod": "/private/tmp/gopernicus-authorization-unified-release/public/modcache/cache/download/github.com/gopernicus/gopernicus/integrations/datastores/pgxdb/@v/v0.9.0.mod",
+          "GoModSum": "h1:m73aQqKrcCcr/XY5CwqUY5REpUg0Pwr1r3i+YfpAPJg=",
+          "Info": "/private/tmp/gopernicus-authorization-unified-release/public/modcache/cache/download/github.com/gopernicus/gopernicus/integrations/datastores/pgxdb/@v/v0.9.0.info",
+          "Origin": {
+            "Hash": "66d70c511a74b28b1019e526acfc1382044395ad",
+            "Ref": "refs/tags/integrations/datastores/pgxdb/v0.9.0",
+            "Subdir": "integrations/datastores/pgxdb",
+            "URL": "https://github.com/gopernicus/gopernicus",
+            "VCS": "git"
+          },
+          "Path": "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb",
+          "Sum": "h1:KQBxTSyAUjnv99C6PNkfwrshdojQmXLfOSzyiq1Hego=",
+          "Version": "v0.9.0",
+          "Zip": "/private/tmp/gopernicus-authorization-unified-release/public/modcache/cache/download/github.com/gopernicus/gopernicus/integrations/datastores/pgxdb/@v/v0.9.0.zip"
+        },
+        "framework_versions": {
+          "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb": null,
+          "github.com/gopernicus/gopernicus/sdk": "v0.9.0"
+        },
+        "checks": [
+          {
+            "command": [
+              "go",
+              "mod",
+              "download",
+              "-json",
+              "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb@v0.9.0"
+            ],
+            "exit_code": 0
+          },
+          {
+            "command": [
+              "go",
+              "list",
+              "-m",
+              "-json",
+              "all"
+            ],
+            "exit_code": 0
+          },
+          {
+            "command": [
+              "go",
+              "build",
+              "./..."
+            ],
+            "exit_code": 0
+          },
+          {
+            "command": [
+              "go",
+              "test",
+              "-count=1",
+              "./..."
+            ],
+            "exit_code": 0
+          },
+          {
+            "command": [
+              "go",
+              "vet",
+              "./..."
+            ],
+            "exit_code": 0
+          },
+          {
+            "command": [
+              "go",
+              "test",
+              "-tags=integration",
+              "-run",
+              "^$",
+              "./..."
+            ],
+            "exit_code": 0
+          },
+          {
+            "command": [
+              "go",
+              "test",
+              "-tags=integration,live",
+              "-run",
+              "^$",
+              "./..."
+            ],
+            "exit_code": 0
+          },
+          {
+            "command": [
+              "go",
+              "vet",
+              "-tags=integration,live",
+              "./..."
+            ],
+            "exit_code": 0
+          }
+        ]
+      },
+      {
+        "module": "github.com/gopernicus/gopernicus/pockets/authorization",
+        "download": {
+          "Dir": "/private/tmp/gopernicus-authorization-unified-release/public/modcache/github.com/gopernicus/gopernicus/pockets/authorization@v0.18.0",
+          "GoMod": "/private/tmp/gopernicus-authorization-unified-release/public/modcache/cache/download/github.com/gopernicus/gopernicus/pockets/authorization/@v/v0.18.0.mod",
+          "GoModSum": "h1:SWt/blN2Csf2p8dohOtJXbINP/BT5Z3oV9/GOxkFXGo=",
+          "Info": "/private/tmp/gopernicus-authorization-unified-release/public/modcache/cache/download/github.com/gopernicus/gopernicus/pockets/authorization/@v/v0.18.0.info",
+          "Origin": {
+            "Hash": "66d70c511a74b28b1019e526acfc1382044395ad",
+            "Subdir": "pockets/authorization",
+            "URL": "https://github.com/gopernicus/gopernicus",
+            "VCS": "git"
+          },
+          "Path": "github.com/gopernicus/gopernicus/pockets/authorization",
+          "Sum": "h1:RT8U8z2CkxDwq0MLYMKtoxKoWLvaM/7wqzoGSensKEM=",
+          "Version": "v0.18.0",
+          "Zip": "/private/tmp/gopernicus-authorization-unified-release/public/modcache/cache/download/github.com/gopernicus/gopernicus/pockets/authorization/@v/v0.18.0.zip"
+        },
+        "framework_versions": {
+          "github.com/gopernicus/gopernicus/pockets": "v0.1.0",
+          "github.com/gopernicus/gopernicus/pockets/authorization": null,
+          "github.com/gopernicus/gopernicus/sdk": "v0.9.0"
+        },
+        "checks": [
+          {
+            "command": [
+              "go",
+              "mod",
+              "download",
+              "-json",
+              "github.com/gopernicus/gopernicus/pockets/authorization@v0.18.0"
+            ],
+            "exit_code": 0
+          },
+          {
+            "command": [
+              "go",
+              "list",
+              "-m",
+              "-json",
+              "all"
+            ],
+            "exit_code": 0
+          },
+          {
+            "command": [
+              "go",
+              "build",
+              "./..."
+            ],
+            "exit_code": 0
+          },
+          {
+            "command": [
+              "go",
+              "test",
+              "-count=1",
+              "./..."
+            ],
+            "exit_code": 0
+          },
+          {
+            "command": [
+              "go",
+              "vet",
+              "./..."
+            ],
+            "exit_code": 0
+          },
+          {
+            "command": [
+              "go",
+              "test",
+              "-tags=integration",
+              "-run",
+              "^$",
+              "./..."
+            ],
+            "exit_code": 0
+          },
+          {
+            "command": [
+              "go",
+              "test",
+              "-tags=integration,live",
+              "-run",
+              "^$",
+              "./..."
+            ],
+            "exit_code": 0
+          },
+          {
+            "command": [
+              "go",
+              "vet",
+              "-tags=integration,live",
+              "./..."
+            ],
+            "exit_code": 0
+          }
+        ]
+      },
+      {
+        "module": "github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx",
+        "download": {
+          "Dir": "/private/tmp/gopernicus-authorization-unified-release/public/modcache/github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx@v0.13.0",
+          "GoMod": "/private/tmp/gopernicus-authorization-unified-release/public/modcache/cache/download/github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx/@v/v0.13.0.mod",
+          "GoModSum": "h1:KPtGnl4pwI2NW+l6Po3s7/SXV7IopinPxpfjw+t0L7k=",
+          "Info": "/private/tmp/gopernicus-authorization-unified-release/public/modcache/cache/download/github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx/@v/v0.13.0.info",
+          "Origin": {
+            "Hash": "66d70c511a74b28b1019e526acfc1382044395ad",
+            "Subdir": "pockets/authorization/stores/pgx",
+            "URL": "https://github.com/gopernicus/gopernicus",
+            "VCS": "git"
+          },
+          "Path": "github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx",
+          "Sum": "h1:tJD/U018SpGSi//clV3PvzHDw+dRUz/Hi84/pauQDf0=",
+          "Version": "v0.13.0",
+          "Zip": "/private/tmp/gopernicus-authorization-unified-release/public/modcache/cache/download/github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx/@v/v0.13.0.zip"
+        },
+        "framework_versions": {
+          "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb": "v0.9.0",
+          "github.com/gopernicus/gopernicus/pockets": "v0.1.0",
+          "github.com/gopernicus/gopernicus/pockets/authorization": "v0.18.0",
+          "github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx": null,
+          "github.com/gopernicus/gopernicus/sdk": "v0.9.0"
+        },
+        "checks": [
+          {
+            "command": [
+              "go",
+              "mod",
+              "download",
+              "-json",
+              "github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx@v0.13.0"
+            ],
+            "exit_code": 0
+          },
+          {
+            "command": [
+              "go",
+              "list",
+              "-m",
+              "-json",
+              "all"
+            ],
+            "exit_code": 0
+          },
+          {
+            "command": [
+              "go",
+              "build",
+              "./..."
+            ],
+            "exit_code": 0
+          },
+          {
+            "command": [
+              "go",
+              "test",
+              "-count=1",
+              "./..."
+            ],
+            "exit_code": 0
+          },
+          {
+            "command": [
+              "go",
+              "vet",
+              "./..."
+            ],
+            "exit_code": 0
+          },
+          {
+            "command": [
+              "go",
+              "test",
+              "-tags=integration",
+              "-run",
+              "^$",
+              "./..."
+            ],
+            "exit_code": 0
+          },
+          {
+            "command": [
+              "go",
+              "test",
+              "-tags=integration,live",
+              "-run",
+              "^$",
+              "./..."
+            ],
+            "exit_code": 0
+          },
+          {
+            "command": [
+              "go",
+              "vet",
+              "-tags=integration,live",
+              "./..."
+            ],
+            "exit_code": 0
+          }
+        ]
+      },
+      {
+        "module": "github.com/gopernicus/gopernicus/pockets/authorization/stores/turso",
+        "download": {
+          "Dir": "/private/tmp/gopernicus-authorization-unified-release/public/modcache/github.com/gopernicus/gopernicus/pockets/authorization/stores/turso@v0.12.0",
+          "GoMod": "/private/tmp/gopernicus-authorization-unified-release/public/modcache/cache/download/github.com/gopernicus/gopernicus/pockets/authorization/stores/turso/@v/v0.12.0.mod",
+          "GoModSum": "h1:sS+jcqMbhTrLwYYSSfXVIchsdRAPaXk/onMBQoi7il8=",
+          "Info": "/private/tmp/gopernicus-authorization-unified-release/public/modcache/cache/download/github.com/gopernicus/gopernicus/pockets/authorization/stores/turso/@v/v0.12.0.info",
+          "Origin": {
+            "Hash": "66d70c511a74b28b1019e526acfc1382044395ad",
+            "Subdir": "pockets/authorization/stores/turso",
+            "URL": "https://github.com/gopernicus/gopernicus",
+            "VCS": "git"
+          },
+          "Path": "github.com/gopernicus/gopernicus/pockets/authorization/stores/turso",
+          "Sum": "h1:9heC6LPtKI4Hk5uUpcSb6KhMWygcoYBKzfAzpiNmkPc=",
+          "Version": "v0.12.0",
+          "Zip": "/private/tmp/gopernicus-authorization-unified-release/public/modcache/cache/download/github.com/gopernicus/gopernicus/pockets/authorization/stores/turso/@v/v0.12.0.zip"
+        },
+        "framework_versions": {
+          "github.com/gopernicus/gopernicus/integrations/datastores/turso": "v0.6.0",
+          "github.com/gopernicus/gopernicus/pockets": "v0.1.0",
+          "github.com/gopernicus/gopernicus/pockets/authorization": "v0.18.0",
+          "github.com/gopernicus/gopernicus/pockets/authorization/stores/turso": null,
+          "github.com/gopernicus/gopernicus/sdk": "v0.9.0"
+        },
+        "checks": [
+          {
+            "command": [
+              "go",
+              "mod",
+              "download",
+              "-json",
+              "github.com/gopernicus/gopernicus/pockets/authorization/stores/turso@v0.12.0"
+            ],
+            "exit_code": 0
+          },
+          {
+            "command": [
+              "go",
+              "list",
+              "-m",
+              "-json",
+              "all"
+            ],
+            "exit_code": 0
+          },
+          {
+            "command": [
+              "go",
+              "build",
+              "./..."
+            ],
+            "exit_code": 0
+          },
+          {
+            "command": [
+              "go",
+              "test",
+              "-count=1",
+              "./..."
+            ],
+            "exit_code": 0
+          },
+          {
+            "command": [
+              "go",
+              "vet",
+              "./..."
+            ],
+            "exit_code": 0
+          },
+          {
+            "command": [
+              "go",
+              "test",
+              "-tags=integration",
+              "-run",
+              "^$",
+              "./..."
+            ],
+            "exit_code": 0
+          },
+          {
+            "command": [
+              "go",
+              "test",
+              "-tags=integration,live",
+              "-run",
+              "^$",
+              "./..."
+            ],
+            "exit_code": 0
+          },
+          {
+            "command": [
+              "go",
+              "vet",
+              "-tags=integration,live",
+              "./..."
+            ],
+            "exit_code": 0
+          }
+        ]
+      },
+      {
+        "module": "github.com/gopernicus/gopernicus/pockets/authorization/stores/goredis",
+        "download": {
+          "Dir": "/private/tmp/gopernicus-authorization-unified-release/public/modcache/github.com/gopernicus/gopernicus/pockets/authorization/stores/goredis@v0.4.0",
+          "GoMod": "/private/tmp/gopernicus-authorization-unified-release/public/modcache/cache/download/github.com/gopernicus/gopernicus/pockets/authorization/stores/goredis/@v/v0.4.0.mod",
+          "GoModSum": "h1:J7Zw1rMxTLlBAqShZWkgAjHy9x6M1IrNY032jp4VnDk=",
+          "Info": "/private/tmp/gopernicus-authorization-unified-release/public/modcache/cache/download/github.com/gopernicus/gopernicus/pockets/authorization/stores/goredis/@v/v0.4.0.info",
+          "Origin": {
+            "Hash": "66d70c511a74b28b1019e526acfc1382044395ad",
+            "Subdir": "pockets/authorization/stores/goredis",
+            "URL": "https://github.com/gopernicus/gopernicus",
+            "VCS": "git"
+          },
+          "Path": "github.com/gopernicus/gopernicus/pockets/authorization/stores/goredis",
+          "Sum": "h1:mTQZwVo3aSBw8BtQABVO+O85/AkCw6UlP2p3leH00EM=",
+          "Version": "v0.4.0",
+          "Zip": "/private/tmp/gopernicus-authorization-unified-release/public/modcache/cache/download/github.com/gopernicus/gopernicus/pockets/authorization/stores/goredis/@v/v0.4.0.zip"
+        },
+        "framework_versions": {
+          "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb": "v0.9.0",
+          "github.com/gopernicus/gopernicus/integrations/datastores/turso": "v0.6.0",
+          "github.com/gopernicus/gopernicus/pockets": "v0.1.0",
+          "github.com/gopernicus/gopernicus/pockets/authorization": "v0.18.0",
+          "github.com/gopernicus/gopernicus/pockets/authorization/stores/goredis": null,
+          "github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx": "v0.13.0",
+          "github.com/gopernicus/gopernicus/pockets/authorization/stores/turso": "v0.12.0",
+          "github.com/gopernicus/gopernicus/sdk": "v0.9.0"
+        },
+        "checks": [
+          {
+            "command": [
+              "go",
+              "mod",
+              "download",
+              "-json",
+              "github.com/gopernicus/gopernicus/pockets/authorization/stores/goredis@v0.4.0"
+            ],
+            "exit_code": 0
+          },
+          {
+            "command": [
+              "go",
+              "list",
+              "-m",
+              "-json",
+              "all"
+            ],
+            "exit_code": 0
+          },
+          {
+            "command": [
+              "go",
+              "build",
+              "./..."
+            ],
+            "exit_code": 0
+          },
+          {
+            "command": [
+              "go",
+              "test",
+              "-count=1",
+              "./..."
+            ],
+            "exit_code": 0
+          },
+          {
+            "command": [
+              "go",
+              "vet",
+              "./..."
+            ],
+            "exit_code": 0
+          },
+          {
+            "command": [
+              "go",
+              "test",
+              "-tags=integration",
+              "-run",
+              "^$",
+              "./..."
+            ],
+            "exit_code": 0
+          },
+          {
+            "command": [
+              "go",
+              "test",
+              "-tags=integration,live",
+              "-run",
+              "^$",
+              "./..."
+            ],
+            "exit_code": 0
+          },
+          {
+            "command": [
+              "go",
+              "vet",
+              "-tags=integration,live",
+              "./..."
+            ],
+            "exit_code": 0
+          }
+        ]
+      }
+    ]
+  },
+  "ci": {
+    "runs": [
+      {
+        "conclusion": "failure",
+        "databaseId": 35068771683,
+        "headBranch": "pockets/authorization/stores/goredis/v0.4.0",
+        "headSha": "66d70c511a74b28b1019e526acfc1382044395ad",
+        "name": "check",
+        "status": "completed",
+        "url": "https://github.com/gopernicus/gopernicus/actions/runs/35068771683"
+      },
+      {
+        "conclusion": "failure",
+        "databaseId": 35068769152,
+        "headBranch": "pockets/authorization/stores/turso/v0.12.0",
+        "headSha": "66d70c511a74b28b1019e526acfc1382044395ad",
+        "name": "check",
+        "status": "completed",
+        "url": "https://github.com/gopernicus/gopernicus/actions/runs/35068769152"
+      },
+      {
+        "conclusion": "failure",
+        "databaseId": 35068765412,
+        "headBranch": "pockets/authorization/stores/pgx/v0.13.0",
+        "headSha": "66d70c511a74b28b1019e526acfc1382044395ad",
+        "name": "check",
+        "status": "completed",
+        "url": "https://github.com/gopernicus/gopernicus/actions/runs/35068765412"
+      },
+      {
+        "conclusion": "failure",
+        "databaseId": 35068763035,
+        "headBranch": "pockets/authorization/v0.18.0",
+        "headSha": "66d70c511a74b28b1019e526acfc1382044395ad",
+        "name": "check",
+        "status": "completed",
+        "url": "https://github.com/gopernicus/gopernicus/actions/runs/35068763035"
+      },
+      {
+        "conclusion": "failure",
+        "databaseId": 35068759421,
+        "headBranch": "integrations/datastores/pgxdb/v0.9.0",
+        "headSha": "66d70c511a74b28b1019e526acfc1382044395ad",
+        "name": "check",
+        "status": "completed",
+        "url": "https://github.com/gopernicus/gopernicus/actions/runs/35068759421"
+      },
+      {
+        "conclusion": "failure",
+        "databaseId": 35068756769,
+        "headBranch": "main",
+        "headSha": "66d70c511a74b28b1019e526acfc1382044395ad",
+        "name": "check",
+        "status": "completed",
+        "url": "https://github.com/gopernicus/gopernicus/actions/runs/35068756769"
+      },
+      {
+        "conclusion": "success",
+        "databaseId": 35068756753,
+        "headBranch": "main",
+        "headSha": "66d70c511a74b28b1019e526acfc1382044395ad",
+        "name": "Deploy Docs to GitHub Pages",
+        "status": "completed",
+        "url": "https://github.com/gopernicus/gopernicus/actions/runs/35068756753"
+      }
+    ],
+    "main_failure": "Existing SDK TestDisk_Conformance/RangeEdges: Linux MaxInt64 seek returns EINVAL",
+    "sdk_unchanged": true,
+    "main_failure_evidence": [
+      "check\tRun make check\t2026-09-16T07:30:02.1287023Z     --- FAIL: TestDisk_Conformance/RangeEdges (0.00s)",
+      "check\tRun make check\t2026-09-16T07:30:02.1289584Z         contract.go:184: range {range 9223372036854775807 1 }: seek /tmp/TestDisk_ConformanceRangeEdges1662660403/001/range: invalid argument"
+    ],
+    "docs_deployment": "success",
+    "tag_failures": [
+      {
+        "run_id": 35068771683,
+        "branch": "pockets/authorization/stores/goredis/v0.4.0",
+        "known_rangeedges_failure": true
+      },
+      {
+        "run_id": 35068769152,
+        "branch": "pockets/authorization/stores/turso/v0.12.0",
+        "known_rangeedges_failure": true
+      },
+      {
+        "run_id": 35068765412,
+        "branch": "pockets/authorization/stores/pgx/v0.13.0",
+        "known_rangeedges_failure": true
+      },
+      {
+        "run_id": 35068763035,
+        "branch": "pockets/authorization/v0.18.0",
+        "known_rangeedges_failure": true
+      },
+      {
+        "run_id": 35068759421,
+        "branch": "integrations/datastores/pgxdb/v0.9.0",
+        "known_rangeedges_failure": true
+      }
+    ]
   }
 }

@@ -5040,9 +5040,11 @@ verification below describe the pre-cleanup implementation. The owner replaced
 that path with a fresh schema before release; [AUDIT-043](#audit-043-authorization-cleanup-and-fresh-sql-schema)
 is authoritative for current setup, raw pagination and facade construction.
 
-**Release status:** implemented and verified; coordinated release candidate.
-Selected versions: core `v0.18.0`, pgx `v0.13.0`, Turso `v0.12.0`, Redis `v0.4.0`,
+**Release status:** published and publicly verified, 2026-09-16.
+Published versions: core `v0.18.0`, pgx `v0.13.0`, Turso `v0.12.0`, Redis `v0.4.0`,
 and PostgreSQL connector `v0.9.0`.
+Source commit `66d70c511a74b28b1019e526acfc1382044395ad`; see the
+[release record](plans/authorization-unified-release.md) for checks and the existing Linux CI limitation.
 Core, PostgreSQL, Turso and Redis ship together with
 the `integrations/datastores/pgxdb` snapshot-transaction prerequisite. No application
 must first deploy v0.17.0 binaries; apply supported migration prefixes offline.
@@ -5143,9 +5145,11 @@ See the [executed plan](plans/authorization-unified-tuples.md) and
 
 ## AUDIT-043: Authorization cleanup and fresh SQL schema
 
-**Release status:** implemented and verified; coordinated release candidate.
-Selected versions: core `v0.18.0`, pgx `v0.13.0`, Turso `v0.12.0`, Redis `v0.4.0`,
+**Release status:** published and publicly verified, 2026-09-16.
+Published versions: core `v0.18.0`, pgx `v0.13.0`, Turso `v0.12.0`, Redis `v0.4.0`,
 and PostgreSQL connector `v0.9.0`.
+Source commit `66d70c511a74b28b1019e526acfc1382044395ad`; see the
+[release record](plans/authorization-unified-release.md) for checks and the existing Linux CI limitation.
 This entry supersedes AUDIT-042's unreleased conversion/downgrade design. The
 published release entries and their verification remain historical records.
 
@@ -5205,9 +5209,11 @@ See the [executed plan](plans/authorization-cleanup.md) and
 
 ## AUDIT-044: One authorization middleware API
 
-**Release status:** implemented and verified; coordinated release candidate.
-Selected versions: core `v0.18.0`, pgx `v0.13.0`, Turso `v0.12.0`, Redis `v0.4.0`,
+**Release status:** published and publicly verified, 2026-09-16.
+Published versions: core `v0.18.0`, pgx `v0.13.0`, Turso `v0.12.0`, Redis `v0.4.0`,
 and PostgreSQL connector `v0.9.0`.
+Source commit `66d70c511a74b28b1019e526acfc1382044395ad`; see the
+[release record](plans/authorization-unified-release.md) for checks and the existing Linux CI limitation.
 
 Authorization HTTP exposes `Adapter.Require(Predicate)` as its only policy
 middleware. Compose `All`/`Any` over `HasRole`, `HasRelationship`, and `Can`, using
