@@ -5411,7 +5411,7 @@ live authentication datastore suites remain unverified.
 
 ## AUDIT-048: Authorization internal cleanup
 
-**Release status:** release candidates prepared: authorization `v0.21.0`,
+**Release status:** published: authorization `v0.21.0`,
 PostgreSQL store `v0.15.0`, Turso store `v0.14.0`. SQL adapter and auth-cms pins
 are updated. No SQL schema, persisted cursor or cache protocol change. See the
 [release record](plans/authorization-internal-cleanup-release.md).
@@ -5454,4 +5454,8 @@ PostgreSQL races in default/named schemas, tagged local SQLite and real
 PostgreSQL/SQLite-to-Redis races. Shared regressions cover raw/service parity,
 selectors, search, cancellation, usersets and pagination; existing transaction
 and graph-model cases pass. Remote Turso and external host compatibility remain
-unverified. Publication and public artifact verification are tracked in the release record.
+unverified. All 312 public archive entries, normal Go checksums and Git origins
+match the candidates at `47ebb259d7eff87cad782ef2d72957b54d3d52ac`. Public build/test/vet,
+consumer/auth-cms races and unchanged Redis compatibility passed. GitHub main/tag
+checks reproduced the unchanged Linux SDK RangeEdges failure; the remote workspace
+gate did not complete. See the release record for all verification evidence.

@@ -1,19 +1,31 @@
 # Releasing gopernicus modules
 
-## Authorization internal cleanup (release candidate)
+## Authorization internal cleanup (published 2026-09-16)
 
 Authorization core and PostgreSQL/Turso adapters consolidate raw relationship
 reads over canonical tuples, reject invalid selectors/unsupported search and
 honor cancellation consistently. Standalone raw listings/counts now use snapshots;
 raw ambient transaction joining and decision isolation requirements are preserved.
 The obsolete decision-service validation trio, CreateRelationship alias and unused
-relationship error are removed. This is a pre-v1 source/accepted-input change;
-release authorization `v0.21.0`, PostgreSQL store `v0.15.0` and Turso store
-`v0.14.0` together. SQL adapter and auth-cms pins are updated. There is no schema,
-cursor/cache protocol or new third-party dependency change.
+relationship error are removed. This pre-v1 source/accepted-input change is
+published as authorization `v0.21.0`, PostgreSQL store `v0.15.0` and Turso store
+`v0.14.0` from `47ebb259d7eff87cad782ef2d72957b54d3d52ac`.
+SQL adapter and auth-cms pins are updated. There is no schema, cursor/cache
+protocol or new third-party dependency change.
 
 See [API adoption](pockets/authorization/stores/UPGRADE.md#adopting-the-internal-cleanup-v0210)
 and [implementation/verification](plans/authorization-internal-cleanup.md).
+
+Upgrade the core and selected SQL adapter together; Redis remains at `v0.4.0`.
+All 312 public archive entries match verified candidates. Public checksums,
+Git provenance, independent build/test/vet, consumer/auth-cms races and real
+SQLite/Redis compatibility passed, as did the local 42-module make check.
+See the [release record](plans/authorization-internal-cleanup-release.md) and
+[checksum manifest](plans/authorization-internal-cleanup-release-manifest.json).
+
+GitHub [main CI](https://github.com/gopernicus/gopernicus/actions/runs/35152994183)
+and all three tag checks reproduced the unchanged Linux SDK RangeEdges failure;
+the remote workspace gate did not complete. Remote Turso remains unverified.
 
 ## Inbound authorization ownership and integrity (published 2026-09-16)
 

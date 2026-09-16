@@ -1,6 +1,6 @@
 # Authorization internal cleanup release
 
-Status: IN PROGRESS. Owner authorized release on 2026-09-16.
+Status: PUBLISHED AND PUBLICLY VERIFIED, 2026-09-16.
 
 ## Scope and versions
 
@@ -32,9 +32,9 @@ cursor or cache protocol changes, host adoption or production mutation.
 - [x] R2 Independently tidy/build/test/vet with GOWORK=off, no replacements;
   verify auth-cms, a standalone consumer and unchanged Redis compatibility.
   Run the final 42-module make check after version pins change.
-- [ ] R3 Confirm committed source equals verified candidates; push main and
+- [x] R3 Confirm committed source equals verified candidates; push main and
   annotated module tags in dependency order.
-- [ ] R4 Download public archives with normal sum.golang.org verification;
+- [x] R4 Download public archives with normal sum.golang.org verification;
   compare source inventories and Git origins, run public module and consumer
   checks, inspect GitHub CI, and publish the documentation receipt.
 
@@ -67,3 +67,30 @@ The final 42-module make check passed with all recorded inputs unchanged. The
 earlier owned PostgreSQL/default/named-schema, local SQLite and both SQL-to-Redis
 race results remain valid: all 1743 implementation/build inputs matched before
 release pin changes. Module archives contain 312 entries in total.
+
+## Publication receipt
+
+- Release commit: `47ebb259d7eff87cad782ef2d72957b54d3d52ac`, pushed normally to main before the
+  three annotated module tags. Every old remote tag is preserved.
+- All 312 public archive entries and module/go.mod checksums match the candidates.
+  Git origin identifies the release commit. Public verification uses
+  sum.golang.org with no exemptions, GOWORK=off and no replacements.
+- Independent public module build/test/vet and tagged checks passed. The public
+  standalone consumer and auth-cms passed race tests; unchanged Redis v0.4.0
+  passed compatibility and actual SQLite-to-Redis delivery, roles and revocation
+  races. Core/SQL pins require no new third-party dependency or migration.
+- The final local 42-module make check passed in 145.36 seconds; all 1917
+  recorded inputs were unchanged. Earlier full owned PostgreSQL and SQLite
+  race evidence is retained after source comparison.
+- GitHub [main CI](https://github.com/gopernicus/gopernicus/actions/runs/35152994183)
+  and all three tag checks reproduced the existing SDK
+  TestDisk_Conformance/RangeEdges failure: Linux rejects seeking to MaxInt64 with
+  EINVAL. SDK and the workflow are unchanged. The remote workspace gate did not
+  complete; all run links and exact failure evidence are in the manifest.
+- Owner changes and Python cache remain untouched and excluded. No production
+  mutation, host adoption or application migration. Remote Turso and arbitrary
+  external hosts remain unverified.
+
+The follow-up root documentation commit records publication without changing
+module archives or moving tags. Durable evidence:
+[release manifest](authorization-internal-cleanup-release-manifest.json).
