@@ -1,8 +1,9 @@
 # Releasing gopernicus modules
 
-## Authorization consistency and TupleCache hardening (release in progress 2026-09-15)
+## Authorization consistency and TupleCache hardening (published 2026-09-15)
 
-Selected versions: authorization core `v0.17.0`, Turso store `v0.11.0`, PostgreSQL
+Published from main `373ef0668dfdf17a56ba002bb344197d6779e374`: authorization core
+`v0.17.0`, Turso store `v0.11.0`, PostgreSQL
 store `v0.12.0`, go-redis adapter `v0.3.0`. Ordinary relationship Check, Explain,
 Batch and Filter operations now use one durable snapshot in supported readers.
 TupleCache adds `Rebuild(ctx)`, capacity errors, and delivery diagnostics; SQL
@@ -18,14 +19,17 @@ rebuild when current facts fit. No schema migration, Redis key change or mandato
 cache rebuild is required. Existing source consumers must tolerate ID-only
 Changes on Full snapshots. Relation exclusivity remains unchanged.
 
-Local repository/race and real SQL-to-Redis checks passed before release.
-Candidate/public verification and publication are recorded in the
-[release plan](plans/authorization-review-hardening-release.md) and manifest.
+All four public archives match the verified candidates and passed normal Go
+checksum/source verification, independent build/test/vet and tagged compilation.
+A standalone public SQLite/Redis consumer and the published integration race test
+passed, as did local full-workspace and implementation SQL/Redis race checks.
+See the [release plan](plans/authorization-review-hardening-release.md) and
+[manifest](plans/authorization-review-hardening-release-manifest.json).
 See [AUDIT-039](AUDIT.md#audit-039-authorization-consistency-and-tuplecache-hardening)
 and the [benchmark report](pockets/authorization/BENCHMARKS.md). Remote Turso,
 Firestore, non-C PostgreSQL locale and production-scale load remain unverified.
-The previous release's unchanged Linux SDK RangeEdges CI failure remains outside
-this authorization change; the release record will report current CI separately.
+GitHub Linux CI still fails the unchanged SDK RangeEdges test; the release
+record links its failing run and evidence. No SDK changes are included.
 
 ## Authorization consistent lookup reads (published 2026-09-15)
 

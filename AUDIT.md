@@ -4938,8 +4938,10 @@ remote Turso/sqld and live Firestore remain unverified. See the
 ## AUDIT-039: Authorization consistency and TupleCache hardening
 
 - **Implemented:** 2026-09-15.
-- **Release:** in progress; core v0.17.0, Turso v0.11.0, PostgreSQL v0.12.0,
-  Redis v0.3.0. See [release record](plans/authorization-review-hardening-release.md).
+- **Release:** published from `373ef0668dfdf17a56ba002bb344197d6779e374`; core
+  v0.17.0, Turso v0.11.0, PostgreSQL v0.12.0, Redis v0.3.0. Public checksums,
+  archive verification and versioned consumer checks passed. See
+  [release record](plans/authorization-review-hardening-release.md).
 - **Impact:** coherent permission reads, Redis client configuration and capacity
   limits, explicit rebuild and diagnostics; no data migration.
 

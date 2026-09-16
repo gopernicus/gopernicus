@@ -1,6 +1,6 @@
 # Authorization consistency and TupleCache hardening release — 2026-09-15
 
-Status: IN PROGRESS. The owner requested release of the completed hardening and
+Status: PUBLISHED AND PUBLICLY VERIFIED. The owner requested release of the completed hardening and
 test/benchmark suite. Publication is authorized; host adoption/deployment is separate.
 
 ## Scope and versions
@@ -49,8 +49,8 @@ under RELEASING.md. No connectors, Firestore adapter or schema migrations change
 
 - [x] Prepare release notes, module pins and exact candidates.
 - [x] Verify independent modules, standalone consumer and final workspace.
-- [ ] Commit/push release source and publish four annotated tags.
-- [ ] Verify public artifacts/consumer and record completion.
+- [x] Commit/push release source and publish four annotated tags.
+- [x] Verify public artifacts/consumer and record completion.
 
 ## Compatibility and verification boundaries
 
@@ -97,3 +97,34 @@ and AUDIT.md. Evidence root: `/tmp/gopernicus-authorization-hardening/release`.
   deadline rejection, cold/warm decisions, revocation, capacity fallback,
   oversized-delta preservation and Rebuild acknowledgement/diagnostics.
   Report: `consumer/candidate-results.json`. Disposable fixtures were removed.
+
+- Release source committed/pushed normally to main as `373ef0668dfdf17a56ba002bb344197d6779e374`.
+  All four annotated tags were published dependency-first at that commit; remote
+  tag objects and peeled commits match. Prior tags and owner changes are preserved.
+  Receipt: `publication/publication.json`. Public verification passed.
+
+
+## Public verification and completion
+
+All four public module archives match the tested candidates and release commit
+`373ef0668dfdf17a56ba002bb344197d6779e374`. Normal public checksum verification,
+Git origin/tag verification, independent versioned build/test/vet and tagged
+compilation passed with GOWORK=off and no replacements or checksum exemptions.
+Report: `public/results.json`.
+
+The retained SQLite → Redis integration race test passed from public archives
+(`public/e2e-results.json`). The standalone public consumer repeated all candidate
+checks: exact versions/hashes, module verification/build/vet, rejected deadline
+configuration, cold/warm decisions, revocation, bounded fallback and oversized
+delta/rebuild acknowledgement/diagnostics. Report: `consumer/public-results.json`.
+Its disposable Redis stopped and fixture files were removed.
+
+GitHub release CI [35039524002](https://github.com/gopernicus/gopernicus/actions/runs/35039524002)
+failed the already disclosed SDK `TestDisk_Conformance/RangeEdges` test because
+Linux rejects seek at MaxInt64 with EINVAL. The four tag-triggered runs also
+failed. SDK source is identical to pre-release main; this release does not claim
+to fix that unrelated failure. Evidence: `release-ci.json`, `release-ci-jobs.json`
+and `release-ci-failed.log`. The local full repository gate passed.
+
+Release complete. Host adoption and deployment remain separate. Owner plan files
+and all prior immutable tags were preserved. No host services or caches changed.

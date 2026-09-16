@@ -1,5 +1,5 @@
 {
-  "status": "verified candidates; publication pending",
+  "status": "published and publicly verified",
   "date": "2026-09-15",
   "scope": "Ordinary durable decision snapshots and TupleCache limits/rebuild/diagnostics; retained regression and benchmark suite; no host deployment",
   "modules": [
@@ -11,7 +11,10 @@
       "sum": "h1:HXMF5ViVjj1fy2ZSqwhaAUbR3GheqpBDZ4nXIMn4PCg=",
       "go_mod_sum": "h1:SWt/blN2Csf2p8dohOtJXbINP/BT5Z3oV9/GOxkFXGo=",
       "source_entries": 200,
-      "source_inventory_sha256": "7832a2d4bed1f1ed814c3348ccc440dad092d65a1023b88fac9c66d2602785e2"
+      "source_inventory_sha256": "7832a2d4bed1f1ed814c3348ccc440dad092d65a1023b88fac9c66d2602785e2",
+      "published": true,
+      "tag_object": "92138fbef2bbad37cd06c2fd2c15d0255bd66e41",
+      "release_commit": "373ef0668dfdf17a56ba002bb344197d6779e374"
     },
     {
       "directory": "pockets/authorization/stores/turso",
@@ -21,7 +24,10 @@
       "sum": "h1:GegXdyNNlOgQxRV+EozkkPXcC+7+qXlIWvQNNeKAuW8=",
       "go_mod_sum": "h1:wXWWJxhUF0Entyw7dfcpw93cFXX9dk30SH2TL1SzMSk=",
       "source_entries": 44,
-      "source_inventory_sha256": "5f9f1f43bd63c0effa190d6ef2bf29db1c7b44712f92132f320a37d3cdbb31c3"
+      "source_inventory_sha256": "5f9f1f43bd63c0effa190d6ef2bf29db1c7b44712f92132f320a37d3cdbb31c3",
+      "published": true,
+      "tag_object": "b055c0cfc546860b9b93f68b52ce5520c5682b34",
+      "release_commit": "373ef0668dfdf17a56ba002bb344197d6779e374"
     },
     {
       "directory": "pockets/authorization/stores/pgx",
@@ -31,7 +37,10 @@
       "sum": "h1:+OtsdJdVWr1McGy8acJEunWwPLk4j1x9YavRPk0bCYk=",
       "go_mod_sum": "h1:T/p1uoEE8N3u5uLFcEth80i5rodu37sMFZ/M34niLWI=",
       "source_entries": 52,
-      "source_inventory_sha256": "fdaf2aade236836ba97f050c8b930f1dd7ecbfa04d58ca5710bd6f5b29f7946c"
+      "source_inventory_sha256": "fdaf2aade236836ba97f050c8b930f1dd7ecbfa04d58ca5710bd6f5b29f7946c",
+      "published": true,
+      "tag_object": "3ee826805b23dd7a7db27f4739dd5a48542c7b79",
+      "release_commit": "373ef0668dfdf17a56ba002bb344197d6779e374"
     },
     {
       "directory": "pockets/authorization/stores/goredis",
@@ -41,7 +50,10 @@
       "sum": "h1:t002wrcfuxriu9hScimZZx30P0qGuG+5BfaKDR6JJAQ=",
       "go_mod_sum": "h1:UjQXXFPAKHggn6HYJQgy5zAkIGyugz+za5ZHTJ2cuNU=",
       "source_entries": 10,
-      "source_inventory_sha256": "553508464b8bb8b337e5a114268bc69d9d81e0c42439880b30bd59df7819949d"
+      "source_inventory_sha256": "553508464b8bb8b337e5a114268bc69d9d81e0c42439880b30bd59df7819949d",
+      "published": true,
+      "tag_object": "5e63951b70528ae9628230f47a76ed3ed371fa02",
+      "release_commit": "373ef0668dfdf17a56ba002bb344197d6779e374"
     }
   ],
   "candidate": {
@@ -90,5 +102,95 @@
     "checksum_exemptions": [],
     "report": "/tmp/gopernicus-authorization-hardening/release/consumer/candidate-results.json",
     "sha256": "f9431a85d547fef1838f70d2e60a73658934db89e7cb54e8922668482e4449f5"
+  },
+  "release_commit": "373ef0668dfdf17a56ba002bb344197d6779e374",
+  "publication": {
+    "release_commit": "373ef0668dfdf17a56ba002bb344197d6779e374",
+    "main_push_verified": true,
+    "tags": [
+      {
+        "tag": "pockets/authorization/v0.17.0",
+        "tag_object": "92138fbef2bbad37cd06c2fd2c15d0255bd66e41",
+        "commit": "373ef0668dfdf17a56ba002bb344197d6779e374"
+      },
+      {
+        "tag": "pockets/authorization/stores/turso/v0.11.0",
+        "tag_object": "b055c0cfc546860b9b93f68b52ce5520c5682b34",
+        "commit": "373ef0668dfdf17a56ba002bb344197d6779e374"
+      },
+      {
+        "tag": "pockets/authorization/stores/pgx/v0.12.0",
+        "tag_object": "3ee826805b23dd7a7db27f4739dd5a48542c7b79",
+        "commit": "373ef0668dfdf17a56ba002bb344197d6779e374"
+      },
+      {
+        "tag": "pockets/authorization/stores/goredis/v0.3.0",
+        "tag_object": "5e63951b70528ae9628230f47a76ed3ed371fa02",
+        "commit": "373ef0668dfdf17a56ba002bb344197d6779e374"
+      }
+    ],
+    "passed": true,
+    "prior_tags_preserved": true
+  },
+  "public_verification": {
+    "passed": true,
+    "gowork": "off",
+    "no_replacements": true,
+    "checksum_exemptions": [],
+    "report": "/tmp/gopernicus-authorization-hardening/release/public/results.json",
+    "sha256": "feb93d0d2dcb1f830f9d4640cdd6d3a78f044a7b3a8cc166f631bcbbb3dec354",
+    "source_matches_candidates": true
+  },
+  "consumer_public": {
+    "passed": true,
+    "gowork": "off",
+    "no_replacements": true,
+    "checksum_exemptions": [],
+    "report": "/tmp/gopernicus-authorization-hardening/release/consumer/public-results.json",
+    "sha256": "8fc8b51c5cec28fb8579ab3493db894e34e7234e1b1182fc6508266ffd348faf"
+  },
+  "public_e2e": {
+    "passed": true,
+    "gowork": "off",
+    "no_replacements": true,
+    "checksum_exemptions": [],
+    "report": "/tmp/gopernicus-authorization-hardening/release/public/e2e-results.json",
+    "sha256": "af06dca82633307c32f563484e864bda8fd17e43614ca0cd37b43c68d176f3d5",
+    "scope": "Actual SQLite-to-Redis race regression from public archives"
+  },
+  "ci": {
+    "passed": false,
+    "run_id": 35039524002,
+    "url": "https://github.com/gopernicus/gopernicus/actions/runs/35039524002",
+    "failure": "Unchanged SDK filestorage TestDisk_Conformance/RangeEdges: Linux seek at MaxInt64 returns EINVAL. No SDK source changed in this release.",
+    "report": "/tmp/gopernicus-authorization-hardening/release/release-ci-failed.log",
+    "sha256": "ff00e50329aa1f570c9628a5a82892d47627c54160a36e9f3b0d569f94899bf5",
+    "all_release_runs": [
+      {
+        "run_id": 35039532789,
+        "ref": "pockets/authorization/stores/goredis/v0.3.0",
+        "conclusion": "failure"
+      },
+      {
+        "run_id": 35039530544,
+        "ref": "pockets/authorization/stores/pgx/v0.12.0",
+        "conclusion": "failure"
+      },
+      {
+        "run_id": 35039528051,
+        "ref": "pockets/authorization/stores/turso/v0.11.0",
+        "conclusion": "failure"
+      },
+      {
+        "run_id": 35039525532,
+        "ref": "pockets/authorization/v0.17.0",
+        "conclusion": "failure"
+      },
+      {
+        "run_id": 35039524002,
+        "ref": "main",
+        "conclusion": "failure"
+      }
+    ]
   }
 }
