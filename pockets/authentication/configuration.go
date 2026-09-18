@@ -30,6 +30,13 @@ func validateRepositories(repos Repositories, cfg constructorConfig) error {
 			return fmt.Errorf("authentication: Repositories.%s is required: %w", required.name, sdk.ErrInvalidInput)
 		}
 	}
+	if cfg.OAuth2 != nil {
+		for _, dependency := range []any{repos.OAuth2, repos.SessionManagement, cfg.OAuth2.Clients, cfg.OAuth2.Views, cfg.Views} {
+			if nilDependency(dependency) {
+				return fmt.Errorf("authentication: OAuth2 requires storage, client trust, browser and consent views: %w", sdk.ErrInvalidInput)
+			}
+		}
+	}
 	if !cfg.PasswordFlowsDisabled && nilDependency(repos.Passwords) {
 		return fmt.Errorf("authentication: password flows require Repositories.Passwords: %w", sdk.ErrInvalidInput)
 	}

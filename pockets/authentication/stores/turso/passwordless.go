@@ -325,18 +325,5 @@ func readActiveUserTurso(ctx context.Context, tx *tursodb.Tx, userID string) (us
 // transaction, applying the ordinary uniqueness contract.
 func insertRedemptionSessionTurso(ctx context.Context, tx *tursodb.Tx, sess session.Session, userID string) (session.Session, error) {
 	sess.UserID = userID
-	methods, err := encodeMethods(sess.Authentication.Methods)
-	if err != nil {
-		return session.Session{}, err
-	}
-	const q = `INSERT INTO sessions (` + sessionColumns + `) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-	if _, err := tx.Exec(ctx, q,
-		sess.ID, sess.UserID, sess.RefreshTokenHash, nullHash(sess.PreviousRefreshTokenHash),
-		tursodb.BoolToInt(sess.PreviousUsed), sess.RotationCount,
-		tursodb.FormatNullTime(sess.Authentication.AuthenticatedAt), methods, string(sess.Authentication.Assurance),
-		tursodb.FormatTime(sess.CreatedAt), tursodb.FormatTime(sess.ExpiresAt),
-	); err != nil {
-		return session.Session{}, tursodb.MapError(err)
-	}
-	return sess, nil
+	return insertSession(ctx, tx, sess)
 }

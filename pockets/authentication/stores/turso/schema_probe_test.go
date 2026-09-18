@@ -14,6 +14,7 @@ import (
 	"database/sql"
 	"errors"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 
@@ -44,7 +45,7 @@ func probeDial(t *testing.T) *tursodb.DB {
 func probeDropAll(t *testing.T, db *tursodb.DB) {
 	t.Helper()
 	ctx := context.Background()
-	for _, tbl := range append(append([]string{}, probeTables...), "schema_migrations") {
+	for _, tbl := range slices.Concat(probeTables, oauth2ProbeTables, []string{"schema_migrations"}) {
 		if _, err := db.Exec(ctx, "DROP TABLE IF EXISTS "+tbl); err != nil {
 			t.Fatalf("drop %s: %v", tbl, err)
 		}
@@ -81,7 +82,7 @@ func TestSchemaProbe_MissingTable(t *testing.T) {
 	db := probeDial(t)
 	t.Cleanup(func() { probeResetSchema(t, db) })
 
-	for _, table := range probeTables {
+	for _, table := range slices.Concat(probeTables, oauth2ProbeTables) {
 		t.Run(table, func(t *testing.T) {
 			probeResetSchema(t, db)
 			if _, err := db.Exec(context.Background(), "DROP TABLE IF EXISTS "+table); err != nil {
@@ -132,7 +133,7 @@ func TestSchemaProbe_CreatesNoSchema(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	for _, table := range probeTables {
+	for _, table := range slices.Concat(probeTables, oauth2ProbeTables) {
 		var name string
 		err := db.QueryRow(ctx,
 			`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?`, table).Scan(&name)

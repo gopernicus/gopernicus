@@ -51,7 +51,7 @@ type credentialHarness struct {
 
 const credentialPassword = "password123456789"
 
-func newCredentialHarness(t *testing.T) *credentialHarness {
+func newCredentialHarness(t *testing.T, delegated ...authlogic.DelegatedTokensConfig) *credentialHarness {
 	t.Helper()
 	users := newMemUsers()
 	sess := &memSessions{m: map[string]session.Session{}}
@@ -59,6 +59,10 @@ func newCredentialHarness(t *testing.T) *credentialHarness {
 	sas := &memServiceAccounts{m: map[string]serviceaccount.ServiceAccount{}}
 	keys := &memAPIKeys{m: map[string]apikey.APIKey{}}
 	events := newSpySecurityEvents()
+	var delegatedConfig authlogic.DelegatedTokensConfig
+	if len(delegated) != 0 {
+		delegatedConfig = delegated[0]
+	}
 	svc := newServiceWithFakes(authenticationFixture{
 		Users:           users,
 		Identifiers:     newMemIdentifiers(users),
@@ -72,6 +76,7 @@ func newCredentialHarness(t *testing.T) *credentialHarness {
 		APIKeys:         keys,
 		SecurityEvents:  events,
 		TokenSigner:     signer,
+		DelegatedTokens: delegatedConfig,
 	})
 
 	h := &credentialHarness{svc: svc, users: users, sess: sess, signer: signer, sas: sas, keys: keys, events: events}

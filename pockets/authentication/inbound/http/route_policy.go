@@ -28,6 +28,8 @@ func PrincipalStrategy(opts ...PrincipalOption) RoutePrincipalStrategy {
 // group. It configures AUTHENTICATION only: it cannot unmount the authenticator
 // from a protected surface, and it never replaces the separate host
 // authorization seams (MachineRoutesGate, UserAdminCheck, InviteCheck).
+// Every bundled group retains a non-overridable delegated-token denial; resource
+// routes that accept Audience belong on the host's own resource surface.
 //
 // An override also owns the inbound context contract of its surface. Handlers
 // that read CurrentUser — and the session-bound credential/step-up handlers that

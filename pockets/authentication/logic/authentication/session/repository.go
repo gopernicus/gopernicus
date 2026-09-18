@@ -20,6 +20,10 @@ var ErrRotationConflict = errors.New("session: refresh rotation conflict")
 // implementation (see the storetest reference). The service hashes every refresh
 // token (SHA-256) before it reaches this port, so the hashes the store persists
 // and matches on are opaque to it; the store does no hashing itself.
+// Profile and Delegation are immutable for the lifetime of a row. Rotation and
+// grace consumption must preserve them; a first-party session is never converted
+// into a delegated connection. Delegated admission requires every binding field
+// to round-trip, so an adapter without that capability cannot admit OAuth tokens.
 //
 // Sentinel contract (the storetest conformance suite executes these):
 //   - Get for an unknown id → sdk.ErrNotFound; for a present row whose ExpiresAt

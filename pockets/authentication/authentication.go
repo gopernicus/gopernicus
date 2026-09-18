@@ -5,6 +5,7 @@ package authentication
 import (
 	authenticationhttp "github.com/gopernicus/gopernicus/pockets/authentication/inbound/http"
 	authlogic "github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/oauth2"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/delivery"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/invitations"
 )
@@ -13,6 +14,7 @@ import (
 // is nil when disabled. HTTP registration and delivery execution are host-owned.
 type Components struct {
 	Authentication *authlogic.Service
+	OAuth2         *oauth2.Service
 	Invitations    *invitations.Service
 	HTTP           *authenticationhttp.Adapter
 	Delivery       *delivery.Runtime

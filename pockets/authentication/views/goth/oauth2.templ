@@ -1,0 +1,45 @@
+package goth
+
+import (
+ authentication "github.com/gopernicus/gopernicus/pockets/authentication/inbound/http"
+ "github.com/gopernicus/gopernicus/ui/goth/components/forms"
+ "github.com/gopernicus/gopernicus/ui/goth/primitives"
+)
+
+templ oauthConsentBody(m authentication.OAuthConsentPage) {
+ @shell("Connect an app", "Review the application and the access you are approving.") {
+  @message(m.PageContext)
+  @errorSummary(m.PageContext)
+  if m.Actor != "" {
+   <p>Signed in as { m.Actor }.</p>
+  }
+  <section aria-labelledby="oauth-client-heading" data-slot="account-section">
+   <h2 id="oauth-client-heading">{ consentClientName(m) }</h2>
+   <dl>
+    <dt>Application website</dt>
+    <dd>{ m.ClientHost }</dd>
+    <dt>Connect to</dt>
+    <dd>{ m.Resource }</dd>
+    <dt>Return to after approval</dt>
+    <dd>{ m.RedirectHost }</dd>
+   </dl>
+  </section>
+  <section aria-labelledby="oauth-access-heading" data-slot="account-section">
+   <h2 id="oauth-access-heading">What you are allowing</h2>
+   <p>{ m.CapabilityDescription }</p>
+   <p>This creates a separate app connection. Signing out of the website keeps this connection active. You can disconnect this app from Sessions and connected apps without signing out of the website or disconnecting other apps.</p>
+  </section>
+  <form method="post" action="/auth/oauth2/authorize">
+   @csrfField(m.PageContext)
+   <input type="hidden" name="request" value={ m.RequestToken }/>
+   @forms.FormActions(forms.FormActionsProps{}) {
+    @primitives.Button(primitives.ButtonProps{Type: primitives.ButtonTypeSubmit, Variant: primitives.ButtonSecondary, Base: primitives.Base{Attributes: templ.Attributes{"name": "decision", "value": "deny"}}}) {
+     Deny
+    }
+    @primitives.Button(primitives.ButtonProps{Type: primitives.ButtonTypeSubmit, Base: primitives.Base{Attributes: templ.Attributes{"name": "decision", "value": "allow"}}}) {
+     Allow connection
+    }
+   }
+  </form>
+ }
+}

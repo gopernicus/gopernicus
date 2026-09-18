@@ -103,6 +103,7 @@ func Run(t *testing.T, newRepos func(t *testing.T) auth.Repositories) {
 	// verified. See useradmin.go.
 	runUserAdmin(t, newRepos)
 	runCredentialAdmission(t, newRepos)
+	RunOAuth2(t, newRepos)
 	runIdentifierMutations(t, newRepos)
 
 	// List search (crud-search-upstream T4): API-key `name` is the pocket's first

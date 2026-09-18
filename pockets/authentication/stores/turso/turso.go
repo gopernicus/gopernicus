@@ -48,6 +48,12 @@ var probeTables = []string{
 	"authentication_grants",
 }
 
+var oauth2ProbeTables = []string{
+	"oauth_clients",
+	"oauth_authorization_codes",
+	"oauth_refresh_history",
+}
+
 // Repositories returns the auth repository set backed by db, WITHOUT touching
 // migrations — AFTER verifying every canonical table (see probeTables) exists
 // (the boot-time probe). It errors with sdk.ErrNotFound naming the specific
@@ -70,11 +76,19 @@ func Repositories(ctx context.Context, db *tursodb.DB) (auth.Repositories, error
 			return auth.Repositories{}, err
 		}
 	}
+	for _, table := range oauth2ProbeTables {
+		if err := probeTable(ctx, db, table); err != nil {
+			return auth.Repositories{}, err
+		}
+	}
+	oauthStore := NewOAuth2Store(db)
 	return auth.Repositories{
 		Users:                NewUserStore(db),
 		Identifiers:          NewIdentifierStore(db),
 		Passwords:            NewPasswordStore(db),
 		Sessions:             NewSessionStore(db),
+		OAuth2:               oauthStore,
+		SessionManagement:    oauthStore,
 		OAuthAccounts:        NewOAuthAccountStore(db),
 		OAuthStates:          NewOAuthStateStore(db),
 		ServiceAccounts:      NewServiceAccountStore(db),
@@ -109,6 +123,8 @@ var probeColumns = []struct{ table, column, migration string }{
 	{"challenges", "subject_key", "0015_challenge_subject_keys.sql"},
 	{"invitations", "metadata", "0016_invitation_metadata.sql"},
 	{"invitations", "resolved_subject_type", "0018_invitation_acceptance.sql"},
+	{"sessions", "session_profile", "0019_oauth2_sessions.sql"},
+	{"sessions", "delegation", "0019_oauth2_sessions.sql"},
 }
 
 // probeColumn verifies one ALTER-added column exists, naming the migration that

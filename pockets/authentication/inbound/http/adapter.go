@@ -20,6 +20,7 @@ import (
 // the HTTP policies for their bundled routes. Host middleware still owns
 // authorization of machine routes; this adapter owns invitation and user policies.
 type adapterConfig struct {
+	OAuth2            *OAuth2Config
 	InviteCheck       InviteCheck
 	UserAdminCheck    UserAdminCheck
 	Authentication    AuthenticationService
@@ -56,6 +57,13 @@ func New(service AuthenticationService, runtimeMode environment.Mode, opts ...Op
 
 	if nilDependency(cfg.Authentication) {
 		return nil, fmt.Errorf("authentication HTTP: Authentication is required: %w", sdk.ErrInvalidInput)
+	}
+	if cfg.OAuth2 != nil {
+		for _, dep := range []any{cfg.OAuth2.Service, cfg.OAuth2.Sessions, cfg.OAuth2.Views, cfg.OAuth2.Limiter, cfg.Views} {
+			if nilDependency(dep) {
+				return nil, fmt.Errorf("authentication HTTP: OAuth2 requires service, sessions, limiter and views: %w", sdk.ErrInvalidInput)
+			}
+		}
 	}
 	if cfg.HTMLPolicy != nil && nilDependency(cfg.Views) {
 		return nil, fmt.Errorf("authentication HTTP: HTMLPolicy requires Views: %w", sdk.ErrInvalidInput)
@@ -96,7 +104,7 @@ func New(service AuthenticationService, runtimeMode environment.Mode, opts ...Op
 		views = cfg.Views
 	}
 	auth.routes = &mountDeps{
-		InviteCheck: cfg.InviteCheck, UserAdminCheck: cfg.UserAdminCheck,
+		InviteCheck: cfg.InviteCheck, UserAdminCheck: cfg.UserAdminCheck, OAuth2: cfg.OAuth2,
 		Auth:        &routedService{AuthenticationService: cfg.Authentication, Adapter: auth},
 		Invitations: inv, ListStrategy: cfg.ListStrategy,
 		Mutation: MutationSecurity{AllowedOrigins: append([]string(nil), cfg.AllowedOrigins...), SessionCookieName: auth.SessionCookieName()},

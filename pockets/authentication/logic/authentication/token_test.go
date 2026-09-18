@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/identifier"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/session"
 	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/ratelimiter"
 	"github.com/gopernicus/gopernicus/sdk/pkg/cryptids"
@@ -20,6 +21,15 @@ import (
 // --- compile-time seam assertion ---
 
 var _ cryptids.JWTSigner = (*fakeSigner)(nil)
+
+// verifyBearerClaims projects first-party identity for existing login fixtures.
+func (s *Service) verifyBearerClaims(raw string) (userID, sessionID string, ok bool) {
+	userID, cred, ok := s.verifyAccessClaims(raw)
+	if !ok || cred.Profile != session.ProfileFirstParty {
+		return "", "", false
+	}
+	return userID, cred.SessionID, true
+}
 
 // fakeSigner is an honest in-package cryptids.JWTSigner (cut refinement 10 keeps
 // golang-jwt out of the pocket core; the real integration is exercised

@@ -28,6 +28,7 @@ import (
 // RuntimeMode and DeliveryMode are explicit; New validates dependencies for each
 // enabled feature. Individual logic and HTTP packages also offer constructors.
 type constructorConfig struct {
+	OAuth2                        *OAuth2Config
 	AuthenticationLimits          authlogic.AuthenticationLimits
 	Hasher                        authlogic.Hasher
 	ValidatePassword              func(context.Context, string) error

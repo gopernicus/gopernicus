@@ -30,6 +30,7 @@ import (
 // TRUNCATE clears them so a Repositories starts empty (no enforced FKs, matching
 // the turso store's logged decision).
 var authTables = []string{
+	oauthClientsTable, oauthCodesTable, oauthHistoryTable,
 	passwordsTable,
 	sessionsTable,
 	apiKeysTable,

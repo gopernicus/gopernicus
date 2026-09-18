@@ -7,6 +7,7 @@ import (
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/contactchange"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/credential"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/identifier"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/oauth2"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/oauthaccount"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/oauthstate"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/passwordless"
@@ -34,6 +35,10 @@ type Repositories struct {
 	Identifiers identifier.IdentifierRepository
 	Passwords   user.PasswordRepository
 	Sessions    session.SessionRepository
+	// OAuth2 and SessionManagement are optional for existing first-party hosts.
+	// Enabling the authorization server requires both, sharing Users/Sessions.
+	OAuth2            oauth2.Repository
+	SessionManagement session.ManagementRepository
 	// OAuthAccounts and OAuthStates back the OAuth flow (design §3). They may be
 	// nil when OAuthConfig.Providers is empty (OAuth off); wiring providers without
 	// them is ErrOAuthReposRequired at construction.

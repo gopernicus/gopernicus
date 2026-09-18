@@ -335,6 +335,10 @@ func (h *handlers) logoutForm(w http.ResponseWriter, r *http.Request) {
 		accessToken = c.Value
 	}
 	err := h.svc.Logout(r.Context(), refreshToken, accessToken)
+	if errors.Is(err, authlogic.ErrDelegatedCredential) {
+		h.renderError(w, r, http.StatusUnauthorized, "This credential cannot sign out a web session.")
+		return
+	}
 	h.svc.ClearSessionCookies(w)
 	if err != nil {
 		status, message := formFailure(err, "Signed out on this device. We could not confirm that the session was revoked.")

@@ -165,6 +165,7 @@ type constructorConfig struct {
 	Normalizer              identifier.Normalizer
 	Passwords               user.PasswordRepository
 	Sessions                session.SessionRepository
+	SessionManagement       session.ManagementRepository
 	UserAdmin               user.AdminRepository
 	PasswordlessRedeem      passwordless.Repository
 	ProvisionOnRedeem       bool
@@ -202,6 +203,7 @@ type constructorConfig struct {
 	ServiceAccounts         serviceaccount.ServiceAccountRepository
 	APIKeys                 apikey.APIKeyRepository
 	TokenSigner             cryptids.JWTSigner
+	DelegatedTokens         DelegatedTokensConfig
 	AccessTokenTTL          time.Duration
 	RefreshTTL              time.Duration
 	Passwordless            []string
@@ -220,9 +222,10 @@ type Service struct {
 	identifiers identifier.IdentifierRepository
 	// normalizer is the single injected identifier-value canonicalizer (design
 	// §2.2); nil-defaulted to identifier.DefaultNormalizer in New.
-	normalizer identifier.Normalizer
-	passwords  user.PasswordRepository
-	sessions   session.SessionRepository
+	normalizer        identifier.Normalizer
+	passwords         user.PasswordRepository
+	sessions          session.SessionRepository
+	sessionManagement session.ManagementRepository
 	// challenges backs the atomic secret rail (design §3.2); protector protects
 	// its codes/tokens (design §3.3). Both nil → the challenge service methods
 	// refuse (the subsystem is off).
@@ -292,9 +295,10 @@ type Service struct {
 	// Access-JWT signer and TTLs (§1.1). tokenSigner is always wired (the public
 	// constructor requires it, D3). accessTTL is the access-JWT lifetime;
 	// refreshTTL is the fixed refresh/session horizon (rotation never extends it).
-	tokenSigner cryptids.JWTSigner
-	accessTTL   time.Duration
-	refreshTTL  time.Duration
+	tokenSigner     cryptids.JWTSigner
+	delegatedTokens DelegatedTokensConfig
+	accessTTL       time.Duration
+	refreshTTL      time.Duration
 
 	// passwordless is the resolved set of enabled passwordless kinds (PasswordlessConfig.Passwordless),
 	// keyed by kind for O(1) lookups. Empty when passwordless is off; the transport
@@ -374,6 +378,7 @@ func newService(d constructorConfig) *Service {
 		normalizer:           normalizer,
 		passwords:            d.Passwords,
 		sessions:             d.Sessions,
+		sessionManagement:    d.SessionManagement,
 		challenges:           d.Challenges,
 		protector:            d.Protector,
 		passwordResets:       d.PasswordResets,
@@ -408,6 +413,7 @@ func newService(d constructorConfig) *Service {
 		serviceAccounts:    d.ServiceAccounts,
 		apiKeys:            d.APIKeys,
 		tokenSigner:        d.TokenSigner,
+		delegatedTokens:    d.DelegatedTokens,
 		accessTTL:          accessTTL,
 		refreshTTL:         refreshTTL,
 		passwordless:       passwordless,
@@ -673,6 +679,19 @@ func (s *Service) recordLogin(ctx context.Context, userID, email, status string)
 //
 // A blank refresh token and a blank access token together are a no-op success.
 func (s *Service) Logout(ctx context.Context, refreshToken, accessToken string) error {
+	if session.IsDelegatedRefreshToken(refreshToken) {
+		return ErrDelegatedCredential
+	}
+	var accessUserID string
+	var accessCredential Credential
+	var accessVerified bool
+	if accessToken != "" {
+		var err error
+		accessUserID, accessCredential, accessVerified, err = s.firstPartyLogoutToken(accessToken)
+		if err != nil {
+			return err
+		}
+	}
 	sessionID := ""
 	if refreshToken != "" {
 		hash, err := s.hashSessionToken(refreshToken)
@@ -682,17 +701,33 @@ func (s *Service) Logout(ctx context.Context, refreshToken, accessToken string) 
 		sess, _, err := s.sessions.GetByRefreshHash(ctx, hash)
 		switch {
 		case err == nil:
+			if !sess.FirstParty() {
+				return ErrDelegatedCredential
+			}
 			sessionID = sess.ID
 		case !errors.Is(err, sdk.ErrNotFound):
 			return err
 		}
 	}
 	if sessionID == "" && accessToken != "" {
-		_, id, ok := s.verifyBearerClaims(accessToken)
-		if !ok || id == "" {
+		if !accessVerified || accessCredential.SessionID == "" {
 			return invalidCredentials()
 		}
-		sessionID = id
+		sess, err := s.sessions.Get(ctx, accessCredential.SessionID)
+		switch {
+		case err == nil:
+			if !sess.FirstParty() {
+				return ErrDelegatedCredential
+			}
+			if sess.ID != accessCredential.SessionID || sess.UserID != accessUserID {
+				return invalidCredentials()
+			}
+		case errors.Is(err, sdk.ErrExpired):
+			return invalidCredentials()
+		case !errors.Is(err, sdk.ErrNotFound):
+			return err
+		}
+		sessionID = accessCredential.SessionID
 	}
 	if sessionID != "" {
 		if err := s.sessions.Delete(ctx, sessionID); err != nil && !errors.Is(err, sdk.ErrNotFound) {
@@ -963,6 +998,7 @@ func (s *Service) signAccessToken(userID, sessionID string) (string, time.Time, 
 	token, err := s.tokenSigner.Sign(map[string]any{
 		tokenClaimUserID:    userID,
 		tokenClaimSessionID: sessionID,
+		tokenClaimProfile:   string(session.ProfileFirstParty),
 	}, expiresAt)
 	if err != nil {
 		return "", time.Time{}, fmt.Errorf("sign access token: %w", err)

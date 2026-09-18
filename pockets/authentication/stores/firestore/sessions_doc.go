@@ -81,6 +81,9 @@ func sessionByPreviousHashQuery(db *firestoredb.DB, hash string) gcfs.Query {
 // so a retry mints a fresh one rather than reusing an id a rolled-back attempt
 // claimed (N-D5); this one is hoisted precisely because it cannot.
 func newSessionDoc(sess session.Session) (sessionDoc, error) {
+	if !sess.FirstParty() {
+		return sessionDoc{}, fmt.Errorf("Firestore does not support delegated sessions: %w", sdk.ErrInvalidInput)
+	}
 	methods, err := encodeMethods(sess.Authentication.Methods)
 	if err != nil {
 		return sessionDoc{}, err

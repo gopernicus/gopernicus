@@ -2,6 +2,7 @@ package authentication
 
 import (
 	"context"
+	"slices"
 
 	"github.com/gopernicus/gopernicus/sdk"
 )
@@ -62,7 +63,9 @@ func (s *Service) CurrentCredential(ctx context.Context) (Credential, bool) {
 	if !ok {
 		return Credential{}, false
 	}
-	return proof.credential, true
+	credential := proof.credential
+	credential.Audiences = slices.Clone(credential.Audiences)
+	return credential, true
 }
 
 // clientInfo is the request's client attribution — the remote IP and User-Agent.

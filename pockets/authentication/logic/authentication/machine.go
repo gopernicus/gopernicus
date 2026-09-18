@@ -9,6 +9,7 @@ import (
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/apikey"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/securityevent"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/serviceaccount"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/session"
 	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/pkg/cryptids"
 	"github.com/gopernicus/gopernicus/sdk/pkg/list"
@@ -298,16 +299,18 @@ func (s *Service) CurrentPrincipal(ctx context.Context) (Principal, bool) {
 
 // verifyAccessTokenCredential verifies an access JWT presented over transport and builds
 // its Principal + Credential. The signer is always wired (D3), so verification
-// covers signature + expiry; the session_id claim rides along unproven until a
-// Live() gate looks it up.
+// covers signature + expiry. First-party session_id remains unproven until a
+// Live() gate; Authenticate always checks delegated session liveness.
 func (s *Service) verifyAccessTokenCredential(raw string, transport Transport) (Principal, Credential, bool) {
-	userID, sessionID, ok := s.verifyBearerClaims(raw)
+	userID, cred, ok := s.verifyAccessClaims(raw)
 	if !ok {
 		return Principal{}, Credential{}, false
 	}
-	return Principal{Type: PrincipalUser, ID: userID},
-		Credential{Kind: CredentialAccessToken, Transport: transport, SessionID: sessionID},
-		true
+	if cred.Profile == session.ProfileDelegated && (transport != TransportHeader || s.delegatedTokens.Issuer == "" || cred.Issuer != s.delegatedTokens.Issuer) {
+		return Principal{}, Credential{}, false
+	}
+	cred.Transport = transport
+	return Principal{Type: PrincipalUser, ID: userID}, cred, true
 }
 
 // enforceCredentialLiveness applies the Live() tier to an already-resolved credential and
@@ -318,19 +321,57 @@ func (s *Service) verifyAccessTokenCredential(raw string, transport Transport) (
 //     missing, expired, or unreadable row denies — fails CLOSED (D1);
 //   - API key: already DB-checked at resolution and owning no session row, it
 //     passes without another lookup;
-//   - a session id already proven by an OUTER Live() passes without a second
-//     lookup.
+//   - a first-party session already proven by an outer Live() reuses that read.
+//     Delegated credentials always re-read; a transport may reuse the context
+//     for its next operation after the connection has been revoked.
 func (s *Service) enforceCredentialLiveness(ctx context.Context, cred Credential) (context.Context, bool) {
 	if cred.Kind != CredentialAccessToken {
 		return ctx, true
 	}
-	if id, proven := s.CurrentSessionID(ctx); proven && id == cred.SessionID {
+	if id, proven := s.CurrentSessionID(ctx); cred.Profile == session.ProfileFirstParty && proven && id == cred.SessionID {
 		return ctx, true
 	}
-	if !s.sessionLive(ctx, cred.SessionID) {
-		return ctx, false
+	proof, ok := s.currentProof(ctx)
+	if !ok || !s.credentialSessionLive(ctx, proof.principal, cred) {
+		return clearCredential(ctx), false
 	}
 	return s.withSessionID(ctx, cred.SessionID), true
+}
+
+func (s *Service) credentialSessionLive(ctx context.Context, principal Principal, cred Credential) bool {
+	if s.sessions == nil || cred.SessionID == "" || principal.Type != PrincipalUser || principal.ID == "" {
+		return false
+	}
+	sess, err := s.sessions.Get(ctx, cred.SessionID)
+	if err != nil || sess.ID != cred.SessionID || sess.UserID != principal.ID || sess.Expired(s.now()) {
+		return false
+	}
+	if cred.Profile == session.ProfileFirstParty {
+		return sess.FirstParty()
+	}
+	if cred.Profile != session.ProfileDelegated || sess.Profile != session.ProfileDelegated || !s.now().Before(cred.accessExpiresAt) || s.users == nil || !s.delegationMatches(sess.Delegation, cred) {
+		return false
+	}
+	u, err := s.users.Get(ctx, principal.ID)
+	return err == nil && u.ID == principal.ID && u.Active() && ctx.Err() == nil
+}
+
+func (s *Service) delegationMatches(binding session.Delegation, cred Credential) bool {
+	if s.delegatedTokens.Issuer == "" || cred.Issuer != s.delegatedTokens.Issuer || binding.Issuer != cred.Issuer || len(cred.Audiences) != 1 {
+		return false
+	}
+	for _, value := range []string{binding.ClientID, binding.Resource, binding.ExchangeResource, binding.ExchangeClientID} {
+		if _, ok := claimString(value); !ok {
+			return false
+		}
+	}
+	if binding.Resource == binding.ExchangeResource || binding.ClientID == binding.ExchangeClientID {
+		return false
+	}
+	if cred.ActorID == "" && cred.OriginClientID == "" {
+		return cred.ClientID == binding.ClientID && cred.Audiences[0] == binding.Resource
+	}
+	return cred.ClientID == binding.ExchangeClientID && cred.ActorID == binding.ExchangeClientID && cred.OriginClientID == binding.ClientID && cred.Audiences[0] == binding.ExchangeResource
 }
 
 // hashAPIKey returns the stored form of a raw API key — its SHA-256 hex digest

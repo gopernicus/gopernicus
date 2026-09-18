@@ -498,6 +498,7 @@ func (h *handlers) changePasswordJSON(w http.ResponseWriter, r *http.Request) {
 // able to log out with its refresh credential. Native clients may supply
 // refresh_token in a JSON body; an explicit value takes precedence over cookies.
 // Server-side revocation errors are returned after clearing browser cookies.
+// A rejected delegated credential leaves the browser's session cookies intact.
 func (h *handlers) logoutJSON(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		RefreshToken string `json:"refresh_token"`
@@ -521,7 +522,9 @@ func (h *handlers) logoutJSON(w http.ResponseWriter, r *http.Request) {
 		accessToken = c.Value
 	}
 	err := h.svc.Logout(r.Context(), refreshToken, accessToken)
-	h.svc.ClearSessionCookies(w)
+	if !errors.Is(err, authlogic.ErrDelegatedCredential) {
+		h.svc.ClearSessionCookies(w)
+	}
 	if err != nil {
 		web.RespondJSONDomainError(w, err)
 		return

@@ -100,6 +100,7 @@ func pocketBoundaryFindings(root, modulePath string, checkLogic bool) ([]pocketB
 			if checkLogic && isLogic && !isTest && (importPath == "net/http" || strings.HasPrefix(importPath, "net/http/") ||
 				importPath == baseModule+"/sdk/pkg/web" || importPath == modulePath ||
 				importPath == modulePath+"/inbound" || strings.HasPrefix(importPath, modulePath+"/inbound/") ||
+				importPath == modulePath+"/outbound" || strings.HasPrefix(importPath, modulePath+"/outbound/") ||
 				importPath == modulePath+"/internal/inbound" || strings.HasPrefix(importPath, modulePath+"/internal/inbound/")) {
 				add("logic", "logic must not depend on transport or root composition: "+importPath)
 			}
@@ -211,6 +212,7 @@ func TestPocketBoundaryFixtures(t *testing.T) {
 		{"logic cannot write HTTP", "internal/logic/service.go", `package logic; import "net/http"`, "logic", false},
 		{"public logic cannot write HTTP", "logic/notes/service.go", `package notes; import "net/http"`, "logic", false},
 		{"public logic cannot import public inbound", "logic/notes/service.go", `package notes; import "example.com/notes/inbound/http"`, "logic", false},
+		{"public logic cannot import concrete outbound", "logic/notes/service.go", `package notes; import "example.com/notes/outbound/client"`, "logic", false},
 		{"public logic cannot import root composition", "logic/notes/service.go", `package notes; import "example.com/notes"`, "logic", false},
 		{"public logic cannot hide behind a module", "logic/notes/service.go", `package notes; import "net/http"`, "isolation", true},
 		{"public HTTP may consume logic", "inbound/http/routes.go", `package noteshttp; import "example.com/notes/logic/notes"`, "", false},

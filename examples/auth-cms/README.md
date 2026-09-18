@@ -942,3 +942,31 @@ copying the public state URL alone cannot complete a login/link. The example's
 HTTP tests verify that a foreign browser fails and the original can still finish.
 Native authorization-code support is opt-in through exact host callback
 configuration; see the authentication README and root AUDIT-015.
+
+## Local MCP OAuth connection proof
+
+Enable `AUTH_OAUTH2_DEMO=true` in development and open
+`http://localhost:8082/oauth-demo`. The default is off; production mode and
+non-loopback/non-HTTP fixture origins are rejected. This is a local identity
+proof, not an MCP protocol implementation or an actual Claude connector.
+
+Sign in through the existing web flow, then connect slots A and B separately.
+Each opens the real consent endpoint and redeems its own PKCE-bound code over
+HTTP. “Call API” sends the MCP token to the local MCP stand-in, which uses
+confidential authenticated introspection and token exchange before calling the
+API with its API-only token. Tokens remain in the demo's bounded server memory;
+only random demo-session cookies reach the browser. The confidential client
+secret is random per startup, and no external service is contacted.
+
+At `/auth/sessions`, disconnect A and verify its API call fails while B and the
+web session work. Log out of the web application and verify B can still refresh
+and call the API. Log back in and revoke all sessions; B must then fail. A/B are
+independent connections to the same public client, matching repeated installations.
+Replacing a demo slot leaves its earlier server session visible for owner revocation.
+The fixture vault expires after an hour; the authorization-server session follows
+its separately configured lifetime. Memory state is lost when the app stops.
+
+Automated cross-module acceptance lives in `cmd/server/oauth2_test.go`. It uses
+real TLS listeners, independent HTTP cookie jars, the real signer/store/views,
+and actual authorize/token/refresh/exchange/introspection/revocation requests.
+Run `go test -race ./cmd/server -run '^TestOAuth2'` from this module.

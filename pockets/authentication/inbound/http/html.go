@@ -344,10 +344,11 @@ func (h *handlers) accountPage(w http.ResponseWriter, r *http.Request) {
 	pc.Actor = maskedPrimary(view)
 	pc.Message = outcomeMessage(accountOutcomes, r.URL.Query().Get("auth"))
 	m := AccountSecurityPage{
-		PageContext: pc,
-		HasPassword: view.HasPassword,
-		OAuth:       make([]OAuthMethod, 0, len(view.OAuth)),
-		Identifiers: make([]IdentifierMethod, 0, len(view.Identifiers)),
+		SessionsEnabled: h.oauth2 != nil,
+		PageContext:     pc,
+		HasPassword:     view.HasPassword,
+		OAuth:           make([]OAuthMethod, 0, len(view.OAuth)),
+		Identifiers:     make([]IdentifierMethod, 0, len(view.Identifiers)),
 	}
 	for _, o := range view.OAuth {
 		entry := OAuthMethod{Provider: o.Provider, Assurance: o.Assurance, Removable: o.Removable}

@@ -5,8 +5,6 @@ github.com/gopernicus/gopernicus/integrations/datastores/pgxdb v0.7.1 h1:fSVdk6V
 github.com/gopernicus/gopernicus/integrations/datastores/pgxdb v0.7.1/go.mod h1:m73aQqKrcCcr/XY5CwqUY5REpUg0Pwr1r3i+YfpAPJg=
 github.com/gopernicus/gopernicus/pockets v0.1.0 h1:2WcybbfPw1km00DmG37CekPbxYmObyyj3T1Ec0eFSRY=
 github.com/gopernicus/gopernicus/pockets v0.1.0/go.mod h1:A2H/Tl9Pn2v2mFLOgkCQngMRFkMN10E1MEzGCQICsEw=
-github.com/gopernicus/gopernicus/pockets/authentication v0.11.1 h1:QPgKOti/1vfmDr+2TCN8iHxKycLe5QUKoilm6G9dNgQ=
-github.com/gopernicus/gopernicus/pockets/authentication v0.11.1/go.mod h1:V4s8PuUv/BPWtuLigf9aVCYEcSA+tklqVUnMnTkxvg4=
 github.com/gopernicus/gopernicus/sdk v0.9.0 h1:g7rTlx/W8Dzb0VwsGJhfhas2hK2L7I61BELPuGQCLZY=
 github.com/gopernicus/gopernicus/sdk v0.9.0/go.mod h1:z0bypQiCybwPoxoDfzhYvB1BtH2av549QR84GacngaE=
 github.com/jackc/pgpassfile v1.0.0 h1:/6Hmqy13Ss2zCq62VdNG8tM1wchn8zjSGOBJ6icpsIM=
@@ -21,10 +19,10 @@ github.com/pmezard/go-difflib v1.0.0/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZN
 github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 h1:Jamvg5psRIccs7FGNTlIRMkT8wgtp5eCXdBlqhYGL6U=
 github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=
 github.com/stretchr/objx v0.1.0/go.mod h1:HFkY916IF+rwdDfMAkV7OtwuqBVzrE8GR6GFx+wExME=
-github.com/stretchr/testify v1.11.1 h1:7s2iGBzp5EwR7/aIZr8ao5+dra3wiQyKjjFuvgVKu7U=
-github.com/stretchr/testify v1.11.1/go.mod h1:wZwfW3scLgRK+23gO65QZefKpKQRnfz6sD981Nm4B6U=
 github.com/stretchr/testify v1.3.0/go.mod h1:M5WIy9Dh21IEIfnGCwXGc5bZfKNJtfHm1UVUgZn+9EI=
 github.com/stretchr/testify v1.7.0/go.mod h1:6Fq8oRcR53rry900zMqJjRRixrwX3KX962/h/Wwjteg=
+github.com/stretchr/testify v1.11.1 h1:7s2iGBzp5EwR7/aIZr8ao5+dra3wiQyKjjFuvgVKu7U=
+github.com/stretchr/testify v1.11.1/go.mod h1:wZwfW3scLgRK+23gO65QZefKpKQRnfz6sD981Nm4B6U=
 golang.org/x/sync v0.21.0 h1:HLII4xRRTtCRkxYp4HNFF0Js/Og6q2i++KXbg0gHCwM=
 golang.org/x/sync v0.21.0/go.mod h1:9xrNwdLfx4jkKbNva9FpL6vEN7evnE43NNNJQ2LF3+0=
 golang.org/x/text v0.38.0 h1:sXmwo9DwP3OK9EZ7PqAdaooSGozfl/3a6/xJcbzPRhE=
@@ -33,3 +31,5 @@ gopkg.in/check.v1 v0.0.0-20161208181325-20d25e280405/go.mod h1:Co6ibVJAznAaIkqp8
 gopkg.in/yaml.v3 v3.0.0-20200313102051-9f266ea9e77c/go.mod h1:K4uyk7z7BCEPqu6E+C64Yfv1cQ7kz7rIZviUmN+EgEM=
 gopkg.in/yaml.v3 v3.0.1 h1:fxVm/GzAzEWqLHuvctI91KS9hhNmmWOoWu0XTYJS7CA=
 gopkg.in/yaml.v3 v3.0.1/go.mod h1:K4uyk7z7BCEPqu6E+C64Yfv1cQ7kz7rIZviUmN+EgEM=
+github.com/gopernicus/gopernicus/pockets/authentication v0.13.0 h1:NbW2Igun43yRhse8vcsVYF+CPYMGeVpRExkZ7SLgaIY=
+github.com/gopernicus/gopernicus/pockets/authentication v0.13.0/go.mod h1:V4s8PuUv/BPWtuLigf9aVCYEcSA+tklqVUnMnTkxvg4=

@@ -240,3 +240,28 @@ func TestPublicOptionsRequireExplicitPrerequisites(t *testing.T) {
 		t.Fatalf("password policy replacement: %v", err)
 	}
 }
+
+func TestDelegatedIssuerConfiguration(t *testing.T) {
+	d := validDeps()
+	for _, issuer := range []string{" ", "not-a-url", "https:///no-host", "ftp://issuer.example.test", "https://user:secret@issuer.example.test", "https://issuer.example.test?scope=other", "https://issuer.example.test#fragment", " https://issuer.example.test"} {
+		t.Run(issuer, func(t *testing.T) {
+			_, err := authentication.New(authentication.Repositories{Users: d.Users, Identifiers: d.Identifiers, Sessions: d.Sessions, ActiveSessions: d.ActiveSessions}, d.TokenSigner, d.RuntimeMode, d.Limiter,
+				authentication.WithPassword(authentication.PasswordConfig{PasswordFlowsDisabled: true}),
+				authentication.WithDelegatedTokens(authentication.DelegatedTokensConfig{Issuer: issuer}),
+			)
+			if !errors.Is(err, sdk.ErrInvalidInput) {
+				t.Fatalf("invalid issuer accepted: %v", err)
+			}
+		})
+	}
+	for _, issuer := range []string{"", "https://issuer.example.test/auth", "http://localhost:8082"} {
+		_, err := authentication.New(authentication.Repositories{Users: d.Users, Identifiers: d.Identifiers, Sessions: d.Sessions, ActiveSessions: d.ActiveSessions}, d.TokenSigner, d.RuntimeMode, d.Limiter,
+			authentication.WithPassword(authentication.PasswordConfig{PasswordFlowsDisabled: true}),
+			authentication.WithDelegatedTokens(authentication.DelegatedTokensConfig{Issuer: "https://replaced.example.test"}),
+			authentication.WithDelegatedTokens(authentication.DelegatedTokensConfig{Issuer: issuer}),
+		)
+		if err != nil {
+			t.Fatalf("valid issuer %q rejected: %v", issuer, err)
+		}
+	}
+}

@@ -23,6 +23,9 @@ import (
 // truncation pass respects any conventional user_id references: api_keys before
 // service_accounts, and the oauth/audit/invitation tables before users.
 var authTables = []string{
+	"oauth_clients",
+	"oauth_authorization_codes",
+	"oauth_refresh_history",
 	"user_passwords",
 	"sessions",
 	"api_keys",

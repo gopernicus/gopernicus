@@ -2,6 +2,7 @@ package pgx
 
 import (
 	"context"
+	"encoding/json"
 	"time"
 
 	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
@@ -35,7 +36,7 @@ func NewSessionStore(db *pgxdb.DB, opts ...Option) *SessionStore {
 	return &SessionStore{db: db, qualified: qualified{schema: applyOptions(opts).schema}}
 }
 
-const sessionColumns = "id, user_id, refresh_token_hash, previous_refresh_token_hash, previous_used, rotation_count, authenticated_at, authentication_methods, assurance_level, created_at, expires_at"
+const sessionColumns = "id, user_id, session_profile, delegation, refresh_token_hash, previous_refresh_token_hash, previous_used, rotation_count, authenticated_at, authentication_methods, assurance_level, created_at, expires_at"
 
 // sessionRow is the store-local, db-tagged projection of a sessions row. The
 // nullable previous slot scans into a *string so a NULL (a fresh, never-rotated
@@ -47,6 +48,8 @@ const sessionColumns = "id, user_id, refresh_token_hash, previous_refresh_token_
 type sessionRow struct {
 	ID                       string     `db:"id"`
 	UserID                   string     `db:"user_id"`
+	Profile                  string     `db:"session_profile"`
+	Delegation               string     `db:"delegation"`
 	RefreshTokenHash         string     `db:"refresh_token_hash"`
 	PreviousRefreshTokenHash *string    `db:"previous_refresh_token_hash"`
 	PreviousUsed             bool       `db:"previous_used"`
@@ -67,7 +70,12 @@ func (r sessionRow) toDomain() (session.Session, error) {
 	if err != nil {
 		return session.Session{}, err
 	}
+	var delegation session.Delegation
+	if err := json.Unmarshal([]byte(r.Delegation), &delegation); err != nil {
+		return session.Session{}, err
+	}
 	return session.Session{
+		Profile: session.Profile(r.Profile), Delegation: delegation,
 		ID:                       r.ID,
 		UserID:                   r.UserID,
 		RefreshTokenHash:         r.RefreshTokenHash,
@@ -96,25 +104,11 @@ func nullHash(h string) *string {
 // Create persists a new session; a colliding refresh_token_hash → sdk.ErrAlreadyExists
 // (the unique index, routed through MapError).
 func (s *SessionStore) Create(ctx context.Context, sess session.Session) (session.Session, error) {
-	methods, err := encodeMethods(sess.Authentication.Methods)
+	args, err := sessionArgs(sess)
 	if err != nil {
 		return session.Session{}, err
 	}
-	q := `INSERT INTO ` + s.table(sessionsTable) + ` (` + sessionColumns + `)
-		VALUES (@id, @user_id, @refresh_token_hash, @previous_refresh_token_hash, @previous_used, @rotation_count, @authenticated_at, @authentication_methods, @assurance_level, @created_at, @expires_at)`
-	_, err = s.db.Exec(ctx, q, pgx.NamedArgs{
-		"id":                          sess.ID,
-		"user_id":                     sess.UserID,
-		"refresh_token_hash":          sess.RefreshTokenHash,
-		"previous_refresh_token_hash": nullHash(sess.PreviousRefreshTokenHash),
-		"previous_used":               sess.PreviousUsed,
-		"rotation_count":              sess.RotationCount,
-		"authenticated_at":            pgxdb.NullTime(sess.Authentication.AuthenticatedAt),
-		"authentication_methods":      methods,
-		"assurance_level":             string(sess.Authentication.Assurance),
-		"created_at":                  sess.CreatedAt.UTC(),
-		"expires_at":                  sess.ExpiresAt.UTC(),
-	})
+	_, err = s.db.Exec(ctx, sessionInsert(s.table(sessionsTable)), args)
 	if err != nil {
 		return session.Session{}, pgxdb.MapError(err)
 	}
@@ -225,4 +219,31 @@ func (s *SessionStore) DeleteByUser(ctx context.Context, userID string) error {
 		return pgxdb.MapError(err)
 	}
 	return nil
+}
+
+func sessionArgs(sess session.Session) (pgx.NamedArgs, error) {
+	methods, err := encodeMethods(sess.Authentication.Methods)
+	if err != nil {
+		return nil, err
+	}
+	delegation, err := json.Marshal(sess.Delegation)
+	if err != nil {
+		return nil, err
+	}
+	profile := sess.Profile
+	if profile == "" && sess.FirstParty() {
+		profile = session.ProfileFirstParty
+	}
+	return pgx.NamedArgs{
+		"id": sess.ID, "user_id": sess.UserID, "session_profile": string(profile), "delegation": string(delegation),
+		"refresh_token_hash": sess.RefreshTokenHash, "previous_refresh_token_hash": nullHash(sess.PreviousRefreshTokenHash),
+		"previous_used": sess.PreviousUsed, "rotation_count": sess.RotationCount,
+		"authenticated_at": pgxdb.NullTime(sess.Authentication.AuthenticatedAt), "authentication_methods": methods,
+		"assurance_level": string(sess.Authentication.Assurance), "created_at": sess.CreatedAt.UTC(), "expires_at": sess.ExpiresAt.UTC(),
+	}, nil
+}
+
+func sessionInsert(table string) string {
+	return `INSERT INTO ` + table + ` (` + sessionColumns + `)
+ VALUES (@id, @user_id, @session_profile, @delegation, @refresh_token_hash, @previous_refresh_token_hash, @previous_used, @rotation_count, @authenticated_at, @authentication_methods, @assurance_level, @created_at, @expires_at)`
 }

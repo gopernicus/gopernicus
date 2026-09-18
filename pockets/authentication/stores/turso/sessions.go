@@ -3,6 +3,7 @@ package turso
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"time"
 
 	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
@@ -34,7 +35,7 @@ func NewSessionStore(db *tursodb.DB) *SessionStore {
 	return &SessionStore{db: db}
 }
 
-const sessionColumns = "id, user_id, refresh_token_hash, previous_refresh_token_hash, previous_used, rotation_count, authenticated_at, authentication_methods, assurance_level, created_at, expires_at"
+const sessionColumns = "id, user_id, refresh_token_hash, previous_refresh_token_hash, previous_used, rotation_count, authenticated_at, authentication_methods, assurance_level, created_at, expires_at, session_profile, delegation"
 
 // sessionRow is the store-local, db-tagged projection of a sessions row. The
 // nullable previous slot scans into sql.NullString so a NULL (a fresh, never-rotated
@@ -56,6 +57,8 @@ type sessionRow struct {
 	AssuranceLevel           string           `db:"assurance_level"`
 	CreatedAt                tursodb.Time     `db:"created_at"`
 	ExpiresAt                tursodb.Time     `db:"expires_at"`
+	Profile                  string           `db:"session_profile"`
+	Delegation               string           `db:"delegation"`
 }
 
 func (r sessionRow) toDomain() (session.Session, error) {
@@ -63,9 +66,15 @@ func (r sessionRow) toDomain() (session.Session, error) {
 	if err != nil {
 		return session.Session{}, err
 	}
+	var delegation session.Delegation
+	if err := json.Unmarshal([]byte(r.Delegation), &delegation); err != nil {
+		return session.Session{}, err
+	}
 	return session.Session{
 		ID:                       r.ID,
 		UserID:                   r.UserID,
+		Profile:                  session.Profile(r.Profile),
+		Delegation:               delegation,
 		RefreshTokenHash:         r.RefreshTokenHash,
 		PreviousRefreshTokenHash: r.PreviousRefreshTokenHash.String,
 		PreviousUsed:             bool(r.PreviousUsed),
@@ -92,16 +101,29 @@ func nullHash(h string) any {
 // Create persists a new session; a colliding refresh_token_hash → sdk.ErrAlreadyExists
 // (the unique index, routed through MapError).
 func (s *SessionStore) Create(ctx context.Context, sess session.Session) (session.Session, error) {
+	return insertSession(ctx, s.db, sess)
+}
+
+func insertSession(ctx context.Context, db tursodb.Querier, sess session.Session) (session.Session, error) {
 	methods, err := encodeMethods(sess.Authentication.Methods)
 	if err != nil {
 		return session.Session{}, err
 	}
-	const q = `INSERT INTO sessions (` + sessionColumns + `) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-	_, err = s.db.Exec(ctx, q,
+	delegation, err := json.Marshal(sess.Delegation)
+	if err != nil {
+		return session.Session{}, err
+	}
+	profile := sess.Profile
+	if profile == "" && sess.FirstParty() {
+		profile = session.ProfileFirstParty
+	}
+	const q = `INSERT INTO sessions (` + sessionColumns + `) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	_, err = db.Exec(ctx, q,
 		sess.ID, sess.UserID, sess.RefreshTokenHash, nullHash(sess.PreviousRefreshTokenHash),
 		tursodb.BoolToInt(sess.PreviousUsed), sess.RotationCount,
 		tursodb.FormatNullTime(sess.Authentication.AuthenticatedAt), methods, string(sess.Authentication.Assurance),
 		tursodb.FormatTime(sess.CreatedAt), tursodb.FormatTime(sess.ExpiresAt),
+		string(profile), string(delegation),
 	)
 	if err != nil {
 		return session.Session{}, tursodb.MapError(err)
@@ -158,7 +180,7 @@ func (s *SessionStore) GetByRefreshHash(ctx context.Context, hash string) (sessi
 func (s *SessionStore) Rotate(ctx context.Context, id, expectedCurrentHash, newHash string) error {
 	const q = `UPDATE sessions
 		SET refresh_token_hash = ?, previous_refresh_token_hash = ?, previous_used = 0, rotation_count = rotation_count + 1
-		WHERE id = ? AND refresh_token_hash = ?`
+		WHERE id = ? AND refresh_token_hash = ? AND session_profile IN ('', 'first_party')`
 	n, err := tursodb.ExecAffecting(ctx, s.db, q, newHash, expectedCurrentHash, id, expectedCurrentHash)
 	if err != nil {
 		return tursodb.MapError(err)
@@ -175,7 +197,7 @@ func (s *SessionStore) Rotate(ctx context.Context, id, expectedCurrentHash, newH
 func (s *SessionStore) ConsumeGrace(ctx context.Context, id, previousHash string) error {
 	const q = `UPDATE sessions
 		SET previous_used = 1
-		WHERE id = ? AND previous_refresh_token_hash = ? AND previous_used = 0`
+		WHERE id = ? AND previous_refresh_token_hash = ? AND previous_used = 0 AND session_profile IN ('', 'first_party')`
 	n, err := tursodb.ExecAffecting(ctx, s.db, q, id, previousHash)
 	if err != nil {
 		return tursodb.MapError(err)

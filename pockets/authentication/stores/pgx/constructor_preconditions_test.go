@@ -24,6 +24,7 @@ func TestRawStoreDatabasePrecondition(t *testing.T) {
 		{"NewIdentifierStore", func(db *pgxdb.DB) *pgxdb.DB { return NewIdentifierStore(db).db }},
 		{"NewInvitationStore", func(db *pgxdb.DB) *pgxdb.DB { return NewInvitationStore(db).db }},
 		{"NewOAuthAccountStore", func(db *pgxdb.DB) *pgxdb.DB { return NewOAuthAccountStore(db).db }},
+		{"NewOAuth2Store", func(db *pgxdb.DB) *pgxdb.DB { return NewOAuth2Store(db).db }},
 		{"NewOAuthStateStore", func(db *pgxdb.DB) *pgxdb.DB { return NewOAuthStateStore(db).db }},
 		{"NewPasswordResetStore", func(db *pgxdb.DB) *pgxdb.DB { return NewPasswordResetStore(db).db }},
 		{"NewPasswordStore", func(db *pgxdb.DB) *pgxdb.DB { return NewPasswordStore(db).db }},

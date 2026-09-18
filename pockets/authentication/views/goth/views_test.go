@@ -98,6 +98,8 @@ func TestAllPagesRenderZeroModels(t *testing.T) {
 	render(t, v.PasswordForm(inbound.PasswordFormPage{}))
 	render(t, v.PasswordForm(inbound.PasswordFormPage{Mode: "remove"}))
 	render(t, v.OAuthUnlink(inbound.OAuthUnlinkPage{}))
+	render(t, v.OAuthConsent(inbound.OAuthConsentPage{}))
+	render(t, v.Sessions(inbound.SessionsPage{}))
 	render(t, v.Status(inbound.StatusPage{}))
 	render(t, v.Error(inbound.ErrorPage{}))
 }

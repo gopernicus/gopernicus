@@ -267,9 +267,11 @@ type IdentifierMethod struct {
 // address is masked; no password/code/token appears.
 type AccountSecurityPage struct {
 	PageContext
-	HasPassword bool
-	OAuth       []OAuthMethod
-	Identifiers []IdentifierMethod
+	// SessionsEnabled reports whether the host mounted independent session management.
+	SessionsEnabled bool
+	HasPassword     bool
+	OAuth           []OAuthMethod
+	Identifiers     []IdentifierMethod
 	// LinkableProviders are the wired OAuth providers the caller has NOT linked yet,
 	// in the service's deterministic order, so the page can offer a link affordance
 	// for each. It is empty when OAuth is off or every wired provider is already

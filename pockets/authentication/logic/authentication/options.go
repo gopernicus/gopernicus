@@ -30,6 +30,19 @@ import (
 // Option configures New before construction. Nil options are invalid.
 type Option func(*constructorConfig)
 
+// DelegatedTokensConfig enables verification of delegated tokens from one exact
+// issuer. It does not enable issuance. The session store must round-trip the
+// immutable delegation binding; stores that omit it cannot admit these tokens.
+type DelegatedTokensConfig struct {
+	Issuer string
+}
+
+// WithDelegatedTokens replaces the trusted delegated-token issuer. An empty
+// issuer disables delegated verification (the default).
+func WithDelegatedTokens(value DelegatedTokensConfig) Option {
+	return func(c *constructorConfig) { c.DelegatedTokens = value }
+}
+
 // Repositories supplies storage capabilities; enabled features require their matching ports.
 type Repositories struct {
 	Users user.UserRepository
@@ -39,9 +52,10 @@ type Repositories struct {
 	// Verify claims/verifies it through the atomic revision-CAS ApplyVerifiedChange.
 	// Wired whenever the challenge-backed register/verify flow is active (the
 	// register/verify/login path assumes it is non-nil, like Users/Passwords).
-	Identifiers identifier.IdentifierRepository
-	Passwords   user.PasswordRepository
-	Sessions    session.SessionRepository
+	Identifiers       identifier.IdentifierRepository
+	Passwords         user.PasswordRepository
+	Sessions          session.SessionRepository
+	SessionManagement session.ManagementRepository
 	// UserAdmin is the OPTIONAL user-administration repository (CHAU-1.1): the
 	// paginated operator directory plus the atomic status/revocation transition.
 	// Nil → the administration service methods fail closed with

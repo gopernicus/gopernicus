@@ -227,12 +227,7 @@ func NewActiveSessionStore(db *tursodb.DB) *ActiveSessionStore {
 // row written; a colliding refresh_token_hash → sdk.ErrAlreadyExists, exactly as
 // SessionStore.Create reports it.
 func (s *ActiveSessionStore) CreateForActiveUser(ctx context.Context, sess session.Session, expectedAuthRevision int64) (session.Session, error) {
-	methods, err := encodeMethods(sess.Authentication.Methods)
-	if err != nil {
-		return session.Session{}, err
-	}
-
-	err = s.db.InTx(ctx, func(tx *tursodb.Tx) error {
+	err := s.db.InTx(ctx, func(tx *tursodb.Tx) error {
 		var status string
 		var revision int64
 		const readQ = `SELECT status, auth_revision FROM users WHERE id = ?`
@@ -246,16 +241,8 @@ func (s *ActiveSessionStore) CreateForActiveUser(ctx context.Context, sess sessi
 		if revision != expectedAuthRevision {
 			return sdk.ErrConflict
 		}
-		const insertQ = `INSERT INTO sessions (` + sessionColumns + `) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-		if _, err := tx.Exec(ctx, insertQ,
-			sess.ID, sess.UserID, sess.RefreshTokenHash, nullHash(sess.PreviousRefreshTokenHash),
-			tursodb.BoolToInt(sess.PreviousUsed), sess.RotationCount,
-			tursodb.FormatNullTime(sess.Authentication.AuthenticatedAt), methods, string(sess.Authentication.Assurance),
-			tursodb.FormatTime(sess.CreatedAt), tursodb.FormatTime(sess.ExpiresAt),
-		); err != nil {
-			return tursodb.MapError(err)
-		}
-		return nil
+		_, err := insertSession(ctx, tx, sess)
+		return err
 	})
 	if err != nil {
 		return session.Session{}, err

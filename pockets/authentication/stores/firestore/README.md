@@ -8,7 +8,7 @@ the [patch release evidence](https://github.com/gopernicus/gopernicus/blob/gps36
 This patch carries forward the known verification gap accepted for `v0.1.0`;
 publication does not establish real GCP coverage. The live suite remains open.
 
-This module implements all eighteen authentication repository ports over Google
+This module implements the eighteen first-party authentication repository ports over Google
 Cloud Firestore Native mode. The connector owns client access, this adapter owns
 its documents and queries, and the host owns database lifecycle and index deployment.
 It targets authentication v0.11.1 and SDK v0.9.0. The `v0.1.1` patch tightens
@@ -31,8 +31,11 @@ before returning. The caller's context controls startup and each probe is capped
 by `firestoredb.ProbeTimeout` (30 seconds). A canceled context is rejected even
 with `WithoutIndexProbe()`. The adapter borrows the database; the caller closes it.
 
-All repository slots are available, including `UserAdmin`, `ActiveSessions` and
-`Passwordless`. Host policies and mounting choices decide which services and routes
+The first-party repository slots include `UserAdmin`, `ActiveSessions` and
+`Passwordless`. `OAuth2` and `SessionManagement` remain nil: this adapter does not
+support the optional MCP authorization server. `WithOAuth2` fails construction
+with this bundle. Session writes reject delegated profiles rather than dropping
+their audience/client binding. Existing first-party behavior is unchanged. Host policies and mounting choices decide which services and routes
 are enabled. Construction does not start workers, migrate data or deploy indexes.
 
 Use `WithoutIndexProbe()` for the emulator, which has no index registry, or when

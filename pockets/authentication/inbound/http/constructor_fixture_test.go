@@ -85,6 +85,7 @@ type authenticationFixture struct {
 	TokenSigner             cryptids.JWTSigner
 	AccessTokenTTL          time.Duration
 	RefreshTTL              time.Duration
+	DelegatedTokens         authlogic.DelegatedTokensConfig
 	Passwordless            []string
 	PublicAuthBaseURL       string
 	PasswordResetURL        string

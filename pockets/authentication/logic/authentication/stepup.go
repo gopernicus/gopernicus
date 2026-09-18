@@ -181,7 +181,10 @@ func (s *Service) liveStepUpSession(ctx context.Context, sessionID, userID strin
 	if err != nil {
 		return session.Session{}, err
 	}
-	if sess.UserID != userID || !now.Before(sess.ExpiresAt) {
+	if !sess.FirstParty() {
+		return session.Session{}, ErrDelegatedCredential
+	}
+	if sess.ID != sessionID || sess.UserID != userID || !now.Before(sess.ExpiresAt) {
 		return session.Session{}, ErrStepUpRequired
 	}
 	owner, err := s.users.Get(ctx, userID)

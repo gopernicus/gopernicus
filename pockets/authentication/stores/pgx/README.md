@@ -12,11 +12,12 @@ be a distinct active identifier of the same user and kind, replacing a primary.
 Invalid input rolls back without credential, revision or revocation changes.
 This patch adds no migration. Stop old vulnerable writers during deployment.
 
-It ports the v3 repository bundle (15 ports over 13 canonical tables — users,
+It ports the authentication repository bundle to PostgreSQL. The schema covers users,
 passwords, sessions, oauth accounts/states, service accounts, api keys, security
 events, invitations, user identifiers, challenges, contact changes, and
-authentication grants; `PasswordResets`/`CredentialMutations` reuse existing
-tables) to postgres idiom — `TIMESTAMPTZ`, native `BOOLEAN`, `$n` placeholders,
+authentication grants, OAuth client metadata, authorization codes, and spent
+refresh hashes. `PasswordResets`/`CredentialMutations` reuse existing tables.
+It uses PostgreSQL idiom — `TIMESTAMPTZ`, native `BOOLEAN`, `$n` placeholders,
 SQLSTATE-based error mapping — with **the same structure** as the turso tree.
 Representation changes; structure does not. Secrets are stored as **digests, never
 plaintext**: session refresh tokens (`refresh_token_hash`), challenge OTP codes /
@@ -42,8 +43,8 @@ option — SQLite has no schemas** (a host switches dialect by one import + one
 
 | member | shape |
 |---|---|
-| `Repositories(ctx context.Context, db *pgxdb.DB, opts ...Option) (auth.Repositories, error)` | the 17-port bundle, no migration side effects — **probes all 13 canonical tables first**, then the ALTER-added columns (`users.status`, `users.status_changed_at`, `challenges.subject_key`), and errors (`sdk.ErrNotFound`, naming the table or column + the `authentication` migration source) when one is missing; an infrastructure/query failure is never misreported as a missing table |
-| `Option` | construction option, accepted by `Repositories` and by every one of the 18 `NewXStore(db, opts ...Option)` constructors, so a host composing its own bundle gets the same seam |
+| `Repositories(ctx context.Context, db *pgxdb.DB, opts ...Option) (auth.Repositories, error)` | the full bundle including `OAuth2` and `SessionManagement`, no migration side effects — probes canonical tables and ALTER-added columns in migration order, and errors (`sdk.ErrNotFound`, naming the table or column + the `authentication` migration source) when one is missing; an infrastructure/query failure is never misreported as a missing table |
+| `Option` | construction option, accepted by `Repositories` and by every `NewXStore(db, opts ...Option)` constructor, so a host composing its own bundle gets the same seam |
 | `WithSchema(s pgxdb.Schema) Option` | places every table these stores touch in `s`; the zero `Schema` is the default and renders today's unqualified SQL byte-for-byte. It never panics — validation happened in `pgxdb.NewSchema` at the host |
 | `ExportMigrations(dst string) error` | copies the canonical `migrations/*.sql` into the host's dir |
 | `MigrationsFS` / `MigrationsDir` | the embedded canonical migration files |
@@ -87,9 +88,20 @@ change outside this option. With a schema set the probe IS scoped to it.
 ## Migrations
 
 `migrations/*.sql` carry the **identical version (filename) set** as the turso
-tree — `0001`–`0018` (thirteen tables; auth owns no delivery table). Same filename
+tree — `0001`–`0019` (sixteen tables; auth owns no delivery table). Same filename
 = same logical schema step; content is per-dialect. After export, the host owns
 the final migration stream and applies it pre-boot through its own ledger.
+
+**`0019_oauth2_sessions.sql` is append-only.** Apply it before deploying this
+adapter version, including hosts that have not enabled OAuth endpoints. It adds
+session profile/delegation columns and three OAuth tables. Existing sessions
+backfill to `first_party`. OAuth grants create separate `delegated` rows; refresh
+rotation retains every spent hash through the fixed session expiry. Reuse commits
+revocation of that connection only. `NewOAuth2Store` implements both `OAuth2` and
+`SessionManagement`; the bundle supplies the same store for both ports. Global
+revocation increments `auth_revision` and removes all sessions in one transaction,
+fencing outstanding authorization codes. Ordinary browser logout and individual
+connection revocation do not advance that fence.
 
 **`0014_user_status.sql` and `0015_challenge_subject_keys.sql` are APPEND-ONLY and
 add no table.** `0015` adds `challenges.subject_key`, backfills it from `user_id`,

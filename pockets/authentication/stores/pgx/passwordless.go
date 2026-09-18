@@ -376,25 +376,11 @@ func lockActiveUser(ctx context.Context, tx *pgxdb.Tx, table, userID string) (us
 // contract.
 func insertRedemptionSession(ctx context.Context, tx *pgxdb.Tx, table string, sess session.Session, userID string) (session.Session, error) {
 	sess.UserID = userID
-	methods, err := encodeMethods(sess.Authentication.Methods)
+	args, err := sessionArgs(sess)
 	if err != nil {
 		return session.Session{}, err
 	}
-	q := `INSERT INTO ` + table + ` (` + sessionColumns + `)
-		VALUES (@id, @user_id, @refresh_token_hash, @previous_refresh_token_hash, @previous_used, @rotation_count, @authenticated_at, @authentication_methods, @assurance_level, @created_at, @expires_at)`
-	if _, err := tx.Exec(ctx, q, pgx.NamedArgs{
-		"id":                          sess.ID,
-		"user_id":                     sess.UserID,
-		"refresh_token_hash":          sess.RefreshTokenHash,
-		"previous_refresh_token_hash": nullHash(sess.PreviousRefreshTokenHash),
-		"previous_used":               sess.PreviousUsed,
-		"rotation_count":              sess.RotationCount,
-		"authenticated_at":            pgxdb.NullTime(sess.Authentication.AuthenticatedAt),
-		"authentication_methods":      methods,
-		"assurance_level":             string(sess.Authentication.Assurance),
-		"created_at":                  sess.CreatedAt.UTC(),
-		"expires_at":                  sess.ExpiresAt.UTC(),
-	}); err != nil {
+	if _, err := tx.Exec(ctx, sessionInsert(table), args); err != nil {
 		return session.Session{}, pgxdb.MapError(err)
 	}
 	return sess, nil

@@ -19,6 +19,7 @@ import (
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/contactchange"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/credential"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/identifier"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/oauth2"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/oauthaccount"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/oauthstate"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/passwordless"
@@ -50,6 +51,9 @@ func TestReference(t *testing.T) {
 // proves and the class of drift a naive memory store silently loses. Expiry is
 // checked against time.Now, matching a store that filters on the read clock.
 type reference struct {
+	oauthClients    map[string]oauth2.Client
+	oauthCodes      map[string]oauth2.Code
+	oauthRefresh    map[string]oauthRefreshRecord
 	mu              sync.RWMutex
 	users           map[string]user.User
 	passwords       map[string]string
@@ -77,6 +81,9 @@ type reference struct {
 
 func newReference() *reference {
 	return &reference{
+		oauthClients:    map[string]oauth2.Client{},
+		oauthCodes:      map[string]oauth2.Code{},
+		oauthRefresh:    map[string]oauthRefreshRecord{},
 		users:           map[string]user.User{},
 		passwords:       map[string]string{},
 		sessions:        map[string]session.Session{},
@@ -95,6 +102,8 @@ func newReference() *reference {
 
 func (r *reference) repositories() auth.Repositories {
 	return auth.Repositories{
+		OAuth2:               refOAuth2{r},
+		SessionManagement:    refOAuth2{r},
 		Users:                refUsers{r},
 		Identifiers:          refIdentifiers{r},
 		Passwords:            refPasswords{r},

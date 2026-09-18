@@ -1,5 +1,11 @@
 package authentication
 
+import (
+	"time"
+
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/session"
+)
+
 // CredentialKind names the class of credential a request authenticated with. The
 // two kinds are the pocket's whole authentication surface (design §4.3): the
 // session-backed access JWT, and a service account's API key.
@@ -37,9 +43,21 @@ const (
 type Credential struct {
 	Kind      CredentialKind
 	Transport Transport
-	// SessionID is the access JWT's session_id claim. It is PROVEN live only
-	// after a Live() gate; a stateless gate leaves it merely claimed.
+	// SessionID is the access JWT's session_id claim. First-party stateless
+	// authentication leaves it merely claimed; delegated authentication always
+	// checks its live session before returning a credential.
 	SessionID string
+	// Profile is verified independently of transport. Delegated credentials always
+	// require a live session; first-party access tokens retain their stateless tier.
+	Profile session.Profile
+	// Issuer, Audiences and client attribution are verified delegated claims.
+	// First-party credentials and API keys leave them empty.
+	Issuer          string
+	Audiences       []string
+	ClientID        string
+	OriginClientID  string
+	ActorID         string
+	accessExpiresAt time.Time
 	// APIKeyID is the resolved key's id (api_key only).
 	APIKeyID string
 	// ServiceAccountID is the owning account (api_key only), act-as-user or not.

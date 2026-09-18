@@ -23,6 +23,7 @@ const refreshAttemptsPerMinute = 30
 // handlers holds services and inbound host policies. listStrategy controls list
 // request parsing; domain services enforce their own business invariants.
 type handlers struct {
+	oauth2         *OAuth2Config
 	inviteCheck    InviteCheck
 	userAdminCheck UserAdminCheck
 	svc            authService
@@ -51,6 +52,7 @@ type handlers struct {
 // views, the HTML policy, the machine gate) named at the call site instead of
 // growing another positional parameter each release.
 type mountDeps struct {
+	OAuth2         *OAuth2Config
 	InviteCheck    InviteCheck
 	UserAdminCheck UserAdminCheck
 	// Auth is the domain service every handler delegates to. Required.
@@ -125,19 +127,19 @@ type RouteAuthentication struct {
 //     browser UI reads only its own cookie and never a header.
 func (a RouteAuthentication) withDefaults(svc authService) RouteAuthentication {
 	if a.OAuthLinkStart == nil {
-		a.OAuthLinkStart = svc.RequirePrincipal(Accept(authlogic.CredentialAccessToken))
+		a.OAuthLinkStart = svc.RequirePrincipal(FirstParty())
 	}
 	if a.SessionSecurityReads == nil {
-		a.SessionSecurityReads = svc.RequirePrincipal(Accept(authlogic.CredentialAccessToken), Live())
+		a.SessionSecurityReads = svc.RequirePrincipal(FirstParty(), Live())
 	}
 	if a.SessionHydration == nil {
 		a.SessionHydration = svc.RequirePrincipal(Live())
 	}
 	if a.CredentialManagement == nil {
-		a.CredentialManagement = svc.RequirePrincipal(Accept(authlogic.CredentialAccessToken), Live())
+		a.CredentialManagement = svc.RequirePrincipal(FirstParty(), Live())
 	}
 	if a.MachineLifecycle == nil {
-		a.MachineLifecycle = svc.RequirePrincipal(Accept(authlogic.CredentialAccessToken), Live())
+		a.MachineLifecycle = svc.RequirePrincipal(FirstParty(), Live())
 	}
 	if a.UserAdministration == nil {
 		a.UserAdministration = svc.RequirePrincipal(Live())
@@ -147,12 +149,27 @@ func (a RouteAuthentication) withDefaults(svc authService) RouteAuthentication {
 	}
 	if a.BrowserAccount == nil {
 		a.BrowserAccount = svc.RequirePrincipal(
-			Accept(authlogic.CredentialAccessToken),
+			FirstParty(),
 			Transports(authlogic.TransportCookie),
 			Live(),
 			Browser(),
 		)
 	}
+	// Bundled authentication/account routes cannot become OAuth resource routes
+	// through a host override. Preserve the existing API-key policy seams while
+	// requiring verified first-party/key proof after every configured strategy.
+	floor := svc.RequirePrincipal()
+	protect := func(strategy web.Middleware) web.Middleware {
+		return func(next http.Handler) http.Handler { return strategy(floor(next)) }
+	}
+	a.OAuthLinkStart = protect(a.OAuthLinkStart)
+	a.SessionSecurityReads = protect(a.SessionSecurityReads)
+	a.SessionHydration = protect(a.SessionHydration)
+	a.CredentialManagement = protect(a.CredentialManagement)
+	a.MachineLifecycle = protect(a.MachineLifecycle)
+	a.UserAdministration = protect(a.UserAdministration)
+	a.Invitations = protect(a.Invitations)
+	a.BrowserAccount = protect(a.BrowserAccount)
 	return a
 }
 
@@ -177,7 +194,11 @@ func mount(r pockets.RouteRegistrar, d mountDeps) {
 	// one (authentication.BrowserConfig.BundledRouteAuth), the audited default otherwise.
 	auth := d.RouteAuth.withDefaults(svc)
 	r = clientInfoRegistrar{inner: r}
-	h := &handlers{inviteCheck: d.InviteCheck, userAdminCheck: d.UserAdminCheck, svc: svc, inv: inv, listStrategy: d.ListStrategy, mutation: d.Mutation, views: views, htmlPolicy: d.HTMLPolicy}
+	h := &handlers{oauth2: d.OAuth2, inviteCheck: d.InviteCheck, userAdminCheck: d.UserAdminCheck, svc: svc, inv: inv, listStrategy: d.ListStrategy, mutation: d.Mutation, views: views, htmlPolicy: d.HTMLPolicy}
+	if d.OAuth2 != nil {
+		mountOAuth2(r, h)
+		mountSessionManagement(r, h)
+	}
 	// The password credential's routes register only when the posture is on
 	// (deny-by-absence, like machine identity and the token endpoint): a
 	// PasswordFlowsDisabled host answers 404 for every one of them.

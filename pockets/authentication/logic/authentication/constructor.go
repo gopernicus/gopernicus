@@ -33,6 +33,7 @@ func New(repos Repositories, signer cryptids.JWTSigner, runtimeMode environment.
 	d.Identifiers = repos.Identifiers
 	d.Passwords = repos.Passwords
 	d.Sessions = repos.Sessions
+	d.SessionManagement = repos.SessionManagement
 	d.UserAdmin = repos.UserAdmin
 	d.PasswordlessRedeem = repos.PasswordlessRedeem
 	d.ActiveSessions = repos.ActiveSessions
@@ -58,6 +59,12 @@ func New(repos Repositories, signer cryptids.JWTSigner, runtimeMode environment.
 
 	if err := environment.ValidateMode(d.RuntimeMode); err != nil {
 		return nil, err
+	}
+	if d.DelegatedTokens.Issuer != "" {
+		u, err := url.Parse(d.DelegatedTokens.Issuer)
+		if err != nil || !u.IsAbs() || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || strings.TrimSpace(d.DelegatedTokens.Issuer) != d.DelegatedTokens.Issuer || (u.Scheme != "https" && u.Scheme != "http") || (d.RuntimeMode == environment.ModeProduction && u.Scheme != "https") {
+			return nil, fmt.Errorf("authentication: invalid or insecure delegated issuer: %w", sdk.ErrInvalidInput)
+		}
 	}
 	if err := d.AuthenticationLimits.Validate(); err != nil {
 		return nil, err
@@ -116,7 +123,7 @@ func New(repos Repositories, signer cryptids.JWTSigner, runtimeMode environment.
 		{"PasswordResets", d.PasswordResets}, {"CredentialMutations", d.CredentialMutations}, {"AuthenticationGrants", d.AuthenticationGrants},
 		{"IdentifierKeyer", d.IdentifierKeyer}, {"UserAdmin", d.UserAdmin}, {"PasswordlessRedeem", d.PasswordlessRedeem},
 		{"OAuthAccounts", d.OAuthAccounts}, {"OAuthStates", d.OAuthStates}, {"TokenEncrypter", d.TokenEncrypter},
-		{"SecurityEvents", d.SecurityEvents}, {"Invitations", d.Invitations}, {"Compromised", d.Compromised},
+		{"SessionManagement", d.SessionManagement}, {"SecurityEvents", d.SecurityEvents}, {"Invitations", d.Invitations}, {"Compromised", d.Compromised},
 	} {
 		if dep.value != nil && nilDependency(dep.value) {
 			return nil, fmt.Errorf("authentication: %s contains a typed nil: %w", dep.name, sdk.ErrInvalidInput)

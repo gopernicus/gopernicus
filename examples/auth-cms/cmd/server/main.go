@@ -60,9 +60,12 @@ import (
 	"github.com/gopernicus/gopernicus/examples/auth-cms/internal/deliveryhealth"
 	"github.com/gopernicus/gopernicus/examples/auth-cms/internal/memstore"
 	"github.com/gopernicus/gopernicus/examples/auth-cms/internal/outboxmem"
+	"github.com/gopernicus/gopernicus/examples/auth-cms/pockets/authentication/inbound/http/oauth2demo"
+	"github.com/gopernicus/gopernicus/examples/auth-cms/pockets/authentication/outbound/oauth2fixture"
 	"github.com/gopernicus/gopernicus/integrations/cryptids/bcrypt"
 	"github.com/gopernicus/gopernicus/pockets"
 	auth "github.com/gopernicus/gopernicus/pockets/authentication"
+	authenticationhttp "github.com/gopernicus/gopernicus/pockets/authentication/inbound/http"
 	delivery "github.com/gopernicus/gopernicus/pockets/authentication/logic/delivery"
 	invitations "github.com/gopernicus/gopernicus/pockets/authentication/logic/invitations"
 	authgoth "github.com/gopernicus/gopernicus/pockets/authentication/views/goth"
@@ -330,12 +333,44 @@ func run(ctx context.Context, log *slog.Logger) error {
 	// RequireAccessTokenOrAPIKey() / CurrentPrincipal back the host demo routes. The pocket's own HTTP routes are
 	// the optional adapter over that surface — built once here, mounted once via
 	// authSvc.HTTP.Register(mount).
-	authSvc, err := auth.New(authRepos, authCfg.TokenSigner, authCfg.RuntimeMode, authCfg.DeliveryMode, authCfg.options()...)
+	oauthDemoConfig := struct {
+		Enabled bool `env:"AUTH_OAUTH2_DEMO"`
+	}{}
+	if err := environment.ParseEnvTags("", &oauthDemoConfig); err != nil {
+		return err
+	}
+	authOptions := authCfg.options()
+	var oauthFixture *oauth2fixture.Resolver
+	if oauthDemoConfig.Enabled {
+		if authCfg.RuntimeMode != environment.ModeDevelopment {
+			return fmt.Errorf("AUTH_OAUTH2_DEMO requires development mode")
+		}
+		oauthFixture, err = oauth2fixture.New(srv.Origin())
+		if err != nil {
+			return err
+		}
+		oauthViews, ok := authCfg.Views.(authenticationhttp.OAuthViews)
+		if !ok {
+			return fmt.Errorf("OAuth demo requires consent and session views")
+		}
+		authOptions = append(authOptions, auth.WithOAuth2(auth.OAuth2Config{Server: oauthFixture.Config(), Clients: oauthFixture, Views: oauthViews,
+			CapabilityDescription: "Read your user and connection identifiers through the local MCP demonstration. This demo does not change application data."}))
+	}
+	authSvc, err := auth.New(authRepos, authCfg.TokenSigner, authCfg.RuntimeMode, authCfg.DeliveryMode, authOptions...)
 	if err != nil {
 		return err
 	}
 	if err := authSvc.HTTP.Register(mount); err != nil {
 		return err
+	}
+	if oauthFixture != nil {
+		demo, err := oauth2demo.New(oauth2demo.Config{BaseURL: srv.Origin(), ClientID: oauthFixture.Client().ID,
+			ConfidentialClientID: oauthFixture.Config().ConfidentialClientID, ConfidentialSecret: oauthFixture.ConfidentialSecret()}, authSvc.HTTP, authSvc.Authentication)
+		if err != nil {
+			return err
+		}
+		demo.Register(mount)
+		log.InfoContext(ctx, "Local OAuth connection demo enabled", "url", srv.Origin()+"/oauth-demo")
 	}
 	// Close the role-routes ordering seam: the bundled /authorization/roles* surface
 	// now runs behind the live human session plus the platform-admin permission — the

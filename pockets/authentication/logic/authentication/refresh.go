@@ -34,6 +34,9 @@ var ErrInvalidRefreshToken = fmt.Errorf("invalid refresh token: %w", sdk.ErrUnau
 // The write path is compare-and-swap, never blind: a racing refresh cannot
 // corrupt the chain or false-revoke an honest client.
 func (s *Service) Refresh(ctx context.Context, presented string) (TokenPair, error) {
+	if session.IsDelegatedRefreshToken(presented) {
+		return TokenPair{}, ErrDelegatedCredential
+	}
 	if presented == "" {
 		return TokenPair{}, ErrInvalidRefreshToken
 	}
@@ -51,6 +54,9 @@ func (s *Service) refreshByHash(ctx context.Context, hash string) (TokenPair, er
 			return TokenPair{}, ErrInvalidRefreshToken // branch 1
 		}
 		return TokenPair{}, err
+	}
+	if !sess.FirstParty() {
+		return TokenPair{}, ErrDelegatedCredential
 	}
 	if sess.Expired(s.now()) {
 		return TokenPair{}, ErrInvalidRefreshToken // branch 2
@@ -135,6 +141,9 @@ func (s *Service) reResolve(ctx context.Context, sess session.Session, hash stri
 		}
 		return TokenPair{}, err
 	}
+	if !fresh.FirstParty() {
+		return TokenPair{}, ErrDelegatedCredential
+	}
 	if match == session.RefreshMatchPrevious {
 		return s.grace(ctx, fresh, hash)
 	}
@@ -197,14 +206,3 @@ func (s *Service) recordRefreshReuse(ctx context.Context, sess session.Session) 
 
 // refreshSessionKey derives the per-session rate-limit key for refresh.
 func refreshSessionKey(sessionID string) string { return "refresh:" + sessionID }
-
-// sessionLive reports whether sessionID resolves to a live (present, unexpired)
-// session. A blank id, a missing/expired row, OR any repository error all return
-// false — the fail-CLOSED posture (D1): a store outage denies, never admits.
-func (s *Service) sessionLive(ctx context.Context, sessionID string) bool {
-	if sessionID == "" {
-		return false
-	}
-	_, err := s.sessions.Get(ctx, sessionID)
-	return err == nil
-}

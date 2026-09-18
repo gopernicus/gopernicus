@@ -235,7 +235,7 @@ func NewActiveSessionStore(db *pgxdb.DB, opts ...Option) *ActiveSessionStore {
 // row written; a colliding refresh_token_hash → sdk.ErrAlreadyExists, exactly as
 // SessionStore.Create reports it.
 func (s *ActiveSessionStore) CreateForActiveUser(ctx context.Context, sess session.Session, expectedAuthRevision int64) (session.Session, error) {
-	methods, err := encodeMethods(sess.Authentication.Methods)
+	args, err := sessionArgs(sess)
 	if err != nil {
 		return session.Session{}, err
 	}
@@ -258,21 +258,7 @@ func (s *ActiveSessionStore) CreateForActiveUser(ctx context.Context, sess sessi
 		if revision != expectedAuthRevision {
 			return sdk.ErrConflict
 		}
-		insertQ := `INSERT INTO ` + s.table(sessionsTable) + ` (` + sessionColumns + `)
-			VALUES (@id, @user_id, @refresh_token_hash, @previous_refresh_token_hash, @previous_used, @rotation_count, @authenticated_at, @authentication_methods, @assurance_level, @created_at, @expires_at)`
-		if _, err := tx.Exec(ctx, insertQ, pgx.NamedArgs{
-			"id":                          sess.ID,
-			"user_id":                     sess.UserID,
-			"refresh_token_hash":          sess.RefreshTokenHash,
-			"previous_refresh_token_hash": nullHash(sess.PreviousRefreshTokenHash),
-			"previous_used":               sess.PreviousUsed,
-			"rotation_count":              sess.RotationCount,
-			"authenticated_at":            pgxdb.NullTime(sess.Authentication.AuthenticatedAt),
-			"authentication_methods":      methods,
-			"assurance_level":             string(sess.Authentication.Assurance),
-			"created_at":                  sess.CreatedAt.UTC(),
-			"expires_at":                  sess.ExpiresAt.UTC(),
-		}); err != nil {
+		if _, err := tx.Exec(ctx, sessionInsert(s.table(sessionsTable)), args); err != nil {
 			return pgxdb.MapError(err)
 		}
 		return nil

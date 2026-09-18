@@ -5962,3 +5962,27 @@ monolith import is gone.
   workflow is built.
 - No changelog convention is mandated yet; the tag message plus commit log is
   the record until one is adopted.
+
+## Independent MCP OAuth coordinated release
+
+The working implementation adds opt-in OAuth authorization, restricted MCP-to-API
+exchange and independently revocable delegated sessions. Coordinate core
+`pockets/authentication` v0.13.0 with pgx v0.7.0 or Turso v0.6.0 and optional
+Goth views v0.5.0. Firestore v0.2.0 is a first-party compatibility release.
+Publication status and exact archive verification belong in
+[the release record](plans/authentication-mcp-oauth-release.md).
+Firestore compatibility does not imply
+support for the OAuth storage capability.
+
+Host rollout: export the unchanged historical ledger plus new `0019_oauth2_sessions.sql`,
+apply it before boot, drain old authentication writers, deploy compatible packages,
+and then enable explicit issuer/resource/client trust/secret/view configuration.
+Verify W/A/B independence, refresh replay, MCP/API audience rejection, global revoke
+fencing, datastore-failure denial, and actual Claude discovery/consent before
+production enablement. See [AUDIT-049](AUDIT.md#audit-049-independent-mcp-oauth-sessions).
+
+A rollback must stop delegated issuance/MCP traffic and drain or revoke delegated
+sessions before restoring an old binary. Keep the additive migration installed.
+The release evidence must distinguish local SQLite from hosted Turso, PostgreSQL
+from unrun Firestore, automated HTTP flows from visual browser verification, and
+local candidate archives from public-proxy/checksum verification after publication.

@@ -5459,3 +5459,48 @@ match the candidates at `47ebb259d7eff87cad782ef2d72957b54d3d52ac`. Public build
 consumer/auth-cms races and unchanged Redis compatibility passed. GitHub main/tag
 checks reproduced the unchanged Linux SDK RangeEdges failure; the remote workspace
 gate did not complete. See the release record for all verification evidence.
+
+## AUDIT-049: Independent MCP OAuth sessions
+
+**Affected:** authentication core, pgx/Turso adapters, optional Goth views and
+custom credential/store consumers. Coordinated versions and publication evidence
+are tracked in [the release record](plans/authentication-mcp-oauth-release.md).
+Application deployment is separate.
+
+The optional `WithOAuth2` authorization server creates independent delegated
+sessions. Browser logout, one-connection revoke and global revoke are distinct.
+Code redemption and revoke-all share the user revision/transaction fence.
+Delegated refresh has a separate `oauth2_rt.` namespace, strict rotation and
+whole-session-lifetime spent-hash detection. A replay revokes only that connection.
+Legacy refresh/logout never consume delegated credentials or clear an unrelated
+browser session on a refused delegated logout.
+
+Delegated access tokens require verified issuer, one exact audience, client and
+live user/session bindings on every admission. First-party tokens cannot carry
+reserved OAuth claims. Custom signers that inject `iss`, `aud`, `client_id`,
+`origin_client_id` or `act` into ordinary web tokens must migrate. Legacy tokens
+without a profile remain accepted only with no reserved claims; legacy session
+rows require empty delegation. Existing first-party stateless expiry and refresh
+grace remain unchanged. Keyed public struct literals remain source-compatible;
+unkeyed literals for extended repository/session/credential records must change.
+
+Hosts must explicitly opt delegated resource routes into `Audience(resource)`;
+ordinary account/authentication routes and `FirstParty()` refuse them. MCP tokens
+cannot be forwarded to the API: authenticated restricted exchange issues an
+API-only token anchored to the same delegated session. MCP uses authenticated
+introspection without the issuer's HMAC key. Host tool/API authorization remains
+mandatory, including revalidation on established MCP transports.
+
+Apply the exact new `0019_oauth2_sessions.sql` before boot; previous SQL migrations
+are unchanged. Upgrade core, SQL store and views together and drain old writers
+before issuance. Custom stores implement the atomic OAuth and owner-management
+ports and run `storetest.RunOAuth2`. Schedule `repos.OAuth2.Prune` for expired
+codes/metadata/history; never prune spent hashes before their session expires.
+Firestore remains first-party only and refuses unsupported feature construction
+and delegated session writes. Root-mounted consent/discovery is required; a prefix
+registrar alone cannot rewrite endpoint URLs or form actions.
+
+Rollback requires disabling MCP traffic/issuance and draining or revoking delegated
+sessions before old binaries run; leave additive schema installed. See
+[the plan](plans/authentication-mcp-oauth.md) for current verification evidence and
+remaining host-specific Claude acceptance work.

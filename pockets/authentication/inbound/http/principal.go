@@ -7,21 +7,25 @@ import (
 	"strings"
 
 	"github.com/gopernicus/gopernicus/pockets/authentication/internal/redirect"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/session"
 	"github.com/gopernicus/gopernicus/sdk/pkg/web"
 )
 
 // RequirePrincipal is THE authenticator. Its options are OR-sets over credential
 // kinds (Accept) and transports (Transports) plus a liveness tier (Live) and a
 // browser denial mode (Browser); with no options it admits every wired
-// credential over both transports, statelessly, denying with a JSON 401.
+// first-party credential or API key over both transports, statelessly, denying
+// with a JSON 401. Delegated tokens require Audience and always require a live
+// grant, including on every nested admission. FirstParty excludes them outright.
 //
 // At the OUTERMOST position it resolves the request's credential within its set
 // (resolveCredential) and stashes the Principal (read via CurrentPrincipal /
 // CurrentUser) plus the Credential (read via CurrentCredential). NESTED under an
 // outer RequirePrincipal it never re-resolves: it narrows, checking the stashed
 // Credential against its own set and denying when it falls outside. A Live()
-// gate runs the session lookup once — a nested Live() under an outer one reads
-// the proven CurrentSessionID and passes.
+// gate runs the session lookup once for first-party proof — a nested Live()
+// under an outer one reads the proven CurrentSessionID and passes. Delegated
+// proof is rechecked on each admission.
 //
 // The set is resolved at CONSTRUCTION, so an empty Accept()/Transports() panics
 // at wiring time. Nested narrowing trusts the stash written earlier in the same
@@ -32,12 +36,7 @@ func (s *Adapter) RequirePrincipal(opts ...PrincipalOption) web.Middleware {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			ctx := r.Context()
 			cred, nested := s.service.CurrentCredential(ctx)
-			if nested {
-				if !set.admits(cred.Kind, cred.Transport) {
-					s.denyPrincipal(w, r, set)
-					return
-				}
-			} else {
+			if !nested {
 				resolved, ok := s.resolveCredential(r, set)
 				if !ok {
 					if set.optional && !s.credentialPresented(r, set) {
@@ -50,7 +49,11 @@ func (s *Adapter) RequirePrincipal(opts ...PrincipalOption) web.Middleware {
 				ctx = resolved
 				cred, _ = s.service.CurrentCredential(ctx)
 			}
-			if set.live {
+			if !set.admits(cred) {
+				s.denyPrincipal(w, r, set)
+				return
+			}
+			if set.live || cred.Profile == session.ProfileDelegated {
 				live, ok := s.service.RequireLive(ctx)
 				if !ok {
 					s.denyPrincipal(w, r, set)

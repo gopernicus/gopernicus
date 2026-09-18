@@ -23,6 +23,7 @@ func TestRawStoreDatabasePrecondition(t *testing.T) {
 		{"NewCredentialMutationStore", func(db *tursodb.DB) *tursodb.DB { return NewCredentialMutationStore(db).db }},
 		{"NewIdentifierStore", func(db *tursodb.DB) *tursodb.DB { return NewIdentifierStore(db).db }},
 		{"NewInvitationStore", func(db *tursodb.DB) *tursodb.DB { return NewInvitationStore(db).db }},
+		{"NewOAuth2Store", func(db *tursodb.DB) *tursodb.DB { return NewOAuth2Store(db).db }},
 		{"NewOAuthAccountStore", func(db *tursodb.DB) *tursodb.DB { return NewOAuthAccountStore(db).db }},
 		{"NewOAuthStateStore", func(db *tursodb.DB) *tursodb.DB { return NewOAuthStateStore(db).db }},
 		{"NewPasswordResetStore", func(db *tursodb.DB) *tursodb.DB { return NewPasswordResetStore(db).db }},

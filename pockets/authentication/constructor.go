@@ -12,6 +12,7 @@ import (
 	"github.com/gopernicus/gopernicus/pockets/authentication/internal/redirect"
 	authlogic "github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/identifier"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/oauth2"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/delivery"
 	invitations "github.com/gopernicus/gopernicus/pockets/authentication/logic/invitations"
 	"github.com/gopernicus/gopernicus/sdk"
@@ -482,11 +483,14 @@ func New(repos Repositories, signer cryptids.JWTSigner, runtimeMode environment.
 		authlogic.WithLogger(cfg.Logger),
 		authlogic.WithIDs(cfg.IDs),
 	}
+	if cfg.OAuth2 != nil {
+		logicOptions = append(logicOptions, authlogic.WithDelegatedTokens(authlogic.DelegatedTokensConfig{Issuer: cfg.OAuth2.Server.Issuer}))
+	}
 	if invSvc != nil {
 		logicOptions = append(logicOptions, authlogic.WithInvitations(invSvc))
 	}
 	authComponents, err := authlogic.New(authlogic.Repositories{
-		Users: repos.Users, Identifiers: repos.Identifiers, Passwords: repos.Passwords, Sessions: repos.Sessions,
+		Users: repos.Users, Identifiers: repos.Identifiers, Passwords: repos.Passwords, Sessions: repos.Sessions, SessionManagement: repos.SessionManagement,
 		UserAdmin: repos.UserAdmin, PasswordlessRedeem: repos.Passwordless, ActiveSessions: repos.ActiveSessions,
 		Challenges: repos.Challenges, PasswordResets: repos.PasswordResets, ContactChanges: repos.ContactChanges,
 		CredentialMutations: repos.CredentialMutations, AuthenticationGrants: repos.AuthenticationGrants,
@@ -497,6 +501,15 @@ func New(repos Repositories, signer cryptids.JWTSigner, runtimeMode environment.
 		return nil, err
 	}
 	authService = authComponents.Service
+	var oauthService *oauth2.Service
+	var oauthHTTP *inbound.OAuth2Config
+	if cfg.OAuth2 != nil {
+		oauthService, err = oauth2.New(oauth2.Repositories{OAuth2: repos.OAuth2, Users: repos.Users, Sessions: repos.Sessions, SecurityEvents: repos.SecurityEvents}, cfg.TokenSigner, cfg.OAuth2.Clients, authService, cfg.RuntimeMode, cfg.OAuth2.Server, oauth2.WithLogger(cfg.Logger))
+		if err != nil {
+			return nil, err
+		}
+		oauthHTTP = &inbound.OAuth2Config{Service: oauthService, Sessions: authService, Views: cfg.OAuth2.Views, CapabilityDescription: cfg.OAuth2.CapabilityDescription, Limiter: limiter}
+	}
 
 	// The outbound delivery executor is built AFTER authService so its Initializer —
 	// the separate initializer capability, which resolves accounts and issues challenges for opaque
@@ -544,6 +557,7 @@ func New(repos Repositories, signer cryptids.JWTSigner, runtimeMode environment.
 		cfg.RuntimeMode,
 		inbound.WithBrowser(inbound.BrowserConfig{RefreshCookiePath: cfg.RefreshCookiePath, AllowedOrigins: cfg.AllowedOrigins, Views: cfg.Views, HTMLPolicy: cfg.HTMLPolicy}),
 		inbound.WithInvitations(invSvc),
+		inbound.WithOAuth2(oauthHTTP),
 		inbound.WithInviteCheck(cfg.InviteCheck),
 		inbound.WithUserAdminCheck(cfg.UserAdminCheck),
 		inbound.WithAuthenticatorPolicy(inbound.AuthenticatorPolicy{Cookie: cfg.SessionCookie, BrowserLoginPath: cfg.BrowserLoginPath, Limiter: limiter, Logger: cfg.Logger}),
@@ -553,7 +567,7 @@ func New(repos Repositories, signer cryptids.JWTSigner, runtimeMode environment.
 	if err != nil {
 		return nil, err
 	}
-	return &Components{Authentication: authService, Invitations: invSvc, HTTP: adapter, Delivery: deliveryRuntime}, nil
+	return &Components{Authentication: authService, OAuth2: oauthService, Invitations: invSvc, HTTP: adapter, Delivery: deliveryRuntime}, nil
 
 }
 

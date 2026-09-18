@@ -31,6 +31,129 @@ Designs of record: `.claude/plans/restructure/auth-pocket-design.md` (v1),
 D1–D8), and `.claude/plans/roadmap/auth-v3-identity-design.md` (v3, the identity
 milestone — executed through `.claude/plans/authv3/`).
 
+## MCP authorization server (v0.13.0)
+
+`WithOAuth2(OAuth2Config{...})` enables one OAuth endpoint family for approved
+clients, including Claude. It is separate from `WithOAuth`, which configures
+Google/GitHub as human login providers. The server feature is off by default.
+
+A browser login W may approve connections A and B. Each approved code creates a
+new `delegated` session with its own refresh history, expiry and revocation. W is
+required to approve consent, but neither A nor B depends on W afterward. The
+account page links to `/auth/sessions`, where web sessions and connected apps
+have separate controls. Revoking A invalidates A's MCP and exchanged API tokens;
+W and B remain valid. “Revoke all” increments the user's authentication revision
+and revokes every session, also fencing outstanding authorization codes.
+
+```go
+clients, err := oauthout.NewCIMD([]string{approvedClientMetadataURL})
+if err != nil { return err }
+components, err := authentication.New(repos, signer, mode, deliveryMode,
+    // Existing browser, identity, delivery and other host options go here.
+    authentication.WithOAuth2(authentication.OAuth2Config{
+        Server: oauth2.Config{
+            Issuer: "https://app.example.com",
+            MCPResource: "https://mcp.example.com/mcp",
+            APIResource: "https://app.example.com/api",
+            ConfidentialClientID: "gps-mcp",
+            ConfidentialSecretHashes: [][32]byte{sha256.Sum256([]byte(mcpSecret))},
+        },
+        Clients: clients,
+        Views: views, // implements inbound/http.OAuthViews as well as Views
+        CapabilityDescription: "Use the enabled GPS tools within your current permissions.",
+    }),
+)
+```
+
+Here `oauth2` is `logic/authentication/oauth2`, and `oauthout` is
+`outbound/oauth2`, both under this pocket. The caller loads a high-entropy MCP
+secret from its secret manager; the authorization server keeps only its SHA-256
+hash in configuration. Multiple hashes support secret rotation. Never share the
+JWT signing key with the MCP server. Root construction requires the OAuth store,
+owner-constrained session management, trusted client resolver, browser views and
+consent views before enabling the feature. No DCR or scope vocabulary is exposed.
+
+| Route | Purpose and authentication |
+| --- | --- |
+| `GET /.well-known/oauth-authorization-server` | Public RFC 8414 discovery from configured issuer |
+| `GET /auth/oauth2/authorize` | Live first-party browser login; validate request and show consent |
+| `POST /auth/oauth2/authorize` | Same login, origin and CSRF checks; signed request binding |
+| `POST /auth/oauth2/token` | Code + S256 verifier; rotating refresh; authenticated restricted exchange |
+| `POST /auth/oauth2/revoke` | Public client ID plus its refresh/access credential; idempotent |
+| `POST /auth/oauth2/introspect` | Confidential MCP client authentication; live MCP token validation |
+| `GET /auth/sessions` | Live first-party browser; owner's paginated live sessions |
+| `POST /auth/sessions/{id}/revoke` | Same owner, origin and CSRF checks; revoke one session |
+| `POST /auth/sessions/revoke-all` | Same owner, origin and CSRF checks; revoke every session |
+
+Mount this optional browser/authorization-server surface at the issuer origin's
+root. Its form actions and endpoint URLs are absolute paths; a prefix registrar
+alone does not relocate them. An issuer with a path uses RFC 8414 discovery at
+`/.well-known/oauth-authorization-server` followed by that path, while endpoints
+remain `/auth/oauth2/*` at the same origin. Discovery never trusts request Host.
+
+The consent page permits `form-action 'self'` plus the exact validated callback
+origin so browsers can follow its post-consent redirect. No wildcard or callback
+query enters CSP; other authentication pages retain self-only forms. Canonical
+ASCII/punycode callback hostnames are required. Origin/CSRF checks and exact
+registered redirect matching still apply to approval.
+
+The public client supplies `resource` in authorization, code and refresh requests;
+the server validates it and signs `aud`. The MCP token has only the MCP audience.
+MCP authenticates with `client_secret_basic` to exchange it for an API-only token
+using `grant_type=urn:ietf:params:oauth:grant-type:token-exchange`,
+`subject_token_type=urn:ietf:params:oauth:token-type:access_token` and the configured
+API `resource`. No arbitrary target, actor, scope, or public-client exchange is
+allowed. Exchange preserves the user and session, records MCP as `client_id` and
+`act.sub`, and preserves the consenting client as `origin_client_id`. It creates
+no new session or refresh token; its expiry cannot exceed the incoming token.
+Both tokens are rejected immediately after their shared session is revoked.
+
+MCP validates every operation through authenticated introspection and checks the
+configured issuer/audience. The API uses `RequirePrincipal(Audience(apiResource))`
+and normal host authorization. Recheck established MCP transports at operation
+admission and before newly authorized emissions. Do not positively cache liveness
+or forward the MCP token unchanged to the API. Datastore failure fails closed.
+The pocket provides OAuth machinery, not the host's MCP protocol server, protected
+resource metadata, tool permissions, or Claude connector configuration.
+
+Token/revoke/introspection accept bounded URL-encoded forms, never JSON or query
+credentials. Token responses contain no browser session cookies. Authorization
+codes expire after one minute and are atomically single-use. Default delegated
+lifetimes are five minutes for access, thirty days for the session, and five
+minutes for the signed consent request; the session horizon never slides.
+Delegated refresh credentials begin `oauth2_rt.` and have no first-party grace
+window. Reusing any spent refresh credential revokes only that connection. A
+client must serialize refresh and reconnect after a lost/replayed rotation.
+Retain spent hashes through session expiry; host maintenance may call
+`repos.OAuth2.Prune(ctx, now)` afterward. Security events are best-effort and contain
+identifiers, never codes, tokens, state, verifier values or secrets.
+
+Production CIMD uses an explicit exact URL allowlist, HTTPS, bounded fetch/cache,
+no redirects or environment proxy, and connection-time nonpublic-address
+rejection. `WithClientTrust` adds a policy checked even on cache hits. Custom
+resolvers must maintain the same trust contract; metadata cache expiry is not an
+authorization decision. Local fixtures require explicit development-only HTTP
+and never weaken the production CIMD transport.
+
+Upgrade core, SQL adapter and optional views together. Both pgx and Turso add
+`0019_oauth2_sessions.sql`; all older migration bytes remain unchanged. Export
+that exact migration into the host ledger and apply it before boot. It adds
+session profile/delegation, client snapshots, hashed codes and spent refresh
+history. Existing sessions default to first-party. The adapters expose `OAuth2`
+and `SessionManagement`; their shared conformance contract is `storetest.RunOAuth2`.
+Firestore does not implement these capabilities: enabling OAuth with it fails
+construction, and attempts to persist delegated sessions fail explicitly.
+
+Drain old authentication writers before enabling delegated issuance; old binaries
+cannot enforce the new session profile and refresh rules. For rollback, disable
+OAuth issuance and MCP traffic, revoke/drain delegated sessions, and retain the
+additive schema. Do not resume an old binary against live delegated sessions.
+Existing first-party refresh grace and stateless token expiry remain unchanged.
+Legacy rows without a profile are accepted only with an empty delegation binding.
+Custom token signers must not inject OAuth-reserved claims into first-party tokens.
+Use the [implementation plan](../../plans/authentication-mcp-oauth.md) for complete
+verification and the host handoff checklist. No candidate tag is published yet.
+
 ## Authentication audit adoption
 
 **Credential ownership patch (`v0.11.1`).** Upgrade this core together with the
@@ -213,7 +336,7 @@ the replaced/displaced rows and adds the newly verified one atomically.
 
 ## Route surface (JSON)
 
-Claimed namespace **`/auth/*`** (prefixable via `pockets.PrefixRegistrar` — a
+Claimed namespace **`/auth/*`** for the existing JSON surface (prefixable via `pockets.PrefixRegistrar` — a
 prefixed host MUST also set `BrowserConfig.RefreshCookiePath` to the full prefixed path,
 e.g. `/api/v1/auth`, or the browser never sends the refresh cookie to
 `/api/v1/auth/refresh`).
@@ -784,12 +907,14 @@ subsystems, no shared type.
 Every other gate — the six named helpers and every bundled route — is a
 pre-composition of it.
 
-**The three axes.** A request authenticates along three independent axes:
+**Credential admission.** A route chooses these constraints independently:
 
 | axis | values | fact |
 |---|---|---|
 | credential | `CredentialAccessToken` (the session-backed JWT: claims `user_id` + `session_id`) · `CredentialAPIKey` | **the cookie's value IS the access JWT** — one credential, two transports |
 | transport | `TransportHeader` (`Authorization: Bearer <token>`) · `TransportCookie` | header is authoritative: a bearer, once consulted, means the cookie is never read |
+| profile | first-party · delegated | delegated proof requires explicit `Audience`; `FirstParty()` excludes delegated proof and API keys |
+| audience | exact resource identifiers | required for delegated proof; audience-less tokens and API keys cannot satisfy it |
 | liveness | stateless verify · `Live()` (`+ sessions.Get(session_id)`) | meaningful for `access_token` only; an API key is already DB-checked at resolution |
 
 **The primitive and its options:**
@@ -800,13 +925,16 @@ func Transports(ts ...Transport) PrincipalOption    // OR-set of transports;  de
 func Live() PrincipalOption                          // access_token ⇒ the session row must exist; api_key ⇒ pass
 func Browser() PrincipalOption                       // on denial 303 to BrowserConfig.BrowserLoginPath (validated return_to) instead of a JSON 401
 func Optional() PrincipalOption                      // no credential within the set passes anonymous instead of denying
+func FirstParty() PrincipalOption                    // first-party access tokens only; excludes delegated tokens and API keys
+func Audience(resources ...string) PrincipalOption   // token must name one of these exact resources; replaces the audience set
 
 func (s *authenticationhttp.Adapter) RequirePrincipal(opts ...PrincipalOption) web.Middleware
 ```
 
-With zero options `RequirePrincipal()` admits every wired credential over both
-transports, header authoritative, stateless, denying with a JSON 401.
-`Accept()` / `Transports()` called with **zero arguments panics at
+With zero options `RequirePrincipal()` admits first-party access tokens and wired
+API keys over both transports, header authoritative, stateless, denying with a
+JSON 401. Delegated tokens require an explicit `Audience(...)` and always require
+a live grant. `Accept()` / `Transports()` / `Audience()` called with **zero arguments panics at
 construction** — a set that admits nothing is a programming error, not a
 posture, so the mistake surfaces at wiring time, not on a request.
 
@@ -826,8 +954,9 @@ and a transport outside the set is still not read.
 **Nesting.** An inner `RequirePrincipal` mounted under an outer one **narrows**:
 it reads the `Credential` the outer gate already stashed and checks it against
 its own set — it never re-resolves the request. A `Live()` inner runs the
-session lookup once; a second nested `Live()` reads the already-proven
-`CurrentSessionID` and passes. A nested denial answers a JSON 401 **unless the
+session lookup once for a first-party credential; a second nested `Live()` reads
+the already-proven `CurrentSessionID` and passes. Delegated admission always
+rechecks its session, user, binding and token expiry. A nested denial answers a JSON 401 **unless the
 INNER gate itself carries `Browser()`** — a plain helper nested under a
 browser-facing outer gate still answers JSON; none of the six named helpers
 below carry `Browser()`. This nesting trusts the credential stash written
@@ -868,6 +997,42 @@ postures read as vocabulary at the call site:
   [Machine identity](#machine-identity--ownership-delegation-and-the-two-seams).
 - `delivery.Runtime.Run(ctx)` — the host-owned `in_process` delivery runtime loop
   (below); in `jobs` mode the host runs the generic jobs runtime instead.
+
+**Delegated session foundation (OAuth issuance is not yet available).** Session
+rows now distinguish `session.ProfileFirstParty` from `session.ProfileDelegated`.
+Existing rows with an empty profile and no delegation binding remain first-party;
+new first-party JWTs carry `session_profile: "first_party"`. Legacy JWTs without
+that claim remain valid only when they have no reserved OAuth claims (`iss`,
+`aud`, `client_id`, `origin_client_id`, `act`). Unknown or mixed profiles deny.
+Host-supplied signers that automatically add these reserved claims to first-party
+tokens must change that behavior before upgrading.
+
+Delegated verification is disabled unless the independently constructed logic
+service opts into `authlogic.WithDelegatedTokens(authlogic.DelegatedTokensConfig{
+Issuer: "https://auth.example.com"})`. This verifies tokens; it does not create
+grants or an authorization server. The root `WithOAuth2` option composes the
+authorization service, delegated verifier, endpoints and connection management
+together. Use the current SQL adapters with migration `0019` applied before
+enabling issuance; see [the MCP OAuth plan](../../plans/authentication-mcp-oauth.md).
+
+A delegated token requires one audience, its issuer and client, a separate live
+session, and an active user. `Credential` exposes `Profile`, `Issuer`, `Audiences`,
+`ClientID`, `OriginClientID` and `ActorID`. Exchanged tokens retain the same
+delegated session and must match its API resource and confidential client binding.
+They cannot authenticate by cookie. Audience gates reject audience-less web
+tokens and API keys. Bundled authentication and account routes deny delegated
+credentials even when a host overrides their authentication strategy; mount
+delegated resource routes separately.
+
+Legacy refresh/logout accepts first-party sessions only. A rejected delegated
+logout does not clear the browser's session cookies or revoke its web session.
+Delegated refresh credentials use the reserved `oauth2_rt.` namespace, generated
+by `session.NewDelegatedRefreshToken()`. Legacy endpoints reject this namespace
+before storage lookup, including after revocation or expiry. The prefix grants
+no authority; OAuth endpoints must still verify the stored hash and grant binding.
+Deleting one delegated session invalidates its resource credentials without
+deleting another connection or a first-party session. First-party immediate
+revocation still requires `Live()`; its existing stateless behavior is unchanged.
 
 ### Migration from the pre-`v0.9.0` fixed middleware names
 
@@ -2353,9 +2518,9 @@ access-JWT cookie (`Path=/`) and the refresh cookie (`<name>_refresh`,
 `Path=BrowserConfig.RefreshCookiePath` — `/auth` by default, `/api/v1/auth` on a
 prefixed host; the same path issues and clears it).
 
-## Migrations are host-owned (0001–0018)
+## Migrations are host-owned (0001–0019)
 
-Auth ships **seventeen** canonical migrations per dialect (0017 is unused), identical filename
+Auth ships **eighteen** canonical migrations per dialect (0017 is unused), identical filename
 sets across pgx and turso:
 
 ```
@@ -2366,11 +2531,12 @@ sets across pgx and turso:
 0005_oauth_states       0010_user_identifiers     0015_challenge_subject_keys
                                                   0016_invitation_metadata
                                                   0018_invitation_acceptance
+                                                  0019_oauth2_sessions
 ```
 
-Thirteen of those create tables; the remaining four **add columns** and are
-**append-only**, precisely because the tables they touch are already tagged and
-immutable:
+The original thirteen create tables. Later migrations add columns and
+constraints; `0019` also creates the OAuth tables. Every addition is
+**append-only**, because previously tagged migration bytes are immutable:
 
 - **`0014_user_status.sql`** — the account-lifecycle `status` /
   `status_changed_at` on `users`, the directory's `(created_at, id)` index, and —
@@ -2392,6 +2558,11 @@ immutable:
   `ClaimAcceptance`/`CompleteAcceptance` and current-token `UpdateStatus` together.
   Existing accepted rows have an empty subject type and are not backfilled with a
   guessed identity kind; replay of those legacy tokens may conflict.
+
+- **`0019_oauth2_sessions.sql`** — adds the session profile/delegation binding,
+  client metadata snapshots, authorization-code hashes and spent-refresh history.
+  Existing session rows remain first-party. Stop old authentication writers
+  before enabling delegated issuance; retain spent hashes through session expiry.
 
 **Upgrading from a host that copied an earlier set:** re-export or copy the
 missing files into your migration directory and apply them **before** deploying a

@@ -55,6 +55,10 @@ templ accountSecurityBody(m authentication.AccountSecurityPage) {
 		</section>
 		<section aria-labelledby="session-heading" data-slot="account-section">
 			<h2 id="session-heading">Session</h2>
+ if m.SessionsEnabled {
+ <p><a href="/auth/sessions">Manage sessions and connected apps</a></p>
+ <p>Signing out of this browser keeps connected apps active.</p>
+ }
 			// Sign-out posts to /auth/logout, which is origin-only (design §9.1, D2):
 			// unlike every other account mutation form it carries NO @csrfField, mirroring
 			// the route's origin-only middleware so a shared-computer logout is never blocked.

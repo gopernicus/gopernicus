@@ -245,3 +245,40 @@ requires verified evidence and the host's `TrustOAuthEmail` callback; nil denies
 those paths. Existing linked-ID login requires neither email nor that policy.
 When an email is already claimed, mailed pending-link proof is still required;
 native clients complete it at `/auth/oauth/native/verify-link` for JSON tokens.
+
+## MCP OAuth authorization server
+
+The optional, currently unreleased `WithOAuth2(OAuth2Config{...})` feature makes
+this host an authorization server for its MCP resource. `WithOAuth` remains the
+separate Google/GitHub human-login configuration. One shared OAuth endpoint family
+serves all explicitly trusted clients; there are no Claude-specific endpoints.
+
+Each consent creates a new delegated session. Web session W and MCP connections
+A/B are independently revocable at `/auth/sessions`. Logging out of W leaves A/B
+active. Revoking A ends its MCP token, refresh token and exchanged API tokens.
+The explicit revoke-all action ends every session and invalidates pending codes.
+
+The client requests the configured `resource`; the server signs its audience.
+MCP receives an MCP-only token and authenticates to `/auth/oauth2/token` for a
+restricted exchange to an API-only token. Both share the same delegated session.
+The API still enforces the person's current permissions. MCP uses authenticated
+`/auth/oauth2/introspect` on each operation; never share its issuer's HMAC signing
+key, cache positive liveness or forward the incoming token unchanged to the API.
+
+The feature mounts RFC 8414 discovery and `/auth/oauth2/{authorize,token,revoke,introspect}`.
+Authorization is code + PKCE S256 with browser consent and CSRF protection.
+Public clients use allowlisted Client ID Metadata Documents, with SSRF-safe HTTPS
+retrieval. Exchange/introspection require the configured confidential MCP client.
+Token endpoints accept forms; no scopes or dynamic registration are provided.
+Default access/session lifetimes are five minutes/thirty days, with strict refresh
+rotation: replay revokes only that connection. First-party refresh grace is unchanged.
+
+Use the root-mounted browser surface and supply both browser and OAuth views.
+Production requires explicit HTTPS issuer/resources, client trust and confidential
+credentials. SQL adapters require the new append-only `0019_oauth2_sessions.sql`
+in the host's migration ledger before boot. Upgrade the core, adapter and views
+together and drain old writers before enabling the feature. PostgreSQL, Turso and
+the example memory store support it; Firestore does not and fails closed if enabled.
+The host still owns MCP protected-resource metadata, tool authorization and the
+actual Claude connector acceptance test. See the pocket README and
+`plans/authentication-mcp-oauth.md` for the full API and rollout contract.

@@ -58,7 +58,7 @@ func WithSchema(s pgxdb.Schema) Option {
 // table-only probe would pass on a host that copied 0001-0013 and skipped the
 // new file, and the failure would then surface as a mid-flight query error
 // instead of at boot.
-var probeTables = []string{
+var legacyProbeTables = []string{
 	usersTable,
 	passwordsTable,
 	sessionsTable,
@@ -73,6 +73,9 @@ var probeTables = []string{
 	contactChangesTable,
 	authGrantsTable,
 }
+
+var oauthProbeTables = []string{oauthClientsTable, oauthCodesTable, oauthHistoryTable}
+var probeTables = append(append([]string{}, legacyProbeTables...), oauthProbeTables...)
 
 // Repositories returns the auth repository set backed by db, WITHOUT touching
 // migrations — AFTER verifying every canonical table (see probeTables) exists
@@ -93,21 +96,20 @@ func Repositories(ctx context.Context, db *pgxdb.DB, opts ...Option) (auth.Repos
 		}
 	}
 	s := qualified{schema: applyOptions(opts).schema}
-	for _, table := range probeTables {
-		name := s.table(table)
-		if err := pgxdb.ProbeTable(ctx, db, name); err != nil {
-			if errors.Is(err, sdk.ErrNotFound) {
-				return auth.Repositories{}, fmt.Errorf("authentication pgx store: %s table missing — apply the %q migration source before boot: %w", name, "authentication", err)
-			}
-			return auth.Repositories{}, err
-		}
+	if err := s.probeTables(ctx, db, legacyProbeTables); err != nil {
+		return auth.Repositories{}, err
 	}
 	for _, pc := range probeColumns {
 		if err := s.probeColumn(ctx, db, pc.table, pc.column, pc.migration); err != nil {
 			return auth.Repositories{}, err
 		}
 	}
+	if err := s.probeTables(ctx, db, oauthProbeTables); err != nil {
+		return auth.Repositories{}, err
+	}
+	oauth2Store := NewOAuth2Store(db, opts...)
 	return auth.Repositories{
+		OAuth2: oauth2Store, SessionManagement: oauth2Store,
 		Users:                NewUserStore(db, opts...),
 		Identifiers:          NewIdentifierStore(db, opts...),
 		Passwords:            NewPasswordStore(db, opts...),
@@ -146,6 +148,8 @@ var probeColumns = []struct{ table, column, migration string }{
 	{challengesTable, "subject_key", "0015_challenge_subject_keys.sql"},
 	{invitationsTable, "metadata", "0016_invitation_metadata.sql"},
 	{invitationsTable, "resolved_subject_type", "0018_invitation_acceptance.sql"},
+	{sessionsTable, "session_profile", "0019_oauth2_sessions.sql"},
+	{sessionsTable, "delegation", "0019_oauth2_sessions.sql"},
 }
 
 // probeColumnSQL is the default column probe. It is deliberately NOT filtered by
@@ -189,4 +193,17 @@ func (s qualified) probeColumn(ctx context.Context, db *pgxdb.DB, table, column,
 // The framework never reads or applies the host's copies.
 func ExportMigrations(dst string) error {
 	return pgxdb.ExportMigrations(MigrationsFS, MigrationsDir, dst)
+}
+
+func (s qualified) probeTables(ctx context.Context, db *pgxdb.DB, tables []string) error {
+	for _, table := range tables {
+		name := s.table(table)
+		if err := pgxdb.ProbeTable(ctx, db, name); err != nil {
+			if errors.Is(err, sdk.ErrNotFound) {
+				return fmt.Errorf("authentication pgx store: %s table missing — apply the %q migration source before boot: %w", name, "authentication", err)
+			}
+			return err
+		}
+	}
+	return nil
 }

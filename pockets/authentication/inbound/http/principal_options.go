@@ -2,13 +2,15 @@ package authenticationhttp
 
 import (
 	"slices"
+	"strings"
 
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/session"
 	"github.com/gopernicus/gopernicus/sdk/pkg/web"
 )
 
 // PrincipalOption narrows the credential set an authenticator admits. The
-// options are OR-sets over credentials and transports plus a liveness tier and a
-// browser denial mode; see Service.RequirePrincipal.
+// options configure credentials, transports, profile, audience, liveness and
+// denial behavior; see Adapter.RequirePrincipal.
 type PrincipalOption func(*principalSet)
 
 // principalSet is the resolved posture of one RequirePrincipal instance: which
@@ -23,6 +25,30 @@ type principalSet struct {
 	live        bool
 	browser     bool
 	optional    bool
+	firstParty  bool
+	audiences   []string
+}
+
+// Audience admits tokens issued for one of the exact resource identifiers.
+// It is required to admit delegated tokens. Audience-less first-party tokens
+// and API keys cannot satisfy this gate. Repeated options replace the set.
+func Audience(resources ...string) PrincipalOption {
+	if len(resources) == 0 {
+		panic("authsvc: Audience requires at least one resource")
+	}
+	for _, resource := range resources {
+		if strings.TrimSpace(resource) == "" || resource != strings.TrimSpace(resource) {
+			panic("authsvc: Audience requires nonempty resource identifiers without surrounding whitespace")
+		}
+	}
+	resources = slices.Clone(resources)
+	return func(set *principalSet) { set.audiences = resources }
+}
+
+// FirstParty requires a first-party access token, regardless of transport.
+// Neither an API key nor a delegated token satisfies this gate.
+func FirstParty() PrincipalOption {
+	return func(set *principalSet) { set.firstParty = true }
 }
 
 // Accept is the OR-set of credential kinds the authenticator admits. The default
@@ -84,7 +110,8 @@ func Transports(ts ...Transport) PrincipalOption {
 // token's session row must exist (one PK lookup, failing CLOSED on a missing,
 // expired, or unreadable row), and the proven session id is stashed for
 // CurrentSessionID. An API key passes without another lookup — it was fully
-// DB-checked during resolution and owns no session row.
+// DB-checked during resolution and owns no session row. Delegated tokens always
+// require a fresh live check even without this option.
 func Live() PrincipalOption {
 	return func(set *principalSet) { set.live = true }
 }
@@ -114,7 +141,7 @@ func Optional() PrincipalOption {
 // defaultSet is the posture of an option-free RequirePrincipal: every WIRED
 // credential kind — the access token always (a TokenSigner is required), the API
 // key only when the machine subsystem is wired — over both transports,
-// stateless, denying with JSON.
+// stateless, denying with JSON. Delegated tokens require an explicit Audience.
 func defaultSet(s *Adapter) principalSet {
 	return principalSet{
 		accessToken: true,
@@ -137,20 +164,34 @@ func (s *Adapter) resolveSet(opts []PrincipalOption) principalSet {
 
 // admits reports whether an already-resolved credential falls inside this set —
 // the nested-narrowing check, which never re-resolves.
-func (set principalSet) admits(kind CredentialKind, transport Transport) bool {
-	switch kind {
+func (set principalSet) admits(cred Credential) bool {
+	switch cred.Kind {
 	case CredentialAccessToken:
 		if !set.accessToken {
 			return false
 		}
+		switch cred.Profile {
+		case session.ProfileFirstParty:
+		case session.ProfileDelegated:
+			if set.firstParty || len(set.audiences) == 0 || cred.Transport != TransportHeader {
+				return false
+			}
+		default:
+			return false
+		}
 	case CredentialAPIKey:
-		if !set.apiKey {
+		if !set.apiKey || set.firstParty || len(set.audiences) != 0 {
 			return false
 		}
 	default:
 		return false
 	}
-	switch transport {
+	if len(set.audiences) != 0 && !slices.ContainsFunc(cred.Audiences, func(audience string) bool {
+		return slices.Contains(set.audiences, audience)
+	}) {
+		return false
+	}
+	switch cred.Transport {
 	case TransportHeader:
 		return set.header
 	case TransportCookie:

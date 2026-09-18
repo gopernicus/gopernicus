@@ -1,0 +1,94 @@
+package goth
+
+import (
+ authentication "github.com/gopernicus/gopernicus/pockets/authentication/inbound/http"
+ "github.com/gopernicus/gopernicus/ui/goth/components/forms"
+ "github.com/gopernicus/gopernicus/ui/goth/primitives"
+)
+
+templ sessionsBody(m authentication.SessionsPage) {
+ @shell("Sessions and connected apps", "Each app connection is separate from your web sessions.") {
+  @message(m.PageContext)
+  @errorSummary(m.PageContext)
+  if m.Actor != "" {
+   <p>Signed in as { m.Actor }.</p>
+  }
+  <section aria-labelledby="web-sessions-heading" data-slot="account-section">
+   <h2 id="web-sessions-heading">Web sessions</h2>
+   <p>Signing out ends only the selected web session. Connected apps keep working.</p>
+   if len(sessionsByProfile(m.Sessions, false)) == 0 {
+    <p>No web sessions on this page.</p>
+   } else {
+    <ul>
+     for _, entry := range sessionsByProfile(m.Sessions, false) {
+      <li>
+       @sessionEntry(m.PageContext, entry)
+      </li>
+     }
+    </ul>
+   }
+  </section>
+  <section aria-labelledby="connected-apps-heading" data-slot="account-section">
+   <h2 id="connected-apps-heading">Connected apps (MCP)</h2>
+   <p>Disconnecting an app ends only that connection. Your web sessions and other app connections keep working.</p>
+   if len(sessionsByProfile(m.Sessions, true)) == 0 {
+    <p>No connected apps on this page.</p>
+   } else {
+    <ul>
+     for _, entry := range sessionsByProfile(m.Sessions, true) {
+      <li>
+       @sessionEntry(m.PageContext, entry)
+      </li>
+     }
+    </ul>
+   }
+  </section>
+  if m.NextURL != "" {
+   <nav aria-label="Session pages" class="goth-auth-links" data-slot="auth-links">
+    <a href={ m.NextURL }>More sessions</a>
+   </nav>
+  }
+  <section aria-labelledby="all-sessions-heading" data-slot="account-section">
+   <h2 id="all-sessions-heading">Sign out everywhere</h2>
+   <p>This ends every web session, including this browser, and disconnects every app. You will need to sign in again and reconnect your apps.</p>
+   <form method="post" action="/auth/sessions/revoke-all">
+    @csrfField(m.PageContext)
+    @forms.FormActions(forms.FormActionsProps{}) {
+     @primitives.Button(primitives.ButtonProps{Type: primitives.ButtonTypeSubmit, Variant: primitives.ButtonDestructive}) {
+      Sign out everywhere, including connected apps
+     }
+    }
+   </form>
+  </section>
+  <nav class="goth-auth-links" data-slot="auth-links">
+   <a href="/auth/account">Back to account security</a>
+  </nav>
+ }
+}
+
+templ sessionEntry(pc authentication.PageContext, entry authentication.SessionView) {
+ <h3>{ sessionName(entry) }</h3>
+ if entry.Profile == "delegated" && entry.Resource != "" {
+  <p>Connected to { entry.Resource }</p>
+ }
+ if !entry.CreatedAt.IsZero() {
+  <p>Started <time datetime={ sessionDateTime(entry.CreatedAt) }>{ sessionDateLabel(entry.CreatedAt) }</time></p>
+ }
+ if !entry.ExpiresAt.IsZero() {
+  <p>Expires <time datetime={ sessionDateTime(entry.ExpiresAt) }>{ sessionDateLabel(entry.ExpiresAt) }</time></p>
+ }
+ <form method="post" action={ sessionRevokeAction(entry.ID) }>
+  @csrfField(pc)
+  @forms.FormActions(forms.FormActionsProps{}) {
+   @primitives.Button(primitives.ButtonProps{Type: primitives.ButtonTypeSubmit, Variant: primitives.ButtonSecondary, Label: sessionRevokeLabel(entry)}) {
+    if entry.Profile == "delegated" {
+     Disconnect app
+    } else if entry.Current {
+     Sign out this browser
+    } else {
+     Sign out session
+    }
+   }
+  }
+ </form>
+}

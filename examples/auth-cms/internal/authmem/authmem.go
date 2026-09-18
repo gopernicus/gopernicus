@@ -37,6 +37,7 @@ import (
 	challenge "github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/challenge"
 	contactchange "github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/contactchange"
 	identifier "github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/identifier"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/oauth2"
 	oauthaccount "github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/oauthaccount"
 	oauthstate "github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/oauthstate"
 	securityevent "github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/securityevent"
@@ -55,11 +56,14 @@ var ids = sdk.IDGenerator{}
 // (oauthAccounts, securityEvents) are slices where the port has no single-key
 // identity; the rest are keyed maps.
 type data struct {
-	mu          sync.RWMutex
-	users       map[string]user.User
-	identifiers map[string]identifier.Identifier // real identifier rows (design §2.2), by identifier ID
-	passwords   map[string]string
-	sessions    map[string]session.Session
+	oauthClients map[string]oauth2.Client
+	oauthCodes   map[string]oauth2.Code
+	oauthRefresh map[string]oauthRefreshRecord
+	mu           sync.RWMutex
+	users        map[string]user.User
+	identifiers  map[string]identifier.Identifier // real identifier rows (design §2.2), by identifier ID
+	passwords    map[string]string
+	sessions     map[string]session.Session
 
 	oauthAccounts   []oauthaccount.OAuthAccount
 	oauthStates     map[string]oauthstate.State
@@ -86,6 +90,9 @@ type Store struct{ d *data }
 // New returns an empty Store.
 func New() *Store {
 	return &Store{d: &data{
+		oauthClients:    map[string]oauth2.Client{},
+		oauthCodes:      map[string]oauth2.Code{},
+		oauthRefresh:    map[string]oauthRefreshRecord{},
 		users:           map[string]user.User{},
 		identifiers:     map[string]identifier.Identifier{},
 		passwords:       map[string]string{},
@@ -108,16 +115,18 @@ func New() *Store {
 // exported storetest suite proves them here too.
 func (s *Store) Repositories() auth.Repositories {
 	return auth.Repositories{
-		Users:           userRepo{s.d},
-		Identifiers:     identifierRepo{s.d},
-		Passwords:       passwordRepo{s.d},
-		Sessions:        sessionRepo{s.d},
-		OAuthAccounts:   oauthAccountRepo{s.d},
-		OAuthStates:     oauthStateRepo{s.d},
-		ServiceAccounts: serviceAccountRepo{s.d},
-		APIKeys:         apiKeyRepo{s.d},
-		SecurityEvents:  securityEventRepo{s.d},
-		Invitations:     invitationRepo{s.d},
+		OAuth2:            oauth2Repo{s.d},
+		SessionManagement: oauth2Repo{s.d},
+		Users:             userRepo{s.d},
+		Identifiers:       identifierRepo{s.d},
+		Passwords:         passwordRepo{s.d},
+		Sessions:          sessionRepo{s.d},
+		OAuthAccounts:     oauthAccountRepo{s.d},
+		OAuthStates:       oauthStateRepo{s.d},
+		ServiceAccounts:   serviceAccountRepo{s.d},
+		APIKeys:           apiKeyRepo{s.d},
+		SecurityEvents:    securityEventRepo{s.d},
+		Invitations:       invitationRepo{s.d},
 
 		Challenges:           challengeRepo{s.d},
 		PasswordResets:       passwordResetRepo{s.d},
