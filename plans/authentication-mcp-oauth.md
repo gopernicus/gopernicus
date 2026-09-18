@@ -1,6 +1,6 @@
 # MCP OAuth authorization server and independent delegated sessions
 
-Status: IMPLEMENTED; RELEASE AUTHORIZED — 2026-09-18. Josh approved implementation after accepting
+Status: IMPLEMENTED AND PUBLISHED — 2026-09-18. Josh approved implementation after accepting
 the plan, then explicitly authorized merging to main and publishing the module releases.
 Execution is tracked in [the release plan](authentication-mcp-oauth-release.md).
 Deployment remains separate work. The defining
@@ -593,8 +593,8 @@ independence or allow delayed revocation.
 
 ## Implementation record
 
-Working branch: `authentication-mcp-oauth`, based on `5a388dd1`. The following
-implementation evidence predates release preparation; the separate release plan
+Implementation branch: `authentication-mcp-oauth`, based on `5a388dd1`, merged to
+main at `6a399d1e27932ea4564e5f391e50f65d4b9751a1`. The separate release plan
 records committed pins, publication and public verification. Matching repository `implementer` and
 `architecture-steward` instructions were used; their configured model names were
 unavailable, so the existing agents used inherited models.
@@ -602,16 +602,17 @@ unavailable, so the existing agents used inherited models.
 - Tasks 1–5: implemented. Independent profiles/admission, atomic stores,
   authorization/refresh/revoke/exchange/introspection, CIMD, optional HTTP wiring,
   consent and owner session management are present.
-- Task 6: implemented and exercised through real HTTP, including the running
-  local proof host. Visual browser verification remains unverified: no browser
-  connector was available, and native Chrome control reported computer-use
-  permissions were not granted. No permission or browser security setting was changed.
-- Task 7: documentation and unpublished exact-version candidate checks are
-  complete for unpublished local candidates; the release manifest records
-  versions, archives and live-store evidence.
+- Task 6: implemented and exercised through real HTTP and a fresh headless
+  Chromium browser against the running local proof host. Consent and session
+  screenshots were visually inspected. The repository's existing Playwright
+  harness resolved the earlier browser-tool access gap without changing personal
+  browser or security settings.
+- Task 7: documentation, real dependency pins and exact-version candidate checks
+  are complete. The release record tracks published archives and public checks.
 - Three-sixty deployment, actual MCP protocol transport, PRM/challenges/tool
   authorization and real Claude connector acceptance remain the separate host leg.
-  No tag publication, consumer pin update or production deployment was performed.
+  Framework tags and auth-cms pins are published; no production host deployment
+  or external consumer repository update was performed.
 
 Implemented behavior: each successful code redemption creates a new delegated
 session; approving web session W is not its parent. MCP-only and exchanged API-only
@@ -621,7 +622,7 @@ client; no second human login, consent or session is created. The MCP specificat
 requires a separate upstream API token; RFC 8693 is our selected mechanism.
 
 SQL migration `0019_oauth2_sessions.sql` is append-only in pgx/Turso; historical
-migration bytes and real module dependency pins remain unchanged. Firestore is
+migration bytes remain unchanged. Release pins are recorded separately. Firestore is
 explicitly unsupported for delegated storage, and optional feature construction
 fails without the necessary repository/view/trust capabilities. Production CIMD
 never permits the demo's local HTTP transport. Metadata snapshots serve display,
@@ -649,21 +650,22 @@ All Go/make commands use `GOCACHE=/tmp/gopernicus-mcp-oauth-cache`.
 - PASS: full repository `make guard` in the original working tree, including the
   new logic-to-outbound boundary rejection fixture. Final architectural review
   found no blocking dependency/placement defect; README corrections were applied.
-- PASS: `make check` in an isolated working-tree snapshot at
-  `/tmp/gopernicus-oauth-check.d4qrtpyy`, including all 42 modules and tagged
-  compile/vet checks. Log: `/tmp/gopernicus-mcp-oauth-make-check-final.log`.
-  The original-tree invocation intentionally stopped at its HEAD-based generated
-  file diff gate because the account template change is uncommitted. The snapshot
-  exercises the Makefile's no-.git before/after generation check without altering
-  the index; original-tree `make guard` separately covers git-dependent guards.
+- PASS: final `make check` on committed release `6a399d1e`, all 42 modules,
+  generated-file drift gates, tagged compile/vet and architecture guards,
+  in 146.59 seconds. Log:
+  `/tmp/gopernicus-authentication-mcp-oauth-verification/release-make-check.log`.
+  Earlier snapshot checks also passed; the original uncommitted generated-file
+  gate was resolved by committing the verified generated artifacts.
 - PASS: documentation `pnpm typecheck` and `pnpm build`; the Docusaurus update
   notifier could not update its local config, but both checks exited successfully.
 - PASS: `git diff --check`, and repository `goimports` on authored Go files.
-- PASS: isolated unpublished candidate-module `GOWORK=off` build/test/vet and
-  tagged compile checks, plus an external composition consumer with no replacements.
-  Exact archive hashes, staging-only pin changes and SQL results are recorded in
-  `plans/authentication-mcp-oauth-release-manifest.json`. Public
-  proxy/checksum verification for these unpublished versions is not claimed.
+- PASS: exact final candidate-module `GOWORK=off` build/test/vet and tagged
+  compile checks, plus external consumer and auth-cms full race suites with no
+  replacements. All 566 archive entries match committed source, including real
+  pins and checksums. Public verification is recorded in the release manifest.
+- PASS: final running-host HTTP and headless Chromium acceptance, with zero
+  browser errors or CSP violations and visually checked consent/session pages.
+  Browser, host and test cookie artifacts were cleaned up afterward.
 
 Automated full OAuth tests use real TLS listeners, separate HTTP cookie jars,
 actual signer, real memory repository and rendered views. They cover incomplete
@@ -687,8 +689,8 @@ initial drive mistakenly selected the first inventory form (the web session)
 instead of B; selecting B by its actual session ID fixed the test assumption.
 The disposable app was stopped after verification.
 
-Not verified: visual browser layout/interactions (computer-use permissions),
-Claude's real connector, hosted Turso, and Firestore emulator/GCP behavior. The
+Not verified: external-origin callback navigation in a browser, Claude's real
+connector, hosted Turso, and Firestore emulator/GCP behavior. The
 Firestore module's offline/build/tagged checks do not imply OAuth support or live
 GCP verification. First-party stateless routes retain their documented token
 expiry window; delegated routes always require live authoritative admission.
@@ -702,8 +704,9 @@ OAuth consent form's redirect to an external client. Only the validated consent
 page/response now adds the exact registered callback origin to that directive;
 queries, wildcard sources and arbitrary directive text are excluded, and all other
 pages retain the default policy. Core build/vet/full race and cross-module OAuth
-HTTP race tests passed after this fix. Browser execution itself remains unverified.
-Candidate archives and the full snapshot check were refreshed after this change.
+HTTP race tests passed after this fix. Final Chromium acceptance verifies the
+same-origin proof client; external-origin CSP sources have automated header tests
+but still need the consuming host's real-client acceptance.
 
 ### Changed-file inventory
 
@@ -815,3 +818,7 @@ Candidate archives and the full snapshot check were refreshed after this change.
 - `workshop/documentation/docs/pockets/authentication.md`.
 - `workshop/gopernicus/internal/commands/pocket_boundaries_test.go`.
 - `plans/authentication-mcp-oauth-release-manifest.json`.
+- `plans/authentication-mcp-oauth-release.md`.
+- `examples/auth-cms/go.mod` and `go.sum`.
+- `pockets/authentication/stores/{pgx,turso,firestore}/go.mod` and `go.sum`.
+- `pockets/authentication/views/goth/go.mod` and `go.sum`.

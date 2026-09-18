@@ -1,6 +1,6 @@
 # Independent MCP OAuth release
 
-Status: AUTHORIZED, IN PROGRESS — 2026-09-18.
+Status: PUBLISHED AND PUBLICLY VERIFIED — 2026-09-18.
 
 Josh explicitly authorized committing the OAuth implementation, merging it to
 main and publishing module releases. Three-sixty adoption, migrations and
@@ -38,13 +38,13 @@ Turso also needs the already published connector v0.6.0.
 
 ## Tasks and gates
 
-- [ ] R1 Apply verified dependency pins, freeze final candidate archives and
+- [x] R1 Apply verified dependency pins, freeze final candidate archives and
   verify independent modules, external consumer and auth-cms with `GOWORK=off`.
-- [ ] R2 Exercise the final running proof host; commit only release-owned files;
+- [x] R2 Exercise the final running proof host; commit only release-owned files;
   run the complete 42-module `make check` with the committed generated artifacts.
-- [ ] R3 Confirm committed source matches candidates, fast-forward main and
+- [x] R3 Confirm committed source matches candidates, fast-forward main and
   publish the five annotated module tags in dependency order.
-- [ ] R4 Verify public archives with ordinary sum.golang.org checks, compare
+- [x] R4 Verify public archives with ordinary sum.golang.org checks, compare
   source/checksums and Git origins, rerun public module/consumer checks and
   inspect GitHub CI. Commit a publication receipt without moving tags.
 
@@ -61,8 +61,40 @@ web logout and revoke-all. Real PostgreSQL (default/named schema) and local SQLi
 passed; optional non-C PostgreSQL collation, hosted Turso and Firestore/GCP were
 not exercised. Firestore does not support delegated sessions.
 
-Visual browser verification was unavailable because no browser connector or
-computer-use permission was granted. Retry practical repository test tooling;
-do not change personal browser/security settings. Record any remaining gap.
+Final browser verification passed using the repository's installed Playwright
+and a fresh headless Chromium profile. Real login, A/B consent, introspection,
+exchange, API admission, individual revoke, web logout and revoke-all all passed;
+screenshots were visually checked, with zero page/CSP errors. No personal browser
+or security settings changed. Browser/context and proof host were stopped.
+External-origin callback navigation remains unverified in a browser; exact CSP
+callback-origin admission has automated header tests.
 Actual Claude discovery/connector acceptance and three-sixty MCP transport,
 resource metadata and tool authorization remain the consuming host's work.
+
+## Publication receipt
+
+- Release commit: `6a399d1e27932ea4564e5f391e50f65d4b9751a1`, fast-forwarded and
+  pushed to main, then all five annotated module tags published in dependency order.
+- All 566 candidate archive entries match committed Git blobs, including real
+  module pins/sums. Independent candidates, external consumer and auth-cms passed
+  `GOWORK=off` build/test/vet; the consumer and host passed full race suites.
+- Final local 42-module `make check` passed on the committed source in 146.59
+  seconds, including generated drift gates, tagged vet and architecture guards.
+- GitHub [main check](https://github.com/gopernicus/gopernicus/actions/runs/35379903125),
+  all five tag checks, and documentation deployment passed. The manifest records
+  each run URL and status.
+- All 473 prior remote refs (tags and peeled commits) were preserved. The only
+  additions are the five annotated tags. All unrelated owner-file hashes match.
+- All five public archives passed normal sum.golang.org verification, with all
+  566 entries, content/go.mod checksums and Git origins matching the candidates
+  and release commit. Independent public module build/test/vet and tagged checks,
+  the external consumer's race tests, and auth-cms full race/build/vet checks passed
+  with `GOWORK=off` and no replacements.
+- The official proxy initially retained prepublication negative lookups for
+  core/views. Unauthenticated GitHub checks confirmed public visibility. The
+  first retry after the recorded 18:45:18 UTC cache expiry succeeded. No tags
+  moved and no public checksum exemptions were used; the manifest retains the
+  failure/recovery evidence.
+
+The follow-up root documentation commit records verification without changing
+module archives or moving tags. No production host mutation occurred.

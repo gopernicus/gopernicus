@@ -1,8 +1,409 @@
 {
   "base_commit": "5a388dd1aae50fdc08ab77a14b125bcb561a2bbd",
+  "browser_proof": {
+    "browser": {
+      "command": "node /tmp/gopernicus-oauth-final-browser.cjs chromium",
+      "engine": "Chromium",
+      "engine_executable": "/Users/jrazmi/Library/Caches/ms-playwright/chromium-1223/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",
+      "engine_version": "Google Chrome for Testing 148.0.7778.96",
+      "exit_code": 0,
+      "playwright_version": "1.60.0",
+      "profile": "Fresh disposable Playwright browser context; no personal browser profile or Computer Use permissions used.",
+      "result": {
+        "browserErrors": 0,
+        "checks": [
+          "real browser login",
+          "consent A/B, form submission, callback navigation, PKCE",
+          "distinct A/B grants, authenticated introspection, exchange and API",
+          "owner UI revokes B; A and web session survive",
+          "web logout leaves A refresh and API admission working",
+          "global revocation denies remaining connection"
+        ],
+        "crossOriginCallback": false,
+        "csp": "consent GET/POST form-action 'self' http://localhost:8082; account/inventory self-only",
+        "engine": "chromium"
+      },
+      "result_artifact": {
+        "bytes": 527,
+        "path": "/tmp/gopernicus-oauth-final-browser-chromium.json",
+        "sha256": "2074984aec28864c0aacfba7f0ea19facc1d9a430bcf33564a0714ddc0e5213f"
+      },
+      "screenshots": [
+        {
+          "bytes": 68544,
+          "path": "/tmp/gopernicus-oauth-final-consent-chromium.png",
+          "sha256": "cde9ca0f087fc315bd97c35ba113f673b83adcdc3af11bd1954aa2a534636e99"
+        },
+        {
+          "bytes": 106123,
+          "path": "/tmp/gopernicus-oauth-final-inventory-chromium.png",
+          "sha256": "23279bab3229b934cd0a068d85a3f82a243f61f9c25e26df27f5254cd3b13717"
+        }
+      ],
+      "script": {
+        "bytes": 6332,
+        "path": "/tmp/gopernicus-oauth-final-browser.cjs",
+        "sha256": "e48a8e7466b898c22be82499227a72df6450e4a694573effdbb88a415972a281"
+      },
+      "visual_inspection": "Both screenshots inspected: readable, complete consent controls and separate web/MCP sections, no clipping or overflow observed at 1200x1050; browser navigation/forms succeeded; zero page errors and zero CSP console violations."
+    },
+    "build": {
+      "binary": {
+        "bytes": 20769554,
+        "path": "/tmp/gopernicus-oauth-final-smoke",
+        "sha256": "2cdb1fc2aa73b460ceb23d8b2c62f9a3e91934092663d574fe1f02713dfc2d97"
+      },
+      "command": "go build -o /tmp/gopernicus-oauth-final-smoke ./cmd/server",
+      "cwd": "/Users/jrazmi/code/gopernicus-ecosystem/gopernicus/examples/auth-cms",
+      "environment": {
+        "GOCACHE": "/tmp/gopernicus-mcp-oauth-cache",
+        "GOMODCACHE": "/tmp/gopernicus-authentication-mcp-oauth-verification/candidate-2/modcache",
+        "GONOSUMDB": "github.com/gopernicus/gopernicus/pockets/authentication",
+        "GOPROXY": "file:///tmp/gopernicus-authentication-mcp-oauth-verification/candidate-2/proxy,https://proxy.golang.org",
+        "GOWORK": "/Users/jrazmi/code/gopernicus-ecosystem/gopernicus/go.work"
+      },
+      "exit_code": 0
+    },
+    "cleanup": {
+      "action": "SIGTERM sent to owned proof-host PID; originating tool process returned exit 0.",
+      "artifacts_retained": "Only bounded proof artifacts under /tmp retained for release receipt.",
+      "browser": "Browser context and browser closed after successful test.",
+      "host_pid": 96292,
+      "http_credentials": "Temporary curl cookie/header directory removed by successful driver.",
+      "listener_check": "lsof -nP -iTCP:8082 -sTCP:LISTEN returned no listener after shutdown."
+    },
+    "csp": {
+      "consent_get_and_post": "form-action 'self' http://localhost:8082;",
+      "external_origin_coverage": "Shipping TestOAuthConsentPolicyAllowsOnlyValidatedCallbackOrigin covers an external validated origin at the HTTP policy level; this task did not rerun that test or perform browser navigation to an external callback origin.",
+      "ordinary_account_and_inventory": "form-action 'self';",
+      "other_assertions": [
+        "frame-ancestors 'none'",
+        "base-uri 'none'"
+      ]
+    },
+    "host": {
+      "environment": {
+        "AUTH_OAUTH2_DEMO": "true",
+        "AUTH_REQUIRE_VERIFIED_EMAIL": "false",
+        "AUTH_RUNTIME_MODE": "development",
+        "HOST": "localhost",
+        "PORT": "8082"
+      },
+      "log": {
+        "bytes": 29925,
+        "path": "/tmp/gopernicus-oauth-final-smoke.log",
+        "sha256": "c86bcc6c990c658fd8bf1a5516abe8a4eb9f116fab677da0c68acbfbbfbeb3a5"
+      },
+      "origin": "http://localhost:8082",
+      "signing_and_confidential_credentials": "Ephemeral generated local fixture credentials; values excluded from receipt."
+    },
+    "http": {
+      "command": "python3 /tmp/gopernicus-oauth-final-live-drive.py",
+      "exit_code": 0,
+      "passes": [
+        "registration and web login",
+        "A/B consent and PKCE callbacks",
+        "authenticated introspection, token exchange and API calls",
+        "consent GET/POST CSP allows self plus validated callback origin only",
+        "account CSP remains form-action self only",
+        "owner UI revoke B denies B while A and web remain usable",
+        "web logout leaves A refresh/API working",
+        "global revoke denies remaining connection"
+      ],
+      "script": {
+        "bytes": 5173,
+        "path": "/tmp/gopernicus-oauth-final-live-drive.py",
+        "sha256": "7ebb7cedf1ec7a3a3e3bfada3f19b12985b2ebc2e36cbf6e0cbf6d50b2cf6060"
+      }
+    },
+    "limitations": [
+      "Browser flow used the local same-origin callback; external-origin callback redirect is not browser-proven by this artifact.",
+      "Chromium only; Firefox and WebKit were not run.",
+      "This is the local in-memory proof host, not live Claude or the GPS host.",
+      "No production deployment, production database, shared user browser, or remote hosted Turso was exercised."
+    ],
+    "recorded_at_utc": "2026-09-18T18:21:22.516154+00:00",
+    "resolved_environment_constraints": [
+      "Initial ordinary build attempted unpublished v0.13.0 metadata through network; resolved with existing local candidate proxy while retaining workspace source selection.",
+      "Default sandbox denied loopback bind; automatic approval review allowed owned localhost proof server and isolated headless test execution. No permission rejection was bypassed."
+    ],
+    "result": "passed",
+    "source_head_at_verification": "6a399d1e27932ea4564e5f391e50f65d4b9751a1",
+    "source_selection": "Current frozen local module source through repository go.work; local candidate-2 proxy used only for prepublication dependency metadata. No shipping files or git state edited by this proof task."
+  },
+  "candidate_authcms": {
+    "behavior": "Complete downstream auth-cms build, race test suite (including actual HTTP OAuth workflows), vet and exact module graph with real declared pins and no workspace.",
+    "checks": [
+      {
+        "command": [
+          "go",
+          "mod",
+          "tidy"
+        ],
+        "cwd": "/tmp/gopernicus-authentication-mcp-oauth-verification/release-candidate/downstream-authcms",
+        "elapsed_seconds": 0.35,
+        "exit_code": 0,
+        "log": "/tmp/gopernicus-authentication-mcp-oauth-verification/release-candidate/authcms-tidy.log"
+      },
+      {
+        "command": [
+          "go",
+          "mod",
+          "verify"
+        ],
+        "cwd": "/tmp/gopernicus-authentication-mcp-oauth-verification/release-candidate/downstream-authcms",
+        "elapsed_seconds": 1.03,
+        "exit_code": 0,
+        "log": "/tmp/gopernicus-authentication-mcp-oauth-verification/release-candidate/authcms-verify.log"
+      },
+      {
+        "command": [
+          "go",
+          "build",
+          "./..."
+        ],
+        "cwd": "/tmp/gopernicus-authentication-mcp-oauth-verification/release-candidate/downstream-authcms",
+        "elapsed_seconds": 1.47,
+        "exit_code": 0,
+        "log": "/tmp/gopernicus-authentication-mcp-oauth-verification/release-candidate/authcms-build.log"
+      },
+      {
+        "command": [
+          "go",
+          "test",
+          "-race",
+          "-count=1",
+          "./..."
+        ],
+        "cwd": "/tmp/gopernicus-authentication-mcp-oauth-verification/release-candidate/downstream-authcms",
+        "elapsed_seconds": 88.51,
+        "exit_code": 0,
+        "log": "/tmp/gopernicus-authentication-mcp-oauth-verification/release-candidate/authcms-test.log"
+      },
+      {
+        "command": [
+          "go",
+          "vet",
+          "./..."
+        ],
+        "cwd": "/tmp/gopernicus-authentication-mcp-oauth-verification/release-candidate/downstream-authcms",
+        "elapsed_seconds": 0.59,
+        "exit_code": 0,
+        "log": "/tmp/gopernicus-authentication-mcp-oauth-verification/release-candidate/authcms-vet.log"
+      },
+      {
+        "command": [
+          "go",
+          "list",
+          "-m",
+          "-json",
+          "all"
+        ],
+        "cwd": "/tmp/gopernicus-authentication-mcp-oauth-verification/release-candidate/downstream-authcms",
+        "elapsed_seconds": 0.24,
+        "exit_code": 0,
+        "log": "/tmp/gopernicus-authentication-mcp-oauth-verification/release-candidate/authcms-graph.log"
+      }
+    ],
+    "full_results": "/tmp/gopernicus-authentication-mcp-oauth-verification/release-candidate/authcms-results.json",
+    "gowork": "off",
+    "passed": true,
+    "public_dependencies": false,
+    "real_pins": {
+      "authentication": "v0.13.0",
+      "authentication/views/goth": "v0.5.0"
+    },
+    "real_sums_applied": true,
+    "replacements": false,
+    "source_inventory_entries": 89,
+    "source_inventory_sha256": "fcb28c9ce8ef48ec5a716e989af8ff11ee93a78d28abc6b422155e34cbc96804",
+    "source_unchanged_after_verification": true
+  },
   "candidate_evidence_root": "/tmp/gopernicus-authentication-mcp-oauth-verification/release-candidate",
+  "candidate_external_consumer": {
+    "behavior": "Actual local SQLite migrations, code issuance/browser logout/redemption into separate MCP session, owner-constrained MCP revocation preserving another web session, replay rejected; new host configuration and escaped consent/session forms; pgx/Turso contracts and Firestore constructor imported.",
+    "candidate_versions": {
+      "github.com/gopernicus/gopernicus/pockets/authentication": "v0.13.0",
+      "github.com/gopernicus/gopernicus/pockets/authentication/stores/firestore": "v0.2.0",
+      "github.com/gopernicus/gopernicus/pockets/authentication/stores/pgx": "v0.7.0",
+      "github.com/gopernicus/gopernicus/pockets/authentication/stores/turso": "v0.6.0",
+      "github.com/gopernicus/gopernicus/pockets/authentication/views/goth": "v0.5.0"
+    },
+    "checks": [
+      {
+        "command": [
+          "go",
+          "mod",
+          "tidy"
+        ],
+        "cwd": "/tmp/gopernicus-authentication-mcp-oauth-verification/release-candidate/external-consumer",
+        "elapsed_seconds": 0.38,
+        "exit_code": 0,
+        "log": "/tmp/gopernicus-authentication-mcp-oauth-verification/release-candidate/consumer-tidy.log"
+      },
+      {
+        "command": [
+          "go",
+          "mod",
+          "verify"
+        ],
+        "cwd": "/tmp/gopernicus-authentication-mcp-oauth-verification/release-candidate/external-consumer",
+        "elapsed_seconds": 1.97,
+        "exit_code": 0,
+        "log": "/tmp/gopernicus-authentication-mcp-oauth-verification/release-candidate/consumer-verify.log"
+      },
+      {
+        "command": [
+          "go",
+          "build",
+          "./..."
+        ],
+        "cwd": "/tmp/gopernicus-authentication-mcp-oauth-verification/release-candidate/external-consumer",
+        "elapsed_seconds": 0.59,
+        "exit_code": 0,
+        "log": "/tmp/gopernicus-authentication-mcp-oauth-verification/release-candidate/consumer-build.log"
+      },
+      {
+        "command": [
+          "go",
+          "test",
+          "-race",
+          "-count=1",
+          "-v",
+          "./..."
+        ],
+        "cwd": "/tmp/gopernicus-authentication-mcp-oauth-verification/release-candidate/external-consumer",
+        "elapsed_seconds": 11.41,
+        "exit_code": 0,
+        "log": "/tmp/gopernicus-authentication-mcp-oauth-verification/release-candidate/consumer-test.log"
+      },
+      {
+        "command": [
+          "go",
+          "vet",
+          "./..."
+        ],
+        "cwd": "/tmp/gopernicus-authentication-mcp-oauth-verification/release-candidate/external-consumer",
+        "elapsed_seconds": 3.79,
+        "exit_code": 0,
+        "log": "/tmp/gopernicus-authentication-mcp-oauth-verification/release-candidate/consumer-vet.log"
+      },
+      {
+        "command": [
+          "go",
+          "list",
+          "-m",
+          "-json",
+          "all"
+        ],
+        "cwd": "/tmp/gopernicus-authentication-mcp-oauth-verification/release-candidate/external-consumer",
+        "elapsed_seconds": 0.02,
+        "exit_code": 0,
+        "log": "/tmp/gopernicus-authentication-mcp-oauth-verification/release-candidate/consumer-graph.log"
+      }
+    ],
+    "gowork": "off",
+    "limitations": "No live Firestore or remote Turso service, no Claude client or upstream host deployment.",
+    "passed": true,
+    "public_dependencies": false,
+    "replacements": false
+  },
   "candidate_method": "Exact source archives including finalized real go.mod/go.sum; private file proxy before publication; no source substitutions or replacements.",
   "candidate_results": "/tmp/gopernicus-authentication-mcp-oauth-verification/release-candidate/results.json",
+  "committed_source_check": {
+    "commit": "6a399d1e27932ea4564e5f391e50f65d4b9751a1",
+    "entries": 566,
+    "owner_files_preserved": true,
+    "passed": true
+  },
+  "downstream_authcms": {
+    "behavior": "Complete downstream auth-cms build, race test suite (including actual HTTP OAuth workflows), vet and exact module graph with real declared pins and no workspace.",
+    "checks": [
+      {
+        "command": [
+          "go",
+          "mod",
+          "tidy"
+        ],
+        "cwd": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/downstream-authcms",
+        "elapsed_seconds": 0.29,
+        "exit_code": 0,
+        "log": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/authcms-tidy.log"
+      },
+      {
+        "command": [
+          "go",
+          "mod",
+          "verify"
+        ],
+        "cwd": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/downstream-authcms",
+        "elapsed_seconds": 0.99,
+        "exit_code": 0,
+        "log": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/authcms-verify.log"
+      },
+      {
+        "command": [
+          "go",
+          "build",
+          "./..."
+        ],
+        "cwd": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/downstream-authcms",
+        "elapsed_seconds": 1.14,
+        "exit_code": 0,
+        "log": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/authcms-build.log"
+      },
+      {
+        "command": [
+          "go",
+          "test",
+          "-race",
+          "-count=1",
+          "./..."
+        ],
+        "cwd": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/downstream-authcms",
+        "elapsed_seconds": 80.35,
+        "exit_code": 0,
+        "log": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/authcms-test.log"
+      },
+      {
+        "command": [
+          "go",
+          "vet",
+          "./..."
+        ],
+        "cwd": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/downstream-authcms",
+        "elapsed_seconds": 0.59,
+        "exit_code": 0,
+        "log": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/authcms-vet.log"
+      },
+      {
+        "command": [
+          "go",
+          "list",
+          "-m",
+          "-json",
+          "all"
+        ],
+        "cwd": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/downstream-authcms",
+        "elapsed_seconds": 0.17,
+        "exit_code": 0,
+        "log": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/authcms-graph.log"
+      }
+    ],
+    "full_results": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/authcms-results.json",
+    "gowork": "off",
+    "passed": true,
+    "public_dependencies": true,
+    "real_pins": {
+      "authentication": "v0.13.0",
+      "authentication/views/goth": "v0.5.0"
+    },
+    "real_sums_applied": false,
+    "replacements": false,
+    "source_inventory_entries": 89,
+    "source_inventory_sha256": "fcb28c9ce8ef48ec5a716e989af8ff11ee93a78d28abc6b422155e34cbc96804",
+    "source_unchanged_after_verification": true
+  },
   "environment": {
     "GOCACHE": "/tmp/gopernicus-mcp-oauth-cache",
     "GOFLAGS": "-mod=readonly",
@@ -18,19 +419,179 @@
     "runtime_environment": "build-only allowlist; no inherited database, emulator or cloud credential settings",
     "seeded_external_cache_files": 0
   },
+  "external_consumer": {
+    "behavior": "Actual local SQLite migrations, code issuance/browser logout/redemption into separate MCP session, owner-constrained MCP revocation preserving another web session, replay rejected; new host configuration and escaped consent/session forms; pgx/Turso contracts and Firestore constructor imported.",
+    "candidate_versions": {
+      "github.com/gopernicus/gopernicus/pockets/authentication": "v0.13.0",
+      "github.com/gopernicus/gopernicus/pockets/authentication/stores/firestore": "v0.2.0",
+      "github.com/gopernicus/gopernicus/pockets/authentication/stores/pgx": "v0.7.0",
+      "github.com/gopernicus/gopernicus/pockets/authentication/stores/turso": "v0.6.0",
+      "github.com/gopernicus/gopernicus/pockets/authentication/views/goth": "v0.5.0"
+    },
+    "checks": [
+      {
+        "command": [
+          "go",
+          "mod",
+          "tidy"
+        ],
+        "cwd": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/external-consumer",
+        "elapsed_seconds": 0.86,
+        "exit_code": 0,
+        "log": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/consumer-tidy.log"
+      },
+      {
+        "command": [
+          "go",
+          "mod",
+          "verify"
+        ],
+        "cwd": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/external-consumer",
+        "elapsed_seconds": 2.06,
+        "exit_code": 0,
+        "log": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/consumer-verify.log"
+      },
+      {
+        "command": [
+          "go",
+          "build",
+          "./..."
+        ],
+        "cwd": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/external-consumer",
+        "elapsed_seconds": 0.66,
+        "exit_code": 0,
+        "log": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/consumer-build.log"
+      },
+      {
+        "command": [
+          "go",
+          "test",
+          "-race",
+          "-count=1",
+          "-v",
+          "./..."
+        ],
+        "cwd": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/external-consumer",
+        "elapsed_seconds": 11.52,
+        "exit_code": 0,
+        "log": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/consumer-test.log"
+      },
+      {
+        "command": [
+          "go",
+          "vet",
+          "./..."
+        ],
+        "cwd": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/external-consumer",
+        "elapsed_seconds": 3.77,
+        "exit_code": 0,
+        "log": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/consumer-vet.log"
+      },
+      {
+        "command": [
+          "go",
+          "list",
+          "-m",
+          "-json",
+          "all"
+        ],
+        "cwd": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/external-consumer",
+        "elapsed_seconds": 0.02,
+        "exit_code": 0,
+        "log": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/consumer-graph.log"
+      }
+    ],
+    "gowork": "off",
+    "limitations": "No live Firestore or remote Turso service, no Claude client or upstream host deployment.",
+    "passed": true,
+    "public_dependencies": true,
+    "replacements": false
+  },
   "final_source_check": {
     "concurrent_source_drift": [],
     "passed": true,
     "real_go_mod_and_go_sum_finalized": true
   },
   "full_source_inventories": "/tmp/gopernicus-authentication-mcp-oauth-verification/release-candidate/source.json",
+  "github_ci": [
+    {
+      "conclusion": "success",
+      "databaseId": 35379918863,
+      "event": "push",
+      "headBranch": "pockets/authentication/stores/firestore/v0.2.0",
+      "headSha": "6a399d1e27932ea4564e5f391e50f65d4b9751a1",
+      "status": "completed",
+      "url": "https://github.com/gopernicus/gopernicus/actions/runs/35379918863",
+      "workflowName": "check"
+    },
+    {
+      "conclusion": "success",
+      "databaseId": 35379915140,
+      "event": "push",
+      "headBranch": "pockets/authentication/views/goth/v0.5.0",
+      "headSha": "6a399d1e27932ea4564e5f391e50f65d4b9751a1",
+      "status": "completed",
+      "url": "https://github.com/gopernicus/gopernicus/actions/runs/35379915140",
+      "workflowName": "check"
+    },
+    {
+      "conclusion": "success",
+      "databaseId": 35379911271,
+      "event": "push",
+      "headBranch": "pockets/authentication/stores/turso/v0.6.0",
+      "headSha": "6a399d1e27932ea4564e5f391e50f65d4b9751a1",
+      "status": "completed",
+      "url": "https://github.com/gopernicus/gopernicus/actions/runs/35379911271",
+      "workflowName": "check"
+    },
+    {
+      "conclusion": "success",
+      "databaseId": 35379908429,
+      "event": "push",
+      "headBranch": "pockets/authentication/stores/pgx/v0.7.0",
+      "headSha": "6a399d1e27932ea4564e5f391e50f65d4b9751a1",
+      "status": "completed",
+      "url": "https://github.com/gopernicus/gopernicus/actions/runs/35379908429",
+      "workflowName": "check"
+    },
+    {
+      "conclusion": "success",
+      "databaseId": 35379905453,
+      "event": "push",
+      "headBranch": "pockets/authentication/v0.13.0",
+      "headSha": "6a399d1e27932ea4564e5f391e50f65d4b9751a1",
+      "status": "completed",
+      "url": "https://github.com/gopernicus/gopernicus/actions/runs/35379905453",
+      "workflowName": "check"
+    },
+    {
+      "conclusion": "success",
+      "databaseId": 35379903506,
+      "event": "push",
+      "headBranch": "main",
+      "headSha": "6a399d1e27932ea4564e5f391e50f65d4b9751a1",
+      "status": "completed",
+      "url": "https://github.com/gopernicus/gopernicus/actions/runs/35379903506",
+      "workflowName": "Deploy Docs to GitHub Pages"
+    },
+    {
+      "conclusion": "success",
+      "databaseId": 35379903125,
+      "event": "push",
+      "headBranch": "main",
+      "headSha": "6a399d1e27932ea4564e5f391e50f65d4b9751a1",
+      "status": "completed",
+      "url": "https://github.com/gopernicus/gopernicus/actions/runs/35379903125",
+      "workflowName": "check"
+    }
+  ],
   "limitations": [
-    "The optional PostgreSQL non-C ordering proof was skipped in both schema runs because POSTGRES_NON_C_TEST_DSN was unset. All default/scoped OAuth2 conformance cases ran and passed.",
-    "Candidates use a private file proxy and candidate-only checksum exemptions. Existing published dependencies retain sum.golang.org verification; module graphs reject unintended exempt descendants. No public provenance or published-version verification claimed.",
-    "Firestore default unit tests and integration/live tagged compile and vet passed, but no Firestore emulator, cloud database or deployed index check ran. OAuth2 remains unsupported and fails closed on Firestore.",
-    "Actual local SQLite and PostgreSQL 17 behavior were exercised. No hosted Turso service, Claude connector account or deployed three-sixty host was tested by this verification task.",
-    "Raw /tmp logs and archives are local evidence and may be removed by operating-system cleanup; this compact manifest preserves versions, checksums, commands, outcomes and known limitations.",
-    "Current public version/provenance verification is pending publication; previous consumer/SQL evidence is identified separately. Final browser/workspace and public checks will be added to the publication receipt."
+    "Three-sixty adoption, host migrations, actual MCP transport/PRM/tool authorization and real Claude connector acceptance are separate consuming-host work; no production application deployment was performed.",
+    "Final fresh Chromium browser and actual HTTP lifecycle tests passed. The proof client callback is same-origin; external-origin callback browser navigation remains unverified, with exact-origin CSP behavior covered by automated header tests.",
+    "PostgreSQL 17 default/named schemas and local SQLite behavior passed. Optional PostgreSQL non-C ordering was skipped because POSTGRES_NON_C_TEST_DSN was unset; hosted Turso was not exercised.",
+    "Firestore passed first-party compatibility unit/build/tagged checks. No emulator/GCP/index deployment test ran; delegated OAuth storage remains unsupported.",
+    "Private file-proxy candidate checks used narrow unpublished-version checksum exemptions. All final public module and consumer checks used normal sum.golang.org verification, GOWORK=off and no replacements.",
+    "Raw /tmp logs, inventories, browser screenshots and helper scripts are local evidence and may be removed by operating-system cleanup. This manifest retains publication refs, checksums, commands, results and known limitations."
   ],
   "modules": [
     {
@@ -802,6 +1363,1291 @@
     "replacements": false
   },
   "prior_candidate_manifest": "/tmp/gopernicus-authentication-mcp-oauth-verification/candidate2-manifest.json",
+  "propagation": {
+    "cache_headers": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/propagation-headers.json",
+    "checksum_exemptions": false,
+    "core_download_attempt_count": 9,
+    "elapsed_seconds_to_first_successful_core_download": 940.35,
+    "first_phase_attempts": [
+      {
+        "command": [
+          "go",
+          "mod",
+          "download",
+          "-json",
+          "github.com/gopernicus/gopernicus/pockets/authentication@v0.13.0"
+        ],
+        "cwd": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/download-context",
+        "elapsed_seconds": 4.17,
+        "exit_code": 1,
+        "log": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/attempts/initial/authcore-download.log",
+        "original_log_path": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/authcore-download.log",
+        "preserved_record": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/attempts/initial/authcore-download.json"
+      },
+      {
+        "command": [
+          "go",
+          "mod",
+          "download",
+          "-json",
+          "github.com/gopernicus/gopernicus/pockets/authentication@v0.13.0"
+        ],
+        "cwd": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/download-context",
+        "elapsed_seconds": 1.01,
+        "exit_code": 1,
+        "log": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/attempts/authcore-download-1/authcore-download.log",
+        "original_log_path": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/authcore-download.log",
+        "preserved_record": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/attempts/authcore-download-1/authcore-download.json"
+      },
+      {
+        "command": [
+          "go",
+          "mod",
+          "download",
+          "-json",
+          "github.com/gopernicus/gopernicus/pockets/authentication@v0.13.0"
+        ],
+        "cwd": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/download-context",
+        "elapsed_seconds": 1.23,
+        "exit_code": 1,
+        "log": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/attempts/authcore-download-2/authcore-download.log",
+        "original_log_path": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/authcore-download.log",
+        "preserved_record": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/attempts/authcore-download-2/authcore-download.json"
+      },
+      {
+        "command": [
+          "go",
+          "mod",
+          "download",
+          "-json",
+          "github.com/gopernicus/gopernicus/pockets/authentication@v0.13.0"
+        ],
+        "cwd": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/download-context",
+        "elapsed_seconds": 1.92,
+        "exit_code": 1,
+        "log": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/attempts/authcore-download-3/authcore-download.log",
+        "original_log_path": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/authcore-download.log",
+        "preserved_record": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/attempts/authcore-download-3/authcore-download.json"
+      },
+      {
+        "command": [
+          "go",
+          "mod",
+          "download",
+          "-json",
+          "github.com/gopernicus/gopernicus/pockets/authentication@v0.13.0"
+        ],
+        "cwd": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/download-context",
+        "elapsed_seconds": 1.16,
+        "exit_code": 1,
+        "log": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/attempts/authcore-download-4/authcore-download.log",
+        "original_log_path": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/authcore-download.log",
+        "preserved_record": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/attempts/authcore-download-4/authcore-download.json"
+      },
+      {
+        "command": [
+          "go",
+          "mod",
+          "download",
+          "-json",
+          "github.com/gopernicus/gopernicus/pockets/authentication@v0.13.0"
+        ],
+        "cwd": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/download-context",
+        "elapsed_seconds": 1.05,
+        "exit_code": 1,
+        "log": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/attempts/authcore-download-5/authcore-download.log",
+        "original_log_path": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/authcore-download.log",
+        "preserved_record": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/attempts/authcore-download-5/authcore-download.json"
+      },
+      {
+        "command": [
+          "go",
+          "mod",
+          "download",
+          "-json",
+          "github.com/gopernicus/gopernicus/pockets/authentication@v0.13.0"
+        ],
+        "cwd": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/download-context",
+        "elapsed_seconds": 1.08,
+        "exit_code": 1,
+        "log": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/attempts/authcore-download-6/authcore-download.log",
+        "original_log_path": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/authcore-download.log",
+        "preserved_record": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/attempts/authcore-download-6/authcore-download.json"
+      },
+      {
+        "command": [
+          "go",
+          "mod",
+          "download",
+          "-json",
+          "github.com/gopernicus/gopernicus/pockets/authentication@v0.13.0"
+        ],
+        "cwd": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/download-context",
+        "elapsed_seconds": 1.07,
+        "exit_code": 1,
+        "log": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/attempts/phase-one-last/authcore-download.log",
+        "original_log_path": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/authcore-download.log",
+        "preserved_record": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/attempts/phase-one-last/authcore-download.json"
+      }
+    ],
+    "first_phase_bounded_backoff_seconds": 225,
+    "first_phase_failed_core_download_count": 8,
+    "first_phase_go_download_seconds": 12.69,
+    "first_successful_core_download_utc": "2026-09-18T18:45:40.887985+00:00",
+    "initial_public_verification_utc": "2026-09-18T18:30:00.540271+00:00",
+    "normal_checksum_database": "sum.golang.org",
+    "revalidation_headers": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/propagation-revalidation.json",
+    "sibling_preflight": {
+      "checked_utc": "2026-09-18T18:41:06.072759+00:00",
+      "downloads": [
+        {
+          "command": [
+            "go",
+            "mod",
+            "download",
+            "-json",
+            "github.com/gopernicus/gopernicus/pockets/authentication/stores/pgx@v0.7.0"
+          ],
+          "download": {
+            "Dir": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/modcache/github.com/gopernicus/gopernicus/pockets/authentication/stores/pgx@v0.7.0",
+            "GoMod": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/modcache/cache/download/github.com/gopernicus/gopernicus/pockets/authentication/stores/pgx/@v/v0.7.0.mod",
+            "GoModSum": "h1:Tia062VkfmONCRn2eGV+Rd58wlQQGOsQxJGJEcXoMYw=",
+            "Info": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/modcache/cache/download/github.com/gopernicus/gopernicus/pockets/authentication/stores/pgx/@v/v0.7.0.info",
+            "Origin": {
+              "Hash": "6a399d1e27932ea4564e5f391e50f65d4b9751a1",
+              "Ref": "refs/tags/pockets/authentication/stores/pgx/v0.7.0",
+              "Subdir": "pockets/authentication/stores/pgx",
+              "URL": "https://github.com/gopernicus/gopernicus",
+              "VCS": "git"
+            },
+            "Path": "github.com/gopernicus/gopernicus/pockets/authentication/stores/pgx",
+            "Sum": "h1:DfaDZt1P0XrML36S65jTV4AIktPzzRBDo/1GSvOzq0E=",
+            "Version": "v0.7.0",
+            "Zip": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/modcache/cache/download/github.com/gopernicus/gopernicus/pockets/authentication/stores/pgx/@v/v0.7.0.zip"
+          },
+          "exit_code": 0,
+          "log": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/authpgx-preflight-download.log",
+          "module": "github.com/gopernicus/gopernicus/pockets/authentication/stores/pgx"
+        },
+        {
+          "command": [
+            "go",
+            "mod",
+            "download",
+            "-json",
+            "github.com/gopernicus/gopernicus/pockets/authentication/stores/turso@v0.6.0"
+          ],
+          "download": {
+            "Dir": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/modcache/github.com/gopernicus/gopernicus/pockets/authentication/stores/turso@v0.6.0",
+            "GoMod": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/modcache/cache/download/github.com/gopernicus/gopernicus/pockets/authentication/stores/turso/@v/v0.6.0.mod",
+            "GoModSum": "h1:Vfr5HUULkE9hhyhKJGeeNRR0S0JGA+v3xd3hCQGOYks=",
+            "Info": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/modcache/cache/download/github.com/gopernicus/gopernicus/pockets/authentication/stores/turso/@v/v0.6.0.info",
+            "Origin": {
+              "Hash": "6a399d1e27932ea4564e5f391e50f65d4b9751a1",
+              "Ref": "refs/tags/pockets/authentication/stores/turso/v0.6.0",
+              "Subdir": "pockets/authentication/stores/turso",
+              "URL": "https://github.com/gopernicus/gopernicus",
+              "VCS": "git"
+            },
+            "Path": "github.com/gopernicus/gopernicus/pockets/authentication/stores/turso",
+            "Sum": "h1:Bjs59aHa2CXHfzmOuB8XBdvMEnnETdWiWThRAn9N0qg=",
+            "Version": "v0.6.0",
+            "Zip": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/modcache/cache/download/github.com/gopernicus/gopernicus/pockets/authentication/stores/turso/@v/v0.6.0.zip"
+          },
+          "exit_code": 0,
+          "log": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/authturso-preflight-download.log",
+          "module": "github.com/gopernicus/gopernicus/pockets/authentication/stores/turso"
+        },
+        {
+          "command": [
+            "go",
+            "mod",
+            "download",
+            "-json",
+            "github.com/gopernicus/gopernicus/pockets/authentication/views/goth@v0.5.0"
+          ],
+          "download": {
+            "Error": "github.com/gopernicus/gopernicus/pockets/authentication/views/goth@v0.5.0: verifying go.mod: github.com/gopernicus/gopernicus/pockets/authentication/views/goth@v0.5.0/go.mod: reading https://sum.golang.org/lookup/github.com/gopernicus/gopernicus/pockets/authentication/views/goth@v0.5.0: 404 Not Found\n\tserver response: not found: github.com/gopernicus/gopernicus/pockets/authentication/views/goth@v0.5.0: invalid version: unknown revision pockets/authentication/views/goth/v0.5.0",
+            "Info": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/modcache/cache/download/github.com/gopernicus/gopernicus/pockets/authentication/views/goth/@v/v0.5.0.info",
+            "Origin": {
+              "Hash": "6a399d1e27932ea4564e5f391e50f65d4b9751a1",
+              "Ref": "refs/tags/pockets/authentication/views/goth/v0.5.0",
+              "Subdir": "pockets/authentication/views/goth",
+              "URL": "https://github.com/gopernicus/gopernicus",
+              "VCS": "git"
+            },
+            "Path": "github.com/gopernicus/gopernicus/pockets/authentication/views/goth",
+            "Version": "v0.5.0"
+          },
+          "exit_code": 1,
+          "log": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/authviews-preflight-download.log",
+          "module": "github.com/gopernicus/gopernicus/pockets/authentication/views/goth"
+        },
+        {
+          "command": [
+            "go",
+            "mod",
+            "download",
+            "-json",
+            "github.com/gopernicus/gopernicus/pockets/authentication/stores/firestore@v0.2.0"
+          ],
+          "download": {
+            "Dir": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/modcache/github.com/gopernicus/gopernicus/pockets/authentication/stores/firestore@v0.2.0",
+            "GoMod": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/modcache/cache/download/github.com/gopernicus/gopernicus/pockets/authentication/stores/firestore/@v/v0.2.0.mod",
+            "GoModSum": "h1:EoZgY+JDcmI2z3F5uQYYzO6naH3iCxrZeSpgc/cZ/9g=",
+            "Info": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/modcache/cache/download/github.com/gopernicus/gopernicus/pockets/authentication/stores/firestore/@v/v0.2.0.info",
+            "Origin": {
+              "Hash": "6a399d1e27932ea4564e5f391e50f65d4b9751a1",
+              "Ref": "refs/tags/pockets/authentication/stores/firestore/v0.2.0",
+              "Subdir": "pockets/authentication/stores/firestore",
+              "URL": "https://github.com/gopernicus/gopernicus",
+              "VCS": "git"
+            },
+            "Path": "github.com/gopernicus/gopernicus/pockets/authentication/stores/firestore",
+            "Sum": "h1:suQ2vXDwpP3Mi6xGXXI2hIlweRfwbxaoKdV57dBUzfk=",
+            "Version": "v0.2.0",
+            "Zip": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/modcache/cache/download/github.com/gopernicus/gopernicus/pockets/authentication/stores/firestore/@v/v0.2.0.zip"
+          },
+          "exit_code": 0,
+          "log": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/authfirestore-preflight-download.log",
+          "module": "github.com/gopernicus/gopernicus/pockets/authentication/stores/firestore"
+        }
+      ],
+      "normal_checksum_verification": true
+    },
+    "status": "resolved; normal checksum database accepted all five exact published versions",
+    "subsequent_failed_download_records": [],
+    "successful_core_download": {
+      "command": [
+        "go",
+        "mod",
+        "download",
+        "-json",
+        "github.com/gopernicus/gopernicus/pockets/authentication@v0.13.0"
+      ],
+      "cwd": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/download-context",
+      "elapsed_seconds": 15.19,
+      "exit_code": 0,
+      "log": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/authcore-download.log"
+    },
+    "successful_views_download": {
+      "command": [
+        "go",
+        "mod",
+        "download",
+        "-json",
+        "github.com/gopernicus/gopernicus/pockets/authentication/views/goth@v0.5.0"
+      ],
+      "cwd": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/download-context",
+      "elapsed_seconds": 14.6,
+      "exit_code": 0,
+      "log": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/authviews-download.log"
+    },
+    "unauthenticated_github": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/unauthenticated-github.json",
+    "upstream_core_negative_cache_expires_utc": "2026-09-18T18:45:18+00:00",
+    "views_cache_headers": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/views-propagation-headers.json",
+    "views_download_attempt_count": 2
+  },
+  "public_compact_receipt": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/compact-results.json",
+  "public_verification": {
+    "downloaded_modules": [
+      {
+        "archive_source_verified": true,
+        "check": {
+          "command": [
+            "go",
+            "mod",
+            "download",
+            "-json",
+            "github.com/gopernicus/gopernicus/pockets/authentication@v0.13.0"
+          ],
+          "cwd": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/download-context",
+          "elapsed_seconds": 15.19,
+          "exit_code": 0,
+          "log": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/authcore-download.log"
+        },
+        "download": {
+          "Dir": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/modcache/github.com/gopernicus/gopernicus/pockets/authentication@v0.13.0",
+          "GoMod": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/modcache/cache/download/github.com/gopernicus/gopernicus/pockets/authentication/@v/v0.13.0.mod",
+          "GoModSum": "h1:V4s8PuUv/BPWtuLigf9aVCYEcSA+tklqVUnMnTkxvg4=",
+          "Info": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/modcache/cache/download/github.com/gopernicus/gopernicus/pockets/authentication/@v/v0.13.0.info",
+          "Origin": {
+            "Hash": "6a399d1e27932ea4564e5f391e50f65d4b9751a1",
+            "Ref": "refs/tags/pockets/authentication/v0.13.0",
+            "Subdir": "pockets/authentication",
+            "URL": "https://github.com/gopernicus/gopernicus",
+            "VCS": "git"
+          },
+          "Path": "github.com/gopernicus/gopernicus/pockets/authentication",
+          "Sum": "h1:NbW2Igun43yRhse8vcsVYF+CPYMGeVpRExkZ7SLgaIY=",
+          "Version": "v0.13.0",
+          "Zip": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/modcache/cache/download/github.com/gopernicus/gopernicus/pockets/authentication/@v/v0.13.0.zip"
+        },
+        "label": "authcore",
+        "module": "github.com/gopernicus/gopernicus/pockets/authentication"
+      },
+      {
+        "archive_source_verified": true,
+        "check": {
+          "command": [
+            "go",
+            "mod",
+            "download",
+            "-json",
+            "github.com/gopernicus/gopernicus/pockets/authentication/stores/pgx@v0.7.0"
+          ],
+          "cwd": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/download-context",
+          "elapsed_seconds": 0.01,
+          "exit_code": 0,
+          "log": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/authpgx-download.log"
+        },
+        "download": {
+          "Dir": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/modcache/github.com/gopernicus/gopernicus/pockets/authentication/stores/pgx@v0.7.0",
+          "GoMod": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/modcache/cache/download/github.com/gopernicus/gopernicus/pockets/authentication/stores/pgx/@v/v0.7.0.mod",
+          "GoModSum": "h1:Tia062VkfmONCRn2eGV+Rd58wlQQGOsQxJGJEcXoMYw=",
+          "Info": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/modcache/cache/download/github.com/gopernicus/gopernicus/pockets/authentication/stores/pgx/@v/v0.7.0.info",
+          "Origin": {
+            "Hash": "6a399d1e27932ea4564e5f391e50f65d4b9751a1",
+            "Ref": "refs/tags/pockets/authentication/stores/pgx/v0.7.0",
+            "Subdir": "pockets/authentication/stores/pgx",
+            "URL": "https://github.com/gopernicus/gopernicus",
+            "VCS": "git"
+          },
+          "Path": "github.com/gopernicus/gopernicus/pockets/authentication/stores/pgx",
+          "Sum": "h1:DfaDZt1P0XrML36S65jTV4AIktPzzRBDo/1GSvOzq0E=",
+          "Version": "v0.7.0",
+          "Zip": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/modcache/cache/download/github.com/gopernicus/gopernicus/pockets/authentication/stores/pgx/@v/v0.7.0.zip"
+        },
+        "label": "authpgx",
+        "module": "github.com/gopernicus/gopernicus/pockets/authentication/stores/pgx"
+      },
+      {
+        "archive_source_verified": true,
+        "check": {
+          "command": [
+            "go",
+            "mod",
+            "download",
+            "-json",
+            "github.com/gopernicus/gopernicus/pockets/authentication/stores/turso@v0.6.0"
+          ],
+          "cwd": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/download-context",
+          "elapsed_seconds": 0.01,
+          "exit_code": 0,
+          "log": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/authturso-download.log"
+        },
+        "download": {
+          "Dir": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/modcache/github.com/gopernicus/gopernicus/pockets/authentication/stores/turso@v0.6.0",
+          "GoMod": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/modcache/cache/download/github.com/gopernicus/gopernicus/pockets/authentication/stores/turso/@v/v0.6.0.mod",
+          "GoModSum": "h1:Vfr5HUULkE9hhyhKJGeeNRR0S0JGA+v3xd3hCQGOYks=",
+          "Info": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/modcache/cache/download/github.com/gopernicus/gopernicus/pockets/authentication/stores/turso/@v/v0.6.0.info",
+          "Origin": {
+            "Hash": "6a399d1e27932ea4564e5f391e50f65d4b9751a1",
+            "Ref": "refs/tags/pockets/authentication/stores/turso/v0.6.0",
+            "Subdir": "pockets/authentication/stores/turso",
+            "URL": "https://github.com/gopernicus/gopernicus",
+            "VCS": "git"
+          },
+          "Path": "github.com/gopernicus/gopernicus/pockets/authentication/stores/turso",
+          "Sum": "h1:Bjs59aHa2CXHfzmOuB8XBdvMEnnETdWiWThRAn9N0qg=",
+          "Version": "v0.6.0",
+          "Zip": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/modcache/cache/download/github.com/gopernicus/gopernicus/pockets/authentication/stores/turso/@v/v0.6.0.zip"
+        },
+        "label": "authturso",
+        "module": "github.com/gopernicus/gopernicus/pockets/authentication/stores/turso"
+      },
+      {
+        "archive_source_verified": true,
+        "check": {
+          "command": [
+            "go",
+            "mod",
+            "download",
+            "-json",
+            "github.com/gopernicus/gopernicus/pockets/authentication/views/goth@v0.5.0"
+          ],
+          "cwd": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/download-context",
+          "elapsed_seconds": 14.6,
+          "exit_code": 0,
+          "log": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/authviews-download.log"
+        },
+        "download": {
+          "Dir": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/modcache/github.com/gopernicus/gopernicus/pockets/authentication/views/goth@v0.5.0",
+          "GoMod": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/modcache/cache/download/github.com/gopernicus/gopernicus/pockets/authentication/views/goth/@v/v0.5.0.mod",
+          "GoModSum": "h1:TFdb2AsCPo9XqtT23fj1pZN4EuC1SE9Kg2HoioCo3nM=",
+          "Info": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/modcache/cache/download/github.com/gopernicus/gopernicus/pockets/authentication/views/goth/@v/v0.5.0.info",
+          "Origin": {
+            "Hash": "6a399d1e27932ea4564e5f391e50f65d4b9751a1",
+            "Ref": "refs/tags/pockets/authentication/views/goth/v0.5.0",
+            "Subdir": "pockets/authentication/views/goth",
+            "URL": "https://github.com/gopernicus/gopernicus",
+            "VCS": "git"
+          },
+          "Path": "github.com/gopernicus/gopernicus/pockets/authentication/views/goth",
+          "Sum": "h1:1FyZWld2krKPnuVhyfBsqy5ZohmgAh4cCA0w31I4cCE=",
+          "Version": "v0.5.0",
+          "Zip": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/modcache/cache/download/github.com/gopernicus/gopernicus/pockets/authentication/views/goth/@v/v0.5.0.zip"
+        },
+        "label": "authviews",
+        "module": "github.com/gopernicus/gopernicus/pockets/authentication/views/goth"
+      },
+      {
+        "archive_source_verified": true,
+        "check": {
+          "command": [
+            "go",
+            "mod",
+            "download",
+            "-json",
+            "github.com/gopernicus/gopernicus/pockets/authentication/stores/firestore@v0.2.0"
+          ],
+          "cwd": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/download-context",
+          "elapsed_seconds": 0.01,
+          "exit_code": 0,
+          "log": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/authfirestore-download.log"
+        },
+        "download": {
+          "Dir": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/modcache/github.com/gopernicus/gopernicus/pockets/authentication/stores/firestore@v0.2.0",
+          "GoMod": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/modcache/cache/download/github.com/gopernicus/gopernicus/pockets/authentication/stores/firestore/@v/v0.2.0.mod",
+          "GoModSum": "h1:EoZgY+JDcmI2z3F5uQYYzO6naH3iCxrZeSpgc/cZ/9g=",
+          "Info": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/modcache/cache/download/github.com/gopernicus/gopernicus/pockets/authentication/stores/firestore/@v/v0.2.0.info",
+          "Origin": {
+            "Hash": "6a399d1e27932ea4564e5f391e50f65d4b9751a1",
+            "Ref": "refs/tags/pockets/authentication/stores/firestore/v0.2.0",
+            "Subdir": "pockets/authentication/stores/firestore",
+            "URL": "https://github.com/gopernicus/gopernicus",
+            "VCS": "git"
+          },
+          "Path": "github.com/gopernicus/gopernicus/pockets/authentication/stores/firestore",
+          "Sum": "h1:suQ2vXDwpP3Mi6xGXXI2hIlweRfwbxaoKdV57dBUzfk=",
+          "Version": "v0.2.0",
+          "Zip": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/modcache/cache/download/github.com/gopernicus/gopernicus/pockets/authentication/stores/firestore/@v/v0.2.0.zip"
+        },
+        "label": "authfirestore",
+        "module": "github.com/gopernicus/gopernicus/pockets/authentication/stores/firestore"
+      }
+    ],
+    "environment": {
+      "GOCACHE": "/tmp/gopernicus-mcp-oauth-cache",
+      "GOFLAGS": "-mod=readonly",
+      "GOMODCACHE": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/modcache",
+      "GONOPROXY": "",
+      "GONOSUMDB": "",
+      "GOPRIVATE": "",
+      "GOPROXY": "https://proxy.golang.org,direct",
+      "GOSUMDB": "sum.golang.org",
+      "GOTOOLCHAIN": "local",
+      "GOWORK": "off",
+      "go_version": "go version go1.26.1 darwin/arm64",
+      "runtime_environment": "build-only allowlist; no inherited database, emulator or cloud credential settings",
+      "seeded_external_cache_files": 0
+    },
+    "full_results": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/results.json",
+    "module_entries": 566,
+    "passed": true,
+    "source_unchanged_after_verification": true,
+    "verification_kind": "public",
+    "verification_status": "passed",
+    "verified_modules": [
+      {
+        "checks": [
+          {
+            "command": [
+              "go",
+              "mod",
+              "download",
+              "-json",
+              "github.com/gopernicus/gopernicus/pockets/authentication@v0.13.0"
+            ],
+            "cwd": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/download-context",
+            "elapsed_seconds": 15.19,
+            "exit_code": 0,
+            "log": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/authcore-download.log"
+          },
+          {
+            "command": [
+              "go",
+              "list",
+              "-m",
+              "-json",
+              "all"
+            ],
+            "cwd": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/verification/pockets/authentication",
+            "elapsed_seconds": 0.01,
+            "exit_code": 0,
+            "log": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/authcore-module-graph.log"
+          },
+          {
+            "command": [
+              "go",
+              "build",
+              "./..."
+            ],
+            "cwd": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/verification/pockets/authentication",
+            "elapsed_seconds": 0.82,
+            "exit_code": 0,
+            "log": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/authcore-build.log"
+          },
+          {
+            "command": [
+              "go",
+              "test",
+              "-count=1",
+              "./..."
+            ],
+            "cwd": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/verification/pockets/authentication",
+            "elapsed_seconds": 3.4,
+            "exit_code": 0,
+            "log": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/authcore-test.log"
+          },
+          {
+            "command": [
+              "go",
+              "vet",
+              "./..."
+            ],
+            "cwd": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/verification/pockets/authentication",
+            "elapsed_seconds": 0.54,
+            "exit_code": 0,
+            "log": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/authcore-vet.log"
+          },
+          {
+            "command": [
+              "go",
+              "test",
+              "-tags=integration",
+              "-run",
+              "^$",
+              "./..."
+            ],
+            "cwd": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/verification/pockets/authentication",
+            "elapsed_seconds": 2.7,
+            "exit_code": 0,
+            "log": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/authcore-integration-compile.log"
+          },
+          {
+            "command": [
+              "go",
+              "test",
+              "-tags=integration,live",
+              "-run",
+              "^$",
+              "./..."
+            ],
+            "cwd": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/verification/pockets/authentication",
+            "elapsed_seconds": 2.6,
+            "exit_code": 0,
+            "log": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/authcore-tagged-compile.log"
+          },
+          {
+            "command": [
+              "go",
+              "vet",
+              "-tags=integration,live",
+              "./..."
+            ],
+            "cwd": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/verification/pockets/authentication",
+            "elapsed_seconds": 0.53,
+            "exit_code": 0,
+            "log": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/authcore-tagged-vet.log"
+          }
+        ],
+        "download": {
+          "Dir": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/modcache/github.com/gopernicus/gopernicus/pockets/authentication@v0.13.0",
+          "GoMod": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/modcache/cache/download/github.com/gopernicus/gopernicus/pockets/authentication/@v/v0.13.0.mod",
+          "GoModSum": "h1:V4s8PuUv/BPWtuLigf9aVCYEcSA+tklqVUnMnTkxvg4=",
+          "Info": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/modcache/cache/download/github.com/gopernicus/gopernicus/pockets/authentication/@v/v0.13.0.info",
+          "Origin": {
+            "Hash": "6a399d1e27932ea4564e5f391e50f65d4b9751a1",
+            "Ref": "refs/tags/pockets/authentication/v0.13.0",
+            "Subdir": "pockets/authentication",
+            "URL": "https://github.com/gopernicus/gopernicus",
+            "VCS": "git"
+          },
+          "Path": "github.com/gopernicus/gopernicus/pockets/authentication",
+          "Sum": "h1:NbW2Igun43yRhse8vcsVYF+CPYMGeVpRExkZ7SLgaIY=",
+          "Version": "v0.13.0",
+          "Zip": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/modcache/cache/download/github.com/gopernicus/gopernicus/pockets/authentication/@v/v0.13.0.zip"
+        },
+        "framework_versions": {
+          "github.com/gopernicus/gopernicus/pockets": "v0.1.0",
+          "github.com/gopernicus/gopernicus/pockets/authentication": null,
+          "github.com/gopernicus/gopernicus/sdk": "v0.9.0"
+        },
+        "label": "authcore",
+        "module": "github.com/gopernicus/gopernicus/pockets/authentication",
+        "passed": true
+      },
+      {
+        "checks": [
+          {
+            "command": [
+              "go",
+              "mod",
+              "download",
+              "-json",
+              "github.com/gopernicus/gopernicus/pockets/authentication/stores/pgx@v0.7.0"
+            ],
+            "cwd": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/download-context",
+            "elapsed_seconds": 0.01,
+            "exit_code": 0,
+            "log": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/authpgx-download.log"
+          },
+          {
+            "command": [
+              "go",
+              "list",
+              "-m",
+              "-json",
+              "all"
+            ],
+            "cwd": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/verification/pockets/authentication/stores/pgx",
+            "elapsed_seconds": 0.01,
+            "exit_code": 0,
+            "log": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/authpgx-module-graph.log"
+          },
+          {
+            "command": [
+              "go",
+              "build",
+              "./..."
+            ],
+            "cwd": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/verification/pockets/authentication/stores/pgx",
+            "elapsed_seconds": 1.42,
+            "exit_code": 0,
+            "log": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/authpgx-build.log"
+          },
+          {
+            "command": [
+              "go",
+              "test",
+              "-count=1",
+              "./..."
+            ],
+            "cwd": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/verification/pockets/authentication/stores/pgx",
+            "elapsed_seconds": 1.16,
+            "exit_code": 0,
+            "log": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/authpgx-test.log"
+          },
+          {
+            "command": [
+              "go",
+              "vet",
+              "./..."
+            ],
+            "cwd": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/verification/pockets/authentication/stores/pgx",
+            "elapsed_seconds": 0.54,
+            "exit_code": 0,
+            "log": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/authpgx-vet.log"
+          },
+          {
+            "command": [
+              "go",
+              "test",
+              "-tags=integration",
+              "-run",
+              "^$",
+              "./..."
+            ],
+            "cwd": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/verification/pockets/authentication/stores/pgx",
+            "elapsed_seconds": 0.69,
+            "exit_code": 0,
+            "log": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/authpgx-integration-compile.log"
+          },
+          {
+            "command": [
+              "go",
+              "test",
+              "-tags=integration,live",
+              "-run",
+              "^$",
+              "./..."
+            ],
+            "cwd": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/verification/pockets/authentication/stores/pgx",
+            "elapsed_seconds": 0.71,
+            "exit_code": 0,
+            "log": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/authpgx-tagged-compile.log"
+          },
+          {
+            "command": [
+              "go",
+              "vet",
+              "-tags=integration,live",
+              "./..."
+            ],
+            "cwd": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/verification/pockets/authentication/stores/pgx",
+            "elapsed_seconds": 0.55,
+            "exit_code": 0,
+            "log": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/authpgx-tagged-vet.log"
+          }
+        ],
+        "download": {
+          "Dir": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/modcache/github.com/gopernicus/gopernicus/pockets/authentication/stores/pgx@v0.7.0",
+          "GoMod": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/modcache/cache/download/github.com/gopernicus/gopernicus/pockets/authentication/stores/pgx/@v/v0.7.0.mod",
+          "GoModSum": "h1:Tia062VkfmONCRn2eGV+Rd58wlQQGOsQxJGJEcXoMYw=",
+          "Info": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/modcache/cache/download/github.com/gopernicus/gopernicus/pockets/authentication/stores/pgx/@v/v0.7.0.info",
+          "Origin": {
+            "Hash": "6a399d1e27932ea4564e5f391e50f65d4b9751a1",
+            "Ref": "refs/tags/pockets/authentication/stores/pgx/v0.7.0",
+            "Subdir": "pockets/authentication/stores/pgx",
+            "URL": "https://github.com/gopernicus/gopernicus",
+            "VCS": "git"
+          },
+          "Path": "github.com/gopernicus/gopernicus/pockets/authentication/stores/pgx",
+          "Sum": "h1:DfaDZt1P0XrML36S65jTV4AIktPzzRBDo/1GSvOzq0E=",
+          "Version": "v0.7.0",
+          "Zip": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/modcache/cache/download/github.com/gopernicus/gopernicus/pockets/authentication/stores/pgx/@v/v0.7.0.zip"
+        },
+        "framework_versions": {
+          "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb": "v0.7.1",
+          "github.com/gopernicus/gopernicus/pockets": "v0.1.0",
+          "github.com/gopernicus/gopernicus/pockets/authentication": "v0.13.0",
+          "github.com/gopernicus/gopernicus/pockets/authentication/stores/pgx": null,
+          "github.com/gopernicus/gopernicus/sdk": "v0.9.0"
+        },
+        "label": "authpgx",
+        "module": "github.com/gopernicus/gopernicus/pockets/authentication/stores/pgx",
+        "passed": true
+      },
+      {
+        "checks": [
+          {
+            "command": [
+              "go",
+              "mod",
+              "download",
+              "-json",
+              "github.com/gopernicus/gopernicus/pockets/authentication/stores/turso@v0.6.0"
+            ],
+            "cwd": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/download-context",
+            "elapsed_seconds": 0.01,
+            "exit_code": 0,
+            "log": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/authturso-download.log"
+          },
+          {
+            "command": [
+              "go",
+              "list",
+              "-m",
+              "-json",
+              "all"
+            ],
+            "cwd": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/verification/pockets/authentication/stores/turso",
+            "elapsed_seconds": 0.13,
+            "exit_code": 0,
+            "log": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/authturso-module-graph.log"
+          },
+          {
+            "command": [
+              "go",
+              "build",
+              "./..."
+            ],
+            "cwd": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/verification/pockets/authentication/stores/turso",
+            "elapsed_seconds": 1.51,
+            "exit_code": 0,
+            "log": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/authturso-build.log"
+          },
+          {
+            "command": [
+              "go",
+              "test",
+              "-count=1",
+              "./..."
+            ],
+            "cwd": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/verification/pockets/authentication/stores/turso",
+            "elapsed_seconds": 10.53,
+            "exit_code": 0,
+            "log": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/authturso-test.log"
+          },
+          {
+            "command": [
+              "go",
+              "vet",
+              "./..."
+            ],
+            "cwd": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/verification/pockets/authentication/stores/turso",
+            "elapsed_seconds": 1.27,
+            "exit_code": 0,
+            "log": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/authturso-vet.log"
+          },
+          {
+            "command": [
+              "go",
+              "test",
+              "-tags=integration",
+              "-run",
+              "^$",
+              "./..."
+            ],
+            "cwd": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/verification/pockets/authentication/stores/turso",
+            "elapsed_seconds": 0.86,
+            "exit_code": 0,
+            "log": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/authturso-integration-compile.log"
+          },
+          {
+            "command": [
+              "go",
+              "test",
+              "-tags=integration,live",
+              "-run",
+              "^$",
+              "./..."
+            ],
+            "cwd": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/verification/pockets/authentication/stores/turso",
+            "elapsed_seconds": 0.69,
+            "exit_code": 0,
+            "log": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/authturso-tagged-compile.log"
+          },
+          {
+            "command": [
+              "go",
+              "vet",
+              "-tags=integration,live",
+              "./..."
+            ],
+            "cwd": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/verification/pockets/authentication/stores/turso",
+            "elapsed_seconds": 1.29,
+            "exit_code": 0,
+            "log": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/authturso-tagged-vet.log"
+          }
+        ],
+        "download": {
+          "Dir": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/modcache/github.com/gopernicus/gopernicus/pockets/authentication/stores/turso@v0.6.0",
+          "GoMod": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/modcache/cache/download/github.com/gopernicus/gopernicus/pockets/authentication/stores/turso/@v/v0.6.0.mod",
+          "GoModSum": "h1:Vfr5HUULkE9hhyhKJGeeNRR0S0JGA+v3xd3hCQGOYks=",
+          "Info": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/modcache/cache/download/github.com/gopernicus/gopernicus/pockets/authentication/stores/turso/@v/v0.6.0.info",
+          "Origin": {
+            "Hash": "6a399d1e27932ea4564e5f391e50f65d4b9751a1",
+            "Ref": "refs/tags/pockets/authentication/stores/turso/v0.6.0",
+            "Subdir": "pockets/authentication/stores/turso",
+            "URL": "https://github.com/gopernicus/gopernicus",
+            "VCS": "git"
+          },
+          "Path": "github.com/gopernicus/gopernicus/pockets/authentication/stores/turso",
+          "Sum": "h1:Bjs59aHa2CXHfzmOuB8XBdvMEnnETdWiWThRAn9N0qg=",
+          "Version": "v0.6.0",
+          "Zip": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/modcache/cache/download/github.com/gopernicus/gopernicus/pockets/authentication/stores/turso/@v/v0.6.0.zip"
+        },
+        "framework_versions": {
+          "github.com/gopernicus/gopernicus/integrations/datastores/turso": "v0.6.0",
+          "github.com/gopernicus/gopernicus/pockets": "v0.1.0",
+          "github.com/gopernicus/gopernicus/pockets/authentication": "v0.13.0",
+          "github.com/gopernicus/gopernicus/pockets/authentication/stores/turso": null,
+          "github.com/gopernicus/gopernicus/sdk": "v0.9.0"
+        },
+        "label": "authturso",
+        "module": "github.com/gopernicus/gopernicus/pockets/authentication/stores/turso",
+        "passed": true
+      },
+      {
+        "checks": [
+          {
+            "command": [
+              "go",
+              "mod",
+              "download",
+              "-json",
+              "github.com/gopernicus/gopernicus/pockets/authentication/views/goth@v0.5.0"
+            ],
+            "cwd": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/download-context",
+            "elapsed_seconds": 14.6,
+            "exit_code": 0,
+            "log": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/authviews-download.log"
+          },
+          {
+            "command": [
+              "go",
+              "list",
+              "-m",
+              "-json",
+              "all"
+            ],
+            "cwd": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/verification/pockets/authentication/views/goth",
+            "elapsed_seconds": 0.16,
+            "exit_code": 0,
+            "log": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/authviews-module-graph.log"
+          },
+          {
+            "command": [
+              "go",
+              "build",
+              "./..."
+            ],
+            "cwd": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/verification/pockets/authentication/views/goth",
+            "elapsed_seconds": 1.16,
+            "exit_code": 0,
+            "log": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/authviews-build.log"
+          },
+          {
+            "command": [
+              "go",
+              "test",
+              "-count=1",
+              "./..."
+            ],
+            "cwd": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/verification/pockets/authentication/views/goth",
+            "elapsed_seconds": 0.83,
+            "exit_code": 0,
+            "log": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/authviews-test.log"
+          },
+          {
+            "command": [
+              "go",
+              "vet",
+              "./..."
+            ],
+            "cwd": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/verification/pockets/authentication/views/goth",
+            "elapsed_seconds": 0.39,
+            "exit_code": 0,
+            "log": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/authviews-vet.log"
+          },
+          {
+            "command": [
+              "go",
+              "test",
+              "-tags=integration",
+              "-run",
+              "^$",
+              "./..."
+            ],
+            "cwd": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/verification/pockets/authentication/views/goth",
+            "elapsed_seconds": 0.51,
+            "exit_code": 0,
+            "log": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/authviews-integration-compile.log"
+          },
+          {
+            "command": [
+              "go",
+              "test",
+              "-tags=integration,live",
+              "-run",
+              "^$",
+              "./..."
+            ],
+            "cwd": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/verification/pockets/authentication/views/goth",
+            "elapsed_seconds": 0.5,
+            "exit_code": 0,
+            "log": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/authviews-tagged-compile.log"
+          },
+          {
+            "command": [
+              "go",
+              "vet",
+              "-tags=integration,live",
+              "./..."
+            ],
+            "cwd": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/verification/pockets/authentication/views/goth",
+            "elapsed_seconds": 0.4,
+            "exit_code": 0,
+            "log": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/authviews-tagged-vet.log"
+          }
+        ],
+        "download": {
+          "Dir": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/modcache/github.com/gopernicus/gopernicus/pockets/authentication/views/goth@v0.5.0",
+          "GoMod": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/modcache/cache/download/github.com/gopernicus/gopernicus/pockets/authentication/views/goth/@v/v0.5.0.mod",
+          "GoModSum": "h1:TFdb2AsCPo9XqtT23fj1pZN4EuC1SE9Kg2HoioCo3nM=",
+          "Info": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/modcache/cache/download/github.com/gopernicus/gopernicus/pockets/authentication/views/goth/@v/v0.5.0.info",
+          "Origin": {
+            "Hash": "6a399d1e27932ea4564e5f391e50f65d4b9751a1",
+            "Ref": "refs/tags/pockets/authentication/views/goth/v0.5.0",
+            "Subdir": "pockets/authentication/views/goth",
+            "URL": "https://github.com/gopernicus/gopernicus",
+            "VCS": "git"
+          },
+          "Path": "github.com/gopernicus/gopernicus/pockets/authentication/views/goth",
+          "Sum": "h1:1FyZWld2krKPnuVhyfBsqy5ZohmgAh4cCA0w31I4cCE=",
+          "Version": "v0.5.0",
+          "Zip": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/modcache/cache/download/github.com/gopernicus/gopernicus/pockets/authentication/views/goth/@v/v0.5.0.zip"
+        },
+        "framework_versions": {
+          "github.com/gopernicus/gopernicus/pockets": "v0.1.0",
+          "github.com/gopernicus/gopernicus/pockets/authentication": "v0.13.0",
+          "github.com/gopernicus/gopernicus/pockets/authentication/views/goth": null,
+          "github.com/gopernicus/gopernicus/sdk": "v0.9.0",
+          "github.com/gopernicus/gopernicus/ui/goth": "v0.2.0"
+        },
+        "label": "authviews",
+        "module": "github.com/gopernicus/gopernicus/pockets/authentication/views/goth",
+        "passed": true
+      },
+      {
+        "checks": [
+          {
+            "command": [
+              "go",
+              "mod",
+              "download",
+              "-json",
+              "github.com/gopernicus/gopernicus/pockets/authentication/stores/firestore@v0.2.0"
+            ],
+            "cwd": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/download-context",
+            "elapsed_seconds": 0.01,
+            "exit_code": 0,
+            "log": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/authfirestore-download.log"
+          },
+          {
+            "command": [
+              "go",
+              "list",
+              "-m",
+              "-json",
+              "all"
+            ],
+            "cwd": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/verification/pockets/authentication/stores/firestore",
+            "elapsed_seconds": 0.18,
+            "exit_code": 0,
+            "log": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/authfirestore-module-graph.log"
+          },
+          {
+            "command": [
+              "go",
+              "build",
+              "./..."
+            ],
+            "cwd": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/verification/pockets/authentication/stores/firestore",
+            "elapsed_seconds": 2.96,
+            "exit_code": 0,
+            "log": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/authfirestore-build.log"
+          },
+          {
+            "command": [
+              "go",
+              "test",
+              "-count=1",
+              "./..."
+            ],
+            "cwd": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/verification/pockets/authentication/stores/firestore",
+            "elapsed_seconds": 1.99,
+            "exit_code": 0,
+            "log": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/authfirestore-test.log"
+          },
+          {
+            "command": [
+              "go",
+              "vet",
+              "./..."
+            ],
+            "cwd": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/verification/pockets/authentication/stores/firestore",
+            "elapsed_seconds": 1.29,
+            "exit_code": 0,
+            "log": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/authfirestore-vet.log"
+          },
+          {
+            "command": [
+              "go",
+              "test",
+              "-tags=integration",
+              "-run",
+              "^$",
+              "./..."
+            ],
+            "cwd": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/verification/pockets/authentication/stores/firestore",
+            "elapsed_seconds": 1.35,
+            "exit_code": 0,
+            "log": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/authfirestore-integration-compile.log"
+          },
+          {
+            "command": [
+              "go",
+              "test",
+              "-tags=integration,live",
+              "-run",
+              "^$",
+              "./..."
+            ],
+            "cwd": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/verification/pockets/authentication/stores/firestore",
+            "elapsed_seconds": 1.25,
+            "exit_code": 0,
+            "log": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/authfirestore-tagged-compile.log"
+          },
+          {
+            "command": [
+              "go",
+              "vet",
+              "-tags=integration,live",
+              "./..."
+            ],
+            "cwd": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/verification/pockets/authentication/stores/firestore",
+            "elapsed_seconds": 1.35,
+            "exit_code": 0,
+            "log": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/authfirestore-tagged-vet.log"
+          }
+        ],
+        "download": {
+          "Dir": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/modcache/github.com/gopernicus/gopernicus/pockets/authentication/stores/firestore@v0.2.0",
+          "GoMod": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/modcache/cache/download/github.com/gopernicus/gopernicus/pockets/authentication/stores/firestore/@v/v0.2.0.mod",
+          "GoModSum": "h1:EoZgY+JDcmI2z3F5uQYYzO6naH3iCxrZeSpgc/cZ/9g=",
+          "Info": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/modcache/cache/download/github.com/gopernicus/gopernicus/pockets/authentication/stores/firestore/@v/v0.2.0.info",
+          "Origin": {
+            "Hash": "6a399d1e27932ea4564e5f391e50f65d4b9751a1",
+            "Ref": "refs/tags/pockets/authentication/stores/firestore/v0.2.0",
+            "Subdir": "pockets/authentication/stores/firestore",
+            "URL": "https://github.com/gopernicus/gopernicus",
+            "VCS": "git"
+          },
+          "Path": "github.com/gopernicus/gopernicus/pockets/authentication/stores/firestore",
+          "Sum": "h1:suQ2vXDwpP3Mi6xGXXI2hIlweRfwbxaoKdV57dBUzfk=",
+          "Version": "v0.2.0",
+          "Zip": "/tmp/gopernicus-authentication-mcp-oauth-verification/public/modcache/cache/download/github.com/gopernicus/gopernicus/pockets/authentication/stores/firestore/@v/v0.2.0.zip"
+        },
+        "framework_versions": {
+          "github.com/gopernicus/gopernicus/integrations/datastores/firestore": "v0.1.0",
+          "github.com/gopernicus/gopernicus/pockets": "v0.1.0",
+          "github.com/gopernicus/gopernicus/pockets/authentication": "v0.13.0",
+          "github.com/gopernicus/gopernicus/pockets/authentication/stores/firestore": null,
+          "github.com/gopernicus/gopernicus/sdk": "v0.9.0"
+        },
+        "label": "authfirestore",
+        "module": "github.com/gopernicus/gopernicus/pockets/authentication/stores/firestore",
+        "passed": true
+      }
+    ]
+  },
+  "public_visibility": {
+    "authentication": "No Authorization header, Git credential helper, token or netrc authentication used; plain urllib HTTPS requests.",
+    "checked_utc": "2026-09-18T18:39:23.057681+00:00",
+    "passed": true,
+    "responses": [
+      {
+        "authentication_sent": false,
+        "data": {
+          "full_name": "gopernicus/gopernicus",
+          "private": false,
+          "visibility": "public"
+        },
+        "headers": {
+          "Date": "Fri, 18 Sep 2026 18:39:22 GMT",
+          "X-RateLimit-Remaining": "54",
+          "X-RateLimit-Reset": "1789760362"
+        },
+        "status": 200,
+        "url": "https://api.github.com/repos/gopernicus/gopernicus"
+      },
+      {
+        "authentication_sent": false,
+        "data": {
+          "object": {
+            "sha": "99a51da86ca862ae41e9c3214c9606fddd2ce5ab",
+            "type": "tag",
+            "url": "https://api.github.com/repos/gopernicus/gopernicus/git/tags/99a51da86ca862ae41e9c3214c9606fddd2ce5ab"
+          },
+          "ref": "refs/tags/pockets/authentication/v0.13.0"
+        },
+        "headers": {
+          "Date": "Fri, 18 Sep 2026 18:39:23 GMT",
+          "X-RateLimit-Remaining": "58",
+          "X-RateLimit-Reset": "1789760362"
+        },
+        "status": 200,
+        "url": "https://api.github.com/repos/gopernicus/gopernicus/git/ref/tags/pockets/authentication/v0.13.0"
+      },
+      {
+        "authentication_sent": false,
+        "data": {
+          "object": {
+            "sha": "db62b2edb7332f9af2317e8fe19d7f0ad2c01f6b",
+            "type": "tag",
+            "url": "https://api.github.com/repos/gopernicus/gopernicus/git/tags/db62b2edb7332f9af2317e8fe19d7f0ad2c01f6b"
+          },
+          "ref": "refs/tags/pockets/authentication/stores/pgx/v0.7.0"
+        },
+        "headers": {
+          "Date": "Fri, 18 Sep 2026 18:39:22 GMT",
+          "X-RateLimit-Remaining": "57",
+          "X-RateLimit-Reset": "1789760362"
+        },
+        "status": 200,
+        "url": "https://api.github.com/repos/gopernicus/gopernicus/git/ref/tags/pockets/authentication/stores/pgx/v0.7.0"
+      },
+      {
+        "authentication_sent": false,
+        "data": {
+          "object": {
+            "sha": "7d5144ff70f86fdd9821f4bec47134b07c32ccf9",
+            "type": "tag",
+            "url": "https://api.github.com/repos/gopernicus/gopernicus/git/tags/7d5144ff70f86fdd9821f4bec47134b07c32ccf9"
+          },
+          "ref": "refs/tags/pockets/authentication/stores/turso/v0.6.0"
+        },
+        "headers": {
+          "Date": "Fri, 18 Sep 2026 18:39:23 GMT",
+          "X-RateLimit-Remaining": "56",
+          "X-RateLimit-Reset": "1789760362"
+        },
+        "status": 200,
+        "url": "https://api.github.com/repos/gopernicus/gopernicus/git/ref/tags/pockets/authentication/stores/turso/v0.6.0"
+      },
+      {
+        "authentication_sent": false,
+        "data": {
+          "object": {
+            "sha": "1429ad4d7360e9a91f02641381726910a5ba9575",
+            "type": "tag",
+            "url": "https://api.github.com/repos/gopernicus/gopernicus/git/tags/1429ad4d7360e9a91f02641381726910a5ba9575"
+          },
+          "ref": "refs/tags/pockets/authentication/views/goth/v0.5.0"
+        },
+        "headers": {
+          "Date": "Fri, 18 Sep 2026 18:39:22 GMT",
+          "X-RateLimit-Remaining": "59",
+          "X-RateLimit-Reset": "1789760362"
+        },
+        "status": 200,
+        "url": "https://api.github.com/repos/gopernicus/gopernicus/git/ref/tags/pockets/authentication/views/goth/v0.5.0"
+      },
+      {
+        "authentication_sent": false,
+        "data": {
+          "object": {
+            "sha": "c96e597e59a65d8ea5390213ec63e165d46ea845",
+            "type": "tag",
+            "url": "https://api.github.com/repos/gopernicus/gopernicus/git/tags/c96e597e59a65d8ea5390213ec63e165d46ea845"
+          },
+          "ref": "refs/tags/pockets/authentication/stores/firestore/v0.2.0"
+        },
+        "headers": {
+          "Date": "Fri, 18 Sep 2026 18:39:22 GMT",
+          "X-RateLimit-Remaining": "55",
+          "X-RateLimit-Reset": "1789760362"
+        },
+        "status": 200,
+        "url": "https://api.github.com/repos/gopernicus/gopernicus/git/ref/tags/pockets/authentication/stores/firestore/v0.2.0"
+      }
+    ]
+  },
+  "publication": {
+    "provenance": "Read-only git ls-remote receipt; this script creates no tags or refs.",
+    "release_commit": "6a399d1e27932ea4564e5f391e50f65d4b9751a1",
+    "tags": [
+      {
+        "commit": "6a399d1e27932ea4564e5f391e50f65d4b9751a1",
+        "tag": "pockets/authentication/v0.13.0",
+        "tag_object": "99a51da86ca862ae41e9c3214c9606fddd2ce5ab"
+      },
+      {
+        "commit": "6a399d1e27932ea4564e5f391e50f65d4b9751a1",
+        "tag": "pockets/authentication/stores/pgx/v0.7.0",
+        "tag_object": "db62b2edb7332f9af2317e8fe19d7f0ad2c01f6b"
+      },
+      {
+        "commit": "6a399d1e27932ea4564e5f391e50f65d4b9751a1",
+        "tag": "pockets/authentication/stores/turso/v0.6.0",
+        "tag_object": "7d5144ff70f86fdd9821f4bec47134b07c32ccf9"
+      },
+      {
+        "commit": "6a399d1e27932ea4564e5f391e50f65d4b9751a1",
+        "tag": "pockets/authentication/views/goth/v0.5.0",
+        "tag_object": "1429ad4d7360e9a91f02641381726910a5ba9575"
+      },
+      {
+        "commit": "6a399d1e27932ea4564e5f391e50f65d4b9751a1",
+        "tag": "pockets/authentication/stores/firestore/v0.2.0",
+        "tag_object": "c96e597e59a65d8ea5390213ec63e165d46ea845"
+      }
+    ]
+  },
+  "release_commit": "6a399d1e27932ea4564e5f391e50f65d4b9751a1",
   "release_plan": "plans/authentication-mcp-oauth-release.md",
   "source_comparison": {
     "allowed_differences": "README/docs and dependency manifests only; all Go, generated templates, migrations, fixtures, assets and shared conformance source bytes identical",
@@ -851,9 +2697,47 @@
     "passed": true,
     "postgresql_evidence_reuse": "Previous private PostgreSQL default/scoped race evidence remains applicable to unchanged SQL implementation and core session/storetest inputs."
   },
-  "status": "release authorized; final source and real module pins verified; publication pending",
+  "status": "published and publicly verified",
+  "tag_preservation": {
+    "new_refs": {
+      "refs/tags/pockets/authentication/stores/firestore/v0.2.0": "c96e597e59a65d8ea5390213ec63e165d46ea845",
+      "refs/tags/pockets/authentication/stores/firestore/v0.2.0^{}": "6a399d1e27932ea4564e5f391e50f65d4b9751a1",
+      "refs/tags/pockets/authentication/stores/pgx/v0.7.0": "db62b2edb7332f9af2317e8fe19d7f0ad2c01f6b",
+      "refs/tags/pockets/authentication/stores/pgx/v0.7.0^{}": "6a399d1e27932ea4564e5f391e50f65d4b9751a1",
+      "refs/tags/pockets/authentication/stores/turso/v0.6.0": "7d5144ff70f86fdd9821f4bec47134b07c32ccf9",
+      "refs/tags/pockets/authentication/stores/turso/v0.6.0^{}": "6a399d1e27932ea4564e5f391e50f65d4b9751a1",
+      "refs/tags/pockets/authentication/v0.13.0": "99a51da86ca862ae41e9c3214c9606fddd2ce5ab",
+      "refs/tags/pockets/authentication/v0.13.0^{}": "6a399d1e27932ea4564e5f391e50f65d4b9751a1",
+      "refs/tags/pockets/authentication/views/goth/v0.5.0": "1429ad4d7360e9a91f02641381726910a5ba9575",
+      "refs/tags/pockets/authentication/views/goth/v0.5.0^{}": "6a399d1e27932ea4564e5f391e50f65d4b9751a1"
+    },
+    "passed": true,
+    "prior_refs_preserved": 473
+  },
   "tool_basis": "Adapted existing /tmp/gopernicus-authorization-internal-cleanup-release/release-tool.py candidate archive and module verification methodology; no publish helpers used.",
   "verification_tool": "/tmp/gopernicus-authentication-mcp-oauth-verification/candidate.py",
-  "verified_utc": "2026-09-18T18:20:20.407188+00:00",
-  "version_basis": "Explicitly authorized coordinated minor releases; all five proposed tags confirmed absent remotely on 2026-09-18."
+  "verified_utc": "2026-09-18T18:49:27.462489+00:00",
+  "version_basis": "Authorized coordinated minor releases, all five annotated tags published at the exact verified release commit.",
+  "workspace_check": {
+    "command": [
+      "make",
+      "check"
+    ],
+    "cwd": "/Users/jrazmi/code/gopernicus-ecosystem/gopernicus",
+    "elapsed_seconds": 146.59,
+    "environment": {
+      "GOCACHE": "/tmp/gopernicus-mcp-oauth-cache",
+      "GOFLAGS": "-mod=readonly",
+      "GOMODCACHE": "/tmp/gopernicus-authentication-mcp-oauth-verification/release-candidate/modcache",
+      "GONOSUMDB": "github.com/gopernicus/gopernicus/pockets/authentication,github.com/gopernicus/gopernicus/pockets/authentication/stores/pgx,github.com/gopernicus/gopernicus/pockets/authentication/stores/turso,github.com/gopernicus/gopernicus/pockets/authentication/views/goth,github.com/gopernicus/gopernicus/pockets/authentication/stores/firestore",
+      "GOPROXY": "file:///tmp/gopernicus-authentication-mcp-oauth-verification/release-candidate/proxy,https://proxy.golang.org",
+      "GOSUMDB": "sum.golang.org",
+      "GOWORK": "/Users/jrazmi/code/gopernicus-ecosystem/gopernicus/go.work"
+    },
+    "exit_code": 0,
+    "head": "6a399d1e27932ea4564e5f391e50f65d4b9751a1",
+    "log": "/tmp/gopernicus-authentication-mcp-oauth-verification/release-make-check.log",
+    "passed": true,
+    "verified_utc": "2026-09-18T18:23:00.164749+00:00"
+  }
 }
