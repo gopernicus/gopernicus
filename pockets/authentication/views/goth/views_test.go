@@ -135,12 +135,52 @@ func TestLogin_LabelsAutocompleteCSRF(t *testing.T) {
 		`name="csrf_token" value="csrf-abc123"`,
 		`name="return_to" value="/dashboard"`,
 		`value="user@example.com"`,
+		`href="/auth/register"`,
+		`href="/auth/password/forgot"`,
 		`role="alert"`,
 		"That email looks invalid.",
 	)
 	// The password input carries no value attribute — a failed attempt never
 	// repopulates a secret (primitives.Input never echoes a password Value).
 	mustNotContain(t, "Login", body, `name="password" value=`, `value="user@example.com" type="password"`)
+}
+
+func TestLoginPasswordFlowsDisabled(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		providers    []string
+		passwordless bool
+	}{
+		{"oauth-only", []string{"google"}, false},
+		{"passwordless-only", nil, true},
+		{"oauth-and-passwordless", []string{"google"}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			pc := ctx()
+			pc.Message = "You have been signed out."
+			body := render(t, newViews(t).Login(inbound.LoginPage{
+				PageContext:           pc,
+				PasswordFlowsDisabled: true,
+				PasswordlessEnabled:   tc.passwordless,
+				OAuthProviders:        tc.providers,
+			}))
+			mustNotContain(t, tc.name, body,
+				`<form`, `name="email"`, `name="password"`, `type="submit"`,
+				`/auth/register`, `/auth/password/forgot`,
+			)
+			mustContain(t, tc.name, body, "Sign in", pc.Message, "That email looks invalid.")
+			if tc.passwordless {
+				mustContain(t, tc.name, body, `href="/auth/passwordless"`, "Sign in without a password")
+			} else {
+				mustNotContain(t, tc.name, body, `href="/auth/passwordless"`, `data-slot="separator"`)
+			}
+			if len(tc.providers) > 0 {
+				mustContain(t, tc.name, body, `href="/auth/oauth/google/start"`, "Continue with Google", `rel="nofollow"`)
+			} else {
+				mustNotContain(t, tc.name, body, `data-slot="auth-providers"`)
+			}
+		})
+	}
 }
 
 // TestRegister_NewPassword proves the registration form uses new-password.

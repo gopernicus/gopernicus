@@ -200,10 +200,11 @@ func (h *handlers) loginPage(w http.ResponseWriter, r *http.Request) {
 	pc.ReturnTo = h.validatedReturnTo(r)
 	pc.Message = outcomeMessage(loginOutcomes, r.URL.Query().Get("auth"))
 	m := LoginPage{
-		PageContext:         pc,
-		Email:               r.URL.Query().Get("email"),
-		PasswordlessEnabled: h.svc.PasswordlessEnabled(),
-		OAuthProviders:      h.svc.OAuthProviderNames(),
+		PageContext:           pc,
+		Email:                 r.URL.Query().Get("email"),
+		PasswordFlowsDisabled: !h.svc.PasswordFlowsEnabled(),
+		PasswordlessEnabled:   h.svc.PasswordlessEnabled(),
+		OAuthProviders:        h.svc.OAuthProviderNames(),
 	}
 	h.renderPage(w, r, pc.CSPNonce, h.views.Login(m))
 }

@@ -122,10 +122,12 @@ type PasswordConfig struct {
 	// PasswordFlowsDisabled turns the password credential OFF as a posture, for a
 	// host whose only way in is OAuth (or passwordless): Register mounts NONE of
 	// the registration / password-login / verification / forgot-reset /
-	// change-set-remove / step-up-password routes (JSON and HTML —
-	// deny-by-absence, like machine identity), and the corresponding Service
-	// use-cases refuse with ErrPasswordFlowsDisabled. Default false keeps every
-	// route. Hasher is required only while password flows are enabled.
+	// change-set-remove / step-up-password routes (password POSTs and dedicated
+	// HTML pages — deny-by-absence), and the corresponding Service use-cases
+	// refuse with ErrPasswordFlowsDisabled. The shared GET /auth/login remains
+	// available for configured alternatives; its page model hides password UI.
+	// Default false keeps every route. Hasher is required only while password
+	// flows are enabled.
 	PasswordFlowsDisabled bool `env:"AUTH_PASSWORD_FLOWS_DISABLED"`
 	// RequireVerifiedEmail, when true, makes login refuse an unverified user
 	// with a 403 (ErrEmailNotVerified). Default false (design §7.1, AV8):

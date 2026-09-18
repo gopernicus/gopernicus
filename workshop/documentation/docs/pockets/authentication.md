@@ -225,6 +225,13 @@ The pgx and Turso store modules implement the pocket repositories and export the
 
 The pocket core imports neither store nor UI. `pockets/authentication/views/goth` maps the technology-neutral `Views` port onto `ui/goth`; hosts can embed that default and override pages, or implement the port with another renderer.
 
+For an OAuth-only or passwordless-only host, `PasswordFlowsDisabled: true` keeps
+the sign-in page available while removing password endpoints. Authentication
+`v0.13.2` exposes that setting as `LoginPage.PasswordFlowsDisabled`; Goth views
+`v0.5.1` hides the password form and registration/recovery links while preserving
+the configured sign-in alternatives and notices. Custom login renderers should
+honor the same field. Its zero value keeps the existing password form.
+
 ## Not shipped
 
 Multi-factor authentication is not part of the current pocket. Method and assurance vocabulary reserve a future path, but there is no TOTP, passkey/WebAuthn, or recovery-code MFA surface today.

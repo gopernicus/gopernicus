@@ -103,11 +103,14 @@ type PageContext struct {
 	FieldErrors []FieldError
 }
 
-// LoginPage models the password-login form. Email is the echoed entered address
+// LoginPage models the sign-in page. Email is the echoed entered address
 // (non-secret); the password is never echoed.
 type LoginPage struct {
 	PageContext
 	Email string
+	// PasswordFlowsDisabled hides password sign-in, registration and recovery.
+	// False preserves the default password-enabled presentation.
+	PasswordFlowsDisabled bool
 	// PasswordlessEnabled reports whether the host wired passwordless login, so the
 	// template can offer the alternative; it changes no route security.
 	PasswordlessEnabled bool

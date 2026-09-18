@@ -121,7 +121,7 @@ func (v Views) page(title string, headExtra templ.Component, body templ.Componen
 // script for the reset/magic-link landings.
 func (v Views) fragmentHead() templ.Component { return fragmentScriptTag(v.fragmentScriptPath) }
 
-// Login renders the password-login form.
+// Login renders the sign-in methods enabled by the page model.
 func (v Views) Login(m inbound.LoginPage) web.Renderer {
 	return v.page("Sign in", nil, loginBody(m))
 }

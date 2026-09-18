@@ -5519,3 +5519,17 @@ of order. Defaults, nested narrowing and no-fallback credential resolution are
 unchanged. No token/session schema, migration, endpoint or store/view release is
 required. Publication and regression evidence are recorded in
 [the patch release plan](plans/authentication-delegated-audience-release.md).
+
+## AUDIT-051: Login page honors disabled password flows
+
+The login page previously offered a password form and registration/recovery links
+even when the host disabled those endpoints. `LoginPage.PasswordFlowsDisabled`
+now carries the existing service setting into GET and failed-form rendering.
+Goth views hides those controls and retains OAuth/passwordless alternatives and
+notices. The zero value preserves the existing password form for direct/custom
+page models; custom renderers should honor the field.
+
+Adopt authentication v0.13.2 and Goth views v0.5.1; the renderer pins the fixed
+core. No route-security, session, token, migration or store change is required.
+Publication and verification status are in
+[the fix plan](plans/authentication-login-password-posture.md).

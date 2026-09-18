@@ -5997,3 +5997,14 @@ must both match. This is an independently adoptable host-configuration patch:
 only `pockets/authentication` is tagged; current SQL/view/Firestore versions and
 all dependency pins remain unchanged. No migration or production rollout occurs
 as part of this release. See [the release record](plans/authentication-delegated-audience-release.md).
+
+## Authentication login page password posture
+
+Authentication v0.13.2 adds a zero-default `LoginPage.PasswordFlowsDisabled` field
+derived from the existing service setting. Goth views v0.5.1 pins that core and
+hides the disabled password form plus registration/recovery links. OAuth and
+passwordless choices remain available. Upgrading the core with older views is
+compatible; adopting the corrected bundled renderer selects its required core.
+These are presentation bugfix patches with no route-security, schema, store or
+mandatory configuration changes. Custom renderers should honor the new field.
+See [the fix and release record](plans/authentication-login-password-posture.md).
