@@ -1,6 +1,6 @@
 # Login page respects disabled password flows
 
-Status: VERIFIED, PUBLICATION APPROVED — 2026-09-18.
+Status: PUBLISHED AND PUBLICLY VERIFIED — 2026-09-18.
 
 Three-sixty is a Google-only host. `PasswordFlowsDisabled` already removes the
 password endpoints, but the bundled login page still offers a password form,
@@ -38,7 +38,7 @@ Do not change any host repository, credentials, production data or existing tags
 - [x] L3 Document the contract and paired adoption; run goimports, pinned templ
   generation, affected-module build/test/vet, full repository checks and a local
   browser check of the rendered page. Record architectural review.
-- [ ] L4 Prepare independently verified module candidates and a consumer with
+- [x] L4 Prepare independently verified module candidates and a consumer with
   `GOWORK=off`; publish the paired patches using the established release process
   and verify public checksums, archive source, module checks and CI.
 
@@ -90,3 +90,35 @@ Detailed commands, checksums and receipts are in
 The initial publication command was rejected by automatic approval review and
 did not execute. Josh subsequently explicitly approved releasing both patches
 ("ok lets release it"). Source and candidates remain unchanged and verified.
+
+## Publication
+
+Main and annotated tags `pockets/authentication/v0.13.2` and
+`pockets/authentication/views/goth/v0.5.1` were pushed atomically from
+`8e07a304ff481a32e267e546f7b5d949d6580394`. All 385 nearest-module archive entries
+match the committed source; all 485 preexisting remote tag refs are unchanged.
+
+GitHub [main check](https://github.com/gopernicus/gopernicus/actions/runs/35397997514),
+[core tag check](https://github.com/gopernicus/gopernicus/actions/runs/35397997270),
+[Goth tag check](https://github.com/gopernicus/gopernicus/actions/runs/35397997439)
+and [docs deployment](https://github.com/gopernicus/gopernicus/actions/runs/35397997527)
+all passed.
+
+Both public modules downloaded with normal sum.golang.org verification and exact
+Git provenance. All 385 public archive entries match the candidate and committed
+source. Independent public module build/test/vet, tagged checks and the real
+mounted HTTP consumer passed without replacements or checksum exemptions.
+
+Initial core downloads encountered a cached public-proxy 404, surfaced through
+checksum lookup. That external propagation delay resolved before final public
+verification. Failed attempts and cache evidence are preserved in the manifest's
+verification evidence; candidate sums were not preseeded into public verification.
+
+Upgrade both packages in the host:
+
+```sh
+go get github.com/gopernicus/gopernicus/pockets/authentication@v0.13.2 github.com/gopernicus/gopernicus/pockets/authentication/views/goth@v0.5.1
+```
+
+The existing `PasswordFlowsDisabled: true` setting is sufficient. No host login
+override, additional configuration, store update or migration is required.
