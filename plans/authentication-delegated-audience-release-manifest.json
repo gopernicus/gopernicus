@@ -4,7 +4,37 @@
     "verdict": "aligned"
   },
   "base_commit": "bb1cc5b04ae2e20561ea9a5b4215f514de275e07",
-  "candidate_checksum_trust": "Locally computed exact core h1 and go.mod h1 seeded into temporary contexts; no public request for unpublished core version.",
+  "candidate_verification": {
+    "checksum_trust": "Locally computed exact core h1 and go.mod h1 seeded into temporary contexts; no public request for unpublished core version.",
+    "evidence_files": {
+      "consumer-module-graph.json": "/tmp/gopernicus-authentication-delegated-audience-release/candidate/consumer-module-graph.json",
+      "consumer-results.json": "/tmp/gopernicus-authentication-delegated-audience-release/candidate/consumer-results.json",
+      "results.json": "/tmp/gopernicus-authentication-delegated-audience-release/candidate/results.json",
+      "source.json": "/tmp/gopernicus-authentication-delegated-audience-release/candidate/source.json"
+    },
+    "external_consumer_passed": true,
+    "passed": true,
+    "verified_utc": "2026-09-18T19:35:51.973828+00:00"
+  },
+  "commit_source_verification": {
+    "all_committed_source_sha256_match_candidate": true,
+    "commit": "9a9482ddf06512f5f0b5a5beb58d3b60ce5764ba",
+    "entries": 348,
+    "go_mod_and_sum_unchanged": true,
+    "method": "git ls-tree exact nearest-module file set and git cat-file --batch blob SHA-256, including inherited root LICENSE; read-only.",
+    "module": "github.com/gopernicus/gopernicus/pockets/authentication",
+    "nearest_module_ownership": true,
+    "passed": true,
+    "source_inventory_sha256": "c87285a91d9c9d7a2c8ee982dc81ae5167200e2f64cc31731aa08f291034311d",
+    "version": "v0.13.1"
+  },
+  "committed_source_check": {
+    "commit": "9a9482ddf06512f5f0b5a5beb58d3b60ce5764ba",
+    "only_owned_files_committed": true,
+    "owner_files_preserved": true,
+    "passed": true,
+    "source_entries": 348
+  },
   "core_checks": {
     "checks": [
       {
@@ -66,20 +96,27 @@
           "-json",
           "github.com/gopernicus/gopernicus/pockets/authentication@v0.13.1"
         ],
-        "cwd": "/tmp/gopernicus-authentication-delegated-audience-release/candidate/download-context",
-        "elapsed_seconds": 0.09,
+        "cwd": "/tmp/gopernicus-authentication-delegated-audience-release/public/download-context",
+        "elapsed_seconds": 14.05,
         "exit_code": 0,
-        "log": "/tmp/gopernicus-authentication-delegated-audience-release/candidate/authcore-download.log"
+        "log": "/tmp/gopernicus-authentication-delegated-audience-release/public/authcore-download.log"
       },
       "download": {
-        "Dir": "/tmp/gopernicus-authentication-delegated-audience-release/candidate/modcache/github.com/gopernicus/gopernicus/pockets/authentication@v0.13.1",
-        "GoMod": "/tmp/gopernicus-authentication-delegated-audience-release/candidate/modcache/cache/download/github.com/gopernicus/gopernicus/pockets/authentication/@v/v0.13.1.mod",
+        "Dir": "/tmp/gopernicus-authentication-delegated-audience-release/public/modcache/github.com/gopernicus/gopernicus/pockets/authentication@v0.13.1",
+        "GoMod": "/tmp/gopernicus-authentication-delegated-audience-release/public/modcache/cache/download/github.com/gopernicus/gopernicus/pockets/authentication/@v/v0.13.1.mod",
         "GoModSum": "h1:V4s8PuUv/BPWtuLigf9aVCYEcSA+tklqVUnMnTkxvg4=",
-        "Info": "/tmp/gopernicus-authentication-delegated-audience-release/candidate/modcache/cache/download/github.com/gopernicus/gopernicus/pockets/authentication/@v/v0.13.1.info",
+        "Info": "/tmp/gopernicus-authentication-delegated-audience-release/public/modcache/cache/download/github.com/gopernicus/gopernicus/pockets/authentication/@v/v0.13.1.info",
+        "Origin": {
+          "Hash": "9a9482ddf06512f5f0b5a5beb58d3b60ce5764ba",
+          "Ref": "refs/tags/pockets/authentication/v0.13.1",
+          "Subdir": "pockets/authentication",
+          "URL": "https://github.com/gopernicus/gopernicus",
+          "VCS": "git"
+        },
         "Path": "github.com/gopernicus/gopernicus/pockets/authentication",
         "Sum": "h1:70KYEQKl36sEC+Iqs9lzygtxRzg4I7C3x6QH163F6b0=",
         "Version": "v0.13.1",
-        "Zip": "/tmp/gopernicus-authentication-delegated-audience-release/candidate/modcache/cache/download/github.com/gopernicus/gopernicus/pockets/authentication/@v/v0.13.1.zip"
+        "Zip": "/tmp/gopernicus-authentication-delegated-audience-release/public/modcache/cache/download/github.com/gopernicus/gopernicus/pockets/authentication/@v/v0.13.1.zip"
       },
       "label": "authcore",
       "module": "github.com/gopernicus/gopernicus/pockets/authentication"
@@ -88,23 +125,22 @@
   "environment": {
     "GOCACHE": "/tmp/gopernicus-mcp-oauth-cache",
     "GOFLAGS": "-mod=readonly",
-    "GOMODCACHE": "/tmp/gopernicus-authentication-delegated-audience-release/candidate/modcache",
+    "GOMODCACHE": "/tmp/gopernicus-authentication-delegated-audience-release/public/modcache",
     "GONOPROXY": "",
     "GONOSUMDB": "",
     "GOPRIVATE": "",
-    "GOPROXY": "file:///tmp/gopernicus-authentication-delegated-audience-release/candidate/proxy,https://proxy.golang.org",
+    "GOPROXY": "https://proxy.golang.org,direct",
     "GOSUMDB": "sum.golang.org",
     "GOTOOLCHAIN": "local",
     "GOWORK": "off",
     "go_version": "go version go1.26.1 darwin/arm64",
     "runtime_environment": "build-only allowlist; no inherited database, emulator or cloud credential settings",
-    "seeded_external_cache_files": 0
+    "seeded_external_cache_files": 5501
   },
   "evidence_files": {
-    "consumer-module-graph.json": "/tmp/gopernicus-authentication-delegated-audience-release/candidate/consumer-module-graph.json",
-    "consumer-results.json": "/tmp/gopernicus-authentication-delegated-audience-release/candidate/consumer-results.json",
-    "results.json": "/tmp/gopernicus-authentication-delegated-audience-release/candidate/results.json",
-    "source.json": "/tmp/gopernicus-authentication-delegated-audience-release/candidate/source.json"
+    "consumer-module-graph.json": "/tmp/gopernicus-authentication-delegated-audience-release/public/consumer-module-graph.json",
+    "consumer-results.json": "/tmp/gopernicus-authentication-delegated-audience-release/public/consumer-results.json",
+    "results.json": "/tmp/gopernicus-authentication-delegated-audience-release/public/results.json"
   },
   "external_consumer": {
     "behavior": "Real localhost HTTP, real JWT signing and published SQLite repository: mixed web cookie/bearer, personal API key, delegated exchanged API token; wrong audience/cookie/header fallback denied, Optional does not soften rejection, strict audience and nested policies preserved, owner revoke denies MCP while web/key survive. Existing lifecycle and published escaped view rendering also pass.",
@@ -115,10 +151,10 @@
           "mod",
           "tidy"
         ],
-        "cwd": "/tmp/gopernicus-authentication-delegated-audience-release/candidate/external-consumer",
-        "elapsed_seconds": 0.13,
+        "cwd": "/tmp/gopernicus-authentication-delegated-audience-release/public/external-consumer",
+        "elapsed_seconds": 1.18,
         "exit_code": 0,
-        "log": "/tmp/gopernicus-authentication-delegated-audience-release/candidate/consumer-tidy.log"
+        "log": "/tmp/gopernicus-authentication-delegated-audience-release/public/consumer-tidy.log"
       },
       {
         "command": [
@@ -126,10 +162,10 @@
           "mod",
           "verify"
         ],
-        "cwd": "/tmp/gopernicus-authentication-delegated-audience-release/candidate/external-consumer",
-        "elapsed_seconds": 2.3,
+        "cwd": "/tmp/gopernicus-authentication-delegated-audience-release/public/external-consumer",
+        "elapsed_seconds": 1.97,
         "exit_code": 0,
-        "log": "/tmp/gopernicus-authentication-delegated-audience-release/candidate/consumer-verify.log"
+        "log": "/tmp/gopernicus-authentication-delegated-audience-release/public/consumer-verify.log"
       },
       {
         "command": [
@@ -137,10 +173,10 @@
           "build",
           "./..."
         ],
-        "cwd": "/tmp/gopernicus-authentication-delegated-audience-release/candidate/external-consumer",
-        "elapsed_seconds": 0.4,
+        "cwd": "/tmp/gopernicus-authentication-delegated-audience-release/public/external-consumer",
+        "elapsed_seconds": 3.93,
         "exit_code": 0,
-        "log": "/tmp/gopernicus-authentication-delegated-audience-release/candidate/consumer-build.log"
+        "log": "/tmp/gopernicus-authentication-delegated-audience-release/public/consumer-build.log"
       },
       {
         "command": [
@@ -151,10 +187,10 @@
           "-v",
           "./..."
         ],
-        "cwd": "/tmp/gopernicus-authentication-delegated-audience-release/candidate/external-consumer",
-        "elapsed_seconds": 4.74,
+        "cwd": "/tmp/gopernicus-authentication-delegated-audience-release/public/external-consumer",
+        "elapsed_seconds": 12.33,
         "exit_code": 0,
-        "log": "/tmp/gopernicus-authentication-delegated-audience-release/candidate/consumer-test.log"
+        "log": "/tmp/gopernicus-authentication-delegated-audience-release/public/consumer-test.log"
       },
       {
         "command": [
@@ -162,10 +198,10 @@
           "vet",
           "./..."
         ],
-        "cwd": "/tmp/gopernicus-authentication-delegated-audience-release/candidate/external-consumer",
-        "elapsed_seconds": 5.79,
+        "cwd": "/tmp/gopernicus-authentication-delegated-audience-release/public/external-consumer",
+        "elapsed_seconds": 4.5,
         "exit_code": 0,
-        "log": "/tmp/gopernicus-authentication-delegated-audience-release/candidate/consumer-vet.log"
+        "log": "/tmp/gopernicus-authentication-delegated-audience-release/public/consumer-vet.log"
       },
       {
         "command": [
@@ -175,23 +211,23 @@
           "-json",
           "all"
         ],
-        "cwd": "/tmp/gopernicus-authentication-delegated-audience-release/candidate/external-consumer",
-        "elapsed_seconds": 0.16,
+        "cwd": "/tmp/gopernicus-authentication-delegated-audience-release/public/external-consumer",
+        "elapsed_seconds": 0.13,
         "exit_code": 0,
-        "log": "/tmp/gopernicus-authentication-delegated-audience-release/candidate/consumer-graph.log"
+        "log": "/tmp/gopernicus-authentication-delegated-audience-release/public/consumer-graph.log"
       }
     ],
     "environment": {
       "GONOPROXY": "",
       "GONOSUMDB": "",
       "GOPRIVATE": "",
-      "GOPROXY": "file:///tmp/gopernicus-authentication-delegated-audience-release/candidate/proxy,https://proxy.golang.org",
+      "GOPROXY": "https://proxy.golang.org,direct",
       "GOSUMDB": "sum.golang.org",
       "GOWORK": "off"
     },
     "limitations": "No live PostgreSQL, Firestore, remote Turso or Claude connector; store contracts compile for published PGX/Firestore without cloud access.",
     "passed": true,
-    "public_dependencies": false,
+    "public_dependencies": true,
     "replacements": false,
     "versions": {
       "github.com/gopernicus/gopernicus/integrations/cryptids/golang-jwt": "v0.2.0",
@@ -204,18 +240,51 @@
       "github.com/gopernicus/gopernicus/ui/goth": "v0.2.0"
     }
   },
+  "github_ci": [
+    {
+      "conclusion": "success",
+      "databaseId": 35387470883,
+      "event": "push",
+      "headBranch": "pockets/authentication/v0.13.1",
+      "headSha": "9a9482ddf06512f5f0b5a5beb58d3b60ce5764ba",
+      "status": "completed",
+      "url": "https://github.com/gopernicus/gopernicus/actions/runs/35387470883",
+      "workflowName": "check"
+    },
+    {
+      "conclusion": "success",
+      "databaseId": 35386917492,
+      "event": "push",
+      "headBranch": "main",
+      "headSha": "9a9482ddf06512f5f0b5a5beb58d3b60ce5764ba",
+      "status": "completed",
+      "url": "https://github.com/gopernicus/gopernicus/actions/runs/35386917492",
+      "workflowName": "Deploy Docs to GitHub Pages"
+    },
+    {
+      "conclusion": "success",
+      "databaseId": 35386917488,
+      "event": "push",
+      "headBranch": "main",
+      "headSha": "9a9482ddf06512f5f0b5a5beb58d3b60ce5764ba",
+      "status": "completed",
+      "url": "https://github.com/gopernicus/gopernicus/actions/runs/35386917488",
+      "workflowName": "check"
+    }
+  ],
   "modules": [
     {
+      "candidate_zip_sha256": "2d78123e0789c3fa6a45f6a97667937febf8b7db8eef17dc5b117fe6ed02c9be",
       "directory": "pockets/authentication",
       "go_mod_sum": "h1:V4s8PuUv/BPWtuLigf9aVCYEcSA+tklqVUnMnTkxvg4=",
       "module": "github.com/gopernicus/gopernicus/pockets/authentication",
+      "public_zip_sha256": "1c0bae5ac17c0b606f7df94893eb5df18b97ef708ab5a5faff49071f66e807e9",
       "source_entries": 348,
       "source_inventory_sha256": "c87285a91d9c9d7a2c8ee982dc81ae5167200e2f64cc31731aa08f291034311d",
       "sum": "h1:70KYEQKl36sEC+Iqs9lzygtxRzg4I7C3x6QH163F6b0=",
       "tag": "pockets/authentication/v0.13.1",
       "temporary_manifest_changes": {},
-      "version": "v0.13.1",
-      "zip_sha256": "2d78123e0789c3fa6a45f6a97667937febf8b7db8eef17dc5b117fe6ed02c9be"
+      "version": "v0.13.1"
     }
   ],
   "offline_candidate_checksum_smoke": "/tmp/gopernicus-authentication-delegated-audience-release/offline-known-sum-smoke/results.json",
@@ -226,9 +295,30 @@
     "plans/gps-360-go-audit-upgrade-handoff.md": "6afdee8279ab6639309341270fa7c775e5444947136784215f81743007449f7a",
     "plans/segovia-v2-audit-upgrade-handoff.md": "e131e1b81fabacc24b0be9dffc2a79a30ddc1cbca06af0959ea8f46428aec3a3"
   },
+  "owner_files_preserved": true,
   "passed": true,
   "plan": "plans/authentication-delegated-audience-release.md",
-  "release_commit": null,
+  "public_download_attempts": 1,
+  "publication": {
+    "provenance": "Read-only git ls-remote receipt; this script creates no tags or refs.",
+    "release_commit": "9a9482ddf06512f5f0b5a5beb58d3b60ce5764ba",
+    "tags": [
+      {
+        "commit": "9a9482ddf06512f5f0b5a5beb58d3b60ce5764ba",
+        "tag": "pockets/authentication/v0.13.1",
+        "tag_object": "a2f208f3543a9c3fda3c10786f3b1441dc431231"
+      }
+    ]
+  },
+  "release_commit": "9a9482ddf06512f5f0b5a5beb58d3b60ce5764ba",
+  "remote_tags": {
+    "existing_remote_tag_refs_preserved": 483,
+    "new_refs": {
+      "refs/tags/pockets/authentication/v0.13.1": "a2f208f3543a9c3fda3c10786f3b1441dc431231",
+      "refs/tags/pockets/authentication/v0.13.1^{}": "9a9482ddf06512f5f0b5a5beb58d3b60ce5764ba"
+    },
+    "passed": true
+  },
   "repository_manifests_changed": false,
   "scope": {
     "dependency_or_migration_changes": false,
@@ -238,9 +328,10 @@
     ]
   },
   "source_unchanged_after_verification": true,
-  "status": "candidate and local checks passed; publication pending",
-  "unpublished": true,
-  "verification_kind": "candidate",
+  "status": "published and publicly verified",
+  "transient_errors": [],
+  "unpublished": false,
+  "verification_kind": "public",
   "verified_modules": [
     {
       "checks": [
@@ -252,10 +343,10 @@
             "-json",
             "github.com/gopernicus/gopernicus/pockets/authentication@v0.13.1"
           ],
-          "cwd": "/tmp/gopernicus-authentication-delegated-audience-release/candidate/download-context",
-          "elapsed_seconds": 0.09,
+          "cwd": "/tmp/gopernicus-authentication-delegated-audience-release/public/download-context",
+          "elapsed_seconds": 14.05,
           "exit_code": 0,
-          "log": "/tmp/gopernicus-authentication-delegated-audience-release/candidate/authcore-download.log"
+          "log": "/tmp/gopernicus-authentication-delegated-audience-release/public/authcore-download.log"
         },
         {
           "command": [
@@ -265,10 +356,10 @@
             "-json",
             "all"
           ],
-          "cwd": "/tmp/gopernicus-authentication-delegated-audience-release/candidate/verification/pockets/authentication",
+          "cwd": "/tmp/gopernicus-authentication-delegated-audience-release/public/verification/pockets/authentication",
           "elapsed_seconds": 0.01,
           "exit_code": 0,
-          "log": "/tmp/gopernicus-authentication-delegated-audience-release/candidate/authcore-module-graph.log"
+          "log": "/tmp/gopernicus-authentication-delegated-audience-release/public/authcore-module-graph.log"
         },
         {
           "command": [
@@ -276,10 +367,10 @@
             "build",
             "./..."
           ],
-          "cwd": "/tmp/gopernicus-authentication-delegated-audience-release/candidate/verification/pockets/authentication",
+          "cwd": "/tmp/gopernicus-authentication-delegated-audience-release/public/verification/pockets/authentication",
           "elapsed_seconds": 0.87,
           "exit_code": 0,
-          "log": "/tmp/gopernicus-authentication-delegated-audience-release/candidate/authcore-build.log"
+          "log": "/tmp/gopernicus-authentication-delegated-audience-release/public/authcore-build.log"
         },
         {
           "command": [
@@ -288,10 +379,10 @@
             "-count=1",
             "./..."
           ],
-          "cwd": "/tmp/gopernicus-authentication-delegated-audience-release/candidate/verification/pockets/authentication",
-          "elapsed_seconds": 3.73,
+          "cwd": "/tmp/gopernicus-authentication-delegated-audience-release/public/verification/pockets/authentication",
+          "elapsed_seconds": 3.5,
           "exit_code": 0,
-          "log": "/tmp/gopernicus-authentication-delegated-audience-release/candidate/authcore-test.log"
+          "log": "/tmp/gopernicus-authentication-delegated-audience-release/public/authcore-test.log"
         },
         {
           "command": [
@@ -299,10 +390,10 @@
             "vet",
             "./..."
           ],
-          "cwd": "/tmp/gopernicus-authentication-delegated-audience-release/candidate/verification/pockets/authentication",
-          "elapsed_seconds": 0.82,
+          "cwd": "/tmp/gopernicus-authentication-delegated-audience-release/public/verification/pockets/authentication",
+          "elapsed_seconds": 0.54,
           "exit_code": 0,
-          "log": "/tmp/gopernicus-authentication-delegated-audience-release/candidate/authcore-vet.log"
+          "log": "/tmp/gopernicus-authentication-delegated-audience-release/public/authcore-vet.log"
         },
         {
           "command": [
@@ -313,10 +404,10 @@
             "^$",
             "./..."
           ],
-          "cwd": "/tmp/gopernicus-authentication-delegated-audience-release/candidate/verification/pockets/authentication",
-          "elapsed_seconds": 3.08,
+          "cwd": "/tmp/gopernicus-authentication-delegated-audience-release/public/verification/pockets/authentication",
+          "elapsed_seconds": 2.68,
           "exit_code": 0,
-          "log": "/tmp/gopernicus-authentication-delegated-audience-release/candidate/authcore-integration-compile.log"
+          "log": "/tmp/gopernicus-authentication-delegated-audience-release/public/authcore-integration-compile.log"
         },
         {
           "command": [
@@ -327,10 +418,10 @@
             "^$",
             "./..."
           ],
-          "cwd": "/tmp/gopernicus-authentication-delegated-audience-release/candidate/verification/pockets/authentication",
-          "elapsed_seconds": 2.77,
+          "cwd": "/tmp/gopernicus-authentication-delegated-audience-release/public/verification/pockets/authentication",
+          "elapsed_seconds": 2.59,
           "exit_code": 0,
-          "log": "/tmp/gopernicus-authentication-delegated-audience-release/candidate/authcore-tagged-compile.log"
+          "log": "/tmp/gopernicus-authentication-delegated-audience-release/public/authcore-tagged-compile.log"
         },
         {
           "command": [
@@ -339,21 +430,28 @@
             "-tags=integration,live",
             "./..."
           ],
-          "cwd": "/tmp/gopernicus-authentication-delegated-audience-release/candidate/verification/pockets/authentication",
-          "elapsed_seconds": 0.55,
+          "cwd": "/tmp/gopernicus-authentication-delegated-audience-release/public/verification/pockets/authentication",
+          "elapsed_seconds": 0.54,
           "exit_code": 0,
-          "log": "/tmp/gopernicus-authentication-delegated-audience-release/candidate/authcore-tagged-vet.log"
+          "log": "/tmp/gopernicus-authentication-delegated-audience-release/public/authcore-tagged-vet.log"
         }
       ],
       "download": {
-        "Dir": "/tmp/gopernicus-authentication-delegated-audience-release/candidate/modcache/github.com/gopernicus/gopernicus/pockets/authentication@v0.13.1",
-        "GoMod": "/tmp/gopernicus-authentication-delegated-audience-release/candidate/modcache/cache/download/github.com/gopernicus/gopernicus/pockets/authentication/@v/v0.13.1.mod",
+        "Dir": "/tmp/gopernicus-authentication-delegated-audience-release/public/modcache/github.com/gopernicus/gopernicus/pockets/authentication@v0.13.1",
+        "GoMod": "/tmp/gopernicus-authentication-delegated-audience-release/public/modcache/cache/download/github.com/gopernicus/gopernicus/pockets/authentication/@v/v0.13.1.mod",
         "GoModSum": "h1:V4s8PuUv/BPWtuLigf9aVCYEcSA+tklqVUnMnTkxvg4=",
-        "Info": "/tmp/gopernicus-authentication-delegated-audience-release/candidate/modcache/cache/download/github.com/gopernicus/gopernicus/pockets/authentication/@v/v0.13.1.info",
+        "Info": "/tmp/gopernicus-authentication-delegated-audience-release/public/modcache/cache/download/github.com/gopernicus/gopernicus/pockets/authentication/@v/v0.13.1.info",
+        "Origin": {
+          "Hash": "9a9482ddf06512f5f0b5a5beb58d3b60ce5764ba",
+          "Ref": "refs/tags/pockets/authentication/v0.13.1",
+          "Subdir": "pockets/authentication",
+          "URL": "https://github.com/gopernicus/gopernicus",
+          "VCS": "git"
+        },
         "Path": "github.com/gopernicus/gopernicus/pockets/authentication",
         "Sum": "h1:70KYEQKl36sEC+Iqs9lzygtxRzg4I7C3x6QH163F6b0=",
         "Version": "v0.13.1",
-        "Zip": "/tmp/gopernicus-authentication-delegated-audience-release/candidate/modcache/cache/download/github.com/gopernicus/gopernicus/pockets/authentication/@v/v0.13.1.zip"
+        "Zip": "/tmp/gopernicus-authentication-delegated-audience-release/public/modcache/cache/download/github.com/gopernicus/gopernicus/pockets/authentication/@v/v0.13.1.zip"
       },
       "framework_versions": {
         "github.com/gopernicus/gopernicus/pockets": "v0.1.0",
@@ -365,7 +463,7 @@
       "passed": true
     }
   ],
-  "verified_utc": "2026-09-18T19:35:51.973828+00:00",
+  "verified_utc": "2026-09-18T19:46:20.967138+00:00",
   "workspace_check": {
     "command": [
       "make",

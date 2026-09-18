@@ -1,6 +1,6 @@
 # Additive delegated audience admission
 
-Status: VERIFIED, READY TO PUBLISH — 2026-09-18.
+Status: PUBLISHED AND PUBLICLY VERIFIED — 2026-09-18.
 
 Josh approved implementing and publishing authentication core v0.13.1 so
 three-sixty can admit delegated API tokens on existing web/API-key routes using
@@ -45,7 +45,7 @@ Use an isolated feature branch and ordinary fast-forward/tag pushes.
 - [x] A3 Run goimports; core build, full race tests and vet; full `make check`.
   Verify the exact core candidate independently with `GOWORK=off`, and an external
   consumer with the already published store/view releases. No dependency changes.
-- [ ] A4 Commit only owned files; confirm candidate entries equal committed source;
+- [x] A4 Commit only owned files; confirm candidate entries equal committed source;
   fast-forward main and publish only the annotated core v0.13.1 tag. Verify public
   checksums, origins, module/consumer checks and GitHub CI; record the receipt.
 
@@ -92,3 +92,40 @@ Evidence directory: `/tmp/gopernicus-authentication-delegated-audience-release`.
 This patch adds no UI or schema behavior. Browser/Claude and hosted-database
 acceptance were not rerun; three-sixty's live integration remains separate.
 Durable checksums, commands and outcomes are in the release manifest.
+
+## Publication receipt
+
+Published annotated tag `pockets/authentication/v0.13.1` from main commit
+`9a9482ddf06512f5f0b5a5beb58d3b60ce5764ba` (tag object
+`a2f208f3543a9c3fda3c10786f3b1441dc431231`). All 483 preexisting remote tag
+refs are unchanged. Only the authentication core was released.
+
+- Public module checksum: `h1:70KYEQKl36sEC+Iqs9lzygtxRzg4I7C3x6QH163F6b0=`.
+- Public go.mod checksum: `h1:V4s8PuUv/BPWtuLigf9aVCYEcSA+tklqVUnMnTkxvg4=`.
+- All 348 public archive entries match both the candidate and committed source.
+  Public Git origin identifies the exact release commit, tag and module subdirectory.
+- Public download passed on its first attempt with normal `sum.golang.org`
+  verification, no checksum exemptions, and no preseeded core checksums. The core
+  download context/cache started fresh; previously verified external dependency
+  cache entries were reused. No transient errors occurred.
+- Published core build/test/vet and tagged compile/vet passed independently with
+  `GOWORK=off`. The published consumer passed build/race tests/vet/module
+  verification and all 21 actual HTTP cases, without replacements.
+- GitHub [main check](https://github.com/gopernicus/gopernicus/actions/runs/35386917488),
+  [release-tag check](https://github.com/gopernicus/gopernicus/actions/runs/35387470883)
+  and [docs deployment](https://github.com/gopernicus/gopernicus/actions/runs/35386917492)
+  all passed.
+- Owner files remain byte-identical and excluded from the release commits.
+
+Three-sixty can upgrade the core:
+
+```sh
+go get github.com/gopernicus/gopernicus/pockets/authentication@v0.13.1
+```
+
+Use `authHTTP.RequirePrincipal(authenticationhttp.DelegatedAudience(apiResource))`
+on shared API routes, with delegated token verification configured as required by
+v0.13.0. Keep strict `Audience(...)` for resource-only routes and `FirstParty()`
+where delegated tokens must be denied. No additional migration or store/view pin
+change is required for this patch. Three-sixty wiring, deployment and live Claude
+acceptance remain host work.
