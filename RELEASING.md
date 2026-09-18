@@ -5986,3 +5986,14 @@ sessions before restoring an old binary. Keep the additive migration installed.
 The release evidence must distinguish local SQLite from hosted Turso, PostgreSQL
 from unrun Firestore, automated HTTP flows from visual browser verification, and
 local candidate archives from public-proxy/checksum verification after publication.
+
+## Authentication v0.13.1: shared-route delegated admission
+
+The optional `DelegatedAudience(resources...)` middleware option admits delegated
+tokens for exact resources while preserving existing web-session and API-key
+admission. Strict `Audience(...)`, `FirstParty`, kinds/transports, live delegated
+checks and no-fallback resolution remain unchanged. Combined audience options
+must both match. This is an independently adoptable host-configuration patch:
+only `pockets/authentication` is tagged; current SQL/view/Firestore versions and
+all dependency pins remain unchanged. No migration or production rollout occurs
+as part of this release. See [the release record](plans/authentication-delegated-audience-release.md).

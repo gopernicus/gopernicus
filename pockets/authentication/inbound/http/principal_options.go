@@ -8,7 +8,7 @@ import (
 	"github.com/gopernicus/gopernicus/sdk/pkg/web"
 )
 
-// PrincipalOption narrows the credential set an authenticator admits. The
+// PrincipalOption configures the credential set an authenticator admits. The
 // options configure credentials, transports, profile, audience, liveness and
 // denial behavior; see Adapter.RequirePrincipal.
 type PrincipalOption func(*principalSet)
@@ -18,20 +18,22 @@ type PrincipalOption func(*principalSet)
 // session lookup, and how it denies. It is built once at construction and never
 // mutated while serving.
 type principalSet struct {
-	accessToken bool
-	apiKey      bool
-	header      bool
-	cookie      bool
-	live        bool
-	browser     bool
-	optional    bool
-	firstParty  bool
-	audiences   []string
+	accessToken        bool
+	apiKey             bool
+	header             bool
+	cookie             bool
+	live               bool
+	browser            bool
+	optional           bool
+	firstParty         bool
+	audiences          []string
+	delegatedAudiences []string
 }
 
 // Audience admits tokens issued for one of the exact resource identifiers.
-// It is required to admit delegated tokens. Audience-less first-party tokens
-// and API keys cannot satisfy this gate. Repeated options replace the set.
+// Audience-less first-party tokens and API keys cannot satisfy this gate. Use
+// DelegatedAudience to opt delegated tokens into a shared first-party/API-key
+// route. Repeated Audience options replace this gate's set.
 func Audience(resources ...string) PrincipalOption {
 	if len(resources) == 0 {
 		panic("authsvc: Audience requires at least one resource")
@@ -43,6 +45,25 @@ func Audience(resources ...string) PrincipalOption {
 	}
 	resources = slices.Clone(resources)
 	return func(set *principalSet) { set.audiences = resources }
+}
+
+// DelegatedAudience admits delegated access tokens issued for one of the exact
+// resources without changing first-party or API-key admission. Accept,
+// Transports and FirstParty still apply; delegated tokens remain header-only
+// and always require live verification. When Audience is also present, both
+// audience gates must match, regardless of option order. Repeated
+// DelegatedAudience options replace this gate's set.
+func DelegatedAudience(resources ...string) PrincipalOption {
+	if len(resources) == 0 {
+		panic("authsvc: DelegatedAudience requires at least one resource")
+	}
+	for _, resource := range resources {
+		if strings.TrimSpace(resource) == "" || resource != strings.TrimSpace(resource) {
+			panic("authsvc: DelegatedAudience requires nonempty resource identifiers without surrounding whitespace")
+		}
+	}
+	resources = slices.Clone(resources)
+	return func(set *principalSet) { set.delegatedAudiences = resources }
 }
 
 // FirstParty requires a first-party access token, regardless of transport.
@@ -141,7 +162,8 @@ func Optional() PrincipalOption {
 // defaultSet is the posture of an option-free RequirePrincipal: every WIRED
 // credential kind — the access token always (a TokenSigner is required), the API
 // key only when the machine subsystem is wired — over both transports,
-// stateless, denying with JSON. Delegated tokens require an explicit Audience.
+// stateless, denying with JSON. Delegated tokens require an explicit Audience
+// or DelegatedAudience.
 func defaultSet(s *Adapter) principalSet {
 	return principalSet{
 		accessToken: true,
@@ -173,7 +195,12 @@ func (set principalSet) admits(cred Credential) bool {
 		switch cred.Profile {
 		case session.ProfileFirstParty:
 		case session.ProfileDelegated:
-			if set.firstParty || len(set.audiences) == 0 || cred.Transport != TransportHeader {
+			if set.firstParty || cred.Transport != TransportHeader || (len(set.audiences) == 0 && len(set.delegatedAudiences) == 0) {
+				return false
+			}
+			if len(set.delegatedAudiences) != 0 && !slices.ContainsFunc(cred.Audiences, func(audience string) bool {
+				return slices.Contains(set.delegatedAudiences, audience)
+			}) {
 				return false
 			}
 		default:

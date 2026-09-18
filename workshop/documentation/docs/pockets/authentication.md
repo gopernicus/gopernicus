@@ -248,7 +248,7 @@ native clients complete it at `/auth/oauth/native/verify-link` for JSON tokens.
 
 ## MCP OAuth authorization server
 
-The optional, currently unreleased `WithOAuth2(OAuth2Config{...})` feature makes
+The optional `WithOAuth2(OAuth2Config{...})` feature, released in v0.13.0, makes
 this host an authorization server for its MCP resource. `WithOAuth` remains the
 separate Google/GitHub human-login configuration. One shared OAuth endpoint family
 serves all explicitly trusted clients; there are no Claude-specific endpoints.
@@ -264,6 +264,15 @@ restricted exchange to an API-only token. Both share the same delegated session.
 The API still enforces the person's current permissions. MCP uses authenticated
 `/auth/oauth2/introspect` on each operation; never share its issuer's HMAC signing
 key, cache positive liveness or forward the incoming token unchanged to the API.
+
+Authentication v0.13.1 adds `DelegatedAudience(apiResource)` for shared API routes:
+pass it to `RequirePrincipal` to admit delegated API tokens while preserving the
+existing web-session and API-key policy. `Audience(apiResource)` remains the
+strict gate that rejects audience-less web tokens and keys. `Accept`, `Transports`
+and `FirstParty` still constrain both options; delegated tokens stay header-only
+and always require live session checks. Combining the audience options requires
+both to match, independent of order. Existing store/view releases remain compatible;
+this patch requires no migration or host credential-dispatch middleware.
 
 The feature mounts RFC 8414 discovery and `/auth/oauth2/{authorize,token,revoke,introspect}`.
 Authorization is code + PKCE S256 with browser consent and CSRF protection.

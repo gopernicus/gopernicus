@@ -15,8 +15,10 @@ import (
 // kinds (Accept) and transports (Transports) plus a liveness tier (Live) and a
 // browser denial mode (Browser); with no options it admits every wired
 // first-party credential or API key over both transports, statelessly, denying
-// with a JSON 401. Delegated tokens require Audience and always require a live
-// grant, including on every nested admission. FirstParty excludes them outright.
+// with a JSON 401. Delegated tokens require Audience or DelegatedAudience and
+// always require a live grant, including on every nested admission. Audience
+// also excludes audience-less first-party tokens and API keys; DelegatedAudience
+// leaves their admission unchanged. FirstParty excludes delegated tokens outright.
 //
 // At the OUTERMOST position it resolves the request's credential within its set
 // (resolveCredential) and stashes the Principal (read via CurrentPrincipal /

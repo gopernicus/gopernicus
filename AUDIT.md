@@ -5504,3 +5504,18 @@ Rollback requires disabling MCP traffic/issuance and draining or revoking delega
 sessions before old binaries run; leave additive schema installed. See
 [the plan](plans/authentication-mcp-oauth.md) for current verification evidence and
 remaining host-specific Claude acceptance work.
+
+## AUDIT-050: Delegated audience admission on shared API routes
+
+Authentication v0.13.1 adds `DelegatedAudience(resources...)` to the existing
+`RequirePrincipal` options. Hosts can admit delegated API tokens on routes that
+also serve web sessions and API keys without adding credential-dispatch middleware.
+Existing `Accept`, `Transports`, `FirstParty` and first-party liveness policies
+remain in effect; delegated credentials stay header-only and always live-checked.
+
+`Audience(...)` remains strict and continues to reject audience-less tokens and
+API keys. Combining both options intersects their resource constraints regardless
+of order. Defaults, nested narrowing and no-fallback credential resolution are
+unchanged. No token/session schema, migration, endpoint or store/view release is
+required. Publication and regression evidence are recorded in
+[the patch release plan](plans/authentication-delegated-audience-release.md).

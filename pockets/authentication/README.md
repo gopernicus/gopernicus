@@ -109,8 +109,11 @@ no new session or refresh token; its expiry cannot exceed the incoming token.
 Both tokens are rejected immediately after their shared session is revoked.
 
 MCP validates every operation through authenticated introspection and checks the
-configured issuer/audience. The API uses `RequirePrincipal(Audience(apiResource))`
-and normal host authorization. Recheck established MCP transports at operation
+configured issuer/audience. An OAuth-only API surface uses
+`RequirePrincipal(Audience(apiResource))`. A shared API surface uses
+`RequirePrincipal(DelegatedAudience(apiResource))` (v0.13.1) to preserve its
+existing first-party and API-key policy while admitting delegated API tokens.
+Both still require normal host authorization. Recheck established MCP transports at operation
 admission and before newly authorized emissions. Do not positively cache liveness
 or forward the MCP token unchanged to the API. Datastore failure fails closed.
 The pocket provides OAuth machinery, not the host's MCP protocol server, protected
@@ -152,7 +155,8 @@ Existing first-party refresh grace and stateless token expiry remain unchanged.
 Legacy rows without a profile are accepted only with an empty delegation binding.
 Custom token signers must not inject OAuth-reserved claims into first-party tokens.
 Use the [implementation plan](../../plans/authentication-mcp-oauth.md) for complete
-verification and the host handoff checklist. No candidate tag is published yet.
+verification and the host handoff checklist. Published versions and evidence are
+recorded in [the release record](../../plans/authentication-mcp-oauth-release.md).
 
 ## Authentication audit adoption
 
@@ -913,8 +917,8 @@ pre-composition of it.
 |---|---|---|
 | credential | `CredentialAccessToken` (the session-backed JWT: claims `user_id` + `session_id`) · `CredentialAPIKey` | **the cookie's value IS the access JWT** — one credential, two transports |
 | transport | `TransportHeader` (`Authorization: Bearer <token>`) · `TransportCookie` | header is authoritative: a bearer, once consulted, means the cookie is never read |
-| profile | first-party · delegated | delegated proof requires explicit `Audience`; `FirstParty()` excludes delegated proof and API keys |
-| audience | exact resource identifiers | required for delegated proof; audience-less tokens and API keys cannot satisfy it |
+| profile | first-party · delegated | delegated proof requires explicit `Audience` or `DelegatedAudience`; `FirstParty()` excludes delegated proof and API keys |
+| audience | exact resource identifiers | `Audience` gates all credentials; `DelegatedAudience` gates only delegated proof |
 | liveness | stateless verify · `Live()` (`+ sessions.Get(session_id)`) | meaningful for `access_token` only; an API key is already DB-checked at resolution |
 
 **The primitive and its options:**
@@ -927,14 +931,16 @@ func Browser() PrincipalOption                       // on denial 303 to Browser
 func Optional() PrincipalOption                      // no credential within the set passes anonymous instead of denying
 func FirstParty() PrincipalOption                    // first-party access tokens only; excludes delegated tokens and API keys
 func Audience(resources ...string) PrincipalOption   // token must name one of these exact resources; replaces the audience set
+func DelegatedAudience(resources ...string) PrincipalOption // opt delegated tokens into exact resources; preserve first-party/key policy
 
 func (s *authenticationhttp.Adapter) RequirePrincipal(opts ...PrincipalOption) web.Middleware
 ```
 
 With zero options `RequirePrincipal()` admits first-party access tokens and wired
 API keys over both transports, header authoritative, stateless, denying with a
-JSON 401. Delegated tokens require an explicit `Audience(...)` and always require
-a live grant. `Accept()` / `Transports()` / `Audience()` called with **zero arguments panics at
+JSON 401. Delegated tokens require explicit `Audience(...)` or
+`DelegatedAudience(...)` and always require a live grant.
+`Accept()` / `Transports()` / `Audience()` / `DelegatedAudience()` called with **zero arguments panics at
 construction** — a set that admits nothing is a programming error, not a
 posture, so the mistake surfaces at wiring time, not on a request.
 
@@ -1019,8 +1025,26 @@ A delegated token requires one audience, its issuer and client, a separate live
 session, and an active user. `Credential` exposes `Profile`, `Issuer`, `Audiences`,
 `ClientID`, `OriginClientID` and `ActorID`. Exchanged tokens retain the same
 delegated session and must match its API resource and confidential client binding.
-They cannot authenticate by cookie. Audience gates reject audience-less web
-tokens and API keys. Bundled authentication and account routes deny delegated
+They cannot authenticate by cookie. `Audience(...)` rejects audience-less web
+tokens and API keys. `DelegatedAudience(...)` (v0.13.1) instead applies its exact
+resource list only to delegated tokens, preserving the route's existing
+first-party and API-key policy:
+
+```go
+sharedAPI := authHTTP.RequirePrincipal(authenticationhttp.DelegatedAudience(apiResource))
+oauthOnly := authHTTP.RequirePrincipal(authenticationhttp.Audience(apiResource))
+```
+
+Neither option bypasses `Accept`, `Transports` or `FirstParty`. Delegated tokens
+always require live checks, including at nested gates; first-party liveness
+still follows `Live()`. If both audience options are supplied, delegated tokens
+must satisfy both lists regardless of option order, and the strict `Audience`
+gate still excludes audience-less web tokens and keys. Repeated instances of
+either option replace only that option's list. An outer gate must explicitly
+admit delegated credentials before an inner gate can narrow them. A failed bearer
+header never falls back to a valid browser cookie or anonymous admission.
+
+Bundled authentication and account routes deny delegated
 credentials even when a host overrides their authentication strategy; mount
 delegated resource routes separately.
 
