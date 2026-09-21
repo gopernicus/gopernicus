@@ -23,7 +23,7 @@ func openLimiterRedis(t *testing.T) (*redis.Client, context.Context) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	t.Cleanup(cancel)
-	rdb, err := Open(ctx, Config{Addr: addr})
+	rdb, err := Open(ctx, Config{Host: addr})
 	if err != nil {
 		t.Fatal(err)
 	}

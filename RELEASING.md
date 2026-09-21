@@ -1,27 +1,46 @@
 # Releasing gopernicus modules
 
-## Unreleased: Redis connector ACL username (2026-09-21)
+## Unreleased: Redis connector — URL, host and port, ACL username (2026-09-21)
 
-`integrations/kvstores/goredis` gains `Config.Username` (`REDIS_USERNAME`,
-default empty), passed to go-redis unchanged. `Open` previously sent a
-password-only AUTH, which Redis and Valkey read as the `default` ACL user; a
-managed service whose credential belongs to any other user answered
-`WRONGPASS invalid username-password pair or user is disabled` at the boot ping,
-and no `ClientOption` reaches the go-redis options to work around it. Found on
-gps-360-go's first production boot against a managed Valkey cluster.
+**BREAKING for every host of `integrations/kvstores/goredis`** (proposed tag
+`v0.3.0`): `Config.Addr` / `REDIS_ADDR` is REMOVED. There is no alias.
 
-Additive: an empty username keeps the password-only AUTH, so existing hosts and
-every module that takes the resulting `*redis.Client` are unaffected. No other
-module in this repository pins the connector. Proposed tag
-`integrations/kvstores/goredis/v0.3.0` (a new configuration key).
+- `Config.Host` (`REDIS_HOST`, default `localhost`) and `Config.Port`
+  (`REDIS_PORT`, default `0`). Port set: the address is `Host:Port`, and a Host
+  that already carries a port is an `ErrInvalidInput` naming both keys. Port
+  unset: Host is read as written, so `REDIS_HOST=cache.internal:6380` works, and
+  a Host with no port at all gets `6379`.
+- `Config.URL` (`REDIS_URL`): a `redis://`, `rediss://` or `unix://` URL read by
+  go-redis's `ParseURL`. **The URL wins**: it supplies the address, the ACL user,
+  the password, the database and TLS, and `Host`, `Port`, `Username`,
+  `Password`, `DB` and `TLSEnabled` are not read. The retry, timeout and pool
+  fields fill whatever the URL leaves unsaid; `ContextTimeoutEnabled` is always
+  set. A rejected URL is reported by its reason alone — `url.Parse` quotes its
+  whole input, and the input holds a password.
+- `Config.Username` (`REDIS_USERNAME`, default empty), passed to go-redis
+  unchanged. `Open` previously sent a password-only AUTH, which Redis and Valkey
+  read as the `default` ACL user; a managed service whose credential belongs to
+  any other user answered `WRONGPASS invalid username-password pair or user is
+  disabled` at the boot ping, and no `ClientOption` reaches the go-redis options
+  to work around it. Found on gps-360-go's first production boot against a
+  managed Valkey cluster.
 
-Verified: `TestConfigDefaultsFromTags` / `TestConfigEnvOverride` cover the key,
-and `TestLive_OpenAuthenticatesAsTheNamedUser` (needs `REDIS_TEST_ADDR`) creates
-an ACL user on a stock `redis:7`, opens as it and reads `ACL WHOAMI` back — it
-fails with `WHOAMI = "default"` when `Open` drops the field. The whole live
-suite passes against the same server. NOT verified here: a managed Valkey, TLS,
-or the WRONGPASS itself, which needs the `default` user locked and would break
-the package's other live tests on a shared server.
+Host adoption: rename `<NAMESPACE>_REDIS_ADDR` to `<NAMESPACE>_REDIS_HOST` (a
+`host:port` value keeps working as written) or replace the connection keys with
+one `<NAMESPACE>_REDIS_URL`; rename `Config{Addr: …}` literals to `Host`; and a
+host that logged `cfg.Addr` logs `rdb.Options().Addr` instead, since with a URL
+the Host field is not where the client connected. No other module in this
+repository pins the connector, and every module that takes the resulting
+`*redis.Client` is unaffected.
+
+Verified: `TestHostAndPortResolveToOneAddress`, `TestURLWinsOverTheSeparateFields`
+and `TestAURLFaultNeverRepeatsTheURL` pin the resolution without a server;
+`TestLive_OpenAuthenticatesAsTheNamedUser` (needs `REDIS_TEST_ADDR`) creates an
+ACL user on a stock `redis:7`, opens as it by field and by URL, and reads `ACL
+WHOAMI` back. The whole live suite passes against the same server. NOT verified
+here: a managed Valkey, `rediss://` against a real TLS endpoint, or the
+WRONGPASS itself, which needs the `default` user locked and would break the
+package's other live tests on a shared server.
 
 ## Linux filestorage fix, authorization outcome cleanup and docs pass (2026-09-16)
 

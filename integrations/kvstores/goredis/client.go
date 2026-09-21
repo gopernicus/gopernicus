@@ -3,8 +3,13 @@ package goredis
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"log/slog"
+	"net"
+	"net/url"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -16,7 +21,8 @@ import (
 // Connection defaults applied to zero-value Config fields by Open. They mirror
 // go-redis's own sane defaults so a zero Config still yields a usable client.
 const (
-	defaultAddr         = "localhost:6379"
+	defaultHost         = "localhost"
+	defaultPort         = 6379
 	defaultMaxRetries   = 3
 	defaultDialTimeout  = 5 * time.Second
 	defaultReadTimeout  = 3 * time.Second
@@ -27,17 +33,35 @@ const (
 
 // Config holds the go-redis connection settings for Open. Its `env:` tags let a
 // host populate it with sdk/pkg/environment.ParseEnvTags (keys are already namespaced by
-// component: REDIS_ADDR, REDIS_PASSWORD, ...; the host passes its own app
+// component: REDIS_HOST, REDIS_PASSWORD, ...; the host passes its own app
 // namespace). Populating
 // from the environment is a convenience, not an import edge — a zero Config is
 // filled with the documented defaults by Open, so struct-literal construction
 // and bring-your-own-client both stay first-class.
 //
+// There are two ways to say where the server is, and URL wins:
+//
+//   - URL is a redis://, rediss:// or unix:// connection URL as go-redis's
+//     ParseURL reads it (rediss:// turns TLS on; the userinfo is the ACL user and
+//     password; the path or ?db= is the database; scalar options such as
+//     ?dial_timeout=3s are honoured). When it is set it supplies the address, the
+//     user, the password, the database and TLS, and Host, Port, Username,
+//     Password, DB and TLSEnabled are NOT READ. The retry, timeout and pool
+//     fields still apply to whatever the URL leaves unsaid. It carries a
+//     password: never log it. Open's own errors name the resolved host:port and
+//     nothing else.
+//   - Host and Port otherwise. Port set: the address is Host:Port, and a Host
+//     that already carries a port is refused rather than guessed at. Port unset:
+//     Host is read as written ("cache.internal:6380"), and a Host with no port at
+//     all gets Redis's 6379.
+//
 // Username names the ACL user to authenticate as. Empty keeps the
 // password-only AUTH, which Redis and Valkey read as the "default" user; a
 // managed service whose credential belongs to any other user needs it set.
 type Config struct {
-	Addr         string        `env:"REDIS_ADDR"           default:"localhost:6379"`
+	URL          string        `env:"REDIS_URL"            default:""`
+	Host         string        `env:"REDIS_HOST"           default:"localhost"`
+	Port         int           `env:"REDIS_PORT"           default:"0"`
 	Username     string        `env:"REDIS_USERNAME"       default:""`
 	Password     string        `env:"REDIS_PASSWORD"       default:""`
 	DB           int           `env:"REDIS_DB"             default:"0"`
@@ -103,45 +127,9 @@ func WithTracing(tracer tracing.Tracer) ClientOption {
 // so a client from Open is interchangeable with a bring-your-own
 // redis.NewClient client, and one client can feed every facility at once.
 func Open(ctx context.Context, cfg Config, opts ...ClientOption) (*redis.Client, error) {
-	if cfg.Addr == "" {
-		cfg.Addr = defaultAddr
-	}
-	if cfg.MaxRetries == 0 {
-		cfg.MaxRetries = defaultMaxRetries
-	}
-	if cfg.DialTimeout == 0 {
-		cfg.DialTimeout = defaultDialTimeout
-	}
-	if cfg.ReadTimeout == 0 {
-		cfg.ReadTimeout = defaultReadTimeout
-	}
-	if cfg.WriteTimeout == 0 {
-		cfg.WriteTimeout = defaultWriteTimeout
-	}
-	if cfg.PoolSize == 0 {
-		cfg.PoolSize = defaultPoolSize
-	}
-	if cfg.MinIdleConns == 0 {
-		cfg.MinIdleConns = defaultMinIdleConns
-	}
-
-	redisOpts := &redis.Options{
-		Addr:         cfg.Addr,
-		Username:     cfg.Username,
-		Password:     cfg.Password,
-		DB:           cfg.DB,
-		MaxRetries:   cfg.MaxRetries,
-		DialTimeout:  cfg.DialTimeout,
-		ReadTimeout:  cfg.ReadTimeout,
-		WriteTimeout: cfg.WriteTimeout,
-		PoolSize:     cfg.PoolSize,
-		MinIdleConns: cfg.MinIdleConns,
-		// go-redis otherwise replaces the I/O context with Background, so the
-		// caller's deadline would not bound an established connection's reads.
-		ContextTimeoutEnabled: true,
-	}
-	if cfg.TLSEnabled {
-		redisOpts.TLSConfig = &tls.Config{MinVersion: tls.VersionTLS12}
+	redisOpts, err := cfg.options()
+	if err != nil {
+		return nil, err
 	}
 
 	var co clientOptions
@@ -165,10 +153,113 @@ func Open(ctx context.Context, cfg Config, opts ...ClientOption) (*redis.Client,
 		if ctx.Err() != nil {
 			err = ctx.Err()
 		}
-		return nil, fmt.Errorf("goredis: pinging redis at %s: %w", cfg.Addr, err)
+		return nil, fmt.Errorf("goredis: pinging redis at %s: %w", redisOpts.Addr, err)
 	}
 
 	return rdb, nil
+}
+
+// options resolves cfg into the go-redis options Open dials with: the
+// documented defaults for zero fields, then URL or Host/Port as Config's doc
+// comment describes. It is a method rather than inline in Open so the
+// resolution is testable without a server.
+func (cfg Config) options() (*redis.Options, error) {
+	if cfg.MaxRetries == 0 {
+		cfg.MaxRetries = defaultMaxRetries
+	}
+	if cfg.DialTimeout == 0 {
+		cfg.DialTimeout = defaultDialTimeout
+	}
+	if cfg.ReadTimeout == 0 {
+		cfg.ReadTimeout = defaultReadTimeout
+	}
+	if cfg.WriteTimeout == 0 {
+		cfg.WriteTimeout = defaultWriteTimeout
+	}
+	if cfg.PoolSize == 0 {
+		cfg.PoolSize = defaultPoolSize
+	}
+	if cfg.MinIdleConns == 0 {
+		cfg.MinIdleConns = defaultMinIdleConns
+	}
+
+	var opts *redis.Options
+	if strings.TrimSpace(cfg.URL) != "" {
+		parsed, err := redis.ParseURL(strings.TrimSpace(cfg.URL))
+		if err != nil {
+			return nil, fmt.Errorf("goredis: REDIS_URL: %s: %w", urlFault(err), sdk.ErrInvalidInput)
+		}
+		opts = parsed
+		if opts.TLSConfig != nil && opts.TLSConfig.MinVersion < tls.VersionTLS12 {
+			opts.TLSConfig.MinVersion = tls.VersionTLS12
+		}
+	} else {
+		addr, err := cfg.address()
+		if err != nil {
+			return nil, err
+		}
+		opts = &redis.Options{Addr: addr, Username: cfg.Username, Password: cfg.Password, DB: cfg.DB}
+		if cfg.TLSEnabled {
+			opts.TLSConfig = &tls.Config{MinVersion: tls.VersionTLS12}
+		}
+	}
+
+	// A URL may name any of these itself (?dial_timeout=3s); whatever it leaves
+	// zero takes the field, which by now holds the documented default.
+	if opts.MaxRetries == 0 {
+		opts.MaxRetries = cfg.MaxRetries
+	}
+	if opts.DialTimeout == 0 {
+		opts.DialTimeout = cfg.DialTimeout
+	}
+	if opts.ReadTimeout == 0 {
+		opts.ReadTimeout = cfg.ReadTimeout
+	}
+	if opts.WriteTimeout == 0 {
+		opts.WriteTimeout = cfg.WriteTimeout
+	}
+	if opts.PoolSize == 0 {
+		opts.PoolSize = cfg.PoolSize
+	}
+	if opts.MinIdleConns == 0 {
+		opts.MinIdleConns = cfg.MinIdleConns
+	}
+	// go-redis otherwise replaces the I/O context with Background, so the
+	// caller's deadline would not bound an established connection's reads.
+	opts.ContextTimeoutEnabled = true
+	return opts, nil
+}
+
+// address joins Host and Port. See Config's doc comment for the three cases.
+func (cfg Config) address() (string, error) {
+	host := strings.TrimSpace(cfg.Host)
+	if host == "" {
+		host = defaultHost
+	}
+	if cfg.Port == 0 {
+		if _, _, err := net.SplitHostPort(host); err == nil {
+			return host, nil
+		}
+		return net.JoinHostPort(strings.Trim(host, "[]"), strconv.Itoa(defaultPort)), nil
+	}
+	if cfg.Port < 1 || cfg.Port > 65535 {
+		return "", fmt.Errorf("goredis: REDIS_PORT %d is not a port (1-65535): %w", cfg.Port, sdk.ErrInvalidInput)
+	}
+	if _, _, err := net.SplitHostPort(host); err == nil {
+		return "", fmt.Errorf("goredis: REDIS_HOST %q already carries a port and REDIS_PORT is %d; set the port in one place: %w",
+			host, cfg.Port, sdk.ErrInvalidInput)
+	}
+	return net.JoinHostPort(strings.Trim(host, "[]"), strconv.Itoa(cfg.Port)), nil
+}
+
+// urlFault is ParseURL's reason WITHOUT the URL. url.Parse quotes the whole
+// input into its error, and the input holds a password.
+func urlFault(err error) string {
+	var urlErr *url.Error
+	if errors.As(err, &urlErr) {
+		return urlErr.Err.Error()
+	}
+	return err.Error()
 }
 
 // StatusCheck returns nil if it can successfully talk to Redis. It mirrors the

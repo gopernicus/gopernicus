@@ -49,7 +49,7 @@ func dialLive(t *testing.T, addr string) *redis.Client {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	rdb, err := goredis.Open(ctx, goredis.Config{Addr: addr})
+	rdb, err := goredis.Open(ctx, goredis.Config{Host: addr})
 	if err != nil {
 		t.Fatalf("goredis.Open(%s): %v", addr, err)
 	}
@@ -65,7 +65,7 @@ func TestOpenLive(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	rdb, err := goredis.Open(ctx, goredis.Config{Addr: addr},
+	rdb, err := goredis.Open(ctx, goredis.Config{Host: addr},
 		goredis.WithLogging(slog.New(slog.DiscardHandler)),
 		goredis.WithTracing(tracing.Noop{}),
 	)

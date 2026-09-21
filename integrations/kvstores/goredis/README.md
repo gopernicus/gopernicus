@@ -120,7 +120,7 @@ caller-supplied `ctx` deadline wins), mirroring `datastores/pgxdb`'s `StatusChec
 ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 defer cancel()
 
-rdb, err := goredis.Open(ctx, goredis.Config{Addr: "localhost:6379"},
+rdb, err := goredis.Open(ctx, goredis.Config{Host: "localhost:6379"},
     goredis.WithLogging(logger, goredis.WithSlowThreshold(50*time.Millisecond)),
     goredis.WithTracing(tracer), // sdk/capabilities/tracing.Tracer
 )
@@ -140,7 +140,9 @@ passes its own app namespace):
 
 | field | env key | default |
 |---|---|---|
-| `Addr` | `REDIS_ADDR` | `localhost:6379` |
+| `URL` | `REDIS_URL` | (empty) |
+| `Host` | `REDIS_HOST` | `localhost` |
+| `Port` | `REDIS_PORT` | `0` (read it from `Host`, else `6379`) |
 | `Username` | `REDIS_USERNAME` | (empty — password-only AUTH, the `default` ACL user) |
 | `Password` | `REDIS_PASSWORD` | (empty) |
 | `DB` | `REDIS_DB` | `0` |
@@ -151,6 +153,23 @@ passes its own app namespace):
 | `WriteTimeout` | `REDIS_WRITE_TIMEOUT` | `3s` |
 | `PoolSize` | `REDIS_POOL_SIZE` | `10` |
 | `MinIdleConns` | `REDIS_MIN_IDLE_CONNS` | `2` |
+
+**Where the server is — a URL, or a host and a port. The URL wins.**
+`REDIS_URL` is a `redis://`, `rediss://` or `unix://` URL as go-redis's
+`ParseURL` reads it: `rediss://` turns TLS on, the userinfo is the ACL user and
+password, the path (or `?db=`) is the database, and scalar options such as
+`?dial_timeout=3s` are honoured. When it is set, `Host`, `Port`, `Username`,
+`Password`, `DB` and `TLSEnabled` are **not read**; the retry, timeout and pool
+fields still fill whatever the URL leaves unsaid. It is the one variable a
+managed service's connection string needs. It carries a password — never log
+it; `Open`'s own errors name the resolved `host:port` and a rejected URL is
+reported by its reason alone.
+
+Without a URL: `REDIS_PORT` set makes the address `Host:Port`, and a `Host` that
+already carries a port is refused rather than guessed at. `REDIS_PORT` unset
+reads `Host` as written (`cache.internal:6380`), and a `Host` with no port at
+all gets Redis's `6379`. To log where a client connected, read
+`rdb.Options().Addr`.
 
 ### Instrumentation hooks
 

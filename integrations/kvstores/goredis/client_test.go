@@ -22,8 +22,14 @@ func TestConfigDefaultsFromTags(t *testing.T) {
 		t.Fatalf("ParseEnvTags() error = %v", err)
 	}
 
-	if cfg.Addr != defaultAddr {
-		t.Errorf("Addr = %q, want %q", cfg.Addr, defaultAddr)
+	if cfg.URL != "" {
+		t.Errorf("URL = %q, want empty", cfg.URL)
+	}
+	if cfg.Host != defaultHost {
+		t.Errorf("Host = %q, want %q", cfg.Host, defaultHost)
+	}
+	if cfg.Port != 0 {
+		t.Errorf("Port = %d, want 0 (read the port from Host, else Redis's 6379)", cfg.Port)
 	}
 	if cfg.Username != "" {
 		t.Errorf("Username = %q, want empty (password-only AUTH, the default ACL user)", cfg.Username)
@@ -50,7 +56,9 @@ func TestConfigDefaultsFromTags(t *testing.T) {
 
 // TestConfigEnvOverride proves an env var overrides the default tag value.
 func TestConfigEnvOverride(t *testing.T) {
-	t.Setenv("REDIS_ADDR", "redis.internal:6380")
+	t.Setenv("REDIS_URL", "rediss://app:secret@redis.internal:25061/2")
+	t.Setenv("REDIS_HOST", "redis.internal")
+	t.Setenv("REDIS_PORT", "6380")
 	t.Setenv("REDIS_DB", "3")
 	t.Setenv("REDIS_USERNAME", "app")
 
@@ -59,8 +67,11 @@ func TestConfigEnvOverride(t *testing.T) {
 		t.Fatalf("ParseEnvTags() error = %v", err)
 	}
 
-	if cfg.Addr != "redis.internal:6380" {
-		t.Errorf("Addr = %q, want %q", cfg.Addr, "redis.internal:6380")
+	if cfg.URL != "rediss://app:secret@redis.internal:25061/2" {
+		t.Errorf("URL = %q, want the value set", cfg.URL)
+	}
+	if cfg.Host != "redis.internal" || cfg.Port != 6380 {
+		t.Errorf("Host, Port = %q, %d, want %q, 6380", cfg.Host, cfg.Port, "redis.internal")
 	}
 	if cfg.DB != 3 {
 		t.Errorf("DB = %d, want 3", cfg.DB)
@@ -126,7 +137,7 @@ func TestOpenFailsFastOnUnreachableAddr(t *testing.T) {
 	defer cancel()
 
 	rdb, err := Open(ctx, Config{
-		Addr:        "192.0.2.1:6379",
+		Host:        "192.0.2.1:6379",
 		DialTimeout: 200 * time.Millisecond,
 		MaxRetries:  -1,
 	})

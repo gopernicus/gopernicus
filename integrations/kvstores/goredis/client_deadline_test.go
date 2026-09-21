@@ -46,7 +46,7 @@ func TestOpenHonorsDeadlineAfterConnection(t *testing.T) {
 	defer cancel()
 	started := time.Now()
 	client, err := Open(ctx, Config{
-		Addr: listener.Addr().String(), MaxRetries: -1,
+		Host: listener.Addr().String(), MaxRetries: -1,
 		DialTimeout: time.Second, ReadTimeout: 3 * time.Second, WriteTimeout: 3 * time.Second,
 	})
 	if client != nil {

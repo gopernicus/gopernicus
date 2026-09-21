@@ -12,8 +12,8 @@ import (
 // server: a managed Redis or Valkey whose credential belongs to an ACL user
 // other than "default" refuses a password-only AUTH with WRONGPASS, and that is
 // what Open sent before the field existed. The test makes such a user, opens as
-// it and asks the server who it is talking to; then opens without the name and
-// shows the server sees "default". It does not provoke the WRONGPASS itself:
+// it (by field, then by URL) and asks the server who it is talking to; then
+// opens without the name and shows the server sees "default". It does not provoke the WRONGPASS itself:
 // that needs the default user locked, which would break every other live test
 // sharing this server. Needs a server that allows ACL SETUSER (a stock redis:7
 // does; REDIS_TEST_ADDR is the package's live-test switch).
@@ -25,7 +25,7 @@ func TestLive_OpenAuthenticatesAsTheNamedUser(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	t.Cleanup(cancel)
 
-	admin, err := Open(ctx, Config{Addr: addr})
+	admin, err := Open(ctx, Config{Host: addr})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -42,7 +42,7 @@ func TestLive_OpenAuthenticatesAsTheNamedUser(t *testing.T) {
 		_ = admin.Do(cleanupCtx, "ACL", "DELUSER", user).Err()
 	})
 
-	named, err := Open(ctx, Config{Addr: addr, Username: user, Password: password})
+	named, err := Open(ctx, Config{Host: addr, Username: user, Password: password})
 	if err != nil {
 		t.Fatalf("Open() as %q error = %v", user, err)
 	}
@@ -55,7 +55,20 @@ func TestLive_OpenAuthenticatesAsTheNamedUser(t *testing.T) {
 		t.Errorf("ACL WHOAMI = %q, want %q", got, user)
 	}
 
-	unnamed, err := Open(ctx, Config{Addr: addr})
+	byURL, err := Open(ctx, Config{URL: "redis://" + user + ":" + password + "@" + addr, Host: "ignored.invalid"})
+	if err != nil {
+		t.Fatalf("Open() by URL as %q error = %v", user, err)
+	}
+	t.Cleanup(func() { _ = byURL.Close() })
+	got, err = byURL.Do(ctx, "ACL", "WHOAMI").Text()
+	if err != nil {
+		t.Fatalf("ACL WHOAMI: %v", err)
+	}
+	if got != user {
+		t.Errorf("ACL WHOAMI by URL = %q, want %q", got, user)
+	}
+
+	unnamed, err := Open(ctx, Config{Host: addr})
 	if err != nil {
 		t.Fatal(err)
 	}
