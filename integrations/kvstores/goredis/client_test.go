@@ -25,6 +25,9 @@ func TestConfigDefaultsFromTags(t *testing.T) {
 	if cfg.Addr != defaultAddr {
 		t.Errorf("Addr = %q, want %q", cfg.Addr, defaultAddr)
 	}
+	if cfg.Username != "" {
+		t.Errorf("Username = %q, want empty (password-only AUTH, the default ACL user)", cfg.Username)
+	}
 	if cfg.MaxRetries != defaultMaxRetries {
 		t.Errorf("MaxRetries = %d, want %d", cfg.MaxRetries, defaultMaxRetries)
 	}
@@ -49,6 +52,7 @@ func TestConfigDefaultsFromTags(t *testing.T) {
 func TestConfigEnvOverride(t *testing.T) {
 	t.Setenv("REDIS_ADDR", "redis.internal:6380")
 	t.Setenv("REDIS_DB", "3")
+	t.Setenv("REDIS_USERNAME", "app")
 
 	var cfg Config
 	if err := environment.ParseEnvTags("", &cfg); err != nil {
@@ -60,6 +64,9 @@ func TestConfigEnvOverride(t *testing.T) {
 	}
 	if cfg.DB != 3 {
 		t.Errorf("DB = %d, want 3", cfg.DB)
+	}
+	if cfg.Username != "app" {
+		t.Errorf("Username = %q, want %q", cfg.Username, "app")
 	}
 }
 

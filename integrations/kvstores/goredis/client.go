@@ -32,8 +32,13 @@ const (
 // from the environment is a convenience, not an import edge — a zero Config is
 // filled with the documented defaults by Open, so struct-literal construction
 // and bring-your-own-client both stay first-class.
+//
+// Username names the ACL user to authenticate as. Empty keeps the
+// password-only AUTH, which Redis and Valkey read as the "default" user; a
+// managed service whose credential belongs to any other user needs it set.
 type Config struct {
 	Addr         string        `env:"REDIS_ADDR"           default:"localhost:6379"`
+	Username     string        `env:"REDIS_USERNAME"       default:""`
 	Password     string        `env:"REDIS_PASSWORD"       default:""`
 	DB           int           `env:"REDIS_DB"             default:"0"`
 	TLSEnabled   bool          `env:"REDIS_TLS_ENABLED"    default:"false"`
@@ -122,6 +127,7 @@ func Open(ctx context.Context, cfg Config, opts ...ClientOption) (*redis.Client,
 
 	redisOpts := &redis.Options{
 		Addr:         cfg.Addr,
+		Username:     cfg.Username,
 		Password:     cfg.Password,
 		DB:           cfg.DB,
 		MaxRetries:   cfg.MaxRetries,

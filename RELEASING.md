@@ -1,5 +1,28 @@
 # Releasing gopernicus modules
 
+## Unreleased: Redis connector ACL username (2026-09-21)
+
+`integrations/kvstores/goredis` gains `Config.Username` (`REDIS_USERNAME`,
+default empty), passed to go-redis unchanged. `Open` previously sent a
+password-only AUTH, which Redis and Valkey read as the `default` ACL user; a
+managed service whose credential belongs to any other user answered
+`WRONGPASS invalid username-password pair or user is disabled` at the boot ping,
+and no `ClientOption` reaches the go-redis options to work around it. Found on
+gps-360-go's first production boot against a managed Valkey cluster.
+
+Additive: an empty username keeps the password-only AUTH, so existing hosts and
+every module that takes the resulting `*redis.Client` are unaffected. No other
+module in this repository pins the connector. Proposed tag
+`integrations/kvstores/goredis/v0.3.0` (a new configuration key).
+
+Verified: `TestConfigDefaultsFromTags` / `TestConfigEnvOverride` cover the key,
+and `TestLive_OpenAuthenticatesAsTheNamedUser` (needs `REDIS_TEST_ADDR`) creates
+an ACL user on a stock `redis:7`, opens as it and reads `ACL WHOAMI` back — it
+fails with `WHOAMI = "default"` when `Open` drops the field. The whole live
+suite passes against the same server. NOT verified here: a managed Valkey, TLS,
+or the WRONGPASS itself, which needs the `default` user locked and would break
+the package's other live tests on a shared server.
+
 ## Linux filestorage fix, authorization outcome cleanup and docs pass (2026-09-16)
 
 SDK patch `v0.9.1`: `filestorage.Disk.DownloadRange` clamps its seek offset to the

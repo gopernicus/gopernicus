@@ -141,6 +141,7 @@ passes its own app namespace):
 | field | env key | default |
 |---|---|---|
 | `Addr` | `REDIS_ADDR` | `localhost:6379` |
+| `Username` | `REDIS_USERNAME` | (empty — password-only AUTH, the `default` ACL user) |
 | `Password` | `REDIS_PASSWORD` | (empty) |
 | `DB` | `REDIS_DB` | `0` |
 | `TLSEnabled` | `REDIS_TLS_ENABLED` | `false` |
