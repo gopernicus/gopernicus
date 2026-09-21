@@ -1,9 +1,9 @@
 # Releasing gopernicus modules
 
-## Unreleased: Redis connector — URL, host and port, ACL username (2026-09-21)
+## Redis connector — URL, host and port, ACL username (published 2026-09-21)
 
-**BREAKING for every host of `integrations/kvstores/goredis`** (proposed tag
-`v0.3.0`): `Config.Addr` / `REDIS_ADDR` is REMOVED. There is no alias.
+**BREAKING for every host of `integrations/kvstores/goredis`** (`v0.3.0`):
+`Config.Addr` / `REDIS_ADDR` is REMOVED. There is no alias.
 
 - `Config.Host` (`REDIS_HOST`, default `localhost`) and `Config.Port`
   (`REDIS_PORT`, default `0`). Port set: the address is `Host:Port`, and a Host
@@ -41,6 +41,14 @@ WHOAMI` back. The whole live suite passes against the same server. NOT verified
 here: a managed Valkey, `rediss://` against a real TLS endpoint, or the
 WRONGPASS itself, which needs the `default` user locked and would break the
 package's other live tests on a shared server.
+
+Published from `b2ef629806d091051d0083b687d594b2dd8fbebb`; the GitHub `check` run passed on
+Linux ([35649270420](https://github.com/gopernicus/gopernicus/actions/runs/35649270420)).
+Cold-verified from a scratch consumer with `GOWORK=off` and an empty module
+cache against `proxy.golang.org` and `sum.golang.org`: the consumer compiled
+against `URL`, `Host`, `Port` and `Username`, and `go mod verify` passed.
+`h1:ch+zTHsBSGDXIGvXd9s8i7VokgBtSCklQwfg64SKnCY=` (module),
+`h1:FgppPk3eiVREbRaeKVApcd9VNJO/0L8NjwfQqmGdj+Q=` (`go.mod`).
 
 ## Linux filestorage fix, authorization outcome cleanup and docs pass (2026-09-16)
 
