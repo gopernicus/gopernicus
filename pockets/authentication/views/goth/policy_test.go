@@ -78,6 +78,24 @@ func TestHTMLPolicy_StyleSrcSelf(t *testing.T) {
 	}
 }
 
+func TestHTMLPolicy_RecoveryConnectsOnlyToSelf(t *testing.T) {
+	for _, p := range []uigoth.Profile{uigoth.StylesOnly, uigoth.Interactive, uigoth.Full} {
+		dirs := viewsForProfile(t, p).resourceDirectives()
+		connect, ok := findDirective(dirs, inbound.HTMLConnectSrc)
+		if !ok {
+			t.Fatalf("profile %d: produced policy has no connect-src directive", p)
+		}
+		for _, source := range connect.Sources {
+			if source != selfSource {
+				t.Errorf("profile %d: connect-src permits %q", p, source)
+			}
+		}
+		if !hasSource(connect.Sources, selfSource) || connect.Nonce {
+			t.Errorf("profile %d: connect-src = %+v", p, connect)
+		}
+	}
+}
+
 // TestHTMLPolicy_Deterministic proves the adapter owns emitting sources
 // deterministically (Gate C C3): the produced directives are identical across calls,
 // so the emitted CSP header is byte-stable run-to-run.

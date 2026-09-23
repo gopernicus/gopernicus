@@ -141,6 +141,10 @@ func Live() PrincipalOption {
 // the WithBrowserLoginPath setting, carrying a validated return_to on GET/HEAD (design
 // §9.2). Mount it deliberately on HTML routes; it never sniffs Accept or Fetch
 // Metadata.
+// An outermost missing/invalid access-cookie proof adds recover=1 on GET/HEAD
+// when this posture admits first-party cookies, allowing the bundled login page
+// to renew a still-live refresh session. Authoritative bearers, resolved-proof
+// denials, and unsafe methods never request recovery.
 func Browser() PrincipalOption {
 	return func(set *principalSet) { set.browser = true }
 }

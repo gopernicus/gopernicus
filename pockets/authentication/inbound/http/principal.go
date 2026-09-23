@@ -45,20 +45,20 @@ func (s *Adapter) RequirePrincipal(opts ...PrincipalOption) web.Middleware {
 						next.ServeHTTP(w, r)
 						return
 					}
-					s.denyPrincipal(w, r, set)
+					s.denyPrincipal(w, r, set, true)
 					return
 				}
 				ctx = resolved
 				cred, _ = s.service.CurrentCredential(ctx)
 			}
 			if !set.admits(cred) {
-				s.denyPrincipal(w, r, set)
+				s.denyPrincipal(w, r, set, false)
 				return
 			}
 			if set.live || cred.Profile == session.ProfileDelegated {
 				live, ok := s.service.RequireLive(ctx)
 				if !ok {
-					s.denyPrincipal(w, r, set)
+					s.denyPrincipal(w, r, set, false)
 					return
 				}
 				ctx = live
@@ -133,9 +133,13 @@ func (s *Adapter) credentialPresented(r *http.Request, set principalSet) bool {
 // for a Browser() set — the 303 to the configured browser login path carrying a
 // validated return_to on GET/HEAD (design §9.2). A nested authenticator denies in
 // its OWN mode, so a plain helper nested under a browser gate answers JSON.
-func (s *Adapter) denyPrincipal(w http.ResponseWriter, r *http.Request, set principalSet) {
+func (s *Adapter) denyPrincipal(w http.ResponseWriter, r *http.Request, set principalSet, unresolved bool) {
 	if set.browser {
-		s.redirectToBrowserLogin(w, r)
+		_, bearer := bearerToken(r)
+		recover := unresolved && !(set.header && bearer) && set.admits(Credential{
+			Kind: CredentialAccessToken, Transport: TransportCookie, Profile: session.ProfileFirstParty,
+		})
+		s.redirectToBrowserLogin(w, r, recover)
 		return
 	}
 	writeUnauthorized(w)
@@ -173,7 +177,7 @@ func writeUnauthorized(w http.ResponseWriter) {
 // uses); an unvalidated target is omitted so it can never seed an open redirect. For
 // any other method it redirects WITHOUT return_to — a later GET must not replay a
 // mutation.
-func (s *Adapter) redirectToBrowserLogin(w http.ResponseWriter, r *http.Request) {
+func (s *Adapter) redirectToBrowserLogin(w http.ResponseWriter, r *http.Request, recover bool) {
 	loc := s.browserLoginPath
 	if r.Method == http.MethodGet || r.Method == http.MethodHead {
 		target := r.URL.Path
@@ -182,6 +186,9 @@ func (s *Adapter) redirectToBrowserLogin(w http.ResponseWriter, r *http.Request)
 		}
 		if safe := redirect.SafeRelativePath(target); safe != "" {
 			loc += "?return_to=" + url.QueryEscape(safe)
+			if recover {
+				loc += "&recover=1"
+			}
 		}
 	}
 	http.Redirect(w, r, loc, http.StatusSeeOther)

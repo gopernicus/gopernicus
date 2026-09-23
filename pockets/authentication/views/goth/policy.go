@@ -30,8 +30,8 @@ var directiveKind = map[goth.Directive]inbound.HTMLResourceKind{
 }
 
 // HTMLPolicy maps the bundle's deterministic browser Requirements into the pocket's
-// technology-neutral HTMLResourcePolicy, plus the script-src the externalized
-// fragment-reader landings need. It is the value a host hands to
+// technology-neutral HTMLResourcePolicy, adding scripts for the fragment-reader
+// landings and same-origin connections for session recovery. It is the value a host hands to
 // authentication.BrowserConfig.HTMLPolicy so the auth CSP widens exactly far enough to load
 // the GOTH stylesheet (and, on Interactive/Full profiles, the runtime), the
 // same-origin fragment-reader script, and any per-render nonced inline script — and
@@ -80,7 +80,7 @@ func (v Views) resourceDirectives() []inbound.HTMLResourceDirective {
 	req := v.bundle.Requirements()
 
 	var out []inbound.HTMLResourceDirective
-	scriptSeen, imgSeen, fontSeen := false, false, false
+	scriptSeen, imgSeen, fontSeen, connectSeen := false, false, false, false
 	for _, d := range req.Directives() {
 		kind, ok := directiveKind[d]
 		if !ok {
@@ -101,6 +101,9 @@ func (v Views) resourceDirectives() []inbound.HTMLResourceDirective {
 			dir.Sources = append(dir.Sources, selfSource)
 		case inbound.HTMLFontSrc:
 			fontSeen = true
+			dir.Sources = append(dir.Sources, selfSource)
+		case inbound.HTMLConnectSrc:
+			connectSeen = true
 			dir.Sources = append(dir.Sources, selfSource)
 		}
 		out = append(out, dir)
@@ -131,6 +134,12 @@ func (v Views) resourceDirectives() []inbound.HTMLResourceDirective {
 	if !fontSeen {
 		out = append(out, inbound.HTMLResourceDirective{
 			Kind:    inbound.HTMLFontSrc,
+			Sources: []string{selfSource},
+		})
+	}
+	if !connectSeen {
+		out = append(out, inbound.HTMLResourceDirective{
+			Kind:    inbound.HTMLConnectSrc,
 			Sources: []string{selfSource},
 		})
 	}

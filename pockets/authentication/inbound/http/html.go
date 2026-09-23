@@ -6,10 +6,12 @@ import (
 	"encoding/base64"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/gopernicus/gopernicus/pockets"
 	authlogic "github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/session"
 	"github.com/gopernicus/gopernicus/sdk/pkg/web"
 )
 
@@ -205,8 +207,33 @@ func (h *handlers) loginPage(w http.ResponseWriter, r *http.Request) {
 		PasswordFlowsDisabled: !h.svc.PasswordFlowsEnabled(),
 		PasswordlessEnabled:   h.svc.PasswordlessEnabled(),
 		OAuthProviders:        h.svc.OAuthProviderNames(),
+		SessionRecovery:       h.sessionRecovery(r),
 	}
 	h.renderPage(w, r, pc.CSPNonce, h.views.Login(m))
+}
+
+func (h *handlers) sessionRecovery(r *http.Request) *SessionRecovery {
+	if (r.Method != http.MethodGet && r.Method != http.MethodHead) || r.URL.Query().Get("recover") != "1" {
+		return nil
+	}
+	cookie, err := r.Cookie(h.svc.RefreshCookieName())
+	if err != nil || cookie.Value == "" || session.IsDelegatedRefreshToken(cookie.Value) {
+		return nil
+	}
+	// PrefixRegistrar preserves the external request path. Cookie paths may be
+	// broader than the auth routes, so they cannot identify the endpoints.
+	loginPath := safeRelativePath(r.URL.Path)
+	if !strings.HasSuffix(loginPath, "/auth/login") {
+		return nil
+	}
+	base := strings.TrimSuffix(loginPath, "/login")
+	checkURL := url.URL{Path: base + "/me"}
+	refreshURL := url.URL{Path: base + "/refresh"}
+	return &SessionRecovery{
+		CheckURL: checkURL.EscapedPath(), RefreshURL: refreshURL.EscapedPath(),
+		ReturnTo: h.resolveReturnTo(r.URL.Query().Get("return_to")),
+		LockName: "gopernicus:session-refresh",
+	}
 }
 
 func (h *handlers) registerPage(w http.ResponseWriter, r *http.Request) {

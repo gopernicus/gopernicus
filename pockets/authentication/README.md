@@ -2550,6 +2550,65 @@ access-JWT cookie (`Path=/`) and the refresh cookie (`<name>_refresh`,
 `Path=BrowserConfig.RefreshCookiePath` — `/auth` by default, `/api/v1/auth` on a
 prefixed host; the same path issues and clears it).
 
+### Server-rendered browser session recovery
+
+The default access-token lifetime is 15 minutes; the default refresh session
+lasts seven days from its original mint. With the bundled Goth login view,
+returning to a protected page after access expiry can renew that session without
+asking the user to sign in again. This works when the expired access cookie is
+still present and when the browser has already removed it.
+
+On an outermost missing/invalid credential, a `Browser()` gate that admits
+first-party access cookies adds `recover=1` to its GET/HEAD login redirect.
+The login handler supplies `LoginPage.SessionRecovery` when a first-party
+refresh cookie accompanies that hint. The hint grants no access. The page
+checks `/auth/me`, sends the existing Origin-protected `POST /auth/refresh`
+only on 401, then checks the renewed cookie before returning to the validated
+`return_to`. A GET never rotates credentials. Authoritative bearer failures,
+audience-only gates, nested/liveness denials and unsafe methods keep their
+existing behavior; submitted mutations are never replayed.
+
+Adopt both the authentication core and `views/goth` changes, retain
+`HTMLPolicy: authViews.HTMLPolicy()`, and point `BrowserLoginPath` at the
+mounted login route. No additional script asset or poller is required. The
+Goth policy allows the recovery script's nonce and `connect-src 'self'`.
+Custom `Views.Login` implementations can include the public component after
+their own sign-in controls, once per page:
+
+```templ
+templ customLogin(m authenticationhttp.LoginPage) {
+    // Your existing form, provider links and page layout.
+    @authgoth.SessionRecovery(m.SessionRecovery, m.CSPNonce)
+}
+```
+
+Import `authgoth` from `pockets/authentication/views/goth`. The component
+contains its own status markup and script, needs no Goth container or assets,
+and renders nothing for a nil model. Pass the handler-provided model and nonce
+unchanged. Keep the nonce allowed by `script-src` and permit
+`connect-src 'self'` in custom CSP; the bundled `HTMLPolicy()` includes both.
+Custom login views that omit the helper keep their existing sign-in behavior.
+Arbitrary login-route rewrites need custom
+integration. A `PrefixRegistrar` mount is supported: configure the full
+`BrowserLoginPath` and `RefreshCookiePath` as usual; recovery derives sibling
+endpoints from the mounted `/auth/login` path. `/auth/me` must retain a
+cookie-compatible session hydration policy.
+
+The script holds the origin-wide Web Lock `gopernicus:session-refresh` across
+the check/refresh/recheck sequence. Waiting tabs see the newly issued access
+cookie and avoid rotating again. Other browser refresh clients sharing these
+cookies must use the **same lock and fresh-cookie check**; independent SPA
+pollers remain a source of rotation races. Web Locks coordinate one origin,
+not different origins sharing Domain cookies.
+
+Recovery requires JavaScript, Web Locks (a secure browser context), and usable
+session storage. Missing support, expired/revoked refresh credentials, 429s,
+network errors or incompatible cookie paths leave normal sign-in available.
+A 30-second per-tab, per-destination attempt record bounds redirect loops; it
+contains no credentials. User interaction cancels automatic navigation, and
+failed recovery never deletes another tab's cookies. Refresh rotation, replay
+protection and the fixed session expiry remain unchanged.
+
 ## Migrations are host-owned (0001–0019)
 
 Auth ships **eighteen** canonical migrations per dialect (0017 is unused), identical filename

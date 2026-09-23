@@ -78,7 +78,7 @@ func TestBrowserLoginPathOverrideReachesGate(t *testing.T) {
 	if rec.Code != http.StatusSeeOther {
 		t.Fatalf("denied browser GET = %d, want 303", rec.Code)
 	}
-	if loc := rec.Header().Get("Location"); loc != "/signin?return_to=%2Fadmin" {
-		t.Errorf("Location = %q, want /signin?return_to=%%2Fadmin", loc)
+	if loc := rec.Header().Get("Location"); loc != "/signin?return_to=%2Fadmin&recover=1" {
+		t.Errorf("Location = %q, want /signin?return_to=%%2Fadmin&recover=1", loc)
 	}
 }

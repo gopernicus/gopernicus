@@ -1,5 +1,34 @@
 # Releasing gopernicus modules
 
+## Browser session recovery after access expiry (v0.14.0 / v0.6.0 candidates, 2026-09-22)
+
+Authentication `v0.14.0` plus Goth views `v0.6.0`: a protected HTML GET/HEAD with a missing or
+expired access cookie can restore its still-live refresh session at the login
+landing, then return to the requested page. Upgrade both modules and use the
+Goth view's `HTMLPolicy()`; no new asset mount, schema change, or poller is needed.
+
+Eligible `Browser()` redirects now include `recover=1`. `LoginPage` gains the
+optional `SessionRecovery` model; existing custom views can ignore it. API
+denials, authoritative bearers, nested/liveness denials and submitted forms
+retain their behavior. The script coordinates same-origin tabs with Web Locks,
+checks fresh cookies before rotating, and bounds redirect loops. Normal sign-in
+remains available if recovery cannot run or fails. Other refresh clients on
+the origin must use the same lock/check protocol. See the authentication
+README's browser recovery section for prefix, CSP and custom-view requirements.
+
+Custom templ login pages retain their own forms and layout and include
+`@authgoth.SessionRecovery(m.SessionRecovery, m.CSPNonce)` once after sign-in
+controls. The public component owns its status markup and script; no Goth DOM
+hooks or new asset route are required. Pass the handler's model and nonce
+unchanged and allow the nonce plus `connect-src 'self'` in custom CSP. Recovery
+requires JavaScript, Web Locks in a secure context, and session storage.
+
+Goth pins core `v0.14.0`. These coordinated additive host-contract changes use
+minor versions; stores and schema are unchanged. Exact candidate checks, the
+42-module repository gate and custom-page recovery in Chromium, Firefox and
+WebKit passed. Publication and public-proxy verification are next. GPS adoption
+and deployment are separate work.
+
 ## Redis connector — URL, host and port, ACL username (published 2026-09-21)
 
 **BREAKING for every host of `integrations/kvstores/goredis`** (`v0.3.0`):

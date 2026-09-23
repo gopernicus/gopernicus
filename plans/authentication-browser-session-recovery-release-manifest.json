@@ -1,0 +1,209 @@
+{
+  "status": "ready to publish; candidate, full repository and external custom browser proof passed",
+  "date": "2026-09-22",
+  "authorization": "User explicitly requested completing helper, commit, push, merge, tag, and release.",
+  "base_commit": "b7a4c99d336b0cb38fc1bf3a79cbf5ba67c8ca32",
+  "branch": "authentication-browser-session-recovery",
+  "modules": [
+    {
+      "directory": "pockets/authentication",
+      "version": "v0.14.0",
+      "label": "core",
+      "module": "github.com/gopernicus/gopernicus/pockets/authentication",
+      "tag": "pockets/authentication/v0.14.0",
+      "sum": "h1:Bzmqi1mzWVMZ+FaAzzzJIbsG1TmYXDRaWVH4ygjSC0k=",
+      "go_mod_sum": "h1:V4s8PuUv/BPWtuLigf9aVCYEcSA+tklqVUnMnTkxvg4=",
+      "entries": 350
+    },
+    {
+      "directory": "pockets/authentication/views/goth",
+      "version": "v0.6.0",
+      "label": "views",
+      "module": "github.com/gopernicus/gopernicus/pockets/authentication/views/goth",
+      "tag": "pockets/authentication/views/goth/v0.6.0",
+      "sum": "h1:/OYszDd29v+36xAYfp/ESsZB7Yl5Aa5SBXL8BIP4sPA=",
+      "go_mod_sum": "h1:welTP0cB7DNr/cGuqkGNDGsh5vILhbHvlA91VpITFJU=",
+      "entries": 41
+    }
+  ],
+  "candidate_source_rule": "git tracked and task untracked nearest-module files; nested modules excluded; inherited repository LICENSE included",
+  "candidate_verification": {
+    "passed": true,
+    "modules": [
+      {
+        "module": "github.com/gopernicus/gopernicus/pockets/authentication",
+        "version": "v0.14.0",
+        "download": {
+          "Path": "github.com/gopernicus/gopernicus/pockets/authentication",
+          "Version": "v0.14.0",
+          "Info": "/tmp/gopernicus-session-recovery-release/candidate-cache/cache/download/github.com/gopernicus/gopernicus/pockets/authentication/@v/v0.14.0.info",
+          "GoMod": "/tmp/gopernicus-session-recovery-release/candidate-cache/cache/download/github.com/gopernicus/gopernicus/pockets/authentication/@v/v0.14.0.mod",
+          "Zip": "/tmp/gopernicus-session-recovery-release/candidate-cache/cache/download/github.com/gopernicus/gopernicus/pockets/authentication/@v/v0.14.0.zip",
+          "Dir": "/tmp/gopernicus-session-recovery-release/candidate-cache/github.com/gopernicus/gopernicus/pockets/authentication@v0.14.0",
+          "Sum": "h1:Bzmqi1mzWVMZ+FaAzzzJIbsG1TmYXDRaWVH4ygjSC0k=",
+          "GoModSum": "h1:V4s8PuUv/BPWtuLigf9aVCYEcSA+tklqVUnMnTkxvg4="
+        },
+        "archive_entries_match": 350,
+        "checks": [
+          "verify",
+          "build",
+          "test",
+          "vet"
+        ]
+      },
+      {
+        "module": "github.com/gopernicus/gopernicus/pockets/authentication/views/goth",
+        "version": "v0.6.0",
+        "download": {
+          "Path": "github.com/gopernicus/gopernicus/pockets/authentication/views/goth",
+          "Version": "v0.6.0",
+          "Info": "/tmp/gopernicus-session-recovery-release/candidate-cache/cache/download/github.com/gopernicus/gopernicus/pockets/authentication/views/goth/@v/v0.6.0.info",
+          "GoMod": "/tmp/gopernicus-session-recovery-release/candidate-cache/cache/download/github.com/gopernicus/gopernicus/pockets/authentication/views/goth/@v/v0.6.0.mod",
+          "Zip": "/tmp/gopernicus-session-recovery-release/candidate-cache/cache/download/github.com/gopernicus/gopernicus/pockets/authentication/views/goth/@v/v0.6.0.zip",
+          "Dir": "/tmp/gopernicus-session-recovery-release/candidate-cache/github.com/gopernicus/gopernicus/pockets/authentication/views/goth@v0.6.0",
+          "Sum": "h1:/OYszDd29v+36xAYfp/ESsZB7Yl5Aa5SBXL8BIP4sPA=",
+          "GoModSum": "h1:welTP0cB7DNr/cGuqkGNDGsh5vILhbHvlA91VpITFJU="
+        },
+        "archive_entries_match": 41,
+        "checks": [
+          "verify",
+          "build",
+          "test",
+          "vet"
+        ]
+      }
+    ],
+    "environment": {
+      "GOWORK": "off",
+      "GOENV": "off",
+      "GOTOOLCHAIN": "local",
+      "GOCACHE": "/tmp/gopernicus-auth-recovery-gocache",
+      "GOMODCACHE": "/tmp/gopernicus-session-recovery-release/candidate-cache",
+      "GOPROXY": "file:///tmp/gopernicus-session-recovery-release/proxy,https://proxy.golang.org",
+      "GOSUMDB": "sum.golang.org",
+      "GOPRIVATE": "",
+      "GONOSUMDB": "",
+      "GONOPROXY": "",
+      "GOFLAGS": "-mod=readonly"
+    }
+  },
+  "tool_sha256": "bbf6c0a9d1cd00c28d8285216fb702b55c53fe038f35a170cca9ad015bb5e0c2",
+  "owner_files_sha256": {
+    "plans/cacher-design.md": "47ce5336e9298531d98a53fb33d39215e281a1c55ab939eb74da4e6aa5537757",
+    "plans/gps-360-go-audit-upgrade-handoff.md": "6afdee8279ab6639309341270fa7c775e5444947136784215f81743007449f7a",
+    "plans/segovia-v2-audit-upgrade-handoff.md": "e131e1b81fabacc24b0be9dffc2a79a30ddc1cbca06af0959ea8f46428aec3a3",
+    ".github/scripts/__pycache__/authorization_cache_verify.cpython-312.pyc": "2cc8bb121c9549f030ddbb9c117bc561f79367aa6288bf487f480dedf9f07978",
+    ".github/scripts/__pycache__/test_authorization_cache_verify.cpython-312.pyc": "db6826e4cb7f46c54632f59b041f03fc58671495dc0538ad53cb262e2887e672"
+  },
+  "evidence_directory": "/tmp/gopernicus-session-recovery-release",
+  "initial_browser_evidence": "/tmp/gopernicus-browser-session-recovery/browser-results.json",
+  "release_scope": "authentication and views/goth only; no datastore/schema changes, GPS adoption or application deployment",
+  "publication": null,
+  "full_repository_verification": {
+    "passed": true,
+    "command": "GOCACHE=/tmp/gopernicus-auth-recovery-gocache make check",
+    "directory": "/tmp/gopernicus-session-recovery-release/workspace",
+    "modules": 42,
+    "guards": 28,
+    "integration_tag_vets": 8,
+    "integration_live_tag_vets": 2,
+    "generated_files_matching_source": 92,
+    "source_G20_and_asset_diff_passed": true,
+    "log": "/tmp/gopernicus-session-recovery-release/make-check.log",
+    "limitation": "Snapshot omits .git; source G20 and asset diff checked separately. Env-gated external store tests not run."
+  },
+  "external_candidate_consumer": {
+    "passed": true,
+    "environment": {
+      "GOWORK": "off",
+      "GOENV": "off",
+      "GOTOOLCHAIN": "local",
+      "GOCACHE": "/tmp/gopernicus-auth-recovery-gocache",
+      "GOMODCACHE": "/tmp/gopernicus-session-recovery-release/candidate-cache",
+      "GOPROXY": "file:///tmp/gopernicus-session-recovery-release/proxy,https://proxy.golang.org",
+      "GOSUMDB": "sum.golang.org",
+      "GOPRIVATE": "",
+      "GONOSUMDB": "",
+      "GONOPROXY": "",
+      "GOFLAGS": "-mod=readonly"
+    },
+    "modules": {
+      "github.com/gopernicus/gopernicus/pockets/authentication": {
+        "Path": "github.com/gopernicus/gopernicus/pockets/authentication",
+        "Version": "v0.14.0",
+        "Time": "2026-09-22T00:00:00Z",
+        "Dir": "/tmp/gopernicus-session-recovery-release/candidate-cache/github.com/gopernicus/gopernicus/pockets/authentication@v0.14.0",
+        "GoMod": "/tmp/gopernicus-session-recovery-release/candidate-cache/cache/download/github.com/gopernicus/gopernicus/pockets/authentication/@v/v0.14.0.mod",
+        "GoVersion": "1.26.1",
+        "Sum": "h1:Bzmqi1mzWVMZ+FaAzzzJIbsG1TmYXDRaWVH4ygjSC0k=",
+        "GoModSum": "h1:V4s8PuUv/BPWtuLigf9aVCYEcSA+tklqVUnMnTkxvg4="
+      },
+      "github.com/gopernicus/gopernicus/pockets/authentication/views/goth": {
+        "Path": "github.com/gopernicus/gopernicus/pockets/authentication/views/goth",
+        "Version": "v0.6.0",
+        "Time": "2026-09-22T00:00:00Z",
+        "Dir": "/tmp/gopernicus-session-recovery-release/candidate-cache/github.com/gopernicus/gopernicus/pockets/authentication/views/goth@v0.6.0",
+        "GoMod": "/tmp/gopernicus-session-recovery-release/candidate-cache/cache/download/github.com/gopernicus/gopernicus/pockets/authentication/views/goth/@v/v0.6.0.mod",
+        "GoVersion": "1.26.1",
+        "Sum": "h1:/OYszDd29v+36xAYfp/ESsZB7Yl5Aa5SBXL8BIP4sPA=",
+        "GoModSum": "h1:welTP0cB7DNr/cGuqkGNDGsh5vILhbHvlA91VpITFJU="
+      }
+    },
+    "checks": [
+      "verify",
+      "build",
+      "test",
+      "vet",
+      "browser:chromium",
+      "browser:firefox",
+      "browser:webkit"
+    ],
+    "public_started_without_candidate_sums": false,
+    "behavior": "Real migrated local SQLite/Turso repositories, JWT signer, services, mounted HTTP handlers; custom Login overrides bundled view and renders public SessionRecovery helper without Goth layout or assets. Root and prefixed mounts, expiry, refresh and revoked-session fallback passed.",
+    "browser": [
+      {
+        "browser": "chromium",
+        "cases": [
+          "valid access; 3 expired-access tabs recover via custom login with exactly 1 server rotation",
+          "missing access cookie and prefixed mount restore via custom helper",
+          "revoked refresh preserves shared cookies; custom unstyled form signs in successfully",
+          "locks unavailable retains custom sign-in without rotation",
+          "javascript unavailable retains custom sign-in without rotation",
+          "mis-scoped access cookie stops after one probe without a redirect loop",
+          "ordinary custom login renders nil helper as no markup"
+        ],
+        "page_errors": [],
+        "csp_violations": []
+      },
+      {
+        "browser": "firefox",
+        "cases": [
+          "valid access; 3 expired-access tabs recover via custom login with exactly 1 server rotation",
+          "missing access cookie and prefixed mount restore via custom helper",
+          "revoked refresh preserves shared cookies; custom unstyled form signs in successfully",
+          "locks unavailable retains custom sign-in without rotation",
+          "javascript unavailable retains custom sign-in without rotation",
+          "mis-scoped access cookie stops after one probe without a redirect loop",
+          "ordinary custom login renders nil helper as no markup"
+        ],
+        "page_errors": [],
+        "csp_violations": []
+      },
+      {
+        "browser": "webkit",
+        "cases": [
+          "valid access; 3 expired-access tabs recover via custom login with exactly 1 server rotation",
+          "missing access cookie and prefixed mount restore via custom helper",
+          "revoked refresh preserves shared cookies; custom unstyled form signs in successfully",
+          "locks unavailable retains custom sign-in without rotation",
+          "javascript unavailable retains custom sign-in without rotation",
+          "mis-scoped access cookie stops after one probe without a redirect loop",
+          "ordinary custom login renders nil helper as no markup"
+        ],
+        "page_errors": [],
+        "csp_violations": []
+      }
+    ],
+    "limitations": "No live PostgreSQL, remote Turso, Firestore, production or downstream host adoption."
+  }
+}

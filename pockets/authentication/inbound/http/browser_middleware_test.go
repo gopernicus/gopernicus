@@ -115,7 +115,7 @@ func TestBrowserGatesRedirectMissingCredential(t *testing.T) {
 		if rec.Code == http.StatusNoContent {
 			t.Fatalf("%s gate admitted a request with no credential", gate.name)
 		}
-		assertLoginRedirect(t, rec, "/auth/login?return_to=%2Fadmin")
+		assertLoginRedirect(t, rec, "/auth/login?return_to=%2Fadmin&recover=1")
 	}
 }
 
@@ -145,7 +145,7 @@ func TestBrowserGatesRedirectExpiredJWT(t *testing.T) {
 		req.AddCookie(&http.Cookie{Name: bh.svc.SessionCookieName(), Value: expired})
 		rec := httptest.NewRecorder()
 		gate(noContent()).ServeHTTP(rec, req)
-		assertLoginRedirect(t, rec, "/auth/login?return_to=%2Fadmin")
+		assertLoginRedirect(t, rec, "/auth/login?return_to=%2Fadmin&recover=1")
 	}
 }
 
@@ -243,8 +243,8 @@ func TestBrowserGateReturnToMethodPolicy(t *testing.T) {
 		method string
 		want   string
 	}{
-		{"GET", "/auth/login?return_to=%2Fadmin%2Fusers%3Fpage%3D2"},
-		{"HEAD", "/auth/login?return_to=%2Fadmin%2Fusers%3Fpage%3D2"},
+		{"GET", "/auth/login?return_to=%2Fadmin%2Fusers%3Fpage%3D2&recover=1"},
+		{"HEAD", "/auth/login?return_to=%2Fadmin%2Fusers%3Fpage%3D2&recover=1"},
 		{"POST", "/auth/login"},
 		{"PUT", "/auth/login"},
 		{"DELETE", "/auth/login"},

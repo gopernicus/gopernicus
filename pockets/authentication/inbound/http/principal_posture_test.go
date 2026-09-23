@@ -368,7 +368,7 @@ func TestDefaultBrowserAccountReadsOnlyItsCookie(t *testing.T) {
 	if denied.Code != http.StatusSeeOther {
 		t.Fatalf("no credential on /auth/account = %d, want 303", denied.Code)
 	}
-	if loc := denied.Header().Get("Location"); loc != "/auth/login?return_to=%2Fauth%2Faccount%3Ftab%3Dsecurity" {
+	if loc := denied.Header().Get("Location"); loc != "/auth/login?return_to=%2Fauth%2Faccount%3Ftab%3Dsecurity&recover=1" {
 		t.Errorf("Location = %q, want the validated path?query return_to", loc)
 	}
 	for header, want := range map[string]string{

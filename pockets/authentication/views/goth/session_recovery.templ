@@ -1,0 +1,82 @@
+package goth
+
+import authentication "github.com/gopernicus/gopernicus/pockets/authentication/inbound/http"
+
+// SessionRecovery renders optional browser session recovery for a login page.
+// Include it once after the sign-in controls in a custom Login template:
+//
+//	@authgoth.SessionRecovery(m.SessionRecovery, m.CSPNonce)
+//
+// Pass the handler's LoginPage.SessionRecovery and CSPNonce unchanged.
+// The page must allow the supplied nonce in script-src and 'self' in connect-src
+// (Views.HTMLPolicy provides both). No Goth layout or asset mount is required.
+// A nil model renders nothing; retain the sign-in controls as the fallback.
+templ SessionRecovery(m *authentication.SessionRecovery, nonce string) {
+	if m != nil {
+		<p id="auth-session-recovery" role="status" aria-live="polite" hidden></p>
+		<script nonce={ nonce } data-auth-session-recovery data-check-url={ m.CheckURL } data-refresh-url={ m.RefreshURL } data-return-to={ m.ReturnTo } data-lock-name={ m.LockName }>
+		(async () => {
+			const script = document.currentScript;
+			const config = script.dataset;
+			const status = script.previousElementSibling;
+			const events = ["input", "submit", "pointerdown", "keydown"];
+			let cancelled = false;
+			let started = false;
+			let recovered = false;
+			const cancel = () => {
+				cancelled = true;
+				status.hidden = true;
+			};
+			try {
+				if (!navigator.locks || !navigator.locks.request || !config.lockName) return;
+				const check = new URL(config.checkUrl, location.href);
+				const refresh = new URL(config.refreshUrl, location.href);
+				const target = new URL(config.returnTo, location.href);
+				if (check.origin !== location.origin || refresh.origin !== location.origin) return;
+				if (check.username || check.password || refresh.username || refresh.password) return;
+				if (target.protocol !== "https:" && target.protocol !== "http:") return;
+				const storage = sessionStorage;
+				const key = "gopernicus:session-recovery:" + check.pathname + ":" + target.href;
+				const previous = Number(storage.getItem(key));
+				const now = Date.now();
+				if (previous && now - previous < 30000) return;
+				// Keep this marker after success: a mis-scoped access cookie must not loop.
+				storage.setItem(key, String(now));
+				if (storage.getItem(key) !== String(now)) return;
+				for (const event of events) document.addEventListener(event, cancel, true);
+				started = true;
+				status.textContent = "Restoring your session…";
+				status.hidden = false;
+				const options = {
+					credentials: "same-origin", cache: "no-store", redirect: "error"
+				};
+				await navigator.locks.request(config.lockName, async () => {
+					if (cancelled) return;
+					let response = await fetch(check.href, { ...options, method: "GET" });
+					if (cancelled) return;
+					if (response.status === 401) {
+						response = await fetch(refresh.href, { ...options, method: "POST" });
+						if (cancelled || !response.ok) return;
+						response = await fetch(check.href, { ...options, method: "GET" });
+					}
+					if (!cancelled && response.ok) {
+						// A slow lock or network must not spend the redirect-loop cooldown.
+						const completed = String(Date.now());
+						storage.setItem(key, completed);
+						if (storage.getItem(key) !== completed) return;
+						recovered = true;
+						location.replace(target.href);
+					}
+				});
+			} catch (_) {
+				// Recovery is optional; the normal sign-in form remains available.
+			} finally {
+				for (const event of events) document.removeEventListener(event, cancel, true);
+				if (started && !cancelled && !recovered) {
+					status.textContent = "Your session could not be restored. Please sign in.";
+				}
+			}
+		})();
+	</script>
+	}
+}

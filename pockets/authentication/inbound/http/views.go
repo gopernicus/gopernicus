@@ -116,6 +116,22 @@ type LoginPage struct {
 	PasswordlessEnabled bool
 	// OAuthProviders lists the wired provider names for "sign in with" links.
 	OAuthProviders []string
+	// SessionRecovery is present when a recovery hint and refresh cookie accompany
+	// the login request. The hint is not authentication proof. Custom views may
+	// ignore it and render normal sign-in.
+	SessionRecovery *SessionRecovery
+}
+
+// SessionRecovery describes one browser renewal attempt, without credentials.
+// Hold the origin-wide LockName across a fresh CheckURL probe, an optional POST
+// to RefreshURL on 401, and a final probe before navigating to ReturnTo. Bound
+// repeated landings per tab and retain normal sign-in on any failure. Other
+// browser refresh clients sharing these cookies must use the same protocol.
+type SessionRecovery struct {
+	CheckURL   string // same-origin, root-relative session hydration endpoint
+	RefreshURL string // same-origin, root-relative refresh endpoint
+	ReturnTo   string // destination validated by the redirect policy
+	LockName   string // gopernicus:session-refresh, shared by every tab on this origin
 }
 
 // RegisterPage models the registration form. Email and DisplayName are echoed
