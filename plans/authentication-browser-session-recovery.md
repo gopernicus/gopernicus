@@ -1,6 +1,6 @@
 # Browser session recovery after access-token expiry
 
-Status: READY TO PUBLISH — 2026-09-22. All prerelease gates passed.
+Status: COMPLETE — 2026-09-22. Published, public-verified and Linux CI passed.
 
 ## Finding and scope
 
@@ -73,7 +73,7 @@ tool; never hand-edit generated Go. Goth will pin the new core release.
   with `GOWORK=off`. Never request unpublished versions from the public proxy.
   Preserve unrelated owner changes and existing tags. Validate full repository,
   exact candidates and an external custom-page consumer before publication.
-- [ ] R7 Commit only this change on a release branch; push and merge into main
+- [x] R7 Commit only this change on a release branch; push and merge into main
   using the established repository workflow, then publish annotated module
   tags and release notes. Verify CI, remote provenance, public Go checksums and
   fresh consumer adoption; record the release receipt and any propagation delay.
@@ -119,7 +119,7 @@ changing production rate limits. No unresolved implementation/test failures.
 
 Live PostgreSQL/remote Turso/Firestore suites were not run; env-gated store
 tests skipped in the hermetic gate. No persistence code changed. Production and
-downstream host adoption remain unverified. Publication and fresh public-proxy verification are next.
+downstream host adoption remain unverified. Both modules are published and fresh public-proxy verification passed.
 
 The public `authgoth.SessionRecovery` helper is implemented and bundled Login
 uses it. Its nil-model, external-package custom rendering and document-level
@@ -149,9 +149,10 @@ Changed files: this plan, its release manifest and `RELEASING.md`; authenticatio
 `session_recovery_test.go`, `session_recovery_external_test.go`,
 `testdata/session_recovery.mjs`, `go.mod`, `go.sum`.
 
-Next step: release authentication and Goth together with the new core minimum
-pin, then adopt in the affected host. Hosts with a custom Login override must
-render the recovery model or delegate to the updated bundled Login view.
+Next adoption step: upgrade both released modules in the affected host. Hosts
+with a custom Login override include the exported recovery helper with the
+provided model/nonce or delegate to the updated bundled Login view. Downstream
+adoption and deployment were not requested in this release task.
 
 Final external consumer proof passed with exact private candidate modules, no
 replacements and `GOWORK=off`: module verify/build/uncached race tests/vet plus
@@ -164,3 +165,30 @@ a successful manual sign-in, no JS/locks, bounded mis-scoped-cookie behavior and
 ordinary nil-helper login. No page errors or CSP violations. The fallback
 screenshot was visually inspected. Fixture servers and browsers were stopped.
 Evidence and reusable public-proxy runner: `/tmp/gopernicus-session-recovery-release/`.
+
+## Publication receipt
+
+Source commit: `7d358447428dd46a0af527cff689ba82ec549955` on
+`authentication-browser-session-recovery`, fast-forward merged into main from
+`b7a4c99d336b0cb38fc1bf3a79cbf5ba67c8ca32`. Main, the release branch and both
+annotated tags were pushed atomically. Remote main/branch and peeled tags match
+the source commit; all 491 pre-existing remote tag refs are unchanged. Committed
+nearest-module inventories (including inherited root LICENSE) match the tested
+350 core and 41 Goth archive entries byte for byte.
+
+Published tags: `pockets/authentication/v0.14.0` and
+`pockets/authentication/views/goth/v0.6.0`. Fresh public Go module caches with
+`GOWORK=off`, `GOPROXY=https://proxy.golang.org,direct` and `GOSUMDB=sum.golang.org`
+verified both source origins and checksums without preseeded candidate hashes,
+replacements or exemptions. Both modules passed verify/build/uncached race
+tests/vet again. The separate public consumer began without a go.sum, fetched
+both published versions and repeated its Go checks and all seven browser cases
+in all three engines successfully. No propagation retry was needed. All
+fixture processes exited cleanly. Full receipts, sums and command logs are
+listed in the companion release manifest. All four GitHub Linux CI runs passed:
+[main](https://github.com/gopernicus/gopernicus/actions/runs/35804533873),
+[core tag](https://github.com/gopernicus/gopernicus/actions/runs/35804533734),
+[Goth tag](https://github.com/gopernicus/gopernicus/actions/runs/35804533906), and
+[release branch](https://github.com/gopernicus/gopernicus/actions/runs/35804533943).
+The final verification receipt changes documentation only; published tags remain
+on the verified source commit. All unrelated owner changes remain preserved.

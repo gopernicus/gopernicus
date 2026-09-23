@@ -1,6 +1,6 @@
 # Releasing gopernicus modules
 
-## Browser session recovery after access expiry (v0.14.0 / v0.6.0 candidates, 2026-09-22)
+## Browser session recovery after access expiry (published 2026-09-22)
 
 Authentication `v0.14.0` plus Goth views `v0.6.0`: a protected HTML GET/HEAD with a missing or
 expired access cookie can restore its still-live refresh session at the login
@@ -24,10 +24,21 @@ unchanged and allow the nonce plus `connect-src 'self'` in custom CSP. Recovery
 requires JavaScript, Web Locks in a secure context, and session storage.
 
 Goth pins core `v0.14.0`. These coordinated additive host-contract changes use
-minor versions; stores and schema are unchanged. Exact candidate checks, the
-42-module repository gate and custom-page recovery in Chromium, Firefox and
-WebKit passed. Publication and public-proxy verification are next. GPS adoption
-and deployment are separate work.
+minor versions; stores and schema are unchanged. Published from
+`7d358447428dd46a0af527cff689ba82ec549955` through an atomic push of main, the
+release branch and both annotated tags. All 491 prior remote tag refs are unchanged.
+
+Verified: the 42-module repository gate; independent build, uncached race tests
+and vet of both modules; all 391 public archive entries and checksums match the
+private candidates. A fresh external consumer using public proxy/sumdb modules,
+local SQLite storage and real authentication handlers passed custom-page recovery
+in Chromium, Firefox and WebKit, including three tabs with exactly one rotation.
+No public-proxy retries, replacements or checksum exemptions were needed.
+All four release CI runs passed on Linux ([main check](https://github.com/gopernicus/gopernicus/actions/runs/35804533873)).
+Checksums and provenance are recorded in the
+[release manifest](plans/authentication-browser-session-recovery-release-manifest.json).
+GPS adoption and deployment remain separate work. Live PostgreSQL, remote Turso
+and Firestore were not exercised; no persistence code changed.
 
 ## Redis connector — URL, host and port, ACL username (published 2026-09-21)
 
