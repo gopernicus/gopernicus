@@ -1,6 +1,7 @@
 package authenticationhttp
 
 import (
+	"maps"
 	"slices"
 
 	"github.com/gopernicus/gopernicus/sdk/pkg/list"
@@ -74,9 +75,19 @@ func WithRouteAuthentication(value BundledRouteAuthentication) Option {
 	}
 }
 
-// WithInviteCheck sets the required policy for bundled invitation create/list routes.
+// WithInviteCheck sets the invitation create/list policy. With a resource rule it
+// is the optional create-only refinement; without one it is required.
 func WithInviteCheck(check InviteCheck) Option {
 	return func(c *adapterConfig) { c.InviteCheck = check }
+}
+
+// WithInvitationResourceRule sets the resource rule for all bundled invitation
+// management routes. Permissions and Can are wired together; the map is cloned.
+func WithInvitationResourceRule(rule InvitationResourceRule) Option {
+	rule.Permissions = maps.Clone(rule.Permissions)
+	return func(c *adapterConfig) {
+		c.ResourceRule = InvitationResourceRule{Permissions: maps.Clone(rule.Permissions), Can: rule.Can}
+	}
 }
 
 // WithUserAdminCheck enables user administration routes with the supplied policy.

@@ -306,8 +306,9 @@ if err := httpAuth.Register(pockets.Mount{Router: router}); err != nil { return 
 supplies credential proof. The HTTP adapter keeps its credential service, cookie
 configuration and resolved route policy private. Trusted administrative/invitation
 methods require authorization by their caller. Bundled HTTP handlers own the
-`authenticationhttp.InviteCheck` and `authenticationhttp.UserAdminCheck` callbacks;
-root configuration forwards them only to the HTTP adapter. Direct adapters use
+`authenticationhttp.InvitationCan`, `authenticationhttp.InviteCheck` and
+`authenticationhttp.UserAdminCheck` callbacks; root configuration forwards them only
+to the HTTP adapter. Direct adapters use `WithInvitationResourceRule`,
 `WithInviteCheck` and `WithUserAdminCheck`. Domain services contain no host policy.
 
 ## The identifier model (design §2.2)
@@ -539,6 +540,57 @@ that never carry it.
   refresh_token}` (the API twin of `/auth/login`). Shares login's pre-credential
   rate limit and verified-email gating; clients rotate via `/auth/refresh`.
 
+**Who administers invitations — the resource rule (v0.15.0).** Invitation
+administration is a property of the RESOURCE. Configure it with two fields on
+`InvitationsConfig`, always together:
+
+```go
+authentication.WithInvitations(authentication.InvitationsConfig{
+    Granter:             granter,
+    ResourcePermissions: map[string]string{"project": "manage", "folder": "manage"},
+    Can: func(ctx context.Context, p sdk.Principal, permission, resourceType, resourceID string) (bool, error) {
+        return authorizer.Check(ctx, p, permission, resourceType, resourceID) // host adapter
+    },
+})
+```
+
+A principal holding `ResourcePermissions[type]` on the resource may create, list,
+resend and cancel that resource's invitations, whoever issued them. A type absent
+from the map is not invitable and is refused without calling `Can`. The pocket
+never imports authorization; `Can` is the host's adapter. `Can` errors fail
+closed. Hosts write no per-invitation authorization data.
+
+**Rule-only authority is broad.** Without `InviteCheck`, the mapped permission
+authorizes creation of invitations for **every relation the host's `Granter`
+accepts, including `owner`, with any domain-valid metadata** — on both the pending
+and the immediate direct-add path. `Can` receives neither the relation nor the
+metadata, and the pocket's shape validation authorizes neither. A host whose
+managers may invite members but not owners, or whose metadata carries routing
+choices or whose invitee set is restricted, also wires `InviteCheck` as the
+create-only refinement:
+
+```go
+InviteCheck: func(ctx context.Context, req authenticationhttp.InviteCheckRequest) error {
+    if req.Relation == "owner" && !isOwner(ctx, req.Principal, req.ResourceType, req.ResourceID) {
+        return fmt.Errorf("only owners may invite owners: %w", sdk.ErrForbidden)
+    }
+    return nil // also the place to check req.Metadata and the invitee context
+},
+```
+
+With the rule on, `InviteCheck` runs on create only, after `Can` allows; it is
+never called for list, resend or cancel. `Granter` still enforces resource
+existence and data invariants when applying a grant; it does not replace
+issuance-time authorization. Without the rule, `InviteCheck` alone governs
+create/list and cancel/resend stay issuer-only (the pre-v0.15.0 behaviour,
+unchanged).
+
+| Rule on | Denied / unmapped | `Can` error |
+|---|---|---|
+| create | 403 | its own mapping (5xx; 404 if it wraps `sdk.ErrNotFound`) |
+| list | 403 | same |
+| resend / cancel | **404**, indistinguishable from an unknown id | same |
+
 **Invitations — registered only when `InvitationsConfig.Granter` is wired; every
 authenticated route is `Invitations`-gated (`RequireAccessTokenOrAPIKeyLive()`
 by default, immediate revocation), only decline is public:**
@@ -549,25 +601,29 @@ by default, immediate revocation), only decline is public:**
   validation and principal resolution, the handler drives the pocket's
   preparation operation: the service validates and copies metadata, normalizes
   the coordinates and identifier, and resolves the invitee once. The HTTP handler
-  poses `InviteCheck`, then executes that exact prepared command. Denial writes
-  no row and attempts no grant.
-- `GET /auth/invitations/{resource_type}/{resource_id}` — the HTTP handler poses
-  `InviteCheck` with `InviteList` before calling the policy-free listing service;
-  `GET /auth/invitations/mine` remains identity-bound.
+  asks the resource rule (when wired) and then `InviteCheck` (when wired), then
+  executes that exact prepared command. Denial writes no row and attempts no grant.
+- `GET /auth/invitations/{resource_type}/{resource_id}` — the HTTP handler asks
+  the resource rule, or without it poses `InviteCheck` with `InviteList`, before
+  calling the policy-free listing service; `GET /auth/invitations/mine` remains
+  identity-bound.
 - `POST /auth/invitations/accept` — `{token}` → grant through the Granter.
   Acceptance does NOT re-run inviter authority (issuance-time authority, below).
-- `POST /auth/invitations/{id}/{cancel,resend}` — the HTTP adapter checks
-  `InvitedBy == caller` against one prepared target before executing it. A denial
-  performs no update or delivery.
+- `POST /auth/invitations/{id}/{cancel,resend}` — the HTTP adapter admits the
+  caller against one prepared target before executing it: with the resource rule,
+  a holder of the permission on the LOADED row's resource (denial → 404); without
+  it, `InvitedBy == caller` (denial → 403). A denial performs no update or delivery.
 - `POST /auth/invitations/{id}/decline` — public, token-authorized, IP-limited
   (the one invitation route with no session gate).
 
 Every response built from an invitation row is `{id, resource_type, resource_id,
 relation, identifier, invited_by, status, auto_accept, resolved_subject_id?,
 expires_at, accepted_at?, created_at}`. It carries **no token** — the secret is
-only ever in the mail. `invited_by` is the owning user id, the same value
-the HTTP adapter enforces cancel/resend admission on, so a resource list can hide actions on
-another admin's rows; it is a rendering hint, never authority.
+only ever in the mail. `invited_by` is the issuing user id. Without the resource
+rule it is the value the HTTP adapter admits cancel/resend on, so a resource list
+can hide actions on another admin's rows; with the rule every permission holder
+manages every row and it is attribution only. Either way it is a rendering hint,
+never authority.
 
 There are **two projections**, deliberately separate types rather than one shared
 DTO:
@@ -644,7 +700,7 @@ type Granter interface{ Grant(context.Context, GrantInput) error }
   KiB** JSON-encoded total, UTF-8, non-empty keys; each violation wraps
   `ErrInvalidInput`); nil/empty persists as `{}`. It is **untrusted** inviter
   input, never an authorization claim by itself: `InvitationsConfig.InviteCheck` receives the
-  same metadata — alongside the normalized invitee context, below — so a host can
+  same metadata (the resource rule's `Can` does not) — alongside the normalized invitee context, below — so a host can
   authorize the complete invitation at issuance. A `Granter` validates metadata
   shape, resource existence and domain constraints when applying its effects;
   metadata itself never grants permission. This does not repeat the inviter's
@@ -660,9 +716,23 @@ type Granter interface{ Grant(context.Context, GrantInput) error }
   configured `IntegrityPolicy`. Their idempotency is state-based: there is no
   durable command receipt or `OperationID` ledger in the tuple writer. Hosts must
   separately deduplicate any additional effects.
-- **Required `InviteCheck`.** Whenever a `Granter` enables invitations,
-  `InvitationsConfig.InviteCheck` is REQUIRED at construction — nil → `ErrInviteCheckRequired`;
-  an `InviteCheck` wired with no `Granter` → `ErrInviteCheckWithoutGranter`. It is
+- **A required host policy.** Whenever a `Granter` enables invitations, the root
+  `New` requires a complete resource rule or `InviteCheck`:
+
+  | Granter | ResourcePermissions + Can | InviteCheck | Result |
+  |---|---|---|---|
+  | set | both, valid | any | rule ON (`InviteCheck`, if set, refines create) |
+  | set | neither | set | rule OFF — `InviteCheck` governs create/list |
+  | set | neither | nil | `ErrInviteCheckRequired` |
+  | any | only one, or an empty key/permission | any | `ErrInvitationResourceRuleIncomplete` (checked first) |
+  | nil | both, valid | any | `ErrInvitationResourceRuleWithoutGranter` |
+  | nil | neither | set | `ErrInviteCheckWithoutGranter` |
+  | nil | neither | nil | invitations OFF |
+
+  The independently usable `authenticationhttp.New` mirrors the same precedence
+  against `InvitationService` presence (a typed nil counts as absent) and wraps
+  every rejection in `sdk.ErrInvalidInput` with its own diagnostic; it does not
+  return the root sentinels. `InviteCheck` is
   posed by the HTTP adapter after live-session validation, principal resolution,
   request parsing and domain preparation, before any row or grant. The host sees
   the caller, resource, action, normalized relation and invitee context, including
@@ -696,13 +766,29 @@ type Granter interface{ Grant(context.Context, GrantInput) error }
 ### Invitation management and authentication proof
 
 For cancellation or resend, call `PrepareManagement(ctx, id)` and inspect the
-opaque value's `ID()` and `InvitedBy()`. The inbound adapter admits the caller,
-then passes that same value to `Cancel(ctx, prepared)` or
+opaque value's `ID()`, `InvitedBy()`, `ResourceType()` and `ResourceID()`. The
+inbound adapter admits the caller, attaches it with `WithActor(principal)`, then
+passes that same value to `Cancel(ctx, prepared)` or
 `Resend(ctx, prepared, redirect)`. Preparation reads once. Execution rejects
 zero or foreign-service values and uses the observed token hash with the store's
 atomic lifecycle transition; stale commands conflict before delivery. These
 principal-free services do not decide issuer access. Other inbound adapters must
 supply their own admission policy before invoking them.
+
+**Audit attribution.** `WithActor` is attribution only — it never authorizes.
+Cancel (`invitation_cancelled`) and resend (`invitation_created`, as before)
+populate the canonical `SecurityEvent.Actor` (persisted as `actor_type` /
+`actor_id`) and add the original issuer as `Details["invited_by"]`:
+
+| Attached actor | `Actor` | `UserID` |
+|---|---|---|
+| none / zero principal | zero | `InvitedBy` (headless fallback) |
+| user | its type and ID | the actor's ID |
+| non-user (e.g. a service account) | its type and ID | empty — never a non-user ID |
+
+The bundled routes always attach the authenticated user, so under rule OFF
+`UserID` is unchanged and `Actor` is now populated. Create, grant and decline
+attribution are unchanged. No store or migration change.
 
 Credential and redemption checks remain in authentication logic:
 
@@ -720,8 +806,8 @@ Credential and redemption checks remain in authentication logic:
 Host principal access decisions run at inbound. Where grants need data rules
 such as minimum administrators, configure the tuple writer's `IntegrityPolicy`;
 its serialized integrity check is separate from the invitation's admission.
-Revocation after admission does not retract an admitted operation. `InviteCheck`
-remains required for bundled invitation create/list routes.
+Revocation after admission does not retract an admitted operation. A complete
+resource rule or `InviteCheck` remains required for the bundled invitation routes.
 
 ## Cross-origin SPA bootstrap (`GET /auth/csrf`)
 
@@ -1274,7 +1360,7 @@ store upgrade is needed.
 | `TokenSigner` (cryptids.JWTSigner) | **REQUIRED.** `integrations/cryptids/golang-jwt` implements HS256/HS384/HS512 with explicit expiration and 60-second clock tolerance; there is no SDK implementation. **Multi-instance hosts MUST share the signing secret** (§1.6). |
 | `AccessTokenTTL` | 0 → 15m (bounds the stateless revocation window). `AUTH_ACCESS_TOKEN_TTL`. |
 | `RefreshTTL` | 0 → 7d — the FIXED refresh horizon; rotation never extends it. `AUTH_REFRESH_TTL`. |
-| `Granter` / `InviteCheck` / `MemberCheck` / `BodySenders` | invitation subsystem seams (see the invitation section). `Granter` now takes a structured `GrantInput` (operation-scoped, fail-loud). `InviteCheck` (the relation-aware host policy) is REQUIRED whenever `Granter` is wired — nil → `ErrInviteCheckRequired`; set without a `Granter` → `ErrInviteCheckWithoutGranter`. |
+| `Granter` / `ResourcePermissions` + `Can` / `InviteCheck` / `MemberCheck` / `BodySenders` | invitation subsystem seams (see the invitation section). `Granter` now takes a structured `GrantInput` (operation-scoped, fail-loud). With a `Granter`, a complete resource rule (`ResourcePermissions` + `Can`) or `InviteCheck` is REQUIRED — neither → `ErrInviteCheckRequired`; a half-wired or invalid rule → `ErrInvitationResourceRuleIncomplete`; a rule without a `Granter` → `ErrInvitationResourceRuleWithoutGranter`; `InviteCheck` without a `Granter` → `ErrInviteCheckWithoutGranter`. With the rule on, `InviteCheck` is the optional create-only refinement. |
 | `ListStrategy` | `"cursor"` default; `"offset"` allowed; anything else `ErrInvalidListStrategy`. |
 | `IDs` (sdk.IDGenerator) | entity-ID strategy; NEVER mints secrets (codes/tokens/keys keep their own high-entropy generator). |
 | `Logger` | best-effort WARN sink for audit-write failures + the ephemeral-key/console-transport warnings; nil → `slog.Default()`. |

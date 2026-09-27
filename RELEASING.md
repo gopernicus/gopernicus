@@ -1,5 +1,38 @@
 # Releasing gopernicus modules
 
+## Invitation resource rule (authentication v0.15.0)
+
+Authentication `v0.15.0` (MINOR, additive): who may administer invitations is now
+a property of the RESOURCE. `InvitationsConfig` gains `ResourcePermissions`
+(resource type → permission) and `Can` (the host's authorizer adapter,
+`authenticationhttp.InvitationCan`); direct HTTP adapters use
+`WithInvitationResourceRule`. With the rule on, any holder of the mapped
+permission on the resource may create, list, resend and cancel its invitations,
+whoever issued them. Unmapped types are refused without calling `Can`; create/list
+denials are 403, resend/cancel denials are 404 (indistinguishable from an unknown
+id); `Can` errors fail closed through their own mapping. `InviteCheck` becomes the
+optional create-only refinement, run after `Can` allows.
+
+**Rule-only authority is broad:** without `InviteCheck`, the mapped permission
+authorizes invitations for every relation the `Granter` accepts, including
+`owner`, with any domain-valid metadata. Hosts whose managers may not invite
+owners (or whose metadata/invitees are restricted) keep `InviteCheck`.
+
+Construction: a half-wired or invalid rule is `ErrInvitationResourceRuleIncomplete`
+(checked first); a rule without a `Granter` is
+`ErrInvitationResourceRuleWithoutGranter`; `ErrInviteCheckRequired` keeps its name
+with a reworded message. `authenticationhttp.New` mirrors the precedence against
+service presence and wraps `sdk.ErrInvalidInput`.
+
+Audit: cancel/resend populate the canonical `SecurityEvent.Actor` via the new
+`PreparedManagement.WithActor`, keep `UserID` user-only, and add
+`Details["invited_by"]`. Under rule OFF, `UserID` is unchanged and `Actor` is now
+populated. Create, grant and decline attribution are unchanged.
+
+Host adoption: none required — rule OFF (`InviteCheck` only) behaves exactly as
+before. Stores untouched, no migration. Guard G28 now also rejects the rule's
+names under authentication logic. Plan: [plans/invitation-resource-rule.md](plans/invitation-resource-rule.md).
+
 ## Browser session recovery after access expiry (published 2026-09-22)
 
 Authentication `v0.14.0` plus Goth views `v0.6.0`: a protected HTML GET/HEAD with a missing or

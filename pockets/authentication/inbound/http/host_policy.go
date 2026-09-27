@@ -58,14 +58,37 @@ type InviteCheckRequest struct {
 // after live-session validation,
 // principal resolution, request parsing, metadata validation, identifier
 // normalization, and the invitee lookup — and always before any row exists or a
-// grant is attempted (design §6/D3). It is REQUIRED whenever a Granter enables
-// invitations — package auth rejects a nil InviteCheck at construction
-// (ErrInviteCheckRequired), never an allow-by-default. A nil return authorizes; a
+// grant is attempted (design §6/D3). Without an InvitationResourceRule it is the
+// whole create/list policy and is REQUIRED whenever invitations are enabled —
+// package auth rejects neither-policy wiring at construction
+// (ErrInviteCheckRequired), never an allow-by-default. With the rule it is the
+// optional create-only refinement, run after Can allows. A nil return authorizes; a
 // denial (wrapping sdk.ErrForbidden) or an infrastructure error fails closed
 // through the normal web/sdk error path. Authority is issuance-time: a create-time
 // authorization is a durable capability and acceptance never re-runs inviter
 // authority.
 type InviteCheck func(ctx context.Context, req InviteCheckRequest) error
+
+// InvitationCan answers "does principal hold permission on (resourceType,
+// resourceID)?" for the invitation resource rule. The host adapts its authorizer;
+// the pocket never imports authorization. A false result denies; an error fails
+// closed through the normal web/sdk mapping (one wrapping sdk.ErrNotFound answers
+// 404).
+type InvitationCan func(ctx context.Context, p sdk.Principal, permission, resourceType, resourceID string) (bool, error)
+
+// InvitationResourceRule makes invitation administration a property of the
+// RESOURCE: a principal holding Permissions[resourceType] on the resource may
+// create, list, resend, and cancel its invitations, whoever issued them. A type
+// absent from Permissions is not invitable and is refused before Can runs.
+//
+// The rule authorizes creation for every relation the host's Granter accepts,
+// with any domain-valid metadata: Can receives neither. A host that restricts
+// which relations, metadata, or invitees a manager may use also wires
+// InviteCheck, which then runs on create only, after Can allows.
+type InvitationResourceRule struct {
+	Permissions map[string]string
+	Can         InvitationCan
+}
 
 // UserAdminAction is the user-administration operation a host UserAdminCheck
 // policy is asked about (coordination-hub-auth-upstream CHAU-1.1). The set is
@@ -132,6 +155,33 @@ func (h *handlers) checkInvite(ctx context.Context, req InviteCheckRequest) erro
 	}
 	return ctx.Err()
 }
+
+// resourceRuleOn reports whether the invitation resource rule is wired.
+func (h *handlers) resourceRuleOn() bool {
+	return h.resourceRule.Can != nil
+}
+
+// checkResource asks the resource rule whether principal may administer the
+// invitations of (resourceType, resourceID). An unmapped type denies without
+// calling Can; a denial wraps sdk.ErrForbidden; a Can error fails closed as-is.
+func (h *handlers) checkResource(ctx context.Context, principal sdk.Principal, resourceType, resourceID string) error {
+	permission, ok := h.resourceRule.Permissions[resourceType]
+	if !ok || h.resourceRule.Can == nil {
+		return fmt.Errorf("resource type is not invitable: %w", sdk.ErrForbidden)
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	allowed, err := h.resourceRule.Can(ctx, principal, permission, resourceType, resourceID)
+	if err != nil {
+		return err
+	}
+	if !allowed {
+		return fmt.Errorf("invitation administration denied: %w", sdk.ErrForbidden)
+	}
+	return ctx.Err()
+}
+
 func (h *handlers) checkUserAdmin(ctx context.Context, req UserAdminCheckRequest) error {
 	if h.userAdminCheck == nil {
 		return fmt.Errorf("user administration policy is not wired: %w", sdk.ErrForbidden)

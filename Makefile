@@ -600,7 +600,7 @@ guard-authorization-decisions-no-mutations:
 # G28: application access policy is invoked at inbound, not by domain/storage services.
 guard-inbound-authorization:
 	@echo "== guard: host authorization callbacks stay at inbound (G28) =="
-	@! grep -rnE 'InviteCheck|inviteCheck|UserAdminCheck|userAdminCheck|CreateAuthorized|ListByResourceAuthorized|AuthorizeUserAdmin' --include='*.go' --exclude='*_test.go' pockets/authentication/logic || { echo "ERROR (G28): authentication logic retains an inbound host-policy callback or authorized wrapper"; exit 1; }
+	@! grep -rnE 'InviteCheck|inviteCheck|InvitationCan([^a-zA-Z]|$$)|InvitationResourceRule|checkResource|UserAdminCheck|userAdminCheck|CreateAuthorized|ListByResourceAuthorized|AuthorizeUserAdmin' --include='*.go' --exclude='*_test.go' pockets/authentication/logic || { echo "ERROR (G28): authentication logic retains an inbound host-policy callback or authorized wrapper"; exit 1; }
 	@! grep -rnE '"github.com/gopernicus/gopernicus/pockets/authorization/logic/(decisions|model)"' --include='*.go' --exclude='*_test.go' examples/auth-cms/internal/logic/domains/documents examples/auth-cms/internal/outbound/domains/documents || { echo "ERROR (G28): document logic/storage invokes the authorization engine; inbound selects query restrictions"; exit 1; }
 
 # G29: tuple writes enforce data integrity, never principal permission policy.

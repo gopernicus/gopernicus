@@ -605,7 +605,13 @@ func (s *Service) Cancel(ctx context.Context, prepared PreparedManagement) error
 	}); err != nil {
 		return err
 	}
-	s.recordLifecycle(ctx, inv, securityevent.TypeInvitationCancelled, inv.InvitedBy)
+	actor, userID := prepared.attribution()
+	s.recordManagement(ctx, actor, userID, securityevent.TypeInvitationCancelled, map[string]any{
+		"resource_type": inv.ResourceType,
+		"resource_id":   inv.ResourceID,
+		"relation":      inv.Relation,
+		"invited_by":    inv.InvitedBy,
+	})
 	return nil
 }
 
@@ -636,7 +642,14 @@ func (s *Service) Resend(ctx context.Context, prepared PreparedManagement, redir
 	if err != nil {
 		return Invitation{}, err
 	}
-	s.recordCreated(ctx, updated)
+	actor, userID := prepared.attribution()
+	s.recordManagement(ctx, actor, userID, securityevent.TypeInvitationCreated, map[string]any{
+		"resource_type": updated.ResourceType,
+		"resource_id":   updated.ResourceID,
+		"relation":      updated.Relation,
+		"identifier":    updated.Identifier,
+		"invited_by":    updated.InvitedBy,
+	})
 	if err := s.sendInviteSent(ctx, updated, secret, redirectTo, true); err != nil {
 		return updated, err
 	}
@@ -728,8 +741,8 @@ func (s *Service) recordGrant(ctx context.Context, subjectID, resourceType, reso
 	})
 }
 
-// recordCreated appends an invitation_created audit row (a pending invite minted
-// or resent), attributed to the InvitedBy owner.
+// recordCreated appends an invitation_created audit row for a newly minted
+// pending invite, attributed to the InvitedBy owner. Resend uses recordManagement.
 func (s *Service) recordCreated(ctx context.Context, inv Invitation) {
 	s.record(ctx, inv.InvitedBy, securityevent.TypeInvitationCreated, securityevent.StatusSuccess, map[string]any{
 		"resource_type": inv.ResourceType,
@@ -739,7 +752,7 @@ func (s *Service) recordCreated(ctx context.Context, inv Invitation) {
 	})
 }
 
-// recordLifecycle appends a decline/cancel audit row, attributed to userID.
+// recordLifecycle appends a decline audit row, attributed to userID.
 func (s *Service) recordLifecycle(ctx context.Context, inv Invitation, eventType, userID string) {
 	s.record(ctx, userID, eventType, securityevent.StatusSuccess, map[string]any{
 		"resource_type": inv.ResourceType,
@@ -753,12 +766,25 @@ func (s *Service) recordLifecycle(ctx context.Context, inv Invitation, eventType
 // logged at WARN with coarse fields only and NEVER fails the invitation flow
 // (design §5.1's non-negotiable, reused here).
 func (s *Service) record(ctx context.Context, userID, eventType, status string, details map[string]any) {
+	s.recordAs(ctx, securityevent.Principal{}, userID, eventType, status, details)
+}
+
+// recordManagement appends a cancel/resend audit row attributed to the acting
+// principal resolved by PreparedManagement (design D5); Details carries the
+// original invited_by.
+func (s *Service) recordManagement(ctx context.Context, actor securityevent.Principal, userID, eventType string, details map[string]any) {
+	s.recordAs(ctx, actor, userID, eventType, securityevent.StatusSuccess, details)
+}
+
+// recordAs is record with the canonical Actor populated.
+func (s *Service) recordAs(ctx context.Context, actor securityevent.Principal, userID, eventType, status string, details map[string]any) {
 	if s.securityEvents == nil {
 		return
 	}
 	ip, ua := authlogic.ClientInfoFromContext(ctx)
 	evt := securityevent.New(s.ids, eventType, status, s.now())
 	evt.UserID = userID
+	evt.Actor = actor
 	evt.Details = details
 	evt.IPAddress = ip
 	evt.UserAgent = ua

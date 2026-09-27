@@ -25,6 +25,7 @@ const refreshAttemptsPerMinute = 30
 type handlers struct {
 	oauth2         *OAuth2Config
 	inviteCheck    InviteCheck
+	resourceRule   InvitationResourceRule
 	userAdminCheck UserAdminCheck
 	svc            authService
 	inv            InvitationService
@@ -54,6 +55,7 @@ type handlers struct {
 type mountDeps struct {
 	OAuth2         *OAuth2Config
 	InviteCheck    InviteCheck
+	ResourceRule   InvitationResourceRule
 	UserAdminCheck UserAdminCheck
 	// Auth is the domain service every handler delegates to. Required.
 	Auth authService
@@ -194,7 +196,7 @@ func mount(r pockets.RouteRegistrar, d mountDeps) {
 	// one (authentication.BrowserConfig.BundledRouteAuth), the audited default otherwise.
 	auth := d.RouteAuth.withDefaults(svc)
 	r = clientInfoRegistrar{inner: r}
-	h := &handlers{oauth2: d.OAuth2, inviteCheck: d.InviteCheck, userAdminCheck: d.UserAdminCheck, svc: svc, inv: inv, listStrategy: d.ListStrategy, mutation: d.Mutation, views: views, htmlPolicy: d.HTMLPolicy}
+	h := &handlers{oauth2: d.OAuth2, inviteCheck: d.InviteCheck, resourceRule: d.ResourceRule, userAdminCheck: d.UserAdminCheck, svc: svc, inv: inv, listStrategy: d.ListStrategy, mutation: d.Mutation, views: views, htmlPolicy: d.HTMLPolicy}
 	if d.OAuth2 != nil {
 		mountOAuth2(r, h)
 		mountSessionManagement(r, h)

@@ -15,7 +15,7 @@ func newFixture(repos Repositories, cfg constructorConfig) (*Components, error) 
 		WithPasswordless(PasswordlessConfig{Passwordless: cfg.Passwordless, PasswordlessProvisionOnRedeem: cfg.PasswordlessProvisionOnRedeem}),
 		WithLinks(LinksConfig{PublicAuthBaseURL: cfg.PublicAuthBaseURL, PasswordResetURL: cfg.PasswordResetURL, OAuthLinkBaseURL: cfg.OAuthLinkBaseURL, RedirectAllowlist: cfg.RedirectAllowlist}),
 		WithBrowser(BrowserConfig{SessionCookie: cfg.SessionCookie, RefreshCookiePath: cfg.RefreshCookiePath, AllowedOrigins: cfg.AllowedOrigins, BrowserLoginPath: cfg.BrowserLoginPath, BundledRouteAuth: cfg.BundledRouteAuth, Views: cfg.Views, HTMLPolicy: cfg.HTMLPolicy}),
-		WithInvitations(InvitationsConfig{Granter: cfg.Granter, InviteCheck: cfg.InviteCheck, MemberCheck: cfg.MemberCheck}),
+		WithInvitations(InvitationsConfig{Granter: cfg.Granter, InviteCheck: cfg.InviteCheck, ResourcePermissions: cfg.ResourcePermissions, Can: cfg.Can, MemberCheck: cfg.MemberCheck}),
 		WithAdministration(AdministrationConfig{MachineRoutesGate: cfg.MachineRoutesGate, UserAdminCheck: cfg.UserAdminCheck, ListStrategy: cfg.ListStrategy}),
 		WithIDs(cfg.IDs),
 		WithLogger(cfg.Logger),

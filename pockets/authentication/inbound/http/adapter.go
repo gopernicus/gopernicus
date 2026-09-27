@@ -22,6 +22,7 @@ import (
 type adapterConfig struct {
 	OAuth2            *OAuth2Config
 	InviteCheck       InviteCheck
+	ResourceRule      InvitationResourceRule
 	UserAdminCheck    UserAdminCheck
 	Authentication    AuthenticationService
 	Invitations       InvitationService
@@ -71,11 +72,8 @@ func New(service AuthenticationService, runtimeMode environment.Mode, opts ...Op
 	if cfg.MachineGate != nil && !cfg.Authentication.MachineEnabled() {
 		return nil, fmt.Errorf("authentication HTTP: machine gate requires machine service: %w", sdk.ErrInvalidInput)
 	}
-	if !nilDependency(cfg.Invitations) && cfg.InviteCheck == nil {
-		return nil, fmt.Errorf("authentication HTTP: invitations require InviteCheck: %w", sdk.ErrInvalidInput)
-	}
-	if nilDependency(cfg.Invitations) && cfg.InviteCheck != nil {
-		return nil, fmt.Errorf("authentication HTTP: InviteCheck requires invitations: %w", sdk.ErrInvalidInput)
+	if err := validateInvitationPolicy(cfg); err != nil {
+		return nil, err
 	}
 	if cfg.UserAdminCheck != nil && !cfg.Authentication.UserAdminEnabled() {
 		return nil, fmt.Errorf("authentication HTTP: UserAdminCheck requires user administration: %w", sdk.ErrInvalidInput)
@@ -104,7 +102,7 @@ func New(service AuthenticationService, runtimeMode environment.Mode, opts ...Op
 		views = cfg.Views
 	}
 	auth.routes = &mountDeps{
-		InviteCheck: cfg.InviteCheck, UserAdminCheck: cfg.UserAdminCheck, OAuth2: cfg.OAuth2,
+		InviteCheck: cfg.InviteCheck, ResourceRule: cfg.ResourceRule, UserAdminCheck: cfg.UserAdminCheck, OAuth2: cfg.OAuth2,
 		Auth:        &routedService{AuthenticationService: cfg.Authentication, Adapter: auth},
 		Invitations: inv, ListStrategy: cfg.ListStrategy,
 		Mutation: MutationSecurity{AllowedOrigins: append([]string(nil), cfg.AllowedOrigins...), SessionCookieName: auth.SessionCookieName()},
@@ -121,6 +119,34 @@ func (a *Adapter) Register(m pockets.Mount) error {
 		return fmt.Errorf("authentication HTTP: Register requires an adapter and router: %w", sdk.ErrInvalidInput)
 	}
 	mount(m.Router, *a.routes)
+	return nil
+}
+
+// validateInvitationPolicy mirrors the root constructor's invitation matrix
+// against service presence: an incomplete or invalid resource rule first, then a
+// service needs a complete rule or InviteCheck, and no service admits neither.
+func validateInvitationPolicy(cfg adapterConfig) error {
+	rule := cfg.ResourceRule
+	ruleSet := rule.Can != nil || len(rule.Permissions) > 0
+	if ruleSet {
+		if rule.Can == nil || len(rule.Permissions) == 0 {
+			return fmt.Errorf("authentication HTTP: invitation resource rule requires both Permissions and Can: %w", sdk.ErrInvalidInput)
+		}
+		for resourceType, permission := range rule.Permissions {
+			if resourceType == "" || permission == "" {
+				return fmt.Errorf("authentication HTTP: invitation resource rule has an empty resource type or permission: %w", sdk.ErrInvalidInput)
+			}
+		}
+	}
+	hasService := !nilDependency(cfg.Invitations)
+	switch {
+	case hasService && !ruleSet && cfg.InviteCheck == nil:
+		return fmt.Errorf("authentication HTTP: invitations require a resource rule or InviteCheck: %w", sdk.ErrInvalidInput)
+	case !hasService && ruleSet:
+		return fmt.Errorf("authentication HTTP: invitation resource rule requires invitations: %w", sdk.ErrInvalidInput)
+	case !hasService && cfg.InviteCheck != nil:
+		return fmt.Errorf("authentication HTTP: InviteCheck requires invitations: %w", sdk.ErrInvalidInput)
+	}
 	return nil
 }
 
