@@ -33,6 +33,22 @@ Host adoption: none required — rule OFF (`InviteCheck` only) behaves exactly a
 before. Stores untouched, no migration. Guard G28 now also rejects the rule's
 names under authentication logic. Plan: [plans/invitation-resource-rule.md](plans/invitation-resource-rule.md).
 
+Published 2026-09-27 from main merge commit
+`ab7df2cc593f1289c6b2314e68ca560b852ba3e2` (PR #52) as annotated tag
+`pockets/authentication/v0.15.0`. The `check` gate passed on the PR and on main
+([36339785942](https://github.com/gopernicus/gopernicus/actions/runs/36339785942)).
+Before merge: module build/vet/test, `examples/auth-cms`, `make guard`, mutation
+checks, and a real-TCP two-manager drive (B resends/cancels A's invitation; A
+after revocation → 404/404/403, row unchanged; audit `actor=user:u2`,
+`invited_by=u1`). Cold-verified from a scratch consumer with `GOWORK=off` and an
+empty module cache against `proxy.golang.org` and `sum.golang.org`: the proxy
+`.info` resolved on the first poll, the consumer compiled against
+`InvitationsConfig.ResourcePermissions`/`Can`, `WithInvitationResourceRule`,
+`PreparedManagement.WithActor` and both new sentinels, and `go mod verify` passed.
+`h1:srmQeJH/R0r+uerUK4A+HMchFDGSA7c2yruvie59yO0=` (module),
+`h1:V4s8PuUv/BPWtuLigf9aVCYEcSA+tklqVUnMnTkxvg4=` (`go.mod`). Stores and schema
+unchanged. Segovia repin (from v0.13.2, which also brings v0.14.0) is downstream.
+
 ## Browser session recovery after access expiry (published 2026-09-22)
 
 Authentication `v0.14.0` plus Goth views `v0.6.0`: a protected HTML GET/HEAD with a missing or

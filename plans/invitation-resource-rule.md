@@ -1,6 +1,6 @@
 # Invitation resource rule (pockets/authentication)
 
-Status: BUILT 2026-09-27 (ratified by owner "build" request) — tasks 1–8 done and verified; task 9 (release) awaits owner. Release target: `pockets/authentication/v0.15.0` (MINOR, additive).
+Status: RELEASED 2026-09-27 — `pockets/authentication/v0.15.0` @ ab7df2cc (PR #52), cold-verified. Ratified by owner "build" request.
 
 ## Problem
 
