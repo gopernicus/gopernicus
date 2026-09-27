@@ -2,6 +2,7 @@ package authenticationhttp
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"time"
 
@@ -74,11 +75,12 @@ type invitationResponse struct {
 	ResourceID   string `json:"resource_id"`
 	Relation     string `json:"relation"`
 	Identifier   string `json:"identifier"`
-	// InvitedBy is the user id that created the invitation — the same value the
-	// HTTP adapter enforces cancel/resend access on. It is an identifier, never a
-	// token or secret, and it is what lets a resource list distinguish the rows the
-	// current admin owns (and may cancel/resend) from another admin's rows. The
-	// HTTP adapter enforces issuer access regardless of what a client renders.
+	// InvitedBy is the user id that created the invitation — an identifier, never
+	// a token or secret. Without the invitation resource rule it is the value the
+	// HTTP adapter admits cancel/resend on, so a resource list can distinguish the
+	// rows the current admin may manage; with the rule, any holder of the resource
+	// permission manages every row and InvitedBy is attribution only. The adapter
+	// enforces access regardless of what a client renders.
 	InvitedBy         string `json:"invited_by"`
 	Status            string `json:"status"`
 	AutoAccept        bool   `json:"auto_accept"`
@@ -197,9 +199,20 @@ func (h *handlers) createInvitation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	in := prepared.Input()
-	if err := h.checkInvite(r.Context(), InviteCheckRequest{Principal: sdk.Principal{Type: sdk.PrincipalTypeUser, ID: invitedBy}, Action: InviteCreate, ResourceType: in.ResourceType, ResourceID: in.ResourceID, Relation: in.Relation, Metadata: in.Metadata, Identifier: in.Identifier, IdentifierKind: in.IdentifierKind, ResolvedSubjectID: prepared.ResolvedSubjectID()}); err != nil {
-		web.RespondJSONDomainError(w, err)
-		return
+	principal := sdk.Principal{Type: sdk.PrincipalTypeUser, ID: invitedBy}
+	if h.resourceRuleOn() {
+		if err := h.checkResource(r.Context(), principal, in.ResourceType, in.ResourceID); err != nil {
+			web.RespondJSONDomainError(w, err)
+			return
+		}
+	}
+	// With the rule on, InviteCheck is the optional create-only refinement;
+	// without it, InviteCheck is the whole policy.
+	if !h.resourceRuleOn() || h.inviteCheck != nil {
+		if err := h.checkInvite(r.Context(), InviteCheckRequest{Principal: principal, Action: InviteCreate, ResourceType: in.ResourceType, ResourceID: in.ResourceID, Relation: in.Relation, Metadata: in.Metadata, Identifier: in.Identifier, IdentifierKind: in.IdentifierKind, ResolvedSubjectID: prepared.ResolvedSubjectID()}); err != nil {
+			web.RespondJSONDomainError(w, err)
+			return
+		}
 	}
 	res, err := h.inv.CreatePrepared(r.Context(), prepared)
 	if err != nil {
@@ -226,7 +239,12 @@ func (h *handlers) listResourceInvitations(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	resourceType, resourceID := web.Param(r, "resource_type"), web.Param(r, "resource_id")
-	if err := h.checkInvite(r.Context(), InviteCheckRequest{Principal: sdk.Principal{Type: sdk.PrincipalTypeUser, ID: userID}, Action: InviteList, ResourceType: resourceType, ResourceID: resourceID}); err != nil {
+	if h.resourceRuleOn() {
+		if err := h.checkResource(r.Context(), sdk.Principal{Type: sdk.PrincipalTypeUser, ID: userID}, resourceType, resourceID); err != nil {
+			web.RespondJSONDomainError(w, err)
+			return
+		}
+	} else if err := h.checkInvite(r.Context(), InviteCheckRequest{Principal: sdk.Principal{Type: sdk.PrincipalTypeUser, ID: userID}, Action: InviteList, ResourceType: resourceType, ResourceID: resourceID}); err != nil {
 		web.RespondJSONDomainError(w, err)
 		return
 	}
@@ -301,8 +319,8 @@ func (h *handlers) acceptInvitation(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// cancelInvitation cancels a pending invitation the caller owns (session-gated;
-// ownership = InvitedBy == caller).
+// cancelInvitation cancels a pending invitation the caller may administer
+// (session-gated; see prepareInvitationManagement).
 func (h *handlers) cancelInvitation(w http.ResponseWriter, r *http.Request) {
 	userID, ok := h.svc.CurrentUser(r.Context())
 	if !ok {
@@ -320,8 +338,8 @@ func (h *handlers) cancelInvitation(w http.ResponseWriter, r *http.Request) {
 	web.RespondJSONOK(w, map[string]string{"status": "cancelled"})
 }
 
-// resendInvitation regenerates and re-mails a pending invitation the caller owns
-// (session-gated; ownership = InvitedBy == caller).
+// resendInvitation regenerates and re-mails a pending invitation the caller may
+// administer (session-gated; see prepareInvitationManagement).
 func (h *handlers) resendInvitation(w http.ResponseWriter, r *http.Request) {
 	userID, ok := h.svc.CurrentUser(r.Context())
 	if !ok {
@@ -340,8 +358,10 @@ func (h *handlers) resendInvitation(w http.ResponseWriter, r *http.Request) {
 	web.RespondJSONOK(w, newInvitationResponse(inv))
 }
 
-// prepareInvitationManagement admits only the authenticated issuer of the exact
-// loaded target. The prepared value pins the row used by the subsequent mutation.
+// prepareInvitationManagement admits the caller against the exact loaded target:
+// with the resource rule, a holder of the resource's permission (a denial is an
+// indistinguishable 404); without it, only the issuer. The prepared value pins
+// the row used by the subsequent mutation and carries the caller as audit actor.
 func (h *handlers) prepareInvitationManagement(w http.ResponseWriter, r *http.Request, userID string) (invitations.PreparedManagement, bool) {
 	id := web.Param(r, "id")
 	prepared, err := h.inv.PrepareManagement(r.Context(), id)
@@ -349,10 +369,24 @@ func (h *handlers) prepareInvitationManagement(w http.ResponseWriter, r *http.Re
 		web.RespondJSONDomainError(w, err)
 		return invitations.PreparedManagement{}, false
 	}
-	if id == "" || prepared.ID() != id || userID == "" || prepared.InvitedBy() != userID {
+	if id == "" || prepared.ID() != id || userID == "" {
 		web.RespondJSONDomainError(w, sdk.ErrForbidden)
 		return invitations.PreparedManagement{}, false
 	}
+	principal := sdk.Principal{Type: sdk.PrincipalTypeUser, ID: userID}
+	if h.resourceRuleOn() {
+		if err := h.checkResource(r.Context(), principal, prepared.ResourceType(), prepared.ResourceID()); err != nil {
+			if errors.Is(err, sdk.ErrForbidden) {
+				err = sdk.ErrNotFound
+			}
+			web.RespondJSONDomainError(w, err)
+			return invitations.PreparedManagement{}, false
+		}
+	} else if prepared.InvitedBy() != userID {
+		web.RespondJSONDomainError(w, sdk.ErrForbidden)
+		return invitations.PreparedManagement{}, false
+	}
+	prepared = prepared.WithActor(principal)
 	if err := r.Context().Err(); err != nil {
 		web.RespondJSONDomainError(w, err)
 		return invitations.PreparedManagement{}, false

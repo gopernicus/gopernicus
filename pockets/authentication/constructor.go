@@ -118,16 +118,8 @@ func New(repos Repositories, signer cryptids.JWTSigner, runtimeMode environment.
 	if cfg.Granter != nil && repos.Invitations == nil {
 		return nil, ErrInvitationRepoRequired
 	}
-	// Relation-aware host policy is required with invitations (design §6/D3): a
-	// Granter enables invitations, so a nil InviteCheck would leave create/list
-	// unprotected — that fails loudly, not allow-by-default. Wiring InviteCheck with
-	// invitations off is the contradictory-wiring error (the ErrInvitationRepoRequired
-	// posture), so a dead policy never gives false confidence.
-	if cfg.Granter != nil && cfg.InviteCheck == nil {
-		return nil, ErrInviteCheckRequired
-	}
-	if cfg.Granter == nil && cfg.InviteCheck != nil {
-		return nil, ErrInviteCheckWithoutGranter
+	if err := validateInvitationPolicy(cfg); err != nil {
+		return nil, err
 	}
 	// The bundled user-administration routes mount ONLY on an explicit host
 	// authorization decision (CHAU-1.1), and only when the wiring can actually
@@ -559,6 +551,7 @@ func New(repos Repositories, signer cryptids.JWTSigner, runtimeMode environment.
 		inbound.WithInvitations(invSvc),
 		inbound.WithOAuth2(oauthHTTP),
 		inbound.WithInviteCheck(cfg.InviteCheck),
+		inbound.WithInvitationResourceRule(inbound.InvitationResourceRule{Permissions: cfg.ResourcePermissions, Can: cfg.Can}),
 		inbound.WithUserAdminCheck(cfg.UserAdminCheck),
 		inbound.WithAuthenticatorPolicy(inbound.AuthenticatorPolicy{Cookie: cfg.SessionCookie, BrowserLoginPath: cfg.BrowserLoginPath, Limiter: limiter, Logger: cfg.Logger}),
 		inbound.WithListStrategy(listStrategy),
@@ -569,6 +562,35 @@ func New(repos Repositories, signer cryptids.JWTSigner, runtimeMode environment.
 	}
 	return &Components{Authentication: authService, OAuth2: oauthService, Invitations: invSvc, HTTP: adapter, Delivery: deliveryRuntime}, nil
 
+}
+
+// validateInvitationPolicy enforces the invitation-policy matrix. A host policy
+// is required with invitations (design §6/D3): a Granter with neither a complete
+// resource rule nor InviteCheck would leave the routes unprotected — that fails
+// loudly, not allow-by-default. An incomplete or invalid rule is reported first;
+// a policy with invitations off is the contradictory-wiring error, so a dead
+// policy never gives false confidence.
+func validateInvitationPolicy(cfg constructorConfig) error {
+	ruleSet := cfg.Can != nil || len(cfg.ResourcePermissions) > 0
+	if ruleSet {
+		if cfg.Can == nil || len(cfg.ResourcePermissions) == 0 {
+			return ErrInvitationResourceRuleIncomplete
+		}
+		for resourceType, permission := range cfg.ResourcePermissions {
+			if resourceType == "" || permission == "" {
+				return ErrInvitationResourceRuleIncomplete
+			}
+		}
+	}
+	switch {
+	case cfg.Granter != nil && !ruleSet && cfg.InviteCheck == nil:
+		return ErrInviteCheckRequired
+	case cfg.Granter == nil && ruleSet:
+		return ErrInvitationResourceRuleWithoutGranter
+	case cfg.Granter == nil && cfg.InviteCheck != nil:
+		return ErrInviteCheckWithoutGranter
+	}
+	return nil
 }
 
 // userLookup builds the internal email→subject resolver invitation service uses for

@@ -76,12 +76,25 @@ var ErrUserAdminReposRequired = errors.New("auth: AdministrationConfig.UserAdmin
 var ErrPasswordlessProvisionWiring = errors.New("auth: PasswordlessConfig.PasswordlessProvisionOnRedeem requires the email passwordless kind, the atomic challenge rail, a challenge protector, an identifier keyer, a delivery runtime, a valid PublicAuthBaseURL, Repositories.Passwordless, and Repositories.ActiveSessions")
 
 // ErrInviteCheckRequired is returned by New when InvitationsConfig.Granter
-// enables invitations but InvitationsConfig.InviteCheck is nil (design §6/D3). The relation-
-// aware host policy is REQUIRED with invitations — a nil check is never an
-// allow-by-default or a silently unprotected create/list route — so it degrades
-// LOUDLY at construction alongside ErrInvitationRepoRequired, mirroring the
-// Hasher/Mailer required posture.
-var ErrInviteCheckRequired = errors.New("auth: InvitationsConfig.Granter set but InvitationsConfig.InviteCheck is nil")
+// enables invitations but neither the resource rule (ResourcePermissions + Can)
+// nor InviteCheck is wired (design §6/D3). A host policy is REQUIRED with
+// invitations — its absence is never an allow-by-default or a silently
+// unprotected route — so it degrades LOUDLY at construction alongside
+// ErrInvitationRepoRequired, mirroring the Hasher/Mailer required posture.
+var ErrInviteCheckRequired = errors.New("auth: InvitationsConfig.Granter set without a policy: set ResourcePermissions+Can or InviteCheck")
+
+// ErrInvitationResourceRuleIncomplete is returned by New when
+// InvitationsConfig.ResourcePermissions and InvitationsConfig.Can are not wired
+// together, or the map holds an empty resource type or permission. A half-wired
+// rule would either authorize nothing or ask an empty question, so it fails
+// LOUDLY — and before any Granter check, so the partial wiring is what is reported.
+var ErrInvitationResourceRuleIncomplete = errors.New("auth: InvitationsConfig.ResourcePermissions and InvitationsConfig.Can must be wired together, with non-empty resource types and permissions")
+
+// ErrInvitationResourceRuleWithoutGranter is returned by New when a complete
+// invitation resource rule is wired but InvitationsConfig.Granter is nil
+// (invitations off) — the ErrInviteCheckWithoutGranter contradictory-wiring
+// posture, reported even when InviteCheck is also set.
+var ErrInvitationResourceRuleWithoutGranter = errors.New("auth: InvitationsConfig.ResourcePermissions+Can set but InvitationsConfig.Granter is nil (invitations off)")
 
 // ErrInviteCheckWithoutGranter is returned by New when
 // InvitationsConfig.InviteCheck is wired but InvitationsConfig.Granter is nil (invitations off). A

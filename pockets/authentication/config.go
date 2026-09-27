@@ -75,6 +75,8 @@ type constructorConfig struct {
 	RefreshTTL                    time.Duration `env:"AUTH_REFRESH_TTL" default:"168h"`
 	Granter                       invitations.Granter
 	InviteCheck                   inbound.InviteCheck
+	ResourcePermissions           map[string]string
+	Can                           inbound.InvitationCan
 	UserAdminCheck                inbound.UserAdminCheck
 	MemberCheck                   invitations.MemberCheck
 	BodySenders                   map[string]delivery.BodySender
@@ -727,13 +729,25 @@ type InvitationsConfig struct {
 	// AUTHORIZED invitation operations pose — the ones the shipped create/list routes
 	// drive — after live-session validation, principal resolution, request parsing,
 	// metadata validation, identifier normalization, and the invitee lookup, and
-	// before any row exists or a grant is attempted (design §6/D3). It is REQUIRED
-	// whenever Granter enables invitations — nil → ErrInviteCheckRequired at
-	// construction, never an allow-by-default. Wiring it without a Granter
-	// (invitations off) is the contradictory ErrInviteCheckWithoutGranter. A nil
-	// return authorizes; a denial or infrastructure error fails closed through the
-	// normal web/sdk mapping.
+	// before any row exists or a grant is attempted (design §6/D3). With the
+	// resource rule (ResourcePermissions + Can) it is the OPTIONAL create-only
+	// refinement, run after Can allows — wire it whenever managers may not issue
+	// every relation, metadata value, or invitee the Granter accepts. Without the
+	// rule it is the whole create/list policy: Granter with neither policy →
+	// ErrInviteCheckRequired at construction, never an allow-by-default. Wiring it
+	// without a Granter (invitations off) is the contradictory
+	// ErrInviteCheckWithoutGranter. A nil return authorizes; a denial or
+	// infrastructure error fails closed through the normal web/sdk mapping.
 	InviteCheck inbound.InviteCheck
+	// ResourcePermissions maps an invitable resource type to the permission a
+	// principal must hold ON THAT RESOURCE to administer its invitations (create,
+	// list, resend, cancel — whoever issued them). A type absent from the map is not
+	// invitable (refused before any check). Wired together with Can; either alone,
+	// or an empty key or permission, is ErrInvitationResourceRuleIncomplete.
+	ResourcePermissions map[string]string
+	// Can answers "does principal hold permission on (resourceType, resourceID)?".
+	// The host adapts its authorizer. An error fails closed.
+	Can inbound.InvitationCan
 	// MemberCheck is the optional duplicate-membership predicate for the direct-add
 	// path (known invitee + AutoAccept). Nil → no dup check (idempotent grants
 	// absorb duplicates). Meaningful only when Granter is wired.
@@ -745,6 +759,8 @@ func WithInvitations(value InvitationsConfig) Option {
 	return func(c *constructorConfig) {
 		c.Granter = value.Granter
 		c.InviteCheck = value.InviteCheck
+		c.ResourcePermissions = maps.Clone(value.ResourcePermissions)
+		c.Can = value.Can
 		c.MemberCheck = value.MemberCheck
 	}
 }
