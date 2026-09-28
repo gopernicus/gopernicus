@@ -168,3 +168,27 @@ func TestBrowserOptionReuseAndReplacement(t *testing.T) {
 		t.Fatalf("authenticator nil option: %v", err)
 	}
 }
+
+// TestProductionRefusesHTTPOriginNamespace mirrors the Secure-cookie rule: an http
+// namespace lets a network attacker speak for any label, so production
+// construction fails; development accepts it for local subdomain setups.
+func TestProductionRefusesHTTPOriginNamespace(t *testing.T) {
+	policy, err := web.NewOriginPolicy(web.OriginPolicyConfig{Namespaces: []web.OriginNamespace{
+		{Scheme: "http", Suffix: "localtest.me", Ports: []int{5173}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := newServiceWithFakes(authenticationFixture{})
+	if _, err := New(service.Service, environment.ModeDevelopment,
+		WithBrowser(BrowserConfig{OriginPolicy: policy}),
+		WithAuthenticatorPolicy(AuthenticatorPolicy{})); err != nil {
+		t.Fatalf("development: err=%v, want nil", err)
+	}
+	_, err = New(service.Service, environment.ModeProduction,
+		WithBrowser(BrowserConfig{OriginPolicy: policy}),
+		WithAuthenticatorPolicy(AuthenticatorPolicy{}))
+	if !errors.Is(err, sdk.ErrInvalidInput) || !strings.Contains(err.Error(), "http namespace") {
+		t.Fatalf("production: err=%v, want http-namespace sdk.ErrInvalidInput", err)
+	}
+}

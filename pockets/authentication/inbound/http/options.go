@@ -15,6 +15,7 @@ type Option func(*adapterConfig)
 type BrowserConfig struct {
 	RefreshCookiePath string
 	AllowedOrigins    []string
+	OriginPolicy      web.OriginPolicy
 	Views             Views
 	HTMLPolicy        *HTMLResourcePolicy
 }
@@ -26,6 +27,7 @@ func WithBrowser(value BrowserConfig) Option {
 		value := cloneBrowserConfig(value)
 		c.RefreshCookiePath = value.RefreshCookiePath
 		c.AllowedOrigins = value.AllowedOrigins
+		c.OriginPolicy = value.OriginPolicy
 		c.Views = value.Views
 		c.HTMLPolicy = value.HTMLPolicy
 	}

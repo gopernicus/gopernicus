@@ -43,6 +43,7 @@ type constructorConfig struct {
 	BrowserLoginPath              string   `env:"AUTH_BROWSER_LOGIN_PATH"`
 	RequireVerifiedEmail          bool     `env:"AUTH_REQUIRE_VERIFIED_EMAIL"`
 	PasswordFlowsDisabled         bool     `env:"AUTH_PASSWORD_FLOWS_DISABLED"`
+	OriginPolicy                  web.OriginPolicy
 	MachineRoutesGate             web.Middleware
 	BundledRouteAuth              inbound.BundledRouteAuthentication
 	RuntimeMode                   environment.Mode `env:"AUTH_RUNTIME_MODE"`
@@ -643,6 +644,17 @@ type BrowserConfig struct {
 	// disallowed Origin; bearer-only (API) callers skip the gate entirely.
 	// (env: AUTH_ALLOWED_ORIGINS, comma-separated)
 	AllowedOrigins []string `env:"AUTH_ALLOWED_ORIGINS"`
+	// OriginPolicy admits browser origins IN ADDITION to AllowedOrigins, at the
+	// same three gates (browser-safe mutations, credential establishment, HTML
+	// form posts): a request passes when either admits its Origin. It carries
+	// exact origins and one-label namespace rules ("https://*.clients.example.com"),
+	// so adding a client subdomain needs no config edit. Build it once with
+	// web.NewOriginPolicy and hand the same value to web.CORSConfig.OriginPolicy
+	// so CORS and CSRF admission cannot drift. The zero value admits nothing. It is
+	// admission only: it grants nothing, and every label under a namespace gets
+	// the power of an exact origin (see web.OriginPolicy for the trust model).
+	// A policy with an http namespace fails construction in production mode.
+	OriginPolicy web.OriginPolicy
 	// BrowserLoginPath is the login destination the browser identity gates
 	// (any authenticator carrying Browser()) 303 to on an
 	// authentication denial (design §9.2). Empty (default) → "/auth/login". A non-empty
@@ -701,6 +713,7 @@ func WithBrowser(value BrowserConfig) Option {
 		c.SessionCookie = value.SessionCookie
 		c.RefreshCookiePath = value.RefreshCookiePath
 		c.AllowedOrigins = value.AllowedOrigins
+		c.OriginPolicy = value.OriginPolicy
 		c.BrowserLoginPath = value.BrowserLoginPath
 		c.BundledRouteAuth = value.BundledRouteAuth
 		c.Views = value.Views

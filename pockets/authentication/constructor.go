@@ -547,7 +547,7 @@ func New(repos Repositories, signer cryptids.JWTSigner, runtimeMode environment.
 	}
 	adapter, err := inbound.New(authService,
 		cfg.RuntimeMode,
-		inbound.WithBrowser(inbound.BrowserConfig{RefreshCookiePath: cfg.RefreshCookiePath, AllowedOrigins: cfg.AllowedOrigins, Views: cfg.Views, HTMLPolicy: cfg.HTMLPolicy}),
+		inbound.WithBrowser(inbound.BrowserConfig{RefreshCookiePath: cfg.RefreshCookiePath, AllowedOrigins: cfg.AllowedOrigins, OriginPolicy: cfg.OriginPolicy, Views: cfg.Views, HTMLPolicy: cfg.HTMLPolicy}),
 		inbound.WithInvitations(invSvc),
 		inbound.WithOAuth2(oauthHTTP),
 		inbound.WithInviteCheck(cfg.InviteCheck),
