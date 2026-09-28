@@ -18,7 +18,7 @@ import (
 // are still refused.
 func TestBrowserOriginPolicyReachesMountedGates(t *testing.T) {
 	policy, err := web.NewOriginPolicy(web.OriginPolicyConfig{Namespaces: []web.OriginNamespace{
-		{Scheme: "https", Suffix: "flight.example.com", Reserved: []string{"api"}},
+		{Scheme: "https", Suffix: "flight.example.com", Ports: []int{443, 8443}, Reserved: []string{"api"}},
 	}})
 	if err != nil {
 		t.Fatal(err)
@@ -43,11 +43,14 @@ func TestBrowserOriginPolicyReachesMountedGates(t *testing.T) {
 		want   int
 	}{
 		{"https://acme.flight.example.com", http.StatusOK},
+		{"https://acme.flight.example.com:8443", http.StatusOK},
 		{"https://app.example.com", http.StatusOK},
 		{"https://api.flight.example.com", http.StatusForbidden},
 		{"https://a.b.flight.example.com", http.StatusForbidden},
 		{"https://evilflight.example.com", http.StatusForbidden},
 		{"https://acme.flight.example.com.evil.com", http.StatusForbidden},
+		{"https://[acme.flight.example.com]", http.StatusForbidden},
+		{"https://[acme.flight.example.com]:8443", http.StatusForbidden},
 	}
 	for _, tt := range tests {
 		t.Run(tt.origin, func(t *testing.T) {

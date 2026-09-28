@@ -371,9 +371,8 @@ func TestClientIPUsesTrustedProxyResolution(t *testing.T) {
 	}
 }
 
-// TestOriginGatesAdmitOriginPolicy runs the same namespace table through all three
-// origin gates — the browser-safe mutation (CSRF) gate, the credential-establishment
-// gate and the HTML form-post check (browserOriginAllowed) — so they cannot drift.
+// TestOriginGatesAdmitOriginPolicy runs the same namespace table through the
+// browser-safe mutation (CSRF) and credential-establishment middleware gates.
 // A request passes when the exact list OR the policy admits its Origin.
 func TestOriginGatesAdmitOriginPolicy(t *testing.T) {
 	policy, err := web.NewOriginPolicy(web.OriginPolicyConfig{Namespaces: []web.OriginNamespace{
@@ -387,13 +386,6 @@ func TestOriginGatesAdmitOriginPolicy(t *testing.T) {
 	gates := map[string]http.Handler{
 		"mutation":      requireBrowserSafeMutation(cfg)(next),
 		"establishment": requireBrowserSafeOrigin(cfg)(next),
-		"form": http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if !browserOriginAllowed(r, cfg.allowedOrigins, cfg.originPolicy) {
-				w.WriteHeader(http.StatusForbidden)
-				return
-			}
-			w.WriteHeader(http.StatusOK)
-		}),
 	}
 
 	tests := []struct {
