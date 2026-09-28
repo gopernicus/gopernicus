@@ -1,0 +1,67 @@
+{
+  "date": "2026-09-28",
+  "issue": 53,
+  "sdk": {
+    "Path": "github.com/gopernicus/gopernicus/sdk",
+    "Version": "v0.10.0",
+    "Sum": "h1:2Olg4g71pOAij0mz+mBGe+meXWreQW268bTPXp+wkSs=",
+    "GoModSum": "h1:z0bypQiCybwPoxoDfzhYvB1BtH2av549QR84GacngaE=",
+    "Origin": {
+      "VCS": "git",
+      "URL": "https://github.com/gopernicus/gopernicus",
+      "Subdir": "sdk",
+      "Hash": "fb2e8cd0e3b8b8dc4ecc28ae8c2acb53d603d60d",
+      "Ref": "refs/tags/sdk/v0.10.0"
+    }
+  },
+  "sdk_pr": 55,
+  "sdk_ci": [
+    "https://github.com/gopernicus/gopernicus/actions/runs/36490548991",
+    "https://github.com/gopernicus/gopernicus/actions/runs/36490545165"
+  ],
+  "authentication": {
+    "status": "pending",
+    "Version": "v0.16.0",
+    "pr": 56
+  },
+  "verification": [
+    "SDK regressions red before fix, green after",
+    "SDK module build/test/vet",
+    "SDK make check on PR head and exact main merge commit",
+    "Authentication independent uncached module build/test/vet before repin",
+    "Real HTTP bracketed-origin rejection",
+    "Mounted HTML login and TLS cookie/CSRF password-change flows",
+    "SDK cold public consumer build/test, published module tests and go mod verify",
+    "Authentication GOWORK=off build, uncached full module tests and vet against sdk v0.10.0"
+  ],
+  "unverified": [
+    "Browser automation",
+    "Live PostgreSQL, Turso and Firestore services"
+  ],
+  "changed_files": [
+    "ARCHITECTURE.md",
+    "RELEASING.md",
+    "plans/origin-namespace-policy-release-manifest.json",
+    "plans/origin-namespace-policy.md",
+    "pockets/authentication/README.md",
+    "pockets/authentication/config.go",
+    "pockets/authentication/constructor.go",
+    "pockets/authentication/constructor_fixture_test.go",
+    "pockets/authentication/go.mod",
+    "pockets/authentication/go.sum",
+    "pockets/authentication/inbound/http/adapter.go",
+    "pockets/authentication/inbound/http/adapter_test.go",
+    "pockets/authentication/inbound/http/csrf_bootstrap_test.go",
+    "pockets/authentication/inbound/http/forms.go",
+    "pockets/authentication/inbound/http/options.go",
+    "pockets/authentication/inbound/http/origin_policy_forms_test.go",
+    "pockets/authentication/inbound/http/security.go",
+    "pockets/authentication/inbound/http/security_test.go",
+    "pockets/authentication/origin_policy_test.go",
+    "sdk/pkg/web/middleware.go",
+    "sdk/pkg/web/middleware_test.go",
+    "sdk/pkg/web/origin_policy.go",
+    "sdk/pkg/web/origin_policy_example_test.go",
+    "sdk/pkg/web/origin_policy_test.go"
+  ]
+}
