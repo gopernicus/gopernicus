@@ -48,6 +48,8 @@ func TestOriginPolicy_AllowsRequest(t *testing.T) {
 		{"exact entry", []string{"http://localhost:5173"}, true},
 		{"reserved label admitted by exact entry", []string{"https://accounts.flight.deck.example.com"}, true},
 		{"explicit allowed port", []string{"https://acme.staging.example.com:8443"}, true},
+		{"bracketed namespace host", []string{"https://[acme.flight.deck.example.com]"}, false},
+		{"bracketed namespace host with allowed port", []string{"https://[acme.staging.example.com]:8443"}, false},
 
 		{"missing origin", nil, false},
 		{"repeated origin", []string{"https://acme.flight.deck.example.com", "https://acme.flight.deck.example.com"}, false},
@@ -98,6 +100,34 @@ func TestOriginPolicy_ZeroValueAdmitsNothing(t *testing.T) {
 	}
 }
 
+func TestOriginPolicy_ExactIPOrigins(t *testing.T) {
+	p, err := NewOriginPolicy(OriginPolicyConfig{Exact: []string{
+		"https://127.0.0.1", "https://127.0.0.1:8443",
+		"https://[2001:db8::1]", "https://[2001:db8::1]:8443",
+		"https://[::ffff:127.0.0.1]",
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for origin, want := range map[string]bool{
+		"https://127.0.0.1":          true,
+		"https://127.0.0.1:8443":     true,
+		"https://[2001:db8::1]":      true,
+		"https://[2001:DB8::1]:8443": true,
+		"https://[::ffff:127.0.0.1]": true,
+		"https://[127.0.0.1]":        false,
+		"https://[127.0.0.1]:8443":   false,
+		"https://[2001:db8::2]":      false,
+		"https://[2001:db8::1]:9443": false,
+	} {
+		t.Run(origin, func(t *testing.T) {
+			if got := p.AllowsRequest(originRequest(origin)); got != want {
+				t.Errorf("AllowsRequest(%q) = %v, want %v", origin, got, want)
+			}
+		})
+	}
+}
+
 func TestOriginPolicy_IgnoresForwardedHeaders(t *testing.T) {
 	p := testOriginPolicy(t)
 	r := originRequest("https://evil.com")
@@ -117,6 +147,12 @@ func TestNewOriginPolicy_Rejects(t *testing.T) {
 		{"exact with path", OriginPolicyConfig{Exact: []string{"https://app.example.com/"}}},
 		{"exact with trailing dot", OriginPolicyConfig{Exact: []string{"https://app.example.com."}}},
 		{"exact null", OriginPolicyConfig{Exact: []string{"null"}}},
+		{"bracketed DNS exact", OriginPolicyConfig{Exact: []string{"https://[app.example.com]"}}},
+		{"bracketed DNS exact with port", OriginPolicyConfig{Exact: []string{"https://[app.example.com]:8443"}}},
+		{"bracketed IPv4 exact", OriginPolicyConfig{Exact: []string{"https://[127.0.0.1]"}}},
+		{"bracketed IPv4 exact with port", OriginPolicyConfig{Exact: []string{"https://[127.0.0.1]:8443"}}},
+		{"malformed IPv6 exact", OriginPolicyConfig{Exact: []string{"https://[2001:db8:::1]"}}},
+		{"malformed IPv6 exact with port", OriginPolicyConfig{Exact: []string{"https://[2001:db8:::1]:8443"}}},
 		{"bad scheme", OriginPolicyConfig{Namespaces: []OriginNamespace{{Scheme: "ftp", Suffix: "example.com"}}}},
 		{"single-label suffix", OriginPolicyConfig{Namespaces: []OriginNamespace{{Scheme: "https", Suffix: "com"}}}},
 		{"wildcard suffix", OriginPolicyConfig{Namespaces: []OriginNamespace{{Scheme: "https", Suffix: "*.example.com"}}}},

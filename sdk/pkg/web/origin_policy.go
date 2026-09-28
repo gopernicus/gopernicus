@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/netip"
 	"slices"
 	"strconv"
 	"strings"
@@ -246,6 +247,12 @@ func parseOrigin(s string) (origin, bool) {
 		}
 	} else if strings.Contains(rest, ":") {
 		return origin{}, false
+	}
+	if strings.HasPrefix(rest, "[") {
+		ip, err := netip.ParseAddr(o.host)
+		if err != nil || !ip.Is6() {
+			return origin{}, false
+		}
 	}
 	if o.host == "" || strings.HasSuffix(o.host, ".") || strings.ContainsAny(o.host, "[]") {
 		return origin{}, false

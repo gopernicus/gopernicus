@@ -314,9 +314,12 @@ func TestNoStore_HandlerCanOverride(t *testing.T) {
 }
 
 func TestCORSWithConfig_OriginPolicy(t *testing.T) {
-	policy, err := NewOriginPolicy(OriginPolicyConfig{Namespaces: []OriginNamespace{
-		{Scheme: "https", Suffix: "flight.example.com", Reserved: []string{"api"}},
-	}})
+	policy, err := NewOriginPolicy(OriginPolicyConfig{
+		Exact: []string{"https://[2001:db8::1]", "https://[2001:db8::1]:8443"},
+		Namespaces: []OriginNamespace{
+			{Scheme: "https", Suffix: "flight.example.com", Ports: []int{443, 8443}, Reserved: []string{"api"}},
+		},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -330,12 +333,22 @@ func TestCORSWithConfig_OriginPolicy(t *testing.T) {
 		wantCode  int
 	}{
 		{"namespace match is credentialed", nil, http.MethodGet, "https://Acme.flight.example.com", "https://Acme.flight.example.com", "true", 200},
+		{"allowed port is credentialed", nil, http.MethodGet, "https://acme.flight.example.com:8443", "https://acme.flight.example.com:8443", "true", 200},
+		{"bracketed DNS refused", nil, http.MethodGet, "https://[acme.flight.example.com]", "", "", 200},
+		{"bracketed DNS with allowed port refused", nil, http.MethodGet, "https://[acme.flight.example.com]:8443", "", "", 200},
+		{"IPv6 exact is credentialed", nil, http.MethodGet, "https://[2001:db8::1]", "https://[2001:db8::1]", "true", 200},
+		{"IPv6 exact with port is credentialed", nil, http.MethodGet, "https://[2001:db8::1]:8443", "https://[2001:db8::1]:8443", "true", 200},
 		{"policy wins over wildcard", []string{"*"}, http.MethodGet, "https://acme.flight.example.com", "https://acme.flight.example.com", "true", 200},
 		{"wildcard still uncredentialed off-policy", []string{"*"}, http.MethodGet, "https://other.example.com", "https://other.example.com", "", 200},
 		{"exact list still credentialed", []string{"https://app.example.com"}, http.MethodGet, "https://app.example.com", "https://app.example.com", "true", 200},
 		{"reserved label refused", nil, http.MethodGet, "https://api.flight.example.com", "", "", 200},
 		{"lookalike refused", nil, http.MethodGet, "https://acme.flight.example.com.evil.com", "", "", 200},
 		{"preflight match", nil, http.MethodOptions, "https://acme.flight.example.com", "https://acme.flight.example.com", "true", 204},
+		{"preflight allowed port", nil, http.MethodOptions, "https://acme.flight.example.com:8443", "https://acme.flight.example.com:8443", "true", 204},
+		{"preflight bracketed DNS refused", nil, http.MethodOptions, "https://[acme.flight.example.com]", "", "", 204},
+		{"preflight bracketed DNS with allowed port refused", nil, http.MethodOptions, "https://[acme.flight.example.com]:8443", "", "", 204},
+		{"preflight IPv6 exact", nil, http.MethodOptions, "https://[2001:db8::1]", "https://[2001:db8::1]", "true", 204},
+		{"preflight IPv6 exact with port", nil, http.MethodOptions, "https://[2001:db8::1]:8443", "https://[2001:db8::1]:8443", "true", 204},
 		{"preflight miss", nil, http.MethodOptions, "https://a.b.flight.example.com", "", "", 204},
 	}
 	for _, tt := range tests {
