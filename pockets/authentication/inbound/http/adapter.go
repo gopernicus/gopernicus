@@ -30,6 +30,7 @@ type adapterConfig struct {
 	RefreshCookiePath string
 	ListStrategy      list.Strategy
 	AllowedOrigins    []string
+	OriginPolicy      web.OriginPolicy
 	Views             Views
 	HTMLPolicy        *HTMLResourcePolicy
 	MachineGate       web.Middleware
@@ -69,6 +70,9 @@ func New(service AuthenticationService, runtimeMode environment.Mode, opts ...Op
 	if cfg.HTMLPolicy != nil && nilDependency(cfg.Views) {
 		return nil, fmt.Errorf("authentication HTTP: HTMLPolicy requires Views: %w", sdk.ErrInvalidInput)
 	}
+	if runtimeMode == environment.ModeProduction && cfg.OriginPolicy.HasHTTPNamespace() {
+		return nil, fmt.Errorf("authentication HTTP: production OriginPolicy must not admit an http namespace: %w", sdk.ErrInvalidInput)
+	}
 	if cfg.MachineGate != nil && !cfg.Authentication.MachineEnabled() {
 		return nil, fmt.Errorf("authentication HTTP: machine gate requires machine service: %w", sdk.ErrInvalidInput)
 	}
@@ -105,7 +109,7 @@ func New(service AuthenticationService, runtimeMode environment.Mode, opts ...Op
 		InviteCheck: cfg.InviteCheck, ResourceRule: cfg.ResourceRule, UserAdminCheck: cfg.UserAdminCheck, OAuth2: cfg.OAuth2,
 		Auth:        &routedService{AuthenticationService: cfg.Authentication, Adapter: auth},
 		Invitations: inv, ListStrategy: cfg.ListStrategy,
-		Mutation: MutationSecurity{AllowedOrigins: append([]string(nil), cfg.AllowedOrigins...), SessionCookieName: auth.SessionCookieName()},
+		Mutation: MutationSecurity{AllowedOrigins: append([]string(nil), cfg.AllowedOrigins...), OriginPolicy: cfg.OriginPolicy, SessionCookieName: auth.SessionCookieName()},
 		Views:    views, HTMLPolicy: snapshotHTMLPolicy(cfg.HTMLPolicy), MachineGate: cfg.MachineGate,
 		RouteAuth: resolveBundledRouteAuth(cfg.RouteAuth, auth),
 	}

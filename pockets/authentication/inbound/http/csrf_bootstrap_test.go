@@ -41,6 +41,11 @@ const (
 // CORS-allowed so a browser can actually read the pocket's own origin denial.
 func newCSRFHandler(t *testing.T) *web.WebHandler {
 	t.Helper()
+	return newCSRFHandlerWithOrigins(t, []string{spaOrigin}, web.OriginPolicy{})
+}
+
+func newCSRFHandlerWithOrigins(t *testing.T, allowedOrigins []string, policy web.OriginPolicy) *web.WebHandler {
+	t.Helper()
 	users := newMemUsers()
 	identifiers := newMemIdentifiers(users)
 	passwords := &memPasswords{m: map[string]string{}}
@@ -67,11 +72,13 @@ func newCSRFHandler(t *testing.T) *web.WebHandler {
 	})
 	h := web.NewWebHandler()
 	h.Use(web.CORSWithConfig(web.CORSConfig{
-		AllowedOrigins: []string{spaOrigin, corsOnlyOrigin},
+		AllowedOrigins: append([]string{corsOnlyOrigin}, allowedOrigins...),
+		OriginPolicy:   policy,
 		AllowedHeaders: []string{"Accept", "Content-Type", "Authorization", csrfHeaderName},
 	}))
 	mount(h, mountDeps{Auth: svc, Mutation: MutationSecurity{
-		AllowedOrigins:    []string{spaOrigin},
+		AllowedOrigins:    allowedOrigins,
+		OriginPolicy:      policy,
 		SessionCookieName: svc.SessionCookieName(),
 	}})
 	return h
@@ -120,7 +127,23 @@ func bootstrapToken(t *testing.T, body []byte) string {
 // browser-safe mutation with the session cookie, the returned CSRF cookie, and the
 // X-CSRF-Token echo header.
 func TestCSRFBootstrapCrossOriginSPAFlow(t *testing.T) {
-	srv := httptest.NewTLSServer(newCSRFHandler(t))
+	policy, err := web.NewOriginPolicy(web.OriginPolicyConfig{Namespaces: []web.OriginNamespace{
+		{Scheme: "https", Suffix: "example.com", Reserved: []string{"other"}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Run("exact list", func(t *testing.T) {
+		testCSRFBootstrapSPAFlow(t, newCSRFHandler(t))
+	})
+	t.Run("namespace policy", func(t *testing.T) {
+		testCSRFBootstrapSPAFlow(t, newCSRFHandlerWithOrigins(t, nil, policy))
+	})
+}
+
+func testCSRFBootstrapSPAFlow(t *testing.T, h http.Handler) {
+	t.Helper()
+	srv := httptest.NewTLSServer(h)
 	defer srv.Close()
 
 	jar, err := cookiejar.New(nil)

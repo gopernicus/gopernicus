@@ -84,7 +84,7 @@ func safeRelativePath(p string) string {
 // renders a generic 403 page on rejection. The passwordless routes already carry the
 // same policy as route middleware, so their form handlers skip this call.
 func (h *handlers) formOriginOK(w http.ResponseWriter, r *http.Request) bool {
-	if browserOriginAllowed(r, h.mutation.AllowedOrigins) {
+	if browserOriginAllowed(r, h.mutation.AllowedOrigins, h.mutation.OriginPolicy) {
 		return true
 	}
 	h.renderError(w, r, http.StatusForbidden, "That request looked cross-site and was blocked. Please try again.")

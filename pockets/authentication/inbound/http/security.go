@@ -57,26 +57,30 @@ var randRead = rand.Read
 
 // csrfConfig configures the browser-safe-mutation gate. allowedOrigins is the
 // exact-match Origin allowlist (a "*" entry never authorizes a credentialed
-// cross-origin mutation); sessionCookieName is the access cookie whose presence
+// cross-origin mutation); originPolicy admits further origins (exact and
+// one-label namespaces); sessionCookieName is the access cookie whose presence
 // marks a request as cookie-authenticated rather than bearer-only.
 type csrfConfig struct {
 	allowedOrigins    []string
+	originPolicy      web.OriginPolicy
 	sessionCookieName string
 }
 
 // MutationSecurity is the host-facing browser-safe-mutation policy the pocket's
-// Register threads into Mount (design §9.1): the exact-match Origin allowlist and
-// the session cookie name marking a request browser-driven. It is exported so the
+// Register threads into Mount (design §9.1): the exact-match Origin allowlist, the
+// origin policy admitting further origins, and the session cookie name marking a
+// request browser-driven. It is exported so the
 // pocket package can build it from BrowserConfig.AllowedOrigins and the resolved cookie
 // name without exposing the unexported csrfConfig.
 type MutationSecurity struct {
 	AllowedOrigins    []string
+	OriginPolicy      web.OriginPolicy
 	SessionCookieName string
 }
 
 // csrf builds the internal gate config from the host policy.
 func (m MutationSecurity) csrf() csrfConfig {
-	return csrfConfig{allowedOrigins: m.AllowedOrigins, sessionCookieName: m.SessionCookieName}
+	return csrfConfig{allowedOrigins: m.AllowedOrigins, originPolicy: m.OriginPolicy, sessionCookieName: m.SessionCookieName}
 }
 
 // requireBrowserSafeMutation returns middleware that protects a
@@ -94,7 +98,7 @@ func requireBrowserSafeMutation(cfg csrfConfig) web.Middleware {
 				return
 			}
 
-			if !browserOriginAllowed(r, cfg.allowedOrigins) {
+			if !browserOriginAllowed(r, cfg.allowedOrigins, cfg.originPolicy) {
 				forbidOrigin(w)
 				return
 			}
@@ -138,7 +142,7 @@ func requireBrowserSafeMutation(cfg csrfConfig) web.Middleware {
 func requireBrowserSafeOrigin(cfg csrfConfig) web.Middleware {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if !browserOriginAllowed(r, cfg.allowedOrigins) {
+			if !browserOriginAllowed(r, cfg.allowedOrigins, cfg.originPolicy) {
 				forbidOrigin(w)
 				return
 			}
@@ -153,20 +157,21 @@ func requireBrowserSafeOrigin(cfg csrfConfig) web.Middleware {
 // origin under the same registrable domain (evil.example.com vs app.example.com), so
 // an attacker-controlled sibling must still clear the exact Origin allowlist — a
 // same-site request whose Origin is absent or not allowlisted is rejected. cross-site
-// / cross-origin likewise require an allowlisted Origin. A request that carries
+// / cross-origin likewise require an allowlisted Origin. An Origin is allowlisted
+// when the exact list OR the origin policy admits it. A request that carries
 // NEITHER header is a non-browser client and passes (the bearer/body path). It is the
 // shared origin gate behind both the browser-safe-mutation gate (which adds the
 // double-submit CSRF token on top) and the credential-establishment origin gate
 // (which does not).
-func browserOriginAllowed(r *http.Request, allowedOrigins []string) bool {
+func browserOriginAllowed(r *http.Request, allowedOrigins []string, policy web.OriginPolicy) bool {
 	switch r.Header.Get("Sec-Fetch-Site") {
 	case "same-origin":
 		return true
 	case "same-site", "cross-site", "cross-origin":
-		return originAllowed(r.Header.Get("Origin"), allowedOrigins)
+		return originAllowed(r.Header.Get("Origin"), allowedOrigins) || policy.AllowsRequest(r)
 	default:
 		if origin := r.Header.Get("Origin"); origin != "" {
-			return originAllowed(origin, allowedOrigins)
+			return originAllowed(origin, allowedOrigins) || policy.AllowsRequest(r)
 		}
 		return true
 	}

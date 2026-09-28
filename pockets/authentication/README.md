@@ -876,6 +876,56 @@ that clears CORS but not `AllowedOrigins` gets a readable 403 with code
 `origin_rejected` (below) — that is the diagnosable signature of this exact
 misconfiguration.
 
+### Client subdomains — one origin policy for CORS and the origin gates
+
+A host that serves one SPA build on a wildcard of client subdomains
+(`{client}.clients.example.com`) builds one `web.OriginPolicy` at boot and hands
+the SAME value to CORS and to `BrowserConfig.OriginPolicy`, so the two cannot
+drift and a new client needs no config edit:
+
+```go
+clients, err := web.ParseOriginNamespace("https://*.clients.example.com")
+if err != nil {
+    log.Fatal(err)
+}
+clients.Reserved = []string{"accounts", "api", "www"} // fixed hosts, never namespace matches
+
+policy, err := web.NewOriginPolicy(web.OriginPolicyConfig{
+    Exact:      []string{"https://accounts.clients.example.com"},
+    Namespaces: []web.OriginNamespace{clients},
+})
+if err != nil {
+    log.Fatal(err) // fail the boot; a zero policy admits nothing
+}
+
+router.Use(web.CORSWithConfig(web.CORSConfig{
+    OriginPolicy:   policy,
+    AllowedHeaders: []string{"Accept", "Content-Type", "Authorization", "X-CSRF-Token"},
+}))
+authentication.WithBrowser(authentication.BrowserConfig{OriginPolicy: policy /* , ... */})
+```
+
+A namespace admits exactly ONE DNS label before the suffix, on the listed ports
+only (default: the scheme's default port). The request `Origin` is parsed
+strictly — null, repeated, malformed, userinfo/path/query/fragment, trailing-dot,
+extra-label, lookalike and unexpected-port values are refused. `OriginPolicy`
+admits IN ADDITION to `AllowedOrigins` (either one admitting is enough). It is
+admission only: the host still resolves the label to a tenant and authorizes
+separately. A policy with an `http` namespace fails construction in production.
+
+**Trust model — read before enabling.** Every label under the suffix gets the
+power of an exact origin: credentialed CORS reads (including `GET /auth/csrf`)
+and passage through the mutation and credential-establishment gates.
+
+- The suffix must be a zone the host fully controls. There is no public-suffix
+  check, so a shared suffix (`*.github.io`, `*.vercel.app`) would admit strangers.
+- A dangling CNAME, a label pointed at a third-party service, or script injection
+  on ANY client label compromises the whole namespace. Audit DNS for takeovers.
+- `Reserved` is a deny-list and fails open: list every label that is not one of
+  your client deployments.
+- Keep the session cookie host-only. Never combine a namespace with a
+  `Domain`-scoped session cookie: a compromised label could then read it.
+
 ## HTML surface (Views) — the optional presentation tier
 
 `BrowserConfig.Views == nil` (the default) → **API-only**: no HTML GET page or form
@@ -1333,6 +1383,7 @@ store upgrade is needed.
 | `Passwordless []string` | empty → passwordless OFF (routes not registered). Allowed v3 kinds are `"email"`/`"phone"` (`ErrPasswordlessKindInvalid`); each needs a wired delivery channel (`ErrPasswordlessKindUnsupported`), the challenge rail + durable outbox, and a valid `PublicAuthBaseURL`. Provisioning is OFF by default and opt-in per `PasswordlessProvisionOnRedeem` (email links only — see [Provision-on-consumption](#provision-on-consumption--magic-links-for-addresses-with-no-account)); NEVER enables phone+password (phone stays passwordless-only). |
 | `PasswordlessProvisionOnRedeem` | **false (default) → an email magic link sent to an address with no account delivers nothing and creates nothing** — the historical login-only behavior. true → the link is delivered, and the account is created **only when the link is successfully CONSUMED**, never when it is sent. Email links ONLY; never phone, OTP, OAuth, or another identifier kind. Requires the email passwordless kind, the challenge rail + `ChallengeProtector`, an `IdentifierKeyer`, a delivery runtime, a valid `PublicAuthBaseURL`, `Repositories.Passwordless`, and `Repositories.ActiveSessions` — anything missing is `ErrPasswordlessProvisionWiring` at construction. Read the [threat model](#provision-on-consumption--magic-links-for-addresses-with-no-account) before enabling. |
 | `AllowedOrigins []string` | the exact-match `Origin` allowlist for cookie-authenticated sensitive mutations and HTML form posts (design §9.1). `"*"` never authorizes a credentialed cross-origin mutation; empty rejects every cross-site cookie mutation. Bearer-only callers skip the gate. |
+| `OriginPolicy web.OriginPolicy` | admits origins IN ADDITION to `AllowedOrigins` at the same gates: exact origins plus one-label namespace rules (`https://*.clients.example.com`). Zero value admits nothing. Share the same value with `web.CORSConfig.OriginPolicy`. An `http` namespace fails construction in production. Read the [client subdomains](#client-subdomains--one-origin-policy-for-cors-and-the-origin-gates) trust model first. |
 | `BrowserLoginPath string` | the login destination any `RequirePrincipal(Browser())` gate 303s to on denial (`AUTH_BROWSER_LOGIN_PATH`). Empty → `/auth/login`. A non-empty value MUST be a safe root-relative path (leading `/`, no `//` prefix, scheme, backslash, or control character) or construction fails with `ErrBrowserLoginPathInvalid`. Configures ONLY the `Browser()` denial mode; a gate without it keeps its byte-stable JSON 401. |
 | `Views` | **nil → API-only** (no HTML routes, JSON-only POSTs, no templ in the graph). Non-nil → HTML pages mount alongside the unchanged JSON API. The blessed default is the ui/goth adapter `authgoth.New(bundle)` (`pockets/authentication/views/goth`); the override path is embedding its `Views`. |
 | `HTMLPolicy` (*HTMLResourcePolicy) | **nil → the historical asset-free CSP** (script-src nonce-only, no external origins). Non-nil → the same fixed protections plus the policy's validated widening resource directives (script/style/image/font/connect/media/worker), so a selected HTML view can load its assets. Only WIDENS — a policy can never remove a fixed protection. Build with `NewHTMLResourcePolicy` (validates loudly). Set with a nil `Views` → `ErrHTMLPolicyWithoutViews` at construction (contradictory wiring). Technology-neutral — the core imports no templ/`ui/goth`. |

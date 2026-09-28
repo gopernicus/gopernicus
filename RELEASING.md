@@ -1,5 +1,39 @@
 # Releasing gopernicus modules
 
+## Namespace origin policy (sdk v0.10.0; authentication v0.16.0 pending)
+
+SDK `v0.10.0` adds `web.OriginPolicy`: immutable exact origins and one-label
+namespace rules with exhaustive port lists and optional reserved labels. Share
+one policy between `web.CORSConfig.OriginPolicy` and authentication's
+`BrowserConfig.OriginPolicy`. CORS policy matches echo the request Origin with
+credentials and take precedence over `*`. Authentication admits the exact list
+OR the policy at its mutation, credential-establishment and HTML form gates.
+Existing behavior is preserved when the policy is absent; production
+authentication rejects HTTP namespaces.
+
+Every admitted subdomain has the trust of an exact origin. The host must control
+the suffix, audit subdomain takeovers, keep session cookies host-only, and still
+resolve tenants and authorize requests separately. Public-suffix ownership is
+not checked. The parser rejects bracketed DNS/IPv4 and malformed IPv6 hosts;
+valid IPv6 exact origins remain supported.
+
+SDK published 2026-09-28 from PR #55's main merge commit
+`fb2e8cd0e3b8b8dc4ecc28ae8c2acb53d603d60d` as annotated tag `sdk/v0.10.0`.
+Both PR CI runs and `make check` on the merge commit passed. A scratch consumer
+with `GOWORK=off` and an empty module cache downloaded through
+`proxy.golang.org` and `sum.golang.org`; consumer build/runtime tests, all
+published SDK tests and `go mod verify` passed.
+
+Authentication `v0.16.0` is pending PR #56 merge and publication. Its dependency
+now pins SDK `v0.10.0`; no store, schema, example or downstream version is changed.
+The regression suite covers constructors, malformed origins, credentialed CORS
+preflight, mounted HTML login and a TLS cookie-jar flow through login, CSRF
+bootstrap, password change and missing-token rejection. Browser automation and
+live datastore tests were not run for this change.
+
+Plan: [origin-namespace-policy](plans/origin-namespace-policy.md).
+Checksums and provenance: [release manifest](plans/origin-namespace-policy-release-manifest.json).
+
 ## Invitation resource rule (authentication v0.15.0)
 
 Authentication `v0.15.0` (MINOR, additive): who may administer invitations is now

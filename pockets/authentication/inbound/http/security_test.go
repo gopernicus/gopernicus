@@ -370,3 +370,66 @@ func TestClientIPUsesTrustedProxyResolution(t *testing.T) {
 		t.Fatalf("clientIP = %q, want the trusted-proxy-resolved 198.51.100.23", got)
 	}
 }
+
+// TestOriginGatesAdmitOriginPolicy runs the same namespace table through the
+// browser-safe mutation (CSRF) and credential-establishment middleware gates.
+// A request passes when the exact list OR the policy admits its Origin.
+func TestOriginGatesAdmitOriginPolicy(t *testing.T) {
+	policy, err := web.NewOriginPolicy(web.OriginPolicyConfig{Namespaces: []web.OriginNamespace{
+		{Scheme: "https", Suffix: "flight.example.com", Reserved: []string{"accounts", "api"}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := csrfConfig{allowedOrigins: []string{"https://app.example.com"}, originPolicy: policy, sessionCookieName: testSessionCookie}
+	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
+	gates := map[string]http.Handler{
+		"mutation":      requireBrowserSafeMutation(cfg)(next),
+		"establishment": requireBrowserSafeOrigin(cfg)(next),
+	}
+
+	tests := []struct {
+		name   string
+		origin string
+		site   string
+		want   int
+	}{
+		{"namespace label cross-site", "https://acme.flight.example.com", "cross-site", http.StatusOK},
+		{"namespace label same-site", "https://acme.flight.example.com", "same-site", http.StatusOK},
+		{"namespace label no fetch metadata", "https://acme.flight.example.com", "", http.StatusOK},
+		{"uppercase label", "https://ACME.flight.example.com", "cross-site", http.StatusOK},
+		{"exact list still admits", "https://app.example.com", "cross-site", http.StatusOK},
+		{"reserved label", "https://api.flight.example.com", "same-site", http.StatusForbidden},
+		{"extra label", "https://a.b.flight.example.com", "same-site", http.StatusForbidden},
+		{"bare suffix", "https://flight.example.com", "same-site", http.StatusForbidden},
+		{"lookalike prefix", "https://evilflight.example.com", "cross-site", http.StatusForbidden},
+		{"lookalike suffix", "https://acme.flight.example.com.evil.com", "cross-site", http.StatusForbidden},
+		{"trailing dot", "https://acme.flight.example.com.", "cross-site", http.StatusForbidden},
+		{"unexpected port", "https://acme.flight.example.com:8443", "cross-site", http.StatusForbidden},
+		{"http scheme", "http://acme.flight.example.com", "cross-site", http.StatusForbidden},
+		{"null", "null", "cross-site", http.StatusForbidden},
+	}
+	for gate, h := range gates {
+		for _, tt := range tests {
+			t.Run(gate+"/"+tt.name, func(t *testing.T) {
+				r := csrfReq{origin: tt.origin, secFetchSite: tt.site, sessionCookie: true, csrfCookie: "tok", csrfHeader: "tok"}.build()
+				rec := httptest.NewRecorder()
+				h.ServeHTTP(rec, r)
+				if rec.Code != tt.want {
+					t.Fatalf("status = %d, want %d; body=%s", rec.Code, tt.want, rec.Body)
+				}
+			})
+		}
+	}
+
+	t.Run("repeated origin refused by the policy", func(t *testing.T) {
+		r := csrfReq{secFetchSite: "cross-site", sessionCookie: true, csrfCookie: "tok", csrfHeader: "tok"}.build()
+		r.Header.Add("Origin", "https://acme.flight.example.com")
+		r.Header.Add("Origin", "https://acme.flight.example.com")
+		rec := httptest.NewRecorder()
+		gates["mutation"].ServeHTTP(rec, r)
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("status = %d, want 403", rec.Code)
+		}
+	})
+}
