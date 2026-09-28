@@ -152,6 +152,12 @@ type CORSConfig struct {
 	// Access-Control-Expose-Headers. A nil list selects the default
 	// X-Request-ID; an explicit empty list suppresses the header.
 	ExposedHeaders []string
+
+	// OriginPolicy admits origins in addition to AllowedOrigins, including
+	// one-label namespace rules. A policy match is credentialed: the exact
+	// request Origin is echoed with Access-Control-Allow-Credentials, never
+	// "*". The zero value admits nothing.
+	OriginPolicy OriginPolicy
 }
 
 // CORSMiddleware returns middleware that applies CORS headers using an origin
@@ -168,8 +174,9 @@ func CORSMiddleware(origins []string) Middleware {
 // Semantics: a "*" entry matches any origin and echoes the request's Origin
 // back. Because a wildcard-configured origin cannot carry credentials, the
 // Access-Control-Allow-Credentials header is set only for explicit
-// (non-wildcard) allowlist matches. When no configured origin matches the
-// request, no CORS headers are written.
+// (non-wildcard) allowlist matches and OriginPolicy matches, and an
+// OriginPolicy match wins over a "*" entry. When no configured origin matches
+// the request, no CORS headers are written.
 //
 // Vary: Origin is added for every request — matched or not — because the
 // response depends on the request's Origin; an existing Vary value is extended,
@@ -181,6 +188,7 @@ func CORSMiddleware(origins []string) Middleware {
 // when this middleware is installed globally.
 func CORSWithConfig(cfg CORSConfig) Middleware {
 	origins := append([]string(nil), cfg.AllowedOrigins...)
+	policy := cfg.OriginPolicy
 
 	allowedHeaders := corsDefaultAllowedHeaders
 	if cfg.AllowedHeaders != nil {
@@ -196,7 +204,10 @@ func CORSWithConfig(cfg CORSConfig) Middleware {
 			origin := r.Header.Get("Origin")
 			addVary(w.Header(), "Origin")
 
-			allowedOrigin, wildcard := matchOrigin(origins, origin)
+			allowedOrigin, wildcard := origin, false
+			if !policy.AllowsRequest(r) {
+				allowedOrigin, wildcard = matchOrigin(origins, origin)
+			}
 			if allowedOrigin != "" {
 				h := w.Header()
 				h.Set("Access-Control-Allow-Origin", allowedOrigin)
