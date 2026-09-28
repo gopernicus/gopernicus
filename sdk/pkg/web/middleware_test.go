@@ -312,3 +312,55 @@ func TestNoStore_HandlerCanOverride(t *testing.T) {
 		t.Errorf("Cache-Control = %q, want handler override to win", got)
 	}
 }
+
+func TestCORSWithConfig_OriginPolicy(t *testing.T) {
+	policy, err := NewOriginPolicy(OriginPolicyConfig{Namespaces: []OriginNamespace{
+		{Scheme: "https", Suffix: "flight.example.com", Reserved: []string{"api"}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name      string
+		allowed   []string
+		method    string
+		origin    string
+		wantACAO  string
+		wantCreds string
+		wantCode  int
+	}{
+		{"namespace match is credentialed", nil, http.MethodGet, "https://Acme.flight.example.com", "https://Acme.flight.example.com", "true", 200},
+		{"policy wins over wildcard", []string{"*"}, http.MethodGet, "https://acme.flight.example.com", "https://acme.flight.example.com", "true", 200},
+		{"wildcard still uncredentialed off-policy", []string{"*"}, http.MethodGet, "https://other.example.com", "https://other.example.com", "", 200},
+		{"exact list still credentialed", []string{"https://app.example.com"}, http.MethodGet, "https://app.example.com", "https://app.example.com", "true", 200},
+		{"reserved label refused", nil, http.MethodGet, "https://api.flight.example.com", "", "", 200},
+		{"lookalike refused", nil, http.MethodGet, "https://acme.flight.example.com.evil.com", "", "", 200},
+		{"preflight match", nil, http.MethodOptions, "https://acme.flight.example.com", "https://acme.flight.example.com", "true", 204},
+		{"preflight miss", nil, http.MethodOptions, "https://a.b.flight.example.com", "", "", 204},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := CORSWithConfig(CORSConfig{AllowedOrigins: tt.allowed, OriginPolicy: policy})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+			req := httptest.NewRequest(tt.method, "/", nil)
+			req.Header.Set("Origin", tt.origin)
+			if tt.method == http.MethodOptions {
+				req.Header.Set("Access-Control-Request-Method", http.MethodPost)
+			}
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, req)
+
+			if rec.Code != tt.wantCode {
+				t.Errorf("status = %d, want %d", rec.Code, tt.wantCode)
+			}
+			if got := rec.Header().Get("Access-Control-Allow-Origin"); got != tt.wantACAO {
+				t.Errorf("ACAO = %q, want %q", got, tt.wantACAO)
+			}
+			if got := rec.Header().Get("Access-Control-Allow-Credentials"); got != tt.wantCreds {
+				t.Errorf("credentials = %q, want %q", got, tt.wantCreds)
+			}
+			if got := rec.Header().Get("Vary"); got != "Origin" {
+				t.Errorf("Vary = %q, want Origin", got)
+			}
+		})
+	}
+}
