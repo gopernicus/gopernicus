@@ -1,6 +1,6 @@
 # Releasing gopernicus modules
 
-## Namespace origin policy (sdk v0.10.0; authentication v0.16.0 pending)
+## Namespace origin policy (sdk v0.10.0; authentication v0.16.0 — published 2026-09-28)
 
 SDK `v0.10.0` adds `web.OriginPolicy`: immutable exact origins and one-label
 namespace rules with exhaustive port lists and optional reserved labels. Share
@@ -24,8 +24,14 @@ with `GOWORK=off` and an empty module cache downloaded through
 `proxy.golang.org` and `sum.golang.org`; consumer build/runtime tests, all
 published SDK tests and `go mod verify` passed.
 
-Authentication `v0.16.0` is pending PR #56 merge and publication. Its dependency
-now pins SDK `v0.10.0`; no store, schema, example or downstream version is changed.
+Authentication `v0.16.0` published from PR #56's main merge commit
+`d5c962d6e67ef53fbd7f471d7914a5fffb634815` as annotated tag
+`pockets/authentication/v0.16.0`. It pins SDK `v0.10.0`; no store, schema,
+example or downstream version is changed. Standalone build, uncached tests and
+vet passed with `GOWORK=off`, as did both final PR CI runs and `make check` on
+the merge commit. A second scratch consumer with an empty module cache resolved
+both public modules through the normal proxy/checksum database; its build/API
+tests, all published authentication tests and `go mod verify` passed.
 The regression suite covers constructors, malformed origins, credentialed CORS
 preflight, mounted HTML login and a TLS cookie-jar flow through login, CSRF
 bootstrap, password change and missing-token rejection. Browser automation and

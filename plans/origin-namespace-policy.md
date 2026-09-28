@@ -1,6 +1,6 @@
 # Namespace origin policy (sdk/pkg/web + pockets/authentication) — issue #53
 
-Status: SDK RELEASED 2026-09-28; authentication release in progress. Owner requested the review fix, merging PRs #55/#56,
+Status: RELEASED AND VERIFIED 2026-09-28. Both PRs merged and both module tags published. Owner requested the review fix, merging PRs #55/#56,
 and publishing sdk v0.10.0 then authentication v0.16.0. Work runs in isolated clones;
 the original checkout has unrelated user edits that must remain untouched.
 
@@ -187,4 +187,18 @@ Verify per module: `go build ./... && go test ./... && go vet ./...` in `sdk/` a
   build, runtime tests, all published SDK package tests, and go mod verify passed with
   GOWORK=off, GOPROXY=https://proxy.golang.org and GOSUMDB=sum.golang.org.
 - SDK module checksum: h1:2Olg4g71pOAij0mz+mBGe+meXWreQW268bTPXp+wkSs=.
-- Authentication now pins sdk v0.10.0; standalone build, uncached tests and vet passed with GOWORK=off; final release gates are pending.
+- Authentication now pins sdk v0.10.0; standalone build, uncached tests and vet passed with GOWORK=off; final PR CI and make check on the merge commit passed.
+
+### Authentication published; release complete
+
+- PR #56 merged as d5c962d6e67ef53fbd7f471d7914a5fffb634815 after both final CI checks passed.
+- make check passed on that exact merge commit; annotated pockets/authentication/v0.16.0
+  published. Public proxy .info immediately resolved the expected merge commit.
+- Fresh-module-cache consumer built and tested both browser-policy APIs, all published
+  authentication package tests passed, and go mod verify passed. No workspace, replacements,
+  private proxy, or checksum exemptions were used.
+- Authentication module checksum: h1:yYvP1F+a4tjPj/7vsM2HG/Kh3hh3g5FCTL4a+hC3vJ8=.
+- Final changed-file list, public checksums and CI links are in the adjacent release manifest.
+- Unresolved failures: none. Browser automation and live datastore services were not exercised;
+  real HTTP/TLS handlers, in-memory fixtures and cookie jars were exercised.
+- Downstream adoption remains separate: use sdk v0.10.0 and pockets/authentication v0.16.0.
