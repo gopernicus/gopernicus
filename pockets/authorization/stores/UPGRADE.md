@@ -4,7 +4,7 @@ Authorization ships a fresh canonical SQL schema for PostgreSQL and SQLite/Turso
 Hosts export and apply it before constructing repositories. Framework constructors
 validate the applied schema; they do not create tables or run migrations.
 
-## Adopting the operation ledger (v0.23.0 candidate)
+## Adopting the operation ledger (v0.23.0)
 
 Upgrade authorization core with PostgreSQL store `v0.17.0` or Turso store
 `v0.16.0`. SQL hosts using `Repositories` **must apply** the additive
@@ -24,7 +24,7 @@ must stop ledger-dependent acceptance retries before using a ledger-free writer.
 
 Third-party mutation stores must implement atomic operation binding and run the
 new `OperationLedger` conformance family. Calls with an empty OperationID keep
-their prior behavior. Publication is pending; the release record is
+their prior behavior. These versions are published; the release record is
 [the implementation plan](../../../plans/invitation-grant-operation-ledger.md).
 
 ## Adopting the outcome cleanup (v0.22.0)

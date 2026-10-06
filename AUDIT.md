@@ -5537,7 +5537,8 @@ Publication and verification status are in
 
 ## AUDIT-052: Atomic operation ledger and invitation grant recovery
 
-Implemented 2026-10-06; release pending. This narrowly reverses AUDIT-026's
+Implemented and published 2026-10-06: authorization v0.23.0, pgx v0.17.0,
+Turso v0.16.0 and authentication v0.17.0. This narrowly reverses AUDIT-026's
 removal of caller operation identity, payload fingerprints, replay flags and
 request ledger storage. `Mutations.Apply` accepts opt-in `Command.OperationID`;
 typed helpers and empty-ID calls retain their state-based behavior. Revision
