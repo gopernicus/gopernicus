@@ -295,12 +295,36 @@ func TestInvitationReinviteAfterRevokeRestoresTuple(t *testing.T) {
 	if allowed(t, svc, "invitee", demoPermission, demoResourceID) {
 		t.Fatal("view survived the revoke: tuple T was not removed")
 	}
+	if err := g.Grant(ctx, demoGrant("inv-A", "member", "invitee")); !errors.Is(err, invitations.ErrGrantSuperseded) {
+		t.Fatalf("invitation A retry after revoke: want superseded, got %v", err)
+	}
+	if allowed(t, svc, "invitee", demoPermission, demoResourceID) {
+		t.Fatal("invitation A retry restored revoked access")
+	}
 
 	if err := g.Grant(ctx, demoGrant("inv-B", "member", "invitee")); err != nil {
 		t.Fatalf("invitation B grant: %v", err)
 	}
 	if !allowed(t, svc, "invitee", demoPermission, demoResourceID) {
 		t.Fatal("re-invitation after revoke did NOT restore the tuple (the core bug)")
+	}
+}
+
+func TestInvitationGranterChangedCommandResolvesSuperseded(t *testing.T) {
+	comps := hostAuthz(t)
+	ctx := context.Background()
+	if err := seedAuthorization(ctx, comps.Mutations); err != nil {
+		t.Fatal(err)
+	}
+	g, _ := hostGranter(comps.Mutations, resourceKey(demoResourceType, demoResourceID))
+	if err := g.Grant(ctx, demoGrant("inv-mismatch", "member", "invitee")); err != nil {
+		t.Fatal(err)
+	}
+	if err := g.Grant(ctx, demoGrant("inv-mismatch", "owner", "invitee")); !errors.Is(err, invitations.ErrGrantSuperseded) {
+		t.Fatalf("changed invitation: want superseded, got %v", err)
+	}
+	if allowed(t, comps, "invitee", manageAccessPerm, demoResourceID) {
+		t.Fatal("changed invitation escalated invitee to owner")
 	}
 }
 

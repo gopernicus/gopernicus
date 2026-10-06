@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 
@@ -76,10 +77,11 @@ func (r *hostResourceRegistry) remove(resourceType, resourceID string) {
 	delete(r.live, resourceKey(resourceType, resourceID))
 }
 
-// relationshipGranter is the ordinary collaboration posture: it adapts the
+// relationshipGranter is the legacy state-convergent posture: it adapts the
 // trusted application-side RelationshipWriter to auth.Granter. The invitation's
 // OperationID is intentionally unused because this state-convergent path needs no
-// mutation identity or receipt. InviteCheck still decides who may invite; that
+// mutation identity or receipt. An accepting retry can restore revoked access.
+// InviteCheck still decides who may invite; that
 // detached host authorization decision is simply not transactionally coupled to
 // the tuple write. The host also checks resource existence because authentication
 // does not own resource lifecycle.
@@ -137,6 +139,9 @@ type integrityRelationshipGranter struct {
 var _ invitations.Granter = integrityRelationshipGranter{}
 
 func (g integrityRelationshipGranter) Grant(ctx context.Context, in invitations.GrantInput) error {
+	if in.OperationID == "" {
+		return fmt.Errorf("auth-cms: invitation operation ID is required: %w", sdk.ErrInvalidInput)
+	}
 	if g.exists == nil {
 		return fmt.Errorf("auth-cms: integrityRelationshipGranter resource-existence seam is not wired")
 	}
@@ -150,11 +155,25 @@ func (g integrityRelationshipGranter) Grant(ctx context.Context, in invitations.
 	}
 
 	ctx = audit.WithSource(ctx, audit.Source{System: "invitation-acceptance"})
-	_, err = g.system.GrantRelationship(ctx, mutations.GrantRelationshipCommand{
-		ResourceType: in.ResourceType, ResourceID: in.ResourceID, Relation: in.Relation,
-		Subject: relationships.SubjectRef{Type: in.SubjectType, ID: in.SubjectID},
+	result, err := g.system.Apply(ctx, mutations.Command{
+		OperationID: "invitation:" + in.OperationID,
+		Target:      mutations.Target{Kind: mutations.TargetResource, Type: in.ResourceType, ID: in.ResourceID},
+		Operation:   mutations.OpGrant,
+		Relationships: []mutations.RelationshipRow{{
+			Relation: in.Relation,
+			Subject:  relationships.SubjectRef{Type: in.SubjectType, ID: in.SubjectID},
+		}},
 	})
-	return err
+	if errors.Is(err, mutations.ErrOperationMismatch) {
+		return fmt.Errorf("auth-cms: invitation command changed: %w", invitations.ErrGrantSuperseded)
+	}
+	if err != nil {
+		return err
+	}
+	if result.Replayed && result.Superseded {
+		return invitations.ErrGrantSuperseded
+	}
+	return nil
 }
 
 // hostInviteCheck is the relation-aware host authorization policy the authentication

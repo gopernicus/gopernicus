@@ -19,9 +19,9 @@
 // the golang-jwt HS256 integration, security-event audit
 // rows surfaced through a
 // DEFAULT-OFF debug route, and invitations that grant through the authorization
-// engine's relationshipGranter (membership.go) — authorization-v1's FLAGSHIP
-// posture (Z4 commit 2): ordinary invitation-accept writes a real ReBAC tuple
-// via the separately held baseline RelationshipWriter, retiring the A9 toy membership map; the
+// engine's integrityRelationshipGranter (membership.go): invitation acceptance
+// writes a real ReBAC tuple and atomically records its operation ID so a retry
+// cannot restore revoked access. The A9 toy membership map is retired; the
 // memstore-backed engine keeps the host zero-infra (no libsql). The host-local
 // demo routes (demo.go) are gated variously on a resolved principal, an engine
 // Check, a LookupAllResourceIDs enumeration, and a roles-kind HasRole check.
@@ -254,7 +254,6 @@ func run(ctx context.Context, log *slog.Logger) error {
 
 	authorizer := authzComponents.Decisions
 	tupleWriter := authzComponents.Mutations
-	relationshipWriter := authzComponents.RelationshipWriter
 	if err := authzComponents.Register(mount); err != nil {
 		return err
 	}
@@ -273,11 +272,10 @@ func run(ctx context.Context, log *slog.Logger) error {
 	// (AV3-8.6): development posture, bundled templ Views, browser-safe Origin
 	// allowlist, passwordless enablement, magic-link base URL, and every development
 	// secret from a distinct env var. The invitation grant-on-accept seam is the
-	// host-local relationshipGranter over the authorization engine, carrying the host
+	// host-local integrityRelationshipGranter over the authorization operation ledger, carrying the host
 	// resource-existence seam so acceptance against a deleted resource fails loudly.
-	authCfg, err := buildAuthConfig(log, relationshipGranter{
-		writer: relationshipWriter,
-		reader: authzComponents.Relationships,
+	authCfg, err := buildAuthConfig(log, integrityRelationshipGranter{
+		system: tupleWriter,
 		exists: hostResources.Exists,
 	})
 	if err != nil {
