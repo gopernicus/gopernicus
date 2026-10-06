@@ -1,8 +1,8 @@
 # Releasing gopernicus modules
 
-## Invitation grant operation ledger (candidate; not published)
+## Invitation grant operation ledger (published 2026-10-06)
 
-Candidate coordinated MINOR releases: authorization `v0.23.0`, PostgreSQL adapter
+Coordinated MINOR releases: authorization `v0.23.0`, PostgreSQL adapter
 `v0.17.0`, Turso adapter `v0.16.0`, and authentication `v0.17.0`. The ledger is
 opt-in per mutation command; every SQL host using `Repositories` must nevertheless
 apply the additive `0003_iam_operations.sql` before upgrading. Preserve operation
@@ -10,13 +10,30 @@ records across teardown and any restore that preserves retriable invitation clai
 Authentication has no migration: superseded grants finalize acceptance with a
 conflict response, a blocked/superseded security event and no member-added notice.
 
-The reference host demonstrates a completion fault, revocation and 409 recovery
-through real HTTP. Memory, local PostgreSQL, SQLite and HTTP libSQL verification
-passed; hosted Turso and published proxy/checksum verification remain outstanding.
-PRs/tags and dependency repins are pending the owner's release word. Publish and
-poll each `.info` before updating pins/tidying; cold-verify after all four versions
-resolve. Exact implementation evidence and Segovia adoption instructions are in
-[the plan](plans/invitation-grant-operation-ledger.md#implementation-record--2026-10-06).
+Core and authentication are annotated tags at
+`ee4be7e62f5fde5428085ceaac9954a4a5c1d465` (PRs #58 and #59). Adapter tags are at
+`bb46a7d0c390fd496e3f0de026ecab9610443894` (PR #61), pinning public core v0.23.0.
+Both exact tag commits passed the full 42-module `make check` and main CI
+([core/auth](https://github.com/gopernicus/gopernicus/actions/runs/37508561886),
+[adapters](https://github.com/gopernicus/gopernicus/actions/runs/37509878732)).
+All four proxy `.info` records resolved before dependent pins were updated.
+
+Using `GOWORK=off`, an initially empty module/build cache, `proxy.golang.org` and
+`sum.golang.org`, all four public archives matched their tag source byte for byte
+and passed standalone build, uncached tests, vet and `go mod verify`; Turso
+integration-tag vet also passed. No replacements or checksum exemptions were used.
+All 501 prior remote tag refs are unchanged. A standalone public consumer also passed
+race tests, build, vet and checksum verification, exercising memory and SQLite
+revocation/replay plus fresh-handle restart.
+
+The reference host adoption is PR #62. Standalone public-module build, uncached
+full tests and vet passed, including its real TCP completion-fault → revoke →
+409 recovery with accepted list state and absent access. Memory, isolated local
+PostgreSQL, SQLite and HTTP libSQL behavior passed before release. Hosted Turso,
+visual browser automation and production host migration remain unverified.
+
+Checksums and provenance: [release manifest](plans/invitation-grant-operation-ledger-release-manifest.json).
+Exact verification and Segovia adoption instructions: [the plan](plans/invitation-grant-operation-ledger.md#release-record--2026-10-06).
 
 ## Namespace origin policy (sdk v0.10.0; authentication v0.16.0 — published 2026-09-28)
 

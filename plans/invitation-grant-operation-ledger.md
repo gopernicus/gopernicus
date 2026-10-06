@@ -2,9 +2,9 @@
 
 **Status:** RULINGS TAKEN 2026-10-06 (owner, in-session: "ratified to update the plan with your
 recommendations" — R0–R6 all as recommended, recorded under "Rulings"). **Implementation authorized 2026-10-06** by the owner's request to implement this plan.
-Tasks 1–4 and the task 6 handoff are implemented; verification and release preparation
-are recorded below.
-Task 5 publication remains gated on the owner's release word.
+Tasks 1–6 are implemented; four coordinated versions are published.
+The owner authorized tagging and release in-session on 2026-10-06.
+Verification, release provenance and downstream handoff are recorded below.
 Drafted 2026-10-06 from a Segovia upstream request (personal invitations are blocked on it;
 `segovia/.claude/plans/v2-personal-timeline-collaboration.md`, "Durable invitation dependency").
 Reviewed 2026-10-06 by lead-backend-engineer and data-integration-reviewer (both
@@ -435,26 +435,54 @@ Verification commands and results (use
   stores and Goth views. `go vet -tags=integration ./...`: passed in authentication
   Turso/Firestore and authorization goredis; `go vet -tags=integration,live ./...`:
   passed in authentication Firestore. Those downstream live suites were not run.
-- `git diff --check`: passed. Full `make check`, generated-template regeneration,
-  visual browser automation and hosted Firestore/Turso execution were not run.
-  The changed behavior is covered through real HTTP; generated files have no diff.
+- `git diff --check`: passed. Full 42-module `make check` passed on both exact tag
+  commits, including generated-template regeneration, tagged vet and guards;
+  generated files and assets have no diff. Visual browser automation and hosted
+  Firestore/Turso execution were not run. The changed behavior is covered through real HTTP.
 
 Default sandbox test attempts could not bind localhost or write the default Go
 cache; reruns used the writable cache and approved local-socket execution.
-No unresolved code/test failure is currently known. No hosted service, production
-migration, remote PR or release tag has been published. Module pins remain at
-published versions until the planned release/proxy sequence runs; workspace
-verification resolves the candidate sources.
-
-The two isolated test containers created for verification were stopped and removed;
+No unresolved code/test failure is currently known. No hosted service or production
+migration was performed. The two isolated test containers were stopped and removed;
 existing containers were untouched.
 
-Task 5 remains: split the reviewable changes into core → stores and independent
-authentication PRs (with the example adoption after both), merge, obtain the owner's
-release word, publish the four candidate tags, poll their proxy `.info`, update
-store/example module pins, tidy and cold-verify the published archives. Proposed
-tags remain authorization `v0.23.0`, pgx `v0.17.0`, Turso `v0.16.0`, authentication
-`v0.17.0`. Do not describe these versions as published yet.
+### Release record — 2026-10-06
+
+The owner authorized tagging/release after implementation verification. Core and
+SQL implementation were grouped in PR #58 because the new core conformance suite
+requires the matching adapters; authentication shipped independently in PR #59.
+PR #60 was closed after its implementation was included in #58. Adapter public
+core pins shipped in PR #61. Reference-host adoption and public pins are PR #62.
+
+| Module | Published tag | Commit |
+| --- | --- | --- |
+| Authorization | `pockets/authorization/v0.23.0` | `ee4be7e62f5fde5428085ceaac9954a4a5c1d465` |
+| Authentication | `pockets/authentication/v0.17.0` | `ee4be7e62f5fde5428085ceaac9954a4a5c1d465` |
+| PostgreSQL adapter | `pockets/authorization/stores/pgx/v0.17.0` | `bb46a7d0c390fd496e3f0de026ecab9610443894` |
+| Turso adapter | `pockets/authorization/stores/turso/v0.16.0` | `bb46a7d0c390fd496e3f0de026ecab9610443894` |
+
+Both exact commits passed local full `make check` and main CI:
+[37508561886](https://github.com/gopernicus/gopernicus/actions/runs/37508561886),
+[37509878732](https://github.com/gopernicus/gopernicus/actions/runs/37509878732).
+The adapter PR's two Linux gates also passed. Each tag's public proxy `.info`
+resolved before dependent tidy/pins. No prior tag was moved: all 501 existing
+remote tag refs are unchanged.
+
+Public verification used `GOWORK=off`, initially empty caches and normal
+`proxy.golang.org`/`sum.golang.org`. Every archive file matched the exact tag
+source; each module passed build, uncached tests, vet and `go mod verify`, plus
+Turso integration-tag vet. No module files drifted from the public archives. A standalone public consumer also passed
+race tests, build, vet and checksum verification, exercising memory and SQLite
+revocation/replay plus fresh-handle restart.
+The example passed standalone build, uncached full tests and vet against those
+public versions. Tidy selected authentication's existing SDK v0.10.0 requirement.
+Checksums, per-file hashes and command receipts are in the
+[release manifest](invitation-grant-operation-ledger-release-manifest.json).
+
+Remaining adoption work belongs to Segovia: apply the selected dialect's 0003,
+pin the published modules, adapt its stable invitation command and exercise the
+failure/revoke/replacement scenarios below. Hosted Turso and visual browser
+verification are unrun; production deployment is separate.
 
 ### Segovia handoff — task 6
 
