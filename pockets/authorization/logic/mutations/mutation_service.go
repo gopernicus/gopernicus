@@ -74,7 +74,8 @@ func (s *Service) Apply(ctx context.Context, cmd Command) (*Result, error) {
 	if cmd.Operation == OpTeardown {
 		return nil, ErrTeardownViaTypedMethod
 	}
-	if len(cmd.Relationships)+len(cmd.Roles)+len(cmd.Tuples.Add)+len(cmd.Tuples.Remove)+len(cmd.Subjects) > s.maxBatchSize {
+	count := len(cmd.Relationships) + len(cmd.Roles) + len(cmd.Tuples.Add) + len(cmd.Tuples.Remove) + len(cmd.Subjects)
+	if cmd.OperationID == "" && count > s.maxBatchSize {
 		return nil, authmodel.ErrEvaluationLimit
 	}
 	if cmd.MaxAffectedRows == 0 || cmd.MaxAffectedRows > s.maxBatchSize {
@@ -83,7 +84,16 @@ func (s *Service) Apply(ctx context.Context, cmd Command) (*Result, error) {
 	if err := cmd.Validate(); err != nil {
 		return nil, err
 	}
-	return s.mutations.Apply(ctx, cmd, semanticValidatorFor(s.model))
+	validate := semanticValidatorFor(s.model)
+	return s.mutations.Apply(ctx, cmd, func(cmd Command) error {
+		if count > s.maxBatchSize {
+			return authmodel.ErrEvaluationLimit
+		}
+		if validate != nil {
+			return validate(cmd)
+		}
+		return nil
+	})
 }
 func semanticValidatorFor(model *decisions.CompiledModel) SemanticValidator {
 	if model == nil {

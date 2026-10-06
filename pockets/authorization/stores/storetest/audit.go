@@ -6,6 +6,7 @@ import (
 	"errors"
 	"reflect"
 	"slices"
+	"sync"
 	"testing"
 
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/audit"
@@ -64,6 +65,37 @@ func RunAudit(t *testing.T, factory func(*testing.T, bool) Repositories) {
 		expectAuditChanges(t, r, func() error { return unassignRole(ctx, r.Tuples, "user", "u", "owner", "doc", "d") }, []audit.Change{removedRelationship(row)})
 		if held, err := r.Tuples.Contains(ctx, row.Tuple()); err != nil || held {
 			t.Fatalf("facade revoke retained duplicate fact: %v/%v", held, err)
+		}
+	})
+	t.Run("OperationLedger", func(t *testing.T) {
+		r := factory(t, true)
+		ctx := audit.WithSource(t.Context(), audit.Source{System: "ledger"})
+		cmd := grant("d", "viewer", "u")
+		cmd.OperationID = "one"
+		const n = 8
+		var wg sync.WaitGroup
+		errs := make(chan error, n)
+		for range n {
+			wg.Go(func() { _, err := r.Mutations.Apply(ctx, cmd, nil); errs <- err })
+		}
+		wg.Wait()
+		close(errs)
+		for err := range errs {
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+		if got := readAudit(t, r.Audit); len(got) != 1 {
+			t.Fatalf("concurrent ledger audit: %+v", got)
+		}
+		if result, err := r.Mutations.Apply(ctx, cmd, nil); err != nil || !result.Replayed {
+			t.Fatalf("replay: %+v %v", result, err)
+		}
+		if got := readAudit(t, r.Audit); len(got) != 1 {
+			t.Fatalf("replay appended audit: %+v", got)
+		}
+		if result, err := r.Mutations.Apply(t.Context(), cmd, nil); result != nil || !errors.Is(err, sdk.ErrInvalidInput) {
+			t.Fatalf("unattributed replay: %+v %v", result, err)
 		}
 	})
 	t.Run("MutationChanges", func(t *testing.T) { specMutationAudit(t, factory(t, true)) })

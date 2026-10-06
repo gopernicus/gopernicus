@@ -86,6 +86,12 @@ func Run(t *testing.T, factory func(t *testing.T, policy mutations.IntegrityPoli
 	t.Run("RawIntegrity", func(t *testing.T) {
 		runRawIntegrity(t, func(t *testing.T) Repositories { return factory(t, mutations.DefaultIntegrityPolicy()) })
 	})
+	t.Run("OperationLedger", func(t *testing.T) {
+		if newRepos(t).Mutations == nil {
+			t.Skip("mutation repository not wired")
+		}
+		runOperationLedger(t, func(t *testing.T) Repositories { return factory(t, mutations.DefaultIntegrityPolicy()) })
+	})
 	t.Run("Mutations", func(t *testing.T) {
 		if newRepos(t).Mutations == nil {
 			t.Skip("mutation repository not wired")

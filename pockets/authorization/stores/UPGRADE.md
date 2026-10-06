@@ -4,6 +4,29 @@ Authorization ships a fresh canonical SQL schema for PostgreSQL and SQLite/Turso
 Hosts export and apply it before constructing repositories. Framework constructors
 validate the applied schema; they do not create tables or run migrations.
 
+## Adopting the operation ledger (v0.23.0 candidate)
+
+Upgrade authorization core with PostgreSQL store `v0.17.0` or Turso store
+`v0.16.0`. SQL hosts using `Repositories` **must apply** the additive
+`migrations/0003_iam_operations.sql` before constructing the upgraded adapter,
+even if they do not supply operation IDs. `RelationshipRepository` alone does
+not require the new table. Historical migrations and cache protocol are unchanged.
+
+For an existing merged migration stream, copy only `0003_iam_operations.sql`
+into the host's authorization source/schema. Do not re-export over renamed
+historical files. Fresh merged streams order base 0001, optional cache 0002,
+then base 0003; separate sources apply both base migrations before the cache.
+`iam_operations` retains committed outcomes across purge and teardown. Do not
+delete rows whose producer can still retry. Backup and restore it together with
+the canonical tuples; restoring facts without their operation records can allow
+an old request to run again. A rollback keeps the additive table installed and
+must stop ledger-dependent acceptance retries before using a ledger-free writer.
+
+Third-party mutation stores must implement atomic operation binding and run the
+new `OperationLedger` conformance family. Calls with an empty OperationID keep
+their prior behavior. Publication is pending; the release record is
+[the implementation plan](../../../plans/invitation-grant-operation-ledger.md).
+
 ## Adopting the outcome cleanup (v0.22.0)
 
 `mutations.OutcomeInvariantBlocked` and `Outcome.Rejection` are removed. No
@@ -47,6 +70,7 @@ relationship repository. No package rename or role API migration is required.
 | --- | --- | --- |
 | Base authorization | `migrations/0001_iam_tuples.sql` | `iam_tuples`, `iam_audit`, identity constraints and lookup indexes |
 | Optional TupleCache | `tuple_cache_migrations/0002_iam_tuple_cache.sql` | Protocol-2 source identity, delivery receipt, outbox and canonical capture triggers |
+| Base authorization | `migrations/0003_iam_operations.sql` | Atomic operation identity, fingerprint and committed outcome |
 
 Use `MigrationsFS` / `MigrationsDir` or `ExportMigrations(dst)` for the base.
 Use `TupleCacheMigrationsFS` / `TupleCacheMigrationsDir` or
@@ -60,7 +84,8 @@ populated canonical facts. Its first publication rebuilds from current facts,
 so it does not require historical insert events for rows already present.
 
 The base contains no `iam_roles`, `iam_relationships`, revision counters or
-mutation receipt tables. There is no bundled old-schema conversion, preflight,
+legacy mutation receipt tables; `iam_operations` is the opt-in request ledger.
+There is no bundled old-schema conversion, preflight,
 downgrade or compatibility migration stream. Existing applications choose their
 own data adoption procedure; this framework setup targets the canonical schema.
 

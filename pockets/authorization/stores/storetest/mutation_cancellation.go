@@ -15,6 +15,7 @@ func specCallbackCancellation(t *testing.T, newRepos func(*testing.T) Repositori
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	cmd := grant("d1", "viewer", "u2")
+	cmd.OperationID = "cancelled:one"
 	validate := func(mutations.Command) error { cancel(); return nil }
 	result, err := m.Apply(ctx, cmd, validate)
 	if !errors.Is(err, context.Canceled) || result != nil {
@@ -24,7 +25,7 @@ func specCallbackCancellation(t *testing.T, newRepos func(*testing.T) Repositori
 		t.Fatalf("canceled write became visible: %v, %v", ok, err)
 	}
 	result = mustApply(t, m, cmd)
-	if result.Outcome != mutations.OutcomeApplied {
+	if result.Outcome != mutations.OutcomeApplied || result.Replayed {
 		t.Fatalf("canceled write was not safely retriable: %+v", result)
 	}
 }

@@ -1,5 +1,23 @@
 # Releasing gopernicus modules
 
+## Invitation grant operation ledger (candidate; not published)
+
+Candidate coordinated MINOR releases: authorization `v0.23.0`, PostgreSQL adapter
+`v0.17.0`, Turso adapter `v0.16.0`, and authentication `v0.17.0`. The ledger is
+opt-in per mutation command; every SQL host using `Repositories` must nevertheless
+apply the additive `0003_iam_operations.sql` before upgrading. Preserve operation
+records across teardown and any restore that preserves retriable invitation claims.
+Authentication has no migration: superseded grants finalize acceptance with a
+conflict response, a blocked/superseded security event and no member-added notice.
+
+The reference host demonstrates a completion fault, revocation and 409 recovery
+through real HTTP. Memory, local PostgreSQL, SQLite and HTTP libSQL verification
+passed; hosted Turso and published proxy/checksum verification remain outstanding.
+PRs/tags and dependency repins are pending the owner's release word. Publish and
+poll each `.info` before updating pins/tidying; cold-verify after all four versions
+resolve. Exact implementation evidence and Segovia adoption instructions are in
+[the plan](plans/invitation-grant-operation-ledger.md#implementation-record--2026-10-06).
+
 ## Namespace origin policy (sdk v0.10.0; authentication v0.16.0 — published 2026-09-28)
 
 SDK `v0.10.0` adds `web.OriginPolicy`: immutable exact origins and one-label

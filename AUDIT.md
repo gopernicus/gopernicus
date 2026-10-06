@@ -5533,3 +5533,37 @@ Adopt authentication v0.13.2 and Goth views v0.5.1; the renderer pins the fixed
 core. No route-security, session, token, migration or store change is required.
 Publication and verification status are in
 [the fix plan](plans/authentication-login-password-posture.md).
+
+
+## AUDIT-052: Atomic operation ledger and invitation grant recovery
+
+Implemented 2026-10-06; release pending. This narrowly reverses AUDIT-026's
+removal of caller operation identity, payload fingerprints, replay flags and
+request ledger storage. `Mutations.Apply` accepts opt-in `Command.OperationID`;
+typed helpers and empty-ID calls retain their state-based behavior. Revision
+counters, compare-and-set, wire receipts and ambient mutation transactions remain
+out of scope.
+
+Memory, PostgreSQL and Turso bind each operation to a frozen, explicitly framed
+`operation/v1` fingerprint and atomically retain the definite outcome with its
+tuple delta and enabled audit. Committed repeats write nothing and bypass fresh
+service admission, semantic validation and integrity planning. Changed payloads
+return `ErrOperationMismatch`; `Result.Replayed` and `Superseded` describe a
+recorded outcome and the requested facts' current state under the same write lock.
+An audit-enabled replay still requires source attribution. Errors and refusals
+retain no ledger record.
+
+Authentication completes a matching accepting claim when its Granter returns
+`ErrGrantSuperseded`, records an invitation-granted blocked event with reason
+`superseded`, sends no member-added notice, and returns a conflict to the resolving
+caller. Later accepted-token calls preserve the prior successful short-circuit.
+The reference host uses the ledger-backed path. Legacy state-convergent Granters
+remain supported and explicitly cannot promise safe recovery after revocation.
+
+SQL `Repositories` requires the additive `0003_iam_operations.sql` migration;
+standalone `RelationshipRepository` remains ledger-free. Operation records survive
+purge/teardown and have no age-based retention. Hosts must preserve records that
+producers can retry and account for subject-linked fingerprints in erasure
+procedures. A pre-Apply host precondition can still strand a committed retry, and
+a refused first grant can apply when its refusal clears; both are named follow-ups.
+Plan and verification: [invitation-grant-operation-ledger](plans/invitation-grant-operation-ledger.md).

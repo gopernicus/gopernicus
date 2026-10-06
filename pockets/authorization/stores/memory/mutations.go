@@ -2,7 +2,9 @@ package memory
 
 import (
 	"context"
+	"fmt"
 	"slices"
+	"time"
 
 	mutation "github.com/gopernicus/gopernicus/pockets/authorization/logic/mutations"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuples"
@@ -71,6 +73,12 @@ func (s *Store) Audit() *Audit { return &Audit{st: s.rel.st} }
 func (s *Store) Mutations() *Mutations { return s.mut }
 
 // Mutations applies integrity checks and changes within the shared write boundary.
+type operationRecord struct {
+	fingerprint string
+	outcome     mutation.Outcome
+	committedAt time.Time
+}
+
 type Mutations struct {
 	st        *state
 	integrity mutation.IntegrityPolicy
@@ -93,17 +101,32 @@ func (m *Mutations) Apply(ctx context.Context, cmd mutation.Command, validate mu
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if validate != nil {
-			if err := validate(cmd); err != nil {
-				return err
-			}
-		}
 		before := []tuples.Tuple{}
 		for t := range next.facts {
 			if cmd.Target.Contains(t) {
 				before = append(before, t)
 			}
 		}
+		fingerprint := ""
+		if cmd.OperationID != "" {
+			fingerprint = mutation.Fingerprint(cmd)
+			if record, ok := next.operations[cmd.OperationID]; ok {
+				if record.fingerprint != fingerprint {
+					return mutation.ErrOperationMismatch
+				}
+				if !record.outcome.Valid() {
+					return fmt.Errorf("authorization memory: invalid operation outcome %q", record.outcome)
+				}
+				result = &mutation.Result{Outcome: record.outcome, Replayed: true, Superseded: mutation.Superseded(cmd, before)}
+				return nil
+			}
+		}
+		if validate != nil {
+			if err := validate(cmd); err != nil {
+				return err
+			}
+		}
+
 		delta, outcome, err := mutation.Plan(cmd, before, m.integrity)
 		if err != nil {
 			return err
@@ -112,6 +135,9 @@ func (m *Mutations) Apply(ctx context.Context, cmd mutation.Command, validate mu
 			return err
 		}
 		next.applyLocked(delta)
+		if cmd.OperationID != "" {
+			next.operations[cmd.OperationID] = operationRecord{fingerprint: fingerprint, outcome: outcome, committedAt: time.Now()}
+		}
 		result = &mutation.Result{Outcome: outcome}
 		return nil
 	})
