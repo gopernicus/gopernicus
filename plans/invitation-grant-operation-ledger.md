@@ -531,7 +531,10 @@ only after the downstream adoption and required migration have been verified.
 - `examples/auth-cms/cmd/server/invitation_recovery_test.go`
 - `examples/auth-cms/cmd/server/main.go`
 - `examples/auth-cms/cmd/server/membership.go`
+- `examples/auth-cms/go.mod`
+- `examples/auth-cms/go.sum`
 - `plans/invitation-grant-operation-ledger.md`
+- `plans/invitation-grant-operation-ledger-release-manifest.json`
 - `pockets/authentication/README.md`
 - `pockets/authentication/logic/authentication/securityevent/securityevent.go`
 - `pockets/authentication/logic/invitations/recovery_test.go`
@@ -555,6 +558,8 @@ only after the downstream adoption and required migration have been verified.
 - `pockets/authorization/stores/pgx/collation_test.go`
 - `pockets/authorization/stores/pgx/conformance_test.go`
 - `pockets/authorization/stores/pgx/fresh_schema_test.go`
+- `pockets/authorization/stores/pgx/go.mod`
+- `pockets/authorization/stores/pgx/go.sum`
 - `pockets/authorization/stores/pgx/migrations/0003_iam_operations.sql`
 - `pockets/authorization/stores/pgx/migrations_test.go`
 - `pockets/authorization/stores/pgx/mutations.go`
@@ -571,6 +576,8 @@ only after the downstream adoption and required migration have been verified.
 - `pockets/authorization/stores/turso/canonical_schema_test.go`
 - `pockets/authorization/stores/turso/conformance_test.go`
 - `pockets/authorization/stores/turso/fresh_schema_test.go`
+- `pockets/authorization/stores/turso/go.mod`
+- `pockets/authorization/stores/turso/go.sum`
 - `pockets/authorization/stores/turso/migrations/0003_iam_operations.sql`
 - `pockets/authorization/stores/turso/migrations_test.go`
 - `pockets/authorization/stores/turso/mutations.go`
