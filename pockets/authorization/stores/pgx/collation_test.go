@@ -57,7 +57,7 @@ func resetCanonicalSchema(t *testing.T, db *pgxdb.DB) {
 	t.Helper()
 	ctx := context.Background()
 	ensureSchema(t, db)
-	for _, tbl := range []string{"iam_audit", "iam_tuples"} {
+	for _, tbl := range authorizationTables {
 		if _, err := db.Exec(ctx, "DROP TABLE IF EXISTS "+qualify(t, tbl)+" CASCADE"); err != nil {
 			t.Fatalf("drop %s: %v", tbl, err)
 		}

@@ -10,7 +10,7 @@ import (
 	"github.com/gopernicus/gopernicus/sdk"
 )
 
-func probeCanonicalSchema(ctx context.Context, db *tursodb.DB, audit bool) error {
+func probeCanonicalSchema(ctx context.Context, db *tursodb.DB, audit, operations bool) error {
 	tx, err := db.BeginRead(ctx)
 	if err != nil {
 		return err
@@ -20,11 +20,16 @@ func probeCanonicalSchema(ctx context.Context, db *tursodb.DB, audit bool) error
 	if err != nil {
 		return err
 	}
+	operationsData, err := MigrationsFS.ReadFile(MigrationsDir + "/0003_iam_operations.sql")
+	if err != nil {
+		return err
+	}
+	data = append(data, operationsData...)
 	// Compare the owned CREATE body, retaining SQL literals and grouping. This
 	// checks column types/nullability, full identity, collation and every shape
 	// constraint together.
-	definitions := regexp.MustCompile(`(?s)CREATE TABLE main\.(iam_tuples|iam_audit) (\(.*?\n\));`).FindAllStringSubmatch(string(data), -1)
-	if len(definitions) != 2 {
+	definitions := regexp.MustCompile(`(?s)CREATE TABLE main\.(iam_tuples|iam_audit|iam_operations) (\(.*?\n\));`).FindAllStringSubmatch(string(data), -1)
+	if len(definitions) != 3 {
 		return incompatibleSchema("iam_tuples", "embedded canonical definitions unavailable")
 	}
 	for _, def := range definitions {
@@ -33,6 +38,9 @@ func probeCanonicalSchema(ctx context.Context, db *tursodb.DB, audit bool) error
 			if !audit {
 				continue
 			}
+		}
+		if table == "iam_operations" && !operations {
+			continue
 		}
 		var actual string
 		if err := tx.QueryRow(ctx, `SELECT sql FROM main.sqlite_schema WHERE type='table' AND name=? AND tbl_name=?`, table, table).Scan(&actual); err != nil {

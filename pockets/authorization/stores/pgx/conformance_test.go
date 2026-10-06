@@ -35,7 +35,7 @@ import (
 // so every leaf subtest starts from a clean, isolated store — including the v3
 // optional audit history so every test observes only its own changes.
 // No FKs between them, so order is immaterial.
-var authorizationTables = []string{"iam_tuples", "iam_audit"}
+var authorizationTables = []string{"iam_tuples", "iam_audit", "iam_operations"}
 
 // fixtureTables are the relation names a hand-rolled fixture statement may name:
 // the pocket's own tables plus the migration ledger the destructive fixtures

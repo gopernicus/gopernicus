@@ -25,8 +25,7 @@ func (m *mutationStore) IntegrityPolicy() mutations.IntegrityPolicy {
 	return mutations.IntegrityPolicy{Rules: slices.Clone(m.integrity.Rules)}
 }
 
-// Integrity checks and changes share one write-serialized transaction. No caller operation
-// token or durable result is retained; every call validates the current model.
+// Integrity checks, tuple changes and operation records share one write-serialized transaction.
 func (m *mutationStore) Apply(ctx context.Context, cmd mutations.Command, validate mutations.SemanticValidator) (*mutations.Result, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -44,18 +43,33 @@ func (m *mutationStore) Apply(ctx context.Context, cmd mutations.Command, valida
 	}
 	var result *mutations.Result
 	attempt := func(tx *tursodb.Tx) error {
+		w := &writeTx{Tx: tx, audit: m.audit}
+		if cmd.OperationID != "" {
+			replayed, err := m.replayOperation(ctx, w, cmd)
+			if err != nil {
+				return err
+			}
+			if replayed != nil {
+				result = replayed
+				return nil
+			}
+		}
 		if validate != nil {
 			if err := validate(cmd); err != nil {
 				return err
 			}
 		}
-		w := &writeTx{Tx: tx, audit: m.audit}
 		outcome, _, err := m.evaluate(ctx, w, cmd)
 		if err != nil {
 			return err
 		}
 		if err := appendAudit(ctx, w, config{audit: m.audit}); err != nil {
 			return err
+		}
+		if cmd.OperationID != "" {
+			if err := m.recordOperation(ctx, w, cmd, outcome); err != nil {
+				return err
+			}
 		}
 		result = &mutations.Result{Outcome: outcome}
 		return nil
