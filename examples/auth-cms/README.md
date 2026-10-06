@@ -53,7 +53,7 @@ PostgreSQL tests use an explicitly selected scratch database.
   `pockets/authorization` never import one another. Only this host's
   `cmd/server/main.go` imports all three. The cross-pocket connections are made
   entirely in the composition root (`auth.Service.RequireUser` →
-  `cms.Config.AdminMiddleware`; the engine `relationshipGranter` →
+  `cms.Config.AdminMiddleware`; the engine `integrityRelationshipGranter` →
   `auth.InvitationsConfig.Granter`; `authorizer.Check` → `events.WithAuthorization`) — over
   sdk-shaped seams, with zero import edges between the pockets.
 
@@ -76,8 +76,8 @@ PostgreSQL tests use an explicitly selected scratch database.
   rotating store-backed refresh tokens (host-signed through
   `integrations/cryptids/golang-jwt`), security-event audit rows,
   and invitations that grant through the **`pockets/authorization` engine's
-  `relationshipGranter`** — ordinary member invitation-accept writes a real ReBAC
-  tuple via the trusted application-side `RelationshipWriter` (the memstore-backed
+  `integrityRelationshipGranter`** — member invitation acceptance writes a real ReBAC
+  tuple and its operation record atomically through `Mutations.Apply` (the memstore-backed
   engine keeps the host **driver-free** — no libsql in the graph). The A9 milestone
   shipped this seam with a toy in-memory `Granter` instead (ratified AV4:
   invitations work with no ReBAC in the graph); `authorization-v1` Z4 commit 2
@@ -100,7 +100,7 @@ history:
   kinds** wired and **memstore-backed** (so the graph stays driver-free —
   `GOWORK=off go list -m all | grep -i libsql` is still empty). The SAME
   `events.WithAuthorization` seam now delegates to `authorizer.Check`, and the
-  invitation `Granter` is the engine's `relationshipGranter`.
+  invitation `Granter` is the engine's ledger-backed `integrityRelationshipGranter`.
 
 **Principal admission and data integrity.** `authzSchema` declares project
 `view` and `manage_access` permissions and platform administration. The host's
@@ -177,14 +177,16 @@ remain absent.
   **multi-instance** deployment MUST share `AUTH_JWT_SECRET` across every instance
   (per-instance keys can't cross-verify). API clients recover a dead access JWT via
   `POST /auth/refresh` (refresh tokens are store-backed).
-- **Granter**: `relationshipGranter` (`cmd/server/membership.go`) — the ordinary
-  collaboration adapter. It validates the target resource still exists and writes
-  the exact fact through `RelationshipWriter.CreateRelationships`. It intentionally
-  ignores `OperationID`: the write is state-based, and a re-grant after deletion
-  restores current state. `integrityRelationshipGranter` in the same file uses
-  `Components.Mutations.GrantRelationship` and supplies explicit system audit
-  attribution. Both writers enforce the store's configured `IntegrityPolicy`;
-  neither makes a principal permission decision or keeps an operation ledger.
+- **Granter**: `integrityRelationshipGranter` (`cmd/server/membership.go`) validates
+  resource existence, then calls `Components.Mutations.Apply` with
+  `OperationID = "invitation:" + in.OperationID` and system audit attribution.
+  Replays never write; superseded results and command mismatches map to
+  `invitations.ErrGrantSuperseded`, so authentication records acceptance without
+  restoring revoked access. The legacy `relationshipGranter` remains demonstrated
+  in tests: it ignores operation IDs and can restore access on an accepting retry.
+  Both enforce configured integrity and leave principal admission to inbound.
+  Resource deletion can still block a committed retry before it reaches the ledger;
+  a never-committed grant can first apply when a refusal later clears.
 - **InviteCheck** (`Policy.Invite`, `pockets/access/inbound/policy.go`) — the required
   relation-aware host authorization policy the pocket calls from its parsed
   create/list invitation handlers (`auth.InvitationsConfig.InviteCheck`): a platform admin may
@@ -308,7 +310,7 @@ remain absent.
 | `OAuthConfig.Providers` | the fake provider | OAuth routes not registered (deny-by-absence) |
 | `New`'s `signer` argument | golang-jwt HS256 over `AUTH_JWT_SECRET` (or ephemeral dev key) | REQUIRED — nil is `ErrTokenSignerRequired` at construction (no nil variant) |
 | `OAuthConfig.TokenEncrypter` | AES-GCM iff `AUTH_TOKEN_ENCRYPTER_KEY` | provider tokens not persisted (login/link still work) |
-| `InvitationsConfig.Granter` | engine `relationshipGranter` (baseline `RelationshipWriter`, structured `GrantInput`; atomic command alternative also demonstrated) | invitation routes not registered (deny-by-absence) |
+| `InvitationsConfig.Granter` | engine `integrityRelationshipGranter` (`Mutations.Apply` with operation ledger, structured `GrantInput`; legacy state-convergent adapter demonstrated in tests) | invitation routes not registered (deny-by-absence) |
 | `InvitationsConfig.InviteCheck` | inbound `Policy.Invite` (platform-admin bypass, owner-grant reserved, else `manage_access`) | REQUIRED once `Granter` is wired — nil is `ErrInviteCheckRequired`; set without a `Granter` is `ErrInviteCheckWithoutGranter` |
 | `New`'s `runtimeMode` argument | `development` (explicit) | REQUIRED, no default — empty is `ErrRuntimeModeRequired` |
 | `New`'s `deliveryMode` argument | `jobs` (explicit) | REQUIRED, no default — empty is `ErrDeliveryModeRequired`, unknown is `ErrDeliveryModeInvalid` |
@@ -551,8 +553,8 @@ curl -i -X POST http://localhost:8082/auth/refresh -H 'Content-Type: application
 
 The membership-gated route is `GET /demo/members-only` — it checks `view` on the
 `project/demo` resource through `authorizer.Check` (the flagship posture). An
-accepted invitation grants the `member` tuple via the engine `relationshipGranter`
-(the baseline `RelationshipWriter`), and `view = AnyOf(owner, member)`, so
+accepted invitation grants the `member` tuple via the ledger-backed
+`integrityRelationshipGranter` (`Mutations.Apply`), and `view = AnyOf(owner, member)`, so
 the member passes the gate. The observable codes are identical to the A9 toy-Granter
 run — the swap is invisible at the seam.
 
