@@ -655,13 +655,23 @@ and binds it to the accepting subject before calling the Granter:
 cancel, decline and resend conflict. Resend on an unclaimed invitation invalidates
 its old token; an acceptance that read that token earlier still fails at the claim.
 
-If granting or finalization returns an error, the claim stays `accepting`: the host
-side effect may already have committed. Repeating acceptance with the same token
+If granting returns a retryable error or finalization fails, the claim stays
+`accepting`: the host side effect may already have committed. Repeating acceptance with the same token
 and subject, including after a process restart or token expiry, retries the same
 operation and finishes the receipt. A completed retry succeeds without granting
 again. Another subject cannot resume that claim. There is no automatic retry worker
 or claim timeout; hosts retry through acceptance/the verified resolver, or reconcile
 a permanently failed operation. Cancellation never claims to undo a grant in progress.
+
+When the Granter returns `invitations.ErrGrantSuperseded`, the operation committed
+earlier but its grant is no longer in effect. Acceptance completes as `accepted`,
+releasing the invitation tuple reservation, and returns the conflict (409-class)
+error. It records `invitation_granted` with status `blocked` and reason
+`superseded`, and sends no member-added notice. The verified resolver also
+completes superseded claims, warns and continues without counting them as grants.
+Later uses of the accepted token take the existing success short-circuit.
+Concurrent retries racing a revoke may yield both success and superseded answers;
+the invariant is that the committed grant is never written again.
 
 **The Granter contract and invitation authority (D1–D3).** `InvitationsConfig.Granter` is
 the host seam an accepted, auto-accepted, or directly-added invitation grants
@@ -682,14 +692,17 @@ type Granter interface{ Grant(context.Context, GrantInput) error }
 
 - **Stable operation identity.** `OperationID` is an opaque, non-secret handle
   for this logical grant. Pending acceptance and automatic resolution use the
-  persisted invitation row ID. Hosts must make repeated and concurrent calls with
-  that ID idempotent, including a retry after a committed grant whose response was
-  lost. A later invitation for the same tuple has a distinct operation ID.
+  persisted invitation row ID. Safe recovery requires at most one committed write
+  for that ID, including concurrent calls and retries after a committed grant
+  whose response was lost. Bind it to the exact resource, relation and subject.
+  A later invitation for the same tuple has a distinct operation ID.
   Direct-add has no invitation row and receives a fresh high-entropy operation ID
   per call from the unconditional secret generator (`WithIDs` may use database
   IDs). An adapter can derive a durable mutation key from purpose, operation ID and
-  tuple. Exact tuple creation may already be idempotent; any additional host effects
-  need equivalent deduplication. The field is metadata, never authority.
+  tuple. The authorization command ledger records the ID atomically with the tuple
+  delta; namespace it when multiple producers share a store (for example,
+  `invitation:<id>`). Any additional host effects need equivalent deduplication.
+  The field is metadata, never authority.
 - **Opaque host metadata.** `Metadata` is small, host-owned routing data the
   inviter sets at create time (`metadata` on the create body / `CreateInput`),
   which the pocket persists and round-trips VERBATIM to `GrantInput` on every
@@ -713,9 +726,24 @@ type Granter interface{ Grant(context.Context, GrantInput) error }
   or an infrastructure error must propagate. The authorization pocket's
   `GrantRelationship` returns `applied` or `no_change` on success; refusals return
   errors, including `ErrInvariantBlocked`. Raw and command writers both enforce
-  configured `IntegrityPolicy`. Their idempotency is state-based: there is no
-  durable command receipt or `OperationID` ledger in the tuple writer. Hosts must
-  separately deduplicate any additional effects.
+  configured `IntegrityPolicy`. For safe recovery, use `Mutations.Apply` with an
+  `OperationID` (or equivalent atomic deduplication). A committed replay never
+  writes again. Map `Replayed && Superseded` to `invitations.ErrGrantSuperseded`;
+  map `ErrOperationMismatch` there too when the host command shape changed.
+  Every definite already-committed answer must map to nil or that sentinel,
+  rather than leaving the claim retryable forever. See `examples/auth-cms` for
+  the reference adapter.
+- **Legacy state-convergent adapters.** Baseline `RelationshipWriter` and
+  role-column writes remain supported, but cannot satisfy the at-most-once
+  recovery contract: an accepting retry can restore revoked access. Hosts
+  requiring safe recovery must use the ledger or equivalent atomic mechanism.
+- **Known recovery limits.** A host precondition checked before the ledger (such
+  as resource existence) can fail permanently after the operation committed,
+  leaving the claim `accepting`. A first grant that was refused also remains
+  claimed and can grant for the first time when the refusal clears. It cannot be
+  cancelled while accepting. Neither path is solved by the operation ledger;
+  hosts must reconcile these claims. A never-committed operation that later
+  grants after a role change is a late first grant.
 - **A required host policy.** Whenever a `Granter` enables invitations, the root
   `New` requires a complete resource rule or `InviteCheck`:
 

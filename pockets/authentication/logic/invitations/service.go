@@ -58,6 +58,9 @@ var (
 	// ErrPendingInvitationExists is returned by Create when a pending invitation
 	// already exists for the (resource, identifier, relation) tuple.
 	ErrPendingInvitationExists = fmt.Errorf("a pending invitation already exists: %w", sdk.ErrAlreadyExists)
+	// ErrGrantSuperseded means this operation already committed, but its requested
+	// grant is no longer in effect. Acceptance completes without granting again.
+	ErrGrantSuperseded = fmt.Errorf("invitation grant superseded: %w", sdk.ErrConflict)
 	// ErrNotPending is returned when a transition (accept/decline/cancel/resend)
 	// targets an invitation that is not in an eligible status.
 	ErrNotPending = fmt.Errorf("invitation is not pending: %w", sdk.ErrConflict)
@@ -100,9 +103,10 @@ type deliveryQueue interface {
 // resolve-on-registration (a retry of the same invitation reuses the same ID; a
 // later invitation row for the same tuple gets a different ID), and a freshly
 // minted high-entropy value for direct-add (no invitation row exists). It is not
-// authority and the pocket does not dictate how the host uses it: guarded
-// adapters may derive durable mutation idempotency while baseline state adapters
-// may ignore it. The remaining fields are the ReBAC tuple: grant
+// authority. Safe recovery requires the host to bind this ID to the exact grant
+// and atomically deduplicate its effects. Baseline state-convergent adapters may
+// ignore it, but an accepting retry can then restore revoked access. The
+// remaining fields are the ReBAC tuple: grant
 // SubjectType/SubjectID the Relation on
 // (ResourceType, ResourceID).
 //
@@ -122,16 +126,21 @@ type GrantInput struct {
 	Metadata     map[string]string
 }
 
-// Granter grants a subject a relation on a resource — the ONE ReBAC-decoupled
-// seam (design §2.2), called on accept, direct-add, and resolve-on-registration
-// and NOTHING else. A ReBAC host adapts it to CreateRelationships; a role-column
-// host to a role write; the proof host to a toy in-memory membership map. Grants
-// must be idempotent for concurrent and repeated calls with one OperationID.
-// The invitation claim is durable, but cannot atomically commit the host grant.
-// nil means the EXACT requested relation was applied or was already exactly
-// present; a different existing relation, an invariant refusal, and a
-// missing/deleted host resource are NOT success and must return an error, and
-// infrastructure failures propagate (design §6/D2).
+// Granter grants a subject a relation on a resource, called on accept, direct-add,
+// and resolve-on-registration. The invitation claim cannot atomically commit the
+// host grant. Safe recovery requires at most one committed write per OperationID,
+// including concurrent repeats; a committed repeat must never write again.
+// nil means the EXACT requested relation is in place. ErrGrantSuperseded means
+// the operation already committed but the requested grant is no longer in effect.
+// Every definite already-committed answer must map to nil or ErrGrantSuperseded,
+// including a mismatch between the recorded operation and a changed host command.
+// Other errors leave acceptance retryable; refusals and infrastructure errors
+// must propagate. A never-committed operation can first grant on a later retry.
+//
+// Legacy state-convergent adapters (a baseline relationship writer or role-column
+// write) remain supported, but cannot provide this at-most-once recovery contract:
+// accepting retries can restore revoked access. Hosts requiring safe recovery
+// must use an atomic operation ledger or equivalent deduplication mechanism.
 type Granter interface {
 	Grant(ctx context.Context, in GrantInput) error
 }
@@ -535,14 +544,19 @@ func (s *Service) acceptClaim(ctx context.Context, inv Invitation, subjectType, 
 	}
 	// The host must deduplicate concurrent as well as sequential repeats. An error
 	// cannot prove that an external side effect did not commit, so never unclaim.
-	if err := s.grant(ctx, claimed.ID, claimed.ResourceType, claimed.ResourceID, claimed.Relation, subjectType, subjectID, claimed.Metadata); err != nil {
+	grantErr := s.grant(ctx, claimed.ID, claimed.ResourceType, claimed.ResourceID, claimed.Relation, subjectType, subjectID, claimed.Metadata)
+	if grantErr != nil && !errors.Is(grantErr, ErrGrantSuperseded) {
 		s.recordGrant(ctx, subjectID, claimed.ResourceType, claimed.ResourceID, claimed.Relation, claimed.Identifier, securityevent.StatusFailure)
-		return Invitation{}, fmt.Errorf("grant: %w", err)
+		return Invitation{}, fmt.Errorf("grant: %w", grantErr)
 	}
 	claim.Now = s.now()
 	accepted, err := s.invitations.CompleteAcceptance(ctx, claimed.ID, claim)
 	if err != nil {
 		return Invitation{}, err
+	}
+	if errors.Is(grantErr, ErrGrantSuperseded) {
+		s.recordGrant(ctx, subjectID, claimed.ResourceType, claimed.ResourceID, claimed.Relation, claimed.Identifier, securityevent.StatusBlocked)
+		return accepted, fmt.Errorf("grant: %w", grantErr)
 	}
 	s.recordGrant(ctx, subjectID, claimed.ResourceType, claimed.ResourceID, claimed.Relation, claimed.Identifier, securityevent.StatusSuccess)
 	s.sendMemberAdded(ctx, memberAdded{
@@ -681,7 +695,8 @@ func (s *Service) Mine(ctx context.Context, address string, req list.Request) (l
 
 // ResolveInvitations resumes auto-accept invitations only for a verified email
 // owner. Individual grant/finalization failures remain resumable and do not
-// prevent other invitations from resolving.
+// prevent other invitations from resolving. Superseded grants complete acceptance
+// without a member-added notice and are warned about rather than counted.
 func (s *Service) ResolveInvitations(ctx context.Context, email, subjectType, subjectID string) (int, error) {
 	normalized, err := s.normalizeIdentifier(email, sdk.AddressKindEmail)
 	if err != nil {
@@ -730,15 +745,19 @@ func (s *Service) ResolveInvitations(ctx context.Context, email, subjectType, su
 // --- audit ---
 
 // recordGrant appends an invitation_granted audit row for a grant attempt
-// (StatusSuccess or StatusFailure). Details carries identifiers only — never the
-// token (design §5.1 WI3).
+// (success, failure, or blocked with reason superseded). Details carries identifiers
+// only — never the token (design §5.1 WI3).
 func (s *Service) recordGrant(ctx context.Context, subjectID, resourceType, resourceID, relation, identifier, status string) {
-	s.record(ctx, subjectID, securityevent.TypeInvitationGranted, status, map[string]any{
+	details := map[string]any{
 		"resource_type": resourceType,
 		"resource_id":   resourceID,
 		"relation":      relation,
 		"identifier":    identifier,
-	})
+	}
+	if status == securityevent.StatusBlocked {
+		details["reason"] = "superseded"
+	}
+	s.record(ctx, subjectID, securityevent.TypeInvitationGranted, status, details)
 }
 
 // recordCreated appends an invitation_created audit row for a newly minted

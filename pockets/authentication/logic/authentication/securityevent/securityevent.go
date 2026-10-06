@@ -86,13 +86,15 @@ const (
 
 	// Invitation vocabulary (design §6, wired by A6's invitation service). Grants are
 	// the security-relevant events: TypeInvitationGranted is recorded success (the
-	// Granter accepted) or failure (the Granter rejected — the grant did not
-	// happen) on accept, direct-add, and resolve-on-registration.
+	// Granter accepted), failure (the grant could not be confirmed), or blocked
+	// with reason superseded (a committed grant is no longer in effect) on accept,
+	// direct-add, and resolve-on-registration.
 	//
 	// TypeInvitationCreated is a pending invitation being minted.
 	TypeInvitationCreated = "invitation_created"
 	// TypeInvitationGranted is a grant-on-accept attempt (StatusSuccess when the
-	// Granter granted, StatusFailure when it rejected).
+	// Granter granted, StatusFailure when it rejected, StatusBlocked with reason
+	// superseded when a committed grant is no longer in effect).
 	TypeInvitationGranted = "invitation_granted"
 	// TypeInvitationDeclined is an invitee declining a pending invitations.
 	TypeInvitationDeclined = "invitation_declined"
