@@ -753,6 +753,7 @@ func specMutationRefusesAmbientTransaction(t *testing.T, newRepos func(t *testin
 		hostRow := ct("doc", "d1", "owner", "user", "u1")
 		var validateRan bool
 		cmd := grant("M", "viewer", "u2")
+		cmd.OperationID = "ambient:one"
 		err := transact(tx, func(ctx context.Context) error {
 			createAt(t, ctx, s, hostRow)
 

@@ -31,7 +31,7 @@ func (s *state) write(ctx context.Context, apply func(*state) error) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	next := &state{facts: maps.Clone(s.facts)}
+	next := &state{facts: maps.Clone(s.facts), operations: maps.Clone(s.operations)}
 	if err := apply(next); err != nil {
 		return err
 	}
@@ -53,6 +53,7 @@ func (s *state) write(ctx context.Context, apply func(*state) error) error {
 	}
 
 	s.facts = next.facts
+	s.operations = next.operations
 	s.auditRecords = append(s.auditRecords, records...)
 	return nil
 }

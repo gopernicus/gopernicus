@@ -252,7 +252,7 @@ largest minimum. Resource minima do not apply to global facts.
 There is one `mutations.Service`, with `Apply(ctx, command)` and typed methods
 such as `AssignRole(ctx, command)`. There is no principal guard, transactional
 permission view or separate system mutator. A pure `SemanticValidator` can enforce
-current-model tuple shapes in `MutationRepository.Apply`; it is not an access
+fresh-operation batch admission and current-model tuple shapes in `MutationRepository.Apply`; it is not an access
 callback.
 
 Integrity uses the current serialized post-state and applies through all ordinary
@@ -277,6 +277,47 @@ purge and raw scope deletion cannot bypass configured minima.
 Results contain `applied`, `no_change` or `not_found`. Integrity refusals return
 `ErrInvariantBlocked`, wrapping `sdk.ErrConflict`. Shape, cancellation and commit
 errors also return no successful result.
+
+### Durable operation replay
+
+`Mutations.Apply` accepts an optional `Command.OperationID`. Empty IDs retain
+state-based semantics. A nonempty ID is global to the authority, so namespace it
+by producer (`invitation:<id>`); it must be valid UTF-8 without control characters
+and at most 256 bytes. Typed relationship/role helpers do not accept operation
+IDs, and resource teardown refuses them.
+
+The mutation store binds each ID to the command's normalized requested facts with
+a frozen `operation/v1` SHA-256 fingerprint. Facts, enabled audit, and the operation
+record commit atomically, including `no_change` and `not_found` outcomes. Errors
+and refusals retain no record. The ID and execution limits are excluded from the
+fingerprint; tuple order and duplicates do not change it. A changed requested
+delta returns `ErrOperationMismatch` (wrapping `sdk.ErrConflict`) without writing.
+
+A matching retry returns the original `Outcome` with `Replayed=true` and writes
+no tuples, audit rows or cache capture. Current-model validation, integrity policy
+and configurable batch/affected-row limits apply only to fresh operations.
+Structural validation and the hard command bound still apply to retries; an
+audit-enabled store still requires `audit.WithSource`. `Superseded` is true only
+on a replay whose requested facts are no longer in effect, checked under the
+same write lock. It is a snapshot and does not prevent a later revoke.
+
+SQL hosts using `Repositories` must apply `0003_iam_operations.sql` before boot;
+the constructor rejects missing or noncanonical ledger tables. Standalone
+`RelationshipRepository` remains ledger-free. See [schema adoption](stores/UPGRADE.md).
+Keep operation rows across purge, teardown and restarts. V1 never deletes them:
+deleting a record that a producer can retry allows its old grant to run again.
+Hosts' user-erasure procedures must account for this table and its hashes over
+subject IDs; hashes can still be linked to known requests. There is no retention
+or purge API in v1.
+
+For invitation hosts, map `Replayed && Superseded` and `ErrOperationMismatch` to
+authentication's `ErrGrantSuperseded`; return nil for a grant still in effect.
+This lets authentication finish an accepting claim without restoring revoked
+access. Keep the command stable between attempts: changing a replacement batch's
+remove set changes its fingerprint. A precondition checked before `Apply` can
+still prevent a committed operation from reaching the ledger (for example, a
+deleted host resource). A never-committed/refused operation can first grant on a
+later retry. These are known follow-ups; there is no read-only operation lookup.
 
 Store `WithAudit()` records one canonical `Change{Action, Tuple}` delta in the
 same commit as facts. Exact duplicates, no-ops, refusals and rollbacks add no

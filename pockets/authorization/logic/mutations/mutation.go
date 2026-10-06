@@ -11,6 +11,7 @@ import (
 
 var (
 	ErrInvalidCommand            = fmt.Errorf("authorization mutation: invalid command: %w", sdk.ErrInvalidInput)
+	ErrOperationMismatch         = fmt.Errorf("authorization mutation: operation payload mismatch: %w", sdk.ErrConflict)
 	ErrConcurrentMutation        = fmt.Errorf("authorization mutation: concurrent change: %w", sdk.ErrConflict)
 	ErrInvariantBlocked          = fmt.Errorf("authorization mutation: invariant blocked: %w", sdk.ErrConflict)
 	ErrMutationInsideTransaction = fmt.Errorf("authorization mutation: atomic tuple command inside an ambient transaction: %w", sdk.ErrInvalidInput)
@@ -86,6 +87,8 @@ func (r RoleRow) Validate() error {
 }
 
 type Command struct {
+	// OperationID optionally binds a globally unique, caller-namespaced operation to its committed result.
+	OperationID   string
 	Target        Target
 	Operation     Operation
 	Relationships []RelationshipRow
@@ -98,6 +101,14 @@ type Command struct {
 }
 
 func (c Command) Validate() error {
+	if c.OperationID != "" {
+		if c.Operation == OpTeardown {
+			return ErrInvalidCommand
+		}
+		if err := tuples.ValidateRefField("operation id", c.OperationID); err != nil {
+			return err
+		}
+	}
 	if err := c.Target.Validate(); err != nil {
 		return err
 	}

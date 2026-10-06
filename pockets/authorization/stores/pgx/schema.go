@@ -14,7 +14,7 @@ import (
 const canonicalScopeConstraint = "CHECK ((((scope_kind = 1) AND (resource_type = ''::text) AND (resource_id = ''::text)) OR ((scope_kind = 2) AND (resource_type <> ''::text) AND (resource_id <> ''::text))))"
 const canonicalRefsConstraint = "CHECK (((relation <> ''::text) AND (subject_type <> ''::text) AND (subject_id <> ''::text)))"
 
-func probeCanonicalSchema(ctx context.Context, db *pgxdb.DB, schema pgxdb.Schema, audit bool) error {
+func probeCanonicalSchema(ctx context.Context, db *pgxdb.DB, schema pgxdb.Schema, audit, operations bool) error {
 	tx, err := db.BeginRead(ctx)
 	if err != nil {
 		return err
@@ -23,6 +23,9 @@ func probeCanonicalSchema(ctx context.Context, db *pgxdb.DB, schema pgxdb.Schema
 	tables := []string{"iam_tuples"}
 	if audit {
 		tables = append(tables, "iam_audit")
+	}
+	if operations {
+		tables = append(tables, "iam_operations")
 	}
 	resolved := ""
 	for _, table := range tables {
@@ -72,6 +75,19 @@ WHERE c.oid=pg_catalog.to_regclass($1)`, schema.Table(table)).Scan(&namespace, &
 			"CHECK ((((actor_type <> ''::text) AND (actor_id <> ''::text) AND (system_source = ''::text)) OR ((actor_type = ''::text) AND (actor_id = ''::text) AND (system_source <> ''::text))))": true,
 		}
 		if err := probeCanonicalTable(ctx, tx, schema.Table("iam_audit"), columns, constraints); err != nil {
+			return err
+		}
+	}
+	if operations {
+		columns = map[string]string{"operation_id": "text", "encoding": "text", "fingerprint": "text", "outcome": "text", "committed_at": "timestamp with time zone"}
+		constraints = map[string]bool{
+			"PRIMARY KEY (operation_id)":                                                             true,
+			"CHECK ((operation_id <> ''::text))":                                                     true,
+			"CHECK ((encoding = 'operation/v1'::text))":                                              true,
+			"CHECK ((fingerprint ~ '^[0-9a-f]{64}$'::text))":                                         true,
+			"CHECK ((outcome = ANY (ARRAY['applied'::text, 'no_change'::text, 'not_found'::text])))": true,
+		}
+		if err := probeCanonicalTable(ctx, tx, schema.Table("iam_operations"), columns, constraints); err != nil {
 			return err
 		}
 	}

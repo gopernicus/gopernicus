@@ -40,3 +40,23 @@ func TestCanonicalConstructorsRejectPartialSchemas(t *testing.T) {
 		})
 	}
 }
+
+func TestOperationSchemaRequiredOnlyForBundle(t *testing.T) {
+	for _, statement := range []string{
+		"DROP TABLE iam_operations",
+		"ALTER TABLE iam_operations DROP CONSTRAINT ck_iam_operations_encoding; ALTER TABLE iam_operations ADD CONSTRAINT ck_iam_operations_encoding CHECK(true)",
+	} {
+		t.Run(statement, func(t *testing.T) {
+			db := canonicalFixture(t, false)
+			if _, err := db.Exec(t.Context(), statement); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := testRepositories(t.Context(), db); err == nil {
+				t.Fatal("bundle accepted missing or incompatible operations table")
+			}
+			if _, err := RelationshipRepository(t.Context(), db, WithAudit()); err != nil {
+				t.Fatalf("facade requires ledger: %v", err)
+			}
+		})
+	}
+}

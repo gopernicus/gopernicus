@@ -13,6 +13,8 @@ func ReasonFor(err error) (authmodel.Reason, bool) {
 		return "", false
 	case errors.Is(err, authmodel.ErrEvaluationLimit):
 		return authmodel.ReasonEvaluationLimit, true
+	case errors.Is(err, ErrOperationMismatch):
+		return authmodel.ReasonOperationMismatch, true
 	case errors.Is(err, ErrConcurrentMutation):
 		return authmodel.ReasonConcurrentMutation, true
 	case errors.Is(err, ErrInvariantBlocked):

@@ -31,7 +31,7 @@ import (
 // so every leaf subtest starts from a clean, isolated store — including the v3
 // optional audit history so every test observes only its own changes.
 // No FKs between them, so order is immaterial.
-var authorizationTables = []string{"iam_tuples", "iam_audit"}
+var authorizationTables = []string{"iam_tuples", "iam_audit", "iam_operations"}
 
 // TestConformance runs the shared authorization conformance suite (both kinds)
 // against a live Turso/libSQL database. Each newRepos call opens a connection,

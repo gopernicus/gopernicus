@@ -113,3 +113,35 @@ func TestMutationRefusesAmbientBeforeAnyWrite(t *testing.T) {
 		t.Fatalf("refusal audit: %+v", records)
 	}
 }
+
+func TestOperationLedgerRestart(t *testing.T) {
+	_, repos := liveRepos(t)
+	cmd := grantCmd("restart", "viewer", "alice")
+	cmd.OperationID = "invitation:restart"
+	first := mustApplyLive(t, repos.Mutations, cmd)
+	if first.Replayed || first.Outcome != mutations.OutcomeApplied {
+		t.Fatalf("first: %+v", first)
+	}
+
+	db, err := pgxdb.Open(t.Context(), pgxdb.Config{DSN: requireDSN(t)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	fresh, err := testRepositories(t.Context(), db, append(storeOptions(t), WithIntegrityPolicy(mutations.IntegrityPolicy{Rules: []mutations.IntegrityRule{{ResourceType: "doc", Relation: "viewer", MinSubjects: 2}}}))...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replay := mustApplyLive(t, fresh.Mutations, cmd)
+	if !replay.Replayed || replay.Superseded || replay.Outcome != first.Outcome {
+		t.Fatalf("restart replay: %+v", replay)
+	}
+	revoke := cmd
+	revoke.OperationID = ""
+	revoke.Operation = mutations.OpRevoke
+	mustApplyLive(t, repos.Mutations, revoke)
+	replay = mustApplyLive(t, repos.Mutations, cmd)
+	if !replay.Replayed || !replay.Superseded {
+		t.Fatalf("revoked replay: %+v", replay)
+	}
+}

@@ -60,7 +60,7 @@ func assertFreshIndexes(t *testing.T, db *tursodb.DB) {
 func TestFreshCanonicalSchema(t *testing.T) {
 	db := canonicalFixture(t, false)
 	assertFreshIndexes(t, db)
-	if got := freshIAMTables(t, db); !slices.Equal(got, []string{"iam_audit", "iam_tuples"}) {
+	if got := freshIAMTables(t, db); !slices.Equal(got, []string{"iam_audit", "iam_operations", "iam_tuples"}) {
 		t.Fatalf("primary tables: %v", got)
 	}
 	repos, err := testRepositories(t.Context(), db, WithAudit())
@@ -177,11 +177,16 @@ func TestFreshCacheInstallationOrderAndRollback(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	operations, err := MigrationsFS.ReadFile(MigrationsDir + "/0003_iam_operations.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	merged[MigrationsDir+"/0003_iam_operations.sql"] = &fstest.MapFile{Data: operations}
 	merged[MigrationsDir+"/0002_iam_tuple_cache.sql"] = &fstest.MapFile{Data: cache}
 	if err := tursodb.RunMigrations(t.Context(), db, merged, MigrationsDir); err != nil {
 		t.Fatal(err)
 	}
-	if got := freshIAMTables(t, db); !slices.Equal(got, []string{"iam_audit", "iam_tuple_cache", "iam_tuple_outbox", "iam_tuples"}) {
+	if got := freshIAMTables(t, db); !slices.Equal(got, []string{"iam_audit", "iam_operations", "iam_tuple_cache", "iam_tuple_outbox", "iam_tuples"}) {
 		t.Fatalf("merged schema: %v", got)
 	}
 	if _, err := testRepositories(t.Context(), db, WithAudit(), WithTupleCache()); err != nil {
@@ -206,7 +211,7 @@ func TestFreshCacheInstallationOrderAndRollback(t *testing.T) {
 		if err := tursodb.RunMigrations(ctx, db, broken, TupleCacheMigrationsDir); err == nil {
 			t.Fatal("broken optional migration succeeded")
 		}
-		if got := freshIAMTables(t, db); !slices.Equal(got, []string{"iam_audit", "iam_tuples"}) {
+		if got := freshIAMTables(t, db); !slices.Equal(got, []string{"iam_audit", "iam_operations", "iam_tuples"}) {
 			t.Fatalf("cache DDL escaped rollback: %v", got)
 		}
 		found, err := repos.Tuples.Contains(ctx, fact)

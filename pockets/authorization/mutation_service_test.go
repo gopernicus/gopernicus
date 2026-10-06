@@ -239,3 +239,29 @@ func TestTupleWriterRevokeRelationship(t *testing.T) {
 		t.Fatalf("integrity refusal: receipt=%+v err=%v", rec, err)
 	}
 }
+
+func TestOperationReplayAfterLowerBatchLimit(t *testing.T) {
+	store := memory.New()
+	repos := Repositories{Tuples: store.Tuples(), Mutations: store.Mutations()}
+	original := mustComponents(t, repos, WithLimits(authmodel.EvaluationLimits{MaxBatchSize: 2}))
+	cmd := validGrantCommand(t)
+	cmd.Relationships = append(cmd.Relationships, mutations.RelationshipRow{Relation: "viewer", Subject: relationships.SubjectRef{Type: "user", ID: "u2"}})
+	cmd.OperationID = "committed"
+	if got, err := original.Mutations.Apply(t.Context(), cmd); err != nil || got.Replayed {
+		t.Fatalf("first: %+v %v", got, err)
+	}
+	lower := mustComponents(t, repos, WithLimits(authmodel.EvaluationLimits{MaxBatchSize: 1}))
+	if got, err := lower.Mutations.Apply(t.Context(), cmd); err != nil || !got.Replayed || got.Superseded {
+		t.Fatalf("lower-limit replay: %+v %v", got, err)
+	}
+	for _, id := range []string{"fresh", ""} {
+		cmd.OperationID = id
+		if got, err := lower.Mutations.Apply(t.Context(), cmd); got != nil || !errors.Is(err, authmodel.ErrEvaluationLimit) {
+			t.Fatalf("fresh admission: %+v %v", got, err)
+		}
+	}
+	cmd.OperationID = "fresh"
+	if got, err := original.Mutations.Apply(t.Context(), cmd); err != nil || got.Replayed {
+		t.Fatalf("refused operation recorded: %+v %v", got, err)
+	}
+}

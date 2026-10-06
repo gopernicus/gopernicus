@@ -34,7 +34,7 @@ const migrationSource = "authorization"
 // storeTables is the pocket's table inventory, probed at construction in this
 // order. Every statement in the package renders these names through a store's
 // table method so a schema-scoped store qualifies them.
-var storeTables = []string{"iam_tuples", "iam_audit"}
+var storeTables = []string{"iam_tuples", "iam_audit", "iam_operations"}
 
 // Option configures the store set at construction.
 type Option func(*config)
@@ -70,7 +70,7 @@ func WithSchema(s pgxdb.Schema) Option {
 	return func(c *config) { c.schema = s }
 }
 
-// Repositories probes the canonical tuple and audit tables and returns all ports.
+// Repositories probes the canonical tuple, audit and operation tables and returns all ports.
 // WithTupleCache additionally validates optional protocol 2 capture and exposes the
 // matching source. No constructor applies migrations or starts a worker.
 func Repositories(ctx context.Context, db *pgxdb.DB, opts ...Option) (authorization.Repositories, error) {
@@ -100,7 +100,7 @@ func Repositories(ctx context.Context, db *pgxdb.DB, opts ...Option) (authorizat
 			return authorization.Repositories{}, err
 		}
 	}
-	if err := probeCanonicalSchema(ctx, db, cfg.schema, true); err != nil {
+	if err := probeCanonicalSchema(ctx, db, cfg.schema, true, true); err != nil {
 		return authorization.Repositories{}, err
 	}
 	repos := authorization.Repositories{
@@ -142,7 +142,7 @@ func RelationshipRepository(ctx context.Context, db *pgxdb.DB, opts ...Option) (
 			return nil, err
 		}
 	}
-	if err := probeCanonicalSchema(ctx, db, cfg.schema, cfg.audit); err != nil {
+	if err := probeCanonicalSchema(ctx, db, cfg.schema, cfg.audit, false); err != nil {
 		return nil, err
 	}
 	return newRelationshipStore(db, cfg), nil

@@ -39,11 +39,14 @@ type state struct {
 	integrity    mutations.IntegrityPolicy
 	mu           sync.Mutex
 	facts        map[tuples.Tuple]struct{}
+	operations   map[string]operationRecord
 	recordAudit  bool
 	auditRecords []audit.Record
 }
 
-func newState() *state { return &state{facts: make(map[tuples.Tuple]struct{})} }
+func newState() *state {
+	return &state{facts: make(map[tuples.Tuple]struct{}), operations: make(map[string]operationRecord)}
+}
 func (s *state) relationshipRows() []relRow {
 	out := make([]relRow, 0, len(s.facts))
 	for t := range s.facts {

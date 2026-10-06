@@ -98,3 +98,37 @@ func TestMutationEmptyIntegrityPolicyAllowsMemberFirst(t *testing.T) {
 		t.Fatalf("an empty integrity policy must allow a member-first command, got %q", rcpt.Outcome)
 	}
 }
+
+func TestOperationReplayAfterPolicyTightening(t *testing.T) {
+	store := New()
+	cmd := grantOwner(t, "d", "u")
+	cmd.OperationID = "one"
+	if _, err := store.Mutations().Apply(t.Context(), cmd, nil); err != nil {
+		t.Fatal(err)
+	}
+	store.Mutations().integrity = mutation.IntegrityPolicy{Rules: []mutation.IntegrityRule{{ResourceType: "doc", Relation: "owner", MinSubjects: 2}}}
+	got, err := store.Mutations().Apply(t.Context(), cmd, nil)
+	if err != nil || !got.Replayed || got.Superseded {
+		t.Fatalf("tightened policy replay: %+v %v", got, err)
+	}
+}
+
+func TestOperationLedgerCancelledPublication(t *testing.T) {
+	store := New()
+	ctx, cancel := context.WithCancel(t.Context())
+	cmd := grantOwner(t, "d", "u")
+	cmd.OperationID = "cancelled"
+	err := store.mut.st.write(ctx, func(next *state) error {
+		next.applyLocked(cmd.Requested())
+		next.operations[cmd.OperationID] = operationRecord{fingerprint: mutation.Fingerprint(cmd), outcome: mutation.OutcomeApplied}
+		cancel()
+		return nil
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled publication: %v", err)
+	}
+	got, err := store.Mutations().Apply(t.Context(), cmd, nil)
+	if err != nil || got.Replayed || got.Outcome != mutation.OutcomeApplied {
+		t.Fatalf("cancelled ledger was published: %+v %v", got, err)
+	}
+}

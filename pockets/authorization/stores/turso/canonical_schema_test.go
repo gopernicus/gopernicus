@@ -85,3 +85,23 @@ INSERT INTO temp.iam_tuples VALUES (1,'','','admin','user','shadow','');`); err 
 		t.Fatalf("TEMP masked missing main: %v", err)
 	}
 }
+
+func TestOperationSchemaRequiredOnlyForBundle(t *testing.T) {
+	for _, statement := range []string{
+		"DROP TABLE main.iam_operations",
+		"DROP TABLE main.iam_operations; CREATE TABLE main.iam_operations(operation_id TEXT)",
+	} {
+		t.Run(statement, func(t *testing.T) {
+			db := canonicalFixture(t, false)
+			if _, err := db.Exec(t.Context(), statement); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := testRepositories(t.Context(), db); err == nil {
+				t.Fatal("bundle accepted missing or incompatible operations table")
+			}
+			if _, err := RelationshipRepository(t.Context(), db, WithAudit()); err != nil {
+				t.Fatalf("facade requires ledger: %v", err)
+			}
+		})
+	}
+}

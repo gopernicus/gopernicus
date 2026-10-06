@@ -52,7 +52,7 @@ func WithIntegrityPolicy(p mutation.IntegrityPolicy) Option {
 	return func(c *config) { c.integrity = mutation.IntegrityPolicy{Rules: slices.Clone(p.Rules)} }
 }
 
-// Repositories probes the canonical tuple and audit tables and returns all ports.
+// Repositories probes the canonical tuple, audit and operation tables and returns all ports.
 // WithTupleCache additionally validates optional protocol 2 capture and exposes the
 // matching source. No constructor applies migrations or starts a worker.
 func Repositories(ctx context.Context, db *tursodb.DB, opts ...Option) (authorization.Repositories, error) {
@@ -77,12 +77,12 @@ func Repositories(ctx context.Context, db *tursodb.DB, opts ...Option) (authoriz
 			return authorization.Repositories{}, err
 		}
 	}
-	for _, table := range []string{"iam_tuples", "iam_audit"} {
+	for _, table := range []string{"iam_tuples", "iam_audit", "iam_operations"} {
 		if err := probeTable(ctx, db, table); err != nil {
 			return authorization.Repositories{}, err
 		}
 	}
-	if err := probeCanonicalSchema(ctx, db, true); err != nil {
+	if err := probeCanonicalSchema(ctx, db, true, true); err != nil {
 		return authorization.Repositories{}, err
 	}
 	repos := authorization.Repositories{
@@ -124,7 +124,7 @@ func RelationshipRepository(ctx context.Context, db *tursodb.DB, opts ...Option)
 			return nil, err
 		}
 	}
-	if err := probeCanonicalSchema(ctx, db, cfg.audit); err != nil {
+	if err := probeCanonicalSchema(ctx, db, cfg.audit, false); err != nil {
 		return nil, err
 	}
 	return newRelationshipStore(db, cfg), nil

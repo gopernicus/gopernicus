@@ -47,6 +47,8 @@ const (
 	// ReasonConcurrentMutation reports an aborted write due to transaction contention.
 	ReasonConcurrentMutation Reason = "concurrent_mutation"
 
+	ReasonOperationMismatch Reason = "operation_mismatch"
+
 	// ReasonInvariantConflict — a protected invariant blocked the write (e.g.
 	// last-owner/integrity minimum). Maps to sdk.ErrConflict.
 	ReasonInvariantConflict Reason = "invariant_conflict"
