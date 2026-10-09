@@ -1,6 +1,6 @@
 # Releasing gopernicus modules
 
-## Unreleased: Email unsubscribe headers (sdk v0.11.0; sendgrid v0.4.0 — issue #64)
+## Email unsubscribe headers (sdk v0.11.0; sendgrid v0.4.0 — published 2026-10-09)
 
 SDK `v0.11.0` adds `email.Unsubscribe` on `Message` and `SendRequest`: the SMTP
 sender writes RFC 2369 `List-Unsubscribe` and, with OneClick, RFC 8058
@@ -14,6 +14,22 @@ DKIM-sign both headers.
 SendGrid `v0.4.0` maps the field to the v3 `headers` object and requires SDK
 `v0.11.0`. Keep SendGrid Subscription Tracking off for mail that sets it.
 Pockets, examples and scaffold pins are unchanged.
+
+Both are annotated tags on merge commits: `sdk/v0.11.0` at
+`7cc785eae6193aa649d1d2584e78c97abe821b56` (PR #65) and
+`integrations/email/sendgrid/v0.4.0` at
+`0d0b6f4d7b7265fe712b8a77d41635bec28bb8c8` (PR #66, pinning public SDK v0.11.0).
+`make check` passed before PR #65; CI passed on both PRs. Both proxy `.info`
+records resolved before the SendGrid pin moved. Using `GOWORK=off`, an empty
+module/build cache, `proxy.golang.org` and `sum.golang.org`, a standalone consumer
+built, vetted and passed `go mod verify`, and saw shared one-click refused with
+`sdk.ErrInvalidInput`. The public SendGrid archive matched its tag source and passed
+uncached tests and vet. The public SDK `notify/email` package matched its source
+and passed uncached tests and vet. No replacements were used.
+
+The live provider check is still open: no real SendGrid message has been sent to
+confirm the client's Unsubscribe button, a single `List-Unsubscribe`, and DKIM
+coverage of both headers.
 
 Plan: [email-list-unsubscribe](plans/email-list-unsubscribe.md).
 
