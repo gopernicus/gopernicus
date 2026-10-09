@@ -1,8 +1,10 @@
 # Email List-Unsubscribe / one-click headers (sdk notify/email + sendgrid) — issue #64
 
-Status: RATIFIED 2026-10-09 (owner: "do it"). BUILT 2026-10-09 — PR 1 branch
-`feat/email-list-unsubscribe` (sdk), stacked PR 2 branch `feat/sendgrid-list-unsubscribe`
-(sendgrid + docs). Tags, sendgrid sdk pin and the live check (T5) NOT done — owner. Direction agreed in-session 2026-10-09
+Status: RATIFIED 2026-10-09 (owner: "do it"). RELEASED 2026-10-09 — sdk/v0.11.0 @ 7cc785ea
+(PR #65) and integrations/email/sendgrid/v0.4.0 @ 0d0b6f4d (PR #66, pins sdk v0.11.0), both
+cold-verified from the public proxy (see RELEASING.md). Owner merged #66 before the live check;
+T5 (real SendGrid → Gmail one-click send) remains OPEN. Build correction: the sendgrid pin moved in
+a follow-up commit after the sdk tag (Task 4), not via a local replace. Direction agreed in-session 2026-10-09
 (owner: "yeah agree. plan it out" to: typed field in the port, per-sender wire mapping,
 OneClick refused for multi-recipient messages, `SendRequest` plumbing in scope).
 
