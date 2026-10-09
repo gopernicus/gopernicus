@@ -61,3 +61,62 @@ func TestMessage_Validate(t *testing.T) {
 		})
 	}
 }
+
+func TestMessage_ValidateUnsubscribe(t *testing.T) {
+	const link = "https://example.test/unsubscribe?token=secret-token"
+	tests := []struct {
+		name    string
+		u       Unsubscribe
+		to      []string
+		wantErr bool
+	}{
+		{"zero value", Unsubscribe{}, nil, false},
+		{"URL only", Unsubscribe{URL: link}, nil, false},
+		{"mailbox only", Unsubscribe{Mailto: "unsubscribe@example.test"}, nil, false},
+		{"URL and mailbox", Unsubscribe{URL: link, Mailto: "unsubscribe@example.test"}, nil, false},
+		{"one-click", Unsubscribe{URL: link, OneClick: true}, nil, false},
+		{"URL on shared message", Unsubscribe{URL: link}, []string{"a@example.test", "b@example.test"}, false},
+		{"900-byte URL", Unsubscribe{URL: link + "&p=" + strings.Repeat("x", 900-len(link)-3)}, nil, false},
+
+		{"OneClick only", Unsubscribe{OneClick: true}, nil, true},
+		{"one-click without URL", Unsubscribe{Mailto: "unsubscribe@example.test", OneClick: true}, nil, true},
+		{"one-click on shared message", Unsubscribe{URL: link, OneClick: true}, []string{"a@example.test", "b@example.test"}, true},
+		{"http URL", Unsubscribe{URL: "http://example.test/u"}, nil, true},
+		{"relative URL", Unsubscribe{URL: "/unsubscribe"}, nil, true},
+		{"mailto URL in URL field", Unsubscribe{URL: "mailto:a@example.test"}, nil, true},
+		{"URL userinfo", Unsubscribe{URL: "https://user:secret@example.test/u"}, nil, true},
+		{"URL fragment", Unsubscribe{URL: link + "#frag"}, nil, true},
+		{"URL CRLF injection", Unsubscribe{URL: link + "\r\nBcc: victim@example.test"}, nil, true},
+		{"URL closing bracket", Unsubscribe{URL: link + ">, <https://evil.test"}, nil, true},
+		{"URL space", Unsubscribe{URL: "https://example.test/a b"}, nil, true},
+		{"URL non-ASCII", Unsubscribe{URL: "https://exämple.test/u"}, nil, true},
+		{"901-byte URL", Unsubscribe{URL: link + "&p=" + strings.Repeat("x", 901-len(link)-3)}, nil, true},
+		{"mailbox CRLF injection", Unsubscribe{Mailto: "u@example.test\r\nBcc: v@example.test"}, nil, true},
+		{"mailbox display name", Unsubscribe{Mailto: "Name <u@example.test>"}, nil, true},
+		{"mailbox query", Unsubscribe{Mailto: "u?subject=x@example.test"}, nil, true},
+		{"mailbox quoted local part", Unsubscribe{Mailto: `"u"@example.test`}, nil, true},
+		{"mailbox non-ASCII", Unsubscribe{Mailto: "ü@example.test"}, nil, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := validMessage()
+			if tt.to != nil {
+				m.To = tt.to
+			}
+			m.Unsubscribe = tt.u
+			err := m.Validate()
+			if tt.wantErr != (err != nil) {
+				t.Fatalf("Validate() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if err == nil {
+				return
+			}
+			if !errors.Is(err, sdk.ErrInvalidInput) {
+				t.Errorf("error %v does not wrap sdk.ErrInvalidInput", err)
+			}
+			if strings.Contains(err.Error(), "secret") || strings.Contains(err.Error(), "example.test") {
+				t.Errorf("diagnostic echoes input: %v", err)
+			}
+		})
+	}
+}

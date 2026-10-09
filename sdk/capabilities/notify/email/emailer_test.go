@@ -40,6 +40,27 @@ func TestEmailerRendersSubjectAndBothBodies(t *testing.T) {
 		t.Fatalf("email representation lost: %+v", sender.last)
 	}
 }
+
+func TestEmailerCarriesUnsubscribe(t *testing.T) {
+	sender := &mockSender{}
+	e, err := New(sender, "from@example.test", WithContentTemplates("test", templateFiles("<p>Hi</p>", "Hi"), LayerApp))
+	if err != nil {
+		t.Fatal(err)
+	}
+	u := Unsubscribe{URL: "https://example.test/u?t=abc", Mailto: "u@example.test", OneClick: true}
+	if err := e.RenderAndSend(context.Background(), SendRequest{To: "to@example.test", Subject: "Mention", Template: "test:body", Unsubscribe: u}); err != nil {
+		t.Fatal(err)
+	}
+	if sender.last.Unsubscribe != u {
+		t.Fatalf("Unsubscribe = %+v, want %+v", sender.last.Unsubscribe, u)
+	}
+	sender.called = false
+	err = e.RenderAndSend(context.Background(), SendRequest{To: "to@example.test", Subject: "Mention", Template: "test:body", Unsubscribe: Unsubscribe{URL: "http://example.test/u"}})
+	if !errors.Is(err, sdk.ErrInvalidInput) || sender.called {
+		t.Fatalf("invalid unsubscribe reached sender: err=%v called=%v", err, sender.called)
+	}
+}
+
 func TestEmailerValidationCancellationAndFailure(t *testing.T) {
 	if _, err := New(nil, "from@example.test"); !errors.Is(err, sdk.ErrInvalidInput) {
 		t.Fatalf("nil sender: %v", err)

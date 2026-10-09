@@ -143,3 +143,19 @@ func TestSMTPRejectsCanceledAndInjectedMessagesBeforeDial(t *testing.T) {
 		t.Fatalf("header injection accepted: %v", err)
 	}
 }
+
+func TestSMTPDeliversOneClickUnsubscribeHeaders(t *testing.T) {
+	wire := make(chan []byte, 1)
+	cfg := smtpSession(t, func(conn *textproto.Conn) { wire <- smtpReadDATA(t, conn); _ = conn.PrintfLine("250 accepted") })
+	msg := validMessage()
+	msg.Unsubscribe = Unsubscribe{URL: "https://example.test/u?t=abc", OneClick: true}
+	if err := NewSMTP(cfg).Send(context.Background(), msg); err != nil {
+		t.Fatal(err)
+	}
+	data := string(<-wire)
+	for _, want := range []string{"\nList-Unsubscribe: <https://example.test/u?t=abc>\n", "\nList-Unsubscribe-Post: List-Unsubscribe=One-Click\n"} {
+		if !strings.Contains(data, want) {
+			t.Errorf("DATA missing %q", want)
+		}
+	}
+}
