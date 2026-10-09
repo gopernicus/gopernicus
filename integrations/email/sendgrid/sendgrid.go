@@ -98,6 +98,12 @@ func (s *Sender) Send(ctx context.Context, msg email.Message) error {
 		p.AddTos(mail.NewEmail("", address))
 	}
 	m.AddPersonalizations(p)
+	if u := msg.Unsubscribe; !u.IsZero() {
+		m.SetHeader("List-Unsubscribe", listUnsubscribe(u))
+		if u.OneClick {
+			m.SetHeader("List-Unsubscribe-Post", "List-Unsubscribe=One-Click")
+		}
+	}
 
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, s.host+sendPath, bytes.NewReader(mail.GetRequestBody(m)))
 	if err != nil {
@@ -114,6 +120,19 @@ func (s *Sender) Send(ctx context.Context, msg email.Message) error {
 		return &ResponseError{StatusCode: response.StatusCode}
 	}
 	return nil
+}
+
+// listUnsubscribe renders a validated Unsubscribe as one header value, https
+// entry first so one-click clients find it. JSON carries it unfolded.
+func listUnsubscribe(u email.Unsubscribe) string {
+	var entries []string
+	if u.URL != "" {
+		entries = append(entries, "<"+u.URL+">")
+	}
+	if u.Mailto != "" {
+		entries = append(entries, "<mailto:"+u.Mailto+">")
+	}
+	return strings.Join(entries, ", ")
 }
 
 // ResponseError reports a rejected provider response without its potentially
