@@ -3,7 +3,7 @@ module github.com/gopernicus/gopernicus/integrations/email/sendgrid
 go 1.26.1
 
 require (
-	github.com/gopernicus/gopernicus/sdk v0.9.0
+	github.com/gopernicus/gopernicus/sdk v0.11.0
 	github.com/sendgrid/sendgrid-go v3.16.1+incompatible
 )
 

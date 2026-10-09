@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -36,6 +37,7 @@ type sendPayload struct {
 		Type  string `json:"type"`
 		Value string `json:"value"`
 	} `json:"content"`
+	Headers map[string]string `json:"headers"`
 }
 
 // capturedRequest records what the fake SendGrid endpoint received.
@@ -229,5 +231,54 @@ func TestSend_StatusErrorsMapToKinds(t *testing.T) {
 				t.Errorf("status %d: error = %v, want wraps %v", tt.status, err, tt.want)
 			}
 		})
+	}
+}
+
+func TestSend_UnsubscribeHeaders(t *testing.T) {
+	const link = "https://example.com/unsubscribe?t=abc"
+	tests := []struct {
+		name string
+		u    email.Unsubscribe
+		want map[string]string
+	}{
+		{"zero value sends no headers object", email.Unsubscribe{}, nil},
+		{"URL only", email.Unsubscribe{URL: link}, map[string]string{"List-Unsubscribe": "<" + link + ">"}},
+		{"mailbox only", email.Unsubscribe{Mailto: "u@example.com"}, map[string]string{"List-Unsubscribe": "<mailto:u@example.com>"}},
+		{"one-click with mailbox", email.Unsubscribe{URL: link, Mailto: "u@example.com", OneClick: true}, map[string]string{
+			"List-Unsubscribe":      "<" + link + ">, <mailto:u@example.com>",
+			"List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sender, captured := newFakeSendGrid(t, Config{APIKey: "sg-test-key"}, http.StatusAccepted, "")
+			msg := email.Message{From: "noreply@example.com", To: []string{"a@example.com"}, Subject: "Mention", Text: "body", Unsubscribe: tt.u}
+			if err := sender.Send(context.Background(), msg); err != nil {
+				t.Fatal(err)
+			}
+			if !maps.Equal(captured.body.Headers, tt.want) || (tt.want == nil) != (captured.body.Headers == nil) {
+				t.Fatalf("headers = %v, want %v", captured.body.Headers, tt.want)
+			}
+		})
+	}
+}
+
+func TestSend_InvalidUnsubscribeMakesNoRequest(t *testing.T) {
+	sender, captured := newFakeSendGrid(t, Config{APIKey: "sg-test-key"}, http.StatusAccepted, "")
+	for _, u := range []email.Unsubscribe{
+		{URL: "http://example.com/u"},
+		{URL: "https://example.com/u", OneClick: true, Mailto: "u@example.com\r\nBcc: v@example.com"},
+	} {
+		msg := email.Message{From: "noreply@example.com", To: []string{"a@example.com"}, Subject: "Mention", Text: "body", Unsubscribe: u}
+		if err := sender.Send(context.Background(), msg); !errors.Is(err, sdk.ErrInvalidInput) {
+			t.Fatalf("Send() error = %v, want ErrInvalidInput", err)
+		}
+	}
+	msg := email.Message{From: "noreply@example.com", To: []string{"a@example.com", "b@example.com"}, Subject: "Mention", Text: "body", Unsubscribe: email.Unsubscribe{URL: "https://example.com/u", OneClick: true}}
+	if err := sender.Send(context.Background(), msg); !errors.Is(err, sdk.ErrInvalidInput) {
+		t.Fatalf("shared one-click: Send() error = %v, want ErrInvalidInput", err)
+	}
+	if captured.called {
+		t.Fatal("invalid unsubscribe reached SendGrid")
 	}
 }

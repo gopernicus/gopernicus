@@ -49,6 +49,13 @@ The email Message supplies bare From/To mailboxes; FromName adds the provider's
 display name. Both text and HTML reach SendGrid. Every To recipient is visible
 to the other recipients; use separate messages for private delivery.
 
+A non-zero `Message.Unsubscribe` becomes the top-level v3 `headers`
+`List-Unsubscribe` (https entry first) and, with OneClick,
+`List-Unsubscribe-Post: List-Unsubscribe=One-Click`. SendGrid DKIM-signs the
+message itself. Leave the account's Subscription Tracking setting off for mail
+that sets Unsubscribe: SendGrid may then add its own unsubscribe link and
+header, and two competing targets confuse mail clients.
+
 ## Posture and errors
 
 Sender implements `notify.CapabilityReporter`. A valid HTTPS origin declares

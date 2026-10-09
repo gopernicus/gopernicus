@@ -1,5 +1,22 @@
 # Releasing gopernicus modules
 
+## Unreleased: Email unsubscribe headers (sdk v0.11.0; sendgrid v0.4.0 — issue #64)
+
+SDK `v0.11.0` adds `email.Unsubscribe` on `Message` and `SendRequest`: the SMTP
+sender writes RFC 2369 `List-Unsubscribe` and, with OneClick, RFC 8058
+`List-Unsubscribe-Post`; the console sender logs both. The zero value changes
+nothing. Validation refuses non-https or non-ASCII URLs, URLs over 900 bytes,
+header-breaking characters, and OneClick without a URL or with more than one
+recipient. A host-owned `email.Sender` must deliver the headers or refuse a
+non-zero Unsubscribe with `sdk.ErrInvalidInput`, never drop it. SMTP relays must
+DKIM-sign both headers.
+
+SendGrid `v0.4.0` maps the field to the v3 `headers` object and requires SDK
+`v0.11.0`. Keep SendGrid Subscription Tracking off for mail that sets it.
+Pockets, examples and scaffold pins are unchanged.
+
+Plan: [email-list-unsubscribe](plans/email-list-unsubscribe.md).
+
 ## Invitation grant operation ledger (published 2026-10-06)
 
 Coordinated MINOR releases: authorization `v0.23.0`, PostgreSQL adapter
