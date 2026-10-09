@@ -3,6 +3,7 @@ package email
 import (
 	"context"
 	"log/slog"
+	"strings"
 
 	"github.com/gopernicus/gopernicus/sdk/capabilities/notify"
 )
@@ -41,11 +42,18 @@ func (s *Console) Send(ctx context.Context, msg Message) error {
 	if err := msg.Validate(); err != nil {
 		return err
 	}
-	s.log.InfoContext(ctx, "email (console sender)",
+	attrs := []any{
 		"from", msg.From,
 		"to", msg.To,
 		"subject", msg.Subject,
 		"text", msg.Text,
-	)
+	}
+	if u := msg.Unsubscribe; !u.IsZero() {
+		attrs = append(attrs, "list_unsubscribe", strings.Join(unsubscribeEntries(u), ", "))
+		if u.OneClick {
+			attrs = append(attrs, "list_unsubscribe_post", "List-Unsubscribe=One-Click")
+		}
+	}
+	s.log.InfoContext(ctx, "email (console sender)", attrs...)
 	return nil
 }

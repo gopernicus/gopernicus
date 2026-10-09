@@ -31,12 +31,15 @@ func New(sender Sender, defaultFrom string, opts ...Option) (*Emailer, error) {
 }
 
 // SendRequest selects one recipient and the rendered email content.
+// Unsubscribe is copied to Message.Unsubscribe; the zero value sends no
+// unsubscribe headers.
 type SendRequest struct {
-	To       string
-	Subject  string
-	Template string
-	Data     any
-	Layout   LayoutType
+	To          string
+	Subject     string
+	Template    string
+	Data        any
+	Layout      LayoutType
+	Unsubscribe Unsubscribe
 }
 
 // RenderAndSend renders both alternatives and performs one transport attempt.
@@ -48,7 +51,7 @@ func (e *Emailer) RenderAndSend(ctx context.Context, req SendRequest) error {
 	if err != nil {
 		return err
 	}
-	message := Message{From: e.defaultFrom, To: []string{req.To}, Subject: req.Subject, Text: text, HTML: html}
+	message := Message{From: e.defaultFrom, To: []string{req.To}, Subject: req.Subject, Text: text, HTML: html, Unsubscribe: req.Unsubscribe}
 	if err := NewDelivery(e.sender, message).Send(ctx); err != nil {
 		return fmt.Errorf("send email: %w", err)
 	}

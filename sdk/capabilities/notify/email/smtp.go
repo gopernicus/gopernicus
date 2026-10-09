@@ -35,7 +35,9 @@ type SMTPConfig struct {
 	Timeout time.Duration
 }
 
-// SMTP is a stdlib email transport. Each Send owns its connection.
+// SMTP is a stdlib email transport. Each Send owns its connection. It does not
+// DKIM-sign; RFC 8058 one-click unsubscribe requires the relay's signature to
+// cover List-Unsubscribe and List-Unsubscribe-Post.
 type SMTP struct {
 	addr    string
 	host    string
@@ -192,6 +194,29 @@ func writeQuotedPrintable(w io.Writer, body string) error {
 	return writer.Close()
 }
 
+// writeUnsubscribeHeaders puts each validated entry on its own folded line.
+func writeUnsubscribeHeaders(b *bytes.Buffer, u Unsubscribe) {
+	if u.IsZero() {
+		return
+	}
+	fmt.Fprintf(b, "List-Unsubscribe: %s\r\n", strings.Join(unsubscribeEntries(u), ",\r\n "))
+	if u.OneClick {
+		b.WriteString("List-Unsubscribe-Post: List-Unsubscribe=One-Click\r\n")
+	}
+}
+
+// unsubscribeEntries lists the https entry first so one-click clients find it.
+func unsubscribeEntries(u Unsubscribe) []string {
+	var entries []string
+	if u.URL != "" {
+		entries = append(entries, "<"+u.URL+">")
+	}
+	if u.Mailto != "" {
+		entries = append(entries, "<mailto:"+u.Mailto+">")
+	}
+	return entries
+}
+
 func writeAddressHeaders(b *bytes.Buffer, msg Message) {
 	fmt.Fprintf(b, "From: %s\r\n", msg.From)
 	fmt.Fprintf(b, "To: %s\r\n", strings.Join(msg.To, ",\r\n "))
@@ -211,6 +236,7 @@ func writeAddressHeaders(b *bytes.Buffer, msg Message) {
 		}
 	}
 	b.WriteString("\r\n")
+	writeUnsubscribeHeaders(b, msg.Unsubscribe)
 	fmt.Fprintf(b, "Date: %s\r\n", time.Now().Format(time.RFC1123Z))
 	b.WriteString("MIME-Version: 1.0\r\n")
 }

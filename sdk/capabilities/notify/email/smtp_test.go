@@ -174,3 +174,47 @@ func assertPart(t *testing.T, part *multipart.Part, wantType, wantCharset, wantB
 		t.Errorf("part body = %q, want %q", body, wantBody)
 	}
 }
+
+func TestBuildMessageUnsubscribeHeaders(t *testing.T) {
+	const link = "https://example.test/unsubscribe?t=abc"
+	longLink := "https://example.test/u?t=" + strings.Repeat("x", 900-len("https://example.test/u?t="))
+	tests := []struct {
+		name     string
+		u        Unsubscribe
+		wantList string
+		wantPost string
+	}{
+		{"zero value", Unsubscribe{}, "", ""},
+		{"URL only", Unsubscribe{URL: link}, "<" + link + ">", ""},
+		{"mailbox only", Unsubscribe{Mailto: "u@example.test"}, "<mailto:u@example.test>", ""},
+		{"both", Unsubscribe{Mailto: "u@example.test", URL: link}, "<" + link + ">, <mailto:u@example.test>", ""},
+		{"one-click", Unsubscribe{URL: link, OneClick: true}, "<" + link + ">", "List-Unsubscribe=One-Click"},
+		{"longest URL and mailbox", Unsubscribe{URL: longLink, Mailto: "u@example.test", OneClick: true}, "<" + longLink + ">, <mailto:u@example.test>", "List-Unsubscribe=One-Click"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			msg := validMessage()
+			msg.HTML = "<p>html</p>"
+			msg.Unsubscribe = tt.u
+			raw, err := buildMessage(msg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			parsed, err := mail.ReadMessage(bytes.NewReader(raw))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := parsed.Header["List-Unsubscribe"]; tt.wantList == "" && got != nil || tt.wantList != "" && (len(got) != 1 || got[0] != tt.wantList) {
+				t.Errorf("List-Unsubscribe = %q, want %q", got, tt.wantList)
+			}
+			if got := parsed.Header["List-Unsubscribe-Post"]; tt.wantPost == "" && got != nil || tt.wantPost != "" && (len(got) != 1 || got[0] != tt.wantPost) {
+				t.Errorf("List-Unsubscribe-Post = %q, want %q", got, tt.wantPost)
+			}
+			for _, line := range bytes.Split(raw, []byte("\r\n")) {
+				if len(line) > 998 {
+					t.Fatalf("oversized header line: %d", len(line))
+				}
+			}
+		})
+	}
+}

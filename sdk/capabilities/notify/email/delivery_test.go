@@ -13,14 +13,16 @@ func TestSelectedEmailPreservesRichContentAndRecipientSnapshot(t *testing.T) {
 	sender := &mockSender{}
 	message := validMessage()
 	message.HTML = "<p>Rich email</p>"
+	message.Unsubscribe = Unsubscribe{URL: "https://example.test/u", OneClick: true}
 	selected := NewDelivery(sender, message)
+	message.Unsubscribe.URL = "https://changed.example.test/u"
 	message.To[0] = "changed@example.test"
 	chatCalls := 0
 	chat := notify.DeliveryFunc(func(context.Context) error { chatCalls++; return nil })
 	if err := notify.Send(context.Background(), selected, chat); err != nil {
 		t.Fatal(err)
 	}
-	if sender.last.To[0] != "recipient@example.com" || sender.last.HTML != message.HTML || sender.last.Text != message.Text || chatCalls != 1 {
+	if sender.last.To[0] != "recipient@example.com" || sender.last.HTML != message.HTML || sender.last.Text != message.Text || sender.last.Unsubscribe.URL != "https://example.test/u" || chatCalls != 1 {
 		t.Fatalf("selected content changed: message=%+v chat=%d", sender.last, chatCalls)
 	}
 	sender.last.To[0] = "provider-mutated@example.test"

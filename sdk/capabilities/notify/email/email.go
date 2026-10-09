@@ -27,6 +27,19 @@
 // which wins over the bundled template entirely — including the bundled logo
 // block, so an overriding host must render Brand.LogoURL itself if it wants one.
 //
+// # Unsubscribe headers
+//
+// Message.Unsubscribe (and SendRequest.Unsubscribe) asks the sender to add
+// RFC 2369 List-Unsubscribe and, with OneClick, RFC 8058
+// List-Unsubscribe-Post headers, which mail clients use for their native
+// Unsubscribe button. This is per-send data, unlike Branding.UnsubscribeURL,
+// which is a static link rendered in the LayoutMarketing body; a host may use
+// both. A one-click URL is per recipient, so OneClick is refused on a message
+// with more than one recipient. The URL's endpoint must accept a POST with the
+// body List-Unsubscribe=One-Click, without cookies or CSRF tokens. RFC 8058 also
+// requires the DKIM signature to cover both headers: the SMTP sender does not
+// sign, so its relay must.
+//
 // # Logo rendering
 //
 // Branding.LogoURL should be an absolute, publicly fetchable HTTPS image URL.
@@ -66,6 +79,7 @@ import (
 	"context"
 	"fmt"
 	"net/mail"
+	"net/url"
 	"strings"
 	"unicode/utf8"
 
@@ -75,13 +89,30 @@ import (
 // Message is an outbound email. Text is required; HTML is optional. From and
 // each To value must be a bare mailbox of at most 254 bytes. Every To recipient
 // is visible to the other recipients; send separate messages for private fan-out.
+// A per-recipient Unsubscribe URL likewise needs one message per recipient.
 type Message struct {
-	From    string
-	To      []string
-	Subject string
-	Text    string
-	HTML    string
+	From        string
+	To          []string
+	Subject     string
+	Text        string
+	HTML        string
+	Unsubscribe Unsubscribe
 }
+
+// Unsubscribe requests RFC 2369 List-Unsubscribe and, with OneClick, RFC 8058
+// List-Unsubscribe-Post headers. The zero value sends neither. It is separate
+// from Branding.UnsubscribeURL, which is a static link in the marketing layout
+// body. URL is an absolute ASCII https URL of at most 900 bytes; Mailto is a
+// bare ASCII mailbox. OneClick requires URL and exactly one recipient, since a
+// shared one-click link would let any visible recipient unsubscribe another.
+type Unsubscribe struct {
+	URL      string
+	Mailto   string
+	OneClick bool
+}
+
+// IsZero reports whether no unsubscribe headers are requested.
+func (u Unsubscribe) IsZero() bool { return u == Unsubscribe{} }
 
 // Validate checks required fields, bare mailboxes, header safety and UTF-8. Failures wrap
 // sdk.ErrInvalidInput.
@@ -114,7 +145,51 @@ func (m Message) Validate() error {
 	if strings.TrimSpace(m.Text) == "" {
 		return fmt.Errorf("body is required: %w", sdk.ErrInvalidInput)
 	}
+	return m.validateUnsubscribe()
+}
+
+func (m Message) validateUnsubscribe() error {
+	u := m.Unsubscribe
+	if u.IsZero() {
+		return nil
+	}
+	if u.URL == "" && u.Mailto == "" {
+		return fmt.Errorf("email: unsubscribe requires a URL or mailbox: %w", sdk.ErrInvalidInput)
+	}
+	if u.OneClick && u.URL == "" {
+		return fmt.Errorf("email: one-click unsubscribe requires a URL: %w", sdk.ErrInvalidInput)
+	}
+	if u.OneClick && len(m.To) != 1 {
+		return fmt.Errorf("email: one-click unsubscribe requires exactly one recipient: %w", sdk.ErrInvalidInput)
+	}
+	if u.URL != "" && !validUnsubscribeURL(u.URL) {
+		return fmt.Errorf("email: invalid unsubscribe URL: %w", sdk.ErrInvalidInput)
+	}
+	if u.Mailto != "" && (validateMailbox(u.Mailto) != nil || !plainHeaderValue(u.Mailto) || strings.ContainsAny(u.Mailto, `"?`)) {
+		return fmt.Errorf("email: invalid unsubscribe mailbox: %w", sdk.ErrInvalidInput)
+	}
 	return nil
+}
+
+// Each List-Unsubscribe entry is written on its own folded header line, so
+// the 900-byte cap keeps it under the RFC 5322 998-byte line limit.
+func validUnsubscribeURL(value string) bool {
+	if len(value) > 900 || !plainHeaderValue(value) {
+		return false
+	}
+	u, err := url.Parse(value)
+	return err == nil && u.Scheme == "https" && u.Host != "" && u.User == nil && u.Fragment == "" && !strings.Contains(value, "#")
+}
+
+// A plain header value is printable ASCII without spaces or angle brackets,
+// so it can be written verbatim inside List-Unsubscribe's <...> entries.
+func plainHeaderValue(value string) bool {
+	for i := 0; i < len(value); i++ {
+		if c := value[i]; c <= ' ' || c >= 127 || c == '<' || c == '>' {
+			return false
+		}
+	}
+	return true
 }
 
 // The port accepts one bare mailbox per value, without display names, address
@@ -131,6 +206,8 @@ func validateMailbox(value string) error {
 }
 
 // Sender delivers a Message. Implemented by bundled or integration senders.
+// A Sender that cannot deliver a non-zero Message.Unsubscribe must return an
+// error wrapping sdk.ErrInvalidInput rather than send without the headers.
 type Sender interface {
 	Send(ctx context.Context, msg Message) error
 }

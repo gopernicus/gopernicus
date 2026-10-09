@@ -63,3 +63,32 @@ func TestConsole_NilLogger(t *testing.T) {
 		t.Fatalf("Send() with nil logger error = %v, want nil", err)
 	}
 }
+
+func TestConsole_Send_LogsUnsubscribeOnlyWhenSet(t *testing.T) {
+	for _, tt := range []struct {
+		name     string
+		u        Unsubscribe
+		wantList any
+		wantPost any
+	}{
+		{"zero value", Unsubscribe{}, nil, nil},
+		{"one-click with mailbox", Unsubscribe{URL: "https://example.test/u", Mailto: "u@example.test", OneClick: true}, "<https://example.test/u>, <mailto:u@example.test>", "List-Unsubscribe=One-Click"},
+		{"mailbox only", Unsubscribe{Mailto: "u@example.test"}, "<mailto:u@example.test>", nil},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			msg := validMessage()
+			msg.Unsubscribe = tt.u
+			if err := NewConsole(slog.New(slog.NewJSONHandler(&buf, nil))).Send(context.Background(), msg); err != nil {
+				t.Fatal(err)
+			}
+			var entry map[string]any
+			if err := json.Unmarshal(buf.Bytes(), &entry); err != nil {
+				t.Fatal(err)
+			}
+			if entry["list_unsubscribe"] != tt.wantList || entry["list_unsubscribe_post"] != tt.wantPost {
+				t.Errorf("list_unsubscribe=%v post=%v, want %v %v", entry["list_unsubscribe"], entry["list_unsubscribe_post"], tt.wantList, tt.wantPost)
+			}
+		})
+	}
+}
