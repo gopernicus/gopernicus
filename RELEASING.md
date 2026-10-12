@@ -1,5 +1,42 @@
 # Releasing gopernicus modules
 
+## StaticFileServer for an SPA beside an API (sdk v0.12.0 — published 2026-10-12)
+
+SDK `v0.12.0` adds two `StaticFileServer` options and one SPA-mode default.
+`WithIndex(bytes)` serves a boot-rewritten `index.html` through
+`http.ServeContent`, keeping `Content-Length`, `HEAD` and ranges; the fs need
+not contain `index.html`, the bytes are copied, and an empty slice panics.
+`WithReservedPrefixes` answers a `no-store` plain-text 404 at or under the given
+rooted prefixes before the filesystem is consulted, in every mode; entries are
+cleaned, and an empty, unrooted or `/` entry panics. Last call wins.
+
+**Behavior change for SPA-mode hosts.** A missing path or directory under the
+asset prefix (default `assets/`, applied even when `WithAssetPrefix` was never
+called) is now a `no-store` 404 instead of `index.html`, so a browser holding a
+stale hashed chunk gets a failure the app can reload from. The zone has
+directory semantics (`static` does not catch `/statistics`); the immutable
+caching match is unchanged. A client route under the asset prefix loses
+deep-link refresh: rename the bundler's asset dir and pass a matching
+`WithAssetPrefix`. `WithAssetPrefix("")` opts out and drops immutable caching
+with it. Both new 404s are `no-store` because during a rolling deploy the path
+may exist on the next instance and a cached 404 would outlive the rollout. The
+SPA owns recovery (Vite `vite:preloadError` → reload). No in-repo consumer uses
+SPA mode; `ui/goth`, examples, pockets, integrations and scaffold pins are
+unchanged.
+
+Annotated tag `sdk/v0.12.0` on merge commit `93c38a35a98feca94e4c640eac8fa4856a4b41a3` (PR #69). `make check`
+passed before the PR; CI passed on the PR. The proxy `.info` resolved before
+any tidy. Using `GOWORK=off`, an empty module cache, `proxy.golang.org` and
+`sum.golang.org`, a standalone consumer built, vetted, passed `go mod verify`
+and saw the index bytes, the SPA fallback, the asset-zone 404 and the reserved
+404 behave as documented. No replacements were used.
+
+Downstream: three-sixty repins sdk v0.9.0 → v0.12.0 (crossing additive v0.10.0
+and v0.11.0) and retires its `ui/spa` overlay and stat branches; Segovia v2 7.2
+uses `WithSPAMode` with the stdlib `GET /api/{path...}` JSON-404 recipe.
+
+Plan: [static-spa-beside-api](plans/static-spa-beside-api.md).
+
 ## Email unsubscribe headers (sdk v0.11.0; sendgrid v0.4.0 — published 2026-10-09)
 
 SDK `v0.11.0` adds `email.Unsubscribe` on `Message` and `SendRequest`: the SMTP
