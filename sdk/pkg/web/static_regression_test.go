@@ -335,19 +335,52 @@ func TestStaticFileServer_MountedRangeWire(t *testing.T) {
 
 func TestStaticOptionsDoNotRetainConstructionConfig(t *testing.T) {
 	var settings *staticConfig
-	files := fstest.MapFS{"index.html": {Data: []byte("SPA")}, "public/app.js": {Data: []byte("asset")}}
-	server := NewStaticFileServer(files, WithAssetPrefix("old/"), WithAssetPrefix("public/"), WithSPAMode(), func(c *staticConfig) { settings = c })
+	files := fstest.MapFS{"index.html": {Data: []byte("fs index")}, "public/app.js": {Data: []byte("asset")}}
+	server := NewStaticFileServer(files, WithAssetPrefix("old/"), WithAssetPrefix("public/"), WithSPAMode(), WithIndex([]byte("SPA")), WithReservedPrefixes("/api"), func(c *staticConfig) { settings = c })
 	settings.assetPrefix = ""
 	settings.spaMode = false
+	copy(settings.index, "XXX")
+	settings.index = nil
+	settings.reserved[0] = "/client-route"
+	settings.reserved = nil
 	for _, tc := range []struct{ path, body, cache string }{
 		{"/public/app.js", "asset", "public, max-age=31536000, immutable"},
 		{"/client-route", "SPA", "no-cache, no-store, must-revalidate"},
+		{"/api/x", "404 page not found\n", "no-cache, no-store, must-revalidate"},
 	} {
 		recorder := httptest.NewRecorder()
 		server.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, tc.path, nil))
-		if recorder.Code != http.StatusOK || recorder.Body.String() != tc.body || recorder.Header().Get("Cache-Control") != tc.cache {
+		wantCode := http.StatusOK
+		if tc.path == "/api/x" {
+			wantCode = http.StatusNotFound
+		}
+		if recorder.Code != wantCode || recorder.Body.String() != tc.body || recorder.Header().Get("Cache-Control") != tc.cache {
 			t.Errorf("%s: status=%d body=%q cache=%q", tc.path, recorder.Code, recorder.Body.String(), recorder.Header().Get("Cache-Control"))
 		}
+	}
+}
+
+func TestStaticOptionsPanicOnMisconfig(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		build func()
+		want  string
+	}{
+		{"nil index", func() { WithIndex(nil) }, "web.WithIndex: empty index"},
+		{"empty index", func() { WithIndex([]byte{}) }, "web.WithIndex: empty index"},
+		{"empty prefix", func() { WithReservedPrefixes("/api", "") }, "web.WithReservedPrefixes: empty prefix"},
+		{"unrooted prefix", func() { WithReservedPrefixes("api") }, `web.WithReservedPrefixes: prefix "api" is not rooted`},
+		{"root prefix", func() { WithReservedPrefixes("/") }, `web.WithReservedPrefixes: prefix "/" reserves the whole mount`},
+		{"double slash prefix", func() { WithReservedPrefixes("//") }, `web.WithReservedPrefixes: prefix "//" reserves the whole mount`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			defer func() {
+				if got := recover(); got != tc.want {
+					t.Fatalf("panic = %v, want %q", got, tc.want)
+				}
+			}()
+			tc.build()
+		})
 	}
 }
 

@@ -15,7 +15,7 @@ technology. Everything composes with plain `http.Handler` values.
 | pure HTTP middleware | `RequestID`, `Logger`, `Panics`, `TrustProxies`, `CORSMiddleware`, `DefaultHeadersMiddleware` |
 | decode and validate a JSON body | `DecodeJSON[T]`, `ReadBody` |
 | respond | `RespondJSON*`, `RespondJSONError`, `RespondJSONDomainError`, `Render`, redirect and no-content helpers |
-| serve embedded or SPA assets | `NewStaticFileServer`, `WithAssetPrefix`, `WithSPAMode` |
+| serve embedded or SPA assets | `NewStaticFileServer`, `WithAssetPrefix`, `WithSPAMode`, `WithIndex`, `WithReservedPrefixes` |
 | server-sent events | `NewSSEStream`, `WithHeartbeat` |
 | run the server | `Run`, `ServerConfig` |
 
@@ -133,10 +133,38 @@ static.AddRoutes(router, "/assets/goth")
 chosen asset prefix, and can be mounted directly as an `http.Handler`. The GOTH
 UI module exposes its embedded filesystem this way while the host picks the
 public route. Only versioned assets belong under an immutable prefix.
-`WithSPAMode` serves `index.html` for missing paths, directories and the root,
+`WithSPAMode` serves `index.html` for missing paths, directories and the root
+(never under the asset prefix or a reserved prefix, below),
 always with no-store headers. Seekable files get range and conditional
 responses through `http.ServeContent`; non-seekable files stream without
 ranges. MIME types follow the standard library.
+
+- **`WithIndex`** serves an `index.html` rewritten at boot (runtime config in a
+  data block) in place of the file in the `fs.FS`. The bytes are public and go
+  through `ServeContent`, so `Content-Length`, `HEAD` and ranges work. The host
+  still detects an absent bundle itself.
+- **Stale chunks.** In SPA mode a missing path under the asset prefix is a
+  `no-store` 404, never the page. The SPA owns recovery: listen for Vite's
+  `vite:preloadError` (or the bundler's equivalent) and `location.reload()`.
+  Keep `WithAssetPrefix` equal to the bundler's asset dir, ending in `/`; a
+  client route under it is unreachable by deep link. `WithAssetPrefix("")`
+  turns the zone off and the immutable caching with it.
+- **Other mounts beside the SPA — pick one:**
+  - Mounted with `AddRoutes` on the same `WebHandler` as the API, and the API
+    owns its 404 shape (JSON): register `GET /api/{path...}` *with its method*
+    answering the API's 404. Mux precedence ranks it above `GET /{path...}`,
+    and because it carries a method a wrong method on a real API route still
+    gets 405. `WithReservedPrefixes` is not needed.
+  - Mounted as a method-less root catch-all (`HandleRaw("/", …)`), or the
+    reserved list is wanted as one testable value: `WithReservedPrefixes`. The
+    answer is always a plain-text `no-store` 404. Keep the list in step with
+    the root mounts; a route-census test is the pattern.
+- **The catch-all caveat.** A method-less `/` catch-all turns a wrong method on
+  any registered route from 405 into whatever the catch-all answers, because
+  ServeMux reports 405 only when no pattern matches at all. `AddRoutes` avoids
+  this by registering `GET`; a host that mounts with `HandleRaw("/", …)` must
+  answer non-GET/HEAD itself. Do not "fix" it with a method-less `/api/` 404
+  handler: that recreates the same 405→404 loss one prefix down.
 
 ## SSE and streaming
 
