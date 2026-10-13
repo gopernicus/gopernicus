@@ -748,8 +748,10 @@ type Fencer interface {
   on restart, and there is no downgrade once a fenced row exists (see
   `pockets/authorization/stores/UPGRADE.md`). Authentication has no migration.
   `InvitationRepository` gains `CancelAcceptance` and `ListActiveByResource`. The
-  Firestore store returns `errors.ErrUnsupported` from both, so a Firestore host
-  that wires a `Fencer` cannot cancel an accepting claim.
+  Firestore store returns `errors.ErrUnsupported` from both. **Do not wire a
+  `Fencer` with the Firestore store:** the fence is written before
+  `CancelAcceptance` runs, so the claim is left `accepting` forever with its
+  tuple reserved, and every later accept retry fails the same way.
 
 **The Granter contract and invitation authority (D1–D3).** `InvitationsConfig.Granter` is
 the host seam an accepted, auto-accepted, or directly-added invitation grants
