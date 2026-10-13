@@ -438,7 +438,8 @@ func TestCancelAcceptingAfterCommittedGrantReturnsAlreadyGranted(t *testing.T) {
 		t.Fatalf("commits=%d notices=%d events=%+v", commits, len(mailer.sent), events.created)
 	}
 	if len(events.created) != 1 || events.created[0].EventType != securityevent.TypeInvitationCancelled ||
-		events.created[0].EventStatus != securityevent.StatusBlocked || events.created[0].Details["reason"] != "already_granted" {
+		events.created[0].EventStatus != securityevent.StatusBlocked || events.created[0].Details["reason"] != "already_granted" ||
+		events.created[0].Details["fence"] != "committed" {
 		t.Fatalf("events=%+v", events.created)
 	}
 	if _, err := svc.Accept(t.Context(), AcceptInput{Token: "secret", SubjectID: "user-9"}); err != nil || len(mailer.sent) != 0 {

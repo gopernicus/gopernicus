@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -281,7 +283,10 @@ func (r completedBeforeCancel) CancelAcceptance(ctx context.Context, id string, 
 func TestCancelFencedButAcceptedReturnsAlreadyGranted(t *testing.T) {
 	repo := newFakeInvRepo()
 	ledger := &fenceLedger{}
-	svc := newSvc(t, repo, ledger, constructorConfig{Fencer: ledger})
+	events := &fakeSecurityEvents{}
+	var logs strings.Builder
+	svc := newSvc(t, repo, ledger, constructorConfig{Fencer: ledger, SecurityEvents: events})
+	svc.logger = slog.New(slog.NewTextHandler(&logs, nil))
 	svc.invitations = completedBeforeCancel{repo}
 	inv := claimSeeded(t, repo)
 	if err := svc.Cancel(t.Context(), prepareManagement(t, svc, inv.ID)); !errors.Is(err, ErrAlreadyGranted) {
@@ -289,6 +294,14 @@ func TestCancelFencedButAcceptedReturnsAlreadyGranted(t *testing.T) {
 	}
 	if got, _ := repo.Get(t.Context(), inv.ID); got.Status != StatusAccepted {
 		t.Fatalf("invitation=%+v", got)
+	}
+	if len(events.created) != 1 || events.created[0].EventStatus != securityevent.StatusBlocked ||
+		events.created[0].Details["reason"] != "accepted_after_fence" || events.created[0].Details["fence"] != "fenced" {
+		t.Fatalf("events=%+v", events.created)
+	}
+	line := logs.String()
+	if !strings.Contains(line, "level=WARN") || !strings.Contains(line, "invitation_id="+inv.ID) || !strings.Contains(line, "fence=fenced") || strings.Contains(line, inv.Identifier) {
+		t.Fatalf("warn line=%q", line)
 	}
 }
 
