@@ -54,6 +54,37 @@ func RunAudit(t *testing.T, factory func(*testing.T, bool) Repositories) {
 			t.Fatalf("unattributed no-op accepted: %v", err)
 		}
 	})
+	t.Run("FenceWritesNoAudit", func(t *testing.T) {
+		r := factory(t, true)
+		requireAudit(t, r)
+		if r.Mutations == nil {
+			t.Skip("mutation repository not wired")
+		}
+		if r.Operations == nil {
+			t.Fatal("Repositories.Mutations is wired but Repositories.Operations is nil")
+		}
+		ctx := audit.WithSource(context.Background(), audit.Source{System: "fence-audit"})
+		if _, err := r.Mutations.Apply(ctx, grant("d", "owner", "o"), nil); err != nil {
+			t.Fatal(err)
+		}
+		committed := grant("d", "viewer", "u")
+		committed.OperationID = "invitation:committed"
+		if _, err := r.Mutations.Apply(ctx, committed, nil); err != nil {
+			t.Fatal(err)
+		}
+		before := readAudit(t, r.Audit)
+		got, err := r.Operations.Fence(context.Background(), "invitation:unattributed")
+		if err != nil || got == nil || got.Outcome != mutations.OutcomeFenced || got.Recorded {
+			t.Fatalf("unattributed fence: %+v %v", got, err)
+		}
+		got, err = r.Operations.Fence(context.Background(), committed.OperationID)
+		if err != nil || got == nil || got.Outcome != mutations.OutcomeApplied || !got.Recorded {
+			t.Fatalf("fence of committed ID: %+v %v", got, err)
+		}
+		if after := readAudit(t, r.Audit); len(after) != len(before) {
+			t.Fatalf("fence recorded audit: before=%d after=%d", len(before), len(after))
+		}
+	})
 	t.Run("RawChanges", func(t *testing.T) { specRawAudit(t, factory(t, true)) })
 	t.Run("OneDeltaAcrossFacades", func(t *testing.T) {
 		r := factory(t, true)

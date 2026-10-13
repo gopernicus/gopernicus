@@ -263,7 +263,7 @@ func waitForLockWaiters(t *testing.T, db *pgxdb.DB, n int) {
 	deadline := time.Now().Add(10 * time.Second)
 	for {
 		var waiting int
-		if err := db.QueryRow(t.Context(), `SELECT count(*) FROM pg_catalog.pg_locks WHERE NOT granted AND relation = $1::regclass`, qualify(t, "iam_tuples")).Scan(&waiting); err != nil {
+		if err := db.QueryRow(t.Context(), `SELECT count(*) FROM pg_catalog.pg_locks WHERE NOT granted AND relation = $1::regclass AND database = (SELECT oid FROM pg_catalog.pg_database WHERE datname = current_database())`, qualify(t, "iam_tuples")).Scan(&waiting); err != nil {
 			t.Fatal(err)
 		}
 		if waiting >= n {

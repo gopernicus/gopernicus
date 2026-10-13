@@ -340,6 +340,13 @@ no validation, no write. `Recorded(ctx, id)` reads the retained outcome without
 the write lock; use it to skip a host precondition for an operation that already
 committed. `false` is never proof the operation will not commit later — only
 `Fence` is — and a lagging replica can report `false`, so read from the primary.
+`Recorded` may run inside an ambient transaction and reads through it; `Fence`
+never does.
+
+A host that wires a Fencer should call `Mutations.Recorded(ctx, "boot-probe")`
+at startup and require `(false, nil)`. A missing `Repositories.Operations` then
+fails boot with `ErrOperationLedgerNotConfigured` instead of failing the first
+cancel of an accepting invitation.
 
 For invitation hosts, map an `OutcomeFenced` replay to authentication's
 `ErrGrantFenced`, then `Replayed && Superseded` and `ErrOperationMismatch` to

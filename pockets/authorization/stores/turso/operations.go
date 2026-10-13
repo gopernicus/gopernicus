@@ -104,8 +104,9 @@ func (m *mutationStore) Fence(ctx context.Context, operationID string) (*mutatio
 	return result, nil
 }
 
-// Recorded reads the operation record without the write lock. Use a primary
-// route: a lagging replica can report false.
+// Recorded reads the operation record without the write lock, through the
+// ambient transaction when one is present. Use a primary route: a lagging
+// replica can report false.
 func (m *mutationStore) Recorded(ctx context.Context, operationID string) (mutations.Outcome, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return "", false, err
@@ -114,12 +115,12 @@ func (m *mutationStore) Recorded(ctx context.Context, operationID string) (mutat
 		return "", false, err
 	}
 	var outcome mutations.Outcome
-	err := m.db.QueryRow(ctx, "SELECT outcome FROM main.iam_operations WHERE operation_id=?", operationID).Scan(&outcome)
+	err := m.db.QuerierFrom(ctx).QueryRow(ctx, "SELECT outcome FROM main.iam_operations WHERE operation_id=?", operationID).Scan(&outcome)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", false, nil
 	}
 	if err != nil {
-		return "", false, err
+		return "", false, tursodb.MapError(err)
 	}
 	if !outcome.Valid() {
 		return "", false, fmt.Errorf("authorization operation: invalid outcome %q", outcome)

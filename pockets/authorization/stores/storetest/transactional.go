@@ -72,6 +72,7 @@ func RunTransactional(t *testing.T, newRepos func(t *testing.T) (Repositories, t
 	t.Run("ReadsJoinTransaction", func(t *testing.T) { specReadsJoinTransaction(t, newRepos) })
 	t.Run("MutationRefusesAmbientTransaction", func(t *testing.T) { specMutationRefusesAmbientTransaction(t, newRepos) })
 	t.Run("OperationLedger/FenceInsideTransactionRefused", func(t *testing.T) { specFenceRefusesAmbientTransaction(t, newRepos) })
+	t.Run("OperationLedger/RecordedJoinsTransaction", func(t *testing.T) { specRecordedJoinsTransaction(t, newRepos) })
 	t.Run("StandaloneUnchanged", func(t *testing.T) { specStandaloneUnchanged(t, newRepos) })
 }
 
@@ -834,6 +835,36 @@ func specFenceRefusesAmbientTransaction(t *testing.T, newRepos func(t *testing.T
 	got, err := repos.Operations.Fence(outside(t), id)
 	if err != nil || got == nil || got.Outcome != mutations.OutcomeFenced || got.Recorded {
 		t.Fatalf("fence after the refusal: %+v %v", got, err)
+	}
+}
+
+// specRecordedJoinsTransaction: Recorded inside Transact reads through the
+// ambient transaction and returns the committed outcome, so a host can consult
+// the ledger from transactional work without a second connection.
+func specRecordedJoinsTransaction(t *testing.T, newRepos func(t *testing.T) (Repositories, transaction.Transactor)) {
+	repos, tx := newRepos(t)
+	if repos.Mutations == nil {
+		t.Skip("mutation repository not wired")
+	}
+	if repos.Operations == nil {
+		t.Fatal("Repositories.Mutations is wired but Repositories.Operations is nil")
+	}
+	cmd := grant("R", "viewer", "u1")
+	cmd.OperationID = "ambient:recorded"
+	mustApply(t, repos.Mutations, grant("R", "owner", "o"))
+	mustApply(t, repos.Mutations, cmd)
+	err := transact(tx, func(ctx context.Context) error {
+		outcome, ok, err := repos.Operations.Recorded(ctx, cmd.OperationID)
+		if err != nil || !ok || outcome != mutations.OutcomeApplied {
+			t.Fatalf("Recorded inside Transact: %q %v %v", outcome, ok, err)
+		}
+		if _, ok, err := repos.Operations.Recorded(ctx, "ambient:absent"); err != nil || ok {
+			t.Fatalf("absent Recorded inside Transact: %v %v", ok, err)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
 }
 
