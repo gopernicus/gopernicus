@@ -4,6 +4,45 @@ Authorization ships a fresh canonical SQL schema for PostgreSQL and SQLite/Turso
 Hosts export and apply it before constructing repositories. Framework constructors
 validate the applied schema; they do not create tables or run migrations.
 
+## Adopting operation fences (v0.24.0) — a one-way migration
+
+Upgrade authorization core with PostgreSQL store `v0.18.0` or Turso store
+`v0.17.0`. SQL hosts using `Repositories` **must apply**
+`migrations/0004_iam_operations_fenced.sql`; it widens the `iam_operations`
+outcome check to accept `fenced`. `RelationshipRepository` alone does not
+require it. Copy only `0004_iam_operations_fenced.sql` as the next entry of the
+host's authorization migration stream, after `0003_iam_operations.sql`; never
+edit an applied file.
+
+- PostgreSQL: one `ALTER TABLE … DROP CONSTRAINT …, ADD CONSTRAINT …` on the
+  unqualified table, resolved through the host's `search_path`/schema.
+- SQLite/Turso: a table rebuild (create `iam_operations_next`, copy, drop,
+  rename) inside the migration transaction. A host view or trigger that names
+  `iam_operations` makes 0004 fail; drop and recreate it around the migration.
+  Host-added indexes on `iam_operations` are dropped; recreate them. The copy is
+  one server-side statement, so only very large ledgers approach hosted
+  transaction limits.
+
+**Hard cutover.** Both schema probes are exact-match: after 0004 an older
+binary (authorization `v0.23.x`, PostgreSQL store `v0.17.x`, Turso store
+`v0.16.x`) refuses construction on restart, and the new binary refuses a schema
+without 0004. Apply 0004 in the same deploy as the new binaries and do not
+restart old instances afterwards. Instances still running during the rollout
+treat a fenced record as `ErrOperationMismatch`, so no access is granted. There
+is no downgrade once a fenced row exists: the check cannot be narrowed back, and
+deleting fence rows re-opens operations they closed. Keep fence rows with the
+rest of the ledger across purge, teardown, backup and restore.
+
+Wire `Repositories.Operations` to enable `Mutations.Fence` and
+`Mutations.Recorded`; the bundled SQL constructors populate it, and
+`memory.Store.Operations()` returns it for hand-built factories.
+`MutationRepository` is unchanged. Third-party mutation stores that honor
+`OperationID` must implement `mutations.OperationLedger` (fence under the same
+write lock as `Apply`, refuse an ambient transaction, replay a fenced ID as
+`OutcomeFenced` for any command before comparing fingerprints) and wire it as
+`Operations`: the `OperationLedger` conformance family fails when `Mutations` is
+wired without it.
+
 ## Adopting the operation ledger (v0.23.0)
 
 Upgrade authorization core with PostgreSQL store `v0.17.0` or Turso store

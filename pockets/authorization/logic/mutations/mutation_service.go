@@ -10,6 +10,7 @@ import (
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/audit"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/decisions"
 	authmodel "github.com/gopernicus/gopernicus/pockets/authorization/logic/model"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuples"
 	"github.com/gopernicus/gopernicus/sdk"
 )
 
@@ -94,6 +95,36 @@ func (s *Service) Apply(ctx context.Context, cmd Command) (*Result, error) {
 		}
 		return nil
 	})
+}
+
+// Fence durably closes operationID: afterwards no command can commit under it, or
+// the result reports the outcome one already committed. Inbound owns access checks.
+func (s *Service) Fence(ctx context.Context, operationID string) (*FenceResult, error) {
+	if s == nil || s.ledger == nil {
+		return nil, ErrOperationLedgerNotConfigured
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if err := tuples.ValidateRefField("operation id", operationID); err != nil {
+		return nil, err
+	}
+	return s.ledger.Fence(ctx, operationID)
+}
+
+// Recorded reports the outcome recorded under operationID. false is never proof
+// that the operation will not commit later; only Fence is.
+func (s *Service) Recorded(ctx context.Context, operationID string) (Outcome, bool, error) {
+	if s == nil || s.ledger == nil {
+		return "", false, ErrOperationLedgerNotConfigured
+	}
+	if err := ctx.Err(); err != nil {
+		return "", false, err
+	}
+	if err := tuples.ValidateRefField("operation id", operationID); err != nil {
+		return "", false, err
+	}
+	return s.ledger.Recorded(ctx, operationID)
 }
 func semanticValidatorFor(model *decisions.CompiledModel) SemanticValidator {
 	if model == nil {

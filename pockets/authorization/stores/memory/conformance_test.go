@@ -21,7 +21,7 @@ func TestConformance(t *testing.T) {
 		// Check and to the raw stores). The default integrity policy protects owner.
 		store := memory.New(memory.WithIntegrityPolicy(policy))
 		return storetest.Repositories{Repositories: authorization.Repositories{Tuples: store.Tuples(),
-			Mutations: store.Mutations()}, Relationships: store.Relationships(),
+			Mutations: store.Mutations(), Operations: store.Operations()}, Relationships: store.Relationships(),
 		}
 	})
 }
@@ -35,7 +35,7 @@ func TestTransactional(t *testing.T) {
 	storetest.RunTransactional(t, func(t *testing.T) (storetest.Repositories, transaction.Transactor) {
 		store := memory.New()
 		return storetest.Repositories{Repositories: authorization.Repositories{Tuples: store.Tuples(),
-			Mutations: store.Mutations()}, Relationships: store.Relationships(),
+			Mutations: store.Mutations(), Operations: store.Operations()}, Relationships: store.Relationships(),
 		}, nil
 	})
 }
@@ -48,6 +48,6 @@ func TestAudit(t *testing.T) {
 			opts = append(opts, memory.WithAudit())
 		}
 		store := memory.New(opts...)
-		return storetest.Repositories{Repositories: authorization.Repositories{Tuples: store.Tuples(), Mutations: store.Mutations(), Audit: store.Audit()}, Relationships: store.Relationships()}
+		return storetest.Repositories{Repositories: authorization.Repositories{Tuples: store.Tuples(), Mutations: store.Mutations(), Operations: store.Operations(), Audit: store.Audit()}, Relationships: store.Relationships()}
 	})
 }

@@ -265,3 +265,71 @@ func TestOperationReplayAfterLowerBatchLimit(t *testing.T) {
 		t.Fatalf("refused operation recorded: %+v %v", got, err)
 	}
 }
+
+// -----------------------------------------------------------------------------
+// Operation ledger wiring
+// -----------------------------------------------------------------------------
+
+func TestOperationsWiring(t *testing.T) {
+	store := memory.New()
+	if _, err := New(Repositories{Tuples: store.Tuples(), Operations: store.Operations()}); !errors.Is(err, ErrOperationsWithoutMutations) || !errors.Is(err, sdk.ErrInvalidInput) {
+		t.Fatalf("Operations without Mutations: %v", err)
+	}
+	_, err := New(Repositories{Tuples: store.Tuples(), Mutations: store.Mutations(), Operations: (*memory.Mutations)(nil)})
+	if !errors.Is(err, sdk.ErrInvalidInput) || !strings.Contains(err.Error(), "Repositories.Operations is typed nil") {
+		t.Fatalf("typed-nil Operations: %v", err)
+	}
+	if _, err := mutations.NewService(store.Mutations(), mutations.WithLedger((*memory.Mutations)(nil))); !errors.Is(err, sdk.ErrInvalidInput) {
+		t.Fatalf("typed-nil ledger option: %v", err)
+	}
+}
+
+func TestFenceAndRecordedRequireLedger(t *testing.T) {
+	if !errors.Is(mutations.ErrOperationLedgerNotConfigured, sdk.ErrInvalidInput) {
+		t.Fatal("ErrOperationLedgerNotConfigured must wrap sdk.ErrInvalidInput")
+	}
+	store := memory.New()
+	comps := mustComponents(t, Repositories{Tuples: store.Tuples(), Mutations: store.Mutations()})
+	if got, err := comps.Mutations.Fence(t.Context(), "invitation:one"); got != nil || !errors.Is(err, mutations.ErrOperationLedgerNotConfigured) {
+		t.Fatalf("Fence without ledger: %+v %v", got, err)
+	}
+	if _, ok, err := comps.Mutations.Recorded(t.Context(), "invitation:one"); ok || !errors.Is(err, mutations.ErrOperationLedgerNotConfigured) {
+		t.Fatalf("Recorded without ledger: %v %v", ok, err)
+	}
+	var nilService *mutations.Service
+	if _, err := nilService.Fence(t.Context(), "invitation:one"); !errors.Is(err, mutations.ErrOperationLedgerNotConfigured) {
+		t.Fatalf("nil service Fence: %v", err)
+	}
+}
+
+func TestServiceFenceThenApplyReplaysFenced(t *testing.T) {
+	store := memory.New()
+	comps := mustComponents(t, Repositories{Tuples: store.Tuples(), Mutations: store.Mutations(), Operations: store.Operations()})
+	for _, id := range []string{"", "bad\x00id", strings.Repeat("x", 257)} {
+		if got, err := comps.Mutations.Fence(t.Context(), id); got != nil || !errors.Is(err, sdk.ErrInvalidInput) {
+			t.Fatalf("Fence(%q): %+v %v", id, got, err)
+		}
+		if _, ok, err := comps.Mutations.Recorded(t.Context(), id); ok || !errors.Is(err, sdk.ErrInvalidInput) {
+			t.Fatalf("Recorded(%q): %v %v", id, ok, err)
+		}
+	}
+	if _, ok, err := comps.Mutations.Recorded(t.Context(), "invitation:one"); ok || err != nil {
+		t.Fatalf("Recorded before fence: %v %v", ok, err)
+	}
+	fenced, err := comps.Mutations.Fence(t.Context(), "invitation:one")
+	if err != nil || fenced.Outcome != mutations.OutcomeFenced || fenced.Recorded {
+		t.Fatalf("Fence: %+v %v", fenced, err)
+	}
+	cmd := validGrantCommand(t)
+	cmd.OperationID = "invitation:one"
+	got, err := comps.Mutations.Apply(t.Context(), cmd)
+	if err != nil || got.Outcome != mutations.OutcomeFenced || !got.Replayed || !got.Superseded {
+		t.Fatalf("Apply after fence: %+v %v", got, err)
+	}
+	if ok, _ := store.Relationships().CheckRelationExists(t.Context(), "doc", "d1", "viewer", "user", "u1"); ok {
+		t.Fatal("fenced operation granted its tuple")
+	}
+	if outcome, ok, err := comps.Mutations.Recorded(t.Context(), "invitation:one"); err != nil || !ok || outcome != mutations.OutcomeFenced {
+		t.Fatalf("Recorded after fence: %q %v %v", outcome, ok, err)
+	}
+}

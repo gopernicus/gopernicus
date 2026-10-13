@@ -301,7 +301,8 @@ audit-enabled store still requires `audit.WithSource`. `Superseded` is true only
 on a replay whose requested facts are no longer in effect, checked under the
 same write lock. It is a snapshot and does not prevent a later revoke.
 
-SQL hosts using `Repositories` must apply `0003_iam_operations.sql` before boot;
+SQL hosts using `Repositories` must apply `0003_iam_operations.sql` and
+`0004_iam_operations_fenced.sql` before boot;
 the constructor rejects missing or noncanonical ledger tables. Standalone
 `RelationshipRepository` remains ledger-free. See [schema adoption](stores/UPGRADE.md).
 Keep operation rows across purge, teardown and restarts. V1 never deletes them:
@@ -310,14 +311,49 @@ Hosts' user-erasure procedures must account for this table and its hashes over
 subject IDs; hashes can still be linked to known requests. There is no retention
 or purge API in v1.
 
-For invitation hosts, map `Replayed && Superseded` and `ErrOperationMismatch` to
-authentication's `ErrGrantSuperseded`; return nil for a grant still in effect.
-This lets authentication finish an accepting claim without restoring revoked
+#### Fence and Recorded
+
+Wire `Repositories.Operations` (a `mutations.OperationLedger` over the same
+authority as `Mutations`; the bundled stores expose it as `Operations()` or set
+it in `Repositories`) to enable `Components.Mutations.Fence` and `Recorded`.
+Without it both return `ErrOperationLedgerNotConfigured`; `Operations` without
+`Mutations` fails construction with `ErrOperationsWithoutMutations`. IDs follow
+the `OperationID` rules above.
+
+`Fence(ctx, id)` writes an `OutcomeFenced` record under the same write lock as
+`Apply`, so the two are totally ordered: either the fence lands first and no
+command can ever commit under that ID, or a command already committed and the
+fence reports its outcome. It writes no tuple or audit row, needs no
+`audit.WithSource`, refuses an ambient transaction
+(`ErrMutationInsideTransaction`), and is idempotent — retry it after an
+unknown-outcome failure.
+
+| `FenceResult` | meaning |
+| --- | --- |
+| `{OutcomeFenced, Recorded: false}` | this call fenced the ID |
+| `{OutcomeFenced, Recorded: true}` | an earlier fence holds |
+| `{applied \| no_change \| not_found, Recorded: true}` | a command already committed under the ID; revoke through your ordinary path |
+
+Any `Apply` under a fenced ID returns `Result{Outcome: OutcomeFenced, Replayed:
+true, Superseded: true}` whatever its command shape: no fingerprint comparison,
+no validation, no write. `Recorded(ctx, id)` reads the retained outcome without
+the write lock; use it to skip a host precondition for an operation that already
+committed. `false` is never proof the operation will not commit later — only
+`Fence` is — and a lagging replica can report `false`, so read from the primary.
+
+For invitation hosts, map an `OutcomeFenced` replay to authentication's
+`ErrGrantFenced`, then `Replayed && Superseded` and `ErrOperationMismatch` to
+`ErrGrantSuperseded`; return nil for a grant still in effect. This lets
+authentication finish or cancel an accepting claim without restoring revoked
 access. Keep the command stable between attempts: changing a replacement batch's
-remove set changes its fingerprint. A precondition checked before `Apply` can
-still prevent a committed operation from reaching the ledger (for example, a
-deleted host resource). A never-committed/refused operation can first grant on a
-later retry. These are known follow-ups; there is no read-only operation lookup.
+remove set changes its fingerprint. Fence with exactly the namespaced ID the
+grant uses (`invitation:<id>`); a different namespace fences nothing.
+
+During a rolling deploy an older binary meets a fenced record as a fingerprint
+mismatch and returns `ErrOperationMismatch`, which the mapping above already
+treats as superseded, so no access is granted. A committed `not_found` outcome
+replays forever; a host that treats it as a failure keeps failing that
+operation — map it to the terminal state your workflow expects.
 
 Store `WithAudit()` records one canonical `Change{Action, Tuple}` delta in the
 same commit as facts. Exact duplicates, no-ops, refusals and rollbacks add no

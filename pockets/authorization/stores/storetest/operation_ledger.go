@@ -12,6 +12,10 @@ import (
 )
 
 func runOperationLedger(t *testing.T, newRepos func(*testing.T) Repositories) {
+	if newRepos(t).Operations == nil {
+		t.Fatal("Repositories.Mutations is wired but Repositories.Operations is nil: a mutation store that honors OperationID must expose its OperationLedger")
+	}
+	runOperationFence(t, newRepos)
 	for _, change := range []string{"revoke", "replace", "teardown"} {
 		t.Run("ReplayAfter/"+change, func(t *testing.T) {
 			r := newRepos(t)
@@ -210,6 +214,254 @@ func runOperationLedger(t *testing.T, newRepos func(*testing.T) Repositories) {
 		got := mustApply(t, r.Mutations, cmd)
 		if !got.Replayed || !got.Superseded || got.Outcome != mutations.OutcomeNotFound || !relationExists(t, r, "d", "viewer", "u") {
 			t.Fatalf("not-found replay: %+v", got)
+		}
+	})
+}
+
+// runOperationFence proves the fence half of OperationLedger: a fence and Apply
+// are totally ordered under one write boundary, a fenced ID replays as fenced for
+// any command without touching facts, and Recorded reads the retained outcome.
+func runOperationFence(t *testing.T, newRepos func(*testing.T) Repositories) {
+	refuseValidation := func(t *testing.T) mutations.SemanticValidator {
+		return func(mutations.Command) error {
+			t.Error("fenced replay reached the validator")
+			return sdk.ErrInvalidInput
+		}
+	}
+	mustFence := func(t *testing.T, r Repositories, id string) *mutations.FenceResult {
+		t.Helper()
+		got, err := r.Operations.Fence(t.Context(), id)
+		if err != nil || got == nil {
+			t.Fatalf("Fence(%q): %+v %v", id, got, err)
+		}
+		return got
+	}
+	mustRecorded := func(t *testing.T, r Repositories, id string) (mutations.Outcome, bool) {
+		t.Helper()
+		outcome, ok, err := r.Operations.Recorded(t.Context(), id)
+		if err != nil {
+			t.Fatalf("Recorded(%q): %v", id, err)
+		}
+		return outcome, ok
+	}
+	assertFencedReplay := func(t *testing.T, got *mutations.Result, err error) {
+		t.Helper()
+		if err != nil || got == nil || got.Outcome != mutations.OutcomeFenced || !got.Replayed || !got.Superseded {
+			t.Fatalf("want fenced replay, got %+v %v", got, err)
+		}
+	}
+
+	t.Run("FenceBeforeApply", func(t *testing.T) {
+		r := newRepos(t)
+		mustApply(t, r.Mutations, grant("d", "owner", "o"))
+		if got := mustFence(t, r, "invitation:one"); got.Outcome != mutations.OutcomeFenced || got.Recorded {
+			t.Fatalf("first fence: %+v", got)
+		}
+		cmd := grant("d", "viewer", "u")
+		cmd.OperationID = "invitation:one"
+		got, err := r.Mutations.Apply(t.Context(), cmd, refuseValidation(t))
+		assertFencedReplay(t, got, err)
+		if relationExists(t, r, "d", "viewer", "u") {
+			t.Fatal("fenced operation granted its tuple")
+		}
+		if outcome, ok := mustRecorded(t, r, "invitation:one"); !ok || outcome != mutations.OutcomeFenced {
+			t.Fatalf("Recorded after fence: %q %v", outcome, ok)
+		}
+	})
+
+	t.Run("FenceSeenAtReplayLookup", func(t *testing.T) {
+		// A command admitted by its host before the fence committed reaches the
+		// replay lookup afterwards; the fence short-circuits before validation,
+		// planning and integrity, so even a command that would be refused is a
+		// fenced replay that writes nothing.
+		r := newRepos(t)
+		mustApply(t, r.Mutations, grant("d", "owner", "o"))
+		mustApply(t, r.Mutations, grant("d", "viewer", "keep"))
+		mustFence(t, r, "invitation:paused")
+		lastOwner := revoke("d", "owner", "o")
+		lastOwner.OperationID = "invitation:paused"
+		got, err := r.Mutations.Apply(t.Context(), lastOwner, refuseValidation(t))
+		assertFencedReplay(t, got, err)
+		if !relationExists(t, r, "d", "owner", "o") || !relationExists(t, r, "d", "viewer", "keep") {
+			t.Fatal("fenced replay changed facts")
+		}
+	})
+
+	for _, tc := range []struct {
+		name    string
+		cmd     mutations.Command
+		outcome mutations.Outcome
+		present bool
+	}{
+		{"applied", grant("d", "viewer", "u"), mutations.OutcomeApplied, true},
+		{"no_change", grant("d", "owner", "o"), mutations.OutcomeNoChange, true},
+		{"not_found", revoke("d", "viewer", "absent"), mutations.OutcomeNotFound, false},
+	} {
+		t.Run("FenceAfterApply/"+tc.name, func(t *testing.T) {
+			r := newRepos(t)
+			mustApply(t, r.Mutations, grant("d", "owner", "o"))
+			cmd := tc.cmd
+			cmd.OperationID = "invitation:committed"
+			if first := mustApply(t, r.Mutations, cmd); first.Replayed || first.Outcome != tc.outcome {
+				t.Fatalf("first: %+v", first)
+			}
+			for range 2 {
+				if got := mustFence(t, r, cmd.OperationID); got.Outcome != tc.outcome || !got.Recorded {
+					t.Fatalf("fence after commit: %+v", got)
+				}
+			}
+			subject := cmd.Relationships[0]
+			if relationExists(t, r, "d", subject.Relation, subject.Subject.ID) != tc.present {
+				t.Fatal("fence after commit changed facts")
+			}
+			if replay := mustApply(t, r.Mutations, cmd); !replay.Replayed || replay.Outcome != tc.outcome {
+				t.Fatalf("replay after fence-of-committed: %+v", replay)
+			}
+			if outcome, ok := mustRecorded(t, r, cmd.OperationID); !ok || outcome != tc.outcome {
+				t.Fatalf("Recorded: %q %v", outcome, ok)
+			}
+		})
+	}
+
+	t.Run("RecordedAfterTeardown", func(t *testing.T) {
+		r := newRepos(t)
+		mustApply(t, r.Mutations, grant("d", "owner", "o"))
+		cmd := grant("d", "viewer", "u")
+		cmd.OperationID = "invitation:applied"
+		mustApply(t, r.Mutations, cmd)
+		mustFence(t, r, "invitation:fenced")
+		mustApply(t, r.Mutations, mutations.Command{Target: resTarget("d"), Operation: mutations.OpTeardown})
+		for id, want := range map[string]mutations.Outcome{"invitation:applied": mutations.OutcomeApplied, "invitation:fenced": mutations.OutcomeFenced} {
+			if outcome, ok := mustRecorded(t, r, id); !ok || outcome != want {
+				t.Fatalf("Recorded(%q) after teardown: %q %v, want %q", id, outcome, ok, want)
+			}
+		}
+	})
+
+	t.Run("RecordedAbsent", func(t *testing.T) {
+		r := newRepos(t)
+		if outcome, ok := mustRecorded(t, r, "invitation:never"); ok || outcome != "" {
+			t.Fatalf("absent operation: %q %v", outcome, ok)
+		}
+		for _, id := range []string{"", "bad\x00id", string([]byte{0xff})} {
+			if _, _, err := r.Operations.Recorded(t.Context(), id); !errors.Is(err, sdk.ErrInvalidInput) {
+				t.Fatalf("Recorded(%q): want ErrInvalidInput, got %v", id, err)
+			}
+			if got, err := r.Operations.Fence(t.Context(), id); got != nil || !errors.Is(err, sdk.ErrInvalidInput) {
+				t.Fatalf("Fence(%q): want ErrInvalidInput, got %+v %v", id, got, err)
+			}
+		}
+		if outcome, ok := mustRecorded(t, r, "invitation:never"); ok || outcome != "" {
+			t.Fatalf("Recorded wrote a record: %q %v", outcome, ok)
+		}
+	})
+
+	t.Run("FenceIgnoresCommandShape", func(t *testing.T) {
+		r := newRepos(t)
+		mustApply(t, r.Mutations, grant("d", "owner", "o"))
+		mustApply(t, r.Mutations, grant("d", "viewer", "keep"))
+		mustFence(t, r, "invitation:shape")
+		for _, cmd := range []mutations.Command{
+			grant("d", "viewer", "u"),
+			grant("d", "editor", "u"),
+			revoke("d", "viewer", "keep"),
+			swap("d", "viewer", "editor", "keep"),
+			{Target: resTarget("d"), Operation: mutations.OpReconcile, Relation: "viewer", Subjects: []tuples.SubjectRef{{Type: "user", ID: "u"}}},
+			{Target: resTarget("d"), Operation: mutations.OpPurge},
+		} {
+			cmd.OperationID = "invitation:shape"
+			got, err := r.Mutations.Apply(t.Context(), cmd, refuseValidation(t))
+			if errors.Is(err, mutations.ErrOperationMismatch) {
+				t.Fatalf("fenced ID compared a fingerprint for %s: %v", cmd.Operation, err)
+			}
+			assertFencedReplay(t, got, err)
+		}
+		if !relationExists(t, r, "d", "owner", "o") || !relationExists(t, r, "d", "viewer", "keep") || relationExists(t, r, "d", "viewer", "u") || relationExists(t, r, "d", "editor", "u") || relationExists(t, r, "d", "editor", "keep") {
+			t.Fatal("fenced replays changed facts")
+		}
+	})
+
+	t.Run("FenceIdempotent", func(t *testing.T) {
+		r := newRepos(t)
+		if got := mustFence(t, r, "invitation:twice"); got.Outcome != mutations.OutcomeFenced || got.Recorded {
+			t.Fatalf("first fence: %+v", got)
+		}
+		for range 2 {
+			if got := mustFence(t, r, "invitation:twice"); got.Outcome != mutations.OutcomeFenced || !got.Recorded {
+				t.Fatalf("repeat fence: %+v", got)
+			}
+		}
+		if outcome, ok := mustRecorded(t, r, "invitation:twice"); !ok || outcome != mutations.OutcomeFenced {
+			t.Fatalf("Recorded: %q %v", outcome, ok)
+		}
+	})
+
+	t.Run("FenceConcurrentWithApply", func(t *testing.T) {
+		r := newRepos(t)
+		mustApply(t, r.Mutations, grant("d", "owner", "o"))
+		cmd := grant("d", "viewer", "u")
+		cmd.OperationID = "invitation:race"
+		const n = 4
+		fences := make(chan *mutations.FenceResult, n)
+		applies := make(chan *mutations.Result, n)
+		errs := make(chan error, 2*n)
+		start := make(chan struct{})
+		var wg sync.WaitGroup
+		for range n {
+			wg.Go(func() {
+				<-start
+				got, err := r.Operations.Fence(t.Context(), cmd.OperationID)
+				fences <- got
+				errs <- err
+			})
+			wg.Go(func() {
+				<-start
+				got, err := r.Mutations.Apply(t.Context(), cmd, nil)
+				applies <- got
+				errs <- err
+			})
+		}
+		close(start)
+		wg.Wait()
+		close(fences)
+		close(applies)
+		close(errs)
+		for err := range errs {
+			if err != nil {
+				t.Fatalf("racing call: %v", err)
+			}
+		}
+		final, ok := mustRecorded(t, r, cmd.OperationID)
+		if !ok || (final != mutations.OutcomeFenced && final != mutations.OutcomeApplied) {
+			t.Fatalf("final record: %q %v", final, ok)
+		}
+		freshFences, freshApplies := 0, 0
+		for got := range fences {
+			if got == nil || got.Outcome != final {
+				t.Fatalf("fence disagrees with final %q: %+v", final, got)
+			}
+			if !got.Recorded {
+				freshFences++
+			}
+		}
+		for got := range applies {
+			if got == nil {
+				t.Fatal("nil apply result")
+			}
+			if !got.Replayed {
+				freshApplies++
+				continue
+			}
+			if got.Outcome != final || (final == mutations.OutcomeFenced && !got.Superseded) {
+				t.Fatalf("apply replay disagrees with final %q: %+v", final, got)
+			}
+		}
+		if final == mutations.OutcomeFenced {
+			if freshFences != 1 || freshApplies != 0 || relationExists(t, r, "d", "viewer", "u") {
+				t.Fatalf("fence won but fresh fences=%d fresh applies=%d or the tuple exists", freshFences, freshApplies)
+			}
+		} else if freshFences != 0 || freshApplies != 1 || !relationExists(t, r, "d", "viewer", "u") {
+			t.Fatalf("apply won but fresh fences=%d fresh applies=%d or the tuple is missing", freshFences, freshApplies)
 		}
 	})
 }

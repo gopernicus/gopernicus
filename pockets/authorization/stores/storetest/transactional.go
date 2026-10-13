@@ -71,6 +71,7 @@ func RunTransactional(t *testing.T, newRepos func(t *testing.T) (Repositories, t
 	t.Run("RolesJoinTransaction", func(t *testing.T) { specRolesJoinTransaction(t, newRepos) })
 	t.Run("ReadsJoinTransaction", func(t *testing.T) { specReadsJoinTransaction(t, newRepos) })
 	t.Run("MutationRefusesAmbientTransaction", func(t *testing.T) { specMutationRefusesAmbientTransaction(t, newRepos) })
+	t.Run("OperationLedger/FenceInsideTransactionRefused", func(t *testing.T) { specFenceRefusesAmbientTransaction(t, newRepos) })
 	t.Run("StandaloneUnchanged", func(t *testing.T) { specStandaloneUnchanged(t, newRepos) })
 }
 
@@ -799,6 +800,41 @@ func specMutationRefusesAmbientTransaction(t *testing.T, newRepos func(t *testin
 			t.Fatalf("refused mutation changed facts before the later application")
 		}
 	})
+}
+
+// specFenceRefusesAmbientTransaction: Fence inside Transact returns
+// ErrMutationInsideTransaction with a nil result and records nothing, so the same
+// ID can still be fenced afterwards. An in-transaction fence would wait on its own
+// write lock. Fails when Mutations is wired without Operations.
+func specFenceRefusesAmbientTransaction(t *testing.T, newRepos func(t *testing.T) (Repositories, transaction.Transactor)) {
+	repos, tx := newRepos(t)
+	if repos.Mutations == nil {
+		t.Skip("mutation repository not wired")
+	}
+	if repos.Operations == nil {
+		t.Fatal("Repositories.Mutations is wired but Repositories.Operations is nil")
+	}
+	const id = "ambient:fence"
+	err := transact(tx, func(ctx context.Context) error {
+		got, err := repos.Operations.Fence(ctx, id)
+		if !errors.Is(err, mutations.ErrMutationInsideTransaction) || !errors.Is(err, sdk.ErrInvalidInput) {
+			t.Fatalf("Fence inside Transact must refuse with ErrMutationInsideTransaction, got %v", err)
+		}
+		if got != nil {
+			t.Fatalf("the refusal must return a nil result, got %+v", got)
+		}
+		return err
+	})
+	if !errors.Is(err, mutations.ErrMutationInsideTransaction) {
+		t.Fatalf("Transact must return the refusal, got %v", err)
+	}
+	if outcome, ok, err := repos.Operations.Recorded(outside(t), id); err != nil || ok {
+		t.Fatalf("refused fence recorded %q %v %v", outcome, ok, err)
+	}
+	got, err := repos.Operations.Fence(outside(t), id)
+	if err != nil || got == nil || got.Outcome != mutations.OutcomeFenced || got.Recorded {
+		t.Fatalf("fence after the refusal: %+v %v", got, err)
+	}
 }
 
 // specStandaloneUnchanged re-proves the two standalone SetRelationTargets

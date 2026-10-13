@@ -20,3 +20,7 @@ func WithLimits(limits authmodel.EvaluationLimits) Option {
 
 // WithLogger supplies the borrowed operational logger. Nil uses slog.Default.
 func WithLogger(logger *slog.Logger) Option { return func(c *config) { c.Logger = logger } }
+
+// WithLedger enables Fence and Recorded. The ledger must read and fence the same
+// authority as the service's MutationRepository. Nil leaves both unconfigured.
+func WithLedger(ledger OperationLedger) Option { return func(c *config) { c.Ledger = ledger } }
