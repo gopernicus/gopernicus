@@ -2,11 +2,13 @@ package turso
 
 import (
 	"slices"
+	"strings"
 	"testing"
 	"testing/fstest"
 
 	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/audit"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/mutations"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuples"
 	"github.com/gopernicus/gopernicus/sdk/pkg/list"
 )
@@ -182,6 +184,11 @@ func TestFreshCacheInstallationOrderAndRollback(t *testing.T) {
 		t.Fatal(err)
 	}
 	merged[MigrationsDir+"/0003_iam_operations.sql"] = &fstest.MapFile{Data: operations}
+	fenced, err := MigrationsFS.ReadFile(MigrationsDir + "/0004_iam_operations_fenced.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	merged[MigrationsDir+"/0004_iam_operations_fenced.sql"] = &fstest.MapFile{Data: fenced}
 	merged[MigrationsDir+"/0002_iam_tuple_cache.sql"] = &fstest.MapFile{Data: cache}
 	if err := tursodb.RunMigrations(t.Context(), db, merged, MigrationsDir); err != nil {
 		t.Fatal(err)
@@ -230,4 +237,149 @@ func TestFreshCacheInstallationOrderAndRollback(t *testing.T) {
 		}
 	})
 
+}
+
+// canonicalOperationsDDL is iam_operations exactly as SQLite stores it after
+// 0004's rename: the header is rewritten, the body is 0004's CREATE body.
+const canonicalOperationsDDL = `CREATE TABLE "iam_operations" (
+    operation_id TEXT COLLATE BINARY NOT NULL PRIMARY KEY,
+    encoding TEXT COLLATE BINARY NOT NULL,
+    fingerprint TEXT COLLATE BINARY NOT NULL,
+    outcome TEXT COLLATE BINARY NOT NULL,
+    committed_at TEXT NOT NULL,
+    CONSTRAINT ck_iam_operations_id CHECK (operation_id <> ''),
+    CONSTRAINT ck_iam_operations_encoding CHECK (encoding = 'operation/v1'),
+    CONSTRAINT ck_iam_operations_fingerprint CHECK (length(fingerprint) = 64 AND fingerprint NOT GLOB '*[^0-9a-f]*'),
+    CONSTRAINT ck_iam_operations_outcome CHECK (outcome IN ('applied', 'no_change', 'not_found', 'fenced'))
+)`
+
+func operationsDDL(t *testing.T, db *tursodb.DB) string {
+	t.Helper()
+	var ddl string
+	if err := db.QueryRow(t.Context(), `SELECT sql FROM main.sqlite_schema WHERE type='table' AND name='iam_operations'`).Scan(&ddl); err != nil {
+		t.Fatal(err)
+	}
+	return ddl
+}
+
+func baseOperationsMigrations(t *testing.T) fstest.MapFS {
+	t.Helper()
+	old := fstest.MapFS{}
+	for _, name := range []string{"0001_iam_tuples.sql", "0003_iam_operations.sql"} {
+		data, err := MigrationsFS.ReadFile(MigrationsDir + "/" + name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		old[MigrationsDir+"/"+name] = &fstest.MapFile{Data: data}
+	}
+	return old
+}
+
+func TestFreshOperationsSchemaMatchesFixture(t *testing.T) {
+	db := canonicalFixture(t, false)
+	if got := operationsDDL(t, db); got != canonicalOperationsDDL {
+		t.Fatalf("fresh iam_operations:\n%s\nwant:\n%s", got, canonicalOperationsDDL)
+	}
+	if got := freshIAMTables(t, db); !slices.Equal(got, []string{"iam_audit", "iam_operations", "iam_tuples"}) {
+		t.Fatalf("tables after 0004: %v", got)
+	}
+}
+
+// TestOperationsFencedUpgrade applies 0001+0003, seeds every committed outcome,
+// then applies 0004: the bundle probe refuses the old check, the rebuild keeps
+// every record byte-for-byte and the stored DDL matches the fixture.
+func TestOperationsFencedUpgrade(t *testing.T) {
+	db := emptyCanonicalFixture(t)
+	if err := tursodb.RunMigrations(t.Context(), db, baseOperationsMigrations(t), MigrationsDir); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := testRepositories(t.Context(), db); err == nil {
+		t.Fatal("bundle accepted the 0003-only outcome check")
+	}
+	if _, err := RelationshipRepository(t.Context(), db); err != nil {
+		t.Fatalf("facade requires 0004: %v", err)
+	}
+	seeded := []mutations.Outcome{mutations.OutcomeApplied, mutations.OutcomeNoChange, mutations.OutcomeNotFound}
+	for i, outcome := range seeded {
+		if _, err := db.Exec(t.Context(), `INSERT INTO main.iam_operations VALUES (?, 'operation/v1', ?, ?, ?)`, "seed:"+string(outcome), strings.Repeat(string(rune('a'+i)), 64), string(outcome), "2026-10-13T00:00:0"+string(rune('0'+i))+"Z"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := db.Exec(t.Context(), `INSERT INTO main.iam_operations VALUES ('seed:fenced', 'operation/v1', ?, 'fenced', '2026-10-13T00:00:00Z')`, mutations.FenceFingerprint); err == nil {
+		t.Fatal("0003 check accepted a fenced outcome")
+	}
+	before := operationRows(t, db)
+	if err := tursodb.RunMigrations(t.Context(), db, MigrationsFS, MigrationsDir); err != nil {
+		t.Fatal(err)
+	}
+	if got := operationsDDL(t, db); got != canonicalOperationsDDL {
+		t.Fatalf("upgraded iam_operations:\n%s\nwant:\n%s", got, canonicalOperationsDDL)
+	}
+	if after := operationRows(t, db); !slices.Equal(after, before) || len(after) != len(seeded) {
+		t.Fatalf("rebuild changed records: before=%v after=%v", before, after)
+	}
+	if got := freshIAMTables(t, db); !slices.Equal(got, []string{"iam_audit", "iam_operations", "iam_tuples"}) {
+		t.Fatalf("tables after 0004: %v", got)
+	}
+	repos, err := testRepositories(t.Context(), db)
+	if err != nil {
+		t.Fatalf("bundle after 0004: %v", err)
+	}
+	for _, outcome := range seeded {
+		if got, ok, err := repos.Operations.Recorded(t.Context(), "seed:"+string(outcome)); err != nil || !ok || got != outcome {
+			t.Fatalf("seeded %s after upgrade: %q %v %v", outcome, got, ok, err)
+		}
+		if got, err := repos.Operations.Fence(t.Context(), "seed:"+string(outcome)); err != nil || got.Outcome != outcome || !got.Recorded {
+			t.Fatalf("fence over seeded %s: %+v %v", outcome, got, err)
+		}
+	}
+	if got, err := repos.Operations.Fence(t.Context(), "fresh"); err != nil || got.Outcome != mutations.OutcomeFenced || got.Recorded {
+		t.Fatalf("fence after upgrade: %+v %v", got, err)
+	}
+	if _, err := db.Exec(t.Context(), `INSERT INTO main.iam_operations VALUES ('bad', 'operation/v1', ?, 'refused', '2026-10-13T00:00:00Z')`, mutations.FenceFingerprint); err == nil {
+		t.Fatal("0004 check accepted an unknown outcome")
+	}
+}
+
+// TestOperationsFencedUpgradeFailsOnHostView pins the documented caveat: a host
+// view naming iam_operations makes 0004 fail and roll back whole.
+func TestOperationsFencedUpgradeFailsOnHostView(t *testing.T) {
+	db := emptyCanonicalFixture(t)
+	if err := tursodb.RunMigrations(t.Context(), db, baseOperationsMigrations(t), MigrationsDir); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(t.Context(), `CREATE VIEW main.host_operations AS SELECT operation_id FROM main.iam_operations`); err != nil {
+		t.Fatal(err)
+	}
+	before := operationsDDL(t, db)
+	if err := tursodb.RunMigrations(t.Context(), db, MigrationsFS, MigrationsDir); err == nil {
+		t.Fatal("0004 applied over a host view")
+	}
+	if got := operationsDDL(t, db); got != before {
+		t.Fatalf("failed 0004 left a partial rebuild:\n%s", got)
+	}
+	if got := freshIAMTables(t, db); !slices.Equal(got, []string{"iam_audit", "iam_operations", "iam_tuples"}) {
+		t.Fatalf("failed 0004 left tables: %v", got)
+	}
+}
+
+func operationRows(t *testing.T, db *tursodb.DB) []string {
+	t.Helper()
+	rows, err := db.Query(t.Context(), `SELECT operation_id || '|' || encoding || '|' || fingerprint || '|' || outcome || '|' || committed_at FROM main.iam_operations ORDER BY operation_id`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var row string
+		if err := rows.Scan(&row); err != nil {
+			t.Fatal(err)
+		}
+		out = append(out, row)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	return out
 }

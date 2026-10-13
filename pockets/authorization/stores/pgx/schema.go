@@ -13,6 +13,7 @@ import (
 // Checking constraint names alone would accept a same-named CHECK (true).
 const canonicalScopeConstraint = "CHECK ((((scope_kind = 1) AND (resource_type = ''::text) AND (resource_id = ''::text)) OR ((scope_kind = 2) AND (resource_type <> ''::text) AND (resource_id <> ''::text))))"
 const canonicalRefsConstraint = "CHECK (((relation <> ''::text) AND (subject_type <> ''::text) AND (subject_id <> ''::text)))"
+const canonicalOutcomeConstraint = "CHECK ((outcome = ANY (ARRAY['applied'::text, 'no_change'::text, 'not_found'::text, 'fenced'::text])))"
 
 func probeCanonicalSchema(ctx context.Context, db *pgxdb.DB, schema pgxdb.Schema, audit, operations bool) error {
 	tx, err := db.BeginRead(ctx)
@@ -81,11 +82,11 @@ WHERE c.oid=pg_catalog.to_regclass($1)`, schema.Table(table)).Scan(&namespace, &
 	if operations {
 		columns = map[string]string{"operation_id": "text", "encoding": "text", "fingerprint": "text", "outcome": "text", "committed_at": "timestamp with time zone"}
 		constraints = map[string]bool{
-			"PRIMARY KEY (operation_id)":                                                             true,
-			"CHECK ((operation_id <> ''::text))":                                                     true,
-			"CHECK ((encoding = 'operation/v1'::text))":                                              true,
-			"CHECK ((fingerprint ~ '^[0-9a-f]{64}$'::text))":                                         true,
-			"CHECK ((outcome = ANY (ARRAY['applied'::text, 'no_change'::text, 'not_found'::text])))": true,
+			"PRIMARY KEY (operation_id)":                     true,
+			"CHECK ((operation_id <> ''::text))":             true,
+			"CHECK ((encoding = 'operation/v1'::text))":      true,
+			"CHECK ((fingerprint ~ '^[0-9a-f]{64}$'::text))": true,
+			canonicalOutcomeConstraint:                       true,
 		}
 		if err := probeCanonicalTable(ctx, tx, schema.Table("iam_operations"), columns, constraints); err != nil {
 			return err

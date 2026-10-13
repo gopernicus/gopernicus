@@ -8,7 +8,7 @@ import (
 )
 
 // Both dialects install the same canonical tables and access paths.
-var canonicalMigrations = []string{"0001_iam_tuples.sql", "0003_iam_operations.sql"}
+var canonicalMigrations = []string{"0001_iam_tuples.sql", "0003_iam_operations.sql", "0004_iam_operations_fenced.sql"}
 var expectedTables = []string{"iam_tuples", "iam_audit", "iam_operations"}
 var expectedConstraints = []string{
 	"ck_iam_operations_id", "ck_iam_operations_encoding", "ck_iam_operations_fingerprint", "ck_iam_operations_outcome",

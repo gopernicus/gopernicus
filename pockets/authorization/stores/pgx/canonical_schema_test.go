@@ -45,6 +45,7 @@ func TestOperationSchemaRequiredOnlyForBundle(t *testing.T) {
 	for _, statement := range []string{
 		"DROP TABLE iam_operations",
 		"ALTER TABLE iam_operations DROP CONSTRAINT ck_iam_operations_encoding; ALTER TABLE iam_operations ADD CONSTRAINT ck_iam_operations_encoding CHECK(true)",
+		"ALTER TABLE iam_operations DROP CONSTRAINT ck_iam_operations_outcome, ADD CONSTRAINT ck_iam_operations_outcome CHECK (outcome IN ('applied', 'no_change', 'not_found'))",
 	} {
 		t.Run(statement, func(t *testing.T) {
 			db := canonicalFixture(t, false)

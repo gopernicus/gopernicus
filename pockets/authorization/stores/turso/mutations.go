@@ -19,7 +19,10 @@ func newMutationStore(db *tursodb.DB, cfg config) *mutationStore {
 	return &mutationStore{db: db, integrity: cfg.integrity, audit: cfg.audit}
 }
 
-var _ mutations.MutationRepository = (*mutationStore)(nil)
+var (
+	_ mutations.MutationRepository = (*mutationStore)(nil)
+	_ mutations.OperationLedger    = (*mutationStore)(nil)
+)
 
 func (m *mutationStore) IntegrityPolicy() mutations.IntegrityPolicy {
 	return mutations.IntegrityPolicy{Rules: slices.Clone(m.integrity.Rules)}

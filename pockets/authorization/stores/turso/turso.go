@@ -85,10 +85,12 @@ func Repositories(ctx context.Context, db *tursodb.DB, opts ...Option) (authoriz
 	if err := probeCanonicalSchema(ctx, db, true, true); err != nil {
 		return authorization.Repositories{}, err
 	}
+	mutationStore := newMutationStore(db, cfg)
 	repos := authorization.Repositories{
-		Tuples:    newTupleStore(db, cfg),
-		Mutations: newMutationStore(db, cfg),
-		Audit:     &auditStore{db: db},
+		Tuples:     newTupleStore(db, cfg),
+		Mutations:  mutationStore,
+		Operations: mutationStore,
+		Audit:      &auditStore{db: db},
 	}
 	if source != nil {
 		repos.TupleSource = source
