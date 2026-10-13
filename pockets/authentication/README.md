@@ -728,8 +728,10 @@ type Fencer interface {
   then ends the claim `cancelled`, records `invitation_granted` status `blocked`
   with reason `fenced`, sends no notice and returns the 409-class error. A Granter
   that maps it to `ErrGrantSuperseded` is safe but degraded: the row ends
-  `accepted` with no access, and a later cancel answers `ErrAlreadyGranted` (a
-  revoke of nothing). That fence-then-accepted answer is recorded as
+  `accepted` with no access. A cancel that races that completion answers
+  `ErrAlreadyGranted`; a cancel started after the row is already `accepted`
+  answers `ErrNotPending`. In either case the pocket revokes nothing, so the
+  host must run its ordinary revoke path. The racing answer is recorded as
   `invitation_cancelled` status `blocked` with `fence=fenced` and reason
   `accepted_after_fence`, plus a WARN log line carrying the invitation ID: it is
   also the signature of a Fencer/Granter namespace mismatch. The verified
