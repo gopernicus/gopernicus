@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/gopernicus/gopernicus/pockets/authorization/stores/storetest"
 
@@ -146,5 +147,150 @@ func TestOperationLedgerRestart(t *testing.T) {
 	replay = mustApplyLive(t, repos.Mutations, cmd)
 	if !replay.Replayed || !replay.Superseded {
 		t.Fatalf("revoked replay: %+v", replay)
+	}
+}
+
+// fenceHoldTime keeps the raw write lock well under hosted sqld's interactive
+// transaction bound while both contenders queue behind it.
+const fenceHoldTime = 300 * time.Millisecond
+
+// secondHandle opens an independent connection pool, as a second process would.
+func secondHandle(t *testing.T) storetest.Repositories {
+	t.Helper()
+	url, token := requireTursoEnv(t)
+	db, err := tursodb.Open(t.Context(), tursodb.Config{URL: url, AuthToken: token})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	repos, err := testRepositories(t.Context(), db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return repos
+}
+
+func settleFenceRace(t *testing.T, a, b storetest.Repositories, cmd mutations.Command, fence *mutations.FenceResult, apply *mutations.Result) string {
+	t.Helper()
+	final, ok, err := b.Operations.Recorded(t.Context(), cmd.OperationID)
+	if err != nil || !ok {
+		t.Fatalf("final record: %q %v %v", final, ok, err)
+	}
+	tuple, err := a.Relationships.CheckRelationExists(t.Context(), "doc", cmd.Target.ID, "viewer", "user", "alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	switch {
+	case !apply.Replayed && apply.Outcome == mutations.OutcomeApplied && fence.Recorded && fence.Outcome == mutations.OutcomeApplied && final == mutations.OutcomeApplied && tuple:
+		return "apply"
+	case !fence.Recorded && fence.Outcome == mutations.OutcomeFenced && apply.Replayed && apply.Superseded && apply.Outcome == mutations.OutcomeFenced && final == mutations.OutcomeFenced && !tuple:
+		return "fence"
+	}
+	t.Fatalf("no single durable ordering: fence=%+v apply=%+v final=%q tuple=%v", fence, apply, final, tuple)
+	return ""
+}
+
+// TestFenceContentionTwoConnections holds BEGIN IMMEDIATE in a raw transaction on
+// handle A while a Fence (handle B) and an Apply (A, second connection) queue
+// behind it, then releases it. SQLite exposes no wait observability, so each
+// round holds the lock for fenceHoldTime and the test repeats. Exactly one
+// durable ordering results; both pure orderings are pinned as well.
+func TestFenceContentionTwoConnections(t *testing.T) {
+	adb, a := liveRepos(t)
+	b := secondHandle(t)
+	t.Run("Contended", func(t *testing.T) {
+		const rounds = 5
+		seen := map[string]int{}
+		for i := range rounds {
+			cmd := grantCmd(fmt.Sprintf("contended-%d", i), "viewer", "alice")
+			cmd.OperationID = fmt.Sprintf("invitation:contended-%d", i)
+			holder, err := adb.Begin(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			var wg sync.WaitGroup
+			var fence *mutations.FenceResult
+			var apply *mutations.Result
+			var fenceErr, applyErr error
+			wg.Go(func() { fence, fenceErr = b.Operations.Fence(t.Context(), cmd.OperationID) })
+			wg.Go(func() { apply, applyErr = a.Mutations.Apply(t.Context(), cmd, nil) })
+			time.Sleep(fenceHoldTime)
+			if err := holder.Commit(); err != nil {
+				t.Fatal(err)
+			}
+			wg.Wait()
+			if fenceErr != nil || applyErr != nil || fence == nil || apply == nil {
+				t.Fatalf("contended calls: fence=%+v/%v apply=%+v/%v", fence, fenceErr, apply, applyErr)
+			}
+			seen[settleFenceRace(t, a, b, cmd, fence, apply)]++
+		}
+		t.Logf("observed orderings over %d contended rounds: %v", rounds, seen)
+	})
+	t.Run("FenceThenApply", func(t *testing.T) {
+		cmd := grantCmd("fence-first", "viewer", "alice")
+		cmd.OperationID = "invitation:fence-first"
+		fence, err := b.Operations.Fence(t.Context(), cmd.OperationID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if winner := settleFenceRace(t, a, b, cmd, fence, mustApplyLive(t, a.Mutations, cmd)); winner != "fence" {
+			t.Fatalf("fence-first ordering: %s", winner)
+		}
+	})
+	t.Run("ApplyThenFence", func(t *testing.T) {
+		cmd := grantCmd("apply-first", "viewer", "alice")
+		cmd.OperationID = "invitation:apply-first"
+		apply := mustApplyLive(t, a.Mutations, cmd)
+		fence, err := b.Operations.Fence(t.Context(), cmd.OperationID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if winner := settleFenceRace(t, a, b, cmd, fence, apply); winner != "apply" {
+			t.Fatalf("apply-first ordering: %s", winner)
+		}
+	})
+}
+
+// TestFenceRestart proves a fence survives the process: a fresh handle replays
+// the fenced ID as fenced and Fence reports the earlier record.
+func TestFenceRestart(t *testing.T) {
+	_, repos := liveRepos(t)
+	cmd := grantCmd("fence-restart", "viewer", "alice")
+	cmd.OperationID = "invitation:fence-restart"
+	if got, err := repos.Operations.Fence(t.Context(), cmd.OperationID); err != nil || got.Outcome != mutations.OutcomeFenced || got.Recorded {
+		t.Fatalf("fence: %+v %v", got, err)
+	}
+	fresh := secondHandle(t)
+	replay, err := fresh.Mutations.Apply(t.Context(), cmd, func(mutations.Command) error { return errors.New("fenced replay reached the validator") })
+	if err != nil || replay.Outcome != mutations.OutcomeFenced || !replay.Replayed || !replay.Superseded {
+		t.Fatalf("restart replay: %+v %v", replay, err)
+	}
+	if outcome, ok, err := fresh.Operations.Recorded(t.Context(), cmd.OperationID); err != nil || !ok || outcome != mutations.OutcomeFenced {
+		t.Fatalf("restart recorded: %q %v %v", outcome, ok, err)
+	}
+	if got, err := fresh.Operations.Fence(t.Context(), cmd.OperationID); err != nil || got.Outcome != mutations.OutcomeFenced || !got.Recorded {
+		t.Fatalf("restart fence: %+v %v", got, err)
+	}
+	if ok, err := fresh.Relationships.CheckRelationExists(t.Context(), "doc", "fence-restart", "viewer", "user", "alice"); err != nil || ok {
+		t.Fatalf("fenced grant landed: %v %v", ok, err)
+	}
+}
+
+// TestFenceRefusesAmbient refuses a fence inside a host transaction before any
+// write, so the ID stays fenceable afterwards.
+func TestFenceRefusesAmbient(t *testing.T) {
+	db, repos := liveRepos(t)
+	err := db.Transact(t.Context(), func(ctx context.Context) error {
+		got, err := repos.Operations.Fence(ctx, "invitation:ambient")
+		if got != nil || !errors.Is(err, mutations.ErrMutationInsideTransaction) {
+			t.Fatalf("ambient fence: %+v %v", got, err)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := repos.Operations.Recorded(t.Context(), "invitation:ambient"); err != nil || ok {
+		t.Fatalf("refused fence recorded: %v %v", ok, err)
 	}
 }

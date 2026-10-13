@@ -2,11 +2,13 @@ package pgx
 
 import (
 	"slices"
+	"strings"
 	"testing"
 	"testing/fstest"
 
 	"github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/audit"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/mutations"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuples"
 	"github.com/gopernicus/gopernicus/sdk/pkg/list"
 )
@@ -192,6 +194,11 @@ func TestFreshCacheInstallationOrderAndRollback(t *testing.T) {
 		t.Fatal(err)
 	}
 	merged[MigrationsDir+"/0003_iam_operations.sql"] = &fstest.MapFile{Data: operations}
+	fenced, err := MigrationsFS.ReadFile(MigrationsDir + "/0004_iam_operations_fenced.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	merged[MigrationsDir+"/0004_iam_operations_fenced.sql"] = &fstest.MapFile{Data: fenced}
 	merged[MigrationsDir+"/0002_iam_tuple_cache.sql"] = &fstest.MapFile{Data: cache}
 	if err := pgxdb.RunMigrations(t.Context(), db, merged, MigrationsDir); err != nil {
 		t.Fatal(err)
@@ -240,4 +247,58 @@ func TestFreshCacheInstallationOrderAndRollback(t *testing.T) {
 		}
 	})
 
+}
+
+// TestOperationsFencedUpgrade applies 0001+0003, seeds every committed outcome,
+// then applies 0004: the bundle probe refuses the old check, the upgrade keeps
+// every record, and fences become writable.
+func TestOperationsFencedUpgrade(t *testing.T) {
+	db := emptyCanonicalFixture(t)
+	old := fstest.MapFS{}
+	for _, name := range []string{"0001_iam_tuples.sql", "0003_iam_operations.sql"} {
+		data, err := MigrationsFS.ReadFile(MigrationsDir + "/" + name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		old[MigrationsDir+"/"+name] = &fstest.MapFile{Data: data}
+	}
+	if err := pgxdb.RunMigrations(t.Context(), db, old, MigrationsDir); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := testRepositories(t.Context(), db); err == nil {
+		t.Fatal("bundle accepted the 0003-only outcome check")
+	}
+	if _, err := RelationshipRepository(t.Context(), db); err != nil {
+		t.Fatalf("facade requires 0004: %v", err)
+	}
+	seeded := []mutations.Outcome{mutations.OutcomeApplied, mutations.OutcomeNoChange, mutations.OutcomeNotFound}
+	for _, outcome := range seeded {
+		if _, err := db.Exec(t.Context(), `INSERT INTO iam_operations VALUES ($1, 'operation/v1', $2, $3, now())`, "seed:"+string(outcome), strings.Repeat("a", 64), string(outcome)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := db.Exec(t.Context(), `INSERT INTO iam_operations VALUES ('seed:fenced', 'operation/v1', $1, 'fenced', now())`, mutations.FenceFingerprint); err == nil {
+		t.Fatal("0003 check accepted a fenced outcome")
+	}
+	if err := pgxdb.RunMigrations(t.Context(), db, MigrationsFS, MigrationsDir); err != nil {
+		t.Fatal(err)
+	}
+	repos, err := testRepositories(t.Context(), db)
+	if err != nil {
+		t.Fatalf("bundle after 0004: %v", err)
+	}
+	for _, outcome := range seeded {
+		if got, ok, err := repos.Operations.Recorded(t.Context(), "seed:"+string(outcome)); err != nil || !ok || got != outcome {
+			t.Fatalf("seeded %s after upgrade: %q %v %v", outcome, got, ok, err)
+		}
+		if got, err := repos.Operations.Fence(t.Context(), "seed:"+string(outcome)); err != nil || got.Outcome != outcome || !got.Recorded {
+			t.Fatalf("fence over seeded %s: %+v %v", outcome, got, err)
+		}
+	}
+	if got, err := repos.Operations.Fence(t.Context(), "fresh"); err != nil || got.Outcome != mutations.OutcomeFenced || got.Recorded {
+		t.Fatalf("fence after upgrade: %+v %v", got, err)
+	}
+	if _, err := db.Exec(t.Context(), `INSERT INTO iam_operations VALUES ('bad', 'operation/v1', $1, 'refused', now())`, mutations.FenceFingerprint); err == nil {
+		t.Fatal("0004 check accepted an unknown outcome")
+	}
 }

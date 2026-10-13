@@ -87,9 +87,14 @@ INSERT INTO temp.iam_tuples VALUES (1,'','','admin','user','shadow','');`); err 
 }
 
 func TestOperationSchemaRequiredOnlyForBundle(t *testing.T) {
+	unfenced, err := MigrationsFS.ReadFile(MigrationsDir + "/0003_iam_operations.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, statement := range []string{
 		"DROP TABLE main.iam_operations",
 		"DROP TABLE main.iam_operations; CREATE TABLE main.iam_operations(operation_id TEXT)",
+		"DROP TABLE main.iam_operations; " + string(unfenced),
 	} {
 		t.Run(statement, func(t *testing.T) {
 			db := canonicalFixture(t, false)

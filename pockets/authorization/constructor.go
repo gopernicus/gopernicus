@@ -41,13 +41,16 @@ func New(repos Repositories, opts ...Option) (Components, error) {
 	for _, dep := range []struct {
 		name  string
 		value any
-	}{{"Repositories.Tuples", repos.Tuples}, {"Repositories.Mutations", repos.Mutations}, {"Repositories.Audit", repos.Audit}, {"Repositories.TupleSource", repos.TupleSource}, {"WithTupleCache", cfg.TupleBackend}} {
+	}{{"Repositories.Tuples", repos.Tuples}, {"Repositories.Mutations", repos.Mutations}, {"Repositories.Operations", repos.Operations}, {"Repositories.Audit", repos.Audit}, {"Repositories.TupleSource", repos.TupleSource}, {"WithTupleCache", cfg.TupleBackend}} {
 		if isTypedNil(dep.value) {
 			return Components{}, fmt.Errorf("authorization: %s is typed nil: %w", dep.name, sdk.ErrInvalidInput)
 		}
 	}
 	if repos.Tuples == nil {
 		return Components{}, ErrNoKindConfigured
+	}
+	if repos.Operations != nil && repos.Mutations == nil {
+		return Components{}, ErrOperationsWithoutMutations
 	}
 	if cfg.RoleRoutesGate != nil && repos.Mutations == nil {
 		return Components{}, authorizationhttp.ErrRoleRoutesWithoutMutations
@@ -87,7 +90,7 @@ func New(repos Repositories, opts ...Option) (Components, error) {
 	}
 	comps.Relationships, comps.RelationshipWriter = parts.Service, parts.RelationshipWriter
 	if repos.Mutations != nil {
-		comps.Mutations, err = mutations.NewService(repos.Mutations, mutations.WithModel(comps.Decisions.CompiledModel()), mutations.WithLimits(cfg.Limits), mutations.WithLogger(comps.log))
+		comps.Mutations, err = mutations.NewService(repos.Mutations, mutations.WithModel(comps.Decisions.CompiledModel()), mutations.WithLimits(cfg.Limits), mutations.WithLogger(comps.log), mutations.WithLedger(repos.Operations))
 		if err != nil {
 			return Components{}, err
 		}

@@ -123,6 +123,16 @@ The fresh base is `migrations/0001_iam_tuples.sql`. It creates `iam_tuples` and
 `ExportMigrations(dst)` or apply `MigrationsFS` / `MigrationsDir` through the
 host's pre-boot migration runner.
 
+`Repositories` also requires the operation ledger from the same source:
+`0003_iam_operations.sql` creates `iam_operations` and
+`0004_iam_operations_fenced.sql` widens its outcome check for fences. 0004 is a
+one-way cutover: older adapter versions refuse the widened schema, and there is
+no downgrade once a fenced record exists. Apply 0004 in its own migrate run with
+a lock timeout (`options=-c lock_timeout=5s`): its ALTER takes ACCESS EXCLUSIVE
+and can stall every authorization write while it waits; see the [deploy order
+and lock guidance](../UPGRADE.md). `Repositories` populates both `Mutations` and
+`Operations`; `RelationshipRepository` needs neither table.
+
 TupleCache adds one optional file,
 `tuple_cache_migrations/0002_iam_tuple_cache.sql`, exposed by
 `TupleCacheMigrationsFS` / `TupleCacheMigrationsDir` and

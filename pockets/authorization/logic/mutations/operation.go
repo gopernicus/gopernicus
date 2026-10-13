@@ -12,6 +12,11 @@ import (
 
 const OperationEncoding = "operation/v1"
 
+// FenceFingerprint is stored on a fenced operation record. A fence binds no
+// command; the value stays valid hex so the column constraint holds. Lookups
+// branch on OutcomeFenced, never on this value.
+const FenceFingerprint = "0000000000000000000000000000000000000000000000000000000000000000"
+
 // Fingerprint binds a structurally valid command's normalized meaning using the
 // frozen operation/v1 encoding. OperationID and execution limits are excluded.
 func Fingerprint(cmd Command) string {

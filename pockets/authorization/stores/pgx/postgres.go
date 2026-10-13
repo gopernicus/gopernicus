@@ -103,10 +103,12 @@ func Repositories(ctx context.Context, db *pgxdb.DB, opts ...Option) (authorizat
 	if err := probeCanonicalSchema(ctx, db, cfg.schema, true, true); err != nil {
 		return authorization.Repositories{}, err
 	}
+	mutationStore := newMutationStore(db, cfg)
 	repos := authorization.Repositories{
-		Tuples:    newTupleStore(db, cfg),
-		Mutations: newMutationStore(db, cfg),
-		Audit:     &auditStore{db: db, schema: cfg.schema},
+		Tuples:     newTupleStore(db, cfg),
+		Mutations:  mutationStore,
+		Operations: mutationStore,
+		Audit:      &auditStore{db: db, schema: cfg.schema},
 	}
 	if source != nil {
 		repos.TupleSource = source

@@ -72,6 +72,9 @@ func (s *Store) Audit() *Audit { return &Audit{st: s.rel.st} }
 // Mutations returns the shared-state atomic mutation.MutationRepository.
 func (s *Store) Mutations() *Mutations { return s.mut }
 
+// Operations returns the mutation.OperationLedger over the same operation records.
+func (s *Store) Operations() *Mutations { return s.mut }
+
 // Mutations applies integrity checks and changes within the shared write boundary.
 type operationRecord struct {
 	fingerprint string
@@ -84,7 +87,10 @@ type Mutations struct {
 	integrity mutation.IntegrityPolicy
 }
 
-var _ mutation.MutationRepository = (*Mutations)(nil)
+var (
+	_ mutation.MutationRepository = (*Mutations)(nil)
+	_ mutation.OperationLedger    = (*Mutations)(nil)
+)
 
 func (m *Mutations) IntegrityPolicy() mutation.IntegrityPolicy {
 	return mutation.IntegrityPolicy{Rules: slices.Clone(m.integrity.Rules)}
@@ -111,6 +117,10 @@ func (m *Mutations) Apply(ctx context.Context, cmd mutation.Command, validate mu
 		if cmd.OperationID != "" {
 			fingerprint = mutation.Fingerprint(cmd)
 			if record, ok := next.operations[cmd.OperationID]; ok {
+				if record.outcome == mutation.OutcomeFenced {
+					result = &mutation.Result{Outcome: mutation.OutcomeFenced, Replayed: true, Superseded: true}
+					return nil
+				}
 				if record.fingerprint != fingerprint {
 					return mutation.ErrOperationMismatch
 				}
@@ -145,4 +155,48 @@ func (m *Mutations) Apply(ctx context.Context, cmd mutation.Command, validate mu
 		return nil, err
 	}
 	return result, nil
+}
+
+// Fence records operationID as fenced under the shared mutex. It bypasses
+// state.write because a fence changes no facts and carries no audit source.
+func (m *Mutations) Fence(ctx context.Context, operationID string) (*mutation.FenceResult, error) {
+	if err := tuples.ValidateRefField("operation id", operationID); err != nil {
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	m.st.mu.Lock()
+	defer m.st.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if record, ok := m.st.operations[operationID]; ok {
+		if !record.outcome.Valid() {
+			return nil, fmt.Errorf("authorization memory: invalid operation outcome %q", record.outcome)
+		}
+		return &mutation.FenceResult{Outcome: record.outcome, Recorded: true}, nil
+	}
+	m.st.operations[operationID] = operationRecord{fingerprint: mutation.FenceFingerprint, outcome: mutation.OutcomeFenced, committedAt: time.Now()}
+	return &mutation.FenceResult{Outcome: mutation.OutcomeFenced}, nil
+}
+
+// Recorded reports the outcome recorded under operationID.
+func (m *Mutations) Recorded(ctx context.Context, operationID string) (mutation.Outcome, bool, error) {
+	if err := tuples.ValidateRefField("operation id", operationID); err != nil {
+		return "", false, err
+	}
+	if err := ctx.Err(); err != nil {
+		return "", false, err
+	}
+	m.st.mu.Lock()
+	defer m.st.mu.Unlock()
+	record, ok := m.st.operations[operationID]
+	if !ok {
+		return "", false, nil
+	}
+	if !record.outcome.Valid() {
+		return "", false, fmt.Errorf("authorization memory: invalid operation outcome %q", record.outcome)
+	}
+	return record.outcome, true, nil
 }

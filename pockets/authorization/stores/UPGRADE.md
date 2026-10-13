@@ -4,6 +4,117 @@ Authorization ships a fresh canonical SQL schema for PostgreSQL and SQLite/Turso
 Hosts export and apply it before constructing repositories. Framework constructors
 validate the applied schema; they do not create tables or run migrations.
 
+## Adopting operation fences (v0.24.0) — a one-way migration
+
+Upgrade authorization core with PostgreSQL store `v0.18.0` or Turso store
+`v0.17.0`. SQL hosts using `Repositories` **must apply**
+`migrations/0004_iam_operations_fenced.sql`; it widens the `iam_operations`
+outcome check to accept `fenced`. `RelationshipRepository` alone does not
+require it. Copy only `0004_iam_operations_fenced.sql` as the next entry of the
+host's authorization migration stream, after `0003_iam_operations.sql`; never
+edit an applied file.
+
+- PostgreSQL: one `ALTER TABLE … DROP CONSTRAINT …, ADD CONSTRAINT …` on the
+  unqualified table, resolved through the host's `search_path`/schema.
+- SQLite/Turso: a table rebuild (create `iam_operations_next`, copy, drop,
+  rename) inside the migration transaction.
+
+**PostgreSQL lock guidance.** The 0004 `ALTER TABLE` takes an ACCESS EXCLUSIVE
+lock on `iam_operations`, and `pgxdb.RunMigrations` sets no lock timeout and
+runs the whole stream in one transaction. If any session holds a lock on
+`iam_operations`, the ALTER queues; every running v0.23 `Apply` with an
+OperationID then blocks behind it while holding `iam_tuples` in SHARE ROW
+EXCLUSIVE mode, and all authorization writes stall. Apply 0004 in its own
+migrate run, and set a lock timeout through the DSN
+(`options=-c lock_timeout=5s`) or the migration role. On timeout the
+transaction rolls back cleanly and the `(source, version)` ledger stays correct;
+retry the run. If a later migration in the same run touches `iam_tuples`, the
+lock order is inverted against running `Apply` calls and PostgreSQL aborts one
+side as a deadlock — another reason to run 0004 alone.
+
+**SQLite/Turso preflight.** The rebuild fails loudly only on a host view that
+names `iam_operations`; drop the view first and recreate it afterwards. Host
+triggers (for example `AFTER INSERT ON iam_operations`) and host indexes on
+`iam_operations` are **silently dropped**: 0004 succeeds and they are gone.
+Before 0004, save the output of
+
+```sql
+SELECT type, name, sql FROM sqlite_master
+WHERE tbl_name = 'iam_operations' AND name NOT LIKE 'sqlite_autoindex%' AND type <> 'table';
+```
+
+and recreate those objects after it. Take a Turso point-in-time snapshot or
+branch before running 0004. The copy is one server-side statement, so only very
+large ledgers approach hosted transaction limits; verify on a branched copy
+before running 0004 on a large ledger.
+
+**Hard cutover and deploy order.** Both schema probes are exact-match: after
+0004 an older binary (authorization `v0.23.x`, PostgreSQL store `v0.17.x`,
+Turso store `v0.16.x`) refuses construction, and the new binary refuses a schema
+without 0004. The probe runs only at construction, so deploy in this order:
+
+1. Freeze scale-out and pin minimum instances.
+2. Run the migration. Old instances keep serving; while they do, they treat a
+   fenced record as `ErrOperationMismatch`, so no access is granted.
+3. Roll the new binaries immediately.
+4. Never let an old revision start after the migration: autoscale-out, a crash
+   restart or a node drain of an old revision fails construction.
+
+**Two-phase rollout.** Phase 1 ships authorization v0.24 and 0004 with **no**
+Fencer wired (authentication's `InvitationsConfig.Fencer` unset and no host
+`Fence` calls). No fenced row can exist yet, so phase 1 is still reversible.
+Phase 2 wires the Fencer; the first fenced row is the real one-way door. Once a
+fenced row exists the check cannot be narrowed, and deleting fence rows
+re-opens operations they closed. Keep fence rows with the rest of the ledger
+across purge, teardown, backup and restore.
+
+**Emergency reverse (phase 1 only).** Reverse with a **new forward** ledger
+entry that the host authors — never delete or edit 0004 (or the host's copy of
+it) — and roll back to the v0.23 binaries in the same deploy, because the v0.24
+probe refuses the narrowed check. Both statements guard themselves: they fail
+if any fenced row exists. These are reference SQL, not shipped migrations.
+
+PostgreSQL (`ADD CONSTRAINT` validates existing rows and fails on a fenced one):
+
+```sql
+ALTER TABLE iam_operations DROP CONSTRAINT ck_iam_operations_outcome, ADD CONSTRAINT ck_iam_operations_outcome CHECK (outcome IN ('applied', 'no_change', 'not_found'));
+```
+
+SQLite/Turso (the copy fails the narrowed CHECK on a fenced row; the body is
+byte-identical to 0003 so the v0.16 probe accepts it; the same view, trigger and
+index preflight applies). The guard only holds when execution stops at the
+first error inside one transaction, as the migration runner does. A shell that
+continues past the failed copy would drop the ledger and rename an empty table,
+so from the `sqlite3` CLI run it with `-bail`:
+
+```sql
+CREATE TABLE main.iam_operations_prev (
+    operation_id TEXT COLLATE BINARY NOT NULL PRIMARY KEY,
+    encoding TEXT COLLATE BINARY NOT NULL,
+    fingerprint TEXT COLLATE BINARY NOT NULL,
+    outcome TEXT COLLATE BINARY NOT NULL,
+    committed_at TEXT NOT NULL,
+    CONSTRAINT ck_iam_operations_id CHECK (operation_id <> ''),
+    CONSTRAINT ck_iam_operations_encoding CHECK (encoding = 'operation/v1'),
+    CONSTRAINT ck_iam_operations_fingerprint CHECK (length(fingerprint) = 64 AND fingerprint NOT GLOB '*[^0-9a-f]*'),
+    CONSTRAINT ck_iam_operations_outcome CHECK (outcome IN ('applied', 'no_change', 'not_found'))
+);
+INSERT INTO main.iam_operations_prev (operation_id, encoding, fingerprint, outcome, committed_at)
+SELECT operation_id, encoding, fingerprint, outcome, committed_at FROM main.iam_operations;
+DROP TABLE main.iam_operations;
+ALTER TABLE main.iam_operations_prev RENAME TO iam_operations;
+```
+
+Wire `Repositories.Operations` to enable `Mutations.Fence` and
+`Mutations.Recorded`; the bundled SQL constructors populate it, and
+`memory.Store.Operations()` returns it for hand-built factories.
+`MutationRepository` is unchanged. Third-party mutation stores that honor
+`OperationID` must implement `mutations.OperationLedger` (fence under the same
+write lock as `Apply`, refuse an ambient transaction, replay a fenced ID as
+`OutcomeFenced` for any command before comparing fingerprints) and wire it as
+`Operations`: the `OperationLedger` conformance family fails when `Mutations` is
+wired without it.
+
 ## Adopting the operation ledger (v0.23.0)
 
 Upgrade authorization core with PostgreSQL store `v0.17.0` or Turso store

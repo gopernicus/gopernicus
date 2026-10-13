@@ -10,18 +10,23 @@ import (
 	"github.com/gopernicus/gopernicus/sdk"
 )
 
-var ErrMutationsNotConfigured = fmt.Errorf("authorization: atomic tuple writes are not configured: %w", sdk.ErrInvalidInput)
+var (
+	ErrMutationsNotConfigured       = fmt.Errorf("authorization: atomic tuple writes are not configured: %w", sdk.ErrInvalidInput)
+	ErrOperationLedgerNotConfigured = fmt.Errorf("authorization: operation ledger is not configured: %w", sdk.ErrInvalidInput)
+)
 
 type config struct {
 	Model  *decisions.CompiledModel
 	Limits authmodel.EvaluationLimits
 	Logger *slog.Logger
+	Ledger OperationLedger
 }
 
 // Service applies data commands. Access policy belongs to the calling inbound adapter.
 type Service struct {
 	model        *decisions.CompiledModel
 	mutations    MutationRepository
+	ledger       OperationLedger
 	maxBatchSize int
 	log          *slog.Logger
 }
@@ -40,6 +45,9 @@ func NewService(repo MutationRepository, opts ...Option) (*Service, error) {
 	if repo == nil {
 		return nil, ErrMutationsNotConfigured
 	}
+	if typedNil(cfg.Ledger) {
+		return nil, fmt.Errorf("authorization: typed nil operation ledger: %w", sdk.ErrInvalidInput)
+	}
 	limits, err := cfg.Limits.Resolve()
 	if err != nil {
 		return nil, err
@@ -55,7 +63,7 @@ func NewService(repo MutationRepository, opts ...Option) (*Service, error) {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Service{model: cfg.Model, mutations: repo, maxBatchSize: limits.MaxBatchSize, log: logger}, nil
+	return &Service{model: cfg.Model, mutations: repo, ledger: cfg.Ledger, maxBatchSize: limits.MaxBatchSize, log: logger}, nil
 }
 func typedNil(v any) bool {
 	if v == nil {

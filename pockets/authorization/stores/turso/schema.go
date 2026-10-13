@@ -20,7 +20,9 @@ func probeCanonicalSchema(ctx context.Context, db *tursodb.DB, audit, operations
 	if err != nil {
 		return err
 	}
-	operationsData, err := MigrationsFS.ReadFile(MigrationsDir + "/0003_iam_operations.sql")
+	// 0004 rebuilds iam_operations under a temporary name; its CREATE body is the
+	// canonical one SQLite keeps after the rename.
+	operationsData, err := MigrationsFS.ReadFile(MigrationsDir + "/0004_iam_operations_fenced.sql")
 	if err != nil {
 		return err
 	}
@@ -28,12 +30,12 @@ func probeCanonicalSchema(ctx context.Context, db *tursodb.DB, audit, operations
 	// Compare the owned CREATE body, retaining SQL literals and grouping. This
 	// checks column types/nullability, full identity, collation and every shape
 	// constraint together.
-	definitions := regexp.MustCompile(`(?s)CREATE TABLE main\.(iam_tuples|iam_audit|iam_operations) (\(.*?\n\));`).FindAllStringSubmatch(string(data), -1)
+	definitions := regexp.MustCompile(`(?s)CREATE TABLE main\.(iam_tuples|iam_audit|iam_operations_next) (\(.*?\n\));`).FindAllStringSubmatch(string(data), -1)
 	if len(definitions) != 3 {
 		return incompatibleSchema("iam_tuples", "embedded canonical definitions unavailable")
 	}
 	for _, def := range definitions {
-		table := def[1]
+		table := strings.TrimSuffix(def[1], "_next")
 		if table == "iam_audit" {
 			if !audit {
 				continue
