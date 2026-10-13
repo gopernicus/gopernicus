@@ -64,10 +64,25 @@ FROM g`
 	if _, err := db.Exec(ctx, hot); err != nil {
 		t.Fatalf("seed hot resource: %v", err)
 	}
+	// Turso hosts rarely run ANALYZE, so the plan must hold without statistics
+	// as well as with them.
+	t.Run("BeforeAnalyze", func(t *testing.T) { assertActivePlans(t, db) })
 	if _, err := db.Exec(ctx, `ANALYZE`); err != nil {
 		t.Fatalf("analyze: %v", err)
 	}
+	t.Run("AfterAnalyze", func(t *testing.T) { assertActivePlans(t, db) })
 
+	store := NewInvitationStore(db)
+	page, err := store.ListActiveByResource(ctx, invitations.ActiveListInput{ResourceType: "project", ResourceID: "res-hot"}, list.Request{Limit: 50, WithCount: true})
+	if err != nil || len(page.Items) != 6 || page.Total == nil || *page.Total != 6 {
+		t.Fatalf("hot resource active page: items=%d total=%v err=%v", len(page.Items), page.Total, err)
+	}
+}
+
+// assertActivePlans requires EXPLAIN QUERY PLAN for each rendered
+// active-listing shape to name idx_invitations_pending_tuple.
+func assertActivePlans(t *testing.T, db *tursodb.DB) {
+	ctx := context.Background()
 	for _, tc := range []struct {
 		name string
 		in   invitations.ActiveListInput
@@ -105,10 +120,5 @@ FROM g`
 			}
 			t.Logf("plan:\n%s", plan)
 		})
-	}
-	store := NewInvitationStore(db)
-	page, err := store.ListActiveByResource(ctx, invitations.ActiveListInput{ResourceType: "project", ResourceID: "res-hot"}, list.Request{Limit: 50, WithCount: true})
-	if err != nil || len(page.Items) != 6 || page.Total == nil || *page.Total != 6 {
-		t.Fatalf("hot resource active page: items=%d total=%v err=%v", len(page.Items), page.Total, err)
 	}
 }

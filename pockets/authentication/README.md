@@ -710,7 +710,7 @@ type Fencer interface {
   | accepting | nil | nothing | `ErrNotPending` |
   | accepting | `Fence` errors | nothing; the claim is untouched | the error |
   | accepting | fenced | ends the claim `cancelled` (subject and token kept, `AcceptedAt` zero); `invitation_cancelled` with `claim_status=accepting`, `fence=fenced` | nil |
-  | accepting | committed | finalizes `accepted`, releasing the tuple; no grant event, no member-added notice; `invitation_cancelled` status `blocked`, reason `already_granted` | `ErrAlreadyGranted` |
+  | accepting | committed | finalizes `accepted`, releasing the tuple; no grant event, no member-added notice; `invitation_cancelled` status `blocked`, `fence=committed`, reason `already_granted` | `ErrAlreadyGranted` |
   | anything else | any | nothing | `ErrNotPending` |
 
   `ErrAlreadyGranted` (409-class) means the access exists: revoke it through the
@@ -718,15 +718,24 @@ type Fencer interface {
   host knows whether the access predates the invitation. Repeating a fenced cancel
   with the same prepared value returns nil. The bundled
   `POST /auth/invitations/{id}/cancel` keeps answering 409 for every conflict;
-  hosts that need the revoke branch call `Service.Cancel` directly.
+  hosts that need the revoke branch call `Service.Cancel` directly. A host that
+  uses the bundled cancel route and wires a `Fencer` must handle
+  `ErrAlreadyGranted` itself (on that route it is a generic 409 and nothing
+  revokes the access), or not wire a `Fencer`.
 - **`ErrGrantFenced` versus `ErrGrantSuperseded`.** A Granter that replays a fenced
   operation (authorization `Outcome == OutcomeFenced`) should return
   `invitations.ErrGrantFenced`, mapped before the superseded mapping. Acceptance
   then ends the claim `cancelled`, records `invitation_granted` status `blocked`
   with reason `fenced`, sends no notice and returns the 409-class error. A Granter
   that maps it to `ErrGrantSuperseded` is safe but degraded: the row ends
-  `accepted` with no access, and a later cancel answers `ErrAlreadyGranted` (a
-  revoke of nothing). The verified resolver warns and continues for both.
+  `accepted` with no access. A cancel that races that completion answers
+  `ErrAlreadyGranted`; a cancel started after the row is already `accepted`
+  answers `ErrNotPending`. In either case the pocket revokes nothing, so the
+  host must run its ordinary revoke path. The racing answer is recorded as
+  `invitation_cancelled` status `blocked` with `fence=fenced` and reason
+  `accepted_after_fence`, plus a WARN log line carrying the invitation ID: it is
+  also the signature of a Fencer/Granter namespace mismatch. The verified
+  resolver warns and continues for both.
 - **Receipt recovery.** A host precondition that runs before the ledger (resource
   existence, tenant lookup) can turn false after the operation committed. Ask
   the ledger first (authorization `mutations.Service.Recorded`); when the
@@ -748,8 +757,29 @@ type Fencer interface {
   on restart, and there is no downgrade once a fenced row exists (see
   `pockets/authorization/stores/UPGRADE.md`). Authentication has no migration.
   `InvitationRepository` gains `CancelAcceptance` and `ListActiveByResource`. The
-  Firestore store returns `errors.ErrUnsupported` from both, so a Firestore host
-  that wires a `Fencer` cannot cancel an accepting claim.
+  Firestore store returns `errors.ErrUnsupported` from both. **Do not wire a
+  `Fencer` with the Firestore store:** the fence is written before
+  `CancelAcceptance` runs, so the claim is left `accepting` forever with its
+  tuple reserved, and every later accept retry fails the same way. Firestore
+  hosts cannot upgrade to authentication v0.18.0 at all yet: the published
+  `stores/firestore/v0.2.0` does not implement the two new repository methods
+  and does not compile against v0.18.0, so firestore hosts stay on
+  authentication ≤ v0.17.x until a firestore store tag ships.
+- **Diagnosing removed-but-has-access.** When a removed invitee still has
+  access, check in order:
+  1. The invitation row's `status` and resolved subject (`resolved_subject_type`,
+     `resolved_subject_id`): `cancelled` means the fence held; `accepted` means a
+     grant committed.
+  2. The ledger: `SELECT outcome, committed_at FROM iam_operations WHERE
+     operation_id = '<host namespace>:<invitation id>'`. No row, or a `fenced`
+     row next to an `accepted` invitation, points at a Fencer/Granter namespace
+     mismatch.
+  3. The `iam_audit` grant delta for that operation: which tuple was written,
+     and when.
+  4. The `invitation_cancelled` security event with status `blocked`: reason
+     `already_granted` (the grant committed first; the host must revoke) or
+     `accepted_after_fence` (a completion won despite the fence, logged at WARN
+     with the invitation ID). Then confirm the host's revoke actually ran.
 
 **The Granter contract and invitation authority (D1–D3).** `InvitationsConfig.Granter` is
 the host seam an accepted, auto-accepted, or directly-added invitation grants

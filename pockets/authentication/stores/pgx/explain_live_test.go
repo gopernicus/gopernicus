@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
@@ -80,12 +81,15 @@ func TestListActiveByResourceUsesPartialIndex(t *testing.T) {
 	t.Cleanup(func() { truncate(t, db, schema) })
 
 	table := schema.Table(invitationsTable)
-	// 400 resources × 100 rows of terminal history; the hot resource carries
-	// 20000 more, with 6 active rows (pending and accepting) among them.
+	// 400 resources × 100 rows of history, one in ten of each resource's rows still pending, so the
+	// partial index holds ~4000 entries and its (resource_type, resource_id)
+	// prefix is what must be selective. The hot resource carries 20000 more,
+	// with 6 active rows (pending and accepting) among them.
 	seed := `INSERT INTO ` + table + ` (id, resource_type, resource_id, relation, identifier, invited_by, token_hash, status, expires_at, accepted_at, created_at, updated_at, resolved_subject_type)
 SELECT 'inv-' || g, 'project', 'res-' || (g % 400), CASE WHEN g % 2 = 0 THEN 'member' ELSE 'admin' END, 'u' || g || '@example.com', 'owner', 'hash-' || g,
-       (ARRAY['accepted', 'declined', 'cancelled'])[1 + g % 3], now() + interval '1 day',
-       CASE WHEN g % 3 = 0 THEN now() END, now() - g * interval '1 second', now(), CASE WHEN g % 3 = 0 THEN 'user' ELSE '' END
+       CASE WHEN (g / 400) % 10 = 0 THEN 'pending' ELSE (ARRAY['accepted', 'declined', 'cancelled'])[1 + g % 3] END, now() + interval '1 day',
+       CASE WHEN (g / 400) % 10 <> 0 AND g % 3 = 0 THEN now() END, now() - g * interval '1 second', now(),
+       CASE WHEN (g / 400) % 10 <> 0 AND g % 3 = 0 THEN 'user' ELSE '' END
 FROM generate_series(1, 40000) AS g`
 	if _, err := db.Exec(ctx, seed); err != nil {
 		t.Fatalf("seed history: %v", err)
@@ -100,6 +104,10 @@ FROM generate_series(1, 20000) AS g`
 	}
 	if _, err := db.Exec(ctx, `ANALYZE `+table); err != nil {
 		t.Fatalf("analyze: %v", err)
+	}
+	var indexed int
+	if err := db.QueryRow(ctx, `SELECT count(*) FROM `+table+` WHERE status IN ('pending', 'accepting')`).Scan(&indexed); err != nil || indexed < 4000 {
+		t.Fatalf("fixture: partial index holds %d rows (%v), want thousands", indexed, err)
 	}
 
 	store := NewInvitationStore(db, storeOpts(schema)...)
@@ -128,7 +136,15 @@ FROM generate_series(1, 20000) AS g`
 			if !usesIndex(plans[0].Plan, "idx_invitations_pending_tuple") {
 				t.Fatalf("active listing is not served by idx_invitations_pending_tuple:\n%s", raw)
 			}
-			t.Logf("plan: %s", raw)
+			rows, err := db.Query(ctx, "EXPLAIN "+capture.sql, capture.args...)
+			if err != nil {
+				t.Fatalf("explain text: %v", err)
+			}
+			lines, err := jackpgx.CollectRows(rows, jackpgx.RowTo[string])
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Logf("plan:\n%s", strings.Join(lines, "\n"))
 		})
 	}
 	page, err := store.ListActiveByResource(ctx, invitations.ActiveListInput{ResourceType: "project", ResourceID: "res-hot"}, list.Request{Limit: 50, WithCount: true})

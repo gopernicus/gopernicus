@@ -77,6 +77,9 @@ The current contracts include:
   grant runs; `CompleteAcceptance` finalizes that durable claim. Matching claims
   resume after expiry, repeated completion preserves `AcceptedAt`, and an
   accepting invitation cannot be resent, cancelled or declined.
+  `CancelAcceptance` and `ListActiveByResource` return `errors.ErrUnsupported`;
+  do not wire an `InvitationsConfig.Fencer` with this store, because the fence is
+  written before the cancel and would strand the claim `accepting` for good.
 - Credential mutations reject foreign, missing or retired identifier targets.
   A replacement must be distinct, active, owned by the same user and of the same
   kind, and may only replace a primary identifier. Invalid mutations change no

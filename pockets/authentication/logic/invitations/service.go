@@ -706,7 +706,6 @@ func (s *Service) settleAccepting(ctx context.Context, inv Invitation, actor sec
 		return fmt.Errorf("fence invitation grant: %w", err)
 	}
 	claim := Acceptance{TokenHash: inv.TokenHash, SubjectType: inv.ResolvedSubjectType, SubjectID: inv.ResolvedSubjectID, Now: s.now()}
-	alreadyGranted := cancelDetails(inv, map[string]any{"claim_status": StatusAccepting, "reason": "already_granted"})
 	switch outcome {
 	case FenceOutcomeFenced:
 		if _, err := s.invitations.CancelAcceptance(ctx, inv.ID, claim); err != nil {
@@ -722,7 +721,9 @@ func (s *Service) settleAccepting(ctx context.Context, inv Invitation, actor sec
 			case current.Status == StatusAccepted:
 				// A completion won despite the fence (a namespace mis-wiring or the
 				// superseded mapping); fail toward a revoke, never a silent leak.
-				s.recordAs(ctx, actor, userID, securityevent.TypeInvitationCancelled, securityevent.StatusBlocked, alreadyGranted)
+				s.logger.Warn("invitation accepted after its grant was fenced", "invitation_id", inv.ID, "fence", string(FenceOutcomeFenced))
+				s.recordAs(ctx, actor, userID, securityevent.TypeInvitationCancelled, securityevent.StatusBlocked,
+					cancelDetails(inv, map[string]any{"claim_status": StatusAccepting, "fence": string(FenceOutcomeFenced), "reason": "accepted_after_fence"}))
 				return ErrAlreadyGranted
 			default:
 				return err
@@ -734,7 +735,8 @@ func (s *Service) settleAccepting(ctx context.Context, inv Invitation, actor sec
 		if _, err := s.invitations.CompleteAcceptance(ctx, inv.ID, claim); err != nil {
 			return err
 		}
-		s.recordAs(ctx, actor, userID, securityevent.TypeInvitationCancelled, securityevent.StatusBlocked, alreadyGranted)
+		s.recordAs(ctx, actor, userID, securityevent.TypeInvitationCancelled, securityevent.StatusBlocked,
+			cancelDetails(inv, map[string]any{"claim_status": StatusAccepting, "fence": string(FenceOutcomeCommitted), "reason": "already_granted"}))
 		return ErrAlreadyGranted
 	default:
 		return fmt.Errorf("fencer returned unknown outcome %q", outcome)

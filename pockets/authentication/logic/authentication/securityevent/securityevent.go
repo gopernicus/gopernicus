@@ -102,8 +102,10 @@ const (
 	TypeInvitationDeclined = "invitation_declined"
 	// TypeInvitationCancelled is an owner cancelling an invitation. Cancelling an
 	// accepting claim adds Details claim_status=accepting: StatusSuccess with
-	// fence=fenced when the grant was fenced, or StatusBlocked with reason
-	// already_granted when the grant had committed (the host revokes instead).
+	// fence=fenced when the grant was fenced, or StatusBlocked when access exists
+	// and the host revokes instead: fence=committed with reason already_granted
+	// when the grant had committed, or fence=fenced with reason
+	// accepted_after_fence when a completion won despite the fence.
 	TypeInvitationCancelled = "invitation_cancelled"
 
 	// TypeStepUpChallengeSent is a recent-authentication step-up code issued and
