@@ -1,5 +1,44 @@
 # Releasing gopernicus modules
 
+## Invitation terminal settlement (published 2026-10-13)
+
+Coordinated MINOR releases: authorization `v0.24.0`, its PostgreSQL adapter
+`v0.18.0` and Turso adapter `v0.17.0`; authentication `v0.18.0`, its PostgreSQL
+adapter `v0.8.0` and Turso adapter `v0.7.0`. No `sdk` change; no firestore
+tag (firestore hosts stay on authentication ≤ v0.17.x).
+
+Authorization gains a durable **fence** over the operation ledger (`OperationLedger`
+port: `Fence`, `Recorded`; `OutcomeFenced`) so an accepting invitation claim can be
+cancelled with the first grant permanently blocked, or reported as already
+committed. Every SQL host using `Repositories` must apply **`0004_iam_operations_fenced.sql`**
+before the new binaries start; the probe refuses the old schema and old binaries
+refuse the new one. Apply 0004 in its own migrate run with a lock timeout; on Turso
+the rebuild silently drops host triggers/indexes on `iam_operations` (save and
+recreate them; a host view fails loudly). Phase 1 (no Fencer wired) remains
+reversible; the first fenced row is the one-way door. See `stores/UPGRADE.md`.
+
+Authentication adds the `Fencer` seam, `Cancel` on `accepting` claims
+(`ErrAlreadyGranted` when the grant already committed), `ErrGrantFenced`, and
+`ListActiveByResource` (active statuses only, server-side, partial-index proven).
+No authentication migration. `InvitationRepository` gains two methods, which
+breaks third-party implementers at compile time.
+
+Core tags are annotated at `b7c8a73a28bc581a473fcdab783134b0ef08e8b0` (PRs #71, #72); adapter tags at `8c9b56e77813ed6fe4d6dbca2506391093beb1f6`
+(PR #74), pinning the public cores. Both commits passed full `make check` and CI.
+Each proxy `.info` resolved before dependent pins moved. Using `GOWORK=off`, empty
+caches, `proxy.golang.org` and `sum.golang.org`, every archive passed standalone
+build, uncached tests, vet and `go mod verify` (Turso integration-tag vet included).
+
+Verification before release: isolated local PostgreSQL 17 (default + schema legs),
+local SQLite, and an isolated local HTTP libSQL server (authorization integration
+suite 806/806; authentication conformance 280/280), plus real-HTTP settlement drives
+in `examples/auth-cms` (PR #73). **Hosted Turso was not run: the playground
+database's group no longer exists.** The hosted sqld transaction bound for 0004 on
+large ledgers is unverified; Turso hosts should dry-run 0004 on a branched copy.
+
+Checksums and provenance: [release manifest](plans/invitation-terminal-settlement-release-manifest.json).
+Exact verification and Segovia adoption: [the plan](plans/invitation-terminal-settlement.md).
+
 ## StaticFileServer for an SPA beside an API (sdk v0.12.0 — published 2026-10-12)
 
 SDK `v0.12.0` adds two `StaticFileServer` options and one SPA-mode default.
