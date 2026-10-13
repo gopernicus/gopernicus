@@ -103,6 +103,11 @@ var ErrInvitationResourceRuleWithoutGranter = errors.New("auth: InvitationsConfi
 // wiring posture — it fails LOUDLY rather than silently ignoring the dead check.
 var ErrInviteCheckWithoutGranter = errors.New("auth: InvitationsConfig.InviteCheck set but InvitationsConfig.Granter is nil (invitations off)")
 
+// ErrFencerWithoutGranter is returned by New when InvitationsConfig.Fencer is
+// wired but InvitationsConfig.Granter is nil (invitations off). A fence guards
+// grants that can never run, so the contradictory wiring fails LOUDLY.
+var ErrFencerWithoutGranter = errors.New("auth: InvitationsConfig.Fencer set but InvitationsConfig.Granter is nil (invitations off)")
+
 // ErrInvalidListStrategy is returned by New when
 // AdministrationConfig.ListStrategy is set to a value other than "cursor" or "offset". Like
 // the Hasher/Mailer requirements it degrades loudly at construction (the constructorConfig

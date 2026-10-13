@@ -87,18 +87,23 @@ const (
 	// Invitation vocabulary (design §6, wired by A6's invitation service). Grants are
 	// the security-relevant events: TypeInvitationGranted is recorded success (the
 	// Granter accepted), failure (the grant could not be confirmed), or blocked
-	// with reason superseded (a committed grant is no longer in effect) on accept,
-	// direct-add, and resolve-on-registration.
+	// with reason superseded (a committed grant is no longer in effect) or fenced
+	// (a cancellation fenced the operation first) on accept, direct-add, and
+	// resolve-on-registration.
 	//
 	// TypeInvitationCreated is a pending invitation being minted.
 	TypeInvitationCreated = "invitation_created"
 	// TypeInvitationGranted is a grant-on-accept attempt (StatusSuccess when the
 	// Granter granted, StatusFailure when it rejected, StatusBlocked with reason
-	// superseded when a committed grant is no longer in effect).
+	// superseded when a committed grant is no longer in effect, or reason fenced
+	// when a cancellation fenced the operation before any grant committed).
 	TypeInvitationGranted = "invitation_granted"
 	// TypeInvitationDeclined is an invitee declining a pending invitations.
 	TypeInvitationDeclined = "invitation_declined"
-	// TypeInvitationCancelled is an owner cancelling a pending invitations.
+	// TypeInvitationCancelled is an owner cancelling an invitation. Cancelling an
+	// accepting claim adds Details claim_status=accepting: StatusSuccess with
+	// fence=fenced when the grant was fenced, or StatusBlocked with reason
+	// already_granted when the grant had committed (the host revokes instead).
 	TypeInvitationCancelled = "invitation_cancelled"
 
 	// TypeStepUpChallengeSent is a recent-authentication step-up code issued and

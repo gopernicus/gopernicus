@@ -2,11 +2,12 @@ package invitations
 
 import "github.com/gopernicus/gopernicus/sdk/pkg/list"
 
-// OrderFields is the allow-list of sortable columns for ListByResource and
-// ListBySubject: only these vetted column names may reach a store's ORDER BY.
-// The map key is the API-facing field name (it coincides with the column).
-// created_at is the indexed spine column both invitation list ports page by; the
-// id tiebreak is applied by the store, not listed here.
+// OrderFields is the allow-list of sortable columns for ListByResource,
+// ListActiveByResource and ListBySubject: only these vetted column names may
+// reach a store's ORDER BY. The map key is the API-facing field name (it
+// coincides with the column). created_at is the indexed spine column every
+// invitation list port pages by; the id tiebreak is applied by the store, not
+// listed here.
 var OrderFields = map[string]list.OrderField{
 	"created_at": {Column: "created_at"},
 }

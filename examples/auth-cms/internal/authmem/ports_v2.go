@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	apikey "github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/apikey"
@@ -455,6 +456,49 @@ func (r invitationRepo) CompleteAcceptance(ctx context.Context, id string, claim
 	}
 	r.invitations[id] = updated.Clone()
 	return updated.Clone(), nil
+}
+
+func (r invitationRepo) CancelAcceptance(ctx context.Context, id string, claim invitation.Acceptance) (invitation.Invitation, error) {
+	if err := claim.Validate(); err != nil {
+		return invitation.Invitation{}, err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return invitation.Invitation{}, err
+	}
+	inv, ok := r.invitations[id]
+	if !ok {
+		return invitation.Invitation{}, sdk.ErrNotFound
+	}
+	updated, err := inv.CancelAcceptance(claim)
+	if err != nil {
+		return invitation.Invitation{}, err
+	}
+	r.invitations[id] = updated.Clone()
+	return updated.Clone(), nil
+}
+
+// ListActiveByResource filters on the stored status (pending, accepting), never
+// the wall clock, so an expired but still pending row is listed.
+func (r invitationRepo) ListActiveByResource(_ context.Context, in invitation.ActiveListInput, req list.Request) (list.Page[invitation.Invitation], error) {
+	if err := in.Validate(); err != nil {
+		return list.Page[invitation.Invitation]{}, err
+	}
+	if strings.TrimSpace(req.Search) != "" {
+		return list.Page[invitation.Invitation]{}, fmt.Errorf("active invitation listing has no searchable fields: %w", sdk.ErrInvalidInput)
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	all := make([]invitation.Invitation, 0)
+	for _, inv := range r.invitations {
+		if inv.ResourceType == in.ResourceType && inv.ResourceID == in.ResourceID &&
+			(inv.Status == invitation.StatusPending || inv.Status == invitation.StatusAccepting) &&
+			(in.Relation == "" || inv.Relation == in.Relation) {
+			all = append(all, inv.Clone())
+		}
+	}
+	return page(all, req, func(inv invitation.Invitation) (time.Time, string) { return inv.CreatedAt, inv.ID })
 }
 
 // --- shared pagination ---

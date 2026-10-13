@@ -35,7 +35,7 @@ func New(repo InvitationRepository, granter Granter, opts ...Option) (*Service, 
 	if d.TTL < 0 {
 		return nil, fmt.Errorf("invitations: TTL must not be negative: %w", sdk.ErrInvalidInput)
 	}
-	for _, v := range []any{d.Queue, d.Normalizer, d.Mailer, d.SecurityEvents} {
+	for _, v := range []any{d.Queue, d.Normalizer, d.Mailer, d.SecurityEvents, d.Fencer} {
 		if v != nil && nilDependency(v) {
 			return nil, fmt.Errorf("invitations: dependency contains a typed nil: %w", sdk.ErrInvalidInput)
 		}

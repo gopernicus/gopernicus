@@ -264,6 +264,71 @@ func (s *InvitationStore) CompleteAcceptance(ctx context.Context, id string, cla
 	return row.toDomain(), nil
 }
 
+// CancelAcceptance terminates only the matching accepting claim, keeping its
+// subject and token. There is no expiry predicate: a claim past expiry cancels.
+func (s *InvitationStore) CancelAcceptance(ctx context.Context, id string, claim invitations.Acceptance) (invitations.Invitation, error) {
+	if err := claim.Validate(); err != nil {
+		return invitations.Invitation{}, err
+	}
+	q := `UPDATE invitations SET status='cancelled',updated_at=?
+ WHERE id=? AND status='accepting' AND token_hash=? AND resolved_subject_type=? AND resolved_subject_id=? RETURNING ` + invitationColumns
+	row, err := tursodb.QueryOne[invitationRow](ctx, s.db, q, tursodb.FormatTime(claim.Now), id, claim.TokenHash, claim.SubjectType, claim.SubjectID)
+	if errors.Is(err, sdk.ErrNotFound) {
+		return s.cancellationResult(ctx, id, claim)
+	}
+	if err != nil {
+		return invitations.Invitation{}, err
+	}
+	return row.toDomain(), nil
+}
+
+// ListActiveByResource pages a resource's pending and accepting invitations by
+// stored status, ordered created_at DESC, id DESC.
+func (s *InvitationStore) ListActiveByResource(ctx context.Context, in invitations.ActiveListInput, req list.Request) (list.Page[invitations.Invitation], error) {
+	if err := in.Validate(); err != nil {
+		return list.Page[invitations.Invitation]{}, err
+	}
+	page, err := tursodb.List(ctx, s.db, activeListQuery(in), req)
+	if err != nil {
+		return list.Page[invitations.Invitation]{}, err
+	}
+	return list.MapPage(page, invitationRow.toDomain), nil
+}
+
+// activeListQuery writes the statuses as literals, never bound parameters, so
+// the planner can match the partial index idx_invitations_pending_tuple, whose
+// predicate this is. It declares no SearchFields: a non-blank Search is refused.
+func activeListQuery(in invitations.ActiveListInput) tursodb.ListQuery[invitationRow] {
+	base := `SELECT ` + invitationColumns + ` FROM invitations WHERE resource_type = ? AND resource_id = ? AND status IN ('pending', 'accepting')`
+	args := []any{in.ResourceType, in.ResourceID}
+	if in.Relation != "" {
+		base += ` AND relation = ?`
+		args = append(args, in.Relation)
+	}
+	return tursodb.ListQuery[invitationRow]{
+		BaseSQL:      base,
+		Args:         args,
+		OrderFields:  invitations.OrderFields,
+		DefaultOrder: invitations.DefaultOrder,
+		PK:           "id",
+		OrderValueOf: func(r invitationRow, _ string) any { return r.CreatedAt.Time },
+		PKOf:         func(r invitationRow) string { return r.ID },
+	}
+}
+
+// cancellationResult resolves a CancelAcceptance that matched no accepting row:
+// only an already cancelled row bound to this exact claim is success.
+func (s *InvitationStore) cancellationResult(ctx context.Context, id string, claim invitations.Acceptance) (invitations.Invitation, error) {
+	current, err := s.Get(ctx, id)
+	if err != nil {
+		return invitations.Invitation{}, err
+	}
+	if current.Status == invitations.StatusCancelled && claim.Matches(current) {
+		return current, nil
+	}
+	return invitations.Invitation{}, sdk.ErrConflict
+}
+
 // A matching committed claim can resume even after expiry. This read never
 // creates a claim; only the conditional UPDATE above may do that.
 func (s *InvitationStore) acceptanceResult(ctx context.Context, id string, claim invitations.Acceptance, complete bool) (invitations.Invitation, error) {

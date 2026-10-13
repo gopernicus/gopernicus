@@ -9,6 +9,7 @@ import (
 
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/securityevent"
 	"github.com/gopernicus/gopernicus/sdk"
+	"github.com/gopernicus/gopernicus/sdk/pkg/list"
 )
 
 func prepareManagement(t *testing.T, svc *Service, id string) PreparedManagement {
@@ -177,5 +178,138 @@ func TestManagementActorLeavesOtherAttributionUnchanged(t *testing.T) {
 	}
 	if len(events.created) < 3 {
 		t.Fatalf("events=%d", len(events.created))
+	}
+}
+
+// claimSeeded seeds a pending invitation and claims it for user-9 directly, so
+// the row is accepting with no grant attempted.
+func claimSeeded(t *testing.T, repo *fakeInvRepo) Invitation {
+	t.Helper()
+	inv := seedInvite(t, repo, "project", "p", "member", "invitee@x.com", "owner", "secret", false, time.Now().Add(time.Hour))
+	claimed, err := repo.ClaimAcceptance(t.Context(), inv.ID, Acceptance{TokenHash: inv.TokenHash, SubjectType: "user", SubjectID: "user-9", Now: time.Now()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return claimed
+}
+
+func TestCancelAcceptingTwiceIsIdempotent(t *testing.T) {
+	repo := newFakeInvRepo()
+	ledger := &fenceLedger{}
+	svc := newSvc(t, repo, ledger, constructorConfig{Fencer: ledger})
+	inv := claimSeeded(t, repo)
+	p := prepareManagement(t, svc, inv.ID)
+	for i := range 2 {
+		if err := svc.Cancel(t.Context(), p); err != nil {
+			t.Fatalf("cancel %d=%v", i, err)
+		}
+	}
+	got, _ := repo.Get(t.Context(), inv.ID)
+	if outcome, commits, fences := ledger.state(inv.ID); got.Status != StatusCancelled || outcome != "fenced" || commits != 0 || fences != 2 {
+		t.Fatalf("invitation=%+v outcome=%q commits=%d fences=%d", got, outcome, commits, fences)
+	}
+	if err := svc.Cancel(t.Context(), prepareManagement(t, svc, inv.ID)); !errors.Is(err, ErrNotPending) {
+		t.Fatalf("cancel of a cancelled row=%v", err)
+	}
+}
+
+func TestResendAfterFencedCancelNotPending(t *testing.T) {
+	repo := newFakeInvRepo()
+	ledger := &fenceLedger{}
+	mailer := &recordingMailer{}
+	svc := newSvc(t, repo, ledger, constructorConfig{Mailer: mailer, Fencer: ledger})
+	inv := claimSeeded(t, repo)
+	stale := prepareManagement(t, svc, inv.ID)
+	if err := svc.Cancel(t.Context(), stale); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []PreparedManagement{stale, prepareManagement(t, svc, inv.ID)} {
+		if _, err := svc.Resend(t.Context(), p, ""); !errors.Is(err, ErrNotPending) {
+			t.Fatalf("resend after fenced cancel=%v", err)
+		}
+	}
+	if got, _ := repo.Get(t.Context(), inv.ID); got.Status != StatusCancelled || got.TokenHash != inv.TokenHash || len(mailer.sent) != 0 {
+		t.Fatalf("resend changed a settled row: %+v notices=%d", got, len(mailer.sent))
+	}
+}
+
+// TestCancelAcceptingFailsClosed covers every accepting outcome that must leave
+// the claim untouched: no Fencer, a Fencer error, and an unknown outcome.
+func TestCancelAcceptingFailsClosed(t *testing.T) {
+	ledgerDown := errors.New("ledger down")
+	for _, tc := range []struct {
+		name   string
+		fencer *fenceLedger
+		want   error
+	}{
+		{"no fencer", nil, ErrNotPending},
+		{"fence error", &fenceLedger{fenceErr: ledgerDown}, ledgerDown},
+		{"unknown outcome", &fenceLedger{outcome: "maybe"}, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := newFakeInvRepo()
+			events := &fakeSecurityEvents{}
+			d := constructorConfig{SecurityEvents: events}
+			if tc.fencer != nil {
+				d.Fencer = tc.fencer
+			}
+			svc := newSvc(t, repo, &fakeGranter{}, d)
+			inv := claimSeeded(t, repo)
+			err := svc.Cancel(t.Context(), prepareManagement(t, svc, inv.ID))
+			if err == nil || (tc.want != nil && !errors.Is(err, tc.want)) {
+				t.Fatalf("cancel=%v, want %v", err, tc.want)
+			}
+			if got, _ := repo.Get(t.Context(), inv.ID); got.Status != StatusAccepting || len(events.created) != 0 {
+				t.Fatalf("claim changed: %+v events=%+v", got, events.created)
+			}
+		})
+	}
+}
+
+// completedBeforeCancel finalizes the claim before cancelling it, modelling a
+// completion that won despite the fence (the degraded superseded mapping).
+type completedBeforeCancel struct{ InvitationRepository }
+
+func (r completedBeforeCancel) CancelAcceptance(ctx context.Context, id string, a Acceptance) (Invitation, error) {
+	if _, err := r.InvitationRepository.CompleteAcceptance(ctx, id, a); err != nil {
+		return Invitation{}, err
+	}
+	return r.InvitationRepository.CancelAcceptance(ctx, id, a)
+}
+
+func TestCancelFencedButAcceptedReturnsAlreadyGranted(t *testing.T) {
+	repo := newFakeInvRepo()
+	ledger := &fenceLedger{}
+	svc := newSvc(t, repo, ledger, constructorConfig{Fencer: ledger})
+	svc.invitations = completedBeforeCancel{repo}
+	inv := claimSeeded(t, repo)
+	if err := svc.Cancel(t.Context(), prepareManagement(t, svc, inv.ID)); !errors.Is(err, ErrAlreadyGranted) {
+		t.Fatalf("cancel=%v", err)
+	}
+	if got, _ := repo.Get(t.Context(), inv.ID); got.Status != StatusAccepted {
+		t.Fatalf("invitation=%+v", got)
+	}
+}
+
+func TestNewRejectsTypedNilFencer(t *testing.T) {
+	if _, err := New(newFakeInvRepo(), &fakeGranter{}, WithFencer((*fenceLedger)(nil))); !errors.Is(err, sdk.ErrInvalidInput) {
+		t.Fatalf("typed-nil Fencer=%v", err)
+	}
+}
+
+func TestListActiveByResource(t *testing.T) {
+	repo := newFakeInvRepo()
+	svc := newSvc(t, repo, &fakeGranter{}, constructorConfig{})
+	pending := seedInvite(t, repo, "project", "p", "member", "a@x.com", "owner", "secret-a", false, time.Now().Add(-time.Hour))
+	declined := seedInvite(t, repo, "project", "p", "member", "b@x.com", "owner", "secret-b", false, time.Now().Add(time.Hour))
+	if err := svc.Decline(t.Context(), declined.ID, "secret-b"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.ListActiveByResource(t.Context(), ActiveListInput{ResourceType: "project"}, list.Request{}); !errors.Is(err, sdk.ErrInvalidInput) {
+		t.Fatalf("blank resource id=%v", err)
+	}
+	page, err := svc.ListActiveByResource(t.Context(), ActiveListInput{ResourceType: "project", ResourceID: "p"}, list.Request{})
+	if err != nil || len(page.Items) != 1 || page.Items[0].ID != pending.ID {
+		t.Fatalf("active page=%+v %v", page, err)
 	}
 }

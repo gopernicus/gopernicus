@@ -2,8 +2,11 @@ package invitations
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"time"
 
+	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/pkg/list"
 )
 
@@ -29,6 +32,16 @@ type Acceptance struct {
 	Now         time.Time
 }
 
+// ActiveListInput selects one resource's active invitations: those whose STORED
+// status is pending or accepting. The wall clock never filters, so an expired
+// but still pending row (which keeps reserving its tuple) is listed. ResourceType
+// and ResourceID are required; a non-empty Relation filters exactly.
+type ActiveListInput struct {
+	ResourceType string
+	ResourceID   string
+	Relation     string
+}
+
 // InvitationRepository persists invitations and their durable acceptance claims.
 // At most one active (pending or accepting) invitation may reserve the tuple
 // (resource_type, resource_id, identifier_kind, identifier, relation). Create
@@ -36,9 +49,11 @@ type Acceptance struct {
 // sdk.ErrAlreadyExists. A completed/declined/cancelled row releases the tuple.
 //
 // ClaimAcceptance is the atomic proof-to-grant boundary. An accepting row cannot
-// be cancelled, declined or resent; failures retain its bound subject and token
-// so another process can retry the same idempotent host operation. A claim is
-// not a lease and never expires. CompleteAcceptance finalizes a matching claim.
+// be declined or resent, and UpdateStatus never cancels it; failures retain its
+// bound subject and token so another process can retry the same idempotent host
+// operation. A claim is not a lease and never expires. CompleteAcceptance
+// finalizes a matching claim; CancelAcceptance terminates one whose host grant
+// the service has fenced.
 //
 // Reads return detached values. GetByTokenHash expires only unclaimed tokens;
 // accepting/accepted records remain readable for bound-subject retries. Unknown
@@ -76,4 +91,24 @@ type InvitationRepository interface {
 	// CompleteAcceptance finalizes only the matching durable claim. Repeating the
 	// same completion returns the accepted row without changing AcceptedAt.
 	CompleteAcceptance(ctx context.Context, id string, claim Acceptance) (Invitation, error)
+	// CancelAcceptance terminates only the matching durable claim: accepting →
+	// cancelled, keeping the bound subject and token, AcceptedAt stays zero, no
+	// expiry predicate (an accepting row past expiry cancels). A matching
+	// cancelled row is returned unchanged. accepted, pending, declined,
+	// cancelled-via-UpdateStatus, another token or subject are ErrConflict;
+	// unknown id is ErrNotFound; an invalid claim is ErrInvalidInput.
+	CancelAcceptance(ctx context.Context, id string, claim Acceptance) (Invitation, error)
+	// ListActiveByResource returns a cursor-paginated page of the resource's
+	// pending and accepting invitations by stored status, ordered created_at DESC,
+	// id DESC; counts apply the same filter. It calls ActiveListInput.Validate,
+	// and a non-blank req.Search is ErrInvalidInput (no searchable fields).
+	ListActiveByResource(ctx context.Context, in ActiveListInput, req list.Request) (list.Page[Invitation], error)
+}
+
+// Validate rejects an active listing without a complete resource.
+func (in ActiveListInput) Validate() error {
+	if strings.TrimSpace(in.ResourceType) == "" || strings.TrimSpace(in.ResourceID) == "" {
+		return fmt.Errorf("active invitation listing requires a resource type and id: %w", sdk.ErrInvalidInput)
+	}
+	return nil
 }

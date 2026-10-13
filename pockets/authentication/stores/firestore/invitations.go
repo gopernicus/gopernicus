@@ -2,6 +2,8 @@ package firestore
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"time"
 
 	firestoredb "github.com/gopernicus/gopernicus/integrations/datastores/firestore"
@@ -169,6 +171,23 @@ func (s *invitationStore) CompleteAcceptance(ctx context.Context, id string, cla
 	return s.transition(ctx, id, func(current invitation.Invitation) (invitation.Invitation, error) {
 		return current.CompleteAcceptance(claim)
 	})
+}
+
+// CancelAcceptance is not implemented on Firestore; a host wiring a Fencer keeps
+// receiving an error from cancellation of an accepting invitation.
+func (s *invitationStore) CancelAcceptance(ctx context.Context, _ string, _ invitation.Acceptance) (invitation.Invitation, error) {
+	if err := refuseAmbient(ctx); err != nil {
+		return invitation.Invitation{}, err
+	}
+	return invitation.Invitation{}, fmt.Errorf("firestore invitations: CancelAcceptance: %w", errors.ErrUnsupported)
+}
+
+// ListActiveByResource is not implemented on Firestore.
+func (s *invitationStore) ListActiveByResource(ctx context.Context, _ invitation.ActiveListInput, _ list.Request) (list.Page[invitation.Invitation], error) {
+	if err := refuseAmbient(ctx); err != nil {
+		return list.Page[invitation.Invitation]{}, err
+	}
+	return list.Page[invitation.Invitation]{}, fmt.Errorf("firestore invitations: ListActiveByResource: %w", errors.ErrUnsupported)
 }
 
 // The lifecycle decision and both uniqueness claims commit against the same read.
