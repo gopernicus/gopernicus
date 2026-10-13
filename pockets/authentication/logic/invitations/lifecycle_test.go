@@ -107,6 +107,57 @@ func TestResendWinsAgainstAcceptanceOfPreviouslyReadToken(t *testing.T) {
 	}
 }
 
+func TestInvitationCancelAcceptanceTransition(t *testing.T) {
+	now := time.Now()
+	pending, err := NewInvitation(sdk.IDGenerator{}, "project", "p", "member", "invitee@x.com", "", "owner", "hash", false, time.Hour, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	claim := Acceptance{TokenHash: "hash", SubjectType: "user", SubjectID: "user-9", Now: now.Add(time.Minute)}
+	accepting, err := pending.ClaimAcceptance(claim)
+	if err != nil {
+		t.Fatal(err)
+	}
+	later := claim
+	later.Now = pending.ExpiresAt.Add(time.Hour)
+	cancelled, err := accepting.CancelAcceptance(later)
+	if err != nil || cancelled.Status != StatusCancelled || cancelled.TokenHash != "hash" || cancelled.ResolvedSubjectID != "user-9" ||
+		!cancelled.AcceptedAt.IsZero() || !cancelled.UpdatedAt.Equal(later.Now.UTC()) || cancelled.Active() {
+		t.Fatalf("cancel past expiry=%+v %v", cancelled, err)
+	}
+	again := later
+	again.Now = later.Now.Add(time.Hour)
+	if repeat, err := cancelled.CancelAcceptance(again); err != nil || !repeat.UpdatedAt.Equal(cancelled.UpdatedAt) {
+		t.Fatalf("repeat=%+v %v", repeat, err)
+	}
+	accepted, err := accepting.CompleteAcceptance(claim)
+	if err != nil {
+		t.Fatal(err)
+	}
+	unclaimed, err := pending.UpdateStatus(StatusUpdate{ExpectedTokenHash: "hash", Status: StatusCancelled, TokenHash: "hash", ExpiresAt: pending.ExpiresAt, ResolvedSubjectID: "user-9", UpdatedAt: now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	other := claim
+	other.SubjectID = "other"
+	for name, tc := range map[string]struct {
+		inv   Invitation
+		claim Acceptance
+	}{
+		"pending":                    {pending, claim},
+		"accepted":                   {accepted, claim},
+		"cancelled via UpdateStatus": {unclaimed, claim},
+		"another subject":            {accepting, other},
+	} {
+		if _, err := tc.inv.CancelAcceptance(tc.claim); !errors.Is(err, sdk.ErrConflict) {
+			t.Errorf("%s=%v", name, err)
+		}
+	}
+	if _, err := accepting.CancelAcceptance(Acceptance{}); !errors.Is(err, sdk.ErrInvalidInput) {
+		t.Errorf("invalid claim=%v", err)
+	}
+}
+
 type failFinalization struct {
 	InvitationRepository
 	remaining atomic.Int32

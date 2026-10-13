@@ -175,6 +175,12 @@ func (stubInvitations) ClaimAcceptance(context.Context, string, invitations.Acce
 func (stubInvitations) CompleteAcceptance(context.Context, string, invitations.Acceptance) (invitations.Invitation, error) {
 	return invitations.Invitation{}, nil
 }
+func (stubInvitations) CancelAcceptance(context.Context, string, invitations.Acceptance) (invitations.Invitation, error) {
+	return invitations.Invitation{}, nil
+}
+func (stubInvitations) ListActiveByResource(context.Context, invitations.ActiveListInput, listing.Request) (listing.Page[invitations.Invitation], error) {
+	return listing.Page[invitations.Invitation]{}, nil
+}
 
 func TestNewServiceRequiresHasher(t *testing.T) {
 	_, err := New(testRepositories(Repositories{}),
@@ -350,6 +356,29 @@ func TestNewServiceMachinePartialWiring(t *testing.T) {
 	}
 	if _, err := newFixture(testRepositories(Repositories{}), base); err != nil {
 		t.Errorf("no machine repos (subsystem off): err=%v, want nil", err)
+	}
+}
+
+type stubFencer struct{}
+
+func (stubFencer) Fence(context.Context, invitations.FenceInput) (invitations.FenceOutcome, error) {
+	return invitations.FenceOutcomeFenced, nil
+}
+
+// TestNewServiceFencerRequiresGranter proves a Fencer without a Granter is the
+// contradictory ErrFencerWithoutGranter, and with one it is accepted.
+func TestNewServiceFencerRequiresGranter(t *testing.T) {
+	base := constructorConfig{Hasher: stubHasher{}, Mailer: stubMailer{}, TokenSigner: stubSigner{}, RuntimeMode: environment.ModeDevelopment, DeliveryMode: delivery.ModeOff}
+	noGranter := base
+	noGranter.Fencer = stubFencer{}
+	if _, err := newFixture(testRepositories(Repositories{}), noGranter); !errors.Is(err, ErrFencerWithoutGranter) {
+		t.Fatalf("Fencer + nil Granter: err=%v, want ErrFencerWithoutGranter", err)
+	}
+	wired := noGranter
+	wired.Granter = stubGranter{}
+	wired.InviteCheck = allowInvite
+	if c, err := newFixture(testRepositories(Repositories{Invitations: stubInvitations{}}), wired); err != nil || c.Invitations == nil {
+		t.Fatalf("Fencer + Granter: err=%v", err)
 	}
 }
 

@@ -58,6 +58,24 @@ func (i Invitation) CompleteAcceptance(a Acceptance) (Invitation, error) {
 	return i, nil
 }
 
+// CancelAcceptance returns the cancelled state of a matching claim. It keeps the
+// bound subject and token, leaves AcceptedAt zero and ignores expiry. A row
+// cancelled through UpdateStatus never matches: it was never bound to a subject.
+func (i Invitation) CancelAcceptance(a Acceptance) (Invitation, error) {
+	if err := a.Validate(); err != nil {
+		return Invitation{}, err
+	}
+	if !a.Matches(i) || (i.Status != StatusAccepting && i.Status != StatusCancelled) {
+		return Invitation{}, sdk.ErrConflict
+	}
+	if i.Status == StatusCancelled {
+		return i, nil
+	}
+	i.Status = StatusCancelled
+	i.UpdatedAt = a.Now.UTC()
+	return i, nil
+}
+
 // Validate limits status updates to unclaimed lifecycle operations.
 func (u StatusUpdate) Validate() error {
 	if u.ExpectedTokenHash == "" || u.TokenHash == "" || u.UpdatedAt.IsZero() || u.ExpiresAt.IsZero() {

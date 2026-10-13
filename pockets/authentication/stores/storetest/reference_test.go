@@ -8,6 +8,7 @@ import (
 	"maps"
 	"slices"
 	"sort"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -1110,6 +1111,56 @@ func (r refInvitations) CompleteAcceptance(ctx context.Context, id string, claim
 	}
 	r.invitations[id] = updated.Clone()
 	return updated.Clone(), nil
+}
+
+func (r refInvitations) CancelAcceptance(ctx context.Context, id string, claim invitations.Acceptance) (invitations.Invitation, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return invitations.Invitation{}, err
+	}
+	if err := claim.Validate(); err != nil {
+		return invitations.Invitation{}, err
+	}
+	inv, ok := r.invitations[id]
+	if !ok {
+		return invitations.Invitation{}, sdk.ErrNotFound
+	}
+	updated, err := inv.CancelAcceptance(claim)
+	if err != nil {
+		return invitations.Invitation{}, err
+	}
+	r.invitations[id] = updated.Clone()
+	return updated.Clone(), nil
+}
+
+// ListActiveByResource filters on the STORED status (pending, accepting), never
+// the wall clock, so an expired but still pending row is listed.
+func (r refInvitations) ListActiveByResource(_ context.Context, in invitations.ActiveListInput, req list.Request) (list.Page[invitations.Invitation], error) {
+	if err := in.Validate(); err != nil {
+		return list.Page[invitations.Invitation]{}, err
+	}
+	if strings.TrimSpace(req.Search) != "" {
+		return list.Page[invitations.Invitation]{}, fmt.Errorf("active invitation listing has no searchable fields: %w", sdk.ErrInvalidInput)
+	}
+	r.mu.RLock()
+	all := make([]invitations.Invitation, 0, len(r.invitations))
+	for _, inv := range r.invitations {
+		if inv.ResourceType != in.ResourceType || inv.ResourceID != in.ResourceID {
+			continue
+		}
+		if inv.Status != invitations.StatusPending && inv.Status != invitations.StatusAccepting {
+			continue
+		}
+		if in.Relation != "" && inv.Relation != in.Relation {
+			continue
+		}
+		all = append(all, inv.Clone())
+	}
+	r.mu.RUnlock()
+	return pageMem(all, req, func(inv invitations.Invitation) (time.Time, string) {
+		return inv.CreatedAt, inv.ID
+	})
 }
 
 // pageMem sorts the full population by (created_at, id) in the resolved

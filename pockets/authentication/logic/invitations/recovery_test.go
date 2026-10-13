@@ -245,3 +245,204 @@ func TestConcurrentAcceptingRetriesRaceRevocationOrReplacement(t *testing.T) {
 		})
 	}
 }
+
+// fenceLedger models a host operation ledger shared by its Granter and Fencer:
+// both serialize on one lock, a fenced ID replays as ErrGrantFenced and never
+// commits, and an applied ID reports committed to a later fence.
+type fenceLedger struct {
+	mu       sync.Mutex
+	outcomes map[string]string
+	commits  int
+	fences   int
+	fenceErr error
+	outcome  FenceOutcome // reported instead of the ledger's answer when set
+	entered  chan struct{}
+	release  chan struct{}
+}
+
+func (l *fenceLedger) Grant(_ context.Context, in GrantInput) error {
+	if l.entered != nil {
+		l.entered <- struct{}{}
+		<-l.release
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	switch l.outcomes[in.OperationID] {
+	case "fenced":
+		return fmt.Errorf("replayed fenced operation: %w", ErrGrantFenced)
+	case "applied":
+		return nil
+	}
+	if l.outcomes == nil {
+		l.outcomes = map[string]string{}
+	}
+	l.outcomes[in.OperationID] = "applied"
+	l.commits++
+	return nil
+}
+
+func (l *fenceLedger) Fence(_ context.Context, in FenceInput) (FenceOutcome, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.fences++
+	if l.fenceErr != nil {
+		return "", l.fenceErr
+	}
+	if l.outcome != "" {
+		return l.outcome, nil
+	}
+	if l.outcomes[in.OperationID] == "applied" {
+		return FenceOutcomeCommitted, nil
+	}
+	if l.outcomes == nil {
+		l.outcomes = map[string]string{}
+	}
+	l.outcomes[in.OperationID] = "fenced"
+	return FenceOutcomeFenced, nil
+}
+
+func (l *fenceLedger) state(id string) (outcome string, commits, fences int) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.outcomes[id], l.commits, l.fences
+}
+
+// pausedAccept starts Accept against a blocking ledger and waits until the
+// grant is in flight, so the row is accepting with no committed operation.
+func pausedAccept(t *testing.T, svc *Service, ledger *fenceLedger) <-chan error {
+	t.Helper()
+	done := make(chan error, 1)
+	go func() {
+		_, err := svc.Accept(t.Context(), AcceptInput{Token: "secret", SubjectID: "user-9"})
+		done <- err
+	}()
+	select {
+	case <-ledger.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("acceptance did not reach the Granter")
+	}
+	return done
+}
+
+func TestCancelPendingThenAcceptRejects(t *testing.T) {
+	repo := newFakeInvRepo()
+	ledger := &fenceLedger{}
+	svc := newSvc(t, repo, ledger, constructorConfig{Fencer: ledger})
+	inv := seedInvite(t, repo, "project", "p", "member", "invitee@x.com", "owner", "secret", false, time.Now().Add(time.Hour))
+	if err := svc.Cancel(t.Context(), prepareManagement(t, svc, inv.ID)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Accept(t.Context(), AcceptInput{Token: "secret", SubjectID: "user-9"}); !errors.Is(err, sdk.ErrConflict) {
+		t.Fatalf("accept after cancel=%v", err)
+	}
+	if outcome, commits, fences := ledger.state(inv.ID); outcome != "" || commits != 0 || fences != 0 {
+		t.Fatalf("pending cancel touched the ledger: outcome=%q commits=%d fences=%d", outcome, commits, fences)
+	}
+}
+
+func TestCancelAcceptingFencesPausedGrant(t *testing.T) {
+	repo := newFakeInvRepo()
+	ledger := &fenceLedger{entered: make(chan struct{}, 1), release: make(chan struct{})}
+	mailer := &recordingMailer{}
+	events := &fakeSecurityEvents{}
+	svc := newSvc(t, repo, ledger, constructorConfig{Mailer: mailer, SecurityEvents: events, Fencer: ledger})
+	inv := seedInvite(t, repo, "project", "p", "member", "invitee@x.com", "owner", "secret", false, time.Now().Add(time.Hour))
+	done := pausedAccept(t, svc, ledger)
+
+	if err := svc.Cancel(t.Context(), prepareManagement(t, svc, inv.ID)); err != nil {
+		close(ledger.release)
+		t.Fatalf("cancel accepting=%v", err)
+	}
+	got, _ := repo.Get(t.Context(), inv.ID)
+	if got.Status != StatusCancelled || got.ResolvedSubjectID != "user-9" || !got.AcceptedAt.IsZero() {
+		t.Fatalf("cancelled claim=%+v", got)
+	}
+	close(ledger.release)
+	if err := <-done; !errors.Is(err, ErrGrantFenced) || !errors.Is(err, sdk.ErrConflict) {
+		t.Fatalf("resumed grant=%v", err)
+	}
+	if outcome, commits, _ := ledger.state(inv.ID); outcome != "fenced" || commits != 0 {
+		t.Fatalf("fenced grant committed: outcome=%q commits=%d", outcome, commits)
+	}
+	got, _ = repo.Get(t.Context(), inv.ID)
+	if got.Status != StatusCancelled || len(mailer.sent) != 0 {
+		t.Fatalf("after fenced grant: invitation=%+v notices=%d", got, len(mailer.sent))
+	}
+	if len(events.created) != 2 {
+		t.Fatalf("events=%+v", events.created)
+	}
+	cancelled, granted := events.created[0], events.created[1]
+	if cancelled.EventType != securityevent.TypeInvitationCancelled || cancelled.EventStatus != securityevent.StatusSuccess ||
+		cancelled.Details["claim_status"] != StatusAccepting || cancelled.Details["fence"] != "fenced" {
+		t.Fatalf("cancel event=%+v", cancelled)
+	}
+	if granted.EventType != securityevent.TypeInvitationGranted || granted.EventStatus != securityevent.StatusBlocked || granted.Details["reason"] != "fenced" {
+		t.Fatalf("grant event=%+v", granted)
+	}
+	if _, err := svc.Accept(t.Context(), AcceptInput{Token: "secret", SubjectID: "user-9"}); !errors.Is(err, sdk.ErrConflict) {
+		t.Fatalf("accept after fenced cancel=%v", err)
+	}
+	if _, commits, _ := ledger.state(inv.ID); commits != 0 {
+		t.Fatal("a retry granted after the fence")
+	}
+}
+
+// TestCancelPendingSnapshotRacedByClaimFences prepares while pending; the claim
+// lands before execution, so the cancel re-reads and settles the claim instead
+// of answering a conflict.
+func TestCancelPendingSnapshotRacedByClaimFences(t *testing.T) {
+	repo := newFakeInvRepo()
+	ledger := &fenceLedger{entered: make(chan struct{}, 1), release: make(chan struct{})}
+	svc := newSvc(t, repo, ledger, constructorConfig{Fencer: ledger})
+	inv := seedInvite(t, repo, "project", "p", "member", "invitee@x.com", "owner", "secret", false, time.Now().Add(time.Hour))
+	prepared := prepareManagement(t, svc, inv.ID)
+	done := pausedAccept(t, svc, ledger)
+
+	if err := svc.Cancel(t.Context(), prepared); err != nil {
+		close(ledger.release)
+		t.Fatalf("cancel of a raced pending snapshot=%v", err)
+	}
+	close(ledger.release)
+	if err := <-done; !errors.Is(err, ErrGrantFenced) {
+		t.Fatalf("resumed grant=%v", err)
+	}
+	got, _ := repo.Get(t.Context(), inv.ID)
+	if outcome, commits, fences := ledger.state(inv.ID); got.Status != StatusCancelled || outcome != "fenced" || commits != 0 || fences != 1 {
+		t.Fatalf("invitation=%+v outcome=%q commits=%d fences=%d", got, outcome, commits, fences)
+	}
+}
+
+func TestCancelAcceptingAfterCommittedGrantReturnsAlreadyGranted(t *testing.T) {
+	repo := newFakeInvRepo()
+	ledger := &fenceLedger{}
+	mailer := &recordingMailer{}
+	events := &fakeSecurityEvents{}
+	svc := newSvc(t, repo, ledger, constructorConfig{Mailer: mailer, SecurityEvents: events, Fencer: ledger})
+	inv := seedInvite(t, repo, "project", "p", "member", "invitee@x.com", "owner", "secret", false, time.Now().Add(time.Hour))
+	failing := &failFinalization{InvitationRepository: repo}
+	failing.remaining.Store(1)
+	svc.invitations = failing
+	if _, err := svc.Accept(t.Context(), AcceptInput{Token: "secret", SubjectID: "user-9"}); err == nil {
+		t.Fatal("expected injected completion failure")
+	}
+
+	err := svc.Cancel(t.Context(), prepareManagement(t, svc, inv.ID))
+	if !errors.Is(err, ErrAlreadyGranted) || !errors.Is(err, sdk.ErrConflict) {
+		t.Fatalf("cancel after committed grant=%v", err)
+	}
+	got, _ := repo.Get(t.Context(), inv.ID)
+	if got.Status != StatusAccepted || got.AcceptedAt.IsZero() || got.Active() {
+		t.Fatalf("committed claim not finalized: %+v", got)
+	}
+	if _, commits, _ := ledger.state(inv.ID); commits != 1 || len(mailer.sent) != 0 || events.grantSuccessRecorded() {
+		t.Fatalf("commits=%d notices=%d events=%+v", commits, len(mailer.sent), events.created)
+	}
+	if len(events.created) != 1 || events.created[0].EventType != securityevent.TypeInvitationCancelled ||
+		events.created[0].EventStatus != securityevent.StatusBlocked || events.created[0].Details["reason"] != "already_granted" ||
+		events.created[0].Details["fence"] != "committed" {
+		t.Fatalf("events=%+v", events.created)
+	}
+	if _, err := svc.Accept(t.Context(), AcceptInput{Token: "secret", SubjectID: "user-9"}); err != nil || len(mailer.sent) != 0 {
+		t.Fatalf("accepted replay=%v notices=%d", err, len(mailer.sent))
+	}
+}

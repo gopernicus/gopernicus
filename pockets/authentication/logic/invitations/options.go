@@ -77,6 +77,15 @@ func cloneDeliveryConfig(value DeliveryConfig) DeliveryConfig {
 	return value
 }
 
+// WithFencer supplies the optional terminal-settlement seam. With it, Cancel
+// settles an accepting claim by fencing its grant operation; without it, Cancel
+// on an accepting claim returns ErrNotPending.
+func WithFencer(value Fencer) Option {
+	return func(c *constructorConfig) {
+		c.Fencer = value
+	}
+}
+
 // WithNormalizer supplies identifier normalization; nil selects identifier.DefaultNormalizer.
 func WithNormalizer(value identifier.Normalizer) Option {
 	return func(c *constructorConfig) {

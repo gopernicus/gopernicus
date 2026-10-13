@@ -214,6 +214,39 @@ func (r *fakeInvRepo) CompleteAcceptance(ctx context.Context, id string, claim A
 	return updated.Clone(), nil
 }
 
+func (r *fakeInvRepo) CancelAcceptance(ctx context.Context, id string, claim Acceptance) (Invitation, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return Invitation{}, err
+	}
+	inv, ok := r.byID[id]
+	if !ok {
+		return Invitation{}, sdk.ErrNotFound
+	}
+	updated, err := inv.CancelAcceptance(claim)
+	if err != nil {
+		return Invitation{}, err
+	}
+	r.byID[id] = updated.Clone()
+	return updated.Clone(), nil
+}
+
+func (r *fakeInvRepo) ListActiveByResource(_ context.Context, in ActiveListInput, _ list.Request) (list.Page[Invitation], error) {
+	if err := in.Validate(); err != nil {
+		return list.Page[Invitation]{}, err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var items []Invitation
+	for _, inv := range r.byID {
+		if inv.ResourceType == in.ResourceType && inv.ResourceID == in.ResourceID && inv.Active() && (in.Relation == "" || inv.Relation == in.Relation) {
+			items = append(items, inv.Clone())
+		}
+	}
+	return list.Page[Invitation]{Items: items}, nil
+}
+
 // --- helpers ---
 
 func hashOf(t *testing.T, secret string) string {

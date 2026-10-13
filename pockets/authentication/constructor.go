@@ -118,6 +118,9 @@ func New(repos Repositories, signer cryptids.JWTSigner, runtimeMode environment.
 	if cfg.Granter != nil && repos.Invitations == nil {
 		return nil, ErrInvitationRepoRequired
 	}
+	if cfg.Fencer != nil && cfg.Granter == nil {
+		return nil, ErrFencerWithoutGranter
+	}
 	if err := validateInvitationPolicy(cfg); err != nil {
 		return nil, err
 	}
@@ -452,6 +455,7 @@ func New(repos Repositories, signer cryptids.JWTSigner, runtimeMode environment.
 			invitations.WithSecurityEvents(repos.SecurityEvents),
 			invitations.WithLogger(cfg.Logger),
 			invitations.WithIDs(cfg.IDs),
+			invitations.WithFencer(cfg.Fencer),
 		)
 		if err != nil {
 			return nil, err
