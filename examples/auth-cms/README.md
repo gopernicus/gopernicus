@@ -100,7 +100,8 @@ history:
   kinds** wired and **memstore-backed** (so the graph stays driver-free —
   `GOWORK=off go list -m all | grep -i libsql` is still empty). The SAME
   `events.WithAuthorization` seam now delegates to `authorizer.Check`, and the
-  invitation `Granter` is the engine's ledger-backed `integrityRelationshipGranter`.
+  invitation `Granter` is the engine's ledger-backed `integrityRelationshipGranter`,
+  paired with the `integrityOperationFencer` that settles an `accepting` claim on cancel.
 
 **Principal admission and data integrity.** `authzSchema` declares project
 `view` and `manage_access` permissions and platform administration. The host's
@@ -177,16 +178,24 @@ remain absent.
   **multi-instance** deployment MUST share `AUTH_JWT_SECRET` across every instance
   (per-instance keys can't cross-verify). API clients recover a dead access JWT via
   `POST /auth/refresh` (refresh tokens are store-backed).
-- **Granter**: `integrityRelationshipGranter` (`cmd/server/membership.go`) validates
-  resource existence, then calls `Components.Mutations.Apply` with
-  `OperationID = "invitation:" + in.OperationID` and system audit attribution.
-  Replays never write; superseded results and command mismatches map to
+- **Granter**: `integrityRelationshipGranter` (`cmd/server/membership.go`) asks
+  `Components.Mutations.Recorded` first; only an unrecorded operation runs the
+  resource-existence probe. It then calls `Components.Mutations.Apply` with
+  `OperationID = invitationOperationID(in.OperationID)` (`"invitation:" + id`) and
+  system audit attribution. Replays never write. A fenced replay maps to
+  `invitations.ErrGrantFenced`; superseded results and command mismatches map to
   `invitations.ErrGrantSuperseded`, so authentication records acceptance without
-  restoring revoked access. The legacy `relationshipGranter` remains demonstrated
-  in tests: it ignores operation IDs and can restore access on an accepting retry.
-  Both enforce configured integrity and leave principal admission to inbound.
-  Resource deletion can still block a committed retry before it reaches the ledger;
-  a never-committed grant can first apply when a refusal later clears.
+  restoring revoked access. A committed operation therefore settles even after the
+  resource is deleted, and restoring a resource never revives a fenced invitation.
+  The legacy `relationshipGranter` remains demonstrated in tests: it ignores
+  operation IDs and can restore access on an accepting retry. Both enforce
+  configured integrity and leave principal admission to inbound.
+- **Fencer**: `integrityOperationFencer` (`cmd/server/membership.go`) calls
+  `Components.Mutations.Fence` under the same `invitationOperationID` helper, so
+  cancelling an `accepting` claim either fences its grant for good (cancel answers
+  200) or reports the grant committed (`ErrAlreadyGranted`, 409; the invitation is
+  `accepted` and the host revokes through its ordinary path). The memory
+  authorization store sets `Repositories.Operations` (`cmd/server/authorization.go`).
 - **InviteCheck** (`Policy.Invite`, `pockets/access/inbound/policy.go`) — the required
   relation-aware host authorization policy the pocket calls from its parsed
   create/list invitation handlers (`auth.InvitationsConfig.InviteCheck`): a platform admin may
@@ -311,6 +320,7 @@ remain absent.
 | `New`'s `signer` argument | golang-jwt HS256 over `AUTH_JWT_SECRET` (or ephemeral dev key) | REQUIRED — nil is `ErrTokenSignerRequired` at construction (no nil variant) |
 | `OAuthConfig.TokenEncrypter` | AES-GCM iff `AUTH_TOKEN_ENCRYPTER_KEY` | provider tokens not persisted (login/link still work) |
 | `InvitationsConfig.Granter` | engine `integrityRelationshipGranter` (`Mutations.Apply` with operation ledger, structured `GrantInput`; legacy state-convergent adapter demonstrated in tests) | invitation routes not registered (deny-by-absence) |
+| `InvitationsConfig.Fencer` | `integrityOperationFencer` (`Mutations.Fence`, same `invitation:` namespace as the Granter) | an `accepting` claim cannot be cancelled (`ErrNotPending`) |
 | `InvitationsConfig.InviteCheck` | inbound `Policy.Invite` (platform-admin bypass, owner-grant reserved, else `manage_access`) | REQUIRED once `Granter` is wired — nil is `ErrInviteCheckRequired`; set without a `Granter` is `ErrInviteCheckWithoutGranter` |
 | `New`'s `runtimeMode` argument | `development` (explicit) | REQUIRED, no default — empty is `ErrRuntimeModeRequired` |
 | `New`'s `deliveryMode` argument | `jobs` (explicit) | REQUIRED, no default — empty is `ErrDeliveryModeRequired`, unknown is `ErrDeliveryModeInvalid` |
@@ -575,7 +585,23 @@ curl -sX POST -c jar -b jar http://localhost:8082/auth/invitations/project/demo 
   -H 'Content-Type: application/json' -d '{"identifier":"d@example.com","relation":"member"}'  # -> {"id":"<DID>",...}
 curl -sX POST http://localhost:8082/auth/invitations/<DID>/decline \
   -H 'Content-Type: application/json' -d '{"token":"<D_INVITE_TOKEN_FROM_LOG>"}'  # 200 -> status "declined"
+# cancel path (cookie mutations echo the CSRF double-submit token):
+CSRF=$(curl -s -c jar -b jar http://localhost:8082/auth/csrf | sed 's/.*"csrf_token":"\([^"]*\)".*/\1/')
+curl -sX POST -c jar -b jar http://localhost:8082/auth/invitations/<EID>/cancel -H "X-CSRF-Token: $CSRF"  # pending -> 200 {"status":"cancelled"}
+curl -sX POST -c ejar -b ejar http://localhost:8082/auth/invitations/accept \
+  -H 'Content-Type: application/json' -d '{"token":"<E_INVITE_TOKEN_FROM_LOG>"}'  # 409; no access
+curl -sX POST -c jar -b jar http://localhost:8082/auth/invitations/<BID_INVITATION>/cancel -H "X-CSRF-Token: $CSRF"  # accepted -> 409
 ```
+
+Terminal settlement needs a claim held between claim and grant, which plain curls
+cannot pause. `cmd/server/invitation_recovery_test.go` drives it over real HTTP:
+`TestInvitationCancelDuringPausedGrantThroughHTTP` (cancel during a paused grant →
+200; the resumed accept → 409, invitation `cancelled`, no access, ledger `fenced`),
+`TestInvitationRecordedOperationSettlesAfterResourceDeleted` (a committed grant whose
+resource was deleted settles on retry → 200 `accepted`),
+`TestFencedInvitationNotRevivedByResourceRestore` (refused first grant, cancel, restore
+the resource → acceptance stays refused) and `TestFencerNamespaceMatchesGranter`
+(fence-then-grant → `ErrGrantFenced`; grant-then-fence → committed).
 
 ### Leg 5 — audit rows visible (DEFAULT-OFF, session-gated)
 

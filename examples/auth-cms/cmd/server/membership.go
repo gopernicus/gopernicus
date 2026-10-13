@@ -131,6 +131,12 @@ func (g relationshipGranter) Grant(ctx context.Context, in invitations.GrantInpu
 	return nil
 }
 
+// invitationOperationID is the one ledger namespace shared by the Granter and the
+// Fencer; a fence under any other key would fence nothing.
+func invitationOperationID(rawID string) string {
+	return "invitation:" + rawID
+}
+
 type integrityRelationshipGranter struct {
 	system *mutations.Service
 	exists resourceExistsFn
@@ -138,25 +144,34 @@ type integrityRelationshipGranter struct {
 
 var _ invitations.Granter = integrityRelationshipGranter{}
 
+// Grant asks the ledger first: a recorded operation (committed or fenced) skips the
+// existence probe, which can turn false after the commit, and replays without writing.
 func (g integrityRelationshipGranter) Grant(ctx context.Context, in invitations.GrantInput) error {
 	if in.OperationID == "" {
 		return fmt.Errorf("auth-cms: invitation operation ID is required: %w", sdk.ErrInvalidInput)
 	}
-	if g.exists == nil {
-		return fmt.Errorf("auth-cms: integrityRelationshipGranter resource-existence seam is not wired")
-	}
-	exists, err := g.exists(ctx, in.ResourceType, in.ResourceID)
+	operationID := invitationOperationID(in.OperationID)
+	_, recorded, err := g.system.Recorded(ctx, operationID)
 	if err != nil {
-		return fmt.Errorf("auth-cms: resource existence probe for %s:%s failed: %w", in.ResourceType, in.ResourceID, err)
+		return fmt.Errorf("auth-cms: invitation operation lookup failed: %w", err)
 	}
-	if !exists {
-		return fmt.Errorf("auth-cms: host resource %s:%s no longer exists; not granting %q to %s:%s: %w",
-			in.ResourceType, in.ResourceID, in.Relation, in.SubjectType, in.SubjectID, sdk.ErrNotFound)
+	if !recorded {
+		if g.exists == nil {
+			return fmt.Errorf("auth-cms: integrityRelationshipGranter resource-existence seam is not wired")
+		}
+		exists, err := g.exists(ctx, in.ResourceType, in.ResourceID)
+		if err != nil {
+			return fmt.Errorf("auth-cms: resource existence probe for %s:%s failed: %w", in.ResourceType, in.ResourceID, err)
+		}
+		if !exists {
+			return fmt.Errorf("auth-cms: host resource %s:%s no longer exists; not granting %q to %s:%s: %w",
+				in.ResourceType, in.ResourceID, in.Relation, in.SubjectType, in.SubjectID, sdk.ErrNotFound)
+		}
 	}
 
 	ctx = audit.WithSource(ctx, audit.Source{System: "invitation-acceptance"})
 	result, err := g.system.Apply(ctx, mutations.Command{
-		OperationID: "invitation:" + in.OperationID,
+		OperationID: operationID,
 		Target:      mutations.Target{Kind: mutations.TargetResource, Type: in.ResourceType, ID: in.ResourceID},
 		Operation:   mutations.OpGrant,
 		Relationships: []mutations.RelationshipRow{{
@@ -170,10 +185,36 @@ func (g integrityRelationshipGranter) Grant(ctx context.Context, in invitations.
 	if err != nil {
 		return err
 	}
+	if result.Replayed && result.Outcome == mutations.OutcomeFenced {
+		return invitations.ErrGrantFenced
+	}
 	if result.Replayed && result.Superseded {
 		return invitations.ErrGrantSuperseded
 	}
 	return nil
+}
+
+// integrityOperationFencer fences an invitation's grant operation in the same ledger,
+// under the same namespace, as integrityRelationshipGranter. The memory-backed
+// authorization store has no ambient transaction to detach, matching the Granter.
+type integrityOperationFencer struct {
+	system *mutations.Service
+}
+
+var _ invitations.Fencer = integrityOperationFencer{}
+
+func (f integrityOperationFencer) Fence(ctx context.Context, in invitations.FenceInput) (invitations.FenceOutcome, error) {
+	if in.OperationID == "" {
+		return "", fmt.Errorf("auth-cms: invitation operation ID is required: %w", sdk.ErrInvalidInput)
+	}
+	result, err := f.system.Fence(ctx, invitationOperationID(in.OperationID))
+	if err != nil {
+		return "", err
+	}
+	if result.Outcome == mutations.OutcomeFenced {
+		return invitations.FenceOutcomeFenced, nil
+	}
+	return invitations.FenceOutcomeCommitted, nil
 }
 
 // hostInviteCheck is the relation-aware host authorization policy the authentication

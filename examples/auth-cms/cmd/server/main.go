@@ -287,6 +287,9 @@ func run(ctx context.Context, log *slog.Logger) error {
 	// escalate by inviting an owner; a nil InviteCheck here would be ErrInviteCheckRequired
 	// at NewService, never an allow-by-default.
 	authCfg.InviteCheck = hostInviteCheck(authorizer)
+	// The Fencer settles an accepting claim on cancel: it fences the Granter's ledger
+	// operation (same namespace, invitationOperationID) or reports a committed grant.
+	authCfg.Fencer = integrityOperationFencer{system: tupleWriter}
 	// The bundled machine-identity lifecycle routes (/auth/service-accounts*,
 	// /auth/api-keys/{id}/revoke) mint and revoke credentials, so the pocket refuses to
 	// guess a policy: with MachineRoutesGate nil they are NOT mounted (404) and NewService

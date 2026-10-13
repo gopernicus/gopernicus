@@ -86,8 +86,9 @@ func newAuthorization(roleRoutesGate web.Middleware, logger *slog.Logger) (autho
 	store := authzmem.New(authzmem.WithIntegrityPolicy(authzIntegrityPolicy()))
 	components, err := authorization.New(
 		authorization.Repositories{
-			Tuples:    store.Tuples(),
-			Mutations: store.Mutations(),
+			Tuples:     store.Tuples(),
+			Mutations:  store.Mutations(),
+			Operations: store.Operations(),
 		},
 		authorization.WithLogger(logger),
 		authorization.WithModel(authzSchema()),
