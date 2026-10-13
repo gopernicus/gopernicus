@@ -115,8 +115,12 @@ host's pre-boot migration runner.
 `0003_iam_operations.sql` creates `iam_operations` and
 `0004_iam_operations_fenced.sql` widens its outcome check for fences. 0004 is a
 one-way cutover: older adapter versions refuse the widened schema, and there is
-no downgrade once a fenced record exists. `0004` rebuilds `iam_operations` (create, copy, drop, rename), so a host view or trigger naming it must be dropped first. `Repositories` populates both
-`Mutations` and `Operations`; `RelationshipRepository` needs neither table.
+no downgrade once a fenced record exists. 0004 rebuilds `iam_operations`: a host
+view naming it makes 0004 fail, while host triggers and indexes on it are
+silently dropped, so save them first (preflight in the [upgrade
+guide](../UPGRADE.md)) and snapshot or branch the database. `Repositories`
+populates both `Mutations` and `Operations`; `RelationshipRepository` needs
+neither table.
 
 TupleCache adds one optional file,
 `tuple_cache_migrations/0002_iam_tuple_cache.sql`, exposed by

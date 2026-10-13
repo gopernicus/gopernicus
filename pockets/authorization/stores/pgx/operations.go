@@ -105,7 +105,8 @@ func (m *mutationStore) Fence(ctx context.Context, operationID string) (*mutatio
 	return result, nil
 }
 
-// Recorded reads the operation record on the pool without the write lock.
+// Recorded reads the operation record without the write lock, through the
+// ambient transaction when one is present, else on the pool.
 func (m *mutationStore) Recorded(ctx context.Context, operationID string) (mutations.Outcome, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return "", false, err
@@ -114,7 +115,7 @@ func (m *mutationStore) Recorded(ctx context.Context, operationID string) (mutat
 		return "", false, err
 	}
 	var outcome mutations.Outcome
-	err := m.db.QueryRow(ctx, "SELECT outcome FROM "+m.schema.Table("iam_operations")+" WHERE operation_id=$1", operationID).Scan(&outcome)
+	err := m.db.QuerierFrom(ctx).QueryRow(ctx, "SELECT outcome FROM "+m.schema.Table("iam_operations")+" WHERE operation_id=$1", operationID).Scan(&outcome)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return "", false, nil
 	}

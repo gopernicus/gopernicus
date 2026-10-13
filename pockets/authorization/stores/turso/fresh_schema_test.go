@@ -1,10 +1,13 @@
 package turso
 
 import (
+	"context"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 	"testing/fstest"
+	"time"
 
 	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/audit"
@@ -360,6 +363,90 @@ func TestOperationsFencedUpgradeFailsOnHostView(t *testing.T) {
 	}
 	if got := freshIAMTables(t, db); !slices.Equal(got, []string{"iam_audit", "iam_operations", "iam_tuples"}) {
 		t.Fatalf("failed 0004 left tables: %v", got)
+	}
+}
+
+// TestOperationsFencedUpgradeDropsHostTriggersAndIndexes pins the documented
+// caveat: the rebuild succeeds and silently drops host triggers and indexes on
+// iam_operations, so hosts must save and recreate them.
+func TestOperationsFencedUpgradeDropsHostTriggersAndIndexes(t *testing.T) {
+	db := emptyCanonicalFixture(t)
+	if err := tursodb.RunMigrations(t.Context(), db, baseOperationsMigrations(t), MigrationsDir); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(t.Context(), `CREATE TABLE main.host_operation_log (operation_id TEXT);
+CREATE TRIGGER main.host_operations_log AFTER INSERT ON iam_operations BEGIN INSERT INTO host_operation_log VALUES (NEW.operation_id); END;
+CREATE INDEX main.host_operations_outcome ON iam_operations(outcome);`); err != nil {
+		t.Fatal(err)
+	}
+	preflight := `SELECT type || ':' || name FROM main.sqlite_master WHERE tbl_name='iam_operations' AND name NOT LIKE 'sqlite_autoindex%' AND type<>'table' ORDER BY name`
+	objects := func() []string {
+		rows, err := db.Query(t.Context(), preflight)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer rows.Close()
+		var out []string
+		for rows.Next() {
+			var object string
+			if err := rows.Scan(&object); err != nil {
+				t.Fatal(err)
+			}
+			out = append(out, object)
+		}
+		if err := rows.Err(); err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+	if got := objects(); !slices.Equal(got, []string{"trigger:host_operations_log", "index:host_operations_outcome"}) {
+		t.Fatalf("preflight before 0004: %v", got)
+	}
+	if err := tursodb.RunMigrations(t.Context(), db, MigrationsFS, MigrationsDir); err != nil {
+		t.Fatalf("0004 must not fail on host triggers or indexes: %v", err)
+	}
+	if got := objects(); len(got) != 0 {
+		t.Fatalf("0004 kept host objects (update the UPGRADE caveat): %v", got)
+	}
+	if got := operationsDDL(t, db); got != canonicalOperationsDDL {
+		t.Fatalf("upgraded iam_operations:\n%s", got)
+	}
+	if _, err := testRepositories(t.Context(), db); err != nil {
+		t.Fatalf("boot after 0004: %v", err)
+	}
+}
+
+// TestRecordedJoinsAmbientSingleConnection proves Recorded reads through the
+// ambient transaction: with one pooled connection held by Transact, a pool read
+// would block until the deadline.
+func TestRecordedJoinsAmbientSingleConnection(t *testing.T) {
+	db, err := tursodb.Open(t.Context(), tursodb.Config{URL: "file:" + filepath.Join(t.TempDir(), "single.sqlite"), MaxOpenConns: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	if err := tursodb.RunMigrations(t.Context(), db, MigrationsFS, MigrationsDir); err != nil {
+		t.Fatal(err)
+	}
+	repos, err := testRepositories(t.Context(), db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := mutations.Command{Target: mutations.Target{Kind: mutations.TargetResource, Type: "doc", ID: "d"}, Operation: mutations.OpBatch, Tuples: tuples.Changes{Add: []tuples.Tuple{{Scope: tuples.On("doc", "d"), Relation: "viewer", Subject: tuples.SubjectRef{Type: "user", ID: "u"}}}}, OperationID: "ambient:single"}
+	if _, err := repos.Mutations.Apply(t.Context(), cmd, nil); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	err = db.Transact(ctx, func(ctx context.Context) error {
+		outcome, ok, err := repos.Operations.Recorded(ctx, cmd.OperationID)
+		if err != nil || !ok || outcome != mutations.OutcomeApplied {
+			t.Fatalf("Recorded inside Transact: %q %v %v", outcome, ok, err)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
 }
 

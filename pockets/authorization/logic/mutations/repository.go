@@ -29,7 +29,8 @@ type OperationLedger interface {
 	// an unknown-outcome commit.
 	Fence(ctx context.Context, operationID string) (*FenceResult, error)
 	// Recorded reads the outcome recorded under operationID without the write
-	// lock. false is never proof that the operation will not commit later; only
+	// lock. Unlike Fence it may run inside an ambient transaction, whose view it
+	// reads. false is never proof that the operation will not commit later; only
 	// Fence is. Read from the primary: a lagging replica can report false.
 	Recorded(ctx context.Context, operationID string) (Outcome, bool, error)
 }
