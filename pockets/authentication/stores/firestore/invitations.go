@@ -179,7 +179,7 @@ func (s *invitationStore) CancelAcceptance(ctx context.Context, _ string, _ invi
 	if err := refuseAmbient(ctx); err != nil {
 		return invitation.Invitation{}, err
 	}
-	return invitation.Invitation{}, fmt.Errorf("firestore invitations: CancelAcceptance: %w", errors.ErrUnsupported)
+	return invitation.Invitation{}, fmt.Errorf("firestore invitation store: CancelAcceptance: %w", errors.ErrUnsupported)
 }
 
 // ListActiveByResource is not implemented on Firestore.
@@ -187,7 +187,7 @@ func (s *invitationStore) ListActiveByResource(ctx context.Context, _ invitation
 	if err := refuseAmbient(ctx); err != nil {
 		return list.Page[invitation.Invitation]{}, err
 	}
-	return list.Page[invitation.Invitation]{}, fmt.Errorf("firestore invitations: ListActiveByResource: %w", errors.ErrUnsupported)
+	return list.Page[invitation.Invitation]{}, fmt.Errorf("firestore invitation store: ListActiveByResource: %w", errors.ErrUnsupported)
 }
 
 // The lifecycle decision and both uniqueness claims commit against the same read.
