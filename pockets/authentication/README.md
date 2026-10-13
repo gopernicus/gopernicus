@@ -652,7 +652,8 @@ invitations await explicit acceptance.
 **Durable acceptance.** The store atomically claims the current, unexpired token
 and binds it to the accepting subject before calling the Granter:
 `pending → accepting → accepted`. A claim reserves the invitation tuple and makes
-cancel, decline and resend conflict. Resend on an unclaimed invitation invalidates
+decline and resend conflict; cancel conflicts too unless a `Fencer` is wired (see
+"Terminal settlement" below). Resend on an unclaimed invitation invalidates
 its old token; an acceptance that read that token earlier still fails at the claim.
 
 If granting returns a retryable error or finalization fails, the claim stays
@@ -661,7 +662,8 @@ and subject, including after a process restart or token expiry, retries the same
 operation and finishes the receipt. A completed retry succeeds without granting
 again. Another subject cannot resume that claim. There is no automatic retry worker
 or claim timeout; hosts retry through acceptance/the verified resolver, or reconcile
-a permanently failed operation. Cancellation never claims to undo a grant in progress.
+a permanently failed operation. Cancellation never undoes a committed grant; with a
+`Fencer` it prevents an uncommitted one.
 
 When the Granter returns `invitations.ErrGrantSuperseded`, the operation committed
 earlier but its grant is no longer in effect. Acceptance completes as `accepted`,
@@ -672,6 +674,82 @@ completes superseded claims, warns and continues without counting them as grants
 Later uses of the accepted token take the existing success short-circuit.
 Concurrent retries racing a revoke may yield both success and superseded answers;
 the invariant is that the committed grant is never written again.
+
+**Terminal settlement.** An `accepting` claim can end without waiting for its
+grant, and a removal flow can find every live row, through three pieces:
+
+```go
+type FenceInput struct{ OperationID string } // the RAW invitation ID
+type FenceOutcome string                     // FenceOutcomeFenced | FenceOutcomeCommitted
+type Fencer interface {
+    Fence(ctx context.Context, in FenceInput) (FenceOutcome, error)
+}
+```
+
+- **Fencer wiring.** `InvitationsConfig.Fencer` (or `invitations.WithFencer`) is
+  optional; set without a `Granter` it is `ErrFencerWithoutGranter`. `Fence`
+  durably fences the operation so no first grant under it can ever commit
+  (`FenceOutcomeFenced`, also when an earlier call fenced it), or reports that a
+  grant already committed (`FenceOutcomeCommitted`). It must be idempotent and
+  serialize with the Granter's ledger write. The pocket passes the raw invitation
+  ID; derive the ledger key with **the same helper the Granter uses** (for example
+  `"invitation:" + id`). Different namespaces fence nothing, so prove the wiring
+  with a fence-then-grant test that expects `ErrGrantFenced`. Detach any ambient
+  transaction first, as the Granter does. With the authorization pocket, call
+  `mutations.Service.Fence` (wired through `authorization.Repositories.Operations`)
+  and map `OutcomeFenced` to `FenceOutcomeFenced`, every other outcome to
+  `FenceOutcomeCommitted`.
+- **`Cancel` on an accepting claim.** `Cancel` settles from the current row. When
+  a pending snapshot's cancellation conflicts, it re-reads: the same token now
+  `accepting` takes the accepting path, so a claim racing the cancel is settled
+  rather than answered with 409.
+
+  | Row | Fencer | Cancel does | Returns |
+  |---|---|---|---|
+  | pending | any | cancels | nil |
+  | accepting | nil | nothing | `ErrNotPending` |
+  | accepting | `Fence` errors | nothing; the claim is untouched | the error |
+  | accepting | fenced | ends the claim `cancelled` (subject and token kept, `AcceptedAt` zero); `invitation_cancelled` with `claim_status=accepting`, `fence=fenced` | nil |
+  | accepting | committed | finalizes `accepted`, releasing the tuple; no grant event, no member-added notice; `invitation_cancelled` status `blocked`, reason `already_granted` | `ErrAlreadyGranted` |
+  | anything else | any | nothing | `ErrNotPending` |
+
+  `ErrAlreadyGranted` (409-class) means the access exists: revoke it through the
+  host's ordinary path. That holds for a `no_change` commit too, since only the
+  host knows whether the access predates the invitation. Repeating a fenced cancel
+  with the same prepared value returns nil. The bundled
+  `POST /auth/invitations/{id}/cancel` keeps answering 409 for every conflict;
+  hosts that need the revoke branch call `Service.Cancel` directly.
+- **`ErrGrantFenced` versus `ErrGrantSuperseded`.** A Granter that replays a fenced
+  operation (authorization `Outcome == OutcomeFenced`) should return
+  `invitations.ErrGrantFenced`, mapped before the superseded mapping. Acceptance
+  then ends the claim `cancelled`, records `invitation_granted` status `blocked`
+  with reason `fenced`, sends no notice and returns the 409-class error. A Granter
+  that maps it to `ErrGrantSuperseded` is safe but degraded: the row ends
+  `accepted` with no access, and a later cancel answers `ErrAlreadyGranted` (a
+  revoke of nothing). The verified resolver warns and continues for both.
+- **Receipt recovery.** A host precondition that runs before the ledger (resource
+  existence, tenant lookup) can turn false after the operation committed. Ask
+  the ledger first (authorization `mutations.Service.Recorded`); when the
+  operation is recorded, skip the precondition and replay, which never writes.
+  `Recorded == false` never proves the operation will not commit later; only
+  `Fence` does. Read it on a primary route.
+- **Active listing.** `Service.ListActiveByResource(ctx,
+  invitations.ActiveListInput{ResourceType, ResourceID, Relation}, req)` pages the
+  resource's `pending` and `accepting` rows by STORED status, newest first, so
+  terminal history never hides a live row. An expired but still pending row keeps
+  its tuple reserved and is listed. `Relation` filters exactly when set; a blank
+  resource or a non-blank `Search` is `ErrInvalidInput`; counts apply the same
+  filter. It is policy-free like `ListByResource`, which is unchanged. For a
+  removal, collect to exhaustion, then `PrepareManagement` and `Cancel` each row.
+  A row created mid-loop is not seen.
+- **Cutover.** Fencing through the authorization ledger requires the
+  authorization stores' `0004_iam_operations_fenced.sql` migration. Apply it in
+  the same deploy as the new binaries: older instances refuse the widened schema
+  on restart, and there is no downgrade once a fenced row exists (see
+  `pockets/authorization/stores/UPGRADE.md`). Authentication has no migration.
+  `InvitationRepository` gains `CancelAcceptance` and `ListActiveByResource`. The
+  Firestore store returns `errors.ErrUnsupported` from both, so a Firestore host
+  that wires a `Fencer` cannot cancel an accepting claim.
 
 **The Granter contract and invitation authority (D1–D3).** `InvitationsConfig.Granter` is
 the host seam an accepted, auto-accepted, or directly-added invitation grants
@@ -731,19 +809,19 @@ type Granter interface{ Grant(context.Context, GrantInput) error }
   writes again. Map `Replayed && Superseded` to `invitations.ErrGrantSuperseded`;
   map `ErrOperationMismatch` there too when the host command shape changed.
   Every definite already-committed answer must map to nil or that sentinel,
-  rather than leaving the claim retryable forever. See `examples/auth-cms` for
+  rather than leaving the claim retryable forever. Map a fenced replay to
+  `invitations.ErrGrantFenced` first (see "Terminal settlement"). See `examples/auth-cms` for
   the reference adapter.
 - **Legacy state-convergent adapters.** Baseline `RelationshipWriter` and
   role-column writes remain supported, but cannot satisfy the at-most-once
   recovery contract: an accepting retry can restore revoked access. Hosts
   requiring safe recovery must use the ledger or equivalent atomic mechanism.
-- **Known recovery limits.** A host precondition checked before the ledger (such
-  as resource existence) can fail permanently after the operation committed,
-  leaving the claim `accepting`. A first grant that was refused also remains
-  claimed and can grant for the first time when the refusal clears. It cannot be
-  cancelled while accepting. Neither path is solved by the operation ledger;
-  hosts must reconcile these claims. A never-committed operation that later
-  grants after a role change is a late first grant.
+- **Terminal settlement.** A refused first grant stays claimed and can grant
+  when the refusal clears; a post-commit precondition failure can leave a claim
+  `accepting`. Both settle through the `Fencer`, `Recorded`-first Granter and
+  `ListActiveByResource` described under "Terminal settlement" above. Without a
+  `Fencer`, an accepting claim still cannot be cancelled and a never-committed
+  operation that later grants after a role change is a late first grant.
 - **A required host policy.** Whenever a `Granter` enables invitations, the root
   `New` requires a complete resource rule or `InviteCheck`:
 
@@ -1439,7 +1517,7 @@ store upgrade is needed.
 | `TokenSigner` (cryptids.JWTSigner) | **REQUIRED.** `integrations/cryptids/golang-jwt` implements HS256/HS384/HS512 with explicit expiration and 60-second clock tolerance; there is no SDK implementation. **Multi-instance hosts MUST share the signing secret** (§1.6). |
 | `AccessTokenTTL` | 0 → 15m (bounds the stateless revocation window). `AUTH_ACCESS_TOKEN_TTL`. |
 | `RefreshTTL` | 0 → 7d — the FIXED refresh horizon; rotation never extends it. `AUTH_REFRESH_TTL`. |
-| `Granter` / `ResourcePermissions` + `Can` / `InviteCheck` / `MemberCheck` / `BodySenders` | invitation subsystem seams (see the invitation section). `Granter` now takes a structured `GrantInput` (operation-scoped, fail-loud). With a `Granter`, a complete resource rule (`ResourcePermissions` + `Can`) or `InviteCheck` is REQUIRED — neither → `ErrInviteCheckRequired`; a half-wired or invalid rule → `ErrInvitationResourceRuleIncomplete`; a rule without a `Granter` → `ErrInvitationResourceRuleWithoutGranter`; `InviteCheck` without a `Granter` → `ErrInviteCheckWithoutGranter`. With the rule on, `InviteCheck` is the optional create-only refinement. |
+| `Granter` / `ResourcePermissions` + `Can` / `InviteCheck` / `MemberCheck` / `Fencer` / `BodySenders` | invitation subsystem seams (see the invitation section). `Granter` now takes a structured `GrantInput` (operation-scoped, fail-loud). With a `Granter`, a complete resource rule (`ResourcePermissions` + `Can`) or `InviteCheck` is REQUIRED — neither → `ErrInviteCheckRequired`; a half-wired or invalid rule → `ErrInvitationResourceRuleIncomplete`; a rule without a `Granter` → `ErrInvitationResourceRuleWithoutGranter`; `InviteCheck` without a `Granter` → `ErrInviteCheckWithoutGranter`. With the rule on, `InviteCheck` is the optional create-only refinement. `Fencer` (optional terminal settlement) without a `Granter` → `ErrFencerWithoutGranter`. |
 | `ListStrategy` | `"cursor"` default; `"offset"` allowed; anything else `ErrInvalidListStrategy`. |
 | `IDs` (sdk.IDGenerator) | entity-ID strategy; NEVER mints secrets (codes/tokens/keys keep their own high-entropy generator). |
 | `Logger` | best-effort WARN sink for audit-write failures + the ephemeral-key/console-transport warnings; nil → `slog.Default()`. |

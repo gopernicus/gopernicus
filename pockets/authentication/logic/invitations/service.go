@@ -49,6 +49,16 @@ const (
 	resolvePageLimit = 100
 )
 
+// Fence outcomes a Fencer reports.
+const (
+	// FenceOutcomeFenced means the operation is fenced, by this call or an earlier
+	// one: no first grant under its ID can ever commit.
+	FenceOutcomeFenced FenceOutcome = "fenced"
+	// FenceOutcomeCommitted means a grant already committed under the ID (the
+	// ledger outcome was applied, no_change or not_found).
+	FenceOutcomeCommitted FenceOutcome = "committed"
+)
+
 // Errors surfaced to the transport (each wraps a stable errs kind so sdk/pkg/web
 // maps it to a status; checked with errors.Is).
 var (
@@ -61,6 +71,13 @@ var (
 	// ErrGrantSuperseded means this operation already committed, but its requested
 	// grant is no longer in effect. Acceptance completes without granting again.
 	ErrGrantSuperseded = fmt.Errorf("invitation grant superseded: %w", sdk.ErrConflict)
+	// ErrGrantFenced means the operation was fenced before any grant committed
+	// under it, so it never will. Acceptance ends the claim as cancelled.
+	ErrGrantFenced = fmt.Errorf("invitation grant fenced: %w", sdk.ErrConflict)
+	// ErrAlreadyGranted is returned by Cancel when the accepting claim's grant had
+	// already committed. The invitation is finalized as accepted; the host revokes
+	// the access through its ordinary path.
+	ErrAlreadyGranted = fmt.Errorf("invitation grant already committed: %w", sdk.ErrConflict)
 	// ErrNotPending is returned when a transition (accept/decline/cancel/resend)
 	// targets an invitation that is not in an eligible status.
 	ErrNotPending = fmt.Errorf("invitation is not pending: %w", sdk.ErrConflict)
@@ -134,8 +151,11 @@ type GrantInput struct {
 // the operation already committed but the requested grant is no longer in effect.
 // Every definite already-committed answer must map to nil or ErrGrantSuperseded,
 // including a mismatch between the recorded operation and a changed host command.
-// Other errors leave acceptance retryable; refusals and infrastructure errors
-// must propagate. A never-committed operation can first grant on a later retry.
+// A replay of a fenced operation (see Fencer) should return ErrGrantFenced, so
+// the claim ends cancelled; mapping it to ErrGrantSuperseded is safe but ends the
+// claim accepted with no access. Other errors leave acceptance retryable;
+// refusals and infrastructure errors must propagate. Without a Fencer, a
+// never-committed operation can first grant on a later retry.
 //
 // Legacy state-convergent adapters (a baseline relationship writer or role-column
 // write) remain supported, but cannot provide this at-most-once recovery contract:
@@ -143,6 +163,25 @@ type GrantInput struct {
 // must use an atomic operation ledger or equivalent deduplication mechanism.
 type Granter interface {
 	Grant(ctx context.Context, in GrantInput) error
+}
+
+// FenceInput identifies the grant operation to fence: the raw invitation ID, the
+// same value GrantInput.OperationID carries. The host applies the namespace its
+// Granter uses; a different namespace fences nothing.
+type FenceInput struct {
+	OperationID string
+}
+
+// FenceOutcome is a Fencer's answer for one operation ID.
+type FenceOutcome string
+
+// Fencer durably fences an invitation grant operation so no first grant under
+// its ID can commit afterwards, or reports that one already committed. It must be
+// idempotent and share the Granter's serialization point, so Fence and Grant are
+// totally ordered. The host detaches any ambient transaction first, as its
+// Granter does. An error leaves the accepting claim untouched.
+type Fencer interface {
+	Fence(ctx context.Context, in FenceInput) (FenceOutcome, error)
 }
 
 // MemberCheck is the optional duplicate-membership predicate consulted before a
@@ -254,6 +293,7 @@ type constructorConfig struct {
 	TTL               time.Duration
 	BodySenders       map[string]delivery.BodySender
 	IDs               sdk.IDGenerator
+	Fencer            Fencer
 }
 
 // Service implements the invitation use cases over its ports.
@@ -287,6 +327,8 @@ type Service struct {
 	// ids is the app-chosen entity-ID strategy (WithIDs); entity keys only,
 	// never the mailed secret.
 	ids sdk.IDGenerator
+	// fencer settles accepting claims on Cancel (WithFencer); nil keeps ErrNotPending.
+	fencer Fencer
 }
 
 // newService builds a Service, applying a time.Now clock, slog default logger, and the
@@ -327,6 +369,7 @@ func newService(d constructorConfig) *Service {
 
 		bodySenders: d.BodySenders,
 		ids:         d.IDs,
+		fencer:      d.Fencer,
 	}
 }
 
@@ -455,10 +498,10 @@ func (s *Service) directAdd(ctx context.Context, in CreateInput, subjectID strin
 	// whose sdk.DatabaseID mode yields an empty ID until an entity is inserted.
 	operationID := mintOperationID()
 	if err := s.grant(ctx, operationID, in.ResourceType, in.ResourceID, in.Relation, subjectTypeUser, subjectID, in.Metadata); err != nil {
-		s.recordGrant(ctx, subjectID, in.ResourceType, in.ResourceID, in.Relation, in.Identifier, securityevent.StatusFailure)
+		s.recordGrant(ctx, subjectID, in.ResourceType, in.ResourceID, in.Relation, in.Identifier, securityevent.StatusFailure, "")
 		return CreateResult{}, fmt.Errorf("grant: %w", err)
 	}
-	s.recordGrant(ctx, subjectID, in.ResourceType, in.ResourceID, in.Relation, in.Identifier, securityevent.StatusSuccess)
+	s.recordGrant(ctx, subjectID, in.ResourceType, in.ResourceID, in.Relation, in.Identifier, securityevent.StatusSuccess, "")
 	s.sendMemberAdded(ctx, memberAdded{
 		kind: in.IdentifierKind, identifier: in.Identifier,
 		resourceType: in.ResourceType, resourceID: in.ResourceID, relation: in.Relation,
@@ -545,8 +588,19 @@ func (s *Service) acceptClaim(ctx context.Context, inv Invitation, subjectType, 
 	// The host must deduplicate concurrent as well as sequential repeats. An error
 	// cannot prove that an external side effect did not commit, so never unclaim.
 	grantErr := s.grant(ctx, claimed.ID, claimed.ResourceType, claimed.ResourceID, claimed.Relation, subjectType, subjectID, claimed.Metadata)
+	// A fenced operation can never grant, so the claim ends cancelled. This is
+	// checked first: both sentinels wrap sdk.ErrConflict.
+	if errors.Is(grantErr, ErrGrantFenced) {
+		claim.Now = s.now()
+		cancelled, err := s.invitations.CancelAcceptance(ctx, claimed.ID, claim)
+		if err != nil {
+			return Invitation{}, err
+		}
+		s.recordGrant(ctx, subjectID, claimed.ResourceType, claimed.ResourceID, claimed.Relation, claimed.Identifier, securityevent.StatusBlocked, "fenced")
+		return cancelled, fmt.Errorf("grant: %w", grantErr)
+	}
 	if grantErr != nil && !errors.Is(grantErr, ErrGrantSuperseded) {
-		s.recordGrant(ctx, subjectID, claimed.ResourceType, claimed.ResourceID, claimed.Relation, claimed.Identifier, securityevent.StatusFailure)
+		s.recordGrant(ctx, subjectID, claimed.ResourceType, claimed.ResourceID, claimed.Relation, claimed.Identifier, securityevent.StatusFailure, "")
 		return Invitation{}, fmt.Errorf("grant: %w", grantErr)
 	}
 	claim.Now = s.now()
@@ -555,10 +609,10 @@ func (s *Service) acceptClaim(ctx context.Context, inv Invitation, subjectType, 
 		return Invitation{}, err
 	}
 	if errors.Is(grantErr, ErrGrantSuperseded) {
-		s.recordGrant(ctx, subjectID, claimed.ResourceType, claimed.ResourceID, claimed.Relation, claimed.Identifier, securityevent.StatusBlocked)
+		s.recordGrant(ctx, subjectID, claimed.ResourceType, claimed.ResourceID, claimed.Relation, claimed.Identifier, securityevent.StatusBlocked, "superseded")
 		return accepted, fmt.Errorf("grant: %w", grantErr)
 	}
-	s.recordGrant(ctx, subjectID, claimed.ResourceType, claimed.ResourceID, claimed.Relation, claimed.Identifier, securityevent.StatusSuccess)
+	s.recordGrant(ctx, subjectID, claimed.ResourceType, claimed.ResourceID, claimed.Relation, claimed.Identifier, securityevent.StatusSuccess, "")
 	s.sendMemberAdded(ctx, memberAdded{
 		kind: claimed.IdentifierKind, identifier: claimed.Identifier,
 		resourceType: claimed.ResourceType, resourceID: claimed.ResourceID, relation: claimed.Relation,
@@ -600,33 +654,105 @@ func (s *Service) Decline(ctx context.Context, id, token string) error {
 
 // Cancel marks the prepared invitation cancelled. The caller owns admission;
 // the repository checks the observed token and current lifecycle state atomically.
+//
+// An accepting claim settles only through the configured Fencer: a fenced
+// operation ends the claim cancelled (nil); an already committed grant finalizes
+// it accepted and returns ErrAlreadyGranted, so the host revokes instead. Without
+// a Fencer an accepting claim returns ErrNotPending. A pending snapshot whose
+// cancellation conflicts is re-read, so a claim racing this cancel is settled.
 func (s *Service) Cancel(ctx context.Context, prepared PreparedManagement) error {
 	inv, err := prepared.checked(ctx, s)
 	if err != nil {
 		return err
 	}
-	if inv.Status != StatusPending {
+	actor, userID := prepared.attribution()
+	if inv.Status == StatusPending {
+		now := s.now()
+		_, err := s.invitations.UpdateStatus(ctx, inv.ID, StatusUpdate{
+			ExpectedTokenHash: inv.TokenHash,
+			Status:            StatusCancelled,
+			TokenHash:         inv.TokenHash,
+			ExpiresAt:         inv.ExpiresAt,
+			ResolvedSubjectID: inv.ResolvedSubjectID,
+			UpdatedAt:         now,
+		})
+		if err == nil {
+			s.recordManagement(ctx, actor, userID, securityevent.TypeInvitationCancelled, cancelDetails(inv, nil))
+			return nil
+		}
+		if !errors.Is(err, sdk.ErrConflict) {
+			return err
+		}
+		current, getErr := s.invitations.Get(ctx, inv.ID)
+		if getErr != nil {
+			return getErr
+		}
+		if current.Status != StatusAccepting || current.TokenHash != inv.TokenHash {
+			return err
+		}
+		inv = current
+	}
+	if inv.Status != StatusAccepting || s.fencer == nil {
 		return ErrNotPending
 	}
-	now := s.now()
-	if _, err := s.invitations.UpdateStatus(ctx, inv.ID, StatusUpdate{
-		ExpectedTokenHash: inv.TokenHash,
-		Status:            StatusCancelled,
-		TokenHash:         inv.TokenHash,
-		ExpiresAt:         inv.ExpiresAt,
-		ResolvedSubjectID: inv.ResolvedSubjectID,
-		UpdatedAt:         now,
-	}); err != nil {
-		return err
+	return s.settleAccepting(ctx, inv, actor, userID)
+}
+
+// settleAccepting fences an accepting claim's grant operation and terminates
+// the claim per the outcome.
+func (s *Service) settleAccepting(ctx context.Context, inv Invitation, actor securityevent.Principal, userID string) error {
+	outcome, err := s.fencer.Fence(ctx, FenceInput{OperationID: inv.ID})
+	if err != nil {
+		return fmt.Errorf("fence invitation grant: %w", err)
 	}
-	actor, userID := prepared.attribution()
-	s.recordManagement(ctx, actor, userID, securityevent.TypeInvitationCancelled, map[string]any{
+	claim := Acceptance{TokenHash: inv.TokenHash, SubjectType: inv.ResolvedSubjectType, SubjectID: inv.ResolvedSubjectID, Now: s.now()}
+	alreadyGranted := cancelDetails(inv, map[string]any{"claim_status": StatusAccepting, "reason": "already_granted"})
+	switch outcome {
+	case FenceOutcomeFenced:
+		if _, err := s.invitations.CancelAcceptance(ctx, inv.ID, claim); err != nil {
+			if !errors.Is(err, sdk.ErrConflict) {
+				return err
+			}
+			current, getErr := s.invitations.Get(ctx, inv.ID)
+			if getErr != nil {
+				return getErr
+			}
+			switch {
+			case current.Status == StatusCancelled && claim.Matches(current):
+			case current.Status == StatusAccepted:
+				// A completion won despite the fence (a namespace mis-wiring or the
+				// superseded mapping); fail toward a revoke, never a silent leak.
+				s.recordAs(ctx, actor, userID, securityevent.TypeInvitationCancelled, securityevent.StatusBlocked, alreadyGranted)
+				return ErrAlreadyGranted
+			default:
+				return err
+			}
+		}
+		s.recordManagement(ctx, actor, userID, securityevent.TypeInvitationCancelled, cancelDetails(inv, map[string]any{"claim_status": StatusAccepting, "fence": string(FenceOutcomeFenced)}))
+		return nil
+	case FenceOutcomeCommitted:
+		if _, err := s.invitations.CompleteAcceptance(ctx, inv.ID, claim); err != nil {
+			return err
+		}
+		s.recordAs(ctx, actor, userID, securityevent.TypeInvitationCancelled, securityevent.StatusBlocked, alreadyGranted)
+		return ErrAlreadyGranted
+	default:
+		return fmt.Errorf("fencer returned unknown outcome %q", outcome)
+	}
+}
+
+// cancelDetails is the invitation_cancelled audit detail set plus extra.
+func cancelDetails(inv Invitation, extra map[string]any) map[string]any {
+	details := map[string]any{
 		"resource_type": inv.ResourceType,
 		"resource_id":   inv.ResourceID,
 		"relation":      inv.Relation,
 		"invited_by":    inv.InvitedBy,
-	})
-	return nil
+	}
+	for k, v := range extra {
+		details[k] = v
+	}
+	return details
 }
 
 // Resend rotates the prepared invitation's secret and expiry, then queues delivery.
@@ -676,6 +802,19 @@ func (s *Service) Resend(ctx context.Context, prepared PreparedManagement, redir
 // The caller owns authorization before this read.
 func (s *Service) ListByResource(ctx context.Context, resourceType, resourceID string, req list.Request) (list.Page[Invitation], error) {
 	return s.invitations.ListByResource(ctx, resourceType, resourceID, req)
+}
+
+// ListActiveByResource returns a cursor-paginated page of a resource's pending
+// and accepting invitations by stored status (ordered created_at DESC, id DESC),
+// so terminal history never hides a live row. An expired but still pending row
+// is listed: it reserves its tuple until cancelled.
+//
+// The caller owns authorization before this read.
+func (s *Service) ListActiveByResource(ctx context.Context, in ActiveListInput, req list.Request) (list.Page[Invitation], error) {
+	if err := in.Validate(); err != nil {
+		return list.Page[Invitation]{}, err
+	}
+	return s.invitations.ListActiveByResource(ctx, in, req)
 }
 
 // Mine returns a cursor-paginated page of the invitations addressed to an
@@ -745,17 +884,17 @@ func (s *Service) ResolveInvitations(ctx context.Context, email, subjectType, su
 // --- audit ---
 
 // recordGrant appends an invitation_granted audit row for a grant attempt
-// (success, failure, or blocked with reason superseded). Details carries identifiers
-// only — never the token (design §5.1 WI3).
-func (s *Service) recordGrant(ctx context.Context, subjectID, resourceType, resourceID, relation, identifier, status string) {
+// (success, failure, or blocked with reason superseded or fenced). Details carries
+// identifiers only — never the token (design §5.1 WI3).
+func (s *Service) recordGrant(ctx context.Context, subjectID, resourceType, resourceID, relation, identifier, status, reason string) {
 	details := map[string]any{
 		"resource_type": resourceType,
 		"resource_id":   resourceID,
 		"relation":      relation,
 		"identifier":    identifier,
 	}
-	if status == securityevent.StatusBlocked {
-		details["reason"] = "superseded"
+	if reason != "" {
+		details["reason"] = reason
 	}
 	s.record(ctx, subjectID, securityevent.TypeInvitationGranted, status, details)
 }

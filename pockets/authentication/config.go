@@ -80,6 +80,7 @@ type constructorConfig struct {
 	Can                           inbound.InvitationCan
 	UserAdminCheck                inbound.UserAdminCheck
 	MemberCheck                   invitations.MemberCheck
+	Fencer                        invitations.Fencer
 	BodySenders                   map[string]delivery.BodySender
 	Views                         inbound.Views
 	HTMLPolicy                    *inbound.HTMLResourcePolicy
@@ -765,6 +766,13 @@ type InvitationsConfig struct {
 	// path (known invitee + AutoAccept). Nil → no dup check (idempotent grants
 	// absorb duplicates). Meaningful only when Granter is wired.
 	MemberCheck invitations.MemberCheck
+	// Fencer is the optional terminal-settlement seam: with it, cancelling an
+	// accepting invitation fences its grant operation (nil) or reports that the
+	// grant already committed (invitations.ErrAlreadyGranted). It receives the raw
+	// invitation ID and must apply the same namespace as the Granter. Nil → an
+	// accepting invitation cannot be cancelled (invitations.ErrNotPending). Set
+	// without a Granter → ErrFencerWithoutGranter.
+	Fencer invitations.Fencer
 }
 
 // WithInvitations replaces the complete InvitationsConfig group, including zero values.
@@ -775,6 +783,7 @@ func WithInvitations(value InvitationsConfig) Option {
 		c.ResourcePermissions = maps.Clone(value.ResourcePermissions)
 		c.Can = value.Can
 		c.MemberCheck = value.MemberCheck
+		c.Fencer = value.Fencer
 	}
 }
 

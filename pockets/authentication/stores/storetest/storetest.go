@@ -251,6 +251,17 @@ func Run(t *testing.T, newRepos func(t *testing.T) auth.Repositories) {
 		t.Run("AcceptanceClaim", func(t *testing.T) { testInvitationAcceptanceClaim(t, newRepos(t)) })
 		t.Run("StaleTokenTransition", func(t *testing.T) { testInvitationStaleTokenTransition(t, newRepos(t)) })
 		t.Run("ConcurrentClaimCancel", func(t *testing.T) { testInvitationConcurrentClaimCancel(t, newRepos(t)) })
+		// Terminal settlement: an adapter answering errors.ErrUnsupported skips
+		// these cases loudly (the firestore stubs, ruling R6).
+		t.Run("CancelAcceptance", func(t *testing.T) { testInvitationCancelAcceptance(t, newRepos(t)) })
+		t.Run("CancelAcceptanceIdempotent", func(t *testing.T) { testInvitationCancelAcceptanceIdempotent(t, newRepos(t)) })
+		t.Run("CancelAcceptancePastExpiry", func(t *testing.T) { testInvitationCancelAcceptancePastExpiry(t, newRepos(t)) })
+		t.Run("CancelAcceptanceMismatch", func(t *testing.T) { testInvitationCancelAcceptanceMismatch(t, newRepos(t)) })
+		t.Run("CancelThenCompleteConflicts", func(t *testing.T) { testInvitationCancelThenCompleteConflicts(t, newRepos(t)) })
+		t.Run("ConcurrentCompleteCancel", func(t *testing.T) { testInvitationConcurrentCompleteCancel(t, newRepos(t)) })
+		t.Run("ListActiveByResourceHidesTerminalHistory", func(t *testing.T) { testInvitationListActiveHidesTerminalHistory(t, newRepos(t)) })
+		t.Run("ListActiveByResourceRelationFilter", func(t *testing.T) { testInvitationListActiveRelationFilter(t, newRepos(t)) })
+		t.Run("ListActiveByResourceRejectsInvalidInput", func(t *testing.T) { testInvitationListActiveRejectsInvalidInput(t, newRepos(t)) })
 		t.Run("StatusTransitions", func(t *testing.T) { testInvitationsStatusTransitions(t, newRepos(t)) })
 		t.Run("UpdateStatusAbsentNotFound", func(t *testing.T) { testInvitationsUpdateAbsent(t, newRepos(t)) })
 		t.Run("ListByResourcePagination", func(t *testing.T) { testInvitationsListByResourcePaged(t, newRepos(t)) })
