@@ -593,25 +593,35 @@ SQL facts. Ordinary SQL-only writers participate through those same triggers.
 
 Construct the SQL repositories with their store `WithTupleCache()` option after
 applying the optional cache baseline in the [schema setup guide](stores/UPGRADE.md).
-Then construct `goredis.NewTupleCache(client, namespace)` and pass
+Then construct `goredis.NewTupleCache(client)` (an optional
+`goredis.WithNamespace` adds a readable key prefix) and pass
 `authorization.WithTupleCache(backend, tuplecache.Policy{MaxStaleness: bound})`.
 The Redis client must enable context timeouts. Run `components.TupleCache.Poll`
 as a supervised host worker; `Notify()` after the outermost commit is only a
 coalesced wake-up hint. Constructors start no goroutines.
 
-A positive `MaxStaleness` is required. A revocation may remain unseen while
-publication is pending within that bound. Eligibility starts at the authoritative
+`MaxStaleness` defaults to **5 seconds** when zero: a revocation may remain
+unseen for up to 5s. Negative values are rejected. A host that sets it must use
+the same value on every replica sharing an authorization database. A revocation
+may remain unseen while publication is pending within that bound. `PollInterval`
+defaults to `min(1s, MaxStaleness/4)` (1s with the default); `Notify()` still
+delivers local writes immediately, and replicas may use different intervals. Eligibility starts at the authoritative
 observation, so a delayed relay cannot extend it. Missing/expired/oversized cache
 reads or a concurrent publication retry the **whole operation** on a durable
 snapshot. Exact role reads use this same runtime. Ambient transactions bypass
 Redis and borrow the coherent SQL view; integrity and audit remain durable.
 
-Protocol 2 is part of the Redis key prefix and wire format. Scope kind is explicit.
-Processes sharing a delivery stream share one mirror and MaxStaleness policy;
-source/policy mismatches fail with `tuplecache.ErrBinding`. An empty/restored mirror
-rebuilds from SQL, even after its original events were acknowledged. Use a fresh
-source identity/namespace when restoring or cloning authoritative data as directed
-by the adapter runbook.
+Protocol 2 is part of the binding and wire format. Scope kind is explicit.
+The backend keys each mirror on its binding (protocol, source identity and
+MaxStaleness), so processes share a mirror exactly when their bindings match and
+different bindings use different mirrors. `tuplecache.ErrBinding` now only reports
+a backend returning a foreign mirror. An authorization database has a single
+delivery receipt, so every replica on it must run the same `MaxStaleness`;
+different bindings over one database keep rebuilding each other in full on every
+poll. When changing `MaxStaleness`, deploy quickly, or turn the cache off,
+deploy, and turn it back on. An empty/restored mirror rebuilds from SQL,
+even after its original events were acknowledged. Use a fresh source identity when
+restoring or cloning authoritative data as directed by the adapter runbook.
 
 The Redis adapter uses one complete hash on one shard; Redis Cluster is unsupported.
 Default limits reject reads above 1 MiB and delta publication inputs plus affected

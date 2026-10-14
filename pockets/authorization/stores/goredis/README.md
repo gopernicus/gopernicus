@@ -9,7 +9,8 @@ client := redis.NewClient(&redis.Options{
     Addr: "localhost:6379",
     ContextTimeoutEnabled: true,
 })
-backend, err := goredis.NewTupleCache(client, "my-tuple-store",
+backend, err := goredis.NewTupleCache(client,
+    goredis.WithNamespace("my-app"), // optional
     goredis.WithLimits(goredis.Limits{
         MaxReadBytes: 1 << 20,
         MaxMutationBytes: 4 << 20,
@@ -17,7 +18,8 @@ backend, err := goredis.NewTupleCache(client, "my-tuple-store",
 )
 ```
 
-The namespace is required and must belong exclusively to one tuple store. The
+The namespace is optional; it only adds a readable key prefix. Mirrors are keyed
+on the runtime binding, so the host never types anything that must match it. The
 constructor starts no goroutines and performs no I/O. The host retains ownership
 of the client, its connection settings, persistence, memory capacity, and shutdown.
 Compose the backend with `tuplecache.New(source, backend, ...)` and drive that
@@ -28,28 +30,112 @@ The client must enable `ContextTimeoutEnabled`; otherwise construction returns
 socket I/O. Construction never mutates the borrowed client's options. Host hooks
 and custom dialers remain responsible for honoring context deadlines themselves.
 
+## Fit
+
+The adapter is correct but has a narrow performance fit; choose it knowingly.
+Owner benchmark (Apple M4 Pro, Unix-socket Redis, one principal holding N direct
+grants):
+
+| Set size | one read | one delta | full rebuild |
+|---|---|---|---|
+| 100 | 0.11 ms | 0.41 ms | 0.29 ms |
+| 1,000 | 0.95 ms | 3.7 ms | 2.7 ms |
+| 10,000 | 9.4 ms | 38 ms | 25 ms |
+| 100,000 | 96 ms | 426 ms | 283 ms |
+
+- Each index set is one JSON field. A read decodes the whole set touched; a delta
+  decodes, validates and re-encodes the whole set inside Redis's single thread.
+- Good fit: many resources with small forward sets, principals with small reverse
+  sets, and PostgreSQL under read load from many replicas.
+- Poor fit: a principal or resource with thousands of direct tuples. Graph checks
+  are subject-first and read the principal's whole reverse set. Prefer durable
+  reads. A per-replica memory backend is not a cheap alternative: each replica's
+  mirror shares the source's one delivery receipt (see below), so replicas keep
+  rebuilding each other in full.
+- Full rebuilds are cheap relative to deltas on large sets.
+
 ## Redis key
 
-The protocol-2 mirror key is `tuplecache:v2:{<namespace>}`. The namespace is stored verbatim:
-`segovia-v2:dev:authorization` produces
-`tuplecache:v2:{segovia-v2:dev:authorization}`. It may contain ASCII letters, digits
-and `:._-/`; empty namespaces or other characters return `sdk.ErrInvalidInput`.
-Colons are allowed. Braces are reserved for the surrounding Redis hash tag, which
-keeps the mirror and temporary `:build:<nonce>` hashes in the same slot.
-This key layout does not add Redis Cluster support.
+Each mirror is keyed on its runtime binding: `tuplecache:v3:{<binding>}`, or
+`tuplecache:v3:{<namespace>/<binding>}` with `WithNamespace`. The runtime binding
+is `protocol:2/<source binding>/max-staleness:<nanoseconds>`, so processes share
+a mirror exactly when their protocol, source identity and `MaxStaleness` match;
+any difference lands in a different mirror instead of failing with
+`tuplecache.ErrBinding`. `v3` is this adapter's key-layout version; the wire
+format is unchanged.
 
-For example, inspect the mirror with:
+The namespace and the binding may contain ASCII letters, digits and `:._-/`.
+An empty or invalid namespace fails construction, and an invalid binding (from a
+custom `tuplecache.Source`) fails `State`, `Read` and `Publish`; both return
+`sdk.ErrInvalidInput`. Braces are reserved for the surrounding Redis hash tag,
+which keeps the mirror and temporary `:build:<nonce>` hashes in the same slot.
+This key layout does not add Redis Cluster support. A runtime whose custom
+binding is invalid never reaches ready: every poll fails with
+`FailureStage: "state"` and decisions stay on the durable source.
+
+`(*TupleCache).Key(binding)` returns the key for a binding. Log the runtime's
+binding and key once at INFO on startup, so operators can see which mirror each
+process uses:
+
+```go
+runtime := components.TupleCache
+key, err := backend.Key(runtime.Binding())
+logger.Info("authorization tuple cache", "binding", runtime.Binding(), "key", key)
+```
+
+For example, inspect the mirrors with:
 
 ```sh
-redis-cli --scan --pattern 'tuplecache:*'
-redis-cli HLEN 'tuplecache:v2:{segovia-v2:dev:authorization}'
+redis-cli --scan --pattern 'tuplecache:v3:{my-app/*'
+redis-cli HLEN 'tuplecache:v3:{my-app/protocol:2/<source binding>/max-staleness:5000000000}'
 ```
 
 Protocol 2 uses `!schema=2` and includes the protocol in the runtime binding.
 Apply the authoritative adapter's fresh base and optional cache schema before
 constructing the source. The first successful poll rebuilds the mirror from
-current canonical tuples. One authoritative source receipt belongs to one mirror.
-See the SQL adapter's [schema setup guide](../UPGRADE.md).
+current canonical tuples. See the SQL adapter's [schema setup guide](../UPGRADE.md).
+
+### One binding per authorization database
+
+Every replica on the same authorization database must run the same
+`MaxStaleness` (and the same gopernicus protocol), so all of them share one
+binding and one mirror. The database keeps a single delivery receipt, so it can
+keep exactly one mirror current. Runtimes with different bindings (or separate
+mirrors, such as per-replica memory backends) over the same database each keep
+their own mirror, but every acknowledgement moves the receipt past the others.
+Each of them then rebuilds in full on **every** poll, even with no writes, for
+as long as more than one is active: a full SQL scan plus a full rebuild per poll
+per replica. Answers stay correct; only the cost changes.
+
+**Rollout note.** When changing `MaxStaleness` (or upgrading from the v2 key
+layout), old and new pods rebuild on every poll while they overlap. Either
+deploy the change quickly, or turn the cache off, deploy, and turn it back on.
+
+### Mirror expiry and orphans
+
+Every publication (full rebuild, delta, or the no-change renewal each poll)
+renews the mirror's Redis expiry inside the same Lua script. A live mirror is
+renewed at poll cadence and never lapses; a superseded binding's mirror (after a
+`MaxStaleness`, protocol or source identity change) is no longer published to,
+so it expires on its own. `WithExpiry(d)` sets the duration: the default is
+7 days, and `0` keeps mirrors forever (the previous behaviour; superseded keys
+then need manual deletion). Keep it far above the poll interval.
+
+Keys with a TTL are what `volatile-*` `maxmemory` policies evict first. That is
+safe: reads fall back to the durable source and the next poll rebuilds the
+mirror.
+
+**Upgrading from the v2 key layout.** Old binaries `PERSIST`ed their
+`tuplecache:v2:` key, so it never expires. Once the whole fleet runs v3, delete
+it once by hand:
+
+```sh
+redis-cli --scan --pattern 'tuplecache:v2:*'
+redis-cli DEL '<key>'
+```
+
+**Rollback.** v2 binaries ignore v3 keys and rebuild their stale v2 key once.
+Do not delete the v2 key until the whole fleet is on v3.
 
 ## Stored data
 
@@ -93,8 +179,8 @@ operational error during mutation leaves an unavailable mirror instead of
 partial indexes under a valid receipt.
 
 Full publication builds a temporary hash with a five-minute cleanup TTL and
-swaps it into place only if the old receipt still matches. The permanent hash
-has no TTL. Full snapshots already contain their pending changes; those changes
+swaps it into place only if the old receipt still matches. The swapped-in
+mirror takes the renewing expiry described under "Mirror expiry and orphans". Full snapshots already contain their pending changes; those changes
 are not applied again to the rebuilt tuples.
 
 Eligibility is checked using Redis server time. Time spent contacting Redis or
@@ -154,7 +240,9 @@ duration must be measured against the host's tuple-set sizes. This is not a
 partitioned or Redis Cluster adapter.
 
 Run `go build ./...`, `go test ./...`, `go test -race ./...`, and `go vet ./...`
-from this module. Tests launch isolated `redis-server` processes using private
+from this module, and once more with `GOWORK=off` to prove the published pins
+resolve (`GOWORK=off go build ./... && GOWORK=off go test ./...`). CI does not
+run the Redis-backed tests, so a local `-race` run is the release gate. Tests launch isolated `redis-server` processes using private
 Unix sockets, including an AOF restart proof. They skip explicitly when the
 executable is unavailable; they do not connect to a host or production Redis.
 

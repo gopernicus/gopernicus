@@ -27,7 +27,7 @@ func BenchmarkTupleCache(b *testing.B) {
 				b.Fatal(err)
 			}
 			keys := []tuplecache.SetKey{reverse(rows[0])}
-			bytes := client.HStrLen(ctx, c.key, setField(reverse(rows[0]))).Val()
+			bytes := client.HStrLen(ctx, keyFor(b, c, state.Binding), setField(reverse(rows[0]))).Val()
 			// Preload scripts to exclude EVALSHA's initial NOSCRIPT retry.
 			if _, err := c.Read(ctx, state, keys); err != nil {
 				b.Fatal(err)

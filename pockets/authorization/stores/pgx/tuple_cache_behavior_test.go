@@ -86,7 +86,7 @@ func TestPostgresTupleCacheBatchAndRevocation(t *testing.T) {
 	if source.reads != 1 || components.TupleCache.Stats().Hits != 1 {
 		t.Fatalf("warm read fell back: %d/%+v", source.reads, components.TupleCache.Stats())
 	}
-	state, err := backend.State(t.Context())
+	state, err := backend.State(t.Context(), components.TupleCache.Binding())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -105,7 +105,7 @@ func TestPostgresTupleCacheBatchAndRevocation(t *testing.T) {
 	if source.reads != 1 {
 		t.Fatal("revocation check required source snapshot")
 	}
-	state, err = backend.State(t.Context())
+	state, err = backend.State(t.Context(), components.TupleCache.Binding())
 	if err != nil {
 		t.Fatal(err)
 	}

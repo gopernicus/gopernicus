@@ -145,7 +145,7 @@ func TestSQLRedisDeliveryRecovery(t *testing.T) {
 			source := &observedSource{Source: repos.TupleSource}
 			repos.TupleSource = source
 			client, _ := startRedis(t, "", false)
-			backend, err := NewTupleCache(client, "sql-redis", WithLimits(Limits{MaxMutationBytes: 32768}))
+			backend, err := NewTupleCache(client, WithNamespace("sql-redis"), WithLimits(Limits{MaxMutationBytes: 32768}))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -201,7 +201,7 @@ func TestSQLRedisDeliveryRecovery(t *testing.T) {
 			if err := components.TupleCache.Poll(t.Context()); err != nil {
 				t.Fatal(err)
 			}
-			if err := client.Del(t.Context(), backend.key).Err(); err != nil {
+			if err := client.Del(t.Context(), keyFor(t, backend, components.TupleCache.Binding())).Err(); err != nil {
 				t.Fatal(err)
 			}
 			check(true)
@@ -225,14 +225,14 @@ func TestSQLRedisDeliveryRecovery(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			before, err := backend.State(t.Context())
+			before, err := backend.State(t.Context(), components.TupleCache.Binding())
 			if err != nil {
 				t.Fatal(err)
 			}
 			if err := components.TupleCache.Poll(t.Context()); !errors.Is(err, tuplecache.ErrCapacity) {
 				t.Fatalf("oversized delta: %v", err)
 			}
-			after, err := backend.State(t.Context())
+			after, err := backend.State(t.Context(), components.TupleCache.Binding())
 			if err != nil || after != before {
 				t.Fatalf("oversized delta changed mirror: %v/%v", after, err)
 			}
@@ -244,7 +244,7 @@ func TestSQLRedisDeliveryRecovery(t *testing.T) {
 				t.Fatal(err)
 			}
 			check(true)
-			state, err := backend.State(t.Context())
+			state, err := backend.State(t.Context(), components.TupleCache.Binding())
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -252,7 +252,7 @@ func TestSQLRedisDeliveryRecovery(t *testing.T) {
 			if err != nil || snapshot.Full || len(snapshot.Changes) != 0 {
 				t.Fatalf("recovery left work or inconsistent receipt: %+v/%v", snapshot, err)
 			}
-			limited, err := NewTupleCache(client, "sql-redis", WithLimits(Limits{MaxReadBytes: 128, MaxMutationBytes: 32768}))
+			limited, err := NewTupleCache(client, WithNamespace("sql-redis"), WithLimits(Limits{MaxReadBytes: 128, MaxMutationBytes: 32768}))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -347,6 +347,63 @@ func TestSQLRedisModelFreeRoleReads(t *testing.T) {
 	}
 }
 
+// Acceptance for #76: a restart with an unchanged binding resumes the
+// persisted mirror by delta instead of rebuilding it.
+func TestSQLRedisRestartResumesDeltas(t *testing.T) {
+	for _, dialect := range []string{"sqlite", "postgres"} {
+		t.Run(dialect, func(t *testing.T) {
+			repos := endToEndRepositories(t, dialect)
+			fact := tuples.Tuple{Scope: tuples.Global(), Relation: "admin", Subject: tuples.SubjectRef{Type: "user", ID: "alice"}}
+			if err := repos.Tuples.ApplyTuples(t.Context(), tuples.Changes{Add: []tuples.Tuple{fact}}); err != nil {
+				t.Fatal(err)
+			}
+			client, server := startRedis(t, "", true)
+			first, err := authorization.New(repos, authorization.WithTupleCache(newCache(t, client), tuplecache.Policy{MaxStaleness: time.Minute}))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := first.TupleCache.Poll(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			_ = first.TupleCache.Close()
+			server.stop()
+			restored, _ := startRedis(t, server.dir, true)
+			if err := repos.Tuples.ApplyTuples(t.Context(), tuples.Changes{Remove: []tuples.Tuple{fact}}); err != nil {
+				t.Fatal(err)
+			}
+			resumed, err := authorization.New(repos, authorization.WithTupleCache(newCache(t, restored), tuplecache.Policy{MaxStaleness: time.Minute}))
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = resumed.TupleCache.Close() })
+			if err := resumed.TupleCache.Poll(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			if stats := resumed.TupleCache.Stats(); stats.Rebuilds != 0 || stats.LastPoll.Full || stats.LastPoll.Changes != 1 {
+				t.Fatalf("restart with unchanged binding rebuilt: %+v", stats)
+			}
+			principal := model.PrincipalRef{Type: "user", ID: "alice"}
+			if held, err := resumed.Roles.HasRole(t.Context(), principal, "admin"); err != nil || held {
+				t.Fatalf("resumed mirror missed the revocation: %v/%v", held, err)
+			}
+			if stats := resumed.TupleCache.Stats(); stats.Hits != 1 || stats.Fallbacks != 0 {
+				t.Fatalf("revocation must be proved in the resumed mirror: %+v", stats)
+			}
+			// F5: an idle poll renews the live mirror's expiry.
+			key := keyFor(t, newCache(t, restored), resumed.TupleCache.Binding())
+			if err := restored.PExpire(t.Context(), key, time.Minute).Err(); err != nil {
+				t.Fatal(err)
+			}
+			if err := resumed.TupleCache.Poll(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			if ttl := restored.PTTL(t.Context(), key).Val(); ttl <= defaultExpiry-time.Minute {
+				t.Fatalf("idle poll did not renew expiry: %v", ttl)
+			}
+		})
+	}
+}
+
 func TestSQLRedisEventOrderPreservesFinalRevocation(t *testing.T) {
 	for _, dialect := range []string{"sqlite", "postgres"} {
 		t.Run(dialect, func(t *testing.T) {
@@ -400,7 +457,7 @@ func BenchmarkSQLRedisDecisions(b *testing.B) {
 					repos := endToEndRepositories(b, dialect)
 					requests, ids, _ := endToEndSeed(b, repos, 128)
 					client, _ := startRedis(b, "", false)
-					backend, err := NewTupleCache(client, "benchmark")
+					backend, err := NewTupleCache(client, WithNamespace("benchmark"))
 					if err != nil {
 						b.Fatal(err)
 					}

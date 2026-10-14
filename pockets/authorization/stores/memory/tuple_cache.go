@@ -13,10 +13,15 @@ import (
 	"github.com/gopernicus/gopernicus/sdk"
 )
 
-// TupleCache is the in-memory reference backend for a complete raw mirror.
-// It is separate from Store, which owns the authoritative in-memory facts.
+// TupleCache is the in-memory reference backend for complete raw mirrors, one
+// per binding. It is separate from Store, which owns the authoritative
+// in-memory facts.
 type TupleCache struct {
-	mu    sync.Mutex
+	mu      sync.Mutex
+	mirrors map[string]*mirror
+}
+
+type mirror struct {
 	state tuplecache.State
 	until time.Time
 	sets  map[tuplecache.SetKey][]tuples.Tuple
@@ -24,22 +29,56 @@ type TupleCache struct {
 
 func NewTupleCache() *TupleCache { return &TupleCache{} }
 
-func (c *TupleCache) State(ctx context.Context) (tuplecache.State, error) {
+// mirrorFor returns the mirror for binding, or an empty one. Callers hold mu.
+func (c *TupleCache) mirrorFor(binding string) *mirror {
+	if m := c.mirrors[binding]; m != nil {
+		return m
+	}
+	return &mirror{}
+}
+
+// validBinding applies the goredis key allow-list, so a custom Source binding
+// that production would reject also fails here.
+func validBinding(binding string) error {
+	if binding == "" {
+		return fmt.Errorf("tuple cache binding is empty: %w", sdk.ErrInvalidInput)
+	}
+	for _, ch := range binding {
+		switch {
+		case ch >= 'a' && ch <= 'z', ch >= 'A' && ch <= 'Z', ch >= '0' && ch <= '9':
+		case ch == ':', ch == '.', ch == '_', ch == '-', ch == '/':
+		default:
+			return fmt.Errorf("tuple cache binding must contain only ASCII letters, digits or :._-/: %w", sdk.ErrInvalidInput)
+		}
+	}
+	return nil
+}
+
+func (c *TupleCache) State(ctx context.Context, binding string) (tuplecache.State, error) {
+	if err := validBinding(binding); err != nil {
+		return tuplecache.State{}, err
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if err := ctx.Err(); err != nil {
 		return tuplecache.State{}, err
 	}
-	return c.state, nil
+	return c.mirrorFor(binding).state, nil
 }
 
 func (c *TupleCache) Read(ctx context.Context, expected tuplecache.State, keys []tuplecache.SetKey) ([][]tuples.Tuple, error) {
+	if expected.Binding != "" {
+		if err := validBinding(expected.Binding); err != nil {
+			return nil, err
+		}
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if expected != c.state || c.state.Receipt == "" || !time.Now().Before(c.until) {
+	m := c.mirrorFor(expected.Binding)
+	if expected != m.state || m.state.Receipt == "" || !time.Now().Before(m.until) {
 		return nil, tuplecache.ErrUnavailable
 	}
 	out := make([][]tuples.Tuple, len(keys))
@@ -47,21 +86,28 @@ func (c *TupleCache) Read(ctx context.Context, expected tuplecache.State, keys [
 		if err := key.Validate(); err != nil {
 			return nil, err
 		}
-		out[i] = slices.Clone(c.sets[key])
+		out[i] = slices.Clone(m.sets[key])
 	}
 	return out, nil
 }
 
 func (c *TupleCache) Publish(ctx context.Context, expected, next tuplecache.State, snapshot tuplecache.Snapshot, validFor time.Duration) error {
 	started := time.Now()
-	if validFor <= 0 || next.Binding == "" || next.Receipt == "" || ((snapshot.Full || len(snapshot.Changes) > 0) && next == expected) {
+	if validFor <= 0 || next.Binding == "" || next.Receipt == "" || (expected.Binding == "") != (expected.Receipt == "") {
 		return fmt.Errorf("tuple cache: invalid publication: %w", sdk.ErrInvalidInput)
-	}
-	if !snapshot.Full && (expected.Binding != next.Binding || expected.Receipt == "") {
-		return tuplecache.ErrConflict
 	}
 	if expected.Binding != "" && expected.Binding != next.Binding {
 		return tuplecache.ErrBinding
+	}
+	if (snapshot.Full || len(snapshot.Changes) > 0) && next == expected {
+		return fmt.Errorf("tuple cache: invalid publication: %w", sdk.ErrInvalidInput)
+	}
+	// Same refusal order as goredis: a delta needs an existing mirror.
+	if !snapshot.Full && expected.Binding == "" {
+		return tuplecache.ErrUnavailable
+	}
+	if err := validBinding(next.Binding); err != nil {
+		return err
 	}
 	for _, t := range snapshot.Tuples {
 		if err := t.Validate(); err != nil {
@@ -87,10 +133,11 @@ func (c *TupleCache) Publish(ctx context.Context, expected, next tuplecache.Stat
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if c.state != expected {
+	m := c.mirrorFor(next.Binding)
+	if m.state != expected {
 		return tuplecache.ErrConflict
 	}
-	sets := maps.Clone(c.sets)
+	sets := maps.Clone(m.sets)
 	if sets == nil || snapshot.Full {
 		sets = make(map[tuplecache.SetKey][]tuples.Tuple)
 	}
@@ -133,6 +180,9 @@ func (c *TupleCache) Publish(ctx context.Context, expected, next tuplecache.Stat
 	if !time.Now().Before(until) {
 		return tuplecache.ErrUnavailable
 	}
-	c.sets, c.state, c.until = sets, next, until
+	if c.mirrors == nil {
+		c.mirrors = make(map[string]*mirror)
+	}
+	c.mirrors[next.Binding] = &mirror{state: next, until: until, sets: sets}
 	return nil
 }

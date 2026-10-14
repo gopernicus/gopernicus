@@ -240,7 +240,7 @@ func TestThroughBatchSQLiteTupleCache(t *testing.T) {
 	if stats := components.TupleCache.Stats(); stats.Hits != 2 || stats.Rebuilds != 1 {
 		t.Fatalf("cache not serving: %+v", stats)
 	}
-	first, err := backend.State(t.Context())
+	first, err := backend.State(t.Context(), components.TupleCache.Binding())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -260,7 +260,7 @@ func TestThroughBatchSQLiteTupleCache(t *testing.T) {
 		t.Fatal(err)
 	}
 	check(false, 6) // Revoked grants require exploring the remaining Through branches.
-	second, err := backend.State(t.Context())
+	second, err := backend.State(t.Context(), components.TupleCache.Binding())
 	if err != nil {
 		t.Fatal(err)
 	}

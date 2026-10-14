@@ -41,7 +41,7 @@ func TestRebuildRecoversRejectedDelta(t *testing.T) {
 	backend := &capacityBackend{Backend: memory.NewTupleCache(), maxChanges: 0}
 	c, s := fixture(t, []tuplefacts.Tuple{grant}, backend)
 	poll(t, c)
-	before, err := backend.State(t.Context())
+	before, err := backend.State(t.Context(), c.Binding())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -49,7 +49,7 @@ func TestRebuildRecoversRejectedDelta(t *testing.T) {
 	if err := c.Poll(t.Context()); !errors.Is(err, tuplecache.ErrCapacity) {
 		t.Fatalf("oversized delta: %v", err)
 	}
-	after, err := backend.State(t.Context())
+	after, err := backend.State(t.Context(), c.Binding())
 	if err != nil || before != after || len(s.pending) != 1 || s.acks != 1 {
 		t.Fatalf("failed publication changed receipt or acknowledged: %v/%v pending=%d acks=%d", after, err, len(s.pending), s.acks)
 	}

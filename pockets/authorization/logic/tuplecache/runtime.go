@@ -15,8 +15,14 @@ import (
 	"github.com/gopernicus/gopernicus/sdk/pkg/workers"
 )
 
+// DefaultMaxStaleness is the revocation window when Policy.MaxStaleness is zero.
+const DefaultMaxStaleness = 5 * time.Second
+
 // Policy separates delivery freshness from tuple storage: tuples do not expire.
-// MaxStaleness must be explicitly chosen by the host; it accepts delayed writes.
+// MaxStaleness bounds how long a revocation may remain unseen; zero selects
+// DefaultMaxStaleness. It is part of the binding, so every replica sharing an
+// authorization database must use the same value. PollInterval zero selects
+// min(1s, MaxStaleness/4); it is not part of the binding, so replicas may differ.
 type Policy struct {
 	MaxStaleness time.Duration
 	PollInterval time.Duration
@@ -69,11 +75,14 @@ func New(source Source, backend Backend, opts ...Option) (*TupleCache, error) {
 		}
 		opt(&p)
 	}
-	if nilValue(source) || nilValue(backend) || source.Binding() == "" || p.MaxStaleness <= 0 {
-		return nil, fmt.Errorf("tuple cache: source, backend and positive MaxStaleness required: %w", sdk.ErrInvalidInput)
+	if nilValue(source) || nilValue(backend) || source.Binding() == "" || p.MaxStaleness < 0 {
+		return nil, fmt.Errorf("tuple cache: source, backend and nonnegative MaxStaleness required: %w", sdk.ErrInvalidInput)
+	}
+	if p.MaxStaleness == 0 {
+		p.MaxStaleness = DefaultMaxStaleness
 	}
 	if p.PollInterval == 0 {
-		p.PollInterval = min(250*time.Millisecond, p.MaxStaleness/4)
+		p.PollInterval = min(time.Second, p.MaxStaleness/4)
 	}
 	if p.PollTimeout == 0 {
 		p.PollTimeout = 30 * time.Second
@@ -185,10 +194,12 @@ func (c *TupleCache) poll(ctx context.Context, rebuild bool) (err error) {
 	}()
 	ctx, cancel := context.WithTimeout(ctx, c.policy.PollTimeout)
 	defer cancel()
-	before, err := c.backend.State(ctx)
+	before, err := c.backend.State(ctx, c.binding)
 	if err != nil {
 		return err
 	}
+	// A correct backend only returns this binding's mirror; anything else is
+	// a foreign mirror under our key, so refuse rather than overwrite it.
 	if before.Binding != "" && before.Binding != c.Binding() {
 		return ErrBinding
 	}
@@ -303,7 +314,7 @@ func (c *TupleCache) Run(ctx context.Context, evaluate func(context.Context, Che
 func (c *TupleCache) attempt(ctx context.Context, evaluate func(context.Context, CheckReads) error) (bool, error) {
 	cacheCtx, cancel := context.WithTimeout(ctx, c.policy.ReadTimeout)
 	defer cancel()
-	state, err := c.backend.State(cacheCtx)
+	state, err := c.backend.State(cacheCtx, c.binding)
 	if err != nil {
 		return false, err
 	}

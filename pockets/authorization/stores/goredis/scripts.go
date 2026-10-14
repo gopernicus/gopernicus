@@ -23,6 +23,10 @@ local function matches(key, binding, receipt)
   local b, r = state(key)
   return b == binding and r == receipt
 end
+-- Renew the mirror's retention on every publication; 0 keeps it forever.
+local function retain(key, ms)
+  if ms > 0 then redis.call('PEXPIRE', key, ms) else redis.call('PERSIST', key) end
+end
 `
 
 var (
@@ -68,7 +72,7 @@ if redis.call('TYPE', KEYS[2]).ok ~= 'hash' or redis.call('HGET', KEYS[2], '!pre
 redis.call('HSET', KEYS[2], '!schema', '2', '!binding', ARGV[3], '!receipt', ARGV[4], '!until', ARGV[5])
 redis.call('HDEL', KEYS[2], '!prepared')
 redis.call('RENAME', KEYS[2], KEYS[1])
-redis.call('PERSIST', KEYS[1])
+retain(KEYS[1], tonumber(ARGV[6]))
 return 1
 `)
 	deltaScript = redis.NewScript(metadataLua + `
@@ -81,7 +85,7 @@ if not deadline or deadline <= now_ms() then return -1 end
 -- Field names are passed separately so no JSON decode is needed for this check.
 local max_bytes, bytes, allowed = tonumber(ARGV[7]), #ARGV[6], {}
 if bytes > max_bytes then return -2 end
-for i = 8, #ARGV do
+for i = 9, #ARGV do
   if not allowed[ARGV[i]] then
     bytes = bytes + redis.call('HSTRLEN', KEYS[1], ARGV[i])
     if bytes > max_bytes then return -2 end
@@ -164,6 +168,7 @@ redis.call('HDEL', KEYS[1], '!schema')
 for _, pair in ipairs(values) do redis.call('HSET', KEYS[1], pair[1], pair[2]) end
 for _, field in ipairs(deleted) do redis.call('HDEL', KEYS[1], field) end
 redis.call('HSET', KEYS[1], '!schema', '2', '!binding', ARGV[3], '!receipt', ARGV[4], '!until', ARGV[5])
+retain(KEYS[1], tonumber(ARGV[8]))
 return 1
 `)
 )
