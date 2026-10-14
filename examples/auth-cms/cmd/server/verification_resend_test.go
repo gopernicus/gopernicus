@@ -167,10 +167,14 @@ func TestAdminResendReportsRealTargetState(t *testing.T) {
 	// its id must come from the directory rather than /auth/me.
 	const unverified = "admin-resend-target@example.com"
 	reg := host.newClient()
+	beforeRegister := host.sender.count()
 	if resp, body := reg.do("POST", "/auth/register",
 		`{"email":"`+unverified+`","password":"`+linkPassword+`","display_name":"Target"}`, nil); resp.StatusCode != http.StatusCreated {
 		t.Fatalf("register = %d; body=%s", resp.StatusCode, body)
 	}
+	// Delivery is asynchronous. Drain the registration mail first, or it can land
+	// after the resend's baseline and be read as the (superseded) resent code.
+	host.awaitCode(beforeRegister, unverified)
 	targetID := host.findUserID(t, admin, unverified)
 
 	header := func() http.Header { return http.Header{"X-CSRF-Token": {admin.csrfToken()}} }
