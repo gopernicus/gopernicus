@@ -1,0 +1,41 @@
+{
+	"public_proxy": "https://proxy.golang.org",
+	"checksum_database": "sum.golang.org",
+	"workspace": "off",
+	"modules": {
+		"pockets/authorization": {
+			"Path": "github.com/gopernicus/gopernicus/pockets/authorization",
+			"Version": "v0.25.0",
+			"Info": "/private/tmp/claude-502/-Users-jrazmi-code-gopernicus-ecosystem-gopernicus/18ba8d6a-5181-48bd-9e16-2f417ff37473/scratchpad/cold25/mod/cache/download/github.com/gopernicus/gopernicus/pockets/authorization/@v/v0.25.0.info",
+			"GoMod": "/private/tmp/claude-502/-Users-jrazmi-code-gopernicus-ecosystem-gopernicus/18ba8d6a-5181-48bd-9e16-2f417ff37473/scratchpad/cold25/mod/cache/download/github.com/gopernicus/gopernicus/pockets/authorization/@v/v0.25.0.mod",
+			"Zip": "/private/tmp/claude-502/-Users-jrazmi-code-gopernicus-ecosystem-gopernicus/18ba8d6a-5181-48bd-9e16-2f417ff37473/scratchpad/cold25/mod/cache/download/github.com/gopernicus/gopernicus/pockets/authorization/@v/v0.25.0.zip",
+			"Dir": "/private/tmp/claude-502/-Users-jrazmi-code-gopernicus-ecosystem-gopernicus/18ba8d6a-5181-48bd-9e16-2f417ff37473/scratchpad/cold25/mod/github.com/gopernicus/gopernicus/pockets/authorization@v0.25.0",
+			"Sum": "h1:iBWJ2AmI4fz7KOvkQMBWHm3/BchNOGJYWfr0IMOaTq8=",
+			"GoModSum": "h1:SWt/blN2Csf2p8dohOtJXbINP/BT5Z3oV9/GOxkFXGo=",
+			"Origin": {
+				"VCS": "git",
+				"URL": "https://github.com/gopernicus/gopernicus",
+				"Subdir": "pockets/authorization",
+				"Hash": "fabc62613874fe5c59de4ac2a19f21268b9af7d7",
+				"Ref": "refs/tags/pockets/authorization/v0.25.0"
+			}
+		},
+		"pockets/authorization/stores/goredis": {
+			"Path": "github.com/gopernicus/gopernicus/pockets/authorization/stores/goredis",
+			"Version": "v0.5.0",
+			"Info": "/private/tmp/claude-502/-Users-jrazmi-code-gopernicus-ecosystem-gopernicus/18ba8d6a-5181-48bd-9e16-2f417ff37473/scratchpad/cold25/mod/cache/download/github.com/gopernicus/gopernicus/pockets/authorization/stores/goredis/@v/v0.5.0.info",
+			"GoMod": "/private/tmp/claude-502/-Users-jrazmi-code-gopernicus-ecosystem-gopernicus/18ba8d6a-5181-48bd-9e16-2f417ff37473/scratchpad/cold25/mod/cache/download/github.com/gopernicus/gopernicus/pockets/authorization/stores/goredis/@v/v0.5.0.mod",
+			"Zip": "/private/tmp/claude-502/-Users-jrazmi-code-gopernicus-ecosystem-gopernicus/18ba8d6a-5181-48bd-9e16-2f417ff37473/scratchpad/cold25/mod/cache/download/github.com/gopernicus/gopernicus/pockets/authorization/stores/goredis/@v/v0.5.0.zip",
+			"Dir": "/private/tmp/claude-502/-Users-jrazmi-code-gopernicus-ecosystem-gopernicus/18ba8d6a-5181-48bd-9e16-2f417ff37473/scratchpad/cold25/mod/github.com/gopernicus/gopernicus/pockets/authorization/stores/goredis@v0.5.0",
+			"Sum": "h1:MMsYG2yR1aiXAJ0ojATXG09S00GaCBPN4uVVXcmhsGA=",
+			"GoModSum": "h1:/TC9wueLz7EtaBkP1dYx7US4B1+qkUP7cHvqRF1FW/s=",
+			"Origin": {
+				"VCS": "git",
+				"URL": "https://github.com/gopernicus/gopernicus",
+				"Subdir": "pockets/authorization/stores/goredis",
+				"Hash": "63af377b950a2ae14b03798dfb16e805e40a12df",
+				"Ref": "refs/tags/pockets/authorization/stores/goredis/v0.5.0"
+			}
+		}
+	}
+}

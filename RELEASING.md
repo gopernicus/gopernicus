@@ -49,6 +49,55 @@ Design, rulings and build notes: [the plan](plans/per-route-lookup-strategy.md).
 Host repins: [gps-360-go](plans/gps-360-go-authorization-v0.26-repin-handoff.md),
 [Segovia v2](plans/segovia-v2-authorization-v0.26-repin-handoff.md).
 
+## Tuple-cache mirror keyed on its binding (authorization v0.25.0; goredis v0.5.0 — published 2026-10-14)
+
+Fixes #76. This release has two parts: the core MINOR `pockets/authorization` `v0.25.0`, and the
+Redis adapter `pockets/authorization/stores/goredis` `v0.5.0`. The pgx and Turso adapters were
+repinned without a tag; their runtime code did not change, so pgx `v0.18.0` and Turso `v0.17.0`
+remain current.
+
+**What changed.**
+- **Keys.** `tuplecache.Backend.State` now takes the runtime binding. The goredis mirror is keyed
+  `tuplecache:v3:{<binding>}`, or `{<namespace>/<binding>}`, so hosts never type a value that has
+  to match the binding.
+- **Breaking constructor change.** `goredis.NewTupleCache(client, namespace, opts...)` becomes
+  `NewTupleCache(client, opts...)`, and the namespace moves to the optional
+  `goredis.WithNamespace`. goredis v0.4.0 does not satisfy the v0.25 `Backend` interface, so
+  hosts must bump both modules together.
+- **Expiry.** Every publication renews a Redis `PEXPIRE` on the mirror (`WithExpiry`, default 7
+  days; `0` never expires). Superseded mirrors therefore expire on their own.
+- **New defaults.** `Policy.MaxStaleness` zero now selects 5s. The default `PollInterval` is now
+  `min(1s, MaxStaleness/4)`, previously `min(250ms, …)`.
+- **Known limitation, issue #80.** Run one steady-state binding per authorization database: every
+  replica must use the same `MaxStaleness`. While two bindings overlap, each one rebuilds in full
+  on every poll. Answers stay correct; only the cost rises. The owner has no plans to build
+  per-binding receipts.
+
+**Host rollout.** Redis keys move from `v2` to `v3`.
+- Deploy quickly, or turn the cache off, deploy, and turn it back on.
+- Old binaries `PERSIST`ed the `tuplecache:v2:` key. Delete it by hand once the whole fleet runs
+  v3, and never before.
+- Rollback is safe: a v2 binary ignores the v3 keys and rebuilds its own key once.
+
+The goredis README covers all of this under "Redis key", "One binding per authorization
+database" and "Mirror expiry and orphans".
+
+**Tags and verification.**
+- `pockets/authorization/v0.25.0` is annotated at `fabc62613874fe5c59de4ac2a19f21268b9af7d7`
+  (PR #77). The pin commit came next (PR #79), and `stores/goredis/v0.5.0` is annotated on it at
+  `63af377b950a2ae14b03798dfb16e805e40a12df`.
+- PR #78 fixed a race in the auth-cms resend test, which had been taken for a known flake.
+- Each proxy `.info` resolved on the first poll.
+- This record was backfilled on 2026-10-14 after the v0.26.0 release. Both archives were then
+  re-verified cold (`GOWORK=off`, empty module cache, `proxy.golang.org`, `sum.golang.org`):
+  build, vet, uncached tests (goredis against a local `redis-server`, with no skips) and
+  `go mod verify`.
+- Hosted Turso was not run; its adapter has no cache-runtime change.
+
+Checksums and provenance: [release manifest](plans/tuplecache-key-on-binding-release-manifest.json).
+Design, review findings F1–F12 and rulings: [the plan](plans/tuplecache-key-on-binding.md).
+Host adoption is covered by the v0.26.0 repin handoffs, which span this release.
+
 ## Invitation terminal settlement (published 2026-10-13)
 
 Coordinated MINOR releases: authorization `v0.24.0`, its PostgreSQL adapter
