@@ -40,7 +40,7 @@ func TestCheckSnapshotCompletionFailureDiscardsResults(t *testing.T) {
 	for name, operation := range operations {
 		for _, failure := range []string{"completion", "canceled", "nil reader", "typed nil reader"} {
 			t.Run(name+"/"+failure, func(t *testing.T) {
-				ctx, cancel := context.WithCancel(t.Context())
+				ctx, cancel := context.WithCancel(subjectFirst(t.Context()))
 				defer cancel()
 				svc := newLimitedService(t, &fakeStore{tuples: []CreateRelationship{tuple("space", "a", "viewer", "user", "u1", "")}}, setHierarchySchema(), authmodel.EvaluationLimits{})
 				reader := svc.reader
@@ -128,7 +128,7 @@ func TestCheckSnapshotsDoNotNestOrReplaceExplicitReads(t *testing.T) {
 		calls++
 		return fn(ctx, graphSnapshotFacts{Reader: reader})
 	}
-	if got, err := svc.LookupResources(t.Context(), setPrincipal, "view", "space"); err != nil || len(got.IDs) != 1 || calls != 1 {
+	if got, err := svc.LookupResources(subjectFirst(t.Context()), setPrincipal, "view", "space"); err != nil || len(got.IDs) != 1 || calls != 1 {
 		t.Fatalf("lookup result=%v err=%v snapshots=%d; want one snapshot including verification", got, err, calls)
 	}
 	svc.store.(*graphFixture).snapshot = func(context.Context, func(context.Context, tuples.Reader) error) error {
@@ -137,13 +137,13 @@ func TestCheckSnapshotsDoNotNestOrReplaceExplicitReads(t *testing.T) {
 	}
 	source := explicitCheckSource{CheckReader: reader}
 	req := authmodel.CheckRequest{Principal: setPrincipal, Permission: "view", Resource: authmodel.Resource{Type: "space", ID: "a"}}
-	if got, err := svc.CheckWith(t.Context(), source, req); err != nil || !got.Allowed {
+	if got, err := svc.CheckWith(subjectFirst(t.Context()), source, req); err != nil || !got.Allowed {
 		t.Fatalf("CheckWith: %v/%v", got, err)
 	}
-	if got, _, err := svc.CheckExplainWith(t.Context(), source, req); err != nil || !got.Allowed {
+	if got, _, err := svc.CheckExplainWith(subjectFirst(t.Context()), source, req); err != nil || !got.Allowed {
 		t.Fatalf("CheckExplainWith: %v/%v", got, err)
 	}
-	if got, err := svc.CheckBatchWith(t.Context(), source, []authmodel.CheckRequest{req}); err != nil || len(got) != 1 || !got[0].Allowed {
+	if got, err := svc.CheckBatchWith(subjectFirst(t.Context()), source, []authmodel.CheckRequest{req}); err != nil || len(got) != 1 || !got[0].Allowed {
 		t.Fatalf("CheckBatchWith: %v/%v", got, err)
 	}
 }

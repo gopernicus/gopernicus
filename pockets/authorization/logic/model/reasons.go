@@ -28,6 +28,12 @@ const (
 	// masquerades as it.
 	ReasonDenied Reason = "denied"
 
+	// ReasonDirectHit appears only in ExplainStep.Outcome, for a direct-relation
+	// check granted by the principal's own tuple without group expansion. It is
+	// never a CheckResult.ReasonCode or an Explanation.Decision: those stay
+	// ReasonGranted for the same decision.
+	ReasonDirectHit Reason = "direct_hit"
+
 	// ReasonInvalidRequest — the request is structurally malformed (empty,
 	// over-long, non-UTF-8, or control-character-bearing type/id/relation/
 	// permission). Maps to sdk.ErrInvalidInput / HTTP 400.

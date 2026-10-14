@@ -1,9 +1,11 @@
 package decisions
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 
+	"github.com/gopernicus/gopernicus/pockets/authorization/internal/decisionmode"
 	authmodel "github.com/gopernicus/gopernicus/pockets/authorization/logic/model"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/relationships"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuplecache"
@@ -34,6 +36,9 @@ type Service struct {
 	tupleCache  *tuplecache.TupleCache
 	diagnostic  DiagnosticObserver
 	diagnostics *operationDiagnostics
+
+	// subjectFirst disables the direct-hit short circuit for one bound view.
+	subjectFirst bool
 }
 
 func NewService(reader tuples.Reader, opts ...Option) (*Service, error) {
@@ -106,10 +111,11 @@ func (s *Service) graphReader(facts tuples.Reader) Reader {
 	}
 	return fallback
 }
-func (s *Service) bound(facts tuples.Reader) *Service {
+func (s *Service) bound(ctx context.Context, facts tuples.Reader) *Service {
 	v := *s
 	v.facts = &memoFacts{Reader: facts, values: map[tuples.Tuple]bool{}}
 	v.reader = v.graphReader(facts)
 	v.inSnapshot = true
+	v.subjectFirst = decisionmode.SubjectFirst(ctx)
 	return &v
 }

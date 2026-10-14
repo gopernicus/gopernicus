@@ -4,6 +4,49 @@ Authorization ships a fresh canonical SQL schema for PostgreSQL and SQLite/Turso
 Hosts export and apply it before constructing repositories. Framework constructors
 validate the applied schema; they do not create tables or run migrations.
 
+## Adopting the direct-hit short circuit (v0.26.0)
+
+Upgrade authorization core. No host code change, no migration and no new
+option is required; the short circuit is on for every `Direct` relation. See
+[Direct-grant short circuit and read costs](../README.md#direct-grant-short-circuit-and-read-costs).
+
+**Budget-edge answers change.** A principal whose subject-first expansion
+exceeds `MaxGraphStates` used to receive `ErrEvaluationLimit` (503) even when
+directly granted. Now a direct hit grants, and on a relation that admits no
+userset subject a miss denies. Every other overflow, including a miss on a
+relation that admits usersets, still returns `ErrEvaluationLimit` and is never
+a deny.
+
+**Explain outcomes gain `direct_hit`.** `model.ReasonDirectHit`
+(`"direct_hit"`) can now appear in `ExplainStep.Outcome`, on a
+`Kind: "direct"` step answered by the principal's own tuple. Code that compares
+step outcomes to `ReasonGranted` must also accept `ReasonDirectHit`.
+`CheckResult.ReasonCode`, `Explanation.Decision` and `Reason` are unchanged.
+
+**Store modules.** Store runtime code is unchanged and existing store tags work
+with authorization v0.26.0. The PostgreSQL, Turso and Redis store test suites
+call the new `storetest` equivalence suite, so those modules repin
+authorization to v0.26.0 for their own tests.
+
+**Misses on userset relations cost more.** A single check that misses on a
+relation admitting usersets pays one extra round trip before expanding (about
+30 µs on loopback PostgreSQL). On SQL stores, `CheckBatch` and
+`FilterAuthorized` add statements for each Direct level they probe: in the
+benchmark graph, `2 × ceil(n/100)` more for n requests (7, 9, 13 and 21
+statements instead of 5, 5, 5 and 9 at n = 50, 128, 366 and 600). This matters
+most on remote Turso, where each statement is a network round trip.
+
+**Wide resources.** With TupleCache on, the probe decodes the resource's whole
+forward set, so a check on a resource with 10,001 direct grantees goes from
+about 4 µs to about 1 ms and allocates about 3.1 MB. On a vacuumed and analyzed
+PostgreSQL table the same check gets faster (about 148 µs to 112 µs). On a
+freshly loaded or un-vacuumed table, PostgreSQL's cached generic plan for the
+exact probe can prefer `idx_iam_tuples_relation_resource` and filter every
+grantee (about 0.83 ms) until autovacuum runs; resource-scoped `RoleIn` checks
+and batch exact reads already share that exposure. Principals with many grants
+checked on small resources get much faster on both. See
+[BENCHMARKS.md](../BENCHMARKS.md#direct-hit-short-circuit-unreleased-2026-10-14).
+
 ## Adopting operation fences (v0.24.0) — a one-way migration
 
 Upgrade authorization core with PostgreSQL store `v0.18.0` or Turso store

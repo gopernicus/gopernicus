@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"slices"
 	"sort"
 	"strings"
 
@@ -65,6 +66,9 @@ type compiledResourceType struct {
 type compiledRelation struct {
 	subjects []SubjectTypeRef // sorted, duplicate-free
 	kind     relationKind
+	// hasUsersets reports whether any allowed subject is a userset. Without one,
+	// subject-first expansion can match only the concrete principal itself.
+	hasUsersets bool
 }
 
 type compiledPermission struct {
@@ -165,9 +169,11 @@ func Compile(schema Model) (*CompiledModel, error) {
 			if navRefs[[2]string{rtName, relName}] {
 				kind = relationNavigational
 			}
+			subjects := dedupeSortSubjects(rel.AllowedSubjects)
 			crt.relations[relName] = compiledRelation{
-				subjects: dedupeSortSubjects(rel.AllowedSubjects),
-				kind:     kind,
+				subjects:    subjects,
+				kind:        kind,
+				hasUsersets: slices.ContainsFunc(subjects, func(s SubjectTypeRef) bool { return s.Relation != "" }),
 			}
 		}
 		for permName, rule := range rt.Permissions {
@@ -232,6 +238,14 @@ func (c *CompiledModel) relationSubjects(resourceType, relation string) (subject
 		return nil, true, false
 	}
 	return rel.subjects, true, true
+}
+
+// relationHasUsersets reports whether the compiled relation admits any userset
+// subject. An undeclared relation reports true, so callers never treat a miss
+// as final for a shape the model does not describe.
+func (c *CompiledModel) relationHasUsersets(resourceType, relation string) bool {
+	rel, ok := c.resourceTypes[resourceType].relations[relation]
+	return !ok || rel.hasUsersets
 }
 
 // relationResourceTargets returns the precomputed sorted concrete resource-target

@@ -214,7 +214,7 @@ func TestFilterAuthorizedReusesSharedParentReads(t *testing.T) {
 		store := &graphStore{}
 		store.tuples = wideDeniedTuples(n)
 		svc := newLimitedService(t, store, wideSchema(), authmodel.EvaluationLimits{})
-		allowed, err := svc.FilterAuthorized(context.Background(), setPrincipal, "view", "post", deniedCandidates(n))
+		allowed, err := svc.FilterAuthorized(subjectFirst(context.Background()), setPrincipal, "view", "post", deniedCandidates(n))
 		if err != nil || len(allowed) != 0 {
 			t.Fatalf("n=%d allowed=%v err=%v", n, allowed, err)
 		}

@@ -11,6 +11,7 @@ import (
 
 	"github.com/gopernicus/gopernicus/pockets/authorization/stores/storetest"
 
+	"github.com/gopernicus/gopernicus/pockets/authorization/internal/decisionmode"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/decisions"
 
 	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
@@ -179,6 +180,53 @@ func TestThroughBatchSQLiteQueryCounts(t *testing.T) {
 	}
 }
 
+// probeStatements is the SQL the direct-hit short circuit adds to one batch
+// over n dashboards: two probe rounds (space#viewer, then tenant#owner), each
+// carrying one probe per request and chunked by tupleTransportBatch. Repeated
+// probes are not deduplicated within a round; a parent space's probe is
+// already memoized from the first round.
+func probeStatements(n int) int {
+	return 2 * ((n + tupleTransportBatch - 1) / tupleTransportBatch)
+}
+
+// TestThroughBatchSQLiteProbeRounds pins how the direct-hit probes grow with
+// batch size, against the same evaluation in pure subject-first mode.
+func TestThroughBatchSQLiteProbeRounds(t *testing.T) {
+	for _, tc := range []struct{ n, subjectFirst int }{{50, 5}, {128, 5}, {366, 5}, {600, 9}} {
+		t.Run(fmt.Sprint(tc.n), func(t *testing.T) {
+			repos, ids, count := batchQueryFixture(t, tc.n)
+			svc, err := decisions.NewService(repos.Tuples, decisions.WithModel(batchQuerySchema()))
+			if err != nil {
+				t.Fatal(err)
+			}
+			alice := authmodel.PrincipalRef{Type: "user", ID: "alice"}
+			requests := make([]authmodel.CheckRequest, len(ids))
+			for i, id := range ids {
+				requests[i] = authmodel.CheckRequest{Principal: alice, Permission: "view", Resource: authmodel.Resource{Type: "dashboard", ID: id}}
+			}
+			for _, pure := range []bool{true, false} {
+				ctx, want := t.Context(), tc.subjectFirst+probeStatements(tc.n)
+				if pure {
+					ctx, want = decisionmode.WithSubjectFirst(ctx), tc.subjectFirst
+				}
+				*count = 0
+				if results, err := svc.CheckBatch(ctx, requests); err != nil || !results[0].Allowed {
+					t.Fatalf("batch: %v", err)
+				}
+				batch := *count
+				*count = 0
+				if allowed, err := svc.FilterAuthorized(ctx, alice, "view", "dashboard", ids); err != nil || len(allowed) != tc.n {
+					t.Fatalf("filter: %d/%v", len(allowed), err)
+				}
+				if batch != want || *count != want {
+					t.Fatalf("subject-first=%v: batch %d, filter %d permission SQL, want %d", pure, batch, *count, want)
+				}
+				t.Logf("subject-first=%v: %d permission SQL statements", pure, want)
+			}
+		})
+	}
+}
+
 func TestThroughBatchSQLiteTupleCache(t *testing.T) {
 	repos, ids, count := batchQueryFixture(t, 128)
 	backend := memory.NewTupleCache()
@@ -232,7 +280,9 @@ func TestThroughBatchSQLiteTupleCache(t *testing.T) {
 		}
 		t.Logf("filter: %d permission SQL queries, %d cache hits, %d durable fallbacks", *count, after.Hits-before.Hits, after.Fallbacks-before.Fallbacks)
 	}
-	check(true, 5) // Initial requests use one durable snapshot; they never fill Redis.
+	// Initial requests use one durable snapshot; they never fill Redis. The
+	// direct-hit probes add probeStatements(128) exact reads to the 5 graph reads.
+	check(true, 5+probeStatements(128))
 	if err := components.TupleCache.Poll(t.Context()); err != nil {
 		t.Fatal(err)
 	}
@@ -259,7 +309,7 @@ func TestThroughBatchSQLiteTupleCache(t *testing.T) {
 	if err := components.TupleCache.Close(); err != nil {
 		t.Fatal(err)
 	}
-	check(false, 6) // Revoked grants require exploring the remaining Through branches.
+	check(false, 6+probeStatements(128)) // Revoked grants require exploring the remaining Through branches.
 	second, err := backend.State(t.Context(), components.TupleCache.Binding())
 	if err != nil {
 		t.Fatal(err)

@@ -53,7 +53,7 @@ func (s *Service) evaluateWith(ctx context.Context, reader tuples.Reader, req au
 	if isNilReader(reader) {
 		return authmodel.CheckResult{}, fmt.Errorf("nil bound tuple reader: %w", sdk.ErrInvalidInput)
 	}
-	view := s.bound(reader)
+	view := s.bound(ctx, reader)
 	return view.check(ctx, req, newBudget(view.limits, newMemoReader(view.reader)))
 }
 func (s *Service) CheckWith(ctx context.Context, reader tuples.Reader, req authmodel.CheckRequest) (authmodel.CheckResult, error) {
@@ -145,7 +145,7 @@ func (s *Service) checkBatchWith(ctx context.Context, reader tuples.Reader, reqs
 	if isNilReader(reader) {
 		return nil, fmt.Errorf("nil bound tuple reader: %w", sdk.ErrInvalidInput)
 	}
-	view := s.bound(reader)
+	view := s.bound(ctx, reader)
 	return view.checkBatch(ctx, view.reader, reqs)
 }
 
@@ -402,14 +402,42 @@ func (s *Service) checkBatchOptimized(ctx context.Context, reader CheckReader, r
 		if check.Relation == "" {
 			continue
 		}
-		batchResults, err := reader.CheckBatchDirect(
-			ctx, first.Resource.Type, resourceIDs, check.Relation, first.Principal.Type, first.Principal.ID, s.limits.MaxGraphStates,
-		)
+		batchResults, err := s.directBatchHits(ctx, first.Resource.Type, resourceIDs, check.Relation, first.Principal)
 		if err != nil {
-			return nil, mapExpansionBudget(err)
-		}
-		if err := ctx.Err(); err != nil {
 			return nil, err
+		}
+		expand := resourceIDs
+		if batchResults != nil {
+			// A hit is final. A miss is final too when the relation admits no
+			// userset. An unprobed ID is defensive only: checkBatch has already
+			// validated every request ID, so none should be malformed here.
+			hasUsersets := s.compiled.relationHasUsersets(first.Resource.Type, check.Relation)
+			expand = nil
+			for _, id := range resourceIDs {
+				if allowed, probed := batchResults[id]; !allowed && (!probed || hasUsersets) {
+					expand = append(expand, id)
+				}
+			}
+		}
+		if len(expand) > 0 {
+			expanded, err := reader.CheckBatchDirect(
+				ctx, first.Resource.Type, expand, check.Relation, first.Principal.Type, first.Principal.ID, s.limits.MaxGraphStates,
+			)
+			if err != nil {
+				return nil, mapExpansionBudget(err)
+			}
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+			if batchResults == nil {
+				batchResults = expanded
+			} else {
+				for id, allowed := range expanded {
+					if allowed {
+						batchResults[id] = true
+					}
+				}
+			}
 		}
 		remaining := resourceIDs[:0]
 		for _, id := range resourceIDs {
@@ -436,4 +464,41 @@ func (s *Service) checkBatchOptimized(ctx context.Context, reader CheckReader, r
 	}
 
 	return results, nil
+}
+
+// directBatchHits applies the direct-hit short circuit to one batch relation
+// with one exact ContainsMany (stores may chunk it). It returns nil when the
+// short circuit does not apply. Otherwise the map holds one entry per probed ID.
+// Skipping malformed IDs is defensive: request IDs are validated upstream, and
+// expansion would quietly deny such an ID where an exact read would reject it.
+func (s *Service) directBatchHits(ctx context.Context, resourceType string, ids []string, relation string, principal authmodel.PrincipalRef) (map[string]bool, error) {
+	if !s.shortCircuits(resourceType, relation, principal.Type) {
+		return nil, nil
+	}
+	probed := make([]string, 0, len(ids))
+	facts := make([]tuples.Tuple, 0, len(ids))
+	for _, id := range ids {
+		if fact, ok := directTuple(resourceType, id, relation, principal); ok {
+			probed = append(probed, id)
+			facts = append(facts, fact)
+		}
+	}
+	out := make(map[string]bool, len(probed))
+	if len(facts) == 0 {
+		return out, nil
+	}
+	found, err := s.facts.ContainsMany(ctx, facts)
+	if err != nil {
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if len(found) != len(facts) {
+		return nil, fmt.Errorf("invalid exact batch cardinality: %w", sdk.ErrUnavailable)
+	}
+	for i, id := range probed {
+		out[id] = found[i]
+	}
+	return out, nil
 }

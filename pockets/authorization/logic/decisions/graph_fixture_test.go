@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/gopernicus/gopernicus/pockets/authorization/internal/decisionmode"
 	authmodel "github.com/gopernicus/gopernicus/pockets/authorization/logic/model"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/relationships"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuples"
@@ -80,6 +81,79 @@ func (f *graphFixture) ReadSets(ctx context.Context, keys []tuples.SetKey, max i
 }
 func (f *graphFixture) Lookup(ctx context.Context, q tuples.Query) ([]tuples.Tuple, error) {
 	return nil, fmt.Errorf("fixture raw lookup unused")
+}
+
+// subjectFirst disables the direct-hit short circuit for tests that pin the
+// subject-first graph read path: its read counts, injected faults and budgets.
+func subjectFirst(ctx context.Context) context.Context { return decisionmode.WithSubjectFirst(ctx) }
+
+// subjectFirstService is subjectFirst for tests that call an unbound service's
+// internals directly, where no bound view resolves the context.
+func subjectFirstService(s *Service) *Service {
+	v := *s
+	v.subjectFirst = true
+	return &v
+}
+
+// exactStoreView is modelStoreView with exact reads served from the store, for
+// default-mode tests whose Direct nodes probe before expanding.
+type exactStoreView struct{ modelStoreView }
+
+func (v exactStoreView) Contains(ctx context.Context, t tuples.Tuple) (bool, error) {
+	return v.Storer.CheckRelationExists(ctx, t.Scope.Type, t.Scope.ID, t.Relation, t.Subject.Type, t.Subject.ID)
+}
+func (v exactStoreView) ContainsMany(ctx context.Context, ts []tuples.Tuple) ([]bool, error) {
+	return containsEach(ctx, v.Contains, ts)
+}
+
+// exactRecordingReader is recordingReader with exact reads served from store and
+// logged beside graph reads, so default-mode parity covers the probes too.
+type exactRecordingReader struct {
+	*recordingReader
+	store Storer
+}
+
+func (r exactRecordingReader) Contains(ctx context.Context, t tuples.Tuple) (bool, error) {
+	r.calls = append(r.calls, fmt.Sprintf("exact %s:%s#%s@%s:%s", t.Scope.Type, t.Scope.ID, t.Relation, t.Subject.Type, t.Subject.ID))
+	return r.store.CheckRelationExists(ctx, t.Scope.Type, t.Scope.ID, t.Relation, t.Subject.Type, t.Subject.ID)
+}
+func (r exactRecordingReader) ContainsMany(ctx context.Context, ts []tuples.Tuple) ([]bool, error) {
+	return containsEach(ctx, r.Contains, ts)
+}
+
+// hookedFacts runs before ahead of every exact read, to inject faults into the
+// direct-hit probe rounds.
+type hookedFacts struct {
+	tuples.Reader
+	before func([]tuples.Tuple) error
+	calls  int
+}
+
+func (f *hookedFacts) Contains(ctx context.Context, t tuples.Tuple) (bool, error) {
+	values, err := f.ContainsMany(ctx, []tuples.Tuple{t})
+	if err != nil {
+		return false, err
+	}
+	return values[0], nil
+}
+func (f *hookedFacts) ContainsMany(ctx context.Context, ts []tuples.Tuple) ([]bool, error) {
+	f.calls++
+	if err := f.before(ts); err != nil {
+		return nil, err
+	}
+	return f.Reader.ContainsMany(ctx, ts)
+}
+
+func containsEach(ctx context.Context, contains func(context.Context, tuples.Tuple) (bool, error), ts []tuples.Tuple) ([]bool, error) {
+	out := make([]bool, len(ts))
+	for i, t := range ts {
+		v, err := contains(ctx, t)
+		if err != nil {
+			return nil, err
+		}
+		out[i] = v
+	}
+	return out, nil
 }
 
 // These fixtures exercise graph reads only, keeping their original counters and

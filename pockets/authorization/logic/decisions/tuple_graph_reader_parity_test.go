@@ -6,6 +6,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/gopernicus/gopernicus/pockets/authorization/internal/decisionmode"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/decisions"
 	authmodel "github.com/gopernicus/gopernicus/pockets/authorization/logic/model"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuples"
@@ -54,7 +55,10 @@ func TestPortableGraphMatchesOptimizedFilteringAndBudgets(t *testing.T) {
 					if err != nil {
 						t.Fatal(err)
 					}
-					result, err := service.Check(t.Context(), authmodel.CheckRequest{Principal: authmodel.PrincipalRef{Type: "user", ID: "alice"}, Resource: authmodel.Resource{Type: "doc", ID: "d"}, Permission: "view"})
+					// Pure subject-first: alice's direct grant would otherwise short-circuit
+					// the expansion whose budget accounting this test compares.
+					ctx := decisionmode.WithSubjectFirst(t.Context())
+					result, err := service.Check(ctx, authmodel.CheckRequest{Principal: authmodel.PrincipalRef{Type: "user", ID: "alice"}, Resource: authmodel.Resource{Type: "doc", ID: "d"}, Permission: "view"})
 					if tc.exhausted {
 						if !errors.Is(err, authmodel.ErrEvaluationLimit) || result.Allowed {
 							t.Fatalf("expected limit, got %+v/%v", result, err)

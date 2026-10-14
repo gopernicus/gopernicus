@@ -102,13 +102,13 @@ func TestExplainTraceRecordsCoarseSteps(t *testing.T) {
 	}
 	var sawThroughGrant, sawDirectGrant bool
 	for _, st := range expl.Steps {
-		if st.Outcome != authmodel.ReasonGranted && st.Outcome != authmodel.ReasonDenied {
+		if st.Outcome != authmodel.ReasonGranted && st.Outcome != authmodel.ReasonDenied && st.Outcome != authmodel.ReasonDirectHit {
 			t.Fatalf("step Outcome %q is not a coarse decision code", st.Outcome)
 		}
 		if st.Kind == authmodel.ExplainKindThrough && st.Relation == "org" && st.Outcome == authmodel.ReasonGranted {
 			sawThroughGrant = true
 		}
-		if st.Kind == authmodel.ExplainKindDirect && st.Relation == "admin" && st.Outcome == authmodel.ReasonGranted {
+		if st.Kind == authmodel.ExplainKindDirect && st.Relation == "admin" && st.Outcome == authmodel.ReasonDirectHit {
 			sawDirectGrant = true
 		}
 	}

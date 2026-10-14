@@ -32,7 +32,8 @@ type ExplainStep struct {
 	// resource).
 	Depth int
 	// Outcome is the stable coarse result of this check: ReasonGranted or
-	// ReasonDenied.
+	// ReasonDenied, or ReasonDirectHit for a direct-relation check (Kind ==
+	// ExplainKindDirect) granted by the principal's own tuple without expansion.
 	Outcome Reason
 	// Scope is the explicit scope examined, whether granted or denied. For graph
 	// steps it is the resource whose relation is checked or traversed.

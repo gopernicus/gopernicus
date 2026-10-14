@@ -286,7 +286,7 @@ func TestCheckBatchSharesContainerReads(t *testing.T) {
 			Resource:   authmodel.Resource{Type: "post", ID: fmt.Sprintf("p%d", i)},
 		}
 	}
-	results, err := svc.CheckBatch(context.Background(), reqs)
+	results, err := svc.CheckBatch(subjectFirst(context.Background()), reqs)
 	if err != nil {
 		t.Fatalf("CheckBatch: %v", err)
 	}

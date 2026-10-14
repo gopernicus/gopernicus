@@ -9,8 +9,23 @@ import (
 	"github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/mutations"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/relationships"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuplecache"
+	"github.com/gopernicus/gopernicus/pockets/authorization/stores/memory"
 	"github.com/gopernicus/gopernicus/pockets/authorization/stores/storetest"
 )
+
+// TestTupleCacheLookupEquivalence repeats the short-circuit equivalence proof
+// with a polled memory tuple cache in front of this store.
+func TestTupleCacheLookupEquivalence(t *testing.T) {
+	storetest.RunLookupEquivalenceTupleCache(t, func(t *testing.T) storetest.Repositories {
+		db, cfg := cacheFixture(t, true)
+		repos, err := testRepositories(context.Background(), db, cacheOptions(cfg)...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return repos
+	}, func(*testing.T) tuplecache.Backend { return memory.NewTupleCache() })
+}
 
 func TestCacheEnabledConformance(t *testing.T) {
 	storetest.Run(t, func(t *testing.T, policy mutations.IntegrityPolicy) storetest.Repositories {
