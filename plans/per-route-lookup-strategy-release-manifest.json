@@ -1,0 +1,24 @@
+{
+	"public_proxy": "https://proxy.golang.org",
+	"checksum_database": "sum.golang.org",
+	"workspace": "off",
+	"modules": {
+		"pockets/authorization": {
+			"Path": "github.com/gopernicus/gopernicus/pockets/authorization",
+			"Version": "v0.26.0",
+			"Info": "/private/tmp/claude-502/-Users-jrazmi-code-gopernicus-ecosystem-gopernicus/18ba8d6a-5181-48bd-9e16-2f417ff37473/scratchpad/cold/mod/cache/download/github.com/gopernicus/gopernicus/pockets/authorization/@v/v0.26.0.info",
+			"GoMod": "/private/tmp/claude-502/-Users-jrazmi-code-gopernicus-ecosystem-gopernicus/18ba8d6a-5181-48bd-9e16-2f417ff37473/scratchpad/cold/mod/cache/download/github.com/gopernicus/gopernicus/pockets/authorization/@v/v0.26.0.mod",
+			"Zip": "/private/tmp/claude-502/-Users-jrazmi-code-gopernicus-ecosystem-gopernicus/18ba8d6a-5181-48bd-9e16-2f417ff37473/scratchpad/cold/mod/cache/download/github.com/gopernicus/gopernicus/pockets/authorization/@v/v0.26.0.zip",
+			"Dir": "/private/tmp/claude-502/-Users-jrazmi-code-gopernicus-ecosystem-gopernicus/18ba8d6a-5181-48bd-9e16-2f417ff37473/scratchpad/cold/mod/github.com/gopernicus/gopernicus/pockets/authorization@v0.26.0",
+			"Sum": "h1:+KT88Af3BqUW1k20uKUWsPPC5i+VMVxyNkbPSOwzVok=",
+			"GoModSum": "h1:SWt/blN2Csf2p8dohOtJXbINP/BT5Z3oV9/GOxkFXGo=",
+			"Origin": {
+				"VCS": "git",
+				"URL": "https://github.com/gopernicus/gopernicus",
+				"Subdir": "pockets/authorization",
+				"Hash": "826c519767578c7540805e20d2d229821cf73fa5",
+				"Ref": "refs/tags/pockets/authorization/v0.26.0"
+			}
+		}
+	}
+}
