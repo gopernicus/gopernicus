@@ -37,7 +37,27 @@ func (c *TupleCache) mirrorFor(binding string) *mirror {
 	return &mirror{}
 }
 
+// validBinding applies the goredis key allow-list, so a custom Source binding
+// that production would reject also fails here.
+func validBinding(binding string) error {
+	if binding == "" {
+		return fmt.Errorf("tuple cache binding is empty: %w", sdk.ErrInvalidInput)
+	}
+	for _, ch := range binding {
+		switch {
+		case ch >= 'a' && ch <= 'z', ch >= 'A' && ch <= 'Z', ch >= '0' && ch <= '9':
+		case ch == ':', ch == '.', ch == '_', ch == '-', ch == '/':
+		default:
+			return fmt.Errorf("tuple cache binding must contain only ASCII letters, digits or :._-/: %w", sdk.ErrInvalidInput)
+		}
+	}
+	return nil
+}
+
 func (c *TupleCache) State(ctx context.Context, binding string) (tuplecache.State, error) {
+	if err := validBinding(binding); err != nil {
+		return tuplecache.State{}, err
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if err := ctx.Err(); err != nil {
@@ -47,6 +67,11 @@ func (c *TupleCache) State(ctx context.Context, binding string) (tuplecache.Stat
 }
 
 func (c *TupleCache) Read(ctx context.Context, expected tuplecache.State, keys []tuplecache.SetKey) ([][]tuples.Tuple, error) {
+	if expected.Binding != "" {
+		if err := validBinding(expected.Binding); err != nil {
+			return nil, err
+		}
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if err := ctx.Err(); err != nil {
@@ -68,14 +93,21 @@ func (c *TupleCache) Read(ctx context.Context, expected tuplecache.State, keys [
 
 func (c *TupleCache) Publish(ctx context.Context, expected, next tuplecache.State, snapshot tuplecache.Snapshot, validFor time.Duration) error {
 	started := time.Now()
-	if validFor <= 0 || next.Binding == "" || next.Receipt == "" || ((snapshot.Full || len(snapshot.Changes) > 0) && next == expected) {
+	if validFor <= 0 || next.Binding == "" || next.Receipt == "" || (expected.Binding == "") != (expected.Receipt == "") {
 		return fmt.Errorf("tuple cache: invalid publication: %w", sdk.ErrInvalidInput)
-	}
-	if !snapshot.Full && (expected.Binding != next.Binding || expected.Receipt == "") {
-		return tuplecache.ErrConflict
 	}
 	if expected.Binding != "" && expected.Binding != next.Binding {
 		return tuplecache.ErrBinding
+	}
+	if (snapshot.Full || len(snapshot.Changes) > 0) && next == expected {
+		return fmt.Errorf("tuple cache: invalid publication: %w", sdk.ErrInvalidInput)
+	}
+	// Same refusal order as goredis: a delta needs an existing mirror.
+	if !snapshot.Full && expected.Binding == "" {
+		return tuplecache.ErrUnavailable
+	}
+	if err := validBinding(next.Binding); err != nil {
+		return err
 	}
 	for _, t := range snapshot.Tuples {
 		if err := t.Validate(); err != nil {

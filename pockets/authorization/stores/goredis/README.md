@@ -71,6 +71,16 @@ custom `tuplecache.Source`) fails `State`, `Read` and `Publish`; both return
 which keeps the mirror and temporary `:build:<nonce>` hashes in the same slot.
 This key layout does not add Redis Cluster support.
 
+`(*TupleCache).Key(binding)` returns the key for a binding. Log the runtime's
+binding and key once at INFO on startup, so operators can see which mirror each
+process uses:
+
+```go
+runtime := components.TupleCache
+key, err := backend.Key(runtime.Binding())
+logger.Info("authorization tuple cache", "binding", runtime.Binding(), "key", key)
+```
+
 For example, inspect the mirrors with:
 
 ```sh
@@ -213,7 +223,9 @@ duration must be measured against the host's tuple-set sizes. This is not a
 partitioned or Redis Cluster adapter.
 
 Run `go build ./...`, `go test ./...`, `go test -race ./...`, and `go vet ./...`
-from this module. Tests launch isolated `redis-server` processes using private
+from this module, and once more with `GOWORK=off` to prove the published pins
+resolve (`GOWORK=off go build ./... && GOWORK=off go test ./...`). CI does not
+run the Redis-backed tests, so a local `-race` run is the release gate. Tests launch isolated `redis-server` processes using private
 Unix sockets, including an AOF restart proof. They skip explicitly when the
 executable is unavailable; they do not connect to a host or production Redis.
 

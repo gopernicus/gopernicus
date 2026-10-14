@@ -99,9 +99,11 @@ func NewTupleCache(client *redis.Client, opts ...Option) (*TupleCache, error) {
 	return &TupleCache{client: client, namespace: cfg.namespace, limits: cfg.limits}, nil
 }
 
-// key derives the mirror key for binding. Bindings come from Source.Binding,
-// which a custom source may fill with anything, so validate on every call.
-func (c *TupleCache) key(binding string) (string, error) {
+// Key returns the Redis key of the mirror for binding, so hosts can log which
+// key a runtime uses (pass the runtime's Binding()). Bindings come from
+// Source.Binding, which a custom source may fill with anything, so every call
+// validates it and an invalid binding returns sdk.ErrInvalidInput.
+func (c *TupleCache) Key(binding string) (string, error) {
 	if err := validKeyPart("binding", binding); err != nil {
 		return "", err
 	}
@@ -129,7 +131,7 @@ func validKeyPart(name, part string) error {
 }
 
 func (c *TupleCache) State(ctx context.Context, binding string) (tuplecache.State, error) {
-	key, err := c.key(binding)
+	key, err := c.Key(binding)
 	if err != nil {
 		return tuplecache.State{}, err
 	}
@@ -147,7 +149,7 @@ func (c *TupleCache) Read(ctx context.Context, expected tuplecache.State, keys [
 	if expected.Binding == "" || expected.Receipt == "" {
 		return nil, tuplecache.ErrUnavailable
 	}
-	key, err := c.key(expected.Binding)
+	key, err := c.Key(expected.Binding)
 	if err != nil {
 		return nil, err
 	}
@@ -211,7 +213,7 @@ func (c *TupleCache) Publish(ctx context.Context, expected, next tuplecache.Stat
 	if !snapshot.Full && expected.Binding == "" {
 		return tuplecache.ErrUnavailable
 	}
-	key, err := c.key(next.Binding)
+	key, err := c.Key(next.Binding)
 	if err != nil {
 		return err
 	}

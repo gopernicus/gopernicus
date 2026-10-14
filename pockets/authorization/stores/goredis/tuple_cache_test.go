@@ -18,6 +18,7 @@ import (
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuplecache"
 	tuplefacts "github.com/gopernicus/gopernicus/pockets/authorization/logic/tuples"
 	"github.com/gopernicus/gopernicus/pockets/authorization/stores/memory"
+	"github.com/gopernicus/gopernicus/pockets/authorization/stores/storetest"
 	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/redis/go-redis/v9"
 )
@@ -619,7 +620,7 @@ func TestTupleCacheConstructor(t *testing.T) {
 		if err != nil {
 			t.Fatalf("readable namespace %q: %v", namespace, err)
 		}
-		if key, err := cache.key(binding); err != nil || key != "tuplecache:v3:{"+namespace+"/"+binding+"}" {
+		if key, err := cache.Key(binding); err != nil || key != "tuplecache:v3:{"+namespace+"/"+binding+"}" {
 			t.Fatalf("namespaced key %q: %q/%v", namespace, key, err)
 		}
 	}
@@ -627,12 +628,12 @@ func TestTupleCacheConstructor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if key, err := cache.key(binding); err != nil || key != "tuplecache:v3:{"+binding+"}" {
+	if key, err := cache.Key(binding); err != nil || key != "tuplecache:v3:{"+binding+"}" {
 		t.Fatalf("unprefixed key: %q/%v", key, err)
 	}
 	// Custom sources choose their binding, so the adapter checks it per call.
 	for _, binding := range invalid {
-		if key, err := cache.key(binding); key != "" || !errors.Is(err, sdk.ErrInvalidInput) {
+		if key, err := cache.Key(binding); key != "" || !errors.Is(err, sdk.ErrInvalidInput) {
 			t.Fatalf("invalid binding %q: %q/%v", binding, key, err)
 		}
 	}
@@ -731,7 +732,7 @@ func newCache(t testing.TB, client *redis.Client) *TupleCache {
 // keyFor returns c's mirror key for binding.
 func keyFor(t testing.TB, c *TupleCache, binding string) string {
 	t.Helper()
-	key, err := c.key(binding)
+	key, err := c.Key(binding)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -846,4 +847,11 @@ func (h delayHook) ProcessHook(next redis.ProcessHook) redis.ProcessHook {
 }
 func (h delayHook) ProcessPipelineHook(next redis.ProcessPipelineHook) redis.ProcessPipelineHook {
 	return next
+}
+
+func TestTupleCacheBackendConformance(t *testing.T) {
+	storetest.RunTupleCacheBackend(t, func(t *testing.T) tuplecache.Backend {
+		client, _ := startRedis(t, "", false)
+		return newCache(t, client)
+	})
 }
