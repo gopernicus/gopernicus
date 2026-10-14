@@ -81,7 +81,7 @@ func (s *Service) checkExplainWith(ctx context.Context, source tuples.Reader, re
 	if isNilReader(source) {
 		return authmodel.CheckResult{}, authmodel.Explanation{}, fmt.Errorf("nil tuple reader: %w", sdk.ErrInvalidInput)
 	}
-	view := s.bound(source)
+	view := s.bound(ctx, source)
 	return view.checkExplain(ctx, view.reader, req)
 }
 

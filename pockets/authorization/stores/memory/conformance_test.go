@@ -51,3 +51,14 @@ func TestAudit(t *testing.T) {
 		return storetest.Repositories{Repositories: authorization.Repositories{Tuples: store.Tuples(), Mutations: store.Mutations(), Operations: store.Operations(), Audit: store.Audit()}, Relationships: store.Relationships()}
 	})
 }
+
+// TestLookupEquivalence proves the direct-hit short circuit against pure
+// subject-first expansion over the memory reference store.
+func TestLookupEquivalence(t *testing.T) {
+	storetest.RunLookupEquivalence(t, func(t *testing.T) storetest.Repositories {
+		store := memory.New()
+		return storetest.Repositories{Repositories: authorization.Repositories{Tuples: store.Tuples(),
+			Mutations: store.Mutations(), Operations: store.Operations()}, Relationships: store.Relationships(),
+		}
+	})
+}

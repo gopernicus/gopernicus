@@ -51,6 +51,21 @@ func TestConformance(t *testing.T) {
 	})
 }
 
+// TestLookupEquivalence proves the direct-hit short circuit against pure
+// subject-first expansion over this store's recursive-CTE reads.
+func TestLookupEquivalence(t *testing.T) {
+	url, token := requireTursoEnv(t)
+
+	storetest.RunLookupEquivalence(t, func(t *testing.T) storetest.Repositories {
+		db := openAndMigrate(t, url, token)
+		repos, err := testRepositories(context.Background(), db)
+		if err != nil {
+			t.Fatalf("Repositories: %v", err)
+		}
+		return repos
+	})
+}
+
 // TestTransactional runs the shared ambient-transaction family: the connector
 // (*tursodb.DB) is the transaction.Transactor, and the SAME connector backs the
 // repositories, so a Transact-owned BEGIN IMMEDIATE transaction is the one the

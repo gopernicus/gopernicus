@@ -23,7 +23,7 @@ func (s *Service) withOperation(ctx context.Context, evaluate func(context.Conte
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		view := s.bound(reader)
+		view := s.bound(ctx, reader)
 		if s.diagnostic != nil {
 			diagnostics = &operationDiagnostics{}
 			view.diagnostics = diagnostics

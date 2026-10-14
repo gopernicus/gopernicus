@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"iter"
+	"slices"
 
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuples"
 	"github.com/gopernicus/gopernicus/sdk"
@@ -136,19 +137,27 @@ func resolveBatchReads(ctx context.Context, source CheckReader, facts tuples.Rea
 		}
 	}
 	if len(exact) > 0 {
+		// Requests in one round often probe the same fact (a shared tenant or
+		// container); read each distinct fact once and fan the answer out.
 		requested := make([]tuples.Tuple, len(exact))
 		for i, read := range exact {
 			requested[i] = *read.tuple
 		}
+		slices.SortFunc(requested, tuples.Compare)
+		requested = slices.Compact(requested)
 		values, err := facts.ContainsMany(ctx, requested)
-		if err == nil && len(values) != len(exact) {
+		if err == nil && len(values) != len(requested) {
 			err = fmt.Errorf("invalid exact batch cardinality: %w", sdk.ErrUnavailable)
 		}
-		for i, read := range exact {
-			read.err = err
-			if err == nil {
-				read.allowed = values[i]
+		held := make(map[tuples.Tuple]bool, len(requested))
+		if err == nil {
+			for i, fact := range requested {
+				held[fact] = values[i]
 			}
+		}
+		for _, read := range exact {
+			read.err = err
+			read.allowed = held[*read.tuple]
 		}
 	}
 	pending = graph

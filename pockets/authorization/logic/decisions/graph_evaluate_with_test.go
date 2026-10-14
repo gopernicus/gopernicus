@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	authmodel "github.com/gopernicus/gopernicus/pockets/authorization/logic/model"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuples"
 	"github.com/gopernicus/gopernicus/sdk"
 )
 
@@ -203,49 +204,68 @@ func TestEvaluateWithMatchesCheckOverStore(t *testing.T) {
 	}
 
 	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			overStore, err := newService(graph, evaluateWithSchema(), serviceConfig{limits: tc.limits})
-			if err != nil {
-				t.Fatalf("newService(graph): %v", err)
-			}
-			// The service under EvaluateWith is built over an EMPTY store: if the
-			// walk ever read s.store instead of the reader, every allow below would
-			// become a deny.
-			overEmpty, err := newService(&fakeStore{}, evaluateWithSchema(), serviceConfig{limits: tc.limits})
-			if err != nil {
-				t.Fatalf("newService(empty): %v", err)
-			}
+		for _, pure := range []bool{true, false} {
+			t.Run(fmt.Sprintf("%s/subject-first=%v", tc.name, pure), func(t *testing.T) {
+				assertEvaluateWithMatchesCheck(t, graph, tc.limits, tc.req, tc.wantAllowed, tc.wantErr, tc.wantReasonSub, pure)
+			})
+		}
+	}
+}
 
-			storeRec := &recordingReader{inner: graph}
-			want, wantErr := overStore.check(context.Background(), tc.req, newBudget(overStore.limits, storeRec))
-			readerRec := &recordingReader{inner: graph}
-			got, gotErr := overEmpty.EvaluateWith(context.Background(), readerRec, tc.req)
+// assertEvaluateWithMatchesCheck compares Check over the store with EvaluateWith
+// over an explicit reader. By default both sides serve and log exact reads, so
+// the direct-hit probes are part of the call parity.
+func assertEvaluateWithMatchesCheck(t *testing.T, graph *graphStore, limits authmodel.EvaluationLimits, req authmodel.CheckRequest, wantAllowed bool, wantErr error, wantReasonSub string, pure bool) {
+	t.Helper()
+	overStore, err := newService(graph, evaluateWithSchema(), serviceConfig{limits: limits})
+	if err != nil {
+		t.Fatalf("newService(graph): %v", err)
+	}
+	// The service under EvaluateWith is built over an EMPTY store: if the
+	// walk ever read s.store instead of the reader, every allow below would
+	// become a deny.
+	overEmpty, err := newService(&fakeStore{}, evaluateWithSchema(), serviceConfig{limits: limits})
+	if err != nil {
+		t.Fatalf("newService(empty): %v", err)
+	}
 
-			if tc.wantErr != nil {
-				if !errors.Is(wantErr, tc.wantErr) || !errors.Is(gotErr, tc.wantErr) {
-					t.Fatalf("want %v from both: check=%v evaluate=%v", tc.wantErr, wantErr, gotErr)
-				}
-			} else {
-				if wantErr != nil || gotErr != nil {
-					t.Fatalf("unexpected error: check=%v evaluate=%v", wantErr, gotErr)
-				}
-				if want.Allowed != tc.wantAllowed || got.Allowed != tc.wantAllowed {
-					t.Fatalf("allowed: want %v, check=%v evaluate=%v", tc.wantAllowed, want.Allowed, got.Allowed)
-				}
-				if want != got {
-					t.Fatalf("result parity: check=%+v evaluate=%+v", want, got)
-				}
-				if tc.wantReasonSub != "" && got.Reason != tc.wantReasonSub {
-					t.Fatalf("reason: want %q got %q", tc.wantReasonSub, got.Reason)
-				}
-			}
-			if fmt.Sprint(storeRec.calls) != fmt.Sprint(readerRec.calls) {
-				t.Fatalf("call parity:\n check:    %v\n evaluate: %v", storeRec.calls, readerRec.calls)
-			}
-			if len(readerRec.calls) == 0 {
-				t.Fatalf("EvaluateWith made no reader calls")
-			}
-		})
+	storeRec := &recordingReader{inner: graph}
+	readerRec := &recordingReader{inner: graph}
+	checker, ctx := overStore, context.Background()
+	var reader tuples.Reader = exactRecordingReader{recordingReader: readerRec, store: graph}
+	if pure {
+		checker, ctx, reader = subjectFirstService(overStore), subjectFirst(ctx), readerRec
+	} else {
+		exact := *overStore
+		exact.facts = exactRecordingReader{recordingReader: storeRec, store: graph}
+		checker = &exact
+	}
+	want, checkErr := checker.check(ctx, req, newBudget(overStore.limits, storeRec))
+	got, gotErr := overEmpty.EvaluateWith(ctx, reader, req)
+
+	if wantErr != nil {
+		if !errors.Is(checkErr, wantErr) || !errors.Is(gotErr, wantErr) {
+			t.Fatalf("want %v from both: check=%v evaluate=%v", wantErr, checkErr, gotErr)
+		}
+	} else {
+		if checkErr != nil || gotErr != nil {
+			t.Fatalf("unexpected error: check=%v evaluate=%v", checkErr, gotErr)
+		}
+		if want.Allowed != wantAllowed || got.Allowed != wantAllowed {
+			t.Fatalf("allowed: want %v, check=%v evaluate=%v", wantAllowed, want.Allowed, got.Allowed)
+		}
+		if want != got {
+			t.Fatalf("result parity: check=%+v evaluate=%+v", want, got)
+		}
+		if wantReasonSub != "" && got.Reason != wantReasonSub {
+			t.Fatalf("reason: want %q got %q", wantReasonSub, got.Reason)
+		}
+	}
+	if fmt.Sprint(storeRec.calls) != fmt.Sprint(readerRec.calls) {
+		t.Fatalf("call parity:\n check:    %v\n evaluate: %v", storeRec.calls, readerRec.calls)
+	}
+	if len(readerRec.calls) == 0 {
+		t.Fatalf("EvaluateWith made no reader calls")
 	}
 }
 
@@ -257,12 +277,12 @@ func TestEvaluateWithReadsOnlyTheReader(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Check over the service's own (empty) store denies…
-	res, err := svc.Check(context.Background(), check("alice", "space", "s"))
+	res, err := svc.Check(subjectFirst(context.Background()), check("alice", "space", "s"))
 	if err != nil || res.Allowed {
 		t.Fatalf("Check over empty store: allowed=%v err=%v", res.Allowed, err)
 	}
 	// …while EvaluateWith over the populated reader allows.
-	res, err = svc.EvaluateWith(context.Background(), modelStoreView{graph}, check("alice", "space", "s"))
+	res, err = svc.EvaluateWith(subjectFirst(context.Background()), modelStoreView{graph}, check("alice", "space", "s"))
 	if err != nil || !res.Allowed {
 		t.Fatalf("EvaluateWith over reader: allowed=%v err=%v", res.Allowed, err)
 	}

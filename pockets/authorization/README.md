@@ -221,6 +221,77 @@ including PostgreSQL READ COMMITTED; use a snapshot transaction when consistency
 across statements is required. Root `Relationships`, exact role checks and decision
 operations retain their stricter snapshot-isolation requirements.
 
+## Direct-grant short circuit and read costs
+
+Every store keeps forward and reverse access paths to each tuple. The **forward
+set** of a resource and relation ("every viewer of space S") answers who can;
+its size is the number of grantees on one resource. The **reverse set** of a
+subject ("everything Alice holds") answers what a principal can do; its size is
+the principal's total grants. A **userset** subject such as `group:G#member` is
+itself a set, and following one is expansion. `Direct` relations expand
+**subject-first**: from the principal's reverse set outward to every userset it
+reaches. `Through` hops are already resource-first: they read the resource's
+forward set for the hop relation.
+
+The rule of thumb: forward reads are cheap when resources have few grantees and
+principals have many grants (principal-heavy); reverse reads are cheap in the
+opposite, resource-heavy shape.
+
+**Direct-grant short circuit (on by default, no API).** Before expanding a
+`Direct` relation, the engine probes the forward set for the principal's own
+concrete tuple. A hit grants without expansion. A miss denies without expansion
+when the relation admits no userset subject. Otherwise the check expands
+subject-first exactly as before. The probe applies only when the model allows
+the principal's concrete type on that relation, and it reads the same snapshot
+as the expansion. Batches probe in rounds: the optimized `CheckBatch` and
+`FilterAuthorized` path (one resource type, one principal, no `Through`) sends
+one exact read per Direct relation, which SQL stores split into statements of
+100 tuples; other batches send one exact read per scheduling round, reading each
+distinct fact once however many requests probe it. Answers are
+identical wherever both paths decide; the store conformance suite proves this
+over random models, cycles and off-model rows.
+
+**Reading the explain trace.** A short-circuit hit records one step with
+`Kind: "direct"` and `Outcome: "direct_hit"` (`model.ReasonDirectHit`) and no
+expansion. A short-circuit miss on a relation without usersets records
+`Kind: "direct"`, `Outcome: "denied"`. A step answered by expansion records
+`granted` or `denied` as before. `CheckResult.ReasonCode` and
+`Explanation.Decision` remain `granted` or `denied`, and `Reason` remains
+`direct:<relation>`; `direct_hit` appears only in `ExplainStep.Outcome`.
+
+**Budgets.** The probe charges no evaluation step and no graph state, so a
+decision just under `MaxEvaluationSteps` is unaffected. It changes answers only
+at the budget edge, in the caller's favor: a principal whose expansion exceeds
+`MaxGraphStates` used to receive `ErrEvaluationLimit` even when directly
+granted; now a direct hit grants, and a miss on a relation without usersets
+denies. A miss on a relation that admits usersets still expands and still fails
+with `ErrEvaluationLimit` on overflow, never a deny.
+
+**Cost of a miss.** A miss on a relation that admits usersets pays the probe and
+then the full expansion: about one extra round trip per single check (about
+30 µs on loopback PostgreSQL, about 1 µs on the in-memory cache). On SQL stores
+`CheckBatch` and `FilterAuthorized` add statements for every Direct level they
+probe: in the Turso benchmark graph (dashboard → space → tenant) a round of one
+distinct space probe per request plus a round of four distinct tenant probes add
+`ceil(n/100) + 1` statements, so a batch of 50, 128, 366 or 600 requests goes
+from 5, 5, 5 or 9 to 7, 8, 10 or 16 statements. Each statement is a round trip on a remote Turso database.
+
+**Wide resources.** With the TupleCache on, the probe decodes the resource's
+whole forward set (`logic/tuplecache/reader.go`): in the
+[benchmarks](BENCHMARKS.md#direct-hit-short-circuit-unreleased-2026-10-14) a
+check on a resource with 10,001 grantees went from about 4 µs to about 1 ms and
+allocates about 3.1 MB per check. On PostgreSQL the probe is an indexed
+`EXISTS`, and on a vacuumed and analyzed table that same check went from about
+148 µs to about 112 µs. On a freshly loaded or un-vacuumed table, the generic
+plan PostgreSQL caches for the exact-probe statement ties the primary key
+against `idx_iam_tuples_relation_resource`, and the narrower index wins: it
+filters every grantee of the resource (about 0.83 ms at 10,001 grantees until
+autovacuum runs). Resource-scoped `RoleIn` checks (the HTTP `HasRole` guard) and batch
+`ContainsMany` reads already share this exposure. After a bulk load, run
+`VACUUM ANALYZE iam_tuples` rather than waiting for autovacuum. Grant very wide access (for
+example "every user can view the lobby") through a userset such as a group
+rather than thousands of direct tuples.
+
 ## Writes, integrity and audit
 
 Inbound adapters authorize the exact command before invoking a writer. Every

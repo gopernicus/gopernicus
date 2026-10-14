@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	authmodel "github.com/gopernicus/gopernicus/pockets/authorization/logic/model"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuples"
 	"github.com/gopernicus/gopernicus/sdk"
 )
 
@@ -150,29 +151,43 @@ func TestModelScopedReaderIsMandatory(t *testing.T) {
 }
 
 func TestThroughTargetOrderIsCanonicalAcrossEntryPoints(t *testing.T) {
-	for _, reverse := range []bool{false, true} {
-		targets := []CreateRelationship{
-			tuple("space", "root", "parent", "space", "a-too-deep", ""),
-			tuple("space", "root", "parent", "space", "z-granted", ""),
+	for _, pure := range []bool{true, false} {
+		for _, reverse := range []bool{false, true} {
+			assertThroughTargetOrderIsCanonical(t, pure, reverse)
 		}
-		if reverse {
-			slices.Reverse(targets)
-		}
-		store := &graphStore{fakeStore: fakeStore{tuples: append(targets,
-			tuple("space", "a-too-deep", "parent", "space", "deeper", ""),
-			tuple("space", "z-granted", "viewer", "user", "u1", ""),
-		)}}
-		svc := newLimitedService(t, store, setHierarchySchema(), authmodel.EvaluationLimits{MaxThroughDepth: 1})
-		req := authmodel.CheckRequest{Principal: setPrincipal, Permission: "view", Resource: authmodel.Resource{Type: "space", ID: "root"}}
-		_, checkErr := svc.Check(context.Background(), req)
-		_, _, explainErr := svc.CheckExplain(context.Background(), req)
-		_, batchErr := svc.CheckBatch(context.Background(), []authmodel.CheckRequest{req})
-		_, filterErr := svc.FilterAuthorized(context.Background(), setPrincipal, "view", "space", []string{"root"})
-		_, guardErr := svc.EvaluateWith(context.Background(), modelStoreView{store}, req)
-		for _, err := range []error{checkErr, explainErr, batchErr, filterErr, guardErr} {
-			if !errors.Is(err, authmodel.ErrEvaluationLimit) {
-				t.Fatalf("reverse=%v: error=%v, want canonical earlier target's depth failure", reverse, err)
-			}
+	}
+}
+
+// assertThroughTargetOrderIsCanonical runs under pure subject-first, or by
+// default with exact reads served so Direct nodes probe before expanding.
+func assertThroughTargetOrderIsCanonical(t *testing.T, pure, reverse bool) {
+	t.Helper()
+	targets := []CreateRelationship{
+		tuple("space", "root", "parent", "space", "a-too-deep", ""),
+		tuple("space", "root", "parent", "space", "z-granted", ""),
+	}
+	if reverse {
+		slices.Reverse(targets)
+	}
+	store := &graphStore{fakeStore: fakeStore{tuples: append(targets,
+		tuple("space", "a-too-deep", "parent", "space", "deeper", ""),
+		tuple("space", "z-granted", "viewer", "user", "u1", ""),
+	)}}
+	svc := newLimitedService(t, store, setHierarchySchema(), authmodel.EvaluationLimits{MaxThroughDepth: 1})
+	req := authmodel.CheckRequest{Principal: setPrincipal, Permission: "view", Resource: authmodel.Resource{Type: "space", ID: "root"}}
+	ctx := context.Background()
+	var view tuples.Reader = exactStoreView{modelStoreView{store}}
+	if pure {
+		ctx, view = subjectFirst(ctx), modelStoreView{store}
+	}
+	_, checkErr := svc.Check(ctx, req)
+	_, _, explainErr := svc.CheckExplain(ctx, req)
+	_, batchErr := svc.CheckBatch(ctx, []authmodel.CheckRequest{req})
+	_, filterErr := svc.FilterAuthorized(ctx, setPrincipal, "view", "space", []string{"root"})
+	_, guardErr := svc.EvaluateWith(ctx, view, req)
+	for _, err := range []error{checkErr, explainErr, batchErr, filterErr, guardErr} {
+		if !errors.Is(err, authmodel.ErrEvaluationLimit) {
+			t.Fatalf("subject-first=%v reverse=%v: error=%v, want canonical earlier target's depth failure", pure, reverse, err)
 		}
 	}
 }
@@ -205,11 +220,11 @@ func TestDirectBatchSkipsResolvedCandidatesAndBranches(t *testing.T) {
 	request := func(id string) authmodel.CheckRequest {
 		return authmodel.CheckRequest{Principal: setPrincipal, Permission: "view", Resource: authmodel.Resource{Type: "doc", ID: id}}
 	}
-	results, err := svc.CheckBatch(context.Background(), []authmodel.CheckRequest{request("granted"), request("granted")})
+	results, err := svc.CheckBatch(subjectFirst(context.Background()), []authmodel.CheckRequest{request("granted"), request("granted")})
 	if err != nil || len(results) != 2 || !results[0].Allowed || results[0].Reason != "direct:a" || len(store.calls) != 0 {
 		t.Fatalf("resolved batch=%v error=%v calls=%v", results, err, store.calls)
 	}
-	_, err = svc.CheckBatch(context.Background(), []authmodel.CheckRequest{request("granted"), request("pending"), request("granted"), request("pending")})
+	_, err = svc.CheckBatch(subjectFirst(context.Background()), []authmodel.CheckRequest{request("granted"), request("pending"), request("granted"), request("pending")})
 	if !errors.Is(err, store.fail) || len(store.calls) != 1 || !slices.Equal(store.calls[0], []string{"pending"}) {
 		t.Fatalf("unresolved error=%v calls=%v", err, store.calls)
 	}

@@ -25,7 +25,7 @@ func TestLookupRetryBoundaries(t *testing.T) {
 		for _, page := range []bool{false, true} {
 			for _, outcome := range []string{"exhausted", "third attempt succeeds", "store conflict", "budget", "canceled", "deadline"} {
 				t.Run(fmt.Sprintf("snapshot=%v/page=%v/%s", snapshot, page, outcome), func(t *testing.T) {
-					ctx, cancel := context.WithCancel(t.Context())
+					ctx, cancel := context.WithCancel(subjectFirst(t.Context()))
 					defer cancel()
 					// The reader discovers candidates but the empty store denies them. Each
 					// mismatch must restart discovery, including a page's withheld lookahead.
@@ -129,7 +129,7 @@ func TestLookupSnapshotFailureDiscardsResults(t *testing.T) {
 			svc.store.(*graphFixture).reader = svc.reader
 			source := &failingTupleSnapshot{Reader: svc.reader, fail: failure, nilReader: nilReader}
 			svc.store.(*graphFixture).snapshot = source.ReadTupleSnapshot
-			got, err := svc.LookupResources(t.Context(), setPrincipal, "view", "space")
+			got, err := svc.LookupResources(subjectFirst(t.Context()), setPrincipal, "view", "space")
 			want := failure
 			if nilReader {
 				want = sdk.ErrInvalidInput

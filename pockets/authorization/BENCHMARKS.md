@@ -1,5 +1,66 @@
 # Authorization verification and benchmarks
 
+## Direct-hit short circuit (unreleased, 2026-10-14)
+
+`BenchmarkDirectLookupPostgres` measures single `Check` calls on
+`space.view = Direct(viewer)`, where `viewer` admits users and `group#member`.
+Alice holds 5,000 direct grants; space `wide` has 10,001 direct grantees. Each
+case runs over durable PostgreSQL reads and over a polled in-memory TupleCache
+(the PostgreSQL source with `memory.NewTupleCache()`), and the cache run fails
+if any check falls back to SQL. The fixture runs `VACUUM ANALYZE` after loading,
+as autovacuum would in production; one extra row measures the wide resource
+before that. "Before" is the same benchmark on the unchanged evaluator (pure
+subject-first expansion).
+
+Six 1 s samples per case, Go 1.26.1, Apple M4 Pro / Darwin arm64, PostgreSQL 17
+on loopback; medians, with the sample range after.
+
+| Case | Reads | Before µs/op | After µs/op | Before B/op | After B/op |
+| --- | --- | ---: | ---: | ---: | ---: |
+| Hit: principal with 5,000 grants, resource with 3 viewers | pgx | 2,435.8 (2,418.5–2,450.5) | 112.5 (111.0–115.9) | 14,688 | 7,614 |
+| Miss on a relation that admits usersets | pgx | 149.9 (147.7–153.2) | 179.3 (177.9–183.1) | 14,679 | 19,499 |
+| Grant reachable only through a userset | pgx | 146.3 (143.6–151.2) | 174.3 (171.7–177.3) | 14,680 | 19,500 |
+| Hit: resource with 10,001 grantees, principal with 3 grants | pgx | 147.5 (145.3–152.2) | 112.3 (111.2–114.8) | 14,680 | 7,613 |
+| Same, freshly loaded, before `VACUUM ANALYZE` | pgx | 1,447.4 (1,439.3–1,451.7) | 830.5 (828.8–845.2) | 14,708 | 7,635 |
+| Hit: principal with 5,000 grants, resource with 3 viewers | memory cache | 3,781.4 (3,768.4–3,813.0) | 2.3 (2.3–2.4) | 11,367,938 | 5,256 |
+| Miss on a relation that admits usersets | memory cache | 3.7 (3.6–3.7) | 4.9 (4.8–4.9) | 7,544 | 9,800 |
+| Grant reachable only through a userset | memory cache | 3.3 (3.3–3.4) | 4.3 (4.2–4.3) | 6,264 | 7,896 |
+| Hit: resource with 10,001 grantees, principal with 3 grants | memory cache | 3.6 (3.6–3.8) | 990.4 (983.8–1,000.6) | 7,544 | 3,125,448 |
+
+A miss on a userset relation now pays one extra exact probe: about 30 µs (one
+SQL round trip) on PostgreSQL and about 1 µs on the cache. The cache regression
+on the wide resource is the probe decoding the resource's whole forward set,
+about 3.1 MB per check.
+
+On PostgreSQL the steady-state wide-resource check is faster than before. On a
+freshly loaded or un-vacuumed table, the generic plan PostgreSQL caches for the
+exact-probe statement ties the primary key against
+`idx_iam_tuples_relation_resource`, and the narrower index wins: it filters all
+10,001 grantees. In single 1,000-iteration samples on an analyzed but
+un-vacuumed table, forcing `plan_cache_mode` gave 153 µs on custom plans and
+785 µs on a generic plan. Resource-scoped `RoleIn` checks and batch
+`ContainsMany` reads use the same statement and share this exposure.
+
+SQL statement counts for `CheckBatch` and `FilterAuthorized` over n dashboards
+on SQLite (`TestThroughBatchSQLiteProbeRounds`; dashboard → space → tenant):
+
+| n | Subject-first | Short circuit |
+| ---: | ---: | ---: |
+| 50 | 5 | 7 |
+| 128 | 5 | 8 |
+| 366 | 5 | 10 |
+| 600 | 9 | 16 |
+
+A round of one distinct space probe per request adds `ceil(n/100)` statements;
+the tenant round deduplicates to the fixture's four tenants and adds one.
+
+Run from the repository root with a disposable database:
+
+```sh
+(cd pockets/authorization/stores/pgx && POSTGRES_TEST_DSN=... go test -run '^$' -bench '^BenchmarkDirectLookupPostgres$' -benchmem -benchtime=1s -count=6 .)
+(cd pockets/authorization/stores/turso && go test -run '^TestThroughBatchSQLiteProbeRounds$' -v .)
+```
+
 ## Tuple-writer refresh (unreleased, 2026-09-16)
 
 `BenchmarkTupleWriterContentionPostgres` and `BenchmarkTupleWriterContentionSQLite`
@@ -140,7 +201,7 @@ Use longer runs and repeated samples for decisions about capacity or deployment.
 (cd pockets/authorization && go test -run '^$' -bench '^BenchmarkComposableGuard$' -benchmem -benchtime=1s -count=5 ./inbound/http)
 (cd pockets/authorization/stores/goredis && go test -run '^$' -bench '^BenchmarkTupleCache$' -benchmem -benchtime=1s -count=5 ./...)
 (cd pockets/authorization/stores/turso && go test -run '^$' -bench 'Benchmark(ThroughBatchSQLite|TupleSourceBacklog|GuardedWriterContentionSQLite)$' -benchmem -benchtime=1s -count=5 ./...)
-(cd pockets/authorization/stores/pgx && go test -run '^$' -bench 'Benchmark(DecisionsPostgres|TupleSourceBacklog|GuardedWriterContentionPostgres)$' -benchmem -benchtime=1s -count=5 ./...)
+(cd pockets/authorization/stores/pgx && go test -run '^$' -bench 'Benchmark(DecisionsPostgres|DirectLookupPostgres|TupleSourceBacklog|GuardedWriterContentionPostgres)$' -benchmem -benchtime=1s -count=5 ./...)
 (cd pockets/authorization/stores/goredis && go test -tags=integration -run '^$' -bench '^BenchmarkSQLRedis(Decisions|RoleReads)$' -benchmem -benchtime=1s -count=5 ./...)
 ```
 
@@ -153,6 +214,7 @@ Use longer runs and repeated samples for decisions about capacity or deployment.
 | TupleCache | Real Redis; 100–100,000 documents for one principal; accepted/rejected reverse-set reads, hot-set deltas and complete builds |
 | ThroughBatchSQLite | Direct/Through checks and 366-resource batch/filter; sequential reader versus batched SQL reader, including SQL query counts |
 | DecisionsPostgres | Direct/Through checks and 366-resource batch/filter against PostgreSQL |
+| DirectLookupPostgres | Direct checks with a principal-heavy hit, a userset miss, a userset-only grant and a resource-heavy hit; durable PostgreSQL and polled memory cache |
 | TupleSourceBacklog | 0, 2,000 or 20,000 pending trigger events but one current tuple; delta decoding versus full snapshot with event IDs |
 | GuardedWriterContention… | Actual alternating grant/revoke with a guard; one versus eight concurrent workers targeting different tenant IDs |
 | SQLRedisDecisions | Same 128-document userset/Through graph; SQL-only, cold cache and warm cache; single check, batch and filter; hits/fallbacks per operation |

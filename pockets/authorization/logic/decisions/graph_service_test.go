@@ -415,7 +415,7 @@ func TestCheckGroupExpansionOverflowMapsToEvaluationLimit(t *testing.T) {
 	store := budgetExceededStore{&fakeStore{}}
 	svc := newTestService(t, store)
 
-	_, err := svc.Check(context.Background(), authmodel.CheckRequest{
+	_, err := svc.Check(subjectFirst(context.Background()), authmodel.CheckRequest{
 		Principal: authmodel.PrincipalRef{Type: "user", ID: "u1"}, Permission: "delete", Resource: authmodel.Resource{Type: "post", ID: "p1"},
 	})
 	if !errors.Is(err, authmodel.ErrEvaluationLimit) {
@@ -430,7 +430,7 @@ func TestCheckGroupExpansionOverflowMapsToEvaluationLimit(t *testing.T) {
 
 	// The batch-optimized path (a Direct-only permission across shared subject +
 	// resource type) maps identically.
-	_, err = svc.CheckBatch(context.Background(), []authmodel.CheckRequest{
+	_, err = svc.CheckBatch(subjectFirst(context.Background()), []authmodel.CheckRequest{
 		{Principal: authmodel.PrincipalRef{Type: "user", ID: "u1"}, Permission: "delete", Resource: authmodel.Resource{Type: "post", ID: "p1"}},
 		{Principal: authmodel.PrincipalRef{Type: "user", ID: "u1"}, Permission: "delete", Resource: authmodel.Resource{Type: "post", ID: "p2"}},
 	})

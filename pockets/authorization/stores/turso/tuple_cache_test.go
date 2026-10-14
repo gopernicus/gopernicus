@@ -16,9 +16,37 @@ import (
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/relationships"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuplecache"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuples"
+	"github.com/gopernicus/gopernicus/pockets/authorization/stores/memory"
 	"github.com/gopernicus/gopernicus/pockets/authorization/stores/storetest"
 	"github.com/gopernicus/gopernicus/sdk"
 )
+
+// TestLookupEquivalenceLocal runs the durable short-circuit equivalence proof
+// on a local SQLite file without the integration tag; TestLookupEquivalence
+// repeats it against a configured disposable database under the tag.
+func TestLookupEquivalenceLocal(t *testing.T) {
+	storetest.RunLookupEquivalence(t, func(t *testing.T) storetest.Repositories {
+		db, cfg := cacheFixture(t, false)
+		repos, err := testRepositories(context.Background(), db, func(c *config) { *c = cfg })
+		if err != nil {
+			t.Fatal(err)
+		}
+		return repos
+	})
+}
+
+// TestTupleCacheLookupEquivalence repeats the short-circuit equivalence proof
+// with a polled memory tuple cache in front of this store.
+func TestTupleCacheLookupEquivalence(t *testing.T) {
+	storetest.RunLookupEquivalenceTupleCache(t, func(t *testing.T) storetest.Repositories {
+		db, cfg := cacheFixture(t, true)
+		repos, err := testRepositories(context.Background(), db, cacheOptions(cfg)...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return repos
+	}, func(*testing.T) tuplecache.Backend { return memory.NewTupleCache() })
+}
 
 func TestTupleCacheEnabledConformance(t *testing.T) {
 	storetest.Run(t, func(t *testing.T, policy mutations.IntegrityPolicy) storetest.Repositories {
