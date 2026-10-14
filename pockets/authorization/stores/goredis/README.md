@@ -93,15 +93,21 @@ Apply the authoritative adapter's fresh base and optional cache schema before
 constructing the source. The first successful poll rebuilds the mirror from
 current canonical tuples. See the SQL adapter's [schema setup guide](../UPGRADE.md).
 
-One authoritative source has one delivery receipt, so it can keep exactly one
-mirror current. Runtimes with different bindings (or separate mirrors, such as
-per-replica memory backends) over the same source each keep their own mirror,
-but every acknowledgement moves the receipt past the others. Each of them then
-rebuilds in full on **every** poll, even with no writes, for as long as more
-than one mirror is active: a full SQL scan plus a full rebuild per poll per
-replica. Keep that overlap short, including the rollout that changes
-`MaxStaleness` and the one-time cut from the v2 key layout, and run one binding
-per source in steady state.
+### One binding per authorization database
+
+Every replica on the same authorization database must run the same
+`MaxStaleness` (and the same gopernicus protocol), so all of them share one
+binding and one mirror. The database keeps a single delivery receipt, so it can
+keep exactly one mirror current. Runtimes with different bindings (or separate
+mirrors, such as per-replica memory backends) over the same database each keep
+their own mirror, but every acknowledgement moves the receipt past the others.
+Each of them then rebuilds in full on **every** poll, even with no writes, for
+as long as more than one is active: a full SQL scan plus a full rebuild per poll
+per replica. Answers stay correct; only the cost changes.
+
+**Rollout note.** When changing `MaxStaleness` (or upgrading from the v2 key
+layout), old and new pods rebuild on every poll while they overlap. Either
+deploy the change quickly, or turn the cache off, deploy, and turn it back on.
 
 ### Orphaned mirrors
 
