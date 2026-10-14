@@ -246,7 +246,8 @@ the principal's concrete type on that relation, and it reads the same snapshot
 as the expansion. Batches probe in rounds: the optimized `CheckBatch` and
 `FilterAuthorized` path (one resource type, one principal, no `Through`) sends
 one exact read per Direct relation, which SQL stores split into statements of
-100 tuples; other batches send one exact read per scheduling round. Answers are
+100 tuples; other batches send one exact read per scheduling round, reading each
+distinct fact once however many requests probe it. Answers are
 identical wherever both paths decide; the store conformance suite proves this
 over random models, cycles and off-model rows.
 
@@ -270,10 +271,10 @@ with `ErrEvaluationLimit` on overflow, never a deny.
 then the full expansion: about one extra round trip per single check (about
 30 µs on loopback PostgreSQL, about 1 µs on the in-memory cache). On SQL stores
 `CheckBatch` and `FilterAuthorized` add statements for every Direct level they
-probe: in the Turso benchmark graph (dashboard → space → tenant) two probe
-rounds of one probe per request add `2 × ceil(n/100)` statements, so a batch of
-50, 128, 366 or 600 requests goes from 5, 5, 5 or 9 to 7, 9, 13 or 21
-statements. Each statement is a round trip on a remote Turso database.
+probe: in the Turso benchmark graph (dashboard → space → tenant) a round of one
+distinct space probe per request plus a round of four distinct tenant probes add
+`ceil(n/100) + 1` statements, so a batch of 50, 128, 366 or 600 requests goes
+from 5, 5, 5 or 9 to 7, 8, 10 or 16 statements. Each statement is a round trip on a remote Turso database.
 
 **Wide resources.** With the TupleCache on, the probe decodes the resource's
 whole forward set (`logic/tuplecache/reader.go`): in the
@@ -286,7 +287,8 @@ plan PostgreSQL caches for the exact-probe statement ties the primary key
 against `idx_iam_tuples_relation_resource`, and the narrower index wins: it
 filters every grantee of the resource (about 0.83 ms at 10,001 grantees until
 autovacuum runs). Resource-scoped `RoleIn` checks (the HTTP `HasRole` guard) and batch
-`ContainsMany` reads already share this exposure. Grant very wide access (for
+`ContainsMany` reads already share this exposure. After a bulk load, run
+`VACUUM ANALYZE iam_tuples` rather than waiting for autovacuum. Grant very wide access (for
 example "every user can view the lobby") through a userset such as a group
 rather than thousands of direct tuples.
 

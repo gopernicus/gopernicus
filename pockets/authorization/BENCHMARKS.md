@@ -47,11 +47,12 @@ on SQLite (`TestThroughBatchSQLiteProbeRounds`; dashboard → space → tenant):
 | n | Subject-first | Short circuit |
 | ---: | ---: | ---: |
 | 50 | 5 | 7 |
-| 128 | 5 | 9 |
-| 366 | 5 | 13 |
-| 600 | 9 | 21 |
+| 128 | 5 | 8 |
+| 366 | 5 | 10 |
+| 600 | 9 | 16 |
 
-Two probe rounds of one probe per request add `2 × ceil(n/100)` statements.
+A round of one distinct space probe per request adds `ceil(n/100)` statements;
+the tenant round deduplicates to the fixture's four tenants and adds one.
 
 Run from the repository root with a disposable database:
 

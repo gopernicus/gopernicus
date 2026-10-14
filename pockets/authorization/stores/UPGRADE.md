@@ -32,8 +32,9 @@ authorization to v0.26.0 for their own tests.
 relation admitting usersets pays one extra round trip before expanding (about
 30 µs on loopback PostgreSQL). On SQL stores, `CheckBatch` and
 `FilterAuthorized` add statements for each Direct level they probe: in the
-benchmark graph, `2 × ceil(n/100)` more for n requests (7, 9, 13 and 21
-statements instead of 5, 5, 5 and 9 at n = 50, 128, 366 and 600). This matters
+benchmark graph, `ceil(n/100) + 1` more for n requests (7, 8, 10 and 16
+statements instead of 5, 5, 5 and 9 at n = 50, 128, 366 and 600). Requests that
+probe the same fact in one round share one read. This matters
 most on remote Turso, where each statement is a network round trip.
 
 **Wide resources.** With TupleCache on, the probe decodes the resource's whole
@@ -43,7 +44,8 @@ PostgreSQL table the same check gets faster (about 148 µs to 112 µs). On a
 freshly loaded or un-vacuumed table, PostgreSQL's cached generic plan for the
 exact probe can prefer `idx_iam_tuples_relation_resource` and filter every
 grantee (about 0.83 ms) until autovacuum runs; resource-scoped `RoleIn` checks
-and batch exact reads already share that exposure. Principals with many grants
+and batch exact reads already share that exposure. After a bulk load, run
+`VACUUM ANALYZE iam_tuples` rather than waiting for autovacuum. Principals with many grants
 checked on small resources get much faster on both. See
 [BENCHMARKS.md](../BENCHMARKS.md#direct-hit-short-circuit-unreleased-2026-10-14).
 

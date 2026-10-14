@@ -181,12 +181,12 @@ func TestThroughBatchSQLiteQueryCounts(t *testing.T) {
 }
 
 // probeStatements is the SQL the direct-hit short circuit adds to one batch
-// over n dashboards: two probe rounds (space#viewer, then tenant#owner), each
-// carrying one probe per request and chunked by tupleTransportBatch. Repeated
-// probes are not deduplicated within a round; a parent space's probe is
+// over n dashboards: a space#viewer probe round with one distinct probe per
+// request, chunked by tupleTransportBatch, and a tenant#owner round that
+// deduplicates to the fixture's four tenants. A parent space's probe is
 // already memoized from the first round.
 func probeStatements(n int) int {
-	return 2 * ((n + tupleTransportBatch - 1) / tupleTransportBatch)
+	return (n+tupleTransportBatch-1)/tupleTransportBatch + 1
 }
 
 // TestThroughBatchSQLiteProbeRounds pins how the direct-hit probes grow with

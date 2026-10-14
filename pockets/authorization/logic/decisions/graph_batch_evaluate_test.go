@@ -227,3 +227,46 @@ func TestBatchTraversalCancellationAndPanicInProbeRound(t *testing.T) {
 		})
 	}
 }
+
+// TestBatchTraversalDeduplicatesProbeRound proves one round reads each distinct
+// fact once and fans hits and misses back to every request that probed it.
+func TestBatchTraversalDeduplicatesProbeRound(t *testing.T) {
+	store := &fakeStore{tuples: containerTuples(3)}
+	svc := newTestService(t, store)
+	var rounds [][]tuples.Tuple
+	facts := &hookedFacts{Reader: svc.facts, before: func(ts []tuples.Tuple) error {
+		rounds = append(rounds, slices.Clone(ts))
+		return nil
+	}}
+	probed := *svc
+	probed.facts = facts
+	reqs := []authmodel.CheckRequest{check("u1", "post", "p0"), check("u2", "post", "p0"), check("u1", "post", "p2"), check("u2", "post", "p2")}
+	got, err := probed.checkBatch(t.Context(), svc.reader, reqs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, want := range []bool{true, false, true, false} {
+		if got[i].Allowed != want {
+			t.Fatalf("request %d: %+v, want allowed=%v", i, got[i], want)
+		}
+	}
+	admin := func(user string) tuples.Tuple {
+		return tuples.Tuple{Scope: tuples.On("org", "o1"), Relation: "admin", Subject: tuples.SubjectRef{Type: "user", ID: user}}
+	}
+	sawOrgRound := false
+	for _, round := range rounds {
+		if !slices.IsSortedFunc(round, tuples.Compare) || len(slices.Compact(slices.Clone(round))) != len(round) {
+			t.Fatalf("round read duplicates or is unordered: %v", round)
+		}
+		if slices.Contains(round, admin("u1")) {
+			sawOrgRound = true
+			if !slices.Equal(round, []tuples.Tuple{admin("u1"), admin("u2")}) {
+				t.Fatalf("four org probes must read two distinct facts: %v", round)
+			}
+		}
+	}
+	if !sawOrgRound {
+		t.Fatalf("no org probe round: %v", rounds)
+	}
+	assertBatchParity(t, svc, reqs)
+}
