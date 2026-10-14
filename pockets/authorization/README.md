@@ -278,7 +278,7 @@ from 5, 5, 5 or 9 to 7, 8, 10 or 16 statements. Each statement is a round trip o
 
 **Wide resources.** With the TupleCache on, the probe decodes the resource's
 whole forward set (`logic/tuplecache/reader.go`): in the
-[benchmarks](BENCHMARKS.md#direct-hit-short-circuit-unreleased-2026-10-14) a
+[benchmarks](BENCHMARKS.md#direct-hit-short-circuit-v0260--published-2026-10-14) a
 check on a resource with 10,001 grantees went from about 4 µs to about 1 ms and
 allocates about 3.1 MB per check. On PostgreSQL the probe is an indexed
 `EXISTS`, and on a vacuumed and analyzed table that same check went from about

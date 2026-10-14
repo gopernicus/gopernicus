@@ -1,6 +1,6 @@
 # Authorization verification and benchmarks
 
-## Direct-hit short circuit (unreleased, 2026-10-14)
+## Direct-hit short circuit (v0.26.0 — published 2026-10-14)
 
 `BenchmarkDirectLookupPostgres` measures single `Check` calls on
 `space.view = Direct(viewer)`, where `viewer` admits users and `group#member`.

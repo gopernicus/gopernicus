@@ -47,7 +47,7 @@ grantee (about 0.83 ms) until autovacuum runs; resource-scoped `RoleIn` checks
 and batch exact reads already share that exposure. After a bulk load, run
 `VACUUM ANALYZE iam_tuples` rather than waiting for autovacuum. Principals with many grants
 checked on small resources get much faster on both. See
-[BENCHMARKS.md](../BENCHMARKS.md#direct-hit-short-circuit-unreleased-2026-10-14).
+[BENCHMARKS.md](../BENCHMARKS.md#direct-hit-short-circuit-v0260--published-2026-10-14).
 
 ## Adopting operation fences (v0.24.0) — a one-way migration
 

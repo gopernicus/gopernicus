@@ -1,5 +1,54 @@
 # Releasing gopernicus modules
 
+## Direct-hit short circuit (authorization v0.26.0 — published 2026-10-14)
+
+MINOR release of authorization core `v0.26.0`, alone. This is Phase 1 of the
+per-route lookup strategy. No store tag, no migration and no host code change.
+The pgx, Turso and goredis adapters were repinned to `v0.26.0` for their own
+tests only (PR #82), because their conformance tests call the new
+`storetest.RunLookupEquivalence` suites. Their runtime code is unchanged, so
+existing adapter tags (pgx `v0.18.0`, Turso `v0.17.0`, goredis `v0.5.0`) work
+with `v0.26.0`.
+
+**What changed.** Before a `Direct` relation check expands subject-first, the
+engine probes the principal's own concrete tuple on the resource. A hit grants.
+A miss denies when the relation admits no userset subject. Otherwise the
+existing expansion runs unchanged, and no extra budget step is charged.
+
+- Batch traversal reads each distinct exact fact once per round.
+- The optimized batch probes all IDs with one `ContainsMany`.
+- Answers change only at the budget edge. A principal over `MaxGraphStates`
+  now gets a grant on a direct hit, or a deny on a miss for a relation that
+  admits no usersets, instead of `ErrEvaluationLimit`.
+- Explain steps for a hit carry the new `Outcome: direct_hit`. `CheckResult`
+  codes are unchanged.
+- Costs: a miss on a relation that admits usersets pays one extra round trip.
+  With the tuple cache on, a resource with very many grantees costs about 1 ms
+  per check. See `stores/UPGRADE.md` and
+  [BENCHMARKS.md](pockets/authorization/BENCHMARKS.md).
+
+**Tag and verification.** The tag is annotated at
+`826c519767578c7540805e20d2d229821cf73fa5` (PR #81), and that commit passed CI on
+`main`.
+
+- The proxy `.info` resolved before the adapter repin moved.
+- A cold download (`GOWORK=off`, empty module cache, `proxy.golang.org`,
+  `sum.golang.org`) passed build, vet, uncached tests and `go mod verify`.
+- Equivalence and adapter suites ran on local PostgreSQL 17, local SQLite (Turso
+  untagged and `-tags=integration`), and goredis against a local
+  `redis-server`. **Hosted Turso was not run: the playground database no longer
+  exists.**
+- An owner rerun of `BenchmarkDirectLookupPostgres` reproduced the recorded
+  numbers within about 3%.
+- A proposed 7-column pgx index was measured and dropped by owner ruling: it
+  grew that index from 12 MB to 120 MB to fix only freshly bulk-loaded,
+  un-vacuumed tables.
+
+Checksums and provenance: [release manifest](plans/per-route-lookup-strategy-release-manifest.json).
+Design, rulings and build notes: [the plan](plans/per-route-lookup-strategy.md).
+Host repins: [gps-360-go](plans/gps-360-go-authorization-v0.26-repin-handoff.md),
+[Segovia v2](plans/segovia-v2-authorization-v0.26-repin-handoff.md).
+
 ## Invitation terminal settlement (published 2026-10-13)
 
 Coordinated MINOR releases: authorization `v0.24.0`, its PostgreSQL adapter
