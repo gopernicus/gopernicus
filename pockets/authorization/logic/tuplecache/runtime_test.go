@@ -470,6 +470,17 @@ func TestZeroMaxStalenessSelectsDefault(t *testing.T) {
 	if want := fmt.Sprintf("protocol:2/test-store/max-staleness:%d", tuplecache.DefaultMaxStaleness); c.Binding() != want || tuplecache.DefaultMaxStaleness != 5*time.Second {
 		t.Fatalf("binding %q, want %q", c.Binding(), want)
 	}
+	if c.PollInterval() != time.Second {
+		t.Fatalf("default poll interval %v, want 1s", c.PollInterval())
+	}
+	short, err := tuplecache.New(&source{store: memory.New()}, memory.NewTupleCache(), tuplecache.WithPolicy(tuplecache.Policy{MaxStaleness: 2 * time.Second}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer short.Close()
+	if short.PollInterval() != 500*time.Millisecond {
+		t.Fatalf("poll interval %v, want MaxStaleness/4", short.PollInterval())
+	}
 }
 
 func TestRestartWithUnchangedBindingResumesDeltas(t *testing.T) {

@@ -603,7 +603,9 @@ coalesced wake-up hint. Constructors start no goroutines.
 `MaxStaleness` defaults to **5 seconds** when zero: a revocation may remain
 unseen for up to 5s. Negative values are rejected. A host that sets it must use
 the same value on every replica sharing an authorization database. A revocation
-may remain unseen while publication is pending within that bound. Eligibility starts at the authoritative
+may remain unseen while publication is pending within that bound. `PollInterval`
+defaults to `min(1s, MaxStaleness/4)` (1s with the default); `Notify()` still
+delivers local writes immediately, and replicas may use different intervals. Eligibility starts at the authoritative
 observation, so a delayed relay cannot extend it. Missing/expired/oversized cache
 reads or a concurrent publication retry the **whole operation** on a durable
 snapshot. Exact role reads use this same runtime. Ambient transactions bypass

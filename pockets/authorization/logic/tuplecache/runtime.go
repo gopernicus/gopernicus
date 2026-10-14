@@ -21,7 +21,8 @@ const DefaultMaxStaleness = 5 * time.Second
 // Policy separates delivery freshness from tuple storage: tuples do not expire.
 // MaxStaleness bounds how long a revocation may remain unseen; zero selects
 // DefaultMaxStaleness. It is part of the binding, so every replica sharing an
-// authorization database must use the same value.
+// authorization database must use the same value. PollInterval zero selects
+// min(1s, MaxStaleness/4); it is not part of the binding, so replicas may differ.
 type Policy struct {
 	MaxStaleness time.Duration
 	PollInterval time.Duration
@@ -81,7 +82,7 @@ func New(source Source, backend Backend, opts ...Option) (*TupleCache, error) {
 		p.MaxStaleness = DefaultMaxStaleness
 	}
 	if p.PollInterval == 0 {
-		p.PollInterval = min(250*time.Millisecond, p.MaxStaleness/4)
+		p.PollInterval = min(time.Second, p.MaxStaleness/4)
 	}
 	if p.PollTimeout == 0 {
 		p.PollTimeout = 30 * time.Second
