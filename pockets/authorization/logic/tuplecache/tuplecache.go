@@ -67,18 +67,23 @@ type Source interface {
 	ReadSnapshot(context.Context, func(context.Context, CheckReads) error) error
 }
 
-// Backend owns a complete raw mirror, its atomic publications and readiness.
+// Backend owns complete raw mirrors, their atomic publications and readiness.
 // No operation may expose a partially applied batch or partially built mirror.
-// The host supplies a dedicated namespace and owns the backend's lifecycle.
+// A backend holds one independent mirror per binding: State addresses binding,
+// Read addresses expected.Binding and Publish addresses next.Binding. The host
+// owns the backend's lifecycle.
 type Backend interface {
-	// State returns even an expired receipt for recovery; it does not prove
-	// that cached permission reads are eligible.
-	State(context.Context) (State, error)
+	// State returns the mirror published under binding, or the zero State when
+	// none exists. It returns even an expired receipt for recovery; it does not
+	// prove that cached permission reads are eligible.
+	State(ctx context.Context, binding string) (State, error)
 	// Read returns one complete set per key, in input order. An empty set is
 	// known absence only in a complete, unexpired mirror matching expected.
 	// Empty keys validate eligibility without reading any tuple fields.
 	Read(ctx context.Context, expected State, keys []SetKey) ([][]tuples.Tuple, error)
-	// Publish compares expected atomically. Full replaces all data from Tuples;
+	// Publish compares expected atomically. expected.Binding is empty (no
+	// mirror yet) or equal to next.Binding; otherwise it returns ErrBinding.
+	// Full replaces all data from Tuples;
 	// otherwise apply Changes in order, updating only affected index fields.
 	// validFor is the remaining eligibility period, measured on backend time.
 	// A no-change publication may retain the receipt and only renew eligibility.

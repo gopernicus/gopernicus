@@ -119,9 +119,9 @@ func TestBootstrapDeliveryAndRecovery(t *testing.T) {
 	if s.durable != 1 || c.Stats().Hits != 1 {
 		t.Fatalf("warm read: %+v", c.Stats())
 	}
-	before, _ := backend.State(t.Context())
+	before, _ := backend.State(t.Context(), c.Binding())
 	poll(t, c)
-	after, _ := backend.State(t.Context())
+	after, _ := backend.State(t.Context(), c.Binding())
 	if before != after || s.acks != 1 {
 		t.Fatal("idle observation changed receipt or acknowledged work")
 	}
@@ -148,7 +148,7 @@ func TestAcknowledgementFailureAndRedisRestore(t *testing.T) {
 	backend := memory.NewTupleCache()
 	c, s := fixture(t, []tuplefacts.Tuple{grant}, backend)
 	poll(t, c)
-	old, _ := backend.State(t.Context())
+	old, _ := backend.State(t.Context(), c.Binding())
 	revoke(t, s)
 	s.ackErr = errors.New("SQL acknowledgement unavailable")
 	if err := c.Poll(t.Context()); !errors.Is(err, s.ackErr) {
@@ -164,7 +164,7 @@ func TestAcknowledgementFailureAndRedisRestore(t *testing.T) {
 		t.Fatal("mismatching receipt did not rebuild")
 	}
 	// Restore an old complete Redis snapshot while the SQL outbox is empty.
-	state, _ := backend.State(t.Context())
+	state, _ := backend.State(t.Context(), c.Binding())
 	if err := backend.Publish(t.Context(), state, old, tuplecache.Snapshot{Full: true, Tuples: []tuplefacts.Tuple{grant}}, time.Second); err != nil {
 		t.Fatal(err)
 	}
@@ -379,17 +379,17 @@ func TestPolicyBindingStartupAndWake(t *testing.T) {
 		t.Fatal("wake not coalesced")
 	default:
 	}
-	if err := b.Publish(t.Context(), tuplecache.State{}, tuplecache.State{Binding: "other-store", Receipt: "x"}, tuplecache.Snapshot{Full: true}, time.Second); err != nil {
-		t.Fatal(err)
-	}
-	if err := c.Poll(t.Context()); !errors.Is(err, tuplecache.ErrBinding) {
-		t.Fatal(err)
-	}
-	allowed(t, c, false)
-	if s.durable != 1 {
-		t.Fatal("mismatched store binding read")
-	}
 	_ = c.Close()
+	// A correct backend never returns another binding's mirror; one that does is
+	// corrupt, so the runtime refuses it and stays durable.
+	foreign, s := fixture(t, nil, foreignBackend{Backend: b})
+	if err := foreign.Poll(t.Context()); !errors.Is(err, tuplecache.ErrBinding) {
+		t.Fatal(err)
+	}
+	allowed(t, foreign, false)
+	if s.durable != 1 {
+		t.Fatal("foreign mirror read")
+	}
 	c.Notify()
 	select {
 	case <-c.WakeChannel():
@@ -398,7 +398,14 @@ func TestPolicyBindingStartupAndWake(t *testing.T) {
 	}
 }
 
-func TestSharedMirrorRejectsDifferentFreshnessPolicies(t *testing.T) {
+// foreignBackend reports another binding's mirror for every key.
+type foreignBackend struct{ tuplecache.Backend }
+
+func (foreignBackend) State(context.Context, string) (tuplecache.State, error) {
+	return tuplecache.State{Binding: "other-store", Receipt: "x"}, nil
+}
+
+func TestDifferentFreshnessPoliciesUseSeparateMirrors(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		backend := memory.NewTupleCache()
 		short, s := fixture(t, []tuplefacts.Tuple{grant}, backend)
@@ -408,17 +415,68 @@ func TestSharedMirrorRejectsDifferentFreshnessPolicies(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer long.Close()
-		if err := long.Poll(t.Context()); !errors.Is(err, tuplecache.ErrBinding) {
-			t.Fatalf("peer extended shared eligibility: %v", err)
+		poll(t, long)
+		if long.Stats().Rebuilds != 1 {
+			t.Fatalf("long policy did not build its own mirror: %+v", long.Stats())
 		}
+		allowed(t, short, true)
+		allowed(t, long, true)
 		revoke(t, s)
-		time.Sleep(time.Second)
+		poll(t, short)
 		allowed(t, short, false)
+		allowed(t, long, true) // long's own mirror, within its accepted lag.
+		poll(t, long)
 		allowed(t, long, false)
-		if s.durable != 2 {
-			t.Fatal("mismatched policy or expired runtime served stale grant")
+		if s.durable != 0 {
+			t.Fatalf("ready runtimes fell back to durable reads: %d", s.durable)
 		}
 	})
+}
+
+// renamedSource is a source whose identity row changed, e.g. after a restore.
+type renamedSource struct{ *source }
+
+func (renamedSource) Binding() string { return "restored-store" }
+
+func TestSourceIdentityChangeUsesNewMirror(t *testing.T) {
+	backend := memory.NewTupleCache()
+	c, s := fixture(t, []tuplefacts.Tuple{grant}, backend)
+	poll(t, c)
+	old, err := backend.State(t.Context(), c.Binding())
+	if err != nil {
+		t.Fatal(err)
+	}
+	moved, err := tuplecache.New(renamedSource{s}, backend, tuplecache.WithPolicy(tuplecache.Policy{MaxStaleness: time.Second}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer moved.Close()
+	poll(t, moved)
+	allowed(t, moved, true)
+	if moved.Stats().Rebuilds != 1 || moved.Binding() == c.Binding() {
+		t.Fatalf("new identity did not rebuild its own mirror: %+v", moved.Stats())
+	}
+	if left, err := backend.State(t.Context(), c.Binding()); err != nil || left != old {
+		t.Fatalf("old mirror changed: %+v/%v", left, err)
+	}
+}
+
+func TestRestartWithUnchangedBindingResumesDeltas(t *testing.T) {
+	backend := memory.NewTupleCache()
+	c, s := fixture(t, []tuplefacts.Tuple{grant}, backend)
+	poll(t, c)
+	_ = c.Close()
+	restarted, err := tuplecache.New(s, backend, tuplecache.WithPolicy(tuplecache.Policy{MaxStaleness: time.Second}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer restarted.Close()
+	revoke(t, s)
+	poll(t, restarted)
+	allowed(t, restarted, false)
+	if restarted.Stats().Rebuilds != 0 {
+		t.Fatalf("restart with unchanged binding rebuilt: %+v", restarted.Stats())
+	}
 }
 
 func tupleFact(rt, rid, rel, st, sid, sr string) tuplefacts.Tuple {

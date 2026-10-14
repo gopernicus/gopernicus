@@ -185,10 +185,12 @@ func (c *TupleCache) poll(ctx context.Context, rebuild bool) (err error) {
 	}()
 	ctx, cancel := context.WithTimeout(ctx, c.policy.PollTimeout)
 	defer cancel()
-	before, err := c.backend.State(ctx)
+	before, err := c.backend.State(ctx, c.binding)
 	if err != nil {
 		return err
 	}
+	// A correct backend only returns this binding's mirror; anything else is
+	// a foreign mirror under our key, so refuse rather than overwrite it.
 	if before.Binding != "" && before.Binding != c.Binding() {
 		return ErrBinding
 	}
@@ -303,7 +305,7 @@ func (c *TupleCache) Run(ctx context.Context, evaluate func(context.Context, Che
 func (c *TupleCache) attempt(ctx context.Context, evaluate func(context.Context, CheckReads) error) (bool, error) {
 	cacheCtx, cancel := context.WithTimeout(ctx, c.policy.ReadTimeout)
 	defer cancel()
-	state, err := c.backend.State(cacheCtx)
+	state, err := c.backend.State(cacheCtx, c.binding)
 	if err != nil {
 		return false, err
 	}

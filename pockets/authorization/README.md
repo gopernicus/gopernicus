@@ -593,7 +593,8 @@ SQL facts. Ordinary SQL-only writers participate through those same triggers.
 
 Construct the SQL repositories with their store `WithTupleCache()` option after
 applying the optional cache baseline in the [schema setup guide](stores/UPGRADE.md).
-Then construct `goredis.NewTupleCache(client, namespace)` and pass
+Then construct `goredis.NewTupleCache(client)` (an optional
+`goredis.WithNamespace` adds a readable key prefix) and pass
 `authorization.WithTupleCache(backend, tuplecache.Policy{MaxStaleness: bound})`.
 The Redis client must enable context timeouts. Run `components.TupleCache.Poll`
 as a supervised host worker; `Notify()` after the outermost commit is only a
@@ -606,12 +607,13 @@ reads or a concurrent publication retry the **whole operation** on a durable
 snapshot. Exact role reads use this same runtime. Ambient transactions bypass
 Redis and borrow the coherent SQL view; integrity and audit remain durable.
 
-Protocol 2 is part of the Redis key prefix and wire format. Scope kind is explicit.
-Processes sharing a delivery stream share one mirror and MaxStaleness policy;
-source/policy mismatches fail with `tuplecache.ErrBinding`. An empty/restored mirror
-rebuilds from SQL, even after its original events were acknowledged. Use a fresh
-source identity/namespace when restoring or cloning authoritative data as directed
-by the adapter runbook.
+Protocol 2 is part of the binding and wire format. Scope kind is explicit.
+The backend keys each mirror on its binding (protocol, source identity and
+MaxStaleness), so processes share a mirror exactly when their bindings match and
+different bindings use different mirrors. `tuplecache.ErrBinding` now only reports
+a backend returning a foreign mirror. An empty/restored mirror rebuilds from SQL,
+even after its original events were acknowledged. Use a fresh source identity when
+restoring or cloning authoritative data as directed by the adapter runbook.
 
 The Redis adapter uses one complete hash on one shard; Redis Cluster is unsupported.
 Default limits reject reads above 1 MiB and delta publication inputs plus affected
