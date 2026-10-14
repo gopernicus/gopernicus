@@ -271,7 +271,7 @@ is measured from the authoritative observation. Wire it like this:
 
 ```go
 repos, err := pgx.Repositories(ctx, db, pgx.WithTupleCache())   // fills Repositories.TupleSource
-backend, err := goredis.NewTupleCache(client, "authorization")
+backend, err := goredis.NewTupleCache(client, goredis.WithNamespace("authorization")) // namespace optional
 components, err := authorization.New(repos,
     authorization.WithTupleCache(backend, tuplecache.Policy{MaxStaleness: 5 * time.Second}),
 )

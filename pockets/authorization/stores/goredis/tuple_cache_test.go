@@ -17,6 +17,7 @@ import (
 
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuplecache"
 	tuplefacts "github.com/gopernicus/gopernicus/pockets/authorization/logic/tuples"
+	"github.com/gopernicus/gopernicus/pockets/authorization/stores/memory"
 	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/redis/go-redis/v9"
 )
@@ -28,7 +29,7 @@ func TestTupleCacheRawSetsAndTargetedChanges(t *testing.T) {
 	state := tuplecache.State{Binding: "store", Receipt: "initial"}
 	a := tuple("space", "a", "viewer", "user", "alice", "")
 	b := tuple("space", "b", "viewer", "user", "bob", "")
-	if got, err := c.State(ctx); err != nil || got != (tuplecache.State{}) {
+	if got, err := c.State(ctx, "store"); err != nil || got != (tuplecache.State{}) {
 		t.Fatalf("absent State: %v %v", got, err)
 	}
 	if _, err := c.Read(ctx, state, nil); !errors.Is(err, tuplecache.ErrUnavailable) {
@@ -40,7 +41,7 @@ func TestTupleCacheRawSetsAndTargetedChanges(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertSets(t, c, state, []tuplecache.SetKey{forward(a), reverse(a), forward(tuple("space", "missing", "viewer", "user", "x", ""))}, [][]tuplefacts.Tuple{{a}, {a}, {}})
-	untouched := client.HGet(ctx, c.key, setField(forward(b))).Val()
+	untouched := client.HGet(ctx, keyFor(t, c, "store"), setField(forward(b))).Val()
 	updated := tuple("space", "a", "viewer", "team", "engineering", "member")
 	membership := tuple("team", "engineering", "member", "user", "alice", "")
 	next := tuplecache.State{Binding: "store", Receipt: "updated"}
@@ -49,13 +50,13 @@ func TestTupleCacheRawSetsAndTargetedChanges(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertSets(t, c, next, []tuplecache.SetKey{forward(updated), reverse(a), reverse(updated), reverse(membership)}, [][]tuplefacts.Tuple{{updated}, {membership}, {updated}, {membership}})
-	if got := client.HGet(ctx, c.key, setField(forward(b))).Val(); got != untouched {
+	if got := client.HGet(ctx, keyFor(t, c, "store"), setField(forward(b))).Val(); got != untouched {
 		t.Fatal("unrelated set changed")
 	}
 	if _, err := c.Read(ctx, state, nil); !errors.Is(err, tuplecache.ErrUnavailable) {
 		t.Fatalf("old receipt: %v", err)
 	}
-	if ttl := client.TTL(ctx, c.key).Val(); ttl != -1 {
+	if ttl := client.TTL(ctx, keyFor(t, c, "store")).Val(); ttl != -1 {
 		t.Fatalf("ordinary mirror has TTL: %v", ttl)
 	}
 	last := tuplecache.State{Binding: "store", Receipt: "removed"}
@@ -63,7 +64,7 @@ func TestTupleCacheRawSetsAndTargetedChanges(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertSets(t, c, last, []tuplecache.SetKey{forward(updated), reverse(updated)}, [][]tuplefacts.Tuple{{}, {}})
-	if client.HExists(ctx, c.key, setField(forward(updated))).Val() {
+	if client.HExists(ctx, keyFor(t, c, "store"), setField(forward(updated))).Val() {
 		t.Fatal("empty index field retained")
 	}
 }
@@ -119,7 +120,7 @@ func TestTupleCacheCASAndAtomicIndexes(t *testing.T) {
 	if successes != 1 || conflicts != 1 {
 		t.Fatalf("publication winners %d conflicts %d", successes, conflicts)
 	}
-	state, _ = c.State(ctx)
+	state, _ = c.State(ctx, "store")
 	assertSets(t, c, state, []tuplecache.SetKey{forward(row), reverse(row)}, [][]tuplefacts.Tuple{{}, {}})
 	var wg sync.WaitGroup
 	done := make(chan struct{})
@@ -131,7 +132,7 @@ func TestTupleCacheCASAndAtomicIndexes(t *testing.T) {
 				return
 			default:
 			}
-			observed, err := c.State(ctx)
+			observed, err := c.State(ctx, "store")
 			if err != nil {
 				readErrors <- err
 				return
@@ -179,10 +180,10 @@ func TestTupleCacheReadinessAndRebuild(t *testing.T) {
 	if err := c.Publish(ctx, tuplecache.State{}, state, tuplecache.Snapshot{Full: true, Tuples: []tuplefacts.Tuple{row}}, time.Minute); err != nil {
 		t.Fatal(err)
 	}
-	if err := client.HSet(ctx, c.key, "!until", 1).Err(); err != nil {
+	if err := client.HSet(ctx, keyFor(t, c, "store"), "!until", 1).Err(); err != nil {
 		t.Fatal(err)
 	}
-	if got, err := c.State(ctx); err != nil || got != state {
+	if got, err := c.State(ctx, "store"); err != nil || got != state {
 		t.Fatalf("expired receipt lost: %v %v", got, err)
 	}
 	if _, err := c.Read(ctx, state, nil); !errors.Is(err, tuplecache.ErrUnavailable) {
@@ -192,10 +193,10 @@ func TestTupleCacheReadinessAndRebuild(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertSets(t, c, state, []tuplecache.SetKey{forward(row)}, [][]tuplefacts.Tuple{{row}})
-	if err := client.Del(ctx, c.key).Err(); err != nil {
+	if err := client.Del(ctx, keyFor(t, c, "store")).Err(); err != nil {
 		t.Fatal(err)
 	}
-	if got, err := c.State(ctx); err != nil || got != (tuplecache.State{}) {
+	if got, err := c.State(ctx, "store"); err != nil || got != (tuplecache.State{}) {
 		t.Fatalf("lost mirror: %v %v", got, err)
 	}
 	if _, err := c.Read(ctx, state, []tuplecache.SetKey{forward(row)}); !errors.Is(err, tuplecache.ErrUnavailable) {
@@ -209,10 +210,10 @@ func TestTupleCacheReadinessAndRebuild(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertSets(t, c, rebuilt, []tuplecache.SetKey{forward(row)}, [][]tuplefacts.Tuple{{}})
-	if err := client.HSet(ctx, c.key, "!receipt", "").Err(); err != nil {
+	if err := client.HSet(ctx, keyFor(t, c, "store"), "!receipt", "").Err(); err != nil {
 		t.Fatal(err)
 	}
-	if got, err := c.State(ctx); err != nil || got != (tuplecache.State{}) {
+	if got, err := c.State(ctx, "store"); err != nil || got != (tuplecache.State{}) {
 		t.Fatalf("corrupt mirror: %v %v", got, err)
 	}
 	if err := c.Publish(ctx, tuplecache.State{}, state, tuplecache.Snapshot{Full: true, Tuples: []tuplefacts.Tuple{row}}, time.Minute); err != nil {
@@ -245,24 +246,24 @@ func TestTupleCacheRejectsInvalidDataBeforeMutation(t *testing.T) {
 		{"stale writer", tuplecache.State{Binding: "store", Receipt: "old"}, next, tuplecache.Snapshot{Full: true}, tuplecache.ErrConflict},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			before := client.HGetAll(ctx, c.key).Val()
+			before := client.HGetAll(ctx, keyFor(t, c, "store")).Val()
 			if err := c.Publish(ctx, test.expected, test.next, test.snapshot, time.Minute); !errors.Is(err, test.want) {
 				t.Fatalf("error %v, want %v", err, test.want)
 			}
-			if got := client.HGetAll(ctx, c.key).Val(); !reflect.DeepEqual(before, got) {
+			if got := client.HGetAll(ctx, keyFor(t, c, "store")).Val(); !reflect.DeepEqual(before, got) {
 				t.Fatal("invalid publication mutated hash")
 			}
 		})
 	}
 	field := setField(forward(other))
-	if err := client.HSet(ctx, c.key, field, `[["bad"]]`).Err(); err != nil {
+	if err := client.HSet(ctx, keyFor(t, c, "store"), field, `[["bad"]]`).Err(); err != nil {
 		t.Fatal(err)
 	}
-	before := client.HGetAll(ctx, c.key).Val()
+	before := client.HGetAll(ctx, keyFor(t, c, "store")).Val()
 	if err := c.Publish(ctx, state, next, tuplecache.Snapshot{Changes: []tuplecache.Change{{Before: &row}, {Before: &other}}}, time.Minute); !errors.Is(err, tuplecache.ErrUnavailable) {
 		t.Fatalf("malformed existing set: %v", err)
 	}
-	if got := client.HGetAll(ctx, c.key).Val(); !reflect.DeepEqual(before, got) {
+	if got := client.HGetAll(ctx, keyFor(t, c, "store")).Val(); !reflect.DeepEqual(before, got) {
 		t.Fatal("script partially mutated before validation error")
 	}
 	if _, err := c.Read(ctx, state, []tuplecache.SetKey{forward(other)}); !errors.Is(err, tuplecache.ErrUnavailable) {
@@ -282,10 +283,178 @@ func TestTupleCacheRestartPersistence(t *testing.T) {
 	server.stop()
 	restored, _ := startRedis(t, server.dir, true)
 	c = newCache(t, restored)
-	if got, err := c.State(ctx); err != nil || got != state {
+	if got, err := c.State(ctx, "store"); err != nil || got != state {
 		t.Fatalf("restored state: %v %v", got, err)
 	}
 	assertSets(t, c, state, []tuplecache.SetKey{forward(row), reverse(row)}, [][]tuplefacts.Tuple{{row}, {row}})
+}
+
+func TestTupleCacheRuntimeRestartResumesDeltas(t *testing.T) {
+	client, server := startRedis(t, "", true)
+	row := tuple("space", "a", "viewer", "user", "alice", "")
+	source := newDeltaSource(t, "redis-delta", row)
+	first := newRuntime(t, source, newCache(t, client), time.Minute)
+	poll(t, first)
+	_ = first.Close()
+	server.stop()
+	restored, _ := startRedis(t, server.dir, true)
+	source.revoke(t, row)
+	resumed := newRuntime(t, source, newCache(t, restored), time.Minute)
+	poll(t, resumed)
+	assertAllowed(t, resumed, row, false)
+	if stats := resumed.Stats(); stats.Rebuilds != 0 || stats.Publications != 1 || source.reads != 0 {
+		t.Fatalf("restart with unchanged binding did not resume deltas: %+v reads=%d", stats, source.reads)
+	}
+}
+
+// Acceptance for #76: bindings, not a hand-typed namespace, decide which
+// processes share a mirror.
+func TestTupleCacheBindingsAreIndependent(t *testing.T) {
+	client, _ := startRedis(t, "", false)
+	row := tuple("space", "a", "viewer", "user", "alice", "")
+	source := newDeltaSource(t, "redis-delta", row)
+	short := newRuntime(t, source, newCache(t, client), time.Second)
+	poll(t, short)
+
+	// An identical binding joins the existing mirror and resumes it.
+	twin := newRuntime(t, source, newCache(t, client), time.Second)
+	poll(t, twin)
+	if twin.Stats().Rebuilds != 0 {
+		t.Fatalf("identical binding rebuilt: %+v", twin.Stats())
+	}
+	source.revoke(t, row)
+	results := make(chan error, 2)
+	for _, runtime := range []*tuplecache.TupleCache{short, twin} {
+		go func() { results <- runtime.Poll(t.Context()) }()
+	}
+	for range 2 {
+		if err := <-results; err != nil && !errors.Is(err, tuplecache.ErrConflict) {
+			t.Fatal(err)
+		}
+	}
+	poll(t, short)
+	poll(t, twin)
+	if got := source.acknowledged["revoke"]; got != 1 {
+		t.Fatalf("shared mirror acknowledged the delta %d times", got)
+	}
+	assertAllowed(t, short, row, false)
+	assertAllowed(t, twin, row, false)
+
+	// A different freshness policy gets its own mirror; neither refuses the other.
+	long := newRuntime(t, source, newCache(t, client), 5*time.Minute)
+	poll(t, long)
+	assertAllowed(t, long, row, false)
+	keys, err := client.Keys(t.Context(), "tuplecache:v3:*").Result()
+	want := []string{"tuplecache:v3:{test:raw:sets/" + short.Binding() + "}", "tuplecache:v3:{test:raw:sets/" + long.Binding() + "}"}
+	slices.Sort(keys)
+	slices.Sort(want)
+	if err != nil || !slices.Equal(keys, want) {
+		t.Fatalf("different policies: keys %v/%v, want %v", keys, err, want)
+	}
+	// One source has one delivery receipt. long's rebuild acknowledged it, so
+	// short's mirror is behind the source and its next poll rebuilds too.
+	rebuilds := short.Stats().Rebuilds
+	poll(t, short)
+	if got := short.Stats().Rebuilds; got != rebuilds+1 {
+		t.Fatalf("cross-binding receipt: rebuilds %d, want %d", got, rebuilds+1)
+	}
+	assertAllowed(t, short, row, false)
+	if source.reads != 0 {
+		t.Fatalf("ready runtimes used durable reads: %d", source.reads)
+	}
+}
+
+// deltaSource is a SQL-like Source: one delivery receipt and an outbox of
+// pending changes, acknowledged by exact ID.
+type deltaSource struct {
+	mu           sync.Mutex
+	binding      string
+	store        *memory.Store
+	tuples       []tuplefacts.Tuple
+	receipt      string
+	pending      []tuplecache.Change
+	acknowledged map[string]int
+	reads        int
+}
+
+func newDeltaSource(t testing.TB, binding string, rows ...tuplefacts.Tuple) *deltaSource {
+	t.Helper()
+	s := &deltaSource{binding: binding, store: memory.New(), tuples: rows, acknowledged: make(map[string]int)}
+	if err := s.store.Tuples().ApplyTuples(t.Context(), tuplefacts.Changes{Add: rows}); err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
+
+func (s *deltaSource) revoke(t testing.TB, row tuplefacts.Tuple) {
+	t.Helper()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.store.Tuples().ApplyTuples(t.Context(), tuplefacts.Changes{Remove: []tuplefacts.Tuple{row}}); err != nil {
+		t.Fatal(err)
+	}
+	s.tuples = slices.DeleteFunc(slices.Clone(s.tuples), func(r tuplefacts.Tuple) bool { return r == row })
+	s.pending = append(s.pending, tuplecache.Change{ID: "revoke", Before: &row})
+}
+
+func (s *deltaSource) Binding() string                       { return s.binding }
+func (s *deltaSource) CacheableContext(context.Context) bool { return true }
+func (s *deltaSource) Snapshot(_ context.Context, mirrored string) (tuplecache.Snapshot, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	full := mirrored == "" || mirrored != s.receipt
+	return tuplecache.Snapshot{Receipt: s.receipt, Full: full, Tuples: slices.Clone(s.tuples), Changes: slices.Clone(s.pending)}, nil
+}
+func (s *deltaSource) Acknowledge(_ context.Context, expected, next string, ids []string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if expected != s.receipt || len(ids) > len(s.pending) {
+		return tuplecache.ErrConflict
+	}
+	for i, id := range ids {
+		if id != s.pending[i].ID {
+			return fmt.Errorf("wrong acknowledgement %q", id)
+		}
+		s.acknowledged[id]++
+	}
+	s.receipt, s.pending = next, s.pending[len(ids):]
+	return nil
+}
+func (s *deltaSource) ReadSnapshot(ctx context.Context, fn func(context.Context, tuplecache.CheckReads) error) error {
+	s.mu.Lock()
+	s.reads++
+	s.mu.Unlock()
+	return s.store.Tuples().ReadTupleSnapshot(ctx, fn)
+}
+
+func newRuntime(t testing.TB, source tuplecache.Source, backend tuplecache.Backend, maxStaleness time.Duration) *tuplecache.TupleCache {
+	t.Helper()
+	runtime, err := tuplecache.New(source, backend, tuplecache.WithPolicy(tuplecache.Policy{MaxStaleness: maxStaleness}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = runtime.Close() })
+	return runtime
+}
+
+func poll(t testing.TB, runtime *tuplecache.TupleCache) {
+	t.Helper()
+	if err := runtime.Poll(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func assertAllowed(t testing.TB, runtime *tuplecache.TupleCache, row tuplefacts.Tuple, want bool) {
+	t.Helper()
+	var got bool
+	err := runtime.Run(t.Context(), func(ctx context.Context, reads tuplecache.CheckReads) error {
+		var err error
+		got, err = reads.Contains(ctx, row)
+		return err
+	})
+	if err != nil || got != want {
+		t.Fatalf("allowed=%v want=%v err=%v", got, want, err)
+	}
 }
 
 func TestTupleCachePublicationDoesNotRefreshLongBuild(t *testing.T) {
@@ -302,10 +471,10 @@ func TestTupleCachePublicationDoesNotRefreshLongBuild(t *testing.T) {
 	if err := c.Publish(ctx, state, next, tuplecache.Snapshot{Full: true, Tuples: []tuplefacts.Tuple{row}}, 40*time.Millisecond); !errors.Is(err, tuplecache.ErrUnavailable) {
 		t.Fatalf("late full publication: %v", err)
 	}
-	if got, err := c.State(ctx); err != nil || got != state {
+	if got, err := c.State(ctx, "store"); err != nil || got != state {
 		t.Fatalf("late build replaced mirror: %v %v", got, err)
 	}
-	keys := client.Keys(ctx, c.key+":build:*").Val()
+	keys := client.Keys(ctx, keyFor(t, c, "store")+":build:*").Val()
 	if len(keys) != 0 {
 		t.Fatalf("temporary hashes leaked: %v", keys)
 	}
@@ -338,7 +507,7 @@ func TestTupleCacheBatchesBeyondRebuildChunk(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertSets(t, c, next, keys, want)
-	if fields := client.HLen(ctx, c.key).Val(); fields != 4 {
+	if fields := client.HLen(ctx, keyFor(t, c, "store")).Val(); fields != 4 {
 		t.Fatalf("remaining fields %d, want metadata only", fields)
 	}
 }
@@ -366,7 +535,7 @@ func TestTupleCacheInterruptedScriptLeavesUnavailableMirror(t *testing.T) {
 	if err := failing.Publish(ctx, state, next, tuplecache.Snapshot{Changes: []tuplecache.Change{{Before: &row}}}, time.Minute); !errors.Is(err, tuplecache.ErrUnavailable) {
 		t.Fatalf("script error: %v", err)
 	}
-	if got, err := c.State(ctx); err != nil || got != (tuplecache.State{}) {
+	if got, err := c.State(ctx, "store"); err != nil || got != (tuplecache.State{}) {
 		t.Fatalf("partially applied script still ready: %v %v", got, err)
 	}
 	if _, err := c.Read(ctx, state, nil); !errors.Is(err, tuplecache.ErrUnavailable) {
@@ -382,7 +551,7 @@ func TestTupleCacheLostTemporaryHashIsNotRecreated(t *testing.T) {
 	client, _ := startRedis(t, "", false)
 	c := newCache(t, client)
 	ctx := context.Background()
-	temporary := c.key + ":build:lost"
+	temporary := keyFor(t, c, "store") + ":build:lost"
 	if err := prepareScript.Run(ctx, client, []string{temporary}, temporaryTTL.Milliseconds()).Err(); err != nil {
 		t.Fatal(err)
 	}
@@ -415,7 +584,7 @@ func TestTupleCacheDelayedReadCannotOutliveEligibility(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := client.HSet(ctx, c.key, "!until", serverTime.UnixMilli()+40).Err(); err != nil {
+	if err := client.HSet(ctx, keyFor(t, c, "store"), "!until", serverTime.UnixMilli()+40).Err(); err != nil {
 		t.Fatal(err)
 	}
 	client.AddHook(delayHook{command: "evalsha", script: readScript.Hash(), duration: 80 * time.Millisecond, after: true})
@@ -425,7 +594,7 @@ func TestTupleCacheDelayedReadCannotOutliveEligibility(t *testing.T) {
 }
 
 func TestTupleCacheConstructor(t *testing.T) {
-	if _, err := NewTupleCache(nil, "namespace"); !errors.Is(err, sdk.ErrInvalidInput) {
+	if _, err := NewTupleCache(nil); !errors.Is(err, sdk.ErrInvalidInput) {
 		t.Fatalf("nil client: %v", err)
 	}
 	client := redis.NewClient(&redis.Options{ContextTimeoutEnabled: true, Dialer: func(context.Context, string, string) (net.Conn, error) {
@@ -433,16 +602,73 @@ func TestTupleCacheConstructor(t *testing.T) {
 		return nil, errors.New("unexpected dial")
 	}})
 	t.Cleanup(func() { _ = client.Close() })
-	for _, namespace := range []string{"", "test:{raw}:sets", "app}", "{app", "app name", "app\n", "app\x00", "app*", "app?", "app[1]", "app\\name", "caf\u00e9", "app\xff"} {
-		if cache, err := NewTupleCache(client, namespace); cache != nil || !errors.Is(err, sdk.ErrInvalidInput) {
+	invalid := []string{"", "test:{raw}:sets", "app}", "{app", "app name", "app\n", "app\x00", "app*", "app?", "app[1]", "app\\name", "caf\u00e9", "app\xff"}
+	for _, namespace := range invalid {
+		if cache, err := NewTupleCache(client, WithNamespace(namespace)); cache != nil || !errors.Is(err, sdk.ErrInvalidInput) {
 			t.Fatalf("invalid namespace %q: %v/%v", namespace, cache, err)
 		}
 	}
+	const binding = "protocol:2/pgx:schema.v1/max-staleness:1000000000"
 	for _, namespace := range []string{"segovia-v2:dev:authorization", "App_1.2/relationships", "app:build:123"} {
-		cache, err := NewTupleCache(client, namespace)
-		if err != nil || cache.key != "tuplecache:v2:{"+namespace+"}" {
-			t.Fatalf("readable namespace %q: %+v/%v", namespace, cache, err)
+		cache, err := NewTupleCache(client, WithNamespace(namespace))
+		if err != nil {
+			t.Fatalf("readable namespace %q: %v", namespace, err)
 		}
+		if key, err := cache.key(binding); err != nil || key != "tuplecache:v3:{"+namespace+"/"+binding+"}" {
+			t.Fatalf("namespaced key %q: %q/%v", namespace, key, err)
+		}
+	}
+	cache, err := NewTupleCache(client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if key, err := cache.key(binding); err != nil || key != "tuplecache:v3:{"+binding+"}" {
+		t.Fatalf("unprefixed key: %q/%v", key, err)
+	}
+	// Custom sources choose their binding, so the adapter checks it per call.
+	for _, binding := range invalid {
+		if key, err := cache.key(binding); key != "" || !errors.Is(err, sdk.ErrInvalidInput) {
+			t.Fatalf("invalid binding %q: %q/%v", binding, key, err)
+		}
+	}
+}
+
+func TestTupleCacheKeyLayout(t *testing.T) {
+	client, _ := startRedis(t, "", false)
+	ctx := t.Context()
+	plain, err := NewTupleCache(client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prefixed := newCache(t, client)
+	state := tuplecache.State{Binding: "store", Receipt: "initial"}
+	for _, c := range []*TupleCache{plain, prefixed} {
+		if err := c.Publish(ctx, tuplecache.State{}, state, tuplecache.Snapshot{Full: true}, time.Minute); err != nil {
+			t.Fatal(err)
+		}
+	}
+	keys, err := client.Keys(ctx, "tuplecache:*").Result()
+	slices.Sort(keys)
+	if want := []string{"tuplecache:v3:{store}", "tuplecache:v3:{test:raw:sets/store}"}; err != nil || !slices.Equal(keys, want) {
+		t.Fatalf("keys %v/%v, want %v", keys, err, want)
+	}
+	for _, key := range keys {
+		if kind := client.Type(ctx, key).Val(); kind != "hash" {
+			t.Fatalf("%s is a %s", key, kind)
+		}
+	}
+	escaping := tuplecache.State{Binding: "store}{other", Receipt: "x"}
+	if _, err := plain.State(ctx, escaping.Binding); !errors.Is(err, sdk.ErrInvalidInput) {
+		t.Fatalf("State accepted escaping binding: %v", err)
+	}
+	if _, err := plain.Read(ctx, escaping, nil); !errors.Is(err, sdk.ErrInvalidInput) {
+		t.Fatalf("Read accepted escaping binding: %v", err)
+	}
+	if err := plain.Publish(ctx, tuplecache.State{}, escaping, tuplecache.Snapshot{Full: true}, time.Minute); !errors.Is(err, sdk.ErrInvalidInput) {
+		t.Fatalf("Publish accepted escaping binding: %v", err)
+	}
+	if n := client.DBSize(ctx).Val(); n != 2 {
+		t.Fatalf("rejected binding wrote keys: %d", n)
 	}
 }
 
@@ -459,11 +685,11 @@ func TestTupleCacheReadableNamespaces(t *testing.T) {
 	var wantKeys []string
 	namespaces := []string{"segovia", "segovia-v2:dev:authorization", "segovia-v2.dev.authorization", "my-app/relationships"}
 	for _, namespace := range namespaces {
-		cache, err := NewTupleCache(client, namespace)
+		cache, err := NewTupleCache(client, WithNamespace(namespace))
 		if err != nil {
 			t.Fatal(err)
 		}
-		if got, err := cache.State(ctx); err != nil || got != (tuplecache.State{}) {
+		if got, err := cache.State(ctx, state.Binding); err != nil || got != (tuplecache.State{}) {
 			t.Fatalf("fresh namespace inherited a mirror: %+v/%v", got, err)
 		}
 		row := tuple("space", "a", "viewer", "user", namespace, "")
@@ -471,7 +697,7 @@ func TestTupleCacheReadableNamespaces(t *testing.T) {
 			t.Fatal(err)
 		}
 		caches = append(caches, cache)
-		wantKeys = append(wantKeys, "tuplecache:v2:{"+namespace+"}")
+		wantKeys = append(wantKeys, "tuplecache:v3:{"+namespace+"/store}")
 	}
 	for i, cache := range caches {
 		row := tuple("space", "a", "viewer", "user", namespaces[i], "")
@@ -490,11 +716,21 @@ func TestTupleCacheReadableNamespaces(t *testing.T) {
 
 func newCache(t testing.TB, client *redis.Client) *TupleCache {
 	t.Helper()
-	c, err := NewTupleCache(client, "test:raw:sets")
+	c, err := NewTupleCache(client, WithNamespace("test:raw:sets"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	return c
+}
+
+// keyFor returns c's mirror key for binding.
+func keyFor(t testing.TB, c *TupleCache, binding string) string {
+	t.Helper()
+	key, err := c.key(binding)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return key
 }
 
 func tuple(rt, rid, relation, st, sid, sr string) tuplefacts.Tuple {

@@ -145,7 +145,7 @@ func TestSQLRedisDeliveryRecovery(t *testing.T) {
 			source := &observedSource{Source: repos.TupleSource}
 			repos.TupleSource = source
 			client, _ := startRedis(t, "", false)
-			backend, err := NewTupleCache(client, "sql-redis", WithLimits(Limits{MaxMutationBytes: 32768}))
+			backend, err := NewTupleCache(client, WithNamespace("sql-redis"), WithLimits(Limits{MaxMutationBytes: 32768}))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -201,7 +201,7 @@ func TestSQLRedisDeliveryRecovery(t *testing.T) {
 			if err := components.TupleCache.Poll(t.Context()); err != nil {
 				t.Fatal(err)
 			}
-			if err := client.Del(t.Context(), backend.key).Err(); err != nil {
+			if err := client.Del(t.Context(), keyFor(t, backend, components.TupleCache.Binding())).Err(); err != nil {
 				t.Fatal(err)
 			}
 			check(true)
@@ -225,14 +225,14 @@ func TestSQLRedisDeliveryRecovery(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			before, err := backend.State(t.Context())
+			before, err := backend.State(t.Context(), components.TupleCache.Binding())
 			if err != nil {
 				t.Fatal(err)
 			}
 			if err := components.TupleCache.Poll(t.Context()); !errors.Is(err, tuplecache.ErrCapacity) {
 				t.Fatalf("oversized delta: %v", err)
 			}
-			after, err := backend.State(t.Context())
+			after, err := backend.State(t.Context(), components.TupleCache.Binding())
 			if err != nil || after != before {
 				t.Fatalf("oversized delta changed mirror: %v/%v", after, err)
 			}
@@ -244,7 +244,7 @@ func TestSQLRedisDeliveryRecovery(t *testing.T) {
 				t.Fatal(err)
 			}
 			check(true)
-			state, err := backend.State(t.Context())
+			state, err := backend.State(t.Context(), components.TupleCache.Binding())
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -252,7 +252,7 @@ func TestSQLRedisDeliveryRecovery(t *testing.T) {
 			if err != nil || snapshot.Full || len(snapshot.Changes) != 0 {
 				t.Fatalf("recovery left work or inconsistent receipt: %+v/%v", snapshot, err)
 			}
-			limited, err := NewTupleCache(client, "sql-redis", WithLimits(Limits{MaxReadBytes: 128, MaxMutationBytes: 32768}))
+			limited, err := NewTupleCache(client, WithNamespace("sql-redis"), WithLimits(Limits{MaxReadBytes: 128, MaxMutationBytes: 32768}))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -400,7 +400,7 @@ func BenchmarkSQLRedisDecisions(b *testing.B) {
 					repos := endToEndRepositories(b, dialect)
 					requests, ids, _ := endToEndSeed(b, repos, 128)
 					client, _ := startRedis(b, "", false)
-					backend, err := NewTupleCache(client, "benchmark")
+					backend, err := NewTupleCache(client, WithNamespace("benchmark"))
 					if err != nil {
 						b.Fatal(err)
 					}

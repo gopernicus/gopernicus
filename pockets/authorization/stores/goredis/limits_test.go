@@ -25,7 +25,7 @@ func TestTupleCacheClientAndLimitsValidation(t *testing.T) {
 	}}
 	client := redis.NewClient(options)
 	t.Cleanup(func() { _ = client.Close() })
-	if got, err := NewTupleCache(client, "limits"); got != nil || !errors.Is(err, sdk.ErrInvalidInput) {
+	if got, err := NewTupleCache(client); got != nil || !errors.Is(err, sdk.ErrInvalidInput) {
 		t.Fatalf("client without context deadlines: %v/%v", got, err)
 	}
 	if client.Options().ContextTimeoutEnabled {
@@ -36,18 +36,18 @@ func TestTupleCacheClientAndLimitsValidation(t *testing.T) {
 	valid := redis.NewClient(&validOptions)
 	t.Cleanup(func() { _ = valid.Close() })
 	for _, opts := range [][]Option{{nil}, {WithLimits(Limits{MaxReadBytes: -1})}, {WithLimits(Limits{MaxMutationBytes: -1})}} {
-		if got, err := NewTupleCache(valid, "limits", opts...); got != nil || !errors.Is(err, sdk.ErrInvalidInput) {
+		if got, err := NewTupleCache(valid, opts...); got != nil || !errors.Is(err, sdk.ErrInvalidInput) {
 			t.Fatalf("invalid options: %v/%v", got, err)
 		}
 	}
 	option := WithLimits(Limits{MaxReadBytes: 32})
 	for range 2 {
-		c, err := NewTupleCache(valid, "limits", WithLimits(Limits{MaxMutationBytes: 1}), option)
+		c, err := NewTupleCache(valid, WithLimits(Limits{MaxMutationBytes: 1}), option)
 		if err != nil || c.limits != (Limits{MaxReadBytes: 32, MaxMutationBytes: defaultMaxMutationBytes}) {
 			t.Fatalf("replacement/defaults/reused option: %+v/%v", c, err)
 		}
 	}
-	c, err := NewTupleCache(valid, "limits")
+	c, err := NewTupleCache(valid)
 	if err != nil || c.limits != (Limits{MaxReadBytes: defaultMaxReadBytes, MaxMutationBytes: defaultMaxMutationBytes}) {
 		t.Fatalf("defaults: %+v/%v", c, err)
 	}
@@ -64,8 +64,8 @@ func TestTupleCacheReadCapacityBoundaries(t *testing.T) {
 	}
 	f := setField(forward(row))
 	r := setField(reverse(row))
-	size := len(client.HGet(ctx, c.key, f).Val())
-	other := len(client.HGet(ctx, c.key, r).Val())
+	size := len(client.HGet(ctx, keyFor(t, c, "store"), f).Val())
+	other := len(client.HGet(ctx, keyFor(t, c, "store"), r).Val())
 	for _, test := range []struct {
 		name     string
 		limit    int
@@ -94,7 +94,7 @@ func TestTupleCacheReadCapacityBoundaries(t *testing.T) {
 		})
 	}
 	// An oversized invalid payload must hit the byte gate before JSON decoding.
-	if err := client.HSet(ctx, c.key, f, strings.Repeat("!", defaultMaxReadBytes+1)).Err(); err != nil {
+	if err := client.HSet(ctx, keyFor(t, c, "store"), f, strings.Repeat("!", defaultMaxReadBytes+1)).Err(); err != nil {
 		t.Fatal(err)
 	}
 	if sets, err := c.Read(ctx, state, []tuplecache.SetKey{forward(row)}); sets != nil || !errors.Is(err, tuplecache.ErrCapacity) {
@@ -119,12 +119,12 @@ func TestTupleCacheDeltaCapacityIsAtomic(t *testing.T) {
 	}
 	total := len(payload)
 	for _, field := range fields {
-		total += len(client.HGet(ctx, c.key, field).Val())
+		total += len(client.HGet(ctx, keyFor(t, c, "store"), field).Val())
 	}
-	before := client.HGetAll(ctx, c.key).Val()
+	before := client.HGetAll(ctx, keyFor(t, c, "store")).Val()
 	// The script independently rejects incoming bytes before decoding them,
 	// even if the caller bypasses the Go encoder with invalid JSON.
-	status, err := deltaScript.Run(ctx, client, []string{c.key}, state.Binding, state.Receipt,
+	status, err := deltaScript.Run(ctx, client, []string{keyFor(t, c, "store")}, state.Binding, state.Receipt,
 		next.Binding, next.Receipt, time.Now().Add(time.Minute).UnixMilli(), "not-json", 2).Int()
 	if err != nil || status != -2 {
 		t.Fatalf("incoming JSON preflight: %d/%v", status, err)
@@ -134,23 +134,23 @@ func TestTupleCacheDeltaCapacityIsAtomic(t *testing.T) {
 		if err := limited.Publish(ctx, state, next, tuplecache.Snapshot{Changes: changes}, time.Minute); !errors.Is(err, tuplecache.ErrCapacity) {
 			t.Fatalf("limit %d: %v", limit, err)
 		}
-		if got := client.HGetAll(ctx, c.key).Val(); !reflect.DeepEqual(got, before) {
+		if got := client.HGetAll(ctx, keyFor(t, c, "store")).Val(); !reflect.DeepEqual(got, before) {
 			t.Fatal("capacity rejection changed data or complete receipt")
 		}
 	}
 	// The existing value is rejected by length, before its malformed JSON is decoded.
 	field := fields[0]
-	if err := client.HSet(ctx, c.key, field, strings.Repeat("!", total)).Err(); err != nil {
+	if err := client.HSet(ctx, keyFor(t, c, "store"), field, strings.Repeat("!", total)).Err(); err != nil {
 		t.Fatal(err)
 	}
 	limited := cacheWithLimits(t, client, Limits{MaxMutationBytes: total})
 	if err := limited.Publish(ctx, state, next, tuplecache.Snapshot{Changes: changes}, time.Minute); !errors.Is(err, tuplecache.ErrCapacity) {
 		t.Fatalf("oversized malformed set: %v", err)
 	}
-	if got, err := c.State(ctx); err != nil || got != state {
+	if got, err := c.State(ctx, "store"); err != nil || got != state {
 		t.Fatalf("capacity cleared readiness: %+v/%v", got, err)
 	}
-	if err := client.HSet(ctx, c.key, field, before[field]).Err(); err != nil {
+	if err := client.HSet(ctx, keyFor(t, c, "store"), field, before[field]).Err(); err != nil {
 		t.Fatal(err)
 	}
 	if err := limited.Publish(ctx, state, next, tuplecache.Snapshot{Changes: changes}, time.Minute); err != nil {
@@ -184,15 +184,15 @@ func TestTupleCacheFullCapacityAndChunking(t *testing.T) {
 		maxField = max(maxField, len(field)+len(encoded))
 	}
 	next := tuplecache.State{Binding: "store", Receipt: "chunked"}
-	before := client.HGetAll(ctx, c.key).Val()
+	before := client.HGetAll(ctx, keyFor(t, c, "store")).Val()
 	limited := cacheWithLimits(t, client, Limits{MaxMutationBytes: maxField - 1})
 	if err := limited.Publish(ctx, state, next, tuplecache.Snapshot{Full: true, Tuples: tuples}, time.Minute); !errors.Is(err, tuplecache.ErrCapacity) {
 		t.Fatalf("oversized full field: %v", err)
 	}
-	if got := client.HGetAll(ctx, c.key).Val(); !reflect.DeepEqual(got, before) {
+	if got := client.HGetAll(ctx, keyFor(t, c, "store")).Val(); !reflect.DeepEqual(got, before) {
 		t.Fatal("rejected rebuild changed old mirror")
 	}
-	if keys := client.Keys(ctx, c.key+":build:*").Val(); len(keys) != 0 {
+	if keys := client.Keys(ctx, keyFor(t, c, "store")+":build:*").Val(); len(keys) != 0 {
 		t.Fatalf("temporary keys: %v", keys)
 	}
 	limited = cacheWithLimits(t, client, Limits{MaxMutationBytes: maxField})
@@ -265,7 +265,7 @@ func TestTupleCachePausedServerAndCapacityFallBack(t *testing.T) {
 			}
 			if paused {
 				// Warm both scripts and the connection before pausing actual Redis.
-				state, err := backend.State(t.Context())
+				state, err := backend.State(t.Context(), runtime.Binding())
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -300,7 +300,7 @@ func TestTupleCachePausedServerAndCapacityFallBack(t *testing.T) {
 
 func cacheWithLimits(t testing.TB, client *redis.Client, limits Limits) *TupleCache {
 	t.Helper()
-	c, err := NewTupleCache(client, "test:raw:sets", WithLimits(limits))
+	c, err := NewTupleCache(client, WithNamespace("test:raw:sets"), WithLimits(limits))
 	if err != nil {
 		t.Fatal(err)
 	}

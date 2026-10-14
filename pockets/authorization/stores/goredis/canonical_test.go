@@ -52,21 +52,30 @@ func TestCanonicalProtocolDoesNotReadOrMutatePreviousMirror(t *testing.T) {
 	if err := client.HSet(ctx, legacy, "!schema", "1", "!binding", "store", "!receipt", "old", "sentinel", "unchanged").Err(); err != nil {
 		t.Fatal(err)
 	}
+	// The v2 adapter keyed protocol 2 mirrors on a hand-typed namespace.
+	previous := "tuplecache:v2:{test:raw:sets}"
+	if err := client.HSet(ctx, previous, "!schema", "2", "!binding", "protocol:2/store", "!receipt", "old", "sentinel", "unchanged").Err(); err != nil {
+		t.Fatal(err)
+	}
 	before := client.HGetAll(ctx, legacy).Val()
-	if state, err := c.State(ctx); err != nil || state != (tuplecache.State{}) {
+	beforePrevious := client.HGetAll(ctx, previous).Val()
+	if state, err := c.State(ctx, "protocol:2/store"); err != nil || state != (tuplecache.State{}) {
 		t.Fatalf("old mirror reused: %+v/%v", state, err)
 	}
 	state := tuplecache.State{Binding: "protocol:2/store", Receipt: "new"}
 	if err := c.Publish(ctx, tuplecache.State{}, state, tuplecache.Snapshot{Full: true}, time.Minute); err != nil {
 		t.Fatal(err)
 	}
-	if got := client.HGet(ctx, c.key, "!schema").Val(); got != "2" {
+	if got := client.HGet(ctx, keyFor(t, c, state.Binding), "!schema").Val(); got != "2" {
 		t.Fatalf("protocol marker = %q", got)
 	}
 	if got := client.HGetAll(ctx, legacy).Val(); !reflect.DeepEqual(before, got) {
 		t.Fatal("protocol 2 modified the old mirror")
 	}
-	if err := client.HSet(ctx, c.key, "!schema", "1").Err(); err != nil {
+	if got := client.HGetAll(ctx, previous).Val(); !reflect.DeepEqual(beforePrevious, got) {
+		t.Fatal("v3 key layout modified the v2 mirror")
+	}
+	if err := client.HSet(ctx, keyFor(t, c, state.Binding), "!schema", "1").Err(); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := c.Read(ctx, state, nil); !errors.Is(err, tuplecache.ErrUnavailable) {
@@ -96,7 +105,7 @@ func TestCanonicalMalformedAndMisplacedFactsFailClosed(t *testing.T) {
 		{"unknown scope", [][]string{{"3", "", "", "dmlld2Vy", "dXNlcg", "YWxpY2U", ""}}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			if err := client.Del(ctx, c.key).Err(); err != nil {
+			if err := client.Del(ctx, keyFor(t, c, state.Binding)).Err(); err != nil {
 				t.Fatal(err)
 			}
 			if err := c.Publish(ctx, tuplecache.State{}, state, tuplecache.Snapshot{Full: true, Tuples: []tuples.Tuple{row}}, time.Minute); err != nil {
@@ -106,17 +115,17 @@ func TestCanonicalMalformedAndMisplacedFactsFailClosed(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := client.HSet(ctx, c.key, setField(forward(row)), string(encoded)).Err(); err != nil {
+			if err := client.HSet(ctx, keyFor(t, c, state.Binding), setField(forward(row)), string(encoded)).Err(); err != nil {
 				t.Fatal(err)
 			}
-			before := client.HGetAll(ctx, c.key).Val()
+			before := client.HGetAll(ctx, keyFor(t, c, state.Binding)).Val()
 			if sets, err := c.Read(ctx, state, []tuplecache.SetKey{forward(row)}); sets != nil || !errors.Is(err, tuplecache.ErrUnavailable) {
 				t.Fatalf("bad fact read: %v/%v", sets, err)
 			}
 			if err := c.Publish(ctx, state, next, tuplecache.Snapshot{Changes: []tuplecache.Change{{Before: &row}}}, time.Minute); !errors.Is(err, tuplecache.ErrUnavailable) {
 				t.Fatalf("bad fact publication: %v", err)
 			}
-			if got := client.HGetAll(ctx, c.key).Val(); !reflect.DeepEqual(before, got) {
+			if got := client.HGetAll(ctx, keyFor(t, c, state.Binding)).Val(); !reflect.DeepEqual(before, got) {
 				t.Fatal("malformed delta partially published")
 			}
 		})
@@ -169,7 +178,7 @@ func TestCanonicalGlobalAndResourcePublicationIsAtomic(t *testing.T) {
 				return
 			default:
 			}
-			observed, err := c.State(ctx)
+			observed, err := c.State(ctx, "store")
 			if err != nil {
 				failures <- err
 				return

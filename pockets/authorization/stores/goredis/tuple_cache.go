@@ -25,13 +25,13 @@ const (
 
 var _ tuplecache.Backend = (*TupleCache)(nil)
 
-// TupleCache stores raw forward and reverse canonical tuple sets in one Redis hash.
-// The client and its lifecycle belong to the host. The namespace must be dedicated
-// to one authoritative tuple store; arbitrary writes to this hash are unsupported.
+// TupleCache stores raw forward and reverse canonical tuple sets in one Redis
+// hash per binding. The client and its lifecycle belong to the host. Arbitrary
+// writes to these hashes are unsupported.
 type TupleCache struct {
-	client *redis.Client
-	key    string
-	limits Limits
+	client    *redis.Client
+	namespace string
+	limits    Limits
 }
 
 // Limits bound encoded tuple work before Redis fetches or transforms raw sets.
@@ -43,7 +43,11 @@ type Limits struct {
 	MaxMutationBytes int
 }
 
-type config struct{ limits Limits }
+type config struct {
+	limits       Limits
+	namespace    string
+	namespaceSet bool
+}
 
 // Option configures a TupleCache at construction.
 type Option func(*config)
@@ -51,14 +55,22 @@ type Option func(*config)
 // WithLimits replaces the complete limits record; zero fields select defaults.
 func WithLimits(limits Limits) Option { return func(c *config) { c.limits = limits } }
 
+// WithNamespace adds a readable prefix to every mirror key:
+// tuplecache:v3:{<namespace>/<binding>}. It must be nonempty and contain only
+// ASCII letters, digits, colons, periods, underscores, hyphens or slashes.
+func WithNamespace(namespace string) Option {
+	return func(c *config) { c.namespace, c.namespaceSet = namespace, true }
+}
+
 // NewTupleCache constructs a backend without I/O or background goroutines.
-// The namespace is used verbatim in tuplecache:v2:{<namespace>} and must contain
-// only ASCII letters, digits, colons, periods, underscores, hyphens or slashes.
+// Each mirror is stored under tuplecache:v3:{<binding>}, or
+// tuplecache:v3:{<namespace>/<binding>} with WithNamespace, so processes share
+// a mirror exactly when their runtime bindings match.
 // The borrowed client must enable redis.Options.ContextTimeoutEnabled so the
 // runtime's read deadline also bounds socket I/O. The client is never modified.
-func NewTupleCache(client *redis.Client, namespace string, opts ...Option) (*TupleCache, error) {
-	if client == nil || namespace == "" {
-		return nil, fmt.Errorf("tuple cache requires a Redis client and namespace: %w", sdk.ErrInvalidInput)
+func NewTupleCache(client *redis.Client, opts ...Option) (*TupleCache, error) {
+	if client == nil {
+		return nil, fmt.Errorf("tuple cache requires a Redis client: %w", sdk.ErrInvalidInput)
 	}
 	if !client.Options().ContextTimeoutEnabled {
 		return nil, fmt.Errorf("tuple cache Redis client requires ContextTimeoutEnabled: %w", sdk.ErrInvalidInput)
@@ -79,22 +91,49 @@ func NewTupleCache(client *redis.Client, namespace string, opts ...Option) (*Tup
 	if cfg.limits.MaxMutationBytes == 0 {
 		cfg.limits.MaxMutationBytes = defaultMaxMutationBytes
 	}
-	for _, ch := range namespace {
+	if cfg.namespaceSet {
+		if err := validKeyPart("namespace", cfg.namespace); err != nil {
+			return nil, err
+		}
+	}
+	return &TupleCache{client: client, namespace: cfg.namespace, limits: cfg.limits}, nil
+}
+
+// key derives the mirror key for binding. Bindings come from Source.Binding,
+// which a custom source may fill with anything, so validate on every call.
+func (c *TupleCache) key(binding string) (string, error) {
+	if err := validKeyPart("binding", binding); err != nil {
+		return "", err
+	}
+	if c.namespace == "" {
+		return "tuplecache:v3:{" + binding + "}", nil
+	}
+	return "tuplecache:v3:{" + c.namespace + "/" + binding + "}", nil
+}
+
+// validKeyPart keeps key parts readable. Rejecting braces prevents a part from
+// escaping the hash tag shared by the mirror and its temporary rebuild hashes.
+func validKeyPart(name, part string) error {
+	if part == "" {
+		return fmt.Errorf("tuple cache %s is empty: %w", name, sdk.ErrInvalidInput)
+	}
+	for _, ch := range part {
 		switch {
 		case ch >= 'a' && ch <= 'z', ch >= 'A' && ch <= 'Z', ch >= '0' && ch <= '9':
 		case ch == ':', ch == '.', ch == '_', ch == '-', ch == '/':
 		default:
-			return nil, fmt.Errorf("tuple cache namespace must contain only ASCII letters, digits or :._-/: %w", sdk.ErrInvalidInput)
+			return fmt.Errorf("tuple cache %s must contain only ASCII letters, digits or :._-/: %w", name, sdk.ErrInvalidInput)
 		}
 	}
-	// Keep the namespace readable. Rejecting braces prevents it from escaping
-	// the hash tag shared by the mirror and its temporary rebuild hashes.
-	key := "tuplecache:v2:{" + namespace + "}"
-	return &TupleCache{client: client, key: key, limits: cfg.limits}, nil
+	return nil
 }
 
-func (c *TupleCache) State(ctx context.Context) (tuplecache.State, error) {
-	values, err := stateScript.Run(ctx, c.client, []string{c.key}).StringSlice()
+func (c *TupleCache) State(ctx context.Context, binding string) (tuplecache.State, error) {
+	key, err := c.key(binding)
+	if err != nil {
+		return tuplecache.State{}, err
+	}
+	values, err := stateScript.Run(ctx, c.client, []string{key}).StringSlice()
 	if err != nil {
 		return tuplecache.State{}, unavailable(err)
 	}
@@ -107,6 +146,10 @@ func (c *TupleCache) State(ctx context.Context) (tuplecache.State, error) {
 func (c *TupleCache) Read(ctx context.Context, expected tuplecache.State, keys []tuplecache.SetKey) ([][]tuples.Tuple, error) {
 	if expected.Binding == "" || expected.Receipt == "" {
 		return nil, tuplecache.ErrUnavailable
+	}
+	key, err := c.key(expected.Binding)
+	if err != nil {
+		return nil, err
 	}
 	// Even absent sets return two JSON bytes. Bound request fan-out before
 	// allocating arguments or asking Redis to inspect each field.
@@ -122,7 +165,7 @@ func (c *TupleCache) Read(ctx context.Context, expected tuplecache.State, keys [
 		args = append(args, setField(key))
 	}
 	started := time.Now()
-	values, err := readScript.Run(ctx, c.client, []string{c.key}, args...).Slice()
+	values, err := readScript.Run(ctx, c.client, []string{key}, args...).Slice()
 	if err != nil {
 		return nil, unavailable(err)
 	}
@@ -168,6 +211,10 @@ func (c *TupleCache) Publish(ctx context.Context, expected, next tuplecache.Stat
 	if !snapshot.Full && expected.Binding == "" {
 		return tuplecache.ErrUnavailable
 	}
+	key, err := c.key(next.Binding)
+	if err != nil {
+		return err
+	}
 	if validFor < time.Millisecond {
 		return tuplecache.ErrUnavailable
 	}
@@ -183,7 +230,7 @@ func (c *TupleCache) Publish(ctx context.Context, expected, next tuplecache.Stat
 	}
 	deadline := serverTime.UnixMilli() + remaining.Milliseconds()
 	if snapshot.Full {
-		return c.publishFull(ctx, expected, next, snapshot.Tuples, deadline)
+		return c.publishFull(ctx, key, expected, next, snapshot.Tuples, deadline)
 	}
 	payload, fields, err := changesWire(snapshot.Changes, c.limits.MaxMutationBytes)
 	if err != nil {
@@ -193,11 +240,11 @@ func (c *TupleCache) Publish(ctx context.Context, expected, next tuplecache.Stat
 	for _, field := range fields {
 		args = append(args, field)
 	}
-	status, err := deltaScript.Run(ctx, c.client, []string{c.key}, args...).Int()
+	status, err := deltaScript.Run(ctx, c.client, []string{key}, args...).Int()
 	return publicationError(status, err)
 }
 
-func (c *TupleCache) publishFull(ctx context.Context, expected, next tuplecache.State, tuples []tuples.Tuple, deadline int64) error {
+func (c *TupleCache) publishFull(ctx context.Context, key string, expected, next tuplecache.State, tuples []tuples.Tuple, deadline int64) error {
 	sets, err := fullSets(tuples, c.limits.MaxMutationBytes)
 	if err != nil {
 		return err
@@ -206,7 +253,7 @@ func (c *TupleCache) publishFull(ctx context.Context, expected, next tuplecache.
 	if _, err := rand.Read(nonce[:]); err != nil {
 		return err
 	}
-	temporary := c.key + ":build:" + hex.EncodeToString(nonce[:])
+	temporary := key + ":build:" + hex.EncodeToString(nonce[:])
 	// The first command creates the temporary hash and its TTL together. Every
 	// subsequent chunk only extends its contents, never its bounded lifetime.
 	if err := prepareScript.Run(ctx, c.client, []string{temporary}, temporaryTTL.Milliseconds()).Err(); err != nil {
@@ -241,7 +288,7 @@ func (c *TupleCache) publishFull(ctx context.Context, expected, next tuplecache.
 	}
 	// A temporary key may have expired or been evicted during construction. The
 	// prepared marker must survive; setting the ready marker alone is insufficient.
-	status, err := replaceScript.Run(ctx, c.client, []string{c.key, temporary}, expected.Binding, expected.Receipt,
+	status, err := replaceScript.Run(ctx, c.client, []string{key, temporary}, expected.Binding, expected.Receipt,
 		next.Binding, next.Receipt, deadline).Int()
 	return publicationError(status, err)
 }

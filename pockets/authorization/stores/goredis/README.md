@@ -9,7 +9,8 @@ client := redis.NewClient(&redis.Options{
     Addr: "localhost:6379",
     ContextTimeoutEnabled: true,
 })
-backend, err := goredis.NewTupleCache(client, "my-tuple-store",
+backend, err := goredis.NewTupleCache(client,
+    goredis.WithNamespace("my-app"), // optional
     goredis.WithLimits(goredis.Limits{
         MaxReadBytes: 1 << 20,
         MaxMutationBytes: 4 << 20,
@@ -17,7 +18,8 @@ backend, err := goredis.NewTupleCache(client, "my-tuple-store",
 )
 ```
 
-The namespace is required and must belong exclusively to one tuple store. The
+The namespace is optional; it only adds a readable key prefix. Mirrors are keyed
+on the runtime binding, so the host never types anything that must match it. The
 constructor starts no goroutines and performs no I/O. The host retains ownership
 of the client, its connection settings, persistence, memory capacity, and shutdown.
 Compose the backend with `tuplecache.New(source, backend, ...)` and drive that
@@ -28,28 +30,79 @@ The client must enable `ContextTimeoutEnabled`; otherwise construction returns
 socket I/O. Construction never mutates the borrowed client's options. Host hooks
 and custom dialers remain responsible for honoring context deadlines themselves.
 
+## Fit
+
+The adapter is correct but has a narrow performance fit; choose it knowingly.
+Owner benchmark (Apple M4 Pro, Unix-socket Redis, one principal holding N direct
+grants):
+
+| Set size | one read | one delta | full rebuild |
+|---|---|---|---|
+| 100 | 0.11 ms | 0.41 ms | 0.29 ms |
+| 1,000 | 0.95 ms | 3.7 ms | 2.7 ms |
+| 10,000 | 9.4 ms | 38 ms | 25 ms |
+| 100,000 | 96 ms | 426 ms | 283 ms |
+
+- Each index set is one JSON field. A read decodes the whole set touched; a delta
+  decodes, validates and re-encodes the whole set inside Redis's single thread.
+- Good fit: many resources with small forward sets, principals with small reverse
+  sets, and PostgreSQL under read load from many replicas.
+- Poor fit: a principal or resource with thousands of direct tuples. Graph checks
+  are subject-first and read the principal's whole reverse set. Prefer durable
+  reads or the per-replica memory backend.
+- Full rebuilds are cheap relative to deltas on large sets.
+
 ## Redis key
 
-The protocol-2 mirror key is `tuplecache:v2:{<namespace>}`. The namespace is stored verbatim:
-`segovia-v2:dev:authorization` produces
-`tuplecache:v2:{segovia-v2:dev:authorization}`. It may contain ASCII letters, digits
-and `:._-/`; empty namespaces or other characters return `sdk.ErrInvalidInput`.
-Colons are allowed. Braces are reserved for the surrounding Redis hash tag, which
-keeps the mirror and temporary `:build:<nonce>` hashes in the same slot.
+Each mirror is keyed on its runtime binding: `tuplecache:v3:{<binding>}`, or
+`tuplecache:v3:{<namespace>/<binding>}` with `WithNamespace`. The runtime binding
+is `protocol:2/<source binding>/max-staleness:<nanoseconds>`, so processes share
+a mirror exactly when their protocol, source identity and `MaxStaleness` match;
+any difference lands in a different mirror instead of failing with
+`tuplecache.ErrBinding`. `v3` is this adapter's key-layout version; the wire
+format is unchanged.
+
+The namespace and the binding may contain ASCII letters, digits and `:._-/`.
+An empty or invalid namespace fails construction, and an invalid binding (from a
+custom `tuplecache.Source`) fails `State`, `Read` and `Publish`; both return
+`sdk.ErrInvalidInput`. Braces are reserved for the surrounding Redis hash tag,
+which keeps the mirror and temporary `:build:<nonce>` hashes in the same slot.
 This key layout does not add Redis Cluster support.
 
-For example, inspect the mirror with:
+For example, inspect the mirrors with:
 
 ```sh
-redis-cli --scan --pattern 'tuplecache:*'
-redis-cli HLEN 'tuplecache:v2:{segovia-v2:dev:authorization}'
+redis-cli --scan --pattern 'tuplecache:v3:{my-app/*'
+redis-cli HLEN 'tuplecache:v3:{my-app/protocol:2/<source binding>/max-staleness:5000000000}'
 ```
 
 Protocol 2 uses `!schema=2` and includes the protocol in the runtime binding.
 Apply the authoritative adapter's fresh base and optional cache schema before
 constructing the source. The first successful poll rebuilds the mirror from
-current canonical tuples. One authoritative source receipt belongs to one mirror.
-See the SQL adapter's [schema setup guide](../UPGRADE.md).
+current canonical tuples. See the SQL adapter's [schema setup guide](../UPGRADE.md).
+
+One authoritative source has one delivery receipt. Runtimes with different
+bindings over the same source each keep their own mirror, but every rebuild or
+delta one of them acknowledges moves the receipt past the other's mirror, whose
+next poll then rebuilds in full. That is harmless while a rollout changes
+`MaxStaleness`; in steady state run one policy per source.
+
+### Orphaned mirrors
+
+Superseded mirrors do not expire. The permanent hash has no TTL (a full rebuild
+`PERSIST`s it), so after a binding change (new `MaxStaleness`, protocol or source
+identity) the old key stays until an operator deletes it, as does any
+`tuplecache:v2:` key from the previous key layout. Nothing reads or writes them.
+List and delete them with:
+
+```sh
+redis-cli --scan --pattern 'tuplecache:*:{my-app/*'   # with WithNamespace("my-app")
+redis-cli --scan --pattern 'tuplecache:v2:*'          # one-time cut from v2
+redis-cli DEL '<key>'                                  # each superseded key
+```
+
+The first pattern also matches live mirrors. Deleting a key that a running
+runtime uses is safe but forces a full rebuild.
 
 ## Stored data
 
