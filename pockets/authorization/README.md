@@ -611,7 +611,9 @@ Protocol 2 is part of the binding and wire format. Scope kind is explicit.
 The backend keys each mirror on its binding (protocol, source identity and
 MaxStaleness), so processes share a mirror exactly when their bindings match and
 different bindings use different mirrors. `tuplecache.ErrBinding` now only reports
-a backend returning a foreign mirror. An empty/restored mirror rebuilds from SQL,
+a backend returning a foreign mirror. A source has a single delivery receipt, so
+different bindings over one source keep rebuilding each other in full on every
+poll; keep one binding per source outside a rollout. An empty/restored mirror rebuilds from SQL,
 even after its original events were acknowledged. Use a fresh source identity when
 restoring or cloning authoritative data as directed by the adapter runbook.
 

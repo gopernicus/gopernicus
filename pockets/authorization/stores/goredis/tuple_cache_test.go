@@ -353,10 +353,15 @@ func TestTupleCacheBindingsAreIndependent(t *testing.T) {
 	}
 	// One source has one delivery receipt. long's rebuild acknowledged it, so
 	// short's mirror is behind the source and its next poll rebuilds too.
-	rebuilds := short.Stats().Rebuilds
-	poll(t, short)
-	if got := short.Stats().Rebuilds; got != rebuilds+1 {
-		t.Fatalf("cross-binding receipt: rebuilds %d, want %d", got, rebuilds+1)
+	// It never settles, even with no writes: each poll rebuilds in full.
+	for range 3 {
+		for _, runtime := range []*tuplecache.TupleCache{short, long} {
+			rebuilds := runtime.Stats().Rebuilds
+			poll(t, runtime)
+			if got := runtime.Stats().Rebuilds; got != rebuilds+1 {
+				t.Fatalf("cross-binding receipt: rebuilds %d, want %d", got, rebuilds+1)
+			}
+		}
 	}
 	assertAllowed(t, short, row, false)
 	if source.reads != 0 {

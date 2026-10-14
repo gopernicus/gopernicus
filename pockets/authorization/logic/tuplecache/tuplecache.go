@@ -83,8 +83,8 @@ type Backend interface {
 	Read(ctx context.Context, expected State, keys []SetKey) ([][]tuples.Tuple, error)
 	// Publish compares expected atomically. expected.Binding is empty (no
 	// mirror yet) or equal to next.Binding; otherwise it returns ErrBinding.
-	// Full replaces all data from Tuples;
-	// otherwise apply Changes in order, updating only affected index fields.
+	// Full replaces all data from Tuples; otherwise apply Changes in order,
+	// updating only affected index fields.
 	// validFor is the remaining eligibility period, measured on backend time.
 	// A no-change publication may retain the receipt and only renew eligibility.
 	Publish(ctx context.Context, expected, next State, snapshot Snapshot, validFor time.Duration) error

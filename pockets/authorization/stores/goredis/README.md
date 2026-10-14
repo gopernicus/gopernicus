@@ -49,7 +49,9 @@ grants):
   sets, and PostgreSQL under read load from many replicas.
 - Poor fit: a principal or resource with thousands of direct tuples. Graph checks
   are subject-first and read the principal's whole reverse set. Prefer durable
-  reads or the per-replica memory backend.
+  reads. A per-replica memory backend is not a cheap alternative: each replica's
+  mirror shares the source's one delivery receipt (see below), so replicas keep
+  rebuilding each other in full.
 - Full rebuilds are cheap relative to deltas on large sets.
 
 ## Redis key
@@ -81,11 +83,15 @@ Apply the authoritative adapter's fresh base and optional cache schema before
 constructing the source. The first successful poll rebuilds the mirror from
 current canonical tuples. See the SQL adapter's [schema setup guide](../UPGRADE.md).
 
-One authoritative source has one delivery receipt. Runtimes with different
-bindings over the same source each keep their own mirror, but every rebuild or
-delta one of them acknowledges moves the receipt past the other's mirror, whose
-next poll then rebuilds in full. That is harmless while a rollout changes
-`MaxStaleness`; in steady state run one policy per source.
+One authoritative source has one delivery receipt, so it can keep exactly one
+mirror current. Runtimes with different bindings (or separate mirrors, such as
+per-replica memory backends) over the same source each keep their own mirror,
+but every acknowledgement moves the receipt past the others. Each of them then
+rebuilds in full on **every** poll, even with no writes, for as long as more
+than one mirror is active: a full SQL scan plus a full rebuild per poll per
+replica. Keep that overlap short, including the rollout that changes
+`MaxStaleness` and the one-time cut from the v2 key layout, and run one binding
+per source in steady state.
 
 ### Orphaned mirrors
 
