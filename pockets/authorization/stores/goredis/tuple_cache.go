@@ -21,6 +21,7 @@ const (
 	fieldChunk              = 256
 	defaultMaxReadBytes     = 1 << 20
 	defaultMaxMutationBytes = 4 << 20
+	defaultExpiry           = 7 * 24 * time.Hour
 )
 
 var _ tuplecache.Backend = (*TupleCache)(nil)
@@ -32,6 +33,7 @@ type TupleCache struct {
 	client    *redis.Client
 	namespace string
 	limits    Limits
+	expiry    time.Duration
 }
 
 // Limits bound encoded tuple work before Redis fetches or transforms raw sets.
@@ -47,6 +49,7 @@ type config struct {
 	limits       Limits
 	namespace    string
 	namespaceSet bool
+	expiry       time.Duration
 }
 
 // Option configures a TupleCache at construction.
@@ -54,6 +57,12 @@ type Option func(*config)
 
 // WithLimits replaces the complete limits record; zero fields select defaults.
 func WithLimits(limits Limits) Option { return func(c *config) { c.limits = limits } }
+
+// WithExpiry sets how long a mirror outlives its last publication. Every
+// publication renews it, so only a mirror nothing publishes to (a superseded
+// binding) expires. The default is 7 days; 0 never expires. Negative values and
+// values below one millisecond are invalid.
+func WithExpiry(expiry time.Duration) Option { return func(c *config) { c.expiry = expiry } }
 
 // WithNamespace adds a readable prefix to every mirror key:
 // tuplecache:v3:{<namespace>/<binding>}. It must be nonempty and contain only
@@ -75,7 +84,7 @@ func NewTupleCache(client *redis.Client, opts ...Option) (*TupleCache, error) {
 	if !client.Options().ContextTimeoutEnabled {
 		return nil, fmt.Errorf("tuple cache Redis client requires ContextTimeoutEnabled: %w", sdk.ErrInvalidInput)
 	}
-	cfg := config{}
+	cfg := config{expiry: defaultExpiry}
 	for _, opt := range opts {
 		if opt == nil {
 			return nil, fmt.Errorf("nil tuple cache option: %w", sdk.ErrInvalidInput)
@@ -84,6 +93,9 @@ func NewTupleCache(client *redis.Client, opts ...Option) (*TupleCache, error) {
 	}
 	if cfg.limits.MaxReadBytes < 0 || cfg.limits.MaxMutationBytes < 0 {
 		return nil, fmt.Errorf("negative tuple cache limits: %w", sdk.ErrInvalidInput)
+	}
+	if cfg.expiry < 0 || (cfg.expiry > 0 && cfg.expiry < time.Millisecond) {
+		return nil, fmt.Errorf("tuple cache expiry must be zero or at least one millisecond: %w", sdk.ErrInvalidInput)
 	}
 	if cfg.limits.MaxReadBytes == 0 {
 		cfg.limits.MaxReadBytes = defaultMaxReadBytes
@@ -96,7 +108,7 @@ func NewTupleCache(client *redis.Client, opts ...Option) (*TupleCache, error) {
 			return nil, err
 		}
 	}
-	return &TupleCache{client: client, namespace: cfg.namespace, limits: cfg.limits}, nil
+	return &TupleCache{client: client, namespace: cfg.namespace, limits: cfg.limits, expiry: cfg.expiry}, nil
 }
 
 // Key returns the Redis key of the mirror for binding, so hosts can log which
@@ -238,7 +250,7 @@ func (c *TupleCache) Publish(ctx context.Context, expected, next tuplecache.Stat
 	if err != nil {
 		return err
 	}
-	args := []any{expected.Binding, expected.Receipt, next.Binding, next.Receipt, deadline, string(payload), c.limits.MaxMutationBytes}
+	args := []any{expected.Binding, expected.Receipt, next.Binding, next.Receipt, deadline, string(payload), c.limits.MaxMutationBytes, c.expiry.Milliseconds()}
 	for _, field := range fields {
 		args = append(args, field)
 	}
@@ -291,7 +303,7 @@ func (c *TupleCache) publishFull(ctx context.Context, key string, expected, next
 	// A temporary key may have expired or been evicted during construction. The
 	// prepared marker must survive; setting the ready marker alone is insufficient.
 	status, err := replaceScript.Run(ctx, c.client, []string{key, temporary}, expected.Binding, expected.Receipt,
-		next.Binding, next.Receipt, deadline).Int()
+		next.Binding, next.Receipt, deadline, c.expiry.Milliseconds()).Int()
 	return publicationError(status, err)
 }
 

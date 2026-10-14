@@ -57,8 +57,8 @@ func TestTupleCacheRawSetsAndTargetedChanges(t *testing.T) {
 	if _, err := c.Read(ctx, state, nil); !errors.Is(err, tuplecache.ErrUnavailable) {
 		t.Fatalf("old receipt: %v", err)
 	}
-	if ttl := client.TTL(ctx, keyFor(t, c, "store")).Val(); ttl != -1 {
-		t.Fatalf("ordinary mirror has TTL: %v", ttl)
+	if ttl := client.PTTL(ctx, keyFor(t, c, "store")).Val(); ttl <= defaultExpiry-time.Minute || ttl > defaultExpiry {
+		t.Fatalf("mirror retention not renewed to the default: %v", ttl)
 	}
 	last := tuplecache.State{Binding: "store", Receipt: "removed"}
 	if err := c.Publish(ctx, next, last, tuplecache.Snapshot{Changes: []tuplecache.Change{{Before: &updated}, {Before: &updated}}}, time.Minute); err != nil {
@@ -635,6 +635,70 @@ func TestTupleCacheConstructor(t *testing.T) {
 	for _, binding := range invalid {
 		if key, err := cache.Key(binding); key != "" || !errors.Is(err, sdk.ErrInvalidInput) {
 			t.Fatalf("invalid binding %q: %q/%v", binding, key, err)
+		}
+	}
+}
+
+// F5: every publication renews the mirror's retention, so only a superseded
+// binding's mirror lapses.
+func TestTupleCacheExpiryRenewsOnEveryPublication(t *testing.T) {
+	client, _ := startRedis(t, "", false)
+	ctx := t.Context()
+	c, err := NewTupleCache(client, WithNamespace("expiry"), WithExpiry(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := keyFor(t, c, "store")
+	renewed := func(stage string) {
+		t.Helper()
+		if ttl := client.PTTL(ctx, key).Val(); ttl <= 59*time.Minute || ttl > time.Hour {
+			t.Fatalf("%s did not renew retention: %v", stage, ttl)
+		}
+		if err := client.PExpire(ctx, key, time.Minute).Err(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	row := tuple("space", "a", "viewer", "user", "alice", "")
+	state := tuplecache.State{Binding: "store", Receipt: "full"}
+	if err := c.Publish(ctx, tuplecache.State{}, state, tuplecache.Snapshot{Full: true, Tuples: []tuplefacts.Tuple{row}}, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	renewed("full rebuild")
+	next := tuplecache.State{Binding: "store", Receipt: "delta"}
+	if err := c.Publish(ctx, state, next, tuplecache.Snapshot{Changes: []tuplecache.Change{{Before: &row}}}, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	renewed("delta")
+	if err := c.Publish(ctx, next, next, tuplecache.Snapshot{}, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	renewed("no-change renewal")
+
+	forever, err := NewTupleCache(client, WithNamespace("expiry"), WithExpiry(0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := forever.Publish(ctx, next, next, tuplecache.Snapshot{}, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	if ttl := client.TTL(ctx, key).Val(); ttl != -1 {
+		t.Fatalf("WithExpiry(0) kept a TTL: %v", ttl)
+	}
+
+	orphan, err := NewTupleCache(client, WithNamespace("orphan"), WithExpiry(50*time.Millisecond))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := orphan.Publish(ctx, tuplecache.State{}, state, tuplecache.Snapshot{Full: true}, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(150 * time.Millisecond)
+	if got, err := orphan.State(ctx, "store"); err != nil || got != (tuplecache.State{}) {
+		t.Fatalf("unrenewed mirror did not lapse: %+v/%v", got, err)
+	}
+	for _, expiry := range []time.Duration{-time.Second, time.Microsecond} {
+		if cache, err := NewTupleCache(client, WithExpiry(expiry)); cache != nil || !errors.Is(err, sdk.ErrInvalidInput) {
+			t.Fatalf("invalid expiry %v: %v/%v", expiry, cache, err)
 		}
 	}
 }

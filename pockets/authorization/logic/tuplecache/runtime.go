@@ -15,8 +15,13 @@ import (
 	"github.com/gopernicus/gopernicus/sdk/pkg/workers"
 )
 
+// DefaultMaxStaleness is the revocation window when Policy.MaxStaleness is zero.
+const DefaultMaxStaleness = 5 * time.Second
+
 // Policy separates delivery freshness from tuple storage: tuples do not expire.
-// MaxStaleness must be explicitly chosen by the host; it accepts delayed writes.
+// MaxStaleness bounds how long a revocation may remain unseen; zero selects
+// DefaultMaxStaleness. It is part of the binding, so every replica sharing an
+// authorization database must use the same value.
 type Policy struct {
 	MaxStaleness time.Duration
 	PollInterval time.Duration
@@ -69,8 +74,11 @@ func New(source Source, backend Backend, opts ...Option) (*TupleCache, error) {
 		}
 		opt(&p)
 	}
-	if nilValue(source) || nilValue(backend) || source.Binding() == "" || p.MaxStaleness <= 0 {
-		return nil, fmt.Errorf("tuple cache: source, backend and positive MaxStaleness required: %w", sdk.ErrInvalidInput)
+	if nilValue(source) || nilValue(backend) || source.Binding() == "" || p.MaxStaleness < 0 {
+		return nil, fmt.Errorf("tuple cache: source, backend and nonnegative MaxStaleness required: %w", sdk.ErrInvalidInput)
+	}
+	if p.MaxStaleness == 0 {
+		p.MaxStaleness = DefaultMaxStaleness
 	}
 	if p.PollInterval == 0 {
 		p.PollInterval = min(250*time.Millisecond, p.MaxStaleness/4)

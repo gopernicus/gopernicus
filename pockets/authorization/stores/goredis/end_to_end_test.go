@@ -389,6 +389,17 @@ func TestSQLRedisRestartResumesDeltas(t *testing.T) {
 			if stats := resumed.TupleCache.Stats(); stats.Hits != 1 || stats.Fallbacks != 0 {
 				t.Fatalf("revocation must be proved in the resumed mirror: %+v", stats)
 			}
+			// F5: an idle poll renews the live mirror's expiry.
+			key := keyFor(t, newCache(t, restored), resumed.TupleCache.Binding())
+			if err := restored.PExpire(t.Context(), key, time.Minute).Err(); err != nil {
+				t.Fatal(err)
+			}
+			if err := resumed.TupleCache.Poll(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			if ttl := restored.PTTL(t.Context(), key).Val(); ttl <= defaultExpiry-time.Minute {
+				t.Fatalf("idle poll did not renew expiry: %v", ttl)
+			}
 		})
 	}
 }

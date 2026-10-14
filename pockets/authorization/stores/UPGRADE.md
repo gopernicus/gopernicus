@@ -211,8 +211,9 @@ own data adoption procedure; this framework setup targets the canonical schema.
 4. Pass the repositories to `authorization.New`. `Repositories.Tuples` supplies
    roles, the relationship facade and decisions. Supply a model only when policy
    needs named permissions or graph traversal.
-5. If caching is enabled, construct the store with `WithTupleCache()`, supply a
-   dedicated Redis namespace and a positive `MaxStaleness`, and supervise the
+5. If caching is enabled, construct the store with `WithTupleCache()`, pass the
+   backend (a Redis namespace is optional) and a `MaxStaleness` (zero means 5s;
+   every replica must agree), and supervise the
    returned runtime's poll loop. Constructors start no workers.
 
 `WithAudit()` enables atomic recording; the audit table exists even when recording

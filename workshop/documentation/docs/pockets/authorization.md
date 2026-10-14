@@ -265,8 +265,9 @@ outbox so the mirror can never silently diverge:
    ambient transaction always bypass Redis. Integrity and audit never use the
    cache.
 
-The consistency window is the host-chosen `MaxStaleness`. A revocation may be
-unseen for at most that long; a slow relay cannot extend it, because eligibility
+The consistency window is `MaxStaleness`, **5 seconds** unless the host sets
+it (then every replica on the same authorization database must use the same
+value). A revocation may be unseen for at most that long; a slow relay cannot extend it, because eligibility
 is measured from the authoritative observation. Wire it like this:
 
 ```go

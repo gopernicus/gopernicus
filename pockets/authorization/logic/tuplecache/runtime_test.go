@@ -358,7 +358,7 @@ func TestRawReaderParityModelsCyclesBudgetsAndBatches(t *testing.T) {
 func TestPolicyBindingStartupAndWake(t *testing.T) {
 	s := &source{store: memory.New()}
 	b := memory.NewTupleCache()
-	for _, policy := range []tuplecache.Policy{{}, {MaxStaleness: -1}, {MaxStaleness: time.Second, PollInterval: time.Second}, {MaxStaleness: time.Second, ReadTimeout: -1}} {
+	for _, policy := range []tuplecache.Policy{{MaxStaleness: -1}, {MaxStaleness: time.Second, PollInterval: time.Second}, {MaxStaleness: time.Second, ReadTimeout: -1}} {
 		if _, err := tuplecache.New(s, b, tuplecache.WithPolicy(policy)); !errors.Is(err, sdk.ErrInvalidInput) {
 			t.Fatal(err)
 		}
@@ -458,6 +458,17 @@ func TestSourceIdentityChangeUsesNewMirror(t *testing.T) {
 	}
 	if left, err := backend.State(t.Context(), c.Binding()); err != nil || left != old {
 		t.Fatalf("old mirror changed: %+v/%v", left, err)
+	}
+}
+
+func TestZeroMaxStalenessSelectsDefault(t *testing.T) {
+	c, err := tuplecache.New(&source{store: memory.New()}, memory.NewTupleCache())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	if want := fmt.Sprintf("protocol:2/test-store/max-staleness:%d", tuplecache.DefaultMaxStaleness); c.Binding() != want || tuplecache.DefaultMaxStaleness != 5*time.Second {
+		t.Fatalf("binding %q, want %q", c.Binding(), want)
 	}
 }
 

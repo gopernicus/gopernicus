@@ -69,7 +69,9 @@ An empty or invalid namespace fails construction, and an invalid binding (from a
 custom `tuplecache.Source`) fails `State`, `Read` and `Publish`; both return
 `sdk.ErrInvalidInput`. Braces are reserved for the surrounding Redis hash tag,
 which keeps the mirror and temporary `:build:<nonce>` hashes in the same slot.
-This key layout does not add Redis Cluster support.
+This key layout does not add Redis Cluster support. A runtime whose custom
+binding is invalid never reaches ready: every poll fails with
+`FailureStage: "state"` and decisions stay on the durable source.
 
 `(*TupleCache).Key(binding)` returns the key for a binding. Log the runtime's
 binding and key once at INFO on startup, so operators can see which mirror each
@@ -109,22 +111,31 @@ per replica. Answers stay correct; only the cost changes.
 layout), old and new pods rebuild on every poll while they overlap. Either
 deploy the change quickly, or turn the cache off, deploy, and turn it back on.
 
-### Orphaned mirrors
+### Mirror expiry and orphans
 
-Superseded mirrors do not expire. The permanent hash has no TTL (a full rebuild
-`PERSIST`s it), so after a binding change (new `MaxStaleness`, protocol or source
-identity) the old key stays until an operator deletes it, as does any
-`tuplecache:v2:` key from the previous key layout. Nothing reads or writes them.
-List and delete them with:
+Every publication (full rebuild, delta, or the no-change renewal each poll)
+renews the mirror's Redis expiry inside the same Lua script. A live mirror is
+renewed at poll cadence and never lapses; a superseded binding's mirror (after a
+`MaxStaleness`, protocol or source identity change) is no longer published to,
+so it expires on its own. `WithExpiry(d)` sets the duration: the default is
+7 days, and `0` keeps mirrors forever (the previous behaviour; superseded keys
+then need manual deletion). Keep it far above the poll interval.
+
+Keys with a TTL are what `volatile-*` `maxmemory` policies evict first. That is
+safe: reads fall back to the durable source and the next poll rebuilds the
+mirror.
+
+**Upgrading from the v2 key layout.** Old binaries `PERSIST`ed their
+`tuplecache:v2:` key, so it never expires. Once the whole fleet runs v3, delete
+it once by hand:
 
 ```sh
-redis-cli --scan --pattern 'tuplecache:*:{my-app/*'   # with WithNamespace("my-app")
-redis-cli --scan --pattern 'tuplecache:v2:*'          # one-time cut from v2
-redis-cli DEL '<key>'                                  # each superseded key
+redis-cli --scan --pattern 'tuplecache:v2:*'
+redis-cli DEL '<key>'
 ```
 
-The first pattern also matches live mirrors. Deleting a key that a running
-runtime uses is safe but forces a full rebuild.
+**Rollback.** v2 binaries ignore v3 keys and rebuild their stale v2 key once.
+Do not delete the v2 key until the whole fleet is on v3.
 
 ## Stored data
 
@@ -168,8 +179,8 @@ operational error during mutation leaves an unavailable mirror instead of
 partial indexes under a valid receipt.
 
 Full publication builds a temporary hash with a five-minute cleanup TTL and
-swaps it into place only if the old receipt still matches. The permanent hash
-has no TTL. Full snapshots already contain their pending changes; those changes
+swaps it into place only if the old receipt still matches. The swapped-in
+mirror takes the renewing expiry described under "Mirror expiry and orphans". Full snapshots already contain their pending changes; those changes
 are not applied again to the rebuilt tuples.
 
 Eligibility is checked using Redis server time. Time spent contacting Redis or
