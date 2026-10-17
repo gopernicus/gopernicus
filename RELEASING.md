@@ -1,5 +1,46 @@
 # Releasing gopernicus modules
 
+## Secrets pocket (sdk v0.13.0; pockets/secrets v0.1.0; pockets/secrets/stores/pgx v0.1.0 — published 2026-10-17)
+
+Three tags for one feature, in dependency order. Design and build record:
+[plans/secrets-pocket.md](plans/secrets-pocket.md).
+
+**What changed.**
+- **sdk v0.13.0 (MINOR).** `cryptids.KeyRing`, `ParseKeyRing`, `KeyedEncrypter`
+  and `NewAESGCMRing`: ciphertext names its key (`v1.<key id>.<AESGCM payload>`),
+  the active key encrypts, every ring key decrypts, and a dropped key yields
+  `ErrUnknownKeyID`. `AESGCM` and `Encrypter` are unchanged; no host code changes.
+- **pockets/secrets v0.1.0 (new).** Owner-scoped secrets encrypted at rest with
+  a per-owner data key wrapped by the master ring; every read, write, delete
+  and key operation audited in the same transaction; reads require a `Source`.
+  `logic/vault`, `logic/rotation` (`RewrapOwnerKeys`, `RotateOwnerKey`),
+  `stores/memory`, `stores/storetest`. No HTTP adapter.
+- **pockets/secrets/stores/pgx v0.1.0 (new).** Three tables, `WithSchema`,
+  `StatusCheck`, `ExportMigrations`; `ReplaceOwnerKey` is a compare-and-swap.
+
+**Tags and verification.**
+- `sdk/v0.13.0` is annotated at `96643d1a68439540d36ba34e545c3874b931a495`
+  (PR #85 merge). `pockets/secrets/v0.1.0` at
+  `0dc4ee686373339354b65587c5a1945a0a2eddad` (PR #86, which also pinned sdk
+  v0.13.0 and dropped the pre-tag replace). `pockets/secrets/stores/pgx/v0.1.0`
+  at `dddf25af3f0e37a0834e15bea283fff92ac09cdc` (PR #87, pinning the pocket and
+  dropping the last replace). Every PR passed `make check` on CI.
+- Each proxy `.info` resolved before the dependent pin moved (each pin's
+  `go mod tidy` ran with `GOWORK=off` against `proxy.golang.org`).
+- A cold scratch consumer (`GOWORK=off`, empty module and build caches,
+  `proxy.golang.org`, `sum.golang.org`) requiring all three passed build, vet,
+  tests (the storetest suite on the memory store plus a put/get/rewrap round
+  trip) and `go mod verify`.
+- Live PostgreSQL 17 conformance ran before the merge, bare and under a schema,
+  with the 16-racer `ReplaceOwnerKey` proof; it is env-gated
+  (`POSTGRES_TEST_DSN`) and not part of CI.
+- Known: PR #85's `TestAESGCMRingRejectsBadCiphertext` tamper case was flaky
+  (it flipped a base64 character, not a decoded byte) and failed once on PR
+  #86's first CI run; fixed in #86 as a test-only change. `sdk/v0.13.0` runtime
+  code is identical.
+
+Checksums and provenance: [release manifest](plans/secrets-pocket-release-manifest.json).
+
 ## Direct-hit short circuit (authorization v0.26.0 — published 2026-10-14)
 
 MINOR release of authorization core `v0.26.0`, alone. This is Phase 1 of the

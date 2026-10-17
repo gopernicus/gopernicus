@@ -3,8 +3,9 @@
 Status: RATIFIED — 2026-10-16 ("yes, two layers, ratify and build"). Owner
 decided §6.1 reads require a Source and §6.2 two layers; §6.3–§6.6 take the
 recommendations (64 KiB, `secrets`, `List` unaudited, one `id:hex` list).
-Work on branch `secrets-pocket` from `main` 8a18f0c4. S1–S3 BUILT AND
-VERIFIED 2026-10-16 (see §9); S4 release and S5 Venona pending.
+S1–S4 COMPLETE: PUBLISHED AND COLD-VERIFIED 2026-10-17 as `sdk/v0.13.0`,
+`pockets/secrets/v0.1.0`, `pockets/secrets/stores/pgx/v0.1.0` (PRs #85–#87;
+see RELEASING.md and §9). S5 (Venona S2.2) pending in venona-project.
 Requester: venona-project plan 02 S2.2 (tenant-held Cloudflare/GitHub/DO
 credentials). Prior art: Segovia v1 `tenant_secrets` (2026-05-07), built on the
 old framework; design lineage recorded in §2.
@@ -373,6 +374,8 @@ Deviations from §3, each deliberate:
 | `stores/pgx` hermetic | export test, bare-table guard |
 | `stores/pgx` live, PostgreSQL 17 (`postgres:17-alpine`, disposable) | `RunRepository` pass bare and under `POSTGRES_TEST_SCHEMA=secrets_test`; `TestLive_StatusCheck`; `TestLive_ConcurrentReplaceOwnerKey` |
 | `make guard` (28 guards) | exit 0 after registering the two modules in `MODULES`, `STORE_MODULES` and the G5 pocket list |
+| CI `make check` | pass on PRs #85, #86, #87 (one flaky tamper test fixed in #86, test only) |
+| cold consumer, `GOWORK=off`, empty caches, public proxy and sumdb | build, vet, tests, `go mod verify` pass; checksums in `secrets-pocket-release-manifest.json` |
 
 ## 10. References
 
