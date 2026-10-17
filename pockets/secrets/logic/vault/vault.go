@@ -56,6 +56,11 @@ var (
 // excluded so Owner.String and Ref.String are unambiguous.
 var namePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,127}$`)
 
+// actorPattern bounds Source fields. Actor ids are whatever the host's
+// authentication issues (mixed-case, ULIDs, UUIDs, "svc:deploy"), so the
+// alphabet is wider than namePattern's; they are stored, never parsed.
+var actorPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:@-]{0,127}$`)
+
 // actions is the closed set an AuditFilter may name.
 var actions = map[Action]bool{
 	ActionOwnerKeyCreated: true, ActionOwnerKeyRewrapped: true, ActionOwnerKeyRotated: true, ActionOwnerKeyDestroyed: true,
@@ -226,11 +231,11 @@ func (s Source) Validate() error {
 		return ErrSourceRequired
 	}
 	if actor {
-		if !namePattern.MatchString(s.ActorType) || !namePattern.MatchString(s.ActorID) {
-			return fmt.Errorf("secrets: actor type and id must match %s: %w", namePattern, sdk.ErrInvalidInput)
+		if !actorPattern.MatchString(s.ActorType) || !actorPattern.MatchString(s.ActorID) {
+			return fmt.Errorf("secrets: actor type and id must match %s: %w", actorPattern, sdk.ErrInvalidInput)
 		}
-	} else if !namePattern.MatchString(s.System) {
-		return fmt.Errorf("secrets: system must match %s: %w", namePattern, sdk.ErrInvalidInput)
+	} else if !actorPattern.MatchString(s.System) {
+		return fmt.Errorf("secrets: system must match %s: %w", actorPattern, sdk.ErrInvalidInput)
 	}
 	if len(s.Reason) > MaxReasonLen || !utf8.ValidString(s.Reason) || strings.ContainsRune(s.Reason, 0) {
 		return fmt.Errorf("secrets: reason must be valid UTF-8 without NUL and at most %d bytes: %w", MaxReasonLen, sdk.ErrInvalidInput)
@@ -252,8 +257,8 @@ func (f AuditFilter) Validate() error {
 		return fmt.Errorf("secrets: unknown audit action %q: %w", f.Action, sdk.ErrInvalidInput)
 	}
 	for _, v := range []string{f.ActorType, f.ActorID, f.System} {
-		if v != "" && !namePattern.MatchString(v) {
-			return fmt.Errorf("secrets: audit source filter must match %s: %w", namePattern, sdk.ErrInvalidInput)
+		if v != "" && !actorPattern.MatchString(v) {
+			return fmt.Errorf("secrets: audit source filter must match %s: %w", actorPattern, sdk.ErrInvalidInput)
 		}
 	}
 	if !f.Since.IsZero() && !f.Until.IsZero() && !f.Until.After(f.Since) {
