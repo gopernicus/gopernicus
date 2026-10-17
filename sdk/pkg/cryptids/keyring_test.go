@@ -2,6 +2,7 @@ package cryptids
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"strings"
@@ -97,10 +98,13 @@ func TestAESGCMRingRejectsBadCiphertext(t *testing.T) {
 	if _, err := ring.Decrypt("v1.k2." + payload); !errors.Is(err, ErrCiphertextAuthFailed) || !errors.Is(err, sdk.ErrConflict) {
 		t.Fatalf("relabelled: %v", err)
 	}
-	// Flipped tag bit.
-	tampered := []byte(payload)
-	tampered[len(tampered)-1] ^= 1
-	if _, err := ring.Decrypt("v1.k1." + string(tampered)); !errors.Is(err, ErrCiphertextAuthFailed) {
+	// Flipped tag bit, in the decoded bytes so the text stays valid base64url.
+	raw, err := base64.RawURLEncoding.DecodeString(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw[len(raw)-1] ^= 1
+	if _, err := ring.Decrypt("v1.k1." + base64.RawURLEncoding.EncodeToString(raw)); !errors.Is(err, ErrCiphertextAuthFailed) {
 		t.Fatalf("tampered: %v", err)
 	}
 	for name, in := range map[string]string{
