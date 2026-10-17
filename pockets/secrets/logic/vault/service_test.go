@@ -165,6 +165,25 @@ func TestDeleteOwnerShredsEverything(t *testing.T) {
 	}
 }
 
+func TestActorIDsTakeHostShapes(t *testing.T) {
+	ctx := context.Background()
+	svc := newVault(t, memory.New(), ring(t, "m1", "m1"))
+	for _, id := range []string{"HGVcNGX5wbQd8PfR42Gtz", "01J9ZK3Q7M8N2P4R6T8V0W2X4Y", "6f1a2b3c-4d5e-4f60-8a9b-0c1d2e3f4a5b", "svc:deploy", "ops@example.com"} {
+		if _, err := svc.Put(ctx, token, []byte("v"), vault.Source{ActorType: "user", ActorID: id}); err != nil {
+			t.Errorf("actor id %q refused: %v", id, err)
+		}
+	}
+	audit, _, err := svc.Audit(ctx, vault.AuditFilter{ActorID: "svc:deploy"}, "", 0)
+	if err != nil || len(audit) != 1 {
+		t.Fatalf("filter by host-shaped actor id: %d %v", len(audit), err)
+	}
+	for _, bad := range []string{"", " u1", "u 1", "a/b", "é"} {
+		if _, err := svc.Put(ctx, token, []byte("v"), vault.Source{ActorType: "user", ActorID: bad}); !errors.Is(err, sdk.ErrInvalidInput) {
+			t.Errorf("actor id %q accepted: %v", bad, err)
+		}
+	}
+}
+
 func TestValidation(t *testing.T) {
 	ctx := context.Background()
 	svc := newVault(t, memory.New(), ring(t, "m1", "m1"))

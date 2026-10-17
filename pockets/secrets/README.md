@@ -32,7 +32,9 @@ stores/pgx/             independent PostgreSQL module and migration
   `cryptids.KeyedEncrypter`, normally `cryptids.NewAESGCMRing` over keys the
   host reads from its environment.
 - Every call that touches a value takes a **Source**: exactly one actor pair
-  (`ActorType`, `ActorID`) or a `System`, plus an optional `Reason`. A read
+  (`ActorType`, `ActorID`) or a `System`, plus an optional `Reason`. Actor
+  ids take whatever shape the host's authentication issues (mixed case,
+  ULIDs, UUIDs, `svc:deploy`, an email address); they are stored, not parsed. A read
   without one is refused with `vault.ErrSourceRequired`. `List` reveals names
   only and takes no Source.
 - **Audit** records (`vault.AuditRecord`) carry the action, owner, name,
