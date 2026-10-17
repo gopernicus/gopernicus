@@ -16,6 +16,3 @@ require (
 	golang.org/x/sync v0.21.0 // indirect
 	golang.org/x/text v0.38.0 // indirect
 )
-
-// Pre-tag: the pocket is unreleased. Dropped with its v0.1.0 pin.
-replace github.com/gopernicus/gopernicus/pockets/secrets => ../..
