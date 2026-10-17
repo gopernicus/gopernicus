@@ -46,6 +46,8 @@ pockets/events/stores/turso/       events' Turso store adapter, its own module
 pockets/jobs/                      durable queue + schedules hexagon — datastore-free; public memstore/
 pockets/jobs/stores/pgx/           jobs' pgx store adapter, its own module
 pockets/jobs/stores/turso/         jobs' Turso store adapter, its own module
+pockets/secrets/                   owner-scoped encrypted secrets with key rotation and an audit log — datastore-free; public stores/memory
+pockets/secrets/stores/pgx/        secrets' pgx store adapter, its own module
 ui/goth/                            reusable templ + plain-CSS presentation system, its own module
 examples/cms/                       a host app: pockets/cms on Turso, with a custom theme
 examples/minimal/                   a host app: pockets/cms on an in-memory store — zero libsql in its module graph

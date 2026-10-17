@@ -1,15 +1,15 @@
 # gopernicus — framework monorepo (sdk + integrations + pockets + examples)
 #
-# Multi-module workspace (go.work), 42 modules. templ is pinned via the `tool`
+# Multi-module workspace (go.work), 44 modules. templ is pinned via the `tool`
 # directive in pockets/cms/views/goth/go.mod (where the .templ sources live),
 # so `go tool templ` is reproducible.
 
-MODULES = sdk pockets integrations/cryptids/bcrypt integrations/cryptids/golang-jwt integrations/cryptids/google-uuid integrations/datastores/pgxdb integrations/datastores/turso integrations/datastores/firestore integrations/email/sendgrid integrations/filestorage/gcs integrations/filestorage/s3 integrations/kvstores/goredis integrations/oauth/github integrations/oauth/google integrations/scheduling/robfig-cron integrations/tracing/otel pockets/authentication pockets/authentication/stores/firestore pockets/authentication/stores/pgx pockets/authentication/stores/turso pockets/authentication/views/goth pockets/authorization pockets/authorization/stores/pgx pockets/authorization/stores/turso pockets/authorization/stores/goredis pockets/cms pockets/cms/stores/pgx pockets/cms/stores/turso pockets/cms/views/goth pockets/events pockets/events/stores/pgx pockets/events/stores/turso pockets/jobs pockets/jobs/stores/pgx pockets/jobs/stores/turso ui/goth examples/auth-cms examples/cms examples/goth-showcase examples/jobs-minimal examples/minimal workshop/gopernicus
+MODULES = sdk pockets integrations/cryptids/bcrypt integrations/cryptids/golang-jwt integrations/cryptids/google-uuid integrations/datastores/pgxdb integrations/datastores/turso integrations/datastores/firestore integrations/email/sendgrid integrations/filestorage/gcs integrations/filestorage/s3 integrations/kvstores/goredis integrations/oauth/github integrations/oauth/google integrations/scheduling/robfig-cron integrations/tracing/otel pockets/authentication pockets/authentication/stores/firestore pockets/authentication/stores/pgx pockets/authentication/stores/turso pockets/authentication/views/goth pockets/authorization pockets/authorization/stores/pgx pockets/authorization/stores/turso pockets/authorization/stores/goredis pockets/cms pockets/cms/stores/pgx pockets/cms/stores/turso pockets/cms/views/goth pockets/events pockets/events/stores/pgx pockets/events/stores/turso pockets/jobs pockets/jobs/stores/pgx pockets/jobs/stores/turso pockets/secrets pockets/secrets/stores/pgx ui/goth examples/auth-cms examples/cms examples/goth-showcase examples/jobs-minimal examples/minimal workshop/gopernicus
 
 # STORE_MODULES carry env-gated live conformance suites (storetest against a real
 # database). `make check`/`make test` run them hermetically (loud skips); `make
 # test-stores` runs them EXPECTING the datastore env vars set.
-STORE_MODULES = pockets/cms/stores/pgx pockets/cms/stores/turso pockets/authentication/stores/firestore pockets/authentication/stores/pgx pockets/authentication/stores/turso pockets/jobs/stores/pgx pockets/jobs/stores/turso pockets/events/stores/pgx pockets/events/stores/turso pockets/authorization/stores/pgx pockets/authorization/stores/turso
+STORE_MODULES = pockets/cms/stores/pgx pockets/cms/stores/turso pockets/authentication/stores/firestore pockets/authentication/stores/pgx pockets/authentication/stores/turso pockets/jobs/stores/pgx pockets/jobs/stores/turso pockets/events/stores/pgx pockets/events/stores/turso pockets/authorization/stores/pgx pockets/authorization/stores/turso pockets/secrets/stores/pgx
 
 # INTEGRATION_TAG_MODULES carry `-tags=integration` sources `make check` must keep
 # COMPILING: the Turso/Firestore external-store suites, Firestore connector, and
@@ -205,7 +205,7 @@ guard-no-legacy-path:
 # require; the dev-only relative `replace` of sdk is permitted pre-tag.
 guard-pocket-dependencies:
 	@echo "== guard: shared pockets requires SDK; concrete cores require SDK/shared pockets only (FS1) =="
-	@fail=0; for f in pockets pockets/authentication pockets/authorization pockets/cms pockets/events pockets/jobs; do \
+	@fail=0; for f in pockets pockets/authentication pockets/authorization pockets/cms pockets/events pockets/jobs pockets/secrets; do \
 		allowed='^github.com/gopernicus/gopernicus/sdk$$'; \
 		if [ "$$f" != pockets ]; then allowed='^github.com/gopernicus/gopernicus/(sdk|pockets)$$'; fi; \
 		extras=$$(awk '/^require \(/{inblk=1; next} inblk && /^\)/{inblk=0; next} inblk && !/\/\/ indirect/{print $$1} /^require [^(]/{print $$2}' $$f/go.mod \

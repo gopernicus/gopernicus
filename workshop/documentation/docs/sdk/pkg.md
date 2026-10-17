@@ -18,7 +18,7 @@ but never another package under `pkg/`.
 | `web` | anything HTTP: routing, middleware, JSON and HTML responses, SSE, static files, server run | see the [Web package](web.md) page |
 | `list` | paginated listings at an HTTP edge or in a store adapter | `ParseQuery`, `ParseOrder`, `Request`, `Page[T]`, `TrimPage` |
 | `validation` | field checks that produce client-safe violations | `Required`, `MaxLength`, `Email`, `IfSet` |
-| `cryptids` | digests, AES-GCM envelopes, or the JWT signing contract | `SHA256`, `NewAESGCM`, `JWTSigner` |
+| `cryptids` | digests, AES-GCM envelopes, rotatable key rings, or the JWT signing contract | `SHA256`, `NewAESGCM`, `NewAESGCMRing`, `JWTSigner` |
 | `workers` | a worker pool or claim/process/complete runner over your own store | `NewPool`, `NewRunner`, `NewFencedRunner` |
 | `async` | bounded fire-and-forget tasks inside one process | `GoContext`, `Close`, `Wait` |
 
@@ -186,6 +186,7 @@ authentication's bare-address normalization.
 
 - `SHA256(value)` returns a lowercase hex digest for stable lookup, including high-entropy API keys. Password hashing stays behind authentication's host-selected `PasswordHasher`; bcrypt's cost is configurable.
 - `NewAESGCM(key)` takes a 32-byte key and keeps the raw-base64url nonce/ciphertext/tag envelope for stored data.
+- `KeyedEncrypter` adds `ActiveKeyID` and `KeyIDOf` to `Encrypter` so stored ciphertext names its key and keys can be rotated without a flag day. `NewAESGCMRing(KeyRing)` is the implementation: ciphertext is `v1.<key id>.<AESGCM payload>`, the active key encrypts, every ring key decrypts, and a key dropped from the ring makes its ciphertext `ErrUnknownKeyID` rather than a guess. `ParseKeyRing("k1:<hex>,k2:<hex>", "k2")` reads the two-variable host shape (`openssl rand -hex 32` per key). Tampering is `ErrCiphertextAuthFailed` (matches `sdk.ErrConflict`); everything else malformed matches `sdk.ErrInvalidInput`.
 - `JWTSigner` is the contract `integrations/cryptids/golang-jwt` implements. Signing owns `exp` and `iat`; verification requires numeric expiration, validates optional `nbf`/`iat`, and allows 60 seconds of clock tolerance. Dates must fall in years 0001 to 9999. Hosts keep their exact key bytes when migrating from SDK HS256.
 
 ## workers

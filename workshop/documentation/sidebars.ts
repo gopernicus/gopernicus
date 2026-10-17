@@ -55,6 +55,7 @@ const sidebars: SidebarsConfig = {
         'pockets/cms',
         'pockets/events',
         'pockets/jobs',
+        'pockets/secrets',
       ],
     },
     'integrations/catalog',

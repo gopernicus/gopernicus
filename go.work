@@ -40,6 +40,8 @@ use (
 	./pockets/jobs
 	./pockets/jobs/stores/pgx
 	./pockets/jobs/stores/turso
+	./pockets/secrets
+	./pockets/secrets/stores/pgx
 	./sdk
 	./ui/goth
 	./workshop/gopernicus
