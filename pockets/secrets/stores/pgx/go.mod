@@ -5,7 +5,7 @@ go 1.26.1
 require (
 	github.com/gopernicus/gopernicus/integrations/datastores/pgxdb v0.9.0
 	github.com/gopernicus/gopernicus/pockets/secrets v0.1.0
-	github.com/gopernicus/gopernicus/sdk v0.12.0
+	github.com/gopernicus/gopernicus/sdk v0.13.0
 )
 
 require (
@@ -17,8 +17,5 @@ require (
 	golang.org/x/text v0.38.0 // indirect
 )
 
-// Pre-tag: the pocket and the sdk key ring are unreleased. Dropped at S4.
-replace (
-	github.com/gopernicus/gopernicus/pockets/secrets => ../..
-	github.com/gopernicus/gopernicus/sdk => ../../../../sdk
-)
+// Pre-tag: the pocket is unreleased. Dropped with its v0.1.0 pin.
+replace github.com/gopernicus/gopernicus/pockets/secrets => ../..
