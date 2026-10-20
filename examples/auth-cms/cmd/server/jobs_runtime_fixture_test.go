@@ -3,7 +3,7 @@ package main
 import (
 	"context"
 
-	"github.com/gopernicus/gopernicus/examples/auth-cms/internal/authjobs"
+	"github.com/gopernicus/gopernicus/examples/auth-cms/pockets/authentication/outbound/authjobs"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/delivery"
 	job "github.com/gopernicus/gopernicus/pockets/jobs/logic/queue"
 )

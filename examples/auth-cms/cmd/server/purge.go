@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/gopernicus/gopernicus/examples/auth-cms/internal/authjobs"
+	"github.com/gopernicus/gopernicus/examples/auth-cms/pockets/authentication/outbound/authjobs"
 	delivery "github.com/gopernicus/gopernicus/pockets/authentication/logic/delivery"
 	"github.com/gopernicus/gopernicus/sdk/pkg/environment"
 )

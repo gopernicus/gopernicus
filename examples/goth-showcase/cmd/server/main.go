@@ -12,7 +12,7 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/gopernicus/gopernicus/examples/goth-showcase/internal/showcase"
+	"github.com/gopernicus/gopernicus/examples/goth-showcase/ui/showcase"
 	"github.com/gopernicus/gopernicus/sdk/pkg/environment"
 	"github.com/gopernicus/gopernicus/sdk/pkg/logging"
 	"github.com/gopernicus/gopernicus/sdk/pkg/web"

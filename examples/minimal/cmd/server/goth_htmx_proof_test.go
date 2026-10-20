@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gopernicus/gopernicus/examples/minimal/internal/memstore"
+	"github.com/gopernicus/gopernicus/examples/minimal/pockets/cms/outbound/memstore"
 	"github.com/gopernicus/gopernicus/pockets"
 	"github.com/gopernicus/gopernicus/pockets/cms"
 	cmsgoth "github.com/gopernicus/gopernicus/pockets/cms/views/goth"

@@ -1845,7 +1845,7 @@ lifecycle, exactly like the jobs and events pollers.
   the returned `deliveryRuntime.Handle` (+ its `Discard` terminal hook) under one
   job kind. The host then runs the generic `jobs.FencedRuntime` in its own
   goroutine (stop it after HTTP drains) and periodically calls the jobs
-  `PurgeTerminal`. `examples/auth-cms/internal/authjobs` is the exemplary adapter,
+  `PurgeTerminal`. `examples/auth-cms/pockets/authentication/outbound/authjobs` is the exemplary adapter,
   and `examples/auth-cms/cmd/server` is the executable wiring twin.
 
   ```go
@@ -2996,7 +2996,7 @@ SMTP/real body senders, a durable/shared limiter, and an HTTPS `PublicAuthBaseUR
 Both dialect stores ship and pass the same `storetest` suite (live runs recorded
 in NOTES.md; turso against libSQL, pgx against docker postgres:17 with `C`
 collation). A host may satisfy `Repositories` itself —
-`examples/auth-cms/internal/authmem` is the zero-infra proof for every port.
+`examples/auth-cms/pockets/authentication/outbound/authmem` is the zero-infra proof for every port.
 Conformance is env-gated: turso via `-tags=integration` + `TURSO_*`; pgx via
 `POSTGRES_TEST_DSN`. Child tables carry no enforced FKs (credential/identifier
 atomicity lives in the `Provision`/`Passwords.Change`/`ApplyVerifiedChange`/

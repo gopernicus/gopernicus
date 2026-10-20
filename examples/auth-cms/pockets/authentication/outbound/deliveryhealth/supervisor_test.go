@@ -1,8 +1,10 @@
-package main
+package deliveryhealth
 
 import (
 	"context"
 	"errors"
+	"io"
+	"log/slog"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -18,6 +20,10 @@ type markerSpy struct {
 func (m *markerSpy) MarkStarted() { m.started.Add(1) }
 func (m *markerSpy) MarkStopped() { m.stopped.Add(1) }
 
+func quietLog() *slog.Logger {
+	return slog.New(slog.NewTextHandler(io.Discard, nil))
+}
+
 // TestSuperviseDeliveryUnexpectedErrorCancelsHost proves the IX-02 reaction: a delivery
 // runtime that returns an error while its context is NOT canceled (the host is running)
 // cancels the host context and records the cause, so web.Run drains and run returns nonzero.
@@ -32,7 +38,7 @@ func TestSuperviseDeliveryUnexpectedErrorCancelsHost(t *testing.T) {
 
 	marker := &markerSpy{}
 	// The runtime exits promptly with the injected error while deliveryCtx is still live.
-	sup := superviseDelivery(deliveryCtx, cancelHost, func(context.Context) error {
+	sup := Supervise(deliveryCtx, cancelHost, func(context.Context) error {
 		return injected
 	}, marker, quietLog())
 
@@ -42,10 +48,10 @@ func TestSuperviseDeliveryUnexpectedErrorCancelsHost(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("supervisor did not cancel the host after an unexpected delivery error")
 	}
-	if !sup.wait(2 * time.Second) {
+	if !sup.Wait(2 * time.Second) {
 		t.Fatal("supervisor goroutine did not return")
 	}
-	if got := sup.exitErr(); !errors.Is(got, injected) {
+	if got := sup.ExitErr(); !errors.Is(got, injected) {
 		t.Fatalf("exitErr = %v, want it to wrap the injected error %v", got, injected)
 	}
 	if marker.started.Load() != 1 || marker.stopped.Load() != 1 {
@@ -64,7 +70,7 @@ func TestSuperviseDeliveryUnexpectedCleanExitCancelsHost(t *testing.T) {
 	hostCtx, cancelHost := context.WithCancel(context.Background())
 	defer cancelHost()
 
-	sup := superviseDelivery(deliveryCtx, cancelHost, func(context.Context) error {
+	sup := Supervise(deliveryCtx, cancelHost, func(context.Context) error {
 		return nil // clean, but unexpected: deliveryCtx was never canceled
 	}, &markerSpy{}, quietLog())
 
@@ -73,10 +79,10 @@ func TestSuperviseDeliveryUnexpectedCleanExitCancelsHost(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("supervisor did not cancel the host after an unexpected clean exit")
 	}
-	if !sup.wait(2 * time.Second) {
+	if !sup.Wait(2 * time.Second) {
 		t.Fatal("supervisor goroutine did not return")
 	}
-	if got := sup.exitErr(); !errors.Is(got, errDeliveryExitedClean) {
+	if got := sup.ExitErr(); !errors.Is(got, errDeliveryExitedClean) {
 		t.Fatalf("exitErr = %v, want errDeliveryExitedClean", got)
 	}
 }
@@ -93,7 +99,7 @@ func TestSuperviseDeliveryNormalShutdownIsQuiet(t *testing.T) {
 	started := make(chan struct{})
 	// The runtime blocks until its own context is canceled, then returns nil — the real
 	// runtime's shutdown contract.
-	sup := superviseDelivery(deliveryCtx, cancelHost, func(ctx context.Context) error {
+	sup := Supervise(deliveryCtx, cancelHost, func(ctx context.Context) error {
 		close(started)
 		<-ctx.Done()
 		return nil
@@ -102,10 +108,10 @@ func TestSuperviseDeliveryNormalShutdownIsQuiet(t *testing.T) {
 	<-started
 	// Simulate the host-driven ordered shutdown: cancel the delivery context.
 	cancelDelivery()
-	if !sup.wait(2 * time.Second) {
+	if !sup.Wait(2 * time.Second) {
 		t.Fatal("supervisor goroutine did not return after expected shutdown")
 	}
-	if got := sup.exitErr(); got != nil {
+	if got := sup.ExitErr(); got != nil {
 		t.Fatalf("exitErr = %v, want nil (expected shutdown is the quiet path)", got)
 	}
 	select {

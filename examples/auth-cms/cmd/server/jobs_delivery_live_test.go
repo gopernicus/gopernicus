@@ -36,8 +36,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gopernicus/gopernicus/examples/auth-cms/internal/authjobs"
-	"github.com/gopernicus/gopernicus/examples/auth-cms/internal/authmem"
+	"github.com/gopernicus/gopernicus/examples/auth-cms/pockets/authentication/outbound/authjobs"
+	"github.com/gopernicus/gopernicus/examples/auth-cms/pockets/authentication/outbound/authmem"
 	auth "github.com/gopernicus/gopernicus/pockets/authentication"
 	delivery "github.com/gopernicus/gopernicus/pockets/authentication/logic/delivery"
 	job "github.com/gopernicus/gopernicus/pockets/jobs/logic/queue"

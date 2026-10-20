@@ -50,11 +50,11 @@ worked example `examples/cms`.
     gopernicus/           module github.com/gopernicus/gopernicus/workshop/gopernicus       — the scaffolding CLI (init / new pocket / db verbs; stdlib-only; emits the anatomies below, never links them — guard G11)
   examples/
     cms/                  module github.com/gopernicus/gopernicus/examples/cms                — a host app: pockets/cms on Turso
-      cmd/  internal/theme  workshop/migrations
+      cmd/  pockets/cms/inbound/theme  workshop/migrations
     minimal/               module github.com/gopernicus/gopernicus/examples/minimal           — a host app: pockets/cms on an in-memory store
-      cmd/  internal/memstore
+      cmd/  internal/{logic,inbound,outbound}/domains/catalog  pockets/cms/outbound/memstore
     auth-cms/              module github.com/gopernicus/gopernicus/examples/auth-cms          — a host app: auth + cms + events + the authorization flagship composed, in-memory (rule 6, live)
-      cmd/  internal/authmem  internal/memstore
+      cmd/  internal/{logic,inbound,outbound}/domains/documents  pockets/{access,authentication,cms,events}
     jobs-minimal/          module github.com/gopernicus/gopernicus/examples/jobs-minimal      — a host app: pockets/jobs on stores/memory, zero drivers
       cmd/
 ```

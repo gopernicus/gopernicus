@@ -4,7 +4,7 @@
 // in SQL (pockets/cms/stores/turso/migrations) — entry (type,slug), term
 // (kind,slug), and menu slug collisions all return sdk.ErrAlreadyExists.
 //
-// Copied verbatim from examples/minimal/internal/memstore alongside the store
+// Copied verbatim from examples/minimal/pockets/cms/outbound/memstore alongside the store
 // it exercises (see memstore.go's copy note).
 package memstore
 

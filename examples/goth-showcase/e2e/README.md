@@ -9,7 +9,7 @@ specimen — the Gate A ratified three-engine release gate.
 
 ## What runs where
 
-- **Go suite** (`internal/showcase/*_test.go`) — hermetic `httptest` checks
+- **Go suite** (`ui/showcase/*_test.go`) — hermetic `httptest` checks
   (routes, CSP mapping, host-theme link ordering + cascade and the `text/css`
   stylesheet response, HTMX status codes, registry completeness). Runs in
   `make check` / `make test`. No Node.

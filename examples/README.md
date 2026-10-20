@@ -341,7 +341,7 @@ internal/inbound/
   co-located `templates/` are **app-only**: a pocket core requires sdk
   only (FS1), so its render port lives in the core and its bundled default
   is the `views/<pkg>` sibling module (FS3); the pocket theming seam is
-  embed-the-sibling-default (live override: `examples/cms/internal/theme/`).
+  embed-the-sibling-default (live override: `examples/cms/pockets/cms/inbound/theme/`).
   See `pockets/README.md` §2.
 
 **`internal/outbound` vs `integrations`.** An `integration` is the *reusable*

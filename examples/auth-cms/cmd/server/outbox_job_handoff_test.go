@@ -6,7 +6,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/gopernicus/gopernicus/examples/auth-cms/internal/outboxmem"
+	"github.com/gopernicus/gopernicus/examples/auth-cms/pockets/events/outbound/outboxmem"
 	outbox2 "github.com/gopernicus/gopernicus/pockets/events/logic/outbox"
 	"github.com/gopernicus/gopernicus/pockets/jobs"
 	job "github.com/gopernicus/gopernicus/pockets/jobs/logic/queue"
