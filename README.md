@@ -8,7 +8,7 @@ infrastructure. Gopernicus is open source under the [MIT License](LICENSE),
 very much a work in progress, and not stable. See [ARCHITECTURE.md](ARCHITECTURE.md)
 for the full layering rules and [NOTES.md](NOTES.md) for the decision log.
 
-## The forty-two modules
+## The forty-four modules
 
 ```
 sdk/                                stdlib-only, layered: root = kernel; pkg/ + capabilities/ (empty go.mod = structural enforcement)
@@ -99,7 +99,7 @@ and the Registry content model.
 
 The host side of that boundary has its own charter:
 [examples/README.md](examples/README.md) is **the host contract** — rules
-H0–H10 for a host's layout, imports, host pockets, and composition root, the
+H0–H14 for a host's layout, imports, host pockets, and composition root, the
 sibling of [pockets/README.md](pockets/README.md).
 
 ## Quickstart
@@ -118,7 +118,7 @@ make migrate           # applies examples/cms/workshop/migrations pre-boot
 make run                # or: cd examples/cms && go run ./cmd/server
 ```
 
-From the repo root, `make check` builds, vets, and tests all forty-two modules
+From the repo root, `make check` builds, vets, and tests all forty-four modules
 and runs the twenty-three layering guards; `make test-stores` runs the live dialect
 conformance suites (expects `POSTGRES_TEST_DSN` / `TURSO_*` / `FIRESTORE_EMULATOR_HOST`). See [examples/cms/README.md](examples/cms/README.md)
 for that host's full env/make-target reference.

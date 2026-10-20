@@ -2774,3 +2774,63 @@ that had been dead since the rename. That is now closed on the doc side.
 
 Plan of record `.claude/plans/host-layout-contract.md`. No Go code changed in
 this half; no sdk, pocket, integration, or ui symbol moves at all.
+
+## 2026-10-20 — host-contract-reconciliation RATIFIED: the host contract adopts the reference shape (H0–H14, issue #90)
+
+The 2026-08-27 contract described a host the reference no longer was, and its
+executable floor never shipped. gps-360-go retired its `internal/` technology
+adapter slot on 2026-08-28 and put host adapters at top-level
+`integrations/<capability>/<vendor>`; the `gopernicus guard` verb promised
+for "next PR" was never built, and `workshop/gopernicus/v0.3.0` (tagged
+2026-09-11 for the framework audit) carries no `guard` though the contract
+and `RELEASING.md` said it did. This entry records PR-1 of the train: the
+text, not yet the moves or the verb.
+
+- **Owner rulings.** (1) Adopt the reference shape: host tech adapters live
+  at top-level `integrations/<capability>[/<vendor>]`, import stdlib +
+  framework `sdk` + the host's `sdk/` + one connector, return no domain type,
+  and are named only by `cmd` — the consumer declares the narrow port; a
+  host-local top-level `sdk/` is sanctioned; the vendor-libs fence becomes a
+  rule. (2) Ship `gopernicus guard` in this milestone, contract text first,
+  with `--list`, a Makefile/CI hook over the example hosts, and a new
+  `workshop/gopernicus` tag. (3) Sanction `cmd/<bin>` client binaries (H10
+  carve-out). (4) Name the Turso carve-out (`modernc.org/sqlite` beside libsql
+  for `localfile`) in `ARCHITECTURE.md`'s "exactly one external dependency"
+  text — docs only.
+- **Rule-id changes.** H5 is now the outbound row alone and the host
+  integration row is **H11**; **H12** is the outer import fence for
+  `internal/**` and `pockets/**`, tests included (one shared driver list for
+  H3/H7/H12; `golang.org/x/...` is third-party; production files never import
+  the host's `workshop/`); **H13** is the host's `sdk/`; **H14** is the host's
+  `ui/`, sanctioned as an optional presentation root. **H10** gains the
+  client-binary carve-out (classified by imports; may own commands, client,
+  wire types and interfaces; still no SQL literals) and is production-files
+  only in both clauses. H0 adds `sdk/`, `integrations/` and `ui/` to the roots;
+  H1, H4, H5, H6, H7 and H9 name the host's `sdk/` or `integrations/` where
+  they named the retired slot. The series is H0–H14, fifteen sentences.
+- **Package homes (PR-2).** auth-cms's `authjobs`, `authmem`,
+  `deliveryhealth` (with the delivery supervisor out of `cmd/server`) →
+  `pockets/authentication/outbound/*`; `authpages` →
+  `pockets/authentication/inbound/authpages`; `memstore` →
+  `pockets/cms/outbound/memstore`; `outboxmem` →
+  `pockets/events/outbound/outboxmem`; cms's `theme` →
+  `pockets/cms/inbound/theme`; minimal's `memstore` →
+  `pockets/cms/outbound/memstore`; goth-showcase's `showcase` →
+  `ui/showcase`. All five examples are then guarded; auth-cms passes the
+  floor only, its `cmd/` provider behavior recorded as named debt.
+- **Correction to the 2026-08-27 entry's "Executable floor, next PR".** That
+  PR was never opened. The verb is planned for `workshop/gopernicus` **v0.4.0**
+  under this plan; the G21 that entry named went to `guard-list-no-nethttp`,
+  and the host guard is **G30** (`guard-host-contract`).
+- **Deferred.** PR-B's second half — `gopernicus init` emitting the `tool`
+  pin and the `guard:` target skeleton — waits for v0.4.0 on the proxy (the
+  init templates pin published versions), and lands as v0.4.1.
+- **Reference findings recorded, not sanctioned:** `manual/`, `harness/`
+  (the host's `sdk/` is their home), `server/` (a committed binary, out of
+  H0's scope), `pockets/auth/views` (→ `pockets/auth/inbound/views`), and
+  `internal/inbound/domains/manual` importing `workshop/testweb` (H12).
+
+Plan of record `.claude/plans/host-contract-reconciliation.md` (copied to
+`plans/` at release). PR-1 changes text only — `examples/README.md`,
+`ARCHITECTURE.md`, `README.md`, `RELEASING.md`, the docs-site host-contract
+and examples pages; no Go package moves.
