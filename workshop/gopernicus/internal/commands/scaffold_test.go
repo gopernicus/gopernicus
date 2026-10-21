@@ -44,7 +44,7 @@ var (
 // go.mod must carry. Bump sdkPin with every sdk tag the template moves to.
 var (
 	inlineHint = regexp.MustCompile(`^[A-Z0-9_]+=\S*\s+#`)
-	sdkPin     = baseModule + "/sdk v0.9.0"
+	sdkPin     = baseModule + "/sdk v0.15.0"
 )
 
 // TestScaffoldInitNoneCompiles is the hermetic leg: an sdk-only host builds fully
