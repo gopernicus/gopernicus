@@ -32,7 +32,7 @@ LIVE_TAG_MODULES = $(filter %/firestore,$(INTEGRATION_TAG_MODULES))
 	guard-auth-no-delivery-repo guard-auth-no-request-time-provider \
 	guard-authorization-no-delivery-repo guard-authorization-rolesvc-no-engine guard-ui-no-inward guard-ui-require-whitelist \
 	guard-no-legacy-features-path guard-list-no-nethttp guard-violation-message-not-error \
-	guard-firestore-mediation guard-pocket-logic guard-authorization-tuples-leaf guard-authorization-decisions-no-mutations guard-inbound-authorization guard-tuple-write-integrity guard-host-contract
+	guard-firestore-mediation guard-pocket-logic guard-authorization-tuples-leaf guard-authorization-decisions-no-mutations guard-inbound-authorization guard-tuple-write-integrity guard-host-contract guard-auth-no-vendor-names
 
 # Regenerate *_templ.go from .templ sources. Each bundled views/templ module pins
 # its own templ tool; generation runs inside each so the tool version is
@@ -190,7 +190,7 @@ guard: guard-sdk-stdlib guard-pocket-isolation guard-sdk-no-outward guard-no-leg
 	guard-auth-no-delivery-repo guard-auth-no-request-time-provider \
 	guard-authorization-no-delivery-repo guard-authorization-rolesvc-no-engine guard-ui-no-inward guard-ui-require-whitelist \
 	guard-no-legacy-features-path guard-list-no-nethttp guard-violation-message-not-error \
-	guard-firestore-mediation guard-pocket-logic guard-authorization-tuples-leaf guard-authorization-decisions-no-mutations guard-inbound-authorization guard-tuple-write-integrity guard-host-contract
+	guard-firestore-mediation guard-pocket-logic guard-authorization-tuples-leaf guard-authorization-decisions-no-mutations guard-inbound-authorization guard-tuple-write-integrity guard-host-contract guard-auth-no-vendor-names
 
 # G1: sdk imports only the standard library (also enforced structurally by
 # sdk/go.mod having no require block).
@@ -625,6 +625,16 @@ guard-inbound-authorization:
 guard-tuple-write-integrity:
 	@echo "== guard: tuple write services and stores contain no principal authorization (G29) =="
 	@! grep -rnE 'MutationGuard|AuthorizeMutation|ApplyGuarded|StoreDecisionView|SystemMutator|PrincipalFromContext|\*decisions.Service' --include='*.go' --exclude='*_test.go' pockets/authorization/logic/mutations pockets/authorization/stores/memory pockets/authorization/stores/pgx pockets/authorization/stores/turso || { echo "ERROR (G29): tuple writers retain principal policy; inbound admits commands, stores enforce IntegrityPolicy"; exit 1; }
+
+# external-identity-providers (D4, 2026-10-20): identity vendors are wired through
+# sdk/capabilities/authentication and integrations/authentication/<vendor>; no
+# vendor name enters the authentication pocket's production code. Store modules,
+# tests and READMEs are excluded.
+guard-auth-no-vendor-names:
+	@echo "== guard: authentication names no identity vendor (external-identity-providers D4) =="
+	@test -d pockets/authentication/logic
+	@hits=$$(grep -rniE 'firebase|auth0|clerk|cognito|workos|keycloak|okta' --include='*.go' --exclude='*_test.go' --exclude-dir=stores pockets/authentication || true); \
+		if [ -n "$$hits" ]; then echo "ERROR (external-identity-providers D4): a vendor name entered the authentication pocket — vendor code belongs in integrations/authentication/<vendor>:"; echo "$$hits"; exit 1; fi
 
 # G30 (host-contract-reconciliation, 2026-10-20): the in-repo hosts pass the host
 # contract's executable floor — every examples/README.md §8 row is guarded.

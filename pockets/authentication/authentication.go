@@ -11,9 +11,12 @@ import (
 )
 
 // Components holds the independently usable components built by New. Invitations
-// is nil when disabled. HTTP registration and delivery execution are host-owned.
+// and External are nil when disabled. HTTP registration and delivery execution
+// are host-owned. External exposes revocation stats and the heartbeat of the
+// engine Authentication already uses.
 type Components struct {
 	Authentication *authlogic.Service
+	External       *authlogic.ExternalAuthenticator
 	OAuth2         *oauth2.Service
 	Invitations    *invitations.Service
 	HTTP           *authenticationhttp.Adapter

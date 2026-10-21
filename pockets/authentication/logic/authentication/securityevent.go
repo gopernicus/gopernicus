@@ -33,23 +33,7 @@ type securityEventInput struct {
 //     status, error kind — never the event body, and NEVER fails the auth flow
 //     (the design's non-negotiable).
 func (s *Service) recordSecurityEvent(ctx context.Context, in securityEventInput) {
-	if s.securityEvents == nil {
-		return
-	}
-	info := clientInfoFromContext(ctx)
-	evt := securityevent.New(s.ids, in.Type, in.Status, s.now())
-	evt.UserID = in.UserID
-	evt.Actor = in.Actor
-	evt.Details = in.Details
-	evt.IPAddress = info.ip
-	evt.UserAgent = info.ua
-	if _, err := s.securityEvents.Create(ctx, evt); err != nil {
-		s.logger.Warn("security event write failed",
-			"event_type", in.Type,
-			"status", in.Status,
-			"error_kind", ErrorKind(err),
-		)
-	}
+	recordSecurityEvent(ctx, s.securityEvents, s.ids, s.now(), s.logger, in)
 }
 
 // ErrorKind reduces err to a coarse, secret-free sentinel label for the WARN line

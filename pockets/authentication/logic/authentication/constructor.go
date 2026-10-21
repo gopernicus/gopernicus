@@ -47,6 +47,7 @@ func New(repos Repositories, signer cryptids.JWTSigner, runtimeMode environment.
 	d.OAuthStates = repos.OAuthStates
 	d.ServiceAccounts = repos.ServiceAccounts
 	d.APIKeys = repos.APIKeys
+	d.ExternalSubjects = repos.ExternalSubjects
 	d.TokenSigner = signer
 	d.RuntimeMode = runtimeMode
 	d.Limiter = limiter
@@ -124,6 +125,7 @@ func New(repos Repositories, signer cryptids.JWTSigner, runtimeMode environment.
 		{"IdentifierKeyer", d.IdentifierKeyer}, {"UserAdmin", d.UserAdmin}, {"PasswordlessRedeem", d.PasswordlessRedeem},
 		{"OAuthAccounts", d.OAuthAccounts}, {"OAuthStates", d.OAuthStates}, {"TokenEncrypter", d.TokenEncrypter},
 		{"SessionManagement", d.SessionManagement}, {"SecurityEvents", d.SecurityEvents}, {"Invitations", d.Invitations}, {"Compromised", d.Compromised},
+		{"ExternalSubjects", d.ExternalSubjects},
 	} {
 		if dep.value != nil && nilDependency(dep.value) {
 			return nil, fmt.Errorf("authentication: %s contains a typed nil: %w", dep.name, sdk.ErrInvalidInput)
@@ -174,7 +176,17 @@ func New(repos Repositories, signer cryptids.JWTSigner, runtimeMode environment.
 	d.RedirectAllowlist = append(d.RedirectAllowlist[:0:0], d.RedirectAllowlist...)
 	d.OAuthNativeRedirectURIs = append(d.OAuthNativeRedirectURIs[:0:0], d.OAuthNativeRedirectURIs...)
 	d.Passwordless = append(d.Passwordless[:0:0], d.Passwordless...)
+	var external *ExternalAuthenticator
+	if d.External != nil {
+		repos := ExternalRepositories{Users: d.Users, Identifiers: d.Identifiers, ExternalSubjects: d.ExternalSubjects, SecurityEvents: d.SecurityEvents, Invitations: d.Invitations}
+		cfg, err := validateExternal(*d.External, repos, d.RuntimeMode, d.IdentifierKeyer, d.DelegatedTokens.Issuer)
+		if err != nil {
+			return nil, err
+		}
+		external = newExternalAuthenticator(repos, cfg, d.RuntimeMode, externalOptions{clock: d.Clock, logger: d.Logger, ids: d.IDs, normalizer: d.Normalizer, keyer: d.IdentifierKeyer})
+	}
 	service := newService(d)
+	service.external = external
 	return &Components{Service: service, DeliveryInitializer: &deliveryInitializer{service: service}}, nil
 }
 

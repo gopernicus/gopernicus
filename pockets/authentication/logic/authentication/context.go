@@ -3,6 +3,7 @@ package authentication
 import (
 	"context"
 	"slices"
+	"time"
 
 	"github.com/gopernicus/gopernicus/sdk"
 )
@@ -27,17 +28,24 @@ const (
 // credentialProof records the authority and principal that verified a credential.
 // A live session belongs only to this exact proof; copying a context to another
 // service or replacing its credential cannot carry liveness into another store.
+// owner is a *Service or a standalone *ExternalAuthenticator. externalLiveAt
+// stamps a passed external re-check so a nested gate does not repeat it.
 type credentialProof struct {
-	owner         *Service
-	principal     Principal
-	credential    Credential
-	liveSessionID string
+	owner          any
+	principal      Principal
+	credential     Credential
+	liveSessionID  string
+	externalLiveAt time.Time
+}
+
+func proofFor(ctx context.Context, owner any) (credentialProof, bool) {
+	proof, ok := ctx.Value(credentialKey).(credentialProof)
+	principal, hasPrincipal := sdk.PrincipalFromContext(ctx)
+	return proof, ok && owner != nil && proof.owner == owner && proof.credential.Kind != "" && hasPrincipal && principal == proof.principal
 }
 
 func (s *Service) currentProof(ctx context.Context) (credentialProof, bool) {
-	proof, ok := ctx.Value(credentialKey).(credentialProof)
-	principal, hasPrincipal := sdk.PrincipalFromContext(ctx)
-	return proof, ok && proof.owner == s && proof.credential.Kind != "" && hasPrincipal && principal == proof.principal
+	return proofFor(ctx, s)
 }
 
 func (s *Service) withSessionID(ctx context.Context, id string) context.Context {
@@ -63,9 +71,13 @@ func (s *Service) CurrentCredential(ctx context.Context) (Credential, bool) {
 	if !ok {
 		return Credential{}, false
 	}
-	credential := proof.credential
-	credential.Audiences = slices.Clone(credential.Audiences)
-	return credential, true
+	return proof.credential.clone(), true
+}
+
+func (c Credential) clone() Credential {
+	c.Audiences = slices.Clone(c.Audiences)
+	c.Identity = c.Identity.Clone()
+	return c
 }
 
 // clientInfo is the request's client attribution — the remote IP and User-Agent.
@@ -114,5 +126,15 @@ func clearCredential(ctx context.Context) context.Context {
 }
 
 func (s *Service) withAuthenticatedPrincipal(ctx context.Context, principal Principal, cred Credential) context.Context {
-	return context.WithValue(sdk.WithPrincipal(ctx, principal), credentialKey, credentialProof{owner: s, principal: principal, credential: cred})
+	return withProof(ctx, s, principal, cred)
+}
+
+func withProof(ctx context.Context, owner any, principal Principal, cred Credential) context.Context {
+	return context.WithValue(sdk.WithPrincipal(ctx, principal), credentialKey, credentialProof{owner: owner, principal: principal, credential: cred.clone()})
+}
+
+// withExternalLive stamps the current proof as externally re-checked at at.
+func withExternalLive(ctx context.Context, proof credentialProof, at time.Time) context.Context {
+	proof.externalLiveAt = at
+	return context.WithValue(ctx, credentialKey, proof)
 }

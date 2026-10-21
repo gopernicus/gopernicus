@@ -4,16 +4,20 @@ import (
 	"context"
 	"time"
 
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/externalsubject"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/identifier"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/oauthaccount"
 )
 
-// InitialCredentials belongs to the initial user transaction. A host may omit both
-// values for deliberate passwordless provisioning. OAuth is linked to the new
-// user by the store; its supplied UserID is ignored.
+// InitialCredentials belongs to the initial user transaction. A host may omit all
+// values for deliberate passwordless provisioning. OAuth and External are linked
+// to the new user by the store; their supplied UserID is ignored. A store must
+// persist External: the external engine re-reads it after Provision and fails
+// closed when it is absent.
 type InitialCredentials struct {
 	PasswordHash string
 	OAuth        *oauthaccount.OAuthAccount
+	External     *externalsubject.ExternalSubject
 }
 
 // UserRepository persists user aggregates. Implemented by pocket store adapters

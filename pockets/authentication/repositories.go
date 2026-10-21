@@ -6,6 +6,7 @@ import (
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/challenge"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/contactchange"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/credential"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/externalsubject"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/identifier"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/oauth2"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/oauthaccount"
@@ -133,4 +134,10 @@ type Repositories struct {
 	// transaction-capable adapter as Users, Identifiers, Passwords, Sessions,
 	// Challenges, and AuthenticationGrants.
 	Passwordless passwordless.Repository
+
+	// ExternalSubjects backs the external identity mirror. It is REQUIRED when
+	// WithExternal wires providers and unused otherwise. It must be backed by
+	// the same transaction-capable adapter as Users, whose Provision persists
+	// the first mirror row.
+	ExternalSubjects externalsubject.Repository
 }

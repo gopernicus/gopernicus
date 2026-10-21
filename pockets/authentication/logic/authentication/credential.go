@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/session"
+	sdkauth "github.com/gopernicus/gopernicus/sdk/capabilities/authentication"
 )
 
 // CredentialKind names the class of credential a request authenticated with. The
@@ -20,6 +21,10 @@ const (
 	// service-account principal, or — for an act-as-user account — to the human
 	// owner it acts as.
 	CredentialAPIKey CredentialKind = "api_key"
+	// CredentialExternalToken is a token issued by a wired external identity
+	// provider. It resolves through the subject mirror to a local user and carries
+	// the verified sdk identity in Credential.Identity.
+	CredentialExternalToken CredentialKind = "external_token"
 )
 
 // Transport names how a credential reached the server. It is the axis
@@ -31,8 +36,23 @@ type Transport string
 const (
 	// TransportHeader is `Authorization: Bearer <token>`.
 	TransportHeader Transport = "header"
-	// TransportCookie is the access-JWT session cookie.
+	// TransportCookie is the access-JWT session cookie, or a provider's own
+	// session cookie for an external token.
 	TransportCookie Transport = "cookie"
+)
+
+// LivenessTier selects how much a request re-checks beyond credential validity.
+// The zero value is LivenessOnMutation, the default.
+type LivenessTier int
+
+const (
+	// LivenessOnMutation re-checks on unsafe methods and lets safe reads pass on
+	// validity alone. A per-provider RevocationFailOpen relaxes only this tier.
+	LivenessOnMutation LivenessTier = iota
+	// LivenessLive re-checks on every request and always fails closed.
+	LivenessLive
+	// LivenessStateless never re-checks. Delegated tokens still check their grant.
+	LivenessStateless
 )
 
 // Credential is what the authenticator stashes beside the Principal: the proof
@@ -65,6 +85,10 @@ type Credential struct {
 	// ActAsUser reports whether the key's account resolves to a human owner
 	// (api_key only).
 	ActAsUser bool
+	// Identity is the provider-verified identity (external_token only). It is a
+	// named field because an embedded one would shadow Issuer. Native kinds leave
+	// it zero, and external tokens leave Issuer, Audiences and Profile zero.
+	Identity sdkauth.Identity
 }
 
 // The named helpers below are one-line pre-compositions of RequirePrincipal, so
