@@ -2,6 +2,7 @@ package authentication
 
 import (
 	"context"
+	"strings"
 
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/session"
 )
@@ -68,20 +69,19 @@ func (s *Service) RequireLive(ctx context.Context, tier LivenessTier, unsafe boo
 }
 
 // ClassifyBearer names the kind a JWT-shaped bearer claims from its UNVERIFIED
-// iss, so the caller verifies it with exactly one verifier: no iss, or the
-// delegated issuer, is an access token; a wired provider's issuer is an external
-// token; anything else is unclassified. It proves nothing.
+// iss, so the caller verifies it with exactly one verifier: a wired provider's
+// issuer is an external token; every other JWT-shaped bearer is an access token,
+// left to the host's TokenSigner to accept or refuse. That keeps tokens from a
+// host signer that sets its own iss, or whose payload is not JSON, working as
+// they did before external providers existed. It proves nothing.
 func (s *Service) ClassifyBearer(raw string) (CredentialKind, bool) {
-	iss, present, ok := peekIssuer(raw)
-	switch {
-	case !ok:
+	if strings.Count(raw, ".") != 2 {
 		return "", false
-	case !present || (s.delegatedTokens.Issuer != "" && iss == s.delegatedTokens.Issuer):
-		return CredentialAccessToken, true
-	case s.external != nil && s.external.wired(iss):
+	}
+	if iss, present, ok := peekIssuer(raw); ok && present && s.external != nil && s.external.wired(iss) {
 		return CredentialExternalToken, true
 	}
-	return "", false
+	return CredentialAccessToken, true
 }
 
 // ExternalEnabled reports whether external identity providers are wired.

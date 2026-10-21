@@ -55,13 +55,26 @@ func TestServiceClassifyBearerKeepsNativeTokensAccessTokens(t *testing.T) {
 	if kind, ok := svc.ClassifyBearer(extToken(extIssuerA, "s1")); !ok || kind != CredentialExternalToken {
 		t.Fatalf("wired issuer classified %q, %v", kind, ok)
 	}
-	for _, raw := range []string{extToken("https://unwired.example.test", "s1"), "dotless_api_key", "a.!!!.b"} {
-		if _, ok := svc.ClassifyBearer(raw); ok {
-			t.Fatalf("%q classified", raw)
+	// Every JWT-shaped bearer that is not a wired provider's goes to the host's
+	// TokenSigner: a host signer may set its own iss or a non-JSON payload, and the
+	// signer, not the classifier, refuses what it did not sign.
+	for name, raw := range map[string]string{
+		"unwired iss":                 extToken("https://unwired.example.test", "s1"),
+		"host signer iss":             extToken("https://host-signer.example.test", "s1"),
+		"non-JSON payload":            "a.!!!.b",
+		"opaque host token":           "identifier.http.test-token",
+		"provider token, no provider": extToken(extIssuerA, "s1"),
+	} {
+		target := svc
+		if name == "provider token, no provider" {
+			target = h.svc
+		}
+		if kind, ok := target.ClassifyBearer(raw); !ok || kind != CredentialAccessToken {
+			t.Fatalf("%s classified %q, %v; want access_token", name, kind, ok)
 		}
 	}
-	if _, ok := h.svc.ClassifyBearer(extToken(extIssuerA, "s1")); ok {
-		t.Fatal("a host without providers classified an external token")
+	if _, ok := svc.ClassifyBearer("dotless_api_key"); ok {
+		t.Fatal("a dotless bearer classified")
 	}
 	if !svc.ExternalEnabled() || h.svc.ExternalEnabled() || svc.ExternalAuthenticator() == nil {
 		t.Fatal("ExternalEnabled does not follow the wiring")
