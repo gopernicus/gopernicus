@@ -893,6 +893,51 @@ http-base→`ErrPublicAuthBaseURLInsecure`, memory-limiter→`ErrNonDurableRateL
 nil-keyer→`ErrIdentifierKeyerRequired`, and (default `jobs` mode) an unacknowledged
 jobs runtime→`ErrDeliveryJobsUnacknowledged`.
 
+### Leg 12 — external identity provider, the hybrid demo (`AUTH_EXTERNAL_DEMO=1`)
+
+`AUTH_EXTERNAL_DEMO=1` (development only; any other mode refuses to boot) wires a
+development OIDC issuer served by this process (`integrations/authentication/devissuer`)
+beside the native credentials through `auth.WithExternal`, mounts its JWKS
+(`GET /dev/issuer/.well-known/jwks.json`) and token mint (`POST /dev/token`), and
+seeds one service account whose API key is printed ONCE in the startup WARN
+(`api_key=…`). Its routes (`cmd/server/demo.go`):
+
+| route | gate |
+|---|---|
+| `GET /demo/external/hybrid` | `RequireExternalTokenOrAPIKey()` — a provider token OR an API key |
+| `GET /demo/external/mfa` | `RequirePrincipal(Accept(CredentialExternalToken), RequireMFA())` |
+| `GET /demo/external/only` | `RequireExternalToken()` — a native session or key is refused |
+
+```sh
+cd examples/auth-cms
+AUTH_EXTERNAL_DEMO=1 AUTH_JWT_SECRET=$AUTH_JWT_SECRET go run ./cmd/server
+#   WARN msg="AUTH_EXTERNAL_DEMO enabled (development only): ..." issuer=http://localhost:8082/dev/issuer token=/dev/token api_key=<KEY>
+TOKEN=$(curl -s -XPOST localhost:8082/dev/token -d '{"sub":"ext-1","email":"ext@example.com","email_verified":true}' | jq -r .token)
+# 1. the hybrid route admits the provider token (first sight provisions a local user) ...
+curl -i -H "Authorization: Bearer $TOKEN" localhost:8082/demo/external/hybrid
+#   200 {"principal_id":"<ID>","principal_type":"user"}
+# 2. ... and the seeded API key
+curl -i -H "Authorization: Bearer <KEY>" localhost:8082/demo/external/hybrid
+#   200 {"principal_id":"<SAID>","principal_type":"service_account"}
+# 3. MFA required, no amr -> 401 with the RFC 9470 challenge
+curl -i -H "Authorization: Bearer $TOKEN" localhost:8082/demo/external/mfa
+#   401  WWW-Authenticate: Bearer error="insufficient_user_authentication", error_description="multi-factor authentication is required"
+# 4. a token whose amr carries a second factor -> 200, the same <ID>
+MFA=$(curl -s -XPOST localhost:8082/dev/token -d '{"sub":"ext-1","email":"ext@example.com","email_verified":true,"amr":["pwd","mfa"]}' | jq -r .token)
+curl -i -H "Authorization: Bearer $MFA" localhost:8082/demo/external/mfa
+# 5. native step-up needs a native session: a provider token is refused
+curl -i -XPOST -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d '{}' localhost:8082/auth/step-up/begin
+#   401 {"message":"authentication required","code":"unauthenticated"}
+# 6. the provider-only route refuses the API key (and a native session cookie)
+curl -i -H "Authorization: Bearer <KEY>" localhost:8082/demo/external/only     # 401
+```
+
+The provider cookie (`POST /dev/session`) and the session-cookie exchange are
+not mounted here; `examples/external-identity` proves the cookie transport. The
+same protocol runs over real HTTP in `cmd/server/external_demo_test.go`
+(`TestExternalDemoHybridRoutes`, `TestExternalDemoRefusesANativeSession`,
+`TestExternalDemoRefusedOutsideDevelopment`).
+
 ## Invitation kinds demo (identity-resolution, 2026-07-10)
 
 The host wires a phone-kind `notify.Console` notifier, so phone
@@ -947,7 +992,8 @@ unwired kind (e.g. `slack`) fails 400; email is always-on via the Mailer.
   200, resolved non-member → 403), `GET /demo/my-projects` (the relationship
   kind's `LookupAllResourceIDs` enumeration → `{admin, ids}`), `GET /demo/audit`
   (the scoped predicate `Require(Can("audit", Fixed("project", "demo")))`
-  + a direct-scope `ListRoleAssignmentsByScope` read-back), and `GET /debug/security-events`
+  + a direct-scope `ListRoleAssignmentsByScope` read-back), `GET /demo/external/{hybrid,mfa,only}`
+  plus the dev issuer's `POST /dev/token` (`AUTH_EXTERNAL_DEMO=1` only, Leg 12), and `GET /debug/security-events`
   (`AUTH_DEBUG=1` + `RequireUser`). The demo routes are READ-ONLY: AZ3-4.1 removed the
   session-only `POST /demo/roles/{assign,unassign}` and `POST /demo/admin/bootstrap`
   mutation routes; role assignment now rides the POCKET's own bundled

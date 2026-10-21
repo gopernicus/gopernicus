@@ -1485,6 +1485,429 @@ those handlers require — they still fail closed at the inbound handler
 boundary rather than treating "credential accepted" as "credential can satisfy
 the route's application input."
 
+## External identity providers (v0.19)
+
+Since v0.19 the pocket admits tokens from an external identity provider —
+Firebase Auth, Auth0, Clerk, Cognito, Okta, Keycloak — as ordinary
+`sdk.Principal`s. The provider verifies who signed in; the pocket maps the
+provider's subject to a local user and stays the identity home. Downstream
+pockets read `sdk.PrincipalFromContext` and never learn a provider exists.
+Take **v0.19.1** (v0.19.0 shipped a bearer-classification regression; see
+RELEASING). Design of record: `plans/external-identity-providers.md`.
+
+The pieces:
+
+| piece | module | role |
+|---|---|---|
+| the port | `sdk/capabilities/authentication` (`sdkauth`) | `Provider`, `Identity`, `Profile`, `NewOIDC`, `RevocationChecker`; `authenticationtest` pins the contract |
+| the JWT verifier | `integrations/cryptids/go-oidc` (`gooidc`) | signature, `iss`/`aud`/`exp` with 60 s tolerance, asymmetric algorithms only, per-issuer JWKS refetch floor, last good keys kept |
+| vendor presets | `integrations/authentication/{firebase,auth0}` | Firebase: ID tokens, session cookies, revocation facts, `MintSessionCookie` (Admin SDK). Auth0: a `Profile` (no library) |
+| the engine | `logic/authentication` (`authlogic.NewExternalAuthenticator`, or `WithExternal` on `New`) | routes a token by its `iss` to ONE provider, maps it through the `external_subjects` mirror, provisions on first sight, re-checks liveness |
+| the guard | `inbound/http` | `CredentialExternalToken`, provider cookies, the liveness tiers, assurance options |
+
+Proof hosts: `examples/external-identity` (external-only: no driver, signer,
+sessions or mail) and `examples/auth-cms` with `AUTH_EXTERNAL_DEMO=1` (hybrid).
+
+### Native or external?
+
+| you want | choose |
+|---|---|
+| no third-party identity vendor; passwords, passwordless, OAuth login, step-up, `/auth/sessions` | **native** (the rest of this README) |
+| the product already signs users in with a provider SDK (mobile, SPA) | **external** — wire the provider, keep the pocket for users, keys, invitations and audit |
+| social login only, gopernicus-owned sessions | **native** with `WithOAuth` (Google, GitHub) |
+| both: provider users plus native API keys or native accounts | **hybrid** — `auth.New(..., auth.WithExternal(cfg))` |
+| provider users with step-up and session management | not in v1: those need a native session (the deferred handshake exchange, F1) |
+| no pocket, just a verified `sdk.Principal` | not in v1 (F7): the pocket is required — mirror, status, audit and `Resolve` live there |
+
+### Who owns what
+
+| the provider owns | gopernicus owns |
+|---|---|
+| stored passwords and hashes, sign-in and sign-up UI, password reset, email verification, MFA enrollment, social federation, brute-force protection | the user record (internal id, profile, `active`/`deactivated` status), the `(provider name, subject) → user` mirror |
+| its own sessions and session cookies | API keys and service accounts (machines stay native) |
+| sign-in, MFA and password audit events | invitations, the authorization link, security events, admin deactivation |
+
+Gopernicus mints **no** native session for a provider user in v1. Deactivating
+the local user denies every provider token for that user on the next re-check
+(the local kill switch), whatever the provider thinks.
+
+### Wiring
+
+External-only host (`examples/external-identity/cmd/server`):
+
+```go
+verifier, err := gooidc.New(ctx, issuer, gooidc.WithAudiences(apiAudience)) // discovery under ctx
+if err != nil { return err }
+engine, err := authlogic.NewExternalAuthenticator(repos /* Users, Identifiers, ExternalSubjects, SecurityEvents */, authlogic.ExternalConfig{
+	Providers: []authlogic.ExternalProvider{{
+		Name:                         "idp", // the mirror namespace; never change it once rows exist
+		Provider:                     sdkauth.NewOIDC(issuer, verifier, profile),
+		ProvisionOnFirstVerification: true,
+		RequireVerifiedEmail:         true,
+		AllowedTenants:               []string{"org_123"}, // when the provider is multi-tenant
+	}},
+}, mode, authlogic.WithExternalLogger(log), authlogic.WithExternalIdentifierKeyer(keyer))
+if err != nil { return err }
+httpAuth, err := authenticationhttp.NewAuthenticator(engine, mode) // + WithExternalCookies(name) for a cookie provider
+if err != nil { return err }
+router.Handle(http.MethodGet, "/api/me", me, httpAuth.RequirePrincipal())
+```
+
+Hybrid host: pass the same `ExternalConfig` to `auth.WithExternal(...)` on the
+root `New`; the root fills `WithExternalCookies` from every `CookieName`, and
+`Repositories.ExternalSubjects` becomes required. `ExternalProvider` fields:
+
+| field | meaning |
+|---|---|
+| `Name` | host-chosen mirror namespace; entries for one vendor that issues under two issuers (Firebase ID token and session cookie) **share** a `Name` so one human is one user |
+| `Provider` | required; its `Issuer()` must be unique and absolute (`https` in production) |
+| `Revocation` | optional `sdkauth.RevocationChecker`; nil limits re-checks to local status |
+| `CookieName` | the provider's own session cookie; empty means header-only |
+| `ProvisionOnFirstVerification` | JIT-create a local user for an unknown subject; the zero value denies (`external_subject_unknown`) |
+| `RequireVerifiedEmail` | deny a token whose email is present but unverified |
+| `AllowedTenants` | non-empty → `Identity.Tenant` must match exactly |
+| `RevocationFailOpen` | during a provider outage, let the default tier pass on validity plus local status; `Live()` never fails open; production logs a WARN at construction |
+
+`ExternalConfig` knobs: `RevocationCache` (any `cacher.Storer`, namespaced
+`authext`; nil → in-process memory bounded by `RevocationCacheEntries`, 10,000),
+`RevocationCacheTTL` (30 s), `RevocationOutageGrace` (5 m, ≥ TTL),
+`RevocationTimeout` (2 s, < 10 s). Production with any provisioning provider
+requires `WithExternalIdentifierKeyer`. `RevocationStats()` and
+`RunHeartbeat(ctx, interval)` expose cache hits, misses, stale serves, fail-open
+and fail-closed counts and provider errors. Provider load is roughly
+instances × distinct mutating users per `RevocationCacheTTL`; check it against
+your provider's admin-API quota before shortening the TTL.
+
+### Recipes
+
+Claim names for Firebase and Auth0 come from their preset modules, which are
+tested (Firebase against the Auth emulator). Clerk, Cognito, Okta and Keycloak
+have no preset: their claim names come from the cited vendor pages and **have
+not been exercised against a live tenant**. `gooidc` requires an audience, so
+every recipe names the token's `aud`.
+
+**Firebase Auth — header.** `firebase.New` verifies ID tokens with the Admin
+SDK and implements `RevocationChecker`
+(https://firebase.google.com/docs/auth/admin/verify-id-tokens). A host that
+wants no Admin SDK uses `firebase.Profile(projectID)` with `gooidc.New(ctx,
+firebase.IDTokenIssuer(p), gooidc.WithAudiences(p))` — header-only, no
+revocation facts.
+
+| claim | `Identity` | note |
+|---|---|---|
+| `iss` | `Issuer` | `https://securetoken.google.com/<project>`; session cookies `https://session.firebase.google.com/<project>` |
+| `sub` | `Subject` | the Firebase uid |
+| `email`, `email_verified` | `Email`, `EmailVerified` | |
+| `phone_number` | `Phone`, `PhoneVerified` (always true) | Firebase sets it only after SMS possession |
+| `firebase.sign_in_provider` | `Attributes["firebase.sign_in_provider"]`; `anonymous` denied | |
+| `firebase.sign_in_second_factor` | `MFA` | Firebase issues no `amr` |
+| `firebase.tenant` | `Tenant` | |
+
+**Verified:** what the Admin SDK's `Token.Claims` carries was checked in task-3
+against the Auth emulator (firebase-tools 15.34.0) and the SDK source — the
+whole payload minus `iss`, `aud`, `exp`, `iat`, `sub`, `uid`; see
+`integrations/authentication/firebase/README.md`. **Not verified:** the IAM
+permission names `firebaseauth.users.get` (for `CheckRevocation`) and
+`firebaseauth.users.createSession` (for `MintSessionCookie`) come from the
+Firebase IAM docs; no real project has exercised them, because the emulator
+ignores credentials.
+
+**Firebase Auth — the session-cookie exchange** (server-rendered pages). The
+client signs in with the Firebase JS SDK, posts the fresh ID token once, and the
+host sets a Firebase session cookie that the pocket then reads like any provider
+cookie (https://firebase.google.com/docs/auth/admin/manage-cookies). The
+exchange handler is host code. Under H7 a host inbound package may not import
+the firebase integration, so the handler declares the one method it needs as a
+port and `cmd` injects `*firebase.Provider`:
+
+```go
+// host inbound package: the port is declared where it is used
+type SessionCookieMinter interface {
+	MintSessionCookie(ctx context.Context, idToken string, ttl time.Duration) (string, error)
+}
+
+func Exchange(idTokens sdkauth.Provider, minter SessionCookieMinter, cookieName string, ttl time.Duration) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			IDToken string `json:"id_token"`
+		}
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16<<10)).Decode(&body); err != nil {
+			web.RespondJSONError(w, web.ErrBadRequest("invalid body"))
+			return
+		}
+		id, err := idTokens.Authenticate(r.Context(), sdkauth.Credential{Transport: sdkauth.TransportHeader, Raw: body.IDToken})
+		if err != nil {
+			web.RespondJSONDomainError(w, err) // ErrInvalidCredential → 401, an outage → 503
+			return
+		}
+		// Mint only for a recent sign-in, so a stolen older ID token cannot be
+		// upgraded into a two-week cookie.
+		if time.Since(id.AuthenticatedAt) > 5*time.Minute {
+			web.RespondJSONError(w, web.ErrUnauthorized("recent sign-in required"))
+			return
+		}
+		cookie, err := minter.MintSessionCookie(r.Context(), body.IDToken, ttl)
+		if err != nil {
+			web.RespondJSONDomainError(w, err)
+			return
+		}
+		http.SetCookie(w, &http.Cookie{Name: cookieName, Value: cookie, Path: "/", MaxAge: int(ttl.Seconds()),
+			HttpOnly: true, Secure: true, SameSite: http.SameSiteLaxMode})
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+```
+
+```go
+// cmd: the only place that names the integration
+client, err := firebase.NewClient(ctx, firebase.ClientConfig{ProjectID: p})
+idTokens, err := firebase.New(ctx, client, firebase.Config{ProjectID: p, Mode: mode})
+cookies, err := firebase.NewSessionCookie(ctx, client, firebase.Config{ProjectID: p, Mode: mode})
+external := authlogic.ExternalConfig{Providers: []authlogic.ExternalProvider{
+	{Name: "firebase", Provider: idTokens, Revocation: idTokens, ProvisionOnFirstVerification: true},
+	{Name: "firebase", Provider: cookies, Revocation: cookies, CookieName: "fb_session", ProvisionOnFirstVerification: true},
+}}
+crossOrigin := http.NewCrossOriginProtection() // the login-CSRF gate: a cross-site page cannot plant its cookie
+router.Handle(http.MethodPost, "/session/firebase", session.Exchange(idTokens, idTokens, "fb_session", 14*24*time.Hour), crossOrigin.Handler)
+```
+
+- **Login CSRF.** The exchange sets a cookie from a request body, so a
+  cross-site page could sign the victim in as the attacker. The origin gate
+  (`http.CrossOriginProtection`, the ARCHITECTURE host posture) refuses it.
+- **Freshness.** `auth_time` within five minutes before minting, as the
+  Firebase guide recommends.
+- **TTL** is 5 minutes to 14 days (`ErrInvalidSessionTTL` otherwise).
+- **Cookie name** must differ from the native session, refresh and
+  `__Host-auth_csrf` names (construction fails otherwise); `HttpOnly; Secure;
+  SameSite=Lax`.
+- **Sign-out** clears the cookie. To end every session, call the Admin SDK's
+  `RevokeRefreshTokens` from host code (the module does not wrap it); the
+  revocation facts then deny older cookies on the next re-check.
+- **Proof:** the firebase module's emulator leg mints and verifies a session
+  cookie; its live leg (`-tags=live`) does the same against a real project and
+  was not run for v0.1.0. Neither proof host builds the exchange (it would pull
+  the Admin SDK graph into a zero-infrastructure host).
+
+**Auth0 — header-only.** `auth0.Issuer(domain)` (trailing slash kept) +
+`auth0.Profile(domain)` over `gooidc` with your API identifier as the audience;
+the full pinned contract is in `integrations/authentication/auth0/README.md`.
+Access tokens are JWTs only when the SPA requests an API `audience`.
+Client-credentials tokens are denied by default (an owner ruling: machines stay
+native API keys).
+
+| claim | `Identity` | note |
+|---|---|---|
+| `sub` | `Subject` | |
+| `email`, `email_verified`, `name` | `Email`, `EmailVerified`, `DisplayName` | absent from access tokens unless an Action adds them (map a namespaced claim) |
+| `amr` | `Methods`; `mfa` → `MFA` | |
+| `org_id` | `Tenant` | pin with `AllowedTenants` |
+| `gty` | sign-in method; `client-credentials` denied | |
+| `azp` | `Attributes["azp"]` | |
+
+**Clerk — header or the `__session` cookie.** Clerk sets a short-lived
+`__session` JWT on same-origin requests; verify it against the instance JWKS
+(https://clerk.com/docs/backend-requests/handling/manual-jwt ;
+https://clerk.com/docs/backend-requests/resources/session-tokens). Wire
+`CookieName: "__session"` and pin the authorized party with a route `Check`.
+
+```go
+verifier, err := gooidc.New(ctx, frontendAPI, gooidc.WithAudiences(aud))
+provider := sdkauth.NewOIDC(frontendAPI, verifier, sdkauth.Profile{
+	Claims: sdkauth.ClaimMapping{Tenant: "o.id", Extra: []string{"azp", "sid"}},
+})
+```
+
+| claim | `Identity` | note |
+|---|---|---|
+| `iss` | `Issuer` | the Frontend API URL |
+| `sub` | `Subject` | the Clerk user id |
+| `azp` | `Attributes["azp"]` | check it equals your origin with `Check(fn)` |
+| `o.id` | `Tenant` | v2 tokens; v1 used `org_id` |
+| email, name | — | not in the default session token; add them through Clerk's session-token customization |
+
+**Unverified:** the default session token carries no `aud`, and `gooidc`
+requires one; add an `aud` claim through the session-token customization (or a
+JWT template) before wiring. `FreshAuth` is meaningless (the token is reissued
+about every minute, so `iat` is always fresh), and MFA is not mapped (Clerk
+reports factor age in `fva`, an array). No revocation facts: the token's short
+lifetime is the bound.
+
+**Amazon Cognito — header-only, ID tokens.** Verify against
+`https://cognito-idp.<region>.amazonaws.com/<pool>/.well-known/jwks.json`
+(https://docs.aws.amazon.com/en_en/cognito/latest/developerguide/amazon-cognito-user-pools-using-tokens-verifying-a-jwt.html).
+Cognito **access tokens carry `client_id`, not `aud`**, so `gooidc` cannot
+admit them; the recipe verifies ID tokens, whose `aud` is the app client id.
+
+```go
+issuer := "https://cognito-idp." + region + ".amazonaws.com/" + poolID
+verifier, err := gooidc.New(ctx, issuer, gooidc.WithAudiences(appClientID))
+provider := sdkauth.NewOIDC(issuer, verifier, sdkauth.Profile{
+	Claims: sdkauth.ClaimMapping{Extra: []string{"token_use", "cognito:username"}},
+})
+```
+
+| claim | `Identity` | note |
+|---|---|---|
+| `sub` | `Subject` | stable per user pool |
+| `email`, `email_verified`, `phone_number`, `phone_number_verified`, `name` | the defaults | |
+| `token_use` | `Attributes["token_use"]` | `id`; a route `Check` can pin it |
+| `cognito:groups` | — | **never mapped** (roles) |
+
+**Okta — header-only.** Verify ID tokens against the authorization server's
+JWKS (https://developer.okta.com/docs/guides/validate-id-tokens/main/). The
+issuer is the authorization server URL; the ID token's `aud` is the client id.
+Okta's Sessions API makes an Okta-domain cookie, not an application session, and
+Okta does not encourage it (https://developer.okta.com/docs/guides/session-cookie/main/).
+
+| claim | `Identity` | note |
+|---|---|---|
+| `sub`, `email`, `email_verified`, `name` | the defaults | `email` needs the `email` scope |
+| `amr` | `Methods`, `MFA` | |
+| `auth_time` | `AuthenticatedAt` | `FreshAuth` works |
+| `groups` | — | **never mapped** (roles) |
+
+**Keycloak — header-only.** Issuer `https://<host>/realms/<realm>`; verify
+locally over the realm JWKS. Local validation cannot see a revoked session;
+token introspection can, and is follow-up F6
+(https://skycloak.io/blog/keycloak-token-introspection-vs-local-validation/).
+Make the access token carry your API in `aud` (an audience mapper on the
+client) and pass it to `WithAudiences` — **unverified** against a live realm.
+
+| claim | `Identity` | note |
+|---|---|---|
+| `sub`, `email`, `email_verified`, `name` | the defaults | |
+| `azp` | `Attributes["azp"]` via `Extra` | |
+| `realm_access.roles`, `resource_access` | — | **never mapped** (roles) |
+
+### Server-rendered pages: the support matrix
+
+The cookie transport reads the native session cookie first, then each wired
+provider cookie — first present wins. A provider without a server-minted,
+backend-verifiable session is header-only.
+
+| vendor | server-session mechanism | gopernicus v1 | revocation signal | sources |
+|---|---|---|---|---|
+| Firebase Auth | `createSessionCookie` (5 min–2 weeks), `verifySessionCookie`; x509 keys, not a JWKS | **cookie-capable** via the firebase module; host exchange handler above | `GetUser`: `Disabled`, `TokensValidAfterMillis` vs `auth_time` | https://firebase.google.com/docs/auth/admin/manage-cookies ; https://firebase.google.com/docs/auth/admin/verify-id-tokens |
+| Clerk | `__session` cookie: short-lived JWT, `iss` = Frontend API | **cookie-capable** generically (`CookieName: "__session"`, `aud` added) | none (lifetime-bounded) | https://clerk.com/docs/backend-requests/handling/manual-jwt ; https://clerk.com/docs/backend-requests/resources/session-tokens |
+| Auth0 | application session is yours; the Auth0 SSO cookie lives on the Auth0 domain; no mint/verify API | **header-only** (access token with an API audience) | none for access tokens | https://auth0.com/docs/manage-users/sessions/session-layers |
+| Cognito | none; verify JWTs against the pool JWKS | **header-only** (ID tokens) | none | https://docs.aws.amazon.com/en_en/cognito/latest/developerguide/amazon-cognito-user-pools-using-tokens-verifying-a-jwt.html |
+| Okta | Sessions API cookie on the Okta domain, "not encouraged" | **header-only** | `/introspect` — follow-up | https://developer.okta.com/docs/guides/validate-id-tokens/main/ ; https://developer.okta.com/docs/guides/session-cookie/main/ |
+| Keycloak | no application-session API | **header-only** | introspection — follow-up F6 | https://skycloak.io/blog/keycloak-token-introspection-vs-local-validation/ |
+
+### Liveness and revocation lag
+
+The tiers are in "The middleware surface" above. For an external token a
+re-check is the uncached local `users.Get` + `Active()` plus, when the provider
+implements `RevocationChecker`, its revocation FACTS (`disabled`,
+`valid_after`), cached per (provider, subject) and compared to each token's
+`auth_time`. A user who signs in again after "revoke all" passes at once,
+because the cache holds facts, not verdicts.
+
+| situation | how long a revoked or disabled provider user keeps access |
+|---|---|
+| safe reads (`GET`) under the default tier | until the token's `exp` |
+| mutations, provider healthy | ≤ `RevocationCacheTTL` (30 s) |
+| mutations, provider down, fail-closed (default) | stale facts for ≤ `RevocationOutageGrace` (5 m), then **503 + `Retry-After: 5`** |
+| mutations, provider down, `RevocationFailOpen` | until `exp` (one `external_revocation_unavailable` event per outage) |
+| provider without a `RevocationChecker` (Auth0, Clerk, Cognito, Okta, Keycloak) | until `exp`; local deactivation still denies every mutation at once |
+| any route with `Live()` | as for mutations, on every method; never fails open |
+
+| vendor | token lifetime that bounds the lag |
+|---|---|
+| Firebase | ID token 1 hour; session cookie its own TTL (5 min–14 d); both bounded by revocation facts on re-checked routes |
+| Auth0, Cognito, Okta, Keycloak | the access/ID token lifetime you configure — keep it short |
+| Clerk | the session token's short lifetime (refreshed by the frontend SDK) |
+
+A cache error is a miss, never an outage: a Redis failure does not become an
+authentication outage.
+
+### Provider roles are not authorization
+
+**Provider claims are identity data, never permissions.** `ClaimMapping` has no
+field for roles, groups or permissions (`permissions`, `cognito:groups`,
+`groups`, `realm_access`), and `Identity.Attributes` is string-valued host data.
+A host that wants a provider group to mean something maps it in host code into
+its own authorization (for example a grant written when the user is first seen),
+and owns that mapping's staleness.
+
+### Identity edge cases
+
+| case | policy |
+|---|---|
+| Firebase anonymous users | denied by the preset's `DenySignIn` (`external_subject_denied`, reason `sign_in_method`). Allowing them needs identifier-less provisioning across four stores (F3). An anonymous → email upgrade keeps the uid, so the first accepted token is the upgraded one. |
+| phone-only subject | phone identifier, notification-only, verified iff `PhoneVerified` (Firebase: always). The collision check runs against login/recovery phones. |
+| unverified email | notification-only, UNVERIFIED: `Resolve` omits it and invitations cannot match it. `RequireVerifiedEmail` denies at verification; `VerifiedEmail()` denies per route. The collision check still runs on the address. A later verified token does not refresh the stored identifier (F5). |
+| no email and no phone | denied (reason `no_identifier`). |
+| email already used to log in natively | denied + `external_subject_collision`; an operator links explicitly with `ExternalSubjects.Link` from host code (no bundled route). Auto-linking is out. |
+| JIT first, native registration later with the same email | a second account: native registration checks only login/recovery identifiers (R-SYMMETRIC, follow-up F4). |
+| deactivated local user | denied on the next re-check (reason `inactive`), whatever the provider says. |
+
+### The audit gap
+
+The pocket records `external_subject_provisioned`, `external_subject_unknown`,
+`external_subject_collision`, `external_subject_denied` (reason `tenant`,
+`sign_in_method`, `unverified_email`, `no_identifier`, `invalid_identifier`,
+`inactive` or `revoked`) and `external_revocation_unavailable` (once per
+provider outage). It does **not** record per-request successful authentication
+(native access tokens do not either), provider sign-ins, password changes or MFA
+events. Those live only in the provider's own audit or event log, so an
+incident review needs both. (This README names no per-vendor log location; check
+each vendor's documentation.)
+
+### The step-up loss
+
+`RequireRecentAuthentication`, `/auth/step-up/*`, `/auth/sessions` and the
+credential-management routes need a native session, so a provider user is
+denied there (pinned in the route-policy test; the auth-cms demo shows a 401 on
+`POST /auth/step-up/begin`). This is deliberate. Host routes use
+`FreshAuth(within)` and `RequireMFA()` instead; the RFC 9470
+`WWW-Authenticate: Bearer error="insufficient_user_authentication"` denial tells
+a SPA to re-authenticate at the provider (`prompt=login`, `max_age`,
+`acr_values`, or the vendor's re-authentication call).
+
+### Invitations
+
+- **Accept** works for a provider user whose JIT email is verified (the
+  verified-identifier match) and, like every bundled mutation, needs
+  `X-CSRF-Token` on the cookie transport; `GET /auth/csrf` admits provider
+  cookies.
+- **Pending invitations** for a verified email are accepted automatically right
+  after JIT, as after native verification.
+- **Direct add** at invite-create time does not see external users (it looks up
+  login/recovery identifiers only), so they get a pending invitation instead.
+- The bundled `Invitations` group admits every wired kind. When authorization
+  later runs on an external provider, the invitation settlement changes; that
+  belongs to the authorization plan.
+
+### Host routes and CSRF
+
+The pocket's double-submit gate (`__Host-auth_csrf` + `X-CSRF-Token`, bootstrap
+`GET /auth/csrf`) protects the **bundled** routes and exists only on an adapter
+built with `authenticationhttp.New` (or the root `New`). An external-only host
+built on `NewAuthenticator` mounts no bundled route and has no `/auth/csrf`; it
+protects its own cookie-authenticated mutations with Go's
+`http.CrossOriginProtection`, the ARCHITECTURE "Host HTML cross-origin posture"
+(`examples/external-identity` does exactly this, and refuses a cross-site POST
+with 403). Header-only providers need nothing: a bearer is not ambient.
+**Owner's pending call:** whether the pocket should export a host-route
+double-submit gate for `NewAuthenticator` hosts; the recommendation is to keep
+documenting the stdlib posture rather than build one.
+
+### Leaving a provider
+
+Switching providers is a data update, not a schema change: remap
+`external_subjects.provider` / `subject` for each user (no foreign keys move).
+Moving users onto native passwords depends on whether the vendor exports hashes:
+
+| vendor | password-hash export | path onto native passwords | source |
+|---|---|---|---|
+| Firebase | `firebase auth:export` yields modified-scrypt hashes plus the project `hash_config` (signer key, salt separator, rounds, mem cost) | a dedicated scrypt `Hasher` (follow-up F9) or a reset campaign | https://firebase.google.com/docs/cli/auth |
+| Auth0 | bcrypt (`$2b$10$`) as NDJSON, only through a support ticket on paid plans, PGP-encrypted | import into the native `Passwords` rail unchanged (bcrypt) | https://support.auth0.com/center/s/article/How-to-Use-the-Password-Hashes-Export-from-Auth0 ; https://auth0.com/docs/manage-users/user-migration/user-migration-scenarios |
+| Cognito | no hash export | reset campaign, or verify each password at login against Cognito and set it natively | https://aws.amazon.com/blogs/security/approaches-for-migrating-users-to-amazon-cognito-user-pools/ |
+| Clerk | **unverified** — check with the vendor | — | — |
+| Okta | **unverified** — check with the vendor | — | — |
+| Keycloak | self-hosted: the hashes are in your own database | depends on the realm's hash algorithm | — |
+
 ## Repositories (the ports a host or store adapter satisfies)
 
 The bundled store adapters fill the whole bundle from one handle
