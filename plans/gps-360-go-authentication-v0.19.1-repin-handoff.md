@@ -69,6 +69,10 @@ repo's convention, implement it, and verify the real host behaviour.
    are unaffected. Audit every cookie mutation the SPA sends to a bundled `/auth/*` route
    (invitations, identifiers, service accounts and API keys, admin users, session revoke,
    password change) and make sure each sends the header.
+   The pocket's gate covers only its bundled `/auth/*` routes. gps-360-go's **own** routes are
+   protected by the global `http.NewCrossOriginProtection()` in `cmd/server/main.go` (~:256–274).
+   That is required, because the SPA authenticates with the session cookie
+   (`credentials: 'include'`). Keep it in place through this repin, with CORS still ahead of it.
 5. **`CredentialService` changed signature** (`Authenticate`/`RequireLive` return
    `(ctx, error)`). gps-360-go neither implements it nor calls those methods (grepped
    2026-10-21); re-check outside `vendor/`.

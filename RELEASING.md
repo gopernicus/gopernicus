@@ -153,16 +153,22 @@ v0.19.0 and take v0.19.1** (v0.19.0's regression is under Known).
   name (no preset; README recipes cite the vendor pages). What the Firebase
   Admin SDK's `Token.Claims` carries WAS verified against the emulator
   (firebase README).
-- **Known limitation, host-route CSRF (owner ruling 2026-10-21):** the pocket does
-  not export a double-submit CSRF gate for a host's own routes. An external-only
-  host built on `NewAuthenticator` protects its own cookie-authenticated
-  mutations with `http.CrossOriginProtection` (ARCHITECTURE host posture); the
-  double-submit `/auth/csrf` gate exists only on adapters built with `New`.
+- **Known limitation, host-route CSRF (owner ruling 2026-10-21, corrected the same
+  day):** the pocket's double-submit gate covers only its bundled `/auth/*` routes,
+  and the pocket exports no gate for a host's own routes. Host routes are the
+  host's responsibility, **on every host, native (`New`) or external-only
+  (`NewAuthenticator`)**. A host whose clients authenticate with the session
+  cookie (for example a same-origin SPA calling its API with
+  `credentials: 'include'`) **must** wrap its router in
+  `http.CrossOriginProtection` (ARCHITECTURE host posture); gps-360-go's
+  `cmd/server` is the reference. CORS is not a substitute, because it governs
+  reading responses, not sending forged requests. Bearer- and API-key-only hosts
+  need nothing, since those credentials are not ambient. The residual limitation:
   `CrossOriginProtection` admits a request that carries neither `Origin` nor
-  `Sec-Fetch-Site`. Ruled acceptable because the expected traffic is
-  overwhelmingly API requests (bearer and API-key credentials, which are not
-  ambient); revisit if a host relies on cookie-authenticated mutations on its
-  own routes.
+  `Sec-Fetch-Site` (non-browser clients, very old browsers), and the
+  `SameSite=Lax` session cookie is the backstop there. The first wording of this
+  entry reasoned that host traffic is "overwhelmingly API requests". That does
+  not hold for cookie-authenticated SPAs, so it was corrected.
 - **Deferred:** the native handshake exchange (F1), Firebase anonymous users
   (F3), the symmetric collision check in native registration (F4), identifier
   refresh on a later verified token (F5), revocation adapters for Keycloak and

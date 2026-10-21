@@ -23,6 +23,11 @@ flightdeck SPA, not only the tests.
 
 ## Before you edit
 
+- **Prerequisite:** `plans/segovia-v2-cross-origin-protection-handoff.md` (in the gopernicus
+  repo) adds `http.CrossOriginProtection` to Segovia's own routes. Segovia's SPA uses the session
+  cookie, and its host API routes currently have no origin check. Confirm that has landed on
+  `main` first. The pocket's CSRF changes below cover only its bundled `/auth/*` routes, never
+  Segovia's `/api/v1` routes.
 - The main checkout is on a feature branch with uncommitted work. **Do not touch it.** Create a
   worktree or branch from `main` (confirm `git status`, the branch and HEAD first).
 - Read the upstream release record: `RELEASING.md` in `github.com/gopernicus/gopernicus`, the
