@@ -1,11 +1,17 @@
 # Releasing gopernicus modules
 
-## Authorization protocol, slice A (sdk v0.15.0; authorization v0.27.0 — DRAFT, unpublished)
+## Authorization protocol, slice A (sdk v0.15.0; authorization v0.27.0 — published 2026-10-21)
 
-**Status: draft. Nothing here is tagged.** Two tags, in order: `sdk/v0.15.0`, then
-`pockets/authorization/v0.27.0` pinned to it. Store modules get a repin PR and no
-tags. Design and rulings: the authorization-provider-port plan (rev 4.2,
-slice A), copied to `plans/` with the release record. Host guidance:
+Two tags, in order, both cold-verified through the proxy on the first poll:
+- `sdk/v0.15.0` @ `1ed60c4f`: #116, then #117. #117 applied owner ruling D6′,
+  which says grammar belongs to the implementation, before the tag.
+- `pockets/authorization/v0.27.0` @ `f5eda0a4` (#118).
+
+The store modules were repinned in #119, with no tags. Design and rulings:
+[plans/authorization-provider-port.md](plans/authorization-provider-port.md)
+(rev 4.2, slice A; slices B–E still open). Host handoffs:
+`plans/segovia-v2-authorization-v0.27-repin-handoff.md` and
+`plans/gps-360-go-authorization-v0.27-repin-handoff.md`. Host guidance:
 "The authorization protocol" in `pockets/authorization/README.md` and the v0.27.0
 section of `pockets/authorization/stores/UPGRADE.md`.
 
