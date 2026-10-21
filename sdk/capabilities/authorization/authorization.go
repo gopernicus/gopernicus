@@ -56,8 +56,8 @@ type Limiter interface {
 	Limits() Limits
 }
 
-// Principal is a concrete caller (Type, ID). It is never a userset;
-// ValidateObject enforces the grammar in every implementation.
+// Principal is a concrete caller (Type, ID). It is never a userset: the
+// protocol has no field that names one.
 type Principal = sdk.Principal
 
 // Resource is one object.

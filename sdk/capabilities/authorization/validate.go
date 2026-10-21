@@ -6,7 +6,7 @@ import (
 	"github.com/gopernicus/gopernicus/sdk"
 )
 
-// Reference kinds accepted by ValidateRef.
+// Reference kinds accepted by ValidatePortableRef.
 const (
 	// KindType names a resource, principal or subject type.
 	KindType = "type"
@@ -24,11 +24,59 @@ const (
 	maxObjectBytes   = 256
 )
 
-// ValidateRef enforces the identifier grammar shared by every implementation.
-// Types match ^[a-z][a-z0-9_]{1,62}[a-z0-9]$; relations and permissions match
-// the same pattern in at most 50 bytes; IDs match ^[a-zA-Z0-9/_|\-=+]+$ in at
-// most 256 bytes. A violation wraps sdk.ErrInvalidInput.
-func ValidateRef(kind, value string) error {
+// Validate checks structure only: the principal, the permission and the
+// resource type and ID are present. Identifier grammar belongs to each
+// implementation; ValidatePortable is the opt-in strict check.
+func (r CheckRequest) Validate() error {
+	if err := validatePrincipal(r.Principal); err != nil {
+		return err
+	}
+	if err := required("permission", r.Permission); err != nil {
+		return err
+	}
+	if err := required("resource type", r.Resource.Type); err != nil {
+		return err
+	}
+	return required("resource id", r.Resource.ID)
+}
+
+// Validate checks structure only: the principal, the permission and the
+// resource type are present and Limit is not negative. The upper bound and
+// After are checked by the implementation, which knows its Limits and its
+// cursors.
+func (r LookupRequest) Validate() error {
+	if r.Limit < 0 {
+		return fmt.Errorf("authorization: lookup limit must not be negative, got %d: %w", r.Limit, sdk.ErrInvalidInput)
+	}
+	if err := validatePrincipal(r.Principal); err != nil {
+		return err
+	}
+	if err := required("permission", r.Permission); err != nil {
+		return err
+	}
+	return required("resource type", r.ResourceType)
+}
+
+// ValidatePortable applies the strict identifier grammar every known
+// implementation can represent (ValidatePortableObject for the principal and
+// the resource, ValidatePortableRef for the permission). It is opt-in: no
+// implementation is required to call it. A host runs it in tests, or before
+// moving to a vendor, to prove its identifiers travel.
+func ValidatePortable(r CheckRequest) error {
+	if err := ValidatePortableObject(r.Principal.Type, r.Principal.ID); err != nil {
+		return err
+	}
+	if err := ValidatePortableRef(KindRelation, r.Permission); err != nil {
+		return err
+	}
+	return ValidatePortableObject(r.Resource.Type, r.Resource.ID)
+}
+
+// ValidatePortableRef enforces the portable identifier grammar. Types match
+// ^[a-z][a-z0-9_]{1,62}[a-z0-9]$; relations and permissions match the same
+// pattern in at most 50 bytes; IDs match ^[a-zA-Z0-9/_|\-=+]+$ in at most 256
+// bytes, so "*" is never nameable. A violation wraps sdk.ErrInvalidInput.
+func ValidatePortableRef(kind, value string) error {
 	switch kind {
 	case KindType:
 		if !validName(value, maxTypeBytes) {
@@ -48,14 +96,13 @@ func ValidateRef(kind, value string) error {
 	return nil
 }
 
-// ValidateObject validates a type and an ID together: both pass ValidateRef
-// and len(objectType)+1+len(id) <= 256, so an object one implementation
-// cannot express is rejected by all of them.
-func ValidateObject(objectType, id string) error {
-	if err := ValidateRef(KindType, objectType); err != nil {
+// ValidatePortableObject validates a type and an ID together: both pass
+// ValidatePortableRef and len(objectType)+1+len(id) <= 256.
+func ValidatePortableObject(objectType, id string) error {
+	if err := ValidatePortableRef(KindType, objectType); err != nil {
 		return err
 	}
-	if err := ValidateRef(KindID, id); err != nil {
+	if err := ValidatePortableRef(KindID, id); err != nil {
 		return err
 	}
 	if len(objectType)+1+len(id) > maxObjectBytes {
@@ -64,32 +111,18 @@ func ValidateObject(objectType, id string) error {
 	return nil
 }
 
-// Validate applies the identifier grammar to every field. It applies no
-// schema knowledge.
-func (r CheckRequest) Validate() error {
-	if err := ValidateObject(r.Principal.Type, r.Principal.ID); err != nil {
+func validatePrincipal(p Principal) error {
+	if err := required("principal type", p.Type); err != nil {
 		return err
 	}
-	if err := ValidateRef(KindRelation, r.Permission); err != nil {
-		return err
-	}
-	return ValidateObject(r.Resource.Type, r.Resource.ID)
+	return required("principal id", p.ID)
 }
 
-// Validate applies the identifier grammar and rejects a negative Limit. The
-// upper bound and After are checked by the implementation, which knows its
-// Limits and its cursors.
-func (r LookupRequest) Validate() error {
-	if r.Limit < 0 {
-		return fmt.Errorf("authorization: lookup limit must not be negative, got %d: %w", r.Limit, sdk.ErrInvalidInput)
+func required(field, value string) error {
+	if value == "" {
+		return fmt.Errorf("authorization: %s must not be empty: %w", field, sdk.ErrInvalidInput)
 	}
-	if err := ValidateObject(r.Principal.Type, r.Principal.ID); err != nil {
-		return err
-	}
-	if err := ValidateRef(KindRelation, r.Permission); err != nil {
-		return err
-	}
-	return ValidateRef(KindType, r.ResourceType)
+	return nil
 }
 
 func validName(value string, maxBytes int) bool {

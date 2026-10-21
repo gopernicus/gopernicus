@@ -11,12 +11,16 @@
 //
 // # Contract rules not visible in the signatures
 //
-// Identifiers. Every implementation enforces one grammar (ValidateRef): types,
-// relations and permissions match ^[a-z][a-z0-9_]{1,62}[a-z0-9]$ (relations
-// and permissions at most 50 bytes); IDs match ^[a-zA-Z0-9/_|\-=+]+$ and are
-// at most 256 bytes, so "*" is never nameable. An object additionally fits
-// len(type)+1+len(id) <= 256 (ValidateObject). A Principal is always
-// concrete: a userset can never be expressed through it.
+// Identifiers. The protocol checks structure only (CheckRequest.Validate,
+// LookupRequest.Validate): the type, ID and permission are present. Grammar
+// belongs to the implementation: each rejects what it cannot represent as
+// sdk.ErrInvalidInput. Portability is opt-in through ValidatePortable, the
+// strict grammar every known implementation can represent: types, relations
+// and permissions match ^[a-z][a-z0-9_]{1,62}[a-z0-9]$ (relations and
+// permissions at most 50 bytes); IDs match ^[a-zA-Z0-9/_|\-=+]+$ and are at
+// most 256 bytes, so "*" is never nameable; an object fits
+// len(type)+1+len(id) <= 256. A Principal is always concrete: a userset can
+// never be expressed through it.
 //
 // Check. CheckRequest.Permission names a permission OR a relation (the
 // Zanzibar meaning). CheckBatch is all-or-nothing: any failed item fails the
@@ -41,9 +45,9 @@
 // stale, expired or malformed After is ErrInvalidCursor.
 //
 // Errors are classed by sdk sentinel, never by message:
-//   - grammar, an oversize batch, an out-of-range Limit, an undeclared
-//     resource type, permission or relation, and ErrInvalidCursor wrap
-//     sdk.ErrInvalidInput;
+//   - a missing field, the implementation's grammar, an oversize batch, an
+//     out-of-range Limit, an undeclared resource type, permission or
+//     relation, and ErrInvalidCursor wrap sdk.ErrInvalidInput;
 //   - an exhausted budget, depth or deadline, truncation, and "cannot
 //     enumerate" wrap sdk.ErrUnavailable;
 //   - contention wraps sdk.ErrConflict;
