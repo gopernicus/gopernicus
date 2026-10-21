@@ -22,7 +22,7 @@ The reference host is **gps-360-go**, a private production application built on 
 
 ## The fifteen rules
 
-Rule ids are the **H series** (H = host), H0 through H14. They police a host; the repository's own Makefile `G` guards police the framework. A `gopernicus guard` command that checks a host against these rules is planned for `workshop/gopernicus` v0.4.0 and has not shipped.
+Rule ids are the **H series** (H = host), H0 through H14. They police a host; the repository's own Makefile `G` guards police the framework. The `gopernicus guard` command checks a host against these rules and ships in `workshop/gopernicus` v0.4.0; `gopernicus guard --list` prints the sentences below verbatim. See the [Workshop command reference](../workshop/commands.md#guard).
 
 Bare `sdk` always means the framework's module; the host's own top-level roots are always written "the host's `sdk/`", "the host's `integrations/`", and "the host's `ui/`".
 

@@ -26,6 +26,9 @@ func TestRunExitCodes(t *testing.T) {
 		{"db migrate no runner errors", []string{"db", "migrate"}, 1},
 		{"db status no runner falls back", []string{"db", "status"}, 0},
 		{"db create needs slug", []string{"db", "create"}, 1},
+		{"guard list", []string{"guard", "--list"}, 0},
+		{"guard unknown flag", []string{"guard", "--bogus"}, 2},
+		{"guard no go.mod", []string{"guard", "no-such-host-root"}, 2},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

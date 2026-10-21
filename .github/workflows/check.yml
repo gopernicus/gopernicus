@@ -1,5 +1,5 @@
 # Required CI gate: `make check` (templ drift in git mode, per-module
-# vet/build/test across every Makefile MODULE, the twenty-three layering guards, and
+# vet/build/test across every Makefile MODULE, the twenty-nine layering guards, and
 # the compile-only -tags=integration vet of the turso and firestore stores plus
 # the firestore connector — whose -tags='integration,live' files, and every
 # firestore store's, are vetted compile-only too, so the live leg cannot rot

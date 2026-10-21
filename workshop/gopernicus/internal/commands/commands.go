@@ -37,6 +37,8 @@ func Run(args []string) int {
 		return runNew(rest)
 	case "db":
 		return runDB(rest)
+	case "guard":
+		return runGuard(rest)
 	case "-h", "--help", "help":
 		usage(os.Stdout)
 		return 0
@@ -57,6 +59,7 @@ Commands:
   init      Scaffold a new host application
   new       Scaffold a new pocket
   db        Migrate, check status, or create migrations
+  guard     Check a host against the host contract (H0–H14)
   version   Print the CLI version and module path
 
 Run 'gopernicus <command> -h' for command-specific help.

@@ -104,6 +104,40 @@ gopernicus db status --db primary
 
 Delegates to the host runner's `-status` mode. If the runner is absent or cannot connect, the CLI prints a file-only view with every discovered migration shown as pending—the only honest status a stdlib-only tool can produce without database access.
 
+## `guard`
+
+```bash
+gopernicus guard            # the host in the current directory
+gopernicus guard ./myapp
+gopernicus guard --list
+```
+
+Checks a host against the [host contract](../architecture/host-contract.md), rules H0 through H14. The host root is the directory holding its `go.mod`; the module path is read from that file. Nested modules, `vendor/`, `testdata/`, `node_modules/`, and directories starting with `.` or `_` are not walked, and symlinks are not followed.
+
+| Flag | Meaning | Default |
+|---|---|---|
+| `--list` | print every rule's canonical sentence and exit | off |
+
+Output is one status line per rule in id order, then one line per finding, then a summary:
+
+```text
+H0   1 finding
+H1   ok        (1 package)
+H3   no scope  (no internal/logic/compositions)
+…
+
+H0  internal/leak: package outside the contract's shape — home: internal/{logic,inbound,outbound}/domains/leak
+    rule: A host's production Go packages live only under …
+
+guard: 1 finding across 1 rule
+```
+
+A rule with nothing in scope prints `no scope` with the reason, so an inert rule never reads as a clean one. A clean run ends `guard: clean (15 rules, N packages)`.
+
+Exit codes: `0` clean, `1` findings, `2` for a missing or malformed `go.mod`, an unparsable Go file, or bad flags.
+
+There is no `--skip`, no allow file, and no configuration. A host that does not conform yet runs the guard red until it does, then adds it to `make guard`. The `--list` sentences are versioned with the binary: a wording change is a change to `examples/README.md` and the CLI in the same tag.
+
 ## `version`
 
 ```bash
