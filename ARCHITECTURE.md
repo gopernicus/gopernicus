@@ -191,7 +191,7 @@ relationship is not uniform:
 | `sdk/capabilities/events.Bus` | `pockets/events` | BUILDS ON the Bus (durable outbox + SSE gateway); is not the Bus implementation |
 | `sdk/capabilities/authentication` — external identity providers (`Provider` → `Identity`, optional `RevocationChecker`) | `pockets/authentication` | CONSUMES the port — the pocket is not the implementation of record (`NewOIDC` in sdk and the `integrations/authentication/*` presets are); `Identity` carries no principal or user id, so mapping an external subject to a user, JIT provisioning and status stay pocket-owned |
 | `sdk/capabilities/work` — the keyed-work submission protocol | `pockets/jobs` | IMPLEMENTS the protocol as the **implementation of record** — a capability with NO default (the oauth precedent); the durable `Job` aggregate and fenced runtime stay pocket-owned |
-| authorization check/decision vocabulary | `pockets/authorization` | **deferred** — stays consumer-declared (fails graduation criterion 2 of `pockets/README.md` §5 today; trigger: authorizationv3 settles its semantics) |
+| sdk/capabilities/authorization — the Zanzibar read protocol (Checker, Lookup, composite Authorizer; writes later) | pockets/authorization | IMPLEMENTS the protocol as the implementation of record (in-core engine adapter, Components.Authorizer) AND CONSUMES it (decisions.NewLoweredEvaluator); Unrestricted, reasons/explain, Expression/Require, roles exactness, ledger, audit, TupleCache, FilterPage stay pocket-owned |
 
 Placement within sdk is determined by what the package MEANS and may depend
 on, never by where a current implementation happens to live: pure

@@ -413,9 +413,12 @@ the keyed-work submission protocol, `sdk/capabilities/work`, implemented by
 `pockets/jobs` as the implementation of record; its lifecycle vocabulary is
 the frozen seven-value status set (`pending`/`running`/`completed`/`failed`/
 `dead_letter`/`canceled`/`superseded` — `failed` is non-terminal), adopted
-verbatim from the persisted jobs strings. Authorization's check/decision
-vocabulary explicitly **fails criterion 2 today** and stays consumer-declared
-(deferred; trigger: authorizationv3 settles its semantics).
+verbatim from the persisted jobs strings. Authorization's Zanzibar read
+protocol (Check/CheckBatch/paged lookup; single-resource writes later)
+graduated as sdk/capabilities/authorization (2026-10-21) with
+pockets/authorization as the implementation of record; the decision
+vocabulary beyond it stays pocket-owned. The criterion-2 failure recorded here
+applied to that full vocabulary, not the common denominator.
 
 ## 6. C3 — Mount evolution policy
 

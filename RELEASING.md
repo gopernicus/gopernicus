@@ -1,5 +1,64 @@
 # Releasing gopernicus modules
 
+## Authorization protocol, slice A (sdk v0.15.0; authorization v0.27.0 — DRAFT, unpublished)
+
+**Status: draft. Nothing here is tagged.** Two tags, in order: `sdk/v0.15.0`, then
+`pockets/authorization/v0.27.0` pinned to it. Store modules get a repin PR and no
+tags. Design and rulings: the authorization-provider-port plan (rev 4.2,
+slice A), copied to `plans/` with the release record. Host guidance:
+"The authorization protocol" in `pockets/authorization/README.md` and the v0.27.0
+section of `pockets/authorization/stores/UPGRADE.md`.
+
+**BREAKING, pre-1.0 — `pockets/authorization` v0.27.0.**
+- **`Check` / `CheckBatch` return `sdkauthorization.Decision`.**
+  `decisions.Service.Check` is `(sdkauthorization.Decision, error)` and
+  `CheckBatch` is `([]sdkauthorization.Decision, error)`; `Decision` carries
+  `Allowed` only. Reasons stay in `CheckExplain` and the decision log.
+  **Host retypes** (mechanical): every narrow interface typed
+  `Check(...) (model.CheckResult, error)` or `CheckBatch(...) ([]model.CheckResult, error)`
+  — gps-360-go `ask/allowed.go:18` and `access.go:38`; Segovia's `CheckBatch`
+  ports. Code that read `ReasonCode`/`Reason` from a check calls `CheckExplain`.
+- **`model.PrincipalRef` is `sdk.Principal`** and has no `Validate` method; call
+  `model.ValidatePrincipal`. `model.Resource`, `model.CheckRequest` and
+  `model.LookupRequest` are deprecated aliases of the sdk types; everything else
+  compiles through them. Their `Validate` methods now apply the protocol's
+  identifier grammar; the decision service uses `model.ValidateCheckRequest` /
+  `model.ValidateLookupRequest` (the unchanged opaque-reference grammar).
+- **`Require` answers 503 for any `sdk.ErrUnavailable`**, not only
+  `ErrEvaluationLimit`: TupleCache unavailability, a closed snapshot and a tuple
+  read limit move from 500 to 503.
+
+**What changed.**
+- **sdk v0.15.0 (MINOR, additive).** `sdk/capabilities/authorization`
+  (`sdkauthorization`): `Checker`, `Lookup`, `Authorizer`, optional
+  `SchemaReader`/`Limiter`, `Decision`, `ValidateRef`/`ValidateObject`, the cursor
+  envelope `EncodeCursor`/`DecodeCursor`, `FilterAuthorized`, `LookupAll`,
+  `ErrInvalidCursor`, `ErrConditional`; `authorizationtest.Run` with four fixtures.
+- **authorization v0.27.0.** `Components.Authorizer` (`logic/authorizer.Engine`),
+  the implementation of record; `decisions.Service.EvaluateBatch`;
+  `decisions.NewLoweredEvaluator` + `WithGlobalResource`;
+  `authorizationhttp.WithLoweredPolicy()` (Require refuses a lowered evaluator
+  without it); `decisions.ResourceSlot.Pure` / `BindPureResource` (set by `Path`);
+  `authorizer.ErrUnrestricted` (wraps `sdk.ErrUnavailable`; do not retry);
+  `storetest.RunAuthorizer`. `model.ErrInvalidCursor` is the sdk sentinel.
+- **examples/auth-cms.** Document listing decides `view` through
+  `Components.Authorizer` as an `sdkauthorization.Checker`
+  (`documents.ProtocolListing`); pages match the native Candidates listing.
+
+**sdk catch-up.** The pocket and its stores pin sdk v0.9.0; v0.27.0 pins v0.15.0.
+The v0.9.0 → v0.14.0 audit (plan, A0) found no removed export; the behaviour
+changes (static-file caching, email unsubscribe headers, opt-in origin admission)
+touch nothing the pocket or its stores use.
+
+**Stores.** pgx, turso and goredis runtime code is unchanged. Their tests gain
+`TestAuthorizer` (live, env-gated), so the repin PR moves them to sdk v0.15.0 and
+authorization v0.27.0 (goredis also its pgx/turso pins). No store tags.
+
+**Gates before the pocket tag.** `make check`, `make guard`; the live PostgreSQL and
+Turso store legs (including `TestAuthorizer`) on merged main;
+`GOWORK=off go build ./... && go vet ./...` on pgx, turso and goredis against the
+new pins; cold-verify each tag.
+
 ## External identity providers (sdk v0.14.0; go-oidc v0.1.0; firebase v0.1.0; auth0 v0.1.0; authentication v0.19.0 → v0.19.1; stores pgx v0.9.0, turso v0.8.0 — published 2026-10-20)
 
 One train, eight tags, in dependency order. A host can now admit tokens from an
