@@ -90,6 +90,7 @@ type constructorConfig struct {
 	DeliveryData                  delivery.DataHook
 	EmailSubjects                 map[string]string
 	SMSBodies                     map[string]string
+	External                      *authlogic.ExternalConfig
 	Logger                        *slog.Logger
 }
 
@@ -844,6 +845,14 @@ func WithAdministration(value AdministrationConfig) Option {
 		c.MachineRoutesGate = value.MachineRoutesGate
 		c.UserAdminCheck = value.UserAdminCheck
 		c.ListStrategy = value.ListStrategy
+	}
+}
+
+// WithExternal wires external identity providers into the authentication
+// service. Repositories.ExternalSubjects is then required.
+func WithExternal(value authlogic.ExternalConfig) Option {
+	return func(c *constructorConfig) {
+		c.External = &value
 	}
 }
 

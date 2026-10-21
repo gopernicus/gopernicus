@@ -24,6 +24,7 @@ import (
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/challenge"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/contactchange"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/credential"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/externalsubject"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/identifier"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/oauthaccount"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/oauthstate"
@@ -210,6 +211,8 @@ type constructorConfig struct {
 	PublicAuthBaseURL       string
 	PasswordResetURL        string
 	OAuthLinkBaseURL        string
+	External                *ExternalConfig
+	ExternalSubjects        externalsubject.Repository
 }
 
 // Service implements the auth use cases over the repository ports.
@@ -334,6 +337,10 @@ type Service struct {
 	// historical login-only redemption path.
 	passwordlessRedeem passwordless.Repository
 	provisionOnRedeem  bool
+
+	// external is the external identity engine (WithExternal); nil when no
+	// provider is wired.
+	external *ExternalAuthenticator
 }
 
 // newService assembles already validated dependencies; isolated package tests
@@ -574,12 +581,7 @@ func (s *Service) Verify(ctx context.Context, emailAddr, code string) error {
 // Resolver errors are logged without failing authentication; durable acceptance
 // claims let the invitation service resume an interrupted grant.
 func (s *Service) resolvePendingInvitations(ctx context.Context, email, userID string) {
-	if s.invitations == nil {
-		return
-	}
-	if _, err := s.invitations.ResolveInvitations(ctx, email, PrincipalUser, userID); err != nil {
-		s.logger.Warn("resolve invitations failed", "error_kind", ErrorKind(err))
-	}
+	resolvePendingInvitations(ctx, s.invitations, s.logger, email, userID)
 }
 
 // ActiveVerifiedIdentifier returns the normalized value of userID's active,

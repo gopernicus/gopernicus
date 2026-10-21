@@ -485,13 +485,16 @@ func New(repos Repositories, signer cryptids.JWTSigner, runtimeMode environment.
 	if invSvc != nil {
 		logicOptions = append(logicOptions, authlogic.WithInvitations(invSvc))
 	}
+	if cfg.External != nil {
+		logicOptions = append(logicOptions, authlogic.WithExternal(*cfg.External))
+	}
 	authComponents, err := authlogic.New(authlogic.Repositories{
 		Users: repos.Users, Identifiers: repos.Identifiers, Passwords: repos.Passwords, Sessions: repos.Sessions, SessionManagement: repos.SessionManagement,
 		UserAdmin: repos.UserAdmin, PasswordlessRedeem: repos.Passwordless, ActiveSessions: repos.ActiveSessions,
 		Challenges: repos.Challenges, PasswordResets: repos.PasswordResets, ContactChanges: repos.ContactChanges,
 		CredentialMutations: repos.CredentialMutations, AuthenticationGrants: repos.AuthenticationGrants,
 		SecurityEvents: repos.SecurityEvents, OAuthAccounts: repos.OAuthAccounts, OAuthStates: repos.OAuthStates,
-		ServiceAccounts: repos.ServiceAccounts, APIKeys: repos.APIKeys,
+		ServiceAccounts: repos.ServiceAccounts, APIKeys: repos.APIKeys, ExternalSubjects: repos.ExternalSubjects,
 	}, cfg.TokenSigner, cfg.RuntimeMode, limiter, logicOptions...)
 	if err != nil {
 		return nil, err
@@ -564,7 +567,7 @@ func New(repos Repositories, signer cryptids.JWTSigner, runtimeMode environment.
 	if err != nil {
 		return nil, err
 	}
-	return &Components{Authentication: authService, OAuth2: oauthService, Invitations: invSvc, HTTP: adapter, Delivery: deliveryRuntime}, nil
+	return &Components{Authentication: authService, External: authService.ExternalAuthenticator(), OAuth2: oauthService, Invitations: invSvc, HTTP: adapter, Delivery: deliveryRuntime}, nil
 
 }
 

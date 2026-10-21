@@ -25,3 +25,19 @@ func TestMachineLifecycleTypesAreStableWireValues(t *testing.T) {
 		seen[v] = true
 	}
 }
+
+// TestExternalIdentityTypesAreStableWireValues pins the external identity
+// vocabulary for the same reason: event_type is free TEXT at rest.
+func TestExternalIdentityTypesAreStableWireValues(t *testing.T) {
+	for _, tc := range []struct{ got, want string }{
+		{TypeExternalSubjectProvisioned, "external_subject_provisioned"},
+		{TypeExternalSubjectUnknown, "external_subject_unknown"},
+		{TypeExternalSubjectCollision, "external_subject_collision"},
+		{TypeExternalSubjectDenied, "external_subject_denied"},
+		{TypeExternalRevocationUnavailable, "external_revocation_unavailable"},
+	} {
+		if tc.got != tc.want {
+			t.Errorf("event type = %q, want %q", tc.got, tc.want)
+		}
+	}
+}

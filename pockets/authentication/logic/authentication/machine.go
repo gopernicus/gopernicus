@@ -313,47 +313,85 @@ func (s *Service) verifyAccessTokenCredential(raw string, transport Transport) (
 	return Principal{Type: PrincipalUser, ID: userID}, cred, true
 }
 
-// enforceCredentialLiveness applies the Live() tier to an already-resolved credential and
+// enforceCredentialLiveness applies tier to an already-resolved credential and
 // returns the context a passing request continues with (§1.4):
 //
+//   - external token: delegated to the external engine FIRST, so the
+//     access-token early return below can never pass it unchecked;
 //   - access token: one PK lookup on the session row, stamping the proven id so a
 //     sensitive-mutation handler binds its step-up grant to that exact session; a
-//     missing, expired, or unreadable row denies — fails CLOSED (D1);
+//     missing or expired row denies, an unreadable one is sdk.ErrUnavailable —
+//     both fail CLOSED (D1). LivenessStateless and safe reads under
+//     LivenessOnMutation skip the read for first-party tokens;
 //   - API key: already DB-checked at resolution and owning no session row, it
 //     passes without another lookup;
-//   - a first-party session already proven by an outer Live() reuses that read.
-//     Delegated credentials always re-read; a transport may reuse the context
-//     for its next operation after the connection has been revoked.
-func (s *Service) enforceCredentialLiveness(ctx context.Context, cred Credential) (context.Context, bool) {
+//   - a first-party session already proven by an outer gate reuses that read.
+//     Delegated credentials always re-read, whatever the tier; a transport may
+//     reuse the context for its next operation after the connection has been revoked.
+func (s *Service) enforceCredentialLiveness(ctx context.Context, cred Credential, tier LivenessTier, unsafe bool) (context.Context, error) {
+	if cred.Kind == CredentialExternalToken {
+		proof, ok := s.currentProof(ctx)
+		if !ok || s.external == nil {
+			return clearCredential(ctx), errNotLive
+		}
+		return s.external.requireLiveProof(ctx, proof, tier, unsafe)
+	}
 	if cred.Kind != CredentialAccessToken {
-		return ctx, true
+		return ctx, nil
+	}
+	if cred.Profile == session.ProfileFirstParty && (tier == LivenessStateless || (tier == LivenessOnMutation && !unsafe)) {
+		return ctx, nil
 	}
 	if id, proven := s.CurrentSessionID(ctx); cred.Profile == session.ProfileFirstParty && proven && id == cred.SessionID {
-		return ctx, true
+		return ctx, nil
 	}
 	proof, ok := s.currentProof(ctx)
-	if !ok || !s.credentialSessionLive(ctx, proof.principal, cred) {
-		return clearCredential(ctx), false
+	if !ok {
+		return clearCredential(ctx), errNotLive
 	}
-	return s.withSessionID(ctx, cred.SessionID), true
+	if err := s.credentialSessionLive(ctx, proof.principal, cred); err != nil {
+		return clearCredential(ctx), err
+	}
+	return s.withSessionID(ctx, cred.SessionID), nil
 }
 
-func (s *Service) credentialSessionLive(ctx context.Context, principal Principal, cred Credential) bool {
+func (s *Service) credentialSessionLive(ctx context.Context, principal Principal, cred Credential) error {
 	if s.sessions == nil || cred.SessionID == "" || principal.Type != PrincipalUser || principal.ID == "" {
-		return false
+		return errNotLive
 	}
 	sess, err := s.sessions.Get(ctx, cred.SessionID)
-	if err != nil || sess.ID != cred.SessionID || sess.UserID != principal.ID || sess.Expired(s.now()) {
-		return false
+	if err != nil {
+		return liveReadError(ctx, err)
+	}
+	if sess.ID != cred.SessionID || sess.UserID != principal.ID || sess.Expired(s.now()) {
+		return errNotLive
 	}
 	if cred.Profile == session.ProfileFirstParty {
-		return sess.FirstParty()
+		if !sess.FirstParty() {
+			return errNotLive
+		}
+		return nil
 	}
 	if cred.Profile != session.ProfileDelegated || sess.Profile != session.ProfileDelegated || !s.now().Before(cred.accessExpiresAt) || s.users == nil || !s.delegationMatches(sess.Delegation, cred) {
-		return false
+		return errNotLive
 	}
 	u, err := s.users.Get(ctx, principal.ID)
-	return err == nil && u.ID == principal.ID && u.Active() && ctx.Err() == nil
+	if err != nil {
+		return liveReadError(ctx, err)
+	}
+	if u.ID != principal.ID || !u.Active() || ctx.Err() != nil {
+		return errNotLive
+	}
+	return nil
+}
+
+// liveReadError keeps a missing row a denial and makes an unreadable one
+// sdk.ErrUnavailable, so a store outage is never reported as a revoked credential.
+func liveReadError(ctx context.Context, err error) error {
+	if errors.Is(err, sdk.ErrNotFound) || ctx.Err() != nil {
+		return errNotLive
+	}
+	return storeUnavailable(err)
 }
 
 func (s *Service) delegationMatches(binding session.Delegation, cred Credential) bool {

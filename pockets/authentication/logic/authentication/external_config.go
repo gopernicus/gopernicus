@@ -1,0 +1,221 @@
+package authentication
+
+import (
+	"fmt"
+	"log/slog"
+	"net/url"
+	"slices"
+	"strings"
+	"time"
+
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/externalsubject"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/identifier"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/securityevent"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/user"
+	"github.com/gopernicus/gopernicus/sdk"
+	sdkauth "github.com/gopernicus/gopernicus/sdk/capabilities/authentication"
+	"github.com/gopernicus/gopernicus/sdk/capabilities/cacher"
+	"github.com/gopernicus/gopernicus/sdk/pkg/environment"
+)
+
+const (
+	defaultRevocationCacheTTL     = 30 * time.Second
+	defaultRevocationOutageGrace  = 5 * time.Minute
+	defaultRevocationTimeout      = 2 * time.Second
+	maxRevocationTimeout          = 10 * time.Second
+	defaultRevocationCacheEntries = 10_000
+	revocationCacheNamespace      = "authext"
+)
+
+// ExternalProvider is one wired identity provider.
+type ExternalProvider struct {
+	// Name is the host-chosen mirror namespace ("idp"). Entries for one
+	// provider that issues under several issuers share a Name.
+	Name string
+	// Provider is required. Its Issuer is unique across entries and differs from
+	// the delegated-token issuer.
+	Provider sdkauth.Provider
+	// Revocation is optional; nil limits re-checks to local user status.
+	Revocation sdkauth.RevocationChecker
+	// CookieName is the provider's own session cookie, read by the HTTP adapter.
+	CookieName string
+	// ProvisionOnFirstVerification creates a local user for an unknown subject.
+	// The zero value denies unknown subjects.
+	ProvisionOnFirstVerification bool
+	// RequireVerifiedEmail denies a token whose email is present but unverified.
+	RequireVerifiedEmail bool
+	// AllowedTenants, when non-empty, must contain Identity.Tenant exactly.
+	AllowedTenants []string
+	// RevocationFailOpen lets LivenessOnMutation pass on validity and local status
+	// while the provider cannot answer. LivenessLive always fails closed.
+	RevocationFailOpen bool
+}
+
+// ExternalConfig wires external identity providers. Zero durations and counts
+// select their defaults.
+type ExternalConfig struct {
+	Providers []ExternalProvider
+	// RevocationCache stores provider revocation facts under the "authext"
+	// namespace. Nil selects an in-process cacher.Memory.
+	RevocationCache cacher.Storer
+	// RevocationCacheTTL is how long fetched facts count as fresh (30s).
+	RevocationCacheTTL time.Duration
+	// RevocationOutageGrace is how long stale facts are served while the provider
+	// cannot answer (5m). It must be at least RevocationCacheTTL.
+	RevocationOutageGrace time.Duration
+	// RevocationTimeout bounds one provider call (2s); it must be under 10s. A
+	// shorter request deadline still applies.
+	RevocationTimeout time.Duration
+	// RevocationCacheEntries bounds the default in-process cache (10,000).
+	RevocationCacheEntries int
+}
+
+// ExternalRepositories are the ports the external engine uses.
+type ExternalRepositories struct {
+	Users            user.UserRepository                   // required
+	Identifiers      identifier.IdentifierRepository       // required
+	ExternalSubjects externalsubject.Repository            // required
+	SecurityEvents   securityevent.SecurityEventRepository // optional
+	Invitations      invitationResolver                    // optional: pending auto-accept after provisioning
+}
+
+// ExternalOption configures NewExternalAuthenticator. Nil options are invalid.
+type ExternalOption func(*externalOptions)
+
+type externalOptions struct {
+	clock      func() time.Time
+	logger     *slog.Logger
+	ids        sdk.IDGenerator
+	normalizer identifier.Normalizer
+	keyer      identifierKeyer
+}
+
+// WithExternal enables external identity providers on New. The Service builds
+// the engine from its own users, identifiers, audit and invitation ports plus
+// Repositories.ExternalSubjects.
+func WithExternal(value ExternalConfig) Option {
+	value = cloneExternalConfig(value)
+	return func(c *constructorConfig) {
+		value := cloneExternalConfig(value)
+		c.External = &value
+	}
+}
+
+// WithExternalClock supplies the clock; nil selects time.Now.
+func WithExternalClock(value func() time.Time) ExternalOption {
+	return func(o *externalOptions) { o.clock = value }
+}
+
+// WithExternalLogger supplies the logger; nil selects slog.Default().
+func WithExternalLogger(value *slog.Logger) ExternalOption {
+	return func(o *externalOptions) { o.logger = value }
+}
+
+// WithExternalIDs supplies the entity-ID strategy for provisioned rows.
+func WithExternalIDs(value sdk.IDGenerator) ExternalOption {
+	return func(o *externalOptions) { o.ids = value }
+}
+
+// WithExternalNormalizer supplies the identifier normalizer; nil selects
+// identifier.DefaultNormalizer.
+func WithExternalNormalizer(value identifier.Normalizer) ExternalOption {
+	return func(o *externalOptions) { o.normalizer = value }
+}
+
+// WithExternalIdentifierKeyer supplies the PII-free identifier keyer used in
+// collision audit rows. Production requires it when any provider provisions.
+func WithExternalIdentifierKeyer(value identifierKeyer) ExternalOption {
+	return func(o *externalOptions) { o.keyer = value }
+}
+
+func cloneExternalConfig(value ExternalConfig) ExternalConfig {
+	value.Providers = slices.Clone(value.Providers)
+	for i := range value.Providers {
+		value.Providers[i].AllowedTenants = slices.Clone(value.Providers[i].AllowedTenants)
+	}
+	return value
+}
+
+// validateExternal checks a wired configuration and returns it with defaults
+// applied. delegatedIssuer is the hybrid host's delegated-token issuer, if any.
+func validateExternal(cfg ExternalConfig, repos ExternalRepositories, mode environment.Mode, keyer identifierKeyer, delegatedIssuer string) (ExternalConfig, error) {
+	cfg = cloneExternalConfig(cfg)
+	if len(cfg.Providers) == 0 {
+		return cfg, fmt.Errorf("authentication: external identity requires at least one provider: %w", sdk.ErrInvalidInput)
+	}
+	for _, dep := range []struct {
+		name  string
+		value any
+	}{{"Users", repos.Users}, {"Identifiers", repos.Identifiers}, {"ExternalSubjects", repos.ExternalSubjects}} {
+		if nilDependency(dep.value) {
+			return cfg, fmt.Errorf("authentication: external identity requires %s: %w", dep.name, sdk.ErrInvalidInput)
+		}
+	}
+	for _, dep := range []struct {
+		name  string
+		value any
+	}{{"SecurityEvents", repos.SecurityEvents}, {"Invitations", repos.Invitations}, {"RevocationCache", cfg.RevocationCache}} {
+		if dep.value != nil && nilDependency(dep.value) {
+			return cfg, fmt.Errorf("authentication: external %s contains a typed nil: %w", dep.name, sdk.ErrInvalidInput)
+		}
+	}
+	issuers := map[string]bool{}
+	provisions := false
+	for i, p := range cfg.Providers {
+		if strings.TrimSpace(p.Name) == "" || strings.TrimSpace(p.Name) != p.Name {
+			return cfg, fmt.Errorf("authentication: external provider %d needs a name: %w", i, sdk.ErrInvalidInput)
+		}
+		if nilDependency(p.Provider) {
+			return cfg, fmt.Errorf("authentication: external provider %q has no Provider: %w", p.Name, sdk.ErrInvalidInput)
+		}
+		if p.Revocation != nil && nilDependency(p.Revocation) {
+			return cfg, fmt.Errorf("authentication: external provider %q Revocation contains a typed nil: %w", p.Name, sdk.ErrInvalidInput)
+		}
+		issuer := p.Provider.Issuer()
+		u, err := url.Parse(issuer)
+		if err != nil || !u.IsAbs() || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || strings.TrimSpace(issuer) != issuer || (u.Scheme != "https" && u.Scheme != "http") || (mode == environment.ModeProduction && u.Scheme != "https") {
+			return cfg, fmt.Errorf("authentication: external provider %q has an invalid or insecure issuer: %w", p.Name, sdk.ErrInvalidInput)
+		}
+		if issuers[issuer] || issuer == delegatedIssuer {
+			return cfg, fmt.Errorf("authentication: external provider %q reuses an issuer: %w", p.Name, sdk.ErrInvalidInput)
+		}
+		issuers[issuer] = true
+		if p.CookieName != "" && !validCookieName(p.CookieName) {
+			return cfg, fmt.Errorf("authentication: external provider %q has an invalid cookie name: %w", p.Name, sdk.ErrInvalidInput)
+		}
+		if slices.Contains(p.AllowedTenants, "") {
+			return cfg, fmt.Errorf("authentication: external provider %q allows a blank tenant: %w", p.Name, sdk.ErrInvalidInput)
+		}
+		provisions = provisions || p.ProvisionOnFirstVerification
+	}
+	if mode == environment.ModeProduction && provisions && nilDependency(keyer) {
+		return cfg, fmt.Errorf("authentication: production external provisioning requires an IdentifierKeyer: %w", sdk.ErrInvalidInput)
+	}
+	if cfg.RevocationCacheTTL == 0 {
+		cfg.RevocationCacheTTL = defaultRevocationCacheTTL
+	}
+	if cfg.RevocationOutageGrace == 0 {
+		cfg.RevocationOutageGrace = defaultRevocationOutageGrace
+	}
+	if cfg.RevocationTimeout == 0 {
+		cfg.RevocationTimeout = defaultRevocationTimeout
+	}
+	if cfg.RevocationCacheEntries == 0 {
+		cfg.RevocationCacheEntries = defaultRevocationCacheEntries
+	}
+	if cfg.RevocationCacheTTL < 0 || cfg.RevocationOutageGrace < cfg.RevocationCacheTTL || cfg.RevocationTimeout < 0 || cfg.RevocationTimeout >= maxRevocationTimeout || cfg.RevocationCacheEntries < 0 {
+		return cfg, fmt.Errorf("authentication: incoherent external revocation timing: %w", sdk.ErrInvalidInput)
+	}
+	return cfg, nil
+}
+
+// validCookieName reports whether name is an RFC 6265 cookie-name token.
+func validCookieName(name string) bool {
+	for i := 0; i < len(name); i++ {
+		c := name[i]
+		if c <= 0x20 || c >= 0x7f || strings.IndexByte(`()<>@,;:\"/[]?={}`, c) >= 0 {
+			return false
+		}
+	}
+	return name != ""
+}

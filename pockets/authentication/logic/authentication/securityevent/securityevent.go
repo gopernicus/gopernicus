@@ -208,6 +208,28 @@ const (
 	// TypeAPIKeyRevoked is an API key marked revoked. Details carries the key id
 	// only (the revoke coordinate is the key itself; the port has no read-by-id).
 	TypeAPIKeyRevoked = "api_key_revoked"
+
+	// External identity vocabulary. Details carry the host provider name, the
+	// identifier kind and a reason only — never the token, claims, address or
+	// provider payload. Per-request successful authentication is not recorded.
+	//
+	// TypeExternalSubjectProvisioned is a user created on first verification of
+	// an unknown provider subject. UserID is the new user.
+	TypeExternalSubjectProvisioned = "external_subject_provisioned"
+	// TypeExternalSubjectUnknown is a verified subject with no mirror row on a
+	// provider that does not provision.
+	TypeExternalSubjectUnknown = "external_subject_unknown"
+	// TypeExternalSubjectCollision is a refused provisioning whose address is an
+	// existing account's login or recovery identifier. UserID is that account;
+	// an administrator links the subject explicitly.
+	TypeExternalSubjectCollision = "external_subject_collision"
+	// TypeExternalSubjectDenied is a verified subject refused by policy. Details
+	// carry the reason: tenant, sign_in_method, unverified_email, no_identifier,
+	// invalid_identifier, inactive or revoked.
+	TypeExternalSubjectDenied = "external_subject_denied"
+	// TypeExternalRevocationUnavailable is recorded once per provider outage
+	// episode, not once per affected request.
+	TypeExternalRevocationUnavailable = "external_revocation_unavailable"
 )
 
 // Status vocabulary (design §5.1).

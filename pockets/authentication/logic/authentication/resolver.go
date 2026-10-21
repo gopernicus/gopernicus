@@ -3,9 +3,7 @@ package authentication
 import (
 	"context"
 	"fmt"
-	"sort"
 
-	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/identifier"
 	"github.com/gopernicus/gopernicus/sdk"
 )
 
@@ -72,41 +70,8 @@ func resolveNotFound(p sdk.Principal) error {
 	return fmt.Errorf("cannot resolve principal (type=%q): %w", p.Type, sdk.ErrNotFound)
 }
 
-// projectAddresses returns a user's active VERIFIED identifiers as identity
-// Addresses (design §7), primary-first then oldest-first for a stable projection,
-// excluding replaced and unverified rows. A nil Identifiers repository (identity
-// subsystem off) projects nothing; a repository error is propagated so the
-// Resolver fails closed rather than fabricating a partial address set.
+// projectAddresses returns a user's active verified identifiers as identity
+// Addresses; see the package-level projectAddresses.
 func (s *Service) projectAddresses(ctx context.Context, userID string) ([]sdk.IdentityAddress, error) {
-	if s.identifiers == nil {
-		return nil, nil
-	}
-	idents, err := s.identifiers.ListByUser(ctx, userID)
-	if err != nil {
-		return nil, err
-	}
-	verified := make([]identifier.Identifier, 0, len(idents))
-	for _, it := range idents {
-		if it.Active() && it.Verified() {
-			verified = append(verified, it)
-		}
-	}
-	sort.SliceStable(verified, func(i, j int) bool {
-		a, b := verified[i], verified[j]
-		if a.IsPrimary != b.IsPrimary {
-			return a.IsPrimary // primary first
-		}
-		if !a.CreatedAt.Equal(b.CreatedAt) {
-			return a.CreatedAt.Before(b.CreatedAt) // then oldest first
-		}
-		return a.ID < b.ID // stable tie-break
-	})
-	if len(verified) == 0 {
-		return nil, nil
-	}
-	addresses := make([]sdk.IdentityAddress, 0, len(verified))
-	for _, it := range verified {
-		addresses = append(addresses, sdk.IdentityAddress{Kind: string(it.Kind), Value: it.NormalizedValue})
-	}
-	return addresses, nil
+	return projectAddresses(ctx, s.identifiers, userID)
 }

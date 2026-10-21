@@ -13,6 +13,7 @@ import (
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/challenge"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/contactchange"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/credential"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/externalsubject"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/identifier"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/oauthaccount"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/oauthstate"
@@ -113,6 +114,9 @@ type Repositories struct {
 	// construction (auth.ErrMachineReposRequired).
 	ServiceAccounts serviceaccount.ServiceAccountRepository
 	APIKeys         apikey.APIKeyRepository
+	// ExternalSubjects backs the external identity mirror. It is required when
+	// WithExternal wires providers and unused otherwise.
+	ExternalSubjects externalsubject.Repository
 }
 
 // PasswordConfig selects password availability, validation, and login requirements.
