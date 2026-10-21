@@ -1,5 +1,179 @@
 # Releasing gopernicus modules
 
+## External identity providers (sdk v0.14.0; go-oidc v0.1.0; firebase v0.1.0; auth0 v0.1.0; authentication v0.19.0 → v0.19.1; stores pgx v0.9.0, turso v0.8.0 — published 2026-10-20)
+
+One train, eight tags, in dependency order. A host can now admit tokens from an
+external identity provider (Firebase Auth, Auth0, or any OIDC issuer) as
+ordinary `sdk.Principal`s, with the authentication pocket as the identity home.
+Design, rulings and build record:
+[plans/external-identity-providers.md](plans/external-identity-providers.md).
+Host guidance: the "External identity providers" section of
+`pockets/authentication/README.md`.
+
+**BREAKING — `pockets/authentication` v0.19 (pre-1.0 MINOR).** Hosts: **skip
+v0.19.0 and take v0.19.1** (v0.19.0's regression is under Known).
+- **`CredentialService` signatures.** `Authenticate` and `RequireLive` return
+  `(context.Context, error)` instead of `(context.Context, bool)`, so the guard
+  can tell a denial (401) from an outage (503). `RequireLive` takes a
+  `LivenessTier` and an `unsafe` flag. The interface gains `ClassifyBearer` and
+  `ExternalEnabled`. This breaks compilation only for a host that implements
+  `CredentialService` itself; none is known.
+- **The default set.** `RequirePrincipal()` with no `Accept` admits every
+  wired kind, so it admits external tokens once providers are wired. The named
+  helpers stay literal: `RequireAccessTokenOrAPIKey*` never admit an external
+  token. `/auth/csrf` moves to its own `CSRFBootstrap` group; `/auth/me`, user
+  administration and invitations admit every wired kind.
+- **R-LIVE: native POSTs now read the session row.** The default liveness tier
+  is `LiveOnMutation()` for every kind, native access tokens included. A host
+  `POST`/`PUT`/`PATCH`/`DELETE` route that used to check only the access JWT's
+  signature now pays one session read and denies a revoked session. Safe reads
+  stay stateless. Escape per route with `RequirePrincipal(Stateless())`.
+- **503 on store errors.** A session-store read error used to look like a
+  missing session (401). It is now `503` with `Retry-After: 5`, on the default
+  tier and `Live()`. `Browser()` answers the JSON 503 instead of the login
+  redirect, and `Optional()` answers 503 instead of anonymity. A missing or
+  expired row is still 401.
+- **Strict CSRF for cookie clients (v0.19.1).** Every bundled mutation reached
+  with a cookie needs the `X-CSRF-Token` header (bootstrap `GET /auth/csrf`),
+  whatever the body's content type. The four authenticated invitation POSTs
+  (create, accept, cancel, resend) are now gated too. Only the form-lane routes,
+  whose handlers check a body `csrf_token` (the bundled HTML forms), still accept
+  a form body without the header. Bearer and API-key callers are unaffected.
+- **Migration 0020 is required.** `0020_external_subjects.sql` must be in the
+  ledger of **every** pgx and Turso host before it deploys stores pgx v0.9.0 /
+  Turso v0.8.0, even with no external provider wired: both store constructors
+  probe the table at boot and refuse to construct without it.
+
+**What changed.**
+- **sdk v0.14.0 (MINOR, PR #99).** `cryptids.JWTVerifier`, a plain port for
+  JWTs from another issuer. `sdk/capabilities/authentication` (`sdkauth`), the
+  external identity port: `Provider` → `Identity`, which carries no principal
+  and no user id; optional `RevocationChecker` (facts, not verdicts);
+  `Profile`/`ClaimMapping`; the stdlib `NewOIDC`; stable errors including
+  `ErrProviderUnavailable` with an `UnavailableError` kind;
+  `authenticationtest.RunProvider` and `RunRevocation`. Additive.
+- **integrations/cryptids/go-oidc v0.1.0 (new, PR #100).** A
+  `cryptids.JWTVerifier` over `coreos/go-oidc`. It pins `iss`, requires an
+  audience, allows only asymmetric algorithms, and applies 60 s of tolerance.
+  Cheap rejections run before any fetch. The JWKS refetch floor is per issuer
+  and single-flight, the last good key set survives a failed fetch, and the
+  unknown-kid cache is bounded. `oidctest` is a local dev issuer.
+- **integrations/authentication/firebase v0.1.0 + auth0 v0.1.0 (new, PR #101).**
+  Firebase, over the Admin SDK: ID-token and session-cookie providers,
+  `CheckRevocation`, `MintSessionCookie`, anonymous users denied, and production
+  construction refused while `FIREBASE_AUTH_EMULATOR_HOST` is set. Also
+  `make dev-firebase` (an Auth emulator under `workshop/dev/firebase`). Auth0: a
+  zero-library `Profile` + `Issuer`. **Client-credentials tokens are denied by
+  default** (owner ruling): machines stay native API keys.
+- **pockets/authentication v0.19.0 (PRs #102 engine, #104 HTTP guard).** The
+  external engine (`authlogic.NewExternalAuthenticator`, or `WithExternal` on
+  `New`). It routes a token by its `iss` to exactly one provider, maps the
+  subject through the `external_subjects` mirror keyed by a host-chosen provider
+  name, and provisions just in time. A collision with a native login email is
+  denied and audited. Revocation facts are cached (30 s TTL, 5 m outage grace),
+  and an outage fails closed unless the provider sets `RevocationFailOpen`.
+  Five new security events. In HTTP: `CredentialExternalToken`, provider cookies
+  (`WithExternalCookies`), the `Live`/`LiveOnMutation`/`Stateless` tiers, the
+  assurance options `RequireMFA`/`FreshAuth`/`VerifiedEmail`/`Tenant`/`Check`
+  (RFC 9470 `WWW-Authenticate` on MFA and freshness denials), and
+  `RequireExternalToken*`. A provider user is denied on native step-up,
+  sessions and credential management, by design.
+- **pockets/authentication v0.19.1 (PATCH).** #106: `ClassifyBearer` sends
+  every JWT-shaped bearer whose `iss` is not a wired provider to the host
+  signer, as before v0.19. #107 (fixes #105): the invitation create, accept,
+  cancel and resend POSTs are CSRF-gated, and decline is origin-gated. #108: the
+  CSRF gate is strict; the form lane is opt-in per route.
+- **stores pgx v0.9.0 + turso v0.8.0 (PR #103 code, #110 pins).** Migration
+  `0020_external_subjects.sql` (identical filename in both trees), the
+  `ExternalSubjects` repository, `Users.Provision` writing the mirror row in the
+  user's transaction, the boot probe, and `storetest.RunExternalSubjects`.
+  Firestore has no mirror this release (documented nil).
+- **Examples (PR #111, untagged).** `examples/external-identity`: an
+  external-only host with no datastore driver, signer, sessions or mail, added
+  to G30. `examples/auth-cms` gains `AUTH_EXTERNAL_DEMO=1`: a hybrid route
+  (provider token or API key) and an MFA route (README Leg 12).
+- **Guards.** `guard-auth-no-vendor-names` keeps vendor names out of the pocket
+  core. `make check` now also vets the provider `-tags=live` legs (auth0,
+  firebase, go-oidc) and the firebase `-tags=emulator` leg, compile-only.
+
+**Tags and verification.**
+- `sdk/v0.14.0` at `d4c3bfa43499b74b1701e27cf35c3746cb0ca7dd` (PR #99).
+  `integrations/cryptids/go-oidc/v0.1.0` at
+  `845d83133d220379595f898db44cea1ad808a86c` (PR #100).
+  `integrations/authentication/firebase/v0.1.0` and
+  `integrations/authentication/auth0/v0.1.0` at
+  `a7b97e4bea578f69d72acbcc0dc881b2b11fea2e` (PR #101).
+  `pockets/authentication/v0.19.0` at `6a71627ce79cfa2afe2cdb32c47935c7edae6cda`
+  (PR #104; with #102 and #103). `pockets/authentication/v0.19.1` at
+  `5ae1ada8ce4b4a4799306fff640fec435eba247c` (PR #108; with #106 and #107).
+  `pockets/authentication/stores/pgx/v0.9.0` and
+  `pockets/authentication/stores/turso/v0.8.0` at
+  `2c7476070844c253d4720db8a414ef78146d988f` (PR #110). All annotated.
+- The proxy resolved each tag before its dependents were pinned (sdk and
+  go-oidc in about 10 s); the store pins were tidied with `GOWORK=off`.
+- Cold verification (`GOWORK=off`, empty module cache, `proxy.golang.org`,
+  `sum.golang.org`), as recorded per tag. sdk: the capability and cryptids
+  tests, an ES256 scratch consumer, `go mod verify`. go-oidc: a real-HTTP
+  scratch. firebase: all 7 emulator tests against the PUBLISHED module.
+  authentication v0.19.0 and v0.19.1: 19 packages ok. stores: live PostgreSQL
+  bare and under a schema (11 `ExternalSubjects` cases), local Turso,
+  `go mod verify`.
+- `make check` passed on each PR before merge. The pocket's live pgx suite passed for
+  #106 and on `main` after #108. The task-7 run-and-look (8 steps on
+  `examples/external-identity`, the auth-cms hybrid routes) was re-run by the
+  lead.
+- **Not exercised:** no real Firebase project and no real Auth0 tenant (owner
+  ruling: the Firebase legs run on the local emulator, whose tokens are
+  unsigned; the signed-JWT path is proven by go-oidc against `oidctest`). The
+  firebase `-tags=live` leg exists and was not run for v0.1.0.
+
+**Known.**
+- **v0.19.0 regression — do not pin it.** Its `ClassifyBearer` refused a
+  JWT-shaped bearer whose payload was not JSON, or whose `iss` was neither the
+  delegated issuer nor a wired provider, before the host `TokenSigner` saw it.
+  A host signer that sets its own `iss` or emits non-JSON dotted tokens got 401
+  on every request. Fixed in v0.19.1 (#106). gps-360-go and Segovia use
+  `golangjwt.New` (no `iss`) and were not affected.
+- **The form-encoded CSRF hole (before v0.19.1).** The gate skipped the
+  token for every form body, but only the account-form handlers check a body
+  token, and about 35 routes sat behind it. Confirmed live: a cookie form POST
+  with no token cancelled an invitation (200). Modern browsers' cross-site and
+  sibling-subdomain requests were still blocked by the Origin allowlist and
+  `SameSite=Lax`. Fixed in v0.19.1 (#108).
+- **Cold runs of stores pgx v0.9.0 / Turso v0.8.0 need
+  `-skip '^TestMigrationParity$'`.** The test reads the sibling store's
+  migrations directory, which a published module does not contain. It now
+  skips itself when the sibling is absent; that ships with the next store tag.
+- **CI has no PR-triggered live PostgreSQL leg** (#109). `live-stores.yml` is
+  dispatch-only, and its hosted Turso target is gone. The v0.19.0 regression
+  slipped through that gap.
+- **Unverified vendor facts:** the Firebase IAM permission names
+  (`firebaseauth.users.get`, `firebaseauth.users.createSession`), Clerk and
+  Okta password-hash export, and every Clerk, Cognito, Okta and Keycloak claim
+  name (no preset; README recipes cite the vendor pages). What the Firebase
+  Admin SDK's `Token.Claims` carries WAS verified against the emulator
+  (firebase README).
+- **Owner's pending call:** should the pocket export a host-route double-submit
+  CSRF gate for `NewAuthenticator` hosts? Today such a host uses
+  `http.CrossOriginProtection` (ARCHITECTURE host posture), and the double-submit
+  `/auth/csrf` gate exists only on adapters built with `New`. The
+  recommendation is to document that, not build a gate; the README documents it.
+- **Deferred:** the native handshake exchange (F1), Firebase anonymous users
+  (F3), the symmetric collision check in native registration (F4), identifier
+  refresh on a later verified token (F5), revocation adapters for Keycloak and
+  others (F6), a pocket-less middleware (F7), the native-session seam (F8), a
+  Firebase scrypt `Hasher` (F9), Firestore `external_subjects` (F10).
+- Downstream (owner):
+  - **gps-360-go and Segovia v2:** repin `pockets/authentication` to
+    **v0.19.1** (skip v0.19.0) and the auth stores to pgx v0.9.0 / Turso v0.8.0.
+    Copy or re-export `0020_external_subjects.sql` into the host ledger and
+    apply it before deploying. Make sure every cookie client sends
+    `X-CSRF-Token` on bundled mutations, including invitations and form-encoded
+    posts. Neither host implements `CredentialService` (owner grep), so the
+    signature break is internal. Expect one extra session read on host mutation
+    routes (R-LIVE); add `Stateless()` where that is wrong.
+  - Unrelated and still open: #95 (jobs fenced runtime wake signal).
+
 ## Host contract reconciliation (workshop/gopernicus v0.4.0 — published 2026-10-20)
 
 MINOR release of the `workshop/gopernicus` CLI, alone. It adds the `guard` verb,

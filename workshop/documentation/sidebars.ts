@@ -42,6 +42,7 @@ const sidebars: SidebarsConfig = {
       items: [
         'sdk/pkg',
         'sdk/capabilities',
+        'sdk/authentication',
         'sdk/web',
       ],
     },

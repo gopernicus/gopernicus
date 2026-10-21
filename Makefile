@@ -23,6 +23,13 @@ INTEGRATION_TAG_MODULES = $(filter %/turso %/firestore,$(STORE_MODULES)) integra
 # dispatches of .github/workflows/live-stores.yml, which is the only thing that
 # RUNS them.
 LIVE_TAG_MODULES = $(filter %/firestore,$(INTEGRATION_TAG_MODULES))
+# PROVIDER_LIVE_TAG_MODULES carry a bare `-tags=live` leg against a real identity
+# provider tenant (owner-minted tokens; env-gated, never run by CI).
+# EMULATOR_TAG_MODULES carry a `-tags=emulator` leg against the Firebase Auth
+# emulator (`make dev-firebase`). `make check` vets both compile-only so the
+# tagged legs cannot rot between manual runs.
+PROVIDER_LIVE_TAG_MODULES = integrations/authentication/auth0 integrations/authentication/firebase integrations/cryptids/go-oidc
+EMULATOR_TAG_MODULES = integrations/authentication/firebase
 
 .PHONY: generate generate-ui-assets build vet test test-stores test-ui-browser docs-install docs docs-build run migrate check tidy guard warm-scaffold-cache dev-firebase dev-firebase-down \
 	guard-sdk-stdlib guard-pocket-isolation guard-sdk-no-outward guard-no-legacy-path \
@@ -607,6 +614,8 @@ check:
 	@echo "== integration-tag vet (compile-only, no DB) =="
 	@for m in $(INTEGRATION_TAG_MODULES); do echo "== vet -tags=integration $$m =="; (cd $$m && go vet -tags=integration ./...) || exit 1; done
 	@for m in $(LIVE_TAG_MODULES); do echo "== vet -tags=integration,live $$m =="; (cd $$m && go vet -tags='integration,live' ./...) || exit 1; done
+	@for m in $(PROVIDER_LIVE_TAG_MODULES); do echo "== vet -tags=live $$m =="; (cd $$m && go vet -tags=live ./...) || exit 1; done
+	@for m in $(EMULATOR_TAG_MODULES); do echo "== vet -tags=emulator $$m =="; (cd $$m && go vet -tags=emulator ./...) || exit 1; done
 	@$(MAKE) guard
 	@echo "all checks passed"
 

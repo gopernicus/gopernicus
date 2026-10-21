@@ -14,6 +14,7 @@ another.
 
 | Capability | It gives you | Default | Replace with |
 |---|---|---|---|
+| [`authentication`](authentication.md) | external identity provider port: `Provider` → `Identity`, optional revocation facts | `NewOIDC` over a `cryptids.JWTVerifier` | go-oidc verifier; Firebase and Auth0 presets |
 | [`cacher`](#cacher) | byte cache, namespaced JSON cache, public-page middleware | bounded memory LRU, `Noop` | Redis (`integrations/kvstores/goredis`) |
 | [`events`](#events) | typed notifications, subscriptions, checked local dispatch, record envelopes | bounded memory, `Noop` | Redis; the events pocket builds on it |
 | [`filestorage`](#filestorage) | object keys, streaming upload/replace, range reads; optional signed URLs and resumable uploads | confined disk | GCS, S3-compatible |

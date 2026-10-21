@@ -1,6 +1,7 @@
 package pgx
 
 import (
+	"errors"
 	"io/fs"
 	"os"
 	"strings"
@@ -156,6 +157,10 @@ func TestMigrationParity(t *testing.T) {
 	own := migrationNames(t)
 
 	siblingEntries, err := os.ReadDir("../turso/" + MigrationsDir)
+	if errors.Is(err, fs.ErrNotExist) {
+		// A published module (the module cache, a vendored copy) carries no sibling tree.
+		t.Skipf("sibling turso migrations dir is absent (../turso/%s); parity runs only inside the gopernicus repo", MigrationsDir)
+	}
 	if err != nil {
 		t.Fatalf("read sibling turso migrations: %v", err)
 	}

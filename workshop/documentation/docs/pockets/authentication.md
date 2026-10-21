@@ -202,11 +202,54 @@ The host owns either runtime. In jobs mode, authentication exposes delivery call
 ## Middleware and revocation
 
 - `authenticationhttp.Adapter.RequirePrincipal(opts ...PrincipalOption)` is the one authenticator; `Accept`/`Transports` narrow which credential kinds and transports it admits, and named helpers like `RequireAccessToken()` and `RequireAPIKey()` are one-line pre-compositions of it.
-- Without `Live()`, verification is stateless (signature + expiry only), so a revoked access JWT stays acceptable until its short TTL expires; `Live()` also checks the session anchor for immediate revocation on sensitive routes.
-- browser-sensitive mutations apply an allowlisted Origin check and double-submit CSRF protection;
+- Liveness is per route: `LiveOnMutation()` (the default since v0.19.0) checks the session anchor on `POST`/`PUT`/`PATCH`/`DELETE` and lets safe reads pass on signature and expiry; `Live()` checks it on every request; `Stateless()` never does. A session-store read error is a 503 with `Retry-After`, never a false 401.
+- browser-sensitive mutations apply an allowlisted Origin check and double-submit CSRF protection; since v0.19.1 every cookie mutation needs the `X-CSRF-Token` header whatever its content type, except the few form-lane routes whose handler checks a body token;
 - API bearer callers do not need a browser CSRF cookie.
 
 The access JWT is short-lived. The server-side session is the refresh and revocation anchor. Refresh tokens rotate within a fixed horizon rather than extending it indefinitely.
+
+## External identity providers
+
+Since v0.19 the pocket also admits tokens from an external identity provider
+(Firebase Auth, Auth0, Clerk, Cognito, Okta, Keycloak) as ordinary principals.
+The provider owns credentials: passwords, sign-in UI, reset, email
+verification, MFA enrollment and its own sessions. The pocket owns identity:
+the local user and its status, the `(provider name, subject) → user` mirror
+(`external_subjects`), API keys, invitations and security events. Downstream
+pockets still see only `sdk.Principal`.
+
+- **Port and verifier.** [`sdk/capabilities/authentication`](../sdk/authentication.md)
+  defines `Provider` and `Identity`; [go-oidc](../integrations/go-oidc.md) verifies
+  any OIDC issuer's JWTs; [Firebase](../integrations/firebase.md) and
+  [Auth0](../integrations/auth0.md) are presets.
+- **Wiring.** An external-only host uses `authlogic.NewExternalAuthenticator`
+  with `authenticationhttp.NewAuthenticator`, and needs no signer, sessions or
+  mail. A hybrid host passes `auth.WithExternal(cfg)` to `New`.
+- **Routing.** A token goes to exactly one provider, chosen by its `iss`. An
+  unknown subject is provisioned only when the provider sets
+  `ProvisionOnFirstVerification`, and a collision with an existing login email is
+  denied and audited.
+- **Revocation.** Mutations re-check local status and, where the provider can
+  answer (Firebase), cached revocation facts compared with each token's
+  `auth_time`. A provider outage is a 503 after a grace window, never a 401.
+- **Server-rendered pages** use the provider's own session where one exists:
+  Firebase session cookies, through a host exchange handler, and Clerk's
+  `__session`. Auth0, Cognito, Okta and Keycloak are header-only.
+- **Assurance.** `RequireMFA()`, `FreshAuth(d)`, `VerifiedEmail()`, `Tenant()`
+  and `Check()` gate routes on provider facts. Provider roles are never read as
+  permissions.
+- **Losses, by design.** Step-up, `/auth/sessions` and credential management
+  need a native session, so provider users are denied there. Per-request sign-in
+  and MFA events stay in the provider's log.
+- **Host CSRF.** An external-only host built on `NewAuthenticator` has no
+  `/auth/csrf`; it protects its own cookie mutations with
+  `http.CrossOriginProtection`.
+
+The pocket README's "External identity providers" section has the per-vendor
+recipes and claim tables, the server-session support matrix, the revocation lag
+table, the identity edge cases and the hash-export notes for leaving a
+provider. The runnable proofs are `examples/external-identity` and
+`examples/auth-cms` with `AUTH_EXTERNAL_DEMO=1`.
 
 ## Production posture
 
@@ -223,6 +266,11 @@ Production has no implicit mode and fails closed on incomplete security wiring. 
 
 The pgx and Turso store modules implement the pocket repositories and export the authentication migration set; the Firestore store module implements the same repositories and exports an index manifest instead. The host owns its final migration ledger and upgrades.
 
+Migration `0020_external_subjects.sql` (stores pgx v0.9.0 and Turso v0.8.0) is
+required for every SQL host, including hosts that wire no external provider,
+because both store constructors probe the table at boot. Firestore has no
+`external_subjects` repository in this release.
+
 The pocket core imports neither store nor UI. `pockets/authentication/views/goth` maps the technology-neutral `Views` port onto `ui/goth`; hosts can embed that default and override pages, or implement the port with another renderer.
 
 For an OAuth-only or passwordless-only host, `PasswordFlowsDisabled: true` keeps
@@ -234,7 +282,7 @@ honor the same field. Its zero value keeps the existing password form.
 
 ## Not shipped
 
-Multi-factor authentication is not part of the current pocket. Method and assurance vocabulary reserve a future path, but there is no TOTP, passkey/WebAuthn, or recovery-code MFA surface today.
+Multi-factor authentication is not part of the current pocket. Method and assurance vocabulary reserve a future path, but there is no TOTP, passkey/WebAuthn, or recovery-code MFA surface today. A route can still require MFA that an external identity provider asserted, with `RequireMFA()`.
 
 ## OAuth client transports and trust
 
