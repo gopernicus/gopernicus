@@ -31,6 +31,7 @@ import (
 // the turso store's logged decision).
 var authTables = []string{
 	oauthClientsTable, oauthCodesTable, oauthHistoryTable,
+	externalSubjectsTable,
 	passwordsTable,
 	sessionsTable,
 	apiKeysTable,

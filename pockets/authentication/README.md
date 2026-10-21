@@ -2882,9 +2882,9 @@ contains no credentials. User interaction cancels automatic navigation, and
 failed recovery never deletes another tab's cookies. Refresh rotation, replay
 protection and the fixed session expiry remain unchanged.
 
-## Migrations are host-owned (0001–0019)
+## Migrations are host-owned (0001–0020)
 
-Auth ships **eighteen** canonical migrations per dialect (0017 is unused), identical filename
+Auth ships **nineteen** canonical migrations per dialect (0017 is unused), identical filename
 sets across pgx and turso:
 
 ```
@@ -2896,10 +2896,12 @@ sets across pgx and turso:
                                                   0016_invitation_metadata
                                                   0018_invitation_acceptance
                                                   0019_oauth2_sessions
+                                                  0020_external_subjects
 ```
 
 The original thirteen create tables. Later migrations add columns and
-constraints; `0019` also creates the OAuth tables. Every addition is
+constraints; `0019` also creates the OAuth tables and `0020` the external identity
+mirror. Every addition is
 **append-only**, because previously tagged migration bytes are immutable:
 
 - **`0014_user_status.sql`** — the account-lifecycle `status` /
@@ -2927,6 +2929,15 @@ constraints; `0019` also creates the OAuth tables. Every addition is
   client metadata snapshots, authorization-code hashes and spent-refresh history.
   Existing session rows remain first-party. Stop old authentication writers
   before enabling delegated issuance; retain spent hashes through session expiry.
+
+- **`0020_external_subjects.sql`** — the `external_subjects` table: the mirror
+  from a host-chosen provider name and the provider's subject to a local user,
+  keyed `(provider, subject)` and indexed by `user_id`. It touches no existing
+  table. It is REQUIRED even for a host that wires no external provider: both SQL
+  constructors probe the table at boot. `Users.Provision` writes the first row in
+  the user's transaction; a taken `(provider, subject)` rolls the whole
+  provisioning back as `sdk.ErrAlreadyExists`. Firestore has no mirror this
+  release (`ExternalSubjects` is nil).
 
 **Upgrading from a host that copied an earlier set:** re-export or copy the
 missing files into your migration directory and apply them **before** deploying a

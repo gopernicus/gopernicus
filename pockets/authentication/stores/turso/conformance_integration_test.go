@@ -26,6 +26,7 @@ var authTables = []string{
 	"oauth_clients",
 	"oauth_authorization_codes",
 	"oauth_refresh_history",
+	"external_subjects",
 	"user_passwords",
 	"sessions",
 	"api_keys",

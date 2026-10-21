@@ -54,6 +54,11 @@ var oauth2ProbeTables = []string{
 	"oauth_refresh_history",
 }
 
+// externalProbeTables are the tables migration 0020 creates. They are probed
+// even for a host that wires no external provider, so a missed migration fails at
+// boot rather than on the first external request.
+var externalProbeTables = []string{"external_subjects"}
+
 // Repositories returns the auth repository set backed by db, WITHOUT touching
 // migrations — AFTER verifying every canonical table (see probeTables) exists
 // (the boot-time probe). It errors with sdk.ErrNotFound naming the specific
@@ -77,6 +82,11 @@ func Repositories(ctx context.Context, db *tursodb.DB) (auth.Repositories, error
 		}
 	}
 	for _, table := range oauth2ProbeTables {
+		if err := probeTable(ctx, db, table); err != nil {
+			return auth.Repositories{}, err
+		}
+	}
+	for _, table := range externalProbeTables {
 		if err := probeTable(ctx, db, table); err != nil {
 			return auth.Repositories{}, err
 		}
@@ -109,7 +119,8 @@ func Repositories(ctx context.Context, db *tursodb.DB) (auth.Repositories, error
 		// The atomic magic-link redemption is always supplied too. It changes nothing
 		// for a host that leaves Config.PasswordlessProvisionOnRedeem off — that flag
 		// is what routes redemption through it (CHAU-6.1).
-		Passwordless: NewPasswordlessStore(db),
+		Passwordless:     NewPasswordlessStore(db),
+		ExternalSubjects: NewExternalSubjectStore(db),
 	}, nil
 }
 

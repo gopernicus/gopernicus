@@ -19,6 +19,7 @@ import (
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/challenge"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/contactchange"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/credential"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/externalsubject"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/identifier"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/oauth2"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/oauthaccount"
@@ -72,6 +73,9 @@ type reference struct {
 	userIdentifiers map[string]identifier.Identifier         // real identifier rows (design §2.2), by identifier ID
 	contactChanges  map[string]contactchange.PendingChange   // pending identifier changes (design §2.4), by (user, kind)
 
+	// externalSubjects is the external identity mirror, by (provider, subject).
+	externalSubjects map[externalKey]externalsubject.ExternalSubject
+
 	// resetFailAt/resetFailErr inject an all-or-nothing rollback failure into
 	// refPasswordResets.Redeem (design §5.9): resetFailAt=N fails just after the
 	// Nth composition statement, so a test proves that a mid-transaction failure at
@@ -98,6 +102,8 @@ func newReference() *reference {
 		identifiers:     map[string][]credential.IdentifierMethod{},
 		userIdentifiers: map[string]identifier.Identifier{},
 		contactChanges:  map[string]contactchange.PendingChange{},
+
+		externalSubjects: map[externalKey]externalsubject.ExternalSubject{},
 	}
 }
 
@@ -123,6 +129,7 @@ func (r *reference) repositories() auth.Repositories {
 		UserAdmin:            refUserAdmin{r},
 		Passwordless:         refPasswordless{r},
 		ActiveSessions:       refActiveSessions{r},
+		ExternalSubjects:     refExternalSubjects{r},
 	}
 }
 
@@ -327,6 +334,11 @@ func (r refUsers) Provision(ctx context.Context, u user.User, ident identifier.I
 			}
 		}
 	}
+	if credentials.External != nil {
+		if _, taken := r.externalSubjects[externalKey{credentials.External.Provider, credentials.External.Subject}]; taken {
+			return user.User{}, identifier.Identifier{}, sdk.ErrAlreadyExists
+		}
+	}
 	ident.UserID = u.ID
 	r.users[u.ID] = u
 	r.authRevisions[u.ID] = u.AuthRevision
@@ -338,6 +350,11 @@ func (r refUsers) Provision(ctx context.Context, u user.User, ident identifier.I
 		a := *credentials.OAuth
 		a.UserID = u.ID
 		r.oauthAccounts = append(r.oauthAccounts, a)
+	}
+	if credentials.External != nil {
+		s := *credentials.External
+		s.UserID = u.ID
+		r.externalSubjects[externalKey{s.Provider, s.Subject}] = s
 	}
 	return u, ident, nil
 }
@@ -2273,4 +2290,88 @@ func (r refCredentialMutations) mutationIdentifierLocked(userID, id string) iden
 		}
 	}
 	return identifier.Identifier{}
+}
+
+// --- externalsubject.Repository ---
+
+// externalKey is the mirror's (provider, subject) primary key.
+type externalKey struct{ provider, subject string }
+
+// refExternalSubjects hand-enforces the (provider, subject) primary key and the
+// active-user precondition of Link under the shared reference mutex.
+type refExternalSubjects struct{ *reference }
+
+var _ externalsubject.Repository = refExternalSubjects{}
+
+func (r refExternalSubjects) Get(ctx context.Context, provider, subject string) (externalsubject.ExternalSubject, error) {
+	if err := ctx.Err(); err != nil {
+		return externalsubject.ExternalSubject{}, err
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	s, ok := r.externalSubjects[externalKey{provider, subject}]
+	if !ok {
+		return externalsubject.ExternalSubject{}, sdk.ErrNotFound
+	}
+	return s, nil
+}
+
+func (r refExternalSubjects) Link(ctx context.Context, s externalsubject.ExternalSubject) (externalsubject.ExternalSubject, error) {
+	if err := ctx.Err(); err != nil {
+		return externalsubject.ExternalSubject{}, err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	u, ok := r.users[s.UserID]
+	if !ok {
+		return externalsubject.ExternalSubject{}, sdk.ErrNotFound
+	}
+	if !u.Active() {
+		return externalsubject.ExternalSubject{}, session.ErrUserNotActive
+	}
+	key := externalKey{s.Provider, s.Subject}
+	if _, taken := r.externalSubjects[key]; taken {
+		return externalsubject.ExternalSubject{}, sdk.ErrAlreadyExists
+	}
+	s.FirstSeenAt = s.FirstSeenAt.UTC()
+	r.externalSubjects[key] = s
+	return s, nil
+}
+
+func (r refExternalSubjects) ListByUser(ctx context.Context, userID string) ([]externalsubject.ExternalSubject, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	out := []externalsubject.ExternalSubject{}
+	for _, s := range r.externalSubjects {
+		if s.UserID == userID {
+			out = append(out, s)
+		}
+	}
+	slices.SortFunc(out, func(a, b externalsubject.ExternalSubject) int {
+		if c := a.FirstSeenAt.Compare(b.FirstSeenAt); c != 0 {
+			return c
+		}
+		if c := strings.Compare(a.Provider, b.Provider); c != 0 {
+			return c
+		}
+		return strings.Compare(a.Subject, b.Subject)
+	})
+	return out, nil
+}
+
+func (r refExternalSubjects) Unlink(ctx context.Context, provider, subject string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	key := externalKey{provider, subject}
+	if _, ok := r.externalSubjects[key]; !ok {
+		return sdk.ErrNotFound
+	}
+	delete(r.externalSubjects, key)
+	return nil
 }

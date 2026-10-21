@@ -104,6 +104,7 @@ func Run(t *testing.T, newRepos func(t *testing.T) auth.Repositories) {
 	runUserAdmin(t, newRepos)
 	runCredentialAdmission(t, newRepos)
 	RunOAuth2(t, newRepos)
+	RunExternalSubjects(t, newRepos)
 	runIdentifierMutations(t, newRepos)
 
 	// List search (crud-search-upstream T4): API-key `name` is the pocket's first
