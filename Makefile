@@ -32,7 +32,7 @@ LIVE_TAG_MODULES = $(filter %/firestore,$(INTEGRATION_TAG_MODULES))
 	guard-auth-no-delivery-repo guard-auth-no-request-time-provider \
 	guard-authorization-no-delivery-repo guard-authorization-rolesvc-no-engine guard-ui-no-inward guard-ui-require-whitelist \
 	guard-no-legacy-features-path guard-list-no-nethttp guard-violation-message-not-error \
-	guard-firestore-mediation guard-pocket-logic guard-authorization-tuples-leaf guard-authorization-decisions-no-mutations guard-inbound-authorization guard-tuple-write-integrity
+	guard-firestore-mediation guard-pocket-logic guard-authorization-tuples-leaf guard-authorization-decisions-no-mutations guard-inbound-authorization guard-tuple-write-integrity guard-host-contract
 
 # Regenerate *_templ.go from .templ sources. Each bundled views/templ module pins
 # its own templ tool; generation runs inside each so the tool version is
@@ -173,7 +173,7 @@ guard: guard-sdk-stdlib guard-pocket-isolation guard-sdk-no-outward guard-no-leg
 	guard-auth-no-delivery-repo guard-auth-no-request-time-provider \
 	guard-authorization-no-delivery-repo guard-authorization-rolesvc-no-engine guard-ui-no-inward guard-ui-require-whitelist \
 	guard-no-legacy-features-path guard-list-no-nethttp guard-violation-message-not-error \
-	guard-firestore-mediation guard-pocket-logic guard-authorization-tuples-leaf guard-authorization-decisions-no-mutations guard-inbound-authorization guard-tuple-write-integrity
+	guard-firestore-mediation guard-pocket-logic guard-authorization-tuples-leaf guard-authorization-decisions-no-mutations guard-inbound-authorization guard-tuple-write-integrity guard-host-contract
 
 # G1: sdk imports only the standard library (also enforced structurally by
 # sdk/go.mod having no require block).
@@ -322,7 +322,8 @@ guard-list-no-nethttp:
 # ve.Add(field, code, err.Error()) are the two shapes that do it. Comment lines
 # are excluded so the rule can be stated in prose (sdk/faults.go,
 # sdk/pkg/web/errors.go both name the anti-pattern).
-# (G22 is RESERVED for the host-layout-contract PR-B `gopernicus guard` tool.)
+# (G22 was reserved for the host-layout-contract PR-B `gopernicus guard` tool;
+# it shipped as G30 `guard-host-contract`, host-contract-reconciliation.)
 guard-violation-message-not-error:
 	@echo "== guard: sdk.Violation messages never wrap a raw error string (G23) =="
 	@! grep -rn --include='*.go' -E '(Refuse\(|\.Add\().*err\.Error\(\)' sdk/ pockets/ integrations/ examples/ | grep -vE '^[^:]+:[0-9]+:[[:space:]]*//' || { echo "ERROR (G23): a violation message wraps a raw error string — sdk.Violation.Message is caller-facing text only, never err.Error() from a store or driver"; exit 1; }
@@ -555,7 +556,7 @@ guard-no-legacy-features-path:
 # <<< LEGACY-PATTERNS
 
 # CI-style gate: templ generation must be a no-op (no drift), then per-module
-# vet/build/test across all MODULES, then the twenty-three layering guards. Drift
+# vet/build/test across all MODULES, then the twenty-nine layering guards. Drift
 # is checked via `git diff` when this tree is a git repo; this repo IS a git
 # repo (as of phase 2), so that branch runs. The before/after checksum branch
 # remains as a fallback for gitless checkouts of *_templ.go.
@@ -607,3 +608,11 @@ guard-inbound-authorization:
 guard-tuple-write-integrity:
 	@echo "== guard: tuple write services and stores contain no principal authorization (G29) =="
 	@! grep -rnE 'MutationGuard|AuthorizeMutation|ApplyGuarded|StoreDecisionView|SystemMutator|PrincipalFromContext|\*decisions.Service' --include='*.go' --exclude='*_test.go' pockets/authorization/logic/mutations pockets/authorization/stores/memory pockets/authorization/stores/pgx pockets/authorization/stores/turso || { echo "ERROR (G29): tuple writers retain principal policy; inbound admits commands, stores enforce IntegrityPolicy"; exit 1; }
+
+# G30 (host-contract-reconciliation, 2026-10-20): the in-repo hosts pass the host
+# contract's executable floor — every examples/README.md §8 row is guarded.
+# examples/* never pin the tool (G11); the verb is run from this checkout.
+guard-host-contract:
+	@echo "== guard: example hosts pass gopernicus guard (H0–H14) (G30) =="
+	@cd workshop/gopernicus && for h in cms minimal jobs-minimal auth-cms goth-showcase; do \
+		echo "-- examples/$$h"; go run . guard ../../examples/$$h || exit 1; done

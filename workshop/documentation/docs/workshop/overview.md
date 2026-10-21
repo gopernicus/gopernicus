@@ -5,7 +5,7 @@ description: Developer tooling for Gopernicus hosts, pockets, and migration ledg
 
 # Workshop CLI
 
-`workshop/gopernicus` is the stdlib-only developer CLI. It emits initial host and pocket source trees, delegates database work to host-owned runners, and is not linked into generated applications at runtime.
+`workshop/gopernicus` is the stdlib-only developer CLI. It emits initial host and pocket source trees, delegates database work to host-owned runners, checks a host against the host contract, and is not linked into generated applications at runtime.
 
 <img class="docs-illustration" src="/gopernicus/img/clitelescope.jpg" alt="Gopernicus character using a telescope in a city of orbiting systems" />
 

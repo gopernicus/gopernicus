@@ -47,7 +47,7 @@ worked example `examples/cms`.
     secrets/              module github.com/gopernicus/gopernicus/pockets/secrets            — owner-scoped encrypted secrets, rotation, audit (datastore-free)
       stores/pgx/         module …/pockets/secrets/stores/pgx          — secrets' pgx store adapter
   workshop/
-    gopernicus/           module github.com/gopernicus/gopernicus/workshop/gopernicus       — the scaffolding CLI (init / new pocket / db verbs; stdlib-only; emits the anatomies below, never links them — guard G11)
+    gopernicus/           module github.com/gopernicus/gopernicus/workshop/gopernicus       — the scaffolding CLI (init / new pocket / db / guard verbs; stdlib-only; emits the anatomies below, never links them — guard G11)
   examples/
     cms/                  module github.com/gopernicus/gopernicus/examples/cms                — a host app: pockets/cms on Turso
       cmd/  pockets/cms/inbound/theme  workshop/migrations
@@ -560,8 +560,8 @@ host's `sdk/` H13, and the host's `ui/` H14 that this summary omits), the
 Inbound anatomy, host pockets (`<host-module>/pockets/<name>`),
 `cmd`/`workshop`/`integrations`/`sdk`, and the retrofit recipe. This section
 is the framework-side summary; that page is normative for hosts, and
-`gopernicus guard` (planned for `workshop/gopernicus` v0.4.0) will be its
-executable floor.
+`gopernicus guard` (`workshop/gopernicus` v0.4.0) is its executable
+floor.
 
 ### Inbound anatomy
 

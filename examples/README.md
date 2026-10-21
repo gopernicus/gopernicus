@@ -41,8 +41,8 @@ the misreading this paragraph exists to pre-empt.
 
 Rule ids on this page are the **H series** (H = host), H0–H14, one series in
 the FS/G tradition. The repo's own Makefile guards keep the `G` series: those
-police the framework, these police a host. `gopernicus guard --list` will print
-these fifteen sentences verbatim (the verb is planned for `workshop/gopernicus`
+police the framework, these police a host. `gopernicus guard --list` prints
+these fifteen sentences verbatim (the verb ships in `workshop/gopernicus`
 v0.4.0, §7), so the binary and this page cannot drift.
 
 **Prefix discipline.** Bare `sdk` always means the framework's module; the
@@ -124,7 +124,7 @@ Inside those roots the shape is fixed:
 ## 3. The rules — H0 through H14
 
 Every rule gets one canonical sentence. These fifteen lines are what
-`gopernicus guard --list` will print, and they are the wording a finding is
+`gopernicus guard --list` prints, and they are the wording a finding is
 argued against.
 
 | id | the rule, in one line |
@@ -510,9 +510,9 @@ apply: nothing under `internal/` or `pockets/` links it from production code.
 ## 7. Retrofit an existing host
 
 The three real hosts adopt this contract by retrofit, not by scaffolding. The
-`gopernicus guard` verb is planned for `workshop/gopernicus` **v0.4.0** (plan
-of record: host-contract-reconciliation, issue #90); the recipe below
-describes the state a host lands in once it ships.
+`gopernicus guard` verb ships in `workshop/gopernicus` **v0.4.0**
+(host-contract-reconciliation, issue #90); the recipe below describes the
+state a host lands in.
 
 1. **Pin the guard in `go.mod`** — a developer-time tool, never a runtime
    import:
@@ -557,11 +557,11 @@ adopts them by bumping its pin — `go get -tool github.com/gopernicus/gopernicu
 
 | host | role |
 |---|---|
-| `examples/cms` | conforming worked example (after the host-contract-reconciliation package moves, issue #90) — the Turso host of `pockets/cms` |
-| `examples/minimal` | conforming worked example (after those moves) — the zero-infra host, no driver in its module graph |
+| `examples/cms` | conforming worked example — the Turso host of `pockets/cms` |
+| `examples/minimal` | conforming worked example — the zero-infra host, no driver in its module graph |
 | `examples/jobs-minimal` | conforming worked example — the jobs pocket with host-owned handlers; `cmd/` only, conforming as it stands |
-| `examples/auth-cms` | conforming to the H floor (after those moves); still the **authentication conformance harness**, not a layout reference — its `cmd/` carries provider behavior the H10 reviewer clause covers |
-| `examples/goth-showcase` | conforming to the H floor (after its showcase package moves to the host's `ui/showcase`); the `ui/goth` kit showcase, not a layout reference |
+| `examples/auth-cms` | conforming to the H floor since the host-contract-reconciliation package moves (issue #90); still the **authentication conformance harness**, not a layout reference — its `cmd/` carries provider behavior the H10 reviewer clause covers |
+| `examples/goth-showcase` | conforming to the H floor since its showcase package moved to the host's `ui/showcase`; the `ui/goth` kit showcase, not a layout reference |
 
 `examples/minimal` also demonstrates application-data caching at
 `GET /catalog.json`: a host service caches a public product projection from CMS
@@ -573,7 +573,7 @@ host invalidates the logical `published:` prefix after a write; the runnable
 HTTP proof covers that invalidation and never includes draft products. The JSON
 route sets HTTP no-store independently of the service's data cache.
 
-All five run under this repo's own `make guard` once the guard verb ships.
+All five run under this repo's own `make guard` (G30).
 A green guard over `auth-cms` is the floor, not the clause: its composition
 root's provider behavior is named debt (below), not H10 compliance.
 
@@ -586,11 +586,10 @@ pockets can do and for how their seams are wired together.
 
 **Do not read it for layout.** Its composition root carries provider behavior
 (`demo.go`, `purge.go`, `membership.go`, `product.go`, `oauthfake.go`) that
-this contract places in a host pocket or an outbound adapter, and until the
-host-contract-reconciliation moves land it grows several ad-hoc packages
-directly under `internal/` that H0 makes findings — those move to its host
-pockets' `inbound`/`outbound`. The provider behavior in `cmd/` is a known,
-dated debt, not a pattern to copy: the shape to copy is §2, and the worked
+this contract places in a host pocket or an outbound adapter; the ad-hoc
+packages it once grew directly under `internal/` now live in its host
+pockets' `inbound`/`outbound` (host-contract-reconciliation). The provider
+behavior in `cmd/` is a known, dated debt, not a pattern to copy: the shape to copy is §2, and the worked
 examples are `cms`, `minimal`, and `jobs-minimal`.
 
 **Reference findings.** Where this document and the reference host disagree,
