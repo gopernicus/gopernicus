@@ -31,7 +31,7 @@ The module is LAYERED, and the layers are physical:
   their useful namespaces; cryptids means "cryptography tidbits".
 - **`capabilities/`** — behavioral ports + the observable policy that
   goes with them, pinned by conformance tests (cacher, tracing, email,
-  notify, oauth, filestorage, ratelimiter, events, work, transaction). A capability
+  notify, oauth, authentication, filestorage, ratelimiter, events, work, transaction). A capability
   MAY ship a first-party stdlib default (`cacher.Memory`, `email.Console`),
   or its implementation of record may live in an integration
   (`oauth` → `integrations/oauth/*`) or a pocket
@@ -114,7 +114,8 @@ interface).
 | `validation` | explicit field checks (`Required`, `Email`, `UUID`, `MinLength`, …) return optional `*sdk.Violation` data; collect with `sdk.ValidationError.AddViolation` and return `Err()` from DTO or domain validation. Length checks count Unicode code points; optional pointer checks skip nil and use the scalar rule. Password policy belongs to authentication or the host |
 | `async` | bounded in-process task pool; explicit admission and `Close(ctx)` drain. Tasks may outlive a request; no persistence or automatic task cancellation |
 | `tracing` | minimal span port (`Tracer`/`SpanFinisher`), optional HTTP metadata seams + `Noop` default — OpenTelemetry backend in `integrations/tracing/otel` (stdout/OTLP-gRPC exporters) |
-| `cryptids` | `Encrypter` with `AESGCM`, `KeyedEncrypter` with `AESGCMRing` (named, rotatable keys), the `SHA256` digest function, and `JWTSigner`; JWT implementation lives in `integrations/cryptids/golang-jwt` |
+| `cryptids` | `Encrypter` with `AESGCM`, `KeyedEncrypter` with `AESGCMRing` (named, rotatable keys), the `SHA256` digest function, `JWTSigner`, and `JWTVerifier` (a bearer JWT from an external issuer: published keys, pinned iss/aud, algorithm allow-list, 60 s tolerance; `ctx` because key discovery is I/O; an error wrapping `sdk.ErrUnavailable` is a key outage, not a rejection); JWT signing lives in `integrations/cryptids/golang-jwt` |
+| `authentication` | external identity provider port (imported as `sdkauth`): `Provider` turns a `Credential` into a verified `Identity` (issuer, subject, email/phone with verified flags, tenant, auth time, methods, MFA, bounded string `Attributes`) carrying **no principal and no user id**; optional `RevocationChecker` reports `RevocationFacts`; stable errors (`ErrInvalidCredential`, `ErrIssuerMismatch`, `ErrSignInMethodDenied`, `ErrProviderUnavailable`). `NewOIDC` is the stdlib-only default over a `cryptids.JWTVerifier` with a vendor-neutral `Profile`; vendor presets live in `integrations/authentication/*`. `authenticationtest` ships `RunProvider`/`RunRevocation`; `pockets/authentication` consumes it |
 | `oauth` | OAuth 2.0/OIDC `Provider` port, explicit authorization request, optional OIDC/refresh + PKCE S256 helper — providers live in `integrations/oauth/*` (no vendor-neutral default exists) |
 | `events` | bounded notifications (`Emitter`/`Subscriber`/`Bus`), explicit local `Memory.Dispatch`, `Record`/`RemoteEvent` envelope with stable identity, `Noop`, `TypedHandler`, and `WakeChannel`; Redis has checked `Publish` and separate `SubscribeWork`. `eventstest` verifies the common notification contract; `pockets/events` supplies outbox polling + SSE |
 | `notify` | `Delivery`, `DeliveryFunc` and `Send(ctx, deliveries...)`: caller-selected sequential delivery, ordinary failures collected by index, cancellation skips remaining work. No registry, identity routing or implicit retries. `SendError` preserves causes and attempted/skipped failures. Shared `Capabilities`, `InspectTransport` and `CheckTransport` own production posture; body Console is development-only. |

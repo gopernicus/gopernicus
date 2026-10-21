@@ -93,8 +93,8 @@ sdk/                      ROOT package sdk — shared errors/faults, context,
   capabilities/<pkg>      behavioral ports + observable policy, pinned
                           by conformance tests; first-party defaults
                           OPTIONAL (cacher, tracing, notify/email, notify,
-                          oauth, filestorage, ratelimiter, events,
-                          work — oauth and work ship no default). May
+                          oauth, authentication, filestorage, ratelimiter,
+                          events, work — oauth and work ship no default). May
                           import root + pkg and their own
                           subsystem subpackages, never another capability.
 
@@ -189,6 +189,7 @@ relationship is not uniform:
 |---|---|---|
 | `sdk.IdentityResolver` | `pockets/authentication` | IMPLEMENTS the Resolver; users/credentials stay pocket-owned |
 | `sdk/capabilities/events.Bus` | `pockets/events` | BUILDS ON the Bus (durable outbox + SSE gateway); is not the Bus implementation |
+| `sdk/capabilities/authentication` — external identity providers (`Provider` → `Identity`, optional `RevocationChecker`) | `pockets/authentication` | CONSUMES the port — the pocket is not the implementation of record (`NewOIDC` in sdk and the `integrations/authentication/*` presets are); `Identity` carries no principal or user id, so mapping an external subject to a user, JIT provisioning and status stay pocket-owned |
 | `sdk/capabilities/work` — the keyed-work submission protocol | `pockets/jobs` | IMPLEMENTS the protocol as the **implementation of record** — a capability with NO default (the oauth precedent); the durable `Job` aggregate and fenced runtime stay pocket-owned |
 | authorization check/decision vocabulary | `pockets/authorization` | **deferred** — stays consumer-declared (fails graduation criterion 2 of `pockets/README.md` §5 today; trigger: authorizationv3 settles its semantics) |
 
@@ -404,7 +405,11 @@ app-local tree is the escape hatch, not the framework's shared UI kit.
 
 For example, `cryptids.JWTSigner` has one library-backed implementation in
 `integrations/cryptids/golang-jwt`. Keeping the SDK stdlib-only does not require
-maintaining a second handwritten JWT parser. Root `sdk` keeps identifier strategies
+maintaining a second handwritten JWT parser. `cryptids.JWTVerifier` is the
+separate port for bearer JWTs from an issuer that is not this process (keys
+discovered over I/O, iss/aud pinned, an algorithm allow-list); its
+implementation is `integrations/cryptids/go-oidc`, and
+`sdk/capabilities/authentication.NewOIDC` maps its claims. Root `sdk` keeps identifier strategies
 separate from encryption and token signing. Published integration module paths
 retain their existing `cryptids/` category.
 
