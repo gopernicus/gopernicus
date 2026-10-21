@@ -153,11 +153,16 @@ v0.19.0 and take v0.19.1** (v0.19.0's regression is under Known).
   name (no preset; README recipes cite the vendor pages). What the Firebase
   Admin SDK's `Token.Claims` carries WAS verified against the emulator
   (firebase README).
-- **Owner's pending call:** should the pocket export a host-route double-submit
-  CSRF gate for `NewAuthenticator` hosts? Today such a host uses
-  `http.CrossOriginProtection` (ARCHITECTURE host posture), and the double-submit
-  `/auth/csrf` gate exists only on adapters built with `New`. The
-  recommendation is to document that, not build a gate; the README documents it.
+- **Known limitation, host-route CSRF (owner ruling 2026-10-21):** the pocket does
+  not export a double-submit CSRF gate for a host's own routes. An external-only
+  host built on `NewAuthenticator` protects its own cookie-authenticated
+  mutations with `http.CrossOriginProtection` (ARCHITECTURE host posture); the
+  double-submit `/auth/csrf` gate exists only on adapters built with `New`.
+  `CrossOriginProtection` admits a request that carries neither `Origin` nor
+  `Sec-Fetch-Site`. Ruled acceptable because the expected traffic is
+  overwhelmingly API requests (bearer and API-key credentials, which are not
+  ambient); revisit if a host relies on cookie-authenticated mutations on its
+  own routes.
 - **Deferred:** the native handshake exchange (F1), Firebase anonymous users
   (F3), the symmetric collision check in native registration (F4), identifier
   refresh on a later verified token (F5), revocation adapters for Keycloak and

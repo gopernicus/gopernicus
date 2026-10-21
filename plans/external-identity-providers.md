@@ -57,8 +57,9 @@ absent (runs in-repo; proven by renaming the sibling dir); published pgx v0.9.0 
 call** whether the pocket should export a host-route double-submit gate (recommendation: document, do not build).
 Unverified and marked as such in the docs: Firebase IAM permission names, Clerk/Okta hash export, every Clerk/Cognito/
 Okta/Keycloak claim name (incl. Clerk's missing default `aud`, which gooidc requires). `Token.Claims` verified (task-3). Earlier: task-7 BUILT @ a2abfee4 → PR #111 (the external-identity host:
-zero drivers, G30 clean; 8-step run-and-look re-verified by the lead; auth-cms TestExternalDemo* pass). Owner's call:
-should the pocket export a host-route double-submit gate (the host uses http.CrossOriginProtection)?
+zero drivers, G30 clean; 8-step run-and-look re-verified by the lead; auth-cms TestExternalDemo* pass). Host-route CSRF
+RULED 2026-10-21: no exported gate; hosts use http.CrossOriginProtection; recorded as a Known limitation
+("99% of these will be api requests").
 Then task-8 (docs, RELEASING, vet the emulator/live tags, the parity-test skip). CI gap: no live-PG leg in check.yml.
 #102 MERGED @ dd8b9709. task-5 BUILT @ 5dbf55c5 →
 PR #104 (BREAKING: signature + R-LIVE native + 503 on a store read error; real HTTP a–g re-verified by

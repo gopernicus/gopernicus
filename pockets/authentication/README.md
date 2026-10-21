@@ -1889,9 +1889,12 @@ protects its own cookie-authenticated mutations with Go's
 `http.CrossOriginProtection`, the ARCHITECTURE "Host HTML cross-origin posture"
 (`examples/external-identity` does exactly this, and refuses a cross-site POST
 with 403). Header-only providers need nothing: a bearer is not ambient.
-**Owner's pending call:** whether the pocket should export a host-route
-double-submit gate for `NewAuthenticator` hosts; the recommendation is to keep
-documenting the stdlib posture rather than build one.
+**Known limitation (owner ruling 2026-10-21):** the pocket exports no
+double-submit gate for host routes, and `CrossOriginProtection` admits a
+request that carries neither `Origin` nor `Sec-Fetch-Site`. This is accepted
+because the expected traffic is overwhelmingly API requests with bearer or API-key
+credentials. A host that relies on cookie-authenticated mutations on its own
+routes should raise it; exporting the gate is the follow-up.
 
 ### Leaving a provider
 
