@@ -5,10 +5,10 @@ github.com/gopernicus/gopernicus/integrations/datastores/pgxdb v0.7.1 h1:fSVdk6V
 github.com/gopernicus/gopernicus/integrations/datastores/pgxdb v0.7.1/go.mod h1:m73aQqKrcCcr/XY5CwqUY5REpUg0Pwr1r3i+YfpAPJg=
 github.com/gopernicus/gopernicus/pockets v0.1.0 h1:2WcybbfPw1km00DmG37CekPbxYmObyyj3T1Ec0eFSRY=
 github.com/gopernicus/gopernicus/pockets v0.1.0/go.mod h1:A2H/Tl9Pn2v2mFLOgkCQngMRFkMN10E1MEzGCQICsEw=
-github.com/gopernicus/gopernicus/pockets/authentication v0.18.0 h1:sDOqO/iTMLiMx2M7nMFqOu6BvIu2vFXxF/UjXqhxZIc=
-github.com/gopernicus/gopernicus/pockets/authentication v0.18.0/go.mod h1:VKWIZt+W3/GZ/odaUMFdHLpK8U4IwhwJ3wkR4zddSjg=
-github.com/gopernicus/gopernicus/sdk v0.10.0 h1:2Olg4g71pOAij0mz+mBGe+meXWreQW268bTPXp+wkSs=
-github.com/gopernicus/gopernicus/sdk v0.10.0/go.mod h1:z0bypQiCybwPoxoDfzhYvB1BtH2av549QR84GacngaE=
+github.com/gopernicus/gopernicus/pockets/authentication v0.19.1 h1:D0cePd0v9qeDnzfDkB86RAkZhPKoTPps4M5/KNzu7II=
+github.com/gopernicus/gopernicus/pockets/authentication v0.19.1/go.mod h1:CVAs7HEKSyHigr9o0FA6Y7B+Lb0XwANiqQ6rDPUYOHw=
+github.com/gopernicus/gopernicus/sdk v0.14.0 h1:HwLnbnYRyX6mjl/S5+eqJGWFavuWyx7XNIsksTMqATI=
+github.com/gopernicus/gopernicus/sdk v0.14.0/go.mod h1:z0bypQiCybwPoxoDfzhYvB1BtH2av549QR84GacngaE=
 github.com/jackc/pgpassfile v1.0.0 h1:/6Hmqy13Ss2zCq62VdNG8tM1wchn8zjSGOBJ6icpsIM=
 github.com/jackc/pgpassfile v1.0.0/go.mod h1:CEx0iS5ambNFdcRtxPj5JhEz+xB6uRky5eyVu/W2HEg=
 github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 h1:iCEnooe7UlwOQYpKFhBabPMi4aNAfoODPEFNiAnClxo=

@@ -7,7 +7,7 @@ require (
 	github.com/gopernicus/gopernicus/integrations/cryptids/golang-jwt v0.2.0
 	github.com/gopernicus/gopernicus/integrations/datastores/pgxdb v0.9.0
 	github.com/gopernicus/gopernicus/integrations/datastores/turso v0.4.0
-	github.com/gopernicus/gopernicus/pockets/authentication v0.18.0
+	github.com/gopernicus/gopernicus/pockets/authentication v0.19.1
 	github.com/gopernicus/gopernicus/pockets/authentication/views/goth v0.5.0
 	github.com/gopernicus/gopernicus/pockets/authorization v0.24.0
 	github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx v0.17.0
@@ -17,7 +17,7 @@ require (
 	github.com/gopernicus/gopernicus/pockets/jobs v0.6.0
 	github.com/gopernicus/gopernicus/pockets/jobs/stores/pgx v0.6.0
 	github.com/gopernicus/gopernicus/pockets/jobs/stores/turso v0.5.0
-	github.com/gopernicus/gopernicus/sdk v0.10.0
+	github.com/gopernicus/gopernicus/sdk v0.14.0
 	github.com/gopernicus/gopernicus/ui/goth v0.2.0
 	github.com/jackc/pgx/v5 v5.8.0
 )
