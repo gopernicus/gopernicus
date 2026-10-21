@@ -4,8 +4,8 @@ go 1.26.1
 
 require (
 	github.com/gopernicus/gopernicus/integrations/datastores/turso v0.6.0
-	github.com/gopernicus/gopernicus/pockets/authorization v0.26.0
-	github.com/gopernicus/gopernicus/sdk v0.9.0
+	github.com/gopernicus/gopernicus/pockets/authorization v0.27.0
+	github.com/gopernicus/gopernicus/sdk v0.15.0
 	modernc.org/sqlite v1.52.0
 )
 
