@@ -17,7 +17,7 @@ Every example is a real host module, not documentation-only pseudocode. Together
 
 The repository does not currently include a React host module. The [React and TanStack guide](ui/react.md) shows the corresponding API boundary and client code.
 
-`examples/cms`, `examples/minimal`, and `examples/jobs-minimal` are the conforming worked examples: once their host-pocket moves land they are the hosts held to the [Host contract](architecture/host-contract.md) by this repository's own guards, and they are the layouts to copy. `examples/auth-cms` and `examples/goth-showcase` are named, dated exemptions — read them for what they prove, not for how they are arranged.
+`examples/cms`, `examples/minimal`, and `examples/jobs-minimal` are the conforming worked examples and the layouts to copy. Once the host-contract-reconciliation package moves land and the `gopernicus guard` verb ships (planned for `workshop/gopernicus` v0.4.0), all five examples are held to the [Host contract](architecture/host-contract.md) by this repository's own guards. `examples/auth-cms` and `examples/goth-showcase` pass the contract's floor but are not layout references: `auth-cms` is the authentication conformance harness, whose composition root still carries provider behavior the contract's reviewer clause covers, and `goth-showcase` is the `ui/goth` kit showcase — read them for what they prove, not for how they are arranged.
 
 ## Minimal CMS
 

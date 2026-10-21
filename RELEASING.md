@@ -1752,8 +1752,9 @@ is cut this milestone.
 
 **The `workshop/gopernicus` CLI as a host `tool` pin (host-layout-contract,
 2026-08-27) — LIVING.** The scaffolding CLI is tagged like any other importable
-module, but from **v0.3.0** it is also something a host depends on: it carries
-the `guard` verb that checks a host against the H0–H10 rules of
+module, but from **v0.4.0** (planned; host-contract-reconciliation) it is also
+something a host depends on: it carries the `guard` verb that checks a host
+against the H0–H14 rules of
 `examples/README.md`, and a host pins it with a `go.mod` `tool` directive plus
 the matching `require` — a developer-time dependency, never a runtime import.
 That makes the rule-set versioned with the binary: **new H-rules ship in a minor

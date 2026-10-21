@@ -44,6 +44,8 @@ worked example `examples/cms`.
     jobs/                 module github.com/gopernicus/gopernicus/pockets/jobs               — durable queue + schedules hexagon (datastore-free; public stores/memory)
       stores/pgx/         module …/pockets/jobs/stores/pgx             — jobs' pgx store adapter
       stores/turso/       module …/pockets/jobs/stores/turso           — jobs' Turso store adapter
+    secrets/              module github.com/gopernicus/gopernicus/pockets/secrets            — owner-scoped encrypted secrets, rotation, audit (datastore-free)
+      stores/pgx/         module …/pockets/secrets/stores/pgx          — secrets' pgx store adapter
   workshop/
     gopernicus/           module github.com/gopernicus/gopernicus/workshop/gopernicus       — the scaffolding CLI (init / new pocket / db verbs; stdlib-only; emits the anatomies below, never links them — guard G11)
   examples/
@@ -57,7 +59,7 @@ worked example `examples/cms`.
       cmd/
 ```
 
-**Forty-two modules today.** `sdk` is the kernel; `integrations/*` are reusable
+**Forty-four modules today.** `sdk` is the kernel; `integrations/*` are reusable
 third-party connectors (one external dependency each, each its own module);
 `pockets/<name>` is a datastore-free pocket core with its driver adapters as
 sibling modules. Memory and store conformance are packages in the core module
@@ -324,7 +326,7 @@ ui-goth GOTH-0.2, adding the UI-implementation row):
 | kind | definition | examples | swap unit |
 |---|---|---|---|
 | **sdk facility** | a capability **port** + a conformance suite, usually with a first-party stdlib default — defaults are OPTIONAL (sdk-work-protocol, 2026-07-13): the implementation of record may instead be an integration (`oauth`) or a pocket (`work` → `pockets/jobs`); its state is opaque to the host (no host-owned schema, no migrations, no routes) | `cacher`+`Memory`, `notify/email`+`Console`/`SMTP`, `notify.Send`+selected `Delivery` values, `ratelimiter`+`Memory`, `filestorage`+`Disk`, `workers` (pool + `Runner[T]`), `work` (no default) | a config value — the swap is invisible outside the process |
-| **integration** | a third-party backend for a port; isolates exactly one external dependency — a third-party library or an external vendor's live API contract (never importing pockets/, examples/, or another integration; guard G13); one module. The isolation unit is the vendor client library **plus the companion modules its API forces on the caller** (`google.golang.org/api/option`, `grpc/codes`+`status` beside `cloud.google.com/go/firestore`) — never a second backend | `datastores/turso`, `datastores/pgxdb`, `datastores/firestore`, `kvstores/goredis` | a module import in the host's `main` |
+| **integration** | a third-party backend for a port; isolates exactly one external dependency — a third-party library or an external vendor's live API contract (never importing pockets/, examples/, or another integration; guard G13); one module. The isolation unit is the vendor client library **plus the companion modules its API forces on the caller** (`google.golang.org/api/option`, `grpc/codes`+`status` beside `cloud.google.com/go/firestore`) — never a second backend. Named carve-out: `integrations/datastores/turso` additionally requires `modernc.org/sqlite` for its opt-in `localfile` package, because libsql's `file:` mode delegates to a registered SQLite driver (see the layout tree above); it is a companion the vendor's API forces on the caller, not a second backend — the same isolation-unit clause that admits `google.golang.org/api/option` beside the Firestore client | `datastores/turso`, `datastores/pgxdb`, `datastores/firestore`, `kvstores/goredis` | a module import in the host's `main` |
 | **pocket** | a domain module: own entities, **own durable schema + migrations**, and/or **own route surface**; its core module requires **SDK and shared pockets only** (FS1) | `cms`, `authentication`, `authorization`, `jobs`, `events` | explicit service/component construction and optional HTTP registration |
 | **store module** | a pocket's store implementation — persistence written against one driver package's API (`stores/<package>`) plus its scaffold artifact: SQL migrations for the SQL families, an index manifest (`firestore.indexes.json`, exported and boot-probed) for Firestore (R5) | `cms/stores/turso`, `cms/stores/pgx`, `authentication/stores/firestore` | a module import + one `Open` call |
 | **views module** | a pocket's bundled presentation default — the implementation of the core's `Views` port, written against one view package's API (`views/<package>`; FS3, 2026-07-07 — amends R6's four-kind table). Nil `Config.Views` → the pocket's HTML surface is not registered, uniformly | `cms/views/goth` (landed at feature-standard B2, 2026-07-07; migrated templ→ui/goth at ui-goth GOTH-7.3, 2026-07-18) | a module import + one `Config` field |
@@ -410,7 +412,7 @@ That's why `smtp`/`disk`/`memory`/`console` are sdk defaults (stdlib) while
 `turso` (libsql) and `pgx` (jackc/pgx v5) are integrations. Every integration
 module earns its existence by isolating exactly one external dependency — a
 third-party library **or an external vendor's live API contract** (amended
-2026-07-06). Vendor-specific connectors are never sdk defaults even when
+2026-07-06). Named carve-out: `integrations/datastores/turso` additionally requires `modernc.org/sqlite` for its opt-in `localfile` package, because libsql's `file:` mode delegates to a registered SQLite driver (the layout tree's `datastores/turso` line); it is a companion the vendor's API forces on the caller, not a second backend — the same isolation-unit clause that admits `google.golang.org/api/option` beside the Firestore client. Vendor-specific connectors are never sdk defaults even when
 stdlib-implementable: sdk defaults must be vendor-neutral, and a vendor
 connector's surface churns on the vendor's schedule, not sdk's. The amendment
 does not soften the test's other edge: a module that isolates nothing external
@@ -529,20 +531,20 @@ structurally via module boundaries).
    cmd ──► wires the chosen implementations together (dependency injection lives here)
 ```
 
-The import law, as the host rules H1–H8 state it (host-relative paths;
+The import law, as the host rules H1–H8 and H11 state it (host-relative paths;
 "framework" = `sdk`, `integrations/*`, `pockets/*`, `ui/*`; production files
 unless a row says otherwise):
 
 | id | package family | may import | never imports |
 |---|---|---|---|
-| **H1** | `internal/logic/**` | stdlib, `sdk/...`, `<module>/internal/logic/...` | anything else — an allow-list, with no escape valve |
+| **H1** | `internal/logic/**` | stdlib, `sdk/...`, the host's `sdk/...`, `<module>/internal/logic/...` | anything else — an allow-list, with no escape valve |
 | **H2** | `internal/logic/domains/<d>` | as H1 | `internal/logic/compositions/*`; another domain's package |
 | **H3** | `internal/logic/compositions/<c>` | as H1 | a repository port, a storage import, or a transaction handle |
-| **H4** | `internal/inbound/**` | `internal/logic`, `sdk`, framework pocket cores + `views/<pkg>`, `ui/*`, host `pockets/*/{logic,inbound}`, view technology | `internal/outbound/**`, `internal/integrations/**` (`_test.go` exempt), host `pockets/*/outbound` |
-| **H5** | `internal/outbound/domains/<d>` | among host packages: `internal/logic/domains/<d>`, `internal/integrations/*`, host `pockets/*`; framework freely | `internal/inbound/**`; any other `internal/logic/domains/<x>` (`_test.go`, `workshop/**` exempt) |
-| **H5** | `internal/integrations/<tech>` | stdlib, `sdk`, third-party, framework `integrations/*` | `internal/logic`, `internal/inbound`, `internal/outbound`, host `pockets/*`, framework `pockets/*` |
-| **H6** | `<host-module>/pockets/<n>/*` | stdlib, `sdk`, framework pocket rims, its own host pocket | `internal/*`, another host pocket; at least one framework-pocket rim import is required |
-| **H7** | everything except `cmd/**`, `internal/outbound/**`, `internal/integrations/**`, host `pockets/*/outbound/**`, `workshop/**` | — | framework `pockets/*/stores/*`, framework `integrations/...`, database drivers |
+| **H4** | `internal/inbound/**` | `internal/logic`, `sdk` and the host's `sdk/`, framework pocket cores + `views/<pkg>`, `ui/*`, host `pockets/*/{logic,inbound}`, recognized view technology | `internal/outbound/**`, the host's `integrations/**` (`_test.go` exempt), host `pockets/*/outbound` |
+| **H5** | `internal/outbound/domains/<d>` | among host packages: `internal/logic/domains/<d>`, the host's `sdk/`, host `pockets/*`; framework freely | `internal/inbound/**`; any other `internal/logic/domains/<x>`; the host's `integrations/` — it declares the narrow port, `cmd` injects the integration (`_test.go`, `workshop/**` exempt) |
+| **H11** | the host's `integrations/<capability>[/<vendor>]` | stdlib, `sdk/...`, the host's `sdk/...`, exactly one connector or vendor client library plus the companion modules its API forces | `internal/*`, host `pockets/*`, framework `pockets/*`; and only `cmd/**` and `workshop/**` import it, tests included |
+| **H6** | `<host-module>/pockets/<n>/*` | stdlib, `sdk`, the host's `sdk/` (logic), framework pocket rims, its own host pocket | `internal/*`, another host pocket; at least one framework-pocket rim import is required |
+| **H7** | everything except `cmd/**`, `internal/outbound/**`, the host's `integrations/**`, host `pockets/*/outbound/**`, `workshop/**` | — | framework `pockets/*/stores/*`, framework `integrations/...`, recognized database drivers |
 | **H8** | directories | — | an inbound/outbound directory with no `internal/logic` counterpart (one-directional) |
 
 `cmd/` is the composition root and the only place that names concrete
@@ -552,12 +554,14 @@ the app; the framework modules (`sdk`, `integrations/*`, `pockets/*`) never
 reach into them.
 
 **The full host contract is [`examples/README.md`](examples/README.md)** — the
-sibling of [`pockets/README.md`](pockets/README.md): the layout tree, H0–H10
-in full with the normative wording of the table above, the Inbound anatomy,
-host pockets (`<host-module>/pockets/<name>`), `cmd`/`workshop`/
-`internal/integrations`, and the retrofit recipe. This section is the
-framework-side summary; that page is normative for hosts, and
-`gopernicus guard` is its executable floor.
+sibling of [`pockets/README.md`](pockets/README.md): the layout tree, H0–H14
+in full with the normative wording of the table above (and the fence H12, the
+host's `sdk/` H13, and the host's `ui/` H14 that this summary omits), the
+Inbound anatomy, host pockets (`<host-module>/pockets/<name>`),
+`cmd`/`workshop`/`integrations`/`sdk`, and the retrofit recipe. This section
+is the framework-side summary; that page is normative for hosts, and
+`gopernicus guard` (planned for `workshop/gopernicus` v0.4.0) will be its
+executable floor.
 
 ### Inbound anatomy
 
