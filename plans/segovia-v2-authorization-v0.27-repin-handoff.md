@@ -23,9 +23,6 @@ running server and the flightdeck SPA.
 
 ## Before you edit
 
-- **Separate open item, do not fold in:** `plans/segovia-v2-cross-origin-protection-handoff.md`
-  (in the gopernicus repo) has **not** landed on Segovia `main`. A read-only grep at `62671aaa`
-  finds no `CrossOriginProtection` under `v2/`. Tell the owner whether it is in flight.
 - Do not touch another branch's uncommitted work; create a branch or worktree from `main`
   (confirm `git status`, the branch and HEAD first).
 - Read the upstream release record: `RELEASING.md` in `github.com/gopernicus/gopernicus`, the

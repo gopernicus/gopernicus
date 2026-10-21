@@ -1,6 +1,6 @@
 # Releasing gopernicus modules
 
-## Scaffold pins (workshop/gopernicus v0.4.1 — DRAFT, unpublished)
+## Scaffold pins (workshop/gopernicus v0.4.1 — published 2026-10-21)
 
 **PATCH.** The templates move to the current tags, so a freshly scaffolded host or
 pocket starts on today's releases:
@@ -17,6 +17,12 @@ writes these pins at scaffold time.
   each pass `go mod tidy`, `go build`, `go vet` and `go test`, resolving to
   exactly the pins above.
 - `gopernicus guard` on each emitted host exits 0.
+
+**Tag and verification.** `workshop/gopernicus/v0.4.1` is annotated at
+`2de8edc6` (#121 merge). The proxy `.info` resolved on the first poll. A cold
+`go run …/workshop/gopernicus@v0.4.1 init --db pgx` (`GOWORK=off`, an empty
+module cache) emitted a host that tidied and built against sdk v0.15.0 and
+pgxdb v0.9.0.
 
 **Known.** Emitting the `tool` pin and a `guard:` target in `init` (v0.4.0 Known,
 YOUR CALL 7) is still deferred.
