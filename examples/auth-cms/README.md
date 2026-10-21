@@ -571,23 +571,26 @@ run — the swap is invisible at the seam.
 # register + verify user B (b@example.com) and user C (c@example.com), each with its own cookie jar.
 # B is not a member yet:
 curl -i -c bjar -b bjar http://localhost:8082/demo/members-only                  # 403
+# cookie mutations echo the CSRF double-submit token (GET /auth/csrf per jar):
+CSRF=$(curl -s -c jar -b jar http://localhost:8082/auth/csrf | sed 's/.*"csrf_token":"\([^"]*\)".*/\1/')
+BCSRF=$(curl -s -c bjar -b bjar http://localhost:8082/auth/csrf | sed 's/.*"csrf_token":"\([^"]*\)".*/\1/')
 # A (admin session) invites B on project/demo -> 201 pending; token is in the mailer log
-curl -sX POST -c jar -b jar http://localhost:8082/auth/invitations/project/demo \
+curl -sX POST -c jar -b jar http://localhost:8082/auth/invitations/project/demo -H "X-CSRF-Token: $CSRF" \
   -H 'Content-Type: application/json' -d '{"identifier":"b@example.com","relation":"member"}'
 # B accepts with the token -> 200, and the engine Granter writes B's member tuple
-curl -sX POST -c bjar -b bjar http://localhost:8082/auth/invitations/accept \
+curl -sX POST -c bjar -b bjar http://localhost:8082/auth/invitations/accept -H "X-CSRF-Token: $BCSRF" \
   -H 'Content-Type: application/json' -d '{"token":"<INVITE_TOKEN_FROM_LOG>"}'
 curl -i -c bjar -b bjar http://localhost:8082/demo/members-only                  # 200 (granted)
 curl -i -c cjar -b cjar http://localhost:8082/demo/members-only                  # 403 (C is not a member)
 # decline path on a second invitation -> declined, no grant
-curl -sX POST -c jar -b jar http://localhost:8082/auth/invitations/project/demo \
+curl -sX POST -c jar -b jar http://localhost:8082/auth/invitations/project/demo -H "X-CSRF-Token: $CSRF" \
   -H 'Content-Type: application/json' -d '{"identifier":"d@example.com","relation":"member"}'  # -> {"id":"<DID>",...}
 curl -sX POST http://localhost:8082/auth/invitations/<DID>/decline \
   -H 'Content-Type: application/json' -d '{"token":"<D_INVITE_TOKEN_FROM_LOG>"}'  # 200 -> status "declined"
-# cancel path (cookie mutations echo the CSRF double-submit token):
-CSRF=$(curl -s -c jar -b jar http://localhost:8082/auth/csrf | sed 's/.*"csrf_token":"\([^"]*\)".*/\1/')
+# cancel path:
 curl -sX POST -c jar -b jar http://localhost:8082/auth/invitations/<EID>/cancel -H "X-CSRF-Token: $CSRF"  # pending -> 200 {"status":"cancelled"}
-curl -sX POST -c ejar -b ejar http://localhost:8082/auth/invitations/accept \
+ECSRF=$(curl -s -c ejar -b ejar http://localhost:8082/auth/csrf | sed 's/.*"csrf_token":"\([^"]*\)".*/\1/')
+curl -sX POST -c ejar -b ejar http://localhost:8082/auth/invitations/accept -H "X-CSRF-Token: $ECSRF" \
   -H 'Content-Type: application/json' -d '{"token":"<E_INVITE_TOKEN_FROM_LOG>"}'  # 409; no access
 curl -sX POST -c jar -b jar http://localhost:8082/auth/invitations/<BID_INVITATION>/cancel -H "X-CSRF-Token: $CSRF"  # accepted -> 409
 ```

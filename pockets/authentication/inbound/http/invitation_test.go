@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"maps"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -241,6 +242,27 @@ func (f invitationFixture) login(t *testing.T, emailAddr string) *http.Cookie {
 	return c
 }
 
+// doCSRF is do for a cookie-lane invitation mutation: it adds the
+// __Host-auth_csrf double-submit pair (cookie + matching X-CSRF-Token header) the
+// browser-safe gate compares, as a browser client must send it.
+func doCSRF(t *testing.T, h http.Handler, method, path, body string, cookies ...*http.Cookie) *httptest.ResponseRecorder {
+	t.Helper()
+	var r *http.Request
+	if body != "" {
+		r = httptest.NewRequest(method, path, strings.NewReader(body))
+	} else {
+		r = httptest.NewRequest(method, path, nil)
+	}
+	for _, c := range cookies {
+		r.AddCookie(c)
+	}
+	r.AddCookie(&http.Cookie{Name: csrfCookieName, Value: "csrf-token"})
+	r.Header.Set(csrfHeaderName, "csrf-token")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, r)
+	return rec
+}
+
 // TestInvitationRoutesDenyByAbsence proves the whole invitation surface is NOT
 // registered when no Granter (→ nil InvitationService) is wired: every route
 // returns 404, never a 401 from a gated-but-registered route (design §6
@@ -298,7 +320,7 @@ func TestInvitationCreateRelationDeniedNeverReachesService(t *testing.T) {
 	f.seedLoginUser("u1", "alice@example.com")
 	cookie := f.login(t, "alice@example.com")
 
-	rec := do(t, f.h, "POST", "/auth/invitations/project/p1",
+	rec := doCSRF(t, f.h, "POST", "/auth/invitations/project/p1",
 		`{"identifier":"bob@example.com","relation":"owner"}`, cookie)
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("relation-denied create = %d, want 403; body=%s", rec.Code, rec.Body)
@@ -328,7 +350,7 @@ func TestInvitationCreateRelationAllowedReachesService(t *testing.T) {
 	f.seedLoginUser("u1", "alice@example.com")
 	cookie := f.login(t, "alice@example.com")
 
-	rec := do(t, f.h, "POST", "/auth/invitations/project/p1",
+	rec := doCSRF(t, f.h, "POST", "/auth/invitations/project/p1",
 		`{"identifier":"bob@example.com","relation":"member"}`, cookie)
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("allowed create = %d, want 201; body=%s", rec.Code, rec.Body)
@@ -405,7 +427,7 @@ func TestInvitationCreateFailsClosed(t *testing.T) {
 
 	t.Run("missing principal", func(t *testing.T) {
 		f := newInvitationFixture(t, allowInviteCheck, nil)
-		rec := do(t, f.h, "POST", "/auth/invitations/project/p1", body)
+		rec := doCSRF(t, f.h, "POST", "/auth/invitations/project/p1", body)
 		if rec.Code != http.StatusUnauthorized {
 			t.Fatalf("no-session create = %d, want 401; body=%s", rec.Code, rec.Body)
 		}
@@ -421,7 +443,7 @@ func TestInvitationCreateFailsClosed(t *testing.T) {
 		f := newInvitationFixture(t, deny, nil)
 		f.seedLoginUser("u1", "alice@example.com")
 		cookie := f.login(t, "alice@example.com")
-		rec := do(t, f.h, "POST", "/auth/invitations/project/p1", body, cookie)
+		rec := doCSRF(t, f.h, "POST", "/auth/invitations/project/p1", body, cookie)
 		if rec.Code != http.StatusForbidden {
 			t.Fatalf("denied create = %d, want 403; body=%s", rec.Code, rec.Body)
 		}
@@ -437,7 +459,7 @@ func TestInvitationCreateFailsClosed(t *testing.T) {
 		f := newInvitationFixture(t, boom, nil)
 		f.seedLoginUser("u1", "alice@example.com")
 		cookie := f.login(t, "alice@example.com")
-		rec := do(t, f.h, "POST", "/auth/invitations/project/p1", body, cookie)
+		rec := doCSRF(t, f.h, "POST", "/auth/invitations/project/p1", body, cookie)
 		if rec.Code != http.StatusInternalServerError {
 			t.Fatalf("policy-error create = %d, want 500; body=%s", rec.Code, rec.Body)
 		}
@@ -504,6 +526,78 @@ func TestInvitationDeclineRateLimited(t *testing.T) {
 	}
 }
 
+// TestInvitationDeclineOriginGated proves decline carries the ORIGIN-ONLY gate:
+// a cross-site browser page is refused before the handler, while the session-less
+// token decline (no Origin, no CSRF pair) stays reachable (see
+// TestInvitationDeclineReachableWithoutSession).
+func TestInvitationDeclineOriginGated(t *testing.T) {
+	f := newInvitationFixture(t, allowInviteCheck, nil)
+	r := httptest.NewRequest("POST", "/auth/invitations/inv-1/decline", strings.NewReader(`{"token":"secret"}`))
+	r.Header.Set("Sec-Fetch-Site", "cross-site")
+	r.Header.Set("Origin", "https://evil.example")
+	rec := httptest.NewRecorder()
+	f.h.ServeHTTP(rec, r)
+	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), originRejectedCode) {
+		t.Fatalf("cross-site decline = %d, want 403 %s; body=%s", rec.Code, originRejectedCode, rec.Body)
+	}
+}
+
+// TestInvitationMutationsRequireCSRFOnCookieTransport pins issue #105: every
+// authenticated invitation mutation carries the double-submit gate on a cookie
+// transport — the native session cookie and a provider cookie
+// (WithExternalCookies) alike — while bearer-only callers (native access token,
+// provider token, act-as-user API key) need no token.
+func TestInvitationMutationsRequireCSRFOnCookieTransport(t *testing.T) {
+	h := newExternalHarness(t, externalSetup{cookies: []string{extCookie}})
+	mux, _ := newExternalRoutes(t, h, RouteAuthentication{})
+	apiKey, _, _ := h.mintKey(t, "inviter-bot", true, h.userID, time.Time{})
+	routes := []struct{ name, path, body string }{
+		{"create", "/auth/invitations/project/p1", `{"identifier":"bob@example.com","relation":"member"}`},
+		{"accept", "/auth/invitations/accept", `{"token":"t"}`},
+		{"cancel", "/auth/invitations/inv-1/cancel", ""},
+		{"resend", "/auth/invitations/inv-1/resend", ""},
+	}
+	csrfRefused := func(rec *httptest.ResponseRecorder) bool {
+		return rec.Code == http.StatusForbidden && strings.Contains(rec.Body.String(), "CSRF")
+	}
+	cookies := map[string]*http.Cookie{
+		"native cookie":   {Name: "session", Value: h.accessJWT},
+		"provider cookie": {Name: extCookie, Value: h.token},
+	}
+	bearers := map[string]string{"native bearer": h.accessJWT, "provider bearer": h.token, "api key": apiKey}
+	for _, rt := range routes {
+		for name, c := range cookies {
+			t.Run(rt.name+"/"+name, func(t *testing.T) {
+				rec := httptest.NewRecorder()
+				mux.ServeHTTP(rec, routeRequest("POST", rt.path, rt.body, func(r *http.Request) { r.AddCookie(c) }))
+				if !csrfRefused(rec) {
+					t.Fatalf("no CSRF token = %d, want 403 CSRF; body=%s", rec.Code, rec.Body)
+				}
+				rec = httptest.NewRecorder()
+				mux.ServeHTTP(rec, routeRequest("POST", rt.path, rt.body, func(r *http.Request) {
+					r.AddCookie(c)
+					r.AddCookie(&http.Cookie{Name: csrfCookieName, Value: "csrf-token"})
+					r.Header.Set(csrfHeaderName, "csrf-token")
+				}))
+				if csrfRefused(rec) || rec.Code == http.StatusUnauthorized {
+					t.Fatalf("matching CSRF pair = %d, want past the gates; body=%s", rec.Code, rec.Body)
+				}
+			})
+		}
+		for name, token := range bearers {
+			t.Run(rt.name+"/"+name, func(t *testing.T) {
+				rec := httptest.NewRecorder()
+				mux.ServeHTTP(rec, routeRequest("POST", rt.path, rt.body, func(r *http.Request) {
+					r.Header.Set("Authorization", "Bearer "+token)
+				}))
+				if csrfRefused(rec) || rec.Code == http.StatusUnauthorized {
+					t.Fatalf("bearer without CSRF token = %d, want past the gates; body=%s", rec.Code, rec.Body)
+				}
+			})
+		}
+	}
+}
+
 // TestInvitationResponseCarriesInvitedBy proves the owner field is on EVERY
 // response built from the invitation DTO mapper — create (201), resource list
 // (200), and resend (200) — so a resource list can tell the rows the current admin
@@ -536,7 +630,7 @@ func TestInvitationResponseCarriesInvitedBy(t *testing.T) {
 		f.seedLoginUser(owner, "alice@example.com")
 		cookie := f.login(t, "alice@example.com")
 
-		rec := do(t, f.h, "POST", "/auth/invitations/project/p1",
+		rec := doCSRF(t, f.h, "POST", "/auth/invitations/project/p1",
 			`{"identifier":"bob@example.com","relation":"member","auto_accept":true}`, cookie)
 		if rec.Code != http.StatusCreated {
 			t.Fatalf("create = %d, want 201; body=%s", rec.Code, rec.Body)
@@ -581,7 +675,7 @@ func TestInvitationResponseCarriesInvitedBy(t *testing.T) {
 		f.seedLoginUser(owner, "alice@example.com")
 		cookie := f.login(t, "alice@example.com")
 
-		rec := do(t, f.h, "POST", "/auth/invitations/inv-1/resend", "", cookie)
+		rec := doCSRF(t, f.h, "POST", "/auth/invitations/inv-1/resend", "", cookie)
 		if rec.Code != http.StatusOK {
 			t.Fatalf("resend = %d, want 200; body=%s", rec.Code, rec.Body)
 		}
@@ -607,7 +701,7 @@ func TestInvitationCancelResendOwnershipStaysServerEnforced(t *testing.T) {
 		t.Run(rt.name+"/owner", func(t *testing.T) {
 			f := newInvitationFixtureWith(t, &ownerAwareInvitationService{owner: "u-owner"}, allowInviteCheck, nil)
 			f.seedLoginUser("u-owner", "owner@example.com")
-			rec := do(t, f.h, "POST", rt.path, "", f.login(t, "owner@example.com"))
+			rec := doCSRF(t, f.h, "POST", rt.path, "", f.login(t, "owner@example.com"))
 			if rec.Code != http.StatusOK {
 				t.Fatalf("owner %s = %d, want 200; body=%s", rt.name, rec.Code, rec.Body)
 			}
@@ -615,7 +709,7 @@ func TestInvitationCancelResendOwnershipStaysServerEnforced(t *testing.T) {
 		t.Run(rt.name+"/non-owner", func(t *testing.T) {
 			f := newInvitationFixtureWith(t, &ownerAwareInvitationService{owner: "u-owner"}, allowInviteCheck, nil)
 			f.seedLoginUser("u-other", "other@example.com")
-			rec := do(t, f.h, "POST", rt.path, "", f.login(t, "other@example.com"))
+			rec := doCSRF(t, f.h, "POST", rt.path, "", f.login(t, "other@example.com"))
 			if rec.Code != http.StatusForbidden {
 				t.Fatalf("non-owner %s = %d, want 403; body=%s", rt.name, rec.Code, rec.Body)
 			}
@@ -643,7 +737,7 @@ func TestInvitationCreateForwardsMetadata(t *testing.T) {
 	f.seedLoginUser("u1", "alice@example.com")
 	cookie := f.login(t, "alice@example.com")
 
-	rec := do(t, f.h, "POST", "/auth/invitations/project/p1",
+	rec := doCSRF(t, f.h, "POST", "/auth/invitations/project/p1",
 		`{"identifier":"bob@example.com","relation":"member","metadata":{"routing_key":"org-1"}}`, cookie)
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("create = %d, want 201; body=%s", rec.Code, rec.Body)
@@ -664,7 +758,7 @@ func TestInvitationCreateMetadataAbsentIsEmpty(t *testing.T) {
 	f.seedLoginUser("u1", "alice@example.com")
 	cookie := f.login(t, "alice@example.com")
 
-	rec := do(t, f.h, "POST", "/auth/invitations/project/p1",
+	rec := doCSRF(t, f.h, "POST", "/auth/invitations/project/p1",
 		`{"identifier":"bob@example.com","relation":"member"}`, cookie)
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("create = %d, want 201; body=%s", rec.Code, rec.Body)
@@ -684,7 +778,7 @@ func TestInvitationCreateOversizedBodyRejected(t *testing.T) {
 	big := strings.Repeat("a", (1<<20)+1) // just over maxJSONBodyBytes
 	body := `{"identifier":"bob@example.com","relation":"member","metadata":{"k":"` + big + `"}}`
 
-	rec := do(t, f.h, "POST", "/auth/invitations/project/p1", body, cookie)
+	rec := doCSRF(t, f.h, "POST", "/auth/invitations/project/p1", body, cookie)
 	if rec.Code != http.StatusRequestEntityTooLarge {
 		t.Fatalf("oversized body = %d, want 413; body=%s", rec.Code, rec.Body)
 	}
@@ -713,7 +807,7 @@ func TestInvitationOwnerResponsesCarryMetadata(t *testing.T) {
 		f.seedLoginUser(owner, "alice@example.com")
 		cookie := f.login(t, "alice@example.com")
 
-		rec := do(t, f.h, "POST", "/auth/invitations/project/p1",
+		rec := doCSRF(t, f.h, "POST", "/auth/invitations/project/p1",
 			`{"identifier":"bob@example.com","relation":"member","metadata":{"routing_key":"route-1"}}`, cookie)
 		if rec.Code != http.StatusCreated {
 			t.Fatalf("create = %d, want 201; body=%s", rec.Code, rec.Body)
@@ -752,7 +846,7 @@ func TestInvitationOwnerResponsesCarryMetadata(t *testing.T) {
 		f.seedLoginUser(owner, "alice@example.com")
 		cookie := f.login(t, "alice@example.com")
 
-		rec := do(t, f.h, "POST", "/auth/invitations/inv-1/resend", "", cookie)
+		rec := doCSRF(t, f.h, "POST", "/auth/invitations/inv-1/resend", "", cookie)
 		if rec.Code != http.StatusOK {
 			t.Fatalf("resend = %d, want 200; body=%s", rec.Code, rec.Body)
 		}

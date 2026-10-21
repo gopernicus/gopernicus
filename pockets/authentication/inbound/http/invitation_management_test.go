@@ -70,7 +70,7 @@ func TestInvitationManagementHTTPAdmissionBeforeWritesOrDelivery(t *testing.T) {
 				}
 				f := newInvitationFixtureWith(t, inv, allowInviteCheck, nil)
 				f.seedLoginUser(caller, "caller@x.com")
-				rec := do(t, f.h, "POST", "/auth/invitations/inv-1/"+operation, "", f.login(t, "caller@x.com"))
+				rec := doCSRF(t, f.h, "POST", "/auth/invitations/inv-1/"+operation, "", f.login(t, "caller@x.com"))
 				if rec.Code != want || repo.reads != 1 {
 					t.Fatalf("status=%d want=%d reads=%d body=%s", rec.Code, want, repo.reads, rec.Body)
 				}

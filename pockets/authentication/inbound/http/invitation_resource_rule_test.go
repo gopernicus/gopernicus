@@ -249,7 +249,7 @@ func TestInvitationResourceRuleCoManagerAdministersAll(t *testing.T) {
 	w := newRuleWorld(t, nil)
 	alice, bob := w.login(t, "alice@x.com"), w.login(t, "bob@x.com")
 
-	rec := do(t, w.h, "POST", "/auth/invitations/project/p1", `{"identifier":"invitee@x.com","relation":"member"}`, alice)
+	rec := doCSRF(t, w.h, "POST", "/auth/invitations/project/p1", `{"identifier":"invitee@x.com","relation":"member"}`, alice)
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("A create=%d body=%s", rec.Code, rec.Body)
 	}
@@ -260,7 +260,7 @@ func TestInvitationResourceRuleCoManagerAdministersAll(t *testing.T) {
 	if created.InvitedBy != "u1" {
 		t.Fatalf("created=%+v", created)
 	}
-	if rec := do(t, w.h, "POST", "/auth/invitations/project/p1", `{"identifier":"other@x.com","relation":"member"}`, bob); rec.Code != http.StatusCreated {
+	if rec := doCSRF(t, w.h, "POST", "/auth/invitations/project/p1", `{"identifier":"other@x.com","relation":"member"}`, bob); rec.Code != http.StatusCreated {
 		t.Fatalf("B create=%d body=%s", rec.Code, rec.Body)
 	}
 	rec = do(t, w.h, "GET", "/auth/invitations/project/p1", "", bob)
@@ -275,7 +275,7 @@ func TestInvitationResourceRuleCoManagerAdministersAll(t *testing.T) {
 	}
 
 	before := w.repo.row(created.ID).TokenHash
-	if rec := do(t, w.h, "POST", "/auth/invitations/"+created.ID+"/resend", "", bob); rec.Code != http.StatusOK {
+	if rec := doCSRF(t, w.h, "POST", "/auth/invitations/"+created.ID+"/resend", "", bob); rec.Code != http.StatusOK {
 		t.Fatalf("B resend A's invitation=%d body=%s", rec.Code, rec.Body)
 	}
 	if w.repo.row(created.ID).TokenHash == before {
@@ -285,7 +285,7 @@ func TestInvitationResourceRuleCoManagerAdministersAll(t *testing.T) {
 	if evt.EventType != securityevent.TypeInvitationCreated || evt.Actor != (securityevent.Principal{Type: sdk.PrincipalTypeUser, ID: "u2"}) || evt.UserID != "u2" || evt.Details["invited_by"] != "u1" {
 		t.Fatalf("resend audit=%+v", evt)
 	}
-	if rec := do(t, w.h, "POST", "/auth/invitations/"+created.ID+"/cancel", "", bob); rec.Code != http.StatusOK {
+	if rec := doCSRF(t, w.h, "POST", "/auth/invitations/"+created.ID+"/cancel", "", bob); rec.Code != http.StatusOK {
 		t.Fatalf("B cancel A's invitation=%d body=%s", rec.Code, rec.Body)
 	}
 	if w.repo.row(created.ID).Status != invitations.StatusCancelled {
@@ -302,10 +302,10 @@ func TestInvitationResourceRuleCoManagerAdministersAll(t *testing.T) {
 func ruleOps(t *testing.T, w *ruleWorld, cookie *http.Cookie, resourceType, id string) map[string]int {
 	t.Helper()
 	return map[string]int{
-		"create": do(t, w.h, "POST", "/auth/invitations/"+resourceType+"/p1", `{"identifier":"new@x.com","relation":"member"}`, cookie).Code,
+		"create": doCSRF(t, w.h, "POST", "/auth/invitations/"+resourceType+"/p1", `{"identifier":"new@x.com","relation":"member"}`, cookie).Code,
 		"list":   do(t, w.h, "GET", "/auth/invitations/"+resourceType+"/p1", "", cookie).Code,
-		"resend": do(t, w.h, "POST", "/auth/invitations/"+id+"/resend", "", cookie).Code,
-		"cancel": do(t, w.h, "POST", "/auth/invitations/"+id+"/cancel", "", cookie).Code,
+		"resend": doCSRF(t, w.h, "POST", "/auth/invitations/"+id+"/resend", "", cookie).Code,
+		"cancel": doCSRF(t, w.h, "POST", "/auth/invitations/"+id+"/cancel", "", cookie).Code,
 	}
 }
 
@@ -329,7 +329,7 @@ func TestInvitationResourceRuleRefusals(t *testing.T) {
 		w.revoke("u1")
 		alice := w.login(t, "alice@x.com")
 		for _, op := range []string{"resend", "cancel"} {
-			if rec := do(t, w.h, "POST", "/auth/invitations/inv-a/"+op, "", alice); rec.Code != http.StatusNotFound {
+			if rec := doCSRF(t, w.h, "POST", "/auth/invitations/inv-a/"+op, "", alice); rec.Code != http.StatusNotFound {
 				t.Fatalf("revoked inviter %s=%d body=%s", op, rec.Code, rec.Body)
 			}
 		}
@@ -348,7 +348,7 @@ func TestInvitationResourceRuleRefusals(t *testing.T) {
 	})
 	t.Run("unknown id is indistinguishable", func(t *testing.T) {
 		w := newRuleWorld(t, nil)
-		rec := do(t, w.h, "POST", "/auth/invitations/missing/cancel", "", w.login(t, "mallory@x.com"))
+		rec := doCSRF(t, w.h, "POST", "/auth/invitations/missing/cancel", "", w.login(t, "mallory@x.com"))
 		if rec.Code != http.StatusNotFound {
 			t.Fatalf("unknown id=%d", rec.Code)
 		}
@@ -387,7 +387,7 @@ func TestInvitationResourceRuleInviteCheckIsCreateOnlyRefinement(t *testing.T) {
 	w.seedPending("inv-a", "project", "p1", "u1")
 	bob := w.login(t, "bob@x.com")
 	w.resetTrace()
-	if rec := do(t, w.h, "POST", "/auth/invitations/project/p1", `{"identifier":"new@x.com","relation":"member"}`, bob); rec.Code != http.StatusCreated {
+	if rec := doCSRF(t, w.h, "POST", "/auth/invitations/project/p1", `{"identifier":"new@x.com","relation":"member"}`, bob); rec.Code != http.StatusCreated {
 		t.Fatalf("create=%d body=%s", rec.Code, rec.Body)
 	}
 	if !slices.Equal(w.trace, []string{"can", "invite-check:create"}) {
@@ -395,7 +395,7 @@ func TestInvitationResourceRuleInviteCheckIsCreateOnlyRefinement(t *testing.T) {
 	}
 	for _, step := range []struct{ method, path string }{{"GET", "/auth/invitations/project/p1"}, {"POST", "/auth/invitations/inv-a/resend"}, {"POST", "/auth/invitations/inv-a/cancel"}} {
 		w.resetTrace()
-		if rec := do(t, w.h, step.method, step.path, "", bob); rec.Code != http.StatusOK {
+		if rec := doCSRF(t, w.h, step.method, step.path, "", bob); rec.Code != http.StatusOK {
 			t.Fatalf("%s=%d body=%s", step.path, rec.Code, rec.Body)
 		}
 		if !slices.Equal(w.trace, []string{"can"}) {
@@ -403,7 +403,7 @@ func TestInvitationResourceRuleInviteCheckIsCreateOnlyRefinement(t *testing.T) {
 		}
 	}
 	w.resetTrace()
-	if rec := do(t, w.h, "POST", "/auth/invitations/project/p1", `{"identifier":"new2@x.com","relation":"member"}`, w.login(t, "mallory@x.com")); rec.Code != http.StatusForbidden {
+	if rec := doCSRF(t, w.h, "POST", "/auth/invitations/project/p1", `{"identifier":"new2@x.com","relation":"member"}`, w.login(t, "mallory@x.com")); rec.Code != http.StatusForbidden {
 		t.Fatalf("non-holder create=%d", rec.Code)
 	}
 	if !slices.Equal(w.trace, []string{"can"}) {
@@ -430,7 +430,7 @@ func TestInvitationResourceRuleInviteCheckRestrictsManager(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			w := newRuleWorld(t, memberOnly)
 			base := w.effects()
-			rec := do(t, w.h, "POST", "/auth/invitations/project/p1", tc.body, w.login(t, "bob@x.com"))
+			rec := doCSRF(t, w.h, "POST", "/auth/invitations/project/p1", tc.body, w.login(t, "bob@x.com"))
 			if rec.Code != http.StatusForbidden || w.canCalls != 1 {
 				t.Fatalf("status=%d canCalls=%d body=%s", rec.Code, w.canCalls, rec.Body)
 			}
@@ -446,7 +446,7 @@ func TestInvitationResourceRuleInviteCheckRestrictsManager(t *testing.T) {
 func TestInvitationResourceRuleOnlyAuthorityIsBroad(t *testing.T) {
 	w := newRuleWorld(t, nil)
 	bob := w.login(t, "bob@x.com")
-	rec := do(t, w.h, "POST", "/auth/invitations/project/p1", `{"identifier":"new@x.com","relation":"owner","metadata":{"route":"restricted"}}`, bob)
+	rec := doCSRF(t, w.h, "POST", "/auth/invitations/project/p1", `{"identifier":"new@x.com","relation":"owner","metadata":{"route":"restricted"}}`, bob)
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("pending owner=%d body=%s", rec.Code, rec.Body)
 	}
@@ -457,7 +457,7 @@ func TestInvitationResourceRuleOnlyAuthorityIsBroad(t *testing.T) {
 	if row := w.repo.row(created.ID); row.Relation != "owner" || row.Metadata["route"] != "restricted" {
 		t.Fatalf("row=%+v", row)
 	}
-	rec = do(t, w.h, "POST", "/auth/invitations/project/p1", `{"identifier":"known@x.com","relation":"owner","auto_accept":true,"metadata":{"route":"restricted"}}`, bob)
+	rec = doCSRF(t, w.h, "POST", "/auth/invitations/project/p1", `{"identifier":"known@x.com","relation":"owner","auto_accept":true,"metadata":{"route":"restricted"}}`, bob)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("direct-add owner=%d body=%s", rec.Code, rec.Body)
 	}
@@ -484,7 +484,7 @@ func TestInvitationRuleOffManagementAttribution(t *testing.T) {
 			}
 			f := newInvitationFixtureWith(t, inv, allowInviteCheck, nil)
 			f.seedLoginUser("u1", "alice@x.com")
-			if rec := do(t, f.h, "POST", "/auth/invitations/inv-a/"+op, "", f.login(t, "alice@x.com")); rec.Code != http.StatusOK {
+			if rec := doCSRF(t, f.h, "POST", "/auth/invitations/inv-a/"+op, "", f.login(t, "alice@x.com")); rec.Code != http.StatusOK {
 				t.Fatalf("status=%d body=%s", rec.Code, rec.Body)
 			}
 			evt := events.last()
