@@ -6,6 +6,8 @@ use (
 	./examples/goth-showcase
 	./examples/jobs-minimal
 	./examples/minimal
+	./integrations/authentication/auth0
+	./integrations/authentication/firebase
 	./integrations/cryptids/bcrypt
 	./integrations/cryptids/go-oidc
 	./integrations/cryptids/golang-jwt

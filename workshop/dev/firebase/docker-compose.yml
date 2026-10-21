@@ -1,0 +1,19 @@
+# Firebase Auth emulator only. Start with `make dev-firebase`, stop with
+# `make dev-firebase-down`. Then:
+#   FIREBASE_AUTH_EMULATOR_HOST=127.0.0.1:9099 FIREBASE_PROJECT_ID=demo-gopernicus
+name: gopernicus-dev-firebase
+
+services:
+  auth-emulator:
+    build: .
+    image: gopernicus/firebase-auth-emulator:15.34.0
+    container_name: gopernicus-firebase-auth-emulator
+    environment:
+      FIREBASE_PROJECT: demo-gopernicus
+    ports:
+      - "127.0.0.1:9099:9099"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:9099/"]
+      interval: 2s
+      timeout: 2s
+      retries: 30

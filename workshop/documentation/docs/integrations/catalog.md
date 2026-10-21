@@ -46,6 +46,16 @@ Query logging is opt-in, logs arguments verbatim, and is development-only.
 
 Password policy stays in authentication; bcrypt owns hashing mechanics. Entity ID choice is made once in pocket config and never controls secret/token generation.
 
+## Authentication providers
+
+| Module | Implements | Notes |
+|---|---|---|
+| `integrations/authentication/auth0` | `sdkauth.Profile` preset | no library; trailing-slash `Issuer`, `org_id` tenant, machine tokens denied; `cmd` composes it with go-oidc ([details](auth0.md)) |
+| `integrations/authentication/firebase` | `sdkauth.Provider`, `sdkauth.RevocationChecker` | Firebase Admin SDK: ID tokens, session cookies (verify and mint), revocation facts; refuses emulator mode in production ([details](firebase.md)) |
+
+Presets return SDK values and never import another integration; generic OIDC
+verification lives in `integrations/cryptids/go-oidc`.
+
 ## Email and notification
 
 | Module | Implements | Notes |

@@ -1,10 +1,10 @@
 # gopernicus — framework monorepo (sdk + integrations + pockets + examples)
 #
-# Multi-module workspace (go.work), 45 modules. templ is pinned via the `tool`
+# Multi-module workspace (go.work), 47 modules. templ is pinned via the `tool`
 # directive in pockets/cms/views/goth/go.mod (where the .templ sources live),
 # so `go tool templ` is reproducible.
 
-MODULES = sdk pockets integrations/cryptids/bcrypt integrations/cryptids/go-oidc integrations/cryptids/golang-jwt integrations/cryptids/google-uuid integrations/datastores/pgxdb integrations/datastores/turso integrations/datastores/firestore integrations/email/sendgrid integrations/filestorage/gcs integrations/filestorage/s3 integrations/kvstores/goredis integrations/oauth/github integrations/oauth/google integrations/scheduling/robfig-cron integrations/tracing/otel pockets/authentication pockets/authentication/stores/firestore pockets/authentication/stores/pgx pockets/authentication/stores/turso pockets/authentication/views/goth pockets/authorization pockets/authorization/stores/pgx pockets/authorization/stores/turso pockets/authorization/stores/goredis pockets/cms pockets/cms/stores/pgx pockets/cms/stores/turso pockets/cms/views/goth pockets/events pockets/events/stores/pgx pockets/events/stores/turso pockets/jobs pockets/jobs/stores/pgx pockets/jobs/stores/turso pockets/secrets pockets/secrets/stores/pgx ui/goth examples/auth-cms examples/cms examples/goth-showcase examples/jobs-minimal examples/minimal workshop/gopernicus
+MODULES = sdk pockets integrations/authentication/auth0 integrations/authentication/firebase integrations/cryptids/bcrypt integrations/cryptids/go-oidc integrations/cryptids/golang-jwt integrations/cryptids/google-uuid integrations/datastores/pgxdb integrations/datastores/turso integrations/datastores/firestore integrations/email/sendgrid integrations/filestorage/gcs integrations/filestorage/s3 integrations/kvstores/goredis integrations/oauth/github integrations/oauth/google integrations/scheduling/robfig-cron integrations/tracing/otel pockets/authentication pockets/authentication/stores/firestore pockets/authentication/stores/pgx pockets/authentication/stores/turso pockets/authentication/views/goth pockets/authorization pockets/authorization/stores/pgx pockets/authorization/stores/turso pockets/authorization/stores/goredis pockets/cms pockets/cms/stores/pgx pockets/cms/stores/turso pockets/cms/views/goth pockets/events pockets/events/stores/pgx pockets/events/stores/turso pockets/jobs pockets/jobs/stores/pgx pockets/jobs/stores/turso pockets/secrets pockets/secrets/stores/pgx ui/goth examples/auth-cms examples/cms examples/goth-showcase examples/jobs-minimal examples/minimal workshop/gopernicus
 
 # STORE_MODULES carry env-gated live conformance suites (storetest against a real
 # database). `make check`/`make test` run them hermetically (loud skips); `make
@@ -24,7 +24,7 @@ INTEGRATION_TAG_MODULES = $(filter %/turso %/firestore,$(STORE_MODULES)) integra
 # RUNS them.
 LIVE_TAG_MODULES = $(filter %/firestore,$(INTEGRATION_TAG_MODULES))
 
-.PHONY: generate generate-ui-assets build vet test test-stores test-ui-browser docs-install docs docs-build run migrate check tidy guard warm-scaffold-cache \
+.PHONY: generate generate-ui-assets build vet test test-stores test-ui-browser docs-install docs docs-build run migrate check tidy guard warm-scaffold-cache dev-firebase dev-firebase-down \
 	guard-sdk-stdlib guard-pocket-isolation guard-sdk-no-outward guard-no-legacy-path \
 	guard-pocket-dependencies guard-pocket-transport-sdk-web guard-pocket-no-cross-pocket \
 	guard-store-no-foreign-pocket guard-no-underlying guard-no-lax-scan \
@@ -83,6 +83,12 @@ test:
 # (`-p 8081:8080` … FIRESTORE_EMULATOR_HOST=127.0.0.1:8081).
 #   POSTGRES_TEST_DSN='postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable' \
 #     FIRESTORE_EMULATOR_HOST=127.0.0.1:8080 FIRESTORE_PROJECT_ID=gopernicus-test make test-stores
+# The Firebase Auth emulator (integrations/authentication/firebase -tags=emulator)
+# is `make dev-firebase`; the equivalent one-off container is:
+#   docker build -t gopernicus/firebase-auth-emulator:15.34.0 workshop/dev/firebase
+#   docker run --rm -d -p 127.0.0.1:9099:9099 --name gopernicus-firebase-auth-emulator \
+#     gopernicus/firebase-auth-emulator:15.34.0
+#   FIREBASE_AUTH_EMULATOR_HOST=127.0.0.1:9099 (project demo-gopernicus)
 # pgx-leg runs one pgx store module's live suite twice: once unqualified (the
 # default every existing host runs) and once with POSTGRES_TEST_SCHEMA set, so
 # every statement is proven both bare and schema-qualified
@@ -125,6 +131,17 @@ test-stores:
 	@echo "== pockets/authentication/stores/firestore (emulator, -tags=integration) =="
 	@if [ -z "$$FIRESTORE_EMULATOR_HOST" ]; then echo "   FIRESTORE_EMULATOR_HOST not set — the emulator cases SKIP loudly (Firestore emulator conformance NOT verified)"; fi
 	@cd pockets/authentication/stores/firestore && go test -tags=integration -count=1 -timeout 45m ./...
+
+# dev-firebase starts the Firebase Auth emulator (auth only, demo-gopernicus
+# project, no credentials) on 127.0.0.1:9099 from workshop/dev/firebase, whose
+# Dockerfile pins firebase-tools and the node base image. Docker-gated and never
+# part of `check`; the -tags=emulator leg skips loudly without it.
+dev-firebase:
+	docker compose -f workshop/dev/firebase/docker-compose.yml up -d --build --wait
+	@echo "Firebase Auth emulator: FIREBASE_AUTH_EMULATOR_HOST=127.0.0.1:9099 FIREBASE_PROJECT_ID=demo-gopernicus"
+
+dev-firebase-down:
+	docker compose -f workshop/dev/firebase/docker-compose.yml down
 
 # test-ui-browser runs the ui/goth three-engine Playwright + axe harness
 # (Chromium, Firefox, WebKit) against the zero-datastore examples/goth-showcase
