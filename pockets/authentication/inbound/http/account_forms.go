@@ -57,7 +57,7 @@ func accountDone(code string) string {
 
 // accountForm is the wrapper every account-security form handler runs through. It
 // parses a bounded body, performs the double-submit CSRF compare against the body's
-// csrf_token field (the form lane of the browser-safe-mutation gate — a form POST
+// csrf_token field (the form lane of requireBrowserSafeFormMutation — a form POST
 // cannot set the X-CSRF-Token header, design §9.1), and only then invokes fn. The
 // route middleware has already enforced the allowlisted Origin and the live session;
 // this closes the CSRF token lane the middleware deferred.

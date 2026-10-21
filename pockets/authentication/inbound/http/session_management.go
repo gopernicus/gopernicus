@@ -13,7 +13,7 @@ import (
 
 func mountSessionManagement(r pockets.RouteRegistrar, h *handlers) {
 	live := htmlSecured(h.htmlPolicy, h.svc.RequirePrincipal(FirstParty(), Transports(authlogic.TransportCookie), Live(), Browser()))
-	mutation := requireBrowserSafeMutation(h.mutation.csrf())
+	mutation := requireBrowserSafeFormMutation(h.mutation.csrf())
 	r.Handle("GET", "/auth/sessions", h.sessionsPage, live)
 	r.Handle("POST", "/auth/sessions/{id}/revoke", h.revokeSessionForm, live, mutation)
 	r.Handle("POST", "/auth/sessions/revoke-all", h.revokeAllSessionsForm, live, mutation)

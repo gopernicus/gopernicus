@@ -84,7 +84,7 @@ var (
 //
 // Every HTML GET path is distinct from its JSON POST twin (method+path), so no route
 // collides — the POST endpoints keep their single JSON registration.
-func mountHTML(r pockets.RouteRegistrar, h *handlers, browserAccount, browserSafe web.Middleware) {
+func mountHTML(r pockets.RouteRegistrar, h *handlers, browserAccount, browserSafeForm web.Middleware) {
 	// Public credential pages.
 	r.Handle("GET", "/auth/login", h.loginPage)
 	// The password credential's pages, only when the posture is on (deny-by-absence).
@@ -131,10 +131,10 @@ func mountHTML(r pockets.RouteRegistrar, h *handlers, browserAccount, browserSaf
 	// /auth/identifiers/{id} with an action field; the handler routes it to the same
 	// SetIdentifierUses / RemoveIdentifier service methods the JSON PATCH/DELETE edges
 	// use. This POST path is form-only (no JSON twin), so it is a single registration
-	// carrying the BrowserAccount authenticator + the browser-safe (Origin +
-	// deferred form-CSRF) gate. A denied POST redirects WITHOUT a return_to, so a
+	// carrying the BrowserAccount authenticator + the form-lane browser-safe gate
+	// (Origin, then identifierEditForm's body double-submit). A denied POST redirects WITHOUT a return_to, so a
 	// later GET can never replay the mutation.
-	r.Handle("POST", "/auth/identifiers/{id}", h.identifierEditForm, live, browserSafe)
+	r.Handle("POST", "/auth/identifiers/{id}", h.identifierEditForm, live, browserSafeForm)
 
 	// OAuth pages, only when at least one provider is wired. The pending-link landing
 	// is PUBLIC by construction (design §5.7): the caller proved inbox control with the
