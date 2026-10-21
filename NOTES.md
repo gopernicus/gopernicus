@@ -2834,3 +2834,7 @@ Plan of record `.claude/plans/host-contract-reconciliation.md` (copied to
 `plans/` at release). PR-1 changes text only — `examples/README.md`,
 `ARCHITECTURE.md`, `README.md`, `RELEASING.md`, the docs-site host-contract
 and examples pages; no Go package moves.
+
+**RELEASED 2026-10-20:** PR-2 landed as #93 (because #92 merged into PR-1's
+branch), PR-3 as #96, and `workshop/gopernicus/v0.4.0` was tagged at `fef8f47b`
+and cold-verified. See `RELEASING.md`.

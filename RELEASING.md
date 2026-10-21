@@ -1,5 +1,57 @@
 # Releasing gopernicus modules
 
+## Host contract reconciliation (workshop/gopernicus v0.4.0 — published 2026-10-20)
+
+MINOR release of the `workshop/gopernicus` CLI, alone. It adds the `guard` verb,
+the executable floor of the host contract in `examples/README.md` (issue #90).
+No other module is tagged, and no library API changes. Design, rulings and
+build notes: [the plan](plans/host-contract-reconciliation.md).
+
+**What changed.**
+- **The contract (PR #91).** `examples/README.md` adopts the reference host's
+  shape. Host tech adapters live at top-level `integrations/<capability>[/<vendor>]`
+  and only `cmd` names them (H11). A host may have a top-level `sdk/` (H13) and
+  `ui/` (H14). H12 is the outer import fence, and H10 gains the client-binary
+  carve-out. The series is now H0–H14, fifteen rules.
+- **The example hosts (PR #93).** auth-cms, cms, minimal and goth-showcase
+  moved their out-of-shape packages to host-pocket or `ui/` homes, with package
+  names kept. auth-cms's delivery supervisor moved out of `cmd/server` into
+  `deliveryhealth`. auth-cms passes the floor only; its `cmd/` provider behavior
+  is recorded as named debt.
+- **The verb (PR #96).** `gopernicus guard [host-root]` checks the fifteen rules
+  with the standard library alone (`go/parser`), so the module still has zero
+  `require` lines. `gopernicus guard --list` prints the canonical sentences, and
+  `TestGuardListMatchesContract` keeps them byte-identical to the README table.
+  It prints one status line per rule, then one line per finding. Exit codes:
+  0 clean, 1 findings, 2 for a missing `go.mod`, an unparsable file or a bad
+  flag. There is no skip list, allow file or config.
+- **G30 `guard-host-contract`** runs the verb over all five example hosts in
+  `make guard`, which makes it part of CI. Twenty-nine guards in total.
+
+**Tag and verification.** The tag `workshop/gopernicus/v0.4.0` is annotated at
+`fef8f47b70fe0ae6a310533e41cd756fe743fd94` (PR #96 merge). `check` passed on
+that commit on `main` before tagging.
+
+- The proxy `.info` resolved about 10 s after the push, with `Origin.Hash` =
+  `fef8f47b…`.
+- A cold download (`GOWORK=off`, an empty module cache, `proxy.golang.org`,
+  `sum.golang.org`) passed: `go run …/workshop/gopernicus@v0.4.0 guard --list`
+  printed 15 lines, `version` ran, and `guard` on a fresh copy of
+  `examples/minimal` printed `guard: clean (15 rules, 5 packages)` and exited 0.
+- Before merge, all five example hosts were clean. A copy of minimal with a
+  stray `internal/leak` package and a logic→outbound import exited 1 with
+  exactly one H0 and one H1 finding.
+
+**Known.**
+- `go run` reports a child exit of 2 as 1. Use a built or `go tool` binary when
+  the distinction matters; G30's `|| exit 1` works either way.
+- The `init` skeleton still emits the three grep guards. Emitting the `tool`
+  pin and a `guard:` target is deferred to v0.4.1 (YOUR CALL 7).
+- Downstream: gps-360-go, venona-project and Segovia v2 pin the tool with
+  `go get -tool github.com/gopernicus/gopernicus/workshop/gopernicus@v0.4.0`
+  and settle their findings in their own slices. The plan's "Downstream
+  handoff" section lists each host's findings.
+
 ## Secrets pocket (sdk v0.13.0; pockets/secrets v0.1.0; pockets/secrets/stores/pgx v0.1.0 — published 2026-10-17)
 
 Three tags for one feature, in dependency order. Design and build record:
@@ -1752,7 +1804,7 @@ is cut this milestone.
 
 **The `workshop/gopernicus` CLI as a host `tool` pin (host-layout-contract,
 2026-08-27) — LIVING.** The scaffolding CLI is tagged like any other importable
-module, but from **v0.4.0** (planned; host-contract-reconciliation) it is also
+module, but from **v0.4.0** (published 2026-10-20; host-contract-reconciliation) it is also
 something a host depends on: it carries the `guard` verb that checks a host
 against the H0–H14 rules of
 `examples/README.md`, and a host pins it with a `go.mod` `tool` directive plus
