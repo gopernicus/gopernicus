@@ -16,7 +16,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gopernicus/gopernicus/examples/auth-cms/internal/authmem"
+	"github.com/gopernicus/gopernicus/examples/auth-cms/pockets/authentication/outbound/authmem"
 	"github.com/gopernicus/gopernicus/pockets"
 	auth "github.com/gopernicus/gopernicus/pockets/authentication"
 	inbound "github.com/gopernicus/gopernicus/pockets/authentication/inbound/http"

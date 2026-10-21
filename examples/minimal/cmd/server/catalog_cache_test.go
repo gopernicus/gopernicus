@@ -12,8 +12,8 @@ import (
 
 	cataloghttp "github.com/gopernicus/gopernicus/examples/minimal/internal/inbound/domains/catalog"
 	"github.com/gopernicus/gopernicus/examples/minimal/internal/logic/domains/catalog"
-	"github.com/gopernicus/gopernicus/examples/minimal/internal/memstore"
 	catalogstore "github.com/gopernicus/gopernicus/examples/minimal/internal/outbound/domains/catalog"
+	"github.com/gopernicus/gopernicus/examples/minimal/pockets/cms/outbound/memstore"
 	"github.com/gopernicus/gopernicus/pockets/cms/domain/content"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/cacher"
 	"github.com/gopernicus/gopernicus/sdk/pkg/web"

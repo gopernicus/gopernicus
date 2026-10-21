@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gopernicus/gopernicus/examples/auth-cms/internal/authmem"
-	"github.com/gopernicus/gopernicus/examples/auth-cms/internal/deliveryhealth"
+	"github.com/gopernicus/gopernicus/examples/auth-cms/pockets/authentication/outbound/authmem"
+	"github.com/gopernicus/gopernicus/examples/auth-cms/pockets/authentication/outbound/deliveryhealth"
 	auth "github.com/gopernicus/gopernicus/pockets/authentication"
 	delivery "github.com/gopernicus/gopernicus/pockets/authentication/logic/delivery"
 	sdkevents "github.com/gopernicus/gopernicus/sdk/capabilities/events"
@@ -18,7 +18,7 @@ import (
 )
 
 // This file is the AV3D-5.3 REAL-INTERACTION proof for the host-composed delivery health
-// surface (internal/deliveryhealth). It drives the bounded in_process composition over real
+// surface (pockets/authentication/outbound/deliveryhealth). It drives the bounded in_process composition over real
 // HTTP + the real worker pool and hits the health endpoint (deliveryhealth.Handler over
 // httptest) to assert the four distinguishable states: runtime not-started vs running,
 // backlog visible under saturation, dead-letter count incrementing after a permanent

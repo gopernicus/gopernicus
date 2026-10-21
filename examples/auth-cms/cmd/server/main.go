@@ -32,7 +32,7 @@
 // DEFAULT variant is direct-emit/best-effort — cms emits straight onto the bus
 // (SSE id: = CorrelationID). The DURABLE variant (EVENTS_OUTBOX=memory) routes a
 // host-owned POST /outbox-demo append through an example-local in-memory outbox
-// (internal/outboxmem) and a host-driven outbox.Poller on an sdk/pkg/workers pool:
+// (pockets/events/outbound/outboxmem) and a host-driven outbox.Poller on an sdk/pkg/workers pool:
 // outbox -> poll -> emit -> SSE, id: = the durable outbox EventID. The shutdown
 // order is HTTP server -> delivery runtime -> terminal-purge scheduler -> poller pool
 // -> bus.Close (see run's tail comment); HTTP and the delivery runtime are supervised
@@ -54,14 +54,14 @@ import (
 
 	authorizationhttp "github.com/gopernicus/gopernicus/pockets/authorization/inbound/http"
 
-	"github.com/gopernicus/gopernicus/examples/auth-cms/internal/authjobs"
-	"github.com/gopernicus/gopernicus/examples/auth-cms/internal/authmem"
-	"github.com/gopernicus/gopernicus/examples/auth-cms/internal/authpages"
-	"github.com/gopernicus/gopernicus/examples/auth-cms/internal/deliveryhealth"
-	"github.com/gopernicus/gopernicus/examples/auth-cms/internal/memstore"
-	"github.com/gopernicus/gopernicus/examples/auth-cms/internal/outboxmem"
+	"github.com/gopernicus/gopernicus/examples/auth-cms/pockets/authentication/inbound/authpages"
 	"github.com/gopernicus/gopernicus/examples/auth-cms/pockets/authentication/inbound/http/oauth2demo"
+	"github.com/gopernicus/gopernicus/examples/auth-cms/pockets/authentication/outbound/authjobs"
+	"github.com/gopernicus/gopernicus/examples/auth-cms/pockets/authentication/outbound/authmem"
+	"github.com/gopernicus/gopernicus/examples/auth-cms/pockets/authentication/outbound/deliveryhealth"
 	"github.com/gopernicus/gopernicus/examples/auth-cms/pockets/authentication/outbound/oauth2fixture"
+	"github.com/gopernicus/gopernicus/examples/auth-cms/pockets/cms/outbound/memstore"
+	"github.com/gopernicus/gopernicus/examples/auth-cms/pockets/events/outbound/outboxmem"
 	"github.com/gopernicus/gopernicus/integrations/cryptids/bcrypt"
 	"github.com/gopernicus/gopernicus/pockets"
 	auth "github.com/gopernicus/gopernicus/pockets/authentication"
@@ -178,7 +178,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 	mode := deliverySelection.DeliveryMode
 
 	// Host operational health for delivery (AV3D-5.3): a secret-free, bounded, host-COMPOSED
-	// surface (internal/deliveryhealth). It observes the runtime lifecycle (host-owned), the
+	// surface (pockets/authentication/outbound/deliveryhealth). It observes the runtime lifecycle (host-owned), the
 	// secret-free delivery lifecycle events (wrapping Config.DeliveryEventsEmitter), jobs-mode
 	// admissions (wrapping Config.DeliveryDispatcher), and the in_process queue depth (the
 	// auth Service's InProcessQueueDepth read). It carries counters/gauges/enums only — never
@@ -192,7 +192,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 	// (jobsmem.NewFencedQueue) is the zero-infra stand-in, so jobs mode is NON-DURABLE here —
 	// queued work is lost on restart with no cross-instance coordination; a durable posture is
 	// a pgx/turso FencedQueue store swap a real host makes. The composition adapter
-	// (internal/authjobs) is the ONE place that imports BOTH pockets; neither pocket core
+	// (pockets/authentication/outbound/authjobs) is the ONE place that imports BOTH pockets; neither pocket core
 	// imports the other (constitution rule 6).
 	var (
 		deliveryJobs       *jobs.Components
@@ -564,7 +564,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 			_ = pool.Run(poolCtx)
 		}()
 		log.InfoContext(ctx, "events durable outbox variant ENABLED (EVENTS_OUTBOX=memory)",
-			"outbox", "in-memory (internal/outboxmem)", "trigger", "POST /outbox-demo")
+			"outbox", "in-memory (pockets/events/outbound/outboxmem)", "trigger", "POST /outbox-demo")
 	}
 
 	registerDemoRoutes(router, authSvc.HTTP, authorizer, authzComponents.Roles, authzComponents.HTTP)
@@ -612,7 +612,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 	hostCtx, cancelHost := context.WithCancel(ctx)
 	defer cancelHost()
 	deliveryCtx, cancelDelivery := context.WithCancel(context.Background())
-	supervisor := superviseDelivery(deliveryCtx, cancelHost, deliveryRun, health, log)
+	supervisor := deliveryhealth.Supervise(deliveryCtx, cancelHost, deliveryRun, health, log)
 
 	// Host-owned scheduled terminal purge (IX-10), jobs mode only. Without it the durable
 	// delivery rows and their encrypted metadata grow without bound despite the documented
@@ -655,14 +655,14 @@ func run(ctx context.Context, log *slog.Logger) error {
 	// Stop the delivery runtime after HTTP drains (its own context, like the poller).
 	log.InfoContext(context.Background(), "stopping delivery runtime")
 	cancelDelivery()
-	if !supervisor.wait(5 * time.Second) {
+	if !supervisor.Wait(5 * time.Second) {
 		log.WarnContext(context.Background(), "delivery runtime did not stop within 5s")
 	}
 	log.InfoContext(context.Background(), "delivery runtime stopped")
 	// If the delivery runtime exited unexpectedly (it drove this shutdown, not a signal),
 	// surface its cause so run returns nonzero even though web.Run drained cleanly.
 	if runErr == nil {
-		runErr = supervisor.exitErr()
+		runErr = supervisor.ExitErr()
 	}
 
 	// Stop the terminal-purge scheduler after the delivery runtime (its own context, like the

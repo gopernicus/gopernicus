@@ -14,7 +14,7 @@ import (
 
 	authenticationhttp "github.com/gopernicus/gopernicus/pockets/authentication/inbound/http"
 
-	"github.com/gopernicus/gopernicus/examples/auth-cms/internal/authmem"
+	"github.com/gopernicus/gopernicus/examples/auth-cms/pockets/authentication/outbound/authmem"
 	auth "github.com/gopernicus/gopernicus/pockets/authentication"
 	invitations "github.com/gopernicus/gopernicus/pockets/authentication/logic/invitations"
 

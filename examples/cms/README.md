@@ -9,7 +9,7 @@ The host builds a `ui/goth` bundle (`uigoth.New(uigoth.WithAssetBasePath(
 "/assets/goth"))`), serves its embedded fingerprinted assets under that path with
 `web.NewStaticFileServer(uigothassets.FS, web.WithAssetPrefix("dist/"))`, and passes
 the bundle to `cmsViews`. The admin CRUD pages render through the GOTH default; the
-public site is this host's custom theme (`internal/theme`, the pocket's
+public site is this host's custom theme (`pockets/cms/inbound/theme`, the pocket's
 view-override seam) composing the same bundle. See `ui/goth/README.md` §11 for the
 full adopter guide.
 
@@ -29,7 +29,7 @@ module, not here.
 
 ```
 cmd/server                 composition root — wires everything; the only place that names concrete adapters
-internal/theme             this host's custom public-site theme (the pocket's view-override seam)
+pockets/cms/inbound/theme  this host's custom public-site theme (the pocket's view-override seam)
 workshop/migrations        host-owned migration runner — applies pockets/cms/stores/turso's scaffolded SQL pre-boot
 pockets/cms (module)      the hexagon — content, taxonomy, menus, media, messaging (services + ports); datastore-free
 pockets/cms/stores/turso  the Turso/libSQL store adapter module for pockets/cms (SQL + migrations)

@@ -5,8 +5,8 @@
 // theme deps) and sdk. It is a reference "bring your own store", not a
 // production datastore: data lives in maps and is lost on exit.
 //
-// NOTE: this package is a verbatim copy of examples/minimal/internal/memstore —
-// a host never reaches into another example's internal/ packages, so the
+// NOTE: this package is a verbatim copy of examples/minimal/pockets/cms/outbound/memstore —
+// a host never reaches into another example's packages, so the
 // two-pocket proof host owns its own copy of the cms store. Keep it in sync
 // with the source if the cms ports change.
 //

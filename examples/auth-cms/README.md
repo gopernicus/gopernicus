@@ -12,7 +12,7 @@ bounded **in_process** — both backed by in-memory stores here, so both are
 non-durable on this proof host), passwordless email/phone login, the
 step-up-gated credential/identifier management suite, the bundled default HTML
 pages (the `ui/goth` adapter `authgoth`) **with a real host page override**
-(`internal/authpages`),
+(`pockets/authentication/inbound/authpages`),
 and a `RuntimeMode=development` posture whose production-negative twin is proven
 hermetically.
 
@@ -31,8 +31,7 @@ wired together — it is the most heavily tested host in the repo, and every
 leg below is a live proof. It is NOT the host to copy a layout from.
 
 Its composition root carries provider behavior that the host contract places
-in a host pocket or an outbound adapter, and it grows several ad-hoc packages
-directly under `internal/` that H0 makes findings. That is known, dated debt
+in a host pocket or an outbound adapter. That is known, dated debt
 with a named follow-up plan, and this host is a NAMED EXEMPTION from the
 repo's host-contract guard until that plan lands. For layout, read
 [`examples/README.md`](../README.md) — the host contract — and the conforming
@@ -154,8 +153,8 @@ remain absent.
 
 ## Wiring
 
-- **cms store**: `internal/memstore` (in-memory cms ports).
-- **auth store**: `internal/authmem` — an in-memory implementation of **every**
+- **cms store**: `pockets/cms/outbound/memstore` (in-memory cms ports).
+- **auth store**: `pockets/authentication/outbound/authmem` — an in-memory implementation of **every**
   auth port: v1 user/password/session, the v2 oauth-account/oauth-state/
   service-account/api-key/security-event/invitation ports, and the v3 identity +
   atomic-security rails (identifier, challenge, password-reset, contact-change,
@@ -246,7 +245,7 @@ remain absent.
     `authSvc.DeliveryJobRuntime()`) in a **supervised** goroutine (see the shutdown
     section: an unexpected runtime exit brings the host down rather than serving with a
     dead delivery runtime). This demonstrates the exemplary jobs-mode composition
-    (`internal/authjobs` is the ONE adapter importing both pockets), but **this proof
+    (`pockets/authentication/outbound/authjobs` is the ONE adapter importing both pockets), but **this proof
     host backs the fenced queue with `jobsmem.NewFencedQueue` — an in-memory store**. So
     on THIS host jobs mode is **NOT durable**: accepted work is **lost on restart** and
     there is **no cross-instance coordination** (the same development posture as
@@ -271,7 +270,7 @@ remain absent.
     other than `in_process` falls back to `jobs` — the host never *silently* selects
     an ephemeral mode.
 - **Delivery operational health** (`GET /healthz/delivery`, AV3D-5.3): a host-COMPOSED,
-  secret-free, bounded status surface (`internal/deliveryhealth`) — counters/gauges/
+  secret-free, bounded status surface (`pockets/authentication/outbound/deliveryhealth`) — counters/gauges/
   enums only, **never** a recipient, payload, secret, or logical key. It distinguishes
   runtime **not-started vs running** (host-owned lifecycle), **request accounting /
   backlog** (jobs mode: `admitted` counts **accepted** admission requests over the
@@ -296,7 +295,7 @@ remain absent.
   so same-origin browser forms pass the browser-safe gate and cross-site
   credentialed POSTs are refused.
 - **Views (HTML) + page override**: `WithBrowser(BrowserConfig{Views: views, ...})`, with views from `authpages.New(bundle)` —
-  `internal/authpages` **embeds the bundled `ui/goth` `authgoth.Views`** and overrides
+  `pockets/authentication/inbound/authpages` **embeds the bundled `ui/goth` `authgoth.Views`** and overrides
   ONLY `Login` with a Gopernicus-CMS-branded page rendered through stdlib
   `html/template` (no templ import in the host). Every other page is the promoted
   ui/goth default (rendered from the fingerprinted assets the host serves under
@@ -553,7 +552,7 @@ curl -i -X POST http://localhost:8082/auth/refresh -H 'Content-Type: application
 ```
 
 > **authmem caveat (honest):** refresh tokens are store-backed and *would* survive
-> a restart against a durable store — but this host's `internal/authmem` is
+> a restart against a durable store — but this host's `pockets/authentication/outbound/authmem` is
 > **in-memory**, so a restart wipes every session. The `/auth/refresh` call above
 > therefore returns **401** here: the surviving-refresh recovery half of this leg
 > is only observable against a persistent store (e.g. `stores/turso` / `stores/pgx`
@@ -652,7 +651,7 @@ curl -N -b jar http://localhost:8082/events
 
 Reboot with `EVENTS_OUTBOX=memory` to swap the emit path in front of the bus from
 direct-emit to the **durable at-least-once rail**. The host wires an example-local
-in-memory outbox (`internal/outboxmem`, an honest `outbox.EntryRepository`) into
+in-memory outbox (`pockets/events/outbound/outboxmem`, an honest `outbox.EntryRepository`) into
 `WithOutbox` and drives an `outbox.Poller` (`pockets/events/logic/outbox`) on an `sdk/pkg/workers` pool. A
 host-owned `POST /outbox-demo` route appends a record, then signals a cap-1 wake
 channel (the canonical append-then-signal pattern) so the poller drains it

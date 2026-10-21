@@ -1199,8 +1199,8 @@ func New(bundle *goth.Bundle) (Views, error) {
 A host wires it as `views, _ := pocketgoth.New(bundle)` →
 `pocket.Config{Views: views}`, and serves the bundle assets (§11.1). **Partial
 override** is the blessed customization: embed the default `Views` in a host type and
-override only the methods you rebrand (`examples/auth-cms/internal/authpages` overrides
-just `Login`; `examples/cms/internal/theme` overrides the public chrome and falls
+override only the methods you rebrand (`examples/auth-cms/pockets/authentication/inbound/authpages` overrides
+just `Login`; `examples/cms/pockets/cms/inbound/theme` overrides the public chrome and falls
 through to the GOTH admin pages).
 
 **Security-sensitive pockets map `Requirements` into their own policy, not a raw

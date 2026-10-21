@@ -92,7 +92,7 @@ for supported headers and middleware ordering.
 
 ## GOTH and custom themes
 
-`pockets/cms/views/goth` supplies the bundled view implementation. A host can use it directly or embed it and override selected public pages while keeping admin/forms on the default components. `examples/cms/internal/theme` demonstrates that pattern.
+`pockets/cms/views/goth` supplies the bundled view implementation. A host can use it directly or embed it and override selected public pages while keeping admin/forms on the default components. `examples/cms/pockets/cms/inbound/theme` demonstrates that pattern.
 
 The host constructs the GOTH bundle and serves its assets. CMS owns neither the UI module nor an asset route.
 

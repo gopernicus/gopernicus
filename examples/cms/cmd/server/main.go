@@ -15,7 +15,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/gopernicus/gopernicus/examples/cms/internal/theme"
+	"github.com/gopernicus/gopernicus/examples/cms/pockets/cms/inbound/theme"
 	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
 	"github.com/gopernicus/gopernicus/integrations/tracing/otel"
 	"github.com/gopernicus/gopernicus/pockets"

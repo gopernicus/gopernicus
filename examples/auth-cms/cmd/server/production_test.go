@@ -8,7 +8,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/gopernicus/gopernicus/examples/auth-cms/internal/authmem"
+	"github.com/gopernicus/gopernicus/examples/auth-cms/pockets/authentication/outbound/authmem"
 	auth "github.com/gopernicus/gopernicus/pockets/authentication"
 	authenticationlogic "github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication"
 	delivery "github.com/gopernicus/gopernicus/pockets/authentication/logic/delivery"
