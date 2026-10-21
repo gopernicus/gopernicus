@@ -88,9 +88,17 @@ change outside this option. With a schema set the probe IS scoped to it.
 ## Migrations
 
 `migrations/*.sql` carry the **identical version (filename) set** as the turso
-tree — `0001`–`0019` (sixteen tables; auth owns no delivery table). Same filename
+tree — `0001`–`0020` (seventeen tables; auth owns no delivery table). Same filename
 = same logical schema step; content is per-dialect. After export, the host owns
 the final migration stream and applies it pre-boot through its own ledger.
+
+**`0020_external_subjects.sql` is append-only and REQUIRED.** It creates
+`external_subjects`, the external identity mirror keyed `(provider, subject)`, and
+touches no existing table. Export and apply it before deploying this adapter
+version, including hosts that wire no external provider: `Repositories` probes the
+table at boot. `NewExternalSubjectStore` implements `ExternalSubjects`;
+`UserStore.Provision` inserts `InitialCredentials.External` in the user's
+transaction, so a taken subject rolls the whole provisioning back.
 
 **`0019_oauth2_sessions.sql` is append-only.** Apply it before deploying this
 adapter version, including hosts that have not enabled OAuth endpoints. It adds

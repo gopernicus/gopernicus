@@ -35,7 +35,10 @@ The first-party repository slots include `UserAdmin`, `ActiveSessions` and
 `Passwordless`. `OAuth2` and `SessionManagement` remain nil: this adapter does not
 support the optional MCP authorization server. `WithOAuth2` fails construction
 with this bundle. Session writes reject delegated profiles rather than dropping
-their audience/client binding. Existing first-party behavior is unchanged. Host policies and mounting choices decide which services and routes
+their audience/client binding. `ExternalSubjects` is nil too: this release has
+no Firestore external identity mirror, so wiring `WithExternal` providers with
+this bundle fails construction loudly, and `storetest.RunExternalSubjects` skips.
+Existing first-party behavior is unchanged. Host policies and mounting choices decide which services and routes
 are enabled. Construction does not start workers, migrate data or deploy indexes.
 
 Use `WithoutIndexProbe()` for the emulator, which has no index registry, or when

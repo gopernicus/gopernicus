@@ -26,6 +26,8 @@ const (
 	oauthClientsTable    = "oauth_clients"
 	oauthCodesTable      = "oauth_authorization_codes"
 	oauthHistoryTable    = "oauth_refresh_history"
+
+	externalSubjectsTable = "external_subjects"
 )
 
 // MigrationsFS holds the embedded schema (app-owned). cmd wires it into the

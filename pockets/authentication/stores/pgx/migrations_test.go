@@ -36,6 +36,7 @@ var canonicalMigrations = []string{
 	"0016_invitation_metadata.sql",
 	"0018_invitation_acceptance.sql",
 	"0019_oauth2_sessions.sql",
+	"0020_external_subjects.sql",
 }
 
 // expectedTables are every CREATE TABLE the canonical set must define.
@@ -54,6 +55,7 @@ var expectedTables = []string{
 	"contact_changes",
 	"authentication_grants",
 	"oauth_clients", "oauth_authorization_codes", "oauth_refresh_history",
+	"external_subjects",
 }
 
 // expectedIndexes are the auth-v3 indexes AV3-2.1 lands: the identifier claim /
@@ -62,6 +64,7 @@ var expectedTables = []string{
 // grant consume index.
 var expectedIndexes = []string{
 	"idx_sessions_user_created_at_id", "idx_oauth_refresh_history_session_id",
+	"idx_external_subjects_user_id",
 	"idx_invitations_kind_identifier",
 	"idx_user_identifiers_auth_claim",
 	"idx_user_identifiers_primary",

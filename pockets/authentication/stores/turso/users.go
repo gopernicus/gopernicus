@@ -112,6 +112,13 @@ func (s *UserStore) Provision(ctx context.Context, u user.User, ident identifier
 				return err
 			}
 		}
+		if credentials.External != nil {
+			subject := *credentials.External
+			subject.UserID = u.ID
+			if _, err := insertExternalSubject(ctx, tx, subject); err != nil {
+				return err
+			}
+		}
 		return nil
 	})
 	if err != nil {

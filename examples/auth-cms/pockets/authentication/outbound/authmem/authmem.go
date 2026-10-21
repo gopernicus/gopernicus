@@ -36,6 +36,7 @@ import (
 	authgrant "github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/authgrant"
 	challenge "github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/challenge"
 	contactchange "github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/contactchange"
+	externalsubject "github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/externalsubject"
 	identifier "github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/identifier"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/oauth2"
 	oauthaccount "github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/oauthaccount"
@@ -81,6 +82,9 @@ type data struct {
 	challenges     map[string]challenge.Challenge
 	authGrants     map[string]authgrant.Grant
 	contactChanges map[string]contactchange.PendingChange
+
+	// externalSubjects is the external identity mirror, by (provider, subject).
+	externalSubjects map[externalKey]externalsubject.ExternalSubject
 }
 
 // Store is an in-memory auth datastore. Its Repositories method yields the port
@@ -105,6 +109,8 @@ func New() *Store {
 		challenges:     map[string]challenge.Challenge{},
 		authGrants:     map[string]authgrant.Grant{},
 		contactChanges: map[string]contactchange.PendingChange{},
+
+		externalSubjects: map[externalKey]externalsubject.ExternalSubject{},
 	}}
 }
 
@@ -142,6 +148,8 @@ func (s *Store) Repositories() auth.Repositories {
 		// The atomic magic-link redemption (CHAU-6.1). Supplying it changes nothing
 		// until the host sets Config.PasswordlessProvisionOnRedeem.
 		Passwordless: passwordlessRepo{s.d},
+
+		ExternalSubjects: externalSubjectRepo{s.d},
 	}
 }
 
@@ -208,6 +216,11 @@ func (r userRepo) Provision(ctx context.Context, u user.User, ident identifier.I
 			}
 		}
 	}
+	if credentials.External != nil {
+		if _, taken := r.externalSubjects[externalKey{credentials.External.Provider, credentials.External.Subject}]; taken {
+			return user.User{}, identifier.Identifier{}, sdk.ErrAlreadyExists
+		}
+	}
 	ident.UserID = u.ID
 	r.users[u.ID] = u
 	r.identifiers[ident.ID] = ident
@@ -218,6 +231,11 @@ func (r userRepo) Provision(ctx context.Context, u user.User, ident identifier.I
 		a := *credentials.OAuth
 		a.UserID = u.ID
 		r.oauthAccounts = append(r.oauthAccounts, a)
+	}
+	if credentials.External != nil {
+		es := *credentials.External
+		es.UserID = u.ID
+		r.externalSubjects[externalKey{es.Provider, es.Subject}] = es
 	}
 	return u, ident, nil
 }

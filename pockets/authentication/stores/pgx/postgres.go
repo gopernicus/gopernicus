@@ -75,7 +75,12 @@ var legacyProbeTables = []string{
 }
 
 var oauthProbeTables = []string{oauthClientsTable, oauthCodesTable, oauthHistoryTable}
-var probeTables = append(append([]string{}, legacyProbeTables...), oauthProbeTables...)
+
+// externalProbeTables are the tables migration 0020 creates. They are probed
+// even for a host that wires no external provider, so a missed migration fails at
+// boot rather than on the first external request.
+var externalProbeTables = []string{externalSubjectsTable}
+var probeTables = append(append(append([]string{}, legacyProbeTables...), oauthProbeTables...), externalProbeTables...)
 
 // Repositories returns the auth repository set backed by db, WITHOUT touching
 // migrations — AFTER verifying every canonical table (see probeTables) exists
@@ -107,6 +112,9 @@ func Repositories(ctx context.Context, db *pgxdb.DB, opts ...Option) (auth.Repos
 	if err := s.probeTables(ctx, db, oauthProbeTables); err != nil {
 		return auth.Repositories{}, err
 	}
+	if err := s.probeTables(ctx, db, externalProbeTables); err != nil {
+		return auth.Repositories{}, err
+	}
 	oauth2Store := NewOAuth2Store(db, opts...)
 	return auth.Repositories{
 		OAuth2: oauth2Store, SessionManagement: oauth2Store,
@@ -134,7 +142,8 @@ func Repositories(ctx context.Context, db *pgxdb.DB, opts ...Option) (auth.Repos
 		// The atomic magic-link redemption is always supplied too. It changes nothing
 		// for a host that leaves Config.PasswordlessProvisionOnRedeem off — that flag
 		// is what routes redemption through it (CHAU-6.1).
-		Passwordless: NewPasswordlessStore(db, opts...),
+		Passwordless:     NewPasswordlessStore(db, opts...),
+		ExternalSubjects: NewExternalSubjectStore(db, opts...),
 	}, nil
 }
 
