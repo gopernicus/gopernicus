@@ -383,7 +383,7 @@ func TestCheckDirectRelation(t *testing.T) {
 		Principal: authmodel.PrincipalRef{Type: "user", ID: "u1"}, Permission: "delete", Resource: authmodel.Resource{Type: "post", ID: "p1"},
 	})
 	if err != nil || !res.Allowed {
-		t.Fatalf("owner should have delete: allowed=%v reason=%q err=%v", res.Allowed, res.Reason, err)
+		t.Fatalf("owner should have delete: allowed=%v err=%v", res.Allowed, err)
 	}
 
 	deny, _ := svc.Check(context.Background(), authmodel.CheckRequest{

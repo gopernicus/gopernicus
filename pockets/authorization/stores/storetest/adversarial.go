@@ -89,7 +89,7 @@ func mustView(t *testing.T, svc authorization.Components, subjectType, subjectID
 		t.Fatalf("Check: %v", err)
 	}
 	if res.Allowed != want {
-		t.Fatalf("view(%s:%s, doc:%s) = %v, want %v (reason %q)", subjectType, subjectID, docID, res.Allowed, want, res.Reason)
+		t.Fatalf("view(%s:%s, doc:%s) = %v, want %v", subjectType, subjectID, docID, res.Allowed, want)
 	}
 }
 

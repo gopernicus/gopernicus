@@ -4,6 +4,7 @@ import "net/http"
 
 type requireConfig struct {
 	deniedHandler http.Handler
+	loweredPolicy bool
 }
 
 // RequireOption configures one mounted policy. Options apply in order; nil
@@ -20,4 +21,13 @@ type RequireOption func(*requireConfig)
 // response per policy; the handler does not receive branch-specific decisions.
 func WithDeniedHandler(handler http.Handler) RequireOption {
 	return func(cfg *requireConfig) { cfg.deniedHandler = handler }
+}
+
+// WithLoweredPolicy admits a decision service that reports LoweredPolicy() ==
+// true (decisions.NewLoweredEvaluator). Require refuses one without this
+// option: a lowered policy is a sequence of protocol calls, not one snapshot,
+// so separate branches may observe different states. A host decorator over a
+// lowered evaluator must forward LoweredPolicy, or Require treats it as native.
+func WithLoweredPolicy() RequireOption {
+	return func(cfg *requireConfig) { cfg.loweredPolicy = true }
 }

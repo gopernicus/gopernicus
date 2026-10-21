@@ -32,7 +32,7 @@ func (s *Service) EvaluateResolved(ctx context.Context, principal authmodel.Prin
 }
 
 func (s *Service) evaluateResolved(ctx context.Context, principal authmodel.PrincipalRef, expr Expression, resolve ResourceResolver) (authmodel.CheckResult, error) {
-	if err := principal.Validate(); err != nil {
+	if err := authmodel.ValidatePrincipal(principal); err != nil {
 		return authmodel.CheckResult{}, err
 	}
 	hasSlots, err := s.validateAdhocExpression(expr)
@@ -67,7 +67,7 @@ func (s *Service) EvaluateExpressionWith(ctx context.Context, reader tuples.Read
 }
 
 func (s *Service) evaluateExpressionWith(ctx context.Context, reader tuples.Reader, principal authmodel.PrincipalRef, expr Expression) (authmodel.CheckResult, error) {
-	if err := principal.Validate(); err != nil {
+	if err := authmodel.ValidatePrincipal(principal); err != nil {
 		return authmodel.CheckResult{}, err
 	}
 	hasSlots, err := s.validateAdhocExpression(expr)

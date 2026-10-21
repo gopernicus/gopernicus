@@ -72,4 +72,5 @@ const (
 var ErrNoDecisionKind = errors.New("authorization: no decision service is configured")
 var ErrInfrastructure = errors.New("authorization: infrastructure failure")
 
-func PrincipalFrom(p sdk.Principal) PrincipalRef { return PrincipalRef{Type: p.Type, ID: p.ID} }
+// PrincipalFrom is the identity: PrincipalRef is sdk.Principal.
+func PrincipalFrom(p sdk.Principal) PrincipalRef { return p }

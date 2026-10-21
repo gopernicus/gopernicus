@@ -115,7 +115,7 @@ func filterPageOperation[T any](ctx context.Context, s *Service, req FilterPageR
 	if s == nil {
 		return FilteredPage[T]{}, authmodel.ErrNoDecisionKind
 	}
-	if err := req.Principal.Validate(); err != nil {
+	if err := authmodel.ValidatePrincipal(req.Principal); err != nil {
 		return FilteredPage[T]{}, err
 	}
 	if err := tuples.ValidateRefField("permission", req.Permission); err != nil {

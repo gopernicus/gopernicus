@@ -11,6 +11,7 @@ import (
 	"github.com/gopernicus/gopernicus/pockets/authorization"
 	authmodel "github.com/gopernicus/gopernicus/pockets/authorization/logic/model"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/relationships"
+	sdkauthorization "github.com/gopernicus/gopernicus/sdk/capabilities/authorization"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/transaction"
 	"github.com/gopernicus/gopernicus/sdk/pkg/list"
 )
@@ -61,9 +62,9 @@ func (r interleavedTupleReader) Lookup(ctx context.Context, q tuples.Query) ([]t
 }
 
 type permissionChecks interface {
-	Check(context.Context, authmodel.CheckRequest) (authmodel.CheckResult, error)
+	Check(context.Context, authmodel.CheckRequest) (sdkauthorization.Decision, error)
 	CheckExplain(context.Context, authmodel.CheckRequest) (authmodel.CheckResult, authmodel.Explanation, error)
-	CheckBatch(context.Context, []authmodel.CheckRequest) ([]authmodel.CheckResult, error)
+	CheckBatch(context.Context, []authmodel.CheckRequest) ([]sdkauthorization.Decision, error)
 	FilterAuthorized(context.Context, authmodel.PrincipalRef, string, string, []string) ([]string, error)
 }
 

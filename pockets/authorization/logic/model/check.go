@@ -6,39 +6,44 @@ import (
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuples"
 
 	"github.com/gopernicus/gopernicus/sdk"
+	sdkauthorization "github.com/gopernicus/gopernicus/sdk/capabilities/authorization"
 )
 
 // ErrInvalidCursor reports a LookupRequest.After the decision surface refuses:
 // malformed base64/JSON, an unknown cursor version, a fingerprint bound to a
 // different query (another principal, permission, resource type or model), or a
-// structurally invalid resource id inside it. It wraps
-// sdk.ErrInvalidInput (HTTP 400) — a client presenting it restarts the
-// enumeration from page one; it is never an evaluation-budget outcome.
-var ErrInvalidCursor = fmt.Errorf("authorization: invalid lookup cursor: %w", sdk.ErrInvalidInput)
+// structurally invalid resource id inside it. It IS the sdk sentinel
+// sdkauthorization.ErrInvalidCursor and wraps sdk.ErrInvalidInput (HTTP 400) — a
+// client presenting it restarts the enumeration from page one; it is never an
+// evaluation-budget outcome.
+var ErrInvalidCursor = sdkauthorization.ErrInvalidCursor
 
 // =============================================================================
 // Core check types
 // =============================================================================
 
 // Resource is what is being accessed.
-type Resource struct {
-	Type string // "post", "org", "folder"
-	ID   string
-}
+//
+// Deprecated: Resource is sdkauthorization.Resource
+// (sdk/capabilities/authorization); use that name. The alias is removed in a
+// later minor.
+type Resource = sdkauthorization.Resource
 
 // CheckRequest is a permission-check query. Principal is concrete: a decision
 // request never carries a userset relation.
-type CheckRequest struct {
-	Principal  PrincipalRef
-	Permission string // "view", "edit", "delete"
-	Resource   Resource
-}
+//
+// Deprecated: CheckRequest is sdkauthorization.CheckRequest; use that name. Its
+// Validate method applies the protocol's identifier grammar; the decision
+// service applies the pocket's opaque-reference grammar (ValidateCheckRequest).
+// The alias is removed in a later minor.
+type CheckRequest = sdkauthorization.CheckRequest
 
-// Validate reports whether the request is structurally well formed: the
-// principal, the permission, and the resource type/id are all present and well
-// formed. It applies no schema knowledge.
-func (r CheckRequest) Validate() error {
-	if err := r.Principal.Validate(); err != nil {
+// ValidateCheckRequest reports whether a decision request is structurally well
+// formed under the pocket's opaque-reference grammar (tuples.ValidateRefField):
+// the principal, the permission, and the resource type/id are all present and
+// well formed. It applies no schema knowledge.
+func ValidateCheckRequest(r CheckRequest) error {
+	if err := ValidatePrincipal(r.Principal); err != nil {
 		return err
 	}
 	if err := tuples.ValidateRefField("permission", r.Permission); err != nil {
@@ -89,22 +94,20 @@ type CheckResult struct {
 //     It is opaque: the decision surface decodes it against the query it is
 //     bound to (principal, permission, resource type and model digest) and
 //     refuses a foreign or stale one with ErrInvalidCursor. A
-//     non-empty After is validated by that decode, not by Validate below.
+//     non-empty After is validated by that decode, not by ValidateLookupRequest.
 //   - Unrestricted passes through untouched and IGNORES both fields: there are
 //     no IDs to page, and the host must skip ID filtering entirely.
-type LookupRequest struct {
-	Principal    PrincipalRef
-	Permission   string
-	ResourceType string
-	Limit        int
-	After        string
-}
+//
+// Deprecated: LookupRequest is sdkauthorization.LookupRequest; use that name.
+// The alias is removed in a later minor.
+type LookupRequest = sdkauthorization.LookupRequest
 
-// Validate reports whether the request is structurally well formed: the
-// principal, the permission, and the resource type are all present and well
-// formed, and Limit is not negative. It applies no schema knowledge.
-func (r LookupRequest) Validate() error {
-	if err := r.Principal.Validate(); err != nil {
+// ValidateLookupRequest reports whether a lookup is structurally well formed
+// under the pocket's opaque-reference grammar: the principal, the permission,
+// and the resource type are all present and well formed, and Limit is not
+// negative. It applies no schema knowledge.
+func ValidateLookupRequest(r LookupRequest) error {
+	if err := ValidatePrincipal(r.Principal); err != nil {
 		return err
 	}
 	if err := tuples.ValidateRefField("permission", r.Permission); err != nil {

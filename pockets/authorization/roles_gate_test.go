@@ -284,7 +284,7 @@ func TestStewardGrantsOnlyWhatTheModelNames(t *testing.T) {
 
 	// Every permission that still names steward is unaffected.
 	view := authmodel.CheckRequest{Principal: boss, Permission: "view", Resource: authmodel.Resource{Type: "organization", ID: "org-1"}}
-	if res, err := svc.Decisions.Check(ctx, view); err != nil || !res.Allowed || res.ReasonCode != authmodel.ReasonGranted {
+	if res, _, err := svc.Decisions.CheckExplain(ctx, view); err != nil || !res.Allowed || res.ReasonCode != authmodel.ReasonGranted {
 		t.Fatalf("view under the narrowed model: res=%+v err=%v, want allowed via role:steward@global", res, err)
 	}
 	if look, err := svc.Decisions.LookupAllResourceIDs(ctx, boss, "view", "organization"); err != nil || !look.Unrestricted {

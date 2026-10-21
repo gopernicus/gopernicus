@@ -27,7 +27,7 @@ func TestPrincipalRefInvalid(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			err := tc.ref.Validate()
+			err := ValidatePrincipal(tc.ref)
 			if tc.wantErr {
 				if !errors.Is(err, sdk.ErrInvalidInput) {
 					t.Fatalf("Validate(%+v) = %v, want sdk.ErrInvalidInput", tc.ref, err)

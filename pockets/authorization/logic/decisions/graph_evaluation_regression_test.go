@@ -220,7 +220,7 @@ func TestDirectBatchSkipsResolvedCandidatesAndBranches(t *testing.T) {
 	request := func(id string) authmodel.CheckRequest {
 		return authmodel.CheckRequest{Principal: setPrincipal, Permission: "view", Resource: authmodel.Resource{Type: "doc", ID: id}}
 	}
-	results, err := svc.CheckBatch(subjectFirst(context.Background()), []authmodel.CheckRequest{request("granted"), request("granted")})
+	results, err := svc.checkBatchOperation(subjectFirst(context.Background()), []authmodel.CheckRequest{request("granted"), request("granted")})
 	if err != nil || len(results) != 2 || !results[0].Allowed || results[0].Reason != "direct:a" || len(store.calls) != 0 {
 		t.Fatalf("resolved batch=%v error=%v calls=%v", results, err, store.calls)
 	}

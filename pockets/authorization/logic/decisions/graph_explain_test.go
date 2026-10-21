@@ -18,14 +18,14 @@ func TestReasonCodeStableGrantedDenied(t *testing.T) {
 		ResourceType: "post", ResourceID: "p1", Relation: "owner", SubjectType: "user", SubjectID: "u1",
 	})
 
-	grant, err := svc.Check(context.Background(), authmodel.CheckRequest{
+	grant, err := svc.checkRequest(context.Background(), authmodel.CheckRequest{
 		Principal: authmodel.PrincipalRef{Type: "user", ID: "u1"}, Permission: "delete", Resource: authmodel.Resource{Type: "post", ID: "p1"},
 	})
 	if err != nil || !grant.Allowed || grant.ReasonCode != authmodel.ReasonGranted {
 		t.Fatalf("granted decision: allowed=%v code=%q err=%v", grant.Allowed, grant.ReasonCode, err)
 	}
 
-	deny, err := svc.Check(context.Background(), authmodel.CheckRequest{
+	deny, err := svc.checkRequest(context.Background(), authmodel.CheckRequest{
 		Principal: authmodel.PrincipalRef{Type: "user", ID: "u2"}, Permission: "delete", Resource: authmodel.Resource{Type: "post", ID: "p1"},
 	})
 	if err != nil || deny.Allowed || deny.ReasonCode != authmodel.ReasonDenied {
@@ -33,7 +33,7 @@ func TestReasonCodeStableGrantedDenied(t *testing.T) {
 	}
 
 	// A permission with no rules on the type is still a stable deny.
-	none, err := svc.Check(context.Background(), authmodel.CheckRequest{
+	none, err := svc.checkRequest(context.Background(), authmodel.CheckRequest{
 		Principal: authmodel.PrincipalRef{Type: "user", ID: "u1"}, Permission: "nonexistent", Resource: authmodel.Resource{Type: "post", ID: "p1"},
 	})
 	if err != nil || none.Allowed || none.ReasonCode != authmodel.ReasonDenied {
@@ -62,7 +62,7 @@ func TestExplainCannotChangeDecision(t *testing.T) {
 		{"deny", authmodel.CheckRequest{Principal: authmodel.PrincipalRef{Type: "user", ID: "u3"}, Permission: "view", Resource: authmodel.Resource{Type: "post", ID: "p2"}}},
 	}
 	for _, tc := range cases {
-		plain, perr := svc.Check(context.Background(), tc.req)
+		plain, perr := svc.checkRequest(context.Background(), tc.req)
 		expl, expExpl, eerr := svc.CheckExplain(context.Background(), tc.req)
 		if perr != nil || eerr != nil {
 			t.Fatalf("%s: Check err=%v CheckExplain err=%v", tc.name, perr, eerr)

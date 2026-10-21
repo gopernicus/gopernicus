@@ -62,3 +62,12 @@ func TestLookupEquivalence(t *testing.T) {
 		}
 	})
 }
+
+// TestAuthorizer runs the sdk/capabilities/authorization conformance suite
+// against the engine adapter over the memstore: the hermetic proof that the
+// pocket implements the protocol.
+func TestAuthorizer(t *testing.T) {
+	storetest.RunAuthorizer(t, func(t *testing.T) authorization.Repositories {
+		return authorization.Repositories{Tuples: memory.New().Tuples()}
+	})
+}

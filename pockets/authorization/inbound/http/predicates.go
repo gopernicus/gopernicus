@@ -32,7 +32,10 @@ type guardTarget struct {
 	resourceType string
 	fixed        *authmodel.Resource
 	resolve      ResourceResolver
-	err          error
+	// pure marks a resolver that reads only the request (Path), which a lowered
+	// evaluator may run before its predicate is reached.
+	pure bool
+	err  error
 }
 
 // Predicate describes a deferred authorization check. All and Any compose
@@ -75,6 +78,7 @@ func Path(resourceType, parameter string) Target {
 	if err := tuples.ValidateRefField("path parameter", parameter); err != nil {
 		target.value.err = err
 	}
+	target.value.pure = true
 	return target
 }
 
@@ -175,6 +179,9 @@ func lowerPredicate(predicate Predicate) (decisions.Expression, map[string]Resou
 			key = "resource_" + strconv.Itoa(len(slots))
 			slots[target] = key
 			resolvers[key] = target.resolve
+		}
+		if target.pure {
+			return decisions.BindPureResource(target.resourceType, key, expression), nil
 		}
 		return decisions.BindResource(target.resourceType, key, expression), nil
 	}

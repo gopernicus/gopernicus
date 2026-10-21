@@ -291,7 +291,7 @@ func assertCheckLookupParity(t *testing.T, ctx context.Context, svc authorizatio
 			t.Fatalf("Check(lookup id %s): %v", id, err)
 		}
 		if !res.Allowed {
-			t.Fatalf("LookupAllResourceIDs returned %s:%s on %s:%s but Check denies it (%s)", principal.Type, principal.ID, resourceType, id, res.Reason)
+			t.Fatalf("LookupAllResourceIDs returned %s:%s on %s:%s but Check denies it", principal.Type, principal.ID, resourceType, id)
 		}
 	}
 }

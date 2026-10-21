@@ -87,7 +87,7 @@ func TestHierarchySelfReferentialThrough(t *testing.T) {
 		t.Fatalf("Check: %v", err)
 	}
 	if !res.Allowed {
-		t.Fatalf("Check view on leaf: want allowed, got denied (%s)", res.Reason)
+		t.Fatalf("Check view on leaf: want allowed, got denied")
 	}
 
 	look, err := svc.Decisions.LookupAllResourceIDs(ctx, user, "view", "space")
@@ -152,7 +152,7 @@ func TestHierarchyLookupOrgSeededRootExpandsDescendants(t *testing.T) {
 		t.Fatalf("Check: %v", err)
 	}
 	if !res.Allowed {
-		t.Fatalf("Check view on leaf: want allowed (org-derived), got denied (%s)", res.Reason)
+		t.Fatalf("Check view on leaf: want allowed (org-derived), got denied")
 	}
 
 	look, err := svc.Decisions.LookupAllResourceIDs(ctx, user, "view", "space")
@@ -205,7 +205,7 @@ func TestHierarchyLookupMultipleSelfRelationsFixpoint(t *testing.T) {
 		t.Fatalf("Check: %v", err)
 	}
 	if !res.Allowed {
-		t.Fatalf("Check view on b: want allowed (cross-relation chain), got denied (%s)", res.Reason)
+		t.Fatalf("Check view on b: want allowed (cross-relation chain), got denied")
 	}
 
 	look, err := svc.Decisions.LookupAllResourceIDs(ctx, user, "view", "doc")

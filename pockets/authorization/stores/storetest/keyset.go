@@ -304,7 +304,7 @@ func assertPagedParityAt(t *testing.T, svc authorization.Components, principal a
 			t.Fatalf("Check(paged id %s): %v", id, err)
 		}
 		if !res.Allowed {
-			t.Fatalf("the paged walk yielded %s:%s on %s:%s but Check denies it (%s)", principal.Type, principal.ID, resourceType, id, res.Reason)
+			t.Fatalf("the paged walk yielded %s:%s on %s:%s but Check denies it", principal.Type, principal.ID, resourceType, id)
 		}
 	}
 	return plain.IDs

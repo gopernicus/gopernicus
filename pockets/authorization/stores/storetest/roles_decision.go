@@ -80,7 +80,8 @@ func grantRole(t *testing.T, repos Repositories, mutator *mutations.Service, sub
 // projectCheck runs one decision on the fixture's project type.
 func projectCheck(t *testing.T, svc authorization.Components, subjectID, permission, projectID string) authmodel.CheckResult {
 	t.Helper()
-	res, err := svc.Decisions.Check(context.Background(), authmodel.CheckRequest{
+	// CheckExplain is the reason-bearing twin of Check.
+	res, _, err := svc.Decisions.CheckExplain(context.Background(), authmodel.CheckRequest{
 		Principal:  authmodel.PrincipalRef{Type: "user", ID: subjectID},
 		Permission: permission,
 		Resource:   authmodel.Resource{Type: "project", ID: projectID},

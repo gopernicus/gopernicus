@@ -8,19 +8,25 @@ import (
 	authmodel "github.com/gopernicus/gopernicus/pockets/authorization/logic/model"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuples"
 	"github.com/gopernicus/gopernicus/sdk"
+	sdkauthorization "github.com/gopernicus/gopernicus/sdk/capabilities/authorization"
 )
 
 // Check evaluates a named permission in one coherent canonical tuple view.
 // The compiled expression defines exact membership, graph checks and composition.
-func (s *Service) Check(ctx context.Context, req authmodel.CheckRequest) (authmodel.CheckResult, error) {
+// An undeclared permission is a deny with a nil error. The decision's reasons
+// reach the decision log and CheckExplain, never the result.
+func (s *Service) Check(ctx context.Context, req authmodel.CheckRequest) (sdkauthorization.Decision, error) {
 	log := s.startDecisionLog(ctx, false)
 	result, err := s.checkRequest(ctx, req)
 	log.check(ctx, "Check", req, result, err)
-	return result, err
+	if err != nil {
+		return sdkauthorization.Decision{}, err
+	}
+	return sdkauthorization.Decision{Allowed: result.Allowed}, nil
 }
 
 func (s *Service) checkRequest(ctx context.Context, req authmodel.CheckRequest) (authmodel.CheckResult, error) {
-	if err := req.Validate(); err != nil {
+	if err := authmodel.ValidateCheckRequest(req); err != nil {
 		return authmodel.CheckResult{}, err
 	}
 	if err := ctx.Err(); err != nil {
@@ -72,7 +78,7 @@ func (s *Service) checkWith(ctx context.Context, reader tuples.Reader, req authm
 // trace collector — there is deliberately no second evaluator, so an explain
 // cannot reach a different decision or spend more work than the plain Check.
 func (s *Service) check(ctx context.Context, req authmodel.CheckRequest, b *budget) (authmodel.CheckResult, error) {
-	if err := req.Validate(); err != nil {
+	if err := authmodel.ValidateCheckRequest(req); err != nil {
 		return authmodel.CheckResult{}, err
 	}
 	if err := ctx.Err(); err != nil {
@@ -90,11 +96,26 @@ func (s *Service) check(ctx context.Context, req authmodel.CheckRequest, b *budg
 // Readers with RelationSetReader batch pending Through and direct reads across
 // the ordinary checks. Other readers retain sequential, memoized evaluation.
 // Canonical tuple snapshots keep all requests in one operation view.
-func (s *Service) CheckBatch(ctx context.Context, reqs []authmodel.CheckRequest) ([]authmodel.CheckResult, error) {
+// Results are in request order; any failed request fails the call.
+func (s *Service) CheckBatch(ctx context.Context, reqs []authmodel.CheckRequest) ([]sdkauthorization.Decision, error) {
 	log := s.startDecisionLog(ctx, false)
 	result, err := s.checkBatchOperation(ctx, reqs)
 	log.batch(ctx, "CheckBatch", len(reqs), result, err)
-	return result, err
+	if err != nil {
+		return nil, err
+	}
+	return decisionsOf(result), nil
+}
+
+func decisionsOf(results []authmodel.CheckResult) []sdkauthorization.Decision {
+	if results == nil {
+		return nil
+	}
+	out := make([]sdkauthorization.Decision, len(results))
+	for i, r := range results {
+		out[i] = sdkauthorization.Decision{Allowed: r.Allowed}
+	}
+	return out
 }
 
 func (s *Service) checkBatchOperation(ctx context.Context, reqs []authmodel.CheckRequest) ([]authmodel.CheckResult, error) {
@@ -106,7 +127,7 @@ func (s *Service) checkBatchOperation(ctx context.Context, reqs []authmodel.Chec
 	}
 	needsReads := false
 	for _, req := range reqs {
-		if err := req.Validate(); err != nil {
+		if err := authmodel.ValidateCheckRequest(req); err != nil {
 			return nil, err
 		}
 		needsReads = needsReads || s.DeclaresPermission(req.Resource.Type, req.Permission)
@@ -160,7 +181,7 @@ func (s *Service) checkBatch(ctx context.Context, reader CheckReader, reqs []aut
 	}
 
 	for i := range reqs {
-		if err := reqs[i].Validate(); err != nil {
+		if err := authmodel.ValidateCheckRequest(reqs[i]); err != nil {
 			return nil, err
 		}
 	}

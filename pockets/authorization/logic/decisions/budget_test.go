@@ -13,6 +13,7 @@ import (
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/relationships"
 	"github.com/gopernicus/gopernicus/pockets/authorization/stores/memory"
 	"github.com/gopernicus/gopernicus/sdk"
+	sdkauthorization "github.com/gopernicus/gopernicus/sdk/capabilities/authorization"
 )
 
 // budgetService builds a memstore-backed Service over model with the given
@@ -46,7 +47,7 @@ func folderHierarchy() decisions.Model {
 	}})
 }
 
-func checkFolder(t *testing.T, svc authorization.Components, ctx context.Context, id string) (authmodel.CheckResult, error) {
+func checkFolder(t *testing.T, svc authorization.Components, ctx context.Context, id string) (sdkauthorization.Decision, error) {
 	t.Helper()
 	return svc.Decisions.Check(ctx, authmodel.CheckRequest{
 		Principal:  authmodel.PrincipalRef{Type: "user", ID: "u1"},
@@ -78,7 +79,7 @@ func TestDepthBoundaryExactlyThroughDepth(t *testing.T) {
 		t.Fatalf("MaxThroughDepth=2 Check: %v", err)
 	}
 	if !res.Allowed {
-		t.Fatalf("MaxThroughDepth=2: want allowed at exactly the depth boundary, got deny (%s)", res.Reason)
+		t.Fatalf("MaxThroughDepth=2: want allowed at exactly the depth boundary, got deny")
 	}
 
 	// One hop too shallow: MaxThroughDepth=1 must return the indeterminate limit,
@@ -155,7 +156,7 @@ func TestDiamondGraphStateDedup(t *testing.T) {
 		{ResourceType: "node", ResourceID: "b", Relation: "left", SubjectType: "node", SubjectID: "z"},
 	}
 
-	check := func(svc authorization.Components) (authmodel.CheckResult, error) {
+	check := func(svc authorization.Components) (sdkauthorization.Decision, error) {
 		return svc.Decisions.Check(ctx, authmodel.CheckRequest{
 			Principal:  authmodel.PrincipalRef{Type: "user", ID: "u1"},
 			Permission: "view",

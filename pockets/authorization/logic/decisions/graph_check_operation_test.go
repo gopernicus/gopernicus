@@ -22,7 +22,7 @@ func TestCheckSnapshotCompletionFailureDiscardsResults(t *testing.T) {
 	operations := map[string]func(context.Context, *Service) (bool, error){
 		"Check": func(ctx context.Context, svc *Service) (bool, error) {
 			result, err := svc.Check(ctx, req)
-			return result != (authmodel.CheckResult{}), err
+			return result.Allowed, err
 		},
 		"CheckExplain": func(ctx context.Context, svc *Service) (bool, error) {
 			result, trace, err := svc.CheckExplain(ctx, req)

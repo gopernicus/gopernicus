@@ -7,6 +7,7 @@ import (
 
 	"github.com/gopernicus/gopernicus/pockets"
 	authorizationhttp "github.com/gopernicus/gopernicus/pockets/authorization/inbound/http"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/authorizer"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/decisions"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/mutations"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/relationships"
@@ -18,8 +19,13 @@ import (
 // Components contains independently usable decision, read and data-write services.
 // Inbound access points authorize calls before invoking data writers.
 type Components struct {
-	TupleCache         *tuplecache.TupleCache
-	Decisions          *decisions.Service
+	TupleCache *tuplecache.TupleCache
+	Decisions  *decisions.Service
+	// Authorizer serves sdk/capabilities/authorization over Decisions: the
+	// protocol's implementation of record. It has no global resource; a host
+	// that maps global roles builds its own with authorizer.New and
+	// authorizer.WithGlobalResource.
+	Authorizer         *authorizer.Engine
 	Relationships      *relationships.Service
 	Roles              *roles.Service
 	Mutations          *mutations.Service
@@ -72,6 +78,10 @@ func New(repos Repositories, opts ...Option) (Components, error) {
 		return Components{}, err
 	}
 	comps.TupleCache = comps.Decisions.TupleCache()
+	comps.Authorizer, err = authorizer.New(comps.Decisions)
+	if err != nil {
+		return Components{}, err
+	}
 	roleOptions := []roles.Option{}
 	if comps.TupleCache != nil {
 		roleOptions = append(roleOptions, roles.WithSnapshots(comps.TupleCache))

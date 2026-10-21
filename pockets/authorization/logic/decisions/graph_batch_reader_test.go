@@ -119,7 +119,7 @@ func assertBatchParity(t *testing.T, svc *Service, reqs []authmodel.CheckRequest
 	want := make([]authmodel.CheckResult, len(reqs))
 	var wantErr error
 	for i, req := range reqs {
-		res, err := svc.Check(ctx, req)
+		res, err := svc.checkRequest(ctx, req)
 		if err != nil {
 			wantErr = err
 			break
@@ -127,7 +127,7 @@ func assertBatchParity(t *testing.T, svc *Service, reqs []authmodel.CheckRequest
 		want[i] = res
 	}
 
-	got, err := svc.CheckBatch(ctx, reqs)
+	got, err := svc.checkBatchOperation(ctx, reqs)
 	if wantErr != nil {
 		if !errors.Is(err, wantErr) {
 			t.Fatalf("CheckBatch err = %v, want sequential Check err %v", err, wantErr)

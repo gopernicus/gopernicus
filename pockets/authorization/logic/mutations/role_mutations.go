@@ -43,7 +43,7 @@ func roleCommandTarget(p authmodel.PrincipalRef, scope tuples.Scope) (Target, er
 	if err := scope.Validate(); err != nil {
 		return Target{}, err
 	}
-	if err := p.Validate(); err != nil {
+	if err := authmodel.ValidatePrincipal(p); err != nil {
 		return Target{}, err
 	}
 	if scope.Kind == tuples.GlobalScope {

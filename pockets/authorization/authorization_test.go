@@ -316,9 +316,9 @@ func TestModelFreeExactExpressionsAndUnknownPermissions(t *testing.T) {
 	if err != nil || !got.Allowed {
 		t.Fatalf("model-free exact check: %+v, %v", got, err)
 	}
-	got, err = comps.Decisions.Check(ctx, projectRequest("u1", "audit", "p1"))
-	if err != nil || got.Allowed {
-		t.Fatalf("undeclared permission: %+v, %v", got, err)
+	decision, err := comps.Decisions.Check(ctx, projectRequest("u1", "audit", "p1"))
+	if err != nil || decision.Allowed {
+		t.Fatalf("undeclared permission: %+v, %v", decision, err)
 	}
 	batch, err := comps.Decisions.CheckBatch(ctx, []authmodel.CheckRequest{projectRequest("u1", "audit", "p1")})
 	if err != nil || len(batch) != 1 || batch[0].Allowed {
@@ -453,15 +453,15 @@ func TestRolesOnlyWithModelDecides(t *testing.T) {
 	svc := comps
 	ctx := context.Background()
 
-	res, err := svc.Decisions.Check(ctx, projectRequest("u1", "audit", "p1"))
+	res, _, err := svc.Decisions.CheckExplain(ctx, projectRequest("u1", "audit", "p1"))
 	if err != nil || !res.Allowed || res.ReasonCode != authmodel.ReasonGranted {
 		t.Fatalf("scoped role holder: got %+v err=%v", res, err)
 	}
-	res, err = svc.Decisions.Check(ctx, projectRequest("u1", "audit", "p2"))
+	res, _, err = svc.Decisions.CheckExplain(ctx, projectRequest("u1", "audit", "p2"))
 	if err != nil || res.Allowed || res.ReasonCode != authmodel.ReasonDenied {
 		t.Fatalf("another project: got %+v err=%v", res, err)
 	}
-	res, err = svc.Decisions.Check(ctx, projectRequest("u1", "publish", "p1"))
+	res, _, err = svc.Decisions.CheckExplain(ctx, projectRequest("u1", "publish", "p1"))
 	if err != nil || res.Allowed || res.Reason != "no rules defined" {
 		t.Fatalf("undeclared pair: got %+v err=%v", res, err)
 	}

@@ -14,6 +14,7 @@ import (
 	authmodel "github.com/gopernicus/gopernicus/pockets/authorization/logic/model"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuples"
 	"github.com/gopernicus/gopernicus/sdk"
+	sdkauthorization "github.com/gopernicus/gopernicus/sdk/capabilities/authorization"
 )
 
 type loggedDecision struct {
@@ -92,6 +93,19 @@ func TestDecisionLoggingPublicOperations(t *testing.T) {
 		}
 		return err
 	}
+	allowed := func(result sdkauthorization.Decision, err error) error {
+		return allow(authmodel.CheckResult{Allowed: result.Allowed}, err)
+	}
+	allowedBatch := func(results []sdkauthorization.Decision, err error) error {
+		converted := make([]authmodel.CheckResult, len(results))
+		for i, r := range results {
+			converted[i] = authmodel.CheckResult{Allowed: r.Allowed}
+		}
+		if results == nil {
+			converted = nil
+		}
+		return batch(converted, err)
+	}
 	lookup := func(result authmodel.LookupResult, err error) error {
 		if err == nil && !reflect.DeepEqual(result.IDs, []string{"a"}) {
 			return errors.New("wrong lookup IDs")
@@ -103,13 +117,13 @@ func TestDecisionLoggingPublicOperations(t *testing.T) {
 		bound         bool
 		call          func(context.Context, *Service, *tupleFixture) error
 	}{
-		{"Check", "allowed", false, func(ctx context.Context, s *Service, _ *tupleFixture) error { return allow(s.Check(ctx, req)) }},
+		{"Check", "allowed", false, func(ctx context.Context, s *Service, _ *tupleFixture) error { return allowed(s.Check(ctx, req)) }},
 		{"EvaluateWith", "allowed", true, func(ctx context.Context, s *Service, f *tupleFixture) error {
 			return allow(s.EvaluateWith(ctx, f, req))
 		}},
 		{"CheckWith", "allowed", true, func(ctx context.Context, s *Service, f *tupleFixture) error { return allow(s.CheckWith(ctx, f, req)) }},
 		{"CheckBatch", "complete", false, func(ctx context.Context, s *Service, _ *tupleFixture) error {
-			return batch(s.CheckBatch(ctx, []authmodel.CheckRequest{req, missing}))
+			return allowedBatch(s.CheckBatch(ctx, []authmodel.CheckRequest{req, missing}))
 		}},
 		{"CheckBatchWith", "complete", true, func(ctx context.Context, s *Service, f *tupleFixture) error {
 			return batch(s.CheckBatchWith(ctx, f, []authmodel.CheckRequest{req, missing}))

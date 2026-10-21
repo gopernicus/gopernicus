@@ -11,6 +11,7 @@ import (
 	"github.com/gopernicus/gopernicus/pockets/authorization"
 	authmodel "github.com/gopernicus/gopernicus/pockets/authorization/logic/model"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/relationships"
+	sdkauthorization "github.com/gopernicus/gopernicus/sdk/capabilities/authorization"
 )
 
 // budgetSchema is the layer-(b) traversal schema for the bounded-evaluation
@@ -71,7 +72,7 @@ func runBudget(t *testing.T, newRepos func(t *testing.T) Repositories) {
 			{ResourceType: "folder", ResourceID: "f1", Relation: "parent", SubjectType: "folder", SubjectID: "f0"},
 			{ResourceType: "folder", ResourceID: "f0", Relation: "viewer", SubjectType: "user", SubjectID: "u1"},
 		}
-		check := func(svc authorization.Components) (authmodel.CheckResult, error) {
+		check := func(svc authorization.Components) (sdkauthorization.Decision, error) {
 			return svc.Decisions.Check(ctx, authmodel.CheckRequest{
 				Principal:  authmodel.PrincipalRef{Type: "user", ID: "u1"},
 				Permission: "view",
