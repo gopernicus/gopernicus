@@ -75,23 +75,23 @@ func TestServiceExternalLivenessIsCheckedBeforeKindPass(t *testing.T) {
 	provider.identities[raw] = sdkauth.Identity{Issuer: extIssuerA, Subject: "s1", AuthenticatedAt: time.Now().Add(-time.Hour)}
 	revocation.set("s1", sdkauth.RevocationFacts{ValidAfter: time.Now()}, nil)
 
-	ctx, ok := svc.Authenticate(context.Background(), CredentialExternalToken, TransportHeader, raw)
+	ctx, ok := authOK(svc.Authenticate(context.Background(), CredentialExternalToken, TransportHeader, raw))
 	if !ok {
 		t.Fatal("hybrid Service rejected a wired external token")
 	}
 	if p, _ := svc.CurrentPrincipal(ctx); p.ID != "u1" {
 		t.Fatalf("principal = %+v, want the mirrored user", p)
 	}
-	if _, ok := svc.RequireLive(ctx); ok {
+	if _, ok := authOK(svc.RequireLive(ctx, LivenessLive, true)); ok {
 		t.Fatal("Live() passed a revoked external token")
 	}
-	if _, err := svc.requireLive(ctx, LivenessOnMutation, false); err != nil {
+	if _, err := svc.RequireLive(ctx, LivenessOnMutation, false); err != nil {
 		t.Fatalf("safe read under the default tier re-checked: %v", err)
 	}
-	if _, err := svc.requireLive(ctx, LivenessStateless, true); err != nil {
+	if _, err := svc.RequireLive(ctx, LivenessStateless, true); err != nil {
 		t.Fatalf("Stateless re-checked: %v", err)
 	}
-	if _, err := svc.requireLive(ctx, LivenessOnMutation, true); !errors.Is(err, ErrRevoked) {
+	if _, err := svc.RequireLive(ctx, LivenessOnMutation, true); !errors.Is(err, ErrRevoked) {
 		t.Fatalf("mutation under the default tier = %v, want revoked", err)
 	}
 }
@@ -102,15 +102,15 @@ func TestServiceExternalNestedGateReadsOnce(t *testing.T) {
 	raw := extToken(extIssuerA, "s1")
 	provider.identities[raw] = sdkauth.Identity{Issuer: extIssuerA, Subject: "s1", AuthenticatedAt: time.Now()}
 	revocation.set("s1", sdkauth.RevocationFacts{}, nil)
-	ctx, err := svc.authenticate(context.Background(), CredentialExternalToken, TransportHeader, raw)
+	ctx, err := svc.Authenticate(context.Background(), CredentialExternalToken, TransportHeader, raw)
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx, err = svc.requireLive(ctx, LivenessOnMutation, true)
+	ctx, err = svc.RequireLive(ctx, LivenessOnMutation, true)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := svc.requireLive(ctx, LivenessLive, true); err != nil {
+	if _, err := svc.RequireLive(ctx, LivenessLive, true); err != nil {
 		t.Fatal(err)
 	}
 	stats := svc.ExternalAuthenticator().RevocationStats()
@@ -145,7 +145,7 @@ func TestServiceExternalWiringValidation(t *testing.T) {
 func TestServiceNativeLivenessTiers(t *testing.T) {
 	h := newHarness(t, nil)
 	pair := h.loginPair(t, "tiers@example.test", "password123456789")
-	ctx, ok := h.svc.Authenticate(context.Background(), CredentialAccessToken, TransportHeader, pair.AccessToken)
+	ctx, ok := authOK(h.svc.Authenticate(context.Background(), CredentialAccessToken, TransportHeader, pair.AccessToken))
 	if !ok {
 		t.Fatal("first-party token rejected")
 	}
@@ -163,7 +163,7 @@ func TestServiceNativeLivenessTiers(t *testing.T) {
 		{LivenessOnMutation, true, false},
 		{LivenessLive, false, false},
 	} {
-		_, err := h.svc.requireLive(ctx, tc.tier, tc.unsafe)
+		_, err := h.svc.RequireLive(ctx, tc.tier, tc.unsafe)
 		if (err == nil) != tc.live {
 			t.Fatalf("tier=%d unsafe=%v: err = %v, want live=%v", tc.tier, tc.unsafe, err, tc.live)
 		}
@@ -176,16 +176,16 @@ func TestServiceNativeLivenessTiers(t *testing.T) {
 func TestServiceSessionReadErrorIsUnavailable(t *testing.T) {
 	h := newHarness(t, nil)
 	pair := h.loginPair(t, "outage@example.test", "password123456789")
-	ctx, ok := h.svc.Authenticate(context.Background(), CredentialAccessToken, TransportHeader, pair.AccessToken)
+	ctx, ok := authOK(h.svc.Authenticate(context.Background(), CredentialAccessToken, TransportHeader, pair.AccessToken))
 	if !ok {
 		t.Fatal("first-party token rejected")
 	}
 	h.sess.getErr = errors.New("connection reset")
-	_, err := h.svc.requireLive(ctx, LivenessLive, true)
+	_, err := h.svc.RequireLive(ctx, LivenessLive, true)
 	if !errors.Is(err, sdk.ErrUnavailable) || errors.Is(err, sdk.ErrUnauthorized) {
 		t.Fatalf("session store outage = %v, want unavailable, not a denial", err)
 	}
-	if _, ok := h.svc.RequireLive(ctx); ok {
+	if _, ok := authOK(h.svc.RequireLive(ctx, LivenessLive, true)); ok {
 		t.Fatal("the bool surface passed an unreadable session")
 	}
 }

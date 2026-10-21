@@ -53,7 +53,7 @@ func TestRequireAccessTokenOrAPIKeyLiveUserJWT(t *testing.T) {
 }
 
 // TestRequireAccessTokenOrAPIKeyLiveFailsClosed covers the fail-CLOSED posture
-// (D1): a repository error on the session lookup denies.
+// (D1): a repository error on the session lookup denies with a 503.
 func TestRequireAccessTokenOrAPIKeyLiveFailsClosed(t *testing.T) {
 	h := newMiddlewareHarness(t, nil)
 	pair := h.loginPair(t, "fc@example.com", "password123456789")
@@ -64,7 +64,7 @@ func TestRequireAccessTokenOrAPIKeyLiveFailsClosed(t *testing.T) {
 	req.AddCookie(&http.Cookie{Name: h.svc.SessionCookieName(), Value: pair.AccessToken})
 	rec := httptest.NewRecorder()
 	h.svc.RequireAccessTokenOrAPIKeyLive()(next).ServeHTTP(rec, req)
-	if rec.Code != http.StatusUnauthorized {
-		t.Errorf("repo error status = %d, want 401 (fail closed)", rec.Code)
+	if rec.Code != http.StatusServiceUnavailable || rec.Header().Get("Retry-After") == "" {
+		t.Errorf("repo error status = %d, want 503 + Retry-After (fail closed, not a revocation)", rec.Code)
 	}
 }

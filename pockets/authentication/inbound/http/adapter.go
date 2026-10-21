@@ -92,7 +92,7 @@ func New(service AuthenticationService, runtimeMode environment.Mode, opts ...Op
 		cfg.Authenticator.Cookie.RefreshPath = cfg.RefreshCookiePath
 	}
 	auth, err := NewAuthenticator(cfg.Authentication, runtimeMode,
-		WithCookies(cfg.Authenticator.Cookie), WithBrowserLoginPath(cfg.Authenticator.BrowserLoginPath),
+		WithCookies(cfg.Authenticator.Cookie), WithExternalCookies(cfg.Authenticator.ExternalCookies...), WithBrowserLoginPath(cfg.Authenticator.BrowserLoginPath),
 		WithLimiter(cfg.Authenticator.Limiter), WithAuthenticatorLogger(cfg.Authenticator.Logger))
 	if err != nil {
 		return nil, err

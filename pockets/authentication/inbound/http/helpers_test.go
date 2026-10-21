@@ -61,6 +61,8 @@ func (stubQueue) Status(_ context.Context, _ string) (delivery.Status, error) {
 type memUsers struct {
 	mu   sync.Mutex
 	byID map[string]user.User
+	// gets counts Get calls, so a guard test can pin its local status reads.
+	gets int
 	// idents is the linked identifier store the atomic CreateWithPrimaryIdentifier
 	// persists the primary into (design §2.2), so a register→login transport test
 	// resolves identity through GetLogin. newMemIdentifiers links it.
@@ -79,6 +81,7 @@ func newMemUsers() *memUsers { return &memUsers{byID: map[string]user.User{}} }
 func (m *memUsers) Get(_ context.Context, id string) (user.User, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.gets++
 	u, ok := m.byID[id]
 	if !ok {
 		return user.User{}, sdk.ErrNotFound

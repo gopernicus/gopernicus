@@ -77,10 +77,10 @@ func TestPublicAuthenticationRequiresVerifiedProof(t *testing.T) {
 	}
 	service := components.Service
 	ctx := sdk.WithPrincipal(context.Background(), sdk.Principal{Type: "user", ID: "unverified"})
-	if _, ok := service.RequireLive(ctx); ok {
+	if _, ok := authOK(service.RequireLive(ctx, authentication.LivenessLive, true)); ok {
 		t.Fatal("host principal context became credential proof")
 	}
-	if _, ok := service.Authenticate(ctx, authentication.CredentialAccessToken, authentication.TransportHeader, "invalid"); ok {
+	if _, ok := authOK(service.Authenticate(ctx, authentication.CredentialAccessToken, authentication.TransportHeader, "invalid")); ok {
 		t.Fatal("invalid token authenticated")
 	}
 	if calls != 1 {
@@ -88,16 +88,16 @@ func TestPublicAuthenticationRequiresVerifiedProof(t *testing.T) {
 	}
 	canceled, cancel := context.WithCancel(ctx)
 	cancel()
-	if _, ok := service.Authenticate(canceled, authentication.CredentialAccessToken, authentication.TransportHeader, "invalid"); ok {
+	if _, ok := authOK(service.Authenticate(canceled, authentication.CredentialAccessToken, authentication.TransportHeader, "invalid")); ok {
 		t.Fatal("canceled proof authenticated")
 	}
 	if calls != 1 {
 		t.Fatal("canceled authentication called the signer")
 	}
-	if _, ok := service.Authenticate(ctx, authentication.CredentialAccessToken, "invalid", "token"); ok {
+	if _, ok := authOK(service.Authenticate(ctx, authentication.CredentialAccessToken, "invalid", "token")); ok {
 		t.Fatal("unknown transport authenticated")
 	}
-	if _, ok := service.Authenticate(ctx, authentication.CredentialAPIKey, authentication.TransportCookie, "key"); ok {
+	if _, ok := authOK(service.Authenticate(ctx, authentication.CredentialAPIKey, authentication.TransportCookie, "key")); ok {
 		t.Fatal("cookie API key authenticated")
 	}
 }
@@ -140,45 +140,45 @@ func TestReplacingCredentialClearsEarlierLiveSession(t *testing.T) {
 		t.Fatal(err)
 	}
 	service := built.Service
-	first, ok := service.Authenticate(context.Background(), authentication.CredentialAccessToken, authentication.TransportHeader, "A")
+	first, ok := authOK(service.Authenticate(context.Background(), authentication.CredentialAccessToken, authentication.TransportHeader, "A"))
 	if !ok {
 		t.Fatal("valid signature rejected")
 	}
-	first, ok = service.RequireLive(first)
+	first, ok = authOK(service.RequireLive(first, authentication.LivenessLive, true))
 	if !ok {
 		t.Fatal("live A rejected")
 	}
-	if _, ok = service.RequireLive(first); !ok || store.reads != 1 {
+	if _, ok = authOK(service.RequireLive(first, authentication.LivenessLive, true)); !ok || store.reads != 1 {
 		t.Fatal("same proof did not reuse its live check")
 	}
-	replacement, ok := service.Authenticate(first, authentication.CredentialAccessToken, authentication.TransportHeader, "B")
+	replacement, ok := authOK(service.Authenticate(first, authentication.CredentialAccessToken, authentication.TransportHeader, "B"))
 	if !ok {
 		t.Fatal("valid signature for revoked B rejected at stateless tier")
 	}
 	if id, ok := service.CurrentSessionID(replacement); ok {
 		t.Fatalf("new proof inherited live session %q", id)
 	}
-	if _, ok = service.RequireLive(replacement); ok {
+	if _, ok = authOK(service.RequireLive(replacement, authentication.LivenessLive, true)); ok {
 		t.Fatal("revoked B borrowed A's liveness")
 	}
 	if id, ok := service.CurrentSessionID(first); !ok || id != "A" {
 		t.Fatal("replacement mutated its caller's original context")
 	}
-	failed, ok := service.Authenticate(first, authentication.CredentialAccessToken, authentication.TransportHeader, "invalid")
+	failed, ok := authOK(service.Authenticate(first, authentication.CredentialAccessToken, authentication.TransportHeader, "invalid"))
 	if ok {
 		t.Fatal("invalid signature accepted")
 	}
 	if _, ok := service.CurrentCredential(failed); ok {
 		t.Fatal("failed replacement retained credential proof")
 	}
-	if _, ok := service.RequireLive(failed); ok {
+	if _, ok := authOK(service.RequireLive(failed, authentication.LivenessLive, true)); ok {
 		t.Fatal("failed replacement retained liveness")
 	}
 	if _, ok := service.CurrentPrincipal(failed); ok {
 		t.Fatal("failed replacement retained principal")
 	}
 	altered := sdk.WithPrincipal(first, sdk.Principal{Type: "user", ID: "other"})
-	if _, ok := service.RequireLive(altered); ok {
+	if _, ok := authOK(service.RequireLive(altered, authentication.LivenessLive, true)); ok {
 		t.Fatal("host principal replacement retained another principal's proof")
 	}
 }
@@ -198,11 +198,11 @@ func TestCredentialProofCannotCrossServiceStores(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx, ok := first.Service.Authenticate(context.Background(), authentication.CredentialAccessToken, authentication.TransportHeader, "A")
+	ctx, ok := authOK(first.Service.Authenticate(context.Background(), authentication.CredentialAccessToken, authentication.TransportHeader, "A"))
 	if !ok {
 		t.Fatal("valid proof rejected")
 	}
-	ctx, ok = first.Service.RequireLive(ctx)
+	ctx, ok = authOK(first.Service.RequireLive(ctx, authentication.LivenessLive, true))
 	if !ok {
 		t.Fatal("live proof rejected")
 	}
@@ -212,14 +212,14 @@ func TestCredentialProofCannotCrossServiceStores(t *testing.T) {
 	if _, ok := second.Service.CurrentSessionID(ctx); ok {
 		t.Fatal("foreign service accepted live session")
 	}
-	if _, ok := second.Service.RequireLive(ctx); ok {
+	if _, ok := authOK(second.Service.RequireLive(ctx, authentication.LivenessLive, true)); ok {
 		t.Fatal("foreign proof bypassed its own store")
 	}
-	rebound, ok := second.Service.Authenticate(ctx, authentication.CredentialAccessToken, authentication.TransportHeader, "A")
+	rebound, ok := authOK(second.Service.Authenticate(ctx, authentication.CredentialAccessToken, authentication.TransportHeader, "A"))
 	if !ok {
 		t.Fatal("reverification rejected valid signature")
 	}
-	if _, ok := second.Service.RequireLive(rebound); ok {
+	if _, ok := authOK(second.Service.RequireLive(rebound, authentication.LivenessLive, true)); ok {
 		t.Fatal("reverified proof bypassed missing session in second store")
 	}
 	if secondStore.reads != 1 {
@@ -264,4 +264,8 @@ func TestDelegatedIssuerConfiguration(t *testing.T) {
 			t.Fatalf("valid issuer %q rejected: %v", issuer, err)
 		}
 	}
+}
+
+func authOK(ctx context.Context, err error) (context.Context, bool) {
+	return ctx, err == nil
 }

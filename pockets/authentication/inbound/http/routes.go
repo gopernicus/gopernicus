@@ -95,6 +95,7 @@ type mountDeps struct {
 type RouteAuthentication struct {
 	OAuthLinkStart       web.Middleware
 	SessionSecurityReads web.Middleware
+	CSRFBootstrap        web.Middleware
 	SessionHydration     web.Middleware
 	CredentialManagement web.Middleware
 	MachineLifecycle     web.Middleware
@@ -107,41 +108,52 @@ type RouteAuthentication struct {
 // the ONE place the bundled route audit is expressed, so a default and the route
 // it guards can never drift apart:
 //
-//   - OAuthLinkStart — RequireAccessToken(): an API key cannot start a human
-//     OAuth link, but either transport may carry the person's token;
-//   - SessionSecurityReads — RequireAccessTokenLive(): explicitly
-//     established-session surfaces (the masked credential inventory, the CSRF
-//     bootstrap, the delivery-status read);
-//   - SessionHydration — RequireAccessTokenOrAPIKeyLive(): preserves the
-//     documented act-as-user-key hydration (a self-acting service account still
-//     fails the handler's CurrentUser requirement);
-//   - CredentialManagement — RequireAccessTokenLive(): these mutate or prove a
-//     HUMAN credential and several bind work to CurrentSessionID, so no API key,
-//     act-as-user included, substitutes for a session;
-//   - MachineLifecycle — RequireAccessTokenLive(): a key never creates, reads,
-//     mints, or revokes keys;
-//   - UserAdministration — RequireAccessTokenOrAPIKeyLive(): a machine principal
+//   - OAuthLinkStart — Accept(CredentialAccessToken), FirstParty(): an API key
+//     or an external token cannot start a human OAuth link, but either
+//     transport may carry the person's token;
+//   - SessionSecurityReads — Accept(CredentialAccessToken), FirstParty(),
+//     Live(): explicitly established-session surfaces (the masked credential
+//     inventory, the delivery-status read);
+//   - CSRFBootstrap — Live(), every wired kind: a provider-cookie user must be
+//     able to obtain the double-submit token every bundled cookie mutation needs;
+//   - SessionHydration — Live(), every wired kind: preserves the documented
+//     act-as-user-key hydration and hydrates external users (a self-acting
+//     service account still fails the handler's CurrentUser requirement);
+//   - CredentialManagement — Accept(CredentialAccessToken), FirstParty(), Live():
+//     these mutate or prove a HUMAN credential and several bind work to
+//     CurrentSessionID, so neither an API key nor an external token (which has
+//     no native session, so no step-up) substitutes for a session;
+//   - MachineLifecycle — Accept(CredentialAccessToken), FirstParty(), Live(): a
+//     key never creates, reads, mints, or revokes keys;
+//   - UserAdministration — Live(), every wired kind: a machine principal
 //     deliberately REACHES WithUserAdminCheck, and the host decides;
-//   - Invitations — RequireAccessTokenOrAPIKeyLive(): an act-as-user key acts as
-//     its effective human principal, while a self-acting service account fails
-//     the handlers' CurrentUser requirement;
+//   - Invitations — Live(), every wired kind: an act-as-user key acts as its
+//     effective human principal, while a self-acting service account fails the
+//     handlers' CurrentUser requirement;
 //   - BrowserAccount — cookie-only, live, redirecting on denial: the bundled
 //     browser UI reads only its own cookie and never a header.
+//
+// The floor every group runs inside is RequirePrincipal(Stateless()): the
+// default set, so it admits whatever kinds are wired (external included) while
+// denying delegated tokens, and stateless, so a host override owns the tier.
 func (a RouteAuthentication) withDefaults(svc authService) RouteAuthentication {
 	if a.OAuthLinkStart == nil {
-		a.OAuthLinkStart = svc.RequirePrincipal(FirstParty())
+		a.OAuthLinkStart = svc.RequirePrincipal(Accept(CredentialAccessToken), FirstParty())
 	}
 	if a.SessionSecurityReads == nil {
-		a.SessionSecurityReads = svc.RequirePrincipal(FirstParty(), Live())
+		a.SessionSecurityReads = svc.RequirePrincipal(Accept(CredentialAccessToken), FirstParty(), Live())
+	}
+	if a.CSRFBootstrap == nil {
+		a.CSRFBootstrap = svc.RequirePrincipal(Live())
 	}
 	if a.SessionHydration == nil {
 		a.SessionHydration = svc.RequirePrincipal(Live())
 	}
 	if a.CredentialManagement == nil {
-		a.CredentialManagement = svc.RequirePrincipal(FirstParty(), Live())
+		a.CredentialManagement = svc.RequirePrincipal(Accept(CredentialAccessToken), FirstParty(), Live())
 	}
 	if a.MachineLifecycle == nil {
-		a.MachineLifecycle = svc.RequirePrincipal(FirstParty(), Live())
+		a.MachineLifecycle = svc.RequirePrincipal(Accept(CredentialAccessToken), FirstParty(), Live())
 	}
 	if a.UserAdministration == nil {
 		a.UserAdministration = svc.RequirePrincipal(Live())
@@ -151,6 +163,7 @@ func (a RouteAuthentication) withDefaults(svc authService) RouteAuthentication {
 	}
 	if a.BrowserAccount == nil {
 		a.BrowserAccount = svc.RequirePrincipal(
+			Accept(CredentialAccessToken),
 			FirstParty(),
 			Transports(authlogic.TransportCookie),
 			Live(),
@@ -160,12 +173,13 @@ func (a RouteAuthentication) withDefaults(svc authService) RouteAuthentication {
 	// Bundled authentication/account routes cannot become OAuth resource routes
 	// through a host override. Preserve the existing API-key policy seams while
 	// requiring verified first-party/key proof after every configured strategy.
-	floor := svc.RequirePrincipal()
+	floor := svc.RequirePrincipal(Stateless())
 	protect := func(strategy web.Middleware) web.Middleware {
 		return func(next http.Handler) http.Handler { return strategy(floor(next)) }
 	}
 	a.OAuthLinkStart = protect(a.OAuthLinkStart)
 	a.SessionSecurityReads = protect(a.SessionSecurityReads)
+	a.CSRFBootstrap = protect(a.CSRFBootstrap)
 	a.SessionHydration = protect(a.SessionHydration)
 	a.CredentialManagement = protect(a.CredentialManagement)
 	a.MachineLifecycle = protect(a.MachineLifecycle)
@@ -263,15 +277,16 @@ func mount(r pockets.RouteRegistrar, d mountDeps) {
 	// /auth/csrf is the JSON double-submit bootstrap (upstream evidence §1a): a
 	// cookie-authenticated SPA served from a DIFFERENT origin than the API cannot
 	// read the API-origin __Host-auth_csrf cookie, so it reads the matching token from
-	// this body instead and echoes it in X-CSRF-Token. It is a session-security read
-	// (only an established human session bootstraps; a credential-establishment
-	// endpoint needs no token) plus the ORIGIN-ONLY
+	// this body instead and echoes it in X-CSRF-Token. It rides its own
+	// CSRFBootstrap group (only a live authenticated caller bootstraps, a
+	// provider-cookie user included; a credential-establishment endpoint needs no
+	// token) plus the ORIGIN-ONLY
 	// browser gate — the double-submit gate cannot protect the very endpoint that
 	// hands out the token. The handler sets Cache-Control: no-store and reuses an
 	// existing well-formed token rather than rotating another tab's out from under
 	// it. The host must allow X-CSRF-Token in its CORS request-header policy
 	// (web.CORSWithConfig) for the browser to send the echo header.
-	r.Handle("GET", "/auth/csrf", h.csrfBootstrap, auth.SessionSecurityReads, requireBrowserSafeOrigin(h.mutation.csrf()))
+	r.Handle("GET", "/auth/csrf", h.csrfBootstrap, auth.CSRFBootstrap, requireBrowserSafeOrigin(h.mutation.csrf()))
 	// /auth/me is session hydration: the cookie-authenticated client that cannot
 	// read its own session asks who it is signed in as, and gets the SAME
 	// userResponse body login and register return. Hydration intentionally pays one

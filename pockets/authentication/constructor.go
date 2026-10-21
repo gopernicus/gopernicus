@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 
 	"github.com/gopernicus/gopernicus/sdk/pkg/cryptids"
 
@@ -552,6 +553,14 @@ func New(repos Repositories, signer cryptids.JWTSigner, runtimeMode environment.
 	if err != nil {
 		return nil, err
 	}
+	var externalCookies []string
+	if cfg.External != nil {
+		for _, p := range cfg.External.Providers {
+			if p.CookieName != "" && !slices.Contains(externalCookies, p.CookieName) {
+				externalCookies = append(externalCookies, p.CookieName)
+			}
+		}
+	}
 	adapter, err := inbound.New(authService,
 		cfg.RuntimeMode,
 		inbound.WithBrowser(inbound.BrowserConfig{RefreshCookiePath: cfg.RefreshCookiePath, AllowedOrigins: cfg.AllowedOrigins, OriginPolicy: cfg.OriginPolicy, Views: cfg.Views, HTMLPolicy: cfg.HTMLPolicy}),
@@ -560,7 +569,7 @@ func New(repos Repositories, signer cryptids.JWTSigner, runtimeMode environment.
 		inbound.WithInviteCheck(cfg.InviteCheck),
 		inbound.WithInvitationResourceRule(inbound.InvitationResourceRule{Permissions: cfg.ResourcePermissions, Can: cfg.Can}),
 		inbound.WithUserAdminCheck(cfg.UserAdminCheck),
-		inbound.WithAuthenticatorPolicy(inbound.AuthenticatorPolicy{Cookie: cfg.SessionCookie, BrowserLoginPath: cfg.BrowserLoginPath, Limiter: limiter, Logger: cfg.Logger}),
+		inbound.WithAuthenticatorPolicy(inbound.AuthenticatorPolicy{Cookie: cfg.SessionCookie, ExternalCookies: externalCookies, BrowserLoginPath: cfg.BrowserLoginPath, Limiter: limiter, Logger: cfg.Logger}),
 		inbound.WithListStrategy(listStrategy),
 		inbound.WithMachineGate(cfg.MachineRoutesGate),
 		inbound.WithRouteAuthentication(cfg.BundledRouteAuth))

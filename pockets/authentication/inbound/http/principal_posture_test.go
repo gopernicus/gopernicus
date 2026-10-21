@@ -286,7 +286,6 @@ func TestDefaultSessionAndCredentialSurfacesRefuseEveryAPIKey(t *testing.T) {
 	sessionSecurityReads := []struct{ method, path string }{
 		{"GET", "/auth/delivery/status"},
 		{"GET", "/auth/methods"},
-		{"GET", "/auth/csrf"},
 	}
 	credentialMutations := []struct{ method, path, body string }{
 		{"POST", "/auth/password/change", `{}`},

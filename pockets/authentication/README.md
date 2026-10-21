@@ -396,8 +396,8 @@ API callers skip it), and sets `Cache-Control: no-store`.
   email_verified}` with the **unmasked** active email (`/auth/methods` is the
   masked inventory; this is the signed-in identity). `Cache-Control: no-store`.
   Hydration deliberately pays one revocation lookup
-  (`SessionHydration`'s default `RequireAccessTokenOrAPIKeyLive()`, not a
-  stateless gate): a revoked access JWT is denied within one round-trip. Bearer-safe (no body → no double-submit gate); both the session
+  (`SessionHydration`'s default `RequirePrincipal(Live())` — every wired kind —
+  not a stateless gate): a revoked access JWT is denied within one round-trip. Bearer-safe (no body → no double-submit gate); both the session
   cookie and a bearer access JWT hydrate. `email_verified` is `false` — with the
   address still present — for an allowed-but-unverified account. A **machine
   principal is not a current user**: a service-account API key is a valid live
@@ -592,8 +592,8 @@ unchanged).
 | resend / cancel | **404**, indistinguishable from an unknown id | same |
 
 **Invitations — registered only when `InvitationsConfig.Granter` is wired; every
-authenticated route is `Invitations`-gated (`RequireAccessTokenOrAPIKeyLive()`
-by default, immediate revocation), only decline is public:**
+authenticated route is `Invitations`-gated (`RequirePrincipal(Live())` — every
+wired kind — by default, immediate revocation), only decline is public:**
 
 - `POST /auth/invitations/{resource_type}/{resource_id}` — `{identifier,
   relation, identifier_kind?, auto_accept?, redirect?, metadata?}` → 201 pending
@@ -989,7 +989,9 @@ Contract details:
   no deployment constraint — but the failure mode on a plain-HTTP host is now
   "the browser refuses the cookie entirely" rather than "the cookie is set and
   not sent". Serve the API over HTTPS (as production already must).
-- **It is live-session-gated.** No session and a revoked session are both 401;
+- **It is live-gated** (`BundledRouteAuth.CSRFBootstrap`, default
+  `RequirePrincipal(Live())` — every wired kind, so a provider-cookie user can
+  bootstrap too). No credential and a revoked one are both 401;
   credential-establishment endpoints (login, passwordless, verify) need no token
   and must not be bootstrapped first.
 - **Entropy failure fails closed** — 500, no token, no cookie.
@@ -1187,18 +1189,26 @@ pre-composition of it.
 
 | axis | values | fact |
 |---|---|---|
-| credential | `CredentialAccessToken` (the session-backed JWT: claims `user_id` + `session_id`) · `CredentialAPIKey` | **the cookie's value IS the access JWT** — one credential, two transports |
+| credential | `CredentialAccessToken` (the session-backed JWT: claims `user_id` + `session_id`) · `CredentialAPIKey` · `CredentialExternalToken` (a wired identity provider's token, `authlogic.WithExternal`) | **the cookie's value IS the access JWT** — one credential, two transports |
 | transport | `TransportHeader` (`Authorization: Bearer <token>`) · `TransportCookie` | header is authoritative: a bearer, once consulted, means the cookie is never read |
-| profile | first-party · delegated | delegated proof requires explicit `Audience` or `DelegatedAudience`; `FirstParty()` excludes delegated proof and API keys |
-| audience | exact resource identifiers | `Audience` gates all credentials; `DelegatedAudience` gates only delegated proof |
-| liveness | stateless verify · `Live()` (`+ sessions.Get(session_id)`) | meaningful for `access_token` only; an API key is already DB-checked at resolution |
+| profile | first-party · delegated | delegated proof requires explicit `Audience` or `DelegatedAudience`; `FirstParty()` excludes delegated proof, API keys and external tokens |
+| audience | exact resource identifiers | `Audience` gates all credentials; `DelegatedAudience` gates only delegated proof (and refuses external tokens) |
+| liveness | `Live()` · `LiveOnMutation()` (**default**) · `Stateless()` | see the liveness table below |
+| assurance | `RequireMFA()` · `FreshAuth(d)` · `VerifiedEmail()` · `Tenant(ids…)` · `Check(fn)` | evaluated on external tokens only; an API key passes |
 
 **The primitive and its options:**
 
 ```go
 func Accept(kinds ...CredentialKind) PrincipalOption // OR-set of credentials; default: every wired kind
 func Transports(ts ...Transport) PrincipalOption    // OR-set of transports;  default: header + cookie
-func Live() PrincipalOption                          // access_token ⇒ the session row must exist; api_key ⇒ pass
+func Live() PrincipalOption                          // re-check on every request, always fail closed
+func LiveOnMutation() PrincipalOption                // the default: re-check on POST/PUT/PATCH/DELETE only
+func Stateless() PrincipalOption                     // never re-check (the per-route escape from the default)
+func RequireMFA() PrincipalOption                    // external token: provider asserted MFA
+func FreshAuth(within time.Duration) PrincipalOption // external token: authenticated at the provider within d
+func VerifiedEmail() PrincipalOption                 // external token: provider-verified email
+func Tenant(ids ...string) PrincipalOption           // external token: Identity.Tenant is one of ids
+func Check(fn func(context.Context, Credential) error) PrincipalOption // external token: host rule over Identity (incl. Attributes)
 func Browser() PrincipalOption                       // on denial 303 to BrowserConfig.BrowserLoginPath (validated return_to) instead of a JSON 401
 func Optional() PrincipalOption                      // no credential within the set passes anonymous instead of denying
 func FirstParty() PrincipalOption                    // first-party access tokens only; excludes delegated tokens and API keys
@@ -1208,13 +1218,66 @@ func DelegatedAudience(resources ...string) PrincipalOption // opt delegated tok
 func (s *authenticationhttp.Adapter) RequirePrincipal(opts ...PrincipalOption) web.Middleware
 ```
 
-With zero options `RequirePrincipal()` admits first-party access tokens and wired
-API keys over both transports, header authoritative, stateless, denying with a
-JSON 401. Delegated tokens require explicit `Audience(...)` or
-`DelegatedAudience(...)` and always require a live grant.
+With zero options `RequirePrincipal()` admits **every wired kind** — first-party
+access tokens, API keys when the machine subsystem is wired, external tokens when
+providers are wired — over both transports, header authoritative, at the
+`LiveOnMutation` tier, denying with a JSON 401. Delegated tokens require explicit
+`Audience(...)` or `DelegatedAudience(...)` and always require a live grant.
 `Accept()` / `Transports()` / `Audience()` / `DelegatedAudience()` called with **zero arguments panics at
 construction** — a set that admits nothing is a programming error, not a
-posture, so the mistake surfaces at wiring time, not on a request.
+posture, so the mistake surfaces at wiring time, not on a request. Two more
+postures panic at construction: an assurance option on a set that also admits
+access tokens (they carry no provider assurance — write
+`Accept(CredentialExternalToken, …)`), and `Browser()` on a set admitting external
+tokens without an explicit `BrowserLoginPath` (the default `/auth/login` is not
+mounted on an external-only host).
+
+**Liveness (v0.19.0).** BREAKING (behavior): the default is `LiveOnMutation()`
+for **every** kind, native access tokens included — a host `POST` route that used
+to verify only the access JWT's signature now pays one session read and denies a
+revoked session. `Stateless()` is the per-route escape.
+
+| tier | native access token | API key | delegated token | external token |
+|---|---|---|---|---|
+| `Live()` | session read, every request | pass (DB-checked at resolution) | live grant, always | local `users.Get` + `Active()` + provider revocation facts, every request; **always fails closed** |
+| `LiveOnMutation()` (default) | session read on unsafe methods; `GET`/`HEAD`/`OPTIONS` stateless | pass | live grant, always | re-check on unsafe methods only; a provider's `RevocationFailOpen` relaxes only this tier |
+| `Stateless()` | never | pass | live grant, always | never (token validity + the local status read at resolution) |
+
+A passed re-check is stamped on the proof, so a nested gate (the bundled floor)
+never repeats it: a bundled `POST` pays one session read, or one `users.Get` and
+one provider revocation call. Revocation lag for external tokens: safe reads under
+the default → up to the token's `exp`; mutations with a healthy provider → ≤
+`RevocationCacheTTL`; mutations during an outage → stale facts for
+`RevocationOutageGrace`, then 503; fail-open mutations → up to `exp`; providers
+with no `RevocationChecker` → `exp`, plus the local kill switch on every mutation.
+
+**503, never a false 401.** A credential service that cannot decide — a session
+store read error, a provider outage past its grace window, a provider that cannot
+verify — answers `503` with `Retry-After: 5` and the JSON `unavailable` error, on
+the default tier and `Live()`. `Browser()` still answers the JSON 503 (a login
+redirect would sign the user out over an outage) and `Optional()` answers 503 too
+(never anonymity). A missing or expired session row is still a 401.
+
+**External tokens.** A JWT-shaped bearer is verified as exactly ONE kind, named by
+`ClassifyBearer` from its unverified `iss`: no `iss` (or the delegated issuer) →
+access token; a wired provider's issuer → external token; anything else → 401
+without verification. A dotless bearer is an API key. On the cookie transport the
+native session cookie is read first, then each provider cookie
+(`WithExternalCookies`, filled by the root `New` from every
+`ExternalProvider.CookieName`) — **first present wins**: a present but invalid
+native cookie denies and never falls through. Provider cookies are read only by a
+set admitting external tokens, are never asked for native `recover=1`, and must
+be `HttpOnly; Secure; SameSite=Lax`. A provider cookie name equal to the native
+session, refresh or `__Host-auth_csrf` name fails construction. Without a cookie
+name a provider is header-only.
+
+**Assurance (RFC 9470).** `RequireMFA()` and `FreshAuth(d)` denials on a JSON set
+carry `WWW-Authenticate: Bearer error="insufficient_user_authentication"`
+(`FreshAuth` adds `max_age`), telling a SPA to re-authenticate at the provider;
+`VerifiedEmail()`, `Tenant()` and `Check()` deny with a plain 401, since
+re-authentication cannot cure them. `Browser()` keeps the 303. Provider claims are
+identity data, **never permissions**: map `Identity.Attributes` to authorization in
+host code.
 
 **A credential arriving on a transport outside the set is IGNORED, never
 denied** — the set says what the surface reads, so a header at a
@@ -1223,11 +1286,12 @@ simply not read.
 
 **`Optional()`** switches the OUTERMOST gate from deny-by-absence to
 pass-by-absence: no credential presented within the set continues the request
-with no principal and no credential stashed, skipping `Live()` and the
-`Browser()` redirect; a credential presented within the set is resolved and
-denied exactly as today when invalid, expired, revoked, or of a kind outside
-the set — a stale or wrong-kind credential is never laundered into anonymity,
-and a transport outside the set is still not read.
+with no principal and no credential stashed, skipping liveness and the
+`Browser()` redirect; a credential presented within the set (a provider cookie
+included) is resolved and denied exactly as today when invalid, expired,
+revoked, or of a kind outside the set — a stale or wrong-kind credential is never
+laundered into anonymity, an outage is a 503, and a transport outside the set is
+still not read.
 
 **Nesting.** An inner `RequirePrincipal` mounted under an outer one **narrows**:
 it reads the `Credential` the outer gate already stashed and checks it against
@@ -1236,7 +1300,7 @@ session lookup once for a first-party credential; a second nested `Live()` reads
 the already-proven `CurrentSessionID` and passes. Delegated admission always
 rechecks its session, user, binding and token expiry. A nested denial answers a JSON 401 **unless the
 INNER gate itself carries `Browser()`** — a plain helper nested under a
-browser-facing outer gate still answers JSON; none of the six named helpers
+browser-facing outer gate still answers JSON; none of the named helpers
 below carry `Browser()`. This nesting trusts the credential stash written
 earlier in the SAME chain: the supported wiring invariant is **one
 authentication `Service` per chain** — composing middleware from independently
@@ -1246,17 +1310,20 @@ stashes nothing, so an inner gate finds no stash and resolves the request
 itself: an inner required gate denies (nothing to admit), an inner
 `Optional()` passes anonymously again — the same request, the same answer.
 
-**The six helpers** are one-line pre-compositions, exported so the common
-postures read as vocabulary at the call site:
+**The eight helpers** are one-line pre-compositions, exported so the common
+postures read as vocabulary at the call site. They are **literal**: none of the
+access-token helpers admits an external token, even when providers are wired.
 
 | helper | is literally |
 |---|---|
-| `RequireAccessTokenOrAPIKey()` | `RequirePrincipal()` |
-| `RequireAccessTokenOrAPIKeyLive()` | `RequirePrincipal(Live())` |
+| `RequireAccessTokenOrAPIKey()` | `RequirePrincipal(Accept(CredentialAccessToken, CredentialAPIKey))` |
+| `RequireAccessTokenOrAPIKeyLive()` | `RequirePrincipal(Accept(CredentialAccessToken, CredentialAPIKey), Live())` |
 | `RequireAccessToken()` | `RequirePrincipal(Accept(CredentialAccessToken))` |
 | `RequireAccessTokenLive()` | `RequirePrincipal(Accept(CredentialAccessToken), Live())` |
 | `RequireAccessTokenCookie()` | `RequirePrincipal(Accept(CredentialAccessToken), Transports(TransportCookie))` |
 | `RequireAPIKey()` | `RequirePrincipal(Accept(CredentialAPIKey))` |
+| `RequireExternalToken()` | `RequirePrincipal(Accept(CredentialExternalToken))` |
+| `RequireExternalTokenOrAPIKey()` | `RequirePrincipal(Accept(CredentialExternalToken, CredentialAPIKey))` |
 
 - `authlogic.Service.CurrentUser(ctx)` / `authlogic.Service.CurrentPrincipal(ctx)` — read the
   resolved identity.
@@ -1327,8 +1394,9 @@ by `session.NewDelegatedRefreshToken()`. Legacy endpoints reject this namespace
 before storage lookup, including after revocation or expiry. The prefix grants
 no authority; OAuth endpoints must still verify the stored hash and grant binding.
 Deleting one delegated session invalidates its resource credentials without
-deleting another connection or a first-party session. First-party immediate
-revocation still requires `Live()`; its existing stateless behavior is unchanged.
+deleting another connection or a first-party session. First-party revocation
+follows the route's liveness tier (`LiveOnMutation()` by default, `Live()` on
+every method, `Stateless()` never).
 
 ### Migration from the pre-`v0.9.0` fixed middleware names
 
@@ -1354,22 +1422,28 @@ never per-route, because the posture is a property of what the surface does:
 
 | `BrowserConfig.BundledRouteAuth` slot | routes | default |
 |---|---|---|
-| `OAuthLinkStart` | `GET /auth/oauth/{provider}/link/start` | `RequireAccessToken()` |
-| `SessionSecurityReads` | `GET /auth/delivery/status`, `/auth/methods`, `/auth/csrf` | `RequireAccessTokenLive()` |
-| `SessionHydration` | `GET /auth/me` | `RequireAccessTokenOrAPIKeyLive()` |
-| `CredentialManagement` | password change/set/remove, step-up begin/completion, identifier add/confirm/update/delete, OAuth unlink start/completion | `RequireAccessTokenLive()` |
-| `MachineLifecycle` | create/list service accounts; mint/list/revoke keys | `RequireAccessTokenLive()` |
-| `UserAdministration` | all `/auth/admin/users…` reads and mutations | `RequireAccessTokenOrAPIKeyLive()` |
-| `Invitations` | authenticated create/list/mine/accept/cancel/resend routes | `RequireAccessTokenOrAPIKeyLive()` |
-| `BrowserAccount` | HTML account, identifier/password/step-up, OAuth-unlink GETs; HTML-only identifier edit POST | `RequirePrincipal(Accept(CredentialAccessToken), Transports(TransportCookie), Live(), Browser())` |
+| `OAuthLinkStart` | `GET /auth/oauth/{provider}/link/start` | `RequirePrincipal(Accept(CredentialAccessToken), FirstParty())` |
+| `SessionSecurityReads` | `GET /auth/delivery/status`, `/auth/methods` | `RequirePrincipal(Accept(CredentialAccessToken), FirstParty(), Live())` |
+| `CSRFBootstrap` (v0.19.0) | `GET /auth/csrf` | `RequirePrincipal(Live())` — every wired kind |
+| `SessionHydration` | `GET /auth/me` | `RequirePrincipal(Live())` — every wired kind |
+| `CredentialManagement` | password change/set/remove, step-up begin/completion, identifier add/confirm/update/delete, OAuth unlink start/completion | `RequirePrincipal(Accept(CredentialAccessToken), FirstParty(), Live())` |
+| `MachineLifecycle` | create/list service accounts; mint/list/revoke keys | `RequirePrincipal(Accept(CredentialAccessToken), FirstParty(), Live())` |
+| `UserAdministration` | all `/auth/admin/users…` reads and mutations | `RequirePrincipal(Live())` — every wired kind |
+| `Invitations` | authenticated create/list/mine/accept/cancel/resend routes | `RequirePrincipal(Live())` — every wired kind |
+| `BrowserAccount` | HTML account, identifier/password/step-up, OAuth-unlink GETs; HTML-only identifier edit POST | `RequirePrincipal(Accept(CredentialAccessToken), FirstParty(), Transports(TransportCookie), Live(), Browser())` |
 
-This tightens the routes classified as established-session or human-credential
-surfaces — for example an API key no longer reaches `/auth/delivery/status`,
-`/auth/methods`, `/auth/csrf`, or any credential mutation — while preserving
-today's documented API-key access to user administration, invitations, and
-`/auth/me` (an act-as-user key still acts as its effective human principal
-there; a self-acting service account still fails those handlers' `CurrentUser`
-requirement).
+The established-session and human-credential surfaces refuse API keys AND
+external tokens — an API key or a provider user never reaches
+`/auth/delivery/status`, `/auth/methods`, step-up or any credential mutation
+(step-up needs a native session: a provider user is denied, and re-authenticates
+at the provider instead, guided by `FreshAuth`). User administration,
+invitations, `/auth/me` and `/auth/csrf` admit every wired kind (an act-as-user
+key still acts as its effective human principal there; a self-acting service
+account still fails those handlers' `CurrentUser` requirement). Since v0.19.0
+`/auth/csrf` has its own `CSRFBootstrap` slot: an override of
+`SessionSecurityReads` no longer reaches it. Every group runs inside a floor of
+`RequirePrincipal(Stateless())` — the default set, so it admits wired external
+tokens and denies delegated ones, and stateless, so the override owns the tier.
 
 Override one semantic surface without restating the others:
 
@@ -1385,7 +1459,7 @@ auth.WithBrowser(auth.BrowserConfig{
 ```
 
 `PrincipalStrategy()` called with **no arguments is an explicit choice of the
-primitive's defaults** — every wired credential, both transports, stateless —
+primitive's defaults** — every wired credential, both transports, `LiveOnMutation` —
 **not** "leave the audited default in place"; leave the field zero for that.
 
 An override configures AUTHENTICATION only. It cannot unmount the

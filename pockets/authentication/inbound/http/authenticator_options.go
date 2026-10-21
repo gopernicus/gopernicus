@@ -2,6 +2,7 @@ package authenticationhttp
 
 import (
 	"log/slog"
+	"slices"
 
 	"github.com/gopernicus/gopernicus/sdk/capabilities/ratelimiter"
 )
@@ -13,6 +14,16 @@ type AuthenticatorOption func(*authenticatorConfig)
 func WithCookies(value CookieConfig) AuthenticatorOption {
 	return func(c *authenticatorConfig) {
 		c.Cookie = value
+	}
+}
+
+// WithExternalCookies names the external identity providers' own session
+// cookies the cookie transport reads, in order, after the native session cookie.
+// A name shared with the native session, refresh or CSRF cookie is rejected.
+func WithExternalCookies(names ...string) AuthenticatorOption {
+	names = slices.Clone(names)
+	return func(c *authenticatorConfig) {
+		c.ExternalCookies = slices.Clone(names)
 	}
 }
 
@@ -37,10 +48,11 @@ func WithAuthenticatorLogger(value *slog.Logger) AuthenticatorOption {
 	}
 }
 
-// AuthenticatorPolicy groups optional cookie, browser denial and limiter policy.
+// AuthenticatorPolicy groups optional cookie (native and provider), browser denial and limiter policy.
 // Runtime mode remains an explicit constructor argument.
 type AuthenticatorPolicy struct {
 	Cookie           CookieConfig
+	ExternalCookies  []string
 	BrowserLoginPath string
 	Limiter          ratelimiter.Limiter
 	Logger           *slog.Logger
