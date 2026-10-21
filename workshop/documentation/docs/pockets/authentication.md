@@ -243,7 +243,9 @@ pockets still see only `sdk.Principal`.
   and MFA events stay in the provider's log.
 - **Host CSRF.** An external-only host built on `NewAuthenticator` has no
   `/auth/csrf`; it protects its own cookie mutations with
-  `http.CrossOriginProtection`.
+  `http.CrossOriginProtection`. Known limitation (owner ruling): no exported
+  double-submit gate for host routes, accepted because the expected traffic is
+  overwhelmingly bearer and API-key requests.
 
 The pocket README's "External identity providers" section has the per-vendor
 recipes and claim tables, the server-session support matrix, the revocation lag
