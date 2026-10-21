@@ -3,6 +3,7 @@ go 1.26.1
 use (
 	./examples/auth-cms
 	./examples/cms
+	./examples/external-identity
 	./examples/goth-showcase
 	./examples/jobs-minimal
 	./examples/minimal

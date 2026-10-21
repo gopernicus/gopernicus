@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -11,9 +12,12 @@ import (
 
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuples"
 
+	"github.com/gopernicus/gopernicus/examples/auth-cms/integrations/authentication/devissuer"
+	gooidc "github.com/gopernicus/gopernicus/integrations/cryptids/go-oidc"
 	golangjwt "github.com/gopernicus/gopernicus/integrations/cryptids/golang-jwt"
 	auth "github.com/gopernicus/gopernicus/pockets/authentication"
 	authenticationhttp "github.com/gopernicus/gopernicus/pockets/authentication/inbound/http"
+	authlogic "github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication"
 	protection "github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/protection"
 	securityevent "github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/securityevent"
 	authorizationhttp "github.com/gopernicus/gopernicus/pockets/authorization/inbound/http"
@@ -21,11 +25,15 @@ import (
 	model "github.com/gopernicus/gopernicus/pockets/authorization/logic/model"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/roles"
 	"github.com/gopernicus/gopernicus/sdk"
+	sdkauth "github.com/gopernicus/gopernicus/sdk/capabilities/authentication"
 	"github.com/gopernicus/gopernicus/sdk/pkg/cryptids"
 	"github.com/gopernicus/gopernicus/sdk/pkg/environment"
 	"github.com/gopernicus/gopernicus/sdk/pkg/list"
 	"github.com/gopernicus/gopernicus/sdk/pkg/web"
 )
+
+// externalProviderName is the mirror namespace of the AUTH_EXTERNAL_DEMO issuer.
+const externalProviderName = "dev"
 
 func registerDemoRoutes(router *web.WebHandler, authentication *authenticationhttp.Adapter, authorizer *decisions.Service, roleReader *roles.Service, authorization *authorizationhttp.Adapter) {
 	principal := authentication.RequireAccessTokenOrAPIKey()
@@ -328,4 +336,68 @@ func writeHostJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(v)
+}
+
+// externalDemo is the AUTH_EXTERNAL_DEMO=1 hybrid proof: a development issuer
+// served by this process is wired beside the native credentials through
+// auth.WithExternal, so one route admits a provider token OR an API key and
+// another demands provider MFA. It is development-only — devissuer.New refuses
+// any other mode — and the Firebase session-cookie exchange is not built here.
+type externalDemo struct {
+	issuer *devissuer.Issuer
+	config authlogic.ExternalConfig
+}
+
+// newExternalDemo builds the dev issuer and the provider config auth.New takes.
+func newExternalDemo(ctx context.Context, origin string, mode environment.Mode, log *slog.Logger) (*externalDemo, error) {
+	if mode != environment.ModeDevelopment {
+		return nil, fmt.Errorf("AUTH_EXTERNAL_DEMO requires development mode")
+	}
+	dev, err := devissuer.New(origin, mode)
+	if err != nil {
+		return nil, err
+	}
+	// The issuer is served by this process, so the verifier pins its JWKS URL
+	// rather than running discovery against a server that is not listening yet.
+	verifier, err := gooidc.New(ctx, dev.Issuer(),
+		gooidc.WithJWKSURL(dev.JWKSURL()), gooidc.WithAudiences(devissuer.Audience), gooidc.WithLogger(log))
+	if err != nil {
+		return nil, err
+	}
+	return &externalDemo{issuer: dev, config: authlogic.ExternalConfig{
+		Providers: []authlogic.ExternalProvider{{
+			Name:                         externalProviderName,
+			Provider:                     sdkauth.NewOIDC(dev.Issuer(), verifier, sdkauth.Profile{}),
+			ProvisionOnFirstVerification: true,
+		}},
+	}}, nil
+}
+
+// register mounts the dev issuer and the three demo routes, and seeds one API
+// key whose plaintext is logged once (development only):
+//
+//	GET /demo/external/hybrid  provider token OR API key
+//	GET /demo/external/mfa     provider token whose amr carries a second factor
+//	GET /demo/external/only    provider token only (a native session is refused)
+func (d *externalDemo) register(ctx context.Context, router *web.WebHandler, components *auth.Components, log *slog.Logger) error {
+	router.Handle(http.MethodGet, devissuer.KeysPath, d.issuer.KeysHandler().ServeHTTP)
+	router.Handle(http.MethodPost, devissuer.TokenPath, d.issuer.TokenHandler())
+
+	authentication := components.HTTP
+	router.Handle(http.MethodGet, "/demo/external/hybrid", demoWhoami(), authentication.RequireExternalTokenOrAPIKey())
+	router.Handle(http.MethodGet, "/demo/external/mfa", demoWhoami(),
+		authentication.RequirePrincipal(authenticationhttp.Accept(authenticationhttp.CredentialExternalToken), authenticationhttp.RequireMFA()))
+	router.Handle(http.MethodGet, "/demo/external/only", demoWhoami(), authentication.RequireExternalToken())
+
+	account, err := components.Authentication.CreateServiceAccount(ctx, "external-demo", "external-demo-bot", "AUTH_EXTERNAL_DEMO seeded machine identity", false, "")
+	if err != nil {
+		return err
+	}
+	_, key, err := components.Authentication.MintAPIKey(ctx, account.ID, "external-demo", time.Time{})
+	if err != nil {
+		return err
+	}
+	log.WarnContext(ctx, "AUTH_EXTERNAL_DEMO enabled (development only): dev issuer and hybrid routes mounted; seeded API key printed ONCE",
+		"issuer", d.issuer.Issuer(), "token", devissuer.TokenPath, "api_key", key)
+	return nil
 }

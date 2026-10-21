@@ -562,6 +562,7 @@ adopts them by bumping its pin — `go get -tool github.com/gopernicus/gopernicu
 | `examples/jobs-minimal` | conforming worked example — the jobs pocket with host-owned handlers; `cmd/` only, conforming as it stands |
 | `examples/auth-cms` | conforming to the H floor since the host-contract-reconciliation package moves (issue #90); still the **authentication conformance harness**, not a layout reference — its `cmd/` carries provider behavior the H10 reviewer clause covers |
 | `examples/goth-showcase` | conforming to the H floor since its showcase package moved to the host's `ui/showcase`; the `ui/goth` kit showcase, not a layout reference |
+| `examples/external-identity` | conforming worked example — the external-only identity host: the authentication pocket's external engine over an in-memory host-pocket outbound, a host `integrations/` dev issuer, no driver, signer, sessions or mail |
 
 `examples/minimal` also demonstrates application-data caching at
 `GET /catalog.json`: a host service caches a public product projection from CMS
@@ -573,7 +574,7 @@ host invalidates the logical `published:` prefix after a write; the runnable
 HTTP proof covers that invalidation and never includes draft products. The JSON
 route sets HTTP no-store independently of the service's data cache.
 
-All five run under this repo's own `make guard` (G30).
+All six run under this repo's own `make guard` (G30).
 A green guard over `auth-cms` is the floor, not the clause: its composition
 root's provider behavior is named debt (below), not H10 compliance.
 
@@ -590,7 +591,7 @@ this contract places in a host pocket or an outbound adapter; the ad-hoc
 packages it once grew directly under `internal/` now live in its host
 pockets' `inbound`/`outbound` (host-contract-reconciliation). The provider
 behavior in `cmd/` is a known, dated debt, not a pattern to copy: the shape to copy is §2, and the worked
-examples are `cms`, `minimal`, and `jobs-minimal`.
+examples are `cms`, `minimal`, `jobs-minimal`, and `external-identity`.
 
 **Reference findings.** Where this document and the reference host disagree,
 the disagreement is recorded here until one side moves:
