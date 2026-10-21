@@ -18,7 +18,7 @@ require (
 	github.com/gopernicus/gopernicus/pockets/jobs v0.6.0
 	github.com/gopernicus/gopernicus/pockets/jobs/stores/pgx v0.6.0
 	github.com/gopernicus/gopernicus/pockets/jobs/stores/turso v0.5.0
-	github.com/gopernicus/gopernicus/sdk v0.14.0
+	github.com/gopernicus/gopernicus/sdk v0.15.0
 	github.com/gopernicus/gopernicus/ui/goth v0.2.0
 	github.com/jackc/pgx/v5 v5.8.0
 )
