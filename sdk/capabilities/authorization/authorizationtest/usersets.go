@@ -21,7 +21,10 @@ func Usersets() Fixture {
 			check("non-member denied", user("bob"), "view", res("document", "spec"), false),
 			check("direct grant", user("bob"), "view", res("document", "memo"), true),
 			check("concrete grant beside a userset", user("cid"), "view", res("document", "spec"), true),
-			checkErr("userset principal is not nameable", user("all#member"), "view", res("document", "spec"), sdk.ErrInvalidInput),
+			// A userset-shaped ID is an opaque ID: it never expands. Outside the
+			// portable grammar, so WithGrammar may reject it instead.
+			check("userset principal is not nameable", user("all#member"), "view", res("document", "spec"), false),
+			checkErr("empty principal id", user(""), "view", res("document", "spec"), sdk.ErrInvalidInput),
 		},
 		Lookups: []LookupCase{
 			lookup("lookup through a userset", user("ann"), "view", "document", 10, "spec"),

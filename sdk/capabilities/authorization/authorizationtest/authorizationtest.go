@@ -10,12 +10,19 @@
 // asserted as a divergence through the Diverge map, keyed by implementation.
 // The optional SchemaReader and Limiter families skip loudly when the
 // interface is absent; a declared one must pass.
+//
+// Identifier grammar belongs to the implementation. The fixtures carry
+// identifiers outside the portable grammar (ValidatePortable) whose answer is
+// a plain deny; an implementation declares the grammar it enforces with
+// WithGrammar, and every fixture request that grammar rejects must instead be
+// sdk.ErrInvalidInput.
 package authorizationtest
 
 import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"testing"
 
@@ -26,6 +33,23 @@ import (
 // maxDrainPages stops a lookup that never finishes.
 const maxDrainPages = 10_000
 
+// Option configures Run.
+type Option func(*config)
+
+type config struct {
+	grammar func(authorization.CheckRequest) error
+}
+
+// WithGrammar declares the identifier grammar the implementation enforces:
+// every fixture CheckRequest for which validate returns an error must be
+// rejected with sdk.ErrInvalidInput, by Check and by CheckBatch. An
+// implementation that enforces the portable grammar passes
+// authorization.ValidatePortable. Without it, only the structural checks of
+// CheckRequest.Validate are assumed.
+func WithGrammar(validate func(authorization.CheckRequest) error) Option {
+	return func(c *config) { c.grammar = validate }
+}
+
 // Factory builds a FRESH authority for f, installs its own dialect's schema for
 // f.Name and seeds f.Facts natively. It calls t.Fatal when it has no schema
 // for f.Name.
@@ -34,12 +58,22 @@ type Factory func(t *testing.T, f Fixture) authorization.Authorizer
 // Run executes every family over every fixture. implementation names the
 // implementation under test (Engine, Authzed, OpenFGA, or a new name) and
 // selects its Diverge entries.
-func Run(t *testing.T, implementation string, factory Factory) {
+func Run(t *testing.T, implementation string, factory Factory, opts ...Option) {
 	t.Helper()
 	if implementation == "" || factory == nil {
 		t.Fatal("authorizationtest: Run needs an implementation name and a factory")
 	}
+	var cfg config
+	for _, opt := range opts {
+		if opt == nil {
+			t.Fatal("authorizationtest: nil Option")
+		}
+		opt(&cfg)
+	}
 	for _, f := range Fixtures() {
+		if cfg.grammar != nil {
+			applyGrammar(&f, implementation, cfg.grammar)
+		}
 		t.Run(f.Name, func(t *testing.T) {
 			a := factory(t, f)
 			if a == nil {
@@ -263,6 +297,20 @@ func runLookupAll(t *testing.T, a authorization.Authorizer) {
 	}
 	if _, err := authorization.LookupAll(ctx, a, req, 2*DocumentCount/3-1); !errors.Is(err, sdk.ErrUnavailable) {
 		t.Fatalf("LookupAll over its max = %v, want sdk.ErrUnavailable", err)
+	}
+}
+
+// applyGrammar makes every check the implementation's grammar rejects expect
+// sdk.ErrInvalidInput for that implementation.
+func applyGrammar(f *Fixture, implementation string, grammar func(authorization.CheckRequest) error) {
+	for i, c := range f.Checks {
+		if grammar(c.Req) == nil {
+			continue
+		}
+		diverge := make(map[string]Expect, len(c.Diverge)+1)
+		maps.Copy(diverge, c.Diverge)
+		diverge[implementation] = Expect{Err: sdk.ErrInvalidInput}
+		f.Checks[i].Diverge = diverge
 	}
 }
 

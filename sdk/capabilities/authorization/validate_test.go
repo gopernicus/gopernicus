@@ -9,7 +9,7 @@ import (
 	"github.com/gopernicus/gopernicus/sdk/capabilities/authorization"
 )
 
-func TestValidateRefAccepts(t *testing.T) {
+func TestValidatePortableRefAccepts(t *testing.T) {
 	for _, c := range []struct{ kind, value string }{
 		{authorization.KindType, "abc"},
 		{authorization.KindType, "client_hub"},
@@ -24,13 +24,13 @@ func TestValidateRefAccepts(t *testing.T) {
 		{authorization.KindID, "x"},
 		{authorization.KindID, strings.Repeat("a", 256)},
 	} {
-		if err := authorization.ValidateRef(c.kind, c.value); err != nil {
-			t.Errorf("ValidateRef(%s, %q) = %v", c.kind, c.value, err)
+		if err := authorization.ValidatePortableRef(c.kind, c.value); err != nil {
+			t.Errorf("ValidatePortableRef(%s, %q) = %v", c.kind, c.value, err)
 		}
 	}
 }
 
-func TestValidateRefRejects(t *testing.T) {
+func TestValidatePortableRefRejects(t *testing.T) {
 	for _, c := range []struct{ kind, value string }{
 		{authorization.KindType, ""},
 		{authorization.KindType, "ab"},
@@ -51,8 +51,8 @@ func TestValidateRefRejects(t *testing.T) {
 		{authorization.KindID, strings.Repeat("a", 257)},
 		{"label", "abc"},
 	} {
-		if err := authorization.ValidateRef(c.kind, c.value); !errors.Is(err, sdk.ErrInvalidInput) {
-			t.Errorf("ValidateRef(%s, %q) = %v, want sdk.ErrInvalidInput", c.kind, c.value, err)
+		if err := authorization.ValidatePortableRef(c.kind, c.value); !errors.Is(err, sdk.ErrInvalidInput) {
+			t.Errorf("ValidatePortableRef(%s, %q) = %v, want sdk.ErrInvalidInput", c.kind, c.value, err)
 		}
 	}
 }
@@ -61,25 +61,27 @@ func TestValidateRefRejects(t *testing.T) {
 // which is why consumers never apply it to them.
 func TestPathParameterNamesAreNotIdentifiers(t *testing.T) {
 	for _, name := range []string{"organizationId", "timelineID", "spaceID", "tenantID", "programId"} {
-		if authorization.ValidateRef(authorization.KindRelation, name) == nil {
+		if authorization.ValidatePortableRef(authorization.KindRelation, name) == nil {
 			t.Errorf("%q unexpectedly passes the relation grammar", name)
 		}
 	}
 }
 
-func TestValidateObjectCombinedCap(t *testing.T) {
-	if err := authorization.ValidateObject("client_hub", strings.Repeat("a", 245)); err != nil {
+func TestValidatePortableObjectCombinedCap(t *testing.T) {
+	if err := authorization.ValidatePortableObject("client_hub", strings.Repeat("a", 245)); err != nil {
 		t.Fatalf("256-byte object rejected: %v", err)
 	}
-	err := authorization.ValidateObject("client_hub", strings.Repeat("a", 246))
+	err := authorization.ValidatePortableObject("client_hub", strings.Repeat("a", 246))
 	if !errors.Is(err, sdk.ErrInvalidInput) {
 		t.Fatalf("257-byte object = %v, want sdk.ErrInvalidInput", err)
 	}
-	if err := authorization.ValidateObject("doc", "*"); !errors.Is(err, sdk.ErrInvalidInput) {
+	if err := authorization.ValidatePortableObject("doc", "*"); !errors.Is(err, sdk.ErrInvalidInput) {
 		t.Fatalf("wildcard id = %v", err)
 	}
 }
 
+// Validate checks structure only: identifiers the portable grammar rejects
+// still pass it, because grammar belongs to each implementation.
 func TestRequestValidate(t *testing.T) {
 	alice := authorization.Principal{Type: "user", ID: "alice"}
 	ok := authorization.CheckRequest{Principal: alice, Permission: "view", Resource: authorization.Resource{Type: "document", ID: "d1"}}
@@ -87,22 +89,64 @@ func TestRequestValidate(t *testing.T) {
 		t.Fatal(err)
 	}
 	for name, req := range map[string]authorization.CheckRequest{
-		"wildcard principal": {Principal: authorization.Principal{Type: "user", ID: "*"}, Permission: "view", Resource: ok.Resource},
-		"empty permission":   {Principal: alice, Resource: ok.Resource},
-		"bad resource type":  {Principal: alice, Permission: "view", Resource: authorization.Resource{Type: "Doc", ID: "d1"}},
-		"empty resource id":  {Principal: alice, Permission: "view", Resource: authorization.Resource{Type: "document"}},
+		"empty principal type": {Principal: authorization.Principal{ID: "alice"}, Permission: "view", Resource: ok.Resource},
+		"empty principal id":   {Principal: authorization.Principal{Type: "user"}, Permission: "view", Resource: ok.Resource},
+		"empty permission":     {Principal: alice, Resource: ok.Resource},
+		"empty resource type":  {Principal: alice, Permission: "view", Resource: authorization.Resource{ID: "d1"}},
+		"empty resource id":    {Principal: alice, Permission: "view", Resource: authorization.Resource{Type: "document"}},
 	} {
 		if err := req.Validate(); !errors.Is(err, sdk.ErrInvalidInput) {
 			t.Errorf("%s: %v", name, err)
+		}
+	}
+	for name, req := range map[string]authorization.CheckRequest{
+		"wildcard principal": {Principal: authorization.Principal{Type: "user", ID: "*"}, Permission: "view", Resource: ok.Resource},
+		"hyphenated name":    {Principal: alice, Permission: "can-view", Resource: ok.Resource},
+		"capitalised type":   {Principal: alice, Permission: "view", Resource: authorization.Resource{Type: "Doc", ID: "a.b"}},
+	} {
+		if err := req.Validate(); err != nil {
+			t.Errorf("%s: Validate = %v, want structure only", name, err)
 		}
 	}
 	lookup := authorization.LookupRequest{Principal: alice, Permission: "view", ResourceType: "document"}
 	if err := lookup.Validate(); err != nil {
 		t.Fatal(err)
 	}
-	lookup.Limit = -1
-	if err := lookup.Validate(); !errors.Is(err, sdk.ErrInvalidInput) {
-		t.Fatalf("negative limit: %v", err)
+	for name, req := range map[string]authorization.LookupRequest{
+		"negative limit":      {Principal: alice, Permission: "view", ResourceType: "document", Limit: -1},
+		"empty principal id":  {Principal: authorization.Principal{Type: "user"}, Permission: "view", ResourceType: "document"},
+		"empty permission":    {Principal: alice, ResourceType: "document"},
+		"empty resource type": {Principal: alice, Permission: "view"},
+	} {
+		if err := req.Validate(); !errors.Is(err, sdk.ErrInvalidInput) {
+			t.Errorf("lookup %s: %v", name, err)
+		}
+	}
+	lookup.Permission = "can-view"
+	if err := lookup.Validate(); err != nil {
+		t.Fatalf("lookup grammar: Validate = %v, want structure only", err)
+	}
+}
+
+func TestValidatePortable(t *testing.T) {
+	alice := authorization.Principal{Type: "user", ID: "alice"}
+	ok := authorization.CheckRequest{Principal: alice, Permission: "view", Resource: authorization.Resource{Type: "document", ID: "d1"}}
+	if err := authorization.ValidatePortable(ok); err != nil {
+		t.Fatal(err)
+	}
+	for name, req := range map[string]authorization.CheckRequest{
+		"wildcard principal":    {Principal: authorization.Principal{Type: "user", ID: "*"}, Permission: "view", Resource: ok.Resource},
+		"userset principal":     {Principal: authorization.Principal{Type: "user", ID: "all#member"}, Permission: "view", Resource: ok.Resource},
+		"empty permission":      {Principal: alice, Resource: ok.Resource},
+		"hyphenated permission": {Principal: alice, Permission: "can-view", Resource: ok.Resource},
+		"bad resource type":     {Principal: alice, Permission: "view", Resource: authorization.Resource{Type: "Doc", ID: "d1"}},
+		"wildcard resource id":  {Principal: alice, Permission: "view", Resource: authorization.Resource{Type: "document", ID: "*"}},
+		"empty resource id":     {Principal: alice, Permission: "view", Resource: authorization.Resource{Type: "document"}},
+		"object over 256 bytes": {Principal: alice, Permission: "view", Resource: authorization.Resource{Type: "document", ID: strings.Repeat("a", 250)}},
+	} {
+		if err := authorization.ValidatePortable(req); !errors.Is(err, sdk.ErrInvalidInput) {
+			t.Errorf("%s: %v", name, err)
+		}
 	}
 }
 

@@ -48,11 +48,16 @@ func Documents() Fixture {
 		check("platform non-admin", user("alice"), "admin", res("platform", "main"), false),
 		checkErr("undeclared permission", user("alice"), "edit", res("document", DocID(1)), sdk.ErrInvalidInput),
 		checkErr("undeclared resource type", user("alice"), "view", res("widget", "w1"), sdk.ErrInvalidInput),
-		checkErr("wildcard principal id", user("*"), "view", res("document", DocID(1)), sdk.ErrInvalidInput),
-		checkErr("wildcard resource id", user("alice"), "view", res("document", "*"), sdk.ErrInvalidInput),
 		checkErr("hyphenated permission", user("alice"), "can-view", res("document", DocID(1)), sdk.ErrInvalidInput),
-		checkErr("300-byte id", user("alice"), "view", res("document", strings.Repeat("a", 300)), sdk.ErrInvalidInput),
-		checkErr("object over 256 bytes", user("alice"), "view", res("document", strings.Repeat("a", 250)), sdk.ErrInvalidInput),
+		checkErr("empty principal id", user(""), "view", res("document", DocID(1)), sdk.ErrInvalidInput),
+		checkErr("empty permission", user("alice"), "", res("document", DocID(1)), sdk.ErrInvalidInput),
+		checkErr("empty resource id", user("alice"), "view", res("document", ""), sdk.ErrInvalidInput),
+		// Outside the portable grammar: a plain deny, or sdk.ErrInvalidInput
+		// where the implementation's grammar (WithGrammar) rejects them.
+		check("wildcard principal id", user("*"), "view", res("document", DocID(1)), false),
+		check("wildcard resource id", user("alice"), "view", res("document", "*"), false),
+		check("300-byte id", user("alice"), "view", res("document", strings.Repeat("a", 300)), false),
+		check("object over 256 bytes", user("alice"), "view", res("document", strings.Repeat("a", 250)), false),
 	}
 	f.Lookups = []LookupCase{
 		lookup("limit 50 over 120", user("alice"), "view", "document", 50, aliceIDs...),
