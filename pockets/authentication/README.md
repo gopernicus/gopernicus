@@ -614,7 +614,12 @@ wired kind — by default, immediate revocation), only decline is public:**
   a holder of the permission on the LOADED row's resource (denial → 404); without
   it, `InvitedBy == caller` (denial → 403). A denial performs no update or delivery.
 - `POST /auth/invitations/{id}/decline` — public, token-authorized, IP-limited
-  (the one invitation route with no session gate).
+  (the one invitation route with no session gate), behind the Origin-only gate.
+
+**Cookie clients must double-submit the CSRF token on create, accept, cancel and
+resend**: `GET /auth/csrf`, then echo the `__Host-auth_csrf`
+value in `X-CSRF-Token` from an allowlisted `Origin`. Bearer and API-key callers
+are not gated.
 
 Every response built from an invitation row is `{id, resource_type, resource_id,
 relation, identifier, invited_by, status, auto_accept, resolved_subject_id?,

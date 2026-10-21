@@ -158,15 +158,20 @@ func newMyInvitationResponse(inv invitations.Invitation) myInvitationResponse {
 // from Mount only when a Granter is wired. Every authenticated route rides the
 // Invitations authenticator (design §6/D3), so a revoked session's outstanding
 // access JWT is denied within one round-trip; decline is public and
-// IP-rate-limited.
+// IP-rate-limited. The authenticated mutations also carry the browser-safe gate
+// (allowlisted Origin + double-submit CSRF, design §9.1); bearer-only callers
+// skip it. Decline has no session and so no __Host-auth_csrf cookie to
+// double-submit — the token in its body is the credential — so, like the other
+// session-less routes, it carries the ORIGIN-ONLY gate.
 func mountInvitations(r pockets.RouteRegistrar, h *handlers, invitations, declineLimit web.Middleware) {
-	r.Handle("POST", "/auth/invitations/{resource_type}/{resource_id}", h.createInvitation, invitations)
+	browserSafe := requireBrowserSafeMutation(h.mutation.csrf())
+	r.Handle("POST", "/auth/invitations/{resource_type}/{resource_id}", h.createInvitation, invitations, browserSafe)
 	r.Handle("GET", "/auth/invitations/{resource_type}/{resource_id}", h.listResourceInvitations, invitations)
 	r.Handle("GET", "/auth/invitations/mine", h.listMyInvitations, invitations)
-	r.Handle("POST", "/auth/invitations/accept", h.acceptInvitation, invitations)
-	r.Handle("POST", "/auth/invitations/{id}/cancel", h.cancelInvitation, invitations)
-	r.Handle("POST", "/auth/invitations/{id}/resend", h.resendInvitation, invitations)
-	r.Handle("POST", "/auth/invitations/{id}/decline", h.declineInvitation, declineLimit)
+	r.Handle("POST", "/auth/invitations/accept", h.acceptInvitation, invitations, browserSafe)
+	r.Handle("POST", "/auth/invitations/{id}/cancel", h.cancelInvitation, invitations, browserSafe)
+	r.Handle("POST", "/auth/invitations/{id}/resend", h.resendInvitation, invitations, browserSafe)
+	r.Handle("POST", "/auth/invitations/{id}/decline", h.declineInvitation, requireBrowserSafeOrigin(h.mutation.csrf()), declineLimit)
 }
 
 // createInvitation prepares once, authorizes the inspected command, then executes

@@ -84,7 +84,7 @@ func TestInvitationHTTPPolicyChecksExactPreparedCommand(t *testing.T) {
 				f.seedLoginUser("u1", "inviter@x.com")
 				cookie := f.login(t, "inviter@x.com")
 				body := fmt.Sprintf(`{"identifier":" Invitee@X.com ","identifier_kind":" email ","relation":" member ","auto_accept":%v,"metadata":{"route":"original"}}`, direct)
-				rec := do(t, f.h, "POST", "/auth/invitations/project/p1", body, cookie)
+				rec := doCSRF(t, f.h, "POST", "/auth/invitations/project/p1", body, cookie)
 				want := http.StatusCreated
 				if direct {
 					want = http.StatusOK
