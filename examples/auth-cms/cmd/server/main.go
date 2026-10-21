@@ -357,6 +357,22 @@ func run(ctx context.Context, log *slog.Logger) error {
 		authOptions = append(authOptions, auth.WithOAuth2(auth.OAuth2Config{Server: oauthFixture.Config(), Clients: oauthFixture, Views: oauthViews,
 			CapabilityDescription: "Read your user and connection identifiers through the local MCP demonstration. This demo does not change application data."}))
 	}
+	// AUTH_EXTERNAL_DEMO=1 (development only) wires a dev identity provider beside
+	// the native credentials and mounts the hybrid routes after the pocket (demo.go).
+	externalDemoConfig := struct {
+		Enabled bool `env:"AUTH_EXTERNAL_DEMO"`
+	}{}
+	if err := environment.ParseEnvTags("", &externalDemoConfig); err != nil {
+		return err
+	}
+	var external *externalDemo
+	if externalDemoConfig.Enabled {
+		external, err = newExternalDemo(ctx, srv.Origin(), authCfg.RuntimeMode, log)
+		if err != nil {
+			return err
+		}
+		authOptions = append(authOptions, auth.WithExternal(external.config))
+	}
 	authSvc, err := auth.New(authRepos, authCfg.TokenSigner, authCfg.RuntimeMode, authCfg.DeliveryMode, authOptions...)
 	if err != nil {
 		return err
@@ -372,6 +388,11 @@ func run(ctx context.Context, log *slog.Logger) error {
 		}
 		demo.Register(mount)
 		log.InfoContext(ctx, "Local OAuth connection demo enabled", "url", srv.Origin()+"/oauth-demo")
+	}
+	if external != nil {
+		if err := external.register(ctx, router, authSvc, log); err != nil {
+			return err
+		}
 	}
 	// Close the role-routes ordering seam: the bundled /authorization/roles* surface
 	// now runs behind the live human session plus the platform-admin permission — the
