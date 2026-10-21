@@ -13,6 +13,7 @@ import (
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/challenge"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/contactchange"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/credential"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/externalsubject"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/identifier"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/oauthaccount"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/oauthstate"
@@ -90,4 +91,6 @@ type authenticationFixture struct {
 	PublicAuthBaseURL       string
 	PasswordResetURL        string
 	OAuthLinkBaseURL        string
+	External                *authlogic.ExternalConfig
+	ExternalSubjects        externalsubject.Repository
 }

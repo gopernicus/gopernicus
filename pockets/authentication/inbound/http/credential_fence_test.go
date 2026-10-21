@@ -181,6 +181,7 @@ func newServiceWithFakes(d authenticationFixture, configs ...authenticatorConfig
 	cfg := authenticatorConfig{Limiter: d.Limiter, Logger: d.Logger}
 	if len(configs) > 0 {
 		cfg.Cookie = configs[0].Cookie
+		cfg.ExternalCookies = configs[0].ExternalCookies
 		cfg.BrowserLoginPath = configs[0].BrowserLoginPath
 	}
 	// Registration now validates its challenge/delivery dependencies before it
@@ -281,10 +282,7 @@ func mustAuthenticationService(d authenticationFixture) *authlogic.Components {
 			}
 		}
 	}
-	service, err := authlogic.New(authlogic.Repositories{Users: d.Users, Identifiers: d.Identifiers, Passwords: d.Passwords, Sessions: d.Sessions, UserAdmin: d.UserAdmin, PasswordlessRedeem: d.PasswordlessRedeem, ActiveSessions: d.ActiveSessions, Challenges: d.Challenges, PasswordResets: d.PasswordResets, ContactChanges: d.ContactChanges, CredentialMutations: d.CredentialMutations, AuthenticationGrants: d.AuthenticationGrants, SecurityEvents: d.SecurityEvents, OAuthAccounts: d.OAuthAccounts, OAuthStates: d.OAuthStates, ServiceAccounts: d.ServiceAccounts, APIKeys: d.APIKeys},
-		d.TokenSigner,
-		d.RuntimeMode,
-		d.Limiter,
+	opts := []authlogic.Option{
 		authlogic.WithPassword(authlogic.PasswordConfig{Hasher: d.Hasher, ValidatePassword: d.ValidatePassword, Compromised: d.Compromised, CompromisedFailOpen: d.CompromisedFailOpen, PasswordFlowsDisabled: d.PasswordFlowsDisabled, RequireVerifiedEmail: d.RequireVerifiedEmail}),
 		authlogic.WithSessions(authlogic.SessionsConfig{AccessTokenTTL: d.AccessTokenTTL, RefreshTTL: d.RefreshTTL}),
 		authlogic.WithDelegatedTokens(d.DelegatedTokens),
@@ -298,7 +296,16 @@ func mustAuthenticationService(d authenticationFixture) *authlogic.Components {
 		authlogic.WithLimits(d.AuthenticationLimits),
 		authlogic.WithClock(d.Clock),
 		authlogic.WithLogger(d.Logger),
-		authlogic.WithIDs(d.IDs))
+		authlogic.WithIDs(d.IDs),
+	}
+	if d.External != nil {
+		opts = append(opts, authlogic.WithExternal(*d.External))
+	}
+	service, err := authlogic.New(authlogic.Repositories{Users: d.Users, Identifiers: d.Identifiers, Passwords: d.Passwords, Sessions: d.Sessions, UserAdmin: d.UserAdmin, PasswordlessRedeem: d.PasswordlessRedeem, ActiveSessions: d.ActiveSessions, Challenges: d.Challenges, PasswordResets: d.PasswordResets, ContactChanges: d.ContactChanges, CredentialMutations: d.CredentialMutations, AuthenticationGrants: d.AuthenticationGrants, SecurityEvents: d.SecurityEvents, OAuthAccounts: d.OAuthAccounts, OAuthStates: d.OAuthStates, ServiceAccounts: d.ServiceAccounts, APIKeys: d.APIKeys, ExternalSubjects: d.ExternalSubjects},
+		d.TokenSigner,
+		d.RuntimeMode,
+		d.Limiter,
+		opts...)
 	if err != nil {
 		panic(err)
 	}

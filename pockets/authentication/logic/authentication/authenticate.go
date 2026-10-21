@@ -14,14 +14,8 @@ import (
 // adapters must require the expected profile and audience. Delegated proof always
 // checks a live grant; each new operation on a persistent transport must call
 // RequireLive again. The HTTP adapter supplies these checks through Audience.
-func (s *Service) Authenticate(ctx context.Context, kind CredentialKind, transport Transport, raw string) (context.Context, bool) {
-	ctx, err := s.authenticate(ctx, kind, transport, raw)
-	return ctx, err == nil
-}
-
-// authenticate is Authenticate with the reason kept: errors match
-// sdk.ErrUnauthorized (deny) or sdk.ErrUnavailable (cannot decide).
-func (s *Service) authenticate(ctx context.Context, kind CredentialKind, transport Transport, raw string) (context.Context, error) {
+// Errors match sdk.ErrUnauthorized (deny) or sdk.ErrUnavailable (cannot decide).
+func (s *Service) Authenticate(ctx context.Context, kind CredentialKind, transport Transport, raw string) (context.Context, error) {
 	ctx = clearCredential(ctx)
 	if ctx.Err() != nil || (transport != TransportHeader && transport != TransportCookie) {
 		return ctx, errCredentialRejected
@@ -59,18 +53,13 @@ func (s *Service) authenticate(ctx context.Context, kind CredentialKind, transpo
 	return ctx, nil
 }
 
-// RequireLive verifies the live session behind a previously authenticated proof.
-// API keys already checked their backing row during authentication. A context
-// without this service's credential proof always fails.
-// Delegated proof is rechecked on every call, including its access-token expiry.
-func (s *Service) RequireLive(ctx context.Context) (context.Context, bool) {
-	ctx, err := s.requireLive(ctx, LivenessLive, true)
-	return ctx, err == nil
-}
-
-// requireLive applies tier to the proof on ctx; unsafe reports a mutating
-// request. Errors match sdk.ErrUnauthorized or sdk.ErrUnavailable.
-func (s *Service) requireLive(ctx context.Context, tier LivenessTier, unsafe bool) (context.Context, error) {
+// RequireLive applies tier to a previously authenticated proof; unsafe reports a
+// mutating request. API keys already checked their backing row during
+// authentication. A context without this service's credential proof always
+// fails. Delegated proof is rechecked on every call, whatever the tier,
+// including its access-token expiry. Errors match sdk.ErrUnauthorized (deny) or
+// sdk.ErrUnavailable (cannot decide).
+func (s *Service) RequireLive(ctx context.Context, tier LivenessTier, unsafe bool) (context.Context, error) {
 	cred, ok := s.CurrentCredential(ctx)
 	if !ok || ctx.Err() != nil {
 		return clearCredential(ctx), errNotLive

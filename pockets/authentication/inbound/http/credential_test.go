@@ -438,12 +438,12 @@ func TestRequirePrincipalLiveTier(t *testing.T) {
 		}
 	})
 
-	t.Run("repository error fails closed", func(t *testing.T) {
+	t.Run("repository error fails closed with 503", func(t *testing.T) {
 		h := newCredentialHarness(t)
 		h.sess.getErr = errors.New("session store unavailable")
-		rec, _ := serveGuarded(h, h.svc.RequirePrincipal(Live()), h.credentialRequest(h.accessJWT, ""))
-		if rec.Code != http.StatusUnauthorized {
-			t.Errorf("unreadable session store status = %d, want 401 (fail closed)", rec.Code)
+		rec, got := serveGuarded(h, h.svc.RequirePrincipal(Live()), h.credentialRequest(h.accessJWT, ""))
+		if rec.Code != http.StatusServiceUnavailable || rec.Header().Get("Retry-After") != "5" || got.reached {
+			t.Errorf("unreadable session store status = %d Retry-After=%q reached=%v, want 503 + Retry-After, not reached (fail closed, never a 401)", rec.Code, rec.Header().Get("Retry-After"), got.reached)
 		}
 	})
 

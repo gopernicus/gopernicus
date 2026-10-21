@@ -77,7 +77,7 @@ func TestDelegatedAuthenticationChecksGrantAndReturnsIsolatedMetadata(t *testing
 	h, _, sess, _ := delegatedFixture(t)
 	for _, exchanged := range []bool{false, true} {
 		raw := signDelegatedClaims(t, h, delegatedClaims(sess, exchanged))
-		ctx, ok := h.svc.Authenticate(context.Background(), CredentialAccessToken, TransportHeader, raw)
+		ctx, ok := authOK(h.svc.Authenticate(context.Background(), CredentialAccessToken, TransportHeader, raw))
 		if !ok {
 			t.Fatalf("exchanged=%v: valid delegated proof denied", exchanged)
 		}
@@ -96,7 +96,7 @@ func TestDelegatedAuthenticationChecksGrantAndReturnsIsolatedMetadata(t *testing
 		if again.Audiences[0] == "changed-by-caller" {
 			t.Fatal("caller changed authenticated audience in context")
 		}
-		if _, ok := h.svc.Authenticate(context.Background(), CredentialAccessToken, TransportCookie, raw); ok {
+		if _, ok := authOK(h.svc.Authenticate(context.Background(), CredentialAccessToken, TransportCookie, raw)); ok {
 			t.Fatal("delegated token authenticated as a browser cookie")
 		}
 	}
@@ -134,7 +134,7 @@ func TestDelegatedClaimsNeverDowngradeToFirstParty(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			claims := delegatedClaims(sess, false)
 			mutate(claims)
-			ctx, ok := h.svc.Authenticate(context.Background(), CredentialAccessToken, TransportHeader, signDelegatedClaims(t, h, claims))
+			ctx, ok := authOK(h.svc.Authenticate(context.Background(), CredentialAccessToken, TransportHeader, signDelegatedClaims(t, h, claims)))
 			if ok {
 				t.Fatal("invalid delegated proof admitted")
 			}
@@ -146,7 +146,7 @@ func TestDelegatedClaimsNeverDowngradeToFirstParty(t *testing.T) {
 	for _, name := range []string{"iss", "aud", "client_id", "origin_client_id", "act"} {
 		t.Run("partial legacy "+name, func(t *testing.T) {
 			claims := map[string]any{"user_id": sess.UserID, "session_id": sess.ID, name: "partial"}
-			if _, ok := h.svc.Authenticate(context.Background(), CredentialAccessToken, TransportHeader, signDelegatedClaims(t, h, claims)); ok {
+			if _, ok := authOK(h.svc.Authenticate(context.Background(), CredentialAccessToken, TransportHeader, signDelegatedClaims(t, h, claims))); ok {
 				t.Fatal("partial OAuth claims fell back to first-party")
 			}
 		})
@@ -155,14 +155,14 @@ func TestDelegatedClaimsNeverDowngradeToFirstParty(t *testing.T) {
 		t.Run("exchange binding "+name, func(t *testing.T) {
 			claims := delegatedClaims(sess, true)
 			claims[name] = "wrong"
-			if _, ok := h.svc.Authenticate(context.Background(), CredentialAccessToken, TransportHeader, signDelegatedClaims(t, h, claims)); ok {
+			if _, ok := authOK(h.svc.Authenticate(context.Background(), CredentialAccessToken, TransportHeader, signDelegatedClaims(t, h, claims))); ok {
 				t.Fatal("invalid exchange binding admitted")
 			}
 		})
 	}
 	claims := delegatedClaims(sess, false)
 	claims["aud"] = []string{sess.Delegation.Resource}
-	if _, ok := h.svc.Authenticate(context.Background(), CredentialAccessToken, TransportHeader, signDelegatedClaims(t, h, claims)); !ok {
+	if _, ok := authOK(h.svc.Authenticate(context.Background(), CredentialAccessToken, TransportHeader, signDelegatedClaims(t, h, claims))); !ok {
 		t.Fatal("single-element audience array denied")
 	}
 }
@@ -203,7 +203,7 @@ func TestDelegatedAuthenticationRequiresLiveAuthoritativeBinding(t *testing.T) {
 			id := sess.ID
 			mutate(h, &sess)
 			h.sess.m[id] = sess
-			if _, ok := h.svc.Authenticate(context.Background(), CredentialAccessToken, TransportHeader, raw); ok {
+			if _, ok := authOK(h.svc.Authenticate(context.Background(), CredentialAccessToken, TransportHeader, raw)); ok {
 				t.Fatal("unproven delegated binding authenticated")
 			}
 		})
@@ -216,7 +216,7 @@ func TestRevocationOfDelegatedSessionIsIndependentAndNeverCached(t *testing.T) {
 	contexts := map[string]context.Context{}
 	tokens := map[string]string{"web": web.AccessToken, "A": signDelegatedClaims(t, h, delegatedClaims(a, false)), "A-api": signDelegatedClaims(t, h, delegatedClaims(a, true)), "B": signDelegatedClaims(t, h, delegatedClaims(b, false)), "B-api": signDelegatedClaims(t, h, delegatedClaims(b, true))}
 	for name, raw := range tokens {
-		ctx, ok := h.svc.Authenticate(context.Background(), CredentialAccessToken, TransportHeader, raw)
+		ctx, ok := authOK(h.svc.Authenticate(context.Background(), CredentialAccessToken, TransportHeader, raw))
 		if !ok {
 			t.Fatalf("%s initially denied", name)
 		}
@@ -227,10 +227,10 @@ func TestRevocationOfDelegatedSessionIsIndependentAndNeverCached(t *testing.T) {
 	}
 	for name, raw := range tokens {
 		want := name != "A" && name != "A-api"
-		if _, ok := h.svc.Authenticate(context.Background(), CredentialAccessToken, TransportHeader, raw); ok != want {
+		if _, ok := authOK(h.svc.Authenticate(context.Background(), CredentialAccessToken, TransportHeader, raw)); ok != want {
 			t.Errorf("%s next authentication = %v, want %v", name, ok, want)
 		}
-		ctx, ok := h.svc.RequireLive(contexts[name])
+		ctx, ok := authOK(h.svc.RequireLive(contexts[name], LivenessLive, true))
 		if ok != want {
 			t.Errorf("%s reused connection context liveness = %v, want %v", name, ok, want)
 		}
@@ -244,7 +244,7 @@ func TestRevocationOfDelegatedSessionIsIndependentAndNeverCached(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, name := range []string{"B", "B-api"} {
-		if _, ok := h.svc.RequireLive(contexts[name]); !ok {
+		if _, ok := authOK(h.svc.RequireLive(contexts[name], LivenessLive, true)); !ok {
 			t.Fatalf("web logout revoked independent %s", name)
 		}
 	}
@@ -288,12 +288,12 @@ func TestLegacyLifecycleRejectsDelegatedWithoutMutatingAnySession(t *testing.T) 
 func TestDelegatedLiveProofCannotOutliveAccessToken(t *testing.T) {
 	h, _, sess, _ := delegatedFixture(t)
 	raw := signDelegatedClaims(t, h, delegatedClaims(sess, false))
-	ctx, ok := h.svc.Authenticate(context.Background(), CredentialAccessToken, TransportHeader, raw)
+	ctx, ok := authOK(h.svc.Authenticate(context.Background(), CredentialAccessToken, TransportHeader, raw))
 	if !ok {
 		t.Fatal("initial delegated authentication failed")
 	}
 	h.svc.now = func() time.Time { return time.Now().Add(6 * time.Minute) }
-	if _, ok := h.svc.RequireLive(ctx); ok {
+	if _, ok := authOK(h.svc.RequireLive(ctx, LivenessLive, true)); ok {
 		t.Fatal("reused connection proof outlived access expiry")
 	}
 }
@@ -358,17 +358,17 @@ func TestFirstPartyLiveGateRejectsCrossUserAndCrossProfileSessions(t *testing.T)
 			row := h.sess.m[webID]
 			row.Profile = profile
 			h.sess.m[webID] = row
-			ctx, ok := h.svc.Authenticate(context.Background(), CredentialAccessToken, TransportHeader, web.AccessToken)
+			ctx, ok := authOK(h.svc.Authenticate(context.Background(), CredentialAccessToken, TransportHeader, web.AccessToken))
 			if !ok {
 				t.Fatal("first-party stateless semantics changed")
 			}
-			if _, ok := h.svc.RequireLive(ctx); ok != (profile == "" || profile == session.ProfileFirstParty) {
+			if _, ok := authOK(h.svc.RequireLive(ctx, LivenessLive, true)); ok != (profile == "" || profile == session.ProfileFirstParty) {
 				t.Fatal("incorrect profile boundary")
 			}
 			row.Profile = session.ProfileFirstParty
 			row.UserID = "other-user"
 			h.sess.m[webID] = row
-			if _, ok := h.svc.RequireLive(ctx); ok {
+			if _, ok := authOK(h.svc.RequireLive(ctx, LivenessLive, true)); ok {
 				t.Fatal("first-party proof used another user's live row")
 			}
 			claims := map[string]any{"user_id": delegated.UserID, "session_id": delegated.ID}
@@ -388,4 +388,8 @@ func TestDelegatedSessionCannotObtainFirstPartyStepUp(t *testing.T) {
 	if _, err := h.svc.RequireRecentAuthentication(context.Background(), sess.ID, sess.UserID, authgrant.PurposeSetPassword, "", RecentAuthPolicy{}); !errors.Is(err, ErrDelegatedCredential) {
 		t.Fatalf("delegated session satisfied first-party step-up: %v", err)
 	}
+}
+
+func authOK(ctx context.Context, err error) (context.Context, bool) {
+	return ctx, err == nil
 }
