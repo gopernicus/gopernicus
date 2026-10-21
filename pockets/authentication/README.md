@@ -1111,7 +1111,11 @@ allowlisted `Origin`/`Sec-Fetch-Site` check WITHOUT a pre-existing CSRF session
 (a first-time browser sign-in has no cookie to compare), and native/no-Origin
 clients pass. **Authenticated mutations** (account-security forms) use the full
 double-submit CSRF contract: the form's `csrf_token` field is compared to the
-`__Host-auth_csrf` cookie in constant time. Every HTML response carries the full
+`__Host-auth_csrf` cookie in constant time. Only routes whose handler runs that
+body compare accept a form body without the header; every other cookie-authenticated
+mutation (invitations, service accounts and API keys, user administration,
+identifier PATCH/DELETE) requires the `X-CSRF-Token` header whatever the body's
+content type. Every HTML response carries the full
 **fixed** header policy — these are pocket-owned and no policy or view can turn them off:
 `Cache-Control: no-store`, `Referrer-Policy: no-referrer`, `X-Frame-Options: DENY`,
 `X-Content-Type-Options: nosniff`, and the fixed CSP prefix `default-src 'none';

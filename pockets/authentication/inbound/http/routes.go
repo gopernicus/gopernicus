@@ -303,17 +303,18 @@ func mount(r pockets.RouteRegistrar, d mountDeps) {
 	// allowlisted-Origin + double-submit CSRF protection (design §9.1). The handlers
 	// themselves enforce the strict JSON body and set Cache-Control: no-store.
 	browserSafe := requireBrowserSafeMutation(h.mutation.csrf())
+	browserSafeForm := requireBrowserSafeFormMutation(h.mutation.csrf())
 	if pw {
 		r.Handle("POST", "/auth/verification/resend", h.resendVerification, requireBrowserSafeOrigin(h.mutation.csrf()))
 	}
 	if pw {
-		r.Handle("POST", "/auth/password/change", h.changePassword, auth.CredentialManagement, browserSafe)
+		r.Handle("POST", "/auth/password/change", h.changePassword, auth.CredentialManagement, browserSafeForm)
 	}
-	r.Handle("POST", "/auth/step-up/begin", h.beginStepUp, auth.CredentialManagement, browserSafe)
+	r.Handle("POST", "/auth/step-up/begin", h.beginStepUp, auth.CredentialManagement, browserSafeForm)
 	if pw {
-		r.Handle("POST", "/auth/step-up/password", h.completeStepUpPassword, auth.CredentialManagement, browserSafe)
+		r.Handle("POST", "/auth/step-up/password", h.completeStepUpPassword, auth.CredentialManagement, browserSafeForm)
 	}
-	r.Handle("POST", "/auth/step-up/code", h.completeStepUpCode, auth.CredentialManagement, browserSafe)
+	r.Handle("POST", "/auth/step-up/code", h.completeStepUpCode, auth.CredentialManagement, browserSafeForm)
 
 	// Credential-suite password routes (design §5.2/§5.3). Each is a
 	// cookie-authenticated sensitive mutation gated by the CredentialManagement
@@ -323,13 +324,13 @@ func mount(r pockets.RouteRegistrar, d mountDeps) {
 	// set_password grant; the remove pair delivers a remove_password code to a verified
 	// recovery identifier and completes through the revision-serialized credential rail.
 	if pw {
-		r.Handle("POST", "/auth/password/set", h.setPassword, auth.CredentialManagement, browserSafe)
+		r.Handle("POST", "/auth/password/set", h.setPassword, auth.CredentialManagement, browserSafeForm)
 	}
 	if pw {
-		r.Handle("POST", "/auth/password/remove/start", h.startRemovePassword, auth.CredentialManagement, browserSafe)
+		r.Handle("POST", "/auth/password/remove/start", h.startRemovePassword, auth.CredentialManagement, browserSafeForm)
 	}
 	if pw {
-		r.Handle("POST", "/auth/password/remove", h.removePassword, auth.CredentialManagement, browserSafe)
+		r.Handle("POST", "/auth/password/remove", h.removePassword, auth.CredentialManagement, browserSafeForm)
 	}
 
 	// Identifier-management routes (design §5.5). Each is a cookie-authenticated
@@ -339,10 +340,10 @@ func mount(r pockets.RouteRegistrar, d mountDeps) {
 	// and Cache-Control: no-store. The add/change start delivers an ownership-proof
 	// code to the proposed NEW address and the confirm applies the verified change;
 	// PATCH/DELETE route through the policy-guarded revision-serialized credential rail.
-	r.Handle("POST", "/auth/identifiers/email", h.startEmailIdentifier, auth.CredentialManagement, browserSafe)
-	r.Handle("POST", "/auth/identifiers/email/confirm", h.confirmEmailIdentifier, auth.CredentialManagement, browserSafe)
-	r.Handle("POST", "/auth/identifiers/phone", h.startPhoneIdentifier, auth.CredentialManagement, browserSafe)
-	r.Handle("POST", "/auth/identifiers/phone/confirm", h.confirmPhoneIdentifier, auth.CredentialManagement, browserSafe)
+	r.Handle("POST", "/auth/identifiers/email", h.startEmailIdentifier, auth.CredentialManagement, browserSafeForm)
+	r.Handle("POST", "/auth/identifiers/email/confirm", h.confirmEmailIdentifier, auth.CredentialManagement, browserSafeForm)
+	r.Handle("POST", "/auth/identifiers/phone", h.startPhoneIdentifier, auth.CredentialManagement, browserSafeForm)
+	r.Handle("POST", "/auth/identifiers/phone/confirm", h.confirmPhoneIdentifier, auth.CredentialManagement, browserSafeForm)
 	r.Handle("PATCH", "/auth/identifiers/{id}", h.patchIdentifier, auth.CredentialManagement, browserSafe)
 	r.Handle("DELETE", "/auth/identifiers/{id}", h.deleteIdentifier, auth.CredentialManagement, browserSafe)
 
@@ -361,7 +362,7 @@ func mount(r pockets.RouteRegistrar, d mountDeps) {
 	// OAuth routes are registered only when at least one provider is wired
 	// (deny-by-absence, design §3): an unwired host returns 404 for them.
 	if svc.OAuthEnabled() {
-		mountOAuth(r, h, auth.OAuthLinkStart, auth.CredentialManagement, browserSafe)
+		mountOAuth(r, h, auth.OAuthLinkStart, auth.CredentialManagement, browserSafeForm)
 	}
 
 	// Machine-identity lifecycle routes are registered only when both machine
@@ -407,7 +408,7 @@ func mount(r pockets.RouteRegistrar, d mountDeps) {
 	// pages ride the BrowserAccount authenticator: cookie-only and live, redirecting
 	// on denial instead of leaking a JSON 401 onto an HTML page.
 	if views != nil {
-		mountHTML(r, h, auth.BrowserAccount, browserSafe)
+		mountHTML(r, h, auth.BrowserAccount, browserSafeForm)
 	}
 }
 

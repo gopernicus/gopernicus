@@ -85,12 +85,33 @@ func (m MutationSecurity) csrf() csrfConfig {
 
 // requireBrowserSafeMutation returns middleware that protects a
 // cookie-authenticated mutation with an allowlisted Origin / Sec-Fetch-Site
-// check and a double-submit CSRF token. Bearer-only (API) requests skip the
-// gate entirely — a cross-site page cannot attach an Authorization header
-// without a CORS-approved preflight, so they are not a browser CSRF vector and
-// must not be forced through a browser CSRF flow. SameSite cookies remain
-// defense-in-depth, not the sole control (design §9.1).
+// check and a header double-submit CSRF token, whatever the body's content type.
+// Bearer-only (API) requests skip the gate entirely — a cross-site page cannot
+// attach an Authorization header without a CORS-approved preflight, so they are
+// not a browser CSRF vector and must not be forced through a browser CSRF flow.
+// SameSite cookies remain defense-in-depth, not the sole control (design §9.1).
+//
+// The Origin check alone is not enough for a cookie request: browserOriginAllowed
+// admits a request carrying neither Origin nor Sec-Fetch-Site, so the token is
+// what binds the request to a page that could read the CSRF cookie. A route whose
+// handler performs the body double-submit for form posts opts into
+// requireBrowserSafeFormMutation instead.
 func requireBrowserSafeMutation(cfg csrfConfig) web.Middleware {
+	return browserSafeMutation(cfg, false)
+}
+
+// requireBrowserSafeFormMutation is the form-lane variant of
+// requireBrowserSafeMutation. A form-encoded body cannot carry the X-CSRF-Token
+// header, so after the Origin check it defers a form body to the handler, which
+// MUST compare the body's csrf_token field against the CSRF cookie (formCSRFOK via
+// accountForm, or the consent handler's equivalent) before acting on every path
+// that accepts a form body. Any non-form body still needs the header token here.
+// Wire it only on routes whose handler meets that obligation.
+func requireBrowserSafeFormMutation(cfg csrfConfig) web.Middleware {
+	return browserSafeMutation(cfg, true)
+}
+
+func browserSafeMutation(cfg csrfConfig, formLane bool) web.Middleware {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if isBearerOnly(r, cfg.sessionCookieName) {
@@ -103,14 +124,7 @@ func requireBrowserSafeMutation(cfg csrfConfig) web.Middleware {
 				return
 			}
 
-			// A form-encoded browser mutation cannot set the X-CSRF-Token header, so
-			// its handler performs the double-submit compare against the body's
-			// csrf_token field instead (design §9.1, form lane; see accountForm). The
-			// Origin allowlist above still gates it here; the header double-submit
-			// remains the sole additional gate for JSON/fetch callers. Deferring here
-			// is safe: a form body reaches an account form handler only when Views is
-			// wired, and that handler is required to run the body double-submit.
-			if classifyContent(r) == contentForm {
+			if formLane && classifyContent(r) == contentForm {
 				next.ServeHTTP(w, r)
 				return
 			}

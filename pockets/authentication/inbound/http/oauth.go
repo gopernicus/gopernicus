@@ -50,7 +50,7 @@ type unlinkRequest struct {
 // Origin/CSRF gate, replacing the plain DELETE /auth/oauth/{provider}/link
 // (pre-tag route break). The caller's link inventory is no longer a route here:
 // GET /auth/oauth/linked is subsumed by the masked GET /auth/methods (design §5.1).
-func mountOAuth(r pockets.RouteRegistrar, h *handlers, linkStart, credentialManagement, browserSafe web.Middleware) {
+func mountOAuth(r pockets.RouteRegistrar, h *handlers, linkStart, credentialManagement, browserSafeForm web.Middleware) {
 	r.Handle("GET", "/auth/oauth/{provider}/start", h.oauthStart)
 	r.Handle("GET", "/auth/oauth/{provider}/callback", h.oauthCallback)
 	r.Handle("POST", verifyLinkPath, h.oauthVerifyLink)
@@ -61,8 +61,8 @@ func mountOAuth(r pockets.RouteRegistrar, h *handlers, linkStart, credentialMana
 		r.Handle("POST", "/auth/oauth/native/verify-link", h.oauthNativeVerifyLink)
 	}
 	r.Handle("GET", "/auth/oauth/{provider}/link/start", h.oauthLinkStart, linkStart)
-	r.Handle("POST", "/auth/oauth/{provider}/unlink/start", h.startUnlinkOAuth, credentialManagement, browserSafe)
-	r.Handle("POST", "/auth/oauth/{provider}/unlink", h.unlinkOAuth, credentialManagement, browserSafe)
+	r.Handle("POST", "/auth/oauth/{provider}/unlink/start", h.startUnlinkOAuth, credentialManagement, browserSafeForm)
+	r.Handle("POST", "/auth/oauth/{provider}/unlink", h.unlinkOAuth, credentialManagement, browserSafeForm)
 }
 
 // oauthStart redirects the browser to the provider authorization URL.
