@@ -53,6 +53,8 @@ github.com/gopernicus/gopernicus/pockets/jobs/stores/turso v0.5.0 h1:r9FoBRfAWUv
 github.com/gopernicus/gopernicus/pockets/jobs/stores/turso v0.5.0/go.mod h1:jxYvAhsD1/9XUcuc/WviDkvIMA/hStBNZ9IGm8hLiUg=
 github.com/gopernicus/gopernicus/sdk v0.14.0 h1:HwLnbnYRyX6mjl/S5+eqJGWFavuWyx7XNIsksTMqATI=
 github.com/gopernicus/gopernicus/sdk v0.14.0/go.mod h1:z0bypQiCybwPoxoDfzhYvB1BtH2av549QR84GacngaE=
+github.com/gopernicus/gopernicus/sdk v0.15.0 h1:Tt7GO5kpGQXjnGbSmOKvAyOXnBbUm19j/gtyKL1QAC0=
+github.com/gopernicus/gopernicus/sdk v0.15.0/go.mod h1:z0bypQiCybwPoxoDfzhYvB1BtH2av549QR84GacngaE=
 github.com/gopernicus/gopernicus/ui/goth v0.2.0 h1:I+frS3EyeGsd4c43uLDTiDbiMf9wZQUQBXv9rOcmkC8=
 github.com/gopernicus/gopernicus/ui/goth v0.2.0/go.mod h1:N5d51dHXti9FcUOZ3ktYI1BaFFVbbSwSd5N8KyS92Fg=
 github.com/jackc/pgpassfile v1.0.0 h1:/6Hmqy13Ss2zCq62VdNG8tM1wchn8zjSGOBJ6icpsIM=

@@ -4,6 +4,65 @@ Authorization ships a fresh canonical SQL schema for PostgreSQL and SQLite/Turso
 Hosts export and apply it before constructing repositories. Framework constructors
 validate the applied schema; they do not create tables or run migrations.
 
+## Adopting the authorization protocol (v0.27.0) — BREAKING, pre-1.0
+
+Authorization core now implements and consumes `sdk/capabilities/authorization`
+(sdk v0.15.0). No migration; store runtime code is unchanged. See
+[The authorization protocol](../README.md#the-authorization-protocol).
+
+**Breaking: `Check` and `CheckBatch` return `sdkauthorization.Decision`.**
+`decisions.Service.Check` returns `(sdkauthorization.Decision, error)` and
+`CheckBatch` returns `([]sdkauthorization.Decision, error)`. `Decision` carries
+`Allowed` only. Retype any narrow host interface declared as
+`Check(...) (model.CheckResult, error)` or
+`CheckBatch(...) ([]model.CheckResult, error)` to the `Decision` forms. Code that
+read `ReasonCode` or `Reason` from a check result calls `CheckExplain`, which still
+returns `model.CheckResult`; so do `Evaluate`, `EvaluateResolved`, `CheckWith`,
+`EvaluateWith` and `CheckBatchWith`. Decision logging and audit are unchanged.
+
+**Deprecated aliases.** `model.Resource`, `model.CheckRequest`,
+`model.LookupRequest` and `model.PrincipalRef` are aliases of the sdk types
+(`PrincipalRef` is `sdk.Principal`); existing code compiles unchanged, and
+`model.PrincipalFrom` is the identity. The aliases are removed in a later minor.
+Two consequences:
+
+- `PrincipalRef` has no `Validate` method. Call `model.ValidatePrincipal(p)`.
+- `CheckRequest.Validate` and `LookupRequest.Validate` now check structure only
+  (non-empty fields, `Limit` not negative). The pocket's opaque-reference grammar
+  (length cap, valid UTF-8, no control characters) is `model.ValidateCheckRequest`
+  and `model.ValidateLookupRequest`, which the decision service applies, so
+  stored data and native decisions are unaffected. A host that relied on
+  `Validate` for those checks switches to the `model` functions. To prove
+  identifiers would travel to a vendor implementation, run
+  `sdkauthorization.ValidatePortable` in tests.
+
+`model.ErrInvalidCursor` is now the sdk sentinel `sdkauthorization.ErrInvalidCursor`;
+`errors.Is` checks against either name, and against `sdk.ErrInvalidInput`, still hold.
+
+**Additive.**
+- `Components.Authorizer` (`*authorizer.Engine`), the protocol's implementation
+  of record, and `decisions.Service.EvaluateBatch`.
+- `decisions.NewLoweredEvaluator` with `decisions.WithGlobalResource`, and
+  `authorizationhttp.WithLoweredPolicy()`. `Require` panics at mount over an
+  evaluator whose `LoweredPolicy()` is true unless the route passes
+  `WithLoweredPolicy()`; a host decorator over one must forward `LoweredPolicy`
+  and `SchemaReader`.
+- `decisions.ResourceSlot` gains `Pure`, set by `decisions.BindPureResource` and
+  by the guard's `Path` target. The native evaluator ignores it.
+- `authorizer.ErrUnrestricted` wraps `sdk.ErrUnavailable` but is not transient:
+  do not retry it.
+
+**Behaviour.** `Require` now answers 503 for any `sdk.ErrUnavailable` from the
+decision service, not only `model.ErrEvaluationLimit`. On the native engine this
+moves `tuplecache.ErrUnavailable` (and `ErrCapacity`), `tuples.ErrSnapshotClosed`,
+`tuples.ErrReadLimit` and an incomplete exact batch read from 500 to 503. Every
+other response is unchanged.
+
+**Store modules.** Store runtime code is unchanged. The PostgreSQL and Turso test
+suites run the new `storetest.RunAuthorizer` conformance leg, so those modules
+repin sdk v0.15.0 and authorization v0.27.0 for their own tests (goredis repins
+with them).
+
 ## Adopting the direct-hit short circuit (v0.26.0)
 
 Upgrade authorization core. No host code change, no migration and no new

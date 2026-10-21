@@ -41,7 +41,7 @@ func (s *Service) CheckExplain(ctx context.Context, req authmodel.CheckRequest) 
 }
 
 func (s *Service) checkExplainOperation(ctx context.Context, req authmodel.CheckRequest) (authmodel.CheckResult, authmodel.Explanation, error) {
-	if err := req.Validate(); err != nil {
+	if err := authmodel.ValidateCheckRequest(req); err != nil {
 		return authmodel.CheckResult{}, authmodel.Explanation{}, err
 	}
 	if err := ctx.Err(); err != nil {

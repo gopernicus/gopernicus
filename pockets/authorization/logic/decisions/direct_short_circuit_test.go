@@ -185,12 +185,9 @@ func TestDirectShortCircuitSingleChecks(t *testing.T) {
 			if counts.expansions != tc.expansions || counts.exact != 1 {
 				t.Fatalf("reads: %d expansions/%d exact, want %d/1", counts.expansions, counts.exact, tc.expansions)
 			}
-			if want := decisionCode(tc.allowed); got.ReasonCode != want {
-				t.Fatalf("ReasonCode %q, want %q", got.ReasonCode, want)
-			}
 			before := *counts
 			pure, err := svc.Check(decisionmode.WithSubjectFirst(t.Context()), tc.req)
-			if err != nil || pure.Allowed != got.Allowed || pure.ReasonCode != got.ReasonCode || pure.Reason != got.Reason {
+			if err != nil || pure != got {
 				t.Fatalf("subject-first: %+v/%v, short circuit: %+v", pure, err, got)
 			}
 			if counts.exact != before.exact || counts.expansions != before.expansions+1 {
@@ -329,7 +326,7 @@ func TestDirectShortCircuitBatchPaths(t *testing.T) {
 				t.Fatalf("batch: %+v/%v", got, err)
 			}
 			for i, result := range got {
-				if result.Allowed != tc.want[i] || result.ReasonCode != decisionCode(tc.want[i]) {
+				if result.Allowed != tc.want[i] {
 					t.Fatalf("result %d: %+v, want allowed=%v", i, result, tc.want[i])
 				}
 			}
@@ -341,7 +338,7 @@ func TestDirectShortCircuitBatchPaths(t *testing.T) {
 				t.Fatal(err)
 			}
 			for i := range pure {
-				if pure[i].Allowed != got[i].Allowed || pure[i].ReasonCode != got[i].ReasonCode {
+				if pure[i] != got[i] {
 					t.Fatalf("subject-first %d: %+v, short circuit %+v", i, pure[i], got[i])
 				}
 			}

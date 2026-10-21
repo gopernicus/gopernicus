@@ -22,6 +22,7 @@ import (
 	"testing"
 
 	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
+	"github.com/gopernicus/gopernicus/pockets/authorization"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/mutations"
 	"github.com/gopernicus/gopernicus/pockets/authorization/stores/storetest"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/transaction"
@@ -48,6 +49,21 @@ func TestConformance(t *testing.T) {
 			t.Fatalf("Repositories: %v", err)
 		}
 		return repos
+	})
+}
+
+// TestAuthorizer runs the sdk/capabilities/authorization conformance suite
+// against the engine adapter over a live Turso/libSQL tuple authority.
+func TestAuthorizer(t *testing.T) {
+	url, token := requireTursoEnv(t)
+
+	storetest.RunAuthorizer(t, func(t *testing.T) authorization.Repositories {
+		db := openAndMigrate(t, url, token)
+		repos, err := testRepositories(context.Background(), db)
+		if err != nil {
+			t.Fatalf("Repositories: %v", err)
+		}
+		return repos.Repositories
 	})
 }
 

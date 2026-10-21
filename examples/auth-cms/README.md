@@ -42,7 +42,8 @@ The authorization audit adds a normal
 [document listing example](internal/outbound/domains/documents/README.md) under
 `internal/{logic,inbound,outbound}/domains/documents`. Its complete-set,
 candidate and constrained PostgreSQL strategies share one host operation and
-have real HTTP regressions. The running demo chooses memory/candidates; optional
+have real HTTP regressions. The running demo chooses memory/candidates decided
+through the `sdk/capabilities/authorization` protocol; optional
 PostgreSQL tests use an explicitly selected scratch database.
 
 ## What it proves

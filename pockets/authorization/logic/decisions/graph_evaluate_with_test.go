@@ -282,9 +282,9 @@ func TestEvaluateWithReadsOnlyTheReader(t *testing.T) {
 		t.Fatalf("Check over empty store: allowed=%v err=%v", res.Allowed, err)
 	}
 	// …while EvaluateWith over the populated reader allows.
-	res, err = svc.EvaluateWith(subjectFirst(context.Background()), modelStoreView{graph}, check("alice", "space", "s"))
-	if err != nil || !res.Allowed {
-		t.Fatalf("EvaluateWith over reader: allowed=%v err=%v", res.Allowed, err)
+	evaluated, err := svc.EvaluateWith(subjectFirst(context.Background()), modelStoreView{graph}, check("alice", "space", "s"))
+	if err != nil || !evaluated.Allowed {
+		t.Fatalf("EvaluateWith over reader: allowed=%v err=%v", evaluated.Allowed, err)
 	}
 }
 

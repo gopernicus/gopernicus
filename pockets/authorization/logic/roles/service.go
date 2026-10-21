@@ -112,7 +112,7 @@ func (s *Service) ListRoleAssignmentsBySubject(ctx context.Context, p authmodel.
 	if s == nil {
 		return list.Page[Assignment]{}, ErrRolesNotConfigured
 	}
-	if err := p.Validate(); err != nil {
+	if err := authmodel.ValidatePrincipal(p); err != nil {
 		return list.Page[Assignment]{}, err
 	}
 	subject := tuples.SubjectRef{Type: p.Type, ID: p.ID}

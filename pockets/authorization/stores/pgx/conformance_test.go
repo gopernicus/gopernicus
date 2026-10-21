@@ -26,6 +26,7 @@ import (
 	"testing"
 
 	"github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
+	"github.com/gopernicus/gopernicus/pockets/authorization"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/mutations"
 	"github.com/gopernicus/gopernicus/pockets/authorization/stores/storetest"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/transaction"
@@ -77,6 +78,21 @@ func TestConformance(t *testing.T) {
 			t.Fatalf("Repositories: %v", err)
 		}
 		return repos
+	})
+}
+
+// TestAuthorizer runs the sdk/capabilities/authorization conformance suite
+// against the engine adapter over a live PostgreSQL tuple authority.
+func TestAuthorizer(t *testing.T) {
+	dsn := requireDSN(t)
+
+	storetest.RunAuthorizer(t, func(t *testing.T) authorization.Repositories {
+		db := openAndMigrate(t, dsn)
+		repos, err := testRepositories(context.Background(), db, storeOptions(t)...)
+		if err != nil {
+			t.Fatalf("Repositories: %v", err)
+		}
+		return repos.Repositories
 	})
 }
 

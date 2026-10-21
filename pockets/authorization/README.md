@@ -14,7 +14,8 @@ at startup.
 | `logic/tuples` | Canonical facts, exact raw reads, snapshots and trusted storage ports |
 | `logic/roles` | Exact concrete membership, assignment listing and trusted role writer |
 | `logic/relationships` | Resource-scoped fact facade, graph read ports and trusted relationship writer |
-| `logic/decisions` | One model/compiler and evaluator for roles, graph traversal, All/Any, check/explain/batch/filter/lookup |
+| `logic/decisions` | One model/compiler and evaluator for roles, graph traversal, All/Any, check/explain/batch/filter/lookup; `NewLoweredEvaluator` for guard policies over any protocol `Checker` |
+| `logic/authorizer` | `Engine`: the implementation of record of `sdk/capabilities/authorization` over `decisions` (`Components.Authorizer`) |
 | `logic/model` | Principals, resources, result/reason vocabulary and evaluation budgets |
 | `logic/mutations` | Principal-free commands, tuple-shape validation and atomic integrity policy |
 | `logic/audit` | Canonical committed changes, attribution and history reader |
@@ -115,6 +116,15 @@ result, err := components.Decisions.Check(ctx, model.CheckRequest{
     Principal: principal, Permission: "view", Resource: resource,
 })
 ```
+
+`Check` and `CheckBatch` return `sdkauthorization.Decision{Allowed}`. The
+decision's reason codes reach the decision log and `CheckExplain`, never the
+result. `model.Resource`, `model.CheckRequest`, `model.LookupRequest` and
+`model.PrincipalRef` are deprecated aliases of the `sdk/capabilities/authorization`
+types (`PrincipalRef` is `sdk.Principal`), so nothing is converted; the
+decision service validates them with the pocket's opaque-reference grammar
+(`model.ValidateCheckRequest`, `model.ValidatePrincipal`), not their protocol
+`Validate` methods.
 
 `Role(label)` means exact global membership. `RoleIn(label)` within a named
 permission means exact membership on the checked resource; ad hoc `Evaluate`
@@ -442,6 +452,87 @@ permission. Bundled role handlers supply authenticated attribution themselves.
 Records use `tuple/v2`, with event grouping, source and time. Hosts own retention
 and audit access.
 
+## The authorization protocol
+
+`sdk/capabilities/authorization` (imported here as `sdkauthorization`) is the
+Zanzibar read protocol: `Checker` (`Check`, all-or-nothing `CheckBatch`),
+`Lookup` (strictly paged `LookupResources`) and the composite `Authorizer`. This
+pocket both implements and consumes it.
+
+**Implementing: `Components.Authorizer`.** `authorizer.Engine` serves the
+protocol over `Components.Decisions`, with `SchemaReader` and `Limiter`
+(`MaxBatchSize`, `MaxLookupResults`). It adds behaviour only:
+
+- every request passes the decision service's opaque-reference grammar
+  (`model.ValidateCheckRequest`, `model.ValidateLookupRequest`) and nothing
+  stricter: the adapter accepts whatever the pocket accepts natively;
+- an undeclared resource type, permission or relation is `sdk.ErrInvalidInput`.
+  `Components.Decisions` still denies an undeclared permission with a nil error;
+- `Check` answers a permission or a declared relation (through `Direct`, with
+  userset expansion);
+- `authorizer.WithGlobalResource(type, id, relationFor)` names where global roles
+  appear: `relationFor(label)` on `type:id` is an exact `tuples.Global()` read of
+  `label`, never a permission of that name. `Components.Authorizer` has none;
+  build your own with `authorizer.New(components.Decisions, ...)`;
+- a batch mixing permissions with relations or global roles runs as one snapshot
+  (`decisions.Service.EvaluateBatch`); an oversize batch is `sdk.ErrInvalidInput`;
+- `LookupResources` enumerates permissions only. A universal grant (a satisfied
+  global `Role` branch) cannot be enumerated: it returns `authorizer.ErrUnrestricted`,
+  which wraps `sdk.ErrUnavailable` but is **not transient — do not retry**. Hosts
+  that rely on `Unrestricted` keep calling `Components.Decisions`.
+
+`Unrestricted`, reasons and explain, `Expression`/`Require`, exact roles at any
+scope, the ledger, audit, TupleCache and `FilterPage` stay pocket-owned.
+
+**Portability is opt-in.** Grammar belongs to each implementation: the protocol
+checks structure only, this engine accepts `a.b`, `a@b` or `é`, and a vendor
+integration rejects what its own grammar cannot represent as
+`sdk.ErrInvalidInput`. Before moving to a vendor, run
+`sdkauthorization.ValidatePortable(req)` over your requests in tests: it applies
+the strict grammar every known implementation can represent (types and
+relations `^[a-z][a-z0-9_]{1,62}[a-z0-9]$`, relations at most 50 bytes, IDs
+`^[a-zA-Z0-9/_|\-=+]+$` at most 256 bytes, `len(type)+1+len(id) <= 256`).
+`ValidatePortableRef` and `ValidatePortableObject` check one identifier or one
+object.
+
+**Consuming: lowered guard policies.** `decisions.NewLoweredEvaluator(checker,
+opts...)` evaluates `Require` policies over any protocol `Checker` (this
+pocket's engine adapter or a vendor integration), with no stores. Each leaf
+becomes one `Check`: `Can` a permission, `HasRelationship` and `HasRole` on a
+resource the relation of that label, `HasRole(label, Global())` the relation
+`relationFor(label)` on the `decisions.WithGlobalResource` resource. `Through`
+cannot be lowered. The walk keeps the native order and short circuit; leaves whose
+resource is known without running a store-reading resolver (`Global`, `Fixed`,
+`Path`, or an input already resolved) go out as one `CheckBatch`, so the common
+`Any(HasRole(…, Global()), Can(…, Path(…)))` costs one round trip. `Path` inputs
+resolve early and hold their errors until reached; `Resource` resolvers run only
+when reached. Identifiers pass through unchanged: the `Checker` decides what it
+can represent, and its `sdk.ErrInvalidInput` surfaces as
+`decisions.ErrLoweredPolicyMisconfigured` (500).
+
+```go
+evaluator, err := decisions.NewLoweredEvaluator(checker,
+    decisions.WithGlobalResource("platform", "global", func(label string) string { return "role_" + label }))
+guard, err := authorizationhttp.New(authorizationhttp.Services{Decisions: evaluator})
+mw := guard.Require(policy, authorizationhttp.WithLoweredPolicy())
+```
+
+- **Opt in per route.** A lowered policy is a sequence of protocol calls, not one
+  snapshot, so `Require` panics at mount over an evaluator whose
+  `LoweredPolicy()` is true unless the route passes `WithLoweredPolicy()`.
+- **Decorators must forward `LoweredPolicy` and `SchemaReader`.** A logging or
+  metrics wrapper that hides `LoweredPolicy` makes `Require` treat the evaluator
+  as native; one that hides `SchemaReader` moves name validation from mount to
+  evaluation.
+- **Without a `SchemaReader`**, an undeclared name is caught only at evaluation
+  and fails with `decisions.ErrLoweredPolicyMisconfigured` (500), never a
+  client 400.
+- **Declare your role labels as relations.** Through the protocol an undeclared
+  relation is an error. A host moving a guard onto `NewLoweredEvaluator` must
+  declare every scoped `HasRole` label as a relation, and each global label's
+  `relationFor(label)` on the global resource type. A host that stays on the
+  native evaluator needs no change.
+
 ## HTTP
 
 ### Composable route guards
@@ -495,8 +586,8 @@ Custom resolvers must be read-only, concurrency-safe and respect the request
 context. They execute while the authorization snapshot is open; their external
 reads do not automatically join it. Leave connection-pool capacity for such input
 reads or use an independent source. Authentication runs before the guard. Missing
-principal returns 401, denial 403 by default, evaluation exhaustion 503, and other errors
-500, with no internal error details. The handler runs after successful snapshot
+principal returns 401, denial 403 by default, evaluation exhaustion or any other
+`sdk.ErrUnavailable` 503, and other errors 500, with no internal error details. The handler runs after successful snapshot
 completion and receives the original request.
 
 Transport-independent callers can use the same engine:

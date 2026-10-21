@@ -12,13 +12,20 @@ import (
 	"github.com/gopernicus/gopernicus/sdk/pkg/web"
 )
 
+// loweredPolicy is implemented by decision services that evaluate policies as
+// separate protocol calls (decisions.LoweredEvaluator).
+type loweredPolicy interface {
+	LoweredPolicy() bool
+}
+
 // Require mounts a nested policy over the context principal. It validates every
 // branch at mount, then evaluates the entire expression in one tuple snapshot
 // with shared budgets and ordered short-circuiting. Resource inputs are lazy and
 // memoized for the request, including cache fallback. Missing authentication is
 // 401; denial is 403 unless WithDeniedHandler is supplied; evaluation exhaustion
-// is 503; other errors are 500. Errors always fail closed. Invalid configuration
-// panics before traffic.
+// and any other sdk.ErrUnavailable are 503; other errors are 500. Errors always
+// fail closed. Invalid configuration panics before traffic, including a lowered
+// decision service mounted without WithLoweredPolicy.
 //
 // Success authorizes admission to next. The decision operation completes before
 // next runs; later revocation does not cancel an admitted handler. A configured
@@ -39,6 +46,9 @@ func (a *Adapter) Require(predicate Predicate, opts ...RequireOption) web.Middle
 		panic("authorization: Require: nil denied handler")
 	}
 	evaluator := a.decisions
+	if lowered, ok := evaluator.(loweredPolicy); ok && lowered.LoweredPolicy() && !cfg.loweredPolicy {
+		panic("authorization: Require: the decision service is a lowered evaluator (no single snapshot); pass WithLoweredPolicy to accept it")
+	}
 	expression, resolvers, err := lowerPredicate(predicate)
 	if err == nil {
 		err = evaluator.ValidateExpression(expression)
@@ -69,7 +79,7 @@ func (a *Adapter) Require(predicate Predicate, opts ...RequireOption) web.Middle
 				err = r.Context().Err()
 			}
 			if err != nil {
-				if errors.Is(err, authmodel.ErrEvaluationLimit) {
+				if errors.Is(err, sdk.ErrUnavailable) {
 					web.RespondJSONError(w, web.NewError(http.StatusServiceUnavailable, "authorization temporarily unavailable"))
 				} else {
 					web.RespondJSONError(w, web.ErrInternal("internal error"))

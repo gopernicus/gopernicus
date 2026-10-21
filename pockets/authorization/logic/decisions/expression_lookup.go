@@ -19,7 +19,7 @@ func (s *Service) LookupResourcesIn(ctx context.Context, req authmodel.LookupReq
 }
 
 func (s *Service) lookupResourcesIn(ctx context.Context, req authmodel.LookupRequest) (authmodel.LookupResult, error) {
-	if err := req.Validate(); err != nil {
+	if err := authmodel.ValidateLookupRequest(req); err != nil {
 		return authmodel.LookupResult{}, err
 	}
 	limit := req.Limit

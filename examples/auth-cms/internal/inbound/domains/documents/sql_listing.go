@@ -40,7 +40,7 @@ func (l *SQLListing) ListVisible(ctx context.Context, principal sdk.Principal, q
 	if err := query.normalize(); err != nil {
 		return Page{}, err
 	}
-	if err := model.PrincipalFrom(principal).Validate(); err != nil {
+	if err := model.ValidatePrincipal(principal); err != nil {
 		return Page{}, err
 	}
 	binding := cursorBinding(principal, query)

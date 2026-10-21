@@ -41,7 +41,7 @@ func TestCheckBatchNamesActualGrantingRelation(t *testing.T) {
 		CreateRelationship{ResourceType: "doc", ResourceID: "d1", Relation: "owner", SubjectType: "user", SubjectID: "u1"},
 	)
 
-	results, err := svc.CheckBatch(context.Background(), []authmodel.CheckRequest{
+	results, err := svc.checkBatchOperation(context.Background(), []authmodel.CheckRequest{
 		{Principal: authmodel.PrincipalRef{Type: "user", ID: "u1"}, Permission: "read", Resource: authmodel.Resource{Type: "doc", ID: "d1"}},
 		{Principal: authmodel.PrincipalRef{Type: "user", ID: "u1"}, Permission: "read", Resource: authmodel.Resource{Type: "doc", ID: "d2"}},
 	})

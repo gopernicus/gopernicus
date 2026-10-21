@@ -11,7 +11,8 @@ Neither the domain nor storage invokes an authorizer or host policy callback.
 
 [Server composition](../../../../cmd/server/documents.go) mounts
 `GET /demo/tenants/{tenant}/documents` behind live authentication, using memory
-storage and candidate filtering. For example:
+storage and candidate filtering through the authorization protocol
+(`NewProtocolListing` over `Components.Authorizer`). For example:
 
 ```text
 /demo/tenants/demo/documents?q=a&sort=-name&limit=2
@@ -30,6 +31,7 @@ normal business query parameters; strategy selection happens at construction.
 | Different stores, or same SQL database using separate queries | `inbound.NewListing(service, authorizer, codec, CompleteSet, 0, bypass)` | Get a complete bounded `ResourceSet`, then apply it before tenant/search sorting and paging. |
 | Different stores, or same SQL database using separate queries | `inbound.NewListing(service, authorizer, codec, Candidates, batchSize, bypass)` | Read business candidates in order, then batch-check their document IDs. |
 | Same PostgreSQL database with authorization in the business statement | `inbound.NewSQLListing(service, authorizer, codec, bypass)` | Apply a constrained permission `EXISTS` before business sorting and paging. |
+| Any `sdkauthorization.Checker` (the pocket's `Components.Authorizer`, or a vendor integration) | `inbound.NewProtocolListing(service, checker, codec, batchSize, bypass)` | `Candidates` over the protocol: batch-check candidates with `sdkauthorization.FilterAuthorized`. Pages match `Candidates` row for row. |
 
 All implement the same inbound `Lister`. `bypass` is an optional host policy
 function. A true result skips only the permission restriction; tenant, search,

@@ -75,7 +75,7 @@ func usersetView(t *testing.T, svc authorization.Components, st, sid, docID stri
 		t.Fatalf("Check(%s:%s, doc:%s): %v", st, sid, docID, err)
 	}
 	if res.Allowed != want {
-		t.Fatalf("view(%s:%s, doc:%s) = %v, want %v (reason %q)", st, sid, docID, res.Allowed, want, res.Reason)
+		t.Fatalf("view(%s:%s, doc:%s) = %v, want %v", st, sid, docID, res.Allowed, want)
 	}
 }
 

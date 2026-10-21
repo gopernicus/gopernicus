@@ -410,7 +410,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 	if !roleRoutesGate.installed() {
 		return errRoleRoutesGateNotInstalled
 	}
-	if err := registerDocumentRoutes(ctx, router, authSvc.HTTP.RequireAccessTokenLive(), authorizer, tupleWriter); err != nil {
+	if err := registerDocumentRoutes(ctx, router, authSvc.HTTP.RequireAccessTokenLive(), authorizer, authzComponents.Authorizer, tupleWriter); err != nil {
 		return err
 	}
 

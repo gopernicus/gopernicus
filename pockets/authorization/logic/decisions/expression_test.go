@@ -203,7 +203,7 @@ func TestUnifiedNamedExpressionsBatchExplainAndLookup(t *testing.T) {
 	for _, id := range []string{"one", "two", "missing", "one"} {
 		requests = append(requests, authmodel.CheckRequest{Principal: expressionPrincipal, Permission: "view", Resource: authmodel.Resource{Type: "doc", ID: id}})
 	}
-	batch, err := s.CheckBatch(t.Context(), requests)
+	batch, err := s.checkBatchOperation(t.Context(), requests)
 	if err != nil {
 		t.Fatal(err)
 	}

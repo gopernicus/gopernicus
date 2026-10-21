@@ -349,7 +349,8 @@ func (e *equivalence) sweep(ctx context.Context) {
 				}
 				return nil, err
 			}
-			if want := outcome(result.Allowed); result.ReasonCode != want {
+			// Check reports no reason; its ReasonCode is left empty.
+			if want := outcome(result.Allowed); result.ReasonCode != "" && result.ReasonCode != want {
 				e.t.Fatalf("%s ReasonCode %q, want %q", name, result.ReasonCode, want)
 			}
 			return []bool{result.Allowed}, nil
@@ -357,7 +358,8 @@ func (e *equivalence) sweep(ctx context.Context) {
 	}
 	for range 6 {
 		single("Check", func(ctx context.Context, svc *decisions.Service, req authmodel.CheckRequest) (authmodel.CheckResult, error) {
-			return svc.Check(ctx, req)
+			decision, err := svc.Check(ctx, req)
+			return authmodel.CheckResult{Allowed: decision.Allowed}, err
 		})
 		single("CheckExplain", func(ctx context.Context, svc *decisions.Service, req authmodel.CheckRequest) (authmodel.CheckResult, error) {
 			result, explanation, err := svc.CheckExplain(ctx, req)
@@ -432,9 +434,6 @@ func (e *equivalence) sweep(ctx context.Context) {
 		out := make([]bool, len(results))
 		for i, result := range results {
 			out[i] = result.Allowed
-			if want := outcome(result.Allowed); result.ReasonCode != want {
-				e.t.Fatalf("batch ReasonCode %q, want %q", result.ReasonCode, want)
-			}
 		}
 		return out, nil
 	}

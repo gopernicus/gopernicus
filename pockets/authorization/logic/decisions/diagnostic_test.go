@@ -43,7 +43,7 @@ func TestScopedDenialDiagnosticIsOptionalAndUsesCompletedSnapshot(t *testing.T) 
 			}
 			// Concurrent removal after the scoped read cannot change the diagnostic's view.
 			f.afterRead = func() { delete(f.facts, global) }
-			got, err := s.Check(t.Context(), authmodel.CheckRequest{Principal: expressionPrincipal, Permission: "view", Resource: authmodel.Resource{Type: "doc", ID: "one"}})
+			got, err := s.checkRequest(t.Context(), authmodel.CheckRequest{Principal: expressionPrincipal, Permission: "view", Resource: authmodel.Resource{Type: "doc", ID: "one"}})
 			if err != nil || got.Allowed || got.ReasonCode != authmodel.ReasonDenied {
 				t.Fatalf("diagnostic changed decision: %+v, %v", got, err)
 			}

@@ -51,7 +51,7 @@ func (s *Service) lookupResourcesOperation(ctx context.Context, principal authmo
 	if err := ctx.Err(); err != nil {
 		return authmodel.LookupResult{}, err
 	}
-	if err := principal.Validate(); err != nil {
+	if err := authmodel.ValidatePrincipal(principal); err != nil {
 		return authmodel.LookupResult{}, err
 	}
 	if err := tuples.ValidateRefField("permission", permission); err != nil {
@@ -326,7 +326,7 @@ func (s *Service) lookupResourcesPageOperation(ctx context.Context, principal au
 	if err := ctx.Err(); err != nil {
 		return authmodel.LookupResult{}, err
 	}
-	if err := principal.Validate(); err != nil {
+	if err := authmodel.ValidatePrincipal(principal); err != nil {
 		return authmodel.LookupResult{}, err
 	}
 	if err := tuples.ValidateRefField("permission", permission); err != nil {

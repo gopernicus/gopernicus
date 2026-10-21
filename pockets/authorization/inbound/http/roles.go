@@ -212,7 +212,7 @@ func (h *Adapter) listByResource(w http.ResponseWriter, r *http.Request) {
 // credential and adds none.
 func currentPrincipal(w http.ResponseWriter, r *http.Request) (sdk.Principal, bool) {
 	p, ok := sdk.PrincipalFromContext(r.Context())
-	if !ok || (authmodel.PrincipalRef{Type: p.Type, ID: p.ID}).Validate() != nil {
+	if !ok || authmodel.ValidatePrincipal(p) != nil {
 		web.RespondJSONError(w, web.ErrUnauthorized("authentication required"))
 		return sdk.Principal{}, false
 	}

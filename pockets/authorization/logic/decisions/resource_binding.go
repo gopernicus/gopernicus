@@ -16,7 +16,14 @@ var ErrResourceNotApplicable = errors.New("authorization resource not applicable
 
 // ResourceSlot names a runtime input and its required resource type.
 // Slots are permitted only in ad hoc expressions, never in compiled models.
-type ResourceSlot struct{ Type, Key string }
+// Pure marks an input whose resolver only reads the request (a route
+// parameter): an evaluator may resolve it before its leaf is reached, holding
+// any error until the leaf is. The native evaluator resolves every slot lazily.
+type ResourceSlot struct {
+	Type string
+	Key  string
+	Pure bool
+}
 
 // ResourceResolver resolves a reached input using the parent operation context.
 // It must be read-only and respect cancellation. Its external reads are pinned
@@ -44,6 +51,16 @@ func BindResource(resourceType, key string, leaf Expression) Expression {
 	}
 	leaf.CurrentResource = false
 	leaf.ResourceSlot = &ResourceSlot{Type: resourceType, Key: key}
+	return leaf
+}
+
+// BindPureResource is BindResource for an input whose resolver is pure: it
+// reads only the request, never a store or another service.
+func BindPureResource(resourceType, key string, leaf Expression) Expression {
+	leaf = BindResource(resourceType, key, leaf)
+	if leaf.ResourceSlot != nil && !leaf.invalidSelector {
+		leaf.ResourceSlot.Pure = true
+	}
 	return leaf
 }
 

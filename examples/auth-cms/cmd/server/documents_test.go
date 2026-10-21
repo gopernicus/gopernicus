@@ -27,7 +27,7 @@ func TestDocumentRouteComposition(t *testing.T) {
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
-	if err := registerDocumentRoutes(t.Context(), router, authenticate, components.Decisions, components.Mutations); err != nil {
+	if err := registerDocumentRoutes(t.Context(), router, authenticate, components.Decisions, components.Authorizer, components.Mutations); err != nil {
 		t.Fatal(err)
 	}
 	server := httptest.NewServer(router)

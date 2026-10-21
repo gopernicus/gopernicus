@@ -13,12 +13,16 @@ import (
 	audit "github.com/gopernicus/gopernicus/pockets/authorization/logic/audit"
 	decisions "github.com/gopernicus/gopernicus/pockets/authorization/logic/decisions"
 	mutations "github.com/gopernicus/gopernicus/pockets/authorization/logic/mutations"
+	sdkauthorization "github.com/gopernicus/gopernicus/sdk/capabilities/authorization"
 	"github.com/gopernicus/gopernicus/sdk/pkg/web"
 )
 
 // The host selects its inbound listing policy at construction. The domain
-// reads explicit data restrictions without evaluating permissions.
-func registerDocumentRoutes(ctx context.Context, router *web.WebHandler, authenticate web.Middleware, authorizer *decisions.Service, system *mutations.Service) error {
+// reads explicit data restrictions without evaluating permissions. Document
+// view is decided through the authorization protocol (checker is the pocket's
+// Components.Authorizer); the platform-admin bypass stays on the decision
+// service.
+func registerDocumentRoutes(ctx context.Context, router *web.WebHandler, authenticate web.Middleware, authorizer *decisions.Service, checker sdkauthorization.Checker, system *mutations.Service) error {
 	ctx = audit.WithSource(ctx, audit.Source{System: "demo-document-seed"})
 	documents := []domain.Document{
 		{ID: "document-90", TenantID: "demo", Name: "Alpha"},
@@ -52,7 +56,7 @@ func registerDocumentRoutes(ctx context.Context, router *web.WebHandler, authent
 	if err != nil {
 		return err
 	}
-	lister, err := inbound.NewListing(service, authorizer, codec, inbound.Candidates, 0, bypass)
+	lister, err := inbound.NewProtocolListing(service, checker, codec, 0, bypass)
 	if err != nil {
 		return err
 	}
