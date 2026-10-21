@@ -4,8 +4,9 @@
 // engine, plus the optional SchemaReader and Limiter.
 //
 // Engine adds behaviour only; it never re-implements a decision:
-//   - every request passes the protocol's identifier grammar
-//     (sdkauthorization.ValidateRef / ValidateObject);
+//   - every request passes the pocket's own opaque-reference grammar
+//     (model.ValidateCheckRequest / ValidateLookupRequest), no stricter: the
+//     engine accepts through the protocol whatever it accepts natively;
 //   - an undeclared resource type, permission or relation is
 //     sdk.ErrInvalidInput (components.Decisions instead denies it with a nil
 //     error);
@@ -25,6 +26,8 @@ import (
 	"fmt"
 
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/decisions"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/model"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuples"
 	"github.com/gopernicus/gopernicus/sdk"
 	sdkauthorization "github.com/gopernicus/gopernicus/sdk/capabilities/authorization"
 )
@@ -85,7 +88,7 @@ func WithGlobalResource(resourceType, id string, relationFor func(label string) 
 		if relationFor == nil {
 			return fmt.Errorf("authorizer: WithGlobalResource needs relationFor: %w", sdk.ErrInvalidInput)
 		}
-		if err := sdkauthorization.ValidateObject(resourceType, id); err != nil {
+		if err := tuples.On(resourceType, id).Validate(); err != nil {
 			return err
 		}
 		e.global = &globalResource{resourceType: resourceType, id: id, relationFor: relationFor}
@@ -199,7 +202,7 @@ func (e *Engine) CheckBatch(ctx context.Context, reqs []sdkauthorization.CheckRe
 // LookupResources pages the resource IDs on which the principal holds a
 // declared permission. A universal grant is ErrUnrestricted.
 func (e *Engine) LookupResources(ctx context.Context, req sdkauthorization.LookupRequest) (sdkauthorization.LookupPage, error) {
-	if err := req.Validate(); err != nil {
+	if err := model.ValidateLookupRequest(req); err != nil {
 		return sdkauthorization.LookupPage{}, err
 	}
 	if req.Limit > e.limits.MaxLookupPage {
@@ -232,9 +235,9 @@ func (e *Engine) LookupResources(ctx context.Context, req sdkauthorization.Looku
 	return out, nil
 }
 
-// admit applies the identifier grammar and classifies the name.
+// admit applies the pocket's grammar and classifies the name.
 func (e *Engine) admit(req sdkauthorization.CheckRequest) (nameKind, string, error) {
-	if err := req.Validate(); err != nil {
+	if err := model.ValidateCheckRequest(req); err != nil {
 		return kindUndeclared, "", err
 	}
 	kind := e.classify(req.Resource, req.Permission)

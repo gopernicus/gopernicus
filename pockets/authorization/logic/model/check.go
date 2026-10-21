@@ -33,8 +33,8 @@ type Resource = sdkauthorization.Resource
 // request never carries a userset relation.
 //
 // Deprecated: CheckRequest is sdkauthorization.CheckRequest; use that name. Its
-// Validate method applies the protocol's identifier grammar; the decision
-// service applies the pocket's opaque-reference grammar (ValidateCheckRequest).
+// Validate method checks structure only; the decision service applies the
+// pocket's opaque-reference grammar (ValidateCheckRequest).
 // The alias is removed in a later minor.
 type CheckRequest = sdkauthorization.CheckRequest
 

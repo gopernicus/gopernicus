@@ -40,8 +40,11 @@ func TestConstruction(t *testing.T) {
 	if _, err := authorizer.New(svc, authorizer.WithGlobalResource("platform", "global", nil)); !errors.Is(err, sdk.ErrInvalidInput) {
 		t.Fatalf("nil relationFor = %v", err)
 	}
-	if _, err := authorizer.New(svc, authorizer.WithGlobalResource("platform", "a.b", func(l string) string { return l })); !errors.Is(err, sdk.ErrInvalidInput) {
-		t.Fatalf("inexpressible global resource = %v", err)
+	if _, err := authorizer.New(svc, authorizer.WithGlobalResource("platform", "", func(l string) string { return l })); !errors.Is(err, sdk.ErrInvalidInput) {
+		t.Fatalf("empty global resource id = %v", err)
+	}
+	if _, err := authorizer.New(svc, authorizer.WithGlobalResource("platform", "a.b", func(l string) string { return l })); err != nil {
+		t.Fatalf("global resource id outside the portable grammar = %v; the engine accepts what the pocket accepts", err)
 	}
 	// Both the label "admin" (a model Role label) and "role_admin" (a declared
 	// relation) would map to role_admin.
@@ -80,5 +83,28 @@ func TestUnrestrictedIsUnavailableNotRetryable(t *testing.T) {
 	d, err := e.Check(ctx, sdkauthorization.CheckRequest{Principal: admin, Permission: "manage", Resource: sdkauthorization.Resource{Type: "platform", ID: "any"}})
 	if err != nil || !d.Allowed {
 		t.Fatalf("universal grant check = %v, %v; want allowed", d, err)
+	}
+}
+
+// D6': the engine accepts through the protocol whatever the pocket accepts.
+func TestEngineAcceptsThePocketGrammar(t *testing.T) {
+	e, err := authorizer.New(service(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := t.Context()
+	req := sdkauthorization.CheckRequest{Principal: sdkauthorization.Principal{Type: "user", ID: "a@b.c"}, Permission: "manage", Resource: sdkauthorization.Resource{Type: "platform", ID: "org.dot"}}
+	if sdkauthorization.ValidatePortable(req) == nil {
+		t.Fatal("request must be outside the portable grammar")
+	}
+	if d, err := e.Check(ctx, req); err != nil || d.Allowed {
+		t.Fatalf("Check outside the portable grammar = %v, %v; want a plain deny", d, err)
+	}
+	if _, err := e.LookupResources(ctx, sdkauthorization.LookupRequest{Principal: req.Principal, Permission: "manage", ResourceType: "platform"}); err != nil {
+		t.Fatalf("LookupResources outside the portable grammar = %v", err)
+	}
+	req.Resource.ID = "a\x01b"
+	if _, err := e.Check(ctx, req); !errors.Is(err, sdk.ErrInvalidInput) {
+		t.Fatalf("Check outside the pocket grammar = %v, want sdk.ErrInvalidInput", err)
 	}
 }

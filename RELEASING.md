@@ -21,9 +21,10 @@ section of `pockets/authorization/stores/UPGRADE.md`.
 - **`model.PrincipalRef` is `sdk.Principal`** and has no `Validate` method; call
   `model.ValidatePrincipal`. `model.Resource`, `model.CheckRequest` and
   `model.LookupRequest` are deprecated aliases of the sdk types; everything else
-  compiles through them. Their `Validate` methods now apply the protocol's
-  identifier grammar; the decision service uses `model.ValidateCheckRequest` /
-  `model.ValidateLookupRequest` (the unchanged opaque-reference grammar).
+  compiles through them. Their `Validate` methods check structure only
+  (non-empty fields, `Limit` not negative); the pocket's opaque-reference
+  grammar is `model.ValidateCheckRequest` / `model.ValidateLookupRequest`, which
+  the decision service uses unchanged.
 - **`Require` answers 503 for any `sdk.ErrUnavailable`**, not only
   `ErrEvaluationLimit`: TupleCache unavailability, a closed snapshot and a tuple
   read limit move from 500 to 503.
@@ -31,11 +32,15 @@ section of `pockets/authorization/stores/UPGRADE.md`.
 **What changed.**
 - **sdk v0.15.0 (MINOR, additive).** `sdk/capabilities/authorization`
   (`sdkauthorization`): `Checker`, `Lookup`, `Authorizer`, optional
-  `SchemaReader`/`Limiter`, `Decision`, `ValidateRef`/`ValidateObject`, the cursor
-  envelope `EncodeCursor`/`DecodeCursor`, `FilterAuthorized`, `LookupAll`,
-  `ErrInvalidCursor`, `ErrConditional`; `authorizationtest.Run` with four fixtures.
+  `SchemaReader`/`Limiter`, `Decision`, structure-only request `Validate` (grammar
+  belongs to each implementation, owner ruling D6′), the opt-in strict
+  `ValidatePortable` (with `ValidatePortableRef`/`ValidatePortableObject`), the
+  cursor envelope `EncodeCursor`/`DecodeCursor`, `FilterAuthorized`, `LookupAll`,
+  `ErrInvalidCursor`, `ErrConditional`; `authorizationtest.Run` with four fixtures
+  and `WithGrammar` for the implementation's declared grammar.
 - **authorization v0.27.0.** `Components.Authorizer` (`logic/authorizer.Engine`),
-  the implementation of record; `decisions.Service.EvaluateBatch`;
+  the implementation of record, as lenient as the pocket's own grammar;
+  `decisions.Service.EvaluateBatch`;
   `decisions.NewLoweredEvaluator` + `WithGlobalResource`;
   `authorizationhttp.WithLoweredPolicy()` (Require refuses a lowered evaluator
   without it); `decisions.ResourceSlot.Pure` / `BindPureResource` (set by `Path`);

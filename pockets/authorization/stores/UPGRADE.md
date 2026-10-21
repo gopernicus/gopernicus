@@ -27,12 +27,14 @@ returns `model.CheckResult`; so do `Evaluate`, `EvaluateResolved`, `CheckWith`,
 Two consequences:
 
 - `PrincipalRef` has no `Validate` method. Call `model.ValidatePrincipal(p)`.
-- `CheckRequest.Validate` and `LookupRequest.Validate` now apply the protocol's
-  identifier grammar, which rejects IDs the pocket accepts (for example `a.b`,
-  `a@b`, `é`). The decision service no longer calls them: it applies the pocket's
-  opaque-reference grammar through `model.ValidateCheckRequest` and
-  `model.ValidateLookupRequest`, so stored data and native decisions are
-  unaffected. A host that called `Validate` itself switches to those functions.
+- `CheckRequest.Validate` and `LookupRequest.Validate` now check structure only
+  (non-empty fields, `Limit` not negative). The pocket's opaque-reference grammar
+  (length cap, valid UTF-8, no control characters) is `model.ValidateCheckRequest`
+  and `model.ValidateLookupRequest`, which the decision service applies, so
+  stored data and native decisions are unaffected. A host that relied on
+  `Validate` for those checks switches to the `model` functions. To prove
+  identifiers would travel to a vendor implementation, run
+  `sdkauthorization.ValidatePortable` in tests.
 
 `model.ErrInvalidCursor` is now the sdk sentinel `sdkauthorization.ErrInvalidCursor`;
 `errors.Is` checks against either name, and against `sdk.ErrInvalidInput`, still hold.

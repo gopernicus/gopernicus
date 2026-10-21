@@ -340,7 +340,7 @@ func TestLoweredShortCircuit(t *testing.T) {
 		{"resolver error on an unreached branch", g7, parityRequest{parityUser("stella"), map[string]string{"?programId": "boom"}}, http.StatusOK},
 		{"resolver error reached", g7, parityRequest{parityUser("mo"), map[string]string{"?programId": "boom"}}, http.StatusInternalServerError},
 		{"alternative not applicable is false", g7, parityRequest{parityUser("mo"), map[string]string{"?programId": "missing"}}, http.StatusForbidden},
-		{"inexpressible input denies", g1, parityRequest{parityUser("mo"), map[string]string{"organizationId": "org.dot"}}, http.StatusForbidden},
+		{"input outside the portable grammar reaches the backend", g1, parityRequest{parityUser("mo"), map[string]string{"organizationId": "org.dot"}}, http.StatusForbidden},
 	} {
 		if got := guardStatus(t, native, c.pred, c.req); got != c.want {
 			t.Fatalf("native %s = %d, want %d", c.name, got, c.want)
@@ -394,7 +394,7 @@ func TestLoweredValidationAndRewrap(t *testing.T) {
 		"Through":                       decisions.Any(decisions.Through("parent", "view")),
 		"global role without resource":  decisions.Role("steward"),
 		"hyphenated name":               decisions.On(authmodel.Resource{Type: "document", ID: "d1"}, decisions.Permission("can-view")),
-		"fixed resource beyond grammar": decisions.On(authmodel.Resource{Type: "document", ID: "a.b"}, decisions.Permission("view")),
+		"fixed resource beyond grammar": decisions.On(authmodel.Resource{Type: "document", ID: "a\x01b"}, decisions.Permission("view")),
 		"undeclared role relation":      decisions.RoleIn("janitor", authmodel.Resource{Type: "project", ID: "demo"}),
 	} {
 		if err := withSchema.ValidateExpression(expr); !errors.Is(err, sdk.ErrInvalidInput) {
@@ -446,5 +446,44 @@ func TestLoweredGlobalRoleUsesRelation(t *testing.T) {
 	}
 	if got := guardStatus(t, guard, pred, parityRequest{parityUser("dev"), nil}, authorizationhttp.WithLoweredPolicy()); got != http.StatusOK {
 		t.Fatalf("developer = %d, want 200", got)
+	}
+}
+
+// allowingChecker grants every request and records what reached it.
+type allowingChecker struct {
+	seen []sdkauthorization.CheckRequest
+}
+
+func (c *allowingChecker) Check(_ context.Context, r sdkauthorization.CheckRequest) (sdkauthorization.Decision, error) {
+	c.seen = append(c.seen, r)
+	return sdkauthorization.Decision{Allowed: true}, nil
+}
+
+func (c *allowingChecker) CheckBatch(_ context.Context, rs []sdkauthorization.CheckRequest) ([]sdkauthorization.Decision, error) {
+	out := make([]sdkauthorization.Decision, len(rs))
+	for i, r := range rs {
+		c.seen = append(c.seen, r)
+		out[i] = sdkauthorization.Decision{Allowed: true}
+	}
+	return out, nil
+}
+
+// D6': the lowered evaluator never denies on grammar; identifiers outside the
+// portable grammar reach the Checker, which decides.
+func TestLoweredPassesIdentifiersThrough(t *testing.T) {
+	checker := &allowingChecker{}
+	evaluator, err := decisions.NewLoweredEvaluator(checker)
+	if err != nil {
+		t.Fatal(err)
+	}
+	principal := authmodel.PrincipalRef{Type: "user", ID: "a@b.c"}
+	resource := authmodel.Resource{Type: "document", ID: "org.dot"}
+	got, err := evaluator.EvaluateResolved(context.Background(), principal, decisions.On(resource, decisions.Permission("view")), nil)
+	if err != nil || !got.Allowed {
+		t.Fatalf("EvaluateResolved = %+v, %v; want the Checker's allow", got, err)
+	}
+	want := sdkauthorization.CheckRequest{Principal: principal, Permission: "view", Resource: resource}
+	if len(checker.seen) != 1 || checker.seen[0] != want {
+		t.Fatalf("Checker saw %+v, want [%+v]", checker.seen, want)
 	}
 }

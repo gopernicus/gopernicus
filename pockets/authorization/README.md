@@ -463,9 +463,9 @@ pocket both implements and consumes it.
 protocol over `Components.Decisions`, with `SchemaReader` and `Limiter`
 (`MaxBatchSize`, `MaxLookupResults`). It adds behaviour only:
 
-- every request passes the protocol's identifier grammar (`ValidateRef`,
-  `ValidateObject`), which is stricter than the decision service's
-  opaque-reference grammar;
+- every request passes the decision service's opaque-reference grammar
+  (`model.ValidateCheckRequest`, `model.ValidateLookupRequest`) and nothing
+  stricter: the adapter accepts whatever the pocket accepts natively;
 - an undeclared resource type, permission or relation is `sdk.ErrInvalidInput`.
   `Components.Decisions` still denies an undeclared permission with a nil error;
 - `Check` answers a permission or a declared relation (through `Direct`, with
@@ -484,6 +484,17 @@ protocol over `Components.Decisions`, with `SchemaReader` and `Limiter`
 `Unrestricted`, reasons and explain, `Expression`/`Require`, exact roles at any
 scope, the ledger, audit, TupleCache and `FilterPage` stay pocket-owned.
 
+**Portability is opt-in.** Grammar belongs to each implementation: the protocol
+checks structure only, this engine accepts `a.b`, `a@b` or `é`, and a vendor
+integration rejects what its own grammar cannot represent as
+`sdk.ErrInvalidInput`. Before moving to a vendor, run
+`sdkauthorization.ValidatePortable(req)` over your requests in tests: it applies
+the strict grammar every known implementation can represent (types and
+relations `^[a-z][a-z0-9_]{1,62}[a-z0-9]$`, relations at most 50 bytes, IDs
+`^[a-zA-Z0-9/_|\-=+]+$` at most 256 bytes, `len(type)+1+len(id) <= 256`).
+`ValidatePortableRef` and `ValidatePortableObject` check one identifier or one
+object.
+
 **Consuming: lowered guard policies.** `decisions.NewLoweredEvaluator(checker,
 opts...)` evaluates `Require` policies over any protocol `Checker` (this
 pocket's engine adapter or a vendor integration), with no stores. Each leaf
@@ -495,7 +506,9 @@ resource is known without running a store-reading resolver (`Global`, `Fixed`,
 `Path`, or an input already resolved) go out as one `CheckBatch`, so the common
 `Any(HasRole(…, Global()), Can(…, Path(…)))` costs one round trip. `Path` inputs
 resolve early and hold their errors until reached; `Resource` resolvers run only
-when reached. A resolved resource the protocol cannot name denies.
+when reached. Identifiers pass through unchanged: the `Checker` decides what it
+can represent, and its `sdk.ErrInvalidInput` surfaces as
+`decisions.ErrLoweredPolicyMisconfigured` (500).
 
 ```go
 evaluator, err := decisions.NewLoweredEvaluator(checker,

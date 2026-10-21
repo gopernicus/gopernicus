@@ -16,10 +16,11 @@ import (
 const defaultLoweredRun = sdkauthorization.DefaultCheckChunk
 
 // ErrLoweredPolicyMisconfigured is server-class: the Checker rejected, as
-// invalid input, a name a lowered policy asked about. Every client-controlled
-// input is admitted before it reaches the Checker, so the rejection is a host
-// misconfiguration (typically an undeclared name with no SchemaReader to catch
-// it at mount) and never a client 400. It wraps no sdk class.
+// invalid input, a request a lowered policy asked about. Identifier grammar
+// belongs to the Checker, so the rejection is either a host misconfiguration
+// (typically an undeclared name with no SchemaReader to catch it at mount) or
+// an identifier the Checker cannot represent; it is never a client 400. It
+// wraps no sdk class.
 var ErrLoweredPolicyMisconfigured = errors.New("authorization: a lowered policy names something the authorization backend rejects")
 
 // LoweredOption configures a LoweredEvaluator.
@@ -67,7 +68,7 @@ func WithGlobalResource(resourceType, id string, relationFor func(label string) 
 		if relationFor == nil {
 			return fmt.Errorf("lowered evaluator: WithGlobalResource needs relationFor: %w", sdk.ErrInvalidInput)
 		}
-		if err := sdkauthorization.ValidateObject(resourceType, id); err != nil {
+		if err := tuples.On(resourceType, id).Validate(); err != nil {
 			return err
 		}
 		e.global = &loweredGlobal{resourceType: resourceType, id: id, relationFor: relationFor}
@@ -105,9 +106,9 @@ func NewLoweredEvaluator(checker sdkauthorization.Checker, opts ...LoweredOption
 // LoweredPolicy marks this evaluator for Require's opt-in check.
 func (e *LoweredEvaluator) LoweredPolicy() bool { return true }
 
-// ValidateExpression checks the tree's structure, the protocol's identifier
-// grammar for every name, type and fixed resource, and, when the Checker is a
-// SchemaReader, every declaration. It performs no I/O.
+// ValidateExpression checks the tree's structure under the pocket's grammar
+// and, when the Checker is a SchemaReader, every declaration. Identifier
+// grammar beyond that belongs to the Checker. It performs no I/O.
 func (e *LoweredEvaluator) ValidateExpression(expr Expression) error {
 	if err := e.validateLowered(expr); err != nil {
 		return err
@@ -131,11 +132,7 @@ func (e *LoweredEvaluator) EvaluateResolved(ctx context.Context, principal authm
 	if hasSlots && resolve == nil {
 		return authmodel.CheckResult{}, fmt.Errorf("resource resolver required: %w", sdk.ErrInvalidInput)
 	}
-	w := &loweredWalk{
-		e: e, ctx: ctx, principal: principal, resolve: resolve, slots: map[string]*loweredSlot{},
-		// A principal the protocol cannot name holds no grant through it.
-		nameable: sdkauthorization.ValidateObject(principal.Type, principal.ID) == nil,
-	}
+	w := &loweredWalk{e: e, ctx: ctx, principal: principal, resolve: resolve, slots: map[string]*loweredSlot{}}
 	allowed, err := w.node(expr)
 	if err != nil {
 		return authmodel.CheckResult{}, err
@@ -161,8 +158,8 @@ func (e *LoweredEvaluator) declarations() expressionDeclarations {
 }
 
 // validateLowered applies what only a lowered policy needs: no Through, the
-// identifier grammar, the global resource for a global role, and declarations
-// for role labels (which the native validator leaves to the role store).
+// global resource for a global role, and declarations for role labels (which
+// the native validator leaves to the role store).
 func (e *LoweredEvaluator) validateLowered(expr Expression) error {
 	invalid := func(format string, args ...any) error {
 		return fmt.Errorf("lowered expression: "+format+": %w", append(args, sdk.ErrInvalidInput)...)
@@ -201,19 +198,10 @@ func (e *LoweredEvaluator) validateLowered(expr Expression) error {
 		if name == "" {
 			return nil
 		}
-		if err := sdkauthorization.ValidateRef(sdkauthorization.KindRelation, name); err != nil {
-			return err
-		}
 		switch {
 		case x.Resource != nil:
-			if err := sdkauthorization.ValidateObject(x.Resource.Type, x.Resource.ID); err != nil {
-				return err
-			}
 			return declared(x.Resource.Type, name)
 		case x.ResourceSlot != nil:
-			if err := sdkauthorization.ValidateRef(sdkauthorization.KindType, x.ResourceSlot.Type); err != nil {
-				return err
-			}
 			return declared(x.ResourceSlot.Type, name)
 		case x.RoleName != "" && !x.CurrentResource:
 			g := e.global
@@ -221,7 +209,7 @@ func (e *LoweredEvaluator) validateLowered(expr Expression) error {
 				return invalid("HasRole(%q, Global()) needs WithGlobalResource", x.RoleName)
 			}
 			relation := g.relationFor(x.RoleName)
-			if err := sdkauthorization.ValidateRef(sdkauthorization.KindRelation, relation); err != nil {
+			if err := tuples.ValidateRefField("global role relation", relation); err != nil {
 				return err
 			}
 			return declared(g.resourceType, relation)
@@ -252,8 +240,7 @@ func loweredName(x Expression) string {
 type loweredSlot struct {
 	resource authmodel.Resource
 	err      error
-	// skip makes the leaf false: the input does not apply, or the protocol
-	// cannot name it (no grant can exist on it through the Checker).
+	// skip makes the leaf false: the input does not apply.
 	skip bool
 }
 
@@ -263,7 +250,6 @@ type loweredWalk struct {
 	principal authmodel.PrincipalRef
 	resolve   ResourceResolver
 	slots     map[string]*loweredSlot
-	nameable  bool
 }
 
 // leafState is one leaf before its Check.
@@ -358,7 +344,6 @@ func (w *loweredWalk) resolveSlot(slot ResourceSlot) {
 			return
 		}
 		out.resource = resource
-		out.skip = sdkauthorization.ValidateObject(resource.Type, resource.ID) != nil
 	}
 }
 
@@ -372,9 +357,6 @@ func (w *loweredWalk) state(x Expression) leafState {
 		if slot.skip {
 			return leafState{}
 		}
-	}
-	if !w.nameable {
-		return leafState{}
 	}
 	name := loweredName(x)
 	var resource sdkauthorization.Resource

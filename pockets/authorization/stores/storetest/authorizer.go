@@ -10,6 +10,7 @@ import (
 	"github.com/gopernicus/gopernicus/pockets/authorization"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/authorizer"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/decisions"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/model"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuples"
 	sdkauthorization "github.com/gopernicus/gopernicus/sdk/capabilities/authorization"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/authorization/authorizationtest"
@@ -17,12 +18,13 @@ import (
 
 // RunAuthorizer runs the sdk/capabilities/authorization conformance suite
 // against the engine adapter (Components.Authorizer over this pocket's engine)
-// on fresh, empty repositories from newRepos.
+// on fresh, empty repositories from newRepos. The declared grammar is the
+// pocket's own (model.ValidateCheckRequest), never the portable one.
 func RunAuthorizer(t *testing.T, newRepos func(t *testing.T) authorization.Repositories) {
 	t.Helper()
 	authorizationtest.Run(t, authorizationtest.Engine, func(t *testing.T, f authorizationtest.Fixture) sdkauthorization.Authorizer {
 		return NewAuthorizer(t, newRepos(t), f).Authorizer
-	})
+	}, authorizationtest.WithGrammar(model.ValidateCheckRequest))
 }
 
 // AuthorizerModel returns an authorizationtest fixture's schema in the
