@@ -1,5 +1,26 @@
 # Releasing gopernicus modules
 
+## Scaffold pins (workshop/gopernicus v0.4.1 — DRAFT, unpublished)
+
+**PATCH.** The templates move to the current tags, so a freshly scaffolded host or
+pocket starts on today's releases:
+- sdk v0.9.0 → **v0.15.0**: `init`, plus the pocket core and its pgx and turso stores;
+- `integrations/datastores/pgxdb` v0.7.0 → **v0.9.0**: `init --db pgx` and the pocket pgx store;
+- `integrations/datastores/turso` v0.4.0 → **v0.6.0**: `init --db turso` and the pocket turso store.
+
+No template code changed. Existing hosts are unaffected, because the CLI only
+writes these pins at scaffold time.
+
+**Verified before merge.**
+- With `GOWORK=off`, an empty module cache and the public proxy,
+  `init --db none|pgx|turso` and `new pocket` (core plus pgx and turso stores)
+  each pass `go mod tidy`, `go build`, `go vet` and `go test`, resolving to
+  exactly the pins above.
+- `gopernicus guard` on each emitted host exits 0.
+
+**Known.** Emitting the `tool` pin and a `guard:` target in `init` (v0.4.0 Known,
+YOUR CALL 7) is still deferred.
+
 ## Authorization protocol, slice A (sdk v0.15.0; authorization v0.27.0 — published 2026-10-21)
 
 Two tags, in order, both cold-verified through the proxy on the first poll:
