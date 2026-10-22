@@ -27,7 +27,7 @@ modes:
 
 | `Config.Exporter`     | destination | ownership |
 |---|---|---|
-| `ExporterStdout` (default) | `Config.Stdout` (default `os.Stdout`), synchronous | module owns the provider; `Shutdown` flushes it |
+| `ExporterStdout` (default outside production) | `Config.Stdout` (default `os.Stdout`), synchronous | module owns the provider; `Shutdown` flushes it |
 | `ExporterOTLPGRPC`    | OTLP/gRPC collector (Jaeger, Tempo, Grafana, an OpenTelemetry Collector), batched | module owns the provider; `Shutdown` flushes it |
 | `ExporterProvider`    | a caller-supplied `trace.TracerProvider` (`Config.Provider`) | caller owns the provider; `Shutdown` is a no-op |
 
@@ -58,7 +58,29 @@ span.SetAttributes(tracing.StringAttribute("entry.id", id))
 
 The scalar `Config` fields carry `env:` tags for `sdk/pkg/environment.ParseEnvTags`
 (`TRACING_EXPORTER`, `TRACING_SERVICE_NAME`, `TRACING_OTLP_ENDPOINT`, …); the
-`Stdout` and `Provider` fields are programmatic-only.
+`Stdout`, `Provider` and `RuntimeMode` fields are programmatic-only.
+`TRACING_EXPORTER` carries no env default: unset, it leaves `Exporter` empty and
+`Open` fills stdout, so an unset exporter stays distinguishable from an explicit
+`TRACING_EXPORTER=stdout`.
+
+## Production posture — `RuntimeMode`
+
+`Config.RuntimeMode` is the host's `environment.Mode`, set in code by the
+composition root (no env tag). The zero value is mode-blind: `Open` behaves
+exactly as before. A non-zero mode must be `development` or `production`
+(`environment.ErrModeRequired` / `ErrModeInvalid` otherwise). Production
+refuses, before any default is filled:
+
+| condition | sentinel | fix |
+|---|---|---|
+| empty `Exporter` | `ErrExporterRequired` | set `TRACING_EXPORTER` — `stdout` explicitly is admitted |
+| `ExporterOTLPGRPC` with `Insecure` and an `Endpoint` that is not `127.0.0.1`, `::1` or `localhost` (with or without a port) | `ErrInsecureExporter` | unset `Insecure` to use TLS, or point at a loopback collector |
+
+An empty `Endpoint` with `Insecure` counts as non-loopback: the OTLP exporter then
+resolves its target from `OTEL_EXPORTER_OTLP_*` variables this module never sees,
+so production asks for the loopback endpoint by name. Neither refusal has an
+acknowledgement. Development admits both and logs one WARN per condition through
+`slog.Default()`.
 
 ## Lifecycle
 
@@ -74,7 +96,8 @@ Hermetic, no network. The provider mode is exercised against otel's
 `tracetest.SpanRecorder`, asserting span name, attributes, and error status
 through the `sdk/capabilities/tracing.Tracer` surface; the stdout mode redirects output to a
 buffer and asserts the emitted JSON; the OTLP/gRPC mode is verified to construct
-and shut down offline. Run with `go test ./...`.
+and shut down offline; the `RuntimeMode` posture cases run `Open` over
+`ParseEnvTags` output and the loopback matrix. Run with `go test ./...`.
 
 ## HTTP spans and propagation
 

@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/gopernicus/gopernicus/sdk"
+	"github.com/gopernicus/gopernicus/sdk/pkg/environment"
 
 	_ "github.com/tursodatabase/libsql-client-go/libsql" // registers the "libsql" driver
 )
@@ -55,9 +56,10 @@ const (
 // no namespace.
 type Config struct {
 	// URL is required: "libsql://", "https://", "wss://" for a hosted database,
-	// or "file:<path>" for a local SQLite database (see Open). Open does not
-	// validate the scheme today: a plaintext "http://" or "ws://" URL connects
-	// without complaint. Hosts must not use them (a refusal is planned, SOC 2 S1).
+	// or "file:<path>" for a local SQLite database (see Open). A plaintext
+	// "http://" or "ws://" URL, or "libsql://…?tls=0" (which the driver sends as
+	// http), connects without complaint under the zero RuntimeMode; production
+	// refuses it (ErrTLSRequired).
 	URL string `env:"DB_URL"`
 
 	// AuthToken overrides any authToken, auth_token or jwt credential in URL.
@@ -77,8 +79,9 @@ type Config struct {
 	// args verbatim, so this is dev-only tooling: leave it false in production.
 	LogQueries bool `env:"DB_LOG_QUERIES" default:"false"`
 
-	// Logger is used only when LogQueries is true. If nil, slog.Default() is
-	// used.
+	// Logger receives the query log when LogQueries is true and, under a
+	// non-zero RuntimeMode, the posture lines Open writes. If nil,
+	// slog.Default() is used.
 	Logger *slog.Logger
 
 	// Retry, when its Attempts is > 1, makes Open perform EAGER boot validation:
@@ -94,6 +97,20 @@ type Config struct {
 	// auto-retried by the connector — statement retry is store-owned, explicit,
 	// and per-call.
 	Retry RetryPolicy
+
+	// RuntimeMode is the host's deployment posture. The zero value is
+	// mode-blind: Open behaves exactly as it did before the field existed. A
+	// non-zero mode must be environment.ModeDevelopment or ModeProduction.
+	// Production refuses, before any I/O, a hosted URL that does not use TLS
+	// (ErrTLSRequired); development logs a WARN instead. A "file:" URL is
+	// exempt. It carries no env tag: the host reads its mode from the process
+	// environment in its composition root and sets it here.
+	RuntimeMode environment.Mode
+
+	// TLSDisabledAcknowledged admits, in production, a hosted URL without TLS.
+	// It is inert when the URL uses TLS; when honored, Open logs a
+	// posture_waiver WARN. No env tag.
+	TLSDisabledAcknowledged bool
 }
 
 // dsn validates the URL and sets the separately configured credential.
@@ -137,7 +154,9 @@ func (cfg Config) Redacted() string {
 // busy_timeout(BusyTimeout), foreign_keys(1) and journal_mode(WAL). A single
 // PRAGMA on one connection would not do: the driver applies "_pragma=" DSN
 // parameters on each new connection, which is what makes the setting hold on
-// every connection of the pool. Hosted URLs are untouched.
+// every connection of the pool. Hosted URLs are untouched. A non-zero
+// RuntimeMode is validated and enforced before the local file profile or the
+// driver runs, so a refused configuration performs no I/O.
 func Open(ctx context.Context, cfg Config) (*DB, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -151,6 +170,9 @@ func Open(ctx context.Context, cfg Config) (*DB, error) {
 
 	dsn, err := cfg.dsn()
 	if err != nil {
+		return nil, err
+	}
+	if err := cfg.checkPosture(dsn); err != nil {
 		return nil, err
 	}
 	if isLocalFile(cfg.URL) {

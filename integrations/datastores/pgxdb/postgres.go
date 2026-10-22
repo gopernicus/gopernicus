@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/gopernicus/gopernicus/sdk"
+	"github.com/gopernicus/gopernicus/sdk/pkg/environment"
 
 	jackpgx "github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -100,11 +101,12 @@ type Config struct {
 	HealthCheckPeriod time.Duration `env:"DB_HEALTH_CHECK_PERIOD"`
 
 	// LogQueries installs a LoggingQueryTracer. It logs SQL args verbatim, so
-	// this is dev-only tooling.
+	// this is dev-only tooling; a production RuntimeMode refuses it.
 	LogQueries bool `env:"DB_LOG_QUERIES" default:"false"`
 
-	// Logger is used only when LogQueries is true. If nil, slog.Default() is
-	// used. It is not populated by env parsers.
+	// Logger receives the query log when LogQueries is true and, under a
+	// non-zero RuntimeMode, the posture lines Open writes. If nil,
+	// slog.Default() is used. It is not populated by env parsers.
 	Logger *slog.Logger
 
 	// Tracer, when non-nil, is installed as poolConfig.ConnConfig.Tracer
@@ -123,6 +125,28 @@ type Config struct {
 	// and per-call, because a method verb does not encode idempotency
 	// (Query/QueryRow carry RETURNING writes).
 	Retry RetryPolicy
+
+	// RuntimeMode is the host's deployment posture. The zero value is
+	// mode-blind: Open behaves exactly as it did before the field existed. A
+	// non-zero mode must be environment.ModeDevelopment or ModeProduction.
+	// Production refuses, before any connection attempt, a connection target
+	// whose TLS does not verify the server (ErrTLSRequired) and query-argument
+	// logging (ErrQueryLoggingRefused); development logs one WARN per such
+	// condition. See the module README's "Production posture" section. It
+	// carries no env tag: the host reads its mode from the process environment
+	// in its composition root and sets it here.
+	RuntimeMode environment.Mode
+
+	// TLSUnverifiedAcknowledged admits, in production, a target that encrypts
+	// without verifying the server — a bare sslmode=require, the shape of a
+	// provider that serves a self-signed certificate. It is inert when no
+	// target needs it; when honored, Open logs a posture_waiver WARN. No env tag.
+	TLSUnverifiedAcknowledged bool
+
+	// TLSDisabledAcknowledged admits every target in production, plaintext
+	// included. It is inert when no target needs it; when honored, Open logs a
+	// posture_waiver WARN. No env tag.
+	TLSDisabledAcknowledged bool
 }
 
 func (cfg Config) connectionString() (string, error) {
@@ -251,7 +275,8 @@ func hasSessionTimeZone(params map[string]string) bool {
 }
 
 // poolConfig builds the pgxpool configuration Open connects with: pgx's own
-// parse of the DSN, then this Config's pool sizes and tracer, the connector's
+// parse of the DSN, the RuntimeMode posture check over every parsed connection
+// target, then this Config's pool sizes and tracer, the connector's
 // AfterConnect codec registration, and the default session time zone. The DSN
 // string itself is never rewritten — pgconn has already parsed it into
 // ConnConfig, so the parsed form is what gets adjusted.
@@ -275,6 +300,9 @@ func (cfg Config) poolConfig(dsn string) (*pgxpool.Config, error) {
 	poolConfig, err := pgxpool.ParseConfig(dsn)
 	if err != nil {
 		return nil, fmt.Errorf("parsing connection string: %w", err)
+	}
+	if err := cfg.checkPosture(&poolConfig.ConnConfig.Config); err != nil {
+		return nil, err
 	}
 	if cfg.MaxConns > 0 {
 		poolConfig.MaxConns = int32(cfg.MaxConns)
@@ -323,6 +351,8 @@ func (cfg Config) poolConfig(dsn string) (*pgxpool.Config, error) {
 // in place otherwise. Every connection scans timestamptz in UTC and, unless the
 // host named a zone, runs with a UTC session time zone (see poolConfig).
 // The context bounds startup only; the caller owns the returned DB's lifetime.
+// A non-zero RuntimeMode is validated and enforced before the pool exists, so a
+// refused configuration never attempts a connection.
 func Open(ctx context.Context, cfg Config) (*DB, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
