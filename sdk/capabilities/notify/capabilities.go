@@ -3,7 +3,8 @@ package notify
 // TransportSecurity classifies the wire protection a transport provides. It is
 // informational metadata a production host can surface or record; the
 // fail-closed rule keys on DevelopmentOnly and on whether the transport declares
-// metadata at all, not on this value.
+// metadata at all, and on this value only when the caller passes
+// RequireMandatoryTLS.
 type TransportSecurity string
 
 const (

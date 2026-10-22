@@ -1,9 +1,11 @@
 package email
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/gopernicus/gopernicus/sdk/capabilities/notify"
+	"github.com/gopernicus/gopernicus/sdk/pkg/environment"
 )
 
 // TestConsoleCapabilities_DevelopmentOnly proves the bundled console sender
@@ -34,5 +36,28 @@ func TestSMTPCapabilities_ProductionCapable(t *testing.T) {
 	}
 	if r.Capabilities().DevelopmentOnly {
 		t.Error("SMTP.Capabilities().DevelopmentOnly = true, want false")
+	}
+}
+
+// TestSMTPCapabilities_RequireTLS proves RequireTLS turns the declared posture
+// from opportunistic STARTTLS into TLS, which notify.RequireMandatoryTLS admits.
+func TestSMTPCapabilities_RequireTLS(t *testing.T) {
+	tests := []struct {
+		requireTLS bool
+		want       notify.TransportSecurity
+		wantErr    error
+	}{
+		{requireTLS: false, want: notify.TransportSecurityStartTLS, wantErr: notify.ErrOpportunisticTLS},
+		{requireTLS: true, want: notify.TransportSecurityTLS},
+	}
+	for _, tt := range tests {
+		s := NewSMTP(SMTPConfig{Host: "localhost", Port: "587", RequireTLS: tt.requireTLS})
+		if got := s.Capabilities().TransportSecurity; got != tt.want {
+			t.Errorf("RequireTLS=%v: TransportSecurity = %q, want %q", tt.requireTLS, got, tt.want)
+		}
+		_, err := notify.CheckTransport(environment.ModeProduction, s, notify.RequireMandatoryTLS())
+		if !errors.Is(err, tt.wantErr) {
+			t.Errorf("RequireTLS=%v: CheckTransport error = %v, want %v", tt.requireTLS, err, tt.wantErr)
+		}
 	}
 }

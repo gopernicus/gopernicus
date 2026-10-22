@@ -139,6 +139,40 @@ func TestPagesNoStoreBothOrders(t *testing.T) {
 	}
 }
 
+// web.SecurityHeaders lives in web and Pages here, so the composition is pinned
+// on the capability side (G12b keeps web tests from importing cacher).
+// Strict-Transport-Security is not a stored page header: it survives a hit
+// because the outer layer writes it on every request.
+func TestPagesUnderSecurityHeadersHitCarriesAllFive(t *testing.T) {
+	calls := 0
+	h := web.SecurityHeaders()(Pages(NewMemory(), PageConfig{})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		w.Header().Set("Content-Type", "text/html")
+		io.WriteString(w, "page")
+	})))
+	want := map[string]string{
+		"Strict-Transport-Security": "max-age=31536000; includeSubDomains",
+		"X-Content-Type-Options":    "nosniff",
+		"Referrer-Policy":           "strict-origin-when-cross-origin",
+		"X-Frame-Options":           "DENY",
+		"Permissions-Policy":        "camera=(), microphone=(), geolocation=()",
+	}
+	for i, cache := range []string{"MISS", "HIT"} {
+		w := pageResponse(h, httptest.NewRequest("GET", "/", nil))
+		if got := w.Header().Get("X-Cache"); got != cache {
+			t.Fatalf("request %d X-Cache = %q, want %q; headers=%v", i+1, got, cache, w.Header())
+		}
+		for name, value := range want {
+			if got := w.Result().Header.Values(name); len(got) != 1 || got[0] != value {
+				t.Errorf("request %d %s = %q, want %q", i+1, name, got, value)
+			}
+		}
+	}
+	if calls != 1 {
+		t.Fatalf("renders = %d, want 1", calls)
+	}
+}
+
 func TestPagesConflictingOuterMetadata(t *testing.T) {
 	for _, tc := range []struct{ name, outer, inner string }{
 		{"Cache-Control", "public, max-age=60", "public, max-age=5"},

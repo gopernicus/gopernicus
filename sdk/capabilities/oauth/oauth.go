@@ -16,10 +16,19 @@ package oauth
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
+	"reflect"
 	"strings"
+
+	"github.com/gopernicus/gopernicus/sdk/pkg/environment"
 )
+
+// ErrDevelopmentOnlyProvider is returned by CheckProvider in
+// environment.ModeProduction for a provider that declares itself
+// development-only. The returned error wraps it with the provider's name.
+var ErrDevelopmentOnlyProvider = errors.New("oauth: production rejects a development-only provider")
 
 // Provider drives an authorization-code flow. Host authentication policy belongs
 // to the caller; provider evidence does not itself authorize account adoption.
@@ -40,6 +49,13 @@ type IDTokenValidator interface {
 // TokenRefresher is optional. Whether refresh tokens are requested is host policy.
 type TokenRefresher interface {
 	RefreshToken(ctx context.Context, refreshToken string) (*TokenResponse, error)
+}
+
+// CapabilityReporter is the optional interface a Provider implements to declare
+// its production posture. Consumers detect it with a type assertion, so any
+// provider, bundled or host-owned, can opt in.
+type CapabilityReporter interface {
+	Capabilities() Capabilities
 }
 
 // AuthorizationRequest contains the values bound to one login transaction.
@@ -142,3 +158,66 @@ func (e *Error) Error() string {
 }
 
 func (e *Error) Unwrap() error { return e.Cause }
+
+// Capabilities is the posture metadata a Provider declares.
+type Capabilities struct {
+	// DevelopmentOnly marks a provider that must never run in production, such
+	// as a fake that signs in whoever asks. CheckProvider refuses it there.
+	DevelopmentOnly bool
+}
+
+// ProviderPosture is what CheckProvider returns: what the provider declared,
+// separate from whether that is acceptable for a mode. A development caller
+// uses it to phrase its own warning; this package takes no logger.
+type ProviderPosture struct {
+	// Declared reports whether the provider implements CapabilityReporter.
+	Declared bool
+	// Capabilities is what the provider declared; the zero value when Declared
+	// is false.
+	Capabilities Capabilities
+}
+
+// CheckProvider validates p against mode and returns the provider's declared
+// posture either way. In environment.ModeProduction a provider that declares
+// DevelopmentOnly is rejected with an error wrapping ErrDevelopmentOnlyProvider;
+// in environment.ModeDevelopment it is accepted and the posture tells the
+// caller to warn.
+//
+// A provider that declares nothing is ACCEPTED in every mode. This is the
+// deliberate opposite of notify.CheckTransport, which refuses an undeclared
+// transport: providers predate the hook, so refusing them would break every
+// production host, while a development-only provider is the one shape known
+// to be unsafe. A nil provider declares nothing.
+//
+// An invalid or empty mode is rejected with the environment package's own
+// validation error rather than defaulting to a posture the host did not choose.
+func CheckProvider(mode environment.Mode, p Provider) (ProviderPosture, error) {
+	posture := inspectProvider(p)
+	if err := environment.ValidateMode(mode); err != nil {
+		return posture, err
+	}
+	if mode.IsProduction() && posture.Capabilities.DevelopmentOnly {
+		return posture, fmt.Errorf("%w: %q", ErrDevelopmentOnlyProvider, p.Name())
+	}
+	return posture, nil
+}
+
+// inspectProvider reports what p declares, treating a nil or typed-nil
+// provider as declaring nothing.
+func inspectProvider(p Provider) ProviderPosture {
+	if p == nil {
+		return ProviderPosture{}
+	}
+	v := reflect.ValueOf(p)
+	switch v.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		if v.IsNil() {
+			return ProviderPosture{}
+		}
+	}
+	r, ok := p.(CapabilityReporter)
+	if !ok {
+		return ProviderPosture{}
+	}
+	return ProviderPosture{Declared: true, Capabilities: r.Capabilities()}
+}

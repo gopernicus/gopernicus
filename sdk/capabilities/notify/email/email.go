@@ -73,6 +73,16 @@
 //		Data:     map[string]any{"Name": "Ada"},
 //		Layout: email.LayoutTransactional,
 //	})
+//
+// # Production posture
+//
+// Console is development-only, and SMTP declares opportunistic STARTTLS unless
+// SMTPConfig.RequireTLS is set. A host that resolved a runtime mode checks the
+// sender it wires, and calls SMTP.Probe at boot when it requires TLS:
+//
+//	if _, err := notify.CheckTransport(mode, sender, notify.RequireMandatoryTLS()); err != nil {
+//		return err
+//	}
 package email
 
 import (

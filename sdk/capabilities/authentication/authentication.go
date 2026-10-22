@@ -2,13 +2,16 @@ package authentication
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"maps"
+	"reflect"
 	"slices"
 	"time"
 
 	"github.com/gopernicus/gopernicus/sdk"
+	"github.com/gopernicus/gopernicus/sdk/pkg/environment"
 )
 
 // MaxCredentialBytes bounds a presented credential. Larger input is rejected
@@ -51,6 +54,11 @@ var (
 	// ErrProviderUnavailable reports that the provider could not answer; it says
 	// nothing about the credential. It matches sdk.ErrUnavailable.
 	ErrProviderUnavailable = fmt.Errorf("authentication: provider unavailable: %w", sdk.ErrUnavailable)
+
+	// ErrDevelopmentOnlyProvider is returned by CheckProvider in
+	// environment.ModeProduction for a provider that declares itself
+	// development-only. The returned error wraps it with the provider's issuer.
+	ErrDevelopmentOnlyProvider = errors.New("authentication: production rejects a development-only provider")
 )
 
 // Provider verifies one credential kind from one issuer.
@@ -67,6 +75,13 @@ type RevocationChecker interface {
 	// CheckRevocation never reports an unknown subject as valid: it returns
 	// Disabled facts or an error matching sdk.ErrNotFound.
 	CheckRevocation(ctx context.Context, issuer, subject string) (RevocationFacts, error)
+}
+
+// CapabilityReporter is the optional interface a Provider implements to declare
+// its production posture. Consumers detect it with a type assertion, so any
+// provider, bundled or host-owned, can opt in.
+type CapabilityReporter interface {
+	Capabilities() Capabilities
 }
 
 // Transport is how a credential reached the consumer.
@@ -149,4 +164,68 @@ func (e *UnavailableError) Unwrap() []error {
 		return []error{ErrProviderUnavailable}
 	}
 	return []error{ErrProviderUnavailable, e.Err}
+}
+
+// Capabilities is the posture metadata a Provider declares.
+type Capabilities struct {
+	// DevelopmentOnly marks a provider that must never run in production, such
+	// as a local issuer that mints tokens for anyone. CheckProvider refuses it
+	// there.
+	DevelopmentOnly bool
+}
+
+// ProviderPosture is what CheckProvider returns: what the provider declared,
+// separate from whether that is acceptable for a mode. A development caller
+// uses it to phrase its own warning; this package takes no logger.
+type ProviderPosture struct {
+	// Declared reports whether the provider implements CapabilityReporter.
+	Declared bool
+	// Capabilities is what the provider declared; the zero value when Declared
+	// is false.
+	Capabilities Capabilities
+}
+
+// CheckProvider validates p against mode and returns the provider's declared
+// posture either way. In environment.ModeProduction a provider that declares
+// DevelopmentOnly is rejected with an error wrapping ErrDevelopmentOnlyProvider;
+// in environment.ModeDevelopment it is accepted and the posture tells the
+// caller to warn.
+//
+// A provider that declares nothing is ACCEPTED in every mode. This is the
+// deliberate opposite of notify.CheckTransport, which refuses an undeclared
+// transport: providers predate the hook, so refusing them would break every
+// production host, while a development-only provider is the one shape known
+// to be unsafe. A nil provider declares nothing.
+//
+// An invalid or empty mode is rejected with the environment package's own
+// validation error rather than defaulting to a posture the host did not choose.
+func CheckProvider(mode environment.Mode, p Provider) (ProviderPosture, error) {
+	posture := inspectProvider(p)
+	if err := environment.ValidateMode(mode); err != nil {
+		return posture, err
+	}
+	if mode.IsProduction() && posture.Capabilities.DevelopmentOnly {
+		return posture, fmt.Errorf("%w: issuer %q", ErrDevelopmentOnlyProvider, p.Issuer())
+	}
+	return posture, nil
+}
+
+// inspectProvider reports what p declares, treating a nil or typed-nil
+// provider as declaring nothing.
+func inspectProvider(p Provider) ProviderPosture {
+	if p == nil {
+		return ProviderPosture{}
+	}
+	v := reflect.ValueOf(p)
+	switch v.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		if v.IsNil() {
+			return ProviderPosture{}
+		}
+	}
+	r, ok := p.(CapabilityReporter)
+	if !ok {
+		return ProviderPosture{}
+	}
+	return ProviderPosture{Declared: true, Capabilities: r.Capabilities()}
 }
