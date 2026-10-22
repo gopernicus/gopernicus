@@ -318,8 +318,9 @@ declare them.
 - **the key constructor:** `authentication.NewKeys`, fed an
   `authentication.KeysInput`.
 
-`--posture` requires workshop/gopernicus ≥ v0.5.0; an older pin exits 2
-(unknown flag) — CI treats 2 as a broken invocation, never a pass.
+`--posture` requires workshop/gopernicus ≥ v0.5.0; an older pin refuses the flag — the binary
+exits 2, and a `go run …@<old>` invocation prints `exit status 2` and returns 1 — so CI treats any
+non-zero status as a broken invocation, never a pass.
 
 ## 4. Inbound anatomy — inside `internal/inbound/` (ratified 2026-07-08)
 
