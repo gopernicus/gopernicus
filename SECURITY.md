@@ -50,9 +50,9 @@ reviewer is written here and enforced by configuration, not by habit:
 3. **Cold-verified releases.** Every tag is verified from a scratch consumer with
    `GOWORK=off`, an empty module cache, `proxy.golang.org` and `sum.golang.org`, and the
    result is recorded with per-tag commit hashes and checksum manifests in `RELEASING.md`.
-   Tags are signed (`git tag -s`, `RELEASING.md` "Cutting a tag") from the first tag cut after
-   this file lands; every earlier tag is annotated but unsigned and remains verifiable through
-   the checksum database's transparency log and the manifests.
+   Tags are annotated (`git tag -a`) and unsigned; tamper evidence comes from the checksum
+   database's transparency log and the manifests. Signed tags are planned once a dedicated
+   release-signing key exists (SOC 2 readiness follow-up, FHC-9).
 4. **`CODEOWNERS`** lists the maintainer; the day a second reviewer is listed, the ruleset's
    required-approval count moves from zero to one.
 
@@ -62,9 +62,10 @@ reviewer is written here and enforced by configuration, not by habit:
   which runs `govulncheck` with symbol-level reachability in every module against the live
   Go vulnerability database. A newly published advisory that the code reaches fails the next
   run. The tool version is pinned in the `Makefile`.
-- **Dependabot** security updates are enabled; `.github/dependabot.yml` opens monthly grouped
-  version PRs for GitHub Actions and for each Go module directory. Sibling framework modules
-  move only through release trains, never through Dependabot.
+- **Dependency currency** is a deliberate, periodic coordinated bump across the modules (the
+  2026-10-22 train is the precedent), reviewed and gated like any change; Dependabot version
+  updates are not configured (under evaluation). Sibling framework modules move only through
+  release trains. The `vuln` job above is what catches a reachable advisory between bumps.
 - **CodeQL** default setup is configured for this repository.
 - **GitHub Actions** are pinned to full commit SHAs and the repository setting requires it;
   only GitHub-authored actions plus an explicit allowlist may run.

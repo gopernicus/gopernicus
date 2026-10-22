@@ -31,11 +31,78 @@ startup context and deadline to those constructors too.
 SQL migration streams are flat directories: nested files belong to separate
 host-controlled streams; export copies only direct SQL files.
 
+## Production posture — `RuntimeMode`
+
+`Config.RuntimeMode` is the host's `environment.Mode`. The composition root reads
+it from the process environment and sets it in code — it carries no env tag, and
+neither do the two acknowledgements below, so `environment.ParseEnvTags` over
+`Config` never fills them. The zero value is mode-blind: `Open` behaves exactly as
+before. A non-zero mode must be `development` or `production`
+(`environment.ErrModeRequired` / `ErrModeInvalid` otherwise).
+
+```go
+var cfg pgxdb.Config
+if err := environment.ParseEnvTags("", &cfg); err != nil {
+    return err
+}
+cfg.RuntimeMode = mode // validated by cmd/ from the process environment
+db, err := pgxdb.Open(ctx, cfg)
+```
+
+The check runs over pgx's own parse of the connection string, before the pool
+exists, so `PG*` environment defaults, `~/.postgresql/root.crt` and every
+multi-host fallback are judged exactly as pgx will dial them, and a refusal never
+attempts a connection. Every target — the primary and each entry pgx keeps in
+`ConnConfig.Fallbacks` — is one of:
+
+| class | pgx shape | connection strings | production |
+|---|---|---|---|
+| verified | TLS that checks the server: `InsecureSkipVerify` off, or skip-verify plus pgx's own `VerifyPeerCertificate` chain check | `sslmode=verify-full`; `sslrootcert=system`; `sslmode=verify-ca` + `sslrootcert`; `sslmode=require` + `sslrootcert` (libpq treats it as `verify-ca`) | admitted |
+| unverified | TLS with no server check | a bare `sslmode=require` | refused unless `TLSUnverifiedAcknowledged` |
+| plaintext | no TLS on a TCP host | `sslmode=disable`; the plaintext fallback that `sslmode=prefer` (the libpq default when `sslmode` is absent) and `sslmode=allow` keep | refused unless `TLSDisabledAcknowledged` |
+| local | a unix-socket host, which pgx never wraps in TLS | `host=/cloudsql/<instance>`, `host=/var/run/postgresql` | admitted; `Open` logs `tls=local_socket` at INFO |
+
+Production admits a configuration only when every target is verified or local.
+`TLSUnverifiedAcknowledged` additionally admits unverified targets;
+`TLSDisabledAcknowledged` admits all. A refusal is `ErrTLSRequired` naming the
+class, the target, `cfg.Redacted()` and the fix — `sslmode=verify-full` with
+`sslrootcert=system` or the provider CA, or `sslmode=verify-ca` with
+`sslrootcert` where the certificate does not name the host — and never the DSN
+itself.
+
+Production also refuses `LogQueries`, and a `Tracer` that is or wraps (through
+`MultiQueryTracer`) a `*LoggingQueryTracer`, with `ErrQueryLoggingRefused`: both
+log SQL arguments verbatim, and no acknowledgement admits them. When both
+refusals apply, `Open` returns them joined.
+
+Development admits everything and logs one WARN per condition production would
+refuse. In production each honored acknowledgement logs one WARN carrying
+`posture_waiver=TLSUnverifiedAcknowledged` or
+`posture_waiver=TLSDisabledAcknowledged`, so the runtime log evidences the
+waiver. An acknowledgement that waives nothing is inert — one binary runs in
+several environments. Posture lines go to `Config.Logger` (`slog.Default()` when
+nil).
+
+### Managed providers
+
+| provider | connection | class |
+|---|---|---|
+| Neon | `sslmode=verify-full&sslrootcert=system` | verified |
+| Supabase, AWS RDS / Aurora, Azure Database for PostgreSQL | `sslmode=verify-full&sslrootcert=<provider CA bundle>` | verified |
+| Google Cloud SQL through the Auth Proxy or connector unix socket | `host=/cloudsql/<project>:<region>:<instance>` (the proxy encrypts upstream) | local |
+| Google Cloud SQL by direct IP | `sslmode=verify-ca&sslrootcert=server-ca.pem` (the server certificate names the instance, not the IP) | verified |
+| Heroku-style self-signed server | `sslmode=require` plus `TLSUnverifiedAcknowledged: true` | unverified, acknowledged |
+
+Loopback TCP earns no exemption: an Auth Proxy listening on `127.0.0.1:5432` with
+`sslmode=disable` is plaintext. Run the proxy with `--unix-socket`, or
+acknowledge with `TLSDisabledAcknowledged`.
+
 ## Surface
 
 | member | shape |
 |---|---|
-| `Config` | `DSN` or split `Host`/`Port`/`User`/`Password`/`Database`/`SSLMode`, plus pool settings, `LogQueries`, `Logger`, `Tracer`, and `Retry`; env tags are provided for host parsers; pgx also honors standard `PG*` environment defaults during DSN parsing |
+| `Config` | `DSN` or split `Host`/`Port`/`User`/`Password`/`Database`/`SSLMode`, plus pool settings, `LogQueries`, `Logger`, `Tracer`, and `Retry`; env tags are provided for host parsers; pgx also honors standard `PG*` environment defaults during DSN parsing. `RuntimeMode`, `TLSUnverifiedAcknowledged` and `TLSDisabledAcknowledged` are programmatic (no env tag; see "Production posture") |
+| `ErrTLSRequired` / `ErrQueryLoggingRefused` | production posture refusals from `Open`, matched with `errors.Is` |
 | `Open(ctx, cfg) (*DB, error)` | opens a `pgxpool` and pings; every connection scans `timestamptz` in UTC and, unless the host named a zone, runs with session `timezone=UTC` (see below) |
 | `DB` | `Exec` / `Query` / `QueryRow` / `InTx` / `Begin` / `Close` / `Ping` / `Underlying() *pgxpool.Pool` |
 | `Querier` | interface intersection of `*DB` and `*Tx` (`Exec`/`Query`/`QueryRow`) — lets a store accept pool-or-tx |
@@ -641,6 +708,7 @@ then, hosts opt in by setting `Config.LogQueries` or `Config.Tracer`.
 
 Unit tests are hermetic (`MapError` over constructed `pgconn.PgError` values,
 `Collect` and `ProbeTables` over in-memory `Querier` stubs, config validation,
+the `RuntimeMode` posture matrix over pgx's DSN parse,
 migration checksum/error paths, `poolConfig`'s
 `AfterConnect`/session-zone defaulting, and the codec registration driven through
 a bare `pgtype.Map` in both wire formats) and run with a plain `go test ./...` —
