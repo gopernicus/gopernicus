@@ -13,10 +13,11 @@
 #
 # The check-run context name this workflow reports is "check" — the job id,
 # confirmed via the commit check-runs API (.check_runs[].name) and `gh pr
-# checks`. Branch protection at task-11 pins the required status check to that
-# EXACT literal string ("check") — renaming the `check` job (or the workflow, if
-# a future rename ever changes the reported context) silently un-enforces the
-# gate unless the protection rule is updated in the SAME change.
+# checks`. The repository ruleset on `main` must require EXACTLY the literal
+# contexts "check" and "vuln" (the two job ids below) — renaming a job (or the
+# workflow, if a future rename ever changes the reported context) silently
+# un-enforces the gate unless the ruleset is updated in the SAME change. A
+# required context that no workflow reports blocks every merge forever.
 #
 # Hermetic by design: no live creds, no service containers. The store
 # conformance suites skip loudly without their datastore env vars, so `make
@@ -46,10 +47,10 @@ jobs:
   check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
-          # go.work declares `go 1.26.1`; GOTOOLCHAIN stays auto (unset) so the
+          # go.work declares `go 1.26.10`; GOTOOLCHAIN stays auto (unset) so the
           # exact toolchain self-downloads if the runner's Go differs.
           go-version-file: go.work
           # Module caching keyed off every module's go.sum (no root go.sum in a
@@ -57,3 +58,20 @@ jobs:
           cache: true
           cache-dependency-path: "**/go.sum"
       - run: make check
+
+  # Vulnerability gate (SOC 2 CC7.1 / CC6.8): govulncheck with symbol-level
+  # reachability in every Makefile MODULE (`make vuln`). It is its own job, not
+  # part of `make check`, because it needs the live vulnerability database from
+  # vuln.go.dev and is therefore not hermetic — a newly published advisory turns
+  # this red on the next run, which is the point. The ruleset requires it by
+  # the literal context "vuln" next to "check".
+  vuln:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version-file: go.work
+          cache: true
+          cache-dependency-path: "**/go.sum"
+      - run: make vuln

@@ -31,7 +31,7 @@ LIVE_TAG_MODULES = $(filter %/firestore,$(INTEGRATION_TAG_MODULES))
 PROVIDER_LIVE_TAG_MODULES = integrations/authentication/auth0 integrations/authentication/firebase integrations/cryptids/go-oidc
 EMULATOR_TAG_MODULES = integrations/authentication/firebase
 
-.PHONY: generate generate-ui-assets build vet test test-stores test-ui-browser docs-install docs docs-build run migrate check tidy guard warm-scaffold-cache dev-firebase dev-firebase-down \
+.PHONY: generate generate-ui-assets build vet test test-stores vuln test-ui-browser docs-install docs docs-build run migrate check tidy guard warm-scaffold-cache dev-firebase dev-firebase-down \
 	guard-sdk-stdlib guard-pocket-isolation guard-sdk-no-outward guard-no-legacy-path \
 	guard-pocket-dependencies guard-pocket-transport-sdk-web guard-pocket-no-cross-pocket \
 	guard-store-no-foreign-pocket guard-no-underlying guard-no-lax-scan \
@@ -66,6 +66,17 @@ build: generate
 
 vet:
 	@for m in $(MODULES); do (cd $$m && go vet ./...) || exit 1; done
+
+# vuln runs govulncheck (symbol-level reachability: only advisories your code
+# actually reaches fail the run) in every MODULE. NOT part of `check`: it needs
+# the live vulnerability database from vuln.go.dev, so it is not hermetic. CI runs
+# it as its own job ("vuln", check.yml) next to "check", and a release records
+# the clean run in its manifest. The tool version is pinned so a result is
+# reproducible for a given database snapshot; bump it deliberately.
+GOVULNCHECK = golang.org/x/vuln/cmd/govulncheck@v1.9.0
+
+vuln:
+	@for m in $(MODULES); do echo "== vuln $$m =="; (cd $$m && go run $(GOVULNCHECK) ./...) || exit 1; done
 
 test:
 	@for m in $(MODULES); do echo "test $$m"; (cd $$m && go test ./...) || exit 1; done

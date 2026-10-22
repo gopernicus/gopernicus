@@ -1,12 +1,12 @@
 module github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx
 
-go 1.26.1
+go 1.26.10
 
 require (
 	github.com/gopernicus/gopernicus/integrations/datastores/pgxdb v0.9.0
 	github.com/gopernicus/gopernicus/pockets/authorization v0.27.0
 	github.com/gopernicus/gopernicus/sdk v0.15.0
-	github.com/jackc/pgx/v5 v5.8.0
+	github.com/jackc/pgx/v5 v5.9.2
 )
 
 require (

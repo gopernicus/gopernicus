@@ -9,7 +9,7 @@ The `examples/minimal` host uses the CMS pocket with in-memory repositories. It 
 
 ## Requirements
 
-- Go 1.26.1 or the version named by the repository's `go.work`
+- Go 1.26.10 or the version named by the repository's `go.work`
 - a checkout of `github.com/gopernicus/gopernicus`
 
 ## Run it

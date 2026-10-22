@@ -1,6 +1,6 @@
 module github.com/gopernicus/gopernicus/pockets/events/stores/turso
 
-go 1.26.1
+go 1.26.10
 
 require (
 	github.com/gopernicus/gopernicus/integrations/datastores/turso v0.4.0

@@ -1,6 +1,6 @@
 module github.com/gopernicus/gopernicus/examples/goth-showcase
 
-go 1.26.1
+go 1.26.10
 
 require (
 	github.com/a-h/templ v0.3.1020

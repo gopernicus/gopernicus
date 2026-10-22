@@ -1,6 +1,6 @@
 module github.com/gopernicus/gopernicus/examples/minimal
 
-go 1.26.1
+go 1.26.10
 
 require (
 	github.com/gopernicus/gopernicus/pockets/cms v0.3.0

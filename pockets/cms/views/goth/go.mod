@@ -1,6 +1,6 @@
 module github.com/gopernicus/gopernicus/pockets/cms/views/goth
 
-go 1.26.1
+go 1.26.10
 
 require (
 	github.com/a-h/templ v0.3.1020
@@ -21,9 +21,9 @@ require (
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/natefinch/atomic v1.0.1 // indirect
 	golang.org/x/mod v0.36.0 // indirect
-	golang.org/x/net v0.56.0 // indirect
+	golang.org/x/net v0.60.0 // indirect
 	golang.org/x/sync v0.21.0 // indirect
-	golang.org/x/sys v0.46.0 // indirect
+	golang.org/x/sys v0.48.0 // indirect
 	golang.org/x/tools v0.45.0 // indirect
 )
 

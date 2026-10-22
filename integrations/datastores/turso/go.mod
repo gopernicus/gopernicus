@@ -1,6 +1,6 @@
 module github.com/gopernicus/gopernicus/integrations/datastores/turso
 
-go 1.26.1
+go 1.26.10
 
 require (
 	github.com/gopernicus/gopernicus/sdk v0.9.0

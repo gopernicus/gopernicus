@@ -25,7 +25,7 @@ var pocketTemplates embed.FS
 const (
 	pgxVersion        = "v5.8.0"
 	libsqlVersion     = "v0.0.0-20260528064733-9d5d30a29a60"
-	scaffoldGoVersion = "1.26.1"
+	scaffoldGoVersion = "1.26.10"
 	defaultAggregate  = "item"
 	identifierExplain = "must be a lowercase Go identifier: start with a letter, then letters or digits"
 )

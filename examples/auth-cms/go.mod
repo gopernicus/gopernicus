@@ -1,6 +1,6 @@
 module github.com/gopernicus/gopernicus/examples/auth-cms
 
-go 1.26.1
+go 1.26.10
 
 require (
 	github.com/gopernicus/gopernicus/integrations/cryptids/bcrypt v0.2.0
@@ -20,7 +20,7 @@ require (
 	github.com/gopernicus/gopernicus/pockets/jobs/stores/turso v0.5.0
 	github.com/gopernicus/gopernicus/sdk v0.15.0
 	github.com/gopernicus/gopernicus/ui/goth v0.2.0
-	github.com/jackc/pgx/v5 v5.8.0
+	github.com/jackc/pgx/v5 v5.9.2
 )
 
 require (
