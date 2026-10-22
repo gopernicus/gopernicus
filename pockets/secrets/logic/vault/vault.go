@@ -6,8 +6,10 @@
 // and the secret's reference as additional authenticated data. The data key is
 // stored wrapped by a Wrapper, bundled as a cryptids key ring held in the host's
 // environment, so rotating the master key rewraps one row per owner rather than
-// every secret, and destroying an owner's key makes its secrets unreadable even
-// in backups.
+// every secret, and destroying an owner's key makes its secrets unreadable in any
+// backup that holds the secrets rows but not the owner-key row. A backup that also
+// holds secrets_owner_keys stays readable until every ring key the owner key was
+// wrapped under has been retired from the host's ring (README, Rotation).
 //
 // Plaintext never reaches a log line, an error or an audit row.
 package vault

@@ -802,6 +802,31 @@ closing borrowed clients. `Stats`, `LastPoll` and `LastSuccessfulPoll` expose
 fallbacks, capacity failures, publication conflicts, timings and captured counts.
 Measure SQL fallback and rebuild capacity alongside Redis latency.
 
+## Access review
+
+Recipes for a periodic review of who holds what, with the bundled APIs as they are today.
+`Roles` and `Audit` are `Components` fields; `Repositories.Audit` must be wired and the store
+constructed with `WithAudit()` for history to exist.
+
+```go
+// Every global role holder (the bundled HTTP listings exclude the global scope).
+page, err := components.Roles.ListRoleAssignmentsByScope(ctx, tuples.Global(), list.Request{})
+
+// Direct assignments on one resource; usersets are not expanded.
+page, err = components.Roles.ListRoleAssignmentsByScope(ctx, tuples.On("project", id), list.Request{})
+
+// Everything one subject holds directly, across scopes.
+page, err = components.Roles.ListRoleAssignmentsBySubject(ctx, principal, list.Request{})
+
+// Change history for one resource, newest first; same shape by subject or by actor.
+page, err = repos.Audit.List(ctx, audit.Filter{ResourceType: "project", ResourceID: id}, list.Request{})
+```
+
+Limits today: there is no effective-access listing that merges scopes or expands usersets,
+no reverse listing ("who can `manage` this resource"), and no bundled HTTP route or export
+for the audit history — a host serves its own. Denied decisions and refused writes are not in
+the history. Pagination follows `sdk/pkg/list` (cursor or offset per the store).
+
 ## Schema setup and verification
 
 SQL adapters ship a fresh `0001_iam_tuples.sql` defining canonical facts and audit.

@@ -192,8 +192,8 @@ type IdentityConfig struct {
 	// safe default (credential.NewDefaultPolicy: one direct login method + one
 	// verified recovery method, PSTN restricted) when the credential suite is
 	// enabled (phase 6); a host may supply stronger rules. The slot is frozen here
-	// (AV3-0.4); ErrCredentialPolicyRequired covers the strict-production posture
-	// that disables the default without a replacement.
+	// (AV3-0.4). ErrCredentialPolicyRequired is declared for a strict-production
+	// posture but no code path returns it today: a nil policy always selects the default.
 	CredentialPolicy credential.Policy
 }
 

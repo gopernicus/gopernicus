@@ -80,6 +80,9 @@ Two procedures, both library calls for the host's own command.
    untouched. It is idempotent; `Report.Failed` lists owners whose key is under
    a wrapper key no longer in the ring. `DryRun` counts without writing.
 4. Remove the old key from the ring once `Failed` is empty.
+5. Retire it everywhere else too (old `.env` files, secret-manager versions,
+   backups of the environment): a backup of `secrets_owner_keys` taken before the
+   rewrap stays readable for as long as that key exists anywhere.
 
 **Owner key** (`RotateOwnerKey(ctx, owner, source)`): a fresh data key,
 every secret of that owner resealed, and the key replaced, in one transaction.
@@ -87,7 +90,10 @@ Use it on a schedule or after someone with database read access leaves.
 
 **Offboarding** (`Vault.DeleteOwner`): deletes the owner's secrets and
 destroys its data key in one transaction, recording each. Backups of the
-value rows are unreadable afterwards.
+value rows alone are unreadable afterwards. A backup that also contains
+`secrets_owner_keys` remains readable until every ring key it was wrapped under
+is retired, so an offboarding that must defeat backups is followed by the
+master-key rotation above, through step 5.
 
 ## Errors
 

@@ -1,10 +1,12 @@
 // Package securityevent is the append-only audit-rail domain (design §5.1): a
-// synchronous record of every sensitive authentication event — registrations,
-// logins (success/failure/blocked), logouts, verifications, password changes,
-// OAuth flows, API-key authentications, and token issuance. It is deliberately
-// append-only: there are no Update or Delete methods on the port (structural,
-// not enforced by a flag), because an audit trail that can be rewritten is not
-// an audit trail.
+// synchronous record of sensitive authentication events — registrations, logins
+// (success/failure/blocked), logouts, verifications, password changes, OAuth
+// logins (success only today), API-key authentications, and token issuance
+// (success only today; the README's "Security events" posture bullet lists the
+// denial paths that record nothing yet). It is append-only AT THE PORT: there
+// are no Update or Delete methods (structural, not enforced by a flag). The
+// database role can still rewrite the table unless the host revokes UPDATE and
+// DELETE on it — see the docs site's "Production database posture" guide.
 //
 // Content hygiene (plan-cut amendment, SRE): Details/IPAddress/UserAgent carry
 // identifiers and key PREFIXES only — raw API keys, JWTs, session tokens,

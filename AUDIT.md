@@ -3713,13 +3713,15 @@ presentation and export. No HTTP audit endpoint is mounted.
 Trusted/raw writes need explicit attribution when recording is enabled:
 
 ```go
-ctx = authorization.WithAuditSource(ctx, authorization.AuditSource{
+// Current symbols (corrected 2026-10-22): audit.WithSource / audit.Source in
+// pockets/authorization/logic/audit; the writer is components.Mutations.
+ctx = audit.WithSource(ctx, audit.Source{
     System: "bootstrap", Reason: "initial tenant owner",
 })
-result, err := components.SystemMutator.GrantRelationship(ctx,
-    authorization.GrantRelationshipCommand{
+result, err := components.Mutations.GrantRelationship(ctx,
+    mutations.GrantRelationshipCommand{
         ResourceType: "project", ResourceID: projectID,
-        Relation: "owner", Subject: authorization.SubjectRef{Type: "user", ID: ownerID},
+        Relation: "owner", Subject: relationships.SubjectRef{Type: "user", ID: ownerID},
     },
 )
 ```

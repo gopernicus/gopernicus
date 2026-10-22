@@ -212,7 +212,11 @@ login/password-token issuance, password-reset starts, sensitive-code starts and
 sensitive-password proofs. Defaults per minute are 5/30, 3/20, 5/30 and 5/30
 respectively. Full zero limits select defaults; partial invalid limits fail boot.
 Subject keys contain digests; hosts supply trusted client IP context and a shared
-limiter for production. Limiter failures fail closed on these operations.
+limiter for production. Limiter failures fail closed on these four budgets. Two other
+budgets fail OPEN on a limiter error (WARN, request admitted): the HTTP per-IP budgets on
+`POST /auth/refresh` and invitation decline (`inbound/http/public_rate_limit.go`,
+`FailOpen: true`) and the per-session refresh budget (`logic/authentication/refresh.go`).
+Making those fail closed in production is planned (SOC 2 slice S5).
 
 A sensitive code has an operation/session/channel binding and a distinct delivery
 issuance key. Concurrent starts cannot reuse a queued message for a replaced code.
@@ -351,7 +355,10 @@ registered (404) — never a half-registered state. Every sensitive credential/
 identifier mutation is `CredentialManagement`-gated (`RequireAccessTokenLive()`
 by default), carries the **browser-safe
 gate** (allowlisted `Origin` + double-submit CSRF for cookie callers; bearer-only
-API callers skip it), and sets `Cache-Control: no-store`.
+API callers skip it), and sets `Cache-Control: no-store` — except, today,
+`POST /auth/password/change`, whose JSON response carries no `Cache-Control` (the
+login, token, refresh and register JSON responses likewise; `no-store` on the whole
+`/auth` registrar is planned, SOC 2 slice S5).
 
 **Always registered — password + sessions + challenge rail:**
 
@@ -1868,7 +1875,9 @@ a SPA to re-authenticate at the provider (`prompt=login`, `max_age`,
 ### Invitations
 
 - **Accept** works for a provider user whose JIT email is verified (the
-  verified-identifier match) and, like every bundled mutation, needs
+  verified-identifier match — applied to email and phone invitation kinds only;
+  an invitation of any other, host-declared kind is accepted by any authenticated
+  holder of the token today, see SOC 2 slice S7) and, like every bundled mutation, needs
   `X-CSRF-Token` on the cookie transport; `GET /auth/csrf` admits provider
   cookies.
 - **Pending invitations** for a verified email are accepted automatically right
@@ -2024,7 +2033,7 @@ store upgrade is needed.
 | `ChallengeProtector` | REQUIRED once `Challenges` is wired (`ErrChallengeProtectorRequired`). The bundled `HMACChallengeProtector` peppers OTP codes with an in-process HMAC **key ring** (active key ID stamped on each challenge; an overlapping rotation still verifies an unexpired code) and SHA-256-digests 256-bit tokens. The pepper is **local code, not a service** (below). |
 | `IdentifierNormalizer` | nil → the bundled strict default (email trim+lowercase, phone strict E.164). One policy canonicalizes registration, login, recovery, and invitations identically. |
 | `IdentifierKeyer` | derives PII-free rate-limit/idempotency keys under a key **distinct** from the pepper, JWT, and encryption keys. **Production-required** (`ErrIdentifierKeyerRequired`); development falls back to a per-instance SHA-256. |
-| `CredentialPolicy` | nil → the bundled safe default (`credential.NewDefaultPolicy`: one direct login method + one verified recovery method, PSTN restricted). A host may supply stronger rules; `ErrCredentialPolicyRequired` covers a strict-production posture that disables the default without a replacement. |
+| `CredentialPolicy` | nil → the bundled safe default (`credential.NewDefaultPolicy`: one direct login method + one verified recovery method, PSTN restricted). A host may supply stronger rules. `ErrCredentialPolicyRequired` is declared for a strict-production posture but no code path returns it today: a nil policy always selects the bundled default. |
 | `DeliveryEncrypter` (cryptids.Encrypter) | REQUIRED once delivery can send — a wired `DeliveryDispatcher` (`jobs` mode) or `DeliveryMode: "in_process"` (`ErrDeliveryEncrypterRequired`) — the command envelope briefly carries the rendered secret + destination, so it is always sealed. Bundled `cryptids.NewAESGCM` with a distinct 32-byte key. |
 | `DeliveryMode` | **REQUIRED**, no default (`AUTH_DELIVERY_MODE`): `"jobs"` (durable delivery on the generic jobs runtime), `"in_process"` (bounded, EPHEMERAL in-process pool), or `"off"` (no delivery runtime). Empty → `ErrDeliveryModeRequired`, unknown → `ErrDeliveryModeInvalid`, never inferred from a non-nil collaborator. `"jobs"` requires `DeliveryConfig.DeliveryDispatcher` (`ErrDeliveryQueueRequired`); `"off"` rejects a wired dispatcher (`ErrDeliveryOffButDeliverable`); `"in_process"` needs no dispatcher (it owns its bounded pool). `Register` starts no runtime in any mode. |
 | `DeliveryJobsAcknowledged` | a wiring assertion that the host runs the durable generic jobs delivery runtime. Meaningful for `DeliveryMode: "jobs"`; the queue is the ONLY send path, so production REQUIRES it (`ErrDeliveryJobsUnacknowledged`) rather than silently swallowing every message; development tolerates the zero value. |
@@ -2072,9 +2081,12 @@ compromise the others: `AUTH_JWT_SECRET` (session/JWT signing),
 `AUTH_CHALLENGE_PEPPER` (OTP HMAC key ring, rotatable), `AUTH_IDENTIFIER_KEY`
 (PII-free rate-limit/idempotency digests), `AUTH_DELIVERY_ENCRYPTER_KEY`
 (delivery-outbox envelope AES-GCM), and `AUTH_TOKEN_ENCRYPTER_KEY` (provider
-tokens). Key material is never printed; an unset key falls back to an **ephemeral
-per-boot** key (dev/single-instance only, WARN-logged). Multi-instance production
-MUST set and SHARE every key. There is deliberately **no separate CSRF or
+tokens). Key material is never printed. The pocket never synthesizes a key — every signer,
+encrypter and keyer is a required collaborator (`configuration_errors.go`). The
+**ephemeral per-boot** fallback with a WARN lives in the reference host
+(`examples/auth-cms/cmd/server/demo.go`), where today it applies in EVERY
+`RuntimeMode`, production included (a fail-closed loader is planned, SOC 2 slice S1).
+Multi-instance production MUST set and SHARE every key. There is deliberately **no separate CSRF or
 magic-link/reset secret**: CSRF is a per-render random double-submit token (no
 managed key), and magic-link / reset tokens are digested by the challenge pepper
 above. **Rotation consequence per key:** only the challenge pepper supports
@@ -3244,13 +3256,23 @@ credential rail is unwired.
   cross-origin SPA reads the token from `GET /auth/csrf` (above); an origin-gate
   refusal answers 403 `origin_rejected`, a failed double-submit 403
   `permission_denied`.
-- **Security events.** When `SecurityEvents` is wired, every sensitive operation
-  records an append-only row synchronously (see below). Audit content carries
+- **Security events.** When `SecurityEvents` is wired, successful sensitive
+  operations record an append-only row synchronously (see below), and password
+  `login`, step-up, passwordless and external-identity denials record
+  failure/blocked rows too. NOT recorded today: `POST /auth/token` failures,
+  a wrong current password on change, an invalid reset token, a wrong
+  registration or removal code (only the lockout is recorded), identifier-change
+  denials, OAuth provider login failures and pending-link issuance, and OAuth2
+  consent denials and grant failures (recording them is SOC 2 slice S2). When
+  `SecurityEvents` is nil there is no audit trail and no construction error in
+  any mode. Audit content carries
   identifiers, key PREFIXES, kind, and purpose ONLY — raw codes, tokens, JWTs,
   passwords, provider tokens, and unmasked destinations never land in it. An
   audit-write failure is logged at WARN and NEVER fails the auth flow.
 - **PII masking / retention / redress.** Identifier values are masked in reads and
-  audit rows; an identifier change fans an independent notice to previously
+  in audit rows — except the invitation rail, whose `invitation_created`,
+  `invitation_granted` and resend rows carry the raw invitee address in
+  `details.identifier` today (a kind + digest is planned, SOC 2 slice S2); an identifier change fans an independent notice to previously
   verified channels (never only the newly bound address), carrying change time +
   client context + a host redress path so a victim of a hostile change can react.
 
