@@ -1,7 +1,9 @@
 package environment
 
 import (
+	"bytes"
 	"errors"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -309,5 +311,129 @@ func TestLoadPath_ExistingEmptyValueAndPartialFailure(t *testing.T) {
 	}
 	if got := os.Getenv(applied); got != "applied" {
 		t.Errorf("earlier assignment = %q, want applied", got)
+	}
+}
+
+const (
+	modeTestKey    = "GOPERNICUS_TEST_RUNTIME_MODE"
+	modeTestLoaded = "GOPERNICUS_TEST_FROM_DOTENV"
+)
+
+// modeTestDir runs the test in a fresh working directory, optionally holding a
+// .env, with the mode key set to mode (unset when mode is "-") and the
+// file-loaded variable unset.
+func modeTestDir(t *testing.T, mode, dotenv string) {
+	t.Helper()
+	t.Chdir(t.TempDir())
+	if dotenv != "" {
+		if err := os.WriteFile(".env", []byte(dotenv), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv(modeTestKey, mode)
+	if mode == "-" {
+		os.Unsetenv(modeTestKey)
+	}
+	t.Setenv(modeTestLoaded, "")
+	os.Unsetenv(modeTestLoaded)
+}
+
+// captureDefaultLog routes slog.Default to a buffer for the test.
+func captureDefaultLog(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	var buf bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+	return &buf
+}
+
+func TestLoadEnvForMode(t *testing.T) {
+	const loads = modeTestLoaded + "=yes\n"
+	tests := []struct {
+		name       string
+		mode       string // "-" leaves the key unset
+		dotenv     string
+		want       Mode
+		wantErr    error
+		wantLoaded bool
+		wantWarn   bool
+	}{
+		{name: "unset", mode: "-", dotenv: loads, wantErr: ErrModeRequired},
+		{name: "empty", mode: "", dotenv: loads, wantErr: ErrModeRequired},
+		{name: "unset while .env names the key", mode: "-", dotenv: modeTestKey + "=development\n" + loads, wantErr: ErrModeRequired},
+		{name: "invalid", mode: "prod", dotenv: loads, wantErr: ErrModeInvalid},
+		{name: "production skips .env", mode: "production", dotenv: modeTestKey + "=development\n" + loads, want: ModeProduction, wantWarn: true},
+		{name: "production without .env", mode: "production", want: ModeProduction},
+		{name: "development loads .env", mode: "development", dotenv: loads, want: ModeDevelopment, wantLoaded: true},
+		{name: "development without .env", mode: "development", want: ModeDevelopment},
+		{name: "development .env names the key", mode: "development", dotenv: loads + modeTestKey + "=development\n", wantErr: ErrModeFromFile},
+		{name: "development .env names the key empty", mode: "development", dotenv: loads + "export " + modeTestKey + "=\n", wantErr: ErrModeFromFile},
+		{name: "development .env comments the key", mode: "development", dotenv: "# " + modeTestKey + "=\n" + loads, want: ModeDevelopment, wantLoaded: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			modeTestDir(t, tt.mode, tt.dotenv)
+			logs := captureDefaultLog(t)
+
+			got, err := LoadEnvForMode(modeTestKey)
+
+			if tt.wantErr != nil {
+				if !errors.Is(err, tt.wantErr) {
+					t.Fatalf("LoadEnvForMode() error = %v, want errors.Is %v", err, tt.wantErr)
+				}
+				for _, want := range []string{modeTestKey, "process environment", "systemd", "docker --env-file"} {
+					if !strings.Contains(err.Error(), want) {
+						t.Errorf("error %q does not name %q", err, want)
+					}
+				}
+				if got != "" {
+					t.Errorf("mode = %q on error, want zero", got)
+				}
+			} else if err != nil {
+				t.Fatalf("LoadEnvForMode() error = %v", err)
+			}
+			if got != tt.want {
+				t.Errorf("mode = %q, want %q", got, tt.want)
+			}
+			if _, loaded := os.LookupEnv(modeTestLoaded); loaded != tt.wantLoaded {
+				t.Errorf(".env loaded = %v, want %v", loaded, tt.wantLoaded)
+			}
+			warned := strings.Contains(logs.String(), ".env present, ignored in production")
+			if warned != tt.wantWarn {
+				t.Errorf("production WARN logged = %v, want %v; log %q", warned, tt.wantWarn, logs.String())
+			}
+			if tt.wantWarn && strings.Count(logs.String(), "level=WARN") != 1 {
+				t.Errorf("want exactly one WARN, log %q", logs.String())
+			}
+		})
+	}
+}
+
+func TestLoadEnvForMode_FromFileNamesLine(t *testing.T) {
+	modeTestDir(t, "development", "A=1\n"+modeTestKey+"=production\n")
+	_, err := LoadEnvForMode(modeTestKey)
+	if !errors.Is(err, ErrModeFromFile) {
+		t.Fatalf("error = %v, want ErrModeFromFile", err)
+	}
+	if !strings.Contains(err.Error(), ".env:2") {
+		t.Errorf("error %q does not name the offending line", err)
+	}
+	if strings.Contains(err.Error(), "=production") {
+		t.Errorf("error %q echoes the file's assignment", err)
+	}
+}
+
+func TestLoadEnvForMode_DevelopmentReportsMalformedEnv(t *testing.T) {
+	modeTestDir(t, "development", "not an assignment\n")
+	if _, err := LoadEnvForMode(modeTestKey); err == nil || !strings.Contains(err.Error(), ".env:1") {
+		t.Fatalf("error = %v, want the LoadPath parse error", err)
+	}
+}
+
+func TestLoadEnvForMode_RequiresKey(t *testing.T) {
+	if _, err := LoadEnvForMode(""); err == nil {
+		t.Fatal("LoadEnvForMode(\"\") = nil error, want one")
 	}
 }

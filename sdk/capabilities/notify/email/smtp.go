@@ -21,10 +21,15 @@ import (
 	"github.com/gopernicus/gopernicus/sdk/capabilities/notify"
 )
 
-// SMTPConfig holds host-owned connection settings. STARTTLS is opportunistic:
-// this supports explicit private-relay configurations without TLS. PLAIN auth
-// follows net/smtp's protection against sending credentials to remote plaintext
-// servers. Use a different Sender when mandatory or implicit TLS is required.
+// ErrTLSRequired is returned by Send and Probe when SMTPConfig.RequireTLS is
+// set and the relay does not offer STARTTLS. Nothing is authenticated or sent.
+var ErrTLSRequired = errors.New("email: the SMTP relay does not offer STARTTLS and RequireTLS is set")
+
+// SMTPConfig holds host-owned connection settings. STARTTLS is opportunistic
+// unless RequireTLS is set: this supports explicit private-relay configurations
+// without TLS. PLAIN auth follows net/smtp's protection against sending
+// credentials to remote plaintext servers. Implicit TLS (port 465) is not
+// supported; use a different Sender for it.
 type SMTPConfig struct {
 	Host     string
 	Port     string
@@ -33,21 +38,32 @@ type SMTPConfig struct {
 	// Timeout bounds a complete attempt, including the greeting and DATA reply.
 	// Zero uses 30 seconds; an earlier caller deadline wins.
 	Timeout time.Duration
+	// RequireTLS makes STARTTLS mandatory, with TLS 1.2 or later: a relay that
+	// does not offer it fails each Send with ErrTLSRequired before AUTH or MAIL.
+	// Capabilities then reports notify.TransportSecurityTLS. Because the failure
+	// otherwise surfaces only at send time, a production host calls Probe at boot.
+	RequireTLS bool
 }
 
 // SMTP is a stdlib email transport. Each Send owns its connection. It does not
 // DKIM-sign; RFC 8058 one-click unsubscribe requires the relay's signature to
 // cover List-Unsubscribe and List-Unsubscribe-Post.
 type SMTP struct {
-	addr    string
-	host    string
-	auth    smtp.Auth
-	timeout time.Duration
+	addr       string
+	host       string
+	auth       smtp.Auth
+	timeout    time.Duration
+	requireTLS bool
 }
 
 var _ Sender = (*SMTP)(nil)
 
+// Capabilities reports notify.TransportSecurityTLS when RequireTLS is set and
+// opportunistic notify.TransportSecurityStartTLS otherwise.
 func (s *SMTP) Capabilities() notify.Capabilities {
+	if s.requireTLS {
+		return notify.Capabilities{TransportSecurity: notify.TransportSecurityTLS}
+	}
 	return notify.Capabilities{TransportSecurity: notify.TransportSecurityStartTLS}
 }
 
@@ -61,7 +77,34 @@ func NewSMTP(cfg SMTPConfig) *SMTP {
 	if timeout == 0 {
 		timeout = 30 * time.Second
 	}
-	return &SMTP{addr: net.JoinHostPort(cfg.Host, cfg.Port), host: cfg.Host, auth: auth, timeout: timeout}
+	return &SMTP{addr: net.JoinHostPort(cfg.Host, cfg.Port), host: cfg.Host, auth: auth, timeout: timeout, requireTLS: cfg.RequireTLS}
+}
+
+// Probe checks that the relay accepts a session this sender can use: it dials,
+// greets with EHLO, completes STARTTLS when the relay offers it, and fails with
+// ErrTLSRequired when RequireTLS is set and the relay does not. It ends with
+// QUIT and never authenticates or sends a message. Production hosts call it at
+// boot, so a relay that would refuse every Send stops the boot instead.
+func (s *SMTP) Probe(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if s.timeout < 0 {
+		return fmt.Errorf("email: SMTP timeout must not be negative: %w", sdk.ErrInvalidInput)
+	}
+	ctx, cancel := context.WithTimeout(ctx, s.timeout)
+	defer cancel()
+	conn, err := (&net.Dialer{}).DialContext(ctx, "tcp", s.addr)
+	if err != nil {
+		return fmt.Errorf("smtp connect: %w", errors.Join(err, ctx.Err()))
+	}
+	defer conn.Close()
+	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
+	defer stop()
+	if err := s.probe(conn); err != nil {
+		return fmt.Errorf("smtp probe: %w", errors.Join(err, ctx.Err()))
+	}
+	return nil
 }
 
 // Send validates and delivers one email. Cancellation closes the active
@@ -102,10 +145,8 @@ func (s *SMTP) send(conn net.Conn, msg Message, body []byte) error {
 		return err
 	}
 	defer client.Close()
-	if ok, _ := client.Extension("STARTTLS"); ok {
-		if err := client.StartTLS(&tls.Config{ServerName: s.host}); err != nil {
-			return err
-		}
+	if err := s.startTLS(client); err != nil {
+		return err
 	}
 	if s.auth != nil {
 		if ok, _ := client.Extension("AUTH"); !ok {
@@ -147,6 +188,38 @@ func (s *SMTP) send(conn net.Conn, msg Message, body []byte) error {
 	// the host should retry a message the server already accepted.
 	_ = client.Quit()
 	return nil
+}
+
+func (s *SMTP) probe(conn net.Conn) error {
+	client, err := smtp.NewClient(conn, s.host)
+	if err != nil {
+		return err
+	}
+	defer client.Close()
+	if err := client.Hello("localhost"); err != nil {
+		return err
+	}
+	if err := s.startTLS(client); err != nil {
+		return err
+	}
+	return client.Quit()
+}
+
+// startTLS upgrades the session when the relay offers STARTTLS. Under
+// RequireTLS a relay without it is ErrTLSRequired, and the handshake refuses
+// anything older than TLS 1.2.
+func (s *SMTP) startTLS(client *smtp.Client) error {
+	if ok, _ := client.Extension("STARTTLS"); !ok {
+		if s.requireTLS {
+			return ErrTLSRequired
+		}
+		return nil
+	}
+	cfg := &tls.Config{ServerName: s.host}
+	if s.requireTLS {
+		cfg.MinVersion = tls.VersionTLS12
+	}
+	return client.StartTLS(cfg)
 }
 
 // buildMessage uses quoted-printable bodies and folded encoded subjects so UTF-8
