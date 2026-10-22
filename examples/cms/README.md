@@ -18,6 +18,7 @@ host-registered custom types via the Registry model), `taxonomy` (categories +
 tags), `menus` (nested nav), `media` (uploads), `messaging` (contact
 inquiries). **Surfaces:** an admin CRUD area and a themed public site
 (markdown-rendered, menu-driven nav, SEO meta, render-cached).
+The admin is ungated by acknowledgement (`cms.Config.AdminUngatedAcknowledged`) — demo only, refused in production.
 
 See [ARCHITECTURE.md](../../ARCHITECTURE.md) for the layering rule and
 [NOTES.md](../../NOTES.md) for the decision log.

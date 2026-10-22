@@ -80,6 +80,31 @@ func TestRespondJSONError(t *testing.T) {
 	}
 }
 
+func TestRespondJSON_NoSniff(t *testing.T) {
+	tests := []struct {
+		name       string
+		respond    func(w http.ResponseWriter)
+		wantStatus int
+	}{
+		{"success", func(w http.ResponseWriter) { _ = RespondJSON(w, http.StatusOK, map[string]string{"ok": "yes"}) }, http.StatusOK},
+		{"marshal failure", func(w http.ResponseWriter) { _ = RespondJSON(w, http.StatusOK, func() {}) }, http.StatusInternalServerError},
+		{"error body", func(w http.ResponseWriter) { RespondJSONError(w, ErrNotFound("missing")) }, http.StatusNotFound},
+		{"domain error", func(w http.ResponseWriter) { RespondJSONDomainError(w, fmt.Errorf("boom")) }, http.StatusInternalServerError},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			tc.respond(w)
+			if w.Code != tc.wantStatus {
+				t.Fatalf("status = %d, want %d", w.Code, tc.wantStatus)
+			}
+			if got := w.Result().Header.Get("X-Content-Type-Options"); got != "nosniff" {
+				t.Errorf("X-Content-Type-Options = %q, want nosniff", got)
+			}
+		})
+	}
+}
+
 // recordingWriter captures a RecordError call so the RespondJSONDomainError
 // 5xx seam can be asserted without a delivery-layer import.
 type recordingWriter struct {

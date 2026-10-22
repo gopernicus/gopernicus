@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/pkg/environment"
 )
 
@@ -145,6 +146,66 @@ func TestCheckTransport(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestCheckTransportRequireMandatoryTLS(t *testing.T) {
+	starttls := structuralNotifier{caps: Capabilities{TransportSecurity: TransportSecurityStartTLS}}
+	tls := structuralNotifier{caps: Capabilities{TransportSecurity: TransportSecurityTLS}}
+
+	t.Run("default verdict unchanged", func(t *testing.T) {
+		posture, err := CheckTransport(environment.ModeProduction, starttls)
+		if err != nil {
+			t.Fatalf("CheckTransport(production, starttls) = %v, want nil: the default admits STARTTLS", err)
+		}
+		if !posture.ProductionCapable() {
+			t.Error("ProductionCapable() = false, want true")
+		}
+	})
+	t.Run("production refuses STARTTLS under the option", func(t *testing.T) {
+		posture, err := CheckTransport(environment.ModeProduction, starttls, RequireMandatoryTLS())
+		if !errors.Is(err, ErrOpportunisticTLS) {
+			t.Fatalf("error = %v, want ErrOpportunisticTLS", err)
+		}
+		if !errors.Is(err, ErrInsecureTransport) {
+			t.Errorf("error = %v, want it to keep matching ErrInsecureTransport", err)
+		}
+		if !strings.Contains(err.Error(), "notify:") || !strings.Contains(err.Error(), "STARTTLS") {
+			t.Errorf("error %q does not explain itself", err)
+		}
+		if posture.Capabilities.TransportSecurity != TransportSecurityStartTLS {
+			t.Errorf("rejection dropped the declared posture: %+v", posture)
+		}
+	})
+	t.Run("production admits mandatory TLS under the option", func(t *testing.T) {
+		if _, err := CheckTransport(environment.ModeProduction, tls, RequireMandatoryTLS()); err != nil {
+			t.Fatalf("error = %v, want nil", err)
+		}
+	})
+	t.Run("development accepts STARTTLS under the option", func(t *testing.T) {
+		posture, err := CheckTransport(environment.ModeDevelopment, starttls, RequireMandatoryTLS())
+		if err != nil {
+			t.Fatalf("error = %v, want nil", err)
+		}
+		if !posture.Declared || posture.Capabilities.TransportSecurity != TransportSecurityStartTLS {
+			t.Errorf("posture = %+v, want the declared STARTTLS posture", posture)
+		}
+	})
+	t.Run("the option keeps earlier refusals", func(t *testing.T) {
+		_, err := CheckTransport(environment.ModeProduction, NewConsole(discardLogger()), RequireMandatoryTLS())
+		if !errors.Is(err, ErrInsecureTransport) || errors.Is(err, ErrOpportunisticTLS) {
+			t.Fatalf("error = %v, want the development-only refusal", err)
+		}
+	})
+	t.Run("empty mode still rejected", func(t *testing.T) {
+		if _, err := CheckTransport("", starttls, RequireMandatoryTLS()); !errors.Is(err, environment.ErrModeRequired) {
+			t.Fatalf("error = %v, want ErrModeRequired", err)
+		}
+	})
+	t.Run("nil option rejected", func(t *testing.T) {
+		if _, err := CheckTransport(environment.ModeProduction, tls, nil); !errors.Is(err, sdk.ErrInvalidInput) {
+			t.Fatalf("error = %v, want sdk.ErrInvalidInput", err)
+		}
+	})
 }
 
 // TestCheckTransportErrorIsCapabilityOwned pins that the sdk validator's wording

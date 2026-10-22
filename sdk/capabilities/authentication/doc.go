@@ -21,6 +21,11 @@
 // token's AuthenticatedAt, so a cached answer never locks out a subject who
 // just re-authenticated.
 //
+// CapabilityReporter is optional too: a provider that must never run in
+// production declares Capabilities{DevelopmentOnly: true}, and CheckProvider
+// refuses it there with ErrDevelopmentOnlyProvider. A provider that declares
+// nothing is accepted.
+//
 // Errors are stable kinds: ErrInvalidCredential (wraps sdk.ErrUnauthorized),
 // ErrIssuerMismatch and ErrSignInMethodDenied (both wrap ErrInvalidCredential),
 // and ErrProviderUnavailable (wraps sdk.ErrUnavailable; an *UnavailableError

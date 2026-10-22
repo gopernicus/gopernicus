@@ -159,3 +159,86 @@ func TestSMTPDeliversOneClickUnsubscribeHeaders(t *testing.T) {
 		}
 	}
 }
+
+// smtpPlaintextRelay answers like a relay that offers AUTH but no STARTTLS and
+// records every command it receives until QUIT or disconnect.
+func smtpPlaintextRelay(t *testing.T, commands chan<- []string) func(*textproto.Conn) {
+	return func(conn *textproto.Conn) {
+		var seen []string
+		defer func() { commands <- seen }()
+		if err := conn.PrintfLine("220 plaintext relay"); err != nil {
+			t.Error(err)
+			return
+		}
+		for {
+			line, err := conn.ReadLine()
+			if err != nil {
+				return // the client closed the session
+			}
+			seen = append(seen, line)
+			switch {
+			case strings.HasPrefix(line, "EHLO "):
+				_ = conn.PrintfLine("250-plaintext relay")
+				_ = conn.PrintfLine("250 AUTH PLAIN")
+			case line == "QUIT":
+				_ = conn.PrintfLine("221 bye")
+				return
+			default:
+				_ = conn.PrintfLine("250 accepted")
+			}
+		}
+	}
+}
+
+func TestSMTPRequireTLSRefusesRelayWithoutSTARTTLS(t *testing.T) {
+	commands := make(chan []string, 1)
+	cfg := smtpSession(t, smtpPlaintextRelay(t, commands))
+	cfg.Username, cfg.Password, cfg.RequireTLS = "user", "secret", true
+
+	err := NewSMTP(cfg).Send(context.Background(), validMessage())
+	if !errors.Is(err, ErrTLSRequired) {
+		t.Fatalf("Send error = %v, want ErrTLSRequired", err)
+	}
+	if got := <-commands; len(got) != 1 || !strings.HasPrefix(got[0], "EHLO ") {
+		t.Fatalf("relay saw %q, want only EHLO: no AUTH, MAIL or DATA before TLS", got)
+	}
+}
+
+func TestSMTPProbe(t *testing.T) {
+	tests := []struct {
+		name         string
+		requireTLS   bool
+		wantErr      error
+		wantCommands []string
+	}{
+		{name: "opportunistic relay passes", wantCommands: []string{"EHLO localhost", "QUIT"}},
+		{name: "RequireTLS refuses a relay without STARTTLS", requireTLS: true, wantErr: ErrTLSRequired, wantCommands: []string{"EHLO localhost"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			commands := make(chan []string, 1)
+			cfg := smtpSession(t, smtpPlaintextRelay(t, commands))
+			cfg.Username, cfg.Password, cfg.RequireTLS = "user", "secret", tt.requireTLS
+
+			err := NewSMTP(cfg).Probe(context.Background())
+			if tt.wantErr == nil && err != nil {
+				t.Fatalf("Probe error = %v, want nil", err)
+			}
+			if tt.wantErr != nil && !errors.Is(err, tt.wantErr) {
+				t.Fatalf("Probe error = %v, want %v", err, tt.wantErr)
+			}
+			got := <-commands
+			if strings.Join(got, "|") != strings.Join(tt.wantCommands, "|") {
+				t.Fatalf("relay saw %q, want %q: Probe never authenticates or sends", got, tt.wantCommands)
+			}
+		})
+	}
+}
+
+func TestSMTPProbeHonorsCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := NewSMTP(SMTPConfig{Host: "127.0.0.1", Port: "1"}).Probe(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("pre-canceled probe: %v", err)
+	}
+}

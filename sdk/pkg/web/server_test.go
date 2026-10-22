@@ -1,6 +1,10 @@
 package web
 
-import "testing"
+import (
+	"errors"
+	"strings"
+	"testing"
+)
 
 // Origin is exercised from struct literals: sdk/pkg/web may not import
 // sdk/pkg/environment (guard G12b, tests included), so the tag-driven
@@ -59,5 +63,56 @@ func TestServerConfig_OriginDoesNotMutateConfig(t *testing.T) {
 	}
 	if cfg.Host != "0.0.0.0" {
 		t.Errorf("Host = %q, want %q (Origin must not alter the listen address)", cfg.Host, "0.0.0.0")
+	}
+}
+
+func TestServerConfig_ValidateProduction(t *testing.T) {
+	tests := []struct {
+		name    string
+		base    string
+		wantErr error
+	}{
+		{"unset", "", ErrPublicBaseURLRequired},
+		{"slash only", "/", ErrPublicBaseURLRequired},
+		{"http", "http://app.example.com", ErrPublicBaseURLInsecure},
+		{"no scheme", "app.example.com", ErrPublicBaseURLInsecure},
+		{"userinfo", "https://admin:hunter2@app.example.com", ErrPublicBaseURLMalformed},
+		{"username only", "https://admin@app.example.com", ErrPublicBaseURLMalformed},
+		{"path", "https://app.example.com/app", ErrPublicBaseURLMalformed},
+		{"double slash path", "https://app.example.com//", ErrPublicBaseURLMalformed},
+		{"escaped slash path", "https://app.example.com/%2F", ErrPublicBaseURLMalformed},
+		{"query", "https://app.example.com?x=1", ErrPublicBaseURLMalformed},
+		{"empty query", "https://app.example.com/?", ErrPublicBaseURLMalformed},
+		{"fragment", "https://app.example.com#top", ErrPublicBaseURLMalformed},
+		{"empty fragment", "https://app.example.com/#", ErrPublicBaseURLMalformed},
+		{"no host", "https:///", ErrPublicBaseURLMalformed},
+		{"opaque", "https:app.example.com", ErrPublicBaseURLMalformed},
+		{"unparseable", "https://app.example.com:port", ErrPublicBaseURLMalformed},
+		{"valid", "https://app.example.com", nil},
+		{"valid trailing slash", "https://app.example.com/", nil},
+		{"valid with port", "https://app.example.com:8443", nil},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := ServerConfig{PublicBaseURL: tc.base}.ValidateProduction()
+			if tc.wantErr == nil {
+				if err != nil {
+					t.Fatalf("ValidateProduction() = %v, want nil", err)
+				}
+				return
+			}
+			if !errors.Is(err, tc.wantErr) {
+				t.Fatalf("ValidateProduction() = %v, want errors.Is %v", err, tc.wantErr)
+			}
+			if !strings.Contains(err.Error(), "PUBLIC_BASE_URL") {
+				t.Errorf("error %q does not name PUBLIC_BASE_URL", err)
+			}
+			for _, secret := range []string{"admin", "hunter2", tc.base} {
+				if tc.base != "" && strings.Contains(err.Error(), secret) {
+					t.Errorf("error %q echoes %q from the configured value", err, secret)
+				}
+			}
+		})
 	}
 }

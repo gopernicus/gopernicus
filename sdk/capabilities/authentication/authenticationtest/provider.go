@@ -2,8 +2,8 @@
 // and authentication.RevocationChecker implementations, in the cachertest /
 // eventstest style: RunProvider(t, newProvider, mint) and RunRevocation pin the
 // shared contract every implementation must honor. Imports stdlib + sdk +
-// sdk/capabilities/authentication only, so a suite over a fake verifier needs
-// no network.
+// sdk/capabilities/authentication + sdk/pkg/environment only, so a suite over a
+// fake verifier needs no network.
 //
 // That a provider rejects an oversize credential WITHOUT calling its verifier
 // is not observable through the Provider port; implementations pin it in their
@@ -22,6 +22,7 @@ import (
 
 	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/authentication"
+	"github.com/gopernicus/gopernicus/sdk/pkg/environment"
 )
 
 // conformanceSubject is the sub every minted suite token carries.
@@ -43,6 +44,7 @@ func RunProvider(t *testing.T, newProvider func(t *testing.T) authentication.Pro
 	t.Run("Oversize", func(t *testing.T) { testOversize(t, newProvider(t), mint) })
 	t.Run("EmptyAndMalformed", func(t *testing.T) { testMalformed(t, newProvider(t)) })
 	t.Run("MethodsCloned", func(t *testing.T) { testMethodsCloned(t, newProvider(t), mint) })
+	t.Run("CapabilityReporter", func(t *testing.T) { testCapabilityReporter(t, newProvider(t)) })
 }
 
 // RunRevocation exercises the RevocationChecker contract. knownSubject must be
@@ -170,6 +172,37 @@ func testMethodsCloned(t *testing.T, p authentication.Provider, mint Minter) {
 	}
 	if !reflect.DeepEqual(second.Methods, want) {
 		t.Fatalf("second Identity.Methods = %v, want %v; a returned slice must not alias provider state", second.Methods, want)
+	}
+}
+
+// testCapabilityReporter pins the posture round trip: CheckProvider reports
+// exactly what the provider declares, refuses a declared DevelopmentOnly
+// provider in production only, and accepts a provider that declares nothing.
+func testCapabilityReporter(t *testing.T, p authentication.Provider) {
+	reporter, declared := p.(authentication.CapabilityReporter)
+	posture, err := authentication.CheckProvider(environment.ModeDevelopment, p)
+	if err != nil {
+		t.Fatalf("CheckProvider(development) error = %v, want nil", err)
+	}
+	if posture.Declared != declared {
+		t.Fatalf("CheckProvider posture Declared = %v, want %v", posture.Declared, declared)
+	}
+	_, err = authentication.CheckProvider(environment.ModeProduction, p)
+	if !declared {
+		if err != nil {
+			t.Fatalf("CheckProvider(production) on an undeclared provider = %v, want nil", err)
+		}
+		return
+	}
+	caps := reporter.Capabilities()
+	if posture.Capabilities != caps {
+		t.Errorf("CheckProvider posture Capabilities = %+v, want the declared %+v", posture.Capabilities, caps)
+	}
+	switch {
+	case caps.DevelopmentOnly && !errors.Is(err, authentication.ErrDevelopmentOnlyProvider):
+		t.Errorf("CheckProvider(production) on a DevelopmentOnly provider = %v, want ErrDevelopmentOnlyProvider", err)
+	case !caps.DevelopmentOnly && err != nil:
+		t.Errorf("CheckProvider(production) = %v, want nil for a production provider", err)
 	}
 }
 

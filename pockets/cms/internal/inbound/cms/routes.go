@@ -17,9 +17,10 @@ type RouterOption func(*routerConfig)
 
 // routerConfig collects host overrides applied during BuildRouter.
 type routerConfig struct {
-	views     Views
-	adminMW   []web.Middleware
-	pageCache cacher.PageConfig
+	views        Views
+	adminMW      []web.Middleware
+	adminUngated bool
+	pageCache    cacher.PageConfig
 }
 
 // WithViews sets the HTML rendering port. When unset (nil), the HTML surface is
@@ -56,12 +57,13 @@ type Deps struct {
 // generic admin CRUD set per type plus a public route per routable type, instead
 // of hand-listing /posts…/pages…. Taxonomy/menus/media/contact routes are fixed.
 // A nil cache disables public-page caching. adminMW wraps every admin route (the
-// CRUD/management surface) and nothing public; a nil adminMW leaves admin routes
-// ungated (current behavior).
+// CRUD/management surface) and nothing public. adminEnabled false leaves every
+// admin route unregistered (deny-by-absence); admin routes register only through
+// handleAdmin, so none can be added outside that switch.
 //
 // A nil views registers ONLY the media byte endpoint (GET /media/{id}/file) and
 // returns — the entire HTML surface (public site + admin) is not mounted (FS3).
-func Mount(r pockets.RouteRegistrar, d Deps, views Views, cache cacher.Storer, pageCache cacher.PageConfig, adminMW []web.Middleware) {
+func Mount(r pockets.RouteRegistrar, d Deps, views Views, cache cacher.Storer, pageCache cacher.PageConfig, adminMW []web.Middleware, adminEnabled bool) {
 	md := NewMediaHandlers(d.Media, views)
 	if views == nil {
 		r.Handle("GET", "/media/{id}/file", md.Serve)
@@ -80,6 +82,13 @@ func Mount(r pockets.RouteRegistrar, d Deps, views Views, cache cacher.Storer, p
 		pubMW = append(pubMW, cacher.Pages(cache, pageCache))
 	}
 
+	handleAdmin := func(method, path string, h http.HandlerFunc) {
+		if !adminEnabled {
+			return
+		}
+		r.Handle(method, path, h, adminMW...)
+	}
+
 	// Public home.
 	r.Handle("GET", "/{$}", pub.Home, pubMW...)
 
@@ -91,14 +100,14 @@ func Mount(r pockets.RouteRegistrar, d Deps, views Views, cache cacher.Storer, p
 	for _, t := range d.Registry.Types() {
 		t := t
 		base := "/" + t.AdminBase()
-		r.Handle("GET", base, func(w http.ResponseWriter, req *http.Request) { eh.List(w, req, t) }, adminMW...)
-		r.Handle("GET", base+"/new", func(w http.ResponseWriter, req *http.Request) { eh.New(w, req, t) }, adminMW...)
-		r.Handle("POST", base, func(w http.ResponseWriter, req *http.Request) { eh.Create(w, req, t) }, adminMW...)
-		r.Handle("GET", base+"/{id}/edit", func(w http.ResponseWriter, req *http.Request) { eh.Edit(w, req, t) }, adminMW...)
-		r.Handle("POST", base+"/{id}", func(w http.ResponseWriter, req *http.Request) { eh.Update(w, req, t) }, adminMW...)
-		r.Handle("POST", base+"/{id}/publish", func(w http.ResponseWriter, req *http.Request) { eh.Publish(w, req, t) }, adminMW...)
-		r.Handle("POST", base+"/{id}/unpublish", func(w http.ResponseWriter, req *http.Request) { eh.Unpublish(w, req, t) }, adminMW...)
-		r.Handle("POST", base+"/{id}/delete", func(w http.ResponseWriter, req *http.Request) { eh.Delete(w, req, t) }, adminMW...)
+		handleAdmin("GET", base, func(w http.ResponseWriter, req *http.Request) { eh.List(w, req, t) })
+		handleAdmin("GET", base+"/new", func(w http.ResponseWriter, req *http.Request) { eh.New(w, req, t) })
+		handleAdmin("POST", base, func(w http.ResponseWriter, req *http.Request) { eh.Create(w, req, t) })
+		handleAdmin("GET", base+"/{id}/edit", func(w http.ResponseWriter, req *http.Request) { eh.Edit(w, req, t) })
+		handleAdmin("POST", base+"/{id}", func(w http.ResponseWriter, req *http.Request) { eh.Update(w, req, t) })
+		handleAdmin("POST", base+"/{id}/publish", func(w http.ResponseWriter, req *http.Request) { eh.Publish(w, req, t) })
+		handleAdmin("POST", base+"/{id}/unpublish", func(w http.ResponseWriter, req *http.Request) { eh.Unpublish(w, req, t) })
+		handleAdmin("POST", base+"/{id}/delete", func(w http.ResponseWriter, req *http.Request) { eh.Delete(w, req, t) })
 
 		if !t.Routable {
 			continue
@@ -113,38 +122,38 @@ func Mount(r pockets.RouteRegistrar, d Deps, views Views, cache cacher.Storer, p
 	}
 
 	// Taxonomy admin.
-	r.Handle("GET", "/terms", th.List, adminMW...)
-	r.Handle("GET", "/terms/new", th.New, adminMW...)
-	r.Handle("POST", "/terms", th.Create, adminMW...)
-	r.Handle("GET", "/terms/{id}/edit", th.Edit, adminMW...)
-	r.Handle("POST", "/terms/{id}", th.Update, adminMW...)
-	r.Handle("POST", "/terms/{id}/delete", th.Delete, adminMW...)
+	handleAdmin("GET", "/terms", th.List)
+	handleAdmin("GET", "/terms/new", th.New)
+	handleAdmin("POST", "/terms", th.Create)
+	handleAdmin("GET", "/terms/{id}/edit", th.Edit)
+	handleAdmin("POST", "/terms/{id}", th.Update)
+	handleAdmin("POST", "/terms/{id}/delete", th.Delete)
 
 	// Public taxonomy archives.
 	r.Handle("GET", "/category/{slug}", pub.Category, pubMW...)
 	r.Handle("GET", "/tag/{slug}", pub.Tag, pubMW...)
 
 	// Menus (admin) + a public nav render by slug.
-	r.Handle("GET", "/menus", mn.List, adminMW...)
-	r.Handle("GET", "/menus/new", mn.New, adminMW...)
-	r.Handle("POST", "/menus", mn.Create, adminMW...)
-	r.Handle("GET", "/menus/{id}", mn.Detail, adminMW...)
-	r.Handle("POST", "/menus/{id}/items", mn.AddItem, adminMW...)
-	r.Handle("GET", "/menu-items/{id}/edit", mn.EditItem, adminMW...)
-	r.Handle("POST", "/menu-items/{id}", mn.UpdateItem, adminMW...)
-	r.Handle("POST", "/menu-items/{id}/delete", mn.DeleteItem, adminMW...)
+	handleAdmin("GET", "/menus", mn.List)
+	handleAdmin("GET", "/menus/new", mn.New)
+	handleAdmin("POST", "/menus", mn.Create)
+	handleAdmin("GET", "/menus/{id}", mn.Detail)
+	handleAdmin("POST", "/menus/{id}/items", mn.AddItem)
+	handleAdmin("GET", "/menu-items/{id}/edit", mn.EditItem)
+	handleAdmin("POST", "/menu-items/{id}", mn.UpdateItem)
+	handleAdmin("POST", "/menu-items/{id}/delete", mn.DeleteItem)
 	r.Handle("GET", "/menu/{slug}", mn.PublicNav)
 
 	// Media management (admin) + public asset serving.
-	r.Handle("GET", "/media", md.Library, adminMW...)
-	r.Handle("POST", "/media", md.Upload, adminMW...)
+	handleAdmin("GET", "/media", md.Library)
+	handleAdmin("POST", "/media", md.Upload)
 	r.Handle("GET", "/media/{id}/file", md.Serve)
-	r.Handle("POST", "/media/{id}/delete", md.Delete, adminMW...)
+	handleAdmin("POST", "/media/{id}/delete", md.Delete)
 
 	// Contact form (public) + inquiry list (admin).
 	r.Handle("GET", "/contact", ct.Form)
 	r.Handle("POST", "/contact", ct.Submit)
-	r.Handle("GET", "/inquiries", ct.Inquiries, adminMW...)
+	handleAdmin("GET", "/inquiries", ct.Inquiries)
 }
 
 // BuildRouter assembles a standalone CMS router with the global middleware stack
@@ -166,7 +175,7 @@ func BuildRouter(registry *content.Registry, entries entryService, taxo taxonomy
 		Menus:    menusvc,
 		Media:    mediasvc,
 		Contact:  contact,
-	}, cfg.views, cache, cfg.pageCache, cfg.adminMW)
+	}, cfg.views, cache, cfg.pageCache, cfg.adminMW, len(cfg.adminMW) > 0 || cfg.adminUngated)
 
 	return h
 }

@@ -6,15 +6,99 @@ import (
 	"bufio"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"strings"
 	"unicode"
 )
 
+// dotenvPath is the working-directory file LoadEnvForMode loads in development.
+const dotenvPath = ".env"
+
+// ErrModeFromFile is returned by LoadEnvForMode when .env names the mode key.
+// The mode has one source, the process environment, so a file in the working
+// directory can never choose or downgrade the posture.
+var ErrModeFromFile = errors.New("environment: the mode is read from the process environment only, never from .env")
+
 // LoadEnv loads environment variables from a .env file in the current directory.
 // Missing file is not an error — it simply returns nil.
 func LoadEnv() error {
 	return LoadPath(".env")
+}
+
+// LoadEnvForMode reads the runtime mode from the process environment variable
+// key and loads .env only in development:
+//
+//   - unset or empty: an error matching ErrModeRequired; .env is not read.
+//   - any value other than "development" or "production": an error matching
+//     ErrModeInvalid; .env is not read.
+//   - production: .env is never opened. If one exists in the working
+//     directory, one WARN on slog.Default records that it was ignored.
+//   - development: .env is loaded as by LoadEnv, unless it names key on any
+//     line, which is ErrModeFromFile and loads nothing.
+//
+// The host chooses key, for example APP_RUNTIME_MODE. Every error names it and
+// where its value belongs. LoadEnv remains for hosts that resolve no mode.
+func LoadEnvForMode(key string) (Mode, error) {
+	if key == "" {
+		return "", errors.New("environment: LoadEnvForMode requires the mode's environment key")
+	}
+	raw := os.Getenv(key)
+	if raw == "" {
+		return "", fmt.Errorf("%w: %s is unset; %s", ErrModeRequired, key, modeRemedy(key))
+	}
+	mode, err := ParseMode(raw)
+	if err != nil {
+		return "", fmt.Errorf("%s: %w; %s", key, err, modeRemedy(key))
+	}
+	if mode.IsProduction() {
+		if _, err := os.Stat(dotenvPath); err == nil {
+			slog.Default().Warn(".env present, ignored in production", "path", dotenvPath, "mode_key", key)
+		}
+		return mode, nil
+	}
+	line, err := lineNaming(dotenvPath, key)
+	if err != nil {
+		return "", err
+	}
+	if line > 0 {
+		return "", fmt.Errorf("%w: %s:%d names %s; delete that line and %s", ErrModeFromFile, dotenvPath, line, key, modeRemedy(key))
+	}
+	if err := LoadPath(dotenvPath); err != nil {
+		return "", err
+	}
+	return mode, nil
+}
+
+// modeRemedy says where the mode belongs in each posture.
+func modeRemedy(key string) string {
+	return fmt.Sprintf("set %[1]s in the process environment: development by exporting %[1]s=development "+
+		"or prefixing the command (the rest of .env still loads); production through systemd "+
+		"Environment=/EnvironmentFile=, docker --env-file, or platform secrets", key)
+}
+
+// lineNaming returns the first line of the dotenv file p that assigns key, or
+// 0 when p is missing or never names it. LoadPath reports malformed lines.
+func lineNaming(p, key string) (int, error) {
+	f, err := os.Open(p)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0, nil
+		}
+		return 0, err
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	for n := 1; scanner.Scan(); n++ {
+		if name, _, _ := parseEnvLine(scanner.Text()); name == key {
+			return n, nil
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return 0, fmt.Errorf("%s: read environment: %w", p, err)
+	}
+	return 0, nil
 }
 
 // LoadPath loads single-line assignments from p without replacing existing

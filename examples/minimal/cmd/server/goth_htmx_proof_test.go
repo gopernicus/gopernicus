@@ -53,6 +53,8 @@ func htmxProofRouter(t *testing.T) http.Handler {
 		Mailer:    email.NewConsole(log),
 		MailFrom:  "cms@localhost",
 		ContactTo: "ops@localhost",
+		// The demo posture run() wires: admin mounted ungated by acknowledgement.
+		AdminUngatedAcknowledged: true,
 	}); err != nil {
 		t.Fatalf("cms.Register: %v", err)
 	}

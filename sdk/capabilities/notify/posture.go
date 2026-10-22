@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"reflect"
 
+	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/pkg/environment"
 )
 
@@ -15,6 +16,34 @@ import (
 // nothing cannot be proven safe, so production rejects both. The returned error
 // wraps this sentinel with the specific reason.
 var ErrInsecureTransport = errors.New("notify: production rejects a development-only or metadata-less transport")
+
+// ErrOpportunisticTLS is returned by CheckTransport in
+// environment.ModeProduction, under RequireMandatoryTLS, for a transport that
+// declares TransportSecurityStartTLS: a relay that does not offer STARTTLS, or
+// an attacker who strips the offer, leaves the message in plaintext. It wraps
+// ErrInsecureTransport, so errors.Is checks for that sentinel keep matching.
+var ErrOpportunisticTLS error = &refinedError{
+	msg:    "notify: production requires mandatory TLS; the transport declares opportunistic STARTTLS",
+	parent: ErrInsecureTransport,
+}
+
+// CheckOption tightens CheckTransport's production verdict. Options never
+// change the development verdict.
+type CheckOption func(*checkConfig)
+
+// checkConfig is the policy CheckOptions assemble for one CheckTransport call.
+type checkConfig struct {
+	requireMandatoryTLS bool
+}
+
+// RequireMandatoryTLS makes CheckTransport reject, in
+// environment.ModeProduction, a transport that declares
+// TransportSecurityStartTLS, with ErrOpportunisticTLS. Without it the verdict
+// is unchanged and opportunistic STARTTLS is accepted, which is how a caller
+// admits a relay it trusts on a private network.
+func RequireMandatoryTLS() CheckOption {
+	return func(c *checkConfig) { c.requireMandatoryTLS = true }
+}
 
 // TransportPosture is the classification CheckTransport returns: what the
 // transport declared about itself, separate from whether that is acceptable for a
@@ -65,14 +94,24 @@ func InspectTransport(n any) TransportPosture {
 //
 // In environment.ModeProduction a transport that declares no metadata, or
 // declares itself development-only, is rejected with an error wrapping
-// ErrInsecureTransport. In environment.ModeDevelopment both are accepted and the
-// returned posture tells the caller whether to warn.
+// ErrInsecureTransport; with RequireMandatoryTLS, so is one declaring
+// TransportSecurityStartTLS (ErrOpportunisticTLS). In
+// environment.ModeDevelopment all are accepted and the returned posture tells
+// the caller whether to warn.
 //
 // An invalid or empty mode is rejected with the environment package's own
 // validation error rather than defaulting to a posture the host did not choose.
-func CheckTransport(mode environment.Mode, n any) (TransportPosture, error) {
+// A nil option is rejected with an error wrapping sdk.ErrInvalidInput.
+func CheckTransport(mode environment.Mode, n any, opts ...CheckOption) (TransportPosture, error) {
 	posture := InspectTransport(n)
 
+	var cfg checkConfig
+	for _, opt := range opts {
+		if opt == nil {
+			return posture, fmt.Errorf("notify: nil CheckOption: %w", sdk.ErrInvalidInput)
+		}
+		opt(&cfg)
+	}
 	if err := environment.ValidateMode(mode); err != nil {
 		return posture, err
 	}
@@ -85,5 +124,19 @@ func CheckTransport(mode environment.Mode, n any) (TransportPosture, error) {
 	if posture.Capabilities.DevelopmentOnly {
 		return posture, fmt.Errorf("%w: the transport is development-only", ErrInsecureTransport)
 	}
+	if cfg.requireMandatoryTLS && posture.Capabilities.TransportSecurity == TransportSecurityStartTLS {
+		return posture, ErrOpportunisticTLS
+	}
 	return posture, nil
 }
+
+// refinedError is a sentinel with its own message that also matches a broader
+// sentinel through errors.Is.
+type refinedError struct {
+	msg    string
+	parent error
+}
+
+func (e *refinedError) Error() string { return e.msg }
+
+func (e *refinedError) Unwrap() error { return e.parent }

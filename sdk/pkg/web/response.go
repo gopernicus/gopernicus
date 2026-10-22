@@ -38,8 +38,11 @@ func RecordError(w http.ResponseWriter, err error) {
 // JSON responses
 // ---------------------------------------------------------------------------
 
-// RespondJSON writes a JSON response with the given status code.
+// RespondJSON writes a JSON response with the given status code. Every
+// response, including the 500 written when v fails to marshal, carries
+// X-Content-Type-Options: nosniff so a browser never sniffs the body as HTML.
 func RespondJSON(w http.ResponseWriter, status int, v any) error {
+	w.Header().Set("X-Content-Type-Options", "nosniff")
 	data, err := json.Marshal(v)
 	if err != nil {
 		RecordError(w, err)
@@ -69,8 +72,10 @@ func RespondJSONAccepted(w http.ResponseWriter, v any) error {
 	return RespondJSON(w, http.StatusAccepted, v)
 }
 
-// RespondJSONError writes a JSON error response from an [*Error].
+// RespondJSONError writes a JSON error response from an [*Error], with
+// X-Content-Type-Options: nosniff like RespondJSON.
 func RespondJSONError(w http.ResponseWriter, err *Error) {
+	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(err.Status)
 	RecordError(w, json.NewEncoder(w).Encode(err))
