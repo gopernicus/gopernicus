@@ -1,0 +1,96 @@
+# Security
+
+This file is the written security posture of the gopernicus framework repository: how to
+report a vulnerability, which versions are supported, and the controls an auditor can sample
+for change management, vulnerability management and CI credentials. It describes the
+repository as it is on 2026-10-22; host applications built on the framework document their
+own posture, starting from the docs site's *Production posture* guide.
+
+## Reporting a vulnerability
+
+Report privately through GitHub's security advisories for this repository
+(**Security → Report a vulnerability**). Do not open a public issue for an unfixed
+vulnerability. There is no bug bounty. Reports are acknowledged as soon as practical and
+fixes ship as patch tags on the affected module(s), recorded in `RELEASING.md`.
+
+## Supported versions
+
+Each module is tagged independently (`RELEASING.md`, "Tagging scheme"). Only the latest tag of
+each module receives fixes. Latest tags at the time of writing:
+
+| Module | Latest |
+|---|---|
+| `sdk` | v0.15.0 |
+| `pockets/authentication` | v0.19.1 |
+| `pockets/authorization` | v0.27.0 |
+| `pockets/cms` | v0.3.0 |
+| `pockets/events` | v0.3.0 |
+| `pockets/jobs` | v0.6.0 |
+| `pockets/secrets` | v0.1.1 |
+| `integrations/datastores/pgxdb` | v0.9.0 |
+| `integrations/datastores/turso` | v0.6.0 |
+| `workshop/gopernicus` | v0.4.1 |
+
+Every module declares `go 1.26.10`; a host that honors the pin builds with a standard
+library carrying the fixes listed in `plans/soc2-s8-toolchain-pgx-repin-handoff.md`.
+
+## Change management
+
+The repository has one maintainer. The compensating control for the missing second
+reviewer is written here and enforced by configuration, not by habit:
+
+1. **Plan-file ratification.** Significant work is designed in a plan file under
+   `.claude/plans/` (released copies in `plans/`) and ratified by the owner before any code
+   is written; the plan names the verification each slice must pass.
+2. **Required status checks on `main`.** A repository ruleset on `main` requires a pull
+   request, the `check` status (the hermetic `make check` gate: per-module vet, build, test,
+   templ and asset drift, and every layering guard) and the `vuln` status (see below), blocks
+   force-pushes and deletion, and limits the admin bypass to pull requests only, so a bypass
+   leaves a reviewable trail.
+3. **Cold-verified releases.** Every tag is verified from a scratch consumer with
+   `GOWORK=off`, an empty module cache, `proxy.golang.org` and `sum.golang.org`, and the
+   result is recorded with per-tag commit hashes and checksum manifests in `RELEASING.md`.
+   Tags are signed (`git tag -s`) from 2026-10-22; earlier tags are annotated but unsigned
+   and remain verifiable through the checksum database's transparency log.
+4. **`CODEOWNERS`** lists the maintainer; the day a second reviewer is listed, the ruleset's
+   required-approval count moves from zero to one.
+
+## Vulnerability management
+
+- **Every push and pull request** runs `vuln` (`.github/workflows/check.yml`): `make vuln`,
+  which runs `govulncheck` with symbol-level reachability in every module against the live
+  Go vulnerability database. A newly published advisory that the code reaches fails the next
+  run. The tool version is pinned in the `Makefile`.
+- **Dependabot** security updates are enabled; `.github/dependabot.yml` opens monthly grouped
+  version PRs for GitHub Actions and for each Go module directory. Sibling framework modules
+  move only through release trains, never through Dependabot.
+- **CodeQL** default setup is configured for this repository.
+- **GitHub Actions** are pinned to full commit SHAs and the repository setting requires it;
+  only GitHub-authored actions plus an explicit allowlist may run.
+- The toolchain is pinned per module (`go 1.26.10`); `GOTOOLCHAIN=auto` fetches it.
+
+## CI credentials
+
+CI runs on GitHub-hosted runners with a read-only default workflow token. The hermetic
+`check` and `vuln` jobs use no secrets. The live-store workflow (`.github/workflows/live-stores.yml`)
+uses repository secrets for the Turso playground and, once a GCP project is provisioned
+(it was not, as of the workflow header dated 2026-09-09), a Firestore service-account key:
+
+- A service-account key does not expire on its own. Owner target: rotate every 90 days and
+  immediately after any run whose logs are suspect; the key is decoded into `$RUNNER_TEMP`
+  for one ephemeral VM and shredded by an `always()` step.
+- **Target state, not yet implemented:** Workload Identity Federation, which removes the
+  long-lived key. On the GCP side the owner (1) creates a workload identity pool and an OIDC
+  provider for `https://token.actions.githubusercontent.com` with the attribute condition
+  `assertion.repository == "gopernicus/gopernicus"`, (2) grants the service account
+  `roles/iam.workloadIdentityUser` on that pool's principal set for the repository plus the
+  Firestore roles the job needs; then the workflow change is `permissions: id-token: write`
+  on the live job and `google-github-actions/auth` (SHA-pinned) with
+  `workload_identity_provider` and `service_account`, after which the key secret and the
+  base64-decode and shred steps are deleted.
+
+## Where the evidence lives
+
+`RELEASING.md` (release records, cold verification, checksum manifests), `.github/workflows/`
+(the gates), `.github/dependabot.yml`, `.github/CODEOWNERS`, the ruleset on `main` (repository
+settings), and the docs site's operations guides for host-side controls.

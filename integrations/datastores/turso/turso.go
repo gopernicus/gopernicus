@@ -55,7 +55,9 @@ const (
 // no namespace.
 type Config struct {
 	// URL is required: "libsql://", "https://", "wss://" for a hosted database,
-	// or "file:<path>" for a local SQLite database (see Open).
+	// or "file:<path>" for a local SQLite database (see Open). Open does not
+	// validate the scheme today: a plaintext "http://" or "ws://" URL connects
+	// without complaint. Hosts must not use them (a refusal is planned, SOC 2 S1).
 	URL string `env:"DB_URL"`
 
 	// AuthToken overrides any authToken, auth_token or jwt credential in URL.

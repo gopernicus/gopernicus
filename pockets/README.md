@@ -345,8 +345,10 @@ host imports both.
 exists, and `examples/auth-cms` is the living proof — the host builds
 `authSvc, err := auth.New(...)`, handles construction errors, and passes
 `authSvc.HTTP.RequireAccessToken()` into
-`cms.Config.AdminMiddleware`; cms's admin surface is auth-gated with neither
-pocket importing the other (verified: the greps in both directions are
+`cms.Config.AdminMiddleware`; cms's admin surface is auth-gated IN THAT HOST — today a
+nil `AdminMiddleware` mounts the cms admin routes ungated, and `examples/cms` and
+`examples/minimal` ship that way (deny-by-absence for cms is planned, SOC 2 slice S1)
+— with neither pocket importing the other (verified: the greps in both directions are
 empty; the five-step login flow passes over live HTTP). The middleware seam
 was the shape v1 actually needed; the narrow-port variant below remains the
 general pattern for data-shaped needs (e.g. attributing an inquiry to the

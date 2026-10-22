@@ -203,8 +203,10 @@ service); `WrapperKeyID` is what the master ring reports.
   thing the log exists to prevent. (Owner call, §6.)
 - **Delete(ctx, Ref, Source)**: record `secret_deleted`.
 - **DeleteOwner(ctx, Owner, Source)**: deletes every secret and the owner key
-  in one transaction, records `owner_key_destroyed`. Crypto-shredding: even a
-  backup of the secrets rows is unreadable afterwards.
+  in one transaction, records `owner_key_destroyed`. Crypto-shredding: a
+  backup of the secrets rows alone is unreadable afterwards; a backup that also
+  holds the wrapped owner key stays readable until the ring key is retired
+  (corrected 2026-10-22, SOC 2 review FOP-2).
 - **List(ctx, Owner)**: metadata; not audited (it reveals names, not values —
   owner call if names are sensitive in some host).
 - Plaintext never reaches a log line, an error string or an audit row. Tests

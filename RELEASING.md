@@ -2091,6 +2091,8 @@ something a host depends on: it carries the `guard` verb that checks a host
 against the H0–H14 rules of
 `examples/README.md`, and a host pins it with a `go.mod` `tool` directive plus
 the matching `require` — a developer-time dependency, never a runtime import.
+(The `init` scaffold does not emit that `tool` pin yet — v0.4.0/v0.4.1 Known; a
+scaffolded host carries three grep guards in its Makefile and adds the pin by hand.)
 That makes the rule-set versioned with the binary: **new H-rules ship in a minor
 version of `workshop/gopernicus`, and a host adopts them by bumping its pin**
 (`go get -tool github.com/gopernicus/gopernicus/workshop/gopernicus@<next>`),
@@ -2117,10 +2119,13 @@ the workshop module in an example's graph, against G11) — they are guarded wit
 
 ## Cutting a tag
 
-For each module being released, from the repo root:
+For each module being released, from the repo root. Tags are signed (`-s`) from
+2026-10-22 (SOC 2 slice S0, `SECURITY.md`); earlier tags are annotated but unsigned and
+remain verifiable through `sum.golang.org` and the checksum manifests in this file.
 
 ```sh
-git tag pockets/cms/v0.1.0 -m "pockets/cms v0.1.0"
+git tag -s pockets/cms/v0.1.0 -m "pockets/cms v0.1.0"
+git verify-tag pockets/cms/v0.1.0
 git push origin pockets/cms/v0.1.0
 ```
 

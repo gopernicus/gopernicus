@@ -3,7 +3,7 @@
 // module graph (the load-bearing opt-out property). It owns the SQL; the HOST owns its database lifecycle. It is the
 // dialect sibling of pockets/authentication/stores/turso: same surface plus the
 // Postgres-only WithSchema option — SQLite has no schemas — same migration version
-// set (0001–0014, thirteen tables backing the 17-port bundle; 0014 adds the
+// set (0001–0020 with 0017 absent, seventeen tables backing the 20-port bundle; 0014 adds the
 // account-lifecycle columns to users rather than a table, and auth owns no
 // delivery table), same port semantics — a host switches dialect by one import +
 // one Open call. Secrets are persisted as digests, never plaintext (session

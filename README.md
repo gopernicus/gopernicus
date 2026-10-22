@@ -129,6 +129,10 @@ The documentation site lives in [`workshop/documentation`](workshop/documentatio
 It describes the current SDK, pocket and integration boundaries, worked examples,
 the optional UI layers, and the Workshop CLI.
 
+Security posture, vulnerability disclosure and the written change-management control are
+in [`SECURITY.md`](SECURITY.md); operator guides (production posture, keys and rotation,
+runtime runbooks, database posture) are under the site's Guides section.
+
 ```sh
 make docs-install  # install the pinned pnpm dependency graph
 make docs          # development server at localhost:3000/gopernicus/
