@@ -7,6 +7,7 @@ use (
 	./examples/goth-showcase
 	./examples/jobs-minimal
 	./examples/minimal
+	./examples/production-baseline
 	./integrations/authentication/auth0
 	./integrations/authentication/firebase
 	./integrations/cryptids/bcrypt

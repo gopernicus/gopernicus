@@ -8,7 +8,7 @@ infrastructure. Gopernicus is open source under the [MIT License](LICENSE),
 very much a work in progress, and not stable. See [ARCHITECTURE.md](ARCHITECTURE.md)
 for the full layering rules and [NOTES.md](NOTES.md) for the decision log.
 
-## The forty-four modules
+## The forty-nine modules
 
 ```
 sdk/                                stdlib-only, layered: root = kernel; pkg/ + capabilities/ (empty go.mod = structural enforcement)
@@ -54,6 +54,7 @@ examples/minimal/                   a host app: pockets/cms on an in-memory stor
 examples/auth-cms/                  a host app: auth + cms + events + the authorization flagship composed in-memory (rule 6, live)
 examples/jobs-minimal/              a host app: pockets/jobs on its memstore — zero drivers, the §8 protocol host
 examples/goth-showcase/             a zero-datastore browser and accessibility proof for ui/goth
+examples/production-baseline/       the auditable reference host: external OIDC identity + authorization on pgx, production posture, zero acknowledgements
 workshop/gopernicus/                the scaffolding CLI (init / new pocket / db verbs) — stdlib-only, its own module
 ```
 
@@ -118,7 +119,7 @@ make migrate           # applies examples/cms/workshop/migrations pre-boot
 make run                # or: cd examples/cms && go run ./cmd/server
 ```
 
-From the repo root, `make check` builds, vets, and tests all forty-four modules
+From the repo root, `make check` builds, vets, and tests all forty-nine modules
 and runs the twenty-three layering guards; `make test-stores` runs the live dialect
 conformance suites (expects `POSTGRES_TEST_DSN` / `TURSO_*` / `FIRESTORE_EMULATOR_HOST`). See [examples/cms/README.md](examples/cms/README.md)
 for that host's full env/make-target reference.

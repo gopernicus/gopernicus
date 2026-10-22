@@ -57,9 +57,11 @@ worked example `examples/cms`.
       cmd/  internal/{logic,inbound,outbound}/domains/documents  pockets/{access,authentication,cms,events}
     jobs-minimal/          module github.com/gopernicus/gopernicus/examples/jobs-minimal      — a host app: pockets/jobs on stores/memory, zero drivers
       cmd/
+    production-baseline/   module github.com/gopernicus/gopernicus/examples/production-baseline — the auditable reference host: external OIDC identity + authorization on pgx, the production posture with no acknowledgement
+      cmd/  integrations/authentication/devissuer  workshop/migrations
 ```
 
-**Forty-four modules today.** `sdk` is the kernel; `integrations/*` are reusable
+**Forty-nine modules today.** `sdk` is the kernel; `integrations/*` are reusable
 third-party connectors (one external dependency each, each its own module);
 `pockets/<name>` is a datastore-free pocket core with its driver adapters as
 sibling modules. Memory and store conformance are packages in the core module

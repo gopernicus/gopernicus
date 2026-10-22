@@ -1,10 +1,10 @@
 # gopernicus — framework monorepo (sdk + integrations + pockets + examples)
 #
-# Multi-module workspace (go.work), 47 modules. templ is pinned via the `tool`
+# Multi-module workspace (go.work), 49 modules. templ is pinned via the `tool`
 # directive in pockets/cms/views/goth/go.mod (where the .templ sources live),
 # so `go tool templ` is reproducible.
 
-MODULES = sdk pockets integrations/authentication/auth0 integrations/authentication/firebase integrations/cryptids/bcrypt integrations/cryptids/go-oidc integrations/cryptids/golang-jwt integrations/cryptids/google-uuid integrations/datastores/pgxdb integrations/datastores/turso integrations/datastores/firestore integrations/email/sendgrid integrations/filestorage/gcs integrations/filestorage/s3 integrations/kvstores/goredis integrations/oauth/github integrations/oauth/google integrations/scheduling/robfig-cron integrations/tracing/otel pockets/authentication pockets/authentication/stores/firestore pockets/authentication/stores/pgx pockets/authentication/stores/turso pockets/authentication/views/goth pockets/authorization pockets/authorization/stores/pgx pockets/authorization/stores/turso pockets/authorization/stores/goredis pockets/cms pockets/cms/stores/pgx pockets/cms/stores/turso pockets/cms/views/goth pockets/events pockets/events/stores/pgx pockets/events/stores/turso pockets/jobs pockets/jobs/stores/pgx pockets/jobs/stores/turso pockets/secrets pockets/secrets/stores/pgx ui/goth examples/auth-cms examples/cms examples/external-identity examples/goth-showcase examples/jobs-minimal examples/minimal workshop/gopernicus
+MODULES = sdk pockets integrations/authentication/auth0 integrations/authentication/firebase integrations/cryptids/bcrypt integrations/cryptids/go-oidc integrations/cryptids/golang-jwt integrations/cryptids/google-uuid integrations/datastores/pgxdb integrations/datastores/turso integrations/datastores/firestore integrations/email/sendgrid integrations/filestorage/gcs integrations/filestorage/s3 integrations/kvstores/goredis integrations/oauth/github integrations/oauth/google integrations/scheduling/robfig-cron integrations/tracing/otel pockets/authentication pockets/authentication/stores/firestore pockets/authentication/stores/pgx pockets/authentication/stores/turso pockets/authentication/views/goth pockets/authorization pockets/authorization/stores/pgx pockets/authorization/stores/turso pockets/authorization/stores/goredis pockets/cms pockets/cms/stores/pgx pockets/cms/stores/turso pockets/cms/views/goth pockets/events pockets/events/stores/pgx pockets/events/stores/turso pockets/jobs pockets/jobs/stores/pgx pockets/jobs/stores/turso pockets/secrets pockets/secrets/stores/pgx ui/goth examples/auth-cms examples/cms examples/external-identity examples/goth-showcase examples/jobs-minimal examples/minimal examples/production-baseline workshop/gopernicus
 
 # STORE_MODULES carry env-gated live conformance suites (storetest against a real
 # database). `make check`/`make test` run them hermetically (loud skips); `make
@@ -665,7 +665,7 @@ guard-auth-no-vendor-names:
 # examples/* never pin the tool (G11); the verb is run from this checkout.
 guard-host-contract:
 	@echo "== guard: example hosts pass gopernicus guard (H0–H14) (G30) =="
-	@cd workshop/gopernicus && for h in cms minimal jobs-minimal auth-cms goth-showcase external-identity; do \
+	@cd workshop/gopernicus && for h in cms minimal jobs-minimal auth-cms goth-showcase external-identity production-baseline; do \
 		echo "-- examples/$$h"; go run . guard ../../examples/$$h || exit 1; done
 
 # G31 (SOC 2 S1, cms admin deny-by-absence): since pockets/cms v0.4.0 a
@@ -690,7 +690,7 @@ guard-cms-admin-gate:
 # checkout (examples/* never pin the tool, G11).
 guard-host-posture:
 	@echo "== guard: example hosts pass gopernicus guard --posture (P0–P8) (G32) =="
-	@cd workshop/gopernicus && for h in cms minimal jobs-minimal auth-cms goth-showcase external-identity; do \
+	@cd workshop/gopernicus && for h in cms minimal jobs-minimal auth-cms goth-showcase external-identity production-baseline; do \
 		echo "-- examples/$$h"; go run . guard --posture ../../examples/$$h || exit 1; done
 
 # G33 (SOC 2 S1, O-5): a pocket never reads the process environment. The host
