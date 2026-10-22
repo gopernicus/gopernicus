@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -19,6 +20,7 @@ import (
 	authorization "github.com/gopernicus/gopernicus/pockets/authorization"
 	mutations "github.com/gopernicus/gopernicus/pockets/authorization/logic/mutations"
 	sdkevents "github.com/gopernicus/gopernicus/sdk/capabilities/events"
+	"github.com/gopernicus/gopernicus/sdk/pkg/environment"
 	"github.com/gopernicus/gopernicus/sdk/pkg/web"
 
 	// The bundled role-administration proof (issue #20). The pocket's own tests use
@@ -66,7 +68,7 @@ func newRoleRoutesHost(t *testing.T, withGate bool) *roleRoutesHost {
 	if withGate {
 		configured = gate.middleware
 	}
-	comps, err := newAuthorization(configured, log)
+	comps, err := newAuthorization(configured, environment.ModeDevelopment, log)
 	if err != nil {
 		t.Fatalf("newAuthorization: %v", err)
 	}
@@ -88,6 +90,7 @@ func newRoleRoutesHost(t *testing.T, withGate bool) *roleRoutesHost {
 	}
 	gate.set(roleAdministrationGate(
 		svc.HTTP.RequireAccessTokenLive(),
+		svc.HTTP.RequireBrowserSafeMutation(),
 		comps.HTTP.Require(authorizationhttp.Can("admin", authorizationhttp.Fixed(platformResourceType, platformResourceID))),
 	))
 
@@ -111,7 +114,7 @@ func newRoleRoutesHost(t *testing.T, withGate bool) *roleRoutesHost {
 
 func (h *roleRoutesHost) makePlatformAdmin(userID string) {
 	h.t.Helper()
-	if _, err := h.comps.Mutations.GrantRelationship(context.Background(), mutations.GrantRelationshipCommand{
+	if _, err := h.comps.Mutations.GrantRelationship(trustedContext(), mutations.GrantRelationshipCommand{
 
 		ResourceType: platformResourceType,
 		ResourceID:   platformResourceID,
@@ -143,7 +146,7 @@ func TestRoleRoutesPlatformAdminDrivesTheLifecycle(t *testing.T) {
 	body := `{"subject_type":"user","subject_id":"` + roleGrantee +
 		`","role":"` + demoRole + `","scope":{"kind":"resource","resource_type":"` + demoResourceType + `","resource_id":"` + demoResourceID + `"}}`
 
-	resp, payload := admin.do("POST", "/authorization/roles", body, nil)
+	resp, payload := admin.mutate("/authorization/roles", body)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("assign = %d, want 200; body=%s", resp.StatusCode, payload)
 	}
@@ -152,7 +155,7 @@ func TestRoleRoutesPlatformAdminDrivesTheLifecycle(t *testing.T) {
 		t.Fatalf("first assign receipt = %+v, want applied and not replayed", first)
 	}
 
-	resp, payload = admin.do("POST", "/authorization/roles", body, nil)
+	resp, payload = admin.mutate("/authorization/roles", body)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("replay = %d, want 200; body=%s", resp.StatusCode, payload)
 	}
@@ -185,7 +188,7 @@ func TestRoleRoutesPlatformAdminDrivesTheLifecycle(t *testing.T) {
 
 	unassignBody := `{"subject_type":"user","subject_id":"` + roleGrantee +
 		`","role":"` + demoRole + `","scope":{"kind":"resource","resource_type":"` + demoResourceType + `","resource_id":"` + demoResourceID + `"}}`
-	resp, payload = admin.do("POST", "/authorization/roles/unassign", unassignBody, nil)
+	resp, payload = admin.mutate("/authorization/roles/unassign", unassignBody)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("unassign = %d, want 200; body=%s", resp.StatusCode, payload)
 	}
@@ -214,9 +217,12 @@ func TestRoleRoutesPlatformAdminDrivesTheLifecycle(t *testing.T) {
 func TestRoleRoutesRefuseANonAdmin(t *testing.T) {
 	host := newRoleRoutesHost(t, true)
 	plain := host.signUp(rolePlainEmail)
+	// The double-submit token lets the POSTs clear the browser-safe layer, so the
+	// 403 asserted is the authorization denial.
+	token := http.Header{"X-CSRF-Token": {plain.csrfToken()}}
 
 	for _, rt := range roleAdminRoutes {
-		resp, payload := plain.do(rt.method, rt.path, rt.body, nil)
+		resp, payload := plain.do(rt.method, rt.path, rt.body, token)
 		if resp.StatusCode != http.StatusForbidden {
 			t.Errorf("%s %s = %d, want 403; body=%s", rt.method, rt.path, resp.StatusCode, payload)
 			continue
@@ -273,9 +279,9 @@ func TestRoleRoutesAcceptOpaqueLabel(t *testing.T) {
 	admin := host.signUp(roleAdminEmail)
 	host.makePlatformAdmin(admin.userIDFor())
 
-	resp, payload := admin.do("POST", "/authorization/roles",
+	resp, payload := admin.mutate("/authorization/roles",
 		`{"subject_type":"user","subject_id":"`+roleGrantee+`","role":"not-in-the-model","scope":{"kind":"resource","resource_type":"`+
-			demoResourceType+`","resource_id":"`+demoResourceID+`"}}`, nil)
+			demoResourceType+`","resource_id":"`+demoResourceID+`"}}`)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("opaque role = %d, want 200; body=%s", resp.StatusCode, payload)
 	}
@@ -288,10 +294,79 @@ func TestRoleRoutesRejectAHalfScopedPair(t *testing.T) {
 	admin := host.signUp(roleAdminEmail)
 	host.makePlatformAdmin(admin.userIDFor())
 
-	resp, payload := admin.do("POST", "/authorization/roles",
-		`{"subject_type":"user","subject_id":"`+roleGrantee+`","role":"`+demoRole+`","scope":{"kind":"resource","resource_type":"`+demoResourceType+`"}}`, nil)
+	resp, payload := admin.mutate("/authorization/roles",
+		`{"subject_type":"user","subject_id":"`+roleGrantee+`","role":"`+demoRole+`","scope":{"kind":"resource","resource_type":"`+demoResourceType+`"}}`)
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("half-scoped pair = %d, want 400; body=%s", resp.StatusCode, payload)
+	}
+}
+
+// TestRoleRoutesRequireBrowserSafeMutation proves the middle layer of the gate on
+// the real chain: a platform admin's cookie session cannot be ridden cross-site
+// or without the double-submit token, while a bearer-only caller and a cookie
+// read pass.
+func TestRoleRoutesRequireBrowserSafeMutation(t *testing.T) {
+	host := newRoleRoutesHost(t, true)
+	admin := host.signUp(roleAdminEmail)
+	host.makePlatformAdmin(admin.userIDFor())
+	token := admin.csrfToken()
+	assign := roleAdminRoutes[0]
+
+	send := func(client *http.Client, origin, bearer string, header http.Header) (*http.Response, []byte) {
+		t.Helper()
+		req, err := http.NewRequest(assign.method, host.srv.URL+assign.path, strings.NewReader(assign.body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Origin", origin)
+		if bearer != "" {
+			req.Header.Set("Authorization", "Bearer "+bearer)
+		}
+		for k, vs := range header {
+			req.Header[k] = vs
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		payload, _ := io.ReadAll(resp.Body)
+		return resp, payload
+	}
+	code := func(payload []byte) string {
+		var body struct {
+			Code string `json:"code"`
+		}
+		_ = json.Unmarshal(payload, &body)
+		return body.Code
+	}
+
+	if resp, payload := send(admin.http, "https://evil.example", "", http.Header{"X-CSRF-Token": {token}}); resp.StatusCode != http.StatusForbidden || code(payload) != "origin_rejected" {
+		t.Errorf("cross-site cookie POST = %d %s, want 403 origin_rejected", resp.StatusCode, payload)
+	}
+	if resp, payload := send(admin.http, host.origin, "", nil); resp.StatusCode != http.StatusForbidden || code(payload) != "permission_denied" {
+		t.Errorf("same-origin cookie POST without the token = %d %s, want 403 permission_denied", resp.StatusCode, payload)
+	}
+	if resp, payload := send(admin.http, host.origin, "", http.Header{"X-CSRF-Token": {token}}); resp.StatusCode != http.StatusOK {
+		t.Errorf("same-origin cookie POST with the token = %d %s, want 200", resp.StatusCode, payload)
+	}
+
+	// A bearer-only caller carries no ambient credential, so the browser layer
+	// steps aside even cross-origin; authorization still decides.
+	tokenResp, tokenBody := host.newClient().do("POST", "/auth/token", `{"email":"`+roleAdminEmail+`","password":"`+linkPassword+`"}`, nil)
+	var pair struct {
+		AccessToken string `json:"access_token"`
+	}
+	if err := json.Unmarshal(tokenBody, &pair); tokenResp.StatusCode != http.StatusOK || err != nil || pair.AccessToken == "" {
+		t.Fatalf("POST /auth/token = %d %s", tokenResp.StatusCode, tokenBody)
+	}
+	if resp, payload := send(&http.Client{}, "https://evil.example", pair.AccessToken, nil); resp.StatusCode != http.StatusOK {
+		t.Errorf("bearer-only cross-origin POST = %d %s, want 200", resp.StatusCode, payload)
+	}
+
+	if resp, payload := admin.do("GET", "/authorization/roles/by-subject?subject_type=user&subject_id="+roleGrantee, "", nil); resp.StatusCode != http.StatusOK {
+		t.Errorf("cookie GET without a token = %d %s, want 200", resp.StatusCode, payload)
 	}
 }
 

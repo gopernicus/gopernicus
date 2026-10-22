@@ -59,7 +59,7 @@ func newExternalDemoHost(t *testing.T) *externalDemoHost {
 	}
 	origin := "http://" + listener.Addr().String()
 
-	cfg, err := buildAuthConfig(quietLog(), nil)
+	cfg, err := buildAuthConfig(quietLog(), environment.ModeDevelopment, nil)
 	if err != nil {
 		t.Fatalf("buildAuthConfig: %v", err)
 	}

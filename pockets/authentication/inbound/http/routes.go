@@ -5,11 +5,14 @@
 package authenticationhttp
 
 import (
+	"log/slog"
 	"net"
 	"net/http"
+	"sync"
 
 	"github.com/gopernicus/gopernicus/pockets"
 	authlogic "github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication"
+	"github.com/gopernicus/gopernicus/sdk/pkg/environment"
 	"github.com/gopernicus/gopernicus/sdk/pkg/list"
 	"github.com/gopernicus/gopernicus/sdk/pkg/web"
 )
@@ -85,6 +88,9 @@ type mountDeps struct {
 	// default below, so a host overrides one semantic surface without restating
 	// the others.
 	RouteAuth RouteAuthentication
+	// Proxies logs the one production trusted-proxy warning; nil outside
+	// production.
+	Proxies *proxyPosture
 }
 
 // RouteAuthentication is the authenticator each bundled route group runs behind
@@ -209,7 +215,7 @@ func mount(r pockets.RouteRegistrar, d mountDeps) {
 	// The bundled route groups' authenticators: the host's override where it set
 	// one (authentication.BrowserConfig.BundledRouteAuth), the audited default otherwise.
 	auth := d.RouteAuth.withDefaults(svc)
-	r = clientInfoRegistrar{inner: r}
+	r = clientInfoRegistrar{inner: r, proxies: d.Proxies}
 	h := &handlers{oauth2: d.OAuth2, inviteCheck: d.InviteCheck, resourceRule: d.ResourceRule, userAdminCheck: d.UserAdminCheck, svc: svc, inv: inv, listStrategy: d.ListStrategy, mutation: d.Mutation, views: views, htmlPolicy: d.HTMLPolicy}
 	if d.OAuth2 != nil {
 		mountOAuth2(r, h)
@@ -419,21 +425,66 @@ func mount(r pockets.RouteRegistrar, d mountDeps) {
 // OAuth callback) are attributed too.
 type clientInfoRegistrar struct {
 	inner pockets.RouteRegistrar
+	// proxies, when set, logs the one production trusted-proxy warning.
+	proxies *proxyPosture
 }
 
 func (c clientInfoRegistrar) Handle(method, path string, handler http.HandlerFunc, middleware ...web.Middleware) {
-	all := append([]web.Middleware{clientInfoMiddleware}, middleware...)
+	all := append([]web.Middleware{clientInfoMiddleware(c.proxies)}, middleware...)
 	c.inner.Handle(method, path, handler, all...)
 }
 
 // clientInfoMiddleware stamps the request IP and User-Agent onto the context via
 // the pocket's exported carrier (authlogic.WithClientInfo). It is the ONE write
-// point; login/token read the IP from it and the audit rail reads IP + UA.
-func clientInfoMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ctx := authlogic.WithClientInfo(r.Context(), clientIP(r), r.UserAgent())
-		next.ServeHTTP(w, r.WithContext(ctx))
-	})
+// point; login/token read the IP from it and the audit rail reads IP + UA. Each
+// request is first shown to proxies, which may log the production warning.
+func clientInfoMiddleware(proxies *proxyPosture) web.Middleware {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			proxies.observe(r)
+			ctx := authlogic.WithClientInfo(r.Context(), clientIP(r), r.UserAgent())
+			next.ServeHTTP(w, r.WithContext(ctx))
+		})
+	}
+}
+
+// proxyPosture logs one production WARN the first time a request shows that
+// client IPs are not being attributed: web.TrustProxies did not run, or the
+// request carries X-Forwarded-For yet its client IP resolved to the peer
+// address (TrustProxies(0) behind a proxy). Every rate limit and audit row would
+// then key to the proxy. A nil *proxyPosture (development, or a route table
+// mounted without the adapter) observes nothing.
+type proxyPosture struct {
+	log  *slog.Logger
+	once sync.Once
+}
+
+// newProxyPosture returns the production observer, or nil in any other mode.
+func newProxyPosture(mode environment.Mode, log *slog.Logger) *proxyPosture {
+	if !mode.IsProduction() {
+		return nil
+	}
+	if log == nil {
+		log = slog.Default()
+	}
+	return &proxyPosture{log: log}
+}
+
+func (p *proxyPosture) observe(r *http.Request) {
+	if p == nil {
+		return
+	}
+	ip, resolved := web.ClientIP(r.Context())
+	switch {
+	case !resolved:
+		p.once.Do(func() {
+			p.log.Warn("authentication: web.TrustProxies is not wired, so client IPs are the peer address; behind a proxy every rate limit and audit row keys to the proxy — wire web.TrustProxies outermost")
+		})
+	case r.Header.Get("X-Forwarded-For") != "" && ip == peerAddress(r):
+		p.once.Do(func() {
+			p.log.Warn("authentication: a request carried X-Forwarded-For but its client IP resolved to the peer address; behind a proxy set web.TrustProxies to the proxy hop count (TRUSTED_PROXY_COUNT), or every rate limit and audit row keys to the proxy")
+		})
+	}
 }
 
 // clientIP derives the client IP. The TrustProxies-resolved IP wins when the
@@ -447,6 +498,11 @@ func clientIP(r *http.Request) string {
 	if ip, ok := web.ClientIP(r.Context()); ok {
 		return ip
 	}
+	return peerAddress(r)
+}
+
+// peerAddress is the host part of RemoteAddr, or RemoteAddr when it has none.
+func peerAddress(r *http.Request) string {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		return r.RemoteAddr

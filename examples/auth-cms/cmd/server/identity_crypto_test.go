@@ -17,7 +17,7 @@ import (
 // Exercise the host configuration, actual hashing/signing adapters, JSON routes,
 // and authentication middleware together over HTTP with in-memory repositories.
 func TestHostPasswordPolicyAndJWTOverHTTP(t *testing.T) {
-	t.Setenv("AUTH_JWT_SECRET", strings.Repeat("j", 32)) // Disposable fixture key.
+	t.Setenv("AUTH_JWT_SECRET", strings.Repeat("6", 64)) // Disposable fixture key.
 	const password = "host-choice"                       // Below the default length.
 	tooLong := strings.Repeat("🔑", 19)                   // 19 code points, 76 bytes.
 	svc := bootInProcess(t, &recordingSender{}, func(cfg *authenticationConfig) {

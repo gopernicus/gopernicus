@@ -1,6 +1,7 @@
 package devissuer
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -10,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/gopernicus/gopernicus/sdk"
+	sdkauth "github.com/gopernicus/gopernicus/sdk/capabilities/authentication"
 	"github.com/gopernicus/gopernicus/sdk/pkg/environment"
 )
 
@@ -19,6 +21,23 @@ func TestNewRefusesOutsideDevelopment(t *testing.T) {
 		if i != nil || !errors.Is(err, ErrNotDevelopment) || !errors.Is(err, sdk.ErrInvalidInput) {
 			t.Fatalf("New(mode %q) = %v, %v; want nil, ErrNotDevelopment", mode, i, err)
 		}
+	}
+}
+
+type refusingVerifier struct{}
+
+func (refusingVerifier) Verify(context.Context, string) (map[string]any, error) {
+	return nil, errors.New("not verified")
+}
+
+func TestProviderIsRefusedInProduction(t *testing.T) {
+	p := NewProvider("http://localhost:8080"+IssuerPath, refusingVerifier{}, sdkauth.Profile{})
+	if _, err := sdkauth.CheckProvider(environment.ModeProduction, p); !errors.Is(err, sdkauth.ErrDevelopmentOnlyProvider) {
+		t.Fatalf("CheckProvider(production) = %v; want ErrDevelopmentOnlyProvider", err)
+	}
+	posture, err := sdkauth.CheckProvider(environment.ModeDevelopment, p)
+	if err != nil || !posture.Capabilities.DevelopmentOnly {
+		t.Fatalf("CheckProvider(development) = %+v, %v; want a declared development-only provider", posture, err)
 	}
 }
 

@@ -2,6 +2,7 @@ package authentication
 
 import (
 	"fmt"
+	"log/slog"
 	"net/url"
 	"reflect"
 	"slices"
@@ -179,7 +180,11 @@ func New(repos Repositories, signer cryptids.JWTSigner, runtimeMode environment.
 	var external *ExternalAuthenticator
 	if d.External != nil {
 		repos := ExternalRepositories{Users: d.Users, Identifiers: d.Identifiers, ExternalSubjects: d.ExternalSubjects, SecurityEvents: d.SecurityEvents, Invitations: d.Invitations}
-		cfg, err := validateExternal(*d.External, repos, d.RuntimeMode, d.IdentifierKeyer, d.DelegatedTokens.Issuer)
+		log := d.Logger
+		if log == nil {
+			log = slog.Default()
+		}
+		cfg, err := validateExternal(*d.External, repos, d.RuntimeMode, d.IdentifierKeyer, d.DelegatedTokens.Issuer, log)
 		if err != nil {
 			return nil, err
 		}

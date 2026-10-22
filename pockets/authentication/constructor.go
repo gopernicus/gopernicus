@@ -233,13 +233,17 @@ func New(repos Repositories, signer cryptids.JWTSigner, runtimeMode environment.
 	// Fail closed on delivery transport security (design §6.3): in production a
 	// development-only or metadata-less Mailer/BodySender is rejected; in
 	// development a development-only transport warns. The Mailer is validated non-
-	// nil above.
+	// nil above. An opportunistic-STARTTLS refusal is waivable, so it is reported
+	// with the other posture violations below rather than here.
 	transportLog := cfg.Logger
 	if transportLog == nil {
 		transportLog = slog.Default()
 	}
+	var startTLS []string
+	var opportunistic error
 	if cfg.Mailer != nil {
-		if err := validateDeliveryTransports(cfg.RuntimeMode, cfg.Mailer, bodySenders, transportLog); err != nil {
+		startTLS, opportunistic, err = validateDeliveryTransports(cfg.RuntimeMode, cfg.Mailer, bodySenders, cfg.OpportunisticTLSAcknowledged, transportLog)
+		if err != nil {
 			return nil, err
 		}
 	}
@@ -264,6 +268,13 @@ func New(repos Repositories, signer cryptids.JWTSigner, runtimeMode environment.
 	if cfg.RuntimeMode == environment.ModeProduction && cfg.IdentifierKeyer == nil {
 		return nil, ErrIdentifierKeyerRequired
 	}
+	// The acknowledgeable production posture: the security-event audit rail,
+	// single-factor native login, and opportunistic STARTTLS. Production reports
+	// every unacknowledged violation in one joined error, so a host repinning onto
+	// this check sees its whole list in one boot.
+	if err := checkPosture(repos, cfg, startTLS, opportunistic, transportLog); err != nil {
+		return nil, err
+	}
 
 	// The shared delivery renderer/router (design §6.1): one kind-aware policy
 	// consumed by BOTH authentication service and invitation service so the outbound email/SMS content
@@ -273,12 +284,17 @@ func New(repos Repositories, signer cryptids.JWTSigner, runtimeMode environment.
 	// router is always buildable here.
 	var deliveryRouter *delivery.Router
 	if cfg.Mailer != nil {
-		deliveryRouter, err = delivery.NewRouter(cfg.Mailer,
+		routerOptions := []delivery.RouterOption{
 			delivery.WithTemplates(delivery.TemplatesConfig{AppTemplates: cfg.EmailContentTemplates, AppLayouts: cfg.EmailLayouts, Branding: cfg.EmailBranding, Subjects: cfg.EmailSubjects, SMSBodies: cfg.SMSBodies}),
 			delivery.WithMailFrom(cfg.MailFrom),
 			delivery.WithBodySenders(bodySenders),
 			delivery.WithDataHook(cfg.DeliveryData),
-			delivery.WithRouterLogger(cfg.Logger))
+			delivery.WithRouterLogger(cfg.Logger),
+		}
+		if cfg.OpportunisticTLSAcknowledged {
+			routerOptions = append(routerOptions, delivery.WithOpportunisticTLSAcknowledged())
+		}
+		deliveryRouter, err = delivery.NewRouter(cfg.Mailer, routerOptions...)
 		if err != nil {
 			return nil, err
 		}

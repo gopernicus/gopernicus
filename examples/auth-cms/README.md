@@ -172,8 +172,9 @@ remain absent.
   self-contained `sdk/capabilities/oauth.Provider`, no vendor, no network; identity derived
   from the authorization `code`.
 - **TokenSigner** (REQUIRED — the core no longer tolerates a nil signer):
-  `golangjwt.New` (the HMAC JWT integration) over `AUTH_JWT_SECRET`;
-  absent → an **ephemeral** per-boot key. The ephemeral key is a **DEV /
+  `golangjwt.New` (the HMAC JWT integration) over the hex-decoded `AUTH_JWT_SECRET`
+  (`authentication.NewKeys`); absent in development → an **ephemeral** per-boot key,
+  absent in production → the boot is refused. The ephemeral key is a **DEV /
   single-instance convenience only**: access JWTs don't survive a restart, and a
   **multi-instance** deployment MUST share `AUTH_JWT_SECRET` across every instance
   (per-instance keys can't cross-verify). API clients recover a dead access JWT via
@@ -224,16 +225,19 @@ remain absent.
 
 ### auth-v3 wiring (identity, challenge rail, delivery, HTML)
 
-- **RuntimeMode**: `development` (explicit — production has no default). A memory
-  host cannot boot production by design; the production-negative matrix is
-  hermetic (`cmd/server/production_test.go`).
+- **RuntimeMode**: from `AUTH_RUNTIME_MODE` in the process environment
+  (`environment.LoadEnvForMode` — never from `.env`; no default). A memory host
+  cannot boot production by design; the production-negative matrix is hermetic
+  (`cmd/server/production_test.go`).
 - **Five distinct dev secrets** (`.env.example`): `AUTH_JWT_SECRET` (JWT/session),
   `AUTH_CHALLENGE_PEPPER` (OTP HMAC key ring), `AUTH_IDENTIFIER_KEY` (PII-free
   rate-limit/idempotency digests), `AUTH_DELIVERY_ENCRYPTER_KEY` (outbox
-  envelope), `AUTH_TOKEN_ENCRYPTER_KEY` (provider tokens). Each unset key falls
-  back to an **ephemeral per-boot** key (dev/single-instance only, WARN-logged; key
-  material is never printed).
-- **Challenge rail**: `ChallengeProtector` (`buildChallengeProtector`, HMAC key
+  envelope), `AUTH_TOKEN_ENCRYPTER_KEY` (provider tokens), all hex, decoded by one
+  `authentication.NewKeys` call. In development each unset key falls back to an
+  **ephemeral per-boot** key (single-instance only, WARN-logged; key material is
+  never printed); production refuses to boot until the first four are set, and
+  leaves provider tokens unstored without the fifth.
+- **Challenge rail**: `ChallengeProtector` (`buildKeyedCollaborators`, HMAC key
   ring with active key ID `dev`) + the `Challenges`/`PasswordResets`/`Challenges`
   ports from `authmem` back verify/reset/step-up/passwordless.
 - **Delivery** (two proof-host variants, `AUTH_DELIVERY_MODE`): the queue is the ONLY
@@ -333,7 +337,7 @@ remain absent.
 | `BrowserConfig.Views` | `authpages.New(bundle)` (branded-Login override of the ui/goth `authgoth.Views`) | nil → API-only (no HTML pages, no templ/`ui/goth` in the graph) |
 | `MessagesConfig.EmailContentTemplates` | `authpages.EmailOverride()` | empty → bundled LayerCore email bodies |
 | `Repositories.SecurityEvents` | authmem | no audit trail (recording site is a no-op) |
-| `AUTH_DEBUG` | off by default | `/debug/security-events` not registered (404) |
+| `AUTH_DEBUG` | off by default; development only (refused at boot in any other mode); live session + platform admin | `/debug/security-events` not registered (404) |
 
 ## Environment
 
@@ -346,10 +350,13 @@ v3 secrets (`AUTH_CHALLENGE_PEPPER`, `AUTH_IDENTIFIER_KEY`,
 `AUTH_PASSWORDLESS`),
 `AUTH_DELIVERY_MODE` (`jobs` default / `in_process` for the ephemeral bounded variant —
 see the Delivery wiring bullet), and
-`AUTH_DEBUG` + `OAUTH_CLIENT_ID/SECRET`. The host boots with **none** of them set:
-every secret gets a required-but-ephemeral single-instance key at boot
-(WARN-logged, never printed), passwordless defaults to `email,phone`, the magic
-link lands on the bundled `/auth/magic` page, and the debug route is off.
+`AUTH_DEBUG` + `OAUTH_CLIENT_ID/SECRET`. `AUTH_RUNTIME_MODE` is read from the process
+environment only — never from `.env`. In development (`AUTH_RUNTIME_MODE=development`)
+the host boots with **none** of the others set: every secret gets a
+required-but-ephemeral single-instance key at boot (WARN-logged, never printed),
+passwordless defaults to `email,phone`, the magic link lands on the bundled
+`/auth/magic` page, and the debug route is off. Production refuses to boot without
+the hex keys, and refuses `AUTH_DEBUG=1`.
 
 ## The A9 proof protocol (copy-pasteable curls)
 
@@ -358,8 +365,8 @@ JWT secret and enable the debug route:
 
 ```sh
 cd examples/auth-cms
-export AUTH_JWT_SECRET='choose-a-secret-of-at-least-32-bytes-xxxxx'   # >=32 bytes; do NOT commit
-AUTH_DEBUG=1 go run ./cmd/server
+export AUTH_JWT_SECRET=$(openssl rand -hex 32)   # hex, >=32 bytes; do NOT commit
+AUTH_RUNTIME_MODE=development AUTH_DEBUG=1 go run ./cmd/server
 ```
 
 The console mailer logs every message to the server's STDERR. Read the
@@ -489,7 +496,7 @@ Expired-access-JWT path — reboot with a 1-second access TTL, mint, wait, retry
 → **401** (then recover with the refresh token, below):
 
 ```sh
-AUTH_JWT_SECRET=$AUTH_JWT_SECRET AUTH_ACCESS_TOKEN_TTL=1s go run ./cmd/server
+AUTH_RUNTIME_MODE=development AUTH_JWT_SECRET=$AUTH_JWT_SECRET AUTH_ACCESS_TOKEN_TTL=1s go run ./cmd/server
 # ... mint a pair, then after >1s:
 curl -i -H "Authorization: Bearer <JWT>" http://localhost:8082/demo/whoami       # 401 (expired)
 ```
@@ -606,13 +613,21 @@ resource was deleted settles on retry → 200 `accepted`),
 the resource → acceptance stays refused) and `TestFencerNamespaceMatchesGranter`
 (fence-then-grant → `ErrGrantFenced`; grant-then-fence → committed).
 
-### Leg 5 — audit rows visible (DEFAULT-OFF, session-gated)
+### Leg 5 — audit rows visible (DEFAULT-OFF, development only, platform-admin gated)
+
+The route runs behind a live session and the `platform:main#admin` permission —
+the role-routes gate. The Leg 0 account holds no platform-admin tuple, so it is
+refused; the 200 read is proven over real HTTP in
+`TestDebugSecurityEventsRequiresPlatformAdmin` (`cmd/server/debug_route_test.go`),
+which grants the tuple to a registered user as Leg 7b's proof does.
 
 ```sh
-# with AUTH_DEBUG=1 and the admin session -> 200, the rows the legs produced
-curl -s -c jar -b jar http://localhost:8082/debug/security-events                # 200 (register/login/verify/
-                                                                                 #  oauth_*/apikey_auth/token_issued/invitation_*)
+# with AUTH_DEBUG=1 and the Leg 0 session (not a platform admin) -> 403
+curl -i -c jar -b jar http://localhost:8082/debug/security-events                # 403 permission_denied
+# a platform admin reads the rows the legs produced (register/login/verify/
+#  oauth_*/apikey_auth/token_issued/invitation_*) -> 200
 curl -i http://localhost:8082/debug/security-events                              # 401 (no session)
+# AUTH_RUNTIME_MODE=production AUTH_DEBUG=1 refuses to boot, naming AUTH_DEBUG
 # with AUTH_DEBUG unset, the route is not registered:
 curl -i -c jar -b jar http://localhost:8082/debug/security-events                # 404
 ```
@@ -666,7 +681,7 @@ on. The gateway is unchanged; only the path feeding the bus differs. cms itself
 never touches the outbox (O2).
 
 ```sh
-EVENTS_OUTBOX=memory go run ./cmd/server
+AUTH_RUNTIME_MODE=development EVENTS_OUTBOX=memory go run ./cmd/server
 # as the logged-in admin: open the stream and leave it running
 curl -N -b jar http://localhost:8082/events
 # in another shell, trigger a durable append:
@@ -715,7 +730,9 @@ so `Register` mounts the
 bundled role-administration routes under `/authorization/*`. The gate
 (`roleAdministrationGate`, `cmd/server/authorization.go`) is the ENTIRE chain the
 pocket requires: `authSvc.HTTP.RequireAccessTokenLive()` (a live human session, which
-stashes the principal the routes read back) composed with
+stashes the principal the routes read back), then `authSvc.HTTP.RequireBrowserSafeMutation()`
+(a cookie POST needs an allowlisted `Origin` and the `X-CSRF-Token` double-submit from
+`GET /auth/csrf`; reads and bearer-only calls pass), then
 `authz.HTTP.Require(authorizationhttp.Can("admin", authorizationhttp.Fixed("platform", "main")))` — the same
 platform-admin coordinate `MachineRoutesGate` names. It is assigned through
 `deferredMiddleware` because the authorization pocket is built before `authSvc`
@@ -734,8 +751,10 @@ curl -i http://localhost:8082/authorization/roles/by-resource?resource_type=proj
 #  -> 401 {"message":"authentication required","code":"unauthenticated"}
 
 # signed in but NOT a platform admin -> 403 on all four, the real FS9 denial body
+# (a cookie POST first clears the browser-safe layer with the double-submit token)
+CSRF=$(curl -s -b cjar -c cjar http://localhost:8082/auth/csrf | jq -r .csrf_token)
 curl -i -b cjar -X POST http://localhost:8082/authorization/roles \
-  -H 'Content-Type: application/json' \
+  -H 'Content-Type: application/json' -H 'Origin: http://localhost:8082' -H "X-CSRF-Token: $CSRF" \
   -d '{"subject_type":"user","subject_id":"grantee-1","role":"auditor","scope":{"kind":"resource","resource_type":"project","resource_id":"demo"}}'
 #  -> 403 {"message":"permission denied","code":"permission_denied"}
 ```
@@ -749,8 +768,9 @@ registered user through the `Components.Mutations` and then walks the whole flow
 
 ```sh
 # assign -> 200 with the outcome
+ADMIN_CSRF=$(curl -s -b adminjar -c adminjar http://localhost:8082/auth/csrf | jq -r .csrf_token)
 curl -sX POST http://localhost:8082/authorization/roles -b adminjar \
-  -H 'Content-Type: application/json' \
+  -H 'Content-Type: application/json' -H 'Origin: http://localhost:8082' -H "X-CSRF-Token: $ADMIN_CSRF" \
   -d '{"subject_type":"user","subject_id":"grantee-1","role":"auditor","scope":{"kind":"resource","resource_type":"project","resource_id":"demo"}}'
 #  -> {"outcome":"applied"}
 
@@ -776,25 +796,16 @@ answer **404**. This intentional headless
 configuration is logged informationally, without a missing-route warning. The
 host passes its logger through `authorization.WithLogger` at construction.
 
-⚠ **Cookie hosts owe a CSRF layer; this host does not have one.** These are
-state-changing POSTs and the pocket adds nothing beneath your gate. This proof
-host composes authentication + authorization only, because the authentication
-pocket does not export its browser-safe middleware.
-
-What is actually carrying the defense here, precisely: the two writes require
-`Content-Type: application/json` and answer **415** to every content type an HTML
-form can send, so a form-POST forgery is refused; a cross-site `fetch` with a JSON
-content type is preflighted, and **this host installs no CORS policy at all**, so
-the preflight fails; and the session cookie is `SameSite=Lax`, so a browser
-withholds it from cross-site POSTs anyway.
-
-**None of that is an origin check.** It is content-type strictness plus two
-browser defaults, and it lapses the moment a host adds a credentialed CORS
-allowlist for an SPA origin, relaxes the accepted content type, or weakens the
-cookie's SameSite posture — any of which this example could plausibly grow. A
-production cookie-credential host composes a real Origin allowlist plus a
-double-submit token inside its own gate closure; see the pocket README's gate
-section.
+**The CSRF layer.** These are state-changing POSTs and the pocket adds nothing
+beneath your gate, so the gate composes `authSvc.HTTP.RequireBrowserSafeMutation()`
+between authentication and authorization: a cookie POST needs an allowlisted
+`Origin` (else **403** `origin_rejected`) and the `X-CSRF-Token` double-submit of the
+token `GET /auth/csrf` returns (else **403** `permission_denied`); reads and
+bearer-only callers pass. The writes' `Content-Type: application/json` strictness
+(**415** to every HTML form encoding), the absent CORS policy and the
+`SameSite=Lax` session cookie remain defense in depth, not the control.
+`TestRoleRoutesRequireBrowserSafeMutation` (`cmd/server/role_routes_proof_test.go`)
+proves each case over real HTTP.
 
 ### Leg 8 — auth-v3: normal HTML pages (twice-through)
 
@@ -891,8 +902,13 @@ retry/replacement/terminal/purge are proven hermetically
 boot production, so the production-negative gates
 (`cmd/server/production_test.go`) are hermetic: console→`ErrInsecureDeliveryTransport`,
 http-base→`ErrPublicAuthBaseURLInsecure`, memory-limiter→`ErrNonDurableRateLimiter`,
-nil-keyer→`ErrIdentifierKeyerRequired`, and (default `jobs` mode) an unacknowledged
-jobs runtime→`ErrDeliveryJobsUnacknowledged`.
+nil-keyer→`ErrIdentifierKeyerRequired`, (default `jobs` mode) an unacknowledged
+jobs runtime→`ErrDeliveryJobsUnacknowledged`, the fake OAuth
+provider→`ErrDevelopmentOnlyProvider`, nil `SecurityEvents`→`ErrAuditRequired`,
+unacknowledged password/passwordless login→`ErrSingleFactorUnacknowledged`, a
+STARTTLS relay→`ErrInsecureDeliveryTransport` (constructs once acknowledged), an
+unset key→`ErrKeyRequired` naming every variable, and `AUTH_DEBUG=1` outside
+development→its own refusal.
 
 ### Leg 12 — external identity provider, the hybrid demo (`AUTH_EXTERNAL_DEMO=1`)
 
@@ -911,7 +927,7 @@ seeds one service account whose API key is printed ONCE in the startup WARN
 
 ```sh
 cd examples/auth-cms
-AUTH_EXTERNAL_DEMO=1 AUTH_JWT_SECRET=$AUTH_JWT_SECRET go run ./cmd/server
+AUTH_RUNTIME_MODE=development AUTH_EXTERNAL_DEMO=1 AUTH_JWT_SECRET=$AUTH_JWT_SECRET go run ./cmd/server
 #   WARN msg="AUTH_EXTERNAL_DEMO enabled (development only): ..." issuer=http://localhost:8082/dev/issuer token=/dev/token api_key=<KEY>
 TOKEN=$(curl -s -XPOST localhost:8082/dev/token -d '{"sub":"ext-1","email":"ext@example.com","email_verified":true}' | jq -r .token)
 # 1. the hybrid route admits the provider token (first sight provisions a local user) ...
@@ -995,7 +1011,7 @@ unwired kind (e.g. `slack`) fails 400; email is always-on via the Mailer.
   (the scoped predicate `Require(Can("audit", Fixed("project", "demo")))`
   + a direct-scope `ListRoleAssignmentsByScope` read-back), `GET /demo/external/{hybrid,mfa,only}`
   plus the dev issuer's `POST /dev/token` (`AUTH_EXTERNAL_DEMO=1` only, Leg 12), and `GET /debug/security-events`
-  (`AUTH_DEBUG=1` + `RequireUser`). The demo routes are READ-ONLY: AZ3-4.1 removed the
+  (`AUTH_DEBUG=1`, development only, live session + platform admin). The demo routes are READ-ONLY: AZ3-4.1 removed the
   session-only `POST /demo/roles/{assign,unassign}` and `POST /demo/admin/bootstrap`
   mutation routes; role assignment now rides the POCKET's own bundled
   `/authorization/roles*` surface above, not a host route. See "Authorization

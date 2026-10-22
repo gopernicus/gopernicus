@@ -150,3 +150,10 @@ var ErrBrowserLoginPathInvalid = errors.New("auth: BrowserConfig.BrowserLoginPat
 // host never asked for — it fails LOUDLY at construction instead (the loud-constructorConfig
 // posture).
 var ErrRefreshCookiePathInvalid = errors.New(`auth: BrowserConfig.RefreshCookiePath must be an absolute cookie path (leading /, no query/fragment/control/delimiter character, no trailing slash except "/")`)
+
+// ErrAuditAcknowledgedWithSecurityEvents is returned by New in every mode when
+// WithAuditDisabledAcknowledged() is passed while Repositories.SecurityEvents is
+// wired. A waiver beside the rail it waives is contradictory wiring (the
+// ErrHTMLPolicyWithoutViews posture), so a stale acknowledgement cannot linger
+// and hide a later removal of the rail.
+var ErrAuditAcknowledgedWithSecurityEvents = errors.New("auth: WithAuditDisabledAcknowledged() set but Repositories.SecurityEvents is wired (remove the acknowledgement)")

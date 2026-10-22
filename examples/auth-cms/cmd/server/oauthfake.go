@@ -26,6 +26,12 @@ var _ oauth.Provider = fakeOAuthProvider{}
 // Name is the provider key in the /auth/oauth/{provider}/* routes.
 func (fakeOAuthProvider) Name() string { return "fake" }
 
+// Capabilities declares the fake development-only: it signs in whoever names a
+// code, so a production pocket refuses it (authentication.ErrDevelopmentOnlyProvider).
+func (fakeOAuthProvider) Capabilities() oauth.Capabilities {
+	return oauth.Capabilities{DevelopmentOnly: true}
+}
+
 // GetAuthorizationURL builds a fake authorize URL that surfaces the state and the
 // S256 PKCE challenge as query params (so the A9 transcript can note them in the
 // 302 Location), plus a suggested `code` the operator can pass straight to the

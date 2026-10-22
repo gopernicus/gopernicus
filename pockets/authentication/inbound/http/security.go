@@ -111,6 +111,42 @@ func requireBrowserSafeFormMutation(cfg csrfConfig) web.Middleware {
 	return browserSafeMutation(cfg, true)
 }
 
+// RequireBrowserSafeMutation returns the browser-safe mutation gate for host
+// routes, under this adapter's AllowedOrigins, OriginPolicy and session cookie.
+// GET, HEAD and OPTIONS pass. On any other method a bearer-only request passes,
+// and a request carrying the session cookie needs an allowlisted Origin /
+// Sec-Fetch-Site (else 403 origin_rejected) and the X-CSRF-Token double-submit
+// of the token GET /auth/csrf issues (else 403 permission_denied). Compose it
+// after the authenticator and before authorization. An adapter built by
+// NewAuthenticator carries no browser policy, so its gate refuses every unsafe
+// method with 403 and logs one WARN when composed.
+func (s *Adapter) RequireBrowserSafeMutation() web.Middleware {
+	var gate web.Middleware
+	if s != nil && s.routes != nil {
+		gate = requireBrowserSafeMutation(s.routes.Mutation.csrf())
+	} else if s != nil && s.logger != nil {
+		s.logger.Warn("authentication: RequireBrowserSafeMutation on an adapter without a browser policy (built by NewAuthenticator) refuses every unsafe method with 403")
+	}
+	return func(next http.Handler) http.Handler {
+		var guarded http.Handler
+		if gate != nil {
+			guarded = gate(next)
+		}
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch r.Method {
+			case http.MethodGet, http.MethodHead, http.MethodOptions:
+				next.ServeHTTP(w, r)
+			default:
+				if guarded == nil {
+					forbidCSRF(w, "invalid or missing CSRF token")
+					return
+				}
+				guarded.ServeHTTP(w, r)
+			}
+		})
+	}
+}
+
 func browserSafeMutation(cfg csrfConfig, formLane bool) web.Middleware {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

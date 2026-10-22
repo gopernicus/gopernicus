@@ -113,8 +113,11 @@ func newAuthBundle() (*uigoth.Bundle, error) {
 }
 
 func main() {
-	// A missing .env is allowed; malformed configuration must stop startup.
-	if err := environment.LoadEnv(); err != nil {
+	// The runtime mode comes from the process environment only; .env is loaded in
+	// development and never opened in production. A missing .env is allowed;
+	// malformed configuration must stop startup.
+	runtimeMode, err := environment.LoadEnvForMode("AUTH_RUNTIME_MODE")
+	if err != nil {
 		slog.Error("load environment", "error", err)
 		os.Exit(1)
 	}
@@ -129,13 +132,16 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	if err := run(ctx, log); err != nil {
+	if err := run(ctx, log, runtimeMode); err != nil {
 		log.Error("server exited with error", "error", err)
 		os.Exit(1)
 	}
 }
 
-func run(ctx context.Context, log *slog.Logger) error {
+func run(ctx context.Context, log *slog.Logger, runtimeMode environment.Mode) error {
+	if err := refuseDebugRouteOutsideDevelopment(runtimeMode); err != nil {
+		return err
+	}
 	// The HTTP server config, read the same way. It is resolved here rather than at
 	// the web.Run call because TrustProxies (below) and every host-derived URL take
 	// their values from it.
@@ -247,7 +253,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 	mount := pockets.Mount{Router: router, Logger: log, Events: bus}
 
 	roleRoutesGate := &deferredMiddleware{}
-	authzComponents, err := newAuthorization(roleRoutesGate.middleware, log)
+	authzComponents, err := newAuthorization(roleRoutesGate.middleware, runtimeMode, log)
 	if err != nil {
 		return err
 	}
@@ -274,7 +280,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 	// secret from a distinct env var. The invitation grant-on-accept seam is the
 	// host-local integrityRelationshipGranter over the authorization operation ledger, carrying the host
 	// resource-existence seam so acceptance against a deleted resource fails loudly.
-	authCfg, err := buildAuthConfig(log, integrityRelationshipGranter{
+	authCfg, err := buildAuthConfig(log, runtimeMode, integrityRelationshipGranter{
 		system: tupleWriter,
 		exists: hostResources.Exists,
 	})
@@ -400,6 +406,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 	// request can reach the routes ahead of their gate (which fails closed anyway).
 	roleRoutesGate.set(roleAdministrationGate(
 		authSvc.HTTP.RequireAccessTokenLive(),
+		authSvc.HTTP.RequireBrowserSafeMutation(),
 		authzComponents.HTTP.Require(authorizationhttp.Can("admin", authorizationhttp.Fixed(platformResourceType, platformResourceID))),
 	))
 	// Boot fails LOUDLY if the chain never landed, matching the construction-matrix
@@ -589,7 +596,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 	}
 
 	registerDemoRoutes(router, authSvc.HTTP, authorizer, authzComponents.Roles, authzComponents.HTTP)
-	registerDebugRoutes(router, authSvc.HTTP, authRepos, log)
+	registerDebugRoutes(router, authSvc.HTTP, authzComponents.HTTP, authRepos, log)
 
 	// Host-local liveness probe (host route, not pocket surface). Mounted on
 	// the root router with no middleware, outside every gated group and
@@ -855,36 +862,23 @@ func seed(ctx context.Context, repos cms.Repositories) error {
 //   - DeliveryMode "jobs" + DeliveryJobsAcknowledged: the queue is the only send path
 //     (AV3-4.3), so the pocket is told run() actually runs the generic-jobs delivery
 //     runtime (jobs.FencedRuntime, below); and
-//   - every development secret (JWT signer, challenge pepper, delivery + identifier +
-//     token-encryption keys) from a DISTINCT env var, never a committed constant, and
-//     never printing key material (see demo.go builders).
+//   - every secret (JWT signer, challenge pepper, delivery + identifier +
+//     token-encryption keys) from a DISTINCT hex env var through one
+//     authentication.NewKeys call, never a committed constant, and never printing
+//     key material (demo.go buildKeyedCollaborators): production refuses an unset
+//     key, development mints an ephemeral one.
 //
+// mode is the host's runtime mode, resolved by main from the process environment.
 // The granter is the invitation grant-on-accept seam (nil → invitations off). When run()
 // passes a non-nil Granter it also sets the REQUIRED relation-aware authenticationConfig.InviteCheck
 // (hostInviteCheck) right after this seam returns — the two are wired together (design D3).
 // It builds no goroutines and reads no host lifecycle; run() owns the worker + shutdown.
-func buildAuthConfig(log *slog.Logger, granter invitations.Granter) (authenticationConfig, error) {
+func buildAuthConfig(log *slog.Logger, mode environment.Mode, granter invitations.Granter) (authenticationConfig, error) {
 	// The REQUIRED access-JWT signer, optional provider-token encrypter, REQUIRED
 	// challenge protector (authmem wires Challenges), REQUIRED delivery-outbox
 	// encrypter (jobs mode seals every command envelope), and identifier keyer — each
 	// from its own distinct env var (demo.go).
-	signer, err := buildTokenSigner(log)
-	if err != nil {
-		return authenticationConfig{}, err
-	}
-	encrypter, err := buildTokenEncrypter()
-	if err != nil {
-		return authenticationConfig{}, err
-	}
-	challengeProtector, err := buildChallengeProtector(log)
-	if err != nil {
-		return authenticationConfig{}, err
-	}
-	deliveryEncrypter, err := buildDeliveryEncrypter(log)
-	if err != nil {
-		return authenticationConfig{}, err
-	}
-	identifierKeyer, err := buildIdentifierKeyer(log)
+	keyed, err := buildKeyedCollaborators(mode, log)
 	if err != nil {
 		return authenticationConfig{}, err
 	}
@@ -916,8 +910,8 @@ func buildAuthConfig(log *slog.Logger, granter invitations.Granter) (authenticat
 	origin := srv.Origin()
 
 	cfg := authenticationConfig{
-		TokenSigner: signer,
-		RuntimeMode: environment.ModeDevelopment,
+		TokenSigner: keyed.signer,
+		RuntimeMode: mode,
 		// Delivery on the generic jobs runtime (authv3-delivery-refactor
 		// AV3D-0.1). run() wires the generic-jobs dispatcher (authCfg.DeliveryDispatcher)
 		// over an in-memory fenced queue for this demo, so it is NON-DURABLE here (a real
@@ -932,8 +926,8 @@ func buildAuthConfig(log *slog.Logger, granter invitations.Granter) (authenticat
 			RequireVerifiedEmail: true,
 		},
 		IdentityConfig: auth.IdentityConfig{
-			ChallengeProtector: challengeProtector,
-			IdentifierKeyer:    identifierKeyer,
+			ChallengeProtector: keyed.challengeProtector,
+			IdentifierKeyer:    keyed.identifierKeyer,
 		},
 		DeliveryConfig: auth.DeliveryConfig{
 			Mailer:   email.NewConsole(log),
@@ -942,7 +936,7 @@ func buildAuthConfig(log *slog.Logger, granter invitations.Granter) (authenticat
 			// (deny-by-absence; the dev stand-in for SMS — the token lands in the log).
 
 			BodySenders:       map[string]delivery.BodySender{sdk.AddressKindPhone: notify.NewConsole(log)},
-			DeliveryEncrypter: deliveryEncrypter,
+			DeliveryEncrypter: keyed.deliveryEncrypter,
 			// The queue is the only send path; affirm run() runs the generic-jobs delivery
 			// runtime (jobs.FencedRuntime) (authv3-delivery-refactor AV3D-0.1).
 
@@ -959,7 +953,7 @@ func buildAuthConfig(log *slog.Logger, granter invitations.Granter) (authenticat
 		},
 		OAuthConfig: auth.OAuthConfig{
 			Providers:         []oauth.Provider{fakeOAuthProvider{}},
-			TokenEncrypter:    encrypter,
+			TokenEncrypter:    keyed.tokenEncrypter,
 			OAuthCallbackBase: origin,
 			// This host explicitly trusts its local demonstration identity source.
 
@@ -1031,7 +1025,7 @@ func buildAuthConfig(log *slog.Logger, granter invitations.Granter) (authenticat
 	// The pocket's own env tags, applied over the literal: AUTH_MAIL_FROM,
 	// AUTH_ALLOWED_ORIGINS, AUTH_PASSWORDLESS, AUTH_PUBLIC_BASE_URL,
 	// AUTH_PASSWORD_RESET_URL, AUTH_OAUTH_LINK_URL, AUTH_OAUTH_CALLBACK_BASE,
-	// AUTH_REDIRECT_ALLOWLIST, AUTH_REQUIRE_VERIFIED_EMAIL, AUTH_RUNTIME_MODE,
+	// AUTH_REDIRECT_ALLOWLIST, AUTH_REQUIRE_VERIFIED_EMAIL,
 	// AUTH_DELIVERY_MODE, AUTH_ACCESS_TOKEN_TTL, AUTH_REFRESH_TTL, AUTH_LIST_STRATEGY,
 	// the AUTH_COOKIE_* nested cookie keys, and the remaining flags. An empty value
 	// keeps what the literal seeded; an unrecognized mode or strategy is the pocket's

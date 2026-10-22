@@ -15,6 +15,7 @@ import (
 	"github.com/gopernicus/gopernicus/examples/auth-cms/pockets/authentication/outbound/authmem"
 	auth "github.com/gopernicus/gopernicus/pockets/authentication"
 	"github.com/gopernicus/gopernicus/sdk"
+	"github.com/gopernicus/gopernicus/sdk/pkg/environment"
 
 	// CHAU-1.7 — the account-lifecycle proof, driven through EXPORTED host seams over
 	// real HTTP. It is a HOST test in a separate module, so nothing here reaches a
@@ -373,7 +374,7 @@ func TestUserAdminRoutesAbsentWithoutCheck(t *testing.T) {
 // TestUserAdminCheckWithoutReposFailsLoudly pins the construction guard: a host
 // cannot advertise a deactivate button without the wiring that makes it real.
 func TestUserAdminCheckWithoutReposFailsLoudly(t *testing.T) {
-	cfg, err := buildAuthConfig(quietLog(), nil)
+	cfg, err := buildAuthConfig(quietLog(), environment.ModeDevelopment, nil)
 	if err != nil {
 		t.Fatalf("buildAuthConfig: %v", err)
 	}

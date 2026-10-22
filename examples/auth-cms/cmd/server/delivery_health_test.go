@@ -15,6 +15,7 @@ import (
 	delivery "github.com/gopernicus/gopernicus/pockets/authentication/logic/delivery"
 	sdkevents "github.com/gopernicus/gopernicus/sdk/capabilities/events"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/notify/email"
+	"github.com/gopernicus/gopernicus/sdk/pkg/environment"
 )
 
 // This file is the AV3D-5.3 REAL-INTERACTION proof for the host-composed delivery health
@@ -39,7 +40,7 @@ func (failingBus) Emit(context.Context, sdkevents.Event) error {
 // defaults to a real in-memory bus; a nil sender keeps the console mailer.
 func bootHealth(t *testing.T, sender email.Sender, emitter sdkevents.Emitter, tune func(*authenticationConfig)) (*auth.Components, *deliveryhealth.Health) {
 	t.Helper()
-	cfg, err := buildAuthConfig(quietLog(), nil)
+	cfg, err := buildAuthConfig(quietLog(), environment.ModeDevelopment, nil)
 	if err != nil {
 		t.Fatalf("buildAuthConfig: %v", err)
 	}

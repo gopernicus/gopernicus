@@ -2,9 +2,8 @@ package main
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -132,17 +131,39 @@ func demoMembersOnly() http.HandlerFunc {
 	}
 }
 
-// registerDebugRoutes mounts GET /debug/security-events ONLY when AUTH_DEBUG=1
-// (plan-cut amendment, SRE — DEFAULT-OFF because it dumps IP/UA/emails and this
-// host is public). It is additionally session-gated (RequireAccessToken): with no
-// AUTH_DEBUG the route is never registered (404), and with no session it is 401.
-func registerDebugRoutes(router *web.WebHandler, authentication *authenticationhttp.Adapter, repos auth.Repositories, log *slog.Logger) {
-	if environment.GetEnvOrDefault("AUTH_DEBUG", "") != "1" {
+// errDebugRouteOutsideDevelopment refuses AUTH_DEBUG=1 outside development: the
+// route dumps the security-event audit rail (IP addresses, user agents, emails).
+var errDebugRouteOutsideDevelopment = errors.New("auth-cms: AUTH_DEBUG=1 is refused outside development — GET /debug/security-events dumps the security-event audit rail (IPs, user agents, emails); unset AUTH_DEBUG")
+
+// debugRouteEnabled reports whether AUTH_DEBUG=1 asks for the debug route.
+func debugRouteEnabled() bool {
+	return environment.GetEnvOrDefault("AUTH_DEBUG", "") == "1"
+}
+
+// refuseDebugRouteOutsideDevelopment is run()'s first check, so the refusal
+// names AUTH_DEBUG before any key or pocket is built.
+func refuseDebugRouteOutsideDevelopment(mode environment.Mode) error {
+	if debugRouteEnabled() && mode != environment.ModeDevelopment {
+		return errDebugRouteOutsideDevelopment
+	}
+	return nil
+}
+
+// registerDebugRoutes mounts GET /debug/security-events ONLY when AUTH_DEBUG=1 in
+// development (plan-cut amendment, SRE — DEFAULT-OFF because it dumps IP/UA/emails
+// and this host is public; run() refuses AUTH_DEBUG=1 in any other mode). It is
+// gated like the role routes: a live human session, then the platform-admin
+// permission. With no AUTH_DEBUG the route is never registered (404); with no
+// session it is 401, and a signed-in non-admin is 403.
+func registerDebugRoutes(router *web.WebHandler, authentication *authenticationhttp.Adapter, authorization *authorizationhttp.Adapter, repos auth.Repositories, log *slog.Logger) {
+	if !debugRouteEnabled() {
 		log.Info("debug security-events route DISABLED (set AUTH_DEBUG=1 to enable)")
 		return
 	}
-	log.Warn("debug security-events route ENABLED (AUTH_DEBUG=1) — dumps IP/UA/emails; do not enable in production")
-	router.Handle("GET", "/debug/security-events", debugSecurityEvents(repos.SecurityEvents), authentication.RequireAccessToken())
+	log.Warn("debug security-events route ENABLED (AUTH_DEBUG=1) — dumps IP/UA/emails to platform admins; development only")
+	router.Handle("GET", "/debug/security-events", debugSecurityEvents(repos.SecurityEvents),
+		authentication.RequireAccessTokenLive(),
+		authorization.Require(authorizationhttp.Can("admin", authorizationhttp.Fixed(platformResourceType, platformResourceID))))
 }
 
 // debugEventResponse is the trimmed audit-row shape the debug dump returns.
@@ -192,143 +213,75 @@ func debugSecurityEvents(repo securityevent.SecurityEventRepository) http.Handle
 	}
 }
 
-// buildTokenSigner builds the REQUIRED access-JWT signer from the environment
-// (auth-jwt plan §1.6, D3 — the core no longer tolerates a nil signer):
-//
-//   - AUTH_JWT_SECRET set (≥32 bytes) → the golang-jwt HS256 integration
-//     (golangjwt.New) over that secret — a stable key across boots that
-//     MULTIPLE INSTANCES can share.
-//   - AUTH_JWT_SECRET absent → an EPHEMERAL random 32-byte key generated at boot.
-//     NEVER a hardcoded constant (this host lands on public GitHub; a committed
-//     signing key is a leak). Access JWTs do not survive a restart (README); API
-//     clients recover via POST /auth/refresh (refresh tokens are DB-backed).
-//
-// The ephemeral key is a DEV / SINGLE-INSTANCE convenience ONLY: per-instance
-// keys cannot cross-verify, so a MULTI-INSTANCE deployment behind a load balancer
-// MUST set a shared AUTH_JWT_SECRET or every request flaps auth (§1.6).
-func buildTokenSigner(log *slog.Logger) (cryptids.JWTSigner, error) {
-	secret := environment.GetEnvOrDefault("AUTH_JWT_SECRET", "")
-	if secret == "" {
-		var b [32]byte
-		if _, err := rand.Read(b[:]); err != nil {
-			return nil, fmt.Errorf("generate ephemeral jwt key: %w", err)
-		}
-		secret = hex.EncodeToString(b[:]) // 64 hex chars ≥ 32 bytes
-		log.Warn("AUTH_JWT_SECRET unset: using an EPHEMERAL random signing key — DEV / SINGLE-INSTANCE ONLY; access JWTs will NOT survive a restart, and a MULTI-INSTANCE deployment MUST share AUTH_JWT_SECRET across every instance")
-	}
-	signer, err := golangjwt.New(secret)
-	if err != nil {
-		return nil, fmt.Errorf("build jwt signer: %w", err)
-	}
-	return signer, nil
+// keyedCollaborators are the five key-backed collaborators buildAuthConfig wires.
+type keyedCollaborators struct {
+	signer             cryptids.JWTSigner
+	challengeProtector protection.ChallengeProtector
+	identifierKeyer    protection.IdentifierKeyer
+	deliveryEncrypter  cryptids.Encrypter
+	tokenEncrypter     cryptids.Encrypter
 }
 
-// buildChallengeProtector wires the bundled HMAC challenge protector (design §3.3)
-// from AUTH_CHALLENGE_PEPPER (hex, ≥ 32 bytes — the design-canonical env name, §11),
-// or an EPHEMERAL random key — DEV / SINGLE-INSTANCE ONLY: per-instance keys cannot
-// cross-verify short codes, so a multi-instance deployment MUST share the key. The
-// key ring's active key ID ("dev") stamps each issued challenge's protector_key_id so
-// an overlapping rotation can verify an unexpired code under the prior key. The
-// register/verify challenge rail requires it (auth.ErrChallengeProtectorRequired)
-// whenever Challenges is wired. This pepper is DISTINCT from the JWT signing key, the
-// identifier keyer, the delivery-outbox key, and the provider-token key — never
-// reused across them, and never logged (only the WARN, never the material).
-func buildChallengeProtector(log *slog.Logger) (protection.ChallengeProtector, error) {
-	const activeKeyID = "dev"
-	key := environment.GetEnvOrDefault("AUTH_CHALLENGE_PEPPER", "")
-	var raw []byte
-	if key == "" {
-		raw = make([]byte, 32)
-		if _, err := rand.Read(raw); err != nil {
-			return nil, fmt.Errorf("generate ephemeral challenge key: %w", err)
-		}
-		log.Warn("AUTH_CHALLENGE_PEPPER unset: using an EPHEMERAL random challenge pepper — DEV / SINGLE-INSTANCE ONLY; pending verification codes will NOT survive a restart, and a MULTI-INSTANCE deployment MUST share AUTH_CHALLENGE_PEPPER")
-	} else {
-		decoded, err := hex.DecodeString(key)
-		if err != nil {
-			return nil, fmt.Errorf("decode AUTH_CHALLENGE_PEPPER (hex): %w", err)
-		}
-		raw = decoded
+// buildKeyedCollaborators reads the five hex AUTH_* key variables into
+// authentication.KeysInput and decodes them with one authentication.NewKeys call
+// (auth-jwt plan §1.6, design §3.3/§4.4/§6.1.1):
+//
+//   - production: every unset or malformed key is reported together, naming the
+//     variable and never the value — a multi-instance deployment MUST set and SHARE
+//     each one;
+//   - development: an unset key becomes an EPHEMERAL per-boot key with a WARN —
+//     NEVER a committed constant (this host lands on public GitHub). Access JWTs,
+//     pending codes and in-flight delivery jobs do not survive a restart;
+//   - AUTH_TOKEN_ENCRYPTER_KEY unset leaves provider tokens unpersisted in every mode
+//     (login and linking still work).
+//
+// The JWT signer takes the decoded bytes; the challenge ring keeps the active key ID
+// "dev" its pending challenges were stamped with. Each key is a distinct role and is
+// never logged.
+func buildKeyedCollaborators(mode environment.Mode, log *slog.Logger) (keyedCollaborators, error) {
+	var in auth.KeysInput
+	if err := environment.ParseEnvTags("", &in); err != nil {
+		return keyedCollaborators{}, err
 	}
+	keys, err := auth.NewKeys(mode, in, log,
+		auth.KeyJWT, auth.KeyChallengePepper, auth.KeyIdentifier, auth.KeyDeliveryEncrypter, auth.KeyTokenEncrypter)
+	if err != nil {
+		return keyedCollaborators{}, err
+	}
+	signer, err := golangjwt.New(string(keys.JWTSecret))
+	if err != nil {
+		return keyedCollaborators{}, fmt.Errorf("build jwt signer: %w", err)
+	}
+	const activeKeyID = "dev"
 	protector, err := protection.NewHMACChallengeProtector(protection.HMACKeyRing{
 		Active: activeKeyID,
-		Keys:   map[string][]byte{activeKeyID: raw},
+		Keys:   map[string][]byte{activeKeyID: keys.ChallengePepper},
 	})
 	if err != nil {
-		return nil, fmt.Errorf("build challenge protector: %w", err)
+		return keyedCollaborators{}, fmt.Errorf("build challenge protector: %w", err)
 	}
-	return protector, nil
-}
-
-// buildTokenEncrypter wires an AES-256-GCM Encrypter for provider tokens at rest
-// when AUTH_TOKEN_ENCRYPTER_KEY is set (exactly 32 bytes). Absent → nil: provider
-// tokens are not persisted (login and linking still work) — a safe, documented
-// degradation (design §3). No key ever ships in the repo.
-func buildTokenEncrypter() (cryptids.Encrypter, error) {
-	key := environment.GetEnvOrDefault("AUTH_TOKEN_ENCRYPTER_KEY", "")
-	if key == "" {
-		return nil, nil
-	}
-	enc, err := cryptids.NewAESGCM([]byte(key))
+	keyer, err := protection.NewHMACIdentifierKeyer(keys.IdentifierKey)
 	if err != nil {
-		return nil, fmt.Errorf("build token encrypter (AUTH_TOKEN_ENCRYPTER_KEY must be exactly 32 bytes): %w", err)
+		return keyedCollaborators{}, fmt.Errorf("build identifier keyer: %w", err)
 	}
-	return enc, nil
-}
-
-// buildDeliveryEncrypter wires an AES-256-GCM Encrypter for the durable delivery
-// outbox payload envelope (design §6.1.1) from AUTH_DELIVERY_ENCRYPTER_KEY (exactly
-// 32 bytes), or an EPHEMERAL random key — DEV / SINGLE-INSTANCE ONLY: pending
-// outbox jobs seal their destination/rendered-secret under it, so a restart with an
-// ephemeral key strands any in-flight job (its payload can no longer be opened), and
-// a MULTI-INSTANCE deployment MUST share the key. Delivery requires it whenever a
-// delivery runtime is wired (auth.ErrDeliveryEncrypterRequired). Its key is distinct
-// from the challenge pepper, JWT, and token-encryption keys.
-func buildDeliveryEncrypter(log *slog.Logger) (cryptids.Encrypter, error) {
-	key := environment.GetEnvOrDefault("AUTH_DELIVERY_ENCRYPTER_KEY", "")
-	var raw []byte
-	if key == "" {
-		raw = make([]byte, 32)
-		if _, err := rand.Read(raw); err != nil {
-			return nil, fmt.Errorf("generate ephemeral delivery key: %w", err)
-		}
-		log.Warn("AUTH_DELIVERY_ENCRYPTER_KEY unset: using an EPHEMERAL random delivery-outbox key — DEV / SINGLE-INSTANCE ONLY; in-flight delivery jobs will NOT survive a restart, and a MULTI-INSTANCE deployment MUST share AUTH_DELIVERY_ENCRYPTER_KEY")
-	} else {
-		raw = []byte(key)
-	}
-	enc, err := cryptids.NewAESGCM(raw)
+	deliveryEncrypter, err := cryptids.NewAESGCM(keys.DeliveryEncrypterKey)
 	if err != nil {
-		return nil, fmt.Errorf("build delivery encrypter (AUTH_DELIVERY_ENCRYPTER_KEY must be exactly 32 bytes): %w", err)
+		return keyedCollaborators{}, fmt.Errorf("build delivery encrypter: %w", err)
 	}
-	return enc, nil
-}
-
-// buildIdentifierKeyer wires the bundled HMAC identifier keyer (design §4.4) from
-// AUTH_IDENTIFIER_KEY (hex, ≥ 32 bytes), or an EPHEMERAL random key — DEV /
-// SINGLE-INSTANCE ONLY: it derives the PII-free rate-limit/outbox idempotency keys,
-// so a multi-instance deployment MUST share the key. It is deliberately separate from
-// the challenge pepper, JWT, and encryption keys.
-func buildIdentifierKeyer(log *slog.Logger) (protection.IdentifierKeyer, error) {
-	key := environment.GetEnvOrDefault("AUTH_IDENTIFIER_KEY", "")
-	var raw []byte
-	if key == "" {
-		raw = make([]byte, 32)
-		if _, err := rand.Read(raw); err != nil {
-			return nil, fmt.Errorf("generate ephemeral identifier key: %w", err)
-		}
-		log.Warn("AUTH_IDENTIFIER_KEY unset: using an EPHEMERAL random identifier keyer — DEV / SINGLE-INSTANCE ONLY; a MULTI-INSTANCE deployment MUST share AUTH_IDENTIFIER_KEY")
-	} else {
-		decoded, err := hex.DecodeString(key)
+	collaborators := keyedCollaborators{
+		signer:             signer,
+		challengeProtector: protector,
+		identifierKeyer:    keyer,
+		deliveryEncrypter:  deliveryEncrypter,
+	}
+	if keys.TokenEncrypterKey != nil {
+		tokenEncrypter, err := cryptids.NewAESGCM(keys.TokenEncrypterKey)
 		if err != nil {
-			return nil, fmt.Errorf("decode AUTH_IDENTIFIER_KEY (hex): %w", err)
+			return keyedCollaborators{}, fmt.Errorf("build token encrypter: %w", err)
 		}
-		raw = decoded
+		collaborators.tokenEncrypter = tokenEncrypter
 	}
-	keyer, err := protection.NewHMACIdentifierKeyer(raw)
-	if err != nil {
-		return nil, fmt.Errorf("build identifier keyer: %w", err)
-	}
-	return keyer, nil
+	return collaborators, nil
 }
 
 // writeHostJSON writes v as a JSON response at status (host-local handlers).
@@ -367,7 +320,7 @@ func newExternalDemo(ctx context.Context, origin string, mode environment.Mode, 
 	return &externalDemo{issuer: dev, config: authlogic.ExternalConfig{
 		Providers: []authlogic.ExternalProvider{{
 			Name:                         externalProviderName,
-			Provider:                     sdkauth.NewOIDC(dev.Issuer(), verifier, sdkauth.Profile{}),
+			Provider:                     devissuer.NewProvider(dev.Issuer(), verifier, sdkauth.Profile{}),
 			ProvisionOnFirstVerification: true,
 		}},
 	}}, nil

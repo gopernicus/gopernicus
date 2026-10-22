@@ -20,6 +20,7 @@ import (
 	authzmem "github.com/gopernicus/gopernicus/pockets/authorization/stores/memory"
 	"github.com/gopernicus/gopernicus/sdk"
 	sdkevents "github.com/gopernicus/gopernicus/sdk/capabilities/events"
+	"github.com/gopernicus/gopernicus/sdk/pkg/environment"
 	"github.com/gopernicus/gopernicus/sdk/pkg/web"
 
 	model "github.com/gopernicus/gopernicus/pockets/authorization/logic/model"
@@ -30,7 +31,7 @@ import (
 // construction matrix (a guard requires a mutation repository, etc.) is exercised.
 func hostAuthz(t *testing.T) authorization.Components {
 	t.Helper()
-	comps, err := newAuthorization(nil, nil)
+	comps, err := newAuthorization(nil, environment.ModeDevelopment, nil)
 	if err != nil {
 		t.Fatalf("newAuthorization: %v", err)
 	}
@@ -39,7 +40,7 @@ func hostAuthz(t *testing.T) authorization.Components {
 
 func seedTrustedOwner(t *testing.T, sm *mutations.Service, resourceID, userID string) {
 	t.Helper()
-	if _, err := sm.GrantRelationship(context.Background(), mutations.GrantRelationshipCommand{
+	if _, err := sm.GrantRelationship(trustedContext(), mutations.GrantRelationshipCommand{
 
 		ResourceType: demoResourceType,
 		ResourceID:   resourceID,
@@ -152,7 +153,7 @@ func TestHostAdmissionPlatformAdminShortCircuit(t *testing.T) {
 
 	// Tear down the platform-admin scope (trusted), then the SAME actor is denied — the
 	// guard read the now-absent admin tuple through the view.
-	if _, err := sm.TeardownResourceAuthorization(context.Background(), mutations.TeardownResourceAuthorizationCommand{
+	if _, err := sm.TeardownResourceAuthorization(trustedContext(), mutations.TeardownResourceAuthorizationCommand{
 		ResourceType: platformResourceType, ResourceID: platformResourceID,
 		Reason: "az3-4.1 host test: revoke platform admin",
 	}); err != nil {
@@ -249,7 +250,7 @@ func TestInvitationAcceptanceTrustedAndIdempotent(t *testing.T) {
 		t.Fatal("invitee does not have view after acceptance")
 	}
 
-	rcpt, err := sm.GrantRelationship(ctx, mutations.GrantRelationshipCommand{
+	rcpt, err := sm.GrantRelationship(trustedContext(), mutations.GrantRelationshipCommand{
 		ResourceType: demoResourceType, ResourceID: demoResourceID, Relation: "member",
 		Subject: relationships.SubjectRef{Type: "user", ID: "invitee"},
 	})
@@ -465,7 +466,7 @@ func TestAuthorizationPosturesDemonstrable(t *testing.T) {
 
 	// Flagship engine: a granted member has view; an ungranted subject does not.
 	seedTrustedOwner(t, sm, "pflag", "u-flag-owner")
-	if _, err := sm.GrantRelationship(ctx, mutations.GrantRelationshipCommand{
+	if _, err := sm.GrantRelationship(trustedContext(), mutations.GrantRelationshipCommand{
 		ResourceType: demoResourceType, ResourceID: "pflag", Relation: "member",
 		Subject: relationships.SubjectRef{Type: "user", ID: "u-flag-member"},
 	}); err != nil {
@@ -485,7 +486,7 @@ func TestAuthorizationPosturesDemonstrable(t *testing.T) {
 // =============================================================================
 
 func TestHostUnifiedModelDeclaresGraphAndExactPermissions(t *testing.T) {
-	c, err := newAuthorization(nil, nil)
+	c, err := newAuthorization(nil, environment.ModeDevelopment, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -548,7 +549,7 @@ func (h *demoAuditHost) principalID(c *linkClient) string {
 
 func (h *demoAuditHost) assignAuditor(userID, resourceType, resourceID string) {
 	h.t.Helper()
-	if _, err := h.comps.Mutations.AssignRole(context.Background(), mutations.AssignRoleCommand{
+	if _, err := h.comps.Mutations.AssignRole(trustedContext(), mutations.AssignRoleCommand{
 
 		Subject: model.PrincipalRef{Type: "user", ID: userID},
 		Role:    demoRole,
@@ -599,7 +600,7 @@ func TestDemoAuditRouteUsesScopedPredicate(t *testing.T) {
 	// role model, and still passes the relationship-owned gate.
 	member := h.signUp("role-model-member@example.com")
 	memberID := h.principalID(member)
-	if _, err := h.comps.Mutations.GrantRelationship(context.Background(), mutations.GrantRelationshipCommand{
+	if _, err := h.comps.Mutations.GrantRelationship(trustedContext(), mutations.GrantRelationshipCommand{
 
 		ResourceType: demoResourceType,
 		ResourceID:   demoResourceID,

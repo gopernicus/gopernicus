@@ -119,6 +119,7 @@ func (g relationshipGranter) Grant(ctx context.Context, in invitations.GrantInpu
 	if g.writer == nil || g.reader == nil {
 		return fmt.Errorf("auth-cms: relationshipGranter authorization capabilities are not wired")
 	}
+	ctx = audit.WithSource(ctx, audit.Source{System: "invitation-acceptance"})
 	if err := g.writer.CreateRelationships(ctx, []relationships.CreateRelationship{{
 		ResourceType: in.ResourceType,
 		ResourceID:   in.ResourceID,

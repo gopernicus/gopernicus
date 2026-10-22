@@ -229,10 +229,11 @@ func TestNewServiceProductionAcceptsDeclaredTransports(t *testing.T) {
 		environment.ModeProduction,
 		delivery.ModeOff,
 		WithPassword(PasswordConfig{Hasher: stubHasher{}}),
-		WithIdentity(IdentityConfig{IdentifierKeyer: prodKeyer{}}),
+		WithIdentity(IdentityConfig{IdentifierKeyer: prodKeyer{}, SingleFactorAcknowledged: true}),
 		WithAbuseProtection(AbuseProtectionConfig{RateLimiter: durableLimiter{}}),
 		WithDelivery(DeliveryConfig{Mailer: prodMailer{}, BodySenders: map[string]delivery.BodySender{"sms": prodNotifier{}}}),
-		WithBrowser(BrowserConfig{SessionCookie: inbound.CookieConfig{Secure: true}}))
+		WithBrowser(BrowserConfig{SessionCookie: inbound.CookieConfig{Secure: true}}),
+		WithAuditDisabledAcknowledged())
 	if err != nil {
 		t.Fatalf("production with declared transports: err=%v, want nil", err)
 	}
@@ -356,6 +357,8 @@ func prodLimiterConfig() constructorConfig {
 		RuntimeMode:           environment.ModeProduction,
 		DeliveryMode:          delivery.ModeOff,
 		IdentifierKeyer:       prodKeyer{},
+		// The audit rail is not the dimension under test.
+		AuditDisabledAcknowledged: true,
 	}
 }
 
@@ -677,11 +680,12 @@ func TestNewServiceProductionPasswordlessRejectsHTTPBaseURL(t *testing.T) {
 		environment.ModeProduction,
 		delivery.ModeJobs,
 		WithPassword(PasswordConfig{Hasher: stubHasher{}}),
-		WithIdentity(IdentityConfig{ChallengeProtector: passwordlessProtector(t), IdentifierKeyer: prodKeyer{}}),
+		WithIdentity(IdentityConfig{ChallengeProtector: passwordlessProtector(t), IdentifierKeyer: prodKeyer{}, SingleFactorAcknowledged: true}),
 		WithAbuseProtection(AbuseProtectionConfig{RateLimiter: durableLimiter{}}),
 		WithDelivery(DeliveryConfig{Mailer: prodMailer{}, DeliveryEncrypter: stubEncrypter{}, DeliveryDispatcher: stubDispatcher{}, DeliveryJobsAcknowledged: true}),
 		WithPasswordless(PasswordlessConfig{Passwordless: []string{"email"}}),
-		WithLinks(LinksConfig{PublicAuthBaseURL: "http://auth.example.com"}))
+		WithLinks(LinksConfig{PublicAuthBaseURL: "http://auth.example.com"}),
+		WithAuditDisabledAcknowledged())
 	if !errors.Is(err, ErrPublicAuthBaseURLInsecure) {
 		t.Errorf("http base url in production: err=%v, want ErrPublicAuthBaseURLInsecure", err)
 	}
@@ -697,12 +701,13 @@ func TestNewServiceProductionPasswordlessAcceptsFullWiring(t *testing.T) {
 		environment.ModeProduction,
 		delivery.ModeJobs,
 		WithPassword(PasswordConfig{Hasher: stubHasher{}, PasswordFlowsDisabled: true}),
-		WithIdentity(IdentityConfig{ChallengeProtector: passwordlessProtector(t), IdentifierKeyer: prodKeyer{}}),
+		WithIdentity(IdentityConfig{ChallengeProtector: passwordlessProtector(t), IdentifierKeyer: prodKeyer{}, SingleFactorAcknowledged: true}),
 		WithAbuseProtection(AbuseProtectionConfig{RateLimiter: durableLimiter{}}),
 		WithDelivery(DeliveryConfig{Mailer: prodMailer{}, BodySenders: map[string]delivery.BodySender{"phone": prodNotifier{}}, DeliveryEncrypter: stubEncrypter{}, DeliveryDispatcher: stubDispatcher{}, DeliveryJobsAcknowledged: true}),
 		WithPasswordless(PasswordlessConfig{Passwordless: []string{"email", "phone"}}),
 		WithLinks(LinksConfig{PublicAuthBaseURL: "https://auth.example.com"}),
-		WithBrowser(BrowserConfig{SessionCookie: inbound.CookieConfig{Secure: true}}))
+		WithBrowser(BrowserConfig{SessionCookie: inbound.CookieConfig{Secure: true}}),
+		WithAuditDisabledAcknowledged())
 	if err != nil {
 		t.Fatalf("full production passwordless wiring: err=%v, want nil", err)
 	}

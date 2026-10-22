@@ -193,7 +193,7 @@ func TestPasswordResetLinkIgnoresRequestHeaders(t *testing.T) {
 // posture at construction: production refuses to start without it, development
 // starts (with a warning) and keeps the legacy raw-token mail.
 func TestPasswordResetProductionRequiresTheURL(t *testing.T) {
-	base, err := buildAuthConfig(quietLog(), nil)
+	base, err := buildAuthConfig(quietLog(), environment.ModeDevelopment, nil)
 	if err != nil {
 		t.Fatalf("buildAuthConfig: %v", err)
 	}
@@ -210,6 +210,8 @@ func TestPasswordResetProductionRequiresTheURL(t *testing.T) {
 		cfg.BodySenders = nil
 		cfg.Passwordless = nil
 		cfg.RateLimiter = durableStubLimiter{}
+		cfg.Providers = nil                 // the fake provider is development-only
+		cfg.SingleFactorAcknowledged = true // passwords stay on in this host
 
 		_, err := auth.New(authmem.New().Repositories(), cfg.TokenSigner, cfg.RuntimeMode, cfg.DeliveryMode, cfg.options()...)
 		if !errors.Is(err, auth.ErrPasswordResetURLRequired) {
@@ -226,6 +228,8 @@ func TestPasswordResetProductionRequiresTheURL(t *testing.T) {
 		cfg.BodySenders = nil
 		cfg.Passwordless = nil
 		cfg.RateLimiter = durableStubLimiter{}
+		cfg.Providers = nil                 // the fake provider is development-only
+		cfg.SingleFactorAcknowledged = true // passwords stay on in this host
 
 		_, err := auth.New(authmem.New().Repositories(), cfg.TokenSigner, cfg.RuntimeMode, cfg.DeliveryMode, cfg.options()...)
 		if !errors.Is(err, auth.ErrPasswordResetURLInsecure) {

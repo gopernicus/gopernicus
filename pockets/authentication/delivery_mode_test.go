@@ -58,6 +58,8 @@ func deliveryProdConfig() constructorConfig {
 		RuntimeMode:           environment.ModeProduction,
 		RateLimiter:           durableLimiter{},
 		IdentifierKeyer:       prodKeyer{},
+		// The audit rail is not the dimension under test.
+		AuditDisabledAcknowledged: true,
 	}
 }
 

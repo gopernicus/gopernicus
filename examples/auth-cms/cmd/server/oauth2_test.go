@@ -23,6 +23,7 @@ import (
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/oauth2"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/session"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/delivery"
+	"github.com/gopernicus/gopernicus/sdk/pkg/environment"
 	"github.com/gopernicus/gopernicus/sdk/pkg/list"
 	"github.com/gopernicus/gopernicus/sdk/pkg/web"
 )
@@ -55,7 +56,7 @@ func newOAuthHTTPProof(t *testing.T, enabled bool) *oauthHTTPProof {
 	router := web.NewWebHandler()
 	srv := httptest.NewTLSServer(router)
 	t.Cleanup(srv.Close)
-	cfg, err := buildAuthConfig(quietLog(), nil)
+	cfg, err := buildAuthConfig(quietLog(), environment.ModeDevelopment, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -361,7 +362,7 @@ func TestOAuth2DisabledSurface(t *testing.T) {
 }
 
 func TestOAuth2IncompleteWiringFailsBeforeServing(t *testing.T) {
-	cfg, err := buildAuthConfig(quietLog(), nil)
+	cfg, err := buildAuthConfig(quietLog(), environment.ModeDevelopment, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

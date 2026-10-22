@@ -11,6 +11,12 @@ import (
 	"github.com/gopernicus/gopernicus/sdk"
 )
 
+// trustedContext is a test's context for a direct, trusted mutation: the host's
+// authority records audit, so every change needs an audit source.
+func trustedContext() context.Context {
+	return audit.WithSource(context.Background(), audit.Source{System: "test"})
+}
+
 // These helpers exercise the host's inbound admission followed by its data call.
 // Production bundled role handlers perform the same sequence in inbound/http.
 func admittedContext(ctx context.Context, c authorization.Components, p sdk.Principal, scope tuples.Scope) (context.Context, error) {

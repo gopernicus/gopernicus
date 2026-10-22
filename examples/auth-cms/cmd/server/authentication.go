@@ -13,10 +13,11 @@ import (
 // authenticationConfig is this demo host's staged wiring and environment input.
 // The pocket accepts required inputs and named feature options; embedding its
 // policy records lets the host parse the same AUTH_* environment keys together.
+// RuntimeMode carries no env tag: main resolves it once with LoadEnvForMode.
 type authenticationConfig struct {
 	TokenSigner  cryptids.JWTSigner
-	RuntimeMode  environment.Mode `env:"AUTH_RUNTIME_MODE"`
-	DeliveryMode delivery.Mode    `env:"AUTH_DELIVERY_MODE"`
+	RuntimeMode  environment.Mode
+	DeliveryMode delivery.Mode `env:"AUTH_DELIVERY_MODE"`
 	IDs          sdk.IDGenerator
 	Logger       *slog.Logger
 	auth.PasswordConfig

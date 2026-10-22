@@ -13,6 +13,7 @@ import (
 	"github.com/gopernicus/gopernicus/pockets/jobs"
 	jobsmem "github.com/gopernicus/gopernicus/pockets/jobs/stores/memory"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/notify/email"
+	"github.com/gopernicus/gopernicus/sdk/pkg/environment"
 )
 
 // TestJobsModeDeliveryEndToEnd drives a real register → generic-jobs FencedRuntime →
@@ -24,7 +25,7 @@ import (
 // and that construction/registration start no delivery work — only the host-run runtime
 // does.
 func TestJobsModeDeliveryEndToEnd(t *testing.T) {
-	cfg, err := buildAuthConfig(quietLog(), nil)
+	cfg, err := buildAuthConfig(quietLog(), environment.ModeDevelopment, nil)
 	if err != nil {
 		t.Fatalf("buildAuthConfig: %v", err)
 	}

@@ -16,6 +16,7 @@ import (
 	delivery "github.com/gopernicus/gopernicus/pockets/authentication/logic/delivery"
 	sdkevents "github.com/gopernicus/gopernicus/sdk/capabilities/events"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/notify/email"
+	"github.com/gopernicus/gopernicus/sdk/pkg/environment"
 	"github.com/gopernicus/gopernicus/sdk/pkg/web"
 )
 
@@ -73,7 +74,7 @@ func (e *senderError) Error() string { return e.s }
 // passwordless enablement is satisfied by in_process itself.
 func bootInProcess(t *testing.T, sender email.Sender, tune func(*authenticationConfig)) *auth.Components {
 	t.Helper()
-	cfg, err := buildAuthConfig(quietLog(), nil)
+	cfg, err := buildAuthConfig(quietLog(), environment.ModeDevelopment, nil)
 	if err != nil {
 		t.Fatalf("buildAuthConfig: %v", err)
 	}

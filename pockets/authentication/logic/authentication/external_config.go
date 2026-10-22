@@ -1,6 +1,7 @@
 package authentication
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/url"
@@ -26,6 +27,13 @@ const (
 	defaultRevocationCacheEntries = 10_000
 	revocationCacheNamespace      = "authext"
 )
+
+// ErrDevelopmentOnlyProvider is returned in production for an external identity
+// provider, or at the pocket root an OAuth provider, that declares itself
+// development-only through its capability hook (sdkauth.CapabilityReporter,
+// oauth.CapabilityReporter). The error also wraps the capability's own
+// sentinel. A provider that declares nothing is accepted.
+var ErrDevelopmentOnlyProvider = errors.New("authentication: production refuses a development-only identity provider")
 
 // ExternalProvider is one wired identity provider.
 type ExternalProvider struct {
@@ -138,7 +146,9 @@ func cloneExternalConfig(value ExternalConfig) ExternalConfig {
 
 // validateExternal checks a wired configuration and returns it with defaults
 // applied. delegatedIssuer is the hybrid host's delegated-token issuer, if any.
-func validateExternal(cfg ExternalConfig, repos ExternalRepositories, mode environment.Mode, keyer identifierKeyer, delegatedIssuer string) (ExternalConfig, error) {
+// Production refuses a provider declaring itself development-only
+// (sdkauth.CheckProvider); development logs one WARN per such provider on log.
+func validateExternal(cfg ExternalConfig, repos ExternalRepositories, mode environment.Mode, keyer identifierKeyer, delegatedIssuer string, log *slog.Logger) (ExternalConfig, error) {
 	cfg = cloneExternalConfig(cfg)
 	if len(cfg.Providers) == 0 {
 		return cfg, fmt.Errorf("authentication: external identity requires at least one provider: %w", sdk.ErrInvalidInput)
@@ -167,6 +177,16 @@ func validateExternal(cfg ExternalConfig, repos ExternalRepositories, mode envir
 		}
 		if nilDependency(p.Provider) {
 			return cfg, fmt.Errorf("authentication: external provider %q has no Provider: %w", p.Name, sdk.ErrInvalidInput)
+		}
+		posture, err := sdkauth.CheckProvider(mode, p.Provider)
+		if errors.Is(err, sdkauth.ErrDevelopmentOnlyProvider) {
+			return cfg, fmt.Errorf("%w: external provider %q: %w", ErrDevelopmentOnlyProvider, p.Name, err)
+		}
+		if err != nil {
+			return cfg, err
+		}
+		if posture.Capabilities.DevelopmentOnly {
+			log.Warn("authentication: development-only external identity provider wired; production refuses it", "provider", p.Name)
 		}
 		if p.Revocation != nil && nilDependency(p.Revocation) {
 			return cfg, fmt.Errorf("authentication: external provider %q Revocation contains a typed nil: %w", p.Name, sdk.ErrInvalidInput)

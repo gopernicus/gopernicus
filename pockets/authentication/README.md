@@ -1350,6 +1350,16 @@ access-token helpers admits an external token, even when providers are wired.
   which `CurrentPrincipal` alone cannot.
 - `authlogic.Service.CurrentSessionID(ctx)` — the live session id stashed by a `Live()`
   gate; absent for a stateless gate or a machine credential.
+- `authenticationhttp.Adapter.RequireBrowserSafeMutation()` — the browser-safe mutation
+  gate for HOST routes, under the adapter's `AllowedOrigins`, `OriginPolicy` and
+  session cookie. `GET`/`HEAD`/`OPTIONS` pass; on any other method a bearer-only
+  request passes, and a request carrying the session cookie needs an allowlisted
+  `Origin`/`Sec-Fetch-Site` (else 403 `origin_rejected`) and the `X-CSRF-Token`
+  double-submit of the token `GET /auth/csrf` issues (else 403
+  `permission_denied`). Compose it between authentication and authorization —
+  `authenticate ∘ RequireBrowserSafeMutation() ∘ authorize`, the stack the
+  authorization pocket's role routes expect. An adapter built by `NewAuthenticator`
+  has no browser policy, so its gate refuses every unsafe method with 403.
 - `AdministrationConfig.MachineRoutesGate` — the one middleware the pocket CONSUMES instead of
   providing: the host's authorization, applied last in the bundled
   machine-identity lifecycle stack (`BundledRouteAuth.MachineLifecycle` —
@@ -2025,6 +2035,11 @@ store upgrade is needed.
 | field | nil/zero means |
 |---|---|
 | `RuntimeMode` | **REQUIRED, no default.** `"production"` rejects development-only delivery transports and every incomplete security wiring (below); `"development"` warns instead. Uses `environment.Mode` (`sdk/pkg/environment`) — see [Security posture](#security-posture); app-wide code should name `environment.Mode` and needs no auth import. |
+| `Repositories.SecurityEvents` + `WithAuditDisabledAcknowledged()` | **Production requires the audit rail** (`ErrAuditRequired`); development WARNs. `WithAuditDisabledAcknowledged()` waives it and logs one `posture_waiver=AuditDisabledAcknowledged` WARN; passed beside a wired `SecurityEvents` it is `ErrAuditAcknowledgedWithSecurityEvents` in every mode. |
+| `IdentityConfig.SingleFactorAcknowledged` | **Production refuses single-factor native login** — password flows on (`PasswordFlowsDisabled` false) or any `Passwordless` kind listed — without it (`ErrSingleFactorUnacknowledged`); development WARNs. Set it to accept one-factor login (one `posture_waiver=SingleFactorAcknowledged` WARN), or turn native login off. Inert when native login is off. |
+| `DeliveryConfig.OpportunisticTLSAcknowledged` | **Production refuses a Mailer or BodySender declaring opportunistic STARTTLS** (`ErrInsecureDeliveryTransport` wrapping `notify.ErrOpportunisticTLS`), at the root and in the delivery router's `ValidateTransports` (`delivery.WithOpportunisticTLSAcknowledged()`); development WARNs. Prefer a mandatory-TLS sender (`email.SMTPConfig.RequireTLS`). Inert when no transport declares STARTTLS. |
+| development-only providers (`OAuthConfig.Providers`, `WithExternal`) | A provider declaring `oauth.Capabilities{DevelopmentOnly: true}` or the authentication capability's `Capabilities{DevelopmentOnly: true}` is **refused in production** (`ErrDevelopmentOnlyProvider`, re-exported from `authlogic`) and WARNed in development. Providers that declare nothing are accepted. No acknowledgement exists. |
+| keys (`NewKeys`) | `NewKeys(mode, KeysInput, log, need...)` decodes the five hex keys (table below). **Production** reports every unset or malformed needed key in one `errors.Join` of `ErrKeyRequired`, each naming its variable and never its value; development mints an ephemeral key with a WARN. `AUTH_TOKEN_ENCRYPTER_KEY` stays optional in every mode. The pocket never reads the process environment. |
 | `Hasher` (PasswordHasher) | Required when password flows are enabled. Host owns algorithm and password strength policy. |
 | `Mailer` (email.Sender) | Required when delivery is enabled; may be nil with `DeliveryModeOff`. |
 | `MailFrom` | From address on verification/reset/change mail. |
@@ -2033,7 +2048,7 @@ store upgrade is needed.
 | `ChallengeProtector` | REQUIRED once `Challenges` is wired (`ErrChallengeProtectorRequired`). The bundled `HMACChallengeProtector` peppers OTP codes with an in-process HMAC **key ring** (active key ID stamped on each challenge; an overlapping rotation still verifies an unexpired code) and SHA-256-digests 256-bit tokens. The pepper is **local code, not a service** (below). |
 | `IdentifierNormalizer` | nil → the bundled strict default (email trim+lowercase, phone strict E.164). One policy canonicalizes registration, login, recovery, and invitations identically. |
 | `IdentifierKeyer` | derives PII-free rate-limit/idempotency keys under a key **distinct** from the pepper, JWT, and encryption keys. **Production-required** (`ErrIdentifierKeyerRequired`); development falls back to a per-instance SHA-256. |
-| `CredentialPolicy` | nil → the bundled safe default (`credential.NewDefaultPolicy`: one direct login method + one verified recovery method, PSTN restricted). A host may supply stronger rules. `ErrCredentialPolicyRequired` is declared for a strict-production posture but no code path returns it today: a nil policy always selects the bundled default. |
+| `CredentialPolicy` | nil → the bundled safe default (`credential.NewDefaultPolicy`: one direct login method + one verified recovery method, PSTN restricted). A host may supply stronger rules. |
 | `DeliveryEncrypter` (cryptids.Encrypter) | REQUIRED once delivery can send — a wired `DeliveryDispatcher` (`jobs` mode) or `DeliveryMode: "in_process"` (`ErrDeliveryEncrypterRequired`) — the command envelope briefly carries the rendered secret + destination, so it is always sealed. Bundled `cryptids.NewAESGCM` with a distinct 32-byte key. |
 | `DeliveryMode` | **REQUIRED**, no default (`AUTH_DELIVERY_MODE`): `"jobs"` (durable delivery on the generic jobs runtime), `"in_process"` (bounded, EPHEMERAL in-process pool), or `"off"` (no delivery runtime). Empty → `ErrDeliveryModeRequired`, unknown → `ErrDeliveryModeInvalid`, never inferred from a non-nil collaborator. `"jobs"` requires `DeliveryConfig.DeliveryDispatcher` (`ErrDeliveryQueueRequired`); `"off"` rejects a wired dispatcher (`ErrDeliveryOffButDeliverable`); `"in_process"` needs no dispatcher (it owns its bounded pool). `Register` starts no runtime in any mode. |
 | `DeliveryJobsAcknowledged` | a wiring assertion that the host runs the durable generic jobs delivery runtime. Meaningful for `DeliveryMode: "jobs"`; the queue is the ONLY send path, so production REQUIRES it (`ErrDeliveryJobsUnacknowledged`) rather than silently swallowing every message; development tolerates the zero value. |
@@ -2081,21 +2096,73 @@ compromise the others: `AUTH_JWT_SECRET` (session/JWT signing),
 `AUTH_CHALLENGE_PEPPER` (OTP HMAC key ring, rotatable), `AUTH_IDENTIFIER_KEY`
 (PII-free rate-limit/idempotency digests), `AUTH_DELIVERY_ENCRYPTER_KEY`
 (delivery-outbox envelope AES-GCM), and `AUTH_TOKEN_ENCRYPTER_KEY` (provider
-tokens). Key material is never printed. The pocket never synthesizes a key — every signer,
-encrypter and keyer is a required collaborator (`configuration_errors.go`). The
-**ephemeral per-boot** fallback with a WARN lives in the reference host
-(`examples/auth-cms/cmd/server/demo.go`), where today it applies in EVERY
-`RuntimeMode`, production included (a fail-closed loader is planned, SOC 2 slice S1).
+tokens). Key material is never printed. `New` never synthesizes a key — every signer,
+encrypter and keyer is a required collaborator (`configuration_errors.go`); the
+host builds them from `NewKeys` (below), whose **ephemeral per-boot** fallback with
+a WARN exists only in development.
 Multi-instance production MUST set and SHARE every key. There is deliberately **no separate CSRF or
 magic-link/reset secret**: CSRF is a per-render random double-submit token (no
 managed key), and magic-link / reset tokens are digested by the challenge pepper
 above. **Rotation consequence per key:** only the challenge pepper supports
 continuity (the `HMACKeyRing` retains older keys, so a rotation keeps pending
 codes/links valid until the old key is dropped). The other four are single-key and
-disruptive — rotating the JWT signer forces re-authentication, the delivery key
+disruptive — rotating the JWT signer invalidates every outstanding access JWT
+(401 until the client refreshes), the delivery key
 must be drained-first (in-flight sealed payloads dead-letter), the provider-token
 key loses stored OAuth tokens (users re-link), and the identifier key resets
-rate-limit/idempotency buckets once (transient).
+rate-limit/idempotency buckets once (transient). **JWT-secret rotation does not end
+sessions:** refresh never consults the signer, so a client holding a refresh token
+mints a new access token under the new key. To end sessions, revoke them
+(deactivate the user, log out, or delete the session rows).
+
+| variable | `KeyName` | decoded length | role | unset in development | unset in production |
+|---|---|---|---|---|---|
+| `AUTH_JWT_SECRET` | `KeyJWT` | ≥ 32 bytes | access-JWT signing (the signer gets `string(keys.JWTSecret)`) | ephemeral + WARN | `ErrKeyRequired` |
+| `AUTH_CHALLENGE_PEPPER` | `KeyChallengePepper` | ≥ 32 bytes | OTP/link challenge HMAC key ring | ephemeral + WARN | `ErrKeyRequired` |
+| `AUTH_IDENTIFIER_KEY` | `KeyIdentifier` | ≥ 32 bytes | PII-free rate-limit/idempotency digests | ephemeral + WARN | `ErrKeyRequired` |
+| `AUTH_DELIVERY_ENCRYPTER_KEY` | `KeyDeliveryEncrypter` | exactly 32 bytes | delivery command envelope (AES-256-GCM) | ephemeral + WARN | `ErrKeyRequired` |
+| `AUTH_TOKEN_ENCRYPTER_KEY` | `KeyTokenEncrypter` | exactly 32 bytes | stored OAuth provider tokens (AES-256-GCM) | nil + one INFO | nil + one INFO |
+
+Every variable is **hex** — one encoding, generated with `openssl rand -hex 32`.
+The "unset" columns apply to the keys named in `need`; an unneeded unset key stays
+nil. A malformed value (not hex, or the wrong length) is `ErrKeyRequired` in every
+mode, wrapping `environment.ErrSecretEncoding` or `ErrSecretUnderMinimum`; the error
+names the variable and never the value. `Keys` and `KeysInput` print redacted through
+`fmt` and `slog`. The pocket never reads the process environment: the host fills
+`KeysInput` with `environment.ParseEnvTags` (its tags name the variables) or from
+any other source.
+
+```go
+var in authentication.KeysInput
+if err := environment.ParseEnvTags("", &in); err != nil {
+	return err
+}
+keys, err := authentication.NewKeys(mode, in, log,
+	authentication.KeyJWT, authentication.KeyChallengePepper, authentication.KeyIdentifier,
+	authentication.KeyDeliveryEncrypter, authentication.KeyTokenEncrypter)
+if err != nil {
+	return err // production: every unset or malformed key, joined
+}
+// Error checks after each constructor are elided.
+signer, err := golangjwt.New(string(keys.JWTSecret))
+protector, err := protection.NewHMACChallengeProtector(protection.HMACKeyRing{
+	Active: "primary", Keys: map[string][]byte{"primary": keys.ChallengePepper}})
+keyer, err := protection.NewHMACIdentifierKeyer(keys.IdentifierKey)
+deliveryEncrypter, err := cryptids.NewAESGCM(keys.DeliveryEncrypterKey)
+var tokenEncrypter cryptids.Encrypter // nil: provider tokens are not stored
+if keys.TokenEncrypterKey != nil {
+	tokenEncrypter, err = cryptids.NewAESGCM(keys.TokenEncrypterKey)
+}
+```
+
+**Moving to hex without losing continuity.** A host that set raw (non-hex) values
+before `NewKeys` sets each variable to the hex of its OLD bytes —
+`printf %s "$OLD" | xxd -p | tr -d '\n'` — so the decoded key material is unchanged.
+That covers a JWT secret whose hex *text* was the key material, and 32-character
+raw encrypter keys. Minting new values instead invalidates outstanding access
+tokens, strands every in-flight delivery job sealed under the old key, makes every
+stored provider token undecryptable, and makes a mixed fleet reject each other's
+output for the whole rollout.
 
 ## Challenges and recovery (design §3.2, §5.9)
 
@@ -3198,8 +3265,25 @@ credential rail is unwired.
   (`ErrIdentifierKeyerRequired`), an HTTP magic-link base
   (`ErrPublicAuthBaseURLInsecure`), a `jobs`-mode config with no wired delivery
   dispatcher (`ErrDeliveryQueueRequired`), an unacknowledged `jobs` delivery runtime
-  (`ErrDeliveryJobsUnacknowledged`), and an unacknowledged `in_process` crash-loss
-  posture (`ErrDeliveryEphemeralUnacknowledged`). Development WARNs on each instead.
+  (`ErrDeliveryJobsUnacknowledged`), an unacknowledged `in_process` crash-loss
+  posture (`ErrDeliveryEphemeralUnacknowledged`), and a development-only OAuth or
+  external identity provider (`ErrDevelopmentOnlyProvider`). Development WARNs on
+  each instead.
+
+  Three further conditions are **waivable**: a nil `Repositories.SecurityEvents`
+  (`ErrAuditRequired`, waived by `WithAuditDisabledAcknowledged()`), single-factor
+  native login (`ErrSingleFactorUnacknowledged`, waived by
+  `IdentityConfig.SingleFactorAcknowledged`), and a transport declaring
+  opportunistic STARTTLS (`ErrInsecureDeliveryTransport` wrapping
+  `notify.ErrOpportunisticTLS`, waived by
+  `DeliveryConfig.OpportunisticTLSAcknowledged`). Production reports every
+  unacknowledged one in **one joined error**, each naming its acknowledgement, so a
+  repinning host sees its whole list in one boot; each honored acknowledgement logs
+  one `posture_waiver=<Flag>` WARN. An acknowledgement is a literal in the
+  composition root — none carries an `env` tag. Bundled HTTP routes in production
+  also log one WARN when `web.TrustProxies` is not wired, or when a request carries
+  `X-Forwarded-For` but resolved to its peer address (`TrustProxies(0)` behind a
+  proxy).
 
   **Deployment posture is app-wide vocabulary.** `runtimeMode` uses
   `environment.Mode` from `sdk/pkg/environment`, with `ModeDevelopment` and
@@ -3264,8 +3348,9 @@ credential rail is unwired.
   registration or removal code (only the lockout is recorded), identifier-change
   denials, OAuth provider login failures and pending-link issuance, and OAuth2
   consent denials and grant failures (recording them is SOC 2 slice S2). When
-  `SecurityEvents` is nil there is no audit trail and no construction error in
-  any mode. Audit content carries
+  `SecurityEvents` is nil there is no audit trail: production refuses that
+  (`ErrAuditRequired`) unless the host passes `WithAuditDisabledAcknowledged()`,
+  and development WARNs. Audit content carries
   identifiers, key PREFIXES, kind, and purpose ONLY — raw codes, tokens, JWTs,
   passwords, provider tokens, and unmasked destinations never land in it. An
   audit-write failure is logged at WARN and NEVER fails the auth flow.
