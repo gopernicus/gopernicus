@@ -150,7 +150,7 @@ rand cmd/server/documents.go:43: crypto/rand.Read
 guard: clean (24 rules, 15 packages)
 ```
 
-A host without the `tool` pin runs the posture check in CI with `go run github.com/gopernicus/gopernicus/workshop/gopernicus@v0.5.0 guard --posture .`. A release older than v0.5.0 exits 2 on `--posture` (unknown flag); treat 2 as a broken invocation, never a pass.
+A host without the `tool` pin runs the posture check in CI with `go run github.com/gopernicus/gopernicus/workshop/gopernicus@v0.5.0 guard --posture .`. A release older than v0.5.0 refuses `--posture` (unknown flag): the binary exits 2, and a `go run` invocation prints `exit status 2` and returns 1; treat any non-zero status as a broken invocation, never a pass.
 
 Exit codes: `0` clean, `1` findings, `2` for a missing or malformed `go.mod`, an unparsable Go file, or bad flags.
 
