@@ -4,7 +4,7 @@ go 1.26.10
 
 require (
 	github.com/gopernicus/gopernicus/sdk v0.9.0
-	github.com/jackc/pgx/v5 v5.9.2
+	github.com/jackc/pgx/v5 v5.11.0
 )
 
 require (

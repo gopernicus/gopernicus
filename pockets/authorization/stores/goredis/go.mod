@@ -5,7 +5,7 @@ go 1.26.10
 require (
 	github.com/gopernicus/gopernicus/pockets/authorization v0.27.0
 	github.com/gopernicus/gopernicus/sdk v0.15.0
-	github.com/redis/go-redis/v9 v9.18.0
+	github.com/redis/go-redis/v9 v9.23.0
 )
 
 require (
@@ -16,28 +16,27 @@ require (
 	github.com/gopernicus/gopernicus/pockets v0.1.0 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
-	github.com/jackc/pgx/v5 v5.9.2 // indirect
+	github.com/jackc/pgx/v5 v5.11.0 // indirect
 	github.com/jackc/puddle/v2 v2.2.2 // indirect
-	github.com/mattn/go-isatty v0.0.20 // indirect
+	github.com/mattn/go-isatty v0.0.24 // indirect
 	github.com/ncruces/go-strftime v1.0.0 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/tursodatabase/libsql-client-go v0.0.0-20260528064733-9d5d30a29a60 // indirect
 	golang.org/x/exp v0.0.0-20240325151524-a685a6edb6d8 // indirect
-	golang.org/x/sync v0.21.0 // indirect
-	golang.org/x/sys v0.42.0 // indirect
+	golang.org/x/sync v0.23.0 // indirect
+	golang.org/x/sys v0.48.0 // indirect
 	golang.org/x/text v0.38.0 // indirect
-	modernc.org/libc v1.72.3 // indirect
+	modernc.org/libc v1.77.1 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
-	modernc.org/memory v1.11.0 // indirect
+	modernc.org/memory v1.12.1 // indirect
 )
 
 require (
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
-	github.com/dgryski/go-rendezvous v0.0.0-20200823014737-9f7001d12a5f // indirect
 	github.com/gopernicus/gopernicus/integrations/datastores/pgxdb v0.9.0
 	github.com/gopernicus/gopernicus/integrations/datastores/turso v0.6.0
 	github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx v0.18.0
 	github.com/gopernicus/gopernicus/pockets/authorization/stores/turso v0.17.0
-	go.uber.org/atomic v1.11.0 // indirect
-	modernc.org/sqlite v1.52.0
+	go.uber.org/atomic v1.12.0 // indirect
+	modernc.org/sqlite v1.60.1
 )

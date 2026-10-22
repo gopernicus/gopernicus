@@ -1,5 +1,5 @@
-github.com/coreos/go-oidc/v3 v3.17.0 h1:hWBGaQfbi0iVviX4ibC7bk8OKT5qNr4klBaCHVNvehc=
-github.com/coreos/go-oidc/v3 v3.17.0/go.mod h1:wqPbKFrVnE90vty060SB40FCJ8fTHTxSwyXJqZH+sI8=
+github.com/coreos/go-oidc/v3 v3.21.0 h1:wZo4Q9Pum8dYEj0eMUPrqR+kvuGkeUplbLpNCkBqoWM=
+github.com/coreos/go-oidc/v3 v3.21.0/go.mod h1:DYCf24+ncYi+XkIH97GY1+dqoRlbaSI26KVTCI9SrY4=
 github.com/go-jose/go-jose/v4 v4.1.4 h1:moDMcTHmvE6Groj34emNPLs/qtYXRVcd6S7NHbHz3kA=
 github.com/go-jose/go-jose/v4 v4.1.4/go.mod h1:x4oUasVrzR7071A4TnHLGSPpNOm2a21K9Kf04k1rs08=
 github.com/gopernicus/gopernicus/integrations/authentication/auth0 v0.1.0 h1:YKsMpHtNNT2DjlMd0991VG6+gUM9SGxjHfTfyT9tTqo=
@@ -12,5 +12,5 @@ github.com/gopernicus/gopernicus/pockets/authentication v0.19.1 h1:D0cePd0v9qeDn
 github.com/gopernicus/gopernicus/pockets/authentication v0.19.1/go.mod h1:CVAs7HEKSyHigr9o0FA6Y7B+Lb0XwANiqQ6rDPUYOHw=
 github.com/gopernicus/gopernicus/sdk v0.14.0 h1:HwLnbnYRyX6mjl/S5+eqJGWFavuWyx7XNIsksTMqATI=
 github.com/gopernicus/gopernicus/sdk v0.14.0/go.mod h1:z0bypQiCybwPoxoDfzhYvB1BtH2av549QR84GacngaE=
-golang.org/x/oauth2 v0.36.0 h1:peZ/1z27fi9hUOFCAZaHyrpWG5lwe0RJEEEeH0ThlIs=
-golang.org/x/oauth2 v0.36.0/go.mod h1:YDBUJMTkDnJS+A4BP4eZBjCqtokkg1hODuPjwiGPO7Q=
+golang.org/x/oauth2 v0.37.0 h1:JUlcxA8oAtauLfiH8FX2/FkAWHAdi0QtGCGc+hofE98=
+golang.org/x/oauth2 v0.37.0/go.mod h1:IxwZNxUULJmpBFf9K/9NTMSIfZZuvuTy1gGxhigP/58=

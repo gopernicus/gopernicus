@@ -6,7 +6,7 @@ require (
 	github.com/gopernicus/gopernicus/integrations/datastores/pgxdb v0.7.0
 	github.com/gopernicus/gopernicus/pockets/cms v0.3.0
 	github.com/gopernicus/gopernicus/sdk v0.9.0
-	github.com/jackc/pgx/v5 v5.9.2
+	github.com/jackc/pgx/v5 v5.11.0
 )
 
 require (
