@@ -63,10 +63,16 @@ if err := cms.Register(mount, repos, cms.Config{
     Views:  views,
     Cache:  cacher.NewMemory(),
     Mailer: email.NewConsole(log),
+    // No identity pocket in this demo. A real host passes a gate instead:
+    // AdminMiddleware: []web.Middleware{authenticationComponents.HTTP.RequireAccessToken(),
+    //     authorizationComponents.HTTP.Require(authorizationhttp.Can("admin", authorizationhttp.Fixed("platform", "global")))},
+    AdminUngatedAcknowledged: true, // development only
 }); err != nil {
     return err
 }
 ```
+
+Without `AdminMiddleware` or the acknowledgement, the CMS admin routes are not mounted. A gate must authorize, not only authenticate — compose `Require(Can(...))`; see [CMS admin authorization](../pockets/cms.md#admin-authorization).
 
 The real example also serves the bundle assets, registers custom content and templates, seeds the repositories, and supplies contact-form addresses. Treat the source as the executable version of this abbreviated list. Remove the view bundle and its asset route when the host should expose an API only.
 

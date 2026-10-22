@@ -104,9 +104,15 @@ Pass middleware or another narrow host-owned collaborator.
 
 ```go
 cms.Config{
-    AdminMiddleware: []web.Middleware{authenticationComponents.HTTP.RequireAccessToken()},
+    AdminMiddleware: []web.Middleware{
+        authenticationComponents.HTTP.RequireAccessToken(),
+        authorizationComponents.HTTP.Require(authorizationhttp.Can("admin", authorizationhttp.Fixed("platform", "global"))),
+    },
+    // or, with no gate: AdminUngatedAcknowledged: true, // development only
 }
 ```
+
+A gate must authorize, not only authenticate — compose `Require(Can(...))`. With neither field the CMS admin routes are not mounted (deny-by-absence).
 
 CMS does not import authentication. Authentication does not import CMS. The host performs the composition.
 

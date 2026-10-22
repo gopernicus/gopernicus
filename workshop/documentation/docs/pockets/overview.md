@@ -62,11 +62,15 @@ The host also decides whether to include a sibling `views/goth` implementation. 
 
 ```go
 cms.Config{
-    AdminMiddleware: []web.Middleware{authenticationComponents.HTTP.RequireAccessToken()},
+    AdminMiddleware: []web.Middleware{
+        authenticationComponents.HTTP.RequireAccessToken(),
+        authorizationComponents.HTTP.Require(authorizationhttp.Can("admin", authorizationhttp.Fixed("platform", "global"))),
+    },
+    // or, with no gate: AdminUngatedAcknowledged: true, // development only
 }
 ```
 
-The assignment works because both sides speak the standard `web.Middleware` shape. Neither pocket imports the other.
+The assignment works because both sides speak the standard `web.Middleware` shape. Neither pocket imports the other. A gate must authorize, not only authenticate — compose `Require(Can(...))`; with neither field the CMS admin routes are not mounted (deny-by-absence).
 
 Authentication's jobs delivery is more involved but follows the same law: authentication depends on SDK work ports; jobs implements them; a host also adapts authentication's execution callbacks onto the jobs fenced runtime.
 

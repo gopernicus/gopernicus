@@ -144,12 +144,12 @@ func (h *MenuHandlers) DeleteItem(w http.ResponseWriter, r *http.Request) {
 func (h *MenuHandlers) PublicNav(w http.ResponseWriter, r *http.Request) {
 	m, err := h.svc.GetMenuBySlug(r.Context(), r.PathValue("slug"))
 	if err != nil {
-		h.renderError(w, r, err)
+		h.renderPublicError(w, r, err)
 		return
 	}
 	items, err := h.svc.Items(r.Context(), m.ID)
 	if err != nil {
-		h.renderError(w, r, err)
+		h.renderPublicError(w, r, err)
 		return
 	}
 	web.Render(r.Context(), w, http.StatusOK, h.views.MenuNav(m, items))
@@ -161,4 +161,14 @@ func (h *MenuHandlers) renderError(w http.ResponseWriter, r *http.Request, err e
 		web.RecordError(w, err)
 	}
 	web.Render(r.Context(), w, mapped.Status, h.views.AdminError(mapped.Status, mapped.Message))
+}
+
+// renderPublicError renders through the public error view: a public route must
+// not render the admin chrome, which would leak the admin navigation.
+func (h *MenuHandlers) renderPublicError(w http.ResponseWriter, r *http.Request, err error) {
+	mapped := web.ErrFromDomain(err)
+	if mapped.Status >= http.StatusInternalServerError {
+		web.RecordError(w, err)
+	}
+	web.Render(r.Context(), w, mapped.Status, h.views.Error(mapped.Status, mapped.Message))
 }

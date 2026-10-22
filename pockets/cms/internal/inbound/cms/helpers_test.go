@@ -37,19 +37,25 @@ func newTestRegistry() *content.Registry {
 	return r
 }
 
+// WithAdminUngated mounts the admin routes with no AdminMiddleware — the test
+// stand-in for cms.Config.AdminUngatedAcknowledged.
+func WithAdminUngated() RouterOption {
+	return func(c *routerConfig) { c.adminUngated = true }
+}
+
 // --- router helpers: build a full router with fakes for every service except
 // the one under test ---
 
 func menuRouter(svc menuService) http.Handler {
-	return BuildRouter(newTestRegistry(), &fakeEntrySvc{}, &fakeTaxo{}, svc, &fakeMediaSvc{}, &fakeContactSvc{}, nil, slog.New(slog.DiscardHandler), WithViews(stubViews{}))
+	return BuildRouter(newTestRegistry(), &fakeEntrySvc{}, &fakeTaxo{}, svc, &fakeMediaSvc{}, &fakeContactSvc{}, nil, slog.New(slog.DiscardHandler), WithViews(stubViews{}), WithAdminUngated())
 }
 
 func mediaRouter(svc mediaService) http.Handler {
-	return BuildRouter(newTestRegistry(), &fakeEntrySvc{}, &fakeTaxo{}, &fakeMenuSvc{}, svc, &fakeContactSvc{}, nil, slog.New(slog.DiscardHandler), WithViews(stubViews{}))
+	return BuildRouter(newTestRegistry(), &fakeEntrySvc{}, &fakeTaxo{}, &fakeMenuSvc{}, svc, &fakeContactSvc{}, nil, slog.New(slog.DiscardHandler), WithViews(stubViews{}), WithAdminUngated())
 }
 
 func contactRouter(svc messagingService) http.Handler {
-	return BuildRouter(newTestRegistry(), &fakeEntrySvc{}, &fakeTaxo{}, &fakeMenuSvc{}, &fakeMediaSvc{}, svc, nil, slog.New(slog.DiscardHandler), WithViews(stubViews{}))
+	return BuildRouter(newTestRegistry(), &fakeEntrySvc{}, &fakeTaxo{}, &fakeMenuSvc{}, &fakeMediaSvc{}, svc, nil, slog.New(slog.DiscardHandler), WithViews(stubViews{}), WithAdminUngated())
 }
 
 // --- fakeEntrySvc ---

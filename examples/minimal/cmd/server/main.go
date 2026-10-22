@@ -106,6 +106,10 @@ func run(ctx context.Context, log *slog.Logger) error {
 		Mailer:    email.NewConsole(log),
 		MailFrom:  "cms@localhost",
 		ContactTo: "ops@localhost",
+		// Demo posture: this host has no identity pocket, so the admin surface is
+		// mounted ungated by acknowledgement — development only, refused in
+		// production. A real host passes an authorizing AdminMiddleware instead.
+		AdminUngatedAcknowledged: true,
 	}); err != nil {
 		return err
 	}

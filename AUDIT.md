@@ -5570,3 +5570,78 @@ producers can retry and account for subject-linked fingerprints in erasure
 procedures. A pre-Apply host precondition can still strand a committed retry, and
 a refused first grant can apply when its refusal clears; both are named follow-ups.
 Plan and verification: [invitation-grant-operation-ledger](plans/invitation-grant-operation-ledger.md).
+
+## AUDIT-053: cms admin routes are deny-by-absence
+
+- **Implemented:** 2026-10-22 (SOC 2 slice S1, closes B1/FOP-1).
+- **Module:** `pockets/cms`; release pending `pockets/cms/v0.4.0` (a BREAKING
+  pre-1.0 minor). The sdk pin stays at v0.9.0; `views/goth` and both stores are
+  unchanged.
+- **Impact:** default behavior change and three new `Config` fields. No exported
+  removal, schema or stored-format change.
+
+Previously a nil `cms.Config.AdminMiddleware` mounted the whole admin surface
+ungated: the per-type CRUD routes (`/articles`, `/pages`, any host type),
+`/terms`, `/menus`, `/menu-items`, media management and `/inquiries`.
+
+Now an empty `AdminMiddleware` with no acknowledgement leaves every admin route
+unregistered and `Register` logs one WARN (`cms: admin routes NOT mounted`) when
+`Views` is set. `ServeMux` falls through to the public patterns: an admin GET
+reaches the public single route (the public 404 page, or 200 when a published
+page carries that slug), other admin paths answer 404, and a POST to a path a
+public GET pattern matches answers 405. The public site, contact form and media
+byte endpoint are unchanged. The flip is not a boot refusal: a host that misses
+it deploys green and loses its admin surface, and a mixed fleet flaps admin
+routes, so check before deploying. A published page whose slug equals an admin
+base (`articles`, `pages`, `terms`, `menus`, `media`, `inquiries`, or a host
+type's plural) becomes publicly reachable at that path.
+
+New fields, all programmatic (no `env` tag, pinned by test):
+
+- `AdminUngatedAcknowledged bool` mounts the admin routes ungated with a WARN
+  carrying `posture_waiver=AdminUngatedAcknowledged` — a development/demo
+  posture. Beside a non-empty `AdminMiddleware` it is
+  `cms.ErrAdminAcknowledgedWithMiddleware` in every mode.
+- `RuntimeMode environment.Mode`: zero is mode-blind. A non-zero mode is
+  validated (`environment.ErrModeRequired`/`ErrModeInvalid`). Production refuses
+  the acknowledgement (`cms.ErrAdminUngatedRefused`) and a `Mailer` that
+  `notify.CheckTransport` rejects, such as the console sender
+  (`cms.ErrInsecureMailTransport`, which also matches `notify.ErrInsecureTransport`).
+
+The public error paths of `GET /menu/{slug}` and `POST /contact` now render
+through `Views.Error` instead of `Views.AdminError`, so the admin navigation no
+longer appears on public pages. Custom `Views` need no change.
+
+### Migration
+
+1. Find every `cms.Config{` literal in the host, tests included:
+   `grep -rn 'cms\.Config{' --include='*.go' .`
+2. For each, choose a gate or the acknowledgement. A gate must authorize, not
+   only authenticate — compose `Require(Can(...))`:
+
+   ```go
+   cms.Config{
+       AdminMiddleware: []web.Middleware{
+           authenticationComponents.HTTP.RequireAccessToken(),
+           authorizationComponents.HTTP.Require(authorizationhttp.Can("admin", authorizationhttp.Fixed("platform", "global"))),
+       },
+       // or, with no gate: AdminUngatedAcknowledged: true, // development only
+   }
+   ```
+
+3. Optionally pass `RuntimeMode` from the composition root (the mode comes from
+   the process environment). A production host then needs a gate and a
+   production-capable `Mailer`.
+4. Downstream hosts can run `gopernicus guard --posture` (P8, workshop v0.5.0)
+   before deploying; this repository enforces the same rule over `examples/`
+   with G31 (`make guard-cms-admin-gate`).
+
+### Verification
+
+Boot the host without a gate or acknowledgement and confirm no admin handler is
+reached: `GET /articles/x/edit` → 404, `POST /media` → 405, `GET /articles` →
+the public 404 page (public chrome, no `cms-admin-nav`), and the boot log carries
+the WARN. With the gate, admin routes answer through it. The pocket tests pin the
+exact public route set registered without a gate, the 404/405 answers and absent
+admin chrome over HTTP, the three sentinels, the production console-`Mailer`
+refusal and the absent env tags.
