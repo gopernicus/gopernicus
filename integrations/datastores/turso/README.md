@@ -29,6 +29,33 @@ filename order, skipping directories and names beginning with `_`.
 `ExportMigrations` copies direct `.sql` files, including underscore-prefixed SQL
 for the host to manage, and skips documentation and nested directories.
 
+## Production posture — `RuntimeMode`
+
+`Config.RuntimeMode` is the host's `environment.Mode`. The composition root reads
+it from the process environment and sets it in code — it carries no env tag, and
+neither does `TLSDisabledAcknowledged`, so `environment.ParseEnvTags` over
+`Config` never fills them. The zero value is mode-blind: `Open` behaves exactly as
+before. A non-zero mode must be `development` or `production`
+(`environment.ErrModeRequired` / `ErrModeInvalid` otherwise).
+
+In production `Open` refuses, with `ErrTLSRequired` and before any I/O, a hosted
+URL that does not use TLS:
+
+| URL | production |
+|---|---|
+| `libsql://…`, `https://…`, `wss://…` | admitted |
+| `file:…` | admitted — a local database has no transport |
+| `http://…`, `ws://…`, any other or missing scheme | refused |
+| `libsql://…?tls=0` (the driver rewrites it to `http://`; the first `tls` value decides, as in the driver) | refused |
+
+The refusal names `cfg.Redacted()` — never the auth token — and the fix: use
+`libsql://`, `https://` or `wss://`, or set `TLSDisabledAcknowledged: true`, which
+admits the URL and logs one WARN carrying `posture_waiver=TLSDisabledAcknowledged`.
+The acknowledgement is inert over a TLS URL, so one binary runs in several
+environments. Development admits the URL and logs one WARN instead. Posture lines
+go to `Config.Logger` (`slog.Default()` when nil). The check runs in `Open` after
+the URL is normalized, not in `Redacted`, which stays side-effect free.
+
 ## Local file profile — `file:` URLs, the `localfile` driver package, env tags
 
 `Config` carries env tags that mirror the pgxdb connector's `DB_*` names
@@ -147,7 +174,8 @@ to any `Exec`/`Query`/`QueryRow`. `Config.Retry` is boot connectivity only.
 ## Testing
 
 Unit tests are hermetic and run with a plain `go test ./...` — the `List`
-behavior tests run against in-memory SQLite through the real driver.
+behavior tests run against in-memory SQLite through the real driver, and the
+`RuntimeMode` posture tests need no database.
 
 Live conformance runs are per-pocket (the `stores/turso` modules), gated on
 `-tags=integration` + `TURSO_DATABASE_URL`/`TURSO_AUTH_TOKEN`, and only ever
