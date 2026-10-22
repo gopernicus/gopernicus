@@ -1,6 +1,6 @@
 module github.com/gopernicus/gopernicus/pockets/events
 
-go 1.26.1
+go 1.26.10
 
 require (
 	github.com/gopernicus/gopernicus/pockets v0.1.0

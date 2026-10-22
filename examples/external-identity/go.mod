@@ -1,6 +1,6 @@
 module github.com/gopernicus/gopernicus/examples/external-identity
 
-go 1.26.1
+go 1.26.10
 
 require (
 	github.com/gopernicus/gopernicus/integrations/authentication/auth0 v0.1.0

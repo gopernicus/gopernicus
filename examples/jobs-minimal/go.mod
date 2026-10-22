@@ -1,6 +1,6 @@
 module github.com/gopernicus/gopernicus/examples/jobs-minimal
 
-go 1.26.1
+go 1.26.10
 
 require (
 	github.com/gopernicus/gopernicus/integrations/scheduling/robfig-cron v0.2.0

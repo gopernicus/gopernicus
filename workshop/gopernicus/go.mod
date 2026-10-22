@@ -1,3 +1,3 @@
 module github.com/gopernicus/gopernicus/workshop/gopernicus
 
-go 1.26.1
+go 1.26.10

@@ -1,6 +1,6 @@
 module github.com/gopernicus/gopernicus/integrations/cryptids/go-oidc
 
-go 1.26.1
+go 1.26.10
 
 require (
 	github.com/coreos/go-oidc/v3 v3.17.0
