@@ -152,7 +152,8 @@ policy, without named-model shape constraints.
 
 `Repositories.Tuples` is required and supplies roles, the resource fact facade
 and decisions. `Mutations` adds the atomic mutation capability. `Audit` is an
-optional history reader. `TupleSource` supplies authoritative snapshots and
+optional history reader, required in production (see
+[Production posture](#production-posture)). `TupleSource` supplies authoritative snapshots and
 committed changes to the optional TupleCache; the SQL adapters' `Repositories`
 constructors populate it when their `WithTupleCache()` option is set. Without `Repositories.Mutations`, `Components.Mutations`
 is nil and raw writers remain available. Direct `mutations.NewService(nil)`
@@ -160,7 +161,8 @@ returns `ErrMutationsNotConfigured`; it never constructs an unusable writer.
 `Decisions`, `Roles` and `Relationships` are available without a named model.
 
 Options replace whole values in order: `WithModel`, `WithLimits`,
-`WithLogger`, `WithRoleRoutes`, and `WithTupleCache`. Nil options and typed-nil
+`WithLogger`, `WithRoleRoutes`, `WithTupleCache`, `WithRuntimeMode` and
+`WithAuditDisabledAcknowledged`. Nil options and typed-nil
 dependencies fail construction. Limits default finite zero dimensions and reject
 negative values. No constructor starts a worker or owns a database connection.
 
@@ -200,6 +202,65 @@ BEGIN IMMEDIATE is suitable. Both preserve pending writes and leave commit or
 rollback to the host. No detached transaction or silent isolation upgrade occurs.
 Raw writes continue to join ordinary ambient transactions; atomic mutation commands
 reject ambient transactions because they own their serialized write boundary.
+
+## Production posture
+
+`WithRuntimeMode(mode)` takes the host's `environment.Mode`, read by the composition
+root from the process environment. The zero mode, the default, is mode-blind: no
+posture check and no warning. A non-zero mode must pass `environment.ValidateMode`,
+so `Production` or `prod` fails construction instead of running as development.
+
+With `environment.ModeProduction`, `New` returns `ErrAuditRequired` unless:
+
+- `Repositories.Tuples`, and `Repositories.Mutations` when wired, implement
+  `audit.RecordingReporter` and report `AuditRecording()` true. The bundled stores
+  report the `WithAudit()` setting they were built with (memory; pgx from v0.19.0;
+  turso from v0.18.0);
+- `Repositories.Audit` is wired. `Components.Audit` exposes it.
+
+The error names each failing port and the fix: "does not report
+`AuditRecording()`" means an older store or a host wrapper that hides the method;
+"reports `AuditRecording()` false" means the store was built without `WithAudit()`;
+"`Repositories.Audit` is nil" means the reader is unwired.
+
+`WithAuditDisabledAcknowledged()` waives the requirement for an authority that does
+not record: production constructs and logs one WARN with
+`posture_waiver=AuditDisabledAcknowledged`. It is a wiring assertion: pass it in
+the composition root, never from configuration. Beside a recording authority it is
+`ErrAuditAcknowledgedWithRecording` in every mode, the zero mode included.
+`environment.ModeDevelopment` constructs and logs one WARN naming each condition
+production would refuse.
+
+**Wrappers forward `AuditRecording()`.** A logging, metrics or delegating
+`tuples.Storer` or `mutations.MutationRepository` must forward `AuditRecording()`
+from the store it wraps, as decorators forward `LoweredPolicy`. One that hides it
+reads as non-recording, and production refuses it.
+
+`Register` logs `audit_recording`, `audit_reader` and `runtime_mode` beside the
+other fields, so the boot log shows the posture the pocket runs under.
+
+### Multi-authority hosts
+
+A host with several tuple authorities, for example one per tenant database plus
+a control plane, satisfies the production check in one of two shapes:
+
+- **(a) A registry of per-tenant `Components`.** Each is built with
+  `WithRuntimeMode(mode)` over its own recording store and its own
+  `Repositories.Audit`.
+- **(b) One `authorization.New` over a host-owned delegating `tuples.Storer`**,
+  plus a delegating `mutations.MutationRepository` and `audit.Reader` when wired.
+  It resolves the tenant from the context and fails closed, with an error and never
+  an empty read, when none is present. Its `AuditRecording()` reports the
+  registry's admission policy: `true` only if registration refuses, in production,
+  any tenant store whose own `AuditRecording()` is false, and `false` while the
+  registry is empty. `New` samples it once, so a conjunction over the stores
+  present at boot would be vacuous.
+
+A host that builds `decisions.NewService` directly bypasses `authorization.New`
+and this check. A per-tenant connection factory that runs after boot is provider
+behavior, not wiring (H10 in [the host contract](../../examples/README.md)): it
+lives in a host pocket's `outbound/` or the host's `integrations/**` (H7), takes
+the mode as a constructor parameter and passes it on.
 
 ## Lists and budgets
 

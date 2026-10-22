@@ -6,6 +6,7 @@ import (
 	"errors"
 	"reflect"
 	"slices"
+	"strconv"
 	"sync"
 	"testing"
 
@@ -20,7 +21,13 @@ import (
 // RunAudit exercises optional change recording on all three write surfaces.
 // factory returns a fresh bundle with an empty integrity policy and recording
 // enabled exactly when requested. Audit must always be supplied for reads.
+// Tuples and Mutations must report the request through audit.RecordingReporter.
 func RunAudit(t *testing.T, factory func(*testing.T, bool) Repositories) {
+	t.Run("RecordingCapability", func(t *testing.T) {
+		for _, enabled := range []bool{false, true} {
+			t.Run(strconv.FormatBool(enabled), func(t *testing.T) { requireRecording(t, factory(t, enabled), enabled) })
+		}
+	})
 	t.Run("Disabled", func(t *testing.T) {
 		r := factory(t, false)
 		requireAudit(t, r)
@@ -137,6 +144,19 @@ func requireAudit(t *testing.T, r Repositories) {
 	t.Helper()
 	if r.Audit == nil || r.Relationships == nil || r.Tuples == nil || r.Mutations == nil {
 		t.Fatal("audit factory must wire reader and all writers")
+	}
+}
+func requireRecording(t *testing.T, r Repositories, enabled bool) {
+	t.Helper()
+	requireAudit(t, r)
+	for name, port := range map[string]any{"Tuples": r.Tuples, "Mutations": r.Mutations} {
+		reporter, ok := port.(audit.RecordingReporter)
+		if !ok {
+			t.Fatalf("%s does not implement audit.RecordingReporter", name)
+		}
+		if got := reporter.AuditRecording(); got != enabled {
+			t.Fatalf("%s AuditRecording() = %v; store constructed with recording %v", name, got, enabled)
+		}
 	}
 }
 func addedRelationship(r relationships.CreateRelationship) audit.Change {

@@ -6,6 +6,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/audit"
 	mutation "github.com/gopernicus/gopernicus/pockets/authorization/logic/mutations"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuples"
 )
@@ -90,7 +91,15 @@ type Mutations struct {
 var (
 	_ mutation.MutationRepository = (*Mutations)(nil)
 	_ mutation.OperationLedger    = (*Mutations)(nil)
+	_ audit.RecordingReporter     = (*Mutations)(nil)
+	_ audit.RecordingReporter     = (*Tuples)(nil)
 )
+
+// AuditRecording reports whether the bundle was constructed WithAudit.
+func (t *Tuples) AuditRecording() bool { return t.st.recordAudit }
+
+// AuditRecording reports whether the bundle was constructed WithAudit.
+func (m *Mutations) AuditRecording() bool { return m.st.recordAudit }
 
 func (m *Mutations) IntegrityPolicy() mutation.IntegrityPolicy {
 	return mutation.IntegrityPolicy{Rules: slices.Clone(m.integrity.Rules)}

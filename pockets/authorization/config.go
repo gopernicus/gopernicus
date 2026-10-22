@@ -13,6 +13,7 @@ import (
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuplecache"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuples"
 	"github.com/gopernicus/gopernicus/sdk"
+	"github.com/gopernicus/gopernicus/sdk/pkg/environment"
 	"github.com/gopernicus/gopernicus/sdk/pkg/list"
 	"github.com/gopernicus/gopernicus/sdk/pkg/web"
 )
@@ -20,6 +21,13 @@ import (
 var (
 	ErrNoKindConfigured           = errors.New("authorization: Repositories.Tuples is required")
 	ErrOperationsWithoutMutations = fmt.Errorf("authorization: Repositories.Operations requires Repositories.Mutations: %w", sdk.ErrInvalidInput)
+	// ErrAuditRequired is returned by New in production when Repositories.Tuples,
+	// or Repositories.Mutations when wired, does not report AuditRecording() true,
+	// or when Repositories.Audit is nil. The wrapped text names each failing port.
+	ErrAuditRequired = errors.New("authorization: production requires an audit-recording authority and Repositories.Audit")
+	// ErrAuditAcknowledgedWithRecording is returned by New in every mode when
+	// WithAuditDisabledAcknowledged is passed beside an authority that records.
+	ErrAuditAcknowledgedWithRecording = fmt.Errorf("authorization: WithAuditDisabledAcknowledged set but the authority records audit (remove the acknowledgement): %w", sdk.ErrInvalidInput)
 )
 
 // Repositories supplies one required tuple authority and optional capabilities.
@@ -39,17 +47,20 @@ type Repositories struct {
 	Operations mutations.OperationLedger
 
 	// Audit reads committed change history. The host controls access and retention.
+	// Production (WithRuntimeMode) requires it.
 	Audit audit.Reader
 }
 
 type config struct {
-	TupleBackend       tuplecache.Backend
-	TuplePolicy        tuplecache.Policy
-	Logger             *slog.Logger
-	ModelOption        decisions.Option
-	DiagnosticObserver decisions.DiagnosticObserver
-	Limits             authmodel.EvaluationLimits
-	RoleRoutesGate     web.Middleware
-	RoleWritePolicy    authorizationhttp.RoleWritePolicy
-	ListStrategy       list.Strategy
+	TupleBackend              tuplecache.Backend
+	TuplePolicy               tuplecache.Policy
+	Logger                    *slog.Logger
+	ModelOption               decisions.Option
+	DiagnosticObserver        decisions.DiagnosticObserver
+	Limits                    authmodel.EvaluationLimits
+	RoleRoutesGate            web.Middleware
+	RoleWritePolicy           authorizationhttp.RoleWritePolicy
+	ListStrategy              list.Strategy
+	RuntimeMode               environment.Mode
+	AuditDisabledAcknowledged bool
 }

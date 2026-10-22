@@ -4,9 +4,11 @@ import (
 	"fmt"
 	"log/slog"
 	"reflect"
+	"strings"
 
 	"github.com/gopernicus/gopernicus/pockets"
 	authorizationhttp "github.com/gopernicus/gopernicus/pockets/authorization/inbound/http"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/audit"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/authorizer"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/decisions"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/mutations"
@@ -14,6 +16,7 @@ import (
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/roles"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuplecache"
 	"github.com/gopernicus/gopernicus/sdk"
+	"github.com/gopernicus/gopernicus/sdk/pkg/environment"
 )
 
 // Components contains independently usable decision, read and data-write services.
@@ -32,7 +35,19 @@ type Components struct {
 	HTTP               *authorizationhttp.Adapter
 	RelationshipWriter *relationships.RelationshipWriter
 	RoleWriter         *roles.Writer
-	log                *slog.Logger
+	// Audit is Repositories.Audit, the committed change history reader; nil
+	// when unwired. The host controls access and retention.
+	Audit   audit.Reader
+	log     *slog.Logger
+	posture auditPosture
+}
+
+// auditPosture is New's verdict on audit wiring, reported at registration.
+type auditPosture struct {
+	mode      environment.Mode
+	recording bool
+	reasons   string
+	waived    bool
 }
 
 // New validates host wiring and assembles the public services.
@@ -61,18 +76,22 @@ func New(repos Repositories, opts ...Option) (Components, error) {
 	if cfg.RoleRoutesGate != nil && repos.Mutations == nil {
 		return Components{}, authorizationhttp.ErrRoleRoutesWithoutMutations
 	}
+	posture, err := checkAuditPosture(repos, cfg)
+	if err != nil {
+		return Components{}, err
+	}
 	if err := authorizationhttp.ValidateListStrategy(cfg.ListStrategy); err != nil {
 		return Components{}, err
 	}
-	comps := Components{log: cfg.Logger}
+	comps := Components{Audit: repos.Audit, log: cfg.Logger, posture: posture}
 	if comps.log == nil {
 		comps.log = slog.Default()
 	}
+	posture.warn(comps.log)
 	decisionOptions := []decisions.Option{decisions.WithLogger(comps.log), decisions.WithLimits(cfg.Limits), decisions.WithDiagnosticObserver(cfg.DiagnosticObserver), decisions.WithTupleCache(cfg.TupleBackend, repos.TupleSource, cfg.TuplePolicy)}
 	if cfg.ModelOption != nil {
 		decisionOptions = append(decisionOptions, cfg.ModelOption)
 	}
-	var err error
 	comps.Decisions, err = decisions.NewService(repos.Tuples, decisionOptions...)
 	if err != nil {
 		return Components{}, err
@@ -137,9 +156,69 @@ func (c Components) Register(m pockets.Mount) error {
 	if c.HTTP == nil {
 		return fmt.Errorf("authorization: components are not initialized: %w", sdk.ErrInvalidInput)
 	}
-	c.log.Info("registered authorization pocket", "relationships", c.Relationships != nil, "roles", c.Roles != nil, "model", c.Decisions.CompiledModel() != nil, "baseline_relationship_writes", c.RelationshipWriter != nil, "role_routes", c.HTTP.RoutesEnabled())
+	c.log.Info("registered authorization pocket", "relationships", c.Relationships != nil, "roles", c.Roles != nil, "model", c.Decisions.CompiledModel() != nil, "baseline_relationship_writes", c.RelationshipWriter != nil, "role_routes", c.HTTP.RoutesEnabled(), "audit_recording", c.posture.recording, "audit_reader", c.Audit != nil, "runtime_mode", c.posture.mode.String())
 	return c.HTTP.Register(m.Router)
 }
+
+// checkAuditPosture validates a non-zero mode and the audit wiring production
+// requires. The zero mode only rejects a contradictory acknowledgement.
+func checkAuditPosture(repos Repositories, cfg config) (auditPosture, error) {
+	posture := auditPosture{mode: cfg.RuntimeMode, recording: true}
+	if posture.mode != "" {
+		if err := environment.ValidateMode(posture.mode); err != nil {
+			return auditPosture{}, fmt.Errorf("authorization: WithRuntimeMode: %w", err)
+		}
+	}
+	var reasons []string
+	for _, port := range []struct {
+		name  string
+		value any
+	}{{"Repositories.Tuples", repos.Tuples}, {"Repositories.Mutations", repos.Mutations}} {
+		if port.value == nil {
+			continue
+		}
+		reporter, ok := port.value.(audit.RecordingReporter)
+		switch {
+		case !ok:
+			posture.recording = false
+			reasons = append(reasons, port.name+" does not report AuditRecording() (stores pgx < v0.19.0 / turso < v0.18.0, or a host wrapper hides it — forward the method)")
+		case !reporter.AuditRecording():
+			posture.recording = false
+			reasons = append(reasons, port.name+" reports AuditRecording() false (construct the store WithAudit())")
+		}
+	}
+	if cfg.AuditDisabledAcknowledged && posture.recording {
+		return auditPosture{}, ErrAuditAcknowledgedWithRecording
+	}
+	if repos.Audit == nil {
+		reasons = append(reasons, "Repositories.Audit is nil (wire the store's audit reader)")
+	}
+	if posture.mode == "" || len(reasons) == 0 {
+		return posture, nil
+	}
+	posture.reasons = strings.Join(reasons, "; ")
+	switch {
+	case cfg.AuditDisabledAcknowledged:
+		posture.waived = true
+	case posture.mode.IsProduction() && posture.recording:
+		return auditPosture{}, fmt.Errorf("%w: %s", ErrAuditRequired, posture.reasons)
+	case posture.mode.IsProduction():
+		return auditPosture{}, fmt.Errorf("%w: %s; to run without recording pass WithAuditDisabledAcknowledged()", ErrAuditRequired, posture.reasons)
+	}
+	return posture, nil
+}
+
+// warn logs one line for a waived requirement or, in development, an unmet one.
+func (p auditPosture) warn(log *slog.Logger) {
+	switch {
+	case p.reasons == "":
+	case p.waived:
+		log.Warn("authorization audit requirement waived", "posture_waiver", "AuditDisabledAcknowledged", "runtime_mode", p.mode.String(), "reason", p.reasons)
+	default:
+		log.Warn("authorization audit wiring would be refused in production", "runtime_mode", p.mode.String(), "reason", p.reasons)
+	}
+}
+
 func isTypedNil(value any) bool {
 	if value == nil {
 		return false

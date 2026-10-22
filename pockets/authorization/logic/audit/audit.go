@@ -139,6 +139,15 @@ type Reader interface {
 	List(ctx context.Context, filter Filter, req list.Request) (list.Page[Record], error)
 }
 
+// RecordingReporter reports whether a tuple authority or mutation repository
+// records every committed change it writes. Bundled stores report the WithAudit
+// setting they were constructed with. Wrappers and delegating stores must
+// forward it from the store they wrap, as decorators forward LoweredPolicy: a
+// port that hides it reads as non-recording, which production refuses.
+type RecordingReporter interface {
+	AuditRecording() bool
+}
+
 // NewRecords validates and owns actual deltas, removes duplicate changes and
 // cancels opposing changes to the same fact, then sorts by fact identity. One
 // generated EventID groups all remaining changes. No net change yields no records.
