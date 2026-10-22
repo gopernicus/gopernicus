@@ -687,6 +687,7 @@ adopts them by bumping its pin — `go get -tool github.com/gopernicus/gopernicu
 | `examples/auth-cms` | conforming to the H floor since the host-contract-reconciliation package moves (issue #90); still the **authentication conformance harness**, not a layout reference — its `cmd/` carries provider behavior the H10 reviewer clause covers |
 | `examples/goth-showcase` | conforming to the H floor since its showcase package moved to the host's `ui/showcase`; the `ui/goth` kit showcase, not a layout reference |
 | `examples/external-identity` | conforming worked example — the external-only identity host: the authentication pocket's external engine over an in-memory host-pocket outbound, a host `integrations/` dev issuer, no driver, signer, sessions or mail |
+| `examples/production-baseline` | conforming worked example — the auditable reference host: the production posture of §3b with zero acknowledgements; external OIDC identity, role administration and both audit rails on the pgx stores, a thin host (`cmd/`, a host `integrations/` dev issuer, `workshop/migrations`) |
 
 `examples/minimal` also demonstrates application-data caching at
 `GET /catalog.json`: a host service caches a public product projection from CMS
@@ -698,7 +699,7 @@ host invalidates the logical `published:` prefix after a write; the runnable
 HTTP proof covers that invalidation and never includes draft products. The JSON
 route sets HTTP no-store independently of the service's data cache.
 
-All six run under this repo's own `make guard`: G30 (H0–H14) and G32
+All seven run under this repo's own `make guard`: G30 (H0–H14) and G32
 (P0–P8 under `--posture`).
 A green guard over `auth-cms` is the floor, not the clause: its composition
 root's provider behavior is named debt (below), not H10 compliance.
@@ -716,7 +717,8 @@ this contract places in a host pocket or an outbound adapter; the ad-hoc
 packages it once grew directly under `internal/` now live in its host
 pockets' `inbound`/`outbound` (host-contract-reconciliation). The provider
 behavior in `cmd/` is a known, dated debt, not a pattern to copy: the shape to copy is §2, and the worked
-examples are `cms`, `minimal`, `jobs-minimal`, and `external-identity`.
+examples are `cms`, `minimal`, `jobs-minimal`, `external-identity`, and
+`production-baseline`.
 
 **Reference findings.** Where this document and the reference host disagree,
 the disagreement is recorded here until one side moves:

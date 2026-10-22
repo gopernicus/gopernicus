@@ -1,0 +1,180 @@
+// Command migrations is the host-owned, pre-boot migration runner for
+// examples/production-baseline. The framework never migrates at startup; this
+// runner applies the host-owned ledger (workshop/migrations/primary) before
+// the server boots: the authentication and authorization pgx stores' exported
+// migrations and the pgxdb rate limiter's reference DDL, as one ordered stream
+// under one schema_migrations ledger.
+//
+// Usage (APP_RUNTIME_MODE comes from the process environment; `make migrate`
+// exports development):
+//
+//	go run ./workshop/migrations           apply pending migrations
+//	go run ./workshop/migrations -status   report applied vs pending (file-only
+//	                                       when the database is unreachable)
+package main
+
+import (
+	"context"
+	"embed"
+	"flag"
+	"fmt"
+	"io/fs"
+	"log/slog"
+	"os"
+	"strings"
+	"time"
+
+	"github.com/gopernicus/gopernicus/sdk/pkg/environment"
+	"github.com/gopernicus/gopernicus/sdk/pkg/logging"
+
+	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
+)
+
+// migrationsFS embeds the host's own copy of the migrations. The runner applies
+// *.sql files in filename order and skips names prefixed with "_".
+//
+//go:embed primary
+var migrationsFS embed.FS
+
+const migrationsDir = "primary"
+
+func main() {
+	status := flag.Bool("status", false, "report applied vs pending migrations and exit")
+	flag.Parse()
+
+	// The runner holds the most privileged connection, so it resolves the mode
+	// like the server: from the process environment only, reading .env in
+	// development and never in production.
+	mode, err := environment.LoadEnvForMode("APP_RUNTIME_MODE")
+	if err != nil {
+		slog.Error("load environment", "error", err)
+		os.Exit(1)
+	}
+
+	logOpts := logging.Options{Format: "text", Output: "STDOUT"}
+	if err := environment.ParseEnvTags("", &logOpts); err != nil {
+		slog.Error("configure logging", "error", err)
+		os.Exit(1)
+	}
+	log := logging.New(logOpts)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	if err := run(ctx, log, mode, *status); err != nil {
+		log.Error("migrations", "error", err)
+		os.Exit(1)
+	}
+}
+
+func run(ctx context.Context, log *slog.Logger, mode environment.Mode, status bool) error {
+	db, err := open(ctx, mode)
+	if status {
+		return reportStatus(ctx, db, err)
+	}
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+
+	log.Info("running migrations", "dir", migrationsDir)
+	if err := pgxdb.RunMigrations(ctx, db, migrationsFS, migrationsDir); err != nil {
+		return err
+	}
+	log.Info("migrations complete")
+	return nil
+}
+
+// open connects under mode: production refuses a connection without verified
+// TLS, as the server does.
+func open(ctx context.Context, mode environment.Mode) (*pgxdb.DB, error) {
+	var cfg pgxdb.Config
+	if err := environment.ParseEnvTags("", &cfg); err != nil {
+		return nil, err
+	}
+	cfg.RuntimeMode = mode
+	return pgxdb.Open(ctx, cfg)
+}
+
+// reportStatus prints applied vs pending migrations. When the database is
+// unreachable (open failed, or the readiness check fails) it falls back to a
+// file-only listing: every embedded migration is reported pending. This is the
+// only status a runner can self-produce without a live database.
+func reportStatus(ctx context.Context, db *pgxdb.DB, openErr error) error {
+	files, err := migrationFiles()
+	if err != nil {
+		return err
+	}
+
+	if openErr != nil || pgxdb.StatusCheck(ctx, db) != nil {
+		if db != nil {
+			db.Close()
+		}
+		fmt.Println("database unreachable — reporting from migration files only")
+		printList("pending", files)
+		return nil
+	}
+	defer db.Close()
+
+	applied, err := appliedVersions(ctx, db)
+	if err != nil {
+		return err
+	}
+
+	var appliedList, pending []string
+	for _, f := range files {
+		if _, ok := applied[f]; ok {
+			appliedList = append(appliedList, f)
+		} else {
+			pending = append(pending, f)
+		}
+	}
+	printList("applied", appliedList)
+	printList("pending", pending)
+	return nil
+}
+
+// appliedVersions reads the connector's portable ledger. The (source, version,
+// checksum) shape is identical across the supported dialects, so this SELECT is
+// dialect-agnostic; version is the migration filename.
+func appliedVersions(ctx context.Context, db *pgxdb.DB) (map[string]string, error) {
+	rows, err := db.Query(ctx, "SELECT source, version, checksum FROM schema_migrations ORDER BY source, version")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	applied := make(map[string]string)
+	for rows.Next() {
+		var source, version, checksum string
+		if err := rows.Scan(&source, &version, &checksum); err != nil {
+			return nil, err
+		}
+		applied[version] = source
+	}
+	return applied, rows.Err()
+}
+
+// migrationFiles lists the embedded *.sql migrations in filename order, skipping
+// "_"-prefixed files (fs.ReadDir returns entries already sorted by name).
+func migrationFiles() ([]string, error) {
+	entries, err := fs.ReadDir(migrationsFS, migrationsDir)
+	if err != nil {
+		return nil, err
+	}
+	var files []string
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || strings.HasPrefix(name, "_") || !strings.HasSuffix(name, ".sql") {
+			continue
+		}
+		files = append(files, name)
+	}
+	return files, nil
+}
+
+func printList(label string, files []string) {
+	fmt.Printf("%s (%d):\n", label, len(files))
+	for _, f := range files {
+		fmt.Printf("  %s\n", f)
+	}
+}

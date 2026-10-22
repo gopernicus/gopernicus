@@ -1,0 +1,12 @@
+-- Invitation metadata (invitation-metadata plan). APPEND-ONLY: 0009_invitations.sql
+-- is already tagged and immutable, so the metadata channel arrives as an ALTER
+-- here. A host that copied 0001-0015 must copy and apply THIS file before deploying
+-- a binary built against the new store tag.
+--
+-- metadata is opaque, host-owned routing data an invitation carries from create to
+-- the Granter seam — the feature never interprets it. It is bounded routing data
+-- (a firm id, a plan tier), NOT a document store; the domain/service enforce the
+-- size limits. It is jsonb NOT NULL DEFAULT '{}' so every pre-existing row reads
+-- back as an empty map, matching the store's nil/empty → '{}' round-trip. The
+-- store never writes JSON null (which would bypass this default).
+ALTER TABLE invitations ADD COLUMN IF NOT EXISTS metadata jsonb NOT NULL DEFAULT '{}';
