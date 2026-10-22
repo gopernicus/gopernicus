@@ -1,5 +1,139 @@
 # Releasing gopernicus modules
 
+## Production posture floor (SOC 2 slice S1 — published 2026-10-22)
+
+Ten annotated tags in seven steps, each cut at its PR's squash-merge commit, pushed, THEN
+polled on the proxy, and cold-verified from a scratch consumer (`GOWORK=off`, an empty module
+cache, `proxy.golang.org`, `sum.golang.org`, `go mod verify`, `go build <module>/...`). Every
+one resolved on the first poll. Design and rulings:
+[plans/s1-production-posture.md](plans/s1-production-posture.md) (rev 2, ratified
+2026-10-22). Host handoff:
+[plans/soc2-s1-production-posture-handoff.md](plans/soc2-s1-production-posture-handoff.md).
+Manifest: `plans/s1-production-posture-release-manifest.json` (from `go mod download -json`
+of the published tags). The cms flip is recorded as
+[AUDIT-053](AUDIT.md#audit-053-cms-admin-routes-are-deny-by-absence).
+
+| Step | Tag | Commit | PR | Cold verification |
+|---|---|---|---|---|
+| 0 | `pockets/cms/v0.4.0` | `2f789281` | #129 | OK, poll 1; builds against sdk v0.9.0 (pin unchanged) |
+| 1 | `sdk/v0.16.0` | `bfaf233a` | #130 | OK, poll 1; the consumer auto-switched to go1.26.10 |
+| 2 | `integrations/datastores/pgxdb/v0.10.0` | `31d57904` | #131 | OK, poll 1 |
+| 2 | `integrations/datastores/turso/v0.7.0` | `31d57904` | #131 | OK, poll 1 |
+| 2 | `integrations/tracing/otel/v0.3.0` | `31d57904` | #131 | OK, poll 1 |
+| 3a | `pockets/authorization/v0.28.0` | `ddcb1468` | #128 | OK, poll 1 |
+| 3b | `pockets/authorization/stores/pgx/v0.19.0` | `10135055` | #133 (repin to core v0.28.0) | OK, poll 1 |
+| 3b | `pockets/authorization/stores/turso/v0.18.0` | `10135055` | #133 | OK, poll 1 |
+| 4 | `pockets/authentication/v0.20.0` | `b8036dd0` | #134 | OK, poll 1 |
+| 5 | `workshop/gopernicus/v0.5.0` | `2de17b50` | #135 | OK, poll 1 |
+
+**Verification record.**
+- CI `check` and `vuln` passed on every PR (push and pull_request events); CodeQL analyses
+  passed. One `check` run (#129, push event) failed on the known
+  `integrations/kvstores/goredis` `TestOpenHonorsDeadlineAfterConnection` timing flake and
+  passed on rerun; the module is untouched by S1.
+- Live store legs on merged `main`: `make test-stores` pgx legs before tags 2/3a — 18 legs
+  (every pgx store bare and schema-qualified, plus the pgxdb connector's own live suite) against
+  a scratch Postgres 17, 0 failures. The turso connector and the authorization turso store
+  `-tags=integration` suites PASSED against a local libSQL server
+  (`ghcr.io/tursodatabase/libsql-server`, zero mode, `http://127.0.0.1:8081`). The hosted Turso
+  playground leg could NOT run: every statement returned Turso `error code 404: group not found`
+  (the playground database's group no longer exists on the account), so the hosted secret must be
+  repointed before the next `live-stores.yml` dispatch. Before tag 4: the authentication pgx
+  store live suite (bare and schema-qualified), the authentication turso store `-tags=integration`
+  suite (local libSQL) and the core's own tests PASSED on `main` @ `b8036dd0`.
+- Tag 5 legs: a cold `go run github.com/gopernicus/gopernicus/workshop/gopernicus@v0.5.0 init
+  --db pgx --module example.com/x` (`GOWORK=off`, empty cache) tidied and built against
+  sdk v0.16.0, pgxdb v0.10.0 and pgx v5.9.2; its `.env.example` mentions `APP_RUNTIME_MODE` only
+  in a comment and carries `DB_SSLMODE=verify-full` with the commented local-docker line; `guard
+  --posture .` on it is clean. The old pin, `go run …/workshop/gopernicus@v0.4.1 guard --posture .`,
+  prints `flag provided but not defined: -posture`, the usage text, and `exit status 2` — the
+  binary exits 2; a `go run` invocation reports `exit status 2` and returns 1 — non-zero either
+  way, so CI must treat any non-zero as a broken invocation, never a pass.
+- `examples/production-baseline` (PR #136, untagged, open at this record) was driven live
+  against a throwaway Postgres: development boot with HSTS on `/healthz`; production refusals in
+  order (`ErrKeyRequired` naming both needed keys with `.env` ignored, `ErrPublicBaseURLRequired`,
+  `pgxdb.ErrTLSRequired` class `plaintext` with zero connection attempts); the audited
+  `cmd/bootstrap` first-admin grant (403 before, one `iam_audit` row with `system=bootstrap`,
+  200 after).
+
+**Owner rulings during execution.** Tags are annotated, not signed (PR #132; a dedicated
+release-signing key is a follow-up, FHC-9). Dependabot was removed pending research; CodeQL
+default setup stays on. O-1…O-6 of the plan were taken at their recommendations.
+`SingleFactorAcknowledged` lives on `IdentityConfig` (the pocket has no exported `Config`).
+`ErrCredentialPolicyRequired` was deleted — the only exported removal in the train. The runtime
+mode is never assigned in `.env` (strict `LoadEnvForMode`). The baseline gained an audited
+first-admin bootstrap.
+
+**Migration notes — what a repinning host meets.**
+- (a) **cms admin is deny-by-absence (BREAKING, pre-1.0 minor, AUDIT-053).** A nil or empty
+  `cms.Config.AdminMiddleware` no longer mounts the admin routes: `GET /articles` and friends
+  fall through to the public page handler (404, or 200 if a published page carries that slug),
+  admin `POST`s answer 405, and `Register` logs one WARN. Pass a gate that authorizes, or
+  `AdminUngatedAcknowledged: true` for a development demo (production refuses it with
+  `ErrAdminUngatedRefused`; beside a gate it is `ErrAdminAcknowledgedWithMiddleware` in every mode).
+- (b) **Production refusals and their acknowledgements**, all construction-time, every
+  acknowledgement a boolean literal in the composition root with no env tag, and every honored
+  one logged once as `posture_waiver=<Flag>`:
+  - `pockets/authentication` (positional `RuntimeMode`): nil `Repositories.SecurityEvents` →
+    `ErrAuditRequired` unless `WithAuditDisabledAcknowledged()` (beside a wired rail:
+    `ErrAuditAcknowledgedWithSecurityEvents`, every mode); native single-factor login — password
+    flows on or any `Passwordless` kind — → `ErrSingleFactorUnacknowledged` unless
+    `IdentityConfig.SingleFactorAcknowledged`; a delivery transport declaring opportunistic
+    STARTTLS → `ErrInsecureDeliveryTransport` (wrapping `notify.ErrOpportunisticTLS`) unless
+    `DeliveryConfig.OpportunisticTLSAcknowledged`, honored at BOTH check sites; a provider
+    declaring `DevelopmentOnly` → `ErrDevelopmentOnlyProvider`. Production joins every violation
+    into one error naming each acknowledgement.
+  - `pockets/authorization` (`WithRuntimeMode(mode)`, zero = mode-blind): `Repositories.Tuples`
+    (and `Mutations` when wired) must report `audit.RecordingReporter` true and
+    `Repositories.Audit` must be wired → `ErrAuditRequired` unless `WithAuditDisabledAcknowledged()`
+    (beside a recording authority: `ErrAuditAcknowledgedWithRecording`, every mode). `Components`
+    now exposes `Audit`. Wrappers forward `AuditRecording()`.
+  - `pockets/cms` (`Config.RuntimeMode`): the acknowledgement itself, and a Mailer failing
+    `notify.CheckTransport` → `ErrInsecureMailTransport`.
+  - `integrations/datastores/pgxdb` (`Config.RuntimeMode`): every connection target — primary and
+    fallbacks — must be *verified* (`verify-full`, `verify-ca`, `require`+`sslrootcert`,
+    `sslrootcert=system`) or *local* (a unix socket) → `ErrTLSRequired` otherwise;
+    `TLSUnverifiedAcknowledged` admits a bare `require`, `TLSDisabledAcknowledged` admits all;
+    `LogQueries`, or a `Tracer` that is or wraps `*LoggingQueryTracer`, → `ErrQueryLoggingRefused`,
+    no acknowledgement.
+  - `integrations/datastores/turso` (`Config.RuntimeMode`): a non-`file:` URL that is not
+    `libsql`/`https`/`wss`, or `libsql` with `tls=0`, → `ErrTLSRequired` unless
+    `TLSDisabledAcknowledged`.
+  - `integrations/tracing/otel` (`Config.RuntimeMode`): an empty `Exporter` →
+    `ErrExporterRequired` (the `default:"stdout"` env tag is gone; `Open` still fills stdout
+    outside production); OTLP `Insecure` to a non-loopback endpoint → `ErrInsecureExporter`.
+  - `sdk`: `notify.CheckTransport`'s default verdict is unchanged; the STARTTLS refusal is the
+    opt-in `notify.RequireMandatoryTLS()`. `web.SecurityHeaders()` (HSTS, nosniff, referrer,
+    `X-Frame-Options: DENY`, permissions policy; zero `FrameOptions` means DENY,
+    `DisableFrameOptions` drops it, `HSTSMaxAge < 0` emits `max-age=0`);
+    `ServerConfig.ValidateProduction()` (a bare https origin, never echoed); `RespondJSON*` set
+    `nosniff`; `environment.LoadEnvForMode`; `oauth.CheckProvider` / `sdkauth.CheckProvider`;
+    `email.SMTP.Probe` and `SMTPConfig.RequireTLS`.
+- (c) **Key continuity.** `authentication.NewKeys` decodes all five keys as hex. The reference
+  host used the hex TEXT of `AUTH_JWT_SECRET` as key material and the raw 32-character strings of
+  `AUTH_DELIVERY_ENCRYPTER_KEY` and `AUTH_TOKEN_ENCRYPTER_KEY`. To keep every outstanding access
+  token, in-flight sealed outbox job and stored provider token valid, set each new variable to
+  the hex of the OLD bytes — `printf %s "$OLD" | xxd -p | tr -d '\n'` — and never mint a new
+  value at the upgrade. `AUTH_TOKEN_ENCRYPTER_KEY` stays optional in every mode.
+- (d) **The mode comes from the process environment only.** `environment.LoadEnvForMode(key)`
+  refuses a `.env` that assigns the key (`ErrModeFromFile`), never opens `.env` in production
+  (one WARN if present), and loads it in development. A host that ships `.env` beside a
+  production binary moves EVERY variable to the process environment, not only the mode.
+- (e) **Consumer toolchain floor.** These are the first published tags carrying the S8
+  `go 1.26.10` directive and pgx v5.9.2: a consumer building with `GOTOOLCHAIN=local` on an older
+  toolchain fails; `GOTOOLCHAIN=auto` switches on its own.
+- (f) **Pair the authorization core with its stores.** Bump `pockets/authorization` v0.28.0
+  together with `stores/pgx` ≥ v0.19.0 / `stores/turso` ≥ v0.18.0 before passing
+  `WithRuntimeMode(production)`: a v0.28.0 core over an older store refuses with
+  `ErrAuditRequired` ("does not report AuditRecording()").
+- (g) `authentication.ErrCredentialPolicyRequired` is removed (it was never returned).
+- (h) `gopernicus guard --posture` needs workshop/gopernicus ≥ v0.5.0; an older pin fails the
+  invocation (see the tag-5 leg above) and CI must treat that as broken, never as a pass.
+
+**Known.** The hosted Turso playground is unavailable (above). The S1 scaffold's `guard` target
+still carries no `tool` pin (v0.4.0 Known). `examples/README.md` §3b says the old pin "exits 2";
+the one-clause clarification about `go run` returning 1 belongs in a follow-up after #136 lands.
+
 ## Scaffold pins (workshop/gopernicus v0.4.1 — published 2026-10-21)
 
 **PATCH.** The templates move to the current tags, so a freshly scaffolded host or

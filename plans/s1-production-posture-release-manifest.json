@@ -1,0 +1,179 @@
+{
+	"public_proxy": "https://proxy.golang.org",
+	"checksum_database": "sum.golang.org",
+	"workspace": "off",
+	"released": "2026-10-22",
+	"plan": "plans/s1-production-posture.md",
+	"modules": {
+		"pockets/cms": {
+			"Path": "github.com/gopernicus/gopernicus/pockets/cms",
+			"Version": "v0.4.0",
+			"Info": "/var/folders/qm/bjn1lmt54tlf9fc8vblm1hc80000gp/T/tmp.VRpPNiTvly/cache/cache/download/github.com/gopernicus/gopernicus/pockets/cms/@v/v0.4.0.info",
+			"GoMod": "/var/folders/qm/bjn1lmt54tlf9fc8vblm1hc80000gp/T/tmp.VRpPNiTvly/cache/cache/download/github.com/gopernicus/gopernicus/pockets/cms/@v/v0.4.0.mod",
+			"Zip": "/var/folders/qm/bjn1lmt54tlf9fc8vblm1hc80000gp/T/tmp.VRpPNiTvly/cache/cache/download/github.com/gopernicus/gopernicus/pockets/cms/@v/v0.4.0.zip",
+			"Dir": "/var/folders/qm/bjn1lmt54tlf9fc8vblm1hc80000gp/T/tmp.VRpPNiTvly/cache/github.com/gopernicus/gopernicus/pockets/cms@v0.4.0",
+			"Sum": "h1:17O+HXozOLi4i09bqB+thO6XXZtBioavMFUw4LyKZAw=",
+			"GoModSum": "h1:xppSZGsJl/inVYKzNPVN6tmTevZPB4Fc7qrCCdzRxEc=",
+			"Origin": {
+				"VCS": "git",
+				"URL": "https://github.com/gopernicus/gopernicus",
+				"Subdir": "pockets/cms",
+				"Hash": "2f789281cfbfd0779b3c3c2874539e23ab0e58cd",
+				"Ref": "refs/tags/pockets/cms/v0.4.0"
+			}
+		},
+		"sdk": {
+			"Path": "github.com/gopernicus/gopernicus/sdk",
+			"Version": "v0.16.0",
+			"Info": "/var/folders/qm/bjn1lmt54tlf9fc8vblm1hc80000gp/T/tmp.VRpPNiTvly/cache/cache/download/github.com/gopernicus/gopernicus/sdk/@v/v0.16.0.info",
+			"GoMod": "/var/folders/qm/bjn1lmt54tlf9fc8vblm1hc80000gp/T/tmp.VRpPNiTvly/cache/cache/download/github.com/gopernicus/gopernicus/sdk/@v/v0.16.0.mod",
+			"Zip": "/var/folders/qm/bjn1lmt54tlf9fc8vblm1hc80000gp/T/tmp.VRpPNiTvly/cache/cache/download/github.com/gopernicus/gopernicus/sdk/@v/v0.16.0.zip",
+			"Dir": "/var/folders/qm/bjn1lmt54tlf9fc8vblm1hc80000gp/T/tmp.VRpPNiTvly/cache/github.com/gopernicus/gopernicus/sdk@v0.16.0",
+			"Sum": "h1:MhRgNHVcE2dCubglj04AKpz2fWG6hV/YtvoDQVDG5pE=",
+			"GoModSum": "h1:zo9DGgXEfFANGvuo3VAIRWyRmlN4YRqavdncRsnCzu8=",
+			"Origin": {
+				"VCS": "git",
+				"URL": "https://github.com/gopernicus/gopernicus",
+				"Subdir": "sdk",
+				"Hash": "bfaf233a1fb883867c8666a240e27233c19980c8",
+				"Ref": "refs/tags/sdk/v0.16.0"
+			}
+		},
+		"integrations/datastores/pgxdb": {
+			"Path": "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb",
+			"Version": "v0.10.0",
+			"Info": "/var/folders/qm/bjn1lmt54tlf9fc8vblm1hc80000gp/T/tmp.VRpPNiTvly/cache/cache/download/github.com/gopernicus/gopernicus/integrations/datastores/pgxdb/@v/v0.10.0.info",
+			"GoMod": "/var/folders/qm/bjn1lmt54tlf9fc8vblm1hc80000gp/T/tmp.VRpPNiTvly/cache/cache/download/github.com/gopernicus/gopernicus/integrations/datastores/pgxdb/@v/v0.10.0.mod",
+			"Zip": "/var/folders/qm/bjn1lmt54tlf9fc8vblm1hc80000gp/T/tmp.VRpPNiTvly/cache/cache/download/github.com/gopernicus/gopernicus/integrations/datastores/pgxdb/@v/v0.10.0.zip",
+			"Dir": "/var/folders/qm/bjn1lmt54tlf9fc8vblm1hc80000gp/T/tmp.VRpPNiTvly/cache/github.com/gopernicus/gopernicus/integrations/datastores/pgxdb@v0.10.0",
+			"Sum": "h1:wWX+2R9YatVkz9zKF4nRXVRPJALXWgseCL+SG9Ez7UI=",
+			"GoModSum": "h1:jDufDCS4Z1Uxe37y/jMeEMY49WtzXc/wyGvjPa9iQG0=",
+			"Origin": {
+				"VCS": "git",
+				"URL": "https://github.com/gopernicus/gopernicus",
+				"Subdir": "integrations/datastores/pgxdb",
+				"Hash": "31d579040cef22dca924e6b282aa56dcee0b8f59",
+				"Ref": "refs/tags/integrations/datastores/pgxdb/v0.10.0"
+			}
+		},
+		"integrations/datastores/turso": {
+			"Path": "github.com/gopernicus/gopernicus/integrations/datastores/turso",
+			"Version": "v0.7.0",
+			"Info": "/var/folders/qm/bjn1lmt54tlf9fc8vblm1hc80000gp/T/tmp.VRpPNiTvly/cache/cache/download/github.com/gopernicus/gopernicus/integrations/datastores/turso/@v/v0.7.0.info",
+			"GoMod": "/var/folders/qm/bjn1lmt54tlf9fc8vblm1hc80000gp/T/tmp.VRpPNiTvly/cache/cache/download/github.com/gopernicus/gopernicus/integrations/datastores/turso/@v/v0.7.0.mod",
+			"Zip": "/var/folders/qm/bjn1lmt54tlf9fc8vblm1hc80000gp/T/tmp.VRpPNiTvly/cache/cache/download/github.com/gopernicus/gopernicus/integrations/datastores/turso/@v/v0.7.0.zip",
+			"Dir": "/var/folders/qm/bjn1lmt54tlf9fc8vblm1hc80000gp/T/tmp.VRpPNiTvly/cache/github.com/gopernicus/gopernicus/integrations/datastores/turso@v0.7.0",
+			"Sum": "h1:Utw/bLKb65j5u6gRFNH5/8CYl5k9+bZsTAigEXyeno0=",
+			"GoModSum": "h1:20Wt7fZvn6M1G42/3GTlbEaEA31nmIiPJJvSN3uuq1E=",
+			"Origin": {
+				"VCS": "git",
+				"URL": "https://github.com/gopernicus/gopernicus",
+				"Subdir": "integrations/datastores/turso",
+				"Hash": "31d579040cef22dca924e6b282aa56dcee0b8f59",
+				"Ref": "refs/tags/integrations/datastores/turso/v0.7.0"
+			}
+		},
+		"integrations/tracing/otel": {
+			"Path": "github.com/gopernicus/gopernicus/integrations/tracing/otel",
+			"Version": "v0.3.0",
+			"Info": "/var/folders/qm/bjn1lmt54tlf9fc8vblm1hc80000gp/T/tmp.VRpPNiTvly/cache/cache/download/github.com/gopernicus/gopernicus/integrations/tracing/otel/@v/v0.3.0.info",
+			"GoMod": "/var/folders/qm/bjn1lmt54tlf9fc8vblm1hc80000gp/T/tmp.VRpPNiTvly/cache/cache/download/github.com/gopernicus/gopernicus/integrations/tracing/otel/@v/v0.3.0.mod",
+			"Zip": "/var/folders/qm/bjn1lmt54tlf9fc8vblm1hc80000gp/T/tmp.VRpPNiTvly/cache/cache/download/github.com/gopernicus/gopernicus/integrations/tracing/otel/@v/v0.3.0.zip",
+			"Dir": "/var/folders/qm/bjn1lmt54tlf9fc8vblm1hc80000gp/T/tmp.VRpPNiTvly/cache/github.com/gopernicus/gopernicus/integrations/tracing/otel@v0.3.0",
+			"Sum": "h1:CU3ZH5FIXHtuHUrXEcLaZobGGOrSK08bSDlsjsSFpbU=",
+			"GoModSum": "h1:cj0eH2nmL9H+1LAOng722hS+XjpWxo+BFdOVnu1GKso=",
+			"Origin": {
+				"VCS": "git",
+				"URL": "https://github.com/gopernicus/gopernicus",
+				"Subdir": "integrations/tracing/otel",
+				"Hash": "31d579040cef22dca924e6b282aa56dcee0b8f59",
+				"Ref": "refs/tags/integrations/tracing/otel/v0.3.0"
+			}
+		},
+		"pockets/authorization": {
+			"Path": "github.com/gopernicus/gopernicus/pockets/authorization",
+			"Version": "v0.28.0",
+			"Info": "/var/folders/qm/bjn1lmt54tlf9fc8vblm1hc80000gp/T/tmp.VRpPNiTvly/cache/cache/download/github.com/gopernicus/gopernicus/pockets/authorization/@v/v0.28.0.info",
+			"GoMod": "/var/folders/qm/bjn1lmt54tlf9fc8vblm1hc80000gp/T/tmp.VRpPNiTvly/cache/cache/download/github.com/gopernicus/gopernicus/pockets/authorization/@v/v0.28.0.mod",
+			"Zip": "/var/folders/qm/bjn1lmt54tlf9fc8vblm1hc80000gp/T/tmp.VRpPNiTvly/cache/cache/download/github.com/gopernicus/gopernicus/pockets/authorization/@v/v0.28.0.zip",
+			"Dir": "/var/folders/qm/bjn1lmt54tlf9fc8vblm1hc80000gp/T/tmp.VRpPNiTvly/cache/github.com/gopernicus/gopernicus/pockets/authorization@v0.28.0",
+			"Sum": "h1:PfZlet4qkdJC3GXr2Gw1nxZisjrg5KVCnd0DSzjCL6I=",
+			"GoModSum": "h1:pDN8HlJK0ZMncFZLnXergHZkEB5QjMxLwS/dkCo6XMs=",
+			"Origin": {
+				"VCS": "git",
+				"URL": "https://github.com/gopernicus/gopernicus",
+				"Subdir": "pockets/authorization",
+				"Hash": "ddcb146852ef8008af47e74dda0a7e791277eba9",
+				"Ref": "refs/tags/pockets/authorization/v0.28.0"
+			}
+		},
+		"pockets/authorization/stores/pgx": {
+			"Path": "github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx",
+			"Version": "v0.19.0",
+			"Info": "/var/folders/qm/bjn1lmt54tlf9fc8vblm1hc80000gp/T/tmp.VRpPNiTvly/cache/cache/download/github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx/@v/v0.19.0.info",
+			"GoMod": "/var/folders/qm/bjn1lmt54tlf9fc8vblm1hc80000gp/T/tmp.VRpPNiTvly/cache/cache/download/github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx/@v/v0.19.0.mod",
+			"Zip": "/var/folders/qm/bjn1lmt54tlf9fc8vblm1hc80000gp/T/tmp.VRpPNiTvly/cache/cache/download/github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx/@v/v0.19.0.zip",
+			"Dir": "/var/folders/qm/bjn1lmt54tlf9fc8vblm1hc80000gp/T/tmp.VRpPNiTvly/cache/github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx@v0.19.0",
+			"Sum": "h1:VypMGUOecPS29sHYsQwkggfnNRqSPbIbTXegtdrFM3I=",
+			"GoModSum": "h1:IboXuT6wHwCHIYbuUGvhsewFLgQO5bQRrttzCjuKTdw=",
+			"Origin": {
+				"VCS": "git",
+				"URL": "https://github.com/gopernicus/gopernicus",
+				"Subdir": "pockets/authorization/stores/pgx",
+				"Hash": "10135055056367c7ed8fb5122c07745c91e4e8d8",
+				"Ref": "refs/tags/pockets/authorization/stores/pgx/v0.19.0"
+			}
+		},
+		"pockets/authorization/stores/turso": {
+			"Path": "github.com/gopernicus/gopernicus/pockets/authorization/stores/turso",
+			"Version": "v0.18.0",
+			"Info": "/var/folders/qm/bjn1lmt54tlf9fc8vblm1hc80000gp/T/tmp.VRpPNiTvly/cache/cache/download/github.com/gopernicus/gopernicus/pockets/authorization/stores/turso/@v/v0.18.0.info",
+			"GoMod": "/var/folders/qm/bjn1lmt54tlf9fc8vblm1hc80000gp/T/tmp.VRpPNiTvly/cache/cache/download/github.com/gopernicus/gopernicus/pockets/authorization/stores/turso/@v/v0.18.0.mod",
+			"Zip": "/var/folders/qm/bjn1lmt54tlf9fc8vblm1hc80000gp/T/tmp.VRpPNiTvly/cache/cache/download/github.com/gopernicus/gopernicus/pockets/authorization/stores/turso/@v/v0.18.0.zip",
+			"Dir": "/var/folders/qm/bjn1lmt54tlf9fc8vblm1hc80000gp/T/tmp.VRpPNiTvly/cache/github.com/gopernicus/gopernicus/pockets/authorization/stores/turso@v0.18.0",
+			"Sum": "h1:wnqGpGsxGAJqiZuymwpXzy1SwV/QRX0WTaUDAdeALaQ=",
+			"GoModSum": "h1:VOvidBp46Ag+NF+uGg36/YsNzY7r1ylOcX1LV7cZYJY=",
+			"Origin": {
+				"VCS": "git",
+				"URL": "https://github.com/gopernicus/gopernicus",
+				"Subdir": "pockets/authorization/stores/turso",
+				"Hash": "10135055056367c7ed8fb5122c07745c91e4e8d8",
+				"Ref": "refs/tags/pockets/authorization/stores/turso/v0.18.0"
+			}
+		},
+		"pockets/authentication": {
+			"Path": "github.com/gopernicus/gopernicus/pockets/authentication",
+			"Version": "v0.20.0",
+			"Info": "/var/folders/qm/bjn1lmt54tlf9fc8vblm1hc80000gp/T/tmp.VRpPNiTvly/cache/cache/download/github.com/gopernicus/gopernicus/pockets/authentication/@v/v0.20.0.info",
+			"GoMod": "/var/folders/qm/bjn1lmt54tlf9fc8vblm1hc80000gp/T/tmp.VRpPNiTvly/cache/cache/download/github.com/gopernicus/gopernicus/pockets/authentication/@v/v0.20.0.mod",
+			"Zip": "/var/folders/qm/bjn1lmt54tlf9fc8vblm1hc80000gp/T/tmp.VRpPNiTvly/cache/cache/download/github.com/gopernicus/gopernicus/pockets/authentication/@v/v0.20.0.zip",
+			"Dir": "/var/folders/qm/bjn1lmt54tlf9fc8vblm1hc80000gp/T/tmp.VRpPNiTvly/cache/github.com/gopernicus/gopernicus/pockets/authentication@v0.20.0",
+			"Sum": "h1:z5BtUGkyS6hgkZ91OFUz/fLkRKlpTzxksCmbp0WHD/U=",
+			"GoModSum": "h1:hCw1IY77LcnpywuBtfenqI8VTuzTU1HRqKyEY7UN6fA=",
+			"Origin": {
+				"VCS": "git",
+				"URL": "https://github.com/gopernicus/gopernicus",
+				"Subdir": "pockets/authentication",
+				"Hash": "b8036dd07a76e0079c0aed87a2949e13a58c23cb",
+				"Ref": "refs/tags/pockets/authentication/v0.20.0"
+			}
+		},
+		"workshop/gopernicus": {
+			"Path": "github.com/gopernicus/gopernicus/workshop/gopernicus",
+			"Version": "v0.5.0",
+			"Info": "/var/folders/qm/bjn1lmt54tlf9fc8vblm1hc80000gp/T/tmp.VRpPNiTvly/cache/cache/download/github.com/gopernicus/gopernicus/workshop/gopernicus/@v/v0.5.0.info",
+			"GoMod": "/var/folders/qm/bjn1lmt54tlf9fc8vblm1hc80000gp/T/tmp.VRpPNiTvly/cache/cache/download/github.com/gopernicus/gopernicus/workshop/gopernicus/@v/v0.5.0.mod",
+			"Zip": "/var/folders/qm/bjn1lmt54tlf9fc8vblm1hc80000gp/T/tmp.VRpPNiTvly/cache/cache/download/github.com/gopernicus/gopernicus/workshop/gopernicus/@v/v0.5.0.zip",
+			"Dir": "/var/folders/qm/bjn1lmt54tlf9fc8vblm1hc80000gp/T/tmp.VRpPNiTvly/cache/github.com/gopernicus/gopernicus/workshop/gopernicus@v0.5.0",
+			"Sum": "h1:ECAg5V8F8WCz5YH8AHf/QGarJ8SAZVhmiCAKbwUh7bU=",
+			"GoModSum": "h1:2l97ctFDlsSkYzKxXtdem9wENdWZj8QM4enPeqc8Q1I=",
+			"Origin": {
+				"VCS": "git",
+				"URL": "https://github.com/gopernicus/gopernicus",
+				"Subdir": "workshop/gopernicus",
+				"Hash": "2de17b50a4d9cf662fb63824448e926e3c13b5a9",
+				"Ref": "refs/tags/workshop/gopernicus/v0.5.0"
+			}
+		}
+	}
+}
