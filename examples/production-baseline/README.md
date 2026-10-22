@@ -58,6 +58,7 @@ policy keeps one owner on every project.
 
 ```
 cmd/server/                              composition root (wiring only, H10)
+cmd/bootstrap/                           one-shot: grants the first global admin through the authorization pocket
 integrations/authentication/devissuer/   development OIDC issuer: JWKS and POST /dev/token (H11)
 workshop/migrations/                     the pre-boot runner and its host-owned ledger (primary/)
 ```
@@ -130,11 +131,34 @@ curl -i -XPOST localhost:8080/authorization/roles -H "Authorization: Bearer $TOK
 The first token provisions a local user and writes one
 `external_subject_provisioned` row to `security_events`.
 
-**The first admin.** This host ships no bootstrap: nobody holds the global
-`admin` role until a trusted out-of-band write grants it to a local user id
-(`external_subjects.user_id`). Once one admin exists, role writes through
-`POST /authorization/roles` are recorded in `iam_audit` with the admin as the
-actor.
+### The first admin
+
+Nobody holds the global `admin` role until `cmd/bootstrap` grants it. Sign in
+once at the provider (above, the first token), find the local user id the
+authentication pocket provisioned — the `user_id` of the
+`external_subject_provisioned` row in `security_events`, or of the person's
+`external_subjects` row — and grant it:
+
+```sh
+docker exec baseline-pg psql -U postgres -Atc "select user_id from external_subjects where provider = 'idp' and subject = 'u1'"
+make bootstrap SUBJECT_ID=<user_id>
+#   applied: global admin for user <user_id>
+#   audit event <event_id> at <time>
+```
+
+The command writes through the authorization pocket over the same recording
+store, under the same runtime mode as the server, so the grant is in the
+change history (`iam_audit`, `system_source = bootstrap`, reason `first platform
+admin`). Rerunning it answers `no_change` and records nothing. **A raw SQL
+insert into `iam_tuples` is not supported:** it leaves no audit row. Once an
+admin exists, role writes through `POST /authorization/roles` are recorded with
+that admin as the actor:
+
+```sh
+curl -i -XPOST localhost:8080/authorization/roles -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' -d "$ASSIGN"
+#   200 {"outcome":"applied"}
+```
 
 ## Production
 
@@ -156,6 +180,15 @@ the boot before anything is served, in this order:
 4. `IDP_ISSUER` unset → `devissuer.ErrNotDevelopment`: the development issuer
    refuses production itself. Set `IDP_ISSUER`, `IDP_AUDIENCE` and
    `IDP_JWKS_URL` (empty runs OIDC discovery) for the real provider.
+
+After the first person signs in at the provider, grant them the global `admin`
+role with the same environment:
+
+```sh
+APP_RUNTIME_MODE=production go run ./cmd/bootstrap -subject-type user -subject-id <user_id>
+```
+
+It exits non-zero on any error, including the same TLS refusal as the server.
 
 The pockets refuse the rest at construction — a missing security-event rail
 (`authentication.ErrAuditRequired`), an authorization store that does not
@@ -183,6 +216,11 @@ needed key, `PUBLIC_BASE_URL`, `Secure` cookies, and a development issuer built
 in development and handed to the production pocket. An HTTP test serves the
 router on a loopback listener and proves the role routes' gate order (403 for a
 cross-site cookie request, 401 without a credential).
+
+`cmd/bootstrap/main_test.go` runs the bootstrap twice over the recording memory
+store in production: the first run grants global `admin` and writes one change
+record with `System: "bootstrap"`; the rerun answers `no_change` and writes
+none.
 
 ## Guard
 
