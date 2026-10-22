@@ -33,8 +33,11 @@ import (
 )
 
 func main() {
-	// A missing .env is allowed; malformed configuration must stop startup.
-	if err := environment.LoadEnv(); err != nil {
+	// The runtime mode comes from the process environment only; .env is loaded
+	// in development and never opened in production. A missing .env is allowed;
+	// malformed configuration must stop startup.
+	mode, err := environment.LoadEnvForMode("APP_RUNTIME_MODE")
+	if err != nil {
 		slog.Error("load environment", "error", err)
 		os.Exit(1)
 	}
@@ -49,13 +52,23 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	if err := run(ctx, log); err != nil {
+	if err := run(ctx, log, mode); err != nil {
 		log.Error("server exited with error", "error", err)
 		os.Exit(1)
 	}
 }
 
-func run(ctx context.Context, log *slog.Logger) error {
+func run(ctx context.Context, log *slog.Logger, mode environment.Mode) error {
+	srv := web.ServerConfig{Port: "8083"}
+	if err := environment.ParseEnvTags("", &srv); err != nil {
+		return err
+	}
+	if mode.IsProduction() {
+		if err := srv.ValidateProduction(); err != nil {
+			return err
+		}
+	}
+
 	// Stores: the in-core memstore with its DEFAULT lease (15m). No driver, no
 	// migrations, no datastore module — zero external infrastructure.
 	queueStore := memory.NewQueue()
@@ -120,19 +133,16 @@ func run(ctx context.Context, log *slog.Logger) error {
 	}
 
 	// Host-owned router. The only route is the host's own POST /enqueue — jobs v1
-	// registers no pocket routes.
+	// registers no pocket routes. TrustProxies runs outermost so every later
+	// layer sees the resolved client IP; SecurityHeaders sends HSTS and the
+	// browser defaults.
 	router := web.NewWebHandler()
-	router.Use(web.RequestID(), web.Logger(log), web.Panics(log))
+	router.Use(web.TrustProxies(srv.TrustedProxyCount), web.SecurityHeaders(), web.RequestID(), web.Logger(log), web.Panics(log))
 	router.Handle(http.MethodPost, "/enqueue", enqueueHandler(parts.Queue, log))
 	// Host-local liveness probe (host route, not pocket surface). Mounted on
 	// the root router with no middleware — unauthenticated by design, since a
 	// readiness probe can't log in.
 	router.Handle(http.MethodGet, "/healthz", healthzHandler())
-
-	srv := web.ServerConfig{Port: "8083"}
-	if err := environment.ParseEnvTags("", &srv); err != nil {
-		return err
-	}
 
 	// In-process topology (design §7.4): the Runtime runs next to the HTTP server,
 	// sharing one process and one cancellation. On ctx-cancel both drain — the HTTP

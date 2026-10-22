@@ -37,7 +37,8 @@ export default defineConfig({
     command: "go run ./cmd/server",
     cwd: "..",
     url: baseURL,
-    env: { PORT, HOST, LOG_LEVEL: "ERROR" },
+    // The server reads its runtime mode from the process environment only.
+    env: { PORT, HOST, LOG_LEVEL: "ERROR", APP_RUNTIME_MODE: "development" },
     reuseExistingServer: !process.env.CI,
     timeout: 120_000,
   },

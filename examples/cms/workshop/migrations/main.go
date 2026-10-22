@@ -29,7 +29,11 @@ import (
 var migrationsFS embed.FS
 
 func main() {
-	if err := environment.LoadEnv(); err != nil {
+	// The runner holds the most privileged connection, so it resolves the mode
+	// like the server: from the process environment only, reading .env in
+	// development and never in production.
+	mode, err := environment.LoadEnvForMode("APP_RUNTIME_MODE")
+	if err != nil {
 		slog.Error("load environment", "error", err)
 		os.Exit(1)
 	}
@@ -43,16 +47,17 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
-	if err := run(ctx, log); err != nil {
+	if err := run(ctx, log, mode); err != nil {
 		log.Error("migrations", "error", err)
 		os.Exit(1)
 	}
 }
 
-func run(ctx context.Context, log *slog.Logger) error {
+func run(ctx context.Context, log *slog.Logger, mode environment.Mode) error {
 	db, err := tursodb.Open(ctx, tursodb.Config{
-		URL:       os.Getenv("TURSO_DATABASE_URL"),
-		AuthToken: os.Getenv("TURSO_AUTH_TOKEN"),
+		URL:         os.Getenv("TURSO_DATABASE_URL"),
+		AuthToken:   os.Getenv("TURSO_AUTH_TOKEN"),
+		RuntimeMode: mode,
 	})
 	if err != nil {
 		return fmt.Errorf("connecting to database: %w", err)

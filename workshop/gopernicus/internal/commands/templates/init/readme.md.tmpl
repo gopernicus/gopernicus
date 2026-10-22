@@ -23,13 +23,29 @@ This host wires **no datastore** (`--db=none`): the store you supply — a real
 connector or an in-memory implementation — is your choice when you mount a
 pocket.
 {{end}}
+## First run
+
+1. Copy `.env.example` to `.env` and fill it in. The runtime mode is never
+   written there: `APP_RUNTIME_MODE` (`development` | `production`) is read from
+   the process environment only, and a `.env` that assigns it is refused at
+   boot with `environment.ErrModeFromFile`.
+2. `make run` exports `APP_RUNTIME_MODE=development`; a direct run prefixes it:
+   `APP_RUNTIME_MODE=development go run ./cmd/server`.
+{{- if eq .DB "pgx"}}
+3. `.env.example` asks for verified TLS (`DB_SSLMODE=verify-full`). A plain
+   docker Postgres has none: in `.env`, comment out `DB_SSLMODE=verify-full`
+   and uncomment `DB_SSLMODE=disable` (the first assignment wins). Production
+   refuses it.
+{{- end}}
+
 ## Resolving the framework
 
 The `github.com/gopernicus/gopernicus/*` modules resolve the normal Go way from
 their tagged releases (`v0.1.0` and later) — `go mod tidy` fetches them; nothing
 extra to configure.
 
-Then `make run` (or `go run ./cmd/server`) and hit `http://localhost:{{.Port}}/healthz`.
+Then `make run` (or `APP_RUNTIME_MODE=development go run ./cmd/server`) and hit
+`http://localhost:{{.Port}}/healthz`.
 
 ### Local framework development
 
@@ -70,7 +86,8 @@ startup.
 ```
 gopernicus db create <slug>              # scaffold NNNN_<slug>.sql into the ledger
 make migrate                             # apply pending migrations
-go run ./workshop/migrations -status     # applied vs pending (file-only when the
+APP_RUNTIME_MODE=development go run ./workshop/migrations -status
+                                         # applied vs pending (file-only when the
                                          # database is unreachable)
 ```
 {{else}}
@@ -84,6 +101,45 @@ This host has no datastore, so no runner was scaffolded. Re-run `gopernicus init
 | `make build` | `go build ./...` |
 | `make vet` | `go vet ./...` |
 | `make test` | `go test ./...` |
-| `make run` | {{if .HasDB}}migrate, then {{end}}`go run ./cmd/server` |
+| `make run` | {{if .HasDB}}migrate, then {{end}}`go run ./cmd/server`, with `APP_RUNTIME_MODE=development` |
 | `make migrate` | {{if .HasDB}}apply the host-owned ledger pre-boot{{else}}no-op (this host has no datastore){{end}} |
 | `make guard` | the host's architectural boundary checks (the one rule + hygiene) |
+
+## Production posture
+
+Set `APP_RUNTIME_MODE=production` in the process environment — systemd
+`Environment=`/`EnvironmentFile=`, `docker --env-file`, or platform secrets;
+production never reads `.env`, so every variable it carried moves there too.
+In production this host refuses to boot when:
+
+- `APP_RUNTIME_MODE` is unset or not exactly `development` or `production`;
+- `PUBLIC_BASE_URL` is unset, not `https`, or not a bare origin
+  (`web.ServerConfig.ValidateProduction`);
+{{- if eq .DB "pgx"}}
+- a database target is not verified TLS — `sslmode=verify-full` (or
+  `verify-ca` with `sslrootcert`); a unix socket counts as local — or query
+  logging is on (`pgxdb.ErrTLSRequired`, `pgxdb.ErrQueryLoggingRefused`);
+{{- end}}
+{{- if eq .DB "turso"}}
+- the Turso URL is not TLS (`libsql://`, `https://`, or `wss://` without
+  `tls=0`; a `file:` database is local) (`turso.ErrTLSRequired`);
+{{- end}}
+- a pocket you mount meets one of its own development-only options: pass
+  every pocket this same `mode`, and write any waiver as a literal
+  acknowledgement beside the thing it waives.
+
+TLS terminates at your edge (load balancer, ingress, platform router); the app
+sends HSTS and the browser defaults through `web.SecurityHeaders()`, and
+`TRUSTED_PROXY_COUNT` names the proxies in front of it so `web.TrustProxies`
+resolves the real client IP.
+
+Check the composition before every deploy. This scaffold pins no tool, so CI
+runs the guard directly:
+
+```
+go run github.com/gopernicus/gopernicus/workshop/gopernicus@v0.5.0 guard --posture .
+```
+
+It exits 0 clean and 1 with findings, and prints one `ack` line per waiver you
+wrote. Exit 2 is a broken invocation — a release older than v0.5.0 does not
+know `--posture` — so CI treats it as a failure, never a pass.

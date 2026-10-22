@@ -45,6 +45,13 @@ police the framework, these police a host. `gopernicus guard --list` prints
 these fifteen sentences verbatim (the verb ships in `workshop/gopernicus`
 v0.4.0, §7), so the binary and this page cannot drift.
 
+A second series, the **P series** (P = production posture), P0–P8, is opt-in:
+`gopernicus guard --posture` adds it to the H run, and `guard --list --posture`
+prints its nine sentences after the fifteen (§3b, `workshop/gopernicus`
+v0.5.0). The H series is the layout every host keeps; the P series proves a
+composition root asks for the production posture the pockets and connectors
+enforce at construction.
+
 **Prefix discipline.** Bare `sdk` always means the framework's module; the
 host's own vocabulary root is always written "the host's `sdk/`". The same
 holds for the two other roots a host shares a name with: rule text says "the
@@ -254,6 +261,65 @@ seam is the only route to a raw pool, and struct scanning is strict. Both are
 checked on the AST (a `CallExpr` whose selector is `Underlying`; the
 identifier `RowToStructByNameLax`), so comments and split-token tricks are
 irrelevant in both directions. These mirror this repo's own G9/G10.
+
+## 3b. P0–P8 — production posture, opt-in via `--posture`
+
+A pocket or connector refuses a development-only or unprovable option at
+construction when the host passes `production`; these rules prove, before
+boot, that the composition root passes the mode, wires the HTTP floor, and
+writes every waiver as a literal. They read the H7 adapter-naming trees —
+`cmd/**`, `internal/outbound/**`, the host's `integrations/**`, a host pocket's
+`outbound/**` — plus `workshop/**` main packages, production files only, and
+`.env.example` at the host root. Runtime refusal stays the pocket's job; the
+guard proves the composition asks for it. These nine lines are what
+`gopernicus guard --list --posture` prints after the H fifteen.
+
+| id | the rule, in one line |
+|---|---|
+| **P0** | The host resolves its runtime mode from the process environment only: through `environment.LoadEnvForMode`, `environment.ParseMode`, or an `environment.Mode`-typed env field tagged `required:"true"` with no `default:`; scanned production files call `environment.LoadEnv(`/`LoadPath(` nowhere; `ModeDevelopment`/`ModeProduction` appear only as an operand of `==`/`!=` or a `case`. |
+| **P1** | For every recognized `Config{` literal or `var x <pkg>.Config` in a scanned function, that function names `RuntimeMode:` or `x.RuntimeMode =`; every `authentication.New` call passes a mode argument and every `authorization.New` call passes `WithRuntimeMode(`. (The guard proves the mode is NAMED; the pocket proves it is honored.) |
+| **P2** | `web.TrustProxies(` is the first argument of the first `.Use(` call on the handler the composition root passes to `web.Run`/`HTTPServer`. |
+| **P3** | `web.SecurityHeaders(` or `web.SecurityHeadersWithConfig(` appears in a `.Use(` call on that handler. |
+| **P4** | A host that builds a `web.ServerConfig` calls its `ValidateProduction()`. |
+| **P5** | Every recognized acknowledgement in scanned files is a boolean literal (`true` or `false`), never another expression; an option-form acknowledgement is a direct argument of the `New(` call; `--posture` prints one `ack` line (file:line, flag) per `true`, and `ack (conditional)` when it sits under `if`/`switch` — informational, exit code unchanged. |
+| **P6** | A host that mounts authentication builds its keys through `authentication.NewKeys(` with a `KeysInput` filled by `environment.ParseEnvTags` in a scanned file; `--posture` prints one informational `rand` line per `crypto/rand` use in scanned files so a review sees any other key minting (no ban: non-auth keys such as auth-cms's cursor key, `documents.go:43`, are legitimate). |
+| **P7** | `.env.example`, when present, carries no **uncommented** `sslmode=disable`/`DB_SSLMODE=disable` line; mentions the host's mode key ONLY in a comment (`# APP_RUNTIME_MODE=…` — an uncommented assignment, even empty, is a finding, because `LoadEnvForMode` refuses it); and names `TRUSTED_PROXY_COUNT` and `PUBLIC_BASE_URL`. |
+| **P8** | Every `cms.Config` literal in scanned files names `AdminMiddleware` or `AdminUngatedAcknowledged` (the flip is not a boot refusal, so downstream hosts need the pre-deploy signal; G31 covers only this repo). |
+
+P0, P1, P5, P6 and P8 report `no scope` unless a scanned file imports a
+package on the list below (or a package beneath one); P2 and P3 report it
+without a `web.Run` or `HTTPServer` call, P4 without a built
+`web.ServerConfig`, and P7 without a `.env.example`. The `ack` and `rand`
+lines are review evidence, never findings: a waiver a host chose stays
+visible in every CI log, and so does every other place it mints key material.
+
+### Recognized posture surfaces (P0, P1, P5, P6, P8)
+
+Rule text and implementation name the same identifiers, maintained like §3's
+recognized lists: a rule sentence names this list, the list names the
+identifiers, and a new surface is a list edit shipped in a workshop minor. The
+guard matches them as text in the AST; it never imports the packages that
+declare them.
+
+- **mode-accepting constructors and `RuntimeMode` records:**
+  `authentication.New` (the mode is its third, positional argument),
+  `authorization.WithRuntimeMode(` (an option of `authorization.New`),
+  `cms.Config.RuntimeMode`, `pgxdb.Config.RuntimeMode`,
+  `tursodb.Config.RuntimeMode`, `otel.Config.RuntimeMode` — the packages
+  `github.com/gopernicus/gopernicus/pockets/{authentication,authorization,cms}`,
+  `…/integrations/datastores/{pgxdb,turso}`, and `…/integrations/tracing/otel`,
+  matched by import path whatever the local name.
+- **acknowledgements:** `AuditDisabledAcknowledged` (option form
+  `WithAuditDisabledAcknowledged()` in both the authentication and the
+  authorization pocket), `IdentityConfig.SingleFactorAcknowledged`,
+  `DeliveryConfig.OpportunisticTLSAcknowledged`, `DeliveryJobsAcknowledged`,
+  `DeliveryEphemeralAcknowledged`, `AdminUngatedAcknowledged`,
+  `TLSUnverifiedAcknowledged`, `TLSDisabledAcknowledged`.
+- **the key constructor:** `authentication.NewKeys`, fed an
+  `authentication.KeysInput`.
+
+`--posture` requires workshop/gopernicus ≥ v0.5.0; an older pin exits 2
+(unknown flag) — CI treats 2 as a broken invocation, never a pass.
 
 ## 4. Inbound anatomy — inside `internal/inbound/` (ratified 2026-07-08)
 
@@ -507,6 +573,64 @@ legitimately names an integration), and from H0's internal-shape rules. It is
 still one of the seven sanctioned Go-bearing roots, and H9 and H12 still
 apply: nothing under `internal/` or `pockets/` links it from production code.
 
+**The production composition root (P0–P8).** One shape serves every
+environment; the mode decides what is refused:
+
+```go
+func main() {
+	// The mode has one source, the process environment: .env is loaded in
+	// development and never opened in production, and a .env that names the
+	// key is refused.
+	mode, err := environment.LoadEnvForMode("APP_RUNTIME_MODE")
+	if err != nil {
+		slog.Error("load environment", "error", err)
+		os.Exit(1)
+	}
+	// … logger, signal context …
+	if err := run(ctx, log, mode); err != nil { /* … */ }
+}
+
+func run(ctx context.Context, log *slog.Logger, mode environment.Mode) error {
+	srv := web.ServerConfig{}
+	if err := environment.ParseEnvTags("", &srv); err != nil {
+		return err
+	}
+	if mode.IsProduction() {
+		if err := srv.ValidateProduction(); err != nil { // https PUBLIC_BASE_URL, a bare origin
+			return err
+		}
+	}
+	db, err := pgxdb.Open(ctx, pgxdb.Config{ /* … */ RuntimeMode: mode })
+	// … every recognized surface gets the same mode (§3b) …
+	router := web.NewWebHandler()
+	router.Use(web.TrustProxies(srv.TrustedProxyCount), web.SecurityHeaders(),
+		web.RequestID(), web.Logger(log), web.Panics(log))
+	// … mount pockets, host routes, /healthz …
+	return web.Run(ctx, router, srv, log)
+}
+```
+
+- **TLS terminates at the edge** — the load balancer, ingress, or platform
+  router — and `web.Run` serves plain HTTP behind it. **HSTS is the app's to
+  send**: `web.SecurityHeaders()` writes `Strict-Transport-Security` with the
+  browser defaults (`nosniff`, `Referrer-Policy`, `X-Frame-Options: DENY`,
+  `Permissions-Policy`), and browsers ignore HSTS received over plain HTTP, so
+  development on `http://localhost` is unaffected. A page that owns a stricter
+  policy (the authentication pages' CSP and `no-referrer`) keeps it;
+  `web.SecurityHeadersWithConfig` adjusts the preset for a host that embeds
+  its pages or still has plain-HTTP sibling subdomains.
+- **`TrustProxies` is outermost**, so every later layer — the logger, rate
+  limits, and the audit rail — sees the client IP resolved from the
+  `TRUSTED_PROXY_COUNT` rightmost `X-Forwarded-For` hops, never a spoofable
+  leftmost one.
+- **`ValidateProduction` runs under production only**: development keeps
+  `Origin()`'s `http://HOST:PORT` fallback.
+- **The mode comes from the process environment**: `make run` exports
+  `APP_RUNTIME_MODE=development`; production sets it through systemd
+  `Environment=`/`EnvironmentFile=`, `docker --env-file`, or platform secrets.
+  The same mode is passed to every recognized surface, and every
+  acknowledgement is a literal beside the thing it waives (§3b).
+
 ## 7. Retrofit an existing host
 
 The three real hosts adopt this contract by retrofit, not by scaffolding. The
@@ -574,7 +698,8 @@ host invalidates the logical `published:` prefix after a write; the runnable
 HTTP proof covers that invalidation and never includes draft products. The JSON
 route sets HTTP no-store independently of the service's data cache.
 
-All six run under this repo's own `make guard` (G30).
+All six run under this repo's own `make guard`: G30 (H0–H14) and G32
+(P0–P8 under `--posture`).
 A green guard over `auth-cms` is the floor, not the clause: its composition
 root's provider behavior is named debt (below), not H10 compliance.
 

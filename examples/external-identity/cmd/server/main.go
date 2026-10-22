@@ -36,8 +36,11 @@ import (
 const providerName = "dev"
 
 func main() {
-	// A missing .env is allowed; malformed configuration must stop startup.
-	if err := environment.LoadEnv(); err != nil {
+	// The runtime mode comes from the process environment only; .env is loaded
+	// in development and never opened in production. A missing .env is allowed;
+	// malformed configuration must stop startup.
+	mode, err := environment.LoadEnvForMode("AUTH_RUNTIME_MODE")
+	if err != nil {
 		slog.Error("load environment", "error", err)
 		os.Exit(1)
 	}
@@ -52,24 +55,23 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	if err := run(ctx, log); err != nil {
+	if err := run(ctx, log, mode); err != nil {
 		log.Error("server exited with error", "error", err)
 		os.Exit(1)
 	}
 }
 
-func run(ctx context.Context, log *slog.Logger) error {
+func run(ctx context.Context, log *slog.Logger, mode environment.Mode) error {
 	srv := web.ServerConfig{}
 	if err := environment.ParseEnvTags("", &srv); err != nil {
 		return err
 	}
-	mode := struct {
-		RuntimeMode environment.Mode `env:"AUTH_RUNTIME_MODE" default:"development"`
-	}{}
-	if err := environment.ParseEnvTags("", &mode); err != nil {
-		return err
+	if mode.IsProduction() {
+		if err := srv.ValidateProduction(); err != nil {
+			return err
+		}
 	}
-	handler, err := newHandler(ctx, srv.Origin(), mode.RuntimeMode, log)
+	handler, err := newHandler(ctx, srv.Origin(), srv.TrustedProxyCount, mode, log)
 	if err != nil {
 		return err
 	}
@@ -77,9 +79,9 @@ func run(ctx context.Context, log *slog.Logger) error {
 	return web.Run(ctx, handler, srv, log)
 }
 
-// newHandler composes the host for origin. It returns the dev issuer's
-// refusal outside development mode.
-func newHandler(ctx context.Context, origin string, mode environment.Mode, log *slog.Logger) (http.Handler, error) {
+// newHandler composes the host for origin behind trustedProxyCount reverse
+// proxies. It returns the dev issuer's refusal outside development mode.
+func newHandler(ctx context.Context, origin string, trustedProxyCount int, mode environment.Mode, log *slog.Logger) (http.Handler, error) {
 	dev, err := devissuer.New(origin, mode)
 	if err != nil {
 		return nil, err
@@ -115,8 +117,10 @@ func newHandler(ctx context.Context, origin string, mode environment.Mode, log *
 		return nil, err
 	}
 
+	// TrustProxies runs outermost so every later layer sees the resolved client
+	// IP; SecurityHeaders sends HSTS and the browser defaults.
 	router := web.NewWebHandler()
-	router.Use(web.RequestID(), web.Logger(log), web.Panics(log))
+	router.Use(web.TrustProxies(trustedProxyCount), web.SecurityHeaders(), web.RequestID(), web.Logger(log), web.Panics(log))
 
 	router.Handle(http.MethodGet, devissuer.KeysPath, dev.KeysHandler().ServeHTTP)
 	router.Handle(http.MethodPost, devissuer.TokenPath, dev.TokenHandler())
