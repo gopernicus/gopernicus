@@ -11,6 +11,7 @@ import (
 	auth "github.com/gopernicus/gopernicus/pockets/authentication"
 	delivery "github.com/gopernicus/gopernicus/pockets/authentication/logic/delivery"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/notify/email"
+	"github.com/gopernicus/gopernicus/sdk/pkg/environment"
 )
 
 // TestOverrideSystemsAreDistinct proves the host wires BOTH override systems and that
@@ -19,7 +20,7 @@ import (
 // EMAIL body (the branded verification content). They are different Config fields of
 // different types feeding different subsystems.
 func TestOverrideSystemsAreDistinct(t *testing.T) {
-	cfg, err := buildAuthConfig(quietLog(), nil)
+	cfg, err := buildAuthConfig(quietLog(), environment.ModeDevelopment, nil)
 	if err != nil {
 		t.Fatalf("buildAuthConfig: %v", err)
 	}
@@ -65,7 +66,7 @@ func (c *captureSender) latest() (email.Message, bool) {
 // the bundled default copy. This is the host-level demonstration that the email
 // override system actually takes effect, distinct from the page Views override.
 func TestEmailLayerAppOverrideWins(t *testing.T) {
-	cfg, err := buildAuthConfig(quietLog(), nil)
+	cfg, err := buildAuthConfig(quietLog(), environment.ModeDevelopment, nil)
 	if err != nil {
 		t.Fatalf("buildAuthConfig: %v", err)
 	}

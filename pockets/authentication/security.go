@@ -4,7 +4,9 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net/url"
+	"slices"
 	"strings"
 
 	"github.com/gopernicus/gopernicus/pockets/authentication/internal/redirect"
@@ -13,6 +15,7 @@ import (
 	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/notify"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/notify/email"
+	"github.com/gopernicus/gopernicus/sdk/capabilities/oauth"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/ratelimiter"
 	"github.com/gopernicus/gopernicus/sdk/pkg/environment"
 )
@@ -35,7 +38,10 @@ var (
 	// ErrInsecureDeliveryTransport is returned in production RuntimeMode when a
 	// wired email Sender or BodySender is development-only or declares no capability
 	// metadata (design §6.3): a console transport leaks OTPs and magic links to
-	// logs, and an undeclared transport cannot be proven safe.
+	// logs, and an undeclared transport cannot be proven safe. It is also returned
+	// for a transport declaring opportunistic STARTTLS unless
+	// DeliveryConfig.OpportunisticTLSAcknowledged is set; that error also wraps
+	// notify.ErrOpportunisticTLS.
 	//
 	// The verdict itself is made by the capability that owns the port —
 	// notify.CheckTransport — so an app-wide
@@ -44,7 +50,7 @@ var (
 	// notify.ErrInsecureTransport, so existing
 	// errors.Is checks keep matching and new sdk-only code can match the
 	// capability sentinel.
-	ErrInsecureDeliveryTransport = errors.New("auth: production RuntimeMode rejects a development-only or metadata-less delivery transport")
+	ErrInsecureDeliveryTransport = errors.New("auth: production RuntimeMode rejects a development-only, metadata-less or opportunistic-TLS delivery transport")
 	// ErrDeliveryModeRequired is returned when deliveryMode is empty. The mode
 	// has no default (the RuntimeMode precedent) so a host explicitly selects the
 	// outbound-delivery execution model and never inherits one from a non-nil
@@ -76,6 +82,24 @@ var (
 	// explicitly accepting that crash-loss (the recommended production posture is
 	// "jobs").
 	ErrDeliveryEphemeralUnacknowledged = errors.New(`auth: production RuntimeMode with DeliveryMode "in_process" requires DeliveryConfig.DeliveryEphemeralAcknowledged (ephemeral in-process delivery loses in-flight work on crash)`)
+	// ErrAuditRequired is returned in production RuntimeMode when
+	// Repositories.SecurityEvents is nil: without the rail no sign-in, credential
+	// change or denial is recorded. WithAuditDisabledAcknowledged() waives it.
+	ErrAuditRequired = errors.New("auth: production RuntimeMode requires Repositories.SecurityEvents (the security-event audit rail); to run without it pass WithAuditDisabledAcknowledged()")
+	// ErrSingleFactorUnacknowledged is returned in production RuntimeMode when
+	// native single-factor login is enabled — password flows on or any
+	// Passwordless kind listed — without IdentityConfig.SingleFactorAcknowledged.
+	// The pocket ships no second factor yet, so production asks the host to
+	// accept one-factor login explicitly or to disable it (PasswordFlowsDisabled
+	// and no Passwordless kinds, for example behind an external provider).
+	ErrSingleFactorUnacknowledged = errors.New("auth: production RuntimeMode refuses single-factor native login (password flows or a Passwordless kind) unless IdentityConfig.SingleFactorAcknowledged is set")
+	// ErrDevelopmentOnlyProvider is returned in production RuntimeMode for an
+	// OAuth provider or an external identity provider that declares itself
+	// development-only (oauth.Capabilities or the authentication capability's
+	// Capabilities with DevelopmentOnly). It is the logic package's sentinel,
+	// re-exported here; the error also wraps the capability's own sentinel.
+	// Providers that declare nothing are accepted. There is no acknowledgement.
+	ErrDevelopmentOnlyProvider = authlogic.ErrDevelopmentOnlyProvider
 	// ErrNonDurableRateLimiter is returned in production RuntimeMode when the wired
 	// (or defaulted) rate limiter is in-process-only (design §4.4/§8): the bundled
 	// ratelimiter.Memory default, or a limiter that declares InProcessOnly through
@@ -142,12 +166,6 @@ var (
 	// LinksConfig.OAuthLinkBaseURL is not HTTPS: the pending-link URL carries a single-use
 	// credential in its fragment, and plain HTTP exposes it in transit.
 	ErrOAuthLinkURLInsecure = errors.New("auth: production RuntimeMode requires an HTTPS LinksConfig.OAuthLinkBaseURL")
-	// ErrCredentialPolicyRequired is reserved for the credential suite (phase 6):
-	// strict production validation rejects a configuration that disables the
-	// bundled default without supplying a replacement policy (design §5.6/§8). A
-	// nil IdentityConfig.CredentialPolicy otherwise selects the bundled
-	// credential.NewDefaultPolicy default.
-	ErrCredentialPolicyRequired = errors.New("auth: IdentityConfig.CredentialPolicy is required when the bundled default is disabled")
 )
 
 // Passwordless enablement construction errors (design §4.2/§8). PasswordlessConfig.Passwordless
@@ -215,28 +233,49 @@ func validateDeliveryMode(m delivery.Mode) error {
 // transport emits a startup WARN. The Mailer is always the required email
 // transport; each wired BodySender is checked too.
 //
+// Unless opportunisticTLSAcknowledged, production also refuses a transport
+// declaring STARTTLS (notify.RequireMandatoryTLS). That refusal is the only
+// waivable one, so it is returned separately as opportunistic, joined across
+// transports, for New to report beside the other posture violations; any other
+// refusal is err and returns at once. startTLS labels every transport declaring
+// STARTTLS, whatever the verdict.
+//
 // The production VERDICT is delegated to the capability that owns each port —
 // notify.CheckTransport — so this pocket and a
 // host's app-wide mailer enforce one rule from one place. What stays here is
 // auth's own vocabulary (ErrInsecureDeliveryTransport, the per-transport label)
 // and auth's development WARN wording, because message text and log routing are
 // composition concerns the sdk validators deliberately do not own.
-func validateDeliveryTransports(mode environment.Mode, mailer email.Sender, bodySenders map[string]delivery.BodySender, log *slog.Logger) error {
-	posture, err := notify.CheckTransport(mode, mailer)
-	if err := asInsecureTransport(err, posture.Declared, "email sender"); err != nil {
-		return err
+func validateDeliveryTransports(mode environment.Mode, mailer email.Sender, bodySenders map[string]delivery.BodySender, opportunisticTLSAcknowledged bool, log *slog.Logger) (startTLS []string, opportunistic error, err error) {
+	var opts []notify.CheckOption
+	if !opportunisticTLSAcknowledged {
+		opts = append(opts, notify.RequireMandatoryTLS())
 	}
-	warnDevelopmentOnlyTransport(mode, posture.Declared, posture.Capabilities.DevelopmentOnly, "email sender", log)
+	type labeled struct {
+		label     string
+		transport any
+	}
+	transports := []labeled{{"email sender", mailer}}
+	for _, kind := range slices.Sorted(maps.Keys(bodySenders)) {
+		transports = append(transports, labeled{"body sender " + kind, bodySenders[kind]})
+	}
 
-	for kind, n := range bodySenders {
-		label := "body sender " + kind
-		nposture, err := notify.CheckTransport(mode, n)
-		if err := asInsecureTransport(err, nposture.Declared, label); err != nil {
-			return err
+	var refusals []error
+	for _, t := range transports {
+		posture, capErr := notify.CheckTransport(mode, t.transport, opts...)
+		if posture.Capabilities.TransportSecurity == notify.TransportSecurityStartTLS {
+			startTLS = append(startTLS, t.label)
 		}
-		warnDevelopmentOnlyTransport(mode, nposture.Declared, nposture.Capabilities.DevelopmentOnly, label, log)
+		if errors.Is(capErr, notify.ErrOpportunisticTLS) {
+			refusals = append(refusals, fmt.Errorf("%w: %s declares opportunistic STARTTLS; set DeliveryConfig.OpportunisticTLSAcknowledged to accept it: %w", ErrInsecureDeliveryTransport, t.label, capErr))
+			continue
+		}
+		if err := asInsecureTransport(capErr, posture.Declared, t.label); err != nil {
+			return nil, nil, err
+		}
+		warnDevelopmentOnlyTransport(mode, posture.Declared, posture.Capabilities.DevelopmentOnly, t.label, log)
 	}
-	return nil
+	return startTLS, errors.Join(refusals...), nil
 }
 
 // asInsecureTransport re-labels a capability-owned production rejection in auth's
@@ -439,6 +478,85 @@ func validateOAuthLinkBaseURL(mode environment.Mode, raw string) error {
 
 // validateOAuthConfig rejects ambiguous provider names and callback construction.
 // Native URIs are exact provider-registered destinations, not redirect templates.
+// Production refuses a provider declaring itself development-only
+// (oauth.CheckProvider) with ErrDevelopmentOnlyProvider; development WARNs once
+// per such provider on cfg.Logger.
 func validateOAuthConfig(cfg constructorConfig) error {
-	return redirect.ValidateOAuthConfig(cfg.RuntimeMode, cfg.Providers, cfg.OAuthCallbackBase, cfg.OAuthNativeRedirectURIs)
+	if err := redirect.ValidateOAuthConfig(cfg.RuntimeMode, cfg.Providers, cfg.OAuthCallbackBase, cfg.OAuthNativeRedirectURIs); err != nil {
+		return err
+	}
+	log := cfg.Logger
+	if log == nil {
+		log = slog.Default()
+	}
+	for _, p := range cfg.Providers {
+		posture, err := oauth.CheckProvider(cfg.RuntimeMode, p)
+		if errors.Is(err, oauth.ErrDevelopmentOnlyProvider) {
+			return fmt.Errorf("%w: OAuth provider %q: %w", ErrDevelopmentOnlyProvider, p.Name(), err)
+		}
+		if err != nil {
+			return err
+		}
+		if posture.Capabilities.DevelopmentOnly {
+			log.Warn("auth: development-only OAuth provider wired; production refuses it", "provider", p.Name())
+		}
+	}
+	return nil
+}
+
+// postureCondition is one acknowledgeable production-posture requirement.
+type postureCondition struct {
+	present      bool
+	acknowledged bool
+	flag         string
+	refusal      error
+	warning      string
+	attrs        []any
+}
+
+// checkPosture enforces the acknowledgeable production posture: the
+// security-event audit rail, single-factor native login, and opportunistic
+// STARTTLS on a delivery transport (startTLS and opportunistic come from
+// validateDeliveryTransports). Production returns every unacknowledged
+// violation at once with errors.Join, each naming its acknowledgement, and logs
+// one posture_waiver WARN per honored acknowledgement; development logs one WARN
+// per present condition. An acknowledgement is inert while its condition is
+// absent, except WithAuditDisabledAcknowledged() beside a wired SecurityEvents,
+// which is contradictory in every mode.
+func checkPosture(repos Repositories, cfg constructorConfig, startTLS []string, opportunistic error, log *slog.Logger) error {
+	auditWired := !nilDependency(repos.SecurityEvents)
+	if cfg.AuditDisabledAcknowledged && auditWired {
+		return ErrAuditAcknowledgedWithSecurityEvents
+	}
+	conditions := []postureCondition{
+		{
+			present: !auditWired, acknowledged: cfg.AuditDisabledAcknowledged,
+			flag: "AuditDisabledAcknowledged", refusal: ErrAuditRequired,
+			warning: "auth: Repositories.SecurityEvents is nil, so the security-event audit rail records nothing; production refuses this without WithAuditDisabledAcknowledged()",
+		},
+		{
+			present: !cfg.PasswordFlowsDisabled || len(cfg.Passwordless) > 0, acknowledged: cfg.SingleFactorAcknowledged,
+			flag: "SingleFactorAcknowledged", refusal: ErrSingleFactorUnacknowledged,
+			warning: "auth: single-factor native login is enabled (password flows or a Passwordless kind); production refuses this without IdentityConfig.SingleFactorAcknowledged",
+		},
+		{
+			present: len(startTLS) > 0, acknowledged: cfg.OpportunisticTLSAcknowledged,
+			flag: "OpportunisticTLSAcknowledged", refusal: opportunistic,
+			warning: "auth: a delivery transport declares opportunistic STARTTLS; production refuses it without DeliveryConfig.OpportunisticTLSAcknowledged",
+			attrs:   []any{"transports", startTLS},
+		},
+	}
+	var refusals []error
+	for _, c := range conditions {
+		switch {
+		case !c.present:
+		case c.acknowledged:
+			log.Warn("auth: production posture requirement waived", append([]any{"posture_waiver", c.flag, "runtime_mode", cfg.RuntimeMode.String()}, c.attrs...)...)
+		case cfg.RuntimeMode.IsProduction():
+			refusals = append(refusals, c.refusal)
+		default:
+			log.Warn(c.warning, c.attrs...)
+		}
+	}
+	return errors.Join(refusals...)
 }

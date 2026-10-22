@@ -339,7 +339,7 @@ func TestSpoofedForwardedHeaderCannotRotateLimiterBucket(t *testing.T) {
 	next := http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		carrierIP, _ = authlogic.ClientInfoFromContext(r.Context())
 	})
-	handler := clientInfoMiddleware(next)
+	handler := clientInfoMiddleware(nil)(next)
 
 	r := httptest.NewRequest(http.MethodPost, "/auth/login", nil)
 	r.RemoteAddr = "203.0.113.7:5555"

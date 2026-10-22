@@ -8,11 +8,12 @@ import (
 
 	documents "github.com/gopernicus/gopernicus/examples/auth-cms/internal/inbound/domains/documents"
 	"github.com/gopernicus/gopernicus/sdk"
+	"github.com/gopernicus/gopernicus/sdk/pkg/environment"
 	"github.com/gopernicus/gopernicus/sdk/pkg/web"
 )
 
 func TestDocumentRouteComposition(t *testing.T) {
-	components, err := newAuthorization(nil, nil)
+	components, err := newAuthorization(nil, environment.ModeDevelopment, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

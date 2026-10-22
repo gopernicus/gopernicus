@@ -209,6 +209,9 @@ type routerConfig struct {
 	Subjects     map[string]string
 	SMSBodies    map[string]string
 	Logger       *slog.Logger
+	// OpportunisticTLSAcknowledged admits a STARTTLS transport in
+	// ValidateTransports' production verdict.
+	OpportunisticTLSAcknowledged bool
 }
 
 // TemplateOverride registers a host's email content templates at email.LayerApp so
@@ -255,6 +258,9 @@ type Router struct {
 	smsBodies map[string]*template.Template
 	dataHook  DataHook
 	logger    *slog.Logger
+	// opportunisticTLSAcknowledged drops notify.RequireMandatoryTLS from
+	// ValidateTransports (WithOpportunisticTLSAcknowledged).
+	opportunisticTLSAcknowledged bool
 }
 
 // NewRouter builds a Router. A nil Mailer is ErrMailerRequired. It registers the
@@ -344,6 +350,8 @@ func NewRouter(mailer email.Sender, opts ...RouterOption) (*Router, error) {
 		smsBodies:   smsBodies,
 		dataHook:    d.DataHook,
 		logger:      logger,
+
+		opportunisticTLSAcknowledged: d.OpportunisticTLSAcknowledged,
 	}, nil
 }
 
@@ -531,12 +539,19 @@ func renderTemplate(t *template.Template, data map[string]any) (string, error) {
 
 // ValidateTransports checks the actual configured senders against the host's
 // runtime mode, including when this router is composed without the pocket root.
+// Production refuses a sender declaring opportunistic STARTTLS
+// (notify.ErrOpportunisticTLS) unless the router was built with
+// WithOpportunisticTLSAcknowledged.
 func (r *Router) ValidateTransports(mode environment.Mode) error {
-	if _, err := notify.CheckTransport(mode, r.mailer); err != nil {
+	var opts []notify.CheckOption
+	if !r.opportunisticTLSAcknowledged {
+		opts = append(opts, notify.RequireMandatoryTLS())
+	}
+	if _, err := notify.CheckTransport(mode, r.mailer, opts...); err != nil {
 		return err
 	}
 	for _, sender := range r.bodySenders {
-		if _, err := notify.CheckTransport(mode, sender); err != nil {
+		if _, err := notify.CheckTransport(mode, sender, opts...); err != nil {
 			return err
 		}
 	}

@@ -13,6 +13,7 @@ import (
 	delivery "github.com/gopernicus/gopernicus/pockets/authentication/logic/delivery"
 	authgoth "github.com/gopernicus/gopernicus/pockets/authentication/views/goth"
 	sdkevents "github.com/gopernicus/gopernicus/sdk/capabilities/events"
+	"github.com/gopernicus/gopernicus/sdk/pkg/environment"
 	"github.com/gopernicus/gopernicus/sdk/pkg/web"
 	uigothassets "github.com/gopernicus/gopernicus/ui/goth/assets"
 )
@@ -23,7 +24,7 @@ import (
 // wires them, so the HTTP-level proofs below drive the shipped surface, not a stub.
 func gothProofRouter(t *testing.T) *web.WebHandler {
 	t.Helper()
-	cfg, err := buildAuthConfig(quietLog(), nil)
+	cfg, err := buildAuthConfig(quietLog(), environment.ModeDevelopment, nil)
 	if err != nil {
 		t.Fatalf("buildAuthConfig: %v", err)
 	}
@@ -178,7 +179,7 @@ func TestGOTHMigrationPreservesJSONAPI(t *testing.T) {
 // Views wired the HTML GET page is unregistered (405 — the JSON POST twin still owns
 // the path) and no widened CSP/asset route is required.
 func TestGOTHNilViewsAssetFreePosture(t *testing.T) {
-	cfg, err := buildAuthConfig(quietLog(), nil)
+	cfg, err := buildAuthConfig(quietLog(), environment.ModeDevelopment, nil)
 	if err != nil {
 		t.Fatalf("buildAuthConfig: %v", err)
 	}

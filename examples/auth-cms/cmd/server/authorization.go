@@ -19,6 +19,7 @@ import (
 	mutations "github.com/gopernicus/gopernicus/pockets/authorization/logic/mutations"
 	relationships "github.com/gopernicus/gopernicus/pockets/authorization/logic/relationships"
 	authzmem "github.com/gopernicus/gopernicus/pockets/authorization/stores/memory"
+	"github.com/gopernicus/gopernicus/sdk/pkg/environment"
 	"github.com/gopernicus/gopernicus/sdk/pkg/web"
 )
 
@@ -82,16 +83,23 @@ func authzIntegrityPolicy() mutations.IntegrityPolicy {
 	}
 }
 
-func newAuthorization(roleRoutesGate web.Middleware, logger *slog.Logger) (authorization.Components, error) {
-	store := authzmem.New(authzmem.WithIntegrityPolicy(authzIntegrityPolicy()))
+// newAuthorization builds the authorization pocket over the in-memory store,
+// recording audit and exposing its reader, so production mode's audit
+// requirement is met. A recording store needs an audit.Source on every change:
+// the bundled role routes stamp the principal, and this host's seeds and
+// granters stamp themselves as systems.
+func newAuthorization(roleRoutesGate web.Middleware, mode environment.Mode, logger *slog.Logger) (authorization.Components, error) {
+	store := authzmem.New(authzmem.WithIntegrityPolicy(authzIntegrityPolicy()), authzmem.WithAudit())
 	components, err := authorization.New(
 		authorization.Repositories{
 			Tuples:     store.Tuples(),
 			Mutations:  store.Mutations(),
 			Operations: store.Operations(),
+			Audit:      store.Audit(),
 		},
 		authorization.WithLogger(logger),
 		authorization.WithModel(authzSchema()),
+		authorization.WithRuntimeMode(mode),
 	)
 	if err != nil {
 		return authorization.Components{}, err
@@ -109,18 +117,14 @@ func newAuthorization(roleRoutesGate web.Middleware, logger *slog.Logger) (autho
 //  1. authenticate — the auth pocket's live human-session middleware, which stashes
 //     the principal with sdk.WithPrincipal. Without it the bundled writes
 //     answer 401 rather than fabricate a zero Actor.
-//  2. authorize — the platform-admin coordinate already declared in authzSchema
+//  2. browserSafe — the auth pocket's RequireBrowserSafeMutation: a cookie POST
+//     needs an allowlisted Origin and the X-CSRF-Token double-submit; GETs and
+//     bearer-only calls pass.
+//  3. authorize — the platform-admin coordinate already declared in authzSchema
 //     (platform/admin on platform:main), the same one MachineRoutesGate names.
-//
-// ⚠ The third layer the pocket's README mandates for a COOKIE-credential host — a
-// browser-origin/CSRF defense on these state-changing POSTs — is deliberately NOT
-// composed here: the authentication pocket does not export its browser-safe
-// middleware, and whether the gate should be a slice so the pocket can help is an
-// OPEN QUESTION for the owner (authorization-role-routes, open question 1). A
-// production cookie host must add it.
-func roleAdministrationGate(authenticate, authorize web.Middleware) web.Middleware {
+func roleAdministrationGate(authenticate, browserSafe, authorize web.Middleware) web.Middleware {
 	return func(next http.Handler) http.Handler {
-		return authenticate(authorize(next))
+		return authenticate(browserSafe(authorize(next)))
 	}
 }
 

@@ -17,6 +17,8 @@ import (
 
 	"github.com/gopernicus/gopernicus/integrations/cryptids/go-oidc/oidctest"
 	"github.com/gopernicus/gopernicus/sdk"
+	sdkauth "github.com/gopernicus/gopernicus/sdk/capabilities/authentication"
+	"github.com/gopernicus/gopernicus/sdk/pkg/cryptids"
 	"github.com/gopernicus/gopernicus/sdk/pkg/environment"
 )
 
@@ -53,6 +55,13 @@ type Issuer struct {
 	now           func() time.Time
 }
 
+// Provider is the external identity provider for tokens this issuer mints: the
+// generic OIDC provider, declared development-only, so a production
+// authentication pocket refuses it even when the issuer was built in development.
+type Provider struct {
+	*sdkauth.OIDC
+}
+
 // TokenRequest is the body TokenPath and SessionPath accept. Iss, when set,
 // overrides the issuer so a caller can mint a token from an unwired issuer.
 type TokenRequest struct {
@@ -84,6 +93,17 @@ func New(origin string, mode environment.Mode) (*Issuer, error) {
 		secureCookie:  strings.HasPrefix(origin, "https://"),
 		now:           time.Now,
 	}, nil
+}
+
+// NewProvider verifies tokens minted under issuer — Issuer or SessionIssuer —
+// with verifier.
+func NewProvider(issuer string, verifier cryptids.JWTVerifier, profile sdkauth.Profile) Provider {
+	return Provider{OIDC: sdkauth.NewOIDC(issuer, verifier, profile)}
+}
+
+// Capabilities declares the provider development-only.
+func (Provider) Capabilities() sdkauth.Capabilities {
+	return sdkauth.Capabilities{DevelopmentOnly: true}
 }
 
 // Issuer is the iss of header tokens.

@@ -22,6 +22,7 @@ import (
 	sdkevents "github.com/gopernicus/gopernicus/sdk/capabilities/events"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/notify/email"
 	"github.com/gopernicus/gopernicus/sdk/pkg/cryptids"
+	"github.com/gopernicus/gopernicus/sdk/pkg/environment"
 	"github.com/gopernicus/gopernicus/sdk/pkg/web"
 )
 
@@ -50,10 +51,11 @@ import (
 // stableDeliveryEnv pins the key material buildAuthConfig would otherwise generate
 // ephemerally per boot, so a payload sealed before a modeled restart can be opened
 // after it (the demo.go WARNs say a multi-instance/restart deployment MUST share
-// these). AUTH_DELIVERY_ENCRYPTER_KEY is raw 32 bytes; the rest are hex >= 32 bytes.
+// these). Every key is hex: the delivery key decodes to exactly 32 bytes, the rest
+// to at least 32.
 func stableDeliveryEnv(t *testing.T) {
 	t.Helper()
-	t.Setenv("AUTH_DELIVERY_ENCRYPTER_KEY", "0123456789abcdef0123456789abcdef")
+	t.Setenv("AUTH_DELIVERY_ENCRYPTER_KEY", strings.Repeat("01", 32))
 	t.Setenv("AUTH_CHALLENGE_PEPPER", strings.Repeat("ab", 32))
 	t.Setenv("AUTH_IDENTIFIER_KEY", strings.Repeat("cd", 32))
 	t.Setenv("AUTH_JWT_SECRET", strings.Repeat("ef", 32))
@@ -269,7 +271,7 @@ func bootDeliveryEmit(t *testing.T, authRepos auth.Repositories, store job.Fence
 	if err != nil {
 		t.Fatalf("jobs.NewService: %v", err)
 	}
-	cfg, err := buildAuthConfig(quietLog(), nil)
+	cfg, err := buildAuthConfig(quietLog(), environment.ModeDevelopment, nil)
 	if err != nil {
 		t.Fatalf("buildAuthConfig: %v", err)
 	}

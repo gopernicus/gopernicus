@@ -15,18 +15,38 @@ import (
 	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/notify"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/notify/email"
+	"github.com/gopernicus/gopernicus/sdk/capabilities/oauth"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/ratelimiter"
 	environment "github.com/gopernicus/gopernicus/sdk/pkg/environment"
 )
 
+// productionKeys are distinct disposable hex fixture keys for the five AUTH_*
+// key variables; production refuses to mint any of them.
+var productionKeys = map[auth.KeyName]string{
+	auth.KeyJWT:               strings.Repeat("a1", 32),
+	auth.KeyChallengePepper:   strings.Repeat("b2", 32),
+	auth.KeyIdentifier:        strings.Repeat("c3", 32),
+	auth.KeyDeliveryEncrypter: strings.Repeat("d4", 32),
+	auth.KeyTokenEncrypter:    strings.Repeat("e5", 32),
+}
+
 // prodSender is a production-capable email transport double: it declares
-// non-development-only capability metadata so the production transport gate accepts
-// it (unlike the console sender the host wires by default).
+// mandatory TLS and no development-only flag, so the production transport gate
+// accepts it (unlike the console sender the host wires by default).
 type prodSender struct{}
 
 func (prodSender) Send(context.Context, email.Message) error { return nil }
 func (prodSender) Capabilities() notify.Capabilities {
-	return notify.Capabilities{TransportSecurity: notify.TransportSecurityStartTLS, DevelopmentOnly: false}
+	return notify.Capabilities{TransportSecurity: notify.TransportSecurityTLS, DevelopmentOnly: false}
+}
+
+// starttlsSender is a relay that offers only opportunistic STARTTLS, which
+// production refuses unless the host acknowledges it.
+type starttlsSender struct{}
+
+func (starttlsSender) Send(context.Context, email.Message) error { return nil }
+func (starttlsSender) Capabilities() notify.Capabilities {
+	return notify.Capabilities{TransportSecurity: notify.TransportSecurityStartTLS}
 }
 
 // prodNotifier is a production-capable phone Notifier double: it declares
@@ -53,19 +73,29 @@ func (durableLimiter) RateLimiterDurability() authenticationlogic.LimiterDurabil
 	return authenticationlogic.LimiterDurability{InProcessOnly: false}
 }
 
+// setProductionKeys sets the five key variables for the test.
+func setProductionKeys(t *testing.T) {
+	t.Helper()
+	for name, value := range productionKeys {
+		t.Setenv(string(name), value)
+	}
+}
+
 // productionBaseline returns a production-VALID config + repositories: every v3
-// safeguard the memory host would otherwise fail is satisfied (production transports,
-// a durable limiter, an HTTPS magic-link base, the generic-jobs delivery dispatcher, an
-// acknowledged runtime, and the identifier keyer buildAuthConfig already wires). It
-// constructs cleanly in production (proven by TestProductionBaselineConstructs), so
-// each negative below isolates exactly one broken safeguard.
+// safeguard the memory host would otherwise fail is satisfied (the five keys set,
+// production transports, a durable limiter, an HTTPS magic-link base, the
+// generic-jobs delivery dispatcher, an acknowledged runtime, no fake OAuth
+// provider, and single-factor native login acknowledged). buildAuthConfig runs in
+// production, so NewKeys decodes the keys rather than minting them. It constructs
+// cleanly in production (proven by TestProductionBaselineConstructs), so each
+// negative below isolates exactly one broken safeguard.
 func productionBaseline(t *testing.T) (authenticationConfig, auth.Repositories) {
 	t.Helper()
-	cfg, err := buildAuthConfig(quietLog(), nil)
+	setProductionKeys(t)
+	cfg, err := buildAuthConfig(quietLog(), environment.ModeProduction, nil)
 	if err != nil {
 		t.Fatalf("buildAuthConfig: %v", err)
 	}
-	cfg.RuntimeMode = environment.ModeProduction
 	cfg.SessionCookie.Secure = true
 	cfg.OAuthCallbackBase = "https://auth.example.com"
 	cfg.Mailer = prodSender{}
@@ -78,6 +108,11 @@ func productionBaseline(t *testing.T) (authenticationConfig, auth.Repositories) 
 	// run() wires the generic-jobs dispatcher; reproduce it so jobs mode has its queue
 	// capability in the baseline.
 	cfg.DeliveryDispatcher = jobsDispatcher(t)
+	// The fake provider declares itself development-only; production refuses it.
+	cfg.Providers = nil
+	// Passwords and passwordless are one-factor; production asks for the host's
+	// explicit acceptance.
+	cfg.SingleFactorAcknowledged = true
 
 	repos := authmem.New().Repositories()
 	return cfg, repos
@@ -89,6 +124,9 @@ func productionBaseline(t *testing.T) (authenticationConfig, auth.Repositories) 
 // matrix.
 func TestProductionBaselineConstructs(t *testing.T) {
 	cfg, repos := productionBaseline(t)
+	if cfg.RuntimeMode != environment.ModeProduction {
+		t.Fatalf("baseline RuntimeMode = %q, want production", cfg.RuntimeMode)
+	}
 	if _, err := auth.New(repos, cfg.TokenSigner, cfg.RuntimeMode, cfg.DeliveryMode, cfg.options()...); err != nil {
 		t.Fatalf("production-valid baseline should construct, got: %v", err)
 	}
@@ -153,6 +191,38 @@ func TestProductionNegatives(t *testing.T) {
 			},
 			want: auth.ErrDeliveryJobsUnacknowledged,
 		},
+		{
+			// the host's own fake provider signs in whoever names a code.
+			name: "fake_oauth_provider",
+			mutate: func(cfg *authenticationConfig, _ *auth.Repositories) {
+				cfg.Providers = []oauth.Provider{fakeOAuthProvider{}}
+			},
+			want: auth.ErrDevelopmentOnlyProvider,
+		},
+		{
+			// no security-event audit rail and no acknowledgement.
+			name: "nil_security_events",
+			mutate: func(_ *authenticationConfig, repos *auth.Repositories) {
+				repos.SecurityEvents = nil
+			},
+			want: auth.ErrAuditRequired,
+		},
+		{
+			// passwords and passwordless stay on without the acknowledgement.
+			name: "single_factor",
+			mutate: func(cfg *authenticationConfig, _ *auth.Repositories) {
+				cfg.SingleFactorAcknowledged = false
+			},
+			want: auth.ErrSingleFactorUnacknowledged,
+		},
+		{
+			// an opportunistic-STARTTLS relay without the acknowledgement.
+			name: "starttls_mailer",
+			mutate: func(cfg *authenticationConfig, _ *auth.Repositories) {
+				cfg.Mailer = starttlsSender{}
+			},
+			want: auth.ErrInsecureDeliveryTransport,
+		},
 	}
 
 	for _, tc := range cases {
@@ -167,24 +237,85 @@ func TestProductionNegatives(t *testing.T) {
 	}
 }
 
+// TestProductionStartTLSAcknowledgedConstructs proves the acknowledgement admits a
+// STARTTLS relay end to end through authentication.New — the root check and the
+// delivery router's ValidateTransports both honor it.
+func TestProductionStartTLSAcknowledgedConstructs(t *testing.T) {
+	cfg, repos := productionBaseline(t)
+	cfg.Mailer = starttlsSender{}
+	cfg.OpportunisticTLSAcknowledged = true
+	if _, err := auth.New(repos, cfg.TokenSigner, cfg.RuntimeMode, cfg.DeliveryMode, cfg.options()...); err != nil {
+		t.Fatalf("acknowledged STARTTLS relay in production: %v", err)
+	}
+}
+
+// TestProductionRefusesUnsetKeys proves production never mints a key: each
+// needed AUTH_* key variable unset is reported by name, all in one error, and the
+// optional provider-token key is not among them.
+func TestProductionRefusesUnsetKeys(t *testing.T) {
+	needed := []auth.KeyName{auth.KeyJWT, auth.KeyChallengePepper, auth.KeyIdentifier, auth.KeyDeliveryEncrypter}
+	for _, missing := range needed {
+		t.Run(string(missing), func(t *testing.T) {
+			setProductionKeys(t)
+			t.Setenv(string(missing), "")
+			_, err := buildAuthConfig(quietLog(), environment.ModeProduction, nil)
+			if !errors.Is(err, auth.ErrKeyRequired) || !strings.Contains(err.Error(), string(missing)) {
+				t.Fatalf("err = %v, want ErrKeyRequired naming %s", err, missing)
+			}
+		})
+	}
+	t.Run("all", func(t *testing.T) {
+		for name := range productionKeys {
+			t.Setenv(string(name), "")
+		}
+		_, err := buildAuthConfig(quietLog(), environment.ModeProduction, nil)
+		if !errors.Is(err, auth.ErrKeyRequired) {
+			t.Fatalf("err = %v, want ErrKeyRequired", err)
+		}
+		for _, name := range needed {
+			if !strings.Contains(err.Error(), string(name)) {
+				t.Errorf("joined error does not name %s: %v", name, err)
+			}
+		}
+		if strings.Contains(err.Error(), string(auth.KeyTokenEncrypter)) {
+			t.Errorf("the optional token key was reported: %v", err)
+		}
+	})
+}
+
+// TestAuthDebugRefusedOutsideDevelopment proves AUTH_DEBUG=1 stops run() before
+// anything is built, with its own sentinel naming the variable.
+func TestAuthDebugRefusedOutsideDevelopment(t *testing.T) {
+	t.Setenv("AUTH_DEBUG", "1")
+	err := run(context.Background(), quietLog(), environment.ModeProduction)
+	if !errors.Is(err, errDebugRouteOutsideDevelopment) || !strings.Contains(err.Error(), "AUTH_DEBUG") {
+		t.Fatalf("run(production, AUTH_DEBUG=1) = %v, want errDebugRouteOutsideDevelopment naming AUTH_DEBUG", err)
+	}
+	if err := refuseDebugRouteOutsideDevelopment(environment.ModeDevelopment); err != nil {
+		t.Errorf("development with AUTH_DEBUG=1: %v", err)
+	}
+	t.Setenv("AUTH_DEBUG", "")
+	if err := refuseDebugRouteOutsideDevelopment(environment.ModeProduction); err != nil {
+		t.Errorf("production without AUTH_DEBUG: %v", err)
+	}
+}
+
 // TestDevelopmentConsoleTransportWarns observes the one development console warning
 // the host is expected to emit (design §6.3): its dev wiring runs console email +
 // phone transports, so construction in development mode logs a development-only
 // delivery-transport WARN (and never rejects). Production rejects the same wiring
-// (TestProductionNegatives); development warns and proceeds.
+// (TestProductionNegatives); development warns and proceeds. AUTH_RUNTIME_MODE no
+// longer reaches the config: main resolves the mode once.
 func TestDevelopmentConsoleTransportWarns(t *testing.T) {
-	// The host's development posture is now overridable from the environment
-	// (AUTH_RUNTIME_MODE); pin both posture keys empty (= not provided) so this
-	// development-default assertion cannot be decided by an ambient value.
-	t.Setenv("AUTH_RUNTIME_MODE", "")
+	t.Setenv("AUTH_RUNTIME_MODE", "production")
 	t.Setenv("AUTH_DELIVERY_MODE", "")
 	rec := &recordHandler{}
-	cfg, err := buildAuthConfig(slog.New(rec), nil)
+	cfg, err := buildAuthConfig(slog.New(rec), environment.ModeDevelopment, nil)
 	if err != nil {
 		t.Fatalf("buildAuthConfig: %v", err)
 	}
 	if cfg.RuntimeMode != environment.ModeDevelopment {
-		t.Fatalf("host default RuntimeMode = %q, want development", cfg.RuntimeMode)
+		t.Fatalf("RuntimeMode = %q, want the development mode passed in", cfg.RuntimeMode)
 	}
 	// run() wires the generic-jobs dispatcher; reproduce it so jobs-mode construction succeeds.
 	cfg.DeliveryDispatcher = jobsDispatcher(t)

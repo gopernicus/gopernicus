@@ -57,6 +57,9 @@ type constructorConfig struct {
 	DeliveryEventsEmitter         sdkevents.Emitter
 	DeliveryJobsAcknowledged      bool
 	DeliveryEphemeralAcknowledged bool
+	OpportunisticTLSAcknowledged  bool
+	SingleFactorAcknowledged      bool
+	AuditDisabledAcknowledged     bool
 	InProcessDelivery             delivery.InProcessConfig
 	PublicAuthBaseURL             string   `env:"AUTH_PUBLIC_BASE_URL"`
 	PasswordResetURL              string   `env:"AUTH_PASSWORD_RESET_URL"`
@@ -192,9 +195,16 @@ type IdentityConfig struct {
 	// safe default (credential.NewDefaultPolicy: one direct login method + one
 	// verified recovery method, PSTN restricted) when the credential suite is
 	// enabled (phase 6); a host may supply stronger rules. The slot is frozen here
-	// (AV3-0.4). ErrCredentialPolicyRequired is declared for a strict-production
-	// posture but no code path returns it today: a nil policy always selects the default.
+	// (AV3-0.4).
 	CredentialPolicy credential.Policy
+	// SingleFactorAcknowledged affirms that the host accepts single-factor native
+	// login: password flows on (PasswordFlowsDisabled false) or any Passwordless
+	// kind listed, each a one-factor (AAL1) credential. Production refuses that
+	// posture without it (ErrSingleFactorUnacknowledged) and logs one
+	// posture_waiver WARN with it; development WARNs either way. It is inert when
+	// native login is off, so one binary can run in several environments. It is a
+	// wiring assertion set as a literal in the composition root, not an env knob.
+	SingleFactorAcknowledged bool
 }
 
 // WithIdentity replaces the complete IdentityConfig group, including zero values.
@@ -204,6 +214,7 @@ func WithIdentity(value IdentityConfig) Option {
 		c.IdentifierNormalizer = value.IdentifierNormalizer
 		c.IdentifierKeyer = value.IdentifierKeyer
 		c.CredentialPolicy = value.CredentialPolicy
+		c.SingleFactorAcknowledged = value.SingleFactorAcknowledged
 	}
 }
 
@@ -279,6 +290,16 @@ type DeliveryConfig struct {
 	// "jobs". Development tolerates the zero value. It is a wiring assertion set in the
 	// composition root, not an env knob.
 	DeliveryEphemeralAcknowledged bool
+	// OpportunisticTLSAcknowledged affirms that the host accepts a Mailer or
+	// BodySender declaring notify.TransportSecurityStartTLS: a relay that does not
+	// offer STARTTLS, or an attacker who strips the offer, leaves the message (a
+	// code or link) in plaintext. Production refuses such a transport without it
+	// (ErrInsecureDeliveryTransport wrapping notify.ErrOpportunisticTLS), at the
+	// root and in the delivery router's ValidateTransports, and logs one
+	// posture_waiver WARN with it. It is inert when no transport declares STARTTLS.
+	// Prefer a mandatory-TLS transport (email.SMTPConfig.RequireTLS). It is a
+	// wiring assertion set in the composition root, not an env knob.
+	OpportunisticTLSAcknowledged bool
 	// InProcessDelivery tunes the bounded, EPHEMERAL in-process delivery runtime
 	// (authv3-delivery-refactor AV3D-4.5). Meaningful ONLY for DeliveryMode
 	// "in_process"; the zero value is a valid, fully-defaulted configuration. Every knob
@@ -302,6 +323,7 @@ func WithDelivery(value DeliveryConfig) Option {
 		c.DeliveryEventsEmitter = value.DeliveryEventsEmitter
 		c.DeliveryJobsAcknowledged = value.DeliveryJobsAcknowledged
 		c.DeliveryEphemeralAcknowledged = value.DeliveryEphemeralAcknowledged
+		c.OpportunisticTLSAcknowledged = value.OpportunisticTLSAcknowledged
 		c.InProcessDelivery = value.InProcessDelivery
 	}
 }
@@ -836,6 +858,8 @@ type AdministrationConfig struct {
 	// (`env:"AUTH_LIST_STRATEGY" default:"cursor"` via sdk/config ParseEnvTags),
 	// never from os.Getenv inside the pocket. Any other value is
 	// ErrInvalidListStrategy at construction (the loud-constructorConfig posture).
+	// Key material follows the same rule: the host fills KeysInput (the
+	// environment package's ParseEnvTags, or any other source) and calls NewKeys.
 	ListStrategy string `env:"AUTH_LIST_STRATEGY" default:"cursor"`
 }
 
@@ -853,6 +877,16 @@ func WithAdministration(value AdministrationConfig) Option {
 func WithExternal(value authlogic.ExternalConfig) Option {
 	return func(c *constructorConfig) {
 		c.External = &value
+	}
+}
+
+// WithAuditDisabledAcknowledged waives the production requirement for
+// Repositories.SecurityEvents; New logs one posture_waiver WARN. Beside a wired
+// SecurityEvents it is ErrAuditAcknowledgedWithSecurityEvents in every mode.
+// Pass it as a literal in the composition root, never from configuration.
+func WithAuditDisabledAcknowledged() Option {
+	return func(c *constructorConfig) {
+		c.AuditDisabledAcknowledged = true
 	}
 }
 

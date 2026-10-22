@@ -26,7 +26,6 @@ import (
 	gooidc "github.com/gopernicus/gopernicus/integrations/cryptids/go-oidc"
 	authenticationhttp "github.com/gopernicus/gopernicus/pockets/authentication/inbound/http"
 	authlogic "github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication"
-	sdkauth "github.com/gopernicus/gopernicus/sdk/capabilities/authentication"
 	"github.com/gopernicus/gopernicus/sdk/pkg/environment"
 	"github.com/gopernicus/gopernicus/sdk/pkg/logging"
 	"github.com/gopernicus/gopernicus/sdk/pkg/web"
@@ -103,8 +102,8 @@ func newHandler(ctx context.Context, origin string, mode environment.Mode, log *
 	store := memstore.New(log)
 	engine, err := authlogic.NewExternalAuthenticator(store.Repositories(), authlogic.ExternalConfig{
 		Providers: []authlogic.ExternalProvider{
-			{Name: providerName, Provider: sdkauth.NewOIDC(dev.Issuer(), headerVerifier, profile), ProvisionOnFirstVerification: true},
-			{Name: providerName, Provider: sdkauth.NewOIDC(dev.SessionIssuer(), sessionVerifier, profile), CookieName: devissuer.CookieName, ProvisionOnFirstVerification: true},
+			{Name: providerName, Provider: devissuer.NewProvider(dev.Issuer(), headerVerifier, profile), ProvisionOnFirstVerification: true},
+			{Name: providerName, Provider: devissuer.NewProvider(dev.SessionIssuer(), sessionVerifier, profile), CookieName: devissuer.CookieName, ProvisionOnFirstVerification: true},
 		},
 	}, mode, authlogic.WithExternalLogger(log))
 	if err != nil {

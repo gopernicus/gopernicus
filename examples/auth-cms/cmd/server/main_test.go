@@ -14,6 +14,7 @@ import (
 	delivery "github.com/gopernicus/gopernicus/pockets/authentication/logic/delivery"
 	"github.com/gopernicus/gopernicus/pockets/jobs"
 	jobsmem "github.com/gopernicus/gopernicus/pockets/jobs/stores/memory"
+	"github.com/gopernicus/gopernicus/sdk/pkg/environment"
 )
 
 // quietLog is a discarding logger so the console transports' dev WARN and the
@@ -31,7 +32,7 @@ func quietLog() *slog.Logger {
 // fail anyway, and the failure is clearer here.
 func hostAllowedOrigins(t *testing.T) []string {
 	t.Helper()
-	cfg, err := buildAuthConfig(quietLog(), nil)
+	cfg, err := buildAuthConfig(quietLog(), environment.ModeDevelopment, nil)
 	if err != nil {
 		t.Fatalf("buildAuthConfig: %v", err)
 	}
@@ -63,7 +64,7 @@ func TestBuildAuthConfigConstructs(t *testing.T) {
 	// AUTH_DELIVERY_MODE now overrides; pin it empty (= not provided) so an ambient
 	// value cannot decide the outcome.
 	t.Setenv("AUTH_DELIVERY_MODE", "")
-	cfg, err := buildAuthConfig(quietLog(), nil)
+	cfg, err := buildAuthConfig(quietLog(), environment.ModeDevelopment, nil)
 	if err != nil {
 		t.Fatalf("buildAuthConfig: %v", err)
 	}
@@ -99,7 +100,7 @@ func TestBuildAuthConfigConstructs(t *testing.T) {
 // jobs.FencedRuntime (proven in the jobs_delivery tests); this exercises the analogous
 // in_process runtime the same host offers as the small-deployment mode.
 func TestDeliveryRuntimeStartStop(t *testing.T) {
-	cfg, err := buildAuthConfig(quietLog(), nil)
+	cfg, err := buildAuthConfig(quietLog(), environment.ModeDevelopment, nil)
 	if err != nil {
 		t.Fatalf("buildAuthConfig: %v", err)
 	}

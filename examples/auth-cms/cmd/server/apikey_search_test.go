@@ -10,6 +10,7 @@ import (
 	authorizationhttp "github.com/gopernicus/gopernicus/pockets/authorization/inbound/http"
 
 	mutations "github.com/gopernicus/gopernicus/pockets/authorization/logic/mutations"
+	"github.com/gopernicus/gopernicus/sdk/pkg/environment"
 	listing "github.com/gopernicus/gopernicus/sdk/pkg/list"
 )
 
@@ -44,7 +45,7 @@ type machineHost struct {
 func newMachineHost(t *testing.T) *machineHost {
 	t.Helper()
 
-	components, err := newAuthorization(nil, nil)
+	components, err := newAuthorization(nil, environment.ModeDevelopment, nil)
 	if err != nil {
 		t.Fatalf("newAuthorization: %v", err)
 	}

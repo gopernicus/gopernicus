@@ -21,6 +21,7 @@ import (
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/mutations"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/relationships"
 	"github.com/gopernicus/gopernicus/sdk"
+	"github.com/gopernicus/gopernicus/sdk/pkg/environment"
 )
 
 // The failure occurs after the host's real grant commits and before authentication
@@ -45,7 +46,7 @@ func TestInvitationCommittedGrantRecoveryThroughHTTP(t *testing.T) {
 	components := hostAuthz(t)
 	g, _ := hostGranter(components.Mutations, resourceKey(demoResourceType, demoResourceID))
 	sender := &recordingSender{}
-	cfg, err := buildAuthConfig(quietLog(), g)
+	cfg, err := buildAuthConfig(quietLog(), environment.ModeDevelopment, g)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -182,7 +183,7 @@ func newSettlementHost(t *testing.T, wrapGranter func(invitations.Granter) invit
 		granter = wrapGranter(g)
 	}
 	sender := &recordingSender{}
-	cfg, err := buildAuthConfig(quietLog(), granter)
+	cfg, err := buildAuthConfig(quietLog(), environment.ModeDevelopment, granter)
 	if err != nil {
 		t.Fatal(err)
 	}

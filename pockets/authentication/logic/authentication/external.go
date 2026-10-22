@@ -157,7 +157,11 @@ func NewExternalAuthenticator(repos ExternalRepositories, cfg ExternalConfig, ru
 	if o.normalizer != nil && nilDependency(o.normalizer) || o.keyer != nil && nilDependency(o.keyer) {
 		return nil, fmt.Errorf("authentication: external option contains a typed nil: %w", sdk.ErrInvalidInput)
 	}
-	cfg, err := validateExternal(cfg, repos, runtimeMode, o.keyer, "")
+	log := o.logger
+	if log == nil {
+		log = slog.Default()
+	}
+	cfg, err := validateExternal(cfg, repos, runtimeMode, o.keyer, "", log)
 	if err != nil {
 		return nil, err
 	}

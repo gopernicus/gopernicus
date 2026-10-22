@@ -24,6 +24,7 @@ import (
 	// The load-bearing sequence is: request a link for an address with NO account →
 	// assert NO user exists yet → redeem by POST → assert the account now exists and
 	// the caller is signed in → assert the replay fails. A test that only checked
+	"github.com/gopernicus/gopernicus/sdk/pkg/environment"
 	// "redeem returned 200" would not prove the account is created at CONSUME rather
 	// than at SEND, which is the entire security claim.
 	delivery "github.com/gopernicus/gopernicus/pockets/authentication/logic/delivery"
@@ -61,7 +62,7 @@ func newProvisioningHostWithInvitations(t *testing.T) (*linkHost, *recordingGran
 	granter := &recordingGranter{}
 	sender := &recordingSender{}
 
-	cfg, err := buildAuthConfig(quietLog(), granter)
+	cfg, err := buildAuthConfig(quietLog(), environment.ModeDevelopment, granter)
 	if err != nil {
 		t.Fatalf("buildAuthConfig: %v", err)
 	}
@@ -247,7 +248,7 @@ func TestProvisionDisabledSendsNothingForUnknownAddress(t *testing.T) {
 // TestProvisionWiringFailsLoudly pins the construction matrix: every dependency
 // provisioning needs is required, not best-effort.
 func TestProvisionWiringFailsLoudly(t *testing.T) {
-	base, err := buildAuthConfig(quietLog(), nil)
+	base, err := buildAuthConfig(quietLog(), environment.ModeDevelopment, nil)
 	if err != nil {
 		t.Fatalf("buildAuthConfig: %v", err)
 	}

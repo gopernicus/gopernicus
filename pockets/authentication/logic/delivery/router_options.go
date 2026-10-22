@@ -90,3 +90,13 @@ func WithRouterLogger(value *slog.Logger) RouterOption {
 		c.Logger = value
 	}
 }
+
+// WithOpportunisticTLSAcknowledged admits, in ValidateTransports' production
+// verdict, a sender declaring opportunistic STARTTLS. The pocket root applies it
+// from DeliveryConfig.OpportunisticTLSAcknowledged; a host composing the router
+// directly passes it as a literal, never from configuration.
+func WithOpportunisticTLSAcknowledged() RouterOption {
+	return func(c *routerConfig) {
+		c.OpportunisticTLSAcknowledged = true
+	}
+}
