@@ -25,8 +25,12 @@ import (
 )
 
 func main() {
-	// A missing .env is allowed; malformed configuration must stop startup.
-	if err := environment.LoadEnv(); err != nil {
+	// The runtime mode comes from the process environment only: .env is loaded
+	// in development and never opened in production, and a .env that names
+	// APP_RUNTIME_MODE is refused. A missing .env is allowed; malformed
+	// configuration must stop startup.
+	mode, err := environment.LoadEnvForMode("APP_RUNTIME_MODE")
+	if err != nil {
 		slog.Error("load environment", "error", err)
 		os.Exit(1)
 	}
@@ -41,22 +45,35 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	if err := run(ctx, log); err != nil {
+	if err := run(ctx, log, mode); err != nil {
 		log.Error("server exited with error", "error", err)
 		os.Exit(1)
 	}
 }
 
-func run(ctx context.Context, log *slog.Logger) error {
+func run(ctx context.Context, log *slog.Logger, mode environment.Mode) error {
+	srv := web.ServerConfig{Port: "{{.Port}}"}
+	if err := environment.ParseEnvTags("", &srv); err != nil {
+		return err
+	}
+	// Production requires an https PUBLIC_BASE_URL; development keeps the
+	// http://HOST:PORT fallback.
+	if mode.IsProduction() {
+		if err := srv.ValidateProduction(); err != nil {
+			return err
+		}
+	}
 {{- if .HasDB}}
 
 	// Database. The connector owns the driver, DSN, and dialect error mapping;
 	// the host owns the schema — migrations live under workshop/migrations and
 	// are applied pre-boot by `make migrate`, never by the framework at startup.
+	// Under production the connector refuses a connection without verified TLS.
 {{- if eq .DB "turso"}}
 	db, err := {{.ConnectorAlias}}.Open(ctx, {{.ConnectorAlias}}.Config{
-		URL:       os.Getenv("TURSO_DATABASE_URL"),
-		AuthToken: os.Getenv("TURSO_AUTH_TOKEN"),
+		URL:         os.Getenv("TURSO_DATABASE_URL"),
+		AuthToken:   os.Getenv("TURSO_AUTH_TOKEN"),
+		RuntimeMode: mode,
 	})
 	if err != nil {
 		return err
@@ -66,6 +83,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 	if err := environment.ParseEnvTags("", &dbCfg); err != nil {
 		return err
 	}
+	dbCfg.RuntimeMode = mode
 	db, err := {{.ConnectorAlias}}.Open(ctx, dbCfg)
 	if err != nil {
 		return err
@@ -76,12 +94,17 @@ func run(ctx context.Context, log *slog.Logger) error {
 
 	// Host-owned HTTP router + middleware stack. Pockets mount their routes onto
 	// this via the narrow RouteRegistrar; the host never sees a concrete handler.
+	// TrustProxies runs outermost so every later layer sees the client IP
+	// resolved from TRUSTED_PROXY_COUNT; SecurityHeaders sends HSTS and the
+	// browser defaults (TLS terminates at the edge; the app sends HSTS).
 	router := web.NewWebHandler()
-	router.Use(web.RequestID(), web.Logger(log), web.Panics(log))
+	router.Use(web.TrustProxies(srv.TrustedProxyCount), web.SecurityHeaders(), web.RequestID(), web.Logger(log), web.Panics(log))
 
 	// ── Mount your pockets here ─────────────────────────────────────────────
 	// Add the pocket (and, if it persists data, a store adapter) to go.mod.
-	// Construct its services with the required inputs and optional With... options.
+	// Construct its services with the required inputs and optional With... options,
+	// passing this host's mode to every pocket that takes one — for example
+	// cms.Config{RuntimeMode: mode, …} or authorization.WithRuntimeMode(mode).
 	// Hosts may call public use cases directly from handlers or workers. For a
 	// pocket that supplies HTTP components, register them on the host router:
 	//
@@ -97,11 +120,6 @@ func run(ctx context.Context, log *slog.Logger) error {
 	// root router with no middleware, unauthenticated by design — a readiness
 	// probe can't log in.
 	router.Handle(http.MethodGet, "/healthz", healthzHandler({{if .HasDB}}db{{end}}))
-
-	srv := web.ServerConfig{Port: "{{.Port}}"}
-	if err := environment.ParseEnvTags("", &srv); err != nil {
-		return err
-	}
 
 	return web.Run(ctx, router, srv, log)
 }

@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -13,23 +14,31 @@ import (
 // fixtureModule is the module path of every generated guard fixture host.
 const fixtureModule = "example.com/acme"
 
-// contractRow matches one `| **Hn** | sentence |` row of examples/README.md §3.
-// The import-law table's rows carry words after the bold id and never match.
-var contractRow = regexp.MustCompile(`^\| \*\*(H[0-9]+)\*\* \| (.*) \|$`)
+// contractRow matches one `| **Hn** | sentence |` row of examples/README.md §3,
+// and postureRow one `| **Pn** | sentence |` row of §3b. The import-law table's
+// rows carry words after the bold id and never match.
+var (
+	contractRow = regexp.MustCompile(`^\| \*\*(H[0-9]+)\*\* \| (.*) \|$`)
+	postureRow  = regexp.MustCompile(`^\| \*\*(P[0-9]+)\*\* \| (.*) \|$`)
+)
 
 // guardFixture is one generated host: files maps a host-relative path to its
-// contents, written beside a go.mod and a cmd/server composition root.
+// contents, written beside a go.mod and a cmd/server composition root. notes,
+// when non-nil, are the informational line labels the rule must print, in any
+// order.
 type guardFixture struct {
 	name      string
 	rule      string
 	module    string
 	files     map[string]string
 	violating bool
+	notes     []string
 }
 
 // TestGuardListMatchesContract is what makes "the binary and this page cannot
 // drift" true: every canonical sentence the CLI embeds is byte-equal to the
-// examples/README.md §3 row with the same id, and the ids agree in order.
+// examples/README.md §3 (H) or §3b (P) row with the same id, and the ids agree
+// in order within each series. `--list` prints H; `--list --posture` H then P.
 func TestGuardListMatchesContract(t *testing.T) {
 	f, err := os.Open(filepath.Join(repoRoot(t), "examples", "README.md"))
 	if err != nil {
@@ -37,40 +46,54 @@ func TestGuardListMatchesContract(t *testing.T) {
 	}
 	defer f.Close()
 
-	var ids, sentences []string
+	var rows [2][][2]string
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	for sc.Scan() {
-		if m := contractRow.FindStringSubmatch(sc.Text()); m != nil {
-			ids = append(ids, m[1])
-			sentences = append(sentences, m[2])
+		for i, re := range []*regexp.Regexp{contractRow, postureRow} {
+			if m := re.FindStringSubmatch(sc.Text()); m != nil {
+				rows[i] = append(rows[i], [2]string{m[1], m[2]})
+			}
 		}
 	}
 	if err := sc.Err(); err != nil {
 		t.Fatal(err)
 	}
 
-	if len(ids) != len(guardRules) {
-		t.Fatalf("examples/README.md §3 has %d canonical rows, the CLI embeds %d rules", len(ids), len(guardRules))
-	}
-	for i, rule := range guardRules {
-		if ids[i] != rule.id {
-			t.Errorf("row %d: README id %s, CLI id %s", i, ids[i], rule.id)
+	var all [][2]string
+	for i, series := range [][]guardRule{guardRules, postureRules} {
+		if len(rows[i]) != len(series) {
+			t.Fatalf("examples/README.md has %d canonical %s rows, the CLI embeds %d rules", len(rows[i]), series[0].id[:1], len(series))
 		}
-		if sentences[i] != rule.sentence {
-			t.Errorf("%s drifted:\nREADME: %s\nCLI:    %s", rule.id, sentences[i], rule.sentence)
+		for j, rule := range series {
+			id, sentence := rows[i][j][0], rows[i][j][1]
+			if id != rule.id {
+				t.Errorf("row %d: README id %s, CLI id %s", j, id, rule.id)
+			}
+			if sentence != rule.sentence {
+				t.Errorf("%s drifted:\nREADME: %s\nCLI:    %s", rule.id, sentence, rule.sentence)
+			}
 		}
+		all = append(all, rows[i]...)
 	}
 
-	out := captureStdout(t, func() int { return Run([]string{"guard", "--list"}) })
-	lines := strings.Split(strings.TrimSuffix(out, "\n"), "\n")
-	if len(lines) != len(guardRules) {
-		t.Fatalf("--list printed %d lines, want %d", len(lines), len(guardRules))
-	}
-	for i, line := range lines {
-		want := ids[i] + strings.Repeat(" ", 4-len(ids[i])) + sentences[i]
-		if line != want {
-			t.Errorf("--list line %d:\n got %q\nwant %q", i, line, want)
+	for _, c := range []struct {
+		args []string
+		want [][2]string
+	}{
+		{[]string{"guard", "--list"}, rows[0]},
+		{[]string{"guard", "--list", "--posture"}, all},
+	} {
+		out := captureStdout(t, func() int { return Run(c.args) })
+		lines := strings.Split(strings.TrimSuffix(out, "\n"), "\n")
+		if len(lines) != len(c.want) {
+			t.Fatalf("%v printed %d lines, want %d", c.args, len(lines), len(c.want))
+		}
+		for i, line := range lines {
+			id, sentence := c.want[i][0], c.want[i][1]
+			if want := id + strings.Repeat(" ", 4-len(id)) + sentence; line != want {
+				t.Errorf("%v line %d:\n got %q\nwant %q", c.args, i, line, want)
+			}
 		}
 	}
 }
@@ -271,6 +294,7 @@ func TestGuardRuleFixtures(t *testing.T) {
 			"internal/inbound/views/shell.go": goSrc("views", nil, ""),
 		}},
 	}
+	cases = append(cases, postureFixtures()...)
 
 	clean, violating := map[string]bool{}, map[string]bool{}
 	for _, c := range cases {
@@ -287,6 +311,15 @@ func TestGuardRuleFixtures(t *testing.T) {
 			case !c.violating && res.checked == 0:
 				t.Fatalf("%s checked nothing on a clean fixture: the case is vacuous", c.rule)
 			}
+			if c.notes != nil {
+				var got []string
+				for _, n := range res.notes {
+					got = append(got, n.label)
+				}
+				if !sameLabels(got, c.notes) {
+					t.Fatalf("%s notes = %q, want %q (%+v)", c.rule, got, c.notes, res.notes)
+				}
+			}
 		})
 		if c.violating {
 			violating[c.rule] = true
@@ -294,7 +327,7 @@ func TestGuardRuleFixtures(t *testing.T) {
 			clean[c.rule] = true
 		}
 	}
-	for _, rule := range guardRules {
+	for _, rule := range append(append([]guardRule{}, guardRules...), postureRules...) {
 		if !clean[rule.id] || !violating[rule.id] {
 			t.Errorf("%s lacks a clean (%v) or violating (%v) fixture", rule.id, clean[rule.id], violating[rule.id])
 		}
@@ -305,6 +338,10 @@ func TestGuardExitCodes(t *testing.T) {
 	cleanHost := writeFixture(t, guardFixture{})
 	dirtyHost := writeFixture(t, guardFixture{files: map[string]string{
 		"internal/foo/foo.go": goSrc("foo", nil, ""),
+	}})
+	postureClean := writeFixture(t, guardFixture{files: map[string]string{"cmd/server/main.go": postureRoot()}})
+	postureDirty := writeFixture(t, guardFixture{files: map[string]string{
+		"cmd/server/main.go": postureRoot("web.TrustProxies(srv.TrustedProxyCount), web.SecurityHeaders(), ", ""),
 	}})
 	cases := []struct {
 		name string
@@ -318,6 +355,14 @@ func TestGuardExitCodes(t *testing.T) {
 		{"list", []string{"guard", "--list"}, 0},
 		{"unknown flag", []string{"guard", "--skip", "H0"}, 2},
 		{"two roots", []string{"guard", cleanHost, dirtyHost}, 2},
+		{"posture clean", []string{"guard", "--posture", postureClean}, 0},
+		{"posture finding", []string{"guard", "--posture", postureDirty}, 1},
+		{"posture finding is not an H finding", []string{"guard", postureDirty}, 0},
+		{"posture with nothing in scope", []string{"guard", "--posture", cleanHost}, 0},
+		{"posture H finding", []string{"guard", "--posture", dirtyHost}, 1},
+		{"posture list", []string{"guard", "--list", "--posture"}, 0},
+		{"posture after the root", []string{"guard", cleanHost, "--posture"}, 2},
+		{"posture no go.mod", []string{"guard", "--posture", t.TempDir()}, 2},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -371,6 +416,33 @@ func TestGuardNothingToCheckIsReported(t *testing.T) {
 	}
 }
 
+// TestGuardPostureExtendsTheRun proves --posture only appends: the H status
+// lines are byte-equal to a plain run's, the nine P lines follow, and the
+// informational lines appear only under --posture.
+func TestGuardPostureExtendsTheRun(t *testing.T) {
+	root := writeFixture(t, guardFixture{files: map[string]string{"cmd/server/main.go": postureRoot()}})
+	plain := captureStdout(t, func() int { return Run([]string{"guard", root}) })
+	posture := captureStdout(t, func() int { return Run([]string{"guard", "--posture", root}) })
+
+	plainLines, postureLines := strings.Split(plain, "\n"), strings.Split(posture, "\n")
+	for i := range guardRules {
+		if plainLines[i] != postureLines[i] {
+			t.Errorf("status line %d: plain %q, posture %q", i, plainLines[i], postureLines[i])
+		}
+	}
+	for i, rule := range postureRules {
+		if line := postureLines[len(guardRules)+i]; !strings.HasPrefix(line, rule.id+" ") {
+			t.Errorf("posture status line %d = %q, want %s", len(guardRules)+i, line, rule.id)
+		}
+	}
+	if strings.Contains(plain, "ack ") || !strings.HasSuffix(plain, "guard: clean (15 rules, 1 package)\n") {
+		t.Errorf("plain run changed:\n%s", plain)
+	}
+	if !strings.Contains(posture, "\nack  cmd/server/main.go:") || !strings.HasSuffix(posture, "guard: clean (24 rules, 1 package)\n") {
+		t.Errorf("posture run lacks its ack line or summary:\n%s", posture)
+	}
+}
+
 func TestReadModulePath(t *testing.T) {
 	cases := []struct {
 		gomod string
@@ -403,7 +475,7 @@ func evalFixture(t *testing.T, c guardFixture) guardResult {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, rule := range guardRules {
+	for _, rule := range append(append([]guardRule{}, guardRules...), postureRules...) {
 		if rule.id == c.rule {
 			return rule.eval(host)
 		}
@@ -455,4 +527,212 @@ func goSrc(pkg string, imports []string, body string) string {
 func compositionBody(extra string) string {
 	return "type ItemService interface{ Get(id string) (string, error) }\n\n" +
 		"type Dependencies struct{ Items ItemService }\n\n" + extra
+}
+
+// postureBase is a posture-clean composition root over every surface P rules
+// read; postureRoot edits it. Its import paths are filled from the framework
+// family prefixes, so G11 never sees a quoted pocket path in this file.
+const postureBase = `package main
+
+import (
+	"context"
+	"crypto/rand"
+	"net/http"
+	"os"
+
+	authentication "{authentication}"
+	authorization "{authorization}"
+	cms "{cms}"
+	pgxdb "{pgxdb}"
+	tursodb "{turso}"
+	environment "{environment}"
+	web "{web}"
+)
+
+func main() {
+	mode, err := environment.LoadEnvForMode("APP_RUNTIME_MODE")
+	if err != nil {
+		os.Exit(1)
+	}
+	_ = run(context.Background(), mode)
+}
+
+func run(ctx context.Context, mode environment.Mode) error {
+	srv := web.ServerConfig{}
+	if mode.IsProduction() {
+		if err := srv.ValidateProduction(); err != nil {
+			return err
+		}
+	}
+	router := web.NewWebHandler()
+	router.Use(web.TrustProxies(srv.TrustedProxyCount), web.SecurityHeaders(), web.RequestID())
+	if err := cms.Register(nil, nil, cms.Config{RuntimeMode: mode, AdminUngatedAcknowledged: true}); err != nil {
+		return err
+	}
+	// extra
+	return web.Run(ctx, router, srv, nil)
+}
+`
+
+// The P7 fixture: a clean .env.example over postureBase's APP_RUNTIME_MODE.
+const postureEnvExample = `# APP_RUNTIME_MODE=development|production — process environment only
+TRUSTED_PROXY_COUNT=0
+PUBLIC_BASE_URL=
+DB_SSLMODE=verify-full
+# DB_SSLMODE=disable  # local docker only — refused in production
+DB_URL=                # e.g. postgres://u@h/db?sslmode=disable
+`
+
+// The extra-statement marker in postureBase and the mode resolution in its main.
+const (
+	postureExtra   = "\t// extra\n"
+	postureResolve = "\tmode, err := environment.LoadEnvForMode(\"APP_RUNTIME_MODE\")\n\tif err != nil {\n\t\tos.Exit(1)\n\t}\n"
+)
+
+// postureRoot renders postureBase with each (old, new) pair replaced once.
+func postureRoot(pairs ...string) string {
+	src := strings.NewReplacer(
+		"{authentication}", fwPockets+"/authentication",
+		"{authorization}", fwPockets+"/authorization",
+		"{cms}", fwPockets+"/cms",
+		"{pgxdb}", fwIntegrations+"/datastores/pgxdb",
+		"{turso}", fwIntegrations+"/datastores/turso",
+		"{environment}", fwSDK+"/pkg/environment",
+		"{web}", fwSDK+"/pkg/web",
+	).Replace(postureBase)
+	for i := 0; i+1 < len(pairs); i += 2 {
+		if !strings.Contains(src, pairs[i]) {
+			panic("postureRoot: no " + strconv.Quote(pairs[i]))
+		}
+		src = strings.Replace(src, pairs[i], pairs[i+1], 1)
+	}
+	return src
+}
+
+// postureEnv renders postureEnvExample with each (old, new) pair replaced once.
+func postureEnv(pairs ...string) string {
+	src := postureEnvExample
+	for i := 0; i+1 < len(pairs); i += 2 {
+		if !strings.Contains(src, pairs[i]) {
+			panic("postureEnv: no " + strconv.Quote(pairs[i]))
+		}
+		src = strings.Replace(src, pairs[i], pairs[i+1], 1)
+	}
+	return src
+}
+
+// postureFixtures are the P cases of TestGuardRuleFixtures: each P id has at
+// least one clean and one violating host, and P5/P6 pin their informational
+// lines.
+func postureFixtures() []guardFixture {
+	root := func(pairs ...string) map[string]string {
+		return map[string]string{"cmd/server/main.go": postureRoot(pairs...)}
+	}
+	extra := func(stmts string) map[string]string { return root(postureExtra, stmts) }
+	env := func(pairs ...string) map[string]string {
+		return map[string]string{"cmd/server/main.go": postureRoot(), ".env.example": postureEnv(pairs...)}
+	}
+	modeField := func(tag string) string {
+		return "\tvar cfg struct {\n\t\tMode environment.Mode `" + tag + "`\n\t}\n" +
+			"\tif err := environment.ParseEnvTags(\"\", &cfg); err != nil {\n\t\tos.Exit(1)\n\t}\n\tmode := cfg.Mode\n"
+	}
+	newHandler := "\nfunc newHandler(srv web.ServerConfig) (http.Handler, error) {\n\tif srv.Port == \"\" {\n\t\treturn nil, nil\n\t}\n" +
+		"\trouter := web.NewWebHandler()\n\trouter.Use(web.TrustProxies(srv.TrustedProxyCount), web.SecurityHeaders())\n\treturn router, nil\n}\n"
+
+	return []guardFixture{
+		{name: "mode from LoadEnvForMode, constants only compared", rule: "P0", files: extra(
+			"\tif mode == environment.ModeProduction {\n\t}\n\tswitch mode {\n\tcase environment.ModeDevelopment:\n\t}\n")},
+		{name: "a required Mode env field", rule: "P0", files: root(postureResolve, modeField(`env:"APP_RUNTIME_MODE" required:"true"`))},
+		{name: "LoadEnv reads .env in every mode", rule: "P0", violating: true, files: extra("\t_ = environment.LoadEnv()\n")},
+		{name: "a Mode env field with a default", rule: "P0", violating: true, files: root(postureResolve,
+			modeField(`env:"APP_RUNTIME_MODE" required:"true" default:"development"`))},
+		{name: "ModeDevelopment passed as an argument", rule: "P0", violating: true, files: root(
+			"run(context.Background(), mode)", "run(context.Background(), environment.ModeDevelopment)")},
+		{name: "no mode resolved from the environment", rule: "P0", violating: true, files: root(postureResolve,
+			"\tmode := environment.Mode(os.Getenv(\"APP_RUNTIME_MODE\"))\n")},
+
+		{name: "every surface names the mode", rule: "P1", files: extra(
+			"\tvar dbCfg pgxdb.Config\n\tdbCfg.RuntimeMode = mode\n" +
+				"\t_, _ = tursodb.Open(ctx, tursodb.Config{URL: \"file:x\", RuntimeMode: mode})\n" +
+				"\t_, _ = authentication.New(nil, nil, mode, \"jobs\")\n" +
+				"\t_, _ = authorization.New(nil, authorization.WithRuntimeMode(mode))\n")},
+		{name: "turso Config without RuntimeMode", rule: "P1", violating: true, files: extra(
+			"\t_, _ = tursodb.Open(ctx, tursodb.Config{URL: \"file:x\"})\n")},
+		{name: "var pgxdb.Config never given the mode", rule: "P1", violating: true, files: extra(
+			"\tvar dbCfg pgxdb.Config\n\t_ = dbCfg\n")},
+		{name: "authentication.New with the empty mode", rule: "P1", violating: true, files: extra(
+			"\t_, _ = authentication.New(nil, nil, \"\", \"jobs\")\n")},
+		{name: "authorization.New without WithRuntimeMode", rule: "P1", violating: true, files: extra(
+			"\t_, _ = authorization.New(nil)\n")},
+
+		{name: "router built and returned by a helper", rule: "P2", files: map[string]string{"cmd/server/main.go": postureRoot(
+			"\trouter := web.NewWebHandler()\n\trouter.Use(web.TrustProxies(srv.TrustedProxyCount), web.SecurityHeaders(), web.RequestID())\n",
+			"\thandler, err := newHandler(srv)\n\tif err != nil {\n\t\treturn err\n\t}\n",
+			"web.Run(ctx, router, srv, nil)", "web.Run(ctx, handler, srv, nil)",
+		) + newHandler}},
+		{name: "TrustProxies not outermost", rule: "P2", violating: true, files: root(
+			"web.TrustProxies(srv.TrustedProxyCount), web.SecurityHeaders(), web.RequestID()",
+			"web.RequestID(), web.TrustProxies(srv.TrustedProxyCount), web.SecurityHeaders()")},
+		{name: "a wrapped handler", rule: "P2", violating: true, files: root(
+			"web.Run(ctx, router, srv, nil)", "web.Run(ctx, http.TimeoutHandler(router, 0, \"\"), srv, nil)")},
+
+		{name: "SecurityHeadersWithConfig in a later Use", rule: "P3", files: root(
+			"router.Use(web.TrustProxies(srv.TrustedProxyCount), web.SecurityHeaders(), web.RequestID())",
+			"router.Use(web.TrustProxies(srv.TrustedProxyCount))\n\trouter.Use(web.SecurityHeadersWithConfig(web.SecurityHeadersConfig{FrameOptions: \"SAMEORIGIN\"}))")},
+		{name: "no SecurityHeaders", rule: "P3", violating: true, files: root("web.SecurityHeaders(), ", "")},
+
+		{name: "ServerConfig validated under production", rule: "P4", files: root()},
+		{name: "ServerConfig never validated", rule: "P4", violating: true, files: root(
+			"\tif mode.IsProduction() {\n\t\tif err := srv.ValidateProduction(); err != nil {\n\t\t\treturn err\n\t\t}\n\t}\n", "")},
+
+		{name: "true literal in an if's init statement", rule: "P5", notes: []string{"ack"}, files: root()},
+		{name: "false literal", rule: "P5", notes: []string{}, files: root(
+			"AdminUngatedAcknowledged: true", "AdminUngatedAcknowledged: false")},
+		{name: "conditional under switch and if", rule: "P5", notes: []string{"ack", "ack (conditional)", "ack (conditional)"}, files: extra(
+			"\tvar delivery authentication.DeliveryConfig\n\tswitch mode {\n\tcase environment.ModeDevelopment:\n" +
+				"\t\tdelivery.DeliveryEphemeralAcknowledged = true\n\t}\n\tif mode.IsProduction() {\n" +
+				"\t\tdelivery.DeliveryJobsAcknowledged = true\n\t}\n\t_ = delivery\n")},
+		{name: "option form as a direct argument of New", rule: "P5", notes: []string{"ack", "ack"}, files: extra(
+			"\t_, _ = authorization.New(nil, authorization.WithRuntimeMode(mode), authorization.WithAuditDisabledAcknowledged())\n")},
+		{name: "an expression", rule: "P5", violating: true, files: root(
+			"AdminUngatedAcknowledged: true", "AdminUngatedAcknowledged: os.Getenv(\"X\") != \"\"")},
+		{name: "option form outside New", rule: "P5", violating: true, files: extra(
+			"\topts := []authorization.Option{authorization.WithAuditDisabledAcknowledged()}\n" +
+				"\t_, _ = authorization.New(nil, append(opts, authorization.WithRuntimeMode(mode))...)\n")},
+
+		{name: "keys from a KeysInput through ParseEnvTags", rule: "P6", notes: []string{"rand"}, files: extra(
+			"\tvar in authentication.KeysInput\n\tif err := environment.ParseEnvTags(\"\", &in); err != nil {\n\t\treturn err\n\t}\n" +
+				"\tif _, err := authentication.NewKeys(mode, in, nil, authentication.KeyJWT); err != nil {\n\t\treturn err\n\t}\n" +
+				"\t_, _ = authentication.New(nil, nil, mode, \"jobs\")\n\tcursorKey := make([]byte, 32)\n\t_, _ = rand.Read(cursorKey)\n")},
+		{name: "authentication without NewKeys", rule: "P6", violating: true, files: extra(
+			"\t_, _ = authentication.New(nil, nil, mode, \"jobs\")\n")},
+		{name: "KeysInput not from the environment", rule: "P6", violating: true, files: extra(
+			"\tkeys, _ := authentication.NewKeys(mode, authentication.KeysInput{JWTSecret: \"00\"}, nil)\n\t_ = keys\n" +
+				"\t_, _ = authentication.New(nil, nil, mode, \"jobs\")\n")},
+
+		{name: "mode commented, TLS on, proxies and origin named", rule: "P7", files: env()},
+		{name: "uncommented DB_SSLMODE=disable", rule: "P7", violating: true, files: env(
+			"DB_SSLMODE=verify-full", "DB_SSLMODE=disable")},
+		{name: "the mode key assigned, even empty", rule: "P7", violating: true, files: env(
+			"TRUSTED_PROXY_COUNT=0\n", "TRUSTED_PROXY_COUNT=0\nAPP_RUNTIME_MODE=\n")},
+		{name: "AUTH_PUBLIC_BASE_URL does not name PUBLIC_BASE_URL", rule: "P7", violating: true, files: env(
+			"\nPUBLIC_BASE_URL=", "\nAUTH_PUBLIC_BASE_URL=")},
+		{name: "the mode key never mentioned", rule: "P7", violating: true, files: env(
+			"# APP_RUNTIME_MODE=development|production — process environment only\n", "")},
+
+		{name: "cms.Config gated", rule: "P8", files: root(
+			"AdminUngatedAcknowledged: true", "AdminMiddleware: []web.Middleware{web.RequestID()}")},
+		{name: "cms.Config names neither", rule: "P8", violating: true, files: root(", AdminUngatedAcknowledged: true", "")},
+	}
+}
+
+// sameLabels reports whether got and want hold the same labels in any order.
+func sameLabels(got, want []string) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	g, w := slices.Clone(got), slices.Clone(want)
+	slices.Sort(g)
+	slices.Sort(w)
+	return slices.Equal(g, w)
 }

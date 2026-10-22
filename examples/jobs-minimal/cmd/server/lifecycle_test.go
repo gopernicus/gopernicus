@@ -8,6 +8,8 @@ import (
 	"net"
 	"testing"
 	"time"
+
+	"github.com/gopernicus/gopernicus/sdk/pkg/environment"
 )
 
 func TestRunReturnsOnHTTPListenFailure(t *testing.T) {
@@ -25,7 +27,7 @@ func TestRunReturnsOnHTTPListenFailure(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	done := make(chan error, 1)
-	go func() { done <- run(ctx, slog.New(slog.NewTextHandler(io.Discard, nil))) }()
+	go func() { done <- run(ctx, slog.New(slog.NewTextHandler(io.Discard, nil)), environment.ModeDevelopment) }()
 	select {
 	case err := <-done:
 		if err == nil {

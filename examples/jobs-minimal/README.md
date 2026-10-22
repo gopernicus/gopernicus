@@ -3,7 +3,8 @@
 The zero-infra proof host for `pockets/jobs` (design §8). It constructs the jobs
 service backed by the in-core `pockets/jobs/stores/memory` — no datastore driver, no
 migrations, no external infrastructure — and runs the jobs `Runtime` in-process
-next to an HTTP server. Boot it with `go run ./cmd/server` and drive it with
+next to an HTTP server. Boot it with `APP_RUNTIME_MODE=development go run ./cmd/server`
+(the mode is read from the process environment only) and drive it with
 `curl`.
 
 Jobs has no HTTP routes to mount, so this host omits optional `Service.Register`.
@@ -41,7 +42,7 @@ cd examples/jobs-minimal && GOWORK=off go list -m all | grep -iE 'libsql|pgx'   
 Port 8083 (8081/8082 are taken by the other examples).
 
 ```sh
-cd examples/jobs-minimal && go run ./cmd/server        # boots, logs pool + scheduler start
+cd examples/jobs-minimal && APP_RUNTIME_MODE=development go run ./cmd/server   # boots, logs pool + scheduler start
 
 # 0. liveness probe -> 200 (host-local GET /healthz; unauthenticated, memory-backed so no DB to probe)
 curl -fsS -o /dev/null -w '%{http_code}\n' localhost:8083/healthz

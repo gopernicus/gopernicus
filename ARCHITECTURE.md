@@ -229,7 +229,7 @@ HTTP middleware sorts onto the same three tiers, ratified so nobody
 
 | middleware | lives in | why |
 |---|---|---|
-| **pkg — pure HTTP mechanism** | `sdk/pkg/web` | `Panics`, `Logger`, `RequestID`, `TrustProxies`, `CORSMiddleware`/`CORSWithConfig`, `OriginPolicy` (exact + one-label namespace origin admission, shared by CORS and pocket origin gates), `DefaultHeadersMiddleware`, `NoStore` — no capability port behind them, stdlib only, FLAT. `CORSMiddleware`/`DefaultHeadersMiddleware` are AVAILABLE host middleware, kept deliberately (owner call, 2026-07-11): expected wiring for any API-serving or browser-facing host, NOT prune candidates even though no example wires them yet. |
+| **pkg — pure HTTP mechanism** | `sdk/pkg/web` | `Panics`, `Logger`, `RequestID`, `TrustProxies`, `CORSMiddleware`/`CORSWithConfig`, `OriginPolicy` (exact + one-label namespace origin admission, shared by CORS and pocket origin gates), `DefaultHeadersMiddleware`, `NoStore`, `SecurityHeaders` (a `DefaultHeadersMiddleware` preset like `NoStore`: HSTS + the browser defaults, no CSP) — no capability port behind them, stdlib only, FLAT. `CORSMiddleware`/`DefaultHeadersMiddleware` are AVAILABLE host middleware, kept deliberately (owner call, 2026-07-11): expected wiring for any API-serving or browser-facing host, NOT prune candidates even though no example wires them yet. |
 | **capability×pkg composition** | the capability that owns the semantics | `cacher.Pages`, `tracing.Middleware`, `ratelimiter.Middleware` — a capability producing a `web.Middleware`; web stays agnostic of the capability, the capability legally depends on web (capability → pkg). |
 | **identity/authorization gate** | the owning pocket's public `inbound/http` adapter | `authentication.RequireAccessToken()` and `authorizationhttp.Adapter.Require` assemble HTTP adapters over transport-independent credential/decision logic. Hosts inject them through config seams — `[]web.Middleware` (`cms.Config.AdminMiddleware`, `events.Config.StreamMiddleware`) or a SINGULAR `web.Middleware` (`authentication.Config.MachineRoutesGate`) — or at route registration. Singular vs slice is a deliberate posture choice, not drift: with a slice, nil and an empty slice both mean "mounted, ungated", which is fine for a surface that mounts regardless (cms's admin slice is the exception: empty means unmounted unless `cms.Config.AdminUngatedAcknowledged`, SOC 2 S1); the singular seam is for a surface whose routes should NOT mount without a policy — nil is the unambiguous "no policy" (the machine lifecycle routes stay unmounted), where an empty slice would have meant "mounted, ungated". |
 | **host policy** | an explicit permission expression, composable guard or host closure | Hosts declare platform-admin alternatives with `Any` and exact role predicates, or compose application-specific checks such as self-access in a closure. Global facts grant only policies that explicitly apply them. Exact scoped role reads have no global fallback. The pocket ships no `Superuser` primitive. |
@@ -561,12 +561,13 @@ reach into them.
 **The full host contract is [`examples/README.md`](examples/README.md)** — the
 sibling of [`pockets/README.md`](pockets/README.md): the layout tree, H0–H14
 in full with the normative wording of the table above (and the fence H12, the
-host's `sdk/` H13, and the host's `ui/` H14 that this summary omits), the
+host's `sdk/` H13, and the host's `ui/` H14 that this summary omits), and
+P0–P8 under `--posture` (the production-posture series, §3b), the
 Inbound anatomy, host pockets (`<host-module>/pockets/<name>`),
 `cmd`/`workshop`/`integrations`/`sdk`, and the retrofit recipe. This section
 is the framework-side summary; that page is normative for hosts, and
-`gopernicus guard` (`workshop/gopernicus` v0.4.0) is its executable
-floor.
+`gopernicus guard` (`workshop/gopernicus` v0.4.0; `--posture` from v0.5.0) is
+its executable floor.
 
 ### Inbound anatomy
 

@@ -68,7 +68,7 @@ cd examples/external-identity && GOWORK=off go list -m all | grep -iE 'libsql|pg
 Port 8080. Every request and response below is from a real run.
 
 ```sh
-cd examples/external-identity && go run ./cmd/server
+cd examples/external-identity && AUTH_RUNTIME_MODE=development go run ./cmd/server
 
 # 1. a dev-issuer token -> 200 with an internal user id (not "u1")
 TOKEN=$(curl -s -XPOST localhost:8080/dev/token -d '{"sub":"u1","email":"a@x.test","email_verified":true}' | jq -r .token)

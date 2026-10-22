@@ -37,8 +37,11 @@ import (
 const gothAssetBasePath = "/assets/goth"
 
 func main() {
-	// A missing .env is allowed; malformed configuration must stop startup.
-	if err := environment.LoadEnv(); err != nil {
+	// The runtime mode comes from the process environment only; .env is loaded
+	// in development and never opened in production. A missing .env is allowed;
+	// malformed configuration must stop startup.
+	mode, err := environment.LoadEnvForMode("APP_RUNTIME_MODE")
+	if err != nil {
 		slog.Error("load environment", "error", err)
 		os.Exit(1)
 	}
@@ -53,17 +56,22 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	if err := run(ctx, log); err != nil {
+	if err := run(ctx, log, mode); err != nil {
 		log.Error("server exited with error", "error", err)
 		os.Exit(1)
 	}
 }
 
-func run(ctx context.Context, log *slog.Logger) error {
+func run(ctx context.Context, log *slog.Logger, mode environment.Mode) error {
 	// Parsed before the tracer, whose flush budget reuses SHUTDOWN_TIMEOUT.
 	srv := web.ServerConfig{Port: "8080"}
 	if err := environment.ParseEnvTags("", &srv); err != nil {
 		return err
+	}
+	if mode.IsProduction() {
+		if err := srv.ValidateProduction(); err != nil {
+			return err
+		}
 	}
 
 	// Database. The Turso datastore connector owns the driver, DSN, and dialect
@@ -74,6 +82,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 		MaxOpenConns:    4,
 		MaxIdleConns:    4,
 		ConnMaxLifetime: time.Hour,
+		RuntimeMode:     mode,
 	})
 	if err != nil {
 		return err
@@ -85,7 +94,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 	// .env.example); otherwise a no-op tracer keeps the always-wired middleware
 	// inert. With tracing enabled, client IP + user-agent leave the process to
 	// the configured trace backend.
-	tracer, shutdownTracer, err := buildTracer(ctx)
+	tracer, shutdownTracer, err := buildTracer(ctx, mode)
 	if err != nil {
 		return err
 	}
@@ -102,11 +111,15 @@ func run(ctx context.Context, log *slog.Logger) error {
 
 	// Host-owned HTTP router + middleware stack. The pocket mounts its routes
 	// onto this via the narrow RouteRegistrar; it never sees the concrete handler.
-	// Tracing sits OUTER of Logger so the traced context (and its trace_id/span_id)
-	// is on the request when Logger emits its access line, and so web.RecordError's
-	// direct writer type-assert keeps landing on Logger's writer.
+	// TrustProxies runs outermost so every later layer sees the resolved client
+	// IP; SecurityHeaders sends HSTS and the browser defaults (TLS terminates at
+	// the edge). Tracing sits OUTER of Logger so the traced context (and its
+	// trace_id/span_id) is on the request when Logger emits its access line, and
+	// so web.RecordError's direct writer type-assert keeps landing on Logger's
+	// writer.
 	router := web.NewWebHandler()
-	router.Use(web.RequestID(), otel.Middleware(tracer, otel.HTTPConfig{}), web.Logger(log), web.Panics(log))
+	router.Use(web.TrustProxies(srv.TrustedProxyCount), web.SecurityHeaders(), web.RequestID(),
+		otel.Middleware(tracer, otel.HTTPConfig{}), web.Logger(log), web.Panics(log))
 
 	// The host owns its database lifecycle: migrations are scaffolded into
 	// ./workshop/migrations and applied PRE-BOOT by that runner (go run
@@ -165,6 +178,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 		// mounted ungated by acknowledgement — development only, refused in
 		// production. A real host passes an authorizing AdminMiddleware instead.
 		AdminUngatedAcknowledged: true,
+		RuntimeMode:              mode,
 	}
 	if err := environment.ParseEnvTags("", &cmsCfg); err != nil {
 		return err
@@ -197,9 +211,10 @@ func healthzHandler(db *tursodb.DB) http.HandlerFunc {
 
 // buildTracer gates the TRACER CHOICE on TRACING_ENABLED (the Tracing middleware
 // is always wired). Enabled → an OpenTelemetry tracer built from the TRACING_*
-// env tags via environment.ParseEnvTags; disabled → nil (Noop middleware). The returned
-// shutdown func flushes+stops an owned provider and is a no-op for Noop.
-func buildTracer(ctx context.Context) (*otel.Tracer, func(context.Context) error, error) {
+// env tags via environment.ParseEnvTags, under the host's mode; disabled → nil
+// (Noop middleware). The returned shutdown func flushes+stops an owned provider
+// and is a no-op for Noop.
+func buildTracer(ctx context.Context, mode environment.Mode) (*otel.Tracer, func(context.Context) error, error) {
 	enabled, _ := strconv.ParseBool(os.Getenv("TRACING_ENABLED"))
 	if !enabled {
 		return nil, func(context.Context) error { return nil }, nil
@@ -208,6 +223,7 @@ func buildTracer(ctx context.Context) (*otel.Tracer, func(context.Context) error
 	if err := environment.ParseEnvTags("", &cfg); err != nil {
 		return nil, nil, err
 	}
+	cfg.RuntimeMode = mode
 	tracer, err := otel.Open(ctx, cfg)
 	if err != nil {
 		return nil, nil, err

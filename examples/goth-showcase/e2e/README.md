@@ -34,8 +34,11 @@ npm test                                          # or: make test-ui-browser (fr
 ```
 
 Playwright starts the Go server itself (`webServer: go run ./cmd/server`, cwd
-`..`) on `127.0.0.1:8099` (override with `SHOWCASE_PORT`) and waits for it before
-the specs run.
+`..`, with `APP_RUNTIME_MODE=development` in its environment — the server reads
+the mode from the process environment only) on `127.0.0.1:8099` (override with
+`SHOWCASE_PORT`) and waits for it before the specs run. To run the server by
+hand: `APP_RUNTIME_MODE=development go run ./cmd/server` from
+`examples/goth-showcase`.
 
 ## CI job, trigger, browser-binary cache, and flake policy (Gate B GOTH-1.5 record)
 

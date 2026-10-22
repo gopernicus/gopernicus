@@ -40,7 +40,7 @@ EMULATOR_TAG_MODULES = integrations/authentication/firebase
 	guard-authorization-no-delivery-repo guard-authorization-rolesvc-no-engine guard-ui-no-inward guard-ui-require-whitelist \
 	guard-no-legacy-features-path guard-list-no-nethttp guard-violation-message-not-error \
 	guard-firestore-mediation guard-pocket-logic guard-authorization-tuples-leaf guard-authorization-decisions-no-mutations guard-inbound-authorization guard-tuple-write-integrity guard-host-contract guard-auth-no-vendor-names \
-	guard-cms-admin-gate
+	guard-cms-admin-gate guard-host-posture guard-pocket-no-env
 
 # Regenerate *_templ.go from .templ sources. Each bundled views/templ module pins
 # its own templ tool; generation runs inside each so the tool version is
@@ -185,15 +185,17 @@ docs-build:
 	cd workshop/documentation && pnpm typecheck && pnpm build
 
 # The server binary never migrates; `run` applies host-owned migrations first
-# (pre-boot), then serves — keeping migration a separate, explicit step.
+# (pre-boot), then serves — keeping migration a separate, explicit step. Both
+# read the runtime mode from the process environment only (never .env), so the
+# targets export the development posture.
 run: generate migrate
-	cd examples/cms && go run ./cmd/server
+	cd examples/cms && APP_RUNTIME_MODE=development go run ./cmd/server
 
 # Migrations are HOST-OWNED and applied pre-boot (never by the framework at
 # startup). The CMS pocket's SQL is scaffolded into the host's own dir
 # (examples/cms/workshop/migrations/primary) and applied by the host's runner.
 migrate:
-	cd examples/cms && go run ./workshop/migrations
+	cd examples/cms && APP_RUNTIME_MODE=development go run ./workshop/migrations
 
 tidy:
 	@for m in $(MODULES); do (cd $$m && go mod tidy) || exit 1; done
@@ -210,7 +212,7 @@ guard: guard-sdk-stdlib guard-pocket-isolation guard-sdk-no-outward guard-no-leg
 	guard-authorization-no-delivery-repo guard-authorization-rolesvc-no-engine guard-ui-no-inward guard-ui-require-whitelist \
 	guard-no-legacy-features-path guard-list-no-nethttp guard-violation-message-not-error \
 	guard-firestore-mediation guard-pocket-logic guard-authorization-tuples-leaf guard-authorization-decisions-no-mutations guard-inbound-authorization guard-tuple-write-integrity guard-host-contract guard-auth-no-vendor-names \
-	guard-cms-admin-gate
+	guard-cms-admin-gate guard-host-posture guard-pocket-no-env
 
 # G1: sdk imports only the standard library (also enforced structurally by
 # sdk/go.mod having no require block).
@@ -593,7 +595,7 @@ guard-no-legacy-features-path:
 # <<< LEGACY-PATTERNS
 
 # CI-style gate: templ generation must be a no-op (no drift), then per-module
-# vet/build/test across all MODULES, then the twenty-nine layering guards. Drift
+# vet/build/test across all MODULES, then the thirty-three layering guards. Drift
 # is checked via `git diff` when this tree is a git repo; this repo IS a git
 # repo (as of phase 2), so that branch runs. The before/after checksum branch
 # remains as a fallback for gitless checkouts of *_templ.go.
@@ -679,3 +681,25 @@ guard-cms-admin-gate:
 			echo "ERROR (G31): $$f builds a cms.Config naming neither AdminMiddleware nor AdminUngatedAcknowledged — its admin surface is unmounted (deny-by-absence); pass an authorizing gate or acknowledge the demo posture"; fail=1; \
 		fi; \
 	done; exit $$fail
+
+# G32 (SOC 2 S1, production posture): every G30 host also passes the opt-in
+# production-posture rules P0–P8 of examples/README.md §3b — the mode from the
+# process environment, RuntimeMode on every recognized surface, TrustProxies
+# outermost, SecurityHeaders, ValidateProduction, literal acknowledgements,
+# NewKeys, and a posture-clean .env.example. Like G30, the verb runs from this
+# checkout (examples/* never pin the tool, G11).
+guard-host-posture:
+	@echo "== guard: example hosts pass gopernicus guard --posture (P0–P8) (G32) =="
+	@cd workshop/gopernicus && for h in cms minimal jobs-minimal auth-cms goth-showcase external-identity; do \
+		echo "-- examples/$$h"; go run . guard --posture ../../examples/$$h || exit 1; done
+
+# G33 (SOC 2 S1, O-5): a pocket never reads the process environment. The host
+# resolves configuration and passes values in — ParseEnvTags over a pocket's
+# Config, authentication.KeysInput + NewKeys for key material — so pocket
+# production code (store modules excluded) names no os.Getenv, os.LookupEnv,
+# environment.ParseEnvTags, environment.LoadEnv*, or environment.Secret(.
+# Comment lines are skipped so a doc comment may name the rule it follows.
+guard-pocket-no-env:
+	@echo "== guard: pocket production code never reads the process environment (G33) =="
+	@hits=$$(grep -rnE 'os\.Getenv|os\.LookupEnv|environment\.ParseEnvTags|environment\.LoadEnv|environment\.Secret\(' --include='*.go' --exclude='*_test.go' --exclude-dir=stores pockets | grep -vE '^[^:]+:[0-9]+:[[:space:]]*//' || true); \
+		if [ -n "$$hits" ]; then echo "ERROR (G33): pocket production code reads the process environment — the host resolves configuration and passes it in (ParseEnvTags over the pocket's Config; authentication.KeysInput + NewKeys):"; echo "$$hits"; exit 1; fi

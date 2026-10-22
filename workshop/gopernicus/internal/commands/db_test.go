@@ -218,6 +218,7 @@ func TestDBFileFallbackEndToEnd(t *testing.T) {
 	t.Setenv("GOWORK", "off")
 	t.Setenv("TURSO_DATABASE_URL", "")
 	t.Setenv("TURSO_AUTH_TOKEN", "")
+	t.Setenv(scaffoldModeKey, "development")
 
 	var out bytes.Buffer
 	if code := statusRunner(target, defaultLedger, &out, &out); code != 0 {

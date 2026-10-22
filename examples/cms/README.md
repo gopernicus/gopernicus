@@ -57,14 +57,21 @@ never imports this app or `integrations/`, and everything ultimately stands on
 
 ## Environment
 
-Copy `.env.example` (repo root) to `.env` and fill in:
+Copy `.env.example` to `.env` and fill in. The runtime mode is never written
+there: `APP_RUNTIME_MODE` (`development` | `production`) is read from the process
+environment only (`environment.LoadEnvForMode`, which refuses a `.env` naming
+it). `make run` exports `APP_RUNTIME_MODE=development`; a direct run prefixes it:
+`APP_RUNTIME_MODE=development go run ./cmd/server`.
 
 | var | meaning |
 |---|---|
+| `APP_RUNTIME_MODE` | `development` or `production`, process environment only (never `.env`) |
 | `TURSO_DATABASE_URL` | `libsql://<db>.turso.io` |
 | `TURSO_AUTH_TOKEN` | Turso auth token |
 | `HOST`, `PORT` | listen address (default `localhost:8080`) |
 | `SHUTDOWN_TIMEOUT` | graceful-drain window (default `10s`) |
+| `TRUSTED_PROXY_COUNT` | reverse-proxy hops in front of the host (`TrustProxies`; default `0`) |
+| `PUBLIC_BASE_URL` | the externally visible origin; production requires an `https` origin (`ValidateProduction`) |
 | `LOG_LEVEL`, `LOG_FORMAT`, `LOG_OUTPUT` | `slog` setup |
 | `MEDIA_DIR` | disk path for uploaded assets (default `media-data`) |
 | `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD` | email delivery; unset ⇒ console sender (logs mail) |
@@ -78,8 +85,8 @@ Run from the repo root (the `Makefile` covers all 6 modules):
 |---|---|
 | `make generate` | `templ generate` in the `views/goth` + `ui/goth` modules → `*_templ.go` |
 | `make build` | generate + `go build ./...` per module |
-| `make run` | generate + migrate + `go run ./cmd/server` (this app) |
-| `make migrate` | applies `workshop/migrations` pre-boot (host-owned, separate from `run`'s server boot) |
+| `make run` | generate + migrate + `go run ./cmd/server` (this app), both with `APP_RUNTIME_MODE=development` |
+| `make migrate` | applies `workshop/migrations` pre-boot with `APP_RUNTIME_MODE=development` (host-owned, separate from `run`'s server boot) |
 | `make test` | `go test ./...` per module |
 | `make check` | generate (fail on drift) + vet + build + test per module + the twenty layering guards |
 

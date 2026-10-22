@@ -22,7 +22,8 @@ import (
 // asset routes, the externalized fragment-reader script route, and the auth pocket
 // mounted with the ui/goth Views + the adapter-derived HTMLPolicy — exactly as run()
 // wires them, so the HTTP-level proofs below drive the shipped surface, not a stub.
-func gothProofRouter(t *testing.T) *web.WebHandler {
+// global is installed with Use before anything mounts, as run() does.
+func gothProofRouter(t *testing.T, global ...web.Middleware) *web.WebHandler {
 	t.Helper()
 	cfg, err := buildAuthConfig(quietLog(), environment.ModeDevelopment, nil)
 	if err != nil {
@@ -36,6 +37,9 @@ func gothProofRouter(t *testing.T) *web.WebHandler {
 	}
 
 	router := web.NewWebHandler()
+	if len(global) > 0 {
+		router.Use(global...)
+	}
 	uigothStatic := web.NewStaticFileServer(uigothassets.FS, web.WithAssetPrefix("dist/"))
 	uigothStatic.AddRoutes(router, authAssetBasePath)
 	router.Handle(http.MethodGet, authgoth.DefaultFragmentScriptPath, authgoth.FragmentScriptHandler().ServeHTTP)
@@ -44,6 +48,34 @@ func gothProofRouter(t *testing.T) *web.WebHandler {
 		t.Fatalf("auth Register: %v", err)
 	}
 	return router
+}
+
+// TestSecurityHeadersPresetBesidePocketPolicy drives the auth pages under the
+// global stack run() installs (TrustProxies outermost, SecurityHeaders second):
+// the preset adds HSTS and Permissions-Policy, and the pocket's stricter page
+// policy wins — no-referrer, X-Frame-Options DENY, and its own CSP with
+// frame-ancestors 'none'.
+func TestSecurityHeadersPresetBesidePocketPolicy(t *testing.T) {
+	router := gothProofRouter(t, web.TrustProxies(0), web.SecurityHeaders())
+	rec := get(t, router, "/auth/login")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /auth/login = %d, want 200", rec.Code)
+	}
+	h := rec.Header()
+	for name, want := range map[string]string{
+		"Referrer-Policy":           "no-referrer",
+		"X-Frame-Options":           "DENY",
+		"X-Content-Type-Options":    "nosniff",
+		"Strict-Transport-Security": "max-age=31536000; includeSubDomains",
+		"Permissions-Policy":        "camera=(), microphone=(), geolocation=()",
+	} {
+		if got := h.Get(name); got != want {
+			t.Errorf("%s = %q, want %q", name, got, want)
+		}
+	}
+	if csp := h.Get("Content-Security-Policy"); !strings.Contains(csp, "frame-ancestors 'none'") {
+		t.Errorf("Content-Security-Policy = %q, want the pocket's frame-ancestors 'none'", csp)
+	}
 }
 
 func get(t *testing.T, router http.Handler, path string) *httptest.ResponseRecorder {

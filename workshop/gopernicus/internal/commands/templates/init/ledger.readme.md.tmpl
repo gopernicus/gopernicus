@@ -21,7 +21,8 @@ runner (`workshop/migrations`, `make migrate`) applies them pre-boot.
 ```
 gopernicus db create <slug>              # scaffold NNNN_<slug>.sql here (max+1)
 make migrate                             # apply pending migrations pre-boot
-go run ./workshop/migrations -status     # applied vs pending (file-only if the
+APP_RUNTIME_MODE=development go run ./workshop/migrations -status
+                                         # applied vs pending (file-only if the
                                          # database is unreachable)
 ```
 {{- else}}

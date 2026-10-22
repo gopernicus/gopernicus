@@ -52,7 +52,7 @@ func newHost(t *testing.T) *host {
 	}
 	origin := "http://" + listener.Addr().String()
 	logs := &lockedBuffer{}
-	handler, err := newHandler(context.Background(), origin, environment.ModeDevelopment, slog.New(slog.NewTextHandler(logs, nil)))
+	handler, err := newHandler(context.Background(), origin, 0, environment.ModeDevelopment, slog.New(slog.NewTextHandler(logs, nil)))
 	if err != nil {
 		t.Fatalf("newHandler: %v", err)
 	}
@@ -116,7 +116,7 @@ func bearer(token string) http.Header {
 }
 
 func TestProductionRefusesTheDevIssuer(t *testing.T) {
-	handler, err := newHandler(context.Background(), "https://app.example.com", environment.ModeProduction, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	handler, err := newHandler(context.Background(), "https://app.example.com", 0, environment.ModeProduction, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if handler != nil || !errors.Is(err, devissuer.ErrNotDevelopment) {
 		t.Fatalf("newHandler(production) = %v, %v; want the dev issuer refusal", handler, err)
 	}

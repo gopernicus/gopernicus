@@ -2,6 +2,8 @@
 #
 # The framework never migrates at startup: `migrate` is a separate, explicit
 # pre-boot step, and `run` applies it first. `GET /healthz` is the liveness probe.
+# Both binaries read APP_RUNTIME_MODE from the process environment only (never
+# .env), so `run` and `migrate` export the development posture.
 
 .PHONY: build vet test run migrate guard guard-one-rule guard-no-underlying guard-no-lax-scan
 
@@ -15,14 +17,15 @@ test:
 	go test ./...
 
 run:{{if .HasDB}} migrate{{end}}
-	go run ./cmd/server
+	APP_RUNTIME_MODE=development go run ./cmd/server
 
 {{if .HasDB -}}
 # migrate applies the host-owned ledger (workshop/migrations/{{.LedgerDir}}) via the
 # host's own runner — never the framework. Set the datastore env first (see
-# .env.example). Inspect with `go run ./workshop/migrations -status`.
+# .env.example). Inspect with
+# `APP_RUNTIME_MODE=development go run ./workshop/migrations -status`.
 migrate:
-	go run ./workshop/migrations
+	APP_RUNTIME_MODE=development go run ./workshop/migrations
 {{- else -}}
 # This host was scaffolded with --db=none: it has no datastore and nothing to
 # migrate. Re-run `gopernicus init --db=turso|pgx` for a host that wires a

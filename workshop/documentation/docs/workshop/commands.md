@@ -93,7 +93,7 @@ Runs the host-owned migration package:
 go run ./workshop/migrations
 ```
 
-The CLI does not know a DSN, database driver, or pocket migration source. Missing runners and runner exit failures are reported to the caller.
+The CLI does not know a DSN, database driver, or pocket migration source. Missing runners and runner exit failures are reported to the caller. A runner scaffolded by `gopernicus init` v0.5.0 or later reads its runtime mode from the process environment, so run the verb as `APP_RUNTIME_MODE=development gopernicus db migrate` (the scaffold's `make migrate` exports it); the CLI never chooses a mode.
 
 ## `db status`
 
@@ -107,16 +107,19 @@ Delegates to the host runner's `-status` mode. If the runner is absent or cannot
 ## `guard`
 
 ```bash
-gopernicus guard            # the host in the current directory
+gopernicus guard                      # the host in the current directory
 gopernicus guard ./myapp
+gopernicus guard --posture ./myapp    # H0–H14 plus the production-posture rules P0–P8
 gopernicus guard --list
+gopernicus guard --list --posture
 ```
 
-Checks a host against the [host contract](../architecture/host-contract.md), rules H0 through H14. The host root is the directory holding its `go.mod`; the module path is read from that file. Nested modules, `vendor/`, `testdata/`, `node_modules/`, and directories starting with `.` or `_` are not walked, and symlinks are not followed.
+Checks a host against the [host contract](../architecture/host-contract.md), rules H0 through H14, and with `--posture` also P0 through P8 (production posture, the contract's section 3b; `workshop/gopernicus` v0.5.0). The host root is the directory holding its `go.mod`; the module path is read from that file. Nested modules, `vendor/`, `testdata/`, `node_modules/`, and directories starting with `.` or `_` are not walked, and symlinks are not followed.
 
 | Flag | Meaning | Default |
 |---|---|---|
-| `--list` | print every rule's canonical sentence and exit | off |
+| `--list` | print every rule's canonical sentence and exit (with `--posture`, the H sentences then the P sentences) | off |
+| `--posture` | add P0–P8: the mode from the process environment, `RuntimeMode` on every recognized surface, `TrustProxies` outermost, `SecurityHeaders`, `ValidateProduction`, literal acknowledgements, `NewKeys`, a posture-clean `.env.example` | off |
 
 Output is one status line per rule in id order, then one line per finding, then a summary:
 
@@ -132,7 +135,22 @@ H0  internal/leak: package outside the contract's shape — home: internal/{logi
 guard: 1 finding across 1 rule
 ```
 
-A rule with nothing in scope prints `no scope` with the reason, so an inert rule never reads as a clean one. A clean run ends `guard: clean (15 rules, N packages)`.
+A rule with nothing in scope prints `no scope` with the reason, so an inert rule never reads as a clean one. A clean run ends `guard: clean (15 rules, N packages)`; without `--posture` the output is exactly the H run.
+
+With `--posture` the nine P status lines follow the fifteen H lines, and informational lines follow the status block — `ack` for each acknowledgement written `true` (`ack (conditional)` when it sits under an `if` or `switch`) and `rand` for each `crypto/rand` use in the scanned trees. They are review evidence and never change the exit code:
+
+```text
+P5   ok        (3 acknowledgements)
+P6   ok        (1 mount)
+…
+
+ack (conditional) cmd/server/main.go:323: DeliveryEphemeralAcknowledged
+ack  cmd/server/main.go:950: DeliveryJobsAcknowledged
+rand cmd/server/documents.go:43: crypto/rand.Read
+guard: clean (24 rules, 15 packages)
+```
+
+A host without the `tool` pin runs the posture check in CI with `go run github.com/gopernicus/gopernicus/workshop/gopernicus@v0.5.0 guard --posture .`. A release older than v0.5.0 exits 2 on `--posture` (unknown flag); treat 2 as a broken invocation, never a pass.
 
 Exit codes: `0` clean, `1` findings, `2` for a missing or malformed `go.mod`, an unparsable Go file, or bad flags.
 

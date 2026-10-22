@@ -56,7 +56,7 @@ var guardRules = []guardRule{
 	{"H14", sentenceH14, evalH14},
 }
 
-// guardRule is one H id: its canonical sentence and its evaluator.
+// guardRule is one H or P id: its canonical sentence and its evaluator.
 type guardRule struct {
 	id       string
 	sentence string
@@ -64,12 +64,15 @@ type guardRule struct {
 }
 
 // guardResult is one evaluator's verdict. checked counts the packages (or
-// directories) in scope; a result with nothing checked and no findings reports
-// noScope as its reason.
+// directories) in scope — or, when unit is set, that unit; a result with
+// nothing checked and no findings reports noScope as its reason. notes are
+// informational lines that never change the exit code.
 type guardResult struct {
 	checked  int
+	unit     string
 	noScope  string
 	findings []guardFinding
+	notes    []guardNote
 }
 
 // guardFinding is one violation: where (a package path or file:line) and why.
@@ -78,8 +81,19 @@ type guardFinding struct {
 	msg   string
 }
 
+// guardNote is one informational line: a label, where, and what.
+type guardNote struct {
+	label string
+	where string
+	msg   string
+}
+
 func (r *guardResult) add(where, msg string) {
 	r.findings = append(r.findings, guardFinding{where, msg})
+}
+
+func (r *guardResult) note(label, where, msg string) {
+	r.notes = append(r.notes, guardNote{label, where, msg})
 }
 
 func (r *guardResult) addImport(f *guardFile, imp guardImport, why string) {

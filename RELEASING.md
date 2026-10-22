@@ -2096,7 +2096,11 @@ scaffolded host carries three grep guards in its Makefile and adds the pin by ha
 That makes the rule-set versioned with the binary: **new H-rules ship in a minor
 version of `workshop/gopernicus`, and a host adopts them by bumping its pin**
 (`go get -tool github.com/gopernicus/gopernicus/workshop/gopernicus@<next>`),
-never by copying Makefile text. A host that stays on an older pin keeps the
+never by copying Makefile text. **The opt-in production-posture P rules
+(`guard --posture`, from v0.5.0) ship the same way**: a new P rule or a new
+entry on `examples/README.md` §3b's Recognized posture surfaces list is a
+workshop minor, and an older pin exits 2 on `--posture`, which CI treats as a
+broken invocation, never a pass. A host that stays on an older pin keeps the
 older rule-set and is unaffected until it bumps; a rule whose wording changes
 is a change to `examples/README.md` and to the CLI's `--list` output in the same
 tag. This repo's own `examples/*` never carry the `tool` directive (it would put

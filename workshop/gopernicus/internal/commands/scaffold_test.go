@@ -21,6 +21,8 @@ import (
 	"encoding/json"
 	"errors"
 	"io/fs"
+	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -40,12 +42,20 @@ var (
 )
 
 // The .env.example tripwire's expectations: the shape no emitted line may take
-// (a value followed by whitespace then a `#` hint) and the sdk pin the emitted
-// go.mod must carry. Bump sdkPin with every sdk tag the template moves to.
+// (a value followed by whitespace then a `#` hint) and the pins the emitted
+// go.mod must carry. Bump them with every tag the templates move to.
 var (
 	inlineHint = regexp.MustCompile(`^[A-Z0-9_]+=\S*\s+#`)
-	sdkPin     = baseModule + "/sdk v0.15.0"
+	sdkPin     = baseModule + "/sdk v0.16.0"
+	dbPins     = map[string]string{
+		"pgx":   baseModule + "/integrations/datastores/pgxdb v0.10.0",
+		"turso": baseModule + "/integrations/datastores/turso v0.7.0",
+	}
 )
+
+// scaffoldModeKey is the runtime-mode key the emitted binaries read from the
+// process environment.
+const scaffoldModeKey = "APP_RUNTIME_MODE"
 
 // TestScaffoldInitNoneCompiles is the hermetic leg: an sdk-only host builds fully
 // offline (sdk is third-party-free, so an empty go.sum suffices). Startup checks
@@ -75,16 +85,40 @@ func TestScaffoldInitNoneCompiles(t *testing.T) {
 	runGo(t, target, env, "build", "./...")
 
 	assertGuardShapes(t, target)
+	assertPostureClean(t, target)
 
 	binary := filepath.Join(t.TempDir(), "server")
 	runGo(t, target, env, "build", "-o", binary, "./cmd/server")
 	t.Run("malformed dotenv", func(t *testing.T) {
 		assertMalformedEnvRejected(t, binary)
 	})
+	t.Run("mode from the process environment only", func(t *testing.T) {
+		_, stderr := runStartupFailure(t, binary, t.TempDir(), []string{"LOG_FORMAT=json", "LOG_OUTPUT=STDOUT"})
+		if !strings.Contains(stderr, scaffoldModeKey+" is unset") {
+			t.Fatalf("an unset mode must stop startup naming %s, got: %s", scaffoldModeKey, stderr)
+		}
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, ".env"), []byte(scaffoldModeKey+"=development\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		_, stderr = runStartupFailure(t, binary, dir, []string{scaffoldModeKey + "=development", "LOG_FORMAT=json", "LOG_OUTPUT=STDOUT"})
+		if !strings.Contains(stderr, ".env:1 names "+scaffoldModeKey) {
+			t.Fatalf("a .env naming the mode must be refused, got: %s", stderr)
+		}
+	})
+	t.Run("production requires PUBLIC_BASE_URL", func(t *testing.T) {
+		stdout, _ := runStartupFailure(t, binary, t.TempDir(), []string{scaffoldModeKey + "=production", "LOG_FORMAT=json", "LOG_OUTPUT=STDOUT"})
+		if !strings.Contains(stdout, "PUBLIC_BASE_URL is required in production") {
+			t.Fatalf("production without PUBLIC_BASE_URL must stop startup, got: %s", stdout)
+		}
+	})
+	t.Run("boots in development with HSTS", func(t *testing.T) {
+		assertBootsInDevelopment(t, binary)
+	})
 	t.Run("configured startup error", func(t *testing.T) {
 		dir := t.TempDir()
 		stdout, stderr := runStartupFailure(t, binary, dir, []string{
-			"LOG_FORMAT=json", "LOG_OUTPUT=STDOUT", "READ_TIMEOUT=invalid-duration",
+			scaffoldModeKey + "=development", "LOG_FORMAT=json", "LOG_OUTPUT=STDOUT", "READ_TIMEOUT=invalid-duration",
 		})
 		if stderr != "" {
 			t.Fatalf("configured startup error used stderr: %s", stderr)
@@ -129,6 +163,7 @@ func TestScaffoldInitTursoCompiles(t *testing.T) {
 	runGo(t, target, env, "build", "./...")
 
 	assertGuardShapes(t, target)
+	assertPostureClean(t, target)
 
 	for _, pkg := range []string{"cmd/server", "workshop/migrations"} {
 		t.Run(pkg+" rejects malformed dotenv", func(t *testing.T) {
@@ -145,12 +180,62 @@ func assertMalformedEnvRejected(t *testing.T, binary string) {
 	if err := os.WriteFile(filepath.Join(dir, ".env"), []byte("GOPERNICUS_STARTUP_TEST=\"dummy-private-value\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	stdout, stderr := runStartupFailure(t, binary, dir, []string{"LOG_FORMAT=json", "LOG_OUTPUT=STDOUT"})
+	stdout, stderr := runStartupFailure(t, binary, dir, []string{scaffoldModeKey + "=development", "LOG_FORMAT=json", "LOG_OUTPUT=STDOUT"})
 	if stdout != "" {
 		t.Fatalf("malformed dotenv reached configured startup: %s", stdout)
 	}
 	if !strings.Contains(stderr, "load environment") || !strings.Contains(stderr, ".env") || strings.Contains(stderr, "dummy-private-value") {
 		t.Fatalf("expected a value-free dotenv bootstrap error, got: %s", stderr)
+	}
+}
+
+// assertBootsInDevelopment serves the emitted binary in development with no
+// .env and proves GET /healthz answers 200 under the SecurityHeaders preset.
+func assertBootsInDevelopment(t *testing.T, binary string) {
+	t.Helper()
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, port, _ := net.SplitHostPort(l.Addr().String())
+	l.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, binary)
+	cmd.Dir = t.TempDir()
+	cmd.Env = []string{scaffoldModeKey + "=development", "HOST=127.0.0.1", "PORT=" + port, "LOG_OUTPUT=STDOUT"}
+	var out bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &out, &out
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+
+	var status int
+	var hsts string
+	for ctx.Err() == nil {
+		resp, err := http.Get("http://127.0.0.1:" + port + "/healthz")
+		if err == nil {
+			resp.Body.Close()
+			status, hsts = resp.StatusCode, resp.Header.Get("Strict-Transport-Security")
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	_ = cmd.Process.Kill()
+	_ = cmd.Wait()
+	if status != http.StatusOK || !strings.HasPrefix(hsts, "max-age=") {
+		t.Fatalf("GET /healthz = %d with Strict-Transport-Security %q, want 200 with HSTS\n%s", status, hsts, out.String())
+	}
+}
+
+// assertPostureClean runs `guard --posture` over an emitted host.
+func assertPostureClean(t *testing.T, target string) {
+	t.Helper()
+	var code int
+	out := captureStdout(t, func() int { code = Run([]string{"guard", "--posture", target}); return code })
+	if code != 0 {
+		t.Fatalf("guard --posture over the emitted host exited %d, want 0:\n%s", code, out)
 	}
 }
 
@@ -207,10 +292,26 @@ func TestScaffoldInitEnvTemplate(t *testing.T) {
 				}
 			}
 
-			gomod := readFile(t, filepath.Join(target, "go.mod"))
-			if !strings.Contains(gomod, sdkPin) {
-				t.Errorf("emitted go.mod missing %q:\n%s", sdkPin, gomod)
+			for _, line := range strings.Split(env, "\n") {
+				if strings.Contains(line, scaffoldModeKey) && !strings.HasPrefix(strings.TrimSpace(line), "#") {
+					t.Errorf("emitted .env.example assigns %s outside a comment: %q", scaffoldModeKey, line)
+				}
 			}
+			if !strings.Contains(env, "# "+scaffoldModeKey+"=") {
+				t.Errorf("emitted .env.example never mentions %s in a comment:\n%s", scaffoldModeKey, env)
+			}
+			if db == "pgx" && !strings.Contains(env, "\nDB_SSLMODE=verify-full\n") {
+				t.Errorf("emitted pgx .env.example lacks DB_SSLMODE=verify-full:\n%s", env)
+			}
+
+			gomod := readFile(t, filepath.Join(target, "go.mod"))
+			for _, pin := range []string{sdkPin, dbPins[db]} {
+				if !strings.Contains(gomod, pin) {
+					t.Errorf("emitted go.mod missing %q:\n%s", pin, gomod)
+				}
+			}
+
+			assertPostureClean(t, target)
 		})
 	}
 }

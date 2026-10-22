@@ -149,6 +149,11 @@ func run(ctx context.Context, log *slog.Logger, runtimeMode environment.Mode) er
 	if err := environment.ParseEnvTags("", &srv); err != nil {
 		return err
 	}
+	if runtimeMode.IsProduction() {
+		if err := srv.ValidateProduction(); err != nil {
+			return err
+		}
+	}
 
 	// Both stores are in-memory: no driver, no migrations, no datastore module.
 	cmsStore := memstore.New()
@@ -229,8 +234,9 @@ func run(ctx context.Context, log *slog.Logger, runtimeMode environment.Mode) er
 	// X-Forwarded-For hop. TRUSTED_PROXY_COUNT=0 (default) trusts only RemoteAddr,
 	// so a forged X-Forwarded-For can no longer rotate rate-limit keys or poison
 	// security-event audit rows; a proxied deployment sets it to its trusted-proxy
-	// hop count.
-	router.Use(web.TrustProxies(srv.TrustedProxyCount), web.RequestID(), web.Logger(log), web.Panics(log))
+	// hop count. SecurityHeaders sends HSTS and the browser defaults; a pocket page
+	// that owns a stricter policy (the auth pages' CSP and no-referrer) keeps it.
+	router.Use(web.TrustProxies(srv.TrustedProxyCount), web.SecurityHeaders(), web.RequestID(), web.Logger(log), web.Panics(log))
 
 	// Serve the ui/goth fingerprinted assets (the auth pages' stylesheet) and the
 	// externalized fragment-reader script the reset/magic-link landings load. Both are
@@ -481,6 +487,7 @@ func run(ctx context.Context, log *slog.Logger, runtimeMode environment.Mode) er
 		MailFrom:        "cms@localhost",
 		ContactTo:       "ops@localhost",
 		AdminMiddleware: []web.Middleware{authSvc.HTTP.RequireAccessToken()}, // auth gates cms's admin surface
+		RuntimeMode:     runtimeMode,
 	}
 	// CMS_MAIL_FROM / CMS_CONTACT_TO win over the two addresses seeded above.
 	if err := environment.ParseEnvTags("", &cmsCfg); err != nil {
