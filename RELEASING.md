@@ -2119,9 +2119,10 @@ the workshop module in an example's graph, against G11) — they are guarded wit
 
 ## Cutting a tag
 
-For each module being released, from the repo root. Tags are signed (`-s`) from
-2026-10-22 (SOC 2 slice S0, `SECURITY.md`); earlier tags are annotated but unsigned and
-remain verifiable through `sum.golang.org` and the checksum manifests in this file.
+For each module being released, from the repo root. Tags are signed (`-s`) from the first
+tag cut after `SECURITY.md` landed (SOC 2 slice S0); every earlier tag is annotated but
+unsigned and remains verifiable through `sum.golang.org` and the checksum manifests in this
+file. A signing key must be configured (`git config user.signingkey`) before the next train.
 
 ```sh
 git tag -s pockets/cms/v0.1.0 -m "pockets/cms v0.1.0"

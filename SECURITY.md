@@ -50,8 +50,9 @@ reviewer is written here and enforced by configuration, not by habit:
 3. **Cold-verified releases.** Every tag is verified from a scratch consumer with
    `GOWORK=off`, an empty module cache, `proxy.golang.org` and `sum.golang.org`, and the
    result is recorded with per-tag commit hashes and checksum manifests in `RELEASING.md`.
-   Tags are signed (`git tag -s`) from 2026-10-22; earlier tags are annotated but unsigned
-   and remain verifiable through the checksum database's transparency log.
+   Tags are signed (`git tag -s`, `RELEASING.md` "Cutting a tag") from the first tag cut after
+   this file lands; every earlier tag is annotated but unsigned and remains verifiable through
+   the checksum database's transparency log and the manifests.
 4. **`CODEOWNERS`** lists the maintainer; the day a second reviewer is listed, the ruleset's
    required-approval count moves from zero to one.
 
