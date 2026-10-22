@@ -1,14 +1,27 @@
 package cms
 
 import (
+	"context"
+	"errors"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"strings"
 	"sync"
 	"testing"
 
+	"github.com/gopernicus/gopernicus/pockets/cms/domain/media"
+	"github.com/gopernicus/gopernicus/pockets/cms/domain/menus"
+	"github.com/gopernicus/gopernicus/pockets/cms/domain/messaging"
+	"github.com/gopernicus/gopernicus/pockets/cms/domain/taxonomy"
+	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/pkg/web"
 )
+
+// adminNavMarker is the admin-chrome slot the bundled goth views render on every
+// admin page (pockets/cms/views/goth/layout.templ adminNav).
+const adminNavMarker = `data-slot="cms-admin-nav"`
 
 // routeRecorder is a counting middleware: it records, per request, the method+
 // path it was invoked on. Wiring it as AdminMiddleware lets a test prove the
@@ -125,14 +138,110 @@ func TestAdminMiddleware_SkipsEveryPublicRoute(t *testing.T) {
 	}
 }
 
-// TestAdminMiddleware_NilPreservesBehavior documents the zero-value contract:
-// with no AdminMiddleware configured, an admin route still serves (no gating).
-func TestAdminMiddleware_NilPreservesBehavior(t *testing.T) {
-	h := BuildRouter(newTestRegistry(), &fakeEntrySvc{}, &fakeTaxo{}, &fakeMenuSvc{}, &fakeMediaSvc{}, &fakeContactSvc{}, nil, slog.New(slog.DiscardHandler), WithViews(stubViews{}))
+// adminChromeViews renders every admin view inside the admin nav slot, as the
+// bundled goth views do, so a test can prove no admin handler and no admin
+// chrome answered a request.
+type adminChromeViews struct{ stubViews }
+
+func adminChrome(page string) web.Renderer {
+	return stringRenderer("<nav " + adminNavMarker + "></nav>" + page)
+}
+
+func (adminChromeViews) EntriesList(string, string, string, []EntryListItem, Pager) web.Renderer {
+	return adminChrome("entries")
+}
+func (adminChromeViews) EntriesListContent(string, string, string, []EntryListItem, Pager) web.Renderer {
+	return adminChrome("entries-content")
+}
+func (adminChromeViews) EntryForm(EntryFormModel) web.Renderer { return adminChrome("entry-form") }
+func (adminChromeViews) TermsList(_, _ []taxonomy.Term) web.Renderer {
+	return adminChrome("terms")
+}
+func (adminChromeViews) TermForm(TermFormModel) web.Renderer { return adminChrome("term-form") }
+func (adminChromeViews) MenusList([]menus.Menu) web.Renderer { return adminChrome("menus") }
+func (adminChromeViews) MenuNew(string) web.Renderer         { return adminChrome("menu-new") }
+func (adminChromeViews) MenuDetail(menus.Menu, []menus.MenuItem) web.Renderer {
+	return adminChrome("menu-detail")
+}
+func (adminChromeViews) MenuItemForm(menus.MenuItem) web.Renderer { return adminChrome("menu-item") }
+func (adminChromeViews) MediaLibrary([]media.Asset, string) web.Renderer {
+	return adminChrome("media")
+}
+func (adminChromeViews) InquiriesList([]messaging.Inquiry) web.Renderer {
+	return adminChrome("inquiries")
+}
+func (adminChromeViews) AdminError(int, string) web.Renderer { return adminChrome("admin-error") }
+
+// TestAdminMiddleware_NilUnmountsAdmin documents deny-by-absence: with no
+// AdminMiddleware and no acknowledgement, no admin handler is reachable — every
+// admin path answers 404 or 405 (ServeMux falls through to the public patterns)
+// and renders no admin chrome — while the public site still serves. The
+// acknowledged router is the control: the same GETs do render the admin chrome.
+func TestAdminMiddleware_NilUnmountsAdmin(t *testing.T) {
+	newRouter := func(opts ...RouterOption) http.Handler {
+		opts = append([]RouterOption{WithViews(adminChromeViews{})}, opts...)
+		return BuildRouter(newTestRegistry(), &fakeEntrySvc{}, &fakeTaxo{}, &fakeMenuSvc{}, &fakeMediaSvc{}, &fakeContactSvc{}, nil, slog.New(slog.DiscardHandler), opts...)
+	}
+	unmounted, ungated := newRouter(), newRouter(WithAdminUngated())
+
+	for _, rt := range adminRoutes {
+		w := httptest.NewRecorder()
+		unmounted.ServeHTTP(w, httptest.NewRequest(rt.method, rt.path, nil))
+		if w.Code != http.StatusNotFound && w.Code != http.StatusMethodNotAllowed {
+			t.Errorf("%s %s with nil AdminMiddleware: status = %d, want 404 or 405", rt.method, rt.path, w.Code)
+		}
+		if strings.Contains(w.Body.String(), adminNavMarker) {
+			t.Errorf("%s %s with nil AdminMiddleware rendered the admin chrome: %q", rt.method, rt.path, w.Body.String())
+		}
+
+		if rt.method != http.MethodGet {
+			continue
+		}
+		w = httptest.NewRecorder()
+		ungated.ServeHTTP(w, httptest.NewRequest(rt.method, rt.path, nil))
+		if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), adminNavMarker) {
+			t.Errorf("control: acknowledged %s %s = %d %q, want 200 with the admin chrome", rt.method, rt.path, w.Code, w.Body.String())
+		}
+	}
 
 	w := httptest.NewRecorder()
-	h.ServeHTTP(w, httptest.NewRequest("GET", "/articles", nil))
+	unmounted.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/", nil))
 	if w.Code != http.StatusOK {
-		t.Fatalf("GET /articles with nil AdminMiddleware: status = %d, want %d", w.Code, http.StatusOK)
+		t.Fatalf("GET / with nil AdminMiddleware: status = %d, want 200", w.Code)
+	}
+}
+
+// TestPublicErrors_RenderNoAdminChrome pins the public routes' error paths to
+// the public error view: GET /menu/{slug} and POST /contact never render
+// AdminError, whose admin nav would leak onto public pages, whether or not the
+// admin surface is mounted.
+func TestPublicErrors_RenderNoAdminChrome(t *testing.T) {
+	menuSvc := &fakeMenuSvc{getSlug: func(context.Context, string) (menus.Menu, error) {
+		return menus.Menu{}, sdk.ErrNotFound
+	}}
+	contactSvc := &fakeContactSvc{submitFn: func(context.Context, string, string, string) (messaging.Inquiry, error) {
+		return messaging.Inquiry{}, errors.New("smtp down")
+	}}
+
+	for name, opts := range map[string][]RouterOption{
+		"unmounted": {WithViews(adminChromeViews{})},
+		"ungated":   {WithViews(adminChromeViews{}), WithAdminUngated()},
+	} {
+		h := BuildRouter(newTestRegistry(), &fakeEntrySvc{}, &fakeTaxo{}, menuSvc, &fakeMediaSvc{}, contactSvc, nil, slog.New(slog.DiscardHandler), opts...)
+
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/menu/nope", nil))
+		if w.Code != http.StatusNotFound || strings.Contains(w.Body.String(), adminNavMarker) || !strings.Contains(w.Body.String(), "STUB-ERROR:404") {
+			t.Errorf("%s: GET /menu/nope = %d %q, want 404 through the public error view", name, w.Code, w.Body.String())
+		}
+
+		form := url.Values{"name": {"Alice"}, "email": {"a@b.com"}, "message": {"Hi"}}
+		req := httptest.NewRequest(http.MethodPost, "/contact", strings.NewReader(form.Encode()))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		w = httptest.NewRecorder()
+		h.ServeHTTP(w, req)
+		if w.Code != http.StatusInternalServerError || strings.Contains(w.Body.String(), adminNavMarker) || !strings.Contains(w.Body.String(), "STUB-ERROR:500") {
+			t.Errorf("%s: failed POST /contact = %d %q, want 500 through the public error view", name, w.Code, w.Body.String())
+		}
 	}
 }

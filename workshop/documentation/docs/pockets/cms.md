@@ -39,6 +39,9 @@ if err := cms.Register(mount, repos, cms.Config{
     Mailer:    sender,
     MailFrom:  "cms@example.com",
     ContactTo: "ops@example.com",
+    // An authorizing gate (see Admin authorization); without one the admin routes are not mounted.
+    AdminMiddleware: adminGate,
+    // AdminUngatedAcknowledged: true, // development only — instead of AdminMiddleware
 }); err != nil {
     return err
 }
@@ -58,7 +61,9 @@ if err := cms.Register(mount, repos, cms.Config{
 | `Blobs` | host-owned file storage for media bytes |
 | `Mailer` | host-owned contact delivery |
 | `IDs` | zero uses default nanoids; database/custom strategies supported |
-| `AdminMiddleware` | wraps every admin route; nil leaves the surface ungated |
+| `AdminMiddleware` | wraps every admin route; empty → the admin routes are not mounted (deny-by-absence, WARN) |
+| `AdminUngatedAcknowledged` | development only: mounts the admin routes ungated with a WARN; refused in production, an error beside `AdminMiddleware` |
+| `RuntimeMode` | the host's `environment.Mode`, no env tag; zero is mode-blind; production refuses the acknowledgement and a development-only `Mailer` |
 
 The views seam and registry-template seam are different: `Views` controls page chrome and forms, while template bindings render a particular registered content type.
 
@@ -98,14 +103,25 @@ The host constructs the GOTH bundle and serves its assets. CMS owns neither the 
 
 ## Admin authorization
 
-CMS declares no authentication or authorization dependency. The host injects middleware:
+CMS declares no authentication or authorization dependency. The admin surface is
+deny-by-absence: with no `AdminMiddleware` its routes are not mounted (admin paths
+answer 404 or 405) and `Register` logs a WARN. The host injects middleware. A gate
+must authorize, not only authenticate — compose `Require(Can(...))`:
 
 ```go
 cms.Config{
     AdminMiddleware: []web.Middleware{
         authSvc.HTTP.RequireAccessToken(),
-        requireCMSAdmin,
+        authorizationComponents.HTTP.Require(authorizationhttp.Can("admin", authorizationhttp.Fixed("platform", "global"))),
     },
+}
+```
+
+A demo host with no identity pocket acknowledges the ungated posture instead:
+
+```go
+cms.Config{
+    AdminUngatedAcknowledged: true, // development only — refused in production
 }
 ```
 

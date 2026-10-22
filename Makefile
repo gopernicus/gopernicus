@@ -39,7 +39,8 @@ EMULATOR_TAG_MODULES = integrations/authentication/firebase
 	guard-auth-no-delivery-repo guard-auth-no-request-time-provider \
 	guard-authorization-no-delivery-repo guard-authorization-rolesvc-no-engine guard-ui-no-inward guard-ui-require-whitelist \
 	guard-no-legacy-features-path guard-list-no-nethttp guard-violation-message-not-error \
-	guard-firestore-mediation guard-pocket-logic guard-authorization-tuples-leaf guard-authorization-decisions-no-mutations guard-inbound-authorization guard-tuple-write-integrity guard-host-contract guard-auth-no-vendor-names
+	guard-firestore-mediation guard-pocket-logic guard-authorization-tuples-leaf guard-authorization-decisions-no-mutations guard-inbound-authorization guard-tuple-write-integrity guard-host-contract guard-auth-no-vendor-names \
+	guard-cms-admin-gate
 
 # Regenerate *_templ.go from .templ sources. Each bundled views/templ module pins
 # its own templ tool; generation runs inside each so the tool version is
@@ -208,7 +209,8 @@ guard: guard-sdk-stdlib guard-pocket-isolation guard-sdk-no-outward guard-no-leg
 	guard-auth-no-delivery-repo guard-auth-no-request-time-provider \
 	guard-authorization-no-delivery-repo guard-authorization-rolesvc-no-engine guard-ui-no-inward guard-ui-require-whitelist \
 	guard-no-legacy-features-path guard-list-no-nethttp guard-violation-message-not-error \
-	guard-firestore-mediation guard-pocket-logic guard-authorization-tuples-leaf guard-authorization-decisions-no-mutations guard-inbound-authorization guard-tuple-write-integrity guard-host-contract guard-auth-no-vendor-names
+	guard-firestore-mediation guard-pocket-logic guard-authorization-tuples-leaf guard-authorization-decisions-no-mutations guard-inbound-authorization guard-tuple-write-integrity guard-host-contract guard-auth-no-vendor-names \
+	guard-cms-admin-gate
 
 # G1: sdk imports only the standard library (also enforced structurally by
 # sdk/go.mod having no require block).
@@ -663,3 +665,17 @@ guard-host-contract:
 	@echo "== guard: example hosts pass gopernicus guard (H0–H14) (G30) =="
 	@cd workshop/gopernicus && for h in cms minimal jobs-minimal auth-cms goth-showcase external-identity; do \
 		echo "-- examples/$$h"; go run . guard ../../examples/$$h || exit 1; done
+
+# G31 (SOC 2 S1, cms admin deny-by-absence): since pockets/cms v0.4.0 a
+# cms.Config with neither AdminMiddleware nor AdminUngatedAcknowledged leaves the
+# admin surface unmounted — a WARN, not a boot refusal. Every file under
+# examples/ (tests included) that builds a cms.Config literal names its admin
+# posture: a gate or the demo acknowledgement. Downstream hosts get the same
+# signal from `gopernicus guard --posture` (P8).
+guard-cms-admin-gate:
+	@echo "== guard: example cms.Config literals name their admin posture (G31) =="
+	@fail=0; for f in $$(grep -rl --include='*.go' --exclude-dir=node_modules 'cms\.Config{' examples || true); do \
+		if ! grep -qE 'AdminMiddleware|AdminUngatedAcknowledged' "$$f"; then \
+			echo "ERROR (G31): $$f builds a cms.Config naming neither AdminMiddleware nor AdminUngatedAcknowledged — its admin surface is unmounted (deny-by-absence); pass an authorizing gate or acknowledge the demo posture"; fail=1; \
+		fi; \
+	done; exit $$fail

@@ -35,7 +35,7 @@ func (h *ContactHandlers) Form(w http.ResponseWriter, r *http.Request) {
 // Submit handles a contact-form submission.
 func (h *ContactHandlers) Submit(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseForm(); err != nil {
-		h.renderError(w, r, err)
+		h.renderPublicError(w, r, err)
 		return
 	}
 	model := ContactModel{
@@ -51,7 +51,7 @@ func (h *ContactHandlers) Submit(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		// Inquiry may still be persisted (notification failure); surface a 500.
-		h.renderError(w, r, err)
+		h.renderPublicError(w, r, err)
 		return
 	}
 	web.Render(r.Context(), w, http.StatusOK, h.views.ContactThanks())
@@ -73,4 +73,14 @@ func (h *ContactHandlers) renderError(w http.ResponseWriter, r *http.Request, er
 		web.RecordError(w, err)
 	}
 	web.Render(r.Context(), w, mapped.Status, h.views.AdminError(mapped.Status, mapped.Message))
+}
+
+// renderPublicError renders through the public error view: a public route must
+// not render the admin chrome, which would leak the admin navigation.
+func (h *ContactHandlers) renderPublicError(w http.ResponseWriter, r *http.Request, err error) {
+	mapped := web.ErrFromDomain(err)
+	if mapped.Status >= http.StatusInternalServerError {
+		web.RecordError(w, err)
+	}
+	web.Render(r.Context(), w, mapped.Status, h.views.Error(mapped.Status, mapped.Message))
 }
