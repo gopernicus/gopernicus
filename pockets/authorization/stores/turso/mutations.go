@@ -22,7 +22,11 @@ func newMutationStore(db *tursodb.DB, cfg config) *mutationStore {
 var (
 	_ mutations.MutationRepository = (*mutationStore)(nil)
 	_ mutations.OperationLedger    = (*mutationStore)(nil)
+	_ audit.RecordingReporter      = (*mutationStore)(nil)
 )
+
+// AuditRecording reports whether the store was constructed WithAudit.
+func (m *mutationStore) AuditRecording() bool { return m.audit }
 
 func (m *mutationStore) IntegrityPolicy() mutations.IntegrityPolicy {
 	return mutations.IntegrityPolicy{Rules: slices.Clone(m.integrity.Rules)}

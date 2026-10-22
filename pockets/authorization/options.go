@@ -7,6 +7,7 @@ import (
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/decisions"
 	authmodel "github.com/gopernicus/gopernicus/pockets/authorization/logic/model"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuplecache"
+	"github.com/gopernicus/gopernicus/sdk/pkg/environment"
 )
 
 // Option configures construction. Options apply in order; each replaces its
@@ -54,6 +55,24 @@ func WithRoleRoutes(routes authorizationhttp.RoleRoutes) Option {
 // borrowed; the host drives Components.TupleCache.Poll and owns its lifecycle.
 func WithTupleCache(backend tuplecache.Backend, policy tuplecache.Policy) Option {
 	return func(cfg *config) { cfg.TupleBackend = backend; cfg.TuplePolicy = policy }
+}
+
+// WithRuntimeMode sets the host's deployment posture. In production, New
+// returns ErrAuditRequired unless Repositories.Tuples, and Repositories.Mutations
+// when wired, report AuditRecording() true (audit.RecordingReporter) and
+// Repositories.Audit is wired; development logs one warning instead. The zero
+// mode, the default, applies no posture check. A non-zero mode must pass
+// environment.ValidateMode.
+func WithRuntimeMode(mode environment.Mode) Option {
+	return func(cfg *config) { cfg.RuntimeMode = mode }
+}
+
+// WithAuditDisabledAcknowledged waives the production audit requirement for an
+// authority that does not record changes; New logs one posture_waiver warning.
+// Beside a recording authority it is ErrAuditAcknowledgedWithRecording in every
+// mode. Pass it as a literal in the composition root, never from configuration.
+func WithAuditDisabledAcknowledged() Option {
+	return func(cfg *config) { cfg.AuditDisabledAcknowledged = true }
 }
 
 // WithDiagnosticObserver enables bounded transition observations for scoped

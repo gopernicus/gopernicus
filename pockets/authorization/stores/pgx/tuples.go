@@ -32,6 +32,10 @@ type tupleStore struct {
 func newTupleStore(db *pgxdb.DB, cfg config) *tupleStore { return &tupleStore{db: db, cfg: cfg} }
 
 var _ tuples.Storer = (*tupleStore)(nil)
+var _ audit.RecordingReporter = (*tupleStore)(nil)
+
+// AuditRecording reports whether the store was constructed WithAudit.
+func (s *tupleStore) AuditRecording() bool { return s.cfg.audit }
 
 func (s *tupleStore) TupleCacheBinding() string { return s.cfg.tupleBinding }
 func (s *tupleStore) table() string             { return s.cfg.schema.Table("iam_tuples") }
