@@ -1,34 +1,42 @@
 ---
 title: Keys and rotation
-description: The five authentication keys, how they are encoded and loaded today, what rotating each one costs, and the secrets-pocket key procedures.
+description: The five authentication keys, how NewKeys decodes and loads them, what rotating each one costs, and the secrets-pocket key procedures.
 ---
 
 # Keys and rotation
 
-Current state on `main` at 2026-10-22. The authentication pocket never generates a key:
-every signer, encrypter and keyer is a required collaborator, so where a key comes from
-is the composition root's job. The reference host (`examples/auth-cms/cmd/server/demo.go`)
-is the shape most hosts copied, and it is also where the inconsistencies below live.
+Current state on `main` at 2026-10-22, after S1. The authentication pocket never generates a
+key in production: every signer, encrypter and keyer is a required collaborator, and
+`authentication.NewKeys(mode, KeysInput{…}, log, need…)` is the one loader that decodes them.
+The host fills `KeysInput` from its own environment (hex, every key), names the keys it wires
+in `need`, and gets back the collaborators. A needed key that is unset is `ErrKeyRequired` in
+production (one joined error naming each variable) and a per-boot `crypto/rand` key with one
+WARN in development; a malformed value (not hex, too short) is refused in every mode. The
+reference host (`examples/auth-cms/cmd/server/demo.go`) and the `init` scaffold use it.
 
 ## The five authentication keys
 
-| Env (reference host) | Protects | Encoding today | Minimum | Rotation consequence |
+| Env (reference host) | Protects | Encoding (`NewKeys`) | Minimum | Rotation consequence |
 |---|---|---|---|---|
-| `AUTH_JWT_SECRET` | access-JWT signing (HS256 by default) | the env string is used as the key bytes directly; the reference host generates a 64-hex-char string, so the *text* is the key | 32 bytes for HS256, 48 for HS384, 64 for HS512 (enforced by `integrations/cryptids/golang-jwt`) | single key: every outstanding access JWT becomes invalid at once; sessions survive and clients refresh |
+| `AUTH_JWT_SECRET` | access-JWT signing (HS256 by default) | hex, decoded to bytes (before S1 the reference host used the hex *text* as the key — see continuity below) | 32 bytes for HS256, 48 for HS384, 64 for HS512 (enforced by `integrations/cryptids/golang-jwt`) | single key: every outstanding access JWT becomes invalid at once; sessions survive and clients refresh |
 | `AUTH_CHALLENGE_PEPPER` | HMAC over OTP codes; digests of reset and magic-link tokens | hex, decoded to bytes | 32 bytes per ring key | the only key with overlap: `HMACKeyRing` keeps older keys so unexpired codes still verify until the old key is dropped |
 | `AUTH_IDENTIFIER_KEY` | PII-free rate-limit and idempotency digests | hex, decoded to bytes | 32 bytes | single key: every budget and idempotency bucket resets once (transient) |
-| `AUTH_DELIVERY_ENCRYPTER_KEY` | AES-256-GCM over queued delivery envelopes (the rendered secret and destination) | **raw 32-byte string** (not hex) | exactly 32 bytes | single key: drain the queue first; in-flight sealed rows dead-letter under a new key |
-| `AUTH_TOKEN_ENCRYPTER_KEY` | AES-256-GCM over stored OAuth provider tokens | **raw 32-byte string** (not hex); unset → provider tokens are not persisted | exactly 32 bytes | single key: stored provider tokens become unreadable; users re-link |
+| `AUTH_DELIVERY_ENCRYPTER_KEY` | AES-256-GCM over queued delivery envelopes (the rendered secret and destination) | hex, decoded to bytes (before S1: a raw 32-byte string) | 32 bytes | single key: drain the queue first; in-flight sealed rows dead-letter under a new key |
+| `AUTH_TOKEN_ENCRYPTER_KEY` | AES-256-GCM over stored OAuth provider tokens | hex, decoded to bytes (before S1: a raw 32-byte string); optional in every mode — unset → provider tokens are not persisted | 32 bytes | single key: stored provider tokens become unreadable; users re-link |
 
-Two things to know before you copy the reference host:
+Two things to know before you repin a host that copied the pre-S1 reference host:
 
-- **Unset keys are not refused.** With any of the first four unset, the reference host mints
-  a random key at boot and logs a WARN, in every runtime mode. A multi-instance deployment
-  then flaps authentication (each instance signs with its own key) and loses sealed delivery
-  rows on restart. A single hex loader that fails closed in production is planned (S1).
-- **The encodings differ** (hex for three, raw bytes for two). Operators who paste a hex
-  string into a raw-bytes variable get a 32-byte key with 128 bits of entropy. S1 standardizes
-  on hex.
+- **Unset keys are refused in production.** Before S1 the reference host minted a random key
+  at boot with a WARN in every mode, so a multi-instance deployment flapped authentication
+  and lost sealed delivery rows on restart. `NewKeys` fails closed; the development mint is
+  what a host that still minted its own keys may keep seeing in `guard --posture` P6's
+  informational `rand` lines.
+- **Continuity across the encoding change.** `NewKeys` decodes every key as hex. If your host
+  used the hex *text* of `AUTH_JWT_SECRET` as the key bytes, or raw 32-character strings for
+  the two encrypter keys, set each new value to the hex of the OLD bytes
+  (`printf %s "$OLD" | xxd -p | tr -d '\n'`) so outstanding access tokens, in-flight sealed
+  outbox rows and stored provider tokens stay valid. Never mint a new value at the upgrade;
+  the consequences are the last column above.
 
 There is deliberately no separate CSRF or magic-link key: CSRF is a per-render double-submit
 token, and link tokens are digested under the challenge pepper.

@@ -35,14 +35,23 @@ mode) has no privileges: restrict the file and its backups instead.
 
 ## Connection security
 
-- `pgxdb` forwards `sslmode` verbatim and validates nothing; unset falls back to libpq's
-  `prefer`, which negotiates TLS when offered and silently continues without it. Use
-  `sslmode=verify-full` (`DB_SSLMODE=verify-full`) with the provider's CA. The `init`
-  scaffold currently emits `DB_SSLMODE=disable`; change it before the first deploy (a
-  `verify-full` default and a production refusal are planned, S1).
-- `turso` accepts any URL scheme; use `libsql://`, `https://` or `wss://` only.
+- `pgxdb` classifies every connection target (the primary and each fallback) before any
+  I/O: *verified* (`verify-full`, `verify-ca`, `require` with `sslrootcert`,
+  `sslrootcert=system`), *local* (a unix socket), *unverified* (a bare `require`) or
+  *plaintext* (`disable`, or the fallback that `prefer`/`allow` keep). With
+  `Config.RuntimeMode` production, an unverified or plaintext target is refused
+  (`ErrTLSRequired`) unless the composition root sets `TLSUnverifiedAcknowledged` (bare
+  `require`) or `TLSDisabledAcknowledged` (all); development logs a WARN. The zero
+  `RuntimeMode` is mode-blind. Use `sslmode=verify-full` (`DB_SSLMODE=verify-full`) with the
+  provider's CA; the `init` scaffold emits `DB_SSLMODE=verify-full` with the local-docker
+  `disable` line commented out (shipped S1).
+- `turso` under production refuses a hosted URL without TLS — `http://`, `ws://`, or
+  `libsql://…?tls=0` — with `ErrTLSRequired` unless `TLSDisabledAcknowledged`; `file:` is
+  exempt. Use `libsql://`, `https://` or `wss://`.
 - The DSN is a secret (it carries the password); the connectors redact it from errors and
-  logs. `DB_LOG_QUERIES=true` logs bind arguments verbatim — never in production.
+  logs. `DB_LOG_QUERIES=true` logs bind arguments verbatim; production refuses it
+  (`ErrQueryLoggingRefused`, no acknowledgement), as it refuses a `Tracer` that is or wraps
+  `*LoggingQueryTracer`.
 
 ## Encryption at rest and backups
 
