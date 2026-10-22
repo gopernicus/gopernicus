@@ -39,10 +39,12 @@ type SecurityHeadersConfig struct {
 	// DisableHSTS omits Strict-Transport-Security entirely.
 	DisableHSTS bool
 
-	// FrameOptions is the X-Frame-Options value. Empty omits the header, for a
-	// host whose pages are embedded and which sets CSP frame-ancestors itself.
-	// SecurityHeaders uses "DENY".
+	// FrameOptions is the X-Frame-Options value. Empty selects "DENY".
 	FrameOptions string
+
+	// DisableFrameOptions omits X-Frame-Options entirely, for a host whose
+	// pages are embedded and which sets CSP frame-ancestors itself.
+	DisableFrameOptions bool
 }
 
 // SecurityHeaders is a preset of DefaultHeadersMiddleware, like NoStore, that
@@ -65,22 +67,25 @@ type SecurityHeadersConfig struct {
 // cacher.Pages: Strict-Transport-Security is not a stored page header, so set
 // inside, it makes every page bypass the cache.
 //
-// It is SecurityHeadersWithConfig(SecurityHeadersConfig{FrameOptions: "DENY"}).
+// It is SecurityHeadersWithConfig(SecurityHeadersConfig{}).
 func SecurityHeaders() Middleware {
-	return SecurityHeadersWithConfig(SecurityHeadersConfig{FrameOptions: securityFrameOptionsDeny})
+	return SecurityHeadersWithConfig(SecurityHeadersConfig{})
 }
 
 // SecurityHeadersWithConfig is SecurityHeaders with the HSTS and framing
-// posture adjusted by cfg. The zero config writes every SecurityHeaders header
-// except X-Frame-Options; set FrameOptions to keep it.
+// posture adjusted by cfg. Each zero field keeps the SecurityHeaders default.
 func SecurityHeadersWithConfig(cfg SecurityHeadersConfig) Middleware {
 	headers := map[string]string{
 		"X-Content-Type-Options": securityContentTypeOptions,
 		"Referrer-Policy":        securityReferrerPolicy,
 		"Permissions-Policy":     securityPermissionsPolicy,
 	}
-	if cfg.FrameOptions != "" {
-		headers["X-Frame-Options"] = cfg.FrameOptions
+	if !cfg.DisableFrameOptions {
+		frameOptions := cfg.FrameOptions
+		if frameOptions == "" {
+			frameOptions = securityFrameOptionsDeny
+		}
+		headers["X-Frame-Options"] = frameOptions
 	}
 	if !cfg.DisableHSTS {
 		headers["Strict-Transport-Security"] = hstsValue(cfg)

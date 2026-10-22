@@ -47,8 +47,27 @@ func TestSecurityHeaders_Matrix(t *testing.T) {
 			},
 		},
 		{
-			name: "zero config drops only X-Frame-Options",
+			name: "zero config is the preset",
 			mw:   SecurityHeadersWithConfig(SecurityHeadersConfig{}),
+			want: map[string]string{
+				"Strict-Transport-Security": "max-age=31536000; includeSubDomains",
+				"X-Content-Type-Options":    "nosniff",
+				"Referrer-Policy":           referrer,
+				"X-Frame-Options":           "DENY",
+				"Permissions-Policy":        permissions,
+			},
+		},
+		{
+			name: "HSTS-only adjustment keeps DENY",
+			mw:   SecurityHeadersWithConfig(SecurityHeadersConfig{HSTSMaxAge: 48 * time.Hour}),
+			want: map[string]string{
+				"Strict-Transport-Security": "max-age=172800; includeSubDomains",
+				"X-Frame-Options":           "DENY",
+			},
+		},
+		{
+			name: "frame options disabled",
+			mw:   SecurityHeadersWithConfig(SecurityHeadersConfig{DisableFrameOptions: true, FrameOptions: "SAMEORIGIN"}),
 			want: map[string]string{
 				"Strict-Transport-Security": "max-age=31536000; includeSubDomains",
 				"X-Content-Type-Options":    "nosniff",
@@ -74,7 +93,7 @@ func TestSecurityHeaders_Matrix(t *testing.T) {
 		},
 		{
 			name: "negative max-age un-pins",
-			mw:   SecurityHeadersWithConfig(SecurityHeadersConfig{HSTSMaxAge: -1, FrameOptions: "DENY"}),
+			mw:   SecurityHeadersWithConfig(SecurityHeadersConfig{HSTSMaxAge: -1}),
 			want: map[string]string{
 				"Strict-Transport-Security": "max-age=0; includeSubDomains",
 				"X-Frame-Options":           "DENY",
@@ -82,14 +101,14 @@ func TestSecurityHeaders_Matrix(t *testing.T) {
 		},
 		{
 			name: "subdomains excluded",
-			mw:   SecurityHeadersWithConfig(SecurityHeadersConfig{HSTSExcludeSubDomains: true, FrameOptions: "DENY"}),
+			mw:   SecurityHeadersWithConfig(SecurityHeadersConfig{HSTSExcludeSubDomains: true}),
 			want: map[string]string{
 				"Strict-Transport-Security": "max-age=31536000",
 			},
 		},
 		{
 			name: "HSTS disabled",
-			mw:   SecurityHeadersWithConfig(SecurityHeadersConfig{DisableHSTS: true, HSTSPreload: true, FrameOptions: "DENY"}),
+			mw:   SecurityHeadersWithConfig(SecurityHeadersConfig{DisableHSTS: true, HSTSPreload: true}),
 			want: map[string]string{
 				"Strict-Transport-Security": "",
 				"X-Content-Type-Options":    "nosniff",
