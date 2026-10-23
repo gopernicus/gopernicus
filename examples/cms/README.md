@@ -88,7 +88,7 @@ Run from the repo root (the `Makefile` covers all 6 modules):
 | `make run` | generate + migrate + `go run ./cmd/server` (this app), both with `APP_RUNTIME_MODE=development` |
 | `make migrate` | applies `workshop/migrations` pre-boot with `APP_RUNTIME_MODE=development` (host-owned, separate from `run`'s server boot) |
 | `make test` | `go test ./...` per module |
-| `make check` | generate (fail on drift) + vet + build + test per module + the twenty layering guards |
+| `make check` | generate (fail on drift) + vet + build + test per module + the thirty-three layering guards |
 
 Migrations are scaffolded into `workshop/migrations/primary` from
 `pockets/cms/stores/turso` (D4: scaffold-and-own) and applied by this host's
@@ -105,7 +105,7 @@ cd ../../pockets/cms/stores/turso && go test -tags=integration ./...   # needs T
 
 ## Layering guards
 
-Run from the repo root (`make guard` runs all twenty; each must print nothing):
+Run from the repo root (`make guard` runs all thirty-three; each must print nothing):
 
 ```
 grep -rn --include='*.go' -E '"gopernicus/' .                                         # no legacy import path

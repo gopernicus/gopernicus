@@ -152,17 +152,20 @@ by the workspace. Redis tests start private Unix-socket servers and require
 skip if it is unavailable; a green test command with that skip is not Redis
 verification. SQLite tests create disposable local files.
 
-The owned-fixture runner creates and verifies its own PostgreSQL 17 cluster,
-SQLite files and Redis instances. It snapshots source, discards inherited
-datastore settings, requires named behavioral proofs and rejects skipped SQL or
-Redis checks. It includes both PostgreSQL schema variants and the CMS HTTP suite:
+The owned-fixture runner is historical: it is the owned runner that produced
+the 109-case cache/store matrix this file cites, kept so those numbers stay
+reproducible. Nothing in CI or the `Makefile` runs it, and no release gate
+depends on it. It creates and verifies its own PostgreSQL 17 cluster, SQLite
+files and Redis instances. It snapshots source, discards inherited datastore
+settings, requires named behavioral proofs and rejects skipped SQL or Redis
+checks. It includes both PostgreSQL schema variants and the CMS HTTP suite:
 
 ```sh
 python3 -B .github/scripts/authorization_cache_verify.py --mode all \
   --postgres-bin /path/to/postgresql17/bin --report /tmp/authorization-verification.json
 ```
 
-Its separate `--mode benchmark` requires all 109 current workload cases and five
+Its separate `--mode benchmark` requires all 109 workload cases of that matrix and five
 completed samples per case. The JSON report records commands, output, source
 digest and cleanup. Remote Turso remains a separate explicitly gated run.
 

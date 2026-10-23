@@ -1,5 +1,257 @@
 # Releasing gopernicus modules
 
+## S2 follow-ups (secrets stores/pgx v0.2.1; authentication v0.22.0, stores/pgx v0.10.1; workshop/gopernicus v0.6.1 — published 2026-10-23)
+
+Four annotated tags (not signed), each cut at its PR's squash-merge commit on `main`, pushed,
+THEN polled on the proxy, and cold-verified from a scratch consumer (`GOWORK=off`, an empty
+module cache, `proxy.golang.org`, `sum.golang.org`, `go mod verify`, `go build <module>/...`).
+Every one resolved on the first poll. They close the **Known** list of
+[Audit completeness and integrity](#audit-completeness-and-integrity-soc-2-slice-s2--published-2026-10-23)
+below, except `external_login`'s per-cache dedupe, a design property that stays Known. Design
+and rulings: [plans/s2-follow-ups.md](plans/s2-follow-ups.md) (rev 2, ratified 2026-10-23).
+Host handoff: [plans/soc2-s2-audit-completeness-handoff.md](plans/soc2-s2-audit-completeness-handoff.md),
+updated under the maintenance rule (below). Manifest: `plans/s2-follow-ups-release-manifest.json`
+(from `go mod download -json` of the four tags).
+
+| Step | Tag | Commit | PR | Cold verification |
+|---|---|---|---|---|
+| 1 | `pockets/secrets/stores/pgx/v0.2.1` | `f7b3ec9f` | #156 (PR-1; PATCH; core `pockets/secrets` v0.2.0 + pgxdb v0.11.0 unchanged) | OK, poll 1 |
+| 2b | `pockets/authentication/stores/pgx/v0.10.1` | `7e26db9e` | #158 (PR-2b; PATCH; its tree pins core v0.21.0 + pgxdb v0.11.0 — cut BEFORE PR-2a landed the live case that needs v0.22.0) | OK, poll 1 |
+| 2 | `pockets/authentication/v0.22.0` | `c9cc0a9b` | #155 (PR-2d), #158 (PR-2b), #159 (PR-2a), #160 (PR-2c) — one core tag, MINOR, cut at the later merge | OK, poll 1 |
+| 3 | `workshop/gopernicus/v0.6.1` | `9b51e10f` | #157 (PR-3; PATCH; tagged as the next step after the merge) | OK, poll 1; a cold `init --db pgx` from `@v0.6.1` emits a README running `@v0.6.0 guard --posture .`, builds, and is guard-clean (P9 `no scope`) |
+
+**Not tagged.** `pockets/authentication/stores/turso` stays v0.9.0: its code does not change (it
+stores nine fractional digits). Both authentication stores keep core v0.21.0 in their `go.mod`
+(pgx v0.10.1, turso v0.9.0), so a host that pins core v0.22.0 beside them builds v0.22.0 by
+MVS. `pockets/secrets` v0.2.0, `sdk` v0.16.0, pgxdb v0.11.0 and turso v0.8.0 do not move. No
+migration, no store schema change, no port signature change; nothing retracts.
+
+**Verification record.**
+- CI `check` and `vuln` (push and pull_request events) and the CodeQL analyses passed on the
+  final run of every PR, #155–#160.
+- Live store legs on merged `main` before each pocket and store tag, against a scratch
+  PostgreSQL 17 and a local libSQL server: the secrets pgx store bare and schema-qualified, the
+  two race tests at `-count=20` (tag 1); the authentication pgx store bare and schema-qualified
+  (tags 2b and 2); for tag 2 also the authentication turso store under `-tags=integration` and
+  `TestConformance_LocalSQLite`, the five terminal-settlement subtests printing `--- PASS` in
+  every run (`TestReference`, `LocalSQLite`, local libSQL, authmem, pgx bare and schema), and
+  the pgx Recorder live case `TestLive_RecorderBoundsClientAttribution` (bare and schema). None
+  skipped except the pre-existing `TestCollationControlsOrdering_NonC` (it needs a non-C DSN).
+- Linux, before PR-2b merged: `make test-stores` end to end in a `golang:1.26.10` container
+  against a fresh database exited 0 on every leg, the first full Linux run of the legs after
+  authentication pgx since 2026-07-07; the `live-stores` dispatch on the PR-2b branch (run
+  40002504439) passed both jobs, the authentication pgx bare and schema legs green on
+  `ubuntu-latest` with no `GOCACHE` override in the workflow. That branch was cut from
+  `019e8a36`, before #156, so the secrets race tests have run on macOS only; tag 1's Linux
+  evidence is the next `live-stores` run on `main`.
+- Tag 3: before the merge, a scaffold from the published v0.6.0 was checked posture-clean under
+  `@v0.6.0 guard --posture .` (exit 0); after the tag, the cold `init --db pgx` above.
+- `examples/production-baseline` was driven live in PR-2c (scratch PostgreSQL 17): a dev-token
+  403 on the role routes wrote `external_subject_provisioned`, `external_login` and
+  `authorization_denied` rows, each with `ip_address`, `user_agent` and the response's request
+  id; a request whose User-Agent is not valid UTF-8 got the same three rows with `user_agent`
+  blank; `/healthz` reported `audit_write_failures=0`, `audit_rows_suppressed=0`,
+  `bridge_dropped=0`. `examples/auth-cms` drove the OAuth2 mismatch in PR-2a (below). Both
+  examples (untagged) are repinned by this record's PR: auth-cms to authentication v0.22.0 (and
+  `pockets/cms` v0.3.0 → v0.4.0, a pin stale since S1 that only the workspace had masked — the
+  example now builds at `GOWORK=off` again);
+  production-baseline to authentication v0.22.0 AND `stores/pgx` v0.10.1, an explicit `go get`
+  (the baseline pins the store directly and `go mod tidy` does not raise a direct pin).
+
+**What shipped, per module.**
+- `pockets/secrets/stores/pgx` v0.2.1: `DeleteOwner` locks the owner key first — `SELECT key_id
+  … FOR UPDATE`, scanned through `pgxdb.MapError` (no key ⇒ `sdk.ErrNotFound` before any
+  delete) — then deletes the values and the key. A `PutSecret` that commits before the lock
+  makes `DeleteOwner` return `sdk.ErrConflict` with nothing deleted, which the service's retries
+  absorb (it returned `sdk.ErrInvalidReference`, which the service does not retry); one that
+  arrives after the lock waits, then fails with `sdk.ErrInvalidReference` because the owner is
+  gone. `DeleteOwner` and `ReplaceOwnerKey` now lock in the same order (owner key, then values),
+  so the deadlock (SQLSTATE 40P01, unmapped) between owner deletion and a resealing rotation is
+  gone. Proof: `TestLive_DeleteOwnerVersusPutSecret` (with a service-level assertion that
+  `vault.Service.DeleteOwner` succeeds through its retries) and
+  `TestLive_DeleteOwnerVersusRotation`, driven by a `pg_blocking_pids` barrier, no sleeps; both
+  fail on the pre-fix store and pass 20 of 20 in the bare and schema-qualified legs. The outcome
+  assumes the server default READ COMMITTED (`pgxdb.InTx` uses `pool.Begin`). The lock is held
+  for the transaction and there is no `lock_timeout`: a request-path caller carries a deadline.
+  `FOR UPDATE` needs UPDATE on `secrets_owner_keys`, which the runtime role already holds for
+  `ReplaceOwnerKey`. The memory store holds one mutex for the whole call and is unchanged.
+- `pockets/authentication/stores/pgx` v0.10.1: every session insert returns the session as
+  persisted. One helper, `persisted`, truncates `CreatedAt`, `ExpiresAt` and
+  `Authentication.AuthenticatedAt` to the microsecond in UTC; the insert encodes from it and all
+  four insert paths return it — `Create`, `CreateForActiveUser` (the production mint path),
+  `RedeemCode` and the passwordless redemption. Truncating in Go is load-bearing: pgx's binary
+  encoding truncates but the text protocol rounds half-to-even, so only Go-side truncation
+  stores the same value under every `default_query_exec_mode`. No SQL or migration change.
+- `pockets/authentication` v0.22.0 (pre-1.0 MINOR; additive exports only): six reasons
+  (`ReasonPrecondition`, `ReasonClaimConflict`, `ReasonUnknownProvider`, `ReasonInvalidRequest`,
+  `ReasonInvalidScope`, `ReasonInvalidTarget`); `securityevent.BoundValue` with `Field` and its
+  five constants, `MaxUserAgentLen`, `MaxDetailLen`; `securityevent.WithFailureRowBudget`,
+  `WithMissingAttributionWarning`, `Input.Budgeted`, `(*Recorder).SuppressedRows()`;
+  `Components.AuditRowsSuppressed()`; `(*oauth2.Service).AuthenticateClientContext`;
+  `(*authenticationhttp.Adapter).ClientInfoMiddleware()`; the session port's "returns the
+  session as persisted" sentence; and the storetest changes below. ARCHITECTURE.md gains the
+  "pocket-owned context stamp" middleware row.
+- `workshop/gopernicus` v0.6.1 (PATCH): the scaffold README and `docs/workshop/commands.md` run
+  `@v0.6.0 guard --posture .` (P9 included); the install line in `workshop/gopernicus/README.md`
+  names `@v0.6.1`. No code; the emitted `go.mod` pins do not change. This supersedes S2's
+  Known "the init pin moves in the next workshop minor (the S1 precedent)": a template pin is a
+  PATCH by the v0.4.1 "Scaffold pins" precedent.
+- CI: `live-stores.yml` loses the workflow-level `env: GOCACHE: /tmp/gopernicus-audit-s1…`
+  override, a local temp path that #124 leaked; setup-go's cache owns the build cache and
+  `live-stores` shares `check.yml`'s cache key. Its header now says there are no Turso secrets in
+  CI: the turso legs skip there and are proven locally against libSQL. The `RotationKeepsExpiresAt`
+  failure the dispatch reported on every run since 2026-07-07 (called a "precision flake" on
+  2026-08-15) was deterministic on Linux: the store returned the caller's nanosecond values
+  while `timestamptz` keeps microseconds, and macOS's microsecond wall clock hid it.
+
+**Behavior notes — what a repinning host or adapter author meets.**
+- (a) **storetest at v0.22.0 tightens two adapter contracts (BREAKING for third-party
+  adapters, learned at `storetest.Run` time, not at compile time).** Terminal settlement is
+  mandatory: an adapter answering `errors.ErrUnsupported` to `CancelAcceptance` or
+  `ListActiveByResource` now fails the suite (the R6 probes that exempted the retired Firestore
+  store are gone). And `Create` / `CreateForActiveUser` return the session as persisted: the
+  fixture clock in `Sessions/RotationKeepsExpiresAt` and `ActiveSessionMint/ActiveUserRoundTrip`
+  carries a fixed 750 ns remainder (500 would be the rounding tie), so an adapter that stores
+  coarser than nanoseconds but returns its input fails on every platform. Every in-repo
+  adapter passes. A `stores/pgx` consumer at `GOWORK=off` on core v0.21.0 runs v0.21.0's suite,
+  which the fixed store also passes.
+- (b) **"Returns the session as persisted"** covers timestamps only: an insert's return now
+  equals what `Get` reads back. A host-written caller that compared an insert's return with its
+  own nanosecond input sees the stored microsecond value (nothing in this repository does; the
+  service uses only the returned ID). `session.NewSession` keeps nanoseconds; precision is the
+  store's fact, not the entity's.
+- (c) **Nine more denial paths record**, through the one recorder, as failure rows unless noted:
+  `SetPassword` with a password already set (`password_set`, `precondition`); a revision race in
+  `SetPassword` / `ChangePassword` (`revision_conflict`); `RemovePassword` with no password
+  (`password_removed`, `precondition`) or a deactivated account (`password_removed`, blocked,
+  `inactive`); a refused recent-authentication grant on an identifier change, removal or uses
+  change (the mutation's own type, `invalid_token`); the address-claim race on confirm
+  (`email_changed` / `phone_changed`, `claim_conflict`); an unknown provider at the OAuth
+  callback (`oauth_login`, `unknown_provider`, no `provider` key, budgeted) and at a session-bound
+  link start (`oauth_linked`, `unknown_provider`, with the user) — never at the unauthenticated
+  login start, which resolves no provider and records nothing (that route has no rate limit);
+  the token endpoint's `invalid_request` / `invalid_scope` / `invalid_target` refusals
+  (`oauth2_grant_failed`, budgeted); and the confidential-client secret mismatch
+  (`oauth2_grant_failed`, `invalid_client`, budgeted). A dashboard that assumed malformed token
+  requests leave no row sees rows now. `client_id` rides an `oauth2_grant_failed` row only when it
+  names the configured confidential client; otherwise the key is absent. **The boundary is a
+  rule:** *"A row is written when the server evaluated a credential, grant, token or parameter
+  value and refused it. A request refused for its shape (auth-header form, credentials in the
+  body, encoding, a parameter the grant does not accept) writes none; it appears only in access
+  logs and rate-limit counters."*
+- (d) **`AuthenticateClient` is deprecated, not removed.** It delegates to
+  `AuthenticateClientContext(ctx, clientID, secret)` (one constant-time comparison site) with
+  `context.Background()`, so a mismatch through it records an `oauth2_grant_failed` row with no
+  request id, IP or User-Agent, counted in one shared failure-row bucket. The bundled token
+  handler calls the context sibling. **Removal point:** the core MINOR after
+  `pockets/authentication/stores/turso` repins past v0.21.0 (its tests call the old method).
+- (e) **One attribution rule at the one recording site — and the pgx row loss it closes.**
+  `Record` passes every attributed value through `securityevent.BoundValue`: a value carrying
+  NUL, invalid UTF-8 or a control character is recorded blank, never truncated and never
+  refused; the IP is blank unless `netip.ParseAddr` accepts it; the User-Agent is cut at 512
+  bytes on a rune boundary; a top-level Details string over 2048 bytes is blank (before: an
+  OAuth2 `client_id` was truncated at 2048). The request and trace ids keep S2's rule byte for
+  byte — printable ASCII, at most 128 bytes, else blank — so no correlation id behaves
+  differently. **This fixes a pre-existing pgx row loss:** before v0.22.0 a client id carrying an
+  encoded NUL (JSONB refuses `\u0000`, SQLSTATE 22P05) or a User-Agent that is not valid UTF-8
+  (`TEXT` refuses it, SQLSTATE 22021) lost the whole row on the pocket's own routes, counted only
+  as an `audit_write_failed`; now the row is written with that field blank
+  (`TestLive_RecorderBoundsClientAttribution`: the old recorder stored 0 of 3 rows, the new one
+  3 of 3 with `WriteFailures() == 0`). Turso and the memory store kept such values; no producer
+  can send one now. auth-cms run-and-look (`AUTH_OAUTH2_DEMO=1`): a wrong secret for the demo
+  client, for a foreign id and for the demo id with an encoded NUL each answered 401
+  `invalid_client` and wrote a row — `client_id` present, absent, absent — with IP and UA set
+  and no secret anywhere.
+- (f) **A per-IP failure-row budget: 60 rows a minute per client IP, per instance.** The root
+  wires `securityevent.WithFailureRowBudget(limiter, ratelimiter.PerMinute(60))` with the same
+  limiter it hands `OAuth2Config.Limiter`. Every `oauth2_grant_failed` row and the callback's
+  `unknown_provider` row are budgeted (`Input.Budgeted`); S2's `invalid_state` callback row is
+  not. Over budget the row is not written, `Components.AuditRowsSuppressed()` counts it, and one
+  `audit_rows_suppressed` WARN logs, then at most one `count=N` line a minute; a limiter error
+  writes the row (a limiter fault costs a row, never loses one). A blank IP shares one key.
+  auth-cms run-and-look: seventy mismatches from one address in a minute logged
+  `audit_rows_suppressed count=1`, then `count=13` a minute later, and no `audit_write_failed`.
+- (g) **`ClientInfoMiddleware` — client attribution on host routes.** Before v0.22.0 only the
+  authentication pocket's own routes carried the client-info context, so a host route's rows —
+  bridged `authorization_denied` rows, `external_login` rows first recorded on a host route —
+  had blank `ip_address` / `user_agent`. The recipe, in `cmd/`: `router.Use(authenticationComponents.HTTP.ClientInfoMiddleware())`
+  right after `authentication.New`, registered after (so running inside) the `TrustProxies`
+  `Use`. It is a stamp, not a gate; it reads `web.ClientIP` (set by `TrustProxies`; the peer
+  address otherwise), never `X-Forwarded-For`; the pocket exports it and only the host installs
+  it (`pockets.Mount` never grows a `Use`). The pocket's own routes keep their per-route stamp.
+  The proxy posture now lives on the `Adapter`: `NewAuthenticator` builds it from its own
+  runtime mode, so a `NewAuthenticator`-built adapter in production also warns once that
+  `TrustProxies` is not wired. In production the recorder logs one WARN per process, *"security
+  event recorded without client attribution; mount ClientInfoMiddleware"*, the first time it
+  writes a row whose context carries a request id but no client IP (background rows never
+  warn). Both examples mount it, and their bridges' 60 s dedupe key gains the client address: a
+  second address within the window records its own row. The baseline's audit-write observer
+  logs the first failure at ERROR, then one counted line a minute, and `/healthz` reports
+  `audit_rows_suppressed`.
+- (h) **Every surface whose per-IP bucketing changes.** Today's behavior on a host route is the
+  defect: `RateLimitByIP` there put every client in one `prefix:` bucket. Now:
+  `RateLimitByIP` and the OAuth2 per-IP budget key on the stamped IP, and on an unstamped route
+  fall back to the `TrustProxies`-resolved or peer address — so `RateLimitByIP` on a host route
+  rebuckets per client with or without the middleware. The logic-side per-IP budgets
+  (`allowAuthenticationRequest`, passwordless start and redeem, verification resend) have no
+  request to fall back on: on the pocket's own routes they are always stamped, and a host that
+  calls those services from a host route rebuckets them only once the middleware is mounted —
+  the production WARN in (g) is their signal. (Identifier-management budgets are per user and per
+  target, not per IP.) The rebucketing therefore happens only when the middleware is mounted or
+  the fallback applies. Shared → per-client can only admit more: no host newly answers 429,
+  but the implicit global cap is gone. **Caveat:** attribution is only as good as
+  `TRUSTED_PROXY_COUNT` plus an origin reachable solely through those proxies; the
+  `X-Real-IP` fallback and the leftmost clamp are now a spoof surface on every host route that
+  carries the stamp.
+- (i) **Host routes now add IP and User-Agent — personal data — to `security_events`, an
+  immutable table; erasure is S3's.**
+
+**Owner rulings.** Tags are annotated, not signed (ruling of 2026-10-22). **R-A = (a):**
+`.github/scripts/authorization_cache_verify.py` and its test stay — nothing in CI or the
+`Makefile` runs them, but they reproduce the 109-case matrix `pockets/authorization/BENCHMARKS.md`
+still cites — and BENCHMARKS' recipe now calls the script a historical, owned runner. **R-B =
+(a): no adoption exception.** The maintenance rule (owner, 2026-10-23): host handoffs are
+written and updated per slice but are NOT applied to the hosts until the SOC 2 roadmap is
+complete; the hosts adopt once, at the end. The risk, named: the pgx row-loss fix (v0.22.0) and
+the secrets race fix (v0.2.1) do not reach gps-360-go, which mounts OAuth2, until the roadmap
+ends, and the eventual adoption stacks the S1, S2 and follow-up runtime refusals and migrations
+into one deploy. The flood posture in (f) is acceptable in part BECAUSE hosts adopt after S3
+retention.
+
+**Known.**
+- **The flood bound, with the budget:** ≤ 60 rows a minute per IP per instance (~86 k rows a
+  day per IP per instance), each ≤ ~3 KB (UA ≤ 512 B, ids ≤ 2048 B), multiplied by the instance
+  count because the memory limiter is per instance; each row is a synchronous insert bounded at
+  2 s on the host's shared pool, append-only, with no purge until S3. Operators alert on
+  `oauth2_grant_failed reason=invalid_client`.
+- The budget bounds rows, not requests: the OAuth callback route has no rate limit (follow-up).
+- Placement debt: grant validation is split across the handler (`oauth2PublicResource`,
+  `actor_token_type`, an empty `token`) and the service (`Resource`) — a later re-split, not an
+  audit gap alone. Under the rule in (c) the handler's shape rejects stay unrecorded.
+- The logic-side per-IP budgets stay carrier-dependent (`abuse.go`, `passwordless.go`,
+  `resend.go`): they rebucket on a host route only behind the middleware (h).
+- Secrets `DeleteOwner` under a `default_transaction_isolation = 'repeatable read'` server
+  default: the race returns SQLSTATE 40001, which `MapError` passes through and the service does
+  not retry. READ COMMITTED (the server default) is assumed.
+- The `owner_key_destroyed` row can name a stale key id: the secrets service reads the key id
+  outside the deleting transaction, so a rotation committing in between leaves the record naming
+  the rotated-away key. The fix is a secrets core change for a later minor.
+- The `pockets/authentication/stores/pgx` tree on `main` carries `TestLive_RecorderBoundsClientAttribution`,
+  which needs core ≥ v0.22.0; it is not in the v0.10.1 tag (that tree pins v0.21.0), and the next
+  `stores/pgx` tag repins past v0.22.0.
+- `external_login` dedupe is per cache (carried from S2): under the memory default each instance
+  records once per token, and once more per eviction.
+- Turso legs share one ledger: `pockets/authentication/stores/turso/schema_probe_test.go:48`
+  drops the shared `schema_migrations` table, so a later authorization turso leg against the
+  SAME libSQL server fails with `table iam_tuples already exists`. Run each full pass on a fresh
+  server (CI skips turso; `make test-stores` passes on a fresh server). Follow-up: scope the probe
+  test's reset to its own tables.
+- Database reuse: `TestInvitationAcceptanceUpgrade` and `TestOAuth2SessionUpgradePreservesBrowserSession`
+  (authentication pgx) fail against a database another run already migrated — the table probe
+  reports the missing `oauth_clients` before the column probe names 0018/0019 — and pass on a
+  fresh database. Use a fresh database per run. Follow-up: have the two tests create their own
+  schema.
+
 ## Retired: Firestore stores (no tags — owner ruling 2026-10-23)
 
 `integrations/datastores/firestore` and `pockets/authentication/stores/firestore` left the
