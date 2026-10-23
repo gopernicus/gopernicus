@@ -319,16 +319,22 @@ func (r *Repository) DeleteSecret(ctx context.Context, ref vault.Ref, audit []va
 
 func (r *Repository) DeleteOwner(ctx context.Context, owner vault.Owner, expected []string, audit []vault.AuditRecord) error {
 	return r.db.InTx(ctx, func(tx *pgxdb.Tx) error {
+		// The owner key is locked before any value, ReplaceOwnerKey's order, so
+		// the two cannot deadlock. FOR UPDATE because it is the only mode that
+		// conflicts with the FOR KEY SHARE a PutSecret's foreign-key check
+		// holds: under READ COMMITTED a write that got there first commits and
+		// is in the delete below (sdk.ErrConflict); a later one waits and finds
+		// the owner gone.
+		var keyID string
+		if err := tx.QueryRow(ctx, `SELECT key_id FROM `+r.table("secrets_owner_keys")+` WHERE owner_type = $1 AND owner_id = $2 FOR UPDATE`, owner.Type, owner.ID).Scan(&keyID); err != nil {
+			return pgxdb.MapError(err)
+		}
 		removed, err := r.deleteOwnerSecrets(ctx, tx, owner)
 		if err != nil {
 			return err
 		}
-		n, err := pgxdb.ExecAffecting(ctx, tx, `DELETE FROM `+r.table("secrets_owner_keys")+` WHERE owner_type = $1 AND owner_id = $2`, owner.Type, owner.ID)
-		if err != nil {
+		if _, err := tx.Exec(ctx, `DELETE FROM `+r.table("secrets_owner_keys")+` WHERE owner_type = $1 AND owner_id = $2`, owner.Type, owner.ID); err != nil {
 			return err
-		}
-		if n == 0 {
-			return sdk.ErrNotFound
 		}
 		want := map[string]bool{}
 		for _, name := range expected {

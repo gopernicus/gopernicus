@@ -24,7 +24,12 @@ Three tables: `secrets_owner_keys` (one wrapped data key per owner),
 `secrets_values` (sealed values, versioned, FK to the owner key without
 cascade) and `secrets_audit` (append-only). Every write and `GetSecret` run in
 one transaction with their audit rows. `ReplaceOwnerKey` is a compare-and-swap
-on the stored key id; a mismatch is `sdk.ErrConflict`.
+on the stored key id; a mismatch is `sdk.ErrConflict`. `DeleteOwner` locks the
+owner key first, under the default READ COMMITTED: a write that commits first
+makes the delete a retried conflict; a write that arrives after the lock waits
+for the delete and fails because the owner no longer exists
+(`sdk.ErrInvalidReference`). The lock is held for the transaction; a
+request-path caller carries a deadline — there is no `lock_timeout`.
 
 Ordering columns compare under `COLLATE "C"` so pages match the memory store's
 byte order whatever the database's default collation.
