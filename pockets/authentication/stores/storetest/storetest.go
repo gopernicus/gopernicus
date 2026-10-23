@@ -257,8 +257,8 @@ func Run(t *testing.T, newRepos func(t *testing.T) auth.Repositories) {
 		t.Run("AcceptanceClaim", func(t *testing.T) { testInvitationAcceptanceClaim(t, newRepos(t)) })
 		t.Run("StaleTokenTransition", func(t *testing.T) { testInvitationStaleTokenTransition(t, newRepos(t)) })
 		t.Run("ConcurrentClaimCancel", func(t *testing.T) { testInvitationConcurrentClaimCancel(t, newRepos(t)) })
-		// Terminal settlement: an adapter answering errors.ErrUnsupported skips
-		// these cases loudly (the firestore stubs, ruling R6).
+		// Terminal settlement is mandatory for every adapter; an
+		// errors.ErrUnsupported answer fails the suite.
 		t.Run("CancelAcceptance", func(t *testing.T) { testInvitationCancelAcceptance(t, newRepos(t)) })
 		t.Run("CancelAcceptanceIdempotent", func(t *testing.T) { testInvitationCancelAcceptanceIdempotent(t, newRepos(t)) })
 		t.Run("CancelAcceptancePastExpiry", func(t *testing.T) { testInvitationCancelAcceptancePastExpiry(t, newRepos(t)) })
