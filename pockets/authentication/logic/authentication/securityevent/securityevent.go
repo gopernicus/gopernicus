@@ -25,8 +25,11 @@
 package securityevent
 
 import (
+	"net/netip"
 	"slices"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/gopernicus/gopernicus/sdk"
 )
@@ -59,7 +62,8 @@ const (
 	TypeEmailVerified = "email_verified"
 	// TypeOAuthLogin is an OAuth login into an already-linked identity. A
 	// provider callback refused on any branch records it too, as StatusFailure or
-	// StatusBlocked with the provider and a reason.
+	// StatusBlocked with the provider and a reason — or, for a provider the host
+	// does not wire, reason unknown_provider and no provider.
 	TypeOAuthLogin = "oauth_login"
 	// TypeOAuthRegister is an OAuth-driven registration of a new user.
 	TypeOAuthRegister = "oauth_register"
@@ -291,8 +295,9 @@ const (
 	// TypeOAuth2RevocationRequested is a client-requested revocation.
 	TypeOAuth2RevocationRequested = "oauth2_revocation_requested"
 	// TypeOAuth2GrantFailed is a token-endpoint request (code redemption,
-	// refresh, exchange, revocation or introspection) refused for its grant or
-	// client: StatusFailure with reason invalid_grant or invalid_client. A
+	// refresh, exchange, revocation or introspection) refused for its grant,
+	// client or a parameter value: StatusFailure with reason invalid_grant,
+	// invalid_client, invalid_request, invalid_scope or invalid_target. A
 	// refresh reuse records TypeOAuth2RefreshReuse instead.
 	TypeOAuth2GrantFailed = "oauth2_grant_failed"
 )
@@ -349,12 +354,58 @@ const (
 	// ReasonRevisionConflict is a credential change that lost a concurrent
 	// revision race; the proof is spent and a new one is needed.
 	ReasonRevisionConflict = "revision_conflict"
+	// ReasonPrecondition is an operation the account's credential state refused
+	// before any proof was spent: a password set on an account that has one, or
+	// removed from an account that has none.
+	ReasonPrecondition = "precondition"
+	// ReasonClaimConflict is an identifier change whose proven value another
+	// account claimed first.
+	ReasonClaimConflict = "claim_conflict"
+	// ReasonUnknownProvider is an OAuth callback or link start naming a provider
+	// the host does not wire.
+	ReasonUnknownProvider = "unknown_provider"
+	// ReasonInvalidRequest is an OAuth2 token-endpoint parameter value the
+	// server evaluated and refused.
+	ReasonInvalidRequest = "invalid_request"
+	// ReasonInvalidScope is an OAuth2 scope the server refused.
+	ReasonInvalidScope = "invalid_scope"
+	// ReasonInvalidTarget is an OAuth2 resource or audience the server refused.
+	ReasonInvalidTarget = "invalid_target"
 )
 
-// MaxCorrelationIDLen is the longest RequestID or TraceID the Recorder stamps,
-// in bytes. A longer id, or one carrying a byte outside printable ASCII, is
-// recorded blank — never truncated and never refused.
-const MaxCorrelationIDLen = 128
+// Attribution bounds BoundValue applies, in bytes.
+const (
+	// MaxCorrelationIDLen is the longest RequestID or TraceID the Recorder
+	// stamps. A longer id, or one carrying a byte outside printable ASCII, is
+	// recorded blank — never truncated and never refused.
+	MaxCorrelationIDLen = 128
+	// MaxUserAgentLen is the longest UserAgent the Recorder stamps; a longer one
+	// is cut on a rune boundary.
+	MaxUserAgentLen = 512
+	// MaxDetailLen is the longest string value a Details key carries; a longer
+	// one is recorded blank.
+	MaxDetailLen = 2048
+)
+
+// The fields BoundValue knows. Each names the rule applied to one attributed
+// value.
+const (
+	// FieldRequestID is SecurityEvent.RequestID: printable ASCII of at most
+	// MaxCorrelationIDLen bytes, else blank.
+	FieldRequestID Field = iota + 1
+	// FieldTraceID is SecurityEvent.TraceID, under FieldRequestID's rule.
+	FieldTraceID
+	// FieldIPAddress is SecurityEvent.IPAddress: blank unless it is clean text
+	// that netip.ParseAddr accepts.
+	FieldIPAddress
+	// FieldUserAgent is SecurityEvent.UserAgent: blank unless it is clean text,
+	// then cut at MaxUserAgentLen bytes on a rune boundary.
+	FieldUserAgent
+	// FieldDetail is a top-level string value of SecurityEvent.Details, or an
+	// identifier bound for one: blank unless it is clean text of at most
+	// MaxDetailLen bytes.
+	FieldDetail
+)
 
 // types is the registry Types returns: every event type this pocket records.
 var types = []string{
@@ -377,6 +428,9 @@ var types = []string{
 	TypeOAuth2ConsentApproved, TypeOAuth2ConsentDenied, TypeOAuth2ConnectionCreated, TypeOAuth2Refresh,
 	TypeOAuth2RefreshReuse, TypeOAuth2TokenExchanged, TypeOAuth2RevocationRequested, TypeOAuth2GrantFailed,
 }
+
+// Field selects the rule BoundValue applies to an attributed value.
+type Field uint8
 
 // Principal is the effective actor (an AV5 subject_type/subject_id pair) that
 // triggered an event, when one is resolved — a machine identity for an API-key
@@ -415,6 +469,68 @@ type SecurityEvent struct {
 // the rail (an authorization denial, say) is valid there without being listed.
 func Types() []string {
 	return slices.Clone(types)
+}
+
+// BoundValue returns value as the Recorder stamps it into field, or "" when
+// field's rule refuses it. It is the ONE attribution rule: Record applies it to
+// every attributed value, and a producer that bounds an identifier before
+// recording calls it rather than keeping a second copy. Clean text is valid
+// UTF-8 with no control character (C0, DEL or C1; NUL included) — the values a
+// PostgreSQL TEXT or JSONB column would refuse are among them, so a refused
+// value is recorded blank instead of losing the row. Only the User-Agent is
+// ever truncated. An unknown field yields "".
+func BoundValue(field Field, value string) string {
+	switch field {
+	case FieldRequestID, FieldTraceID:
+		if len(value) > MaxCorrelationIDLen {
+			return ""
+		}
+		for i := 0; i < len(value); i++ {
+			if value[i] < 0x20 || value[i] > 0x7e {
+				return ""
+			}
+		}
+		return value
+	case FieldIPAddress:
+		if !cleanText(value) {
+			return ""
+		}
+		if _, err := netip.ParseAddr(value); err != nil {
+			return ""
+		}
+		return value
+	case FieldUserAgent:
+		if !cleanText(value) {
+			return ""
+		}
+		if len(value) <= MaxUserAgentLen {
+			return value
+		}
+		cut := MaxUserAgentLen
+		for cut > 0 && !utf8.RuneStart(value[cut]) {
+			cut--
+		}
+		return value[:cut]
+	case FieldDetail:
+		if len(value) > MaxDetailLen || !cleanText(value) {
+			return ""
+		}
+		return value
+	}
+	return ""
+}
+
+// cleanText reports whether value is valid UTF-8 carrying no control character.
+func cleanText(value string) bool {
+	if !utf8.ValidString(value) {
+		return false
+	}
+	for _, r := range value {
+		if unicode.IsControl(r) {
+			return false
+		}
+	}
+	return true
 }
 
 // New builds a SecurityEvent of eventType/eventStatus as of now, minting its ID

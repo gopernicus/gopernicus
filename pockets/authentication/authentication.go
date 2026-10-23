@@ -35,3 +35,10 @@ type Components struct {
 func (c *Components) AuditWriteFailures() uint64 {
 	return c.SecurityEvents.WriteFailures()
 }
+
+// AuditRowsSuppressed returns how many failure rows the per-IP failure-row
+// budget has refused since New: unauthenticated failures past the budget that
+// wrote no row.
+func (c *Components) AuditRowsSuppressed() uint64 {
+	return c.SecurityEvents.SuppressedRows()
+}

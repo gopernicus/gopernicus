@@ -54,6 +54,7 @@ func (s *Service) SetPassword(ctx context.Context, sessionID, userID, newPasswor
 	}
 	// Refuse an already-set password before spending the grant (409).
 	if _, err := s.passwords.Get(ctx, userID); err == nil {
+		s.recordDenial(ctx, securityevent.TypePasswordSet, userID, securityevent.StatusFailure, securityevent.ReasonPrecondition)
 		return TokenPair{}, ErrPasswordAlreadySet
 	} else if !errors.Is(err, sdk.ErrNotFound) {
 		return TokenPair{}, err
@@ -75,6 +76,9 @@ func (s *Service) SetPassword(ctx context.Context, sessionID, userID, newPasswor
 	}
 	revision, err := s.passwords.Change(ctx, userID, user.PasswordChange{ExpectedAuthRevision: u.AuthRevision, NewHash: hash, Now: s.now()})
 	if err != nil {
+		if errors.Is(err, sdk.ErrConflict) {
+			s.recordDenial(ctx, securityevent.TypePasswordSet, userID, securityevent.StatusFailure, securityevent.ReasonRevisionConflict)
+		}
 		return TokenPair{}, err
 	}
 	pair, err := s.mintSession(ctx, userID, revision, s.primaryAuthentication(session.MethodPassword))
@@ -181,12 +185,16 @@ func (s *Service) RemovePassword(ctx context.Context, userID, code string) (Toke
 	}
 	if _, err := s.passwords.Get(ctx, userID); err != nil {
 		if errors.Is(err, sdk.ErrNotFound) {
+			s.recordDenial(ctx, securityevent.TypePasswordRemoved, userID, securityevent.StatusFailure, securityevent.ReasonPrecondition)
 			return TokenPair{}, ErrPasswordNotSet
 		}
 		return TokenPair{}, err
 	}
 	proof, dest, err := s.credentialRemovalProof(ctx, userID, "")
 	if err != nil {
+		if errors.Is(err, session.ErrUserNotActive) {
+			s.recordDenial(ctx, securityevent.TypePasswordRemoved, userID, securityevent.StatusBlocked, securityevent.ReasonInactive)
+		}
 		return TokenPair{}, err
 	}
 	if _, err := s.consumeChallenge(ctx, userID, challenge.PurposeRemovePassword, code, withExpectedContext(proof)); err != nil {

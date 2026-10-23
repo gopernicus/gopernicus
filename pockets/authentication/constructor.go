@@ -24,6 +24,11 @@ import (
 	"github.com/gopernicus/gopernicus/sdk/pkg/list"
 )
 
+// auditFailureRowsPerMinute is the failure-row budget: the most Budgeted
+// security-event rows (every oauth2_grant_failed row, the OAuth callback's
+// unknown_provider row) one client IP may write per minute, per limiter.
+const auditFailureRowsPerMinute = 60
+
 // resolveListStrategy validates AdministrationConfig.ListStrategy and maps it to a
 // list.Strategy. Empty (the zero value of a literally-built constructorConfig) resolves to
 // the cursor default; "cursor"/"offset" pass through; anything else is
@@ -454,10 +459,12 @@ func New(repos Repositories, signer cryptids.JWTSigner, runtimeMode environment.
 	}
 
 	// The ONE security-event recorder: every recording site below shares it, so
-	// its write-failure count covers the whole pocket.
+	// its write-failure and suppressed-row counts cover the whole pocket. The
+	// failure-row budget draws on the same limiter the pocket's routes use.
 	securityEvents := securityevent.NewRecorder(repos.SecurityEvents, cfg.IDs, time.Now, cfg.Logger,
 		securityevent.WithClientInfoReader(authlogic.ClientInfoFromContext),
-		securityevent.WithWriteObserver(cfg.AuditWriteObserver))
+		securityevent.WithWriteObserver(cfg.AuditWriteObserver),
+		securityevent.WithFailureRowBudget(limiter, ratelimiter.PerMinute(auditFailureRowsPerMinute)))
 
 	var invSvc *invitations.Service
 	if cfg.Granter != nil {

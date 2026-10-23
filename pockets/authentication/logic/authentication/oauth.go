@@ -175,7 +175,8 @@ func (s *Service) StartOAuth(ctx context.Context, providerName string, req OAuth
 }
 
 // StartLink begins a link for a host-authenticated user. The caller must authorize
-// userID; the bundled transport requires the person's session.
+// userID; the bundled transport requires the person's session. An unknown
+// provider records an oauth_linked failure with reason unknown_provider.
 func (s *Service) StartLink(ctx context.Context, userID, providerName string, req OAuthStartRequest) (OAuthStart, error) {
 	if userID == "" {
 		return OAuthStart{}, sdk.ErrUnauthorized
@@ -203,6 +204,13 @@ func (s *Service) ResolveRedirect(target string) string {
 func (s *Service) start(ctx context.Context, providerName string, req OAuthStartRequest, linkUserID string) (OAuthStart, error) {
 	p, err := s.provider(providerName)
 	if err != nil {
+		// A link start is session-bound: the linker is attributable, so the
+		// refusal records. A login start presents no credential, names no
+		// actor and resolves no provider — nothing to attribute — so it records
+		// nothing. The provider key is omitted: the name is caller input.
+		if linkUserID != "" {
+			s.recordOAuth(ctx, linkUserID, "", securityevent.TypeOAuthLinked, securityevent.StatusFailure, securityevent.ReasonUnknownProvider)
+		}
 		return OAuthStart{}, err
 	}
 	var redirectURI string
@@ -289,10 +297,20 @@ func ValidOAuthFlowValue(value string) bool {
 // start, attaches the identity to the linking user. A consumed/expired/unknown
 // state surfaces sdk.ErrNotFound / sdk.ErrExpired. A refusal records an
 // oauth_login failure or blocked row with the provider and a reason, except a
-// link-start conflict, which records an oauth_linked failure.
+// link-start conflict, which records an oauth_linked failure, and an unknown
+// provider, which records reason unknown_provider with no provider as a
+// Budgeted row.
 func (s *Service) OAuthCallback(ctx context.Context, providerName string, req OAuthCallbackRequest) (OAuthResult, error) {
 	p, err := s.provider(providerName)
 	if err != nil {
+		// An unknown provider at the callback is a flow in flight when the host
+		// removed a provider, or a forged callback — actionable, so it records.
+		// The caller holds no credential, so the row is Budgeted. The provider
+		// key is omitted: the name is caller input, and a placeholder such as
+		// "unknown" could be a real provider's name.
+		in := oauthEvent("", "", securityevent.TypeOAuthLogin, securityevent.StatusFailure, securityevent.ReasonUnknownProvider)
+		in.Budgeted = true
+		s.recordSecurityEvent(ctx, in)
 		return OAuthResult{}, err
 	}
 	if (req.Mode != OAuthBrowser && req.Mode != OAuthNative) || !ValidOAuthFlowValue(req.State) || !ValidOAuthFlowValue(req.FlowSecret) || strings.TrimSpace(req.Code) == "" {
@@ -668,6 +686,11 @@ func (s *Service) oauthSession(ctx context.Context, account oauthaccount.OAuthAc
 // a denial; either is omitted when empty (a token that resolved no state names
 // no provider).
 func (s *Service) recordOAuth(ctx context.Context, userID, providerName, eventType, status, reason string) {
+	s.recordSecurityEvent(ctx, oauthEvent(userID, providerName, eventType, status, reason))
+}
+
+// oauthEvent builds recordOAuth's row.
+func oauthEvent(userID, providerName, eventType, status, reason string) securityEventInput {
 	details := map[string]any{}
 	if providerName != "" {
 		details["provider"] = providerName
@@ -675,12 +698,12 @@ func (s *Service) recordOAuth(ctx context.Context, userID, providerName, eventTy
 	if reason != "" {
 		details["reason"] = reason
 	}
-	s.recordSecurityEvent(ctx, securityEventInput{
+	return securityEventInput{
 		UserID:  userID,
 		Type:    eventType,
 		Status:  status,
 		Details: details,
-	})
+	}
 }
 
 // startPendingLink stores the would-be link — plus the captured anti-takeover

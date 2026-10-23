@@ -147,6 +147,7 @@ func (s *Service) StartIdentifierChange(ctx context.Context, in IdentifierChange
 		return StepUpReceipt{}, err
 	}
 	if _, err := s.RequireRecentAuthentication(ctx, in.SessionID, in.UserID, grantPurpose, "", RecentAuthPolicy{}); err != nil {
+		s.recordStepUpRefusal(ctx, changedEvent(in.Kind), in.UserID, err)
 		return StepUpReceipt{}, err
 	}
 	// Per-user AND per-target budgets (design §5.5 delta gate): a start delivers a
@@ -301,6 +302,7 @@ func (s *Service) RemoveIdentifier(ctx context.Context, in IdentifierRemoveInput
 	}
 	// Reject invalid input before a recent-authentication grant can be consumed.
 	if _, err := s.RequireRecentAuthentication(ctx, in.SessionID, in.UserID, authgrant.PurposeRemoveIdentifier, in.IdentifierID, RecentAuthPolicy{}); err != nil {
+		s.recordStepUpRefusal(ctx, removedEvent(target.Kind), in.UserID, err)
 		return err
 	}
 	// Capture recipients before the removal so the remaining verified channels are
@@ -343,6 +345,7 @@ func (s *Service) SetIdentifierUses(ctx context.Context, in IdentifierUsesInput)
 		return identifier.ErrVerificationRequired
 	}
 	if _, err := s.RequireRecentAuthentication(ctx, in.SessionID, in.UserID, authgrant.PurposeChangeIdentifierUses, in.IdentifierID, RecentAuthPolicy{}); err != nil {
+		s.recordStepUpRefusal(ctx, securityevent.TypeIdentifierUsesChanged, in.UserID, err)
 		return err
 	}
 	if err := s.applyCredentialMutationAtRevision(ctx, in.UserID, owner.AuthRevision, credential.ChangeIdentifierUses{
