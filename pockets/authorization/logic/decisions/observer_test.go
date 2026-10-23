@@ -2,6 +2,7 @@ package decisions
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"strings"
 	"sync"
@@ -102,11 +103,11 @@ func TestDecisionObserverPublicOperations(t *testing.T) {
 			_, err := s.EvaluateBatch(ctx, []ExpressionCheck{{Principal: expressionPrincipal, Expression: Role("admin")}, {Principal: expressionPrincipal, Expression: Role("absent")}})
 			return err
 		}},
-		{"Evaluate", DecisionEvent{Principal: expressionPrincipal, Outcome: OutcomeAllowed}, true, func(ctx context.Context, s *Service, _ tuples.Reader) error {
+		{"Evaluate", DecisionEvent{Principal: expressionPrincipal, Permission: "admin", Outcome: OutcomeAllowed}, true, func(ctx context.Context, s *Service, _ tuples.Reader) error {
 			_, err := s.Evaluate(ctx, expressionPrincipal, Role("admin"))
 			return err
 		}},
-		{"EvaluateResolved", DecisionEvent{Principal: expressionPrincipal, Outcome: OutcomeDenied}, true, func(ctx context.Context, s *Service, _ tuples.Reader) error {
+		{"EvaluateResolved", DecisionEvent{Principal: expressionPrincipal, Permission: "read", ResourceType: "doc", ResourceID: "absent", Outcome: OutcomeDenied}, true, func(ctx context.Context, s *Service, _ tuples.Reader) error {
 			_, err := s.EvaluateResolved(ctx, expressionPrincipal, BindResource("doc", "target", Permission("read")), func(context.Context, string) (authmodel.Resource, error) { return missing.Resource, nil })
 			return err
 		}},
@@ -273,5 +274,109 @@ func TestDecisionObserverDisabledByDefault(t *testing.T) {
 	}
 	if _, err := s.Check(t.Context(), authmodel.CheckRequest{Principal: sdk.Principal{Type: "user", ID: "u"}, Permission: "read", Resource: authmodel.Resource{Type: "doc", ID: "a"}}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestDecisionObserverExpressionTargets pins what an expression evaluation
+// names: a single leaf's permission, relation or role and its resolved resource
+// or scope; for a composite, the first denied leaf when not allowed, otherwise
+// the first leaf reached, plus the reached leaves' counts. The DEBUG line agrees.
+func TestDecisionObserverExpressionTargets(t *testing.T) {
+	m := Model{ResourceTypes: map[string]ResourceTypeDef{
+		"folder": {Relations: map[string]RelationDef{"viewer": {AllowedSubjects: []SubjectTypeRef{{Type: "user"}}}}, Permissions: map[string]Expression{"read": Direct("viewer")}},
+		"doc": {Relations: map[string]RelationDef{
+			"viewer": {AllowedSubjects: []SubjectTypeRef{{Type: "user"}}},
+			"parent": {AllowedSubjects: []SubjectTypeRef{{Type: "folder"}}},
+		}, Permissions: map[string]Expression{"read": Any(Direct("viewer"), Through("parent", "read"))}},
+	}}
+	a, b := authmodel.Resource{Type: "doc", ID: "a"}, authmodel.Resource{Type: "doc", ID: "b"}
+	parent := tuples.Tuple{Scope: tuples.On("doc", "b"), Relation: "parent", Subject: tuples.SubjectRef{Type: "folder", ID: "f"}}
+	resolveTo := func(resource authmodel.Resource, err error) ResourceResolver {
+		return func(context.Context, string) (authmodel.Resource, error) { return resource, err }
+	}
+	for _, tc := range []struct {
+		name    string
+		expr    Expression
+		resolve ResourceResolver
+		want    DecisionEvent
+	}{
+		{"permission leaf denied", On(b, Permission("read")), nil, DecisionEvent{Permission: "read", ResourceType: "doc", ResourceID: "b", Outcome: OutcomeDenied}},
+		{"permission leaf allowed", On(a, Permission("read")), nil, DecisionEvent{Permission: "read", ResourceType: "doc", ResourceID: "a", Outcome: OutcomeAllowed}},
+		{"global role leaf", Role("auditor"), nil, DecisionEvent{Permission: "auditor", Outcome: OutcomeDenied}},
+		{"scoped role leaf", RoleIn("owner", a), nil, DecisionEvent{Permission: "owner", ResourceType: "doc", ResourceID: "a", Outcome: OutcomeDenied}},
+		{"relation leaf", On(b, Direct("viewer")), nil, DecisionEvent{Permission: "viewer", ResourceType: "doc", ResourceID: "b", Outcome: OutcomeDenied}},
+		{"through leaf", On(b, Through("parent", "read")), nil, DecisionEvent{Permission: "read", ResourceType: "doc", ResourceID: "b", Outcome: OutcomeDenied}},
+		{"any both denied", Any(On(b, Permission("read")), RoleIn("owner", a)), nil, DecisionEvent{Permission: "read", ResourceType: "doc", ResourceID: "b", Outcome: OutcomeDenied, Requests: 2, Denied: 2}},
+		{"all second denied", All(Role("admin"), RoleIn("owner", a)), nil, DecisionEvent{Permission: "owner", ResourceType: "doc", ResourceID: "a", Outcome: OutcomeDenied, Requests: 2, Allowed: 1, Denied: 1}},
+		{"all allowed", All(Role("admin"), On(a, Permission("read"))), nil, DecisionEvent{Permission: "admin", Outcome: OutcomeAllowed, Requests: 2, Allowed: 2}},
+		{"any short circuit", Any(Role("admin"), BindResource("doc", "never", Permission("read"))), resolveTo(authmodel.Resource{}, errors.New("unreached")), DecisionEvent{Permission: "admin", Outcome: OutcomeAllowed, Requests: 1, Allowed: 1}},
+		{"any allowed after a denial", Any(Role("auditor"), Role("admin")), nil, DecisionEvent{Permission: "auditor", Outcome: OutcomeAllowed, Requests: 2, Allowed: 1, Denied: 1}},
+		{"nested composite", Any(All(Role("admin"), RoleIn("owner", a)), On(b, Direct("viewer"))), nil, DecisionEvent{Permission: "owner", ResourceType: "doc", ResourceID: "a", Outcome: OutcomeDenied, Requests: 3, Allowed: 1, Denied: 2}},
+		{"slot resolved", BindResource("doc", "target", Permission("read")), resolveTo(b, nil), DecisionEvent{Permission: "read", ResourceType: "doc", ResourceID: "b", Outcome: OutcomeDenied}},
+		{"slot not applicable", Any(BindResource("doc", "target", Permission("read")), Role("auditor")), resolveTo(authmodel.Resource{}, ErrResourceNotApplicable), DecisionEvent{Permission: "read", Outcome: OutcomeDenied, Requests: 2, Denied: 2}},
+		{"resolver error", Any(Role("auditor"), BindResource("doc", "target", Permission("read"))), resolveTo(authmodel.Resource{}, errors.New("input unavailable")), DecisionEvent{Outcome: OutcomeError, ErrorKind: "other"}},
+		{"validation error", All(), nil, DecisionEvent{Outcome: OutcomeError, ErrorKind: "invalid_input"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, f := expressionService(t, exact(tuples.On("doc", "a"), "viewer"), exact(tuples.Global(), "admin"), parent)
+			got := &observedEvents{}
+			h := &decisionLogHandler{enabled: true}
+			s, err := NewService(f, WithModel(m), WithLogger(slog.New(h)), WithDecisionObserver(func(_ context.Context, event DecisionEvent) {
+				got.mu.Lock()
+				got.events = append(got.events, event)
+				got.mu.Unlock()
+			}))
+			if err != nil {
+				t.Fatal(err)
+			}
+			operation := "Evaluate"
+			if tc.resolve != nil {
+				operation = "EvaluateResolved"
+				_, _ = s.EvaluateResolved(t.Context(), expressionPrincipal, tc.expr, tc.resolve)
+			} else {
+				_, _ = s.Evaluate(t.Context(), expressionPrincipal, tc.expr)
+			}
+			events := got.all()
+			if len(events) != 1 {
+				t.Fatalf("events=%+v", events)
+			}
+			event := events[0]
+			event.Duration = 0
+			want := tc.want
+			want.Operation, want.Principal = operation, expressionPrincipal
+			if event != want {
+				t.Fatalf("event=%+v\nwant %+v", event, want)
+			}
+			entry := assertDecisionLog(t, h, operation, string(want.Outcome), false)
+			for key, value := range map[string]string{"permission": want.Permission, "resource_type": want.ResourceType, "resource_id": want.ResourceID} {
+				if logged, ok := entry.attrs[key]; ok != (value != "") || (ok && logged != value) {
+					t.Errorf("log %s=%v, event %q", key, logged, value)
+				}
+			}
+			for key, value := range map[string]int{"request_count": want.Requests, "allowed_count": want.Allowed, "denied_count": want.Denied} {
+				if logged, ok := entry.attrs[key]; ok != (want.Requests > 0) || (ok && logged != int64(value)) {
+					t.Errorf("log %s=%v, event %d", key, logged, value)
+				}
+			}
+		})
+	}
+}
+
+// TestDecisionObserverFailedExpressionNamesNoTarget pins that an evaluation
+// failing after a leaf decided reports neither that leaf nor its counts.
+func TestDecisionObserverFailedExpressionNamesNoTarget(t *testing.T) {
+	s, _, got, _ := observedService(t)
+	s.limits.MaxEvaluationSteps = 2
+	if _, err := s.Evaluate(t.Context(), expressionPrincipal, All(Role("admin"), Role("admin"))); err == nil {
+		t.Fatal("exhausted evaluation succeeded")
+	}
+	events := got.all()
+	if len(events) != 1 {
+		t.Fatalf("events=%+v", events)
+	}
+	event := events[0]
+	event.Duration = 0
+	if want := (DecisionEvent{Operation: "Evaluate", Principal: expressionPrincipal, Outcome: OutcomeError, ErrorKind: "evaluation_limit"}); event != want {
+		t.Fatalf("event=%+v\nwant %+v", event, want)
 	}
 }

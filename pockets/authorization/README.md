@@ -838,6 +838,18 @@ connection and repeat on retry.
 | `Requests`, `Allowed`, `Denied` | Batch and filter counts; lookups and filtered pages report returned IDs as `Allowed` |
 | `ErrorKind`, `Duration` | A low-cardinality error class, never the error text, and the elapsed time |
 
+For `Evaluate` and `EvaluateResolved`, which every `Require` gate runs,
+`Permission`, `ResourceType` and `ResourceID` name the expression's target. A
+single leaf reports its named permission (a `Through` leaf its `Permission`),
+relation or role, with its resolved resource or scope; a global role, or an input
+that was not applicable, has no resource. An `AnyOf`/`AllOf` composite reports its
+first denied leaf when the result is not allowed, otherwise its first reached
+leaf, and counts the leaves it reached as `Requests`, `Allowed` and `Denied`. A
+failed evaluation names no target, and `EvaluateBatch` keeps its one summary
+event. The decision log line carries the same fields. A bridge's dedupe key is
+therefore per target: a gate denying one permission on one resource writes one
+row per window, and each distinct target writes its own.
+
 When the `WritePolicy` refuses a bundled role write, the HTTP adapter logs one WARN,
 `authorization: role write refused`, with `actor_type`, `actor_id`, `operation`,
 `subject_type`, `subject_id`, `role`, `scope_kind`, `scope_type`, `scope_id` and
