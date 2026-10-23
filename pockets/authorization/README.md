@@ -236,9 +236,12 @@ production would refuse.
 from the store it wraps, as decorators forward `LoweredPolicy`. One that hides it
 reads as non-recording, and production refuses it.
 
-`Register` logs `audit_recording`, `audit_reader`, `decision_observer` and
-`runtime_mode` beside the other fields, so the boot log shows the posture the
-pocket runs under.
+`Register` logs `audit_recording`, `audit_reader`, `decision_observer`,
+`operation_expiry` and `runtime_mode` beside the other fields, so the boot log
+shows the posture the pocket runs under. With `environment.ModeProduction`,
+`Repositories.Mutations` wired and no `Repositories.OperationExpiry`, `New` logs
+one WARN: operation records are never expired (see
+[Durable operation replay](#durable-operation-replay)).
 
 **Denials are opt-in.** With `environment.ModeProduction` and no
 `WithDecisionObserver`, `New` logs one WARN: `authorization: denials are not
@@ -496,13 +499,42 @@ same write lock. It is a snapshot and does not prevent a later revoke.
 
 SQL hosts using `Repositories` must apply `0003_iam_operations.sql`,
 `0004_iam_operations_fenced.sql` and `0005_iam_audit_integrity.sql` before boot;
-the constructor rejects missing or noncanonical ledger tables. Standalone
-`RelationshipRepository` remains ledger-free. See [schema adoption](stores/UPGRADE.md).
-Keep operation rows across purge, teardown and restarts. V1 never deletes them:
-deleting a record that a producer can retry allows its old grant to run again.
-Hosts' user-erasure procedures must account for this table and its hashes over
-subject IDs; hashes can still be linked to known requests. There is no retention
-or purge API in v1.
+the constructor rejects missing or noncanonical ledger tables.
+`0007_iam_operations_expiry.sql` adds the index expiry walks in commit order; it
+is admitted, not required, and the PostgreSQL store logs one WARN
+(`index_missing=idx_iam_operations_committed`) at construction without it.
+Standalone `RelationshipRepository` remains ledger-free. See
+[schema adoption](stores/UPGRADE.md).
+
+Operation records survive purge, teardown and restarts, and expire past the
+configured retention; fenced records never expire. Wire
+`Repositories.OperationExpiry` (a `mutations.OperationExpirer` over the same
+authority as `Mutations`; the bundled stores set it in `Repositories`, the memory
+store exposes `OperationExpiry()`) and call
+`Components.Mutations.ExpireOperations(ctx, limit)` from the host's schedule. It
+deletes at most `limit` `applied`, `no_change` and `not_found` records committed
+at or before now minus the retention, oldest first, and returns the count. It
+takes no write lock, so it runs beside `Apply`; it refuses an ambient transaction
+(`ErrMutationInsideTransaction`) and `limit <= 0`. Without the slot it returns
+`ErrOperationExpiryNotConfigured`, and `OperationExpiry` without `Mutations` fails
+construction. `WithOperationRetention(d)` sets the retention: 180 days by default,
+refused below 7 days (`ErrOperationRetentionTooShort`) and without
+`Repositories.OperationExpiry` (`ErrOperationRetentionWithoutExpirer`). `Register`
+logs `operation_expiry`; production logs one WARN when `Mutations` is wired
+without it.
+
+**An expired operation ID reads as never recorded.** `Recorded` returns `false`,
+`Fence` records the ID as fenced, and a command retried under it applies again:
+expiring a record that a producer can still retry lets its old grant run again.
+The retention must exceed every producer's retry window and the age of the
+oldest open `accepting` invitation claim. A claim retried after its record
+expired runs the host's preconditions again (a Granter that skips them for a
+recorded operation no longer can) and re-applies its grant. Keep
+authentication's stale-accepting-claim WARN threshold (`InvitationRetention`, 90
+days by default) at or below half of the operation retention (180 days by
+default). Hosts' user-erasure procedures must account for this table and its
+hashes over subject IDs until they expire; hashes can still be linked to known
+requests.
 
 #### Fence and Recorded
 
@@ -526,6 +558,9 @@ unknown-outcome failure.
 | `{OutcomeFenced, Recorded: false}` | this call fenced the ID |
 | `{OutcomeFenced, Recorded: true}` | an earlier fence holds |
 | `{applied \| no_change \| not_found, Recorded: true}` | a command already committed under the ID; revoke through your ordinary path |
+
+A record expired by `ExpireOperations` is gone: `Fence` then records the ID as
+fenced (`Recorded: false`), even though a command once committed under it.
 
 Any `Apply` under a fenced ID returns `Result{Outcome: OutcomeFenced, Replayed:
 true, Superseded: true}` whatever its command shape: no fingerprint comparison,

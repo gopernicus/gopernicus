@@ -156,6 +156,17 @@ migrations and server share one role must split them. See the
 [upgrade guide](../UPGRADE.md) and
 [pgxdb](../../../../integrations/datastores/pgxdb/README.md#append-only-tables-the-posture-probe).
 
+**v0.21.0: 0007 is admitted, not required.** `0007_iam_operations_expiry.sql`
+builds `idx_iam_operations_committed` (`committed_at, operation_id`) with
+`CREATE INDEX IF NOT EXISTS` under its own `lock_timeout`. `Repositories` sets
+`OperationExpiry`, whose `Expire` deletes the oldest expired non-fenced records
+in one statement on the pool, without the authorization lock or a row lock, so
+the runtime role needs DELETE but not UPDATE. Without the index (or with an
+invalid one) `Repositories` logs one WARN on `slog.Default`,
+`index_missing=idx_iam_operations_committed file=0007_iam_operations_expiry.sql`;
+pre-build it `CONCURRENTLY` on a large ledger as the [upgrade guide](../UPGRADE.md)
+describes.
+
 TupleCache adds one optional file,
 `tuple_cache_migrations/0002_iam_tuple_cache.sql`, exposed by
 `TupleCacheMigrationsFS` / `TupleCacheMigrationsDir` and

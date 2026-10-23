@@ -4,11 +4,13 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/audit"
 	mutation "github.com/gopernicus/gopernicus/pockets/authorization/logic/mutations"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuples"
+	"github.com/gopernicus/gopernicus/sdk"
 )
 
 // Store bundles Tuples, Relationships and Mutations over one canonical fact set.
@@ -76,6 +78,9 @@ func (s *Store) Mutations() *Mutations { return s.mut }
 // Operations returns the mutation.OperationLedger over the same operation records.
 func (s *Store) Operations() *Mutations { return s.mut }
 
+// OperationExpiry returns the mutation.OperationExpirer over the same operation records.
+func (s *Store) OperationExpiry() *Mutations { return s.mut }
+
 // Mutations applies integrity checks and changes within the shared write boundary.
 type operationRecord struct {
 	fingerprint string
@@ -91,6 +96,7 @@ type Mutations struct {
 var (
 	_ mutation.MutationRepository = (*Mutations)(nil)
 	_ mutation.OperationLedger    = (*Mutations)(nil)
+	_ mutation.OperationExpirer   = (*Mutations)(nil)
 	_ audit.RecordingReporter     = (*Mutations)(nil)
 	_ audit.RecordingReporter     = (*Tuples)(nil)
 )
@@ -208,4 +214,39 @@ func (m *Mutations) Recorded(ctx context.Context, operationID string) (mutation.
 		return "", false, fmt.Errorf("authorization memory: invalid operation outcome %q", record.outcome)
 	}
 	return record.outcome, true, nil
+}
+
+// Expire deletes at most limit applied, no_change and not_found records
+// committed at or before before, oldest first, under the shared mutex. Fenced
+// records never expire.
+func (m *Mutations) Expire(ctx context.Context, before time.Time, limit int) (int, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	if limit <= 0 {
+		return 0, fmt.Errorf("authorization memory: operation expiry limit must be positive, got %d: %w", limit, sdk.ErrInvalidInput)
+	}
+	m.st.mu.Lock()
+	defer m.st.mu.Unlock()
+	type expired struct {
+		id string
+		at time.Time
+	}
+	var due []expired
+	for id, record := range m.st.operations {
+		if record.outcome != mutation.OutcomeFenced && !record.committedAt.After(before) {
+			due = append(due, expired{id: id, at: record.committedAt})
+		}
+	}
+	slices.SortFunc(due, func(a, b expired) int {
+		if c := a.at.Compare(b.at); c != 0 {
+			return c
+		}
+		return strings.Compare(a.id, b.id)
+	})
+	due = due[:min(limit, len(due))]
+	for _, record := range due {
+		delete(m.st.operations, record.id)
+	}
+	return len(due), nil
 }

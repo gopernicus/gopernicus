@@ -146,6 +146,13 @@ rebuild of `iam_audit` or `iam_operations` (`DROP TABLE` and rename) drops the
 triggers silently, so it must ship with a paired file that re-creates them. See
 the [upgrade guide](../UPGRADE.md).
 
+**v0.20.0: 0007 is admitted, not required.** `0007_iam_operations_expiry.sql`
+builds `idx_iam_operations_committed` (`committed_at, operation_id`) with
+`CREATE INDEX IF NOT EXISTS`. `Repositories` sets `OperationExpiry`, whose
+`Expire` deletes the oldest expired non-fenced records in one statement; SQLite's
+single writer orders it against `Apply` and `Fence`. The schema probe admits the
+database with or without the index.
+
 TupleCache adds one optional file,
 `tuple_cache_migrations/0002_iam_tuple_cache.sql`, exposed by
 `TupleCacheMigrationsFS` / `TupleCacheMigrationsDir` and

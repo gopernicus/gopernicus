@@ -2,6 +2,7 @@ package memory_test
 
 import (
 	"testing"
+	"time"
 
 	"github.com/gopernicus/gopernicus/pockets/authorization"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/mutations"
@@ -21,7 +22,12 @@ func TestConformance(t *testing.T) {
 		// Check and to the raw stores). The default integrity policy protects owner.
 		store := memory.New(memory.WithIntegrityPolicy(policy))
 		return storetest.Repositories{Repositories: authorization.Repositories{Tuples: store.Tuples(),
-			Mutations: store.Mutations(), Operations: store.Operations()}, Relationships: store.Relationships(),
+			Mutations: store.Mutations(), Operations: store.Operations(), OperationExpiry: store.OperationExpiry()}, Relationships: store.Relationships(),
+			SetOperationCommittedAt: func(t *testing.T, operationID string, committedAt time.Time) {
+				if !memory.SetOperationCommittedAt(store.Mutations(), operationID, committedAt) {
+					t.Fatalf("no operation record %q", operationID)
+				}
+			},
 		}
 	})
 }

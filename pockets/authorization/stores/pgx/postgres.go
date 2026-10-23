@@ -8,6 +8,7 @@ import (
 	"context"
 	"embed"
 	"fmt"
+	"log/slog"
 	"slices"
 
 	"github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
@@ -30,6 +31,13 @@ const MigrationsDir = "migrations"
 // migrationSource is the ledger source the canonical files are recorded under —
 // the name the boot probe points a misconfigured host at.
 const migrationSource = "authorization"
+
+// The index migration 0007 adds for Expire's commit-order walk. It is admitted,
+// not required: Repositories WARNs when it is absent or invalid.
+const (
+	operationExpiryIndex     = "idx_iam_operations_committed"
+	operationExpiryMigration = "0007_iam_operations_expiry.sql"
+)
 
 // The trigger function bodies migration 0006 installs, exactly as pg_proc.prosrc
 // holds them: the text between each function's dollar quotes. The posture probe
@@ -100,6 +108,7 @@ func WithSchema(s pgxdb.Schema) Option {
 }
 
 // Repositories probes the canonical tuple, audit and operation tables and returns all ports.
+// It WARNs when migration 0007's expiry index is absent; OperationExpiry works without it.
 // WithTupleCache additionally validates optional protocol 2 capture and exposes the
 // matching source. It then runs the append-only posture probe over AuditTables
 // under the RuntimeMode db was opened with: production refuses a runtime role
@@ -138,17 +147,35 @@ func Repositories(ctx context.Context, db *pgxdb.DB, opts ...Option) (authorizat
 	if err := db.ProbeAppendOnly(ctx, auditTables(cfg)...); err != nil {
 		return authorization.Repositories{}, err
 	}
+	if err := warnMissingExpiryIndex(ctx, db, cfg.schema); err != nil {
+		return authorization.Repositories{}, err
+	}
 	mutationStore := newMutationStore(db, cfg)
 	repos := authorization.Repositories{
-		Tuples:     newTupleStore(db, cfg),
-		Mutations:  mutationStore,
-		Operations: mutationStore,
-		Audit:      &auditStore{db: db, schema: cfg.schema},
+		Tuples:          newTupleStore(db, cfg),
+		Mutations:       mutationStore,
+		Operations:      mutationStore,
+		OperationExpiry: mutationStore,
+		Audit:           &auditStore{db: db, schema: cfg.schema},
 	}
 	if source != nil {
 		repos.TupleSource = source
 	}
 	return repos, nil
+}
+
+// warnMissingExpiryIndex logs one WARN on slog.Default when migration 0007's
+// index is absent or invalid: every Expire batch then sorts the whole ledger.
+func warnMissingExpiryIndex(ctx context.Context, db *pgxdb.DB, schema pgxdb.Schema) error {
+	var present bool
+	if err := db.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM pg_catalog.pg_index i JOIN pg_catalog.pg_class c ON c.oid=i.indexrelid
+WHERE i.indrelid=pg_catalog.to_regclass($1) AND c.relname=$2 AND i.indisvalid)`, schema.Table("iam_operations"), operationExpiryIndex).Scan(&present); err != nil {
+		return err
+	}
+	if !present {
+		slog.Default().WarnContext(ctx, "authorization pgx store: operation expiry index missing; apply it before running Mutations.ExpireOperations on a large ledger", "index_missing", operationExpiryIndex, "file", operationExpiryMigration)
+	}
+	return nil
 }
 
 // AuditTables is the append-only table set Repositories hands to

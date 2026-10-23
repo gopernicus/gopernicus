@@ -37,7 +37,7 @@ func TestSchemaProbeRequiresMigration0005(t *testing.T) {
 		t.Fatal("0001 no longer creates iam_audit")
 	}
 	if _, err := db.Exec(t.Context(), `DROP TABLE main.iam_audit; DROP TABLE main.iam_operations;
-DELETE FROM main.schema_migrations WHERE source='default' AND version IN ('0003_iam_operations.sql', '0004_iam_operations_fenced.sql', '0005_iam_audit_integrity.sql', '0006_iam_audit_immutable.sql');
+DELETE FROM main.schema_migrations WHERE source='default' AND version IN ('0003_iam_operations.sql', '0004_iam_operations_fenced.sql', '0005_iam_audit_integrity.sql', '0006_iam_audit_immutable.sql', '0007_iam_operations_expiry.sql');
 `+string(primary[start:])); err != nil {
 		t.Fatal(err)
 	}

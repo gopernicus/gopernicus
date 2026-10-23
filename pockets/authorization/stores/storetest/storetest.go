@@ -8,6 +8,7 @@ import (
 	"errors"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/gopernicus/gopernicus/pockets/authorization"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/mutations"
@@ -22,6 +23,11 @@ import (
 type Repositories struct {
 	authorization.Repositories
 	Relationships relationships.Storer
+	// SetOperationCommittedAt rewrites the commit time of the non-fenced
+	// operation record operationID. Stores stamp commit times from their own
+	// clock, so the OperationLedger expiry cases use it to place a record exactly
+	// at an Expire boundary. It is required when OperationExpiry is wired.
+	SetOperationCommittedAt func(t *testing.T, operationID string, committedAt time.Time)
 }
 
 // Run executes the full conformance suite. factory returns fresh, empty

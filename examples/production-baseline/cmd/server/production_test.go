@@ -116,7 +116,7 @@ func authorizationRepositories(audit bool) authorization.Repositories {
 		options = append(options, authorizationmemory.WithAudit())
 	}
 	store := authorizationmemory.New(options...)
-	return authorization.Repositories{Tuples: store.Tuples(), Mutations: store.Mutations(), Operations: store.Operations(), Audit: store.Audit()}
+	return authorization.Repositories{Tuples: store.Tuples(), Mutations: store.Mutations(), Operations: store.Operations(), OperationExpiry: store.OperationExpiry(), Audit: store.Audit()}
 }
 
 // setKeys sets both key variables for the test.

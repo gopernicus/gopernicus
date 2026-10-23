@@ -23,6 +23,7 @@ const (
 	waiverHintText      = "WithAuditDisabledAcknowledged()"
 	waiverLogText       = "posture_waiver=AuditDisabledAcknowledged"
 	observerWarnText    = "denials are not durably recorded; wire WithDecisionObserver"
+	expiryWarnText      = "operation records are never expired; wire Repositories.OperationExpiry"
 )
 
 func ignoreDecisions(context.Context, decisions.DecisionEvent) {}
@@ -37,7 +38,7 @@ func postureRepos(recording, reader bool) Repositories {
 		opts = append(opts, memory.WithAudit())
 	}
 	store := memory.New(opts...)
-	repos := Repositories{Tuples: store.Tuples(), Mutations: store.Mutations()}
+	repos := Repositories{Tuples: store.Tuples(), Mutations: store.Mutations(), OperationExpiry: store.OperationExpiry()}
 	if reader {
 		repos.Audit = store.Audit()
 	}
@@ -115,7 +116,7 @@ func TestProductionConstructsWithRecordingAuthorityAndReader(t *testing.T) {
 		t.Fatalf("satisfied posture warned: %s", logs.String())
 	}
 	line := registrationLine(t, comps, logs)
-	for _, want := range []string{"audit_recording=true", "audit_reader=true", "decision_observer=true", "runtime_mode=production"} {
+	for _, want := range []string{"audit_recording=true", "audit_reader=true", "decision_observer=true", "operation_expiry=true", "runtime_mode=production"} {
 		if !strings.Contains(line, want) {
 			t.Errorf("registration line lacks %s: %s", want, line)
 		}
@@ -141,6 +142,39 @@ func TestProductionWarnsOnceWithoutDecisionObserver(t *testing.T) {
 				t.Errorf("registration line lacks decision_observer=false: %s", line)
 			}
 		})
+	}
+}
+
+func TestProductionWarnsOnceWithoutOperationExpiry(t *testing.T) {
+	for _, mode := range []environment.Mode{"", environment.ModeDevelopment, environment.ModeProduction} {
+		t.Run(mode.String(), func(t *testing.T) {
+			logger, logs := postureLogger()
+			repos := postureRepos(true, true)
+			repos.OperationExpiry = nil
+			comps, err := New(repos, WithRuntimeMode(mode), WithLogger(logger), WithDecisionObserver(ignoreDecisions))
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := 0
+			if mode.IsProduction() {
+				want = 1
+			}
+			if n := strings.Count(logs.String(), expiryWarnText); n != want || strings.Count(logs.String(), "level=WARN") != want {
+				t.Fatalf("expiry warnings=%d, want %d: %s", n, want, logs.String())
+			}
+			if line := registrationLine(t, comps, logs); !strings.Contains(line, "operation_expiry=false") {
+				t.Errorf("registration line lacks operation_expiry=false: %s", line)
+			}
+		})
+	}
+	// Without Mutations nothing records operations, so there is nothing to expire.
+	logger, logs := postureLogger()
+	store := memory.New(memory.WithAudit())
+	if _, err := New(Repositories{Tuples: store.Tuples(), Audit: store.Audit()}, WithRuntimeMode(environment.ModeProduction), WithLogger(logger), WithDecisionObserver(ignoreDecisions)); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(logs.String(), "level=WARN") {
+		t.Fatalf("a pocket without Mutations warned: %s", logs.String())
 	}
 }
 

@@ -95,6 +95,7 @@ never migrates. Its files are the host's:
 | `0024_ratelimit_windows.sql` | the pgxdb limiter's reference DDL |
 | `0025_iam_audit_integrity.sql`, `0026_iam_audit_immutable.sql` | `pockets/authorization/stores/pgx/migrations` `0005`, `0006`, renumbered |
 | `0027_security_events_integrity.sql`, `0028_security_events_immutable.sql` | `pockets/authentication/stores/pgx/migrations` `0021`, `0022`, renumbered |
+| `0029_iam_operations_expiry.sql` | `pockets/authorization/stores/pgx/migrations` `0007`, renumbered |
 
 When a store ships a new migration, copy it in as the next number. Never
 renumber a file once it is applied: the filename is its ledger identity.

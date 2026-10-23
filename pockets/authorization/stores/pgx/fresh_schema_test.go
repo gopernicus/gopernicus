@@ -36,7 +36,7 @@ func freshIAMTables(t *testing.T, db *pgxdb.DB) []string {
 
 func assertFreshIndexes(t *testing.T, db *pgxdb.DB) {
 	t.Helper()
-	rows, err := db.Query(t.Context(), `SELECT indexname FROM pg_indexes WHERE schemaname=current_schema() AND tablename IN ('iam_tuples','iam_audit') AND indexname LIKE 'idx_iam_%' ORDER BY indexname`)
+	rows, err := db.Query(t.Context(), `SELECT indexname FROM pg_indexes WHERE schemaname=current_schema() AND tablename IN ('iam_tuples','iam_audit','iam_operations') AND indexname LIKE 'idx_iam_%' ORDER BY indexname`)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -2,12 +2,23 @@ package authorization
 
 import (
 	"log/slog"
+	"time"
 
 	authorizationhttp "github.com/gopernicus/gopernicus/pockets/authorization/inbound/http"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/decisions"
 	authmodel "github.com/gopernicus/gopernicus/pockets/authorization/logic/model"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/mutations"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuplecache"
 	"github.com/gopernicus/gopernicus/sdk/pkg/environment"
+)
+
+var (
+	// ErrOperationRetentionTooShort is returned by New when WithOperationRetention
+	// is below the 7-day minimum.
+	ErrOperationRetentionTooShort = mutations.ErrOperationRetentionTooShort
+	// ErrOperationRetentionWithoutExpirer is returned by New when
+	// WithOperationRetention is set without Repositories.OperationExpiry.
+	ErrOperationRetentionWithoutExpirer = mutations.ErrOperationRetentionWithoutExpirer
 )
 
 // Option configures construction. Options apply in order; each replaces its
@@ -89,4 +100,15 @@ func WithDiagnosticObserver(observer decisions.DiagnosticObserver) Option {
 // nothing durable; production then logs one WARN at construction.
 func WithDecisionObserver(observer decisions.DecisionObserver) Option {
 	return func(cfg *config) { cfg.DecisionObserver = observer }
+}
+
+// WithOperationRetention sets how long Mutations.ExpireOperations keeps an
+// operation record; the default is 180 days. New refuses a retention below 7
+// days (ErrOperationRetentionTooShort) and one set without
+// Repositories.OperationExpiry (ErrOperationRetentionWithoutExpirer). The
+// retention must exceed every producer's retry window and the age of the oldest
+// open claim that names an operation ID: a command retried after its record
+// expired applies again.
+func WithOperationRetention(retention time.Duration) Option {
+	return func(cfg *config) { cfg.OperationRetention = retention; cfg.OperationRetentionSet = true }
 }

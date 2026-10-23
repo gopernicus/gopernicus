@@ -39,7 +39,7 @@ func freshIAMTables(t *testing.T, db *tursodb.DB) []string {
 
 func assertFreshIndexes(t *testing.T, db *tursodb.DB) {
 	t.Helper()
-	rows, err := db.Query(t.Context(), `SELECT name FROM main.sqlite_schema WHERE type='index' AND tbl_name IN ('iam_tuples','iam_audit') AND name LIKE 'idx_iam_%' ORDER BY name`)
+	rows, err := db.Query(t.Context(), `SELECT name FROM main.sqlite_schema WHERE type='index' AND tbl_name IN ('iam_tuples','iam_audit','iam_operations') AND name LIKE 'idx_iam_%' ORDER BY name`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -416,8 +416,9 @@ CREATE INDEX main.host_operations_outcome ON iam_operations(outcome);`); err != 
 	if err := tursodb.RunMigrations(t.Context(), db, MigrationsFS, MigrationsDir); err != nil {
 		t.Fatalf("0004 must not fail on host triggers or indexes: %v", err)
 	}
-	// Only the immutability triggers 0006 installs after the rebuilds remain.
-	if got := objects(); !slices.Equal(got, []string{"trigger:iam_operations_immutable_delete", "trigger:iam_operations_immutable_update"}) {
+	// Only the immutability triggers 0006 and the expiry index 0007 install after
+	// the rebuilds remain.
+	if got := objects(); !slices.Equal(got, []string{"trigger:iam_operations_immutable_delete", "trigger:iam_operations_immutable_update", "index:idx_iam_operations_committed"}) {
 		t.Fatalf("0004 kept host objects (update the UPGRADE caveat): %v", got)
 	}
 	if got := operationsDDL(t, db); got != canonicalOperationsDDL {

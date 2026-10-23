@@ -128,6 +128,39 @@ func TestOperationSchemaRequiredOnlyForBundle(t *testing.T) {
 	}
 }
 
+// TestCanonicalSchemaAdmitsMigration0007 boots with and without 0007's expiry
+// index: the probe refuses only extra unique indexes, so the index is admitted,
+// not required, Expire works either way, and 0007 over an index that already
+// exists is a no-op.
+func TestCanonicalSchemaAdmitsMigration0007(t *testing.T) {
+	db := emptyCanonicalFixture(t)
+	if err := tursodb.RunMigrations(t.Context(), db, migrationsThrough(t, "0006_iam_audit_immutable.sql"), MigrationsDir); err != nil {
+		t.Fatal(err)
+	}
+	writeAudited(t, db, "before")
+	repos, err := testRepositories(t.Context(), db)
+	if err != nil {
+		t.Fatalf("bundle refused a database without 0007: %v", err)
+	}
+	if n, err := repos.OperationExpiry.Expire(t.Context(), time.Now().Add(time.Second), 10); err != nil || n != 1 {
+		t.Fatalf("Expire without the index: %d %v", n, err)
+	}
+	data, err := MigrationsFS.ReadFile(MigrationsDir + "/0007_iam_operations_expiry.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(t.Context(), string(data)); err != nil {
+		t.Fatalf("pre-build the index: %v", err)
+	}
+	if err := tursodb.RunMigrations(t.Context(), db, MigrationsFS, MigrationsDir); err != nil {
+		t.Fatalf("0007 over an existing index: %v", err)
+	}
+	if got, err := queryStrings(t.Context(), db, `SELECT name FROM main.sqlite_schema WHERE type='index' AND tbl_name='iam_operations' AND name LIKE 'idx_%'`); err != nil || !slices.Equal(got, []string{"idx_iam_operations_committed"}) {
+		t.Fatalf("0007 index: %v %v", got, err)
+	}
+	writeAudited(t, db, "after")
+}
+
 // migrationsThrough is the embedded stream up to and including last: the
 // database a host has before it copies a later file.
 func migrationsThrough(t *testing.T, last string) fstest.MapFS {

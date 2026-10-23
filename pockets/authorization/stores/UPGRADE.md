@@ -4,6 +4,57 @@ Authorization ships a fresh canonical SQL schema for PostgreSQL and SQLite/Turso
 Hosts export and apply it before constructing repositories. Framework constructors
 validate the applied schema; they do not create tables or run migrations.
 
+## Adopting 0007 — additive, admitted; pre-build `CONCURRENTLY` on a large ledger; apply alone
+
+Authorization core `v0.30.0` with PostgreSQL store `v0.21.0` or Turso store
+`v0.20.0`. `migrations/0007_iam_operations_expiry.sql` adds
+`idx_iam_operations_committed ON iam_operations (committed_at, operation_id)`,
+the access path `Mutations.ExpireOperations` walks. Copy it as the next entry of
+the host's authorization stream, after `0006_iam_audit_immutable.sql`; never edit
+an applied file.
+
+**Admitted, not required.** Both schema probes accept the database with or
+without the index (they refuse only extra unique indexes), so 0007 needs no
+lockstep and an older store boots over it. Without it the PostgreSQL store logs
+one WARN at construction, `index_missing=idx_iam_operations_committed
+file=0007_iam_operations_expiry.sql`, and also for an invalid index left by a
+failed `CONCURRENTLY` build: every expiry batch then sorts the whole ledger.
+
+**PostgreSQL: pre-build on a large ledger, then apply alone.** The file sets
+`lock_timeout = '5s'` and builds with `CREATE INDEX IF NOT EXISTS`. The timeout
+bounds only the wait to acquire the lock, not the build: a plain build blocks
+every `Apply` and `Fence` that records an operation for its whole length, and the
+runner applies every pending file in one transaction. On a large ledger, build the
+index first as the role that owns `iam_operations`, in the store's schema, then
+apply 0007 in a run of its own, where it is a no-op:
+
+```sql
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_iam_operations_committed ON iam_operations (committed_at, operation_id);
+-- A failed CONCURRENTLY build leaves an INVALID index that IF NOT EXISTS keeps.
+-- Expect true; otherwise DROP INDEX CONCURRENTLY it and build again.
+SELECT indisvalid FROM pg_index WHERE indexrelid = 'idx_iam_operations_committed'::regclass;
+```
+
+SQLite/Turso builds the index under the write lock; apply 0007 alone, off-peak.
+
+**Enable expiry.** Wire `Repositories.OperationExpiry` (the bundled stores set it
+in `Repositories`), choose `WithOperationRetention` (180 days by default; it must
+exceed every producer's retry window and the age of the oldest open accepting
+claim) and call `Components.Mutations.ExpireOperations(ctx, limit)` on the host's
+schedule. The runtime role needs DELETE on `iam_operations` and nothing more: the
+0006 trigger refuses deleting a fenced row, and expiry takes no row lock, so the
+posture that revokes UPDATE stays. An S0 host that revoked DELETE grants it back
+(`GRANT DELETE ON iam_operations TO runtime;`), as
+[the S2 handoff](../../../plans/soc2-s2-audit-completeness-handoff.md) and
+"`iam_operations` keeps DELETE" under Adopting 0005 below say. The first runs on
+an old ledger are a sustained DELETE load: keep the limit modest and the cadence
+steady.
+
+**Reverse (reference SQL, not shipped).** Author a new forward ledger entry:
+`DROP INDEX IF EXISTS idx_iam_operations_committed;` (SQLite:
+`DROP INDEX IF EXISTS main.idx_iam_operations_committed;`). Expiry keeps working
+and sorts the ledger again. Expired records do not come back.
+
 ## Adopting 0005 — REQUIRED, LOCKSTEP; every instance on v0.19.1 / v0.18.1 first; roll back only to v0.19.1 / v0.18.1
 
 Authorization core `v0.29.0` with PostgreSQL store `v0.20.0` or Turso store
@@ -450,6 +501,7 @@ relationship repository. No package rename or role API migration is required.
 | Base authorization | `migrations/0004_iam_operations_fenced.sql` | The `fenced` operation outcome |
 | Base authorization | `migrations/0005_iam_audit_integrity.sql` | Request and trace ids, `seq` (PostgreSQL) and `recorded_at` evidence columns |
 | Base authorization | `migrations/0006_iam_audit_immutable.sql` | Immutability triggers on `iam_audit` and `iam_operations` |
+| Base authorization | `migrations/0007_iam_operations_expiry.sql` | The admitted commit-order index operation expiry walks |
 
 Use `MigrationsFS` / `MigrationsDir` or `ExportMigrations(dst)` for the base.
 Use `TupleCacheMigrationsFS` / `TupleCacheMigrationsDir` or

@@ -100,10 +100,11 @@ func newAuthorization(roleRoutesGate web.Middleware, securityEvents securityeven
 	}
 	components, err := authorization.New(
 		authorization.Repositories{
-			Tuples:     store.Tuples(),
-			Mutations:  store.Mutations(),
-			Operations: store.Operations(),
-			Audit:      store.Audit(),
+			Tuples:          store.Tuples(),
+			Mutations:       store.Mutations(),
+			Operations:      store.Operations(),
+			OperationExpiry: store.OperationExpiry(),
+			Audit:           store.Audit(),
 		},
 		authorization.WithLogger(logger),
 		authorization.WithModel(authzSchema()),

@@ -688,6 +688,16 @@ func run(ctx context.Context, log *slog.Logger, runtimeMode environment.Mode) er
 		stopInquiryPurge = startInquiryPurge(inquiryCfg, newInquiryPurge(cmsRepos.InquiryMaintenance, inquiryCfg, time.Now), log)
 	}
 
+	// Host-owned authorization operation expiry, in both delivery modes: the pocket keeps
+	// every operation record until ExpireOperations removes those past its retention. Its
+	// own Background-derived context stops it after HTTP drains, like the purge scheduler.
+	expiryCtx, cancelExpiry := context.WithCancel(context.Background())
+	expiryDone := make(chan struct{})
+	go func() {
+		defer close(expiryDone)
+		runOperationExpiryLoop(expiryCtx, defaultOperationExpiryInterval, authzComponents.Mutations.ExpireOperations, defaultOperationExpiryBatch, log)
+	}()
+
 	// Shutdown order (design §7, phase 5 — with the poller, corrected context idiom
 	// P3):
 	//  1. web.Run blocks until hostCtx is canceled (by the signal ctx OR by the delivery
@@ -731,6 +741,12 @@ func run(ctx context.Context, log *slog.Logger, runtimeMode environment.Mode) er
 	}
 	if stopInquiryPurge != nil {
 		stopInquiryPurge()
+	}
+	cancelExpiry()
+	select {
+	case <-expiryDone:
+	case <-time.After(5 * time.Second):
+		log.WarnContext(context.Background(), "authorization operation expiry did not stop within 5s")
 	}
 
 	if cancelPool != nil {

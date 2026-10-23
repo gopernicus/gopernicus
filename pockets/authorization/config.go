@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"time"
 
 	authorizationhttp "github.com/gopernicus/gopernicus/pockets/authorization/inbound/http"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/audit"
@@ -45,6 +46,11 @@ type Repositories struct {
 	// read the same authority as Mutations, and requires it. Nil leaves both
 	// returning ErrOperationLedgerNotConfigured.
 	Operations mutations.OperationLedger
+	// OperationExpiry enables Mutations.ExpireOperations over the same authority
+	// as Mutations, and requires it. Nil leaves ExpireOperations returning
+	// ErrOperationExpiryNotConfigured and keeps every operation record; production
+	// then logs one WARN.
+	OperationExpiry mutations.OperationExpirer
 
 	// Audit reads committed change history. The host controls access and retention.
 	// Production (WithRuntimeMode) requires it.
@@ -64,4 +70,6 @@ type config struct {
 	ListStrategy              list.Strategy
 	RuntimeMode               environment.Mode
 	AuditDisabledAcknowledged bool
+	OperationRetention        time.Duration
+	OperationRetentionSet     bool
 }

@@ -10,6 +10,7 @@ import (
 	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/mutations"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuples"
+	"github.com/gopernicus/gopernicus/sdk"
 )
 
 func (m *mutationStore) replayOperation(ctx context.Context, tx *writeTx, cmd mutations.Command) (*mutations.Result, error) {
@@ -102,6 +103,36 @@ func (m *mutationStore) Fence(ctx context.Context, operationID string) (*mutatio
 		return nil, err
 	}
 	return result, nil
+}
+
+// Expire deletes at most limit applied, no_change and not_found records
+// committed at or before before, oldest first, in one statement. The outcome
+// filter keeps fenced records, which the 0006 trigger also refuses to delete.
+// SQLite's single writer orders it against Fence and Apply. It refuses an
+// ambient transaction, whose write lock it would wait on.
+func (m *mutationStore) Expire(ctx context.Context, before time.Time, limit int) (int, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	if _, ok := tursodb.TxFromContext(ctx); ok {
+		return 0, mutations.ErrMutationInsideTransaction
+	}
+	if limit <= 0 {
+		return 0, fmt.Errorf("authorization operation expiry: limit must be positive, got %d: %w", limit, sdk.ErrInvalidInput)
+	}
+	var deleted int64
+	err := retryBusy(ctx, func() error {
+		result, err := m.db.Exec(ctx, "DELETE FROM main.iam_operations WHERE operation_id IN (SELECT operation_id FROM main.iam_operations WHERE outcome IN ('applied', 'no_change', 'not_found') AND committed_at <= ? ORDER BY committed_at, operation_id LIMIT ?)", tursodb.FormatTime(before), limit)
+		if err != nil {
+			return err
+		}
+		deleted, err = result.RowsAffected()
+		return err
+	})
+	if err != nil {
+		return 0, tursodb.MapError(err)
+	}
+	return int(deleted), nil
 }
 
 // Recorded reads the operation record without the write lock, through the

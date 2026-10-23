@@ -36,6 +36,13 @@ const (
 	defaultInquiryPurgeBatch     = 500
 )
 
+// Authorization operation-expiry defaults: a pass runs hourly and removes at most 500
+// operation records past the authorization pocket's retention (180 days by default).
+const (
+	defaultOperationExpiryInterval = time.Hour
+	defaultOperationExpiryBatch    = 500
+)
+
 // deliveryPurgeConfig is the host-owned schedule/retention/batch for the terminal-purge loop.
 type deliveryPurgeConfig struct {
 	// Interval is how often a purge pass runs.
@@ -198,5 +205,27 @@ func startInquiryPurge(cfg inquiryPurgeConfig, purge func(context.Context) (int,
 			log.WarnContext(context.Background(), "inquiry purge scheduler did not stop within 5s")
 		}
 		log.InfoContext(context.Background(), "inquiry purge scheduler stopped")
+	}
+}
+
+// runOperationExpiryLoop calls expire (the authorization pocket's
+// Mutations.ExpireOperations) for at most batch operation records on every tick until ctx
+// is canceled. A failed pass is logged and the loop continues; it returns promptly on
+// cancellation. The first pass runs one interval after start.
+func runOperationExpiryLoop(ctx context.Context, interval time.Duration, expire func(context.Context, int) (int, error), batch int, log *slog.Logger) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			n, err := expire(ctx, batch)
+			if err != nil {
+				log.ErrorContext(ctx, "retention step failed; continuing", "step", "operations", "error", err)
+				continue
+			}
+			log.InfoContext(ctx, "retention step", "step", "operations", "count", n)
+		}
 	}
 }
