@@ -169,6 +169,7 @@ type constructorConfig struct {
 	Sessions                session.SessionRepository
 	SessionManagement       session.ManagementRepository
 	UserAdmin               user.AdminRepository
+	UserErasure             user.EraseRepository
 	PasswordlessRedeem      passwordless.Repository
 	ProvisionOnRedeem       bool
 	ActiveSessions          session.ActiveUserRepository
@@ -329,6 +330,9 @@ type Service struct {
 	// Both nil → the subsystem is off. The repository alone enables the TRUSTED
 	// service methods; the bundled admin ROUTES additionally require the check.
 	userAdmin user.AdminRepository
+	// userErasure is the optional erasure capability (SOC 2 S3). Nil →
+	// EraseUser refuses with ErrUserErasureUnavailable.
+	userErasure user.EraseRepository
 	// activeSessions is the optional fenced session-minting capability (CHAU-1.1):
 	// it inserts a session only while the owning user is atomically proven active.
 	// Nil → mintSession falls back to the ordinary sessions.Create, which cannot
@@ -436,6 +440,7 @@ func newService(d constructorConfig) *Service {
 		passwordResetURL:   d.PasswordResetURL,
 		oauthLinkBase:      d.OAuthLinkBaseURL,
 		userAdmin:          d.UserAdmin,
+		userErasure:        d.UserErasure,
 		activeSessions:     d.ActiveSessions,
 		passwordlessRedeem: d.PasswordlessRedeem,
 		provisionOnRedeem:  d.ProvisionOnRedeem,

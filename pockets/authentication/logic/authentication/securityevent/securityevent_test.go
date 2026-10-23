@@ -53,7 +53,8 @@ func TestExternalIdentityTypesAreStableWireValues(t *testing.T) {
 
 // TestEventTypesAreRegistered pins the registry: every Type* constant declared
 // in this package is listed in Types exactly once, every value is unique and
-// snake_case, and the two promoted session literals keep the values rows were
+// snake_case, and the promoted session literals and the retention vocabulary
+// keep the values rows were
 // written with — event_type is free TEXT at rest, so a rename orphans rows.
 func TestEventTypesAreRegistered(t *testing.T) {
 	files, err := filepath.Glob("*.go")
@@ -132,6 +133,10 @@ func TestEventTypesAreRegistered(t *testing.T) {
 	for _, tc := range []struct{ got, want string }{
 		{TypeSessionRevoked, "session_revoked"},
 		{TypeAllSessionsRevoked, "all_sessions_revoked"},
+		{TypeUserErased, "user_erased"},
+		{TypeServiceAccountDeleted, "service_account_deleted"},
+		{TypeSecurityEventsPurged, "security_events_purged"},
+		{TypeSecurityEventsArchived, "security_events_archived"},
 	} {
 		if tc.got != tc.want {
 			t.Errorf("event type = %q, want %q", tc.got, tc.want)

@@ -35,6 +35,7 @@ type adapterConfig struct {
 	HTMLPolicy        *HTMLResourcePolicy
 	MachineGate       web.Middleware
 	RouteAuth         BundledRouteAuthentication
+	UserErasureRoute  bool
 }
 
 type routedService struct {
@@ -82,6 +83,14 @@ func New(service AuthenticationService, runtimeMode environment.Mode, opts ...Op
 	if cfg.UserAdminCheck != nil && !cfg.Authentication.UserAdminEnabled() {
 		return nil, fmt.Errorf("authentication HTTP: UserAdminCheck requires user administration: %w", sdk.ErrInvalidInput)
 	}
+	var eraser userEraser
+	if cfg.UserErasureRoute {
+		e, ok := cfg.Authentication.(userEraser)
+		if !ok || !e.UserErasureEnabled() || cfg.UserAdminCheck == nil {
+			return nil, fmt.Errorf("authentication HTTP: the user erasure route requires user erasure and UserAdminCheck: %w", sdk.ErrInvalidInput)
+		}
+		eraser = e
+	}
 	if cfg.ListStrategy == "" {
 		cfg.ListStrategy = list.StrategyCursor
 	}
@@ -112,6 +121,7 @@ func New(service AuthenticationService, runtimeMode environment.Mode, opts ...Op
 		Mutation: MutationSecurity{AllowedOrigins: append([]string(nil), cfg.AllowedOrigins...), OriginPolicy: cfg.OriginPolicy, SessionCookieName: auth.SessionCookieName()},
 		Views:    views, HTMLPolicy: snapshotHTMLPolicy(cfg.HTMLPolicy), MachineGate: cfg.MachineGate,
 		RouteAuth: resolveBundledRouteAuth(cfg.RouteAuth, auth),
+		Eraser:    eraser,
 		Proxies:   auth.proxies,
 	}
 	return auth, nil

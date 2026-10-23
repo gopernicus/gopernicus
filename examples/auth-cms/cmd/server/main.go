@@ -63,12 +63,14 @@ import (
 	"github.com/gopernicus/gopernicus/examples/auth-cms/pockets/authentication/outbound/oauth2fixture"
 	"github.com/gopernicus/gopernicus/examples/auth-cms/pockets/cms/outbound/memstore"
 	"github.com/gopernicus/gopernicus/examples/auth-cms/pockets/events/outbound/outboxmem"
+	"github.com/gopernicus/gopernicus/examples/auth-cms/pockets/retention/inbound/runner"
 	"github.com/gopernicus/gopernicus/integrations/cryptids/bcrypt"
 	"github.com/gopernicus/gopernicus/pockets"
 	auth "github.com/gopernicus/gopernicus/pockets/authentication"
 	authenticationhttp "github.com/gopernicus/gopernicus/pockets/authentication/inbound/http"
 	delivery "github.com/gopernicus/gopernicus/pockets/authentication/logic/delivery"
 	invitations "github.com/gopernicus/gopernicus/pockets/authentication/logic/invitations"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/maintenance"
 	authgoth "github.com/gopernicus/gopernicus/pockets/authentication/views/goth"
 	"github.com/gopernicus/gopernicus/pockets/cms"
 	"github.com/gopernicus/gopernicus/pockets/cms/domain/content"
@@ -316,6 +318,12 @@ func run(ctx context.Context, log *slog.Logger, runtimeMode environment.Mode) er
 	// in buildAuthConfig because the gate is a method value on the authorizer, which the
 	// composition seam does not receive (the DeliveryMode post-set precedent below).
 	authCfg.MachineRoutesGate = authzComponents.HTTP.Require(authorizationhttp.Can("admin", authorizationhttp.Fixed(platformResourceType, platformResourceID)))
+	// The bundled user administration routes, behind the same platform-admin
+	// coordinate, and the opt-in erase route (SOC 2 S3): erasure is irreversible,
+	// so it mounts only because this host asks for it, with the action
+	// UserAdminErase reaching the check.
+	authCfg.UserAdminCheck = access.New(authorizer).UserAdmin
+	authCfg.UserErasureRoute = true
 	// Apply the selected delivery mode to the auth config. buildAuthConfig returns the
 	// jobs-mode posture (in-memory fenced queue on this host); AUTH_DELIVERY_MODE=in_process flips
 	// it to the bounded EPHEMERAL pool here — and announces that posture LOUDLY. Neither mode
@@ -394,6 +402,10 @@ func run(ctx context.Context, log *slog.Logger, runtimeMode environment.Mode) er
 		return err
 	}
 	securityEvents.set(authSvc.SecurityEvents)
+	retention, err := runner.New(envPositiveDuration(log, "MAINTENANCE_INTERVAL", defaultMaintenanceInterval), log, runner.MaintenanceStep(authSvc.Maintenance))
+	if err != nil {
+		return err
+	}
 	// The client-attribution stamp on every host route, so a denial the bridge
 	// records there (the role routes, the debug route) carries the client's IP
 	// and User-Agent. A later Use, so it runs inside TrustProxies.
@@ -698,6 +710,17 @@ func run(ctx context.Context, log *slog.Logger, runtimeMode environment.Mode) er
 		runOperationExpiryLoop(expiryCtx, defaultOperationExpiryInterval, authzComponents.Mutations.ExpireOperations, defaultOperationExpiryBatch, log)
 	}()
 
+	// Host-owned retention (SOC 2 S3): the retention host pocket's runner ticks the
+	// authentication maintenance pass at start and every MAINTENANCE_INTERVAL, on
+	// its own Background-derived context so shutdown stops it after HTTP drains.
+	// MaintenanceConfig.MaintenanceRunnerAcknowledged asserts exactly this.
+	retentionCtx, cancelRetention := context.WithCancel(context.Background())
+	retentionDone := make(chan struct{})
+	go func() {
+		defer close(retentionDone)
+		retention.Run(retentionCtx)
+	}()
+
 	// Shutdown order (design §7, phase 5 — with the poller, corrected context idiom
 	// P3):
 	//  1. web.Run blocks until hostCtx is canceled (by the signal ctx OR by the delivery
@@ -747,6 +770,14 @@ func run(ctx context.Context, log *slog.Logger, runtimeMode environment.Mode) er
 	case <-expiryDone:
 	case <-time.After(5 * time.Second):
 		log.WarnContext(context.Background(), "authorization operation expiry did not stop within 5s")
+	}
+
+	log.InfoContext(context.Background(), "stopping retention runner")
+	cancelRetention()
+	select {
+	case <-retentionDone:
+	case <-time.After(5 * time.Second):
+		log.WarnContext(context.Background(), "retention runner did not stop within 5s")
 	}
 
 	if cancelPool != nil {
@@ -1063,6 +1094,14 @@ func buildAuthConfig(log *slog.Logger, mode environment.Mode, granter invitation
 			// the values the pocket resolves a zero field to anyway.
 
 			Granter: granter,
+		},
+		// Retention (SOC 2 S3): run() ticks Components.Maintenance on the retention
+		// runner, which the acknowledgement asserts. INVITATION_RETENTION shortens
+		// the invitation window for a run-and-look; unset keeps the 90-day default.
+		// No archive sink: this in-memory host purges its rail unarchived.
+		MaintenanceConfig: auth.MaintenanceConfig{
+			Config:                        maintenance.Config{InvitationRetention: envPositiveDuration(log, "INVITATION_RETENTION", 0)},
+			MaintenanceRunnerAcknowledged: true,
 		},
 	}
 	// The pocket's own env tags, applied over the literal: AUTH_MAIL_FROM,

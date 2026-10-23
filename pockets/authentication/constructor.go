@@ -18,6 +18,7 @@ import (
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/securityevent"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/delivery"
 	invitations "github.com/gopernicus/gopernicus/pockets/authentication/logic/invitations"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/maintenance"
 	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/ratelimiter"
 	environment "github.com/gopernicus/gopernicus/sdk/pkg/environment"
@@ -144,6 +145,15 @@ func New(repos Repositories, signer cryptids.JWTSigner, runtimeMode environment.
 	// unmounted while the trusted service methods stay available.
 	if cfg.UserAdminCheck != nil && (repos.UserAdmin == nil || repos.ActiveSessions == nil) {
 		return nil, ErrUserAdminReposRequired
+	}
+	// Erasure and retention (SOC 2 S3). The erase route is an explicit opt-in
+	// that needs both the port and the host check, and a runner acknowledgement
+	// beside no retention port is contradictory.
+	if cfg.UserErasureRoute && (nilDependency(repos.UserErasure) || cfg.UserAdminCheck == nil) {
+		return nil, ErrUserErasureRouteRequires
+	}
+	if cfg.MaintenanceRunnerAcknowledged && nilDependency(repos.Maintenance) {
+		return nil, ErrMaintenanceAcknowledgedWithoutRepository
 	}
 	// A resource policy is only ever consulted by the HTML surface, which is gated on
 	// Views (design §9.2, GOTH-0.4). Setting HTMLPolicy with a nil Views is a policy
@@ -434,7 +444,20 @@ func New(repos Repositories, signer cryptids.JWTSigner, runtimeMode environment.
 		transportLog.Warn("auth: machine repositories are wired but AdministrationConfig.MachineRoutesGate is unset; the bundled lifecycle routes are NOT mounted (404) — set a gate or serve your own routes over the Service methods")
 	}
 
+	// An erase commits a deactivation the fenced mint must observe, so the
+	// erasure port requires it. Checked after every feature's own wiring error
+	// and before the general repository validation, so it names itself.
+	if !nilDependency(repos.UserErasure) && nilDependency(repos.ActiveSessions) {
+		return nil, ErrUserErasureRequiresActiveSessions
+	}
 	if err := validateRepositories(repos, cfg); err != nil {
+		return nil, err
+	}
+	// The retention service starts nothing; the host runs it. Its policy is
+	// validated here so a refused retention fails the boot, not the first pass.
+	maintenanceService, err := maintenance.New(maintenance.Repositories{Maintenance: repos.Maintenance, Challenges: repos.Challenges, SecurityEvents: repos.SecurityEvents},
+		cfg.Maintenance, maintenance.WithLogger(cfg.Logger))
+	if err != nil {
 		return nil, err
 	}
 	cfg = snapshotConfig(cfg)
@@ -531,7 +554,7 @@ func New(repos Repositories, signer cryptids.JWTSigner, runtimeMode environment.
 	}
 	authComponents, err := authlogic.New(authlogic.Repositories{
 		Users: repos.Users, Identifiers: repos.Identifiers, Passwords: repos.Passwords, Sessions: repos.Sessions, SessionManagement: repos.SessionManagement,
-		UserAdmin: repos.UserAdmin, PasswordlessRedeem: repos.Passwordless, ActiveSessions: repos.ActiveSessions,
+		UserAdmin: repos.UserAdmin, UserErasure: repos.UserErasure, PasswordlessRedeem: repos.Passwordless, ActiveSessions: repos.ActiveSessions,
 		Challenges: repos.Challenges, PasswordResets: repos.PasswordResets, ContactChanges: repos.ContactChanges,
 		CredentialMutations: repos.CredentialMutations, AuthenticationGrants: repos.AuthenticationGrants,
 		SecurityEvents: repos.SecurityEvents, OAuthAccounts: repos.OAuthAccounts, OAuthStates: repos.OAuthStates,
@@ -612,12 +635,33 @@ func New(repos Repositories, signer cryptids.JWTSigner, runtimeMode environment.
 		inbound.WithAuthenticatorPolicy(inbound.AuthenticatorPolicy{Cookie: cfg.SessionCookie, ExternalCookies: externalCookies, BrowserLoginPath: cfg.BrowserLoginPath, Limiter: limiter, Logger: cfg.Logger}),
 		inbound.WithListStrategy(listStrategy),
 		inbound.WithMachineGate(cfg.MachineRoutesGate),
-		inbound.WithRouteAuthentication(cfg.BundledRouteAuth))
+		inbound.WithRouteAuthentication(cfg.BundledRouteAuth),
+		inbound.WithUserErasureRoute(cfg.UserErasureRoute))
 	if err != nil {
 		return nil, err
 	}
-	return &Components{Authentication: authService, External: authService.ExternalAuthenticator(), OAuth2: oauthService, Invitations: invSvc, HTTP: adapter, Delivery: deliveryRuntime, SecurityEvents: securityEvents}, nil
+	logMaintenancePosture(cfg, maintenanceService, transportLog)
+	return &Components{Authentication: authService, External: authService.ExternalAuthenticator(), OAuth2: oauthService, Invitations: invSvc, HTTP: adapter, Delivery: deliveryRuntime, SecurityEvents: securityEvents, Maintenance: maintenanceService}, nil
 
+}
+
+// logMaintenancePosture logs the retention registration line and, in
+// production without MaintenanceRunnerAcknowledged, the one WARN that retention
+// is not enforced. A sink is reported by its ArchiveLocation label; no sink is
+// archive_sink=none — a valid policy, not a warning.
+func logMaintenancePosture(cfg constructorConfig, svc *maintenance.Service, log *slog.Logger) {
+	policy := svc.Config()
+	sink := "none"
+	if policy.ArchiveSink != nil {
+		sink = policy.ArchiveLocation
+		if sink == "" {
+			sink = "unlabeled"
+		}
+	}
+	log.Info("auth: maintenance", "maintenance_runner", cfg.MaintenanceRunnerAcknowledged, "archive_sink", sink, "security_event_retention", policy.SecurityEventRetention)
+	if cfg.RuntimeMode.IsProduction() && !cfg.MaintenanceRunnerAcknowledged {
+		log.Warn("auth: maintenance_runner=unacknowledged: retention is not enforced; run Components.Maintenance.Run or the jobs schedule and set MaintenanceConfig.MaintenanceRunnerAcknowledged")
+	}
 }
 
 // validateInvitationPolicy enforces the invitation-policy matrix. A host policy

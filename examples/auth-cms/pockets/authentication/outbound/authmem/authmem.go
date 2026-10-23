@@ -85,6 +85,10 @@ type data struct {
 
 	// externalSubjects is the external identity mirror, by (provider, subject).
 	externalSubjects map[externalKey]externalsubject.ExternalSubject
+
+	// erasedAt is the erasure marker (users.erased_at), by user ID. The stored
+	// status stays deactivated; every read projects user.StatusErased from it.
+	erasedAt map[string]time.Time
 }
 
 // Store is an in-memory auth datastore. Its Repositories method yields the port
@@ -111,6 +115,7 @@ func New() *Store {
 		contactChanges: map[string]contactchange.PendingChange{},
 
 		externalSubjects: map[externalKey]externalsubject.ExternalSubject{},
+		erasedAt:         map[string]time.Time{},
 	}}
 }
 
@@ -150,6 +155,11 @@ func (s *Store) Repositories() auth.Repositories {
 		Passwordless: passwordlessRepo{s.d},
 
 		ExternalSubjects: externalSubjectRepo{s.d},
+
+		// Retention and erasure (SOC 2 S3): the bounded purges the maintenance
+		// service drives, and the one-critical-section erase.
+		Maintenance: maintenanceRepo{s.d},
+		UserErasure: erasureRepo{s.d},
 	}
 }
 
@@ -164,7 +174,16 @@ func (r userRepo) Get(_ context.Context, id string) (user.User, error) {
 	if !ok {
 		return user.User{}, sdk.ErrNotFound
 	}
-	return u, nil
+	return r.projectLocked(u), nil
+}
+
+// projectLocked reports an erased user as user.StatusErased, the projection a
+// SQL store derives from erased_at IS NOT NULL. Callers hold r.mu.
+func (d *data) projectLocked(u user.User) user.User {
+	if _, erased := d.erasedAt[u.ID]; erased {
+		u.Status = user.StatusErased
+	}
+	return u
 }
 
 func (r userRepo) Update(_ context.Context, id string, u user.User) (user.User, error) {

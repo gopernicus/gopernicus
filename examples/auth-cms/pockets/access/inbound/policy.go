@@ -47,6 +47,20 @@ func (p *Policy) Can(ctx context.Context, principal sdk.Principal, permission, r
 	result, err := p.decisions.Check(ctx, model.CheckRequest{Principal: model.PrincipalFrom(principal), Permission: permission, Resource: model.Resource{Type: resourceType, ID: resourceID}})
 	return result.Allowed, err
 }
+
+// UserAdmin admits a platform administrator to every user-administration
+// action, the irreversible erase included. A host that wants a step-up grant
+// before an erase keys that on request.Action.
+func (p *Policy) UserAdmin(ctx context.Context, request authenticationhttp.UserAdminCheckRequest) error {
+	ok, err := p.PlatformAdmin(ctx, request.Principal)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return fmt.Errorf("auth-cms: user administration requires platform admin: %w", sdk.ErrForbidden)
+	}
+	return nil
+}
 func (p *Policy) Invite(ctx context.Context, request authenticationhttp.InviteCheckRequest) error {
 	expr := decisions.On(model.Resource{Type: "platform", ID: "main"}, decisions.Direct("admin"))
 	if request.Action != authenticationhttp.InviteCreate || request.Relation != "owner" {

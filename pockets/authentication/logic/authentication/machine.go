@@ -179,6 +179,55 @@ func (s *Service) RevokeAPIKey(ctx context.Context, keyID string) error {
 	return nil
 }
 
+// DeleteServiceAccount deletes the machine identity id and its API keys. With
+// the store's serviceaccount.CascadeDeleter the account and every key go in one
+// transaction and the counts are recorded; without it the service falls back to
+// ServiceAccounts.Delete and records zero counts with cascade=false. Unknown →
+// sdk.ErrNotFound.
+//
+// A deletion records one service_account_deleted row attributed to actor —
+// Details carry service_account_id, key_count, unrevoked_key_count and cascade,
+// never a key prefix, hash or key id. A key revoked by the deletion records no
+// api_key_revoked row of its own.
+//
+// TRUSTED: it applies NO authorization — the caller owns that decision.
+func (s *Service) DeleteServiceAccount(ctx context.Context, actor Principal, id string) (serviceaccount.Deletion, error) {
+	if !s.MachineEnabled() {
+		return serviceaccount.Deletion{}, fmt.Errorf("auth: machine identity is not wired: %w", sdk.ErrNotFound)
+	}
+	sa, err := s.serviceAccounts.Get(ctx, id)
+	if err != nil {
+		return serviceaccount.Deletion{}, err
+	}
+	var deletion serviceaccount.Deletion
+	cascader, cascade := s.serviceAccounts.(serviceaccount.CascadeDeleter)
+	if cascade {
+		deletion, err = cascader.DeleteWithKeys(ctx, id)
+	} else {
+		err = s.serviceAccounts.Delete(ctx, id)
+	}
+	if err != nil {
+		return serviceaccount.Deletion{}, err
+	}
+	userID := ""
+	if sa.ActAsUser {
+		userID = sa.OwnerUserID
+	}
+	s.recordSecurityEvent(ctx, securityEventInput{
+		UserID: userID,
+		Actor:  securityevent.Principal{Type: actor.Type, ID: actor.ID},
+		Type:   securityevent.TypeServiceAccountDeleted,
+		Status: securityevent.StatusSuccess,
+		Details: map[string]any{
+			"service_account_id":  id,
+			"key_count":           deletion.KeyCount,
+			"unrevoked_key_count": deletion.UnrevokedKeyCount,
+			"cascade":             cascade,
+		},
+	})
+	return deletion, nil
+}
+
 // auditActor is the audit attribution for the machine-identity lifecycle ops:
 // the principal the transport resolved from the request credential, or the zero
 // Principal when a host calls the service outside a request (a job, a seeder) —

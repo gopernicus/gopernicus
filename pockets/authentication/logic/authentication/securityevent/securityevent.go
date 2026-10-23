@@ -300,6 +300,31 @@ const (
 	// invalid_client, invalid_request, invalid_scope or invalid_target. A
 	// refresh reuse records TypeOAuth2RefreshReuse instead.
 	TypeOAuth2GrantFailed = "oauth2_grant_failed"
+
+	// Retention and erasure vocabulary (SOC 2 S3). Details carry counts,
+	// cutoffs and object coordinates only — never an address, a display name or
+	// credential material.
+	//
+	// TypeUserErased is an applied erasure. UserID is the TARGET subject and
+	// Actor the administrator who applied it; Details carry the erasure's bounded
+	// counts. The store writes it INSIDE the erase transaction, so the row and
+	// the erasure commit together.
+	TypeUserErased = "user_erased"
+	// TypeServiceAccountDeleted is a deleted machine identity. Details carry
+	// service_account_id, key_count, unrevoked_key_count and cascade — counts,
+	// never a key prefix, hash or key id.
+	TypeServiceAccountDeleted = "service_account_deleted"
+	// TypeSecurityEventsPurged is one bounded purge call over this rail,
+	// written by the store with Actor{Type: "system", ID: "maintenance"} — one
+	// row per call, a zero count included. Details carry cutoff, count,
+	// floor_days, max_rows and, on PostgreSQL, session_user.
+	TypeSecurityEventsPurged = "security_events_purged"
+	// TypeSecurityEventsArchived is one archive object of this rail, written
+	// by the maintenance service after the object read back intact and before
+	// any row it holds is purged. Details carry object, sha256, rows,
+	// first_created_at, first_id, last_created_at, last_id and
+	// archive_location.
+	TypeSecurityEventsArchived = "security_events_archived"
 )
 
 // Status vocabulary (design §5.1).
@@ -427,6 +452,7 @@ var types = []string{
 	TypeSessionRevoked, TypeAllSessionsRevoked, TypeUserDirectoryRead,
 	TypeOAuth2ConsentApproved, TypeOAuth2ConsentDenied, TypeOAuth2ConnectionCreated, TypeOAuth2Refresh,
 	TypeOAuth2RefreshReuse, TypeOAuth2TokenExchanged, TypeOAuth2RevocationRequested, TypeOAuth2GrantFailed,
+	TypeUserErased, TypeServiceAccountDeleted, TypeSecurityEventsPurged, TypeSecurityEventsArchived,
 }
 
 // Field selects the rule BoundValue applies to an attributed value.

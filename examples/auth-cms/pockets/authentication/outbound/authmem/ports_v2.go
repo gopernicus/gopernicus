@@ -28,6 +28,7 @@ var (
 	_ oauthaccount.OAuthAccountRepository     = oauthAccountRepo{}
 	_ oauthstate.StateRepository              = oauthStateRepo{}
 	_ serviceaccount.ServiceAccountRepository = serviceAccountRepo{}
+	_ serviceaccount.CascadeDeleter           = serviceAccountRepo{}
 	_ apikey.APIKeyRepository                 = apiKeyRepo{}
 	_ securityevent.SecurityEventRepository   = securityEventRepo{}
 	_ invitation.InvitationRepository         = invitationRepo{}
@@ -174,14 +175,44 @@ func (r serviceAccountRepo) Update(_ context.Context, id string, sa serviceaccou
 	return sa, nil
 }
 
+// Delete removes the account and, in the same critical section, every API key
+// it holds — the cascade the bundled stores perform in one transaction.
 func (r serviceAccountRepo) Delete(_ context.Context, id string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if _, ok := r.serviceAccounts[id]; !ok {
 		return sdk.ErrNotFound
 	}
-	delete(r.serviceAccounts, id)
+	r.deleteAccountLocked(id)
 	return nil
+}
+
+// DeleteWithKeys is the serviceaccount.CascadeDeleter capability: Delete plus
+// the counts of the keys it removed.
+func (r serviceAccountRepo) DeleteWithKeys(_ context.Context, id string) (serviceaccount.Deletion, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, ok := r.serviceAccounts[id]; !ok {
+		return serviceaccount.Deletion{}, sdk.ErrNotFound
+	}
+	return r.deleteAccountLocked(id), nil
+}
+
+// deleteAccountLocked removes the account and its keys. Callers hold r.mu.
+func (d *data) deleteAccountLocked(id string) serviceaccount.Deletion {
+	var del serviceaccount.Deletion
+	for kid, k := range d.apiKeys {
+		if k.ServiceAccountID != id {
+			continue
+		}
+		del.KeyCount++
+		if !k.Revoked() {
+			del.UnrevokedKeyCount++
+		}
+		delete(d.apiKeys, kid)
+	}
+	delete(d.serviceAccounts, id)
+	return del
 }
 
 // --- apikey.APIKeyRepository ---

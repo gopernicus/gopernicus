@@ -550,3 +550,53 @@ func TestRecorderMissingAttributionWarning(t *testing.T) {
 		})
 	}
 }
+
+// TestRecorderPrepareBuildsWithoutWriting proves Prepare stamps exactly what
+// Record writes — the id, the time, the correlation ids, the client attribution
+// and the bounds — and writes nothing, and that it reports ok=false wherever
+// Record would write nothing.
+func TestRecorderPrepareBuildsWithoutWriting(t *testing.T) {
+	repo := &recordingRepo{}
+	at := time.Date(2026, 10, 23, 9, 0, 0, 0, time.UTC)
+	rec := NewRecorder(repo, sdk.NewIDGenerator(func() (string, error) { return "evt-1", nil }), func() time.Time { return at }, nil,
+		WithClientInfoReader(func(context.Context) (string, string) { return "203.0.113.9", "admin-agent\x00" }))
+	ctx := sdk.WithTraceID(sdk.WithRequestID(context.Background(), "req-9"), "trace-9")
+	in := Input{UserID: "target", Actor: Principal{Type: "user", ID: "admin"}, Type: TypeUserErased, Status: StatusSuccess, Details: map[string]any{"note": "a\x00b"}}
+
+	evt, ok := rec.Prepare(ctx, in)
+	if !ok {
+		t.Fatal("Prepare refused a row Record would write")
+	}
+	want := SecurityEvent{ID: "evt-1", UserID: "target", Actor: Principal{Type: "user", ID: "admin"}, EventType: TypeUserErased, EventStatus: StatusSuccess,
+		IPAddress: "203.0.113.9", UserAgent: "", RequestID: "req-9", TraceID: "trace-9", CreatedAt: at}
+	if !equalEvent(evt, want) {
+		t.Errorf("prepared = %+v, want %+v", evt, want)
+	}
+	if evt.Details["note"] != "" || in.Details["note"] != "a\x00b" {
+		t.Errorf("Details not bounded on a copy: prepared %v, input %v", evt.Details, in.Details)
+	}
+	if got := repo.recorded(); len(got) != 0 {
+		t.Fatalf("Prepare wrote %d rows, want 0", len(got))
+	}
+
+	rec.Record(ctx, in)
+	got := repo.recorded()
+	if len(got) != 1 || !equalEvent(got[0], want) {
+		t.Fatalf("Record wrote %+v, want the prepared row %+v", got, want)
+	}
+
+	var nilRecorder *Recorder
+	if _, ok := nilRecorder.Prepare(ctx, in); ok {
+		t.Error("a nil Recorder prepared a row")
+	}
+	if _, ok := NewRecorder(nil, sdk.IDGenerator{}, nil, nil).Prepare(ctx, in); ok {
+		t.Error("a Recorder without a repository prepared a row")
+	}
+	refusing := NewRecorder(repo, sdk.IDGenerator{}, nil, nil, WithFailureRowBudget(&budgetAllower{}, ratelimiter.PerMinute(1)))
+	if _, ok := refusing.Prepare(ctx, Input{Type: TypeOAuth2GrantFailed, Status: StatusFailure, Budgeted: true}); ok {
+		t.Error("an over-budget row was prepared")
+	}
+	if refusing.SuppressedRows() != 1 {
+		t.Errorf("SuppressedRows = %d, want 1", refusing.SuppressedRows())
+	}
+}

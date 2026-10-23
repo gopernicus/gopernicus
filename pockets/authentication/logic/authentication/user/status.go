@@ -10,18 +10,25 @@ import (
 )
 
 // Status is the account lifecycle posture (coordination-hub-auth-upstream
-// CHAU-1.1). The vocabulary is CLOSED to exactly two values in v1:
+// CHAU-1.1, SOC 2 S3). The vocabulary is CLOSED to exactly three values:
 //
 //   - StatusActive — the default posture. Every existing row and every newly
 //     constructed user is active.
 //   - StatusDeactivated — no new session and no act-as-user authentication may
 //     succeed for this subject.
+//   - StatusErased — the subject was erased (EraseRepository): deactivated, its
+//     identifiers and credentials gone, and the transition is TERMINAL. Stores
+//     persist it as the deactivated status plus an erasure marker and project
+//     it on every read, so a reader built before erasure existed sees a correct
+//     denial. It is never a SetStatus target: SetStatus(…, StatusErased) is
+//     ErrErased, deactivating an erased user is a no-op replay, and
+//     reactivating one is ErrErased.
 //
 // Suspension, deletion, anonymization, lock-until, and arbitrary host-defined
 // statuses are deliberately OUT of scope: each needs its own semantics on every
 // credential path, and an open string would let a host invent a posture the
-// pocket has no rules for. Adding a third value is a design decision, not a
-// constant.
+// pocket has no rules for. Adding a value is a design decision, not a
+// constant — a host switching on Status exhaustively gains a case with each.
 //
 // Status is NOT verification. Whether an address is proven is identifier state
 // (identifier.VerifiedAt); whether the subject may authenticate at all is this.
@@ -35,6 +42,9 @@ const (
 	// StatusDeactivated denies every new session and act-as-user authentication
 	// for the subject. Existing sessions are revoked by the transition itself.
 	StatusDeactivated Status = "deactivated"
+	// StatusErased is the terminal posture of an erased subject. It denies
+	// everything StatusDeactivated denies and no transition leaves it.
+	StatusErased Status = "erased"
 )
 
 // ErrInvalidStatus is returned for a status value outside the closed vocabulary.
@@ -43,12 +53,18 @@ const (
 // lost CAS (sdk.ErrConflict). Checked with errors.Is.
 var ErrInvalidStatus = fmt.Errorf("user: unknown status: %w", sdk.ErrInvalidInput)
 
-// Valid reports whether s is one of the closed v1 statuses. The empty value is
+// ErrErased is returned for a transition the erasure forbids: reactivating an
+// erased user, or naming StatusErased as a SetStatus target (erasure is
+// EraseRepository.Erase, never a status write). It wraps sdk.ErrConflict, so a
+// transport maps it to 409. Checked with errors.Is.
+var ErrErased = fmt.Errorf("user: erased (erasure is terminal and is not a status transition): %w", sdk.ErrConflict)
+
+// Valid reports whether s is one of the closed statuses. The empty value is
 // NOT valid: it is a legacy-read artifact that NormalizeStatus resolves, never
 // something a caller may pass in.
 func (s Status) Valid() bool {
 	switch s {
-	case StatusActive, StatusDeactivated:
+	case StatusActive, StatusDeactivated, StatusErased:
 		return true
 	default:
 		return false
@@ -137,7 +153,8 @@ var DefaultOrder = list.NewOrder("created_at", list.DESC)
 // resulting state reads Status.
 type StatusChange struct {
 	// Status is the user's status after the operation — the DESIRED status on
-	// success, whether or not this call caused it.
+	// success, whether or not this call caused it, and StatusErased when a
+	// deactivation replays on an erased user.
 	Status Status
 	// Changed reports whether this call performed the transition.
 	Changed bool
@@ -168,6 +185,8 @@ type StatusChange struct {
 //     (wrapping sdk.ErrInvalidInput), with NO write performed.
 //   - SetStatus to the status the user already has → success with
 //     Changed=false, never sdk.ErrNotFound and never sdk.ErrConflict.
+//   - SetStatus to StatusErased → ErrErased with no write; on an erased user,
+//     StatusDeactivated → Changed=false and StatusActive → ErrErased.
 //   - A concurrent credential/status CAS loss → sdk.ErrConflict.
 //
 // List is list-typed (design §9) with the same pinned ordering as every other
@@ -185,6 +204,11 @@ type AdminRepository interface {
 	GetSummary(ctx context.Context, id string) (Summary, error)
 
 	// SetStatus atomically transitions the user's lifecycle status.
+	//
+	// StatusErased is never a target: it is ErrErased with NO write performed.
+	// On an erased user, StatusDeactivated is a no-op replay ({Status:
+	// StatusErased, Changed: false}) and StatusActive is ErrErased, decided in
+	// the same locked read as the transition.
 	//
 	// When the status actually changes it MUST, in ONE transaction:
 	//

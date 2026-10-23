@@ -9,6 +9,7 @@ import (
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/securityevent"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/delivery"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/invitations"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/maintenance"
 )
 
 // Components holds the independently usable components built by New. Invitations
@@ -20,6 +21,11 @@ import (
 // Invitations record through; it is never nil (without
 // Repositories.SecurityEvents it records nothing). A host that bridges events into the rail hands it this recorder
 // rather than building another, so AuditWriteFailures counts every lost row.
+//
+// Maintenance is the retention service over Repositories.Maintenance,
+// Challenges and SecurityEvents; it is never nil and starts nothing. The host
+// runs it — Maintenance.Run in process, or Maintenance.Pass from a schedule —
+// and says so with MaintenanceConfig.MaintenanceRunnerAcknowledged.
 type Components struct {
 	Authentication *authlogic.Service
 	External       *authlogic.ExternalAuthenticator
@@ -28,6 +34,7 @@ type Components struct {
 	HTTP           *authenticationhttp.Adapter
 	Delivery       *delivery.Runtime
 	SecurityEvents *securityevent.Recorder
+	Maintenance    *maintenance.Service
 }
 
 // AuditWriteFailures returns how many security-event writes have failed since
