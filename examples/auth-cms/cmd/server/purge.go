@@ -8,6 +8,7 @@ import (
 
 	"github.com/gopernicus/gopernicus/examples/auth-cms/pockets/authentication/outbound/authjobs"
 	delivery "github.com/gopernicus/gopernicus/pockets/authentication/logic/delivery"
+	"github.com/gopernicus/gopernicus/pockets/cms/domain/messaging"
 	"github.com/gopernicus/gopernicus/sdk/pkg/environment"
 )
 
@@ -25,6 +26,16 @@ const (
 	defaultDeliveryPurgeBatch = 500
 )
 
+// Inquiry purge defaults (SOC 2 S3). cms keeps every contact-form inquiry — a third party's
+// name, email and message — until the host disposes of it through the messaging.InquiryEraser
+// it wired as cms.Repositories.InquiryMaintenance. Retention is host-chosen; these defaults
+// purge hourly, keep inquiries for 90 days and remove at most 500 per pass.
+const (
+	defaultInquiryPurgeInterval  = time.Hour
+	defaultInquiryPurgeRetention = 90 * 24 * time.Hour
+	defaultInquiryPurgeBatch     = 500
+)
+
 // deliveryPurgeConfig is the host-owned schedule/retention/batch for the terminal-purge loop.
 type deliveryPurgeConfig struct {
 	// Interval is how often a purge pass runs.
@@ -32,6 +43,16 @@ type deliveryPurgeConfig struct {
 	// Retention is the minimum age of a terminal row before it is purged.
 	Retention time.Duration
 	// Batch caps how many rows one pass removes (bounded work per tick).
+	Batch int
+}
+
+// inquiryPurgeConfig is the host-owned schedule/retention/batch for the inquiry purge loop.
+type inquiryPurgeConfig struct {
+	// Interval is how often a purge pass runs.
+	Interval time.Duration
+	// Retention is the minimum age (from created_at) of an inquiry before it is purged.
+	Retention time.Duration
+	// Batch caps how many inquiries one pass removes (bounded work per tick).
 	Batch int
 }
 
@@ -47,6 +68,20 @@ func deliveryPurgeConfigFromEnv(log *slog.Logger) deliveryPurgeConfig {
 		Interval:  envPositiveDuration(log, "DELIVERY_PURGE_INTERVAL", defaultDeliveryPurgeInterval),
 		Retention: envPositiveDuration(log, "DELIVERY_PURGE_RETENTION", defaultDeliveryPurgeRetention),
 		Batch:     envPositiveInt(log, "DELIVERY_PURGE_BATCH", defaultDeliveryPurgeBatch),
+	}
+}
+
+// inquiryPurgeConfigFromEnv reads the inquiry purge schedule/retention/batch from the
+// environment, with the same fallback rules as the delivery purge:
+//
+//   - INQUIRY_PURGE_INTERVAL  (Go duration, e.g. "1h")    → how often a pass runs.
+//   - INQUIRY_PURGE_RETENTION (Go duration, e.g. "2160h") → inquiry minimum age to purge.
+//   - INQUIRY_PURGE_BATCH     (int, e.g. "500")           → max inquiries removed per pass.
+func inquiryPurgeConfigFromEnv(log *slog.Logger) inquiryPurgeConfig {
+	return inquiryPurgeConfig{
+		Interval:  envPositiveDuration(log, "INQUIRY_PURGE_INTERVAL", defaultInquiryPurgeInterval),
+		Retention: envPositiveDuration(log, "INQUIRY_PURGE_RETENTION", defaultInquiryPurgeRetention),
+		Batch:     envPositiveInt(log, "INQUIRY_PURGE_BATCH", defaultInquiryPurgeBatch),
 	}
 }
 
@@ -110,5 +145,58 @@ func runDeliveryPurgeLoop(ctx context.Context, interval time.Duration, purge fun
 				log.InfoContext(ctx, "delivery terminal purge pass removed terminal rows", "purged", n)
 			}
 		}
+	}
+}
+
+// newInquiryPurge binds one bounded inquiry purge pass over the eraser the host wired into
+// cms.Repositories.InquiryMaintenance: it removes at most cfg.Batch inquiries created at or
+// before now−cfg.Retention. now is injected so a test can pin the cutoff.
+func newInquiryPurge(eraser messaging.InquiryEraser, cfg inquiryPurgeConfig, now func() time.Time) func(context.Context) (int, error) {
+	return func(ctx context.Context) (int, error) {
+		return eraser.PurgeBefore(ctx, now().Add(-cfg.Retention), cfg.Batch)
+	}
+}
+
+// runInquiryPurgeLoop drives the inquiry purge on a ticker until ctx is canceled, logging one
+// step=inquiries count=<n> line per pass (zero included, so an operator sees the step ran). A
+// pass error is logged and the loop continues. The first pass runs one interval after start.
+func runInquiryPurgeLoop(ctx context.Context, interval time.Duration, purge func(context.Context) (int, error), log *slog.Logger) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			n, err := purge(ctx)
+			if err != nil {
+				log.ErrorContext(ctx, "retention step failed; continuing", "step", "inquiries", "error", err)
+				continue
+			}
+			log.InfoContext(ctx, "retention step", "step", "inquiries", "count", n)
+		}
+	}
+}
+
+// startInquiryPurge runs runInquiryPurgeLoop on its own Background-derived context — like the
+// delivery purge, it must outlive the parent ctx until HTTP has drained — and returns the stop
+// the shutdown sequence calls: cancel, then wait up to 5s for the in-flight pass.
+func startInquiryPurge(cfg inquiryPurgeConfig, purge func(context.Context) (int, error), log *slog.Logger) (stop func()) {
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		runInquiryPurgeLoop(ctx, cfg.Interval, purge, log)
+	}()
+	log.InfoContext(ctx, "inquiry purge scheduler ENABLED", "interval", cfg.Interval, "retention", cfg.Retention, "batch", cfg.Batch)
+	return func() {
+		log.InfoContext(context.Background(), "stopping inquiry purge scheduler")
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			log.WarnContext(context.Background(), "inquiry purge scheduler did not stop within 5s")
+		}
+		log.InfoContext(context.Background(), "inquiry purge scheduler stopped")
 	}
 }

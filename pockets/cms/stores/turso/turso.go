@@ -18,13 +18,17 @@ import (
 // migrations. This is the store half of the scaffold model: the host owns and
 // applies the schema (see ExportMigrations) and the store just provides repos.
 // db is the connector wrapper (error mapping + Tx), not a raw *sql.DB.
+// One InquiryStore fills both Inquiries and the optional InquiryMaintenance.
 func Repositories(db *tursodb.DB) cms.Repositories {
+	inquiries := NewInquiryStore(db)
 	return cms.Repositories{
 		Entries:   NewEntryStore(db),
 		Terms:     NewTermStore(db),
 		Menus:     NewMenuStore(db),
 		Media:     NewAssetStore(db),
-		Inquiries: NewInquiryStore(db),
+		Inquiries: inquiries,
+
+		InquiryMaintenance: inquiries,
 	}
 }
 

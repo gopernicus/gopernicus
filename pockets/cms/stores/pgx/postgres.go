@@ -3,7 +3,7 @@
 // graph (the load-bearing opt-out property, plan §2). It owns the SQL; the HOST owns its database lifecycle. It is the
 // dialect sibling of pockets/cms/stores/turso: same surface plus the
 // Postgres-only WithSchema option — SQLite has no schemas — same migration
-// version set (0009–0021, gaps at 0011/0012 reproduced), same port
+// version set (0009–0022, gaps at 0011/0012 reproduced), same port
 // semantics — a host switches dialect by one import + one Open call.
 //
 // Migrations follow the scaffold model (matching gopernicus init's auth flow):
@@ -15,10 +15,13 @@ package pgx
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"log/slog"
 
 	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
 	"github.com/gopernicus/gopernicus/pockets/cms"
+	"github.com/gopernicus/gopernicus/sdk"
 )
 
 // The pocket's table names. Every statement in this package renders one of
@@ -37,6 +40,13 @@ const (
 // migrationSource names this store's migrations in the boot-check message, so a
 // host reading a StatusCheck failure knows which stream it forgot to apply.
 const migrationSource = "cms"
+
+// inquiriesCreatedAtIndex is the ADMITTED retention index 0022 creates:
+// StatusCheck WARNs when it is absent rather than refusing to boot.
+const (
+	inquiriesCreatedAtIndex     = "idx_inquiries_created_at"
+	inquiriesCreatedAtIndexFile = "0022_inquiries_created_at.sql"
+)
 
 // probeTables is the inventory StatusCheck verifies — every table this store
 // reads or writes.
@@ -84,13 +94,17 @@ func newConfig(opts []Option) config {
 // applies the schema (see ExportMigrations) and the store just provides repos.
 // db is the connector wrapper (error mapping + Tx), not a raw *pgxpool.Pool.
 // It runs no probe; a host that passes WithSchema should call StatusCheck.
+// One InquiryStore fills both Inquiries and the optional InquiryMaintenance.
 func Repositories(db *pgxdb.DB, opts ...Option) cms.Repositories {
+	inquiries := NewInquiryStore(db, opts...)
 	return cms.Repositories{
 		Entries:   NewEntryStore(db, opts...),
 		Terms:     NewTermStore(db, opts...),
 		Menus:     NewMenuStore(db, opts...),
 		Media:     NewAssetStore(db, opts...),
-		Inquiries: NewInquiryStore(db, opts...),
+		Inquiries: inquiries,
+
+		InquiryMaintenance: inquiries,
 	}
 }
 
@@ -101,6 +115,12 @@ func Repositories(db *pgxdb.DB, opts ...Option) cms.Repositories {
 // another, or migrated with a schema and constructed without) fails at boot
 // instead of quietly using the host's own tables. Repositories itself stays
 // probe-less; call this once, pre-boot, with the same options.
+//
+// The retention index 0022 creates is admitted, not required: when it is
+// absent StatusCheck logs one WARN through slog's default logger
+// (index_missing=idx_inquiries_created_at file=0022_inquiries_created_at.sql)
+// and still returns nil — InquiryMaintenance.PurgeBefore then sorts the whole
+// table on every batch.
 func StatusCheck(ctx context.Context, db *pgxdb.DB, opts ...Option) error {
 	cfg := newConfig(opts)
 	for _, t := range probeTables {
@@ -109,6 +129,14 @@ func StatusCheck(ctx context.Context, db *pgxdb.DB, opts ...Option) error {
 			return fmt.Errorf("cms store: %s table missing — apply the %q migrations before boot: %w",
 				name, migrationSource, err)
 		}
+	}
+	index := cfg.schema.Table(inquiriesCreatedAtIndex)
+	switch err := pgxdb.ProbeTable(ctx, db, index); {
+	case errors.Is(err, sdk.ErrNotFound):
+		slog.WarnContext(ctx, "cms store: the inquiries retention index is missing — InquiryMaintenance.PurgeBefore sorts the whole table on every batch; apply "+inquiriesCreatedAtIndexFile,
+			"index_missing", inquiriesCreatedAtIndex, "file", inquiriesCreatedAtIndexFile, "index", index)
+	case err != nil:
+		return fmt.Errorf("cms store: probe %s: %w", index, err)
 	}
 	return nil
 }

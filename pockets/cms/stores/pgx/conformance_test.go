@@ -14,8 +14,10 @@
 package pgx
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"os"
 	"strings"
 	"testing"
@@ -131,6 +133,50 @@ func TestLive_StatusCheck(t *testing.T) {
 			t.Fatalf("StatusCheck: %v", err)
 		}
 	})
+}
+
+// TestLive_StatusCheckAdmitsMissingInquiriesIndex pins 0022 as admitted, not
+// required: with the retention index StatusCheck is silent, and without it
+// StatusCheck still passes but WARNs naming the index and the file. It runs in
+// its own schema so dropping the index never touches the conformance tables.
+func TestLive_StatusCheckAdmitsMissingInquiriesIndex(t *testing.T) {
+	dsn := requireDSN(t)
+	ctx := context.Background()
+	schema, err := pgxdb.NewSchema("cms_status_check_index")
+	if err != nil {
+		t.Fatalf("NewSchema: %v", err)
+	}
+	dropSchema(t, dsn, schema)
+	t.Cleanup(func() { dropSchema(t, dsn, schema) })
+	db := openDB(t, dsn)
+	if err := pgxdb.RunMigrations(ctx, db, MigrationsFS, MigrationsDir, pgxdb.WithSchema(schema)); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	if err := StatusCheck(ctx, db, WithSchema(schema)); err != nil {
+		t.Fatalf("StatusCheck with the index: %v", err)
+	}
+	if strings.Contains(buf.String(), "index_missing") {
+		t.Fatalf("StatusCheck WARNed with the index present: %s", buf.String())
+	}
+
+	if _, err := db.Exec(ctx, "DROP INDEX "+schema.Table(inquiriesCreatedAtIndex)); err != nil {
+		t.Fatalf("drop index: %v", err)
+	}
+	if err := StatusCheck(ctx, db, WithSchema(schema)); err != nil {
+		t.Fatalf("StatusCheck without the index = %v, want nil (admitted, not required)", err)
+	}
+	out := buf.String()
+	if strings.Count(out, "level=WARN") != 1 ||
+		!strings.Contains(out, "index_missing=idx_inquiries_created_at") ||
+		!strings.Contains(out, "file=0022_inquiries_created_at.sql") {
+		t.Errorf("want one WARN naming the index and its file, got: %s", out)
+	}
 }
 
 // requireDSN returns POSTGRES_TEST_DSN or skips loudly.

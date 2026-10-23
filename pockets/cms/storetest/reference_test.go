@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -64,6 +65,8 @@ func (r *reference) repositories() cms.Repositories {
 		Menus:     refMenus{r},
 		Media:     refAssets{r},
 		Inquiries: refInquiries{r},
+
+		InquiryMaintenance: refInquiries{r},
 	}
 }
 
@@ -560,4 +563,56 @@ func (r refInquiries) List(_ context.Context) ([]messaging.Inquiry, error) {
 		return out[i].CreatedAt.After(out[j].CreatedAt)
 	})
 	return out, nil
+}
+
+func (r refInquiries) Delete(_ context.Context, id string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, ok := r.inquiries[id]; !ok {
+		return sdk.ErrNotFound
+	}
+	delete(r.inquiries, id)
+	return nil
+}
+
+// DeleteByEmail matches with strings.EqualFold, which agrees with the port's
+// ASCII case fold on the ASCII range.
+func (r refInquiries) DeleteByEmail(_ context.Context, email string) (int, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	n := 0
+	for id, in := range r.inquiries {
+		if strings.EqualFold(in.Email, email) {
+			delete(r.inquiries, id)
+			n++
+		}
+	}
+	return n, nil
+}
+
+func (r refInquiries) PurgeBefore(_ context.Context, before time.Time, limit int) (int, error) {
+	if limit <= 0 {
+		return 0, fmt.Errorf("inquiry purge limit %d must be positive: %w", limit, sdk.ErrInvalidInput)
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var due []messaging.Inquiry
+	for _, in := range r.inquiries {
+		if !in.CreatedAt.After(before) {
+			due = append(due, in)
+		}
+	}
+	sort.Slice(due, func(i, j int) bool {
+		if due[i].CreatedAt.Equal(due[j].CreatedAt) {
+			return due[i].ID < due[j].ID
+		}
+		return due[i].CreatedAt.Before(due[j].CreatedAt)
+	})
+	if len(due) > limit {
+		due = due[:limit]
+	}
+	for _, in := range due {
+		delete(r.inquiries, in.ID)
+	}
+	return len(due), nil
 }
