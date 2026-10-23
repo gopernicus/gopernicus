@@ -105,6 +105,17 @@ The primary-email directory projection is maintained with identifier mutations.
 Invitation metadata and security-event details use JSON text for consistent
 round trips across adapters.
 
+Security-event documents carry the correlation ids `request_id` and `trace_id`
+like every other field (the SQL adapters' migration `0021`); a document written
+before them reads both back empty. The Firestore rail has no immutability trigger
+and no sequence — the SQL adapters' `0021`/`0022` evidence columns and triggers
+have no counterpart here. The port offers no update or delete, so the store never
+rewrites a row; denying everything else that could is HOST IAM: give the runtime
+service account no role that edits or deletes documents outside the adapter,
+deny updates and deletes on `security_events` in the Security Rules of any client
+that can reach the database, and keep collection-level deletes (console, `gcloud
+firestore`, TTL policies) away from it. SCHEMA.md §7.3 records the posture.
+
 The adapter reserves its twenty collection names. Hosts must avoid collisions at
 any depth: Firestore field overrides apply to every collection with the same group
 ID, including host subcollections. Use a separate database or different host names.

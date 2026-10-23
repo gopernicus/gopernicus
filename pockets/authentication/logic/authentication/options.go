@@ -325,6 +325,28 @@ func WithChallengeProtector(value challengeProtector) Option {
 	}
 }
 
+// WithSecurityEventRecorder supplies the recorder the service — and the external
+// engine WithExternal builds — records through, so every recording site of a
+// host shares one recorder and one failure count. It wins over
+// Repositories.SecurityEvents. Without it New builds a recorder over
+// Repositories.SecurityEvents that attributes rows through the client-info
+// carrier.
+func WithSecurityEventRecorder(value *securityevent.Recorder) Option {
+	return func(c *constructorConfig) {
+		c.SecurityEventRecorder = value
+	}
+}
+
+// WithAuditWriteObserver sets the observer told about every failed audit write
+// of the recorder New builds. A supplied recorder carries its own observer
+// (securityevent.WithWriteObserver), so passing both options is
+// sdk.ErrInvalidInput.
+func WithAuditWriteObserver(value securityevent.WriteObserver) Option {
+	return func(c *constructorConfig) {
+		c.AuditWriteObserver = value
+	}
+}
+
 // WithInvitations replaces Invitations for this constructor.
 func WithInvitations(value invitationResolver) Option {
 	return func(c *constructorConfig) {

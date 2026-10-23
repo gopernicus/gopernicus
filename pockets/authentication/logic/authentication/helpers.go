@@ -14,27 +14,13 @@ import (
 // The helpers below are shared by Service and ExternalAuthenticator, which hold
 // the same collaborators but neither owns the other.
 
-// recordSecurityEvent appends one audit row synchronously (design §5.1). A nil
-// repository is a no-op; a write failure is logged at WARN with coarse fields
-// only and never fails the auth flow.
-func recordSecurityEvent(ctx context.Context, events securityevent.SecurityEventRepository, ids sdk.IDGenerator, now time.Time, logger *slog.Logger, in securityEventInput) {
-	if events == nil {
-		return
-	}
-	info := clientInfoFromContext(ctx)
-	evt := securityevent.New(ids, in.Type, in.Status, now)
-	evt.UserID = in.UserID
-	evt.Actor = in.Actor
-	evt.Details = in.Details
-	evt.IPAddress = info.ip
-	evt.UserAgent = info.ua
-	if _, err := events.Create(ctx, evt); err != nil {
-		logger.Warn("security event write failed",
-			"event_type", in.Type,
-			"status", in.Status,
-			"error_kind", ErrorKind(err),
-		)
-	}
+// newSecurityEventRecorder builds the recorder a Service or ExternalAuthenticator
+// owns when none was supplied: over events, attributing each row to the client
+// through the request's client-info carrier (design §5.1 WI4).
+func newSecurityEventRecorder(events securityevent.SecurityEventRepository, ids sdk.IDGenerator, now func() time.Time, logger *slog.Logger, observer securityevent.WriteObserver) *securityevent.Recorder {
+	return securityevent.NewRecorder(events, ids, now, logger,
+		securityevent.WithClientInfoReader(ClientInfoFromContext),
+		securityevent.WithWriteObserver(observer))
 }
 
 // projectAddresses returns a user's active VERIFIED identifiers as identity

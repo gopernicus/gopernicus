@@ -30,7 +30,9 @@ func NewSecurityEventStore(db *tursodb.DB) *SecurityEventStore {
 	return &SecurityEventStore{db: db}
 }
 
-const securityEventColumns = "id, user_id, actor_type, actor_id, event_type, event_status, details, ip_address, user_agent, created_at"
+// securityEventColumns are the columns the store reads and writes. recorded_at
+// (migration 0021) is evidence the database fills; the store never names it.
+const securityEventColumns = "id, user_id, actor_type, actor_id, event_type, event_status, details, ip_address, user_agent, request_id, trace_id, created_at"
 
 // detailsJSON is a sql.Scanner that reads the stored TEXT JSON details bag into a
 // non-nil map through unmarshalDetails (the read twin of marshalDetails), so a
@@ -72,6 +74,8 @@ type securityEventRow struct {
 	Details     detailsJSON  `db:"details"`
 	IPAddress   string       `db:"ip_address"`
 	UserAgent   string       `db:"user_agent"`
+	RequestID   string       `db:"request_id"`
+	TraceID     string       `db:"trace_id"`
 	CreatedAt   tursodb.Time `db:"created_at"`
 }
 
@@ -85,6 +89,8 @@ func (r securityEventRow) toDomain() securityevent.SecurityEvent {
 		Details:     map[string]any(r.Details),
 		IPAddress:   r.IPAddress,
 		UserAgent:   r.UserAgent,
+		RequestID:   r.RequestID,
+		TraceID:     r.TraceID,
 		CreatedAt:   r.CreatedAt.Time,
 	}
 }
@@ -98,19 +104,19 @@ func (s *SecurityEventStore) Create(ctx context.Context, evt securityevent.Secur
 	// Empty ID → the sdk.DatabaseID strategy (amended D10): omit the id
 	// column so the schema default generates the key, read back with RETURNING.
 	if evt.ID == "" {
-		const q = `INSERT INTO security_events (user_id, actor_type, actor_id, event_type, event_status, details, ip_address, user_agent, created_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`
+		const q = `INSERT INTO security_events (user_id, actor_type, actor_id, event_type, event_status, details, ip_address, user_agent, request_id, trace_id, created_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`
 		if err := s.db.QueryRow(ctx, q,
 			evt.UserID, evt.Actor.Type, evt.Actor.ID, evt.EventType, evt.EventStatus,
-			details, evt.IPAddress, evt.UserAgent, tursodb.FormatTime(evt.CreatedAt),
+			details, evt.IPAddress, evt.UserAgent, evt.RequestID, evt.TraceID, tursodb.FormatTime(evt.CreatedAt),
 		).Scan(&evt.ID); err != nil {
 			return securityevent.SecurityEvent{}, tursodb.MapError(err)
 		}
 	} else {
-		const q = `INSERT INTO security_events (` + securityEventColumns + `) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+		const q = `INSERT INTO security_events (` + securityEventColumns + `) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 		if _, err := s.db.Exec(ctx, q,
 			evt.ID, evt.UserID, evt.Actor.Type, evt.Actor.ID, evt.EventType, evt.EventStatus,
-			details, evt.IPAddress, evt.UserAgent, tursodb.FormatTime(evt.CreatedAt),
+			details, evt.IPAddress, evt.UserAgent, evt.RequestID, evt.TraceID, tursodb.FormatTime(evt.CreatedAt),
 		); err != nil {
 			return securityevent.SecurityEvent{}, err
 		}

@@ -7,13 +7,14 @@ import (
 	"github.com/gopernicus/gopernicus/sdk"
 )
 
+// The OAuth2 event types live in securityevent's registry; these are aliases.
 const (
-	TypeConsentApproved     = "oauth2_consent_approved"
-	TypeConnectionCreated   = "oauth2_connection_created"
-	TypeRefresh             = "oauth2_refresh"
-	TypeRefreshReuse        = "oauth2_refresh_reuse"
-	TypeTokenExchanged      = "oauth2_token_exchanged"
-	TypeRevocationRequested = "oauth2_revocation_requested"
+	TypeConsentApproved     = securityevent.TypeOAuth2ConsentApproved
+	TypeConnectionCreated   = securityevent.TypeOAuth2ConnectionCreated
+	TypeRefresh             = securityevent.TypeOAuth2Refresh
+	TypeRefreshReuse        = securityevent.TypeOAuth2RefreshReuse
+	TypeTokenExchanged      = securityevent.TypeOAuth2TokenExchanged
+	TypeRevocationRequested = securityevent.TypeOAuth2RevocationRequested
 )
 
 // Audit input is deliberately limited to validated identifiers. Request bodies,
@@ -31,16 +32,12 @@ func (s *Service) audit(ctx context.Context, kind, userID, sessionID, clientID s
 		status = securityevent.StatusBlocked
 		s.logger.WarnContext(ctx, "OAuth refresh reuse revoked a connection", "client_id", clientID, "session_id", sessionID, "user_id", userID)
 	}
-	if s.repos.SecurityEvents == nil {
-		return
-	}
-	event := securityevent.New(sdk.IDGenerator{}, kind, status, s.now())
-	event.UserID = userID
-	event.Details = map[string]any{"client_id": clientID}
+	in := securityevent.Input{UserID: userID, Type: kind, Status: status, Details: map[string]any{"client_id": clientID}}
 	if sessionID != "" {
-		event.Details["session_id"] = sessionID
+		in.Details["session_id"] = sessionID
 	}
-	if _, err := s.repos.SecurityEvents.Create(ctx, event); err != nil {
-		s.logger.WarnContext(ctx, "OAuth security event could not be recorded", "event_type", kind)
+	if p, ok := sdk.PrincipalFromContext(ctx); ok {
+		in.Actor = securityevent.Principal{Type: p.Type, ID: p.ID}
 	}
+	s.events.Record(ctx, in)
 }

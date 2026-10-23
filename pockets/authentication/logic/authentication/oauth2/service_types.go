@@ -129,8 +129,9 @@ type Introspection struct {
 type Option func(*serviceOptions)
 
 type serviceOptions struct {
-	now    func() time.Time
-	logger *slog.Logger
+	now      func() time.Time
+	logger   *slog.Logger
+	recorder *securityevent.Recorder
 }
 
 // WithClock supplies the authoritative time source; production normally uses UTC.
@@ -146,4 +147,14 @@ func WithLogger(logger *slog.Logger) Option {
 		}
 		o.logger = logger
 	}
+}
+
+// WithSecurityEventRecorder supplies the recorder OAuth2 events are recorded
+// through, so they share one recorder — ids, client attribution, correlation and
+// failure count — with the host's other recording sites. It wins over
+// Repositories.SecurityEvents. Without it New records through its own recorder
+// over Repositories.SecurityEvents with no client-info reader: IP and User-Agent
+// are recorded empty, and ids are default nanoids.
+func WithSecurityEventRecorder(recorder *securityevent.Recorder) Option {
+	return func(o *serviceOptions) { o.recorder = recorder }
 }

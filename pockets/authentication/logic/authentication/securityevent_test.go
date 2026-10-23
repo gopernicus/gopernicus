@@ -470,7 +470,6 @@ func TestSecurityEventWarnOnFailingRepo(t *testing.T) {
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
 	spy := newSpySecurityEvents()
-	spy.createErr = errors.New("boom: audit db unavailable")
 
 	users := newFakeUsers()
 	svc := newServiceWithFakes(constructorConfig{
@@ -490,7 +489,12 @@ func TestSecurityEventWarnOnFailingRepo(t *testing.T) {
 	if _, err := svc.Register(context.Background(), "warn@example.com", "password123456789", "W"); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
-	buf.Reset() // isolate the login WARN from the register WARN
+	// The recorder logs the FIRST failure in detail and then summarizes, so the
+	// audit store starts failing only after registration.
+	spy.mu.Lock()
+	spy.createErr = errors.New("boom: audit db unavailable")
+	spy.mu.Unlock()
+	buf.Reset()
 	if _, _, err := svc.Login(context.Background(), "warn@example.com", "password123456789"); err != nil {
 		t.Fatalf("Login: %v", err)
 	}
@@ -501,7 +505,7 @@ func TestSecurityEventWarnOnFailingRepo(t *testing.T) {
 	}
 	t.Logf("captured WARN: %s", line)
 
-	for _, want := range []string{"security event write failed", "event_type=login", "status=success", "error_kind=unknown", "level=WARN"} {
+	for _, want := range []string{"msg=audit_write_failed", "event_type=login", "status=success", "error_kind=unknown", "level=WARN"} {
 		if !strings.Contains(line, want) {
 			t.Errorf("WARN line missing %q: %s", want, line)
 		}

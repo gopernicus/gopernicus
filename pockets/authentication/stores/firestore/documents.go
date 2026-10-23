@@ -167,7 +167,7 @@ type apiKeyDoc struct {
 	CreatedAt        time.Time `firestore:"created_at"`
 }
 
-// securityEventDoc is one security_events document (migration 0008): the
+// securityEventDoc is one security_events document (migrations 0008, 0021): the
 // append-only audit rail. Details is JSON TEXT, exactly as both SQL adapters
 // store it, and deliberately NOT a native Firestore map.
 //
@@ -192,6 +192,8 @@ type securityEventDoc struct {
 	Details     string    `firestore:"details"`
 	IPAddress   string    `firestore:"ip_address"`
 	UserAgent   string    `firestore:"user_agent"`
+	RequestID   string    `firestore:"request_id"`
+	TraceID     string    `firestore:"trace_id"`
 	CreatedAt   time.Time `firestore:"created_at"`
 }
 

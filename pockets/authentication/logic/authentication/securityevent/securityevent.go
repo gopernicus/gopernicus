@@ -4,9 +4,14 @@
 // logins (success only today), API-key authentications, and token issuance
 // (success only today; the README's "Security events" posture bullet lists the
 // denial paths that record nothing yet). It is append-only AT THE PORT: there
-// are no Update or Delete methods (structural, not enforced by a flag). The
-// database role can still rewrite the table unless the host revokes UPDATE and
-// DELETE on it — see the docs site's "Production database posture" guide.
+// are no Update or Delete methods (structural, not enforced by a flag). The SQL
+// stores' immutability migration (0022) refuses UPDATE and DELETE on the table —
+// on PostgreSQL from every role but the table owner, TRUNCATE included — and
+// the pgx store refuses to boot in production on a runtime role that could
+// rewrite it; see the docs site's "Production database posture" guide.
+//
+// Recorder is the one recording site: it stamps ids, time, correlation and
+// client attribution, and owns the never-fail write.
 //
 // Content hygiene (plan-cut amendment, SRE): Details/IPAddress/UserAgent carry
 // identifiers and key PREFIXES only — raw API keys, JWTs, session tokens,
@@ -20,6 +25,7 @@
 package securityevent
 
 import (
+	"slices"
 	"time"
 
 	"github.com/gopernicus/gopernicus/sdk"
@@ -232,6 +238,41 @@ const (
 	// TypeExternalRevocationUnavailable is recorded once per provider outage
 	// episode, not once per affected request.
 	TypeExternalRevocationUnavailable = "external_revocation_unavailable"
+
+	// Session-management vocabulary. Both are recorded on success only; UserID is
+	// the session owner.
+	//
+	// TypeSessionRevoked is one session revoked by its owner. Details carries the
+	// session id.
+	TypeSessionRevoked = "session_revoked"
+	// TypeAllSessionsRevoked is every session of a user revoked, pending
+	// approvals fenced with them.
+	TypeAllSessionsRevoked = "all_sessions_revoked"
+
+	// TypeUserDirectoryRead is one successful operator-directory read (the page
+	// or one user's summary). Actor is the principal resolved from the request
+	// context; Details carries page (true for the page read) and, for a summary,
+	// target_user_id — never a display name or address.
+	TypeUserDirectoryRead = "user_directory_read"
+
+	// OAuth2 authorization-server vocabulary (logic/authentication/oauth2 keeps
+	// its Type* names as aliases). Details carries client_id and, when known,
+	// session_id.
+	//
+	// TypeOAuth2ConsentApproved is an approved consent screen.
+	TypeOAuth2ConsentApproved = "oauth2_consent_approved"
+	// TypeOAuth2ConnectionCreated is an authorization code redeemed into a
+	// delegated session.
+	TypeOAuth2ConnectionCreated = "oauth2_connection_created"
+	// TypeOAuth2Refresh is a delegated refresh-token rotation.
+	TypeOAuth2Refresh = "oauth2_refresh"
+	// TypeOAuth2RefreshReuse is a blocked reuse of a rotated delegated refresh
+	// token; the connection is revoked.
+	TypeOAuth2RefreshReuse = "oauth2_refresh_reuse"
+	// TypeOAuth2TokenExchanged is a delegated token exchange.
+	TypeOAuth2TokenExchanged = "oauth2_token_exchanged"
+	// TypeOAuth2RevocationRequested is a client-requested revocation.
+	TypeOAuth2RevocationRequested = "oauth2_revocation_requested"
 )
 
 // Status vocabulary (design §5.1).
@@ -245,6 +286,33 @@ const (
 	// rate-limited login, a revoked API key).
 	StatusBlocked = "blocked"
 )
+
+// MaxCorrelationIDLen is the longest RequestID or TraceID the Recorder stamps,
+// in bytes. A longer id, or one carrying a byte outside printable ASCII, is
+// recorded blank — never truncated and never refused.
+const MaxCorrelationIDLen = 128
+
+// types is the registry Types returns: every event type this pocket records.
+var types = []string{
+	TypeRegister, TypeLogin, TypeLogout, TypePasswordChange, TypePasswordReset,
+	TypePasswordSet, TypePasswordRemoveCodeSent, TypePasswordRemoved, TypeEmailVerified,
+	TypeOAuthLogin, TypeOAuthRegister, TypeOAuthLinkVerified, TypeOAuthLinked,
+	TypeOAuthUnlinkCodeSent, TypeOAuthUnlinked, TypeAPIKeyAuth, TypeTokenIssued,
+	TypeRefresh, TypeRefreshReuse, TypeChallengeLockout,
+	TypeInvitationCreated, TypeInvitationGranted, TypeInvitationDeclined, TypeInvitationCancelled,
+	TypeStepUpChallengeSent, TypeStepUp,
+	TypeEmailChangeCodeSent, TypeEmailChanged, TypeEmailRemoved,
+	TypePhoneChangeCodeSent, TypePhoneChanged, TypePhoneRemoved, TypeIdentifierUsesChanged,
+	TypeUserDeactivated, TypeUserReactivated,
+	TypeVerificationResendRequested, TypeVerificationResendIssued,
+	TypePasswordlessProvisioned, TypePasswordlessAdopted, TypePasswordlessStart, TypePasswordlessLogin,
+	TypeServiceAccountCreated, TypeAPIKeyMinted, TypeAPIKeyRevoked,
+	TypeExternalSubjectProvisioned, TypeExternalSubjectUnknown, TypeExternalSubjectCollision,
+	TypeExternalSubjectDenied, TypeExternalRevocationUnavailable,
+	TypeSessionRevoked, TypeAllSessionsRevoked, TypeUserDirectoryRead,
+	TypeOAuth2ConsentApproved, TypeOAuth2ConnectionCreated, TypeOAuth2Refresh,
+	TypeOAuth2RefreshReuse, TypeOAuth2TokenExchanged, TypeOAuth2RevocationRequested,
+}
 
 // Principal is the effective actor (an AV5 subject_type/subject_id pair) that
 // triggered an event, when one is resolved — a machine identity for an API-key
@@ -260,7 +328,10 @@ type Principal struct {
 // SecurityEvent is one append-only audit row. UserID and Actor are both optional
 // (a failed login for an unknown email has neither a user nor a distinct actor);
 // Details is an open bag of identifiers and key prefixes (never secrets — see the
-// package doc). CreatedAt is the ordering key, tie-broken by ID.
+// package doc). RequestID and TraceID correlate the row with the request and
+// trace that produced it; empty when the context carried none or the Recorder
+// blanked one (MaxCorrelationIDLen). CreatedAt is the ordering key, tie-broken by
+// ID.
 type SecurityEvent struct {
 	ID          string
 	UserID      string // optional
@@ -270,7 +341,16 @@ type SecurityEvent struct {
 	Details     map[string]any
 	IPAddress   string
 	UserAgent   string
+	RequestID   string
+	TraceID     string
 	CreatedAt   time.Time
+}
+
+// Types returns every event type the authentication pocket records, in no
+// particular order. event_type is free TEXT at rest: a type a host bridges into
+// the rail (an authorization denial, say) is valid there without being listed.
+func Types() []string {
+	return slices.Clone(types)
 }
 
 // New builds a SecurityEvent of eventType/eventStatus as of now, minting its ID

@@ -3353,7 +3353,9 @@ credential rail is unwired.
   and development WARNs. Audit content carries
   identifiers, key PREFIXES, kind, and purpose ONLY — raw codes, tokens, JWTs,
   passwords, provider tokens, and unmasked destinations never land in it. An
-  audit-write failure is logged at WARN and NEVER fails the auth flow.
+  audit-write failure NEVER fails the auth flow: it is logged (`audit_write_failed`),
+  counted (`Components.AuditWriteFailures()`) and reported to
+  `WithAuditWriteObserver` — see [the recorder](#the-recorder-one-per-pocket).
 - **PII masking / retention / redress.** Identifier values are masked in reads and
   in audit rows — except the invitation rail, whose `invitation_created`,
   `invitation_granted` and resend rows carry the raw invitee address in
@@ -3411,9 +3413,84 @@ CALL rather than per state transition — a replayed revoke of the same key writ
 a second row, because the revoke path carries only the key id and
 `APIKeyRepository` has no Get-by-id to read the prior state. Their `Actor` is the
 principal resolved from the request context, never a caller-supplied creator
-string. The forgot-password *request* records nothing (it must not reveal whether
-an address exists). There is no HTTP read surface — query the table, or see the
-proof host's dev-only debug route.
+string. Session management records `session_revoked` (Details `session_id`) and
+`all_sessions_revoked`; the operator directory records `user_directory_read` once
+per successful `ListUsers` or `GetUserSummary` call (`Actor` from
+`sdk.PrincipalFromContext`; Details `page` and, for one user, `target_user_id` —
+signatures unchanged); the OAuth2 server records `oauth2_consent_approved`,
+`oauth2_connection_created`, `oauth2_refresh`, `oauth2_refresh_reuse` (blocked),
+`oauth2_token_exchanged` and `oauth2_revocation_requested` (Details `client_id`,
+`session_id`; `Actor` when the context carries a principal). The forgot-password
+*request* records nothing (it must not reveal whether an address exists). There is
+no HTTP read surface — query the table, or see the proof host's dev-only debug
+route.
+
+Every type has a `securityevent.Type*` constant, and `securityevent.Types()`
+returns the registry; `oauth2.Type*` are aliases of the `TypeOAuth2*` constants.
+`event_type` is free TEXT at rest, so a rename orphans rows — the registry test
+pins every value. **Host-bridged types are free TEXT outside `Types()`**: the
+registry names only what this pocket records, and a type a host bridges into the
+rail (the authorization pocket's decision events, say) is valid there without
+being listed.
+
+### Correlation
+
+Every row carries `RequestID` and `TraceID`, stamped by the recorder from
+`sdk.RequestIDFromContext` and `sdk.TraceIDFromContext` (the host's
+`web.RequestID()` middleware and tracing). An id longer than
+`securityevent.MaxCorrelationIDLen` (128) bytes, or carrying a byte outside
+printable ASCII, is recorded BLANK — never truncated and never refused, so a
+client cannot fail a write with an oversized `X-Request-ID`. Stores persist the
+two ids as given. The SQL stores add them in migration `0021`, together with the
+evidence columns `seq` (pgx) and `recorded_at` (the database clock) that no store
+reads or writes, and make the table immutable in `0022`; see the
+[pgx](stores/pgx/README.md#audit-rail-0021-and-0022) and
+[turso](stores/turso/README.md#audit-rail-0021-and-0022) store READMEs.
+
+### The recorder (one per pocket)
+
+`securityevent.Recorder` is the single recording site:
+`securityevent.NewRecorder(repo, ids, now, logger, opts...)` builds one, and
+`Record(ctx, securityevent.Input{UserID, Actor, Type, Status, Details})` fills the
+id, the timestamp, the correlation ids and — through
+`securityevent.WithClientInfoReader` — the client IP and User-Agent. A nil
+recorder, or one without a repository, records nothing. The write runs detached
+from the request's cancellation (`context.WithoutCancel`) with a two-second
+bound, so a client that disconnects cannot cancel its own failed-login row.
+
+**One recorder.** `New` builds ONE from `Repositories.SecurityEvents`, the
+`IDs` strategy and the logger, attributing rows through the pocket's client-info
+carrier, and exposes it as `Components.SecurityEvents`. The service, its external
+engine, the OAuth2 server and the invitation service all record through it — each
+takes it through one option name (`authlogic.WithSecurityEventRecorder`,
+`oauth2.WithSecurityEventRecorder`, `invitations.WithSecurityEventRecorder`; a
+standalone `NewExternalAuthenticator` takes
+`authlogic.WithExternalSecurityEventRecorder`). A host or bridge that records
+into the rail accepts `interface{ Record(context.Context, securityevent.Input) }`
+and is handed `Components.SecurityEvents` — it never builds a second recorder, so
+`Components.AuditWriteFailures()` counts every lost row. Constructed directly,
+each logic package builds a private recorder when none is passed:
+`authlogic.New` and `NewExternalAuthenticator` over their repository with the
+client-info carrier; `invitations.New` over `WithSecurityEvents` the same way
+(the recorder wins over `WithSecurityEvents`; both with different repositories is
+`invitations.ErrSecurityEventsConflict`); `oauth2.New` over
+`Repositories.SecurityEvents` with no client-info reader, so IP and User-Agent are
+empty. A private recorder's failures are not in the root count.
+
+**Write failures.** A failed write is lost, and the flow completes. The first
+failure logs one WARN `audit_write_failed` with `event_type`, `status` and
+`error_kind` only; while failures continue, at most one `audit_write_failed
+count=N` line per minute follows (N failures since the previous line), never one
+line per failure. Every failure increments `Components.AuditWriteFailures()` and
+calls the observer set with `authentication.WithAuditWriteObserver(observer)` —
+synchronously, with `securityevent.WriteFailure{EventType, EventStatus,
+ErrorKind}`, under a context that keeps the request's values but not its
+cancellation. The observer must return promptly.
+
+**The failure matrix.** Authentication FAILS OPEN: the flow completes and the
+row is lost; the counter, the observer and the `audit_write_failed` line see it.
+Authorization FAILS CLOSED: a mutation rolls back with its audit row. Secrets
+FAILS CLOSED: the read or write fails with its audit row.
 
 ## Sessions, access JWTs, and refresh rotation (2026-07-11)
 

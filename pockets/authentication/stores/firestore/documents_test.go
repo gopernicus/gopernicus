@@ -2,7 +2,12 @@ package firestore
 
 import (
 	"maps"
+	"strings"
 	"testing"
+	"time"
+
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/securityevent"
+	"github.com/gopernicus/gopernicus/sdk"
 )
 
 // awkwardKeys are the map keys a Firestore MAP field cannot carry as itself.
@@ -133,4 +138,32 @@ func sameJSON(a, b any) bool {
 		return false
 	}
 	return left == right
+}
+
+// TestSecurityEventDocCarriesCorrelation is the hermetic half of the
+// correlation round-trip (the storetest case runs on the emulator): both ids
+// reach the document and come back, a 129-byte id whole, and a document written
+// before the fields existed reads them back empty.
+func TestSecurityEventDocCarriesCorrelation(t *testing.T) {
+	long := strings.Repeat("r", securityevent.MaxCorrelationIDLen+1)
+	evt := securityevent.New(sdk.IDGenerator{}, securityevent.TypeLogin, securityevent.StatusSuccess, time.Now())
+	evt.RequestID, evt.TraceID = "req-1", long
+	doc, err := newSecurityEventDoc(evt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if doc.RequestID != "req-1" || doc.TraceID != long {
+		t.Fatalf("document ids = %q, %q", doc.RequestID, doc.TraceID)
+	}
+	got, err := doc.toDomain()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.RequestID != "req-1" || got.TraceID != long {
+		t.Fatalf("read back ids = %q, %q", got.RequestID, got.TraceID)
+	}
+	doc.RequestID, doc.TraceID = "", ""
+	if legacy, err := doc.toDomain(); err != nil || legacy.RequestID != "" || legacy.TraceID != "" {
+		t.Fatalf("legacy document = %+v, %v", legacy, err)
+	}
 }

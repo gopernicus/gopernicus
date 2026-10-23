@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/securityevent"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/session"
 	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/pkg/cryptids"
@@ -29,6 +30,7 @@ type Service struct {
 	config   Config
 	now      func() time.Time
 	logger   *slog.Logger
+	events   *securityevent.Recorder
 }
 
 func New(repos Repositories, signer cryptids.JWTSigner, resolver ClientResolver, verifier TokenVerifier, mode environment.Mode, cfg Config, opts ...Option) (*Service, error) {
@@ -92,7 +94,11 @@ func New(repos Repositories, signer cryptids.JWTSigner, resolver ClientResolver,
 		return nil, fmt.Errorf("oauth2: access lifetime exceeds session lifetime: %w", sdk.ErrInvalidInput)
 	}
 	cfg.ConfidentialSecretHashes = slices.Clone(cfg.ConfidentialSecretHashes)
-	return &Service{repos: repos, signer: signer, resolver: resolver, verifier: verifier, config: cfg, now: o.now, logger: o.logger}, nil
+	events := o.recorder
+	if events == nil {
+		events = securityevent.NewRecorder(repos.SecurityEvents, sdk.IDGenerator{}, o.now, o.logger)
+	}
+	return &Service{repos: repos, signer: signer, resolver: resolver, verifier: verifier, config: cfg, now: o.now, logger: o.logger, events: events}, nil
 }
 
 func (s *Service) Metadata() Metadata {

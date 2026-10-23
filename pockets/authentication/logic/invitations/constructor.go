@@ -2,11 +2,20 @@ package invitations
 
 import (
 	"fmt"
+	"log/slog"
 	"reflect"
+	"time"
 
+	authlogic "github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/securityevent"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/delivery"
 	"github.com/gopernicus/gopernicus/sdk"
 )
+
+// ErrSecurityEventsConflict is returned by New when WithSecurityEvents names a
+// repository other than the one the WithSecurityEventRecorder recorder writes
+// to: the recorder wins, so the other repository would silently receive nothing.
+var ErrSecurityEventsConflict = fmt.Errorf("invitations: WithSecurityEvents and WithSecurityEventRecorder name different repositories: %w", sdk.ErrInvalidInput)
 
 // New constructs invitation use cases over host-owned storage and grant policy.
 // Its caller authorizes operations before invoking them.
@@ -40,6 +49,9 @@ func New(repo InvitationRepository, granter Granter, opts ...Option) (*Service, 
 			return nil, fmt.Errorf("invitations: dependency contains a typed nil: %w", sdk.ErrInvalidInput)
 		}
 	}
+	if d.SecurityRecorder != nil && d.SecurityEvents != nil && !sameRepository(d.SecurityEvents, d.SecurityRecorder.Repository()) {
+		return nil, ErrSecurityEventsConflict
+	}
 	var err error
 	d.BodySenders, err = delivery.CopyBodySenders(d.BodySenders)
 	if err != nil {
@@ -59,4 +71,27 @@ func nilDependency(value any) bool {
 		return v.IsNil()
 	}
 	return false
+}
+
+// securityEventRecorder returns the recorder the service records through: the
+// WithSecurityEventRecorder one, else a recorder of its own over SecurityEvents
+// that attributes rows through the authentication pocket's client-info carrier.
+// The service's own recorder counts its failures apart from every other
+// recording site.
+func (d constructorConfig) securityEventRecorder(clock func() time.Time, logger *slog.Logger) *securityevent.Recorder {
+	if d.SecurityRecorder != nil {
+		return d.SecurityRecorder
+	}
+	return securityevent.NewRecorder(d.SecurityEvents, d.IDs, clock, logger, securityevent.WithClientInfoReader(authlogic.ClientInfoFromContext))
+}
+
+// sameRepository reports whether a and b are the same repository. Values of
+// one dynamic type that cannot be compared are never the same.
+func sameRepository(a, b securityevent.SecurityEventRepository) (same bool) {
+	defer func() {
+		if recover() != nil {
+			same = false
+		}
+	}()
+	return a == b
 }

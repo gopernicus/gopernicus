@@ -3,7 +3,7 @@
 // module graph (the load-bearing opt-out property). It owns the SQL; the HOST owns its database lifecycle. It is the
 // dialect sibling of pockets/authentication/stores/turso: same surface plus the
 // Postgres-only WithSchema option — SQLite has no schemas — same migration version
-// set (0001–0020 with 0017 absent, seventeen tables backing the 20-port bundle; 0014 adds the
+// set (0001–0022 with 0017 absent, seventeen tables backing the 20-port bundle; 0014 adds the
 // account-lifecycle columns to users rather than a table, and auth owns no
 // delivery table), same port semantics — a host switches dialect by one import +
 // one Open call. Secrets are persisted as digests, never plaintext (session
@@ -91,6 +91,12 @@ var probeTables = append(append(append([]string{}, legacyProbeTables...), oauthP
 // applies the schema (see ExportMigrations) and the store just provides repos.
 // db is the connector wrapper (error mapping + Tx), not a raw *pgxpool.Pool.
 // WithSchema qualifies both the probe and every statement the stores run.
+//
+// Last it probes the runtime role's posture on AuditTables under the
+// RuntimeMode db was opened with (pgxdb.DB.ProbeAppendOnly): in production it
+// returns pgxdb.ErrAppendOnlyTableWritable for a role that could rewrite
+// security_events (unless Config.AppendOnlyWritableAcknowledged) and
+// pgxdb.ErrAppendOnlyTableUnwritable for one that cannot append to it.
 func Repositories(ctx context.Context, db *pgxdb.DB, opts ...Option) (auth.Repositories, error) {
 	if db == nil {
 		return auth.Repositories{}, fmt.Errorf("authentication pgx: nil database: %w", sdk.ErrInvalidInput)
@@ -113,6 +119,9 @@ func Repositories(ctx context.Context, db *pgxdb.DB, opts ...Option) (auth.Repos
 		return auth.Repositories{}, err
 	}
 	if err := s.probeTables(ctx, db, externalProbeTables); err != nil {
+		return auth.Repositories{}, err
+	}
+	if err := db.ProbeAppendOnly(ctx, AuditTables(opts...)...); err != nil {
 		return auth.Repositories{}, err
 	}
 	oauth2Store := NewOAuth2Store(db, opts...)
@@ -159,6 +168,38 @@ var probeColumns = []struct{ table, column, migration string }{
 	{invitationsTable, "resolved_subject_type", "0018_invitation_acceptance.sql"},
 	{sessionsTable, "session_profile", "0019_oauth2_sessions.sql"},
 	{sessionsTable, "delegation", "0019_oauth2_sessions.sql"},
+	{securityEventsTable, "request_id", "0021_security_events_integrity.sql"},
+}
+
+// securityEventsRefuseWrite is the trigger function migration 0022 creates, and
+// securityEventsRefuseWriteBody its body exactly as the catalog's prosrc holds
+// it — the text between the migration's dollar quotes. A test pins it to the
+// embedded 0022, so the posture probe verifies the trigger the store ships.
+const (
+	securityEventsRefuseWrite     = "security_events_refuse_write"
+	securityEventsRefuseWriteBody = `
+BEGIN
+  IF pg_catalog.pg_has_role(current_user, (SELECT c.relowner FROM pg_catalog.pg_class c WHERE c.oid = TG_RELID), 'MEMBER') THEN
+    IF TG_OP = 'UPDATE' THEN RETURN NEW; END IF;
+    RETURN OLD;
+  END IF;
+  RAISE EXCEPTION 'security_events is append-only' USING ERRCODE = '42501';
+END
+`
+)
+
+// AuditTables are the append-only tables this store owns, as the posture probe
+// judges them: security_events, under the schema WithSchema selects, verified
+// against the trigger function migration 0022 ships. Repositories probes them
+// with pgxdb.DB.ProbeAppendOnly; a migrator preflights the runtime role with
+// pgxdb.InspectTablePrivileges over the same list, so both decide identically.
+// A nil option panics, as it does in the store constructors.
+func AuditTables(opts ...Option) []pgxdb.AppendOnlyTable {
+	s := qualified{schema: applyOptions(opts).schema}
+	return []pgxdb.AppendOnlyTable{{
+		Name:      s.table(securityEventsTable),
+		Canonical: []pgxdb.TriggerBody{{Function: securityEventsRefuseWrite, Body: securityEventsRefuseWriteBody}},
+	}}
 }
 
 // probeColumnSQL is the default column probe. It is deliberately NOT filtered by
