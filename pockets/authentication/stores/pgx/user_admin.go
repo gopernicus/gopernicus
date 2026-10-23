@@ -54,10 +54,10 @@ func NewUserAdminStore(db *pgxdb.DB, opts ...Option) *UserAdminStore {
 // keyset predicate lives in a WHERE clause, where an output-column alias would not
 // resolve.
 func userSummarySelect(s qualified) string {
-	return `SELECT id, display_name, status, status_changed_at, created_at, updated_at, primary_email, primary_email_verified_at
+	return `SELECT id, display_name, status, status_changed_at, erased_at, created_at, updated_at, primary_email, primary_email_verified_at
 	FROM (
 		SELECT u.id AS id, u.display_name AS display_name, u.status AS status,
-			u.status_changed_at AS status_changed_at, u.created_at AS created_at,
+			u.status_changed_at AS status_changed_at, u.erased_at AS erased_at, u.created_at AS created_at,
 			u.updated_at AS updated_at,
 			i.normalized_value AS primary_email, i.verified_at AS primary_email_verified_at
 		FROM ` + s.table(usersTable) + ` u
@@ -77,6 +77,7 @@ type userSummaryRow struct {
 	DisplayName            string     `db:"display_name"`
 	Status                 string     `db:"status"`
 	StatusChangedAt        *time.Time `db:"status_changed_at"`
+	ErasedAt               *time.Time `db:"erased_at"`
 	CreatedAt              time.Time  `db:"created_at"`
 	UpdatedAt              time.Time  `db:"updated_at"`
 	PrimaryEmail           *string    `db:"primary_email"`
@@ -87,7 +88,7 @@ func (r userSummaryRow) toDomain() user.Summary {
 	s := user.Summary{
 		ID:              r.ID,
 		DisplayName:     r.DisplayName,
-		Status:          user.NormalizeStatus(user.Status(r.Status)),
+		Status:          projectStatus(r.Status, r.ErasedAt),
 		StatusChangedAt: pgxdb.FromNullTime(r.StatusChangedAt),
 		CreatedAt:       r.CreatedAt.UTC(),
 		UpdatedAt:       r.UpdatedAt.UTC(),
@@ -138,7 +139,9 @@ func (s *UserAdminStore) GetSummary(ctx context.Context, id string) (user.Summar
 // transaction contract; the ordering inside it is deliberate:
 //
 //  1. SELECT ... FOR UPDATE locks the user row, so a concurrent
-//     CreateForActiveUser blocks here rather than reading a stale status;
+//     CreateForActiveUser blocks here rather than reading a stale status; an
+//     erased user replays a deactivation (Changed=false, StatusErased) and
+//     refuses a reactivation with user.ErrErased, decided in this locked read;
 //  2. an unchanged desired status returns early with Changed=false, holding no
 //     write and leaving auth_revision alone — the idempotent replay;
 //  3. the UPDATE writes status/status_changed_at/updated_at and increments
@@ -152,17 +155,27 @@ func (s *UserAdminStore) SetStatus(ctx context.Context, id string, status user.S
 	if !status.Valid() {
 		return user.StatusChange{}, fmt.Errorf("authentication pgx store: %q: %w", status, user.ErrInvalidStatus)
 	}
+	if status == user.StatusErased {
+		return user.StatusChange{}, user.ErrErased
+	}
 	now = now.UTC()
 
 	var out user.StatusChange
 	err := s.db.InTx(ctx, func(tx *pgxdb.Tx) error {
 		var (
-			current   string
-			changedAt *time.Time
+			current             string
+			changedAt, erasedAt *time.Time
 		)
-		lockQ := `SELECT status, status_changed_at FROM ` + s.table(usersTable) + ` WHERE id = @id FOR UPDATE`
-		if err := tx.QueryRow(ctx, lockQ, pgx.NamedArgs{"id": id}).Scan(&current, &changedAt); err != nil {
+		lockQ := `SELECT status, status_changed_at, erased_at FROM ` + s.table(usersTable) + ` WHERE id = @id FOR UPDATE`
+		if err := tx.QueryRow(ctx, lockQ, pgx.NamedArgs{"id": id}).Scan(&current, &changedAt, &erasedAt); err != nil {
 			return pgxdb.MapError(err)
+		}
+		if erasedAt != nil {
+			if status == user.StatusActive {
+				return user.ErrErased
+			}
+			out = user.StatusChange{Status: user.StatusErased, Changed: false, ChangedAt: pgxdb.FromNullTime(changedAt)}
+			return nil
 		}
 
 		if user.NormalizeStatus(user.Status(current)) == status {

@@ -97,6 +97,12 @@ func (r securityEventRow) toDomain() securityevent.SecurityEvent {
 
 // Create appends an audit row and returns the stored record.
 func (s *SecurityEventStore) Create(ctx context.Context, evt securityevent.SecurityEvent) (securityevent.SecurityEvent, error) {
+	return insertSecurityEvent(ctx, s.db, evt)
+}
+
+// insertSecurityEvent appends evt by plain INSERT through q — the pool, or the
+// transaction of a write that records its own evidence.
+func insertSecurityEvent(ctx context.Context, q tursodb.Querier, evt securityevent.SecurityEvent) (securityevent.SecurityEvent, error) {
 	details, err := marshalDetails(evt.Details)
 	if err != nil {
 		return securityevent.SecurityEvent{}, err
@@ -104,17 +110,17 @@ func (s *SecurityEventStore) Create(ctx context.Context, evt securityevent.Secur
 	// Empty ID → the sdk.DatabaseID strategy (amended D10): omit the id
 	// column so the schema default generates the key, read back with RETURNING.
 	if evt.ID == "" {
-		const q = `INSERT INTO security_events (user_id, actor_type, actor_id, event_type, event_status, details, ip_address, user_agent, request_id, trace_id, created_at)
+		const sql = `INSERT INTO security_events (user_id, actor_type, actor_id, event_type, event_status, details, ip_address, user_agent, request_id, trace_id, created_at)
 			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`
-		if err := s.db.QueryRow(ctx, q,
+		if err := q.QueryRow(ctx, sql,
 			evt.UserID, evt.Actor.Type, evt.Actor.ID, evt.EventType, evt.EventStatus,
 			details, evt.IPAddress, evt.UserAgent, evt.RequestID, evt.TraceID, tursodb.FormatTime(evt.CreatedAt),
 		).Scan(&evt.ID); err != nil {
 			return securityevent.SecurityEvent{}, tursodb.MapError(err)
 		}
 	} else {
-		const q = `INSERT INTO security_events (` + securityEventColumns + `) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-		if _, err := s.db.Exec(ctx, q,
+		const sql = `INSERT INTO security_events (` + securityEventColumns + `) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+		if _, err := q.Exec(ctx, sql,
 			evt.ID, evt.UserID, evt.Actor.Type, evt.Actor.ID, evt.EventType, evt.EventStatus,
 			details, evt.IPAddress, evt.UserAgent, evt.RequestID, evt.TraceID, tursodb.FormatTime(evt.CreatedAt),
 		); err != nil {

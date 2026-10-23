@@ -2,10 +2,14 @@ package turso
 
 import (
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/maintenance"
 )
 
 // canonicalMigrations is the frozen auth-v3 canonical filename set (both dialect
@@ -42,6 +46,10 @@ var canonicalMigrations = []string{
 	// here), then its immutability trigger pair. Neither adds a table.
 	"0021_security_events_integrity.sql",
 	"0022_security_events_immutable.sql",
+	// SOC 2 S3: the retention indexes and the users.erased_at marker, then the
+	// rail's floor table. 0024 adds the one table maintenance reads.
+	"0023_retention.sql",
+	"0024_security_events_retention.sql",
 }
 
 // expectedTables are every CREATE TABLE the canonical set must define.
@@ -63,6 +71,7 @@ var expectedTables = []string{
 	"oauth_authorization_codes",
 	"oauth_refresh_history",
 	"external_subjects",
+	"security_events_retention",
 }
 
 // expectedIndexes are the auth-v3 indexes AV3-2.1 lands: the identifier claim /
@@ -87,6 +96,10 @@ var expectedIndexes = []string{
 	"idx_users_created_at_id",
 	// CHAU-6.1: the challenge single-active claim moves to (subject_key, purpose).
 	"idx_challenges_subject_purpose",
+	// SOC 2 S3: the purge predicates' access paths (0023; the OAuth2 codes and
+	// refresh history keep their 0019 expiry indexes).
+	"idx_sessions_expires_at", "idx_authentication_grants_expires_at", "idx_contact_changes_expires_at",
+	"idx_oauth_states_expires_at", "idx_challenges_expires_at", "idx_oauth_clients_expires_at",
 }
 
 // expectedColumns are the schema additions to existing tables this task lands.
@@ -105,6 +118,7 @@ var expectedColumns = []string{
 	"request_id",             // security_events (0021)
 	"trace_id",               // security_events (0021)
 	"recorded_at",            // security_events (0021)
+	"erased_at",              // users (0023)
 }
 
 func migrationNames(t *testing.T) []string {
@@ -191,6 +205,36 @@ func TestMigrationParity(t *testing.T) {
 	for i := range own {
 		if own[i] != sibling[i] {
 			t.Errorf("filename mismatch at %d: turso %q vs pgx %q", i, own[i], sibling[i])
+		}
+	}
+}
+
+// TestRetentionMigrationShape pins 0023's order (indexes first, the users
+// column last) and 0024's floor: re-runnable (IF NOT EXISTS + INSERT OR
+// IGNORE, so a re-run keeps an existing row), floor_days >= 1, and the 365-day
+// row pinned to MinSecurityEventRetention less the day of clock-skew margin.
+func TestRetentionMigrationShape(t *testing.T) {
+	b, err := fs.ReadFile(MigrationsFS, MigrationsDir+"/"+retentionMigration)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const addColumn = "ALTER TABLE users ADD COLUMN erased_at TEXT NULL;\n"
+	if sql := string(b); !strings.HasSuffix(sql, addColumn) || strings.Index(sql, "CREATE INDEX") > strings.Index(sql, addColumn) {
+		t.Errorf("%s must build its indexes first and END with %q", retentionMigration, addColumn)
+	}
+	b, err = fs.ReadFile(MigrationsFS, MigrationsDir+"/"+railRetentionFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	floorDays := int((maintenance.MinSecurityEventRetention - 24*time.Hour) / (24 * time.Hour))
+	for _, want := range []string{
+		"CREATE TABLE IF NOT EXISTS " + retentionFloorTable + " (",
+		"id         INTEGER PRIMARY KEY CHECK (id = 1),",
+		"floor_days INTEGER NOT NULL CHECK (floor_days >= 1)",
+		fmt.Sprintf("INSERT OR IGNORE INTO %s (id, floor_days) VALUES (1, %d);", retentionFloorTable, floorDays),
+	} {
+		if !strings.Contains(string(b), want) {
+			t.Errorf("%s lacks %q", railRetentionFile, want)
 		}
 	}
 }

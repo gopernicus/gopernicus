@@ -2,10 +2,15 @@ package pgx
 
 import (
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/securityevent"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/maintenance"
 )
 
 // canonicalMigrations is the frozen auth-v3 canonical filename set (both dialect
@@ -42,6 +47,10 @@ var canonicalMigrations = []string{
 	// immutability trigger pair. Neither adds a table.
 	"0021_security_events_integrity.sql",
 	"0022_security_events_immutable.sql",
+	// SOC 2 S3: the retention indexes and the users.erased_at marker, then the
+	// rail's floor and owner-only purge functions. Neither adds a table.
+	"0023_retention.sql",
+	"0024_security_events_retention.sql",
 }
 
 // expectedTables are every CREATE TABLE the canonical set must define.
@@ -82,6 +91,10 @@ var expectedIndexes = []string{
 	"idx_users_created_at_id",
 	// CHAU-6.1: the challenge single-active claim moves to (subject_key, purpose).
 	"idx_challenges_subject_purpose",
+	// SOC 2 S3: the purge predicates' access paths (0023).
+	"idx_sessions_expires_at", "idx_authentication_grants_expires_at", "idx_contact_changes_expires_at",
+	"idx_oauth_states_expires_at", "idx_challenges_expires_at", "idx_oauth_authorization_codes_expires_at",
+	"idx_oauth_clients_expires_at", "idx_oauth_refresh_history_expires_at",
 }
 
 // expectedColumns are the schema additions to existing tables this task lands.
@@ -99,6 +112,7 @@ var expectedColumns = []string{
 	"request_id",             // security_events (0021)
 	"trace_id",               // security_events (0021)
 	"recorded_at",            // security_events (0021)
+	"erased_at",              // users (0023)
 }
 
 func migrationNames(t *testing.T) []string {
@@ -186,5 +200,117 @@ func TestMigrationParity(t *testing.T) {
 		if own[i] != sibling[i] {
 			t.Errorf("filename mismatch at %d: pgx %q vs turso %q", i, own[i], sibling[i])
 		}
+	}
+}
+
+// readMigration returns one embedded migration's text.
+func readMigration(t *testing.T, name string) string {
+	t.Helper()
+	b, err := fs.ReadFile(MigrationsFS, MigrationsDir+"/"+name)
+	if err != nil {
+		t.Fatalf("read %s: %v", name, err)
+	}
+	return string(b)
+}
+
+// retentionIndexes are the eight indexes 0023 builds, in file order.
+var retentionIndexes = []struct{ name, table string }{
+	{"idx_sessions_expires_at", sessionsTable},
+	{"idx_authentication_grants_expires_at", authGrantsTable},
+	{"idx_contact_changes_expires_at", contactChangesTable},
+	{"idx_oauth_states_expires_at", oauthStatesTable},
+	{"idx_challenges_expires_at", challengesTable},
+	{"idx_oauth_authorization_codes_expires_at", oauthCodesTable},
+	{"idx_oauth_clients_expires_at", oauthClientsTable},
+	{"idx_oauth_refresh_history_expires_at", oauthHistoryTable},
+}
+
+// TestRetentionMigrationOrder pins 0023's lock discipline: the lock timeout
+// first, every index IF NOT EXISTS under its exact name (a CONCURRENTLY
+// pre-build then makes it a no-op), and the ACCESS EXCLUSIVE ADD COLUMN on
+// users last, after every index build.
+func TestRetentionMigrationOrder(t *testing.T) {
+	sql := readMigration(t, retentionMigration)
+	if !strings.HasPrefix(sql, "SET LOCAL lock_timeout = '5s';\n") {
+		t.Errorf("%s must begin with SET LOCAL lock_timeout", retentionMigration)
+	}
+	const addColumn = "ALTER TABLE users ADD COLUMN IF NOT EXISTS erased_at TIMESTAMPTZ NULL;\n"
+	if !strings.HasSuffix(sql, addColumn) {
+		t.Errorf("%s must END with %q", retentionMigration, addColumn)
+	}
+	last := -1
+	for _, idx := range retentionIndexes {
+		stmt := fmt.Sprintf("CREATE INDEX IF NOT EXISTS %s ON %s (expires_at);", idx.name, idx.table)
+		at := strings.Index(sql, stmt)
+		if at < 0 {
+			t.Errorf("%s lacks %q", retentionMigration, stmt)
+			continue
+		}
+		if at < last {
+			t.Errorf("%s: %s is out of order", retentionMigration, idx.name)
+		}
+		last = at
+	}
+	if strings.Contains(sql, "ON invitations") {
+		t.Errorf("%s indexes invitations; the plan gives them none", retentionMigration)
+	}
+}
+
+// TestRailRetentionMigrationPins pins 0024 to the Go constants and its
+// load-bearing shape: the floor literal is MinSecurityEventRetention less the
+// day of clock-skew margin, the max_rows clamp is MaxBatchSize, the evidence
+// row's type is the domain's, the assertions run before anything is created,
+// the search_path pin is computed from the table's namespace with pg_temp last,
+// and EXECUTE is revoked from PUBLIC.
+func TestRailRetentionMigrationPins(t *testing.T) {
+	sql := readMigration(t, railRetentionFile)
+	floorDays := int((maintenance.MinSecurityEventRetention - 24*time.Hour) / (24 * time.Hour))
+	for _, want := range []string{
+		fmt.Sprintf("SELECT '%d days'::pg_catalog.interval", floorDays),
+		fmt.Sprintf("LEAST(GREATEST(p_max_rows, 1), %d)", maintenance.MaxBatchSize),
+		"'" + securityevent.TypeSecurityEventsPurged + "'::pg_catalog.text",
+		"CREATE OR REPLACE FUNCTION " + floorFunction + "() RETURNS pg_catalog.interval LANGUAGE sql STABLE AS",
+		"CREATE OR REPLACE FUNCTION " + purgeFunction + "(p_before pg_catalog.timestamptz, p_max_rows pg_catalog.int4)",
+		"LANGUAGE plpgsql SECURITY DEFINER AS",
+		"ORDER BY created_at, id LIMIT p_max_rows FOR UPDATE SKIP LOCKED",
+		"USING ERRCODE = '" + belowFloorSQLState + "'",
+		"IF p_before IS NULL THEN",
+		"'maintenance'::pg_catalog.text",
+		"SESSION_USER::pg_catalog.text",
+		"'ALTER FUNCTION " + purgeFunction + purgeFunctionArgs + " SET search_path = pg_catalog, %I, pg_temp'",
+		"WHERE c.oid OPERATOR(pg_catalog.=) 'security_events'::pg_catalog.regclass));",
+	} {
+		if !strings.Contains(sql, want) {
+			t.Errorf("%s lacks %q", railRetentionFile, want)
+		}
+	}
+	if !strings.HasPrefix(sql, "SET LOCAL lock_timeout = '5s';\n") {
+		t.Errorf("%s must begin with SET LOCAL lock_timeout", railRetentionFile)
+	}
+	const revoke = "REVOKE EXECUTE ON FUNCTION " + purgeFunction + purgeFunctionArgs + " FROM PUBLIC;\n"
+	if !strings.HasSuffix(sql, revoke) {
+		t.Errorf("%s must END with %q", railRetentionFile, revoke)
+	}
+	if strings.Index(sql, "pg_catalog.current_schema() IS DISTINCT FROM") > strings.Index(sql, "CREATE OR REPLACE FUNCTION") {
+		t.Errorf("%s: the assertion block must precede every CREATE", railRetentionFile)
+	}
+	for _, forbidden := range []string{"FROM CURRENT", "IMMUTABLE", "SECURITY INVOKER"} {
+		if strings.Contains(sql, forbidden) {
+			t.Errorf("%s contains %q", railRetentionFile, forbidden)
+		}
+	}
+}
+
+// TestAuditTablesListsPurgeFunction pins the one DefinerFunction AuditTables
+// hands the posture probe, schema-qualified under WithSchema; the floor
+// function is not a definer and is not listed.
+func TestAuditTablesListsPurgeFunction(t *testing.T) {
+	got := AuditTables()[0].Functions
+	if len(got) != 1 || got[0].Signature != "security_events_purge_before(pg_catalog.timestamptz, pg_catalog.int4)" {
+		t.Fatalf("AuditTables().Functions = %+v", got)
+	}
+	s := disposableSchema(t, "Auth_X")
+	if got := AuditTables(WithSchema(s))[0].Functions; len(got) != 1 || got[0].Signature != `"Auth_X".security_events_purge_before(pg_catalog.timestamptz, pg_catalog.int4)` {
+		t.Fatalf("AuditTables(WithSchema).Functions = %+v", got)
 	}
 }

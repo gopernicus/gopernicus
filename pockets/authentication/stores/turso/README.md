@@ -10,12 +10,15 @@ the migrations pre-boot (`ExportMigrations`, then its own runner).
 table and ALTER-added column, refusing with `sdk.ErrNotFound` naming the missing
 table or migration file. `AuditTables()` lists the append-only tables this store
 owns with the immutability triggers `0022` creates; `Repositories` checks them
-with `db.ProbeAuditImmutable` last.
+with `db.ProbeAuditImmutable` last. The bundle fills `Maintenance`
+(`NewMaintenanceStore`, the retention port) and `UserErasure`
+(`NewErasureStore`); `ServiceAccountStore` implements
+`serviceaccount.CascadeDeleter` — see [Retention](#retention-0023-and-0024).
 
 ## Migrations
 
 `migrations/*.sql` carry the same version (filename) set as the pgx tree,
-`0001`–`0022` with `0017` absent.
+`0001`–`0024` with `0017` absent.
 
 ### Audit rail (`0021` and `0022`)
 
@@ -52,6 +55,63 @@ altered. It never refuses — SQLite has no privileges to probe.
   and a two-role posture whose runtime role holds USAGE on the
   `security_events_seq` sequence. Turso has neither roles nor a sequence.
 
+### Retention (`0023` and `0024`)
+
+Both files are **REQUIRED**: `Repositories` refuses, in every mode, a database
+without `users.erased_at` (naming `0023_retention.sql`) or without row 1 of
+`security_events_retention` (naming `0024_security_events_retention.sql`). Apply
+them in their own runner invocation; a binary built before them keeps running on
+a migrated database (a nullable column, indexes, and a table it never reads).
+
+**`0023_retention.sql`** creates the `expires_at` indexes the maintenance purges
+select through (`idx_sessions_expires_at`, `idx_authentication_grants_expires_at`,
+`idx_contact_changes_expires_at`, `idx_oauth_states_expires_at`,
+`idx_challenges_expires_at`, `idx_oauth_clients_expires_at`; the OAuth2 codes and
+refresh history keep their `0019` expiry indexes), then adds `users.erased_at`
+(`TEXT NULL`, a fixed-width `tursodb.FormatTime` timestamp) last. An erased user
+keeps `status = 'deactivated'` — every credential path already refuses it — and
+every read (`Get`, the directory, the redemption reads) projects
+`user.StatusErased` from `erased_at IS NOT NULL`.
+
+**`0024_security_events_retention.sql`** creates `security_events_retention`
+(`id INTEGER PRIMARY KEY CHECK (id = 1)`, `floor_days INTEGER NOT NULL CHECK
+(floor_days >= 1)`) and `INSERT OR IGNORE`s row 1 at 365 days, so re-running it
+keeps an existing row. **The floor is a footgun guard, not a control:** SQLite has
+no roles, and the connection that can purge can also drop the triggers. The store
+refuses a cutoff younger than `now - floor_days` with
+`maintenance.ErrBelowRetentionFloor`; the Go minimum retention (366 days) sits
+above it. There is no procedure for lowering it.
+
+**The rail purge** (`MaintenanceStore.PurgeSecurityEventsBefore`) is one short
+`BEGIN IMMEDIATE` transaction per call, in this order: capture the triggers on
+`security_events` from `sqlite_schema` (`tbl_name` matched `COLLATE NOCASE`) and
+close the rows before any DDL; `DROP TRIGGER` exactly those; delete up to `limit`
+rows with `created_at <= cutoff`, oldest first; re-execute the CAPTURED text
+verbatim; then append one `security_events_purged` row by plain INSERT
+(`actor_type='system'`, `actor_id='maintenance'`, Details `cutoff`, `count`,
+`floor_days`, `max_rows`) — after the restore, so a host `AFTER INSERT` trigger
+sees it. Restoring what was captured, never the embedded `0022`, means a host
+that declined `0022` gets no trigger back and a host-altered trigger is not
+"repaired". After COMMIT the store reads the trigger set again and logs ERROR
+`error_kind=rail_triggers_changed` when it differs from the capture. A fault or a
+cancelled context rolls the whole transaction back, triggers included.
+
+Each batch holds the database's one write lock for its length: every login waits
+behind it. Measured against a local `libsql-server` (the `-tags=integration` leg,
+`TestRailPurgeAndEraseTimings_Turso`): one 1000-row purge batch from a
+20,000-row rail took ~14 ms and one Erase ~10 ms. A remote Turso database adds
+its round trips to both; size `maintenance.Config.BatchSize` (and, if logins
+queue, pause between passes) from your own measurement.
+
+**Erasure** (`ErasureStore.Erase`) runs the port's order in one `BEGIN
+IMMEDIATE` transaction — the write lock is the row locks the pgx sibling takes —
+and appends the `user_erased` row inside it. `ServiceAccountStore.Delete`
+cascades to the account's API keys (`DeleteWithKeys` counts them), and `Create`
+refuses an owner whose `erased_at` is set with `user.ErrErased`. Known residual:
+a key minted right after a cascade of its account commits is still inserted (the
+store never refused keys for an unknown account) — it is inert, because API-key
+authentication resolves the account and finds none.
+
 ## Testing
 
 `go test ./...` is hermetic: it includes a local-file SQLite run of the
@@ -60,7 +120,12 @@ live leg runs with `-tags=integration` against `TURSO_DATABASE_URL` and
 `TURSO_AUTH_TOKEN`, skipping loudly without them. It is DESTRUCTIVE — it drops
 and re-creates every auth table — so point it only at a disposable database. Its
 reset drops the two triggers before `DELETE FROM` and re-executes the embedded
-`0022` after.
+`0022` after; it never clears `security_events_retention`, whose row survives.
+The rail-purge file cases (`maintenance_localsqlite_test.go`: the restored
+trigger set, a declined `0022`, fault injection after the drop and before
+COMMIT, a host `AFTER INSERT` trigger, the post-commit check, the floor row, a
+concurrent WAL reader) are untagged and run in `go test ./...`; their
+libSQL-server twins and the timings are in `maintenance_integration_test.go`.
 
 ```sh
 TURSO_DATABASE_URL=http://127.0.0.1:8080 TURSO_AUTH_TOKEN=local \

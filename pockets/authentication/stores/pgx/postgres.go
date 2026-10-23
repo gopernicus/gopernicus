@@ -3,7 +3,7 @@
 // module graph (the load-bearing opt-out property). It owns the SQL; the HOST owns its database lifecycle. It is the
 // dialect sibling of pockets/authentication/stores/turso: same surface plus the
 // Postgres-only WithSchema option — SQLite has no schemas — same migration version
-// set (0001–0022 with 0017 absent, seventeen tables backing the 20-port bundle; 0014 adds the
+// set (0001–0024 with 0017 absent, seventeen tables backing the 20-port bundle; 0014 adds the
 // account-lifecycle columns to users rather than a table, and auth owns no
 // delivery table), same port semantics — a host switches dialect by one import +
 // one Open call. Secrets are persisted as digests, never plaintext (session
@@ -23,6 +23,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 
 	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
 	auth "github.com/gopernicus/gopernicus/pockets/authentication"
@@ -92,11 +93,21 @@ var probeTables = append(append(append([]string{}, legacyProbeTables...), oauthP
 // db is the connector wrapper (error mapping + Tx), not a raw *pgxpool.Pool.
 // WithSchema qualifies both the probe and every statement the stores run.
 //
+// It refuses, in every mode with sdk.ErrNotFound, a database without migration
+// 0023 (the users.erased_at column) or 0024 (the rail's retention functions),
+// naming the file.
+//
 // Last it probes the runtime role's posture on AuditTables under the
 // RuntimeMode db was opened with (pgxdb.DB.ProbeAppendOnly): in production it
 // returns pgxdb.ErrAppendOnlyTableWritable for a role that could rewrite
-// security_events (unless Config.AppendOnlyWritableAcknowledged) and
-// pgxdb.ErrAppendOnlyTableUnwritable for one that cannot append to it.
+// security_events (unless Config.AppendOnlyWritableAcknowledged),
+// pgxdb.ErrAppendOnlyTableUnwritable for one that cannot append to it, and
+// pgxdb.ErrDefinerFunctionUnsafe when PUBLIC can execute the purge function or
+// its search_path is not pinned to the table's schema; an inoperative function
+// is the connector's WARN. Production also WARNs once (maintenance_execute=
+// missing) when the runtime role cannot execute the purge function: the
+// Maintenance repository this store fills then fails its rail step with
+// sdk.ErrForbidden while every other step runs.
 func Repositories(ctx context.Context, db *pgxdb.DB, opts ...Option) (auth.Repositories, error) {
 	if db == nil {
 		return auth.Repositories{}, fmt.Errorf("authentication pgx: nil database: %w", sdk.ErrInvalidInput)
@@ -121,8 +132,17 @@ func Repositories(ctx context.Context, db *pgxdb.DB, opts ...Option) (auth.Repos
 	if err := s.probeTables(ctx, db, externalProbeTables); err != nil {
 		return auth.Repositories{}, err
 	}
+	execute, err := s.probeRetentionFunctions(ctx, db)
+	if err != nil {
+		return auth.Repositories{}, err
+	}
 	if err := db.ProbeAppendOnly(ctx, AuditTables(opts...)...); err != nil {
 		return auth.Repositories{}, err
+	}
+	if !execute && db.RuntimeMode().IsProduction() {
+		slog.Default().WarnContext(ctx, "authentication pgx store: the runtime role cannot execute the rail purge function; the maintenance security_events step fails until it can",
+			"maintenance_execute", "missing", "function", purgeFunction,
+			"fix", "GRANT EXECUTE ON FUNCTION "+s.table(purgeFunction)+purgeFunctionArgs+" TO <runtime role>")
 	}
 	oauth2Store := NewOAuth2Store(db, opts...)
 	return auth.Repositories{
@@ -153,6 +173,10 @@ func Repositories(ctx context.Context, db *pgxdb.DB, opts ...Option) (auth.Repos
 		// is what routes redemption through it (CHAU-6.1).
 		Passwordless:     NewPasswordlessStore(db, opts...),
 		ExternalSubjects: NewExternalSubjectStore(db, opts...),
+		// Retention and erasure (SOC 2 S3) run on this same database: the rail
+		// purge appends its evidence to the table it purges.
+		Maintenance: NewMaintenanceStore(db, opts...),
+		UserErasure: NewErasureStore(db, opts...),
 	}, nil
 }
 
@@ -169,6 +193,7 @@ var probeColumns = []struct{ table, column, migration string }{
 	{sessionsTable, "session_profile", "0019_oauth2_sessions.sql"},
 	{sessionsTable, "delegation", "0019_oauth2_sessions.sql"},
 	{securityEventsTable, "request_id", "0021_security_events_integrity.sql"},
+	{usersTable, "erased_at", retentionMigration},
 }
 
 // securityEventsRefuseWrite is the trigger function migration 0022 creates, and
@@ -194,12 +219,46 @@ END
 // with pgxdb.DB.ProbeAppendOnly; a migrator preflights the runtime role with
 // pgxdb.InspectTablePrivileges over the same list, so both decide identically.
 // A nil option panics, as it does in the store constructors.
+//
+// It lists the one SECURITY DEFINER function migration 0024 ships beside the
+// table, security_events_purge_before, so the probe judges it too: unsafe (PUBLIC
+// EXECUTE, an unpinned search_path, another schema) refuses production;
+// inoperative WARNs. The floor function is not a definer and is not listed.
 func AuditTables(opts ...Option) []pgxdb.AppendOnlyTable {
 	s := qualified{schema: applyOptions(opts).schema}
 	return []pgxdb.AppendOnlyTable{{
 		Name:      s.table(securityEventsTable),
 		Canonical: []pgxdb.TriggerBody{{Function: securityEventsRefuseWrite, Body: securityEventsRefuseWriteBody}},
+		Functions: []pgxdb.DefinerFunction{{Signature: s.table(purgeFunction) + purgeFunctionArgs}},
 	}}
+}
+
+// probeRetentionFunctionsSQL resolves both 0024 functions on the connection's
+// search_path (or under the store's schema) and reads whether the connected
+// role may execute the purge function.
+const probeRetentionFunctionsSQL = `SELECT pg_catalog.to_regprocedure($1::pg_catalog.text) IS NOT NULL,
+	pg_catalog.to_regprocedure($2::pg_catalog.text) IS NOT NULL,
+	COALESCE(pg_catalog.has_function_privilege(pg_catalog.to_regprocedure($1::pg_catalog.text), 'EXECUTE'), FALSE)`
+
+// probeRetentionFunctions refuses a database without the 0024 functions,
+// naming the file, and reports whether the runtime role holds EXECUTE on the
+// purge function.
+func (s qualified) probeRetentionFunctions(ctx context.Context, db *pgxdb.DB) (execute bool, err error) {
+	var purge, floor bool
+	if err := db.QueryRow(ctx, probeRetentionFunctionsSQL,
+		s.table(purgeFunction)+purgeFunctionArgs, s.table(floorFunction)+floorFunctionArgs).Scan(&purge, &floor, &execute); err != nil {
+		return false, pgxdb.MapError(err)
+	}
+	for _, f := range []struct {
+		present bool
+		name    string
+	}{{purge, purgeFunction + purgeFunctionArgs}, {floor, floorFunction + floorFunctionArgs}} {
+		if !f.present {
+			return false, fmt.Errorf("authentication pgx store: %s function missing — apply migration %s from the %q migration source before boot: %w",
+				s.table(f.name), railRetentionFile, "authentication", sdk.ErrNotFound)
+		}
+	}
+	return execute, nil
 }
 
 // probeColumnSQL is the default column probe. It is deliberately NOT filtered by

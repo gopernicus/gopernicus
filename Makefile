@@ -34,7 +34,7 @@ EMULATOR_TAG_MODULES = integrations/authentication/firebase
 	guard-authorization-no-delivery-repo guard-authorization-rolesvc-no-engine guard-ui-no-inward guard-ui-require-whitelist \
 	guard-no-legacy-features-path guard-list-no-nethttp guard-violation-message-not-error \
 	guard-pocket-logic guard-authorization-tuples-leaf guard-authorization-decisions-no-mutations guard-inbound-authorization guard-tuple-write-integrity guard-host-contract guard-auth-no-vendor-names \
-	guard-cms-admin-gate guard-host-posture guard-pocket-no-env guard-baseline-ledger guard-auth-maintenance-leaf
+	guard-cms-admin-gate guard-host-posture guard-pocket-no-env guard-baseline-ledger guard-rail-no-dml guard-auth-maintenance-leaf
 
 # Regenerate *_templ.go from .templ sources. Each bundled views/templ module pins
 # its own templ tool; generation runs inside each so the tool version is
@@ -191,7 +191,7 @@ guard: guard-sdk-stdlib guard-pocket-isolation guard-sdk-no-outward guard-no-leg
 	guard-authorization-no-delivery-repo guard-authorization-rolesvc-no-engine guard-ui-no-inward guard-ui-require-whitelist \
 	guard-no-legacy-features-path guard-list-no-nethttp guard-violation-message-not-error \
 	guard-pocket-logic guard-authorization-tuples-leaf guard-authorization-decisions-no-mutations guard-inbound-authorization guard-tuple-write-integrity guard-host-contract guard-auth-no-vendor-names \
-	guard-cms-admin-gate guard-host-posture guard-pocket-no-env guard-baseline-ledger guard-auth-maintenance-leaf
+	guard-cms-admin-gate guard-host-posture guard-pocket-no-env guard-baseline-ledger guard-rail-no-dml guard-auth-maintenance-leaf
 
 # G1: sdk imports only the standard library (also enforced structurally by
 # sdk/go.mod having no require block).
@@ -513,7 +513,7 @@ guard-no-legacy-features-path:
 # <<< LEGACY-PATTERNS
 
 # CI-style gate: templ generation must be a no-op (no drift), then per-module
-# vet/build/test across all MODULES, then the thirty-four layering guards. Drift
+# vet/build/test across all MODULES, then the thirty-five layering guards. Drift
 # is checked via `git diff` when this tree is a git repo; this repo IS a git
 # repo (as of phase 2), so that branch runs. The before/after checksum branch
 # remains as a fallback for gitless checkouts of *_templ.go.
@@ -645,6 +645,51 @@ guard-baseline-ledger:
 			if [ $$found = 0 ]; then echo "ERROR (G34): $$f has no byte-identical copy in $$ledger (re-export: copy the store file into the ledger; never edit a copy)"; fail=1; fi; \
 		done; \
 	done; exit $$fail
+
+# G35 (SOC 2 S3, the rails are append-only in code too): no store rewrites or
+# removes an audit-rail row except on a reviewed line. A non-test Go file under
+# pockets/*/stores fails when one line names UPDATE, DELETE FROM, INSERT OR
+# REPLACE INTO, TRUNCATE or DROP TRIGGER and, later on it, a rail — in BOTH
+# spellings: the literal table names the turso stores write (security_events,
+# iam_audit, secrets_audit) and the concatenated forms the pgx stores write
+# (s.table(securityEventsTable), cfg.schema.Table("iam_audit"),
+# r.table("secrets_audit")). The word boundaries keep security_events_retention
+# and security_events_purge_before out; iam_operations is not a rail
+# (AllowDelete). The pgx stores only CALL the 0024 definer function. The
+# allow-list is PER LINE, by file and exact text — never a whole file: the turso
+# rail purge's DELETE (its DROP TRIGGER line drops the captured names and names
+# no rail, so it never matches) and the two turso canonical trigger texts
+# (CREATE TRIGGER … BEFORE UPDATE ON <rail>), DDL the boot probe compares, not
+# DML. Comment lines are skipped, and the pattern must still match the
+# allow-listed purge line, so a grep that stops matching cannot pass silently.
+# A SECOND pattern catches a rail trigger dropped BY NAME, which the first
+# cannot see (a SQLite DROP TRIGGER names only the trigger): DROP TRIGGER
+# [IF EXISTS] [<schema>.]<name>, case-insensitive, quoted or bare, where the
+# name holds security_events, iam_audit or secrets_audit as an _-delimited
+# token. It has no allow-list: the turso purge drops the triggers it captured
+# from sqlite_schema (DROP TRIGGER `+quoteName(t.name)), a line that names no
+# rail, so no store line matches it today and any that does is a violation. Its
+# self-check runs the pattern over the canonical rail trigger names.
+G35_PATTERN = (UPDATE|DELETE[[:space:]]+FROM|INSERT[[:space:]]+OR[[:space:]]+REPLACE[[:space:]]+INTO|TRUNCATE|DROP[[:space:]]+TRIGGER)[^;]*(\bsecurity_events\b|securityEventsTable|\biam_audit\b|\bsecrets_audit\b)
+G35_ALLOWED = \
+	-e 'pockets/authentication/stores/turso/maintenance.go:res, err := tx.Exec(ctx, `DELETE FROM security_events WHERE id IN (SELECT id FROM security_events WHERE created_at <= ? ORDER BY created_at, id LIMIT ?)`, cutoff, limit)' \
+	-e 'pockets/authentication/stores/turso/turso.go:securityEventsImmutableUpdateSQL = `CREATE TRIGGER security_events_immutable_update BEFORE UPDATE ON security_events' \
+	-e 'pockets/authorization/stores/turso/turso.go:iamAuditImmutableUpdate = `CREATE TRIGGER iam_audit_immutable_update BEFORE UPDATE ON iam_audit'
+G35_DROP_PATTERN = DROP[[:space:]]+TRIGGER([[:space:]]+IF[[:space:]]+EXISTS)?[[:space:]]+([`"]?[A-Za-z0-9_]+[`"]?\.)?[`"]?([A-Za-z0-9_]*_)?(security_events|iam_audit|secrets_audit)(_[A-Za-z0-9_]*)?([^A-Za-z0-9_]|$$)
+guard-rail-no-dml:
+	@echo "== guard: stores rewrite or remove no audit-rail row outside the per-line allow-list (G35) =="
+	@grep -qE '$(G35_PATTERN)' pockets/authentication/stores/turso/maintenance.go || { echo "ERROR (G35): the pattern no longer matches the allow-listed turso purge line — the guard would check nothing"; exit 1; }
+	@{ grep -rnE --include='*.go' --exclude='*_test.go' '$(G35_PATTERN)' pockets/*/stores || true; } | grep -vE '^[^:]+:[0-9]+:[[:space:]]*//' | { \
+		fail=0; while IFS= read -r hit; do \
+			file=$${hit%%:*}; rest=$${hit#*:}; text=$$(printf '%s' "$${rest#*:}" | sed -E 's/^[[:space:]]+//'); \
+			if printf '%s\n' "$$file:$$text" | grep -qxF $(G35_ALLOWED); then continue; fi; \
+			echo "ERROR (G35): $$hit — the rails are append-only: write them by plain INSERT; purge security_events through the 0024 definer function (pgx) or the reviewed turso purge line"; fail=1; \
+		done; exit $$fail; }
+	@test "$$(printf '%s\n' 'DROP TRIGGER security_events_immutable_update' 'drop trigger if exists "iam_audit_immutable_update"' 'DROP TRIGGER IF EXISTS main.secrets_audit_no_truncate' 'DROP TRIGGER xsecurity_eventsx' | grep -ciE '$(G35_DROP_PATTERN)')" = 3 || { echo "ERROR (G35): the drop-by-name pattern no longer matches exactly the three canonical rail trigger samples — the guard would check nothing"; exit 1; }
+	@{ grep -rniE --include='*.go' --exclude='*_test.go' '$(G35_DROP_PATTERN)' pockets/*/stores || true; } | grep -vE '^[^:]+:[0-9]+:[[:space:]]*//' | { \
+		fail=0; while IFS= read -r hit; do \
+			echo "ERROR (G35): $$hit — a rail trigger is dropped by name: the rails' immutability triggers are dropped only by the turso purge's capture-drop-restore transaction"; fail=1; \
+		done; exit $$fail; }
 
 # G36 (SOC 2 S3, the maintenance leaf): the authentication retention service
 # sits beside the authentication service, never above it. It imports the leaf

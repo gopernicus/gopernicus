@@ -297,11 +297,12 @@ func readActiveUserTurso(ctx context.Context, tx *tursodb.Tx, userID string) (us
 		displayName  string
 		authRevision int64
 		status       string
+		erasedAt     tursodb.NullTime
 		createdAt    tursodb.Time
 		updatedAt    tursodb.Time
 	)
-	const q = `SELECT display_name, auth_revision, status, created_at, updated_at FROM users WHERE id = ?`
-	if err := tx.QueryRow(ctx, q, userID).Scan(&displayName, &authRevision, &status, &createdAt, &updatedAt); err != nil {
+	const q = `SELECT display_name, auth_revision, status, erased_at, created_at, updated_at FROM users WHERE id = ?`
+	if err := tx.QueryRow(ctx, q, userID).Scan(&displayName, &authRevision, &status, &erasedAt, &createdAt, &updatedAt); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return user.User{}, passwordless.ErrRedemption
 		}
@@ -311,7 +312,7 @@ func readActiveUserTurso(ctx context.Context, tx *tursodb.Tx, userID string) (us
 		ID:           userID,
 		DisplayName:  displayName,
 		AuthRevision: authRevision,
-		Status:       user.NormalizeStatus(user.Status(status)),
+		Status:       projectStatus(status, erasedAt.Valid),
 		CreatedAt:    createdAt.Time,
 		UpdatedAt:    updatedAt.Time,
 	}

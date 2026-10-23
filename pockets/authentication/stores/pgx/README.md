@@ -43,8 +43,8 @@ option — SQLite has no schemas** (a host switches dialect by one import + one
 
 | member | shape |
 |---|---|
-| `Repositories(ctx context.Context, db *pgxdb.DB, opts ...Option) (auth.Repositories, error)` | the full bundle including `OAuth2` and `SessionManagement`, no migration side effects — probes canonical tables and ALTER-added columns in migration order, and errors (`sdk.ErrNotFound`, naming the table or column + the `authentication` migration source) when one is missing; an infrastructure/query failure is never misreported as a missing table. Last it runs `db.ProbeAppendOnly(ctx, AuditTables(opts...)...)` under the `RuntimeMode` `db` was opened with (see [Audit rail](#audit-rail-0021-and-0022)) |
-| `AuditTables(opts ...Option) []pgxdb.AppendOnlyTable` | the append-only tables this store owns — `security_events`, schema-qualified under `WithSchema`, verified against the trigger function `0022` ships. A migrator preflights the runtime role with `pgxdb.InspectTablePrivileges(ctx, q, role, pgx.AuditTables(opts...)...)`, deciding exactly as the boot probe will |
+| `Repositories(ctx context.Context, db *pgxdb.DB, opts ...Option) (auth.Repositories, error)` | the full bundle including `OAuth2` and `SessionManagement`, no migration side effects — probes canonical tables and ALTER-added columns in migration order, and errors (`sdk.ErrNotFound`, naming the table or column + the `authentication` migration source) when one is missing; an infrastructure/query failure is never misreported as a missing table; it refuses a database without the `0024` functions the same way. Last it runs `db.ProbeAppendOnly(ctx, AuditTables(opts...)...)` under the `RuntimeMode` `db` was opened with (see [Audit rail](#audit-rail-0021-and-0022) and [Retention](#retention-0023-and-0024)). The bundle fills `Maintenance` (`NewMaintenanceStore`) and `UserErasure` (`NewErasureStore`); `ServiceAccountStore` implements `serviceaccount.CascadeDeleter` |
+| `AuditTables(opts ...Option) []pgxdb.AppendOnlyTable` | the append-only tables this store owns — `security_events`, schema-qualified under `WithSchema`, verified against the trigger function `0022` ships, with the one `DefinerFunction` `0024` ships (`security_events_purge_before(pg_catalog.timestamptz, pg_catalog.int4)`). A migrator preflights the runtime role with `pgxdb.InspectTablePrivileges(ctx, q, role, pgx.AuditTables(opts...)...)`, deciding exactly as the boot probe will |
 | `Option` | construction option, accepted by `Repositories` and by every `NewXStore(db, opts ...Option)` constructor, so a host composing its own bundle gets the same seam |
 | `WithSchema(s pgxdb.Schema) Option` | places every table these stores touch in `s`; the zero `Schema` is the default and renders today's unqualified SQL byte-for-byte. It never panics — validation happened in `pgxdb.NewSchema` at the host |
 | `ExportMigrations(dst string) error` | copies the canonical `migrations/*.sql` into the host's dir |
@@ -89,7 +89,7 @@ change outside this option. With a schema set the probe IS scoped to it.
 ## Migrations
 
 `migrations/*.sql` carry the **identical version (filename) set** as the turso
-tree — `0001`–`0022` (seventeen tables; auth owns no delivery table). Same filename
+tree — `0001`–`0024` (seventeen tables; auth owns no delivery table). Same filename
 = same logical schema step; content is per-dialect. After export, the host owns
 the final migration stream and applies it pre-boot through its own ledger.
 
@@ -139,6 +139,115 @@ silent. **A single-role production host refuses to boot after upgrading**: run
 the server as a separate runtime role with INSERT and SELECT on the rail and
 `GRANT USAGE ON SEQUENCE security_events_seq` — the
 [two-role posture](../../../../workshop/documentation/docs/guides/database-posture.md#two-roles).
+
+### Retention (`0023` and `0024`)
+
+Both files are **REQUIRED** and begin with `SET LOCAL lock_timeout = '5s'`.
+`Repositories` refuses, in every mode, a database without `users.erased_at`
+(naming `0023_retention.sql`) or without either `0024` function (naming
+`0024_security_events_retention.sql`). **Apply them in their own runner
+invocation**, before deploying a binary built against this store: a binary
+built before them keeps running on a migrated database — a nullable column,
+indexes and functions it never calls. Rolling the binary back is safe (an old
+binary reads an erased user as `deactivated`); rolling the schema back is
+forward-fix only — there are no down files, and dropping `erased_at` after an
+erase loses the marker.
+
+**`0023_retention.sql`** builds the `expires_at` indexes the maintenance purges
+select through — `idx_sessions_expires_at`, `idx_authentication_grants_expires_at`,
+`idx_contact_changes_expires_at`, `idx_oauth_states_expires_at`,
+`idx_challenges_expires_at`, `idx_oauth_authorization_codes_expires_at`,
+`idx_oauth_clients_expires_at`, `idx_oauth_refresh_history_expires_at`
+(invitations get none: one row per invite) — each `CREATE INDEX IF NOT EXISTS`,
+and only then adds `users.erased_at TIMESTAMPTZ NULL`. The `ADD COLUMN` is
+metadata-only but takes ACCESS EXCLUSIVE on `users`, so it comes last: the
+stream waits on `users` only for that one statement, never behind an index
+build. A plain `CREATE INDEX` blocks writes to its table while it builds; **on a
+large host, pre-build them first**, outside the runner, then apply the file —
+`IF NOT EXISTS` makes each in-stream build a no-op:
+
+```sql
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_sessions_expires_at ON sessions (expires_at);
+-- … the same for the other seven, then confirm none is left invalid:
+SELECT c.relname FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid
+ WHERE c.relname LIKE 'idx_%_expires_at' AND NOT i.indisvalid;  -- drop and rebuild any row
+```
+
+An erased user keeps `status = 'deactivated'` — every credential path and the
+fenced mint already refuse it — and every read (`Get`, the directory's
+`GetSummary`/`List`, the redemption reads) projects `user.StatusErased` from
+`erased_at IS NOT NULL`. `SetStatus` refuses `StatusErased` as a target and
+refuses reactivating an erased user (`user.ErrErased`); deactivating one is a
+no-op replay.
+
+**`0024_security_events_retention.sql`** gives the rail its only purge path.
+The runtime role holds no DELETE on `security_events`, so the store calls a
+SECURITY DEFINER function owned by the table's owner:
+
+- `security_events_retention_floor()` — `STABLE`, returns `365 days`. **The floor
+  is a framework invariant**: no procedure lowers it, and the Go minimum
+  retention (366 days) sits above it so the bundled service can never configure
+  below it.
+- `security_events_purge_before(p_before pg_catalog.timestamptz, p_max_rows
+  pg_catalog.int4)` — SECURITY DEFINER. It refuses a NULL cutoff and one younger
+  than `now() - floor` with SQLSTATE 22023 (`maintenance.ErrBelowRetentionFloor`
+  — refused, never clamped), clamps `p_max_rows` to `[1, 10000]`
+  (`maintenance.MaxBatchSize`), deletes the oldest rows `created_at <= p_before`
+  through a `FOR UPDATE SKIP LOCKED` subselect (two concurrent purges never wait
+  on each other) and appends ONE `security_events_purged` row per call — a zero
+  count included — with Details `cutoff`, `count`, `floor_days`, `session_user`
+  (the connecting role; behind a pooler, the pooler's login role) and
+  `max_rows`. Every function and operator in both bodies is
+  `pg_catalog`-qualified.
+
+The file first asserts that it runs in the schema holding `security_events`
+and that the migrator is a member of the table's owner (`make migrate` fails
+before boot otherwise, naming the fix), then pins the definer's `search_path` to
+`pg_catalog, <the table's schema>, pg_temp` — computed from the table, quoted
+when the name needs quotes, `pg_temp` last — and ends with `REVOKE EXECUTE …
+FROM PUBLIC`. After a restore into a renamed schema, re-run its pin `DO` block.
+The migration cannot know your runtime role, so **grant it yourself**:
+
+```sql
+GRANT EXECUTE ON FUNCTION security_events_purge_before(pg_catalog.timestamptz, pg_catalog.int4) TO <runtime role>;
+```
+
+The store calls it with explicit casts, schema-qualified under `WithSchema`.
+`Maintenance` must be backed by the database that holds the rail: the function
+probe at construction runs on the same connection the purge does.
+
+**What the probe checks.** `AuditTables` lists the purge function, so
+`ProbeAppendOnly` resolves it on the runtime role's `search_path` (before it pins
+its own) and judges it by catalog evidence, never by comparing its body:
+production **refuses** (`pgxdb.ErrDefinerFunctionUnsafe`, not waivable) when
+PUBLIC can execute it, its `proconfig` is not exactly the pinned `search_path`,
+or it resolves outside the table's schema; it **WARNs** (`definer_function=
+inoperative`) when it is not SECURITY DEFINER, its owner is not a member of the
+table's owner, its owner is a superuser, or the runtime role holds CREATE on the
+schema. A runtime role without EXECUTE boots in production with one WARN,
+`maintenance_execute=missing … fix=GRANT EXECUTE …`; the maintenance pass then
+reports `step=security_events error_kind=forbidden` while every other step runs.
+Probe hygiene: `REVOKE CREATE ON SCHEMA <schema> FROM PUBLIC`, and run
+migrations as a `NOSUPERUSER` owner role. A migrator preflights the runtime role
+with the same `AuditTables`; the reference host's `go run ./workshop/migrations
+-posture-role <role>` prints `functions=[security_events_purge_before:execute=…
+unsafe=… inoperative=…] floor=365 days` and decides as the boot does.
+
+**Erasure** (`ErasureStore.Erase`) is one transaction in the port's order:
+`SELECT … FOR UPDATE` on the user (the mint's and the service-account insert's
+`FOR SHARE` wait on it); the invitations addressed to one of the user's
+identifier pairs (less any pair another user holds active) or resolved to the
+user, locked `FOR UPDATE` so a concurrent `ClaimAcceptance` waits and then finds
+the row gone or unchanged; a refusal (`user.ErrEraseBlockedByClaim`) when one is
+accepting; then the writes and the `user_erased` row by plain INSERT, inside the
+transaction. `ServiceAccountStore.Delete` cascades to the account's API keys
+under `FOR UPDATE` on the account (`APIKeyStore.Create` takes `FOR SHARE` on it),
+and `Create` takes `FOR SHARE` on the owner and refuses an erased one with
+`user.ErrErased`. Known residual: a key minted while a cascade of its account
+commits FIRST is still inserted (the store never refused keys for an unknown
+account) — it is inert, because API-key authentication resolves the account and
+finds none. Erase is not a ban: the next external login provisions a fresh
+user — deactivate instead to keep someone out.
 
 **`0020_external_subjects.sql` is append-only and REQUIRED.** It creates
 `external_subjects`, the external identity mirror keyed `(provider, subject)`, and
@@ -243,7 +352,11 @@ The audit-rail cases (`audit_integrity_live_test.go`) build their own
 disposable schema owned by a run-unique migrator role and connect as run-unique
 runtime roles — table grants with and without USAGE on the sequence — dropping
 every role with `DROP OWNED BY` + `DROP ROLE` at cleanup. They need a DSN whose
-user can create roles.
+user can create roles. The retention cases (`maintenance_live_test.go`,
+`erasure_live_test.go`, `upgrade_live_test.go`) do the same with a runtime role
+in the two-role posture (no UPDATE, DELETE or TRUNCATE on the rail); under
+`POSTGRES_TEST_SCHEMA` their schema's name is mixed case, so the pinned
+`search_path` is quoted.
 
 `make check` stays hermetic (the suite skips); `make test-stores` runs this
 live path expecting `POSTGRES_TEST_DSN`.
