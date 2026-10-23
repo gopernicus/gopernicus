@@ -194,7 +194,7 @@ func Open(ctx context.Context, cfg Config) (*DB, error) {
 	db.SetMaxIdleConns(cfg.MaxIdleConns)
 	db.SetConnMaxLifetime(cfg.ConnMaxLifetime)
 
-	wrapped := &DB{db: db}
+	wrapped := &DB{db: db, mode: cfg.RuntimeMode, logger: cfg.Logger}
 	if cfg.LogQueries {
 		wrapped.tracer = newLoggingQueryTracer(cfg.Logger)
 	}
@@ -270,6 +270,10 @@ func localDriverHint(rawURL string, err error) error {
 // Detection is by substring because the libSQL client surfaces SQLite's textual
 // messages. Unrecognized errors pass through unchanged. Callers map both query
 // errors and Scan errors (sql.ErrNoRows → ErrNotFound) through this.
+//
+// An append-only table's immutability trigger aborts with "<table> is
+// append-only" — modernc formats it "constraint failed: <message> (1811)", the
+// remote driver "SQLite error: <message>" — and maps to sdk.ErrForbidden.
 func MapError(err error) error {
 	if err == nil {
 		return nil
@@ -288,6 +292,8 @@ func MapError(err error) error {
 		return sdk.ErrInvalidInput
 	case strings.Contains(msg, "NOT NULL constraint failed"):
 		return sdk.ErrInvalidInput
+	case strings.Contains(msg, appendOnlyMessage):
+		return sdk.ErrForbidden
 	}
 	return err
 }

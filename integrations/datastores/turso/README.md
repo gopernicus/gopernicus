@@ -56,6 +56,34 @@ environments. Development admits the URL and logs one WARN instead. Posture line
 go to `Config.Logger` (`slog.Default()` when nil). The check runs in `Open` after
 the URL is normalized, not in `Redacted`, which stays side-effect free.
 
+## Append-only tables: the immutability trigger probe
+
+SQLite has no roles or grants, so there is no privilege to probe: an audit table's
+append-only guarantee is its pair of triggers (`<table>_immutable_update` and
+`<table>_immutable_delete`, each `SELECT RAISE(ABORT, '<table> is append-only')`), shipped
+as an ordinary store migration. `(*DB).ProbeAuditImmutable(ctx, tables ...AppendOnlyTable)`
+checks they are still there, under the `RuntimeMode` the `DB` was opened with
+(`DB.RuntimeMode()`):
+
+- each `AppendOnlyTable{Name, Triggers []TableTrigger}` is read from
+  `sqlite_schema WHERE type='trigger' AND tbl_name=?`, the name bound;
+- each `TableTrigger{Name, Canonical []TriggerBody}` is intact when its stored definition
+  equals one `TriggerBody.SQL` — the migration file's `CREATE TRIGGER` text compared without
+  surrounding whitespace or the trailing semicolon (SQLite also drops `IF NOT EXISTS` and a
+  `main.` qualifier, so pass the statement without them);
+- in production and development, a table with an absent or different trigger logs one WARN —
+  `turso: audit table has no immutability triggers; restore the migration file` with
+  `table`, `trigger` and `reason=absent|differs`. It never refuses; a failing query is
+  returned. The zero mode returns nil without a query.
+
+A later rebuild of an audit table (`CREATE TABLE …_next`, copy, `DROP TABLE`, rename) drops
+its triggers with the old table, so every such rebuild ships a paired file that re-creates
+them; the probe is how a missed one surfaces.
+
+**Behavior change (v0.8.0):** `MapError` maps an error whose message contains
+`is append-only` to `sdk.ErrForbidden` — the immutability triggers' abort, which modernc
+formats `constraint failed: <message> (1811)` and the remote driver `SQLite error: <message>`.
+
 ## Local file profile — `file:` URLs, the `localfile` driver package, env tags
 
 `Config` carries env tags that mirror the pgxdb connector's `DB_*` names
@@ -174,8 +202,9 @@ to any `Exec`/`Query`/`QueryRow`. `Config.Retry` is boot connectivity only.
 ## Testing
 
 Unit tests are hermetic and run with a plain `go test ./...` — the `List`
-behavior tests run against in-memory SQLite through the real driver, and the
-`RuntimeMode` posture tests need no database.
+behavior tests run against in-memory SQLite through the real driver, the
+immutability trigger probe and its `MapError` case against local file databases,
+and the `RuntimeMode` posture tests need no database.
 
 Live conformance runs are per-pocket (the `stores/turso` modules), gated on
 `-tags=integration` + `TURSO_DATABASE_URL`/`TURSO_AUTH_TOKEN`, and only ever

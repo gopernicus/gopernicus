@@ -147,6 +147,13 @@ type Config struct {
 	// included. It is inert when no target needs it; when honored, Open logs a
 	// posture_waiver WARN. No env tag.
 	TLSDisabledAcknowledged bool
+
+	// AppendOnlyWritableAcknowledged admits, in production, a runtime role that
+	// DB.ProbeAppendOnly finds can modify an append-only table
+	// (ErrAppendOnlyTableWritable) — the single-role host. It never admits
+	// ErrAppendOnlyTableUnwritable. It is inert when nothing needs it; when
+	// honored, ProbeAppendOnly logs one posture_waiver WARN per table. No env tag.
+	AppendOnlyWritableAcknowledged bool
 }
 
 func (cfg Config) connectionString() (string, error) {
@@ -380,7 +387,12 @@ func Open(ctx context.Context, cfg Config) (*DB, error) {
 	if err != nil {
 		return nil, fmt.Errorf("creating connection pool: %w", err)
 	}
-	db := &DB{pool: pool}
+	db := &DB{
+		pool:                           pool,
+		mode:                           cfg.RuntimeMode,
+		logger:                         cfg.Logger,
+		appendOnlyWritableAcknowledged: cfg.AppendOnlyWritableAcknowledged,
+	}
 
 	// Retry runs the boot connectivity check (StatusCheck: Ping + SELECT 1) under
 	// the policy's jittered backoff, targeting the orchestration race where the
@@ -413,7 +425,10 @@ func Open(ctx context.Context, cfg Config) (*DB, error) {
 // whose server message is kept, as the sentence before the sentinel, because it
 // names the offending value and a host that dropped it lost that from its log.
 // web.ErrFromDomain answers the generic 400, so the message never reaches a
-// client. The other codes return the bare sentinel.
+// client. 42501 (insufficient_privilege — a missing grant, or an append-only
+// table's trigger refusing a write) maps to sdk.ErrForbidden and keeps the
+// *pgconn.PgError in the chain, because callers match its SQLSTATE with
+// errors.As. The other codes return the bare sentinel.
 func MapError(err error) error {
 	if err == nil {
 		return nil
@@ -433,6 +448,8 @@ func MapError(err error) error {
 			return sdk.ErrInvalidInput
 		case invalidTextRepresentation:
 			return fmt.Errorf("%s: %w", pgErr.Message, sdk.ErrInvalidInput)
+		case insufficientPrivilege:
+			return fmt.Errorf("%w: %w", pgErr, sdk.ErrForbidden)
 		}
 	}
 	return err

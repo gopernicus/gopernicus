@@ -28,7 +28,7 @@ const (
 	microsecFromUnixEpochToY2K = 946684800 * 1_000_000
 )
 
-// TestMapError covers the five SQLSTATE codes plus jackpgx.ErrNoRows and the
+// TestMapError covers the six SQLSTATE codes plus jackpgx.ErrNoRows and the
 // nil/passthrough cases — the connector's entire error taxonomy, hermetically.
 func TestMapError(t *testing.T) {
 	cases := []struct {
@@ -42,6 +42,7 @@ func TestMapError(t *testing.T) {
 		{"check_violation", &pgconn.PgError{Code: "23514"}, sdk.ErrInvalidInput},
 		{"not_null_violation", &pgconn.PgError{Code: "23502"}, sdk.ErrInvalidInput},
 		{"invalid_text_representation", &pgconn.PgError{Code: "22P02"}, sdk.ErrInvalidInput},
+		{"insufficient_privilege", &pgconn.PgError{Code: "42501"}, sdk.ErrForbidden},
 		{"no_rows", jackpgx.ErrNoRows, sdk.ErrNotFound},
 		{"wrapped_unique", fmt.Errorf("insert: %w", &pgconn.PgError{Code: "23505"}), sdk.ErrAlreadyExists},
 		{"wrapped_no_rows", fmt.Errorf("scan: %w", jackpgx.ErrNoRows), sdk.ErrNotFound},
@@ -79,6 +80,28 @@ func TestMapError_InvalidTextRepresentationKeepsMessage(t *testing.T) {
 	// The existing codes are unchanged: a bare sentinel, no message.
 	if got := MapError(&pgconn.PgError{Code: "23502", Message: "null value in column"}); got != sdk.ErrInvalidInput {
 		t.Fatalf("MapError(23502) = %v, want the bare sdk.ErrInvalidInput", got)
+	}
+}
+
+// TestMapError_InsufficientPrivilege: 42501 — a missing grant or an
+// append-only trigger's refusal — is sdk.ErrForbidden, and the driver error
+// stays in the chain so a caller can still match its SQLSTATE.
+func TestMapError_InsufficientPrivilege(t *testing.T) {
+	for _, pgErr := range []*pgconn.PgError{
+		{Code: "42501", Message: "permission denied for table security_events"},
+		{Code: "42501", Message: "security_events is append-only"},
+	} {
+		got := MapError(fmt.Errorf("update: %w", pgErr))
+		if !errors.Is(got, sdk.ErrForbidden) {
+			t.Fatalf("MapError(42501) = %v, want ErrForbidden", got)
+		}
+		var inner *pgconn.PgError
+		if !errors.As(got, &inner) || inner.Code != "42501" {
+			t.Fatalf("MapError(42501) = %v, want the *pgconn.PgError kept in the chain", got)
+		}
+		if !strings.Contains(got.Error(), pgErr.Message) {
+			t.Fatalf("MapError(42501) = %q, want the server message kept", got)
+		}
 	}
 }
 

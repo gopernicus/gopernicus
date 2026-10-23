@@ -97,20 +97,114 @@ Loopback TCP earns no exemption: an Auth Proxy listening on `127.0.0.1:5432` wit
 `sslmode=disable` is plaintext. Run the proxy with `--unix-socket`, or
 acknowledge with `TLSDisabledAcknowledged`.
 
+## Append-only tables: the posture probe
+
+The contract, in one sentence: **in production a store refuses to boot when its runtime role
+is superuser, owns an audit table, can UPDATE/DELETE/TRUNCATE/TRIGGER it without the verified
+triggers, or cannot insert into it.**
+
+`(*DB).ProbeAppendOnly(ctx, tables ...AppendOnlyTable)` enforces it for the role the `DB`
+connects as, under the `RuntimeMode` the `DB` was opened with (`DB.RuntimeMode()`). The pgx
+stores call it from their constructors over their own audit tables. `InspectTablePrivileges(ctx,
+q, role, tables...)` returns the same evidence for any role — an empty `role` is
+`current_user` — so a migrator can preflight the runtime role from its own connection and get
+exactly the decision boot will make; `TablePrivilege.ProtectedBy(acknowledged)` names what
+protects each table: `privilege`, `trigger`, `waiver` or `none`. Requires PostgreSQL ≥ 14 (the
+trigger files use `CREATE OR REPLACE TRIGGER`).
+
+Each `AppendOnlyTable{Name, AllowDelete, Canonical}` is resolved once with `to_regclass` (a
+missing table is `Exists: false`, not an error) and inspected by oid, every name bound as a
+parameter:
+
+| evidence | source |
+|---|---|
+| `Owner`, `OwnerKind` | `pg_has_role(role, …, 'MEMBER')` — NOINHERIT members included — on the owner of the table (`table`), of its schema (`schema`) or of a trigger function of the pair (`function`) |
+| `Superuser` | `pg_roles.rolsuper` |
+| `Insert`, `Delete`, `Truncate`, `Trigger` | `has_table_privilege` |
+| `Update` | `has_any_column_privilege` — a column-level grant counts |
+| `SequenceUsage` | `has_sequence_privilege(…, 'USAGE')` on the sequence the `seq` column's default draws from, found through `pg_attribute`/`pg_attrdef`; true when the table has no `seq` column |
+| `ImmutableTrigger`, `TriggerState` | the verified trigger pair, below |
+
+The pair is `<table>_immutable` (`BEFORE UPDATE OR DELETE … FOR EACH ROW`) and
+`<table>_no_truncate` (`BEFORE TRUNCATE … FOR EACH STATEMENT`). It is verified only when both
+triggers exist, are not internal, are `ENABLE ALWAYS` (`tgenabled = 'A'`), carry no `WHEN`
+clause and no column list, have the expected level and the `pg_get_triggerdef` form, and execute
+a plpgsql function in the table's schema whose name and body (`prosrc`) match one of the store's
+`Canonical` `TriggerBody` values, that is not `SECURITY DEFINER`, and whose `proconfig` is exactly
+`{search_path=pg_catalog, pg_temp}`. `TriggerState` is `verified` or the first failure:
+`absent`, `internal`, `tgenabled=O` (what `pg_restore --disable-triggers` leaves; `D` and `R`
+likewise), `level`, `when_clause`, `column_list`, `namespace`, `differs`, `language`,
+`body_differs`, `security_definer`, `proconfig`.
+
+`Writable()` is `Owner || Superuser || ((Update || (Delete && !AllowDelete) || Truncate ||
+Trigger) && !ImmutableTrigger)`: an owner or superuser is refused even with the triggers, which
+exempt the owning role by design; TRIGGER counts because its holder can change what happens to
+inserted rows. `CannotAppend()` is `!Insert || !SequenceUsage`.
+
+`ProbeAppendOnly` runs in its own read-only transaction with `SET LOCAL search_path TO
+pg_catalog` once the names are resolved:
+
+- **zero mode** — nil, no query, no log line;
+- **development** — never refuses; one WARN line `append_only=unenforced tables=[…]` with
+  every table production would refuse and why;
+- **production** — `errors.Join` of one error per finding: `ErrAppendOnlyTableWritable`
+  (`owner=table|schema|function`, `superuser`, or `privileges=update,delete,truncate,trigger`
+  with `trigger=<state>` or `tgenabled=<value>`) or `ErrAppendOnlyTableUnwritable`
+  (`insert=false`, `sequence_usage=false sequence=<name>`), each naming the table, the reason
+  and the fix.
+
+The fix every refusal names, with the inspected role and a `<migrator>` placeholder:
+
+```text
+activate the trigger files; create the runtime role with SQL, not the console;
+REVOKE UPDATE, DELETE, TRUNCATE, TRIGGER ON <t> FROM <role>    -- DELETE is kept where AllowDelete (iam_operations)
+GRANT USAGE ON SEQUENCE <t>_seq TO <role>
+ALTER TABLE <t> OWNER TO <migrator>
+ALTER SCHEMA public OWNER TO <migrator>
+ALTER TABLE <t> ENABLE ALWAYS TRIGGER <t>_immutable           -- and <t>_no_truncate
+```
+
+`Config.AppendOnlyWritableAcknowledged` (programmatic, no env tag) admits
+`ErrAppendOnlyTableWritable` only — the single-role host. Each admitted table logs one WARN
+carrying `posture_waiver=AppendOnlyWritableAcknowledged`: for an owner or superuser, "runtime
+role owns <t>: immutability triggers do not apply" with `trigger_exempt=true`; for a role
+holding grants without the verified pair, "runtime role can modify <t>: immutability triggers
+are not verified" with `trigger_exempt=false`. `ErrAppendOnlyTableUnwritable` is never waivable:
+the rail could not record anything.
+
+Managed providers — the two-role recipe is
+[database-posture.md](../../../workshop/documentation/docs/guides/database-posture.md):
+
+- **Neon** — roles created in the console or the API carry `pg_write_all_data` through
+  `neon_superuser`, which no per-table `REVOKE` removes; create the runtime role with SQL.
+- **AWS RDS / Aurora** — `rds_superuser` can set `session_replication_role`, which silences
+  triggers that are not `ENABLE ALWAYS`; hence `tgenabled = 'A'`.
+- **Google Cloud SQL** (and Neon or Supabase default roles) — on PostgreSQL 15+ `public` belongs
+  to `pg_database_owner`, which `cloudsqlsuperuser` and those defaults reach: the probe reports
+  `owner=schema` until `ALTER SCHEMA public OWNER TO <migrator>`.
+
+**Behavior change (v0.11.0):** `MapError` maps SQLSTATE `42501` (`insufficient_privilege`) to
+`sdk.ErrForbidden` — a 403 through the web mappers — for every consumer, keeping the
+`*pgconn.PgError` in the chain so `errors.As` still reads the SQLSTATE. A missing grant and an
+append-only trigger's refusal (`<t> is append-only`) both arrive that way; a host that matched
+the raw driver error sees the sentinel now.
+
 ## Surface
 
 | member | shape |
 |---|---|
-| `Config` | `DSN` or split `Host`/`Port`/`User`/`Password`/`Database`/`SSLMode`, plus pool settings, `LogQueries`, `Logger`, `Tracer`, and `Retry`; env tags are provided for host parsers; pgx also honors standard `PG*` environment defaults during DSN parsing. `RuntimeMode`, `TLSUnverifiedAcknowledged` and `TLSDisabledAcknowledged` are programmatic (no env tag; see "Production posture") |
+| `Config` | `DSN` or split `Host`/`Port`/`User`/`Password`/`Database`/`SSLMode`, plus pool settings, `LogQueries`, `Logger`, `Tracer`, and `Retry`; env tags are provided for host parsers; pgx also honors standard `PG*` environment defaults during DSN parsing. `RuntimeMode`, `TLSUnverifiedAcknowledged`, `TLSDisabledAcknowledged` and `AppendOnlyWritableAcknowledged` are programmatic (no env tag; see "Production posture" and "Append-only tables") |
 | `ErrTLSRequired` / `ErrQueryLoggingRefused` | production posture refusals from `Open`, matched with `errors.Is` |
+| `ErrAppendOnlyTableWritable` / `ErrAppendOnlyTableUnwritable` | production append-only refusals from `ProbeAppendOnly`, matched with `errors.Is` |
 | `Open(ctx, cfg) (*DB, error)` | opens a `pgxpool` and pings; every connection scans `timestamptz` in UTC and, unless the host named a zone, runs with session `timezone=UTC` (see below) |
-| `DB` | `Exec` / `Query` / `QueryRow` / `InTx` / `Begin` / `Close` / `Ping` / `Underlying() *pgxpool.Pool` |
+| `DB` | `Exec` / `Query` / `QueryRow` / `InTx` / `Begin` / `Close` / `Ping` / `Underlying() *pgxpool.Pool` / `RuntimeMode()` / `ProbeAppendOnly(ctx, tables…)` |
 | `Querier` | interface intersection of `*DB` and `*Tx` (`Exec`/`Query`/`QueryRow`) — lets a store accept pool-or-tx |
-| `MapError(err) error` | SQLSTATE-based: `23505`→`ErrAlreadyExists`, `23503`→`ErrInvalidReference`, `23514`/`23502`→`ErrInvalidInput`, `22P02` (malformed uuid/integer literal)→`ErrInvalidInput` keeping the server message as the sentence before the sentinel, `pgx.ErrNoRows`→`ErrNotFound`; unknown errors pass through |
+| `MapError(err) error` | SQLSTATE-based: `23505`→`ErrAlreadyExists`, `23503`→`ErrInvalidReference`, `23514`/`23502`→`ErrInvalidInput`, `22P02` (malformed uuid/integer literal)→`ErrInvalidInput` keeping the server message as the sentence before the sentinel, `42501`→`ErrForbidden` keeping the `*pgconn.PgError` in the chain, `pgx.ErrNoRows`→`ErrNotFound`; unknown errors pass through |
 | `RedactDSN(dsn) string` | masks URL userinfo, `password` and `sslpassword`; keyword DSNs and malformed inputs return the literal `"REDACTED"` |
 | `StatusCheck(ctx, db)` | 1s-deadline ping |
 | `ProbeTable(ctx, q, table) error` | boot-time existence probe for a store's table (`to_regclass`, name bound as a parameter, bare or schema-qualified): absent → wraps `ErrNotFound` naming the relation; a query failure maps through `MapError` and is never misreported as missing. Run it in a store constructor so a host aimed at the wrong database fails before serving |
 | `ProbeTables(ctx, q, tables…) error` | `ProbeTable` over every relation a store owns; probing stops at the first failure and returns it unchanged — the absent-relation error already names the table, and a query failure is about none of them. No tables is nil |
+| `InspectTablePrivileges(ctx, q, role, tables…) (Report, error)` | the append-only evidence for `role` (empty = `current_user`) over `AppendOnlyTable{Name, AllowDelete, Canonical []TriggerBody{Function, Body}}`; `Report{Role, Tables []TablePrivilege}`; `TablePrivilege.Writable()` / `CannotAppend()` / `ProtectedBy(acknowledged)` (see "Append-only tables") |
 | `RunMigrations(ctx, db, fs, dir, opts…)` | host-driven migration runner for one directory; one transaction, filename order, checksum guard, forward-only. One merged stream per schema: call it once per schema, with filenames unique within the stream that are never renumbered — `dir` is an `fs.FS` subpath, never a ledger namespace (all rows in a stream share the `"default"` source) |
 | `MigrateOption` / `WithSchema(s)` | the only `RunMigrations` option: run this stream inside `s` — create the schema if absent, `SET LOCAL search_path` for the transaction, and keep the stream's `schema_migrations` ledger in `s`. No option = today's unqualified stream, byte-for-byte |
 | `Schema` / `NewSchema(name) (Schema, error)` | validated Postgres schema name; the zero value means "no schema" and renders bare names. Rejection wraps `ErrInvalidInput` (empty, >63 bytes, non-identifier, reserved `pg_` prefix, `information_schema`); `public` is valid |
@@ -708,7 +802,8 @@ then, hosts opt in by setting `Config.LogQueries` or `Config.Tracer`.
 
 Unit tests are hermetic (`MapError` over constructed `pgconn.PgError` values,
 `Collect` and `ProbeTables` over in-memory `Querier` stubs, config validation,
-the `RuntimeMode` posture matrix over pgx's DSN parse,
+the `RuntimeMode` posture matrix over pgx's DSN parse, the append-only policy and mode
+matrix over hand-built reports,
 migration checksum/error paths, `poolConfig`'s
 `AfterConnect`/session-zone defaulting, and the codec registration driven through
 a bare `pgtype.Map` in both wire formats) and run with a plain `go test ./...` —
@@ -725,7 +820,7 @@ preflight and the no-copy fallback, and the four-case privilege matrix), the
 result, a collect inside a transaction, and `22P02`/unknown-relation error
 mapping), `TestLive_ScanUTC` (UTC-located scalar, array, struct-scan
 and simple-protocol reads, `SHOW TimeZone` = `UTC`, and the DSN override keeping
-its own session zone while scans stay UTC), and the limiter legs (the shared
+its own session zone while scans stay UTC), the limiter legs (the shared
 `ratelimitertest.Run` conformance suite, the exact-K concurrency proof — which
 also bounds the returned `RetryAfter`/`Remaining`, the only place a stale
 server clock is reachable — server time, burst, prefix isolation, context
@@ -734,7 +829,9 @@ cancellation, pool-survives-`Close`, `Allow`/`Reset` error-kind parity,
 for admission/reset/probes with no fallback for missing schemas/tables/columns,
 and the pruning statement —
 the limiter legs create the reference table themselves, playing the host that
-migrated it). Unset, they skip loudly
+migrated it), and `TestLive_AppendOnlyProbe` (its own tables, trigger pairs and
+run-unique fixture roles, each case decided both by `InspectTablePrivileges` from the
+owner's connection and by `ProbeAppendOnly` as the role). Unset, they skip loudly
 (`POSTGRES_TEST_DSN not set — postgres conformance NOT verified`, plus a
 banner on stderr and the controlling terminal for the limiter legs, because
 `go test ./...` hides a passing package's output) — a silent green that tested
@@ -745,7 +842,9 @@ legs `CREATE TABLE ratelimit_windows`, create and drop a scratch schema, and run
 an unqualified `DELETE FROM ratelimit_windows` to prove the pruning statement.
 The schema legs create and `DROP SCHEMA … CASCADE` their own disposable schemas
 and `CREATE ROLE`/`DROP ROLE` disposable login roles, and delete only the
-`public.schema_migrations` rows they wrote.
+`public.schema_migrations` rows they wrote. The append-only legs `CREATE ROLE` login roles
+(one `SUPERUSER`) and a NOLOGIN owner, and drop every table, function and schema they created
+before `DROP OWNED BY`/`DROP ROLE`.
 
 Spin a local database and run the live leg with `-race` — Go-level race hygiene
 for the test's own 40 goroutines; the atomicity proof is the exact-K assertion
