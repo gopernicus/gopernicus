@@ -8,12 +8,12 @@ github.com/google/pprof v0.0.0-20250317173921-a4b03ec1a45e h1:ijClszYn+mADRFY17k
 github.com/google/pprof v0.0.0-20250317173921-a4b03ec1a45e/go.mod h1:boTsfXsheKC2y+lKOCMpSfarhxDeIzfZG1jqGcPl3cA=
 github.com/google/uuid v1.6.0 h1:NIvaJDMOsjHA8n1jAhLSgzrAzy1Hgr+hNrb57e+94F0=
 github.com/google/uuid v1.6.0/go.mod h1:TIyPZe4MgqvfeYDBFedMoGGpEw/LqOeaOT+nhxU+yHo=
-github.com/gopernicus/gopernicus/integrations/datastores/turso v0.6.0 h1:XsGlUV/dCr8et4Cc3xPi28mU30IzgoU75WC4R+Z567E=
-github.com/gopernicus/gopernicus/integrations/datastores/turso v0.6.0/go.mod h1:83vKGYZCHOoTnCSWM/ClCLOvBlXOgkvGh3SPfn+dOOE=
+github.com/gopernicus/gopernicus/integrations/datastores/turso v0.8.0 h1:WL3VjVCc7QD9BLi8TI90w0gqec/ZqSvMma3Ce5VJKMs=
+github.com/gopernicus/gopernicus/integrations/datastores/turso v0.8.0/go.mod h1:20Wt7fZvn6M1G42/3GTlbEaEA31nmIiPJJvSN3uuq1E=
 github.com/gopernicus/gopernicus/pockets v0.1.0 h1:2WcybbfPw1km00DmG37CekPbxYmObyyj3T1Ec0eFSRY=
 github.com/gopernicus/gopernicus/pockets v0.1.0/go.mod h1:A2H/Tl9Pn2v2mFLOgkCQngMRFkMN10E1MEzGCQICsEw=
-github.com/gopernicus/gopernicus/pockets/authorization v0.28.0 h1:PfZlet4qkdJC3GXr2Gw1nxZisjrg5KVCnd0DSzjCL6I=
-github.com/gopernicus/gopernicus/pockets/authorization v0.28.0/go.mod h1:pDN8HlJK0ZMncFZLnXergHZkEB5QjMxLwS/dkCo6XMs=
+github.com/gopernicus/gopernicus/pockets/authorization v0.29.0 h1:Kd9DjOGZrXsJFt3dlq/UVv8Hq73YidbMluqUMBLth0I=
+github.com/gopernicus/gopernicus/pockets/authorization v0.29.0/go.mod h1:pDN8HlJK0ZMncFZLnXergHZkEB5QjMxLwS/dkCo6XMs=
 github.com/gopernicus/gopernicus/sdk v0.15.0 h1:Tt7GO5kpGQXjnGbSmOKvAyOXnBbUm19j/gtyKL1QAC0=
 github.com/gopernicus/gopernicus/sdk v0.15.0/go.mod h1:z0bypQiCybwPoxoDfzhYvB1BtH2av549QR84GacngaE=
 github.com/hashicorp/golang-lru/v2 v2.0.7 h1:a+bsQ5rvGLjzHuww6tVxozPZFVghXaHOwFs4luLUK2k=
