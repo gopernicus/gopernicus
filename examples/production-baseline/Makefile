@@ -4,7 +4,7 @@
 # (workshop/migrations/primary) pre-boot, and `run` applies it first. Every
 # binary reads APP_RUNTIME_MODE from the process environment only (never
 # .env), so these targets export the development posture. `guard` checks the
-# host contract (H0–H14) and the production posture (P0–P8).
+# host contract (H0–H14) and the production posture (P0–P9).
 
 .PHONY: build vet test run migrate bootstrap guard
 

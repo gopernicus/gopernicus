@@ -176,6 +176,8 @@ type debugEventResponse struct {
 	Details     map[string]any `json:"details,omitempty"`
 	IPAddress   string         `json:"ip_address,omitempty"`
 	UserAgent   string         `json:"user_agent,omitempty"`
+	RequestID   string         `json:"request_id,omitempty"`
+	TraceID     string         `json:"trace_id,omitempty"`
 	CreatedAt   string         `json:"created_at"`
 }
 
@@ -201,6 +203,8 @@ func debugSecurityEvents(repo securityevent.SecurityEventRepository) http.Handle
 					Details:     e.Details,
 					IPAddress:   e.IPAddress,
 					UserAgent:   e.UserAgent,
+					RequestID:   e.RequestID,
+					TraceID:     e.TraceID,
 					CreatedAt:   e.CreatedAt.Format(time.RFC3339),
 				})
 			}

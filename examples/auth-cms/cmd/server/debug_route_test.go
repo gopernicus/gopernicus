@@ -19,10 +19,13 @@ import (
 
 // TestDebugSecurityEventsRequiresPlatformAdmin drives GET /debug/security-events
 // over real HTTP sessions with AUTH_DEBUG=1: no session is 401, a signed-in
-// non-admin is 403, and a platform admin reads the rail.
+// non-admin is 403, and a platform admin reads the rail — including the
+// non-admin's denial, which the decision bridge recorded with the request id
+// that request carried.
 func TestDebugSecurityEventsRequiresPlatformAdmin(t *testing.T) {
 	t.Setenv("AUTH_DEBUG", "1")
-	comps, err := newAuthorization(nil, environment.ModeDevelopment, quietLog())
+	securityEvents := &deferredRecorder{}
+	comps, err := newAuthorization(nil, securityEvents, environment.ModeDevelopment, quietLog())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -40,7 +43,9 @@ func TestDebugSecurityEventsRequiresPlatformAdmin(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	securityEvents.set(svc.SecurityEvents)
 	router := web.NewWebHandler()
+	router.Use(web.RequestID())
 	if err := svc.HTTP.Register(pockets.Mount{Router: router, Logger: quietLog(), Events: sdkevents.NewMemory(sdkevents.WithLogger(quietLog()))}); err != nil {
 		t.Fatal(err)
 	}
@@ -54,7 +59,8 @@ func TestDebugSecurityEventsRequiresPlatformAdmin(t *testing.T) {
 		t.Errorf("no session = %d %s, want 401", resp.StatusCode, body)
 	}
 	plain := host.signUp("debug-plain@example.com")
-	if resp, body := plain.do("GET", "/debug/security-events", "", nil); resp.StatusCode != http.StatusForbidden {
+	const deniedRequestID = "debug-denied-request"
+	if resp, body := plain.do("GET", "/debug/security-events", "", http.Header{web.RequestIDHeader: {deniedRequestID}}); resp.StatusCode != http.StatusForbidden {
 		t.Errorf("signed-in non-admin = %d %s, want 403", resp.StatusCode, body)
 	}
 	admin := host.signUp("debug-admin@example.com")
@@ -71,17 +77,34 @@ func TestDebugSecurityEventsRequiresPlatformAdmin(t *testing.T) {
 		t.Fatalf("platform admin = %d %s, want 200", resp.StatusCode, body)
 	}
 	var dump struct {
-		Count int `json:"count"`
+		Count  int `json:"count"`
+		Events []struct {
+			EventType string `json:"event_type"`
+			UserID    string `json:"user_id"`
+			RequestID string `json:"request_id"`
+		} `json:"events"`
 	}
 	if err := json.Unmarshal(body, &dump); err != nil || dump.Count == 0 {
-		t.Errorf("admin read %s (err %v), want the rail's rows", body, err)
+		t.Fatalf("admin read %s (err %v), want the rail's rows", body, err)
+	}
+	var denials int
+	for _, e := range dump.Events {
+		if e.RequestID == deniedRequestID {
+			denials++
+			if e.EventType != "authorization_denied" || e.UserID != plain.userIDFor() {
+				t.Errorf("row for %s = %+v, want the non-admin's authorization_denied", deniedRequestID, e)
+			}
+		}
+	}
+	if denials != 1 {
+		t.Errorf("rows carrying request_id %s = %d, want 1; dump=%s", deniedRequestID, denials, body)
 	}
 }
 
 // TestDebugSecurityEventsAbsentWithoutFlag proves the default-off posture.
 func TestDebugSecurityEventsAbsentWithoutFlag(t *testing.T) {
 	t.Setenv("AUTH_DEBUG", "")
-	comps, err := newAuthorization(nil, environment.ModeDevelopment, quietLog())
+	comps, err := newAuthorization(nil, nil, environment.ModeDevelopment, quietLog())
 	if err != nil {
 		t.Fatal(err)
 	}

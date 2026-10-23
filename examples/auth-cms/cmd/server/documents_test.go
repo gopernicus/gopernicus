@@ -13,7 +13,7 @@ import (
 )
 
 func TestDocumentRouteComposition(t *testing.T) {
-	components, err := newAuthorization(nil, environment.ModeDevelopment, nil)
+	components, err := newAuthorization(nil, nil, environment.ModeDevelopment, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
