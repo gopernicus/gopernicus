@@ -32,6 +32,15 @@ import (
 	"github.com/gopernicus/gopernicus/sdk/pkg/web"
 )
 
+// Ordinary-queue retention: the retention kind purges completed and dead-lettered
+// jobs older than retentionAge, at most retentionBatch per run. retentionAge must
+// stay longer than the scheduler's longest retry window (pockets/jobs README,
+// "Retention").
+const (
+	retentionAge   = 7 * 24 * time.Hour
+	retentionBatch = 500
+)
+
 func main() {
 	// The runtime mode comes from the process environment only; .env is loaded
 	// in development and never opened in production. A missing .env is allowed;
@@ -96,9 +105,10 @@ func run(ctx context.Context, log *slog.Logger, mode environment.Mode) error {
 
 	// The host loads its admission and scheduling settings, then supplies named options.
 	settings := struct {
-		MaxAttempts   int `env:"JOBS_MAX_ATTEMPTS"`
-		ScheduleBatch int `env:"JOBS_SCHEDULE_BATCH"`
-	}{MaxAttempts: 3}
+		MaxAttempts    int           `env:"JOBS_MAX_ATTEMPTS"`
+		ScheduleBatch  int           `env:"JOBS_SCHEDULE_BATCH"`
+		RetentionEvery time.Duration `env:"RETENTION_EVERY"`
+	}{MaxAttempts: 3, RetentionEvery: time.Hour}
 	if err := environment.ParseEnvTags("", &settings); err != nil {
 		return err
 	}
@@ -107,6 +117,7 @@ func run(ctx context.Context, log *slog.Logger, mode environment.Mode) error {
 	if err != nil {
 		return err
 	}
+	handlers["retention"] = retentionHandler(parts.Queue, log)
 
 	// One stdlib-path interval schedule and one robfig-path cron schedules. Both
 	// fire demo.print with a deterministic sched_<id>_<slot> job ID.
@@ -123,6 +134,15 @@ func run(ctx context.Context, log *slog.Logger, mode environment.Mode) error {
 		Kind:    "demo.print",
 		Spec:    schedules.Spec{Cron: "* * * * *"},
 		Payload: json.RawMessage(`{"source":"minute-cron"}`),
+	}); err != nil {
+		return err
+	}
+	// The jobs-schedule form of ordinary-queue retention: RETENTION_EVERY (default
+	// 1h) fires the retention kind, whose handler calls PurgeTerminalJobs.
+	if _, err := parts.Schedules.EnsureSchedule(ctx, schedules.Ensure{
+		Name: "retention",
+		Kind: "retention",
+		Spec: schedules.Spec{Every: settings.RetentionEvery},
 	}); err != nil {
 		return err
 	}
@@ -210,6 +230,19 @@ func slowHandler(log *slog.Logger) queue.HandlerFunc {
 		log.InfoContext(ctx, "demo.slow started", "job_id", j.ID())
 		time.Sleep(5 * time.Second)
 		log.InfoContext(ctx, "demo.slow finished", "job_id", j.ID())
+		return nil
+	}
+}
+
+// retentionHandler purges the ordinary queue's completed and dead-lettered jobs
+// older than retentionAge, at most retentionBatch per run, and logs the count.
+func retentionHandler(svc *queue.Service, log *slog.Logger) queue.HandlerFunc {
+	return func(ctx context.Context, j queue.Job) error {
+		n, err := svc.PurgeTerminalJobs(ctx, time.Now().Add(-retentionAge), retentionBatch)
+		if err != nil {
+			return err
+		}
+		log.InfoContext(ctx, "retention", "job_id", j.ID(), "purged", n)
 		return nil
 	}
 }

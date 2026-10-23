@@ -48,7 +48,7 @@ Mirrors the turso store's exported surface (a host switches dialect by one impor
 | `Option` | the option type every constructor takes |
 | `QueueOption` | alias of `Option`, kept so `WithLease` call sites that named it keep compiling |
 | `WithSchema(s pgxdb.Schema) Option` | places every table in `s`; **Postgres-only** — the turso sibling has no equivalent because SQLite has no schemas |
-| `StatusCheck(ctx, db, opts...) error` | boot gate: every jobs table exists under the configured schema |
+| `StatusCheck(ctx, db, opts...) error` | boot gate: every jobs table exists under the configured schema; WARNs (never fails) when the admitted `idx_job_queue_terminal` index (0005) is absent |
 | `ExportMigrations(dst string) error` | copies the canonical `migrations/*.sql` into the host's dir |
 | `MigrationsFS` / `MigrationsDir` | the embedded canonical migration files |
 

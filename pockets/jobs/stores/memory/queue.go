@@ -38,8 +38,12 @@ const DefaultLease = 15 * time.Minute
 // cursor's order field so a stale cursor from a different sort is ignored.
 const orderField = "created_at"
 
-// Compile-time seam: the Queue fills the exact job.QueueRepository port.
-var _ job.QueueRepository = (*Queue)(nil)
+// Compile-time seams: the Queue fills the exact job.QueueRepository port and the
+// optional job.TerminalPurger retention capability.
+var (
+	_ job.QueueRepository = (*Queue)(nil)
+	_ job.TerminalPurger  = (*Queue)(nil)
+)
 
 // Option configures a Queue.
 type Option func(*queueConfig)
@@ -240,6 +244,41 @@ func (q *Queue) Fail(_ context.Context, jobID string, now time.Time, reason stri
 	}
 	q.jobs[jobID] = j
 	return nil
+}
+
+// PurgeTerminal deletes up to limit completed or dead-lettered jobs whose
+// UpdatedAt is at or before before, oldest first (UpdatedAt, then JobID), and
+// returns the number removed. A non-positive limit is sdk.ErrInvalidInput.
+func (q *Queue) PurgeTerminal(_ context.Context, before time.Time, limit int) (int, error) {
+	if limit <= 0 {
+		return 0, sdk.ErrInvalidInput
+	}
+	q.mu.Lock()
+	defer q.mu.Unlock()
+
+	var candidates []job.Job
+	for _, j := range q.jobs {
+		if j.JobStatus != job.StatusCompleted && j.JobStatus != job.StatusDeadLetter {
+			continue
+		}
+		if j.UpdatedAt.After(before) {
+			continue
+		}
+		candidates = append(candidates, j)
+	}
+	sort.Slice(candidates, func(i, k int) bool {
+		if !candidates[i].UpdatedAt.Equal(candidates[k].UpdatedAt) {
+			return candidates[i].UpdatedAt.Before(candidates[k].UpdatedAt)
+		}
+		return candidates[i].JobID < candidates[k].JobID
+	})
+	if len(candidates) > limit {
+		candidates = candidates[:limit]
+	}
+	for _, j := range candidates {
+		delete(q.jobs, j.JobID)
+	}
+	return len(candidates), nil
 }
 
 // Get returns the job with the given id, or sdk.ErrNotFound.

@@ -22,8 +22,12 @@ const DefaultLease = 15 * time.Minute
 // jobColumns is the job_queue projection, in jobRow's field order.
 const jobColumns = "job_id, kind, tenant_id, payload, status, priority, retry_count, max_attempts, worker_name, failure_reason, scheduled_for, claimed_at, completed_at, created_at, updated_at"
 
-// Compile-time seam: the Queue fills the exact job.QueueRepository port.
-var _ job.QueueRepository = (*Queue)(nil)
+// Compile-time seams: the Queue fills the exact job.QueueRepository port and the
+// optional job.TerminalPurger retention capability.
+var (
+	_ job.QueueRepository = (*Queue)(nil)
+	_ job.TerminalPurger  = (*Queue)(nil)
+)
 
 // QueueOption configures a Queue.
 type QueueOption func(*queueConfig)
@@ -241,6 +245,38 @@ func (q *Queue) Fail(ctx context.Context, jobID string, now time.Time, reason st
 		    claimed_at = CASE WHEN retry_count + 1 >= ? THEN claimed_at ELSE NULL END
 		WHERE job_id = ?`
 	return q.transition(ctx, jobID, job.StatusDeadLetter, fail, reason, ts, maxAttempts, maxAttempts, maxAttempts, jobID)
+}
+
+// PurgeTerminal deletes up to limit completed or dead-lettered jobs whose
+// updated_at is at or before before, oldest first (updated_at, job_id), and
+// returns the number removed. A non-positive limit is sdk.ErrInvalidInput. SQLite
+// serializes the statement; the outer status predicate mirrors the pgx store.
+// idx_job_queue_terminal (migration 0005) is the access path.
+func (q *Queue) PurgeTerminal(ctx context.Context, before time.Time, limit int) (int, error) {
+	if limit <= 0 {
+		return 0, sdk.ErrInvalidInput
+	}
+	const del = `DELETE FROM job_queue
+		WHERE job_id IN (
+			SELECT job_id FROM job_queue
+			WHERE status IN ('completed','dead_letter') AND updated_at <= ?
+			ORDER BY updated_at, job_id
+			LIMIT ?
+		)
+		  AND status IN ('completed','dead_letter')`
+	var removed int64
+	err := retryBusy(ctx, func() error {
+		n, e := tursodb.ExecAffecting(ctx, q.db, del, tursodb.FormatTime(before.UTC()), limit)
+		if e != nil {
+			return e
+		}
+		removed = n
+		return nil
+	})
+	if err != nil {
+		return 0, err
+	}
+	return int(removed), nil
 }
 
 // Get returns the job with the given id, or sdk.ErrNotFound.

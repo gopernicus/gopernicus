@@ -135,6 +135,29 @@ func TestWithLease(t *testing.T) {
 	}
 }
 
+// TestTerminalPurgeMigration pins 0005: lock_timeout is set before the build, the
+// index is IF NOT EXISTS (so a CONCURRENTLY pre-build makes it a no-op) and never
+// CONCURRENTLY itself (the runner applies files in one transaction), and its
+// name and shape are the ones StatusCheck probes and PurgeTerminal sorts by.
+func TestTerminalPurgeMigration(t *testing.T) {
+	b, err := fs.ReadFile(MigrationsFS, MigrationsDir+"/"+terminalPurgeMigration)
+	if err != nil {
+		t.Fatalf("read %s: %v", terminalPurgeMigration, err)
+	}
+	text := string(b)
+	lock := strings.Index(text, "SET LOCAL lock_timeout = '5s';")
+	create := strings.Index(text, "CREATE INDEX IF NOT EXISTS "+terminalPurgeIndex+"\n    ON job_queue (updated_at, job_id) WHERE status IN ('completed','dead_letter');")
+	if lock < 0 || create < 0 || lock > create {
+		t.Fatalf("%s must SET LOCAL lock_timeout and then CREATE INDEX IF NOT EXISTS %s on (updated_at, job_id) over terminal rows:\n%s",
+			terminalPurgeMigration, terminalPurgeIndex, text)
+	}
+	for _, line := range strings.Split(text, "\n") {
+		if !strings.HasPrefix(strings.TrimSpace(line), "--") && strings.Contains(strings.ToUpper(line), "CONCURRENTLY") {
+			t.Fatalf("%s must not build CONCURRENTLY inside the migration transaction: %q", terminalPurgeMigration, line)
+		}
+	}
+}
+
 // migrationTables returns every table name the embedded canonical migrations
 // create — the guard's inventory, enumerated from the files rather than by hand.
 func migrationTables(t *testing.T) []string {

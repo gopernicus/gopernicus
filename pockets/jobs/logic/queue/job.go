@@ -132,6 +132,17 @@ type QueueDeferrer interface {
 	Defer(ctx context.Context, id string, availableAt time.Time, reason string, now time.Time) error
 }
 
+// TerminalPurger optionally supports bounded retention of the ordinary queue.
+// PurgeTerminal deletes up to limit completed or dead-lettered jobs whose
+// UpdatedAt is at or before before, oldest first (UpdatedAt, then JobID), and
+// returns the number removed. A non-positive limit is sdk.ErrInvalidInput. It
+// never removes a pending or running job. NewService resolves it once on
+// Repositories.Queue and Service.PurgeTerminalJobs drives it; the fenced queue's
+// PurgeTerminal is a separate contract.
+type TerminalPurger interface {
+	PurgeTerminal(ctx context.Context, before time.Time, limit int) (int, error)
+}
+
 // Terminal reports whether the job has reached a terminal state and will never be
 // claimed again: completed, dead-lettered, canceled, or superseded. Extension
 // predicate (AV3D-0.3) — StatusCanceled/StatusSuperseded are only produced by the

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/gopernicus/gopernicus/sdk"
@@ -12,14 +13,18 @@ import (
 // Service owns ordinary and fenced queue admission and the ordinary worker wake signal.
 // Build runtimes from this Service to share that signal by construction.
 type Service struct {
-	repo        QueueRepository
-	fencedQueue FencedQueueRepository
-	wake        chan struct{}
-	maxAttempts int
-	now         func() time.Time
+	repo           QueueRepository
+	fencedQueue    FencedQueueRepository
+	terminalPurger TerminalPurger
+	wake           chan struct{}
+	maxAttempts    int
+	now            func() time.Time
 }
 
 // NewService validates the queue ports and resolves admission defaults. It starts no workers.
+// It resolves the optional TerminalPurger on Repositories.Queue once, logs it as
+// terminal_purge=wired|absent through slog.Default, and WARNs when an ordinary
+// queue is wired without it.
 func NewService(repos Repositories, opts ...Option) (*Service, error) {
 	cfg := serviceConfig{}
 	for _, opt := range opts {
@@ -37,7 +42,24 @@ func NewService(repos Repositories, opts ...Option) (*Service, error) {
 	if cfg.clock == nil {
 		cfg.clock = func() time.Time { return time.Now().UTC() }
 	}
-	return &Service{repo: repos.Queue, fencedQueue: repos.FencedQueue, wake: make(chan struct{}, 1), maxAttempts: cfg.maxAttempts, now: cfg.clock}, nil
+	purger, _ := repos.Queue.(TerminalPurger)
+	logTerminalPurge(repos, purger != nil)
+	return &Service{repo: repos.Queue, fencedQueue: repos.FencedQueue, terminalPurger: purger, wake: make(chan struct{}, 1), maxAttempts: cfg.maxAttempts, now: cfg.clock}, nil
+}
+
+// logTerminalPurge is the construction-time record of the ordinary-queue
+// retention capability. The WARN is mode-blind because the queue Service has no
+// runtime mode; every bundled store implements TerminalPurger.
+func logTerminalPurge(repos Repositories, wired bool) {
+	state := "absent"
+	if wired {
+		state = "wired"
+	}
+	log := slog.Default()
+	log.Info("jobs queue service constructed", "ordinary_queue", repos.Queue != nil, "fenced_queue", repos.FencedQueue != nil, "terminal_purge", state)
+	if repos.Queue != nil && !wired {
+		log.Warn("jobs queue: Repositories.Queue does not implement queue.TerminalPurger — ordinary-queue retention cannot run and PurgeTerminalJobs returns ErrTerminalPurgeRequired", "terminal_purge", state)
+	}
 }
 
 // Enqueue is the primitive-typed entry point (stdlib types only), so a consuming
