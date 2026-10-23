@@ -236,8 +236,34 @@ production would refuse.
 from the store it wraps, as decorators forward `LoweredPolicy`. One that hides it
 reads as non-recording, and production refuses it.
 
-`Register` logs `audit_recording`, `audit_reader` and `runtime_mode` beside the
-other fields, so the boot log shows the posture the pocket runs under.
+`Register` logs `audit_recording`, `audit_reader`, `decision_observer` and
+`runtime_mode` beside the other fields, so the boot log shows the posture the
+pocket runs under.
+
+**Denials are opt-in.** With `environment.ModeProduction` and no
+`WithDecisionObserver`, `New` logs one WARN: `authorization: denials are not
+durably recorded; wire WithDecisionObserver`. There is no acknowledgement and no
+refusal; see [Decision observer](#decision-observer).
+
+**The append-only posture probe (PostgreSQL).** In production a store refuses to
+boot when its runtime role is superuser, owns an audit table, can
+UPDATE/DELETE/TRUNCATE/TRIGGER it without the verified triggers, or cannot insert
+into it. `stores/pgx.Repositories` runs the probe after its schema probe, over
+`pgx.AuditTables(opts...)`: `iam_audit` when built `WithAudit()`, and
+`iam_operations`, where a DELETE grant is admitted. It uses the `RuntimeMode` the
+`pgxdb.DB` was opened with: production returns `pgxdb.ErrAppendOnlyTableWritable`
+or `pgxdb.ErrAppendOnlyTableUnwritable` naming the table, the reason and the fix;
+development logs one `append_only=unenforced` line; the zero mode is silent.
+`pgxdb.Config.AppendOnlyWritableAcknowledged` waives a writable table (one
+`posture_waiver` WARN per table), never an unwritable one. A host that runs
+migrations and the server as one role is refused; split the roles as the
+[database posture guide](../../workshop/documentation/docs/guides/database-posture.md)
+describes. A migrator preflights the runtime role with
+`pgxdb.InspectTablePrivileges(ctx, db, role, pgx.AuditTables(opts...)...)`, which
+decides exactly as boot does. The Turso store has no privileges to probe: it logs
+one WARN per audit table whose immutability triggers are absent or differ from
+migration 0006, and never refuses. See
+[pgxdb](../../integrations/datastores/pgxdb/README.md#append-only-tables-the-posture-probe).
 
 ### Multi-authority hosts
 
@@ -420,6 +446,31 @@ Results contain `applied`, `no_change` or `not_found`. Integrity refusals return
 `ErrInvariantBlocked`, wrapping `sdk.ErrConflict`. Shape, cancellation and commit
 errors also return no successful result.
 
+**Request correlation.** `audit.Source.RequestID` and `audit.Source.TraceID` tie a
+recorded change to the request that caused it. `Validate` bounds each to
+`audit.MaxCorrelationIDLen` (128) bytes of printable ASCII (0x20–0x7E), so a host
+that stamps an invalid id through `audit.WithSource` gets `sdk.ErrInvalidInput`.
+The bundled role routes stamp both from `sdk.RequestIDFromContext` and
+`sdk.TraceIDFromContext`. `web.RequestID()` passes a client's `X-Request-ID`
+through, so the routes BLANK an id that `Validate` would refuse; they never
+truncate it and never refuse the write. A system source, such as a bootstrap
+command, carries none. The SQL stores persist both ids. The database also stamps
+`seq` (PostgreSQL) and `recorded_at` on every row. These are evidence columns: no
+store reads or writes them, and they are NULL on rows written before migration 0005.
+
+**Append-only tables.** Migration 0006 installs immutability triggers by default.
+`iam_audit` refuses every UPDATE, DELETE and TRUNCATE. `iam_operations` refuses
+UPDATE and TRUNCATE, and refuses DELETE only for a fenced row (`outcome =
+'fenced'`, tested in the trigger body). Deleting a ledger row that is not fenced
+stays allowed; a fence row is what keeps a closed operation closed. On PostgreSQL
+the role that owns the table, and a SECURITY DEFINER function that role owns, is
+exempt, so an owner's backfill or purge needs no `DISABLE TRIGGER`. A refused
+write is `sdk.ErrForbidden` (SQLSTATE 42501, or the Turso trigger's abort).
+SQLite has no owner: a Turso host that must change an audit row drops the
+trigger, writes and re-runs 0006 in one transaction. Never use `INSERT OR
+REPLACE` on an audit table: SQLite deletes the replaced row without firing its
+DELETE trigger.
+
 ### Durable operation replay
 
 `Mutations.Apply` accepts an optional `Command.OperationID`. Empty IDs retain
@@ -443,8 +494,8 @@ audit-enabled store still requires `audit.WithSource`. `Superseded` is true only
 on a replay whose requested facts are no longer in effect, checked under the
 same write lock. It is a snapshot and does not prevent a later revoke.
 
-SQL hosts using `Repositories` must apply `0003_iam_operations.sql` and
-`0004_iam_operations_fenced.sql` before boot;
+SQL hosts using `Repositories` must apply `0003_iam_operations.sql`,
+`0004_iam_operations_fenced.sql` and `0005_iam_audit_integrity.sql` before boot;
 the constructor rejects missing or noncanonical ledger tables. Standalone
 `RelationshipRepository` remains ledger-free. See [schema adoption](stores/UPGRADE.md).
 Keep operation rows across purge, teardown and restarts. V1 never deletes them:
@@ -762,6 +813,78 @@ Disabled DEBUG skips timing and attribute construction. Caller-bound `*With`
 operations describe evaluation inside the caller's view, not a committed
 transaction. These operational records are separate from durable mutation audit
 and from `WithDiagnosticObserver`'s scoped-denial transition probes.
+
+#### Decision observer
+
+`authorization.WithDecisionObserver(observer)` reports decisions to a host
+observer, which can record denials durably. It forwards to the decision service
+(`decisions.WithDecisionObserver`) and to the HTTP adapter
+(`authorizationhttp.WithDecisionObserver`, for hosts that build the adapter
+themselves). The observer receives one `decisions.DecisionEvent` per completed
+unbound public operation, at every log level, after the operation returns and
+never inside a snapshot or retry callback. That covers `Check`, `CheckBatch`,
+`Evaluate`, `EvaluateResolved`, `EvaluateBatch`, `CheckExplain`,
+`FilterAuthorized`, `FilterPage`, `LookupResources*`, `LookupAllResourceIDs` and
+`LookupResourceIDPage`. The bound `*With` family emits nothing: those views run
+inside the caller's transaction, where a bridge's write would take a second
+connection and repeat on retry.
+
+| Field | Content |
+| --- | --- |
+| `Operation` | The public method name, or `RoleWrite` |
+| `Principal`, `Permission`, `ResourceType`, `ResourceID` | The request, bounded as the decision log bounds them |
+| `Subject` | The role write's subject; empty otherwise |
+| `Outcome` | `allowed` or `denied` for single decisions, `complete` for batches, filters and lookups, `error`, or `refused` |
+| `Requests`, `Allowed`, `Denied` | Batch and filter counts; lookups and filtered pages report returned IDs as `Allowed` |
+| `ErrorKind`, `Duration` | A low-cardinality error class, never the error text, and the elapsed time |
+
+When the `WritePolicy` refuses a bundled role write, the HTTP adapter logs one WARN,
+`authorization: role write refused`, with `actor_type`, `actor_id`, `operation`,
+`subject_type`, `subject_id`, `role`, `scope_kind`, `scope_type`, `scope_id` and
+`error_kind`. It also emits `DecisionEvent{Operation: "RoleWrite", Outcome:
+OutcomeRefused}` with the actor as `Principal`, the subject, the role as
+`Permission` and the scope as the resource. The response is unchanged. A request
+whose context ends is not a refusal and emits nothing.
+
+The observer runs on the request path: it must return promptly and tolerate
+concurrent calls. `decisions.EventAuthorizationDenied` (`authorization_denied`)
+and `decisions.EventRoleWriteRefused` (`role_write_refused`) name the durable
+events a host records. The bridge to the authentication pocket's security-event
+recorder is provider behavior between two framework pockets, so it lives in a
+HOST POCKET, never in `cmd/` (H10 in [the host contract](../../examples/README.md)).
+For example, `pockets/audit/outbound/securityevents` exposes `New(rec interface{
+Record(context.Context, securityevent.Input) }, opts ...Option)
+decisions.DecisionObserver`. It takes authentication's `Components.SecurityEvents`,
+the one recorder, so bridge failures count in `AuditWriteFailures()`. It records
+denials and refusals only; an allowed `Check` is not audit material. `cmd/`
+passes it to `authorization.WithDecisionObserver`:
+
+```go
+func New(rec Recorder, opts ...Option) decisions.DecisionObserver {
+    b := newBridge(rec, opts...) // semaphore + dedupe window
+    return func(ctx context.Context, ev decisions.DecisionEvent) {
+        switch ev.Outcome {
+        case decisions.OutcomeDenied:
+            b.record(ctx, ev, securityevent.Input{UserID: ev.Principal.ID, Type: decisions.EventAuthorizationDenied,
+                Status: securityevent.StatusFailure, Details: map[string]any{"operation": ev.Operation, "permission": ev.Permission,
+                "resource_type": ev.ResourceType, "resource_id": ev.ResourceID}})
+        case decisions.OutcomeRefused:
+            b.record(ctx, ev, securityevent.Input{Actor: securityevent.Principal{Type: ev.Principal.Type, ID: ev.Principal.ID},
+                UserID: ev.Subject.ID, Type: decisions.EventRoleWriteRefused, Status: securityevent.StatusBlocked,
+                Details: map[string]any{"role": ev.Permission, "scope_type": ev.ResourceType, "scope_id": ev.ResourceID}})
+        }
+    }
+}
+```
+
+The bridge ships backpressure, so a flood of 403s neither drains the database pool
+nor writes a row per request:
+
+- A semaphore, `WithMaxInFlight(n)` (default 8). When it is full the event is
+  dropped and counted; `Dropped() uint64` reports the count.
+- A dedupe window per (principal, permission, resource type, resource ID) through
+  the cacher, `WithDedupe(store cacher.Storer, window time.Duration)` (default an
+  in-memory store and 60 s).
 
 ### Bundled role administration
 

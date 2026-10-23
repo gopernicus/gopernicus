@@ -14,36 +14,56 @@ import (
 
 // Logging lives outside retry and snapshot callbacks. A caller-owned bound view
 // reports only evaluation completion, never the surrounding transaction's commit.
+// The decision observer sees unbound operations only, regardless of log level.
 type decisionLog struct {
-	logger  *slog.Logger
-	started time.Time
-	bound   bool
+	logger   *slog.Logger
+	observer DecisionObserver
+	started  time.Time
+	bound    bool
 }
 
 func (s *Service) startDecisionLog(ctx context.Context, bound bool) decisionLog {
-	if s == nil || s.logger == nil || !s.logger.Enabled(ctx, slog.LevelDebug) {
+	if s == nil {
 		return decisionLog{}
 	}
-	return decisionLog{logger: s.logger, started: time.Now(), bound: bound || s.inSnapshot}
+	l := decisionLog{bound: bound || s.inSnapshot}
+	if s.logger != nil && s.logger.Enabled(ctx, slog.LevelDebug) {
+		l.logger = s.logger
+	}
+	if !l.bound {
+		l.observer = s.observer
+	}
+	if !l.active() {
+		return decisionLog{}
+	}
+	l.started = time.Now()
+	return l
 }
 
+func (l decisionLog) active() bool { return l.logger != nil || l.observer != nil }
+
 func (l decisionLog) check(ctx context.Context, operation string, req authmodel.CheckRequest, result authmodel.CheckResult, err error) {
-	if l.logger == nil {
+	if !l.active() {
 		return
 	}
-	outcome := "denied"
+	outcome := OutcomeDenied
 	if result.Allowed {
-		outcome = "allowed"
+		outcome = OutcomeAllowed
 	}
-	attrs := decisionRequestAttrs(req.Principal, req.Permission, req.Resource.Type)
-	if req.Resource.ID != "" {
-		attrs = append(attrs, slog.String("resource_id", logRef(req.Resource.ID)))
+	event := decisionRequestEvent(req.Principal, req.Permission, req.Resource.Type)
+	event.ResourceID = logRef(req.Resource.ID)
+	var attrs []slog.Attr
+	if l.logger != nil {
+		attrs = decisionRequestAttrs(req.Principal, req.Permission, req.Resource.Type)
+		if req.Resource.ID != "" {
+			attrs = append(attrs, slog.String("resource_id", logRef(req.Resource.ID)))
+		}
 	}
-	l.finish(ctx, operation, outcome, err, attrs)
+	l.finish(ctx, operation, outcome, err, event, attrs)
 }
 
 func (l decisionLog) batch(ctx context.Context, operation string, requests int, results []authmodel.CheckResult, err error) {
-	if l.logger == nil {
+	if !l.active() {
 		return
 	}
 	allowed := 0
@@ -52,43 +72,80 @@ func (l decisionLog) batch(ctx context.Context, operation string, requests int, 
 			allowed++
 		}
 	}
-	l.finish(ctx, operation, "complete", err, []slog.Attr{slog.Int("request_count", requests), slog.Int("result_count", len(results)), slog.Int("allowed_count", allowed), slog.Int("denied_count", len(results)-allowed)})
+	event := DecisionEvent{Requests: requests, Allowed: allowed, Denied: len(results) - allowed}
+	var attrs []slog.Attr
+	if l.logger != nil {
+		attrs = []slog.Attr{slog.Int("request_count", requests), slog.Int("result_count", len(results)), slog.Int("allowed_count", allowed), slog.Int("denied_count", len(results)-allowed)}
+	}
+	l.finish(ctx, operation, OutcomeComplete, err, event, attrs)
 }
 
 func (l decisionLog) filter(ctx context.Context, principal authmodel.PrincipalRef, permission, resourceType string, requests, results int, err error) {
-	if l.logger == nil {
+	if !l.active() {
 		return
 	}
-	attrs := decisionRequestAttrs(principal, permission, resourceType)
-	attrs = append(attrs, slog.Int("request_count", requests), slog.Int("result_count", results))
-	l.finish(ctx, "FilterAuthorized", "complete", err, attrs)
+	event := decisionRequestEvent(principal, permission, resourceType)
+	event.Requests, event.Allowed = requests, results
+	if err == nil {
+		event.Denied = requests - results
+	}
+	var attrs []slog.Attr
+	if l.logger != nil {
+		attrs = decisionRequestAttrs(principal, permission, resourceType)
+		attrs = append(attrs, slog.Int("request_count", requests), slog.Int("result_count", results))
+	}
+	l.finish(ctx, "FilterAuthorized", OutcomeComplete, err, event, attrs)
 }
 
 func (l decisionLog) lookup(ctx context.Context, operation string, principal authmodel.PrincipalRef, permission, resourceType string, limit int, result authmodel.LookupResult, err error) {
-	if l.logger == nil {
+	if !l.active() {
 		return
 	}
-	attrs := decisionRequestAttrs(principal, permission, resourceType)
-	attrs = append(attrs, slog.Int("page_limit", limit), slog.Int("result_count", len(result.IDs)), slog.Bool("unrestricted", result.Unrestricted), slog.Bool("has_more", result.HasMore))
-	l.finish(ctx, operation, "complete", err, attrs)
+	event := decisionRequestEvent(principal, permission, resourceType)
+	event.Allowed = len(result.IDs)
+	var attrs []slog.Attr
+	if l.logger != nil {
+		attrs = decisionRequestAttrs(principal, permission, resourceType)
+		attrs = append(attrs, slog.Int("page_limit", limit), slog.Int("result_count", len(result.IDs)), slog.Bool("unrestricted", result.Unrestricted), slog.Bool("has_more", result.HasMore))
+	}
+	l.finish(ctx, operation, OutcomeComplete, err, event, attrs)
 }
 
 func (l decisionLog) page(ctx context.Context, principal authmodel.PrincipalRef, permission, resourceType string, limit, count int, hasMore, scanLimit bool, err error) {
-	if l.logger == nil {
+	if !l.active() {
 		return
 	}
-	attrs := decisionRequestAttrs(principal, permission, resourceType)
-	attrs = append(attrs, slog.Int("page_limit", limit), slog.Int("result_count", count), slog.Bool("has_more", hasMore), slog.Bool("scan_limit_reached", scanLimit))
-	l.finish(ctx, "FilterPage", "complete", err, attrs)
+	event := decisionRequestEvent(principal, permission, resourceType)
+	event.Allowed = count
+	var attrs []slog.Attr
+	if l.logger != nil {
+		attrs = decisionRequestAttrs(principal, permission, resourceType)
+		attrs = append(attrs, slog.Int("page_limit", limit), slog.Int("result_count", count), slog.Bool("has_more", hasMore), slog.Bool("scan_limit_reached", scanLimit))
+	}
+	l.finish(ctx, "FilterPage", OutcomeComplete, err, event, attrs)
 }
 
-func (l decisionLog) finish(ctx context.Context, operation, outcome string, err error, attrs []slog.Attr) {
+func (l decisionLog) finish(ctx context.Context, operation string, outcome DecisionOutcome, err error, event DecisionEvent, attrs []slog.Attr) {
+	duration := time.Since(l.started)
 	if err != nil {
-		outcome = "error"
-		attrs = append(attrs, slog.String("error_kind", decisionErrorKind(err)))
+		outcome = OutcomeError
+		event.ErrorKind = decisionErrorKind(err)
 	}
-	attrs = append(attrs, slog.String("operation", operation), slog.String("outcome", outcome), slog.Duration("duration", time.Since(l.started)), slog.Bool("bound", l.bound))
-	l.logger.LogAttrs(ctx, slog.LevelDebug, "authorization decision", attrs...)
+	if l.logger != nil {
+		if err != nil {
+			attrs = append(attrs, slog.String("error_kind", event.ErrorKind))
+		}
+		attrs = append(attrs, slog.String("operation", operation), slog.String("outcome", string(outcome)), slog.Duration("duration", duration), slog.Bool("bound", l.bound))
+		l.logger.LogAttrs(ctx, slog.LevelDebug, "authorization decision", attrs...)
+	}
+	if l.observer != nil {
+		event.Operation, event.Outcome, event.Duration = operation, outcome, duration
+		l.observer(ctx, event)
+	}
+}
+
+func decisionRequestEvent(principal authmodel.PrincipalRef, permission, resourceType string) DecisionEvent {
+	return DecisionEvent{Principal: sdk.Principal{Type: logRef(principal.Type), ID: logRef(principal.ID)}, Permission: logRef(permission), ResourceType: logRef(resourceType)}
 }
 
 func decisionRequestAttrs(principal authmodel.PrincipalRef, permission, resourceType string) []slog.Attr {

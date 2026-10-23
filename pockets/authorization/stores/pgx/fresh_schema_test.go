@@ -199,6 +199,13 @@ func TestFreshCacheInstallationOrderAndRollback(t *testing.T) {
 		t.Fatal(err)
 	}
 	merged[MigrationsDir+"/0004_iam_operations_fenced.sql"] = &fstest.MapFile{Data: fenced}
+	for _, name := range []string{"0005_iam_audit_integrity.sql", immutableMigration} {
+		data, err := MigrationsFS.ReadFile(MigrationsDir + "/" + name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		merged[MigrationsDir+"/"+name] = &fstest.MapFile{Data: data}
+	}
 	merged[MigrationsDir+"/0002_iam_tuple_cache.sql"] = &fstest.MapFile{Data: cache}
 	if err := pgxdb.RunMigrations(t.Context(), db, merged, MigrationsDir); err != nil {
 		t.Fatal(err)

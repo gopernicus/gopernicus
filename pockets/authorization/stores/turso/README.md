@@ -122,15 +122,29 @@ guide](../UPGRADE.md)) and snapshot or branch the database. `Repositories`
 populates both `Mutations` and `Operations`; `RelationshipRepository` needs
 neither table.
 
-**v0.18.1: ship and tolerate 0005; adopt BEFORE migrating it.**
+**v0.19.0: 0005 is required; 0006 makes the audit tables append-only.**
 `0005_iam_audit_integrity.sql` rebuilds `iam_audit` (adding `request_id`,
 `trace_id` and `recorded_at`) and `iam_operations` (adding `recorded_at`) the way
 0004 does, so host triggers and indexes on either table are dropped; copied rows
-keep a NULL `recorded_at`. The store never writes the new columns, so they take
-their defaults. v0.18.1 admits a database with or without 0005; v0.18.0 refuses
-one with 0005 applied (through `Repositories` or `WithAudit()`) and v0.19.0 will
-require it. Run v0.18.1 everywhere first,
-then migrate 0005; after 0005, roll back only to v0.18.1.
+keep a NULL `recorded_at`. The store writes the two ids; the database stamps
+`recorded_at`. The rebuild holds the write lock: it is restartable, not online,
+so run it in a maintenance window. `Repositories` and any store built
+`WithAudit()` refuse a database without 0005, and v0.18.0 refuses one with it:
+run v0.18.1 everywhere first, migrate 0005, then repin v0.19.0. After 0005, roll
+back only to v0.18.1.
+
+`0006_iam_audit_immutable.sql` drops and re-creates four triggers:
+`iam_audit_immutable_update` and `iam_audit_immutable_delete` abort every change
+to `iam_audit`; `iam_operations_immutable_update` aborts every UPDATE of
+`iam_operations`, and `iam_operations_immutable_delete` aborts deleting a fenced
+row. SQLite has no owner to exempt, and a refused write is `sdk.ErrForbidden`.
+Under a non-zero `RuntimeMode`, `Repositories` logs one WARN per table in
+`AuditTables(opts...)` whose triggers are absent or differ; it never refuses.
+Two SQLite rules follow. `INSERT OR REPLACE` deletes the replaced row without
+firing its DELETE trigger, so no path may use it on an audit table. A later
+rebuild of `iam_audit` or `iam_operations` (`DROP TABLE` and rename) drops the
+triggers silently, so it must ship with a paired file that re-creates them. See
+the [upgrade guide](../UPGRADE.md).
 
 TupleCache adds one optional file,
 `tuple_cache_migrations/0002_iam_tuple_cache.sql`, exposed by

@@ -231,9 +231,11 @@ func TestAuditListingEqualTimestampPagination(t *testing.T) {
 		}
 	}
 	now := time.Date(2026, 9, 11, 12, 0, 0, 123456000, time.UTC)
+	dropAuditTriggers(t, db)
 	if _, err := db.Exec(ctx, `UPDATE `+"iam_audit"+` SET occurred_at=?`, tursodb.FormatTime(now)); err != nil {
 		t.Fatal(err)
 	}
+	restoreAuditTriggers(t, db)
 	for _, direction := range []string{list.ASC, list.DESC} {
 		req := list.Request{Limit: 1, Order: list.NewOrder("occurred_at", direction)}
 		var ids []string
@@ -287,4 +289,11 @@ func TestAuditModelReaderRetainsRecordingConfiguration(t *testing.T) {
 	if records := auditRecords(t, repos); len(records) != 1 {
 		t.Fatalf("bound store lost audit: %+v", records)
 	}
+}
+
+// TestAuditTriggersLive proves migration 0006 on the live database: audit rows
+// cannot be rewritten or removed, fenced operations cannot be removed.
+func TestAuditTriggersLive(t *testing.T) {
+	url, token := requireTursoEnv(t)
+	assertAuditImmutable(t, openAndMigrate(t, url, token))
 }

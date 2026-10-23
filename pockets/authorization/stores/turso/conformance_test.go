@@ -138,15 +138,19 @@ func openAndMigrate(t *testing.T, url, token string) *tursodb.DB {
 	return db
 }
 
-// truncate clears every authorization table so a store starts empty.
+// truncate clears every authorization table so a store starts empty. The
+// immutability triggers refuse the reset, so it drops them first and restores
+// them from the embedded 0006 after.
 func truncate(t *testing.T, db *tursodb.DB) {
 	t.Helper()
 	ctx := context.Background()
+	dropAuditTriggers(t, db)
 	for _, tbl := range authorizationTables {
 		if _, err := db.Exec(ctx, "DELETE FROM "+tbl); err != nil {
 			t.Fatalf("truncate %s: %v", tbl, err)
 		}
 	}
+	restoreAuditTriggers(t, db)
 }
 
 func TestAuditConformance(t *testing.T) {

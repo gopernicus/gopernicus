@@ -30,6 +30,28 @@ var MigrationsFS embed.FS
 // MigrationsDir is the directory within MigrationsFS holding the .sql files.
 const MigrationsDir = "migrations"
 
+// The immutability triggers migration 0006 installs, exactly as sqlite_schema
+// stores them: without the main. qualifier and the final semicolon. The trigger
+// probe compares the installed definitions with them.
+const (
+	iamAuditImmutableUpdate = `CREATE TRIGGER iam_audit_immutable_update BEFORE UPDATE ON iam_audit
+BEGIN
+    SELECT RAISE(ABORT, 'iam_audit is append-only');
+END`
+	iamAuditImmutableDelete = `CREATE TRIGGER iam_audit_immutable_delete BEFORE DELETE ON iam_audit
+BEGIN
+    SELECT RAISE(ABORT, 'iam_audit is append-only');
+END`
+	iamOperationsImmutableUpdate = `CREATE TRIGGER iam_operations_immutable_update BEFORE UPDATE ON iam_operations
+BEGIN
+    SELECT RAISE(ABORT, 'iam_operations is append-only');
+END`
+	iamOperationsImmutableDelete = `CREATE TRIGGER iam_operations_immutable_delete BEFORE DELETE ON iam_operations
+BEGIN
+    SELECT CASE WHEN OLD.outcome = 'fenced' THEN RAISE(ABORT, 'iam_operations is append-only') END;
+END`
+)
+
 // Option configures the store set at construction.
 type Option func(*config)
 
@@ -54,7 +76,10 @@ func WithIntegrityPolicy(p mutation.IntegrityPolicy) Option {
 
 // Repositories probes the canonical tuple, audit and operation tables and returns all ports.
 // WithTupleCache additionally validates optional protocol 2 capture and exposes the
-// matching source. No constructor applies migrations or starts a worker.
+// matching source. Under a non-zero RuntimeMode it then logs one WARN per table
+// in AuditTables whose immutability triggers are absent or differ from
+// migration 0006; it never refuses for them. No constructor applies migrations
+// or starts a worker.
 func Repositories(ctx context.Context, db *tursodb.DB, opts ...Option) (authorization.Repositories, error) {
 	if db == nil {
 		return authorization.Repositories{}, fmt.Errorf("authorization turso: nil database: %w", sdk.ErrInvalidInput)
@@ -85,6 +110,9 @@ func Repositories(ctx context.Context, db *tursodb.DB, opts ...Option) (authoriz
 	if err := probeCanonicalSchema(ctx, db, true, true); err != nil {
 		return authorization.Repositories{}, err
 	}
+	if err := db.ProbeAuditImmutable(ctx, auditTables(cfg)...); err != nil {
+		return authorization.Repositories{}, err
+	}
 	mutationStore := newMutationStore(db, cfg)
 	repos := authorization.Repositories{
 		Tuples:     newTupleStore(db, cfg),
@@ -96,6 +124,33 @@ func Repositories(ctx context.Context, db *tursodb.DB, opts ...Option) (authoriz
 		repos.TupleSource = source
 	}
 	return repos, nil
+}
+
+// AuditTables is the append-only table set Repositories hands to
+// tursodb.DB.ProbeAuditImmutable for these options: iam_audit when WithAudit()
+// is set, and iam_operations, each with the triggers migration 0006 installs.
+func AuditTables(opts ...Option) []tursodb.AppendOnlyTable {
+	var cfg config
+	for _, o := range opts {
+		if o != nil {
+			o(&cfg)
+		}
+	}
+	return auditTables(cfg)
+}
+
+func auditTables(cfg config) []tursodb.AppendOnlyTable {
+	var tables []tursodb.AppendOnlyTable
+	if cfg.audit {
+		tables = append(tables, tursodb.AppendOnlyTable{Name: "iam_audit", Triggers: []tursodb.TableTrigger{
+			{Name: "iam_audit_immutable_update", Canonical: []tursodb.TriggerBody{{SQL: iamAuditImmutableUpdate}}},
+			{Name: "iam_audit_immutable_delete", Canonical: []tursodb.TriggerBody{{SQL: iamAuditImmutableDelete}}},
+		}})
+	}
+	return append(tables, tursodb.AppendOnlyTable{Name: "iam_operations", Triggers: []tursodb.TableTrigger{
+		{Name: "iam_operations_immutable_update", Canonical: []tursodb.TriggerBody{{SQL: iamOperationsImmutableUpdate}}},
+		{Name: "iam_operations_immutable_delete", Canonical: []tursodb.TriggerBody{{SQL: iamOperationsImmutableDelete}}},
+	}})
 }
 
 // RelationshipRepository constructs the relationship facade over canonical facts.

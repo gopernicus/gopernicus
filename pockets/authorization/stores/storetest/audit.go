@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 
@@ -139,6 +140,7 @@ func RunAudit(t *testing.T, factory func(*testing.T, bool) Repositories) {
 	t.Run("MutationChanges", func(t *testing.T) { specMutationAudit(t, factory(t, true)) })
 	t.Run("PurgeBound", func(t *testing.T) { specAuditPurgeBound(t, factory(t, true)) })
 	t.Run("PagingAndOwnership", func(t *testing.T) { specAuditPaging(t, factory(t, true)) })
+	t.Run("CorrelationIDs", func(t *testing.T) { specAuditCorrelation(t, factory(t, true)) })
 }
 func requireAudit(t *testing.T, r Repositories) {
 	t.Helper()
@@ -394,4 +396,58 @@ func specAuditPurgeBound(t *testing.T, r Repositories) {
 		}
 		return err
 	}, []audit.Change{removedRelationship(rows[0]), removedRelationship(rows[1])})
+}
+
+// specAuditCorrelation round-trips Source.RequestID and Source.TraceID through
+// every write surface and both list strategies, admits blank and whole ids,
+// and refuses an id a host stamps by hand beyond audit.MaxCorrelationIDLen.
+func specAuditCorrelation(t *testing.T, r Repositories) {
+	requireAudit(t, r)
+	whole := strings.Repeat("r", audit.MaxCorrelationIDLen)
+	for i, source := range []audit.Source{
+		{ActorType: "user", ActorID: "actor", RequestID: "req-1", TraceID: "4bf92f3577b34da6a3ce929d0e0e4736"},
+		{System: "bootstrap"},
+		{ActorType: "user", ActorID: "actor", Reason: "rotation", RequestID: whole, TraceID: whole},
+	} {
+		ctx := audit.WithSource(context.Background(), source)
+		id := "correlated-" + strconv.Itoa(i)
+		writes := []func() error{
+			func() error {
+				return r.Relationships.CreateRelationships(ctx, []relationships.CreateRelationship{ct("doc", id, "viewer", "user", "raw")})
+			},
+			func() error { _, err := r.Mutations.Apply(ctx, grant(id, "viewer", "command"), nil); return err },
+			func() error {
+				return assignRole(ctx, r.Tuples, roles.Assignment{SubjectType: "user", SubjectID: "role", Role: "editor", Scope: fixtureScope("doc", id)})
+			},
+		}
+		for _, write := range writes {
+			if err := write(); err != nil {
+				t.Fatalf("source %+v: %v", source, err)
+			}
+		}
+		for _, strategy := range []list.Strategy{list.StrategyCursor, list.StrategyOffset} {
+			page, err := r.Audit.List(context.Background(), audit.Filter{ResourceType: "doc", ResourceID: id}, list.Request{Strategy: strategy, Limit: 10})
+			if err != nil || len(page.Items) != len(writes) {
+				t.Fatalf("%s listing of %s: %+v %v", strategy, id, page, err)
+			}
+			for _, row := range page.Items {
+				if row.Source != source {
+					t.Fatalf("%s listing changed source: got %+v, want %+v", strategy, row.Source, source)
+				}
+			}
+		}
+	}
+	before := readAudit(t, r.Audit)
+	for _, source := range []audit.Source{{System: "host", RequestID: whole + "r"}, {ActorType: "user", ActorID: "actor", TraceID: "trace\x00"}} {
+		ctx := audit.WithSource(context.Background(), source)
+		if err := r.Relationships.CreateRelationships(ctx, []relationships.CreateRelationship{ct("doc", "refused", "viewer", "user", "raw")}); !errors.Is(err, sdk.ErrInvalidInput) {
+			t.Fatalf("raw write accepted invalid correlation %+v: %v", source, err)
+		}
+		if result, err := r.Mutations.Apply(ctx, grant("refused", "viewer", "command"), nil); result != nil || !errors.Is(err, sdk.ErrInvalidInput) {
+			t.Fatalf("command accepted invalid correlation %+v: %+v %v", source, result, err)
+		}
+	}
+	if after := readAudit(t, r.Audit); len(after) != len(before) || relationExists(t, r, "refused", "viewer", "raw") {
+		t.Fatalf("invalid correlation wrote state: before=%d after=%d", len(before), len(after))
+	}
 }

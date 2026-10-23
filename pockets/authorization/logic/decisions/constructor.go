@@ -21,6 +21,7 @@ type config struct {
 	source     tuplecache.Source
 	policy     tuplecache.Policy
 	diagnostic DiagnosticObserver
+	observer   DecisionObserver
 }
 
 // Service evaluates exact membership and graph policy over one canonical view.
@@ -36,6 +37,7 @@ type Service struct {
 	tupleCache  *tuplecache.TupleCache
 	diagnostic  DiagnosticObserver
 	diagnostics *operationDiagnostics
+	observer    DecisionObserver
 
 	// subjectFirst disables the direct-hit short circuit for one bound view.
 	subjectFirst bool
@@ -63,7 +65,7 @@ func NewService(reader tuples.Reader, opts ...Option) (*Service, error) {
 	if cfg.logger == nil {
 		cfg.logger = slog.Default()
 	}
-	s := &Service{logger: cfg.logger, store: reader, facts: reader, compiled: compiled, readModel: compiled.readModel(), limits: limits, diagnostic: cfg.diagnostic}
+	s := &Service{logger: cfg.logger, store: reader, facts: reader, compiled: compiled, readModel: compiled.readModel(), limits: limits, diagnostic: cfg.diagnostic, observer: cfg.observer}
 	s.reader = s.graphReader(reader)
 	if cfg.backend != nil {
 		if isNilReader(cfg.backend) || isNilReader(cfg.source) {

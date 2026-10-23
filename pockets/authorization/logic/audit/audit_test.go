@@ -25,6 +25,35 @@ func TestSourceValidation(t *testing.T) {
 		}
 	}
 }
+func TestSourceCorrelationIDs(t *testing.T) {
+	whole := strings.Repeat("~", MaxCorrelationIDLen)
+	for _, source := range []Source{
+		{System: "job", RequestID: whole + "a"},
+		{System: "job", TraceID: whole + "a"},
+		{System: "job", RequestID: "req\x01"},
+		{System: "job", TraceID: "trace\x7f"},
+		{System: "job", RequestID: "r\u00e9q"},
+		{ActorType: "user", ActorID: "u", RequestID: "req\n"},
+	} {
+		if err := source.Validate(); !errors.Is(err, sdk.ErrInvalidInput) {
+			t.Fatalf("accepted invalid correlation %q/%q: %v", source.RequestID, source.TraceID, err)
+		}
+	}
+	for _, source := range []Source{{System: "job"}, {System: "job", RequestID: whole, TraceID: whole}, {ActorType: "user", ActorID: "u", RequestID: " req-1 ", TraceID: "4bf92f3577b34da6a3ce929d0e0e4736"}} {
+		if err := source.Validate(); err != nil {
+			t.Fatalf("refused valid correlation %+v: %v", source, err)
+		}
+	}
+	source := Source{ActorType: "user", ActorID: "u", RequestID: "req-1", TraceID: "trace-1"}
+	change := Change{Action: ActionAdded, Tuple: tuples.Tuple{Scope: tuples.Global(), Relation: "editor", Subject: tuples.SubjectRef{Type: "user", ID: "u"}}}
+	records, err := NewRecords(WithSource(context.Background(), source), []Change{change}, time.Now())
+	if err != nil || len(records) != 1 || records[0].Source != source {
+		t.Fatalf("records lost correlation: %+v %v", records, err)
+	}
+	if _, err := NewRecords(WithSource(context.Background(), Source{System: "job", RequestID: whole + "a"}), []Change{change}, time.Now()); !errors.Is(err, sdk.ErrInvalidInput) {
+		t.Fatalf("recorded an over-long request id: %v", err)
+	}
+}
 func TestRecordsOwnCanonicalNetChanges(t *testing.T) {
 	ctx := WithSource(context.Background(), Source{System: "sync"})
 	a := (relationships.CreateRelationship{ResourceType: "doc", ResourceID: "d", Relation: "viewer", SubjectType: "group", SubjectID: "g", SubjectRelation: "member"}).Tuple()

@@ -31,6 +31,35 @@ const MigrationsDir = "migrations"
 // the name the boot probe points a misconfigured host at.
 const migrationSource = "authorization"
 
+// The trigger function bodies migration 0006 installs, exactly as pg_proc.prosrc
+// holds them: the text between each function's dollar quotes. The posture probe
+// verifies the installed trigger pairs against them.
+const (
+	iamAuditRefuseWrite     = "iam_audit_refuse_write"
+	iamAuditRefuseWriteBody = `
+BEGIN
+  IF pg_catalog.pg_has_role(current_user, (SELECT c.relowner FROM pg_catalog.pg_class c WHERE c.oid = TG_RELID), 'MEMBER') THEN
+    IF TG_OP = 'UPDATE' THEN RETURN NEW; END IF;
+    RETURN OLD;
+  END IF;
+  RAISE EXCEPTION 'iam_audit is append-only' USING ERRCODE = '42501';
+END
+`
+	iamOperationsRefuseWrite     = "iam_operations_refuse_write"
+	iamOperationsRefuseWriteBody = `
+BEGIN
+  IF pg_catalog.pg_has_role(current_user, (SELECT c.relowner FROM pg_catalog.pg_class c WHERE c.oid = TG_RELID), 'MEMBER') THEN
+    IF TG_OP = 'UPDATE' THEN RETURN NEW; END IF;
+    RETURN OLD;
+  END IF;
+  IF TG_OP = 'DELETE' THEN
+    IF OLD.outcome <> 'fenced' THEN RETURN OLD; END IF;
+  END IF;
+  RAISE EXCEPTION 'iam_operations is append-only' USING ERRCODE = '42501';
+END
+`
+)
+
 // storeTables is the pocket's table inventory, probed at construction in this
 // order. Every statement in the package renders these names through a store's
 // table method so a schema-scoped store qualifies them.
@@ -72,7 +101,10 @@ func WithSchema(s pgxdb.Schema) Option {
 
 // Repositories probes the canonical tuple, audit and operation tables and returns all ports.
 // WithTupleCache additionally validates optional protocol 2 capture and exposes the
-// matching source. No constructor applies migrations or starts a worker.
+// matching source. It then runs the append-only posture probe over AuditTables
+// under the RuntimeMode db was opened with: production refuses a runtime role
+// that can modify or cannot append to those tables. No constructor applies
+// migrations or starts a worker.
 func Repositories(ctx context.Context, db *pgxdb.DB, opts ...Option) (authorization.Repositories, error) {
 	if db == nil {
 		return authorization.Repositories{}, fmt.Errorf("authorization pgx: nil database: %w", sdk.ErrInvalidInput)
@@ -103,6 +135,9 @@ func Repositories(ctx context.Context, db *pgxdb.DB, opts ...Option) (authorizat
 	if err := probeCanonicalSchema(ctx, db, cfg.schema, true, true); err != nil {
 		return authorization.Repositories{}, err
 	}
+	if err := db.ProbeAppendOnly(ctx, auditTables(cfg)...); err != nil {
+		return authorization.Repositories{}, err
+	}
 	mutationStore := newMutationStore(db, cfg)
 	repos := authorization.Repositories{
 		Tuples:     newTupleStore(db, cfg),
@@ -114,6 +149,36 @@ func Repositories(ctx context.Context, db *pgxdb.DB, opts ...Option) (authorizat
 		repos.TupleSource = source
 	}
 	return repos, nil
+}
+
+// AuditTables is the append-only table set Repositories hands to
+// pgxdb.DB.ProbeAppendOnly for these options: iam_audit when WithAudit() is set,
+// and iam_operations, whose trigger admits deleting rows that are not fenced.
+// A migrator passes the same set to pgxdb.InspectTablePrivileges to preflight
+// the runtime role, so the preflight and boot decide identically.
+func AuditTables(opts ...Option) []pgxdb.AppendOnlyTable {
+	var cfg config
+	for _, o := range opts {
+		if o != nil {
+			o(&cfg)
+		}
+	}
+	return auditTables(cfg)
+}
+
+func auditTables(cfg config) []pgxdb.AppendOnlyTable {
+	var tables []pgxdb.AppendOnlyTable
+	if cfg.audit {
+		tables = append(tables, pgxdb.AppendOnlyTable{
+			Name:      cfg.schema.Table("iam_audit"),
+			Canonical: []pgxdb.TriggerBody{{Function: iamAuditRefuseWrite, Body: iamAuditRefuseWriteBody}},
+		})
+	}
+	return append(tables, pgxdb.AppendOnlyTable{
+		Name:        cfg.schema.Table("iam_operations"),
+		AllowDelete: true,
+		Canonical:   []pgxdb.TriggerBody{{Function: iamOperationsRefuseWrite, Body: iamOperationsRefuseWriteBody}},
+	})
 }
 
 // RelationshipRepository constructs the relationship facade over canonical facts.
