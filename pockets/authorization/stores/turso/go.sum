@@ -12,8 +12,8 @@ github.com/gopernicus/gopernicus/integrations/datastores/turso v0.8.0 h1:WL3VjVC
 github.com/gopernicus/gopernicus/integrations/datastores/turso v0.8.0/go.mod h1:20Wt7fZvn6M1G42/3GTlbEaEA31nmIiPJJvSN3uuq1E=
 github.com/gopernicus/gopernicus/pockets v0.1.0 h1:2WcybbfPw1km00DmG37CekPbxYmObyyj3T1Ec0eFSRY=
 github.com/gopernicus/gopernicus/pockets v0.1.0/go.mod h1:A2H/Tl9Pn2v2mFLOgkCQngMRFkMN10E1MEzGCQICsEw=
-github.com/gopernicus/gopernicus/pockets/authorization v0.29.0 h1:Kd9DjOGZrXsJFt3dlq/UVv8Hq73YidbMluqUMBLth0I=
-github.com/gopernicus/gopernicus/pockets/authorization v0.29.0/go.mod h1:pDN8HlJK0ZMncFZLnXergHZkEB5QjMxLwS/dkCo6XMs=
+github.com/gopernicus/gopernicus/pockets/authorization v0.30.0 h1:Wij1Y7AmthrkU3PFEgeypjTu5wOQCTgbFLumP/+5PM0=
+github.com/gopernicus/gopernicus/pockets/authorization v0.30.0/go.mod h1:pDN8HlJK0ZMncFZLnXergHZkEB5QjMxLwS/dkCo6XMs=
 github.com/gopernicus/gopernicus/sdk v0.15.0 h1:Tt7GO5kpGQXjnGbSmOKvAyOXnBbUm19j/gtyKL1QAC0=
 github.com/gopernicus/gopernicus/sdk v0.15.0/go.mod h1:z0bypQiCybwPoxoDfzhYvB1BtH2av549QR84GacngaE=
 github.com/hashicorp/golang-lru/v2 v2.0.7 h1:a+bsQ5rvGLjzHuww6tVxozPZFVghXaHOwFs4luLUK2k=
