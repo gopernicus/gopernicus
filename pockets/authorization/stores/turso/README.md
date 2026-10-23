@@ -122,6 +122,16 @@ guide](../UPGRADE.md)) and snapshot or branch the database. `Repositories`
 populates both `Mutations` and `Operations`; `RelationshipRepository` needs
 neither table.
 
+**v0.18.1: ship and tolerate 0005; adopt BEFORE migrating it.**
+`0005_iam_audit_integrity.sql` rebuilds `iam_audit` (adding `request_id`,
+`trace_id` and `recorded_at`) and `iam_operations` (adding `recorded_at`) the way
+0004 does, so host triggers and indexes on either table are dropped; copied rows
+keep a NULL `recorded_at`. The store never writes the new columns, so they take
+their defaults. v0.18.1 admits a database with or without 0005; v0.18.0 refuses
+one with 0005 applied (through `Repositories` or `WithAudit()`) and v0.19.0 will
+require it. Run v0.18.1 everywhere first,
+then migrate 0005; after 0005, roll back only to v0.18.1.
+
 TupleCache adds one optional file,
 `tuple_cache_migrations/0002_iam_tuple_cache.sql`, exposed by
 `TupleCacheMigrationsFS` / `TupleCacheMigrationsDir` and

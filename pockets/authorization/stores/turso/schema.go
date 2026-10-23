@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 
 	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
@@ -27,15 +28,26 @@ func probeCanonicalSchema(ctx context.Context, db *tursodb.DB, audit, operations
 		return err
 	}
 	data = append(data, operationsData...)
+	// 0005 rebuilds iam_audit and iam_operations the same way; until it is
+	// required, either the earlier body or the 0005 body is canonical.
+	integrityData, err := MigrationsFS.ReadFile(MigrationsDir + "/0005_iam_audit_integrity.sql")
+	if err != nil {
+		return err
+	}
+	data = append(data, integrityData...)
 	// Compare the owned CREATE body, retaining SQL literals and grouping. This
 	// checks column types/nullability, full identity, collation and every shape
 	// constraint together.
-	definitions := regexp.MustCompile(`(?s)CREATE TABLE main\.(iam_tuples|iam_audit|iam_operations_next) (\(.*?\n\));`).FindAllStringSubmatch(string(data), -1)
-	if len(definitions) != 3 {
+	definitions := regexp.MustCompile(`(?s)CREATE TABLE main\.(iam_tuples|iam_audit|iam_audit_next|iam_operations_next) (\(.*?\n\));`).FindAllStringSubmatch(string(data), -1)
+	if len(definitions) != 5 {
 		return incompatibleSchema("iam_tuples", "embedded canonical definitions unavailable")
 	}
+	accepted := map[string][]string{}
 	for _, def := range definitions {
 		table := strings.TrimSuffix(def[1], "_next")
+		accepted[table] = append(accepted[table], def[2])
+	}
+	for _, table := range []string{"iam_tuples", "iam_audit", "iam_operations"} {
 		if table == "iam_audit" {
 			if !audit {
 				continue
@@ -49,7 +61,7 @@ func probeCanonicalSchema(ctx context.Context, db *tursodb.DB, audit, operations
 			return err
 		}
 		start := strings.IndexByte(actual, '(')
-		if start < 0 || strings.TrimSpace(actual[start:]) != def[2] {
+		if start < 0 || !slices.Contains(accepted[table], strings.TrimSpace(actual[start:])) {
 			return incompatibleSchema(table, "column, primary key or shape definitions differ from the canonical migration")
 		}
 		var extraUnique int
