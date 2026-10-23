@@ -149,26 +149,6 @@ func testInvitationConcurrentClaimCancel(t *testing.T, repos auth.Repositories) 
 	}
 }
 
-// skipUnsupportedCancelAcceptance skips a CancelAcceptance case for an adapter
-// that reports the method unsupported (the firestore stub, ruling R6). Any other
-// answer to the probe, including ErrNotFound, runs the case.
-func skipUnsupportedCancelAcceptance(t *testing.T, repos auth.Repositories) {
-	t.Helper()
-	probe := invitations.Acceptance{TokenHash: "probe-token", SubjectType: "user", SubjectID: "probe", Now: suiteBase}
-	if _, err := repos.Invitations.CancelAcceptance(context.Background(), "storetest-unsupported-probe", probe); errors.Is(err, errors.ErrUnsupported) {
-		t.Skip("CancelAcceptance unsupported by this adapter — terminal-settlement conformance NOT verified")
-	}
-}
-
-// skipUnsupportedListActive is skipUnsupportedCancelAcceptance for ListActiveByResource.
-func skipUnsupportedListActive(t *testing.T, repos auth.Repositories) {
-	t.Helper()
-	in := invitations.ActiveListInput{ResourceType: "probe", ResourceID: "probe"}
-	if _, err := repos.Invitations.ListActiveByResource(context.Background(), in, listing.Request{Limit: 1}); errors.Is(err, errors.ErrUnsupported) {
-		t.Skip("ListActiveByResource unsupported by this adapter — active-listing conformance NOT verified")
-	}
-}
-
 // claimInvitation creates a pending invitation and claims it for claimant one
 // minute after creation, returning the accepting row and its claim.
 func claimInvitation(t *testing.T, repo invitations.InvitationRepository, resourceID, relation, identifier, tokenHash string, createdAt time.Time) (invitations.Invitation, invitations.Acceptance) {
@@ -193,7 +173,6 @@ func sameInvitationState(a, b invitations.Invitation) bool {
 }
 
 func testInvitationCancelAcceptance(t *testing.T, repos auth.Repositories) {
-	skipUnsupportedCancelAcceptance(t, repos)
 	ctx := context.Background()
 	repo := repos.Invitations
 	inv, claim := claimInvitation(t, repo, "p", "member", "cancel@example.com", "cancel-token", suiteBase)
@@ -222,7 +201,6 @@ func testInvitationCancelAcceptance(t *testing.T, repos auth.Repositories) {
 }
 
 func testInvitationCancelAcceptanceIdempotent(t *testing.T, repos auth.Repositories) {
-	skipUnsupportedCancelAcceptance(t, repos)
 	ctx := context.Background()
 	repo := repos.Invitations
 	inv, claim := claimInvitation(t, repo, "p", "member", "twice@example.com", "twice-token", suiteBase)
@@ -242,7 +220,6 @@ func testInvitationCancelAcceptanceIdempotent(t *testing.T, repos auth.Repositor
 }
 
 func testInvitationCancelAcceptancePastExpiry(t *testing.T, repos auth.Repositories) {
-	skipUnsupportedCancelAcceptance(t, repos)
 	repo := repos.Invitations
 	inv, claim := claimInvitation(t, repo, "p", "member", "late@example.com", "late-token", suiteBase)
 	claim.Now = inv.ExpiresAt.Add(time.Hour)
@@ -256,7 +233,6 @@ func testInvitationCancelAcceptancePastExpiry(t *testing.T, repos auth.Repositor
 // cancels: another token, subject or subject type, and every other status —
 // including a row cancelled through UpdateStatus — conflict and change nothing.
 func testInvitationCancelAcceptanceMismatch(t *testing.T, repos auth.Repositories) {
-	skipUnsupportedCancelAcceptance(t, repos)
 	ctx := context.Background()
 	repo := repos.Invitations
 	later := suiteBase.Add(30 * time.Minute)
@@ -302,7 +278,6 @@ func testInvitationCancelAcceptanceMismatch(t *testing.T, repos auth.Repositorie
 }
 
 func testInvitationCancelThenCompleteConflicts(t *testing.T, repos auth.Repositories) {
-	skipUnsupportedCancelAcceptance(t, repos)
 	ctx := context.Background()
 	repo := repos.Invitations
 	inv, claim := claimInvitation(t, repo, "p", "member", "settled@example.com", "settled-token", suiteBase)
@@ -324,7 +299,6 @@ func testInvitationCancelThenCompleteConflicts(t *testing.T, repos auth.Reposito
 // testInvitationConcurrentCompleteCancel races completion against cancellation
 // of the same claim: exactly one wins and the row ends in the winner's state.
 func testInvitationConcurrentCompleteCancel(t *testing.T, repos auth.Repositories) {
-	skipUnsupportedCancelAcceptance(t, repos)
 	ctx := context.Background()
 	repo := repos.Invitations
 	for i := range 4 {
@@ -364,8 +338,6 @@ func testInvitationConcurrentCompleteCancel(t *testing.T, repos auth.Repositorie
 // only stored pending/accepting rows — expired-but-pending rows included —
 // however much terminal history the resource carries.
 func testInvitationListActiveHidesTerminalHistory(t *testing.T, repos auth.Repositories) {
-	skipUnsupportedListActive(t, repos)
-	skipUnsupportedCancelAcceptance(t, repos)
 	ctx := context.Background()
 	repo := repos.Invitations
 	const resource = "res-active"
@@ -446,7 +418,6 @@ func testInvitationListActiveHidesTerminalHistory(t *testing.T, repos auth.Repos
 }
 
 func testInvitationListActiveRelationFilter(t *testing.T, repos auth.Repositories) {
-	skipUnsupportedListActive(t, repos)
 	ctx := context.Background()
 	repo := repos.Invitations
 	const resource = "res-rel"
@@ -480,7 +451,6 @@ func testInvitationListActiveRelationFilter(t *testing.T, repos auth.Repositorie
 // testInvitationListActiveRejectsInvalidInput pins ActiveListInput.Validate and
 // the no-searchable-fields refusal at the store edge.
 func testInvitationListActiveRejectsInvalidInput(t *testing.T, repos auth.Repositories) {
-	skipUnsupportedListActive(t, repos)
 	ctx := context.Background()
 	for _, in := range []invitations.ActiveListInput{
 		{ResourceID: "r"},
