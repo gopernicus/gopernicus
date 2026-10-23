@@ -101,7 +101,8 @@ acknowledge with `TLSDisabledAcknowledged`.
 
 The contract, in one sentence: **in production a store refuses to boot when its runtime role
 is superuser, owns an audit table, can UPDATE/DELETE/TRUNCATE/TRIGGER it without the verified
-triggers, or cannot insert into it.**
+triggers, or cannot insert into it — or when a definer function it lists for the table is
+executable by PUBLIC, lacks the pinned `search_path`, or resolves outside the table's schema.**
 
 `(*DB).ProbeAppendOnly(ctx, tables ...AppendOnlyTable)` enforces it for the role the `DB`
 connects as, under the `RuntimeMode` the `DB` was opened with (`DB.RuntimeMode()`). The pgx
@@ -112,7 +113,7 @@ exactly the decision boot will make; `TablePrivilege.ProtectedBy(acknowledged)` 
 protects each table: `privilege`, `trigger`, `waiver` or `none`. Requires PostgreSQL ≥ 14 (the
 trigger files use `CREATE OR REPLACE TRIGGER`).
 
-Each `AppendOnlyTable{Name, AllowDelete, Canonical}` is resolved once with `to_regclass` (a
+Each `AppendOnlyTable{Name, AllowDelete, Canonical, Functions}` is resolved once with `to_regclass` (a
 missing table is `Exists: false`, not an error) and inspected by oid, every name bound as a
 parameter:
 
@@ -151,7 +152,7 @@ pg_catalog` once the names are resolved:
   (`owner=table|schema|function`, `superuser`, or `privileges=update,delete,truncate,trigger`
   with `trigger=<state>` or `tgenabled=<value>`) or `ErrAppendOnlyTableUnwritable`
   (`insert=false`, `sequence_usage=false sequence=<name>`), each naming the table, the reason
-  and the fix.
+  and the fix — plus `ErrDefinerFunctionUnsafe` per unsafe definer function (below).
 
 The fix every refusal names, with the inspected role and a `<migrator>` placeholder:
 
@@ -183,6 +184,78 @@ Managed providers — the two-role recipe is
   to `pg_database_owner`, which `cloudsqlsuperuser` and those defaults reach: the probe reports
   `owner=schema` until `ALTER SCHEMA public OWNER TO <migrator>`.
 
+### Definer functions on an append-only table
+
+A store lists `Functions []DefinerFunction{Signature}` on an `AppendOnlyTable` for the
+migrator-owned `SECURITY DEFINER` functions its runtime role calls to do what its own grants
+refuse (the authentication store's `security_events_purge_before`). `Signature` is bound to
+`to_regprocedure`, bare or schema-qualified, with every argument type `pg_catalog`-qualified —
+`security_events_purge_before(pg_catalog.timestamptz, pg_catalog.int4)` — and the store calls
+the function with the same explicit casts, so a planted overload cannot make the call
+ambiguous. A store that lists none is probed, and logs and refuses, byte for byte as before.
+
+Each signature is resolved in the same phase as the tables — on the caller's `search_path`,
+**before** `ProbeAppendOnly` pins `pg_catalog` (resolved after the pin, every bare-schema host
+would read "function missing") — and inspected by oid into `TablePrivilege.Functions[Signature]`,
+a `FunctionPrivilege`:
+
+| evidence | source |
+|---|---|
+| `Exists` | `to_regprocedure` resolved it; a missing function is `Exists: false`, not an error and not a probe finding — the store that lists it refuses, naming its migration |
+| `SameNamespace` | `pronamespace = relnamespace`: the function lives in the table's schema, not a same-named function earlier on the `search_path` |
+| `SearchPathPinned` | `proconfig` is exactly ONE element, `search_path=pg_catalog, <schema>, pg_temp`, the expected text built in SQL with `quote_ident(nspname)` — PostgreSQL flattens a schema needing quotes as `"S3-Mixed"` |
+| `SecurityDefiner` | `prosecdef` |
+| `OwnerIsTableOwner` | `pg_has_role(proowner, relowner, 'MEMBER')` |
+| `OwnerSuperuser` | `rolsuper` of the function's owner |
+| `PublicExecute` | `has_function_privilege('public', …, 'EXECUTE')` |
+| `PathSchemaCreate` | `has_schema_privilege(role, <the table's schema>, 'CREATE')` — PUBLIC's grant included |
+| `Execute` | `has_function_privilege(role, …, 'EXECUTE')` — evidence only; the store decides what a missing grant means for the capability it wires |
+
+The probe never compares a definer function's body. The findings split in two:
+
+- **Unsafe — refused.** `TablePrivilege.UnsafeFunctions()`: PUBLIC holds EXECUTE, the
+  `search_path` is not pinned or not the canonical value, or the signature resolves outside the
+  table's schema. Production returns `ErrDefinerFunctionUnsafe` — one per function in the
+  `errors.Join` — naming the table, `function=<signature>`, the reasons (`public_execute=true`,
+  `search_path_pinned=false`, `same_namespace=false namespace=<schema>`) and the fix:
+  `REVOKE EXECUTE ON FUNCTION <fn> FROM PUBLIC; GRANT EXECUTE ON FUNCTION <fn> TO <role>`, or
+  `ALTER FUNCTION <fn> RESET ALL; ALTER FUNCTION <fn> SET search_path = pg_catalog, <schema>, pg_temp`.
+  **Not waivable**: `AppendOnlyWritableAcknowledged` never admits it (a host `DROP` + `CREATE`
+  silently re-grants PUBLIC EXECUTE). Development names each in the one `append_only=unenforced`
+  line.
+- **Inoperative — WARN.** `TablePrivilege.InoperativeFunctions()`: not `SECURITY DEFINER`, an
+  owner that is not a member of the table's owner, a superuser owner, or CREATE on the table's
+  schema for the inspected role. Production boots and logs one `definer_function=inoperative`
+  WARN per function with the fix (`ALTER FUNCTION <fn> SECURITY DEFINER`; `ALTER FUNCTION <fn>
+  OWNER TO <table owner>`; a `NOSUPERUSER` migrator owning the table and the function;
+  `REVOKE CREATE ON SCHEMA <schema> FROM PUBLIC, <role>`); the function then fails loudly when
+  called. Development stays silent on it.
+
+No function state moves `Writable()`, `CannotAppend()` or `ProtectedBy()`: DELETE on the rail
+stays the owner's, so the runtime role's posture is unchanged. A function passes when the
+migrator creates it with a static body, then pins it from the table's own namespace (never
+`current_schema()`, never `SET search_path FROM CURRENT`, which captures the runner's path
+without `pg_temp`), then revokes and grants:
+
+```sql
+DO $$ BEGIN
+  EXECUTE pg_catalog.format('ALTER FUNCTION <fn>(pg_catalog.timestamptz, pg_catalog.int4) SET search_path = pg_catalog, %I, pg_temp',
+    (SELECT n.nspname FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+     WHERE c.oid = '<table>'::pg_catalog.regclass));
+END $$;
+REVOKE EXECUTE ON FUNCTION <fn>(pg_catalog.timestamptz, pg_catalog.int4) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION <fn>(pg_catalog.timestamptz, pg_catalog.int4) TO <runtime role>;
+```
+
+The same `DO` block re-pins a function restored into a renamed schema. A `-posture-role` runner
+reads the same evidence from the migrator's connection through `InspectTablePrivileges` and can
+print it per table — `functions=[<name>:execute=true|false unsafe=… inoperative=…]` — deciding
+as the role's boot probe does.
+
+**`TablePrivilege` is no longer comparable (v0.12.0):** the `Functions` map field means `==` on
+two `TablePrivilege` values no longer compiles; compare with `reflect.DeepEqual` or field by
+field.
+
 **Behavior change (v0.11.0):** `MapError` maps SQLSTATE `42501` (`insufficient_privilege`) to
 `sdk.ErrForbidden` — a 403 through the web mappers — for every consumer, keeping the
 `*pgconn.PgError` in the chain so `errors.As` still reads the SQLSTATE. A missing grant and an
@@ -195,7 +268,7 @@ the raw driver error sees the sentinel now.
 |---|---|
 | `Config` | `DSN` or split `Host`/`Port`/`User`/`Password`/`Database`/`SSLMode`, plus pool settings, `LogQueries`, `Logger`, `Tracer`, and `Retry`; env tags are provided for host parsers; pgx also honors standard `PG*` environment defaults during DSN parsing. `RuntimeMode`, `TLSUnverifiedAcknowledged`, `TLSDisabledAcknowledged` and `AppendOnlyWritableAcknowledged` are programmatic (no env tag; see "Production posture" and "Append-only tables") |
 | `ErrTLSRequired` / `ErrQueryLoggingRefused` | production posture refusals from `Open`, matched with `errors.Is` |
-| `ErrAppendOnlyTableWritable` / `ErrAppendOnlyTableUnwritable` | production append-only refusals from `ProbeAppendOnly`, matched with `errors.Is` |
+| `ErrAppendOnlyTableWritable` / `ErrAppendOnlyTableUnwritable` / `ErrDefinerFunctionUnsafe` | production append-only refusals from `ProbeAppendOnly`, matched with `errors.Is` |
 | `Open(ctx, cfg) (*DB, error)` | opens a `pgxpool` and pings; every connection scans `timestamptz` in UTC and, unless the host named a zone, runs with session `timezone=UTC` (see below) |
 | `DB` | `Exec` / `Query` / `QueryRow` / `InTx` / `Begin` / `Close` / `Ping` / `Underlying() *pgxpool.Pool` / `RuntimeMode()` / `ProbeAppendOnly(ctx, tables…)` |
 | `Querier` | interface intersection of `*DB` and `*Tx` (`Exec`/`Query`/`QueryRow`) — lets a store accept pool-or-tx |
@@ -204,7 +277,7 @@ the raw driver error sees the sentinel now.
 | `StatusCheck(ctx, db)` | 1s-deadline ping |
 | `ProbeTable(ctx, q, table) error` | boot-time existence probe for a store's table (`to_regclass`, name bound as a parameter, bare or schema-qualified): absent → wraps `ErrNotFound` naming the relation; a query failure maps through `MapError` and is never misreported as missing. Run it in a store constructor so a host aimed at the wrong database fails before serving |
 | `ProbeTables(ctx, q, tables…) error` | `ProbeTable` over every relation a store owns; probing stops at the first failure and returns it unchanged — the absent-relation error already names the table, and a query failure is about none of them. No tables is nil |
-| `InspectTablePrivileges(ctx, q, role, tables…) (Report, error)` | the append-only evidence for `role` (empty = `current_user`) over `AppendOnlyTable{Name, AllowDelete, Canonical []TriggerBody{Function, Body}}`; `Report{Role, Tables []TablePrivilege}`; `TablePrivilege.Writable()` / `CannotAppend()` / `ProtectedBy(acknowledged)` (see "Append-only tables") |
+| `InspectTablePrivileges(ctx, q, role, tables…) (Report, error)` | the append-only evidence for `role` (empty = `current_user`) over `AppendOnlyTable{Name, AllowDelete, Canonical []TriggerBody{Function, Body}, Functions []DefinerFunction{Signature}}`; `Report{Role, Tables []TablePrivilege}`; `TablePrivilege.Writable()` / `CannotAppend()` / `ProtectedBy(acknowledged)`; `TablePrivilege.Functions map[string]FunctionPrivilege` / `UnsafeFunctions()` / `InoperativeFunctions()` (see "Append-only tables" and "Definer functions") |
 | `RunMigrations(ctx, db, fs, dir, opts…)` | host-driven migration runner for one directory; one transaction, filename order, checksum guard, forward-only. One merged stream per schema: call it once per schema, with filenames unique within the stream that are never renumbered — `dir` is an `fs.FS` subpath, never a ledger namespace (all rows in a stream share the `"default"` source) |
 | `MigrateOption` / `WithSchema(s)` | the only `RunMigrations` option: run this stream inside `s` — create the schema if absent, `SET LOCAL search_path` for the transaction, and keep the stream's `schema_migrations` ledger in `s`. No option = today's unqualified stream, byte-for-byte |
 | `Schema` / `NewSchema(name) (Schema, error)` | validated Postgres schema name; the zero value means "no schema" and renders bare names. Rejection wraps `ErrInvalidInput` (empty, >63 bytes, non-identifier, reserved `pg_` prefix, `information_schema`); `public` is valid |
@@ -802,8 +875,8 @@ then, hosts opt in by setting `Config.LogQueries` or `Config.Tracer`.
 
 Unit tests are hermetic (`MapError` over constructed `pgconn.PgError` values,
 `Collect` and `ProbeTables` over in-memory `Querier` stubs, config validation,
-the `RuntimeMode` posture matrix over pgx's DSN parse, the append-only policy and mode
-matrix over hand-built reports,
+the `RuntimeMode` posture matrix over pgx's DSN parse, the append-only and definer-function
+policy and mode matrices over hand-built reports (the no-function output pinned byte for byte),
 migration checksum/error paths, `poolConfig`'s
 `AfterConnect`/session-zone defaulting, and the codec registration driven through
 a bare `pgtype.Map` in both wire formats) and run with a plain `go test ./...` —
@@ -831,7 +904,11 @@ and the pruning statement —
 the limiter legs create the reference table themselves, playing the host that
 migrated it), and `TestLive_AppendOnlyProbe` (its own tables, trigger pairs and
 run-unique fixture roles, each case decided both by `InspectTablePrivileges` from the
-owner's connection and by `ProbeAppendOnly` as the role). Unset, they skip loudly
+owner's connection and by `ProbeAppendOnly` as the role), and `TestLive_DefinerFunctionProbe`
+(definer functions the fixture migrator creates through the recipe above in a schema whose
+name needs quotes: clean, each unsafe and inoperative state, a decoy earlier on the path, a
+bare-schema host resolved before the pin, a missing function, EXECUTE granted and revoked).
+Unset, they skip loudly
 (`POSTGRES_TEST_DSN not set — postgres conformance NOT verified`, plus a
 banner on stderr and the controlling terminal for the limiter legs, because
 `go test ./...` hides a passing package's output) — a silent green that tested
