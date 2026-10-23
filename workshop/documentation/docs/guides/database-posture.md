@@ -11,27 +11,66 @@ Host-owned controls around the pocket stores, stated for `main` at 2026-10-22.
 
 The scaffold uses one `DB_URL` for the migration runner and the server. Split them:
 
-- a **migrator** role that owns the schema and runs `make migrate` pre-boot;
+- a **migrator** role that owns the schema, every table and sequence, and the trigger
+  functions, and runs `make migrate` pre-boot;
 - a **runtime** role the server connects as, with data access only.
 
+Create the runtime role with SQL, not the provider console: Neon console and API roles carry
+`pg_write_all_data` (through `neon_superuser`), which no per-table `REVOKE` removes, and a role
+holding `rds_superuser` can set `session_replication_role`.
+
 ```sql
--- as the owner / migrator role
+-- as the migrator
+ALTER SCHEMA public OWNER TO migrator;
 REVOKE CREATE ON SCHEMA public FROM runtime;
 GRANT USAGE ON SCHEMA public TO runtime;
 GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO runtime;
+GRANT USAGE ON ALL SEQUENCES IN SCHEMA public TO runtime;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE ON SEQUENCES TO runtime;
 
--- the audit rails are append-only at the Go port only; make the database agree
-REVOKE UPDATE, DELETE, TRUNCATE ON security_events FROM runtime;   -- pockets/authentication
-REVOKE UPDATE, DELETE, TRUNCATE ON iam_audit, iam_operations FROM runtime;  -- pockets/authorization
-REVOKE UPDATE, DELETE, TRUNCATE ON secrets_audit FROM runtime;     -- pockets/secrets
+-- the audit rails are append-only: the runtime role reads and appends
+REVOKE UPDATE, DELETE, TRUNCATE, TRIGGER ON security_events FROM runtime;  -- pockets/authentication
+GRANT USAGE ON SEQUENCE security_events_seq TO runtime;
+REVOKE UPDATE, DELETE, TRUNCATE, TRIGGER ON iam_audit FROM runtime;        -- pockets/authorization
+GRANT USAGE ON SEQUENCE iam_audit_seq TO runtime;
+REVOKE UPDATE, TRUNCATE, TRIGGER ON iam_operations FROM runtime;           -- DELETE stays granted
+REVOKE UPDATE, DELETE, TRUNCATE, TRIGGER ON secrets_audit FROM runtime;    -- pockets/secrets
+GRANT USAGE ON SEQUENCE secrets_audit_seq TO runtime;
 
 -- the password-hash table can be narrowed further; the store needs SELECT/INSERT/UPDATE/DELETE
 ```
 
-Adjust the schema name when a store is mounted with `WithSchema`. Nothing probes these grants
-at boot today (a privilege probe is planned, S2). The pockets issue no `UPDATE` or `DELETE`
-against the audit tables, so the revokes cost nothing at runtime. SQLite (`turso` in `file:`
-mode) has no privileges: restrict the file and its backups instead.
+Adjust the schema name when a store is mounted with `WithSchema`. `DELETE` stays granted on
+`iam_operations` (an earlier version of this recipe revoked it — grant it back): its trigger
+refuses the delete of a fenced row and admits the expiry of the others. The integrity migrations
+grant `USAGE` on each rail's sequence to `PUBLIC`, so a host that already split its roles keeps
+inserting; granting it to the runtime role and revoking it from `PUBLIC` is optional hardening.
+The pockets issue no `UPDATE` or `DELETE` against the audit rails, so the revokes cost nothing at
+runtime.
+
+Ownership is broader than the table's owner. A runtime role counts as an owner when it is a
+member — `NOINHERIT` included — of the role that owns the table, of the role that owns its
+schema (it can drop the table; on PostgreSQL 15+ `public` belongs to `pg_database_owner`, which
+managed providers' default roles reach — hence `ALTER SCHEMA public OWNER TO migrator`), or of
+the role that owns a trigger function (it can replace the body). The immutability triggers exempt
+the owning role by design, so the migrator can backfill and a migrator-owned `SECURITY DEFINER`
+function passes; that is why an owner — or a superuser — is refused as the runtime role.
+
+The triggers ship `ENABLE ALWAYS`, so `session_replication_role = replica` cannot silence them.
+`pg_restore --disable-triggers` leaves them `tgenabled=O`; after a restore, re-run
+`ALTER TABLE <t> ENABLE ALWAYS TRIGGER <t>_immutable` and `… <t>_no_truncate` on each rail.
+
+What probes this now: each pgx store with an audit table (from authentication `stores/pgx`
+v0.10.0, authorization `stores/pgx` v0.20.0 and secrets `stores/pgx` v0.2.0) runs the
+`pgxdb` append-only probe when it is constructed. In production it refuses to boot when its
+runtime role is superuser, owns an audit table, can UPDATE/DELETE/TRUNCATE/TRIGGER it without
+the verified triggers, or cannot insert into it; development logs one `append_only=unenforced`
+line. The scaffold's pgx runner makes the same decision from the migrator's connection before a
+deploy: `go run ./workshop/migrations -posture-role <runtime role>` prints one
+`protected_by=privilege|trigger|waiver|none` line per table and exits non-zero on `none` or a
+role that cannot append; archive its output. SQLite (`turso` in `file:` mode) has no privileges:
+the turso stores check the trigger text and WARN in production; restrict the file and its
+backups.
 
 ## Connection security
 
@@ -67,8 +106,13 @@ database for access purposes.
 
 Audit timestamps (`security_events.created_at`, `iam_audit.occurred_at`,
 `iam_operations.committed_at`, `secrets_audit`) come from the application clock in UTC, and
-rows have random ids, not a sequence. Run NTP on every instance; without it, cross-instance
-ordering of audit rows is contestable (a database sequence is planned, S2).
+rows have random ids; the stores page by these. Since S2 each rail also carries evidence the
+database writes and no store reads: `recorded_at`, the database clock at insert, and on pgx
+`seq` (not on `iam_operations`), a sequence value that proves the order of insertion. Both are
+NULL on rows written before the migration. A sequence is non-transactional, so a rolled-back
+write leaves a gap: a gap is not evidence of deletion — the triggers and the role split are.
+Run NTP on every instance; the application timestamps are still what cross-instance ordering of
+the API reads rests on.
 
 ## Timeouts
 
@@ -85,3 +129,9 @@ The runner applies files in name order inside one transaction and records
 `(source, version, checksum, raw_sql, applied_at)`; a modified already-applied file fails with
 a checksum mismatch. The runner takes no advisory lock, so run exactly one instance of it per
 deploy.
+
+Every S2 pgx store migration begins with `SET LOCAL lock_timeout = '5s'`. The pending files run
+in one transaction, and `ADD COLUMN` and `CREATE TRIGGER` queue behind a running `pg_dump`; with
+the timeout a blocked file aborts the whole stream — nothing is applied — and you re-run the
+runner, instead of holding locks that stall login inserts for the runner's whole budget. The S2
+pgx files require PostgreSQL 14 or later.

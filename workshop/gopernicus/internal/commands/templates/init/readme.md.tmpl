@@ -143,3 +143,38 @@ go run github.com/gopernicus/gopernicus/workshop/gopernicus@v0.5.0 guard --postu
 It exits 0 clean and 1 with findings, and prints one `ack` line per waiver you
 wrote. Exit 2 is a broken invocation — a release older than v0.5.0 does not
 know `--posture` — so CI treats it as a failure, never a pass.
+{{- if eq .DB "pgx"}}
+
+### Audit tables and the two database roles
+
+The pgx stores with an audit table (authentication `security_events`,
+authorization `iam_audit` and `iam_operations`, secrets `secrets_audit`) need
+two database roles, created with SQL rather than a provider console (console
+roles can carry `pg_write_all_data`):
+
+- a **migrator** that owns the schema, the tables, their sequences and the
+  trigger functions, and runs `make migrate`;
+- a **runtime** role the server connects as. On the audit tables it gets
+  `SELECT` and `INSERT`, plus `USAGE` on their sequences; `UPDATE`, `DELETE`,
+  `TRUNCATE` and `TRIGGER` are revoked — except that `DELETE` stays granted on
+  `iam_operations`, whose trigger decides which rows may go.
+
+Each store enforces this when it is constructed. The contract, in one
+sentence: **in production a store refuses to boot when its runtime role is
+superuser, owns an audit table, can UPDATE/DELETE/TRUNCATE/TRIGGER it without
+the verified triggers, or cannot insert into it.** The immutability trigger
+files are migrations — delete them from your ledger before applying if you
+decline them.
+
+Before every deploy, list each mounted pgx store's `AuditTables()` in
+`postureTables` (`workshop/migrations/main.go`), run the preflight as the
+migrator against the runtime role, and archive its output with the release:
+
+```
+APP_RUNTIME_MODE=production go run ./workshop/migrations -posture-role <runtime role>
+```
+
+It prints one line per table —
+`table=<t> protected_by=<privilege|trigger|waiver|none> owner=… insert=… sequence_usage=… trigger=<state>`
+— and exits non-zero when any table is unprotected or cannot be appended to.
+{{- end}}

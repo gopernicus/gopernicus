@@ -48,8 +48,8 @@ var (
 	inlineHint = regexp.MustCompile(`^[A-Z0-9_]+=\S*\s+#`)
 	sdkPin     = baseModule + "/sdk v0.16.0"
 	dbPins     = map[string]string{
-		"pgx":   baseModule + "/integrations/datastores/pgxdb v0.10.0",
-		"turso": baseModule + "/integrations/datastores/turso v0.7.0",
+		"pgx":   baseModule + "/integrations/datastores/pgxdb v0.11.0",
+		"turso": baseModule + "/integrations/datastores/turso v0.8.0",
 	}
 )
 
@@ -171,6 +171,52 @@ func TestScaffoldInitTursoCompiles(t *testing.T) {
 			runGo(t, target, env, "build", "-o", binary, "./"+pkg)
 			assertMalformedEnvRejected(t, binary)
 		})
+	}
+}
+
+// TestScaffoldInitPgxCompiles is the pin leg: a --db=pgx host keeps its emitted
+// pins — no framework replace — and tidies and builds with GOPROXY=off against
+// the GOMODCACHE warm-scaffold-cache filled (TestWarmScaffoldModuleCache resolves
+// this same host through the proxy). guard --posture is clean with P9 out of
+// scope (the scaffold mounts no store), and the runner's -posture-role answers
+// without a database while postureTables is empty. A cold cache FAILS LOUD.
+func TestScaffoldInitPgxCompiles(t *testing.T) {
+	target := t.TempDir()
+	params, err := buildInitParams("example.com/scaffoldtest/pgx", "pgx")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := emitInit(target, params); err != nil {
+		t.Fatalf("emitInit: %v", err)
+	}
+
+	env := append(hermeticEnv(), "GOFLAGS=-mod=mod")
+	runGo(t, target, env, "mod", "tidy")
+	runGo(t, target, env, "build", "./...")
+	gomod := readFile(t, filepath.Join(target, "go.mod"))
+	for _, pin := range []string{sdkPin, dbPins["pgx"]} {
+		if !strings.Contains(gomod, pin) {
+			t.Errorf("tidied go.mod lost %q:\n%s", pin, gomod)
+		}
+	}
+
+	assertGuardShapes(t, target)
+	var code int
+	out := captureStdout(t, func() int { code = Run([]string{"guard", "--posture", target}); return code })
+	if code != 0 || !strings.Contains(out, "\nP9   no scope  (no framework store module mounted)\n") {
+		t.Errorf("guard --posture over the pgx scaffold exited %d, want 0 with P9 out of scope:\n%s", code, out)
+	}
+
+	binary := filepath.Join(t.TempDir(), "migrations")
+	runGo(t, target, env, "build", "-o", binary, "./workshop/migrations")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, binary, "-posture-role", "app_runtime")
+	cmd.Dir = t.TempDir()
+	cmd.Env = []string{scaffoldModeKey + "=development", "LOG_OUTPUT=STDOUT"}
+	got, err := cmd.CombinedOutput()
+	if err != nil || strings.TrimSpace(string(got)) != "no append-only tables mounted; add each mounted pgx store's AuditTables() to postureTables" {
+		t.Fatalf("-posture-role with no tables = %v:\n%s", err, got)
 	}
 }
 

@@ -10,7 +10,7 @@ import (
 )
 
 // runGuard checks a host tree against the host contract (examples/README.md,
-// H0–H14, and with --posture the production-posture rules P0–P8 of §3b). It
+// H0–H14, and with --posture the production-posture rules P0–P9 of §3b). It
 // prints one status line per rule, any informational lines, one line per
 // finding, then a summary. Exit 0 clean, 1 findings, 2 for an invocation or
 // input failure. There is deliberately no skip flag, allow file, or config.
@@ -18,7 +18,7 @@ func runGuard(args []string) int {
 	fs := flag.NewFlagSet("guard", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 	list := fs.Bool("list", false, "print the canonical sentence of every rule and exit")
-	posture := fs.Bool("posture", false, "add the production-posture rules P0–P8 to the run")
+	posture := fs.Bool("posture", false, "add the production-posture rules P0–P9 to the run")
 	fs.Usage = func() { guardUsage(os.Stderr) }
 	if err := fs.Parse(args); err != nil {
 		if err == flag.ErrHelp {
@@ -80,12 +80,18 @@ func reportGuard(w io.Writer, host *guardHost, rules []guardRule) int {
 			unit = "package"
 		}
 		switch {
+		case len(res.findings) > 0 && res.detail != "":
+			total += len(res.findings)
+			failing++
+			fmt.Fprintf(w, "%-4s %-9s (%s)\n", rule.id, plural(len(res.findings), "finding"), res.detail)
 		case len(res.findings) > 0:
 			total += len(res.findings)
 			failing++
 			fmt.Fprintf(w, "%-4s %-9s\n", rule.id, plural(len(res.findings), "finding"))
 		case res.checked == 0:
 			fmt.Fprintf(w, "%-4s %-9s (%s)\n", rule.id, "no scope", res.noScope)
+		case res.detail != "":
+			fmt.Fprintf(w, "%-4s %-9s (%s; %s)\n", rule.id, "ok", plural(res.checked, unit), res.detail)
 		default:
 			fmt.Fprintf(w, "%-4s %-9s (%s)\n", rule.id, "ok", plural(res.checked, unit))
 		}
@@ -133,7 +139,7 @@ func guardUsage(w io.Writer) {
 
 Usage:
   gopernicus guard [host-root]             check the host at host-root (default: .)
-  gopernicus guard --posture [host-root]   also check production posture (P0–P8)
+  gopernicus guard --posture [host-root]   also check production posture (P0–P9)
   gopernicus guard --list [--posture]      print every rule's canonical sentence
 
 Prints one status line per rule, one line per finding, then a summary. With

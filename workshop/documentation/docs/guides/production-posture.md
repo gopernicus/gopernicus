@@ -21,7 +21,7 @@ checks below fail construction, before any I/O, in one joined error naming every
 acknowledgement. An acknowledgement is a boolean literal in the composition root with no env
 tag, and each honored one is logged once as `posture_waiver=<Flag>`. What a refusal cannot see
 — a mode never passed, a missing middleware, a key minted by hand — `gopernicus guard
---posture` (P0–P8) finds in the host's `cmd/` tree.
+--posture` (P0–P9) finds in the host's `cmd/` tree.
 
 **`pockets/authentication`, before S1** (positional `RuntimeMode`):
 
@@ -64,6 +64,27 @@ tag, and each honored one is logged once as `posture_waiver=<Flag>`. What a refu
 | sdk `web` | `ServerConfig.ValidateProduction()`: `PUBLIC_BASE_URL` unset, not `https`, or not a bare origin (the host calls it) | `ErrPublicBaseURLRequired` / `ErrPublicBaseURLInsecure` / `ErrPublicBaseURLMalformed` | none |
 | sdk `notify` | `RequireMandatoryTLS()` makes `CheckTransport` fail an opportunistic-STARTTLS transport; `SMTPConfig.RequireTLS` declares mandatory TLS and `Probe` proves it | `ErrOpportunisticTLS` | the authentication acknowledgement above |
 
+**Added by S2** (audit integrity), through the pgx store constructors — authentication
+`stores/pgx` v0.10.0, authorization `stores/pgx` v0.20.0, secrets `stores/pgx` v0.2.0 — each
+of which runs the `pgxdb` append-only probe over its own audit tables. The contract, in one
+sentence: in production a store refuses to boot when its runtime role is superuser, owns an
+audit table, can UPDATE/DELETE/TRUNCATE/TRIGGER it without the verified triggers, or cannot
+insert into it.
+
+| Module | Production refuses | Sentinel | Acknowledgement |
+|---|---|---|---|
+| pgxdb (via the pgx stores) | a runtime role that is superuser, owns an audit table (its table, schema or trigger-function owner, by membership), or holds `UPDATE`/`DELETE`/`TRUNCATE`/`TRIGGER` on it without the verified immutability triggers (`DELETE` admitted on `iam_operations`) | `ErrAppendOnlyTableWritable` | `pgxdb.Config.AppendOnlyWritableAcknowledged` (the single-role host; one `posture_waiver` WARN per table) |
+| pgxdb (via the pgx stores) | a runtime role that cannot insert into an audit table, or lacks `USAGE` on its sequence | `ErrAppendOnlyTableUnwritable` | none |
+| turso (the turso stores) | nothing: a missing or altered immutability trigger pair is a production WARN (SQLite has no roles) | — | — |
+
+Tamper evidence for the audit rails, by store family:
+
+| Family | Status | What holds |
+|---|---|---|
+| pgx | DEFAULT | the immutability triggers ship as ordinary numbered store migrations, and the posture probe is enforced in production; the runner's `-posture-role` preflights it before deploy |
+| turso | DEFAULT | the same triggers ship as migrations; the probe compares their text and only WARNs |
+| firestore | HOST | no triggers, roles or sequences in band; tamper evidence is the host's IAM posture |
+
 Persistent stores are still the host's choice: an in-memory authentication or authorization
 store constructs in production, and `guard --posture` does not see which store a `Config`
 names. The scaffold wires the chosen connector.
@@ -75,7 +96,6 @@ names. The scaffold wires the chosen connector.
 | `LOG_LEVEL=DEBUG` | authorization decision records carry principal and resource ids | keep INFO in production; redaction handler (S6) |
 | Authentication failure events | the rail is required in production (above) but many failure paths still write no event | failures on every path (S2) |
 | `Cache-Control: no-store` on `/auth` | the auth HTML pages set their own headers; JSON auth responses do not say `no-store` | S5 |
-| Database privileges | the role split and `REVOKE` in *Production database posture* are documented, not probed | privilege probe at boot (S2) |
 
 ## Trust boundary
 
@@ -97,8 +117,9 @@ names. The scaffold wires the chosen connector.
   sets are not signed; write access to that Redis is equivalent to write access to the
   authorization database. Run it dedicated, with TLS and AUTH, and treat it as an in-scope
   system. Without TupleCache, Redis holds only rate-limit windows, cache pages and events.
-- **Audit tables are append-only at the Go port, not at the database.** See *Production
-  database posture* for the role split and the `REVOKE` that makes them so.
+- **Audit tables are append-only in the database** on pgx (immutability triggers and the
+  boot-time privilege probe, from the S2 store tags above), by trigger only on turso, and by the
+  host's IAM on firestore. See *Production database posture* for the role split.
 
 ## Revocation SLA
 

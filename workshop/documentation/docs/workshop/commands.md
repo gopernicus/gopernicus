@@ -104,22 +104,36 @@ gopernicus db status --db primary
 
 Delegates to the host runner's `-status` mode. If the runner is absent or cannot connect, the CLI prints a file-only view with every discovered migration shown as pending—the only honest status a stdlib-only tool can produce without database access.
 
+## Runner `-posture-role` (pgx)
+
+```bash
+APP_RUNTIME_MODE=production go run ./workshop/migrations -posture-role app_runtime
+```
+
+A `--db pgx` runner scaffolded by `workshop/gopernicus` v0.6.0 or later also takes `-posture-role <runtime role>`; no `db` verb delegates it, so run the runner directly, as the migrator, before every deploy and archive its output. It inspects the append-only audit tables listed in the runner's `postureTables` — append each mounted pgx store's `AuditTables()` there — through `pgxdb.InspectTablePrivileges` in a read transaction, and prints one line per table:
+
+```text
+table=security_events protected_by=trigger owner=false insert=true sequence_usage=true trigger=verified
+```
+
+`protected_by` is `privilege`, `trigger`, `waiver` or `none`, decided exactly as the stores' boot probe decides in production (`waiver` only when the runner's `appendOnlyWritableAcknowledged` mirrors a server that passes `AppendOnlyWritableAcknowledged: true`). The runner exits non-zero when any table is `none` or the role cannot append (no `INSERT`, or no `USAGE` on the table's sequence). With `postureTables` empty — the scaffold mounts no store — it prints `no append-only tables mounted; add each mounted pgx store's AuditTables() to postureTables` and exits 0 without connecting. `-status` is unchanged.
+
 ## `guard`
 
 ```bash
 gopernicus guard                      # the host in the current directory
 gopernicus guard ./myapp
-gopernicus guard --posture ./myapp    # H0–H14 plus the production-posture rules P0–P8
+gopernicus guard --posture ./myapp    # H0–H14 plus the production-posture rules P0–P9
 gopernicus guard --list
 gopernicus guard --list --posture
 ```
 
-Checks a host against the [host contract](../architecture/host-contract.md), rules H0 through H14, and with `--posture` also P0 through P8 (production posture, the contract's section 3b; `workshop/gopernicus` v0.5.0). The host root is the directory holding its `go.mod`; the module path is read from that file. Nested modules, `vendor/`, `testdata/`, `node_modules/`, and directories starting with `.` or `_` are not walked, and symlinks are not followed.
+Checks a host against the [host contract](../architecture/host-contract.md), rules H0 through H14, and with `--posture` also P0 through P9 (production posture, the contract's section 3b; `workshop/gopernicus` v0.5.0, P9 from v0.6.0). The host root is the directory holding its `go.mod`; the module path is read from that file. Nested modules, `vendor/`, `testdata/`, `node_modules/`, and directories starting with `.` or `_` are not walked, and symlinks are not followed.
 
 | Flag | Meaning | Default |
 |---|---|---|
 | `--list` | print every rule's canonical sentence and exit (with `--posture`, the H sentences then the P sentences) | off |
-| `--posture` | add P0–P8: the mode from the process environment, `RuntimeMode` on every recognized surface, `TrustProxies` outermost, `SecurityHeaders`, `ValidateProduction`, literal acknowledgements, `NewKeys`, a posture-clean `.env.example` | off |
+| `--posture` | add P0–P9: the mode from the process environment, `RuntimeMode` on every recognized surface, `TrustProxies` outermost, `SecurityHeaders`, `ValidateProduction`, literal acknowledgements, `NewKeys`, a posture-clean `.env.example`, and a byte-identical ledger copy of every mounted store's migration files | off |
 
 Output is one status line per rule in id order, then one line per finding, then a summary:
 
@@ -137,7 +151,7 @@ guard: 1 finding across 1 rule
 
 A rule with nothing in scope prints `no scope` with the reason, so an inert rule never reads as a clean one. A clean run ends `guard: clean (15 rules, N packages)`; without `--posture` the output is exactly the H run.
 
-With `--posture` the nine P status lines follow the fifteen H lines, and informational lines follow the status block — `ack` for each acknowledgement written `true` (`ack (conditional)` when it sits under an `if` or `switch`) and `rand` for each `crypto/rand` use in the scanned trees. They are review evidence and never change the exit code:
+With `--posture` the ten P status lines follow the fifteen H lines, and informational lines follow the status block — `ack` for each acknowledgement written `true` (`ack (conditional)` when it sits under an `if` or `switch`) and `rand` for each `crypto/rand` use in the scanned trees. They are review evidence and never change the exit code:
 
 ```text
 P5   ok        (3 acknowledgements)
@@ -147,7 +161,15 @@ P6   ok        (1 mount)
 ack (conditional) cmd/server/main.go:323: DeliveryEphemeralAcknowledged
 ack  cmd/server/main.go:950: DeliveryJobsAcknowledged
 rand cmd/server/documents.go:43: crypto/rand.Read
-guard: clean (24 rules, 15 packages)
+guard: clean (25 rules, 15 packages)
+```
+
+P9 is the one P rule that reads beyond the source tree. A store is mounted when the host's `go.mod` requires a framework `pockets/<pocket>/stores/<dialect>` module and a production file imports it; for each one that ships a `migrations/` directory, `--posture` resolves the module's directory with `go list -m` in the host root (a `go.work`, a `replace` or the module cache answers) and requires every `NNNN_<name>.sql` there to have a byte-identical copy, under any number, in `workshop/migrations/primary/`. A missing or edited copy is one finding per store file; the fix is a re-export — copy the store file into the ledger, never edit a copy. An immutability trigger file (`*_immutable.sql`) is the one optional file: a host that declines the triggers omits it, and the status line says so — `P9   ok        (2 stores; declined: 0022_security_events_immutable.sql)` — while a trigger copy the ledger does hold must still be byte-identical. With no mounted store it prints `no scope`:
+
+```text
+P9   1 finding
+…
+P9  github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx/migrations/0005_iam_audit_integrity.sql: ledger copy missing from workshop/migrations/primary (re-export: copy the store file into the ledger; never edit a copy)
 ```
 
 A host without the `tool` pin runs the posture check in CI with `go run github.com/gopernicus/gopernicus/workshop/gopernicus@v0.5.0 guard --posture .`. A release older than v0.5.0 refuses `--posture` (unknown flag): the binary exits 2, and a `go run` invocation prints `exit status 2` and returns 1; treat any non-zero status as a broken invocation, never a pass.

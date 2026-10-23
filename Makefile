@@ -40,7 +40,7 @@ EMULATOR_TAG_MODULES = integrations/authentication/firebase
 	guard-authorization-no-delivery-repo guard-authorization-rolesvc-no-engine guard-ui-no-inward guard-ui-require-whitelist \
 	guard-no-legacy-features-path guard-list-no-nethttp guard-violation-message-not-error \
 	guard-firestore-mediation guard-pocket-logic guard-authorization-tuples-leaf guard-authorization-decisions-no-mutations guard-inbound-authorization guard-tuple-write-integrity guard-host-contract guard-auth-no-vendor-names \
-	guard-cms-admin-gate guard-host-posture guard-pocket-no-env
+	guard-cms-admin-gate guard-host-posture guard-pocket-no-env guard-baseline-ledger
 
 # Regenerate *_templ.go from .templ sources. Each bundled views/templ module pins
 # its own templ tool; generation runs inside each so the tool version is
@@ -213,7 +213,7 @@ guard: guard-sdk-stdlib guard-pocket-isolation guard-sdk-no-outward guard-no-leg
 	guard-authorization-no-delivery-repo guard-authorization-rolesvc-no-engine guard-ui-no-inward guard-ui-require-whitelist \
 	guard-no-legacy-features-path guard-list-no-nethttp guard-violation-message-not-error \
 	guard-firestore-mediation guard-pocket-logic guard-authorization-tuples-leaf guard-authorization-decisions-no-mutations guard-inbound-authorization guard-tuple-write-integrity guard-host-contract guard-auth-no-vendor-names \
-	guard-cms-admin-gate guard-host-posture guard-pocket-no-env
+	guard-cms-admin-gate guard-host-posture guard-pocket-no-env guard-baseline-ledger
 
 # G1: sdk imports only the standard library (also enforced structurally by
 # sdk/go.mod having no require block).
@@ -596,7 +596,7 @@ guard-no-legacy-features-path:
 # <<< LEGACY-PATTERNS
 
 # CI-style gate: templ generation must be a no-op (no drift), then per-module
-# vet/build/test across all MODULES, then the thirty-three layering guards. Drift
+# vet/build/test across all MODULES, then the thirty-four layering guards. Drift
 # is checked via `git diff` when this tree is a git repo; this repo IS a git
 # repo (as of phase 2), so that branch runs. The before/after checksum branch
 # remains as a fallback for gitless checkouts of *_templ.go.
@@ -684,13 +684,14 @@ guard-cms-admin-gate:
 	done; exit $$fail
 
 # G32 (SOC 2 S1, production posture): every G30 host also passes the opt-in
-# production-posture rules P0–P8 of examples/README.md §3b — the mode from the
+# production-posture rules P0–P9 of examples/README.md §3b — the mode from the
 # process environment, RuntimeMode on every recognized surface, TrustProxies
 # outermost, SecurityHeaders, ValidateProduction, literal acknowledgements,
-# NewKeys, and a posture-clean .env.example. Like G30, the verb runs from this
+# NewKeys, a posture-clean .env.example, and (S2) a byte-identical ledger copy
+# of every mounted store's migrations. Like G30, the verb runs from this
 # checkout (examples/* never pin the tool, G11).
 guard-host-posture:
-	@echo "== guard: example hosts pass gopernicus guard --posture (P0–P8) (G32) =="
+	@echo "== guard: example hosts pass gopernicus guard --posture (P0–P9) (G32) =="
 	@cd workshop/gopernicus && for h in cms minimal jobs-minimal auth-cms goth-showcase external-identity production-baseline; do \
 		echo "-- examples/$$h"; go run . guard --posture ../../examples/$$h || exit 1; done
 
@@ -704,3 +705,27 @@ guard-pocket-no-env:
 	@echo "== guard: pocket production code never reads the process environment (G33) =="
 	@hits=$$(grep -rnE 'os\.Getenv|os\.LookupEnv|environment\.ParseEnvTags|environment\.LoadEnv|environment\.Secret\(' --include='*.go' --exclude='*_test.go' --exclude-dir=stores pockets | grep -vE '^[^:]+:[0-9]+:[[:space:]]*//' || true); \
 		if [ -n "$$hits" ]; then echo "ERROR (G33): pocket production code reads the process environment — the host resolves configuration and passes it in (ParseEnvTags over the pocket's Config; authentication.KeysInput + NewKeys):"; echo "$$hits"; exit 1; fi
+
+# G34 (SOC 2 S2, ledger completeness): P9 over the reference host, in this
+# repo's own gate. For every store module examples/production-baseline/go.mod
+# requires that ships a migrations/ directory, every NNNN_<name>.sql there has a
+# byte-identical copy in the baseline ledger under any number (hosts renumber;
+# the version is the filename, so a renumbered copy keeps its bytes). A drifted
+# ledger is reconciled by re-export — a file copy, never an edit.
+guard-baseline-ledger:
+	@echo "== guard: the baseline ledger holds every mounted store migration byte-identical (G34) =="
+	@ledger=examples/production-baseline/workshop/migrations/primary; fail=0; \
+	stores=$$(grep -oE 'github\.com/gopernicus/gopernicus/pockets/[a-z0-9_-]+/stores/[a-z0-9_-]+ ' examples/production-baseline/go.mod | sed 's#^github\.com/gopernicus/gopernicus/##'); \
+	if [ -z "$$stores" ]; then echo "ERROR (G34): examples/production-baseline/go.mod requires no store module — the guard would check nothing"; exit 1; fi; \
+	for s in $$stores; do \
+		[ -d "$$s/migrations" ] || continue; \
+		for f in "$$s"/migrations/[0-9]*_*.sql; do \
+			[ -f "$$f" ] || continue; \
+			suffix=$${f##*/}; suffix=$${suffix#*_}; found=0; \
+			for c in "$$ledger"/[0-9]*_"$$suffix"; do \
+				name=$${c##*/}; \
+				if [ -f "$$c" ] && [ "$$(echo "$$name" | sed 's/^[0-9]*_//')" = "$$suffix" ] && cmp -s "$$f" "$$c"; then found=1; fi; \
+			done; \
+			if [ $$found = 0 ]; then echo "ERROR (G34): $$f has no byte-identical copy in $$ledger (re-export: copy the store file into the ledger; never edit a copy)"; fail=1; fi; \
+		done; \
+	done; exit $$fail

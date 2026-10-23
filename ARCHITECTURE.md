@@ -564,7 +564,7 @@ reach into them.
 sibling of [`pockets/README.md`](pockets/README.md): the layout tree, H0–H14
 in full with the normative wording of the table above (and the fence H12, the
 host's `sdk/` H13, and the host's `ui/` H14 that this summary omits), and
-P0–P8 under `--posture` (the production-posture series, §3b), the
+P0–P9 under `--posture` (the production-posture series, §3b), the
 Inbound anatomy, host pockets (`<host-module>/pockets/<name>`),
 `cmd`/`workshop`/`integrations`/`sdk`, and the retrofit recipe. This section
 is the framework-side summary; that page is normative for hosts, and
