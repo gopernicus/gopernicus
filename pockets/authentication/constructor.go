@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"slices"
+	"time"
 
 	"github.com/gopernicus/gopernicus/sdk/pkg/cryptids"
 
@@ -14,6 +15,7 @@ import (
 	authlogic "github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/identifier"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/oauth2"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/securityevent"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/delivery"
 	invitations "github.com/gopernicus/gopernicus/pockets/authentication/logic/invitations"
 	"github.com/gopernicus/gopernicus/sdk"
@@ -451,6 +453,12 @@ func New(repos Repositories, signer cryptids.JWTSigner, runtimeMode environment.
 		idNormalizer = cfg.IdentifierNormalizer
 	}
 
+	// The ONE security-event recorder: every recording site below shares it, so
+	// its write-failure count covers the whole pocket.
+	securityEvents := securityevent.NewRecorder(repos.SecurityEvents, cfg.IDs, time.Now, cfg.Logger,
+		securityevent.WithClientInfoReader(authlogic.ClientInfoFromContext),
+		securityevent.WithWriteObserver(cfg.AuditWriteObserver))
+
 	var invSvc *invitations.Service
 	if cfg.Granter != nil {
 		invDelivery := invitations.DeliveryConfig{Mailer: cfg.Mailer, MailFrom: cfg.MailFrom, Deliver: deliveryRouter, BodySenders: bodySenders}
@@ -469,7 +477,7 @@ func New(repos Repositories, signer cryptids.JWTSigner, runtimeMode environment.
 			invitations.WithDelivery(invDelivery),
 			invitations.WithNormalizer(cfg.IdentifierNormalizer),
 			invitations.WithRedirectAllowlist(cfg.RedirectAllowlist),
-			invitations.WithSecurityEvents(repos.SecurityEvents),
+			invitations.WithSecurityEventRecorder(securityEvents),
 			invitations.WithLogger(cfg.Logger),
 			invitations.WithIDs(cfg.IDs),
 			invitations.WithFencer(cfg.Fencer),
@@ -495,6 +503,7 @@ func New(repos Repositories, signer cryptids.JWTSigner, runtimeMode environment.
 		authlogic.WithLimits(cfg.AuthenticationLimits),
 		authlogic.WithLogger(cfg.Logger),
 		authlogic.WithIDs(cfg.IDs),
+		authlogic.WithSecurityEventRecorder(securityEvents),
 	}
 	if cfg.OAuth2 != nil {
 		logicOptions = append(logicOptions, authlogic.WithDelegatedTokens(authlogic.DelegatedTokensConfig{Issuer: cfg.OAuth2.Server.Issuer}))
@@ -520,7 +529,7 @@ func New(repos Repositories, signer cryptids.JWTSigner, runtimeMode environment.
 	var oauthService *oauth2.Service
 	var oauthHTTP *inbound.OAuth2Config
 	if cfg.OAuth2 != nil {
-		oauthService, err = oauth2.New(oauth2.Repositories{OAuth2: repos.OAuth2, Users: repos.Users, Sessions: repos.Sessions, SecurityEvents: repos.SecurityEvents}, cfg.TokenSigner, cfg.OAuth2.Clients, authService, cfg.RuntimeMode, cfg.OAuth2.Server, oauth2.WithLogger(cfg.Logger))
+		oauthService, err = oauth2.New(oauth2.Repositories{OAuth2: repos.OAuth2, Users: repos.Users, Sessions: repos.Sessions, SecurityEvents: repos.SecurityEvents}, cfg.TokenSigner, cfg.OAuth2.Clients, authService, cfg.RuntimeMode, cfg.OAuth2.Server, oauth2.WithLogger(cfg.Logger), oauth2.WithSecurityEventRecorder(securityEvents))
 		if err != nil {
 			return nil, err
 		}
@@ -592,7 +601,7 @@ func New(repos Repositories, signer cryptids.JWTSigner, runtimeMode environment.
 	if err != nil {
 		return nil, err
 	}
-	return &Components{Authentication: authService, External: authService.ExternalAuthenticator(), OAuth2: oauthService, Invitations: invSvc, HTTP: adapter, Delivery: deliveryRuntime}, nil
+	return &Components{Authentication: authService, External: authService.ExternalAuthenticator(), OAuth2: oauthService, Invitations: invSvc, HTTP: adapter, Delivery: deliveryRuntime, SecurityEvents: securityEvents}, nil
 
 }
 

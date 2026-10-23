@@ -356,11 +356,14 @@ store stricter than its SQL siblings, so none is written (§5.9).
 | UNIQUE `idx_api_keys_key_hash` | **claim** `api_key_hashes` (§5.4), which is also `GetByHash`'s access path |
 | `idx_api_keys_service_account_id` | equality query + composite with `(created_at, id)` |
 
-### 3.8 `security_events` (migration 0008)
+### 3.8 `security_events` (migrations 0008, 0021)
 
 `id` (store-minted when empty) → doc id `h(id)`; `user_id`, `actor_type`,
 `actor_id`, `event_type`, `event_status`, `details`, `ip_address`, `user_agent`,
-`created_at`. `details` is **JSON TEXT**, the same `'{}'`-for-empty encoding both
+`request_id`, `trace_id`, `created_at`. The two correlation ids (0021) are stored
+as given — the recorder blanks an invalid one before the store sees it — and read
+back empty on a document written before them. 0021's `seq` and `recorded_at`
+evidence columns and 0022's triggers have no counterpart (§7.3). `details` is **JSON TEXT**, the same `'{}'`-for-empty encoding both
 SQL adapters write; the round-trip contract is uniform (nil or empty in, non-nil
 empty out). Append-only: no update or delete path exists in the port, so none
 exists here.
@@ -926,7 +929,21 @@ Three facts keep this from being larger than it looks:
 - **Firestore's field order within an index is `equalities → range/order`**, so
   the eight prefixes are genuinely eight indexes rather than one per permutation.
 - **Nothing else in this collection queries.** There is no `GetByID` query
-  (the document id is `h(id)`), no claim, and no search.
+  (the document id is `h(id)`), no claim, and no search. `request_id` and
+  `trace_id` are filtered by no query; they keep Firestore's automatic
+  single-field indexes so an operator can look a request up in the console.
+
+**Tamper posture (host IAM; no trigger, no sequence).** The SQL adapters ship
+migration 0022, an immutability trigger pair, and 0021's database-clock
+`recorded_at` and insertion-order `seq`. Firestore has no triggers that can
+refuse a write and no transactional sequence, so this adapter ships neither: the
+collection is append-only at the port (no update or delete method, `Create` never
+`Set`), and keeping anything else from rewriting it is the host's IAM. The runtime
+service account gets no role that edits or deletes documents beyond what the
+adapter does; Security Rules deny `update` and `delete` on `security_events` for
+every client SDK that reaches the database; console, `gcloud firestore` bulk
+deletes and TTL policies stay off the collection. `created_at` is the
+application clock, as on every rail.
 
 `service_accounts` and `api_keys` contribute the two pairs the manifest already
 carries — `(created_at, id)` and `(service_account_id, created_at, id)`, each in

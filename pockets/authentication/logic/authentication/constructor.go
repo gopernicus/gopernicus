@@ -71,6 +71,9 @@ func New(repos Repositories, signer cryptids.JWTSigner, runtimeMode environment.
 	if err := d.AuthenticationLimits.Validate(); err != nil {
 		return nil, err
 	}
+	if d.SecurityEventRecorder != nil && d.AuditWriteObserver != nil {
+		return nil, fmt.Errorf("authentication: WithAuditWriteObserver applies only to the recorder New builds; set the observer on the supplied recorder: %w", sdk.ErrInvalidInput)
+	}
 	for _, dep := range []struct {
 		name  string
 		value any
@@ -177,6 +180,7 @@ func New(repos Repositories, signer cryptids.JWTSigner, runtimeMode environment.
 	d.RedirectAllowlist = append(d.RedirectAllowlist[:0:0], d.RedirectAllowlist...)
 	d.OAuthNativeRedirectURIs = append(d.OAuthNativeRedirectURIs[:0:0], d.OAuthNativeRedirectURIs...)
 	d.Passwordless = append(d.Passwordless[:0:0], d.Passwordless...)
+	service := newService(d)
 	var external *ExternalAuthenticator
 	if d.External != nil {
 		repos := ExternalRepositories{Users: d.Users, Identifiers: d.Identifiers, ExternalSubjects: d.ExternalSubjects, SecurityEvents: d.SecurityEvents, Invitations: d.Invitations}
@@ -188,9 +192,8 @@ func New(repos Repositories, signer cryptids.JWTSigner, runtimeMode environment.
 		if err != nil {
 			return nil, err
 		}
-		external = newExternalAuthenticator(repos, cfg, d.RuntimeMode, externalOptions{clock: d.Clock, logger: d.Logger, ids: d.IDs, normalizer: d.Normalizer, keyer: d.IdentifierKeyer})
+		external = newExternalAuthenticator(repos, cfg, d.RuntimeMode, externalOptions{clock: d.Clock, logger: d.Logger, ids: d.IDs, normalizer: d.Normalizer, keyer: d.IdentifierKeyer, recorder: service.securityEvents})
 	}
-	service := newService(d)
 	service.external = external
 	return &Components{Service: service, DeliveryInitializer: &deliveryInitializer{service: service}}, nil
 }

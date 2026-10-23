@@ -96,6 +96,7 @@ type externalOptions struct {
 	ids        sdk.IDGenerator
 	normalizer identifier.Normalizer
 	keyer      identifierKeyer
+	recorder   *securityevent.Recorder
 }
 
 // WithExternal enables external identity providers on New. The Service builds
@@ -134,6 +135,16 @@ func WithExternalNormalizer(value identifier.Normalizer) ExternalOption {
 // collision audit rows. Production requires it when any provider provisions.
 func WithExternalIdentifierKeyer(value identifierKeyer) ExternalOption {
 	return func(o *externalOptions) { o.keyer = value }
+}
+
+// WithExternalSecurityEventRecorder supplies the recorder the engine records
+// through, so its rows share one recorder — and one failure count — with the
+// host's other recording sites. It wins over ExternalRepositories.SecurityEvents.
+// Without it the engine records through its own recorder over
+// ExternalRepositories.SecurityEvents. New passes its service's recorder to the
+// engine WithExternal builds.
+func WithExternalSecurityEventRecorder(value *securityevent.Recorder) ExternalOption {
+	return func(o *externalOptions) { o.recorder = value }
 }
 
 func cloneExternalConfig(value ExternalConfig) ExternalConfig {

@@ -38,6 +38,10 @@ var canonicalMigrations = []string{
 	"0018_invitation_acceptance.sql",
 	"0019_oauth2_sessions.sql",
 	"0020_external_subjects.sql",
+	// SOC 2 S2: the audit rail's correlation and evidence columns, then its
+	// immutability trigger pair. Neither adds a table.
+	"0021_security_events_integrity.sql",
+	"0022_security_events_immutable.sql",
 }
 
 // expectedTables are every CREATE TABLE the canonical set must define.
@@ -92,6 +96,9 @@ var expectedColumns = []string{
 	"status_changed_at",      // users (CHAU-1.2)
 	"subject_key",            // challenges (CHAU-6.1)
 	"metadata",               // invitations (invitation-metadata)
+	"request_id",             // security_events (0021)
+	"trace_id",               // security_events (0021)
+	"recorded_at",            // security_events (0021)
 }
 
 func migrationNames(t *testing.T) []string {

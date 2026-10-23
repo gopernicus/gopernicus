@@ -93,6 +93,8 @@ func newSecurityEventDoc(evt securityevent.SecurityEvent) (securityEventDoc, err
 		Details:     details,
 		IPAddress:   evt.IPAddress,
 		UserAgent:   evt.UserAgent,
+		RequestID:   evt.RequestID,
+		TraceID:     evt.TraceID,
 		CreatedAt:   firestoredb.TruncateTime(evt.CreatedAt),
 	}, nil
 }
@@ -147,7 +149,9 @@ func listSecurityEvents(db *firestoredb.DB, filter securityevent.ListFilter) fir
 // toDomain projects the document onto the domain aggregate, re-assembling the
 // flat actor columns into the Principal and guaranteeing a NON-NIL Details map
 // on every path — including a document written before this field existed, whose
-// absent value decodes to the empty string and therefore to an empty bag.
+// absent value decodes to the empty string and therefore to an empty bag. A
+// document written before the correlation ids existed reads them back empty the
+// same way.
 func (d securityEventDoc) toDomain() (securityevent.SecurityEvent, error) {
 	details, err := decodeDetails(d.Details)
 	if err != nil {
@@ -162,6 +166,8 @@ func (d securityEventDoc) toDomain() (securityevent.SecurityEvent, error) {
 		Details:     details,
 		IPAddress:   d.IPAddress,
 		UserAgent:   d.UserAgent,
+		RequestID:   d.RequestID,
+		TraceID:     d.TraceID,
 		CreatedAt:   d.CreatedAt,
 	}, nil
 }

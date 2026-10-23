@@ -27,7 +27,7 @@ func (s *Service) RevokeUserSession(ctx context.Context, userID, sessionID strin
 	if err := s.sessionManagement.DeleteForUser(ctx, sessionID, userID); err != nil {
 		return err
 	}
-	s.recordSecurityEvent(ctx, securityEventInput{Type: "session_revoked", Status: securityevent.StatusSuccess, UserID: userID, Details: map[string]any{"session_id": sessionID}})
+	s.recordSecurityEvent(ctx, securityEventInput{Type: securityevent.TypeSessionRevoked, Status: securityevent.StatusSuccess, UserID: userID, Details: map[string]any{"session_id": sessionID}})
 	return nil
 }
 
@@ -39,7 +39,7 @@ func (s *Service) RevokeAllUserSessions(ctx context.Context, userID string) erro
 	if err := s.sessionManagement.RevokeAllForUser(ctx, userID, time.Now().UTC()); err != nil {
 		return err
 	}
-	s.recordSecurityEvent(ctx, securityEventInput{Type: "all_sessions_revoked", Status: securityevent.StatusSuccess, UserID: userID})
+	s.recordSecurityEvent(ctx, securityEventInput{Type: securityevent.TypeAllSessionsRevoked, Status: securityevent.StatusSuccess, UserID: userID})
 	return nil
 }
 

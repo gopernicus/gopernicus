@@ -12,6 +12,7 @@ import (
 	credential "github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/credential"
 	identifier "github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/identifier"
 	protection "github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/protection"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/securityevent"
 	delivery "github.com/gopernicus/gopernicus/pockets/authentication/logic/delivery"
 	invitations "github.com/gopernicus/gopernicus/pockets/authentication/logic/invitations"
 	"github.com/gopernicus/gopernicus/sdk"
@@ -94,6 +95,7 @@ type constructorConfig struct {
 	EmailSubjects                 map[string]string
 	SMSBodies                     map[string]string
 	External                      *authlogic.ExternalConfig
+	AuditWriteObserver            securityevent.WriteObserver
 	Logger                        *slog.Logger
 }
 
@@ -887,6 +889,15 @@ func WithExternal(value authlogic.ExternalConfig) Option {
 func WithAuditDisabledAcknowledged() Option {
 	return func(c *constructorConfig) {
 		c.AuditDisabledAcknowledged = true
+	}
+}
+
+// WithAuditWriteObserver sets the observer Components.SecurityEvents tells about
+// every failed security-event write — the rail fails open, so this is how a host
+// alerts on lost audit rows beyond the audit_write_failed log line.
+func WithAuditWriteObserver(value securityevent.WriteObserver) Option {
+	return func(c *constructorConfig) {
+		c.AuditWriteObserver = value
 	}
 }
 

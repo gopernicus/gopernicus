@@ -69,7 +69,7 @@ type ExternalAuthenticator struct {
 	users       user.UserRepository
 	identifiers identifier.IdentifierRepository
 	subjects    externalsubject.Repository
-	events      securityevent.SecurityEventRepository
+	events      *securityevent.Recorder
 	invitations invitationResolver
 	normalizer  identifier.Normalizer
 	keyer       identifierKeyer
@@ -179,12 +179,15 @@ func newExternalAuthenticator(repos ExternalRepositories, cfg ExternalConfig, mo
 	if o.normalizer == nil {
 		o.normalizer = identifier.DefaultNormalizer{}
 	}
+	if o.recorder == nil {
+		o.recorder = newSecurityEventRecorder(repos.SecurityEvents, o.ids, o.clock, o.logger, nil)
+	}
 	e := &ExternalAuthenticator{
 		providers:   make(map[string]externalProvider, len(cfg.Providers)),
 		users:       repos.Users,
 		identifiers: repos.Identifiers,
 		subjects:    repos.ExternalSubjects,
-		events:      repos.SecurityEvents,
+		events:      o.recorder,
 		invitations: repos.Invitations,
 		normalizer:  o.normalizer,
 		keyer:       o.keyer,
@@ -590,7 +593,7 @@ func (e *ExternalAuthenticator) providerFailed(ctx context.Context, p externalPr
 	}
 	kind := unavailableKind(err)
 	e.logger.Error("external revocation provider unavailable", "provider", p.Name, "error_kind", kind)
-	recordSecurityEvent(ctx, e.events, e.ids, e.now(), e.logger, securityEventInput{
+	e.events.Record(ctx, securityEventInput{
 		Type:    securityevent.TypeExternalRevocationUnavailable,
 		Status:  securityevent.StatusFailure,
 		Details: map[string]any{"provider": p.Name, "error_kind": kind},
@@ -637,7 +640,7 @@ func (e *ExternalAuthenticator) resolveSubject(ctx context.Context, p externalPr
 	case err == nil:
 	case errors.Is(err, sdk.ErrNotFound):
 		if !p.ProvisionOnFirstVerification {
-			recordSecurityEvent(ctx, e.events, e.ids, e.now(), e.logger, securityEventInput{
+			e.events.Record(ctx, securityEventInput{
 				Type:    securityevent.TypeExternalSubjectUnknown,
 				Status:  securityevent.StatusFailure,
 				Details: map[string]any{"provider": p.Name},
@@ -731,7 +734,7 @@ func (e *ExternalAuthenticator) provision(ctx context.Context, p externalProvide
 	if kind == identifier.KindEmail && verified {
 		resolvePendingInvitations(ctx, e.invitations, e.logger, ident.NormalizedValue, created.ID)
 	}
-	recordSecurityEvent(ctx, e.events, e.ids, e.now(), e.logger, securityEventInput{
+	e.events.Record(ctx, securityEventInput{
 		UserID:  created.ID,
 		Type:    securityevent.TypeExternalSubjectProvisioned,
 		Status:  securityevent.StatusSuccess,
@@ -758,7 +761,7 @@ func (e *ExternalAuthenticator) checkCollision(ctx context.Context, p externalPr
 }
 
 func (e *ExternalAuthenticator) collision(ctx context.Context, p externalProvider, existingUserID string, kind identifier.Kind) {
-	recordSecurityEvent(ctx, e.events, e.ids, e.now(), e.logger, securityEventInput{
+	e.events.Record(ctx, securityEventInput{
 		UserID:  existingUserID,
 		Type:    securityevent.TypeExternalSubjectCollision,
 		Status:  securityevent.StatusBlocked,
@@ -769,7 +772,7 @@ func (e *ExternalAuthenticator) collision(ctx context.Context, p externalProvide
 // deny records a policy denial and returns ErrExternalSubjectDenied, or
 // ErrRevoked for a revocation.
 func (e *ExternalAuthenticator) deny(ctx context.Context, p externalProvider, userID, reason string) error {
-	recordSecurityEvent(ctx, e.events, e.ids, e.now(), e.logger, securityEventInput{
+	e.events.Record(ctx, securityEventInput{
 		UserID:  userID,
 		Type:    securityevent.TypeExternalSubjectDenied,
 		Status:  securityevent.StatusBlocked,

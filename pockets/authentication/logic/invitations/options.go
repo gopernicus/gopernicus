@@ -102,10 +102,24 @@ func WithRedirectAllowlist(value []string) Option {
 	}
 }
 
-// WithSecurityEvents replaces SecurityEvents for this constructor.
+// WithSecurityEvents replaces SecurityEvents for this constructor. Without
+// WithSecurityEventRecorder the service records through a recorder of its own
+// over this repository, attributing rows through the client-info carrier; its
+// write failures are counted apart from every other recording site.
 func WithSecurityEvents(value securityevent.SecurityEventRepository) Option {
 	return func(c *constructorConfig) {
 		c.SecurityEvents = value
+	}
+}
+
+// WithSecurityEventRecorder supplies the recorder invitation events are recorded
+// through, so they share one recorder — ids, client attribution, correlation and
+// failure count — with the host's other recording sites. It wins over
+// WithSecurityEvents; passing both with different repositories is
+// ErrSecurityEventsConflict.
+func WithSecurityEventRecorder(value *securityevent.Recorder) Option {
+	return func(c *constructorConfig) {
+		c.SecurityRecorder = value
 	}
 }
 

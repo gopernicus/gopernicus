@@ -25,6 +25,7 @@ import (
 	"fmt"
 	"maps"
 	"sort"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -222,6 +223,10 @@ func Run(t *testing.T, newRepos func(t *testing.T) auth.Repositories) {
 		t.Run("ListSameCreatedAtCollision", func(t *testing.T) { testSecurityEventsListCollision(t, newRepos(t)) })
 		t.Run("DetailsRoundTrip", func(t *testing.T) { testSecurityEventsDetails(t, newRepos(t)) })
 		t.Run("DBGeneratedIDOnEmpty", func(t *testing.T) { testSecurityEventsDBGeneratedID(t, newRepos(t)) })
+		t.Run("CorrelationRoundTrip", func(t *testing.T) {
+			t.Run("AppMintedID", func(t *testing.T) { testSecurityEventsCorrelation(t, newRepos(t), ids) })
+			t.Run("DatabaseID", func(t *testing.T) { testSecurityEventsCorrelation(t, newRepos(t), dbIDs) })
+		})
 		runPagedFamily(t, newRepos,
 			func(repos auth.Repositories, ctx context.Context, req listing.Request) (listing.Page[securityevent.SecurityEvent], error) {
 				return repos.SecurityEvents.List(ctx, securityevent.ListFilter{UserID: "u-seed"}, req)
@@ -2465,6 +2470,42 @@ func testSecurityEventsDBGeneratedID(t *testing.T, repos auth.Repositories) {
 	}
 	if created.ID == "" {
 		t.Fatal("Create returned an empty ID — the store did not assign a database-generated key")
+	}
+}
+
+// testSecurityEventsCorrelation is the correlation round-trip under one id
+// strategy: RequestID and TraceID come back from Create and from List exactly as
+// given — blank, ordinary, and a 129-byte id the store must keep whole, since
+// blanking an over-long id is the recorder's job, not the store's.
+func testSecurityEventsCorrelation(t *testing.T, repos auth.Repositories, gen sdk.IDGenerator) {
+	ctx := context.Background()
+	repo := repos.SecurityEvents
+	long := strings.Repeat("r", securityevent.MaxCorrelationIDLen+1)
+	cases := []struct{ userID, requestID, traceID string }{
+		{"u-corr-blank", "", ""},
+		{"u-corr-set", "req-7f3a", "4bf92f3577b34da6a3ce929d0e0e4736"},
+		{"u-corr-long", long, long},
+	}
+	for i, tc := range cases {
+		evt := securityevent.New(gen, securityevent.TypeLogin, securityevent.StatusSuccess, suiteBase.Add(time.Duration(i)*time.Minute))
+		evt.UserID, evt.RequestID, evt.TraceID = tc.userID, tc.requestID, tc.traceID
+		created, err := repo.Create(ctx, evt)
+		if err != nil {
+			t.Fatalf("Create(%s): %v", tc.userID, err)
+		}
+		if created.ID == "" || created.RequestID != tc.requestID || created.TraceID != tc.traceID {
+			t.Errorf("Create(%s) returned id %q request_id %q trace_id %q, want a key and the ids as given", tc.userID, created.ID, created.RequestID, created.TraceID)
+		}
+		page, err := repo.List(ctx, securityevent.ListFilter{UserID: tc.userID}, listing.Request{Limit: 10})
+		if err != nil {
+			t.Fatalf("List(%s): %v", tc.userID, err)
+		}
+		if len(page.Items) != 1 {
+			t.Fatalf("List(%s) len = %d, want 1", tc.userID, len(page.Items))
+		}
+		if got := page.Items[0]; got.ID != created.ID || got.RequestID != tc.requestID || got.TraceID != tc.traceID {
+			t.Errorf("List(%s) = id %q request_id %q trace_id %q, want %q %q %q", tc.userID, got.ID, got.RequestID, got.TraceID, created.ID, tc.requestID, tc.traceID)
+		}
 	}
 }
 

@@ -66,7 +66,9 @@ var externalProbeTables = []string{"external_subjects"}
 // before boot, so the failure surfaces at wiring time rather than on the first
 // query. This is the store half of the scaffold model: the host owns and
 // applies the schema (see ExportMigrations) and the store just provides repos.
-// db is the connector wrapper (error mapping + Tx), not a raw *sql.DB.
+// db is the connector wrapper (error mapping + Tx), not a raw *sql.DB. Last it
+// checks the 0022 immutability triggers (AuditTables) under the RuntimeMode db
+// was opened with, logging a WARN when they are missing or altered.
 func Repositories(ctx context.Context, db *tursodb.DB) (auth.Repositories, error) {
 	if db == nil {
 		return auth.Repositories{}, fmt.Errorf("authentication turso: nil database: %w", sdk.ErrInvalidInput)
@@ -90,6 +92,9 @@ func Repositories(ctx context.Context, db *tursodb.DB) (auth.Repositories, error
 		if err := probeTable(ctx, db, table); err != nil {
 			return auth.Repositories{}, err
 		}
+	}
+	if err := db.ProbeAuditImmutable(ctx, AuditTables()...); err != nil {
+		return auth.Repositories{}, err
 	}
 	oauthStore := NewOAuth2Store(db)
 	return auth.Repositories{
@@ -136,6 +141,37 @@ var probeColumns = []struct{ table, column, migration string }{
 	{"invitations", "resolved_subject_type", "0018_invitation_acceptance.sql"},
 	{"sessions", "session_profile", "0019_oauth2_sessions.sql"},
 	{"sessions", "delegation", "0019_oauth2_sessions.sql"},
+	{"security_events", "request_id", "0021_security_events_integrity.sql"},
+}
+
+// The immutability triggers migration 0022 creates, as sqlite_schema stores
+// them. A test pins both to the embedded 0022, so the trigger probe verifies
+// the triggers the store ships.
+const (
+	securityEventsImmutableUpdate    = "security_events_immutable_update"
+	securityEventsImmutableUpdateSQL = `CREATE TRIGGER security_events_immutable_update BEFORE UPDATE ON security_events
+BEGIN
+  SELECT RAISE(ABORT, 'security_events is append-only');
+END;`
+	securityEventsImmutableDelete    = "security_events_immutable_delete"
+	securityEventsImmutableDeleteSQL = `CREATE TRIGGER security_events_immutable_delete BEFORE DELETE ON security_events
+BEGIN
+  SELECT RAISE(ABORT, 'security_events is append-only');
+END;`
+)
+
+// AuditTables are the append-only tables this store owns and the triggers
+// migration 0022 creates on them. Repositories checks them with
+// tursodb.DB.ProbeAuditImmutable: under a non-zero RuntimeMode a missing or
+// altered trigger logs a WARN; SQLite has no privileges, so it never refuses.
+func AuditTables() []tursodb.AppendOnlyTable {
+	return []tursodb.AppendOnlyTable{{
+		Name: "security_events",
+		Triggers: []tursodb.TableTrigger{
+			{Name: securityEventsImmutableUpdate, Canonical: []tursodb.TriggerBody{{SQL: securityEventsImmutableUpdateSQL}}},
+			{Name: securityEventsImmutableDelete, Canonical: []tursodb.TriggerBody{{SQL: securityEventsImmutableDeleteSQL}}},
+		},
+	}}
 }
 
 // probeColumn verifies one ALTER-added column exists, naming the migration that

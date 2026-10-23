@@ -33,7 +33,10 @@ func NewSecurityEventStore(db *pgxdb.DB, opts ...Option) *SecurityEventStore {
 	return &SecurityEventStore{db: db, qualified: qualified{schema: applyOptions(opts).schema}}
 }
 
-const securityEventColumns = "id, user_id, actor_type, actor_id, event_type, event_status, details, ip_address, user_agent, created_at"
+// securityEventColumns are the columns the store reads and writes. seq and
+// recorded_at (migration 0021) are evidence the database fills; the store never
+// names them.
+const securityEventColumns = "id, user_id, actor_type, actor_id, event_type, event_status, details, ip_address, user_agent, request_id, trace_id, created_at"
 
 // securityEventRow is the store-local, db-tagged projection of a security_events
 // row. Details scans directly from JSONB into a map; toDomain normalizes a NULL
@@ -48,6 +51,8 @@ type securityEventRow struct {
 	Details     map[string]any `db:"details"`
 	IPAddress   string         `db:"ip_address"`
 	UserAgent   string         `db:"user_agent"`
+	RequestID   string         `db:"request_id"`
+	TraceID     string         `db:"trace_id"`
 	CreatedAt   time.Time      `db:"created_at"`
 }
 
@@ -65,6 +70,8 @@ func (r securityEventRow) toDomain() securityevent.SecurityEvent {
 		Details:     details,
 		IPAddress:   r.IPAddress,
 		UserAgent:   r.UserAgent,
+		RequestID:   r.RequestID,
+		TraceID:     r.TraceID,
 		CreatedAt:   r.CreatedAt.UTC(),
 	}
 }
@@ -84,20 +91,22 @@ func (s *SecurityEventStore) Create(ctx context.Context, evt securityevent.Secur
 		"details":      details,
 		"ip_address":   evt.IPAddress,
 		"user_agent":   evt.UserAgent,
+		"request_id":   evt.RequestID,
+		"trace_id":     evt.TraceID,
 		"created_at":   evt.CreatedAt.UTC(),
 	}
 	// Empty ID → the sdk.DatabaseID strategy (amended D10): omit the id
 	// column so the schema default generates the key, read back with RETURNING.
 	if evt.ID == "" {
-		q := `INSERT INTO ` + s.table(securityEventsTable) + ` (user_id, actor_type, actor_id, event_type, event_status, details, ip_address, user_agent, created_at)
-			VALUES (@user_id, @actor_type, @actor_id, @event_type, @event_status, @details, @ip_address, @user_agent, @created_at)
+		q := `INSERT INTO ` + s.table(securityEventsTable) + ` (user_id, actor_type, actor_id, event_type, event_status, details, ip_address, user_agent, request_id, trace_id, created_at)
+			VALUES (@user_id, @actor_type, @actor_id, @event_type, @event_status, @details, @ip_address, @user_agent, @request_id, @trace_id, @created_at)
 			RETURNING id`
 		if err := s.db.QueryRow(ctx, q, args).Scan(&evt.ID); err != nil {
 			return securityevent.SecurityEvent{}, pgxdb.MapError(err)
 		}
 	} else {
 		q := `INSERT INTO ` + s.table(securityEventsTable) + ` (` + securityEventColumns + `)
-			VALUES (@id, @user_id, @actor_type, @actor_id, @event_type, @event_status, @details, @ip_address, @user_agent, @created_at)`
+			VALUES (@id, @user_id, @actor_type, @actor_id, @event_type, @event_status, @details, @ip_address, @user_agent, @request_id, @trace_id, @created_at)`
 		args["id"] = evt.ID
 		if _, err := s.db.Exec(ctx, q, args); err != nil {
 			return securityevent.SecurityEvent{}, err

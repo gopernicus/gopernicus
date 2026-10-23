@@ -149,7 +149,7 @@ var defaultIndexedFields = map[string][]string{
 	collectionOAuthStates:     {"expires_at", "provider", "purpose", "token"},
 	collectionServiceAccounts: {"act_as_user", "created_by", "description", "owner_user_id", "updated_at"},
 	collectionAPIKeys:         {"expires_at", "last_used_at", "revoked_at"},
-	collectionSecurityEvents:  {"actor_id", "actor_type", "ip_address", "user_agent"},
+	collectionSecurityEvents:  {"actor_id", "actor_type", "ip_address", "request_id", "trace_id", "user_agent"},
 	collectionInvitations:     {"accepted_at", "auto_accept", "expires_at", "identifier", "identifier_kind", "invited_by", "relation", "resolved_subject_id", "resolved_subject_type", "resource_id", "resource_type", "status", "updated_at"},
 	collectionChallenges:      {"attempt_count", "context", "created_at", "protector_key_id", "subject_key", "version"},
 	collectionContactChanges:  {"created_at", "expires_at", "id", "kind", "login_enabled", "make_primary", "new_value", "notification_enabled", "recovery_enabled", "replaces_identifier_id", "user_id"},

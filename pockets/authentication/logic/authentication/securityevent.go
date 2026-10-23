@@ -2,59 +2,31 @@ package authentication
 
 import (
 	"context"
-	"errors"
 
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/securityevent"
-	"github.com/gopernicus/gopernicus/sdk"
 )
 
-// securityEventInput is the content a sensitive op hands recordSecurityEvent.
-// The helper fills the ID, timestamp, and client attribution (IP/UA) from the
-// service clock and the request's client-info carrier — the caller never touches
-// those, so IP/UA have exactly one source (design §5.1 WI4).
+// securityEventInput is the content a sensitive op hands recordSecurityEvent:
+// securityevent.Input, whose recorder fills the ID, timestamp, correlation ids
+// and client attribution (IP/UA) — the caller never touches those, so each has
+// exactly one source (design §5.1 WI4).
 //
 // Content hygiene (design §5.1 WI3): Details carries identifiers and key
 // PREFIXES only. Never put a raw API key, JWT, session token, password, or OAuth
 // token in Details, Actor, UserID, IP, or UA.
-type securityEventInput struct {
-	UserID  string
-	Actor   securityevent.Principal
-	Type    string
-	Status  string
-	Details map[string]any
-}
+type securityEventInput = securityevent.Input
 
-// recordSecurityEvent appends one audit row synchronously (design §5.1). It is
-// the SINGLE recording site: every sensitive op routes through it, so the
-// never-fail property and the client-info sourcing live in one place.
-//
-//   - Nil repository → no-op (ratified AV9: the host keeps no audit trail).
-//   - A write failure is logged at WARN with COARSE fields only — event_type,
-//     status, error kind — never the event body, and NEVER fails the auth flow
-//     (the design's non-negotiable).
+// recordSecurityEvent appends one audit row synchronously through the service's
+// recorder (design §5.1), the one recording site every sensitive op routes
+// through. A recorder without a repository is a no-op (ratified AV9: the host
+// keeps no audit trail); a write failure is logged, counted and observed by the
+// recorder and NEVER fails the auth flow (the design's non-negotiable).
 func (s *Service) recordSecurityEvent(ctx context.Context, in securityEventInput) {
-	recordSecurityEvent(ctx, s.securityEvents, s.ids, s.now(), s.logger, in)
+	s.securityEvents.Record(ctx, in)
 }
 
-// ErrorKind reduces err to a coarse, secret-free sentinel label for the WARN line
-// (design §5.1 WI3 — the log carries event_type, status, and error kind only,
-// never the event body). Unrecognized errors report "unknown" rather than their
-// message, so no store detail leaks into logs.
+// ErrorKind reduces err to a coarse, secret-free sentinel label for a WARN line.
+// It forwards to securityevent.ErrorKind.
 func ErrorKind(err error) string {
-	switch {
-	case err == nil:
-		return "none"
-	case errors.Is(err, sdk.ErrAlreadyExists):
-		return "already_exists"
-	case errors.Is(err, sdk.ErrInvalidInput):
-		return "invalid_input"
-	case errors.Is(err, sdk.ErrInvalidReference):
-		return "invalid_reference"
-	case errors.Is(err, sdk.ErrNotFound):
-		return "not_found"
-	case errors.Is(err, sdk.ErrConflict):
-		return "conflict"
-	default:
-		return "unknown"
-	}
+	return securityevent.ErrorKind(err)
 }

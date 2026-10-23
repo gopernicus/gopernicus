@@ -19,7 +19,6 @@ import (
 	"time"
 
 	"github.com/gopernicus/gopernicus/pockets/authentication/internal/redirect"
-	authlogic "github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/identifier"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/securityevent"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/delivery"
@@ -288,6 +287,7 @@ type constructorConfig struct {
 	Queue             deliveryQueue
 	RedirectAllowlist []string
 	SecurityEvents    securityevent.SecurityEventRepository
+	SecurityRecorder  *securityevent.Recorder
 	Clock             func() time.Time
 	Logger            *slog.Logger
 	TTL               time.Duration
@@ -316,7 +316,7 @@ type Service struct {
 	// queue is the durable delivery outbox (DeliveryConfig.Queue) send sites enqueue through.
 	queue          deliveryQueue
 	redirects      redirect.Allowlist
-	securityEvents securityevent.SecurityEventRepository
+	securityEvents *securityevent.Recorder
 	now            func() time.Time
 	logger         *slog.Logger
 	ttl            time.Duration
@@ -362,7 +362,7 @@ func newService(d constructorConfig) *Service {
 		deliverer:         d.Deliver,
 		queue:             d.Queue,
 		redirects:         redirect.New(d.RedirectAllowlist),
-		securityEvents:    d.SecurityEvents,
+		securityEvents:    d.securityEventRecorder(clock, logger),
 		now:               clock,
 		logger:            logger,
 		ttl:               ttl,
@@ -921,10 +921,10 @@ func (s *Service) recordLifecycle(ctx context.Context, inv Invitation, eventType
 	})
 }
 
-// record appends one audit row synchronously, reading IP/UA from the shared
-// client-info carrier. Nil repository → no-op (ratified AV9); a write failure is
-// logged at WARN with coarse fields only and NEVER fails the invitation flow
-// (design §5.1's non-negotiable, reused here).
+// record appends one audit row synchronously through the service's recorder.
+// No repository → no-op (ratified AV9); a write failure is logged, counted and
+// observed by the recorder and NEVER fails the invitation flow (design §5.1's
+// non-negotiable, reused here).
 func (s *Service) record(ctx context.Context, userID, eventType, status string, details map[string]any) {
 	s.recordAs(ctx, securityevent.Principal{}, userID, eventType, status, details)
 }
@@ -938,23 +938,7 @@ func (s *Service) recordManagement(ctx context.Context, actor securityevent.Prin
 
 // recordAs is record with the canonical Actor populated.
 func (s *Service) recordAs(ctx context.Context, actor securityevent.Principal, userID, eventType, status string, details map[string]any) {
-	if s.securityEvents == nil {
-		return
-	}
-	ip, ua := authlogic.ClientInfoFromContext(ctx)
-	evt := securityevent.New(s.ids, eventType, status, s.now())
-	evt.UserID = userID
-	evt.Actor = actor
-	evt.Details = details
-	evt.IPAddress = ip
-	evt.UserAgent = ua
-	if _, err := s.securityEvents.Create(ctx, evt); err != nil {
-		s.logger.Warn("security event write failed",
-			"event_type", eventType,
-			"status", status,
-			"error_kind", errKind(err),
-		)
-	}
+	s.securityEvents.Record(ctx, securityevent.Input{UserID: userID, Actor: actor, Type: eventType, Status: status, Details: details})
 }
 
 // --- delivery ---

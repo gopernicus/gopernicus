@@ -11,12 +11,14 @@ package turso
 
 import (
 	"context"
+	"log/slog"
 	"os"
 	"testing"
 
 	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
 	auth "github.com/gopernicus/gopernicus/pockets/authentication"
 	"github.com/gopernicus/gopernicus/pockets/authentication/stores/storetest"
+	"github.com/gopernicus/gopernicus/sdk/pkg/environment"
 )
 
 // authTables are the pocket's tables in child-before-parent order, so a
@@ -75,13 +77,44 @@ func TestConformance_Turso(t *testing.T) {
 	})
 }
 
-// truncate clears every auth table so a Repositories starts empty.
+// truncate clears every auth table so a Repositories starts empty. The
+// security_events immutability triggers refuse DELETE from every connection, so
+// it drops them first and re-executes the embedded 0022 after (test-only).
 func truncate(t *testing.T, db *tursodb.DB) {
 	t.Helper()
 	ctx := context.Background()
+	for _, trigger := range []string{securityEventsImmutableUpdate, securityEventsImmutableDelete} {
+		if _, err := db.Exec(ctx, "DROP TRIGGER IF EXISTS "+trigger); err != nil {
+			t.Fatalf("drop trigger %s: %v", trigger, err)
+		}
+	}
 	for _, tbl := range authTables {
 		if _, err := db.Exec(ctx, "DELETE FROM "+tbl); err != nil {
 			t.Fatalf("truncate %s: %v", tbl, err)
 		}
 	}
+	if err := execMigration(ctx, db, immutableMigration); err != nil {
+		t.Fatalf("re-create the security_events triggers: %v", err)
+	}
+}
+
+// TestSecurityEventsIntegrity_Turso runs the integrity cases against the live
+// database, from an empty schema.
+func TestSecurityEventsIntegrity_Turso(t *testing.T) {
+	url := os.Getenv("TURSO_DATABASE_URL")
+	token := os.Getenv("TURSO_AUTH_TOKEN")
+	if url == "" || token == "" {
+		t.Skip("TURSO_DATABASE_URL/TURSO_AUTH_TOKEN not set — turso audit-rail integrity NOT verified")
+	}
+	runSecurityEventsIntegrity(t, integrityTarget{
+		open: func(t *testing.T, mode environment.Mode, logger *slog.Logger) *tursodb.DB {
+			db, err := tursodb.Open(context.Background(), tursodb.Config{URL: url, AuthToken: token, RuntimeMode: mode, Logger: logger, TLSDisabledAcknowledged: mode != ""})
+			if err != nil {
+				t.Fatalf("connect: %v", err)
+			}
+			t.Cleanup(func() { db.Close() })
+			return db
+		},
+		reset: probeDropAll,
+	})
 }

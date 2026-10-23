@@ -57,7 +57,12 @@ func (s *Service) ListUsers(ctx context.Context, req list.Request) (list.Page[us
 	if s.userAdmin == nil {
 		return list.Page[user.Summary]{}, ErrUserAdminUnavailable
 	}
-	return s.userAdmin.List(ctx, req)
+	page, err := s.userAdmin.List(ctx, req)
+	if err != nil {
+		return page, err
+	}
+	s.recordDirectoryRead(ctx, map[string]any{"page": true})
+	return page, nil
 }
 
 // GetUserSummary returns one user's directory projection; unknown →
@@ -68,7 +73,22 @@ func (s *Service) GetUserSummary(ctx context.Context, id string) (user.Summary, 
 	if s.userAdmin == nil {
 		return user.Summary{}, ErrUserAdminUnavailable
 	}
-	return s.userAdmin.GetSummary(ctx, id)
+	summary, err := s.userAdmin.GetSummary(ctx, id)
+	if err != nil {
+		return summary, err
+	}
+	s.recordDirectoryRead(ctx, map[string]any{"page": false, "target_user_id": id})
+	return summary, nil
+}
+
+// recordDirectoryRead records one successful operator-directory read, attributed
+// to the principal the caller's transport resolved onto ctx.
+func (s *Service) recordDirectoryRead(ctx context.Context, details map[string]any) {
+	var actor securityevent.Principal
+	if p, ok := sdk.PrincipalFromContext(ctx); ok {
+		actor = securityevent.Principal{Type: p.Type, ID: p.ID}
+	}
+	s.recordSecurityEvent(ctx, securityEventInput{Type: securityevent.TypeUserDirectoryRead, Status: securityevent.StatusSuccess, Actor: actor, Details: details})
 }
 
 // SetUserStatus transitions a user's lifecycle status and returns the resulting

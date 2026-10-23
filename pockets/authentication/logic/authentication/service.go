@@ -192,6 +192,8 @@ type constructorConfig struct {
 	PasswordFlowsDisabled   bool
 	RequireVerifiedEmail    bool
 	SecurityEvents          securityevent.SecurityEventRepository
+	SecurityEventRecorder   *securityevent.Recorder
+	AuditWriteObserver      securityevent.WriteObserver
 	Invitations             invitationResolver
 	OAuthAccounts           oauthaccount.OAuthAccountRepository
 	OAuthStates             oauthstate.StateRepository
@@ -272,9 +274,10 @@ type Service struct {
 	// ids is the app-chosen entity-ID strategy (WithIDs); zero value → default
 	// nanoids. Entity keys only, never secrets.
 	ids sdk.IDGenerator
-	// securityEvents is the optional append-only audit rail (design §5.1). Nil →
-	// the recordSecurityEvent helper is a no-op (ratified AV9).
-	securityEvents securityevent.SecurityEventRepository
+	// securityEvents records the optional append-only audit rail (design §5.1):
+	// the supplied recorder or one over Repositories.SecurityEvents. Without a
+	// repository recordSecurityEvent is a no-op (ratified AV9).
+	securityEvents *securityevent.Recorder
 	// invitations resolves grants for proven email ownership. Nil disables it.
 	invitations invitationResolver
 
@@ -378,6 +381,10 @@ func newService(d constructorConfig) *Service {
 	if credentialPolicy == nil {
 		credentialPolicy = credential.NewDefaultPolicy(credential.PolicyConfig{})
 	}
+	securityEvents := d.SecurityEventRecorder
+	if securityEvents == nil {
+		securityEvents = newSecurityEventRecorder(d.SecurityEvents, d.IDs, clock, logger, d.AuditWriteObserver)
+	}
 	return &Service{
 		authenticationLimits: d.AuthenticationLimits.withDefaults(),
 		users:                d.Users,
@@ -406,7 +413,7 @@ func newService(d constructorConfig) *Service {
 		requireVerifiedEmail: d.RequireVerifiedEmail,
 		passwordFlowsEnabled: !d.PasswordFlowsDisabled,
 		ids:                  d.IDs,
-		securityEvents:       d.SecurityEvents,
+		securityEvents:       securityEvents,
 		invitations:          d.Invitations,
 
 		oauthAccounts:      d.OAuthAccounts,
