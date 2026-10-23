@@ -548,10 +548,14 @@ func (s *Service) createPending(ctx context.Context, in CreateInput, subjectID s
 func (s *Service) Accept(ctx context.Context, in AcceptInput) (AcceptResult, error) {
 	tokenHash, err := s.hashSecret(in.Token)
 	if err != nil {
+		s.recordAcceptDenied(ctx, in.SubjectID, nil, securityevent.ReasonInvalidToken)
 		return AcceptResult{}, invitationNotFound()
 	}
 	inv, err := s.invitations.GetByTokenHash(ctx, tokenHash)
 	if err != nil {
+		if errors.Is(err, sdk.ErrNotFound) || errors.Is(err, sdk.ErrExpired) {
+			s.recordAcceptDenied(ctx, in.SubjectID, nil, securityevent.ReasonInvalidToken)
+		}
 		return AcceptResult{}, err
 	}
 	subjectType := in.SubjectType
@@ -565,6 +569,9 @@ func (s *Service) Accept(ctx context.Context, in AcceptInput) (AcceptResult, err
 		switch inv.IdentifierKind {
 		case sdk.AddressKindEmail, sdk.AddressKindPhone:
 			if err := s.requireVerifiedIdentifier(ctx, in.SubjectID, inv.IdentifierKind, inv.Identifier); err != nil {
+				if errors.Is(err, ErrIdentifierMismatch) {
+					s.recordAcceptDenied(ctx, in.SubjectID, &inv, securityevent.ReasonPolicy)
+				}
 				return AcceptResult{}, err
 			}
 		}
@@ -899,6 +906,22 @@ func (s *Service) recordGrant(ctx context.Context, subjectID, resourceType, reso
 		details["reason"] = reason
 	}
 	s.record(ctx, subjectID, securityevent.TypeInvitationGranted, status, details)
+}
+
+// recordAcceptDenied appends an invitation_granted failure for an accept refused
+// before any claim: reason invalid_token for a token that resolved no
+// invitation (inv is nil), policy for a caller the invitation is not addressed
+// to. Details carry the invitation's resource coordinates and identifier kind —
+// never the token or an address.
+func (s *Service) recordAcceptDenied(ctx context.Context, subjectID string, inv *Invitation, reason string) {
+	details := map[string]any{"reason": reason}
+	if inv != nil {
+		details["resource_type"] = inv.ResourceType
+		details["resource_id"] = inv.ResourceID
+		details["relation"] = inv.Relation
+		details["identifier_kind"] = inv.IdentifierKind
+	}
+	s.record(ctx, subjectID, securityevent.TypeInvitationGranted, securityevent.StatusFailure, details)
 }
 
 // recordCreated appends an invitation_created audit row for a newly minted

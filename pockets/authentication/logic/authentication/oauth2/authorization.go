@@ -81,6 +81,7 @@ func (s *Service) Deny(ctx context.Context, consentToken, userID, webSessionID s
 	if err != nil {
 		return AuthorizationResult{}, err
 	}
+	s.audit(ctx, TypeConsentDenied, userID, webSessionID, approved.Request.ClientID)
 	return AuthorizationResult{RedirectURI: approved.Request.RedirectURI, State: approved.Request.State, Error: "access_denied"}, nil
 }
 

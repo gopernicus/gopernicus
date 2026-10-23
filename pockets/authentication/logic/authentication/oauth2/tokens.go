@@ -10,7 +10,8 @@ import (
 	"github.com/gopernicus/gopernicus/sdk"
 )
 
-func (s *Service) RedeemCode(ctx context.Context, req CodeRequest) (TokenResponse, error) {
+func (s *Service) RedeemCode(ctx context.Context, req CodeRequest) (_ TokenResponse, err error) {
+	defer func() { s.auditGrantFailure(ctx, req.ClientID, err) }()
 	if req.Code == "" || len(req.Code) > 512 || !validVerifier(req.CodeVerifier) {
 		return TokenResponse{}, ErrInvalidGrant
 	}
@@ -50,7 +51,8 @@ func (s *Service) RedeemCode(ctx context.Context, req CodeRequest) (TokenRespons
 	return response, nil
 }
 
-func (s *Service) Refresh(ctx context.Context, req RefreshRequest) (TokenResponse, error) {
+func (s *Service) Refresh(ctx context.Context, req RefreshRequest) (_ TokenResponse, err error) {
+	defer func() { s.auditGrantFailure(ctx, req.ClientID, err) }()
 	if !session.IsDelegatedRefreshToken(req.RefreshToken) || len(req.RefreshToken) > 512 {
 		return TokenResponse{}, ErrInvalidGrant
 	}
@@ -98,7 +100,8 @@ func (s *Service) Refresh(ctx context.Context, req RefreshRequest) (TokenRespons
 	return response, nil
 }
 
-func (s *Service) Exchange(ctx context.Context, proof ClientProof, req ExchangeRequest) (TokenResponse, error) {
+func (s *Service) Exchange(ctx context.Context, proof ClientProof, req ExchangeRequest) (_ TokenResponse, err error) {
+	defer func() { s.auditGrantFailure(ctx, proof.clientID, err) }()
 	if !s.validProof(proof) {
 		return TokenResponse{}, ErrInvalidClient
 	}
@@ -127,11 +130,13 @@ func (s *Service) Exchange(ctx context.Context, proof ClientProof, req ExchangeR
 
 func (s *Service) Introspect(ctx context.Context, proof ClientProof, raw string) (Introspection, error) {
 	if !s.validProof(proof) {
+		s.auditGrantFailure(ctx, proof.clientID, ErrInvalidClient)
 		return Introspection{}, ErrInvalidClient
 	}
 	token, _, err := s.liveAccess(ctx, raw)
 	if err != nil {
 		if errors.Is(err, ErrInvalidGrant) || errors.Is(err, ErrInvalidClient) {
+			s.auditGrantFailure(ctx, proof.clientID, err)
 			return Introspection{Active: false}, nil
 		}
 		return Introspection{}, err
@@ -139,6 +144,7 @@ func (s *Service) Introspect(ctx context.Context, proof ClientProof, raw string)
 	// This client is the MCP resource server; it cannot inspect API-only or
 	// another client's tokens merely because their issuer happens to match.
 	if token.Audience != s.config.MCPResource || token.OriginClientID != "" || token.ActorID != "" {
+		s.auditGrantFailure(ctx, proof.clientID, ErrInvalidGrant)
 		return Introspection{Active: false}, nil
 	}
 	return Introspection{Active: true, TokenType: "Bearer", Subject: "user:" + token.UserID, UserID: token.UserID,
@@ -147,6 +153,7 @@ func (s *Service) Introspect(ctx context.Context, proof ClientProof, raw string)
 
 func (s *Service) Revoke(ctx context.Context, req RevokeRequest) error {
 	if _, err := s.resolveClient(ctx, req.ClientID); err != nil {
+		s.auditGrantFailure(ctx, req.ClientID, err)
 		return err
 	}
 	if req.Token == "" || len(req.Token) > 16<<10 {
@@ -162,11 +169,13 @@ func (s *Service) Revoke(ctx context.Context, req RevokeRequest) error {
 	token, sess, err := s.liveAccess(ctx, req.Token)
 	if err != nil {
 		if errors.Is(err, ErrInvalidGrant) || errors.Is(err, ErrInvalidClient) {
+			s.auditGrantFailure(ctx, req.ClientID, err)
 			return nil
 		}
 		return err
 	}
 	if token.ClientID != req.ClientID || token.OriginClientID != "" || token.ActorID != "" || token.Audience != s.config.MCPResource {
+		s.auditGrantFailure(ctx, req.ClientID, ErrInvalidGrant)
 		return nil
 	}
 	err = s.repos.OAuth2.RevokeGrant(ctx, sess.ID, sess.UserID, req.ClientID)

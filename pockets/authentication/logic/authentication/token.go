@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"strings"
@@ -48,31 +49,33 @@ func (s *Service) TokenEnabled() bool {
 // legacy email column, and the verified gate reads the identifier's proof state.
 // The rate-limit IP is read from the request's client-info carrier (WithClientInfo)
 // — the single source of truth for IP (design §5.1 WI4); there is no clientIP
-// parameter. A successful issuance records a token_issued success event.
+// parameter. Every exit records a token_issued event exactly as Login records
+// its login event (recordCredentialOutcome), without the attempted address.
 func (s *Service) IssueToken(ctx context.Context, emailAddr, password string) (TokenPair, error) {
 	if err := s.requirePasswordFlows(); err != nil {
 		return TokenPair{}, err
 	}
 	normalized, err := s.normalizeEmail(emailAddr)
 	if err != nil {
+		s.recordCredentialOutcome(ctx, securityevent.TypeTokenIssued, "", invalidCredentials(), nil)
 		return TokenPair{}, invalidCredentials()
 	}
 
 	u, _, err := s.provePassword(ctx, normalized, password)
 	if err != nil {
+		s.recordCredentialOutcome(ctx, securityevent.TypeTokenIssued, u.ID, err, nil)
 		return TokenPair{}, err
 	}
 
 	pair, err := s.mintSession(ctx, u.ID, u.AuthRevision, s.primaryAuthentication(session.MethodPassword))
 	if err != nil {
 		// A deactivated account is denied as ordinary bad credentials (CHAU-1.5).
+		if errors.Is(err, session.ErrUserNotActive) {
+			s.recordCredentialOutcome(ctx, securityevent.TypeTokenIssued, u.ID, err, nil)
+		}
 		return TokenPair{}, genericIfNotActive(err, invalidCredentials())
 	}
-	s.recordSecurityEvent(ctx, securityEventInput{
-		UserID: u.ID,
-		Type:   securityevent.TypeTokenIssued,
-		Status: securityevent.StatusSuccess,
-	})
+	s.recordCredentialOutcome(ctx, securityevent.TypeTokenIssued, u.ID, nil, nil)
 	return pair, nil
 }
 

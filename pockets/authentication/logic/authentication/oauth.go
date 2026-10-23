@@ -287,20 +287,27 @@ func ValidOAuthFlowValue(value string) bool {
 // three-way anti-takeover branch (existing link → login; matching email, no link
 // → pending link; no user → register + link) — or, for a session-gated link
 // start, attaches the identity to the linking user. A consumed/expired/unknown
-// state surfaces sdk.ErrNotFound / sdk.ErrExpired.
+// state surfaces sdk.ErrNotFound / sdk.ErrExpired. A refusal records an
+// oauth_login failure or blocked row with the provider and a reason, except a
+// link-start conflict, which records an oauth_linked failure.
 func (s *Service) OAuthCallback(ctx context.Context, providerName string, req OAuthCallbackRequest) (OAuthResult, error) {
 	p, err := s.provider(providerName)
 	if err != nil {
 		return OAuthResult{}, err
 	}
 	if (req.Mode != OAuthBrowser && req.Mode != OAuthNative) || !ValidOAuthFlowValue(req.State) || !ValidOAuthFlowValue(req.FlowSecret) || strings.TrimSpace(req.Code) == "" {
+		s.recordOAuth(ctx, "", providerName, securityevent.TypeOAuthLogin, securityevent.StatusFailure, securityevent.ReasonInvalidState)
 		return OAuthResult{}, ErrInvalidOAuthState
 	}
 	st, err := s.oauthStates.Consume(ctx, flowLookupKey(providerName, req.Mode, req.State, req.FlowSecret))
 	if err != nil {
+		if errors.Is(err, sdk.ErrNotFound) || errors.Is(err, sdk.ErrExpired) {
+			s.recordOAuth(ctx, "", providerName, securityevent.TypeOAuthLogin, securityevent.StatusFailure, securityevent.ReasonInvalidState)
+		}
 		return OAuthResult{}, err
 	}
 	if st.Purpose != oauthstate.PurposeFlow || st.Provider != providerName {
+		s.recordOAuth(ctx, "", providerName, securityevent.TypeOAuthLogin, securityevent.StatusFailure, securityevent.ReasonInvalidState)
 		return OAuthResult{}, ErrInvalidOAuthState
 	}
 	var fs flowState
@@ -309,27 +316,36 @@ func (s *Service) OAuthCallback(ctx context.Context, providerName string, req OA
 	}
 
 	if fs.Mode != req.Mode || fs.RedirectURI == "" || (fs.LinkUserID != "" && fs.LinkAuthRevision == nil) {
+		s.recordOAuth(ctx, fs.LinkUserID, providerName, securityevent.TypeOAuthLogin, securityevent.StatusFailure, securityevent.ReasonInvalidState)
 		return OAuthResult{}, ErrInvalidOAuthState
 	}
 	tok, err := p.ExchangeCode(ctx, req.Code, fs.CodeVerifier, fs.RedirectURI)
 	if err != nil {
+		s.recordOAuth(ctx, fs.LinkUserID, providerName, securityevent.TypeOAuthLogin, securityevent.StatusFailure, securityevent.ReasonExchangeFailed)
 		return OAuthResult{}, fmt.Errorf("oauth code exchange: %w", err)
 	}
 	ident, err := s.readIdentity(ctx, p, tok, fs.Nonce)
 	if err != nil {
+		s.recordOAuth(ctx, fs.LinkUserID, providerName, securityevent.TypeOAuthLogin, securityevent.StatusFailure, securityevent.ReasonIdentityInvalid)
 		return OAuthResult{}, err
 	}
 
 	// Session-gated link start: attach the identity to the linking user.
 	if fs.LinkUserID != "" {
 		if _, err := s.linkAccount(ctx, fs.LinkUserID, *fs.LinkAuthRevision, providerName, ident, tok); err != nil {
+			switch {
+			case errors.Is(err, sdk.ErrAlreadyExists), errors.Is(err, sdk.ErrConflict):
+				s.recordOAuth(ctx, fs.LinkUserID, providerName, securityevent.TypeOAuthLinked, securityevent.StatusFailure, securityevent.ReasonLinkConflict)
+			case errors.Is(err, session.ErrUserNotActive):
+				s.recordOAuth(ctx, fs.LinkUserID, providerName, securityevent.TypeOAuthLogin, securityevent.StatusBlocked, securityevent.ReasonInactive)
+			}
 			return OAuthResult{}, err
 		}
 		u, err := s.users.Get(ctx, fs.LinkUserID)
 		if err != nil {
 			return OAuthResult{}, err
 		}
-		s.recordOAuth(ctx, fs.LinkUserID, providerName, securityevent.TypeOAuthLinked)
+		s.recordOAuth(ctx, fs.LinkUserID, providerName, securityevent.TypeOAuthLinked, securityevent.StatusSuccess, "")
 		return OAuthResult{Action: ActionLinked, User: u, RedirectTo: fs.RedirectTo}, nil
 	}
 
@@ -341,7 +357,7 @@ func (s *Service) OAuthCallback(ctx context.Context, providerName string, req OA
 		if err != nil {
 			return OAuthResult{}, err
 		}
-		s.recordOAuth(ctx, existing.UserID, providerName, securityevent.TypeOAuthLogin)
+		s.recordOAuth(ctx, existing.UserID, providerName, securityevent.TypeOAuthLogin, securityevent.StatusSuccess, "")
 		return OAuthResult{Action: ActionLogin, Token: pair.AccessToken, RefreshToken: pair.RefreshToken, User: u, RedirectTo: fs.RedirectTo}, nil
 	case !errors.Is(err, sdk.ErrNotFound):
 		return OAuthResult{}, err
@@ -353,10 +369,12 @@ func (s *Service) OAuthCallback(ctx context.Context, providerName string, req OA
 	// registers, or adopts. Branch 1 (an existing link) is keyed on the provider user
 	// id and already returned above, so it is unaffected by this gate.
 	if !ident.EmailVerified || s.trustOAuthEmail == nil || !s.trustOAuthEmail(providerName, ident) {
+		s.recordOAuth(ctx, "", providerName, securityevent.TypeOAuthLogin, securityevent.StatusFailure, securityevent.ReasonEmailUnverified)
 		return OAuthResult{}, ErrProviderEmailUnverified
 	}
 	normEmail, err := s.normalizeEmail(ident.Email)
 	if err != nil {
+		s.recordOAuth(ctx, "", providerName, securityevent.TypeOAuthLogin, securityevent.StatusFailure, securityevent.ReasonIdentityInvalid)
 		return OAuthResult{}, ErrProviderEmailUnverified
 	}
 
@@ -372,6 +390,12 @@ func (s *Service) OAuthCallback(ctx context.Context, providerName string, req OA
 			return OAuthResult{}, err
 		}
 		if err := s.startPendingLink(ctx, matched, providerName, ident, tok); err != nil {
+			switch {
+			case errors.Is(err, session.ErrUserNotActive):
+				s.recordOAuth(ctx, matched.UserID, providerName, securityevent.TypeOAuthLogin, securityevent.StatusBlocked, securityevent.ReasonInactive)
+			case errors.Is(err, ErrInvalidOAuthState):
+				s.recordOAuth(ctx, matched.UserID, providerName, securityevent.TypeOAuthLogin, securityevent.StatusFailure, securityevent.ReasonLinkConflict)
+			}
 			return OAuthResult{}, err
 		}
 		return OAuthResult{Action: ActionPendingLink, User: u, RedirectTo: fs.RedirectTo}, nil
@@ -386,13 +410,18 @@ func (s *Service) OAuthCallback(ctx context.Context, providerName string, req OA
 // VerifyLink completes a pending link: it consumes the pending-link secret
 // (single use), creates the link stored in its payload, and mints a session for
 // the now-linked user. An expired/unknown/already-used token surfaces
-// sdk.ErrExpired / sdk.ErrNotFound.
+// sdk.ErrExpired / sdk.ErrNotFound. A refusal records an oauth_link_verified
+// failure or blocked row.
 func (s *Service) VerifyLink(ctx context.Context, token string) (OAuthResult, error) {
 	st, err := s.oauthStates.Consume(ctx, token)
 	if err != nil {
+		if errors.Is(err, sdk.ErrNotFound) || errors.Is(err, sdk.ErrExpired) {
+			s.recordOAuth(ctx, "", "", securityevent.TypeOAuthLinkVerified, securityevent.StatusFailure, securityevent.ReasonInvalidToken)
+		}
 		return OAuthResult{}, err
 	}
 	if st.Purpose != oauthstate.PurposePendingLink {
+		s.recordOAuth(ctx, "", st.Provider, securityevent.TypeOAuthLinkVerified, securityevent.StatusFailure, securityevent.ReasonInvalidToken)
 		return OAuthResult{}, ErrInvalidOAuthState
 	}
 	var pl pendingLink
@@ -400,6 +429,7 @@ func (s *Service) VerifyLink(ctx context.Context, token string) (OAuthResult, er
 		return OAuthResult{}, fmt.Errorf("decode pending link: %w", err)
 	}
 	if pl.AuthRevision == nil {
+		s.recordOAuth(ctx, pl.Account.UserID, st.Provider, securityevent.TypeOAuthLinkVerified, securityevent.StatusFailure, securityevent.ReasonInvalidState)
 		return OAuthResult{}, ErrInvalidOAuthState
 	}
 	u, err := s.users.Get(ctx, pl.Account.UserID)
@@ -408,6 +438,7 @@ func (s *Service) VerifyLink(ctx context.Context, token string) (OAuthResult, er
 	}
 	matched, err := s.identifiers.Get(ctx, pl.MatchedIdentifierID)
 	if err != nil || matched.UserID != u.ID || !matched.Active() || (!matched.LoginEnabled && !matched.RecoveryEnabled) {
+		s.recordOAuth(ctx, u.ID, st.Provider, securityevent.TypeOAuthLinkVerified, securityevent.StatusFailure, securityevent.ReasonInvalidState)
 		return OAuthResult{}, ErrInvalidOAuthState
 	}
 	adoptID := ""
@@ -416,17 +447,26 @@ func (s *Service) VerifyLink(ctx context.Context, token string) (OAuthResult, er
 	}
 	created, revision, err := s.oauthAccounts.Link(ctx, pl.Account, *pl.AuthRevision, adoptID, s.now())
 	if err != nil {
+		switch {
+		case errors.Is(err, session.ErrUserNotActive):
+			s.recordOAuth(ctx, u.ID, st.Provider, securityevent.TypeOAuthLinkVerified, securityevent.StatusBlocked, securityevent.ReasonInactive)
+		case errors.Is(err, sdk.ErrConflict), errors.Is(err, sdk.ErrAlreadyExists):
+			s.recordOAuth(ctx, u.ID, st.Provider, securityevent.TypeOAuthLinkVerified, securityevent.StatusFailure, securityevent.ReasonInvalidState)
+		}
 		return OAuthResult{}, err
 	}
 	u.AuthRevision = revision
 	pair, err := s.mintSession(ctx, u.ID, revision, s.primaryAuthentication(session.MethodOAuth))
 	if err != nil {
+		if errors.Is(err, session.ErrUserNotActive) {
+			s.recordOAuth(ctx, u.ID, st.Provider, securityevent.TypeOAuthLinkVerified, securityevent.StatusBlocked, securityevent.ReasonInactive)
+		}
 		return OAuthResult{}, genericIfNotActive(err, invalidCredentials())
 	}
 	if adoptID != "" {
 		s.resolvePendingInvitations(ctx, matched.NormalizedValue, u.ID)
 	}
-	s.recordOAuth(ctx, created.UserID, created.Provider, securityevent.TypeOAuthLinkVerified)
+	s.recordOAuth(ctx, created.UserID, created.Provider, securityevent.TypeOAuthLinkVerified, securityevent.StatusSuccess, "")
 	return OAuthResult{Action: ActionLinked, Token: pair.AccessToken, RefreshToken: pair.RefreshToken, User: u}, nil
 }
 
@@ -467,7 +507,7 @@ func (s *Service) StartUnlinkOAuth(ctx context.Context, userID, providerName str
 		return StepUpReceipt{}, err
 	}
 
-	s.recordOAuth(ctx, userID, providerName, securityevent.TypeOAuthUnlinkCodeSent)
+	s.recordOAuth(ctx, userID, providerName, securityevent.TypeOAuthUnlinkCodeSent, securityevent.StatusSuccess, "")
 	return StepUpReceipt{Delivered: true, Receipt: key}, nil
 }
 
@@ -502,7 +542,7 @@ func (s *Service) UnlinkOAuth(ctx context.Context, userID, providerName, code st
 	if err := s.applyCredentialMutationAtRevision(ctx, userID, proof.AuthRevision, credential.UnlinkOAuth{Provider: providerName}); err != nil {
 		return err
 	}
-	s.recordOAuth(ctx, userID, providerName, securityevent.TypeOAuthUnlinked)
+	s.recordOAuth(ctx, userID, providerName, securityevent.TypeOAuthUnlinked, securityevent.StatusSuccess, "")
 	return nil
 }
 
@@ -560,6 +600,7 @@ func (s *Service) registerAndLink(ctx context.Context, providerName, normEmail s
 				}
 				return OAuthResult{Action: ActionLogin, Token: pair.AccessToken, RefreshToken: pair.RefreshToken, User: owner, RedirectTo: redirectTo}, nil
 			}
+			s.recordOAuth(ctx, "", providerName, securityevent.TypeOAuthLogin, securityevent.StatusFailure, securityevent.ReasonLinkConflict)
 		}
 		return OAuthResult{}, err
 	}
@@ -578,7 +619,7 @@ func (s *Service) registerAndLink(ctx context.Context, providerName, normEmail s
 	if err != nil {
 		return OAuthResult{}, err
 	}
-	s.recordOAuth(ctx, created.ID, providerName, securityevent.TypeOAuthRegister)
+	s.recordOAuth(ctx, created.ID, providerName, securityevent.TypeOAuthRegister, securityevent.StatusSuccess, "")
 	return OAuthResult{Action: ActionRegister, Token: pair.AccessToken, RefreshToken: pair.RefreshToken, User: created, RedirectTo: redirectTo}, nil
 }
 
@@ -607,23 +648,38 @@ func (s *Service) oauthSession(ctx context.Context, account oauthaccount.OAuthAc
 	}
 	current, err := s.oauthAccounts.GetByProvider(ctx, account.Provider, account.ProviderUserID)
 	if err != nil || current.UserID != u.ID {
+		if err == nil || errors.Is(err, sdk.ErrNotFound) {
+			s.recordOAuth(ctx, u.ID, account.Provider, securityevent.TypeOAuthLogin, securityevent.StatusFailure, securityevent.ReasonLinkConflict)
+		}
 		return TokenPair{}, user.User{}, invalidCredentials()
 	}
 	pair, err := s.mintSession(ctx, u.ID, u.AuthRevision, s.primaryAuthentication(session.MethodOAuth))
 	if err != nil {
+		if errors.Is(err, session.ErrUserNotActive) {
+			s.recordOAuth(ctx, u.ID, account.Provider, securityevent.TypeOAuthLogin, securityevent.StatusBlocked, securityevent.ReasonInactive)
+		}
 		return TokenPair{}, user.User{}, genericIfNotActive(err, invalidCredentials())
 	}
 	return pair, u, nil
 }
 
 // recordOAuth appends an OAuth-flow audit row for userID. The provider name is an
-// identifier (never a secret), so it rides Details.
-func (s *Service) recordOAuth(ctx context.Context, userID, providerName, eventType string) {
+// identifier (never a secret), so it rides Details beside the bounded reason of
+// a denial; either is omitted when empty (a token that resolved no state names
+// no provider).
+func (s *Service) recordOAuth(ctx context.Context, userID, providerName, eventType, status, reason string) {
+	details := map[string]any{}
+	if providerName != "" {
+		details["provider"] = providerName
+	}
+	if reason != "" {
+		details["reason"] = reason
+	}
 	s.recordSecurityEvent(ctx, securityEventInput{
 		UserID:  userID,
 		Type:    eventType,
-		Status:  securityevent.StatusSuccess,
-		Details: map[string]any{"provider": providerName},
+		Status:  status,
+		Details: details,
 	})
 }
 
@@ -683,6 +739,7 @@ func (s *Service) startPendingLink(ctx context.Context, matched identifier.Ident
 		}
 		return err
 	}
+	s.recordOAuth(ctx, matched.UserID, providerName, securityevent.TypeOAuthPendingLinkSent, securityevent.StatusSuccess, "")
 	return nil
 }
 
