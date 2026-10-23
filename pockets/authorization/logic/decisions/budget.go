@@ -59,6 +59,8 @@ type budget struct {
 	trace           *explainTrace
 	diagnosticFacts []tuples.Tuple
 	resolveSlot     func(context.Context, ResourceSlot) (authmodel.Resource, bool, error)
+	// target collects an unbound ad hoc evaluation's leaf targets; nil elsewhere.
+	target *expressionTarget
 }
 
 func newBudget(limits authmodel.EvaluationLimits, reader PermissionReader) *budget {

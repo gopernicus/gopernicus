@@ -9,16 +9,30 @@ import (
 	"github.com/gopernicus/gopernicus/sdk"
 )
 
+// expressionTarget is what an unbound ad hoc evaluation reports in its decision
+// event and log line. The walk records the expression's own reached leaves,
+// never the model rules a leaf expands into.
+type expressionTarget struct {
+	composite          bool
+	first, firstDenied leafTarget
+	leaves, denied     int
+}
+
+type leafTarget struct {
+	permission string
+	resource   authmodel.Resource
+}
+
 // Evaluate validates every branch, then evaluates fixed resource bindings in one
 // coherent operation. Runtime slots require EvaluateResolved.
 func (s *Service) Evaluate(ctx context.Context, principal authmodel.PrincipalRef, expr Expression) (authmodel.CheckResult, error) {
 	log := s.startDecisionLog(ctx, false)
-	result, err := s.evaluate(ctx, principal, expr)
-	log.check(ctx, "Evaluate", authmodel.CheckRequest{Principal: principal}, result, err)
+	result, target, err := s.evaluate(ctx, principal, expr)
+	log.expression(ctx, "Evaluate", principal, target, result, err)
 	return result, err
 }
 
-func (s *Service) evaluate(ctx context.Context, principal authmodel.PrincipalRef, expr Expression) (authmodel.CheckResult, error) {
+func (s *Service) evaluate(ctx context.Context, principal authmodel.PrincipalRef, expr Expression) (authmodel.CheckResult, expressionTarget, error) {
 	return s.evaluateResolved(ctx, principal, expr, nil)
 }
 
@@ -26,37 +40,43 @@ func (s *Service) evaluate(ctx context.Context, principal authmodel.PrincipalRef
 // Inputs are pinned across cache fallback; facts and budgets are fresh per attempt.
 func (s *Service) EvaluateResolved(ctx context.Context, principal authmodel.PrincipalRef, expr Expression, resolve ResourceResolver) (authmodel.CheckResult, error) {
 	log := s.startDecisionLog(ctx, false)
-	result, err := s.evaluateResolved(ctx, principal, expr, resolve)
-	log.check(ctx, "EvaluateResolved", authmodel.CheckRequest{Principal: principal}, result, err)
+	result, target, err := s.evaluateResolved(ctx, principal, expr, resolve)
+	log.expression(ctx, "EvaluateResolved", principal, target, result, err)
 	return result, err
 }
 
-func (s *Service) evaluateResolved(ctx context.Context, principal authmodel.PrincipalRef, expr Expression, resolve ResourceResolver) (authmodel.CheckResult, error) {
+func (s *Service) evaluateResolved(ctx context.Context, principal authmodel.PrincipalRef, expr Expression, resolve ResourceResolver) (authmodel.CheckResult, expressionTarget, error) {
 	if err := authmodel.ValidatePrincipal(principal); err != nil {
-		return authmodel.CheckResult{}, err
+		return authmodel.CheckResult{}, expressionTarget{}, err
 	}
 	hasSlots, err := s.validateAdhocExpression(expr)
 	if err != nil {
-		return authmodel.CheckResult{}, err
+		return authmodel.CheckResult{}, expressionTarget{}, err
 	}
 	if hasSlots && resolve == nil {
-		return authmodel.CheckResult{}, fmt.Errorf("resource resolver required: %w", sdk.ErrInvalidInput)
+		return authmodel.CheckResult{}, expressionTarget{}, fmt.Errorf("resource resolver required: %w", sdk.ErrInvalidInput)
 	}
 	expr = copyExpression(expr)
 	resolveSlot := memoResourceResolver(ctx, resolve)
-	var result authmodel.CheckResult
+	// One captured value carries both outputs, so the target costs no allocation.
+	var out struct {
+		result authmodel.CheckResult
+		target expressionTarget
+	}
 	err = s.withOperation(ctx, func(ctx context.Context, view *Service) error {
 		var e error
 		b := newBudget(view.limits, newMemoReader(view.reader))
 		b.resolveSlot = resolveSlot
-		result, e = view.evaluateExpression(ctx, authmodel.CheckRequest{Principal: principal}, expr, 0, b, map[stateKey]bool{})
-		view.observeDenied(ctx, b, result, e)
+		out.target = expressionTarget{composite: expr.AnyOf != nil || expr.AllOf != nil}
+		b.target = &out.target
+		out.result, e = view.evaluateExpression(ctx, authmodel.CheckRequest{Principal: principal}, expr, 0, b, map[stateKey]bool{})
+		view.observeDenied(ctx, b, out.result, e)
 		return e
 	})
 	if err != nil {
-		return authmodel.CheckResult{}, err
+		return authmodel.CheckResult{}, expressionTarget{}, err
 	}
-	return result, nil
+	return out.result, out.target, nil
 }
 
 func (s *Service) EvaluateExpressionWith(ctx context.Context, reader tuples.Reader, principal authmodel.PrincipalRef, expr Expression) (authmodel.CheckResult, error) {
@@ -90,6 +110,40 @@ func (s *Service) evaluateExpressionWith(ctx context.Context, reader tuples.Read
 	}
 	return result, nil
 }
+
+// record notes one decided leaf. resource is the leaf's resolved resource or
+// scope, empty for a global role or an input that was not applicable.
+func (t *expressionTarget) record(e Expression, resource authmodel.Resource, allowed bool) {
+	leaf := leafTarget{permission: e.Relation, resource: resource}
+	switch {
+	case e.NamedPermission != "":
+		leaf.permission = e.NamedPermission
+	case e.Through != "":
+		leaf.permission = e.Permission
+	case e.RoleName != "":
+		leaf.permission = e.RoleName
+	}
+	if t.leaves == 0 {
+		t.first = leaf
+	}
+	if !allowed {
+		if t.denied == 0 {
+			t.firstDenied = leaf
+		}
+		t.denied++
+	}
+	t.leaves++
+}
+
+// of is the first denied leaf of an expression that was not allowed, otherwise
+// the first leaf reached.
+func (t *expressionTarget) of(allowed bool) leafTarget {
+	if !allowed && t.denied > 0 {
+		return t.firstDenied
+	}
+	return t.first
+}
+
 func decision(allowed bool, reason string) authmodel.CheckResult {
 	code := authmodel.ReasonDenied
 	if allowed {
@@ -97,7 +151,7 @@ func decision(allowed bool, reason string) authmodel.CheckResult {
 	}
 	return authmodel.CheckResult{Allowed: allowed, ReasonCode: code, Reason: reason}
 }
-func (s *Service) evaluateExpression(ctx context.Context, req authmodel.CheckRequest, e Expression, depth int, b *budget, stack map[stateKey]bool) (authmodel.CheckResult, error) {
+func (s *Service) evaluateExpression(ctx context.Context, req authmodel.CheckRequest, e Expression, depth int, b *budget, stack map[stateKey]bool) (result authmodel.CheckResult, err error) {
 	if err := ctx.Err(); err != nil {
 		return authmodel.CheckResult{}, err
 	}
@@ -120,6 +174,17 @@ func (s *Service) evaluateExpression(ctx context.Context, req authmodel.CheckReq
 			}
 		}
 		return decision(all, "expression"), nil
+	}
+	if target := b.target; target != nil {
+		// Only the ad hoc expression's own leaves are its target: the model rules
+		// this leaf reaches walk without one.
+		b.target = nil
+		defer func() {
+			b.target = target
+			if err == nil {
+				target.record(e, req.Resource, result.Allowed)
+			}
+		}()
 	}
 	boundResource := e.Resource != nil || e.ResourceSlot != nil
 	if e.Resource != nil {

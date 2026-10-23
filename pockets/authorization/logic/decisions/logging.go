@@ -46,6 +46,29 @@ func (l decisionLog) check(ctx context.Context, operation string, req authmodel.
 	if !l.active() {
 		return
 	}
+	outcome, event, attrs := l.checkRecord(req, result)
+	l.finish(ctx, operation, outcome, err, event, attrs)
+}
+
+// expression reports an ad hoc evaluation as a check of its target leaf. A
+// composite also reports the leaves it reached; a failed evaluation names none.
+func (l decisionLog) expression(ctx context.Context, operation string, principal authmodel.PrincipalRef, target expressionTarget, result authmodel.CheckResult, err error) {
+	if !l.active() {
+		return
+	}
+	leaf := target.of(result.Allowed)
+	outcome, event, attrs := l.checkRecord(authmodel.CheckRequest{Principal: principal, Permission: leaf.permission, Resource: leaf.resource}, result)
+	if target.composite {
+		allowed := target.leaves - target.denied
+		event.Requests, event.Allowed, event.Denied = target.leaves, allowed, target.denied
+		if l.logger != nil {
+			attrs = append(attrs, slog.Int("request_count", target.leaves), slog.Int("allowed_count", allowed), slog.Int("denied_count", target.denied))
+		}
+	}
+	l.finish(ctx, operation, outcome, err, event, attrs)
+}
+
+func (l decisionLog) checkRecord(req authmodel.CheckRequest, result authmodel.CheckResult) (DecisionOutcome, DecisionEvent, []slog.Attr) {
 	outcome := OutcomeDenied
 	if result.Allowed {
 		outcome = OutcomeAllowed
@@ -59,7 +82,7 @@ func (l decisionLog) check(ctx context.Context, operation string, req authmodel.
 			attrs = append(attrs, slog.String("resource_id", logRef(req.Resource.ID)))
 		}
 	}
-	l.finish(ctx, operation, outcome, err, event, attrs)
+	return outcome, event, attrs
 }
 
 func (l decisionLog) batch(ctx context.Context, operation string, requests int, results []authmodel.CheckResult, err error) {

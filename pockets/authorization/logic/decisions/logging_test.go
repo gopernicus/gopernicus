@@ -213,6 +213,11 @@ func TestDecisionLoggingPublicOperations(t *testing.T) {
 					t.Fatalf("batch counts=%+v", entry)
 				}
 			}
+			if target, ok := map[string][3]any{"Evaluate": {"admin", nil, nil}, "EvaluateResolved": {"read", "doc", "a"}, "EvaluateExpressionWith": {nil, nil, nil}}[tc.name]; ok {
+				if got := [3]any{entry.attrs["permission"], entry.attrs["resource_type"], entry.attrs["resource_id"]}; got != target {
+					t.Fatalf("expression target=%v, want %v", got, target)
+				}
+			}
 		})
 	}
 }
@@ -426,7 +431,7 @@ func BenchmarkDecisionLogging(b *testing.B) {
 					for b.Loop() {
 						if workload == "exact_role_evaluate" {
 							if mode == "unlogged" {
-								_, _ = s.evaluate(ctx, expressionPrincipal, expr)
+								_, _, _ = s.evaluate(ctx, expressionPrincipal, expr)
 							} else {
 								_, _ = s.Evaluate(ctx, expressionPrincipal, expr)
 							}

@@ -31,8 +31,12 @@ const (
 // DecisionEvent describes one completed unbound public decision operation, or
 // one refused role write. Identifiers are bounded as the decision log bounds
 // them. Requests, Allowed and Denied count batch and filter checks; lookups and
-// filtered pages report their returned IDs as Allowed. Subject is set only for
-// a refused role write. ErrorKind is a low-cardinality class, never the error text.
+// filtered pages report their returned IDs as Allowed. Evaluate and
+// EvaluateResolved report the expression's target as Permission and resource:
+// its leaf, or a composite's first denied leaf when not allowed and otherwise
+// its first reached leaf; a composite counts its reached leaves. Subject is set
+// only for a refused role write. ErrorKind is a low-cardinality class, never
+// the error text.
 type DecisionEvent struct {
 	Operation    string
 	Principal    sdk.Principal

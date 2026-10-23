@@ -381,3 +381,51 @@ func TestComposableGuardSharedBudget(t *testing.T) {
 		t.Fatalf("separate leaf budgets: status=%d next=%d", rec.Code, next)
 	}
 }
+
+// TestComposableGuardDenialNamesTarget pins that a guard's denial event names
+// what was denied: the leaf's permission or role and its resource or scope, and
+// for a composite the first denied leaf with the reached leaves' counts.
+func TestComposableGuardDenialNamesTarget(t *testing.T) {
+	store := memory.NewTuples()
+	seedGuard(t, store, guardFact(tuples.On("organization", "acme"), "member", "user", "alice", ""))
+	var mu sync.Mutex
+	var events []decisions.DecisionEvent
+	adapter := guardAdapter(t, store, decisions.WithModel(guardModel()), decisions.WithDecisionObserver(func(_ context.Context, event decisions.DecisionEvent) {
+		mu.Lock()
+		events = append(events, event)
+		mu.Unlock()
+	}))
+	document := Path("document", "documentID")
+	for _, tc := range []struct {
+		name   string
+		policy Predicate
+		want   decisions.DecisionEvent
+	}{
+		{"can", Can("edit", document), decisions.DecisionEvent{Permission: "edit", ResourceType: "document", ResourceID: "one"}},
+		{"role at a resource", HasRole("admin", Fixed("organization", "acme")), decisions.DecisionEvent{Permission: "admin", ResourceType: "organization", ResourceID: "acme"}},
+		{"global role", HasRole("admin", Global()), decisions.DecisionEvent{Permission: "admin"}},
+		{"any", Any(HasRole("admin", Global()), Can("edit", document)), decisions.DecisionEvent{Permission: "admin", Requests: 2, Denied: 2}},
+		{"all", All(HasRole("member", Fixed("organization", "acme")), Can("edit", document)), decisions.DecisionEvent{Permission: "edit", ResourceType: "document", ResourceID: "one", Requests: 2, Allowed: 1, Denied: 1}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mu.Lock()
+			events = nil
+			mu.Unlock()
+			if rec, next := serveGuard(adapter.Require(tc.policy), guardRequest("alice")); rec.Code != 403 || next != 0 {
+				t.Fatalf("status=%d next=%d", rec.Code, next)
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			if len(events) != 1 {
+				t.Fatalf("events=%+v", events)
+			}
+			event := events[0]
+			event.Duration = 0
+			want := tc.want
+			want.Operation, want.Principal, want.Outcome = "EvaluateResolved", sdk.Principal{Type: "user", ID: "alice"}, decisions.OutcomeDenied
+			if event != want {
+				t.Fatalf("event=%+v\nwant %+v", event, want)
+			}
+		})
+	}
+}
