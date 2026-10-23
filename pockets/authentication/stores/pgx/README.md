@@ -225,6 +225,10 @@ Each `newRepos` opens a connection, applies the migrations via the connector's
 `RunMigrations`, and `TRUNCATE ... CASCADE`s the auth tables (up front and via
 `t.Cleanup`) so every leaf subtest starts from a clean, isolated `Repositories`.
 
+Session time fields come back at microsecond precision from every insert path
+(`Create`, `CreateForActiveUser`, `RedeemCode`, the passwordless redemption) —
+exactly what `Get` reads — and the suite's sub-microsecond fixture clock proves it.
+
 The optional `POSTGRES_TEST_SCHEMA` runs the whole live suite — conformance,
 probe, and collation fixtures — inside a named schema, with migrations applied
 through `pgxdb.WithSchema` and every store constructed `WithSchema`. That is the

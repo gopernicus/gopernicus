@@ -101,8 +101,10 @@ func nullHash(h string) *string {
 	return &h
 }
 
-// Create persists a new session; a colliding refresh_token_hash → sdk.ErrAlreadyExists
-// (the unique index, routed through MapError).
+// Create persists a new session and returns the session as persisted —
+// PostgreSQL keeps microseconds; Go-side truncation keeps the text protocol from
+// rounding. A colliding refresh_token_hash → sdk.ErrAlreadyExists (the unique
+// index, routed through MapError).
 func (s *SessionStore) Create(ctx context.Context, sess session.Session) (session.Session, error) {
 	args, err := sessionArgs(sess)
 	if err != nil {
@@ -112,7 +114,7 @@ func (s *SessionStore) Create(ctx context.Context, sess session.Session) (sessio
 	if err != nil {
 		return session.Session{}, pgxdb.MapError(err)
 	}
-	return sess, nil
+	return persisted(sess), nil
 }
 
 // Get returns the live session for id: unknown → sdk.ErrNotFound,
@@ -221,7 +223,20 @@ func (s *SessionStore) DeleteByUser(ctx context.Context, userID string) error {
 	return nil
 }
 
+// persisted returns sess with the timestamps PostgreSQL stores: CreatedAt,
+// ExpiresAt and Authentication.AuthenticatedAt in UTC, truncated to the
+// microsecond (a zero AuthenticatedAt stays zero). sessionArgs encodes from it
+// because the text protocol rounds half-to-even where the binary one truncates;
+// every insert path returns it so its result equals what Get reads.
+func persisted(sess session.Session) session.Session {
+	sess.CreatedAt = sess.CreatedAt.UTC().Truncate(time.Microsecond)
+	sess.ExpiresAt = sess.ExpiresAt.UTC().Truncate(time.Microsecond)
+	sess.Authentication.AuthenticatedAt = sess.Authentication.AuthenticatedAt.UTC().Truncate(time.Microsecond)
+	return sess
+}
+
 func sessionArgs(sess session.Session) (pgx.NamedArgs, error) {
+	sess = persisted(sess)
 	methods, err := encodeMethods(sess.Authentication.Methods)
 	if err != nil {
 		return nil, err
@@ -239,7 +254,7 @@ func sessionArgs(sess session.Session) (pgx.NamedArgs, error) {
 		"refresh_token_hash": sess.RefreshTokenHash, "previous_refresh_token_hash": nullHash(sess.PreviousRefreshTokenHash),
 		"previous_used": sess.PreviousUsed, "rotation_count": sess.RotationCount,
 		"authenticated_at": pgxdb.NullTime(sess.Authentication.AuthenticatedAt), "authentication_methods": methods,
-		"assurance_level": string(sess.Authentication.Assurance), "created_at": sess.CreatedAt.UTC(), "expires_at": sess.ExpiresAt.UTC(),
+		"assurance_level": string(sess.Authentication.Assurance), "created_at": sess.CreatedAt, "expires_at": sess.ExpiresAt,
 	}, nil
 }
 

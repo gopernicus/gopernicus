@@ -26,5 +26,8 @@ var ErrUserNotActive = fmt.Errorf("session: owning user is not active: %w", sdk.
 // A concurrent mutation either follows admission and revokes the session, or
 // commits first and makes admission fail. A service-level recheck is insufficient.
 type ActiveUserRepository interface {
+	// CreateForActiveUser returns the session as persisted; a store with coarser
+	// timestamp precision than the entity returns the truncated values, and the
+	// conformance suite proves it (ActiveSessionMint/ActiveUserRoundTrip).
 	CreateForActiveUser(ctx context.Context, s Session, expectedAuthRevision int64) (Session, error)
 }

@@ -21,11 +21,10 @@
 # honoring the standing destructive-run rule — the conformance suites truncate,
 # so they may only ever point at that one blessed DB.
 #
-# Secrets status as of 2026-07-07: TURSO_DATABASE_URL / TURSO_AUTH_TOKEN are
-# PENDING UPLOAD (jrazmi uploads them himself). Until then ${{ secrets.* }}
-# expands to empty and the three turso `-tags=integration` legs SKIP LOUDLY
-# ("TURSO_DATABASE_URL/TURSO_AUTH_TOKEN not set — turso conformance NOT
-# verified") — the correct, expected mid-milestone outcome, not a failure.
+# Secrets status: no Turso secrets are configured (the hosted playground is gone,
+# S2), so the turso `-tags=integration` legs SKIP LOUDLY in CI and are proven
+# locally against libsql (TURSO_DATABASE_URL=http://127.0.0.1:8081
+# TURSO_AUTH_TOKEN=local).
 #
 # NOT testcontainers (that harness is workshop-v2 scope): the services here are
 # workflow infrastructure; the Go tests stay env-gated exactly as written. gcs /
@@ -42,9 +41,6 @@ on:
 # Least-privilege: these jobs only read the tree and talk to their own services.
 permissions:
   contents: read
-
-env:
-  GOCACHE: /tmp/gopernicus-audit-s1.aMLwCQ/cache
 
 jobs:
   # Job A — postgres pgx store conformance (cms/auth/jobs) + turso store
