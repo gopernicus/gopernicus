@@ -286,6 +286,74 @@ func TestServicePurgeTerminal(t *testing.T) {
 	}
 }
 
+// TestPurgeTerminalUnchangedByOrdinaryRetention pins the released fenced-only
+// PurgeTerminal contract beside an ordinary queue that implements TerminalPurger:
+// zero removes nothing, a negative limit is unbounded, the count is fenced rows
+// only (auth-cms reports it to the delivery purged observation), and an
+// ordinary-only Service still returns ErrFencedQueueRequired. PurgeTerminalJobs
+// in turn removes ordinary rows only.
+func TestPurgeTerminalUnchangedByOrdinaryRetention(t *testing.T) {
+	ctx := context.Background()
+	past := time.Now().Add(-time.Hour).UTC()
+	ordinary := memory.NewQueue()
+	fq := memory.NewFencedQueue()
+	svc, err := pocketjobs.New(pocketjobs.Repositories{Queue: ordinary, FencedQueue: fq})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	done, err := svc.Queue.EnqueueJob(ctx, queueapi.Enqueue{ID: "ordinary-done", Kind: "k", ScheduledFor: past})
+	if err != nil {
+		t.Fatalf("EnqueueJob: %v", err)
+	}
+	if _, err := ordinary.Claim(ctx, "w1", past, nil); err != nil {
+		t.Fatalf("Claim: %v", err)
+	}
+	if err := ordinary.Complete(ctx, done.ID(), past); err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	cancelFenced := func(key string) string {
+		t.Helper()
+		id, err := svc.Queue.EnqueueOnce(ctx, "k", key, json.RawMessage(`"x"`))
+		if err != nil {
+			t.Fatalf("EnqueueOnce: %v", err)
+		}
+		if err := fq.Cancel(ctx, id, past); err != nil {
+			t.Fatalf("Cancel: %v", err)
+		}
+		return id
+	}
+	for _, key := range []string{"key-1", "key-2", "key-3"} {
+		cancelFenced(key)
+	}
+
+	if n, err := svc.Queue.PurgeTerminal(ctx, time.Now(), 0); err != nil || n != 0 {
+		t.Fatalf("PurgeTerminal(limit 0) = %d, %v; want 0, nil (zero removes nothing)", n, err)
+	}
+	if n, err := svc.Queue.PurgeTerminal(ctx, time.Now(), -1); err != nil || n != 3 {
+		t.Fatalf("PurgeTerminal(limit -1) = %d, %v; want the 3 fenced rows (negative is unbounded)", n, err)
+	}
+	if _, err := ordinary.Get(ctx, done.ID()); err != nil {
+		t.Fatalf("PurgeTerminal removed an ordinary job: %v", err)
+	}
+
+	kept := cancelFenced("key-4")
+	if n, err := svc.Queue.PurgeTerminalJobs(ctx, time.Now(), 10); err != nil || n != 1 {
+		t.Fatalf("PurgeTerminalJobs = %d, %v; want the 1 ordinary row", n, err)
+	}
+	if _, err := fq.Get(ctx, kept); err != nil {
+		t.Fatalf("PurgeTerminalJobs removed a fenced job: %v", err)
+	}
+
+	ordinaryOnly, err := pocketjobs.New(pocketjobs.Repositories{Queue: memory.NewQueue()})
+	if err != nil {
+		t.Fatalf("New (ordinary-only): %v", err)
+	}
+	if _, err := ordinaryOnly.Queue.PurgeTerminal(ctx, time.Now(), 10); !errors.Is(err, queueapi.ErrFencedQueueRequired) {
+		t.Fatalf("ordinary-only PurgeTerminal err = %v, want queueapi.ErrFencedQueueRequired", err)
+	}
+}
+
 // TestNewFencedRuntime_RequiresFencedQueue proves the fenced runtime refuses to build
 // without a fenced queue.
 func TestNewFencedRuntime_RequiresFencedQueue(t *testing.T) {

@@ -71,6 +71,7 @@ func RunQueue(t *testing.T, newRepo func(t *testing.T) job.QueueRepository) {
 	t.Run("RetryThenDeadLetter", func(t *testing.T) { testRetryThenDeadLetter(t, newRepo(t)) })
 	t.Run("LeaseExpiryReclaim", func(t *testing.T) { testLeaseExpiryReclaim(t, newRepo(t)) })
 	t.Run("ClaimKindFilter", func(t *testing.T) { testClaimKindFilter(t, newRepo(t)) })
+	t.Run("BoundedTerminalPurge", func(t *testing.T) { testQueueTerminalPurge(t, newRepo(t)) })
 	t.Run("ListFilterAndPaginate", func(t *testing.T) {
 		t.Run("FilterAndStatus", func(t *testing.T) { testQueueListFilterAndPaginate(t, newRepo(t)) })
 		runPagedFamily(t, newRepo,
@@ -530,6 +531,98 @@ func testConcurrentClaim(t *testing.T, repo job.QueueRepository) {
 	for id, count := range claimed {
 		if count != 1 {
 			t.Errorf("job %q claimed %d times, want exactly 1 (double-claim)", id, count)
+		}
+	}
+}
+
+// testQueueTerminalPurge proves the optional job.TerminalPurger contract: a
+// positive limit bounds each batch, oldest first by (updated_at, job_id); a row
+// whose updated_at is exactly before is eligible (<=) while one a microsecond later
+// is not; pending and running rows inside the window survive; and a non-positive
+// limit is refused without removing anything. Every stamp is caller-supplied and
+// microsecond-aligned so the boundary compares exactly on every dialect.
+func testQueueTerminalPurge(t *testing.T, repo job.QueueRepository) {
+	purger, ok := repo.(job.TerminalPurger)
+	if !ok {
+		t.Skip("optional job.TerminalPurger is not implemented — ordinary-queue bounded retention NOT verified")
+	}
+	ctx := context.Background()
+	before := time.Now().UTC().Add(time.Hour).Truncate(time.Microsecond)
+	oldest := before.Add(-2 * time.Hour)
+	older := before.Add(-90 * time.Minute)
+	scheduled := before.Add(-3 * time.Hour)
+
+	// settle enqueues one job, claims it at "at" (the only due job), and applies
+	// the terminal transition at the same instant so updated_at == at.
+	settle := func(id string, at time.Time, finish func(id string, at time.Time) error) {
+		t.Helper()
+		mustEnqueue(t, repo, job.Enqueue{ID: id, Kind: "demo", ScheduledFor: scheduled, MaxAttempts: 5})
+		claimed, err := repo.Claim(ctx, "w1", at, nil)
+		if err != nil || claimed.ID() != id {
+			t.Fatalf("Claim %s = %q, %v; want %s", id, claimed.ID(), err, id)
+		}
+		if finish != nil {
+			if err := finish(id, at); err != nil {
+				t.Fatalf("settle %s: %v", id, err)
+			}
+		}
+	}
+	complete := func(id string, at time.Time) error { return repo.Complete(ctx, id, at) }
+	deadLetter := func(id string, at time.Time) error { return repo.Fail(ctx, id, at, "boom", 1) }
+	retry := func(id string, at time.Time) error { return repo.Fail(ctx, id, at, "transient", 5) }
+
+	settle("purge-completed-a", oldest, complete)
+	settle("purge-completed-b", oldest, complete)
+	settle("purge-dead", older, deadLetter)
+	settle("purge-boundary", before, complete)
+	settle("purge-after", before.Add(time.Microsecond), complete)
+	settle("purge-running", oldest, nil)
+	settle("purge-retried", oldest, retry)
+	mustEnqueue(t, repo, job.Enqueue{ID: "purge-pending", Kind: "demo", ScheduledFor: scheduled})
+
+	for _, limit := range []int{0, -1} {
+		if n, err := purger.PurgeTerminal(ctx, before, limit); !errors.Is(err, sdk.ErrInvalidInput) || n != 0 {
+			t.Fatalf("PurgeTerminal(limit %d) = %d, %v; want 0, sdk.ErrInvalidInput", limit, n, err)
+		}
+	}
+	if _, err := repo.Get(ctx, "purge-completed-a"); err != nil {
+		t.Fatalf("a refused purge removed a row: %v", err)
+	}
+
+	// Oldest first: the two completed rows at the oldest stamp go before the
+	// dead-lettered row.
+	if n, err := purger.PurgeTerminal(ctx, before, 2); err != nil || n != 2 {
+		t.Fatalf("PurgeTerminal(limit 2) = %d, %v; want the bounded 2", n, err)
+	}
+	if _, err := repo.Get(ctx, "purge-dead"); err != nil {
+		t.Fatalf("the first batch skipped the oldest rows and removed purge-dead: %v", err)
+	}
+	if n, err := purger.PurgeTerminal(ctx, before, 10); err != nil || n != 2 {
+		t.Fatalf("second PurgeTerminal = %d, %v; want purge-dead and the boundary row", n, err)
+	}
+	if n, err := purger.PurgeTerminal(ctx, before, 10); err != nil || n != 0 {
+		t.Fatalf("third PurgeTerminal = %d, %v; want 0", n, err)
+	}
+
+	for _, id := range []string{"purge-completed-a", "purge-completed-b", "purge-dead", "purge-boundary"} {
+		if _, err := repo.Get(ctx, id); !errors.Is(err, sdk.ErrNotFound) {
+			t.Errorf("Get(%s) after purge: err=%v, want sdk.ErrNotFound", id, err)
+		}
+	}
+	survivors := map[string]job.Status{
+		"purge-after":   job.StatusCompleted,
+		"purge-running": job.StatusRunning,
+		"purge-retried": job.StatusPending,
+		"purge-pending": job.StatusPending,
+	}
+	for id, want := range survivors {
+		got, err := repo.Get(ctx, id)
+		if err != nil {
+			t.Errorf("Get(%s): %v — purge removed a row it must keep", id, err)
+			continue
+		}
+		if got.JobStatus != want {
+			t.Errorf("%s status = %q, want %q", id, got.JobStatus, want)
 		}
 	}
 }

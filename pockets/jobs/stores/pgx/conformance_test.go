@@ -16,9 +16,11 @@
 package pgx
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"strings"
 	"testing"
@@ -184,8 +186,47 @@ func TestLive_StatusCheck(t *testing.T) {
 	})
 
 	t.Run("migrated schema passes", func(t *testing.T) {
+		buf := captureDefaultLog(t)
 		if err := StatusCheck(ctx, db, opts...); err != nil {
 			t.Fatalf("StatusCheck against the migrated schema: %v", err)
 		}
+		if strings.Contains(buf.String(), "index_missing") {
+			t.Fatalf("the migrated schema lacks %s: %q", terminalPurgeIndex, buf.String())
+		}
 	})
+
+	t.Run("missing terminal index warns and passes", func(t *testing.T) {
+		schema := testSchema(t)
+		if _, err := db.Exec(ctx, "DROP INDEX "+schema.Table(terminalPurgeIndex)); err != nil {
+			t.Fatalf("drop %s: %v", terminalPurgeIndex, err)
+		}
+		t.Cleanup(func() {
+			restore := "CREATE INDEX IF NOT EXISTS " + terminalPurgeIndex + " ON " + schema.Table("job_queue") +
+				" (updated_at, job_id) WHERE status IN ('completed','dead_letter')"
+			if _, err := db.Exec(ctx, restore); err != nil {
+				t.Errorf("restore %s: %v", terminalPurgeIndex, err)
+			}
+		})
+		buf := captureDefaultLog(t)
+		if err := StatusCheck(ctx, db, opts...); err != nil {
+			t.Fatalf("StatusCheck must admit a missing %s: %v", terminalPurgeIndex, err)
+		}
+		out := buf.String()
+		for _, want := range []string{"level=WARN", "index_missing=" + terminalPurgeIndex, "file=" + terminalPurgeMigration} {
+			if !strings.Contains(out, want) {
+				t.Fatalf("StatusCheck log missing %q: %q", want, out)
+			}
+		}
+	})
+}
+
+// captureDefaultLog routes slog.Default into a text buffer for the test's
+// duration.
+func captureDefaultLog(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	return &buf
 }

@@ -33,8 +33,12 @@ const jobSelect = "job_id, kind, COALESCE(tenant_id, ''), payload, status, prior
 // jobRow's db tags, with nullable text COALESCEd to ”.
 const jobRowColumns = "job_id, kind, COALESCE(tenant_id, '') AS tenant_id, payload, status, priority, retry_count, max_attempts, COALESCE(worker_name, '') AS worker_name, COALESCE(failure_reason, '') AS failure_reason, scheduled_for, claimed_at, completed_at, created_at, updated_at"
 
-// Compile-time seam: the Queue fills the exact job.QueueRepository port.
-var _ job.QueueRepository = (*Queue)(nil)
+// Compile-time seams: the Queue fills the exact job.QueueRepository port and the
+// optional job.TerminalPurger retention capability.
+var (
+	_ job.QueueRepository = (*Queue)(nil)
+	_ job.TerminalPurger  = (*Queue)(nil)
+)
 
 // WithLease sets the stale-claim recovery window folded into Claim's due
 // predicate: a running job whose claimed_at is older than d becomes claimable
@@ -241,6 +245,33 @@ func (q *Queue) Fail(ctx context.Context, jobID string, now time.Time, reason st
 		_, err := tx.Exec(ctx, fail, pgx.NamedArgs{"reason": reason, "now": now.UTC(), "max": maxAttempts, "job_id": jobID})
 		return err
 	})
+}
+
+// PurgeTerminal deletes up to limit completed or dead-lettered jobs whose
+// updated_at is at or before before, oldest first (updated_at, job_id), and
+// returns the number removed. A non-positive limit is sdk.ErrInvalidInput. FOR
+// UPDATE in the subquery re-evaluates its WHERE against the newest row version
+// and SKIP LOCKED passes over rows another transaction holds; the repeated outer
+// status predicate is extra insurance. idx_job_queue_terminal (migration 0005)
+// is the access path.
+func (q *Queue) PurgeTerminal(ctx context.Context, before time.Time, limit int) (int, error) {
+	if limit <= 0 {
+		return 0, sdk.ErrInvalidInput
+	}
+	del := `DELETE FROM ` + q.table("job_queue") + `
+		WHERE job_id IN (
+			SELECT job_id FROM ` + q.table("job_queue") + `
+			WHERE status IN ('completed','dead_letter') AND updated_at <= @before
+			ORDER BY updated_at, job_id
+			LIMIT @limit
+			FOR UPDATE SKIP LOCKED
+		)
+		  AND status IN ('completed','dead_letter')`
+	n, err := pgxdb.ExecAffecting(ctx, q.db, del, pgx.NamedArgs{"before": before.UTC(), "limit": limit})
+	if err != nil {
+		return 0, err
+	}
+	return int(n), nil
 }
 
 // Get returns the job with the given id, or sdk.ErrNotFound.

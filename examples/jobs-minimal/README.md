@@ -23,6 +23,12 @@ returns after both stop; the host does not wait indefinitely for a later signal.
 - **schedules.** One stdlib-path `Spec.Every` 15s interval and one robfig-path
   `Spec.Cron` `* * * * *` schedule, each firing `demo.print` with a
   deterministic `sched_<scheduleID>_<slotUnix>` job ID.
+- **ordinary-queue retention.** A `retention` interval schedule (every
+  `RETENTION_EVERY`, default `1h`) fires the `retention` kind, whose handler calls
+  `Service.PurgeTerminalJobs(ctx, now-7d, 500)` and logs `purged=<n>`: completed
+  and dead-lettered jobs older than 7 days are removed, pending and running ones
+  never. This is the jobs-schedule form of the pocket's retention recipe
+  (`pockets/jobs` README, "Retention").
 - **graceful drain (§7.4).** SIGTERM cancels the shared context; the HTTP server
   and the pools drain, an in-flight `demo.slow` handler **finishes** before
   `Run` returns, and the process exits 0.
@@ -58,6 +64,9 @@ curl -fsS -X POST localhost:8083/enqueue -d '{"kind":"demo.doomed","payload":{}}
 
 # 4. wait ~90s: heartbeat-15s fires ~6x, minute-cron at each minute boundary,
 #    each with a deterministic sched_ job ID.
+
+# 4b. retention: boot with RETENTION_EVERY=1m (a whole-second Go duration, >= 1s)
+#     and the retention kind fires each minute, logging "retention ... purged=<n>".
 
 # 5. graceful drain: enqueue a slow job then Ctrl-C immediately
 curl -fsS -X POST localhost:8083/enqueue -d '{"kind":"demo.slow","payload":{}}'

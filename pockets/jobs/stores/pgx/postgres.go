@@ -26,7 +26,9 @@ package pgx
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
@@ -37,6 +39,14 @@ import (
 // probeTables is the inventory of relations this package's stores read and
 // write — the set StatusCheck probes under the configured schema.
 var probeTables = []string{"job_queue", "job_schedules", "fenced_job_queue", "job_schedule_occurrences"}
+
+// terminalPurgeIndex is the ADMITTED, not required, retention index migration
+// terminalPurgeMigration creates: StatusCheck WARNs when it is absent and never
+// fails for it, because Queue.PurgeTerminal still runs without it.
+const (
+	terminalPurgeIndex     = "idx_job_queue_terminal"
+	terminalPurgeMigration = "0005_job_queue_terminal_purge.sql"
+)
 
 // Option configures the stores this package constructs.
 type Option func(*config)
@@ -84,7 +94,9 @@ func WithSchema(s pgxdb.Schema) Option {
 // naming the qualified table when the "jobs" migration source was not applied
 // into that schema. A host that configures a schema calls it before serving
 // traffic; without a schema it is the same cheap existence check against the
-// connection's default namespace.
+// connection's default namespace. A missing idx_job_queue_terminal (migration
+// 0005) is admitted: StatusCheck logs a WARN through slog.Default naming the
+// index and the file, and returns nil.
 func StatusCheck(ctx context.Context, db *pgxdb.DB, opts ...Option) error {
 	if db == nil {
 		return fmt.Errorf("jobs pgx: nil database: %w", sdk.ErrInvalidInput)
@@ -101,6 +113,14 @@ func StatusCheck(ctx context.Context, db *pgxdb.DB, opts ...Option) error {
 			return fmt.Errorf("jobs store: %s table missing — apply the %q migration source before boot: %w",
 				table, "jobs", err)
 		}
+	}
+	index := cfg.schema.Table(terminalPurgeIndex)
+	if err := pgxdb.ProbeTable(ctx, db, index); err != nil {
+		if !errors.Is(err, sdk.ErrNotFound) {
+			return fmt.Errorf("jobs store: probe %s: %w", index, err)
+		}
+		slog.Default().WarnContext(ctx, "jobs store: retention index missing — PurgeTerminalJobs sorts every terminal job_queue row per batch; apply the migration",
+			"index_missing", terminalPurgeIndex, "file", terminalPurgeMigration, "relation", index)
 	}
 	return nil
 }

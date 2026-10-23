@@ -13,13 +13,17 @@ const defaultMaxAttempts = 3
 var (
 	// ErrQueueRequired is returned when neither Repositories.Queue nor
 	// Repositories.FencedQueue is wired: a jobs Service needs at least one queue
-	// surface. It is also returned by the unfenced Enqueue/EnqueueJob/NewRuntime
-	// path when only the fenced queue is wired.
+	// surface. It is also returned by the unfenced
+	// Enqueue/EnqueueJob/NewRuntime/PurgeTerminalJobs path when only the fenced
+	// queue is wired.
 	ErrQueueRequired = errors.New("jobs: at least one of Repositories.Queue or Repositories.FencedQueue is required")
 	// ErrFencedQueueRequired is returned by the fenced primitive methods
 	// (EnqueueOnce/Replace/LatestStatusByKey/Checkpoint) and NewFencedRuntime when
 	// Repositories.FencedQueue is nil.
 	ErrFencedQueueRequired = errors.New("jobs: Repositories.FencedQueue is required for the fenced delivery surface")
+	// ErrTerminalPurgeRequired is returned by PurgeTerminalJobs when
+	// Repositories.Queue does not implement TerminalPurger.
+	ErrTerminalPurgeRequired = errors.New("jobs: Repositories.Queue must implement queue.TerminalPurger for ordinary-queue retention")
 	// ErrHandlersRequired is returned when a runtime is built with no handlers.
 	ErrHandlersRequired = errors.New("jobs: handlers must be non-empty")
 	// ErrInvalidHandler is returned when handlers has an empty kind key or

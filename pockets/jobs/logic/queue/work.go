@@ -161,3 +161,26 @@ func (s *Service) PurgeTerminal(ctx context.Context, before time.Time, limit int
 	}
 	return s.fencedQueue.PurgeTerminal(ctx, before, limit)
 }
+
+// PurgeTerminalJobs deletes up to limit completed or dead-lettered jobs from the
+// ORDINARY queue whose UpdatedAt is at or before before, oldest first, returning
+// the number removed — the bounded retention seam for Repositories.Queue. limit
+// must be positive (sdk.ErrInvalidInput otherwise); pending and running jobs are
+// never removed, and the fenced queue is never touched (PurgeTerminal is its
+// purge). Keep before at least the scheduler's longest retry window behind now:
+// purging a completed job frees its ID, so a late re-delivery of the same
+// schedule occurrence would enqueue and run it again. A Service without
+// Repositories.Queue returns ErrQueueRequired; one whose ordinary queue does not
+// implement TerminalPurger returns ErrTerminalPurgeRequired.
+func (s *Service) PurgeTerminalJobs(ctx context.Context, before time.Time, limit int) (int, error) {
+	if s.repo == nil {
+		return 0, ErrQueueRequired
+	}
+	if s.terminalPurger == nil {
+		return 0, ErrTerminalPurgeRequired
+	}
+	if limit <= 0 {
+		return 0, fmt.Errorf("jobs: purge limit must be positive: %w", sdk.ErrInvalidInput)
+	}
+	return s.terminalPurger.PurgeTerminal(ctx, before, limit)
+}

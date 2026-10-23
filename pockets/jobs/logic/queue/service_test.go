@@ -1,10 +1,13 @@
 package queue
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -14,14 +17,26 @@ import (
 	"github.com/gopernicus/gopernicus/sdk/pkg/workers"
 )
 
-// fakeQueue is an in-test QueueRepository. Only Enqueue carries behavior; the
-// rest satisfy the port so the compile-time seam holds.
+// fakeQueue is an in-test QueueRepository that also implements the optional
+// TerminalPurger. Only Enqueue and PurgeTerminal carry behavior; the rest satisfy
+// the port so the compile-time seam holds.
 type fakeQueue struct {
-	mu    sync.Mutex
-	jobs  map[string]Job
-	seq   int
-	calls []Enqueue
+	mu     sync.Mutex
+	jobs   map[string]Job
+	seq    int
+	calls  []Enqueue
+	purges []purgeCall
 }
+
+// purgeCall records one PurgeTerminal invocation.
+type purgeCall struct {
+	before time.Time
+	limit  int
+}
+
+// plainQueue hides fakeQueue's PurgeTerminal: embedding the interface promotes
+// only the QueueRepository methods, so it lacks the TerminalPurger capability.
+type plainQueue struct{ QueueRepository }
 
 func newFakeQueue() *fakeQueue { return &fakeQueue{jobs: map[string]Job{}} }
 
@@ -61,6 +76,12 @@ func (f *fakeQueue) Get(ctx context.Context, id string) (Job, error) {
 }
 func (f *fakeQueue) List(ctx context.Context, _ ListFilter, _ list.Request) (list.Page[Job], error) {
 	return list.Page[Job]{}, nil
+}
+func (f *fakeQueue) PurgeTerminal(ctx context.Context, before time.Time, limit int) (int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.purges = append(f.purges, purgeCall{before: before, limit: limit})
+	return limit - 1, nil
 }
 
 func drained(wake <-chan struct{}) bool {
@@ -186,4 +207,86 @@ func TestConstructionOptionsResolveBeforeAdmission(t *testing.T) {
 	if _, err := NewService(Repositories{Queue: newFakeQueue()}, nil); !errors.Is(err, sdk.ErrInvalidInput) {
 		t.Fatalf("nil option: %v", err)
 	}
+}
+
+// captureDefaultLog routes slog.Default into a text buffer for the test's
+// duration, so construction-time log lines read as key=value text.
+func captureDefaultLog(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	return &buf
+}
+
+func TestNewServiceResolvesTerminalPurger(t *testing.T) {
+	t.Run("wired", func(t *testing.T) {
+		buf := captureDefaultLog(t)
+		svc := newQueueService(t, Repositories{Queue: newFakeQueue()})
+		if svc.terminalPurger == nil {
+			t.Fatal("a TerminalPurger queue was not resolved at construction")
+		}
+		out := buf.String()
+		if !strings.Contains(out, "terminal_purge=wired") || !strings.Contains(out, "ordinary_queue=true") {
+			t.Fatalf("registration line missing terminal_purge=wired: %q", out)
+		}
+		if strings.Contains(out, "level=WARN") {
+			t.Fatalf("a wired capability must not WARN: %q", out)
+		}
+	})
+	t.Run("absent warns", func(t *testing.T) {
+		buf := captureDefaultLog(t)
+		svc := newQueueService(t, Repositories{Queue: plainQueue{newFakeQueue()}})
+		if svc.terminalPurger != nil {
+			t.Fatal("a queue without PurgeTerminal resolved a TerminalPurger")
+		}
+		out := buf.String()
+		if !strings.Contains(out, "terminal_purge=absent") {
+			t.Fatalf("registration line missing terminal_purge=absent: %q", out)
+		}
+		if !strings.Contains(out, "level=WARN") || !strings.Contains(out, "TerminalPurger") {
+			t.Fatalf("an ordinary queue without the capability must WARN: %q", out)
+		}
+	})
+}
+
+func TestPurgeTerminalJobs(t *testing.T) {
+	ctx := context.Background()
+	before := time.Unix(1700000000, 0).UTC()
+
+	t.Run("delegates the bounded batch", func(t *testing.T) {
+		q := newFakeQueue()
+		svc := newQueueService(t, Repositories{Queue: q})
+		n, err := svc.PurgeTerminalJobs(ctx, before, 5)
+		if err != nil || n != 4 {
+			t.Fatalf("PurgeTerminalJobs = %d, %v; want the store's 4", n, err)
+		}
+		if len(q.purges) != 1 || !q.purges[0].before.Equal(before) || q.purges[0].limit != 5 {
+			t.Fatalf("store calls = %+v; want one call with before=%v limit=5", q.purges, before)
+		}
+	})
+	t.Run("non-positive limit refused", func(t *testing.T) {
+		q := newFakeQueue()
+		svc := newQueueService(t, Repositories{Queue: q})
+		for _, limit := range []int{0, -1} {
+			if n, err := svc.PurgeTerminalJobs(ctx, before, limit); !errors.Is(err, sdk.ErrInvalidInput) || n != 0 {
+				t.Fatalf("PurgeTerminalJobs(limit %d) = %d, %v; want 0, sdk.ErrInvalidInput", limit, n, err)
+			}
+		}
+		if len(q.purges) != 0 {
+			t.Fatalf("a refused limit reached the store: %+v", q.purges)
+		}
+	})
+	t.Run("capability absent", func(t *testing.T) {
+		svc := newQueueService(t, Repositories{Queue: plainQueue{newFakeQueue()}})
+		if _, err := svc.PurgeTerminalJobs(ctx, before, 5); !errors.Is(err, ErrTerminalPurgeRequired) {
+			t.Fatalf("err = %v, want ErrTerminalPurgeRequired", err)
+		}
+	})
+	t.Run("ordinary queue absent", func(t *testing.T) {
+		if _, err := (&Service{}).PurgeTerminalJobs(ctx, before, 5); !errors.Is(err, ErrQueueRequired) {
+			t.Fatalf("err = %v, want ErrQueueRequired", err)
+		}
+	})
 }

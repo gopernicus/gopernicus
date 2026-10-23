@@ -104,6 +104,7 @@ Scheduler interface. No root facade is required for either extension.
 |---|---|
 | `Repositories.Queue` / `FencedQueue` | at least one must be supplied; each enables its own protocol |
 | `Repositories.Schedules` | nil omits scheduling; it also requires the ordinary queue |
+| `queue.TerminalPurger` on `Repositories.Queue` | absent: `NewService` WARNs and `PurgeTerminalJobs` returns `ErrTerminalPurgeRequired` (see [Retention](#retention)) |
 | `jobs.WithMaxAttempts` | ordinary admission defaults to 3 attempts |
 | `NewRuntime handlers` | runtime construction requires valid nonempty entries |
 | `queue.RuntimePolicy.Workers` | defaults to 4 |
@@ -257,9 +258,10 @@ before persistence; a `DeadLetterFunc` remains a separate post-persistence hook.
 Both dialect stores ship and pass one `storetest` suite (live runs
 recorded in NOTES.md: turso against the playground incl. the
 concurrent-claim case; postgres on docker where `FOR UPDATE SKIP LOCKED`
-makes contention trivial). The canonical migration set is four files per
+makes contention trivial). The canonical migration set is five files per
 dialect with identical filename sets: `0001_job_queue`, `0002_job_schedules`,
-`0003_fenced_job_queue`, and `0004_job_schedule_occurrences`. A host may instead use `pockets/jobs/stores/memory`
+`0003_fenced_job_queue`, `0004_job_schedule_occurrences`, and the admitted
+retention index `0005_job_queue_terminal_purge` ([Retention](#retention)). A host may instead use `pockets/jobs/stores/memory`
 (public, in-core — `examples/jobs-minimal` is the zero-infra proof) or
 implement the two ports itself. Postgres conformance:
 `docker run --rm -d -p 5432:5432 -e POSTGRES_PASSWORD=postgres postgres:17`
@@ -297,3 +299,50 @@ Apply migration 0004 before new scheduler writers and stop old scheduler writers
 before enabling the new protocol. Existing schedules require no backfill; past
 lost occurrences cannot be recovered automatically. Drain pending work before
 rolling back to an older scheduler. See root AUDIT.md for custom-store migration.
+
+## Retention
+
+Terminal rows stay in their queue until the host purges them. Each queue has
+its own bounded purge, and the two never mix:
+
+- **`Service.PurgeTerminalJobs(ctx, before, limit)`, the ordinary queue.** It
+  deletes up to `limit` completed or dead-lettered jobs whose `UpdatedAt` is at or
+  before `before`, oldest first, and never a pending or running job. `limit` must
+  be positive (`sdk.ErrInvalidInput`). It needs the optional `queue.TerminalPurger`
+  on `Repositories.Queue`; the memory, pgx and turso stores implement it.
+  `NewService` resolves it once and logs `terminal_purge=wired|absent` through
+  `slog.Default`; an ordinary queue without it logs a WARN, and the method returns
+  `queue.ErrTerminalPurgeRequired` (`queue.ErrQueueRequired` on a fenced-only
+  Service).
+- **`Service.PurgeTerminal(ctx, before, limit)`, the fenced queue, unchanged.**
+  It purges by `TerminalAt`, returns `ErrFencedQueueRequired` without
+  `Repositories.FencedQueue`, removes nothing for a zero limit and is unbounded
+  for a negative one. Its count is fenced rows only, so a delivery observer that
+  reports it never counts ordinary jobs.
+
+**Never purge inside the scheduler's retry window.** Keep `before` behind now by
+at least the longest window in which a schedule occurrence can still be
+re-delivered. Delivery treats `sdk.ErrAlreadyExists` on the deterministic
+`sched_` job ID as its acknowledgement; purging the completed job frees that ID,
+so a late re-delivery enqueues and runs the job again.
+
+**What retention bounds.** Payloads are stored as submitted, and
+`failure_reason` is the handler's error text. Handlers must not put payload data
+or other personal data in the errors they return. Both stay in `job_queue` until
+a purge removes the row.
+
+**Scheduling it.** Register a `retention` kind whose handler calls
+`PurgeTerminalJobs(ctx, time.Now().Add(-retention), batch)`, and ensure an
+interval schedule for that kind. `examples/jobs-minimal` is the worked recipe
+(`RETENTION_EVERY`). If you schedule nothing, nothing is purged.
+
+**Migration 0005** (`0005_job_queue_terminal_purge.sql`, both dialects) adds
+`idx_job_queue_terminal` on `(updated_at, job_id)` over terminal rows, the purge's
+access path. It is admitted, not required: pgx `StatusCheck` WARNs
+`index_missing=idx_job_queue_terminal file=0005_job_queue_terminal_purge.sql`
+when it is absent, and the purge still runs by sorting every terminal row per
+batch. The pgx file sets `lock_timeout`, which bounds only the wait to acquire
+the lock; the build itself then blocks enqueue, claim and complete on
+`job_queue`. On a large queue, pre-build it with `CREATE INDEX CONCURRENTLY IF
+NOT EXISTS` under the same name and definition (drop an INVALID leftover first),
+so the file applies as a no-op.
