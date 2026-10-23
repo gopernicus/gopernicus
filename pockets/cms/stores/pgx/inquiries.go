@@ -2,21 +2,27 @@ package pgx
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 
 	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
 	"github.com/gopernicus/gopernicus/pockets/cms/domain/messaging"
+	"github.com/gopernicus/gopernicus/sdk"
 )
 
-// InquiryStore implements messaging.InquiryRepository over a PostgreSQL database.
+// InquiryStore implements messaging.InquiryRepository and the optional
+// messaging.InquiryEraser over a PostgreSQL database.
 type InquiryStore struct {
 	db     *pgxdb.DB
 	schema pgxdb.Schema
 }
 
-var _ messaging.InquiryRepository = (*InquiryStore)(nil)
+var (
+	_ messaging.InquiryRepository = (*InquiryStore)(nil)
+	_ messaging.InquiryEraser     = (*InquiryStore)(nil)
+)
 
 // NewInquiryStore returns an InquiryStore backed by db.
 func NewInquiryStore(db *pgxdb.DB, opts ...Option) *InquiryStore {
@@ -92,4 +98,46 @@ func (s *InquiryStore) List(ctx context.Context) ([]messaging.Inquiry, error) {
 		out = append(out, in.toDomain())
 	}
 	return out, nil
+}
+
+// Delete removes the inquiry with id; an absent id is sdk.ErrNotFound.
+func (s *InquiryStore) Delete(ctx context.Context, id string) error {
+	n, err := pgxdb.ExecAffecting(ctx, s.db, "DELETE FROM "+s.table(inquiriesTable)+" WHERE id = @id", pgx.NamedArgs{"id": id})
+	if err != nil {
+		return pgxdb.MapError(err)
+	}
+	if n == 0 {
+		return sdk.ErrNotFound
+	}
+	return nil
+}
+
+// DeleteByEmail removes every inquiry whose email equals email under lower()
+// on both sides — at least the ASCII case fold the port promises.
+func (s *InquiryStore) DeleteByEmail(ctx context.Context, email string) (int, error) {
+	n, err := pgxdb.ExecAffecting(ctx, s.db, "DELETE FROM "+s.table(inquiriesTable)+" WHERE lower(email) = lower(@email)", pgx.NamedArgs{"email": email})
+	if err != nil {
+		return 0, pgxdb.MapError(err)
+	}
+	return int(n), nil
+}
+
+// PurgeBefore removes at most limit inquiries with created_at <= before, oldest
+// first. The subselect locks its batch with SKIP LOCKED so concurrent purges
+// take disjoint rows; 0022's created_at index is its access path.
+func (s *InquiryStore) PurgeBefore(ctx context.Context, before time.Time, limit int) (int, error) {
+	if limit <= 0 {
+		return 0, fmt.Errorf("cms pgx: inquiry purge limit %d must be positive: %w", limit, sdk.ErrInvalidInput)
+	}
+	q := `DELETE FROM ` + s.table(inquiriesTable) + ` WHERE id IN (
+		SELECT id FROM ` + s.table(inquiriesTable) + `
+		WHERE created_at <= @before
+		ORDER BY created_at, id
+		LIMIT @limit
+		FOR UPDATE SKIP LOCKED)`
+	n, err := pgxdb.ExecAffecting(ctx, s.db, q, pgx.NamedArgs{"before": before.UTC(), "limit": limit})
+	if err != nil {
+		return 0, pgxdb.MapError(err)
+	}
+	return int(n), nil
 }

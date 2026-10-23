@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"slices"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -74,6 +75,8 @@ func (s *Store) Repositories() cms.Repositories {
 		Menus:     menuRepo{s.d},
 		Media:     assetRepo{s.d},
 		Inquiries: inquiryRepo{s.d},
+
+		InquiryMaintenance: inquiryRepo{s.d},
 	}
 }
 
@@ -413,6 +416,60 @@ func (r inquiryRepo) List(_ context.Context) ([]messaging.Inquiry, error) {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.After(out[j].CreatedAt) })
 	return out, nil
+}
+
+// --- messaging.InquiryEraser (the optional cms.Repositories.InquiryMaintenance) ---
+
+func (r inquiryRepo) Delete(_ context.Context, id string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, ok := r.inquiries[id]; !ok {
+		return sdk.ErrNotFound
+	}
+	delete(r.inquiries, id)
+	return nil
+}
+
+// DeleteByEmail matches with strings.EqualFold, which agrees with the port's
+// ASCII case fold on the ASCII range.
+func (r inquiryRepo) DeleteByEmail(_ context.Context, email string) (int, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	n := 0
+	for id, in := range r.inquiries {
+		if strings.EqualFold(in.Email, email) {
+			delete(r.inquiries, id)
+			n++
+		}
+	}
+	return n, nil
+}
+
+func (r inquiryRepo) PurgeBefore(_ context.Context, before time.Time, limit int) (int, error) {
+	if limit <= 0 {
+		return 0, fmt.Errorf("memstore: inquiry purge limit %d must be positive: %w", limit, sdk.ErrInvalidInput)
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var due []messaging.Inquiry
+	for _, in := range r.inquiries {
+		if !in.CreatedAt.After(before) {
+			due = append(due, in)
+		}
+	}
+	sort.Slice(due, func(i, j int) bool {
+		if due[i].CreatedAt.Equal(due[j].CreatedAt) {
+			return due[i].ID < due[j].ID
+		}
+		return due[i].CreatedAt.Before(due[j].CreatedAt)
+	})
+	if len(due) > limit {
+		due = due[:limit]
+	}
+	for _, in := range due {
+		delete(r.inquiries, in.ID)
+	}
+	return len(due), nil
 }
 
 // entryPageOf sorts items by (created_at, id) in the resolved direction, then

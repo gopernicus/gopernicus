@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gopernicus/gopernicus/pockets"
 	"github.com/gopernicus/gopernicus/pockets/cms/domain/content"
@@ -216,8 +217,59 @@ func TestRegister_NilViewsWarnsNothing(t *testing.T) {
 	if got := rec.sorted(); !slices.Equal(got, []string{"GET /media/{id}/file"}) {
 		t.Errorf("registered routes = %q, want only the media byte endpoint", got)
 	}
-	if buf.Len() != 0 {
-		t.Errorf("nil Views logged: %s", buf.String())
+	if strings.Contains(buf.String(), "level=WARN") {
+		t.Errorf("nil Views logged a WARN: %s", buf.String())
+	}
+}
+
+// stubEraser stands in for a store's messaging.InquiryEraser; Register never
+// calls it.
+type stubEraser struct{}
+
+func (stubEraser) Delete(context.Context, string) error               { return nil }
+func (stubEraser) DeleteByEmail(context.Context, string) (int, error) { return 0, nil }
+func (stubEraser) PurgeBefore(context.Context, time.Time, int) (int, error) {
+	return 0, nil
+}
+
+// TestRegister_InquiryMaintenance pins the capability's construction-time
+// resolution: the registration line names it wired or absent in every mode, and
+// only production WARNs when it is absent.
+func TestRegister_InquiryMaintenance(t *testing.T) {
+	gate := []web.Middleware{passthrough}
+	cases := []struct {
+		name     string
+		mode     environment.Mode
+		eraser   messaging.InquiryEraser
+		wantLine string
+		wantWarn bool
+	}{
+		{"zero mode absent", "", nil, "inquiry_maintenance=absent", false},
+		{"development absent", environment.ModeDevelopment, nil, "inquiry_maintenance=absent", false},
+		{"production absent", environment.ModeProduction, nil, "inquiry_maintenance=absent", true},
+		{"production wired", environment.ModeProduction, stubEraser{}, "inquiry_maintenance=wired", false},
+		{"development wired", environment.ModeDevelopment, stubEraser{}, "inquiry_maintenance=wired", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			log, buf := captureLog()
+			repos := Repositories{InquiryMaintenance: tc.eraser}
+			cfg := Config{Views: stubViews{}, AdminMiddleware: gate, Mailer: tlsSender{}, RuntimeMode: tc.mode}
+			if err := Register(pockets.Mount{Router: newRecordingRegistrar(), Logger: log}, repos, cfg); err != nil {
+				t.Fatalf("Register: %v", err)
+			}
+			out := buf.String()
+			if !strings.Contains(out, "registered cms pocket") || !strings.Contains(out, tc.wantLine) {
+				t.Errorf("registration line missing %q: %s", tc.wantLine, out)
+			}
+			warns := strings.Count(out, "level=WARN")
+			switch {
+			case tc.wantWarn && (warns != 1 || !strings.Contains(out, "Repositories.InquiryMaintenance is nil")):
+				t.Errorf("want one InquiryMaintenance WARN, got %d: %s", warns, out)
+			case !tc.wantWarn && warns != 0:
+				t.Errorf("want no WARN, got %d: %s", warns, out)
+			}
+		})
 	}
 }
 

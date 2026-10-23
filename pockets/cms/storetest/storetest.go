@@ -108,6 +108,10 @@ func Run(t *testing.T, newRepos func(t *testing.T) cms.Repositories) {
 	t.Run("Inquiries", func(t *testing.T) {
 		t.Run("CreateAndListNewestFirst", func(t *testing.T) { testInquiries(t, newRepos(t)) })
 		t.Run("DBGeneratedIDOnEmpty", func(t *testing.T) { testInquiriesDBGeneratedID(t, newRepos(t)) })
+		t.Run("DeleteAbsentNotFound", func(t *testing.T) { testInquiriesDeleteAbsent(t, newRepos(t)) })
+		t.Run("DeleteByEmailCaseInsensitive", func(t *testing.T) { testInquiriesDeleteByEmail(t, newRepos(t)) })
+		t.Run("PurgeBeforeBounded", func(t *testing.T) { testInquiriesPurgeBefore(t, newRepos(t)) })
+		t.Run("PurgeBeforeLimitZeroRefused", func(t *testing.T) { testInquiriesPurgeLimitRefused(t, newRepos(t)) })
 	})
 }
 
@@ -782,6 +786,168 @@ func testInquiries(t *testing.T, repos cms.Repositories) {
 	}
 	if len(list) != 2 || list[0].ID != newer.ID || list[1].ID != older.ID {
 		t.Errorf("List order = %v, want newest first", list)
+	}
+}
+
+// requireInquiryEraser returns the optional erasure capability or skips loudly:
+// a Repositories without it keeps the never-delete behavior and is not wrong,
+// but nothing about erasure is then verified.
+func requireInquiryEraser(t *testing.T, repos cms.Repositories) messaging.InquiryEraser {
+	t.Helper()
+	if repos.InquiryMaintenance == nil {
+		t.Skip("InquiryMaintenance not wired — inquiry erasure conformance NOT verified for this Repositories")
+	}
+	return repos.InquiryMaintenance
+}
+
+// createInquiry persists one inquiry stamped at createdAt and returns it.
+func createInquiry(t *testing.T, repos cms.Repositories, name, email string, createdAt time.Time) messaging.Inquiry {
+	t.Helper()
+	in, err := messaging.NewInquiry(ids, name, email, "message from "+name, createdAt)
+	if err != nil {
+		t.Fatalf("NewInquiry %s: %v", name, err)
+	}
+	created, err := repos.Inquiries.Create(context.Background(), in)
+	if err != nil {
+		t.Fatalf("Create %s: %v", name, err)
+	}
+	return created
+}
+
+// inquiryIDs lists the stored inquiry ids, sorted, through the read port.
+func inquiryIDs(t *testing.T, repos cms.Repositories) []string {
+	t.Helper()
+	list, err := repos.Inquiries.List(context.Background())
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	out := make([]string, 0, len(list))
+	for _, in := range list {
+		out = append(out, in.ID)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// sortedIDs returns the inquiries' ids, sorted, for comparison with inquiryIDs.
+func sortedIDs(ins ...messaging.Inquiry) []string {
+	out := make([]string, 0, len(ins))
+	for _, in := range ins {
+		out = append(out, in.ID)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func testInquiriesDeleteAbsent(t *testing.T, repos cms.Repositories) {
+	ctx := context.Background()
+	eraser := requireInquiryEraser(t, repos)
+	kept := createInquiry(t, repos, "Jane", "jane@example.com", suiteBase)
+	gone := createInquiry(t, repos, "John", "john@example.com", suiteBase.Add(time.Minute))
+
+	if err := eraser.Delete(ctx, "inquiry-absent"); !errors.Is(err, sdk.ErrNotFound) {
+		t.Errorf("Delete(absent) = %v, want sdk.ErrNotFound", err)
+	}
+	if err := eraser.Delete(ctx, gone.ID); err != nil {
+		t.Fatalf("Delete(%s): %v", gone.ID, err)
+	}
+	if got, want := inquiryIDs(t, repos), sortedIDs(kept); !equalStrings(got, want) {
+		t.Errorf("after Delete, stored ids = %v, want %v", got, want)
+	}
+	if err := eraser.Delete(ctx, gone.ID); !errors.Is(err, sdk.ErrNotFound) {
+		t.Errorf("repeat Delete(%s) = %v, want sdk.ErrNotFound", gone.ID, err)
+	}
+}
+
+// testInquiriesDeleteByEmail pins the ASCII case-fold equality: every casing of
+// the address goes, a near miss and a superstring stay. Non-ASCII folding is
+// store-defined and deliberately not asserted.
+func testInquiriesDeleteByEmail(t *testing.T, repos cms.Repositories) {
+	ctx := context.Background()
+	eraser := requireInquiryEraser(t, repos)
+	createInquiry(t, repos, "Bob", "Bob@Example.com", suiteBase)
+	createInquiry(t, repos, "Bob", "bob@example.com", suiteBase.Add(time.Minute))
+	createInquiry(t, repos, "Bob", "BOB@EXAMPLE.COM", suiteBase.Add(2*time.Minute))
+	nearMiss := createInquiry(t, repos, "Rob", "bob@example.co", suiteBase.Add(3*time.Minute))
+	superstring := createInquiry(t, repos, "Robert", "xbob@example.com", suiteBase.Add(4*time.Minute))
+	other := createInquiry(t, repos, "Alice", "alice@example.com", suiteBase.Add(5*time.Minute))
+
+	n, err := eraser.DeleteByEmail(ctx, "bOb@eXample.COM")
+	if err != nil {
+		t.Fatalf("DeleteByEmail: %v", err)
+	}
+	if n != 3 {
+		t.Errorf("DeleteByEmail removed %d, want 3 (every ASCII casing)", n)
+	}
+	if got, want := inquiryIDs(t, repos), sortedIDs(nearMiss, superstring, other); !equalStrings(got, want) {
+		t.Errorf("after DeleteByEmail, stored ids = %v, want %v", got, want)
+	}
+
+	n, err = eraser.DeleteByEmail(ctx, "bob@example.com")
+	if err != nil || n != 0 {
+		t.Errorf("repeat DeleteByEmail = (%d, %v), want (0, nil)", n, err)
+	}
+}
+
+// testInquiriesPurgeBefore pins the bounded purge: at most limit rows per call,
+// oldest first, and the <= boundary — a row exactly AT before goes, one a
+// microsecond later stays. Fixtures are microsecond-aligned so every dialect
+// stores them exactly.
+func testInquiriesPurgeBefore(t *testing.T, repos cms.Repositories) {
+	ctx := context.Background()
+	eraser := requireInquiryEraser(t, repos)
+	before := suiteBase.Add(time.Hour)
+	createInquiry(t, repos, "A", "a@example.com", before.Add(-2*time.Hour))
+	createInquiry(t, repos, "B", "b@example.com", before.Add(-time.Hour))
+	justBefore := createInquiry(t, repos, "C", "c@example.com", before.Add(-time.Microsecond))
+	atBoundary := createInquiry(t, repos, "D", "d@example.com", before)
+	justAfter := createInquiry(t, repos, "E", "e@example.com", before.Add(time.Microsecond))
+	later := createInquiry(t, repos, "F", "f@example.com", before.Add(time.Hour))
+
+	n, err := eraser.PurgeBefore(ctx, before, 2)
+	if err != nil {
+		t.Fatalf("PurgeBefore(limit 2): %v", err)
+	}
+	if n != 2 {
+		t.Errorf("PurgeBefore(limit 2) removed %d, want 2 (bounded)", n)
+	}
+	if got, want := inquiryIDs(t, repos), sortedIDs(justBefore, atBoundary, justAfter, later); !equalStrings(got, want) {
+		t.Errorf("after the first batch, stored ids = %v, want %v (the two oldest removed first)", got, want)
+	}
+
+	n, err = eraser.PurgeBefore(ctx, before, 10)
+	if err != nil {
+		t.Fatalf("PurgeBefore(limit 10): %v", err)
+	}
+	if n != 2 {
+		t.Errorf("PurgeBefore(limit 10) removed %d, want 2 (the row AT before is eligible)", n)
+	}
+	if got, want := inquiryIDs(t, repos), sortedIDs(justAfter, later); !equalStrings(got, want) {
+		t.Errorf("after the drain, stored ids = %v, want %v (rows after before survive)", got, want)
+	}
+
+	n, err = eraser.PurgeBefore(ctx, before, 10)
+	if err != nil || n != 0 {
+		t.Errorf("PurgeBefore on a drained window = (%d, %v), want (0, nil)", n, err)
+	}
+}
+
+func testInquiriesPurgeLimitRefused(t *testing.T, repos cms.Repositories) {
+	ctx := context.Background()
+	eraser := requireInquiryEraser(t, repos)
+	kept := createInquiry(t, repos, "Jane", "jane@example.com", suiteBase)
+
+	for _, limit := range []int{0, -1} {
+		n, err := eraser.PurgeBefore(ctx, suiteBase.Add(time.Hour), limit)
+		if !errors.Is(err, sdk.ErrInvalidInput) {
+			t.Errorf("PurgeBefore(limit %d) error = %v, want sdk.ErrInvalidInput", limit, err)
+		}
+		if n != 0 {
+			t.Errorf("PurgeBefore(limit %d) reported %d removed, want 0", limit, n)
+		}
+	}
+	if got, want := inquiryIDs(t, repos), sortedIDs(kept); !equalStrings(got, want) {
+		t.Errorf("after refused purges, stored ids = %v, want %v", got, want)
 	}
 }
 

@@ -154,7 +154,18 @@ remain absent.
 
 ## Wiring
 
-- **cms store**: `pockets/cms/outbound/memstore` (in-memory cms ports).
+- **cms store**: `pockets/cms/outbound/memstore` (in-memory cms ports). It also fills the
+  optional `cms.Repositories.InquiryMaintenance` (`messaging.InquiryEraser`), so
+  `cms.Register` logs `inquiry_maintenance=wired`; a store without it keeps every inquiry
+  forever and production `Register` WARNs.
+- **cms inquiry retention** (SOC 2 S3): the host keeps the eraser it handed to `cms.Register`
+  and runs a bounded `PurgeBefore` on its own ticker in every delivery mode —
+  `INQUIRY_PURGE_INTERVAL` (default `1h`), `INQUIRY_PURGE_RETENTION` (default `2160h`, 90
+  days), `INQUIRY_PURGE_BATCH` (default `500`); each pass logs `step=inquiries count=<n>`.
+  To see a pass remove a row, run with `INQUIRY_PURGE_INTERVAL=1m INQUIRY_PURGE_RETENTION=1m`
+  and submit `POST /contact`. Nothing here runs `DeleteByEmail` (the erasure runbook's step);
+  no route deletes an inquiry and no evidence row records a deletion — both are deferred
+  to a follow-up cms plan.
 - **auth store**: `pockets/authentication/outbound/authmem` — an in-memory implementation of **every**
   auth port: v1 user/password/session, the v2 oauth-account/oauth-state/
   service-account/api-key/security-event/invitation ports, and the v3 identity +
@@ -704,8 +715,8 @@ curl -sX POST -b jar http://localhost:8082/outbox-demo        # -> 202 {"event_i
 ```
 
 Shutdown order (SIGTERM): **HTTP server → delivery runtime → terminal-purge scheduler
-→ poller pool → `bus.Close`** — the delivery runtime, purge scheduler, and poller pool
-each run on their own Background-derived context so they stop only after HTTP has
+→ inquiry purge scheduler → poller pool → `bus.Close`** — the delivery runtime, purge
+schedulers, and poller pool each run on their own Background-derived context so they stop only after HTTP has
 drained, and the bus closes last on a fresh bounded context. HTTP and delivery are
 **supervised as one lifecycle** (IX-02): the server blocks on a cancelable child of the
 signal context, and if the delivery runtime exits unexpectedly (error OR a clean return)

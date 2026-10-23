@@ -34,9 +34,10 @@
 // host-owned POST /outbox-demo append through an example-local in-memory outbox
 // (pockets/events/outbound/outboxmem) and a host-driven outbox.Poller on an sdk/pkg/workers pool:
 // outbox -> poll -> emit -> SSE, id: = the durable outbox EventID. The shutdown
-// order is HTTP server -> delivery runtime -> terminal-purge scheduler -> poller pool
-// -> bus.Close (see run's tail comment); HTTP and the delivery runtime are supervised
-// as one lifecycle, so an unexpected delivery-runtime exit drives the same drain.
+// order is HTTP server -> delivery runtime -> terminal-purge scheduler -> inquiry purge
+// scheduler -> poller pool -> bus.Close (see run's tail comment); HTTP and the delivery
+// runtime are supervised as one lifecycle, so an unexpected delivery-runtime exit drives
+// the same drain.
 package main
 
 import (
@@ -679,6 +680,14 @@ func run(ctx context.Context, log *slog.Logger, runtimeMode environment.Mode) er
 			"interval", deliveryPurgeInterval)
 	}
 
+	// Host-owned inquiry retention (SOC 2 S3), every delivery mode: a bounded PurgeBefore on the
+	// eraser this host wired as cmsRepos.InquiryMaintenance. Stopped beside the delivery purge.
+	var stopInquiryPurge func()
+	if cmsRepos.InquiryMaintenance != nil {
+		inquiryCfg := inquiryPurgeConfigFromEnv(log)
+		stopInquiryPurge = startInquiryPurge(inquiryCfg, newInquiryPurge(cmsRepos.InquiryMaintenance, inquiryCfg, time.Now), log)
+	}
+
 	// Shutdown order (design §7, phase 5 — with the poller, corrected context idiom
 	// P3):
 	//  1. web.Run blocks until hostCtx is canceled (by the signal ctx OR by the delivery
@@ -719,6 +728,9 @@ func run(ctx context.Context, log *slog.Logger, runtimeMode environment.Mode) er
 			log.WarnContext(context.Background(), "delivery terminal purge scheduler did not stop within 5s")
 		}
 		log.InfoContext(context.Background(), "delivery terminal purge scheduler stopped")
+	}
+	if stopInquiryPurge != nil {
+		stopInquiryPurge()
 	}
 
 	if cancelPool != nil {

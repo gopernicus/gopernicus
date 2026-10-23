@@ -64,6 +64,14 @@ type Repositories struct {
 	Menus     menus.MenuRepository
 	Media     media.AssetRepository
 	Inquiries messaging.InquiryRepository
+
+	// InquiryMaintenance is the OPTIONAL inquiry disposal capability over the
+	// same rows as Inquiries (the bundled stores fill both from one store).
+	// Register resolves it once and logs inquiry_maintenance=wired|absent;
+	// production WARNs when it is nil. The pocket never calls it: the host's
+	// retention schedule calls PurgeBefore and its erasure runbook calls
+	// DeleteByEmail on the eraser it wired here.
+	InquiryMaintenance messaging.InquiryEraser
 }
 
 // TemplateBinding binds a dev-authored render func to a registered type's
@@ -135,6 +143,10 @@ func Register(m pockets.Mount, repos Repositories, cfg Config) error {
 		return err
 	}
 	gated := len(cfg.AdminMiddleware) > 0
+	inquiryMaintenance := "absent"
+	if repos.InquiryMaintenance != nil {
+		inquiryMaintenance = "wired"
+	}
 
 	registry := content.NewRegistry()
 	if err := registerSeedTypes(registry); err != nil {
@@ -179,6 +191,13 @@ func Register(m pockets.Mount, repos Repositories, cfg Config) error {
 			m.Logger.Warn("cms: admin routes mounted UNGATED by Config.AdminUngatedAcknowledged — development only; production refuses it", "posture_waiver", "AdminUngatedAcknowledged")
 		} else {
 			m.Logger.Warn("cms: admin routes NOT mounted (404/405): Config.AdminMiddleware is empty (deny-by-absence) — pass a gate that authorizes, or set Config.AdminUngatedAcknowledged for a development demo", "admin_mounted", false)
+		}
+	}
+
+	if m.Logger != nil {
+		m.Logger.Info("registered cms pocket", "inquiry_maintenance", inquiryMaintenance)
+		if inquiryMaintenance == "absent" && cfg.RuntimeMode.IsProduction() {
+			m.Logger.Warn("cms: Repositories.InquiryMaintenance is nil — stored inquiries (name, email, message) can never be deleted or purged; wire the store's messaging.InquiryEraser and schedule PurgeBefore", "inquiry_maintenance", "absent", "runtime_mode", cfg.RuntimeMode.String())
 		}
 	}
 
