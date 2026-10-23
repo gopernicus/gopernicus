@@ -5,12 +5,12 @@ go 1.26.10
 require (
 	github.com/gopernicus/gopernicus/integrations/cryptids/go-oidc v0.1.0
 	github.com/gopernicus/gopernicus/integrations/cryptids/golang-jwt v0.2.0
-	github.com/gopernicus/gopernicus/integrations/datastores/pgxdb v0.10.0
+	github.com/gopernicus/gopernicus/integrations/datastores/pgxdb v0.11.0
 	github.com/gopernicus/gopernicus/pockets v0.1.0
-	github.com/gopernicus/gopernicus/pockets/authentication v0.19.1
-	github.com/gopernicus/gopernicus/pockets/authentication/stores/pgx v0.9.0
-	github.com/gopernicus/gopernicus/pockets/authorization v0.28.0
-	github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx v0.18.0
+	github.com/gopernicus/gopernicus/pockets/authentication v0.21.0
+	github.com/gopernicus/gopernicus/pockets/authentication/stores/pgx v0.10.0
+	github.com/gopernicus/gopernicus/pockets/authorization v0.29.1
+	github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx v0.20.0
 	github.com/gopernicus/gopernicus/sdk v0.16.0
 )
 

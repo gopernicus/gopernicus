@@ -21,15 +21,15 @@ each module receives fixes. Latest tags at the time of writing:
 | Module | Latest |
 |---|---|
 | `sdk` | v0.16.0 |
-| `pockets/authentication` | v0.20.0 |
-| `pockets/authorization` | v0.28.0 |
+| `pockets/authentication` | v0.21.0 |
+| `pockets/authorization` | v0.29.1 |
 | `pockets/cms` | v0.4.0 |
 | `pockets/events` | v0.3.0 |
 | `pockets/jobs` | v0.6.0 |
-| `pockets/secrets` | v0.1.1 |
-| `integrations/datastores/pgxdb` | v0.10.0 |
-| `integrations/datastores/turso` | v0.7.0 |
-| `workshop/gopernicus` | v0.5.0 |
+| `pockets/secrets` | v0.2.0 |
+| `integrations/datastores/pgxdb` | v0.11.0 |
+| `integrations/datastores/turso` | v0.8.0 |
+| `workshop/gopernicus` | v0.6.0 |
 
 Every module declares `go 1.26.10`; a host that honors the pin builds with a standard
 library carrying the fixes listed in `plans/soc2-s8-toolchain-pgx-repin-handoff.md`.

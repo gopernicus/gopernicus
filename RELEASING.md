@@ -1,20 +1,337 @@
 # Releasing gopernicus modules
 
-## Unreleased: append-only posture probe (pgxdb v0.11.0, turso v0.8.0 — SOC 2 slice S2, step 1)
+## Audit completeness and integrity (SOC 2 slice S2 — published 2026-10-23)
 
-- `integrations/datastores/pgxdb` → **v0.11.0**: `AppendOnlyTable`, `TriggerBody`,
-  `TablePrivilege`, `Report`, `InspectTablePrivileges`, `(*DB).ProbeAppendOnly`,
-  `(*DB).RuntimeMode()`, `Config.AppendOnlyWritableAcknowledged` (programmatic, no env tag),
-  `ErrAppendOnlyTableWritable`, `ErrAppendOnlyTableUnwritable`. Requires PostgreSQL ≥ 14 for
-  the trigger files. **Behavior change for every consumer:** `MapError` maps SQLSTATE `42501`
+Fourteen annotated tags (not signed), each cut at its PR's squash-merge commit on `main`,
+pushed, THEN polled on the proxy, and cold-verified from a scratch consumer (`GOWORK=off`, an
+empty module cache, `proxy.golang.org`, `sum.golang.org`, `go mod verify`, `go build
+<module>/...`). Every one resolved on the first poll. Design and rulings:
+[plans/s2-audit-completeness.md](plans/s2-audit-completeness.md) (rev 3, ratified
+2026-10-22). Host handoff:
+[plans/soc2-s2-audit-completeness-handoff.md](plans/soc2-s2-audit-completeness-handoff.md).
+Manifest: `plans/s2-audit-completeness-release-manifest.json` (from `go mod download -json`
+of the published tags; `pockets/authorization` appears twice, v0.29.0 and v0.29.1). The
+Details flip is recorded as
+[AUDIT-054](AUDIT.md#audit-054-audit-details-carry-identifier-digests-not-addresses).
+
+| Step | Tag | Commit | PR | Cold verification |
+|---|---|---|---|---|
+| 0 | `pockets/authorization/stores/pgx/v0.19.1` | `84b0154d` | #139 (expand: ships 0005, tolerates it, does not require it) | OK, poll 1 |
+| 0 | `pockets/authorization/stores/turso/v0.18.1` | `84b0154d` | #139 | OK, poll 1 |
+| 1 | `integrations/datastores/pgxdb/v0.11.0` | `f0e1043f` | #140 | OK, poll 1; also built the MVS pair authorization `stores/pgx` v0.19.1 on pgxdb v0.11.0 |
+| 1 | `integrations/datastores/turso/v0.8.0` | `f0e1043f` | #140 | OK, poll 1 |
+| 2a | `pockets/authentication/v0.21.0` | `9590e366` | #144, #147, #149 (one core tag for PR-2a/2b/2c) | OK, poll 1 |
+| 2b | `pockets/authentication/stores/pgx/v0.10.0` | `ada0aeda` | #150 (repin to core v0.21.0 + pgxdb v0.11.0) | OK, poll 1 |
+| 2b | `pockets/authentication/stores/turso/v0.9.0` | `ada0aeda` | #150 (repin to core v0.21.0 + turso v0.8.0) | OK, poll 1 |
+| 3a | `pockets/authorization/v0.29.0` | `7344393c` | #142 | OK, poll 1 |
+| 3a' | `pockets/authorization/v0.29.1` | `159be98a` | #151 (gate-denial target patch; no store retag) | OK, poll 1 |
+| 3b | `pockets/authorization/stores/pgx/v0.20.0` | `1f22ad38` | #146 (repin to core v0.29.0 + pgxdb v0.11.0) | OK, poll 1 |
+| 3b | `pockets/authorization/stores/turso/v0.19.0` | `1f22ad38` | #146 (repin to core v0.29.0 + turso v0.8.0) | OK, poll 1 |
+| 4a | `pockets/secrets/v0.2.0` | `cd80f491` | #141 | OK, poll 1 |
+| 4b | `pockets/secrets/stores/pgx/v0.2.0` | `a8a12eb4` | #145 (repin to core v0.2.0 + pgxdb v0.11.0) | OK, poll 1 |
+| 5 | `workshop/gopernicus/v0.6.0` | `7619e090` | #143 | OK, poll 1; cold-installed, `guard --list --posture` row 25 = P9 |
+
+**Step 0 is the expand step.** `stores/pgx` v0.19.1 and `stores/turso` v0.18.1 are patches by
+owner ruling: they ship `0005_iam_audit_integrity.sql` in both dialects with probes that admit a
+database with or without it, require nothing new (core v0.28.0 and the connector pins of
+v0.19.0 / v0.18.0), and were tagged on `main` only after 0005's text was pinned by a test (the
+"Expand-step patches" rule under [Tagging scheme](#tagging-scheme)). v0.20.0 / v0.19.0 make 0005
+required. Not tagged: `pockets/authentication/stores/firestore` (retired, below),
+`pockets/authorization/stores/goredis` and `sdk` (stays v0.16.0).
+
+**Verification record.**
+- CI `check` and `vuln` (push and pull_request events) and the CodeQL analyses passed on the
+  final run of every PR, #139–#151.
+- Live store legs on merged `main` before every pocket and store tag: per-module runs
+  equivalent to `make test-stores` (every pgx store bare and schema-qualified, now including the
+  secrets leg and the fixture-role cases) against a scratch Postgres 17 on `127.0.0.1:55433`;
+  the turso connector and turso stores under `-tags=integration` against local libSQL servers on
+  ports 8081–8084; the Firestore emulator on 8080. None skipped except the pre-existing
+  `TestCollationControlsOrdering_NonC` (it needs a non-C DSN). One load flake,
+  `TestFenceContentionTwoConnections` (authorization turso store), re-passed 3/3 run alone
+  before Step 0. The emulator leg's pre-existing failure `TestConstructorSkipsTheProbeWhenAskedTo`
+  (it fails on `main` before S2) is moot with the firestore retirement.
+- Step 1's cold verification also built the pair a host sits on between its authentication and
+  authorization repins: `pockets/authorization/stores/pgx` v0.19.1 over pgxdb v0.11.0, including
+  the 42501 mapping change.
+- `examples/production-baseline` and `examples/auth-cms` (PR-6, #148, untagged) were driven live
+  (run-and-look notes under Known) and are repinned to the published tags, with
+  `pockets/authorization` at v0.29.1, by the release-record PR.
+
+**Owner rulings during execution.** Tags are annotated, not signed (ruling of 2026-10-22). The
+four roadmap deviations were ratified with the plan: (a) the immutability triggers ship
+DEFAULT-ON as numbered migrations, not opt-in; (b) `secret_read_denied` is the OUTCOME value
+`denied` of a `secret_read` row, not a new action; (c) `audit_read` moves to S7 with the
+audit-read routes, so S2 records `user_directory_read` only; (d) the `iam_operations` trigger
+refuses DELETE of fenced rows only. Found during the build: P9 treats a store's
+`*_immutable.sql` as declinable — absent from the host ledger it is a `declined:` note on the
+status line, not a finding; an edited copy is a finding (G34 on the baseline stays strict). The
+baseline ledger copies moved from PR-6 to PR-5 (#143) and are numbered
+`0025_iam_audit_integrity.sql`, `0026_iam_audit_immutable.sql`,
+`0027_security_events_integrity.sql`, `0028_security_events_immutable.sql`. AUDIT-054's lookup
+recipe was corrected in PR-2c, before tag 2a (below). The gate-denial finding from PR-6 was patched as
+authorization v0.29.1 ("patch it"). The firestore store adapters are retired (below). The
+secrets `DeleteOwner` race is a follow-up (Known).
+
+**What shipped, per module.**
+- `integrations/datastores/pgxdb` v0.11.0: `AppendOnlyTable`, `TriggerBody`, `TablePrivilege`,
+  `Report`, `InspectTablePrivileges`, `(*DB).ProbeAppendOnly`, `(*DB).RuntimeMode()`,
+  `Config.AppendOnlyWritableAcknowledged` (programmatic, no env tag), `ErrAppendOnlyTableWritable`,
+  `ErrAppendOnlyTableUnwritable`.
+- `integrations/datastores/turso` v0.8.0: `(*DB).RuntimeMode()`, `AppendOnlyTable`,
+  `TableTrigger`, `TriggerBody`, `(*DB).ProbeAuditImmutable` (WARN-only).
+- `pockets/authentication` v0.21.0 (no exported signature change): one security-event recorder
+  (`securityevent.Recorder`, exposed as `Components.SecurityEvents` and handed to every
+  consumer), `SecurityEvent.RequestID`/`TraceID`, `Components.AuditWriteFailures()`,
+  `WithAuditWriteObserver`, the `audit_write_failed` WARN (once, then one summary a minute),
+  `session_revoked`/`all_sessions_revoked` promoted to constants with a registration test,
+  failure and blocked rows on the denial paths of `IssueToken`, `ChangePassword`,
+  `SetPassword`, `ResetPassword`, `Verify`, `RemovePassword`, identifier changes, OAuth
+  callbacks and link verification, the OAuth2 server (`oauth2_consent_denied`,
+  `oauth2_grant_failed`, all through the one recorder) and invitation acceptance;
+  `oauth_pending_link_sent`, `external_login` (once per token per cache) and
+  `user_directory_read`; AUDIT-054. Recording fails OPEN.
+- `pockets/authorization` v0.29.0: the decision observer (`authorization.WithDecisionObserver`,
+  `decisions.WithDecisionObserver`, `authorizationhttp.WithDecisionObserver`),
+  `decisions.EventAuthorizationDenied` / `EventRoleWriteRefused`, `audit.Source.RequestID` /
+  `TraceID` (the bundled role routes blank an id longer than 128 bytes or non-printable rather
+  than refuse the write; `Validate` bounds an id a host stamps by hand), a WARN and an
+  `OutcomeRefused` event on every refused role write, a production WARN when no observer is
+  wired. v0.29.1: `Evaluate` and `EvaluateResolved` — what every `Require` gate calls — name
+  their target in the decision event and log line (a single leaf: its permission, relation or
+  role and its resource; a composite: the first leaf that denied, else the first reached). No
+  exported signature, store or `go.mod` change.
+- `pockets/secrets` v0.2.0 (BREAKING port, pre-1.0 minor): `vault.Repository` gains
+  `AppendAudit`; `DeleteOwner(ctx, owner, expected, audit)` deletes in its transaction and
+  records the rows it removed; one `secret_read` row per read after the open, with
+  `Outcome` `ok`/`denied` and the version read; `AuditRecord.RequestID`/`TraceID` through
+  `vault.Correlate`; `AuditFilter.Outcome`. `stores/pgx` v0.2.0 adds `Open(ctx, db, opts...)`,
+  the probing constructor (`NewRepository` stays; `StatusCheck` is boot-only).
+- The stores: authentication `stores/pgx` v0.10.0 / `stores/turso` v0.9.0 (migrations 0021 +
+  0022), authorization `stores/pgx` v0.20.0 / `stores/turso` v0.19.0 (0005 required + 0006),
+  secrets `stores/pgx` v0.2.0 (0002 + 0003); each pgx store runs the posture probe at
+  construction and exports `AuditTables(...)`; each turso store runs the trigger probe.
+- `workshop/gopernicus` v0.6.0: posture rule P9 (every migration a mounted framework store ships
+  has a byte-identical copy in the host's ledger), `AppendOnlyWritableAcknowledged` on the
+  recognized posture surfaces (P5), the runner template's `-posture-role <role>` preflight,
+  scaffold pins pgxdb v0.11.0 / turso v0.8.0, the two-role posture docs. In this repo, guard
+  G34 (`guard-baseline-ledger`) holds the baseline ledger byte-identical to its stores'
+  migrations.
+
+**Migration notes — what a repinning host meets.**
+- (a) **Migrate, then deploy: authentication 0021 and secrets 0002.** Authentication
+  `stores/pgx` v0.10.0 / `stores/turso` v0.9.0 refuse a database without
+  `0021_security_events_integrity.sql`, and secrets `pgx.Open` one without
+  `0002_secrets_audit_integrity.sql`, each naming the file. Both probes check the presence of
+  known columns only and every new column has a default, so the previous binaries keep running
+  on a migrated database. Export each rail's integrity file, then its immutable file
+  (`0021` → `0022`, `0002` → `0003`). Secrets 0002 adds its `outcome` CHECK `NOT VALID`;
+  `VALIDATE CONSTRAINT` is a later host maintenance step.
+- (b) **Authorization 0005 is REQUIRED and LOCKSTEP, after Step 0.** Both schema probes are
+  exact: v0.19.0 / v0.18.0 refuse a database with 0005 applied and v0.20.0 / v0.19.0 refuse one
+  without it (`Repositories`, or any store built `WithAudit()`). Order: every instance on
+  `stores/pgx` v0.19.1 / `stores/turso` v0.18.1 first → adopt the authentication (and secrets)
+  stores until production boots clean → migrate `0005_iam_audit_integrity.sql`, then
+  `0006_iam_audit_immutable.sql` → repin core v0.29.1 with `stores/pgx` v0.20.0 /
+  `stores/turso` v0.19.0. After 0005 roll back only to v0.19.1 / v0.18.1, never v0.19.0 /
+  v0.18.0. On PostgreSQL 0005 is two metadata-only `ADD COLUMN`s per table. On SQLite/Turso it
+  rebuilds `iam_audit` and `iam_operations` as 0004 did, holding the write lock inside the
+  runner's two-minute budget: restartable, not online — plan a maintenance window, snapshot or
+  branch the database first, and run the 0004 preflight for host views, triggers and indexes.
+  Authentication's turso `0021` rebuilds `security_events` the same way. The full procedure is
+  in `pockets/authorization/stores/UPGRADE.md` ("Adopting 0005"). Its reverse, reference SQL
+  that is not shipped (author it as a new forward ledger entry, never by deleting or editing
+  0005 or 0006; it discards the evidence 0005 recorded; roll the binaries back to v0.19.1 /
+  v0.18.1 first):
+
+  PostgreSQL:
+
+  ```sql
+  DROP TRIGGER IF EXISTS iam_audit_immutable ON iam_audit;
+  DROP TRIGGER IF EXISTS iam_audit_no_truncate ON iam_audit;
+  DROP TRIGGER IF EXISTS iam_operations_immutable ON iam_operations;
+  DROP TRIGGER IF EXISTS iam_operations_no_truncate ON iam_operations;
+  DROP FUNCTION IF EXISTS iam_audit_refuse_write();
+  DROP FUNCTION IF EXISTS iam_operations_refuse_write();
+  -- 0005: drops iam_audit_seq with the column that owns it
+  ALTER TABLE iam_audit DROP COLUMN request_id, DROP COLUMN trace_id, DROP COLUMN seq, DROP COLUMN recorded_at;
+  ALTER TABLE iam_operations DROP COLUMN recorded_at;
+  ```
+
+  SQLite/Turso (a rebuild to the 0001 and 0004 bodies, with the same preflight and maintenance
+  window; from the `sqlite3` CLI run it with `-bail`):
+
+  ```sql
+  DROP TRIGGER IF EXISTS main.iam_audit_immutable_update;
+  DROP TRIGGER IF EXISTS main.iam_audit_immutable_delete;
+  DROP TRIGGER IF EXISTS main.iam_operations_immutable_update;
+  DROP TRIGGER IF EXISTS main.iam_operations_immutable_delete;
+  CREATE TABLE main.iam_audit_prev (
+      id TEXT COLLATE BINARY NOT NULL PRIMARY KEY,
+      event_id TEXT COLLATE BINARY NOT NULL,
+      occurred_at TEXT NOT NULL,
+      actor_type TEXT COLLATE BINARY NOT NULL,
+      actor_id TEXT COLLATE BINARY NOT NULL,
+      system_source TEXT COLLATE BINARY NOT NULL,
+      reason TEXT NOT NULL,
+      action TEXT NOT NULL CONSTRAINT ck_iam_audit_action CHECK (action IN ('added','removed')),
+      encoding TEXT NOT NULL CONSTRAINT ck_iam_audit_encoding CHECK (encoding = 'tuple/v2'),
+      scope_kind INTEGER NOT NULL,
+      resource_type TEXT COLLATE BINARY NOT NULL,
+      resource_id TEXT COLLATE BINARY NOT NULL,
+      relation TEXT COLLATE BINARY NOT NULL,
+      subject_type TEXT COLLATE BINARY NOT NULL,
+      subject_id TEXT COLLATE BINARY NOT NULL,
+      subject_relation TEXT COLLATE BINARY NOT NULL,
+      CONSTRAINT ck_iam_audit_scope CHECK (
+          (scope_kind=1 AND resource_type='' AND resource_id='')
+          OR (scope_kind=2 AND resource_type<>'' AND resource_id<>'')
+      ),
+      CONSTRAINT ck_iam_audit_tuple CHECK (relation<>'' AND subject_type<>'' AND subject_id<>''),
+      CONSTRAINT ck_iam_audit_source CHECK
+          ((actor_type<>'' AND actor_id<>'' AND system_source='') OR (actor_type='' AND actor_id='' AND system_source<>''))
+  );
+  INSERT INTO main.iam_audit_prev (id, event_id, occurred_at, actor_type, actor_id, system_source, reason, action, encoding, scope_kind, resource_type, resource_id, relation, subject_type, subject_id, subject_relation)
+  SELECT id, event_id, occurred_at, actor_type, actor_id, system_source, reason, action, encoding, scope_kind, resource_type, resource_id, relation, subject_type, subject_id, subject_relation FROM main.iam_audit ORDER BY occurred_at, id;
+  DROP TABLE main.iam_audit;
+  ALTER TABLE main.iam_audit_prev RENAME TO iam_audit;
+  CREATE INDEX main.idx_iam_audit_time ON iam_audit (occurred_at DESC, id DESC);
+  CREATE INDEX main.idx_iam_audit_resource ON iam_audit (resource_type, resource_id, occurred_at DESC, id DESC);
+  CREATE INDEX main.idx_iam_audit_subject ON iam_audit (subject_type, subject_id, occurred_at DESC, id DESC);
+  CREATE INDEX main.idx_iam_audit_actor ON iam_audit (actor_type, actor_id, occurred_at DESC, id DESC);
+  CREATE TABLE main.iam_operations_prev (
+      operation_id TEXT COLLATE BINARY NOT NULL PRIMARY KEY,
+      encoding TEXT COLLATE BINARY NOT NULL,
+      fingerprint TEXT COLLATE BINARY NOT NULL,
+      outcome TEXT COLLATE BINARY NOT NULL,
+      committed_at TEXT NOT NULL,
+      CONSTRAINT ck_iam_operations_id CHECK (operation_id <> ''),
+      CONSTRAINT ck_iam_operations_encoding CHECK (encoding = 'operation/v1'),
+      CONSTRAINT ck_iam_operations_fingerprint CHECK (length(fingerprint) = 64 AND fingerprint NOT GLOB '*[^0-9a-f]*'),
+      CONSTRAINT ck_iam_operations_outcome CHECK (outcome IN ('applied', 'no_change', 'not_found', 'fenced'))
+  );
+  INSERT INTO main.iam_operations_prev (operation_id, encoding, fingerprint, outcome, committed_at)
+  SELECT operation_id, encoding, fingerprint, outcome, committed_at FROM main.iam_operations ORDER BY committed_at, operation_id;
+  DROP TABLE main.iam_operations;
+  ALTER TABLE main.iam_operations_prev RENAME TO iam_operations;
+  ```
+
+- (c) **The sequence grant.** Each pgx integrity file (`0021`, `0005`, `0002`) adds a nullable
+  `seq` drawn from `<rail>_seq` (not on `iam_operations`) and a nullable `recorded_at` defaulting
+  to the database clock, and ends with `GRANT USAGE ON SEQUENCE <rail>_seq TO PUBLIC`. The grant
+  is load-bearing: without USAGE every insert's `nextval` fails, so the fail-open
+  authentication rail would lose every row and the fail-closed rails would fail every write.
+  A host that split its roles before S2 keeps inserting through the PUBLIC grant; granting
+  USAGE to the runtime role and revoking it from PUBLIC is optional hardening, and the probe
+  refuses a role left without it. `seq` proves insertion order, not completeness (a rolled-back
+  write leaves a gap); `recorded_at` is NULL on rows written before the migration. Never
+  backfill either with UPDATE.
+- (d) **The immutability triggers are default-on.** `0022_security_events_immutable.sql`
+  (pgx and turso), `0006_iam_audit_immutable.sql` (pgx and turso) and
+  `0003_secrets_audit_immutable.sql` (pgx) are ordinary numbered migrations: exported, applied
+  and checksummed like every other file. **A host that declines one deletes it from its ledger
+  before applying.** On pgx the probe then judges the runtime role by its privileges alone
+  (`protected_by=privilege`) or refuses; on turso it WARNs once per table at boot. The pgx
+  triggers refuse UPDATE, DELETE and TRUNCATE with SQLSTATE 42501 for every role that is not a
+  member of the table's owner and are `ENABLE ALWAYS`; the owner (the migrator, or a SECURITY
+  DEFINER function it owns) is exempt by design, and its UPDATE persists. `iam_operations`
+  refuses UPDATE always and DELETE of a fenced row only. After `pg_restore --disable-triggers`
+  the triggers are left `tgenabled=O`: re-run `ALTER TABLE <t> ENABLE ALWAYS TRIGGER …` for
+  each. A future turso migration that rebuilds an audit table ships a paired file re-creating
+  its triggers, and no audit-table path uses SQLite `INSERT OR REPLACE` (it deletes rows without
+  firing DELETE triggers). Host code that issues `DELETE FROM` (or UPDATE) against
+  `security_events`, `iam_audit` or `secrets_audit` as the runtime role now fails: run it as
+  the migrator.
+- (e) **The posture refusal production hosts meet (BREAKING at runtime).** In production a
+  store refuses to boot when its runtime role is superuser, owns an audit table, can
+  UPDATE/DELETE/TRUNCATE/TRIGGER it without the verified triggers, or cannot insert into it.
+  Ownership includes membership of the owning role and ownership of the table's schema or the
+  trigger function (`owner=table|schema|function`). The errors are
+  `pgxdb.ErrAppendOnlyTableWritable` (waivable with
+  `pgxdb.Config.AppendOnlyWritableAcknowledged: true`, a literal in the composition root that
+  P5 prints as `ack`; the waiver logs one `posture_waiver=AppendOnlyWritableAcknowledged` WARN
+  per waived table, for an owned table "runtime role owns <t>: immutability triggers do not
+  apply" with `trigger_exempt=true`) and `pgxdb.ErrAppendOnlyTableUnwritable` (never
+  waivable), joined, one per table, each naming its reason and the fix. Development logs one `append_only=unenforced
+  tables=[…]` line; the zero mode is silent; turso stores only WARN. **Every production host
+  whose server connects as the role that runs its migrations refuses to boot after repinning a
+  pgx store with an audit table.** The fix is the two-role posture in
+  `workshop/documentation/docs/guides/database-posture.md` ("Two roles"): a migrator that owns
+  the schema, tables, sequences and trigger functions, and a runtime role — create the runtime
+  role with SQL, not the console — with `SELECT, INSERT` on the audit tables, `USAGE` on their
+  sequences, `UPDATE`, `DELETE`, `TRUNCATE` and `TRIGGER` revoked, and `DELETE` kept on
+  `iam_operations` (S0 hosts that revoked it grant it back). Preflight the runtime role from the
+  migrator's connection before the deploy — `go run ./workshop/migrations -posture-role <role>`
+  in a scaffolded host, `pgxdb.InspectTablePrivileges(ctx, q, "<role>", <store>.AuditTables(opts...)...)`
+  elsewhere — and archive its `protected_by=privilege|trigger|waiver|none` lines as audit
+  evidence.
+- (f) **AUDIT-054 — audit Details carry identifier digests, not addresses (BREAKING for
+  dashboards, pre-1.0 minor).** New `login` rows carry `identifier_kind` + `identifier_digest`
+  instead of `email`; new `invitation_created` / `invitation_granted` rows carry them instead of
+  `identifier`. New rows only: existing rows keep their raw values until S3 lands retention.
+  Known users are found by `user_id`. The digest is `IdentifierKeyer.IdentifierKey(kind,
+  normalized)` in hex — an HMAC over three length-prefixed fields (the label
+  `gopernicus.auth.identifier-key.v1`, the kind, the normalized value; an 8-byte big-endian
+  length before each), **not** over `email:<normalized>`. AUDIT-054 ships the runnable shell
+  recipe for an unknown-address lookup, with its check value
+  (`35916db2967bd336a7f3e7b94ebee7e4cd70017d104cb28c7427e8d77a51f478` for the key
+  `000102…1e1f` and `alice@example.com`), pinned by `TestIdentifierKeyAuditRecipe`.
+- (g) **`MapError` behavior changes for every consumer.** pgxdb maps SQLSTATE `42501`
   (`insufficient_privilege`) to `sdk.ErrForbidden` — a 403 through the web mappers — keeping
-  the `*pgconn.PgError` in the chain; a host that matched the raw driver error for a missing
-  grant sees the sentinel now.
-- `integrations/datastores/turso` → **v0.8.0**: `(*DB).RuntimeMode()`, `AppendOnlyTable`,
-  `TableTrigger`, `TriggerBody`, `(*DB).ProbeAuditImmutable` (WARN-only). **Behavior change:**
-  `MapError` maps a message containing `is append-only` to `sdk.ErrForbidden`.
-- Nothing refuses at boot from these tags alone: the production refusal reaches hosts through
-  the pgx store releases that call the probe. Both migration runners are unchanged.
+  the `*pgconn.PgError` in the chain; turso maps a message containing `is append-only` to
+  `sdk.ErrForbidden`. A host that matched the raw driver error for a missing grant sees the
+  sentinel now. Nothing refuses at boot from the connector tags alone: the refusal reaches a
+  host through the pgx store releases that call the probe, and both migration runners are
+  unchanged.
+- (h) **PostgreSQL ≥ 14** for every S2 pgx migration (`CREATE OR REPLACE TRIGGER`). Each S2 pgx
+  file begins `SET LOCAL lock_timeout = '5s'`: the pending stream runs in one transaction, so a
+  file blocked behind a long-running reader (a `pg_dump`) aborts the stream with nothing applied
+  and the host retries.
+- (i) **Pin authorization v0.29.1, not v0.29.0**, so bridged gate denials name their target:
+  under v0.29.0 an `authorization_denied` row written by a `Require` gate carried no
+  permission or resource, and the bridge's dedupe window folded a principal's gate denials into
+  one row. The decision observer is opt-in; the host-pocket bridge to the security-event rail is
+  `examples/production-baseline/pockets/audit/outbound/securityevents` (bounded in-flight writes,
+  a per-instance dedupe window, `Dropped()`), built over `Components.SecurityEvents` so its lost
+  rows count in `AuditWriteFailures()`.
+- (j) **Secrets v0.2.0 breaks host-implemented repositories** (`AppendAudit`, the new
+  `DeleteOwner` signature). No example mounts secrets.
+- (k) **Constraints S3 inherits (O-3).** S3's purge is a migrator-owned SECURITY DEFINER
+  `<table>_purge_before(ts)` that keeps its retention floor inside the function, under owner
+  control, never from the caller's argument, and appends a purge row (cutoff, count,
+  `session_user`) to the rail it purged; S2 ships the live test that such a function passes the
+  owner-exempt branch. A turso purge is `DROP TRIGGER`, `DELETE`, re-`CREATE` in one
+  transaction. No later migration may UPDATE-backfill a triggered table; every future turso
+  rebuild of an audit table ships its paired trigger file; `iam_operations` keeps non-fenced
+  DELETE so `Expire` runs in the server; in-place IP/UA erasure is S3's to design against the
+  owner-exempt UPDATE branch.
+- (l) **The firestore store adapters are retired (owner ruling 2026-10-23).**
+  `pockets/authentication/stores/firestore` is not tagged at this release (it stays at v0.2.0)
+  and is not repinned onto core v0.21.0; its retirement, with `integrations/datastores/firestore`,
+  is its own plan. Firebase Auth as an identity provider (`integrations/authentication/firebase`)
+  stays.
+
+**Known.**
+- Secrets `DeleteOwner` race: a `PutSecret` committing between the `DELETE … RETURNING` and the
+  owner-key delete surfaces as `sdk.ErrInvalidReference`, not `sdk.ErrConflict` (nothing is
+  deleted either way). A later patch locks the owner key.
+- Authentication denial paths still unrecorded (follow-up): `SetPassword` with
+  `ErrPasswordAlreadySet`; revision races in `passwords.Change`; refused recent-auth grants on
+  identifier mutations; the address-claim race on confirm; `RemovePassword` with no password or
+  a deactivated account; an unknown OAuth provider name; malformed OAuth2 requests; and the
+  OAuth2 confidential-client secret mismatch (refused in the inbound handler before the service;
+  `AuthenticateClient` takes no context).
+- Run-and-look notes from the examples (PR-6): the development `append_only=unenforced` line
+  prints once per store; the owner refusal names the first store constructed; a disabled
+  trigger with no modifying grants is admitted as `protected_by=privilege`, as designed; bridged
+  denial rows have empty `ip_address`/`user_agent`, because the authorization routes do not
+  carry the authentication client-info carrier (follow-up); proving the 200-byte `X-Request-ID`
+  blanking needs the 60 s dedupe window to expire first; auth-cms has no signed-in platform
+  admin, so its `/debug/security-events` dump is proven by in-process tests.
+- `external_login` dedupe is per cache: under the memory default each instance records once per
+  token (and once more per eviction); a fleet-wide dedupe needs a shared `LoginRecordCache`.
+- The scaffold README still runs `guard@v0.5.0`, which has no P9; the init pin moves in the
+  next workshop minor (the S1 precedent).
 
 ## Production posture floor (SOC 2 slice S1 — published 2026-10-22)
 
