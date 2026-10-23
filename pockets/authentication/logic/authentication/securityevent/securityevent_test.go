@@ -167,6 +167,12 @@ func TestReasonsAreStableWireValues(t *testing.T) {
 		{ReasonInvalidGrant, "invalid_grant"},
 		{ReasonInvalidClient, "invalid_client"},
 		{ReasonRevisionConflict, "revision_conflict"},
+		{ReasonPrecondition, "precondition"},
+		{ReasonClaimConflict, "claim_conflict"},
+		{ReasonUnknownProvider, "unknown_provider"},
+		{ReasonInvalidRequest, "invalid_request"},
+		{ReasonInvalidScope, "invalid_scope"},
+		{ReasonInvalidTarget, "invalid_target"},
 	} {
 		if tc.got != tc.want {
 			t.Errorf("reason = %q, want %q", tc.got, tc.want)
@@ -185,5 +191,69 @@ func TestReasonsAreStableWireValues(t *testing.T) {
 		if tc.got != tc.want {
 			t.Errorf("event type = %q, want %q", tc.got, tc.want)
 		}
+	}
+}
+
+// TestBoundValuePerField pins the ONE attribution rule, field by field: the
+// correlation ids keep S2's printable-ASCII rule; the IP, the User-Agent and a
+// Details value are blank on a NUL, invalid UTF-8 or a control character; the
+// User-Agent alone is cut, on a rune boundary; an unparsable IP and an
+// oversized Details value are blank.
+func TestBoundValuePerField(t *testing.T) {
+	ua511 := strings.Repeat("u", MaxUserAgentLen-1)
+	for _, tc := range []struct {
+		name  string
+		field Field
+		value string
+		want  string
+	}{
+		{"request id kept at 128 bytes", FieldRequestID, strings.Repeat("r", MaxCorrelationIDLen), strings.Repeat("r", MaxCorrelationIDLen)},
+		{"request id blank at 129 bytes", FieldRequestID, strings.Repeat("r", MaxCorrelationIDLen+1), ""},
+		{"request id blank on a control byte", FieldRequestID, "req\n1", ""},
+		{"request id blank on DEL", FieldRequestID, "req\x7f", ""},
+		{"request id blank on non-ASCII", FieldRequestID, "req-é", ""},
+		{"request id keeps printable edges", FieldRequestID, " ~", " ~"},
+		{"request id empty", FieldRequestID, "", ""},
+		{"trace id kept", FieldTraceID, "trace-1", "trace-1"},
+		{"trace id blank at 129 bytes", FieldTraceID, strings.Repeat("t", MaxCorrelationIDLen+1), ""},
+		{"trace id blank on non-ASCII", FieldTraceID, "trace-é", ""},
+
+		{"IPv4 kept", FieldIPAddress, "203.0.113.7", "203.0.113.7"},
+		{"IPv6 kept", FieldIPAddress, "2001:db8::1", "2001:db8::1"},
+		{"IP with a port blank", FieldIPAddress, "203.0.113.7:443", ""},
+		{"IP not an address blank", FieldIPAddress, "not-an-address", ""},
+		{"IP with a NUL blank", FieldIPAddress, "203.0.113.7\x00", ""},
+		{"IP zone with invalid UTF-8 blank", FieldIPAddress, "fe80::1%\xff", ""},
+		{"IP empty", FieldIPAddress, "", ""},
+
+		{"UA kept", FieldUserAgent, "Mozilla/5.0 (X11; Linux) café", "Mozilla/5.0 (X11; Linux) café"},
+		{"UA kept at 512 bytes", FieldUserAgent, strings.Repeat("u", MaxUserAgentLen), strings.Repeat("u", MaxUserAgentLen)},
+		{"UA cut at 512 bytes", FieldUserAgent, strings.Repeat("u", MaxUserAgentLen+100), strings.Repeat("u", MaxUserAgentLen)},
+		{"UA cut before a straddling rune", FieldUserAgent, ua511 + "é", ua511},
+		{"UA cut before a straddling 4-byte rune", FieldUserAgent, strings.Repeat("u", MaxUserAgentLen-2) + "😀", strings.Repeat("u", MaxUserAgentLen-2)},
+		{"UA blank on invalid UTF-8", FieldUserAgent, "agent/\xff", ""},
+		{"UA blank on a NUL", FieldUserAgent, "agent\x00/1", ""},
+		{"UA blank on a tab", FieldUserAgent, "agent\t/1", ""},
+		{"UA blank on a C1 control", FieldUserAgent, "agent\u0085/1", ""},
+		{"UA blank on invalid UTF-8 past the cut", FieldUserAgent, strings.Repeat("u", MaxUserAgentLen+10) + "\xff", ""},
+		{"UA empty", FieldUserAgent, "", ""},
+
+		{"detail kept", FieldDetail, "https://client.example/metadata", "https://client.example/metadata"},
+		{"detail kept non-ASCII", FieldDetail, "café", "café"},
+		{"detail kept at 2048 bytes", FieldDetail, strings.Repeat("d", MaxDetailLen), strings.Repeat("d", MaxDetailLen)},
+		{"detail blank at 2049 bytes", FieldDetail, strings.Repeat("d", MaxDetailLen+1), ""},
+		{"detail blank on a NUL", FieldDetail, "mcp\x00", ""},
+		{"detail blank on invalid UTF-8", FieldDetail, "mcp\xff", ""},
+		{"detail blank on a newline", FieldDetail, "mcp\nforged=1", ""},
+		{"detail empty", FieldDetail, "", ""},
+
+		{"zero field blank", Field(0), "value", ""},
+		{"unknown field blank", Field(200), "value", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := BoundValue(tc.field, tc.value); got != tc.want {
+				t.Errorf("BoundValue = %.60q (%d bytes), want %.60q (%d bytes)", got, len(got), tc.want, len(tc.want))
+			}
+		})
 	}
 }

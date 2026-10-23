@@ -2,13 +2,17 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/gopernicus/gopernicus/examples/auth-cms/pockets/authentication/outbound/authmem"
+	"github.com/gopernicus/gopernicus/examples/auth-cms/pockets/authentication/outbound/oauth2fixture"
 	"github.com/gopernicus/gopernicus/pockets"
 	auth "github.com/gopernicus/gopernicus/pockets/authentication"
+	authenticationhttp "github.com/gopernicus/gopernicus/pockets/authentication/inbound/http"
 	delivery "github.com/gopernicus/gopernicus/pockets/authentication/logic/delivery"
 	mutations "github.com/gopernicus/gopernicus/pockets/authorization/logic/mutations"
 	relationships "github.com/gopernicus/gopernicus/pockets/authorization/logic/relationships"
@@ -21,7 +25,8 @@ import (
 // over real HTTP sessions with AUTH_DEBUG=1: no session is 401, a signed-in
 // non-admin is 403, and a platform admin reads the rail — including the
 // non-admin's denial, which the decision bridge recorded with the request id
-// that request carried.
+// that request carried, and the OAuth2 demo's confidential-client mismatches:
+// client_id only for the configured client, IP and User-Agent, no secret.
 func TestDebugSecurityEventsRequiresPlatformAdmin(t *testing.T) {
 	t.Setenv("AUTH_DEBUG", "1")
 	securityEvents := &deferredRecorder{}
@@ -39,7 +44,12 @@ func TestDebugSecurityEventsRequiresPlatformAdmin(t *testing.T) {
 	cfg.DeliveryEphemeralAcknowledged = true
 	cfg.Mailer = sender
 	repos := authmem.New().Repositories()
-	svc, err := auth.New(repos, cfg.TokenSigner, cfg.RuntimeMode, cfg.DeliveryMode, cfg.options()...)
+	oauthFixture, err := oauth2fixture.New("http://127.0.0.1:8082")
+	if err != nil {
+		t.Fatal(err)
+	}
+	options := append(cfg.options(), auth.WithOAuth2(auth.OAuth2Config{Server: oauthFixture.Config(), Clients: oauthFixture, Views: cfg.Views.(authenticationhttp.OAuthViews)}))
+	svc, err := auth.New(repos, cfg.TokenSigner, cfg.RuntimeMode, cfg.DeliveryMode, options...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -63,6 +73,30 @@ func TestDebugSecurityEventsRequiresPlatformAdmin(t *testing.T) {
 	if resp, body := plain.do("GET", "/debug/security-events", "", http.Header{web.RequestIDHeader: {deniedRequestID}}); resp.StatusCode != http.StatusForbidden {
 		t.Errorf("signed-in non-admin = %d %s, want 403", resp.StatusCode, body)
 	}
+	const mismatchUA = "mcp-probe/1.0"
+	mismatches := []struct{ requestID, user, clientID string }{
+		{"oauth2-mismatch-configured", "oauth-demo-mcp", "oauth-demo-mcp"},
+		{"oauth2-mismatch-foreign", "someone-else", ""},
+		{"oauth2-mismatch-nul", "oauth-demo-mcp%00", ""},
+	}
+	for _, m := range mismatches {
+		req, err := http.NewRequest("POST", srv.URL+"/auth/oauth2/token", strings.NewReader("grant_type=urn:ietf:params:oauth:grant-type:token-exchange"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.Header.Set(web.RequestIDHeader, m.requestID)
+		req.Header.Set("User-Agent", mismatchUA)
+		req.SetBasicAuth(m.user, "wrong-secret-0451")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusUnauthorized {
+			t.Fatalf("token with %q = %d, want 401 invalid_client", m.user, resp.StatusCode)
+		}
+	}
 	admin := host.signUp("debug-admin@example.com")
 	if _, err := comps.Mutations.GrantRelationship(trustedContext(), mutations.GrantRelationshipCommand{
 		ResourceType: platformResourceType,
@@ -79,9 +113,13 @@ func TestDebugSecurityEventsRequiresPlatformAdmin(t *testing.T) {
 	var dump struct {
 		Count  int `json:"count"`
 		Events []struct {
-			EventType string `json:"event_type"`
-			UserID    string `json:"user_id"`
-			RequestID string `json:"request_id"`
+			EventType   string         `json:"event_type"`
+			EventStatus string         `json:"event_status"`
+			UserID      string         `json:"user_id"`
+			RequestID   string         `json:"request_id"`
+			Details     map[string]any `json:"details"`
+			IPAddress   string         `json:"ip_address"`
+			UserAgent   string         `json:"user_agent"`
 		} `json:"events"`
 	}
 	if err := json.Unmarshal(body, &dump); err != nil || dump.Count == 0 {
@@ -98,6 +136,29 @@ func TestDebugSecurityEventsRequiresPlatformAdmin(t *testing.T) {
 	}
 	if denials != 1 {
 		t.Errorf("rows carrying request_id %s = %d, want 1; dump=%s", deniedRequestID, denials, body)
+	}
+	for _, m := range mismatches {
+		var rows int
+		for _, e := range dump.Events {
+			if e.RequestID != m.requestID {
+				continue
+			}
+			rows++
+			clientID, attributed := e.Details["client_id"]
+			if e.EventType != "oauth2_grant_failed" || e.EventStatus != "failure" || e.Details["reason"] != "invalid_client" ||
+				attributed != (m.clientID != "") || (attributed && clientID != m.clientID) {
+				t.Errorf("row for %s = %+v, want oauth2_grant_failed invalid_client with client_id %q", m.requestID, e, m.clientID)
+			}
+			if e.IPAddress == "" || e.UserAgent != mismatchUA {
+				t.Errorf("row for %s ip/ua = %q/%q, want the request's", m.requestID, e.IPAddress, e.UserAgent)
+			}
+			if _, ok := e.Details["client_secret"]; ok || strings.Contains(fmt.Sprint(e.Details), "wrong-secret-0451") {
+				t.Errorf("row for %s carries the presented secret: %v", m.requestID, e.Details)
+			}
+		}
+		if rows != 1 {
+			t.Errorf("rows carrying request_id %s = %d, want 1", m.requestID, rows)
+		}
 	}
 }
 

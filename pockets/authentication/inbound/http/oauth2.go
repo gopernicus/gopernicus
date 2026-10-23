@@ -345,7 +345,7 @@ func (h *handlers) oauth2ClientProof(w http.ResponseWriter, r *http.Request, for
 	if err != nil {
 		return reject()
 	}
-	proof, err := h.oauth2.Service.AuthenticateClient(clientID, secret)
+	proof, err := h.oauth2.Service.AuthenticateClientContext(r.Context(), clientID, secret)
 	if err != nil {
 		return reject()
 	}

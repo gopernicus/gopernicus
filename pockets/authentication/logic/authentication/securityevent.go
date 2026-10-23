@@ -62,10 +62,21 @@ func (s *Service) recordChallengeDenial(ctx context.Context, eventType, userID s
 	}
 }
 
+// recordStepUpRefusal records a refused recent-authentication requirement — no
+// usable grant (ErrStepUpRequired) or a delegated credential
+// (ErrDelegatedCredential) — as a failure of eventType for userID with reason
+// invalid_token. Any other error records nothing.
+func (s *Service) recordStepUpRefusal(ctx context.Context, eventType, userID string, err error) {
+	if errors.Is(err, ErrStepUpRequired) || errors.Is(err, ErrDelegatedCredential) {
+		s.recordDenial(ctx, eventType, userID, securityevent.StatusFailure, securityevent.ReasonInvalidToken)
+	}
+}
+
 // recordCredentialMutationDenial records a refused credential mutation of
 // eventType for userID: a credential-policy refusal or a verification-required
-// use change is policy, a lost revision race revision_conflict. Any other error
-// records nothing.
+// use change is policy, a lost revision race revision_conflict, and a proven
+// identifier another account claimed first (only a verified change's apply
+// reports it) claim_conflict. Any other error records nothing.
 func (s *Service) recordCredentialMutationDenial(ctx context.Context, eventType, userID string, err error) {
 	var refused credentialPolicyRefusal
 	switch {
@@ -73,6 +84,8 @@ func (s *Service) recordCredentialMutationDenial(ctx context.Context, eventType,
 		s.recordDenial(ctx, eventType, userID, securityevent.StatusFailure, securityevent.ReasonPolicy)
 	case errors.Is(err, sdk.ErrConflict):
 		s.recordDenial(ctx, eventType, userID, securityevent.StatusFailure, securityevent.ReasonRevisionConflict)
+	case errors.Is(err, sdk.ErrAlreadyExists):
+		s.recordDenial(ctx, eventType, userID, securityevent.StatusFailure, securityevent.ReasonClaimConflict)
 	}
 }
 

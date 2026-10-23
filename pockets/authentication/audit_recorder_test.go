@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 
@@ -14,6 +15,7 @@ import (
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/securityevent"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/session"
 	"github.com/gopernicus/gopernicus/sdk"
+	"github.com/gopernicus/gopernicus/sdk/capabilities/ratelimiter"
 	listing "github.com/gopernicus/gopernicus/sdk/pkg/list"
 )
 
@@ -139,5 +141,67 @@ func TestComponentsRecorderWithoutAuditRail(t *testing.T) {
 	c.SecurityEvents.Record(context.Background(), securityevent.Input{Type: securityevent.TypeLogout})
 	if c.AuditWriteFailures() != 0 {
 		t.Fatalf("AuditWriteFailures = %d, want 0", c.AuditWriteFailures())
+	}
+}
+
+// keyedLimiter admits through Limiter and remembers every key and limit it was
+// asked about.
+type keyedLimiter struct {
+	ratelimiter.Limiter
+	mu     sync.Mutex
+	keys   []string
+	limits []ratelimiter.Limit
+}
+
+func (l *keyedLimiter) Allow(ctx context.Context, key string, limit ratelimiter.Limit) (ratelimiter.Result, error) {
+	l.mu.Lock()
+	l.keys, l.limits = append(l.keys, key), append(l.limits, limit)
+	l.mu.Unlock()
+	return l.Limiter.Allow(ctx, key, limit)
+}
+
+// TestComponentsBudgetFailureRowsOnTheRootLimiter pins the failure-row budget's
+// wiring: the root hands the recorder the limiter its routes use, at
+// auditFailureRowsPerMinute rows per minute per IP, and AuditRowsSuppressed
+// counts the rows it refused.
+func TestComponentsBudgetFailureRowsOnTheRootLimiter(t *testing.T) {
+	events := &recorderEvents{}
+	limiter := &keyedLimiter{Limiter: ratelimiter.NewMemory()}
+	cfg := browserBaseConfig()
+	repos := testRepositories(Repositories{SecurityEvents: events, OAuth2: recorderOAuth2Repository{}, SessionManagement: recorderSessionManagement{}})
+	c, err := New(repos, cfg.TokenSigner, cfg.RuntimeMode, cfg.DeliveryMode,
+		WithPassword(PasswordConfig{Hasher: cfg.Hasher}),
+		WithDelivery(DeliveryConfig{Mailer: cfg.Mailer}),
+		WithBrowser(BrowserConfig{Views: recorderViews{}}),
+		WithAbuseProtection(AbuseProtectionConfig{RateLimiter: limiter}),
+		WithOAuth2(OAuth2Config{
+			Server: oauth2.Config{Issuer: "https://issuer.example", MCPResource: "https://mcp.example", APIResource: "https://api.example",
+				ConfidentialClientID: "mcp", ConfidentialSecretHashes: [][32]byte{sha256.Sum256([]byte("a high entropy confidential test secret"))}},
+			Clients: recorderClients{}, Views: recorderOAuthViews{},
+		}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i <= auditFailureRowsPerMinute; i++ {
+		if _, err := c.OAuth2.AuthenticateClientContext(context.Background(), "mcp", "wrong-secret-0451"); !errors.Is(err, oauth2.ErrInvalidClient) {
+			t.Fatalf("AuthenticateClientContext = %v", err)
+		}
+	}
+	if len(events.created) != auditFailureRowsPerMinute || c.AuditRowsSuppressed() != 1 {
+		t.Fatalf("rows = %d, AuditRowsSuppressed = %d; want %d and 1", len(events.created), c.AuditRowsSuppressed(), auditFailureRowsPerMinute)
+	}
+	limiter.mu.Lock()
+	defer limiter.mu.Unlock()
+	var budgeted int
+	for i, key := range limiter.keys {
+		if strings.HasPrefix(key, "securityevent:failure-row:ip:") {
+			budgeted++
+			if limiter.limits[i] != ratelimiter.PerMinute(auditFailureRowsPerMinute) {
+				t.Fatalf("budget limit = %+v", limiter.limits[i])
+			}
+		}
+	}
+	if budgeted != auditFailureRowsPerMinute+1 {
+		t.Fatalf("the root limiter saw %d budget keys, want %d", budgeted, auditFailureRowsPerMinute+1)
 	}
 }

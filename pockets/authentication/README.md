@@ -3430,7 +3430,8 @@ signatures unchanged); the OAuth2 server records `oauth2_consent_approved`,
 `oauth2_consent_denied`, `oauth2_connection_created`, `oauth2_refresh`,
 `oauth2_refresh_reuse` (blocked), `oauth2_token_exchanged`,
 `oauth2_revocation_requested` and `oauth2_grant_failed` (failure) (Details
-`client_id`, `session_id`; `Actor` when the context carries a principal); the
+`client_id` — see "Denial coverage" for when it is absent or blank —
+`session_id`; `Actor` when the context carries a principal); the
 external identity engine records `external_login` once per token (below) beside
 its `external_subject_*` and `external_revocation_unavailable` rows. The forgot-password
 *request* records nothing (it must not reveal whether an address exists). There is
@@ -3453,26 +3454,55 @@ A denial carries ONE Details key, `reason`, from a bounded set
 (`securityevent.Reason*`): `invalid_credentials`, `rate_limited`, `inactive`,
 `email_unverified`, `invalid_token`, `invalid_code`, `lockout`, `policy`,
 `invalid_state`, `exchange_failed`, `identity_invalid`, `link_conflict`,
-`invalid_grant`, `invalid_client`, `revision_conflict`. A reason names the class
-of refusal only — never an error message, address, code or token.
+`invalid_grant`, `invalid_client`, `revision_conflict`, `precondition`,
+`claim_conflict`, `unknown_provider`, `invalid_request`, `invalid_scope`,
+`invalid_target`. A reason names the class of refusal only — never an error
+message, address, code or token.
 
 | path | type | denials |
 |---|---|---|
 | `Login`, `IssueToken` (`POST /auth/token`) | `login`, `token_issued` | failure `invalid_credentials` / `email_unverified`; blocked `rate_limited` / `inactive`; one shared classification, so both record alike (`login` carries `identifier_kind` + `identifier_digest`, AUDIT-054; `token_issued` carries no address) |
-| `ChangePassword` | `password_change` | failure `invalid_credentials` (wrong current password), `policy` (rejected new password) |
-| `SetPassword` | `password_set` | failure `policy`, `invalid_token` (no recent-authentication grant) |
+| `ChangePassword` | `password_change` | failure `invalid_credentials` (wrong current password), `policy` (rejected new password), `revision_conflict` (a concurrent credential change won) |
+| `SetPassword` | `password_set` | failure `precondition` (the account already has a password; refused before the grant is spent), `policy`, `invalid_token` (no recent-authentication grant), `revision_conflict` |
 | `ResetPassword` | `password_reset` | failure `invalid_token`, `policy`; no `UserID` — the token resolved none |
 | `Verify` (registration) | `email_verified` | failure `invalid_code`, `revision_conflict`; blocked `inactive`, and `lockout` beside the challenge rail's own `challenge_lockout` row |
-| `RemovePassword` | `password_removed` | failure `invalid_code`, `policy`, `revision_conflict`; blocked `lockout` |
-| identifier confirm / remove / uses | `email_changed` / `phone_changed`, `email_removed` / `phone_removed`, `identifier_uses_changed` | failure `invalid_code` (confirm), `policy`, `revision_conflict`; blocked `lockout` (confirm) |
-| OAuth provider callback | `oauth_login`; `oauth_linked` | `oauth_login` failure `invalid_state` / `exchange_failed` / `identity_invalid` / `email_unverified` / `link_conflict`, blocked `inactive`; `oauth_linked` failure `link_conflict` for a session-gated link start; Details `provider` |
+| `RemovePassword` | `password_removed` | failure `precondition` (the account has no password), `invalid_code`, `policy`, `revision_conflict`; blocked `inactive`, `lockout` |
+| identifier start / confirm / remove / uses | `email_changed` / `phone_changed` (start, confirm), `email_removed` / `phone_removed`, `identifier_uses_changed` | failure `invalid_token` (start, remove, uses: no recent-authentication grant), `invalid_code` (confirm), `claim_conflict` (confirm: another account claimed the proven value first), `policy`, `revision_conflict`; blocked `lockout` (confirm) |
+| OAuth provider callback | `oauth_login`; `oauth_linked` | `oauth_login` failure `invalid_state` / `exchange_failed` / `identity_invalid` / `email_unverified` / `link_conflict` / `unknown_provider`, blocked `inactive`; `oauth_linked` failure `link_conflict` for a session-gated link start; Details `provider`, except `unknown_provider`, which carries none (the name is caller input) and is budgeted (below) |
+| OAuth start | `oauth_linked` | `StartLink` (session-bound): failure `unknown_provider`, `UserID` the linker, no `provider`. `StartOAuth` (the unauthenticated login start) records nothing: no credential is presented, no actor and no provider resolved — nothing to attribute. The start route (`GET /auth/oauth/{provider}/start`) has no rate limit |
 | `VerifyLink` | `oauth_link_verified` | failure `invalid_token`, `invalid_state`; blocked `inactive` |
 | OAuth2 consent `Deny` | `oauth2_consent_denied` | success (the user's decision); Details `client_id`, `session_id` |
-| OAuth2 code, refresh, exchange, revocation, introspection | `oauth2_grant_failed` | failure `invalid_grant`, `invalid_client`; Details `client_id`. A refresh reuse stays `oauth2_refresh_reuse` (blocked). A malformed request records nothing |
+| OAuth2 code, refresh, exchange, revocation, introspection | `oauth2_grant_failed` | failure `invalid_grant`, `invalid_client`, `invalid_request`, `invalid_scope`, `invalid_target` (the wire error codes); Details `client_id`; budgeted. A refresh reuse stays `oauth2_refresh_reuse` (blocked). A request refused for its shape records nothing (the rule below) |
+| OAuth2 confidential-client authentication (`client_secret_basic` on token exchange and introspection) | `oauth2_grant_failed` | failure `invalid_client` on a secret mismatch; `client_id` only when the presented id is the configured confidential client; budgeted |
 | invitation accept | `invitation_granted` | failure `invalid_token` (a token that resolved no invitation; no Details beyond the reason), `policy` (the caller is not the invitee; Details the resource coordinates and `identifier_kind`) |
 
 An error that is not a denial — a store or provider outage — records no row.
 Recording never fails a flow: the recorder fails open.
+
+**The OAuth2 boundary.** A row is written when the server evaluated a
+credential, grant, token or parameter value and refused it. A request refused
+for its shape (auth-header form, credentials in the body, encoding, a parameter
+the grant does not accept) writes none; it appears only in access logs and
+rate-limit counters. So `scope` on an authorization-code request (not accepted:
+shape, no row) and `scope` on a token exchange (accepted, value refused:
+`invalid_scope` row) are consistent.
+
+**`client_id` on `oauth2_grant_failed`.** On the public-client paths (code,
+refresh, revocation) it is the presented id, bounded by the attribution rule
+below: a value it refuses is recorded BLANK (`""`), so a blank `client_id` means
+"an id was presented but carried a NUL, invalid UTF-8 or a control character, or
+ran past 2048 bytes". On the confidential-client mismatch it rides the row only
+when the presented id IS the configured confidential client; any other id is
+caller-chosen text, not a client the server knows, so the key is ABSENT. The key
+is also absent on a call that carried no client proof at all. An operator alerts
+on `oauth2_grant_failed reason=invalid_client`.
+
+`oauth2.Service.AuthenticateClientContext(ctx, clientID, secret)` is the
+recording client authentication the bundled token and introspection routes call.
+`AuthenticateClient(clientID, secret)` is **deprecated** and delegates to it with
+`context.Background()`, so its mismatch row carries no request id, IP or
+User-Agent and counts against one shared failure-row bucket; it is removed in the
+core MINOR after `stores/turso` repins past v0.21.0.
 
 ### Correlation
 
@@ -3499,6 +3529,53 @@ recorder, or one without a repository, records nothing. The write runs detached
 from the request's cancellation (`context.WithoutCancel`) with a two-second
 bound, so a client that disconnects cannot cancel its own failed-login row.
 
+**The attribution rule.** `Record` passes every attributed value through ONE
+helper, `securityevent.BoundValue(field, value)`, with a per-field rule — a
+refused value is recorded BLANK, never refused, and only the User-Agent is ever
+truncated:
+
+| field | rule |
+|---|---|
+| `RequestID`, `TraceID` | printable ASCII of at most `MaxCorrelationIDLen` (128) bytes, else blank (unchanged) |
+| `IPAddress` | blank unless it is clean text `netip.ParseAddr` accepts |
+| `UserAgent` | blank unless it is clean text; cut at `MaxUserAgentLen` (512) bytes on a rune boundary |
+| every top-level string value of `Details` | blank unless it is clean text of at most `MaxDetailLen` (2048) bytes |
+
+Clean text is valid UTF-8 with no control character (C0, DEL, C1 — NUL included).
+These are exactly the values a PostgreSQL `TEXT` column (invalid UTF-8) or the
+`JSONB` `details` column (`\u0000`) refuses, so a crafted User-Agent or a
+`%00`-bearing client id now records its row with that field blank instead of
+losing the row on the pgx store. The caller's `Details` map is never written. The
+OAuth2 server bounds its identifiers through the same helper.
+
+**The failure-row budget.** Rows a caller can drive without an authenticated
+session are budgeted per client IP: every `oauth2_grant_failed` row and the OAuth
+callback's `unknown_provider` row set `securityevent.Input.Budgeted`, and
+`securityevent.WithFailureRowBudget(limiter, limit)` admits them through the
+limiter. `New` wires it with the SAME limiter the pocket's routes use
+(`AbuseProtectionConfig.RateLimiter`, default in-memory) at **60 rows per minute
+per IP** (key `securityevent:failure-row:ip:<sha256(ip)>`; a blank or unparsable
+IP shares one key). Over budget the row is not written, `Components.AuditRowsSuppressed()`
+counts it, and one WARN `audit_rows_suppressed` logs (with `event_type` and
+`count=1`), then at most one `audit_rows_suppressed count=N` line per minute while
+suppression continues. A limiter error writes the row: a limiter fault costs a row,
+never loses one. The budget bounds rows, not requests; `invalid_state` on the
+callback is not budgeted.
+
+**Known.** With the budget, one IP can append at most 60 budgeted rows per
+minute per instance (~86 k/day/IP/instance), each at most ~3 KB (User-Agent ≤
+512 B, `Details` values ≤ 2048 B); the in-memory limiter is per instance, so a
+fleet multiplies it. Each row is a synchronous insert bounded at two seconds on
+the host's pool, and the table is append-only with no purge until retention
+lands (SOC 2 slice S3); the risk is accepted because hosts adopt after that
+retention. The OAuth
+callback route has no rate limit of its own (a follow-up). Grant validation is
+split across handler and service: the token handler refuses a `scope` or
+`audience` on the public grants (`oauth2PublicResource`), an `actor_token_type`
+and an empty `token` before the service runs, while the service refuses the
+`resource` — a later re-split, not an audit gap alone; under the OAuth2 boundary
+above the handler-level refusals record nothing.
+
 **One recorder.** `New` builds ONE from `Repositories.SecurityEvents`, the
 `IDs` strategy and the logger, attributing rows through the pocket's client-info
 carrier, and exposes it as `Components.SecurityEvents`. The service, its external
@@ -3509,7 +3586,8 @@ standalone `NewExternalAuthenticator` takes
 `authlogic.WithExternalSecurityEventRecorder`). A host or bridge that records
 into the rail accepts `interface{ Record(context.Context, securityevent.Input) }`
 and is handed `Components.SecurityEvents` — it never builds a second recorder, so
-`Components.AuditWriteFailures()` counts every lost row. Constructed directly,
+`Components.AuditWriteFailures()` counts every lost row and
+`Components.AuditRowsSuppressed()` every row the budget refused. Constructed directly,
 each logic package builds a private recorder when none is passed:
 `authlogic.New` and `NewExternalAuthenticator` over their repository with the
 client-info carrier; `invitations.New` over `WithSecurityEvents` the same way

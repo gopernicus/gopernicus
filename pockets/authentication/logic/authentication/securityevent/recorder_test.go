@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/gopernicus/gopernicus/sdk"
+	"github.com/gopernicus/gopernicus/sdk/capabilities/ratelimiter"
 	"github.com/gopernicus/gopernicus/sdk/pkg/list"
 )
 
@@ -326,4 +327,185 @@ func TestErrorKindLabels(t *testing.T) {
 			t.Errorf("ErrorKind(%v) = %q, want %q", tc.err, got, tc.want)
 		}
 	}
+}
+
+// purpose is a named string type, as a Details producer may carry.
+type purpose string
+
+func TestRecorderBoundsAttributedValues(t *testing.T) {
+	repo := &recordingRepo{}
+	rec := NewRecorder(repo, sdk.IDGenerator{}, nil, nil,
+		WithClientInfoReader(func(context.Context) (string, string) { return "203.0.113.7:443", "agent/\xff" }))
+	details := map[string]any{
+		"client_id": "mcp\x00",
+		"oversized": strings.Repeat("a", 4096),
+		"named":     purpose("step\x00up"),
+		"provider":  "google",
+		"count":     3,
+		"flag":      true,
+	}
+	rec.Record(sdk.WithRequestID(context.Background(), "req-é"), Input{Type: TypeOAuth2GrantFailed, Status: StatusFailure, Details: details})
+	got := repo.recorded()
+	if len(got) != 1 {
+		t.Fatalf("recorded %d rows, want 1: a refused value blanks, never loses the row", len(got))
+	}
+	evt := got[0]
+	if evt.IPAddress != "" || evt.UserAgent != "" || evt.RequestID != "" {
+		t.Errorf("ip/ua/request id = %q/%q/%q, want all blank", evt.IPAddress, evt.UserAgent, evt.RequestID)
+	}
+	for key, want := range map[string]any{"client_id": "", "oversized": "", "named": "", "provider": "google", "count": 3, "flag": true} {
+		if evt.Details[key] != want {
+			t.Errorf("Details[%q] = %#v, want %#v", key, evt.Details[key], want)
+		}
+	}
+	if details["client_id"] != "mcp\x00" || details["named"] != purpose("step\x00up") {
+		t.Error("Record wrote the caller's Details map")
+	}
+
+	clean := map[string]any{"provider": "google"}
+	rec = NewRecorder(repo, sdk.IDGenerator{}, nil, nil,
+		WithClientInfoReader(func(context.Context) (string, string) { return "2001:db8::1", strings.Repeat("u", MaxUserAgentLen+1) }))
+	rec.Record(context.Background(), Input{Type: TypeLogin, Status: StatusSuccess, Details: clean})
+	evt = repo.recorded()[1]
+	if evt.IPAddress != "2001:db8::1" || evt.UserAgent != strings.Repeat("u", MaxUserAgentLen) || evt.Details["provider"] != "google" {
+		t.Errorf("clean row = ip %q, ua %d bytes, details %v", evt.IPAddress, len(evt.UserAgent), evt.Details)
+	}
+}
+
+// budgetAllower admits the first allow calls, then refuses; err fails every
+// call. It records each key and limit it was asked about.
+type budgetAllower struct {
+	mu     sync.Mutex
+	allow  int
+	err    error
+	keys   []string
+	limits []ratelimiter.Limit
+}
+
+func (b *budgetAllower) Allow(_ context.Context, key string, limit ratelimiter.Limit) (ratelimiter.Result, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.keys = append(b.keys, key)
+	b.limits = append(b.limits, limit)
+	if b.err != nil {
+		return ratelimiter.Result{}, b.err
+	}
+	if len(b.keys) <= b.allow {
+		return ratelimiter.Result{Allowed: true}, nil
+	}
+	return ratelimiter.Result{Allowed: false}, nil
+}
+
+func (b *budgetAllower) calls() []string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return append([]string(nil), b.keys...)
+}
+
+func TestRecorderFailureRowBudget(t *testing.T) {
+	limit := ratelimiter.PerMinute(60)
+	ipReader := func(ip string) RecorderOption {
+		return WithClientInfoReader(func(context.Context) (string, string) { return ip, "agent/1" })
+	}
+	budgeted := Input{Type: TypeOAuth2GrantFailed, Status: StatusFailure, Details: map[string]any{"reason": ReasonInvalidClient}, Budgeted: true}
+
+	t.Run("over budget writes no row, counts it and warns once a minute", func(t *testing.T) {
+		repo := &recordingRepo{}
+		clock := &fakeClock{now: time.Date(2026, 10, 23, 12, 0, 0, 0, time.UTC)}
+		logger, buf := warnLogger()
+		allower := &budgetAllower{allow: 2}
+		rec := NewRecorder(repo, sdk.IDGenerator{}, clock.Now, logger, ipReader("203.0.113.7"), WithFailureRowBudget(allower, limit))
+		lines := func() []string {
+			out := strings.TrimSpace(buf.String())
+			if out == "" {
+				return nil
+			}
+			return strings.Split(out, "\n")
+		}
+		for i := 0; i < 5; i++ {
+			rec.Record(context.Background(), budgeted)
+		}
+		if n := len(repo.recorded()); n != 2 || rec.SuppressedRows() != 3 {
+			t.Fatalf("rows = %d, suppressed = %d; want 2 and 3", n, rec.SuppressedRows())
+		}
+		if rec.WriteFailures() != 0 {
+			t.Fatalf("a suppressed row counted as a write failure")
+		}
+		got := lines()
+		if len(got) != 1 || !strings.Contains(got[0], "msg=audit_rows_suppressed") || !strings.Contains(got[0], "event_type=oauth2_grant_failed") || !strings.Contains(got[0], "count=1") {
+			t.Fatalf("first suppression logged %q, want one audit_rows_suppressed line", got)
+		}
+		if strings.Contains(buf.String(), "203.0.113.7") {
+			t.Fatalf("the WARN carries the client IP: %s", buf.String())
+		}
+		clock.Advance(time.Minute)
+		rec.Record(context.Background(), budgeted)
+		got = lines()
+		if len(got) != 2 || !strings.Contains(got[1], "msg=audit_rows_suppressed count=3") {
+			t.Fatalf("minute summary = %q, want count=3", got)
+		}
+		keys := allower.calls()
+		if len(keys) != 6 || keys[0] != keys[5] || !strings.HasPrefix(keys[0], failureRowKeyPrefix) || strings.Contains(keys[0], "203.0.113.7") {
+			t.Fatalf("limiter keys = %q, want one digest key per IP that never carries the address", keys)
+		}
+		if allower.limits[0] != limit {
+			t.Fatalf("limit = %+v, want %+v", allower.limits[0], limit)
+		}
+	})
+	t.Run("a key per IP, one shared key without an IP", func(t *testing.T) {
+		allower := &budgetAllower{allow: 100}
+		for _, ip := range []string{"203.0.113.7", "203.0.113.8", "", "not-an-address"} {
+			NewRecorder(&recordingRepo{}, sdk.IDGenerator{}, nil, nil, ipReader(ip), WithFailureRowBudget(allower, limit)).Record(context.Background(), budgeted)
+		}
+		keys := allower.calls()
+		if keys[0] == keys[1] || keys[2] != keys[3] || keys[0] == keys[2] {
+			t.Fatalf("keys = %q, want distinct per IP and one shared for a blank or unparsable IP", keys)
+		}
+	})
+	t.Run("a limiter error writes the row", func(t *testing.T) {
+		repo := &recordingRepo{}
+		allower := &budgetAllower{err: errors.New("limiter unavailable")}
+		rec := NewRecorder(repo, sdk.IDGenerator{}, nil, slog.New(slog.DiscardHandler), ipReader("203.0.113.7"), WithFailureRowBudget(allower, limit))
+		rec.Record(context.Background(), budgeted)
+		if len(repo.recorded()) != 1 || rec.SuppressedRows() != 0 {
+			t.Fatalf("rows = %d, suppressed = %d; a limiter fault must cost a row, never lose one", len(repo.recorded()), rec.SuppressedRows())
+		}
+	})
+	t.Run("an unflagged row never asks the limiter", func(t *testing.T) {
+		repo := &recordingRepo{}
+		allower := &budgetAllower{}
+		rec := NewRecorder(repo, sdk.IDGenerator{}, nil, nil, ipReader("203.0.113.7"), WithFailureRowBudget(allower, limit))
+		unflagged := budgeted
+		unflagged.Budgeted = false
+		rec.Record(context.Background(), unflagged)
+		if len(allower.calls()) != 0 || len(repo.recorded()) != 1 {
+			t.Fatalf("limiter calls = %d, rows = %d; want 0 and 1", len(allower.calls()), len(repo.recorded()))
+		}
+	})
+	t.Run("no budget wired writes every row", func(t *testing.T) {
+		repo := &recordingRepo{}
+		rec := NewRecorder(repo, sdk.IDGenerator{}, nil, nil, ipReader("203.0.113.7"), WithFailureRowBudget(nil, limit))
+		for i := 0; i < 3; i++ {
+			rec.Record(context.Background(), budgeted)
+		}
+		if len(repo.recorded()) != 3 || rec.SuppressedRows() != 0 {
+			t.Fatalf("rows = %d, suppressed = %d", len(repo.recorded()), rec.SuppressedRows())
+		}
+	})
+	t.Run("the memory limiter admits the limit, then suppresses", func(t *testing.T) {
+		repo := &recordingRepo{}
+		rec := NewRecorder(repo, sdk.IDGenerator{}, nil, slog.New(slog.DiscardHandler), ipReader("203.0.113.7"), WithFailureRowBudget(ratelimiter.NewMemory(), limit))
+		for i := 0; i < limit.Requests+10; i++ {
+			rec.Record(context.Background(), budgeted)
+		}
+		if len(repo.recorded()) != limit.Requests || rec.SuppressedRows() != 10 {
+			t.Fatalf("rows = %d, suppressed = %d; want %d and 10", len(repo.recorded()), rec.SuppressedRows(), limit.Requests)
+		}
+	})
+	t.Run("nil recorder", func(t *testing.T) {
+		var rec *Recorder
+		if rec.SuppressedRows() != 0 {
+			t.Fatal("nil Recorder reports suppressed rows")
+		}
+	})
 }

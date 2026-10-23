@@ -118,13 +118,33 @@ func (s *Service) ClientDisplayName(ctx context.Context, id string) (string, err
 	return client.Name, nil
 }
 
+// AuthenticateClient authenticates the confidential client.
+//
+// Deprecated: use AuthenticateClientContext. This path records a mismatch as an
+// oauth2_grant_failed row with no request id, IP or User-Agent, counted in one
+// shared failure-row bucket; it is removed in the core MINOR after
+// `stores/turso` repins past v0.21.0.
 func (s *Service) AuthenticateClient(clientID, secret string) (ClientProof, error) {
+	return s.AuthenticateClientContext(context.Background(), clientID, secret)
+}
+
+// AuthenticateClientContext authenticates the confidential client by its id
+// and secret. A mismatch records an oauth2_grant_failed row with reason
+// invalid_client, attributed to the request in ctx and Budgeted. The row names
+// client_id only when the presented id is the configured confidential client:
+// any other id is caller-chosen text, not a client this server knows.
+func (s *Service) AuthenticateClientContext(ctx context.Context, clientID, secret string) (ClientProof, error) {
 	presented := sha256.Sum256([]byte(secret))
 	matched := 0
 	for _, allowed := range s.config.ConfidentialSecretHashes {
 		matched |= subtle.ConstantTimeCompare(presented[:], allowed[:])
 	}
 	if clientID != s.config.ConfidentialClientID || secret == "" || matched != 1 {
+		attributed := ""
+		if clientID == s.config.ConfidentialClientID {
+			attributed = clientID
+		}
+		s.auditGrantFailure(ctx, attributed, ErrInvalidClient)
 		return ClientProof{}, ErrInvalidClient
 	}
 	return ClientProof{service: s, clientID: clientID}, nil

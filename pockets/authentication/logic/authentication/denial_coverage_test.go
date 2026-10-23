@@ -156,6 +156,26 @@ func TestChangePasswordRecordsDenials(t *testing.T) {
 		requireDenial(t, h.events, securityevent.TypePasswordChange, securityevent.StatusFailure, securityevent.ReasonPolicy, u.ID)
 		assertNoSecretInDetails(t, h.events.recorded(), denialPassword, "short")
 	})
+	t.Run("revision conflict", func(t *testing.T) {
+		h := newHarness(t, nil)
+		const address = "change-race@example.com"
+		u := h.mustRegister(t, address, denialPassword)
+		h.svc.passwords = denialConflictPasswords{h.svc.passwords}
+		if _, err := h.svc.ChangePassword(ctx, u.ID, denialPassword, "newpassword456789"); !errors.Is(err, sdk.ErrConflict) {
+			t.Fatalf("ChangePassword = %v, want conflict", err)
+		}
+		requireDenial(t, h.events, securityevent.TypePasswordChange, securityevent.StatusFailure, securityevent.ReasonRevisionConflict, u.ID)
+		assertNoSecretInDetails(t, h.events.recorded(), denialPassword, "newpassword456789", address)
+	})
+}
+
+// denialConflictPasswords loses every password change's revision race.
+type denialConflictPasswords struct {
+	user.PasswordRepository
+}
+
+func (denialConflictPasswords) Change(context.Context, string, user.PasswordChange) (int64, error) {
+	return 0, sdk.ErrConflict
 }
 
 func TestSetPasswordRecordsDenials(t *testing.T) {
@@ -180,6 +200,28 @@ func TestSetPasswordRecordsDenials(t *testing.T) {
 		}
 		requireDenial(t, h.events, securityevent.TypePasswordSet, securityevent.StatusFailure, securityevent.ReasonInvalidToken, userID)
 		assertNoSecretInDetails(t, h.events.recorded(), denialPassword)
+	})
+	t.Run("password already set", func(t *testing.T) {
+		h := newHarness(t, nil)
+		const address = "set-already@example.com"
+		u := h.mustRegister(t, address, denialPassword)
+		if _, err := h.svc.SetPassword(ctx, "sess-set-already", u.ID, "newpassword456789"); !errors.Is(err, ErrPasswordAlreadySet) {
+			t.Fatalf("SetPassword = %v, want ErrPasswordAlreadySet", err)
+		}
+		requireDenial(t, h.events, securityevent.TypePasswordSet, securityevent.StatusFailure, securityevent.ReasonPrecondition, u.ID)
+		assertNoSecretInDetails(t, h.events.recorded(), "newpassword456789", denialPassword, address)
+	})
+	t.Run("revision conflict", func(t *testing.T) {
+		h := newHarness(t, nil)
+		const userID, sessionID = "u-set-race", "sess-set-race"
+		h.seedPasswordlessUser(userID, "set-race@example.com")
+		h.grantFor(t, sessionID, userID, authgrant.PurposeSetPassword)
+		h.svc.passwords = denialConflictPasswords{h.svc.passwords}
+		if _, err := h.svc.SetPassword(ctx, sessionID, userID, denialPassword); !errors.Is(err, sdk.ErrConflict) {
+			t.Fatalf("SetPassword = %v, want conflict", err)
+		}
+		requireDenial(t, h.events, securityevent.TypePasswordSet, securityevent.StatusFailure, securityevent.ReasonRevisionConflict, userID)
+		assertNoSecretInDetails(t, h.events.recorded(), denialPassword, "set-race@example.com")
 	})
 }
 
@@ -323,6 +365,27 @@ func TestRemovePasswordRecordsDenials(t *testing.T) {
 		requireDenial(t, h.events, securityevent.TypePasswordRemoved, securityevent.StatusFailure, securityevent.ReasonRevisionConflict, userID)
 		assertNoSecretInDetails(t, h.events.recorded(), code)
 	})
+	t.Run("password not set", func(t *testing.T) {
+		h := newHarness(t, nil)
+		const userID = "u-remove-none"
+		h.seedPasswordlessUser(userID, "remove-none@example.com")
+		if _, err := h.svc.RemovePassword(ctx, userID, "123456"); !errors.Is(err, ErrPasswordNotSet) {
+			t.Fatalf("RemovePassword = %v, want ErrPasswordNotSet", err)
+		}
+		requireDenial(t, h.events, securityevent.TypePasswordRemoved, securityevent.StatusFailure, securityevent.ReasonPrecondition, userID)
+		assertNoSecretInDetails(t, h.events.recorded(), "123456", "remove-none@example.com")
+	})
+	t.Run("inactive", func(t *testing.T) {
+		h := newHarness(t, nil)
+		const address = "remove-inactive@example.com"
+		u := h.mustRegister(t, address, denialPassword)
+		setUserStatus(h.users, u.ID, user.StatusDeactivated)
+		if _, err := h.svc.RemovePassword(ctx, u.ID, "123456"); !errors.Is(err, session.ErrUserNotActive) {
+			t.Fatalf("RemovePassword = %v, want ErrUserNotActive", err)
+		}
+		requireDenial(t, h.events, securityevent.TypePasswordRemoved, securityevent.StatusBlocked, securityevent.ReasonInactive, u.ID)
+		assertNoSecretInDetails(t, h.events.recorded(), "123456", address)
+	})
 }
 
 func TestIdentifierManagementRecordsDenials(t *testing.T) {
@@ -434,6 +497,68 @@ func TestIdentifierManagementRecordsDenials(t *testing.T) {
 		requireDenial(t, h.events, securityevent.TypeIdentifierUsesChanged, securityevent.StatusFailure, securityevent.ReasonPolicy, userID)
 		assertNoSecretInDetails(t, h.events.recorded(), "ident-unverified@example.com")
 	})
+	t.Run("confirm claim conflict", func(t *testing.T) {
+		h := newHarness(t, nil)
+		userID, _, sessionID := h.mustVerifiedLogin(t, "ident-claim@example.com", denialPassword)
+		const target = "ident-claimed-0451@example.com"
+		if _, err := h.svc.StartIdentifierChange(ctx, IdentifierChangeStart{SessionID: sessionID, UserID: userID,
+			Kind: identifier.KindEmail, Value: target, Uses: identifier.Uses{Notification: true}}); err != nil {
+			t.Fatal(err)
+		}
+		code := h.mailer.proofCodeFor(t, target)
+		h.svc.identifiers = denialClaimedIdentifiers{h.svc.identifiers}
+		if err := h.svc.ConfirmIdentifierChange(ctx, IdentifierChangeConfirm{SessionID: sessionID, UserID: userID,
+			Kind: identifier.KindEmail, Code: code}); !errors.Is(err, sdk.ErrAlreadyExists) {
+			t.Fatalf("Confirm = %v, want already exists", err)
+		}
+		requireDenial(t, h.events, securityevent.TypeEmailChanged, securityevent.StatusFailure, securityevent.ReasonClaimConflict, userID)
+		assertNoSecretInDetails(t, h.events.recorded(), target, code)
+	})
+	// A step-up refusal records the mutation's own type with invalid_token, as
+	// SetPassword does; a session that is not live is refused before any grant.
+	for _, operation := range []string{"start", "remove", "uses"} {
+		t.Run(operation+" step-up refused", func(t *testing.T) {
+			h := newHarness(t, nil)
+			userID, _, _ := h.mustVerifiedLogin(t, "ident-stepup@example.com", denialPassword)
+			const value, staleSession = "ident-stepup-second@example.com", "sess-not-live-0451"
+			now := time.Now().UTC()
+			target := h.idents.insert(identifier.Identifier{
+				UserID: userID, Kind: identifier.KindEmail, NormalizedValue: value,
+				VerifiedAt: now, LoginEnabled: true, RecoveryEnabled: true, NotificationEnabled: true,
+				CreatedAt: now, UpdatedAt: now,
+			})
+			var err error
+			var eventType string
+			switch operation {
+			case "start":
+				eventType = securityevent.TypeEmailChanged
+				_, err = h.svc.StartIdentifierChange(ctx, IdentifierChangeStart{SessionID: staleSession, UserID: userID,
+					Kind: identifier.KindEmail, Value: "ident-stepup-target@example.com", Uses: identifier.Uses{Notification: true}})
+			case "remove":
+				eventType = securityevent.TypeEmailRemoved
+				err = h.svc.RemoveIdentifier(ctx, IdentifierRemoveInput{UserID: userID, SessionID: staleSession, IdentifierID: target.ID})
+			default:
+				eventType = securityevent.TypeIdentifierUsesChanged
+				err = h.svc.SetIdentifierUses(ctx, IdentifierUsesInput{UserID: userID, SessionID: staleSession, IdentifierID: target.ID,
+					Uses: identifier.Uses{Login: true, Recovery: true}})
+			}
+			if !errors.Is(err, ErrStepUpRequired) {
+				t.Fatalf("%s = %v, want ErrStepUpRequired", operation, err)
+			}
+			requireDenial(t, h.events, eventType, securityevent.StatusFailure, securityevent.ReasonInvalidToken, userID)
+			assertNoSecretInDetails(t, h.events.recorded(), value, "ident-stepup-target@example.com", staleSession)
+		})
+	}
+}
+
+// denialClaimedIdentifiers loses every verified change's claim race: another
+// account claimed the proven value first.
+type denialClaimedIdentifiers struct {
+	identifier.IdentifierRepository
+}
+
+func (denialClaimedIdentifiers) ApplyVerifiedChange(context.Context, identifier.ApplyVerifiedChangeInput, int64, time.Time) (identifier.Identifier, error) {
+	return identifier.Identifier{}, sdk.ErrAlreadyExists
 }
 
 // requireOAuthProvider asserts evt names provider and carries no other Details
@@ -544,6 +669,74 @@ func TestOAuthCallbackRecordsDenials(t *testing.T) {
 		evt := requireDenial(t, h.events, securityevent.TypeOAuthLinked, securityevent.StatusFailure, securityevent.ReasonLinkConflict, second.ID)
 		requireOAuthProvider(t, evt, "google")
 		assertNoSecretInDetails(t, h.events.recorded(), providerEmail)
+	})
+}
+
+// budgetedRecorder returns a Recorder over its own spy whose failure-row budget
+// refuses every Budgeted row, and the option wiring it into an OAuth harness.
+func budgetedRecorder() (*securityevent.Recorder, *spySecurityEvents, func(*constructorConfig)) {
+	spy := newSpySecurityEvents()
+	rec := securityevent.NewRecorder(spy, sdk.IDGenerator{}, nil, nil,
+		securityevent.WithFailureRowBudget(denyLimiter{}, ratelimiter.PerMinute(1)))
+	return rec, spy, func(c *constructorConfig) { c.SecurityEventRecorder = rec }
+}
+
+// requireNoProvider asserts evt names no provider: an unknown provider's name
+// is caller input, so the row carries the reason alone.
+func requireNoProvider(t *testing.T, evt securityevent.SecurityEvent) {
+	t.Helper()
+	if _, ok := evt.Details["provider"]; ok || len(evt.Details) != 1 {
+		t.Fatalf("%s row Details = %v, want the reason alone", evt.EventType, evt.Details)
+	}
+}
+
+func TestOAuthUnknownProviderRecords(t *testing.T) {
+	ctx := context.Background()
+	const retired = "retired-provider-0451"
+	newProvider := func() *fakeProvider {
+		return &fakeProvider{name: "google", trust: true, providerUserID: "g-unknown", email: "unknown-provider@example.com", emailVerified: true}
+	}
+	t.Run("callback", func(t *testing.T) {
+		h := newOAuthHarness(t, newProvider(), nil)
+		if _, err := h.svc.OAuthCallback(ctx, retired, OAuthCallbackRequest{Mode: OAuthBrowser, State: "state-0451", Code: "code-0451"}); !errors.Is(err, sdk.ErrNotFound) {
+			t.Fatalf("OAuthCallback = %v, want not found", err)
+		}
+		evt := requireDenial(t, h.events, securityevent.TypeOAuthLogin, securityevent.StatusFailure, securityevent.ReasonUnknownProvider, "")
+		requireNoProvider(t, evt)
+		assertNoSecretInDetails(t, h.events.recorded(), retired, "state-0451", "code-0451")
+	})
+	t.Run("callback row is budgeted", func(t *testing.T) {
+		rec, spy, withRecorder := budgetedRecorder()
+		h := newOAuthHarness(t, newProvider(), nil, withRecorder)
+		if _, err := h.svc.OAuthCallback(ctx, retired, OAuthCallbackRequest{Mode: OAuthBrowser, State: "state-0451", Code: "code-0451"}); !errors.Is(err, sdk.ErrNotFound) {
+			t.Fatalf("OAuthCallback = %v, want not found", err)
+		}
+		if rows := spy.recorded(); len(rows) != 0 || rec.SuppressedRows() != 1 {
+			t.Fatalf("rows = %+v, suppressed = %d; want no row and one suppressed", rows, rec.SuppressedRows())
+		}
+	})
+	t.Run("link start", func(t *testing.T) {
+		rec, spy, withRecorder := budgetedRecorder()
+		h := newOAuthHarness(t, newProvider(), nil, withRecorder)
+		linker := h.mustOAuthUser(t, "linker@example.com")
+		if _, err := h.startLink(ctx, linker.ID, retired, ""); !errors.Is(err, sdk.ErrNotFound) {
+			t.Fatalf("StartLink = %v, want not found", err)
+		}
+		evt := requireDenial(t, spy, securityevent.TypeOAuthLinked, securityevent.StatusFailure, securityevent.ReasonUnknownProvider, linker.ID)
+		requireNoProvider(t, evt)
+		if rec.SuppressedRows() != 0 {
+			t.Fatal("a session-bound link start was budgeted")
+		}
+		assertNoSecretInDetails(t, spy.recorded(), retired, "linker@example.com")
+	})
+	t.Run("login start records nothing", func(t *testing.T) {
+		h := newOAuthHarness(t, newProvider(), nil)
+		if _, err := h.startOAuth(ctx, retired, ""); !errors.Is(err, sdk.ErrNotFound) {
+			t.Fatalf("StartOAuth = %v, want not found", err)
+		}
+		if rows := h.events.recorded(); len(rows) != 0 {
+			t.Fatalf("an unauthenticated login start recorded %+v", rows)
+		}
 	})
 }
 

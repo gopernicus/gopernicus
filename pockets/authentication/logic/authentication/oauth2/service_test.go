@@ -94,12 +94,12 @@ func TestConfidentialProofCannotCrossServicesOrMutateConfiguredSecrets(t *testin
 		t.Fatal(err)
 	}
 	cfg.ConfidentialSecretHashes[0] = sha256.Sum256([]byte("replacement"))
-	proof, err := a.AuthenticateClient("mcp", "a high entropy confidential test secret")
+	proof, err := a.AuthenticateClientContext(t.Context(), "mcp", "a high entropy confidential test secret")
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, bad := range []struct{ id, secret string }{{"public", "a high entropy confidential test secret"}, {"mcp", "replacement"}, {"mcp", ""}} {
-		if _, err := a.AuthenticateClient(bad.id, bad.secret); !errors.Is(err, ErrInvalidClient) {
+		if _, err := a.AuthenticateClientContext(t.Context(), bad.id, bad.secret); !errors.Is(err, ErrInvalidClient) {
 			t.Fatalf("bad confidential credentials accepted: %v", err)
 		}
 	}

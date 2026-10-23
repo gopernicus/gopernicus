@@ -2,13 +2,18 @@ package securityevent
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"log/slog"
+	"maps"
+	"reflect"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/gopernicus/gopernicus/sdk"
+	"github.com/gopernicus/gopernicus/sdk/capabilities/ratelimiter"
 )
 
 const (
@@ -22,6 +27,13 @@ const (
 
 	// writeFailedMessage is the stable message of every write-failure log line.
 	writeFailedMessage = "audit_write_failed"
+
+	// rowsSuppressedMessage is the stable message of every over-budget log line.
+	rowsSuppressedMessage = "audit_rows_suppressed"
+
+	// failureRowKeyPrefix scopes the failure-row budget's limiter keys; the
+	// client IP's digest follows it.
+	failureRowKeyPrefix = "securityevent:failure-row:ip:"
 )
 
 // RecorderOption configures NewRecorder. A nil option is ignored.
@@ -40,12 +52,18 @@ type WriteObserver func(context.Context, WriteFailure)
 // Content hygiene: Details carries identifiers and key PREFIXES only. Never put
 // a raw API key, JWT, session token, password, or OAuth token in Details,
 // Actor or UserID.
+//
+// Budgeted marks a failure row a caller can drive without an authenticated
+// session — every oauth2_grant_failed row and the OAuth callback's
+// unknown_provider row. With WithFailureRowBudget wired, Record writes it only
+// while the client IP's budget admits it.
 type Input struct {
-	UserID  string
-	Actor   Principal
-	Type    string
-	Status  string
-	Details map[string]any
+	UserID   string
+	Actor    Principal
+	Type     string
+	Status   string
+	Details  map[string]any
+	Budgeted bool
 }
 
 // WriteFailure describes one failed audit write: the event's type and status
@@ -67,19 +85,30 @@ type WriteFailure struct {
 // Recording never fails the caller's flow: a write that fails is lost, logged,
 // counted and reported to the WriteObserver.
 type Recorder struct {
-	repo       SecurityEventRepository
-	ids        sdk.IDGenerator
-	now        func() time.Time
-	log        *slog.Logger
-	clientInfo func(context.Context) (ip, ua string)
-	observer   WriteObserver
-	timeout    time.Duration
+	repo        SecurityEventRepository
+	ids         sdk.IDGenerator
+	now         func() time.Time
+	log         *slog.Logger
+	clientInfo  func(context.Context) (ip, ua string)
+	observer    WriteObserver
+	timeout     time.Duration
+	budget      ratelimiter.Allower
+	budgetLimit ratelimiter.Limit
 
-	failures atomic.Uint64
+	failures       atomic.Uint64
+	rowsSuppressed atomic.Uint64
 
-	mu         sync.Mutex
-	lastLine   time.Time
-	suppressed uint64
+	mu             sync.Mutex
+	failureLog     logThrottle
+	suppressionLog logThrottle
+}
+
+// logThrottle is the once-then-per-minute rule for one log message: the first
+// occurrence after a quiet minute logs a detailed line, later ones inside the
+// minute are only counted, and the first one a minute on logs the count.
+type logThrottle struct {
+	last    time.Time
+	pending uint64
 }
 
 // WithClientInfoReader sets how Record attributes a row to a client: read
@@ -92,6 +121,16 @@ func WithClientInfoReader(read func(context.Context) (ip, ua string)) RecorderOp
 // WithWriteObserver sets the observer told about every failed write.
 func WithWriteObserver(observer WriteObserver) RecorderOption {
 	return func(r *Recorder) { r.observer = observer }
+}
+
+// WithFailureRowBudget budgets Budgeted rows per client IP: Record asks limiter
+// to admit one row under a key derived from the attributed IP (a blank IP
+// shares one key) at limit. Over budget the row is not written, SuppressedRows
+// counts it and an "audit_rows_suppressed" WARN logs at most once a minute. A
+// limiter error writes the row: a limiter fault costs a row, never loses one.
+// A nil limiter leaves every row unbudgeted.
+func WithFailureRowBudget(limiter ratelimiter.Allower, limit ratelimiter.Limit) RecorderOption {
+	return func(r *Recorder) { r.budget, r.budgetLimit = limiter, limit }
 }
 
 // NewRecorder returns a Recorder appending to repo, minting event ids from ids
@@ -118,11 +157,13 @@ func NewRecorder(repo SecurityEventRepository, ids sdk.IDGenerator, now func() t
 // repository, does nothing.
 //
 // It stamps the id, the time, the client attribution and the request and trace
-// ids from ctx (sdk.RequestIDFromContext, sdk.TraceIDFromContext); an id longer
-// than MaxCorrelationIDLen bytes or carrying a byte outside printable ASCII is
-// recorded blank, never truncated. The write runs detached from ctx's
-// cancellation — a client that disconnects cannot cancel its own failed-login
-// row — and is bounded to two seconds.
+// ids from ctx (sdk.RequestIDFromContext, sdk.TraceIDFromContext), and passes
+// the ids, the IP, the User-Agent and every top-level string value of Details
+// through BoundValue: a value its rule refuses is recorded blank, never
+// refused. The caller's Details map is never written. A Budgeted row over the
+// WithFailureRowBudget budget is not written. The write runs detached from
+// ctx's cancellation — a client that disconnects cannot cancel its own
+// failed-login row — and is bounded to two seconds.
 //
 // A failed write never reaches the caller. Each one increments WriteFailures and
 // is reported to the WriteObserver. The first failure logs one WARN
@@ -134,20 +175,26 @@ func (r *Recorder) Record(ctx context.Context, in Input) {
 	if r == nil || r.repo == nil {
 		return
 	}
+	var ip, ua string
+	if r.clientInfo != nil {
+		ip, ua = r.clientInfo(ctx)
+		ip, ua = BoundValue(FieldIPAddress, ip), BoundValue(FieldUserAgent, ua)
+	}
+	detached := context.WithoutCancel(ctx)
+	if in.Budgeted && !r.withinBudget(detached, ip, in.Type) {
+		return
+	}
 	evt := New(r.ids, in.Type, in.Status, r.now())
 	evt.UserID = in.UserID
 	evt.Actor = in.Actor
-	evt.Details = in.Details
+	evt.Details = boundDetails(in.Details)
+	evt.IPAddress, evt.UserAgent = ip, ua
 	if id, ok := sdk.RequestIDFromContext(ctx); ok {
-		evt.RequestID = correlationID(id)
+		evt.RequestID = BoundValue(FieldRequestID, id)
 	}
 	if id, ok := sdk.TraceIDFromContext(ctx); ok {
-		evt.TraceID = correlationID(id)
+		evt.TraceID = BoundValue(FieldTraceID, id)
 	}
-	if r.clientInfo != nil {
-		evt.IPAddress, evt.UserAgent = r.clientInfo(ctx)
-	}
-	detached := context.WithoutCancel(ctx)
 	writeCtx, cancel := context.WithTimeout(detached, r.timeout)
 	defer cancel()
 	if _, err := r.repo.Create(writeCtx, evt); err != nil {
@@ -164,6 +211,15 @@ func (r *Recorder) WriteFailures() uint64 {
 	return r.failures.Load()
 }
 
+// SuppressedRows returns how many Budgeted rows the failure-row budget has
+// refused since construction; zero for a nil Recorder.
+func (r *Recorder) SuppressedRows() uint64 {
+	if r == nil {
+		return 0
+	}
+	return r.rowsSuppressed.Load()
+}
+
 // Repository returns the repository r appends to; nil for a nil Recorder.
 func (r *Recorder) Repository() SecurityEventRepository {
 	if r == nil {
@@ -177,17 +233,8 @@ func (r *Recorder) Repository() SecurityEventRepository {
 func (r *Recorder) failed(ctx context.Context, failure WriteFailure) {
 	r.failures.Add(1)
 	now := r.now()
-	var detailed bool
-	var count uint64
 	r.mu.Lock()
-	switch quiet := r.lastLine.IsZero() || now.Sub(r.lastLine) >= summaryInterval; {
-	case quiet && r.suppressed == 0:
-		detailed, r.lastLine = true, now
-	case quiet:
-		count, r.lastLine, r.suppressed = r.suppressed+1, now, 0
-	default:
-		r.suppressed++
-	}
+	detailed, count := r.failureLog.next(now)
 	r.mu.Unlock()
 	switch {
 	case detailed:
@@ -204,18 +251,75 @@ func (r *Recorder) failed(ctx context.Context, failure WriteFailure) {
 	}
 }
 
-// correlationID returns id when it is at most MaxCorrelationIDLen bytes of
-// printable ASCII, and "" otherwise.
-func correlationID(id string) string {
-	if len(id) > MaxCorrelationIDLen {
-		return ""
+// withinBudget reports whether the failure-row budget admits one more row for
+// ip, counting and logging a refusal under the once-then-per-minute rule. The
+// limiter call is detached from the request and bounded like a write.
+func (r *Recorder) withinBudget(ctx context.Context, ip, eventType string) bool {
+	if r.budget == nil {
+		return true
 	}
-	for i := 0; i < len(id); i++ {
-		if id[i] < 0x20 || id[i] > 0x7e {
-			return ""
+	digest := sha256.Sum256([]byte(ip))
+	limitCtx, cancel := context.WithTimeout(ctx, r.timeout)
+	defer cancel()
+	result, err := r.budget.Allow(limitCtx, failureRowKeyPrefix+hex.EncodeToString(digest[:]), r.budgetLimit)
+	if err != nil || result.Allowed {
+		return true
+	}
+	r.rowsSuppressed.Add(1)
+	now := r.now()
+	r.mu.Lock()
+	detailed, count := r.suppressionLog.next(now)
+	r.mu.Unlock()
+	switch {
+	case detailed:
+		r.log.Warn(rowsSuppressedMessage, "event_type", eventType, "count", 1)
+	case count > 0:
+		r.log.Warn(rowsSuppressedMessage, "count", count)
+	}
+	return false
+}
+
+// next counts one occurrence at now and reports the line due: detailed for the
+// first after a quiet minute, a count for the first a minute after the last
+// line, neither inside the minute.
+func (t *logThrottle) next(now time.Time) (detailed bool, count uint64) {
+	switch quiet := t.last.IsZero() || now.Sub(t.last) >= summaryInterval; {
+	case quiet && t.pending == 0:
+		t.last = now
+		return true, 0
+	case quiet:
+		count, t.last, t.pending = t.pending+1, now, 0
+		return false, count
+	default:
+		t.pending++
+		return false, 0
+	}
+}
+
+// boundDetails applies FieldDetail to every top-level string value of
+// details, a named string type included, cloning the map before the first
+// change so the caller's map is never written.
+func boundDetails(details map[string]any) map[string]any {
+	out, cloned := details, false
+	for key, value := range details {
+		text, ok := value.(string)
+		if !ok {
+			v := reflect.ValueOf(value)
+			if v.Kind() != reflect.String {
+				continue
+			}
+			text = v.String()
 		}
+		bounded := BoundValue(FieldDetail, text)
+		if bounded == text {
+			continue
+		}
+		if !cloned {
+			out, cloned = maps.Clone(details), true
+		}
+		out[key] = bounded
 	}
-	return id
+	return out
 }
 
 // ErrorKind reduces err to a coarse, secret-free sentinel label for a log line

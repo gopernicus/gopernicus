@@ -835,6 +835,9 @@ func (s *Service) ChangePassword(ctx context.Context, userID, currentPassword, n
 	}
 	revision, err := s.passwords.Change(ctx, userID, user.PasswordChange{ExpectedAuthRevision: u.AuthRevision, ExpectedHash: hash, NewHash: newHash, Now: s.now()})
 	if err != nil {
+		if errors.Is(err, sdk.ErrConflict) {
+			s.recordDenial(ctx, securityevent.TypePasswordChange, userID, securityevent.StatusFailure, securityevent.ReasonRevisionConflict)
+		}
 		return TokenPair{}, err
 	}
 	pair, err := s.mintSession(ctx, userID, revision, s.primaryAuthentication(session.MethodPassword))
