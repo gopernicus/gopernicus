@@ -9,6 +9,7 @@ import (
 	"github.com/gopernicus/gopernicus/sdk"
 
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/identifier"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/protection"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/securityevent"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/delivery"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/notify/email"
@@ -90,6 +91,17 @@ func WithFencer(value Fencer) Option {
 func WithNormalizer(value identifier.Normalizer) Option {
 	return func(c *constructorConfig) {
 		c.Normalizer = value
+	}
+}
+
+// WithIdentifierKeyer supplies the keyer invitation audit rows digest the invitee
+// identifier with (AUDIT-054): identifier_digest is IdentifierKey(kind,
+// normalized), the keyed HMAC the authentication service's limiter and outbox
+// keys derive from. Nil selects an unkeyed SHA-256 digest, a development fallback
+// only; the pocket root requires a keyer in production.
+func WithIdentifierKeyer(value protection.IdentifierKeyer) Option {
+	return func(c *constructorConfig) {
+		c.IdentifierKeyer = value
 	}
 }
 

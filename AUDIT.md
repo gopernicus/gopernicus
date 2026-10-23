@@ -5645,3 +5645,83 @@ the WARN. With the gate, admin routes answer through it. The pocket tests pin th
 exact public route set registered without a gate, the 404/405 answers and absent
 admin chrome over HTTP, the three sentinels, the production console-`Mailer`
 refusal and the absent env tags.
+
+## AUDIT-054: audit Details carry identifier digests, not addresses
+
+- **Implemented:** 2026-10-23 (SOC 2 slice S2, closes FAF-4, FAC-7's PII half and
+  M3).
+- **Module:** `pockets/authentication`; release pending
+  `pockets/authentication/v0.21.0` (a BREAKING pre-1.0 minor). No store,
+  migration or `go.mod` change.
+- **Impact:** new `login` and invitation audit rows change their Details keys.
+  One new option, `invitations.WithIdentifierKeyer`; no exported removal.
+
+| row | before | after |
+|---|---|---|
+| `login` (every status) | `email`: the normalized address, or the raw input when it did not normalize | `identifier_kind: "email"` + `identifier_digest` of the normalized address, or of the trimmed raw input when it did not normalize |
+| `invitation_created` (create and resend), `invitation_granted` | `identifier`: the invitee address | `identifier_kind` (the invitation's kind) + `identifier_digest` |
+
+`token_issued` rows already carried no address and are unchanged, as are every
+other Details key. `identifier_digest` is `IdentifierKeyer.IdentifierKey(kind,
+normalized)` in lowercase hex: the keyed HMAC the limiter and outbox idempotency
+keys already derive from, so one address digests alike on every row and every
+instance sharing `AUTH_IDENTIFIER_KEY`. The pocket root hands the invitation
+service the same keyer (`WithIdentifierKeyer(cfg.IdentifierKeyer)`). With no
+keyer wired the digest is the unkeyed SHA-256 of `kind:value`, a development
+fallback only; production already refuses to start without a keyer
+(`ErrIdentifierKeyerRequired`). Rotating `AUTH_IDENTIFIER_KEY` changes every
+digest from then on.
+
+New rows only: existing rows keep their raw `email` / `identifier` values until
+S3 lands retention.
+
+### Migration
+
+1. Dashboards and queries reading `details.email` (login rows) or
+   `details.identifier` (invitation rows) move to `details.identifier_digest`
+   and `details.identifier_kind`.
+2. Known users are found by `user_id`, which every attributed row carries.
+3. For an address with no account (a login attempt for an unknown address, an
+   invitee who never registered), compute its digest and match
+   `details.identifier_digest`. The keyer's HMAC input is **not** the string
+   `email:<normalized>`: it is three fields (the domain label
+   `gopernicus.auth.identifier-key.v1`, the kind, the normalized value), each an
+   8-byte big-endian byte length followed by its bytes. A literal
+   `printf '%s' "email:…"` would digest the wrong input. This POSIX-shell recipe
+   builds the exact input, with no Go required:
+
+   ```sh
+   field() {  # one field: an 8-byte big-endian byte length, then the bytes
+     n=$(printf '%s' "$1" | wc -c)
+     for s in 56 48 40 32 24 16 8 0; do printf '%b' "\\0$(printf '%o' $(( (n >> s) & 255 )))"; done
+     printf '%s' "$1"
+   }
+   { field gopernicus.auth.identifier-key.v1; field email; field 'alice@example.com'; } \
+     | openssl dgst -sha256 -mac HMAC -macopt hexkey:"$AUTH_IDENTIFIER_KEY"
+   ```
+
+   Pass the address normalized the way the host's normalizer does (the bundled
+   `identifier.DefaultNormalizer` trims it and lowercases the domain and, by
+   default, the local part); for a login input that did not parse as an
+   address, pass the trimmed raw input. A phone invitation uses `field phone`
+   and the E.164 value. OpenSSL 3 prefixes the hex with `SHA2-256(stdin)= `.
+   Check your shell: with `AUTH_IDENTIFIER_KEY` set to the 32 bytes
+   `000102…1e1f` and `alice@example.com`, the recipe prints
+   `35916db2967bd336a7f3e7b94ebee7e4cd70017d104cb28c7427e8d77a51f478`.
+   `TestIdentifierKeyAuditRecipe` pins this construction, so a change to the
+   keyer fails a test before it falsifies the recipe. A development host on the
+   no-keyer fallback uses `printf '%s' 'email:alice@example.com' | openssl dgst
+   -sha256` instead. A host on an ephemeral development key cannot recompute its
+   digests after a restart.
+
+Rollback: the change is one PR; reverting it restores the raw keys on new rows.
+
+### Verification
+
+A failed login row carries `identifier_kind: "email"` and `identifier_digest`,
+and no `email`; an `invitation_created` row carries `identifier_kind` and
+`identifier_digest`, and no `identifier`. The pocket tests pin the login and
+invitation digests to `IdentifierKey(kind, normalized)` under the bundled HMAC
+keyer, a malformed login address to the digest of its trimmed raw input, the
+SHA-256 fallback, and that no recorded row in those tests holds the attempted
+address or an `@`.

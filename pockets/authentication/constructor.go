@@ -476,6 +476,7 @@ func New(repos Repositories, signer cryptids.JWTSigner, runtimeMode environment.
 			}),
 			invitations.WithDelivery(invDelivery),
 			invitations.WithNormalizer(cfg.IdentifierNormalizer),
+			invitations.WithIdentifierKeyer(cfg.IdentifierKeyer),
 			invitations.WithRedirectAllowlist(cfg.RedirectAllowlist),
 			invitations.WithSecurityEventRecorder(securityEvents),
 			invitations.WithLogger(cfg.Logger),

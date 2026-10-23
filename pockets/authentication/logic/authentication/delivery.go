@@ -2,6 +2,8 @@ package authentication
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 
@@ -72,6 +74,20 @@ func (s *Service) identifierDigest(kind, normalizedValue string) string {
 		return kind + ":" + normalizedValue
 	}
 	return digest
+}
+
+// auditDigest returns the digest an audit row carries in place of an address
+// (AUDIT-054): the host IdentifierKeyer's keyed HMAC — the digest the limiter and
+// outbox keys derive from — or, with no keyer wired, the SHA-256 of
+// kind + ":" + value. That fallback is unkeyed, so it is a development fallback
+// only; production requires the keyer. Unlike identifierDigest it has no raw
+// fallback: it never returns its input.
+func (s *Service) auditDigest(kind, value string) string {
+	if s.identifierKeyer != nil {
+		return s.identifierKeyer.IdentifierKey(kind, value)
+	}
+	sum := sha256.Sum256([]byte(kind + ":" + value))
+	return hex.EncodeToString(sum[:])
 }
 
 // issueAndEnqueueCode gives every issued challenge its own delivery generation.

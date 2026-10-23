@@ -12,6 +12,8 @@ package invitations
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -20,6 +22,7 @@ import (
 
 	"github.com/gopernicus/gopernicus/pockets/authentication/internal/redirect"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/identifier"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/protection"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/securityevent"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/delivery"
 	"github.com/gopernicus/gopernicus/sdk"
@@ -288,6 +291,7 @@ type constructorConfig struct {
 	RedirectAllowlist []string
 	SecurityEvents    securityevent.SecurityEventRepository
 	SecurityRecorder  *securityevent.Recorder
+	IdentifierKeyer   protection.IdentifierKeyer
 	Clock             func() time.Time
 	Logger            *slog.Logger
 	TTL               time.Duration
@@ -329,6 +333,9 @@ type Service struct {
 	ids sdk.IDGenerator
 	// fencer settles accepting claims on Cancel (WithFencer); nil keeps ErrNotPending.
 	fencer Fencer
+	// identifierKeyer digests the invitee identifier for audit rows
+	// (WithIdentifierKeyer); nil selects the development SHA-256 fallback.
+	identifierKeyer protection.IdentifierKeyer
 }
 
 // newService builds a Service, applying a time.Now clock, slog default logger, and the
@@ -367,9 +374,10 @@ func newService(d constructorConfig) *Service {
 		logger:            logger,
 		ttl:               ttl,
 
-		bodySenders: d.BodySenders,
-		ids:         d.IDs,
-		fencer:      d.Fencer,
+		bodySenders:     d.BodySenders,
+		ids:             d.IDs,
+		fencer:          d.Fencer,
+		identifierKeyer: d.IdentifierKeyer,
 	}
 }
 
@@ -498,10 +506,10 @@ func (s *Service) directAdd(ctx context.Context, in CreateInput, subjectID strin
 	// whose sdk.DatabaseID mode yields an empty ID until an entity is inserted.
 	operationID := mintOperationID()
 	if err := s.grant(ctx, operationID, in.ResourceType, in.ResourceID, in.Relation, subjectTypeUser, subjectID, in.Metadata); err != nil {
-		s.recordGrant(ctx, subjectID, in.ResourceType, in.ResourceID, in.Relation, in.Identifier, securityevent.StatusFailure, "")
+		s.recordGrant(ctx, subjectID, in.ResourceType, in.ResourceID, in.Relation, in.IdentifierKind, in.Identifier, securityevent.StatusFailure, "")
 		return CreateResult{}, fmt.Errorf("grant: %w", err)
 	}
-	s.recordGrant(ctx, subjectID, in.ResourceType, in.ResourceID, in.Relation, in.Identifier, securityevent.StatusSuccess, "")
+	s.recordGrant(ctx, subjectID, in.ResourceType, in.ResourceID, in.Relation, in.IdentifierKind, in.Identifier, securityevent.StatusSuccess, "")
 	s.sendMemberAdded(ctx, memberAdded{
 		kind: in.IdentifierKind, identifier: in.Identifier,
 		resourceType: in.ResourceType, resourceID: in.ResourceID, relation: in.Relation,
@@ -603,11 +611,11 @@ func (s *Service) acceptClaim(ctx context.Context, inv Invitation, subjectType, 
 		if err != nil {
 			return Invitation{}, err
 		}
-		s.recordGrant(ctx, subjectID, claimed.ResourceType, claimed.ResourceID, claimed.Relation, claimed.Identifier, securityevent.StatusBlocked, "fenced")
+		s.recordGrant(ctx, subjectID, claimed.ResourceType, claimed.ResourceID, claimed.Relation, claimed.IdentifierKind, claimed.Identifier, securityevent.StatusBlocked, "fenced")
 		return cancelled, fmt.Errorf("grant: %w", grantErr)
 	}
 	if grantErr != nil && !errors.Is(grantErr, ErrGrantSuperseded) {
-		s.recordGrant(ctx, subjectID, claimed.ResourceType, claimed.ResourceID, claimed.Relation, claimed.Identifier, securityevent.StatusFailure, "")
+		s.recordGrant(ctx, subjectID, claimed.ResourceType, claimed.ResourceID, claimed.Relation, claimed.IdentifierKind, claimed.Identifier, securityevent.StatusFailure, "")
 		return Invitation{}, fmt.Errorf("grant: %w", grantErr)
 	}
 	claim.Now = s.now()
@@ -616,10 +624,10 @@ func (s *Service) acceptClaim(ctx context.Context, inv Invitation, subjectType, 
 		return Invitation{}, err
 	}
 	if errors.Is(grantErr, ErrGrantSuperseded) {
-		s.recordGrant(ctx, subjectID, claimed.ResourceType, claimed.ResourceID, claimed.Relation, claimed.Identifier, securityevent.StatusBlocked, "superseded")
+		s.recordGrant(ctx, subjectID, claimed.ResourceType, claimed.ResourceID, claimed.Relation, claimed.IdentifierKind, claimed.Identifier, securityevent.StatusBlocked, "superseded")
 		return accepted, fmt.Errorf("grant: %w", grantErr)
 	}
-	s.recordGrant(ctx, subjectID, claimed.ResourceType, claimed.ResourceID, claimed.Relation, claimed.Identifier, securityevent.StatusSuccess, "")
+	s.recordGrant(ctx, subjectID, claimed.ResourceType, claimed.ResourceID, claimed.Relation, claimed.IdentifierKind, claimed.Identifier, securityevent.StatusSuccess, "")
 	s.sendMemberAdded(ctx, memberAdded{
 		kind: claimed.IdentifierKind, identifier: claimed.Identifier,
 		resourceType: claimed.ResourceType, resourceID: claimed.ResourceID, relation: claimed.Relation,
@@ -793,11 +801,12 @@ func (s *Service) Resend(ctx context.Context, prepared PreparedManagement, redir
 	}
 	actor, userID := prepared.attribution()
 	s.recordManagement(ctx, actor, userID, securityevent.TypeInvitationCreated, map[string]any{
-		"resource_type": updated.ResourceType,
-		"resource_id":   updated.ResourceID,
-		"relation":      updated.Relation,
-		"identifier":    updated.Identifier,
-		"invited_by":    updated.InvitedBy,
+		"resource_type":     updated.ResourceType,
+		"resource_id":       updated.ResourceID,
+		"relation":          updated.Relation,
+		"identifier_kind":   updated.IdentifierKind,
+		"identifier_digest": s.auditDigest(updated.IdentifierKind, updated.Identifier),
+		"invited_by":        updated.InvitedBy,
 	})
 	if err := s.sendInviteSent(ctx, updated, secret, redirectTo, true); err != nil {
 		return updated, err
@@ -894,13 +903,15 @@ func (s *Service) ResolveInvitations(ctx context.Context, email, subjectType, su
 
 // recordGrant appends an invitation_granted audit row for a grant attempt
 // (success, failure, or blocked with reason superseded or fenced). Details carries
-// identifiers only — never the token (design §5.1 WI3).
-func (s *Service) recordGrant(ctx context.Context, subjectID, resourceType, resourceID, relation, identifier, status, reason string) {
+// identifiers only — never the token (design §5.1 WI3) — and the invitee as its
+// kind and digest, never the address (AUDIT-054).
+func (s *Service) recordGrant(ctx context.Context, subjectID, resourceType, resourceID, relation, kind, identifier, status, reason string) {
 	details := map[string]any{
-		"resource_type": resourceType,
-		"resource_id":   resourceID,
-		"relation":      relation,
-		"identifier":    identifier,
+		"resource_type":     resourceType,
+		"resource_id":       resourceID,
+		"relation":          relation,
+		"identifier_kind":   kind,
+		"identifier_digest": s.auditDigest(kind, identifier),
 	}
 	if reason != "" {
 		details["reason"] = reason
@@ -926,13 +937,28 @@ func (s *Service) recordAcceptDenied(ctx context.Context, subjectID string, inv 
 
 // recordCreated appends an invitation_created audit row for a newly minted
 // pending invite, attributed to the InvitedBy owner. Resend uses recordManagement.
+// The invitee rides as its kind and digest, never the address (AUDIT-054).
 func (s *Service) recordCreated(ctx context.Context, inv Invitation) {
 	s.record(ctx, inv.InvitedBy, securityevent.TypeInvitationCreated, securityevent.StatusSuccess, map[string]any{
-		"resource_type": inv.ResourceType,
-		"resource_id":   inv.ResourceID,
-		"relation":      inv.Relation,
-		"identifier":    inv.Identifier,
+		"resource_type":     inv.ResourceType,
+		"resource_id":       inv.ResourceID,
+		"relation":          inv.Relation,
+		"identifier_kind":   inv.IdentifierKind,
+		"identifier_digest": s.auditDigest(inv.IdentifierKind, inv.Identifier),
 	})
+}
+
+// auditDigest returns the digest an audit row carries in place of the invitee
+// identifier (AUDIT-054): IdentifierKey(kind, value) under the
+// WithIdentifierKeyer keyer, or, with none wired, the SHA-256 of
+// kind + ":" + value — the authentication service's own fallback, unkeyed and
+// so for development only. It never returns its input.
+func (s *Service) auditDigest(kind, value string) string {
+	if s.identifierKeyer != nil {
+		return s.identifierKeyer.IdentifierKey(kind, value)
+	}
+	sum := sha256.Sum256([]byte(kind + ":" + value))
+	return hex.EncodeToString(sum[:])
 }
 
 // recordLifecycle appends a decline audit row, attributed to userID.

@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 	"unicode/utf8"
 
@@ -644,7 +645,7 @@ func (s *Service) Login(ctx context.Context, emailAddr, password string) (TokenP
 	}
 	normalized, err := s.normalizeEmail(emailAddr)
 	if err != nil {
-		s.recordLogin(ctx, "", emailAddr, invalidCredentials())
+		s.recordLogin(ctx, "", strings.TrimSpace(emailAddr), invalidCredentials())
 		return TokenPair{}, user.User{}, invalidCredentials()
 	}
 
@@ -667,11 +668,16 @@ func (s *Service) Login(ctx context.Context, emailAddr, password string) (TokenP
 	return pair, u, nil
 }
 
-// recordLogin appends a `login` audit row. The attempted email is an identifier
-// (never a secret), so it rides Details to make failed-login auditing useful; a
-// resolved userID is attributed when one is known.
+// recordLogin appends a `login` audit row. The attempted email rides Details as
+// identifier_kind + identifier_digest, never the address (AUDIT-054): email is
+// the normalized value, or the trimmed raw input when normalization failed, so a
+// malformed address is digested too. A resolved userID is attributed when one is
+// known.
 func (s *Service) recordLogin(ctx context.Context, userID, email string, err error) {
-	s.recordCredentialOutcome(ctx, securityevent.TypeLogin, userID, err, map[string]any{"email": email})
+	s.recordCredentialOutcome(ctx, securityevent.TypeLogin, userID, err, map[string]any{
+		"identifier_kind":   sdk.AddressKindEmail,
+		"identifier_digest": s.auditDigest(sdk.AddressKindEmail, email),
+	})
 }
 
 // recordCredentialOutcome appends the row for one password-credential attempt —
