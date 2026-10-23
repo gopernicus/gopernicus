@@ -161,7 +161,7 @@ func (s *OAuth2Store) RedeemCode(ctx context.Context, expected oauth2.Code, prop
 	if err != nil {
 		return session.Session{}, err
 	}
-	return proposed, nil
+	return persisted(proposed), nil
 }
 
 func validOAuthBinding(d session.Delegation) bool {

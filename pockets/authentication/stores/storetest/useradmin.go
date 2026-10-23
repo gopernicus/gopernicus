@@ -550,7 +550,8 @@ func testActiveMintRoundTrip(t *testing.T, repos auth.Repositories) {
 	ctx := context.Background()
 	u := seedDirectoryUser(t, repos, "mint@example.com", suiteBase, suiteBase)
 
-	s := newSession(u.ID, "fenced-refresh", time.Hour, time.Now())
+	// A store returns the session as persisted; a sub-microsecond clock proves it on every platform.
+	s := newSession(u.ID, "fenced-refresh", time.Hour, time.Now().Truncate(time.Microsecond).Add(750*time.Nanosecond))
 	created, err := repos.ActiveSessions.CreateForActiveUser(ctx, s, currentAuthRevision(ctx, repos.Users, s.UserID))
 	if err != nil {
 		t.Fatalf("CreateForActiveUser: %v", err)
@@ -567,6 +568,9 @@ func testActiveMintRoundTrip(t *testing.T, repos auth.Repositories) {
 	}
 	if got.UserID != u.ID {
 		t.Errorf("Sessions.Get returned user %q, want %q", got.UserID, u.ID)
+	}
+	if !created.ExpiresAt.Equal(got.ExpiresAt) {
+		t.Errorf("fenced mint returned ExpiresAt=%v, Sessions.Get read %v: a store returns the session as persisted", created.ExpiresAt, got.ExpiresAt)
 	}
 	matched, match, err := repos.Sessions.GetByRefreshHash(ctx, s.RefreshTokenHash)
 	if err != nil || matched.ID != created.ID || match != session.RefreshMatchCurrent {

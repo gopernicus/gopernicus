@@ -266,5 +266,5 @@ func (s *ActiveSessionStore) CreateForActiveUser(ctx context.Context, sess sessi
 	if err != nil {
 		return session.Session{}, err
 	}
-	return sess, nil
+	return persisted(sess), nil
 }

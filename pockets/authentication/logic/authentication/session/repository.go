@@ -52,8 +52,11 @@ var ErrRotationConflict = errors.New("session: refresh rotation conflict")
 //     and returns nil even when none exist (never sdk.ErrNotFound). It is the
 //     logout-everywhere primitive (a password change revokes all sessions).
 type SessionRepository interface {
-	// Create persists a new session. A colliding refresh_token_hash surfaces as
-	// sdk.ErrAlreadyExists (MapError-routed) via the store's unique index.
+	// Create persists a new session and returns the session as persisted; a
+	// store with coarser timestamp precision than the entity returns the
+	// truncated values, and the conformance suite proves it
+	// (Sessions/RotationKeepsExpiresAt). A colliding refresh_token_hash surfaces
+	// as sdk.ErrAlreadyExists (MapError-routed) via the store's unique index.
 	Create(ctx context.Context, s Session) (Session, error)
 	// Get returns the live session for id: unknown → sdk.ErrNotFound,
 	// present-but-expired → sdk.ErrExpired.

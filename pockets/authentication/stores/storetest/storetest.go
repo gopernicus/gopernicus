@@ -675,7 +675,8 @@ func testSessionsRotationKeepsExpiry(t *testing.T, repos auth.Repositories) {
 	ctx := context.Background()
 	repo := repos.Sessions
 
-	sess := newSession("u1", "hashA", time.Hour, time.Now())
+	// A store returns the session as persisted; a sub-microsecond clock proves it on every platform.
+	sess := newSession("u1", "hashA", time.Hour, time.Now().Truncate(time.Microsecond).Add(750*time.Nanosecond))
 	created, err := repo.Create(ctx, sess)
 	if err != nil {
 		t.Fatalf("Create: %v", err)

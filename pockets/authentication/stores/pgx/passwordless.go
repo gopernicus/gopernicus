@@ -383,5 +383,5 @@ func insertRedemptionSession(ctx context.Context, tx *pgxdb.Tx, table string, se
 	if _, err := tx.Exec(ctx, sessionInsert(table), args); err != nil {
 		return session.Session{}, pgxdb.MapError(err)
 	}
-	return sess, nil
+	return persisted(sess), nil
 }
