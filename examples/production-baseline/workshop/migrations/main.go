@@ -11,6 +11,9 @@
 //	go run ./workshop/migrations           apply pending migrations
 //	go run ./workshop/migrations -status   report applied vs pending (file-only
 //	                                       when the database is unreachable)
+//	go run ./workshop/migrations -posture-role <runtime role>
+//	                                       preflight the runtime role's
+//	                                       append-only posture before deploy
 package main
 
 import (
@@ -28,6 +31,8 @@ import (
 	"github.com/gopernicus/gopernicus/sdk/pkg/logging"
 
 	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
+	authenticationpgx "github.com/gopernicus/gopernicus/pockets/authentication/stores/pgx"
+	authorizationpgx "github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx"
 )
 
 // migrationsFS embeds the host's own copy of the migrations. The runner applies
@@ -38,8 +43,14 @@ var migrationsFS embed.FS
 
 const migrationsDir = "primary"
 
+// appendOnlyWritableAcknowledged is the literal the server passes as
+// pgxdb.Config.AppendOnlyWritableAcknowledged, so -posture-role decides as the
+// stores' boot probe will. The server passes none.
+const appendOnlyWritableAcknowledged = false
+
 func main() {
 	status := flag.Bool("status", false, "report applied vs pending migrations and exit")
+	postureRole := flag.String("posture-role", "", "preflight this runtime role's append-only posture and exit")
 	flag.Parse()
 
 	// The runner holds the most privileged connection, so it resolves the mode
@@ -60,13 +71,16 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
-	if err := run(ctx, log, mode, *status); err != nil {
+	if err := run(ctx, log, mode, *status, *postureRole); err != nil {
 		log.Error("migrations", "error", err)
 		os.Exit(1)
 	}
 }
 
-func run(ctx context.Context, log *slog.Logger, mode environment.Mode, status bool) error {
+func run(ctx context.Context, log *slog.Logger, mode environment.Mode, status bool, postureRole string) error {
+	if postureRole != "" {
+		return reportPosture(ctx, mode, postureRole)
+	}
 	db, err := open(ctx, mode)
 	if status {
 		return reportStatus(ctx, db, err)
@@ -93,6 +107,57 @@ func open(ctx context.Context, mode environment.Mode) (*pgxdb.DB, error) {
 	}
 	cfg.RuntimeMode = mode
 	return pgxdb.Open(ctx, cfg)
+}
+
+// postureTables are the append-only audit tables -posture-role inspects: each
+// mounted pgx store's AuditTables(), called with the options the server
+// constructs that store with, so this preflight and the stores' boot probe
+// judge the same tables.
+func postureTables() []pgxdb.AppendOnlyTable {
+	tables := authenticationpgx.AuditTables()
+	return append(tables, authorizationpgx.AuditTables(authorizationpgx.WithAudit())...)
+}
+
+// reportPosture preflights role — the runtime role the server connects as —
+// from this runner's migrator connection: one line per append-only table,
+// decided exactly as that role's boot probe in production decides. It fails
+// when a table is unprotected or the role cannot append to it. Archive its
+// output with the deploy.
+func reportPosture(ctx context.Context, mode environment.Mode, role string) error {
+	tables := postureTables()
+
+	db, err := open(ctx, mode)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	tx, err := db.BeginRead(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	report, err := pgxdb.InspectTablePrivileges(ctx, tx, role, tables...)
+	if err != nil {
+		return err
+	}
+	failing := 0
+	for _, t := range report.Tables {
+		protectedBy := t.ProtectedBy(appendOnlyWritableAcknowledged)
+		trigger := t.TriggerState
+		if trigger == "" {
+			trigger = "absent"
+		}
+		fmt.Printf("table=%s protected_by=%s owner=%t insert=%t sequence_usage=%t trigger=%s\n",
+			t.Table, protectedBy, t.Owner, t.Insert, t.SequenceUsage, trigger)
+		if protectedBy == "none" || t.CannotAppend() {
+			failing++
+		}
+	}
+	if failing > 0 {
+		return fmt.Errorf("posture: role %s: %d of %d append-only tables unprotected or not appendable", report.Role, failing, len(report.Tables))
+	}
+	return nil
 }
 
 // reportStatus prints applied vs pending migrations. When the database is

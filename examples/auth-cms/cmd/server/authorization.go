@@ -8,7 +8,9 @@ import (
 	"sync/atomic"
 
 	access "github.com/gopernicus/gopernicus/examples/auth-cms/pockets/access/inbound"
+	"github.com/gopernicus/gopernicus/examples/auth-cms/pockets/audit/outbound/securityevents"
 
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/securityevent"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/decisions"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuples"
 
@@ -87,9 +89,15 @@ func authzIntegrityPolicy() mutations.IntegrityPolicy {
 // recording audit and exposing its reader, so production mode's audit
 // requirement is met. A recording store needs an audit.Source on every change:
 // the bundled role routes stamp the principal, and this host's seeds and
-// granters stamp themselves as systems.
-func newAuthorization(roleRoutesGate web.Middleware, mode environment.Mode, logger *slog.Logger) (authorization.Components, error) {
+// granters stamp themselves as systems. With securityEvents set, the decision
+// bridge records denials and refused role writes into the authentication
+// pocket's security-event rail through that recorder; nil records none.
+func newAuthorization(roleRoutesGate web.Middleware, securityEvents securityevents.Recorder, mode environment.Mode, logger *slog.Logger) (authorization.Components, error) {
 	store := authzmem.New(authzmem.WithIntegrityPolicy(authzIntegrityPolicy()), authzmem.WithAudit())
+	var observer decisions.DecisionObserver
+	if securityEvents != nil {
+		observer = securityevents.New(securityEvents)
+	}
 	components, err := authorization.New(
 		authorization.Repositories{
 			Tuples:     store.Tuples(),
@@ -100,12 +108,14 @@ func newAuthorization(roleRoutesGate web.Middleware, mode environment.Mode, logg
 		authorization.WithLogger(logger),
 		authorization.WithModel(authzSchema()),
 		authorization.WithRuntimeMode(mode),
+		authorization.WithDecisionObserver(observer),
 	)
 	if err != nil {
 		return authorization.Components{}, err
 	}
 	if roleRoutesGate != nil {
-		components.HTTP, err = authorizationhttp.New(authorizationhttp.Services{Decisions: components.Decisions, Roles: components.Roles, Mutations: components.Mutations}, authorizationhttp.WithRoleRoutes(authorizationhttp.RoleRoutes{Gate: roleRoutesGate, WritePolicy: access.New(components.Decisions).RoleWrite}))
+		components.HTTP, err = authorizationhttp.New(authorizationhttp.Services{Decisions: components.Decisions, Roles: components.Roles, Mutations: components.Mutations}, authorizationhttp.WithRoleRoutes(authorizationhttp.RoleRoutes{Gate: roleRoutesGate, WritePolicy: access.New(components.Decisions).RoleWrite}),
+			authorizationhttp.WithDecisionObserver(observer), authorizationhttp.WithLogger(logger))
 	}
 	return components, err
 }
@@ -160,6 +170,23 @@ func (d *deferredMiddleware) middleware(next http.Handler) http.Handler {
 		}
 		(*chain)(next).ServeHTTP(w, r)
 	})
+}
+
+// deferredRecorder is the recorder the decision bridge is built over before the
+// authentication pocket exists — the same ordering seam as deferredMiddleware.
+// run sets it to the pocket's ONE recorder, Components.SecurityEvents, right
+// after auth.New and before the host serves; until then Record does nothing (a
+// nil *securityevent.Recorder records nothing).
+type deferredRecorder struct {
+	recorder atomic.Pointer[securityevent.Recorder]
+}
+
+// set installs the authentication pocket's recorder.
+func (d *deferredRecorder) set(r *securityevent.Recorder) { d.recorder.Store(r) }
+
+// Record forwards to the installed recorder.
+func (d *deferredRecorder) Record(ctx context.Context, in securityevent.Input) {
+	d.recorder.Load().Record(ctx, in)
 }
 
 // seedOwnerSubject is the boot-seeded demo owner/platform-admin principal. This proof

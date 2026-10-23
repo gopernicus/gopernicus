@@ -21,6 +21,7 @@ import (
 	"syscall"
 
 	"github.com/gopernicus/gopernicus/examples/production-baseline/integrations/authentication/devissuer"
+	"github.com/gopernicus/gopernicus/examples/production-baseline/pockets/audit/outbound/securityevents"
 	gooidc "github.com/gopernicus/gopernicus/integrations/cryptids/go-oidc"
 	golangjwt "github.com/gopernicus/gopernicus/integrations/cryptids/golang-jwt"
 	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
@@ -29,6 +30,7 @@ import (
 	authenticationhttp "github.com/gopernicus/gopernicus/pockets/authentication/inbound/http"
 	authlogic "github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/protection"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/securityevent"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/delivery"
 	authenticationpgx "github.com/gopernicus/gopernicus/pockets/authentication/stores/pgx"
 	"github.com/gopernicus/gopernicus/pockets/authorization"
@@ -149,7 +151,7 @@ func run(ctx context.Context, log *slog.Logger, mode environment.Mode) error {
 	if err != nil {
 		return err
 	}
-	if err := mount(router, composition{
+	counters, err := mount(router, composition{
 		mode:                mode,
 		log:                 log,
 		origin:              srv.Origin(),
@@ -159,10 +161,11 @@ func run(ctx context.Context, log *slog.Logger, mode environment.Mode) error {
 		authenticationRepos: authenticationRepos,
 		authorizationRepos:  authorizationRepos,
 		provider:            provider,
-	}); err != nil {
+	})
+	if err != nil {
 		return err
 	}
-	router.Handle(http.MethodGet, "/healthz", healthzHandler(db))
+	router.Handle(http.MethodGet, "/healthz", healthzHandler(db, counters))
 	return web.Run(ctx, router, srv, log)
 }
 
@@ -245,15 +248,17 @@ func newProvider(ctx context.Context, router *web.WebHandler, origin string, mod
 // Authentication admits only the provider's tokens: password flows and
 // delivery are off. Authorization records every change and serves role
 // administration behind authenticate ∘ browser-safe mutation ∘ the global
-// admin role.
-func mount(router *web.WebHandler, c composition) error {
+// admin role; its denials and refused role writes reach the security-event
+// rail through the host's decision bridge. It returns the audit-loss counters
+// /healthz reports.
+func mount(router *web.WebHandler, c composition) (auditCounters, error) {
 	signer, err := golangjwt.New(string(c.keys.JWTSecret))
 	if err != nil {
-		return fmt.Errorf("build jwt signer: %w", err)
+		return auditCounters{}, fmt.Errorf("build jwt signer: %w", err)
 	}
 	keyer, err := protection.NewHMACIdentifierKeyer(c.keys.IdentifierKey)
 	if err != nil {
-		return fmt.Errorf("build identifier keyer: %w", err)
+		return auditCounters{}, fmt.Errorf("build identifier keyer: %w", err)
 	}
 	authenticationComponents, err := authentication.New(c.authenticationRepos, signer, c.mode, delivery.ModeOff,
 		authentication.WithPassword(authentication.PasswordConfig{PasswordFlowsDisabled: true}),
@@ -266,23 +271,31 @@ func mount(router *web.WebHandler, c composition) error {
 			ProvisionOnFirstVerification: true,
 			RequireVerifiedEmail:         true,
 		}}}),
+		authentication.WithAuditWriteObserver(func(ctx context.Context, failure securityevent.WriteFailure) {
+			c.log.ErrorContext(ctx, "security event not recorded",
+				"event_type", failure.EventType, "status", failure.EventStatus, "error_kind", failure.ErrorKind)
+		}),
 		authentication.WithLogger(c.log),
 	)
 	if err != nil {
-		return err
+		return auditCounters{}, err
 	}
 	m := pockets.Mount{Router: router, Logger: c.log}
 	if err := authenticationComponents.HTTP.Register(m); err != nil {
-		return err
+		return auditCounters{}, err
 	}
 
+	// The bridge records through the authentication pocket's one recorder, so a
+	// denial row it loses counts in AuditWriteFailures.
+	bridge := securityevents.NewBridge(authenticationComponents.SecurityEvents)
 	authorizationComponents, err := authorization.New(c.authorizationRepos,
 		authorization.WithRuntimeMode(c.mode),
 		authorization.WithModel(accessModel()),
+		authorization.WithDecisionObserver(bridge.Observer()),
 		authorization.WithLogger(c.log),
 	)
 	if err != nil {
-		return err
+		return auditCounters{}, err
 	}
 	// The role routes' gate ends in this pocket's own guard, so the adapter
 	// serving them is built once the pocket exists.
@@ -296,11 +309,16 @@ func mount(router *web.WebHandler, c composition) error {
 			Gate:        func(next http.Handler) http.Handler { return authenticate(browserSafe(authorize(next))) },
 			WritePolicy: adminWritesAnyRole,
 		}),
+		authorizationhttp.WithDecisionObserver(bridge.Observer()),
+		authorizationhttp.WithLogger(c.log),
 	)
 	if err != nil {
-		return err
+		return auditCounters{}, err
 	}
-	return authorizationComponents.Register(m)
+	if err := authorizationComponents.Register(m); err != nil {
+		return auditCounters{}, err
+	}
+	return auditCounters{authentication: authenticationComponents, bridge: bridge}, nil
 }
 
 // accessModel is the host's permission model: a project is managed by its
@@ -328,14 +346,31 @@ func accessModel() decisions.Model {
 // on every project.
 func adminWritesAnyRole(context.Context, authorizationhttp.RoleWriteRequest) error { return nil }
 
+// auditCounters reads the audit-loss counters /healthz reports: security-event
+// writes that failed, and denials the decision bridge dropped at its in-flight
+// bound.
+type auditCounters struct {
+	authentication *authentication.Components
+	bridge         *securityevents.Bridge
+}
+
+// detail is the /healthz detail object.
+func (a auditCounters) detail() map[string]uint64 {
+	return map[string]uint64{
+		"audit_write_failures": a.authentication.AuditWriteFailures(),
+		"bridge_dropped":       a.bridge.Dropped(),
+	}
+}
+
 // healthzHandler is the readiness probe: 200 while the database answers, 503
-// otherwise. It is unauthenticated by design — a probe cannot sign in.
-func healthzHandler(db *pgxdb.DB) http.HandlerFunc {
+// otherwise, with the audit-loss counters as detail. It is unauthenticated by
+// design — a probe cannot sign in.
+func healthzHandler(db *pgxdb.DB, counters auditCounters) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if err := pgxdb.StatusCheck(r.Context(), db); err != nil {
-			_ = web.RespondJSON(w, http.StatusServiceUnavailable, map[string]string{"status": "unavailable"})
+			_ = web.RespondJSON(w, http.StatusServiceUnavailable, map[string]any{"status": "unavailable", "detail": counters.detail()})
 			return
 		}
-		_ = web.RespondJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+		_ = web.RespondJSON(w, http.StatusOK, map[string]any{"status": "ok", "detail": counters.detail()})
 	}
 }

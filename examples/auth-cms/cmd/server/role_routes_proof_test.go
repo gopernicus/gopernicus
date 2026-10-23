@@ -68,7 +68,7 @@ func newRoleRoutesHost(t *testing.T, withGate bool) *roleRoutesHost {
 	if withGate {
 		configured = gate.middleware
 	}
-	comps, err := newAuthorization(configured, environment.ModeDevelopment, log)
+	comps, err := newAuthorization(configured, nil, environment.ModeDevelopment, log)
 	if err != nil {
 		t.Fatalf("newAuthorization: %v", err)
 	}

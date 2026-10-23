@@ -711,7 +711,7 @@ adopts them by bumping its pin — `go get -tool github.com/gopernicus/gopernicu
 | `examples/auth-cms` | conforming to the H floor since the host-contract-reconciliation package moves (issue #90); still the **authentication conformance harness**, not a layout reference — its `cmd/` carries provider behavior the H10 reviewer clause covers |
 | `examples/goth-showcase` | conforming to the H floor since its showcase package moved to the host's `ui/showcase`; the `ui/goth` kit showcase, not a layout reference |
 | `examples/external-identity` | conforming worked example — the external-only identity host: the authentication pocket's external engine over an in-memory host-pocket outbound, a host `integrations/` dev issuer, no driver, signer, sessions or mail |
-| `examples/production-baseline` | conforming worked example — the auditable reference host: the production posture of §3b with zero acknowledgements; external OIDC identity, role administration and both audit rails on the pgx stores, a thin host (`cmd/`, a host `integrations/` dev issuer, `workshop/migrations`) |
+| `examples/production-baseline` | conforming worked example — the auditable reference host: the production posture of §3b with zero acknowledgements; external OIDC identity, role administration and both audit rails on the pgx stores, triggers applied, two-role posture documented; `cmd/`, a host `integrations/` dev issuer, a host pocket bridging authorization denials to the audit rail, `workshop/migrations` |
 
 `examples/minimal` also demonstrates application-data caching at
 `GET /catalog.json`: a host service caches a public product projection from CMS

@@ -31,7 +31,7 @@ import (
 // construction matrix (a guard requires a mutation repository, etc.) is exercised.
 func hostAuthz(t *testing.T) authorization.Components {
 	t.Helper()
-	comps, err := newAuthorization(nil, environment.ModeDevelopment, nil)
+	comps, err := newAuthorization(nil, nil, environment.ModeDevelopment, nil)
 	if err != nil {
 		t.Fatalf("newAuthorization: %v", err)
 	}
@@ -486,7 +486,7 @@ func TestAuthorizationPosturesDemonstrable(t *testing.T) {
 // =============================================================================
 
 func TestHostUnifiedModelDeclaresGraphAndExactPermissions(t *testing.T) {
-	c, err := newAuthorization(nil, environment.ModeDevelopment, nil)
+	c, err := newAuthorization(nil, nil, environment.ModeDevelopment, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

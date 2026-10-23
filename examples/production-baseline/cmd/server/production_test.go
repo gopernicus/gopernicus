@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -164,10 +165,18 @@ func productionBaseline(t *testing.T) composition {
 }
 
 // TestProductionBaselineConstructs is the positive control: without it the
-// matrix below could pass with every case failing for the wrong reason.
+// matrix below could pass with every case failing for the wrong reason. It also
+// proves the decision bridge is wired: the authorization registration line
+// reports the observer, and production logs no unrecorded-denials WARN.
 func TestProductionBaselineConstructs(t *testing.T) {
-	if err := mount(web.NewWebHandler(), productionBaseline(t)); err != nil {
+	var logs bytes.Buffer
+	c := productionBaseline(t)
+	c.log = slog.New(slog.NewTextHandler(&logs, nil))
+	if _, err := mount(web.NewWebHandler(), c); err != nil {
 		t.Fatalf("production baseline: %v", err)
+	}
+	if !strings.Contains(logs.String(), "decision_observer=true") || strings.Contains(logs.String(), "denials are not durably recorded") {
+		t.Fatalf("registration does not report the decision observer:\n%s", logs.String())
 	}
 }
 
@@ -223,7 +232,7 @@ func TestProductionRefusesEachOmission(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			c := productionBaseline(t)
 			tc.mutate(t, &c)
-			err := mount(web.NewWebHandler(), c)
+			_, err := mount(web.NewWebHandler(), c)
 			if !errors.Is(err, tc.want) || !strings.Contains(fmt.Sprint(err), tc.names) {
 				t.Fatalf("production %s: got %v, want %v naming %q", tc.name, err, tc.want, tc.names)
 			}
@@ -307,7 +316,7 @@ func TestRoleRoutesGateOrder(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newProvider: %v", err)
 	}
-	if err := mount(router, composition{
+	if _, err := mount(router, composition{
 		mode:                environment.ModeDevelopment,
 		log:                 log,
 		origin:              origin,

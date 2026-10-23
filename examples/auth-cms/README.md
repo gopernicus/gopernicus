@@ -207,6 +207,17 @@ remain absent.
   (relationships + roles), memstore-backed (no driver in the graph). Backs
   `auth.InvitationsConfig.Granter`, `events.WithAuthorization` (`authorizer.Check`), and the
   host demo routes.
+- **decision bridge**: `pockets/audit/outbound/securityevents` (a copy of
+  `examples/production-baseline`'s) records denied decisions (`authorization_denied`)
+  and refused role writes (`role_write_refused`) through `Components.SecurityEvents`,
+  the authentication pocket's one recorder. `newAuthorization`
+  (`cmd/server/authorization.go`) passes it to `authorization.WithDecisionObserver`
+  and to the rebuilt role-routes adapter (`authorizationhttp.WithDecisionObserver`,
+  `WithLogger`). The authorization pocket is built before the authentication pocket,
+  so `run` hands the bridge a `deferredRecorder` and sets it right after `auth.New`.
+  The Leg 5 dump carries each row's `request_id` and `trace_id` when set, so a non-admin's 403
+  appears as an `authorization_denied` row carrying that request's `X-Request-ID`
+  (`TestDebugSecurityEventsRequiresPlatformAdmin`).
 - **`RequireVerifiedEmail: true`** — login and `/auth/token` refuse an unverified
   user with 403.
 - **event bus + cache invalidation**: the host builds one shared

@@ -259,7 +259,10 @@ func run(ctx context.Context, log *slog.Logger, runtimeMode environment.Mode) er
 	mount := pockets.Mount{Router: router, Logger: log, Events: bus}
 
 	roleRoutesGate := &deferredMiddleware{}
-	authzComponents, err := newAuthorization(roleRoutesGate.middleware, runtimeMode, log)
+	// The decision bridge records through the authentication pocket's one
+	// recorder, which auth.New builds below.
+	securityEvents := &deferredRecorder{}
+	authzComponents, err := newAuthorization(roleRoutesGate.middleware, securityEvents, runtimeMode, log)
 	if err != nil {
 		return err
 	}
@@ -389,6 +392,7 @@ func run(ctx context.Context, log *slog.Logger, runtimeMode environment.Mode) er
 	if err != nil {
 		return err
 	}
+	securityEvents.set(authSvc.SecurityEvents)
 	if err := authSvc.HTTP.Register(mount); err != nil {
 		return err
 	}
