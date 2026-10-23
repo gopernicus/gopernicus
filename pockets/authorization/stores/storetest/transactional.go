@@ -73,6 +73,7 @@ func RunTransactional(t *testing.T, newRepos func(t *testing.T) (Repositories, t
 	t.Run("MutationRefusesAmbientTransaction", func(t *testing.T) { specMutationRefusesAmbientTransaction(t, newRepos) })
 	t.Run("OperationLedger/FenceInsideTransactionRefused", func(t *testing.T) { specFenceRefusesAmbientTransaction(t, newRepos) })
 	t.Run("OperationLedger/RecordedJoinsTransaction", func(t *testing.T) { specRecordedJoinsTransaction(t, newRepos) })
+	t.Run("OperationLedger/ExpireInsideTransactionRefused", func(t *testing.T) { specExpireRefusesAmbientTransaction(t, newRepos) })
 	t.Run("StandaloneUnchanged", func(t *testing.T) { specStandaloneUnchanged(t, newRepos) })
 }
 
@@ -835,6 +836,37 @@ func specFenceRefusesAmbientTransaction(t *testing.T, newRepos func(t *testing.T
 	got, err := repos.Operations.Fence(outside(t), id)
 	if err != nil || got == nil || got.Outcome != mutations.OutcomeFenced || got.Recorded {
 		t.Fatalf("fence after the refusal: %+v %v", got, err)
+	}
+}
+
+// specExpireRefusesAmbientTransaction: Expire inside Transact returns
+// ErrMutationInsideTransaction with a zero count and deletes nothing; outside it
+// the same record expires.
+func specExpireRefusesAmbientTransaction(t *testing.T, newRepos func(t *testing.T) (Repositories, transaction.Transactor)) {
+	repos, tx := newRepos(t)
+	if repos.Mutations == nil || repos.OperationExpiry == nil {
+		t.Skip("operation expiry not wired")
+	}
+	cmd := grant("E", "viewer", "u1")
+	cmd.OperationID = "ambient:expire"
+	mustApply(t, repos.Mutations, grant("E", "owner", "o"))
+	mustApply(t, repos.Mutations, cmd)
+	before := time.Now().Add(expiryMargin)
+	err := transact(tx, func(ctx context.Context) error {
+		n, err := repos.OperationExpiry.Expire(ctx, before, 10)
+		if !errors.Is(err, mutations.ErrMutationInsideTransaction) || !errors.Is(err, sdk.ErrInvalidInput) || n != 0 {
+			t.Fatalf("Expire inside Transact must refuse with ErrMutationInsideTransaction, got %d %v", n, err)
+		}
+		return err
+	})
+	if !errors.Is(err, mutations.ErrMutationInsideTransaction) {
+		t.Fatalf("Transact must return the refusal, got %v", err)
+	}
+	if outcome, ok, err := repos.Operations.Recorded(outside(t), cmd.OperationID); err != nil || !ok || outcome != mutations.OutcomeApplied {
+		t.Fatalf("refused expiry deleted the record: %q %v %v", outcome, ok, err)
+	}
+	if n, err := repos.OperationExpiry.Expire(outside(t), before, 10); err != nil || n != 1 {
+		t.Fatalf("Expire after the refusal: %d %v", n, err)
 	}
 }
 

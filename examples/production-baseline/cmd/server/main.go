@@ -293,6 +293,7 @@ func mount(router *web.WebHandler, c composition) (auditCounters, error) {
 		authorization.WithRuntimeMode(c.mode),
 		authorization.WithModel(accessModel()),
 		authorization.WithDecisionObserver(bridge.Observer()),
+		authorization.WithOperationRetention(180*24*time.Hour),
 		authorization.WithLogger(c.log),
 	)
 	if err != nil {

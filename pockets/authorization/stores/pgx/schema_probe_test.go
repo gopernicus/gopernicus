@@ -1,10 +1,13 @@
 package pgx
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"slices"
+	"strings"
 	"testing"
 	"testing/fstest"
 	"time"
@@ -143,6 +146,58 @@ func TestSchemaProbeRefusesMigration0005Variants(t *testing.T) {
 				t.Fatalf("bundle accepted altered schema: %v", err)
 			}
 		})
+	}
+}
+
+// TestSchemaProbeAdmitsMigration0007 boots with and without 0007's expiry index.
+// The index is admitted, not required: the canonical probe refuses only extra
+// unique indexes. Its absence, or an invalid leftover of a failed CONCURRENTLY
+// build, is one WARN naming the index and the file, and Expire still works.
+func TestSchemaProbeAdmitsMigration0007(t *testing.T) {
+	var logs bytes.Buffer
+	prior := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(prior) })
+	warning := "index_missing=" + operationExpiryIndex + " file=" + operationExpiryMigration
+
+	db := emptyCanonicalFixture(t)
+	if err := pgxdb.RunMigrations(t.Context(), db, migrationsThrough(t, "0006_iam_audit_immutable.sql"), MigrationsDir); err != nil {
+		t.Fatal(err)
+	}
+	repos, err := testRepositories(t.Context(), db)
+	if err != nil {
+		t.Fatalf("bundle refused a database without 0007: %v", err)
+	}
+	if n := strings.Count(logs.String(), warning); n != 1 {
+		t.Fatalf("want one %s warning, got %d: %s", warning, n, logs.String())
+	}
+	cmd := grantCmd("before", "viewer", "alice")
+	cmd.OperationID = "op:before"
+	mustApplyLive(t, repos.Mutations, cmd)
+	if n, err := repos.OperationExpiry.Expire(t.Context(), time.Now().Add(time.Second), 10); err != nil || n != 1 {
+		t.Fatalf("Expire without the index: %d %v", n, err)
+	}
+
+	// The upgrade recipe: pre-build CONCURRENTLY, then 0007 is a no-op.
+	tupleExec(t, db, `CREATE INDEX CONCURRENTLY `+operationExpiryIndex+` ON iam_operations (committed_at, operation_id)`)
+	if err := pgxdb.RunMigrations(t.Context(), db, MigrationsFS, MigrationsDir); err != nil {
+		t.Fatalf("0007 over a pre-built index: %v", err)
+	}
+	logs.Reset()
+	if _, err := testRepositories(t.Context(), db, WithAudit()); err != nil {
+		t.Fatalf("bundle refused 0007's index: %v", err)
+	}
+	if strings.Contains(logs.String(), "index_missing") {
+		t.Fatalf("index present but warned: %s", logs.String())
+	}
+
+	tupleExec(t, db, `UPDATE pg_catalog.pg_index SET indisvalid = false WHERE indexrelid = pg_catalog.to_regclass('`+operationExpiryIndex+`')`)
+	logs.Reset()
+	if _, err := testRepositories(t.Context(), db); err != nil {
+		t.Fatalf("bundle refused an invalid expiry index: %v", err)
+	}
+	if n := strings.Count(logs.String(), warning); n != 1 {
+		t.Fatalf("invalid index: want one %s warning, got %d: %s", warning, n, logs.String())
 	}
 }
 

@@ -115,10 +115,11 @@ func Repositories(ctx context.Context, db *tursodb.DB, opts ...Option) (authoriz
 	}
 	mutationStore := newMutationStore(db, cfg)
 	repos := authorization.Repositories{
-		Tuples:     newTupleStore(db, cfg),
-		Mutations:  mutationStore,
-		Operations: mutationStore,
-		Audit:      &auditStore{db: db},
+		Tuples:          newTupleStore(db, cfg),
+		Mutations:       mutationStore,
+		Operations:      mutationStore,
+		OperationExpiry: mutationStore,
+		Audit:           &auditStore{db: db},
 	}
 	if source != nil {
 		repos.TupleSource = source

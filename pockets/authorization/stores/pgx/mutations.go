@@ -62,6 +62,7 @@ func newMutationStore(db *pgxdb.DB, cfg config) *mutationStore {
 var (
 	_ mutations.MutationRepository = (*mutationStore)(nil)
 	_ mutations.OperationLedger    = (*mutationStore)(nil)
+	_ mutations.OperationExpirer   = (*mutationStore)(nil)
 	_ audit.RecordingReporter      = (*mutationStore)(nil)
 )
 

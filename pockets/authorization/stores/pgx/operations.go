@@ -9,8 +9,14 @@ import (
 	"github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/mutations"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuples"
+	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/jackc/pgx/v5"
 )
+
+// fenceAttempts bounds Fence's INSERT: an Expire that commits between a
+// conflicting INSERT and its SELECT leaves the ID unrecorded, and the next
+// INSERT then records the fence. Only lock holders insert, so one retry suffices.
+const fenceAttempts = 3
 
 func (m *mutationStore) replayOperation(ctx context.Context, tx *writeTx, cmd mutations.Command) (*mutations.Result, error) {
 	var encoding, fingerprint string
@@ -75,27 +81,30 @@ func (m *mutationStore) Fence(ctx context.Context, operationID string) (*mutatio
 			if err := lockAuthorization(ctx, tx, m.schema); err != nil {
 				return err
 			}
-			tag, err := tx.Exec(ctx, "INSERT INTO "+m.schema.Table("iam_operations")+" (operation_id, encoding, fingerprint, outcome, committed_at) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (operation_id) DO NOTHING", operationID, mutations.OperationEncoding, mutations.FenceFingerprint, mutations.OutcomeFenced, time.Now().UTC())
-			if err != nil {
-				return err
-			}
-			if tag.RowsAffected() == 1 {
-				result = &mutations.FenceResult{Outcome: mutations.OutcomeFenced}
+			for range fenceAttempts {
+				tag, err := tx.Exec(ctx, "INSERT INTO "+m.schema.Table("iam_operations")+" (operation_id, encoding, fingerprint, outcome, committed_at) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (operation_id) DO NOTHING", operationID, mutations.OperationEncoding, mutations.FenceFingerprint, mutations.OutcomeFenced, time.Now().UTC())
+				if err != nil {
+					return err
+				}
+				if tag.RowsAffected() == 1 {
+					result = &mutations.FenceResult{Outcome: mutations.OutcomeFenced}
+					return nil
+				}
+				var outcome mutations.Outcome
+				err = tx.QueryRow(ctx, "SELECT outcome FROM "+m.schema.Table("iam_operations")+" WHERE operation_id=$1", operationID).Scan(&outcome)
+				if errors.Is(err, pgx.ErrNoRows) {
+					continue
+				}
+				if err != nil {
+					return err
+				}
+				if !outcome.Valid() {
+					return fmt.Errorf("authorization operation: invalid outcome %q", outcome)
+				}
+				result = &mutations.FenceResult{Outcome: outcome, Recorded: true}
 				return nil
 			}
-			var outcome mutations.Outcome
-			err = tx.QueryRow(ctx, "SELECT outcome FROM "+m.schema.Table("iam_operations")+" WHERE operation_id=$1", operationID).Scan(&outcome)
-			if errors.Is(err, pgx.ErrNoRows) {
-				return fmt.Errorf("authorization operation: fence conflicted but no record exists for %q", operationID)
-			}
-			if err != nil {
-				return err
-			}
-			if !outcome.Valid() {
-				return fmt.Errorf("authorization operation: invalid outcome %q", outcome)
-			}
-			result = &mutations.FenceResult{Outcome: outcome, Recorded: true}
-			return nil
+			return fmt.Errorf("authorization operation: fence conflicted but no record exists for %q", operationID)
 		})
 		return err, false
 	})
@@ -103,6 +112,32 @@ func (m *mutationStore) Fence(ctx context.Context, operationID string) (*mutatio
 		return nil, err
 	}
 	return result, nil
+}
+
+// Expire deletes at most limit applied, no_change and not_found records
+// committed at or before before, oldest first, in one statement on the pool. It
+// takes no authorization lock: the lock guards iam_tuples, and a record's
+// outcome never changes. The outcome filter keeps fenced records, which the 0006
+// trigger also refuses to delete. It refuses an ambient transaction.
+func (m *mutationStore) Expire(ctx context.Context, before time.Time, limit int) (int, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	if _, ok := pgxdb.TxFromContext(ctx); ok {
+		return 0, mutations.ErrMutationInsideTransaction
+	}
+	if limit <= 0 {
+		return 0, fmt.Errorf("authorization operation expiry: limit must be positive, got %d: %w", limit, sdk.ErrInvalidInput)
+	}
+	table := m.schema.Table("iam_operations")
+	// No FOR UPDATE SKIP LOCKED: every row-lock clause needs UPDATE, which the
+	// append-only posture revokes from the runtime role on iam_operations. A
+	// concurrent Expire waits for these rows and then skips the deleted ones.
+	tag, err := m.db.Exec(ctx, "DELETE FROM "+table+" WHERE operation_id IN (SELECT operation_id FROM "+table+" WHERE outcome IN ('applied', 'no_change', 'not_found') AND committed_at <= $1 ORDER BY committed_at, operation_id LIMIT $2)", before.UTC(), limit)
+	if err != nil {
+		return 0, pgxdb.MapError(err)
+	}
+	return int(tag.RowsAffected()), nil
 }
 
 // Recorded reads the operation record without the write lock, through the

@@ -5,6 +5,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/mutations"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuples"
@@ -16,6 +17,7 @@ func runOperationLedger(t *testing.T, newRepos func(*testing.T) Repositories) {
 		t.Fatal("Repositories.Mutations is wired but Repositories.Operations is nil: a mutation store that honors OperationID must expose its OperationLedger")
 	}
 	runOperationFence(t, newRepos)
+	runOperationExpiry(t, newRepos)
 	for _, change := range []string{"revoke", "replace", "teardown"} {
 		t.Run("ReplayAfter/"+change, func(t *testing.T) {
 			r := newRepos(t)
@@ -462,6 +464,140 @@ func runOperationFence(t *testing.T, newRepos func(*testing.T) Repositories) {
 			}
 		} else if freshFences != 0 || freshApplies != 1 || !relationExists(t, r, "d", "viewer", "u") {
 			t.Fatalf("apply won but fresh fences=%d fresh applies=%d or the tuple is missing", freshFences, freshApplies)
+		}
+	})
+}
+
+// expiryMargin is the δ in before = now + δ: stores stamp commit times from
+// their own clock, so a cutoff a little past now covers every record written so
+// far.
+const expiryMargin = time.Second
+
+// runOperationExpiry proves the OperationExpirer contract: only applied,
+// no_change and not_found records at or before the cutoff expire, oldest first
+// and bounded by limit; fenced records never expire; limit <= 0 is refused; and
+// an expired ID reads as never recorded, so Fence then records it as fenced.
+func runOperationExpiry(t *testing.T, newRepos func(*testing.T) Repositories) {
+	expiryRepos := func(t *testing.T) Repositories {
+		t.Helper()
+		r := newRepos(t)
+		if r.OperationExpiry == nil {
+			t.Skip("Repositories.OperationExpiry not wired — operation expiry NOT verified")
+		}
+		mustApply(t, r.Mutations, grant("d", "owner", "o"))
+		return r
+	}
+	mustExpire := func(t *testing.T, r Repositories, before time.Time, limit, want int) {
+		t.Helper()
+		got, err := r.OperationExpiry.Expire(t.Context(), before, limit)
+		if err != nil || got != want {
+			t.Fatalf("Expire(%s, %d) = %d %v, want %d", before.Format(time.RFC3339Nano), limit, got, err, want)
+		}
+	}
+	assertRecorded := func(t *testing.T, r Repositories, want map[string]mutations.Outcome) {
+		t.Helper()
+		for id, outcome := range want {
+			got, ok, err := r.Operations.Recorded(t.Context(), id)
+			if err != nil || ok != (outcome != "") || got != outcome {
+				t.Fatalf("Recorded(%q) = %q %v %v, want %q", id, got, ok, err, outcome)
+			}
+		}
+	}
+
+	t.Run("ExpireKeepsFenced", func(t *testing.T) {
+		r := expiryRepos(t)
+		for id, cmd := range map[string]mutations.Command{
+			"op:applied":   grant("d", "viewer", "u"),
+			"op:no-change": grant("d", "owner", "o"),
+			"op:not-found": revoke("d", "viewer", "absent"),
+		} {
+			cmd.OperationID = id
+			mustApply(t, r.Mutations, cmd)
+		}
+		for _, id := range []string{"op:fenced", "op:fenced-too"} {
+			if got, err := r.Operations.Fence(t.Context(), id); err != nil || got.Outcome != mutations.OutcomeFenced {
+				t.Fatalf("Fence(%q): %+v %v", id, got, err)
+			}
+		}
+		before := time.Now().Add(expiryMargin)
+		mustExpire(t, r, before, 100, 3)
+		mustExpire(t, r, before, 100, 0)
+		assertRecorded(t, r, map[string]mutations.Outcome{
+			"op:applied": "", "op:no-change": "", "op:not-found": "",
+			"op:fenced": mutations.OutcomeFenced, "op:fenced-too": mutations.OutcomeFenced,
+		})
+		if !relationExists(t, r, "d", "viewer", "u") {
+			t.Fatal("expiry removed a fact; it deletes operation records only")
+		}
+	})
+
+	t.Run("ExpireBoundedAndBoundary", func(t *testing.T) {
+		r := expiryRepos(t)
+		if r.SetOperationCommittedAt == nil {
+			t.Fatal("Repositories.OperationExpiry is wired but SetOperationCommittedAt is nil: the expiry boundary cannot be placed")
+		}
+		// Microsecond-aligned, so every store keeps the fixture times exactly.
+		boundary := time.Now().Add(-time.Hour).UTC().Truncate(time.Microsecond)
+		for _, record := range []struct {
+			id      string
+			subject string
+			at      time.Time
+		}{
+			{"op:z", "z", boundary.Add(-2 * time.Microsecond)},
+			{"op:y", "y", boundary.Add(-time.Microsecond)},
+			{"op:x", "x", boundary.Add(-time.Microsecond)},
+			{"op:a", "a", boundary},
+			{"op:after", "after", boundary.Add(time.Microsecond)},
+		} {
+			cmd := grant("d", "viewer", record.subject)
+			cmd.OperationID = record.id
+			mustApply(t, r.Mutations, cmd)
+			r.SetOperationCommittedAt(t, record.id, record.at)
+		}
+		// Oldest first, ties by operation ID: op:a sorts first by ID but is newest.
+		mustExpire(t, r, boundary, 2, 2)
+		assertRecorded(t, r, map[string]mutations.Outcome{"op:z": "", "op:x": "", "op:y": mutations.OutcomeApplied, "op:a": mutations.OutcomeApplied, "op:after": mutations.OutcomeApplied})
+		// A record exactly at the cutoff is eligible.
+		mustExpire(t, r, boundary, 2, 2)
+		assertRecorded(t, r, map[string]mutations.Outcome{"op:y": "", "op:a": "", "op:after": mutations.OutcomeApplied})
+		mustExpire(t, r, boundary, 2, 0)
+		mustExpire(t, r, time.Now().Add(expiryMargin), 10, 1)
+		assertRecorded(t, r, map[string]mutations.Outcome{"op:after": ""})
+	})
+
+	t.Run("ExpireLimitZeroRefused", func(t *testing.T) {
+		r := expiryRepos(t)
+		cmd := grant("d", "viewer", "u")
+		cmd.OperationID = "op:kept"
+		mustApply(t, r.Mutations, cmd)
+		for _, limit := range []int{0, -1} {
+			if got, err := r.OperationExpiry.Expire(t.Context(), time.Now().Add(expiryMargin), limit); got != 0 || !errors.Is(err, sdk.ErrInvalidInput) {
+				t.Fatalf("Expire limit %d = %d %v, want sdk.ErrInvalidInput", limit, got, err)
+			}
+		}
+		assertRecorded(t, r, map[string]mutations.Outcome{"op:kept": mutations.OutcomeApplied})
+	})
+
+	t.Run("ExpireThenFenceRecordsFenced", func(t *testing.T) {
+		r := expiryRepos(t)
+		cmd := grant("d", "viewer", "u")
+		cmd.OperationID = "invitation:expired"
+		mustApply(t, r.Mutations, cmd)
+		before := time.Now().Add(expiryMargin)
+		mustExpire(t, r, before, 10, 1)
+		assertRecorded(t, r, map[string]mutations.Outcome{cmd.OperationID: ""})
+		got, err := r.Operations.Fence(t.Context(), cmd.OperationID)
+		if err != nil || got.Outcome != mutations.OutcomeFenced || got.Recorded {
+			t.Fatalf("Fence after expiry: %+v %v", got, err)
+		}
+		replay, err := r.Mutations.Apply(t.Context(), cmd, func(mutations.Command) error { return sdk.ErrInvalidInput })
+		if err != nil || replay.Outcome != mutations.OutcomeFenced || !replay.Replayed || !replay.Superseded {
+			t.Fatalf("Apply after the fence: %+v %v", replay, err)
+		}
+		mustExpire(t, r, before, 10, 0)
+		assertRecorded(t, r, map[string]mutations.Outcome{cmd.OperationID: mutations.OutcomeFenced})
+		if !relationExists(t, r, "d", "viewer", "u") {
+			t.Fatal("expiry or the fence removed the committed grant")
 		}
 	})
 }

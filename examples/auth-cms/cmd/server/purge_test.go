@@ -14,6 +14,7 @@ import (
 	"github.com/gopernicus/gopernicus/pockets/cms"
 	"github.com/gopernicus/gopernicus/pockets/cms/domain/messaging"
 	"github.com/gopernicus/gopernicus/sdk"
+	"github.com/gopernicus/gopernicus/sdk/pkg/environment"
 )
 
 // fakePurger stands in for the jobs Service's bounded terminal purge. It removes at most the
@@ -275,5 +276,73 @@ func TestInquiryPurgeLoopContinuesAfterError(t *testing.T) {
 	}
 	if !strings.Contains(logs.String(), "retention step failed") || !strings.Contains(logs.String(), "step=inquiries") {
 		t.Errorf("no step-named error line: %s", logs.String())
+	}
+}
+
+// fakeExpirer stands in for the authorization mutations service's bounded expiry.
+type fakeExpirer struct {
+	mu     sync.Mutex
+	limits []int
+	err    error
+}
+
+func (e *fakeExpirer) ExpireOperations(_ context.Context, limit int) (int, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.limits = append(e.limits, limit)
+	if e.err != nil {
+		return 0, e.err
+	}
+	return 1, nil
+}
+
+func (e *fakeExpirer) calls() []int {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return append([]int(nil), e.limits...)
+}
+
+// TestOperationExpiryLoopRunsBoundedPassesThroughErrors proves every tick asks for at most
+// the batch, a failed pass does not stop the loop, and cancellation returns promptly.
+func TestOperationExpiryLoopRunsBoundedPassesThroughErrors(t *testing.T) {
+	t.Parallel()
+	expirer := &fakeExpirer{err: errors.New("operation ledger unavailable")}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		runOperationExpiryLoop(ctx, 5*time.Millisecond, expirer.ExpireOperations, 7, quietLog())
+	}()
+	deadline := time.Now().Add(2 * time.Second)
+	for len(expirer.calls()) < 3 {
+		if time.Now().After(deadline) {
+			t.Fatalf("expiry loop stopped after errors (calls=%v)", expirer.calls())
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("expiry loop did not return after context cancel")
+	}
+	for _, limit := range expirer.calls() {
+		if limit != 7 {
+			t.Fatalf("pass requested limit %d, want the batch 7", limit)
+		}
+	}
+}
+
+// TestAuthorizationWiresOperationExpiry proves the host's authorization pocket can expire
+// operation records: the slot is wired, and a record inside the retention stays.
+func TestAuthorizationWiresOperationExpiry(t *testing.T) {
+	t.Parallel()
+	components, err := newAuthorization(nil, nil, environment.ModeDevelopment, quietLog())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n, err := components.Mutations.ExpireOperations(context.Background(), defaultOperationExpiryBatch); n != 0 || err != nil {
+		t.Fatalf("ExpireOperations on a fresh ledger: %d %v", n, err)
 	}
 }

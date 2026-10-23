@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/audit"
@@ -125,6 +126,24 @@ func (s *Service) Recorded(ctx context.Context, operationID string) (Outcome, bo
 		return "", false, err
 	}
 	return s.ledger.Recorded(ctx, operationID)
+}
+
+// ExpireOperations deletes at most limit operation records committed at or
+// before now minus the configured retention, oldest first, and returns how many
+// it deleted. Fenced records never expire. It takes no write lock, so it runs
+// beside Apply; it refuses an ambient transaction and limit <= 0. An expired
+// operation ID reads as never recorded. The host's schedule owns the cadence.
+func (s *Service) ExpireOperations(ctx context.Context, limit int) (int, error) {
+	if s == nil || s.expirer == nil {
+		return 0, ErrOperationExpiryNotConfigured
+	}
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	if limit <= 0 {
+		return 0, fmt.Errorf("authorization: operation expiry limit must be positive, got %d: %w", limit, sdk.ErrInvalidInput)
+	}
+	return s.expirer.Expire(ctx, time.Now().Add(-s.retention), limit)
 }
 func semanticValidatorFor(model *decisions.CompiledModel) SemanticValidator {
 	if model == nil {

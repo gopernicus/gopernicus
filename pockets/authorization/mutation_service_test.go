@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	authmodel "github.com/gopernicus/gopernicus/pockets/authorization/logic/model"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/mutations"
@@ -281,6 +282,66 @@ func TestOperationsWiring(t *testing.T) {
 	}
 	if _, err := mutations.NewService(store.Mutations(), mutations.WithLedger((*memory.Mutations)(nil))); !errors.Is(err, sdk.ErrInvalidInput) {
 		t.Fatalf("typed-nil ledger option: %v", err)
+	}
+}
+
+func TestOperationExpiryWiring(t *testing.T) {
+	store := memory.New()
+	day := 24 * time.Hour
+	for _, tc := range []struct {
+		name  string
+		repos Repositories
+		opts  []Option
+		want  error
+	}{
+		{"expiry without Mutations", Repositories{Tuples: store.Tuples(), OperationExpiry: store.OperationExpiry()}, nil, sdk.ErrInvalidInput},
+		{"typed-nil expiry", Repositories{Tuples: store.Tuples(), Mutations: store.Mutations(), OperationExpiry: (*memory.Mutations)(nil)}, nil, sdk.ErrInvalidInput},
+		{"retention without expiry", Repositories{Tuples: store.Tuples(), Mutations: store.Mutations()}, []Option{WithOperationRetention(30 * day)}, ErrOperationRetentionWithoutExpirer},
+		{"retention without Mutations", Repositories{Tuples: store.Tuples()}, []Option{WithOperationRetention(30 * day)}, ErrOperationRetentionWithoutExpirer},
+		{"retention below seven days", Repositories{Tuples: store.Tuples(), Mutations: store.Mutations(), OperationExpiry: store.OperationExpiry()}, []Option{WithOperationRetention(7*day - time.Nanosecond)}, ErrOperationRetentionTooShort},
+		{"explicit zero retention", Repositories{Tuples: store.Tuples(), Mutations: store.Mutations(), OperationExpiry: store.OperationExpiry()}, []Option{WithOperationRetention(0)}, ErrOperationRetentionTooShort},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := New(tc.repos, tc.opts...); !errors.Is(err, tc.want) || !errors.Is(err, sdk.ErrInvalidInput) {
+				t.Fatalf("New = %v, want %v", err, tc.want)
+			}
+		})
+	}
+	if _, err := New(Repositories{Tuples: store.Tuples(), Mutations: store.Mutations(), OperationExpiry: store.OperationExpiry()}, WithOperationRetention(7*day)); err != nil {
+		t.Fatalf("seven-day retention refused: %v", err)
+	}
+}
+
+func TestExpireOperationsRequiresExpiry(t *testing.T) {
+	store := memory.New()
+	comps := mustComponents(t, Repositories{Tuples: store.Tuples(), Mutations: store.Mutations(), Operations: store.Operations()})
+	if n, err := comps.Mutations.ExpireOperations(t.Context(), 10); n != 0 || !errors.Is(err, mutations.ErrOperationExpiryNotConfigured) || !errors.Is(err, sdk.ErrInvalidInput) {
+		t.Fatalf("ExpireOperations without OperationExpiry: %d %v", n, err)
+	}
+	var nilService *mutations.Service
+	if _, err := nilService.ExpireOperations(t.Context(), 10); !errors.Is(err, mutations.ErrOperationExpiryNotConfigured) {
+		t.Fatalf("nil service ExpireOperations: %v", err)
+	}
+}
+
+func TestExpireOperationsKeepsRecordsInsideRetention(t *testing.T) {
+	store := memory.New()
+	comps := mustComponents(t, Repositories{Tuples: store.Tuples(), Mutations: store.Mutations(), Operations: store.Operations(), OperationExpiry: store.OperationExpiry()})
+	cmd := validGrantCommand(t)
+	cmd.OperationID = "invitation:one"
+	if _, err := comps.Mutations.Apply(t.Context(), cmd); err != nil {
+		t.Fatal(err)
+	}
+	for _, limit := range []int{0, -1} {
+		if n, err := comps.Mutations.ExpireOperations(t.Context(), limit); n != 0 || !errors.Is(err, sdk.ErrInvalidInput) {
+			t.Fatalf("ExpireOperations(%d): %d %v", limit, n, err)
+		}
+	}
+	if n, err := comps.Mutations.ExpireOperations(t.Context(), 10); n != 0 || err != nil {
+		t.Fatalf("a record inside the default retention expired: %d %v", n, err)
+	}
+	if outcome, ok, err := comps.Mutations.Recorded(t.Context(), cmd.OperationID); !ok || err != nil || outcome != mutations.OutcomeApplied {
+		t.Fatalf("Recorded: %q %v %v", outcome, ok, err)
 	}
 }
 

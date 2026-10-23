@@ -205,6 +205,17 @@ func TestImmutableTriggersLive(t *testing.T) {
 	if tag, err := runtime.Exec(t.Context(), `DELETE FROM iam_operations WHERE operation_id = 'op:first'`); err != nil || tag.RowsAffected() != 1 {
 		t.Fatalf("non-fenced operation delete: %v %v", tag, err)
 	}
+	// Expire as the runtime role under the posture guide's grants (no UPDATE or
+	// TRUNCATE on iam_operations): the non-fenced records go, the fenced one
+	// stays, and the trigger still refuses deleting it directly.
+	tupleExec(t, f.admin, `REVOKE UPDATE, TRUNCATE ON iam_operations FROM "`+f.role+`"`)
+	if n, err := repos.OperationExpiry.Expire(t.Context(), time.Now().Add(time.Second), 10); err != nil || n != 2 {
+		t.Fatalf("Expire as the runtime role: %d %v", n, err)
+	}
+	if got := queryText(t, f.admin, `SELECT string_agg(operation_id || '=' || outcome, ',' ORDER BY operation_id) FROM iam_operations`); got != "op:fenced=fenced" {
+		t.Fatalf("operations after Expire: %s", got)
+	}
+	expectForbidden(t, runtime, `DELETE FROM iam_operations WHERE operation_id = 'op:fenced'`)
 	if got := queryText(t, f.admin, `SELECT count(*)::text || '/' || count(*) FILTER (WHERE reason = 'test change')::text FROM iam_audit`); got != "3/3" {
 		t.Fatalf("audit rows changed by a refused write: %s", got)
 	}

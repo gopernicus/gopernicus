@@ -8,7 +8,7 @@ import (
 )
 
 // Both dialects install the same canonical tables and access paths.
-var canonicalMigrations = []string{"0001_iam_tuples.sql", "0003_iam_operations.sql", "0004_iam_operations_fenced.sql", "0005_iam_audit_integrity.sql", "0006_iam_audit_immutable.sql"}
+var canonicalMigrations = []string{"0001_iam_tuples.sql", "0003_iam_operations.sql", "0004_iam_operations_fenced.sql", "0005_iam_audit_integrity.sql", "0006_iam_audit_immutable.sql", "0007_iam_operations_expiry.sql"}
 var expectedTables = []string{"iam_tuples", "iam_audit", "iam_operations"}
 var expectedConstraints = []string{
 	"ck_iam_operations_id", "ck_iam_operations_encoding", "ck_iam_operations_fingerprint", "ck_iam_operations_outcome",
@@ -18,6 +18,7 @@ var expectedConstraints = []string{
 var expectedIndexes = []string{
 	"idx_iam_tuples_subject", "idx_iam_tuples_relation_resource",
 	"idx_iam_audit_time", "idx_iam_audit_resource", "idx_iam_audit_subject", "idx_iam_audit_actor",
+	"idx_iam_operations_committed",
 }
 
 // Hosts copy 0005 into their own streams and the runner checksums it, so both
@@ -90,6 +91,15 @@ INSERT INTO main.iam_operations_next (operation_id, encoding, fingerprint, outco
 SELECT operation_id, encoding, fingerprint, outcome, committed_at, NULL AS recorded_at FROM main.iam_operations ORDER BY committed_at, operation_id;
 DROP TABLE main.iam_operations;
 ALTER TABLE main.iam_operations_next RENAME TO iam_operations;
+`
+
+// 0007 is additive and admitted, not required: each dialect builds the expiry
+// index only if it is absent, so a CONCURRENTLY pre-build makes it a no-op.
+const pinnedPgxMigration0007 = `SET LOCAL lock_timeout = '5s';
+CREATE INDEX IF NOT EXISTS idx_iam_operations_committed ON iam_operations (committed_at, operation_id);
+`
+
+const pinnedTursoMigration0007 = `CREATE INDEX IF NOT EXISTS main.idx_iam_operations_committed ON iam_operations (committed_at, operation_id);
 `
 
 func migrationNames(t *testing.T) []string {
@@ -229,5 +239,23 @@ func TestMigration0005Pinned(t *testing.T) {
 	}
 	if string(sibling) != pinnedTursoMigration0005 {
 		t.Errorf("turso 0005 changed:\n%s", sibling)
+	}
+}
+
+// TestMigration0007Pinned holds both dialects' 0007 bodies byte-for-byte.
+func TestMigration0007Pinned(t *testing.T) {
+	own, err := fs.ReadFile(MigrationsFS, MigrationsDir+"/"+operationExpiryMigration)
+	if err != nil {
+		t.Fatalf("read pgx 0007: %v", err)
+	}
+	if string(own) != pinnedPgxMigration0007 {
+		t.Errorf("pgx 0007 changed:\n%s", own)
+	}
+	sibling, err := os.ReadFile("../turso/" + MigrationsDir + "/" + operationExpiryMigration)
+	if err != nil {
+		t.Fatalf("read turso 0007: %v", err)
+	}
+	if string(sibling) != pinnedTursoMigration0007 {
+		t.Errorf("turso 0007 changed:\n%s", sibling)
 	}
 }

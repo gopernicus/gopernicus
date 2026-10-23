@@ -37,9 +37,10 @@ type Components struct {
 	RoleWriter         *roles.Writer
 	// Audit is Repositories.Audit, the committed change history reader; nil
 	// when unwired. The host controls access and retention.
-	Audit   audit.Reader
-	log     *slog.Logger
-	posture auditPosture
+	Audit           audit.Reader
+	log             *slog.Logger
+	posture         auditPosture
+	operationExpiry bool
 }
 
 // auditPosture is New's verdict on audit wiring, reported at registration.
@@ -63,7 +64,7 @@ func New(repos Repositories, opts ...Option) (Components, error) {
 	for _, dep := range []struct {
 		name  string
 		value any
-	}{{"Repositories.Tuples", repos.Tuples}, {"Repositories.Mutations", repos.Mutations}, {"Repositories.Operations", repos.Operations}, {"Repositories.Audit", repos.Audit}, {"Repositories.TupleSource", repos.TupleSource}, {"WithTupleCache", cfg.TupleBackend}} {
+	}{{"Repositories.Tuples", repos.Tuples}, {"Repositories.Mutations", repos.Mutations}, {"Repositories.Operations", repos.Operations}, {"Repositories.OperationExpiry", repos.OperationExpiry}, {"Repositories.Audit", repos.Audit}, {"Repositories.TupleSource", repos.TupleSource}, {"WithTupleCache", cfg.TupleBackend}} {
 		if isTypedNil(dep.value) {
 			return Components{}, fmt.Errorf("authorization: %s is typed nil: %w", dep.name, sdk.ErrInvalidInput)
 		}
@@ -73,6 +74,12 @@ func New(repos Repositories, opts ...Option) (Components, error) {
 	}
 	if repos.Operations != nil && repos.Mutations == nil {
 		return Components{}, ErrOperationsWithoutMutations
+	}
+	if repos.OperationExpiry != nil && repos.Mutations == nil {
+		return Components{}, fmt.Errorf("authorization: Repositories.OperationExpiry requires Repositories.Mutations: %w", sdk.ErrInvalidInput)
+	}
+	if cfg.OperationRetentionSet && repos.OperationExpiry == nil {
+		return Components{}, ErrOperationRetentionWithoutExpirer
 	}
 	if cfg.RoleRoutesGate != nil && repos.Mutations == nil {
 		return Components{}, authorizationhttp.ErrRoleRoutesWithoutMutations
@@ -85,11 +92,14 @@ func New(repos Repositories, opts ...Option) (Components, error) {
 		return Components{}, err
 	}
 	posture.observed = cfg.DecisionObserver != nil
-	comps := Components{Audit: repos.Audit, log: cfg.Logger, posture: posture}
+	comps := Components{Audit: repos.Audit, log: cfg.Logger, posture: posture, operationExpiry: repos.OperationExpiry != nil}
 	if comps.log == nil {
 		comps.log = slog.Default()
 	}
 	posture.warn(comps.log)
+	if posture.mode.IsProduction() && repos.Mutations != nil && repos.OperationExpiry == nil {
+		comps.log.Warn("authorization: operation records are never expired; wire Repositories.OperationExpiry and run Mutations.ExpireOperations", "operation_expiry", false, "runtime_mode", posture.mode.String())
+	}
 	decisionOptions := []decisions.Option{decisions.WithLogger(comps.log), decisions.WithLimits(cfg.Limits), decisions.WithDiagnosticObserver(cfg.DiagnosticObserver), decisions.WithDecisionObserver(cfg.DecisionObserver), decisions.WithTupleCache(cfg.TupleBackend, repos.TupleSource, cfg.TuplePolicy)}
 	if cfg.ModelOption != nil {
 		decisionOptions = append(decisionOptions, cfg.ModelOption)
@@ -121,7 +131,11 @@ func New(repos Repositories, opts ...Option) (Components, error) {
 	}
 	comps.Relationships, comps.RelationshipWriter = parts.Service, parts.RelationshipWriter
 	if repos.Mutations != nil {
-		comps.Mutations, err = mutations.NewService(repos.Mutations, mutations.WithModel(comps.Decisions.CompiledModel()), mutations.WithLimits(cfg.Limits), mutations.WithLogger(comps.log), mutations.WithLedger(repos.Operations))
+		mutationOptions := []mutations.Option{mutations.WithModel(comps.Decisions.CompiledModel()), mutations.WithLimits(cfg.Limits), mutations.WithLogger(comps.log), mutations.WithLedger(repos.Operations), mutations.WithOperationExpiry(repos.OperationExpiry)}
+		if cfg.OperationRetentionSet {
+			mutationOptions = append(mutationOptions, mutations.WithOperationRetention(cfg.OperationRetention))
+		}
+		comps.Mutations, err = mutations.NewService(repos.Mutations, mutationOptions...)
 		if err != nil {
 			return Components{}, err
 		}
@@ -160,7 +174,7 @@ func (c Components) Register(m pockets.Mount) error {
 	if c.HTTP == nil {
 		return fmt.Errorf("authorization: components are not initialized: %w", sdk.ErrInvalidInput)
 	}
-	c.log.Info("registered authorization pocket", "relationships", c.Relationships != nil, "roles", c.Roles != nil, "model", c.Decisions.CompiledModel() != nil, "baseline_relationship_writes", c.RelationshipWriter != nil, "role_routes", c.HTTP.RoutesEnabled(), "audit_recording", c.posture.recording, "audit_reader", c.Audit != nil, "decision_observer", c.posture.observed, "runtime_mode", c.posture.mode.String())
+	c.log.Info("registered authorization pocket", "relationships", c.Relationships != nil, "roles", c.Roles != nil, "model", c.Decisions.CompiledModel() != nil, "baseline_relationship_writes", c.RelationshipWriter != nil, "role_routes", c.HTTP.RoutesEnabled(), "audit_recording", c.posture.recording, "audit_reader", c.Audit != nil, "decision_observer", c.posture.observed, "operation_expiry", c.operationExpiry, "runtime_mode", c.posture.mode.String())
 	return c.HTTP.Register(m.Router)
 }
 
