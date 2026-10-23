@@ -2,7 +2,9 @@ package authentication
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -78,6 +80,7 @@ type ExternalAuthenticator struct {
 	logger      *slog.Logger
 
 	cache   *cacher.Cache
+	logins  *cacher.Cache
 	ttl     time.Duration
 	grace   time.Duration
 	timeout time.Duration
@@ -207,6 +210,11 @@ func newExternalAuthenticator(repos ExternalRepositories, cfg ExternalConfig, mo
 	e.cache = cacher.New(store, cacher.WithNamespace(revocationCacheNamespace), cacher.WithOnError(func(context.Context, string, error) {
 		e.stats.cacherErrors.Add(1)
 	}))
+	logins := cfg.LoginRecordCache
+	if logins == nil {
+		logins = cacher.NewMemory(cacher.WithMaxEntries(cfg.LoginRecordCacheEntries))
+	}
+	e.logins = cacher.New(logins, cacher.WithNamespace(loginRecordCacheNamespace))
 	for _, p := range cfg.Providers {
 		issuer := p.Provider.Issuer()
 		e.providers[issuer] = externalProvider{ExternalProvider: p, issuer: issuer}
@@ -271,7 +279,29 @@ func (e *ExternalAuthenticator) Verify(ctx context.Context, raw string, transpor
 	if err != nil {
 		return Principal{}, Credential{}, err
 	}
+	e.recordLogin(ctx, p, userID, raw, identity.ExpiresAt)
 	return Principal{Type: PrincipalUser, ID: userID}, Credential{Kind: CredentialExternalToken, Transport: transport, Identity: identity.Clone()}, nil
+}
+
+// recordLogin records external_login once per token per login-record cache,
+// keyed by the token's SHA-256 so the cache never holds the token. A cache hit
+// skips the row; a miss, an evicted entry or a cache error records it, so a
+// cache fault costs a duplicate row, never a missing one. The entry lives until
+// the token expires, at most 24 hours and at least one minute.
+func (e *ExternalAuthenticator) recordLogin(ctx context.Context, p externalProvider, userID, raw string, expiresAt time.Time) {
+	sum := sha256.Sum256([]byte(raw))
+	key := hex.EncodeToString(sum[:])
+	if _, found, err := e.logins.Get(ctx, key); err == nil && found {
+		return
+	}
+	e.events.Record(ctx, securityEventInput{
+		UserID:  userID,
+		Type:    securityevent.TypeExternalLogin,
+		Status:  securityevent.StatusSuccess,
+		Details: map[string]any{"provider": p.Name},
+	})
+	ttl := max(min(expiresAt.Sub(e.now()), maxLoginRecordTTL), minLoginRecordTTL)
+	_ = e.logins.Set(ctx, key, []byte{1}, ttl)
 }
 
 // CheckLive re-checks an external credential the caller already verified: the

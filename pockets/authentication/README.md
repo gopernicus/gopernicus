@@ -1588,8 +1588,10 @@ root `New`; the root fills `WithExternalCookies` from every `CookieName`, and
 `ExternalConfig` knobs: `RevocationCache` (any `cacher.Storer`, namespaced
 `authext`; nil → in-process memory bounded by `RevocationCacheEntries`, 10,000),
 `RevocationCacheTTL` (30 s), `RevocationOutageGrace` (5 m, ≥ TTL),
-`RevocationTimeout` (2 s, < 10 s). Production with any provisioning provider
-requires `WithExternalIdentifierKeyer`. `RevocationStats()` and
+`RevocationTimeout` (2 s, < 10 s), `LoginRecordCache` (any `cacher.Storer`,
+namespaced `authext_login`; nil → in-process memory bounded by
+`LoginRecordCacheEntries`, 10,000 — see [the audit gap](#the-audit-gap)).
+Production with any provisioning provider requires `WithExternalIdentifierKeyer`. `RevocationStats()` and
 `RunHeartbeat(ctx, interval)` expose cache hits, misses, stale serves, fail-open
 and fail-closed counts and provider errors. Provider load is roughly
 instances × distinct mutating users per `RevocationCacheTTL`; check it against
@@ -1864,11 +1866,19 @@ and owns that mapping's staleness.
 The pocket records `external_subject_provisioned`, `external_subject_unknown`,
 `external_subject_collision`, `external_subject_denied` (reason `tenant`,
 `sign_in_method`, `unverified_email`, `no_identifier`, `invalid_identifier`,
-`inactive` or `revoked`) and `external_revocation_unavailable` (once per
-provider outage). It does **not** record per-request successful authentication
-(native access tokens do not either), provider sign-ins, password changes or MFA
-events. Those live only in the provider's own audit or event log, so an
-incident review needs both. (This README names no per-vendor log location; check
+`inactive` or `revoked`), `external_revocation_unavailable` (once per
+provider outage) and `external_login` (Details `provider`; `UserID` the mapped
+user) — the first successful verification of each token, not every request.
+The engine remembers a recorded token under the SHA-256 of the raw token in
+`LoginRecordCache`, its own store and namespace, never the revocation cache,
+whose facts a login record would otherwise evict. The entry lives until the
+token's `exp`, at most 24 h and at least 1 m. A cache hit skips the row; a miss,
+an evicted entry or a cache error records it, so a cache fault costs a duplicate
+row, never a lost one. **Dedupe is per cache**: per instance under the
+in-process default (each instance records a token once), fleet-wide when the
+host supplies a shared store such as Redis. It does **not** record provider
+sign-ins, password changes or MFA events. Those live only in the provider's own
+audit or event log, so an incident review needs both. (This README names no per-vendor log location; check
 each vendor's documentation.)
 
 ### The step-up loss
@@ -3341,13 +3351,9 @@ credential rail is unwired.
   refusal answers 403 `origin_rejected`, a failed double-submit 403
   `permission_denied`.
 - **Security events.** When `SecurityEvents` is wired, successful sensitive
-  operations record an append-only row synchronously (see below), and password
-  `login`, step-up, passwordless and external-identity denials record
-  failure/blocked rows too. NOT recorded today: `POST /auth/token` failures,
-  a wrong current password on change, an invalid reset token, a wrong
-  registration or removal code (only the lockout is recorded), identifier-change
-  denials, OAuth provider login failures and pending-link issuance, and OAuth2
-  consent denials and grant failures (recording them is SOC 2 slice S2). When
+  operations record an append-only row synchronously (see below), and every
+  authentication denial path records a failure or blocked row with a bounded
+  `reason` — see [denial coverage](#denial-coverage). When
   `SecurityEvents` is nil there is no audit trail: production refuses that
   (`ErrAuditRequired`) unless the host passes `WithAuditDisabledAcknowledged()`,
   and development WARNs. Audit content carries
@@ -3395,7 +3401,8 @@ a secret.
 `password_change`, `password_set`, `password_remove_code_sent`,
 `password_removed`, `password_reset`; the OAuth events (`oauth_login`,
 `oauth_register`, `oauth_link_verified`, `oauth_linked`,
-`oauth_unlink_code_sent`, `oauth_unlinked`); `apikey_auth`; `token_issued`;
+`oauth_pending_link_sent` (`UserID` = the matched account; Details `provider`
+only), `oauth_unlink_code_sent`, `oauth_unlinked`); `apikey_auth`; `token_issued`;
 `refresh` (with a `grace` detail) and `refresh_reuse` (blocked + unconditional
 WARN even when `SecurityEvents` is nil, so a nil-audit host is never blind to
 token theft); `step_up_challenge_sent`, `step_up` (success/failure/blocked); the
@@ -3418,9 +3425,12 @@ string. Session management records `session_revoked` (Details `session_id`) and
 per successful `ListUsers` or `GetUserSummary` call (`Actor` from
 `sdk.PrincipalFromContext`; Details `page` and, for one user, `target_user_id` —
 signatures unchanged); the OAuth2 server records `oauth2_consent_approved`,
-`oauth2_connection_created`, `oauth2_refresh`, `oauth2_refresh_reuse` (blocked),
-`oauth2_token_exchanged` and `oauth2_revocation_requested` (Details `client_id`,
-`session_id`; `Actor` when the context carries a principal). The forgot-password
+`oauth2_consent_denied`, `oauth2_connection_created`, `oauth2_refresh`,
+`oauth2_refresh_reuse` (blocked), `oauth2_token_exchanged`,
+`oauth2_revocation_requested` and `oauth2_grant_failed` (failure) (Details
+`client_id`, `session_id`; `Actor` when the context carries a principal); the
+external identity engine records `external_login` once per token (below) beside
+its `external_subject_*` and `external_revocation_unavailable` rows. The forgot-password
 *request* records nothing (it must not reveal whether an address exists). There is
 no HTTP read surface — query the table, or see the proof host's dev-only debug
 route.
@@ -3432,6 +3442,35 @@ pins every value. **Host-bridged types are free TEXT outside `Types()`**: the
 registry names only what this pocket records, and a type a host bridges into the
 rail (the authorization pocket's decision events, say) is valid there without
 being listed.
+
+### Denial coverage
+
+Status: `success`; `failure` — a credential or proof mismatch; `blocked` — a
+protective control (a rate limit, a lockout, a deactivated account, a fence).
+A denial carries ONE Details key, `reason`, from a bounded set
+(`securityevent.Reason*`): `invalid_credentials`, `rate_limited`, `inactive`,
+`email_unverified`, `invalid_token`, `invalid_code`, `lockout`, `policy`,
+`invalid_state`, `exchange_failed`, `identity_invalid`, `link_conflict`,
+`invalid_grant`, `invalid_client`, `revision_conflict`. A reason names the class
+of refusal only — never an error message, address, code or token.
+
+| path | type | denials |
+|---|---|---|
+| `Login`, `IssueToken` (`POST /auth/token`) | `login`, `token_issued` | failure `invalid_credentials` / `email_unverified`; blocked `rate_limited` / `inactive`; one shared classification, so both record alike (`token_issued` carries no address) |
+| `ChangePassword` | `password_change` | failure `invalid_credentials` (wrong current password), `policy` (rejected new password) |
+| `SetPassword` | `password_set` | failure `policy`, `invalid_token` (no recent-authentication grant) |
+| `ResetPassword` | `password_reset` | failure `invalid_token`, `policy`; no `UserID` — the token resolved none |
+| `Verify` (registration) | `email_verified` | failure `invalid_code`, `revision_conflict`; blocked `inactive`, and `lockout` beside the challenge rail's own `challenge_lockout` row |
+| `RemovePassword` | `password_removed` | failure `invalid_code`, `policy`, `revision_conflict`; blocked `lockout` |
+| identifier confirm / remove / uses | `email_changed` / `phone_changed`, `email_removed` / `phone_removed`, `identifier_uses_changed` | failure `invalid_code` (confirm), `policy`, `revision_conflict`; blocked `lockout` (confirm) |
+| OAuth provider callback | `oauth_login`; `oauth_linked` | `oauth_login` failure `invalid_state` / `exchange_failed` / `identity_invalid` / `email_unverified` / `link_conflict`, blocked `inactive`; `oauth_linked` failure `link_conflict` for a session-gated link start; Details `provider` |
+| `VerifyLink` | `oauth_link_verified` | failure `invalid_token`, `invalid_state`; blocked `inactive` |
+| OAuth2 consent `Deny` | `oauth2_consent_denied` | success (the user's decision); Details `client_id`, `session_id` |
+| OAuth2 code, refresh, exchange, revocation, introspection | `oauth2_grant_failed` | failure `invalid_grant`, `invalid_client`; Details `client_id`. A refresh reuse stays `oauth2_refresh_reuse` (blocked). A malformed request records nothing |
+| invitation accept | `invitation_granted` | failure `invalid_token` (a token that resolved no invitation; no Details beyond the reason), `policy` (the caller is not the invitee; Details the resource coordinates and `identifier_kind`) |
+
+An error that is not a denial — a store or provider outage — records no row.
+Recording never fails a flow: the recorder fails open.
 
 ### Correlation
 

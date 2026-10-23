@@ -144,3 +144,46 @@ func TestEventTypesAreRegistered(t *testing.T) {
 		t.Error("Types() exposes the registry's backing array")
 	}
 }
+
+// TestReasonsAreStableWireValues pins the denial reason vocabulary: reasons
+// are free TEXT inside Details, so a rename silently splits every operator
+// filter. Each value is unique and snake_case.
+func TestReasonsAreStableWireValues(t *testing.T) {
+	snake := regexp.MustCompile(`^[a-z][a-z0-9]*(_[a-z0-9]+)*$`)
+	seen := map[string]bool{}
+	for _, tc := range []struct{ got, want string }{
+		{ReasonInvalidCredentials, "invalid_credentials"},
+		{ReasonRateLimited, "rate_limited"},
+		{ReasonInactive, "inactive"},
+		{ReasonEmailUnverified, "email_unverified"},
+		{ReasonInvalidToken, "invalid_token"},
+		{ReasonInvalidCode, "invalid_code"},
+		{ReasonLockout, "lockout"},
+		{ReasonPolicy, "policy"},
+		{ReasonInvalidState, "invalid_state"},
+		{ReasonExchangeFailed, "exchange_failed"},
+		{ReasonIdentityInvalid, "identity_invalid"},
+		{ReasonLinkConflict, "link_conflict"},
+		{ReasonInvalidGrant, "invalid_grant"},
+		{ReasonInvalidClient, "invalid_client"},
+		{ReasonRevisionConflict, "revision_conflict"},
+	} {
+		if tc.got != tc.want {
+			t.Errorf("reason = %q, want %q", tc.got, tc.want)
+		}
+		if !snake.MatchString(tc.got) || seen[tc.got] {
+			t.Errorf("reason %q is not unique snake_case", tc.got)
+		}
+		seen[tc.got] = true
+	}
+	for _, tc := range []struct{ got, want string }{
+		{TypeOAuthPendingLinkSent, "oauth_pending_link_sent"},
+		{TypeExternalLogin, "external_login"},
+		{TypeOAuth2ConsentDenied, "oauth2_consent_denied"},
+		{TypeOAuth2GrantFailed, "oauth2_grant_failed"},
+	} {
+		if tc.got != tc.want {
+			t.Errorf("event type = %q, want %q", tc.got, tc.want)
+		}
+	}
+}

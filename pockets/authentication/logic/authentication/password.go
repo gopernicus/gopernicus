@@ -59,10 +59,14 @@ func (s *Service) SetPassword(ctx context.Context, sessionID, userID, newPasswor
 		return TokenPair{}, err
 	}
 	if err := s.validatePassword(ctx, newPassword); err != nil {
+		s.recordDenial(ctx, securityevent.TypePasswordSet, userID, securityevent.StatusFailure, securityevent.ReasonPolicy)
 		return TokenPair{}, err
 	}
 	// Consume the set_password grant immediately before the mutation (design §5.0).
 	if _, err := s.RequireRecentAuthentication(ctx, sessionID, userID, authgrant.PurposeSetPassword, "", RecentAuthPolicy{}); err != nil {
+		if errors.Is(err, ErrStepUpRequired) || errors.Is(err, ErrDelegatedCredential) {
+			s.recordDenial(ctx, securityevent.TypePasswordSet, userID, securityevent.StatusFailure, securityevent.ReasonInvalidToken)
+		}
 		return TokenPair{}, err
 	}
 	hash, err := s.hasher.HashPassword(newPassword)
@@ -84,6 +88,16 @@ func (s *Service) SetPassword(ctx context.Context, sessionID, userID, newPasswor
 	})
 	return pair, nil
 }
+
+// credentialPolicyRefusal marks an error the credential policy returned, so a
+// caller can record it as a policy refusal rather than a revision race (the
+// default policy's errors wrap sdk.ErrConflict too). errors.Is and errors.As see
+// the policy's own error through it.
+type credentialPolicyRefusal struct{ err error }
+
+func (r credentialPolicyRefusal) Error() string { return r.err.Error() }
+
+func (r credentialPolicyRefusal) Unwrap() error { return r.err }
 
 type credentialRemovalBinding struct {
 	AuthRevision         int64  `json:"auth_revision"`
@@ -176,9 +190,11 @@ func (s *Service) RemovePassword(ctx context.Context, userID, code string) (Toke
 		return TokenPair{}, err
 	}
 	if _, err := s.consumeChallenge(ctx, userID, challenge.PurposeRemovePassword, code, withExpectedContext(proof)); err != nil {
+		s.recordChallengeDenial(ctx, securityevent.TypePasswordRemoved, userID, err)
 		return TokenPair{}, err
 	}
 	if err := s.applyCredentialMutationAtRevision(ctx, userID, proof.AuthRevision, credential.RemovePassword{}); err != nil {
+		s.recordCredentialMutationDenial(ctx, securityevent.TypePasswordRemoved, userID, err)
 		return TokenPair{}, err
 	}
 	pair, err := s.mintSession(ctx, userID, proof.AuthRevision+1, s.primaryAuthentication(passwordlessCodeMethod(string(dest.Kind))))
@@ -238,7 +254,7 @@ func (s *Service) applyCredentialMutationAtRevision(ctx context.Context, userID 
 		return sdk.ErrConflict
 	}
 	if err := s.credentialPolicy.EvaluateMutation(ctx, snap, snap.With(m)); err != nil {
-		return err
+		return credentialPolicyRefusal{err}
 	}
 	return s.credentialMutations.Apply(ctx, userID, revision, m)
 }

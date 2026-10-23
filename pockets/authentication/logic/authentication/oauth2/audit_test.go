@@ -35,11 +35,13 @@ func auditService(t *testing.T, events securityevent.SecurityEventRepository, op
 func TestOAuth2TypesAliasTheRegistry(t *testing.T) {
 	for _, tc := range []struct{ alias, registered string }{
 		{TypeConsentApproved, securityevent.TypeOAuth2ConsentApproved},
+		{TypeConsentDenied, securityevent.TypeOAuth2ConsentDenied},
 		{TypeConnectionCreated, securityevent.TypeOAuth2ConnectionCreated},
 		{TypeRefresh, securityevent.TypeOAuth2Refresh},
 		{TypeRefreshReuse, securityevent.TypeOAuth2RefreshReuse},
 		{TypeTokenExchanged, securityevent.TypeOAuth2TokenExchanged},
 		{TypeRevocationRequested, securityevent.TypeOAuth2RevocationRequested},
+		{TypeGrantFailed, securityevent.TypeOAuth2GrantFailed},
 	} {
 		if tc.alias != tc.registered {
 			t.Errorf("alias %q != registered %q", tc.alias, tc.registered)

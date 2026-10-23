@@ -521,6 +521,7 @@ func (s *Service) Register(ctx context.Context, emailAddr, password, displayName
 func (s *Service) Verify(ctx context.Context, emailAddr, code string) error {
 	normalized, err := s.normalizeEmail(emailAddr)
 	if err != nil {
+		s.recordDenial(ctx, securityevent.TypeEmailVerified, "", securityevent.StatusFailure, securityevent.ReasonInvalidCode)
 		return ErrChallengeInvalid // uniform: never reveal a malformed/unknown identity
 	}
 	// Resolve the account through its login-enabled primary identifier — the
@@ -528,6 +529,7 @@ func (s *Service) Verify(ctx context.Context, emailAddr, code string) error {
 	ident, err := s.identifiers.GetLogin(ctx, string(identifier.KindEmail), normalized)
 	if err != nil {
 		if errors.Is(err, sdk.ErrNotFound) {
+			s.recordDenial(ctx, securityevent.TypeEmailVerified, "", securityevent.StatusFailure, securityevent.ReasonInvalidCode)
 			return ErrChallengeInvalid // uniform: no such account is indistinguishable from a wrong code
 		}
 		return err
@@ -537,20 +539,24 @@ func (s *Service) Verify(ctx context.Context, emailAddr, code string) error {
 		return err
 	}
 	if !u.Active() {
+		s.recordDenial(ctx, securityevent.TypeEmailVerified, u.ID, securityevent.StatusBlocked, securityevent.ReasonInactive)
 		return ErrChallengeInvalid
 	}
 	current, err := s.identifiers.GetLogin(ctx, string(identifier.KindEmail), normalized)
 	if err != nil {
 		if errors.Is(err, sdk.ErrNotFound) {
+			s.recordDenial(ctx, securityevent.TypeEmailVerified, u.ID, securityevent.StatusFailure, securityevent.ReasonInvalidCode)
 			return ErrChallengeInvalid
 		}
 		return err
 	}
 	if current.ID != ident.ID || current.UserID != u.ID {
+		s.recordDenial(ctx, securityevent.TypeEmailVerified, u.ID, securityevent.StatusFailure, securityevent.ReasonInvalidCode)
 		return ErrChallengeInvalid
 	}
 	ident = current
 	if _, err := s.consumeChallenge(ctx, ident.UserID, challenge.PurposeVerifyRegistration, code); err != nil {
+		s.recordChallengeDenial(ctx, securityevent.TypeEmailVerified, u.ID, err)
 		return err
 	}
 	now := s.now()
@@ -569,6 +575,7 @@ func (s *Service) Verify(ctx context.Context, emailAddr, code string) error {
 	}
 	if _, err := s.identifiers.ApplyVerifiedChange(ctx, input, u.AuthRevision, now); err != nil {
 		if errors.Is(err, sdk.ErrConflict) || errors.Is(err, sdk.ErrAlreadyExists) {
+			s.recordDenial(ctx, securityevent.TypeEmailVerified, u.ID, securityevent.StatusFailure, securityevent.ReasonRevisionConflict)
 			return ErrRegistrationVerificationConflict
 		}
 		return err
@@ -637,17 +644,13 @@ func (s *Service) Login(ctx context.Context, emailAddr, password string) (TokenP
 	}
 	normalized, err := s.normalizeEmail(emailAddr)
 	if err != nil {
-		s.recordLogin(ctx, "", emailAddr, securityevent.StatusFailure)
+		s.recordLogin(ctx, "", emailAddr, invalidCredentials())
 		return TokenPair{}, user.User{}, invalidCredentials()
 	}
 
 	u, _, err := s.provePassword(ctx, normalized, password)
 	if err != nil {
-		status := securityevent.StatusFailure
-		if errors.Is(err, ErrRateLimited) {
-			status = securityevent.StatusBlocked
-		}
-		s.recordLogin(ctx, u.ID, normalized, status)
+		s.recordLogin(ctx, u.ID, normalized, err)
 		return TokenPair{}, user.User{}, err
 	}
 
@@ -656,23 +659,52 @@ func (s *Service) Login(ctx context.Context, emailAddr, password string) (TokenP
 		// A deactivated account is denied as ordinary bad credentials (CHAU-1.5):
 		// the admin lifecycle must not become an enumeration oracle.
 		if errors.Is(err, session.ErrUserNotActive) {
-			s.recordLogin(ctx, u.ID, normalized, securityevent.StatusBlocked)
+			s.recordLogin(ctx, u.ID, normalized, err)
 		}
 		return TokenPair{}, user.User{}, genericIfNotActive(err, invalidCredentials())
 	}
-	s.recordLogin(ctx, u.ID, normalized, securityevent.StatusSuccess)
+	s.recordLogin(ctx, u.ID, normalized, nil)
 	return pair, u, nil
 }
 
 // recordLogin appends a `login` audit row. The attempted email is an identifier
 // (never a secret), so it rides Details to make failed-login auditing useful; a
 // resolved userID is attributed when one is known.
-func (s *Service) recordLogin(ctx context.Context, userID, email, status string) {
+func (s *Service) recordLogin(ctx context.Context, userID, email string, err error) {
+	s.recordCredentialOutcome(ctx, securityevent.TypeLogin, userID, err, map[string]any{"email": email})
+}
+
+// recordCredentialOutcome appends the row for one password-credential attempt —
+// Login's login row or IssueToken's token_issued row — classifying err: nil is
+// success; a rate limit (rate_limited) or a deactivated account (inactive) is
+// blocked; a credential mismatch (invalid_credentials) or an unverified email
+// (email_unverified) is a failure. Any other error is a failure without a
+// reason. details is extended in place with the reason.
+func (s *Service) recordCredentialOutcome(ctx context.Context, eventType, userID string, err error, details map[string]any) {
+	status, reason := securityevent.StatusFailure, ""
+	switch {
+	case err == nil:
+		status = securityevent.StatusSuccess
+	case errors.Is(err, ErrRateLimited):
+		status, reason = securityevent.StatusBlocked, securityevent.ReasonRateLimited
+	case errors.Is(err, session.ErrUserNotActive):
+		status, reason = securityevent.StatusBlocked, securityevent.ReasonInactive
+	case errors.Is(err, ErrEmailNotVerified):
+		reason = securityevent.ReasonEmailUnverified
+	case errors.Is(err, sdk.ErrUnauthorized):
+		reason = securityevent.ReasonInvalidCredentials
+	}
+	if reason != "" {
+		if details == nil {
+			details = map[string]any{}
+		}
+		details["reason"] = reason
+	}
 	s.recordSecurityEvent(ctx, securityEventInput{
 		UserID:  userID,
-		Type:    securityevent.TypeLogin,
+		Type:    eventType,
 		Status:  status,
-		Details: map[string]any{"email": email},
+		Details: details,
 	})
 }
 
@@ -784,9 +816,11 @@ func (s *Service) ChangePassword(ctx context.Context, userID, currentPassword, n
 		return TokenPair{}, err
 	}
 	if err := s.hasher.VerifyPassword(hash, currentPassword); err != nil {
+		s.recordDenial(ctx, securityevent.TypePasswordChange, userID, securityevent.StatusFailure, securityevent.ReasonInvalidCredentials)
 		return TokenPair{}, fmt.Errorf("current password is incorrect: %w", sdk.ErrUnauthorized)
 	}
 	if err := s.validatePassword(ctx, newPassword); err != nil {
+		s.recordDenial(ctx, securityevent.TypePasswordChange, userID, securityevent.StatusFailure, securityevent.ReasonPolicy)
 		return TokenPair{}, err
 	}
 	newHash, err := s.hasher.HashPassword(newPassword)
@@ -854,12 +888,14 @@ func (s *Service) ResetPassword(ctx context.Context, token, newPassword string) 
 		return err
 	}
 	if err := s.validatePassword(ctx, newPassword); err != nil {
+		s.recordDenial(ctx, securityevent.TypePasswordReset, "", securityevent.StatusFailure, securityevent.ReasonPolicy)
 		return err
 	}
 	if s.passwordResets == nil || s.protector == nil {
 		return fmt.Errorf("password reset subsystem not wired: %w", sdk.ErrForbidden)
 	}
 	if token == "" {
+		s.recordDenial(ctx, securityevent.TypePasswordReset, "", securityevent.StatusFailure, securityevent.ReasonInvalidToken)
 		return ErrPasswordResetInvalid // an empty token never matches a live challenge
 	}
 	newHash, err := s.hasher.HashPassword(newPassword)
@@ -877,6 +913,7 @@ func (s *Service) ResetPassword(ctx context.Context, token, newPassword string) 
 		// A non-live token (unknown/expired/used) is the single generic failure; no
 		// state was changed. Anything else is infrastructure.
 		if errors.Is(err, sdk.ErrNotFound) || errors.Is(err, sdk.ErrExpired) {
+			s.recordDenial(ctx, securityevent.TypePasswordReset, "", securityevent.StatusFailure, securityevent.ReasonInvalidToken)
 			return ErrPasswordResetInvalid
 		}
 		return err

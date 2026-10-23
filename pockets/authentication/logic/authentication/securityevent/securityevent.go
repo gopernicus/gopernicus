@@ -1,9 +1,9 @@
 // Package securityevent is the append-only audit-rail domain (design §5.1): a
-// synchronous record of sensitive authentication events — registrations, logins
-// (success/failure/blocked), logouts, verifications, password changes, OAuth
-// logins (success only today), API-key authentications, and token issuance
-// (success only today; the README's "Security events" posture bullet lists the
-// denial paths that record nothing yet). It is append-only AT THE PORT: there
+// synchronous record of sensitive authentication events — registrations, logins,
+// logouts, verifications, password changes, OAuth logins, API-key
+// authentications and token issuance, each with its denials (StatusFailure or
+// StatusBlocked with a bounded Reason* under the Details key "reason"). It is
+// append-only AT THE PORT: there
 // are no Update or Delete methods (structural, not enforced by a flag). The SQL
 // stores' immutability migration (0022) refuses UPDATE and DELETE on the table —
 // on PostgreSQL from every role but the table owner, TRUNCATE included — and
@@ -43,7 +43,8 @@ const (
 	TypeLogout = "logout"
 	// TypePasswordChange is a session-gated password change.
 	TypePasswordChange = "password_change"
-	// TypePasswordReset is a completed password reset via a reset token.
+	// TypePasswordReset is a password reset via a reset token. A refused reset
+	// carries no UserID: the token resolved no account.
 	TypePasswordReset = "password_reset"
 	// TypePasswordSet is a set-initial-password on an account that had none,
 	// authorized by a consumed set_password recent-auth grant (design §5.2).
@@ -56,7 +57,9 @@ const (
 	TypePasswordRemoved = "password_removed"
 	// TypeEmailVerified is a completed email verification.
 	TypeEmailVerified = "email_verified"
-	// TypeOAuthLogin is an OAuth login into an already-linked identity.
+	// TypeOAuthLogin is an OAuth login into an already-linked identity. A
+	// provider callback refused on any branch records it too, as StatusFailure or
+	// StatusBlocked with the provider and a reason.
 	TypeOAuthLogin = "oauth_login"
 	// TypeOAuthRegister is an OAuth-driven registration of a new user.
 	TypeOAuthRegister = "oauth_register"
@@ -64,6 +67,11 @@ const (
 	TypeOAuthLinkVerified = "oauth_link_verified"
 	// TypeOAuthLinked is a session-gated provider link.
 	TypeOAuthLinked = "oauth_linked"
+	// TypeOAuthPendingLinkSent is an anti-takeover pending-link confirmation
+	// issued and enqueued for delivery to the matched account's address. UserID is
+	// that account; Details carries the provider only, never the address or the
+	// confirmation token.
+	TypeOAuthPendingLinkSent = "oauth_pending_link_sent"
 	// TypeOAuthUnlinkCodeSent is a provider-bound unlink_oauth code issued and
 	// enqueued for delivery to a verified recovery identifier (design §5.4). Details
 	// carries the provider only, never a destination or secret.
@@ -72,7 +80,8 @@ const (
 	TypeOAuthUnlinked = "oauth_unlinked"
 	// TypeAPIKeyAuth is an API-key authentication attempt.
 	TypeAPIKeyAuth = "apikey_auth"
-	// TypeTokenIssued is a bearer-JWT issuance (POST /auth/token).
+	// TypeTokenIssued is a bearer-JWT issuance (POST /auth/token): success,
+	// failure or blocked, with the same reasons as a password login.
 	TypeTokenIssued = "token_issued"
 	// TypeRefresh is a refresh-token rotation (POST /auth/refresh). Recorded
 	// success on a rotation or a single-use grace refresh (the grace lane carries
@@ -102,7 +111,9 @@ const (
 	// TypeInvitationCreated is a pending invitation being minted.
 	TypeInvitationCreated = "invitation_created"
 	// TypeInvitationGranted is a grant-on-accept attempt (StatusSuccess when the
-	// Granter granted, StatusFailure when it rejected, StatusBlocked with reason
+	// Granter granted, StatusFailure when it rejected — or, with reason
+	// invalid_token or policy, when the accept presented a wrong token or came from
+	// a user the invitation is not addressed to — StatusBlocked with reason
 	// superseded when a committed grant is no longer in effect, or reason fenced
 	// when a cancellation fenced the operation before any grant committed).
 	TypeInvitationGranted = "invitation_granted"
@@ -219,8 +230,12 @@ const (
 
 	// External identity vocabulary. Details carry the host provider name, the
 	// identifier kind and a reason only — never the token, claims, address or
-	// provider payload. Per-request successful authentication is not recorded.
+	// provider payload.
 	//
+	// TypeExternalLogin is the first successful verification of one provider
+	// token, recorded once per token per login-record cache rather than once per
+	// request. UserID is the mapped user; Details carries the provider.
+	TypeExternalLogin = "external_login"
 	// TypeExternalSubjectProvisioned is a user created on first verification of
 	// an unknown provider subject. UserID is the new user.
 	TypeExternalSubjectProvisioned = "external_subject_provisioned"
@@ -261,6 +276,8 @@ const (
 	//
 	// TypeOAuth2ConsentApproved is an approved consent screen.
 	TypeOAuth2ConsentApproved = "oauth2_consent_approved"
+	// TypeOAuth2ConsentDenied is a consent screen the user denied.
+	TypeOAuth2ConsentDenied = "oauth2_consent_denied"
 	// TypeOAuth2ConnectionCreated is an authorization code redeemed into a
 	// delegated session.
 	TypeOAuth2ConnectionCreated = "oauth2_connection_created"
@@ -273,6 +290,11 @@ const (
 	TypeOAuth2TokenExchanged = "oauth2_token_exchanged"
 	// TypeOAuth2RevocationRequested is a client-requested revocation.
 	TypeOAuth2RevocationRequested = "oauth2_revocation_requested"
+	// TypeOAuth2GrantFailed is a token-endpoint request (code redemption,
+	// refresh, exchange, revocation or introspection) refused for its grant or
+	// client: StatusFailure with reason invalid_grant or invalid_client. A
+	// refresh reuse records TypeOAuth2RefreshReuse instead.
+	TypeOAuth2GrantFailed = "oauth2_grant_failed"
 )
 
 // Status vocabulary (design §5.1).
@@ -287,6 +309,48 @@ const (
 	StatusBlocked = "blocked"
 )
 
+// Reason vocabulary: the bounded value a denial row carries under the Details key
+// "reason". A reason names the class of refusal only — never an error message,
+// address, code or token.
+const (
+	// ReasonInvalidCredentials is a password or credential that did not match.
+	ReasonInvalidCredentials = "invalid_credentials"
+	// ReasonRateLimited is an attempt refused by a rate limit.
+	ReasonRateLimited = "rate_limited"
+	// ReasonInactive is an attempt on a deactivated account.
+	ReasonInactive = "inactive"
+	// ReasonEmailUnverified is an attempt refused because the email address is
+	// not verified (or, for an OAuth provider, not asserted as verified).
+	ReasonEmailUnverified = "email_unverified"
+	// ReasonInvalidToken is an unknown, expired, used or unbound single-use token.
+	ReasonInvalidToken = "invalid_token"
+	// ReasonInvalidCode is a wrong, expired or unbound challenge code.
+	ReasonInvalidCode = "invalid_code"
+	// ReasonLockout is a challenge whose wrong-attempt budget is spent.
+	ReasonLockout = "lockout"
+	// ReasonPolicy is a request refused by policy: a rejected new password, a
+	// credential-policy refusal, or an invitation addressed to someone else.
+	ReasonPolicy = "policy"
+	// ReasonInvalidState is an unknown, expired, misrouted or stale OAuth state.
+	ReasonInvalidState = "invalid_state"
+	// ReasonExchangeFailed is an OAuth code the provider refused to exchange.
+	ReasonExchangeFailed = "exchange_failed"
+	// ReasonIdentityInvalid is a provider identity that failed validation.
+	ReasonIdentityInvalid = "identity_invalid"
+	// ReasonLinkConflict is a provider identity or address already claimed, or
+	// a link whose account changed under it.
+	ReasonLinkConflict = "link_conflict"
+	// ReasonInvalidGrant is an OAuth2 code, refresh token or access token that
+	// is unknown, expired, revoked or bound to something else.
+	ReasonInvalidGrant = "invalid_grant"
+	// ReasonInvalidClient is an OAuth2 client that failed resolution or
+	// authentication.
+	ReasonInvalidClient = "invalid_client"
+	// ReasonRevisionConflict is a credential change that lost a concurrent
+	// revision race; the proof is spent and a new one is needed.
+	ReasonRevisionConflict = "revision_conflict"
+)
+
 // MaxCorrelationIDLen is the longest RequestID or TraceID the Recorder stamps,
 // in bytes. A longer id, or one carrying a byte outside printable ASCII, is
 // recorded blank — never truncated and never refused.
@@ -297,7 +361,7 @@ var types = []string{
 	TypeRegister, TypeLogin, TypeLogout, TypePasswordChange, TypePasswordReset,
 	TypePasswordSet, TypePasswordRemoveCodeSent, TypePasswordRemoved, TypeEmailVerified,
 	TypeOAuthLogin, TypeOAuthRegister, TypeOAuthLinkVerified, TypeOAuthLinked,
-	TypeOAuthUnlinkCodeSent, TypeOAuthUnlinked, TypeAPIKeyAuth, TypeTokenIssued,
+	TypeOAuthPendingLinkSent, TypeOAuthUnlinkCodeSent, TypeOAuthUnlinked, TypeAPIKeyAuth, TypeTokenIssued,
 	TypeRefresh, TypeRefreshReuse, TypeChallengeLockout,
 	TypeInvitationCreated, TypeInvitationGranted, TypeInvitationDeclined, TypeInvitationCancelled,
 	TypeStepUpChallengeSent, TypeStepUp,
@@ -308,10 +372,10 @@ var types = []string{
 	TypePasswordlessProvisioned, TypePasswordlessAdopted, TypePasswordlessStart, TypePasswordlessLogin,
 	TypeServiceAccountCreated, TypeAPIKeyMinted, TypeAPIKeyRevoked,
 	TypeExternalSubjectProvisioned, TypeExternalSubjectUnknown, TypeExternalSubjectCollision,
-	TypeExternalSubjectDenied, TypeExternalRevocationUnavailable,
+	TypeExternalSubjectDenied, TypeExternalRevocationUnavailable, TypeExternalLogin,
 	TypeSessionRevoked, TypeAllSessionsRevoked, TypeUserDirectoryRead,
-	TypeOAuth2ConsentApproved, TypeOAuth2ConnectionCreated, TypeOAuth2Refresh,
-	TypeOAuth2RefreshReuse, TypeOAuth2TokenExchanged, TypeOAuth2RevocationRequested,
+	TypeOAuth2ConsentApproved, TypeOAuth2ConsentDenied, TypeOAuth2ConnectionCreated, TypeOAuth2Refresh,
+	TypeOAuth2RefreshReuse, TypeOAuth2TokenExchanged, TypeOAuth2RevocationRequested, TypeOAuth2GrantFailed,
 }
 
 // Principal is the effective actor (an AV5 subject_type/subject_id pair) that

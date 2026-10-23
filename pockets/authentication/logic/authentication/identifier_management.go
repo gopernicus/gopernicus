@@ -223,6 +223,7 @@ func (s *Service) ConfirmIdentifierChange(ctx context.Context, in IdentifierChan
 	// this confirmation is running.
 	pending, err := s.contactChanges.Get(ctx, in.UserID, in.Kind)
 	if errors.Is(err, sdk.ErrNotFound) {
+		s.recordDenial(ctx, changedEvent(in.Kind), in.UserID, securityevent.StatusFailure, securityevent.ReasonInvalidCode)
 		return ErrChallengeInvalid
 	}
 	if err != nil {
@@ -232,10 +233,12 @@ func (s *Service) ConfirmIdentifierChange(ctx context.Context, in IdentifierChan
 		withSubjectKey(pending.ID), withExpectedContext(changeBinding{
 			PendingID: pending.ID, SessionID: in.SessionID, AuthRevision: owner.AuthRevision,
 		})); err != nil {
+		s.recordChallengeDenial(ctx, changedEvent(in.Kind), in.UserID, err)
 		return err
 	}
 	pending, err = s.contactChanges.Consume(ctx, in.UserID, in.Kind, pending.ID)
 	if errors.Is(err, sdk.ErrNotFound) {
+		s.recordDenial(ctx, changedEvent(in.Kind), in.UserID, securityevent.StatusFailure, securityevent.ReasonInvalidCode)
 		return ErrChallengeInvalid
 	}
 	if err != nil {
@@ -245,6 +248,7 @@ func (s *Service) ConfirmIdentifierChange(ctx context.Context, in IdentifierChan
 	// replacement still notifies the old primary it retires (design §5.5).
 	recipients := s.verifiedContactChannels(ctx, in.UserID, pending.NewValue)
 	if err := s.applyVerifiedIdentifierChange(ctx, in.UserID, owner.AuthRevision, pending); err != nil {
+		s.recordCredentialMutationDenial(ctx, changedEvent(in.Kind), in.UserID, err)
 		return err
 	}
 	s.recordSecurityEvent(ctx, securityEventInput{
@@ -303,6 +307,7 @@ func (s *Service) RemoveIdentifier(ctx context.Context, in IdentifierRemoveInput
 	// notified (never the just-removed address).
 	recipients := s.verifiedContactChannels(ctx, in.UserID, target.NormalizedValue)
 	if err := s.applyCredentialMutationAtRevision(ctx, in.UserID, owner.AuthRevision, mutation); err != nil {
+		s.recordCredentialMutationDenial(ctx, removedEvent(target.Kind), in.UserID, err)
 		return err
 	}
 	s.recordSecurityEvent(ctx, securityEventInput{
@@ -334,6 +339,7 @@ func (s *Service) SetIdentifierUses(ctx context.Context, in IdentifierUsesInput)
 	}
 	// Enabling an authentication-bearing use requires a proven address (design §2.3).
 	if (in.Uses.Login || in.Uses.Recovery) && !target.Verified() {
+		s.recordDenial(ctx, securityevent.TypeIdentifierUsesChanged, in.UserID, securityevent.StatusFailure, securityevent.ReasonPolicy)
 		return identifier.ErrVerificationRequired
 	}
 	if _, err := s.RequireRecentAuthentication(ctx, in.SessionID, in.UserID, authgrant.PurposeChangeIdentifierUses, in.IdentifierID, RecentAuthPolicy{}); err != nil {
@@ -344,6 +350,7 @@ func (s *Service) SetIdentifierUses(ctx context.Context, in IdentifierUsesInput)
 		Uses:         credential.IdentifierUses{Login: in.Uses.Login, Recovery: in.Uses.Recovery, Notification: in.Uses.Notification},
 		MakePrimary:  in.MakePrimary,
 	}); err != nil {
+		s.recordCredentialMutationDenial(ctx, securityevent.TypeIdentifierUsesChanged, in.UserID, err)
 		return err
 	}
 	s.recordSecurityEvent(ctx, securityEventInput{
@@ -379,7 +386,7 @@ func (s *Service) applyVerifiedIdentifierChange(ctx context.Context, userID stri
 		return sdk.ErrConflict
 	}
 	if err := s.credentialPolicy.EvaluateMutation(ctx, snap, proposedSetForChange(snap, pending)); err != nil {
-		return err
+		return credentialPolicyRefusal{err}
 	}
 	_, err = s.identifiers.ApplyVerifiedChange(ctx, input, revision, s.now())
 	return err

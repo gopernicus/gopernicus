@@ -26,6 +26,11 @@ const (
 	maxRevocationTimeout          = 10 * time.Second
 	defaultRevocationCacheEntries = 10_000
 	revocationCacheNamespace      = "authext"
+
+	defaultLoginRecordCacheEntries = 10_000
+	loginRecordCacheNamespace      = "authext_login"
+	maxLoginRecordTTL              = 24 * time.Hour
+	minLoginRecordTTL              = time.Minute
 )
 
 // ErrDevelopmentOnlyProvider is returned in production for an external identity
@@ -76,6 +81,15 @@ type ExternalConfig struct {
 	RevocationTimeout time.Duration
 	// RevocationCacheEntries bounds the default in-process cache (10,000).
 	RevocationCacheEntries int
+	// LoginRecordCache remembers which tokens already recorded external_login,
+	// under its own "authext_login" namespace, so one token records one row per
+	// cache. Nil selects an in-process cacher.Memory: dedupe per instance. A
+	// store shared across instances dedupes fleet-wide. It is separate from
+	// RevocationCache so login records never evict revocation facts.
+	LoginRecordCache cacher.Storer
+	// LoginRecordCacheEntries bounds the default in-process login-record cache
+	// (10,000).
+	LoginRecordCacheEntries int
 }
 
 // ExternalRepositories are the ports the external engine uses.
@@ -175,7 +189,7 @@ func validateExternal(cfg ExternalConfig, repos ExternalRepositories, mode envir
 	for _, dep := range []struct {
 		name  string
 		value any
-	}{{"SecurityEvents", repos.SecurityEvents}, {"Invitations", repos.Invitations}, {"RevocationCache", cfg.RevocationCache}} {
+	}{{"SecurityEvents", repos.SecurityEvents}, {"Invitations", repos.Invitations}, {"RevocationCache", cfg.RevocationCache}, {"LoginRecordCache", cfg.LoginRecordCache}} {
 		if dep.value != nil && nilDependency(dep.value) {
 			return cfg, fmt.Errorf("authentication: external %s contains a typed nil: %w", dep.name, sdk.ErrInvalidInput)
 		}
@@ -236,6 +250,12 @@ func validateExternal(cfg ExternalConfig, repos ExternalRepositories, mode envir
 	}
 	if cfg.RevocationCacheTTL < 0 || cfg.RevocationOutageGrace < cfg.RevocationCacheTTL || cfg.RevocationTimeout < 0 || cfg.RevocationTimeout >= maxRevocationTimeout || cfg.RevocationCacheEntries < 0 {
 		return cfg, fmt.Errorf("authentication: incoherent external revocation timing: %w", sdk.ErrInvalidInput)
+	}
+	if cfg.LoginRecordCacheEntries == 0 {
+		cfg.LoginRecordCacheEntries = defaultLoginRecordCacheEntries
+	}
+	if cfg.LoginRecordCacheEntries < 0 {
+		return cfg, fmt.Errorf("authentication: external LoginRecordCacheEntries is negative: %w", sdk.ErrInvalidInput)
 	}
 	return cfg, nil
 }
