@@ -460,11 +460,18 @@ func New(repos Repositories, signer cryptids.JWTSigner, runtimeMode environment.
 
 	// The ONE security-event recorder: every recording site below shares it, so
 	// its write-failure and suppressed-row counts cover the whole pocket. The
-	// failure-row budget draws on the same limiter the pocket's routes use.
+	// failure-row budget draws on the same limiter the pocket's routes use. In
+	// production a request row without client attribution warns once: a host
+	// route is serving without ClientInfoMiddleware.
+	var missingAttribution securityevent.RecorderOption
+	if cfg.RuntimeMode == environment.ModeProduction {
+		missingAttribution = securityevent.WithMissingAttributionWarning()
+	}
 	securityEvents := securityevent.NewRecorder(repos.SecurityEvents, cfg.IDs, time.Now, cfg.Logger,
 		securityevent.WithClientInfoReader(authlogic.ClientInfoFromContext),
 		securityevent.WithWriteObserver(cfg.AuditWriteObserver),
-		securityevent.WithFailureRowBudget(limiter, ratelimiter.PerMinute(auditFailureRowsPerMinute)))
+		securityevent.WithFailureRowBudget(limiter, ratelimiter.PerMinute(auditFailureRowsPerMinute)),
+		missingAttribution)
 
 	var invSvc *invitations.Service
 	if cfg.Granter != nil {

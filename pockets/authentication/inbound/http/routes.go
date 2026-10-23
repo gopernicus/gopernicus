@@ -434,6 +434,18 @@ func (c clientInfoRegistrar) Handle(method, path string, handler http.HandlerFun
 	c.inner.Handle(method, path, handler, all...)
 }
 
+// ClientInfoMiddleware stamps every request's client IP and User-Agent onto
+// the pocket's client-info carrier, so a host route's audit rows — a denial
+// recorded through a host bridge, an external_login row — and RateLimitByIP
+// see the client. It is a stamp, not a gate: it admits every request. The IP
+// is web.ClientIP when web.TrustProxies ran, else the peer address — never a
+// raw X-Forwarded-For — so the host installs it with router.Use AFTER the
+// TrustProxies Use, once the adapter exists. The pocket's own routes carry the
+// stamp regardless.
+func (a *Adapter) ClientInfoMiddleware() web.Middleware {
+	return clientInfoMiddleware(a.proxies)
+}
+
 // clientInfoMiddleware stamps the request IP and User-Agent onto the context via
 // the pocket's exported carrier (authlogic.WithClientInfo). It is the ONE write
 // point; login/token read the IP from it and the audit rail reads IP + UA. Each

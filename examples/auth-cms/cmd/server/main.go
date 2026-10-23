@@ -393,6 +393,10 @@ func run(ctx context.Context, log *slog.Logger, runtimeMode environment.Mode) er
 		return err
 	}
 	securityEvents.set(authSvc.SecurityEvents)
+	// The client-attribution stamp on every host route, so a denial the bridge
+	// records there (the role routes, the debug route) carries the client's IP
+	// and User-Agent. A later Use, so it runs inside TrustProxies.
+	router.Use(authSvc.HTTP.ClientInfoMiddleware())
 	if err := authSvc.HTTP.Register(mount); err != nil {
 		return err
 	}

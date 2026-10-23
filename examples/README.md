@@ -647,6 +647,13 @@ func run(ctx context.Context, log *slog.Logger, mode environment.Mode) error {
   limits, and the audit rail — sees the client IP resolved from the
   `TRUSTED_PROXY_COUNT` rightmost `X-Forwarded-For` hops, never a spoofable
   leftmost one.
+- **A host that mounts authentication installs its client-attribution stamp**,
+  `router.Use(authenticationComponents.HTTP.ClientInfoMiddleware())`, after the
+  `TrustProxies` `Use` and once the adapter exists, so audit rows and
+  `RateLimitByIP` on host routes see the client; the pocket's own routes carry
+  it already. Installed before `TrustProxies`, it would stamp the peer address.
+  Attribution is only as good as `TRUSTED_PROXY_COUNT` and a locked-down origin:
+  one reachable solely through those proxies.
 - **`ValidateProduction` runs under production only**: development keeps
   `Origin()`'s `http://HOST:PORT` fallback.
 - **The mode comes from the process environment**: `make run` exports

@@ -1,9 +1,11 @@
 package authentication
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"errors"
+	"log/slog"
 	"reflect"
 	"strings"
 	"sync"
@@ -16,6 +18,7 @@ import (
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/session"
 	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/ratelimiter"
+	"github.com/gopernicus/gopernicus/sdk/pkg/environment"
 	listing "github.com/gopernicus/gopernicus/sdk/pkg/list"
 )
 
@@ -203,5 +206,41 @@ func TestComponentsBudgetFailureRowsOnTheRootLimiter(t *testing.T) {
 	}
 	if budgeted != auditFailureRowsPerMinute+1 {
 		t.Fatalf("the root limiter saw %d budget keys, want %d", budgeted, auditFailureRowsPerMinute+1)
+	}
+}
+
+// TestComponentsWarnUnattributedRowsInProductionOnly pins the root's wiring of
+// the missing-attribution WARN: in production a request row recorded without
+// client attribution logs it once; development never does, and an attributed
+// row never does.
+func TestComponentsWarnUnattributedRowsInProductionOnly(t *testing.T) {
+	for _, tc := range []struct {
+		mode environment.Mode
+		want int
+	}{
+		{environment.ModeProduction, 1},
+		{environment.ModeDevelopment, 0},
+	} {
+		t.Run(string(tc.mode), func(t *testing.T) {
+			var logs bytes.Buffer
+			cfg := prodLimiterConfig()
+			cfg.RuntimeMode = tc.mode
+			cfg.RateLimiter = durableLimiter{}
+			cfg.AuditDisabledAcknowledged = false
+			cfg.Logger = slog.New(slog.NewTextHandler(&logs, nil))
+			c, err := newFixture(testRepositories(Repositories{SecurityEvents: &recorderEvents{}}), cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx := sdk.WithRequestID(context.Background(), "req-unstamped")
+			row := securityevent.Input{Type: securityevent.TypeLogout, Status: securityevent.StatusSuccess}
+			c.SecurityEvents.Record(authlogic.WithClientInfo(ctx, "203.0.113.7", "agent/1"), row)
+			for range 2 {
+				c.SecurityEvents.Record(ctx, row)
+			}
+			if got := strings.Count(logs.String(), "mount ClientInfoMiddleware"); got != tc.want {
+				t.Fatalf("missing-attribution WARNs = %d, want %d:\n%s", got, tc.want, logs.String())
+			}
+		})
 	}
 }

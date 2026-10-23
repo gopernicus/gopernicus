@@ -1360,6 +1360,8 @@ access-token helpers admits an external token, even when providers are wired.
   `authenticate ∘ RequireBrowserSafeMutation() ∘ authorize`, the stack the
   authorization pocket's role routes expect. An adapter built by `NewAuthenticator`
   has no browser policy, so its gate refuses every unsafe method with 403.
+- `authenticationhttp.Adapter.ClientInfoMiddleware()` — the client-attribution
+  stamp for HOST routes (below).
 - `AdministrationConfig.MachineRoutesGate` — the one middleware the pocket CONSUMES instead of
   providing: the host's authorization, applied last in the bundled
   machine-identity lifecycle stack (`BundledRouteAuth.MachineLifecycle` —
@@ -1368,6 +1370,45 @@ access-token helpers admits an external token, even when providers are wired.
   [Machine identity](#machine-identity--ownership-delegation-and-the-two-seams).
 - `delivery.Runtime.Run(ctx)` — the host-owned `in_process` delivery runtime loop
   (below); in `jobs` mode the host runs the generic jobs runtime instead.
+
+**Client attribution on host routes — `ClientInfoMiddleware()`.** The audit rail
+and the per-IP budgets read the client IP and User-Agent from one carrier
+(`authlogic.ClientInfoFromContext`). The pocket's own routes always carry it; a
+host route carries it only behind the exported stamp, which the HOST installs
+with `router.Use` in `cmd/` — after the `TrustProxies` `Use`, once the adapter
+exists:
+
+```go
+router := web.NewWebHandler()
+router.Use(web.TrustProxies(srv.TrustedProxyCount), web.SecurityHeaders(), web.RequestID(), web.Logger(log), web.Panics(log))
+// … authentication.New(…) …
+router.Use(authenticationComponents.HTTP.ClientInfoMiddleware())
+```
+
+It is a stamp, not a gate: it admits every request. It reads `web.ClientIP`
+(the `TrustProxies`-resolved address, else the peer), never a raw
+`X-Forwarded-For`, so it must run INSIDE `TrustProxies`; `WebHandler.Use` wraps
+the whole dispatch in registration order, so the later `Use` covers routes
+registered before it. Attribution is only as good as `TRUSTED_PROXY_COUNT` and an
+origin reachable solely through those proxies. Behind it, three host-route
+surfaces see the client: a denial a host bridge records (`authorization_denied`
+on a route gated by `authorizationhttp.Adapter.Require`), an `external_login` row
+first recorded on a host route, and `RateLimitByIP`.
+
+Without the stamp, `RateLimitByIP` and the OAuth2 per-IP budget fall back to the
+`TrustProxies`-resolved or peer address, never one shared bucket. The logic-side
+per-IP budgets — the authentication-request budgets, passwordless start and
+redeem, and the verification resend — have no request to read and stay
+carrier-only: they run on the pocket's routes, which always carry it, and meet an
+empty carrier only when a host calls the service from an unstamped host route.
+In production the recorder logs ONE WARN per process,
+`security event recorded without client attribution; mount ClientInfoMiddleware`,
+the first time it records a row whose context carries a request id but no client
+IP (`securityevent.WithMissingAttributionWarning`, enabled by the root under
+production); background rows never trigger it. The adapter owns one proxy
+posture, built by `NewAuthenticator` and reused by `New`, so in production a
+narrow `NewAuthenticator` adapter's stamp logs the once-per-process
+`web.TrustProxies is not wired` WARN exactly like the bundled routes.
 
 **Delegated session foundation (OAuth issuance is not yet available).** Session
 rows now distinguish `session.ProfileFirstParty` from `session.ProfileDelegated`.

@@ -35,7 +35,8 @@ It is a small host (H0): `cmd/`, one host integration, one host pocket
    unwired: challenges, contact changes, service accounts and API keys. The
    authorization pgx store `WithAudit()` and `WithIntegrityPolicy(DefaultIntegrityPolicy())`.
 6. The router: `TrustProxies`, `SecurityHeaders`, `RequestID`, `Logger`,
-   `Panics`.
+   `Panics`; the authentication adapter's `ClientInfoMiddleware()` joins it in
+   step 8, in a later `Use`, so it runs inside `TrustProxies`.
 7. The identity provider, chosen by whether `IDP_ISSUER` is set: unset → the
    development issuer served by this process; set → `sdkauth.NewOIDC` over
    go-oidc with `IDP_ISSUER`, `IDP_AUDIENCE` and `IDP_JWKS_URL`.
@@ -43,8 +44,11 @@ It is a small host (H0): `cmd/`, one host integration, one host pocket
    `PasswordFlowsDisabled`, delivery `off`, the pgxdb limiter, the identifier
    keyer from the keys, `Secure` session cookies, `AllowedOrigins` from
    `PUBLIC_BASE_URL`, the one external provider, and
-   `WithAuditWriteObserver` logging each lost security-event row at ERROR;
-   then `HTTP.Register(mount)` (the JSON `/auth/*` surface).
+   `WithAuditWriteObserver` logging lost security-event rows at ERROR,
+   throttled to one line a minute; then
+   `router.Use(HTTP.ClientInfoMiddleware())`, the client-attribution stamp
+   for every host route, and `HTTP.Register(mount)` (the JSON `/auth/*`
+   surface).
 9. The decision bridge over `Components.SecurityEvents`, the authentication
    pocket's one recorder (see [Audit completeness](#audit-completeness)).
 10. `authorization.New` with `WithRuntimeMode(mode)`, the model below,
@@ -57,7 +61,8 @@ It is a small host (H0): `cmd/`, one host integration, one host pocket
    `authorizationhttp.WithDecisionObserver` (the same bridge) and
    `WithLogger`.
 11. `GET /healthz` — 200 while the database answers, 503 otherwise; its
-   `detail` carries `audit_write_failures` and `bridge_dropped`.
+   `detail` carries `audit_write_failures`, `audit_rows_suppressed` and
+   `bridge_dropped`.
 
 The model: a `project` is managed by its `owner`s and viewed by its `viewer`s
 and managers, and the global `admin` role manages every project. The integrity
@@ -122,7 +127,7 @@ curl -i localhost:8080/healthz
 #   Strict-Transport-Security: max-age=31536000; includeSubDomains
 #   X-Content-Type-Options: nosniff
 #   X-Frame-Options: DENY
-#   {"detail":{"audit_write_failures":0,"bridge_dropped":0},"status":"ok"}
+#   {"detail":{"audit_rows_suppressed":0,"audit_write_failures":0,"bridge_dropped":0},"status":"ok"}
 
 TOKEN=$(curl -s -XPOST localhost:8080/dev/token -d '{"sub":"u1","email":"a@x.test","email_verified":true}' | jq -r .token)
 ASSIGN='{"subject_type":"user","subject_id":"x","role":"admin","scope":{"kind":"global"}}'
@@ -145,7 +150,8 @@ curl -i -XPOST localhost:8080/authorization/roles -H "Authorization: Bearer $TOK
 
 The first token provisions a local user and writes one
 `external_subject_provisioned` row to `security_events`; the last request's 403
-writes one `authorization_denied` row through the decision bridge.
+writes one `authorization_denied` row through the decision bridge. Both carry
+the client's `ip_address` and `user_agent`.
 
 ### The first admin
 
@@ -232,7 +238,10 @@ authentication pocket's rail), `iam_audit` (every role change) and
 **Denials.** `pockets/audit/outbound/securityevents` bridges the authorization
 pocket's decision observer to the security-event rail. `cmd/server` builds it
 over `Components.SecurityEvents`, the authentication pocket's one recorder, so a
-row the bridge loses counts in `audit_write_failures`. A denied decision becomes
+row the bridge loses counts in `audit_write_failures`, and installs the
+authentication adapter's `ClientInfoMiddleware()` after the `TrustProxies`
+`Use`, so a denial on a host route carries the client's IP and User-Agent like
+the pocket's own rows. A denied decision becomes
 an `authorization_denied` row (`failure`) and a role write the `WritePolicy`
 refuses a `role_write_refused` row (`blocked`); an allowed decision records
 nothing. The route gates decide through `EvaluateResolved`; since authorization
@@ -243,13 +252,16 @@ drains the pool nor writes a row per request:
 
 - at most 8 writes run at once; an event arriving while all 8 are in flight is
   dropped and counted in `/healthz` `detail.bridge_dropped`;
-- one row per (event type, principal, permission, resource type, resource id)
-  per 60 s window, kept in memory, so per instance.
+- one row per (event type, principal, permission, resource type, resource id,
+  client IP) per 60 s window, kept in memory, so per instance; a second address
+  within the window records its own row.
 
 A security-event write that fails never fails the request: the recorder logs
 `audit_write_failed` (WARN, then one summary line a minute), the host logs
-`security event not recorded` at ERROR for each one, and `/healthz`
-`detail.audit_write_failures` counts them.
+`security event not recorded` at ERROR for the first and then one line a minute
+with the count, and `/healthz` `detail.audit_write_failures` counts them. A
+failure row the per-IP failure-row budget suppresses counts in
+`detail.audit_rows_suppressed`.
 
 **Immutability.** `0026_iam_audit_immutable.sql` and
 `0028_security_events_immutable.sql` are ordinary ledger files. Their triggers,

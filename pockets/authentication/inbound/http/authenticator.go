@@ -57,6 +57,9 @@ type Adapter struct {
 	browserLoginSet bool
 	limiter         ratelimiter.Limiter
 	logger          *slog.Logger
+	// proxies logs the one production trusted-proxy warning, shared by
+	// ClientInfoMiddleware and the bundled routes; nil outside production.
+	proxies *proxyPosture
 }
 
 // authenticatorConfig holds the HTTP adapter's resolved policy and dependencies.
@@ -89,12 +92,18 @@ func newAuthenticator(service CredentialService, cfg authenticatorConfig) *Adapt
 	return &Adapter{
 		service: service, cookie: cfg.Cookie, externalCookies: slices.Clone(cfg.ExternalCookies),
 		browserLoginPath: cfg.BrowserLoginPath, browserLoginSet: browserLoginSet, limiter: cfg.Limiter, logger: cfg.Logger,
+		proxies: newProxyPosture(cfg.RuntimeMode, cfg.Logger),
 	}
 }
 
-func clientIPFromContext(ctx context.Context) string {
-	ip, _ := authlogic.ClientInfoFromContext(ctx)
-	return ip
+// clientIPFor returns the client-info carrier's IP, or clientIP(r) when no
+// ClientInfoMiddleware stamped the request: a host route without the stamp
+// keys on the TrustProxies-resolved or peer address, never one shared bucket.
+func clientIPFor(r *http.Request) string {
+	if ip, _ := authlogic.ClientInfoFromContext(r.Context()); ip != "" {
+		return ip
+	}
+	return clientIP(r)
 }
 
 // CredentialService authenticates supplied proof and reads the resulting context.

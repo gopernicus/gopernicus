@@ -24,9 +24,10 @@ import (
 // TestDebugSecurityEventsRequiresPlatformAdmin drives GET /debug/security-events
 // over real HTTP sessions with AUTH_DEBUG=1: no session is 401, a signed-in
 // non-admin is 403, and a platform admin reads the rail — including the
-// non-admin's denial, which the decision bridge recorded with the request id
-// that request carried, and the OAuth2 demo's confidential-client mismatches:
-// client_id only for the configured client, IP and User-Agent, no secret.
+// non-admin's denial, which the decision bridge recorded with the request id,
+// IP and User-Agent that host-route request carried (run's ClientInfoMiddleware
+// Use), and the OAuth2 demo's confidential-client mismatches: client_id only
+// for the configured client, IP and User-Agent, no secret.
 func TestDebugSecurityEventsRequiresPlatformAdmin(t *testing.T) {
 	t.Setenv("AUTH_DEBUG", "1")
 	securityEvents := &deferredRecorder{}
@@ -55,7 +56,8 @@ func TestDebugSecurityEventsRequiresPlatformAdmin(t *testing.T) {
 	}
 	securityEvents.set(svc.SecurityEvents)
 	router := web.NewWebHandler()
-	router.Use(web.RequestID())
+	router.Use(web.TrustProxies(0), web.RequestID())
+	router.Use(svc.HTTP.ClientInfoMiddleware())
 	if err := svc.HTTP.Register(pockets.Mount{Router: router, Logger: quietLog(), Events: sdkevents.NewMemory(sdkevents.WithLogger(quietLog()))}); err != nil {
 		t.Fatal(err)
 	}
@@ -69,8 +71,8 @@ func TestDebugSecurityEventsRequiresPlatformAdmin(t *testing.T) {
 		t.Errorf("no session = %d %s, want 401", resp.StatusCode, body)
 	}
 	plain := host.signUp("debug-plain@example.com")
-	const deniedRequestID = "debug-denied-request"
-	if resp, body := plain.do("GET", "/debug/security-events", "", http.Header{web.RequestIDHeader: {deniedRequestID}}); resp.StatusCode != http.StatusForbidden {
+	const deniedRequestID, deniedUA = "debug-denied-request", "debug-probe/1.0"
+	if resp, body := plain.do("GET", "/debug/security-events", "", http.Header{web.RequestIDHeader: {deniedRequestID}, "User-Agent": {deniedUA}}); resp.StatusCode != http.StatusForbidden {
 		t.Errorf("signed-in non-admin = %d %s, want 403", resp.StatusCode, body)
 	}
 	const mismatchUA = "mcp-probe/1.0"
@@ -131,6 +133,9 @@ func TestDebugSecurityEventsRequiresPlatformAdmin(t *testing.T) {
 			denials++
 			if e.EventType != "authorization_denied" || e.UserID != plain.userIDFor() {
 				t.Errorf("row for %s = %+v, want the non-admin's authorization_denied", deniedRequestID, e)
+			}
+			if e.IPAddress == "" || e.UserAgent != deniedUA {
+				t.Errorf("row for %s ip/ua = %q/%q, want the host-route request's", deniedRequestID, e.IPAddress, e.UserAgent)
 			}
 		}
 	}

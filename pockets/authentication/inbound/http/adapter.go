@@ -112,7 +112,7 @@ func New(service AuthenticationService, runtimeMode environment.Mode, opts ...Op
 		Mutation: MutationSecurity{AllowedOrigins: append([]string(nil), cfg.AllowedOrigins...), OriginPolicy: cfg.OriginPolicy, SessionCookieName: auth.SessionCookieName()},
 		Views:    views, HTMLPolicy: snapshotHTMLPolicy(cfg.HTMLPolicy), MachineGate: cfg.MachineGate,
 		RouteAuth: resolveBundledRouteAuth(cfg.RouteAuth, auth),
-		Proxies:   newProxyPosture(runtimeMode, auth.logger),
+		Proxies:   auth.proxies,
 	}
 	return auth, nil
 }
