@@ -57,6 +57,7 @@ type config struct {
 	Logger                    *slog.Logger
 	ModelOption               decisions.Option
 	DiagnosticObserver        decisions.DiagnosticObserver
+	DecisionObserver          decisions.DecisionObserver
 	Limits                    authmodel.EvaluationLimits
 	RoleRoutesGate            web.Middleware
 	RoleWritePolicy           authorizationhttp.RoleWritePolicy

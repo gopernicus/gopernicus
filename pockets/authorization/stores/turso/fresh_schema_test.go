@@ -99,6 +99,8 @@ func TestFreshCanonicalSchema(t *testing.T) {
 			t.Fatalf("audit encoding: %s", row.Encoding)
 		}
 	}
+	// The immutability triggers would refuse the audit rewrites before their checks.
+	dropAuditTriggers(t, db)
 	for _, statement := range []string{
 		`INSERT INTO iam_tuples VALUES(0,'','','owner','user','bad','')`,
 		`INSERT INTO iam_tuples VALUES(1,'organization','o','owner','user','bad','')`,
@@ -113,6 +115,7 @@ func TestFreshCanonicalSchema(t *testing.T) {
 			t.Fatalf("schema accepted invalid state: %s", statement)
 		}
 	}
+	restoreAuditTriggers(t, db)
 	// Optional capture can be installed later without inventing historic deltas.
 	if err := tursodb.RunMigrations(t.Context(), db, TupleCacheMigrationsFS, TupleCacheMigrationsDir); err != nil {
 		t.Fatal(err)
@@ -192,6 +195,13 @@ func TestFreshCacheInstallationOrderAndRollback(t *testing.T) {
 		t.Fatal(err)
 	}
 	merged[MigrationsDir+"/0004_iam_operations_fenced.sql"] = &fstest.MapFile{Data: fenced}
+	for _, name := range []string{"0005_iam_audit_integrity.sql", immutableMigration} {
+		data, err := MigrationsFS.ReadFile(MigrationsDir + "/" + name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		merged[MigrationsDir+"/"+name] = &fstest.MapFile{Data: data}
+	}
 	merged[MigrationsDir+"/0002_iam_tuple_cache.sql"] = &fstest.MapFile{Data: cache}
 	if err := tursodb.RunMigrations(t.Context(), db, merged, MigrationsDir); err != nil {
 		t.Fatal(err)
@@ -406,7 +416,8 @@ CREATE INDEX main.host_operations_outcome ON iam_operations(outcome);`); err != 
 	if err := tursodb.RunMigrations(t.Context(), db, MigrationsFS, MigrationsDir); err != nil {
 		t.Fatalf("0004 must not fail on host triggers or indexes: %v", err)
 	}
-	if got := objects(); len(got) != 0 {
+	// Only the immutability triggers 0006 installs after the rebuilds remain.
+	if got := objects(); !slices.Equal(got, []string{"trigger:iam_operations_immutable_delete", "trigger:iam_operations_immutable_update"}) {
 		t.Fatalf("0004 kept host objects (update the UPGRADE caveat): %v", got)
 	}
 	if got := operationsDDL(t, db); got != canonicalOperationsDDL {

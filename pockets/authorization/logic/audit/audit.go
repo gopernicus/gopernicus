@@ -17,14 +17,22 @@ import (
 
 const MaxReasonLen = 1024
 
+// MaxCorrelationIDLen bounds Source.RequestID and Source.TraceID in bytes.
+const MaxCorrelationIDLen = 128
+
 // Source attributes a change to exactly one complete actor pair or an explicit
 // system source. Reason is optional UTF-8 context of at most MaxReasonLen bytes;
-// NUL is forbidden so all bundled stores can persist it directly.
+// NUL is forbidden so all bundled stores can persist it directly. RequestID and
+// TraceID optionally correlate the change with the request that caused it: at
+// most MaxCorrelationIDLen bytes of printable ASCII (0x20-0x7E). Callers that
+// copy them from request headers blank an invalid value rather than refuse.
 type Source struct {
 	ActorType string `json:"actor_type,omitempty"`
 	ActorID   string `json:"actor_id,omitempty"`
 	System    string `json:"system,omitempty"`
 	Reason    string `json:"reason,omitempty"`
+	RequestID string `json:"request_id,omitempty"`
+	TraceID   string `json:"trace_id,omitempty"`
 }
 
 func (s Source) Validate() error {
@@ -45,7 +53,22 @@ func (s Source) Validate() error {
 	if len(s.Reason) > MaxReasonLen || !utf8.ValidString(s.Reason) || strings.ContainsRune(s.Reason, 0) {
 		return fmt.Errorf("audit reason must be valid UTF-8 without NUL and at most %d bytes: %w", MaxReasonLen, sdk.ErrInvalidInput)
 	}
+	if !validCorrelationID(s.RequestID) || !validCorrelationID(s.TraceID) {
+		return fmt.Errorf("audit request and trace ids must be printable ASCII of at most %d bytes: %w", MaxCorrelationIDLen, sdk.ErrInvalidInput)
+	}
 	return nil
+}
+
+func validCorrelationID(id string) bool {
+	if len(id) > MaxCorrelationIDLen {
+		return false
+	}
+	for i := range len(id) {
+		if id[i] < 0x20 || id[i] > 0x7e {
+			return false
+		}
+	}
+	return true
 }
 
 type sourceKey struct{}

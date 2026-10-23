@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 	"testing/fstest"
+	"time"
 
 	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/audit"
@@ -163,12 +164,32 @@ func writeAudited(t *testing.T, db *tursodb.DB, id string) {
 	}
 }
 
-// assertMigration0005Expand starts from a database migrated through 0004: both
-// shapes are admitted, the rebuild keeps every earlier row unstamped and later
-// writes take the new defaults.
-func assertMigration0005Expand(t *testing.T, db *tursodb.DB) {
+// insertPre0005Rows writes one audit and one operation row with the columns
+// that predate 0005, as an earlier store version did.
+func insertPre0005Rows(t *testing.T, db *tursodb.DB) {
 	t.Helper()
-	writeAudited(t, db, "before")
+	at := tursodb.FormatTime(time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC))
+	if _, err := db.Exec(t.Context(), `INSERT INTO main.iam_audit (id, event_id, occurred_at, actor_type, actor_id, system_source, reason, action, encoding, scope_kind, resource_type, resource_id, relation, subject_type, subject_id, subject_relation)
+VALUES ('before:00000000000000000001', 'before', ?, '', '', 'migration-0005-test', '', 'added', 'tuple/v2', 2, 'doc', 'before', 'viewer', 'user', 'alice', '')`, at); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(t.Context(), `INSERT INTO main.iam_operations (operation_id, encoding, fingerprint, outcome, committed_at) VALUES ('op:before', 'operation/v1', ?, 'applied', ?)`, strings.Repeat("a", 64), at); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// assertMigration0005Required starts from a database migrated through 0004:
+// the bundle and the audited facade refuse it, the rebuild keeps every earlier
+// row with recorded_at NULL and later writes take the new defaults.
+func assertMigration0005Required(t *testing.T, db *tursodb.DB) {
+	t.Helper()
+	if _, err := testRepositories(t.Context(), db, WithAudit()); !errors.Is(err, sdk.ErrInvalidInput) {
+		t.Fatalf("bundle admitted a database without 0005: %v", err)
+	}
+	if _, err := RelationshipRepository(t.Context(), db, WithAudit()); !errors.Is(err, sdk.ErrInvalidInput) {
+		t.Fatalf("audited facade admitted a database without 0005: %v", err)
+	}
+	insertPre0005Rows(t, db)
 	before, err := queryStrings(t.Context(), db, preIntegrityAudit)
 	if err != nil {
 		t.Fatal(err)
@@ -187,12 +208,12 @@ func assertMigration0005Expand(t *testing.T, db *tursodb.DB) {
 	}
 }
 
-func TestCanonicalSchemaToleratesMigration0005(t *testing.T) {
+func TestCanonicalSchemaRequiresMigration0005(t *testing.T) {
 	db := emptyCanonicalFixture(t)
 	if err := tursodb.RunMigrations(t.Context(), db, migrationsThrough(t, "0004_iam_operations_fenced.sql"), MigrationsDir); err != nil {
 		t.Fatal(err)
 	}
-	assertMigration0005Expand(t, db)
+	assertMigration0005Required(t, db)
 }
 
 // TestCanonicalSchemaRefusesMigration0005Variants keeps the 0005 bodies exact:

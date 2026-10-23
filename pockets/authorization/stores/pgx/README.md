@@ -133,15 +133,28 @@ and can stall every authorization write while it waits; see the [deploy order
 and lock guidance](../UPGRADE.md). `Repositories` populates both `Mutations` and
 `Operations`; `RelationshipRepository` needs neither table.
 
-**v0.19.1: ship and tolerate 0005; adopt BEFORE migrating it.**
+**v0.20.0: 0005 is required; 0006 makes the audit tables append-only.**
 `0005_iam_audit_integrity.sql` adds `request_id`, `trace_id`, `seq` and
-`recorded_at` to `iam_audit` and `recorded_at` to `iam_operations`; the store
-never writes them, so they take their defaults. The file sets its own
-`lock_timeout` and ends with `GRANT USAGE ON SEQUENCE iam_audit_seq TO PUBLIC`,
-so a runtime role holding table privileges only keeps inserting. v0.19.1 admits
-a database with or without 0005; v0.19.0 refuses one with 0005 applied (through
-`Repositories` or `WithAudit()`) and v0.20.0 will require it. Run v0.19.1 everywhere first, then migrate 0005; after
-0005, roll back only to v0.19.1.
+`recorded_at` to `iam_audit` and `recorded_at` to `iam_operations`. The store
+writes the two ids; the database stamps `seq` and `recorded_at`, which stay NULL
+on earlier rows. The file sets its own `lock_timeout` and ends with `GRANT USAGE
+ON SEQUENCE iam_audit_seq TO PUBLIC`, so a runtime role holding table privileges
+only keeps inserting. `Repositories` and any store built `WithAudit()` refuse a
+database without 0005, and v0.19.0 refuses one with it: run v0.19.1 everywhere
+first, migrate 0005, then repin v0.20.0. After 0005, roll back only to v0.19.1.
+
+`0006_iam_audit_immutable.sql` requires PostgreSQL ≥ 14. It installs
+`<table>_immutable` (BEFORE UPDATE OR DELETE, per row) and `<table>_no_truncate`
+(BEFORE TRUNCATE, per statement), both `ENABLE ALWAYS`, on `iam_audit` and
+`iam_operations`. `iam_audit` refuses every change; `iam_operations` refuses
+UPDATE, TRUNCATE and the DELETE of a fenced row. Members of the role that owns
+the table, including a SECURITY DEFINER function it owns, are exempt. A refused
+write is SQLSTATE 42501, `sdk.ErrForbidden`. In production `Repositories` then
+runs the append-only posture probe over `AuditTables(opts...)` and refuses a
+runtime role that can modify or cannot append to those tables; a host whose
+migrations and server share one role must split them. See the
+[upgrade guide](../UPGRADE.md) and
+[pgxdb](../../../../integrations/datastores/pgxdb/README.md#append-only-tables-the-posture-probe).
 
 TupleCache adds one optional file,
 `tuple_cache_migrations/0002_iam_tuple_cache.sql`, exposed by

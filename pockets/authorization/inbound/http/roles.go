@@ -5,10 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"mime"
 	"net/http"
 
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/audit"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/decisions"
 
 	authmodel "github.com/gopernicus/gopernicus/pockets/authorization/logic/model"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/mutations"
@@ -318,12 +320,26 @@ func strictJSONBody(w http.ResponseWriter, r *http.Request, dst any, maxBytes in
 }
 
 // The authenticated principal owns actor attribution, regardless of prior context metadata.
+// The request and trace ids come from the kernel context; an id audit.Source
+// would refuse is blanked, so a client header can never fail a role write.
 func roleAuditContext(ctx context.Context, p sdk.Principal) context.Context {
 	source := audit.Source{ActorType: p.Type, ActorID: p.ID}
 	if supplied, err := audit.SourceFromContext(ctx); err == nil {
 		source.Reason = supplied.Reason
 	}
+	requestID, _ := sdk.RequestIDFromContext(ctx)
+	traceID, _ := sdk.TraceIDFromContext(ctx)
+	source.RequestID, source.TraceID = correlationID(requestID), correlationID(traceID)
 	return audit.WithSource(ctx, source)
+}
+
+// correlationID returns id, or "" when audit.Source would refuse it (over
+// audit.MaxCorrelationIDLen bytes or not printable ASCII). It never truncates.
+func correlationID(id string) string {
+	if err := (audit.Source{System: "http", RequestID: id}).Validate(); err != nil {
+		return ""
+	}
+	return id
 }
 
 func (h *Adapter) admitRoleWrite(ctx context.Context, request RoleWriteRequest) error {
@@ -331,7 +347,65 @@ func (h *Adapter) admitRoleWrite(ctx context.Context, request RoleWriteRequest) 
 		return err
 	}
 	if err := h.writePolicy(ctx, request); err != nil {
+		if ctx.Err() == nil {
+			h.roleWriteRefused(ctx, request, err)
+		}
 		return err
 	}
 	return ctx.Err()
+}
+
+// roleWriteRefused records a WritePolicy refusal with validated identifiers
+// only: one WARN line and, when observed, one OutcomeRefused event.
+func (h *Adapter) roleWriteRefused(ctx context.Context, request RoleWriteRequest, err error) {
+	kind := refusalErrorKind(err)
+	h.logger.LogAttrs(ctx, slog.LevelWarn, "authorization: role write refused",
+		slog.String("actor_type", request.Principal.Type), slog.String("actor_id", request.Principal.ID),
+		slog.String("operation", string(request.Operation)),
+		slog.String("subject_type", request.Subject.Type), slog.String("subject_id", request.Subject.ID),
+		slog.String("role", request.Role),
+		slog.String("scope_kind", scopeKindName(request.Scope.Kind)), slog.String("scope_type", request.Scope.Type), slog.String("scope_id", request.Scope.ID),
+		slog.String("error_kind", kind))
+	if h.observer != nil {
+		h.observer(ctx, decisions.DecisionEvent{
+			Operation: "RoleWrite", Principal: request.Principal, Subject: request.Subject,
+			Permission: request.Role, ResourceType: request.Scope.Type, ResourceID: request.Scope.ID,
+			Outcome: decisions.OutcomeRefused, ErrorKind: kind,
+		})
+	}
+}
+
+func scopeKindName(kind tuples.ScopeKind) string {
+	switch kind {
+	case tuples.GlobalScope:
+		return "global"
+	case tuples.ResourceScope:
+		return "resource"
+	default:
+		return ""
+	}
+}
+
+// refusalErrorKind classifies a WritePolicy error without logging its text.
+func refusalErrorKind(err error) string {
+	switch {
+	case errors.Is(err, sdk.ErrForbidden):
+		return "forbidden"
+	case errors.Is(err, sdk.ErrUnauthorized):
+		return "unauthorized"
+	case errors.Is(err, sdk.ErrNotFound):
+		return "not_found"
+	case errors.Is(err, sdk.ErrConflict):
+		return "conflict"
+	case errors.Is(err, sdk.ErrInvalidInput):
+		return "invalid_input"
+	case errors.Is(err, sdk.ErrUnavailable):
+		return "unavailable"
+	case errors.Is(err, context.Canceled):
+		return "canceled"
+	case errors.Is(err, context.DeadlineExceeded):
+		return "deadline_exceeded"
+	default:
+		return "other"
+	}
 }

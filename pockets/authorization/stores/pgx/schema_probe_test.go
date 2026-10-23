@@ -93,14 +93,24 @@ UNION ALL SELECT 'operation|' || operation_id, recorded_at IS NOT NULL, recorded
 	return out
 }
 
-// TestSchemaProbeToleratesMigration0005 admits a database before and after 0005:
-// earlier rows stay unstamped and later writes take the new defaults.
-func TestSchemaProbeToleratesMigration0005(t *testing.T) {
+// TestSchemaProbeRequiresMigration0005 refuses a database before 0005 and
+// admits it after: earlier rows stay unstamped and later writes take the new
+// defaults.
+func TestSchemaProbeRequiresMigration0005(t *testing.T) {
 	db := emptyCanonicalFixture(t)
 	if err := pgxdb.RunMigrations(t.Context(), db, migrationsThrough(t, "0004_iam_operations_fenced.sql"), MigrationsDir); err != nil {
 		t.Fatal(err)
 	}
-	writeAudited(t, db, "before")
+	if _, err := testRepositories(t.Context(), db, WithAudit()); !errors.Is(err, sdk.ErrInvalidInput) {
+		t.Fatalf("bundle admitted a database without 0005: %v", err)
+	}
+	if _, err := RelationshipRepository(t.Context(), db, WithAudit()); !errors.Is(err, sdk.ErrInvalidInput) {
+		t.Fatalf("audited facade admitted a database without 0005: %v", err)
+	}
+	// The rows an earlier store version wrote, with the columns that predate 0005.
+	tupleExec(t, db, `INSERT INTO iam_audit (id, event_id, occurred_at, actor_type, actor_id, system_source, reason, action, encoding, scope_kind, resource_type, resource_id, relation, subject_type, subject_id, subject_relation)
+VALUES ('before:00000000000000000001', 'before', now(), '', '', 'sql-test', '', 'added', 'tuple/v2', 2, 'doc', 'before', 'viewer', 'user', 'alice', '')`)
+	tupleExec(t, db, `INSERT INTO iam_operations (operation_id, encoding, fingerprint, outcome, committed_at) VALUES ('op:before', 'operation/v1', repeat('a', 64), 'applied', now())`)
 	if err := pgxdb.RunMigrations(t.Context(), db, MigrationsFS, MigrationsDir); err != nil {
 		t.Fatal(err)
 	}

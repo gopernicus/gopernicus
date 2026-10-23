@@ -48,6 +48,7 @@ type auditPosture struct {
 	recording bool
 	reasons   string
 	waived    bool
+	observed  bool
 }
 
 // New validates host wiring and assembles the public services.
@@ -83,12 +84,13 @@ func New(repos Repositories, opts ...Option) (Components, error) {
 	if err := authorizationhttp.ValidateListStrategy(cfg.ListStrategy); err != nil {
 		return Components{}, err
 	}
+	posture.observed = cfg.DecisionObserver != nil
 	comps := Components{Audit: repos.Audit, log: cfg.Logger, posture: posture}
 	if comps.log == nil {
 		comps.log = slog.Default()
 	}
 	posture.warn(comps.log)
-	decisionOptions := []decisions.Option{decisions.WithLogger(comps.log), decisions.WithLimits(cfg.Limits), decisions.WithDiagnosticObserver(cfg.DiagnosticObserver), decisions.WithTupleCache(cfg.TupleBackend, repos.TupleSource, cfg.TuplePolicy)}
+	decisionOptions := []decisions.Option{decisions.WithLogger(comps.log), decisions.WithLimits(cfg.Limits), decisions.WithDiagnosticObserver(cfg.DiagnosticObserver), decisions.WithDecisionObserver(cfg.DecisionObserver), decisions.WithTupleCache(cfg.TupleBackend, repos.TupleSource, cfg.TuplePolicy)}
 	if cfg.ModelOption != nil {
 		decisionOptions = append(decisionOptions, cfg.ModelOption)
 	}
@@ -144,6 +146,8 @@ func New(repos Repositories, opts ...Option) (Components, error) {
 			WritePolicy:  cfg.RoleWritePolicy,
 			ListStrategy: cfg.ListStrategy,
 		}),
+		authorizationhttp.WithDecisionObserver(cfg.DecisionObserver),
+		authorizationhttp.WithLogger(comps.log),
 	)
 	if err != nil {
 		return Components{}, err
@@ -156,7 +160,7 @@ func (c Components) Register(m pockets.Mount) error {
 	if c.HTTP == nil {
 		return fmt.Errorf("authorization: components are not initialized: %w", sdk.ErrInvalidInput)
 	}
-	c.log.Info("registered authorization pocket", "relationships", c.Relationships != nil, "roles", c.Roles != nil, "model", c.Decisions.CompiledModel() != nil, "baseline_relationship_writes", c.RelationshipWriter != nil, "role_routes", c.HTTP.RoutesEnabled(), "audit_recording", c.posture.recording, "audit_reader", c.Audit != nil, "runtime_mode", c.posture.mode.String())
+	c.log.Info("registered authorization pocket", "relationships", c.Relationships != nil, "roles", c.Roles != nil, "model", c.Decisions.CompiledModel() != nil, "baseline_relationship_writes", c.RelationshipWriter != nil, "role_routes", c.HTTP.RoutesEnabled(), "audit_recording", c.posture.recording, "audit_reader", c.Audit != nil, "decision_observer", c.posture.observed, "runtime_mode", c.posture.mode.String())
 	return c.HTTP.Register(m.Router)
 }
 
@@ -208,7 +212,8 @@ func checkAuditPosture(repos Repositories, cfg config) (auditPosture, error) {
 	return posture, nil
 }
 
-// warn logs one line for a waived requirement or, in development, an unmet one.
+// warn logs one line for a waived requirement or, in development, an unmet one,
+// and in production one line when no decision observer records denials.
 func (p auditPosture) warn(log *slog.Logger) {
 	switch {
 	case p.reasons == "":
@@ -216,6 +221,9 @@ func (p auditPosture) warn(log *slog.Logger) {
 		log.Warn("authorization audit requirement waived", "posture_waiver", "AuditDisabledAcknowledged", "runtime_mode", p.mode.String(), "reason", p.reasons)
 	default:
 		log.Warn("authorization audit wiring would be refused in production", "runtime_mode", p.mode.String(), "reason", p.reasons)
+	}
+	if p.mode.IsProduction() && !p.observed {
+		log.Warn("authorization: denials are not durably recorded; wire WithDecisionObserver", "runtime_mode", p.mode.String())
 	}
 }
 

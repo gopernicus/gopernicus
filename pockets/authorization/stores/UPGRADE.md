@@ -4,6 +4,167 @@ Authorization ships a fresh canonical SQL schema for PostgreSQL and SQLite/Turso
 Hosts export and apply it before constructing repositories. Framework constructors
 validate the applied schema; they do not create tables or run migrations.
 
+## Adopting 0005 — REQUIRED, LOCKSTEP; every instance on v0.19.1 / v0.18.1 first; roll back only to v0.19.1 / v0.18.1
+
+Authorization core `v0.29.0` with PostgreSQL store `v0.20.0` or Turso store
+`v0.19.0`. The stores now **require**
+`migrations/0005_iam_audit_integrity.sql` for `Repositories` and for any store
+built `WithAudit()`, and ship `migrations/0006_iam_audit_immutable.sql`, the
+immutability triggers. Copy both as the next entries of the host's
+authorization stream, after `0004_iam_operations_fenced.sql`; never edit an
+applied file. The PostgreSQL files require PostgreSQL ≥ 14
+(`CREATE OR REPLACE TRIGGER`).
+
+**Lockstep.** Both schema probes are exact. A v0.19.0 / v0.18.0 instance refuses
+a database with 0005 applied, and a v0.20.0 / v0.19.0 instance refuses one
+without it. Deploy in this order:
+
+1. Run every instance on PostgreSQL store `v0.19.1` / Turso store `v0.18.1`
+   first. They admit the database with or without 0005. A v0.19.0 / v0.18.0
+   instance that restarts after 0005 refuses to boot.
+2. Adopt the authentication and secrets stores of the same release until
+   production boots clean.
+3. Migrate 0005 (and 0006).
+   - PostgreSQL: two metadata-only `ADD COLUMN`s per table; the file sets
+     `lock_timeout = '5s'`, so a blocked run aborts with nothing applied and the
+     host retries. It ends with `GRANT USAGE ON SEQUENCE iam_audit_seq TO
+     PUBLIC`, so a role with table grants only keeps inserting.
+   - SQLite/Turso: 0005 rebuilds `iam_audit` and `iam_operations` as 0004 did.
+     The rebuild holds the write lock: it is restartable, not online. Plan a
+     maintenance window, snapshot or branch the database first, and run the 0004
+     preflight for host views, triggers and indexes on both tables.
+4. Repin core `v0.29.0` and the store `v0.20.0` / `v0.19.0`.
+
+After 0005, roll back only to `v0.19.1` / `v0.18.1`, never `v0.19.0` / `v0.18.0`.
+
+**The posture probe is BREAKING at runtime for single-role PostgreSQL hosts.** In
+production `Repositories` refuses a runtime role that is superuser, owns
+`iam_audit` or `iam_operations` (or their schema or trigger functions), can
+UPDATE/DELETE/TRUNCATE/TRIGGER them without the verified 0006 triggers, or cannot
+insert into them (`pgxdb.ErrAppendOnlyTableWritable` /
+`pgxdb.ErrAppendOnlyTableUnwritable`). A host whose migration runner and server
+share one role is refused. Split the roles before repinning, preflight the
+runtime role with `pgxdb.InspectTablePrivileges(ctx, db, "<runtime>",
+pgx.AuditTables(opts...)...)`, and archive its output. A host that revoked USAGE
+on `iam_audit_seq` from PUBLIC grants it to the runtime role. The Turso store
+only WARNs when the triggers are absent or differ.
+
+**0006 is the immutability trigger.** If you decline it, delete it from your
+ledger before applying. On PostgreSQL the probe then accepts only a runtime role
+that holds no UPDATE, TRUNCATE or TRIGGER on either table and no DELETE on
+`iam_audit` (`protected_by=privilege`); otherwise it refuses. On Turso, declining
+leaves one WARN per table at boot.
+
+**`iam_operations` keeps DELETE.** Its trigger refuses deleting a fenced row and
+admits deleting any other, so the two-role recipe keeps DELETE on
+`iam_operations` for the runtime role. A host that revoked it following the
+earlier posture guide grants it back:
+
+```sql
+GRANT DELETE ON iam_operations TO runtime;
+```
+
+**Never backfill with UPDATE.** `seq` and `recorded_at` are NULL on rows written
+before 0005, and `request_id` and `trace_id` are empty; that is the evidence of
+an older row. Do not UPDATE them. The Turso triggers refuse it. On PostgreSQL the
+owner is exempt from the trigger, so an owner's backfill would succeed and alter
+the evidence.
+
+**Turso rebuilds need a paired trigger file.** A later migration that rebuilds
+`iam_audit` or `iam_operations` (create, copy, `DROP TABLE`, rename) silently
+drops the 0006 triggers. Ship it with a paired file, ordered right after it, that
+re-creates them by repeating 0006's statements. The trigger probe WARNs at boot
+when they are missing.
+
+**Reverse (reference SQL, not shipped).** Author a new forward ledger entry;
+never delete or edit 0005 or 0006. Reversing 0005 discards the request, trace,
+sequence and database-clock evidence it recorded. Roll the binaries back to
+`v0.19.1` / `v0.18.1` first. Without 0006 the PostgreSQL probe refuses a role
+that holds UPDATE, TRUNCATE or TRIGGER, so reverse 0006 only alongside the
+grants above or a rollback.
+
+PostgreSQL:
+
+```sql
+DROP TRIGGER IF EXISTS iam_audit_immutable ON iam_audit;
+DROP TRIGGER IF EXISTS iam_audit_no_truncate ON iam_audit;
+DROP TRIGGER IF EXISTS iam_operations_immutable ON iam_operations;
+DROP TRIGGER IF EXISTS iam_operations_no_truncate ON iam_operations;
+DROP FUNCTION IF EXISTS iam_audit_refuse_write();
+DROP FUNCTION IF EXISTS iam_operations_refuse_write();
+-- 0005: drops iam_audit_seq with the column that owns it
+ALTER TABLE iam_audit DROP COLUMN request_id, DROP COLUMN trace_id, DROP COLUMN seq, DROP COLUMN recorded_at;
+ALTER TABLE iam_operations DROP COLUMN recorded_at;
+```
+
+SQLite/Turso (a rebuild to the 0001 and 0004 bodies, with the same preflight and
+maintenance window; from the `sqlite3` CLI run it with `-bail`):
+
+```sql
+DROP TRIGGER IF EXISTS main.iam_audit_immutable_update;
+DROP TRIGGER IF EXISTS main.iam_audit_immutable_delete;
+DROP TRIGGER IF EXISTS main.iam_operations_immutable_update;
+DROP TRIGGER IF EXISTS main.iam_operations_immutable_delete;
+CREATE TABLE main.iam_audit_prev (
+    id TEXT COLLATE BINARY NOT NULL PRIMARY KEY,
+    event_id TEXT COLLATE BINARY NOT NULL,
+    occurred_at TEXT NOT NULL,
+    actor_type TEXT COLLATE BINARY NOT NULL,
+    actor_id TEXT COLLATE BINARY NOT NULL,
+    system_source TEXT COLLATE BINARY NOT NULL,
+    reason TEXT NOT NULL,
+    action TEXT NOT NULL CONSTRAINT ck_iam_audit_action CHECK (action IN ('added','removed')),
+    encoding TEXT NOT NULL CONSTRAINT ck_iam_audit_encoding CHECK (encoding = 'tuple/v2'),
+    scope_kind INTEGER NOT NULL,
+    resource_type TEXT COLLATE BINARY NOT NULL,
+    resource_id TEXT COLLATE BINARY NOT NULL,
+    relation TEXT COLLATE BINARY NOT NULL,
+    subject_type TEXT COLLATE BINARY NOT NULL,
+    subject_id TEXT COLLATE BINARY NOT NULL,
+    subject_relation TEXT COLLATE BINARY NOT NULL,
+    CONSTRAINT ck_iam_audit_scope CHECK (
+        (scope_kind=1 AND resource_type='' AND resource_id='')
+        OR (scope_kind=2 AND resource_type<>'' AND resource_id<>'')
+    ),
+    CONSTRAINT ck_iam_audit_tuple CHECK (relation<>'' AND subject_type<>'' AND subject_id<>''),
+    CONSTRAINT ck_iam_audit_source CHECK
+        ((actor_type<>'' AND actor_id<>'' AND system_source='') OR (actor_type='' AND actor_id='' AND system_source<>''))
+);
+INSERT INTO main.iam_audit_prev (id, event_id, occurred_at, actor_type, actor_id, system_source, reason, action, encoding, scope_kind, resource_type, resource_id, relation, subject_type, subject_id, subject_relation)
+SELECT id, event_id, occurred_at, actor_type, actor_id, system_source, reason, action, encoding, scope_kind, resource_type, resource_id, relation, subject_type, subject_id, subject_relation FROM main.iam_audit ORDER BY occurred_at, id;
+DROP TABLE main.iam_audit;
+ALTER TABLE main.iam_audit_prev RENAME TO iam_audit;
+CREATE INDEX main.idx_iam_audit_time ON iam_audit (occurred_at DESC, id DESC);
+CREATE INDEX main.idx_iam_audit_resource ON iam_audit (resource_type, resource_id, occurred_at DESC, id DESC);
+CREATE INDEX main.idx_iam_audit_subject ON iam_audit (subject_type, subject_id, occurred_at DESC, id DESC);
+CREATE INDEX main.idx_iam_audit_actor ON iam_audit (actor_type, actor_id, occurred_at DESC, id DESC);
+CREATE TABLE main.iam_operations_prev (
+    operation_id TEXT COLLATE BINARY NOT NULL PRIMARY KEY,
+    encoding TEXT COLLATE BINARY NOT NULL,
+    fingerprint TEXT COLLATE BINARY NOT NULL,
+    outcome TEXT COLLATE BINARY NOT NULL,
+    committed_at TEXT NOT NULL,
+    CONSTRAINT ck_iam_operations_id CHECK (operation_id <> ''),
+    CONSTRAINT ck_iam_operations_encoding CHECK (encoding = 'operation/v1'),
+    CONSTRAINT ck_iam_operations_fingerprint CHECK (length(fingerprint) = 64 AND fingerprint NOT GLOB '*[^0-9a-f]*'),
+    CONSTRAINT ck_iam_operations_outcome CHECK (outcome IN ('applied', 'no_change', 'not_found', 'fenced'))
+);
+INSERT INTO main.iam_operations_prev (operation_id, encoding, fingerprint, outcome, committed_at)
+SELECT operation_id, encoding, fingerprint, outcome, committed_at FROM main.iam_operations ORDER BY committed_at, operation_id;
+DROP TABLE main.iam_operations;
+ALTER TABLE main.iam_operations_prev RENAME TO iam_operations;
+```
+
+**Core API (additive).** `audit.Source` gains `RequestID` and `TraceID`, bounded
+by `audit.MaxCorrelationIDLen`; the bundled role routes stamp them (see
+[Writes, integrity and audit](../README.md#writes-integrity-and-audit)). Custom
+`audit.Reader` implementations compile unchanged and should persist both.
+`authorization.WithDecisionObserver`, `decisions.WithDecisionObserver` and
+`authorizationhttp.WithDecisionObserver` / `authorizationhttp.WithLogger` add the
+[Decision observer](../README.md#decision-observer). A WritePolicy refusal on the
+bundled role routes now logs one WARN, and production without an observer logs
+one WARN at construction.
+
 ## Adopting the authorization protocol (v0.27.0) — BREAKING, pre-1.0
 
 Authorization core now implements and consumes `sdk/capabilities/authorization`
@@ -286,6 +447,9 @@ relationship repository. No package rename or role API migration is required.
 | Base authorization | `migrations/0001_iam_tuples.sql` | `iam_tuples`, `iam_audit`, identity constraints and lookup indexes |
 | Optional TupleCache | `tuple_cache_migrations/0002_iam_tuple_cache.sql` | Protocol-2 source identity, delivery receipt, outbox and canonical capture triggers |
 | Base authorization | `migrations/0003_iam_operations.sql` | Atomic operation identity, fingerprint and committed outcome |
+| Base authorization | `migrations/0004_iam_operations_fenced.sql` | The `fenced` operation outcome |
+| Base authorization | `migrations/0005_iam_audit_integrity.sql` | Request and trace ids, `seq` (PostgreSQL) and `recorded_at` evidence columns |
+| Base authorization | `migrations/0006_iam_audit_immutable.sql` | Immutability triggers on `iam_audit` and `iam_operations` |
 
 Use `MigrationsFS` / `MigrationsDir` or `ExportMigrations(dst)` for the base.
 Use `TupleCacheMigrationsFS` / `TupleCacheMigrationsDir` or

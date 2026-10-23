@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"reflect"
 
@@ -96,6 +97,8 @@ type RoleRoutes struct {
 type config struct {
 	Services
 	RoleRoutes
+	observer decisions.DecisionObserver
+	logger   *slog.Logger
 }
 
 // Adapter owns validated HTTP dependencies. Its state is immutable after New.
@@ -106,6 +109,8 @@ type Adapter struct {
 	gate         web.Middleware
 	writePolicy  RoleWritePolicy
 	listStrategy list.Strategy
+	observer     decisions.DecisionObserver
+	logger       *slog.Logger
 }
 
 // New validates the final dependency and route policy before building an adapter.
@@ -138,7 +143,10 @@ func New(services Services, opts ...Option) (*Adapter, error) {
 		return nil, err
 	}
 
-	return &Adapter{decisions: cfg.Decisions, roles: cfg.Roles, mutations: cfg.Mutations, gate: cfg.Gate, writePolicy: cfg.WritePolicy, listStrategy: cfg.ListStrategy}, nil
+	if cfg.logger == nil {
+		cfg.logger = slog.Default()
+	}
+	return &Adapter{decisions: cfg.Decisions, roles: cfg.Roles, mutations: cfg.Mutations, gate: cfg.Gate, writePolicy: cfg.WritePolicy, listStrategy: cfg.ListStrategy, observer: cfg.observer, logger: cfg.logger}, nil
 }
 func ValidateListStrategy(strategy list.Strategy) error {
 	switch strategy {

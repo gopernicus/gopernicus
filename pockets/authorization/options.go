@@ -81,3 +81,12 @@ func WithAuditDisabledAcknowledged() Option {
 func WithDiagnosticObserver(observer decisions.DiagnosticObserver) Option {
 	return func(cfg *config) { cfg.DiagnosticObserver = observer }
 }
+
+// WithDecisionObserver forwards observer to the decision service and the HTTP
+// adapter: one decisions.DecisionEvent per completed unbound decision operation
+// and per role write the WritePolicy refuses. A host bridges denials and
+// refusals to durable storage from a host pocket. Nil, the default, records
+// nothing durable; production then logs one WARN at construction.
+func WithDecisionObserver(observer decisions.DecisionObserver) Option {
+	return func(cfg *config) { cfg.DecisionObserver = observer }
+}

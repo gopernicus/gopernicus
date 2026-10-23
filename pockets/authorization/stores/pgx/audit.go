@@ -14,7 +14,7 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-const auditColumns = "id, event_id, occurred_at, actor_type, actor_id, system_source, reason, action, encoding, scope_kind, resource_type, resource_id, relation, subject_type, subject_id, subject_relation"
+const auditColumns = "id, event_id, occurred_at, actor_type, actor_id, system_source, reason, request_id, trace_id, action, encoding, scope_kind, resource_type, resource_id, relation, subject_type, subject_id, subject_relation"
 
 type auditRow struct {
 	ID              string           `db:"id"`
@@ -24,6 +24,8 @@ type auditRow struct {
 	ActorID         string           `db:"actor_id"`
 	System          string           `db:"system_source"`
 	Reason          string           `db:"reason"`
+	RequestID       string           `db:"request_id"`
+	TraceID         string           `db:"trace_id"`
 	Action          string           `db:"action"`
 	Encoding        string           `db:"encoding"`
 	ScopeKind       tuples.ScopeKind `db:"scope_kind"`
@@ -37,7 +39,7 @@ type auditRow struct {
 
 func (r auditRow) toDomain() audit.Record {
 	return audit.Record{ID: r.ID, EventID: r.EventID, OccurredAt: r.OccurredAt.UTC(), Encoding: r.Encoding,
-		Source: audit.Source{ActorType: r.ActorType, ActorID: r.ActorID, System: r.System, Reason: r.Reason},
+		Source: audit.Source{ActorType: r.ActorType, ActorID: r.ActorID, System: r.System, Reason: r.Reason, RequestID: r.RequestID, TraceID: r.TraceID},
 		Change: audit.Change{Action: audit.Action(r.Action), Tuple: tuples.Tuple{Scope: tuples.Scope{Kind: r.ScopeKind, Type: r.ResourceType, ID: r.ResourceID}, Relation: r.Relation, Subject: tuples.SubjectRef{Type: r.SubjectType, ID: r.SubjectID, Relation: r.SubjectRelation}}}}
 }
 func appendAudit(ctx context.Context, tx *writeTx, cfg config) error {
@@ -52,7 +54,7 @@ func appendAudit(ctx context.Context, tx *writeTx, cfg config) error {
 		f := r.Change.Tuple
 		a := &tupleArgs{}
 		values := []string{}
-		for _, value := range []any{r.ID, r.EventID, r.OccurredAt, r.Source.ActorType, r.Source.ActorID, r.Source.System, r.Source.Reason, string(r.Change.Action), r.Encoding, int(f.Scope.Kind), f.Scope.Type, f.Scope.ID, f.Relation, f.Subject.Type, f.Subject.ID, f.Subject.Relation} {
+		for _, value := range []any{r.ID, r.EventID, r.OccurredAt, r.Source.ActorType, r.Source.ActorID, r.Source.System, r.Source.Reason, r.Source.RequestID, r.Source.TraceID, string(r.Change.Action), r.Encoding, int(f.Scope.Kind), f.Scope.Type, f.Scope.ID, f.Relation, f.Subject.Type, f.Subject.ID, f.Subject.Relation} {
 			values = append(values, a.bind(value))
 		}
 		if _, err := tx.Exec(ctx, `INSERT INTO `+cfg.schema.Table("iam_audit")+` (`+auditColumns+`) VALUES (`+strings.Join(values, ",")+`)`, a.params()...); err != nil {

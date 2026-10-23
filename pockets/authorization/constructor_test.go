@@ -2,12 +2,14 @@ package authorization
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"log/slog"
 	"strings"
 	"testing"
 
 	"github.com/gopernicus/gopernicus/pockets"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/decisions"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/mutations"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuples"
 	"github.com/gopernicus/gopernicus/pockets/authorization/stores/memory"
@@ -20,7 +22,10 @@ const (
 	nilReaderText       = "Repositories.Audit is nil"
 	waiverHintText      = "WithAuditDisabledAcknowledged()"
 	waiverLogText       = "posture_waiver=AuditDisabledAcknowledged"
+	observerWarnText    = "denials are not durably recorded; wire WithDecisionObserver"
 )
+
+func ignoreDecisions(context.Context, decisions.DecisionEvent) {}
 
 // Host wrappers that do not forward AuditRecording.
 type hiddenRecordingTuples struct{ tuples.Storer }
@@ -99,7 +104,7 @@ func TestProductionRefusesAuditWiringThatCannotRecordAndRead(t *testing.T) {
 
 func TestProductionConstructsWithRecordingAuthorityAndReader(t *testing.T) {
 	logger, logs := postureLogger()
-	comps, err := New(postureRepos(true, true), WithRuntimeMode(environment.ModeProduction), WithLogger(logger))
+	comps, err := New(postureRepos(true, true), WithRuntimeMode(environment.ModeProduction), WithLogger(logger), WithDecisionObserver(ignoreDecisions))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -110,10 +115,32 @@ func TestProductionConstructsWithRecordingAuthorityAndReader(t *testing.T) {
 		t.Fatalf("satisfied posture warned: %s", logs.String())
 	}
 	line := registrationLine(t, comps, logs)
-	for _, want := range []string{"audit_recording=true", "audit_reader=true", "runtime_mode=production"} {
+	for _, want := range []string{"audit_recording=true", "audit_reader=true", "decision_observer=true", "runtime_mode=production"} {
 		if !strings.Contains(line, want) {
 			t.Errorf("registration line lacks %s: %s", want, line)
 		}
+	}
+}
+
+func TestProductionWarnsOnceWithoutDecisionObserver(t *testing.T) {
+	for _, mode := range []environment.Mode{"", environment.ModeDevelopment, environment.ModeProduction} {
+		t.Run(mode.String(), func(t *testing.T) {
+			logger, logs := postureLogger()
+			comps, err := New(postureRepos(true, true), WithRuntimeMode(mode), WithLogger(logger))
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := 0
+			if mode.IsProduction() {
+				want = 1
+			}
+			if n := strings.Count(logs.String(), observerWarnText); n != want || strings.Count(logs.String(), "level=WARN") != want {
+				t.Fatalf("observer warnings=%d, want %d: %s", n, want, logs.String())
+			}
+			if line := registrationLine(t, comps, logs); !strings.Contains(line, "decision_observer=false") {
+				t.Errorf("registration line lacks decision_observer=false: %s", line)
+			}
+		})
 	}
 }
 
@@ -121,7 +148,7 @@ func TestAuditAcknowledgementWaivesNonRecordingAuthority(t *testing.T) {
 	for _, mode := range []environment.Mode{environment.ModeProduction, environment.ModeDevelopment} {
 		t.Run(mode.String(), func(t *testing.T) {
 			logger, logs := postureLogger()
-			comps, err := New(postureRepos(false, false), WithRuntimeMode(mode), WithAuditDisabledAcknowledged(), WithLogger(logger))
+			comps, err := New(postureRepos(false, false), WithRuntimeMode(mode), WithAuditDisabledAcknowledged(), WithLogger(logger), WithDecisionObserver(ignoreDecisions))
 			if err != nil {
 				t.Fatalf("acknowledged non-recording authority: %v", err)
 			}
