@@ -1,0 +1,247 @@
+{
+  "public_proxy": "https://proxy.golang.org",
+  "checksum_database": "sum.golang.org",
+  "workspace": "off",
+  "released": "2026-10-23",
+  "plan": "plans/s2-audit-completeness.md",
+  "modules": {
+    "pockets/authorization/stores/pgx": {
+      "Path": "github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx",
+      "Version": "v0.19.1",
+      "Info": "/tmp/manifest.0IhR6D/cache/cache/download/github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx/@v/v0.19.1.info",
+      "GoMod": "/tmp/manifest.0IhR6D/cache/cache/download/github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx/@v/v0.19.1.mod",
+      "Zip": "/tmp/manifest.0IhR6D/cache/cache/download/github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx/@v/v0.19.1.zip",
+      "Dir": "/tmp/manifest.0IhR6D/cache/github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx@v0.19.1",
+      "Sum": "h1:sLSKoSpIwcpm3SvWv68aJY30MYEKiVdBCNPR7cci9t8=",
+      "GoModSum": "h1:IboXuT6wHwCHIYbuUGvhsewFLgQO5bQRrttzCjuKTdw=",
+      "Origin": {
+        "VCS": "git",
+        "URL": "https://github.com/gopernicus/gopernicus",
+        "Subdir": "pockets/authorization/stores/pgx",
+        "Hash": "84b0154d2d325a191190aa1bab9e3f3520b0f702",
+        "Ref": "refs/tags/pockets/authorization/stores/pgx/v0.19.1"
+      }
+    },
+    "pockets/authorization/stores/turso": {
+      "Path": "github.com/gopernicus/gopernicus/pockets/authorization/stores/turso",
+      "Version": "v0.18.1",
+      "Info": "/tmp/manifest.0IhR6D/cache/cache/download/github.com/gopernicus/gopernicus/pockets/authorization/stores/turso/@v/v0.18.1.info",
+      "GoMod": "/tmp/manifest.0IhR6D/cache/cache/download/github.com/gopernicus/gopernicus/pockets/authorization/stores/turso/@v/v0.18.1.mod",
+      "Zip": "/tmp/manifest.0IhR6D/cache/cache/download/github.com/gopernicus/gopernicus/pockets/authorization/stores/turso/@v/v0.18.1.zip",
+      "Dir": "/tmp/manifest.0IhR6D/cache/github.com/gopernicus/gopernicus/pockets/authorization/stores/turso@v0.18.1",
+      "Sum": "h1:/7hdNGzuIi38iyGFMYL7Iq07OxS1/J0A786Olm3lrog=",
+      "GoModSum": "h1:VOvidBp46Ag+NF+uGg36/YsNzY7r1ylOcX1LV7cZYJY=",
+      "Origin": {
+        "VCS": "git",
+        "URL": "https://github.com/gopernicus/gopernicus",
+        "Subdir": "pockets/authorization/stores/turso",
+        "Hash": "84b0154d2d325a191190aa1bab9e3f3520b0f702",
+        "Ref": "refs/tags/pockets/authorization/stores/turso/v0.18.1"
+      }
+    },
+    "integrations/datastores/pgxdb": {
+      "Path": "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb",
+      "Version": "v0.11.0",
+      "Info": "/tmp/manifest.0IhR6D/cache/cache/download/github.com/gopernicus/gopernicus/integrations/datastores/pgxdb/@v/v0.11.0.info",
+      "GoMod": "/tmp/manifest.0IhR6D/cache/cache/download/github.com/gopernicus/gopernicus/integrations/datastores/pgxdb/@v/v0.11.0.mod",
+      "Zip": "/tmp/manifest.0IhR6D/cache/cache/download/github.com/gopernicus/gopernicus/integrations/datastores/pgxdb/@v/v0.11.0.zip",
+      "Dir": "/tmp/manifest.0IhR6D/cache/github.com/gopernicus/gopernicus/integrations/datastores/pgxdb@v0.11.0",
+      "Sum": "h1:hk8IQYlz5qixh1wpyjMH8qp1730ze4HgW3P6isj819M=",
+      "GoModSum": "h1:jDufDCS4Z1Uxe37y/jMeEMY49WtzXc/wyGvjPa9iQG0=",
+      "Origin": {
+        "VCS": "git",
+        "URL": "https://github.com/gopernicus/gopernicus",
+        "Subdir": "integrations/datastores/pgxdb",
+        "Hash": "f0e1043fc9be042b488fa0a8640b0f05f8b9fe7f",
+        "Ref": "refs/tags/integrations/datastores/pgxdb/v0.11.0"
+      }
+    },
+    "integrations/datastores/turso": {
+      "Path": "github.com/gopernicus/gopernicus/integrations/datastores/turso",
+      "Version": "v0.8.0",
+      "Info": "/tmp/manifest.0IhR6D/cache/cache/download/github.com/gopernicus/gopernicus/integrations/datastores/turso/@v/v0.8.0.info",
+      "GoMod": "/tmp/manifest.0IhR6D/cache/cache/download/github.com/gopernicus/gopernicus/integrations/datastores/turso/@v/v0.8.0.mod",
+      "Zip": "/tmp/manifest.0IhR6D/cache/cache/download/github.com/gopernicus/gopernicus/integrations/datastores/turso/@v/v0.8.0.zip",
+      "Dir": "/tmp/manifest.0IhR6D/cache/github.com/gopernicus/gopernicus/integrations/datastores/turso@v0.8.0",
+      "Sum": "h1:WL3VjVCc7QD9BLi8TI90w0gqec/ZqSvMma3Ce5VJKMs=",
+      "GoModSum": "h1:20Wt7fZvn6M1G42/3GTlbEaEA31nmIiPJJvSN3uuq1E=",
+      "Origin": {
+        "VCS": "git",
+        "URL": "https://github.com/gopernicus/gopernicus",
+        "Subdir": "integrations/datastores/turso",
+        "Hash": "f0e1043fc9be042b488fa0a8640b0f05f8b9fe7f",
+        "Ref": "refs/tags/integrations/datastores/turso/v0.8.0"
+      }
+    },
+    "pockets/authentication": {
+      "Path": "github.com/gopernicus/gopernicus/pockets/authentication",
+      "Version": "v0.21.0",
+      "Info": "/tmp/manifest.0IhR6D/cache/cache/download/github.com/gopernicus/gopernicus/pockets/authentication/@v/v0.21.0.info",
+      "GoMod": "/tmp/manifest.0IhR6D/cache/cache/download/github.com/gopernicus/gopernicus/pockets/authentication/@v/v0.21.0.mod",
+      "Zip": "/tmp/manifest.0IhR6D/cache/cache/download/github.com/gopernicus/gopernicus/pockets/authentication/@v/v0.21.0.zip",
+      "Dir": "/tmp/manifest.0IhR6D/cache/github.com/gopernicus/gopernicus/pockets/authentication@v0.21.0",
+      "Sum": "h1:SwucXwLp3YGewbrGbPCSxqvwx1WZs+b1nPptzITW0RE=",
+      "GoModSum": "h1:hCw1IY77LcnpywuBtfenqI8VTuzTU1HRqKyEY7UN6fA=",
+      "Origin": {
+        "VCS": "git",
+        "URL": "https://github.com/gopernicus/gopernicus",
+        "Subdir": "pockets/authentication",
+        "Hash": "9590e3669dcbe192c0a73c5970d8e3182221d645",
+        "Ref": "refs/tags/pockets/authentication/v0.21.0"
+      }
+    },
+    "pockets/authentication/stores/pgx": {
+      "Path": "github.com/gopernicus/gopernicus/pockets/authentication/stores/pgx",
+      "Version": "v0.10.0",
+      "Info": "/tmp/manifest.0IhR6D/cache/cache/download/github.com/gopernicus/gopernicus/pockets/authentication/stores/pgx/@v/v0.10.0.info",
+      "GoMod": "/tmp/manifest.0IhR6D/cache/cache/download/github.com/gopernicus/gopernicus/pockets/authentication/stores/pgx/@v/v0.10.0.mod",
+      "Zip": "/tmp/manifest.0IhR6D/cache/cache/download/github.com/gopernicus/gopernicus/pockets/authentication/stores/pgx/@v/v0.10.0.zip",
+      "Dir": "/tmp/manifest.0IhR6D/cache/github.com/gopernicus/gopernicus/pockets/authentication/stores/pgx@v0.10.0",
+      "Sum": "h1:07P+AFNiep283oJBzokTHa3GPWtH6EwXzDPUpIHGiM8=",
+      "GoModSum": "h1:ftNUy41INWBQ6HNjN8PIZu0PWd3Z6LWoSrsvk9jbEqc=",
+      "Origin": {
+        "VCS": "git",
+        "URL": "https://github.com/gopernicus/gopernicus",
+        "Subdir": "pockets/authentication/stores/pgx",
+        "Hash": "ada0aeda69713dc7e9b99895255f2a9eb3db073c",
+        "Ref": "refs/tags/pockets/authentication/stores/pgx/v0.10.0"
+      }
+    },
+    "pockets/authentication/stores/turso": {
+      "Path": "github.com/gopernicus/gopernicus/pockets/authentication/stores/turso",
+      "Version": "v0.9.0",
+      "Info": "/tmp/manifest.0IhR6D/cache/cache/download/github.com/gopernicus/gopernicus/pockets/authentication/stores/turso/@v/v0.9.0.info",
+      "GoMod": "/tmp/manifest.0IhR6D/cache/cache/download/github.com/gopernicus/gopernicus/pockets/authentication/stores/turso/@v/v0.9.0.mod",
+      "Zip": "/tmp/manifest.0IhR6D/cache/cache/download/github.com/gopernicus/gopernicus/pockets/authentication/stores/turso/@v/v0.9.0.zip",
+      "Dir": "/tmp/manifest.0IhR6D/cache/github.com/gopernicus/gopernicus/pockets/authentication/stores/turso@v0.9.0",
+      "Sum": "h1:YJt3uwzCvDzn4qQ0KPi+I48/mRzSB1BsUsMayQMs+TM=",
+      "GoModSum": "h1:5s78LkMUM3+hiDo43T/b+c4bdg+ABhYbbjh435l8gz8=",
+      "Origin": {
+        "VCS": "git",
+        "URL": "https://github.com/gopernicus/gopernicus",
+        "Subdir": "pockets/authentication/stores/turso",
+        "Hash": "ada0aeda69713dc7e9b99895255f2a9eb3db073c",
+        "Ref": "refs/tags/pockets/authentication/stores/turso/v0.9.0"
+      }
+    },
+    "pockets/authorization": {
+      "Path": "github.com/gopernicus/gopernicus/pockets/authorization",
+      "Version": "v0.29.0",
+      "Info": "/tmp/manifest.0IhR6D/cache/cache/download/github.com/gopernicus/gopernicus/pockets/authorization/@v/v0.29.0.info",
+      "GoMod": "/tmp/manifest.0IhR6D/cache/cache/download/github.com/gopernicus/gopernicus/pockets/authorization/@v/v0.29.0.mod",
+      "Zip": "/tmp/manifest.0IhR6D/cache/cache/download/github.com/gopernicus/gopernicus/pockets/authorization/@v/v0.29.0.zip",
+      "Dir": "/tmp/manifest.0IhR6D/cache/github.com/gopernicus/gopernicus/pockets/authorization@v0.29.0",
+      "Sum": "h1:Kd9DjOGZrXsJFt3dlq/UVv8Hq73YidbMluqUMBLth0I=",
+      "GoModSum": "h1:pDN8HlJK0ZMncFZLnXergHZkEB5QjMxLwS/dkCo6XMs=",
+      "Origin": {
+        "VCS": "git",
+        "URL": "https://github.com/gopernicus/gopernicus",
+        "Subdir": "pockets/authorization",
+        "Hash": "7344393c4b3f47d7450c3621bf28e270fbb3355f",
+        "Ref": "refs/tags/pockets/authorization/v0.29.0"
+      }
+    },
+    "pockets/authorization@v0.29.1": {
+      "Path": "github.com/gopernicus/gopernicus/pockets/authorization",
+      "Version": "v0.29.1",
+      "Info": "/tmp/manifest.0IhR6D/cache/cache/download/github.com/gopernicus/gopernicus/pockets/authorization/@v/v0.29.1.info",
+      "GoMod": "/tmp/manifest.0IhR6D/cache/cache/download/github.com/gopernicus/gopernicus/pockets/authorization/@v/v0.29.1.mod",
+      "Zip": "/tmp/manifest.0IhR6D/cache/cache/download/github.com/gopernicus/gopernicus/pockets/authorization/@v/v0.29.1.zip",
+      "Dir": "/tmp/manifest.0IhR6D/cache/github.com/gopernicus/gopernicus/pockets/authorization@v0.29.1",
+      "Sum": "h1:OikStn2TQIVFoKZuSWpCEATLJEqUlmcyJ0eqiWaRaJw=",
+      "GoModSum": "h1:pDN8HlJK0ZMncFZLnXergHZkEB5QjMxLwS/dkCo6XMs=",
+      "Origin": {
+        "VCS": "git",
+        "URL": "https://github.com/gopernicus/gopernicus",
+        "Subdir": "pockets/authorization",
+        "Hash": "159be98ae8404c3fc0ca6e9618d4774a9cdeacc4",
+        "Ref": "refs/tags/pockets/authorization/v0.29.1"
+      }
+    },
+    "pockets/authorization/stores/pgx@v0.20.0": {
+      "Path": "github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx",
+      "Version": "v0.20.0",
+      "Info": "/tmp/manifest.0IhR6D/cache/cache/download/github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx/@v/v0.20.0.info",
+      "GoMod": "/tmp/manifest.0IhR6D/cache/cache/download/github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx/@v/v0.20.0.mod",
+      "Zip": "/tmp/manifest.0IhR6D/cache/cache/download/github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx/@v/v0.20.0.zip",
+      "Dir": "/tmp/manifest.0IhR6D/cache/github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx@v0.20.0",
+      "Sum": "h1:KDAYil5SJ1MqQxLSEEoChHl849N8hDcKhe57FGCniiQ=",
+      "GoModSum": "h1:YO7hz5WJ1D3egepe3fZcvxtIJGX/NskEd7g6dojMFGY=",
+      "Origin": {
+        "VCS": "git",
+        "URL": "https://github.com/gopernicus/gopernicus",
+        "Subdir": "pockets/authorization/stores/pgx",
+        "Hash": "1f22ad38fba4ba726e2d4e485bc9e20b635bfdc3",
+        "Ref": "refs/tags/pockets/authorization/stores/pgx/v0.20.0"
+      }
+    },
+    "pockets/authorization/stores/turso@v0.19.0": {
+      "Path": "github.com/gopernicus/gopernicus/pockets/authorization/stores/turso",
+      "Version": "v0.19.0",
+      "Info": "/tmp/manifest.0IhR6D/cache/cache/download/github.com/gopernicus/gopernicus/pockets/authorization/stores/turso/@v/v0.19.0.info",
+      "GoMod": "/tmp/manifest.0IhR6D/cache/cache/download/github.com/gopernicus/gopernicus/pockets/authorization/stores/turso/@v/v0.19.0.mod",
+      "Zip": "/tmp/manifest.0IhR6D/cache/cache/download/github.com/gopernicus/gopernicus/pockets/authorization/stores/turso/@v/v0.19.0.zip",
+      "Dir": "/tmp/manifest.0IhR6D/cache/github.com/gopernicus/gopernicus/pockets/authorization/stores/turso@v0.19.0",
+      "Sum": "h1:NrIf/oo/0Qt1//peK9H0QuMfqcY35OKp0s4RUoTAZQ8=",
+      "GoModSum": "h1:gOw4XbZBh7A7bEOmdqRyLAhOsi6t6+bVlO+5nMlmpFI=",
+      "Origin": {
+        "VCS": "git",
+        "URL": "https://github.com/gopernicus/gopernicus",
+        "Subdir": "pockets/authorization/stores/turso",
+        "Hash": "1f22ad38fba4ba726e2d4e485bc9e20b635bfdc3",
+        "Ref": "refs/tags/pockets/authorization/stores/turso/v0.19.0"
+      }
+    },
+    "pockets/secrets": {
+      "Path": "github.com/gopernicus/gopernicus/pockets/secrets",
+      "Version": "v0.2.0",
+      "Info": "/tmp/manifest.0IhR6D/cache/cache/download/github.com/gopernicus/gopernicus/pockets/secrets/@v/v0.2.0.info",
+      "GoMod": "/tmp/manifest.0IhR6D/cache/cache/download/github.com/gopernicus/gopernicus/pockets/secrets/@v/v0.2.0.mod",
+      "Zip": "/tmp/manifest.0IhR6D/cache/cache/download/github.com/gopernicus/gopernicus/pockets/secrets/@v/v0.2.0.zip",
+      "Dir": "/tmp/manifest.0IhR6D/cache/github.com/gopernicus/gopernicus/pockets/secrets@v0.2.0",
+      "Sum": "h1:WG/KbTwRv6kX7K4t9cbRZBlL5nJ/5bhbXoAXS3LLoMY=",
+      "GoModSum": "h1:unmtcJ/XF2i8tx1ezM1RW9PyRg4G51PkRZ/KvkkDwco=",
+      "Origin": {
+        "VCS": "git",
+        "URL": "https://github.com/gopernicus/gopernicus",
+        "Subdir": "pockets/secrets",
+        "Hash": "cd80f49129c3129598e14db35f4d91d78dc08636",
+        "Ref": "refs/tags/pockets/secrets/v0.2.0"
+      }
+    },
+    "pockets/secrets/stores/pgx": {
+      "Path": "github.com/gopernicus/gopernicus/pockets/secrets/stores/pgx",
+      "Version": "v0.2.0",
+      "Info": "/tmp/manifest.0IhR6D/cache/cache/download/github.com/gopernicus/gopernicus/pockets/secrets/stores/pgx/@v/v0.2.0.info",
+      "GoMod": "/tmp/manifest.0IhR6D/cache/cache/download/github.com/gopernicus/gopernicus/pockets/secrets/stores/pgx/@v/v0.2.0.mod",
+      "Zip": "/tmp/manifest.0IhR6D/cache/cache/download/github.com/gopernicus/gopernicus/pockets/secrets/stores/pgx/@v/v0.2.0.zip",
+      "Dir": "/tmp/manifest.0IhR6D/cache/github.com/gopernicus/gopernicus/pockets/secrets/stores/pgx@v0.2.0",
+      "Sum": "h1:g7an2a3gW/Fhqfk6w+rDuVH4A/3IkPNmz7omR2CcyvU=",
+      "GoModSum": "h1:ERpl/SMBZdahvLQNfs3OQ28YR4gST1ZE6B4bEKccaD8=",
+      "Origin": {
+        "VCS": "git",
+        "URL": "https://github.com/gopernicus/gopernicus",
+        "Subdir": "pockets/secrets/stores/pgx",
+        "Hash": "a8a12eb42a2e63c1ca2cc8acc80ab1ba2e35da17",
+        "Ref": "refs/tags/pockets/secrets/stores/pgx/v0.2.0"
+      }
+    },
+    "workshop/gopernicus": {
+      "Path": "github.com/gopernicus/gopernicus/workshop/gopernicus",
+      "Version": "v0.6.0",
+      "Info": "/tmp/manifest.0IhR6D/cache/cache/download/github.com/gopernicus/gopernicus/workshop/gopernicus/@v/v0.6.0.info",
+      "GoMod": "/tmp/manifest.0IhR6D/cache/cache/download/github.com/gopernicus/gopernicus/workshop/gopernicus/@v/v0.6.0.mod",
+      "Zip": "/tmp/manifest.0IhR6D/cache/cache/download/github.com/gopernicus/gopernicus/workshop/gopernicus/@v/v0.6.0.zip",
+      "Dir": "/tmp/manifest.0IhR6D/cache/github.com/gopernicus/gopernicus/workshop/gopernicus@v0.6.0",
+      "Sum": "h1:dSbGEXMfcfhO4L+GxXjbiFVnqnpqYjkVqb2rsoSnxgA=",
+      "GoModSum": "h1:2l97ctFDlsSkYzKxXtdem9wENdWZj8QM4enPeqc8Q1I=",
+      "Origin": {
+        "VCS": "git",
+        "URL": "https://github.com/gopernicus/gopernicus",
+        "Subdir": "workshop/gopernicus",
+        "Hash": "7619e0906d7cca872ab31d30266a2958f658d9dc",
+        "Ref": "refs/tags/workshop/gopernicus/v0.6.0"
+      }
+    }
+  }
+}

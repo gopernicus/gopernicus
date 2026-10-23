@@ -235,9 +235,10 @@ over `Components.SecurityEvents`, the authentication pocket's one recorder, so a
 row the bridge loses counts in `audit_write_failures`. A denied decision becomes
 an `authorization_denied` row (`failure`) and a role write the `WritePolicy`
 refuses a `role_write_refused` row (`blocked`); an allowed decision records
-nothing. The role routes' gate decides through `EvaluateResolved`, whose event
-carries the principal and the operation but no permission or resource, so its
-rows carry only those. The bridge has two bounds, so a flood of 403s neither
+nothing. The route gates decide through `EvaluateResolved`; since authorization
+v0.29.1 its event names the evaluated leaf's permission and resource (for a
+composite expression, the first denied leaf), so the rows name what was denied
+and the dedupe key below is per target. The bridge has two bounds, so a flood of 403s neither
 drains the pool nor writes a row per request:
 
 - at most 8 writes run at once; an event arriving while all 8 are in flight is
