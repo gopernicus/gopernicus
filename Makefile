@@ -144,6 +144,7 @@ test-stores:
 	$(call pgx-leg,pockets/authorization/stores/pgx)
 	@echo "== pockets/authorization/stores/turso (live, -tags=integration) =="
 	@cd pockets/authorization/stores/turso && go test -tags=integration ./...
+	$(call pgx-leg,pockets/secrets/stores/pgx)
 	@echo "== integrations/datastores/firestore (emulator, -tags=integration) =="
 	@if [ -z "$$FIRESTORE_EMULATOR_HOST" ]; then echo "   FIRESTORE_EMULATOR_HOST not set — the emulator cases SKIP loudly (Firestore emulator conformance NOT verified)"; fi
 	@cd integrations/datastores/firestore && go test -tags=integration -count=1 -timeout 15m ./...

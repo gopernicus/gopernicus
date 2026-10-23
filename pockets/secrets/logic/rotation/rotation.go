@@ -140,7 +140,7 @@ func (s *Service) rewrap(ctx context.Context, key vault.OwnerKey, source vault.S
 	}
 	rewrapped := key
 	rewrapped.WrappedKey, rewrapped.WrapperKeyID = blob, wrapperKeyID
-	return s.repo.ReplaceOwnerKey(ctx, rewrapped, key.KeyID, nil, []vault.AuditRecord{record})
+	return s.repo.ReplaceOwnerKey(ctx, rewrapped, key.KeyID, nil, vault.Correlate(ctx, record))
 }
 
 // RotateOwnerKey gives an owner a new data key and reseals its secrets under
@@ -197,5 +197,5 @@ func (s *Service) RotateOwnerKey(ctx context.Context, owner vault.Owner, source 
 		return err
 	}
 	rotated := vault.OwnerKey{Owner: owner, KeyID: keyID, WrappedKey: blob, WrapperKeyID: wrapperKeyID, CreatedAt: old.CreatedAt, RotatedAt: now}
-	return s.repo.ReplaceOwnerKey(ctx, rotated, old.KeyID, sealed, []vault.AuditRecord{record})
+	return s.repo.ReplaceOwnerKey(ctx, rotated, old.KeyID, sealed, vault.Correlate(ctx, record))
 }

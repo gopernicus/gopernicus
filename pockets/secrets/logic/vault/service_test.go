@@ -25,6 +25,9 @@ var (
 // sentinel is a value whose appearance anywhere but Get's return is a leak.
 const sentinel = "LEAK-cfat-9f8e7d6c5b4a"
 
+// errKeyService is unavailableWrapper's Unwrap error.
+var errKeyService = errors.New("key service unavailable")
+
 func ring(t *testing.T, active string, ids ...string) cryptids.KeyedEncrypter {
 	t.Helper()
 	keys := map[string][]byte{}
@@ -279,4 +282,282 @@ func mustKey(t *testing.T, repo vault.Repository) vault.OwnerKey {
 		t.Fatal(err)
 	}
 	return key
+}
+
+// failingAppend is a repository whose AppendAudit fails, as a store whose
+// audit table refuses the insert would.
+type failingAppend struct{ *memory.Store }
+
+func (failingAppend) AppendAudit(context.Context, []vault.AuditRecord) error {
+	return errors.New("audit table unavailable")
+}
+
+// conflictingDeleteOwner reports sdk.ErrConflict on its first conflicts calls
+// to DeleteOwner, as a store whose owner gained a secret after the listing.
+type conflictingDeleteOwner struct {
+	*memory.Store
+	conflicts, calls int
+}
+
+func (r *conflictingDeleteOwner) DeleteOwner(ctx context.Context, owner vault.Owner, expected []string, audit []vault.AuditRecord) error {
+	r.calls++
+	if r.calls <= r.conflicts {
+		return sdk.ErrConflict
+	}
+	return r.Store.DeleteOwner(ctx, owner, expected, audit)
+}
+
+// unavailableWrapper fails every Unwrap the way an unreachable key service
+// would: an error that is not a refusal.
+type unavailableWrapper struct{ vault.Wrapper }
+
+func (unavailableWrapper) Unwrap(context.Context, string) ([]byte, error) {
+	return nil, errKeyService
+}
+
+// readFixture stores token twice under m1, so a read returns version 2.
+func readFixture(t *testing.T) (*memory.Store, *vault.Service) {
+	t.Helper()
+	repo := memory.New()
+	svc := newVault(t, repo, ring(t, "m1", "m1"))
+	for _, v := range []string{"first", sentinel} {
+		if _, err := svc.Put(context.Background(), token, []byte(v), staff); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return repo, svc
+}
+
+func reads(t *testing.T, svc *vault.Service) []vault.AuditRecord {
+	t.Helper()
+	got, _, err := svc.Audit(context.Background(), vault.AuditFilter{Action: vault.ActionSecretRead}, "", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return got
+}
+
+// TestReadOutcomes pins the one secret_read record per Get: the version read,
+// OutcomeDenied when the vault cannot open the value for the caller, and no
+// record for a missing owner key or a wrapper that is unavailable.
+func TestReadOutcomes(t *testing.T) {
+	ctx := context.Background()
+	reseal := func(t *testing.T, repo *memory.Store, change func(*vault.SealedSecret)) {
+		t.Helper()
+		key := mustKey(t, repo)
+		sec := mustSealed(t, repo)[0]
+		change(&sec)
+		if err := repo.ReplaceOwnerKey(ctx, key, key.KeyID, []vault.SealedSecret{sec}, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cases := map[string]struct {
+		read    func(t *testing.T, repo *memory.Store, svc *vault.Service) ([]byte, error)
+		want    error
+		outcome vault.Outcome // "" expects no record
+	}{
+		"ok": {
+			read: func(t *testing.T, _ *memory.Store, svc *vault.Service) ([]byte, error) {
+				return svc.Get(ctx, token, worker)
+			},
+			outcome: vault.OutcomeOK,
+		},
+		"retired wrapper key": {
+			read: func(t *testing.T, repo *memory.Store, _ *vault.Service) ([]byte, error) {
+				return newVault(t, repo, ring(t, "m2", "m2")).Get(ctx, token, worker)
+			},
+			want: cryptids.ErrUnknownKeyID, outcome: vault.OutcomeDenied,
+		},
+		"sealed under another key": {
+			read: func(t *testing.T, repo *memory.Store, svc *vault.Service) ([]byte, error) {
+				reseal(t, repo, func(s *vault.SealedSecret) { s.KeyID = "k_0000000000000000" })
+				return svc.Get(ctx, token, worker)
+			},
+			want: sdk.ErrConflict, outcome: vault.OutcomeDenied,
+		},
+		"corrupted ciphertext": {
+			read: func(t *testing.T, repo *memory.Store, svc *vault.Service) ([]byte, error) {
+				reseal(t, repo, func(s *vault.SealedSecret) { s.Ciphertext = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" })
+				return svc.Get(ctx, token, worker)
+			},
+			want: vault.ErrSealedValueCorrupt, outcome: vault.OutcomeDenied,
+		},
+		"missing owner key": {
+			read: func(t *testing.T, _ *memory.Store, svc *vault.Service) ([]byte, error) {
+				return svc.Get(ctx, vault.Ref{Owner: vault.Owner{Type: "tenant", ID: "nobody"}, Name: token.Name}, worker)
+			},
+			want: sdk.ErrNotFound,
+		},
+		"wrapper unavailable": {
+			read: func(t *testing.T, repo *memory.Store, _ *vault.Service) ([]byte, error) {
+				w, err := vault.NewRingWrapper(ring(t, "m1", "m1"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				svc, err := vault.NewService(repo, unavailableWrapper{w})
+				if err != nil {
+					t.Fatal(err)
+				}
+				return svc.Get(ctx, token, worker)
+			},
+			want: errKeyService,
+		},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			repo, svc := readFixture(t)
+			value, err := c.read(t, repo, svc)
+			switch {
+			case c.want == nil && (err != nil || string(value) != sentinel):
+				t.Fatalf("read: %q %v", value, err)
+			case c.want != nil && (err == nil || value != nil):
+				t.Fatalf("read: want an error and no value, got %q %v", value, err)
+			case c.want != nil && !errors.Is(err, c.want):
+				t.Fatalf("read: want %v, got %v", c.want, err)
+			}
+			got := reads(t, svc)
+			if c.outcome == "" {
+				if len(got) != 0 {
+					t.Fatalf("want no read record, got %+v", got)
+				}
+				return
+			}
+			if len(got) != 1 || got[0].Outcome != c.outcome || got[0].Version != 2 || got[0].Source != worker || got[0].Name != token.Name {
+				t.Fatalf("want one %s read of version 2, got %+v", c.outcome, got)
+			}
+			if c.outcome == vault.OutcomeOK && got[0].KeyID != mustKey(t, repo).KeyID {
+				t.Fatalf("read key id %q, want the owner key", got[0].KeyID)
+			}
+		})
+	}
+}
+
+func TestAuditFilterListsOnlyDenials(t *testing.T) {
+	ctx := context.Background()
+	repo, svc := readFixture(t)
+	if _, err := svc.Get(ctx, token, worker); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := newVault(t, repo, ring(t, "m2", "m2")).Get(ctx, token, worker); err == nil {
+		t.Fatal("read under a retired wrapper key succeeded")
+	}
+	denied, _, err := svc.Audit(ctx, vault.AuditFilter{Outcome: vault.OutcomeDenied}, "", 0)
+	if err != nil || len(denied) != 1 || denied[0].Outcome != vault.OutcomeDenied || denied[0].Action != vault.ActionSecretRead {
+		t.Fatalf("denied filter: %+v %v", denied, err)
+	}
+	if _, _, err := svc.Audit(ctx, vault.AuditFilter{Outcome: "refused"}, "", 0); !errors.Is(err, sdk.ErrInvalidInput) {
+		t.Fatalf("unknown outcome filter: %v", err)
+	}
+}
+
+// TestReadFailsWithoutItsRecord: when the read record cannot be appended the
+// read fails and no value is returned.
+func TestReadFailsWithoutItsRecord(t *testing.T) {
+	ctx := context.Background()
+	svc := newVault(t, failingAppend{memory.New()}, ring(t, "m1", "m1"))
+	if _, err := svc.Put(ctx, token, []byte(sentinel), staff); err != nil {
+		t.Fatal(err)
+	}
+	value, err := svc.Get(ctx, token, worker)
+	if err == nil || value != nil {
+		t.Fatalf("read without its record: %q %v", value, err)
+	}
+}
+
+func TestDeleteRecordsRemovedVersion(t *testing.T) {
+	ctx := context.Background()
+	_, svc := readFixture(t)
+	if err := svc.Delete(ctx, token, staff); err != nil {
+		t.Fatal(err)
+	}
+	got, _, err := svc.Audit(ctx, vault.AuditFilter{Action: vault.ActionSecretDeleted}, "", 0)
+	if err != nil || len(got) != 1 {
+		t.Fatalf("delete audit: %+v %v", got, err)
+	}
+	if got[0].Version != 2 || got[0].KeyID == "" {
+		t.Fatalf("delete recorded version %d key %q, want the removed version 2 and its key", got[0].Version, got[0].KeyID)
+	}
+}
+
+func TestDeleteOwnerRetriesConflicts(t *testing.T) {
+	ctx := context.Background()
+	for _, c := range []struct {
+		conflicts, calls int
+		want             error
+	}{
+		{conflicts: 3, calls: 4},
+		{conflicts: 4, calls: 4, want: sdk.ErrConflict},
+	} {
+		repo := &conflictingDeleteOwner{Store: memory.New(), conflicts: c.conflicts}
+		svc := newVault(t, repo, ring(t, "m1", "m1"))
+		if _, err := svc.Put(ctx, token, []byte("v"), staff); err != nil {
+			t.Fatal(err)
+		}
+		err := svc.DeleteOwner(ctx, gps, staff)
+		if (c.want == nil && err != nil) || (c.want != nil && !errors.Is(err, c.want)) || repo.calls != c.calls {
+			t.Fatalf("%d conflicts: err %v after %d calls, want %v after %d", c.conflicts, err, repo.calls, c.want, c.calls)
+		}
+	}
+}
+
+func TestCorrelate(t *testing.T) {
+	r, err := vault.NewAuditRecord(time.Now(), vault.ActionSecretRead, gps, token.Name, 0, "", worker)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Outcome != vault.OutcomeOK {
+		t.Fatalf("NewAuditRecord outcome %q, want ok", r.Outcome)
+	}
+	if got := vault.Correlate(context.Background(), r); len(got) != 1 || got[0].RequestID != "" || got[0].TraceID != "" {
+		t.Fatalf("no ids in context: %+v", got)
+	}
+	for id, want := range map[string]string{
+		"req-01J9ZK3Q7M8N":       "req-01J9ZK3Q7M8N",
+		strings.Repeat("a", 128): strings.Repeat("a", 128),
+		strings.Repeat("a", 129): "",
+		strings.Repeat("a", 200): "",
+		"a\nb":                   "",
+		"a\x7fb":                 "",
+		"é":                      "",
+	} {
+		ctx := sdk.WithTraceID(sdk.WithRequestID(context.Background(), id), id)
+		got := vault.Correlate(ctx, r, r)
+		if len(got) != 2 || got[0].RequestID != want || got[0].TraceID != want || got[1].RequestID != want {
+			t.Errorf("id %q: stamped %+v, want %q", id, got, want)
+		}
+	}
+	if r.RequestID != "" {
+		t.Fatal("Correlate modified its argument")
+	}
+}
+
+// TestServiceStampsCorrelation: every record the service writes carries the
+// context's ids, and a 200-byte request id is blanked, never refused.
+func TestServiceStampsCorrelation(t *testing.T) {
+	repo := memory.New()
+	svc := newVault(t, repo, ring(t, "m1", "m1"))
+	ctx := sdk.WithTraceID(sdk.WithRequestID(context.Background(), "req-1"), "trace-1")
+	if _, err := svc.Put(ctx, token, []byte("v"), staff); err != nil {
+		t.Fatal(err)
+	}
+	long := sdk.WithTraceID(sdk.WithRequestID(context.Background(), strings.Repeat("x", 200)), "trace-2")
+	if _, err := svc.Get(long, token, worker); err != nil {
+		t.Fatalf("a long request id must not fail the read: %v", err)
+	}
+	if err := svc.Delete(ctx, token, staff); err != nil {
+		t.Fatal(err)
+	}
+	audit, _, err := svc.Audit(context.Background(), vault.AuditFilter{}, "", 0)
+	if err != nil || len(audit) != 4 {
+		t.Fatalf("audit: %+v %v", audit, err)
+	}
+	for _, r := range audit {
+		want := [2]string{"req-1", "trace-1"}
+		if r.Action == vault.ActionSecretRead {
+			want = [2]string{"", "trace-2"}
+		}
+		if [2]string{r.RequestID, r.TraceID} != want {
+			t.Errorf("%s: request %q trace %q, want %q", r.Action, r.RequestID, r.TraceID, want)
+		}
+	}
 }

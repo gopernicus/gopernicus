@@ -131,6 +131,7 @@ func (s *Store) GetSecret(ctx context.Context, ref vault.Ref, audit []vault.Audi
 	if !ok {
 		return vault.SealedSecret{}, sdk.ErrNotFound
 	}
+	audit = stamped(audit, vault.ActionSecretRead, sec)
 	if err := s.checkAudit(audit); err != nil {
 		return vault.SealedSecret{}, err
 	}
@@ -167,9 +168,11 @@ func (s *Store) DeleteSecret(ctx context.Context, ref vault.Ref, audit []vault.A
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if _, ok := s.secrets[ref.String()]; !ok {
+	sec, ok := s.secrets[ref.String()]
+	if !ok {
 		return sdk.ErrNotFound
 	}
+	audit = stamped(audit, vault.ActionSecretDeleted, sec)
 	if err := s.checkAudit(audit); err != nil {
 		return err
 	}
@@ -178,7 +181,7 @@ func (s *Store) DeleteSecret(ctx context.Context, ref vault.Ref, audit []vault.A
 	return nil
 }
 
-func (s *Store) DeleteOwner(ctx context.Context, owner vault.Owner, audit []vault.AuditRecord) error {
+func (s *Store) DeleteOwner(ctx context.Context, owner vault.Owner, expected []string, audit []vault.AuditRecord) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -186,6 +189,27 @@ func (s *Store) DeleteOwner(ctx context.Context, owner vault.Owner, audit []vaul
 	defer s.mu.Unlock()
 	if _, ok := s.keys[owner.String()]; !ok {
 		return sdk.ErrNotFound
+	}
+	removed := map[string]vault.SealedSecret{}
+	for _, sec := range s.secrets {
+		if sec.Ref.Owner == owner {
+			removed[sec.Ref.Name] = sec
+		}
+	}
+	want := map[string]bool{}
+	for _, name := range expected {
+		want[name] = true
+	}
+	if len(want) != len(removed) {
+		return fmt.Errorf("secrets memory: owner %s holds %d secrets, %d expected: %w", owner, len(removed), len(want), sdk.ErrConflict)
+	}
+	for name := range want {
+		if _, ok := removed[name]; !ok {
+			return fmt.Errorf("secrets memory: owner %s holds no secret %q: %w", owner, name, sdk.ErrConflict)
+		}
+	}
+	for _, sec := range removed {
+		audit = stamped(audit, vault.ActionSecretDeleted, sec)
 	}
 	if err := s.checkAudit(audit); err != nil {
 		return err
@@ -228,6 +252,19 @@ func (s *Store) ListSealedSecrets(ctx context.Context, owner vault.Owner) ([]vau
 	return out, nil
 }
 
+func (s *Store) AppendAudit(ctx context.Context, records []vault.AuditRecord) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.checkAudit(records); err != nil {
+		return err
+	}
+	s.appendAudit(records)
+	return nil
+}
+
 func (s *Store) ListAudit(ctx context.Context, filter vault.AuditFilter, after string, limit int) ([]vault.AuditRecord, string, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, "", err
@@ -253,12 +290,18 @@ func (s *Store) ListAudit(ctx context.Context, filter vault.AuditFilter, after s
 	return out, "", nil
 }
 
-// checkAudit refuses records the append would reject, before any mutation.
+// checkAudit refuses, before any mutation, every record a SQL store's
+// secrets_audit constraints refuse: no id, an action or outcome outside the
+// vocabulary, or an id already recorded. The closed sets are the ones
+// vault.AuditFilter validates.
 func (s *Store) checkAudit(records []vault.AuditRecord) error {
 	seen := map[string]bool{}
 	for _, r := range records {
 		if r.ID == "" {
 			return fmt.Errorf("secrets memory: audit record without id: %w", sdk.ErrInvalidInput)
+		}
+		if r.Action == "" || r.Outcome == "" || (vault.AuditFilter{Action: r.Action, Outcome: r.Outcome}).Validate() != nil {
+			return fmt.Errorf("secrets memory: audit record %q has action %q and outcome %q: %w", r.ID, r.Action, r.Outcome, sdk.ErrInvalidInput)
 		}
 		if s.auditID[r.ID] || seen[r.ID] {
 			return fmt.Errorf("secrets memory: audit record %q already recorded: %w", r.ID, sdk.ErrAlreadyExists)
@@ -281,6 +324,20 @@ func (s *Store) appendAudit(records []vault.AuditRecord) {
 		}
 		return a.ID < b.ID
 	})
+}
+
+// stamped returns audit with every action record naming sec given its
+// Version and KeyID: what the store read or removed, not what the caller
+// expected.
+func stamped(audit []vault.AuditRecord, action vault.Action, sec vault.SealedSecret) []vault.AuditRecord {
+	out := make([]vault.AuditRecord, len(audit))
+	for i, r := range audit {
+		if r.Action == action && r.Owner == sec.Ref.Owner && r.Name == sec.Ref.Name {
+			r.Version, r.KeyID = sec.Version, sec.KeyID
+		}
+		out[i] = r
+	}
+	return out
 }
 
 func normalizeKey(key vault.OwnerKey) vault.OwnerKey {
