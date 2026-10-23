@@ -35,6 +35,7 @@ type userAdminRepo struct{ *data }
 // Callers hold r.mu. A SQL store does this with one LEFT JOIN; the point is the
 // same — never one identifier read per user.
 func (r userAdminRepo) summaryLocked(u user.User) user.Summary {
+	u = r.projectLocked(u)
 	s := user.Summary{
 		ID:              u.ID,
 		DisplayName:     u.DisplayName,
@@ -83,6 +84,9 @@ func (r userAdminRepo) SetStatus(_ context.Context, id string, status user.Statu
 	if !status.Valid() {
 		return user.StatusChange{}, fmt.Errorf("authmem: %q: %w", status, user.ErrInvalidStatus)
 	}
+	if status == user.StatusErased {
+		return user.StatusChange{}, user.ErrErased
+	}
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -90,6 +94,14 @@ func (r userAdminRepo) SetStatus(_ context.Context, id string, status user.Statu
 	u, ok := r.users[id]
 	if !ok {
 		return user.StatusChange{}, sdk.ErrNotFound
+	}
+	if _, erased := r.erasedAt[id]; erased {
+		// An erased user replays a deactivation and never reactivates, decided
+		// under the same lock as the transition.
+		if status == user.StatusActive {
+			return user.StatusChange{}, user.ErrErased
+		}
+		return user.StatusChange{Status: user.StatusErased, Changed: false, ChangedAt: u.StatusChangedAt}, nil
 	}
 	current := user.NormalizeStatus(u.Status)
 	if current == status {

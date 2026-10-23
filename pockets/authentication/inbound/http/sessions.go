@@ -162,6 +162,14 @@ type AuthenticationService interface {
 	RedeemPasswordless(ctx context.Context, token string) (authlogic.TokenPair, error)
 }
 
+// userEraser is the erasure capability the erase route drives. It is resolved
+// from the AuthenticationService at New, so the exported service interface
+// does not grow a method.
+type userEraser interface {
+	UserErasureEnabled() bool
+	EraseUser(ctx context.Context, actor authlogic.Principal, id string) (user.Summary, user.Erasure, error)
+}
+
 type authService interface {
 	AuthenticationService
 	SetSessionCookies(w http.ResponseWriter, pair authlogic.TokenPair)

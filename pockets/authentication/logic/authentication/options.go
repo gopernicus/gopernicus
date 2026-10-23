@@ -62,6 +62,10 @@ type Repositories struct {
 	// Nil → the administration service methods fail closed with
 	// ErrUserAdminUnavailable and the bundled admin routes are not registered.
 	UserAdmin user.AdminRepository
+	// UserErasure is the OPTIONAL erasure capability (SOC 2 S3), backed by the
+	// same transaction-capable adapter as Users, Identifiers, Sessions and the
+	// rest. Nil → EraseUser fails closed with ErrUserErasureUnavailable.
+	UserErasure user.EraseRepository
 	// PasswordlessRedeem is the OPTIONAL atomic magic-link redemption repository
 	// (CHAU-6.1). Named apart from the Passwordless KIND list above, which is a
 	// different thing entirely. Required only when ProvisionOnRedeem is enabled;

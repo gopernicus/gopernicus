@@ -15,6 +15,7 @@ import (
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/securityevent"
 	delivery "github.com/gopernicus/gopernicus/pockets/authentication/logic/delivery"
 	invitations "github.com/gopernicus/gopernicus/pockets/authentication/logic/invitations"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/maintenance"
 	"github.com/gopernicus/gopernicus/sdk"
 	sdkevents "github.com/gopernicus/gopernicus/sdk/capabilities/events"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/notify/email"
@@ -96,6 +97,9 @@ type constructorConfig struct {
 	SMSBodies                     map[string]string
 	External                      *authlogic.ExternalConfig
 	AuditWriteObserver            securityevent.WriteObserver
+	Maintenance                   maintenance.Config
+	MaintenanceRunnerAcknowledged bool
+	UserErasureRoute              bool
 	Logger                        *slog.Logger
 }
 
@@ -863,6 +867,14 @@ type AdministrationConfig struct {
 	// Key material follows the same rule: the host fills KeysInput (the
 	// environment package's ParseEnvTags, or any other source) and calls NewKeys.
 	ListStrategy string `env:"AUTH_LIST_STRATEGY" default:"cursor"`
+	// UserErasureRoute opts in to POST /auth/admin/users/{id}/erase (SOC 2 S3),
+	// mounted under the same gates as the other admin mutations with the action
+	// UserAdminErase. Erasure is irreversible, so the route never mounts on
+	// Repositories.UserErasure and UserAdminCheck alone: a host whose check
+	// ignores the action must not receive a destructive route by upgrading. Set
+	// without both → ErrUserErasureRouteRequires. A step-up requirement is host
+	// policy, keyed on the action.
+	UserErasureRoute bool
 }
 
 // WithAdministration replaces the complete AdministrationConfig group, including zero values.
@@ -871,6 +883,31 @@ func WithAdministration(value AdministrationConfig) Option {
 		c.MachineRoutesGate = value.MachineRoutesGate
 		c.UserAdminCheck = value.UserAdminCheck
 		c.ListStrategy = value.ListStrategy
+		c.UserErasureRoute = value.UserErasureRoute
+	}
+}
+
+// MaintenanceConfig is the retention policy Components.Maintenance runs with,
+// plus the host's assertion that it runs it.
+type MaintenanceConfig struct {
+	maintenance.Config
+	// MaintenanceRunnerAcknowledged affirms that the host runs
+	// Components.Maintenance — Run in process, or Pass from a jobs schedule.
+	// The pocket cannot observe that, so production logs one WARN
+	// (maintenance_runner=unacknowledged) while it is false; beside a nil
+	// Repositories.Maintenance it is ErrMaintenanceAcknowledgedWithoutRepository
+	// in every mode. A host enforcing retention through its own SQL cron leaves
+	// it false and accepts the WARN. It is a wiring assertion set as a literal in
+	// the composition root, not an env knob.
+	MaintenanceRunnerAcknowledged bool
+}
+
+// WithMaintenance replaces the complete MaintenanceConfig group, including zero
+// values.
+func WithMaintenance(value MaintenanceConfig) Option {
+	return func(c *constructorConfig) {
+		c.Maintenance = value.Config
+		c.MaintenanceRunnerAcknowledged = value.MaintenanceRunnerAcknowledged
 	}
 }
 

@@ -118,6 +118,11 @@ func Run(t *testing.T, newRepos func(t *testing.T) auth.Repositories) {
 	// provision-on-consumption. It skips LOUDLY when the port is unwired.
 	runPasswordless(t, newRepos)
 
+	// Retention and erasure (SOC 2 S3): both ports are OPTIONAL and skip LOUDLY
+	// when unwired. See maintenance.go and erasure.go.
+	runMaintenance(t, newRepos)
+	runUserErasure(t, newRepos)
+
 	t.Run("Passwords", func(t *testing.T) {
 		t.Run("SetGetUpsert", func(t *testing.T) { testPasswords(t, newRepos(t)) })
 		t.Run("AbsentNotFound", func(t *testing.T) { testPasswordsAbsent(t, newRepos(t)) })
@@ -170,6 +175,15 @@ func Run(t *testing.T, newRepos func(t *testing.T) auth.Repositories) {
 		t.Run("DBGeneratedIDOnEmpty", func(t *testing.T) { testServiceAccountsDBGeneratedID(t, newRepos(t)) })
 		t.Run("ListOrderingPagination", func(t *testing.T) { testServiceAccountsListPaged(t, newRepos(t)) })
 		t.Run("ListSameCreatedAtCollision", func(t *testing.T) { testServiceAccountsListCollision(t, newRepos(t)) })
+		// The cascade (SOC 2 S3) is gated on the optional capability, so a store
+		// that has not adopted it keeps passing until it does.
+		t.Run("DeleteCascadesKeys", func(t *testing.T) {
+			repos := newRepos(t)
+			if _, ok := repos.ServiceAccounts.(serviceaccount.CascadeDeleter); !ok || repos.APIKeys == nil {
+				t.Skip("serviceaccount.CascadeDeleter not implemented — the service-account cascade NOT verified for this Repositories")
+			}
+			testServiceAccountsDeleteCascades(t, repos)
+		})
 		runPagedFamily(t, newRepos,
 			func(repos auth.Repositories, ctx context.Context, req listing.Request) (listing.Page[serviceaccount.ServiceAccount], error) {
 				return repos.ServiceAccounts.List(ctx, req)

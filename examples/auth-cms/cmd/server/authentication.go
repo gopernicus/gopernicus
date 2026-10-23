@@ -32,6 +32,7 @@ type authenticationConfig struct {
 	auth.BrowserConfig
 	auth.InvitationsConfig
 	auth.AdministrationConfig
+	auth.MaintenanceConfig
 }
 
 func (c authenticationConfig) options() []auth.Option {
@@ -48,6 +49,7 @@ func (c authenticationConfig) options() []auth.Option {
 		auth.WithBrowser(c.BrowserConfig),
 		auth.WithInvitations(c.InvitationsConfig),
 		auth.WithAdministration(c.AdministrationConfig),
+		auth.WithMaintenance(c.MaintenanceConfig),
 		auth.WithIDs(c.IDs),
 		auth.WithLogger(c.Logger),
 	}

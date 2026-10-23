@@ -70,6 +70,16 @@ func WithMachineGate(value web.Middleware) Option {
 	}
 }
 
+// WithUserErasureRoute opts in to POST /auth/admin/users/{id}/erase. It mounts
+// only beside WithUserAdminCheck and a service whose erasure is wired; enabling
+// it without either is sdk.ErrInvalidInput at New. False (the default) leaves
+// the destructive route unmounted even where both exist.
+func WithUserErasureRoute(enabled bool) Option {
+	return func(c *adapterConfig) {
+		c.UserErasureRoute = enabled
+	}
+}
+
 // WithRouteAuthentication replaces RouteAuth for this constructor.
 func WithRouteAuthentication(value BundledRouteAuthentication) Option {
 	return func(c *adapterConfig) {

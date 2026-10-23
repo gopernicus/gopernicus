@@ -32,3 +32,19 @@ type ServiceAccountRepository interface {
 	// Delete removes the account for id; unknown → sdk.ErrNotFound.
 	Delete(ctx context.Context, id string) error
 }
+
+// Deletion reports what a cascading service-account delete removed: how many
+// API keys the account held and how many of them were not revoked.
+type Deletion struct {
+	KeyCount          int
+	UnrevokedKeyCount int
+}
+
+// CascadeDeleter is the OPTIONAL capability that deletes an account together
+// with every API key it holds, in one transaction that serializes against a
+// concurrent key mint, and reports the counts. Unknown id → sdk.ErrNotFound. A
+// store without it keeps ServiceAccountRepository.Delete; the service then
+// records zero counts.
+type CascadeDeleter interface {
+	DeleteWithKeys(ctx context.Context, id string) (Deletion, error)
+}

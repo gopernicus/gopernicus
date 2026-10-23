@@ -18,6 +18,7 @@ import (
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/session"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/user"
 	invitations "github.com/gopernicus/gopernicus/pockets/authentication/logic/invitations"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/maintenance"
 )
 
 // Repositories is the set of outbound ports the pocket needs. A store adapter
@@ -140,4 +141,25 @@ type Repositories struct {
 	// the same transaction-capable adapter as Users, whose Provision persists
 	// the first mirror row.
 	ExternalSubjects externalsubject.Repository
+
+	// Maintenance is the OPTIONAL retention capability (SOC 2 S3) behind
+	// Components.Maintenance: the bounded purges of the expired and terminal
+	// rows, the bounded OAuth2 prune, and the security-event export and purge.
+	// It must be backed by the same database as SecurityEvents — the rail purge
+	// appends its evidence row to the rail it purged. Nil → the maintenance
+	// service names the steps it needs skipped in every report, and
+	// MaintenanceConfig.MaintenanceRunnerAcknowledged is
+	// ErrMaintenanceAcknowledgedWithoutRepository.
+	Maintenance maintenance.Repository
+
+	// UserErasure is the OPTIONAL erasure capability (SOC 2 S3) behind
+	// Service.EraseUser and the opt-in erase route. Erase is ONE transaction
+	// across users, identifiers, credentials, sessions, grants, challenges,
+	// invitations, machine identities and the rail's user_erased row, so it must
+	// be backed by the same transaction-capable adapter as Users, Identifiers,
+	// Passwords, Sessions, Challenges, AuthenticationGrants, Invitations,
+	// ServiceAccounts, APIKeys and SecurityEvents. It REQUIRES ActiveSessions
+	// (ErrUserErasureRequiresActiveSessions): a login racing the erase must not
+	// mint through the unfenced Sessions.Create after it commits.
+	UserErasure user.EraseRepository
 }

@@ -30,6 +30,7 @@ type handlers struct {
 	inviteCheck    InviteCheck
 	resourceRule   InvitationResourceRule
 	userAdminCheck UserAdminCheck
+	eraser         userEraser
 	svc            authService
 	inv            InvitationService
 	listStrategy   list.Strategy
@@ -91,6 +92,9 @@ type mountDeps struct {
 	// Proxies logs the one production trusted-proxy warning; nil outside
 	// production.
 	Proxies *proxyPosture
+	// Eraser drives POST /auth/admin/users/{id}/erase. Nil unless the host
+	// opted in (WithUserErasureRoute) and the service's erasure is wired.
+	Eraser userEraser
 }
 
 // RouteAuthentication is the authenticator each bundled route group runs behind
@@ -216,7 +220,7 @@ func mount(r pockets.RouteRegistrar, d mountDeps) {
 	// one (authentication.BrowserConfig.BundledRouteAuth), the audited default otherwise.
 	auth := d.RouteAuth.withDefaults(svc)
 	r = clientInfoRegistrar{inner: r, proxies: d.Proxies}
-	h := &handlers{oauth2: d.OAuth2, inviteCheck: d.InviteCheck, resourceRule: d.ResourceRule, userAdminCheck: d.UserAdminCheck, svc: svc, inv: inv, listStrategy: d.ListStrategy, mutation: d.Mutation, views: views, htmlPolicy: d.HTMLPolicy}
+	h := &handlers{oauth2: d.OAuth2, inviteCheck: d.InviteCheck, resourceRule: d.ResourceRule, userAdminCheck: d.UserAdminCheck, eraser: d.Eraser, svc: svc, inv: inv, listStrategy: d.ListStrategy, mutation: d.Mutation, views: views, htmlPolicy: d.HTMLPolicy}
 	if d.OAuth2 != nil {
 		mountOAuth2(r, h)
 		mountSessionManagement(r, h)
@@ -363,6 +367,12 @@ func mount(r pockets.RouteRegistrar, d mountDeps) {
 	// impossible — the belt-and-braces conjunction keeps the invariant local.
 	if svc.UserAdminEnabled() && d.UserAdminCheck != nil {
 		mountUserAdmin(r, h, auth.UserAdministration, browserSafe)
+		// Erasure is irreversible, so it mounts only on its own explicit opt-in:
+		// a host whose UserAdminCheck ignores Action must not receive a
+		// destructive route by upgrading.
+		if d.Eraser != nil {
+			r.Handle("POST", "/auth/admin/users/{id}/erase", h.adminEraseUser, auth.UserAdministration, browserSafe)
+		}
 	}
 
 	// OAuth routes are registered only when at least one provider is wired

@@ -36,6 +36,7 @@ func New(repos Repositories, signer cryptids.JWTSigner, runtimeMode environment.
 	d.Sessions = repos.Sessions
 	d.SessionManagement = repos.SessionManagement
 	d.UserAdmin = repos.UserAdmin
+	d.UserErasure = repos.UserErasure
 	d.PasswordlessRedeem = repos.PasswordlessRedeem
 	d.ActiveSessions = repos.ActiveSessions
 	d.Challenges = repos.Challenges
@@ -126,7 +127,7 @@ func New(repos Repositories, signer cryptids.JWTSigner, runtimeMode environment.
 		{"ServiceAccounts", d.ServiceAccounts}, {"APIKeys", d.APIKeys}, {"Challenges", d.Challenges}, {"Hasher", d.Hasher}, {"Passwords", d.Passwords},
 		{"Queue", d.Queue}, {"Protector", d.Protector}, {"Normalizer", d.Normalizer}, {"CredentialPolicy", d.CredentialPolicy},
 		{"PasswordResets", d.PasswordResets}, {"CredentialMutations", d.CredentialMutations}, {"AuthenticationGrants", d.AuthenticationGrants},
-		{"IdentifierKeyer", d.IdentifierKeyer}, {"UserAdmin", d.UserAdmin}, {"PasswordlessRedeem", d.PasswordlessRedeem},
+		{"IdentifierKeyer", d.IdentifierKeyer}, {"UserAdmin", d.UserAdmin}, {"UserErasure", d.UserErasure}, {"PasswordlessRedeem", d.PasswordlessRedeem},
 		{"OAuthAccounts", d.OAuthAccounts}, {"OAuthStates", d.OAuthStates}, {"TokenEncrypter", d.TokenEncrypter},
 		{"SessionManagement", d.SessionManagement}, {"SecurityEvents", d.SecurityEvents}, {"Invitations", d.Invitations}, {"Compromised", d.Compromised},
 		{"ExternalSubjects", d.ExternalSubjects},

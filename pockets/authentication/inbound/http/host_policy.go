@@ -109,6 +109,9 @@ const (
 	// verification challenge (the authorized counterpart to the enumeration-safe
 	// public resend).
 	UserAdminResendVerification UserAdminAction = "resend-verification"
+	// UserAdminErase erases the target subject (SOC 2 S3): irreversible, and a
+	// host policy that requires a step-up grant for it keys on this action.
+	UserAdminErase UserAdminAction = "erase"
 )
 
 // UserAdminCheckRequest is the parsed, principal-resolved authorization question

@@ -32,6 +32,7 @@ import (
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/session"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/user"
 	invitations "github.com/gopernicus/gopernicus/pockets/authentication/logic/invitations"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/maintenance"
 	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/pkg/list"
 )
@@ -76,6 +77,10 @@ type reference struct {
 	// externalSubjects is the external identity mirror, by (provider, subject).
 	externalSubjects map[externalKey]externalsubject.ExternalSubject
 
+	// erasedAt is the erasure marker (users.erased_at), by user ID. The stored
+	// status stays deactivated; every read projects StatusErased from it.
+	erasedAt map[string]time.Time
+
 	// resetFailAt/resetFailErr inject an all-or-nothing rollback failure into
 	// refPasswordResets.Redeem (design §5.9): resetFailAt=N fails just after the
 	// Nth composition statement, so a test proves that a mid-transaction failure at
@@ -104,6 +109,7 @@ func newReference() *reference {
 		contactChanges:  map[string]contactchange.PendingChange{},
 
 		externalSubjects: map[externalKey]externalsubject.ExternalSubject{},
+		erasedAt:         map[string]time.Time{},
 	}
 }
 
@@ -130,6 +136,8 @@ func (r *reference) repositories() auth.Repositories {
 		Passwordless:         refPasswordless{r},
 		ActiveSessions:       refActiveSessions{r},
 		ExternalSubjects:     refExternalSubjects{r},
+		Maintenance:          refMaintenance{r},
+		UserErasure:          refErasure{r},
 	}
 }
 
@@ -147,6 +155,7 @@ type refUserAdmin struct{ *reference }
 // Callers hold r.mu. This mirrors the single JOIN a SQL store performs — the
 // projection must never issue one identifier read per user.
 func (r *reference) summaryLocked(u user.User) user.Summary {
+	u = r.projectLocked(u)
 	s := user.Summary{
 		ID:              u.ID,
 		DisplayName:     u.DisplayName,
@@ -192,6 +201,9 @@ func (r refUserAdmin) SetStatus(_ context.Context, id string, status user.Status
 	if !status.Valid() {
 		return user.StatusChange{}, fmt.Errorf("reference: %q: %w", status, user.ErrInvalidStatus)
 	}
+	if status == user.StatusErased {
+		return user.StatusChange{}, user.ErrErased
+	}
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -199,6 +211,14 @@ func (r refUserAdmin) SetStatus(_ context.Context, id string, status user.Status
 	u, ok := r.users[id]
 	if !ok {
 		return user.StatusChange{}, sdk.ErrNotFound
+	}
+	if _, erased := r.erasedAt[id]; erased {
+		// Decided in the same locked read as the transition: an erased user
+		// replays a deactivation and never reactivates.
+		if status == user.StatusActive {
+			return user.StatusChange{}, user.ErrErased
+		}
+		return user.StatusChange{Status: user.StatusErased, Changed: false, ChangedAt: u.StatusChangedAt}, nil
 	}
 	current := user.NormalizeStatus(u.Status)
 	if current == status {
@@ -282,7 +302,16 @@ func (r refUsers) Get(_ context.Context, id string) (user.User, error) {
 	if !ok {
 		return user.User{}, sdk.ErrNotFound
 	}
-	return u, nil
+	return r.projectLocked(u), nil
+}
+
+// projectLocked reports an erased user as StatusErased, the projection a SQL
+// store derives from erased_at IS NOT NULL. Callers hold r.mu.
+func (r *reference) projectLocked(u user.User) user.User {
+	if _, erased := r.erasedAt[u.ID]; erased {
+		u.Status = user.StatusErased
+	}
+	return u
 }
 
 func (r refUsers) Update(_ context.Context, id string, u user.User) (user.User, error) {
@@ -834,13 +863,42 @@ func (r refServiceAccounts) Update(_ context.Context, id string, sa serviceaccou
 	return sa, nil
 }
 
+// DeleteWithKeys is the cascade capability: the account and every key it holds
+// go under one lock, so no concurrent mint can leave an orphan key.
+func (r refServiceAccounts) DeleteWithKeys(_ context.Context, id string) (serviceaccount.Deletion, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, ok := r.serviceAccounts[id]; !ok {
+		return serviceaccount.Deletion{}, sdk.ErrNotFound
+	}
+	return r.deleteAccountLocked(id), nil
+}
+
+// deleteAccountLocked removes the account and its keys. Callers hold r.mu.
+func (r *reference) deleteAccountLocked(id string) serviceaccount.Deletion {
+	var d serviceaccount.Deletion
+	for kid, k := range r.apiKeys {
+		if k.ServiceAccountID != id {
+			continue
+		}
+		d.KeyCount++
+		if !k.Revoked() {
+			d.UnrevokedKeyCount++
+		}
+		delete(r.apiKeys, kid)
+	}
+	delete(r.serviceAccounts, id)
+	return d
+}
+
+// Delete cascades to the account's keys, as the bundled stores' Delete does.
 func (r refServiceAccounts) Delete(_ context.Context, id string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if _, ok := r.serviceAccounts[id]; !ok {
 		return sdk.ErrNotFound
 	}
-	delete(r.serviceAccounts, id)
+	r.deleteAccountLocked(id)
 	return nil
 }
 
@@ -2374,4 +2432,384 @@ func (r refExternalSubjects) Unlink(ctx context.Context, provider, subject strin
 	}
 	delete(r.externalSubjects, key)
 	return nil
+}
+
+// --- maintenance.Repository ---
+
+// refMaintenance is the reference retention port. Each call is one critical
+// section; the rail purge appends its security_events_purged row in the same
+// one, as the port contract requires. The floor is measured on time.Now, the
+// store's own clock.
+type refMaintenance struct{ *reference }
+
+var _ maintenance.Repository = refMaintenance{}
+
+// refFloor is the reference's database floor: the Go minimum less the day of
+// clock-skew margin.
+const refFloor = maintenance.MinSecurityEventRetention - 24*time.Hour
+
+func refLimit(limit int) error {
+	if limit <= 0 {
+		return fmt.Errorf("reference: limit %d: %w", limit, sdk.ErrInvalidInput)
+	}
+	return nil
+}
+
+// purgeLocked deletes up to limit keys of m whose expiry is at or before
+// before, oldest first.
+func purgeLocked[V any](m map[string]V, expires func(V) time.Time, before time.Time, limit int) int {
+	type cand struct {
+		key string
+		at  time.Time
+	}
+	var cands []cand
+	for k, v := range m {
+		if at := expires(v); !at.After(before) {
+			cands = append(cands, cand{k, at})
+		}
+	}
+	sort.Slice(cands, func(i, j int) bool {
+		if !cands[i].at.Equal(cands[j].at) {
+			return cands[i].at.Before(cands[j].at)
+		}
+		return cands[i].key < cands[j].key
+	})
+	n := min(limit, len(cands))
+	for _, c := range cands[:n] {
+		delete(m, c.key)
+	}
+	return n
+}
+
+func (r refMaintenance) PurgeExpiredSessions(_ context.Context, before time.Time, limit int) (int, error) {
+	if err := refLimit(limit); err != nil {
+		return 0, err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return purgeLocked(r.sessions, func(s session.Session) time.Time { return s.ExpiresAt }, before, limit), nil
+}
+
+func (r refMaintenance) PurgeExpiredOAuthStates(_ context.Context, before time.Time, limit int) (int, error) {
+	if err := refLimit(limit); err != nil {
+		return 0, err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return purgeLocked(r.oauthStates, func(s oauthstate.State) time.Time { return s.ExpiresAt }, before, limit), nil
+}
+
+func (r refMaintenance) PurgeExpiredGrants(_ context.Context, before time.Time, limit int) (int, error) {
+	if err := refLimit(limit); err != nil {
+		return 0, err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return purgeLocked(r.grants, func(g authgrant.Grant) time.Time { return g.ExpiresAt }, before, limit), nil
+}
+
+func (r refMaintenance) PurgeExpiredContactChanges(_ context.Context, before time.Time, limit int) (int, error) {
+	if err := refLimit(limit); err != nil {
+		return 0, err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return purgeLocked(r.contactChanges, func(p contactchange.PendingChange) time.Time { return p.ExpiresAt }, before, limit), nil
+}
+
+// invitationPurgeAt is when an invitation becomes purgeable: a terminal row at
+// its last update, a pending row at its expiry; accepting never (the zero
+// sentinel far in the future).
+func invitationPurgeAt(inv invitations.Invitation) time.Time {
+	switch inv.Status {
+	case invitations.StatusAccepted, invitations.StatusDeclined, invitations.StatusCancelled:
+		return inv.UpdatedAt
+	case invitations.StatusPending:
+		return inv.ExpiresAt
+	}
+	return time.Date(9999, 1, 1, 0, 0, 0, 0, time.UTC)
+}
+
+func (r refMaintenance) PurgeInvitations(_ context.Context, before time.Time, limit int) (int, error) {
+	if err := refLimit(limit); err != nil {
+		return 0, err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return purgeLocked(r.invitations, invitationPurgeAt, before, limit), nil
+}
+
+func (r refMaintenance) CountStaleAcceptingInvitations(_ context.Context, before time.Time) (int, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	n := 0
+	for _, inv := range r.invitations {
+		if inv.Status == invitations.StatusAccepting && !inv.UpdatedAt.After(before) {
+			n++
+		}
+	}
+	return n, nil
+}
+
+func (r refMaintenance) PruneOAuth2(_ context.Context, now time.Time, limit int) (int, error) {
+	if err := refLimit(limit); err != nil {
+		return 0, err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	n := purgeLocked(r.oauthCodes, func(c oauth2.Code) time.Time { return c.ExpiresAt }, now, limit)
+	n += purgeLocked(r.oauthClients, func(c oauth2.Client) time.Time { return c.ExpiresAt }, now, limit)
+	n += purgeLocked(r.oauthRefresh, func(h oauthRefreshRecord) time.Time { return h.ExpiresAt }, now, limit)
+	return n, nil
+}
+
+// railLocked returns the rail in ascending (created_at, id) order. Callers
+// hold r.mu.
+func (r *reference) railLocked() []securityevent.SecurityEvent {
+	rows := slices.Clone(r.securityEvents)
+	sort.Slice(rows, func(i, j int) bool {
+		if !rows[i].CreatedAt.Equal(rows[j].CreatedAt) {
+			return rows[i].CreatedAt.Before(rows[j].CreatedAt)
+		}
+		return rows[i].ID < rows[j].ID
+	})
+	return rows
+}
+
+func (r refMaintenance) ExportSecurityEvents(_ context.Context, before time.Time, after maintenance.ExportCursor, limit int) ([]maintenance.ArchivedEvent, maintenance.ExportCursor, error) {
+	if err := refLimit(limit); err != nil {
+		return nil, after, err
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	var out []maintenance.ArchivedEvent
+	for _, evt := range r.railLocked() {
+		if evt.CreatedAt.After(before) {
+			break
+		}
+		if !after.CreatedAt.IsZero() && (evt.CreatedAt.Before(after.CreatedAt) || (evt.CreatedAt.Equal(after.CreatedAt) && evt.ID <= after.ID)) {
+			continue
+		}
+		if len(out) >= limit && !evt.CreatedAt.Equal(out[len(out)-1].CreatedAt) {
+			break
+		}
+		evt.Details = maps.Clone(evt.Details)
+		out = append(out, maintenance.ArchivedEvent{SecurityEvent: evt})
+	}
+	if len(out) == 0 {
+		return nil, after, nil
+	}
+	last := out[len(out)-1]
+	return out, maintenance.ExportCursor{CreatedAt: last.CreatedAt, ID: last.ID}, nil
+}
+
+func (r refMaintenance) PurgeSecurityEventsBefore(_ context.Context, before time.Time, limit int) (maintenance.PurgeResult, error) {
+	if err := refLimit(limit); err != nil {
+		return maintenance.PurgeResult{}, err
+	}
+	now := time.Now().UTC()
+	if before.After(now.Add(-refFloor)) {
+		return maintenance.PurgeResult{}, fmt.Errorf("reference: cutoff %s: %w", before.Format(time.RFC3339Nano), maintenance.ErrBelowRetentionFloor)
+	}
+	limit = min(limit, maintenance.MaxBatchSize)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	doomed := map[string]bool{}
+	for _, evt := range r.railLocked() {
+		if len(doomed) == limit || evt.CreatedAt.After(before) {
+			break
+		}
+		doomed[evt.ID] = true
+	}
+	kept := r.securityEvents[:0:0]
+	for _, evt := range r.securityEvents {
+		if !doomed[evt.ID] {
+			kept = append(kept, evt)
+		}
+	}
+	r.securityEvents = append(kept, securityevent.SecurityEvent{
+		ID:          ids.MustGenerate(),
+		Actor:       securityevent.Principal{Type: "system", ID: "maintenance"},
+		EventType:   securityevent.TypeSecurityEventsPurged,
+		EventStatus: securityevent.StatusSuccess,
+		Details: map[string]any{
+			"cutoff":     before.UTC().Format("2006-01-02T15:04:05.000000Z"),
+			"count":      len(doomed),
+			"floor_days": int(refFloor / (24 * time.Hour)),
+			"max_rows":   limit,
+		},
+		CreatedAt: now,
+	})
+	return maintenance.PurgeResult{Cutoff: before, Count: len(doomed)}, nil
+}
+
+// --- user.EraseRepository ---
+
+// refErasure is the reference erasure: the whole Erase is one critical
+// section, the stand-in for the store's one transaction, in the port's order.
+type refErasure struct{ *reference }
+
+var _ user.EraseRepository = refErasure{}
+
+type identifierPair struct{ kind, value string }
+
+func (r refErasure) Erase(ctx context.Context, in user.EraseInput) (user.Erasure, error) {
+	if strings.TrimSpace(in.ID) == "" {
+		return user.Erasure{}, fmt.Errorf("reference: erase: empty id: %w", sdk.ErrInvalidInput)
+	}
+	if err := ctx.Err(); err != nil {
+		return user.Erasure{}, err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	id := in.ID
+	u, ok := r.users[id]
+	if !ok {
+		return user.Erasure{}, sdk.ErrNotFound
+	}
+	if at, erased := r.erasedAt[id]; erased {
+		return user.Erasure{Changed: false, ErasedAt: at}, nil
+	}
+
+	// Capture the user's pairs, active and retired, minus any pair another
+	// user holds actively now.
+	pairs := map[identifierPair]bool{}
+	for _, it := range r.userIdentifiers {
+		if it.UserID == id && it.NormalizedValue != "" {
+			pairs[identifierPair{string(it.Kind), it.NormalizedValue}] = true
+		}
+	}
+	for _, it := range r.userIdentifiers {
+		if it.UserID != id && it.Active() {
+			delete(pairs, identifierPair{string(it.Kind), it.NormalizedValue})
+		}
+	}
+	var addressed []string
+	for invID, inv := range r.invitations {
+		matched := pairs[identifierPair{inv.IdentifierKind, inv.Identifier}] && (inv.ResolvedSubjectID == "" || inv.ResolvedSubjectID == id)
+		resolved := inv.ResolvedSubjectType == "user" && inv.ResolvedSubjectID == id
+		if !matched && !resolved {
+			continue
+		}
+		if inv.Status == invitations.StatusAccepting {
+			return user.Erasure{}, user.ErrEraseBlockedByClaim
+		}
+		addressed = append(addressed, invID)
+	}
+
+	now := in.Now.UTC()
+	var c user.EraseCounts
+	if user.NormalizeStatus(u.Status) == user.StatusActive {
+		u.Status = user.StatusDeactivated
+		u.StatusChangedAt = now
+	}
+	u.DisplayName = ""
+	u.UpdatedAt = now
+	u.AuthRevision++
+	r.users[id] = u
+	r.authRevisions[id] = u.AuthRevision
+	r.erasedAt[id] = now
+
+	for iid, it := range r.userIdentifiers {
+		if it.UserID != id {
+			continue
+		}
+		if it.ReplacedAt.IsZero() {
+			it.ReplacedAt = now
+		}
+		it.NormalizedValue = ""
+		it.VerifiedAt = time.Time{}
+		it.LoginEnabled, it.RecoveryEnabled, it.NotificationEnabled, it.IsPrimary = false, false, false, false
+		it.UpdatedAt = now
+		r.userIdentifiers[iid] = it
+		c.IdentifiersBlanked++
+	}
+	delete(r.identifiers, id)
+	if _, ok := r.passwords[id]; ok {
+		delete(r.passwords, id)
+		c.Passwords = 1
+	}
+	kept := r.oauthAccounts[:0:0]
+	for _, a := range r.oauthAccounts {
+		if a.UserID == id {
+			c.OAuthAccounts++
+			continue
+		}
+		kept = append(kept, a)
+	}
+	r.oauthAccounts = kept
+	for key, s := range r.externalSubjects {
+		if s.UserID == id {
+			delete(r.externalSubjects, key)
+			c.ExternalSubjects++
+		}
+	}
+	for key, p := range r.contactChanges {
+		if p.UserID == id {
+			delete(r.contactChanges, key)
+			c.ContactChanges++
+		}
+	}
+	for hash, code := range r.oauthCodes {
+		if code.UserID == id {
+			delete(r.oauthCodes, hash)
+			c.Codes++
+		}
+	}
+	for cid, ch := range r.challenges {
+		if ch.UserID == id || slices.Contains(in.SubjectKeys, ch.SubjectKey) {
+			delete(r.challenges, cid)
+			c.Challenges++
+		}
+	}
+	sessions := map[string]bool{}
+	for sid, s := range r.sessions {
+		if s.UserID == id {
+			sessions[sid] = true
+			delete(r.sessions, sid)
+			c.Sessions++
+		}
+	}
+	for gid, g := range r.grants {
+		if g.UserID == id || sessions[g.SessionID] {
+			delete(r.grants, gid)
+			c.Grants++
+		}
+	}
+	for _, invID := range addressed {
+		inv := r.invitations[invID]
+		if inv.Status == invitations.StatusPending {
+			delete(r.invitations, invID)
+			c.InvitationsDeleted++
+			continue
+		}
+		inv.Identifier = ""
+		inv.Metadata = map[string]string{}
+		inv.UpdatedAt = now
+		r.invitations[invID] = inv
+		c.InvitationsBlanked++
+	}
+	for invID, inv := range r.invitations {
+		if inv.InvitedBy == id && inv.Status == invitations.StatusPending {
+			inv.Status = invitations.StatusCancelled
+			inv.UpdatedAt = now
+			r.invitations[invID] = inv
+			c.InvitationsCancelled++
+		}
+	}
+	for said, sa := range r.serviceAccounts {
+		if sa.OwnerUserID == id && sa.ActAsUser {
+			c.APIKeys += r.deleteAccountLocked(said).KeyCount
+			c.ServiceAccounts++
+		}
+	}
+	if in.Event.EventType != "" {
+		evt := in.Event
+		evt.Details = c.Merge(evt.Details)
+		if evt.ID == "" {
+			evt.ID = ids.MustGenerate()
+		}
+		r.securityEvents = append(r.securityEvents, evt)
+	}
+	return user.Erasure{Changed: true, ErasedAt: now, Counts: c}, nil
 }

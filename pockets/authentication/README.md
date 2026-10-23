@@ -2867,17 +2867,25 @@ capability (CHAU-1.1).
 
 ### The closed vocabulary
 
-`UserStatus` has exactly two values in v1:
+`user.Status` has exactly three values:
 
 | status | meaning |
 |---|---|
 | `active` | the default, and the backfill for every pre-existing row |
 | `deactivated` | no new session and no act-as-user authentication may succeed |
+| `erased` | the subject was erased (below): everything `deactivated` denies, and terminal |
 
-Suspension, deletion, anonymization, and lock-until are deliberately **out of
-scope**: each needs its own rules on every credential path, and an open string
-would let a host invent a posture the pocket has no rules for. Adding a third
-value is a design decision, not a constant.
+`erased` is a projection, not a stored status: the row stays `deactivated` and
+carries an erasure marker (`users.erased_at`), so a binary built before erasure
+existed reads a correct denial. It is never a `SetStatus` target —
+`SetStatus(…, StatusErased)` is `user.ErrErased` (409) — deactivating an erased
+user is a `changed:false` replay, and reactivating one is `user.ErrErased`. A
+host that switches on `Status` exhaustively gains a case.
+
+Suspension, anonymization, and lock-until are deliberately **out of scope**:
+each needs its own rules on every credential path, and an open string would let
+a host invent a posture the pocket has no rules for. Adding a value is a design
+decision, not a constant.
 
 Status is **not** verification. Whether an address is proven is identifier state;
 whether the subject may authenticate at all is this. Either can be true without
@@ -3010,6 +3018,78 @@ on the audit event only; it is never consulted for permission.
 The runnable end-to-end proof (list → deactivate → prove generic denial on login,
 refresh, and hydration → idempotent replay → reactivate → log in again) is
 `examples/auth-cms/cmd/server/user_admin_test.go`.
+
+### Erasure
+
+`Repositories.UserErasure` (`user.EraseRepository`, OPTIONAL) erases a person in
+**one store transaction**, through `EraseUser` or the opt-in route. The order
+is the contract, because each step depends on the locks the earlier ones took:
+
+1. lock the user row — already erased returns `changed:false` with the first
+   `erased_at`, no statement and no row, so a retried request is a 200;
+2. capture the user's (kind, value) identifier pairs, active and retired, and
+   drop every pair that is now an ACTIVE identifier of another user — a retired
+   address someone else owns never reaches that owner's invitations;
+3. lock the invitations addressed to a captured pair (with an empty or this
+   resolved subject) and those resolved to the user;
+4. refuse with **`user.ErrEraseBlockedByClaim` (409)** when any locked
+   invitation is `accepting`: the claim id is the host's grant operation and a
+   claim never expires, so the operator settles or cancels it through the
+   host's grant path first — nothing was written;
+5. mark the user erased: deactivated if active, display name blanked,
+   `auth_revision` incremented;
+6. retire and blank every identifier row of the user (value, verification, uses,
+   primary), which frees the addresses for a new account;
+7. delete the password, OAuth accounts, external subjects, contact changes,
+   OAuth2 authorization codes, the challenges keyed to the user or to its
+   address-keyed magic-link subject keys, the authentication grants and the
+   sessions of both profiles;
+8. delete the pending invitations addressed to the user and blank `identifier`
+   and `metadata` on the terminal ones; cancel the pending invitations the user
+   issued;
+9. delete the user's **act-as-user** service accounts and all their API keys —
+   accounts the user owns without act-as are integrations the host reassigns;
+10. append the `user_erased` row (Details: the counts; `UserID` the target,
+   `Actor` the administrator, the administrator's client attribution) inside the
+   same transaction, so the evidence commits with the erasure.
+
+**What is kept, and why.** The `users` row and every pseudonymous id survive:
+`invited_by`, `resolved_subject_id` and `resolved_subject_type` on invitations,
+`user_id` everywhere else. The security-event rail is **not** rewritten — the
+user's earlier rows keep their IP/UA and age out under the rail's 400-day
+retention ("Retention and the maintenance service" below);
+`oauth_refresh_history` keeps its hashes for reuse detection; authorization
+tuples for `user:<id>` are the host's step through the authorization pocket;
+archive objects already written are outside erasure's reach — their lifecycle
+is host policy.
+
+**Erase is not a ban.** The external-subject mirror is deleted, so the same
+provider subject signing in again provisions a fresh user. Deactivate to bar a
+subject.
+
+**The route is an explicit opt-in.** `POST /auth/admin/users/{id}/erase` mounts
+under the admin chain (live session, browser-safe mutation gate,
+`UserAdminCheck` with `UserAdminErase`) only when `Repositories.UserErasure` is
+wired **and** `AdministrationConfig.UserErasureRoute` is true — a host whose
+check ignores `Action` does not receive a destructive route by upgrading. It
+answers 200 `{user, changed, counts}`, 409 on an accepting claim and 400 on
+self-erasure (`ErrEraseSelf`). A step-up requirement is host policy keyed on
+the action. `UserErasureRoute` without the port or the check is
+`ErrUserErasureRouteRequires`; the port without `Repositories.ActiveSessions`
+is `ErrUserErasureRequiresActiveSessions` (a login racing the erase must not
+mint through the unfenced `Sessions.Create`).
+
+```go
+summary, erasure, err := svc.Authentication.EraseUser(ctx, actor, userID) // TRUSTED: no authorization
+deletion, err := svc.Authentication.DeleteServiceAccount(ctx, actor, saID) // the cascade, counted
+```
+
+`EraseUser` runs the store call detached from the caller's cancellation and
+bounded by `EraseTimeout` (30s), so a client that disconnects cannot roll back
+an erasure about to commit. `DeleteServiceAccount` deletes a machine identity
+with its keys through `serviceaccount.CascadeDeleter` when the store offers it
+(counts recorded on `service_account_deleted`), and falls back to
+`ServiceAccounts.Delete` with zero counts and `cascade=false` otherwise.
 
 ### Schema
 
@@ -3474,7 +3554,16 @@ signatures unchanged); the OAuth2 server records `oauth2_consent_approved`,
 `client_id` — see "Denial coverage" for when it is absent or blank —
 `session_id`; `Actor` when the context carries a principal); the
 external identity engine records `external_login` once per token (below) beside
-its `external_subject_*` and `external_revocation_unavailable` rows. The forgot-password
+its `external_subject_*` and `external_revocation_unavailable` rows. Retention and
+erasure record `user_erased` (inside the erase transaction; `UserID` the target,
+`Actor` the administrator, Details the erasure counts), `service_account_deleted`
+(Details `service_account_id`, `key_count`, `unrevoked_key_count`, `cascade` —
+never a prefix, hash or key id), `security_events_purged` (one row per purge
+call, written by the store with `Actor` system/maintenance; Details `cutoff`,
+`count`, `floor_days`, `max_rows` and, on PostgreSQL, `session_user`) and
+`security_events_archived` (one row per verified archive object; Details
+`object`, `sha256`, `rows`, `first_created_at`, `first_id`, `last_created_at`,
+`last_id`, `archive_location`). The forgot-password
 *request* records nothing (it must not reveal whether an address exists). There is
 no HTTP read surface — query the table, or see the proof host's dev-only debug
 route.
@@ -3739,6 +3828,130 @@ A 30-second per-tab, per-destination attempt record bounds redirect loops; it
 contains no credentials. User interaction cancels automatic navigation, and
 failed recovery never deletes another tab's cookies. Refresh rotation, replay
 protection and the fixed session expiry remain unchanged.
+
+## Retention and the maintenance service
+
+Every row class the pocket writes has an owner-set lifetime, disposal is
+bounded, and every disposal of the audit rail leaves evidence on it.
+`Components.Maintenance` (`logic/maintenance.Service`) runs it over
+`Repositories.Maintenance` (`maintenance.Repository`, OPTIONAL — a store adopts
+it whole), `Repositories.Challenges` and `Repositories.SecurityEvents`.
+
+| rows | eligible when (`<=`: a row exactly at the cutoff is eligible) | default (`maintenance.Config`) |
+|---|---|---|
+| sessions (both profiles) | `expires_at <= now − SessionRetention` | 24h past expiry |
+| OAuth states | `expires_at <= now − OAuthStateRetention` | 1h |
+| authentication grants | `expires_at <= now − GrantRetention` | 24h |
+| contact changes | `expires_at <= now − ContactChangeRetention` | 24h |
+| invitations | terminal (`accepted`/`declined`/`cancelled`) with `updated_at <=` the cutoff, or `pending` with `expires_at <=` the cutoff — **never `accepting`** | `InvitationRetention` 90 days |
+| challenges | `Challenges.PurgeExpired(now − 1h)` | fixed 1h |
+| OAuth2 codes, client metadata, refresh history | `expires_at <= now`, bounded per table (`PruneOAuth2`; the unbounded `OAuth2.Prune` is never called) | the stores' own horizons |
+| security events | `created_at <= now − SecurityEventRetention`, archived then purged per chunk, once a day | 400 days; below 366 days refused |
+| retired identifiers | kept for live users, blanked on erasure | — |
+
+Every duration is a Go default a host raises (zero = default, negative =
+`sdk.ErrInvalidInput`); the service reads no environment. `BatchSize` (1000)
+bounds one statement and is refused above `maintenance.MaxBatchSize` (10000);
+every `limit <= 0` is refused — never "unbounded". Stale `accepting` claims
+older than `InvitationRetention` are counted (`Report.StaleAcceptingClaims`)
+and WARNed as `invitations_accepting_stale` at most once a day or on change;
+maintenance never settles a claim.
+
+### `Pass`, `Run`, `LastReport`
+
+`Pass(ctx) (Report, error)` is one bounded pass: every step drains batches
+until a short one or until `PassBudget` (5m) — a deadline checked between
+batches and chunks, never one that cancels a statement — is spent; a failed
+step is reported and the pass continues; a panicking step is recovered, logged
+with its stack and reported failed. Each step logs one stable line
+(`msg=maintenance_step step=<name> count=<n> skipped=<bool> error_kind=<kind>`;
+names are the exported `Step*` constants), a skipped step names why (a nil
+port, or `not_due` for the rail step inside `SecurityEventStepInterval`, 24h),
+and the `Report` carries `BudgetExhausted` and `ArchiveBacklog` — the next pass
+resumes. A budget that runs out pass after pass WARNs
+`maintenance_budget_exhausted`: the first enablement on an old host drains its
+backlog over many passes, so size `PassBudget` and watch WAL and replica lag.
+The error is nil unless the context ended or every step that ran failed.
+
+`Run(ctx)` is the zero-dependency runner: it blocks, runs a first pass after a
+random jitter of up to a tenth of the interval (`WithInterval`, default one
+hour) and then one pass per interval, logs a failed pass and continues, and
+returns nil when `ctx` ends. `LastReport()` is the snapshot of the latest pass,
+for a host's health surface. Two concurrent passes are safe, not cheap: run one
+runner per database.
+
+Run it from a jobs schedule instead with a three-line handler — the error
+contract above means one persistently failing step never dead-letters the
+schedule:
+
+```go
+handlers := map[string]queue.HandlerFunc{
+    "authentication.maintenance": func(ctx context.Context, _ queue.Job) error {
+        _, err := comps.Maintenance.Pass(ctx)
+        return err
+    },
+}
+_, err := parts.Schedules.EnsureSchedule(ctx, schedules.Ensure{
+    Name: "authentication-maintenance",
+    Kind: "authentication.maintenance",
+    Spec: schedules.Spec{Every: time.Hour},
+})
+```
+
+Keep `PassBudget` shorter than the jobs lease window.
+
+### The acknowledgement
+
+`authentication.WithMaintenance(authentication.MaintenanceConfig{Config:
+maintenance.Config{…}, MaintenanceRunnerAcknowledged: true})` sets the policy
+and asserts the host runs the service. The pocket cannot see that, so
+production logs one WARN while the acknowledgement is false
+(`maintenance_runner=unacknowledged: retention is not enforced; …`); beside a
+nil `Repositories.Maintenance` it is
+`ErrMaintenanceAcknowledgedWithoutRepository` in every mode. A host enforcing
+retention through its own SQL cron leaves it false and accepts the WARN. It is
+a literal in the composition root, never an env knob. Every `New` logs
+`maintenance_runner=`, `archive_sink=<ArchiveLocation|none>` and
+`security_event_retention=`.
+
+### The security-event rail: archive, then purge, per chunk
+
+The rail step computes `cutoff = now − SecurityEventRetention` (microseconds)
+and, with an `ArchiveSink` (`filestorage.Storer` satisfies it), loops:
+
+1. export up to `ArchiveChunkRows` (5000) rows in ascending `(created_at, id)`,
+   extended to every row tied at the last instant, so a chunk always ends on a
+   whole instant;
+2. encode them as NDJSON — one version-1 line per row, keyed by the rail's
+   column names: `{"v":1,"id":…,"seq":…,"recorded_at":…,"user_id":…,"actor_type":…,"actor_id":…,"event_type":…,"event_status":…,"details":{…},"ip_address":…,"user_agent":…,"request_id":…,"trace_id":…,"created_at":…}`
+   (timestamps `2006-01-02T15:04:05.000000Z` in UTC; `seq` and `recorded_at`
+   null where the store keeps none) — and upload ONE object at
+   `<ArchivePrefix><cutoff 20060102T150405.000000Z>/<id>.ndjson`, never
+   overwriting an existing key;
+3. read the object back and require its size, line count and SHA-256 to match
+   what was written;
+4. write one `security_events_archived` row through `SecurityEvents.Create`,
+   error returned — evidence fails closed;
+5. purge through the chunk's last instant, `BatchSize` rows per call.
+
+Any failure in steps 1–4 purges nothing that pass; the step fails with
+`maintenance.ErrArchiveFailed` and an object already written is left for the
+operator's reconciliation. A purge that removes a different number of rows than
+the chunk held WARNs `archive_purge_count_mismatch`. Without a sink the rail is
+purged unarchived — a valid policy the registration line reports as
+`archive_sink=none`. Either way every run makes at least one purge call, and
+every call writes one `security_events_purged` row, a zero count included: the
+evidence that the control ran on a day with nothing to purge.
+
+**The floor is an invariant.** The bundled stores refuse a cutoff younger than
+365 days (`maintenance.ErrBelowRetentionFloor`) on the database's own clock;
+`maintenance.MinSecurityEventRetention` (366 days) keeps the service a day
+above it, so clock skew cannot trip it. There is no procedure to lower it.
+
+**Maintenance must be backed by the database that holds the rail.** The purge
+appends its evidence row to the table it purged, and a store's constructor
+probes the rail's purge function on the same connection it purges through, so
+a `Repositories.Maintenance` on another database is refused at boot.
 
 ## Migrations are host-owned (0001–0020)
 

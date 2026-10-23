@@ -43,6 +43,10 @@ const (
 	defaultOperationExpiryBatch    = 500
 )
 
+// defaultMaintenanceInterval is how often the retention runner ticks the
+// authentication maintenance pass (MAINTENANCE_INTERVAL).
+const defaultMaintenanceInterval = time.Hour
+
 // deliveryPurgeConfig is the host-owned schedule/retention/batch for the terminal-purge loop.
 type deliveryPurgeConfig struct {
 	// Interval is how often a purge pass runs.

@@ -157,3 +157,24 @@ var ErrRefreshCookiePathInvalid = errors.New(`auth: BrowserConfig.RefreshCookieP
 // ErrHTMLPolicyWithoutViews posture), so a stale acknowledgement cannot linger
 // and hide a later removal of the rail.
 var ErrAuditAcknowledgedWithSecurityEvents = errors.New("auth: WithAuditDisabledAcknowledged() set but Repositories.SecurityEvents is wired (remove the acknowledgement)")
+
+// ErrMaintenanceAcknowledgedWithoutRepository is returned by New in every mode
+// when MaintenanceConfig.MaintenanceRunnerAcknowledged is set while
+// Repositories.Maintenance is nil: an acknowledgement that the runner runs,
+// beside no port for it to run over, is contradictory wiring (the
+// ErrAuditAcknowledgedWithSecurityEvents posture). A host that enforces
+// retention through its own SQL cron leaves the acknowledgement false and
+// accepts the production WARN.
+var ErrMaintenanceAcknowledgedWithoutRepository = errors.New("auth: MaintenanceConfig.MaintenanceRunnerAcknowledged set but Repositories.Maintenance is nil (a host running retention through its own SQL cron leaves the acknowledgement false and accepts the production WARN)")
+
+// ErrUserErasureRouteRequires is returned by New when
+// AdministrationConfig.UserErasureRoute is set without Repositories.UserErasure
+// or without AdministrationConfig.UserAdminCheck: the opt-in names a route
+// that could never mount.
+var ErrUserErasureRouteRequires = errors.New("auth: AdministrationConfig.UserErasureRoute requires Repositories.UserErasure and AdministrationConfig.UserAdminCheck")
+
+// ErrUserErasureRequiresActiveSessions is returned by New when
+// Repositories.UserErasure is wired without Repositories.ActiveSessions: a
+// login racing the erase would mint through the unfenced Sessions.Create after
+// the erase commits.
+var ErrUserErasureRequiresActiveSessions = errors.New("auth: Repositories.UserErasure requires Repositories.ActiveSessions (the fenced session mint)")

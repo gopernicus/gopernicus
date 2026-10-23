@@ -34,7 +34,7 @@ EMULATOR_TAG_MODULES = integrations/authentication/firebase
 	guard-authorization-no-delivery-repo guard-authorization-rolesvc-no-engine guard-ui-no-inward guard-ui-require-whitelist \
 	guard-no-legacy-features-path guard-list-no-nethttp guard-violation-message-not-error \
 	guard-pocket-logic guard-authorization-tuples-leaf guard-authorization-decisions-no-mutations guard-inbound-authorization guard-tuple-write-integrity guard-host-contract guard-auth-no-vendor-names \
-	guard-cms-admin-gate guard-host-posture guard-pocket-no-env guard-baseline-ledger
+	guard-cms-admin-gate guard-host-posture guard-pocket-no-env guard-baseline-ledger guard-auth-maintenance-leaf
 
 # Regenerate *_templ.go from .templ sources. Each bundled views/templ module pins
 # its own templ tool; generation runs inside each so the tool version is
@@ -191,7 +191,7 @@ guard: guard-sdk-stdlib guard-pocket-isolation guard-sdk-no-outward guard-no-leg
 	guard-authorization-no-delivery-repo guard-authorization-rolesvc-no-engine guard-ui-no-inward guard-ui-require-whitelist \
 	guard-no-legacy-features-path guard-list-no-nethttp guard-violation-message-not-error \
 	guard-pocket-logic guard-authorization-tuples-leaf guard-authorization-decisions-no-mutations guard-inbound-authorization guard-tuple-write-integrity guard-host-contract guard-auth-no-vendor-names \
-	guard-cms-admin-gate guard-host-posture guard-pocket-no-env guard-baseline-ledger
+	guard-cms-admin-gate guard-host-posture guard-pocket-no-env guard-baseline-ledger guard-auth-maintenance-leaf
 
 # G1: sdk imports only the standard library (also enforced structurally by
 # sdk/go.mod having no require block).
@@ -513,7 +513,7 @@ guard-no-legacy-features-path:
 # <<< LEGACY-PATTERNS
 
 # CI-style gate: templ generation must be a no-op (no drift), then per-module
-# vet/build/test across all MODULES, then the thirty-three layering guards. Drift
+# vet/build/test across all MODULES, then the thirty-four layering guards. Drift
 # is checked via `git diff` when this tree is a git repo; this repo IS a git
 # repo (as of phase 2), so that branch runs. The before/after checksum branch
 # remains as a fallback for gitless checkouts of *_templ.go.
@@ -645,3 +645,14 @@ guard-baseline-ledger:
 			if [ $$found = 0 ]; then echo "ERROR (G34): $$f has no byte-identical copy in $$ledger (re-export: copy the store file into the ledger; never edit a copy)"; fail=1; fi; \
 		done; \
 	done; exit $$fail
+
+# G36 (SOC 2 S3, the maintenance leaf): the authentication retention service
+# sits beside the authentication service, never above it. It imports the leaf
+# domain packages it purges through (…/logic/authentication/<leaf>) and never
+# the service package itself, so the pocket root can build both without a
+# cycle and the pass can never reach into the use cases. G26's shape; tests
+# stay on the same side.
+guard-auth-maintenance-leaf:
+	@echo "== guard: authentication maintenance imports no authentication service (G36) =="
+	@test -d pockets/authentication/logic/maintenance
+	@! grep -rn '"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication"' --include='*.go' pockets/authentication/logic/maintenance || { echo "ERROR (G36): logic/maintenance imports the authentication service package — maintenance depends on the leaf domain packages (securityevent, challenge, user, …), never the service"; exit 1; }

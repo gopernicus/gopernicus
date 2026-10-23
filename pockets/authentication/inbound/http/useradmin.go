@@ -56,6 +56,32 @@ type userStatusResponse struct {
 	Changed bool                `json:"changed"`
 }
 
+// userErasureResponse is the body of an erase: the resulting summary, whether
+// THIS call erased the user (false on a repeat), and what it removed.
+type userErasureResponse struct {
+	User    userSummaryResponse `json:"user"`
+	Changed bool                `json:"changed"`
+	Counts  eraseCountsResponse `json:"counts"`
+}
+
+// eraseCountsResponse mirrors user.EraseCounts.
+type eraseCountsResponse struct {
+	Sessions             int `json:"sessions"`
+	Grants               int `json:"grants"`
+	Passwords            int `json:"passwords"`
+	OAuthAccounts        int `json:"oauth_accounts"`
+	ExternalSubjects     int `json:"external_subjects"`
+	ContactChanges       int `json:"contact_changes"`
+	Codes                int `json:"codes"`
+	Challenges           int `json:"challenges"`
+	IdentifiersBlanked   int `json:"identifiers_blanked"`
+	InvitationsDeleted   int `json:"invitations_deleted"`
+	InvitationsBlanked   int `json:"invitations_blanked"`
+	InvitationsCancelled int `json:"invitations_cancelled"`
+	ServiceAccounts      int `json:"service_accounts"`
+	APIKeys              int `json:"api_keys"`
+}
+
 func newUserSummaryResponse(s user.Summary) userSummaryResponse {
 	out := userSummaryResponse{
 		ID:            s.ID,
@@ -187,5 +213,40 @@ func (h *handlers) adminSetStatus(w http.ResponseWriter, r *http.Request, action
 	web.RespondJSONOK(w, userStatusResponse{
 		User:    newUserSummaryResponse(summary),
 		Changed: change.Changed,
+	})
+}
+
+// adminEraseUser erases the target subject. A repeat is a 200 with
+// changed=false; an accepting invitation claim held for the target is 409 (the
+// operator settles it first); naming one's own account is 400.
+func (h *handlers) adminEraseUser(w http.ResponseWriter, r *http.Request) {
+	writeNoStore(w)
+	if !requireJSON(w, r) {
+		return
+	}
+	var body struct{}
+	if !strictJSONBody(w, r, &body, maxJSONBodyBytes) {
+		return
+	}
+	id := web.Param(r, "id")
+	principal, ok := h.adminPrincipal(w, r, UserAdminErase, id)
+	if !ok {
+		return
+	}
+	summary, erasure, err := h.eraser.EraseUser(r.Context(), principal, id)
+	if err != nil {
+		web.RespondJSONDomainError(w, err)
+		return
+	}
+	c := erasure.Counts
+	web.RespondJSONOK(w, userErasureResponse{
+		User:    newUserSummaryResponse(summary),
+		Changed: erasure.Changed,
+		Counts: eraseCountsResponse{
+			Sessions: c.Sessions, Grants: c.Grants, Passwords: c.Passwords, OAuthAccounts: c.OAuthAccounts,
+			ExternalSubjects: c.ExternalSubjects, ContactChanges: c.ContactChanges, Codes: c.Codes, Challenges: c.Challenges,
+			IdentifiersBlanked: c.IdentifiersBlanked, InvitationsDeleted: c.InvitationsDeleted, InvitationsBlanked: c.InvitationsBlanked,
+			InvitationsCancelled: c.InvitationsCancelled, ServiceAccounts: c.ServiceAccounts, APIKeys: c.APIKeys,
+		},
 	})
 }

@@ -825,7 +825,8 @@ func (s *Service) ListByResource(ctx context.Context, resourceType, resourceID s
 // ListActiveByResource returns a cursor-paginated page of a resource's pending
 // and accepting invitations by stored status (ordered created_at DESC, id DESC),
 // so terminal history never hides a live row. An expired but still pending row
-// is listed: it reserves its tuple until cancelled.
+// is listed: it reserves its tuple until cancelled or purged past
+// InvitationRetention (the maintenance service).
 //
 // The caller owns authorization before this read.
 func (s *Service) ListActiveByResource(ctx context.Context, in ActiveListInput, req list.Request) (list.Page[Invitation], error) {

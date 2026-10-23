@@ -4,6 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
+	"strings"
+	"time"
 
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/securityevent"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/user"
@@ -11,11 +14,26 @@ import (
 	"github.com/gopernicus/gopernicus/sdk/pkg/list"
 )
 
+// EraseTimeout bounds the erase transaction. EraseUser runs the store call
+// detached from the caller's cancellation — a client that disconnects cannot
+// roll back an erasure a moment from commit and make every retry repeat it —
+// so this is what stops a hung store from holding the request.
+const EraseTimeout = 30 * time.Second
+
 // ErrUserAdminUnavailable is returned by the user-administration service methods
 // when the administration repository is not wired. It wraps sdk.ErrNotFound so a
 // transport maps it to 404 — an unwired capability is absent, not forbidden.
 // Checked with errors.Is.
 var ErrUserAdminUnavailable = fmt.Errorf("auth: user administration repository is not wired: %w", sdk.ErrNotFound)
+
+// ErrUserErasureUnavailable is returned by EraseUser when the erasure
+// repository is not wired. It wraps sdk.ErrNotFound: an unwired capability is
+// absent, not forbidden.
+var ErrUserErasureUnavailable = fmt.Errorf("auth: user erasure repository is not wired: %w", sdk.ErrNotFound)
+
+// ErrEraseSelf is returned by EraseUser when the actor names their own account.
+// It wraps sdk.ErrInvalidInput (400).
+var ErrEraseSelf = fmt.Errorf("auth: an administrator cannot erase their own account: %w", sdk.ErrInvalidInput)
 
 // UserAdminEnabled reports whether the administration repository is wired. The
 // transport registers the bundled admin routes only when this is true AND a host
@@ -110,6 +128,9 @@ func (s *Service) SetUserStatus(ctx context.Context, actor Principal, id string,
 	if !status.Valid() {
 		return user.Summary{}, user.StatusChange{}, fmt.Errorf("auth: %q: %w", status, user.ErrInvalidStatus)
 	}
+	if status == user.StatusErased {
+		return user.Summary{}, user.StatusChange{}, fmt.Errorf("auth: erasure is EraseUser, not a status transition: %w", user.ErrErased)
+	}
 
 	change, err := s.userAdmin.SetStatus(ctx, id, status, s.now().UTC())
 	if err != nil {
@@ -158,4 +179,89 @@ func (s *Service) recordUserStatusChange(ctx context.Context, actor Principal, u
 			"revoked_sessions": change.RevokedSessions,
 		},
 	})
+}
+
+// UserErasureEnabled reports whether the erasure repository is wired. The
+// transport mounts the bundled erase route only when this is true AND the host
+// opted in (AdministrationConfig.UserErasureRoute).
+func (s *Service) UserErasureEnabled() bool { return s.userErasure != nil }
+
+// EraseUser erases the subject id and returns its summary afterwards with the
+// erasure outcome.
+//
+// The erasure is ONE store transaction (user.EraseRepository.Erase): the user is
+// marked erased and deactivated, its identifiers retired and blanked, its
+// credentials, links, mirrors, grants, sessions, codes and challenges deleted,
+// the invitations addressed to it deleted or blanked and the ones it issued
+// cancelled, its act-as-user service accounts and their keys deleted — and the
+// user_erased row, prepared here with the actor's attribution and client info,
+// is appended inside that transaction with the counts. Earlier security events
+// keep the subject's pseudonymous id; they age out under retention.
+//
+// A repeat is a no-op: Changed is false and nothing is recorded. An accepting
+// invitation claim held for the user is user.ErrEraseBlockedByClaim (409): the
+// operator settles the claim first. Erasing one's own account is ErrEraseSelf.
+// The store call runs detached from ctx's cancellation, bounded by
+// EraseTimeout.
+//
+// Erasure is not a ban: the external-subject mirror goes with it, so the same
+// provider subject signing in again provisions a fresh user. Deactivate to bar
+// a subject.
+//
+// TRUSTED: it applies NO authorization — see ListUsers.
+func (s *Service) EraseUser(ctx context.Context, actor Principal, id string) (user.Summary, user.Erasure, error) {
+	if s.userErasure == nil {
+		return user.Summary{}, user.Erasure{}, ErrUserErasureUnavailable
+	}
+	if s.userAdmin == nil {
+		return user.Summary{}, user.Erasure{}, ErrUserAdminUnavailable
+	}
+	if strings.TrimSpace(id) == "" {
+		return user.Summary{}, user.Erasure{}, fmt.Errorf("auth: erase: empty user id: %w", sdk.ErrInvalidInput)
+	}
+	if actor.ID == id {
+		return user.Summary{}, user.Erasure{}, ErrEraseSelf
+	}
+	keys, err := s.magicLinkSubjectKeys(ctx, id)
+	if err != nil {
+		return user.Summary{}, user.Erasure{}, err
+	}
+	evt, _ := s.securityEvents.Prepare(ctx, securityevent.Input{
+		UserID: id,
+		Actor:  securityevent.Principal{Type: actor.Type, ID: actor.ID},
+		Type:   securityevent.TypeUserErased,
+		Status: securityevent.StatusSuccess,
+	})
+	storeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), EraseTimeout)
+	defer cancel()
+	erasure, err := s.userErasure.Erase(storeCtx, user.EraseInput{ID: id, Now: s.now().UTC(), SubjectKeys: keys, Event: evt})
+	if err != nil {
+		return user.Summary{}, user.Erasure{}, err
+	}
+	summary, err := s.userAdmin.GetSummary(storeCtx, id)
+	if err != nil {
+		return user.Summary{}, erasure, err
+	}
+	return summary, erasure, nil
+}
+
+// magicLinkSubjectKeys returns the challenge subject keys of id's active
+// identifiers — the keys an address-keyed magic link carries, computed by the
+// same function that writes them.
+func (s *Service) magicLinkSubjectKeys(ctx context.Context, id string) ([]string, error) {
+	if s.identifiers == nil {
+		return nil, nil
+	}
+	idents, err := s.identifiers.ListByUser(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	keys := make([]string, 0, len(idents))
+	for _, ident := range idents {
+		key := s.magicLinkSubjectKey(string(ident.Kind), ident.NormalizedValue)
+		if !slices.Contains(keys, key) {
+			keys = append(keys, key)
+		}
+	}
+	return keys, nil
 }

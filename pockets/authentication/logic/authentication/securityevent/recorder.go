@@ -190,8 +190,28 @@ func NewRecorder(repo SecurityEventRepository, ids sdk.IDGenerator, now func() t
 // the failures since the previous line. A failure after a quiet minute starts
 // over with the detailed line.
 func (r *Recorder) Record(ctx context.Context, in Input) {
-	if r == nil || r.repo == nil {
+	evt, ok := r.Prepare(ctx, in)
+	if !ok {
 		return
+	}
+	detached := context.WithoutCancel(ctx)
+	writeCtx, cancel := context.WithTimeout(detached, r.timeout)
+	defer cancel()
+	if _, err := r.repo.Create(writeCtx, evt); err != nil {
+		r.failed(detached, WriteFailure{EventType: in.Type, EventStatus: in.Status, ErrorKind: ErrorKind(err)})
+	}
+}
+
+// Prepare builds the row Record would write for in — the id, the time, the
+// correlation ids, the client attribution and every BoundValue rule applied —
+// without writing it. ok is false when Record would write nothing: a nil
+// Recorder, one without a repository, or a Budgeted row the failure-row budget
+// refuses (the refusal is counted as Record counts it). A store that must
+// append the row inside its own transaction — the user erasure — receives the
+// prepared row and writes it there, so the evidence commits with the change.
+func (r *Recorder) Prepare(ctx context.Context, in Input) (SecurityEvent, bool) {
+	if r == nil || r.repo == nil {
+		return SecurityEvent{}, false
 	}
 	var ip, ua string
 	var stamped bool
@@ -200,9 +220,8 @@ func (r *Recorder) Record(ctx context.Context, in Input) {
 		stamped = ip != ""
 		ip, ua = BoundValue(FieldIPAddress, ip), BoundValue(FieldUserAgent, ua)
 	}
-	detached := context.WithoutCancel(ctx)
-	if in.Budgeted && !r.withinBudget(detached, ip, in.Type) {
-		return
+	if in.Budgeted && !r.withinBudget(context.WithoutCancel(ctx), ip, in.Type) {
+		return SecurityEvent{}, false
 	}
 	evt := New(r.ids, in.Type, in.Status, r.now())
 	evt.UserID = in.UserID
@@ -218,11 +237,7 @@ func (r *Recorder) Record(ctx context.Context, in Input) {
 	if id, ok := sdk.TraceIDFromContext(ctx); ok {
 		evt.TraceID = BoundValue(FieldTraceID, id)
 	}
-	writeCtx, cancel := context.WithTimeout(detached, r.timeout)
-	defer cancel()
-	if _, err := r.repo.Create(writeCtx, evt); err != nil {
-		r.failed(detached, WriteFailure{EventType: in.Type, EventStatus: in.Status, ErrorKind: ErrorKind(err)})
-	}
+	return evt, true
 }
 
 // WriteFailures returns how many writes have failed since construction; zero
