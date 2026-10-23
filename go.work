@@ -14,7 +14,6 @@ use (
 	./integrations/cryptids/go-oidc
 	./integrations/cryptids/golang-jwt
 	./integrations/cryptids/google-uuid
-	./integrations/datastores/firestore
 	./integrations/datastores/pgxdb
 	./integrations/datastores/turso
 	./integrations/email/sendgrid
@@ -27,7 +26,6 @@ use (
 	./integrations/tracing/otel
 	./pockets
 	./pockets/authentication
-	./pockets/authentication/stores/firestore
 	./pockets/authentication/stores/pgx
 	./pockets/authentication/stores/turso
 	./pockets/authentication/views/goth
