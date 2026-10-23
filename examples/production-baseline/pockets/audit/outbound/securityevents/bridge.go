@@ -11,7 +11,7 @@
 // writing a row per request: at most WithMaxInFlight writes run at once and an
 // event arriving while they all do is dropped and counted (Dropped), and one
 // row is written per (event type, principal, permission, resource type,
-// resource id) per WithDedupe window.
+// resource id, client IP) per WithDedupe window.
 package securityevents
 
 import (
@@ -22,6 +22,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	authlogic "github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/securityevent"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/decisions"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/cacher"
@@ -58,8 +59,8 @@ func WithMaxInFlight(n int) Option {
 }
 
 // WithDedupe sets where the dedupe window is kept and how long it lasts: one
-// row per (event type, principal, permission, resource type, resource id) per
-// window. A nil store selects an in-memory cache and a nonpositive window the
+// row per (event type, principal, permission, resource type, resource id,
+// client IP) per window, so a second address records its own row. A nil store selects an in-memory cache and a nonpositive window the
 // default, 60 s. The memory default dedupes per instance; a store the fleet
 // shares dedupes across it.
 func WithDedupe(store cacher.Storer, window time.Duration) Option {
@@ -130,7 +131,8 @@ func (b *Bridge) Dropped() uint64 {
 // in-flight slot is taken. A dedupe store error records: the bridge fails
 // toward recording.
 func (b *Bridge) record(ctx context.Context, ev decisions.DecisionEvent, in securityevent.Input) {
-	key := dedupeKey(in.Type, ev)
+	ip, _ := authlogic.ClientInfoFromContext(ctx)
+	key := dedupeKey(in.Type, ev, ip)
 	if _, seen, err := b.store.Get(ctx, key); err == nil && seen {
 		return
 	}
@@ -146,11 +148,11 @@ func (b *Bridge) record(ctx context.Context, ev decisions.DecisionEvent, in secu
 }
 
 // dedupeKey names one (event type, principal, permission, resource type,
-// resource id). The fields are length-prefixed before hashing, so no two
-// distinct tuples share a key.
-func dedupeKey(eventType string, ev decisions.DecisionEvent) string {
+// resource id, client IP). The fields are length-prefixed before hashing, so
+// no two distinct tuples share a key.
+func dedupeKey(eventType string, ev decisions.DecisionEvent, ip string) string {
 	h := sha256.New()
-	for _, field := range []string{ev.Principal.Type, ev.Principal.ID, ev.Permission, ev.ResourceType, ev.ResourceID} {
+	for _, field := range []string{ev.Principal.Type, ev.Principal.ID, ev.Permission, ev.ResourceType, ev.ResourceID, ip} {
 		h.Write([]byte(strconv.Itoa(len(field))))
 		h.Write([]byte{':'})
 		h.Write([]byte(field))

@@ -34,6 +34,10 @@ const (
 	// failureRowKeyPrefix scopes the failure-row budget's limiter keys; the
 	// client IP's digest follows it.
 	failureRowKeyPrefix = "securityevent:failure-row:ip:"
+
+	// unattributedMessage is the stable message of the one missing-attribution
+	// WARN.
+	unattributedMessage = "security event recorded without client attribution; mount ClientInfoMiddleware"
 )
 
 // RecorderOption configures NewRecorder. A nil option is ignored.
@@ -95,6 +99,9 @@ type Recorder struct {
 	budget      ratelimiter.Allower
 	budgetLimit ratelimiter.Limit
 
+	warnUnattributed bool
+	unattributedOnce sync.Once
+
 	failures       atomic.Uint64
 	rowsSuppressed atomic.Uint64
 
@@ -131,6 +138,17 @@ func WithWriteObserver(observer WriteObserver) RecorderOption {
 // A nil limiter leaves every row unbudgeted.
 func WithFailureRowBudget(limiter ratelimiter.Allower, limit ratelimiter.Limit) RecorderOption {
 	return func(r *Recorder) { r.budget, r.budgetLimit = limiter, limit }
+}
+
+// WithMissingAttributionWarning makes Record log one WARN per Recorder — once
+// per process for the pocket's one recorder — the first time it records a row
+// whose context carries a request id but whose client-info reader returned no
+// IP: a request on a host route ClientInfoMiddleware did not stamp. A stamped
+// request always carries at least the peer address, and a row without a
+// request id (background work) never warns. The pocket root enables it in
+// production.
+func WithMissingAttributionWarning() RecorderOption {
+	return func(r *Recorder) { r.warnUnattributed = true }
 }
 
 // NewRecorder returns a Recorder appending to repo, minting event ids from ids
@@ -176,8 +194,10 @@ func (r *Recorder) Record(ctx context.Context, in Input) {
 		return
 	}
 	var ip, ua string
+	var stamped bool
 	if r.clientInfo != nil {
 		ip, ua = r.clientInfo(ctx)
+		stamped = ip != ""
 		ip, ua = BoundValue(FieldIPAddress, ip), BoundValue(FieldUserAgent, ua)
 	}
 	detached := context.WithoutCancel(ctx)
@@ -191,6 +211,9 @@ func (r *Recorder) Record(ctx context.Context, in Input) {
 	evt.IPAddress, evt.UserAgent = ip, ua
 	if id, ok := sdk.RequestIDFromContext(ctx); ok {
 		evt.RequestID = BoundValue(FieldRequestID, id)
+		if !stamped && r.warnUnattributed {
+			r.unattributedOnce.Do(func() { r.log.Warn(unattributedMessage, "event_type", in.Type) })
+		}
 	}
 	if id, ok := sdk.TraceIDFromContext(ctx); ok {
 		evt.TraceID = BoundValue(FieldTraceID, id)

@@ -91,9 +91,10 @@ type clientInfo struct {
 
 // WithClientInfo returns a copy of ctx carrying the request's client IP and
 // User-Agent. It is EXPORTED because the write site lives OUTSIDE authentication service — the
-// pocket's HTTP middleware (inbound/http) sets it over ALL routes,
-// unauthenticated ones included, so failed logins, registrations, and OAuth
-// callbacks all produce attributed audit rows. It is the ONE write point: login
+// pocket's HTTP middleware (inbound/http) sets it over the pocket's routes,
+// unauthenticated ones included, and every host route behind
+// ClientInfoMiddleware, so failed logins, registrations, OAuth callbacks and
+// host-route denials all produce attributed audit rows. It is the ONE write point: login
 // and token issuance read their rate-limit IP from the same carrier, and the
 // security-event writer reads IP+UA from it (design §5.1 WI4 — one write point,
 // one read path; the separate clientIP request plumbing is retired).

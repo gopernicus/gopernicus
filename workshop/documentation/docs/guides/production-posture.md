@@ -110,8 +110,13 @@ names. The scaffold wires the chosen connector.
   refuses a plaintext or unverified target unless acknowledged; set `sslmode=verify-full` and
   treat the DSN as a secret.
 - **Client IP attribution** relies on `web.TrustProxies` running first; the scaffold and every
-  example install it (guard P2), so audit rows and per-IP budgets see the client, not the
-  proxy.
+  example install it (guard P2). It makes audit rows and per-IP budgets see the client, not the
+  proxy, only on routes that carry the authentication pocket's client-info stamp: the pocket's
+  own routes always, a host route once the host installs
+  `router.Use(authenticationComponents.HTTP.ClientInfoMiddleware())` after the `TrustProxies`
+  `Use` (auth-cms and production-baseline do). Without it a host route's audit rows carry no
+  IP or User-Agent and production logs one `mount ClientInfoMiddleware` WARN. Attribution is
+  only as good as `TRUSTED_PROXY_COUNT` and an origin reachable solely through those proxies.
 - **Redis is inside the authorization trust boundary when TupleCache is on.** Cached tuple
   sets are not signed; write access to that Redis is equivalent to write access to the
   authorization database. Run it dedicated, with TLS and AUTH, and treat it as an in-scope

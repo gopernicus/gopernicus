@@ -509,3 +509,44 @@ func TestRecorderFailureRowBudget(t *testing.T) {
 		}
 	})
 }
+
+// TestRecorderMissingAttributionWarning pins the production signal for a host
+// route serving without ClientInfoMiddleware: a request-id row with no client
+// IP warns once per Recorder, and never without the option or for a
+// background row.
+func TestRecorderMissingAttributionWarning(t *testing.T) {
+	reader := func(ip string) RecorderOption {
+		return WithClientInfoReader(func(context.Context) (string, string) { return ip, "" })
+	}
+	request := sdk.WithRequestID(context.Background(), "req-1")
+	row := Input{Type: TypeLogin, Status: StatusFailure}
+	for _, tc := range []struct {
+		name string
+		opts []RecorderOption
+		ctx  context.Context
+		want int
+	}{
+		{"an unattributed request row warns once", []RecorderOption{reader(""), WithMissingAttributionWarning()}, request, 1},
+		{"no reader warns once", []RecorderOption{WithMissingAttributionWarning()}, request, 1},
+		{"an attributed request row never warns", []RecorderOption{reader("203.0.113.7"), WithMissingAttributionWarning()}, request, 0},
+		{"a stamped but unparsable IP never warns", []RecorderOption{reader("pipe"), WithMissingAttributionWarning()}, request, 0},
+		{"a background row never warns", []RecorderOption{reader(""), WithMissingAttributionWarning()}, context.Background(), 0},
+		{"without the option never warns", []RecorderOption{reader("")}, request, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := &recordingRepo{}
+			logger, buf := warnLogger()
+			rec := NewRecorder(repo, sdk.IDGenerator{}, nil, logger, tc.opts...)
+			for range 3 {
+				rec.Record(tc.ctx, row)
+			}
+			if n := len(repo.recorded()); n != 3 {
+				t.Fatalf("recorded %d rows, want 3: the warning never refuses a row", n)
+			}
+			got := strings.Count(buf.String(), "level=WARN")
+			if got != tc.want || (tc.want == 1 && !strings.Contains(buf.String(), "mount ClientInfoMiddleware")) {
+				t.Fatalf("logged %d WARNs, want %d naming ClientInfoMiddleware:\n%s", got, tc.want, buf.String())
+			}
+		})
+	}
+}

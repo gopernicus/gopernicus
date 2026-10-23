@@ -6,6 +6,7 @@ import (
 	"sync"
 	"testing"
 
+	authlogic "github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/securityevent"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/decisions"
 	"github.com/gopernicus/gopernicus/sdk"
@@ -166,5 +167,24 @@ func TestDedupeWindowCollapsesIdenticalDenials(t *testing.T) {
 	}
 	if got := bridge.Dropped(); got != 0 {
 		t.Fatalf("Dropped = %d, want 0", got)
+	}
+}
+
+// TestDedupeWindowKeysByClientAddress proves the window is per address: the
+// same denial from a second client IP records its own row, and a repeat from
+// either address records nothing.
+func TestDedupeWindowKeysByClientAddress(t *testing.T) {
+	rec := &memoryRecorder{}
+	observe := New(rec)
+	first := authlogic.WithClientInfo(context.Background(), "203.0.113.7", "agent/1")
+	second := authlogic.WithClientInfo(context.Background(), "203.0.113.8", "agent/1")
+	for _, ctx := range []context.Context{first, second, first, second} {
+		observe(ctx, denial("p1"))
+	}
+	if got := len(rec.recorded()); got != 2 {
+		t.Fatalf("rows = %d, want one per client address", got)
+	}
+	if dedupeKey(decisions.EventAuthorizationDenied, denial("p1"), "203.0.113.7") == dedupeKey(decisions.EventAuthorizationDenied, denial("p1"), "203.0.113.8") {
+		t.Fatal("two client addresses share a dedupe key")
 	}
 }

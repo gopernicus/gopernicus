@@ -356,7 +356,7 @@ func (h *handlers) oauth2ClientProof(w http.ResponseWriter, r *http.Request, for
 }
 
 func (h *handlers) oauth2Limit(w http.ResponseWriter, r *http.Request, endpoint, clientID string, perMinute int) bool {
-	if !h.oauth2LimitClient(w, r, endpoint+":ip", clientIPFromContext(r.Context()), perMinute) {
+	if !h.oauth2LimitClient(w, r, endpoint+":ip", clientIPFor(r), perMinute) {
 		return false
 	}
 	return clientID == "" || h.oauth2LimitClient(w, r, endpoint+":client", clientID, perMinute*10)

@@ -18,7 +18,9 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
+	"time"
 
 	"github.com/gopernicus/gopernicus/examples/production-baseline/integrations/authentication/devissuer"
 	"github.com/gopernicus/gopernicus/examples/production-baseline/pockets/audit/outbound/securityevents"
@@ -250,7 +252,8 @@ func newProvider(ctx context.Context, router *web.WebHandler, origin string, mod
 // administration behind authenticate ∘ browser-safe mutation ∘ the global
 // admin role; its denials and refused role writes reach the security-event
 // rail through the host's decision bridge. It returns the audit-loss counters
-// /healthz reports.
+// /healthz reports. Authentication's client-info stamp covers every route on
+// router, inside the TrustProxies Use newRouter installed.
 func mount(router *web.WebHandler, c composition) (auditCounters, error) {
 	signer, err := golangjwt.New(string(c.keys.JWTSecret))
 	if err != nil {
@@ -271,15 +274,13 @@ func mount(router *web.WebHandler, c composition) (auditCounters, error) {
 			ProvisionOnFirstVerification: true,
 			RequireVerifiedEmail:         true,
 		}}}),
-		authentication.WithAuditWriteObserver(func(ctx context.Context, failure securityevent.WriteFailure) {
-			c.log.ErrorContext(ctx, "security event not recorded",
-				"event_type", failure.EventType, "status", failure.EventStatus, "error_kind", failure.ErrorKind)
-		}),
+		authentication.WithAuditWriteObserver((&auditWriteLog{log: c.log, now: time.Now}).observe),
 		authentication.WithLogger(c.log),
 	)
 	if err != nil {
 		return auditCounters{}, err
 	}
+	router.Use(authenticationComponents.HTTP.ClientInfoMiddleware())
 	m := pockets.Mount{Router: router, Logger: c.log}
 	if err := authenticationComponents.HTTP.Register(m); err != nil {
 		return auditCounters{}, err
@@ -346,9 +347,45 @@ func accessModel() decisions.Model {
 // on every project.
 func adminWritesAnyRole(context.Context, authorizationhttp.RoleWriteRequest) error { return nil }
 
+// auditWriteLog is the audit-write observer, throttled so a failing audit
+// store cannot flood the log: the first lost security-event row after a quiet
+// minute logs at ERROR with its fields, later ones inside the minute are only
+// counted, and the first one a minute on logs the count.
+type auditWriteLog struct {
+	log     *slog.Logger
+	now     func() time.Time
+	mu      sync.Mutex
+	last    time.Time
+	pending uint64
+}
+
+func (a *auditWriteLog) observe(ctx context.Context, failure securityevent.WriteFailure) {
+	a.mu.Lock()
+	now := a.now()
+	quiet := a.last.IsZero() || now.Sub(a.last) >= time.Minute
+	var count uint64
+	switch {
+	case quiet && a.pending == 0:
+		a.last = now
+	case quiet:
+		count, a.last, a.pending = a.pending+1, now, 0
+	default:
+		a.pending++
+		a.mu.Unlock()
+		return
+	}
+	a.mu.Unlock()
+	if count > 0 {
+		a.log.ErrorContext(ctx, "security event not recorded", "count", count)
+		return
+	}
+	a.log.ErrorContext(ctx, "security event not recorded",
+		"event_type", failure.EventType, "status", failure.EventStatus, "error_kind", failure.ErrorKind)
+}
+
 // auditCounters reads the audit-loss counters /healthz reports: security-event
-// writes that failed, and denials the decision bridge dropped at its in-flight
-// bound.
+// writes that failed, failure rows the per-IP budget suppressed, and denials
+// the decision bridge dropped at its in-flight bound.
 type auditCounters struct {
 	authentication *authentication.Components
 	bridge         *securityevents.Bridge
@@ -357,8 +394,9 @@ type auditCounters struct {
 // detail is the /healthz detail object.
 func (a auditCounters) detail() map[string]uint64 {
 	return map[string]uint64{
-		"audit_write_failures": a.authentication.AuditWriteFailures(),
-		"bridge_dropped":       a.bridge.Dropped(),
+		"audit_write_failures":  a.authentication.AuditWriteFailures(),
+		"audit_rows_suppressed": a.authentication.AuditRowsSuppressed(),
+		"bridge_dropped":        a.bridge.Dropped(),
 	}
 }
 
