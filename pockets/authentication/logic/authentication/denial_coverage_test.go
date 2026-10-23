@@ -80,7 +80,8 @@ func wrongCodeFor(code string) string {
 
 // TestCredentialDenialsRecordAlike pins IssueToken's denial rows and their
 // parity with Login: both record the same status, reason and attribution
-// through recordCredentialOutcome, and token_issued never carries the address.
+// through recordCredentialOutcome, and neither carries the address (login
+// carries its digest, AUDIT-054).
 func TestCredentialDenialsRecordAlike(t *testing.T) {
 	const address = "parity@example.com"
 	cases := []struct {
@@ -129,9 +130,7 @@ func TestCredentialDenialsRecordAlike(t *testing.T) {
 					want = u.ID
 				}
 				requireDenial(t, h.events, op, tc.status, tc.reason, want)
-				if op == securityevent.TypeTokenIssued {
-					assertNoSecretInDetails(t, h.events.recorded(), tc.attempt, tc.password, denialPassword)
-				}
+				assertNoAddressInDetails(t, h.events.recorded(), tc.attempt, tc.password, denialPassword)
 			})
 		}
 	}

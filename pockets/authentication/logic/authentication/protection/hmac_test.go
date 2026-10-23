@@ -1,6 +1,9 @@
 package protection
 
 import (
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"strings"
 	"testing"
@@ -278,6 +281,43 @@ func TestIdentifierKeyer(t *testing.T) {
 
 	if _, err := NewHMACIdentifierKeyer(make([]byte, minKeyBytes-1)); !errors.Is(err, ErrIdentifierKeyTooShort) {
 		t.Errorf("short key: err=%v, want ErrIdentifierKeyTooShort", err)
+	}
+}
+
+// TestIdentifierKeyAuditRecipe pins the HMAC input the AUDIT-054 lookup recipe
+// rebuilds in the shell: three fields — the domain label, the kind and the
+// normalized value — each an 8-byte big-endian BYTE length then the bytes, under
+// HMAC-SHA-256 keyed with the hex-decoded AUTH_IDENTIFIER_KEY. Each want value is
+// what the recipe printed for that key and value, so a change to the keyer's
+// construction fails here before it silently falsifies the recipe.
+func TestIdentifierKeyAuditRecipe(t *testing.T) {
+	key, err := hex.DecodeString("000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f")
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyer, err := NewHMACIdentifierKeyer(key)
+	if err != nil {
+		t.Fatalf("NewHMACIdentifierKeyer: %v", err)
+	}
+	const prefix = "\x00\x00\x00\x00\x00\x00\x00\x21gopernicus.auth.identifier-key.v1" + "\x00\x00\x00\x00\x00\x00\x00\x05email"
+	long := strings.Repeat("a", 288) + "@example.com"
+	for _, tc := range []struct {
+		value, input, recipe string
+	}{
+		{"alice@example.com", prefix + "\x00\x00\x00\x00\x00\x00\x00\x11alice@example.com",
+			"35916db2967bd336a7f3e7b94ebee7e4cd70017d104cb28c7427e8d77a51f478"},
+		{"jos\u00e9@example.com", prefix + "\x00\x00\x00\x00\x00\x00\x00\x11jos\u00e9@example.com",
+			"46167489a92ee365470faef711ec8aee73d12b11043beb95da3f2d361aad5b71"},
+		{long, prefix + "\x00\x00\x00\x00\x00\x00\x01\x2c" + long,
+			"9c3d50a74975a7387f4034c14f23cc787342d6bb1bae63de90f312fda4eab059"},
+	} {
+		mac := hmac.New(sha256.New, key)
+		mac.Write([]byte(tc.input))
+		documented := hex.EncodeToString(mac.Sum(nil))
+		got := keyer.IdentifierKey("email", tc.value)
+		if got != documented || got != tc.recipe {
+			t.Errorf("IdentifierKey(email, %.20q…) = %s; documented input digests to %s, recipe printed %s", tc.value, got, documented, tc.recipe)
+		}
 	}
 }
 

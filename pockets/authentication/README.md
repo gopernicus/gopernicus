@@ -3363,9 +3363,11 @@ credential rail is unwired.
   counted (`Components.AuditWriteFailures()`) and reported to
   `WithAuditWriteObserver` — see [the recorder](#the-recorder-one-per-pocket).
 - **PII masking / retention / redress.** Identifier values are masked in reads and
-  in audit rows — except the invitation rail, whose `invitation_created`,
-  `invitation_granted` and resend rows carry the raw invitee address in
-  `details.identifier` today (a kind + digest is planned, SOC 2 slice S2); an identifier change fans an independent notice to previously
+  never land in audit rows: `login` and invitation rows carry `identifier_kind` +
+  `identifier_digest` (the `IdentifierKeyer` HMAC), never the address — see
+  [AUDIT-054](../../AUDIT.md#audit-054-audit-details-carry-identifier-digests-not-addresses)
+  for the digest lookup recipe (rows written before it keep their raw
+  `details.email` / `details.identifier`); an identifier change fans an independent notice to previously
   verified channels (never only the newly bound address), carrying change time +
   client context + a host redress path so a victim of a hostile change can react.
 
@@ -3456,7 +3458,7 @@ of refusal only — never an error message, address, code or token.
 
 | path | type | denials |
 |---|---|---|
-| `Login`, `IssueToken` (`POST /auth/token`) | `login`, `token_issued` | failure `invalid_credentials` / `email_unverified`; blocked `rate_limited` / `inactive`; one shared classification, so both record alike (`token_issued` carries no address) |
+| `Login`, `IssueToken` (`POST /auth/token`) | `login`, `token_issued` | failure `invalid_credentials` / `email_unverified`; blocked `rate_limited` / `inactive`; one shared classification, so both record alike (`login` carries `identifier_kind` + `identifier_digest`, AUDIT-054; `token_issued` carries no address) |
 | `ChangePassword` | `password_change` | failure `invalid_credentials` (wrong current password), `policy` (rejected new password) |
 | `SetPassword` | `password_set` | failure `policy`, `invalid_token` (no recent-authentication grant) |
 | `ResetPassword` | `password_reset` | failure `invalid_token`, `policy`; no `UserID` — the token resolved none |
