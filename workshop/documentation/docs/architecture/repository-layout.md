@@ -13,7 +13,7 @@ gopernicus/
 │   ├── pkg/              mechanism and vocabulary
 │   └── capabilities/            ports plus shared policy
 ├── integrations/                reusable technology connectors
-│   ├── datastores/{pgxdb,turso,firestore}
+│   ├── datastores/{pgxdb,turso}
 │   ├── cryptids/*
 │   ├── filestorage/*
 │   ├── kvstores/goredis
@@ -23,7 +23,7 @@ gopernicus/
 │   │   ├── logic/               public services, owned types and ports
 │   │   ├── inbound/http/        public HTTP adapter and middleware
 │   │   ├── stores/storetest/    exported repository conformance
-│   │   ├── stores/{pgx,turso,firestore}/  independent store modules
+│   │   ├── stores/{pgx,turso}/  independent store modules
 │   │   └── views/goth/          independent presentation module
 │   ├── authorization/           core with public stores/memory; stores/{pgx,turso,goredis} modules
 │   └── ...

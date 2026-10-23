@@ -125,7 +125,7 @@ transaction, does not automatically become atomic with a later write.
 
 ## Prove parity
 
-Hermetic `make check` lets live datastore suites skip loudly. Milestone/release proof runs them against real PostgreSQL and Turso, and the Firestore emulator, with race detection where applicable.
+Hermetic `make check` lets live datastore suites skip loudly. Milestone/release proof runs them against real PostgreSQL and Turso, with race detection where applicable.
 
 ```bash
 POSTGRES_TEST_DSN='postgres://…?sslmode=disable' make test-stores

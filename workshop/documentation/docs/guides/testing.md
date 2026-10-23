@@ -62,7 +62,7 @@ POSTGRES_TEST_DSN='postgres://postgres:postgres@localhost:5432/postgres?sslmode=
   make test-stores
 ```
 
-Turso legs need `TURSO_DATABASE_URL` and `TURSO_AUTH_TOKEN` and compile with `-tags=integration`. Firestore legs (the connector and the authentication store) run against `FIRESTORE_EMULATOR_HOST` and skip loudly when it is unset; the authentication leg is slow, with a 45-minute timeout. Use disposable databases. Some suites exercise concurrency, claims, and migration state destructively within their own test data.
+Turso legs need `TURSO_DATABASE_URL` and `TURSO_AUTH_TOKEN` and compile with `-tags=integration`. Use disposable databases. Some suites exercise concurrency, claims, and migration state destructively within their own test data.
 
 ## Architecture guards
 

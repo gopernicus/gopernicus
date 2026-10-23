@@ -8,14 +8,13 @@ infrastructure. Gopernicus is open source under the [MIT License](LICENSE),
 very much a work in progress, and not stable. See [ARCHITECTURE.md](ARCHITECTURE.md)
 for the full layering rules and [NOTES.md](NOTES.md) for the decision log.
 
-## The forty-nine modules
+## The forty-seven modules
 
 ```
 sdk/                                stdlib-only, layered: root = kernel; pkg/ + capabilities/ (empty go.mod = structural enforcement)
 integrations/cryptids/bcrypt/       password-hashing connector (x/crypto), its own module
 integrations/cryptids/golang-jwt/   JWT-signing connector (golang-jwt/jwt v5), its own module
 integrations/cryptids/google-uuid/  uuid ID-generation connector (google/uuid v4/v7), its own module
-integrations/datastores/firestore/  reusable Google Cloud Firestore connector (Native mode; sdk + cloud.google.com/go/firestore), its own module
 integrations/datastores/pgxdb/        reusable Postgres connector (sdk + pgx/v5), its own module
 integrations/datastores/turso/      reusable Turso/libSQL connector (sdk + libsql), its own module
 integrations/email/sendgrid/        SendGrid email connector (sendgrid-go), its own module
@@ -30,7 +29,6 @@ pockets/                           shared host-contract module; requires SDK onl
 pockets/authentication/                      session-auth hexagon — public logic services and HTTP adapters; datastore-free
 pockets/authentication/stores/pgx/           auth's pgx store adapter, its own module
 pockets/authentication/stores/turso/         auth's Turso store adapter, its own module
-pockets/authentication/stores/firestore/     auth's Firestore store adapter (Native mode; no ambient-transaction join — ruling R1), its own module
 pockets/authentication/views/goth/           auth's bundled default views (ui/goth), its own module
 pockets/authorization/             IAM hexagon — one canonical tuple authority for exact roles and optional graph permissions; datastore-free; public stores/memory
 pockets/authorization/stores/pgx/  authorization's pgx store adapter, its own module
@@ -119,9 +117,9 @@ make migrate           # applies examples/cms/workshop/migrations pre-boot
 make run                # or: cd examples/cms && go run ./cmd/server
 ```
 
-From the repo root, `make check` builds, vets, and tests all forty-nine modules
+From the repo root, `make check` builds, vets, and tests all forty-seven modules
 and runs the twenty-three layering guards; `make test-stores` runs the live dialect
-conformance suites (expects `POSTGRES_TEST_DSN` / `TURSO_*` / `FIRESTORE_EMULATOR_HOST`). See [examples/cms/README.md](examples/cms/README.md)
+conformance suites (expects `POSTGRES_TEST_DSN` / `TURSO_*`). See [examples/cms/README.md](examples/cms/README.md)
 for that host's full env/make-target reference.
 
 ## Documentation

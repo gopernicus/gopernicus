@@ -75,21 +75,8 @@ reviewer is written here and enforced by configuration, not by habit:
 
 CI runs on GitHub-hosted runners with a read-only default workflow token. The hermetic
 `check` and `vuln` jobs use no secrets. The live-store workflow (`.github/workflows/live-stores.yml`)
-uses repository secrets for the Turso playground and, once a GCP project is provisioned
-(it was not, as of the workflow header dated 2026-09-09), a Firestore service-account key:
-
-- A service-account key does not expire on its own. Owner target: rotate every 90 days and
-  immediately after any run whose logs are suspect; the key is decoded into `$RUNNER_TEMP`
-  for one ephemeral VM and shredded by an `always()` step.
-- **Target state, not yet implemented:** Workload Identity Federation, which removes the
-  long-lived key. On the GCP side the owner (1) creates a workload identity pool and an OIDC
-  provider for `https://token.actions.githubusercontent.com` with the attribute condition
-  `assertion.repository == "gopernicus/gopernicus"`, (2) grants the service account
-  `roles/iam.workloadIdentityUser` on that pool's principal set for the repository plus the
-  Firestore roles the job needs; then the workflow change is `permissions: id-token: write`
-  on the live job and `google-github-actions/auth` (SHA-pinned) with
-  `workload_identity_provider` and `service_account`, after which the key secret and the
-  base64-decode and shred steps are deleted.
+uses repository secrets for the Turso playground only; no cloud service-account credential
+exists in CI.
 
 ## Where the evidence lives
 

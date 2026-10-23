@@ -555,8 +555,8 @@ Those results do not certify this revision.
 ## Current verification boundaries
 
 The canonical suite uses memory, disposable local SQLite, PostgreSQL and Redis.
-Remote Turso is not covered by those local runs. Authorization Firestore has
-been removed. Ordinary PostgreSQL READ COMMITTED transactions remain suitable
+Remote Turso is not covered by those local runs.
+Ordinary PostgreSQL READ COMMITTED transactions remain suitable
 for raw single reads and writes, while compound authorization reads require a
 verified REPEATABLE READ or SERIALIZABLE ambient transaction.
 

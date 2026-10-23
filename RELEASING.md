@@ -1,5 +1,30 @@
 # Releasing gopernicus modules
 
+## Retired: Firestore stores (no tags — owner ruling 2026-10-23)
+
+`integrations/datastores/firestore` and `pockets/authentication/stores/firestore` left the
+workspace in #153; the authorization Firestore store was retired earlier (AUDIT-040). Guard G24
+(`guard-firestore-mediation`) is retired with them and its number is not reused. Retired modules
+are frozen at their last published version; a deletion gets no tag and no retraction. These tags
+stay on the proxy with their original contracts:
+
+```
+integrations/datastores/firestore/v0.1.0-beta.1
+integrations/datastores/firestore/v0.1.0            @ 10e5f97b  2026-09-13   (last)
+pockets/authentication/stores/firestore/v0.1.0-beta.1
+pockets/authentication/stores/firestore/v0.1.0
+pockets/authentication/stores/firestore/v0.1.1
+pockets/authentication/stores/firestore/v0.2.0     @ 6a399d1e  2026-09-18   (last)
+pockets/authorization/stores/firestore/v0.1.0-beta.1 … v0.3.0              (already retired, AUDIT-040)
+```
+
+S2's side of the ruling is item (l) of
+[Audit completeness and integrity](#audit-completeness-and-integrity-soc-2-slice-s2--published-2026-10-23)
+below. The pre-retirement tree is reachable at the repository ref
+`archive/firestore-stores-2026-10-23` (#153's parent, `f73e70a1`; not a module tag). Consumer
+guidance:
+[AUDIT-055](AUDIT.md#audit-055-retire-the-firestore-connector-and-the-authentication-firestore-adapter).
+
 ## Audit completeness and integrity (SOC 2 slice S2 — published 2026-10-23)
 
 Fourteen annotated tags (not signed), each cut at its PR's squash-merge commit on `main`,

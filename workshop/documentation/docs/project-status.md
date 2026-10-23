@@ -13,8 +13,8 @@ Gopernicus is an open-source, actively developed multi-module repository release
 - web server/router helpers, middleware, JSON and HTML responses, SSE, static files, and server lifecycle;
 - reusable capabilities for cache, email, events, file storage, notification, OAuth, rate limiting, tracing, and work submission;
 - authentication, authorization, CMS, events, and jobs pocket cores;
-- PostgreSQL and Turso store modules for every shipped durable pocket, a Firestore store for authentication, and a Redis tuple mirror for authorization;
-- reusable integrations for databases (PostgreSQL, Turso, Firestore), cryptography/IDs, email, object storage, Redis, OAuth, scheduling, and OpenTelemetry;
+- PostgreSQL and Turso store modules for every shipped durable pocket and a Redis tuple mirror for authorization;
+- reusable integrations for databases (PostgreSQL, Turso), cryptography/IDs, email, object storage, Redis, OAuth, scheduling, and OpenTelemetry;
 - complete `ui/goth` component system and pocket view adapters;
 - an API-only host shape and a React/TanStack client integration guide;
 - zero-infrastructure and datastore-backed example hosts;
