@@ -1,8 +1,11 @@
 package pgxdb
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"fmt"
+	"log/slog"
 	"strings"
 	"testing"
 
@@ -432,6 +435,310 @@ func TestAppendOnlyPosture(t *testing.T) {
 			t.Fatalf("clean production logged:\n%s", buf)
 		}
 	})
+}
+
+// purgeSignature is the definer function the hand-built reports list.
+const purgeSignature = "security_events_purge_before(pg_catalog.timestamptz, pg_catalog.int4)"
+
+// definerRow is a hand-built FunctionPrivilege for a clean definer function in
+// schema public, owned by the table's owner, EXECUTE held by the role.
+func definerRow() FunctionPrivilege {
+	return FunctionPrivilege{
+		Exists: true, SecurityDefiner: true, SearchPathPinned: true, SameNamespace: true,
+		OwnerIsTableOwner: true, Execute: true,
+		function:  "public.security_events_purge_before(timestamp with time zone, integer)",
+		namespace: "public", schema: "public", tableOwner: "migrator",
+	}
+}
+
+// withFunctions returns p listing the functions, keyed by signature.
+func withFunctions(p TablePrivilege, functions map[string]FunctionPrivilege) TablePrivilege {
+	p.Functions = functions
+	return p
+}
+
+// TestFunctionPrivilege_Policy is the definer-function matrix: unsafe is
+// PUBLIC EXECUTE, a search_path not pinned or not canonical, or a foreign
+// namespace; inoperative is not SECURITY DEFINER, a foreign owner, a
+// superuser owner or CREATE on the schema; an absent function is neither; and
+// no function state moves Writable, CannotAppend or ProtectedBy.
+func TestFunctionPrivilege_Policy(t *testing.T) {
+	cases := []struct {
+		name        string
+		mutate      func(*FunctionPrivilege)
+		unsafe      bool
+		inoperative bool
+	}{
+		{"clean", func(*FunctionPrivilege) {}, false, false},
+		{"clean_without_execute", func(f *FunctionPrivilege) { f.Execute = false }, false, false},
+		{"absent", func(f *FunctionPrivilege) { *f = FunctionPrivilege{} }, false, false},
+		{"absent_with_bits", func(f *FunctionPrivilege) { f.Exists, f.PublicExecute, f.SecurityDefiner = false, true, false }, false, false},
+		{"public_execute", func(f *FunctionPrivilege) { f.PublicExecute = true }, true, false},
+		{"search_path_unpinned", func(f *FunctionPrivilege) { f.SearchPathPinned = false }, true, false},
+		{"foreign_namespace", func(f *FunctionPrivilege) { f.SameNamespace = false }, true, false},
+		{"not_definer", func(f *FunctionPrivilege) { f.SecurityDefiner = false }, false, true},
+		{"foreign_owner", func(f *FunctionPrivilege) { f.OwnerIsTableOwner = false }, false, true},
+		{"superuser_owner", func(f *FunctionPrivilege) { f.OwnerSuperuser = true }, false, true},
+		{"schema_create", func(f *FunctionPrivilege) { f.PathSchemaCreate = true }, false, true},
+		{"both", func(f *FunctionPrivilege) { f.PublicExecute, f.SecurityDefiner = true, false }, true, true},
+	}
+	tables := map[string]TablePrivilege{
+		"insert_only":     appendOnlyRow("security_events"),
+		"verified_grants": verified(func() TablePrivilege { p := appendOnlyRow("security_events"); p.Update = true; return p }()),
+		"owner": func() TablePrivilege {
+			p := appendOnlyRow("security_events")
+			p.Owner, p.OwnerKind = true, ownerTable
+			return p
+		}(),
+		"no_insert": func() TablePrivilege { p := appendOnlyRow("security_events"); p.Insert = false; return p }(),
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := definerRow()
+			tc.mutate(&f)
+			for tname, base := range tables {
+				p := withFunctions(base, map[string]FunctionPrivilege{purgeSignature: f})
+				if got := len(p.UnsafeFunctions()) == 1; got != tc.unsafe {
+					t.Errorf("%s: UnsafeFunctions() = %v, want unsafe %v", tname, p.UnsafeFunctions(), tc.unsafe)
+				}
+				if got := len(p.InoperativeFunctions()) == 1; got != tc.inoperative {
+					t.Errorf("%s: InoperativeFunctions() = %v, want inoperative %v", tname, p.InoperativeFunctions(), tc.inoperative)
+				}
+				if p.Writable() != base.Writable() || p.CannotAppend() != base.CannotAppend() ||
+					p.ProtectedBy(false) != base.ProtectedBy(false) || p.ProtectedBy(true) != base.ProtectedBy(true) {
+					t.Errorf("%s: a function state moved the table's posture", tname)
+				}
+			}
+		})
+	}
+
+	p := withFunctions(appendOnlyRow("security_events"), map[string]FunctionPrivilege{
+		"b_purge(pg_catalog.int4)": func() FunctionPrivilege { f := definerRow(); f.PublicExecute = true; return f }(),
+		"a_purge(pg_catalog.int4)": func() FunctionPrivilege { f := definerRow(); f.SearchPathPinned = false; return f }(),
+		"c_clean(pg_catalog.int4)": definerRow(),
+	})
+	if got := strings.Join(p.UnsafeFunctions(), ","); got != "a_purge(pg_catalog.int4),b_purge(pg_catalog.int4)" {
+		t.Fatalf("UnsafeFunctions() = %q, want both unsafe signatures, sorted", got)
+	}
+	if got := appendOnlyRow("security_events").UnsafeFunctions(); got != nil {
+		t.Fatalf("UnsafeFunctions() with no functions = %v, want nil", got)
+	}
+}
+
+// TestFunctionPrivilege_Reasons pins what an unsafe refusal and an
+// inoperative WARN name and the fix each prints.
+func TestFunctionPrivilege_Reasons(t *testing.T) {
+	f := definerRow()
+	f.PublicExecute, f.SearchPathPinned, f.schema = true, false, `"S3-Mixed"`
+	if got := f.unsafeReason(); got != "public_execute=true search_path_pinned=false" {
+		t.Errorf("unsafe reason = %q", got)
+	}
+	fix := f.unsafeFix("app")
+	for _, want := range []string{
+		"REVOKE EXECUTE ON FUNCTION " + f.function + " FROM PUBLIC",
+		"GRANT EXECUTE ON FUNCTION " + f.function + " TO app",
+		"ALTER FUNCTION " + f.function + " RESET ALL",
+		"ALTER FUNCTION " + f.function + ` SET search_path = pg_catalog, "S3-Mixed", pg_temp (proconfig must hold exactly this one setting)`,
+	} {
+		if !strings.Contains(fix, want) {
+			t.Errorf("unsafe fix lacks %q:\n%s", want, fix)
+		}
+	}
+
+	decoy := definerRow()
+	decoy.SameNamespace, decoy.PublicExecute, decoy.namespace = false, true, "decoy"
+	decoy.function = "decoy.security_events_purge_before(timestamp with time zone, integer)"
+	if got := decoy.unsafeReason(); got != "public_execute=true same_namespace=false namespace=decoy" {
+		t.Errorf("namespace reason = %q", got)
+	}
+	if got := decoy.unsafeFix("app"); strings.Contains(got, "REVOKE") ||
+		!strings.Contains(got, "resolves to "+decoy.function+", outside schema public") {
+		t.Errorf("namespace fix = %q, want only the namespace remedy", got)
+	}
+
+	inop := definerRow()
+	inop.SecurityDefiner, inop.OwnerIsTableOwner, inop.OwnerSuperuser, inop.PathSchemaCreate = false, false, true, true
+	if got := inop.inoperativeReason(); got != "security_definer=false owner_is_table_owner=false owner_superuser=true path_schema_create=true" {
+		t.Errorf("inoperative reason = %q", got)
+	}
+	fix = inop.inoperativeFix("security_events", "app")
+	for _, want := range []string{
+		"ALTER FUNCTION " + inop.function + " SECURITY DEFINER",
+		"ALTER FUNCTION " + inop.function + " OWNER TO migrator",
+		"run migrations as a NOSUPERUSER role",
+		"ALTER TABLE security_events OWNER TO <migrator>",
+		"REVOKE CREATE ON SCHEMA public FROM PUBLIC, app",
+	} {
+		if !strings.Contains(fix, want) {
+			t.Errorf("inoperative fix lacks %q:\n%s", want, fix)
+		}
+	}
+}
+
+// TestAppendOnlyPosture_DefinerFunctions is the mode matrix for definer
+// functions: production refuses every unsafe function, one joined error each,
+// whatever the acknowledgement; an inoperative function is one WARN, never a
+// refusal; development names an unsafe function in the one unenforced line,
+// even on an otherwise clean table, and is silent on an inoperative one.
+func TestAppendOnlyPosture_DefinerFunctions(t *testing.T) {
+	public := definerRow()
+	public.PublicExecute = true
+	unpinned := definerRow()
+	unpinned.SearchPathPinned = false
+	unpinned.function = "public.security_events_erase(integer)"
+	invoker := definerRow()
+	invoker.SecurityDefiner = false
+	invoker.function = "public.security_events_floor()"
+	rail := withFunctions(verified(appendOnlyRow("security_events")), map[string]FunctionPrivilege{
+		purgeSignature:                            public,
+		"security_events_erase(pg_catalog.int4)":  unpinned,
+		"security_events_floor()":                 invoker,
+		"security_events_absent(pg_catalog.int4)": {},
+	})
+	report := Report{Role: "app", Tables: []TablePrivilege{rail}}
+
+	for _, acknowledged := range []bool{false, true} {
+		t.Run(fmt.Sprintf("production_acknowledged_%t", acknowledged), func(t *testing.T) {
+			logger, buf := captureLogger()
+			err := appendOnlyPosture(report, environment.ModeProduction, acknowledged, logger)
+			if !errors.Is(err, ErrDefinerFunctionUnsafe) || errors.Is(err, ErrAppendOnlyTableWritable) || errors.Is(err, ErrAppendOnlyTableUnwritable) {
+				t.Fatalf("production = %v, want only ErrDefinerFunctionUnsafe", err)
+			}
+			var joined interface{ Unwrap() []error }
+			if !errors.As(err, &joined) || len(joined.Unwrap()) != 2 {
+				t.Fatalf("production = %v, want two joined refusals", err)
+			}
+			msg := err.Error()
+			for _, want := range []string{
+				"security_events: function=" + purgeSignature + " public_execute=true; REVOKE EXECUTE ON FUNCTION " + public.function + " FROM PUBLIC",
+				"security_events: function=security_events_erase(pg_catalog.int4) search_path_pinned=false; ALTER FUNCTION " + unpinned.function + " RESET ALL",
+			} {
+				if !strings.Contains(msg, want) {
+					t.Errorf("refusal lacks %q:\n%s", want, msg)
+				}
+			}
+			for _, absent := range []string{"security_events_floor", "security_events_absent", ackAppendOnlyWritable} {
+				if strings.Contains(msg, absent) {
+					t.Errorf("refusal names %q:\n%s", absent, msg)
+				}
+			}
+			out := buf.String()
+			if n := strings.Count(out, "\n"); n != 1 {
+				t.Fatalf("production logged %d lines, want the one inoperative WARN:\n%s", n, out)
+			}
+			for _, want := range []string{
+				"level=WARN", "definer_function=inoperative", "table=security_events",
+				"function=security_events_floor()", `reason="security_definer=false"`,
+				"ALTER FUNCTION " + invoker.function + " SECURITY DEFINER",
+			} {
+				if !strings.Contains(out, want) {
+					t.Errorf("WARN lacks %q:\n%s", want, out)
+				}
+			}
+		})
+	}
+
+	t.Run("production_inoperative_only_boots", func(t *testing.T) {
+		logger, buf := captureLogger()
+		only := withFunctions(verified(appendOnlyRow("security_events")), map[string]FunctionPrivilege{"security_events_floor()": invoker})
+		if err := appendOnlyPosture(Report{Role: "app", Tables: []TablePrivilege{only}}, environment.ModeProduction, false, logger); err != nil {
+			t.Fatalf("inoperative only = %v, want nil", err)
+		}
+		if strings.Count(buf.String(), "definer_function=inoperative") != 1 {
+			t.Fatalf("want one inoperative WARN:\n%s", buf)
+		}
+	})
+
+	t.Run("development_one_line", func(t *testing.T) {
+		logger, buf := captureLogger()
+		if err := appendOnlyPosture(report, environment.ModeDevelopment, false, logger); err != nil {
+			t.Fatalf("development = %v, want nil", err)
+		}
+		out := buf.String()
+		if n := strings.Count(out, "\n"); n != 1 {
+			t.Fatalf("development logged %d lines, want 1:\n%s", n, out)
+		}
+		for _, want := range []string{
+			"append_only=unenforced", "tables=[security_events]",
+			"function=" + purgeSignature + " public_execute=true",
+			"function=security_events_erase(pg_catalog.int4) search_path_pinned=false",
+		} {
+			if !strings.Contains(out, want) {
+				t.Errorf("development line lacks %q:\n%s", want, out)
+			}
+		}
+		if strings.Contains(out, "definer_function") || strings.Contains(out, "security_events_floor") {
+			t.Errorf("development logged an inoperative function:\n%s", out)
+		}
+	})
+
+	t.Run("zero_mode_silent", func(t *testing.T) {
+		logger, buf := captureLogger()
+		if err := appendOnlyPosture(report, "", false, logger); err != nil || buf.Len() != 0 {
+			t.Fatalf("zero mode = %v, logged:\n%s", err, buf)
+		}
+	})
+}
+
+// TestAppendOnlyPosture_NoFunctionsUnchanged pins the S2 output byte for
+// byte: a report whose tables list no definer functions — or list only clean
+// ones — logs and refuses exactly as before functions were inspected.
+func TestAppendOnlyPosture_NoFunctionsUnchanged(t *testing.T) {
+	const (
+		devLine      = "level=WARN msg=\"postgres: append-only tables are not enforced for this runtime role; production refuses it\" append_only=unenforced tables=\"[security_events iam_audit secrets_audit]\" reasons=\"security_events: owner=table; iam_audit: privileges=update,delete trigger=absent; secrets_audit: sequence_usage=false sequence=public.secrets_audit_seq\"\n"
+		ownerRefusal = "postgres: runtime role can modify an append-only table: security_events: owner=table; activate the trigger files; create the runtime role with SQL, not the console; REVOKE UPDATE, DELETE, TRUNCATE, TRIGGER ON security_events FROM app; GRANT USAGE ON SEQUENCE public.security_events_seq TO app; ALTER TABLE security_events OWNER TO <migrator>; ALTER SCHEMA public OWNER TO <migrator>; ALTER TABLE security_events ENABLE ALWAYS TRIGGER security_events_immutable; ALTER TABLE security_events ENABLE ALWAYS TRIGGER security_events_no_truncate; or set Config.AppendOnlyWritableAcknowledged"
+		grantRefusal = "postgres: runtime role can modify an append-only table: iam_audit: privileges=update,delete trigger=absent; activate the trigger files; create the runtime role with SQL, not the console; REVOKE UPDATE, DELETE, TRUNCATE, TRIGGER ON iam_audit FROM app; GRANT USAGE ON SEQUENCE public.iam_audit_seq TO app; ALTER TABLE iam_audit OWNER TO <migrator>; ALTER SCHEMA public OWNER TO <migrator>; ALTER TABLE iam_audit ENABLE ALWAYS TRIGGER iam_audit_immutable; ALTER TABLE iam_audit ENABLE ALWAYS TRIGGER iam_audit_no_truncate; or set Config.AppendOnlyWritableAcknowledged"
+		seqRefusal   = "postgres: runtime role cannot append to an append-only table: secrets_audit: sequence_usage=false sequence=public.secrets_audit_seq; activate the trigger files; create the runtime role with SQL, not the console; REVOKE UPDATE, DELETE, TRUNCATE, TRIGGER ON secrets_audit FROM app; GRANT USAGE ON SEQUENCE public.secrets_audit_seq TO app; ALTER TABLE secrets_audit OWNER TO <migrator>; ALTER SCHEMA public OWNER TO <migrator>; ALTER TABLE secrets_audit ENABLE ALWAYS TRIGGER secrets_audit_immutable; ALTER TABLE secrets_audit ENABLE ALWAYS TRIGGER secrets_audit_no_truncate"
+		waiverLines  = "level=WARN msg=\"postgres: runtime role owns security_events: immutability triggers do not apply\" posture_waiver=AppendOnlyWritableAcknowledged table=security_events reason=\"owner=table\" trigger_exempt=true\n" +
+			"level=WARN msg=\"postgres: runtime role can modify iam_audit: immutability triggers are not verified\" posture_waiver=AppendOnlyWritableAcknowledged table=iam_audit reason=\"privileges=update,delete trigger=absent\" trigger_exempt=false\n"
+	)
+	build := func(functions map[string]FunctionPrivilege) Report {
+		owner := appendOnlyRow("security_events")
+		owner.Owner, owner.OwnerKind = true, ownerTable
+		granted := appendOnlyRow("iam_audit")
+		granted.Update, granted.Delete = true, true
+		noSeq := verified(appendOnlyRow("secrets_audit"))
+		noSeq.SequenceUsage = false
+		clean := verified(appendOnlyRow("iam_operations"))
+		clean.Update = true
+		tables := []TablePrivilege{owner, granted, noSeq, clean}
+		for i := range tables {
+			tables[i].Functions = functions
+		}
+		return Report{Role: "app", Tables: tables}
+	}
+	for name, functions := range map[string]map[string]FunctionPrivilege{
+		"none":  nil,
+		"clean": {purgeSignature: definerRow()},
+	} {
+		t.Run(name, func(t *testing.T) {
+			report := build(functions)
+			for _, tc := range []struct {
+				mode         environment.Mode
+				acknowledged bool
+				log, err     string
+			}{
+				{environment.ModeDevelopment, false, devLine, "<nil>"},
+				{environment.ModeProduction, false, "", ownerRefusal + "\n" + grantRefusal + "\n" + seqRefusal},
+				{environment.ModeProduction, true, waiverLines, seqRefusal},
+			} {
+				var buf bytes.Buffer
+				logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{ReplaceAttr: func(groups []string, a slog.Attr) slog.Attr {
+					if a.Key == slog.TimeKey && len(groups) == 0 {
+						return slog.Attr{}
+					}
+					return a
+				}}))
+				err := appendOnlyPosture(report, tc.mode, tc.acknowledged, logger)
+				if got := buf.String(); got != tc.log {
+					t.Errorf("%s acknowledged=%t logged:\n%q\nwant:\n%q", tc.mode, tc.acknowledged, got, tc.log)
+				}
+				if got := fmt.Sprint(err); got != tc.err {
+					t.Errorf("%s acknowledged=%t = %q\nwant %q", tc.mode, tc.acknowledged, got, tc.err)
+				}
+			}
+		})
+	}
 }
 
 // TestProbeAppendOnly_ZeroModeIsBlind: a DB opened without a mode probes

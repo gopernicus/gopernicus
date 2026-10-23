@@ -28,6 +28,12 @@ var (
 	// an append-only table: it lacks INSERT, or USAGE on the sequence behind the
 	// table's seq column. No acknowledgement admits it.
 	ErrAppendOnlyTableUnwritable = errors.New("postgres: runtime role cannot append to an append-only table")
+
+	// ErrDefinerFunctionUnsafe refuses a definer function listed on an
+	// append-only table that PUBLIC can execute, whose proconfig is not exactly
+	// search_path=pg_catalog, <the table's schema>, pg_temp, or whose signature
+	// resolves outside the table's schema. No acknowledgement admits it.
+	ErrDefinerFunctionUnsafe = errors.New("postgres: definer function on an append-only table is unsafe")
 )
 
 // TablePrivilege.OwnerKind values, as refusals print them after "owner=".
@@ -91,6 +97,8 @@ WHERE r.rolname = COALESCE(NULLIF($1::pg_catalog.text, ''), CURRENT_USER::pg_cat
 
 	resolveTableSQL = `SELECT pg_catalog.to_regclass($1::pg_catalog.text)::pg_catalog.oid`
 
+	resolveFunctionSQL = `SELECT pg_catalog.to_regprocedure($1::pg_catalog.text)::pg_catalog.oid`
+
 	// inspectTableSQL finds the seq column's sequence through its default
 	// expression's dependency, never pg_get_serial_sequence, which raises on a
 	// table without the column.
@@ -142,6 +150,30 @@ JOIN pg_catalog.pg_proc p ON p.oid = t.tgfoid
 JOIN pg_catalog.pg_namespace fn ON fn.oid = p.pronamespace
 JOIN pg_catalog.pg_language l ON l.oid = p.prolang
 WHERE t.tgrelid = $1::pg_catalog.oid AND t.tgname = $3::pg_catalog.text`
+
+	// inspectFunctionSQL judges one resolved definer function against its
+	// table. The pinned proconfig is computed here with quote_ident, the way
+	// PostgreSQL flattens a search_path naming a schema that needs quotes, and
+	// compared as a one-element array.
+	inspectFunctionSQL = `SELECT p.prosecdef,
+	p.proconfig IS NOT DISTINCT FROM
+		ARRAY['search_path=pg_catalog, ' || pg_catalog.quote_ident(n.nspname) || ', pg_temp']::pg_catalog.text[],
+	p.pronamespace = c.relnamespace,
+	pg_catalog.pg_has_role(p.proowner, c.relowner, 'MEMBER'),
+	o.rolsuper,
+	pg_catalog.has_function_privilege('public'::pg_catalog.name, p.oid, 'EXECUTE'),
+	pg_catalog.has_schema_privilege($3::pg_catalog.oid, c.relnamespace, 'CREATE'),
+	pg_catalog.has_function_privilege($3::pg_catalog.oid, p.oid, 'EXECUTE'),
+	pg_catalog.format('%I.%I(%s)', fn.nspname, p.proname, pg_catalog.oidvectortypes(p.proargtypes)),
+	fn.nspname::pg_catalog.text,
+	pg_catalog.quote_ident(n.nspname),
+	pg_catalog.quote_ident(pg_catalog.pg_get_userbyid(c.relowner))
+FROM pg_catalog.pg_proc p
+JOIN pg_catalog.pg_namespace fn ON fn.oid = p.pronamespace
+JOIN pg_catalog.pg_roles o ON o.oid = p.proowner
+JOIN pg_catalog.pg_class c ON c.oid = $2::pg_catalog.oid
+JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+WHERE p.oid = $1::pg_catalog.oid`
 )
 
 // AppendOnlyTable is one append-only table a store owns, as the posture probe
@@ -149,11 +181,23 @@ WHERE t.tgrelid = $1::pg_catalog.oid AND t.tgname = $3::pg_catalog.text`
 // search_path) or schema-qualified. AllowDelete admits a DELETE grant, for a
 // table whose trigger function decides which rows may be deleted. Canonical
 // lists the trigger functions the store ships; the trigger pair verifies only
-// against them.
+// against them. Functions lists the SECURITY DEFINER functions the store ships
+// for the table; a store that lists none is probed exactly as before.
 type AppendOnlyTable struct {
 	Name        string
 	AllowDelete bool
 	Canonical   []TriggerBody
+	Functions   []DefinerFunction
+}
+
+// DefinerFunction is one SECURITY DEFINER function a store ships beside an
+// append-only table: owned by the table's owner, it does for the runtime role
+// what the role's own grants refuse. Signature is bound to to_regprocedure on
+// the connection's search_path, bare or schema-qualified, with every argument
+// type written pg_catalog-qualified:
+// "security_events_purge_before(pg_catalog.timestamptz, pg_catalog.int4)".
+type DefinerFunction struct {
+	Signature string
 }
 
 // TriggerBody is one canonical trigger function for an append-only table: its
@@ -176,8 +220,11 @@ type TriggerBody struct {
 // when the table has none. ImmutableTrigger is the verified trigger pair, and
 // TriggerState is "verified" or the first reason it is not ("absent",
 // "tgenabled=O", "when_clause", "column_list", "differs", "body_differs",
-// "security_definer", "proconfig", …). A table that does not exist has Exists
-// false and nothing set beyond Table, AllowDelete and Superuser.
+// "security_definer", "proconfig", …). Functions is the evidence for each of
+// the table's DefinerFunctions, keyed by Signature; UnsafeFunctions and
+// InoperativeFunctions judge it, and nothing in it changes Writable,
+// CannotAppend or ProtectedBy. A table that does not exist has Exists false
+// and nothing set beyond Table, AllowDelete and Superuser.
 type TablePrivilege struct {
 	Table       string
 	AllowDelete bool
@@ -197,12 +244,47 @@ type TablePrivilege struct {
 	ImmutableTrigger bool
 	TriggerState     string
 
+	Functions map[string]FunctionPrivilege
+
 	// schema, relation and sequence are the catalog's names for the table's
 	// namespace, the bare table and its seq sequence ("" without one), for the
 	// remedy a refusal prints.
 	schema   string
 	relation string
 	sequence string
+}
+
+// FunctionPrivilege is the evidence for one DefinerFunction of an append-only
+// table and one role.
+//
+// A signature that does not resolve has Exists false and nothing else set.
+// SecurityDefiner is prosecdef. SearchPathPinned is a proconfig of exactly one
+// element, search_path=pg_catalog, <the table's schema>, pg_temp, the schema
+// written as quote_ident writes it. SameNamespace is the function living in
+// the table's schema. OwnerIsTableOwner is the function's owner being a member
+// of the table's owner; OwnerSuperuser is that owner being a superuser.
+// PublicExecute is EXECUTE held by PUBLIC. PathSchemaCreate is CREATE on the
+// table's schema held by the inspected role, PUBLIC's grant included; Execute
+// is EXECUTE held by the inspected role.
+type FunctionPrivilege struct {
+	Exists            bool
+	SecurityDefiner   bool
+	SearchPathPinned  bool
+	SameNamespace     bool
+	OwnerIsTableOwner bool
+	OwnerSuperuser    bool
+	PublicExecute     bool
+	PathSchemaCreate  bool
+	Execute           bool
+
+	// function is the resolved function, schema-qualified with its argument
+	// types; namespace its schema's name; schema and tableOwner the table's
+	// schema and owner as quote_ident writes them — for the remedy a finding
+	// prints.
+	function   string
+	namespace  string
+	schema     string
+	tableOwner string
 }
 
 // Report is InspectTablePrivileges' evidence: the role inspected and one
@@ -306,6 +388,37 @@ func (p TablePrivilege) ProtectedBy(acknowledged bool) string {
 	}
 }
 
+// UnsafeFunctions names, sorted by Signature, the table's existing definer
+// functions any role could reach or redirect: PUBLIC holds EXECUTE, the
+// search_path is not pinned to exactly pg_catalog, the table's schema and
+// pg_temp, or the signature resolves outside the table's schema. Production
+// refuses each with ErrDefinerFunctionUnsafe.
+func (p TablePrivilege) UnsafeFunctions() []string {
+	return p.functionsWhere(FunctionPrivilege.unsafe)
+}
+
+// InoperativeFunctions names, sorted by Signature, the table's existing
+// definer functions that will not act as the table's owner as intended or
+// act with more reach than intended: not SECURITY DEFINER, owned by a role
+// that is not a member of the table's owner, owned by a superuser, or in a
+// schema where the inspected role holds CREATE. Production logs a WARN for
+// each.
+func (p TablePrivilege) InoperativeFunctions() []string {
+	return p.functionsWhere(FunctionPrivilege.inoperative)
+}
+
+// functionsWhere returns the sorted signatures whose evidence matches.
+func (p TablePrivilege) functionsWhere(match func(FunctionPrivilege) bool) []string {
+	var signatures []string
+	for signature, f := range p.Functions {
+		if match(f) {
+			signatures = append(signatures, signature)
+		}
+	}
+	slices.Sort(signatures)
+	return signatures
+}
+
 // writePrivileged reports whether the role holds a privilege that modifies
 // rows or the table's triggers.
 func (p TablePrivilege) writePrivileged() bool {
@@ -370,6 +483,9 @@ func (p TablePrivilege) reason() string {
 	if p.CannotAppend() {
 		reasons = append(reasons, p.unwritableReason())
 	}
+	for _, signature := range p.UnsafeFunctions() {
+		reasons = append(reasons, "function="+signature+" "+p.Functions[signature].unsafeReason())
+	}
 	return strings.Join(reasons, " ")
 }
 
@@ -399,14 +515,106 @@ func (p TablePrivilege) fix(role string) string {
 	return strings.Join(steps, "; ")
 }
 
+// unsafe reports whether the function exists and PUBLIC can execute it, its
+// search_path is not pinned, or it lives outside the table's schema.
+func (f FunctionPrivilege) unsafe() bool {
+	return f.Exists && (f.PublicExecute || !f.SearchPathPinned || !f.SameNamespace)
+}
+
+// inoperative reports whether the function exists and is not SECURITY
+// DEFINER, is not owned by a member of the table's owner, is owned by a
+// superuser, or sits in a schema where the inspected role holds CREATE.
+func (f FunctionPrivilege) inoperative() bool {
+	return f.Exists && (!f.SecurityDefiner || !f.OwnerIsTableOwner || f.OwnerSuperuser || f.PathSchemaCreate)
+}
+
+// unsafeReason names why unsafe holds.
+func (f FunctionPrivilege) unsafeReason() string {
+	var reasons []string
+	if f.PublicExecute {
+		reasons = append(reasons, "public_execute=true")
+	}
+	if !f.SearchPathPinned {
+		reasons = append(reasons, "search_path_pinned=false")
+	}
+	if !f.SameNamespace {
+		reasons = append(reasons, "same_namespace=false namespace="+f.namespace)
+	}
+	return strings.Join(reasons, " ")
+}
+
+// unsafeFix is the remedy an unsafe refusal names. A function outside the
+// table's schema is not the store's function, so only the namespace remedy
+// applies to it.
+func (f FunctionPrivilege) unsafeFix(role string) string {
+	if !f.SameNamespace {
+		return "the signature resolves to " + f.function + ", outside schema " + f.schema +
+			": drop that function or take its schema off the search_path"
+	}
+	var steps []string
+	if f.PublicExecute {
+		steps = append(steps,
+			"REVOKE EXECUTE ON FUNCTION "+f.function+" FROM PUBLIC",
+			"GRANT EXECUTE ON FUNCTION "+f.function+" TO "+role)
+	}
+	if !f.SearchPathPinned {
+		steps = append(steps,
+			"ALTER FUNCTION "+f.function+" RESET ALL",
+			"ALTER FUNCTION "+f.function+" SET search_path = pg_catalog, "+f.schema+", pg_temp (proconfig must hold exactly this one setting)")
+	}
+	return strings.Join(steps, "; ")
+}
+
+// inoperativeReason names why inoperative holds.
+func (f FunctionPrivilege) inoperativeReason() string {
+	var reasons []string
+	if !f.SecurityDefiner {
+		reasons = append(reasons, "security_definer=false")
+	}
+	if !f.OwnerIsTableOwner {
+		reasons = append(reasons, "owner_is_table_owner=false")
+	}
+	if f.OwnerSuperuser {
+		reasons = append(reasons, "owner_superuser=true")
+	}
+	if f.PathSchemaCreate {
+		reasons = append(reasons, "path_schema_create=true")
+	}
+	return strings.Join(reasons, " ")
+}
+
+// inoperativeFix is the remedy an inoperative WARN names, with a <migrator>
+// placeholder for the role that runs migrations.
+func (f FunctionPrivilege) inoperativeFix(table, role string) string {
+	var steps []string
+	if !f.SecurityDefiner {
+		steps = append(steps, "ALTER FUNCTION "+f.function+" SECURITY DEFINER")
+	}
+	if !f.OwnerIsTableOwner {
+		steps = append(steps, "ALTER FUNCTION "+f.function+" OWNER TO "+f.tableOwner)
+	}
+	if f.OwnerSuperuser {
+		steps = append(steps,
+			"run migrations as a NOSUPERUSER role",
+			"ALTER TABLE "+table+" OWNER TO <migrator>",
+			"ALTER FUNCTION "+f.function+" OWNER TO <migrator>")
+	}
+	if f.PathSchemaCreate {
+		steps = append(steps, "REVOKE CREATE ON SCHEMA "+f.schema+" FROM PUBLIC, "+role)
+	}
+	return strings.Join(steps, "; ")
+}
+
 // InspectTablePrivileges reports, for role, the append-only evidence of every
 // table: ownership, superuser, INSERT/UPDATE/DELETE/TRUNCATE/TRIGGER, USAGE on
-// the seq sequence and the verified trigger pair. An empty role inspects
-// current_user; a named role lets a migrator preflight the runtime role from
-// its own connection, deciding exactly as that role's DB.ProbeAppendOnly will.
-// An unknown role wraps sdk.ErrNotFound; a missing table is Exists false, not
-// an error. Each table is resolved once with to_regclass and inspected by oid;
-// every name is bound as a parameter. q may be a *DB pool or a *Tx.
+// the seq sequence, the verified trigger pair and each listed definer
+// function. An empty role inspects current_user; a named role lets a migrator
+// preflight the runtime role from its own connection, deciding exactly as that
+// role's DB.ProbeAppendOnly will. An unknown role wraps sdk.ErrNotFound; a
+// missing table or function is Exists false, not an error. Each table is
+// resolved once with to_regclass, and each function with to_regprocedure,
+// then inspected by oid; every name is bound as a parameter. q may be a *DB
+// pool or a *Tx.
 func InspectTablePrivileges(ctx context.Context, q Querier, role string, tables ...AppendOnlyTable) (Report, error) {
 	return inspectTablePrivileges(ctx, q, role, false, tables)
 }
@@ -415,15 +623,18 @@ func InspectTablePrivileges(ctx context.Context, q Querier, role string, tables 
 // its own read-only transaction under SET LOCAL search_path TO pg_catalog: in
 // production a store refuses to boot when its runtime role is superuser, owns
 // an audit table, can UPDATE/DELETE/TRUNCATE/TRIGGER it without the verified
-// triggers, or cannot insert into it.
+// triggers, or cannot insert into it, or when a definer function the store
+// lists is unsafe (TablePrivilege.UnsafeFunctions).
 //
 // The zero RuntimeMode returns nil without a query. Development never refuses
 // and logs one combined append_only=unenforced line naming every table
 // production would refuse. Production returns errors.Join of one error per
-// finding — ErrAppendOnlyTableWritable or ErrAppendOnlyTableUnwritable, naming
-// the table, the reason and the fix — except that
-// Config.AppendOnlyWritableAcknowledged turns each ErrAppendOnlyTableWritable
-// into a posture_waiver WARN.
+// finding — ErrAppendOnlyTableWritable, ErrAppendOnlyTableUnwritable or
+// ErrDefinerFunctionUnsafe, naming the table, the reason and the fix — except
+// that Config.AppendOnlyWritableAcknowledged turns each
+// ErrAppendOnlyTableWritable into a posture_waiver WARN; it never admits
+// ErrDefinerFunctionUnsafe. Each inoperative definer function
+// (TablePrivilege.InoperativeFunctions) is a production WARN, never a refusal.
 func (d *DB) ProbeAppendOnly(ctx context.Context, tables ...AppendOnlyTable) error {
 	if d.mode == "" || len(tables) == 0 {
 		return nil
@@ -441,8 +652,9 @@ func (d *DB) ProbeAppendOnly(ctx context.Context, tables ...AppendOnlyTable) err
 }
 
 // inspectTablePrivileges is InspectTablePrivileges; pinCatalog sets the
-// transaction's search_path to pg_catalog once the table names are resolved
-// on the caller's search_path, and requires q to be a transaction.
+// transaction's search_path to pg_catalog once the table names and function
+// signatures are resolved on the caller's search_path, and requires q to be a
+// transaction.
 func inspectTablePrivileges(ctx context.Context, q Querier, role string, pinCatalog bool, tables []AppendOnlyTable) (Report, error) {
 	var (
 		report    Report
@@ -456,9 +668,16 @@ func inspectTablePrivileges(ctx context.Context, q Querier, role string, pinCata
 		return Report{}, fmt.Errorf("pgxdb: inspect role %q: %w", role, MapError(err))
 	}
 	oids := make([]*uint32, len(tables))
+	functionOIDs := make([][]*uint32, len(tables))
 	for i, table := range tables {
 		if err := q.QueryRow(ctx, resolveTableSQL, table.Name).Scan(&oids[i]); err != nil {
 			return Report{}, fmt.Errorf("pgxdb: resolve %s: %w", table.Name, MapError(err))
+		}
+		functionOIDs[i] = make([]*uint32, len(table.Functions))
+		for j, fn := range table.Functions {
+			if err := q.QueryRow(ctx, resolveFunctionSQL, fn.Signature).Scan(&functionOIDs[i][j]); err != nil {
+				return Report{}, fmt.Errorf("pgxdb: resolve %s: %w", fn.Signature, MapError(err))
+			}
 		}
 	}
 	if pinCatalog {
@@ -471,6 +690,9 @@ func inspectTablePrivileges(ctx context.Context, q Querier, role string, pinCata
 		p := TablePrivilege{Table: table.Name, AllowDelete: table.AllowDelete, Superuser: superuser}
 		if oids[i] != nil {
 			if err := inspectTable(ctx, q, *oids[i], roleOID, table.Canonical, &p); err != nil {
+				return Report{}, fmt.Errorf("pgxdb: inspect %s: %w", table.Name, err)
+			}
+			if err := inspectFunctions(ctx, q, *oids[i], roleOID, table.Functions, functionOIDs[i], &p); err != nil {
 				return Report{}, fmt.Errorf("pgxdb: inspect %s: %w", table.Name, err)
 			}
 		}
@@ -521,6 +743,38 @@ func inspectTable(ctx context.Context, q Querier, oid, role uint32, canonical []
 		p.Owner, p.OwnerKind = true, ownerSchema
 	case immutable.functionOwner || noTruncate.functionOwner:
 		p.Owner, p.OwnerKind = true, ownerFunction
+	}
+	return nil
+}
+
+// inspectFunctions fills p.Functions for the table oid and the role, one entry
+// per listed function keyed by its Signature, from the oids resolved before
+// the search_path was pinned; one that did not resolve is Exists false. A
+// table that lists none keeps a nil map.
+func inspectFunctions(ctx context.Context, q Querier, table, role uint32, functions []DefinerFunction, oids []*uint32, p *TablePrivilege) error {
+	if len(functions) == 0 {
+		return nil
+	}
+	p.Functions = make(map[string]FunctionPrivilege, len(functions))
+	for i, fn := range functions {
+		var f FunctionPrivilege
+		if oids[i] != nil {
+			err := q.QueryRow(ctx, inspectFunctionSQL, *oids[i], table, role).Scan(
+				&f.SecurityDefiner, &f.SearchPathPinned, &f.SameNamespace,
+				&f.OwnerIsTableOwner, &f.OwnerSuperuser, &f.PublicExecute,
+				&f.PathSchemaCreate, &f.Execute,
+				&f.function, &f.namespace, &f.schema, &f.tableOwner,
+			)
+			switch {
+			case errors.Is(err, jackpgx.ErrNoRows):
+				f = FunctionPrivilege{}
+			case err != nil:
+				return fmt.Errorf("%s: %w", fn.Signature, MapError(err))
+			default:
+				f.Exists = true
+			}
+		}
+		p.Functions[fn.Signature] = f
 	}
 	return nil
 }
@@ -596,7 +850,8 @@ func (ev triggerEvidence) state(rowLevel bool, events string, canonical []Trigge
 // appendOnlyPosture applies mode to report. The zero mode returns nil and
 // logs nothing; development logs one line naming every table production would
 // refuse; production joins one refusal per finding, logging a posture_waiver
-// WARN instead of each ErrAppendOnlyTableWritable when acknowledged.
+// WARN instead of each ErrAppendOnlyTableWritable when acknowledged, and one
+// definer_function=inoperative WARN per inoperative function.
 func appendOnlyPosture(report Report, mode environment.Mode, acknowledged bool, logger *slog.Logger) error {
 	if mode == "" {
 		return nil
@@ -611,13 +866,12 @@ func appendOnlyPosture(report Report, mode environment.Mode, acknowledged bool, 
 		reasons    []string
 	)
 	for _, p := range report.Tables {
-		writable, unwritable := p.Writable(), p.CannotAppend()
-		if !writable && !unwritable {
-			continue
-		}
+		writable, unwritable, unsafe := p.Writable(), p.CannotAppend(), p.UnsafeFunctions()
 		if !production {
-			unenforced = append(unenforced, p.Table)
-			reasons = append(reasons, p.Table+": "+p.reason())
+			if writable || unwritable || len(unsafe) > 0 {
+				unenforced = append(unenforced, p.Table)
+				reasons = append(reasons, p.Table+": "+p.reason())
+			}
 			continue
 		}
 		switch {
@@ -637,6 +891,18 @@ func appendOnlyPosture(report Report, mode environment.Mode, acknowledged bool, 
 		if unwritable {
 			refusals = append(refusals, fmt.Errorf("%w: %s: %s; %s",
 				ErrAppendOnlyTableUnwritable, p.Table, p.unwritableReason(), p.fix(report.Role)))
+		}
+		for _, signature := range unsafe {
+			f := p.Functions[signature]
+			refusals = append(refusals, fmt.Errorf("%w: %s: function=%s %s; %s",
+				ErrDefinerFunctionUnsafe, p.Table, signature, f.unsafeReason(), f.unsafeFix(report.Role)))
+		}
+		for _, signature := range p.InoperativeFunctions() {
+			f := p.Functions[signature]
+			logger.Warn("postgres: definer function on "+p.Table+" is inoperative or over-privileged",
+				slog.String("definer_function", "inoperative"), slog.String("table", p.Table),
+				slog.String("function", signature), slog.String("reason", f.inoperativeReason()),
+				slog.String("fix", f.inoperativeFix(p.Table, report.Role)))
 		}
 	}
 	if len(unenforced) > 0 {
