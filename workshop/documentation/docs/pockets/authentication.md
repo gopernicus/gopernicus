@@ -106,8 +106,7 @@ application authorization. `AuthenticationLimits` provides independent subject a
 IP budgets for password login, reset starts and sensitive proofs.
 
 Authentication SQL stores own their focused atomic operations; they do not generally
-join host ambient transactions. The Firestore store implements all repository
-ports but has been verified only against the emulator, not real GCP Firestore.
+join host ambient transactions.
 
 ## Minimal development wiring
 
@@ -269,12 +268,11 @@ Production has no implicit mode and fails closed on incomplete security wiring. 
 
 ## Persistence and views
 
-The pgx and Turso store modules implement the pocket repositories and export the authentication migration set; the Firestore store module implements the same repositories and exports an index manifest instead. The host owns its final migration ledger and upgrades.
+The pgx and Turso store modules implement the pocket repositories and export the authentication migration set. The host owns its final migration ledger and upgrades.
 
 Migration `0020_external_subjects.sql` (stores pgx v0.9.0 and Turso v0.8.0) is
 required for every SQL host, including hosts that wire no external provider,
-because both store constructors probe the table at boot. Firestore has no
-`external_subjects` repository in this release.
+because both store constructors probe the table at boot.
 
 The pocket core imports neither store nor UI. `pockets/authentication/views/goth` maps the technology-neutral `Views` port onto `ui/goth`; hosts can embed that default and override pages, or implement the port with another renderer.
 
@@ -347,7 +345,7 @@ Production requires explicit HTTPS issuer/resources, client trust and confidenti
 credentials. SQL adapters require the new append-only `0019_oauth2_sessions.sql`
 in the host's migration ledger before boot. Upgrade the core, adapter and views
 together and drain old writers before enabling the feature. PostgreSQL, Turso and
-the example memory store support it; Firestore does not and fails closed if enabled.
+the example memory store support it.
 The host still owns MCP protected-resource metadata, tool authorization and the
 actual Claude connector acceptance test. See the pocket README and
 `plans/authentication-mcp-oauth.md` for the full API and rollout contract.

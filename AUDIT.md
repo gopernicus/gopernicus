@@ -5725,3 +5725,52 @@ invitation digests to `IdentifierKey(kind, normalized)` under the bundled HMAC
 keyer, a malformed login address to the digest of its trimmed raw input, the
 SHA-256 fallback, and that no recorded row in those tests holds the attempted
 address or an `@`.
+
+## AUDIT-055: Retire the Firestore connector and the authentication Firestore adapter
+
+- **Status:** implemented, unreleased; no tag will ever be cut for the removal
+  (owner ruling 2026-10-23).
+- **Modules:** `integrations/datastores/firestore` and
+  `pockets/authentication/stores/firestore` removed from the current workspace
+  (49 → 47 modules).
+- **Old behavior:** authentication shipped PostgreSQL, SQLite/Turso and an
+  emulator-verified Firestore adapter built on a shared Firestore connector.
+  Guard G24 (`guard-firestore-mediation`) mediated the adapter's vendor I/O. The
+  pockets charter admitted Firestore as an optional third store family on host
+  demand, outside the DP1 `{turso, pgx}` parity bar, that refused the host's
+  ambient transaction (ruling R1).
+- **New behavior:** authentication ships PostgreSQL and SQLite/Turso stores.
+  G24 is retired and its number is not reused; a `Makefile` comment marks where
+  it stood (34 → 33 guards). The optional-third-family rule is withdrawn with its
+  only member, so `pockets/README.md` no longer describes a way to admit a store
+  family outside DP1. Firebase Auth remains supported as an identity provider
+  through `integrations/authentication/firebase`, which is unchanged.
+
+The module sources, workspace entries, Makefile lists and test legs, the
+`firestore-emulator` and `firestore-live` jobs of `live-stores.yml`, their five
+CI helper scripts, the `.env.example` emulator block and the current
+supported-store documentation were removed together. The adapter's untagged
+work after v0.2.0 (external subjects, the S8 toolchain pin and S2's correlation
+ids) goes with it. Existing tags and historical release/audit records remain.
+No hosted database, project, index or application deployment was changed.
+
+Consumers importing the removed modules keep building: the last tags stay
+published and frozen — `integrations/datastores/firestore` v0.1.0 and
+`pockets/authentication/stores/firestore` v0.2.0. The store's v0.2.0 compiles
+only against authentication ≤ v0.17.x, because it does not implement the
+`CancelAcceptance` and `ListActiveByResource` methods v0.18.0 added. To upgrade
+authentication, move to `stores/pgx` or `stores/turso`; there is no
+Firestore-to-SQL data migration tool. The pre-retirement tree remains reachable
+at the repository ref `archive/firestore-stores-2026-10-23`, for example
+`git show archive/firestore-stores-2026-10-23:pockets/authentication/stores/firestore/README.md`.
+See the [RELEASING note](RELEASING.md#retired-firestore-stores-no-tags--owner-ruling-2026-10-23).
+
+**Verification:** on the deletion PR (#153), the hermetic `make check` with every
+`FIRESTORE_*`, `POSTGRES_TEST_DSN` and `TURSO_*` variable unset passed over 47
+modules and 33 guards, including the Firebase `-tags=emulator` vet. `make vuln`
+found no vulnerabilities in the 47 modules; the two uncalled advisories it
+already reported are unchanged after the workspace's Google-family selections
+moved down. The `.github/scripts` unit tests and `make guard` passed, and
+`git ls-files | grep -i firestore` is empty. With `make dev-firebase`, the
+`integrations/authentication/firebase` `-tags=emulator` leg passed all 18 tests
+against the live Auth emulator.

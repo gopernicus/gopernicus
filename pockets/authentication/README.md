@@ -144,8 +144,6 @@ that exact migration into the host ledger and apply it before boot. It adds
 session profile/delegation, client snapshots, hashed codes and spent refresh
 history. Existing sessions default to first-party. The adapters expose `OAuth2`
 and `SessionManagement`; their shared conformance contract is `storetest.RunOAuth2`.
-Firestore does not implement these capabilities: enabling OAuth with it fails
-construction, and attempts to persist delegated sessions fail explicitly.
 
 Drain old authentication writers before enabling delegated issuance; old binaries
 cannot enforce the new session profile and refresh rules. For rollback, disable
@@ -226,9 +224,7 @@ is reported and the caller must start again. This does not provide a transaction
 between authentication storage, jobs and an external sender.
 
 The SQL adapters own transactions for their focused atomic repository operations;
-they do not generally join a host's ambient connector transaction. Firestore
-explicitly refuses ambient transactions and remains incomplete; see its
-[supported capability inventory](stores/firestore/README.md).
+they do not generally join a host's ambient connector transaction.
 
 ## Public packages and composition
 
@@ -241,7 +237,7 @@ explicitly refuses ambient transactions and remains incomplete; see its
 | `logic/invitations` | Invitation entities, repositories, grant policy and validated constructors with explicit prerequisites and typed options |
 | `logic/delivery` | Rendering, encrypted admission, job processing and host-run delivery runtime |
 | `inbound/http` | HTTP middleware, cookies, browser policies, view ports and optional bundled routes |
-| `stores/{pgx,turso,firestore}` | Separate datastore modules; `stores/storetest` holds conformance tests |
+| `stores/{pgx,turso}` | Separate datastore modules; `stores/storetest` holds conformance tests |
 | `views/goth` | Optional templ view module implementing `authenticationhttp.Views` |
 
 The root contains assembly and its validation. It exposes named components without
@@ -249,6 +245,10 @@ copying the services' method sets or their vocabulary. Disabled invitations are 
 nil `Components.Invitations`. No core imports a concrete store, and production logic
 imports neither HTTP nor the root package. Shared redirect validation and delivery
 test fixtures remain private implementation packages.
+
+Retired (2026-10-23): the Firestore store. Its last tag, `stores/firestore/v0.2.0`,
+stays on the proxy, compiles only against authentication ≤ v0.17.x, and **no further
+tag will ship**; hosts move to pgx or turso (no data migration tool is shipped).
 
 In examples below, `auth` means the root package, `authlogic` means
 `logic/authentication`, `authenticationhttp` means `inbound/http`, and `delivery`,
@@ -3675,8 +3675,7 @@ mirror. Every addition is
   table. It is REQUIRED even for a host that wires no external provider: both SQL
   constructors probe the table at boot. `Users.Provision` writes the first row in
   the user's transaction; a taken `(provider, subject)` rolls the whole
-  provisioning back as `sdk.ErrAlreadyExists`. Firestore has no mirror this
-  release (`ExternalSubjects` is nil).
+  provisioning back as `sdk.ErrAlreadyExists`.
 
 **Upgrading from a host that copied an earlier set:** re-export or copy the
 missing files into your migration directory and apply them **before** deploying a

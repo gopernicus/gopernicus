@@ -11,7 +11,7 @@ Pockets are optional, reusable hexagons. Each core is datastore-free and require
 
 | Pocket | Capability | HTTP surface | Durable stores | Memory posture |
 |---|---|---|---|---|
-| [Authentication](authentication.md) | human/machine identity, sessions, credentials, recovery, OAuth, delivery | `/auth/*` JSON; optional HTML | pgx, Turso, Firestore (emulator-verified) | example-local full reference |
+| [Authentication](authentication.md) | human/machine identity, sessions, credentials, recovery, OAuth, delivery | `/auth/*` JSON; optional HTML | pgx, Turso | example-local full reference |
 | [Authorization](authorization.md) | roles and relationships as one tuple table, integrity policy, audit, optional Redis cache | `Require` route guards; optional role administration | pgx, Turso (+ Redis mirror) | public `stores/memory` |
 | [CMS](cms.md) | content registry, taxonomy, menus, media, inquiries | JSON + optional HTML/admin | pgx, Turso | example-local reference |
 | [Events](events.md) | durable outbox drain + authenticated SSE gateway | `/events` streams | pgx, Turso | `storetest` reference |
@@ -52,7 +52,7 @@ A core's public `Repositories` can be filled by:
 
 - a shipped `stores/pgx` module;
 - a shipped `stores/turso` module;
-- a shipped `stores/firestore` (authentication) or `stores/goredis` mirror (authorization) module where one exists;
+- a shipped `stores/goredis` mirror (authorization) where one exists;
 - a public or example memory implementation;
 - your own adapter.
 

@@ -25,8 +25,8 @@ at startup.
 
 PostgreSQL, Turso/SQLite and Redis adapters are separate modules. PostgreSQL and
 Turso persist the authority; Redis provides an optional raw TupleCache mirror.
-The authorization Firestore adapter is removed. The shared Firestore connector
-and authentication Firestore adapter remain separate supported modules.
+The authorization Firestore adapter is removed. The Firestore connector and the
+authentication Firestore adapter were retired on 2026-10-23 (RELEASING, AUDIT-055).
 
 ## Canonical identity
 

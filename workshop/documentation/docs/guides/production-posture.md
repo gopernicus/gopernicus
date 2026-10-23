@@ -83,7 +83,6 @@ Tamper evidence for the audit rails, by store family:
 |---|---|---|
 | pgx | DEFAULT | the immutability triggers ship as ordinary numbered store migrations, and the posture probe is enforced in production; the runner's `-posture-role` preflights it before deploy |
 | turso | DEFAULT | the same triggers ship as migrations; the probe compares their text and only WARNs |
-| firestore | HOST | no triggers, roles or sequences in band; tamper evidence is the host's IAM posture |
 
 Persistent stores are still the host's choice: an in-memory authentication or authorization
 store constructs in production, and `guard --posture` does not see which store a `Config`
@@ -118,8 +117,8 @@ names. The scaffold wires the chosen connector.
   authorization database. Run it dedicated, with TLS and AUTH, and treat it as an in-scope
   system. Without TupleCache, Redis holds only rate-limit windows, cache pages and events.
 - **Audit tables are append-only in the database** on pgx (immutability triggers and the
-  boot-time privilege probe, from the S2 store tags above), by trigger only on turso, and by the
-  host's IAM on firestore. See *Production database posture* for the role split.
+  boot-time privilege probe, from the S2 store tags above) and by trigger only on turso. See
+  *Production database posture* for the role split.
 
 ## Revocation SLA
 

@@ -21,7 +21,7 @@ another.
 | [`notify`](#notify) and `notify/email` | per-call multi-channel delivery, production posture checks, typed email with templates | console and SMTP email | SendGrid; host Slack/SMS clients |
 | [`ratelimiter`](#ratelimiter) | allow/retry semantics and HTTP middleware | memory | Redis, pgx-backed limiter |
 | [`tracing`](#tracing) | tracer/span vocabulary and HTTP middleware | `Noop` | OpenTelemetry |
-| [`transaction`](#transactions) | one transaction callback contract | none | pgx, Turso, Firestore connectors |
+| [`transaction`](#transactions) | one transaction callback contract | none | pgx, Turso connectors |
 | [`oauth`](#oauth) | provider, PKCE and ID-token vocabulary | none | GitHub, Google |
 | [`work`](#work) | keyed admission, replace and status protocol | none | jobs pocket |
 
@@ -298,8 +298,8 @@ context.
 ## transactions
 
 **What:** `transaction.Transactor` with one method,
-`Transact(ctx, func(ctx) error) error`. **Default:** none; the pgx, Turso and
-Firestore connectors implement it.
+`Transact(ctx, func(ctx) error) error`. **Default:** none; the pgx and Turso
+connectors implement it.
 
 Pass the callback context to repositories backed by the same datastore
 instance; only operations using its handle participate. A nil return means the
@@ -308,8 +308,7 @@ cleanup; preserve `errors.Is`/`errors.As` matching since cleanup may add a
 cause. Bundled connectors reject nesting. A connector may retry the callback, so
 reset captured results per attempt and perform external effects only after
 `Transact` returns nil, using a durable outbox when an effect must survive a
-crash. Firestore requires reads before writes and does not observe its pending
-writes. SQL commit uses the begin context, rollback gets an independent
+crash. SQL commit uses the begin context, rollback gets an independent
 five-second deadline, and cancellation racing a commit cannot undo an accepted
 commit.
 

@@ -19,7 +19,7 @@ import "context"
 // durable outbox when effects must survive a crash after commit.
 //
 // Isolation, read restrictions and cancellation depend on the connector.
-// Firestore requires reads before writes and cannot read its pending writes.
+// A document store may require reads before writes and not observe its pending writes.
 // Cancellation racing a commit cannot guarantee undoing a committed write.
 // There is no default implementation or shared untyped context handle.
 type Transactor interface {
