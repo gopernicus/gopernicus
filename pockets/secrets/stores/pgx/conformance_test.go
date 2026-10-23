@@ -30,7 +30,11 @@ func TestConformance(t *testing.T) {
 	dsn := requireDSN(t)
 	storetest.RunRepository(t, func(t *testing.T) vault.Repository {
 		db, opts := openAndMigrate(t, dsn)
-		return NewRepository(db, opts...)
+		repo, err := Open(context.Background(), db, opts...)
+		if err != nil {
+			t.Fatalf("open: %v", err)
+		}
+		return repo
 	})
 }
 

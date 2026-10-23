@@ -32,6 +32,10 @@ const MaxValueBytes = 64 << 10
 // MaxReasonLen bounds Source.Reason in bytes.
 const MaxReasonLen = 512
 
+// maxCorrelationIDLen bounds the request and trace ids Correlate keeps, in
+// bytes; a longer one is blanked.
+const maxCorrelationIDLen = 128
+
 // Action names what an audit record describes.
 type Action string
 
@@ -43,6 +47,19 @@ const (
 	ActionSecretPut         Action = "secret_put"
 	ActionSecretRead        Action = "secret_read"
 	ActionSecretDeleted     Action = "secret_deleted"
+)
+
+// Outcome is whether the vault carried out the recorded action. Only a
+// secret_read is ever OutcomeDenied: the vault could not open that secret for
+// the caller — its owner key is under a wrapper key the wrapper no longer
+// holds, the value is sealed under a key the owner no longer holds, or the
+// value fails authentication. It is not an authorization verdict: the vault
+// has none, and the host authorizes before it calls.
+type Outcome string
+
+const (
+	OutcomeOK     Outcome = "ok"
+	OutcomeDenied Outcome = "denied"
 )
 
 // Construction and request errors; all match sdk.ErrInvalidInput.
@@ -69,6 +86,9 @@ var actions = map[Action]bool{
 	ActionSecretPut: true, ActionSecretRead: true, ActionSecretDeleted: true,
 }
 
+// outcomes is the closed set an AuditFilter may name and a store records.
+var outcomes = map[Outcome]bool{OutcomeOK: true, OutcomeDenied: true}
+
 // Wrapper protects owner data keys. Wrap returns an opaque blob and the id of
 // the key that produced it; Unwrap reverses it for any key the wrapper still
 // holds. A blob under a key the wrapper no longer holds is an error that
@@ -82,8 +102,11 @@ type Wrapper interface {
 // Repository persists owner keys, sealed secrets and the audit log. Every
 // mutating method and GetSecret take the audit records to append and write
 // them in the same transaction as the change; a store that cannot do that
-// atomically does not conform. Times are stored and returned in UTC at
-// microsecond precision. The storetest suite is the executable contract.
+// atomically does not conform. Every append refuses, with nothing written, a
+// record without an id or with an Action or Outcome outside the vocabulary
+// (sdk.ErrInvalidInput) and an id already recorded (sdk.ErrAlreadyExists).
+// Times are stored and returned in UTC at microsecond precision. The storetest
+// suite is the executable contract.
 type Repository interface {
 	// GetOwnerKey returns an owner's wrapped key, or sdk.ErrNotFound.
 	GetOwnerKey(ctx context.Context, owner Owner) (OwnerKey, error)
@@ -98,18 +121,24 @@ type Repository interface {
 	// page's returned cursor, "" for the first page.
 	ListOwnerKeys(ctx context.Context, after string, limit int) (keys []OwnerKey, next string, err error)
 	// GetSecret returns the sealed secret and records the audit only when it
-	// exists; a missing secret is sdk.ErrNotFound with nothing recorded.
+	// exists, each secret_read record naming ref with the secret's Version and
+	// KeyID; a missing secret is sdk.ErrNotFound with nothing recorded.
 	GetSecret(ctx context.Context, ref Ref, audit []AuditRecord) (SealedSecret, error)
 	// PutSecret inserts or replaces a secret, assigning Version (1 for a new
 	// secret, previous+1 otherwise) and timestamps, and records audit with its
 	// Version set to the assigned one. An owner without a key is
 	// sdk.ErrInvalidReference.
 	PutSecret(ctx context.Context, sealed SealedSecret, audit AuditRecord) (SealedSecret, error)
-	// DeleteSecret removes one secret, or sdk.ErrNotFound.
+	// DeleteSecret removes one secret, or sdk.ErrNotFound, recording each
+	// secret_deleted record naming ref with the Version and KeyID removed.
 	DeleteSecret(ctx context.Context, ref Ref, audit []AuditRecord) error
-	// DeleteOwner removes every secret of an owner and its key, or sdk.ErrNotFound
-	// when the owner has no key.
-	DeleteOwner(ctx context.Context, owner Owner, audit []AuditRecord) error
+	// DeleteOwner removes every secret of an owner and its key, or
+	// sdk.ErrNotFound when the owner has no key. expected names the secrets the
+	// caller listed: when the names removed differ from it in either direction
+	// nothing is removed and the error is sdk.ErrConflict. Each secret_deleted
+	// record naming a removed secret is recorded with that secret's Version and
+	// KeyID, whatever the caller set.
+	DeleteOwner(ctx context.Context, owner Owner, expected []string, audit []AuditRecord) error
 	// ListSecrets returns an owner's secrets' metadata ordered by name.
 	ListSecrets(ctx context.Context, owner Owner) ([]Secret, error)
 	// ListSealedSecrets returns an owner's secrets with ciphertext, ordered by
@@ -118,6 +147,9 @@ type Repository interface {
 	ListSealedSecrets(ctx context.Context, owner Owner) ([]SealedSecret, error)
 	// ListAudit pages records matching filter, oldest first, by (OccurredAt, ID).
 	ListAudit(ctx context.Context, filter AuditFilter, after string, limit int) (records []AuditRecord, next string, err error)
+	// AppendAudit records an event that changes nothing else, such as a read
+	// the vault could not open: every record in one transaction, or none.
+	AppendAudit(ctx context.Context, records []AuditRecord) error
 }
 
 // Owner scopes secrets and holds one data key: for example {tenant, gps}.
@@ -172,16 +204,21 @@ type SealedSecret struct {
 }
 
 // AuditRecord is one appended line of the access log. Name is empty for
-// owner-key actions; Version and KeyID are set where they apply.
+// owner-key actions; Version and KeyID are set where they apply. RequestID and
+// TraceID correlate the record with the request that caused it; Correlate
+// stamps them.
 type AuditRecord struct {
 	ID         string    `json:"id"`
 	OccurredAt time.Time `json:"occurred_at"`
 	Action     Action    `json:"action"`
+	Outcome    Outcome   `json:"outcome"`
 	Owner      Owner     `json:"owner"`
 	Name       string    `json:"name,omitempty"`
 	Version    int       `json:"version,omitempty"`
 	KeyID      string    `json:"key_id,omitempty"`
 	Source     Source    `json:"source"`
+	RequestID  string    `json:"request_id,omitempty"`
+	TraceID    string    `json:"trace_id,omitempty"`
 }
 
 // AuditFilter selects audit records. Zero fields match everything.
@@ -189,6 +226,7 @@ type AuditFilter struct {
 	Owner     *Owner
 	Name      string
 	Action    Action
+	Outcome   Outcome
 	Since     time.Time // inclusive
 	Until     time.Time // exclusive
 	ActorType string
@@ -258,6 +296,9 @@ func (f AuditFilter) Validate() error {
 	if f.Action != "" && !actions[f.Action] {
 		return fmt.Errorf("secrets: unknown audit action %q: %w", f.Action, sdk.ErrInvalidInput)
 	}
+	if f.Outcome != "" && !outcomes[f.Outcome] {
+		return fmt.Errorf("secrets: unknown audit outcome %q: %w", f.Outcome, sdk.ErrInvalidInput)
+	}
 	for _, v := range []string{f.ActorType, f.ActorID, f.System} {
 		if v != "" && !actorPattern.MatchString(v) {
 			return fmt.Errorf("secrets: audit source filter must match %s: %w", actorPattern, sdk.ErrInvalidInput)
@@ -281,6 +322,9 @@ func (f AuditFilter) Matches(r AuditRecord) bool {
 	if f.Action != "" && f.Action != r.Action {
 		return false
 	}
+	if f.Outcome != "" && f.Outcome != r.Outcome {
+		return false
+	}
 	if !f.Since.IsZero() && r.OccurredAt.Before(f.Since) {
 		return false
 	}
@@ -297,4 +341,35 @@ func (f AuditFilter) Matches(r AuditRecord) bool {
 		return false
 	}
 	return true
+}
+
+// Correlate returns copies of records stamped with the request and trace ids
+// ctx carries (sdk.RequestIDFromContext, sdk.TraceIDFromContext), blank when
+// it carries none. It is the one place the vault and rotation services stamp
+// them, at their repository boundary. An id longer than 128 bytes or holding a
+// byte outside printable ASCII is blanked, never truncated and never refused:
+// a request id arrives from a client header and must not fail the operation.
+func Correlate(ctx context.Context, records ...AuditRecord) []AuditRecord {
+	requestID, _ := sdk.RequestIDFromContext(ctx)
+	traceID, _ := sdk.TraceIDFromContext(ctx)
+	requestID, traceID = correlationID(requestID), correlationID(traceID)
+	out := make([]AuditRecord, len(records))
+	for i, r := range records {
+		r.RequestID, r.TraceID = requestID, traceID
+		out[i] = r
+	}
+	return out
+}
+
+// correlationID returns id, or "" when it is too long or not printable ASCII.
+func correlationID(id string) string {
+	if len(id) > maxCorrelationIDLen {
+		return ""
+	}
+	for i := 0; i < len(id); i++ {
+		if id[i] < 0x20 || id[i] > 0x7e {
+			return ""
+		}
+	}
+	return id
 }

@@ -9,6 +9,10 @@ import (
 	"github.com/gopernicus/gopernicus/sdk"
 )
 
+// deleteOwnerRetries is how many times DeleteOwner relists and retries when
+// the owner's secrets changed between its list and its delete.
+const deleteOwnerRetries = 3
+
 // Option configures a Service.
 type Option func(*config)
 
@@ -73,38 +77,54 @@ func (s *Service) Put(ctx context.Context, ref Ref, value []byte, source Source)
 	if err != nil {
 		return Secret{}, err
 	}
-	stored, err := s.repo.PutSecret(ctx, SealedSecret{Ref: ref, KeyID: key.KeyID, Ciphertext: ciphertext, CreatedAt: now, UpdatedAt: now}, record)
+	stored, err := s.repo.PutSecret(ctx, SealedSecret{Ref: ref, KeyID: key.KeyID, Ciphertext: ciphertext, CreatedAt: now, UpdatedAt: now}, Correlate(ctx, record)[0])
 	if err != nil {
 		return Secret{}, err
 	}
 	return stored.metadata(), nil
 }
 
-// Get returns the value stored under ref and records who read it. A missing
-// secret is sdk.ErrNotFound and records nothing.
+// Get returns the value stored under ref and records the read: one
+// secret_read record, appended after the value is opened, carrying the
+// version read and the outcome. A value the vault cannot open for the caller
+// (see Outcome) is recorded OutcomeDenied and its error returned. A missing
+// secret or owner key is sdk.ErrNotFound and records nothing, as does a
+// wrapper error that does not match sdk.ErrInvalidInput. When the record
+// cannot be appended the read fails, so no value leaves without its record.
 func (s *Service) Get(ctx context.Context, ref Ref, source Source) ([]byte, error) {
 	if err := validateRequest(ref.Validate, source); err != nil {
 		return nil, err
 	}
-	key, dek, err := s.ownerKey(ctx, ref.Owner, source, false)
+	key, err := s.repo.GetOwnerKey(ctx, ref.Owner)
 	if err != nil {
 		return nil, err
 	}
-	record, err := NewAuditRecord(s.now(), ActionSecretRead, ref.Owner, ref.Name, 0, key.KeyID, source)
+	sealed, err := s.repo.GetSecret(ctx, ref, nil)
 	if err != nil {
 		return nil, err
 	}
-	sealed, err := s.repo.GetSecret(ctx, ref, []AuditRecord{record})
+	value, denied, openErr := s.open(ctx, key, ref, sealed)
+	if openErr != nil && !denied {
+		return nil, openErr
+	}
+	record, err := NewAuditRecord(s.now(), ActionSecretRead, ref.Owner, ref.Name, sealed.Version, sealed.KeyID, source)
 	if err != nil {
 		return nil, err
 	}
-	if sealed.KeyID != key.KeyID {
-		return nil, fmt.Errorf("secrets: %s is sealed under owner key %q but the owner holds %q: %w", ref, sealed.KeyID, key.KeyID, sdk.ErrConflict)
+	if denied {
+		record.Outcome = OutcomeDenied
 	}
-	return Open(dek, ref, sealed.Ciphertext)
+	if err := s.repo.AppendAudit(ctx, Correlate(ctx, record)); err != nil {
+		return nil, err
+	}
+	if denied {
+		return nil, openErr
+	}
+	return value, nil
 }
 
-// Delete removes one secret, or sdk.ErrNotFound.
+// Delete removes one secret, or sdk.ErrNotFound. The store records the
+// version and key it removed.
 func (s *Service) Delete(ctx context.Context, ref Ref, source Source) error {
 	if err := validateRequest(ref.Validate, source); err != nil {
 		return err
@@ -113,16 +133,30 @@ func (s *Service) Delete(ctx context.Context, ref Ref, source Source) error {
 	if err != nil {
 		return err
 	}
-	return s.repo.DeleteSecret(ctx, ref, []AuditRecord{record})
+	return s.repo.DeleteSecret(ctx, ref, Correlate(ctx, record))
 }
 
 // DeleteOwner removes every secret of an owner and destroys its data key in
-// one transaction, recording each secret's deletion and the key's
-// destruction. An owner with no key is sdk.ErrNotFound.
+// one transaction, recording each secret's deletion with the version and key
+// the store removed, and the key's destruction. A secret written or removed
+// between the listing and the delete is a conflict: the delete changes
+// nothing and is retried, up to three times, before sdk.ErrConflict is
+// returned. An owner with no key is sdk.ErrNotFound.
 func (s *Service) DeleteOwner(ctx context.Context, owner Owner, source Source) error {
 	if err := validateRequest(owner.Validate, source); err != nil {
 		return err
 	}
+	for retry := 0; ; retry++ {
+		err := s.deleteOwner(ctx, owner, source)
+		if retry == deleteOwnerRetries || !errors.Is(err, sdk.ErrConflict) {
+			return err
+		}
+	}
+}
+
+// deleteOwner is one DeleteOwner attempt: list, then delete exactly what was
+// listed.
+func (s *Service) deleteOwner(ctx context.Context, owner Owner, source Source) error {
 	key, err := s.repo.GetOwnerKey(ctx, owner)
 	if err != nil {
 		return err
@@ -132,19 +166,21 @@ func (s *Service) DeleteOwner(ctx context.Context, owner Owner, source Source) e
 		return err
 	}
 	now := s.now()
+	expected := make([]string, 0, len(secrets))
 	records := make([]AuditRecord, 0, len(secrets)+1)
 	for _, sec := range secrets {
 		record, err := NewAuditRecord(now, ActionSecretDeleted, owner, sec.Ref.Name, sec.Version, sec.KeyID, source)
 		if err != nil {
 			return err
 		}
+		expected = append(expected, sec.Ref.Name)
 		records = append(records, record)
 	}
 	record, err := NewAuditRecord(now, ActionOwnerKeyDestroyed, owner, "", 0, key.KeyID, source)
 	if err != nil {
 		return err
 	}
-	return s.repo.DeleteOwner(ctx, owner, append(records, record))
+	return s.repo.DeleteOwner(ctx, owner, expected, Correlate(ctx, append(records, record)...))
 }
 
 // List returns an owner's secrets' metadata, ordered by name. It is not
@@ -191,7 +227,7 @@ func (s *Service) ownerKey(ctx context.Context, owner Owner, source Source, crea
 	if err != nil {
 		return OwnerKey{}, nil, err
 	}
-	switch err := s.repo.CreateOwnerKey(ctx, key, []AuditRecord{record}); {
+	switch err := s.repo.CreateOwnerKey(ctx, key, Correlate(ctx, record)); {
 	case err == nil:
 		return key, dek, nil
 	case errors.Is(err, sdk.ErrAlreadyExists):
@@ -214,6 +250,25 @@ func (s *Service) wrapKey(ctx context.Context, owner Owner, dek []byte) (OwnerKe
 	}
 	now := s.now().UTC().Truncate(time.Microsecond)
 	return OwnerKey{Owner: owner, KeyID: keyID, WrappedKey: blob, WrapperKeyID: wrapperKeyID, CreatedAt: now, RotatedAt: now}, nil
+}
+
+// open unwraps the owner key and opens sealed under it. denied reports an
+// error the vault records as OutcomeDenied: the wrapper refused the owner key
+// (sdk.ErrInvalidInput, such as a wrapper key it no longer holds), the value
+// is sealed under a key the owner no longer holds, or the value does not open.
+// Any other wrapper error says nothing about this secret and is not recorded.
+func (s *Service) open(ctx context.Context, key OwnerKey, ref Ref, sealed SealedSecret) (value []byte, denied bool, err error) {
+	dek, err := s.wrapper.Unwrap(ctx, key.WrappedKey)
+	if err != nil {
+		return nil, errors.Is(err, sdk.ErrInvalidInput), err
+	}
+	if sealed.KeyID != key.KeyID {
+		return nil, true, fmt.Errorf("secrets: %s is sealed under owner key %q but the owner holds %q: %w", ref, sealed.KeyID, key.KeyID, sdk.ErrConflict)
+	}
+	if value, err = Open(dek, ref, sealed.Ciphertext); err != nil {
+		return nil, true, err
+	}
+	return value, false, nil
 }
 
 func validateRequest(target func() error, source Source) error {

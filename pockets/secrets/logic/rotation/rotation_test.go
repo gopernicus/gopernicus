@@ -194,3 +194,28 @@ func TestRotationIsAtomic(t *testing.T) {
 		t.Fatalf("healthy secret changed: %q %v", got, err)
 	}
 }
+
+// TestRotationStampsCorrelation: both rotation records carry the context's
+// request and trace ids, through vault.Correlate.
+func TestRotationStampsCorrelation(t *testing.T) {
+	ctx := sdk.WithTraceID(sdk.WithRequestID(context.Background(), "req-rotate"), "trace-rotate")
+	repo := memory.New()
+	v, _ := services(t, repo, wrapper(t, "m1", "m1"))
+	o := owner("gps")
+	if _, err := v.Put(context.Background(), vault.Ref{Owner: o, Name: "a"}, []byte("v"), staff); err != nil {
+		t.Fatal(err)
+	}
+	_, r := services(t, repo, wrapper(t, "m2", "m1", "m2"))
+	if _, err := r.RewrapOwnerKeys(ctx, ops, rotation.RewrapOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.RotateOwnerKey(ctx, o, ops); err != nil {
+		t.Fatal(err)
+	}
+	for _, action := range []vault.Action{vault.ActionOwnerKeyRewrapped, vault.ActionOwnerKeyRotated} {
+		audit, _, err := v.Audit(context.Background(), vault.AuditFilter{Action: action}, "", 0)
+		if err != nil || len(audit) != 1 || audit[0].RequestID != "req-rotate" || audit[0].TraceID != "trace-rotate" {
+			t.Fatalf("%s: %+v %v", action, audit, err)
+		}
+	}
+}

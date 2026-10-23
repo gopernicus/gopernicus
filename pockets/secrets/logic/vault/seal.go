@@ -127,8 +127,8 @@ func NewOwnerKeyID() (string, error) {
 	return "k_" + hex.EncodeToString(b[:]), nil
 }
 
-// NewAuditRecord builds a record with a time-ordered id. Source must already
-// be validated. Exported for the rotation service.
+// NewAuditRecord builds a record with a time-ordered id and OutcomeOK. Source
+// must already be validated. Exported for the rotation service.
 func NewAuditRecord(now time.Time, action Action, owner Owner, name string, version int, keyID string, source Source) (AuditRecord, error) {
 	var b [8]byte
 	if _, err := rand.Read(b[:]); err != nil {
@@ -139,6 +139,7 @@ func NewAuditRecord(now time.Time, action Action, owner Owner, name string, vers
 		ID:         fmt.Sprintf("%016x%s", now.UnixNano(), hex.EncodeToString(b[:])),
 		OccurredAt: now,
 		Action:     action,
+		Outcome:    OutcomeOK,
 		Owner:      owner,
 		Name:       name,
 		Version:    version,

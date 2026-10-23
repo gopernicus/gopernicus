@@ -37,10 +37,11 @@ stores/pgx/             independent PostgreSQL module and migration
   ULIDs, UUIDs, `svc:deploy`, an email address); they are stored, not parsed. A read
   without one is refused with `vault.ErrSourceRequired`. `List` reveals names
   only and takes no Source.
-- **Audit** records (`vault.AuditRecord`) carry the action, owner, name,
-  version, key id, source and time; never a value. They are written in the
-  same transaction as the change they describe. The pocket offers `Audit` to
-  page them and nothing that removes them; retention is host policy.
+- **Audit** records (`vault.AuditRecord`) carry the action, outcome, owner,
+  name, version, key id, source, time and correlation ids; never a value.
+  They are written in the same transaction as the change they describe. The
+  pocket offers `Audit` to page them and nothing that removes them; retention
+  is host policy. See [Audit](#audit).
 
 ## Construction
 
@@ -95,12 +96,24 @@ value rows alone are unreadable afterwards. A backup that also contains
 is retired, so an offboarding that must defeat backups is followed by the
 master-key rotation above, through step 5.
 
+## Audit
+
+| Record | What it says |
+|---|---|
+| `secret_read` | one per `Get`, appended after the value is opened, with the version and key id read; a failed append fails the read, so no value leaves without its record |
+| `Outcome` | `ok`, or `denied` on a `secret_read` the vault could not open for the caller: the owner key is under a wrapper key the ring no longer holds (`Unwrap` returned `sdk.ErrInvalidInput`), the value is sealed under a key the owner no longer holds, or the value fails authentication. It is not an authorization verdict; the vault has none and the host authorizes before calling. The roadmap's `secret_read_denied` is this outcome value, not an action |
+| no record | a missing secret or owner key (`sdk.ErrNotFound`), or a wrapper error that is not a refusal (an unreachable key service): the vault learned nothing about the secret |
+| `secret_deleted` | the version and key id the store removed, not the ones the caller listed; `DeleteOwner` deletes exactly the secrets it listed, and relists and retries up to three times when they changed (`sdk.ErrConflict` after that) |
+| `RequestID`, `TraceID` | stamped by `vault.Correlate` from `sdk.RequestIDFromContext` and `sdk.TraceIDFromContext` on every record; an id over 128 bytes or outside printable ASCII is blanked, never truncated and never refused |
+| `AuditFilter.Outcome` | `Audit(ctx, vault.AuditFilter{Outcome: vault.OutcomeDenied}, …)` pages the denials |
+
 ## Errors
 
 `sdk.ErrNotFound` (missing secret or owner key), `sdk.ErrAlreadyExists`
 (second owner key, duplicate audit id), `sdk.ErrConflict` (stale key
 expectation on replace, `vault.ErrSealedValueCorrupt`, a value sealed under a
-key the owner no longer holds), `sdk.ErrInvalidReference` (secret for an owner
+key the owner no longer holds, an owner whose secrets kept changing under
+`DeleteOwner`), `sdk.ErrInvalidReference` (secret for an owner
 without a key), `sdk.ErrInvalidInput` (validation, `cryptids.ErrUnknownKeyID`
 when the master key a row needs was dropped). Error text never carries values
 or key material.
@@ -108,6 +121,23 @@ or key material.
 ## Stores
 
 `stores/memory` is the reference. `stores/storetest.RunRepository` is the
-executable contract every store runs, including the atomicity case (a failing
-audit append leaves the change unwritten). `stores/pgx` is the PostgreSQL
-module; see its README for the schema option and the live suite.
+executable contract every store runs, including the atomicity cases (a failing
+audit append leaves the change unwritten; one refused record in an
+`AppendAudit` batch writes none of it). `stores/pgx` is the PostgreSQL module;
+see its README for the schema option and the live suite. It requires
+PostgreSQL 14 or later and ships three migrations:
+
+- `0002_secrets_audit_integrity.sql` is **required**: `pgx.Open` refuses a
+  database without it, naming the file. It adds the outcome and correlation
+  columns, plus `seq` and `recorded_at` for operators.
+- `0003_secrets_audit_immutable.sql` is **default-on**: triggers that refuse
+  `UPDATE`, `DELETE` and `TRUNCATE` on `secrets_audit` to every role but the
+  table owner's members. A host that declines them deletes the file from its
+  ledger before applying.
+
+Construct the store with `pgx.Open(ctx, db, opts...)`, which also judges the
+runtime role's posture on `secrets_audit` under the database's `RuntimeMode`:
+in production it refuses a role that can modify the table or cannot append
+to it, including one without `USAGE` on `secrets_audit_seq`. The two-role
+setup, with that sequence grant, is in
+[database-posture.md](../../workshop/documentation/docs/guides/database-posture.md).
