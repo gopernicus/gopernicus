@@ -37,6 +37,19 @@ func TestWarmScaffoldModuleCache(t *testing.T) {
 	replaceModule(t, initDir, params.ConnectorPath, filepath.Join(root, filepath.FromSlash(params.ConnectorRel)))
 	runGo(t, initDir, warmEnv(), "mod", "tidy")
 
+	// Shape 1b — the --db=pgx init host with its pins left as emitted
+	// (TestScaffoldInitPgxCompiles tidies this exact graph): no replace, so the
+	// tidy resolves the published sdk and pgxdb tags through the proxy.
+	pgxDir := t.TempDir()
+	pgxParams, err := buildInitParams("example.com/scaffoldwarm/pgx", "pgx")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := emitInit(pgxDir, pgxParams); err != nil {
+		t.Fatalf("emitInit: %v", err)
+	}
+	runGo(t, pgxDir, warmEnv(), "mod", "tidy")
+
 	// Shape 2 — the pocket scaffold's two store modules
 	// (TestScaffoldPocketStoresCompile tidies both). The SDK/shared-contract core and
 	// --db=memory init shapes need no network (sdk is third-party-free), so

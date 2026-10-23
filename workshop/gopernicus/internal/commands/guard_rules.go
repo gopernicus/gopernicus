@@ -65,12 +65,14 @@ type guardRule struct {
 
 // guardResult is one evaluator's verdict. checked counts the packages (or
 // directories) in scope — or, when unit is set, that unit; a result with
-// nothing checked and no findings reports noScope as its reason. notes are
+// nothing checked and no findings reports noScope as its reason. detail, when
+// set, is appended to the status line of a checked result. notes are
 // informational lines that never change the exit code.
 type guardResult struct {
 	checked  int
 	unit     string
 	noScope  string
+	detail   string
 	findings []guardFinding
 	notes    []guardNote
 }

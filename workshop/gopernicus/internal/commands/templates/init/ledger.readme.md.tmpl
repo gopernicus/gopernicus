@@ -7,9 +7,12 @@ runner (`workshop/migrations`, `make migrate`) applies them pre-boot.
 
 ## Rules
 
-- **Scaffold-and-own.** Once a migration lands here it is host-owned; edit and
-  extend it as the host requires. Re-scaffolding a pocket appends new files; it
-  never rewrites files you already applied.
+- **Yours, or copied.** Files you write here are the host's own. Files copied
+  from a framework store stay byte-identical — `gopernicus guard --posture` (P9)
+  checks every mounted store's migrations against this ledger; when a store
+  ships a new version, re-export the file rather than edit the copy. An
+  immutability trigger file (`*_immutable.sql`) may be left out to decline the
+  triggers; the guard reports it as declined.
 - **Never renumber.** Files apply in filename order under a 4-digit zero-padded
   prefix (`0001_...`, `0002_...`). The next migration is `max + 1`. Renumbering
   an already-applied file breaks the checksum ledger (`schema_migrations`).

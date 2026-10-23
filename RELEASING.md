@@ -2257,6 +2257,10 @@ tag. This repo's own `examples/*` never carry the `tool` directive (it would put
 the workshop module in an example's graph, against G11) — they are guarded with
 `go run` from the Makefile instead.
 
+**Expand-step patches.** A store patch that ships a migration ahead of the minor
+that requires it (the expand step, with probes that tolerate either schema) is
+tagged on `main` only after the migration text is pinned by a test on `main`.
+
 ## Preconditions before the first tag
 
 1. **Module paths are final.** Every `go.mod` module line and internal import

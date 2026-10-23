@@ -45,12 +45,12 @@ police the framework, these police a host. `gopernicus guard --list` prints
 these fifteen sentences verbatim (the verb ships in `workshop/gopernicus`
 v0.4.0, §7), so the binary and this page cannot drift.
 
-A second series, the **P series** (P = production posture), P0–P8, is opt-in:
+A second series, the **P series** (P = production posture), P0–P9, is opt-in:
 `gopernicus guard --posture` adds it to the H run, and `guard --list --posture`
-prints its nine sentences after the fifteen (§3b, `workshop/gopernicus`
-v0.5.0). The H series is the layout every host keeps; the P series proves a
-composition root asks for the production posture the pockets and connectors
-enforce at construction.
+prints its ten sentences after the fifteen (§3b, `workshop/gopernicus`
+v0.5.0; P9 from v0.6.0). The H series is the layout every host keeps; the P
+series proves a composition root asks for the production posture the pockets
+and connectors enforce at construction.
 
 **Prefix discipline.** Bare `sdk` always means the framework's module; the
 host's own vocabulary root is always written "the host's `sdk/`". The same
@@ -262,7 +262,7 @@ checked on the AST (a `CallExpr` whose selector is `Underlying`; the
 identifier `RowToStructByNameLax`), so comments and split-token tricks are
 irrelevant in both directions. These mirror this repo's own G9/G10.
 
-## 3b. P0–P8 — production posture, opt-in via `--posture`
+## 3b. P0–P9 — production posture, opt-in via `--posture`
 
 A pocket or connector refuses a development-only or unprovable option at
 construction when the host passes `production`; these rules prove, before
@@ -270,8 +270,9 @@ boot, that the composition root passes the mode, wires the HTTP floor, and
 writes every waiver as a literal. They read the H7 adapter-naming trees —
 `cmd/**`, `internal/outbound/**`, the host's `integrations/**`, a host pocket's
 `outbound/**` — plus `workshop/**` main packages, production files only, and
-`.env.example` at the host root. Runtime refusal stays the pocket's job; the
-guard proves the composition asks for it. These nine lines are what
+`.env.example` at the host root; P9 reads the host's `go.mod`, the stores'
+`migrations/` and the host ledger. Runtime refusal stays the pocket's job; the
+guard proves the composition asks for it. These ten lines are what
 `gopernicus guard --list --posture` prints after the H fifteen.
 
 | id | the rule, in one line |
@@ -285,13 +286,34 @@ guard proves the composition asks for it. These nine lines are what
 | **P6** | A host that mounts authentication builds its keys through `authentication.NewKeys(` with a `KeysInput` filled by `environment.ParseEnvTags` in a scanned file; `--posture` prints one informational `rand` line per `crypto/rand` use in scanned files so a review sees any other key minting (no ban: non-auth keys such as auth-cms's cursor key, `documents.go:43`, are legitimate). |
 | **P7** | `.env.example`, when present, carries no **uncommented** `sslmode=disable`/`DB_SSLMODE=disable` line; mentions the host's mode key ONLY in a comment (`# APP_RUNTIME_MODE=…` — an uncommented assignment, even empty, is a finding, because `LoadEnvForMode` refuses it); and names `TRUSTED_PROXY_COUNT` and `PUBLIC_BASE_URL`. |
 | **P8** | Every `cms.Config` literal in scanned files names `AdminMiddleware` or `AdminUngatedAcknowledged` (the flip is not a boot refusal, so downstream hosts need the pre-deploy signal; G31 covers only this repo). |
+| **P9** | For every store the host mounts, every store migration file has a byte-identical copy in the host ledger; an immutability trigger file may be declined by omitting it, and the posture report says so. |
 
 P0, P1, P5, P6 and P8 report `no scope` unless a scanned file imports a
 package on the list below (or a package beneath one); P2 and P3 report it
 without a `web.Run` or `HTTPServer` call, P4 without a built
-`web.ServerConfig`, and P7 without a `.env.example`. The `ack` and `rand`
+`web.ServerConfig`, P7 without a `.env.example`, and P9 when no store is
+mounted or none ships a `migrations/` directory. The `ack` and `rand`
 lines are review evidence, never findings: a waiver a host chose stays
 visible in every CI log, and so does every other place it mints key material.
+
+**P9 in full.** A store is mounted when the host's `go.mod` requires a
+framework store module `github.com/gopernicus/gopernicus/pockets/<pocket>/stores/<dialect>`
+and a production file imports it (a store named only by tests is not mounted);
+it is in scope when its module ships a `migrations/` directory (the pgx and turso
+stores do; the memory, goredis and firestore stores do not). `--posture`
+resolves the module directory with `go list -m -f '{{.Dir}}' <module>` in the
+host root — a `go.work`, a `replace` or the module cache answers, bounded by a
+timeout — and a resolution error is a finding naming the module. The host
+ledger is `workshop/migrations/primary/`. For each `NNNN_<name>.sql` in the
+store's `migrations/` (`_`-prefixed files skipped), the ledger holds a file with
+the same `<name>` after any numeric prefix (hosts renumber; the version is the
+filename, so a renumbered copy keeps its bytes) and the same bytes. A missing or
+edited copy is one finding per store file; the fix is a re-export — copy the
+store file into the ledger, never edit a copy. The one optional file is an
+immutability trigger file (`*_immutable.sql`): a host that declines the
+triggers omits it from its ledger before applying, and the P9 status line
+names it — `P9 ok (2 stores; declined: 0022_security_events_immutable.sql)`.
+A trigger file the ledger does hold must still be byte-identical.
 
 ### Recognized posture surfaces (P0, P1, P5, P6, P8)
 
@@ -314,7 +336,8 @@ declare them.
   authorization pocket), `IdentityConfig.SingleFactorAcknowledged`,
   `DeliveryConfig.OpportunisticTLSAcknowledged`, `DeliveryJobsAcknowledged`,
   `DeliveryEphemeralAcknowledged`, `AdminUngatedAcknowledged`,
-  `TLSUnverifiedAcknowledged`, `TLSDisabledAcknowledged`.
+  `TLSUnverifiedAcknowledged`, `TLSDisabledAcknowledged`,
+  `AppendOnlyWritableAcknowledged`.
 - **the key constructor:** `authentication.NewKeys`, fed an
   `authentication.KeysInput`.
 
@@ -574,7 +597,7 @@ legitimately names an integration), and from H0's internal-shape rules. It is
 still one of the seven sanctioned Go-bearing roots, and H9 and H12 still
 apply: nothing under `internal/` or `pockets/` links it from production code.
 
-**The production composition root (P0–P8).** One shape serves every
+**The production composition root (P0–P9).** One shape serves every
 environment; the mode decides what is refused:
 
 ```go
@@ -701,7 +724,8 @@ HTTP proof covers that invalidation and never includes draft products. The JSON
 route sets HTTP no-store independently of the service's data cache.
 
 All seven run under this repo's own `make guard`: G30 (H0–H14) and G32
-(P0–P8 under `--posture`).
+(P0–P9 under `--posture`); G34 additionally holds `production-baseline`'s
+ledger to its stores' migration files.
 A green guard over `auth-cms` is the floor, not the clause: its composition
 root's provider behavior is named debt (below), not H10 compliance.
 

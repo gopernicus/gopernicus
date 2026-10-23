@@ -1,16 +1,21 @@
 package commands
 
 import (
+	"bytes"
+	"context"
 	"errors"
 	"go/ast"
 	"go/token"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // The canonical sentences of examples/README.md §3b, byte for byte. They are
@@ -27,6 +32,7 @@ const (
 	sentenceP6 = "A host that mounts authentication builds its keys through `authentication.NewKeys(` with a `KeysInput` filled by `environment.ParseEnvTags` in a scanned file; `--posture` prints one informational `rand` line per `crypto/rand` use in scanned files so a review sees any other key minting (no ban: non-auth keys such as auth-cms's cursor key, `documents.go:43`, are legitimate)."
 	sentenceP7 = "`.env.example`, when present, carries no **uncommented** `sslmode=disable`/`DB_SSLMODE=disable` line; mentions the host's mode key ONLY in a comment (`# APP_RUNTIME_MODE=…` — an uncommented assignment, even empty, is a finding, because `LoadEnvForMode` refuses it); and names `TRUSTED_PROXY_COUNT` and `PUBLIC_BASE_URL`."
 	sentenceP8 = "Every `cms.Config` literal in scanned files names `AdminMiddleware` or `AdminUngatedAcknowledged` (the flip is not a boot refusal, so downstream hosts need the pre-deploy signal; G31 covers only this repo)."
+	sentenceP9 = "For every store the host mounts, every store migration file has a byte-identical copy in the host ledger; an immutability trigger file may be declined by omitting it, and the posture report says so."
 )
 
 // The no-scope reasons the P rules share.
@@ -57,14 +63,15 @@ var (
 
 	// postureAcknowledgements are the acknowledgement field names (P5).
 	postureAcknowledgements = map[string]bool{
-		"AuditDisabledAcknowledged":     true,
-		"SingleFactorAcknowledged":      true,
-		"OpportunisticTLSAcknowledged":  true,
-		"DeliveryJobsAcknowledged":      true,
-		"DeliveryEphemeralAcknowledged": true,
-		"AdminUngatedAcknowledged":      true,
-		"TLSUnverifiedAcknowledged":     true,
-		"TLSDisabledAcknowledged":       true,
+		"AuditDisabledAcknowledged":      true,
+		"SingleFactorAcknowledged":       true,
+		"OpportunisticTLSAcknowledged":   true,
+		"DeliveryJobsAcknowledged":       true,
+		"DeliveryEphemeralAcknowledged":  true,
+		"AdminUngatedAcknowledged":       true,
+		"TLSUnverifiedAcknowledged":      true,
+		"TLSDisabledAcknowledged":        true,
+		"AppendOnlyWritableAcknowledged": true,
 	}
 
 	// postureAckOptionPkgs are the packages whose New takes the option-form
@@ -83,6 +90,16 @@ var (
 	sslmodeDisable  = "sslmode=disable"
 )
 
+// The P9 shapes: the directory a store module ships its migrations in, the
+// suffix of an immutability trigger file a host may decline by omitting it, the
+// fix every finding names, and the bound on one `go list -m`.
+const (
+	storeMigrationsDir = "migrations"
+	immutableSuffix    = "_immutable.sql"
+	ledgerReexport     = "re-export: copy the store file into the ledger; never edit a copy"
+	storeListTimeout   = 2 * time.Minute
+)
+
 // postureRules is the P table in id order; `guard --posture` appends it to
 // guardRules.
 var postureRules = []guardRule{
@@ -95,6 +112,7 @@ var postureRules = []guardRule{
 	{"P6", sentenceP6, evalP6},
 	{"P7", sentenceP7, evalP7},
 	{"P8", sentenceP8, evalP8},
+	{"P9", sentenceP9, evalP9},
 }
 
 // postureFile is one production file in the P rules' scanned trees, with the
@@ -1228,4 +1246,210 @@ func evalP8(h *guardHost) guardResult {
 		}
 	}
 	return r
+}
+
+func evalP9(h *guardHost) guardResult {
+	r := guardResult{noScope: "no framework store module mounted", unit: "store"}
+	required, err := readRequires(h.root)
+	if err != nil {
+		r.add("go.mod", "cannot be read: "+err.Error())
+		return r
+	}
+	mounted := mountedStores(h, required)
+	if len(mounted) == 0 {
+		return r
+	}
+	r.noScope = "no mounted store ships " + storeMigrationsDir + "/"
+
+	ledgerRel, ledgerPath := "workshop/migrations/"+defaultLedger, ledgerDir(h.root, defaultLedger)
+	ledger, err := ledgerFiles(ledgerPath)
+	if err != nil {
+		r.add(ledgerRel, "cannot be read: "+err.Error())
+		return r
+	}
+	bySuffix := map[string][]string{}
+	for _, name := range ledger {
+		if suffix, ok := migrationSuffix(name); ok {
+			bySuffix[suffix] = append(bySuffix[suffix], name)
+		}
+	}
+
+	var declined []string
+	for _, module := range mounted {
+		dir, err := moduleDir(h.root, module)
+		if err != nil {
+			r.add(module, "cannot resolve the module directory with go list -m: "+err.Error())
+			continue
+		}
+		migrations := filepath.Join(dir, storeMigrationsDir)
+		if info, err := os.Stat(migrations); err != nil || !info.IsDir() {
+			continue
+		}
+		r.checked++
+		files, err := ledgerFiles(migrations)
+		if err != nil {
+			r.add(module+"/"+storeMigrationsDir, "cannot be read: "+err.Error())
+			continue
+		}
+		for _, name := range files {
+			suffix, ok := migrationSuffix(name)
+			if !ok {
+				continue
+			}
+			where := module + "/" + storeMigrationsDir + "/" + name
+			want, err := os.ReadFile(filepath.Join(migrations, name))
+			if err != nil {
+				r.add(where, "cannot be read: "+err.Error())
+				continue
+			}
+			copies := bySuffix[suffix]
+			if len(copies) == 0 && strings.HasSuffix(name, immutableSuffix) {
+				declined = append(declined, name)
+				continue
+			}
+			if len(copies) == 0 {
+				r.add(where, "ledger copy missing from "+ledgerRel+" ("+ledgerReexport+")")
+				continue
+			}
+			identical := false
+			var edited []string
+			for _, c := range copies {
+				got, err := os.ReadFile(filepath.Join(ledgerPath, c))
+				if err == nil && bytes.Equal(got, want) {
+					identical = true
+					break
+				}
+				edited = append(edited, ledgerRel+"/"+c)
+			}
+			if !identical {
+				r.add(where, "ledger copy "+strings.Join(edited, ", ")+" is not byte-identical ("+ledgerReexport+")")
+			}
+		}
+	}
+	if len(declined) > 0 {
+		r.detail = "declined: " + strings.Join(declined, ", ")
+	}
+	return r
+}
+
+// readRequires returns the module path of every require directive in
+// <root>/go.mod, single-line and block form.
+func readRequires(root string) ([]string, error) {
+	raw, err := os.ReadFile(filepath.Join(root, "go.mod"))
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	block := false
+	for _, line := range strings.Split(string(raw), "\n") {
+		if i := strings.Index(line, "//"); i >= 0 {
+			line = line[:i]
+		}
+		line = strings.TrimSpace(line)
+		switch {
+		case block && line == ")":
+			block = false
+			continue
+		case block:
+		default:
+			rest, ok := strings.CutPrefix(line, "require")
+			if !ok || rest == "" || (rest[0] != ' ' && rest[0] != '\t' && rest[0] != '(') {
+				continue
+			}
+			line = strings.TrimSpace(rest)
+			if line == "(" {
+				block = true
+				continue
+			}
+		}
+		fields := strings.Fields(line)
+		if len(fields) == 0 {
+			continue
+		}
+		p := fields[0]
+		if u, err := strconv.Unquote(p); err == nil {
+			p = u
+		}
+		out = append(out, p)
+	}
+	return out, nil
+}
+
+// mountedStores returns, sorted, the required framework store modules
+// (pockets/<pocket>/stores/<dialect>) that a production file of the host
+// imports, the module itself or a package beneath it. A store named only by
+// tests is not mounted.
+func mountedStores(h *guardHost, required []string) []string {
+	var out []string
+	for _, module := range required {
+		parts := strings.Split(strings.TrimPrefix(module, fwPockets+"/"), "/")
+		if !strings.HasPrefix(module, fwPockets+"/") || len(parts) != 3 || parts[1] != "stores" {
+			continue
+		}
+		if importedInProduction(h, module) {
+			out = append(out, module)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+func importedInProduction(h *guardHost, module string) bool {
+	for _, pkg := range h.packages {
+		for _, f := range pkg.files {
+			if f.test {
+				continue
+			}
+			for _, imp := range f.imports {
+				if underPath(imp.path, module) {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+// moduleDir resolves a module's directory the way the host's build does —
+// `go list -m` in the host root, so a go.work, a replace directive or the
+// module cache answers — bounded by storeListTimeout.
+func moduleDir(root, module string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), storeListTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "go", "list", "-m", "-f", "{{.Dir}}", module)
+	cmd.Dir = root
+	out, err := cmd.Output()
+	if ctx.Err() != nil {
+		return "", errors.New("timed out after " + storeListTimeout.String())
+	}
+	if err != nil {
+		var ee *exec.ExitError
+		if errors.As(err, &ee) && len(ee.Stderr) > 0 {
+			return "", errors.New(strings.TrimSpace(string(ee.Stderr)))
+		}
+		return "", err
+	}
+	dir := strings.TrimSpace(string(out))
+	if dir == "" {
+		return "", errors.New("not in the module cache (go mod download " + module + ")")
+	}
+	if info, err := os.Stat(dir); err != nil || !info.IsDir() {
+		return "", errors.New("resolves to " + dir + ", which is not a directory")
+	}
+	return dir, nil
+}
+
+// migrationSuffix returns what follows the numeric prefix of NNNN_<suffix>.sql;
+// ok is false for a name without one.
+func migrationSuffix(name string) (string, bool) {
+	prefix, suffix, ok := strings.Cut(name, "_")
+	if !ok || prefix == "" || suffix == "" {
+		return "", false
+	}
+	for _, c := range prefix {
+		if c < '0' || c > '9' {
+			return "", false
+		}
+	}
+	return suffix, true
 }

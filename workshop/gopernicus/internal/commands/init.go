@@ -97,12 +97,12 @@ func buildInitParams(modulePath, db string) (initParams, error) {
 		p.HasDB = true
 		p.ConnectorAlias = "tursodb"
 		p.ConnectorRel = "integrations/datastores/turso"
-		p.ConnectorVersion = "v0.7.0"
+		p.ConnectorVersion = "v0.8.0"
 	case "pgx":
 		p.HasDB = true
 		p.ConnectorAlias = "pgxdb"
 		p.ConnectorRel = "integrations/datastores/pgxdb"
-		p.ConnectorVersion = "v0.10.0"
+		p.ConnectorVersion = "v0.11.0"
 	default:
 		return initParams{}, fmt.Errorf("unknown --db %q (want: turso | pgx | none)", db)
 	}

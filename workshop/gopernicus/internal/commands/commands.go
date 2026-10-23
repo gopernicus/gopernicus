@@ -59,7 +59,7 @@ Commands:
   init      Scaffold a new host application
   new       Scaffold a new pocket
   db        Migrate, check status, or create migrations
-  guard     Check a host against the host contract (H0–H14; P0–P8 with --posture)
+  guard     Check a host against the host contract (H0–H14; P0–P9 with --posture)
   version   Print the CLI version and module path
 
 Run 'gopernicus <command> -h' for command-specific help.

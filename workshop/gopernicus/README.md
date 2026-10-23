@@ -23,7 +23,7 @@ gopernicus <command>
 | `db create <slug> [--db=<ledger>]` | the next `NNNN_<slug>.sql` in the host ledger (4-digit max+1, never renumber) |
 | `db migrate` | delegates to the HOST-OWNED runner (`go run ./workshop/migrations`) — the CLI carries no database driver, ever |
 | `db status` | the runner's `-status` (applied vs pending), with a file-only all-pending fallback when the runner is absent or the DB unreachable |
-| `guard [--posture] [host-root] [--list]` | checks a host against the host contract (`examples/README.md`, H0–H14; with `--posture` also the production-posture rules P0–P8 of §3b, plus informational `ack`/`rand` lines): one status line per rule, one line per finding, a summary; exit 0 clean, 1 findings, 2 invocation/input failure. `--list` prints the canonical sentences. Stdlib `go/parser` + `go/ast`; no `--skip`, no allow file, no config |
+| `guard [--posture] [host-root] [--list]` | checks a host against the host contract (`examples/README.md`, H0–H14; with `--posture` also the production-posture rules P0–P9 of §3b, plus informational `ack`/`rand` lines): one status line per rule, one line per finding, a summary; exit 0 clean, 1 findings, 2 invocation/input failure. `--list` prints the canonical sentences. Stdlib `go/parser` + `go/ast` (P9 resolves each mounted store module with `go list -m` in the host root); no `--skip`, no allow file, no config |
 | `version` | version + module path |
 
 Templates take **identity parameters only** (module path, pocket name,

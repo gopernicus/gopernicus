@@ -417,7 +417,7 @@ func TestGuardNothingToCheckIsReported(t *testing.T) {
 }
 
 // TestGuardPostureExtendsTheRun proves --posture only appends: the H status
-// lines are byte-equal to a plain run's, the nine P lines follow, and the
+// lines are byte-equal to a plain run's, the ten P lines follow, and the
 // informational lines appear only under --posture.
 func TestGuardPostureExtendsTheRun(t *testing.T) {
 	root := writeFixture(t, guardFixture{files: map[string]string{"cmd/server/main.go": postureRoot()}})
@@ -438,7 +438,7 @@ func TestGuardPostureExtendsTheRun(t *testing.T) {
 	if strings.Contains(plain, "ack ") || !strings.HasSuffix(plain, "guard: clean (15 rules, 1 package)\n") {
 		t.Errorf("plain run changed:\n%s", plain)
 	}
-	if !strings.Contains(posture, "\nack  cmd/server/main.go:") || !strings.HasSuffix(posture, "guard: clean (24 rules, 1 package)\n") {
+	if !strings.Contains(posture, "\nack  cmd/server/main.go:") || !strings.HasSuffix(posture, "guard: clean (25 rules, 1 package)\n") {
 		t.Errorf("posture run lacks its ack line or summary:\n%s", posture)
 	}
 }
@@ -465,6 +465,23 @@ func TestReadModulePath(t *testing.T) {
 		if (err == nil) != c.ok || got != c.want {
 			t.Errorf("readModulePath(%q) = %q, %v; want %q, ok=%v", c.gomod, got, err, c.want, c.ok)
 		}
+	}
+}
+
+func TestReadRequires(t *testing.T) {
+	gomod := "module example.com/a\n\ngo 1.26\n\nrequire example.com/one v1.0.0 // trailing\n\n" +
+		"require (\n\texample.com/two v0.1.0\n\t\"example.com/three\" v0.2.0 // indirect\n\t// example.com/commented v0.0.1\n)\n\n" +
+		"replace (\n\texample.com/two => ../two\n)\n\nrequire(\n\texample.com/four v0.3.0\n)\n"
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte(gomod), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got, err := readRequires(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"example.com/one", "example.com/two", "example.com/three", "example.com/four"}; !slices.Equal(got, want) {
+		t.Fatalf("readRequires = %q, want %q", got, want)
 	}
 }
 
@@ -696,6 +713,10 @@ func postureFixtures() []guardFixture {
 			"\t_, _ = authorization.New(nil, authorization.WithRuntimeMode(mode), authorization.WithAuditDisabledAcknowledged())\n")},
 		{name: "an expression", rule: "P5", violating: true, files: root(
 			"AdminUngatedAcknowledged: true", "AdminUngatedAcknowledged: os.Getenv(\"X\") != \"\"")},
+		{name: "AppendOnlyWritableAcknowledged written true", rule: "P5", notes: []string{"ack", "ack"}, files: extra(
+			"\tdbCfg := pgxdb.Config{RuntimeMode: mode, AppendOnlyWritableAcknowledged: true}\n\t_ = dbCfg\n")},
+		{name: "AppendOnlyWritableAcknowledged from an expression", rule: "P5", violating: true, files: extra(
+			"\tdbCfg := pgxdb.Config{RuntimeMode: mode}\n\tdbCfg.AppendOnlyWritableAcknowledged = os.Getenv(\"X\") != \"\"\n\t_ = dbCfg\n")},
 		{name: "option form outside New", rule: "P5", violating: true, files: extra(
 			"\topts := []authorization.Option{authorization.WithAuditDisabledAcknowledged()}\n" +
 				"\t_, _ = authorization.New(nil, append(opts, authorization.WithRuntimeMode(mode))...)\n")},
@@ -723,6 +744,146 @@ func postureFixtures() []guardFixture {
 		{name: "cms.Config gated", rule: "P8", files: root(
 			"AdminUngatedAcknowledged: true", "AdminMiddleware: []web.Middleware{web.RequestID()}")},
 		{name: "cms.Config names neither", rule: "P8", violating: true, files: root(", AdminUngatedAcknowledged: true", "")},
+
+		{name: "every store file copied byte-identical under new numbers", rule: "P9", files: p9Host(true, p9Ledger(nil))},
+		{name: "a store file missing from the ledger", rule: "P9", violating: true, files: p9Host(true, p9Ledger(map[string]string{
+			"0008_widgets_idx.sql": ""}))},
+		{name: "an edited copy", rule: "P9", violating: true, files: p9Host(true, p9Ledger(map[string]string{
+			"0008_widgets_idx.sql": "CREATE INDEX widgets_id ON widgets (id DESC);\n"}))},
+		{name: "an unresolvable store module", rule: "P9", violating: true, files: withFiles(p9Host(true, p9Ledger(nil)), map[string]string{
+			"go.mod": p9GoMod("./_absent")})},
+		{name: "an immutability trigger file declined by omission", rule: "P9", files: p9Host(true, p9Ledger(map[string]string{
+			"0009_widgets_immutable.sql": ""}))},
+		{name: "an edited immutability trigger copy", rule: "P9", violating: true, files: p9Host(true, p9Ledger(map[string]string{
+			"0009_widgets_immutable.sql": "CREATE TRIGGER widgets_immutable;\n"}))},
+	}
+}
+
+// The P9 fixture: a framework-shaped store module nested under _store (the walk
+// skips `_` directories) and resolved through a relative replace, its three
+// migrations (the last an immutability trigger file) and a scratch file, and the
+// host ledger's renumbered copies.
+var (
+	p9Store      = fwPockets + "/acme/stores/pgx"
+	p9StoreFiles = map[string]string{
+		"0001_widgets.sql":           "CREATE TABLE widgets (id TEXT PRIMARY KEY);\n",
+		"0002_widgets_idx.sql":       "CREATE INDEX widgets_id ON widgets (id);\n",
+		"0003_widgets_immutable.sql": "CREATE OR REPLACE TRIGGER widgets_immutable;\n",
+		"_scratch.sql":               "-- not a migration\n",
+	}
+	p9LedgerFiles = map[string]string{
+		"0001_host_notes.sql":        "CREATE TABLE notes (id TEXT PRIMARY KEY);\n",
+		"0007_widgets.sql":           p9StoreFiles["0001_widgets.sql"],
+		"0008_widgets_idx.sql":       p9StoreFiles["0002_widgets_idx.sql"],
+		"0009_widgets_immutable.sql": p9StoreFiles["0003_widgets_immutable.sql"],
+	}
+)
+
+// p9GoMod requires the fixture store and replaces it with dir.
+func p9GoMod(dir string) string {
+	return "module " + fixtureModule + "\n\ngo 1.26\n\nrequire " + p9Store + " v0.0.0\n\nreplace " + p9Store + " => " + dir + "\n"
+}
+
+// p9Ledger returns the clean ledger with edits applied: an empty value drops
+// the file, any other replaces its bytes.
+func p9Ledger(edits map[string]string) map[string]string {
+	out := map[string]string{}
+	for name, src := range p9LedgerFiles {
+		out[name] = src
+	}
+	for name, src := range edits {
+		if src == "" {
+			delete(out, name)
+			continue
+		}
+		out[name] = src
+	}
+	return out
+}
+
+// p9Host renders a host requiring the fixture store, importing it from
+// cmd/server in production (or only from a test), with the given ledger.
+func p9Host(production bool, ledger map[string]string) map[string]string {
+	files := map[string]string{
+		"go.mod":              p9GoMod("./_store"),
+		"_store/go.mod":       "module " + p9Store + "\n\ngo 1.26\n",
+		"_store/store.go":     goSrc("pgx", nil, ""),
+		"cmd/server/store.go": goSrc("main", []string{p9Store}, ""),
+	}
+	if !production {
+		delete(files, "cmd/server/store.go")
+		files["cmd/server/store_test.go"] = goSrc("main", []string{p9Store}, "")
+	}
+	for name, src := range p9StoreFiles {
+		files["_store/migrations/"+name] = src
+	}
+	for name, src := range ledger {
+		files["workshop/migrations/primary/"+name] = src
+	}
+	return files
+}
+
+// withFiles returns files with extra added or replaced.
+func withFiles(files, extra map[string]string) map[string]string {
+	for rel, src := range extra {
+		files[rel] = src
+	}
+	return files
+}
+
+// TestGuardP9Scope proves P9 never reads as clean when it checked nothing: no
+// store required, a store named only by tests, and a mounted store without a
+// migrations/ directory each report `no scope` with their reason.
+func TestGuardP9Scope(t *testing.T) {
+	noMigrations := p9Host(true, p9Ledger(nil))
+	for rel := range noMigrations {
+		if strings.HasPrefix(rel, "_store/migrations/") {
+			delete(noMigrations, rel)
+		}
+	}
+	cases := []struct {
+		name  string
+		files map[string]string
+		want  string
+	}{
+		{"no store module required", nil, "no framework store module mounted"},
+		{"a store named only by a test", p9Host(false, p9Ledger(nil)), "no framework store module mounted"},
+		{"a mounted store without migrations/", noMigrations, "no mounted store ships migrations/"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			res := evalFixture(t, guardFixture{rule: "P9", files: c.files})
+			if len(res.findings) > 0 || res.checked != 0 || res.noScope != c.want {
+				t.Fatalf("P9 = checked %d, noScope %q, findings %+v; want no scope (%s)", res.checked, res.noScope, res.findings, c.want)
+			}
+		})
+	}
+
+	root := writeFixture(t, guardFixture{files: p9Host(true, p9Ledger(nil))})
+	out := captureStdout(t, func() int { return Run([]string{"guard", "--posture", root}) })
+	if !strings.Contains(out, "\nP9   ok        (1 store)\n") {
+		t.Fatalf("guard --posture lacks the P9 ok line:\n%s", out)
+	}
+}
+
+// TestGuardP9Declined proves the decline path is visible, never silent: a
+// ledger without a store's immutability trigger file is clean and the status
+// line names the declined file; with a required file also missing, the
+// findings line still names it.
+func TestGuardP9Declined(t *testing.T) {
+	declined := p9Ledger(map[string]string{"0009_widgets_immutable.sql": ""})
+	var code int
+	root := writeFixture(t, guardFixture{files: p9Host(true, declined)})
+	out := captureStdout(t, func() int { code = Run([]string{"guard", "--posture", root}); return code })
+	if code != 0 || !strings.Contains(out, "\nP9   ok        (1 store; declined: 0003_widgets_immutable.sql)\n") {
+		t.Fatalf("exit %d, want 0 with the declined note on the P9 status line:\n%s", code, out)
+	}
+
+	declined = p9Ledger(map[string]string{"0009_widgets_immutable.sql": "", "0008_widgets_idx.sql": ""})
+	root = writeFixture(t, guardFixture{files: p9Host(true, declined)})
+	out = captureStdout(t, func() int { code = Run([]string{"guard", "--posture", root}); return code })
+	if code != 1 || !strings.Contains(out, "\nP9   1 finding (declined: 0003_widgets_immutable.sql)\n") {
+		t.Fatalf("exit %d, want 1 with the declined note on the P9 findings line:\n%s", code, out)
 	}
 }
 
