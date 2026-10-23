@@ -243,13 +243,14 @@ func TestFreshCacheInstallationOrderAndRollback(t *testing.T) {
 }
 
 // canonicalOperationsDDL is iam_operations exactly as SQLite stores it after
-// 0004's rename: the header is rewritten, the body is 0004's CREATE body.
+// 0005's rename: the header is rewritten, the body is 0005's CREATE body.
 const canonicalOperationsDDL = `CREATE TABLE "iam_operations" (
     operation_id TEXT COLLATE BINARY NOT NULL PRIMARY KEY,
     encoding TEXT COLLATE BINARY NOT NULL,
     fingerprint TEXT COLLATE BINARY NOT NULL,
     outcome TEXT COLLATE BINARY NOT NULL,
     committed_at TEXT NOT NULL,
+    recorded_at TEXT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
     CONSTRAINT ck_iam_operations_id CHECK (operation_id <> ''),
     CONSTRAINT ck_iam_operations_encoding CHECK (encoding = 'operation/v1'),
     CONSTRAINT ck_iam_operations_fingerprint CHECK (length(fingerprint) = 64 AND fingerprint NOT GLOB '*[^0-9a-f]*'),
@@ -339,7 +340,7 @@ func TestOperationsFencedUpgrade(t *testing.T) {
 	if got, err := repos.Operations.Fence(t.Context(), "fresh"); err != nil || got.Outcome != mutations.OutcomeFenced || got.Recorded {
 		t.Fatalf("fence after upgrade: %+v %v", got, err)
 	}
-	if _, err := db.Exec(t.Context(), `INSERT INTO main.iam_operations VALUES ('bad', 'operation/v1', ?, 'refused', '2026-10-13T00:00:00Z')`, mutations.FenceFingerprint); err == nil {
+	if _, err := db.Exec(t.Context(), `INSERT INTO main.iam_operations (operation_id, encoding, fingerprint, outcome, committed_at) VALUES ('bad', 'operation/v1', ?, 'refused', '2026-10-13T00:00:00Z')`, mutations.FenceFingerprint); err == nil {
 		t.Fatal("0004 check accepted an unknown outcome")
 	}
 }

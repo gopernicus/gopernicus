@@ -15,6 +15,13 @@ const canonicalScopeConstraint = "CHECK ((((scope_kind = 1) AND (resource_type =
 const canonicalRefsConstraint = "CHECK (((relation <> ''::text) AND (subject_type <> ''::text) AND (subject_id <> ''::text)))"
 const canonicalOutcomeConstraint = "CHECK ((outcome = ANY (ARRAY['applied'::text, 'no_change'::text, 'not_found'::text, 'fenced'::text])))"
 
+// optionalColumn is a column a later migration adds: tolerated when present with
+// this shape, never required and never written by the store.
+type optionalColumn struct {
+	typ      string
+	nullable bool
+}
+
 func probeCanonicalSchema(ctx context.Context, db *pgxdb.DB, schema pgxdb.Schema, audit, operations bool) error {
 	tx, err := db.BeginRead(ctx)
 	if err != nil {
@@ -58,7 +65,7 @@ WHERE c.oid=pg_catalog.to_regclass($1)`, schema.Table(table)).Scan(&namespace, &
 		canonicalScopeConstraint:             true,
 		canonicalRefsConstraint:              true,
 	}
-	if err := probeCanonicalTable(ctx, tx, schema.Table("iam_tuples"), columns, constraints); err != nil {
+	if err := probeCanonicalTable(ctx, tx, schema.Table("iam_tuples"), columns, nil, constraints); err != nil {
 		return err
 	}
 	if audit {
@@ -75,7 +82,13 @@ WHERE c.oid=pg_catalog.to_regclass($1)`, schema.Table(table)).Scan(&namespace, &
 			"CHECK ((encoding = 'tuple/v2'::text))":                          true,
 			"CHECK ((((actor_type <> ''::text) AND (actor_id <> ''::text) AND (system_source = ''::text)) OR ((actor_type = ''::text) AND (actor_id = ''::text) AND (system_source <> ''::text))))": true,
 		}
-		if err := probeCanonicalTable(ctx, tx, schema.Table("iam_audit"), columns, constraints); err != nil {
+		optional := map[string]optionalColumn{
+			"request_id":  {typ: "text"},
+			"trace_id":    {typ: "text"},
+			"seq":         {typ: "bigint", nullable: true},
+			"recorded_at": {typ: "timestamp with time zone", nullable: true},
+		}
+		if err := probeCanonicalTable(ctx, tx, schema.Table("iam_audit"), columns, optional, constraints); err != nil {
 			return err
 		}
 	}
@@ -88,14 +101,15 @@ WHERE c.oid=pg_catalog.to_regclass($1)`, schema.Table(table)).Scan(&namespace, &
 			"CHECK ((fingerprint ~ '^[0-9a-f]{64}$'::text))": true,
 			canonicalOutcomeConstraint:                       true,
 		}
-		if err := probeCanonicalTable(ctx, tx, schema.Table("iam_operations"), columns, constraints); err != nil {
+		optional := map[string]optionalColumn{"recorded_at": {typ: "timestamp with time zone", nullable: true}}
+		if err := probeCanonicalTable(ctx, tx, schema.Table("iam_operations"), columns, optional, constraints); err != nil {
 			return err
 		}
 	}
 	return tx.Commit()
 }
 
-func probeCanonicalTable(ctx context.Context, q pgxdb.Querier, table string, columns map[string]string, constraints map[string]bool) error {
+func probeCanonicalTable(ctx context.Context, q pgxdb.Querier, table string, columns map[string]string, optional map[string]optionalColumn, constraints map[string]bool) error {
 	want := maps.Clone(columns)
 	rows, err := q.Query(ctx, `SELECT a.attname, a.atttypid::regtype::text, a.attnotnull,
 COALESCE(c.collname, ''), a.attgenerated::text
@@ -111,7 +125,11 @@ WHERE a.attrelid=$1::regclass AND a.attnum>0 AND NOT a.attisdropped`, table)
 			rows.Close()
 			return err
 		}
-		if want[name] != typ || !nonnull || generated != "" || typ == "text" && collation != "C" {
+		expected, nullable := want[name], false
+		if column, ok := optional[name]; ok {
+			expected, nullable = column.typ, column.nullable
+		}
+		if expected != typ || !nonnull && !nullable || generated != "" || typ == "text" && collation != "C" {
 			rows.Close()
 			return incompatibleSchema(table, "column "+name+" has incompatible type, nullability, generation or collation")
 		}

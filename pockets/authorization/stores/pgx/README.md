@@ -133,6 +133,16 @@ and can stall every authorization write while it waits; see the [deploy order
 and lock guidance](../UPGRADE.md). `Repositories` populates both `Mutations` and
 `Operations`; `RelationshipRepository` needs neither table.
 
+**v0.19.1: ship and tolerate 0005; adopt BEFORE migrating it.**
+`0005_iam_audit_integrity.sql` adds `request_id`, `trace_id`, `seq` and
+`recorded_at` to `iam_audit` and `recorded_at` to `iam_operations`; the store
+never writes them, so they take their defaults. The file sets its own
+`lock_timeout` and ends with `GRANT USAGE ON SEQUENCE iam_audit_seq TO PUBLIC`,
+so a runtime role holding table privileges only keeps inserting. v0.19.1 admits
+a database with or without 0005; v0.19.0 refuses one with 0005 applied (through
+`Repositories` or `WithAudit()`) and v0.20.0 will require it. Run v0.19.1 everywhere first, then migrate 0005; after
+0005, roll back only to v0.19.1.
+
 TupleCache adds one optional file,
 `tuple_cache_migrations/0002_iam_tuple_cache.sql`, exposed by
 `TupleCacheMigrationsFS` / `TupleCacheMigrationsDir` and

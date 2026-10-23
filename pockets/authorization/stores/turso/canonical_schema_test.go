@@ -2,12 +2,28 @@ package turso
 
 import (
 	"errors"
+	"slices"
 	"strings"
 	"testing"
+	"testing/fstest"
 
+	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/audit"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/mutations"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/relationships"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuples"
 	"github.com/gopernicus/gopernicus/sdk"
 )
+
+// preIntegrityAudit renders every iam_audit column that predates 0005.
+const preIntegrityAudit = `SELECT id || '|' || event_id || '|' || occurred_at || '|' || actor_type || '|' || actor_id || '|' || system_source || '|' || reason || '|' || action || '|' || encoding || '|' || scope_kind || '|' || resource_type || '|' || resource_id || '|' || relation || '|' || subject_type || '|' || subject_id || '|' || subject_relation FROM main.iam_audit ORDER BY occurred_at, id`
+
+const recordedAtStamp = `CASE WHEN recorded_at IS NULL THEN 'unstamped' WHEN recorded_at GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9].[0-9][0-9][0-9]Z' THEN 'stamped' ELSE recorded_at END`
+
+// migration0005Columns renders the columns 0005 adds to every audit and
+// operation row, and whether recorded_at is stamped in the canonical format.
+const migration0005Columns = `SELECT 'audit|' || resource_id || '|' || request_id || '|' || trace_id || '|' || ` + recordedAtStamp + ` FROM main.iam_audit
+UNION ALL SELECT 'operation|' || operation_id || '|' || ` + recordedAtStamp + ` FROM main.iam_operations ORDER BY 1`
 
 func TestCanonicalConstructorsRejectPartialSchemas(t *testing.T) {
 	for _, tc := range []struct{ name, table, from, to string }{
@@ -106,6 +122,104 @@ func TestOperationSchemaRequiredOnlyForBundle(t *testing.T) {
 			}
 			if _, err := RelationshipRepository(t.Context(), db, WithAudit()); err != nil {
 				t.Fatalf("facade requires ledger: %v", err)
+			}
+		})
+	}
+}
+
+// migrationsThrough is the embedded stream up to and including last: the
+// database a host has before it copies a later file.
+func migrationsThrough(t *testing.T, last string) fstest.MapFS {
+	t.Helper()
+	stream := fstest.MapFS{}
+	for _, name := range migrationNames(t) {
+		if name > last {
+			break
+		}
+		data, err := MigrationsFS.ReadFile(MigrationsDir + "/" + name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		stream[MigrationsDir+"/"+name] = &fstest.MapFile{Data: data}
+	}
+	return stream
+}
+
+// writeAudited admits the bundle and the audited facade, then records one
+// audited, ledgered grant on doc id.
+func writeAudited(t *testing.T, db *tursodb.DB, id string) {
+	t.Helper()
+	repos, err := testRepositories(t.Context(), db, WithAudit())
+	if err != nil {
+		t.Fatalf("bundle refused: %v", err)
+	}
+	if _, err := RelationshipRepository(t.Context(), db, WithAudit()); err != nil {
+		t.Fatalf("facade refused: %v", err)
+	}
+	ctx := audit.WithSource(t.Context(), audit.Source{System: "migration-0005-test"})
+	cmd := mutations.Command{Target: mutations.Target{Kind: mutations.TargetResource, Type: "doc", ID: id}, Operation: mutations.OpGrant, Relationships: []mutations.RelationshipRow{{Relation: "viewer", Subject: relationships.SubjectRef{Type: "user", ID: "alice"}}}, OperationID: "op:" + id}
+	if _, err := repos.Mutations.Apply(ctx, cmd, nil); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// assertMigration0005Expand starts from a database migrated through 0004: both
+// shapes are admitted, the rebuild keeps every earlier row unstamped and later
+// writes take the new defaults.
+func assertMigration0005Expand(t *testing.T, db *tursodb.DB) {
+	t.Helper()
+	writeAudited(t, db, "before")
+	before, err := queryStrings(t.Context(), db, preIntegrityAudit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := tursodb.RunMigrations(t.Context(), db, MigrationsFS, MigrationsDir); err != nil {
+		t.Fatal(err)
+	}
+	if after, err := queryStrings(t.Context(), db, preIntegrityAudit); err != nil || !slices.Equal(after, before) || len(after) != 1 {
+		t.Fatalf("rebuild changed audit rows: before=%v after=%v %v", before, after, err)
+	}
+	assertFreshIndexes(t, db)
+	writeAudited(t, db, "after")
+	want := []string{"audit|after|||stamped", "audit|before|||unstamped", "operation|op:after|stamped", "operation|op:before|unstamped"}
+	if got, err := queryStrings(t.Context(), db, migration0005Columns); err != nil || !slices.Equal(got, want) {
+		t.Fatalf("0005 columns: got %v, want %v %v", got, want, err)
+	}
+}
+
+func TestCanonicalSchemaToleratesMigration0005(t *testing.T) {
+	db := emptyCanonicalFixture(t)
+	if err := tursodb.RunMigrations(t.Context(), db, migrationsThrough(t, "0004_iam_operations_fenced.sql"), MigrationsDir); err != nil {
+		t.Fatal(err)
+	}
+	assertMigration0005Expand(t, db)
+}
+
+// TestCanonicalSchemaRefusesMigration0005Variants keeps the 0005 bodies exact:
+// another column, an added constraint or a nullable id is refused.
+func TestCanonicalSchemaRefusesMigration0005Variants(t *testing.T) {
+	for _, tc := range []struct{ name, table, from, to string }{
+		{"fifth audit column", "iam_audit", "    recorded_at TEXT NULL", "    host_note TEXT NOT NULL DEFAULT '',\n    recorded_at TEXT NULL"},
+		{"audit check", "iam_audit", "    CONSTRAINT ck_iam_audit_scope", "    CONSTRAINT ck_iam_audit_request_id CHECK (length(request_id) <= 128),\n    CONSTRAINT ck_iam_audit_scope"},
+		{"nullable request id", "iam_audit", "request_id TEXT NOT NULL", "request_id TEXT"},
+		{"second operations column", "iam_operations", "    recorded_at TEXT NULL", "    host_note TEXT NOT NULL DEFAULT '',\n    recorded_at TEXT NULL"},
+		{"operations check", "iam_operations", "    CONSTRAINT ck_iam_operations_id", "    CONSTRAINT ck_iam_operations_recorded_at CHECK (recorded_at IS NOT NULL),\n    CONSTRAINT ck_iam_operations_id"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			db := canonicalFixture(t, false)
+			var ddl string
+			if err := db.QueryRow(t.Context(), `SELECT sql FROM main.sqlite_schema WHERE name=?`, tc.table).Scan(&ddl); err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(ddl, tc.from) {
+				t.Fatalf("test replacement absent: %s", ddl)
+			}
+			ddl = strings.Replace(ddl, tc.from, tc.to, 1)
+			if _, err := db.Exec(t.Context(), "DROP TABLE main."+tc.table+"; "+ddl); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := testRepositories(t.Context(), db); !errors.Is(err, sdk.ErrInvalidInput) {
+				t.Fatalf("bundle accepted altered schema: %v", err)
 			}
 		})
 	}
