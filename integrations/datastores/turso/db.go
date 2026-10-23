@@ -3,7 +3,10 @@ package turso
 import (
 	"context"
 	"database/sql"
+	"log/slog"
 	"time"
+
+	"github.com/gopernicus/gopernicus/sdk/pkg/environment"
 )
 
 // DB wraps a *sql.DB connected to a remote libSQL database. Driver errors from
@@ -12,6 +15,11 @@ type DB struct {
 	db *sql.DB
 	// tracer, when non-nil (Config.LogQueries), logs every Exec/Query/QueryRow.
 	tracer *loggingQueryTracer
+
+	// mode and logger are retained from the Config Open was given, for the
+	// posture probes that run after Open.
+	mode   environment.Mode
+	logger *slog.Logger
 }
 
 // Close closes the database connection.
@@ -27,6 +35,12 @@ func (d *DB) Ping(ctx context.Context) error {
 // Underlying returns the underlying *sql.DB for advanced operations.
 func (d *DB) Underlying() *sql.DB {
 	return d.db
+}
+
+// RuntimeMode returns the Config.RuntimeMode the DB was opened with; the zero
+// value is mode-blind.
+func (d *DB) RuntimeMode() environment.Mode {
+	return d.mode
 }
 
 // StatusCheck returns nil if it can successfully talk to the database.

@@ -1,5 +1,21 @@
 # Releasing gopernicus modules
 
+## Unreleased: append-only posture probe (pgxdb v0.11.0, turso v0.8.0 — SOC 2 slice S2, step 1)
+
+- `integrations/datastores/pgxdb` → **v0.11.0**: `AppendOnlyTable`, `TriggerBody`,
+  `TablePrivilege`, `Report`, `InspectTablePrivileges`, `(*DB).ProbeAppendOnly`,
+  `(*DB).RuntimeMode()`, `Config.AppendOnlyWritableAcknowledged` (programmatic, no env tag),
+  `ErrAppendOnlyTableWritable`, `ErrAppendOnlyTableUnwritable`. Requires PostgreSQL ≥ 14 for
+  the trigger files. **Behavior change for every consumer:** `MapError` maps SQLSTATE `42501`
+  (`insufficient_privilege`) to `sdk.ErrForbidden` — a 403 through the web mappers — keeping
+  the `*pgconn.PgError` in the chain; a host that matched the raw driver error for a missing
+  grant sees the sentinel now.
+- `integrations/datastores/turso` → **v0.8.0**: `(*DB).RuntimeMode()`, `AppendOnlyTable`,
+  `TableTrigger`, `TriggerBody`, `(*DB).ProbeAuditImmutable` (WARN-only). **Behavior change:**
+  `MapError` maps a message containing `is append-only` to `sdk.ErrForbidden`.
+- Nothing refuses at boot from these tags alone: the production refusal reaches hosts through
+  the pgx store releases that call the probe. Both migration runners are unchanged.
+
 ## Production posture floor (SOC 2 slice S1 — published 2026-10-22)
 
 Ten annotated tags in seven steps, each cut at its PR's squash-merge commit, pushed, THEN

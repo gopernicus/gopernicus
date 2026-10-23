@@ -2,7 +2,10 @@ package pgxdb
 
 import (
 	"context"
+	"log/slog"
 	"time"
+
+	"github.com/gopernicus/gopernicus/sdk/pkg/environment"
 
 	jackpgx "github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -13,6 +16,12 @@ import (
 // from Exec/Query are mapped to sdk/errs sentinels via MapError.
 type DB struct {
 	pool *pgxpool.Pool
+
+	// mode, logger and appendOnlyWritableAcknowledged are retained from the
+	// Config Open was given, for the posture probes that run after Open.
+	mode                           environment.Mode
+	logger                         *slog.Logger
+	appendOnlyWritableAcknowledged bool
 }
 
 // Close closes the connection pool. It returns nil to mirror the turso
@@ -30,6 +39,12 @@ func (d *DB) Ping(ctx context.Context) error {
 // Underlying returns the underlying *pgxpool.Pool for advanced operations.
 func (d *DB) Underlying() *pgxpool.Pool {
 	return d.pool
+}
+
+// RuntimeMode returns the Config.RuntimeMode the DB was opened with; the zero
+// value is mode-blind.
+func (d *DB) RuntimeMode() environment.Mode {
+	return d.mode
 }
 
 // StatusCheck returns nil if it can successfully talk to the database.

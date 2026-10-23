@@ -44,12 +44,12 @@ func captureLogger() (*slog.Logger, *bytes.Buffer) {
 	return slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})), &buf
 }
 
-// TestPosture_FieldsCarryNoEnvTag pins the mode and both acknowledgements as
+// TestPosture_FieldsCarryNoEnvTag pins the mode and the acknowledgements as
 // programmatic: ParseEnvTags, which hosts run over Config, leaves them zero even
 // with same-named variables set.
 func TestPosture_FieldsCarryNoEnvTag(t *testing.T) {
 	typ := reflect.TypeFor[Config]()
-	for _, name := range []string{"RuntimeMode", "TLSUnverifiedAcknowledged", "TLSDisabledAcknowledged"} {
+	for _, name := range []string{"RuntimeMode", "TLSUnverifiedAcknowledged", "TLSDisabledAcknowledged", "AppendOnlyWritableAcknowledged"} {
 		field, ok := typ.FieldByName(name)
 		if !ok {
 			t.Fatalf("Config.%s is missing", name)
@@ -62,6 +62,7 @@ func TestPosture_FieldsCarryNoEnvTag(t *testing.T) {
 		"RuntimeMode", "RUNTIME_MODE", "DB_RUNTIME_MODE", "APP_RUNTIME_MODE",
 		"TLSUnverifiedAcknowledged", "TLS_UNVERIFIED_ACKNOWLEDGED", "DB_TLS_UNVERIFIED_ACKNOWLEDGED",
 		"TLSDisabledAcknowledged", "TLS_DISABLED_ACKNOWLEDGED", "DB_TLS_DISABLED_ACKNOWLEDGED",
+		"AppendOnlyWritableAcknowledged", "APPEND_ONLY_WRITABLE_ACKNOWLEDGED", "DB_APPEND_ONLY_WRITABLE_ACKNOWLEDGED",
 	} {
 		value := "true"
 		if strings.Contains(strings.ToUpper(key), "MODE") {
@@ -73,9 +74,9 @@ func TestPosture_FieldsCarryNoEnvTag(t *testing.T) {
 	if err := environment.ParseEnvTags("", &cfg); err != nil {
 		t.Fatalf("ParseEnvTags: %v", err)
 	}
-	if cfg.RuntimeMode != "" || cfg.TLSUnverifiedAcknowledged || cfg.TLSDisabledAcknowledged {
-		t.Fatalf("ParseEnvTags populated a programmatic field: mode=%q unverified=%v disabled=%v",
-			cfg.RuntimeMode, cfg.TLSUnverifiedAcknowledged, cfg.TLSDisabledAcknowledged)
+	if cfg.RuntimeMode != "" || cfg.TLSUnverifiedAcknowledged || cfg.TLSDisabledAcknowledged || cfg.AppendOnlyWritableAcknowledged {
+		t.Fatalf("ParseEnvTags populated a programmatic field: mode=%q unverified=%v disabled=%v append_only=%v",
+			cfg.RuntimeMode, cfg.TLSUnverifiedAcknowledged, cfg.TLSDisabledAcknowledged, cfg.AppendOnlyWritableAcknowledged)
 	}
 }
 
