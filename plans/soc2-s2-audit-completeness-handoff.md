@@ -1,8 +1,13 @@
 # Host handoff — audit completeness and integrity (SOC 2 slice S2, released 2026-10-23)
 
-**Status:** OPEN — apply in gps-360-go, Segovia and coordination-hub on each host's own
-schedule. Release record: `RELEASING.md` "Audit completeness and integrity". Plan of record:
-`plans/s2-audit-completeness.md`. Manifest: `plans/s2-audit-completeness-release-manifest.json`.
+**Status:** OPEN. **Maintenance rule (owner, 2026-10-23): host handoffs are written and
+updated per slice but are NOT applied to the hosts until the SOC 2 roadmap is complete; the
+hosts adopt once, at the end.** Updated 2026-10-23 for the S2 follow-ups (authentication
+v0.22.0 + `stores/pgx` v0.10.1, secrets `stores/pgx` v0.2.1, workshop/gopernicus v0.6.1;
+record: `RELEASING.md` "S2 follow-ups"; plan `plans/s2-follow-ups.md`; manifest
+`plans/s2-follow-ups-release-manifest.json`). Release record: `RELEASING.md` "Audit
+completeness and integrity". Plan of record: `plans/s2-audit-completeness.md`. Manifest:
+`plans/s2-audit-completeness-release-manifest.json`.
 This handoff builds on the S1 handoff (`plans/soc2-s1-production-posture-handoff.md`), which is
 still open in all three hosts; S2 changes one line of it (the authorization store pins, below).
 
@@ -21,18 +26,19 @@ deploy of their own.
 2. **Authentication audit.** Export and apply `0021_security_events_integrity.sql`, then
    `0022_security_events_immutable.sql` (migrate, then deploy), split the database roles (below),
    then `integrations/datastores/pgxdb` **v0.11.0** / `integrations/datastores/turso` **v0.8.0**
-   with `pockets/authentication` **v0.21.0** + `stores/pgx` **v0.10.0** / `stores/turso`
-   **v0.9.0**. The authentication stores require the new connector, so they move together; the
+   with `pockets/authentication` **v0.22.0** + `stores/pgx` **v0.10.1** / `stores/turso`
+   **v0.9.0**, and mount `ClientInfoMiddleware` (recipe under "The bridge", below). The
+   authentication stores require the new connector, so they move together; the
    authorization stores stay on v0.19.1 / v0.18.1, a pair the release cold-verified. Deploy until
    production boots clean.
 3. **Authorization audit, LOCKSTEP after 0005.** With every instance on v0.19.1 / v0.18.1,
    export and apply `0005_iam_audit_integrity.sql`, then `0006_iam_audit_immutable.sql`, then
    repin `pockets/authorization` **v0.29.1** + `stores/pgx` **v0.20.0** / `stores/turso`
    **v0.19.0** (`stores/goredis` unchanged) — pin authorization v0.29.1, not v0.29.0, so gate denials name their target. Wire the bridge (below) in the same deploy.
-4. `workshop/gopernicus` **v0.6.0** for `gopernicus guard --posture` (P9: every migration a
+4. `workshop/gopernicus` **v0.6.1** for `gopernicus guard --posture` (P9: every migration a
    mounted framework store ships has a byte-identical copy in the host ledger).
 
-`pockets/secrets` **v0.2.0** + `stores/pgx` **v0.2.0** (migrations `0002_secrets_audit_integrity.sql`
+`pockets/secrets` **v0.2.0** + `stores/pgx` **v0.2.1** (migrations `0002_secrets_audit_integrity.sql`
 then `0003_secrets_audit_immutable.sql`, migrate-then-deploy) apply only to a host that mounts
 secrets. None of the three hosts mounts secrets today.
 
@@ -151,6 +157,13 @@ audit evidence.** `AuditTables` exists from authentication `stores/pgx` v0.10.0 
   ("Migration", step 3): use its shell recipe as written — the digest is an HMAC over three
   length-prefixed fields, so hand-built shortcuts digest the wrong input; its check value
   confirms your shell before you query.
+- **Authentication v0.22.0 records more rows.** Nine more denial paths now record, and the
+  OAuth2 token endpoint's `invalid_request` / `invalid_scope` / `invalid_target` refusals and
+  client-secret mismatches write `oauth2_grant_failed` rows under a per-IP budget of 60 rows a
+  minute per instance (`AuditRowsSuppressed()` counts the rest); alert on
+  `oauth2_grant_failed reason=invalid_client`. Host code calling
+  `oauth2.Service.AuthenticateClient` moves to `AuthenticateClientContext` (the old method is
+  deprecated). `RELEASING.md` "S2 follow-ups" lists every behavior change.
 
 ## The bridge — denials onto the security-event rail
 
@@ -165,14 +178,24 @@ never `cmd/` (H10). In `cmd/`:
 - `authorization.WithDecisionObserver(bridge.Observer())`, and
   `authorizationhttp.WithDecisionObserver(bridge.Observer())` when the host rebuilds the HTTP
   adapter;
-- `authentication.WithAuditWriteObserver(...)` logging each lost row at ERROR, and
-  `AuditWriteFailures()` and `bridge.Dropped()` in the health detail.
+- `authentication.WithAuditWriteObserver(...)` logging the first lost row at ERROR, then one
+  counted line a minute (the baseline's observer), and `AuditWriteFailures()`,
+  `AuditRowsSuppressed()` and `bridge.Dropped()` in the health detail.
 
 It records denials (`authorization_denied`, `failure`) and refused role writes
 (`role_write_refused`, `blocked`) only, at most 8 writes in flight (extra events are dropped
-and counted) and one row per (type, principal, permission, resource) per 60 s, per instance.
-With authorization v0.29.1 a gate denial names its permission and resource. Bridged rows carry
-no `ip_address` / `user_agent` yet (a known follow-up).
+and counted) and one row per (type, principal, permission, resource, client address) per 60 s,
+per instance. With authorization v0.29.1 a gate denial names its permission and resource.
+
+**Client attribution (authentication v0.22.0).** Mount
+`authenticationComponents.HTTP.ClientInfoMiddleware()` with `router.Use` right after
+`authentication.New`, registered after the `TrustProxies` `Use` so it runs inside it; bridged
+rows and host-route `external_login` rows then carry `ip_address`/`user_agent`, and
+`RateLimitByIP` keys per client. Without it, production logs one WARN per process ("security
+event recorded without client attribution; mount ClientInfoMiddleware"). Attribution is only
+as good as `TRUSTED_PROXY_COUNT` plus an origin reachable solely through those proxies, and the
+host's routes now add IP and User-Agent to the immutable `security_events` table (erasure is
+S3's).
 
 ## gps-360-go
 
@@ -181,9 +204,10 @@ no `ip_address` / `user_agent` yet (a known follow-up).
   v0.18.0 + `stores/goredis` v0.5.0. Re-read `go.mod` before starting. It vendors: `go mod
   vendor` after each tidy.
 - **Repin:** step 1 (the open S1 adoption) with authorization `stores/pgx` **v0.19.1**, skipping
-  v0.19.0 → step 2 (auth 0021 → 0022; pgxdb v0.11.0, authentication v0.21.0 + `stores/pgx`
-  v0.10.0) → step 3 (authorization 0005 → 0006; authorization v0.29.1 + `stores/pgx` v0.20.0;
-  the bridge) → step 4 (workshop v0.6.0). No turso store, no secrets.
+  v0.19.0 → step 2 (auth 0021 → 0022; pgxdb v0.11.0, authentication v0.22.0 + `stores/pgx`
+  v0.10.1; `ClientInfoMiddleware` mounted right after `authentication.New`, inside
+  `TrustProxies`) → step 3 (authorization 0005 → 0006; authorization v0.29.1 + `stores/pgx`
+  v0.20.0; the bridge) → step 4 (workshop v0.6.1). No turso store, no secrets.
 - **Migrations:** export the two pairs into the ledger that holds the authentication and
   authorization tables, after its current last file; P9 checks the copies (gps-360-go also
   mounts `pockets/jobs/stores/pgx`, whose ledger P9 checks the same way).
@@ -204,8 +228,9 @@ no `ip_address` / `user_agent` yet (a known follow-up).
   starting; work from a branch or worktree off `main`.
 - **Repin:** step 1 (the open S1 adoption, incl. the S1 handoff's P0/P1/P3/P6 findings) with
   authorization `stores/pgx` **v0.19.1**, skipping v0.19.0 → step 2 (auth 0021 → 0022; pgxdb
-  v0.11.0, authentication v0.21.0 + `stores/pgx` v0.10.0) → step 3 (authorization 0005 → 0006;
-  authorization v0.29.1 + `stores/pgx` v0.20.0; the bridge) → step 4 (workshop v0.6.0). No
+  v0.11.0, authentication v0.22.0 + `stores/pgx` v0.10.1; `ClientInfoMiddleware` mounted right
+  after `authentication.New`, inside `TrustProxies`) → step 3 (authorization 0005 → 0006;
+  authorization v0.29.1 + `stores/pgx` v0.20.0; the bridge) → step 4 (workshop v0.6.1). No
   turso store, no secrets.
 - **Migrations:** the two pairs go into the ledger that holds the authentication and
   authorization tables; P9 also checks the events and jobs stores' ledgers.
@@ -229,8 +254,8 @@ no `ip_address` / `user_agent` yet (a known follow-up).
 
 ## After the repin
 
-Run `guard --posture` (workshop v0.6.0) in CI and require a zero exit. Archive the
+Run `guard --posture` (workshop v0.6.1) in CI and require a zero exit. Archive the
 `-posture-role` output and the boot log's `posture_waiver` lines with every deploy. Record any
 declined trigger file and any `AppendOnlyWritableAcknowledged` waiver in the host's own posture
-doc: they are the exceptions an auditor samples. Watch `audit_write_failures` and
-`bridge_dropped` in the health detail.
+doc: they are the exceptions an auditor samples. Watch `audit_write_failures`,
+`audit_rows_suppressed` and `bridge_dropped` in the health detail.

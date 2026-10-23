@@ -65,11 +65,14 @@ page, err := repos.SecurityEvents.List(ctx, securityevent.ListFilter{
 
 Rows carry `user_id`, `actor_type`/`actor_id`, `event_type`, `event_status`, `details`
 (identifiers and key prefixes, never secrets), `ip_address`, `user_agent`, `created_at`
-(the application clock, UTC). There is no request id on a row today (planned, S2).
+(the application clock, UTC). Since S2, rows also carry `request_id` and `trace_id`, which
+join a row to the request's logs and trace (blank when the request carried none, or when the
+recorder refused an id that was not printable ASCII of at most 128 bytes).
 
 No bundled HTTP route exposes the rail. `examples/auth-cms` has `GET /debug/security-events`
-behind `AUTH_DEBUG=1`; it is gated by any authenticated session and is a harness feature —
-do not copy it into a host.
+behind `AUTH_DEBUG=1` (refused outside development); it requires a live session holding the
+platform-admin permission (`admin` on `platform:main`) and is a harness feature — do not copy
+it into a host.
 
 ## Read authorization change history
 
@@ -85,7 +88,9 @@ page, err := repos.Audit.List(ctx, audit.Filter{
 ```
 
 Each record is one committed fact delta (`added` or `removed`) with its source (actor pair or
-system, optional reason) and time. Refusals and denials are not recorded (planned, S2). The
+system, optional reason) and time. Refusals and denials are not in this history: since S2 the
+decision observer reports them (`authorization_denied`, `role_write_refused`), and a host that
+wires the audit bridge records them on the security-event rail (above). The
 listing recipes for a periodic access review are in `pockets/authorization/README.md`,
 "Access review".
 
