@@ -337,7 +337,8 @@ declare them.
   `DeliveryConfig.OpportunisticTLSAcknowledged`, `DeliveryJobsAcknowledged`,
   `DeliveryEphemeralAcknowledged`, `AdminUngatedAcknowledged`,
   `TLSUnverifiedAcknowledged`, `TLSDisabledAcknowledged`,
-  `AppendOnlyWritableAcknowledged`.
+  `AppendOnlyWritableAcknowledged`,
+  `MaintenanceConfig.MaintenanceRunnerAcknowledged`.
 - **the key constructor:** `authentication.NewKeys`, fed an
   `authentication.KeysInput`.
 

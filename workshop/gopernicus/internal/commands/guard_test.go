@@ -717,6 +717,11 @@ func postureFixtures() []guardFixture {
 			"\tdbCfg := pgxdb.Config{RuntimeMode: mode, AppendOnlyWritableAcknowledged: true}\n\t_ = dbCfg\n")},
 		{name: "AppendOnlyWritableAcknowledged from an expression", rule: "P5", violating: true, files: extra(
 			"\tdbCfg := pgxdb.Config{RuntimeMode: mode}\n\tdbCfg.AppendOnlyWritableAcknowledged = os.Getenv(\"X\") != \"\"\n\t_ = dbCfg\n")},
+		{name: "MaintenanceRunnerAcknowledged written true, UserErasureRoute no acknowledgement", rule: "P5", notes: []string{"ack", "ack"}, files: extra(
+			"\t_ = authentication.WithMaintenance(authentication.MaintenanceConfig{MaintenanceRunnerAcknowledged: true})\n" +
+				"\t_ = authentication.WithAdministration(authentication.AdministrationConfig{UserErasureRoute: true})\n")},
+		{name: "MaintenanceRunnerAcknowledged from an expression", rule: "P5", violating: true, files: extra(
+			"\tvar maint authentication.MaintenanceConfig\n\tmaint.MaintenanceRunnerAcknowledged = os.Getenv(\"X\") != \"\"\n\t_ = maint\n")},
 		{name: "option form outside New", rule: "P5", violating: true, files: extra(
 			"\topts := []authorization.Option{authorization.WithAuditDisabledAcknowledged()}\n" +
 				"\t_, _ = authorization.New(nil, append(opts, authorization.WithRuntimeMode(mode))...)\n")},

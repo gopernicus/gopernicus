@@ -208,6 +208,42 @@ disable/fix those schedules or restore the parser. Memory stores do not survive 
 loss. New SQL migration 0004 must precede new schedulers; stop old writers during
 rollout, and drain pending occurrences before rollback.
 
+## Ordinary-queue retention
+
+Since v0.7.0 (stores pgx v0.7.0, turso v0.6.0) the ordinary queue has a bounded purge.
+`queue.TerminalPurger` is an optional capability of `Repositories.Queue` that every bundled store
+implements; `queue.NewService` resolves it once, logs `terminal_purge=wired|absent`, and WARNs in
+**every** mode — the queue service takes no runtime mode — when an ordinary queue lacks it.
+
+`Components.Queue.PurgeTerminalJobs(ctx, before, limit)` deletes up to `limit` completed or
+dead-lettered jobs whose `UpdatedAt` is at or before `before`, oldest first, and returns the
+count. Pending and running jobs are never removed, and the fenced queue is never touched —
+`PurgeTerminal` remains its purge. `limit <= 0` is `sdk.ErrInvalidInput`; a queue without the
+capability returns `ErrTerminalPurgeRequired`, a service without `Repositories.Queue`
+`ErrQueueRequired`. Keep `before` at least the scheduler's longest retry window behind now:
+purging a completed job frees its ID, so a late re-delivery of the same schedule occurrence would
+enqueue and run it again.
+
+```go
+handlers := map[string]queue.HandlerFunc{
+    "retention": func(ctx context.Context, _ queue.Job) error {
+        _, err := parts.Queue.PurgeTerminalJobs(ctx, time.Now().Add(-7*24*time.Hour), 500)
+        return err
+    },
+}
+_, err := parts.Schedules.EnsureSchedule(ctx, schedules.Ensure{
+    Name: "retention", Kind: "retention", Spec: schedules.Spec{Every: time.Hour},
+})
+```
+
+`examples/jobs-minimal` runs this schedule (`RETENTION_EVERY`, default one hour). The same
+handler shape runs other pockets' retention from a schedule — authentication's
+`Components.Maintenance.Pass`, authorization's `Mutations.ExpireOperations`.
+`0005_job_queue_terminal_purge.sql` adds the partial index the purge walks; it is admitted, not
+required — the pgx store's `StatusCheck` WARNs `index_missing=idx_job_queue_terminal` without it.
+Its build blocks enqueue, claim and complete on `job_queue`, so on a large queue pre-build it with
+`CREATE INDEX CONCURRENTLY IF NOT EXISTS` outside the runner (drop an INVALID leftover first).
+
 ## Stores
 
 Use the public `pockets/jobs/stores/memory` for zero-infrastructure hosts, or select pgx/Turso sibling modules. All run the pocket conformance suite. The SQL migration source includes the ordinary queue, schedules, and fenced queue.

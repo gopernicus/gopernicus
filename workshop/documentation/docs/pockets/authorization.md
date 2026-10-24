@@ -248,6 +248,43 @@ Attribution is data, not access. The bundled role routes attach their
 authenticated actor themselves. Retention and who may read the audit trail are
 yours.
 
+### Operation expiry
+
+`Mutations` keeps one `iam_operations` record per `OperationID` command so a retry replays its
+outcome. Since v0.30.0 (stores pgx v0.21.0, turso v0.20.0) those records expire: wire
+`Repositories.OperationExpiry` — a `mutations.OperationExpirer` over the same authority as
+`Mutations`, which it requires; the bundled SQL `Repositories` set it and the memory store exposes
+`OperationExpiry()` — and call `components.Mutations.ExpireOperations(ctx, limit)` from the
+host's schedule until it returns less than `limit`. Each call deletes at most `limit` `applied`,
+`no_change` and `not_found` records committed at or before now minus the retention, oldest first,
+and returns the count; fenced records never expire.
+
+```go
+components, err := authorization.New(repos, // repos.OperationExpiry set by the store
+    authorization.WithRuntimeMode(mode),
+    authorization.WithOperationRetention(180*24*time.Hour), // the default; below 7 days refused
+)
+n, err := components.Mutations.ExpireOperations(ctx, 1000)
+```
+
+`WithOperationRetention` below 7 days is `ErrOperationRetentionTooShort`, and set without the slot
+`ErrOperationRetentionWithoutExpirer`. `ExpireOperations` takes no write lock, so it runs beside
+`Apply`, and no row lock — the append-only posture revokes `UPDATE` on `iam_operations`, which
+every row-lock clause needs; it refuses an ambient transaction and `limit <= 0`, and without the
+slot returns `ErrOperationExpiryNotConfigured`. Production logs one WARN when `Mutations` is wired
+without `OperationExpiry`.
+
+**An expired operation ID reads as never recorded**: `Recorded` returns false, `Fence` fences it,
+and a retried command applies again. Keep the retention above every producer's retry window and
+the age of the oldest open `accepting` invitation claim (keep authentication's
+`InvitationRetention`, 90 days, at or below half of it). `0007_iam_operations_expiry.sql` adds the
+index the expiry walks; it is admitted, not required, and the pgx store WARNs
+`index_missing=idx_iam_operations_committed` without it.
+
+Erasing a person in the authentication pocket leaves their facts here: list them with
+`Roles.ListRoleAssignmentsBySubject` and remove each through the role routes or
+`Mutations.UnassignRole` (*Operations runbooks*, "Erase a person").
+
 ## The cache and eventual consistency
 
 SQL is always the authority. The optional **TupleCache** mirrors raw facts in

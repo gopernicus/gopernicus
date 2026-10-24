@@ -116,7 +116,17 @@ A `--db pgx` runner scaffolded by `workshop/gopernicus` v0.6.0 or later also tak
 table=security_events protected_by=trigger owner=false insert=true sequence_usage=true trigger=verified
 ```
 
-`protected_by` is `privilege`, `trigger`, `waiver` or `none`, decided exactly as the stores' boot probe decides in production (`waiver` only when the runner's `appendOnlyWritableAcknowledged` mirrors a server that passes `AppendOnlyWritableAcknowledged: true`). The runner exits non-zero when any table is `none` or the role cannot append (no `INSERT`, or no `USAGE` on the table's sequence). With `postureTables` empty — the scaffold mounts no store — it prints `no append-only tables mounted; add each mounted pgx store's AuditTables() to postureTables` and exits 0 without connecting. `-status` is unchanged.
+`protected_by` is `privilege`, `trigger`, `waiver` or `none`, decided exactly as the stores' boot probe decides in production (`waiver` only when the runner's `appendOnlyWritableAcknowledged` mirrors a server that passes `AppendOnlyWritableAcknowledged: true`). The runner exits non-zero when any table is `none` or the role cannot append (no `INSERT`, or no `USAGE` on the table's sequence).
+
+From `workshop/gopernicus` v0.7.0 the runner also prints, after a table whose `AuditTables()` entry lists definer functions (the authentication pgx store's `security_events` lists `security_events_purge_before`), one evidence line with the rail's database floor:
+
+```text
+functions=[security_events_purge_before:execute=true unsafe=none inoperative=none] floor=365 days
+```
+
+`unsafe` names `public_execute`, `search_path` or `namespace`, and `inoperative` names `invoker`, `owner`, `superuser_owner` or `schema_create` (comma-joined, or `none`); a function that does not resolve prints `<name>:missing`, and `floor=missing` means the floor function is absent. A missing or unsafe function also fails the run — the boot refuses both — while `execute=false` and an inoperative function are reported and do not, because the boot WARNs on them.
+
+With `postureTables` empty — the scaffold mounts no store — it prints `no append-only tables mounted; add each mounted pgx store's AuditTables() to postureTables` and exits 0 without connecting. `-status` is unchanged.
 
 ## `guard`
 
@@ -151,7 +161,7 @@ guard: 1 finding across 1 rule
 
 A rule with nothing in scope prints `no scope` with the reason, so an inert rule never reads as a clean one. A clean run ends `guard: clean (15 rules, N packages)`; without `--posture` the output is exactly the H run.
 
-With `--posture` the ten P status lines follow the fifteen H lines, and informational lines follow the status block — `ack` for each acknowledgement written `true` (`ack (conditional)` when it sits under an `if` or `switch`) and `rand` for each `crypto/rand` use in the scanned trees. They are review evidence and never change the exit code:
+With `--posture` the ten P status lines follow the fifteen H lines, and informational lines follow the status block — `ack` for each acknowledgement written `true` (`ack (conditional)` when it sits under an `if` or `switch`) and `rand` for each `crypto/rand` use in the scanned trees. The acknowledgements are the field names in the contract's recognized-surfaces list; v0.7.0 adds `MaintenanceConfig.MaintenanceRunnerAcknowledged`, so a host that runs the authentication maintenance service sees one `ack` line for it, and P5 finds it when it is set from an expression. `AdministrationConfig.UserErasureRoute` is an opt-in, not an acknowledgement, and prints nothing. The informational lines are review evidence and never change the exit code:
 
 ```text
 P5   ok        (3 acknowledgements)

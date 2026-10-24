@@ -88,6 +88,61 @@ Persistent stores are still the host's choice: an in-memory authentication or au
 store constructs in production, and `guard --posture` does not see which store a `Config`
 names. The scaffold wires the chosen connector.
 
+## Retention (S3)
+
+Every row class the pockets write has an owner-set lifetime, each disposal is bounded, and the
+pockets start none of it: the host runs `Components.Maintenance` (authentication),
+`Mutations.ExpireOperations` (authorization), `PurgeTerminalJobs` (jobs) and the cms inquiry
+eraser from its own schedule — *Operations runbooks*, "Retention". `<=` is the rule everywhere:
+a row exactly at the cutoff is eligible.
+
+| Rows | Eligible when | Default | Floor (database) | Who runs the statement |
+|---|---|---|---|---|
+| `sessions` (both profiles) | `expires_at <= now − SessionRetention` | 24h past expiry (`maintenance.Config`) | none | runtime role, `Components.Maintenance` over `Repositories.Maintenance` |
+| `oauth_states` | `expires_at <= now − OAuthStateRetention` | 1h | none | runtime role |
+| `authentication_grants` | `expires_at <= now − GrantRetention` | 24h | none | runtime role |
+| `contact_changes` | `expires_at <= now − ContactChangeRetention` | 24h | none | runtime role |
+| `invitations` | terminal (`accepted`/`declined`/`cancelled`) with `updated_at <=` the cutoff, or `pending` with `expires_at <=` it; **never `accepting`** | `InvitationRetention` 90 days | none | runtime role |
+| `challenges` | `Challenges.PurgeExpired(now − 1h)` | fixed 1h | none | runtime role |
+| OAuth2 codes, client metadata, refresh history | `expires_at <= now`, bounded per table (`PruneOAuth2`; the unbounded `OAuth2.Prune` is never called) | the stores' own horizons | none | runtime role |
+| `security_events` | `created_at <= now − SecurityEventRetention`, archived then purged per chunk, once a day | 400 days; below `maintenance.MinSecurityEventRetention` (366 days) refused | **365 days, a framework invariant**: pgx `security_events_retention_floor()`; turso row 1 of `security_events_retention.floor_days` (SQLite has no roles: a footgun guard, not a control) | pgx: the runtime role calls `security_events_purge_before`, a migrator-owned `SECURITY DEFINER` function; turso: the store's capture-drop-restore transaction |
+| `user_identifiers` (retired rows) | not purged: kept for live users, blanked on erasure | — | — | — |
+| `iam_operations` | `applied`/`no_change`/`not_found` with `committed_at <=` the cutoff; fenced never | `authorization.WithOperationRetention` 180 days; below 7 days refused (`ErrOperationRetentionTooShort`) | none | runtime role (`DELETE` stays granted), `Mutations.ExpireOperations` over `Repositories.OperationExpiry` |
+| `job_queue` (ordinary) | `completed`/`dead_letter` with `updated_at <= before` | host-chosen; never below the scheduler's longest retry window (a purged job frees its id for a late refire) | none | runtime role, `Queue.PurgeTerminalJobs` |
+| `fenced_job_queue` | terminal, `Queue.PurgeTerminal` (unchanged) | host-chosen | none | runtime role |
+| `event_outbox` | published, `outbox.PurgePublished(before)` — unbounded, so its own step | host-chosen | none | runtime role |
+| cms `inquiries` | `created_at <= before` (`PurgeBefore`); `Delete(id)`; `DeleteByEmail(email)` (ASCII case-fold equality) | host-chosen | none | runtime role, through the `messaging.InquiryEraser` wired as `Repositories.InquiryMaintenance` |
+| `oauth_refresh_history` | pruned by `PruneOAuth2` only past the store's reuse-detection horizon; never by erasure | — | — | — |
+| `iam_audit`, `secrets_audit` | **host-owned**: no function ships; the definer-function template in *Production database posture* is the recipe | host | host | host migration + host cron |
+| `ratelimit_windows` | the pgxdb README's cron, `DELETE … WHERE expires_at < now()` | host | — | host cron |
+
+The pocket cannot see whether the host runs its maintenance, so the host says so:
+`authentication.WithMaintenance(authentication.MaintenanceConfig{…, MaintenanceRunnerAcknowledged:
+true})`, a literal in the composition root that `guard --posture` prints as an `ack` line (P5).
+While it is false, production logs ONE WARN — `maintenance_runner=unacknowledged: retention is
+not enforced; run Components.Maintenance.Run or the jobs schedule and set
+MaintenanceConfig.MaintenanceRunnerAcknowledged` — a WARN today, a refusal at the roadmap's end. A
+host enforcing retention through its own SQL cron leaves it false and accepts the WARN. Every
+`New` logs `maintenance_runner=`, `archive_sink=<ArchiveLocation|none>` and
+`security_event_retention=`; no sink is a valid policy (the rail is purged unarchived), not a
+warning. In production back `ArchiveSink` with an object store — `integrations/filestorage/gcs`
+or `integrations/filestorage/s3` — rather than `filestorage.NewDisk`: a disk sink is per instance
+and as durable as that disk, and the archive holds IP and User-Agent (PII) that erasure does not
+reach.
+
+| Module | In production | Signal |
+|---|---|---|
+| authentication | `MaintenanceRunnerAcknowledged` false | the WARN above; the acknowledgement beside a nil `Repositories.Maintenance` is `ErrMaintenanceAcknowledgedWithoutRepository` in every mode |
+| authentication | `AdministrationConfig.UserErasureRoute` without `Repositories.UserErasure` or `UserAdminCheck`; `UserErasure` without `ActiveSessions` (all modes) | `ErrUserErasureRouteRequires`, `ErrUserErasureRequiresActiveSessions` |
+| authentication `stores/pgx` | a database without `users.erased_at` or the 0024 functions (all modes) | refused, naming `0023_retention.sql` or `0024_security_events_retention.sql` |
+| authentication `stores/pgx` | an unsafe purge function: PUBLIC holds `EXECUTE`, `search_path` not pinned, or it resolves outside the rail's schema | `pgxdb.ErrDefinerFunctionUnsafe`, not waivable |
+| authentication `stores/pgx` | an inoperative purge function: not `SECURITY DEFINER`, owner not a member of the table's owner, a superuser owner, or `CREATE` on the schema for the runtime role | one `definer_function=inoperative` WARN; the rail step then fails |
+| authentication `stores/pgx` | a runtime role without `EXECUTE` on the purge function | one `maintenance_execute=missing` WARN naming the `GRANT`; the rail step reports `forbidden` every pass while every other step runs |
+| authorization | `Repositories.Mutations` without `Repositories.OperationExpiry` | one WARN (`operation_expiry=false`) |
+| cms | nil `Repositories.InquiryMaintenance` | one WARN (`inquiry_maintenance=absent`) |
+| jobs | an ordinary `Repositories.Queue` that does not implement `queue.TerminalPurger` | one WARN in **every** mode — the queue service takes no runtime mode; every bundled store implements it |
+| authorization, jobs and cms pgx stores | the admitted retention index missing (all modes) | one `index_missing=` WARN; the purge still runs, sorting per batch |
+
 ## Documented only: nothing refuses it today
 
 | Knob | Today | Planned |

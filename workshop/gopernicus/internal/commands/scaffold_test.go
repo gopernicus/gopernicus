@@ -48,7 +48,7 @@ var (
 	inlineHint = regexp.MustCompile(`^[A-Z0-9_]+=\S*\s+#`)
 	sdkPin     = baseModule + "/sdk v0.16.0"
 	dbPins     = map[string]string{
-		"pgx":   baseModule + "/integrations/datastores/pgxdb v0.11.0",
+		"pgx":   baseModule + "/integrations/datastores/pgxdb v0.12.0",
 		"turso": baseModule + "/integrations/datastores/turso v0.8.0",
 	}
 )
@@ -178,8 +178,10 @@ func TestScaffoldInitTursoCompiles(t *testing.T) {
 // pins — no framework replace — and tidies and builds with GOPROXY=off against
 // the GOMODCACHE warm-scaffold-cache filled (TestWarmScaffoldModuleCache resolves
 // this same host through the proxy). guard --posture is clean with P9 out of
-// scope (the scaffold mounts no store), and the runner's -posture-role answers
-// without a database while postureTables is empty. A cold cache FAILS LOUD.
+// scope (the scaffold mounts no store) and no ack line (the template writes no
+// acknowledgement), the runner carries the definer-function evidence line, and
+// its -posture-role answers without a database while postureTables is empty. A
+// cold cache FAILS LOUD.
 func TestScaffoldInitPgxCompiles(t *testing.T) {
 	target := t.TempDir()
 	params, err := buildInitParams("example.com/scaffoldtest/pgx", "pgx")
@@ -205,6 +207,13 @@ func TestScaffoldInitPgxCompiles(t *testing.T) {
 	out := captureStdout(t, func() int { code = Run([]string{"guard", "--posture", target}); return code })
 	if code != 0 || !strings.Contains(out, "\nP9   no scope  (no framework store module mounted)\n") {
 		t.Errorf("guard --posture over the pgx scaffold exited %d, want 0 with P9 out of scope:\n%s", code, out)
+	}
+	if strings.Contains(out, "\nack ") {
+		t.Errorf("guard --posture over the pgx scaffold printed an ack line the template never wrote:\n%s", out)
+	}
+	runner := readFile(t, filepath.Join(target, "workshop", "migrations", "main.go"))
+	if !strings.Contains(runner, `fmt.Printf("functions=[%s] floor=%s\n", functions, floor)`) {
+		t.Errorf("emitted pgx runner lacks the functions=/floor= posture line:\n%s", runner)
 	}
 
 	binary := filepath.Join(t.TempDir(), "migrations")

@@ -49,6 +49,23 @@ if err := cms.Register(mount, repos, cms.Config{
 
 `Repositories` contains typed entry, term, menu, asset, and inquiry ports. Store modules supply them as a bundle; a host may implement them independently.
 
+## Inquiry retention and erasure
+
+Contact inquiries hold third-party PII (name, email, message). Since v0.5.0 (stores pgx v0.5.0,
+turso v0.4.0) `Repositories.InquiryMaintenance` is an OPTIONAL `messaging.InquiryEraser` over the
+same rows as `Inquiries` — the bundled stores fill both from one store. `Register` logs
+`inquiry_maintenance=wired|absent`, and production WARNs when it is nil. The pocket never calls
+it; the host keeps the eraser it handed to `Register` and calls it:
+
+- `PurgeBefore(ctx, before, limit)` from its retention schedule — at most `limit` inquiries with
+  `created_at <= before`, oldest first, returning the count; `limit <= 0` is refused;
+- `DeleteByEmail(ctx, email)` from its erasure runbook — every inquiry whose email equals `email`
+  under ASCII case folding (letters outside ASCII compare as the store defines);
+- `Delete(ctx, id)` for one inquiry (an absent id is `sdk.ErrNotFound`).
+
+`0022_inquiries_created_at.sql` adds the `created_at` index the purge walks; it is admitted, not
+required, and the pgx store WARNs without it. No admin route deletes an inquiry yet.
+
 ## Configuration seams
 
 | Field | Meaning |

@@ -172,7 +172,8 @@ supplied as a named group:
 | `WithLinks` | `LinksConfig`: public destinations and redirect allowlist |
 | `WithBrowser` | `BrowserConfig`: cookies, origins, views and browser route policy |
 | `WithInvitations` | `InvitationsConfig`: granter and host access checks |
-| `WithAdministration` | `AdministrationConfig`: machine gate, user administration and list strategy |
+| `WithAdministration` | `AdministrationConfig`: machine gate, user administration, list strategy and the `UserErasureRoute` opt-in |
+| `WithMaintenance` | `MaintenanceConfig`: the retention policy (`maintenance.Config`) and `MaintenanceRunnerAcknowledged` |
 
 `WithIDs` and `WithLogger` select optional host dependencies. Nil options return
 an error; they are not omission markers. Each group replaces its complete value,
@@ -265,6 +266,66 @@ Production has no implicit mode and fails closed on incomplete security wiring. 
 - rate limiting should use a durable/shared implementation in multi-instance deployments;
 - in-process delivery should not be mistaken for durability;
 - SQL/query logs that include arguments must remain off.
+
+## Retention and erasure
+
+`Components.Maintenance` (`logic/maintenance.Service`) is the retention service over the
+OPTIONAL `Repositories.Maintenance` (`maintenance.Repository`), `Challenges` and
+`SecurityEvents`. It is never nil and starts nothing: the host calls `Run(ctx)` in process (a jittered first pass,
+then one an hour) or `Pass(ctx)` from its own ticker or a jobs schedule, and reads `LastReport()`
+for its health surface. One pass purges expired sessions, OAuth states, grants,
+contact changes and challenges, terminal and expired-pending invitations (never `accepting`), the
+OAuth2 rows (bounded `PruneOAuth2`), and once a day the `security_events` rail past
+`SecurityEventRetention` (400 days; below 366 refused). The table of rows, defaults and the
+database floor is in *Production posture*, "Retention".
+
+```go
+authSvc, err := authentication.New(repos, signer, mode, delivery.ModeJobs,
+    authentication.WithMaintenance(authentication.MaintenanceConfig{
+        Config: maintenance.Config{
+            ArchiveSink:     archive,            // a filestorage.Storer satisfies it
+            ArchiveLocation: "gcs:audit-archive", // the label the registration line logs
+        },
+        MaintenanceRunnerAcknowledged: true, // the host runs Components.Maintenance
+    }),
+    // … the other groups
+)
+```
+
+- **The rail is archived, then purged, per chunk.** With an `ArchiveSink` each chunk is written
+  as one NDJSON object, read back and verified, recorded as a `security_events_archived` row, and
+  only then purged; any failure purges nothing that pass (`maintenance.ErrArchiveFailed`). Without
+  a sink the rail is purged unarchived (`archive_sink=none`, a valid policy). Every purge call
+  appends one `security_events_purged` row, a zero count included. **The 365-day database floor
+  is an invariant**, and `Repositories.Maintenance` must be backed by the database that holds the
+  rail.
+- **The acknowledgement.** `MaintenanceRunnerAcknowledged` asserts the host runs the service;
+  production logs one `maintenance_runner=unacknowledged` WARN while it is false, and beside a nil
+  `Repositories.Maintenance` it is `ErrMaintenanceAcknowledgedWithoutRepository` in every mode. It
+  is a literal with no env tag; `guard --posture` prints its `ack` line.
+- **Erasure.** The OPTIONAL `Repositories.UserErasure` (`user.EraseRepository`, which requires
+  `Repositories.ActiveSessions`) backs `Service.EraseUser(ctx, actor, id)`: one store transaction
+  marks the user erased, blanks and retires its identifiers, deletes its credentials, sessions,
+  grants, challenges and act-as-user service accounts with their keys, deletes or blanks the
+  invitations addressed to it, and appends `user_erased`. It refuses while an invitation claim is
+  `accepting` (`user.ErrEraseBlockedByClaim`, 409) and is idempotent (`changed:false`). Reads
+  project `user.StatusErased` from `users.erased_at`; the stored status stays `deactivated`. The
+  `users` row and every pseudonymous id survive, and the rail is not rewritten. Erase is not a ban.
+- **The route is an explicit opt-in.** `POST /auth/admin/users/{id}/erase` mounts under the admin
+  chain only when `Repositories.UserErasure` is wired **and** `AdministrationConfig.UserErasureRoute`
+  is true; the host check receives `UserAdminErase`, and the route answers 200
+  `{user, changed, counts}`, 409 on an accepting claim, 400 on self (`ErrEraseSelf`). Without the
+  port or the check it is `ErrUserErasureRouteRequires`; the port without `ActiveSessions` is
+  `ErrUserErasureRequiresActiveSessions`. `UserErasureRoute` is not an acknowledgement.
+- **Service accounts.** `Service.DeleteServiceAccount(ctx, actor, id)` deletes the account and its
+  API keys in one transaction through the store's optional `serviceaccount.CascadeDeleter` (every
+  bundled SQL store), recording `service_account_deleted`; no route ships it.
+
+The SQL stores require `0023_retention.sql` (the `expires_at` indexes, then `users.erased_at`)
+and `0024_security_events_retention.sql` (the floor and, on pgx, the `SECURITY DEFINER` purge
+function the runtime role needs `EXECUTE` on) and refuse a database without them in every mode.
+Apply them in their own runner invocation; *Production database posture* has the grants and the
+index pre-build recipe, and *Operations runbooks* the schedules and "Erase a person".
 
 ## Persistence and views
 

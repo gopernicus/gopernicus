@@ -24,6 +24,9 @@ import (
 	"io/fs"
 	"log/slog"
 	"os"
+{{- if eq .DB "pgx"}}
+	"sort"
+{{- end}}
 	"strings"
 	"time"
 
@@ -136,9 +139,13 @@ func postureTables() []pgxdb.AppendOnlyTable {
 
 // reportPosture preflights role — the runtime role the server connects as —
 // from this runner's migrator connection: one line per append-only table,
-// decided exactly as that role's boot probe in production decides. It fails
-// when a table is unprotected or the role cannot append to it. Archive its
-// output with the deploy.
+// decided exactly as that role's boot probe in production decides, and for a
+// table with definer functions (the authentication store's security_events
+// lists its purge function) a functions= line with the rail's database floor.
+// It fails when a table is unprotected, the role cannot append to it, or a
+// definer function is missing or unsafe (the boot refuses each); a missing
+// EXECUTE or an inoperative function is reported and does not fail — the boot
+// WARNs on both. Archive its output with the deploy.
 func reportPosture(ctx context.Context, mode environment.Mode, role string) error {
 	tables := postureTables()
 	if len(tables) == 0 {
@@ -173,11 +180,89 @@ func reportPosture(ctx context.Context, mode environment.Mode, role string) erro
 		if protectedBy == "none" || t.CannotAppend() {
 			failing++
 		}
+		if len(t.Functions) == 0 {
+			continue
+		}
+		functions, broken := describeFunctions(t)
+		floor, err := railFloor(ctx, tx)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("functions=[%s] floor=%s\n", functions, floor)
+		failing += broken
 	}
 	if failing > 0 {
-		return fmt.Errorf("posture: role %s: %d of %d append-only tables unprotected or not appendable", report.Role, failing, len(report.Tables))
+		return fmt.Errorf("posture: role %s: %d findings over %d append-only tables (unprotected, not appendable, or a missing or unsafe definer function)", report.Role, failing, len(report.Tables))
 	}
 	return nil
+}
+
+// describeFunctions renders each definer function of t as
+// name:execute=… unsafe=… inoperative=… and counts the ones the boot would
+// refuse: missing or unsafe.
+func describeFunctions(t pgxdb.TablePrivilege) (string, int) {
+	signatures := make([]string, 0, len(t.Functions))
+	for signature := range t.Functions {
+		signatures = append(signatures, signature)
+	}
+	sort.Strings(signatures)
+	var parts []string
+	broken := 0
+	for _, signature := range signatures {
+		f := t.Functions[signature]
+		name := signature
+		if i := strings.Index(name, "("); i >= 0 {
+			name = name[:i]
+		}
+		if i := strings.LastIndex(name, "."); i >= 0 {
+			name = name[i+1:]
+		}
+		if !f.Exists {
+			parts = append(parts, name+":missing")
+			broken++
+			continue
+		}
+		unsafe := reasons(map[string]bool{"public_execute": f.PublicExecute, "search_path": !f.SearchPathPinned, "namespace": !f.SameNamespace})
+		inoperative := reasons(map[string]bool{"invoker": !f.SecurityDefiner, "owner": !f.OwnerIsTableOwner, "superuser_owner": f.OwnerSuperuser, "schema_create": f.PathSchemaCreate})
+		if unsafe != "none" {
+			broken++
+		}
+		parts = append(parts, fmt.Sprintf("%s:execute=%t unsafe=%s inoperative=%s", name, f.Execute, unsafe, inoperative))
+	}
+	return strings.Join(parts, " "), broken
+}
+
+// reasons names the set flags, sorted and comma-joined, or "none".
+func reasons(flags map[string]bool) string {
+	var set []string
+	for name, on := range flags {
+		if on {
+			set = append(set, name)
+		}
+	}
+	if len(set) == 0 {
+		return "none"
+	}
+	sort.Strings(set)
+	return strings.Join(set, ",")
+}
+
+// railFloor reads the security-event rail's database retention floor from the
+// authentication store's 0024 floor function, in whole days; "missing" when
+// the function is absent.
+func railFloor(ctx context.Context, q pgxdb.Querier) (string, error) {
+	var present bool
+	if err := q.QueryRow(ctx, `SELECT pg_catalog.to_regprocedure('security_events_retention_floor()') IS NOT NULL`).Scan(&present); err != nil {
+		return "", err
+	}
+	if !present {
+		return "missing", nil
+	}
+	var days int
+	if err := q.QueryRow(ctx, `SELECT pg_catalog.date_part('day', security_events_retention_floor())::int`).Scan(&days); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%d days", days), nil
 }
 
 {{end -}}
