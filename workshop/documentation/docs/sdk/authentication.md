@@ -13,7 +13,7 @@ verified `Identity`: what the issuer says about who presented it, and how well.
 | Type | Role |
 |---|---|
 | `Credential` | `Transport` (`header` or `cookie`) and `Raw`; `Raw` is never logged |
-| `Identity` | `Issuer`, `Subject`, `Email`/`EmailVerified`, `Phone`/`PhoneVerified`, `DisplayName`, `Tenant`, `AuthenticatedAt` (`auth_time`, else `iat`), `ExpiresAt`, `Methods` (`amr`), `MFA`, `Attributes` (string-valued, at most `MaxAttributes` = 16) |
+| `Identity` | `Issuer`, `Subject`, `Email`/`EmailVerified`, `Phone`/`PhoneVerified`, `DisplayName`, `Tenant`, `AuthenticatedAt` (`auth_time`, else `iat`), `ExpiresAt`, `Methods` (`amr`), `MFA` (see [MFA](#mfa)), `Attributes` (string-valued, at most `MaxAttributes` = 16) |
 | `Provider` | `Issuer()` and `Authenticate(ctx, Credential) (Identity, error)` |
 | `RevocationChecker` | optional: `CheckRevocation(ctx, issuer, subject)` returns `RevocationFacts` (`Disabled`, `ValidAfter`, `CheckedAt`) |
 | `ClaimMapping`, `Profile` | the vendor-neutral claim mapping `NewOIDC` uses: dotted paths with OIDC defaults, `TrustPhone`, `DenySignIn` |
@@ -45,9 +45,8 @@ provider := sdkauth.NewOIDC(issuer, verifier, sdkauth.Profile{
 before it calls the verifier. It then re-checks `iss` on the verified claims,
 maps them and applies `DenySignIn`. Defaults: `sub`, `email`, `email_verified`,
 `phone_number`, `phone_number_verified`, `name`, `auth_time` (falling back to
-`iat`) and `amr`. The MFA methods are `mfa`, `otp`, `hwk`, `sms`, `swk` and
-`pop`. `MFAFlag`, `Tenant` and `SignInMethod` are optional paths. `NewOIDC`
-panics on an empty issuer, a nil verifier, or `DenySignIn` without a
+`iat`) and `amr`. `MFAFlag`, `Tenant` and `SignInMethod` are optional paths.
+`NewOIDC` panics on an empty issuer, a nil verifier, or `DenySignIn` without a
 `SignInMethod` path, which would otherwise silently admit every method.
 
 The JWT verifier is the plain port `cryptids.JWTVerifier` in `sdk/pkg/cryptids`.
@@ -55,6 +54,34 @@ The JWT verifier is the plain port `cryptids.JWTVerifier` in `sdk/pkg/cryptids`.
 ([Firebase](../integrations/firebase.md), [Auth0](../integrations/auth0.md))
 supply `Profile` values or whole providers, and no field or default in the
 capability names a vendor.
+
+## MFA
+
+`Identity.MFA` means the same for every `Provider`: the provider asserted
+authentication with at least two factor categories, or an explicit MFA claim or
+flag. A one-factor sign-in leaves it false. Firebase's
+`firebase.sign_in_second_factor` claim meets it.
+
+`NewOIDC` sets `MFA` from the `MFAFlag` path or from `amr`. Since sdk v0.19.0
+the default amr rule is strict, over the IANA amr registry sorted into factor
+categories. `MFA` is set by `mfa`, or by values from at least two categories:
+
+- knowledge: `pwd`, `pin`, `kba`
+- possession: `otp`, `sms`, `tel`, `hwk`, `swk`, `sc`, `pop`
+- inherence: `fpt`, `face`, `iris`, `retina`, `vbm`
+
+One factor alone (`["otp"]`, `["hwk"]`) is not MFA. Any other value (`user`,
+`geo`, `rba`, a vendor value) is no factor, and matching is case-sensitive.
+
+`ClaimMapping.MFAMethods` is the per-provider hatch. When it is set, any listed
+value alone sets `MFA` and no other value does.
+`MFAMethods: []string{"mfa", "otp", "hwk", "sms", "swk", "pop"}` restores the
+sdk v0.18.0 default exactly. List a value only when the issuer emits it after a
+second factor. An empty list means the strict rule. The Auth0 preset keeps the
+defaults (Auth0 emits `["mfa"]`), and Firebase sets the flag. An IdP whose
+passkey or push sign-in emits a single possession value reads as one factor.
+The [authentication pocket](../pockets/authentication.md#assurance-and-mfa)
+turns `MFA` into the credential's assurance.
 
 ## Errors
 

@@ -8,7 +8,7 @@ require (
 	github.com/gopernicus/gopernicus/pockets/cms v0.6.0
 	github.com/gopernicus/gopernicus/pockets/cms/stores/turso v0.4.0
 	github.com/gopernicus/gopernicus/pockets/cms/views/goth v0.3.0
-	github.com/gopernicus/gopernicus/sdk v0.18.0
+	github.com/gopernicus/gopernicus/sdk v0.19.0
 	github.com/gopernicus/gopernicus/ui/goth v0.2.0
 )
 

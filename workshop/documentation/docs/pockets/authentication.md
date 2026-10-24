@@ -237,10 +237,13 @@ pockets still see only `sdk.Principal`.
   `__session`. Auth0, Cognito, Okta and Keycloak are header-only.
 - **Assurance.** `RequireMFA()`, `FreshAuth(d)`, `VerifiedEmail()`, `Tenant()`
   and `Check()` gate routes on provider facts. Provider roles are never read as
-  permissions.
+  permissions. `RequireMFA()` reads the assurance the provider asserted (see
+  [Assurance and MFA](#assurance-and-mfa)).
 - **Losses, by design.** Step-up, `/auth/sessions` and credential management
-  need a native session, so provider users are denied there. Per-request sign-in
-  and MFA events stay in the provider's log.
+  need a native session, so provider users are denied there. Per-request
+  sign-in events and the provider's own MFA events (enrollment, challenges)
+  stay in the provider's log. The pocket records the assurance each token
+  asserted and its own MFA denials.
 - **Host CSRF.** An external-only host built on `NewAuthenticator` has no
   `/auth/csrf`; it protects its own cookie mutations with
   `http.CrossOriginProtection`. This applies to every host, native or
@@ -255,6 +258,59 @@ recipes and claim tables, the server-session support matrix, the revocation lag
 table, the identity edge cases and the hash-export notes for leaving a
 provider. The runnable proofs are `examples/external-identity` and
 `examples/auth-cms` with `AUTH_EXTERNAL_DEMO=1`.
+
+## Assurance and MFA
+
+Since v0.25.0 (with sdk v0.19.0) a host on an identity provider can require
+MFA for its administrators or for every user. The pocket enforces it from what
+the provider asserted.
+
+- **The stamp.** `Credential.Assurance` (`session.AssuranceLevel`) is what a
+  credential proves. An external token is AAL2 when the provider set
+  `Identity.MFA` (the sdk's [strict amr rule](../sdk/authentication.md#mfa)),
+  and AAL1 otherwise. Unknown is never higher, and nothing produces AAL3.
+  Native access tokens and API keys stay `unknown`, because native sessions
+  carry no assurance until native second factors ship. Every gate compares
+  levels with `session.AssuranceLevel.AtLeast(min)`.
+- **Three gates require AAL2.** Each answers with the RFC 9470 challenge
+  (`WWW-Authenticate: Bearer error="insufficient_user_authentication"`) and
+  records one `mfa_required_denied` row. The row is budgeted per client IP and
+  carries bounded Details, never an amr value, a claim or the token.
+
+  | Gate | Scope |
+  |---|---|
+  | `RequireMFA()` on `RequirePrincipal` | external tokens on that route. An API key passes, and the option still panics at wiring on a set that admits access tokens |
+  | `ExternalProvider.RequireMFA` | every route. It is checked before the subject resolves, so a denied token provisions nothing |
+  | `WithMFA(MFAConfig{Required: MFARequiredAdmins})` | `/auth/admin/users*`, for callers the `UserAdminCheck` admits. A non-admin keeps the check's 403, and an API key passes |
+
+- **`MFAConfig{Required}`** (`WithMFA`) is a wiring literal with no env tag.
+  The zero value is none. `admins` gates the admin routes above, and `all` sets
+  `RequireMFA` on a copy of every `WithExternal` provider. Some wiring cannot
+  satisfy the requirement, and every mode refuses it with `ErrMFAUnsatisfiable`:
+  any requirement without `WithExternal`, `admins` without
+  `AdministrationConfig.UserAdminCheck`, or `all` beside native password,
+  passwordless or OAuth login. An unknown value is `sdk.ErrInvalidInput`. `New`
+  logs one boot line, `auth: mfa posture mfa_required=<none|admins|all>
+  gates=<none|/auth/admin/users*|external_tokens>`.
+- **`admins` does not gate** role routes, cms admin routes, host admin pages or
+  the machine lifecycle routes. Add `RequireMFA()` to those yourself. API keys
+  pass every MFA gate.
+- **A host's own `CredentialService`** stamps `Assurance` itself: AAL2 when
+  `Identity.MFA` is set, else AAL1. Without the stamp, every MFA gate denies its
+  external tokens.
+- **Re-authentication.** On `insufficient_user_authentication`, send the user
+  back to the IdP with a forced second factor (the IdP's own step-up
+  parameter, or `prompt=login`). A browser route behind
+  `RequireMFA()` needs a login path that does this. Otherwise a live IdP
+  session answers AAL1 again and the browser loops.
+
+The pocket README's "Assurance model" section has the full gate table and the
+self-check: after signing in with MFA, the newest `external_login` row's
+Details must read `"assurance":"aal2"`. It also has the passkey caveat and the
+per-IdP table of what each vendor emits. Auth0 and Firebase are known. Google,
+Okta and Entra ID are **unknown**, so run the self-check. The production
+refusals are in [Production posture](../guides/production-posture.md), under
+"Added by S4a".
 
 ## Production posture
 
@@ -346,7 +402,7 @@ honor the same field. Its zero value keeps the existing password form.
 
 ## Not shipped
 
-Multi-factor authentication is not part of the current pocket. Method and assurance vocabulary reserve a future path, but there is no TOTP, passkey/WebAuthn, or recovery-code MFA surface today. A route can still require MFA that an external identity provider asserted, with `RequireMFA()`.
+Native multi-factor authentication is not part of the current pocket. Method and assurance vocabulary reserve a future path, but there is no TOTP, passkey/WebAuthn, or recovery-code MFA surface today, and native sessions carry no assurance. MFA that an external identity provider asserted is enforced (see [Assurance and MFA](#assurance-and-mfa)).
 
 ## OAuth client transports and trust
 

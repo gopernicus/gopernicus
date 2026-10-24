@@ -6,11 +6,11 @@ description: What the framework refuses in production today, what is documented 
 # Production posture
 
 This page describes the framework **as it is on `main` at 2026-10-24, after SOC 2 slices S1–S3,
-S5 and S6** (the production posture floor, audit completeness and integrity, retention and
-erasure, transport and abuse hardening, secrets and logging; release records in `RELEASING.md`,
-host handoffs in `plans/soc2-s1-production-posture-handoff.md`,
+S4a, S5 and S6** (the production posture floor, audit completeness and integrity, retention and
+erasure, the MFA posture, transport and abuse hardening, secrets and logging; release records
+in `RELEASING.md`, host handoffs in `plans/soc2-s1-production-posture-handoff.md`,
 `plans/soc2-s2-audit-completeness-handoff.md` and `plans/soc2-s3-retention-erasure-handoff.md`;
-S5 and S6 have no handoff file — their records carry the upgrade notes).
+S4a, S5 and S6 have no handoff file — their records carry the upgrade notes).
 Where a control is still planned, it says so; an item marked *planned* is not a control a host
 can claim yet.
 
@@ -53,7 +53,7 @@ tag, and each honored one is logged once as `posture_waiver=<Flag>`. What a refu
 | Module | Production refuses | Sentinel | Acknowledgement |
 |---|---|---|---|
 | authentication | nil `Repositories.SecurityEvents` (no audit rail) | `ErrAuditRequired` | `WithAuditDisabledAcknowledged()`; beside a wired rail it is `ErrAuditAcknowledgedWithSecurityEvents` in every mode |
-| authentication | native single-factor login: password flows on, or any `Passwordless` kind | `ErrSingleFactorUnacknowledged` | `IdentityConfig.SingleFactorAcknowledged` |
+| authentication | native single-factor login: password flows on, or any `Passwordless` kind (S4a widens the causes, *Added by S4a* below) | `ErrSingleFactorUnacknowledged` | `IdentityConfig.SingleFactorAcknowledged` |
 | authentication | a delivery transport declaring opportunistic STARTTLS, at both check sites | `ErrInsecureDeliveryTransport` (wraps `notify.ErrOpportunisticTLS`) | `DeliveryConfig.OpportunisticTLSAcknowledged` |
 | authentication | an OAuth or external provider declaring `DevelopmentOnly` | `ErrDevelopmentOnlyProvider` | none |
 | authentication | a needed key unset (`NewKeys`); a malformed key in every mode | `ErrKeyRequired` (joined, one per key) | none; `AUTH_TOKEN_ENCRYPTER_KEY` is optional — see *Keys and rotation* |
@@ -121,6 +121,29 @@ written `true` (P5), where an acknowledgement prints `ack`.
 `guard --posture` (workshop/gopernicus v0.9.0) gives the turso refusal its pre-deploy signal: an
 uncommented `DB_LOG_QUERIES` or `DB_LOG_QUERY_ARGS` set true in `.env.example`, bare or
 prefixed, is a P7 finding, as an uncommented `sslmode=disable` has been since S1.
+
+**Added by S4a** (sdk v0.19.0, authentication v0.25.0). The S1 single-factor refusal now
+covers every login source that admits a single-factor (AAL1) user, and it names the
+source as a cause. There are four causes. `native_password` means password flows are on.
+`passwordless` means any `Passwordless` kind is wired. `native_oauth` means any OAuth
+`Providers` are wired; it is new, and an OAuth link is AAL1. `external_no_mfa` means a
+`WithExternal` provider without `RequireMFA` while `MFAConfig.Required` is none; it is
+also new. Native causes count under any `Required`, because native login cannot produce
+AAL2 yet.
+
+| Module | Production refuses | Sentinel | Acknowledgement |
+|---|---|---|---|
+| authentication (`New`) | any present cause, naming the causes | `ErrSingleFactorUnacknowledged` | `IdentityConfig.SingleFactorAcknowledged` (one `posture_waiver=SingleFactorAcknowledged` WARN with `causes=[…]`); `WithMFA` with `admins` or `all`, or `RequireMFA` on every provider, clears `external_no_mfa` instead |
+| authentication (`NewExternalAuthenticator`, standalone) | a provider without `RequireMFA` (cause `external_no_mfa`); before S4a this constructor ran no posture check | `ErrSingleFactorUnacknowledged` (the same `errors.Is` target) | `ExternalConfig.SingleFactorAcknowledged` (one waiver WARN), or `RequireMFA` on every provider; root `New` refuses this field with `sdk.ErrInvalidInput` and reads the `IdentityConfig` one |
+| authentication | an `MFAConfig.Required` the wiring cannot satisfy (all modes): any requirement without `WithExternal`, `admins` without `AdministrationConfig.UserAdminCheck`, `all` beside native password, passwordless or OAuth login | `ErrMFAUnsatisfiable`, naming the field | none — change the named field |
+
+Development logs one WARN naming the acknowledgement and the causes for every shape that
+production would refuse, and that WARN is the pre-deploy signal. One acknowledgement covers
+every cause, and the `causes` attribute on the waiver keeps it auditable. `guard --posture` P5
+prints `ack` for a `SingleFactorAcknowledged: true` literal on either config, with no
+workshop change. Every `New` logs `auth: mfa posture mfa_required=<none|admins|all>
+gates=<none|/auth/admin/users*|external_tokens>`. The gates themselves are in the
+authentication page's *Assurance and MFA*.
 
 ## Retention (S3)
 
