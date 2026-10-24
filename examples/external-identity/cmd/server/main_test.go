@@ -124,7 +124,7 @@ func TestProductionRefusesTheDevIssuer(t *testing.T) {
 
 func TestHeaderTokenMapsToOneLocalUser(t *testing.T) {
 	h := newHost(t)
-	token := h.token(`{"sub":"u1","email":"a@x.test","email_verified":true}`)
+	token := h.token(`{"sub":"u1","email":"a@x.test","email_verified":true,"amr":["mfa"]}`)
 
 	status, first := h.me(bearer(token))
 	if status != http.StatusOK || first.PrincipalID == "" || first.PrincipalID == "u1" {
@@ -133,7 +133,7 @@ func TestHeaderTokenMapsToOneLocalUser(t *testing.T) {
 	if len(first.Addresses) != 1 || first.Addresses[0].Value != "a@x.test" {
 		t.Fatalf("addresses = %+v; want the verified email", first.Addresses)
 	}
-	status, second := h.me(bearer(h.token(`{"sub":"u1","email":"a@x.test","email_verified":true}`)))
+	status, second := h.me(bearer(h.token(`{"sub":"u1","email":"a@x.test","email_verified":true,"amr":["mfa"]}`)))
 	if status != http.StatusOK || second.PrincipalID != first.PrincipalID {
 		t.Fatalf("second /api/me = %d %+v; want the same id %s", status, second, first.PrincipalID)
 	}
@@ -144,7 +144,7 @@ func TestHeaderTokenMapsToOneLocalUser(t *testing.T) {
 
 func TestUnverifiedEmailIsNotProjected(t *testing.T) {
 	h := newHost(t)
-	status, p := h.me(bearer(h.token(`{"sub":"u2","email":"b@x.test","email_verified":false}`)))
+	status, p := h.me(bearer(h.token(`{"sub":"u2","email":"b@x.test","email_verified":false,"amr":["mfa"]}`)))
 	if status != http.StatusOK || p.PrincipalID == "" || len(p.Addresses) != 0 {
 		t.Fatalf("/api/me = %d %+v; want 200 with no address", status, p)
 	}
@@ -155,7 +155,7 @@ func TestDenials(t *testing.T) {
 	if status, _ := h.me(nil); status != http.StatusUnauthorized {
 		t.Fatalf("no credential: %d; want 401", status)
 	}
-	unwired := h.token(`{"sub":"u1","email":"a@x.test","email_verified":true,"iss":"http://127.0.0.1:1/elsewhere"}`)
+	unwired := h.token(`{"sub":"u1","email":"a@x.test","email_verified":true,"amr":["mfa"],"iss":"http://127.0.0.1:1/elsewhere"}`)
 	if status, _ := h.me(bearer(unwired)); status != http.StatusUnauthorized {
 		t.Fatalf("unwired issuer: %d; want 401", status)
 	}
@@ -164,11 +164,42 @@ func TestDenials(t *testing.T) {
 	}
 }
 
+// TestSingleFactorTokenIsRefusedBeforeProvisioning proves the providers'
+// RequireMFA floor: a token without an MFA claim is refused with the RFC 9470
+// challenge, its denial row carries no user, and nobody is provisioned.
+func TestSingleFactorTokenIsRefusedBeforeProvisioning(t *testing.T) {
+	h := newHost(t)
+	for name, header := range map[string]http.Header{
+		"header": bearer(h.token(`{"sub":"u9","email":"z@x.test","email_verified":true}`)),
+		"pwd":    bearer(h.token(`{"sub":"u9","email":"z@x.test","email_verified":true,"amr":["pwd"]}`)),
+	} {
+		resp, raw := h.do(http.MethodGet, "/api/me", "", header)
+		if resp.StatusCode != http.StatusUnauthorized || !strings.Contains(resp.Header.Get("WWW-Authenticate"), `error="insufficient_user_authentication"`) {
+			t.Fatalf("%s: /api/me = %d %q %s; want 401 with the RFC 9470 challenge", name, resp.StatusCode, resp.Header.Get("WWW-Authenticate"), raw)
+		}
+	}
+	resp, raw := h.do(http.MethodPost, devissuer.SessionPath, `{"sub":"u9","email":"z@x.test","email_verified":true}`, nil)
+	if resp.StatusCode != http.StatusOK || len(resp.Cookies()) != 1 {
+		t.Fatalf("session: %d %s", resp.StatusCode, raw)
+	}
+	cookie := http.Header{"Cookie": {resp.Cookies()[0].Name + "=" + resp.Cookies()[0].Value}}
+	if resp, _ := h.do(http.MethodGet, "/api/me", "", cookie); resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("single-factor session cookie: %d; want 401", resp.StatusCode)
+	}
+	logs := h.log.String()
+	if n := strings.Count(logs, `msg="memstore: security event" type=mfa_required_denied status=blocked user_id=""`); n != 3 {
+		t.Fatalf("mfa_required_denied lines = %d; want 3 with no user\n%s", n, logs)
+	}
+	if strings.Contains(logs, "type=external_subject_provisioned") {
+		t.Fatalf("a refused token provisioned a user\n%s", logs)
+	}
+}
+
 func TestSessionCookieReachesTheSameUser(t *testing.T) {
 	h := newHost(t)
-	_, headerProfile := h.me(bearer(h.token(`{"sub":"u1","email":"a@x.test","email_verified":true}`)))
+	_, headerProfile := h.me(bearer(h.token(`{"sub":"u1","email":"a@x.test","email_verified":true,"amr":["mfa"]}`)))
 
-	resp, raw := h.do(http.MethodPost, devissuer.SessionPath, `{"sub":"u1","email":"a@x.test","email_verified":true}`, nil)
+	resp, raw := h.do(http.MethodPost, devissuer.SessionPath, `{"sub":"u1","email":"a@x.test","email_verified":true,"amr":["mfa"]}`, nil)
 	cookies := resp.Cookies()
 	if resp.StatusCode != http.StatusOK || len(cookies) != 1 {
 		t.Fatalf("session: %d %s", resp.StatusCode, raw)

@@ -238,7 +238,8 @@ const (
 	//
 	// TypeExternalLogin is the first successful verification of one provider
 	// token, recorded once per token per login-record cache rather than once per
-	// request. UserID is the mapped user; Details carries the provider.
+	// request. UserID is the mapped user; Details carries the provider and the
+	// assurance the provider asserted (aal1 or aal2).
 	TypeExternalLogin = "external_login"
 	// TypeExternalSubjectProvisioned is a user created on first verification of
 	// an unknown provider subject. UserID is the new user.
@@ -257,6 +258,16 @@ const (
 	// TypeExternalRevocationUnavailable is recorded once per provider outage
 	// episode, not once per affected request.
 	TypeExternalRevocationUnavailable = "external_revocation_unavailable"
+
+	// TypeMFARequiredDenied is a credential below AAL2 refused where
+	// multi-factor authentication is required: StatusBlocked, Budgeted per
+	// client IP because an AAL1 holder can drive it. UserID is the principal for
+	// the route and admin gates and empty for the provider gate, which refuses
+	// before the subject resolves. Details carry bounded values only: gate
+	// (route, admin or provider), credential (the kind), provider (external
+	// tokens), assurance (the presented level: aal1 or unknown) and required
+	// (aal2) — never an amr value, a claim or the token.
+	TypeMFARequiredDenied = "mfa_required_denied"
 
 	// Session-management vocabulary. Both are recorded on success only; UserID is
 	// the session owner.
@@ -448,7 +459,7 @@ var types = []string{
 	TypePasswordlessProvisioned, TypePasswordlessAdopted, TypePasswordlessStart, TypePasswordlessLogin,
 	TypeServiceAccountCreated, TypeAPIKeyMinted, TypeAPIKeyRevoked,
 	TypeExternalSubjectProvisioned, TypeExternalSubjectUnknown, TypeExternalSubjectCollision,
-	TypeExternalSubjectDenied, TypeExternalRevocationUnavailable, TypeExternalLogin,
+	TypeExternalSubjectDenied, TypeExternalRevocationUnavailable, TypeExternalLogin, TypeMFARequiredDenied,
 	TypeSessionRevoked, TypeAllSessionsRevoked, TypeUserDirectoryRead,
 	TypeOAuth2ConsentApproved, TypeOAuth2ConsentDenied, TypeOAuth2ConnectionCreated, TypeOAuth2Refresh,
 	TypeOAuth2RefreshReuse, TypeOAuth2TokenExchanged, TypeOAuth2RevocationRequested, TypeOAuth2GrantFailed,

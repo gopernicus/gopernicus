@@ -36,6 +36,13 @@ place (`TestProductionRefusesTheDevIssuer`).
   default `LiveOnMutation` tier, and the log shows exactly one
   `memstore: local user read`: the read the engine already made while
   verifying is stamped on the proof and reused.
+- **MFA is required of every user.** Both `dev` provider entries set
+  `RequireMFA: true`, the standalone form of `MFARequiredAll`: a token whose
+  `amr` asserts no second factor gets 401 with the RFC 9470
+  `insufficient_user_authentication` challenge on every route, before it
+  provisions anyone, and writes one `mfa_required_denied` row with no user.
+  Every provider requiring MFA is also this host's production MFA posture, so
+  `NewExternalAuthenticator` needs no `SingleFactorAcknowledged`.
 
 ## Layout
 
@@ -71,29 +78,29 @@ Port 8080. Every request and response below is from a real run.
 cd examples/external-identity && AUTH_RUNTIME_MODE=development go run ./cmd/server
 
 # 1. a dev-issuer token -> 200 with an internal user id (not "u1")
-TOKEN=$(curl -s -XPOST localhost:8080/dev/token -d '{"sub":"u1","email":"a@x.test","email_verified":true}' | jq -r .token)
+TOKEN=$(curl -s -XPOST localhost:8080/dev/token -d '{"sub":"u1","email":"a@x.test","email_verified":true,"amr":["mfa"]}' | jq -r .token)
 curl -i -H "Authorization: Bearer $TOKEN" localhost:8080/api/me
 #   HTTP/1.1 200 OK
 #   {"principal_type":"user","principal_id":"<ID>","display_name":"","addresses":[{"kind":"email","value":"a@x.test"}]}
 #   log: msg="memstore: security event" type=external_subject_provisioned status=success user_id=<ID>
 
 # 2. another token for u1 -> the same <ID>, and no second provisioning event in the log
-TOKEN=$(curl -s -XPOST localhost:8080/dev/token -d '{"sub":"u1","email":"a@x.test","email_verified":true}' | jq -r .token)
+TOKEN=$(curl -s -XPOST localhost:8080/dev/token -d '{"sub":"u1","email":"a@x.test","email_verified":true,"amr":["mfa"]}' | jq -r .token)
 curl -i -H "Authorization: Bearer $TOKEN" localhost:8080/api/me
 
 # 3. an unverified email -> 200, a new user, no address projected
-TOKEN=$(curl -s -XPOST localhost:8080/dev/token -d '{"sub":"u2","email":"b@x.test","email_verified":false}' | jq -r .token)
+TOKEN=$(curl -s -XPOST localhost:8080/dev/token -d '{"sub":"u2","email":"b@x.test","email_verified":false,"amr":["mfa"]}' | jq -r .token)
 curl -i -H "Authorization: Bearer $TOKEN" localhost:8080/api/me      # "addresses":[]
 
 # 4. a token from an unwired issuer -> 401
-TOKEN=$(curl -s -XPOST localhost:8080/dev/token -d '{"sub":"u1","iss":"http://localhost:9999/other"}' | jq -r .token)
+TOKEN=$(curl -s -XPOST localhost:8080/dev/token -d '{"sub":"u1","iss":"http://localhost:9999/other","amr":["mfa"]}' | jq -r .token)
 curl -i -H "Authorization: Bearer $TOKEN" localhost:8080/api/me      # 401
 
 # 5. no credential -> 401
 curl -i localhost:8080/api/me
 
 # 6. the provider session cookie -> 200, the same <ID> as step 1
-curl -c jar -XPOST localhost:8080/dev/session -d '{"sub":"u1","email":"a@x.test","email_verified":true}'
+curl -c jar -XPOST localhost:8080/dev/session -d '{"sub":"u1","email":"a@x.test","email_verified":true,"amr":["mfa"]}'
 curl -b jar -i localhost:8080/api/me
 
 # 7. a cookie mutation -> 200, with exactly ONE local user read in the log for it
@@ -104,7 +111,21 @@ curl -b jar -i -XPOST localhost:8080/api/echo -H 'Content-Type: application/json
 
 # 8. the same cookie mutation from a cross-site page -> 403
 curl -b jar -i -XPOST localhost:8080/api/echo -H 'Sec-Fetch-Site: cross-site' -H 'Origin: https://evil.example'
+
+# 9. a token without an MFA claim, for a fresh subject -> 401 + the challenge, nobody provisioned
+TOKEN=$(curl -s -XPOST localhost:8080/dev/token -d '{"sub":"u9","email":"z@x.test","email_verified":true}' | jq -r .token)
+curl -i -H "Authorization: Bearer $TOKEN" localhost:8080/api/me
+#   HTTP/1.1 401 Unauthorized
+#   Www-Authenticate: Bearer error="insufficient_user_authentication", error_description="multi-factor authentication is required"
+#   {"message":"authentication required","code":"unauthenticated"}
+#   log: msg="memstore: security event" type=mfa_required_denied status=blocked user_id=""
 ```
+
+Step 9's row carries no user: the providers' MFA floor runs before the subject
+resolves, so no `external_subject_provisioned` line appears for `u9`. The dev
+issuer emits Auth0-shaped claims, and `["mfa"]` is what Auth0 puts in `amr`
+after a second factor; `["pwd"]` or `["otp"]` alone is one factor and answers
+401 too.
 
 `GET /api/me` shows two user reads: the engine's status check and the
 identity projection `Resolve` makes for the response. `POST /api/echo` makes
@@ -131,4 +152,5 @@ cd examples/external-identity && go test ./... -race
 
 `cmd/server/main_test.go` runs the protocol above over a real loopback
 listener (the verifiers fetch the JWKS from the same server), including the
-one-read count and the cross-site 403.
+one-read count, the cross-site 403 and step 9's refusal of a single-factor
+header token and session cookie with no user provisioned.

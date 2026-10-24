@@ -95,7 +95,7 @@ func TestHostRouteDenialCarriesClientAttribution(t *testing.T) {
 	server.Start()
 	t.Cleanup(server.Close)
 
-	status, raw := send(t, http.MethodPost, origin+devissuer.TokenPath, `{"sub":"`+memberSubject+`","email":"a@x.test","email_verified":true}`, nil)
+	status, raw := send(t, http.MethodPost, origin+devissuer.TokenPath, `{"sub":"`+memberSubject+`","email":"a@x.test","email_verified":true,"amr":["pwd","mfa"]}`, nil)
 	var minted struct{ Token string }
 	if status != http.StatusOK || json.Unmarshal([]byte(raw), &minted) != nil || minted.Token == "" {
 		t.Fatalf("mint: %d %s", status, raw)

@@ -207,6 +207,9 @@ func TestProductionBaselineConstructs(t *testing.T) {
 			t.Errorf("registration lacks %q:\n%s", want, logs.String())
 		}
 	}
+	if !strings.Contains(logs.String(), "mfa_required=admins gates=/auth/admin/users*") {
+		t.Errorf("registration lacks the mfa posture line:\n%s", logs.String())
+	}
 	if strings.Contains(logs.String(), "level=WARN") {
 		t.Errorf("production logs a WARN:\n%s", logs.String())
 	}
@@ -374,9 +377,11 @@ func TestProductionRefusesTheDevIssuer(t *testing.T) {
 // issuer's key set from it) and proves the role routes' gate order: a
 // cross-site POST carrying the session cookie is refused by the browser-safe
 // mutation gate even with a valid provider token, a request without a
-// credential is refused by authentication, and the same token without the
-// cookie passes both and is refused by authorization. The erase route is
-// mounted behind the same principal and refuses a non-admin.
+// credential or with a single-factor token is refused by authentication (the
+// latter with the RFC 9470 challenge), and an MFA token without the cookie
+// passes both and is refused by authorization. The erase route is mounted
+// behind the same principal and refuses a non-admin with 403 whatever the
+// token's assurance.
 func TestRoleRoutesGateOrder(t *testing.T) {
 	for name := range productionKeys {
 		t.Setenv(string(name), "")
@@ -416,9 +421,14 @@ func TestRoleRoutesGateOrder(t *testing.T) {
 	server.Start()
 	t.Cleanup(server.Close)
 
-	status, raw := send(t, http.MethodPost, origin+devissuer.TokenPath, `{"sub":"`+memberSubject+`","email":"a@x.test","email_verified":true}`, nil)
+	status, raw := send(t, http.MethodPost, origin+devissuer.TokenPath, `{"sub":"`+memberSubject+`","email":"a@x.test","email_verified":true,"amr":["pwd","mfa"]}`, nil)
 	var minted struct{ Token string }
 	if status != http.StatusOK || json.Unmarshal([]byte(raw), &minted) != nil || minted.Token == "" {
+		t.Fatalf("mint: %d %s", status, raw)
+	}
+	status, raw = send(t, http.MethodPost, origin+devissuer.TokenPath, `{"sub":"`+memberSubject+`","email":"a@x.test","email_verified":true,"amr":["pwd"]}`, nil)
+	var single struct{ Token string }
+	if status != http.StatusOK || json.Unmarshal([]byte(raw), &single) != nil || single.Token == "" {
 		t.Fatalf("mint: %d %s", status, raw)
 	}
 
@@ -439,6 +449,10 @@ func TestRoleRoutesGateOrder(t *testing.T) {
 	if status, raw := send(t, http.MethodGet, origin+"/authorization/roles/by-subject?subject_type=user&subject_id=x", "", nil); status != http.StatusUnauthorized {
 		t.Errorf("GET without a credential: %d %s, want 401", status, raw)
 	}
+	singleFactor := http.Header{"Authorization": {"Bearer " + single.Token}, "Content-Type": {"application/json"}}
+	if status, header, raw := sendWithHeader(t, http.MethodPost, origin+"/authorization/roles", assign, singleFactor); status != http.StatusUnauthorized || !strings.Contains(header.Get("WWW-Authenticate"), `error="insufficient_user_authentication"`) {
+		t.Errorf("single-factor bearer POST: %d %q %s, want 401 with the RFC 9470 challenge", status, header.Get("WWW-Authenticate"), raw)
+	}
 	bearerOnly := http.Header{"Authorization": {"Bearer " + minted.Token}, "Content-Type": {"application/json"}}
 	if status, raw := send(t, http.MethodPost, origin+"/authorization/roles", assign, bearerOnly); status != http.StatusForbidden || strings.Contains(raw, "origin_rejected") {
 		t.Errorf("bearer POST by a non-admin: %d %s, want 403 from authorization", status, raw)
@@ -449,10 +463,21 @@ func TestRoleRoutesGateOrder(t *testing.T) {
 	if status, raw := send(t, http.MethodPost, origin+"/auth/admin/users/user-2/erase", "{}", bearerOnly); status != http.StatusForbidden {
 		t.Errorf("erase by a non-admin: %d %s, want 403 from the user-administration check", status, raw)
 	}
+	if status, raw := send(t, http.MethodPost, origin+"/auth/admin/users/user-2/erase", "{}", singleFactor); status != http.StatusForbidden {
+		t.Errorf("erase by a single-factor non-admin: %d %s, want 403: the check runs before the MFA gate", status, raw)
+	}
 }
 
 // send makes one request and returns the status and body.
 func send(t *testing.T, method, url, body string, header http.Header) (int, string) {
+	t.Helper()
+	status, _, raw := sendWithHeader(t, method, url, body, header)
+	return status, raw
+}
+
+// sendWithHeader makes one request and returns the status, the response
+// header and the body.
+func sendWithHeader(t *testing.T, method, url, body string, header http.Header) (int, http.Header, string) {
 	t.Helper()
 	req, err := http.NewRequest(method, url, strings.NewReader(body))
 	if err != nil {
@@ -470,5 +495,5 @@ func send(t *testing.T, method, url, body string, header http.Header) (int, stri
 	if err != nil {
 		t.Fatal(err)
 	}
-	return resp.StatusCode, string(raw)
+	return resp.StatusCode, resp.Header, string(raw)
 }

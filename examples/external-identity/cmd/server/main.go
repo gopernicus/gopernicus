@@ -101,11 +101,14 @@ func newHandler(ctx context.Context, origin string, trustedProxyCount int, mode 
 	// The dev issuer mints Auth0-shaped claims, so the Auth0 preset maps them.
 	profile := auth0.Profile("localhost")
 
+	// RequireMFA on every provider is this host's MFA posture: a token whose
+	// provider asserted no second factor is refused on every route before it
+	// provisions a user, and production boots without an acknowledgement.
 	store := memstore.New(log)
 	engine, err := authlogic.NewExternalAuthenticator(store.Repositories(), authlogic.ExternalConfig{
 		Providers: []authlogic.ExternalProvider{
-			{Name: providerName, Provider: devissuer.NewProvider(dev.Issuer(), headerVerifier, profile), ProvisionOnFirstVerification: true},
-			{Name: providerName, Provider: devissuer.NewProvider(dev.SessionIssuer(), sessionVerifier, profile), CookieName: devissuer.CookieName, ProvisionOnFirstVerification: true},
+			{Name: providerName, Provider: devissuer.NewProvider(dev.Issuer(), headerVerifier, profile), ProvisionOnFirstVerification: true, RequireMFA: true},
+			{Name: providerName, Provider: devissuer.NewProvider(dev.SessionIssuer(), sessionVerifier, profile), CookieName: devissuer.CookieName, ProvisionOnFirstVerification: true, RequireMFA: true},
 		},
 	}, mode, authlogic.WithExternalLogger(log))
 	if err != nil {

@@ -57,6 +57,11 @@ type ExternalProvider struct {
 	ProvisionOnFirstVerification bool
 	// RequireVerifiedEmail denies a token whose email is present but unverified.
 	RequireVerifiedEmail bool
+	// RequireMFA denies a token below AAL2 — one whose provider did not assert
+	// multi-factor authentication (sdkauth.Identity.MFA) — on every route, with
+	// ErrMFARequired and an mfa_required_denied row. The check precedes subject
+	// resolution, so a denied token never provisions a user.
+	RequireMFA bool
 	// AllowedTenants, when non-empty, must contain Identity.Tenant exactly.
 	AllowedTenants []string
 	// RevocationFailOpen lets LivenessOnMutation pass on validity and local status
@@ -90,6 +95,16 @@ type ExternalConfig struct {
 	// LoginRecordCacheEntries bounds the default in-process login-record cache
 	// (10,000).
 	LoginRecordCacheEntries int
+	// SingleFactorAcknowledged affirms that an external-only host accepts
+	// single-factor sign-in: a provider without RequireMFA admits AAL1 tokens.
+	// Production NewExternalAuthenticator refuses that posture without it
+	// (ErrSingleFactorUnacknowledged, cause external_no_mfa) and logs one
+	// posture_waiver WARN with it; development WARNs either way. It is inert
+	// when every provider sets RequireMFA. The pocket root's New refuses it: a
+	// hybrid host sets IdentityConfig.SingleFactorAcknowledged instead. It is a
+	// wiring assertion set as a literal in the composition root, not an env
+	// knob.
+	SingleFactorAcknowledged bool
 }
 
 // ExternalRepositories are the ports the external engine uses.

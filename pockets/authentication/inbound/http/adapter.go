@@ -36,6 +36,7 @@ type adapterConfig struct {
 	MachineGate       web.Middleware
 	RouteAuth         BundledRouteAuthentication
 	UserErasureRoute  bool
+	AdministrationMFA bool
 	RouteLimits       PublicRouteLimits
 }
 
@@ -84,6 +85,9 @@ func New(service AuthenticationService, runtimeMode environment.Mode, opts ...Op
 	if cfg.UserAdminCheck != nil && !cfg.Authentication.UserAdminEnabled() {
 		return nil, fmt.Errorf("authentication HTTP: UserAdminCheck requires user administration: %w", sdk.ErrInvalidInput)
 	}
+	if cfg.AdministrationMFA && cfg.UserAdminCheck == nil {
+		return nil, fmt.Errorf("authentication HTTP: administration MFA requires UserAdminCheck: %w", sdk.ErrInvalidInput)
+	}
 	var eraser userEraser
 	if cfg.UserErasureRoute {
 		e, ok := cfg.Authentication.(userEraser)
@@ -126,7 +130,7 @@ func New(service AuthenticationService, runtimeMode environment.Mode, opts ...Op
 		Views:    views, HTMLPolicy: snapshotHTMLPolicy(cfg.HTMLPolicy), MachineGate: cfg.MachineGate,
 		RouteAuth: resolveBundledRouteAuth(cfg.RouteAuth, auth),
 		Eraser:    eraser,
-		Proxies:   auth.proxies, RouteLimits: cfg.RouteLimits,
+		Proxies:   auth.proxies, RouteLimits: cfg.RouteLimits, AdministrationMFA: cfg.AdministrationMFA,
 	}
 	return auth, nil
 }

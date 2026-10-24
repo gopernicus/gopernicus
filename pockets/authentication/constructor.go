@@ -112,6 +112,9 @@ func New(repos Repositories, signer cryptids.JWTSigner, runtimeMode environment.
 	if err := validateOAuthConfig(cfg); err != nil {
 		return nil, err
 	}
+	if err := validateMFA(cfg); err != nil {
+		return nil, err
+	}
 	if (repos.ServiceAccounts == nil) != (repos.APIKeys == nil) {
 		return nil, ErrMachineReposRequired
 	}
@@ -286,7 +289,7 @@ func New(repos Repositories, signer cryptids.JWTSigner, runtimeMode environment.
 		return nil, ErrIdentifierKeyerRequired
 	}
 	// The acknowledgeable production posture: the security-event audit rail,
-	// single-factor native login, and opportunistic STARTTLS. Production reports
+	// single-factor sign-in, and opportunistic STARTTLS. Production reports
 	// every unacknowledged violation in one joined error, so a host repinning onto
 	// this check sees its whole list in one boot.
 	if err := checkPosture(repos, cfg, startTLS, opportunistic, transportLog); err != nil {
@@ -552,7 +555,7 @@ func New(repos Repositories, signer cryptids.JWTSigner, runtimeMode environment.
 		logicOptions = append(logicOptions, authlogic.WithInvitations(invSvc))
 	}
 	if cfg.External != nil {
-		logicOptions = append(logicOptions, authlogic.WithExternal(*cfg.External))
+		logicOptions = append(logicOptions, authlogic.WithExternal(requireExternalMFA(*cfg.External, cfg.MFARequired)))
 	}
 	authComponents, err := authlogic.New(authlogic.Repositories{
 		Users: repos.Users, Identifiers: repos.Identifiers, Passwords: repos.Passwords, Sessions: repos.Sessions, SessionManagement: repos.SessionManagement,
@@ -626,8 +629,7 @@ func New(repos Repositories, signer cryptids.JWTSigner, runtimeMode environment.
 			}
 		}
 	}
-	adapter, err := inbound.New(authService,
-		cfg.RuntimeMode,
+	httpOptions := []inbound.Option{
 		inbound.WithBrowser(inbound.BrowserConfig{RefreshCookiePath: cfg.RefreshCookiePath, AllowedOrigins: cfg.AllowedOrigins, OriginPolicy: cfg.OriginPolicy, Views: cfg.Views, HTMLPolicy: cfg.HTMLPolicy}),
 		inbound.WithInvitations(invSvc),
 		inbound.WithOAuth2(oauthHTTP),
@@ -639,11 +641,17 @@ func New(repos Repositories, signer cryptids.JWTSigner, runtimeMode environment.
 		inbound.WithListStrategy(listStrategy),
 		inbound.WithMachineGate(cfg.MachineRoutesGate),
 		inbound.WithRouteAuthentication(cfg.BundledRouteAuth),
-		inbound.WithUserErasureRoute(cfg.UserErasureRoute))
+		inbound.WithUserErasureRoute(cfg.UserErasureRoute),
+	}
+	if cfg.MFARequired == MFARequiredAdmins {
+		httpOptions = append(httpOptions, inbound.WithAdministrationMFA())
+	}
+	adapter, err := inbound.New(authService, cfg.RuntimeMode, httpOptions...)
 	if err != nil {
 		return nil, err
 	}
 	logMaintenancePosture(cfg, maintenanceService, transportLog)
+	logMFAPosture(cfg, transportLog)
 	return &Components{Authentication: authService, External: authService.ExternalAuthenticator(), OAuth2: oauthService, Invitations: invSvc, HTTP: adapter, Delivery: deliveryRuntime, SecurityEvents: securityEvents, Maintenance: maintenanceService}, nil
 
 }
@@ -681,6 +689,32 @@ func logMaintenancePosture(cfg constructorConfig, svc *maintenance.Service, log 
 	if cfg.RuntimeMode.IsProduction() && !cfg.MaintenanceRunnerAcknowledged {
 		log.Warn("auth: maintenance_runner=unacknowledged: retention is not enforced; run Components.Maintenance.Run or the jobs schedule and set MaintenanceConfig.MaintenanceRunnerAcknowledged")
 	}
+}
+
+// requireExternalMFA returns external with RequireMFA set on a copy of every
+// provider under MFARequiredAll; the host's slice is never written.
+func requireExternalMFA(external authlogic.ExternalConfig, required MFARequirement) authlogic.ExternalConfig {
+	if required != MFARequiredAll {
+		return external
+	}
+	external.Providers = slices.Clone(external.Providers)
+	for i := range external.Providers {
+		external.Providers[i].RequireMFA = true
+	}
+	return external
+}
+
+// logMFAPosture logs the one boot line naming MFAConfig.Required and what it
+// gates: /auth/admin/users* under admins, every external token under all.
+func logMFAPosture(cfg constructorConfig, log *slog.Logger) {
+	required, gates := "none", "none"
+	switch cfg.MFARequired {
+	case MFARequiredAdmins:
+		required, gates = string(MFARequiredAdmins), "/auth/admin/users*"
+	case MFARequiredAll:
+		required, gates = string(MFARequiredAll), "external_tokens"
+	}
+	log.Info("auth: mfa posture", "mfa_required", required, "gates", gates)
 }
 
 // validateInvitationPolicy enforces the invitation-policy matrix. A host policy

@@ -20,6 +20,15 @@ import (
 	"github.com/gopernicus/gopernicus/sdk/pkg/environment"
 )
 
+// The single-factor causes checkPosture names: login sources that cannot, or
+// are not asked to, produce AAL2.
+const (
+	causeNativePassword = "native_password"
+	causePasswordless   = "passwordless"
+	causeNativeOAuth    = "native_oauth"
+	causeExternalNoMFA  = "external_no_mfa"
+)
+
 // Runtime-mode and delivery-transport construction errors. These fire NOW, at
 // New, because RuntimeMode and the delivery transports are core
 // collaborators the pocket already carries.
@@ -86,13 +95,27 @@ var (
 	// Repositories.SecurityEvents is nil: without the rail no sign-in, credential
 	// change or denial is recorded. WithAuditDisabledAcknowledged() waives it.
 	ErrAuditRequired = errors.New("auth: production RuntimeMode requires Repositories.SecurityEvents (the security-event audit rail); to run without it pass WithAuditDisabledAcknowledged()")
-	// ErrSingleFactorUnacknowledged is returned in production RuntimeMode when
-	// native single-factor login is enabled — password flows on or any
-	// Passwordless kind listed — without IdentityConfig.SingleFactorAcknowledged.
-	// The pocket ships no second factor yet, so production asks the host to
-	// accept one-factor login explicitly or to disable it (PasswordFlowsDisabled
-	// and no Passwordless kinds, for example behind an external provider).
-	ErrSingleFactorUnacknowledged = errors.New("auth: production RuntimeMode refuses single-factor native login (password flows or a Passwordless kind) unless IdentityConfig.SingleFactorAcknowledged is set")
+	// ErrSingleFactorUnacknowledged is returned in production RuntimeMode when the
+	// host admits single-factor sign-in without IdentityConfig.SingleFactorAcknowledged.
+	// The causes are password flows on (native_password), any Passwordless kind
+	// (passwordless), any OAuth provider (native_oauth), and an External provider
+	// without RequireMFA while MFAConfig.Required is none (external_no_mfa); the
+	// refusal names the ones present. The pocket ships no native second factor
+	// yet, so production asks the host to accept one-factor sign-in explicitly,
+	// to require MFA of its external users (WithMFA), or to turn native login off.
+	// It is the logic package's sentinel, re-exported here, so one errors.Is
+	// target serves New and NewExternalAuthenticator.
+	ErrSingleFactorUnacknowledged = authlogic.ErrSingleFactorUnacknowledged
+	// ErrMFAUnsatisfiable is returned in every mode when MFAConfig.Required cannot
+	// be met by the wiring: any requirement without WithExternal (the only AAL2
+	// source); admins without AdministrationConfig.UserAdminCheck (it would gate
+	// nothing); all beside native password, passwordless or OAuth login (the
+	// pocket ships no native second factor). The error names the field to change.
+	ErrMFAUnsatisfiable = errors.New("auth: MFAConfig.Required cannot be satisfied by this wiring")
+	// ErrMFARequired denies a credential below AAL2 where multi-factor
+	// authentication is required. It is the logic package's sentinel,
+	// re-exported here, and matches sdk.ErrUnauthorized.
+	ErrMFARequired = authlogic.ErrMFARequired
 	// ErrDevelopmentOnlyProvider is returned in production RuntimeMode for an
 	// OAuth provider or an external identity provider that declares itself
 	// development-only (oauth.Capabilities or the authentication capability's
@@ -515,19 +538,21 @@ type postureCondition struct {
 }
 
 // checkPosture enforces the acknowledgeable production posture: the
-// security-event audit rail, single-factor native login, and opportunistic
+// security-event audit rail, single-factor sign-in, and opportunistic
 // STARTTLS on a delivery transport (startTLS and opportunistic come from
 // validateDeliveryTransports). Production returns every unacknowledged
 // violation at once with errors.Join, each naming its acknowledgement, and logs
 // one posture_waiver WARN per honored acknowledgement; development logs one WARN
-// per present condition. An acknowledgement is inert while its condition is
-// absent, except WithAuditDisabledAcknowledged() beside a wired SecurityEvents,
-// which is contradictory in every mode.
+// per present condition. The single-factor condition carries its causes on the
+// refusal, the waiver and the WARN. An acknowledgement is inert while its
+// condition is absent, except WithAuditDisabledAcknowledged() beside a wired
+// SecurityEvents, which is contradictory in every mode.
 func checkPosture(repos Repositories, cfg constructorConfig, startTLS []string, opportunistic error, log *slog.Logger) error {
 	auditWired := !nilDependency(repos.SecurityEvents)
 	if cfg.AuditDisabledAcknowledged && auditWired {
 		return ErrAuditAcknowledgedWithSecurityEvents
 	}
+	causes := singleFactorCauses(cfg)
 	conditions := []postureCondition{
 		{
 			present: !auditWired, acknowledged: cfg.AuditDisabledAcknowledged,
@@ -535,9 +560,11 @@ func checkPosture(repos Repositories, cfg constructorConfig, startTLS []string, 
 			warning: "auth: Repositories.SecurityEvents is nil, so the security-event audit rail records nothing; production refuses this without WithAuditDisabledAcknowledged()",
 		},
 		{
-			present: !cfg.PasswordFlowsDisabled || len(cfg.Passwordless) > 0, acknowledged: cfg.SingleFactorAcknowledged,
-			flag: "SingleFactorAcknowledged", refusal: ErrSingleFactorUnacknowledged,
-			warning: "auth: single-factor native login is enabled (password flows or a Passwordless kind); production refuses this without IdentityConfig.SingleFactorAcknowledged",
+			present: len(causes) > 0, acknowledged: cfg.SingleFactorAcknowledged,
+			flag:    "SingleFactorAcknowledged",
+			refusal: singleFactorRefusal(causes),
+			warning: "auth: this host admits single-factor sign-in; production refuses this without IdentityConfig.SingleFactorAcknowledged",
+			attrs:   []any{"causes", causes},
 		},
 		{
 			present: len(startTLS) > 0, acknowledged: cfg.OpportunisticTLSAcknowledged,
@@ -559,4 +586,35 @@ func checkPosture(repos Repositories, cfg constructorConfig, startTLS []string, 
 		}
 	}
 	return errors.Join(refusals...)
+}
+
+// singleFactorCauses lists the login sources that admit single-factor (AAL1)
+// sign-in: native sources cannot produce AAL2, so they count under any
+// MFAConfig.Required; an external provider counts only while it is not asked
+// to (no RequireMFA and Required none). Admins clears external_no_mfa because
+// its UserAdminCheck always gates something.
+func singleFactorCauses(cfg constructorConfig) []string {
+	var causes []string
+	if !cfg.PasswordFlowsDisabled {
+		causes = append(causes, causeNativePassword)
+	}
+	if len(cfg.Passwordless) > 0 {
+		causes = append(causes, causePasswordless)
+	}
+	if len(cfg.Providers) > 0 {
+		causes = append(causes, causeNativeOAuth)
+	}
+	if cfg.External != nil && cfg.MFARequired == MFARequiredNone && slices.ContainsFunc(cfg.External.Providers, func(p authlogic.ExternalProvider) bool { return !p.RequireMFA }) {
+		causes = append(causes, causeExternalNoMFA)
+	}
+	return causes
+}
+
+// singleFactorRefusal wraps ErrSingleFactorUnacknowledged with the causes it
+// tripped and the field that acknowledges them.
+func singleFactorRefusal(causes []string) error {
+	if slices.Contains(causes, causeExternalNoMFA) {
+		return fmt.Errorf("%w: set IdentityConfig.SingleFactorAcknowledged, or WithMFA for external_no_mfa (causes %v)", ErrSingleFactorUnacknowledged, causes)
+	}
+	return fmt.Errorf("%w: set IdentityConfig.SingleFactorAcknowledged (causes %v)", ErrSingleFactorUnacknowledged, causes)
 }

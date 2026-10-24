@@ -43,6 +43,8 @@ const (
 var (
 	_ CredentialService = (*authlogic.Service)(nil)
 	_ CredentialService = (*authlogic.ExternalAuthenticator)(nil)
+	_ MFADenialRecorder = (*authlogic.Service)(nil)
+	_ MFADenialRecorder = (*authlogic.ExternalAuthenticator)(nil)
 )
 
 // Adapter adapts verified credentials to HTTP cookies, middleware and optional routes.
@@ -63,6 +65,9 @@ type Adapter struct {
 	// proxies logs the one production trusted-proxy warning, shared by
 	// ClientInfoMiddleware and the bundled routes; nil outside production.
 	proxies *proxyPosture
+	// mfaDenials records MFA denials when the credential service implements
+	// MFADenialRecorder; nil records nothing.
+	mfaDenials MFADenialRecorder
 }
 
 // authenticatorConfig holds the HTTP adapter's resolved policy and dependencies.
@@ -93,11 +98,22 @@ func newAuthenticator(service CredentialService, cfg authenticatorConfig) *Adapt
 	if cfg.Logger == nil {
 		cfg.Logger = slog.Default()
 	}
+	mfaDenials, _ := service.(MFADenialRecorder)
 	return &Adapter{
 		service: service, cookie: cfg.Cookie, externalCookies: slices.Clone(cfg.ExternalCookies),
 		browserLoginPath: cfg.BrowserLoginPath, browserLoginSet: browserLoginSet, limiter: cfg.Limiter, limiterFailOpen: cfg.LimiterFailOpen, logger: cfg.Logger,
-		proxies: newProxyPosture(cfg.RuntimeMode, cfg.Logger),
+		proxies: newProxyPosture(cfg.RuntimeMode, cfg.Logger), mfaDenials: mfaDenials,
 	}
+}
+
+// recordMFADenial hands one MFA denial of gate to the credential service's
+// recorder, attributed to the request's principal.
+func (s *Adapter) recordMFADenial(ctx context.Context, gate authlogic.MFAGate, cred Credential) {
+	if s.mfaDenials == nil {
+		return
+	}
+	principal, _ := s.service.CurrentPrincipal(ctx)
+	s.mfaDenials.RecordMFADenied(ctx, authlogic.MFADenial{Gate: gate, Principal: principal, Credential: cred})
 }
 
 // clientIPFor returns the client-info carrier's IP, or clientIP(r) when no
@@ -117,6 +133,10 @@ func clientIPFor(r *http.Request) string {
 // RequireLive receives the route's tier and whether the request method is unsafe.
 // ClassifyBearer names the one kind a JWT-shaped bearer or provider cookie is
 // verified as, from its unverified issuer; false denies without verifying.
+// CurrentCredential's Assurance is what RequireMFA reads: an implementation
+// that admits external tokens stamps session.AssuranceAAL2 when the provider
+// asserted MFA (sdkauth.Identity.MFA) and AssuranceAAL1 otherwise, or every
+// RequireMFA gate denies its tokens.
 type CredentialService interface {
 	Authenticate(context.Context, CredentialKind, Transport, string) (context.Context, error)
 	RequireLive(context.Context, LivenessTier, bool) (context.Context, error)
@@ -130,6 +150,17 @@ type CredentialService interface {
 	CurrentSessionID(context.Context) (string, bool)
 }
 
+// MFADenialRecorder is the optional recording seam beside CredentialService. A
+// credential service that implements it records each RequireMFA and admin-gate
+// denial as one mfa_required_denied row; NewAuthenticator asserts it once.
+// *authlogic.Service and *authlogic.ExternalAuthenticator implement it. A
+// service that does not still denies; it records nothing for those gates.
+type MFADenialRecorder interface {
+	RecordMFADenied(context.Context, authlogic.MFADenial)
+}
+
+// NewAuthenticator builds the credential middleware over service. When service
+// implements MFADenialRecorder, MFA denials are recorded through it.
 func NewAuthenticator(service CredentialService, runtimeMode environment.Mode, opts ...AuthenticatorOption) (*Adapter, error) {
 	cfg := authenticatorConfig{}
 	cfg.RuntimeMode = runtimeMode

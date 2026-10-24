@@ -43,3 +43,29 @@ func TestDescribeMethod_UnknownKind(t *testing.T) {
 		t.Error("DescribeMethod(\"passkey\"): ok=true, want false (unregistered)")
 	}
 }
+
+// TestAssuranceAtLeast pins the one comparator: unknown < aal1 < aal2 < aal3,
+// and an unrecognised level ranks as unknown.
+func TestAssuranceAtLeast(t *testing.T) {
+	levels := []AssuranceLevel{AssuranceUnknown, AssuranceAAL1, AssuranceAAL2, AssuranceAAL3}
+	for i, a := range levels {
+		for j, min := range levels {
+			if got, want := a.AtLeast(min), i >= j; got != want {
+				t.Errorf("%q.AtLeast(%q) = %v, want %v", a, min, got, want)
+			}
+		}
+	}
+	for _, tc := range []struct {
+		a, min AssuranceLevel
+		want   bool
+	}{
+		{"aal9", AssuranceAAL1, false},
+		{"aal9", AssuranceUnknown, true},
+		{AssuranceAAL1, "aal9", true},
+		{"AAL2", AssuranceAAL2, false},
+	} {
+		if got := tc.a.AtLeast(tc.min); got != tc.want {
+			t.Errorf("%q.AtLeast(%q) = %v, want %v", tc.a, tc.min, got, tc.want)
+		}
+	}
+}

@@ -44,6 +44,7 @@ func TestExternalIdentityTypesAreStableWireValues(t *testing.T) {
 		{TypeExternalSubjectCollision, "external_subject_collision"},
 		{TypeExternalSubjectDenied, "external_subject_denied"},
 		{TypeExternalRevocationUnavailable, "external_revocation_unavailable"},
+		{TypeMFARequiredDenied, "mfa_required_denied"},
 	} {
 		if tc.got != tc.want {
 			t.Errorf("event type = %q, want %q", tc.got, tc.want)

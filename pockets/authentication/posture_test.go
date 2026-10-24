@@ -231,8 +231,8 @@ func TestPasswordlessAloneIsSingleFactor(t *testing.T) {
 		WithBrowser(BrowserConfig{SessionCookie: inbound.CookieConfig{Secure: true}}),
 		WithAuditDisabledAcknowledged(),
 		WithLogger(log))
-	if !errors.Is(err, ErrSingleFactorUnacknowledged) {
-		t.Fatalf("passwordless-only production: err = %v, want ErrSingleFactorUnacknowledged", err)
+	if !errors.Is(err, ErrSingleFactorUnacknowledged) || !strings.Contains(err.Error(), "causes [passwordless]") {
+		t.Fatalf("passwordless-only production: err = %v, want ErrSingleFactorUnacknowledged naming the passwordless cause", err)
 	}
 }
 
@@ -244,7 +244,7 @@ func TestDevelopmentOnlyOAuthProvider(t *testing.T) {
 	build := func(mode environment.Mode, provider oauth.Provider, log *slog.Logger) error {
 		_, err := New(repos, stubSigner{}, mode, delivery.ModeOff,
 			WithPassword(PasswordConfig{PasswordFlowsDisabled: true}),
-			WithIdentity(IdentityConfig{IdentifierKeyer: prodKeyer{}}),
+			WithIdentity(IdentityConfig{IdentifierKeyer: prodKeyer{}, SingleFactorAcknowledged: true}),
 			WithAbuseProtection(AbuseProtectionConfig{RateLimiter: durableLimiter{}}),
 			WithDelivery(DeliveryConfig{Mailer: prodMailer{}}),
 			WithOAuth(OAuthConfig{Providers: []oauth.Provider{provider}, OAuthCallbackBase: "https://app.example.com"}),
@@ -277,7 +277,7 @@ func TestDevelopmentOnlyExternalProvider(t *testing.T) {
 	build := func(mode environment.Mode, provider sdkauth.Provider, log *slog.Logger) error {
 		_, err := New(repos, stubSigner{}, mode, delivery.ModeOff,
 			WithPassword(PasswordConfig{PasswordFlowsDisabled: true}),
-			WithIdentity(IdentityConfig{IdentifierKeyer: prodKeyer{}}),
+			WithIdentity(IdentityConfig{IdentifierKeyer: prodKeyer{}, SingleFactorAcknowledged: true}),
 			WithAbuseProtection(AbuseProtectionConfig{RateLimiter: durableLimiter{}}),
 			WithDelivery(DeliveryConfig{Mailer: prodMailer{}}),
 			WithBrowser(BrowserConfig{SessionCookie: inbound.CookieConfig{Secure: true}}),

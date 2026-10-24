@@ -325,10 +325,11 @@ type mounted struct {
 // mount builds both pockets from c and registers their routes on router.
 // Authentication admits only the provider's tokens: password flows and
 // delivery are off; user administration, erase included, is the global admin
-// role's; retention runs through the host's runner. Authorization records
-// every change and serves role administration behind authenticate ∘
-// browser-safe mutation ∘ the global admin role; its denials and refused role
-// writes reach the security-event rail through the host's decision bridge. It
+// role's and needs an MFA token (MFARequiredAdmins); retention runs through
+// the host's runner. Authorization records every change and serves role
+// administration behind authenticate (an MFA token) ∘ browser-safe mutation ∘
+// the global admin role; its denials and refused role writes reach the
+// security-event rail through the host's decision bridge. It
 // returns the audit-loss counters and the retention runner. Authentication's
 // client-info stamp covers every route on router, inside the TrustProxies Use
 // newRouter installed.
@@ -357,6 +358,7 @@ func mount(router *web.WebHandler, c composition) (mounted, error) {
 			RequireVerifiedEmail:         true,
 		}}}),
 		authentication.WithAdministration(authentication.AdministrationConfig{UserAdminCheck: admins.check, UserErasureRoute: true}),
+		authentication.WithMFA(authentication.MFAConfig{Required: authentication.MFARequiredAdmins}),
 		authentication.WithMaintenance(authentication.MaintenanceConfig{
 			Config:                        maintenance.Config{ArchiveSink: c.archive.sink, ArchiveLocation: c.archive.location},
 			MaintenanceRunnerAcknowledged: true,
@@ -390,7 +392,7 @@ func mount(router *web.WebHandler, c composition) (mounted, error) {
 	// The role routes' gate ends in this pocket's own guard, so the adapter
 	// serving them is built once the pocket exists.
 	authenticate := authenticationComponents.HTTP.RequirePrincipal(
-		authenticationhttp.Accept(authenticationhttp.CredentialExternalToken), authenticationhttp.Live())
+		authenticationhttp.Accept(authenticationhttp.CredentialExternalToken), authenticationhttp.Live(), authenticationhttp.RequireMFA())
 	browserSafe := authenticationComponents.HTTP.RequireBrowserSafeMutation()
 	authorize := authorizationComponents.HTTP.Require(authorizationhttp.HasRole(adminRole, authorizationhttp.Global()))
 	authorizationComponents.HTTP, err = authorizationhttp.New(
