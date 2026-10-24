@@ -1,22 +1,44 @@
 package session
 
 // AssuranceLevel is an honest authenticator-assurance classification in the NIST
-// SP 800-63B sense. Auth v3 ships AAL1 methods only — password, email magic
+// SP 800-63B sense. Every native method is AAL1 — password, email magic
 // link/code, SMS OTP, and ordinary OAuth are single-factor as actually provided.
-// AAL2/AAL3 are declared but unused, reserved for the auth-v4 MFA add-on
-// (design §12.1), so no v3 seam assumes one method equals one assurance unit.
+// AAL2 is reached only from provider evidence: an external token whose provider
+// asserted multi-factor authentication (sdkauth.Identity.MFA). AAL3 is declared
+// but unused, so no seam assumes one method equals one assurance unit.
 type AssuranceLevel string
 
 const (
 	// AssuranceUnknown is the zero value: no assurance recorded.
 	AssuranceUnknown AssuranceLevel = ""
-	// AssuranceAAL1 is single-factor assurance — every method v3 provides.
+	// AssuranceAAL1 is single-factor assurance — every native method, and an
+	// external token whose provider asserted no second factor.
 	AssuranceAAL1 AssuranceLevel = "aal1"
-	// AssuranceAAL2 is reserved for auth-v4 multi-factor methods.
+	// AssuranceAAL2 is multi-factor assurance: an external token whose provider
+	// asserted multi-factor authentication.
 	AssuranceAAL2 AssuranceLevel = "aal2"
-	// AssuranceAAL3 is reserved for auth-v4 hardware-backed methods.
+	// AssuranceAAL3 is reserved for hardware-backed methods; nothing produces it.
 	AssuranceAAL3 AssuranceLevel = "aal3"
 )
+
+// AtLeast reports whether a meets min under unknown < aal1 < aal2 < aal3. An
+// unrecognised level ranks as unknown, so it never satisfies a floor above it.
+func (a AssuranceLevel) AtLeast(min AssuranceLevel) bool {
+	return a.rank() >= min.rank()
+}
+
+func (a AssuranceLevel) rank() int {
+	switch a {
+	case AssuranceAAL1:
+		return 1
+	case AssuranceAAL2:
+		return 2
+	case AssuranceAAL3:
+		return 3
+	default:
+		return 0
+	}
+}
 
 // MethodKind enumerates the authentication methods v3 can present on a session
 // or a recent-authentication grant. It is the discovery vocabulary policy

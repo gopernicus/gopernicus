@@ -116,24 +116,9 @@ func anyNonPSTN(methods []session.AuthenticationMethod) bool {
 
 func anyAtLeastAssurance(methods []session.AuthenticationMethod, min session.AssuranceLevel) bool {
 	for _, m := range methods {
-		if assuranceRank(m.Assurance) >= assuranceRank(min) {
+		if m.Assurance.AtLeast(min) {
 			return true
 		}
 	}
 	return false
-}
-
-// assuranceRank orders the honest assurance levels so a minimum can be compared
-// (design §12.1): unknown < aal1 < aal2 < aal3.
-func assuranceRank(a session.AssuranceLevel) int {
-	switch a {
-	case session.AssuranceAAL1:
-		return 1
-	case session.AssuranceAAL2:
-		return 2
-	case session.AssuranceAAL3:
-		return 3
-	default:
-		return 0
-	}
 }

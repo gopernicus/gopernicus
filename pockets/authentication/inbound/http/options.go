@@ -115,3 +115,12 @@ func WithInvitationResourceRule(rule InvitationResourceRule) Option {
 func WithUserAdminCheck(check UserAdminCheck) Option {
 	return func(c *adapterConfig) { c.UserAdminCheck = check }
 }
+
+// WithAdministrationMFA requires AAL2 on /auth/admin/users* of every caller the
+// UserAdminCheck admits: an admitted caller below AAL2 gets the RFC 9470 401
+// and an mfa_required_denied row, a non-admin keeps the check's 403, and an API
+// key passes. It gates no other route. Without WithUserAdminCheck it is
+// sdk.ErrInvalidInput at New.
+func WithAdministrationMFA() Option {
+	return func(c *adapterConfig) { c.AdministrationMFA = true }
+}

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"reflect"
 	"slices"
+	"strings"
 
 	delivery "github.com/gopernicus/gopernicus/pockets/authentication/logic/delivery"
 	"github.com/gopernicus/gopernicus/sdk"
@@ -60,6 +61,44 @@ func validateRepositories(repos Repositories, cfg constructorConfig) error {
 		}
 		if cfg.RuntimeMode == environment.ModeProduction && !cfg.CookieDomainAcknowledged {
 			return ErrCookieDomainRefused
+		}
+	}
+	return nil
+}
+
+// validateMFA checks MFAConfig against the wiring in every mode, naming the
+// field to change. ExternalConfig.SingleFactorAcknowledged belongs to
+// NewExternalAuthenticator; New refuses it so it is never inert.
+func validateMFA(cfg constructorConfig) error {
+	if cfg.External != nil && cfg.External.SingleFactorAcknowledged {
+		return fmt.Errorf("authentication: ExternalConfig.SingleFactorAcknowledged is for NewExternalAuthenticator; New reads IdentityConfig.SingleFactorAcknowledged: %w", sdk.ErrInvalidInput)
+	}
+	switch cfg.MFARequired {
+	case MFARequiredNone:
+		return nil
+	case MFARequiredAdmins, MFARequiredAll:
+	default:
+		return fmt.Errorf("authentication: MFAConfig.Required %q is not none, admins or all: %w", cfg.MFARequired, sdk.ErrInvalidInput)
+	}
+	if cfg.External == nil {
+		return fmt.Errorf("%w: MFAConfig.Required %q needs WithExternal, the only AAL2 source", ErrMFAUnsatisfiable, cfg.MFARequired)
+	}
+	if cfg.MFARequired == MFARequiredAdmins && cfg.UserAdminCheck == nil {
+		return fmt.Errorf("%w: MFAConfig.Required admins needs AdministrationConfig.UserAdminCheck, or it gates nothing", ErrMFAUnsatisfiable)
+	}
+	if cfg.MFARequired == MFARequiredAll {
+		var native []string
+		if !cfg.PasswordFlowsDisabled {
+			native = append(native, "PasswordConfig.PasswordFlowsDisabled is false")
+		}
+		if len(cfg.Passwordless) > 0 {
+			native = append(native, "PasswordlessConfig.Passwordless is set")
+		}
+		if len(cfg.Providers) > 0 {
+			native = append(native, "OAuthConfig.Providers is set")
+		}
+		if len(native) > 0 {
+			return fmt.Errorf("%w: MFAConfig.Required all refuses native single-factor login (%s)", ErrMFAUnsatisfiable, strings.Join(native, "; "))
 		}
 	}
 	return nil

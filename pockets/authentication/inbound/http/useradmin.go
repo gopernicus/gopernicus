@@ -6,6 +6,7 @@ import (
 
 	"github.com/gopernicus/gopernicus/pockets"
 	authlogic "github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/session"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/user"
 	"github.com/gopernicus/gopernicus/sdk/pkg/web"
 )
@@ -118,6 +119,12 @@ func mountUserAdmin(r pockets.RouteRegistrar, h *handlers, userAdministration, b
 //
 // A machine principal reaches the policy as a real principal: the pocket does
 // not pre-decide whether a service account may administer users.
+//
+// With WithAdministrationMFA the caller the check admits must also hold an AAL2
+// credential, or it gets the RFC 9470 401 and one mfa_required_denied row
+// (gate admin). The check runs first, so a non-admin keeps the host's 403 and
+// the challenge never reveals who is an administrator. An API key skips the
+// MFA requirement: no key can ever satisfy it.
 func (h *handlers) adminPrincipal(w http.ResponseWriter, r *http.Request, action UserAdminAction, targetUserID string) (authlogic.Principal, bool) {
 	principal, ok := h.svc.CurrentPrincipal(r.Context())
 	if !ok {
@@ -132,6 +139,14 @@ func (h *handlers) adminPrincipal(w http.ResponseWriter, r *http.Request, action
 		// outage never reads as permission.
 		web.RespondJSONDomainError(w, err)
 		return authlogic.Principal{}, false
+	}
+	if h.adminMFA {
+		cred, _ := h.svc.CurrentCredential(r.Context())
+		if cred.Kind != authlogic.CredentialAPIKey && !cred.Assurance.AtLeast(session.AssuranceAAL2) {
+			h.svc.recordMFADenial(r.Context(), authlogic.MFAGateAdmin, cred)
+			writeMFARequired(w)
+			return authlogic.Principal{}, false
+		}
 	}
 	return principal, true
 }

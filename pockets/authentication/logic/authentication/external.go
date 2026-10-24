@@ -18,6 +18,7 @@ import (
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/externalsubject"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/identifier"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/securityevent"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/session"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/user"
 	"github.com/gopernicus/gopernicus/sdk"
 	sdkauth "github.com/gopernicus/gopernicus/sdk/capabilities/authentication"
@@ -168,6 +169,9 @@ func NewExternalAuthenticator(repos ExternalRepositories, cfg ExternalConfig, ru
 	if err != nil {
 		return nil, err
 	}
+	if err := checkExternalPosture(cfg, runtimeMode, log); err != nil {
+		return nil, err
+	}
 	return newExternalAuthenticator(repos, cfg, runtimeMode, o), nil
 }
 
@@ -242,8 +246,12 @@ func (e *ExternalAuthenticator) wired(issuer string) bool {
 
 // Verify authenticates raw with the ONE provider its unverified iss names, then
 // maps the subject to an active local user, provisioning it when the provider
-// allows. A provider failure never falls through to another provider. Errors
-// match sdk.ErrUnauthorized (deny) or sdk.ErrUnavailable (cannot decide).
+// allows. The credential's Assurance is AAL2 when the provider asserted
+// multi-factor authentication, AAL1 otherwise; a provider with RequireMFA
+// denies an AAL1 token with ErrMFARequired before the subject resolves, so the
+// denial provisions nothing and its row carries no UserID. A provider failure
+// never falls through to another provider. Errors match sdk.ErrUnauthorized
+// (deny) or sdk.ErrUnavailable (cannot decide).
 func (e *ExternalAuthenticator) Verify(ctx context.Context, raw string, transport Transport) (Principal, Credential, error) {
 	if transport != TransportHeader && transport != TransportCookie {
 		return Principal{}, Credential{}, errCredentialRejected
@@ -275,20 +283,29 @@ func (e *ExternalAuthenticator) Verify(ctx context.Context, raw string, transpor
 	if p.RequireVerifiedEmail && identity.Email != "" && !identity.EmailVerified {
 		return Principal{}, Credential{}, e.deny(ctx, p, "", externalReasonUnverifiedEmail)
 	}
+	assurance := externalAssurance(identity)
+	if p.RequireMFA && !assurance.AtLeast(session.AssuranceAAL2) {
+		e.events.Record(ctx, mfaDenialEvent(MFADenial{
+			Gate:       MFAGateProvider,
+			Credential: Credential{Kind: CredentialExternalToken, Transport: transport, Assurance: assurance},
+		}, p.Name))
+		return Principal{}, Credential{}, ErrMFARequired
+	}
 	userID, err := e.resolveSubject(ctx, p, identity)
 	if err != nil {
 		return Principal{}, Credential{}, err
 	}
-	e.recordLogin(ctx, p, userID, raw, identity.ExpiresAt)
-	return Principal{Type: PrincipalUser, ID: userID}, Credential{Kind: CredentialExternalToken, Transport: transport, Identity: identity.Clone()}, nil
+	e.recordLogin(ctx, p, userID, raw, identity.ExpiresAt, assurance)
+	return Principal{Type: PrincipalUser, ID: userID}, Credential{Kind: CredentialExternalToken, Transport: transport, Identity: identity.Clone(), Assurance: assurance}, nil
 }
 
 // recordLogin records external_login once per token per login-record cache,
-// keyed by the token's SHA-256 so the cache never holds the token. A cache hit
+// with the assurance the provider asserted (aal1 or aal2), keyed by the
+// token's SHA-256 so the cache never holds the token. A cache hit
 // skips the row; a miss, an evicted entry or a cache error records it, so a
 // cache fault costs a duplicate row, never a missing one. The entry lives until
 // the token expires, at most 24 hours and at least one minute.
-func (e *ExternalAuthenticator) recordLogin(ctx context.Context, p externalProvider, userID, raw string, expiresAt time.Time) {
+func (e *ExternalAuthenticator) recordLogin(ctx context.Context, p externalProvider, userID, raw string, expiresAt time.Time, assurance session.AssuranceLevel) {
 	sum := sha256.Sum256([]byte(raw))
 	key := hex.EncodeToString(sum[:])
 	if _, found, err := e.logins.Get(ctx, key); err == nil && found {
@@ -298,7 +315,7 @@ func (e *ExternalAuthenticator) recordLogin(ctx context.Context, p externalProvi
 		UserID:  userID,
 		Type:    securityevent.TypeExternalLogin,
 		Status:  securityevent.StatusSuccess,
-		Details: map[string]any{"provider": p.Name},
+		Details: map[string]any{"provider": p.Name, "assurance": string(assurance)},
 	})
 	ttl := max(min(expiresAt.Sub(e.now()), maxLoginRecordTTL), minLoginRecordTTL)
 	_ = e.logins.Set(ctx, key, []byte{1}, ttl)

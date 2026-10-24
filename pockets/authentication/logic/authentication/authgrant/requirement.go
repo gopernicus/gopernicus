@@ -21,7 +21,7 @@ type Requirement struct {
 }
 
 func (r Requirement) Validate() error {
-	if r.SessionID == "" || r.UserID == "" || r.Purpose == "" || r.AuthenticatedAfter.IsZero() || assuranceRank(r.MinAssurance) == 0 {
+	if r.SessionID == "" || r.UserID == "" || r.Purpose == "" || r.AuthenticatedAfter.IsZero() || !r.MinAssurance.AtLeast(session.AssuranceAAL1) {
 		return sdk.ErrInvalidInput
 	}
 	return nil
@@ -31,19 +31,6 @@ func (r Requirement) Validate() error {
 // and a session's primary authentication. Future-dated or absent proof is invalid.
 func (r Requirement) Accepts(authenticatedAt time.Time, assurance session.AssuranceLevel, now time.Time) bool {
 	return !authenticatedAt.IsZero() && !authenticatedAt.Before(r.AuthenticatedAfter) &&
-		!authenticatedAt.After(now) && assuranceRank(r.MinAssurance) > 0 &&
-		assuranceRank(assurance) >= assuranceRank(r.MinAssurance)
-}
-
-func assuranceRank(a session.AssuranceLevel) int {
-	switch a {
-	case session.AssuranceAAL1:
-		return 1
-	case session.AssuranceAAL2:
-		return 2
-	case session.AssuranceAAL3:
-		return 3
-	default:
-		return 0
-	}
+		!authenticatedAt.After(now) && r.MinAssurance.AtLeast(session.AssuranceAAL1) &&
+		assurance.AtLeast(r.MinAssurance)
 }

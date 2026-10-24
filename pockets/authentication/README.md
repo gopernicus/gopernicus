@@ -1234,7 +1234,7 @@ pre-composition of it.
 | profile | first-party · delegated | delegated proof requires explicit `Audience` or `DelegatedAudience`; `FirstParty()` excludes delegated proof, API keys and external tokens |
 | audience | exact resource identifiers | `Audience` gates all credentials; `DelegatedAudience` gates only delegated proof (and refuses external tokens) |
 | liveness | `Live()` · `LiveOnMutation()` (**default**) · `Stateless()` | see the liveness table below |
-| assurance | `RequireMFA()` · `FreshAuth(d)` · `VerifiedEmail()` · `Tenant(ids…)` · `Check(fn)` | evaluated on external tokens only; an API key passes |
+| assurance | `RequireMFA()` · `FreshAuth(d)` · `VerifiedEmail()` · `Tenant(ids…)` · `Check(fn)` | evaluated on external tokens only; an API key passes. `RequireMFA()` reads `Credential.Assurance` ([Assurance model](#assurance-model)) |
 
 **The primitive and its options:**
 
@@ -1244,7 +1244,7 @@ func Transports(ts ...Transport) PrincipalOption    // OR-set of transports;  de
 func Live() PrincipalOption                          // re-check on every request, always fail closed
 func LiveOnMutation() PrincipalOption                // the default: re-check on POST/PUT/PATCH/DELETE only
 func Stateless() PrincipalOption                     // never re-check (the per-route escape from the default)
-func RequireMFA() PrincipalOption                    // external token: provider asserted MFA
+func RequireMFA() PrincipalOption                    // external token at AAL2 (Credential.Assurance): provider asserted MFA
 func FreshAuth(within time.Duration) PrincipalOption // external token: authenticated at the provider within d
 func VerifiedEmail() PrincipalOption                 // external token: provider-verified email
 func Tenant(ids ...string) PrincipalOption           // external token: Identity.Tenant is one of ids
@@ -1315,9 +1315,11 @@ name a provider is header-only.
 carry `WWW-Authenticate: Bearer error="insufficient_user_authentication"`
 (`FreshAuth` adds `max_age`), telling a SPA to re-authenticate at the provider;
 `VerifiedEmail()`, `Tenant()` and `Check()` deny with a plain 401, since
-re-authentication cannot cure them. `Browser()` keeps the 303. Provider claims are
-identity data, **never permissions**: map `Identity.Attributes` to authorization in
-host code.
+re-authentication cannot cure them. `Browser()` keeps the 303. A provider's
+`RequireMFA` floor (`authlogic.ErrMFARequired`) and the `MFARequiredAdmins` gate
+answer the same MFA challenge; every MFA denial records one `mfa_required_denied`
+row ([Assurance model](#assurance-model)). Provider claims are identity data,
+**never permissions**: map `Identity.Attributes` to authorization in host code.
 
 **A credential arriving on a transport outside the set is IGNORED, never
 denied** — the set says what the surface reads, so a header at a
@@ -1653,6 +1655,7 @@ root `New`; the root fills `WithExternalCookies` from every `CookieName`, and
 | `CookieName` | the provider's own session cookie; empty means header-only |
 | `ProvisionOnFirstVerification` | JIT-create a local user for an unknown subject; the zero value denies (`external_subject_unknown`) |
 | `RequireVerifiedEmail` | deny a token whose email is present but unverified |
+| `RequireMFA` | deny a token below AAL2 on every route (`ErrMFARequired`, the RFC 9470 challenge, one `mfa_required_denied` row), checked before the subject resolves so a denied token provisions nothing ([Assurance model](#assurance-model)) |
 | `AllowedTenants` | non-empty → `Identity.Tenant` must match exactly |
 | `RevocationFailOpen` | during a provider outage, let the default tier pass on validity plus local status; `Live()` never fails open; production logs a WARN at construction |
 
@@ -1661,7 +1664,11 @@ root `New`; the root fills `WithExternalCookies` from every `CookieName`, and
 `RevocationCacheTTL` (30 s), `RevocationOutageGrace` (5 m, ≥ TTL),
 `RevocationTimeout` (2 s, < 10 s), `LoginRecordCache` (any `cacher.Storer`,
 namespaced `authext_login`; nil → in-process memory bounded by
-`LoginRecordCacheEntries`, 10,000 — see [the audit gap](#the-audit-gap)).
+`LoginRecordCacheEntries`, 10,000 — see [the audit gap](#the-audit-gap)),
+`SingleFactorAcknowledged` (standalone only: production `NewExternalAuthenticator`
+refuses a provider without `RequireMFA` unless it is set —
+`ErrSingleFactorUnacknowledged`, cause `external_no_mfa`; the root `New` refuses
+it with `sdk.ErrInvalidInput` and reads `IdentityConfig.SingleFactorAcknowledged`).
 Production with any provisioning provider requires `WithExternalIdentifierKeyer`. `RevocationStats()` and
 `RunHeartbeat(ctx, interval)` expose cache hits, misses, stale serves, fail-open
 and fail-closed counts and provider errors. Provider load is roughly
@@ -1938,8 +1945,10 @@ The pocket records `external_subject_provisioned`, `external_subject_unknown`,
 `external_subject_collision`, `external_subject_denied` (reason `tenant`,
 `sign_in_method`, `unverified_email`, `no_identifier`, `invalid_identifier`,
 `inactive` or `revoked`), `external_revocation_unavailable` (once per
-provider outage) and `external_login` (Details `provider`; `UserID` the mapped
-user) — the first successful verification of each token, not every request.
+provider outage), `external_login` (Details `provider` and `assurance` —
+`aal1` or `aal2`, the assurance the provider asserted; `UserID` the mapped
+user) — the first successful verification of each token, not every request —
+and `mfa_required_denied` ([Assurance model](#assurance-model)).
 The engine remembers a recorded token under the SHA-256 of the raw token in
 `LoginRecordCache`, its own store and namespace, never the revocation cache,
 whose facts a login record would otherwise evict. The entry lives until the
@@ -1948,7 +1957,9 @@ an evicted entry or a cache error records it, so a cache fault costs a duplicate
 row, never a lost one. **Dedupe is per cache**: per instance under the
 in-process default (each instance records a token once), fleet-wide when the
 host supplies a shared store such as Redis. It does **not** record provider
-sign-ins, password changes or MFA events. Those live only in the provider's own
+sign-ins, password changes or the provider's own MFA events (enrollment,
+challenges); it records only the assurance a token asserted and its own MFA
+denials. Those live only in the provider's own
 audit or event log, so an incident review needs both. (This README names no per-vendor log location; check
 each vendor's documentation.)
 
@@ -1962,6 +1973,83 @@ denied there (pinned in the route-policy test; the auth-cms demo shows a 401 on
 `WWW-Authenticate: Bearer error="insufficient_user_authentication"` denial tells
 a SPA to re-authenticate at the provider (`prompt=login`, `max_age`,
 `acr_values`, or the vendor's re-authentication call).
+
+### Assurance model
+
+`Credential.Assurance` (`session.AssuranceLevel`) is what a credential proves,
+and every MFA gate reads it through the one comparator
+`session.AssuranceLevel.AtLeast(min)` (unknown < aal1 < aal2 < aal3; an
+unrecognised level ranks as unknown).
+
+- **`Identity.MFA`** is the sdk port's output: the provider asserted
+  authentication with at least two factor categories, or an explicit MFA claim
+  or flag; a one-factor sign-in leaves it false. `sdkauth.NewOIDC` derives it
+  from `amr` under a strict default over the IANA amr registry: `mfa`, or values
+  from two categories — knowledge (`pwd` `pin` `kba`), possession (`otp` `sms`
+  `tel` `hwk` `swk` `sc` `pop`), inherence (`fpt` `face` `iris` `retina` `vbm`);
+  any other value is no factor. `ClaimMapping.MFAMethods` is the hatch: set, any
+  listed value alone counts (the sdk v0.18.0 default was `mfa otp hwk sms swk
+  pop`). `ClaimMapping.MFAFlag` sets it from a flag claim.
+- **The stamp.** The engine stamps an external token AAL2 when `Identity.MFA` is
+  set and AAL1 otherwise — unknown is never higher, and nothing produces AAL3.
+  Access tokens and API keys stay `AssuranceUnknown`: native sessions carry no
+  assurance until native second factors ship.
+- **A host's own `CredentialService`** must stamp `Assurance` the same way (AAL2
+  when `Identity.MFA`, else AAL1) on external tokens, or every MFA gate denies
+  them. Implementing `authenticationhttp.MFADenialRecorder` makes its denials
+  recorded; `NewAuthenticator` asserts it once.
+
+Three gates require AAL2. Each answers a JSON request with the RFC 9470
+`insufficient_user_authentication` challenge and records one
+`mfa_required_denied` row (`blocked`, budgeted per client IP; Details `gate`,
+`credential`, `provider` for external tokens, `assurance` presented and
+`required` — never an amr value, a claim or the token):
+
+| gate | where it runs | scope |
+|---|---|---|
+| `RequireMFA()` | a `RequirePrincipal` option | external tokens on that route; an API key passes; panics on a set admitting access tokens |
+| `ExternalProvider.RequireMFA` | `Verify`, before the subject resolves | every route; a denied token provisions nothing, so its row has no `UserID` |
+| `WithMFA(MFAConfig{Required: MFARequiredAdmins})` | `/auth/admin/users*`, after `UserAdminCheck` | callers the check admits; a non-admin keeps the check's 403, so the challenge never reveals who is an administrator; an API key passes |
+
+`MFARequiredAll` sets `RequireMFA` on a copy of every `WithExternal` provider
+(the host's slice is never written) and refuses native password, passwordless
+and OAuth login; a standalone `NewExternalAuthenticator` host sets `RequireMFA`
+on each provider itself. Any requirement needs `WithExternal`, and `admins` needs
+`AdministrationConfig.UserAdminCheck` (`ErrMFAUnsatisfiable` in every mode,
+naming the field); an unknown value is `sdk.ErrInvalidInput`. `New` logs one
+boot line, `auth: mfa posture mfa_required=<none|admins|all>
+gates=<none|/auth/admin/users*|external_tokens>`.
+
+**`admins` does NOT gate** role routes, cms admin routes, host admin pages or
+the machine lifecycle routes: a host adds `RequireMFA()` to those itself.
+**API keys pass every MFA gate**, and an AAL1 native session can mint API keys,
+so a `UserAdminCheck` that admits service accounts allows administration
+without MFA.
+
+- **Self-check.** Sign in at the IdP with a second factor, then read the newest
+  `external_login` row: `select details from security_events where event_type =
+  'external_login' order by created_at desc limit 1` must read
+  `"assurance":"aal2"`. An `aal1` row after a second factor means the IdP's
+  evidence does not meet the strict rule; only the IdP's own documentation can
+  say whether a hatch would be honest.
+- **Passkey caveat.** An IdP passkey sign-in that emits only `hwk` or `swk`
+  reads AAL1 (one possession factor). List it in `MFAMethods` only if the IdP
+  enforces user verification on that passkey.
+- **Re-auth recipe.** On `insufficient_user_authentication`, re-authorize at the
+  IdP forcing a second factor — the IdP's own step-up parameter, or
+  `prompt=login`. `RequireMFA()` beside `Browser()` needs a login path that does
+  this, or a live IdP session answers AAL1 again and the browser loops.
+
+What each IdP emits after a second factor (checked against this repository's
+code, 2026-10-24):
+
+| IdP | what it emits | mapping |
+|---|---|---|
+| Auth0 | `amr: ["mfa"]` after a second factor (`integrations/authentication/auth0/auth0.go:57`, asserted at `auth0_test.go:94-104`) | `auth0.Profile` defaults |
+| Firebase | `firebase.sign_in_second_factor` when MFA was used; no `amr` (`integrations/authentication/firebase/firebase.go:249`) | `firebase.New` flag, or `firebase.Profile`'s `MFAFlag` (`firebase/profile.go:33`) |
+| Google | **unknown** — run the self-check | — |
+| Okta | **unknown** — run the self-check | — |
+| Entra ID | **unknown** — run the self-check | — |
 
 ### Invitations
 
@@ -2117,7 +2205,8 @@ store upgrade is needed.
 |---|---|
 | `RuntimeMode` | **REQUIRED, no default.** `"production"` rejects development-only delivery transports and every incomplete security wiring (below); `"development"` warns instead. Uses `environment.Mode` (`sdk/pkg/environment`) — see [Security posture](#security-posture); app-wide code should name `environment.Mode` and needs no auth import. |
 | `Repositories.SecurityEvents` + `WithAuditDisabledAcknowledged()` | **Production requires the audit rail** (`ErrAuditRequired`); development WARNs. `WithAuditDisabledAcknowledged()` waives it and logs one `posture_waiver=AuditDisabledAcknowledged` WARN; passed beside a wired `SecurityEvents` it is `ErrAuditAcknowledgedWithSecurityEvents` in every mode. |
-| `IdentityConfig.SingleFactorAcknowledged` | **Production refuses single-factor native login** — password flows on (`PasswordFlowsDisabled` false) or any `Passwordless` kind listed — without it (`ErrSingleFactorUnacknowledged`); development WARNs. Set it to accept one-factor login (one `posture_waiver=SingleFactorAcknowledged` WARN), or turn native login off. Inert when native login is off. |
+| `IdentityConfig.SingleFactorAcknowledged` | **Production refuses single-factor sign-in** without it (`ErrSingleFactorUnacknowledged`, naming the causes); development logs one WARN naming it and the causes — the pre-deploy signal. The causes: `native_password` (`PasswordFlowsDisabled` false), `passwordless` (any `Passwordless` kind), `native_oauth` (any OAuth `Providers`), `external_no_mfa` (a `WithExternal` provider without `RequireMFA` while `MFAConfig.Required` is none). Set it to accept one-factor sign-in (one `posture_waiver=SingleFactorAcknowledged` WARN carrying `causes=[…]`), declare `WithMFA` (clears `external_no_mfa`; native causes remain), or turn native login off. Inert when no cause is present. |
+| `MFAConfig.Required` (`WithMFA`) | none: no requirement beyond each provider's `RequireMFA`. `admins` requires AAL2 on `/auth/admin/users*` of callers `UserAdminCheck` admits; `all` sets `RequireMFA` on every external provider. Unsatisfiable wiring is `ErrMFAUnsatisfiable`, an unknown value `sdk.ErrInvalidInput` — see [Assurance model](#assurance-model). A wiring literal, no env tag. |
 | `BrowserConfig.CookieDomainAcknowledged` | **Production refuses `SessionCookie.Domain`** (`AUTH_COOKIE_DOMAIN`) without it (`ErrCookieDomainRefused`): a Domain sends the access and refresh cookies to every host under it. Set it to accept that sharing (one `posture_waiver=CookieDomainAcknowledged` WARN); development admits a Domain. Inert while Domain is empty. It never waives `ErrCookieDomainWithNamespaceRule`: a Domain beside an `OriginPolicy` namespace rule fails `New` in every mode, because the sdk's trust model keeps session cookies host-only under a namespace (`sdk/pkg/web/origin_policy.go:55-62`) — remove one. |
 | `AbuseProtectionConfig.PublicRouteLimiterFailOpen` | false (**FAIL CLOSED in every mode**, development included): a limiter outage answers 503 + `Retry-After: 5` on the bundled public-route budgets, host `RateLimitByIP` routes and the per-session refresh budget. true admits and WARNs per failure; in production it is a posture waiver (one `posture_waiver=PublicRouteLimiterFailOpen` WARN at `New`). See [Rate-limiter outage policy](#rate-limiter-outage-policy). |
 | `DeliveryConfig.OpportunisticTLSAcknowledged` | **Production refuses a Mailer or BodySender declaring opportunistic STARTTLS** (`ErrInsecureDeliveryTransport` wrapping `notify.ErrOpportunisticTLS`), at the root and in the delivery router's `ValidateTransports` (`delivery.WithOpportunisticTLSAcknowledged()`); development WARNs. Prefer a mandatory-TLS sender (`email.SMTPConfig.RequireTLS`). Inert when no transport declares STARTTLS. |
@@ -3438,8 +3527,11 @@ credential rail is unwired.
 
   Three further conditions are **waivable**: a nil `Repositories.SecurityEvents`
   (`ErrAuditRequired`, waived by `WithAuditDisabledAcknowledged()`), single-factor
-  native login (`ErrSingleFactorUnacknowledged`, waived by
-  `IdentityConfig.SingleFactorAcknowledged`), and a transport declaring
+  sign-in — native password, passwordless or OAuth login, or an external provider
+  without `RequireMFA` while `MFAConfig.Required` is none
+  (`ErrSingleFactorUnacknowledged` naming the causes, waived by
+  `IdentityConfig.SingleFactorAcknowledged`; standalone
+  `NewExternalAuthenticator` by `ExternalConfig.SingleFactorAcknowledged`), and a transport declaring
   opportunistic STARTTLS (`ErrInsecureDeliveryTransport` wrapping
   `notify.ErrOpportunisticTLS`, waived by
   `DeliveryConfig.OpportunisticTLSAcknowledged`). Production reports every
@@ -3594,7 +3686,9 @@ signatures unchanged); the OAuth2 server records `oauth2_consent_approved`,
 `client_id` — see "Denial coverage" for when it is absent or blank —
 `session_id`; `Actor` when the context carries a principal); the
 external identity engine records `external_login` once per token (below) beside
-its `external_subject_*` and `external_revocation_unavailable` rows. Retention and
+its `external_subject_*` and `external_revocation_unavailable` rows; every MFA
+gate records `mfa_required_denied` (blocked, budgeted; see [Assurance
+model](#assurance-model)). Retention and
 erasure record `user_erased` (inside the erase transaction; `UserID` the target,
 `Actor` the administrator, Details the erasure counts), `service_account_deleted`
 (Details `service_account_id`, `key_count`, `unrevoked_key_count`, `cascade` —
@@ -3644,6 +3738,7 @@ message, address, code or token.
 | OAuth2 consent `Deny` | `oauth2_consent_denied` | success (the user's decision); Details `client_id`, `session_id` |
 | OAuth2 code, refresh, exchange, revocation, introspection | `oauth2_grant_failed` | failure `invalid_grant`, `invalid_client`, `invalid_request`, `invalid_scope`, `invalid_target` (the wire error codes); Details `client_id`; budgeted. A refresh reuse stays `oauth2_refresh_reuse` (blocked). A request refused for its shape records nothing (the rule below) |
 | OAuth2 confidential-client authentication (`client_secret_basic` on token exchange and introspection) | `oauth2_grant_failed` | failure `invalid_client` on a secret mismatch; `client_id` only when the presented id is the configured confidential client; budgeted |
+| `RequireMFA()`, `ExternalProvider.RequireMFA`, `MFARequiredAdmins` | `mfa_required_denied` | blocked; Details `gate` (`route`, `provider`, `admin`), `credential`, `provider` (external tokens), `assurance` (`aal1` or `unknown`), `required` (`aal2`) instead of `reason`; no `UserID` for the provider gate; budgeted |
 | invitation accept | `invitation_granted` | failure `invalid_token` (a token that resolved no invitation; no Details beyond the reason), `policy` (the caller is not the invitee; Details the resource coordinates and `identifier_kind`) |
 
 An error that is not a denial — a store or provider outage — records no row.
@@ -3719,8 +3814,9 @@ losing the row on the pgx store. The caller's `Details` map is never written. Th
 OAuth2 server bounds its identifiers through the same helper.
 
 **The failure-row budget.** Rows a caller can drive without an authenticated
-session are budgeted per client IP: every `oauth2_grant_failed` row and the OAuth
-callback's `unknown_provider` row set `securityevent.Input.Budgeted`, and
+session are budgeted per client IP: every `oauth2_grant_failed` row, the OAuth
+callback's `unknown_provider` row and every `mfa_required_denied` row (an AAL1
+holder can drive it) set `securityevent.Input.Budgeted`, and
 `securityevent.WithFailureRowBudget(limiter, limit)` admits them through the
 limiter. `New` wires it with the SAME limiter the pocket's routes use
 (`AbuseProtectionConfig.RateLimiter`, default in-memory) at **60 rows per minute
@@ -4130,17 +4226,20 @@ atomicity lives in the `Provision`/`Passwords.Change`/`ApplyVerifiedChange`/
 module and this module imports none — `pockets/authentication/go.mod` requires
 exactly `sdk`.
 
-## auth-v4 handoff (MFA — NOT shipped in v3)
+## auth-v4 handoff (native MFA — NOT shipped in v3)
 
-v3 exposes stable **method** and **assurance** seams but implements NO
-multi-factor authentication. The session carries authentication-method descriptors
+Since v0.25.0 an external token carries the assurance its provider asserted
+(AAL2 when `Identity.MFA`), and `RequireMFA()`, `ExternalProvider.RequireMFA`
+and `MFAConfig` enforce it ([Assurance model](#assurance-model)). Native
+sign-in is still single-factor: v3 exposes stable **method** and **assurance**
+seams but implements NO native multi-factor authentication. The session carries authentication-method descriptors
 and an assurance level, the credential policy evaluates a typed `MethodSet`, and
 the step-up rail proves recent authentication — these are the reserved seams
 auth-v4 builds MFA on: **typed authenticators** for passkeys/WebAuthn, TOTP, and
 recovery codes as their own typed stores (like passwords and OAuth accounts);
 **AAL2** assurance and step-up-to-AAL2 gating; and **factor replacement/reset**
-flows. v3 ships none of these — no TOTP, passkey, or recovery-code MFA exists in
-this milestone; the seams are reserved, not implemented.
+flows. v3 ships none of these natively — no TOTP, passkey, or recovery-code MFA
+exists in this milestone; the seams are reserved, not implemented.
 
 ## UPGRADE NOTE — v1 → v2 invalidates all live sessions
 

@@ -26,6 +26,19 @@ import (
 	"github.com/gopernicus/gopernicus/sdk/pkg/web"
 )
 
+// The MFAConfig.Required values.
+const (
+	// MFARequiredNone is the zero value: no requirement beyond each external
+	// provider's own RequireMFA.
+	MFARequiredNone MFARequirement = ""
+	// MFARequiredAdmins requires AAL2 on /auth/admin/users* of every caller
+	// AdministrationConfig.UserAdminCheck admits; an API key passes.
+	MFARequiredAdmins MFARequirement = "admins"
+	// MFARequiredAll requires AAL2 of every external-token user: New sets
+	// ExternalProvider.RequireMFA on a copy of every External provider.
+	MFARequiredAll MFARequirement = "all"
+)
+
 // constructorConfig holds resolved pocket construction settings.
 // RuntimeMode and DeliveryMode are explicit; New validates dependencies for each
 // enabled feature. Individual logic and HTTP packages also offer constructors.
@@ -103,6 +116,7 @@ type constructorConfig struct {
 	Maintenance                   maintenance.Config
 	MaintenanceRunnerAcknowledged bool
 	UserErasureRoute              bool
+	MFARequired                   MFARequirement
 	Logger                        *slog.Logger
 }
 
@@ -206,13 +220,16 @@ type IdentityConfig struct {
 	// enabled (phase 6); a host may supply stronger rules. The slot is frozen here
 	// (AV3-0.4).
 	CredentialPolicy credential.Policy
-	// SingleFactorAcknowledged affirms that the host accepts single-factor native
-	// login: password flows on (PasswordFlowsDisabled false) or any Passwordless
-	// kind listed, each a one-factor (AAL1) credential. Production refuses that
-	// posture without it (ErrSingleFactorUnacknowledged) and logs one
-	// posture_waiver WARN with it; development WARNs either way. It is inert when
-	// native login is off, so one binary can run in several environments. It is a
-	// wiring assertion set as a literal in the composition root, not an env knob.
+	// SingleFactorAcknowledged affirms that the host admits single-factor (AAL1)
+	// sign-in. Its causes are password flows on (native_password), any
+	// Passwordless kind (passwordless), any OAuth provider (native_oauth), and an
+	// External provider without RequireMFA while MFAConfig.Required is none
+	// (external_no_mfa). Production refuses a present cause without it
+	// (ErrSingleFactorUnacknowledged, naming the causes) and logs one
+	// posture_waiver WARN with a causes attribute with it; development WARNs
+	// either way. It is inert when no cause is present, so one binary can run in
+	// several environments. It is a wiring assertion set as a literal in the
+	// composition root, not an env knob.
 	SingleFactorAcknowledged bool
 }
 
@@ -924,6 +941,28 @@ func WithAdministration(value AdministrationConfig) Option {
 		c.UserAdminCheck = value.UserAdminCheck
 		c.ListStrategy = value.ListStrategy
 		c.UserErasureRoute = value.UserErasureRoute
+	}
+}
+
+// MFARequirement selects which users must sign in at AAL2: none, admins or all.
+type MFARequirement string
+
+// MFAConfig is the pocket's multi-factor requirement. AAL2 comes only from an
+// external provider that asserted multi-factor authentication, so any
+// requirement needs WithExternal (ErrMFAUnsatisfiable without it). Admins also
+// needs AdministrationConfig.UserAdminCheck and gates /auth/admin/users* only:
+// it does NOT gate role routes, cms admin routes or host admin pages, which add
+// RequireMFA() themselves. All refuses native password, passwordless and OAuth
+// login. An unknown Required is sdk.ErrInvalidInput. It is a wiring literal,
+// not an env knob.
+type MFAConfig struct {
+	Required MFARequirement
+}
+
+// WithMFA replaces the complete MFAConfig group, including zero values.
+func WithMFA(value MFAConfig) Option {
+	return func(c *constructorConfig) {
+		c.MFARequired = value.Required
 	}
 }
 

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	authlogic "github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/session"
 	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/pkg/web"
@@ -194,14 +195,16 @@ func Stateless() PrincipalOption {
 	return func(set *principalSet) { set.liveness = LivenessStateless }
 }
 
-// RequireMFA requires an external token whose provider asserted multi-factor
-// authentication. Assurance options evaluate external tokens only: an API key
-// passes, and a set that also admits access tokens panics at wiring time. A JSON
-// denial carries the RFC 9470 insufficient_user_authentication challenge.
+// RequireMFA requires an external token at AAL2 (Credential.Assurance): one
+// whose provider asserted multi-factor authentication. Assurance options
+// evaluate external tokens only: an API key passes, and a set that also admits
+// access tokens panics at wiring time. A JSON denial carries the RFC 9470
+// insufficient_user_authentication challenge, and a credential service that
+// implements MFADenialRecorder records one mfa_required_denied row (gate route).
 func RequireMFA() PrincipalOption {
 	return withAssurance(func(_ context.Context, cred Credential) error {
-		if !cred.Identity.MFA {
-			return &insufficientAuthentication{description: "multi-factor authentication is required"}
+		if !cred.Assurance.AtLeast(session.AssuranceAAL2) {
+			return authlogic.ErrMFARequired
 		}
 		return nil
 	})

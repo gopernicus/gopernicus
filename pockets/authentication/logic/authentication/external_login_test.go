@@ -121,7 +121,7 @@ func TestExternalLoginRecordedOncePerToken(t *testing.T) {
 		t.Fatalf("external_login rows = %d across three verifications of one token, want 1", len(logins))
 	}
 	evt := logins[0]
-	if evt.EventStatus != securityevent.StatusSuccess || evt.UserID != "u1" || evt.Details["provider"] != "alpha" || len(evt.Details) != 1 {
+	if evt.EventStatus != securityevent.StatusSuccess || evt.UserID != "u1" || evt.Details["provider"] != "alpha" || evt.Details["assurance"] != "aal1" || len(evt.Details) != 2 {
 		t.Fatalf("external_login row = %+v", evt)
 	}
 	sum := sha256.Sum256([]byte(raw))

@@ -24,6 +24,7 @@ type handlers struct {
 	inviteCheck    InviteCheck
 	resourceRule   InvitationResourceRule
 	userAdminCheck UserAdminCheck
+	adminMFA       bool
 	eraser         userEraser
 	svc            authService
 	inv            InvitationService
@@ -89,6 +90,9 @@ type mountDeps struct {
 	// Eraser drives POST /auth/admin/users/{id}/erase. Nil unless the host
 	// opted in (WithUserErasureRoute) and the service's erasure is wired.
 	Eraser userEraser
+	// AdministrationMFA requires AAL2 of every caller UserAdminCheck admits on
+	// /auth/admin/users* (WithAdministrationMFA).
+	AdministrationMFA bool
 	// RouteLimits are the per-client-IP budgets of the public routes; a zero
 	// field takes its default at mount.
 	RouteLimits PublicRouteLimits
@@ -220,7 +224,7 @@ func mount(r pockets.RouteRegistrar, d mountDeps) {
 	auth := d.RouteAuth.withDefaults(svc)
 	limits := d.RouteLimits.withDefaults()
 	r = clientInfoRegistrar{inner: noStoreRegistrar{inner: r}, proxies: d.Proxies}
-	h := &handlers{oauth2: d.OAuth2, inviteCheck: d.InviteCheck, resourceRule: d.ResourceRule, userAdminCheck: d.UserAdminCheck, eraser: d.Eraser, svc: svc, inv: inv, listStrategy: d.ListStrategy, mutation: d.Mutation, views: views, htmlPolicy: d.HTMLPolicy}
+	h := &handlers{oauth2: d.OAuth2, inviteCheck: d.InviteCheck, resourceRule: d.ResourceRule, userAdminCheck: d.UserAdminCheck, adminMFA: d.AdministrationMFA, eraser: d.Eraser, svc: svc, inv: inv, listStrategy: d.ListStrategy, mutation: d.Mutation, views: views, htmlPolicy: d.HTMLPolicy}
 	if d.OAuth2 != nil {
 		mountOAuth2(r, h)
 		mountSessionManagement(r, h)

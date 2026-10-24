@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/gopernicus/gopernicus/pockets/authentication/internal/redirect"
+	authlogic "github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/session"
 	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/pkg/web"
@@ -22,6 +23,9 @@ var (
 	errNoCredential = fmt.Errorf("authentication HTTP: no credential presented: %w", sdk.ErrUnauthorized)
 	// errCredentialRefused denies a credential the set does not admit.
 	errCredentialRefused = fmt.Errorf("authentication HTTP: credential refused: %w", sdk.ErrUnauthorized)
+	// mfaRequired is the challenge every MFA denial carries: RequireMFA, a
+	// provider's RequireMFA floor (authlogic.ErrMFARequired) and the admin gate.
+	mfaRequired = &insufficientAuthentication{description: "multi-factor authentication is required"}
 )
 
 // RequirePrincipal is THE authenticator. Its options are OR-sets over credential
@@ -78,6 +82,9 @@ func (s *Adapter) RequirePrincipal(opts ...PrincipalOption) web.Middleware {
 				return
 			}
 			if err := set.assure(ctx, cred); err != nil {
+				if errors.Is(err, authlogic.ErrMFARequired) {
+					s.recordMFADenial(ctx, authlogic.MFAGateRoute, cred)
+				}
 				s.denyPrincipal(w, r, set, err, false)
 				return
 			}
@@ -189,8 +196,8 @@ func (s *Adapter) credentialPresented(r *http.Request, set principalSet) bool {
 // Browser() set answers the 303 to the configured browser login path carrying a
 // validated return_to on GET/HEAD (design §9.2); any other set answers the
 // byte-stable JSON 401, carrying the RFC 9470 challenge when an assurance
-// option denied. A nested authenticator denies in its OWN mode, so a plain
-// helper nested under a browser gate answers JSON.
+// option or a provider's MFA floor denied. A nested authenticator denies in its
+// OWN mode, so a plain helper nested under a browser gate answers JSON.
 func (s *Adapter) denyPrincipal(w http.ResponseWriter, r *http.Request, set principalSet, err error, unresolved bool) {
 	if errors.Is(err, sdk.ErrUnavailable) {
 		writeUnavailable(w)
@@ -205,9 +212,19 @@ func (s *Adapter) denyPrincipal(w http.ResponseWriter, r *http.Request, set prin
 		return
 	}
 	var insufficient *insufficientAuthentication
-	if errors.As(err, &insufficient) {
+	switch {
+	case errors.As(err, &insufficient):
 		w.Header().Set("WWW-Authenticate", insufficient.challenge())
+	case errors.Is(err, authlogic.ErrMFARequired):
+		w.Header().Set("WWW-Authenticate", mfaRequired.challenge())
 	}
+	writeUnauthorized(w)
+}
+
+// writeMFARequired writes the JSON 401 an MFA gate outside RequirePrincipal
+// answers, carrying the RFC 9470 challenge.
+func writeMFARequired(w http.ResponseWriter) {
+	w.Header().Set("WWW-Authenticate", mfaRequired.challenge())
 	writeUnauthorized(w)
 }
 

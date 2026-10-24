@@ -51,7 +51,10 @@ runner) and `workshop/`. There is no `internal/`.
    `WithAuditWriteObserver` logging lost security-event rows at ERROR,
    throttled to one line a minute; `WithAdministration` with a
    `UserAdminCheck` admitting the global `admin` role and
-   `UserErasureRoute: true` (see [Erase a person](#erase-a-person)); and
+   `UserErasureRoute: true` (see [Erase a person](#erase-a-person));
+   `WithMFA(MFAConfig{Required: MFARequiredAdmins})`, so an admitted
+   administrator below AAL2 gets the RFC 9470 401 on `/auth/admin/users*` (see
+   [MFA](#mfa)); and
    `WithMaintenance` with the archive as `ArchiveSink` and `ArchiveLocation`
    and `MaintenanceRunnerAcknowledged: true`; then
    `router.Use(HTTP.ClientInfoMiddleware())`, the client-attribution stamp
@@ -66,8 +69,9 @@ runner) and `workshop/`. There is no `internal/`.
    before any route is served. The role routes run behind
    `authenticate ∘ RequireBrowserSafeMutation() ∘ authorize`: `authenticate`
    admits the provider's token at the `Live()` tier
-   (`RequireAccessTokenLive()` would refuse it), and `authorize` requires the
-   global `admin` role. The adapter serving them is rebuilt with
+   (`RequireAccessTokenLive()` would refuse it) and only when the provider
+   asserted MFA (`RequireMFA()`), and `authorize` requires the global `admin`
+   role. The adapter serving them is rebuilt with
    `authorizationhttp.WithDecisionObserver` (the same bridge) and
    `WithLogger`.
 11. The retention runner (`pockets/retention/inbound/runner`) over
@@ -144,7 +148,8 @@ key, the plaintext-connection WARN, one `append_only=unenforced` WARN per store
 (`make run` connects as the owner, see [Two roles](#two-roles)),
 `authentication: development-only external identity provider wired; production
 refuses it`, the maintenance registration line (`maintenance_runner=true
-archive_sink=none` until `AUDIT_ARCHIVE_DIR` is set) and the authorization
+archive_sink=none` until `AUDIT_ARCHIVE_DIR` is set), the MFA posture line
+(`auth: mfa posture mfa_required=admins gates=/auth/admin/users*`) and the authorization
 registration line with `audit_recording=true audit_reader=true
 decision_observer=true runtime_mode=development`.
 
@@ -156,7 +161,8 @@ curl -i localhost:8080/healthz
 #   X-Frame-Options: DENY
 #   {"detail":{"audit_rows_suppressed":0,"audit_write_failures":0,"bridge_dropped":0,"maintenance_last_error_kind":"none","maintenance_last_pass":null,"maintenance_steps_failed":0},"status":"ok"}
 
-TOKEN=$(curl -s -XPOST localhost:8080/dev/token -d '{"sub":"u1","email":"a@x.test","email_verified":true}' | jq -r .token)
+TOKEN=$(curl -s -XPOST localhost:8080/dev/token -d '{"sub":"u1","email":"a@x.test","email_verified":true,"amr":["pwd","mfa"]}' | jq -r .token)
+SINGLE=$(curl -s -XPOST localhost:8080/dev/token -d '{"sub":"u1","email":"a@x.test","email_verified":true,"amr":["pwd"]}' | jq -r .token)
 ASSIGN='{"subject_type":"user","subject_id":"x","role":"admin","scope":{"kind":"global"}}'
 
 # a cross-site request carrying the session cookie: refused before authorization
@@ -169,16 +175,35 @@ curl -i -XPOST localhost:8080/authorization/roles -H "Authorization: Bearer $TOK
 curl -i -XPOST localhost:8080/authorization/roles -H 'Content-Type: application/json' -d "$ASSIGN"   # 401
 curl -i 'localhost:8080/authorization/roles/by-subject?subject_type=user&subject_id=x'               # 401
 
-# the provider's token alone: authenticated, then refused by authorization (u1 is not an admin)
+# a single-factor token: refused by authentication with the RFC 9470 challenge
+curl -i -XPOST localhost:8080/authorization/roles -H "Authorization: Bearer $SINGLE" \
+  -H 'Content-Type: application/json' -d "$ASSIGN"
+#   401 WWW-Authenticate: Bearer error="insufficient_user_authentication", error_description="multi-factor authentication is required"
+#       {"message":"authentication required","code":"unauthenticated"}
+
+# the provider's MFA token alone: authenticated, then refused by authorization (u1 is not an admin)
 curl -i -XPOST localhost:8080/authorization/roles -H "Authorization: Bearer $TOKEN" \
   -H 'Content-Type: application/json' -d "$ASSIGN"
 #   403 {"message":"permission denied","code":"permission_denied"}
 ```
 
 The first token provisions a local user and writes one
-`external_subject_provisioned` row to `security_events`; the last request's 403
-writes one `authorization_denied` row through the decision bridge. Both carry
-the client's `ip_address` and `user_agent`.
+`external_subject_provisioned` row to `security_events`, and each token's first
+use one `external_login` row whose `details` carry `"assurance": "aal2"` for
+`$TOKEN` and `"aal1"` for `$SINGLE`. The single-factor request writes one
+`mfa_required_denied` row (`blocked`; `{"gate": "route", "provider": "idp",
+"required": "aal2", "assurance": "aal1", "credential": "external_token"}`); the
+last request's 403 writes one `authorization_denied` row through the decision
+bridge. All carry the client's `ip_address` and `user_agent`:
+
+```sh
+docker exec baseline-pg psql -U postgres -Atc "select event_type,event_status,details from security_events order by created_at desc, id desc limit 5"
+#   authorization_denied|failure|{"operation": "EvaluateResolved", "permission": "admin", "resource_id": "", "resource_type": ""}
+#   mfa_required_denied|blocked|{"gate": "route", "provider": "idp", "required": "aal2", "assurance": "aal1", "credential": "external_token"}
+#   external_login|success|{"provider": "idp", "assurance": "aal1"}
+#   external_login|success|{"provider": "idp", "assurance": "aal2"}
+#   external_subject_provisioned|success|{"provider": "idp", "verified": true, "identifier_kind": "email"}
+```
 
 ### The first admin
 
@@ -201,13 +226,38 @@ change history (`iam_audit`, `system_source = bootstrap`, reason `first platform
 admin`). Rerunning it answers `no_change` and records nothing. **A raw SQL
 insert into `iam_tuples` is not supported:** it leaves no audit row. Once an
 admin exists, role writes through `POST /authorization/roles` are recorded with
-that admin as the actor:
+that admin as the actor (the MFA token; `$SINGLE` still answers 401):
 
 ```sh
 curl -i -XPOST localhost:8080/authorization/roles -H "Authorization: Bearer $TOKEN" \
   -H 'Content-Type: application/json' -d "$ASSIGN"
 #   200 {"outcome":"applied"}
 ```
+
+### MFA
+
+`MFARequiredAdmins` requires AAL2 on `/auth/admin/users*` of every caller the
+`UserAdminCheck` admits, after the check runs, and the role routes carry
+`RequireMFA()`. AAL2 is the provider's assertion: `amr` with `mfa`, or values
+from two factor categories (the pocket README's "Assurance model"). With u1 an
+admin:
+
+```sh
+OTP=$(curl -s -XPOST localhost:8080/dev/token -d '{"sub":"u1","email":"a@x.test","email_verified":true,"amr":["otp"]}' | jq -r .token)
+U2=$(curl -s -XPOST localhost:8080/dev/token -d '{"sub":"u2","email":"b@x.test","email_verified":true,"amr":["pwd"]}' | jq -r .token)
+curl -i localhost:8080/auth/admin/users -H "Authorization: Bearer $TOKEN"    # 200 {"items":[…]}
+curl -i localhost:8080/auth/admin/users -H "Authorization: Bearer $SINGLE"   # 401 + the RFC 9470 challenge
+curl -i localhost:8080/auth/admin/users -H "Authorization: Bearer $OTP"      # 401: one factor, the strict rule
+curl -i localhost:8080/auth/admin/users -H "Authorization: Bearer $U2"       # 403 {"code":"permission_denied"}: not an admin
+```
+
+Each 401 writes one `mfa_required_denied` row with `"gate": "admin"`; the
+non-admin's 403 writes none, so the challenge never reveals who is an
+administrator. The admin gate does not cover host routes or the role routes —
+those carry their own `RequireMFA()`. In production, an IdP-only host that
+declares no MFA posture is refused at boot (`ErrSingleFactorUnacknowledged`,
+cause `external_no_mfa`); `WithMFA` is this host's declaration, so it needs no
+acknowledgement.
 
 ## Two roles
 
@@ -504,7 +554,10 @@ registration lines for `decision_observer=true`, `maintenance_runner=true`,
 `archive_sink=disk:…` and `operation_expiry`, and asserts production logs no
 WARN. An HTTP test serves the router on a loopback listener and proves the role
 routes' gate order (403 for a cross-site cookie request, 401 without a
-credential) and that the erase route refuses a non-admin.
+credential, 401 with the RFC 9470 challenge for a single-factor token) and that
+the erase route refuses a non-admin with 403 whatever the token's assurance.
+The positive control also reads the `mfa_required=admins
+gates=/auth/admin/users*` line.
 
 `pockets/retention/inbound/runner/runner_test.go` proves the runner: it starts
 the maintenance loop and returns only after it stops, drains the operation

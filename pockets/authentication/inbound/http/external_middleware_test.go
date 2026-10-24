@@ -135,6 +135,7 @@ type externalSetup struct {
 	noProviders bool
 	cookies     []string
 	loginPath   string
+	requireMFA  bool
 }
 
 // newExternalHarness wires a hybrid service: the native user rail and machine
@@ -167,7 +168,7 @@ func newExternalHarness(t *testing.T, setup externalSetup) *externalHarness {
 	}
 	if !setup.noProviders {
 		fixture.External = &authlogic.ExternalConfig{Providers: []authlogic.ExternalProvider{{
-			Name: "idp", Provider: provider, Revocation: revocation, CookieName: extCookie,
+			Name: "idp", Provider: provider, Revocation: revocation, CookieName: extCookie, RequireMFA: setup.requireMFA,
 		}}}
 		fixture.ExternalSubjects = subjects
 	}
