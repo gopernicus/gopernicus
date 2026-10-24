@@ -356,10 +356,10 @@ routes and the authentication pocket's machine routes.
 
 | Module | Version | Notes |
 | --- | --- | --- |
-| `pockets/authorization` | v0.22.0 | Core, `stores/memory`, `stores/storetest` conformance |
-| `pockets/authorization/stores/pgx` | v0.16.0 | `migrations/0001_iam_tuples.sql`, optional `tuple_cache_migrations/0002_iam_tuple_cache.sql` |
-| `pockets/authorization/stores/turso` | v0.15.0 | Same two files for SQLite/Turso |
-| `pockets/authorization/stores/goredis` | v0.4.0 | TupleCache backend, protocol 2 |
+| `pockets/authorization` | v0.30.0 | Core, `stores/memory`, `stores/storetest` conformance |
+| `pockets/authorization/stores/pgx` | v0.21.0 | `migrations/0001_iam_tuples.sql` and `0003`–`0007` (the operation ledger, fencing, audit integrity and immutability, operation expiry), optional `tuple_cache_migrations/0002_iam_tuple_cache.sql` |
+| `pockets/authorization/stores/turso` | v0.20.0 | The same files for SQLite/Turso |
+| `pockets/authorization/stores/goredis` | v0.5.0 | TupleCache backend, protocol 2 |
 
 Hosts apply the schema before boot; constructors validate it and never migrate.
 The authorization Firestore adapter has been retired. Custom adapters run the

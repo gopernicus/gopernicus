@@ -1,5 +1,362 @@
 # Releasing gopernicus modules
 
+## Retention and erasure (SOC 2 slice S3 — published 2026-10-23)
+
+Fourteen annotated tags (not signed), each cut at its PR's squash-merge commit on `main`,
+pushed, THEN polled on the proxy, and cold-verified from a scratch consumer (`GOWORK=off`, an
+empty module cache, `proxy.golang.org`, `sum.golang.org`, `go mod verify`, `go build
+<module>/...`). Every one resolved on the first poll. Design and rulings:
+[plans/s3-retention-erasure.md](plans/s3-retention-erasure.md) (rev 2, ratified 2026-10-23;
+its "Build-time deviations" section records the lead rulings taken during the build). Host
+handoff: [plans/soc2-s3-retention-erasure-handoff.md](plans/soc2-s3-retention-erasure-handoff.md),
+written now and applied at the roadmap's end. Manifest:
+`plans/s3-retention-erasure-release-manifest.json` (from `go mod download -json` of the fourteen
+tags). The operator surface is in the docs site's guides: *Production posture* "Retention (S3)"
+(the retention table and the S3 refusals and WARNs), *Production database posture* "Two roles",
+"Definer functions" and "Migrations", and *Operations runbooks* "Retention" and "Erase a person".
+
+| Step | Tag | Commit | PR | Cold verification |
+|---|---|---|---|---|
+| 1 | `integrations/datastores/pgxdb/v0.12.0` | `31ac42b7` | #162 (PR-1; cut only after PR-2b's branch passed its live legs against the real 0024) | OK, poll 1; also built the MVS set (below) |
+| 2a | `pockets/authentication/v0.23.0` | `f00205c5` | #169 (PR-2a) and #170 (PR-2b, no core-side change) — one core tag, cut at the later merge | OK, poll 1 |
+| 2b | `pockets/authentication/stores/pgx/v0.11.0` | `371d47b4` | #171 (PR-2c; repin to core v0.23.0 + pgxdb v0.12.0) | OK, poll 1 |
+| 2b | `pockets/authentication/stores/turso/v0.10.0` | `371d47b4` | #171 (repin to core v0.23.0; the turso connector pin does not move) | OK, poll 1 |
+| 3a | `pockets/authorization/v0.30.0` | `66ecb03d` | #166 (PR-3) | OK, poll 1 |
+| 3b | `pockets/authorization/stores/pgx/v0.21.0` | `78f68807` | #168 (PR-3b; repin to core v0.30.0) | OK, poll 1 |
+| 3b | `pockets/authorization/stores/turso/v0.20.0` | `78f68807` | #168 | OK, poll 1 |
+| 4a | `pockets/jobs/v0.7.0` | `627f95b1` | #165 (PR-4) | OK, poll 1 |
+| 4b | `pockets/jobs/stores/pgx/v0.7.0` | `3388d16a` | #167 (PR-4b; repin to core v0.7.0) | OK, poll 1 |
+| 4b | `pockets/jobs/stores/turso/v0.6.0` | `3388d16a` | #167 | OK, poll 1 |
+| 5a | `pockets/cms/v0.5.0` | `acf7263d` | #163 (PR-5) | OK, poll 1 |
+| 5b | `pockets/cms/stores/pgx/v0.5.0` | `00cc48c2` | #164 (PR-5b; repin to core v0.5.0) | OK, poll 1 |
+| 5b | `pockets/cms/stores/turso/v0.4.0` | `00cc48c2` | #164 | OK, poll 1 |
+| 6 | `workshop/gopernicus/v0.7.0` | `4beba21f` | #172 (PR-6) | OK, poll 1; a cold `init` from `@v0.7.0` requires pgxdb v0.12.0, builds, and its `guard` is clean (25 rules, 2 packages) |
+
+The trains are independent, so the tags were cut in the order they became ready — 5a, 4a, 5b,
+3a, 4b, 3b, then 1, 2a, 2b and 6 — never a dependent before its dependency. PR-7 (#173)
+repinned every example to these tags; PR-8 is this record.
+
+**Step 1's MVS set.** A host that adopts any S3 store pulls pgxdb v0.12.0 beside the pgx stores
+it already runs, so step 1's cold verification resolved, in one scratch consumer, pgxdb v0.12.0
+with every released pgx store — authentication `stores/pgx` v0.10.1, authorization `stores/pgx`
+v0.21.0, jobs `stores/pgx` v0.7.0, cms `stores/pgx` v0.5.0, secrets `stores/pgx` v0.2.1 and
+events `stores/pgx` v0.4.0 — and `go.mod` selected v0.12.0, `go mod verify` passed and `go
+build` succeeded. The plan named authorization v0.20.0, jobs v0.6.0 and cms v0.4.0; those trains
+had released first, so the set took their S3 tags. The scratch consumer builds the set and does
+not run its tests; the stores' tests over pgxdb at its v0.12.0 content (the tree has not changed
+since #162) ran in the workspace — the live legs and `live-stores` dispatches below.
+
+**Not tagged.** `sdk` (v0.16.0), `integrations/datastores/turso` (v0.8.0; the turso stores use
+`InTx`), `pockets/cms/views/goth` (v0.3.0; R-8), `pockets/events` and its stores,
+`pockets/secrets` and `stores/pgx`, `pockets/authorization/stores/goredis` and `pockets`. The
+store repins moved only the core pin: the authorization stores stay on pgxdb v0.11.0 / turso
+v0.8.0, the jobs and cms stores on pgxdb v0.7.0 / turso v0.4.0, so pgxdb v0.12.0 reaches a host
+through authentication `stores/pgx` v0.11.0 or the host's own require. Nothing retracts.
+
+**Verification record.**
+- CI `check` and `vuln` (push and pull_request events) and the CodeQL analyses passed on the
+  final run of every PR, #162–#173. `make guard` runs thirty-five guards (G35 and G36 below).
+- Live store legs, every full run against a fresh scratch PostgreSQL 17 and a fresh local libSQL
+  server, counted with `go test -json` or the counted turso gate (`set -o pipefail; … go test -v
+  -count=1 -tags=integration ./... 2>&1 | tee leg.log && ! grep -q -- '--- SKIP' leg.log` — the
+  plan's rev-1 one-liner passed on skips and on failures). Pass / fail / skip:
+  pgxdb (#162) 453 / 0 / 0 over fixture roles and a schema name that needs quoting; cms (#163)
+  pgx bare 59 / 0 (one schema-gated skip by design), schema-qualified 60 / 0 / 0, turso 49 / 0 / 0;
+  jobs (#165, re-run on merged `main` @ `627f95b1`) pgx bare and schema 120 / 0 / 0 each, turso
+  103 / 0 / 0, `EXPLAIN` using `idx_job_queue_terminal` in both dialects; authorization (#166,
+  re-run on `main` @ `66ecb03d`) pgx bare and schema 783 / 0 / 1 each (the pre-existing
+  `TestCollationControlsOrdering_NonC`, which needs a non-C DSN), turso 1006 / 0 / 0 with
+  `AUTHORIZATION_TURSO_DISPOSABLE_URL` set — **S2's authorization libSQL leg is re-proven here
+  under the counted gate**; authentication core (#169) pgx 377 / 0 / 5 each (the four storetest
+  groups gated on the not-yet-merged stores, plus the collation skip), turso 658 / 0 with exactly
+  the eight gated skips; authentication stores (#170, re-run on `main` @ `f00205c5`) pgx bare and
+  schema 432 / 0 / 1 each, turso `-tags=integration` 737 / 0 / 0, hermetic turso 382 / 0 / 0 —
+  the four gated groups now run with zero skips. 0024 is applied by the non-superuser fixture
+  migrator in every live case, and every purge-path case runs as a runtime role with UPDATE,
+  DELETE and TRUNCATE revoked on the rail.
+- Linux, before PR-2b merged: `make test-stores` end to end in a `golang:1.26.10` container
+  against a fresh database, every leg green (authentication pgx 432 × 2; the authorization turso
+  leg needs `AUTHORIZATION_TURSO_DISPOSABLE_URL` — a precondition — and passed on re-run).
+- `live-stores` dispatches, both jobs (`redis-pgxdb`, `postgres-turso`) green each time, one
+  before each store step: run 40034837753 (`main` @ `00cc48c2`, before 5b), 40036209894 (`main` @
+  `3388d16a`, before 4b), 40037265148 (`main` @ `78f68807`, before 3b), 40045860760 (the PR-2b
+  branch @ `6befc63f`, the pre-merge proof that gated step 1) and 40047381425 (`main` @
+  `371d47b4`, before 2b).
+- PR-2b driven by hand with a `NOSUPERUSER` owner: `-posture-role` printed `execute=false`, then
+  `execute=true` after `GRANT EXECUTE`, then `unsafe=public_execute` and failed after a PUBLIC
+  grant; as the runtime role a 367-day cutoff purged, a 364-day one was refused and a direct
+  `DELETE` stayed denied.
+- The examples (PR-7, untagged), against running binaries on a scratch TLS PostgreSQL 17 with a
+  `NOSUPERUSER` owner and a fresh libSQL. `examples/production-baseline`: its three new ledger
+  files applied alone; `-posture-role` printed `functions=[security_events_purge_before:execute=false
+  …] floor=365 days`, then `execute=true` after the grant; as the runtime role a 367-day cutoff
+  purged and wrote its `security_events_purged` row, a 364-day and a NULL cutoff returned 22023,
+  and a direct DELETE and every function-tamper form returned 42501; a PUBLIC EXECUTE grant
+  refused the production boot, `SECURITY INVOKER` WARNed `definer_function=inoperative` and the
+  rail step reported `forbidden`, a missing grant logged exactly one `maintenance_execute=missing`
+  WARN. The clean production boot logged its registration line, ran the first pass inside the
+  jitter with no WARN and answered `/healthz` 200 with the three maintenance fields; ten
+  backdated rail rows became one verified NDJSON object whose ids equal the captured set, one
+  matching `security_events_archived` row and a purge row with `count=10`; a read-only archive
+  mid-run failed the step `archive_failed` with no purge row and no partial object; `PassBudget`
+  20 ms drained 50,000 rows over ten passes with `maintenance_budget_exhausted` WARNs and every id
+  in a verified object; the 48 h alert query flipped after 49 h. The erase answered 200 with
+  counts, left the person's rail IP/UA unchanged and wrote one `user_erased` row with the admin
+  as actor; a repeat answered `changed:false`, reactivate 409, deactivate `changed:false`, self
+  400, a non-admin 403; an accepted invitation was blanked with `invited_by` and
+  `resolved_subject_id` kept; the sweep reported only the rail's IP carve-out; operation expiry
+  kept the fenced row and an expired id read as never recorded. `examples/auth-cms`: a cancelled
+  invitation purged at the next pass, 401 on the erased user's session, the inquiry step's
+  counts, the delivery purge, an ordered shutdown. `examples/jobs-minimal`: the `retention` kind
+  fired. Every example builds at `GOWORK=off`; `guard --posture` on the baseline prints exactly
+  one `ack` (`MaintenanceRunnerAcknowledged`) and P9 ok.
+
+**Owner rulings.** Tags are annotated, not signed (ruling of 2026-10-22). **R-7:** no in-place
+scrub of `security_events` — the rows stay intact, keyed to the pseudonymous `user_id`, and their
+IP, User-Agent and pre-AUDIT-054 raw addresses age out under the 400-day retention (FAS-3's own
+recommendation); `user_erased` is written inside the erase transaction. **R-8:** the cms admin
+paged inquiry list and delete UI are deferred to a separate cms plan, not yet ratified; S3 ships
+the disposal capability only. The roadmap deviations blessed with the plan: the rail purge and
+archive live on `maintenance.Repository`/`Service`, the rail port untouched; `Operations.Expire`
+became the optional `OperationExpirer` slot with `Mutations.ExpireOperations`; `invited_by` and
+`resolved_subject_id` are KEPT, not tombstoned (only `identifier` and `metadata` are blanked);
+`erased_at` plus a three-valued projection instead of `status='erased'`; pending invitations are
+purged past expiry with no stored `expired`; `ServiceAccounts.Delete` cascades; the in-process
+`Run` by default with the jobs `HandlerFunc` recipe; one `Repositories` per service (a per-tenant
+registry is its own plan); the floor in a sibling plain function. The lead's build-time rulings
+are the executed plan's "Build-time deviations"; each one a host or adapter author can see is in
+the surprise list below.
+
+**What shipped, per module.**
+- `integrations/datastores/pgxdb` v0.12.0 (additive): `DefinerFunction{Signature}`,
+  `AppendOnlyTable.Functions`, `TablePrivilege.Functions map[string]FunctionPrivilege`
+  (`Exists`, `SecurityDefiner`, `SearchPathPinned`, `SameNamespace`, `OwnerIsTableOwner`,
+  `OwnerSuperuser`, `PublicExecute`, `PathSchemaCreate`, `Execute`), `UnsafeFunctions()`,
+  `InoperativeFunctions()`, `ErrDefinerFunctionUnsafe`. The probe resolves each signature with
+  `to_regprocedure` in the same phase as the tables, before it pins its own `search_path`.
+  `Writable`, `CannotAppend` and `ProtectedBy` are unchanged — the runtime-role posture of S2 does
+  not move — and a store that lists no function gets byte-identical output and no extra query.
+- `pockets/authentication` v0.23.0 (pre-1.0 MINOR; no exported removal or signature change):
+  `logic/maintenance` (`Repository`, `Config`, `Service` with `Pass`/`Run`/`LastReport`,
+  `WithInterval`/`WithLogger`/`WithClock`, `Report` and the `Step*` constants, `ArchiveSink`,
+  `MinSecurityEventRetention` 366 days, `MaxBatchSize` 10000, `ErrBelowRetentionFloor`,
+  `ErrSecurityEventRetentionTooShort`, `ErrArchiveFailed`, `Service.Config()`); the root
+  `WithMaintenance(MaintenanceConfig{maintenance.Config; MaintenanceRunnerAcknowledged})`,
+  `Components.Maintenance`, the OPTIONAL `Repositories.Maintenance` and `Repositories.UserErasure`
+  slots, `ErrMaintenanceAcknowledgedWithoutRepository`, `ErrUserErasureRouteRequires`,
+  `ErrUserErasureRequiresActiveSessions`; `user.StatusErased`, `user.ErrErased`,
+  `user.EraseRepository`, `EraseInput`, `Erasure`, `EraseCounts` (+ `Merge`),
+  `ErrEraseBlockedByClaim`; `serviceaccount.CascadeDeleter` and `Deletion`; the service's
+  `EraseUser` (`ErrEraseSelf`, `ErrUserErasureUnavailable`, `EraseTimeout` 30 s, run under
+  `context.WithoutCancel`), `UserErasureEnabled`, `DeleteServiceAccount`; `POST
+  /auth/admin/users/{id}/erase` behind `AdministrationConfig.UserErasureRoute`
+  (`authenticationhttp.WithUserErasureRoute`) with the host check receiving `UserAdminErase`; four
+  event types (`user_erased`, `service_account_deleted`, `security_events_purged`,
+  `security_events_archived`) and `(*securityevent.Recorder).Prepare`; storetest groups
+  `Maintenance`, `UserErasure`, `UserAdmin/SummaryReportsErased` and the cascade-gated
+  `ServiceAccounts/DeleteCascadesKeys`. The registration log gains `auth: maintenance
+  maintenance_runner= archive_sink= security_event_retention=`.
+- `pockets/authentication/stores/pgx` v0.11.0 / `stores/turso` v0.10.0: migrations `0023` and
+  `0024` (both REQUIRED), `NewMaintenanceStore` (the bounded purges with `FOR UPDATE SKIP LOCKED`
+  subselects on pgx, the bounded `PruneOAuth2`, the whole-instant export, the purge-function call
+  with explicit casts), `NewErasureStore` (the erase transaction in the port's order, the
+  `user_erased` row inside it), `DeleteWithKeys` and the cascading `Delete`, the owner lock and
+  erased refusal on a service-account insert, the `erased` projection on every read; `Repositories`
+  fills `Maintenance` and `UserErasure`; the pgx `AuditTables` lists the purge function.
+- `pockets/authorization` v0.30.0 (additive): `mutations.OperationExpirer`, the OPTIONAL
+  `Repositories.OperationExpiry` slot (refused without `Mutations`), `WithOperationRetention`
+  (default 180 days; `ErrOperationRetentionTooShort` below 7 days;
+  `ErrOperationRetentionWithoutExpirer` without the slot), `(*mutations.Service).ExpireOperations`
+  (`mutations.ErrOperationExpiryNotConfigured`), `operation_expiry=` on the registration line, the
+  production WARN; storetest `OperationLedger/{ExpireKeepsFenced, ExpireBoundedAndBoundary,
+  ExpireLimitZeroRefused, ExpireThenFenceRecordsFenced}`, `ExpireInsideTransactionRefused` and the
+  `storetest.Repositories.SetOperationCommittedAt` fixture hook. `stores/pgx` v0.21.0 /
+  `stores/turso` v0.20.0: `0007` and `Expire`; the pgx `Fence` re-runs its INSERT when an expiry
+  commits between its conflict and its read-back, so it returns `fenced`, never an error.
+- `pockets/jobs` v0.7.0 (additive): `queue.TerminalPurger`, `(*queue.Service).PurgeTerminalJobs`
+  for the ordinary queue (`ErrTerminalPurgeRequired`), `terminal_purge=` on the registration line;
+  `PurgeTerminal` (fenced) is byte-identical; storetest `Queue/BoundedTerminalPurge`. `stores/pgx`
+  v0.7.0 / `stores/turso` v0.6.0: `0005` and the ordinary-queue purge.
+- `pockets/cms` v0.5.0 (additive): `messaging.InquiryEraser` (`Delete`, `DeleteByEmail` — ASCII
+  case-fold equality — and `PurgeBefore`), the OPTIONAL `Repositories.InquiryMaintenance` slot,
+  `inquiry_maintenance=wired|absent` on the registration line; storetest `Inquiries/*` cases; no
+  route, view or `Views` change (R-8). `stores/pgx` v0.5.0 / `stores/turso` v0.4.0: `0022` and the
+  three methods.
+- `workshop/gopernicus` v0.7.0 (MINOR): `MaintenanceRunnerAcknowledged` joins P5's recognized
+  surfaces (`guard --posture` prints its `ack`); the scaffold pins pgxdb v0.12.0; the runner
+  template's `-posture-role` prints `functions=[…] floor=…` and fails on a missing or unsafe
+  definer function; the scaffold README gains "Retention".
+- Docs: *Production posture* "Retention (S3)", *Production database posture* "Two roles" /
+  "Definer functions" (with the host-owned-rail template) / "Migrations", *Operations runbooks*
+  "Retention" (the evidence, the 48 h alert, verifying the archive, restoring the grants) and
+  "Erase a person" (the composition and the sweep); `docs/pockets/{authentication, authorization,
+  jobs, cms}.md`; `docs/workshop/commands.md`.
+
+**Migration notes — what a repinning host meets.**
+- (a) **Migrate, then deploy, the S3 files alone.** Authentication `0023_retention.sql` and
+  `0024_security_events_retention.sql` are REQUIRED: authentication `stores/pgx` v0.11.0 /
+  `stores/turso` v0.10.0 refuse, in every mode, a database without `users.erased_at` (naming
+  `0023`) or without the 0024 functions (pgx) or floor row (turso) (naming `0024`). Authorization
+  `0007_iam_operations_expiry.sql`, jobs `0005_job_queue_terminal_purge.sql` and cms
+  `0022_inquiries_created_at.sql` are indexes, ADMITTED, not required: without one the pgx store
+  WARNs `index_missing=<index>` (authorization when `Repositories` is built; jobs and cms in their
+  pre-boot `StatusCheck`, so a host that never calls it sees nothing) and the purge still runs,
+  sorting per batch.
+  Every S3 pgx file begins `SET LOCAL lock_timeout = '5s'`, every index is `CREATE INDEX IF NOT
+  EXISTS`, and `0023` builds its eight indexes FIRST and adds `users.erased_at` LAST, so the
+  stream holds `users`' ACCESS EXCLUSIVE for one metadata-only statement. `lock_timeout` bounds
+  only the wait to ACQUIRE a lock, never how long a build holds one, and the runner applies every
+  pending file in one transaction — so **apply the S3 files in their own runner invocation**, and
+  on a large host **pre-build each index** outside the runner with `CREATE INDEX CONCURRENTLY IF
+  NOT EXISTS <the same name> …`, then check `SELECT c.relname FROM pg_index i JOIN pg_class c ON
+  c.oid = i.indexrelid WHERE NOT i.indisvalid;` — a failed concurrent build leaves an INVALID
+  index that `IF NOT EXISTS` keeps: `DROP INDEX` it and build again. The in-stream builds are then
+  no-ops. The turso `0023` builds six indexes (`0019` already indexes the OAuth2 codes and refresh
+  history); turso has no concurrent build — it runs under the write lock. The baseline's ledger
+  copies are `0029_iam_operations_expiry.sql`, `0030_retention.sql` and
+  `0031_security_events_retention.sql` (G34 holds them byte-identical).
+- (b) **Rollback.** Rolling a binary back is safe: no previous binary calls the 0024 functions,
+  and it reads an erased user as `deactivated`, which every credential path refuses. The index
+  files are admitted by the previous stores too. Rolling the schema back is forward-fix only —
+  there are no down files, and dropping `erased_at` after an erase loses the marker.
+- (c) **The two-role recipe gains three lines** (*Production database posture*, "Two roles"):
+  `GRANT EXECUTE ON FUNCTION security_events_purge_before(pg_catalog.timestamptz,
+  pg_catalog.int4) TO <runtime role>;` (0024 cannot know the role, and it ends with `REVOKE
+  EXECUTE … FROM PUBLIC`); `REVOKE CREATE ON SCHEMA <schema> FROM PUBLIC;`; and a `NOSUPERUSER`
+  migrator (`CREATE ROLE migrator LOGIN NOSUPERUSER`) — a superuser owner makes the definer
+  inoperative, and a docker image's default `postgres` role is a superuser. 0024 refuses to apply
+  unless it runs in the schema that holds `security_events` as a member of the table's owner.
+- (d) **The definer-function refuse/WARN split.** The probe judges the purge function by catalog
+  evidence, never by its body. Production REFUSES with `pgxdb.ErrDefinerFunctionUnsafe` — not
+  waivable, `AppendOnlyWritableAcknowledged` included — when PUBLIC can execute it, its
+  `search_path` is not exactly `pg_catalog, <the table's schema>, pg_temp`, or it resolves
+  outside the rail's schema (a function dropped and re-created by hand gets PUBLIC EXECUTE again).
+  It WARNs once (`definer_function=inoperative`, naming the fix) when it is not SECURITY DEFINER,
+  its owner is not a member of the table's owner, its owner is a superuser, or the runtime role
+  holds CREATE on the schema; the rail step then fails at call time. A runtime role without
+  EXECUTE boots with one `maintenance_execute=missing … fix=GRANT EXECUTE …` WARN, logged when the
+  store is constructed in production, and the pass reports `step=security_events
+  error_kind=forbidden` while every other step runs. A missing function is the store's refusal
+  naming 0024 in every mode. `-posture-role` prints `functions=[security_events_purge_before:execute=…
+  unsafe=… inoperative=…] floor=365 days` and fails only on what refuses the boot (a missing or
+  unsafe function); a missing EXECUTE or an inoperative function is reported, as the boot WARNs.
+  After `pg_restore -x`, revoke EXECUTE from PUBLIC and grant it to the runtime role again; after
+  a restore into a renamed schema, re-run 0024's pin `DO` block.
+- (e) **The floor is an invariant.** `security_events_retention_floor()` returns 365 days (pgx);
+  row 1 of `security_events_retention.floor_days` is 365 (turso). The purge refuses a NULL cutoff
+  or one younger than the floor with SQLSTATE 22023 (`maintenance.ErrBelowRetentionFloor`) —
+  refused, never clamped — on the database's clock; `maintenance.MinSecurityEventRetention` (366
+  days) keeps the service a day above it and the default is 400 days. No procedure lowers it. On
+  turso it is a footgun guard, not a control: SQLite has no roles.
+- (f) **Turso: capture, drop, restore.** One short `BEGIN IMMEDIATE` transaction per purge call
+  captures the triggers present on `security_events`, drops exactly those, deletes the bounded
+  batch, re-executes the CAPTURED text verbatim, then appends the purge row (after the restore,
+  so a host `AFTER INSERT` trigger sees it). A host that declined `0022` gets no trigger back; a
+  host-altered trigger is not "repaired"; a fault or a cancelled context rolls everything back,
+  triggers included; after COMMIT a changed trigger set logs ERROR
+  `error_kind=rail_triggers_changed`. Each batch holds the database's one write lock: logins wait
+  behind it (measured locally: ~14 ms per 1000-row batch, ~10 ms per erase).
+- (g) **`pgxdb.TablePrivilege` is no longer comparable**: it gained a map field, so host code that
+  compares two values with `==` or keys a map by one no longer compiles; compare fields.
+- (h) **The archive sink.** Any `filestorage.Storer` is a `maintenance.ArchiveSink`. In production
+  use an object store (`integrations/filestorage/gcs`, `integrations/filestorage/s3`): a disk sink
+  is per instance and does not fsync (`filestorage.Disk.Upload` — the fsync is a named sdk
+  follow-up), so the read-back proves the object was written, not that it survives the node; on
+  ephemeral storage it is not an archive until the host backs it. The archive holds IP and
+  User-Agent (PII), its retention, backup and access control are host policy, and erasure does
+  not reach it. With no sink the rail is purged unarchived and the registration line says
+  `archive_sink=none` — a policy, not a WARN.
+- (i) **Guards G35 and G36** (thirty-five in `make guard`). G35 `guard-rail-no-dml`: no non-test
+  Go file under `pockets/*/stores/**` writes UPDATE, DELETE, `INSERT OR REPLACE`, TRUNCATE or DROP
+  TRIGGER against `security_events`, `iam_audit` or `secrets_audit` — literal and concatenated
+  spellings, plus rail triggers dropped by name — with a per-line allow-list (the turso purge's
+  DELETE and the two canonical trigger constants). G36 `guard-auth-maintenance-leaf`:
+  `pockets/authentication/logic/maintenance` never imports the root authentication service
+  package (leaf domain packages only).
+
+**Surprises — what a repinning host or adapter author meets.**
+- The database says `deactivated` while the API says `erased`: `status:"erased"` breaks a client
+  that validates a closed two-value enum, and the SQL for "erased" is `erased_at IS NOT NULL`.
+- `user.Status.Valid()` has a third value; an exhaustive `switch` over `Status` needs the `erased`
+  case. `SetUserStatus(…, StatusErased)` is refused as a transition (`ErrErased`); reactivating an
+  erased user is 409, deactivating one a `changed:false` replay.
+- The directory has no status filter: `AdminRepository.List` takes none, so the plan's "`erased`
+  as a filter, `deactivated` excluding erased" was not built (follow-up).
+- System rows on the rail: one `security_events_purged` row per purge call (a zero count
+  included — at least one a day while the runner runs) and one `security_events_archived` row
+  per archive object, each `actor_type='system'`, `actor_id='maintenance'`, `user_id` blank.
+  Dashboards filter `actor_type='system'`.
+- Accepted (and declined, cancelled) invitations are deleted 90 days after their last update,
+  pending ones 90 days past expiry; `accepting` is never purged. There is no `INVITATION_TTL`
+  option.
+- A two-role host that skips `GRANT EXECUTE` sees the rail step `forbidden` every pass (and one
+  WARN at boot) while every other step runs.
+- The migrator must own `security_events` (be a member of its owning role): 0024 refuses to apply
+  otherwise, and without 0024 the store refuses to boot. Run `-posture-role` before the deploy.
+- A host store that implements `serviceaccount.CascadeDeleter` runs `ServiceAccounts/DeleteCascadesKeys`;
+  the bundled `Delete` now removes the account's API keys too. An authorization adapter that wires
+  `OperationExpiry` must fill `storetest.Repositories.SetOperationCommittedAt`, or the suite fails.
+- Erase is not a ban. Deleting the provider mirror means the next external login provisions a
+  fresh, empty user — with `ProvisionOnFirstVerification`, even the person's still-valid provider
+  token answers 200 with a new user id (native sessions answer 401). Deactivate, or remove the
+  person at the provider, to keep them out. A held `accepting` invitation claim blocks the erase
+  (409) until it is settled. The rail keeps their IP and User-Agent until retention removes them
+  (R-7); archives already written stay.
+- `ExpireOperations` makes an expired operation id read as never recorded: `Recorded` is false,
+  `Fence` fences it, a retried command applies again. `OperationRetention` (180 days) must exceed
+  every producer's retry window and the age of the oldest open `accepting` claim; keep
+  `InvitationRetention` (90 days) at or below half of it.
+- pgx `Expire` takes no row lock: every PostgreSQL row-lock clause needs UPDATE, which the S2
+  posture revokes on `iam_operations`. The rule: a runtime-role statement on a rail never carries
+  a lock clause; a SECURITY DEFINER function runs as the owner and may.
+- A host that enforces retention with its own SQL cron leaves `MaintenanceRunnerAcknowledged`
+  false and accepts the production WARN; setting it true beside a nil `Repositories.Maintenance`
+  is `ErrMaintenanceAcknowledgedWithoutRepository` in every mode. `UserErasureRoute` is an opt-in,
+  not an acknowledgement — `guard --posture` prints nothing for it — and needs
+  `Repositories.UserErasure` and a `UserAdminCheck` (`ErrUserErasureRouteRequires`);
+  `Repositories.UserErasure` needs `Repositories.ActiveSessions`.
+- `Components.Maintenance.Run` runs hourly with no interval option on the root; a host that wants
+  another cadence calls `Pass` from its own ticker or a jobs schedule (auth-cms does, on
+  `MAINTENANCE_INTERVAL`).
+- The jobs capability WARN (`terminal_purge=absent`) is logged in every mode through
+  `slog.Default`: the queue service takes no runtime mode or logger. Every bundled store
+  implements the capability. The S3 store WARN and ERROR lines also go to `slog.Default`, not the
+  pocket's logger; the turso stores have no index WARN.
+- Archive lines are `json.Marshal` output: HTML characters in a value come out escaped
+  (`<`), still valid JSON.
+- `examples/auth-cms`: its inquiry-purge and operation-expiry loops run on the retention runner
+  now, so their first pass runs at boot instead of one interval later and their failure lines
+  carry `error_kind`, never error text; its platform-admin `UserAdminCheck` (added for the erase
+  route) also mounts the admin directory routes. The baseline's `/healthz` gains
+  `maintenance_last_pass`, `maintenance_steps_failed` and `maintenance_last_error_kind` (`none`,
+  `forbidden`, `below_floor`, `archive_failed`, `budget_exhausted`, `other`) and its status code
+  never changes for a maintenance failure; `AUDIT_ARCHIVE_DIR` is required in production.
+
+**Known.**
+- `outbox.PurgePublished` is not a runner step in any example (the plan's DoD had auth-cms run it);
+  it stays unbounded, and a bounded variant is a named follow-up. Run it as its own step after a
+  one-off manual drain.
+- The scaffold README still runs `workshop/gopernicus@v0.6.0 guard --posture .` (v0.7.0 was not
+  tagged when PR-6 merged), and v0.6.0 does not print the `MaintenanceRunnerAcknowledged` `ack`; a
+  template pin is a PATCH (the v0.6.1 precedent).
+- Residual: an API key minted while its account's cascade commits first is still inserted. It is
+  inert — API-key authentication resolves the account and finds none.
+- G35 residual: a dynamic `DROP TRIGGER ` + name concatenation is outside both patterns; the turso
+  purge is the only such line in store code.
+- The host-owned-rail definer template (`iam_audit`, `secrets_audit`) appends no evidence row —
+  their CHECK constraints forbid one — and returns the count for the host's cron to record.
+- `make test-stores` needs `AUTHORIZATION_TURSO_DISPOSABLE_URL` for the authorization turso leg (a
+  precondition; a Makefile/README note is a follow-up). The S2 "Known" items on shared turso
+  ledgers and database reuse still hold: every full run on a fresh server and a fresh database.
+- `examples/jobs-minimal`'s 7-day boundary is not observable live on its memory store (storetest
+  covers it); a local `PassBudget` of 1 s does not exhaust (one pass drains 50,000 rows).
+- Named follow-ups (S3 Notes): the `Disk.Upload` fsync (sdk PATCH); a bounded
+  `outbox.PurgePublished`; an `sdk/capabilities/retention` protocol; a pgxdb limiter `Prune`; the
+  cms admin form-CSRF seam; the cms admin paging/delete plan; a status filter on the user
+  directory.
+- Known CI flake unrelated to S3: `integrations/kvstores/goredis`
+  `TestOpenHonorsDeadlineAfterConnection`.
+
 ## S2 follow-ups (secrets stores/pgx v0.2.1; authentication v0.22.0, stores/pgx v0.10.1; workshop/gopernicus v0.6.1 — published 2026-10-23)
 
 Four annotated tags (not signed), each cut at its PR's squash-merge commit on `main`, pushed,

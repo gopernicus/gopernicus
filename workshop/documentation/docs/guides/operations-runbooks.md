@@ -5,7 +5,7 @@ description: Deactivate or erase a user, revoke sessions, handle an abusive IP, 
 
 # Operations runbooks
 
-Procedures a host operator runs with what the framework ships on `main` at 2026-10-22.
+Procedures a host operator runs with what the framework ships on `main` at 2026-10-23.
 Each names the bundled route or service call, what it records, and what is missing.
 
 ## Deactivate or reactivate a user

@@ -5,10 +5,12 @@ description: What the framework refuses in production today, what is documented 
 
 # Production posture
 
-This page describes the framework **as it is on `main` at 2026-10-22, after SOC 2 slice S1**
-(the production posture floor; release record in `RELEASING.md`, host handoff in
-`plans/soc2-s1-production-posture-handoff.md`). Where a control is still planned, it says so;
-an item marked *planned* is not a control a host can claim yet.
+This page describes the framework **as it is on `main` at 2026-10-23, after SOC 2 slices S1–S3**
+(the production posture floor, audit completeness and integrity, retention and erasure; release
+records in `RELEASING.md`, host handoffs in `plans/soc2-s1-production-posture-handoff.md`,
+`plans/soc2-s2-audit-completeness-handoff.md` and `plans/soc2-s3-retention-erasure-handoff.md`).
+Where a control is still planned, it says so; an item marked *planned* is not a control a host
+can claim yet.
 
 ## Refused at construction in production
 
