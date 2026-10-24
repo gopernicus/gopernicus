@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"strings"
 	"testing"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	jackpgx "github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/pkg/list"
@@ -572,6 +574,166 @@ func TestLive_Collect(t *testing.T) {
 		}
 		if sdk.IsExpected(err) {
 			t.Fatalf("err = %v, want an unmapped SQLSTATE to pass through", err)
+		}
+	})
+}
+
+// TestLive_Timeouts proves the statement/lock timeout knobs against a real
+// server: a set knob is the session's setting, sent in the startup packet
+// (pg_settings source "client"); a statement past StatementTimeout fails with
+// SQLSTATE 57014 and a lock wait past LockTimeout with 55P03, each passing
+// through MapError unchanged as every unmapped SQLSTATE does (a 500, never a
+// domain sentinel); a zero knob sends nothing; and Open refuses a
+// DSN-and-Config double setting and a sub-millisecond value while a DSN-only
+// setting reaches the server as written. Gated on POSTGRES_TEST_DSN; skips
+// loudly when unset.
+func TestLive_Timeouts(t *testing.T) {
+	dsn := os.Getenv("POSTGRES_TEST_DSN")
+	if dsn == "" {
+		t.Skip("POSTGRES_TEST_DSN not set — postgres statement/lock timeouts NOT verified")
+	}
+	ctx := context.Background()
+
+	open := func(t *testing.T, cfg Config) *DB {
+		t.Helper()
+		db, err := Open(ctx, cfg)
+		if err != nil {
+			t.Fatalf("open: %v", err)
+		}
+		t.Cleanup(func() { _ = db.Close() })
+		return db
+	}
+	withParam := func(t *testing.T, key, value string) string {
+		t.Helper()
+		u, err := url.Parse(dsn)
+		if err != nil {
+			t.Fatalf("parse POSTGRES_TEST_DSN: %v", err)
+		}
+		q := u.Query()
+		q.Set(key, value)
+		u.RawQuery = q.Encode()
+		return u.String()
+	}
+	setting := func(t *testing.T, db *DB, name string) (value, source string) {
+		t.Helper()
+		if err := db.QueryRow(ctx, "SHOW "+name).Scan(&value); err != nil {
+			t.Fatalf("SHOW %s: %v", name, err)
+		}
+		if err := db.QueryRow(ctx, "SELECT source FROM pg_settings WHERE name = $1", name).Scan(&source); err != nil {
+			t.Fatalf("pg_settings source for %s: %v", name, err)
+		}
+		return value, source
+	}
+	wantSQLState := func(t *testing.T, err error, code string) {
+		t.Helper()
+		var pgErr *pgconn.PgError
+		if !errors.As(err, &pgErr) || pgErr.Code != code {
+			t.Fatalf("err = %v, want SQLSTATE %s", err, code)
+		}
+		if sdk.IsExpected(err) {
+			t.Fatalf("err = %v mapped to a domain sentinel, want SQLSTATE %s passed through unchanged", err, code)
+		}
+	}
+
+	t.Run("statement_timeout_cancels_pg_sleep", func(t *testing.T) {
+		db := open(t, Config{DSN: dsn, StatementTimeout: time.Second})
+		value, source := setting(t, db, "statement_timeout")
+		if value != "1s" || source != "client" {
+			t.Fatalf("statement_timeout = %q (source %q), want \"1s\" from the startup packet", value, source)
+		}
+		t.Logf("SHOW statement_timeout = %q (source %q)", value, source)
+
+		started := time.Now()
+		_, err := db.Exec(ctx, "SELECT pg_sleep(5)")
+		elapsed := time.Since(started)
+		wantSQLState(t, err, "57014")
+		if elapsed >= 4*time.Second {
+			t.Fatalf("pg_sleep(5) ran %v, want it canceled near the 1s statement timeout", elapsed)
+		}
+		t.Logf("pg_sleep(5) under StatementTimeout=1s: %v after %v", err, elapsed.Round(time.Millisecond))
+	})
+
+	t.Run("lock_timeout_abandons_a_held_lock", func(t *testing.T) {
+		holder := open(t, Config{DSN: dsn})
+		if _, err := holder.Exec(ctx, "CREATE TABLE IF NOT EXISTS pg_connector_lock_check (id INT)"); err != nil {
+			t.Fatalf("create fixture table: %v", err)
+		}
+		t.Cleanup(func() { _, _ = holder.Exec(context.Background(), "DROP TABLE IF EXISTS pg_connector_lock_check") })
+
+		tx, err := holder.Begin(ctx)
+		if err != nil {
+			t.Fatalf("begin holder: %v", err)
+		}
+		defer func() { _ = tx.Rollback() }()
+		if _, err := tx.Exec(ctx, "LOCK TABLE pg_connector_lock_check IN ACCESS EXCLUSIVE MODE"); err != nil {
+			t.Fatalf("hold lock: %v", err)
+		}
+
+		db := open(t, Config{DSN: dsn, LockTimeout: 200 * time.Millisecond})
+		value, source := setting(t, db, "lock_timeout")
+		if value != "200ms" || source != "client" {
+			t.Fatalf("lock_timeout = %q (source %q), want \"200ms\" from the startup packet", value, source)
+		}
+		t.Logf("SHOW lock_timeout = %q (source %q)", value, source)
+
+		waitCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+		started := time.Now()
+		_, err = db.Exec(waitCtx, "SELECT count(*) FROM pg_connector_lock_check")
+		elapsed := time.Since(started)
+		wantSQLState(t, err, "55P03")
+		t.Logf("SELECT behind an ACCESS EXCLUSIVE lock under LockTimeout=200ms: %v after %v", err, elapsed.Round(time.Millisecond))
+	})
+
+	t.Run("zero_knobs_send_nothing", func(t *testing.T) {
+		db := open(t, Config{DSN: dsn})
+		for _, name := range []string{"statement_timeout", "lock_timeout"} {
+			if value, source := setting(t, db, name); source == "client" {
+				t.Fatalf("%s = %q from the startup packet, want the server's own setting for a zero knob", name, value)
+			}
+		}
+	})
+
+	t.Run("dsn_only_setting_reaches_the_server", func(t *testing.T) {
+		db := open(t, Config{DSN: withParam(t, "statement_timeout", "1500")})
+		value, source := setting(t, db, "statement_timeout")
+		if value != "1500ms" || source != "client" {
+			t.Fatalf("statement_timeout = %q (source %q), want the DSN's \"1500ms\"", value, source)
+		}
+	})
+
+	t.Run("double_setting_refused_at_open", func(t *testing.T) {
+		for _, tc := range []struct {
+			name string
+			cfg  Config
+		}{
+			{"dsn_key", Config{DSN: withParam(t, "statement_timeout", "2000"), StatementTimeout: time.Second}},
+			{"dsn_options", Config{DSN: withParam(t, "options", "-c lock_timeout=2000"), LockTimeout: time.Second}},
+		} {
+			db, err := Open(ctx, tc.cfg)
+			if db != nil || !errors.Is(err, sdk.ErrInvalidInput) {
+				if db != nil {
+					_ = db.Close()
+				}
+				t.Fatalf("%s: Open = %v, %v; want nil, ErrInvalidInput", tc.name, db, err)
+			}
+			t.Logf("%s: Open refused: %v", tc.name, err)
+		}
+	})
+
+	t.Run("sub_millisecond_refused_at_open", func(t *testing.T) {
+		for _, cfg := range []Config{
+			{DSN: dsn, StatementTimeout: 500 * time.Microsecond},
+			{DSN: dsn, LockTimeout: 999 * time.Microsecond},
+		} {
+			db, err := Open(ctx, cfg)
+			if db != nil || !errors.Is(err, sdk.ErrInvalidInput) {
+				if db != nil {
+					_ = db.Close()
+				}
+				t.Fatalf("Open(StatementTimeout=%v, LockTimeout=%v) = %v, %v; want nil, ErrInvalidInput", cfg.StatementTimeout, cfg.LockTimeout, db, err)
+			}
+			t.Logf("Open refused: %v", err)
 		}
 	})
 }

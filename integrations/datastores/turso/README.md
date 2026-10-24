@@ -125,6 +125,9 @@ parameters on every new pooled connection, which is the only way the setting hol
 on every connection of the pool; a single `PRAGMA` statement on one connection would
 not. `BusyTimeout` defaults to 5s and is never applied as zero (a zero busy timeout
 yields `SQLITE_BUSY` under ordinary concurrent use). Hosted URLs are untouched.
+SQLite and libSQL have no statement timeout, so this connector has no twin of
+pgxdb's `StatementTimeout`/`LockTimeout`: `BusyTimeout` bounds only the wait for
+the database lock on a local file, never a statement's running time.
 `MaxOpenConns` keeps `database/sql`'s zero-means-unlimited; hosts running a local
 file set a small bound (the reference hosts use 4).
 

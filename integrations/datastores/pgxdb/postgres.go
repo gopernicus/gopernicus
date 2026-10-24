@@ -21,6 +21,7 @@ import (
 	"math"
 	"net"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -58,6 +59,13 @@ const (
 
 	// defaultTimeZone is the session zone applied when the host named none.
 	defaultTimeZone = "UTC"
+)
+
+// Startup-packet parameters Config.StatementTimeout and Config.LockTimeout set,
+// in whole milliseconds (the server's base unit for both).
+const (
+	runtimeParamStatementTimeout = "statement_timeout"
+	runtimeParamLockTimeout      = "lock_timeout"
 )
 
 // Config holds the PostgreSQL connection settings. Hosts populate it directly
@@ -99,6 +107,17 @@ type Config struct {
 	// HealthCheckPeriod sets pgxpool's idle-connection liveness check
 	// interval. Applied only when non-zero, like MaxConns/MinConns.
 	HealthCheckPeriod time.Duration `env:"DB_HEALTH_CHECK_PERIOD"`
+
+	// StatementTimeout and LockTimeout bound every statement and every lock
+	// wait on every pooled connection, sent as the statement_timeout and
+	// lock_timeout startup parameters in whole milliseconds. Zero leaves the
+	// server's (or role's) setting in place. Negative values, and positive
+	// values under 1ms (which would send "0", the server's "disabled"), are
+	// invalid. A connection string or PGOPTIONS that already names the same
+	// parameter is refused rather than silently overridden. Set them for the
+	// server process only: a migrator leaves both zero (index builds).
+	StatementTimeout time.Duration `env:"DB_STATEMENT_TIMEOUT"`
+	LockTimeout      time.Duration `env:"DB_LOCK_TIMEOUT"`
 
 	// LogQueries installs a LoggingQueryTracer. It logs SQL args verbatim, so
 	// this is dev-only tooling; a production RuntimeMode refuses it.
@@ -281,12 +300,59 @@ func hasSessionTimeZone(params map[string]string) bool {
 	return false
 }
 
+// namesRuntimeParam reports whether params already set the server parameter
+// name: as its own key (case-folded, as the server matches parameter names) or
+// inside an options value. Unlike hasSessionTimeZone's substring test, options
+// entries are parsed and their names compared exactly, because "lock_timeout="
+// is a substring of "-c deadlock_timeout=…".
+func namesRuntimeParam(params map[string]string, name string) bool {
+	for k, v := range params {
+		if strings.EqualFold(k, name) {
+			return true
+		}
+		if strings.EqualFold(k, runtimeParamOptions) && optionsNameParam(v, name) {
+			return true
+		}
+	}
+	return false
+}
+
+// optionsNameParam reports whether an options value sets name. The server
+// reads options as command-line switches — "-c name=value", "-cname=value" or
+// "--name=value" — and treats '-' in a parameter name as '_'.
+func optionsNameParam(options, name string) bool {
+	fields := strings.Fields(options)
+	for i := 0; i < len(fields); i++ {
+		var setting string
+		switch field := fields[i]; {
+		case field == "-c":
+			if i+1 == len(fields) {
+				return false
+			}
+			i++
+			setting = fields[i]
+		case strings.HasPrefix(field, "--"):
+			setting = field[len("--"):]
+		case strings.HasPrefix(field, "-c"):
+			setting = field[len("-c"):]
+		default:
+			continue
+		}
+		key, _, ok := strings.Cut(setting, "=")
+		if ok && strings.EqualFold(strings.ReplaceAll(key, "-", "_"), name) {
+			return true
+		}
+	}
+	return false
+}
+
 // poolConfig builds the pgxpool configuration Open connects with: pgx's own
 // parse of the DSN, the RuntimeMode posture check over every parsed connection
 // target, then this Config's pool sizes and tracer, the connector's
-// AfterConnect codec registration, and the default session time zone. The DSN
-// string itself is never rewritten — pgconn has already parsed it into
-// ConnConfig, so the parsed form is what gets adjusted.
+// AfterConnect codec registration, the default session time zone, and the
+// statement and lock timeouts. The DSN string itself is never rewritten —
+// pgconn has already parsed it into ConnConfig, so the parsed form is what gets
+// adjusted.
 func (cfg Config) poolConfig(dsn string) (*pgxpool.Config, error) {
 	if cfg.MaxConns < 0 || cfg.MinConns < 0 || cfg.MaxConns > math.MaxInt32 || cfg.MinConns > math.MaxInt32 {
 		return nil, fmt.Errorf("postgres: pool counts must be between 0 and %d: %w", math.MaxInt32, sdk.ErrInvalidInput)
@@ -299,9 +365,24 @@ func (cfg Config) poolConfig(dsn string) (*pgxpool.Config, error) {
 		{"MaxIdleTime", cfg.MaxIdleTime},
 		{"HealthCheckPeriod", cfg.HealthCheckPeriod},
 		{"ConnectTimeout", cfg.ConnectTimeout},
+		{"StatementTimeout", cfg.StatementTimeout},
+		{"LockTimeout", cfg.LockTimeout},
 	} {
 		if setting.value < 0 {
 			return nil, fmt.Errorf("postgres: %s cannot be negative: %w", setting.name, sdk.ErrInvalidInput)
+		}
+	}
+	timeouts := []struct {
+		name  string
+		param string
+		value time.Duration
+	}{
+		{"StatementTimeout", runtimeParamStatementTimeout, cfg.StatementTimeout},
+		{"LockTimeout", runtimeParamLockTimeout, cfg.LockTimeout},
+	}
+	for _, timeout := range timeouts {
+		if timeout.value > 0 && timeout.value < time.Millisecond {
+			return nil, fmt.Errorf("postgres: %s must be zero or at least 1ms: %w", timeout.name, sdk.ErrInvalidInput)
 		}
 	}
 	poolConfig, err := pgxpool.ParseConfig(dsn)
@@ -348,6 +429,15 @@ func (cfg Config) poolConfig(dsn string) (*pgxpool.Config, error) {
 	}
 	if !hasSessionTimeZone(poolConfig.ConnConfig.RuntimeParams) {
 		poolConfig.ConnConfig.RuntimeParams[runtimeParamTimeZone] = defaultTimeZone
+	}
+	for _, timeout := range timeouts {
+		if timeout.value == 0 {
+			continue
+		}
+		if namesRuntimeParam(poolConfig.ConnConfig.RuntimeParams, timeout.param) {
+			return nil, fmt.Errorf("postgres: %s is set and the connection string or PGOPTIONS already names %s; set one: %w", timeout.name, timeout.param, sdk.ErrInvalidInput)
+		}
+		poolConfig.ConnConfig.RuntimeParams[timeout.param] = strconv.FormatInt(timeout.value.Milliseconds(), 10)
 	}
 
 	return poolConfig, nil
