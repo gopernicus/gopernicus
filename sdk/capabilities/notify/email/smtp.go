@@ -21,9 +21,13 @@ import (
 	"github.com/gopernicus/gopernicus/sdk/capabilities/notify"
 )
 
-// ErrTLSRequired is returned by Send and Probe when SMTPConfig.RequireTLS is
-// set and the relay does not offer STARTTLS. Nothing is authenticated or sent.
-var ErrTLSRequired = errors.New("email: the SMTP relay does not offer STARTTLS and RequireTLS is set")
+var (
+	// ErrTLSRequired is returned by Send and Probe when SMTPConfig.RequireTLS is
+	// set and the relay does not offer STARTTLS. Nothing is authenticated or sent.
+	ErrTLSRequired = errors.New("email: the SMTP relay does not offer STARTTLS and RequireTLS is set")
+
+	errRedactedPassword = fmt.Errorf("email: SMTPConfig.Password: %w", sdk.ErrRedactedSecret)
+)
 
 // SMTPConfig holds host-owned connection settings. STARTTLS is opportunistic
 // unless RequireTLS is set: this supports explicit private-relay configurations
@@ -34,7 +38,10 @@ type SMTPConfig struct {
 	Host     string
 	Port     string
 	Username string
-	Password string
+	// Password renders as sdk.Redacted. One that contains sdk.Redacted (composed
+	// through fmt or + instead of Reveal) makes Probe and Send return
+	// sdk.ErrRedactedSecret before dialing.
+	Password sdk.Secret
 	// Timeout bounds a complete attempt, including the greeting and DATA reply.
 	// Zero uses 30 seconds; an earlier caller deadline wins.
 	Timeout time.Duration
@@ -49,11 +56,12 @@ type SMTPConfig struct {
 // DKIM-sign; RFC 8058 one-click unsubscribe requires the relay's signature to
 // cover List-Unsubscribe and List-Unsubscribe-Post.
 type SMTP struct {
-	addr       string
-	host       string
-	auth       smtp.Auth
-	timeout    time.Duration
-	requireTLS bool
+	addr             string
+	host             string
+	auth             smtp.Auth
+	timeout          time.Duration
+	requireTLS       bool
+	redactedPassword bool
 }
 
 var _ Sender = (*SMTP)(nil)
@@ -71,23 +79,31 @@ func (s *SMTP) Capabilities() notify.Capabilities {
 func NewSMTP(cfg SMTPConfig) *SMTP {
 	var auth smtp.Auth
 	if cfg.Username != "" {
-		auth = smtp.PlainAuth("", cfg.Username, cfg.Password, cfg.Host)
+		auth = smtp.PlainAuth("", cfg.Username, cfg.Password.Reveal(), cfg.Host)
 	}
 	timeout := cfg.Timeout
 	if timeout == 0 {
 		timeout = 30 * time.Second
 	}
-	return &SMTP{addr: net.JoinHostPort(cfg.Host, cfg.Port), host: cfg.Host, auth: auth, timeout: timeout, requireTLS: cfg.RequireTLS}
+	return &SMTP{
+		addr: net.JoinHostPort(cfg.Host, cfg.Port), host: cfg.Host, auth: auth, timeout: timeout, requireTLS: cfg.RequireTLS,
+		redactedPassword: strings.Contains(cfg.Password.Reveal(), sdk.Redacted),
+	}
 }
 
 // Probe checks that the relay accepts a session this sender can use: it dials,
 // greets with EHLO, completes STARTTLS when the relay offers it, and fails with
 // ErrTLSRequired when RequireTLS is set and the relay does not. It ends with
 // QUIT and never authenticates or sends a message. Production hosts call it at
-// boot, so a relay that would refuse every Send stops the boot instead.
+// boot, so a relay that would refuse every Send stops the boot instead. A
+// Password containing sdk.Redacted fails with sdk.ErrRedactedSecret before it
+// dials.
 func (s *SMTP) Probe(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
+	}
+	if s.redactedPassword {
+		return errRedactedPassword
 	}
 	if s.timeout < 0 {
 		return fmt.Errorf("email: SMTP timeout must not be negative: %w", sdk.ErrInvalidInput)
@@ -109,10 +125,14 @@ func (s *SMTP) Probe(ctx context.Context) error {
 
 // Send validates and delivers one email. Cancellation closes the active
 // connection, including while awaiting a greeting, STARTTLS or a DATA reply.
-// A successful DATA acknowledgement remains success even if QUIT fails.
+// A successful DATA acknowledgement remains success even if QUIT fails. A
+// Password containing sdk.Redacted fails with sdk.ErrRedactedSecret.
 func (s *SMTP) Send(ctx context.Context, msg Message) error {
 	if err := ctx.Err(); err != nil {
 		return err
+	}
+	if s.redactedPassword {
+		return errRedactedPassword
 	}
 	if err := msg.Validate(); err != nil {
 		return err

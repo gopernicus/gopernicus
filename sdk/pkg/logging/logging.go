@@ -1,12 +1,14 @@
 // Package logging configures standard *slog.Logger values with a log level,
 // output format, and destination. Context-aware log calls include available
-// request, trace, and span IDs from sdk context helpers.
+// request, trace, and span IDs from sdk context helpers, and attributes keyed
+// by a credential name are redacted (RedactHandler).
 package logging
 
 import (
 	"io"
 	"log/slog"
 	"os"
+	"slices"
 	"strings"
 )
 
@@ -16,10 +18,14 @@ type Options struct {
 	Level  string `env:"LOG_LEVEL" default:"INFO"`
 	Format string `env:"LOG_FORMAT" default:"json"`
 	Output string `env:"LOG_OUTPUT" default:"STDERR"`
+	// RedactKeys adds attribute keys to DefaultRedactKeys; it never removes
+	// one (comma-separated in LOG_REDACT_KEYS).
+	RedactKeys []string `env:"LOG_REDACT_KEYS"`
 }
 
-// New creates a logger that includes context IDs via ContextHandler.
-// Empty or unrecognized options default to INFO, JSON, and stderr.
+// New creates a logger that includes context IDs via ContextHandler and
+// redacts DefaultRedactKeys plus opts.RedactKeys via RedactHandler, in every
+// format. Empty or unrecognized options default to INFO, JSON, and stderr.
 func New(opts Options) *slog.Logger {
 	level := ParseLevel(opts.Level)
 	output := parseOutput(opts.Output)
@@ -34,7 +40,8 @@ func New(opts Options) *slog.Logger {
 		handler = slog.NewJSONHandler(output, handlerOpts)
 	}
 
-	return slog.New(NewContextHandler(handler))
+	keys := append(slices.Clone(DefaultRedactKeys), opts.RedactKeys...)
+	return slog.New(NewContextHandler(NewRedactHandler(handler, keys)))
 }
 
 // ParseLevel converts a string log level to slog.Level.

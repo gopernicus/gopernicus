@@ -30,8 +30,9 @@ import (
 // this rule — it keeps raw LookupEnv semantics, where KEY= is a set, empty
 // value.
 //
-// Supported field kinds: string, int, int64 (including time.Duration), bool,
-// float32/float64, and slices of strings (including named string types). cfg
+// Supported field kinds: string (including named string types such as
+// sdk.Secret), int, int64 (including time.Duration), bool, float32/float64,
+// and slices of strings (including named string types). cfg
 // must be a pointer to a struct, and any tagged field of an unsupported kind is an error — including a struct field
 // carrying an env tag. An exported, settable struct-kind field WITHOUT an env
 // tag is instead recursed into under the same namespace, so a nested config

@@ -121,7 +121,8 @@ func ClientInfoFromContext(ctx context.Context) (ip, ua string) {
 }
 
 // clearCredential prevents even a failed replacement from exposing earlier proof
-// through the returned context. The caller's original context stays unchanged.
+// through the returned context. The caller's original context values stay
+// unchanged; an sdk.PrincipalCapture on it (an access logger's) records the clear.
 func clearCredential(ctx context.Context) context.Context {
 	return context.WithValue(sdk.WithPrincipal(ctx, Principal{}), credentialKey, credentialProof{})
 }

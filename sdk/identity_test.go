@@ -2,6 +2,7 @@ package sdk
 
 import (
 	"context"
+	"sync"
 	"testing"
 )
 
@@ -95,5 +96,118 @@ func TestPrincipalContextCoexistsWithRequestAndTraceIDs(t *testing.T) {
 		if got, ok := SpanIDFromContext(malformed); !ok || got != "span-1" {
 			t.Fatalf("malformed principal changed span ID: %q, %v", got, ok)
 		}
+	}
+}
+
+func TestPrincipalCaptureRecordsDerivedWrites(t *testing.T) {
+	user := Principal{Type: PrincipalTypeUser, ID: "u-1"}
+	ctx, capture := WithPrincipalCapture(context.Background())
+	if got, ok := capture.Principal(); ok || got != (Principal{}) {
+		t.Fatalf("fresh capture = %+v, %v; want none", got, ok)
+	}
+	derived := WithPrincipal(context.WithValue(ctx, struct{}{}, "derived"), user)
+	if got, ok := capture.Principal(); !ok || got != user {
+		t.Fatalf("capture = %+v, %v; want %+v", got, ok, user)
+	}
+	if _, ok := PrincipalFromContext(ctx); ok {
+		t.Fatal("WithPrincipal changed the captured context's own values")
+	}
+	if got, _ := PrincipalFromContext(derived); got != user {
+		t.Fatalf("derived principal = %+v", got)
+	}
+}
+
+func TestPrincipalCaptureLastWriteWinsIncludingClear(t *testing.T) {
+	first := Principal{Type: PrincipalTypeUser, ID: "u-1"}
+	second := Principal{Type: PrincipalTypeServiceAccount, ID: "sa-1"}
+	ctx, capture := WithPrincipalCapture(context.Background())
+	ctx = WithPrincipal(ctx, first)
+	ctx = WithPrincipal(ctx, second)
+	if got, ok := capture.Principal(); !ok || got != second {
+		t.Fatalf("capture = %+v, %v; want the last write %+v", got, ok, second)
+	}
+	WithPrincipal(ctx, Principal{})
+	if got, ok := capture.Principal(); ok || got != (Principal{}) {
+		t.Fatalf("capture after a clear = %+v, %v; want none", got, ok)
+	}
+	WithPrincipal(ctx, Principal{Type: PrincipalTypeUser})
+	if _, ok := capture.Principal(); ok {
+		t.Fatal("an incomplete principal is reported")
+	}
+}
+
+func TestPrincipalCaptureFreshPerCallAndChained(t *testing.T) {
+	user := Principal{Type: PrincipalTypeUser, ID: "u-1"}
+	outerCtx, outer := WithPrincipalCapture(context.Background())
+	innerCtx, inner := WithPrincipalCapture(outerCtx)
+	if inner == outer {
+		t.Fatal("WithPrincipalCapture reused the enclosing capture")
+	}
+	WithPrincipal(innerCtx, user)
+	for name, c := range map[string]*PrincipalCapture{"inner": inner, "outer": outer} {
+		if got, ok := c.Principal(); !ok || got != user {
+			t.Errorf("%s capture = %+v, %v; want write-through %+v", name, got, ok, user)
+		}
+	}
+	WithPrincipal(innerCtx, Principal{})
+	if _, ok := outer.Principal(); ok {
+		t.Error("a clear did not write through to the enclosing capture")
+	}
+
+	// A write on the outer context reaches the outer capture only.
+	sibling := Principal{Type: PrincipalTypeUser, ID: "u-2"}
+	WithPrincipal(outerCtx, sibling)
+	if got, _ := outer.Principal(); got != sibling {
+		t.Errorf("outer = %+v, want %+v", got, sibling)
+	}
+	if _, ok := inner.Principal(); ok {
+		t.Error("a write on the enclosing context reached the inner capture")
+	}
+}
+
+func TestPrincipalCaptureStartsFromTheContextPrincipal(t *testing.T) {
+	outerAttached := Principal{Type: PrincipalTypeUser, ID: "u-outer"}
+	ctx := WithPrincipal(context.Background(), outerAttached)
+	ctx, capture := WithPrincipalCapture(ctx)
+	if got, ok := capture.Principal(); !ok || got != outerAttached {
+		t.Fatalf("capture = %+v, %v; want the principal the context already carried", got, ok)
+	}
+	WithPrincipal(ctx, Principal{})
+	if _, ok := capture.Principal(); ok {
+		t.Fatal("a clear after the seed is not the last write")
+	}
+}
+
+func TestPrincipalCaptureNoBleedAcrossUnitsOnOneBase(t *testing.T) {
+	base, long := WithPrincipalCapture(context.Background())
+	a := Principal{Type: PrincipalTypeUser, ID: "a"}
+	b := Principal{Type: PrincipalTypeUser, ID: "b"}
+	ctxA, captureA := WithPrincipalCapture(base)
+	ctxB, captureB := WithPrincipalCapture(base)
+	WithPrincipal(ctxA, a)
+	WithPrincipal(ctxB, b)
+	if got, _ := captureA.Principal(); got != a {
+		t.Errorf("unit A = %+v, want %+v", got, a)
+	}
+	if got, _ := captureB.Principal(); got != b {
+		t.Errorf("unit B = %+v, want %+v", got, b)
+	}
+	if got, _ := long.Principal(); got != b {
+		t.Errorf("long-lived base capture = %+v; it records every unit, last write %+v", got, b)
+	}
+}
+
+func TestPrincipalCaptureConcurrentWrites(t *testing.T) {
+	ctx, capture := WithPrincipalCapture(context.Background())
+	var wg sync.WaitGroup
+	for i := range 32 {
+		wg.Go(func() {
+			WithPrincipal(ctx, Principal{Type: PrincipalTypeUser, ID: string(rune('a' + i))})
+			capture.Principal()
+		})
+	}
+	wg.Wait()
+	if _, ok := capture.Principal(); !ok {
+		t.Fatal("no principal after concurrent writes")
 	}
 }

@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/gopernicus/gopernicus/sdk"
 )
 
 type tagsTestEnvironment struct {
@@ -592,5 +594,36 @@ func TestParseEnvTags_ZeroPreseedStillUsesDefaults(t *testing.T) {
 	}
 	if !cfg.Enabled || cfg.Count != 3 || !slices.Equal(cfg.Names, []string{"fallback"}) {
 		t.Fatalf("zero preseed precedence changed: %+v", cfg)
+	}
+}
+
+func TestParseEnvTags_SecretField(t *testing.T) {
+	const value = "DUMMY_SECRET_VALUE"
+	type secrets struct {
+		Password sdk.Secret `env:"PASSWORD"`
+		Token    sdk.Secret `env:"TOKEN" default:"fallback"`
+		Key      sdk.Secret `env:"KEY" required:"true"`
+	}
+
+	t.Setenv("GOPERNICUS_TEST_SECRET_PASSWORD", value)
+	t.Setenv("GOPERNICUS_TEST_SECRET_KEY", value)
+	var cfg secrets
+	if err := ParseEnvTags("GOPERNICUS_TEST_SECRET", &cfg); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Password.Reveal() != value || cfg.Key.Reveal() != value || cfg.Token.Reveal() != "fallback" {
+		t.Fatalf("env/default not applied to sdk.Secret fields")
+	}
+	if got := fmt.Sprintf("%+v", cfg); strings.Contains(got, value) || strings.Contains(got, "fallback") {
+		t.Fatalf("%%+v of a parsed config prints a secret: %s", got)
+	}
+
+	t.Setenv("GOPERNICUS_TEST_SECRET_KEY", "")
+	err := ParseEnvTags("GOPERNICUS_TEST_SECRET", &secrets{})
+	if err == nil || !strings.Contains(err.Error(), "GOPERNICUS_TEST_SECRET_KEY") || !strings.Contains(err.Error(), "sdk.Secret") {
+		t.Fatalf("required sdk.Secret error = %v; want it to name the key and type", err)
+	}
+	if strings.Contains(err.Error(), value) {
+		t.Fatalf("required error contains a value: %v", err)
 	}
 }

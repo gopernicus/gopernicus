@@ -15,12 +15,16 @@ import (
 	"runtime/debug"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/gopernicus/gopernicus/sdk"
 )
 
 // RequestIDHeader is the canonical header used to carry the request ID in and out.
 const RequestIDHeader = "X-Request-ID"
+
+// maxLoggedUserAgent bounds the user_agent attribute on the request log line.
+const maxLoggedUserAgent = 256
 
 // inboundRequestID is the shape an inbound X-Request-ID must have to be reused;
 // anything else is replaced, never echoed into logs or the response.
@@ -77,13 +81,29 @@ func Panics(log *slog.Logger) Middleware {
 // Logger returns middleware that logs each HTTP request with timing and status.
 // Log levels: INFO for 2xx/3xx, WARN for 4xx, ERROR for 5xx or recorded failures.
 //
+// The line carries method, path (never the query string), status, elapsed,
+// remote_addr (the raw peer), and when known: client_ip (ClientIP), user_agent
+// (truncated to 256 bytes at a UTF-8 boundary), request_id, and
+// principal_type/principal_id. Logger reads client_ip and request_id from its
+// own request context, so it sits INSIDE TrustProxies and RequestID.
+//
+// The principal is the last one authenticated during the request, including
+// one the surface then refused (a 401/403 line names who was refused); a
+// principal cleared before the response is not logged. Logger installs a fresh
+// sdk.PrincipalCapture per request, so a principal attached on a derived
+// request (sdk.WithPrincipal) is seen; one an outer middleware attached first
+// is the capture's starting value. It is observability only, never an
+// authorization input.
+//
 // The wrapped writer implements RecordError so render/respond helpers can
-// attach the underlying error string to the request log line.
+// attach the underlying error string to the request log line. That text is
+// not redacted: an error that quotes its input logs the input.
 func Logger(log *slog.Logger) Middleware {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			start := time.Now()
 			sw := NewStatusRecorder(w)
+			ctx, capture := sdk.WithPrincipalCapture(r.Context())
 
 			defer func() {
 				recovered := recover()
@@ -101,6 +121,18 @@ func Logger(log *slog.Logger) Middleware {
 					slog.Int("status", status),
 					slog.Duration("elapsed", elapsed),
 					slog.String("remote_addr", r.RemoteAddr),
+				}
+				if ip, ok := ClientIP(r.Context()); ok {
+					attrs = append(attrs, slog.String("client_ip", ip))
+				}
+				if ua := r.UserAgent(); ua != "" {
+					attrs = append(attrs, slog.String("user_agent", truncateUTF8(ua, maxLoggedUserAgent)))
+				}
+				if id, ok := sdk.RequestIDFromContext(r.Context()); ok {
+					attrs = append(attrs, slog.String("request_id", id))
+				}
+				if p, ok := capture.Principal(); ok {
+					attrs = append(attrs, slog.String("principal_type", p.Type), slog.String("principal_id", p.ID))
 				}
 				if sw.err != nil {
 					attrs = append(attrs, slog.String("error", sw.err.Error()))
@@ -125,20 +157,26 @@ func Logger(log *slog.Logger) Middleware {
 					panic(recovered)
 				}
 			}()
-			next.ServeHTTP(sw, r)
+			next.ServeHTTP(sw, r.WithContext(ctx))
 		})
 	}
 }
 
 // RequestID returns middleware that ensures every request carries a request ID.
-// It reuses an inbound X-Request-ID only when it matches
-// ^[A-Za-z0-9._-]{1,128}$ and otherwise generates one, stashes it on the
-// request context for the logger, and echoes it back in the response header.
-// A trusted proxy in front of the server may set the header to correlate its
-// own logs; any other inbound value is client-controlled.
+// An id already on the request context (an outer RequestID, so a nested router
+// keeps the host's id) is reused. Otherwise it reuses an inbound X-Request-ID
+// only when it matches ^[A-Za-z0-9._-]{1,128}$ and else generates one, stashes
+// it on the request context for the logger, and echoes it back in the response
+// header. A trusted proxy in front of the server may set the header to
+// correlate its own logs; any other inbound value is client-controlled.
 func RequestID() Middleware {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if id, ok := sdk.RequestIDFromContext(r.Context()); ok {
+				w.Header().Set(RequestIDHeader, id)
+				next.ServeHTTP(w, r)
+				return
+			}
 			id := r.Header.Get(RequestIDHeader)
 			if !inboundRequestID.MatchString(id) {
 				id = newRequestID()
@@ -333,6 +371,17 @@ func wantsJSON(r *http.Request) bool {
 		}
 	}
 	return false
+}
+
+// truncateUTF8 returns at most n bytes of s, cut back to a rune boundary.
+func truncateUTF8(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
+	}
+	return s[:n]
 }
 
 // newRequestID returns a 128-bit random hex string.

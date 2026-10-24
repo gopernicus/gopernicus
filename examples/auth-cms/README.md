@@ -943,7 +943,7 @@ development OIDC issuer served by this process (`integrations/authentication/dev
 beside the native credentials through `auth.WithExternal`, mounts its JWKS
 (`GET /dev/issuer/.well-known/jwks.json`) and token mint (`POST /dev/token`), and
 seeds one service account whose API key is printed ONCE in the startup WARN
-(`api_key=…`). Its routes (`cmd/server/demo.go`):
+(`seeded_api_key=…`). Its routes (`cmd/server/demo.go`):
 
 | route | gate |
 |---|---|
@@ -954,7 +954,7 @@ seeds one service account whose API key is printed ONCE in the startup WARN
 ```sh
 cd examples/auth-cms
 AUTH_RUNTIME_MODE=development AUTH_EXTERNAL_DEMO=1 AUTH_JWT_SECRET=$AUTH_JWT_SECRET go run ./cmd/server
-#   WARN msg="AUTH_EXTERNAL_DEMO enabled (development only): ..." issuer=http://localhost:8082/dev/issuer token=/dev/token api_key=<KEY>
+#   WARN msg="AUTH_EXTERNAL_DEMO enabled (development only): ..." issuer=http://localhost:8082/dev/issuer token_path=/dev/token seeded_api_key=<KEY>
 TOKEN=$(curl -s -XPOST localhost:8082/dev/token -d '{"sub":"ext-1","email":"ext@example.com","email_verified":true}' | jq -r .token)
 # 1. the hybrid route admits the provider token (first sight provisions a local user) ...
 curl -i -H "Authorization: Bearer $TOKEN" localhost:8082/demo/external/hybrid

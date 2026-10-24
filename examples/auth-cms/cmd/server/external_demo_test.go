@@ -5,10 +5,11 @@ import (
 	"context"
 	"encoding/json"
 	"io"
-	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
@@ -20,10 +21,11 @@ import (
 	auth "github.com/gopernicus/gopernicus/pockets/authentication"
 	delivery "github.com/gopernicus/gopernicus/pockets/authentication/logic/delivery"
 	"github.com/gopernicus/gopernicus/sdk/pkg/environment"
+	"github.com/gopernicus/gopernicus/sdk/pkg/logging"
 	"github.com/gopernicus/gopernicus/sdk/pkg/web"
 )
 
-var seededKeyPattern = regexp.MustCompile(`api_key=(\S+)`)
+var seededKeyPattern = regexp.MustCompile(`seeded_api_key=(\S+)`)
 
 type syncBuffer struct {
 	mu  sync.Mutex
@@ -67,8 +69,17 @@ func newExternalDemoHost(t *testing.T) *externalDemoHost {
 	cfg.DeliveryEphemeralAcknowledged = true
 	cfg.RequireVerifiedEmail = false
 
-	logs := &syncBuffer{}
-	log := slog.New(slog.NewTextHandler(logs, nil))
+	// logging.New writes only to stdout/stderr; point stderr at a file while it
+	// is built so the seeded key is read back through the redacting handler.
+	logFile, err := os.Create(filepath.Join(t.TempDir(), "demo.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { logFile.Close() })
+	stderr := os.Stderr
+	os.Stderr = logFile
+	log := logging.New(logging.Options{Format: "text"})
+	os.Stderr = stderr
 	external, err := newExternalDemo(ctx, origin, cfg.RuntimeMode, log)
 	if err != nil {
 		t.Fatalf("newExternalDemo: %v", err)
@@ -86,7 +97,11 @@ func newExternalDemoHost(t *testing.T) *externalDemoHost {
 	if err := external.register(ctx, router, components, log); err != nil {
 		t.Fatalf("register: %v", err)
 	}
-	match := seededKeyPattern.FindStringSubmatch(logs.String())
+	logs, err := os.ReadFile(logFile.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	match := seededKeyPattern.FindStringSubmatch(string(logs))
 	if match == nil {
 		t.Fatalf("no seeded API key in the log:\n%s", logs)
 	}
