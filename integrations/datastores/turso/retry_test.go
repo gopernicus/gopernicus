@@ -6,6 +6,8 @@ import (
 	"net"
 	"testing"
 	"time"
+
+	"github.com/gopernicus/gopernicus/sdk"
 )
 
 // TestRetry_ExhaustsAttempts proves the attempt count is honored and the last
@@ -135,7 +137,7 @@ func TestOpen_RetryAgainstUnreachable(t *testing.T) {
 	const backoff = 30 * time.Millisecond
 	start := time.Now()
 	db, err := Open(context.Background(), Config{
-		URL:            "http://" + addr,
+		URL:            sdk.Secret("http://" + addr),
 		ConnectTimeout: 2 * time.Second,
 		Retry:          RetryPolicy{Attempts: 2, MinBackoff: backoff, MaxBackoff: backoff},
 	})

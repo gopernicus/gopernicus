@@ -25,6 +25,7 @@ import (
 	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
 	"github.com/gopernicus/gopernicus/pockets/events/logic/outbox"
 	"github.com/gopernicus/gopernicus/pockets/events/stores/storetest"
+	"github.com/gopernicus/gopernicus/sdk"
 )
 
 // outboxTables are the pocket's tables cleared before each newRepo call so every
@@ -90,7 +91,7 @@ func storeOptions(t *testing.T) []Option {
 // migrates into it with pgxdb.WithSchema.
 func openAndMigrate(t *testing.T, dsn string) *pgxdb.DB {
 	t.Helper()
-	db, err := pgxdb.Open(context.Background(), pgxdb.Config{DSN: dsn})
+	db, err := pgxdb.Open(context.Background(), pgxdb.Config{DSN: sdk.Secret(dsn)})
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}

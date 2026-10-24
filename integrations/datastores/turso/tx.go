@@ -103,7 +103,7 @@ func discardConn(conn *sql.Conn) error {
 // Exec executes a query within the transaction.
 func (t *Tx) Exec(ctx context.Context, query string, args ...any) (sql.Result, error) {
 	if t.tracer != nil {
-		t.tracer.traceQuery(query, args)
+		t.tracer.traceQuery(ctx, query, args)
 	}
 	result, err := t.conn.ExecContext(ctx, query, args...)
 	if err != nil {
@@ -115,7 +115,7 @@ func (t *Tx) Exec(ctx context.Context, query string, args ...any) (sql.Result, e
 // Query executes a query within the transaction.
 func (t *Tx) Query(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
 	if t.tracer != nil {
-		t.tracer.traceQuery(query, args)
+		t.tracer.traceQuery(ctx, query, args)
 	}
 	rows, err := t.conn.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -127,7 +127,7 @@ func (t *Tx) Query(ctx context.Context, query string, args ...any) (*sql.Rows, e
 // QueryRow executes a query that returns at most one row within the transaction.
 func (t *Tx) QueryRow(ctx context.Context, query string, args ...any) *sql.Row {
 	if t.tracer != nil {
-		t.tracer.traceQuery(query, args)
+		t.tracer.traceQuery(ctx, query, args)
 	}
 	return t.conn.QueryRowContext(ctx, query, args...)
 }

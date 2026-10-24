@@ -14,6 +14,7 @@ import (
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/passwordless"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/session"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/user"
+	"github.com/gopernicus/gopernicus/sdk"
 	jackpgx "github.com/jackc/pgx/v5"
 )
 
@@ -61,7 +62,7 @@ func TestPasswordlessLocksOwnerBeforeIdentifierAndChallenge(t *testing.T) {
 		t.Fatal(err)
 	}
 	trace := &passwordlessOwnerLockTrace{usersTable: schema.Table(usersTable), reached: make(chan struct{}, 1)}
-	redeemDB, err := pgxdb.Open(context.Background(), pgxdb.Config{DSN: os.Getenv("POSTGRES_TEST_DSN"), Tracer: trace})
+	redeemDB, err := pgxdb.Open(context.Background(), pgxdb.Config{DSN: sdk.Secret(os.Getenv("POSTGRES_TEST_DSN")), Tracer: trace})
 	if err != nil {
 		t.Fatal(err)
 	}

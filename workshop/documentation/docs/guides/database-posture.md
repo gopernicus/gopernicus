@@ -162,10 +162,17 @@ the runner's `postureTables`, and `-posture-role` judges it with the same rules.
 - `turso` under production refuses a hosted URL without TLS — `http://`, `ws://`, or
   `libsql://…?tls=0` — with `ErrTLSRequired` unless `TLSDisabledAcknowledged`; `file:` is
   exempt. Use `libsql://`, `https://` or `wss://`.
-- The DSN is a secret (it carries the password); the connectors redact it from errors and
-  logs. `DB_LOG_QUERIES=true` logs bind arguments verbatim; production refuses it
-  (`ErrQueryLoggingRefused`, no acknowledgement), as it refuses a `Tracer` that is or wraps
-  `*LoggingQueryTracer`.
+- The DSN is a secret (it carries the password): `pgxdb` `DSN`/`Password` and `turso`
+  `URL`/`AuthToken` are `sdk.Secret`, which prints `[redacted]`; read one with `Reveal()`. `Open`
+  refuses a DSN or URL composed from a printed Secret (`sdk.ErrRedactedSecret`), and the
+  connectors redact the target from errors and logs (shipped S6).
+- `DB_LOG_QUERIES=true` (`LogQueries`) logs each query's SQL with its argument count and types —
+  never values — plus the SQLSTATE and constraint (pgx) of a failed query, never its error text.
+  `DB_LOG_QUERY_ARGS=true` (`LogQueryArgs`) adds bind values (and, on pgx, the error text),
+  development only, and is inert without `DB_LOG_QUERIES`. Production refuses any query logging
+  on both connectors (`ErrQueryLoggingRefused` naming `Config.LogQueries (DB_LOG_QUERIES)`, no
+  acknowledgement), as pgxdb refuses a `Tracer` that is or wraps `*LoggingQueryTracer` (shipped
+  S6).
 
 ## Encryption at rest and backups
 

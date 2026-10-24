@@ -10,6 +10,7 @@ import (
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuplecache"
 	"github.com/gopernicus/gopernicus/pockets/authorization/stores/storetest"
 	tursostore "github.com/gopernicus/gopernicus/pockets/authorization/stores/turso"
+	"github.com/gopernicus/gopernicus/sdk"
 	_ "modernc.org/sqlite"
 )
 
@@ -20,7 +21,7 @@ func TestTupleCacheLookupEquivalence(t *testing.T) {
 	namespaces := 0
 	storetest.RunLookupEquivalenceTupleCache(t, func(t *testing.T) storetest.Repositories {
 		ctx := context.Background()
-		db, err := tursodb.Open(ctx, tursodb.Config{URL: "file:" + filepath.Join(t.TempDir(), "authority.sqlite"), MaxOpenConns: 4, MaxIdleConns: 4})
+		db, err := tursodb.Open(ctx, tursodb.Config{URL: sdk.Secret("file:" + filepath.Join(t.TempDir(), "authority.sqlite")), MaxOpenConns: 4, MaxIdleConns: 4})
 		if err != nil {
 			t.Fatal(err)
 		}

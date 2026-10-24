@@ -15,6 +15,8 @@ import (
 	"os"
 	"testing"
 	"time"
+
+	"github.com/gopernicus/gopernicus/sdk"
 )
 
 // transactLiveDB opens a live connection (skipping loudly without the TURSO_*
@@ -25,7 +27,7 @@ func transactLiveDB(t *testing.T) (*DB, string) {
 	if url == "" || token == "" {
 		t.Skip("TURSO_DATABASE_URL/TURSO_AUTH_TOKEN not set — Transact live semantics NOT verified")
 	}
-	db, err := Open(context.Background(), Config{URL: url, AuthToken: token})
+	db, err := Open(context.Background(), Config{URL: sdk.Secret(url), AuthToken: sdk.Secret(token)})
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}

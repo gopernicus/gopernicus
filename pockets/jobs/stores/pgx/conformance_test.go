@@ -110,7 +110,7 @@ func testSchema(t *testing.T) pgxdb.Schema {
 // migrations just reached, so a mismatch is impossible by construction.
 func openAndMigrate(t *testing.T, dsn string) (*pgxdb.DB, []Option) {
 	t.Helper()
-	db, err := pgxdb.Open(context.Background(), pgxdb.Config{DSN: dsn})
+	db, err := pgxdb.Open(context.Background(), pgxdb.Config{DSN: sdk.Secret(dsn)})
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}

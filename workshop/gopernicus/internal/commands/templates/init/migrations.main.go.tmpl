@@ -29,7 +29,9 @@ import (
 {{- end}}
 	"strings"
 	"time"
-
+{{if eq .DB "turso"}}
+	"github.com/gopernicus/gopernicus/sdk"
+{{- end}}
 	"github.com/gopernicus/gopernicus/sdk/pkg/environment"
 	"github.com/gopernicus/gopernicus/sdk/pkg/logging"
 
@@ -111,8 +113,8 @@ func run(ctx context.Context, log *slog.Logger, mode environment.Mode, status bo
 func open(ctx context.Context, mode environment.Mode) (*{{.ConnectorAlias}}.DB, error) {
 {{- if eq .DB "turso"}}
 	return {{.ConnectorAlias}}.Open(ctx, {{.ConnectorAlias}}.Config{
-		URL:         os.Getenv("TURSO_DATABASE_URL"),
-		AuthToken:   os.Getenv("TURSO_AUTH_TOKEN"),
+		URL:         sdk.Secret(os.Getenv("TURSO_DATABASE_URL")),
+		AuthToken:   sdk.Secret(os.Getenv("TURSO_AUTH_TOKEN")),
 		RuntimeMode: mode,
 	})
 {{- else}}

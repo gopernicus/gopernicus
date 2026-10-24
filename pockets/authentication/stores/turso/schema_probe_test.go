@@ -31,7 +31,7 @@ func probeDial(t *testing.T) *tursodb.DB {
 	if url == "" {
 		t.Skip("TURSO_DATABASE_URL not set — turso store probe NOT verified")
 	}
-	db, err := tursodb.Open(context.Background(), tursodb.Config{URL: url, AuthToken: os.Getenv("TURSO_AUTH_TOKEN")})
+	db, err := tursodb.Open(context.Background(), tursodb.Config{URL: sdk.Secret(url), AuthToken: sdk.Secret(os.Getenv("TURSO_AUTH_TOKEN"))})
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}

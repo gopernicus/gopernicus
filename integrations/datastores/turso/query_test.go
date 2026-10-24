@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/gopernicus/gopernicus/sdk"
 )
 
 func TestQueryOneReportsWriteFinalizationFailure(t *testing.T) {
@@ -16,7 +18,7 @@ func TestQueryOneReportsWriteFinalizationFailure(t *testing.T) {
 	defer cancel()
 	target := url.URL{Scheme: "file", Path: filepath.Join(t.TempDir(), "query.sqlite")}
 	target.RawQuery = "_pragma=busy_timeout%281%29"
-	db, err := Open(ctx, Config{URL: target.String(), MaxOpenConns: 2, MaxIdleConns: 2})
+	db, err := Open(ctx, Config{URL: sdk.Secret(target.String()), MaxOpenConns: 2, MaxIdleConns: 2})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,7 +76,7 @@ func TestQueryOneHTTP(t *testing.T) {
 		_, _ = w.Write([]byte(`{"results":[{"type":"ok","response":{"type":"execute","result":{"cols":[{"name":"id","decltype":"INTEGER"}],"rows":[[{"type":"integer","value":"1"}]],"affected_row_count":1}}}]}`))
 	}))
 	defer server.Close()
-	db, err := Open(context.Background(), Config{URL: server.URL})
+	db, err := Open(context.Background(), Config{URL: sdk.Secret(server.URL)})
 	if err != nil {
 		t.Fatal(err)
 	}

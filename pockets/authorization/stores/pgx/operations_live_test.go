@@ -9,6 +9,7 @@ import (
 
 	"github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/mutations"
+	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -55,7 +56,7 @@ func TestFenceRecordsFencedWhenExpireCommitsBetweenInsertAndSelect(t *testing.T)
 		defer cancel()
 		expired, expireErr = adminRepos.OperationExpiry.Expire(ctx, time.Now().Add(time.Second), 10)
 	}
-	traced, err := pgxdb.Open(t.Context(), pgxdb.Config{DSN: dsn, Tracer: tracer})
+	traced, err := pgxdb.Open(t.Context(), pgxdb.Config{DSN: sdk.Secret(dsn), Tracer: tracer})
 	if err != nil {
 		t.Fatal(err)
 	}

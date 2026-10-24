@@ -6,6 +6,9 @@ import (
 	"log/slog"
 	"strings"
 	"testing"
+
+	"github.com/gopernicus/gopernicus/sdk"
+	"github.com/gopernicus/gopernicus/sdk/pkg/logging"
 )
 
 // bufLogger returns a logger writing JSON records to buf, so tests can assert on
@@ -69,84 +72,90 @@ func TestLogging_SilentAtDefaults(t *testing.T) {
 }
 
 // TestLogging_OptedIn_DBPath proves the opted-in tracer logs each DB-path query
-// with its SQL and its args verbatim.
+// with its SQL, argument count and types, and the context's request_id, never
+// an argument value.
 func TestLogging_OptedIn_DBPath(t *testing.T) {
 	var buf bytes.Buffer
 	db := newMemDB(t)
-	db.tracer = newLoggingQueryTracer(bufLogger(&buf))
-	ctx := context.Background()
+	db.tracer = newLoggingQueryTracer(Config{Logger: slog.New(logging.NewContextHandler(slog.NewJSONHandler(&buf, nil)))})
+	ctx := sdk.WithRequestID(context.Background(), "req-turso")
 	seedLogTable(t, db)
 
 	buf.Reset()
 	if _, err := db.Exec(ctx, `INSERT INTO logtest (id, v) VALUES (?, ?)`, "a", "secret-value"); err != nil {
 		t.Fatalf("Exec: %v", err)
 	}
-	assertLogged(t, &buf, "INSERT INTO logtest", "secret-value")
+	assertArity(t, &buf, "INSERT INTO logtest", `"arg_count":2,"arg_types":["string","string"]`, "secret-value")
 
 	buf.Reset()
-	rows, err := db.Query(ctx, `SELECT id FROM logtest WHERE id = ?`, "a")
+	rows, err := db.Query(ctx, `SELECT id FROM logtest WHERE id = ?`, "query-arg")
 	if err != nil {
 		t.Fatalf("Query: %v", err)
 	}
 	rows.Close()
-	assertLogged(t, &buf, "SELECT id FROM logtest", "a")
+	assertArity(t, &buf, "SELECT id FROM logtest", `"arg_count":1,"arg_types":["string"]`, "query-arg")
 
 	buf.Reset()
 	var v string
 	if err := db.QueryRow(ctx, `SELECT v FROM logtest WHERE id = ?`, "a").Scan(&v); err != nil {
 		t.Fatalf("QueryRow: %v", err)
 	}
-	assertLogged(t, &buf, "SELECT v FROM logtest", "a")
+	assertArity(t, &buf, "SELECT v FROM logtest", `"arg_count":1,"arg_types":["string"]`, "")
 }
 
 // TestLogging_OptedIn_TxPath proves the tracer is inherited by transactions, so
-// transaction-path statements log verbatim too — a query log that dropped them
-// would be a debugging trap.
+// transaction-path statements log too — a query log that dropped them would be
+// a debugging trap — with values only under LogQueryArgs.
 func TestLogging_OptedIn_TxPath(t *testing.T) {
-	var buf bytes.Buffer
-	db := newMemDB(t)
-	db.tracer = newLoggingQueryTracer(bufLogger(&buf))
-	ctx := context.Background()
-	seedLogTable(t, db)
-	if _, err := db.Exec(ctx, `INSERT INTO logtest (id, v) VALUES (?, ?)`, "a", "x"); err != nil {
-		t.Fatalf("seed row: %v", err)
-	}
-
-	buf.Reset()
-	if err := db.InTx(ctx, func(tx *Tx) error {
-		if _, err := tx.Exec(ctx, `UPDATE logtest SET v = ? WHERE id = ?`, "tx-secret", "a"); err != nil {
-			return err
+	for _, logArgs := range []bool{false, true} {
+		var buf bytes.Buffer
+		db := newMemDB(t)
+		db.tracer = newLoggingQueryTracer(Config{Logger: bufLogger(&buf), LogQueryArgs: logArgs})
+		ctx := context.Background()
+		seedLogTable(t, db)
+		if _, err := db.Exec(ctx, `INSERT INTO logtest (id, v) VALUES (?, ?)`, "a", "x"); err != nil {
+			t.Fatalf("seed row: %v", err)
 		}
-		rows, err := tx.Query(ctx, `SELECT id FROM logtest WHERE id = ?`, "tx-arg")
-		if err != nil {
-			return err
-		}
-		rows.Close()
-		var v string
-		return tx.QueryRow(ctx, `SELECT v FROM logtest WHERE id = ?`, "a").Scan(&v)
-	}); err != nil {
-		t.Fatalf("InTx: %v", err)
-	}
 
-	out := buf.String()
-	for _, want := range []string{
-		"UPDATE logtest", "tx-secret", // tx.Exec sql + arg verbatim
-		"SELECT id FROM logtest", "tx-arg", // tx.Query sql + arg verbatim
-		"SELECT v FROM logtest", // tx.QueryRow sql
-	} {
-		if !strings.Contains(out, want) {
-			t.Fatalf("tx-path log missing %q; got:\n%s", want, out)
+		buf.Reset()
+		if err := db.InTx(ctx, func(tx *Tx) error {
+			if _, err := tx.Exec(ctx, `UPDATE logtest SET v = ? WHERE id = ?`, "tx-secret", "a"); err != nil {
+				return err
+			}
+			rows, err := tx.Query(ctx, `SELECT id FROM logtest WHERE id = ?`, "tx-arg")
+			if err != nil {
+				return err
+			}
+			rows.Close()
+			var v string
+			return tx.QueryRow(ctx, `SELECT v FROM logtest WHERE id = ?`, "a").Scan(&v)
+		}); err != nil {
+			t.Fatalf("InTx: %v", err)
+		}
+
+		out := buf.String()
+		for _, want := range []string{"UPDATE logtest", "SELECT id FROM logtest", "SELECT v FROM logtest", `"arg_count":2`} {
+			if !strings.Contains(out, want) {
+				t.Fatalf("logArgs=%v: tx-path log missing %q; got:\n%s", logArgs, want, out)
+			}
+		}
+		for _, value := range []string{"tx-secret", "tx-arg"} {
+			if strings.Contains(out, value) != logArgs {
+				t.Fatalf("logArgs=%v: tx-path log carries %q = %v; got:\n%s", logArgs, value, !logArgs, out)
+			}
 		}
 	}
 }
 
-func assertLogged(t *testing.T, buf *bytes.Buffer, wantSQL, wantArg string) {
+func assertArity(t *testing.T, buf *bytes.Buffer, wantSQL, wantArity, value string) {
 	t.Helper()
 	out := buf.String()
-	if !strings.Contains(out, wantSQL) {
-		t.Fatalf("log missing SQL %q; got:\n%s", wantSQL, out)
+	for _, want := range []string{wantSQL, wantArity, `"request_id":"req-turso"`} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("log missing %s; got:\n%s", want, out)
+		}
 	}
-	if !strings.Contains(out, wantArg) {
-		t.Fatalf("log missing verbatim arg %q; got:\n%s", wantArg, out)
+	if strings.Contains(out, `"args"`) || (value != "" && strings.Contains(out, value)) {
+		t.Fatalf("log carries an argument value; got:\n%s", out)
 	}
 }

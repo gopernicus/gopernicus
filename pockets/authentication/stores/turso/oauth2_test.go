@@ -24,7 +24,7 @@ import (
 
 func openOAuthSQLite(t *testing.T, path string) *tursodb.DB {
 	t.Helper()
-	db, err := tursodb.Open(t.Context(), tursodb.Config{URL: "file:" + path})
+	db, err := tursodb.Open(t.Context(), tursodb.Config{URL: sdk.Secret("file:" + path)})
 	if err != nil {
 		t.Fatal(err)
 	}

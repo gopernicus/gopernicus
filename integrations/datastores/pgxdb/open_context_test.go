@@ -9,6 +9,8 @@ import (
 	"os"
 	"testing"
 	"time"
+
+	"github.com/gopernicus/gopernicus/sdk"
 )
 
 func TestOpenCanceledBeforeConnecting(t *testing.T) {
@@ -30,7 +32,7 @@ func TestOpenCancelsInFlightStartup(t *testing.T) {
 			defer cancel()
 			done := make(chan error, 1)
 			go func() {
-				db, err := Open(ctx, Config{DSN: dsn, Retry: RetryPolicy{Attempts: attempts}})
+				db, err := Open(ctx, Config{DSN: sdk.Secret(dsn), Retry: RetryPolicy{Attempts: attempts}})
 				if db != nil {
 					_ = db.Close()
 					err = fmt.Errorf("Open returned a DB: %v", err)
@@ -66,7 +68,7 @@ func TestOpenHonorsEarlierStartupDeadline(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), hostTimeout)
 			defer cancel()
 			started := time.Now()
-			db, err := Open(ctx, Config{DSN: dsn, ConnectTimeout: connectionTimeout})
+			db, err := Open(ctx, Config{DSN: sdk.Secret(dsn), ConnectTimeout: connectionTimeout})
 			if db != nil || !errors.Is(err, context.DeadlineExceeded) {
 				t.Fatalf("Open = %v, %v; want nil, context.DeadlineExceeded", db, err)
 			}
@@ -108,7 +110,7 @@ func TestLive_OpenContextDoesNotOwnDatabaseLifetime(t *testing.T) {
 		t.Run(fmt.Sprint(attempts), func(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
-			db, err := Open(ctx, Config{DSN: dsn, MaxConns: 1, Retry: RetryPolicy{Attempts: attempts}})
+			db, err := Open(ctx, Config{DSN: sdk.Secret(dsn), MaxConns: 1, Retry: RetryPolicy{Attempts: attempts}})
 			if err != nil {
 				t.Fatal(err)
 			}

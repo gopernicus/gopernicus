@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/gopernicus/gopernicus/sdk"
 )
 
 func TestOpenCanceledBeforeOpeningFile(t *testing.T) {
@@ -18,7 +20,7 @@ func TestOpenCanceledBeforeOpeningFile(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	for _, attempts := range []int{0, 2} {
-		db, err := Open(ctx, Config{URL: "file:" + path, Retry: RetryPolicy{Attempts: attempts}})
+		db, err := Open(ctx, Config{URL: sdk.Secret("file:" + path), Retry: RetryPolicy{Attempts: attempts}})
 		if db != nil || !errors.Is(err, context.Canceled) {
 			t.Fatalf("Open with attempts=%d = %v, %v; want nil, context.Canceled", attempts, db, err)
 		}
@@ -52,7 +54,7 @@ func TestOpenCancelsHTTPStartupAndRetry(t *testing.T) {
 			defer cancel()
 			done := make(chan error, 1)
 			go func() {
-				db, err := Open(ctx, Config{URL: server.URL, Retry: RetryPolicy{Attempts: 3, MinBackoff: 5 * time.Second}})
+				db, err := Open(ctx, Config{URL: sdk.Secret(server.URL), Retry: RetryPolicy{Attempts: 3, MinBackoff: 5 * time.Second}})
 				if db != nil {
 					_ = db.Close()
 					err = fmt.Errorf("Open returned a DB: %v", err)
@@ -83,7 +85,7 @@ func TestOpenContextDoesNotOwnDatabaseLifetime(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 			db, err := Open(ctx, Config{
-				URL:   "file:" + filepath.Join(t.TempDir(), "database.sqlite"),
+				URL:   sdk.Secret("file:" + filepath.Join(t.TempDir(), "database.sqlite")),
 				Retry: RetryPolicy{Attempts: attempts},
 			})
 			if err != nil {

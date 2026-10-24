@@ -11,6 +11,7 @@ import (
 	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
 	job "github.com/gopernicus/gopernicus/pockets/jobs/logic/queue"
 	jobspgx "github.com/gopernicus/gopernicus/pockets/jobs/stores/pgx"
+	"github.com/gopernicus/gopernicus/sdk"
 )
 
 // TestLiveJobsDeliveryPGX runs the AV3D-3.5 live delivery proof list against a live
@@ -24,7 +25,7 @@ func TestLiveJobsDeliveryPGX(t *testing.T) {
 	}
 
 	runLiveDeliveryProofs(t, "pgx", func(t *testing.T) job.FencedQueueRepository {
-		db, err := pgxdb.Open(context.Background(), pgxdb.Config{DSN: dsn})
+		db, err := pgxdb.Open(context.Background(), pgxdb.Config{DSN: sdk.Secret(dsn)})
 		if err != nil {
 			t.Fatalf("pgx connect: %v", err)
 		}

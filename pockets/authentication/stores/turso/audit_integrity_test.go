@@ -222,7 +222,7 @@ func TestSecurityEventsIntegrity_LocalSQLite(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "integrity.db")
 	runSecurityEventsIntegrity(t, integrityTarget{
 		open: func(t *testing.T, mode environment.Mode, logger *slog.Logger) *tursodb.DB {
-			db, err := tursodb.Open(t.Context(), tursodb.Config{URL: "file:" + path, RuntimeMode: mode, Logger: logger})
+			db, err := tursodb.Open(t.Context(), tursodb.Config{URL: sdk.Secret("file:" + path), RuntimeMode: mode, Logger: logger})
 			if err != nil {
 				t.Fatal(err)
 			}

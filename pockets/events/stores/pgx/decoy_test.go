@@ -57,7 +57,7 @@ func TestLive_WithSchema_Decoy(t *testing.T) {
 	dsn := requireDSN(t)
 	ctx := context.Background()
 
-	db, err := pgxdb.Open(context.Background(), pgxdb.Config{DSN: dsn})
+	db, err := pgxdb.Open(context.Background(), pgxdb.Config{DSN: sdk.Secret(dsn)})
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}

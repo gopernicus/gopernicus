@@ -18,6 +18,7 @@ import (
 	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
 	auth "github.com/gopernicus/gopernicus/pockets/authentication"
 	"github.com/gopernicus/gopernicus/pockets/authentication/stores/storetest"
+	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/pkg/environment"
 )
 
@@ -57,7 +58,7 @@ func TestConformance_Turso(t *testing.T) {
 	}
 
 	storetest.Run(t, func(t *testing.T) auth.Repositories {
-		db, err := tursodb.Open(context.Background(), tursodb.Config{URL: url, AuthToken: token})
+		db, err := tursodb.Open(context.Background(), tursodb.Config{URL: sdk.Secret(url), AuthToken: sdk.Secret(token)})
 		if err != nil {
 			t.Fatalf("connect: %v", err)
 		}
@@ -110,7 +111,7 @@ func TestSecurityEventsIntegrity_Turso(t *testing.T) {
 	}
 	runSecurityEventsIntegrity(t, integrityTarget{
 		open: func(t *testing.T, mode environment.Mode, logger *slog.Logger) *tursodb.DB {
-			db, err := tursodb.Open(context.Background(), tursodb.Config{URL: url, AuthToken: token, RuntimeMode: mode, Logger: logger, TLSDisabledAcknowledged: mode != ""})
+			db, err := tursodb.Open(context.Background(), tursodb.Config{URL: sdk.Secret(url), AuthToken: sdk.Secret(token), RuntimeMode: mode, Logger: logger, TLSDisabledAcknowledged: mode != ""})
 			if err != nil {
 				t.Fatalf("connect: %v", err)
 			}

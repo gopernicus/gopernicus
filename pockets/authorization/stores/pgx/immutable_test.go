@@ -129,7 +129,7 @@ func (f immutableFixture) runtime(t *testing.T, mode environment.Mode) *pgxdb.DB
 	query := parsed.Query()
 	query.Set("search_path", f.schema)
 	parsed.RawQuery = query.Encode()
-	db, err := pgxdb.Open(t.Context(), pgxdb.Config{DSN: parsed.String(), MaxConns: 2, RuntimeMode: mode, TLSDisabledAcknowledged: mode != ""})
+	db, err := pgxdb.Open(t.Context(), pgxdb.Config{DSN: sdk.Secret(parsed.String()), MaxConns: 2, RuntimeMode: mode, TLSDisabledAcknowledged: mode != ""})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -305,7 +305,7 @@ func TestAppendOnlyPostureLive(t *testing.T) {
 	query := parsed.Query()
 	query.Set("search_path", f.schema)
 	parsed.RawQuery = query.Encode()
-	superuser, err := pgxdb.Open(t.Context(), pgxdb.Config{DSN: parsed.String(), MaxConns: 2, RuntimeMode: environment.ModeProduction, TLSDisabledAcknowledged: true})
+	superuser, err := pgxdb.Open(t.Context(), pgxdb.Config{DSN: sdk.Secret(parsed.String()), MaxConns: 2, RuntimeMode: environment.ModeProduction, TLSDisabledAcknowledged: true})
 	if err != nil {
 		t.Fatal(err)
 	}

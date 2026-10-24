@@ -14,6 +14,7 @@ import (
 	"time"
 
 	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
+	"github.com/gopernicus/gopernicus/sdk"
 )
 
 func TestInvitationMetadataUpgradeAndMalformed_Turso(t *testing.T) {
@@ -24,7 +25,7 @@ func TestInvitationMetadataUpgradeAndMalformed_Turso(t *testing.T) {
 	}
 	ctx := context.Background()
 
-	db, err := tursodb.Open(context.Background(), tursodb.Config{URL: url, AuthToken: token})
+	db, err := tursodb.Open(context.Background(), tursodb.Config{URL: sdk.Secret(url), AuthToken: sdk.Secret(token)})
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}

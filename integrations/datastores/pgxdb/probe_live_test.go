@@ -192,7 +192,7 @@ func (l *appendOnlyLive) openAs(t *testing.T, role string, mode environment.Mode
 	u.User = url.UserPassword(role, aoRolePassword)
 	logger, buf := captureLogger()
 	db, err := Open(context.Background(), Config{
-		DSN:                            u.String(),
+		DSN:                            sdk.Secret(u.String()),
 		MaxConns:                       2,
 		RuntimeMode:                    mode,
 		Logger:                         logger,

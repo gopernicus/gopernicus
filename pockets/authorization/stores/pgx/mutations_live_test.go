@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/gopernicus/gopernicus/pockets/authorization/stores/storetest"
+	"github.com/gopernicus/gopernicus/sdk"
 
 	"github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/audit"
@@ -124,7 +125,7 @@ func TestOperationLedgerRestart(t *testing.T) {
 		t.Fatalf("first: %+v", first)
 	}
 
-	db, err := pgxdb.Open(t.Context(), pgxdb.Config{DSN: requireDSN(t)})
+	db, err := pgxdb.Open(t.Context(), pgxdb.Config{DSN: sdk.Secret(requireDSN(t))})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -151,7 +152,7 @@ func TestOperationLedgerRestart(t *testing.T) {
 // process would.
 func secondHandle(t *testing.T) storetest.Repositories {
 	t.Helper()
-	db, err := pgxdb.Open(t.Context(), pgxdb.Config{DSN: requireDSN(t)})
+	db, err := pgxdb.Open(t.Context(), pgxdb.Config{DSN: sdk.Secret(requireDSN(t))})
 	if err != nil {
 		t.Fatal(err)
 	}

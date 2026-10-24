@@ -13,6 +13,7 @@ import (
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/audit"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/mutations"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuples"
+	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/pkg/list"
 )
 
@@ -433,7 +434,7 @@ CREATE INDEX main.host_operations_outcome ON iam_operations(outcome);`); err != 
 // ambient transaction: with one pooled connection held by Transact, a pool read
 // would block until the deadline.
 func TestRecordedJoinsAmbientSingleConnection(t *testing.T) {
-	db, err := tursodb.Open(t.Context(), tursodb.Config{URL: "file:" + filepath.Join(t.TempDir(), "single.sqlite"), MaxOpenConns: 1})
+	db, err := tursodb.Open(t.Context(), tursodb.Config{URL: sdk.Secret("file:" + filepath.Join(t.TempDir(), "single.sqlite")), MaxOpenConns: 1})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -128,7 +128,7 @@ func (l *auditLive) openWith(t *testing.T, role string, mode environment.Mode, l
 	}
 	u.User = url.UserPassword(role, auditRolePassword)
 	db, err := pgxdb.Open(context.Background(), pgxdb.Config{
-		DSN: u.String(), MaxConns: 2, RuntimeMode: mode, TLSDisabledAcknowledged: mode != "",
+		DSN: sdk.Secret(u.String()), MaxConns: 2, RuntimeMode: mode, TLSDisabledAcknowledged: mode != "",
 		Logger: logger,
 	})
 	if err != nil {

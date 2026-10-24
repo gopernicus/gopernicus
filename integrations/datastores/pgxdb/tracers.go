@@ -2,49 +2,96 @@ package pgxdb
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"log/slog"
 
 	jackpgx "github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
-// LoggingQueryTracer logs every query start and end via slog.
-//
-// WARNING: TraceQueryStart logs SQL query arguments verbatim, and those can
-// carry secrets or PII belonging to app domains this connector knows nothing
-// about. This tracer is dev-only tooling: wire it only when a host has
-// explicitly opted in by setting Config.LogQueries or Config.Tracer, never in
-// production logging.
-type LoggingQueryTracer struct {
-	logger *slog.Logger
+// LoggingQueryTracerConfig configures NewLoggingQueryTracerWithConfig.
+type LoggingQueryTracerConfig struct {
+	// Logger receives the query lines; nil falls back to slog.Default().
+	Logger *slog.Logger
+
+	// LogArgs adds each query's bind arguments, and a failed query's error
+	// text, verbatim. Those carry secrets and PII: development only.
+	LogArgs bool
 }
 
-// NewLoggingQueryTracer returns a query tracer that logs via logger. A nil
-// logger falls back to slog.Default().
+// LoggingQueryTracer logs every query start and end via slog, with the query's
+// context so a context-aware handler adds request_id. The start line carries
+// sql, arg_count and arg_types (each argument's Go type), never a value; a
+// failed query's end line carries the sqlstate and constraint of a
+// *pgconn.PgError, or error_type otherwise, never the error text, because pgx
+// encode errors and some server messages repeat the argument.
+//
+// WARNING: with LogArgs the tracer also logs bind arguments and error text
+// verbatim, and those can carry secrets or PII belonging to app domains this
+// connector knows nothing about. Either way it is dev-only tooling: wire it
+// only when a host has explicitly opted in by setting Config.LogQueries or
+// Config.Tracer; a production Config.RuntimeMode refuses both.
+type LoggingQueryTracer struct {
+	logger  *slog.Logger
+	logArgs bool
+}
+
+// NewLoggingQueryTracer returns a query tracer that logs argument counts and
+// types, never values, via logger. A nil logger falls back to slog.Default().
 func NewLoggingQueryTracer(logger *slog.Logger) *LoggingQueryTracer {
+	return NewLoggingQueryTracerWithConfig(LoggingQueryTracerConfig{Logger: logger})
+}
+
+// NewLoggingQueryTracerWithConfig returns a query tracer configured by cfg.
+func NewLoggingQueryTracerWithConfig(cfg LoggingQueryTracerConfig) *LoggingQueryTracer {
+	logger := cfg.Logger
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &LoggingQueryTracer{logger: logger}
+	return &LoggingQueryTracer{logger: logger, logArgs: cfg.LogArgs}
 }
 
 func (l *LoggingQueryTracer) TraceQueryStart(ctx context.Context, conn *jackpgx.Conn, data jackpgx.TraceQueryStartData) context.Context {
-	l.logger.Info("query start",
+	attrs := []slog.Attr{
 		slog.String("sql", PrettyPrintSQL(data.SQL)),
-		slog.Any("args", data.Args),
-	)
+		slog.Int("arg_count", len(data.Args)),
+		slog.Any("arg_types", argTypes(data.Args)),
+	}
+	if l.logArgs {
+		attrs = append(attrs, slog.Any("args", data.Args))
+	}
+	l.logger.LogAttrs(ctx, slog.LevelInfo, "query start", attrs...)
 	return ctx
 }
 
 func (l *LoggingQueryTracer) TraceQueryEnd(ctx context.Context, conn *jackpgx.Conn, data jackpgx.TraceQueryEndData) {
-	if data.Err != nil {
-		l.logger.Error("query end",
-			slog.String("error", data.Err.Error()),
-			slog.String("command_tag", data.CommandTag.String()),
-		)
+	attrs := []slog.Attr{slog.String("command_tag", data.CommandTag.String())}
+	if data.Err == nil {
+		l.logger.LogAttrs(ctx, slog.LevelInfo, "query end", attrs...)
 		return
 	}
 
-	l.logger.Info("query end", slog.String("command_tag", data.CommandTag.String()))
+	var pgErr *pgconn.PgError
+	if errors.As(data.Err, &pgErr) {
+		attrs = append(attrs, slog.String("sqlstate", pgErr.Code), slog.String("constraint", pgErr.ConstraintName))
+	} else {
+		attrs = append(attrs, slog.String("error_type", fmt.Sprintf("%T", data.Err)))
+	}
+	if l.logArgs {
+		attrs = append(attrs, slog.String("error", data.Err.Error()))
+	}
+	l.logger.LogAttrs(ctx, slog.LevelError, "query end", attrs...)
+}
+
+// argTypes lists each argument's Go type, the value-free shape of a query's
+// arguments.
+func argTypes(args []any) []string {
+	types := make([]string, len(args))
+	for i, arg := range args {
+		types[i] = fmt.Sprintf("%T", arg)
+	}
+	return types
 }
 
 // MultiQueryTracer composes multiple jackpgx.QueryTracer implementations so all of

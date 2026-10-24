@@ -29,7 +29,7 @@ func emptyCanonicalFixture(t testing.TB) *pgxdb.DB {
 	if dsn == "" {
 		t.Skip("POSTGRES_TEST_DSN not set: canonical SQL NOT verified")
 	}
-	admin, err := pgxdb.Open(t.Context(), pgxdb.Config{DSN: dsn})
+	admin, err := pgxdb.Open(t.Context(), pgxdb.Config{DSN: sdk.Secret(dsn)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -49,7 +49,7 @@ func emptyCanonicalFixture(t testing.TB) *pgxdb.DB {
 	query := parsed.Query()
 	query.Set("search_path", schema.String())
 	parsed.RawQuery = query.Encode()
-	db, err := pgxdb.Open(t.Context(), pgxdb.Config{DSN: parsed.String()})
+	db, err := pgxdb.Open(t.Context(), pgxdb.Config{DSN: sdk.Secret(parsed.String())})
 	if err != nil {
 		t.Fatal(err)
 	}

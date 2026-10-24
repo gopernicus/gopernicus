@@ -134,6 +134,61 @@ func TestOpen_EmptyDSN(t *testing.T) {
 	}
 }
 
+// TestOpen_RefusesRedactedSecret: a DSN or Password composed from a rendered
+// Secret fails in every mode, naming the field and Reveal(), before any dial.
+func TestOpen_RefusesRedactedSecret(t *testing.T) {
+	password := sdk.Secret("hunter2")
+	composed := Config{DSN: sdk.Secret(fmt.Sprintf("postgres://u:%s@127.0.0.1:1/db?sslmode=disable", password)), ConnectTimeout: 2 * time.Second}
+	for _, tc := range []struct {
+		name   string
+		cfg    Config
+		fields []string
+	}{
+		{"dsn", composed, []string{"Config.DSN"}},
+		{"password", Config{Host: "127.0.0.1", Port: "1", User: "u", Password: sdk.Secret(fmt.Sprint(password))}, []string{"Config.Password"}},
+		{"both", Config{DSN: composed.DSN, Password: sdk.Secret("x" + password.String())}, []string{"Config.DSN", "Config.Password"}},
+		{"production", Config{DSN: composed.DSN, RuntimeMode: environment.ModeProduction}, []string{"Config.DSN"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			db, err := Open(context.Background(), tc.cfg)
+			if db != nil || !errors.Is(err, sdk.ErrRedactedSecret) || errors.Is(err, ErrTLSRequired) {
+				t.Fatalf("Open = %v, %v; want only sdk.ErrRedactedSecret", db, err)
+			}
+			msg := err.Error()
+			for _, want := range append(tc.fields, "Reveal()") {
+				if !strings.Contains(msg, want) {
+					t.Errorf("refusal lacks %q: %s", want, msg)
+				}
+			}
+			if strings.Contains(msg, "pinging") || strings.Contains(msg, "127.0.0.1") {
+				t.Errorf("refusal dialed or echoed the target: %s", msg)
+			}
+		})
+	}
+}
+
+// TestConfig_SecretFieldsRedact: DSN and Password render as sdk.Redacted
+// through fmt and slog, and ParseEnvTags still fills them.
+func TestConfig_SecretFieldsRedact(t *testing.T) {
+	t.Setenv("DB_URL", "postgres://u:hunter2@db.example.com/app")
+	t.Setenv("DB_PASSWORD", "hunter2")
+	t.Setenv("DB_LOG_QUERY_ARGS", "true")
+	var cfg Config
+	if err := environment.ParseEnvTags("", &cfg); err != nil {
+		t.Fatalf("ParseEnvTags: %v", err)
+	}
+	if cfg.DSN.Reveal() != "postgres://u:hunter2@db.example.com/app" || cfg.Password.Reveal() != "hunter2" || !cfg.LogQueryArgs {
+		t.Fatalf("ParseEnvTags did not fill the secret fields or LogQueryArgs: %v %v", cfg.DSN.Reveal() != "", cfg.LogQueryArgs)
+	}
+	var logged strings.Builder
+	slog.New(slog.NewTextHandler(&logged, nil)).Info("config", slog.Any("cfg", cfg), slog.Any("dsn", cfg.DSN))
+	for _, out := range []string{fmt.Sprintf("%v %+v %#v %s", cfg, cfg, cfg, cfg.DSN), logged.String()} {
+		if strings.Contains(out, "hunter2") {
+			t.Fatalf("a secret field printed its value: %s", out)
+		}
+	}
+}
+
 func TestConfigConnectionString_DSNWins(t *testing.T) {
 	cfg := Config{
 		DSN:      "postgres://from-dsn.example/db?sslmode=require",
@@ -146,7 +201,7 @@ func TestConfigConnectionString_DSNWins(t *testing.T) {
 	if err != nil {
 		t.Fatalf("connectionString: %v", err)
 	}
-	if want := cfg.DSN; got != want {
+	if want := cfg.DSN.Reveal(); got != want {
 		t.Fatalf("connectionString() = %q, want %q", got, want)
 	}
 }
@@ -203,8 +258,18 @@ func TestConfigQueryTracer_LogQueries(t *testing.T) {
 		Logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 	tracer := cfg.queryTracer()
-	if _, ok := tracer.(*LoggingQueryTracer); !ok {
-		t.Fatalf("queryTracer() = %T, want *LoggingQueryTracer", tracer)
+	if lt, ok := tracer.(*LoggingQueryTracer); !ok || lt.logArgs {
+		t.Fatalf("queryTracer() = %#v, want a *LoggingQueryTracer without args", tracer)
+	}
+
+	cfg.LogQueryArgs = true
+	if lt, ok := cfg.queryTracer().(*LoggingQueryTracer); !ok || !lt.logArgs {
+		t.Fatalf("LogQueryArgs: queryTracer() = %#v, want a *LoggingQueryTracer logging args", cfg.queryTracer())
+	}
+
+	cfg.LogQueries = false
+	if tracer := cfg.queryTracer(); tracer != nil {
+		t.Fatalf("LogQueryArgs alone: queryTracer() = %#v, want nil (inert)", tracer)
 	}
 }
 
@@ -647,7 +712,7 @@ func TestOpen_TimeoutDoubleSettingRefusedBeforeConnecting(t *testing.T) {
 	clearLibpqEnv(t)
 	dsn, connected := stalledPostgres(t)
 
-	db, err := Open(context.Background(), Config{DSN: dsn + "&statement_timeout=2000", StatementTimeout: time.Second})
+	db, err := Open(context.Background(), Config{DSN: sdk.Secret(dsn + "&statement_timeout=2000"), StatementTimeout: time.Second})
 	if db != nil || !errors.Is(err, sdk.ErrInvalidInput) {
 		t.Fatalf("Open = %v, %v; want nil, ErrInvalidInput", db, err)
 	}

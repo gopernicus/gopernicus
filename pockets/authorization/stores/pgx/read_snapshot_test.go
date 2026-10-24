@@ -14,6 +14,7 @@ import (
 	"github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuplecache"
 	"github.com/gopernicus/gopernicus/pockets/authorization/stores/storetest"
+	"github.com/gopernicus/gopernicus/sdk"
 )
 
 func cacheFixture(t testing.TB, install bool) (*pgxdb.DB, config) {
@@ -23,7 +24,7 @@ func cacheFixture(t testing.TB, install bool) (*pgxdb.DB, config) {
 	if dsn == "" {
 		t.Skip("POSTGRES_TEST_DSN not set: cache snapshots NOT verified")
 	}
-	db, err := pgxdb.Open(ctx, pgxdb.Config{DSN: dsn})
+	db, err := pgxdb.Open(ctx, pgxdb.Config{DSN: sdk.Secret(dsn)})
 	if err != nil {
 		t.Fatal(err)
 	}

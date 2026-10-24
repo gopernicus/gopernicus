@@ -88,7 +88,7 @@ func TestOAuth2PostgresRefreshLocksUserBeforeSession(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
 	trace := &passwordlessOwnerLockTrace{usersTable: schema.Table(usersTable), reached: make(chan struct{}, 1)}
-	rotationDB, err := pgxdb.Open(ctx, pgxdb.Config{DSN: os.Getenv("POSTGRES_TEST_DSN"), Tracer: trace})
+	rotationDB, err := pgxdb.Open(ctx, pgxdb.Config{DSN: sdk.Secret(os.Getenv("POSTGRES_TEST_DSN")), Tracer: trace})
 	if err != nil {
 		t.Fatal(err)
 	}

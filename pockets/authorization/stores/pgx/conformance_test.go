@@ -29,6 +29,7 @@ import (
 	"github.com/gopernicus/gopernicus/pockets/authorization"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/mutations"
 	"github.com/gopernicus/gopernicus/pockets/authorization/stores/storetest"
+	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/transaction"
 )
 
@@ -214,7 +215,7 @@ func requireDSN(t *testing.T) string {
 // truncates both tables so the returned repositories start empty and isolated.
 func openAndMigrate(t *testing.T, dsn string) *pgxdb.DB {
 	t.Helper()
-	db, err := pgxdb.Open(context.Background(), pgxdb.Config{DSN: dsn})
+	db, err := pgxdb.Open(context.Background(), pgxdb.Config{DSN: sdk.Secret(dsn)})
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}

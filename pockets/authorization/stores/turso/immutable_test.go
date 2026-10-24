@@ -151,7 +151,7 @@ func TestAuditTriggersRefuseRewrites(t *testing.T) {
 // construction never fails for it.
 func TestAuditTriggerProbeWarnsNeverRefuses(t *testing.T) {
 	var logs bytes.Buffer
-	db, err := tursodb.Open(t.Context(), tursodb.Config{URL: "file:" + filepath.Join(t.TempDir(), "probe.sqlite"), RuntimeMode: environment.ModeProduction, Logger: slog.New(slog.NewTextHandler(&logs, nil))})
+	db, err := tursodb.Open(t.Context(), tursodb.Config{URL: sdk.Secret("file:" + filepath.Join(t.TempDir(), "probe.sqlite")), RuntimeMode: environment.ModeProduction, Logger: slog.New(slog.NewTextHandler(&logs, nil))})
 	if err != nil {
 		t.Fatal(err)
 	}

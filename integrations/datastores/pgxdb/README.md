@@ -31,6 +31,27 @@ startup context and deadline to those constructors too.
 SQL migration streams are flat directories: nested files belong to separate
 host-controlled streams; export copies only direct SQL files.
 
+### Secrets — `DSN` and `Password` are `sdk.Secret`
+
+`Config.DSN` (`DB_URL`) and `Config.Password` (`DB_PASSWORD`) are `sdk.Secret`:
+they print `[redacted]` through `fmt` (every verb, `%+v` of a `Config` included),
+`slog` and `encoding/json`. `environment.ParseEnvTags` fills them like any string
+field, and an untyped literal still assigns; a `string` variable converts with
+`sdk.Secret(v)`. Read the value with `Reveal()`; display the target with
+`cfg.Redacted()`.
+
+A DSN composed from a printed Secret — `fmt.Sprintf("postgres://u:%s@h/db",
+cfg.Password)` — carries `[redacted]` instead of the password. `Open` refuses a
+`DSN` or `Password` containing `sdk.Redacted`, in every mode and before any
+connection attempt, with an error wrapping `sdk.ErrRedactedSecret` that names the
+field and says to read it with `Reveal()`:
+
+```go
+dsn := fmt.Sprintf("postgres://u:%s@h/db", cfg.Password.Reveal()) // not cfg.Password
+db, err := pgxdb.Open(ctx, pgxdb.Config{DSN: sdk.Secret(dsn)})
+if errors.Is(err, sdk.ErrRedactedSecret) { /* a rendered Secret reached the DSN */ }
+```
+
 ### Statement and lock timeouts — `StatementTimeout` / `LockTimeout`
 
 `Config.StatementTimeout` (`DB_STATEMENT_TIMEOUT`) and `Config.LockTimeout`
@@ -117,10 +138,13 @@ class, the target, `cfg.Redacted()` and the fix — `sslmode=verify-full` with
 `sslrootcert` where the certificate does not name the host — and never the DSN
 itself.
 
-Production also refuses `LogQueries`, and a `Tracer` that is or wraps (through
-`MultiQueryTracer`) a `*LoggingQueryTracer`, with `ErrQueryLoggingRefused`: both
-log SQL arguments verbatim, and no acknowledgement admits them. When both
-refusals apply, `Open` returns them joined.
+Production also refuses query logging with `ErrQueryLoggingRefused`: `LogQueries`
+(`DB_LOG_QUERIES`), `LogQueryArgs` (`DB_LOG_QUERY_ARGS`, even alone — a stale
+variable is a signal), and a `Tracer` that is or wraps (through
+`MultiQueryTracer`) a `*LoggingQueryTracer` whatever its `LogArgs`. The text
+names each source with its variable — `Config.LogQueries (DB_LOG_QUERIES)` — and
+no acknowledgement admits it. When both refusals apply, `Open` returns them
+joined.
 
 Development admits everything and logs one WARN per condition production would
 refuse. In production each honored acknowledgement logs one WARN carrying
@@ -313,10 +337,10 @@ the raw driver error sees the sentinel now.
 
 | member | shape |
 |---|---|
-| `Config` | `DSN` or split `Host`/`Port`/`User`/`Password`/`Database`/`SSLMode`, plus pool settings, `StatementTimeout`/`LockTimeout` (see "Statement and lock timeouts"), `LogQueries`, `Logger`, `Tracer`, and `Retry`; env tags are provided for host parsers; pgx also honors standard `PG*` environment defaults during DSN parsing. `RuntimeMode`, `TLSUnverifiedAcknowledged`, `TLSDisabledAcknowledged` and `AppendOnlyWritableAcknowledged` are programmatic (no env tag; see "Production posture" and "Append-only tables") |
+| `Config` | `DSN` or split `Host`/`Port`/`User`/`Password`/`Database`/`SSLMode` (`DSN` and `Password` are `sdk.Secret`; see "Secrets"), plus pool settings, `StatementTimeout`/`LockTimeout` (see "Statement and lock timeouts"), `LogQueries`, `LogQueryArgs`, `Logger`, `Tracer`, and `Retry`; env tags are provided for host parsers; pgx also honors standard `PG*` environment defaults during DSN parsing. `RuntimeMode`, `TLSUnverifiedAcknowledged`, `TLSDisabledAcknowledged` and `AppendOnlyWritableAcknowledged` are programmatic (no env tag; see "Production posture" and "Append-only tables") |
 | `ErrTLSRequired` / `ErrQueryLoggingRefused` | production posture refusals from `Open`, matched with `errors.Is` |
 | `ErrAppendOnlyTableWritable` / `ErrAppendOnlyTableUnwritable` / `ErrDefinerFunctionUnsafe` | production append-only refusals from `ProbeAppendOnly`, matched with `errors.Is` |
-| `Open(ctx, cfg) (*DB, error)` | opens a `pgxpool` and pings; every connection scans `timestamptz` in UTC and, unless the host named a zone, runs with session `timezone=UTC` (see below) |
+| `Open(ctx, cfg) (*DB, error)` | refuses a `DSN`/`Password` containing `sdk.Redacted` (`sdk.ErrRedactedSecret`), then opens a `pgxpool` and pings; every connection scans `timestamptz` in UTC and, unless the host named a zone, runs with session `timezone=UTC` (see below) |
 | `DB` | `Exec` / `Query` / `QueryRow` / `InTx` / `Begin` / `Close` / `Ping` / `Underlying() *pgxpool.Pool` / `RuntimeMode()` / `ProbeAppendOnly(ctx, tables…)` |
 | `Querier` | interface intersection of `*DB` and `*Tx` (`Exec`/`Query`/`QueryRow`) — lets a store accept pool-or-tx |
 | `MapError(err) error` | SQLSTATE-based: `23505`→`ErrAlreadyExists`, `23503`→`ErrInvalidReference`, `23514`/`23502`→`ErrInvalidInput`, `22P02` (malformed uuid/integer literal)→`ErrInvalidInput` keeping the server message as the sentence before the sentinel, `42501`→`ErrForbidden` keeping the `*pgconn.PgError` in the chain, `pgx.ErrNoRows`→`ErrNotFound`; unknown errors pass through |
@@ -335,7 +359,7 @@ the raw driver error sees the sentinel now.
 | `List[T]` / `ListQuery[T]` | the shared paginated-SELECT helper implementing the `sdk/pkg/list` list standards (see below) |
 | `QuoteIdentifier(ident) (string, error)` | regex allow-list + per-segment double-quoting for dynamic identifiers (order columns); rejection wraps `ErrInvalidInput` |
 | `ApplyCursorPagination` / `AddOrderByClause` / `AddLimitClause` | NamedArgs SQL builders under `List`: tuple-comparison keyset predicate (direction × forPrevious operator table), ORDER BY with PK tiebreaker + optional `LOWER()`, `LIMIT @limit` |
-| `LoggingQueryTracer` / `NewLoggingQueryTracer` | `pgx.QueryTracer` over `*slog.Logger`; **logs SQL args verbatim — dev-only** |
+| `LoggingQueryTracer` / `NewLoggingQueryTracer(logger)` / `NewLoggingQueryTracerWithConfig(LoggingQueryTracerConfig{Logger, LogArgs})` | `pgx.QueryTracer` over `*slog.Logger`, context-aware (`request_id`): `sql`, `arg_count`, `arg_types`; a failed query's `sqlstate`/`constraint` or `error_type`. `LogArgs` adds `args` and the error text verbatim. **Dev-only** — see "Query logging" |
 | `MultiQueryTracer` / `NewMultiQueryTracer` | fans a query trace out to several `pgx.QueryTracer`s (pgx accepts only one) |
 | `PrettyPrintSQL(sql) string` | whitespace-normalizes SQL for log lines |
 
@@ -826,9 +850,9 @@ three. Treat the pruning schedule as the retention policy for that data, keep
 the table inside whatever DSR/erasure process covers request logs, and prefer
 opaque or digested key material for anything you would not want to keep.
 
-For the same reason: **do not enable `DB_LOG_QUERIES` (`Config.LogQueries`) on a
-connection with the limiter wired in a shared environment.** The logging tracer
-logs SQL args verbatim, so every `Allow` writes the full key — IPs included —
+For the same reason: **do not enable `DB_LOG_QUERY_ARGS` (`Config.LogQueryArgs`) on
+a connection with the limiter wired in a shared environment.** With it the logging
+tracer logs SQL args verbatim, so every `Allow` writes the full key — IPs included —
 into your application logs, which are typically retained far longer and read far
 more widely than this table.
 
@@ -901,6 +925,24 @@ hatches are `AT TIME ZONE '…'` per expression, or pinning a session zone with
 for `date_trunc|::date|to_char|AT TIME ZONE` before adopting if it relied on a
 server-local zone.
 
+## Query logging — `LogQueries` / `LogQueryArgs`
+
+`DB_LOG_QUERIES=true` (`Config.LogQueries`) installs a `LoggingQueryTracer`. Each
+query logs a start line with `sql`, `arg_count` and `arg_types` (each argument's
+Go type, `%T`) — never a value — and an end line with `command_tag`. A failed
+query's end line, at ERROR, carries `sqlstate` and `constraint` for a
+`*pgconn.PgError` and `error_type` (`%T`) otherwise, never the error text: pgx
+encode errors embed the argument and a `22P02` message repeats the input. The
+tracer logs with the query's context, so a `logging.New` logger adds `request_id`.
+
+`DB_LOG_QUERY_ARGS=true` (`Config.LogQueryArgs`) widens the same lines with `args`
+and the error text, verbatim — secrets and PII included. Without
+`DB_LOG_QUERIES` it is inert (no tracer). A development `RuntimeMode` logs one
+posture WARN naming every source; production refuses all of them (see
+"Production posture"). A host composing its own tracer uses
+`NewLoggingQueryTracerWithConfig(pgxdb.LoggingQueryTracerConfig{Logger: l,
+LogArgs: false})` — `NewLoggingQueryTracer(l)` is the same safe default.
+
 ## Symmetry is convention, not a guarantee
 
 This connector mirrors the turso connector member-for-member **by convention**.
@@ -909,9 +951,11 @@ aligned; a pocket's `storetest` conformance suite is the only parity net, and
 it sees only port-reachable behavior. Do not over-trust the symmetry.
 
 Query logging is symmetric across both connectors: each carries an opt-in
-`Config.LogQueries` / `Config.Logger` with the same dev-only, args-verbatim
-posture — pgx installs it as a native `ConnConfig.Tracer`, turso threads it
-through its `DB`/`Tx` wrapper because database/sql exposes no tracer hook.
+`Config.LogQueries` / `Config.LogQueryArgs` / `Config.Logger` with the same
+dev-only posture — argument count and types by default, values only with
+`LogQueryArgs`, refused in production. pgx installs it as a native
+`ConnConfig.Tracer`, turso threads it through its `DB`/`Tx` wrapper because
+database/sql exposes no tracer hook (and so logs no end line).
 `Config.Tracer` (and `MultiQueryTracer` above) is the one exception that remains
 pgx-only: it composes an external `pgx.QueryTracer` (e.g. OpenTelemetry) into
 that native seam, which SQLite's driver does not expose. This is interim

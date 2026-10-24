@@ -54,16 +54,22 @@ const (
 // environment.ParseEnvTags(namespace, &cfg), and a non-empty namespace prefixes
 // every key (namespace "AUTH" reads AUTH_DB_URL). The connector itself knows
 // no namespace.
+//
+// URL and AuthToken are sdk.Secret (a URL can carry the token): they render as
+// sdk.Redacted through fmt, slog and encoding/json, so read them with Reveal()
+// and display the target with Redacted(). A URL composed from a rendered
+// Secret carries sdk.Redacted instead of the token; Open refuses such a URL or
+// AuthToken with sdk.ErrRedactedSecret before any I/O.
 type Config struct {
 	// URL is required: "libsql://", "https://", "wss://" for a hosted database,
 	// or "file:<path>" for a local SQLite database (see Open). A plaintext
 	// "http://" or "ws://" URL, or "libsql://…?tls=0" (which the driver sends as
 	// http), connects without complaint under the zero RuntimeMode; production
 	// refuses it (ErrTLSRequired).
-	URL string `env:"DB_URL"`
+	URL sdk.Secret `env:"DB_URL"`
 
 	// AuthToken overrides any authToken, auth_token or jwt credential in URL.
-	AuthToken       string        `env:"DB_AUTH_TOKEN"`
+	AuthToken       sdk.Secret    `env:"DB_AUTH_TOKEN"`
 	MaxOpenConns    int           `env:"DB_MAX_CONNS"`
 	MaxIdleConns    int           `env:"DB_MAX_IDLE_CONNS"`
 	ConnMaxLifetime time.Duration `env:"DB_MAX_CONN_LIFETIME"`
@@ -75,9 +81,16 @@ type Config struct {
 	BusyTimeout time.Duration `env:"DB_BUSY_TIMEOUT"`
 
 	// LogQueries installs a query logger that logs every Exec/Query/QueryRow —
-	// on both the DB connection and its transactions — via Logger. It logs SQL
-	// args verbatim, so this is dev-only tooling: leave it false in production.
+	// on both the DB connection and its transactions — via Logger, with the
+	// SQL and its argument count and types, never their values. It is dev-only
+	// tooling; a production RuntimeMode refuses it (ErrQueryLoggingRefused).
 	LogQueries bool `env:"DB_LOG_QUERIES" default:"false"`
+
+	// LogQueryArgs widens the LogQueries logger to log bind arguments
+	// verbatim; those carry secrets and PII. It is inert without LogQueries. A
+	// development RuntimeMode logs a WARN while it is set; a production
+	// RuntimeMode refuses it even alone.
+	LogQueryArgs bool `env:"DB_LOG_QUERY_ARGS" default:"false"`
 
 	// Logger receives the query log when LogQueries is true and, under a
 	// non-zero RuntimeMode, the posture lines Open writes. If nil,
@@ -101,10 +114,11 @@ type Config struct {
 	// RuntimeMode is the host's deployment posture. The zero value is
 	// mode-blind: Open behaves exactly as it did before the field existed. A
 	// non-zero mode must be environment.ModeDevelopment or ModeProduction.
-	// Production refuses, before any I/O, a hosted URL that does not use TLS
-	// (ErrTLSRequired); development logs a WARN instead. A "file:" URL is
-	// exempt. It carries no env tag: the host reads its mode from the process
-	// environment in its composition root and sets it here.
+	// Production refuses, before any I/O, query logging
+	// (ErrQueryLoggingRefused) and a hosted URL that does not use TLS
+	// (ErrTLSRequired; a "file:" URL is exempt); development logs one WARN per
+	// such condition instead. It carries no env tag: the host reads its mode
+	// from the process environment in its composition root and sets it here.
 	RuntimeMode environment.Mode
 
 	// TLSDisabledAcknowledged admits, in production, a hosted URL without TLS.
@@ -115,7 +129,7 @@ type Config struct {
 
 // dsn validates the URL and sets the separately configured credential.
 func (cfg Config) dsn() (string, error) {
-	u, err := url.Parse(cfg.URL)
+	u, err := url.Parse(cfg.URL.Reveal())
 	if err != nil {
 		return "", fmt.Errorf("turso: invalid database URL: %w", sdk.ErrInvalidInput)
 	}
@@ -127,10 +141,28 @@ func (cfg Config) dsn() (string, error) {
 		for _, name := range credentialParams {
 			q.Del(name)
 		}
-		q.Set(authTokenParam, cfg.AuthToken)
+		q.Set(authTokenParam, cfg.AuthToken.Reveal())
 	}
 	u.RawQuery = q.Encode()
 	return u.String(), nil
+}
+
+// refuseRedactedSecrets names each secret field whose value carries
+// sdk.Redacted: it was composed from a rendered Secret, not its Reveal.
+func (cfg Config) refuseRedactedSecrets() error {
+	var refusals []error
+	for _, field := range []struct {
+		name  string
+		value sdk.Secret
+	}{
+		{"URL", cfg.URL},
+		{"AuthToken", cfg.AuthToken},
+	} {
+		if strings.Contains(field.value.Reveal(), sdk.Redacted) {
+			refusals = append(refusals, fmt.Errorf("turso: Config.%s: %w", field.name, sdk.ErrRedactedSecret))
+		}
+	}
+	return errors.Join(refusals...)
 }
 
 // Redacted returns the connection target with the userinfo password and all
@@ -156,13 +188,18 @@ func (cfg Config) Redacted() string {
 // parameters on each new connection, which is what makes the setting hold on
 // every connection of the pool. Hosted URLs are untouched. A non-zero
 // RuntimeMode is validated and enforced before the local file profile or the
-// driver runs, so a refused configuration performs no I/O.
+// driver runs, so a refused configuration performs no I/O. A URL or AuthToken
+// that contains sdk.Redacted is refused first, in every mode, with
+// sdk.ErrRedactedSecret.
 func Open(ctx context.Context, cfg Config) (*DB, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	if cfg.URL == "" {
 		return nil, fmt.Errorf("turso: empty database URL")
+	}
+	if err := cfg.refuseRedactedSecrets(); err != nil {
+		return nil, err
 	}
 	if cfg.ConnectTimeout == 0 {
 		cfg.ConnectTimeout = 10 * time.Second
@@ -175,7 +212,7 @@ func Open(ctx context.Context, cfg Config) (*DB, error) {
 	if err := cfg.checkPosture(dsn); err != nil {
 		return nil, err
 	}
-	if isLocalFile(cfg.URL) {
+	if isLocalFile(cfg.URL.Reveal()) {
 		if dsn, err = localFileDSN(dsn, cfg.BusyTimeout); err != nil {
 			return nil, err
 		}
@@ -196,7 +233,7 @@ func Open(ctx context.Context, cfg Config) (*DB, error) {
 
 	wrapped := &DB{db: db, mode: cfg.RuntimeMode, logger: cfg.Logger}
 	if cfg.LogQueries {
-		wrapped.tracer = newLoggingQueryTracer(cfg.Logger)
+		wrapped.tracer = newLoggingQueryTracer(cfg)
 	}
 
 	// Opting into Retry opts into eager boot validation: a real round-trip
@@ -208,14 +245,14 @@ func Open(ctx context.Context, cfg Config) (*DB, error) {
 			return StatusCheck(ctx, wrapped)
 		}); err != nil {
 			db.Close()
-			return nil, fmt.Errorf("verifying libsql database: %w", localDriverHint(cfg.URL, err))
+			return nil, fmt.Errorf("verifying libsql database: %w", localDriverHint(cfg.URL.Reveal(), err))
 		}
 		return wrapped, nil
 	}
 
 	if err := db.PingContext(ctx); err != nil {
 		db.Close()
-		return nil, fmt.Errorf("pinging libsql database: %w", localDriverHint(cfg.URL, err))
+		return nil, fmt.Errorf("pinging libsql database: %w", localDriverHint(cfg.URL.Reveal(), err))
 	}
 	return wrapped, nil
 }

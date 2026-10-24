@@ -7,6 +7,7 @@ import (
 
 	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
 	"github.com/gopernicus/gopernicus/pockets/authorization/stores/storetest"
+	"github.com/gopernicus/gopernicus/sdk"
 	_ "modernc.org/sqlite"
 )
 
@@ -17,7 +18,7 @@ func cacheFixture(t testing.TB, install bool, poolSize ...int) (*tursodb.DB, con
 	if len(poolSize) > 0 {
 		connections = poolSize[0]
 	}
-	db, err := tursodb.Open(ctx, tursodb.Config{URL: "file:" + filepath.Join(t.TempDir(), "cache.sqlite"), MaxOpenConns: connections, MaxIdleConns: connections})
+	db, err := tursodb.Open(ctx, tursodb.Config{URL: sdk.Secret("file:" + filepath.Join(t.TempDir(), "cache.sqlite")), MaxOpenConns: connections, MaxIdleConns: connections})
 	if err != nil {
 		t.Fatal(err)
 	}
