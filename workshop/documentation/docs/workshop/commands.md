@@ -143,7 +143,7 @@ Checks a host against the [host contract](../architecture/host-contract.md), rul
 | Flag | Meaning | Default |
 |---|---|---|
 | `--list` | print every rule's canonical sentence and exit (with `--posture`, the H sentences then the P sentences) | off |
-| `--posture` | add P0–P9: the mode from the process environment, `RuntimeMode` on every recognized surface, `TrustProxies` outermost, `SecurityHeaders`, `ValidateProduction`, literal acknowledgements, `NewKeys`, a posture-clean `.env.example`, and a byte-identical ledger copy of every mounted store's migration files | off |
+| `--posture` | add P0–P9: the mode from the process environment, `RuntimeMode` on every recognized surface, `TrustProxies` or `TrustProxiesWithConfig` outermost, `SecurityHeaders`, `ValidateProduction`, literal acknowledgements, `NewKeys`, a posture-clean `.env.example`, and a byte-identical ledger copy of every mounted store's migration files | off |
 
 Output is one status line per rule in id order, then one line per finding, then a summary:
 
@@ -161,7 +161,7 @@ guard: 1 finding across 1 rule
 
 A rule with nothing in scope prints `no scope` with the reason, so an inert rule never reads as a clean one. A clean run ends `guard: clean (15 rules, N packages)`; without `--posture` the output is exactly the H run.
 
-With `--posture` the ten P status lines follow the fifteen H lines, and informational lines follow the status block — `ack` for each acknowledgement written `true` (`ack (conditional)` when it sits under an `if` or `switch`) and `rand` for each `crypto/rand` use in the scanned trees. The acknowledgements are the field names in the contract's recognized-surfaces list; v0.7.0 adds `MaintenanceConfig.MaintenanceRunnerAcknowledged`, so a host that runs the authentication maintenance service sees one `ack` line for it, and P5 finds it when it is set from an expression. `AdministrationConfig.UserErasureRoute` is an opt-in, not an acknowledgement, and prints nothing. The informational lines are review evidence and never change the exit code:
+With `--posture` the ten P status lines follow the fifteen H lines, and informational lines follow the status block — `ack` for each acknowledgement written `true` (`ack (conditional)` when it sits under an `if` or `switch`) and `rand` for each `crypto/rand` use in the scanned trees. The acknowledgements are the field names in the contract's recognized-surfaces list; v0.7.0 adds `MaintenanceConfig.MaintenanceRunnerAcknowledged`, so a host that runs the authentication maintenance service sees one `ack` line for it, and P5 finds it when it is set from an expression. `AdministrationConfig.UserErasureRoute` is an opt-in, not an acknowledgement, and prints nothing. v0.8.0 adds `BrowserConfig.CookieDomainAcknowledged` (an `ack` line) and the two fail-open waivers, `PasswordConfig.CompromisedPasswordFailOpen` and `AbuseProtectionConfig.PublicRouteLimiterFailOpen`: a waiver written `true` prints `posture_waiver` instead of `ack` (`posture_waiver cmd/server/main.go:88: PublicRouteLimiterFailOpen`; `posture_waiver (conditional)` under an `if` or `switch`), and P5 finds any of the three set from an expression. v0.8.0 also lets P2 accept `web.TrustProxiesWithConfig(` (the struct-input form that carries `TrustRealIPHeader`) as the outermost middleware. The informational lines are review evidence and never change the exit code:
 
 ```text
 P5   ok        (3 acknowledgements)

@@ -25,10 +25,10 @@ import (
 const (
 	sentenceP0 = "The host resolves its runtime mode from the process environment only: through `environment.LoadEnvForMode`, `environment.ParseMode`, or an `environment.Mode`-typed env field tagged `required:\"true\"` with no `default:`; scanned production files call `environment.LoadEnv(`/`LoadPath(` nowhere; `ModeDevelopment`/`ModeProduction` appear only as an operand of `==`/`!=` or a `case`."
 	sentenceP1 = "For every recognized `Config{` literal or `var x <pkg>.Config` in a scanned function, that function names `RuntimeMode:` or `x.RuntimeMode =`; every `authentication.New` call passes a mode argument and every `authorization.New` call passes `WithRuntimeMode(`. (The guard proves the mode is NAMED; the pocket proves it is honored.)"
-	sentenceP2 = "`web.TrustProxies(` is the first argument of the first `.Use(` call on the handler the composition root passes to `web.Run`/`HTTPServer`."
+	sentenceP2 = "`web.TrustProxies(` or `web.TrustProxiesWithConfig(` is the first argument of the first `.Use(` call on the handler the composition root passes to `web.Run`/`HTTPServer`."
 	sentenceP3 = "`web.SecurityHeaders(` or `web.SecurityHeadersWithConfig(` appears in a `.Use(` call on that handler."
 	sentenceP4 = "A host that builds a `web.ServerConfig` calls its `ValidateProduction()`."
-	sentenceP5 = "Every recognized acknowledgement in scanned files is a boolean literal (`true` or `false`), never another expression; an option-form acknowledgement is a direct argument of the `New(` call; `--posture` prints one `ack` line (file:line, flag) per `true`, and `ack (conditional)` when it sits under `if`/`switch` — informational, exit code unchanged."
+	sentenceP5 = "Every recognized acknowledgement in scanned files is a boolean literal (`true` or `false`), never another expression; an option-form acknowledgement is a direct argument of the `New(` call; `--posture` prints one `ack` line (file:line, flag) per `true`, `posture_waiver` instead for a recognized fail-open waiver, and `ack (conditional)` or `posture_waiver (conditional)` when it sits under `if`/`switch` — informational, exit code unchanged."
 	sentenceP6 = "A host that mounts authentication builds its keys through `authentication.NewKeys(` with a `KeysInput` filled by `environment.ParseEnvTags` in a scanned file; `--posture` prints one informational `rand` line per `crypto/rand` use in scanned files so a review sees any other key minting (no ban: non-auth keys such as auth-cms's cursor key, `documents.go:43`, are legitimate)."
 	sentenceP7 = "`.env.example`, when present, carries no **uncommented** `sslmode=disable`/`DB_SSLMODE=disable` line; mentions the host's mode key ONLY in a comment (`# APP_RUNTIME_MODE=…` — an uncommented assignment, even empty, is a finding, because `LoadEnvForMode` refuses it); and names `TRUSTED_PROXY_COUNT` and `PUBLIC_BASE_URL`."
 	sentenceP8 = "Every `cms.Config` literal in scanned files names `AdminMiddleware` or `AdminUngatedAcknowledged` (the flip is not a boot refusal, so downstream hosts need the pre-deploy signal; G31 covers only this repo)."
@@ -73,6 +73,17 @@ var (
 		"TLSDisabledAcknowledged":        true,
 		"AppendOnlyWritableAcknowledged": true,
 		"MaintenanceRunnerAcknowledged":  true,
+		"CookieDomainAcknowledged":       true,
+		"CompromisedPasswordFailOpen":    true,
+		"PublicRouteLimiterFailOpen":     true,
+	}
+
+	// postureWaivers are the acknowledgement field names that waive a
+	// fail-closed default rather than acknowledge a refusal; a true literal
+	// prints a posture_waiver line instead of ack (P5).
+	postureWaivers = map[string]bool{
+		"CompromisedPasswordFailOpen": true,
+		"PublicRouteLimiterFailOpen":  true,
 	}
 
 	// postureAckOptionPkgs are the packages whose New takes the option-form
@@ -899,8 +910,8 @@ func evalP2(h *guardHost) guardResult {
 			continue
 		}
 		first := s.uses[0]
-		if len(first.Args) == 0 || !isCallTo(first.Args[0], s.useFile.name(sdkWeb), "TrustProxies") {
-			r.add(posOf(s.useFile.guardFile, first.Pos()), "the first .Use( on the served handler does not start with web.TrustProxies( (it runs outermost, so every later layer sees the resolved client IP)")
+		if len(first.Args) == 0 || !isCallTo(first.Args[0], s.useFile.name(sdkWeb), "TrustProxies", "TrustProxiesWithConfig") {
+			r.add(posOf(s.useFile.guardFile, first.Pos()), "the first .Use( on the served handler does not start with web.TrustProxies( or web.TrustProxiesWithConfig( (it runs outermost, so every later layer sees the resolved client IP)")
 		}
 	}
 	return r
@@ -1022,7 +1033,8 @@ func isLit(n ast.Node) bool {
 	return ok
 }
 
-// acknowledge checks one field-form acknowledgement and records its ack line.
+// acknowledge checks one field-form acknowledgement and records its ack or
+// posture_waiver line.
 func acknowledge(r *guardResult, f *postureFile, at ast.Node, stack []ast.Node, flag string, value ast.Expr) {
 	r.checked++
 	where := posOf(f.guardFile, at.Pos())
@@ -1031,9 +1043,14 @@ func acknowledge(r *guardResult, f *postureFile, at ast.Node, stack []ast.Node, 
 		r.add(where, flag+" is set from an expression, not a boolean literal (an acknowledgement is a wiring assertion written in the composition root)")
 		return
 	}
-	if set {
-		r.note(ackLabel(at, stack), where, flag)
+	if !set {
+		return
 	}
+	if postureWaivers[flag] {
+		r.note(waiverLabel(at, stack), where, flag)
+		return
+	}
+	r.note(ackLabel(at, stack), where, flag)
 }
 
 func ackLabel(n ast.Node, stack []ast.Node) string {
@@ -1041,6 +1058,13 @@ func ackLabel(n ast.Node, stack []ast.Node) string {
 		return "ack (conditional)"
 	}
 	return "ack"
+}
+
+func waiverLabel(n ast.Node, stack []ast.Node) string {
+	if conditional(n, stack) {
+		return "posture_waiver (conditional)"
+	}
+	return "posture_waiver"
 }
 
 func evalP6(h *guardHost) guardResult {

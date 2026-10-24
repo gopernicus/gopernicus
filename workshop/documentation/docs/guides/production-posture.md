@@ -5,10 +5,12 @@ description: What the framework refuses in production today, what is documented 
 
 # Production posture
 
-This page describes the framework **as it is on `main` at 2026-10-23, after SOC 2 slices S1–S3**
-(the production posture floor, audit completeness and integrity, retention and erasure; release
-records in `RELEASING.md`, host handoffs in `plans/soc2-s1-production-posture-handoff.md`,
-`plans/soc2-s2-audit-completeness-handoff.md` and `plans/soc2-s3-retention-erasure-handoff.md`).
+This page describes the framework **as it is on `main` at 2026-10-23, after SOC 2 slices S1–S3
+and S5** (the production posture floor, audit completeness and integrity, retention and erasure,
+transport and abuse hardening; release records in `RELEASING.md`, host handoffs in
+`plans/soc2-s1-production-posture-handoff.md`, `plans/soc2-s2-audit-completeness-handoff.md` and
+`plans/soc2-s3-retention-erasure-handoff.md`; S5 has no handoff file — its record carries the
+upgrade notes).
 Where a control is still planned, it says so; an item marked *planned* is not a control a host
 can claim yet.
 
@@ -90,6 +92,23 @@ Persistent stores are still the host's choice: an in-memory authentication or au
 store constructs in production, and `guard --posture` does not see which store a `Config`
 names. The scaffold wires the chosen connector.
 
+**Added by S5** (authentication v0.24.0, pgxdb v0.13.0, go-oidc v0.2.0):
+
+| Module | Production refuses | Sentinel | Acknowledgement |
+|---|---|---|---|
+| authentication | a session cookie with a `Domain` attribute | `ErrCookieDomainRefused` | `BrowserConfig.CookieDomainAcknowledged` (one `posture_waiver` WARN) |
+| authentication | a cookie `Domain` beside an `OriginPolicy` namespace rule (all modes): a namespace keeps session cookies host-only | `ErrCookieDomainWithNamespaceRule` | none — remove one |
+| pgxdb | `StatementTimeout` or `LockTimeout` set while the DSN or `PGOPTIONS` names the same parameter (all modes) | `sdk.ErrInvalidInput` at `Open` | none — set one |
+| go-oidc | a non-loopback `http` issuer it would discover from, i.e. without `WithJWKSURL` (all modes) | `New` fails | `WithInsecureIssuer()` (one WARN; development only — the authentication pocket's production engine refuses `http` issuers) |
+
+Two switches are **waivers** rather than acknowledgements: they refuse nothing, they turn a
+fail-closed default open. `AbuseProtectionConfig.PublicRouteLimiterFailOpen` admits requests
+when the rate limiter errors (production logs one `posture_waiver=PublicRouteLimiterFailOpen`
+WARN at `New`); `PasswordConfig.CompromisedPasswordFailOpen` admits a password when the breach
+checker errors (one WARN per admitted check). Both are literals in the composition root, and
+`guard --posture` (workshop/gopernicus v0.8.0) prints a `posture_waiver` line for each one
+written `true` (P5), where an acknowledgement prints `ack`.
+
 ## Retention (S3)
 
 Every row class the pockets write has an owner-set lifetime, each disposal is bounded, and the
@@ -145,13 +164,70 @@ reach.
 | jobs | an ordinary `Repositories.Queue` that does not implement `queue.TerminalPurger` | one WARN in **every** mode — the queue service takes no runtime mode; every bundled store implements it |
 | authorization, jobs and cms pgx stores | the admitted retention index missing (all modes) | one `index_missing=` WARN; the purge still runs, sorting per batch |
 
+## Transport and abuse (S5)
+
+Each flip below names its escape hatch; `RELEASING.md`'s S5 section carries the full upgrade
+notes table with module versions.
+
+- **`no-store` on `/auth`.** Every response the authentication pocket's routes write — HTML
+  pages, the OAuth2 authorization server, every JSON arm — carries `Cache-Control: no-store`.
+  No knob.
+- **Per-route IP budgets.** Per minute per client IP: `POST /auth/register` 10,
+  `/auth/verify` 20, `/auth/password/reset` 20, `/auth/refresh` 30 (the IP arm; the per-session
+  30 stays fixed), both verify-link routes 20, native OAuth start/complete/link-start 40 on one
+  shared key, invitation decline 10. `/auth/password/forgot` and `/auth/token` keep their per-IP
+  budgets in logic (`AuthenticationLimits`). Over budget is a 429 with `Retry-After`. Each is a
+  `ratelimiter.Limit` on `AbuseProtectionConfig.PublicRouteLimits`; there is no off switch — a
+  host behind its own edge throttle sets a large number.
+- **Origin gate on the JSON arm.** The JSON handlers of register, verify, forgot, reset, token and
+  verify-link answer 403 to a browser-borne request (one carrying `Origin` or `Sec-Fetch-Site`)
+  that fails the origin policy; a client sending neither passes. An SPA calling them adds its
+  origin to `BrowserConfig.AllowedOrigins` or `OriginPolicy`.
+- **Limiters fail closed, in every mode.** A limiter error — a Redis or Postgres outage, the
+  memory limiter at 10,000 keys — answers 503 with `Retry-After: 5` on every budgeted route, on
+  refresh (a silent refresh fails, so SPA users are signed out) and on every host route behind
+  `RateLimitByIP`. `PublicRouteLimiterFailOpen: true` admits instead, with a WARN per failure and,
+  in production, the waiver above; the production answer is a highly available limiter.
+- **Cookie `Domain`.** The two refusals in *Added by S5*: acknowledge a production `Domain`, and
+  never pair one with a namespace rule.
+- **`X-Real-IP`.** `web.TrustProxies(n)` reads `X-Forwarded-For` only, parses the chosen hop as
+  an IP and falls back to the peer on anything else. A proxy that sets only `X-Real-IP` needs
+  `web.TrustProxiesWithConfig(web.TrustProxiesConfig{TrustedProxyCount: n, TrustRealIPHeader:
+  true})`, which reads it only when the count is at least 1 and `X-Forwarded-For` is absent
+  (guard P2 accepts either form). Until then every client resolves to the proxy, so the budgets
+  above key the whole site to one IP; the authentication pocket logs a WARN naming
+  `TrustRealIPHeader` when a request carries `X-Real-IP`, no `X-Forwarded-For`, and resolves to
+  the peer.
+- **Statement and lock timeouts.** `pgxdb.Config.StatementTimeout` and `LockTimeout`
+  (`DB_STATEMENT_TIMEOUT`, `DB_LOCK_TIMEOUT`) bound every statement and lock wait on the pool;
+  zero, the default, leaves the server's or role's setting. Set them on the server process only:
+  a migrator that parses the same environment zeroes both after parsing, as the scaffold's
+  runner does from workshop/gopernicus v0.8.0, or index builds inherit the bound. Behind
+  PgBouncer in transaction mode leave them zero and use `ALTER ROLE … SET`. Turso has no
+  statement timeout.
+- **https-only issuer discovery.** `gooidc.New` refuses a non-loopback `http` issuer when it
+  discovers keys from it; `WithInsecureIssuer()` admits one in development, and a pinned
+  `WithJWKSURL` fetches nothing from the issuer and needs no hatch.
+- **Bounded JSON decode.** `web.DecodeJSON` reads at most 1 MiB (413 beyond it, whatever an
+  outer `MaxBytesReader` allows) and answers decode failures with fixed sentences, never Go type
+  names; `web.DecodeJSONLimit[T](r, n)` sets another bound. A panic on a JSON request answers a
+  JSON 500, and a 503 without `Retry-After` gets `Retry-After: 5`.
+- **Explicit-public page cache.** `cacher.Pages` stores a response only when its
+  `Cache-Control` carries `public` or `s-maxage`; header-less or `max-age`-only HTML is no
+  longer cached. `PageConfig.AllowImplicitPublic: true` restores it for routes that are public
+  by construction (the cms pocket sets it on its own public mount and sends no directive).
+- **cms uploads.** `Upload` stores only the sniffed types in `Config.AllowedMediaTypes`
+  (default png, jpeg, gif, webp, pdf — no SVG; anything else is a 400 naming the list), caps
+  bodies at `Config.MaxUploadBytes` (32 MiB, a 413), and media responses carry `nosniff` and a
+  `Content-Disposition` — `inline` for images, `attachment` for everything else, so PDFs
+  download.
+
 ## Documented only: nothing refuses it today
 
 | Knob | Today | Planned |
 |---|---|---|
 | `LOG_LEVEL=DEBUG` | authorization decision records carry principal and resource ids | keep INFO in production; redaction handler (S6) |
 | Authentication failure events | the rail is required in production (above) but many failure paths still write no event | failures on every path (S2) |
-| `Cache-Control: no-store` on `/auth` | the auth HTML pages set their own headers; JSON auth responses do not say `no-store` | S5 |
 
 ## Trust boundary
 

@@ -279,10 +279,10 @@ guard proves the composition asks for it. These ten lines are what
 |---|---|
 | **P0** | The host resolves its runtime mode from the process environment only: through `environment.LoadEnvForMode`, `environment.ParseMode`, or an `environment.Mode`-typed env field tagged `required:"true"` with no `default:`; scanned production files call `environment.LoadEnv(`/`LoadPath(` nowhere; `ModeDevelopment`/`ModeProduction` appear only as an operand of `==`/`!=` or a `case`. |
 | **P1** | For every recognized `Config{` literal or `var x <pkg>.Config` in a scanned function, that function names `RuntimeMode:` or `x.RuntimeMode =`; every `authentication.New` call passes a mode argument and every `authorization.New` call passes `WithRuntimeMode(`. (The guard proves the mode is NAMED; the pocket proves it is honored.) |
-| **P2** | `web.TrustProxies(` is the first argument of the first `.Use(` call on the handler the composition root passes to `web.Run`/`HTTPServer`. |
+| **P2** | `web.TrustProxies(` or `web.TrustProxiesWithConfig(` is the first argument of the first `.Use(` call on the handler the composition root passes to `web.Run`/`HTTPServer`. |
 | **P3** | `web.SecurityHeaders(` or `web.SecurityHeadersWithConfig(` appears in a `.Use(` call on that handler. |
 | **P4** | A host that builds a `web.ServerConfig` calls its `ValidateProduction()`. |
-| **P5** | Every recognized acknowledgement in scanned files is a boolean literal (`true` or `false`), never another expression; an option-form acknowledgement is a direct argument of the `New(` call; `--posture` prints one `ack` line (file:line, flag) per `true`, and `ack (conditional)` when it sits under `if`/`switch` — informational, exit code unchanged. |
+| **P5** | Every recognized acknowledgement in scanned files is a boolean literal (`true` or `false`), never another expression; an option-form acknowledgement is a direct argument of the `New(` call; `--posture` prints one `ack` line (file:line, flag) per `true`, `posture_waiver` instead for a recognized fail-open waiver, and `ack (conditional)` or `posture_waiver (conditional)` when it sits under `if`/`switch` — informational, exit code unchanged. |
 | **P6** | A host that mounts authentication builds its keys through `authentication.NewKeys(` with a `KeysInput` filled by `environment.ParseEnvTags` in a scanned file; `--posture` prints one informational `rand` line per `crypto/rand` use in scanned files so a review sees any other key minting (no ban: non-auth keys such as auth-cms's cursor key, `documents.go:43`, are legitimate). |
 | **P7** | `.env.example`, when present, carries no **uncommented** `sslmode=disable`/`DB_SSLMODE=disable` line; mentions the host's mode key ONLY in a comment (`# APP_RUNTIME_MODE=…` — an uncommented assignment, even empty, is a finding, because `LoadEnvForMode` refuses it); and names `TRUSTED_PROXY_COUNT` and `PUBLIC_BASE_URL`. |
 | **P8** | Every `cms.Config` literal in scanned files names `AdminMiddleware` or `AdminUngatedAcknowledged` (the flip is not a boot refusal, so downstream hosts need the pre-deploy signal; G31 covers only this repo). |
@@ -292,8 +292,8 @@ P0, P1, P5, P6 and P8 report `no scope` unless a scanned file imports a
 package on the list below (or a package beneath one); P2 and P3 report it
 without a `web.Run` or `HTTPServer` call, P4 without a built
 `web.ServerConfig`, P7 without a `.env.example`, and P9 when no store is
-mounted or none ships a `migrations/` directory. The `ack` and `rand`
-lines are review evidence, never findings: a waiver a host chose stays
+mounted or none ships a `migrations/` directory. The `ack`, `posture_waiver`
+and `rand` lines are review evidence, never findings: a waiver a host chose stays
 visible in every CI log, and so does every other place it mints key material.
 
 **P9 in full.** A store is mounted when the host's `go.mod` requires a
@@ -338,9 +338,21 @@ declare them.
   `DeliveryEphemeralAcknowledged`, `AdminUngatedAcknowledged`,
   `TLSUnverifiedAcknowledged`, `TLSDisabledAcknowledged`,
   `AppendOnlyWritableAcknowledged`,
-  `MaintenanceConfig.MaintenanceRunnerAcknowledged`.
+  `MaintenanceConfig.MaintenanceRunnerAcknowledged`,
+  `BrowserConfig.CookieDomainAcknowledged`; and the two **fail-open
+  waivers**, `PasswordConfig.CompromisedPasswordFailOpen` and
+  `AbuseProtectionConfig.PublicRouteLimiterFailOpen`, held to the same
+  literal rule, whose `true` prints `posture_waiver` rather than `ack`.
 - **the key constructor:** `authentication.NewKeys`, fed an
   `authentication.KeysInput`.
+
+> **Amendment 2026-10-23 (SOC 2 S5, workshop/gopernicus v0.8.0):** P2 also accepts
+> `web.TrustProxiesWithConfig(` (sdk v0.17.0's struct-input form, for
+> `TrustRealIPHeader`); the acknowledgements gain `CookieDomainAcknowledged`
+> and the fail-open waivers `CompromisedPasswordFailOpen` and
+> `PublicRouteLimiterFailOpen`, and P5 prints `posture_waiver` for a waiver's
+> `true`. Those are the only edits to the P2 and P5 sentences, this list and
+> the review-evidence sentence above.
 
 `--posture` requires workshop/gopernicus ≥ v0.5.0; an older pin refuses the flag — the binary
 exits 2, and a `go run …@<old>` invocation prints `exit status 2` and returns 1 — so CI treats any

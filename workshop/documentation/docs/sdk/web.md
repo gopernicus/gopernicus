@@ -83,15 +83,22 @@ JSON responders report write failures through `RecordError` as well as their
 return value. For text, bytes, files and plain streaming, use `net/http` and
 `io` directly.
 
-**Body limits are the host's.** There is no implicit global limit or
-content-type check. Wrap a route or group:
+**Body limits.** `DecodeJSON[T]` reads at most `DefaultBodyLimit` (1 MiB);
+an outer `http.MaxBytesHandler` with a larger limit no longer governs it. A
+route that needs another bound calls `DecodeJSONLimit[T](r, n)`; `n <= 0` is
+refused, so there is no unbounded mode. Decode failures wrap
+`sdk.ErrInvalidInput` with `ReadBody`'s fixed sentences ("request body is
+empty", "request body must be a JSON object"), never `encoding/json`'s text,
+which names Go types and fields; a `Validate()` error keeps its own. There is
+no content-type check. A body the handler reads itself, such as an upload,
+stays the host's to bound:
 
 ```go
-limitJSON := func(next http.Handler) http.Handler {
-    return http.MaxBytesHandler(next, apiBodyLimit)   // uploads can use a different limit
+limitUploads := func(next http.Handler) http.Handler {
+    return http.MaxBytesHandler(next, uploadLimit)
 }
-api := router.Group("/api", limitJSON)
-api.POST("/widgets", create)
+uploads := router.Group("/uploads", limitUploads)
+uploads.POST("/", upload)
 ```
 
 Limit errors reach `ErrValidation` as HTTP 413. For a stricter DTO contract,
