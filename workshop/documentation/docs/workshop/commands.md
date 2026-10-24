@@ -174,6 +174,8 @@ rand cmd/server/documents.go:43: crypto/rand.Read
 guard: clean (25 rules, 15 packages)
 ```
 
+P7 reads `.env.example` at the host root and skips comment lines. v0.9.0 adds a clause: an uncommented `DB_LOG_QUERIES` or `DB_LOG_QUERY_ARGS` set true (any spelling `strconv.ParseBool` reads as true, bare or behind a prefix such as `AUTH_`) is one finding at that line — `P7  .env.example:47: uncommented DB_LOG_QUERIES set true (comment it out; production refuses query logging)`. Both connectors refuse query logging in production and no acknowledgement exists for it, so the fix is to comment the line out; the `init` scaffold ships both keys commented.
+
 P9 is the one P rule that reads beyond the source tree. A store is mounted when the host's `go.mod` requires a framework `pockets/<pocket>/stores/<dialect>` module and a production file imports it; for each one that ships a `migrations/` directory, `--posture` resolves the module's directory with `go list -m` in the host root (a `go.work`, a `replace` or the module cache answers) and requires every `NNNN_<name>.sql` there to have a byte-identical copy, under any number, in `workshop/migrations/primary/`. A missing or edited copy is one finding per store file; the fix is a re-export — copy the store file into the ledger, never edit a copy. An immutability trigger file (`*_immutable.sql`) is the one optional file: a host that declines the triggers omits it, and the status line says so — `P9   ok        (2 stores; declined: 0022_security_events_immutable.sql)` — while a trigger copy the ledger does hold must still be byte-identical. With no mounted store it prints `no scope`:
 
 ```text

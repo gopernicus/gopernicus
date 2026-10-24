@@ -134,7 +134,8 @@ In production this host refuses to boot when:
 {{- end}}
 {{- if eq .DB "turso"}}
 - the Turso URL is not TLS (`libsql://`, `https://`, or `wss://` without
-  `tls=0`; a `file:` database is local) (`turso.ErrTLSRequired`);
+  `tls=0`; a `file:` database is local) or query logging is on
+  (`turso.ErrTLSRequired`, `turso.ErrQueryLoggingRefused`);
 {{- end}}
 - a pocket you mount meets one of its own development-only options: pass
   every pocket this same `mode`, and write any waiver as a literal
@@ -157,6 +158,46 @@ acknowledgement you wrote — `posture_waiver` instead for a fail-open waiver
 (`PublicRouteLimiterFailOpen`, `CompromisedPasswordFailOpen`). Exit 2 is a
 broken invocation — a release older than v0.5.0 does not know `--posture` — so
 CI treats it as a failure, never a pass.
+
+### Secrets and logs
+{{if .HasDB}}
+The connector's credentials are `sdk.Secret` values:
+{{- if eq .DB "pgx"}} `Config.DSN` (`DB_URL`)
+and `Config.Password` (`DB_PASSWORD`), which `environment.ParseEnvTags` fills
+like any string field.
+{{- else}} `Config.URL` and
+`Config.AuthToken`, which `cmd/server/main.go` and `workshop/migrations/main.go`
+wrap as `sdk.Secret(os.Getenv(…))`.
+{{- end}}
+A Secret prints `[redacted]` through `fmt`, `slog` and JSON, and `Reveal()` is
+its one read. A DSN or URL composed from one with `fmt` or `+` carries
+`[redacted]` instead of the credential, so `Open` refuses it with
+`sdk.ErrRedactedSecret` before connecting: compose from `Reveal()` and wrap the
+result in `sdk.Secret(…)`.
+{{end}}
+`logging.New` redacts, in every mode, the value of any attribute keyed by a
+credential name — `password`, `token`, `api_key`, `authorization`, `cookie`,
+`dsn` and the rest of `logging.DefaultRedactKeys`. `LOG_REDACT_KEYS` adds keys
+and never removes one (`LOG_REDACT_KEYS=client_ip,user_agent` drops the
+personal data `web.Logger` puts on every request line); there is no off switch.
+{{- if eq .DB "pgx"}}
+
+Query logging is development only. `DB_LOG_QUERIES=true` logs each query's SQL
+with its argument count and types, never values; `DB_LOG_QUERY_ARGS=true` adds
+the bind values verbatim and is inert without it. `.env.example` ships both
+commented out. Production refuses either (`pgxdb.ErrQueryLoggingRefused`), and
+`guard --posture` (workshop/gopernicus v0.9.0 and later) reports an uncommented
+one in `.env.example` (P7).
+{{- end}}
+{{- if eq .DB "turso"}}
+
+Query logging is development only. `Config.LogQueries` logs each query's SQL
+with its argument count and types, never values; `Config.LogQueryArgs` adds the
+bind values verbatim and is inert without it; this `main.go` sets neither.
+Production refuses either (`turso.ErrQueryLoggingRefused`), and
+`guard --posture` (workshop/gopernicus v0.9.0 and later) reports an uncommented
+`DB_LOG_QUERIES=true` or `DB_LOG_QUERY_ARGS=true` in `.env.example` (P7).
+{{- end}}
 {{- if eq .DB "pgx"}}
 
 ### Audit tables and the two database roles

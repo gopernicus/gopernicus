@@ -46,10 +46,10 @@ var (
 // go.mod must carry. Bump them with every tag the templates move to.
 var (
 	inlineHint = regexp.MustCompile(`^[A-Z0-9_]+=\S*\s+#`)
-	sdkPin     = baseModule + "/sdk v0.17.0"
+	sdkPin     = baseModule + "/sdk v0.18.0"
 	dbPins     = map[string]string{
-		"pgx":   baseModule + "/integrations/datastores/pgxdb v0.13.0",
-		"turso": baseModule + "/integrations/datastores/turso v0.8.0",
+		"pgx":   baseModule + "/integrations/datastores/pgxdb v0.14.0",
+		"turso": baseModule + "/integrations/datastores/turso v0.9.0",
 	}
 )
 
@@ -407,6 +407,14 @@ func TestScaffoldInitEnvTemplate(t *testing.T) {
 				if commented := strings.Contains(env, "\n# "+key+"="); commented != (db == "pgx") {
 					t.Errorf("emitted %s .env.example names # %s= = %t, want %t:\n%s", db, key, commented, db == "pgx", env)
 				}
+			}
+			for _, key := range []string{"DB_LOG_QUERIES", "DB_LOG_QUERY_ARGS"} {
+				if commented := strings.Contains(env, "\n# "+key+"=true\n"); commented != (db == "pgx") {
+					t.Errorf("emitted %s .env.example names # %s=true = %t, want %t (development only; production refuses):\n%s", db, key, commented, db == "pgx", env)
+				}
+			}
+			if !strings.Contains(env, "\n# LOG_REDACT_KEYS=\n") {
+				t.Errorf("emitted .env.example lacks the commented # LOG_REDACT_KEYS= line:\n%s", env)
 			}
 
 			gomod := readFile(t, filepath.Join(target, "go.mod"))
