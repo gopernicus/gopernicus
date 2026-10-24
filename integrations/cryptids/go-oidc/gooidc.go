@@ -114,9 +114,10 @@ type Verifier struct {
 }
 
 // New builds a Verifier pinned to issuer. Without WithJWKSURL it runs OIDC
-// discovery against issuer under ctx (bound it with a timeout); with it, New
-// performs no network I/O. At least one audience is required. Keys are fetched
-// lazily on the first token.
+// discovery against issuer under ctx (bound it with a timeout), so issuer must
+// be https, or http on loopback, unless WithInsecureIssuer; with it, New
+// performs no network I/O and issuer is only compared to iss. At least one
+// audience is required. Keys are fetched lazily on the first token.
 func New(ctx context.Context, issuer string, opts ...Option) (*Verifier, error) {
 	cfg := config{algorithms: slices.Clone(defaultAlgorithms)}
 	for _, opt := range opts {
@@ -155,14 +156,23 @@ func New(ctx context.Context, issuer string, opts ...Option) (*Verifier, error) 
 	}
 
 	jwksURL := cfg.jwksURL
+	plaintextDiscovery := false
 	if jwksURL == "" {
+		var err error
+		if plaintextDiscovery, err = validateDiscoveryIssuer(issuer, cfg.insecureIssuer); err != nil {
+			return nil, err
+		}
+		if plaintextDiscovery {
+			logger.Warn("gooidc: discovering over plain http (WithInsecureIssuer); development only",
+				"issuer", issuer)
+		}
 		discovered, err := discoverJWKSURL(ctx, client, issuer)
 		if err != nil {
 			return nil, err
 		}
 		jwksURL = discovered
 	}
-	if err := validateJWKSURL(jwksURL); err != nil {
+	if err := validateJWKSURL(jwksURL, plaintextDiscovery); err != nil {
 		return nil, err
 	}
 
@@ -275,9 +285,30 @@ func validateIssuer(issuer string) error {
 	return nil
 }
 
+// validateDiscoveryIssuer applies validateJWKSURL's transport rule to an
+// issuer New will discover: discovery names the key set, so it is fetched over
+// https, or plain http on loopback. insecure admits plain http anywhere and
+// reports plaintext so the caller can warn. A pinned WithJWKSURL skips this:
+// the issuer is then only compared to iss and nothing is fetched from it.
+func validateDiscoveryIssuer(issuer string, insecure bool) (plaintext bool, err error) {
+	u, err := url.Parse(issuer)
+	if err != nil {
+		return false, fmt.Errorf("gooidc: issuer %q must be an absolute http(s) URL: %w", issuer, sdk.ErrInvalidInput)
+	}
+	if u.Scheme == "https" || isLoopback(u.Hostname()) {
+		return false, nil
+	}
+	if insecure {
+		return true, nil
+	}
+	return false, fmt.Errorf("gooidc: issuer %q must use https for discovery (http is allowed for loopback only; pin the key set with WithJWKSURL, or opt in with WithInsecureIssuer for development): %w", issuer, sdk.ErrInvalidInput)
+}
+
 // validateJWKSURL requires https, admitting plain http only for loopback
-// (local dev issuers, tests): the key set is where trust comes from.
-func validateJWKSURL(raw string) error {
+// (local dev issuers, tests): the key set is where trust comes from. When
+// discovery itself ran over plain http (plaintextDiscovery), the jwks_uri it
+// returned carries no more trust than that channel, so http is admitted too.
+func validateJWKSURL(raw string, plaintextDiscovery bool) error {
 	u, err := url.Parse(raw)
 	if err != nil || u.Host == "" {
 		return fmt.Errorf("gooidc: JWKS URL %q must be absolute: %w", raw, sdk.ErrInvalidInput)
@@ -286,7 +317,7 @@ func validateJWKSURL(raw string) error {
 	case "https":
 		return nil
 	case "http":
-		if isLoopback(u.Hostname()) {
+		if plaintextDiscovery || isLoopback(u.Hostname()) {
 			return nil
 		}
 	}
