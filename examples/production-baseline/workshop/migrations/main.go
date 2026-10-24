@@ -106,6 +106,11 @@ func open(ctx context.Context, mode environment.Mode) (*pgxdb.DB, error) {
 	if err := environment.ParseEnvTags("", &cfg); err != nil {
 		return nil, err
 	}
+	// DB_STATEMENT_TIMEOUT and DB_LOCK_TIMEOUT are for the server process only:
+	// an index build can outlast a statement timeout, and a migration queued
+	// behind live traffic can outlast a lock timeout.
+	cfg.StatementTimeout = 0
+	cfg.LockTimeout = 0
 	cfg.RuntimeMode = mode
 	return pgxdb.Open(ctx, cfg)
 }

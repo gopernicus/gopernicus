@@ -1,5 +1,232 @@
 # Releasing gopernicus modules
 
+## Transport and abuse hardening (SOC 2 slice S5 — published 2026-10-23)
+
+Six annotated tags (not signed), each cut at its PR's squash-merge commit on `main`, pushed,
+THEN polled on the proxy, and cold-verified from a scratch consumer (`GOWORK=off`, an empty
+module cache, `proxy.golang.org`, `sum.golang.org`, `go mod verify`, `go build <module>/...`).
+Every one resolved on the first poll. Design and rulings:
+[plans/s5-transport-abuse-hardening.md](plans/s5-transport-abuse-hardening.md) (rev 2, ratified
+2026-10-23; its "Build-time deviations" section records the lead rulings taken during the
+build). Under the owner's 2026-10-23 process ruling this section is the whole record: there is
+no handoff file and no manifest. The handoff notes below say what a host does on upgrade; hosts
+adopt them once, at the roadmap's end. The operator surface is the docs site's *Production
+posture* guide: "Added by S5" (the refusals and the two waivers) and "Transport and abuse (S5)".
+
+| Step | Tag | Commit | PR | Cold verification |
+|---|---|---|---|---|
+| 1 | `sdk/v0.17.0` | `ba561be1` | #177 (PR-1) | OK, poll 1 |
+| 2 | `integrations/datastores/pgxdb/v0.13.0` | `c9882f13` | #176 (PR-4; cut after the six pgx store legs on merged `main`) | OK, poll 1; also built the MVS set (below) |
+| 3 | `integrations/cryptids/go-oidc/v0.2.0` | `815e8435` | #175 (PR-5) | OK, poll 1 |
+| 4 | `pockets/authentication/v0.24.0` | `99b9e30d` | #180 (PR-2; cut after the auth store legs on merged `main`) | OK, poll 1; PR-7 rebuilt it cold beside `stores/pgx` v0.11.0 and `stores/turso` v0.10.0 |
+| 5 | `pockets/cms/v0.6.0` | `e36add4a` | #178 (PR-3; its `AllowImplicitPublic` line landed in #177; cut after the cms store legs) | OK, poll 1; PR-7 rebuilt it cold beside `stores/pgx` v0.5.0 and `stores/turso` v0.4.0 |
+| 6 | `workshop/gopernicus/v0.8.0` | `764d5d6e` | #179 (PR-6) | OK, poll 1; a cold `init --db pgx` from `@v0.8.0` requires sdk v0.17.0 and pgxdb v0.13.0, builds, and its `guard` is clean (25 rules, 2 packages) |
+
+The trains are independent, so the tags were cut as they became ready — 3, 2, 1, 5, 6, then 4 —
+never a dependent before its dependency. PR-7 is this record and the example repins.
+
+**Step 2's MVS set.** One scratch consumer resolved pgxdb v0.13.0 beside every released pgx
+store — authentication `stores/pgx` v0.11.0, authorization `stores/pgx` v0.21.0, cms
+`stores/pgx` v0.5.0, events `stores/pgx` v0.4.0, jobs `stores/pgx` v0.7.0 and secrets
+`stores/pgx` v0.2.1 — `go.mod` selected v0.13.0, `go mod verify` passed and `go build` succeeded.
+PR-7 re-ran the set from an empty module cache with the same result.
+
+**Not tagged.** Every store module (R-1: no store code changed; MVS lifts a store's core and
+pgxdb pins inside a host), `integrations/datastores/turso` (one README sentence),
+`pockets/authorization`, `pockets/jobs`, `pockets/events`, `pockets/secrets`,
+`pockets/cms/views/goth`, `pockets/authentication/views/goth`, `ui/goth` and `pockets`. No
+migration. Nothing retracts. **C1 is not in S5:** the `pgxdb.QuerierFrom` foreign-`*DB` refusal
+(the roadmap carry-over) is deferred to the per-tenant authorities plan (R-2); the carry-over
+stays open and the confidentiality row C1 is not claimed.
+
+**Upgrade notes.** Ten behaviour flips with a hatch, five observable changes without a knob
+(rows 2, 3, 12, 15, 16) and three additive rows (4, 7, 18). Rows 11 (production), 12 (any mode),
+16 (only with a double setting) and 17 (a discovering http issuer) fail construction. Row 17 is
+reworded from the plan per build-time deviation 1.
+
+| # | Flip | What the host sees | Hatch | Module@version |
+|---|---|---|---|---|
+| 1 | `DecodeJSON` bounded at 1 MiB | bodies > 1 MiB 413; an outer larger `MaxBytesReader` no longer governs | `DecodeJSONLimit[T](r, n)` | sdk@v0.17.0 |
+| 2 | fixed decode-error text | 400 carries `ReadBody`'s sentences, never Go type names | none (match on `code`, not text) | sdk@v0.17.0 |
+| 3 | `Panics` answers JSON to JSON clients | 500 body is JSON when `Accept`/`Content-Type` is JSON | none | sdk@v0.17.0 |
+| 4 | static `nosniff`; `X-Request-ID` validated; unparsable forwarded hop → peer; 503 `Retry-After: 5` | additive | none | sdk@v0.17.0 |
+| 5 | `X-Real-IP` ignored by default | a proxy setting only `X-Real-IP` attributes the peer; auth WARN names the knob | `TrustProxiesWithConfig(TrustProxiesConfig{…, TrustRealIPHeader: true})` | sdk@v0.17.0 |
+| 6 | page cache stores only `public`/`s-maxage` | header-less or `max-age`-only HTML no longer cached | `PageConfig.AllowImplicitPublic: true` (cms sets it itself) | sdk@v0.17.0 |
+| 7 | `no-store` on every `/auth` response; `X-Real-IP` posture WARN | additive | none | authentication@v0.24.0 |
+| 8 | per-route IP budgets | new 429s on register/verify/reset/verify-link/native OAuth | `AbuseProtectionConfig.PublicRouteLimits.<Route>` | authentication@v0.24.0 |
+| 9 | origin gate on the JSON arm | a same-site/cross-origin SPA calling register/verify/reset/token/verify-link without an allowlisted origin gets 403 | `BrowserConfig.AllowedOrigins` / `OriginPolicy` | authentication@v0.24.0 |
+| 10 | limiters fail closed in every mode | a limiter outage 503s the budgeted routes incl. silent refresh and host `RateLimitByIP` routes | `PublicRouteLimiterFailOpen: true` (production: posture waiver WARN) | authentication@v0.24.0 |
+| 11 | cookie `Domain` refused in production | `New` fails `ErrCookieDomainRefused` | `BrowserConfig.CookieDomainAcknowledged` | authentication@v0.24.0 |
+| 12 | cookie `Domain` + namespace rule refused in every mode | `New` fails `ErrCookieDomainWithNamespaceRule` | none — remove one (R-3) | authentication@v0.24.0 |
+| 13 | upload allow-list by sniffed type | non-listed uploads 400 naming the allowed types | `Config.AllowedMediaTypes` | cms@v0.6.0 |
+| 14 | upload cap | > 32 MiB 413 | `Config.MaxUploadBytes` | cms@v0.6.0 |
+| 15 | media `nosniff` + `Content-Disposition`; PDFs as `attachment` | visitors download PDFs instead of viewing inline | none (R-6 may pick inline + `CSP: sandbox`) | cms@v0.6.0 |
+| 16 | timeout knobs; DSN-and-Config double setting refused | `Open` fails `ErrInvalidInput` only when both name the parameter | set one | pgxdb@v0.13.0 |
+| 17 | https-only issuer when discovering | a non-loopback http issuer that discovers fails `New` before any fetch, naming the fix; v0.1.0 already failed a container-hostname issuer whose `jwks_uri` is on the same host (at the key-set check), so only an http issuer whose discovered key set is https or loopback newly fails; a pinned `WithJWKSURL` is exempt | `WithInsecureIssuer()` (dev only; also admits a plain-http discovered `jwks_uri`) | go-oidc@v0.2.0 |
+| 18 | P2 second name; P5 three names; scaffold migrator zeroes timeouts | additive / informational | none | workshop@v0.8.0 |
+
+**Handoff notes — what a host does on upgrade, per module** (applied at the roadmap's end).
+- **`sdk` v0.17.0.** Grep for `web.DecodeJSON`: a route that must accept more than 1 MiB moves to
+  `DecodeJSONLimit[T](r, n)` (`n <= 0` is refused — there is no unbounded mode). Clients that
+  match decode-error text match on `code`. A `cacher.Pages` mount whose handlers send no
+  `Cache-Control: public` or `s-maxage` stops storing: add the directive, or set
+  `PageConfig.AllowImplicitPublic: true` when the routes are public by construction (cms does,
+  on its own mount). An upstream that mints `X-Request-ID` values outside 1–128 characters of
+  `[A-Za-z0-9._-]` sees them replaced by a fresh id. **The `X-Real-IP` flip and its WARN, together
+  (rows 5 and 7):** `web.TrustProxies(n)` now reads `X-Forwarded-For` only, so behind a proxy
+  that sets only `X-Real-IP` every client resolves to the proxy — and the new authentication
+  budgets then key the whole site to one IP. In production the authentication pocket logs one
+  WARN naming `web.TrustProxiesConfig.TrustRealIPHeader` the first time a request carries
+  `X-Real-IP`, no `X-Forwarded-For`, and resolves to the peer (development logs nothing; the
+  observer is production-only). The fix is `web.TrustProxiesWithConfig(web.TrustProxiesConfig{
+  TrustedProxyCount: n, TrustRealIPHeader: true})`, which reads `X-Real-IP` only when the count
+  is at least 1 and `X-Forwarded-For` is absent; run workshop v0.8.0's guard, since v0.7.0's P2
+  does not know the second name.
+- **`pockets/authentication` v0.24.0** (requires sdk v0.17.0; `stores/pgx` v0.11.0 and
+  `stores/turso` v0.10.0 resolve with it unchanged; no migration). Read the README's "Per-IP
+  budgets by route" table; test fixtures and load scripts that post register or verify from one
+  IP raise `AbuseProtectionConfig.PublicRouteLimits` (fields are `ratelimiter.Limit`, zero takes
+  the default, no off switch and no env tags — set them in code). An SPA on another origin that
+  calls register, verify, forgot, reset, token or verify-link adds that origin to
+  `BrowserConfig.AllowedOrigins` (or `OriginPolicy`) BEFORE the upgrade; the native verify-link
+  shares the `verify_link` budget but, like every native route, is not origin-gated. Decide the
+  limiter posture: every budget now fails closed in every mode, so run a highly available
+  limiter, or set `PublicRouteLimiterFailOpen: true` as a literal (production logs one
+  `posture_waiver=PublicRouteLimiterFailOpen` WARN at `New`; `guard --posture` v0.8.0 prints it
+  as `posture_waiver`). A production host that sets `SessionCookie.Domain` sets
+  `BrowserConfig.CookieDomainAcknowledged: true` (a literal; production logs one
+  `posture_waiver=CookieDomainAcknowledged` WARN at `New`, P5 prints its `ack`) or drops the
+  `Domain`; a `Domain` beside an `OriginPolicy` namespace rule must lose one of the two. No host
+  action for `no-store`.
+- **`pockets/cms` v0.6.0** (requires sdk v0.17.0; `stores/pgx` v0.5.0 and `stores/turso` v0.4.0
+  unchanged). The sniffed bytes decide an upload's type — the client's `Content-Type` is never
+  consulted. A host that accepts types beyond png, jpeg, gif, webp and pdf (SVG is absent by
+  design) sets `Config.AllowedMediaTypes`; an unparsable entry fails `Register`. A host that
+  uploads more than 32 MiB sets `Config.MaxUploadBytes` (negative fails `Register`) and keeps its
+  edge body limit at or above it. Assets already stored with an unlisted type are still served,
+  as `attachment`; PDFs now download instead of opening inline (R-6). Nothing changes on the
+  page-cache wire. The pocket's docs are `docs/pockets/cms.md` on the docs site.
+- **`integrations/datastores/pgxdb` v0.13.0.** Optional knobs `DB_STATEMENT_TIMEOUT` and
+  `DB_LOCK_TIMEOUT` (`Config.StatementTimeout`, `Config.LockTimeout`; zero leaves the server
+  default; negative or under 1 ms fails `Open`). They are for the server process only: a
+  migrator that parses `pgxdb.Config` from the server's environment zeroes both after
+  `ParseEnvTags` (the scaffold and `examples/production-baseline` do) or an index build inherits
+  the statement timeout. Set each in one place — a field set while the DSN, its `options`,
+  `PGOPTIONS` or a service-file entry also names the parameter fails `Open` with
+  `ErrInvalidInput` (a startup parameter would otherwise silently win). Behind PgBouncer
+  transaction mode, which rejects unknown startup parameters, use `ALTER ROLE … SET` instead. A
+  timed-out statement surfaces as an unmapped SQLSTATE (57014, or 55P03 for a lock), so a 500.
+  Turso has no statement timeout (`BusyTimeout` is its knob).
+- **`integrations/cryptids/go-oidc` v0.2.0.** A discovering issuer is https, or http on
+  loopback. A development issuer on a container hostname either pins its key set with
+  `WithJWKSURL` or opts in with `WithInsecureIssuer()` (one WARN when used; the pocket's
+  production engine refuses http issuers anyway). The refusal wraps `sdk.ErrInvalidInput`; there
+  is no new error variable.
+- **`workshop/gopernicus` v0.8.0.** Bump the tool pin (`go get -tool
+  github.com/gopernicus/gopernicus/workshop/gopernicus@v0.8.0`) or run `@v0.8.0 guard --posture
+  .`. P2 accepts `web.TrustProxiesWithConfig(` beside `web.TrustProxies(`; P5 recognizes
+  `CookieDomainAcknowledged` (`ack`) and the two FailOpen flags, whose `true` literal prints
+  `posture_waiver` (`posture_waiver (conditional)` under `if`/`switch`) — the P5 sentence in
+  `examples/README.md` changed with it. A new scaffold pins sdk v0.17.0 and pgxdb v0.13.0, its
+  migrator zeroes the two timeouts, and its `.env.example` ships them commented out. The CLI's
+  `version` still prints the `0.0.0-dev` placeholder.
+- **Examples (this PR).** Every example builds at `GOWORK=off` on the S5 tags (pins below); wiring
+  is unchanged — the defaults are the safe ones. `examples/production-baseline`'s migrator zeroes
+  `StatementTimeout` and `LockTimeout` after `ParseEnvTags`, and its `.env.example` ships
+  `DB_STATEMENT_TIMEOUT=30s` and `DB_LOCK_TIMEOUT=5s` active for the server. Pins moved (explicit
+  `GOWORK=off go get`, then `go mod tidy`): `auth-cms` sdk v0.16.0→v0.17.0, authentication
+  v0.23.0→v0.24.0, cms v0.5.0→v0.6.0, pgxdb v0.12.0→v0.13.0, go-oidc v0.1.0→v0.2.0; `cms` sdk
+  v0.16.0→v0.17.0, cms v0.5.0→v0.6.0; `external-identity` sdk v0.14.0→v0.17.0, authentication
+  v0.19.1→v0.24.0, go-oidc v0.1.0→v0.2.0; `goth-showcase` sdk v0.9.0→v0.17.0; `jobs-minimal` sdk
+  v0.16.0→v0.17.0; `minimal` sdk v0.16.0→v0.17.0, cms v0.5.0→v0.6.0; `production-baseline` sdk
+  v0.16.0→v0.17.0, authentication v0.23.0→v0.24.0, pgxdb v0.12.0→v0.13.0, go-oidc
+  v0.1.0→v0.2.0. No non-S5 pin moved. `external-identity` and `goth-showcase` did not build at
+  `GOWORK=off` before this repin (their code had moved past sdk v0.14.0 / v0.9.0); they do now.
+
+**Verification record.**
+- CI `check` and `vuln` (push and pull_request events) and the CodeQL analyses passed on the
+  final run of every code PR, #175–#180. `make guard` runs thirty-five guards (S5 adds none).
+- Live legs, every leg on a fresh database of a scratch PostgreSQL 17 and a fresh local libSQL
+  server, counted with `go test -json`; the store and pocket legs ran on merged `main` before
+  each tag. Pass / fail / skip: pgxdb's own live leg (on the #176 branch) 490 / 0 / 0 (`SHOW
+  statement_timeout` equals the knob, `pg_sleep` past it returns 57014, a lock wait past
+  `lock_timeout` returns 55P03, both double-setting forms refused). The six pgx store legs @
+  `c9882f13`, before step 2, bare and schema-qualified: authentication 432 / 0 / 1 each,
+  authorization 783 / 0 / 1 each (the pre-existing `TestCollationControlsOrdering_NonC`, which
+  needs a non-C DSN), cms 59 / 0 / 1 bare (`TestLive_TruncateCascadeStaysInSchema` runs only
+  schema-qualified) and 60 / 0 / 0, events 18 / 0 / 0 each, jobs 120 / 0 / 0 each, secrets 30
+  / 0 / 0 each. cms @ `e36add4a`, before step 5: pgx 59 / 0 / 1 bare and 60 / 0 / 0 schema,
+  turso 49 / 0 / 0, core 147 / 0 / 0. Authentication @ `99b9e30d`, before step 4: pgx 432 / 0
+  / 1 bare and 432 / 0 / 1 schema (the collation skip), turso `-tags=integration` 737 / 0 / 0,
+  core 2813 / 0 / 3 (three gated `TestInProcessCharacterization` subtests).
+- Every example builds at `GOWORK=off` against the tags (`go version -m` on the built binaries
+  shows sdk v0.17.0, authentication v0.24.0, cms v0.6.0, pgxdb v0.13.0, go-oidc v0.2.0 where
+  used); `examples/external-identity` `go test ./...` and `go vet ./...` pass at `GOWORK=off`.
+  `make check` passes on the repinned tree, and `make guard-host-posture` is clean over the seven
+  examples (the baseline prints exactly one `ack`, `MaintenanceRunnerAcknowledged`).
+- Run-and-look on those binaries (this PR). `examples/auth-cms` (development, memory limiter,
+  `TRUSTED_PROXY_COUNT=1`): `POST /auth/login` 401 and `GET /auth/login` 200 both carry
+  `Cache-Control: no-store`; twelve registers from one forwarded IP answered ten 400s, then
+  two 429s with `Retry-After: 60`; a cross-site register 403 `origin_rejected`, the same POST
+  without `Origin`/`Sec-Fetch-Site` 400; a 300-character `X-Request-ID` came back as a fresh
+  32-character id; 10,100 refreshes from distinct forwarded IPs answered 10,000 401s, then 503
+  with `Retry-After: 5` and one `public route rate limiter failed … fail_open=false` WARN per
+  refusal. `examples/cms` (development, fresh libSQL): an HTML file named `.png` 400
+  "unsupported file type; allowed: image/png, image/jpeg, image/gif, image/webp,
+  application/pdf"; a 40 MiB upload 413 "upload too large"; a PNG sent as `text/html` stored
+  and served `image/png`, `inline; filename=real.png`, `nosniff`; a PDF served `attachment;
+  filename=doc.pdf`, `nosniff`; `GET /` twice MISS then HIT with no `Cache-Control` on the
+  wire. `examples/minimal`: a goth asset carries `nosniff` (its `SecurityHeaders` sets it too;
+  the sdk consumer below has none); `GET /` HIT with no `Cache-Control`; a valid request id is
+  reused, a 300-character one replaced. `examples/production-baseline`: the migrator run with
+  `DB_STATEMENT_TIMEOUT=-1s DB_LOCK_TIMEOUT=-1s` reached the dial (zeroed) while the server
+  with the same environment refused `StatementTimeout cannot be negative` (honoured). A
+  scratch consumer of sdk v0.17.0 (`DecodeJSON` route, `Panics`, a failing limiter): a
+  malformed body 400 "request body must be a JSON object"; a 2,000,000-byte body 413
+  `payload_too_large`; a panic JSON 500 with `Accept: application/json`, HTML otherwise;
+  static `nosniff`; a failing limiter 503 `Retry-After: 5`; `X-Forwarded-For: not-an-ip` and
+  `X-Real-IP` alone both resolve to the peer, a bracketed ported IPv6 hop to `2001:db8::5`. A
+  scratch consumer of go-oidc v0.2.0: a discovering `http://` container-hostname issuer
+  refused before any fetch, accepted with a pinned https `WithJWKSURL`, and admitted to
+  discovery with one WARN under `WithInsecureIssuer()`.
+- From the PR records: production-baseline cannot boot locally in production (TLS PostgreSQL,
+  an https issuer, a hardcoded `Secure: true` and no cookie-domain variable), so the cookie
+  `Domain` refusal and the production `X-Real-IP` WARN (exactly one for two requests) were proven
+  in-process over its real production composition (#180); a cold scaffold's migrator with
+  `DB_STATEMENT_TIMEOUT=30s DB_LOCK_TIMEOUT=-1s` reached the dial while its server refused the
+  negative value, and a planted host printed `posture_waiver … PublicRouteLimiterFailOpen` with
+  `P2 ok` on `TrustProxiesWithConfig` (#179).
+
+**Owner rulings.** Tags are annotated, not signed (ruling of 2026-10-22). **R-1:** no store tag
+and no repin PR, but the live legs were mandatory before pgxdb, authentication and cms (above).
+**R-2:** `QuerierFrom` deferred to the per-tenant authorities plan; C1 not claimed. **R-3:** a
+cookie `Domain` beside a namespace rule is refused in every mode, no waiver. **R-4:** the default
+budgets as recommended (register 10, verify 20, reset 20, verify-link 20, refresh 30 on the IP
+arm, decline 10, native OAuth 40 on one shared key; forgot and `/auth/token` keep their logic
+per-IP budgets). **R-5:** the page cache stores only on `public` or `s-maxage`, checked at commit
+and `validPage`; cms sets `AllowImplicitPublic` on its own mount and emits no directive. **R-6:**
+PDFs as `attachment`. Every lead ruling taken during the build is in the executed plan's
+"Build-time deviations"; each one a host can see is folded into the rows and notes above.
+
+**Known and deferred.**
+- `pgxdb.QuerierFrom` foreign-`*DB` refusal: deferred to the per-tenant authorities plan (R-2;
+  the correct shape is in the executed plan's Notes); the carry-over stays open, C1 not claimed.
+- FHS-6's fail-open counter is not built (the flag now fails closed; a waiver logs per failure).
+- Per-IP keys use the full IPv6 address; a `/64` bucketing option on `TrustProxiesConfig` is a
+  follow-up (S6 or later).
+- `pgxdb`'s existing `hasSessionTimeZone` substring check also matches `-c log_timezone=…`
+  (follow-up; the new timeout check uses an exact-name parser).
+- cms renders a refused upload's error text raw at 400 (pre-existing), so the allow-list message
+  ends `: invalid input`.
+- A pathological limiter that wraps `sdk.ErrInvalidInput` would make the refresh arm answer 400,
+  not 503 (left).
+- `examples/production-baseline`'s `cmd/bootstrap` parses `pgxdb.Config` and keeps the server
+  timeouts; it runs one grant, so they do not bite.
+- `workshop/documentation/docs/workshop/commands.md` still shows `@v0.6.0 guard --posture .`
+  for hosts without a tool pin (the scaffold README moves to `@v0.8.0` here).
+- Out of S5: escalating lockout (S4), `web.Logger` on `web.ClientIP` (S6), an SSE stream cap and
+  explicit `ReadHeaderTimeout`/`MaxHeaderBytes` (an sdk follow-up issue, owner files).
+
 ## Retention and erasure (SOC 2 slice S3 — published 2026-10-23)
 
 Fourteen annotated tags (not signed), each cut at its PR's squash-merge commit on `main`,
