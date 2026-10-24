@@ -3,19 +3,62 @@ package authentication
 import (
 	"encoding/json"
 	"math"
+	"math/bits"
 	"slices"
 	"strings"
 	"time"
 )
 
-// defaultMFAMethods are the RFC 8176 amr values that count as MFA when
-// ClaimMapping.MFAMethods is empty.
-var defaultMFAMethods = []string{"mfa", "otp", "hwk", "sms", "swk", "pop"}
+// amrMultiFactor is the amr value that asserts MFA on its own.
+const amrMultiFactor = "mfa"
+
+const (
+	factorKnowledge amrFactor = 1 << iota
+	factorPossession
+	factorInherence
+)
+
+// amrFactors is the IANA amr registry, factor-categorised: the strict default
+// rule reads it when ClaimMapping.MFAMethods is empty. Apart from mfa, a value
+// absent here, registered (user, geo, rba, wia, mca) or not, is no factor and
+// never raises assurance. pop is registered from OpenID EAP ACR Values 1.0,
+// not RFC 8176.
+var amrFactors = map[string]amrFactor{
+	"pwd": factorKnowledge,
+	"pin": factorKnowledge,
+	"kba": factorKnowledge,
+
+	"otp": factorPossession,
+	"sms": factorPossession,
+	"tel": factorPossession,
+	"hwk": factorPossession,
+	"swk": factorPossession,
+	"sc":  factorPossession,
+	"pop": factorPossession,
+
+	"fpt":    factorInherence,
+	"face":   factorInherence,
+	"iris":   factorInherence,
+	"retina": factorInherence,
+	"vbm":    factorInherence,
+}
+
+// amrFactor is one authentication factor category, as a bit so a set of
+// categories is a mask.
+type amrFactor uint8
 
 // ClaimMapping names the claims NewOIDC reads, as dotted paths into the
 // verified claims. A path segment that is itself a claim name containing dots
 // (a URL-namespaced claim) resolves as a literal key first. Empty fields take
 // the defaults in parentheses.
+//
+// MFAMethods decides which amr values set Identity.MFA. Empty (the default) is
+// the strict rule over the IANA amr registry, factor-categorised: "mfa", or
+// values from at least two factor categories — knowledge (pwd, pin, kba),
+// possession (otp, sms, tel, hwk, swk, sc, pop), inherence (fpt, face, iris,
+// retina, vbm). One factor alone is not MFA, and any other value is no factor.
+// Set, it is the hatch: any listed value alone sets MFA and no other value
+// does, so list a value only when the issuer emits it after a second factor.
 type ClaimMapping struct {
 	Subject       string   // ("sub")
 	Email         string   // ("email")
@@ -25,7 +68,7 @@ type ClaimMapping struct {
 	DisplayName   string   // ("name")
 	AuthTime      string   // ("auth_time"; falls back to "iat")
 	AMR           string   // ("amr")
-	MFAMethods    []string // amr values counting as MFA ("mfa","otp","hwk","sms","swk","pop")
+	MFAMethods    []string // amr values each counting as MFA (empty: the strict rule above)
 	MFAFlag       string   // optional path whose non-empty or true value means MFA ("")
 	Tenant        string   // optional ("")
 	SignInMethod  string   // optional path naming how the subject signed in ("")
@@ -55,12 +98,30 @@ func (m ClaimMapping) withDefaults() ClaimMapping {
 	def(&m.DisplayName, "name")
 	def(&m.AuthTime, "auth_time")
 	def(&m.AMR, "amr")
-	if len(m.MFAMethods) == 0 {
-		m.MFAMethods = defaultMFAMethods
-	}
 	m.MFAMethods = slices.Clone(m.MFAMethods)
 	m.Extra = slices.Clone(m.Extra)
 	return m
+}
+
+// amrMFA applies the MFAMethods rule to methods: any-of over an explicit
+// list, else "mfa" or at least two factor categories.
+func (m ClaimMapping) amrMFA(methods []string) bool {
+	if len(m.MFAMethods) > 0 {
+		for _, method := range methods {
+			if slices.Contains(m.MFAMethods, method) {
+				return true
+			}
+		}
+		return false
+	}
+	var seen amrFactor
+	for _, method := range methods {
+		if method == amrMultiFactor {
+			return true
+		}
+		seen |= amrFactors[method]
+	}
+	return bits.OnesCount8(uint8(seen)) >= 2
 }
 
 // lookup resolves a dotted path. At each level the longest literal key wins

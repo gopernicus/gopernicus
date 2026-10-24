@@ -103,13 +103,7 @@ func (o *OIDC) identity(claims map[string]any) (Identity, error) {
 
 	id.EmailVerified = id.Email != "" && lookupBool(claims, m.EmailVerified)
 	id.PhoneVerified = id.Phone != "" && (o.trustPhone || lookupBool(claims, m.PhoneVerified))
-	id.MFA = m.MFAFlag != "" && lookupFlag(claims, m.MFAFlag)
-	for _, method := range id.Methods {
-		if slices.Contains(m.MFAMethods, method) {
-			id.MFA = true
-			break
-		}
-	}
+	id.MFA = (m.MFAFlag != "" && lookupFlag(claims, m.MFAFlag)) || m.amrMFA(id.Methods)
 
 	if m.SignInMethod != "" && len(o.denySignIn) > 0 {
 		if method := lookupString(claims, m.SignInMethod); slices.Contains(o.denySignIn, method) {

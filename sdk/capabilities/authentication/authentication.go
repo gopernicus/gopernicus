@@ -121,8 +121,16 @@ type Identity struct {
 	AuthenticatedAt time.Time // auth_time, else iat
 	ExpiresAt       time.Time
 	Methods         []string // amr verbatim
-	MFA             bool
-	Attributes      map[string]string // Profile Claims.Extra paths, string-valued, at most MaxAttributes
+
+	// MFA is the provider's assertion that this sign-in used multiple factors:
+	// authentication with at least two factor categories (knowledge,
+	// possession, inherence), or an explicit MFA claim or flag. A one-factor
+	// sign-in leaves it false, and evidence the provider cannot categorise
+	// never sets it. Every Provider is held to this meaning, whatever evidence
+	// it reads.
+	MFA bool
+
+	Attributes map[string]string // Profile Claims.Extra paths, string-valued, at most MaxAttributes
 }
 
 // Clone returns a copy that shares no slice or map with i. Consumers clone on
