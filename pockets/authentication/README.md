@@ -210,11 +210,15 @@ login/password-token issuance, password-reset starts, sensitive-code starts and
 sensitive-password proofs. Defaults per minute are 5/30, 3/20, 5/30 and 5/30
 respectively. Full zero limits select defaults; partial invalid limits fail boot.
 Subject keys contain digests; hosts supply trusted client IP context and a shared
-limiter for production. Limiter failures fail closed on these four budgets. Two other
-budgets fail OPEN on a limiter error (WARN, request admitted): the HTTP per-IP budgets on
-`POST /auth/refresh` and invitation decline (`inbound/http/public_rate_limit.go`,
-`FailOpen: true`) and the per-session refresh budget (`logic/authentication/refresh.go`).
-Making those fail closed in production is planned (SOC 2 slice S5).
+limiter for production. `AbuseProtectionConfig.PublicRouteLimits` sets the per-IP
+edge budgets of register, verify, password reset, verify-link, native OAuth, refresh
+and invitation decline (`ratelimiter.Limit` fields; zero → default; an invalid limit
+fails boot; no off switch — a host behind its own edge throttle sets a large number).
+[Per-IP budgets by route](#per-ip-budgets-by-route) lists the per-IP budget of every public route.
+Every budget fails CLOSED on a limiter error, in every mode: the service budgets
+always, and the HTTP budgets plus the per-session refresh budget unless
+`AbuseProtectionConfig.PublicRouteLimiterFailOpen` is set (see
+[Rate-limiter outage policy](#rate-limiter-outage-policy)).
 
 A sensitive code has an operation/session/channel binding and a distinct delivery
 issuance key. Concurrent starts cannot reuse a queued message for a replaced code.
@@ -353,27 +357,41 @@ JSON bodies are strictly decoded (unknown fields → 400). Optional subsystems a
 **deny-by-absence**: leave the enabling collaborator nil and the routes are NOT
 registered (404) — never a half-registered state. Every sensitive credential/
 identifier mutation is `CredentialManagement`-gated (`RequireAccessTokenLive()`
-by default), carries the **browser-safe
+by default) and carries the **browser-safe
 gate** (allowlisted `Origin` + double-submit CSRF for cookie callers; bearer-only
-API callers skip it), and sets `Cache-Control: no-store` — except, today,
-`POST /auth/password/change`, whose JSON response carries no `Cache-Control` (the
-login, token, refresh and register JSON responses likewise; `no-store` on the whole
-`/auth` registrar is planned, SOC 2 slice S5).
+API callers skip it). **Every `/auth` response carries `Cache-Control: no-store`:**
+the route registrar prepends `web.NoStore()` to every route it mounts, so the
+token-bearing JSON arms (login, token, refresh, register, password change), the HTML
+pages, the OAuth2 endpoints (which keep `Pragma: no-cache` too) and every gate's
+rejection are never retained by a browser or shared cache.
+
+The public credential-establishment JSON arms — register, verify, password forgot
+and reset, token and `POST /auth/oauth/verify-link`, beside login — run the **origin
+gate** their form arms already ran: a browser-borne request (one carrying `Origin`
+or `Sec-Fetch-Site`) is admitted when `Sec-Fetch-Site` is `same-origin` or its
+`Origin` is in `BrowserConfig.AllowedOrigins` / admitted by `BrowserConfig.OriginPolicy`;
+any other gets the JSON 403 `origin_rejected`. A client sending neither header (a
+native, CLI or server caller) passes. **Breaking for an SPA on another origin —
+same-site siblings included — that calls these routes without an allowlisted
+origin:** add the SPA's origin to `AllowedOrigins` (or an `OriginPolicy` rule) —
+that is the hatch.
 
 **Always registered — password + sessions + challenge rail:**
 
 - `POST /auth/register` — `{email, password, display_name}` → 201; enqueues an
-  async verification code to the new primary email identifier.
+  async verification code to the new primary email identifier. Per-IP budget
+  `register` (10/min); origin-gated JSON arm.
 - `POST /auth/verify` — **`{email, code}`** → 200. **v3 break:** the body now
   carries `email` (the challenge rail keys the code by identifier); the pre-v3
-  `{code}`-only body is a 400.
+  `{code}`-only body is a 400. Per-IP budget `verify` (20/min); origin-gated JSON arm.
 - `POST /auth/login` — `{email, password}` → 200 + BOTH cookies. Browser Origin
   policy applies to JSON as well as form requests. Rate-limited
   (independent identifier and IP budgets) BEFORE credential work → 429. `RequireVerifiedEmail` →
   an unverified login is 403.
 - `POST /auth/refresh` — rotates the presented refresh token (§1.3). Not gated;
   rotation IS the credential. Browser requests pass Origin policy before rotation;
-  native no-Origin requests remain supported.
+  native no-Origin requests remain supported. Per-IP budget `refresh` (30/min); the
+  per-session 30/min budget runs in the service.
 - `POST /auth/logout` — accepts refresh proof (JSON `{refresh_token}` or cookie),
   falling back to a verified, unexpired access token. Expired access-only proof
   is rejected; revocation failures are reported while both cookies clear. Origin-only
@@ -383,12 +401,14 @@ login, token, refresh and register JSON responses likewise; `no-store` on the wh
 - `POST /auth/password/forgot` — `{email}` → 200 (never reveals existence).
   **Enumeration-safe and async:** it normalizes and enqueues an opaque delivery
   command WITHOUT resolving the account or calling a provider; the off-request
-  delivery runtime resolves the recovery identifier and delivers.
+  delivery runtime resolves the recovery identifier and delivers. Origin-gated JSON
+  arm; its per-IP budget is the service's `AuthenticationLimits.PasswordReset`.
 - `POST /auth/password/reset` — `{token, password}` → 200. Atomic: consumes the
   reset challenge, sets the password, and **revokes all sessions** in one
-  transaction.
+  transaction. Per-IP budget `password_reset` (20/min); origin-gated JSON arm.
 - `POST /auth/password/change` — live + browser-safe, `{current_password,
   new_password}` → 200 + a fresh cookie pair; revokes all the user's sessions.
+  `Cache-Control: no-store`.
 - `GET /auth/delivery/status` — live-session-gated; poll the delivery dispatcher
   with a `receipt` to learn a send failed without holding the start request open.
 - `GET /auth/methods` — live-session-gated **masked** method inventory (below);
@@ -466,7 +486,9 @@ login, token, refresh and register JSON responses likewise; `no-store` on the wh
 - `GET /auth/oauth/{provider}/callback` → 302. Existing link → login; matching
   unverified/unlinked email → **pending link** (a mailed single-use secret;
   completes only via verify-link — the takeover gate); no user → register + link.
-- `POST /auth/oauth/verify-link` — `{token}` → completes a pending link.
+- `POST /auth/oauth/verify-link` — `{token}` → completes a pending link. Per-IP
+  budget `verify_link` (20/min, shared with the native verify-link); origin-gated
+  JSON arm.
 - session-gated: `GET /auth/oauth/{provider}/link/start` — see
   [OAuth account linking](#oauth-account-linking--two-distinct-flows).
 - **Removed in v3:** `GET /auth/oauth/linked` (subsumed by `/auth/methods`) and
@@ -1074,7 +1096,9 @@ and passage through the mutation and credential-establishment gates.
 - `Reserved` is a deny-list and fails open: list every label that is not one of
   your client deployments.
 - Keep the session cookie host-only. Never combine a namespace with a
-  `Domain`-scoped session cookie: a compromised label could then read it.
+  `Domain`-scoped session cookie: a compromised label could then read it. `New`
+  refuses the combination in every mode (`ErrCookieDomainWithNamespaceRule`, no
+  acknowledgement).
 
 ## HTML surface (Views) — the optional presentation tier
 
@@ -1394,6 +1418,12 @@ origin reachable solely through those proxies. Behind it, three host-route
 surfaces see the client: a denial a host bridge records (`authorization_denied`
 on a route gated by `authorizationhttp.Adapter.Require`), an `external_login` row
 first recorded on a host route, and `RateLimitByIP`.
+
+`Components.HTTP.RateLimitByIP(keyPrefix, perMinute)` stays the host-route budget
+surface: it keys `<keyPrefix>:<client IP>` and, like the bundled budgets, fails
+closed (JSON 503 + `Retry-After: 5`) on a limiter outage unless
+`AbuseProtectionConfig.PublicRouteLimiterFailOpen` is set — see
+[Rate-limiter outage policy](#rate-limiter-outage-policy).
 
 Without the stamp, `RateLimitByIP` and the OAuth2 per-IP budget fall back to the
 `TrustProxies`-resolved or peer address, never one shared bucket. The logic-side
@@ -2088,6 +2118,8 @@ store upgrade is needed.
 | `RuntimeMode` | **REQUIRED, no default.** `"production"` rejects development-only delivery transports and every incomplete security wiring (below); `"development"` warns instead. Uses `environment.Mode` (`sdk/pkg/environment`) — see [Security posture](#security-posture); app-wide code should name `environment.Mode` and needs no auth import. |
 | `Repositories.SecurityEvents` + `WithAuditDisabledAcknowledged()` | **Production requires the audit rail** (`ErrAuditRequired`); development WARNs. `WithAuditDisabledAcknowledged()` waives it and logs one `posture_waiver=AuditDisabledAcknowledged` WARN; passed beside a wired `SecurityEvents` it is `ErrAuditAcknowledgedWithSecurityEvents` in every mode. |
 | `IdentityConfig.SingleFactorAcknowledged` | **Production refuses single-factor native login** — password flows on (`PasswordFlowsDisabled` false) or any `Passwordless` kind listed — without it (`ErrSingleFactorUnacknowledged`); development WARNs. Set it to accept one-factor login (one `posture_waiver=SingleFactorAcknowledged` WARN), or turn native login off. Inert when native login is off. |
+| `BrowserConfig.CookieDomainAcknowledged` | **Production refuses `SessionCookie.Domain`** (`AUTH_COOKIE_DOMAIN`) without it (`ErrCookieDomainRefused`): a Domain sends the access and refresh cookies to every host under it. Set it to accept that sharing (one `posture_waiver=CookieDomainAcknowledged` WARN); development admits a Domain. Inert while Domain is empty. It never waives `ErrCookieDomainWithNamespaceRule`: a Domain beside an `OriginPolicy` namespace rule fails `New` in every mode, because the sdk's trust model keeps session cookies host-only under a namespace (`sdk/pkg/web/origin_policy.go:55-62`) — remove one. |
+| `AbuseProtectionConfig.PublicRouteLimiterFailOpen` | false (**FAIL CLOSED in every mode**, development included): a limiter outage answers 503 + `Retry-After: 5` on the bundled public-route budgets, host `RateLimitByIP` routes and the per-session refresh budget. true admits and WARNs per failure; in production it is a posture waiver (one `posture_waiver=PublicRouteLimiterFailOpen` WARN at `New`). See [Rate-limiter outage policy](#rate-limiter-outage-policy). |
 | `DeliveryConfig.OpportunisticTLSAcknowledged` | **Production refuses a Mailer or BodySender declaring opportunistic STARTTLS** (`ErrInsecureDeliveryTransport` wrapping `notify.ErrOpportunisticTLS`), at the root and in the delivery router's `ValidateTransports` (`delivery.WithOpportunisticTLSAcknowledged()`); development WARNs. Prefer a mandatory-TLS sender (`email.SMTPConfig.RequireTLS`). Inert when no transport declares STARTTLS. |
 | development-only providers (`OAuthConfig.Providers`, `WithExternal`) | A provider declaring `oauth.Capabilities{DevelopmentOnly: true}` or the authentication capability's `Capabilities{DevelopmentOnly: true}` is **refused in production** (`ErrDevelopmentOnlyProvider`, re-exported from `authlogic`) and WARNed in development. Providers that declare nothing are accepted. No acknowledgement exists. |
 | keys (`NewKeys`) | `NewKeys(mode, KeysInput, log, need...)` decodes the five hex keys (table below). **Production** reports every unset or malformed needed key in one `errors.Join` of `ErrKeyRequired`, each naming its variable and never its value; development mints an ephemeral key with a WARN. `AUTH_TOKEN_ENCRYPTER_KEY` stays optional in every mode. The pocket never reads the process environment. |
@@ -2123,7 +2155,8 @@ store upgrade is needed.
 | `MachineRoutesGate` (web.Middleware) | **nil → the bundled machine-identity lifecycle routes are NOT mounted** (404, deny-by-absence) even when `ServiceAccounts` + `APIKeys` are wired, and `New` WARNs so an upgrading host learns the posture at boot instead of from production 404s. Key AUTHENTICATION is unaffected (`RequireAPIKey()` and the bearer path of `RequirePrincipal` still follow `MachineEnabled`). Non-nil → `POST`/`GET /auth/service-accounts`, `POST`/`GET /auth/service-accounts/{id}/keys` and `POST /auth/api-keys/{id}/revoke` mount, each as `BundledRouteAuth.MachineLifecycle` (`RequireAccessTokenLive()` by default) → (on the three POSTs) the browser-safe `Origin`/CSRF gate → this gate: human credential only by default (an API key, act-as-user or not, is 401), immediately revocable, CSRF-safe for cookie clients, then the host's authorization. Typical: `authorizer.Require(authorizationhttp.Can("steward", authorizationhttp.Fixed("platform", "global")))`. Set with the machine subsystem unwired (both repositories nil — a half-wired pair fails earlier with `ErrMachineReposRequired`) → `ErrMachineRoutesGateWithoutRepos` (a policy that can never be consulted is contradictory wiring). A **single** middleware, not the `[]web.Middleware` of `cms.Config.AdminMiddleware` / `events.WithStreamMiddleware`: nil is the unambiguous "no policy", where an empty non-nil slice would mean "mounted, ungated". **Scope behind the gate:** ownership is fixed (the caller is the creator; delegation is the explicit, validated, audited `act_as_user_id`, and `owner_user_id` is refused by name), but **listing is GLOBAL** — a gate holder sees every service account, lists the keys of any account, and mints/revokes by any id. A host that needs a creator-scoped list or per-object authorization leaves the gate nil and serves its own routes over `CreateServiceAccount` / `MintAPIKey` / `ListServiceAccounts` / `ListAPIKeys` / `RevokeAPIKey`. |
 | `BundledRouteAuth` (BundledRouteAuthentication) | every field zero → the audited default authenticator for that bundled route group (see [The middleware surface](#the-middleware-surface-what-other-pockets-and-host-routes-gate-on)). A non-zero field, built with `PrincipalStrategy(opts...)`, replaces ONLY that group's authentication; it configures authentication alone and never substitutes for `MachineRoutesGate` / `UserAdminCheck` / `InviteCheck`. Resolved once at `New` into concrete middleware and held immutable for the process's life. |
 | `RateLimiter` | `ratelimiter.NewMemory()` — an in-process limiter (not "unlimited"). **Production rejects a per-process limiter** (`ErrNonDurableRateLimiter`): a multi-instance host needs a shared/durable one. |
-| `SessionCookie` (CookieConfig) | zero value usable: name `session`, path `/`, browser-session cookie backed by a 7-day server session. `Secure: true` is required in production; development can use HTTP. |
+| `PublicRouteLimits` | every field zero → the default per-IP budgets of [Per-IP budgets by route](#per-ip-budgets-by-route). Each field is a `ratelimiter.Limit`; one `Limit.Normalize` refuses fails `New` (`sdk.ErrInvalidInput` naming the field). No off switch: a host behind its own edge throttle sets a large budget. |
+| `SessionCookie` (CookieConfig) | zero value usable: name `session`, path `/`, browser-session cookie backed by a 7-day server session. `Secure: true` is required in production; development can use HTTP. A non-empty `Domain` is refused in production without `CookieDomainAcknowledged` and beside an `OriginPolicy` namespace rule in every mode (above). |
 | `RefreshCookiePath string` | the refresh cookie's `Path` scope (`AUTH_REFRESH_COOKIE_PATH`). Empty → `/auth` (covers `/auth/refresh` AND `/auth/logout`). **A host mounting the pocket under a prefix MUST set the FULL prefixed path** — `pockets.PrefixRegistrar{Prefix: "/api/v1"}` → `RefreshCookiePath: "/api/v1/auth"` — else the browser never sends the refresh cookie to `/api/v1/auth/refresh` and cookie-driven refresh dies SILENTLY (the registrar exposes registration, not its mount prefix, so the pocket cannot derive it). A non-empty value must be a valid absolute cookie path (leading `/`, no query/fragment/control/header-delimiter character, no trailing slash except `/` itself) or construction fails with `ErrRefreshCookiePathInvalid`. The SAME resolved path issues (login, rotation) and deletes (logout) the cookie. Configures ONLY the refresh cookie: the access cookie keeps `SessionCookie.Path` and both keep `SameSite=Lax`. |
 | `Providers []oauth.Provider` | OAuth OFF (deny-by-absence). Non-empty → both oauth repos and a valid callback base required. Nil, duplicate and invalid provider names fail construction. |
 | `TrustOAuthEmail` | Host callback for new email-based registration/adoption; nil denies those paths. Verified provider evidence is also required. Existing linked-ID login needs no email/trust callback. |
@@ -3179,7 +3212,9 @@ three completion fields to the host. Completion returns `action` and, when a
 session was minted, `access_token`, `refresh_token`, and `token_type: "Bearer"`.
 Pending linking returns an action without credentials; its proof completes via
 the native verify-link route. These native routes set no cookies, perform no
-credential redirects and use `Cache-Control: no-store`.
+credential redirects and use `Cache-Control: no-store`. Start, complete and link
+start share the per-IP budget `oauth_native` (40/min); native verify-link shares
+`verify_link` (20/min) with the browser route.
 
 The host must configure a provider registration that accepts its native callback
 URI. Claimed HTTPS links, private app schemes and configured loopback IP/ports
@@ -3463,6 +3498,11 @@ credential rail is unwired.
   `web.TrustProxies`-resolved value when the host wires it; **a raw
   `X-Forwarded-For` is NEVER trusted** (a client cannot forge it to rotate
   limiter keys or poison audit rows). A multi-instance host wires a shared limiter.
+  `X-Real-IP` counts only under `web.TrustProxiesWithConfig(web.TrustProxiesConfig{
+  TrustedProxyCount: n, TrustRealIPHeader: true})` with no `X-Forwarded-For`; in
+  production the first request carrying only `X-Real-IP` whose client IP resolved
+  to the peer logs one WARN naming `web.TrustProxiesConfig.TrustRealIPHeader`, since
+  behind such a proxy every per-IP budget would key to the proxy.
 - **CSRF / origin / native clients.** Cookie-authenticated mutations require an
   allowlisted `Origin` + a double-submit `__Host-auth_csrf` token; credential-
   establishment endpoints enforce origin WITHOUT a pre-existing CSRF session
@@ -4253,18 +4293,59 @@ the callback types into `inbound/http` and removes the service policy wrappers.
 
 ### Rate-limiter outage policy
 
-`RateLimitByIP` deliberately proceeds on limiter dependency failures and logs a
-classified warning through the configured logger. Invalid limits remain 500
+Every limiter-backed budget fails CLOSED on a limiter dependency error, in every
+mode. Development is included on purpose — a departure from failing open in
+development, so a development host sees the answer production will. The bundled
+public-route budgets, host routes behind `RateLimitByIP` and the per-session
+refresh budget answer JSON 503 with `Retry-After: 5` (the refresh service returns
+an error matching `sdk.ErrUnavailable`); the service budgets — login/token, password
+reset, sensitive code and password, passwordless, verification resend — return the
+limiter error (503 when it matches `sdk.ErrUnavailable`, else 500). Failures are
+logged with a classified `error_kind`, never the key. Invalid limits remain 500
 configuration errors; exhausted budgets return the shared JSON 429 response with
-Retry-After. The refresh-session budget also retains its deliberate open outage
-policy and now logs failures. A canceled refresh stops before rotation. Login and
-other service entry points retain their existing failure policies.
+Retry-After. A canceled refresh stops before rotation.
+
+**The production flip, plainly:** a Redis or Postgres limiter outage 503s
+register, verify, password reset, verify-link, native OAuth, invitation decline and
+refresh — silent refresh fails, so SPA users are signed out — and every host route
+behind `RateLimitByIP`. The hatches are a highly available limiter, or
+`AbuseProtectionConfig.PublicRouteLimiterFailOpen: true`, which admits those
+requests with one WARN per failure (the service budgets stay closed) and in
+production logs one `posture_waiver=PublicRouteLimiterFailOpen` WARN at `New`. An
+adapter built directly with `NewAuthenticator` takes the same choice through
+`authenticationhttp.WithLimiterFailOpen`.
 
 The underlying SDK middleware defaults to closed; hosts using it directly select
-FailOpen explicitly. Memory is bounded by MaxEntries and can return ErrCapacity;
-select a shared adapter for production as required by the existing security
-posture. See [AUDIT-011](../../AUDIT.md#audit-011-rate-limiter-contract-and-adapter-corrections)
+FailOpen explicitly. Memory is bounded by MaxEntries and can return ErrCapacity
+(10,000 keys by default — the only development-time trigger of the 503); select a
+shared adapter for production as required by the existing security posture. See [AUDIT-011](../../AUDIT.md#audit-011-rate-limiter-contract-and-adapter-corrections)
 for the constructor, policy and adapter migration.
+
+### Per-IP budgets by route
+
+Edge keys are `<key>:<client IP>`, the IP from the client-info carrier
+(`web.TrustProxies`-resolved, else the peer). "Logic" rows are budgets the service
+enforces itself, on the same client IP; "fixed" rows have no knob.
+
+| Route | Key | Default /min/IP | Knob |
+|---|---|---|---|
+| `POST /auth/register` | `register` | 10 | `PublicRouteLimits.Register` |
+| `POST /auth/verify` | `verify` | 20 | `.Verify` |
+| `POST /auth/password/forgot` | logic `password_reset` PerIP | 20 (3/subject) | `AuthenticationLimits.PasswordReset` — already per-IP; NO edge bucket |
+| `POST /auth/password/reset` | `password_reset` | 20 | `.PasswordReset` (the token-consume step) |
+| `POST /auth/login`, `POST /auth/token` | logic `login` PerIP | 30 (5/subject) | `AuthenticationLimits.Login` — already per-IP; NO edge bucket |
+| `POST /auth/refresh` | `refresh` | 30 | `.Refresh` — the IP arm ONLY; the per-session 30 stays a constant |
+| `POST /auth/oauth/verify-link`, `/auth/oauth/native/verify-link` | `verify_link` | 20 | `.VerifyLink` |
+| `POST /auth/oauth/{p}/native/{start,complete,link/start}` | `oauth_native` | 40 (shared key ≈ 13 sign-ins) | `.OAuthNative` |
+| invitation decline | `invitation_decline` | 10 | `.InvitationDecline` |
+| `POST /auth/passwordless/start` | logic `passwordless_start` | 10 (3/identifier) | fixed |
+| `POST /auth/passwordless/verify` | logic `passwordless` (identifier + IP) | 10 per identifier and IP | fixed |
+| `POST /auth/passwordless/redeem` | logic `passwordless_redeem` | 10 | fixed |
+| `POST /auth/verification/resend` | logic `verification_resend` | 10 (3/identifier) | fixed |
+
+A `.Field` knob is `AbuseProtectionConfig.PublicRouteLimits.Field`. The OAuth2
+authorization-server endpoints keep their own per-IP and per-client budgets, which
+already fail closed.
 
 ## Selecting outbound delivery transports
 

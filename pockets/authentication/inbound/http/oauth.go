@@ -50,15 +50,15 @@ type unlinkRequest struct {
 // Origin/CSRF gate, replacing the plain DELETE /auth/oauth/{provider}/link
 // (pre-tag route break). The caller's link inventory is no longer a route here:
 // GET /auth/oauth/linked is subsumed by the masked GET /auth/methods (design §5.1).
-func mountOAuth(r pockets.RouteRegistrar, h *handlers, linkStart, credentialManagement, browserSafeForm web.Middleware) {
+func mountOAuth(r pockets.RouteRegistrar, h *handlers, linkStart, credentialManagement, browserSafeForm, verifyLinkLimit, nativeLimit web.Middleware) {
 	r.Handle("GET", "/auth/oauth/{provider}/start", h.oauthStart)
 	r.Handle("GET", "/auth/oauth/{provider}/callback", h.oauthCallback)
-	r.Handle("POST", verifyLinkPath, h.oauthVerifyLink)
+	r.Handle("POST", verifyLinkPath, h.oauthVerifyLink, verifyLinkLimit)
 	if h.svc.OAuthNativeEnabled() {
-		r.Handle("POST", "/auth/oauth/{provider}/native/start", h.oauthNativeStart)
-		r.Handle("POST", "/auth/oauth/{provider}/native/complete", h.oauthNativeComplete)
-		r.Handle("POST", "/auth/oauth/{provider}/native/link/start", h.oauthNativeLinkStart, linkStart)
-		r.Handle("POST", "/auth/oauth/native/verify-link", h.oauthNativeVerifyLink)
+		r.Handle("POST", "/auth/oauth/{provider}/native/start", h.oauthNativeStart, nativeLimit)
+		r.Handle("POST", "/auth/oauth/{provider}/native/complete", h.oauthNativeComplete, nativeLimit)
+		r.Handle("POST", "/auth/oauth/{provider}/native/link/start", h.oauthNativeLinkStart, nativeLimit, linkStart)
+		r.Handle("POST", "/auth/oauth/native/verify-link", h.oauthNativeVerifyLink, verifyLinkLimit)
 	}
 	r.Handle("GET", "/auth/oauth/{provider}/link/start", h.oauthLinkStart, linkStart)
 	r.Handle("POST", "/auth/oauth/{provider}/unlink/start", h.startUnlinkOAuth, credentialManagement, browserSafeForm)
@@ -133,6 +133,9 @@ func (h *handlers) oauthVerifyLink(w http.ResponseWriter, r *http.Request) {
 // oauthVerifyLinkJSON completes a pending link from the mailed secret and logs the
 // user in (fresh session cookie).
 func (h *handlers) oauthVerifyLinkJSON(w http.ResponseWriter, r *http.Request) {
+	if !h.jsonOriginOK(w, r) {
+		return
+	}
 	var req verifyLinkRequest
 	if !strictJSONBody(w, r, &req, maxJSONBodyBytes) {
 		return

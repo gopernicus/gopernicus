@@ -23,12 +23,21 @@ func TestPublicRateLimitPolicy(t *testing.T) {
 		svc.RateLimitByIP("public", limit)(next).ServeHTTP(r, httptest.NewRequest("GET", "/", nil))
 		return r
 	}
-	if r := run(1); r.Code != http.StatusNoContent {
-		t.Fatalf("outage status = %d; want deliberate fail-open", r.Code)
+	if r := run(1); r.Code != http.StatusServiceUnavailable || r.Header().Get("Retry-After") != "5" {
+		t.Fatalf("outage = %d Retry-After %q; want the default fail-closed 503 + Retry-After: 5", r.Code, r.Header().Get("Retry-After"))
 	}
 	if !strings.Contains(logs.String(), "public route rate limiter failed") || strings.Contains(logs.String(), "backend secret") {
 		t.Fatalf("expected failure classification without backend details: %s", logs.String())
 	}
+	svc.limiterFailOpen = true
+	logs.Reset()
+	if r := run(1); r.Code != http.StatusNoContent {
+		t.Fatalf("outage status = %d; want WithLimiterFailOpen to admit", r.Code)
+	}
+	if n := strings.Count(logs.String(), "public route rate limiter failed"); n != 1 {
+		t.Fatalf("fail-open outage logged %d WARNs, want 1: %s", n, logs.String())
+	}
+	svc.limiterFailOpen = false
 	if r := run(0); r.Code != http.StatusInternalServerError {
 		t.Fatalf("invalid configuration status = %d", r.Code)
 	}

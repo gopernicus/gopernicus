@@ -178,3 +178,19 @@ var ErrUserErasureRouteRequires = errors.New("auth: AdministrationConfig.UserEra
 // login racing the erase would mint through the unfenced Sessions.Create after
 // the erase commits.
 var ErrUserErasureRequiresActiveSessions = errors.New("auth: Repositories.UserErasure requires Repositories.ActiveSessions (the fenced session mint)")
+
+// ErrCookieDomainRefused is returned by New in production when
+// BrowserConfig.SessionCookie.Domain is set without
+// BrowserConfig.CookieDomainAcknowledged. A Domain attribute sends the access
+// and refresh cookies to every host under it, so a takeover or script injection
+// on any of them reads the session; the pocket's default is host-only cookies.
+var ErrCookieDomainRefused = errors.New("auth: production RuntimeMode refuses BrowserConfig.SessionCookie.Domain unless BrowserConfig.CookieDomainAcknowledged is set (the session cookies would reach every host under that Domain)")
+
+// ErrCookieDomainWithNamespaceRule is returned by New in every mode when
+// BrowserConfig.SessionCookie.Domain is set beside an OriginPolicy namespace
+// rule. A namespace gives every label under its suffix the power of an exact
+// origin, and the sdk's OriginPolicy trust model says to keep session cookies
+// host-only under it (sdk/pkg/web/origin_policy.go:55-62), so a compromised
+// label cannot also read the session. No acknowledgement waives it: remove the
+// Domain or the namespace rule.
+var ErrCookieDomainWithNamespaceRule = errors.New("auth: BrowserConfig.SessionCookie.Domain cannot be combined with an OriginPolicy namespace rule (keep session cookies host-only under a namespace; remove one)")

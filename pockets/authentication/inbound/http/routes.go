@@ -17,12 +17,6 @@ import (
 	"github.com/gopernicus/gopernicus/sdk/pkg/web"
 )
 
-// refreshAttemptsPerMinute caps POST /auth/refresh attempts per client IP (the
-// by-IP arm of the §6 refresh rate limit; the by-session arm lives in the
-// service). A per-process memory limiter is N× budget across N instances and NAT
-// users share an IP bucket — multi-instance hosts wire a shared limiter.
-const refreshAttemptsPerMinute = 30
-
 // handlers holds services and inbound host policies. listStrategy controls list
 // request parsing; domain services enforce their own business invariants.
 type handlers struct {
@@ -95,6 +89,9 @@ type mountDeps struct {
 	// Eraser drives POST /auth/admin/users/{id}/erase. Nil unless the host
 	// opted in (WithUserErasureRoute) and the service's erasure is wired.
 	Eraser userEraser
+	// RouteLimits are the per-client-IP budgets of the public routes; a zero
+	// field takes its default at mount.
+	RouteLimits PublicRouteLimits
 }
 
 // RouteAuthentication is the authenticator each bundled route group runs behind
@@ -208,7 +205,9 @@ func (a RouteAuthentication) withDefaults(svc authService) RouteAuthentication {
 // It wraps the registrar so the client-info middleware rides EVERY route,
 // unauthenticated ones included (design §5.1 WI4): the ONE blanket write point
 // that stamps the request IP + User-Agent onto the context for login's
-// rate-limit key and the security-event audit rows.
+// rate-limit key and the security-event audit rows. A second wrap prepends
+// web.NoStore() to every route, so no /auth response — a token-bearing JSON
+// arm, an HTML page or a gate's rejection — is retained by any cache.
 //
 // The JSON API route surface is registered unconditionally. The optional HTML GET
 // surface (design §9.2) is registered only when a Views port is wired (views !=
@@ -219,7 +218,8 @@ func mount(r pockets.RouteRegistrar, d mountDeps) {
 	// The bundled route groups' authenticators: the host's override where it set
 	// one (authentication.BrowserConfig.BundledRouteAuth), the audited default otherwise.
 	auth := d.RouteAuth.withDefaults(svc)
-	r = clientInfoRegistrar{inner: r, proxies: d.Proxies}
+	limits := d.RouteLimits.withDefaults()
+	r = clientInfoRegistrar{inner: noStoreRegistrar{inner: r}, proxies: d.Proxies}
 	h := &handlers{oauth2: d.OAuth2, inviteCheck: d.InviteCheck, resourceRule: d.ResourceRule, userAdminCheck: d.UserAdminCheck, eraser: d.Eraser, svc: svc, inv: inv, listStrategy: d.ListStrategy, mutation: d.Mutation, views: views, htmlPolicy: d.HTMLPolicy}
 	if d.OAuth2 != nil {
 		mountOAuth2(r, h)
@@ -230,13 +230,13 @@ func mount(r pockets.RouteRegistrar, d mountDeps) {
 	// PasswordFlowsDisabled host answers 404 for every one of them.
 	pw := svc.PasswordFlowsEnabled()
 	if pw {
-		r.Handle("POST", "/auth/register", h.register)
+		r.Handle("POST", "/auth/register", h.register, svc.rateLimitByIP("register", limits.Register))
 	}
 	if pw {
 		r.Handle("POST", "/auth/login", h.login, requireBrowserSafeOrigin(h.mutation.csrf()))
 	}
 	if pw {
-		r.Handle("POST", "/auth/verify", h.verify)
+		r.Handle("POST", "/auth/verify", h.verify, svc.rateLimitByIP("verify", limits.Verify))
 	}
 	if pw {
 		r.Handle("POST", "/auth/password/forgot", h.forgotPassword)
@@ -249,12 +249,12 @@ func mount(r pockets.RouteRegistrar, d mountDeps) {
 	// The gate is added below with the other origin-gated routes, once the shared
 	// middleware is built.
 	if pw {
-		r.Handle("POST", "/auth/password/reset", h.resetPassword)
+		r.Handle("POST", "/auth/password/reset", h.resetPassword, svc.rateLimitByIP("password_reset", limits.PasswordReset))
 	}
 	// /auth/refresh is rate-limited by IP (the by-session arm is enforced in the
 	// service once the session resolves — §6). It is cookie- or body-driven and
 	// not credential-gated: rotation IS the credential.
-	r.Handle("POST", "/auth/refresh", h.refresh, requireBrowserSafeOrigin(h.mutation.csrf()), svc.RateLimitByIP("refresh", refreshAttemptsPerMinute))
+	r.Handle("POST", "/auth/refresh", h.refresh, requireBrowserSafeOrigin(h.mutation.csrf()), svc.rateLimitByIP("refresh", limits.Refresh))
 	// /auth/logout is NOT session-gated (§1.5): an expired access JWT must still be
 	// able to log out, so gating it on a live credential would make logout a no-op
 	// exactly when the shared-computer hazard matters most. It IS cookie-driven,
@@ -378,7 +378,8 @@ func mount(r pockets.RouteRegistrar, d mountDeps) {
 	// OAuth routes are registered only when at least one provider is wired
 	// (deny-by-absence, design §3): an unwired host returns 404 for them.
 	if svc.OAuthEnabled() {
-		mountOAuth(r, h, auth.OAuthLinkStart, auth.CredentialManagement, browserSafeForm)
+		mountOAuth(r, h, auth.OAuthLinkStart, auth.CredentialManagement, browserSafeForm,
+			svc.rateLimitByIP("verify_link", limits.VerifyLink), svc.rateLimitByIP("oauth_native", limits.OAuthNative))
 	}
 
 	// Machine-identity lifecycle routes are registered only when both machine
@@ -415,7 +416,7 @@ func mount(r pockets.RouteRegistrar, d mountDeps) {
 	// API key, which acts as its human owner, so the invitation surface is NOT a
 	// service-account administration API. Decline stays public and IP-rate-limited.
 	if inv != nil {
-		mountInvitations(r, h, auth.Invitations, svc.RateLimitByIP("invitation_decline", declineAttemptsPerMinute))
+		mountInvitations(r, h, auth.Invitations, svc.rateLimitByIP("invitation_decline", limits.InvitationDecline))
 	}
 
 	// The optional HTML GET surface is registered only when a Views port is wired
@@ -442,6 +443,19 @@ type clientInfoRegistrar struct {
 func (c clientInfoRegistrar) Handle(method, path string, handler http.HandlerFunc, middleware ...web.Middleware) {
 	all := append([]web.Middleware{clientInfoMiddleware(c.proxies)}, middleware...)
 	c.inner.Handle(method, path, handler, all...)
+}
+
+// noStoreRegistrar wraps a RouteRegistrar so web.NoStore() is prepended to
+// every route it registers: Cache-Control: no-store is set before any gate or
+// handler runs, so a rejection carries it too. A handler that writes its own
+// no-store (or adds Pragma) is unaffected.
+type noStoreRegistrar struct {
+	inner pockets.RouteRegistrar
+}
+
+func (n noStoreRegistrar) Handle(method, path string, handler http.HandlerFunc, middleware ...web.Middleware) {
+	all := append([]web.Middleware{web.NoStore()}, middleware...)
+	n.inner.Handle(method, path, handler, all...)
 }
 
 // ClientInfoMiddleware stamps every request's client IP and User-Agent onto
@@ -474,11 +488,14 @@ func clientInfoMiddleware(proxies *proxyPosture) web.Middleware {
 // client IPs are not being attributed: web.TrustProxies did not run, or the
 // request carries X-Forwarded-For yet its client IP resolved to the peer
 // address (TrustProxies(0) behind a proxy). Every rate limit and audit row would
-// then key to the proxy. A nil *proxyPosture (development, or a route table
-// mounted without the adapter) observes nothing.
+// then key to the proxy. A request carrying only X-Real-IP whose client IP is
+// the peer logs its own one WARN naming web.TrustProxiesConfig.TrustRealIPHeader.
+// A nil *proxyPosture (development, or a route table mounted without the
+// adapter) observes nothing.
 type proxyPosture struct {
-	log  *slog.Logger
-	once sync.Once
+	log        *slog.Logger
+	once       sync.Once
+	realIPOnce sync.Once
 }
 
 // newProxyPosture returns the production observer, or nil in any other mode.
@@ -505,6 +522,10 @@ func (p *proxyPosture) observe(r *http.Request) {
 	case r.Header.Get("X-Forwarded-For") != "" && ip == peerAddress(r):
 		p.once.Do(func() {
 			p.log.Warn("authentication: a request carried X-Forwarded-For but its client IP resolved to the peer address; behind a proxy set web.TrustProxies to the proxy hop count (TRUSTED_PROXY_COUNT), or every rate limit and audit row keys to the proxy")
+		})
+	case r.Header.Get("X-Real-IP") != "" && r.Header.Get("X-Forwarded-For") == "" && ip == peerAddress(r):
+		p.realIPOnce.Do(func() {
+			p.log.Warn("authentication: a request carried X-Real-IP but no X-Forwarded-For and its client IP resolved to the peer address; X-Real-IP is ignored unless web.TrustProxiesWithConfig sets web.TrustProxiesConfig.TrustRealIPHeader (with TrustedProxyCount >= 1), so every rate limit and audit row keys to the proxy")
 		})
 	}
 }

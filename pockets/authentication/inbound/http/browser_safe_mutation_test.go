@@ -223,39 +223,51 @@ func TestRequireBrowserSafeMutationOnHostRoute(t *testing.T) {
 
 // TestProxyPostureWarnsOnceInProduction pins the trusted-proxy WARN: absent
 // TrustProxies, or a forwarded request resolved to its peer, logs once in
-// production; a correctly resolved request and development log nothing.
+// production; a correctly resolved request and development log nothing. A
+// request carrying only X-Real-IP resolved to its peer logs its own WARN naming
+// TrustRealIPHeader, which silences it.
 func TestProxyPostureWarnsOnceInProduction(t *testing.T) {
 	ok := http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})
-	request := func(forwarded string) *http.Request {
+	request := func(forwarded, realIP string) *http.Request {
 		r := httptest.NewRequest(http.MethodPost, "/auth/login", nil)
 		r.RemoteAddr = "10.0.0.2:4000"
 		if forwarded != "" {
 			r.Header.Set("X-Forwarded-For", forwarded)
 		}
+		if realIP != "" {
+			r.Header.Set("X-Real-IP", realIP)
+		}
 		return r
 	}
 	cases := []struct {
-		name    string
-		mode    environment.Mode
-		trusted int // -1: TrustProxies not wired
-		forward string
-		want    string
+		name        string
+		mode        environment.Mode
+		trusted     int // -1: TrustProxies not wired
+		trustRealIP bool
+		forward     string
+		realIP      string
+		want        string
 	}{
-		{"no TrustProxies", environment.ModeProduction, -1, "", "web.TrustProxies is not wired"},
-		{"TrustProxies(0) behind a proxy", environment.ModeProduction, 0, "203.0.113.9", "X-Forwarded-For"},
-		{"TrustProxies(1) behind a proxy", environment.ModeProduction, 1, "203.0.113.9", ""},
-		{"TrustProxies(0) direct", environment.ModeProduction, 0, "", ""},
-		{"development without TrustProxies", environment.ModeDevelopment, -1, "203.0.113.9", ""},
+		{"no TrustProxies", environment.ModeProduction, -1, false, "", "", "web.TrustProxies is not wired"},
+		{"TrustProxies(0) behind a proxy", environment.ModeProduction, 0, false, "203.0.113.9", "", "X-Forwarded-For"},
+		{"TrustProxies(1) behind a proxy", environment.ModeProduction, 1, false, "203.0.113.9", "", ""},
+		{"TrustProxies(0) direct", environment.ModeProduction, 0, false, "", "", ""},
+		{"development without TrustProxies", environment.ModeDevelopment, -1, false, "203.0.113.9", "", ""},
+		{"X-Real-IP alone, TrustProxies(1)", environment.ModeProduction, 1, false, "", "203.0.113.9", "web.TrustProxiesConfig.TrustRealIPHeader"},
+		{"X-Real-IP alone, TrustProxies(0)", environment.ModeProduction, 0, false, "", "203.0.113.9", "web.TrustProxiesConfig.TrustRealIPHeader"},
+		{"X-Real-IP alone, TrustRealIPHeader", environment.ModeProduction, 1, true, "", "203.0.113.9", ""},
+		{"X-Real-IP beside a resolved X-Forwarded-For", environment.ModeProduction, 1, false, "203.0.113.9", "203.0.113.9", ""},
+		{"X-Real-IP alone in development", environment.ModeDevelopment, 1, false, "", "203.0.113.9", ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			var logs bytes.Buffer
 			handler := clientInfoMiddleware(newProxyPosture(tc.mode, slog.New(slog.NewTextHandler(&logs, nil))))(ok)
 			if tc.trusted >= 0 {
-				handler = web.TrustProxies(tc.trusted)(handler)
+				handler = web.TrustProxiesWithConfig(web.TrustProxiesConfig{TrustedProxyCount: tc.trusted, TrustRealIPHeader: tc.trustRealIP})(handler)
 			}
 			for range 3 {
-				handler.ServeHTTP(httptest.NewRecorder(), request(tc.forward))
+				handler.ServeHTTP(httptest.NewRecorder(), request(tc.forward, tc.realIP))
 			}
 			got := strings.Count(logs.String(), "level=WARN")
 			switch {

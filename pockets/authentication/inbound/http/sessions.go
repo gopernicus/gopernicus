@@ -13,6 +13,7 @@ import (
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/serviceaccount"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/user"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/delivery"
+	"github.com/gopernicus/gopernicus/sdk/capabilities/ratelimiter"
 	"github.com/gopernicus/gopernicus/sdk/pkg/list"
 	"github.com/gopernicus/gopernicus/sdk/pkg/web"
 )
@@ -178,6 +179,7 @@ type authService interface {
 	RefreshCookieName() string
 	RequirePrincipal(opts ...PrincipalOption) web.Middleware
 	RateLimitByIP(keyPrefix string, perMinute int) web.Middleware
+	rateLimitByIP(keyPrefix string, limit ratelimiter.Limit) web.Middleware
 }
 
 // ---------------------------------------------------------------------------
@@ -285,10 +287,25 @@ func (h *handlers) userResponseFor(ctx context.Context, u user.User, requestEmai
 	return newUserResponse(u, requestEmail, false)
 }
 
+// jsonOriginOK is formOriginOK's JSON twin for a public credential-establishment
+// JSON arm (design §9.1): a browser-borne request whose Origin/Sec-Fetch-Site
+// fails the allowlist or OriginPolicy gets the JSON forbidOrigin 403; a
+// non-browser client that sends neither header passes.
+func (h *handlers) jsonOriginOK(w http.ResponseWriter, r *http.Request) bool {
+	if browserOriginAllowed(r, h.mutation.AllowedOrigins, h.mutation.OriginPolicy) {
+		return true
+	}
+	forbidOrigin(w)
+	return false
+}
+
 // registerJSON is the JSON transport for POST /auth/register. The content-type
 // dispatcher (register, dispatch.go) routes an application/json body here; a form
 // body goes to registerForm. Successful JSON responses retain their DTO/status/body/cookie contract.
 func (h *handlers) registerJSON(w http.ResponseWriter, r *http.Request) {
+	if !h.jsonOriginOK(w, r) {
+		return
+	}
 	var req registerRequest
 	if !strictJSONBody(w, r, &req, maxJSONBodyBytes) {
 		return
@@ -326,6 +343,9 @@ func (h *handlers) loginJSON(w http.ResponseWriter, r *http.Request) {
 // AV6's stateless-only token). It shares /auth/login's request shape,
 // pre-credential rate-limit discipline, and verified-email gating.
 func (h *handlers) token(w http.ResponseWriter, r *http.Request) {
+	if !h.jsonOriginOK(w, r) {
+		return
+	}
 	var req loginRequest
 	if !strictJSONBody(w, r, &req, maxJSONBodyBytes) {
 		return
@@ -375,6 +395,9 @@ func (h *handlers) refresh(w http.ResponseWriter, r *http.Request) {
 // verifyJSON is the JSON transport for POST /auth/verify (dispatched by verify,
 // dispatch.go). Successful JSON responses are unchanged; a form body goes to verifyForm.
 func (h *handlers) verifyJSON(w http.ResponseWriter, r *http.Request) {
+	if !h.jsonOriginOK(w, r) {
+		return
+	}
 	var req verifyRequest
 	if !strictJSONBody(w, r, &req, maxJSONBodyBytes) {
 		return
@@ -404,6 +427,9 @@ func deliveryUnavailable(err error) bool {
 // (dispatched by forgotPassword, dispatch.go). Successful JSON responses are unchanged; a
 // form body goes to forgotPasswordForm.
 func (h *handlers) forgotPasswordJSON(w http.ResponseWriter, r *http.Request) {
+	if !h.jsonOriginOK(w, r) {
+		return
+	}
 	var req forgotRequest
 	if !strictJSONBody(w, r, &req, maxJSONBodyBytes) {
 		return
@@ -433,6 +459,9 @@ func (h *handlers) forgotPasswordJSON(w http.ResponseWriter, r *http.Request) {
 // (dispatched by resetPassword, dispatch.go). Successful JSON responses are unchanged; a
 // form body goes to resetPasswordForm.
 func (h *handlers) resetPasswordJSON(w http.ResponseWriter, r *http.Request) {
+	if !h.jsonOriginOK(w, r) {
+		return
+	}
 	var req resetRequest
 	if !strictJSONBody(w, r, &req, maxJSONBodyBytes) {
 		return

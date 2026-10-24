@@ -56,6 +56,9 @@ type Adapter struct {
 	// /auth/login is not mounted on an external-only host.
 	browserLoginSet bool
 	limiter         ratelimiter.Limiter
+	// limiterFailOpen admits RateLimitByIP and the bundled route budgets on a
+	// limiter error; false (the default) answers 503.
+	limiterFailOpen bool
 	logger          *slog.Logger
 	// proxies logs the one production trusted-proxy warning, shared by
 	// ClientInfoMiddleware and the bundled routes; nil outside production.
@@ -69,6 +72,7 @@ type authenticatorConfig struct {
 	ExternalCookies  []string
 	BrowserLoginPath string
 	Limiter          ratelimiter.Limiter
+	LimiterFailOpen  bool
 	Logger           *slog.Logger
 }
 
@@ -91,7 +95,7 @@ func newAuthenticator(service CredentialService, cfg authenticatorConfig) *Adapt
 	}
 	return &Adapter{
 		service: service, cookie: cfg.Cookie, externalCookies: slices.Clone(cfg.ExternalCookies),
-		browserLoginPath: cfg.BrowserLoginPath, browserLoginSet: browserLoginSet, limiter: cfg.Limiter, logger: cfg.Logger,
+		browserLoginPath: cfg.BrowserLoginPath, browserLoginSet: browserLoginSet, limiter: cfg.Limiter, limiterFailOpen: cfg.LimiterFailOpen, logger: cfg.Logger,
 		proxies: newProxyPosture(cfg.RuntimeMode, cfg.Logger),
 	}
 }
