@@ -34,6 +34,11 @@ type PageConfig struct {
 	// scheme/authority/URI key. It must be safe for concurrent calls. Pages never
 	// infers tenant identity or proxy trust from request headers.
 	Scope func(*http.Request) string
+	// AllowImplicitPublic stores a response whose Cache-Control carries neither
+	// public nor s-maxage — max-age alone, or no Cache-Control at all. The zero
+	// value requires the explicit directive. Set it only on a mount whose routes
+	// are public by construction.
+	AllowImplicitPublic bool
 }
 
 type pageRecord struct {
@@ -47,7 +52,9 @@ type pageRecord struct {
 // Pages caches eligible public GET HTML responses. Mount it only on public,
 // cacheable routes. Credentials, cookies, a context principal, conditional/range
 // requests and request cache directives bypass it. Responses with Vary, cookies,
-// encoding, nonce policies or unsupported metadata also bypass caching.
+// encoding, nonce policies or unsupported metadata also bypass caching. A
+// response is stored only when its Cache-Control carries public or s-maxage,
+// unless [PageConfig.AllowImplicitPublic] is set.
 //
 // Hits restore supported response metadata while retaining fresh outer headers.
 // Put compression and per-request headers outside Pages; nonce-dependent content
@@ -75,7 +82,7 @@ func Pages(store Storer, cfg PageConfig) web.Middleware {
 			key := pageKey(r, cfg.Scope)
 			if data, found, err := store.Get(r.Context(), key); err == nil && found {
 				var entry pageRecord
-				if json.Unmarshal(data, &entry) == nil && validPage(entry, time.Now(), ttl, cfg.MaxBodyBytes) && compatiblePageMetadata(w.Header(), entry.Header) {
+				if json.Unmarshal(data, &entry) == nil && validPage(entry, time.Now(), ttl, cfg.MaxBodyBytes, cfg.AllowImplicitPublic) && compatiblePageMetadata(w.Header(), entry.Header) {
 					for name, values := range entry.Header {
 						if _, present := w.Header()[name]; !present {
 							w.Header()[name] = append([]string(nil), values...)
@@ -95,7 +102,7 @@ func Pages(store Storer, cfg PageConfig) web.Middleware {
 
 			outer := w.Header().Clone()
 			w.Header().Set("X-Cache", "MISS")
-			capture := &captureWriter{StatusRecorder: web.NewStatusRecorder(w), outer: outer, ttl: ttl, limit: cfg.MaxBodyBytes}
+			capture := &captureWriter{StatusRecorder: web.NewStatusRecorder(w), outer: outer, ttl: ttl, limit: cfg.MaxBodyBytes, implicitPublic: cfg.AllowImplicitPublic}
 			next.ServeHTTP(capture, r)
 			if !capture.cacheable || capture.Err() != nil || r.Context().Err() != nil {
 				return
@@ -149,12 +156,15 @@ func pageKey(r *http.Request, scope func(*http.Request) string) string {
 	return "page:v2:" + hex.EncodeToString(sum[:])
 }
 
-func validPage(entry pageRecord, now time.Time, ttl time.Duration, limit int) bool {
+func validPage(entry pageRecord, now time.Time, ttl time.Duration, limit int, implicitPublic bool) bool {
 	if entry.Version != pageRecordVersion || entry.Created.IsZero() || entry.Created.After(now) || !entry.Expires.After(now) || len(entry.Body) > limit {
 		return false
 	}
 	effective, ok := pageTTL(entry.Header, ttl)
 	if !ok || now.Sub(entry.Created) >= effective || !htmlContentType(entry.Header.Get("Content-Type")) {
+		return false
+	}
+	if !implicitPublic && !explicitlyPublic(entry.Header) {
 		return false
 	}
 	for name := range entry.Header {
@@ -183,13 +193,14 @@ func compatiblePageMetadata(outer, stored http.Header) bool {
 // Metadata is captured at commitment, when net/http fixes its wire headers.
 type captureWriter struct {
 	*web.StatusRecorder
-	outer     http.Header
-	ttl       time.Duration
-	limit     int
-	committed bool
-	cacheable bool
-	entry     pageRecord
-	buf       bytes.Buffer
+	outer          http.Header
+	ttl            time.Duration
+	limit          int
+	implicitPublic bool
+	committed      bool
+	cacheable      bool
+	entry          pageRecord
+	buf            bytes.Buffer
 }
 
 func (c *captureWriter) commit(status int) {
@@ -202,6 +213,9 @@ func (c *captureWriter) commit(status int) {
 	}
 	ttl, ok := pageTTL(c.Header(), c.ttl)
 	if !ok || !htmlContentType(c.Header().Get("Content-Type")) {
+		return
+	}
+	if !c.implicitPublic && !explicitlyPublic(c.Header()) {
 		return
 	}
 	header, ok := pageMetadata(c.Header(), c.outer)

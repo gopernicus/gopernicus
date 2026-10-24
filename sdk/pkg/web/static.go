@@ -228,7 +228,9 @@ func (s *StaticFileServer) serveFile(w http.ResponseWriter, r *http.Request, nam
 	}
 }
 
-// setStaticHeaders sets Cache-Control and Content-Type for a servable file.
+// setStaticHeaders sets Cache-Control, Content-Type and
+// X-Content-Type-Options: nosniff for a servable file, the SPA index included,
+// so a browser never sniffs a file as a type its extension does not name.
 func (s *StaticFileServer) setStaticHeaders(w http.ResponseWriter, name string) {
 	if s.spaMode && name == "index.html" {
 		w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
@@ -237,6 +239,7 @@ func (s *StaticFileServer) setStaticHeaders(w http.ResponseWriter, name string) 
 	}
 
 	w.Header().Set("Content-Type", staticContentType(name))
+	w.Header().Set("X-Content-Type-Options", "nosniff")
 }
 
 // serveMissing handles a path that resolves to nothing servable. In SPA mode it

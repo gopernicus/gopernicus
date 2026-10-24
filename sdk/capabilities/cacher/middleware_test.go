@@ -34,7 +34,7 @@ func TestPagesRenderFailure(t *testing.T) {
 			}
 			return nil
 		})
-		h := web.Logger(log)(Pages(NewMemory(), PageConfig{TTL: time.Minute})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { web.Render(r.Context(), w, 200, view) })))
+		h := web.Logger(log)(Pages(NewMemory(), PageConfig{TTL: time.Minute, AllowImplicitPublic: true})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { web.Render(r.Context(), w, 200, view) })))
 		for i := 0; i < 2; i++ {
 			w := httptest.NewRecorder()
 			h.ServeHTTP(w, httptest.NewRequest("GET", "/", nil))
@@ -80,7 +80,7 @@ func TestPagesWriteAndFlushFailures(t *testing.T) {
 	for _, kind := range []string{"write", "short write", "flush"} {
 		t.Run(kind, func(t *testing.T) {
 			store := NewMemory()
-			h := Pages(store, PageConfig{TTL: time.Minute})(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			h := Pages(store, PageConfig{TTL: time.Minute, AllowImplicitPublic: true})(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				w.Header().Set("Content-Type", "text/html")
 				if kind == "flush" {
 					http.NewResponseController(w).Flush()

@@ -25,7 +25,7 @@ func pageResponse(h http.Handler, r *http.Request) *httptest.ResponseRecorder {
 func TestPagesPartitions(t *testing.T) {
 	calls := 0
 	scope := func(r *http.Request) string { return r.Header.Get("X-Test-Tenant") }
-	h := Pages(NewMemory(), PageConfig{Scope: scope})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	h := Pages(NewMemory(), PageConfig{Scope: scope, AllowImplicitPublic: true})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls++
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		fmt.Fprintf(w, "render %d", calls)
@@ -64,7 +64,7 @@ func TestPagesBypassesRequestPoliciesEvenOnHit(t *testing.T) {
 	for name, mutate := range cases {
 		t.Run(name, func(t *testing.T) {
 			calls := 0
-			h := Pages(NewMemory(), PageConfig{})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			h := Pages(NewMemory(), PageConfig{AllowImplicitPublic: true})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				calls++
 				w.Header().Set("Content-Type", "text/html")
 				fmt.Fprintf(w, "%d", calls)
@@ -94,7 +94,7 @@ func TestPagesResponseBypasses(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name+"/"+tc.value, func(t *testing.T) {
 			calls := 0
-			h := Pages(NewMemory(), PageConfig{})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			h := Pages(NewMemory(), PageConfig{AllowImplicitPublic: true})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				calls++
 				w.Header().Set("Content-Type", "text/html")
 				w.Header().Set(tc.name, tc.value)
@@ -119,7 +119,7 @@ func TestPagesNoStoreBothOrders(t *testing.T) {
 			w.Header().Set("Content-Type", "text/html")
 			io.WriteString(w, "page")
 		})
-		cache := Pages(store, PageConfig{})
+		cache := Pages(store, PageConfig{AllowImplicitPublic: true})
 		var h http.Handler = cache(web.NoStore()(render))
 		if outer {
 			// Warm an existing entry, then enforce the host's new outer no-store policy.
@@ -145,7 +145,7 @@ func TestPagesNoStoreBothOrders(t *testing.T) {
 // because the outer layer writes it on every request.
 func TestPagesUnderSecurityHeadersHitCarriesAllFive(t *testing.T) {
 	calls := 0
-	h := web.SecurityHeaders()(Pages(NewMemory(), PageConfig{})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	h := web.SecurityHeaders()(Pages(NewMemory(), PageConfig{AllowImplicitPublic: true})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls++
 		w.Header().Set("Content-Type", "text/html")
 		io.WriteString(w, "page")
@@ -181,7 +181,7 @@ func TestPagesConflictingOuterMetadata(t *testing.T) {
 	} {
 		t.Run(tc.name+tc.inner, func(t *testing.T) {
 			calls := 0
-			cache := Pages(NewMemory(), PageConfig{})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			cache := Pages(NewMemory(), PageConfig{AllowImplicitPublic: true})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				calls++
 				w.Header().Set("Content-Type", "text/html")
 				if tc.inner == "" {
@@ -256,10 +256,10 @@ func TestPagesBoundedCaptureAndDisabled(t *testing.T) {
 		store     Storer
 		wantCalls int
 	}{
-		{"at limit", PageConfig{MaxBodyBytes: 4}, NewMemory(), 1},
-		{"over limit", PageConfig{MaxBodyBytes: 3}, NewMemory(), 2},
-		{"disabled", PageConfig{TTL: -1}, NewMemory(), 2},
-		{"nil", PageConfig{}, nil, 2},
+		{"at limit", PageConfig{MaxBodyBytes: 4, AllowImplicitPublic: true}, NewMemory(), 1},
+		{"over limit", PageConfig{MaxBodyBytes: 3, AllowImplicitPublic: true}, NewMemory(), 2},
+		{"disabled", PageConfig{TTL: -1, AllowImplicitPublic: true}, NewMemory(), 2},
+		{"nil", PageConfig{AllowImplicitPublic: true}, nil, 2},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			calls := 0
@@ -279,7 +279,7 @@ func TestPagesBoundedCaptureAndDisabled(t *testing.T) {
 			}
 		})
 	}
-	capture := &captureWriter{StatusRecorder: web.NewStatusRecorder(httptest.NewRecorder()), ttl: time.Minute, limit: 2}
+	capture := &captureWriter{StatusRecorder: web.NewStatusRecorder(httptest.NewRecorder()), ttl: time.Minute, limit: 2, implicitPublic: true}
 	capture.Header().Set("Content-Type", "text/html")
 	capture.Write([]byte("pa"))
 	capture.Write([]byte("ge"))
@@ -310,7 +310,7 @@ func TestPagesInvalidRecordsAndOutages(t *testing.T) {
 			raw := NewMemory()
 			now := time.Now()
 			entry := pageRecord{Version: pageRecordVersion, Created: now.Add(-time.Second), Expires: now.Add(time.Minute), Header: http.Header{"Content-Type": {"text/html"}}, Body: []byte("cached")}
-			cfg := PageConfig{}
+			cfg := PageConfig{AllowImplicitPublic: true}
 			switch kind {
 			case "expired":
 				entry.Expires = now.Add(-time.Second)
@@ -387,7 +387,7 @@ type pageRecordedFailure struct {
 func (w *pageRecordedFailure) RecordError(err error) { w.err = err }
 
 func TestPagesHitRecordsShortWrite(t *testing.T) {
-	h := Pages(NewMemory(), PageConfig{})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	h := Pages(NewMemory(), PageConfig{AllowImplicitPublic: true})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
 		io.WriteString(w, "page")
 	}))
@@ -396,5 +396,106 @@ func TestPagesHitRecordsShortWrite(t *testing.T) {
 	h.ServeHTTP(w, httptest.NewRequest("GET", "/", nil))
 	if w.Header().Get("X-Cache") != "HIT" || !errors.Is(w.err, io.ErrShortWrite) {
 		t.Fatalf("headers=%v error=%v", w.Header(), w.err)
+	}
+}
+
+func TestPagesExplicitPublicRule(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		cacheControl string
+		implicit     bool
+		stored       bool
+	}{
+		{"public", "public", false, true},
+		{"s-maxage", "s-maxage=30", false, true},
+		{"public with max-age", "public, max-age=30", false, true},
+		{"max-age alone", "max-age=30", false, false},
+		{"no header", "", false, false},
+		{"implicit no header", "", true, true},
+		{"implicit max-age alone", "max-age=30", true, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			calls := 0
+			h := Pages(NewMemory(), PageConfig{AllowImplicitPublic: tc.implicit})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls++
+				w.Header().Set("Content-Type", "text/html")
+				if tc.cacheControl != "" {
+					w.Header().Set("Cache-Control", tc.cacheControl)
+				}
+				io.WriteString(w, "page")
+			}))
+			want := []string{"MISS", "MISS"}
+			wantCalls := 2
+			if tc.stored {
+				want, wantCalls = []string{"MISS", "HIT"}, 1
+			}
+			for i := 0; i < 2; i++ {
+				w := pageResponse(h, httptest.NewRequest("GET", "/", nil))
+				if got := w.Header().Get("X-Cache"); got != want[i] || w.Body.String() != "page" {
+					t.Fatalf("request %d X-Cache = %q body = %q, want %q", i+1, got, w.Body.String(), want[i])
+				}
+			}
+			if calls != wantCalls {
+				t.Fatalf("calls = %d, want %d", calls, wantCalls)
+			}
+		})
+	}
+}
+
+// The pre-flight runs on the OUTER headers before the handler, where no
+// Cache-Control is normal; it must keep meaning "nothing outside forbids".
+func TestPageTTLPreflightNeedsNoDirective(t *testing.T) {
+	if ttl, ok := pageTTL(http.Header{}, time.Minute); !ok || ttl != time.Minute {
+		t.Fatalf("pageTTL(no headers) = %s, %v; want 1m0s, true", ttl, ok)
+	}
+	if ttl, ok := pageTTL(http.Header{"Cache-Control": {"max-age=30"}}, time.Minute); !ok || ttl != 30*time.Second {
+		t.Fatalf("pageTTL(max-age=30) = %s, %v; want 30s, true", ttl, ok)
+	}
+}
+
+func TestPagesStoredEntryNeedsExplicitPublic(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		cacheControl string
+		implicit     bool
+		hit          bool
+	}{
+		{"implicit entry refused", "", false, false},
+		{"max-age entry refused", "max-age=60", false, false},
+		{"public entry served", "public", false, true},
+		{"implicit entry served when allowed", "", true, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := NewMemory()
+			now := time.Now()
+			header := http.Header{"Content-Type": {"text/html"}}
+			if tc.cacheControl != "" {
+				header.Set("Cache-Control", tc.cacheControl)
+			}
+			entry := pageRecord{Version: pageRecordVersion, Created: now.Add(-time.Second), Expires: now.Add(time.Minute), Header: header, Body: []byte("cached")}
+			data, err := json.Marshal(entry)
+			if err != nil {
+				t.Fatal(err)
+			}
+			req := httptest.NewRequest("GET", "/", nil)
+			if err := store.Set(req.Context(), pageKey(req, nil), data, 0); err != nil {
+				t.Fatal(err)
+			}
+			h := Pages(store, PageConfig{AllowImplicitPublic: tc.implicit})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "text/html")
+				if tc.cacheControl != "" {
+					w.Header().Set("Cache-Control", tc.cacheControl)
+				}
+				io.WriteString(w, "fresh")
+			}))
+			w := pageResponse(h, req)
+			want, wantCache := "fresh", "MISS"
+			if tc.hit {
+				want, wantCache = "cached", "HIT"
+			}
+			if w.Body.String() != want || w.Header().Get("X-Cache") != wantCache {
+				t.Fatalf("body = %q X-Cache = %q, want %q %q", w.Body.String(), w.Header().Get("X-Cache"), want, wantCache)
+			}
+		})
 	}
 }

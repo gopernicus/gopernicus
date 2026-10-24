@@ -548,3 +548,38 @@ func TestStaticContentType(t *testing.T) {
 		}
 	}
 }
+
+func TestStaticFileServer_NoSniff(t *testing.T) {
+	files := fstest.MapFS{
+		"index.html":    &fstest.MapFile{Data: []byte("<html>SPA</html>")},
+		"assets/app.js": &fstest.MapFile{Data: []byte("console.log('app')")},
+		"favicon.ico":   &fstest.MapFile{Data: []byte("icon")},
+	}
+	for name, server := range map[string]*StaticFileServer{
+		"spa":        NewStaticFileServer(files, WithSPAMode()),
+		"spa index":  NewStaticFileServer(files, WithSPAMode(), WithIndex([]byte("<html>rewritten</html>"))),
+		"plain":      NewStaticFileServer(files),
+		"plain head": NewStaticFileServer(files),
+	} {
+		paths := []string{"/assets/app.js", "/favicon.ico", "/index.html"}
+		if strings.HasPrefix(name, "spa") {
+			paths = append(paths, "/", "/client/route")
+		}
+		method := http.MethodGet
+		if strings.HasSuffix(name, "head") {
+			method = http.MethodHead
+		}
+		for _, requestPath := range paths {
+			t.Run(name+requestPath, func(t *testing.T) {
+				w := httptest.NewRecorder()
+				server.ServeHTTP(w, httptest.NewRequest(method, requestPath, nil))
+				if w.Code != http.StatusOK {
+					t.Fatalf("status = %d", w.Code)
+				}
+				if got := w.Header().Get("X-Content-Type-Options"); got != "nosniff" {
+					t.Fatalf("X-Content-Type-Options = %q, want nosniff", got)
+				}
+			})
+		}
+	}
+}
