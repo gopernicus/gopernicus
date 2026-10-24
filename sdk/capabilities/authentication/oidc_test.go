@@ -256,7 +256,7 @@ func TestOIDCMethodsClone(t *testing.T) {
 		t.Fatal("Identity.Methods aliases the verifier's claims")
 	}
 	if !first.MFA {
-		t.Error("MFA = false for amr otp")
+		t.Error("MFA = false for amr pwd+otp")
 	}
 
 	second, _ := p.Authenticate(context.Background(), header(raw))
@@ -266,6 +266,115 @@ func TestOIDCMethodsClone(t *testing.T) {
 	clone.Attributes["k"] = "y"
 	if second.Methods[0] == "x" || second.Attributes["k"] == "y" {
 		t.Fatal("Identity.Clone shares a slice or map with the original")
+	}
+}
+
+func amrClaim(values ...string) map[string]any {
+	amr := make([]any, len(values))
+	for i, v := range values {
+		amr[i] = v
+	}
+	return map[string]any{"amr": amr}
+}
+
+func TestOIDCMFARule(t *testing.T) {
+	anyOf := []string{"mfa", "otp", "hwk", "sms", "swk", "pop"}
+	withFlag := func(flag any, values ...string) map[string]any {
+		c := amrClaim(values...)
+		c["ctx"] = map[string]any{"second_factor": flag}
+		return c
+	}
+	cases := []struct {
+		name    string
+		mapping authentication.ClaimMapping
+		claims  map[string]any
+		want    bool
+	}{
+		{"no amr", authentication.ClaimMapping{}, nil, false},
+		{"empty amr", authentication.ClaimMapping{}, amrClaim(), false},
+		{"pwd alone", authentication.ClaimMapping{}, amrClaim("pwd"), false},
+		{"otp alone", authentication.ClaimMapping{}, amrClaim("otp"), false},
+		{"sms alone", authentication.ClaimMapping{}, amrClaim("sms"), false},
+		{"hwk alone", authentication.ClaimMapping{}, amrClaim("hwk"), false},
+		{"swk alone", authentication.ClaimMapping{}, amrClaim("swk"), false},
+		{"pop alone", authentication.ClaimMapping{}, amrClaim("pop"), false},
+		{"face alone", authentication.ClaimMapping{}, amrClaim("face"), false},
+		{"mfa", authentication.ClaimMapping{}, amrClaim("mfa"), true},
+		{"mfa as a bare string", authentication.ClaimMapping{}, map[string]any{"amr": "mfa"}, true},
+		{"mfa beside a no-factor value", authentication.ClaimMapping{}, amrClaim("user", "mfa"), true},
+		{"knowledge + possession", authentication.ClaimMapping{}, amrClaim("pwd", "otp"), true},
+		{"possession + knowledge", authentication.ClaimMapping{}, amrClaim("hwk", "pin"), true},
+		{"possession + inherence", authentication.ClaimMapping{}, amrClaim("pop", "fpt"), true},
+		{"inherence + possession", authentication.ClaimMapping{}, amrClaim("face", "hwk"), true},
+		{"knowledge + inherence", authentication.ClaimMapping{}, amrClaim("kba", "iris"), true},
+		{"all three categories", authentication.ClaimMapping{}, amrClaim("pwd", "sc", "vbm"), true},
+		{"two knowledge values", authentication.ClaimMapping{}, amrClaim("pwd", "pin"), false},
+		{"three possession values", authentication.ClaimMapping{}, amrClaim("otp", "hwk", "sms"), false},
+		{"two inherence values", authentication.ClaimMapping{}, amrClaim("fpt", "face"), false},
+		{"user is no factor", authentication.ClaimMapping{}, amrClaim("user", "hwk"), false},
+		{"registered no-factor values", authentication.ClaimMapping{}, amrClaim("user", "geo", "rba", "wia", "mca"), false},
+		{"unknown value never raises", authentication.ClaimMapping{}, amrClaim("pwd", "x-push"), false},
+		{"values are case-sensitive", authentication.ClaimMapping{}, amrClaim("MFA", "PWD", "OTP"), false},
+		{"hatch: listed otp alone", authentication.ClaimMapping{MFAMethods: anyOf}, amrClaim("otp"), true},
+		{"hatch: listed pop alone", authentication.ClaimMapping{MFAMethods: anyOf}, amrClaim("pop"), true},
+		{"hatch: unlisted pwd", authentication.ClaimMapping{MFAMethods: anyOf}, amrClaim("pwd"), false},
+		{"hatch is exact: unlisted mfa", authentication.ClaimMapping{MFAMethods: []string{"otp"}}, amrClaim("mfa"), false},
+		{"hatch is exact: unlisted categories", authentication.ClaimMapping{MFAMethods: []string{"hwk"}}, amrClaim("pwd", "otp"), false},
+		{"hatch counts a vendor value", authentication.ClaimMapping{MFAMethods: []string{"x-push"}}, amrClaim("x-push"), true},
+		{"flag", authentication.ClaimMapping{MFAFlag: "ctx.second_factor"}, withFlag("totp", "pwd"), true},
+		{"flag true without amr", authentication.ClaimMapping{MFAFlag: "ctx.second_factor"}, withFlag(true), true},
+		{"flag false", authentication.ClaimMapping{MFAFlag: "ctx.second_factor"}, withFlag("false", "pwd"), false},
+		{"flag absent, amr mfa", authentication.ClaimMapping{MFAFlag: "ctx.second_factor"}, amrClaim("mfa"), true},
+		{"flag absent, one factor", authentication.ClaimMapping{MFAFlag: "ctx.second_factor"}, amrClaim("otp"), false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			p := authentication.NewOIDC(testIssuer, &hmacVerifier{issuer: testIssuer}, authentication.Profile{Claims: tc.mapping})
+			id, err := p.Authenticate(context.Background(), header(mint(t, baseClaims(tc.claims))))
+			if err != nil {
+				t.Fatalf("error = %v", err)
+			}
+			if id.MFA != tc.want {
+				t.Fatalf("MFA = %v for amr %v, want %v", id.MFA, id.Methods, tc.want)
+			}
+		})
+	}
+}
+
+// Every pair of IANA-registered amr values is MFA exactly when both carry a
+// factor and the factors differ; no value alone is, except mfa.
+func TestOIDCMFARuleCoversRegistry(t *testing.T) {
+	categories := map[string][]string{
+		"knowledge":  {"pwd", "pin", "kba"},
+		"possession": {"otp", "sms", "tel", "hwk", "swk", "sc", "pop"},
+		"inherence":  {"fpt", "face", "iris", "retina", "vbm"},
+		"":           {"user", "geo", "rba", "wia", "mca"},
+	}
+	category := map[string]string{}
+	for c, values := range categories {
+		for _, v := range values {
+			category[v] = c
+		}
+	}
+	p := authentication.NewOIDC(testIssuer, &hmacVerifier{issuer: testIssuer}, authentication.Profile{})
+	mfa := func(values ...string) bool {
+		t.Helper()
+		id, err := p.Authenticate(context.Background(), header(mint(t, baseClaims(amrClaim(values...)))))
+		if err != nil {
+			t.Fatalf("amr %v: error = %v", values, err)
+		}
+		return id.MFA
+	}
+	for a, ca := range category {
+		if mfa(a) {
+			t.Errorf("amr [%s] alone = MFA, want one factor at most", a)
+		}
+		for b, cb := range category {
+			want := ca != "" && cb != "" && ca != cb
+			if got := mfa(a, b); got != want {
+				t.Errorf("amr [%s %s] MFA = %v, want %v", a, b, got, want)
+			}
+		}
 	}
 }
 

@@ -16,6 +16,13 @@
 // identity data only: the mapping has no field for roles or permissions, and
 // Identity.Attributes is host-mapped data, never an authorization grant.
 //
+// Identity.MFA means the same for every Provider: the provider asserted at
+// least two factor categories, or an explicit MFA claim or flag; a one-factor
+// sign-in leaves it false. NewOIDC's default amr rule is strict over the IANA
+// amr registry, factor-categorised: "mfa", or values from two of knowledge,
+// possession and inherence, with unknown values counting as no factor. An
+// explicit ClaimMapping.MFAMethods is the hatch: any listed value alone counts.
+//
 // RevocationChecker is optional: a provider that can report a subject's
 // standing returns RevocationFacts, which the consumer compares to each
 // token's AuthenticatedAt, so a cached answer never locks out a subject who
