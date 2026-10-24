@@ -4,21 +4,21 @@ go 1.26.10
 
 require (
 	github.com/gopernicus/gopernicus/integrations/cryptids/bcrypt v0.2.0
-	github.com/gopernicus/gopernicus/integrations/cryptids/go-oidc v0.1.0
+	github.com/gopernicus/gopernicus/integrations/cryptids/go-oidc v0.2.0
 	github.com/gopernicus/gopernicus/integrations/cryptids/golang-jwt v0.2.0
-	github.com/gopernicus/gopernicus/integrations/datastores/pgxdb v0.12.0
+	github.com/gopernicus/gopernicus/integrations/datastores/pgxdb v0.13.0
 	github.com/gopernicus/gopernicus/integrations/datastores/turso v0.8.0
-	github.com/gopernicus/gopernicus/pockets/authentication v0.23.0
+	github.com/gopernicus/gopernicus/pockets/authentication v0.24.0
 	github.com/gopernicus/gopernicus/pockets/authentication/views/goth v0.5.0
 	github.com/gopernicus/gopernicus/pockets/authorization v0.30.0
 	github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx v0.21.0
-	github.com/gopernicus/gopernicus/pockets/cms v0.5.0
+	github.com/gopernicus/gopernicus/pockets/cms v0.6.0
 	github.com/gopernicus/gopernicus/pockets/cms/views/goth v0.3.0
 	github.com/gopernicus/gopernicus/pockets/events v0.3.0
 	github.com/gopernicus/gopernicus/pockets/jobs v0.7.0
 	github.com/gopernicus/gopernicus/pockets/jobs/stores/pgx v0.7.0
 	github.com/gopernicus/gopernicus/pockets/jobs/stores/turso v0.6.0
-	github.com/gopernicus/gopernicus/sdk v0.16.0
+	github.com/gopernicus/gopernicus/sdk v0.17.0
 	github.com/gopernicus/gopernicus/ui/goth v0.2.0
 	github.com/jackc/pgx/v5 v5.9.2
 )

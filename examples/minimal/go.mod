@@ -3,9 +3,9 @@ module github.com/gopernicus/gopernicus/examples/minimal
 go 1.26.10
 
 require (
-	github.com/gopernicus/gopernicus/pockets/cms v0.5.0
+	github.com/gopernicus/gopernicus/pockets/cms v0.6.0
 	github.com/gopernicus/gopernicus/pockets/cms/views/goth v0.3.0
-	github.com/gopernicus/gopernicus/sdk v0.16.0
+	github.com/gopernicus/gopernicus/sdk v0.17.0
 	github.com/gopernicus/gopernicus/ui/goth v0.2.0
 )
 
