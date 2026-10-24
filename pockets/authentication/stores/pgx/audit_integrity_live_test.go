@@ -46,11 +46,18 @@ type auditLive struct {
 
 func newAuditLive(t *testing.T) *auditLive {
 	t.Helper()
+	return newAuditLiveNamed(t, "authaudit")
+}
+
+// newAuditLiveNamed is newAuditLive with the schema and role names prefixed by
+// prefix — mixed case for a schema name that needs quotes.
+func newAuditLiveNamed(t *testing.T, prefix string) *auditLive {
+	t.Helper()
 	dsn := os.Getenv("POSTGRES_TEST_DSN")
 	if dsn == "" {
 		t.Skip("POSTGRES_TEST_DSN not set — audit-rail integrity NOT verified")
 	}
-	l := &auditLive{dsn: dsn, admin: probeDial(t), id: fmt.Sprintf("authaudit%d", time.Now().UnixNano()%10_000_000_000), qualify: os.Getenv("POSTGRES_TEST_SCHEMA") != ""}
+	l := &auditLive{dsn: dsn, admin: probeDial(t), id: fmt.Sprintf("%s%d", prefix, time.Now().UnixNano()%10_000_000_000), qualify: os.Getenv("POSTGRES_TEST_SCHEMA") != ""}
 	l.schema = disposableSchema(t, l.id)
 	l.migrator = l.role(t, "migrator")
 	l.exec(t, `CREATE SCHEMA "`+l.id+`" AUTHORIZATION "`+l.migrator+`"`)
@@ -109,6 +116,12 @@ func (l *auditLive) runtimeRole(t *testing.T, suffix, privileges string) string 
 // the plaintext test DSN.
 func (l *auditLive) openAs(t *testing.T, role string, mode environment.Mode) *pgxdb.DB {
 	t.Helper()
+	return l.openWith(t, role, mode, slog.New(slog.DiscardHandler))
+}
+
+// openWith is openAs with the connector's posture log sent to logger.
+func (l *auditLive) openWith(t *testing.T, role string, mode environment.Mode, logger *slog.Logger) *pgxdb.DB {
+	t.Helper()
 	u, err := url.Parse(l.dsn)
 	if err != nil {
 		t.Fatalf("parse DSN: %v", err)
@@ -116,7 +129,7 @@ func (l *auditLive) openAs(t *testing.T, role string, mode environment.Mode) *pg
 	u.User = url.UserPassword(role, auditRolePassword)
 	db, err := pgxdb.Open(context.Background(), pgxdb.Config{
 		DSN: u.String(), MaxConns: 2, RuntimeMode: mode, TLSDisabledAcknowledged: mode != "",
-		Logger: slog.New(slog.DiscardHandler),
+		Logger: logger,
 	})
 	if err != nil {
 		t.Fatalf("open as %s: %v", role, err)

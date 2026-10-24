@@ -345,13 +345,14 @@ func lockActiveUser(ctx context.Context, tx *pgxdb.Tx, table, userID string) (us
 		displayName  string
 		authRevision int64
 		status       string
+		erasedAt     *time.Time
 		createdAt    time.Time
 		updatedAt    time.Time
 	)
-	q := `SELECT display_name, auth_revision, status, created_at, updated_at
+	q := `SELECT display_name, auth_revision, status, erased_at, created_at, updated_at
 		FROM ` + table + ` WHERE id = @id FOR UPDATE`
 	if err := tx.QueryRow(ctx, q, pgx.NamedArgs{"id": userID}).
-		Scan(&displayName, &authRevision, &status, &createdAt, &updatedAt); err != nil {
+		Scan(&displayName, &authRevision, &status, &erasedAt, &createdAt, &updatedAt); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return user.User{}, passwordless.ErrRedemption
 		}
@@ -361,7 +362,7 @@ func lockActiveUser(ctx context.Context, tx *pgxdb.Tx, table, userID string) (us
 		ID:           userID,
 		DisplayName:  displayName,
 		AuthRevision: authRevision,
-		Status:       user.NormalizeStatus(user.Status(status)),
+		Status:       projectStatus(status, erasedAt),
 		CreatedAt:    createdAt.UTC(),
 		UpdatedAt:    updatedAt.UTC(),
 	}

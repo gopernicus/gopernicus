@@ -51,10 +51,10 @@ func NewUserAdminStore(db *tursodb.DB) *UserAdminStore {
 // unambiguous `id` and `created_at` columns: both tables carry a created_at, and
 // the keyset predicate lives in a WHERE clause where an output alias would not
 // resolve. The pgx sibling uses the identical shape.
-const userSummarySelect = `SELECT id, display_name, status, status_changed_at, created_at, updated_at, primary_email, primary_email_verified_at
+const userSummarySelect = `SELECT id, display_name, status, status_changed_at, erased_at, created_at, updated_at, primary_email, primary_email_verified_at
 	FROM (
 		SELECT u.id AS id, u.display_name AS display_name, u.status AS status,
-			u.status_changed_at AS status_changed_at, u.created_at AS created_at,
+			u.status_changed_at AS status_changed_at, u.erased_at AS erased_at, u.created_at AS created_at,
 			u.updated_at AS updated_at,
 			i.normalized_value AS primary_email, i.verified_at AS primary_email_verified_at
 		FROM users u
@@ -73,6 +73,7 @@ type userSummaryRow struct {
 	DisplayName            string           `db:"display_name"`
 	Status                 string           `db:"status"`
 	StatusChangedAt        tursodb.NullTime `db:"status_changed_at"`
+	ErasedAt               tursodb.NullTime `db:"erased_at"`
 	CreatedAt              tursodb.Time     `db:"created_at"`
 	UpdatedAt              tursodb.Time     `db:"updated_at"`
 	PrimaryEmail           *string          `db:"primary_email"`
@@ -83,7 +84,7 @@ func (r userSummaryRow) toDomain() user.Summary {
 	s := user.Summary{
 		ID:              r.ID,
 		DisplayName:     r.DisplayName,
-		Status:          user.NormalizeStatus(user.Status(r.Status)),
+		Status:          projectStatus(r.Status, r.ErasedAt.Valid),
 		StatusChangedAt: r.StatusChangedAt.Time,
 		CreatedAt:       r.CreatedAt.Time,
 		UpdatedAt:       r.UpdatedAt.Time,
@@ -128,7 +129,9 @@ func (s *UserAdminStore) GetSummary(ctx context.Context, id string) (user.Summar
 // transaction is deliberate:
 //
 //  1. read the current status (the BEGIN IMMEDIATE write lock is already held, so
-//     this read cannot be invalidated by a concurrent writer);
+//     this read cannot be invalidated by a concurrent writer); an erased user
+//     replays a deactivation (Changed=false, StatusErased) and refuses a
+//     reactivation with user.ErrErased, decided in this read;
 //  2. an unchanged desired status returns early with Changed=false, writing
 //     nothing and leaving auth_revision alone — the idempotent replay;
 //  3. the UPDATE writes status/status_changed_at/updated_at and increments
@@ -142,17 +145,27 @@ func (s *UserAdminStore) SetStatus(ctx context.Context, id string, status user.S
 	if !status.Valid() {
 		return user.StatusChange{}, fmt.Errorf("authentication turso store: %q: %w", status, user.ErrInvalidStatus)
 	}
+	if status == user.StatusErased {
+		return user.StatusChange{}, user.ErrErased
+	}
 	now = now.UTC()
 
 	var out user.StatusChange
 	err := s.db.InTx(ctx, func(tx *tursodb.Tx) error {
 		var (
-			current   string
-			changedAt tursodb.NullTime
+			current             string
+			changedAt, erasedAt tursodb.NullTime
 		)
-		const readQ = `SELECT status, status_changed_at FROM users WHERE id = ?`
-		if err := tx.QueryRow(ctx, readQ, id).Scan(&current, &changedAt); err != nil {
+		const readQ = `SELECT status, status_changed_at, erased_at FROM users WHERE id = ?`
+		if err := tx.QueryRow(ctx, readQ, id).Scan(&current, &changedAt, &erasedAt); err != nil {
 			return tursodb.MapError(err)
+		}
+		if erasedAt.Valid {
+			if status == user.StatusActive {
+				return user.ErrErased
+			}
+			out = user.StatusChange{Status: user.StatusErased, Changed: false, ChangedAt: changedAt.Time}
+			return nil
 		}
 
 		if user.NormalizeStatus(user.Status(current)) == status {

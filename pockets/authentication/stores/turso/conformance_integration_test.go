@@ -80,6 +80,8 @@ func TestConformance_Turso(t *testing.T) {
 // truncate clears every auth table so a Repositories starts empty. The
 // security_events immutability triggers refuse DELETE from every connection, so
 // it drops them first and re-executes the embedded 0022 after (test-only).
+// security_events_retention is not in authTables: its row is configuration —
+// the floor — and Repositories refuses a database without it.
 func truncate(t *testing.T, db *tursodb.DB) {
 	t.Helper()
 	ctx := context.Background()
@@ -117,4 +119,22 @@ func TestSecurityEventsIntegrity_Turso(t *testing.T) {
 		},
 		reset: probeDropAll,
 	})
+}
+
+// TestFloorRowSurvivesTruncate_Turso proves the harness keeps the floor: after
+// truncate() row 1 of security_events_retention still reads 365 and the store
+// still constructs.
+func TestFloorRowSurvivesTruncate_Turso(t *testing.T) {
+	db := probeDial(t)
+	if err := tursodb.RunMigrations(context.Background(), db, MigrationsFS, MigrationsDir); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	truncate(t, db)
+	var days int
+	if err := db.QueryRow(context.Background(), `SELECT floor_days FROM `+retentionFloorTable+` WHERE id = 1`).Scan(&days); err != nil || days != 365 {
+		t.Fatalf("floor row after truncate = %d, %v; want 365", days, err)
+	}
+	if _, err := Repositories(context.Background(), db); err != nil {
+		t.Fatalf("Repositories after truncate: %v", err)
+	}
 }

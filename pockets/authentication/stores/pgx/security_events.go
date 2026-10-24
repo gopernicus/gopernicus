@@ -78,6 +78,12 @@ func (r securityEventRow) toDomain() securityevent.SecurityEvent {
 
 // Create appends an audit row and returns the stored record.
 func (s *SecurityEventStore) Create(ctx context.Context, evt securityevent.SecurityEvent) (securityevent.SecurityEvent, error) {
+	return insertSecurityEvent(ctx, s.db, s.table(securityEventsTable), evt)
+}
+
+// insertSecurityEvent appends evt to the already-qualified rail table through
+// q — the pool, or the transaction of a write that records its own evidence.
+func insertSecurityEvent(ctx context.Context, q pgxdb.Querier, table string, evt securityevent.SecurityEvent) (securityevent.SecurityEvent, error) {
 	details, err := marshalDetails(evt.Details)
 	if err != nil {
 		return securityevent.SecurityEvent{}, err
@@ -98,17 +104,17 @@ func (s *SecurityEventStore) Create(ctx context.Context, evt securityevent.Secur
 	// Empty ID → the sdk.DatabaseID strategy (amended D10): omit the id
 	// column so the schema default generates the key, read back with RETURNING.
 	if evt.ID == "" {
-		q := `INSERT INTO ` + s.table(securityEventsTable) + ` (user_id, actor_type, actor_id, event_type, event_status, details, ip_address, user_agent, request_id, trace_id, created_at)
+		sql := `INSERT INTO ` + table + ` (user_id, actor_type, actor_id, event_type, event_status, details, ip_address, user_agent, request_id, trace_id, created_at)
 			VALUES (@user_id, @actor_type, @actor_id, @event_type, @event_status, @details, @ip_address, @user_agent, @request_id, @trace_id, @created_at)
 			RETURNING id`
-		if err := s.db.QueryRow(ctx, q, args).Scan(&evt.ID); err != nil {
+		if err := q.QueryRow(ctx, sql, args).Scan(&evt.ID); err != nil {
 			return securityevent.SecurityEvent{}, pgxdb.MapError(err)
 		}
 	} else {
-		q := `INSERT INTO ` + s.table(securityEventsTable) + ` (` + securityEventColumns + `)
+		sql := `INSERT INTO ` + table + ` (` + securityEventColumns + `)
 			VALUES (@id, @user_id, @actor_type, @actor_id, @event_type, @event_status, @details, @ip_address, @user_agent, @request_id, @trace_id, @created_at)`
 		args["id"] = evt.ID
-		if _, err := s.db.Exec(ctx, q, args); err != nil {
+		if _, err := q.Exec(ctx, sql, args); err != nil {
 			return securityevent.SecurityEvent{}, err
 		}
 	}

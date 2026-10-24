@@ -34,8 +34,9 @@ func NewUserStore(db *pgxdb.DB, opts ...Option) *UserStore {
 // userColumns is the users projection. status/status_changed_at (migration 0014)
 // are read here so a loaded user carries its lifecycle posture: every credential
 // path that consults User.Active() depends on this projection, and omitting them
-// would silently normalize every row to active.
-const userColumns = "id, display_name, auth_revision, status, status_changed_at, created_at, updated_at"
+// would silently normalize every row to active. erased_at (migration 0023) is
+// the erasure marker the reader projects as user.StatusErased.
+const userColumns = "id, display_name, auth_revision, status, status_changed_at, erased_at, created_at, updated_at"
 
 // userRow is the store-local, db-tagged projection of a users row.
 type userRow struct {
@@ -44,6 +45,7 @@ type userRow struct {
 	AuthRevision    int64      `db:"auth_revision"`
 	Status          string     `db:"status"`
 	StatusChangedAt *time.Time `db:"status_changed_at"`
+	ErasedAt        *time.Time `db:"erased_at"`
 	CreatedAt       time.Time  `db:"created_at"`
 	UpdatedAt       time.Time  `db:"updated_at"`
 }
@@ -53,11 +55,21 @@ func (r userRow) toDomain() user.User {
 		ID:              r.ID,
 		DisplayName:     r.DisplayName,
 		AuthRevision:    r.AuthRevision,
-		Status:          user.NormalizeStatus(user.Status(r.Status)),
+		Status:          projectStatus(r.Status, r.ErasedAt),
 		StatusChangedAt: pgxdb.FromNullTime(r.StatusChangedAt),
 		CreatedAt:       r.CreatedAt.UTC(),
 		UpdatedAt:       r.UpdatedAt.UTC(),
 	}
+}
+
+// projectStatus is the status every reader reports: user.StatusErased when the
+// erasure marker is set (the column itself stays deactivated), the normalized
+// column otherwise.
+func projectStatus(status string, erasedAt *time.Time) user.Status {
+	if erasedAt != nil {
+		return user.StatusErased
+	}
+	return user.NormalizeStatus(user.Status(status))
 }
 
 // CreateWithPrimaryIdentifier inserts the user and its first identifier in one

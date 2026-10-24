@@ -66,7 +66,10 @@ var externalProbeTables = []string{"external_subjects"}
 // before boot, so the failure surfaces at wiring time rather than on the first
 // query. This is the store half of the scaffold model: the host owns and
 // applies the schema (see ExportMigrations) and the store just provides repos.
-// db is the connector wrapper (error mapping + Tx), not a raw *sql.DB. Last it
+// db is the connector wrapper (error mapping + Tx), not a raw *sql.DB. It
+// refuses, with sdk.ErrNotFound naming the file, a database without migration
+// 0023 (the users.erased_at column) or without row 1 of 0024's
+// security_events_retention floor table — never a default floor. Last it
 // checks the 0022 immutability triggers (AuditTables) under the RuntimeMode db
 // was opened with, logging a WARN when they are missing or altered.
 func Repositories(ctx context.Context, db *tursodb.DB) (auth.Repositories, error) {
@@ -92,6 +95,9 @@ func Repositories(ctx context.Context, db *tursodb.DB) (auth.Repositories, error
 		if err := probeTable(ctx, db, table); err != nil {
 			return auth.Repositories{}, err
 		}
+	}
+	if _, err := readFloorDays(ctx, db); err != nil {
+		return auth.Repositories{}, err
 	}
 	if err := db.ProbeAuditImmutable(ctx, AuditTables()...); err != nil {
 		return auth.Repositories{}, err
@@ -126,6 +132,10 @@ func Repositories(ctx context.Context, db *tursodb.DB) (auth.Repositories, error
 		// is what routes redemption through it (CHAU-6.1).
 		Passwordless:     NewPasswordlessStore(db),
 		ExternalSubjects: NewExternalSubjectStore(db),
+		// Retention and erasure (SOC 2 S3) run on this same database: the rail
+		// purge appends its evidence to the table it purges.
+		Maintenance: NewMaintenanceStore(db),
+		UserErasure: NewErasureStore(db),
 	}, nil
 }
 
@@ -142,6 +152,7 @@ var probeColumns = []struct{ table, column, migration string }{
 	{"sessions", "session_profile", "0019_oauth2_sessions.sql"},
 	{"sessions", "delegation", "0019_oauth2_sessions.sql"},
 	{"security_events", "request_id", "0021_security_events_integrity.sql"},
+	{"users", "erased_at", retentionMigration},
 }
 
 // The immutability triggers migration 0022 creates, as sqlite_schema stores

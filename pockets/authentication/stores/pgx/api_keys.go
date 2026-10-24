@@ -66,7 +66,10 @@ func (r apiKeyRow) toDomain() apikey.APIKey {
 	}
 }
 
-// Create persists a new key; a colliding key_hash → sdk.ErrAlreadyExists.
+// Create persists a new key; a colliding key_hash → sdk.ErrAlreadyExists. The
+// insert runs under FOR SHARE on the service account's row, the lock
+// ServiceAccountStore.DeleteWithKeys takes FOR UPDATE: a mint racing a cascade
+// either commits first and is deleted with the account, or waits for it.
 func (s *APIKeyStore) Create(ctx context.Context, k apikey.APIKey) (apikey.APIKey, error) {
 	args := pgx.NamedArgs{
 		"service_account_id": k.ServiceAccountID,
@@ -78,21 +81,25 @@ func (s *APIKeyStore) Create(ctx context.Context, k apikey.APIKey) (apikey.APIKe
 		"last_used_at":       pgxdb.NullTime(k.LastUsedAt),
 		"created_at":         k.CreatedAt.UTC(),
 	}
-	// Empty ID → the sdk.DatabaseID strategy (amended D10): omit the id
-	// column so the schema default generates the key, read back with RETURNING.
-	if k.ID == "" {
-		q := `INSERT INTO ` + s.table(apiKeysTable) + ` (service_account_id, name, key_prefix, key_hash, expires_at, revoked_at, last_used_at, created_at)
-			VALUES (@service_account_id, @name, @key_prefix, @key_hash, @expires_at, @revoked_at, @last_used_at, @created_at)
-			RETURNING id`
-		if err := s.db.QueryRow(ctx, q, args).Scan(&k.ID); err != nil {
-			return apikey.APIKey{}, pgxdb.MapError(err)
+	err := s.db.InTx(ctx, func(tx *pgxdb.Tx) error {
+		if _, err := tx.Exec(ctx, `SELECT 1 FROM `+s.table(serviceAccountsTable)+` WHERE id = @service_account_id FOR SHARE`, args); err != nil {
+			return err
 		}
-		return k, nil
-	}
-	q := `INSERT INTO ` + s.table(apiKeysTable) + ` (` + apiKeyColumns + `)
-		VALUES (@id, @service_account_id, @name, @key_prefix, @key_hash, @expires_at, @revoked_at, @last_used_at, @created_at)`
-	args["id"] = k.ID
-	if _, err := s.db.Exec(ctx, q, args); err != nil {
+		// Empty ID → the sdk.DatabaseID strategy (amended D10): omit the id
+		// column so the schema default generates the key, read back with RETURNING.
+		if k.ID == "" {
+			q := `INSERT INTO ` + s.table(apiKeysTable) + ` (service_account_id, name, key_prefix, key_hash, expires_at, revoked_at, last_used_at, created_at)
+				VALUES (@service_account_id, @name, @key_prefix, @key_hash, @expires_at, @revoked_at, @last_used_at, @created_at)
+				RETURNING id`
+			return pgxdb.MapError(tx.QueryRow(ctx, q, args).Scan(&k.ID))
+		}
+		q := `INSERT INTO ` + s.table(apiKeysTable) + ` (` + apiKeyColumns + `)
+			VALUES (@id, @service_account_id, @name, @key_prefix, @key_hash, @expires_at, @revoked_at, @last_used_at, @created_at)`
+		args["id"] = k.ID
+		_, err := tx.Exec(ctx, q, args)
+		return err
+	})
+	if err != nil {
 		return apikey.APIKey{}, err
 	}
 	return k, nil
