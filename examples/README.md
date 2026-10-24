@@ -284,7 +284,7 @@ guard proves the composition asks for it. These ten lines are what
 | **P4** | A host that builds a `web.ServerConfig` calls its `ValidateProduction()`. |
 | **P5** | Every recognized acknowledgement in scanned files is a boolean literal (`true` or `false`), never another expression; an option-form acknowledgement is a direct argument of the `New(` call; `--posture` prints one `ack` line (file:line, flag) per `true`, `posture_waiver` instead for a recognized fail-open waiver, and `ack (conditional)` or `posture_waiver (conditional)` when it sits under `if`/`switch` — informational, exit code unchanged. |
 | **P6** | A host that mounts authentication builds its keys through `authentication.NewKeys(` with a `KeysInput` filled by `environment.ParseEnvTags` in a scanned file; `--posture` prints one informational `rand` line per `crypto/rand` use in scanned files so a review sees any other key minting (no ban: non-auth keys such as auth-cms's cursor key, `documents.go:43`, are legitimate). |
-| **P7** | `.env.example`, when present, carries no **uncommented** `sslmode=disable`/`DB_SSLMODE=disable` line; mentions the host's mode key ONLY in a comment (`# APP_RUNTIME_MODE=…` — an uncommented assignment, even empty, is a finding, because `LoadEnvForMode` refuses it); and names `TRUSTED_PROXY_COUNT` and `PUBLIC_BASE_URL`. |
+| **P7** | `.env.example`, when present, carries no **uncommented** `sslmode=disable`/`DB_SSLMODE=disable` line and no **uncommented** `DB_LOG_QUERIES=true`/`DB_LOG_QUERY_ARGS=true` line (a prefixed key such as `AUTH_DB_LOG_QUERIES` and any true spelling `strconv.ParseBool` accepts included, because production refuses query logging on both connectors); mentions the host's mode key ONLY in a comment (`# APP_RUNTIME_MODE=…` — an uncommented assignment, even empty, is a finding, because `LoadEnvForMode` refuses it); and names `TRUSTED_PROXY_COUNT` and `PUBLIC_BASE_URL`. |
 | **P8** | Every `cms.Config` literal in scanned files names `AdminMiddleware` or `AdminUngatedAcknowledged` (the flip is not a boot refusal, so downstream hosts need the pre-deploy signal; G31 covers only this repo). |
 | **P9** | For every store the host mounts, every store migration file has a byte-identical copy in the host ledger; an immutability trigger file may be declined by omitting it, and the posture report says so. |
 
@@ -353,6 +353,12 @@ declare them.
 > `PublicRouteLimiterFailOpen`, and P5 prints `posture_waiver` for a waiver's
 > `true`. Those are the only edits to the P2 and P5 sentences, this list and
 > the review-evidence sentence above.
+
+> **Amendment 2026-10-24 (SOC 2 S6, workshop/gopernicus v0.9.0):** P7 also
+> finds an uncommented `DB_LOG_QUERIES` or `DB_LOG_QUERY_ARGS` set true in
+> `.env.example`, bare or prefixed: turso v0.9.0 joins pgxdb in refusing any
+> query logging in production, and no acknowledgement exists for it. That is
+> the only edit to the P7 sentence; no recognized surface changes.
 
 `--posture` requires workshop/gopernicus ≥ v0.5.0; an older pin refuses the flag — the binary
 exits 2, and a `go run …@<old>` invocation prints `exit status 2` and returns 1 — so CI treats any

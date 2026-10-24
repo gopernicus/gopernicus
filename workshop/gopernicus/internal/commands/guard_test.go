@@ -759,6 +759,14 @@ func postureFixtures() []guardFixture {
 		{name: "mode commented, TLS on, proxies and origin named", rule: "P7", files: env()},
 		{name: "uncommented DB_SSLMODE=disable", rule: "P7", violating: true, files: env(
 			"DB_SSLMODE=verify-full", "DB_SSLMODE=disable")},
+		{name: "query logging commented out, false or empty", rule: "P7", files: env(
+			"DB_SSLMODE=verify-full\n", "DB_SSLMODE=verify-full\n# DB_LOG_QUERIES=true\n# DB_LOG_QUERY_ARGS=true\nDB_LOG_QUERIES=false\nDB_LOG_QUERY_ARGS=\nAUTH_DB_LOG_QUERIES=0\n")},
+		{name: "uncommented DB_LOG_QUERIES=true", rule: "P7", violating: true, files: env(
+			"DB_SSLMODE=verify-full\n", "DB_SSLMODE=verify-full\nDB_LOG_QUERIES=true\n")},
+		{name: "uncommented DB_LOG_QUERY_ARGS=true", rule: "P7", violating: true, files: env(
+			"DB_SSLMODE=verify-full\n", "DB_SSLMODE=verify-full\nDB_LOG_QUERY_ARGS=true\n")},
+		{name: "prefixed, quoted and spelled 1", rule: "P7", violating: true, files: env(
+			"DB_SSLMODE=verify-full\n", "DB_SSLMODE=verify-full\nexport AUTH_DB_LOG_QUERIES=\"1\"  # dev only\n")},
 		{name: "the mode key assigned, even empty", rule: "P7", violating: true, files: env(
 			"TRUSTED_PROXY_COUNT=0\n", "TRUSTED_PROXY_COUNT=0\nAPP_RUNTIME_MODE=\n")},
 		{name: "AUTH_PUBLIC_BASE_URL does not name PUBLIC_BASE_URL", rule: "P7", violating: true, files: env(
@@ -909,6 +917,20 @@ func TestGuardP9Declined(t *testing.T) {
 	out = captureStdout(t, func() int { code = Run([]string{"guard", "--posture", root}); return code })
 	if code != 1 || !strings.Contains(out, "\nP9   1 finding (declined: 0003_widgets_immutable.sql)\n") {
 		t.Fatalf("exit %d, want 1 with the declined note on the P9 findings line:\n%s", code, out)
+	}
+}
+
+// TestGuardP7QueryLogging pins the query-logging clause's finding: one per
+// uncommented line set true, at that line, naming the key as written.
+func TestGuardP7QueryLogging(t *testing.T) {
+	env := postureEnv("DB_SSLMODE=verify-full\n", "DB_SSLMODE=verify-full\nDB_LOG_QUERIES=true\nAUTH_DB_LOG_QUERY_ARGS=TRUE\n")
+	res := evalFixture(t, guardFixture{rule: "P7", files: map[string]string{"cmd/server/main.go": postureRoot(), ".env.example": env}})
+	want := []guardFinding{
+		{where: ".env.example:5", msg: "uncommented DB_LOG_QUERIES set true (comment it out; production refuses query logging)"},
+		{where: ".env.example:6", msg: "uncommented AUTH_DB_LOG_QUERY_ARGS set true (comment it out; production refuses query logging)"},
+	}
+	if !slices.Equal(res.findings, want) {
+		t.Fatalf("P7 findings = %+v, want %+v", res.findings, want)
 	}
 }
 

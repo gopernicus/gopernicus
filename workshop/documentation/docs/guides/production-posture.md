@@ -5,12 +5,12 @@ description: What the framework refuses in production today, what is documented 
 
 # Production posture
 
-This page describes the framework **as it is on `main` at 2026-10-23, after SOC 2 slices S1–S3
-and S5** (the production posture floor, audit completeness and integrity, retention and erasure,
-transport and abuse hardening; release records in `RELEASING.md`, host handoffs in
-`plans/soc2-s1-production-posture-handoff.md`, `plans/soc2-s2-audit-completeness-handoff.md` and
-`plans/soc2-s3-retention-erasure-handoff.md`; S5 has no handoff file — its record carries the
-upgrade notes).
+This page describes the framework **as it is on `main` at 2026-10-24, after SOC 2 slices S1–S3,
+S5 and S6** (the production posture floor, audit completeness and integrity, retention and
+erasure, transport and abuse hardening, secrets and logging; release records in `RELEASING.md`,
+host handoffs in `plans/soc2-s1-production-posture-handoff.md`,
+`plans/soc2-s2-audit-completeness-handoff.md` and `plans/soc2-s3-retention-erasure-handoff.md`;
+S5 and S6 have no handoff file — their records carry the upgrade notes).
 Where a control is still planned, it says so; an item marked *planned* is not a control a host
 can claim yet.
 
@@ -108,6 +108,19 @@ WARN at `New`); `PasswordConfig.CompromisedPasswordFailOpen` admits a password w
 checker errors (one WARN per admitted check). Both are literals in the composition root, and
 `guard --posture` (workshop/gopernicus v0.8.0) prints a `posture_waiver` line for each one
 written `true` (P5), where an acknowledgement prints `ack`.
+
+**Added by S6** (sdk v0.18.0, pgxdb v0.14.0, turso v0.9.0):
+
+| Module | Production refuses | Sentinel | Acknowledgement |
+|---|---|---|---|
+| turso | `LogQueries` (`DB_LOG_QUERIES`) or `LogQueryArgs` (`DB_LOG_QUERY_ARGS`), checked before the TLS test and joined with any TLS refusal; the error names field and variable, `Config.LogQueries (DB_LOG_QUERIES)` | `ErrQueryLoggingRefused` | none — unset it |
+| pgxdb | `LogQueryArgs` (`DB_LOG_QUERY_ARGS`), even alone, beside S1's `LogQueries` and logging `Tracer`; the error names field and variable | `ErrQueryLoggingRefused` | none — unset it |
+| pgxdb, turso | a revealed `DSN`/`Password` (pgxdb) or `URL`/`AuthToken` (turso) containing `[redacted]`, at `Open` before any dial (all modes) | `sdk.ErrRedactedSecret`, naming the field | none — compose from `Reveal()` |
+| sdk `notify/email` | an `SMTPConfig.Password` containing `[redacted]`: `Probe` and `Send` fail (all modes; production hosts probe at boot) | `sdk.ErrRedactedSecret` | none |
+
+`guard --posture` (workshop/gopernicus v0.9.0) gives the turso refusal its pre-deploy signal: an
+uncommented `DB_LOG_QUERIES` or `DB_LOG_QUERY_ARGS` set true in `.env.example`, bare or
+prefixed, is a P7 finding, as an uncommented `sslmode=disable` has been since S1.
 
 ## Retention (S3)
 
@@ -222,11 +235,68 @@ notes table with module versions.
   `Content-Disposition` — `inline` for images, `attachment` for everything else, so PDFs
   download.
 
+## Secrets and logging (S6)
+
+Each flip below names its escape hatch; `RELEASING.md`'s S6 section carries the full upgrade
+notes table with module versions.
+
+- **Credentials are `sdk.Secret`.** Every integration `Config` field that holds a credential is
+  an `sdk.Secret`: pgxdb `DSN`/`Password`, turso `URL`/`AuthToken`, `email.SMTPConfig.Password`,
+  goredis `URL`/`Password`, sendgrid `APIKey`, s3 `SecretAccessKey`, gcs `CredentialsJSON`,
+  google/github `ClientSecret` and firebase `CredentialsJSON`. A Secret renders `[redacted]`
+  through `fmt` (every verb), `slog`, `encoding/json` and `MarshalText`; `Reveal()` is the one
+  read. `environment.ParseEnvTags` fills one like any string and an untyped literal still
+  assigns; a `string` variable converts with `sdk.Secret(v)` (a compile error until it does, and
+  firebase's former `[]byte` breaks every builder: `sdk.Secret(string(b))`). The adapters that
+  keep a secret in an unexported field — google/github `Provider`, sendgrid `Sender`, gcs
+  `Store`, golang-jwt `Signer` — implement `fmt.Formatter` and `slog.LogValuer`, so `%+v` or
+  `slog.Any` of one prints a redacted summary; a host's own wrapper struct is its own to cover.
+  Guard G37 keeps every new credential-named field under `integrations/` and `sdk/` an
+  `sdk.Secret`.
+- **A composed secret fails loudly.** A DSN or URL built from a Secret with `fmt` or `+` carries
+  `[redacted]` instead of the credential. pgxdb and turso `Open`, and SMTP `Probe`/`Send`, refuse
+  it with `sdk.ErrRedactedSecret` before any dial (table above): compose from `Reveal()` and wrap
+  the result in `sdk.Secret(…)`. A key composed into a sendgrid, s3, gcs or OAuth call fails at
+  its first use. `pgxdb.Config.Redacted()` and `turso.Config.Redacted()` remain the operator's
+  view of the target.
+- **Redaction is on by default.** `logging.New` composes `ContextHandler(RedactHandler(…))` in
+  every mode and format. An attribute keyed `password`, `passwd`, `secret`, `token`,
+  `access_token`, `refresh_token`, `api_key`, `apikey`, `x_api_key`, `authorization`, `cookie`,
+  `set-cookie`, `private_key`, `client_secret`, `credentials_json`, `auth_token` or `dsn`
+  (`logging.DefaultRedactKeys`) logs `[redacted]` whatever its kind, a group included. Keys match
+  exactly, case-insensitively, with `-` and `_` equivalent (`X-API-Key` is `x_api_key`;
+  `refresh_token_hash` is not `token`). `LOG_REDACT_KEYS` (comma-separated,
+  `logging.Options.RedactKeys`) adds keys and never removes one. There is no off switch: a host
+  that must log a value under one of these keys renames the attribute (auth-cms logs its demo key
+  as `seeded_api_key`) or composes `logging.NewContextHandler` over its own handler. The handler
+  sees keys only: a secret inside an `slog.Any` map or struct, or inside error text, passes
+  through — including the request line's `error` attribute, where a pgx invalid-input error
+  (SQLSTATE 22P02) repeats the rejected value.
+- **The request line says who, from where.** `web.Logger` keeps `method`, `path`, `status`,
+  `elapsed`, `remote_addr` (the raw peer), `error`, `aborted` and `hijacked`, never the query
+  string, and adds, when known, `client_ip` (from `web.TrustProxies`), `user_agent` (truncated to
+  256 bytes at a UTF-8 boundary), one `request_id`, and `principal_type`/`principal_id` — the last
+  principal authenticated during the request, including one the surface then refused; observability
+  only, never an authorization input. It must sit inside `TrustProxies` and `RequestID`
+  (`TrustProxies`, then `RequestID`, then `Logger`), because it reads both from its own request
+  context.
+  A nested `web.RequestID` reuses the id already on the context, and `ContextHandler` adds no
+  second `request_id` to a record that carries one. `client_ip` and `user_agent` are personal
+  data: `LOG_REDACT_KEYS=client_ip,user_agent` drops them. Log retention is the host's log
+  pipeline; the S3 rails cover datastore rows, not log output.
+- **Query logs carry no values, and production refuses them.** `DB_LOG_QUERIES=true`
+  (`LogQueries`) logs each query's `sql`, `arg_count` and `arg_types`, never a bind value, with
+  the request's `request_id`; a failed pgx query logs its SQLSTATE and constraint (anything else
+  its error type), never its error text. `DB_LOG_QUERY_ARGS=true` (`LogQueryArgs`) adds the
+  values verbatim (and, on pgx, the error text) — development only, and inert without
+  `DB_LOG_QUERIES`. Production refuses any query logging on both connectors (*Added by S6*);
+  there is no acknowledgement — unset it.
+
 ## Documented only: nothing refuses it today
 
 | Knob | Today | Planned |
 |---|---|---|
-| `LOG_LEVEL=DEBUG` | authorization decision records carry principal and resource ids | keep INFO in production; redaction handler (S6) |
+| `LOG_LEVEL=DEBUG` | authorization decision records carry principal and resource ids | keep INFO in production; the S6 redaction handler matches credential keys, not ids |
 | Authentication failure events | the rail is required in production (above) but many failure paths still write no event | failures on every path (S2) |
 
 ## Trust boundary
