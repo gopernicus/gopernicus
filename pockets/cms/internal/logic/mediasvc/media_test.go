@@ -73,6 +73,9 @@ func TestMedia_UploadOpenDelete(t *testing.T) {
 	blobs := newMemBlobs()
 	now := time.Date(2026, 6, 22, 0, 0, 0, 0, time.UTC)
 	svc := NewService(newFakeAssets(), blobs, sdk.IDGenerator{}, func() time.Time { return now })
+	if err := svc.SetUploadPolicy(UploadPolicy{AllowedMediaTypes: []string{"image/png"}}); err != nil {
+		t.Fatalf("SetUploadPolicy: %v", err)
+	}
 
 	content := "PNG-BYTES"
 	a, err := svc.Upload(ctx, "My Logo.PNG", "image/png", int64(len(content)), strings.NewReader(content))
@@ -126,5 +129,63 @@ func TestMedia_UploadValidation(t *testing.T) {
 	}
 	if _, err := svc.Upload(ctx, "f.png", "image/png", 0, strings.NewReader("")); !errors.Is(err, sdk.ErrInvalidInput) {
 		t.Errorf("empty file: %v", err)
+	}
+}
+
+func TestMedia_UploadPolicy(t *testing.T) {
+	ctx := context.Background()
+	blobs := newMemBlobs()
+	assets := newFakeAssets()
+	svc := NewService(assets, blobs, sdk.IDGenerator{}, nil)
+
+	// No policy installed: every upload is refused.
+	if _, err := svc.Upload(ctx, "f.png", "image/png", 1, strings.NewReader("x")); !errors.Is(err, sdk.ErrInvalidInput) {
+		t.Fatalf("upload with no policy: %v, want sdk.ErrInvalidInput", err)
+	}
+
+	if err := svc.SetUploadPolicy(UploadPolicy{AllowedMediaTypes: []string{"IMAGE/PNG", "application/pdf; charset=binary"}}); err != nil {
+		t.Fatalf("SetUploadPolicy: %v", err)
+	}
+
+	// Listed types are stored; parsing makes case and parameters irrelevant.
+	for _, ct := range []string{"image/png", "application/pdf", "Image/Png; foo=bar"} {
+		a, err := svc.Upload(ctx, "f.bin", ct, 1, strings.NewReader("x"))
+		if err != nil {
+			t.Fatalf("upload %q: %v", ct, err)
+		}
+		if _, ok := blobs.data[a.StorageKey]; !ok {
+			t.Errorf("upload %q: bytes not stored", ct)
+		}
+	}
+
+	// An unlisted type is refused before any byte is stored, naming the list.
+	stored := len(blobs.data)
+	_, err := svc.Upload(ctx, "evil.png", "text/html", 1, strings.NewReader("<script>"))
+	if !errors.Is(err, sdk.ErrInvalidInput) {
+		t.Fatalf("unlisted type: %v, want sdk.ErrInvalidInput", err)
+	}
+	if want := "unsupported file type; allowed: image/png, application/pdf"; !strings.Contains(err.Error(), want) {
+		t.Errorf("unlisted type message = %q, want it to contain %q", err.Error(), want)
+	}
+	if len(blobs.data) != stored || len(assets.byID) != stored {
+		t.Errorf("refused upload stored bytes or metadata")
+	}
+
+	// Validation still answers first: an empty file is "file is empty".
+	if _, err := svc.Upload(ctx, "f.png", "text/html", 0, strings.NewReader("")); err == nil || !strings.Contains(err.Error(), "file is empty") {
+		t.Errorf("empty unlisted upload: %v, want the empty-file error", err)
+	}
+}
+
+func TestMedia_SetUploadPolicyRefusesUnparsableEntry(t *testing.T) {
+	svc := NewService(newFakeAssets(), newMemBlobs(), sdk.IDGenerator{}, nil)
+	if err := svc.SetUploadPolicy(UploadPolicy{AllowedMediaTypes: []string{"image/png"}}); err != nil {
+		t.Fatalf("SetUploadPolicy: %v", err)
+	}
+	if err := svc.SetUploadPolicy(UploadPolicy{AllowedMediaTypes: []string{"image/png", "not a type"}}); !errors.Is(err, sdk.ErrInvalidInput) {
+		t.Fatalf("unparsable entry: %v, want sdk.ErrInvalidInput", err)
+	}
+	if _, err := svc.Upload(context.Background(), "f.png", "image/png", 1, strings.NewReader("x")); err != nil {
+		t.Errorf("refused policy replaced the previous one: %v", err)
 	}
 }

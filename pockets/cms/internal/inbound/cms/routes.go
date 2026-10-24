@@ -21,6 +21,8 @@ type routerConfig struct {
 	adminMW      []web.Middleware
 	adminUngated bool
 	pageCache    cacher.PageConfig
+	// maxUploadBytes is Deps.MaxUploadBytes; set by tests in this package.
+	maxUploadBytes int64
 }
 
 // WithViews sets the HTML rendering port. When unset (nil), the HTML surface is
@@ -41,8 +43,8 @@ func WithPageCache(cfg cacher.PageConfig) RouterOption {
 	return func(c *routerConfig) { c.pageCache = cfg }
 }
 
-// Deps are the domain services + registry the CMS handlers need. cms.Register
-// builds the Registry and services and hands them here.
+// Deps are the domain services + registry the CMS handlers need, plus the
+// upload cap. cms.Register builds the Registry and services and hands them here.
 type Deps struct {
 	Registry *content.Registry
 	Entries  entryService
@@ -50,6 +52,9 @@ type Deps struct {
 	Menus    menuService
 	Media    mediaService
 	Contact  messagingService
+	// MaxUploadBytes caps a media upload's request body (413 past it); zero
+	// selects 32 MiB.
+	MaxUploadBytes int64
 }
 
 // Mount registers CMS routes on the given registrar. Content routes are
@@ -64,7 +69,7 @@ type Deps struct {
 // A nil views registers ONLY the media byte endpoint (GET /media/{id}/file) and
 // returns — the entire HTML surface (public site + admin) is not mounted (FS3).
 func Mount(r pockets.RouteRegistrar, d Deps, views Views, cache cacher.Storer, pageCache cacher.PageConfig, adminMW []web.Middleware, adminEnabled bool) {
-	md := NewMediaHandlers(d.Media, views)
+	md := NewMediaHandlers(d.Media, views, d.MaxUploadBytes)
 	if views == nil {
 		r.Handle("GET", "/media/{id}/file", md.Serve)
 		return
@@ -172,12 +177,13 @@ func BuildRouter(registry *content.Registry, entries entryService, taxo taxonomy
 	h.Use(web.RequestID(), web.Logger(log), web.Panics(log))
 
 	Mount(h, Deps{
-		Registry: registry,
-		Entries:  entries,
-		Taxo:     taxo,
-		Menus:    menusvc,
-		Media:    mediasvc,
-		Contact:  contact,
+		Registry:       registry,
+		Entries:        entries,
+		Taxo:           taxo,
+		Menus:          menusvc,
+		Media:          mediasvc,
+		Contact:        contact,
+		MaxUploadBytes: cfg.maxUploadBytes,
 	}, cfg.views, cache, cfg.pageCache, cfg.adminMW, len(cfg.adminMW) > 0 || cfg.adminUngated)
 
 	return h

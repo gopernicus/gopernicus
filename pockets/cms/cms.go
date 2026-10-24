@@ -100,6 +100,17 @@ type Config struct {
 	// ContactTo is the recipient for contact notifications. (env: CMS_CONTACT_TO)
 	ContactTo string `env:"CMS_CONTACT_TO"`
 
+	// MaxUploadBytes caps one media upload's request body; a larger upload
+	// answers 413. Zero selects 32 MiB; negative is refused (sdk.ErrInvalidInput).
+	MaxUploadBytes int64
+	// AllowedMediaTypes is the media upload allow-list, matched against the
+	// type sniffed from the file's first 512 bytes (http.DetectContentType) —
+	// the client's Content-Type is never consulted — after mime.ParseMediaType
+	// on both sides. Nil or empty selects DefaultAllowedMediaTypes(); an upload
+	// outside the list answers 400 naming the allowed types; an entry
+	// mime.ParseMediaType rejects is refused (sdk.ErrInvalidInput).
+	AllowedMediaTypes []string
+
 	// IDs is the app's entity-ID strategy, decided once at wiring (amended D9):
 	// it mints the keys of entries, assets, menus, menu items, inquiries, and
 	// terms. The zero value generates default nanoids; sdk.DatabaseID delegates
@@ -133,6 +144,13 @@ type Config struct {
 	RuntimeMode environment.Mode
 }
 
+// DefaultAllowedMediaTypes returns a new copy of the upload allow-list an empty
+// Config.AllowedMediaTypes selects: PNG, JPEG, GIF, WebP and PDF. SVG is absent
+// by design: it is a script-capable document.
+func DefaultAllowedMediaTypes() []string {
+	return []string{"image/png", "image/jpeg", "image/gif", "image/webp", "application/pdf"}
+}
+
 // Register wires the CMS pocket onto the host's mount: it builds the content
 // Registry (seed types + host types + their templates), builds the domain
 // services from the supplied repositories, and registers the pocket's routes.
@@ -141,6 +159,13 @@ type Config struct {
 func Register(m pockets.Mount, repos Repositories, cfg Config) error {
 	if err := checkPosture(cfg); err != nil {
 		return err
+	}
+	if cfg.MaxUploadBytes < 0 {
+		return fmt.Errorf("cms: Config.MaxUploadBytes %d is negative: %w", cfg.MaxUploadBytes, sdk.ErrInvalidInput)
+	}
+	allowedMediaTypes := cfg.AllowedMediaTypes
+	if len(allowedMediaTypes) == 0 {
+		allowedMediaTypes = DefaultAllowedMediaTypes()
 	}
 	gated := len(cfg.AdminMiddleware) > 0
 	inquiryMaintenance := "absent"
@@ -174,15 +199,19 @@ func Register(m pockets.Mount, repos Repositories, cfg Config) error {
 	termSvc := taxonomysvc.NewService(repos.Terms, cfg.IDs, nil)
 	menuSvc := menussvc.NewService(repos.Menus, cfg.IDs, nil)
 	mediaSvc := mediasvc.NewService(repos.Media, cfg.Blobs, cfg.IDs, nil)
+	if err := mediaSvc.SetUploadPolicy(mediasvc.UploadPolicy{AllowedMediaTypes: allowedMediaTypes}); err != nil {
+		return fmt.Errorf("cms: Config.AllowedMediaTypes: %w", err)
+	}
 	contactSvc := messagingsvc.NewService(repos.Inquiries, cfg.Mailer, cfg.MailFrom, cfg.ContactTo, cfg.IDs, nil)
 
 	inbound.Mount(m.Router, inbound.Deps{
-		Registry: registry,
-		Entries:  entrySvc,
-		Taxo:     termSvc,
-		Menus:    menuSvc,
-		Media:    mediaSvc,
-		Contact:  contactSvc,
+		Registry:       registry,
+		Entries:        entrySvc,
+		Taxo:           termSvc,
+		Menus:          menuSvc,
+		Media:          mediaSvc,
+		Contact:        contactSvc,
+		MaxUploadBytes: cfg.MaxUploadBytes,
 	}, cfg.Views, cfg.Cache, cfg.PageCache, cfg.AdminMiddleware, gated || cfg.AdminUngatedAcknowledged)
 
 	// With nil Views no admin surface exists, so there is nothing to warn about.

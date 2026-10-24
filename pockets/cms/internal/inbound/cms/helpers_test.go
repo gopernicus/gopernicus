@@ -43,6 +43,12 @@ func WithAdminUngated() RouterOption {
 	return func(c *routerConfig) { c.adminUngated = true }
 }
 
+// WithMaxUploadBytes sets the upload cap — the test stand-in for
+// cms.Config.MaxUploadBytes.
+func WithMaxUploadBytes(n int64) RouterOption {
+	return func(c *routerConfig) { c.maxUploadBytes = n }
+}
+
 // --- router helpers: build a full router with fakes for every service except
 // the one under test ---
 
@@ -208,11 +214,15 @@ func (f *fakeMenuSvc) RemoveMenuItem(context.Context, string) error { return nil
 // --- fakeMediaSvc ---
 
 type fakeMediaSvc struct {
-	listFn func(ctx context.Context) ([]media.Asset, error)
-	openFn func(ctx context.Context, id string) (media.Asset, io.ReadCloser, error)
+	listFn   func(ctx context.Context) ([]media.Asset, error)
+	openFn   func(ctx context.Context, id string) (media.Asset, io.ReadCloser, error)
+	uploadFn func(ctx context.Context, filename, contentType string, size int64, r io.Reader) (media.Asset, error)
 }
 
-func (f *fakeMediaSvc) Upload(context.Context, string, string, int64, io.Reader) (media.Asset, error) {
+func (f *fakeMediaSvc) Upload(ctx context.Context, filename, contentType string, size int64, r io.Reader) (media.Asset, error) {
+	if f.uploadFn != nil {
+		return f.uploadFn(ctx, filename, contentType, size, r)
+	}
 	return media.Asset{}, nil
 }
 func (f *fakeMediaSvc) GetAsset(context.Context, string) (media.Asset, error) {

@@ -48,6 +48,15 @@ func TestPublicPageCacheConfiguration(t *testing.T) {
 				if w.Code != 200 || w.Body.String() != "STUB-HOME" {
 					t.Fatalf("%d %q", w.Code, w.Body.String())
 				}
+				// The mount opts into implicit public; nothing reaches the wire.
+				if cc := w.Header().Values("Cache-Control"); len(cc) != 0 {
+					t.Fatalf("request %d: Cache-Control on the wire: %q", i, cc)
+				}
+				if tc.wantCalls == 1 {
+					if got, want := w.Header().Get("X-Cache"), []string{"MISS", "HIT"}[i]; got != want {
+						t.Fatalf("request %d: X-Cache = %q, want %q", i, got, want)
+					}
+				}
 			}
 			if calls != tc.wantCalls {
 				t.Fatalf("calls=%d", calls)
