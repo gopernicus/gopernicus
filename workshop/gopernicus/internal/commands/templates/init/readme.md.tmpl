@@ -90,6 +90,18 @@ APP_RUNTIME_MODE=development go run ./workshop/migrations -status
                                          # applied vs pending (file-only when the
                                          # database is unreachable)
 ```
+{{- if eq .DB "pgx"}}
+
+`DB_STATEMENT_TIMEOUT` and `DB_LOCK_TIMEOUT` (`pgxdb.Config.StatementTimeout`
+and `LockTimeout`) bound every statement and lock wait on the server's pooled
+connections; `.env.example` ships them commented out. They are for the server
+process only: the runner zeroes both after it parses the environment, so an
+index build or a migration queued behind live traffic is never cut short. Set
+each in one place: a DSN that also names `statement_timeout` or `lock_timeout`
+beside the key is refused at `Open`. Behind PgBouncer in transaction mode
+(which refuses unknown startup parameters) leave both unset and use
+`ALTER ROLE <runtime role> SET statement_timeout = '30s'` instead.
+{{- end}}
 {{else}}
 This host has no datastore, so no runner was scaffolded. Re-run `gopernicus init
 --db=turso|pgx` for a host with a migration runner.

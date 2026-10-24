@@ -88,7 +88,7 @@ background. `InvalidatePrefix` works when the store implements the optional
 namespace) and returns `errors.ErrUnsupported` otherwise. `cachertest.RunPrefix`
 tests that optional contract.
 
-**Pages.** `cacher.Pages(store, PageConfig{TTL, MaxBodyBytes, Scope})` caches
+**Pages.** `cacher.Pages(store, PageConfig{TTL, MaxBodyBytes, Scope, AllowImplicitPublic})` caches
 eligible public GET HTML responses. Zero TTL means 60 seconds, negative
 disables; `MaxBodyBytes` defaults to 1 MiB; nil storage bypasses. Keys include
 scheme, authority, exact URI and the optional host-owned `Scope` partition such
@@ -97,7 +97,13 @@ GET HTML routes: requests with credentials, cookies, a principal, conditional or
 range headers, or cache directives bypass even a warm entry, and responses with
 cookies, `Vary`, content encoding, nonce CSP, explicit `Date`, `Content-Length`,
 `Expires` or `Age`, trailers, or `private`/`no-store`/`no-cache` are not
-stored. Hits replay committed content and caching headers, carry `Age` and
+stored. A response is stored only when its `Cache-Control` carries `public` or
+`s-maxage`; `max-age` alone or no `Cache-Control` is not enough, and an entry
+without the directive is not replayed. `AllowImplicitPublic: true` drops that
+requirement for a mount whose routes are public by construction (the cms pocket
+sets it on its own public routes and sends no directive). The rule is applied
+when the response commits and when an entry is read, never before the handler
+runs, where no `Cache-Control` is normal. Hits replay committed content and caching headers, carry `Age` and
 `X-Cache: HIT`, and get fresh request IDs, tracing fields and `Date`. Put
 compression outside `Pages`. `web.NoStore()` is respected. Cache outages become
 misses, and `DeletePrefix(ctx, "page:")` invalidates without a guarantee

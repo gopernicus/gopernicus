@@ -46,9 +46,9 @@ var (
 // go.mod must carry. Bump them with every tag the templates move to.
 var (
 	inlineHint = regexp.MustCompile(`^[A-Z0-9_]+=\S*\s+#`)
-	sdkPin     = baseModule + "/sdk v0.16.0"
+	sdkPin     = baseModule + "/sdk v0.17.0"
 	dbPins     = map[string]string{
-		"pgx":   baseModule + "/integrations/datastores/pgxdb v0.12.0",
+		"pgx":   baseModule + "/integrations/datastores/pgxdb v0.13.0",
 		"turso": baseModule + "/integrations/datastores/turso v0.8.0",
 	}
 )
@@ -208,8 +208,8 @@ func TestScaffoldInitPgxCompiles(t *testing.T) {
 	if code != 0 || !strings.Contains(out, "\nP9   no scope  (no framework store module mounted)\n") {
 		t.Errorf("guard --posture over the pgx scaffold exited %d, want 0 with P9 out of scope:\n%s", code, out)
 	}
-	if strings.Contains(out, "\nack ") {
-		t.Errorf("guard --posture over the pgx scaffold printed an ack line the template never wrote:\n%s", out)
+	if strings.Contains(out, "\nack ") || strings.Contains(out, "\nposture_waiver ") {
+		t.Errorf("guard --posture over the pgx scaffold printed an ack or posture_waiver line the template never wrote:\n%s", out)
 	}
 	runner := readFile(t, filepath.Join(target, "workshop", "migrations", "main.go"))
 	if !strings.Contains(runner, `fmt.Printf("functions=[%s] floor=%s\n", functions, floor)`) {
@@ -226,6 +226,46 @@ func TestScaffoldInitPgxCompiles(t *testing.T) {
 	got, err := cmd.CombinedOutput()
 	if err != nil || strings.TrimSpace(string(got)) != "no append-only tables mounted; add each mounted pgx store's AuditTables() to postureTables" {
 		t.Fatalf("-posture-role with no tables = %v:\n%s", err, got)
+	}
+
+	t.Run("migrator zeroes the server's timeouts", func(t *testing.T) {
+		assertMigratorZeroesTimeouts(t, runner, binary)
+	})
+}
+
+// assertMigratorZeroesTimeouts proves the emitted pgx runner never inherits the
+// server's DB_STATEMENT_TIMEOUT / DB_LOCK_TIMEOUT. Both are set negative, which
+// pgxdb.Open refuses before dialing; a runner that zeroes them reaches the dial
+// instead and fails on the closed port.
+func assertMigratorZeroesTimeouts(t *testing.T, runner, binary string) {
+	t.Helper()
+	parsed := strings.Index(runner, `environment.ParseEnvTags("", &cfg)`)
+	for _, zero := range []string{"cfg.StatementTimeout = 0", "cfg.LockTimeout = 0"} {
+		if at := strings.Index(runner, zero); parsed < 0 || at < parsed {
+			t.Errorf("emitted pgx runner does not set %q after ParseEnvTags:\n%s", zero, runner)
+		}
+	}
+
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := l.Addr().String()
+	l.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, binary)
+	cmd.Dir = t.TempDir()
+	cmd.Env = []string{
+		scaffoldModeKey + "=development", "LOG_OUTPUT=STDOUT",
+		"DB_URL=postgres://migrator@" + addr + "/app?sslmode=disable", "DB_CONNECT_TIMEOUT=2s",
+		"DB_STATEMENT_TIMEOUT=-1s", "DB_LOCK_TIMEOUT=-1s",
+	}
+	got, err := cmd.CombinedOutput()
+	out := string(got)
+	if err == nil || strings.Contains(out, "StatementTimeout") || strings.Contains(out, "LockTimeout") || !strings.Contains(out, "pinging database") {
+		t.Fatalf("runner with negative DB_STATEMENT_TIMEOUT/DB_LOCK_TIMEOUT = %v, want a dial failure that names neither:\n%s", err, out)
 	}
 }
 
@@ -357,6 +397,16 @@ func TestScaffoldInitEnvTemplate(t *testing.T) {
 			}
 			if db == "pgx" && !strings.Contains(env, "\nDB_SSLMODE=verify-full\n") {
 				t.Errorf("emitted pgx .env.example lacks DB_SSLMODE=verify-full:\n%s", env)
+			}
+			for _, key := range []string{"DB_STATEMENT_TIMEOUT", "DB_LOCK_TIMEOUT"} {
+				for _, line := range strings.Split(env, "\n") {
+					if strings.HasPrefix(line, key) {
+						t.Errorf("emitted .env.example assigns %s uncommented (server process only; the migrator parses the same env): %q", key, line)
+					}
+				}
+				if commented := strings.Contains(env, "\n# "+key+"="); commented != (db == "pgx") {
+					t.Errorf("emitted %s .env.example names # %s= = %t, want %t:\n%s", db, key, commented, db == "pgx", env)
+				}
 			}
 
 			gomod := readFile(t, filepath.Join(target, "go.mod"))

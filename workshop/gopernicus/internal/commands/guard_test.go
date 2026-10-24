@@ -690,6 +690,12 @@ func postureFixtures() []guardFixture {
 		{name: "TrustProxies not outermost", rule: "P2", violating: true, files: root(
 			"web.TrustProxies(srv.TrustedProxyCount), web.SecurityHeaders(), web.RequestID()",
 			"web.RequestID(), web.TrustProxies(srv.TrustedProxyCount), web.SecurityHeaders()")},
+		{name: "TrustProxiesWithConfig outermost", rule: "P2", files: root(
+			"web.TrustProxies(srv.TrustedProxyCount), ",
+			"web.TrustProxiesWithConfig(web.TrustProxiesConfig{TrustedProxyCount: srv.TrustedProxyCount, TrustRealIPHeader: true}), ")},
+		{name: "TrustProxiesWithConfig not outermost", rule: "P2", violating: true, files: root(
+			"web.TrustProxies(srv.TrustedProxyCount), web.SecurityHeaders(), web.RequestID()",
+			"web.SecurityHeaders(), web.TrustProxiesWithConfig(web.TrustProxiesConfig{TrustedProxyCount: srv.TrustedProxyCount}), web.RequestID()")},
 		{name: "a wrapped handler", rule: "P2", violating: true, files: root(
 			"web.Run(ctx, router, srv, nil)", "web.Run(ctx, http.TimeoutHandler(router, 0, \"\"), srv, nil)")},
 
@@ -722,6 +728,20 @@ func postureFixtures() []guardFixture {
 				"\t_ = authentication.WithAdministration(authentication.AdministrationConfig{UserErasureRoute: true})\n")},
 		{name: "MaintenanceRunnerAcknowledged from an expression", rule: "P5", violating: true, files: extra(
 			"\tvar maint authentication.MaintenanceConfig\n\tmaint.MaintenanceRunnerAcknowledged = os.Getenv(\"X\") != \"\"\n\t_ = maint\n")},
+		{name: "CookieDomainAcknowledged written true", rule: "P5", notes: []string{"ack", "ack"}, files: extra(
+			"\t_ = authentication.WithBrowser(authentication.BrowserConfig{CookieDomainAcknowledged: true})\n")},
+		{name: "CookieDomainAcknowledged from an expression", rule: "P5", violating: true, files: extra(
+			"\tvar browser authentication.BrowserConfig\n\tbrowser.CookieDomainAcknowledged = os.Getenv(\"X\") != \"\"\n\t_ = browser\n")},
+		{name: "fail-open waivers written true print posture_waiver, not ack", rule: "P5", notes: []string{"ack", "posture_waiver", "posture_waiver"}, files: extra(
+			"\t_ = authentication.WithAbuseProtection(authentication.AbuseProtectionConfig{PublicRouteLimiterFailOpen: true})\n" +
+				"\t_ = authentication.WithPassword(authentication.PasswordConfig{CompromisedPasswordFailOpen: true})\n")},
+		{name: "a fail-open waiver under if, and one written false", rule: "P5", notes: []string{"ack", "posture_waiver (conditional)"}, files: extra(
+			"\tvar abuse authentication.AbuseProtectionConfig\n\tif !mode.IsProduction() {\n\t\tabuse.PublicRouteLimiterFailOpen = true\n\t}\n\t_ = abuse\n" +
+				"\t_ = authentication.WithPassword(authentication.PasswordConfig{CompromisedPasswordFailOpen: false})\n")},
+		{name: "PublicRouteLimiterFailOpen from an expression", rule: "P5", violating: true, files: extra(
+			"\t_ = authentication.WithAbuseProtection(authentication.AbuseProtectionConfig{PublicRouteLimiterFailOpen: !mode.IsProduction()})\n")},
+		{name: "CompromisedPasswordFailOpen from an expression", rule: "P5", violating: true, files: extra(
+			"\tvar password authentication.PasswordConfig\n\tpassword.CompromisedPasswordFailOpen = os.Getenv(\"X\") != \"\"\n\t_ = password\n")},
 		{name: "option form outside New", rule: "P5", violating: true, files: extra(
 			"\topts := []authorization.Option{authorization.WithAuditDisabledAcknowledged()}\n" +
 				"\t_, _ = authorization.New(nil, append(opts, authorization.WithRuntimeMode(mode))...)\n")},
