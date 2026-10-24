@@ -5,7 +5,7 @@ go 1.26.10
 require (
 	github.com/gopernicus/gopernicus/integrations/scheduling/robfig-cron v0.2.0
 	github.com/gopernicus/gopernicus/pockets/jobs v0.7.0
-	github.com/gopernicus/gopernicus/sdk v0.17.0
+	github.com/gopernicus/gopernicus/sdk v0.18.0
 )
 
 require github.com/robfig/cron/v3 v3.0.1 // indirect

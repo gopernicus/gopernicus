@@ -1,5 +1,299 @@
 # Releasing gopernicus modules
 
+## Secrets and logging (SOC 2 slice S6 — published 2026-10-24)
+
+Twelve annotated tags (not signed), each cut at its PR's squash-merge commit on `main`, pushed,
+THEN polled on the proxy, and cold-verified from a scratch consumer (`GOWORK=off`, an empty
+module cache, `proxy.golang.org`, `sum.golang.org`, `go mod verify`, `go build <module>/...`).
+Every one resolved on the first poll. Design and rulings:
+[plans/s6-secrets-logging.md](plans/s6-secrets-logging.md) (rev 2, ratified 2026-10-24; its
+"Build-time deviations" section records the lead rulings taken during the build). Under the
+owner's 2026-10-23 process ruling this section is the whole record: there is no handoff file and
+no manifest. The handoff notes below say what a host does on upgrade; hosts adopt them once, at
+the roadmap's end. The operator surface is the docs site's *Production posture* guide ("Added by
+S6" and "Secrets and logging (S6)") and the log-content policy paragraph in `sdk/README.md`
+(Packages → `logging`).
+
+| Step | Tag | Commit | PR | Cold verification |
+|---|---|---|---|---|
+| 1 | `sdk/v0.18.0` | `f347b66a` | #182 (PR-1) | OK, poll 1 |
+| 2 | `integrations/datastores/pgxdb/v0.14.0` | `59c318d8` | #183 (PR-2; cut after the six pgx store legs on merged `main`) | OK, poll 1; also built the MVS set (below) |
+| 3 | `integrations/datastores/turso/v0.9.0` | `59c318d8` | #183 (PR-2; cut after the five turso store legs on merged `main`) | OK, poll 1; also built the MVS set (below) |
+| 4 | `integrations/kvstores/goredis/v0.4.0` | `d54de133` | #184 (PR-3; cut after the goredis live leg on merged `main`) | OK, poll 1 |
+| 4 | `integrations/email/sendgrid/v0.5.0` | `d54de133` | #184 (PR-3) | OK, poll 1 |
+| 4 | `integrations/filestorage/s3/v0.3.0` | `d54de133` | #184 (PR-3) | OK, poll 1 |
+| 4 | `integrations/filestorage/gcs/v0.3.0` | `d54de133` | #184 (PR-3) | OK, poll 1 |
+| 4 | `integrations/oauth/google/v0.3.0` | `d54de133` | #184 (PR-3) | OK, poll 1 |
+| 4 | `integrations/oauth/github/v0.3.0` | `d54de133` | #184 (PR-3) | OK, poll 1 |
+| 4 | `integrations/authentication/firebase/v0.2.0` | `d54de133` | #184 (PR-3; the tag message says it breaks every builder) | OK, poll 1 |
+| 4 | `integrations/cryptids/golang-jwt/v0.3.0` | `d54de133` | #184 (PR-3) | OK, poll 1 |
+| 5 | `workshop/gopernicus/v0.9.0` | `5143422f` | #186 (PR-4) | OK, poll 1; a cold `init --db pgx` from `@v0.9.0` requires sdk v0.18.0 and pgxdb v0.14.0, `--db turso` requires sdk v0.18.0 and turso v0.9.0; both build and `guard --posture` is clean (25 rules, 2 packages) |
+
+Order: 1, then 2 and 3, then 4, then 5 — never a dependent before its dependency. After step 4,
+#185 (PR-2b, `1b0643bb`) repinned the twelve store modules to sdk v0.18.0 and pgxdb v0.14.0 /
+turso v0.9.0 by explicit `GOWORK=off go get` — pins only, no tags (R-3); step 5 followed. Every
+compile-time break below ships under MINOR, per the v0 convention; each tag message names the
+fields that changed type.
+
+**Steps 2 and 3, MVS sets.** One scratch consumer resolved pgxdb v0.14.0 and sdk v0.18.0 beside
+every released pgx store — authentication `stores/pgx` v0.11.0, authorization `stores/pgx`
+v0.21.0, cms `stores/pgx` v0.5.0, events `stores/pgx` v0.4.0, jobs `stores/pgx` v0.7.0 and
+secrets `stores/pgx` v0.2.1 — and another resolved turso v0.9.0 and sdk v0.18.0 beside every
+released turso store (authentication v0.10.0, authorization v0.20.0, cms v0.4.0, jobs v0.6.0,
+events v0.3.0); each `go.mod` selected the new connector, `go mod verify` passed and `go build`
+succeeded. The released stores need no retag: their production code is unchanged and MVS lifts
+their old sdk and connector pins inside a host.
+
+**Not tagged.** Every store module (#185 moved pins only), every pocket (one doc comment in
+`pockets/authentication/logic/authentication/context.go`), `pockets`, `integrations/tracing/otel`,
+`integrations/cryptids/go-oidc`, `integrations/authentication/auth0` (no secret fields), `bcrypt`,
+`google-uuid`, `robfig-cron`, every `views/goth` and `ui/goth`. No migration. Nothing retracts.
+
+**Upgrade notes.** Nineteen rows: nine compile-time breaks (2, 7, 9, 12–17), one boot failure
+(10), three log-content changes without a compile error (3, 8 and 11), the rest additive or
+informational. The "Read first" box, the paragraph under it and the table are the
+plan's, verbatim.
+
+> **Read first.** (a) Every migrated field (rows 2, 7, 9, 12–17 — `DSN` and `URL` included) renders `[redacted]`
+> through `fmt`, `+`, templates and `%s`; a DSN/URL COMPOSED from one would carry the marker, so pgxdb/turso `Open` and
+> SMTP `Probe`/`Send` now refuse it with `sdk.ErrRedactedSecret` (loud at boot, not at the wire). Grep every read site
+> and add `.Reveal()`: `grep -rnE '\.(DSN|URL|Password|AuthToken|APIKey|SecretAccessKey|CredentialsJSON|ClientSecret)\b'
+> --include='*.go' . | grep -v 'Reveal()'`. (b) A production turso host with `DB_LOG_QUERIES=true` (prefixed forms
+> included) fails boot, as pgx has since S1: `grep -rnE '^[^#]*[A-Z_]*DB_LOG_QUERY(IES|_ARGS)=true' .env* deploy/`.
+
+Compile-time breaks are rows 2, 7, 9, 12–17: `sdk.Secret(v)` at the literal (an untyped constant needs nothing) and
+`.Reveal()` where the host READS the field. Row 10 fails boot. Rows 3 and 8 change log content without a compile error.
+
+| # | Flip | What the host sees | Hatch | Module@version |
+|---|---|---|---|---|
+| 1 | `sdk.Secret`, `sdk.Redacted`, `sdk.ErrRedactedSecret`, `PrincipalCapture` | additive | none | sdk@v0.18.0 |
+| 2 | `email.SMTPConfig.Password` is `sdk.Secret`; `Probe`/`Send` refuse a composed one | compile error for a `string` variable; `%s` prints `[redacted]` | `sdk.Secret(v)`; `.Reveal()` to read | sdk@v0.18.0 |
+| 3 | `logging.New` redacts by default | attrs keyed password/token/api_key/… (Design 3 list) print `[redacted]` | rename the attribute (auth-cms's `seeded_api_key` is the worked example); `LOG_REDACT_KEYS` adds; compose `NewContextHandler` over your own handler | sdk@v0.18.0 |
+| 4 | `web.Logger` adds `client_ip`, `request_id`, `user_agent`, `principal_type`, `principal_id` | additive; `remote_addr` kept; must sit inside `TrustProxies`/`RequestID` | `LOG_REDACT_KEYS=client_ip,user_agent` | sdk@v0.18.0 |
+| 5 | `sdk.WithPrincipal` writes through to a capture chain | none unless the host reads `PrincipalCapture`; doc only | none | sdk@v0.18.0 |
+| 6 | `ContextHandler` skips an id the record carries; nested `web.RequestID` reuses an existing id | one `request_id` per line; nested routers keep the host's id | none | sdk@v0.18.0 |
+| 7 | pgxdb `Config.DSN`/`Password` are `sdk.Secret`; `Open` refuses a composed one | compile error for `string` variables; `ParseEnvTags` hosts unaffected unless they READ the field | `sdk.Secret(v)`; `.Reveal()` | pgxdb@v0.14.0 |
+| 8 | query log = `arg_count`/`arg_types` + sqlstate/constraint (or `error_type`) on errors | no bind values or error text in dev logs | `DB_LOG_QUERY_ARGS=true` / `Config.LogQueryArgs` (development only; inert without `LogQueries`) | pgxdb@v0.14.0 |
+| 9 | turso `Config.URL`/`AuthToken` are `sdk.Secret`; `Open` refuses a composed one | compile error for `string` variables | `sdk.Secret(v)`; `.Reveal()` | turso@v0.9.0 |
+| 10 | turso production refuses `LogQueries`/`LogQueryArgs` | `Open` fails `ErrQueryLoggingRefused` naming `Config.LogQueries (DB_LOG_QUERIES)`, joined with any TLS refusal | none — unset it (matches pgxdb since S1; P7 warns pre-deploy) | turso@v0.9.0 |
+| 11 | turso query log = arity/types | as row 8 | as row 8 | turso@v0.9.0 |
+| 12 | goredis `Config.URL`/`Password` are `sdk.Secret` | compile error | `sdk.Secret(v)` | goredis@v0.4.0 |
+| 13 | sendgrid `Config.APIKey` | compile error | `sdk.Secret(v)` | sendgrid@v0.5.0 |
+| 14 | s3 `Config.SecretAccessKey` | compile error | `sdk.Secret(v)` | s3@v0.3.0 |
+| 15 | gcs `Config.CredentialsJSON` | compile error | `sdk.Secret(v)` | gcs@v0.3.0 |
+| 16 | google/github `Config.ClientSecret` | compile error | `sdk.Secret(v)` | oauth/google@v0.3.0, oauth/github@v0.3.0 |
+| 17 | firebase `Config.CredentialsJSON` (`[]byte` → `sdk.Secret`) | compile error for EVERY builder, literal or not | `sdk.Secret(string(b))` | firebase@v0.2.0 |
+| 18 | provider/sender/store/signer structs implement `Format` + `LogValue` | `%+v`/`%#v`/`slog.Any` of one prints a redacted summary | none | the PR-3 modules incl. golang-jwt@v0.3.0 |
+| 19 | P7 flags uncommented `DB_LOG_QUERIES=true`/`DB_LOG_QUERY_ARGS=true`; scaffold pins + `sdk.Secret` wraps | `guard --posture` finding on a stale `.env.example` | comment the line | workshop@v0.9.0 |
+
+Build-time deviations a host can see, folded here (the table stays verbatim): row 3's list is
+`logging.DefaultRedactKeys`, seventeen keys — `password`, `passwd`, `secret`, `token`,
+`access_token`, `refresh_token`, `api_key`, `apikey`, `x_api_key` (added in the build),
+`authorization`, `cookie`, `set-cookie`, `private_key`, `client_secret`, `credentials_json`,
+`auth_token`, `dsn` — matched exactly per key, case-insensitive, `-` and `_` equivalent (so
+`X-API-Key` matches; `x_api_key_id` does not). Row 8's failed-query end line also carries
+`command_tag`, and `constraint` is present (empty) on every `PgError`. Row 18's `Format` and
+`LogValue` have pointer receivers, as every constructor returns a pointer; printing a
+dereferenced value bypasses them. Row 19's P7 also matches prefixed keys (`AUTH_DB_LOG_QUERIES`),
+any `strconv.ParseBool` true (`1`, `TRUE`) and quoted values.
+
+**Handoff notes — what a host does on upgrade, per module** (applied at the roadmap's end).
+- **Every host, first.** Run the two "Read first" greps. The type change is the whole migration:
+  a literal or untyped constant still assigns; a `string` variable becomes `sdk.Secret(v)`
+  (`sdk.Secret(os.Getenv("…"))` at the literal), and every place the host READS a migrated field
+  becomes `cfg.Field.Reveal()` — `Reveal()` is the one read. A `Secret` rendered through `fmt`,
+  `+`, a template or `%s` yields `[redacted]`, which is why a composed DSN, URL or SMTP password
+  now fails loudly with `sdk.ErrRedactedSecret` (match it with `errors.Is`). `ParseEnvTags` hosts
+  are unaffected unless they read the field. Also grep `slog.Any(` and `%+v` over a connector,
+  provider, sender, store or signer value (row 18 and the pointer-receiver limit above), and
+  grep for any attribute key in the row-3 list whose value the host relies on reading in its own
+  logs. Never key a map by `Secret` (`encoding/json` writes string-kind keys as they are).
+- **`sdk` v0.18.0.** New: `sdk.Secret`, `sdk.Redacted`, `sdk.ErrRedactedSecret`,
+  `sdk.WithPrincipalCapture`/`PrincipalCapture`. `email.SMTPConfig.Password` is a `Secret`;
+  `NewSMTP` keeps its signature, and a password containing `[redacted]` makes `Probe` and `Send`
+  return `sdk.ErrRedactedSecret` before dialing (a production host probes at boot, so the boot
+  fails there). `logging.New` now composes `ContextHandler(RedactHandler(text|json))` in every
+  mode — there is no off switch (R-5): `LOG_REDACT_KEYS` (comma-separated, additive to the
+  defaults, `logging.Options.RedactKeys`) adds keys; a host that must log a listed key renames
+  the attribute (auth-cms's demo now logs `seeded_api_key` and `token_path`), or composes
+  `logging.NewContextHandler` over its own handler. The handler cannot see inside `slog.Any`
+  maps or structs, nor free-text `error` values (the access line's `error` attribute is a named
+  residual); a `request_id` pre-bound with `logger.With(...)` is outside the dedupe. **The access
+  line:** `web.Logger` keeps `method`, `path`, `status`, `elapsed`, `remote_addr` (the raw peer),
+  `error`, `aborted`, `hijacked` and adds `client_ip` (from `web.ClientIP`, when `TrustProxies`
+  ran), `user_agent` (cut to 256 bytes on a UTF-8 boundary), `request_id`, `principal_type` and
+  `principal_id` — the last principal authenticated during the request, including one the surface
+  then refused; observability only, never an authorization input. Query strings stay out. Mount
+  `web.Logger` INSIDE `web.TrustProxies` and `web.RequestID` (the `sdk/README.md` middleware
+  order). `client_ip` and `user_agent` are personal data: the hatch is
+  `LOG_REDACT_KEYS=client_ip,user_agent`; retention is the host's log pipeline. `web.RequestID`
+  reuses an id already on the context, so a nested mount keeps the host's id and header.
+- **`integrations/datastores/pgxdb` v0.14.0** (requires sdk v0.18.0; the released pgx stores
+  resolve with it unchanged). `Config.DSN` (`DB_URL`) and `Config.Password` (`DB_PASSWORD`) are
+  `Secret`s; `Config.Redacted()` stays the operator's display. Query logging stays refused in
+  production — now for `LogQueries`, the new `LogQueryArgs` (`DB_LOG_QUERY_ARGS`, even alone) and
+  any `Tracer` that is or wraps a `*LoggingQueryTracer`; `pgxdb.ErrQueryLoggingRefused` keeps its
+  name, its text is now "production refuses query logging" and the message names
+  `Config.LogQueries (DB_LOG_QUERIES)` (match the sentinel, never the text). In development the
+  query line is `sql`, `arg_count`, `arg_types` — never values — and a failed query logs
+  `sqlstate`/`constraint`/`command_tag` (or `error_type`), never the error text;
+  `DB_LOG_QUERY_ARGS=true` beside `DB_LOG_QUERIES=true` brings back `args` and the error text with
+  a WARN, and alone it is inert (one WARN, no tracer). `request_id` reaches query lines through
+  the context when the logger is `logging.New`'s (the tracer does not add it).
+  `NewLoggingQueryTracer(logger)` keeps its signature with the safe default;
+  `NewLoggingQueryTracerWithConfig(LoggingQueryTracerConfig{Logger, LogArgs})` is the widening.
+- **`integrations/datastores/turso` v0.9.0** (requires sdk v0.18.0; the released turso stores
+  resolve with it unchanged). `Config.URL` and `Config.AuthToken` are `Secret`s (a URL can embed
+  the token). **New boot failure (row 10):** a production `Open` with `LogQueries` or
+  `LogQueryArgs` set fails `turso.ErrQueryLoggingRefused` naming `Config.LogQueries
+  (DB_LOG_QUERIES)`, joined with any TLS refusal — the pgxdb rule since S1, no waiver; unset it
+  (run the second "Read first" grep). Development query lines are arity/types as for pgxdb.
+  **Every turso host scaffolded by `gopernicus init` at workshop v0.8.0 or earlier** has
+  `URL: os.Getenv("TURSO_DATABASE_URL")` and `AuthToken: os.Getenv("TURSO_AUTH_TOKEN")` in
+  `cmd/server/main.go` and `workshop/migrations/main.go` (the scaffold's migrator) and wraps all
+  four in `sdk.Secret(...)`; a store scaffolded by `new pocket` at v0.8.0 or earlier wraps the
+  `dsn`, `url` and `token` variables in its conformance test the same way.
+- **The eight integration modules** (each requires sdk v0.18.0): `integrations/kvstores/goredis`
+  v0.4.0 (`Config.URL`, `Config.Password`), `integrations/email/sendgrid` v0.5.0
+  (`Config.APIKey`), `integrations/filestorage/s3` v0.3.0 (`Config.SecretAccessKey` only;
+  `AccessKeyID` is an identifier), `integrations/filestorage/gcs` v0.3.0
+  (`Config.CredentialsJSON`), `integrations/oauth/google` and `integrations/oauth/github` v0.3.0
+  (`Config.ClientSecret`) — wrap a `string` variable in `sdk.Secret(v)`.
+  `integrations/authentication/firebase` v0.2.0: `ClientConfig.CredentialsJSON` moves from
+  `[]byte` to `Secret`, so EVERY builder changes — `sdk.Secret(string(b))` (R-4).
+  `integrations/cryptids/golang-jwt` v0.3.0: `New(secret string, …)` is unchanged; `*Signer`,
+  like `*google.Provider`, `*github.Provider`, `*sendgrid.Sender` and `*gcs.Store`, now prints a
+  redacted summary through every `fmt` verb and logs a group without the secret.
+- **`workshop/gopernicus` v0.9.0.** Bump the tool pin (`go get -tool
+  github.com/gopernicus/gopernicus/workshop/gopernicus@v0.9.0`) or run `@v0.9.0 guard --posture
+  .`; P7 now flags an uncommented true `DB_LOG_QUERIES`/`DB_LOG_QUERY_ARGS` in `.env.example`
+  (comment the line). A new scaffold pins sdk v0.18.0 and pgxdb v0.14.0 or turso v0.9.0, wraps
+  its connector env reads in `sdk.Secret`, ships commented `# LOG_REDACT_KEYS=` (and, pgx only,
+  `# DB_LOG_QUERIES=true` / `# DB_LOG_QUERY_ARGS=true`), and its README gains "Secrets and logs".
+  The CLI's `version` still prints the `0.0.0-dev` placeholder.
+- **Examples (this PR).** Every example builds and vets at `GOWORK=off` on the S6 tags. Pins moved
+  (explicit `GOWORK=off go get`, then `go mod tidy`, which only pruned `go.sum`): `auth-cms` sdk
+  v0.17.0→v0.18.0, pgxdb v0.13.0→v0.14.0, turso v0.8.0→v0.9.0, golang-jwt v0.2.0→v0.3.0; `cms`
+  sdk v0.17.0→v0.18.0, turso v0.8.0→v0.9.0; `external-identity` sdk v0.17.0→v0.18.0;
+  `goth-showcase` sdk v0.17.0→v0.18.0; `jobs-minimal` sdk v0.17.0→v0.18.0; `minimal` sdk
+  v0.17.0→v0.18.0; `production-baseline` sdk v0.17.0→v0.18.0, pgxdb v0.13.0→v0.14.0, golang-jwt
+  v0.2.0→v0.3.0. No non-S6 pin moved; no example pins the other seven PR-3 modules (§1 is their
+  real-binary proof). `examples/cms` did not build at `GOWORK=off` before this repin (its SMTP
+  and connector wraps, carried in #182 and #183, need sdk v0.18.0 and turso v0.9.0); it does
+  now. The code-side example changes landed with their PRs: the cms SMTP and connector wraps,
+  the auth-cms demo attribute rename and test literal wraps, and production-baseline's commented
+  `# LOG_REDACT_KEYS=`.
+
+**Verification record.**
+- CI `check` and `vuln` (push and pull_request events) passed on the final run of every PR,
+  #182–#186; the CodeQL analyses passed on #182, #184, #185 and #186 and flagged one alert on
+  #183 (Known and deferred). `make guard` runs thirty-six guards: S6 adds G37
+  `guard-credential-fields-secret` (credential-named `string`/`[]byte` config fields in
+  `integrations/` and `sdk/` must be `sdk.Secret`), whose self-check compares the exact matched
+  set; planted fixtures proved a `string` and a `[]byte` field caught, `json:"` lines, `_test.go`
+  files and the excluded `oauth.go` ignored, and a dead or over-broad pattern failing.
+- Live legs on merged `main`, counted with `go test -json` (pass / fail / skip). Before steps 2
+  and 3, the eleven store legs @ `59c318d8`, pgx bare and schema-qualified: authentication 432 /
+  0 / 1 each and turso 737 passed; authorization 783 / 0 / 1 each and turso 1006 passed; cms 59
+  (bare) and 60 (schema-qualified) and turso 49 passed; events 18 each and turso 13 passed; jobs
+  120 each and turso 103 passed; secrets 30 each; no failures. The connectors on the #183 branch:
+  pgxdb hermetic 352 / 0 / 47 and live 501 / 0 / 0 (fresh scratch PostgreSQL 17), turso hermetic
+  219 / 0 / 0 and live `-tags=integration` 225 / 0 / 0 (fresh libSQL). Before step 4, goredis @
+  `d54de133` with `-race`: 158 / 0 / 0, including `TestLive_OpenAuthenticatesAsTheNamedUser`
+  (the revealed password and URL reach a real Redis); the other seven PR-3 suites are hermetic
+  and green, with three wire assertions (google and github exchange and refresh send the real
+  `client_secret`).
+- Every example builds and vets at `GOWORK=off` against the tags (`go version -m` on the built
+  binaries shows sdk v0.18.0, pgxdb v0.14.0, turso v0.9.0 and golang-jwt v0.3.0 where used), then
+  builds in the workspace; `make guard` and `make check` pass on the repinned tree;
+  `cd workshop/gopernicus && go test ./...` passes with the scaffold README's guard line at
+  `@v0.9.0`.
+- From the PR records (real binaries, development mode unless named). §1, scratch programs at
+  `GOWORK=off`: every migrated `Config` field and the five adapters print `[redacted]` under
+  `%v %s %+v %#v %q` (and `%x` on a bare `Secret`), in slog text and JSON and in `json.Marshal`
+  — `hunter2` appears exactly once, on the deliberate `Reveal()` line (#182, #184);
+  `LOG_REDACT_KEYS=probe_only` parsed by `ParseEnvTags` redacts `probe_only` beside the
+  defaults; a composed `[redacted]` password, DSN or URL fails `ErrRedactedSecret` from SMTP
+  `Probe` and from both connectors' `Open` before any dial; turso through `ParseEnvTags` on a
+  `file:` URL in production → `turso: production refuses query logging: Config.LogQueries
+  (DB_LOG_QUERIES); unset it`, in development the posture WARN and `arg_count=3
+  arg_types="[string []uint8 int]"` with no values (#183). §2(b)
+  production-baseline with `DB_LOG_QUERIES=true`: first-login lines carry `sql`, `arg_count`,
+  `arg_types` and `request_id`, while the email, the hash, `duplicate key`, `Key (`, `args=` and
+  the database password appear zero times; a raced first login logs `sqlstate=23505
+  constraint=external_subjects_pkey`; `DB_LOG_QUERY_ARGS=true` brings `args` and the WARN; §2(d)
+  the real production boot with `DB_LOG_QUERIES=true` exits 1 with the refusal joined to the TLS
+  refusal (#183), and a copy whose `.env.example` uncomments `DB_LOG_QUERIES=true` gets one P7
+  finding, exit 1 (#186). §3 auth-cms (`TRUSTED_PROXY_COUNT=1`): request lines carry
+  `client_ip=203.0.113.9`, `user_agent`, `request_id` and `principal_*` for a user and a service
+  account; `/demo/external/mfa` (authenticated, then refused) still names the user; an expired
+  session carries no principal; `AUTH_EXTERNAL_DEMO=1` prints `seeded_api_key` and
+  `/demo/external/hybrid` answers 200 with it; a scratch host over the cms `BuildRouter` stack
+  shows inner and outer lines sharing one `request_id` (#182).
+- This PR, boot from the tags (`GOWORK=off` binaries; development; a fresh scratch PostgreSQL 17
+  database; `TRUSTED_PROXY_COUNT=1`). `examples/production-baseline`, §2(a) — `curl
+  /healthz?probe=1` with `X-Forwarded-For: 203.0.113.9`, `X-Request-ID: s6probe` and a
+  300-byte user agent gave exactly one line, `request_id` once, `user_agent` cut to 256 bytes,
+  no `principal_*`, no query string (the agent shortened here):
+  `time=2026-10-24T10:50:27.312-07:00 level=INFO msg=request method=GET path=/healthz status=200
+  elapsed=2.215084ms remote_addr=127.0.0.1:56989 client_ip=203.0.113.9 user_agent=UUUU…(256
+  bytes) request_id=s6probe`. §2(c) — a dev-issuer token for `u1`, then `POST
+  /authorization/roles` with `X-Forwarded-For: 203.0.113.9` and `X-Request-ID: s6who`
+  (authenticated, then refused by authorization) gave the one "who, what, from where" line, the
+  CC7 evidence: `time=2026-10-24T10:50:35.015-07:00 level=WARN msg=request method=POST
+  path=/authorization/roles status=403 elapsed=33.143667ms remote_addr=127.0.0.1:57027
+  client_ip=203.0.113.9 user_agent=curl/8.14.1 request_id=s6who principal_type=user
+  principal_id=1FkwYv2mKdy2MW4jHx2fF`. The bearer token and the DSN (with
+  its password) appear zero times in the run's log. Its `pgxdb.Config`, parsed by
+  `ParseEnvTags` from the same environment and printed with `%+v` from a pgxdb v0.14.0 consumer:
+  `{DSN:[redacted] Host: Port: User: Password:[redacted] Database: SSLMode: … StatementTimeout:30s
+  LockTimeout:5s LogQueries:false LogQueryArgs:false …}`; `Redacted()` printed the target with
+  `REDACTED` as the password. `examples/cms`, §4 (a fresh local libSQL server; SMTP pointed at a
+  scratch relay that checks the PLAIN credential): the binary boots with its two wrapped connector
+  literals; a contact-form POST answered 200 and the relay recorded the `AUTH PLAIN` password as
+  matching (`Reveal()` on the PLAIN path), never the `[redacted]` marker; the admin
+  `/inquiries` page load logged one line with `client_ip=203.0.113.9` and one `request_id`; the
+  SMTP password appears zero times in the log. That host has no identity pocket (its admin is
+  ungated by acknowledgement, development only), so its lines carry no `principal_*` — §4's
+  principal expectation does not apply to it; §3 is the principal proof.
+
+**Owner rulings.** Tags are annotated, not signed (ruling of 2026-10-22). **R-1:** `DSN` and `URL`
+migrate too (a DSN carrying a password is the finding; `Redacted()` stays the display path).
+**R-2:** production keeps refusing any query logging, on both connectors (turso gains the rule,
+checked before its TLS early return and joined with the TLS refusal); arity/types is the
+development default. **R-3:** #185 is
+the slice's one store-repin PR — twelve store modules, pins only, no tags. **R-4:** firebase
+`CredentialsJSON` moves to `Secret` (an eighth PR-3 module and tag; every builder breaks).
+**R-5:** no off switch for the redacting handler. **The `NewSMTP` adaptation:** the constructor
+keeps its `*SMTP` signature, and the composed-password refusal surfaces from `Probe` and `Send`.
+Every lead ruling taken during the build is in the executed plan's "Build-time deviations"; each
+one a host can see is folded into the rows and notes above.
+
+**Known and deferred.**
+- **CodeQL alert 14 — OWNER ACTION.** `go/clear-text-logging` at
+  `integrations/datastores/turso/tracers.go:47`, the `args` attribute that only the
+  development-only `LogQueryArgs` opt-in writes (with a WARN); production refuses query logging at
+  `Open` (R-2), which is the control. It is the same flow as the earlier alert 13
+  (`tracers.go:32`, ungated before S6), which now reads fixed. The build session could not
+  dismiss it; the owner dismisses alert 14 as "won't fix" with that reason. CodeQL is not a
+  required check; #183 merged with `check` and `vuln` green. Two other open clear-text-logging
+  alerts on `main` predate S6 and are unrelated (`sdk/capabilities/notify/console.go`, the
+  development console sender; `examples/auth-cms/cmd/server/main.go`).
+- The redacted-secret check matches a literal `[redacted]` only, not a URL-escaped
+  `%5Bredacted%5D`; such a value fails at the wire on authentication instead (follow-up).
+- `examples/auth-cms/cmd/server/jobs_delivery_live_test.go` has not compiled under `-tags
+  livedelivery` since #90 (pre-existing, thirteen stale calls; owner follow-up).
+- `examples/auth-cms/README.md` Leg 3's "1s TTL" is stale (golang-jwt applies a one-minute
+  leeway; follow-up).
+- `AUDIT.md`'s historical snippets still show `string` credential fields, on purpose (records).
+- Workshop, pre-existing: the pocket scaffold's `core.go.mod.tmpl` pins sdk v0.15.0 (the core
+  uses no `Secret`) and `pgxVersion = "v5.8.0"` is stale against v5.9.2 (tidy lifts it);
+  `workshop/documentation/docs/workshop/commands.md` still shows `@v0.6.0 guard --posture .` and
+  `workshop/gopernicus/README.md` `@v0.6.1` (the scaffold README moves to `@v0.9.0` here).
+- Out of S6 by the plan: `.env` in production (FSK-4, closed by S1), console transports (FSK-8),
+  OTel sampling (FSK-5), redacting inside `slog.Any` values or error text, `oauth.Tokens`, an off
+  switch, log retention (the host's pipeline).
+
 ## Transport and abuse hardening (SOC 2 slice S5 — published 2026-10-23)
 
 Six annotated tags (not signed), each cut at its PR's squash-merge commit on `main`, pushed,
