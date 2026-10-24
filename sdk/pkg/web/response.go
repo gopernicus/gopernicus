@@ -6,6 +6,10 @@ import (
 	"net/http"
 )
 
+// unavailableRetryAfter is the Retry-After, in seconds, [RespondJSONError] puts
+// on a 503 that does not already carry one.
+const unavailableRetryAfter = "5"
+
 // errorRecorder is implemented by response writers that want to capture the
 // underlying error for downstream observability (the request logger
 // middleware). Defining it here keeps sdk/pkg/web from importing delivery
@@ -73,9 +77,15 @@ func RespondJSONAccepted(w http.ResponseWriter, v any) error {
 }
 
 // RespondJSONError writes a JSON error response from an [*Error], with
-// X-Content-Type-Options: nosniff like RespondJSON.
+// X-Content-Type-Options: nosniff like RespondJSON. A 503 whose header carries
+// no Retry-After gets Retry-After: 5, so every unavailable answer — a
+// fail-closed limiter, an sdk.ErrUnavailable mapped by [ErrFromDomain] — tells
+// the client when to come back; a value the caller already set is kept.
 func RespondJSONError(w http.ResponseWriter, err *Error) {
 	w.Header().Set("X-Content-Type-Options", "nosniff")
+	if err.Status == http.StatusServiceUnavailable && w.Header().Get("Retry-After") == "" {
+		w.Header().Set("Retry-After", unavailableRetryAfter)
+	}
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(err.Status)
 	RecordError(w, json.NewEncoder(w).Encode(err))

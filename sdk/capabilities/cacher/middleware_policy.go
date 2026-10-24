@@ -11,6 +11,11 @@ import (
 
 // pageTTL deliberately supports a small cache policy. Unknown directives or
 // metadata that need validation/variation logic cause a bypass, not a guess.
+//
+// It never requires an explicit public directive: Pages runs it before the
+// handler on the outer headers, where no Cache-Control is normal, to mean
+// "nothing outside forbids caching". The opt-in is [explicitlyPublic], checked
+// only on the committed response and on a stored entry.
 func pageTTL(header http.Header, ttl time.Duration) (time.Duration, bool) {
 	for _, name := range []string{"Vary", "Set-Cookie", "Content-Encoding", "Content-Length", "Content-Range", "Content-Disposition", "Trailer", "Date", "Expires", "Age", "Pragma", "Connection", "Transfer-Encoding", "Upgrade"} {
 		if len(header.Values(name)) != 0 {
@@ -66,6 +71,22 @@ func pageTTL(header http.Header, ttl time.Duration) (time.Duration, bool) {
 		}
 	}
 	return ttl, ttl > 0
+}
+
+// explicitlyPublic reports whether Cache-Control carries public or s-maxage,
+// the directives that opt a response into shared caching. max-age alone is a
+// private-cache lifetime and does not count.
+func explicitlyPublic(header http.Header) bool {
+	for _, line := range header.Values("Cache-Control") {
+		for _, directive := range strings.Split(line, ",") {
+			name, _, _ := strings.Cut(strings.TrimSpace(directive), "=")
+			switch strings.ToLower(strings.TrimSpace(name)) {
+			case "public", "s-maxage":
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func htmlContentType(value string) bool {

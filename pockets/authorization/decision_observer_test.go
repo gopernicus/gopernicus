@@ -179,10 +179,13 @@ func TestRoleWriteStampsCorrelationIDs(t *testing.T) {
 	for _, tc := range []struct {
 		subject, requestID, trace string
 		want                      audit.Source
+		// minted marks an inbound id web.RequestID replaces at the edge; the row
+		// carries the minted id it echoes.
+		minted bool
 	}{
-		{"u-1", "req-42", "trace-1", audit.Source{RequestID: "req-42", TraceID: "trace-1"}},
-		{"u-2", strings.Repeat("r", 200), "trace-2", audit.Source{TraceID: "trace-2"}},
-		{"u-3", strings.Repeat("r", audit.MaxCorrelationIDLen), "trace\x7f3", audit.Source{RequestID: strings.Repeat("r", audit.MaxCorrelationIDLen)}},
+		{"u-1", "req-42", "trace-1", audit.Source{RequestID: "req-42", TraceID: "trace-1"}, false},
+		{"u-2", strings.Repeat("r", 200), "trace-2", audit.Source{TraceID: "trace-2"}, true},
+		{"u-3", strings.Repeat("r", audit.MaxCorrelationIDLen), "trace\x7f3", audit.Source{RequestID: strings.Repeat("r", audit.MaxCorrelationIDLen)}, false},
 	} {
 		body := `{"subject_type":"user","subject_id":"` + tc.subject + `","role":"viewer","scope":{"kind":"global"}}`
 		rec := host.post(t, t.Context(), body, map[string]string{"X-Request-ID": tc.requestID, traceTestHeader: tc.trace})
@@ -194,6 +197,12 @@ func TestRoleWriteStampsCorrelationIDs(t *testing.T) {
 			t.Fatalf("%s: audit=%+v %v", tc.subject, page, err)
 		}
 		want := tc.want
+		if tc.minted {
+			want.RequestID = rec.Header().Get("X-Request-ID")
+			if want.RequestID == "" || want.RequestID == tc.requestID {
+				t.Fatalf("%s: echoed request id = %q, want a minted one", tc.subject, want.RequestID)
+			}
+		}
 		want.ActorType, want.ActorID = "user", observedAdmin
 		if got := page.Items[0].Source; got != want {
 			t.Fatalf("%s: source=%+v want %+v", tc.subject, got, want)

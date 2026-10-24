@@ -12,11 +12,13 @@ import (
 
 // TestAuditRowRequestIDFromTheEdge drives the request-id middleware into an
 // audited route: an ordinary X-Request-ID lands on the row, and a 200-byte one
-// is blanked on the row while the request itself still succeeds.
+// is replaced at the edge — the row carries the minted id, never the inbound
+// value — while the request itself still succeeds. The recorder's own blanking
+// past MaxCorrelationIDLen is pinned in securityevent.
 func TestAuditRowRequestIDFromTheEdge(t *testing.T) {
 	for _, tc := range []struct{ name, header, want string }{
 		{"ordinary id recorded", "req-0f3c", "req-0f3c"},
-		{"200-byte id blanked", strings.Repeat("x", 200), ""},
+		{"200-byte id replaced at the edge", strings.Repeat("x", 200), ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			h := newCredentialHarness(t)
@@ -33,8 +35,15 @@ func TestAuditRowRequestIDFromTheEdge(t *testing.T) {
 				t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body)
 			}
 			e := requireEvent(t, h.events, securityevent.TypeAPIKeyAuth, securityevent.StatusSuccess)
-			if e.RequestID != tc.want {
-				t.Fatalf("row request_id = %q, want %q", e.RequestID, tc.want)
+			want := tc.want
+			if want == "" {
+				want = rec.Header().Get(web.RequestIDHeader)
+				if want == "" || want == tc.header {
+					t.Fatalf("echoed request id = %q, want a minted one", want)
+				}
+			}
+			if e.RequestID != want {
+				t.Fatalf("row request_id = %q, want %q", e.RequestID, want)
 			}
 		})
 	}

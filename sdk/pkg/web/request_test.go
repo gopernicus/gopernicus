@@ -246,3 +246,96 @@ func TestDecodeJSONHostBodyLimit(t *testing.T) {
 		}
 	}
 }
+
+func TestDecodeJSON_FixedErrorText(t *testing.T) {
+	for _, tc := range []struct {
+		name, body, want string
+	}{
+		{"truncated", `{"email":`, "request body must be a JSON object: invalid input"},
+		{"wrong field type", `{"email":42}`, "request body must be a JSON object: invalid input"},
+		{"not an object", `[1,2]`, "request body must be a JSON object: invalid input"},
+		{"trailing value", `{} {}`, "request body must be a JSON object: invalid input"},
+		{"empty", ``, "request body is empty: invalid input"},
+		{"whitespace", " \t\n", "request body is empty: invalid input"},
+		{"null", ` null `, "request body must be a JSON object, not null: invalid input"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := DecodeJSON[validatedPayload](httptest.NewRequest("POST", "/", strings.NewReader(tc.body)))
+			if !errors.Is(err, sdk.ErrInvalidInput) {
+				t.Fatalf("error = %v, want sdk.ErrInvalidInput", err)
+			}
+			if err.Error() != tc.want {
+				t.Fatalf("error = %q, want %q", err.Error(), tc.want)
+			}
+			got := ErrValidation(err)
+			if got.Status != http.StatusBadRequest || got.Code != "bad_request" || got.Message != tc.want {
+				t.Fatalf("ErrValidation = %+v", got)
+			}
+			for _, leak := range []string{"json:", "Go ", "struct", "validatedPayload", "string", "int"} {
+				if strings.Contains(got.Message, leak) {
+					t.Fatalf("message %q leaks %q", got.Message, leak)
+				}
+			}
+			if mapped := ErrFromDomain(err); mapped.Status != http.StatusBadRequest || mapped.Message != "invalid input" {
+				t.Fatalf("ErrFromDomain = %+v, want the generic 400", mapped)
+			}
+		})
+	}
+}
+
+func TestDecodeJSON_DefaultBodyLimit(t *testing.T) {
+	big := `{"email":"` + strings.Repeat("a", DefaultBodyLimit) + `"}`
+	_, err := DecodeJSON[validatedPayload](httptest.NewRequest("POST", "/", strings.NewReader(big)))
+	var tooLarge *http.MaxBytesError
+	if !errors.As(err, &tooLarge) || tooLarge.Limit != DefaultBodyLimit {
+		t.Fatalf("error = %v, want *http.MaxBytesError at %d", err, DefaultBodyLimit)
+	}
+	if got := ErrValidation(err); got.Status != http.StatusRequestEntityTooLarge {
+		t.Fatalf("ErrValidation status = %d, want 413", got.Status)
+	}
+	if got := ErrFromDomain(err); got.Status != http.StatusRequestEntityTooLarge {
+		t.Fatalf("ErrFromDomain status = %d, want 413", got.Status)
+	}
+
+	exact := `{"email":"` + strings.Repeat("a", DefaultBodyLimit-len(`{"email":""}`)) + `"}`
+	if _, err := DecodeJSON[validatedPayload](httptest.NewRequest("POST", "/", strings.NewReader(exact))); err != nil {
+		t.Fatalf("body of exactly DefaultBodyLimit bytes: %v", err)
+	}
+}
+
+func TestDecodeJSON_OuterLargerLimitDoesNotGovern(t *testing.T) {
+	handler := http.MaxBytesHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if _, err := DecodeJSON[validatedPayload](r); err != nil {
+			RespondJSONError(w, ErrValidation(err))
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}), 4*DefaultBodyLimit)
+	body := `{"email":"` + strings.Repeat("a", 2*DefaultBodyLimit) + `"}`
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, httptest.NewRequest("POST", "/", strings.NewReader(body)))
+	if w.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want 413", w.Code)
+	}
+}
+
+func TestDecodeJSONLimit(t *testing.T) {
+	body := `{"email":"` + strings.Repeat("a", 2*DefaultBodyLimit) + `"}`
+	got, err := DecodeJSONLimit[validatedPayload](httptest.NewRequest("POST", "/", strings.NewReader(body)), 4*DefaultBodyLimit)
+	if err != nil || len(got.Email) != 2*DefaultBodyLimit || got.ValidationCalls != 1 {
+		t.Fatalf("DecodeJSONLimit = %d bytes, %d validations, %v", len(got.Email), got.ValidationCalls, err)
+	}
+
+	_, err = DecodeJSONLimit[validatedPayload](httptest.NewRequest("POST", "/", strings.NewReader(`{"email":"abcdef"}`)), 8)
+	var tooLarge *http.MaxBytesError
+	if !errors.As(err, &tooLarge) || tooLarge.Limit != 8 {
+		t.Fatalf("error = %v, want *http.MaxBytesError at 8", err)
+	}
+
+	for _, limit := range []int64{0, -1} {
+		got, err := DecodeJSONLimit[validatedPayload](httptest.NewRequest("POST", "/", strings.NewReader(`{"email":"a@b.com"}`)), limit)
+		if !errors.Is(err, sdk.ErrInvalidInput) || got.ValidationCalls != 0 {
+			t.Fatalf("limit %d: error = %v, validations = %d; want sdk.ErrInvalidInput before any read", limit, err, got.ValidationCalls)
+		}
+	}
+}

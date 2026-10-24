@@ -79,6 +79,9 @@ func Mount(r pockets.RouteRegistrar, d Deps, views Views, cache cacher.Storer, p
 	// Public pages are cacheable (TTL); admin pages never are.
 	var pubMW []web.Middleware
 	if cache != nil {
+		// Public by construction, and the handlers emit no Cache-Control so no
+		// CDN stores pages the host's invalidation cannot purge.
+		pageCache.AllowImplicitPublic = true
 		pubMW = append(pubMW, cacher.Pages(cache, pageCache))
 	}
 

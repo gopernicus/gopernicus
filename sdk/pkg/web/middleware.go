@@ -8,8 +8,10 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"mime"
 	"net"
 	"net/http"
+	"regexp"
 	"runtime/debug"
 	"strings"
 	"time"
@@ -19,6 +21,10 @@ import (
 
 // RequestIDHeader is the canonical header used to carry the request ID in and out.
 const RequestIDHeader = "X-Request-ID"
+
+// inboundRequestID is the shape an inbound X-Request-ID must have to be reused;
+// anything else is replaced, never echoed into logs or the response.
+var inboundRequestID = regexp.MustCompile(`^[A-Za-z0-9._-]{1,128}$`)
 
 // CORS response defaults. corsDefaultAllowedHeaders is the compatibility
 // request-header allowlist; corsDefaultExposedHeaders makes the framework's own
@@ -31,8 +37,10 @@ const (
 )
 
 // Panics returns middleware that recovers from panics, logs the panic with a
-// stack trace, and returns an HTML 500 page if the response has not started.
-// A panic after commitment aborts the response. http.ErrAbortHandler always
+// stack trace, and returns a 500 if the response has not started: a JSON
+// [ErrInternal] body when the request's Accept lists application/json ahead of
+// text/html or its Content-Type is application/json, else an HTML page. A
+// panic after commitment aborts the response. http.ErrAbortHandler always
 // passes through to net/http without a panic log.
 func Panics(log *slog.Logger) Middleware {
 	return func(next http.Handler) http.Handler {
@@ -54,6 +62,10 @@ func Panics(log *slog.Logger) Middleware {
 					// A handler may have prepared headers for a different body.
 					sw.Header().Del("Content-Length")
 					sw.Header().Del("Content-Encoding")
+					if wantsJSON(r) {
+						RespondJSONError(sw, ErrInternal("internal error"))
+						return
+					}
 					respondHTML(sw, http.StatusInternalServerError, internalErrorHTML)
 				}
 			}()
@@ -119,14 +131,16 @@ func Logger(log *slog.Logger) Middleware {
 }
 
 // RequestID returns middleware that ensures every request carries a request ID.
-// It reuses an inbound X-Request-ID when present, otherwise generates one,
-// stashes it on the request context for the logger, and echoes it back in the
-// response header.
+// It reuses an inbound X-Request-ID only when it matches
+// ^[A-Za-z0-9._-]{1,128}$ and otherwise generates one, stashes it on the
+// request context for the logger, and echoes it back in the response header.
+// A trusted proxy in front of the server may set the header to correlate its
+// own logs; any other inbound value is client-controlled.
 func RequestID() Middleware {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			id := r.Header.Get(RequestIDHeader)
-			if id == "" {
+			if !inboundRequestID.MatchString(id) {
 				id = newRequestID()
 			}
 			w.Header().Set(RequestIDHeader, id)
@@ -298,6 +312,27 @@ func addVary(h http.Header, dimension string) {
 		}
 	}
 	h.Add("Vary", dimension)
+}
+
+// wantsJSON reports whether a recovered panic should answer JSON: the request
+// sent a JSON body, or its Accept lists application/json before text/html.
+// Accept is read in order; q-values are not weighed.
+func wantsJSON(r *http.Request) bool {
+	if mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type")); err == nil && mediaType == "application/json" {
+		return true
+	}
+	for _, value := range r.Header.Values("Accept") {
+		for _, part := range strings.Split(value, ",") {
+			mediaType, _, _ := strings.Cut(part, ";")
+			switch strings.ToLower(strings.TrimSpace(mediaType)) {
+			case "application/json":
+				return true
+			case "text/html":
+				return false
+			}
+		}
+	}
+	return false
 }
 
 // newRequestID returns a 128-bit random hex string.

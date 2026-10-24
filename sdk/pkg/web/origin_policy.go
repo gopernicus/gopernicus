@@ -138,6 +138,13 @@ func (p OriginPolicy) AllowsRequest(r *http.Request) bool {
 	return p.allows(values[0])
 }
 
+// HasNamespace reports whether the policy carries any namespace rule, of
+// either scheme. A pocket uses it to refuse a configuration the trust model
+// above rules out, such as a session cookie Domain beside a namespace.
+func (p OriginPolicy) HasNamespace() bool {
+	return len(p.namespaces) > 0
+}
+
 // HasHTTPNamespace reports whether any namespace rule admits plain http. A
 // pocket uses it to refuse such a policy in production.
 func (p OriginPolicy) HasHTTPNamespace() bool {

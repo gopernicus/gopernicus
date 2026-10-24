@@ -204,6 +204,28 @@ func TestOriginPolicy_HasHTTPNamespace(t *testing.T) {
 	}
 }
 
+func TestOriginPolicy_HasNamespace(t *testing.T) {
+	if (OriginPolicy{}).HasNamespace() {
+		t.Error("zero policy reported a namespace")
+	}
+	exactOnly, err := NewOriginPolicy(OriginPolicyConfig{Exact: []string{"https://app.example.com"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if exactOnly.HasNamespace() {
+		t.Error("exact-only policy reported a namespace")
+	}
+	for _, scheme := range []string{"https", "http"} {
+		p, err := NewOriginPolicy(OriginPolicyConfig{Namespaces: []OriginNamespace{{Scheme: scheme, Suffix: "example.com"}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !p.HasNamespace() {
+			t.Errorf("%s namespace not reported", scheme)
+		}
+	}
+}
+
 func TestNewOriginPolicy_DoesNotAliasInput(t *testing.T) {
 	cfg := OriginPolicyConfig{
 		Exact:      []string{"https://app.example.com"},

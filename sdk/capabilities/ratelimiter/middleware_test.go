@@ -63,6 +63,10 @@ func TestMiddlewareFailurePolicy(t *testing.T) {
 			if w.Code != tc.want || nextRan != tc.wantNext || allower.gotKey != "ip:test" {
 				t.Fatalf("status=%d next=%v key=%q", w.Code, nextRan, allower.gotKey)
 			}
+			// A fail-closed outage tells the client when to retry.
+			if w.Code == 503 && w.Header().Get("Retry-After") != "5" {
+				t.Fatalf("503 Retry-After = %q, want 5", w.Header().Get("Retry-After"))
+			}
 			wantReports := 0
 			if tc.err != nil {
 				wantReports = 1
