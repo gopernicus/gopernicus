@@ -3,9 +3,9 @@ module github.com/gopernicus/gopernicus/pockets/cms/stores/turso
 go 1.26.10
 
 require (
-	github.com/gopernicus/gopernicus/integrations/datastores/turso v0.4.0
+	github.com/gopernicus/gopernicus/integrations/datastores/turso v0.9.0
 	github.com/gopernicus/gopernicus/pockets/cms v0.5.0
-	github.com/gopernicus/gopernicus/sdk v0.9.0
+	github.com/gopernicus/gopernicus/sdk v0.18.0
 )
 
 require (

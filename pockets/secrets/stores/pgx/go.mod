@@ -3,9 +3,9 @@ module github.com/gopernicus/gopernicus/pockets/secrets/stores/pgx
 go 1.26.10
 
 require (
-	github.com/gopernicus/gopernicus/integrations/datastores/pgxdb v0.11.0
+	github.com/gopernicus/gopernicus/integrations/datastores/pgxdb v0.14.0
 	github.com/gopernicus/gopernicus/pockets/secrets v0.2.0
-	github.com/gopernicus/gopernicus/sdk v0.13.0
+	github.com/gopernicus/gopernicus/sdk v0.18.0
 )
 
 require (

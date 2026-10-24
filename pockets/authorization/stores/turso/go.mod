@@ -3,9 +3,9 @@ module github.com/gopernicus/gopernicus/pockets/authorization/stores/turso
 go 1.26.10
 
 require (
-	github.com/gopernicus/gopernicus/integrations/datastores/turso v0.8.0
+	github.com/gopernicus/gopernicus/integrations/datastores/turso v0.9.0
 	github.com/gopernicus/gopernicus/pockets/authorization v0.30.0
-	github.com/gopernicus/gopernicus/sdk v0.15.0
+	github.com/gopernicus/gopernicus/sdk v0.18.0
 	modernc.org/sqlite v1.52.0
 )
 

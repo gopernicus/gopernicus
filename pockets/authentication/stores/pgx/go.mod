@@ -3,9 +3,9 @@ module github.com/gopernicus/gopernicus/pockets/authentication/stores/pgx
 go 1.26.10
 
 require (
-	github.com/gopernicus/gopernicus/integrations/datastores/pgxdb v0.12.0
+	github.com/gopernicus/gopernicus/integrations/datastores/pgxdb v0.14.0
 	github.com/gopernicus/gopernicus/pockets/authentication v0.23.0
-	github.com/gopernicus/gopernicus/sdk v0.16.0
+	github.com/gopernicus/gopernicus/sdk v0.18.0
 	github.com/jackc/pgx/v5 v5.9.2
 )
 
