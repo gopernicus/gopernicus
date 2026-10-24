@@ -31,6 +31,53 @@ startup context and deadline to those constructors too.
 SQL migration streams are flat directories: nested files belong to separate
 host-controlled streams; export copies only direct SQL files.
 
+### Statement and lock timeouts — `StatementTimeout` / `LockTimeout`
+
+`Config.StatementTimeout` (`DB_STATEMENT_TIMEOUT`) and `Config.LockTimeout`
+(`DB_LOCK_TIMEOUT`) bound every statement and every lock wait on every pooled
+connection. `Open` sends them as the `statement_timeout` / `lock_timeout` startup
+parameters (`ConnConfig.RuntimeParams`, in whole milliseconds — a sub-millisecond
+remainder truncates), so they hold on every connection the pool dials at no extra
+round-trip. Zero, the default, sends nothing: the server's, database's or role's
+setting stands. A negative value fails at `Open`, and so does a positive value
+under 1ms — it would serialize as `0`, which the server reads as "disabled".
+
+```sh
+DB_STATEMENT_TIMEOUT=30s
+DB_LOCK_TIMEOUT=5s
+```
+
+A statement past the bound fails with SQLSTATE `57014` (`query_canceled`), a lock
+wait with `55P03` (`lock_not_available`). `MapError` passes both through unchanged,
+like every SQLSTATE it does not map: the caller sees an unexpected error (a 500),
+never a domain sentinel.
+
+**One source per parameter.** When the connection string already names the same
+parameter — a `statement_timeout=` key, or an `options` entry such as
+`options=-c lock_timeout=…` in any switch form the server accepts (`-c name=…`,
+`-cname=…`, `--name=…`; dashes or underscores; any case), `PGOPTIONS` included —
+AND the `Config` field is set, `Open` fails with `sdk.ErrInvalidInput` before any
+connection attempt. There is no silent winner (the server would apply the separate
+startup parameter over the `options` entry). Set one or the other; a DSN-only
+setting reaches the server exactly as written.
+
+**Server process only.** Set the knobs on the serving process. A migrator leaves
+both zero: an index build or a backfill runs far past a request-sized statement
+timeout, and a lock timeout aborts a migration queued behind live traffic. A
+migrator that parses the same environment into `pgxdb.Config` zeroes the two
+fields after parsing.
+
+**PgBouncer in transaction mode** accepts only the few startup parameters it
+tracks and refuses the rest (`unsupported startup parameter`); listing them in
+`ignore_startup_parameters` drops them, so the bound silently never applies.
+Behind such a pooler, leave both knobs zero and put the bound on the runtime role,
+which every server connection the pooler opens picks up at session start:
+
+```sql
+ALTER ROLE app_runtime SET statement_timeout = '30s';
+ALTER ROLE app_runtime SET lock_timeout = '5s';
+```
+
 ## Production posture — `RuntimeMode`
 
 `Config.RuntimeMode` is the host's `environment.Mode`. The composition root reads
@@ -266,7 +313,7 @@ the raw driver error sees the sentinel now.
 
 | member | shape |
 |---|---|
-| `Config` | `DSN` or split `Host`/`Port`/`User`/`Password`/`Database`/`SSLMode`, plus pool settings, `LogQueries`, `Logger`, `Tracer`, and `Retry`; env tags are provided for host parsers; pgx also honors standard `PG*` environment defaults during DSN parsing. `RuntimeMode`, `TLSUnverifiedAcknowledged`, `TLSDisabledAcknowledged` and `AppendOnlyWritableAcknowledged` are programmatic (no env tag; see "Production posture" and "Append-only tables") |
+| `Config` | `DSN` or split `Host`/`Port`/`User`/`Password`/`Database`/`SSLMode`, plus pool settings, `StatementTimeout`/`LockTimeout` (see "Statement and lock timeouts"), `LogQueries`, `Logger`, `Tracer`, and `Retry`; env tags are provided for host parsers; pgx also honors standard `PG*` environment defaults during DSN parsing. `RuntimeMode`, `TLSUnverifiedAcknowledged`, `TLSDisabledAcknowledged` and `AppendOnlyWritableAcknowledged` are programmatic (no env tag; see "Production posture" and "Append-only tables") |
 | `ErrTLSRequired` / `ErrQueryLoggingRefused` | production posture refusals from `Open`, matched with `errors.Is` |
 | `ErrAppendOnlyTableWritable` / `ErrAppendOnlyTableUnwritable` / `ErrDefinerFunctionUnsafe` | production append-only refusals from `ProbeAppendOnly`, matched with `errors.Is` |
 | `Open(ctx, cfg) (*DB, error)` | opens a `pgxpool` and pings; every connection scans `timestamptz` in UTC and, unless the host named a zone, runs with session `timezone=UTC` (see below) |
@@ -878,7 +925,10 @@ Unit tests are hermetic (`MapError` over constructed `pgconn.PgError` values,
 the `RuntimeMode` posture matrix over pgx's DSN parse, the append-only and definer-function
 policy and mode matrices over hand-built reports (the no-function output pinned byte for byte),
 migration checksum/error paths, `poolConfig`'s
-`AfterConnect`/session-zone defaulting, and the codec registration driven through
+`AfterConnect`/session-zone defaulting, the timeout knobs (milliseconds applied,
+zero unset, negative and sub-millisecond refused, the DSN-and-`Config` double
+setting refused at `Open` in every `options` form, a DSN-only setting untouched),
+and the codec registration driven through
 a bare `pgtype.Map` in both wire formats) and run with a plain `go test ./...` —
 no database required. The time-zone default cases clear `PGTZ`, `PGOPTIONS`,
 `PGSERVICE`, and `PGSERVICEFILE` first, so ambient libpq configuration cannot
@@ -893,7 +943,11 @@ preflight and the no-copy fallback, and the four-case privilege matrix), the
 result, a collect inside a transaction, and `22P02`/unknown-relation error
 mapping), `TestLive_ScanUTC` (UTC-located scalar, array, struct-scan
 and simple-protocol reads, `SHOW TimeZone` = `UTC`, and the DSN override keeping
-its own session zone while scans stay UTC), the limiter legs (the shared
+its own session zone while scans stay UTC), `TestLive_Timeouts` (`SHOW` = the knob
+from the startup packet, `pg_sleep` past `StatementTimeout` → `57014`, a held
+`ACCESS EXCLUSIVE` lock past `LockTimeout` → `55P03`, both unmapped by `MapError`,
+zero knobs sending nothing, a DSN-only setting kept, the double setting and a
+sub-millisecond value refused at `Open`), the limiter legs (the shared
 `ratelimitertest.Run` conformance suite, the exact-K concurrency proof — which
 also bounds the returned `RetryAfter`/`Remaining`, the only place a stale
 server clock is reachable — server time, burst, prefix isolation, context

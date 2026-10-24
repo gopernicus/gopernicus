@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/gopernicus/gopernicus/sdk"
+	"github.com/gopernicus/gopernicus/sdk/pkg/environment"
 
 	jackpgx "github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -446,5 +447,257 @@ func TestRegisterUTCTimestamptz_Decodes(t *testing.T) {
 	}
 	if arrGot[0].Location() != time.UTC {
 		t.Fatalf("timestamptz[] element location = %v, want time.UTC", arrGot[0].Location())
+	}
+}
+
+// TestPoolConfig_TimeoutsAppliedInMilliseconds: a set knob becomes its startup
+// parameter in whole milliseconds (sub-millisecond remainders truncate), and the
+// DSN string itself is untouched.
+func TestPoolConfig_TimeoutsAppliedInMilliseconds(t *testing.T) {
+	clearLibpqEnv(t)
+
+	for _, tc := range []struct {
+		name          string
+		cfg           Config
+		wantStatement string
+		wantLock      string
+	}{
+		{"both", Config{StatementTimeout: 30 * time.Second, LockTimeout: 5 * time.Second}, "30000", "5000"},
+		{"one_millisecond", Config{StatementTimeout: time.Millisecond, LockTimeout: time.Millisecond}, "1", "1"},
+		{"truncates_remainder", Config{StatementTimeout: 1500 * time.Microsecond, LockTimeout: 2*time.Second + 999*time.Microsecond}, "1", "2000"},
+		{"statement_only", Config{StatementTimeout: time.Minute}, "60000", ""},
+		{"lock_only", Config{LockTimeout: 250 * time.Millisecond}, "", "250"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			poolConfig, err := tc.cfg.poolConfig(testDSN)
+			if err != nil {
+				t.Fatalf("poolConfig: %v", err)
+			}
+			params := poolConfig.ConnConfig.RuntimeParams
+			for param, want := range map[string]string{"statement_timeout": tc.wantStatement, "lock_timeout": tc.wantLock} {
+				got, ok := params[param]
+				if want == "" {
+					if ok {
+						t.Fatalf("RuntimeParams[%q] = %q, want absent for a zero knob", param, got)
+					}
+					continue
+				}
+				if got != want {
+					t.Fatalf("RuntimeParams[%q] = %q, want %q", param, got, want)
+				}
+			}
+			if got := poolConfig.ConnConfig.ConnString(); got != testDSN {
+				t.Fatalf("ConnString() = %q, want the DSN unchanged (%q)", got, testDSN)
+			}
+		})
+	}
+}
+
+// TestPoolConfig_TimeoutsZeroUnset: the zero Config sends neither parameter, so
+// the server's (or role's) setting stands.
+func TestPoolConfig_TimeoutsZeroUnset(t *testing.T) {
+	clearLibpqEnv(t)
+
+	poolConfig, err := Config{}.poolConfig(testDSN)
+	if err != nil {
+		t.Fatalf("poolConfig: %v", err)
+	}
+	for _, param := range []string{"statement_timeout", "lock_timeout"} {
+		if got, ok := poolConfig.ConnConfig.RuntimeParams[param]; ok {
+			t.Fatalf("RuntimeParams[%q] = %q, want absent", param, got)
+		}
+	}
+}
+
+// TestPoolConfig_TimeoutsRejectInvalid: negative values, and positive values
+// under 1ms — which would serialize as "0", the server's "disabled" — are
+// ErrInvalidInput naming the field.
+func TestPoolConfig_TimeoutsRejectInvalid(t *testing.T) {
+	clearLibpqEnv(t)
+
+	for _, tc := range []struct {
+		name  string
+		cfg   Config
+		field string
+	}{
+		{"negative_statement", Config{StatementTimeout: -time.Second}, "StatementTimeout"},
+		{"negative_lock", Config{LockTimeout: -time.Millisecond}, "LockTimeout"},
+		{"nanosecond_statement", Config{StatementTimeout: time.Nanosecond}, "StatementTimeout"},
+		{"sub_millisecond_statement", Config{StatementTimeout: 999 * time.Microsecond}, "StatementTimeout"},
+		{"sub_millisecond_lock", Config{LockTimeout: 500 * time.Microsecond}, "LockTimeout"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := tc.cfg.poolConfig(testDSN)
+			if !errors.Is(err, sdk.ErrInvalidInput) {
+				t.Fatalf("poolConfig error = %v, want ErrInvalidInput", err)
+			}
+			if !strings.Contains(err.Error(), tc.field) {
+				t.Fatalf("poolConfig error = %q, want it to name %s", err, tc.field)
+			}
+		})
+	}
+}
+
+// TestPoolConfig_TimeoutDoubleSettingRefused: a knob set beside a connection
+// string or PGOPTIONS that names the same parameter — as a key or in any options
+// switch form the server accepts — is ErrInvalidInput, never a silent winner.
+// The refusal names the parameter and keeps the DSN's password out of its text.
+func TestPoolConfig_TimeoutDoubleSettingRefused(t *testing.T) {
+	const secretDSN = "postgres://u:timeout-s3cret@127.0.0.1:5432/db?sslmode=disable"
+
+	for _, tc := range []struct {
+		name  string
+		dsn   string
+		env   map[string]string
+		cfg   Config
+		param string
+	}{
+		{"dsn_key", secretDSN + "&statement_timeout=2000", nil, Config{StatementTimeout: time.Second}, "statement_timeout"},
+		{"dsn_key_mixed_case", secretDSN + "&Lock_Timeout=2000", nil, Config{LockTimeout: time.Second}, "lock_timeout"},
+		{"keyword_value_dsn", "host=127.0.0.1 user=u password=timeout-s3cret dbname=db sslmode=disable statement_timeout=2000", nil, Config{StatementTimeout: time.Second}, "statement_timeout"},
+		{"dsn_options_c", secretDSN + "&options=-c%20statement_timeout%3D2000", nil, Config{StatementTimeout: time.Second}, "statement_timeout"},
+		{"dsn_options_joined", secretDSN + "&options=-clock_timeout%3D2000", nil, Config{LockTimeout: time.Second}, "lock_timeout"},
+		{"dsn_options_long", secretDSN + "&options=--lock-timeout%3D2000", nil, Config{LockTimeout: time.Second}, "lock_timeout"},
+		{"dsn_options_among_others", secretDSN + "&options=-c%20search_path%3Dapp%20-c%20Statement-Timeout%3D2000", nil, Config{StatementTimeout: time.Second}, "statement_timeout"},
+		{"pgoptions", secretDSN, map[string]string{"PGOPTIONS": "-c statement_timeout=2000"}, Config{StatementTimeout: time.Second}, "statement_timeout"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			clearLibpqEnv(t)
+			for k, v := range tc.env {
+				t.Setenv(k, v)
+			}
+
+			_, err := tc.cfg.poolConfig(tc.dsn)
+			if !errors.Is(err, sdk.ErrInvalidInput) {
+				t.Fatalf("poolConfig error = %v, want ErrInvalidInput", err)
+			}
+			if !strings.Contains(err.Error(), tc.param) {
+				t.Fatalf("poolConfig error = %q, want it to name %s", err, tc.param)
+			}
+			if strings.Contains(err.Error(), "timeout-s3cret") {
+				t.Fatalf("poolConfig error = %q leaks the DSN password", err)
+			}
+		})
+	}
+}
+
+// TestPoolConfig_TimeoutDSNOnlyUntouched: with the knob zero, the host's own
+// DSN/options setting reaches the server exactly as written; a knob for the
+// OTHER parameter still applies beside it, and deadlock_timeout is not mistaken
+// for lock_timeout.
+func TestPoolConfig_TimeoutDSNOnlyUntouched(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		dsn    string
+		cfg    Config
+		want   map[string]string
+		absent []string
+	}{
+		{
+			name:   "dsn_key",
+			dsn:    testDSN + "&statement_timeout=1500",
+			want:   map[string]string{"statement_timeout": "1500"},
+			absent: []string{"lock_timeout"},
+		},
+		{
+			name:   "dsn_options",
+			dsn:    testDSN + "&options=-c%20lock_timeout%3D700",
+			want:   map[string]string{"options": "-c lock_timeout=700"},
+			absent: []string{"statement_timeout", "lock_timeout"},
+		},
+		{
+			name: "dsn_names_one_knob_sets_the_other",
+			dsn:  testDSN + "&statement_timeout=1500",
+			cfg:  Config{LockTimeout: 5 * time.Second},
+			want: map[string]string{"statement_timeout": "1500", "lock_timeout": "5000"},
+		},
+		{
+			name: "deadlock_timeout_is_not_lock_timeout",
+			dsn:  testDSN + "&options=-c%20deadlock_timeout%3D2s",
+			cfg:  Config{LockTimeout: 5 * time.Second},
+			want: map[string]string{"options": "-c deadlock_timeout=2s", "lock_timeout": "5000"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			clearLibpqEnv(t)
+
+			poolConfig, err := tc.cfg.poolConfig(tc.dsn)
+			if err != nil {
+				t.Fatalf("poolConfig: %v", err)
+			}
+			params := poolConfig.ConnConfig.RuntimeParams
+			for param, want := range tc.want {
+				if got := params[param]; got != want {
+					t.Fatalf("RuntimeParams[%q] = %q, want %q", param, got, want)
+				}
+			}
+			for _, param := range tc.absent {
+				if got, ok := params[param]; ok {
+					t.Fatalf("RuntimeParams[%q] = %q, want absent", param, got)
+				}
+			}
+		})
+	}
+}
+
+// TestOpen_TimeoutDoubleSettingRefusedBeforeConnecting: the double setting is
+// refused by Open itself, before the pool exists — the listener never sees a
+// connection attempt.
+func TestOpen_TimeoutDoubleSettingRefusedBeforeConnecting(t *testing.T) {
+	clearLibpqEnv(t)
+	dsn, connected := stalledPostgres(t)
+
+	db, err := Open(context.Background(), Config{DSN: dsn + "&statement_timeout=2000", StatementTimeout: time.Second})
+	if db != nil || !errors.Is(err, sdk.ErrInvalidInput) {
+		t.Fatalf("Open = %v, %v; want nil, ErrInvalidInput", db, err)
+	}
+	select {
+	case <-connected:
+		t.Fatal("Open attempted a connection for a refused configuration")
+	case <-time.After(100 * time.Millisecond):
+	}
+}
+
+// TestOptionsNameParam pins the options parse: every switch form the server
+// accepts, '-' folded to '_', names compared exactly (not as substrings).
+func TestOptionsNameParam(t *testing.T) {
+	for _, tc := range []struct {
+		options string
+		want    bool
+	}{
+		{"", false},
+		{"-c statement_timeout=1000", true},
+		{"-cstatement_timeout=1000", true},
+		{"--statement_timeout=1000", true},
+		{"-c statement-timeout=1000", true},
+		{"-c STATEMENT_TIMEOUT=1000", true},
+		{"-c search_path=app  -c statement_timeout=1000", true},
+		{"-c statement_timeout", false},
+		{"-c", false},
+		{"-c idle_in_transaction_session_timeout=1000", false},
+		{"-c xstatement_timeout=1000", false},
+		{"statement_timeout=1000", false},
+	} {
+		if got := optionsNameParam(tc.options, "statement_timeout"); got != tc.want {
+			t.Errorf("optionsNameParam(%q, statement_timeout) = %v, want %v", tc.options, got, tc.want)
+		}
+	}
+	if optionsNameParam("-c deadlock_timeout=2s", "lock_timeout") {
+		t.Error(`optionsNameParam("-c deadlock_timeout=2s", lock_timeout) = true, want false`)
+	}
+}
+
+// TestConfig_TimeoutEnvTags: the knobs parse from DB_STATEMENT_TIMEOUT and
+// DB_LOCK_TIMEOUT as Go durations.
+func TestConfig_TimeoutEnvTags(t *testing.T) {
+	t.Setenv("DB_STATEMENT_TIMEOUT", "30s")
+	t.Setenv("DB_LOCK_TIMEOUT", "5s")
+
+	var cfg Config
+	if err := environment.ParseEnvTags("", &cfg); err != nil {
+		t.Fatalf("ParseEnvTags: %v", err)
+	}
+	if cfg.StatementTimeout != 30*time.Second || cfg.LockTimeout != 5*time.Second {
+		t.Fatalf("StatementTimeout=%v LockTimeout=%v, want 30s and 5s", cfg.StatementTimeout, cfg.LockTimeout)
 	}
 }
