@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
@@ -22,7 +23,7 @@ const sendPath = "/v3/mail/send"
 
 // Config is host-owned provider configuration.
 type Config struct {
-	APIKey string
+	APIKey sdk.Secret
 	// FromName is the display name paired with the message's bare From mailbox.
 	FromName string
 	// Host is an HTTP(S) origin. Empty selects https://api.sendgrid.com.
@@ -55,10 +56,11 @@ func (s *Sender) Capabilities() notify.Capabilities {
 // New validates configuration and prepares a sender without I/O. Credentials
 // are checked by the provider when sending; construction only validates inputs.
 func New(cfg Config) (*Sender, error) {
-	if strings.TrimSpace(cfg.APIKey) == "" {
+	apiKey := cfg.APIKey.Reveal()
+	if strings.TrimSpace(apiKey) == "" {
 		return nil, fmt.Errorf("sendgrid: API key is required: %w", sdk.ErrInvalidInput)
 	}
-	if strings.ContainsAny(cfg.APIKey, "\r\n") || strings.ContainsAny(cfg.FromName, "\r\n") {
+	if strings.ContainsAny(apiKey, "\r\n") || strings.ContainsAny(cfg.FromName, "\r\n") {
 		return nil, fmt.Errorf("sendgrid: configuration contains line breaks: %w", sdk.ErrInvalidInput)
 	}
 	host := cfg.Host
@@ -74,7 +76,18 @@ func New(cfg Config) (*Sender, error) {
 		client = *cfg.HTTPClient
 	}
 	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-	return &Sender{client: &client, apiKey: cfg.APIKey, fromName: cfg.FromName, host: u.Scheme + "://" + u.Host}, nil
+	return &Sender{client: &client, apiKey: apiKey, fromName: cfg.FromName, host: u.Scheme + "://" + u.Host}, nil
+}
+
+// Format writes a summary without the API key for every verb, so %v, %+v and
+// %#v of a Sender never print it.
+func (s *Sender) Format(f fmt.State, _ rune) {
+	_, _ = fmt.Fprintf(f, "sendgrid.Sender{Host:%s APIKey:%s}", s.host, sdk.Redacted)
+}
+
+// LogValue returns the sender's endpoint without the API key.
+func (s *Sender) LogValue() slog.Value {
+	return slog.GroupValue(slog.String("host", s.host))
 }
 
 // Send performs one request. It preserves both email representations and stable

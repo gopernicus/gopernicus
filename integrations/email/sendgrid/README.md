@@ -9,7 +9,7 @@ not share mutable request state.
 
 ```go
 sender, err := sendgrid.New(sendgrid.Config{
-    APIKey:   apiKey,
+    APIKey:   sdk.Secret(apiKey),
     FromName: "Example",
 })
 if err != nil {
@@ -37,6 +37,10 @@ without credentials, query, fragment or endpoint path; empty selects
 `https://api.sendgrid.com`. A missing/blank API key, line breaks in the key or
 FromName, or an invalid origin returns `sdk.ErrInvalidInput` from New. Provider
 credential validity is checked only when sending.
+
+**Secrets.** `APIKey` is an `sdk.Secret`: it renders as `[redacted]` through
+`fmt`, `slog` and `encoding/json`, a `string` variable converts with
+`sdk.Secret(v)`, and `Sender` formats and logs itself without the key.
 
 HTTPClient is copied at construction. Its transport remains shared and host-owned;
 configure it before use. Without a client, the adapter uses the standard transport

@@ -104,6 +104,9 @@ context deadline.
   and set no key. Off GCP, point `GOOGLE_APPLICATION_CREDENTIALS` at a key file
   or pass `ClientConfig.CredentialsJSON` from a secret store. `.env.example`
   holds placeholders only.
+- **Secrets.** `ClientConfig.CredentialsJSON` is an `sdk.Secret`: it renders
+  as `[redacted]` through `fmt`, `slog` and `encoding/json`, and key bytes
+  convert with `sdk.Secret(string(b))`.
 - **Least privilege.** Use a dedicated service account, never the default
   `firebase-adminsdk-*` account (it holds broad admin roles). Token
   verification needs no permission (public keys). `CheckRevocation` needs

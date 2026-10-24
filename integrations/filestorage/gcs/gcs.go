@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"os"
@@ -36,7 +37,7 @@ type Config struct {
 	// CredentialsJSON supplies credentials; empty uses the vendor's ADC path.
 	// A service-account private key also permits local SignedURL signing when
 	// SigningServiceAccount is empty. Open may perform credential discovery I/O.
-	CredentialsJSON string
+	CredentialsJSON sdk.Secret
 	// Endpoint overrides the storage API URL and disables default authentication
 	// for emulator use. Explicit vendor client options are applied afterward.
 	Endpoint string
@@ -124,7 +125,7 @@ func Open(ctx context.Context, cfg Config, opts ...Option) (*Store, error) {
 			internaloption.WithDefaultMTLSEndpoint(emulator.String()))
 	}
 	if cfg.CredentialsJSON != "" {
-		o.clientOpts = append(o.clientOpts, option.WithCredentialsJSON([]byte(cfg.CredentialsJSON)))
+		o.clientOpts = append(o.clientOpts, option.WithCredentialsJSON([]byte(cfg.CredentialsJSON.Reveal())))
 	}
 	if cfg.Endpoint != "" {
 		o.clientOpts = append(o.clientOpts, option.WithEndpoint(cfg.Endpoint), option.WithoutAuthentication())
@@ -143,7 +144,7 @@ func Open(ctx context.Context, cfg Config, opts ...Option) (*Store, error) {
 			ClientEmail string `json:"client_email"`
 			PrivateKey  string `json:"private_key"`
 		}
-		if err := json.Unmarshal([]byte(cfg.CredentialsJSON), &key); err != nil {
+		if err := json.Unmarshal([]byte(cfg.CredentialsJSON.Reveal()), &key); err != nil {
 			return nil, fmt.Errorf("gcs: parsing credentials JSON: %w", err)
 		}
 		if key.Type == "service_account" && key.ClientEmail != "" && key.PrivateKey != "" {
@@ -170,6 +171,20 @@ func Open(ctx context.Context, cfg Config, opts ...Option) (*Store, error) {
 	}
 	s.client, s.httpClient, s.endpoint = client, httpClient, endpoint
 	return s, nil
+}
+
+// Format writes a summary without the private key for every verb, so %v, %+v
+// and %#v of a Store never print it.
+func (s *Store) Format(f fmt.State, _ rune) {
+	_, _ = fmt.Fprintf(f, "gcs.Store{Bucket:%s Prefix:%s SigningAccount:%s PrivateKey:%s}",
+		s.bucket, s.prefix, s.signingAccount, sdk.Redacted)
+}
+
+// LogValue returns the store's bucket, prefix and signing account without the
+// private key.
+func (s *Store) LogValue() slog.Value {
+	return slog.GroupValue(slog.String("bucket", s.bucket), slog.String("prefix", s.prefix),
+		slog.String("signing_account", s.signingAccount))
 }
 
 // Close releases storage-client resources and closes idle HTTP connections.

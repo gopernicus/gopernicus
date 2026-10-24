@@ -7,13 +7,17 @@ the adapter uses `net/http` for token exchange, refresh and userinfo.
 ```go
 provider, err := google.New(ctx, google.Config{
     ClientID: clientID,
-    ClientSecret: clientSecret,
+    ClientSecret: sdk.Secret(clientSecret),
     HTTPClient: httpClient,
 })
 if err != nil {
     return err
 }
 ```
+
+**Secrets.** `ClientSecret` is an `sdk.Secret`: it renders as `[redacted]`
+through `fmt`, `slog` and `encoding/json`, a `string` variable converts with
+`sdk.Secret(v)`, and `Provider` formats and logs itself without the secret.
 
 Construction fetches discovery. Give `ctx` a deadline. `ClientID` is required;
 `ClientSecret` may be empty for a provider registration that permits public

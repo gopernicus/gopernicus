@@ -48,8 +48,9 @@ const (
 //     user, the password, the database and TLS, and Host, Port, Username,
 //     Password, DB and TLSEnabled are NOT READ. The retry, timeout and pool
 //     fields still apply to whatever the URL leaves unsaid. It carries a
-//     password: never log it. Open's own errors name the resolved host:port and
-//     nothing else.
+//     password, so it is an sdk.Secret like Password: both render as
+//     [redacted] and only Open reads them. Open's own errors name the resolved
+//     host:port and nothing else.
 //   - Host and Port otherwise. Port set: the address is Host:Port, and a Host
 //     that already carries a port is refused rather than guessed at. Port unset:
 //     Host is read as written ("cache.internal:6380"), and a Host with no port at
@@ -59,11 +60,11 @@ const (
 // password-only AUTH, which Redis and Valkey read as the "default" user; a
 // managed service whose credential belongs to any other user needs it set.
 type Config struct {
-	URL          string        `env:"REDIS_URL"            default:""`
+	URL          sdk.Secret    `env:"REDIS_URL"            default:""`
 	Host         string        `env:"REDIS_HOST"           default:"localhost"`
 	Port         int           `env:"REDIS_PORT"           default:"0"`
 	Username     string        `env:"REDIS_USERNAME"       default:""`
-	Password     string        `env:"REDIS_PASSWORD"       default:""`
+	Password     sdk.Secret    `env:"REDIS_PASSWORD"       default:""`
 	DB           int           `env:"REDIS_DB"             default:"0"`
 	TLSEnabled   bool          `env:"REDIS_TLS_ENABLED"    default:"false"`
 	MaxRetries   int           `env:"REDIS_MAX_RETRIES"    default:"3"`
@@ -184,8 +185,8 @@ func (cfg Config) options() (*redis.Options, error) {
 	}
 
 	var opts *redis.Options
-	if strings.TrimSpace(cfg.URL) != "" {
-		parsed, err := redis.ParseURL(strings.TrimSpace(cfg.URL))
+	if rawURL := strings.TrimSpace(cfg.URL.Reveal()); rawURL != "" {
+		parsed, err := redis.ParseURL(rawURL)
 		if err != nil {
 			return nil, fmt.Errorf("goredis: REDIS_URL: %s: %w", urlFault(err), sdk.ErrInvalidInput)
 		}
@@ -198,7 +199,7 @@ func (cfg Config) options() (*redis.Options, error) {
 		if err != nil {
 			return nil, err
 		}
-		opts = &redis.Options{Addr: addr, Username: cfg.Username, Password: cfg.Password, DB: cfg.DB}
+		opts = &redis.Options{Addr: addr, Username: cfg.Username, Password: cfg.Password.Reveal(), DB: cfg.DB}
 		if cfg.TLSEnabled {
 			opts.TLSConfig = &tls.Config{MinVersion: tls.VersionTLS12}
 		}

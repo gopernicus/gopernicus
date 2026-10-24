@@ -224,6 +224,9 @@ func TestRefreshToken(t *testing.T) {
 	if gotForm.Get("refresh_token") != "the-refresh-token" {
 		t.Errorf("refresh_token = %q, want %q", gotForm.Get("refresh_token"), "the-refresh-token")
 	}
+	if gotForm.Get("client_secret") != testClientSecret {
+		t.Errorf("client_secret = %q, want %q", gotForm.Get("client_secret"), testClientSecret)
+	}
 }
 
 func TestRefreshTokenOAuthError(t *testing.T) {

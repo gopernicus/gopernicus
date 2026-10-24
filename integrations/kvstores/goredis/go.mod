@@ -3,7 +3,7 @@ module github.com/gopernicus/gopernicus/integrations/kvstores/goredis
 go 1.26.10
 
 require (
-	github.com/gopernicus/gopernicus/sdk v0.9.0
+	github.com/gopernicus/gopernicus/sdk v0.18.0
 	github.com/redis/go-redis/v9 v9.18.0
 )
 

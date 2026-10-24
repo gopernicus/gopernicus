@@ -18,6 +18,7 @@ import (
 	"crypto"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -104,6 +105,24 @@ func New(secret string, opts ...Option) (*Signer, error) {
 	// Options can supply a caller-owned method; keep the validated configuration.
 	method := *cfg.method
 	return &Signer{secret: []byte(secret), method: &method}, nil
+}
+
+// Format writes a summary without the secret for every verb, so %v, %+v and
+// %#v of a Signer never print it.
+func (s *Signer) Format(f fmt.State, _ rune) {
+	_, _ = fmt.Fprintf(f, "golangjwt.Signer{Method:%s Secret:%s}", s.alg(), sdk.Redacted)
+}
+
+// LogValue returns the signing method without the secret.
+func (s *Signer) LogValue() slog.Value {
+	return slog.GroupValue(slog.String("method", s.alg()))
+}
+
+func (s *Signer) alg() string {
+	if s.method == nil {
+		return ""
+	}
+	return s.method.Alg()
 }
 
 // Sign creates a signed token carrying claims plus registered exp and iat

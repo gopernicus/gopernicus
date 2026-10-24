@@ -34,7 +34,8 @@ EMULATOR_TAG_MODULES = integrations/authentication/firebase
 	guard-authorization-no-delivery-repo guard-authorization-rolesvc-no-engine guard-ui-no-inward guard-ui-require-whitelist \
 	guard-no-legacy-features-path guard-list-no-nethttp guard-violation-message-not-error \
 	guard-pocket-logic guard-authorization-tuples-leaf guard-authorization-decisions-no-mutations guard-inbound-authorization guard-tuple-write-integrity guard-host-contract guard-auth-no-vendor-names \
-	guard-cms-admin-gate guard-host-posture guard-pocket-no-env guard-baseline-ledger guard-rail-no-dml guard-auth-maintenance-leaf
+	guard-cms-admin-gate guard-host-posture guard-pocket-no-env guard-baseline-ledger guard-rail-no-dml guard-auth-maintenance-leaf \
+	guard-credential-fields-secret
 
 # Regenerate *_templ.go from .templ sources. Each bundled views/templ module pins
 # its own templ tool; generation runs inside each so the tool version is
@@ -191,7 +192,8 @@ guard: guard-sdk-stdlib guard-pocket-isolation guard-sdk-no-outward guard-no-leg
 	guard-authorization-no-delivery-repo guard-authorization-rolesvc-no-engine guard-ui-no-inward guard-ui-require-whitelist \
 	guard-no-legacy-features-path guard-list-no-nethttp guard-violation-message-not-error \
 	guard-pocket-logic guard-authorization-tuples-leaf guard-authorization-decisions-no-mutations guard-inbound-authorization guard-tuple-write-integrity guard-host-contract guard-auth-no-vendor-names \
-	guard-cms-admin-gate guard-host-posture guard-pocket-no-env guard-baseline-ledger guard-rail-no-dml guard-auth-maintenance-leaf
+	guard-cms-admin-gate guard-host-posture guard-pocket-no-env guard-baseline-ledger guard-rail-no-dml guard-auth-maintenance-leaf \
+	guard-credential-fields-secret
 
 # G1: sdk imports only the standard library (also enforced structurally by
 # sdk/go.mod having no require block).
@@ -513,7 +515,7 @@ guard-no-legacy-features-path:
 # <<< LEGACY-PATTERNS
 
 # CI-style gate: templ generation must be a no-op (no drift), then per-module
-# vet/build/test across all MODULES, then the thirty-five layering guards. Drift
+# vet/build/test across all MODULES, then the thirty-six layering guards. Drift
 # is checked via `git diff` when this tree is a git repo; this repo IS a git
 # repo (as of phase 2), so that branch runs. The before/after checksum branch
 # remains as a fallback for gitless checkouts of *_templ.go.
@@ -701,3 +703,25 @@ guard-auth-maintenance-leaf:
 	@echo "== guard: authentication maintenance imports no authentication service (G36) =="
 	@test -d pockets/authentication/logic/maintenance
 	@! grep -rn '"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication"' --include='*.go' pockets/authentication/logic/maintenance || { echo "ERROR (G36): logic/maintenance imports the authentication service package — maintenance depends on the leaf domain packages (securityevent, challenge, user, …), never the service"; exit 1; }
+
+# G37 (SOC 2 S6, FSK-1): a credential-named field under integrations/ or sdk/
+# is an sdk.Secret, never a plain string or []byte, so fmt, slog and
+# encoding/json render it [redacted]. The pattern matches an indented field
+# named Password, Secret, SecretAccessKey, APIKey, AuthToken, ClientSecret,
+# CredentialsJSON, PrivateKey, DSN or Token, alone or after a capitalised
+# prefix (DBPassword, SMTPAuthToken), typed string or []byte. Skipped:
+# _test.go files; lines carrying a json:" tag (wire DTOs a provider response
+# decodes into, not configuration); and sdk/capabilities/oauth/oauth.go by path
+# (oauth.Tokens holds runtime token values with their own lifetime, not
+# config). URL is not in the list (too generic; the type, not the guard,
+# protects the goredis and turso URL fields), and pockets are out by path
+# (inbound DTOs carry Password string json:"password"). Unexported fields are
+# lower-case and never match: an adapter holding a secret in one implements
+# fmt.Formatter and slog.LogValuer itself. The self-check runs the pattern over
+# canonical samples, so a pattern that stops matching cannot pass silently.
+G37_PATTERN = ^[[:space:]]+([A-Z][A-Za-z]*)?(Password|Secret|SecretAccessKey|APIKey|AuthToken|ClientSecret|CredentialsJSON|PrivateKey|DSN|Token)[[:space:]]+(string|\[\]byte)
+guard-credential-fields-secret:
+	@echo "== guard: credential-named fields in integrations and sdk are sdk.Secret (G37) =="
+	@test "$$(printf '\t%s\n' 'Password string' 'DBPassword  string' 'CredentialsJSON []byte' 'Password sdk.Secret' 'URL string' 'apiKey string' | grep -E '$(G37_PATTERN)' | tr -d '\t' | tr '\n' ',')" = 'Password string,DBPassword  string,CredentialsJSON []byte,' || { echo "ERROR (G37): the pattern no longer matches exactly the three canonical credential-field samples — the guard would check nothing"; exit 1; }
+	@hits=$$({ grep -rnE --include='*.go' --exclude='*_test.go' '$(G37_PATTERN)' integrations sdk || true; } | grep -v 'json:"' | grep -v '^sdk/capabilities/oauth/oauth.go:'); \
+		if [ -n "$$hits" ]; then echo "ERROR (G37): a credential-named field is a plain string or []byte — make it sdk.Secret (it renders [redacted] through fmt, slog and encoding/json; Reveal() is the one read):"; echo "$$hits"; exit 1; fi

@@ -5,7 +5,7 @@ go 1.26.10
 require (
 	cloud.google.com/go/auth v0.18.2
 	cloud.google.com/go/storage v1.61.3
-	github.com/gopernicus/gopernicus/sdk v0.9.0
+	github.com/gopernicus/gopernicus/sdk v0.18.0
 	google.golang.org/api v0.271.0
 )
 
