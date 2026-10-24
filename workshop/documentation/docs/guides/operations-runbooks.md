@@ -1,6 +1,6 @@
 ---
 title: Operations runbooks
-description: Deactivate a user, revoke sessions, handle an abusive IP, read the audit rails, and what retention exists today.
+description: Deactivate or erase a user, revoke sessions, handle an abusive IP, read the audit rails, and run retention.
 ---
 
 # Operations runbooks
@@ -22,8 +22,8 @@ Each names the bundled route or service call, what it records, and what is missi
   Afterwards the account is indistinguishable from bad credentials on public endpoints.
 - **Recorded:** `user_deactivated` / `user_reactivated` with the administrator as `Actor`.
   Admin listings and reads record nothing.
-- **Not available:** deletion, anonymization or erasure. `status` is `active` or
-  `deactivated` only; there is no erase path and no foreign keys to cascade one (planned, S3).
+- **Erasure** is a separate, irreversible procedure — *Erase a person* below. Deactivation
+  keeps every identifier and credential row.
 
 ## Revoke sessions for one user
 
@@ -94,19 +94,117 @@ wires the audit bridge records them on the security-event rail (above). The
 listing recipes for a periodic access review are in `pockets/authorization/README.md`,
 "Access review".
 
-## Retention today
+## Retention
 
-| Data | Purge API | Who runs it |
+The pockets ship bounded disposal calls and start none of them; the host runs each from its own
+schedule, one runner instance per database. The lifetimes, defaults and the floor are in
+*Production posture*, "Retention".
+
+| Data | Call | Schedule |
 |---|---|---|
-| challenges (codes, link tokens) | `Challenges.PurgeExpired(ctx, before, limit)` | nothing in the framework or examples calls it |
-| OAuth2 authorization-server codes, clients, refresh history | `OAuth2.Prune(ctx, now)` | nothing calls it |
-| published events (`event_outbox`) | `outbox.PurgePublished(ctx, before)` | host scheduler |
-| fenced job rows (terminal) | `jobs.Service.PurgeTerminal(ctx, before, limit)` | host scheduler |
-| sessions (expired rows keep their refresh-token hash), `oauth_states` (abandoned flows keep the PKCE verifier), expired grants, `contact_changes`, invitations (no DELETE exists; invitee address persists), retired identifiers, `security_events`, `iam_operations` ("never deleted in v1"), ordinary `job_queue` rows (plaintext payloads), cms `inquiries` (third-party PII) | **none** | — (a maintenance port and schedule are planned, S3) |
+| sessions, OAuth states, grants, contact changes, invitations, challenges, OAuth2 rows, `security_events` | `Components.Maintenance.Run(ctx)` (blocks; a jittered first pass, then one an hour), or `Components.Maintenance.Pass(ctx)` from the host's own ticker or a jobs schedule — the three-line handler in `pockets/authentication/README.md` | hourly; the rail step runs once a day (`SecurityEventStepInterval`) and reports `not_due` between |
+| `iam_operations` | `Components.Mutations.ExpireOperations(ctx, limit)` until it returns less than `limit` | hourly |
+| ordinary `job_queue` | `Components.Queue.PurgeTerminalJobs(ctx, before, limit)` | hourly; `before` behind the scheduler's longest retry window |
+| fenced job rows (terminal, incl. sealed delivery envelopes) | `Components.Queue.PurgeTerminal(ctx, before, limit)` | host scheduler |
+| published events (`event_outbox`) | `outbox.PurgePublished(ctx, before)` — unbounded: its own step, after a one-off manual drain | host scheduler |
+| cms `inquiries` | `PurgeBefore(ctx, before, limit)` on the `messaging.InquiryEraser` the host wired as `Repositories.InquiryMaintenance` | host scheduler |
+| `ratelimit_windows` (pgx limiter) | `DELETE FROM ratelimit_windows WHERE expires_at < now();` | host cron |
+| `iam_audit`, `secrets_audit` | the host's definer function (*Production database posture*, "Definer functions") | host cron |
 
-Define the retention period per table in the host's policy and, until S3, enforce it with
-host SQL against the tables above. Keep `iam_operations` rows for at least every producer's
-retry window.
+Set `MaintenanceRunnerAcknowledged: true` once the authentication runner runs; production WARNs
+while it is false. `Pass` never cancels a running statement: it checks `PassBudget` (5m) between
+batches, and a budget that runs out pass after pass WARNs `maintenance_budget_exhausted` — the
+first enablement on an old host drains its backlog over many passes, so watch WAL and replica lag.
+Two concurrent passes are safe, not cheap; a multi-replica host runs the runner on one replica.
+
+**Where the evidence is.**
+
+- One `msg=maintenance_step step=<name> count=<n> skipped=<bool> error_kind=<kind>` line per step
+  per pass, and `LastReport()` for a health surface.
+- `security_events_purged` rows (`actor_type='system'`, `actor_id='maintenance'`; Details
+  `cutoff`, `count`, `floor_days`, `max_rows`, and on pgx `session_user`): one per purge call, a
+  zero count included — the evidence that the control ran on a day with nothing to purge.
+- `security_events_archived` rows (Details `object`, `sha256`, `rows`, `first_created_at`,
+  `first_id`, `last_created_at`, `last_id`, `archive_location`): one per archive object, written
+  before its chunk is purged.
+- The archive objects themselves, NDJSON at `<ArchivePrefix><cutoff>/<id>.ndjson`.
+- On a jobs schedule, the schedule's `last_run_at`.
+
+Dashboards filter `actor_type='system'`. The canonical alert: **no `security_events_purged` row
+in 48 h**.
+
+**Verify the archive.** Fetch each object an archived row names, check its SHA-256 and line count
+against `sha256` and `rows`, and compare, per cutoff, the sum of `rows` over the archived rows
+with the sum of `count` over the purged rows. The archive's own lifecycle — retention, backup,
+access control, object lock on a real sink — is host policy, and archived rows are outside
+erasure's reach. A failed archive purges nothing that pass (`maintenance.ErrArchiveFailed`); an
+object already written is left for reconciliation.
+
+**After a restore.** `pg_restore -x` drops the grants: revoke `EXECUTE` on
+`security_events_purge_before` from `PUBLIC` and grant it to the runtime role again (the boot
+refuses a PUBLIC-executable definer). After a restore into a renamed schema, re-run the pin `DO`
+block of `0024_security_events_retention.sql`.
+
+## Erase a person
+
+Erasure is irreversible and composes across pockets; run every step and record each.
+
+1. **Settle any accepting invitation claim** for the person first: the erase refuses with 409
+   (`user.ErrEraseBlockedByClaim`) while one is held, and writes nothing.
+2. **Erase the account**: `POST /auth/admin/users/{id}/erase` (mounted only when
+   `Repositories.UserErasure` is wired and `AdministrationConfig.UserErasureRoute` is true; the
+   host check receives `UserAdminErase`; 400 on self) or `Service.EraseUser(ctx, actor, id)`. One
+   transaction marks the user erased, blanks and retires every identifier, deletes credentials,
+   sessions, grants, challenges and the act-as-user service accounts with their keys, removes or
+   blanks the invitations addressed to the person, and appends `user_erased` with the counts. A
+   retry is a 200 with `changed:false`. The `users` row and every pseudonymous id survive.
+3. **Remove the authorization facts** for `user:<id>`: list them with
+   `Roles.ListRoleAssignmentsBySubject` and remove each through the bundled role routes or
+   `Mutations.UnassignRole`/`RevokeRelationship` — an executed step, not a note.
+4. **Delete the person's inquiries**: `DeleteByEmail(ctx, email)` on the wired cms eraser (ASCII
+   case-fold equality), for each address the person used.
+5. **Purge sealed delivery rows**: `Queue.PurgeTerminal` for the terminal fenced jobs that carried
+   the person's messages.
+6. **Out of reach, by design**: archive objects already written; `iam_operations` fingerprints,
+   which expire under `ExpireOperations`; `security_events` rows, which keep their IP and
+   User-Agent and age out at the rail's retention.
+
+Then **sweep**: as the migrator, count the rows of every table whose text or JSON columns contain
+the person's email or last IP:
+
+```sql
+DO $sweep$
+DECLARE
+  needles pg_catalog.text[] := ARRAY['<email>', '<last ip>'];
+  needle pg_catalog.text;
+  col record;
+  n pg_catalog.int8;
+BEGIN
+  FOR col IN
+    SELECT c.table_schema, c.table_name, c.column_name
+      FROM information_schema.columns c
+      JOIN information_schema.tables t ON t.table_schema = c.table_schema AND t.table_name = c.table_name
+     WHERE t.table_type = 'BASE TABLE'
+       AND c.table_schema NOT IN ('pg_catalog', 'information_schema')
+       AND c.data_type IN ('text', 'character varying', 'json', 'jsonb')
+  LOOP
+    FOREACH needle IN ARRAY needles LOOP
+      EXECUTE pg_catalog.format('SELECT count(*) FROM %I.%I WHERE %I::text ILIKE %L',
+        col.table_schema, col.table_name, col.column_name, '%' || needle || '%') INTO n;
+      IF n > 0 THEN
+        RAISE NOTICE '%.%.%: % rows contain %', col.table_schema, col.table_name, col.column_name, n, needle;
+      END IF;
+    END LOOP;
+  END LOOP;
+END
+$sweep$;
+```
+
+Expect no notice except on `security_events`, whose rows within retention keep the IP (and, on
+rows older than AUDIT-054, the raw address). The other documented carve-outs hold no plaintext
+match: `oauth_refresh_history` keeps hashes, `iam_operations` keeps fingerprints, and archive
+objects live outside the database. Erase is not a ban: the next external login provisions a fresh
+user; deactivate to keep someone out.
 
 ## Tenants and offboarding
 

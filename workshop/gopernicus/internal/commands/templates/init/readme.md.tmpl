@@ -178,3 +178,68 @@ It prints one line per table —
 `table=<t> protected_by=<privilege|trigger|waiver|none> owner=… insert=… sequence_usage=… trigger=<state>`
 — and exits non-zero when any table is unprotected or cannot be appended to.
 {{- end}}
+
+## Retention
+
+The pockets ship bounded disposal calls and start none of them: the host
+schedules each one for the pockets it mounts, from one runner instance per
+database. This scaffold mounts no pocket, so this is the recipe, not code.
+
+| pocket | call it from the host's schedule | what it bounds |
+|---|---|---|
+| authentication | `Components.Maintenance.Run(ctx)` in process (hourly, jittered), or `Components.Maintenance.Pass(ctx)` from a jobs schedule | with `Repositories.Maintenance`: expired sessions, OAuth states, grants, contact changes, challenges and OAuth2 rows, terminal invitations, and once a day the `security_events` rail past 400 days, archived then purged |
+| authorization | `Components.Mutations.ExpireOperations(ctx, limit)` | with `Repositories.OperationExpiry`: operation records past `WithOperationRetention` (180 days by default, at least 7); keep it above every producer's retry window |
+| jobs | `Components.Queue.PurgeTerminalJobs(ctx, before, limit)`; `PurgeTerminal` for the fenced queue | completed and dead-lettered jobs; keep `before` behind the scheduler's longest retry window |
+| events | `outbox.PurgePublished(ctx, before)` | published outbox rows — unbounded, so run it as its own step, after a one-off manual drain of the backlog |
+| cms | `PurgeBefore(ctx, before, limit)` on the `messaging.InquiryEraser` wired as `Repositories.InquiryMaintenance` | contact inquiries (third-party names, emails, messages) |
+{{- if eq .DB "pgx"}}
+| pgxdb rate limiter | `DELETE FROM ratelimit_windows WHERE expires_at < now();` from a host cron | expired rate-limit windows |
+{{- end}}
+
+Once the authentication runner runs, say so with a literal in the composition
+root —
+`authentication.WithMaintenance(authentication.MaintenanceConfig{MaintenanceRunnerAcknowledged: true})`;
+production logs one `maintenance_runner=unacknowledged` WARN while it is false,
+and `guard --posture` (workshop/gopernicus v0.7.0 and later) prints one `ack`
+line for it. A host enforcing retention
+through its own SQL cron leaves it false and accepts the WARN.
+{{- if eq .DB "pgx"}}
+
+The rail's floor is an invariant. The authentication store's
+`0024_security_events_retention.sql` gives `security_events` its only purge
+path, `security_events_purge_before`, a `SECURITY DEFINER` function the
+migrator owns; it refuses any cutoff younger than 365 days, and nothing lowers
+that floor. The migration cannot know your runtime role, so grant it, and keep
+the schema and the migrator clean for the boot probe:
+
+```sql
+GRANT EXECUTE ON FUNCTION security_events_purge_before(pg_catalog.timestamptz, pg_catalog.int4) TO <runtime role>;
+REVOKE CREATE ON SCHEMA public FROM PUBLIC;
+```
+
+Run `make migrate` as a `NOSUPERUSER` role that owns the tables: a superuser
+owner makes the function inoperative (one WARN at boot), and without the
+`GRANT EXECUTE` the server boots with one `maintenance_execute=missing` WARN
+and the rail step reports `forbidden` every pass. With the store's
+`AuditTables()` in `postureTables`, `-posture-role` also prints
+`functions=[security_events_purge_before:execute=… unsafe=… inoperative=…] floor=365 days`;
+archive that output with the release.
+
+Apply the retention migrations in their own runner invocation —
+authentication `0023_retention.sql` and `0024_security_events_retention.sql`,
+authorization `0007_iam_operations_expiry.sql`, jobs
+`0005_job_queue_terminal_purge.sql`, cms `0022_inquiries_created_at.sql`, for
+the stores you mount. Their indexes are plain `CREATE INDEX IF NOT EXISTS`
+builds, which block writes to the table while they run; on a large host
+pre-build each one first, outside the runner, under the same name, then apply
+the file (the in-stream build is a no-op):
+
+```sql
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_sessions_expires_at ON sessions (expires_at);
+-- … each index the file creates, then confirm none is left invalid:
+SELECT c.relname FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid WHERE NOT i.indisvalid;
+```
+
+A failed concurrent build leaves an INVALID index that `IF NOT EXISTS` keeps —
+`DROP INDEX` it first, then build again.
+{{- end}}

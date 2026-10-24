@@ -11,8 +11,10 @@ Host-owned controls around the pocket stores, stated for `main` at 2026-10-22.
 
 The scaffold uses one `DB_URL` for the migration runner and the server. Split them:
 
-- a **migrator** role that owns the schema, every table and sequence, and the trigger
-  functions, and runs `make migrate` pre-boot;
+- a **migrator** role that owns the schema, every table and sequence, the trigger
+  functions and the definer functions, and runs `make migrate` pre-boot. Make it
+  `NOSUPERUSER` (`CREATE ROLE migrator LOGIN NOSUPERUSER`): a superuser owner makes a definer
+  function inoperative, and a docker image's default `postgres` role is a superuser;
 - a **runtime** role the server connects as, with data access only.
 
 Create the runtime role with SQL, not the provider console: Neon console and API roles carry
@@ -22,6 +24,7 @@ holding `rds_superuser` can set `session_replication_role`.
 ```sql
 -- as the migrator
 ALTER SCHEMA public OWNER TO migrator;
+REVOKE CREATE ON SCHEMA public FROM PUBLIC;
 REVOKE CREATE ON SCHEMA public FROM runtime;
 GRANT USAGE ON SCHEMA public TO runtime;
 GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO runtime;
@@ -37,6 +40,9 @@ REVOKE UPDATE, TRUNCATE, TRIGGER ON iam_operations FROM runtime;           -- DE
 REVOKE UPDATE, DELETE, TRUNCATE, TRIGGER ON secrets_audit FROM runtime;    -- pockets/secrets
 GRANT USAGE ON SEQUENCE secrets_audit_seq TO runtime;
 
+-- the rail's only purge path (authentication 0024): the runtime role calls the definer
+GRANT EXECUTE ON FUNCTION security_events_purge_before(pg_catalog.timestamptz, pg_catalog.int4) TO runtime;
+
 -- the password-hash table can be narrowed further; the store needs SELECT/INSERT/UPDATE/DELETE
 ```
 
@@ -45,8 +51,16 @@ Adjust the schema name when a store is mounted with `WithSchema`. `DELETE` stays
 refuses the delete of a fenced row and admits the expiry of the others. The integrity migrations
 grant `USAGE` on each rail's sequence to `PUBLIC`, so a host that already split its roles keeps
 inserting; granting it to the runtime role and revoking it from `PUBLIC` is optional hardening.
-The pockets issue no `UPDATE` or `DELETE` against the audit rails, so the revokes cost nothing at
-runtime.
+The pockets issue no `UPDATE` or `DELETE` against the audit rails as the runtime role, so the
+revokes cost nothing at runtime. Nor do they take row locks there: every row-lock clause
+(`FOR UPDATE`, `FOR SHARE`, …) needs `UPDATE`, which this recipe revokes, so the `iam_operations`
+expiry deletes without one. A `SECURITY DEFINER` function runs as its owner and may lock —
+`security_events_purge_before` selects its batch `FOR UPDATE SKIP LOCKED`.
+
+`0024_security_events_retention.sql` cannot know the runtime role, so the `GRANT EXECUTE` above is
+yours; without it the server boots with one `maintenance_execute=missing` WARN and the
+maintenance pass reports the rail step `forbidden` every pass. The migration itself refuses to
+apply unless it runs in the rail's schema as a member of the table's owner.
 
 Ownership is broader than the table's owner. A runtime role counts as an owner when it is a
 member — `NOINHERIT` included — of the role that owns the table, of the role that owns its
@@ -68,9 +82,70 @@ the verified triggers, or cannot insert into it; development logs one `append_on
 line. The scaffold's pgx runner makes the same decision from the migrator's connection before a
 deploy: `go run ./workshop/migrations -posture-role <runtime role>` prints one
 `protected_by=privilege|trigger|waiver|none` line per table and exits non-zero on `none` or a
-role that cannot append; archive its output. SQLite (`turso` in `file:` mode) has no privileges:
-the turso stores check the trigger text and WARN in production; restrict the file and its
-backups.
+role that cannot append; for a table with definer functions it adds
+`functions=[security_events_purge_before:execute=true|false unsafe=… inoperative=…] floor=365 days`
+and exits non-zero on a missing or unsafe function (a missing `EXECUTE` or an inoperative function
+is reported, as the boot WARNs on both); archive its output. SQLite (`turso` in `file:` mode) has
+no privileges: the turso stores check the trigger text and WARN in production; restrict the file
+and its backups.
+
+### Definer functions
+
+A definer function does for the runtime role what its own grants refuse, so the boot probe
+judges it by catalog evidence (never its body) and the rules are:
+
+- **owner = the migrator**, a member of the table's owner — the immutability triggers exempt the
+  owning role, so the definer can delete past them; never a superuser;
+- **`search_path` pinned** to exactly `pg_catalog, <the table's schema>, pg_temp` — `pg_temp`
+  LAST, so a caller's temporary table cannot stand in for the rail — computed from the table's
+  namespace, never `current_schema()` or `SET search_path FROM CURRENT`;
+- **PUBLIC's `EXECUTE` revoked**, then granted to the runtime role alone.
+
+Production refuses an unsafe function (`pgxdb.ErrDefinerFunctionUnsafe`, not waivable): PUBLIC
+can execute it, its `search_path` is not the pinned value, or it resolves outside the table's
+schema. It WARNs (`definer_function=inoperative`) on an owner/definer mismatch: not `SECURITY
+DEFINER`, an owner that is not a member of the table's owner, a superuser owner, or `CREATE` on
+the schema for the runtime role (hence `REVOKE CREATE … FROM PUBLIC`); the function then fails
+when called. The floor `security_events_purge_before` reads, `security_events_retention_floor()`
+(365 days), is a framework invariant: the role split is what keeps the runtime role from
+replacing it, and no procedure lowers it.
+
+**Host-owned rails.** `iam_audit` and `secrets_audit` ship no purge function; their retention is
+the host's. The template, applied by the migrator as a host migration (repeat it for
+`secrets_audit`, whose time column is also `occurred_at`):
+
+```sql
+SET LOCAL lock_timeout = '5s';
+CREATE OR REPLACE FUNCTION iam_audit_purge_before(p_before pg_catalog.timestamptz, p_max_rows pg_catalog.int4)
+RETURNS pg_catalog.int8
+LANGUAGE plpgsql SECURITY DEFINER AS $iam_audit_purge_before$
+DECLARE
+  n pg_catalog.int8;
+BEGIN
+  IF p_before IS NULL OR p_before OPERATOR(pg_catalog.>) (pg_catalog.now() OPERATOR(pg_catalog.-) '<your floor>'::pg_catalog.interval) THEN
+    RAISE EXCEPTION 'iam_audit_purge_before: cutoff % is NULL or younger than the retention floor', p_before USING ERRCODE = '22023';
+  END IF;
+  DELETE FROM iam_audit WHERE id IN (
+    SELECT id FROM iam_audit WHERE occurred_at OPERATOR(pg_catalog.<=) p_before
+    ORDER BY occurred_at, id LIMIT LEAST(GREATEST(p_max_rows, 1), 10000) FOR UPDATE SKIP LOCKED);
+  GET DIAGNOSTICS n = ROW_COUNT;
+  RETURN n;
+END
+$iam_audit_purge_before$;
+DO $$ BEGIN
+  EXECUTE pg_catalog.format('ALTER FUNCTION iam_audit_purge_before(pg_catalog.timestamptz, pg_catalog.int4) SET search_path = pg_catalog, %I, pg_temp',
+    (SELECT n.nspname FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+     WHERE c.oid = 'iam_audit'::pg_catalog.regclass));
+END $$;
+REVOKE EXECUTE ON FUNCTION iam_audit_purge_before(pg_catalog.timestamptz, pg_catalog.int4) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION iam_audit_purge_before(pg_catalog.timestamptz, pg_catalog.int4) TO runtime;
+```
+
+The host's cron calls it in batches as the runtime role and records each returned count as its
+retention evidence. The stores' `AuditTables` list no host function, so the boot probe never
+inspects it; to preflight it, add `pgxdb.DefinerFunction{Signature:
+"iam_audit_purge_before(pg_catalog.timestamptz, pg_catalog.int4)"}` to that table's `Functions` in
+the runner's `postureTables`, and `-posture-role` judges it with the same rules.
 
 ## Connection security
 
@@ -135,3 +210,20 @@ in one transaction, and `ADD COLUMN` and `CREATE TRIGGER` queue behind a running
 the timeout a blocked file aborts the whole stream — nothing is applied — and you re-run the
 runner, instead of holding locks that stall login inserts for the runner's whole budget. The S2
 pgx files require PostgreSQL 14 or later.
+
+**Apply the S3 files in their own runner invocation**, before deploying the binaries built
+against them: authentication `0023_retention.sql` (required; its `users.erased_at` `ADD COLUMN`
+comes last) and `0024_security_events_retention.sql` (required), and the admitted index files —
+authorization `0007_iam_operations_expiry.sql`, jobs `0005_job_queue_terminal_purge.sql`, cms
+`0022_inquiries_created_at.sql`. Their indexes are plain `CREATE INDEX IF NOT EXISTS` builds,
+which block writes to the table while they run; on a large table pre-build each one first,
+outside the runner, under the same name, so the in-stream build is a no-op:
+
+```sql
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_sessions_expires_at ON sessions (expires_at);
+-- … each index the files create, then:
+SELECT c.relname FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid WHERE NOT i.indisvalid;
+```
+
+A failed concurrent build leaves an INVALID index that `IF NOT EXISTS` keeps — `DROP INDEX` it
+first, then build it again.

@@ -72,6 +72,7 @@ var (
 		"TLSUnverifiedAcknowledged":      true,
 		"TLSDisabledAcknowledged":        true,
 		"AppendOnlyWritableAcknowledged": true,
+		"MaintenanceRunnerAcknowledged":  true,
 	}
 
 	// postureAckOptionPkgs are the packages whose New takes the option-form
