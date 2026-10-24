@@ -3,7 +3,7 @@
 This file is the written security posture of the gopernicus framework repository: how to
 report a vulnerability, which versions are supported, and the controls an auditor can sample
 for change management, vulnerability management and CI credentials. It describes the
-repository as it is on 2026-10-22; host applications built on the framework document their
+repository as it is on 2026-10-23; host applications built on the framework document their
 own posture, starting from the docs site's *Production posture* guide.
 
 ## Reporting a vulnerability
@@ -21,15 +21,23 @@ each module receives fixes. Latest tags at the time of writing:
 | Module | Latest |
 |---|---|
 | `sdk` | v0.16.0 |
-| `pockets/authentication` | v0.21.0 |
-| `pockets/authorization` | v0.29.1 |
-| `pockets/cms` | v0.4.0 |
+| `pockets/authentication` | v0.23.0 |
+| `pockets/authentication/stores/pgx` | v0.11.0 |
+| `pockets/authentication/stores/turso` | v0.10.0 |
+| `pockets/authorization` | v0.30.0 |
+| `pockets/authorization/stores/pgx` | v0.21.0 |
+| `pockets/authorization/stores/turso` | v0.20.0 |
+| `pockets/cms` | v0.5.0 |
+| `pockets/cms/stores/pgx` | v0.5.0 |
+| `pockets/cms/stores/turso` | v0.4.0 |
 | `pockets/events` | v0.3.0 |
-| `pockets/jobs` | v0.6.0 |
+| `pockets/jobs` | v0.7.0 |
+| `pockets/jobs/stores/pgx` | v0.7.0 |
+| `pockets/jobs/stores/turso` | v0.6.0 |
 | `pockets/secrets` | v0.2.0 |
-| `integrations/datastores/pgxdb` | v0.11.0 |
+| `integrations/datastores/pgxdb` | v0.12.0 |
 | `integrations/datastores/turso` | v0.8.0 |
-| `workshop/gopernicus` | v0.6.0 |
+| `workshop/gopernicus` | v0.7.0 |
 
 Every module declares `go 1.26.10`; a host that honors the pin builds with a standard
 library carrying the fixes listed in `plans/soc2-s8-toolchain-pgx-repin-handoff.md`.

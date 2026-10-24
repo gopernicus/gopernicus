@@ -5,7 +5,7 @@ description: Roles and grants, encryption at rest and backups, time, timeouts an
 
 # Production database posture
 
-Host-owned controls around the pocket stores, stated for `main` at 2026-10-22.
+Host-owned controls around the pocket stores, stated for `main` at 2026-10-23.
 
 ## Two roles
 

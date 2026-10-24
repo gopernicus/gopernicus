@@ -4,6 +4,9 @@
 # built binaries (host apps build to examples/<app>/server)
 examples/*/server
 
+# the production-baseline's local security-event archive (AUDIT_ARCHIVE_DIR=./archive)
+examples/production-baseline/archive/
+
 # local sqlite/libsql files
 *.db
 *.db-*
