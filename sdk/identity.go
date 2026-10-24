@@ -1,6 +1,9 @@
 package sdk
 
-import "context"
+import (
+	"context"
+	"sync/atomic"
+)
 
 // Conventional subject types. Hosts may define additional types.
 const (
@@ -18,7 +21,10 @@ const (
 	AddressKindPhone = "phone"
 )
 
-type principalContextKey struct{}
+type (
+	principalContextKey        struct{}
+	principalCaptureContextKey struct{}
+)
 
 // Principal identifies the effective caller by subject type and ID.
 // Authentication establishes the caller; protected endpoints decide whether
@@ -50,8 +56,51 @@ type IdentityResolver interface {
 	Resolve(ctx context.Context, p Principal) (IdentityInfo, error)
 }
 
-// WithPrincipal returns a copy of ctx carrying p.
+// PrincipalCapture records the last principal attached by WithPrincipal on any
+// context derived from the one WithPrincipalCapture returned, so code holding
+// the outer context (an access logger) sees a principal attached on a derived
+// request. It is observability only, never an authorization input: the
+// recorded principal may be one the surface then refused. It is safe for
+// concurrent use; the last write wins, including a clear (Principal{}).
+type PrincipalCapture struct {
+	parent *PrincipalCapture
+	last   atomic.Pointer[Principal]
+}
+
+// WithPrincipalCapture returns a copy of ctx carrying a fresh capture, linked
+// to any capture already on ctx so a write reaches every enclosing capture.
+// The capture starts from the principal ctx already carries, if any. Install
+// one per unit of work (a request, a job run); a long-lived capture on a base
+// context records every unit's principal.
+func WithPrincipalCapture(ctx context.Context) (context.Context, *PrincipalCapture) {
+	parent, _ := ctx.Value(principalCaptureContextKey{}).(*PrincipalCapture)
+	c := &PrincipalCapture{parent: parent}
+	if p, ok := PrincipalFromContext(ctx); ok {
+		c.last.Store(&p)
+	}
+	return context.WithValue(ctx, principalCaptureContextKey{}, c), c
+}
+
+// Principal returns the last principal recorded, under the same completeness
+// rule as PrincipalFromContext: none, a clear, or an incomplete principal
+// returns Principal{}, false.
+func (c *PrincipalCapture) Principal() (Principal, bool) {
+	p := c.last.Load()
+	if p == nil || p.Type == "" || p.ID == "" {
+		return Principal{}, false
+	}
+	return *p, true
+}
+
+// WithPrincipal returns a copy of ctx carrying p. It also records p in every
+// PrincipalCapture on ctx (WithPrincipalCapture); the caller's ctx values are
+// unchanged.
 func WithPrincipal(ctx context.Context, p Principal) context.Context {
+	if c, ok := ctx.Value(principalCaptureContextKey{}).(*PrincipalCapture); ok {
+		for ; c != nil; c = c.parent {
+			c.last.Store(&p)
+		}
+	}
 	return context.WithValue(ctx, principalContextKey{}, p)
 }
 

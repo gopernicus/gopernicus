@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -225,5 +226,39 @@ func TestContextHandler_RecordReuse(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestContextHandler_SkipsAnIDTheRecordCarries(t *testing.T) {
+	var buf bytes.Buffer
+	log := newTestLogger(&buf)
+
+	ctx := sdk.WithRequestID(context.Background(), "req-ctx")
+	ctx = sdk.WithTraceID(ctx, "trace-ctx")
+	ctx = sdk.WithSpanID(ctx, "span-ctx")
+	log.InfoContext(ctx, "request", "request_id", "req-ctx", "trace_id", "trace-record")
+
+	line := buf.String()
+	for key, want := range map[string]int{`"request_id"`: 1, `"trace_id"`: 1, `"span_id"`: 1} {
+		if got := strings.Count(line, key); got != want {
+			t.Errorf("%s appears %d times, want %d: %s", key, got, want, line)
+		}
+	}
+	entry := parseJSON(t, buf.Bytes())
+	if entry["trace_id"] != "trace-record" || entry["span_id"] != "span-ctx" {
+		t.Errorf("entry = %v; the record's own id wins, absent ids are added", entry)
+	}
+}
+
+// The handler sees record attributes only: an id bound with WithAttrs is not
+// detected, so the context id is added beside it (the documented limit).
+func TestContextHandler_WithAttrsBoundIDIsNotSeen(t *testing.T) {
+	var buf bytes.Buffer
+	log := newTestLogger(&buf).With("request_id", "req-bound")
+
+	log.InfoContext(sdk.WithRequestID(context.Background(), "req-ctx"), "bound")
+
+	if got := strings.Count(buf.String(), `"request_id"`); got != 2 {
+		t.Fatalf("request_id appears %d times, want 2 (bound + context): %s", got, buf.String())
 	}
 }

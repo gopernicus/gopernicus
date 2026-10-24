@@ -355,6 +355,6 @@ func (d *externalDemo) register(ctx context.Context, router *web.WebHandler, com
 		return err
 	}
 	log.WarnContext(ctx, "AUTH_EXTERNAL_DEMO enabled (development only): dev issuer and hybrid routes mounted; seeded API key printed ONCE",
-		"issuer", d.issuer.Issuer(), "token", devissuer.TokenPath, "api_key", key)
+		"issuer", d.issuer.Issuer(), "token_path", devissuer.TokenPath, "seeded_api_key", key)
 	return nil
 }

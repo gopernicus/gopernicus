@@ -21,6 +21,7 @@ import (
 	"github.com/gopernicus/gopernicus/pockets"
 	"github.com/gopernicus/gopernicus/pockets/cms"
 	cmsturso "github.com/gopernicus/gopernicus/pockets/cms/stores/turso"
+	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/cacher"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/filestorage"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/notify/email"
@@ -141,7 +142,7 @@ func run(ctx context.Context, log *slog.Logger, mode environment.Mode) error {
 			Host:     host,
 			Port:     environment.GetEnvOrDefault("SMTP_PORT", "587"),
 			Username: os.Getenv("SMTP_USERNAME"),
-			Password: os.Getenv("SMTP_PASSWORD"),
+			Password: sdk.Secret(os.Getenv("SMTP_PASSWORD")),
 		})
 	} else {
 		sender = email.NewConsole(log)

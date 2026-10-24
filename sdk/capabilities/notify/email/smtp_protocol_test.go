@@ -2,7 +2,9 @@ package email
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
+	"fmt"
 	"net"
 	"net/textproto"
 	"strings"
@@ -240,5 +242,63 @@ func TestSMTPProbeHonorsCancellation(t *testing.T) {
 	cancel()
 	if err := NewSMTP(SMTPConfig{Host: "127.0.0.1", Port: "1"}).Probe(ctx); !errors.Is(err, context.Canceled) {
 		t.Fatalf("pre-canceled probe: %v", err)
+	}
+}
+
+// A Password composed from a Secret's rendered form carries sdk.Redacted; Probe
+// and Send refuse it before dialing (port 1 would otherwise fail to connect).
+func TestSMTPRefusesARedactedPasswordBeforeDial(t *testing.T) {
+	password := sdk.Secret("hunter2")
+	composed := sdk.Secret(fmt.Sprintf("prefix-%s", password))
+	sender := NewSMTP(SMTPConfig{Host: "127.0.0.1", Port: "1", Username: "user", Password: composed})
+	for name, err := range map[string]error{
+		"Probe": sender.Probe(context.Background()),
+		"Send":  sender.Send(context.Background(), validMessage()),
+	} {
+		if !errors.Is(err, sdk.ErrRedactedSecret) || !strings.Contains(err.Error(), "SMTPConfig.Password") {
+			t.Errorf("%s error = %v, want sdk.ErrRedactedSecret naming the field", name, err)
+		}
+	}
+	if err := NewSMTP(SMTPConfig{Host: "127.0.0.1", Port: "1", Password: password}).Probe(context.Background()); errors.Is(err, sdk.ErrRedactedSecret) {
+		t.Fatalf("a plain password was refused: %v", err)
+	}
+}
+
+// PLAIN auth sends the revealed password, never its rendered form.
+func TestSMTPAuthenticatesWithTheRevealedPassword(t *testing.T) {
+	authLine := make(chan string, 1)
+	cfg := smtpSession(t, func(conn *textproto.Conn) {
+		_ = conn.PrintfLine("220 auth relay")
+		for {
+			line, err := conn.ReadLine()
+			if err != nil {
+				return
+			}
+			switch {
+			case strings.HasPrefix(line, "EHLO "):
+				_ = conn.PrintfLine("250-auth relay")
+				_ = conn.PrintfLine("250 AUTH PLAIN")
+			case strings.HasPrefix(line, "AUTH PLAIN "):
+				authLine <- strings.TrimPrefix(line, "AUTH PLAIN ")
+				_ = conn.PrintfLine("235 authenticated")
+			case line == "DATA":
+				_ = conn.PrintfLine("354 send data")
+				_, _ = conn.ReadDotBytes()
+				_ = conn.PrintfLine("250 accepted")
+			case line == "QUIT":
+				_ = conn.PrintfLine("221 bye")
+				return
+			default:
+				_ = conn.PrintfLine("250 accepted")
+			}
+		}
+	})
+	cfg.Username, cfg.Password = "user", "hunter2"
+	if err := NewSMTP(cfg).Send(context.Background(), validMessage()); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := base64.StdEncoding.DecodeString(<-authLine)
+	if err != nil || string(raw) != "\x00user\x00hunter2" {
+		t.Fatalf("AUTH PLAIN carried %q, %v; want the revealed password", raw, err)
 	}
 }

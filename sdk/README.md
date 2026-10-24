@@ -105,12 +105,12 @@ interface).
 | package | concern |
 |---|---|
 | `environment` | Checked single-line dotenv loading; `ParseEnvTags` for typed config with env > nonzero field > default precedence (empty env counts as absent); `Secret`/`DecodeSecret` for hex secrets with a minimum-byte floor; explicit `Mode` deployment posture and validation; `LoadEnvForMode(key)` reads the mode from the process environment only and loads `.env` only in development (`ErrModeFromFile` when `.env` names the key). Hosts own missing-secret policy and choose the mode key. See [package docs](../workshop/documentation/docs/sdk/pkg.md#environment-and-deployment-posture) for parsing and precedence rules. |
-| `logging` | `New(Options)` returns standard `*slog.Logger` with automatic request/trace/span IDs from context; `ContextHandler` wraps custom handlers. Empty/unknown options default to INFO, JSON, and STDERR. |
-| **root `package sdk`** | Error/fault vocabulary; request/trace/span context; `Principal`, identity info/address/resolver and principal context; `IDGenerator`/`NanoID`/`DatabaseID`; `Deref`/`DerefOr`; `Slugify`. See the [root API guide](../workshop/documentation/docs/sdk/overview.md#root-api). |
-| `web` | ServeMux routing/groups, JSON decoding/responses and domain-error mapping, HTML Renderer/Template, HTTP middleware/status/error recording, SSE, static/SPA serving and server lifecycle. `SecurityHeaders`/`SecurityHeadersWithConfig` preset HSTS, `nosniff`, `Referrer-Policy`, `X-Frame-Options` and `Permissions-Policy` (no CSP); `ServerConfig.ValidateProduction` requires a bare https `PUBLIC_BASE_URL`; JSON responses and static files carry `nosniff`; a 503 from `RespondJSONError` carries `Retry-After: 5` unless one is set. `DecodeJSON` is bounded at `DefaultBodyLimit` (1 MiB; `DecodeJSONLimit` for another bound) and its failures carry `ReadBody`'s fixed sentences, never Go type names; `Panics` answers JSON to a JSON request. `RequestID` reuses an inbound `X-Request-ID` only if it matches `^[A-Za-z0-9._-]{1,128}$`; `TrustProxies`/`TrustProxiesWithConfig` netip-parse the chosen hop (garbage → the peer) and read `X-Real-IP` only under `TrustRealIPHeader`. Hosts own middleware configuration, larger body limits and OpenAPI documents; caching/tracing middleware live in their capabilities. |
+| `logging` | `New(Options)` returns standard `*slog.Logger` with automatic request/trace/span IDs from context (`ContextHandler`, which skips an id the record already carries) and default-on key redaction (`RedactHandler`: `DefaultRedactKeys` plus `Options.RedactKeys`/`LOG_REDACT_KEYS`, no off switch); `ContextHandler` and `NewRedactHandler` wrap custom handlers. Empty/unknown options default to INFO, JSON, and STDERR. See [Log content](#log-content). |
+| **root `package sdk`** | Error/fault vocabulary; request/trace/span context; `Principal`, identity info/address/resolver and principal context, with `PrincipalCapture` (`WithPrincipalCapture`; `WithPrincipal` writes through, last write wins, observability only); `Secret` (renders `Redacted` through fmt/slog/JSON/text, `Reveal()` reads) and `ErrRedactedSecret` for a value composed from the rendered form; `IDGenerator`/`NanoID`/`DatabaseID`; `Deref`/`DerefOr`; `Slugify`. See the [root API guide](../workshop/documentation/docs/sdk/overview.md#root-api). |
+| `web` | ServeMux routing/groups, JSON decoding/responses and domain-error mapping, HTML Renderer/Template, HTTP middleware/status/error recording, SSE, static/SPA serving and server lifecycle. `SecurityHeaders`/`SecurityHeadersWithConfig` preset HSTS, `nosniff`, `Referrer-Policy`, `X-Frame-Options` and `Permissions-Policy` (no CSP); `ServerConfig.ValidateProduction` requires a bare https `PUBLIC_BASE_URL`; JSON responses and static files carry `nosniff`; a 503 from `RespondJSONError` carries `Retry-After: 5` unless one is set. `DecodeJSON` is bounded at `DefaultBodyLimit` (1 MiB; `DecodeJSONLimit` for another bound) and its failures carry `ReadBody`'s fixed sentences, never Go type names; `Panics` answers JSON to a JSON request. `Logger` adds `client_ip`, `user_agent` (256 bytes), `request_id` and `principal_type`/`principal_id` and sits inside `TrustProxies` and `RequestID` ([Log content](#log-content)). `RequestID` reuses an id already on the context (a nested router keeps the host's), else an inbound `X-Request-ID` only if it matches `^[A-Za-z0-9._-]{1,128}$`; `TrustProxies`/`TrustProxiesWithConfig` netip-parse the chosen hop (garbage → the peer) and read `X-Real-IP` only under `TrustRealIPHeader`. Hosts own middleware configuration, larger body limits and OpenAPI documents; caching/tracing middleware live in their capabilities. |
 | `list` | `Request`, `Page[T]`, per-resource `Limits`, cursor/offset pagination, ordering/search allow-lists, strict query parsing and row mapping. See the [listing contract](../workshop/documentation/docs/sdk/pkg.md#listing-vocabulary). Domain packages own repository methods and update inputs. |
 | `transaction` | Capability exposing `Transactor`; the SQL connectors implement it. Repositories must participate through the callback context. The callback may retry; external effects follow a successful return. |
-| `notify/email` | Typed `Message`/`Sender`, SMTP and development Console; `NewDelivery(sender, message)` preserves full HTML/text for an explicit `notify.Send` call. Optional `NewRenderer` and `Emailer` retain layered content/layouts and branding. Plain-text templates use text/template and are required. SMTP honors cancellation and encodes MIME; `SMTPConfig.RequireTLS` makes STARTTLS mandatory (`ErrTLSRequired`) and `SMTP.Probe` checks the relay at boot. SendGrid lives in `integrations/email/sendgrid`. |
+| `notify/email` | Typed `Message`/`Sender`, SMTP and development Console; `NewDelivery(sender, message)` preserves full HTML/text for an explicit `notify.Send` call. Optional `NewRenderer` and `Emailer` retain layered content/layouts and branding. Plain-text templates use text/template and are required. SMTP honors cancellation and encodes MIME; `SMTPConfig.RequireTLS` makes STARTTLS mandatory (`ErrTLSRequired`) and `SMTP.Probe` checks the relay at boot. `SMTPConfig.Password` is an `sdk.Secret`; one containing `sdk.Redacted` makes `Probe`/`Send` return `sdk.ErrRedactedSecret`. SendGrid lives in `integrations/email/sendgrid`. |
 | `validation` | explicit field checks (`Required`, `Email`, `UUID`, `MinLength`, …) return optional `*sdk.Violation` data; collect with `sdk.ValidationError.AddViolation` and return `Err()` from DTO or domain validation. Length checks count Unicode code points; optional pointer checks skip nil and use the scalar rule. Password policy belongs to authentication or the host |
 | `async` | bounded in-process task pool; explicit admission and `Close(ctx)` drain. Tasks may outlive a request; no persistence or automatic task cancellation |
 | `tracing` | minimal span port (`Tracer`/`SpanFinisher`), optional HTTP metadata seams + `Noop` default — OpenTelemetry backend in `integrations/tracing/otel` (stdout/OTLP-gRPC exporters) |
@@ -126,6 +126,39 @@ interface).
 | `workers` | Generic polling Pool, worker middleware, and `Runner`/`FencedRunner` over host-supplied store interfaces. Job middleware wraps processing with explicit defer/reject outcomes. Jobs supplies one queue implementation; custom queues need only SDK. [Execution contract](../workshop/documentation/docs/sdk/pkg.md#workers-versus-jobs) |
 | `work` | the keyed-work submission **protocol** (sdk-work-protocol, 2026-07-13): typed lifecycle `Status` with the frozen seven-value vocabulary (`pending`/`running`/`completed`/`failed`/`dead_letter`/`canceled`/`superseded`; `failed` is NON-terminal — retryable; `Terminal()`/`Known()` predicates), segregated consumer ports `Enqueuer` (idempotent admission under a nonempty logical key), `Replacer` (optional atomic replace/supersede), `StatusReader` (deterministic latest-by-key), opaque `[]byte` payload — NO default implementation (the oauth posture); the implementation of record is `pockets/jobs`; `worktest` ships the conformance suite. Executor-side (claim/lease/checkpoint/fencing) stays in `pkg/workers` + the jobs domain |
 | `pocket` | the host↔pocket pluggability contract (`Mount`, `RouteRegistrar`) — see [ARCHITECTURE.md](../ARCHITECTURE.md)'s Pockets section and the full charter, [pockets/README.md](../pockets/README.md) |
+
+### Log content
+
+`logging.New` composes `ContextHandler(RedactHandler(text or JSON handler))` in
+every mode. The redaction is by attribute key: `password`, `passwd`, `secret`,
+`token`, `access_token`, `refresh_token`, `api_key`, `apikey`, `x_api_key`,
+`authorization`, `cookie`, `set-cookie`, `private_key`, `client_secret`,
+`credentials_json`, `auth_token`, `dsn` (`DefaultRedactKeys`), plus
+`LOG_REDACT_KEYS` (comma-separated; it adds, never removes). Keys match exactly
+(no substring or prefix, so the host's attribute spelling decides),
+case-insensitively, with `-` and `_` equivalent: a header-derived key such as
+`X-API-Key` is matched in its `_` form. A matching key's value becomes `[redacted]` whatever
+its kind, groups included, and non-matching groups are searched. There is no off
+switch: a host that must log a value under one of these keys renames the
+attribute (auth-cms logs its demo key as `seeded_api_key`) or composes
+`NewContextHandler` over its own handler. An `sdk.Secret` renders as `[redacted]`
+under any key.
+
+The handler cannot see inside an `slog.Any` map or struct, nor free text: an
+error message that quotes its input logs the input, including `web.Logger`'s
+`error` attribute (a pgxdb invalid-input error, SQLSTATE 22P02, repeats the
+rejected value). `%+v` of a struct holding a secret in an unexported field prints
+it unless that type implements `fmt.Formatter` and `slog.LogValuer`.
+
+`web.Logger`'s request line carries `client_ip` (from `TrustProxies`) and
+`user_agent`, which are personal data; `LOG_REDACT_KEYS=client_ip,user_agent`
+drops them. `principal_type`/`principal_id` are the last principal authenticated
+during the request, including one the surface then refused; they are
+observability only, never an authorization input. The middleware order is
+`TrustProxies`, then `RequestID`, then `Logger`: the logger reads the client IP
+and request id from its own request context. Log retention belongs to the host's
+log pipeline; the framework's retention rails cover datastore rows, not log
+output.
 
 ## Not responsible for
 

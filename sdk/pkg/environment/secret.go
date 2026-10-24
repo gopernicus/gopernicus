@@ -49,7 +49,8 @@ func DecodeSecret(value string, minBytes int) ([]byte, error) {
 //
 // The host owns missing-key policy, including whether to generate an ephemeral
 // development key or reject production startup. The consuming constructor
-// still validates the decoded key's exact requirements.
+// still validates the decoded key's exact requirements. For a credential held
+// as text (a password, API key or DSN), use an sdk.Secret config field.
 func Secret(key string, minBytes int) ([]byte, error) {
 	value, ok := os.LookupEnv(key)
 	if !ok {

@@ -15,6 +15,9 @@ func TestOptions_EnvironmentTags(t *testing.T) {
 		"Level":  {env: "LOG_LEVEL", def: "INFO"},
 		"Format": {env: "LOG_FORMAT", def: "json"},
 		"Output": {env: "LOG_OUTPUT", def: "STDERR"},
+		// No default tag: an env value would replace it, and RedactKeys only
+		// ever adds to DefaultRedactKeys.
+		"RedactKeys": {env: "LOG_REDACT_KEYS", def: ""},
 	}
 
 	typ := reflect.TypeFor[Options]()
