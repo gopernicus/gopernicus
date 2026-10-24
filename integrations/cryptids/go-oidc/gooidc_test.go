@@ -7,10 +7,12 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -239,6 +241,124 @@ func TestNewValidation(t *testing.T) {
 	if _, err := zero.Verify(ctx, "a.b.c"); err == nil {
 		t.Fatal("nil Verifier verified")
 	}
+}
+
+const plaintextDiscoveryWarning = "gooidc: discovering over plain http"
+
+// TestIssuerTransport pins when an http issuer is admitted. Discovery fetches
+// the key set's location from the issuer, so it needs https or loopback unless
+// WithInsecureIssuer; a pinned JWKS URL fetches nothing from the issuer, which
+// is then only compared to iss.
+func TestIssuerTransport(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("https discovery", func(t *testing.T) {
+		iss, client, _ := routedIssuer(t, "https://issuer.example.com")
+		logs := &logBuffer{}
+		v, err := New(ctx, iss.Issuer(), WithAudiences(iss.Audience()), WithHTTPClient(client), WithLogger(slog.New(logs)))
+		if err != nil {
+			t.Fatalf("New: %v", err)
+		}
+		verifyMinted(t, v, iss, iss.Issuer())
+		if n := logs.count(plaintextDiscoveryWarning); n != 0 {
+			t.Fatalf("plaintext warnings = %d, want 0", n)
+		}
+	})
+
+	t.Run("plain http discovery refused", func(t *testing.T) {
+		iss, client, requests := routedIssuer(t, "http://issuer.example.com")
+		_, err := New(ctx, iss.Issuer(), WithAudiences(iss.Audience()), WithHTTPClient(client))
+		if !errors.Is(err, sdk.ErrInvalidInput) {
+			t.Fatalf("New = %v, want sdk.ErrInvalidInput", err)
+		}
+		for _, want := range []string{"must use https for discovery", "WithJWKSURL", "WithInsecureIssuer"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Fatalf("error %q does not mention %q", err, want)
+			}
+		}
+		if n := requests.Load(); n != 0 {
+			t.Fatalf("requests = %d, want 0: the refusal precedes discovery", n)
+		}
+	})
+
+	t.Run("plain http issuer with pinned JWKS", func(t *testing.T) {
+		keys, err := oidctest.Start()
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer keys.Close()
+		logs := &logBuffer{}
+		const issuer = "http://issuer.example.com"
+		v, err := New(ctx, issuer, WithJWKSURL(keys.JWKSURL()), WithAudiences(keys.Audience()), WithLogger(slog.New(logs)))
+		if err != nil {
+			t.Fatalf("New: %v", err)
+		}
+		verifyMinted(t, v, keys, issuer)
+		if n := logs.count(plaintextDiscoveryWarning); n != 0 {
+			t.Fatalf("plaintext warnings = %d, want 0", n)
+		}
+	})
+
+	for _, issuer := range []string{"http://127.0.0.1:8080", "http://[::1]:8080", "http://localhost:8080"} {
+		t.Run("loopback discovery "+issuer, func(t *testing.T) {
+			iss, client, _ := routedIssuer(t, issuer)
+			logs := &logBuffer{}
+			v, err := New(ctx, iss.Issuer(), WithAudiences(iss.Audience()), WithHTTPClient(client), WithLogger(slog.New(logs)))
+			if err != nil {
+				t.Fatalf("New: %v", err)
+			}
+			verifyMinted(t, v, iss, iss.Issuer())
+			if n := logs.count(plaintextDiscoveryWarning); n != 0 {
+				t.Fatalf("plaintext warnings = %d, want 0", n)
+			}
+		})
+	}
+
+	for name, tc := range map[string]struct {
+		issuer   string
+		warnings int
+	}{
+		"plain http discovery": {"http://keycloak:8080", 1},
+		"https discovery":      {"https://issuer.example.com", 0},
+		"loopback discovery":   {"http://localhost:8080", 0},
+	} {
+		t.Run("WithInsecureIssuer "+name, func(t *testing.T) {
+			iss, client, _ := routedIssuer(t, tc.issuer)
+			logs := &logBuffer{}
+			v, err := New(ctx, iss.Issuer(), WithInsecureIssuer(), WithAudiences(iss.Audience()), WithHTTPClient(client), WithLogger(slog.New(logs)))
+			if err != nil {
+				t.Fatalf("New: %v", err)
+			}
+			verifyMinted(t, v, iss, iss.Issuer())
+			if n := logs.count(plaintextDiscoveryWarning); n != tc.warnings {
+				t.Fatalf("plaintext warnings = %d, want %d", n, tc.warnings)
+			}
+			if tc.warnings > 0 {
+				if got, _ := logs.attr(plaintextDiscoveryWarning, "issuer"); got.String() != tc.issuer {
+					t.Fatalf("warning issuer = %q, want %q", got, tc.issuer)
+				}
+			}
+		})
+	}
+
+	t.Run("WithInsecureIssuer keeps the other refusals", func(t *testing.T) {
+		cases := map[string]struct {
+			issuer string
+			opts   []Option
+		}{
+			"non-http issuer":        {"ftp://issuer.example.com", nil},
+			"relative issuer":        {"issuer.example.com", nil},
+			"pinned plain-http JWKS": {"http://issuer.example.com", []Option{WithJWKSURL("http://issuer.example.com/jwks")}},
+		}
+		for name, tc := range cases {
+			t.Run(name, func(t *testing.T) {
+				opts := append([]Option{WithInsecureIssuer(), WithAudiences("a")}, tc.opts...)
+				if _, err := New(ctx, tc.issuer, opts...); !errors.Is(err, sdk.ErrInvalidInput) {
+					t.Fatalf("New = %v, want sdk.ErrInvalidInput", err)
+				}
+			})
+		}
+	})
 }
 
 // TestCheapRejectionsNeverFetch pins the rejection order: none of these
@@ -690,6 +810,51 @@ func encodeSegment(t *testing.T, v any) string {
 		t.Fatal(err)
 	}
 	return base64.RawURLEncoding.EncodeToString(raw)
+}
+
+// routedIssuer serves an oidctest issuer for issuer and returns a client that
+// dials that server whatever host a URL names, so discovery reaches a
+// non-loopback name without DNS. An https issuer is served over TLS; the
+// httptest certificate covers *.example.com. requests counts what the server
+// answered.
+func routedIssuer(t *testing.T, issuer string) (*oidctest.Issuer, *http.Client, *atomic.Int64) {
+	t.Helper()
+	iss, err := oidctest.New(issuer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	requests := new(atomic.Int64)
+	handler := iss.Handler()
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		handler.ServeHTTP(w, r)
+	}))
+	if strings.HasPrefix(issuer, "https://") {
+		srv.StartTLS()
+	} else {
+		srv.Start()
+	}
+	t.Cleanup(srv.Close)
+	transport := srv.Client().Transport.(*http.Transport).Clone()
+	addr := srv.Listener.Addr().String()
+	transport.DialContext = func(ctx context.Context, network, _ string) (net.Conn, error) {
+		var dialer net.Dialer
+		return dialer.DialContext(ctx, network, addr)
+	}
+	t.Cleanup(transport.CloseIdleConnections)
+	return iss, &http.Client{Transport: transport, Timeout: FetchTimeout}, requests
+}
+
+// verifyMinted proves v fetches keys and verifies a token minted under issuer.
+func verifyMinted(t *testing.T, v *Verifier, iss *oidctest.Issuer, issuer string) {
+	t.Helper()
+	token, err := iss.MintAs(issuer, map[string]any{"sub": "s"})
+	if err != nil {
+		t.Fatalf("MintAs: %v", err)
+	}
+	if _, err := v.Verify(context.Background(), token); err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
 }
 
 // fetching reports whether a JWKS fetch is in flight.

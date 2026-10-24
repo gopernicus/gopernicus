@@ -21,9 +21,10 @@ nonce-bound ID tokens inside a login flow.
 
 | Member | Behavior |
 |---|---|
-| `New(ctx, issuer string, opts ...Option) (*Verifier, error)` | Pins `issuer` (exact string). Runs OIDC discovery under `ctx` unless `WithJWKSURL` is set, in which case it does no network I/O. Keys are fetched on the first token. |
+| `New(ctx, issuer string, opts ...Option) (*Verifier, error)` | Pins `issuer` (exact string). Runs OIDC discovery under `ctx` unless `WithJWKSURL` is set, in which case it does no network I/O. A discovered issuer must be `https`, or `http` on loopback (see Issuer transport). Keys are fetched on the first token. |
 | `WithAudiences(aud ...string)` | Required. A token is accepted when `aud` (string or array) contains any of them. |
 | `WithJWKSURL(url string)` | Skips discovery. `https`, or `http` on loopback only. |
+| `WithInsecureIssuer()` | Development only. Lets `New` discover a plain-`http` issuer on a non-loopback host, with one WARN. |
 | `WithAlgorithms(alg ...string)` | Replaces the allow-list (default `RS256`, `ES256`). RS/PS/ES 256–512 and `EdDSA` only; `none` and HMAC fail `New`. |
 | `WithHTTPClient(*http.Client)` | Client for discovery and JWKS. The default times out after `FetchTimeout` and refuses redirects. |
 | `WithLogger(*slog.Logger)` | Fetch failures and aggregated unknown-kid rejections. Nil uses `slog.Default()`. |
@@ -32,6 +33,28 @@ nonce-bound ID tokens inside a login flow.
 | `ErrInvalidToken` | Every rejection; matches `sdk.ErrUnauthorized`. |
 | `ErrUnknownKey` | The kid is not published after a fetch; matches `ErrInvalidToken`. |
 | `ErrKeysUnavailable` | The issuer's keys could not be obtained; matches `sdk.ErrUnavailable` and says nothing about the token. |
+
+## Issuer transport
+
+Discovery fetches the issuer's metadata, which names the key set, so the
+channel to the issuer is part of the trust chain. `New` therefore checks the
+issuer's scheme only when it will discover (no `WithJWKSURL`):
+
+| Issuer | Discovery | `WithJWKSURL` pinned |
+|---|---|---|
+| `https://…` | accepted | accepted |
+| `http://` on loopback (`localhost`, `127.0.0.1`, `::1`) | accepted | accepted |
+| `http://` on any other host | refused with `sdk.ErrInvalidInput` | accepted |
+| `http://` on any other host + `WithInsecureIssuer()` | accepted, one WARN | accepted, no WARN |
+
+With a pinned JWKS URL nothing is fetched from the issuer: the string is only
+compared to `iss`, and the JWKS URL itself must be `https`, or `http` on
+loopback. `WithInsecureIssuer()` waives the scheme rule for discovery only. A
+`jwks_uri` discovered over plain `http` is admitted over `http` too, since it
+is no more trustworthy than the channel that named it; a pinned JWKS URL is
+never waived. Use the option for a container-hostname issuer in development
+(`http://keycloak:8080`); the authentication pocket refuses `http` issuers in
+production regardless.
 
 ## Verification order
 
@@ -97,7 +120,8 @@ issuer.
 ## Testing
 
 Run `go test ./...`. Tests drive real HTTP round trips against `oidctest`:
-`authenticationtest.RunProvider` over `NewOIDC` (RS256 and ES256); the cheap
+`authenticationtest.RunProvider` over `NewOIDC` (RS256 and ES256); the issuer
+transport table above, including the refusal before any request; the cheap
 rejection order with zero fetches (including `alg: none` and HMAC); the
 emulator-shaped unsigned token; signature, key and JWK-alg mismatches; time
 claims at and past the tolerance; any-of audience; rotation and withdrawal;

@@ -10,17 +10,27 @@ import (
 type Option func(*config)
 
 type config struct {
-	jwksURL    string
-	audiences  []string
-	algorithms []string
-	httpClient *http.Client
-	logger     *slog.Logger
+	jwksURL        string
+	audiences      []string
+	algorithms     []string
+	httpClient     *http.Client
+	logger         *slog.Logger
+	insecureIssuer bool
 }
 
 // WithJWKSURL pins the key set URL and skips discovery, so New performs no
 // network I/O. It must be https, or http on loopback.
 func WithJWKSURL(jwksURL string) Option {
 	return func(cfg *config) { cfg.jwksURL = jwksURL }
+}
+
+// WithInsecureIssuer lets New discover a plain-http issuer on a non-loopback
+// host (a container hostname in development), logging one WARN. Discovery and
+// the key set it names then travel unauthenticated, so never set it in
+// production. It is not needed with WithJWKSURL, which fetches nothing from
+// the issuer, or for http on loopback.
+func WithInsecureIssuer() Option {
+	return func(cfg *config) { cfg.insecureIssuer = true }
 }
 
 // WithAudiences sets the accepted audiences; a token is accepted when its aud
