@@ -365,6 +365,24 @@ func WithLimits(value AuthenticationLimits) Option {
 	}
 }
 
+// AbuseProtectionConfig selects the limiter outage policy. Budgets stay on
+// WithLimits.
+type AbuseProtectionConfig struct {
+	// LimiterFailOpen admits a refresh when the per-session refresh budget's
+	// limiter returns an error (WARN-logged). The zero value fails CLOSED in
+	// every mode: Refresh returns an error matching sdk.ErrUnavailable (503).
+	// Every other budget fails closed regardless.
+	LimiterFailOpen bool
+}
+
+// WithAbuseProtection replaces the complete AbuseProtectionConfig group,
+// including zero values.
+func WithAbuseProtection(value AbuseProtectionConfig) Option {
+	return func(c *constructorConfig) {
+		c.LimiterFailOpen = value.LimiterFailOpen
+	}
+}
+
 // WithClock supplies the clock; nil selects time.Now.
 func WithClock(value func() time.Time) Option {
 	return func(c *constructorConfig) {

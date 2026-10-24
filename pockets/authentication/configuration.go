@@ -17,6 +17,9 @@ func validateRepositories(repos Repositories, cfg constructorConfig) error {
 	if err := cfg.AuthenticationLimits.Validate(); err != nil {
 		return err
 	}
+	if err := cfg.PublicRouteLimits.Validate(); err != nil {
+		return err
+	}
 	for _, required := range []struct {
 		name  string
 		value any
@@ -50,6 +53,14 @@ func validateRepositories(repos Repositories, cfg constructorConfig) error {
 	}
 	if cfg.RuntimeMode == environment.ModeProduction && !cfg.SessionCookie.Secure {
 		return fmt.Errorf("authentication: production session cookies require Secure: %w", sdk.ErrInvalidInput)
+	}
+	if cfg.SessionCookie.Domain != "" {
+		if cfg.OriginPolicy.HasNamespace() {
+			return ErrCookieDomainWithNamespaceRule
+		}
+		if cfg.RuntimeMode == environment.ModeProduction && !cfg.CookieDomainAcknowledged {
+			return ErrCookieDomainRefused
+		}
 	}
 	return nil
 }

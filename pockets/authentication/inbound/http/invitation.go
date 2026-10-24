@@ -14,11 +14,6 @@ import (
 	"github.com/gopernicus/gopernicus/sdk/pkg/web"
 )
 
-// declineAttemptsPerMinute caps invitation-decline attempts per client IP: the
-// decline route is PUBLIC (token-authorized, not session-gated), so it is
-// rate-limited to blunt token-guessing and abuse (design §6).
-const declineAttemptsPerMinute = 10
-
 // InvitationService supplies invitation preparation and policy-free use cases.
 // The adapter checks its policy against a prepared command before executing it.
 // A nil service leaves invitation routes unmounted.

@@ -41,6 +41,16 @@ func WithLimiter(value ratelimiter.Limiter) AuthenticatorOption {
 	}
 }
 
+// WithLimiterFailOpen selects the outage policy of RateLimitByIP and the
+// bundled route budgets. False (the default) fails CLOSED in every mode: a
+// limiter error answers JSON 503 + Retry-After. True admits the request and
+// logs a WARN per failure.
+func WithLimiterFailOpen(enabled bool) AuthenticatorOption {
+	return func(c *authenticatorConfig) {
+		c.LimiterFailOpen = enabled
+	}
+}
+
 // WithAuthenticatorLogger supplies the HTTP logger; nil selects slog.Default().
 func WithAuthenticatorLogger(value *slog.Logger) AuthenticatorOption {
 	return func(c *authenticatorConfig) {
@@ -55,5 +65,6 @@ type AuthenticatorPolicy struct {
 	ExternalCookies  []string
 	BrowserLoginPath string
 	Limiter          ratelimiter.Limiter
+	LimiterFailOpen  bool
 	Logger           *slog.Logger
 }

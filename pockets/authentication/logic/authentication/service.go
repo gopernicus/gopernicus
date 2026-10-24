@@ -188,6 +188,7 @@ type constructorConfig struct {
 	Queue                   deliveryQueue
 	IdentifierKeyer         identifierKeyer
 	Limiter                 ratelimiter.Limiter
+	LimiterFailOpen         bool
 	Clock                   func() time.Time
 	Logger                  *slog.Logger
 	IDs                     sdk.IDGenerator
@@ -269,6 +270,7 @@ type Service struct {
 	queue                deliveryQueue
 	identifierKeyer      identifierKeyer
 	limiter              ratelimiter.Limiter
+	limiterFailOpen      bool
 	now                  func() time.Time
 	logger               *slog.Logger
 	requireVerifiedEmail bool
@@ -413,6 +415,7 @@ func newService(d constructorConfig) *Service {
 		queue:                d.Queue,
 		identifierKeyer:      d.IdentifierKeyer,
 		limiter:              d.Limiter,
+		limiterFailOpen:      d.LimiterFailOpen,
 		now:                  clock,
 		logger:               logger,
 		requireVerifiedEmail: d.RequireVerifiedEmail,

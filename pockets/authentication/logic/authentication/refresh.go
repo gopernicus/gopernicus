@@ -61,15 +61,20 @@ func (s *Service) refreshByHash(ctx context.Context, hash string) (TokenPair, er
 	if sess.Expired(s.now()) {
 		return TokenPair{}, ErrInvalidRefreshToken // branch 2
 	}
-	// This session budget deliberately fails open on a limiter error, as does
-	// the route's separate IP budget. Report failures without logging the key.
+	// A limiter error fails closed as sdk.ErrUnavailable (503) unless the host
+	// chose AbuseProtectionConfig.LimiterFailOpen. Report failures without
+	// logging the key.
 	res, limitErr := s.limiter.Allow(ctx, refreshSessionKey(sess.ID), ratelimiter.PerMinute(refreshAttemptsPerMinute))
 	if err := ctx.Err(); err != nil {
 		return TokenPair{}, err
 	}
-	if limitErr != nil {
-		s.logger.WarnContext(ctx, "refresh rate limiter failed", "error_kind", ErrorKind(limitErr))
-	} else if !res.Allowed {
+	switch {
+	case limitErr != nil:
+		s.logger.WarnContext(ctx, "refresh rate limiter failed", "error_kind", ErrorKind(limitErr), "fail_open", s.limiterFailOpen)
+		if !s.limiterFailOpen {
+			return TokenPair{}, fmt.Errorf("authentication: refresh rate limiter: %w: %w", sdk.ErrUnavailable, limitErr)
+		}
+	case !res.Allowed:
 		return TokenPair{}, ErrRateLimited
 	}
 	switch match {

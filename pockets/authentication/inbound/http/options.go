@@ -80,6 +80,14 @@ func WithUserErasureRoute(enabled bool) Option {
 	}
 }
 
+// WithPublicRouteLimits replaces the per-client-IP budgets of the bundled public
+// routes; zero fields select their defaults and New validates the rest.
+func WithPublicRouteLimits(value PublicRouteLimits) Option {
+	return func(c *adapterConfig) {
+		c.RouteLimits = value
+	}
+}
+
 // WithRouteAuthentication replaces RouteAuth for this constructor.
 func WithRouteAuthentication(value BundledRouteAuthentication) Option {
 	return func(c *adapterConfig) {

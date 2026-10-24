@@ -36,6 +36,7 @@ type adapterConfig struct {
 	MachineGate       web.Middleware
 	RouteAuth         BundledRouteAuthentication
 	UserErasureRoute  bool
+	RouteLimits       PublicRouteLimits
 }
 
 type routedService struct {
@@ -91,6 +92,9 @@ func New(service AuthenticationService, runtimeMode environment.Mode, opts ...Op
 		}
 		eraser = e
 	}
+	if err := cfg.RouteLimits.Validate(); err != nil {
+		return nil, err
+	}
 	if cfg.ListStrategy == "" {
 		cfg.ListStrategy = list.StrategyCursor
 	}
@@ -102,7 +106,7 @@ func New(service AuthenticationService, runtimeMode environment.Mode, opts ...Op
 	}
 	auth, err := NewAuthenticator(cfg.Authentication, runtimeMode,
 		WithCookies(cfg.Authenticator.Cookie), WithExternalCookies(cfg.Authenticator.ExternalCookies...), WithBrowserLoginPath(cfg.Authenticator.BrowserLoginPath),
-		WithLimiter(cfg.Authenticator.Limiter), WithAuthenticatorLogger(cfg.Authenticator.Logger))
+		WithLimiter(cfg.Authenticator.Limiter), WithLimiterFailOpen(cfg.Authenticator.LimiterFailOpen), WithAuthenticatorLogger(cfg.Authenticator.Logger))
 	if err != nil {
 		return nil, err
 	}
@@ -122,7 +126,7 @@ func New(service AuthenticationService, runtimeMode environment.Mode, opts ...Op
 		Views:    views, HTMLPolicy: snapshotHTMLPolicy(cfg.HTMLPolicy), MachineGate: cfg.MachineGate,
 		RouteAuth: resolveBundledRouteAuth(cfg.RouteAuth, auth),
 		Eraser:    eraser,
-		Proxies:   auth.proxies,
+		Proxies:   auth.proxies, RouteLimits: cfg.RouteLimits,
 	}
 	return auth, nil
 }

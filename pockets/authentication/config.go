@@ -36,10 +36,13 @@ type constructorConfig struct {
 	ValidatePassword              func(context.Context, string) error
 	CompromisedPasswordChecker    authlogic.CompromisedPasswordChecker
 	CompromisedPasswordFailOpen   bool
+	PublicRouteLimits             PublicRouteLimits
+	PublicRouteLimiterFailOpen    bool
 	Mailer                        email.Sender
 	MailFrom                      string `env:"AUTH_MAIL_FROM"`
 	RateLimiter                   ratelimiter.Limiter
 	SessionCookie                 inbound.CookieConfig
+	CookieDomainAcknowledged      bool
 	RefreshCookiePath             string   `env:"AUTH_REFRESH_COOKIE_PATH"`
 	AllowedOrigins                []string `env:"AUTH_ALLOWED_ORIGINS"`
 	BrowserLoginPath              string   `env:"AUTH_BROWSER_LOGIN_PATH"`
@@ -224,21 +227,46 @@ func WithIdentity(value IdentityConfig) Option {
 	}
 }
 
+// PublicRouteLimits sets the per-client-IP budgets of the bundled public
+// credential-establishment routes: register, verify, password reset,
+// verify-link, native OAuth, refresh (the IP arm only) and invitation decline.
+// A zero field selects its default; New refuses a non-zero limit that
+// ratelimiter.Limit.Normalize refuses. See the README's per-IP budget table.
+type PublicRouteLimits = inbound.PublicRouteLimits
+
 // AbuseProtectionConfig selects the rate limiter and authentication budgets.
 type AbuseProtectionConfig struct {
 	// AuthenticationLimits configures per-subject and per-IP abuse budgets.
 	// Zero values select documented defaults.
 	AuthenticationLimits authlogic.AuthenticationLimits
+	// PublicRouteLimits configures the per-client-IP budgets of the bundled
+	// public routes. Zero values select documented defaults; there is no off
+	// switch (a host behind its own edge throttle sets a large budget).
+	PublicRouteLimits PublicRouteLimits
 	// RateLimiter throttles login attempts; nil → ratelimiter.NewMemory()
 	// (safe-by-default: an in-process limiter, not "unlimited").
 	RateLimiter ratelimiter.Limiter
+	// PublicRouteLimiterFailOpen selects the policy when RateLimiter returns an
+	// error on the bundled public-route budgets, on host routes behind
+	// Components.HTTP.RateLimitByIP, and on the per-session refresh budget.
+	// Default false = FAIL CLOSED in EVERY mode, development included: a limiter
+	// outage answers 503 + Retry-After, so a development host sees the answer
+	// production will (this departs on purpose from failing open in
+	// development). In production that outage 503s silent refresh, so SPA users
+	// are signed out. Set true to admit and WARN instead; in production that is
+	// a posture waiver (one posture_waiver=PublicRouteLimiterFailOpen WARN at
+	// New). It is a wiring assertion set as a literal in the composition root,
+	// not an env knob. The service's other budgets fail closed regardless.
+	PublicRouteLimiterFailOpen bool
 }
 
 // WithAbuseProtection replaces the complete AbuseProtectionConfig group, including zero values.
 func WithAbuseProtection(value AbuseProtectionConfig) Option {
 	return func(c *constructorConfig) {
 		c.AuthenticationLimits = value.AuthenticationLimits
+		c.PublicRouteLimits = value.PublicRouteLimits
 		c.RateLimiter = value.RateLimiter
+		c.PublicRouteLimiterFailOpen = value.PublicRouteLimiterFailOpen
 	}
 }
 
@@ -650,7 +678,18 @@ func cloneLinksConfig(value LinksConfig) LinksConfig {
 // BrowserConfig configures browser routes, cookies, origins, and views.
 type BrowserConfig struct {
 	// SessionCookie configures the session cookie; the zero value is usable.
+	// A non-empty SessionCookie.Domain is refused in production unless
+	// CookieDomainAcknowledged is set (ErrCookieDomainRefused), and beside an
+	// OriginPolicy namespace rule in every mode (ErrCookieDomainWithNamespaceRule).
 	SessionCookie inbound.CookieConfig
+	// CookieDomainAcknowledged affirms that the host accepts a Domain-scoped
+	// session cookie: the access and refresh cookies then reach every host under
+	// that Domain, so a takeover or script injection on any of them reads the
+	// session. Production refuses SessionCookie.Domain without it
+	// (ErrCookieDomainRefused) and logs one posture_waiver WARN with it. It never
+	// waives ErrCookieDomainWithNamespaceRule. It is inert while Domain is empty
+	// and is a wiring assertion set in the composition root, not an env knob.
+	CookieDomainAcknowledged bool
 	// RefreshCookiePath scopes the refresh cookie. Empty (default) → "/auth", which
 	// covers /auth/refresh AND /auth/logout on a host that mounts the pocket at the
 	// root. A host that mounts the pocket under a path prefix (pockets.PrefixRegistrar,
@@ -741,6 +780,7 @@ func WithBrowser(value BrowserConfig) Option {
 	return func(c *constructorConfig) {
 		value := cloneBrowserConfig(value)
 		c.SessionCookie = value.SessionCookie
+		c.CookieDomainAcknowledged = value.CookieDomainAcknowledged
 		c.RefreshCookiePath = value.RefreshCookiePath
 		c.AllowedOrigins = value.AllowedOrigins
 		c.OriginPolicy = value.OriginPolicy

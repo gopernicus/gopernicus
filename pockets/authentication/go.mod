@@ -4,5 +4,5 @@ go 1.26.10
 
 require (
 	github.com/gopernicus/gopernicus/pockets v0.1.0
-	github.com/gopernicus/gopernicus/sdk v0.16.0
+	github.com/gopernicus/gopernicus/sdk v0.17.0
 )

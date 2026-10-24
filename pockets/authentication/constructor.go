@@ -453,6 +453,7 @@ func New(repos Repositories, signer cryptids.JWTSigner, runtimeMode environment.
 	if err := validateRepositories(repos, cfg); err != nil {
 		return nil, err
 	}
+	logEdgeWaivers(cfg, transportLog)
 	// The retention service starts nothing; the host runs it. Its policy is
 	// validated here so a refused retention fails the boot, not the first pass.
 	maintenanceService, err := maintenance.New(maintenance.Repositories{Maintenance: repos.Maintenance, Challenges: repos.Challenges, SecurityEvents: repos.SecurityEvents},
@@ -539,6 +540,7 @@ func New(repos Repositories, signer cryptids.JWTSigner, runtimeMode environment.
 		authlogic.WithLinks(authlogic.LinksConfig{PublicAuthBaseURL: cfg.PublicAuthBaseURL, PasswordResetURL: cfg.PasswordResetURL, OAuthLinkBaseURL: cfg.OAuthLinkBaseURL, RedirectAllowlist: cfg.RedirectAllowlist}),
 		authlogic.WithChallengeProtector(cfg.ChallengeProtector),
 		authlogic.WithLimits(cfg.AuthenticationLimits),
+		authlogic.WithAbuseProtection(authlogic.AbuseProtectionConfig{LimiterFailOpen: cfg.PublicRouteLimiterFailOpen}),
 		authlogic.WithLogger(cfg.Logger),
 		authlogic.WithIDs(cfg.IDs),
 		authlogic.WithSecurityEventRecorder(securityEvents),
@@ -632,7 +634,8 @@ func New(repos Repositories, signer cryptids.JWTSigner, runtimeMode environment.
 		inbound.WithInviteCheck(cfg.InviteCheck),
 		inbound.WithInvitationResourceRule(inbound.InvitationResourceRule{Permissions: cfg.ResourcePermissions, Can: cfg.Can}),
 		inbound.WithUserAdminCheck(cfg.UserAdminCheck),
-		inbound.WithAuthenticatorPolicy(inbound.AuthenticatorPolicy{Cookie: cfg.SessionCookie, ExternalCookies: externalCookies, BrowserLoginPath: cfg.BrowserLoginPath, Limiter: limiter, Logger: cfg.Logger}),
+		inbound.WithAuthenticatorPolicy(inbound.AuthenticatorPolicy{Cookie: cfg.SessionCookie, ExternalCookies: externalCookies, BrowserLoginPath: cfg.BrowserLoginPath, Limiter: limiter, LimiterFailOpen: cfg.PublicRouteLimiterFailOpen, Logger: cfg.Logger}),
+		inbound.WithPublicRouteLimits(cfg.PublicRouteLimits),
 		inbound.WithListStrategy(listStrategy),
 		inbound.WithMachineGate(cfg.MachineRoutesGate),
 		inbound.WithRouteAuthentication(cfg.BundledRouteAuth),
@@ -643,6 +646,22 @@ func New(repos Repositories, signer cryptids.JWTSigner, runtimeMode environment.
 	logMaintenancePosture(cfg, maintenanceService, transportLog)
 	return &Components{Authentication: authService, External: authService.ExternalAuthenticator(), OAuth2: oauthService, Invitations: invSvc, HTTP: adapter, Delivery: deliveryRuntime, SecurityEvents: securityEvents, Maintenance: maintenanceService}, nil
 
+}
+
+// logEdgeWaivers logs one posture_waiver WARN per honored production waiver of
+// the HTTP edge: a Domain-scoped session cookie under CookieDomainAcknowledged,
+// and limiters failing open under PublicRouteLimiterFailOpen. Development
+// refuses neither, so it waives nothing and logs nothing.
+func logEdgeWaivers(cfg constructorConfig, log *slog.Logger) {
+	if !cfg.RuntimeMode.IsProduction() {
+		return
+	}
+	if cfg.SessionCookie.Domain != "" && cfg.CookieDomainAcknowledged {
+		log.Warn("auth: production posture requirement waived", "posture_waiver", "CookieDomainAcknowledged", "runtime_mode", cfg.RuntimeMode.String(), "cookie_domain", cfg.SessionCookie.Domain)
+	}
+	if cfg.PublicRouteLimiterFailOpen {
+		log.Warn("auth: production posture requirement waived", "posture_waiver", "PublicRouteLimiterFailOpen", "runtime_mode", cfg.RuntimeMode.String())
+	}
 }
 
 // logMaintenancePosture logs the retention registration line and, in
