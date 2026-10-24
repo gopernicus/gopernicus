@@ -1,6 +1,7 @@
 // Command server is the auditable reference host: one composition root that
 // asks for the production posture of examples/README.md §3b on every surface
-// and acknowledges nothing. Users sign in at one external OIDC provider; the
+// and acknowledges one thing — that it runs retention (the retention host
+// pocket's runner). Users sign in at one external OIDC provider; the
 // authentication pocket maps each verified subject to a local user and keeps
 // the security-event audit rail, and the authorization pocket records every
 // role change. Both persist in PostgreSQL through their pgx stores, and the
@@ -13,6 +14,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -24,6 +26,7 @@ import (
 
 	"github.com/gopernicus/gopernicus/examples/production-baseline/integrations/authentication/devissuer"
 	"github.com/gopernicus/gopernicus/examples/production-baseline/pockets/audit/outbound/securityevents"
+	"github.com/gopernicus/gopernicus/examples/production-baseline/pockets/retention/inbound/runner"
 	gooidc "github.com/gopernicus/gopernicus/integrations/cryptids/go-oidc"
 	golangjwt "github.com/gopernicus/gopernicus/integrations/cryptids/golang-jwt"
 	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
@@ -34,13 +37,17 @@ import (
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/protection"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/securityevent"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/delivery"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/maintenance"
 	authenticationpgx "github.com/gopernicus/gopernicus/pockets/authentication/stores/pgx"
 	"github.com/gopernicus/gopernicus/pockets/authorization"
 	authorizationhttp "github.com/gopernicus/gopernicus/pockets/authorization/inbound/http"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/decisions"
+	authorizationmodel "github.com/gopernicus/gopernicus/pockets/authorization/logic/model"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/mutations"
 	authorizationpgx "github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx"
+	"github.com/gopernicus/gopernicus/sdk"
 	sdkauth "github.com/gopernicus/gopernicus/sdk/capabilities/authentication"
+	"github.com/gopernicus/gopernicus/sdk/capabilities/filestorage"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/ratelimiter"
 	"github.com/gopernicus/gopernicus/sdk/pkg/environment"
 	"github.com/gopernicus/gopernicus/sdk/pkg/logging"
@@ -51,9 +58,16 @@ const (
 	// providerName is the external-subject mirror namespace. Never change it
 	// once rows exist.
 	providerName = "idp"
-	// adminRole is the global role that administers roles.
+	// adminRole is the global role that administers roles and users.
 	adminRole = "admin"
+	// operationExpiryInterval is how often the retention runner expires
+	// authorization operation records past their 180-day retention.
+	operationExpiryInterval = time.Hour
 )
+
+// errArchiveDirRequired refuses a production boot without the security-event
+// archive: the maintenance pass archives each rail chunk before it purges it.
+var errArchiveDirRequired = errors.New("AUDIT_ARCHIVE_DIR is required in production: the security-event archive the retention runner writes before every purge (README, Retention)")
 
 // identityProviderConfig selects the external identity provider. An empty
 // Issuer selects the development issuer; an empty JWKSURL runs OIDC discovery.
@@ -63,9 +77,14 @@ type identityProviderConfig struct {
 	JWKSURL  string `env:"IDP_JWKS_URL"`
 }
 
+// archiveConfig locates the security-event archive.
+type archiveConfig struct {
+	Dir string `env:"AUDIT_ARCHIVE_DIR"`
+}
+
 // composition is what the pockets are built from once the keys, the server
-// settings, the stores and the provider are resolved: run fills it over
-// PostgreSQL, the tests over in-memory stores.
+// settings, the archive, the stores and the provider are resolved: run fills
+// it over PostgreSQL, the tests over in-memory stores.
 type composition struct {
 	mode                environment.Mode
 	log                 *slog.Logger
@@ -73,9 +92,18 @@ type composition struct {
 	keys                authentication.Keys
 	sessionCookie       authenticationhttp.CookieConfig
 	limiter             ratelimiter.Limiter
+	archive             auditArchive
 	authenticationRepos authentication.Repositories
 	authorizationRepos  authorization.Repositories
 	provider            sdkauth.Provider
+}
+
+// auditArchive is the sink the maintenance pass archives each security-event
+// chunk to before purging it, and the label every archived row carries. A nil
+// sink purges unarchived (development only).
+type auditArchive struct {
+	sink     maintenance.ArchiveSink
+	location string
 }
 
 func main() {
@@ -105,8 +133,9 @@ func main() {
 }
 
 // run composes the host in the order production checks it: the keys, the
-// public origin, the database and its rate-limit table, the stores, the
-// provider, then the pockets.
+// public origin, the archive, the database and its rate-limit table, the
+// stores, the provider, then the pockets; it then serves, running retention
+// beside the server until the server has drained.
 func run(ctx context.Context, log *slog.Logger, mode environment.Mode) error {
 	keys, err := loadKeys(mode, log)
 	if err != nil {
@@ -116,6 +145,11 @@ func run(ctx context.Context, log *slog.Logger, mode environment.Mode) error {
 	if err != nil {
 		return err
 	}
+	archive, closeArchive, err := openArchive(mode)
+	if err != nil {
+		return err
+	}
+	defer closeArchive()
 
 	var dbCfg pgxdb.Config
 	if err := environment.ParseEnvTags("", &dbCfg); err != nil {
@@ -153,13 +187,14 @@ func run(ctx context.Context, log *slog.Logger, mode environment.Mode) error {
 	if err != nil {
 		return err
 	}
-	counters, err := mount(router, composition{
+	hosted, err := mount(router, composition{
 		mode:                mode,
 		log:                 log,
 		origin:              srv.Origin(),
 		keys:                keys,
 		sessionCookie:       authenticationhttp.CookieConfig{Secure: true},
 		limiter:             limiter,
+		archive:             archive,
 		authenticationRepos: authenticationRepos,
 		authorizationRepos:  authorizationRepos,
 		provider:            provider,
@@ -167,8 +202,42 @@ func run(ctx context.Context, log *slog.Logger, mode environment.Mode) error {
 	if err != nil {
 		return err
 	}
-	router.Handle(http.MethodGet, "/healthz", healthzHandler(db, counters))
-	return web.Run(ctx, router, srv, log)
+	router.Handle(http.MethodGet, "/healthz", healthzHandler(db, hosted))
+
+	// The runner gets its own context so it stops after the server drains and
+	// before the deferred db.Close; MaintenanceRunnerAcknowledged asserts it.
+	retentionCtx, stopRetention := context.WithCancel(context.Background())
+	retentionDone := make(chan struct{})
+	go func() {
+		defer close(retentionDone)
+		hosted.retention.Run(retentionCtx)
+	}()
+	err = web.Run(ctx, router, srv, log)
+	stopRetention()
+	<-retentionDone
+	return err
+}
+
+// openArchive opens the disk archive sink at AUDIT_ARCHIVE_DIR, labeled
+// disk:<dir>. Production refuses it unset; development without it purges the
+// rail unarchived, which the registration line reports as archive_sink=none.
+// The returned close releases the sink.
+func openArchive(mode environment.Mode) (auditArchive, func(), error) {
+	var cfg archiveConfig
+	if err := environment.ParseEnvTags("", &cfg); err != nil {
+		return auditArchive{}, nil, err
+	}
+	if cfg.Dir == "" {
+		if mode.IsProduction() {
+			return auditArchive{}, nil, errArchiveDirRequired
+		}
+		return auditArchive{}, func() {}, nil
+	}
+	disk, err := filestorage.NewDisk(cfg.Dir)
+	if err != nil {
+		return auditArchive{}, nil, fmt.Errorf("open AUDIT_ARCHIVE_DIR: %w", err)
+	}
+	return auditArchive{sink: disk, location: "disk:" + cfg.Dir}, func() { _ = disk.Close() }, nil
 }
 
 // loadKeys decodes the two keys this host needs: the access-JWT signing key
@@ -246,23 +315,36 @@ func newProvider(ctx context.Context, router *web.WebHandler, origin string, mod
 	return devissuer.NewProvider(dev.Issuer(), verifier, sdkauth.Profile{}), nil
 }
 
+// mounted is what mount hands back to run: the sources of the /healthz
+// detail and the retention runner run starts.
+type mounted struct {
+	counters  auditCounters
+	retention *runner.Runner
+}
+
 // mount builds both pockets from c and registers their routes on router.
 // Authentication admits only the provider's tokens: password flows and
-// delivery are off. Authorization records every change and serves role
-// administration behind authenticate ∘ browser-safe mutation ∘ the global
-// admin role; its denials and refused role writes reach the security-event
-// rail through the host's decision bridge. It returns the audit-loss counters
-// /healthz reports. Authentication's client-info stamp covers every route on
-// router, inside the TrustProxies Use newRouter installed.
-func mount(router *web.WebHandler, c composition) (auditCounters, error) {
+// delivery are off; user administration, erase included, is the global admin
+// role's; retention runs through the host's runner. Authorization records
+// every change and serves role administration behind authenticate ∘
+// browser-safe mutation ∘ the global admin role; its denials and refused role
+// writes reach the security-event rail through the host's decision bridge. It
+// returns the audit-loss counters and the retention runner. Authentication's
+// client-info stamp covers every route on router, inside the TrustProxies Use
+// newRouter installed.
+func mount(router *web.WebHandler, c composition) (mounted, error) {
 	signer, err := golangjwt.New(string(c.keys.JWTSecret))
 	if err != nil {
-		return auditCounters{}, fmt.Errorf("build jwt signer: %w", err)
+		return mounted{}, fmt.Errorf("build jwt signer: %w", err)
 	}
 	keyer, err := protection.NewHMACIdentifierKeyer(c.keys.IdentifierKey)
 	if err != nil {
-		return auditCounters{}, fmt.Errorf("build identifier keyer: %w", err)
+		return mounted{}, fmt.Errorf("build identifier keyer: %w", err)
 	}
+	// The user-administration check decides through the authorization pocket,
+	// which is built below over the bridge this pocket's recorder feeds; it is
+	// bound before any route is served.
+	admins := &userAdmins{}
 	authenticationComponents, err := authentication.New(c.authenticationRepos, signer, c.mode, delivery.ModeOff,
 		authentication.WithPassword(authentication.PasswordConfig{PasswordFlowsDisabled: true}),
 		authentication.WithIdentity(authentication.IdentityConfig{IdentifierKeyer: keyer}),
@@ -274,16 +356,21 @@ func mount(router *web.WebHandler, c composition) (auditCounters, error) {
 			ProvisionOnFirstVerification: true,
 			RequireVerifiedEmail:         true,
 		}}}),
+		authentication.WithAdministration(authentication.AdministrationConfig{UserAdminCheck: admins.check, UserErasureRoute: true}),
+		authentication.WithMaintenance(authentication.MaintenanceConfig{
+			Config:                        maintenance.Config{ArchiveSink: c.archive.sink, ArchiveLocation: c.archive.location},
+			MaintenanceRunnerAcknowledged: true,
+		}),
 		authentication.WithAuditWriteObserver((&auditWriteLog{log: c.log, now: time.Now}).observe),
 		authentication.WithLogger(c.log),
 	)
 	if err != nil {
-		return auditCounters{}, err
+		return mounted{}, err
 	}
 	router.Use(authenticationComponents.HTTP.ClientInfoMiddleware())
 	m := pockets.Mount{Router: router, Logger: c.log}
 	if err := authenticationComponents.HTTP.Register(m); err != nil {
-		return auditCounters{}, err
+		return mounted{}, err
 	}
 
 	// The bridge records through the authentication pocket's one recorder, so a
@@ -297,8 +384,9 @@ func mount(router *web.WebHandler, c composition) (auditCounters, error) {
 		authorization.WithLogger(c.log),
 	)
 	if err != nil {
-		return auditCounters{}, err
+		return mounted{}, err
 	}
+	admins.decisions = authorizationComponents.Decisions
 	// The role routes' gate ends in this pocket's own guard, so the adapter
 	// serving them is built once the pocket exists.
 	authenticate := authenticationComponents.HTTP.RequirePrincipal(
@@ -315,12 +403,16 @@ func mount(router *web.WebHandler, c composition) (auditCounters, error) {
 		authorizationhttp.WithLogger(c.log),
 	)
 	if err != nil {
-		return auditCounters{}, err
+		return mounted{}, err
 	}
 	if err := authorizationComponents.Register(m); err != nil {
-		return auditCounters{}, err
+		return mounted{}, err
 	}
-	return auditCounters{authentication: authenticationComponents, bridge: bridge}, nil
+	retention, err := runner.New(authenticationComponents.Maintenance, authorizationComponents.Mutations, operationExpiryInterval, c.log)
+	if err != nil {
+		return mounted{}, err
+	}
+	return mounted{counters: auditCounters{authentication: authenticationComponents, bridge: bridge}, retention: retention}, nil
 }
 
 // accessModel is the host's permission model: a project is managed by its
@@ -347,6 +439,24 @@ func accessModel() decisions.Model {
 // every role in every scope. The store's integrity policy still keeps one owner
 // on every project.
 func adminWritesAnyRole(context.Context, authorizationhttp.RoleWriteRequest) error { return nil }
+
+// userAdmins admits the global admin role to every user-administration
+// action, the irreversible erase included. decisions is set once the
+// authorization pocket exists, before any route is served.
+type userAdmins struct {
+	decisions *decisions.Service
+}
+
+func (u *userAdmins) check(ctx context.Context, req authenticationhttp.UserAdminCheckRequest) error {
+	result, err := u.decisions.EvaluateResolved(ctx, authorizationmodel.PrincipalFrom(req.Principal), decisions.Role(adminRole), nil)
+	if err != nil {
+		return err
+	}
+	if !result.Allowed {
+		return fmt.Errorf("user administration requires the global %s role: %w", adminRole, sdk.ErrForbidden)
+	}
+	return nil
+}
 
 // auditWriteLog is the audit-write observer, throttled so a failing audit
 // store cannot flood the log: the first lost security-event row after a quiet
@@ -401,15 +511,27 @@ func (a auditCounters) detail() map[string]uint64 {
 	}
 }
 
+// detail is the /healthz detail object: the audit-loss counters and the last
+// maintenance pass — its time, its failed-step count and a stable error kind,
+// never error text.
+func (h mounted) detail() map[string]any {
+	detail := h.retention.Health().Detail()
+	for name, value := range h.counters.detail() {
+		detail[name] = value
+	}
+	return detail
+}
+
 // healthzHandler is the readiness probe: 200 while the database answers, 503
-// otherwise, with the audit-loss counters as detail. It is unauthenticated by
-// design — a probe cannot sign in.
-func healthzHandler(db *pgxdb.DB, counters auditCounters) http.HandlerFunc {
+// otherwise, with the audit-loss counters and the last maintenance pass as
+// detail. A maintenance failure never changes the status. It is
+// unauthenticated by design — a probe cannot sign in.
+func healthzHandler(db *pgxdb.DB, hosted mounted) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if err := pgxdb.StatusCheck(r.Context(), db); err != nil {
-			_ = web.RespondJSON(w, http.StatusServiceUnavailable, map[string]any{"status": "unavailable", "detail": counters.detail()})
+			_ = web.RespondJSON(w, http.StatusServiceUnavailable, map[string]any{"status": "unavailable", "detail": hosted.detail()})
 			return
 		}
-		_ = web.RespondJSON(w, http.StatusOK, map[string]any{"status": "ok", "detail": counters.detail()})
+		_ = web.RespondJSON(w, http.StatusOK, map[string]any{"status": "ok", "detail": hosted.detail()})
 	}
 }

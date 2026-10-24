@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/gopernicus/gopernicus/examples/auth-cms/pockets/authentication/outbound/authjobs"
+	"github.com/gopernicus/gopernicus/examples/auth-cms/pockets/retention/inbound/runner"
 	delivery "github.com/gopernicus/gopernicus/pockets/authentication/logic/delivery"
 	"github.com/gopernicus/gopernicus/pockets/cms/domain/messaging"
 	"github.com/gopernicus/gopernicus/sdk/pkg/environment"
@@ -36,15 +37,12 @@ const (
 	defaultInquiryPurgeBatch     = 500
 )
 
-// Authorization operation-expiry defaults: a pass runs hourly and removes at most 500
-// operation records past the authorization pocket's retention (180 days by default).
-const (
-	defaultOperationExpiryInterval = time.Hour
-	defaultOperationExpiryBatch    = 500
-)
+// Authorization operation expiry: each retention-runner tick removes at most 500 operation
+// records past the authorization pocket's retention (180 days by default).
+const defaultOperationExpiryBatch = 500
 
 // defaultMaintenanceInterval is how often the retention runner ticks the
-// authentication maintenance pass (MAINTENANCE_INTERVAL).
+// authentication maintenance pass and the operation expiry (MAINTENANCE_INTERVAL).
 const defaultMaintenanceInterval = time.Hour
 
 // deliveryPurgeConfig is the host-owned schedule/retention/batch for the terminal-purge loop.
@@ -168,36 +166,22 @@ func newInquiryPurge(eraser messaging.InquiryEraser, cfg inquiryPurgeConfig, now
 	}
 }
 
-// runInquiryPurgeLoop drives the inquiry purge on a ticker until ctx is canceled, logging one
-// step=inquiries count=<n> line per pass (zero included, so an operator sees the step ran). A
-// pass error is logged and the loop continues. The first pass runs one interval after start.
-func runInquiryPurgeLoop(ctx context.Context, interval time.Duration, purge func(context.Context) (int, error), log *slog.Logger) {
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			n, err := purge(ctx)
-			if err != nil {
-				log.ErrorContext(ctx, "retention step failed; continuing", "step", "inquiries", "error", err)
-				continue
-			}
-			log.InfoContext(ctx, "retention step", "step", "inquiries", "count", n)
-		}
-	}
+// newInquiryRunner returns the retention runner whose one step, inquiries, is purge, ticking at
+// start and every cfg.Interval: one step=inquiries count=<n> line per pass (zero included, so an
+// operator sees the step ran; a failure by its kind, and the runner continues).
+func newInquiryRunner(cfg inquiryPurgeConfig, purge func(context.Context) (int, error), log *slog.Logger) (*runner.Runner, error) {
+	return runner.New(cfg.Interval, log, runner.Step{Name: "inquiries", Run: purge})
 }
 
-// startInquiryPurge runs runInquiryPurgeLoop on its own Background-derived context — like the
+// startInquiryPurge runs the inquiry runner on its own Background-derived context — like the
 // delivery purge, it must outlive the parent ctx until HTTP has drained — and returns the stop
 // the shutdown sequence calls: cancel, then wait up to 5s for the in-flight pass.
-func startInquiryPurge(cfg inquiryPurgeConfig, purge func(context.Context) (int, error), log *slog.Logger) (stop func()) {
+func startInquiryPurge(cfg inquiryPurgeConfig, inquiries *runner.Runner, log *slog.Logger) (stop func()) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		runInquiryPurgeLoop(ctx, cfg.Interval, purge, log)
+		inquiries.Run(ctx)
 	}()
 	log.InfoContext(ctx, "inquiry purge scheduler ENABLED", "interval", cfg.Interval, "retention", cfg.Retention, "batch", cfg.Batch)
 	return func() {
@@ -209,27 +193,5 @@ func startInquiryPurge(cfg inquiryPurgeConfig, purge func(context.Context) (int,
 			log.WarnContext(context.Background(), "inquiry purge scheduler did not stop within 5s")
 		}
 		log.InfoContext(context.Background(), "inquiry purge scheduler stopped")
-	}
-}
-
-// runOperationExpiryLoop calls expire (the authorization pocket's
-// Mutations.ExpireOperations) for at most batch operation records on every tick until ctx
-// is canceled. A failed pass is logged and the loop continues; it returns promptly on
-// cancellation. The first pass runs one interval after start.
-func runOperationExpiryLoop(ctx context.Context, interval time.Duration, expire func(context.Context, int) (int, error), batch int, log *slog.Logger) {
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			n, err := expire(ctx, batch)
-			if err != nil {
-				log.ErrorContext(ctx, "retention step failed; continuing", "step", "operations", "error", err)
-				continue
-			}
-			log.InfoContext(ctx, "retention step", "step", "operations", "count", n)
-		}
 	}
 }

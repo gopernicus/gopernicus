@@ -1,9 +1,10 @@
 // Package runner is this host's retention driver. A ticker that invokes pocket
 // services is a driving adapter — time is the caller — so it is the retention
-// host pocket's inbound. Each tick runs every configured step in order: the
-// authentication maintenance pass today, beside the delivery terminal purge cmd
-// already schedules. A failing or panicking step is logged and the next step
-// and the next tick still run.
+// host pocket's inbound. Each tick runs every configured step in order: cmd
+// runs one Runner with the authentication maintenance pass and the
+// authorization operation expiry, and one with the cms inquiry purge on its
+// own interval, beside the delivery terminal purge cmd schedules. A failing or
+// panicking step is logged and the next step and the next tick still run.
 package runner
 
 import (
@@ -25,6 +26,12 @@ var errStepPanicked = errors.New("retention step panicked")
 // Components.Maintenance.
 type Passer interface {
 	Pass(ctx context.Context) (maintenance.Report, error)
+}
+
+// OperationExpirer expires authorization operation records past their
+// retention — authorization's Components.Mutations.
+type OperationExpirer interface {
+	ExpireOperations(ctx context.Context, limit int) (int, error)
 }
 
 // Step is one retention task a tick runs: its name in the log line and the call
@@ -52,6 +59,14 @@ func MaintenanceStep(p Passer) Step {
 			total += st.Count
 		}
 		return total, err
+	}}
+}
+
+// OperationsStep expires at most batch operation records per tick as the step
+// named operations.
+func OperationsStep(e OperationExpirer, batch int) Step {
+	return Step{Name: "operations", Run: func(ctx context.Context) (int, error) {
+		return e.ExpireOperations(ctx, batch)
 	}}
 }
 

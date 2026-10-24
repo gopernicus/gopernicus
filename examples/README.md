@@ -713,13 +713,13 @@ adopts them by bumping its pin — `go get -tool github.com/gopernicus/gopernicu
 
 | host | role |
 |---|---|
-| `examples/cms` | conforming worked example — the Turso host of `pockets/cms` |
-| `examples/minimal` | conforming worked example — the zero-infra host, no driver in its module graph |
-| `examples/jobs-minimal` | conforming worked example — the jobs pocket with host-owned handlers; `cmd/` only, conforming as it stands |
-| `examples/auth-cms` | conforming to the H floor since the host-contract-reconciliation package moves (issue #90); still the **authentication conformance harness**, not a layout reference — its `cmd/` carries provider behavior the H10 reviewer clause covers |
+| `examples/cms` | conforming worked example — the Turso host of `pockets/cms`; its store fills `InquiryMaintenance` |
+| `examples/minimal` | conforming worked example — the zero-infra host, no driver in its module graph; its memstore fills `InquiryMaintenance` |
+| `examples/jobs-minimal` | conforming worked example — the jobs pocket with host-owned handlers and the jobs-schedule form of retention (a `retention` kind over `PurgeTerminalJobs`); `cmd/` only, conforming as it stands |
+| `examples/auth-cms` | conforming to the H floor since the host-contract-reconciliation package moves (issue #90); still the **authentication conformance harness**, not a layout reference — its `cmd/` carries provider behavior the H10 reviewer clause covers; its retention host pocket's runner ticks the maintenance pass, the operation expiry and the inquiry purge |
 | `examples/goth-showcase` | conforming to the H floor since its showcase package moved to the host's `ui/showcase`; the `ui/goth` kit showcase, not a layout reference |
 | `examples/external-identity` | conforming worked example — the external-only identity host: the authentication pocket's external engine over an in-memory host-pocket outbound, a host `integrations/` dev issuer, no driver, signer, sessions or mail |
-| `examples/production-baseline` | conforming worked example — the auditable reference host: the production posture of §3b with zero acknowledgements; external OIDC identity, role administration and both audit rails on the pgx stores, triggers applied, two-role posture documented; `cmd/`, a host `integrations/` dev issuer, a host pocket bridging authorization denials to the audit rail, `workshop/migrations` |
+| `examples/production-baseline` | conforming worked example — the auditable reference host: the production posture of §3b with zero waivers and one acknowledgement (`MaintenanceRunnerAcknowledged`: it runs retention in process); external OIDC identity, role administration, user erasure and both audit rails on the pgx stores, triggers and the rail's purge function applied, two-role posture documented; `cmd/`, a host `integrations/` dev issuer, a host pocket bridging authorization denials to the audit rail, a host pocket running retention with a disk archive and its `/healthz` detail, `workshop/migrations` |
 
 `examples/minimal` also demonstrates application-data caching at
 `GET /catalog.json`: a host service caches a public product projection from CMS

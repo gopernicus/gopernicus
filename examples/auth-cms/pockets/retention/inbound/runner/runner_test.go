@@ -109,6 +109,35 @@ func TestRunTicksAtStartAndEveryInterval(t *testing.T) {
 	}
 }
 
+type fakeExpirer struct {
+	mu     sync.Mutex
+	limits []int
+}
+
+func (e *fakeExpirer) ExpireOperations(_ context.Context, limit int) (int, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.limits = append(e.limits, limit)
+	return 1, nil
+}
+
+func TestOperationsStepAsksForTheBatch(t *testing.T) {
+	log, buf := newLog()
+	e := &fakeExpirer{}
+	r, err := New(time.Hour, log, OperationsStep(e, 7))
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.Tick(context.Background())
+	r.Tick(context.Background())
+	if len(e.limits) != 2 || e.limits[0] != 7 || e.limits[1] != 7 {
+		t.Fatalf("limits = %v, want [7 7]", e.limits)
+	}
+	if !strings.Contains(buf.String(), `msg="retention step" step=operations count=1`) {
+		t.Fatalf("no operations step line:\n%s", buf.String())
+	}
+}
+
 func TestNewRefusesInvalidInput(t *testing.T) {
 	log, _ := newLog()
 	for name, build := range map[string]func() (*Runner, error){
