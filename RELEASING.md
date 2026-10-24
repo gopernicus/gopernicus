@@ -1,5 +1,272 @@
 # Releasing gopernicus modules
 
+## MFA posture (SOC 2 slice S4a — published 2026-10-24)
+
+Two annotated tags (not signed), each cut at its PR's squash-merge commit on `main`, pushed,
+THEN polled on the proxy, and cold-verified from a scratch consumer (`GOWORK=off`, an empty
+module cache, `proxy.golang.org`, `sum.golang.org`, `go mod verify`, `go build <module>/...`).
+Both resolved on the first poll. Design and rulings:
+[plans/s4a-mfa-posture.md](plans/s4a-mfa-posture.md) (rev 2, ratified 2026-10-24; its
+"Build-time deviations" section records the lead rulings taken during the build). Under the
+owner's 2026-10-23 process ruling this section is the whole record: there is no handoff file and
+no manifest. The handoff notes below say what a host does on upgrade, and hosts adopt them once,
+at the roadmap's end. The operator surface is the docs site: *Production posture* ("Added by
+S4a"), the authentication page's *Assurance and MFA*, and the sdk authentication page's *MFA*.
+The pocket README's "Assurance model" is the reference.
+
+| Step | Tag | Commit | PR | Cold verification |
+|---|---|---|---|---|
+| 1 | `sdk/v0.19.0` | `544bc781` | #188 (PR-1) | OK, poll 1 |
+| 2 | `pockets/authentication/v0.25.0` | `467b834b` | #189 (PR-2; cut after the authentication store legs and the three IdP-related examples on merged `main`) | OK, poll 1; also built the MVS set (below) |
+
+Order: 1, then 2. #189 moved the pocket's sdk pin from v0.17.0 to v0.19.0 by explicit `GOWORK=off
+go get`, so a host that upgrades the pocket gets the strict amr rule by MVS. The repin is
+semantic: the pocket references no new sdk symbol. Both modules ship MINOR under the v0
+convention. The sdk tag message names the amr rule change (row 1). The authentication tag
+message names the assurance read (row 3) and the single-factor posture on both constructors
+(rows 10–12).
+
+**Step 2's MVS set.** One scratch consumer resolved authentication v0.25.0 beside `stores/pgx`
+v0.11.0 and `stores/turso` v0.10.0. MVS selected sdk v0.19.0, which the pocket requires, `go mod
+verify` passed and `go build` succeeded. The released stores need no retag, because no store code
+changed.
+
+**Not tagged.** Every store module (no store code; MVS lifts their pins inside a host),
+`pockets/authentication/views/goth`, `ui/goth`, `pockets`, `integrations/cryptids/go-oidc`,
+`integrations/authentication/firebase` and `integrations/authentication/auth0` (no code: Firebase
+keeps its flag, and Auth0 emits `["mfa"]` under the defaults), and `workshop/gopernicus` (R-2a:
+no new acknowledgement, and P5 matches `SingleFactorAcknowledged` by name). No migration:
+`mfa_required_denied` is a string with no CHECK. Nothing retracts.
+
+**Upgrade notes.** Thirteen rows. None is a compile-time break. Three are production boot failures
+(10–12), two change a decision without a compile error (1 and 3), two are opt-in (7 and 8), and
+the rest are additive or informational. The "Read first" box, the table and the paragraph under
+it are the plan's, verbatim.
+
+> **Read first — by host shape.** Development logs one WARN naming `SingleFactorAcknowledged` and its causes for every
+> shape production would refuse: that WARN is the pre-deploy signal.
+> - **IdP-only via `New`** (`WithExternal(`, native login off) → rows 1 and 10: declare `WithMFA(` or acknowledge.
+> - **Native password with the acknowledgement** → none. **Native OAuth** (`WithOAuth(`) without it → row 11.
+> - **Direct `NewExternalAuthenticator`** → rows 1 and 12. **A host-implemented `CredentialService`** → row 3.
+>
+> Greps: `grep -rnE 'RequireMFA\(|MFAMethods|NewOIDC\(' --include='*.go'` (row 1); `grep -rn 'WithOAuth('
+> --include='*.go'` (row 11); `grep -rnE 'WithExternal\(|NewExternalAuthenticator\(|WithMFA\(|SingleFactorAcknowledged'
+> --include='*.go'` (rows 10, 12).
+
+| # | Flip | What the host sees | Hatch | Module@version |
+|---|---|---|---|---|
+| 1 | default amr rule strict (R-1) | one-factor amr (`["otp"]`, `["sms"]`, `["hwk"]`, `["swk"]`, `["pop"]`) leaves `MFA` false: `RequireMFA` 401 + challenge; no compile error. Auth0 (`["mfa"]`) and Firebase (flag) hosts are unaffected | `MFAMethods: []string{"mfa","otp","hwk","sms","swk","pop"}` (any-of: the v0.18.0 default exactly) | sdk@v0.19.0 |
+| 2 | `Credential.Assurance`; `session.AssuranceLevel.AtLeast` | additive: external AAL1/AAL2; access token and API key `unknown` | none | authentication@v0.25.0 |
+| 3 | `RequireMFA()` reads `Assurance` (the access-token panic stays) | a host's own `CredentialService` that never stamps `Assurance` gets its external MFA tokens denied; no compile error | stamp `AssuranceAAL2` when `Identity.MFA`, else `AssuranceAAL1` | authentication@v0.25.0 |
+| 4 | `mfa_required_denied` rows (budgeted); `external_login` Details `assurance` | new audit rows; additive row content | none | authentication@v0.25.0 |
+| 5 | `ExternalProvider.RequireMFA` | additive; a below-AAL2 token gets 401 + challenge on every route and a row (gate `provider`) | leave false | authentication@v0.25.0 |
+| 6 | `WithMFA(MFAConfig{Required})`, zero = none | additive; an unknown value → `sdk.ErrInvalidInput` | none | authentication@v0.25.0 |
+| 7 | opt-in `Required: MFARequiredAdmins` | `/auth/admin/users*` answers 401 + challenge to an ADMITTED principal below AAL2 (every native session in S4a); API keys pass; non-admins keep 403; no `UserAdminCheck` → `ErrMFAUnsatisfiable` | stay none until S4b on a native-admin host | authentication@v0.25.0 |
+| 8 | opt-in `Required: MFARequiredAll` | every provider gets `RequireMFA` (cloned); native login or no `External` → `ErrMFAUnsatisfiable` in every mode | native login off, or `admins` | authentication@v0.25.0 |
+| 9 | `ErrMFARequired`, `ErrMFAUnsatisfiable` new; `ErrSingleFactorUnacknowledged` re-exported from logic (same `errors.Is` target); `posture_waiver` gains `causes` | new `errors.Is` targets; log content | none | authentication@v0.25.0 |
+| 10 | production `New`: `External` + `Required` none is cause `external_no_mfa` (R-2a) | BOOT FAILURE `ErrSingleFactorUnacknowledged` naming the cause | `WithMFA(…)` or `SingleFactorAcknowledged: true` | authentication@v0.25.0 |
+| 11 | production `New`: OAuth `Providers` are cause `native_oauth` (R-2b) | BOOT FAILURE without the acknowledgement | `SingleFactorAcknowledged: true` | authentication@v0.25.0 |
+| 12 | production `NewExternalAuthenticator` without `RequireMFA` on every provider | BOOT FAILURE `ErrSingleFactorUnacknowledged` | `RequireMFA` on each provider, or `ExternalConfig.SingleFactorAcknowledged: true` | authentication@v0.25.0 |
+| 13 | examples wired (production-baseline admins + role routes; external-identity provider floor) | example behaviour; README walks updated | — | examples (untagged) |
+
+There are no compile-time breaks. Rows 10–12 fail boot; rows 1 and 3 change decisions silently; rows 7–8 are opt-in.
+Both modules ship MINOR under the v0 convention; the tag messages name rows 1, 3 and 10–12.
+
+Build-time deviations a host can see, folded here (the table stays verbatim):
+- **Row 1.** Matching stays case-sensitive, so `MFA` and `PWD` are unknown values. An empty
+  non-nil `MFAMethods` is the strict rule, the same as nil. No sdk symbol was added or removed.
+- **Row 4.** `mfa_required_denied` Details carry `gate` (`route`, `admin` or `provider`),
+  `credential`, `provider` (external tokens), the presented `assurance` and `required`
+  (`aal2`). They never carry an amr value, a claim or the token. `UserID` is empty for gate
+  `provider`, because that denial precedes subject resolution.
+- **Row 10.** `external_no_mfa` counts per provider: any `WithExternal` provider without
+  `RequireMFA` while `Required` is none. A root host whose every provider sets `RequireMFA` boots
+  without the acknowledgement, which matches the standalone path.
+- **Posture order.** The MFA validation runs before the logic engine is built. A production host
+  with a development-only external provider and no MFA posture therefore reports the
+  single-factor refusal first.
+- **The HTTP constructor.** `authenticationhttp.New` with `WithAdministrationMFA()` but without
+  `WithUserAdminCheck` is `sdk.ErrInvalidInput`. The root `New` returns `ErrMFAUnsatisfiable`
+  before reaching it.
+- **Log rendering.** slog quotes a multi-cause value
+  (`causes="[native_password external_no_mfa]"`), and an empty user id renders as `user_id=""`.
+- **Exported symbols the table does not name.** In logic (`authlogic`): `ErrMFARequired` (wraps
+  `sdk.ErrUnauthorized`, re-exported at the root), `MFAGate` with `MFAGateRoute`,
+  `MFAGateAdmin` and `MFAGateProvider`, `MFADenial`, `(*Service).RecordMFADenied` and
+  `(*ExternalAuthenticator).RecordMFADenied`. At the root: `MFARequirement` with its three
+  constants. In `authenticationhttp`: `MFADenialRecorder` and `WithAdministrationMFA()`.
+- **The tag messages** name the rows' changes in words, not by row number.
+
+**Handoff notes — what a host does on upgrade, by host shape and module** (applied at the
+roadmap's end).
+- **Every host, first.** Run the three "Read first" greps. Then boot once in development and look
+  for the WARN naming `SingleFactorAcknowledged` and its `causes`. Every shape that production
+  would refuse logs it, and none of rows 10–12 gives a compile signal.
+- **`sdk` v0.19.0 (row 1).** `Identity.MFA` now has one documented meaning on the port: the
+  provider asserted at least two factor categories, or an explicit MFA claim or flag. A
+  one-factor sign-in leaves it false. `sdkauth.NewOIDC`'s default amr rule is strict over the IANA
+  amr registry, sorted into factor categories. `mfa` alone counts, or values from two of
+  knowledge (`pwd` `pin` `kba`), possession (`otp` `sms` `tel` `hwk` `swk` `sc` `pop`) and
+  inherence (`fpt` `face` `iris` `retina` `vbm`). Any other value is no factor. So `["otp"]`,
+  `["sms"]`, `["hwk"]`, `["swk"]` and `["pop"]` no longer set `MFA`, and `RequireMFA()` answers
+  them 401 with the challenge. The hatch is per provider: `ClaimMapping.MFAMethods:
+  []string{"mfa", "otp", "hwk", "sms", "swk", "pop"}` restores the v0.18.0 any-of default
+  exactly. Set it only for an issuer that emits those values after a second factor. An IdP
+  passkey sign-in that emits only `hwk` or `swk` reads as one factor; list it only if the IdP
+  enforces user verification. A host's own `sdkauth.Provider` must set `MFA` with the same
+  meaning. Auth0 (`["mfa"]`) and Firebase (`firebase.sign_in_second_factor`) hosts are
+  unaffected.
+- **`pockets/authentication` v0.25.0** (requires sdk v0.19.0; the released stores resolve with
+  it unchanged). By host shape:
+  - **IdP-only through `New`** (`WithExternal`, native login off; rows 1 and 10). Production now
+    refuses a provider without `RequireMFA` while `MFAConfig.Required` is none, with
+    `ErrSingleFactorUnacknowledged` and cause `external_no_mfa`. Choose one fix.
+    `WithMFA(MFAConfig{Required: MFARequiredAdmins})` requires AAL2 on `/auth/admin/users*` for
+    callers the `UserAdminCheck` admits; it needs `AdministrationConfig.UserAdminCheck`
+    (`ErrMFAUnsatisfiable` otherwise) and gates nothing else. `MFARequiredAll` sets `RequireMFA`
+    on a copy of every provider. `RequireMFA: true` can go on each `ExternalProvider` directly.
+    Or `IdentityConfig.SingleFactorAcknowledged: true` accepts AAL1 users, with one
+    `posture_waiver=SingleFactorAcknowledged causes="[external_no_mfa]"` WARN. Every `New` logs
+    `auth: mfa posture mfa_required=<none|admins|all>
+    gates=<none|/auth/admin/users*|external_tokens>`.
+  - **Native password with the acknowledgement.** Nothing changes, but the waiver line now
+    carries `causes` (`native_password`, plus `passwordless`, `native_oauth` or
+    `external_no_mfa` when those are wired).
+  - **Native OAuth (`WithOAuth`) without the acknowledgement (row 11).** Production now fails
+    boot with cause `native_oauth` (R-2b: an OAuth link is AAL1). Set
+    `IdentityConfig.SingleFactorAcknowledged: true`. There is no other hatch until native second
+    factors ship.
+  - **Direct `NewExternalAuthenticator` (rows 1 and 12).** This constructor ran no posture check
+    before. Production now refuses unless every provider sets `RequireMFA` or the new
+    `ExternalConfig.SingleFactorAcknowledged: true` is set (one waiver WARN); development WARNs
+    once. The error is `ErrSingleFactorUnacknowledged`, now defined in logic and re-exported at
+    the root under the same name, so one `errors.Is` target serves both constructors. The root
+    `New` refuses `ExternalConfig.SingleFactorAcknowledged` with `sdk.ErrInvalidInput` and reads
+    `IdentityConfig.SingleFactorAcknowledged`, so neither field is ever inert.
+  - **A host-implemented `CredentialService` (row 3).** `RequireMFA()` now reads
+    `Credential.Assurance`. Stamp `session.AssuranceAAL2` when `Identity.MFA` is set, else
+    `session.AssuranceAAL1`, on external tokens. Without the stamp, every MFA gate denies them.
+    Implement `authenticationhttp.MFADenialRecorder` (`RecordMFADenied(ctx,
+    authlogic.MFADenial)`) to record its denials; `NewAuthenticator` asserts it once.
+    `CredentialService` itself is unchanged.
+  - **Every host.** `RequireMFA()` still panics at wiring beside a set that admits access tokens,
+    because no access token can reach AAL2 yet (S4b lifts the panic). API keys pass every MFA
+    gate. Native access tokens and API keys carry `AssuranceUnknown`; external tokens are AAL1 or
+    AAL2, never AAL3. `session.AssuranceLevel.AtLeast(min)` is the one comparator. A
+    native-admin host stays at `Required` none until S4b (R-4), because `admins` would answer
+    every native session 401. `admins` does NOT gate role routes, cms admin routes, host admin
+    pages or the machine lifecycle routes (R-5); add `RequireMFA()` to those. Denials answer 401
+    `WWW-Authenticate: Bearer error="insufficient_user_authentication",
+    error_description="multi-factor authentication is required"` (`ErrMFARequired`). An
+    unknown `Required` is `sdk.ErrInvalidInput`. An audit reader keyed on event types sees the new
+    budgeted `mfa_required_denied` type and an `assurance` key in `external_login` Details.
+  - **The re-auth recipe.** On `insufficient_user_authentication`, re-authorize at the IdP with a
+    forced second factor, using the IdP's own step-up parameter or `prompt=login`. A route with
+    `RequireMFA()` beside `Browser()` needs a login path that does this. Otherwise a live IdP
+    session answers AAL1 again and the browser loops. **Self-check:** sign in with a second
+    factor, and the newest `external_login` row's Details must read `"assurance":"aal2"`.
+- **Examples (this PR).** Every example builds, vets and tests at `GOWORK=off` on the S4a tags.
+  Pins moved (explicit `GOWORK=off go get`, then `go mod tidy`, which only rewrote `go.sum`):
+  `auth-cms` sdk v0.18.0→v0.19.0 and authentication v0.24.0→v0.25.0; `cms` sdk
+  v0.18.0→v0.19.0; `external-identity` sdk v0.18.0→v0.19.0 and authentication
+  v0.24.0→v0.25.0; `goth-showcase` sdk v0.18.0→v0.19.0; `jobs-minimal` sdk v0.18.0→v0.19.0;
+  `minimal` sdk v0.18.0→v0.19.0; `production-baseline` sdk v0.18.0→v0.19.0 and authentication
+  v0.24.0→v0.25.0. No non-S4a pin moved. The code-side example changes landed with #189. In
+  production-baseline, `WithMFA(MFAConfig{Required: MFARequiredAdmins})` and `RequireMFA()` on
+  the role routes, with the README walk minting `["pwd","mfa"]` and adding a single-factor 401
+  step. In external-identity, `RequireMFA: true` on both `dev` providers and a no-amr 401 step.
+  auth-cms is unchanged, because its demo tokens already send `["pwd","mfa"]`.
+
+**Verification record.**
+- CI `check` and `vuln` (push and pull_request events) and the CodeQL analyses passed on the
+  final run of #188 and #189. `make guard` runs thirty-six guards; S4a adds none.
+- #188 (sdk): `TestOIDCMFARule` (36 cases: the plan's rows, each old default value alone,
+  same-category pairs, unknown and mixed-case values, the flag path and the exact hatch) and
+  `TestOIDCMFARuleCoversRegistry` (every registry value alone and every pair). Weakening the rule
+  to one factor fails 247 assertions. A scratch program at `GOWORK=off` ran a real `gooidc`
+  verifier through `NewOIDC`. `["pwd"]`, `["otp"]`, `["hwk"]` and `["user","hwk"]` gave false.
+  `["pwd","otp"]`, `["mfa"]`, `["face","hwk"]`, `["hwk","pin"]` and `["pop","fpt"]` gave true.
+  With the six-value hatch, `["otp"]` gave true and `["pwd"]` false.
+- Live legs on merged `main` @ `467b834b` before step 2, counted with `go test -json` (pass /
+  fail / skip). Authentication `stores/pgx` gave 432 / 0 / 1 bare and 432 / 0 / 1
+  schema-qualified (the known collation skip), and `stores/turso` gave 737 / 0 / 0. The pocket
+  core gave 2838 / 0 / 3. production-baseline, external-identity and auth-cms built, vetted and
+  tested green.
+- From the #189 record (real binaries, development mode). §2 production-baseline: the boot line
+  read `mfa_required=admins gates=/auth/admin/users*`. `GET /auth/admin/users` answered 200 to
+  `["pwd","mfa"]`, 401 with the challenge to `["pwd"]` or `["otp"]`, and 403 with no MFA row to a
+  non-admin MFA token. `security_events` held `mfa_required_denied` (gate `admin`) and
+  `external_login` with `aal2`, and the README walk's S2 `authorization_denied` step still landed.
+  §3 external-identity: `["mfa"]` tokens got 200 on the header and cookie routes. A no-amr token
+  got 401 with `memstore: security event type=mfa_required_denied status=blocked user_id=""` and
+  no provisioning line. §4 posture program: `all` beside password flows and `admins` without a
+  check both gave `ErrMFAUnsatisfiable`. Production external-only with `Required` none gave
+  `ErrSingleFactorUnacknowledged … causes [external_no_mfa]`, and OAuth providers gave `causes
+  [native_oauth]`. The acknowledged case logged one `posture_waiver` line with the causes. The
+  standalone path refused, booted with `RequireMFA` on every provider, and warned once in
+  development.
+- This PR: every example builds, vets and tests at `GOWORK=off` against the tags. `go version -m`
+  on the production-baseline binary shows sdk v0.19.0 and authentication v0.25.0. `make guard`
+  and `make check` pass on the repinned tree, and `pnpm build` in `workshop/documentation`
+  succeeds.
+- This PR, boot from the tags: `GOWORK=off` binaries of `examples/production-baseline` in
+  development, on a fresh scratch PostgreSQL 17 database, migrated by its own runner. The boot
+  log carries the posture line:
+  `time=2026-10-24T14:20:32.119-07:00 level=INFO msg="auth: mfa posture" mfa_required=admins
+  gates=/auth/admin/users*`. Dev-issuer tokens for `u1` with `["pwd"]` and `["pwd","mfa"]` hit
+  `POST /authorization/roles` (role routes, `RequireMFA()`). `["pwd"]` got `HTTP/1.1 401
+  Unauthorized` with `Www-Authenticate: Bearer error="insufficient_user_authentication",
+  error_description="multi-factor authentication is required"` and
+  `{"message":"authentication required","code":"unauthenticated"}`. `["pwd","mfa"]` got 403
+  `permission_denied` (authenticated; `u1` was not yet an admin). After `cmd/bootstrap` granted
+  `u1` the global admin role, `GET /auth/admin/users` answered `HTTP/1.1 200 OK` to
+  `["pwd","mfa"]`. It answered 401 with the same challenge to `["pwd"]` and to `["otp"]` (the
+  strict rule), and 403 with no MFA row to `u2`, a non-admin, with `["pwd"]` or `["pwd","mfa"]`.
+  `POST /authorization/roles` then answered `["pwd","mfa"]` with `HTTP/1.1 200 OK
+  {"outcome":"applied"}` and `["pwd"]` with 401. `security_events` held four
+  `mfa_required_denied|blocked|{"gate": "admin"|"route", "provider": "idp", "required":
+  "aal2", "assurance": "aal1", "credential": "external_token"}` rows (two per gate) and
+  `external_login` rows reading `"assurance": "aal2"` and `"aal1"`. No row or log line carries a
+  token or an amr value, and the DSN appears zero times in the log.
+
+**Owner rulings.** Tags are annotated, not signed (ruling of 2026-10-22). **R-1:** the default amr
+rule is strict over the IANA registry, sorted into factor categories, and an explicit
+`MFAMethods` is the hatch that restores any-of exactly. **R-2a:** IdP hosts with `Required` none
+in production fall under the widened `SingleFactorAcknowledged`, with cause `external_no_mfa` on
+both constructors and a `causes` attribute; there is no new acknowledgement and no workshop tag.
+**R-2b:** native OAuth counts as single-factor (cause `native_oauth`). **R-3:** `Required: all`
+beside native single-factor login is an `ErrMFAUnsatisfiable` boot refusal in every mode.
+**R-4:** the bundled admin MFA default stays none until S4b. **R-5:** the machine lifecycle
+routes stay outside `admins` until S4b. The three planner placements stand: root `New` refuses
+`External.SingleFactorAcknowledged`, the boot line's `gates=` vocabulary, and
+`ErrSingleFactorUnacknowledged` moving into logic. Every lead ruling taken during the build is in
+the executed plan's "Build-time deviations", and each one a host can see is folded into the
+notes above.
+
+**Known and deferred.**
+- **acr, a follow-up.** `ClaimMapping.ACR`/`MFAACRValues`, `Identity.ACR` and the devissuer
+  field wait until one vendor's MFA acr value is verified against its documentation and an
+  example uses it. `acr_values` in the challenge waits with it.
+- **The IdP table.** The pocket README's Auth0 and Firebase cells cite this repository's code
+  ("checked 2026-10-24"), because the build had no web access. Google, Okta and Entra ID are
+  **unknown**, carry no mapping advice, and point at the self-check. Linking each vendor fact
+  with a checked date is a follow-up.
+- **To S4b.** Stamp `Credential.Assurance` on native access tokens, from a signed `aal` claim at
+  mint or from the live session row. Lift the `RequireMFA()` panic beside access tokens in the
+  same PR. Add `MFAConfig.Methods` and define enrollment grace. Take R-4/R-5 to `admins`,
+  machine lifecycle included. `MinLoginAssurance` and `RecentAuthPolicy.MinAssurance` become
+  meaningful once a native AAL2 method exists. **To S4c:** TOTP, recovery codes and the key
+  ring.
+- **To S4d.** API keys pass every MFA gate, and an AAL1 native session can mint API keys, so a
+  `UserAdminCheck` that admits service accounts allows administration without MFA.
+- **Standalone hosts.** A host calling `NewExternalAuthenticator` directly now gets the posture
+  check (row 12). It is a production boot failure with no compile signal, and the development
+  WARN is the only advance notice.
+- Out of S4a by the plan: passkeys/WebAuthn (S4b), TOTP and recovery codes (S4c), idle timeout,
+  registration mode, revoke-all, API key TTL/disable and the breach checker (S4d), AAL3 from
+  external claims, and per-claim attribution in events. Native OAuth does not reach AAL2,
+  because the OAuth ID token claims carry no amr.
+
 ## Secrets and logging (SOC 2 slice S6 — published 2026-10-24)
 
 Twelve annotated tags (not signed), each cut at its PR's squash-merge commit on `main`, pushed,

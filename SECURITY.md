@@ -20,8 +20,8 @@ each module receives fixes. Latest tags at the time of writing:
 
 | Module | Latest |
 |---|---|
-| `sdk` | v0.18.0 |
-| `pockets/authentication` | v0.24.0 |
+| `sdk` | v0.19.0 |
+| `pockets/authentication` | v0.25.0 |
 | `pockets/authentication/stores/pgx` | v0.11.0 |
 | `pockets/authentication/stores/turso` | v0.10.0 |
 | `pockets/authorization` | v0.30.0 |
