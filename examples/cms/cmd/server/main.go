@@ -78,8 +78,8 @@ func run(ctx context.Context, log *slog.Logger, mode environment.Mode) error {
 	// Database. The Turso datastore connector owns the driver, DSN, and dialect
 	// error mapping; the pocket store adapter owns the CMS schema + repositories.
 	db, err := tursodb.Open(ctx, tursodb.Config{
-		URL:             os.Getenv("TURSO_DATABASE_URL"),
-		AuthToken:       os.Getenv("TURSO_AUTH_TOKEN"),
+		URL:             sdk.Secret(os.Getenv("TURSO_DATABASE_URL")),
+		AuthToken:       sdk.Secret(os.Getenv("TURSO_AUTH_TOKEN")),
 		MaxOpenConns:    4,
 		MaxIdleConns:    4,
 		ConnMaxLifetime: time.Hour,

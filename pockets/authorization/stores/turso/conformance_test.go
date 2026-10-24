@@ -25,6 +25,7 @@ import (
 	"github.com/gopernicus/gopernicus/pockets/authorization"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/mutations"
 	"github.com/gopernicus/gopernicus/pockets/authorization/stores/storetest"
+	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/transaction"
 )
 
@@ -124,7 +125,7 @@ func openAndMigrate(t *testing.T, url, token string) *tursodb.DB {
 	if err := validateDisposableTursoURL(url, os.Getenv(disposableTursoURLEnv)); err != nil {
 		t.Fatal(err)
 	}
-	db, err := tursodb.Open(context.Background(), tursodb.Config{URL: url, AuthToken: token})
+	db, err := tursodb.Open(context.Background(), tursodb.Config{URL: sdk.Secret(url), AuthToken: sdk.Secret(token)})
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}

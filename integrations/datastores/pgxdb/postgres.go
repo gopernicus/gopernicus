@@ -77,8 +77,9 @@ const (
 // seam (pgxpool.ConnConfig.Tracer), so Config forwards it directly rather
 // than inventing an options wrapper for a single value. They hold until
 // sdk/capabilities/tracing lands. Query logging is symmetric with the turso connector: both
-// carry an opt-in LogQueries/Logger with the same dev-only, args-verbatim
-// posture — pgx installs it as a native ConnConfig.Tracer, turso threads it
+// carry an opt-in LogQueries/LogQueryArgs/Logger with the same dev-only posture
+// (argument count and types by default, values only with LogQueryArgs) — pgx
+// installs it as a native ConnConfig.Tracer, turso threads it
 // through its DB/Tx wrapper because database/sql exposes no tracer hook. Tracer
 // has no turso analogue: it composes an external pgx.QueryTracer (e.g.
 // OpenTelemetry) into that native seam, which SQLite's driver does not expose.
@@ -87,14 +88,20 @@ const (
 // timestamptz codecs there on every connection (see the "Time zone" section of
 // the module README). Config exposes no AfterConnect field today; should one be
 // added, it will CHAIN after the connector's registration, never replace it.
+//
+// DSN and Password are sdk.Secret: they render as sdk.Redacted through fmt,
+// slog and encoding/json, so read them with Reveal() and display the target
+// with Redacted(). A DSN composed from a rendered Secret carries sdk.Redacted
+// instead of the password; Open refuses such a DSN or Password with
+// sdk.ErrRedactedSecret before any connection attempt.
 type Config struct {
-	DSN      string `env:"DB_URL"`
-	Host     string `env:"DB_HOST"`
-	Port     string `env:"DB_PORT"`
-	User     string `env:"DB_USER"`
-	Password string `env:"DB_PASSWORD"`
-	Database string `env:"DB_NAME"`
-	SSLMode  string `env:"DB_SSLMODE"`
+	DSN      sdk.Secret `env:"DB_URL"`
+	Host     string     `env:"DB_HOST"`
+	Port     string     `env:"DB_PORT"`
+	User     string     `env:"DB_USER"`
+	Password sdk.Secret `env:"DB_PASSWORD"`
+	Database string     `env:"DB_NAME"`
+	SSLMode  string     `env:"DB_SSLMODE"`
 
 	// Zero pool settings retain the DSN's values or pgx defaults; positive
 	// settings override them. Negative values are invalid.
@@ -119,9 +126,16 @@ type Config struct {
 	StatementTimeout time.Duration `env:"DB_STATEMENT_TIMEOUT"`
 	LockTimeout      time.Duration `env:"DB_LOCK_TIMEOUT"`
 
-	// LogQueries installs a LoggingQueryTracer. It logs SQL args verbatim, so
-	// this is dev-only tooling; a production RuntimeMode refuses it.
+	// LogQueries installs a LoggingQueryTracer, which logs each query's SQL
+	// with its argument count and types, never their values. It is dev-only
+	// tooling; a production RuntimeMode refuses it.
 	LogQueries bool `env:"DB_LOG_QUERIES" default:"false"`
+
+	// LogQueryArgs widens the LogQueries tracer to log bind arguments and
+	// driver error text verbatim; those carry secrets and PII. It is inert
+	// without LogQueries. A development RuntimeMode logs a WARN while it is
+	// set; a production RuntimeMode refuses it even alone.
+	LogQueryArgs bool `env:"DB_LOG_QUERY_ARGS" default:"false"`
 
 	// Logger receives the query log when LogQueries is true and, under a
 	// non-zero RuntimeMode, the posture lines Open writes. If nil,
@@ -149,7 +163,7 @@ type Config struct {
 	// mode-blind: Open behaves exactly as it did before the field existed. A
 	// non-zero mode must be environment.ModeDevelopment or ModeProduction.
 	// Production refuses, before any connection attempt, a connection target
-	// whose TLS does not verify the server (ErrTLSRequired) and query-argument
+	// whose TLS does not verify the server (ErrTLSRequired) and query
 	// logging (ErrQueryLoggingRefused); development logs one WARN per such
 	// condition. See the module README's "Production posture" section. It
 	// carries no env tag: the host reads its mode from the process environment
@@ -177,7 +191,7 @@ type Config struct {
 
 func (cfg Config) connectionString() (string, error) {
 	if cfg.DSN != "" {
-		return cfg.DSN, nil
+		return cfg.DSN.Reveal(), nil
 	}
 	if !cfg.hasSplitConnectionFields() {
 		return "", fmt.Errorf("postgres: empty DSN")
@@ -203,7 +217,7 @@ func (cfg Config) connectionString() (string, error) {
 	}
 	if cfg.User != "" {
 		if cfg.Password != "" {
-			u.User = url.UserPassword(cfg.User, cfg.Password)
+			u.User = url.UserPassword(cfg.User, cfg.Password.Reveal())
 		} else {
 			u.User = url.User(cfg.User)
 		}
@@ -226,6 +240,24 @@ func (cfg Config) hasSplitConnectionFields() bool {
 		cfg.SSLMode != ""
 }
 
+// refuseRedactedSecrets names each secret field whose value carries
+// sdk.Redacted: it was composed from a rendered Secret, not its Reveal.
+func (cfg Config) refuseRedactedSecrets() error {
+	var refusals []error
+	for _, field := range []struct {
+		name  string
+		value sdk.Secret
+	}{
+		{"DSN", cfg.DSN},
+		{"Password", cfg.Password},
+	} {
+		if strings.Contains(field.value.Reveal(), sdk.Redacted) {
+			refusals = append(refusals, fmt.Errorf("postgres: Config.%s: %w", field.name, sdk.ErrRedactedSecret))
+		}
+	}
+	return errors.Join(refusals...)
+}
+
 // Redacted returns the connection target with any URL password masked.
 func (cfg Config) Redacted() string {
 	dsn, err := cfg.connectionString()
@@ -241,7 +273,7 @@ func (cfg Config) queryTracer() jackpgx.QueryTracer {
 		return tracer
 	}
 
-	loggingTracer := NewLoggingQueryTracer(cfg.Logger)
+	loggingTracer := NewLoggingQueryTracerWithConfig(LoggingQueryTracerConfig{Logger: cfg.Logger, LogArgs: cfg.LogQueryArgs})
 	if tracer == nil {
 		return loggingTracer
 	}
@@ -449,9 +481,14 @@ func (cfg Config) poolConfig(dsn string) (*pgxpool.Config, error) {
 // host named a zone, runs with a UTC session time zone (see poolConfig).
 // The context bounds startup only; the caller owns the returned DB's lifetime.
 // A non-zero RuntimeMode is validated and enforced before the pool exists, so a
-// refused configuration never attempts a connection.
+// refused configuration never attempts a connection. A DSN or Password that
+// contains sdk.Redacted is refused first, in every mode, with
+// sdk.ErrRedactedSecret.
 func Open(ctx context.Context, cfg Config) (*DB, error) {
 	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if err := cfg.refuseRedactedSecrets(); err != nil {
 		return nil, err
 	}
 	dsn, err := cfg.connectionString()

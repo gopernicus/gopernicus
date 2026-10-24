@@ -35,7 +35,7 @@ func TestLive_OpenAndMigrate(t *testing.T) {
 
 	ctx := context.Background()
 
-	db, err := Open(context.Background(), Config{DSN: dsn})
+	db, err := Open(context.Background(), Config{DSN: sdk.Secret(dsn)})
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -181,7 +181,7 @@ func TestLive_ListBehavior(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	db, err := Open(context.Background(), Config{DSN: dsn})
+	db, err := Open(context.Background(), Config{DSN: sdk.Secret(dsn)})
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -436,7 +436,7 @@ func TestLive_ProbeTable(t *testing.T) {
 		t.Skip("POSTGRES_TEST_DSN not set — postgres conformance NOT verified")
 	}
 	ctx := context.Background()
-	db, err := Open(context.Background(), Config{DSN: dsn})
+	db, err := Open(context.Background(), Config{DSN: sdk.Secret(dsn)})
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -481,7 +481,7 @@ func TestLive_Collect(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	db, err := Open(context.Background(), Config{DSN: dsn})
+	db, err := Open(context.Background(), Config{DSN: sdk.Secret(dsn)})
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -636,7 +636,7 @@ func TestLive_Timeouts(t *testing.T) {
 	}
 
 	t.Run("statement_timeout_cancels_pg_sleep", func(t *testing.T) {
-		db := open(t, Config{DSN: dsn, StatementTimeout: time.Second})
+		db := open(t, Config{DSN: sdk.Secret(dsn), StatementTimeout: time.Second})
 		value, source := setting(t, db, "statement_timeout")
 		if value != "1s" || source != "client" {
 			t.Fatalf("statement_timeout = %q (source %q), want \"1s\" from the startup packet", value, source)
@@ -654,7 +654,7 @@ func TestLive_Timeouts(t *testing.T) {
 	})
 
 	t.Run("lock_timeout_abandons_a_held_lock", func(t *testing.T) {
-		holder := open(t, Config{DSN: dsn})
+		holder := open(t, Config{DSN: sdk.Secret(dsn)})
 		if _, err := holder.Exec(ctx, "CREATE TABLE IF NOT EXISTS pg_connector_lock_check (id INT)"); err != nil {
 			t.Fatalf("create fixture table: %v", err)
 		}
@@ -669,7 +669,7 @@ func TestLive_Timeouts(t *testing.T) {
 			t.Fatalf("hold lock: %v", err)
 		}
 
-		db := open(t, Config{DSN: dsn, LockTimeout: 200 * time.Millisecond})
+		db := open(t, Config{DSN: sdk.Secret(dsn), LockTimeout: 200 * time.Millisecond})
 		value, source := setting(t, db, "lock_timeout")
 		if value != "200ms" || source != "client" {
 			t.Fatalf("lock_timeout = %q (source %q), want \"200ms\" from the startup packet", value, source)
@@ -686,7 +686,7 @@ func TestLive_Timeouts(t *testing.T) {
 	})
 
 	t.Run("zero_knobs_send_nothing", func(t *testing.T) {
-		db := open(t, Config{DSN: dsn})
+		db := open(t, Config{DSN: sdk.Secret(dsn)})
 		for _, name := range []string{"statement_timeout", "lock_timeout"} {
 			if value, source := setting(t, db, name); source == "client" {
 				t.Fatalf("%s = %q from the startup packet, want the server's own setting for a zero knob", name, value)
@@ -695,7 +695,7 @@ func TestLive_Timeouts(t *testing.T) {
 	})
 
 	t.Run("dsn_only_setting_reaches_the_server", func(t *testing.T) {
-		db := open(t, Config{DSN: withParam(t, "statement_timeout", "1500")})
+		db := open(t, Config{DSN: sdk.Secret(withParam(t, "statement_timeout", "1500"))})
 		value, source := setting(t, db, "statement_timeout")
 		if value != "1500ms" || source != "client" {
 			t.Fatalf("statement_timeout = %q (source %q), want the DSN's \"1500ms\"", value, source)
@@ -707,8 +707,8 @@ func TestLive_Timeouts(t *testing.T) {
 			name string
 			cfg  Config
 		}{
-			{"dsn_key", Config{DSN: withParam(t, "statement_timeout", "2000"), StatementTimeout: time.Second}},
-			{"dsn_options", Config{DSN: withParam(t, "options", "-c lock_timeout=2000"), LockTimeout: time.Second}},
+			{"dsn_key", Config{DSN: sdk.Secret(withParam(t, "statement_timeout", "2000")), StatementTimeout: time.Second}},
+			{"dsn_options", Config{DSN: sdk.Secret(withParam(t, "options", "-c lock_timeout=2000")), LockTimeout: time.Second}},
 		} {
 			db, err := Open(ctx, tc.cfg)
 			if db != nil || !errors.Is(err, sdk.ErrInvalidInput) {
@@ -723,8 +723,8 @@ func TestLive_Timeouts(t *testing.T) {
 
 	t.Run("sub_millisecond_refused_at_open", func(t *testing.T) {
 		for _, cfg := range []Config{
-			{DSN: dsn, StatementTimeout: 500 * time.Microsecond},
-			{DSN: dsn, LockTimeout: 999 * time.Microsecond},
+			{DSN: sdk.Secret(dsn), StatementTimeout: 500 * time.Microsecond},
+			{DSN: sdk.Secret(dsn), LockTimeout: 999 * time.Microsecond},
 		} {
 			db, err := Open(ctx, cfg)
 			if db != nil || !errors.Is(err, sdk.ErrInvalidInput) {

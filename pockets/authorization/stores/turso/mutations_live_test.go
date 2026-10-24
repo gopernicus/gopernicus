@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/gopernicus/gopernicus/pockets/authorization/stores/storetest"
+	"github.com/gopernicus/gopernicus/sdk"
 
 	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/audit"
@@ -127,7 +128,7 @@ func TestOperationLedgerRestart(t *testing.T) {
 		t.Fatalf("first: %+v", first)
 	}
 	url, token := requireTursoEnv(t)
-	db, err := tursodb.Open(t.Context(), tursodb.Config{URL: url, AuthToken: token})
+	db, err := tursodb.Open(t.Context(), tursodb.Config{URL: sdk.Secret(url), AuthToken: sdk.Secret(token)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -158,7 +159,7 @@ const fenceHoldTime = 300 * time.Millisecond
 func secondHandle(t *testing.T) storetest.Repositories {
 	t.Helper()
 	url, token := requireTursoEnv(t)
-	db, err := tursodb.Open(t.Context(), tursodb.Config{URL: url, AuthToken: token})
+	db, err := tursodb.Open(t.Context(), tursodb.Config{URL: sdk.Secret(url), AuthToken: sdk.Secret(token)})
 	if err != nil {
 		t.Fatal(err)
 	}

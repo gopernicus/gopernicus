@@ -62,7 +62,7 @@ func StatusCheck(ctx context.Context, db *DB) error {
 // Exec executes a query that doesn't return rows.
 func (d *DB) Exec(ctx context.Context, query string, args ...any) (sql.Result, error) {
 	if d.tracer != nil {
-		d.tracer.traceQuery(query, args)
+		d.tracer.traceQuery(ctx, query, args)
 	}
 	result, err := d.db.ExecContext(ctx, query, args...)
 	if err != nil {
@@ -74,7 +74,7 @@ func (d *DB) Exec(ctx context.Context, query string, args ...any) (sql.Result, e
 // Query executes a query that returns rows.
 func (d *DB) Query(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
 	if d.tracer != nil {
-		d.tracer.traceQuery(query, args)
+		d.tracer.traceQuery(ctx, query, args)
 	}
 	rows, err := d.db.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -87,7 +87,7 @@ func (d *DB) Query(ctx context.Context, query string, args ...any) (*sql.Rows, e
 // with MapError to translate sql.ErrNoRows into sdk.ErrNotFound.
 func (d *DB) QueryRow(ctx context.Context, query string, args ...any) *sql.Row {
 	if d.tracer != nil {
-		d.tracer.traceQuery(query, args)
+		d.tracer.traceQuery(ctx, query, args)
 	}
 	return d.db.QueryRowContext(ctx, query, args...)
 }

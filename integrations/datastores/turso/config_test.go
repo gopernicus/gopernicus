@@ -21,7 +21,7 @@ func TestConfiguredCredentialReachesDriverUnchanged(t *testing.T) {
 				_, _ = w.Write([]byte(`{"error":"fixture refusal"}`))
 			}))
 			defer server.Close()
-			db, err := Open(context.Background(), Config{URL: server.URL + query, AuthToken: token})
+			db, err := Open(context.Background(), Config{URL: sdk.Secret(server.URL + query), AuthToken: token})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -48,7 +48,7 @@ func TestOpenRejectsMalformedCredentialURL(t *testing.T) {
 		"libsql://example.test#fragment",
 		"libsql://user:secret@%zz",
 	} {
-		cfg := Config{URL: url, AuthToken: "configured"}
+		cfg := Config{URL: sdk.Secret(url), AuthToken: "configured"}
 		db, err := Open(context.Background(), cfg)
 		if db != nil || !errors.Is(err, sdk.ErrInvalidInput) {
 			t.Fatalf("Open = %v, %v, want invalid input", db, err)

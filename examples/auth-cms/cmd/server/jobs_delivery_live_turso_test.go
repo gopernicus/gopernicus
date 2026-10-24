@@ -10,6 +10,7 @@ import (
 	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
 	job "github.com/gopernicus/gopernicus/pockets/jobs/logic/queue"
 	jobsturso "github.com/gopernicus/gopernicus/pockets/jobs/stores/turso"
+	"github.com/gopernicus/gopernicus/sdk"
 )
 
 // TestLiveJobsDeliveryTurso runs the AV3D-3.5 live delivery proof list against a live
@@ -24,7 +25,7 @@ func TestLiveJobsDeliveryTurso(t *testing.T) {
 	}
 
 	runLiveDeliveryProofs(t, "turso", func(t *testing.T) job.FencedQueueRepository {
-		db, err := tursodb.Open(context.Background(), tursodb.Config{URL: url, AuthToken: token})
+		db, err := tursodb.Open(context.Background(), tursodb.Config{URL: sdk.Secret(url), AuthToken: sdk.Secret(token)})
 		if err != nil {
 			t.Fatalf("turso connect: %v", err)
 		}

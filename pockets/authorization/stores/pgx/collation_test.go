@@ -24,6 +24,7 @@ import (
 	"testing"
 
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuples"
+	"github.com/gopernicus/gopernicus/sdk"
 
 	"github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/roles"
@@ -145,7 +146,7 @@ func TestContractualCollation_SQL(t *testing.T) {
 // catalog reports collation_name = 'C' for every inventoried column.
 func TestContractualCollation_Catalog(t *testing.T) {
 	dsn := requireDSN(t)
-	db, err := pgxdb.Open(context.Background(), pgxdb.Config{DSN: dsn})
+	db, err := pgxdb.Open(context.Background(), pgxdb.Config{DSN: sdk.Secret(dsn)})
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}
@@ -190,7 +191,7 @@ func TestCollationControlsOrdering_NonC(t *testing.T) {
 	if dsn == "" {
 		t.Skip("POSTGRES_NON_C_TEST_DSN not set — non-C ordering proof NOT verified")
 	}
-	db, err := pgxdb.Open(context.Background(), pgxdb.Config{DSN: dsn})
+	db, err := pgxdb.Open(context.Background(), pgxdb.Config{DSN: sdk.Secret(dsn)})
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}

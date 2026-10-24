@@ -26,7 +26,7 @@ func probeDial(t *testing.T) *pgxdb.DB {
 	if dsn == "" {
 		t.Skip("POSTGRES_TEST_DSN not set — postgres store probe NOT verified")
 	}
-	db, err := pgxdb.Open(context.Background(), pgxdb.Config{DSN: dsn})
+	db, err := pgxdb.Open(context.Background(), pgxdb.Config{DSN: sdk.Secret(dsn)})
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}

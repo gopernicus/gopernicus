@@ -36,7 +36,7 @@ func openAuditFile(t *testing.T, mode environment.Mode, setup ...string) (*DB, *
 	t.Helper()
 	logger, buf := postureLogger()
 	db, err := Open(context.Background(), Config{
-		URL:         "file:" + filepath.Join(t.TempDir(), "audit.db"),
+		URL:         sdk.Secret("file:" + filepath.Join(t.TempDir(), "audit.db")),
 		RuntimeMode: mode,
 		Logger:      logger,
 	})

@@ -25,6 +25,7 @@ import (
 
 	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/serviceaccount"
+	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/pkg/list"
 )
 
@@ -194,7 +195,7 @@ func TestCollationControlsOrdering_NonC(t *testing.T) {
 	if dsn == "" {
 		t.Skip("POSTGRES_NON_C_TEST_DSN not set — non-C ordering proof NOT verified")
 	}
-	db, err := pgxdb.Open(context.Background(), pgxdb.Config{DSN: dsn})
+	db, err := pgxdb.Open(context.Background(), pgxdb.Config{DSN: sdk.Secret(dsn)})
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}

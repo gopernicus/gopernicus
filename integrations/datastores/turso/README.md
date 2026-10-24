@@ -24,6 +24,17 @@ credentials still work. Malformed query strings and URL fragments are rejected;
 `RedactDSN` and `Config.Redacted` mask every supported credential alias and fully
 redact malformed input.
 
+`Config.URL` (`DB_URL`) and `Config.AuthToken` (`DB_AUTH_TOKEN`) are `sdk.Secret`
+— a URL can carry the token. They print `[redacted]` through `fmt` (every verb,
+`%+v` of a `Config` included), `slog` and `encoding/json`; `ParseEnvTags` fills
+them like any string field and an untyped literal (`URL: "file:app.db"`) still
+assigns, while a `string` variable converts with `sdk.Secret(v)`. Read a value
+with `Reveal()`; display the target with `cfg.Redacted()`. A URL composed from a
+printed Secret (`"libsql://db.example?authToken=" + cfg.AuthToken.String()`)
+carries `[redacted]` instead of the token: `Open` refuses a `URL` or `AuthToken`
+containing `sdk.Redacted`, in every mode and before any I/O, with an error wrapping
+`sdk.ErrRedactedSecret` that names the field and says to read it with `Reveal()`.
+
 Migration streams are flat: `RunMigrations` reads direct `.sql` files in lexical
 filename order, skipping directories and names beginning with `_`.
 `ExportMigrations` copies direct `.sql` files, including underscore-prefixed SQL
@@ -55,6 +66,13 @@ The acknowledgement is inert over a TLS URL, so one binary runs in several
 environments. Development admits the URL and logs one WARN instead. Posture lines
 go to `Config.Logger` (`slog.Default()` when nil). The check runs in `Open` after
 the URL is normalized, not in `Redacted`, which stays side-effect free.
+
+Production also refuses query logging with `ErrQueryLoggingRefused`, as pgxdb
+does: `LogQueries` (`DB_LOG_QUERIES`) or `LogQueryArgs` (`DB_LOG_QUERY_ARGS`, even
+alone — a stale variable is a signal), over every URL, `file:` included. The text
+names each source with its variable — `Config.LogQueries (DB_LOG_QUERIES)` — and
+no acknowledgement admits it. When both refusals apply, `Open` returns them
+joined. Development admits query logging and logs one WARN naming every source.
 
 ## Append-only tables: the immutability trigger probe
 
@@ -167,12 +185,17 @@ semantics the conformance suites demand, nothing more.
 
 ## Query logging is opt-in and dev-only
 
-Set `Config.LogQueries` (with an optional `Config.Logger`; nil falls back to
-`slog.Default()`) to log every query this connector runs — on both the `DB`
-connection and its transactions. This is symmetric with the pgxdb connector's
-`Config.LogQueries` / `Config.Logger`, and carries the identical posture:
-**it logs SQL arguments verbatim**, and those can carry secrets or PII, so it is
-dev-only tooling — leave it false in production. database/sql exposes no
+Set `DB_LOG_QUERIES=true` (`Config.LogQueries`, with an optional `Config.Logger`;
+nil falls back to `slog.Default()`) to log every query this connector runs — on
+both the `DB` connection and its transactions — as one `query` line carrying
+`sql`, `arg_count` and `arg_types` (each argument's Go type, `%T`), never a value.
+The line is logged with the query's context, so a `logging.New` logger adds
+`request_id`. `DB_LOG_QUERY_ARGS=true` (`Config.LogQueryArgs`) adds the bind
+values as `args`, verbatim — secrets and PII included; without `DB_LOG_QUERIES`
+it is inert (no logger installed). This is symmetric with the pgxdb connector's
+`LogQueries` / `LogQueryArgs` / `Logger`. A development `RuntimeMode` logs one
+posture WARN naming every source; production refuses both
+(`ErrQueryLoggingRefused`, see "Production posture"). database/sql exposes no
 driver-level tracer hook (pgx's `ConnConfig.Tracer`), so the `DB`/`Tx` wrapper
 threads the logging through its own `Exec`/`Query`/`QueryRow`; the transaction
 path logs too, so opting in never silently drops tx statements. At defaults

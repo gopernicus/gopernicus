@@ -83,7 +83,7 @@ func openRailFile(t *testing.T, path string, mode environment.Mode, logger *slog
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)
 	}
-	db, err := tursodb.Open(t.Context(), tursodb.Config{URL: "file:" + path, RuntimeMode: mode, Logger: logger})
+	db, err := tursodb.Open(t.Context(), tursodb.Config{URL: sdk.Secret("file:" + path), RuntimeMode: mode, Logger: logger})
 	if err != nil {
 		t.Fatal(err)
 	}

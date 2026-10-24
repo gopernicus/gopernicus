@@ -4,6 +4,8 @@ import (
 	"context"
 	"os"
 	"testing"
+
+	"github.com/gopernicus/gopernicus/sdk"
 )
 
 func TestLive_DefaultPoolReusesConnections(t *testing.T) {
@@ -11,7 +13,7 @@ func TestLive_DefaultPoolReusesConnections(t *testing.T) {
 	if dsn == "" {
 		t.Skip("POSTGRES_TEST_DSN not set — default connection reuse NOT verified")
 	}
-	db, err := Open(context.Background(), Config{DSN: dsn, MaxConns: 1})
+	db, err := Open(context.Background(), Config{DSN: sdk.Secret(dsn), MaxConns: 1})
 	if err != nil {
 		t.Fatal(err)
 	}

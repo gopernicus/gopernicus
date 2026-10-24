@@ -26,10 +26,11 @@ var (
 	// never echoes the DSN.
 	ErrTLSRequired = errors.New("postgres: production requires verified TLS on every connection target")
 
-	// ErrQueryLoggingRefused refuses Config.LogQueries, or a Config.Tracer that
-	// is or wraps a *LoggingQueryTracer: both log SQL arguments verbatim. No
-	// acknowledgement admits it.
-	ErrQueryLoggingRefused = errors.New("postgres: production refuses query-argument logging")
+	// ErrQueryLoggingRefused refuses Config.LogQueries, Config.LogQueryArgs
+	// (even alone), or a Config.Tracer that is or wraps a *LoggingQueryTracer
+	// whatever its LogArgs: query logging is development tooling. The wrapped
+	// text names each source and its env variable. No acknowledgement admits it.
+	ErrQueryLoggingRefused = errors.New("postgres: production refuses query logging")
 )
 
 // The TLS classes of one parsed connection target.
@@ -84,11 +85,16 @@ func (cfg Config) checkPosture(conn *pgconn.Config) error {
 
 	var refusals []error
 	if sources := cfg.queryLoggingSources(); len(sources) > 0 {
-		if production {
-			refusals = append(refusals, fmt.Errorf("%w: %s logs SQL arguments verbatim; unset it", ErrQueryLoggingRefused, strings.Join(sources, " and ")))
-		} else {
-			logger.Warn("postgres: query-argument logging is on; production refuses it",
-				slog.String("source", strings.Join(sources, ",")))
+		source := slog.String("source", strings.Join(sources, ","))
+		switch {
+		case production:
+			refusals = append(refusals, fmt.Errorf("%w: %s; unset it", ErrQueryLoggingRefused, strings.Join(sources, " and ")))
+		case cfg.LogQueries && cfg.LogQueryArgs:
+			logger.Warn("postgres: query logging is on and logs bind arguments verbatim; production refuses it", source)
+		case cfg.LogQueries || wrapsLoggingTracer(cfg.Tracer):
+			logger.Warn("postgres: query logging is on; production refuses it", source)
+		default:
+			logger.Warn("postgres: LogQueryArgs is inert without LogQueries; production refuses it", source)
 		}
 	}
 
@@ -114,11 +120,15 @@ func (cfg Config) checkPosture(conn *pgconn.Config) error {
 	return errors.Join(refusals...)
 }
 
-// queryLoggingSources names each setting that would log SQL arguments verbatim.
+// queryLoggingSources names each query-logging setting, with its env variable
+// where it has one.
 func (cfg Config) queryLoggingSources() []string {
 	var sources []string
 	if cfg.LogQueries {
-		sources = append(sources, "Config.LogQueries")
+		sources = append(sources, "Config.LogQueries (DB_LOG_QUERIES)")
+	}
+	if cfg.LogQueryArgs {
+		sources = append(sources, "Config.LogQueryArgs (DB_LOG_QUERY_ARGS)")
 	}
 	if wrapsLoggingTracer(cfg.Tracer) {
 		sources = append(sources, "Config.Tracer (a *LoggingQueryTracer)")
@@ -196,8 +206,8 @@ func weakestTarget(targets []connTarget) (weakest connTarget, ok bool) {
 	return weakest, ok
 }
 
-// wrapsLoggingTracer reports whether t is a *LoggingQueryTracer or a
-// *MultiQueryTracer holding one at any depth.
+// wrapsLoggingTracer reports whether t is a *LoggingQueryTracer, whatever its
+// LogArgs, or a *MultiQueryTracer holding one at any depth.
 func wrapsLoggingTracer(t jackpgx.QueryTracer) bool {
 	switch t := t.(type) {
 	case *LoggingQueryTracer:

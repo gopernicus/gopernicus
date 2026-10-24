@@ -7,13 +7,15 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/gopernicus/gopernicus/sdk"
 )
 
 func TestBeginReadSnapshot(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	target := url.URL{Scheme: "file", Path: filepath.Join(t.TempDir(), "snapshot.sqlite")}
-	db, err := Open(ctx, Config{URL: target.String(), MaxOpenConns: 2, MaxIdleConns: 2})
+	db, err := Open(ctx, Config{URL: sdk.Secret(target.String()), MaxOpenConns: 2, MaxIdleConns: 2})
 	if err != nil {
 		t.Fatal(err)
 	}

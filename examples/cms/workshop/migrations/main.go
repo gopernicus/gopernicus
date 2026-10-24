@@ -16,6 +16,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/pkg/environment"
 	"github.com/gopernicus/gopernicus/sdk/pkg/logging"
 
@@ -55,8 +56,8 @@ func main() {
 
 func run(ctx context.Context, log *slog.Logger, mode environment.Mode) error {
 	db, err := tursodb.Open(ctx, tursodb.Config{
-		URL:         os.Getenv("TURSO_DATABASE_URL"),
-		AuthToken:   os.Getenv("TURSO_AUTH_TOKEN"),
+		URL:         sdk.Secret(os.Getenv("TURSO_DATABASE_URL")),
+		AuthToken:   sdk.Secret(os.Getenv("TURSO_AUTH_TOKEN")),
 		RuntimeMode: mode,
 	})
 	if err != nil {

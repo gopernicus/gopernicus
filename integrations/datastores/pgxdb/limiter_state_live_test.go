@@ -150,7 +150,7 @@ func TestLive_LimiterDecisionTimeAfterRowLock(t *testing.T) {
 	defer cancel()
 	// Keep the one observed backend alive across the PID query and admission.
 	// Config's zero lifetime otherwise retires a connection on pool release.
-	waitingDB, err := Open(context.Background(), Config{DSN: os.Getenv("POSTGRES_TEST_DSN"), MaxConns: 1,
+	waitingDB, err := Open(context.Background(), Config{DSN: sdk.Secret(os.Getenv("POSTGRES_TEST_DSN")), MaxConns: 1,
 		MaxLifetime: time.Minute, MaxIdleTime: time.Minute})
 	if err != nil {
 		t.Fatal(err)
@@ -256,7 +256,7 @@ func TestLive_LimiterDecisionTimeAfterRolledBackInsert(t *testing.T) {
 	defer cancel()
 	// Keep the one observed backend alive across the PID query and admission.
 	// Config's zero lifetime otherwise retires a connection on pool release.
-	waitingDB, err := Open(context.Background(), Config{DSN: os.Getenv("POSTGRES_TEST_DSN"), MaxConns: 1,
+	waitingDB, err := Open(context.Background(), Config{DSN: sdk.Secret(os.Getenv("POSTGRES_TEST_DSN")), MaxConns: 1,
 		MaxLifetime: time.Minute, MaxIdleTime: time.Minute})
 	if err != nil {
 		t.Fatal(err)
@@ -368,7 +368,7 @@ func TestLive_LimiterInitializationInterruptionIsBounded(t *testing.T) {
 		}
 		counts = append(counts, count)
 	}}
-	traced, err := Open(context.Background(), Config{DSN: os.Getenv("POSTGRES_TEST_DSN"), Tracer: tracer})
+	traced, err := Open(context.Background(), Config{DSN: sdk.Secret(os.Getenv("POSTGRES_TEST_DSN")), Tracer: tracer})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -391,7 +391,7 @@ func TestLive_LimiterCancellationAfterInitializationDoesNotAdmit(t *testing.T) {
 		_, _ = db.Exec(context.Background(), `DELETE FROM ratelimit_windows WHERE key = @key`, jackpgx.NamedArgs{"key": key})
 	})
 	calls := 0
-	traced, err := Open(context.Background(), Config{DSN: os.Getenv("POSTGRES_TEST_DSN"), Tracer: limiterAfterQuery{after: func(context.Context) {
+	traced, err := Open(context.Background(), Config{DSN: sdk.Secret(os.Getenv("POSTGRES_TEST_DSN")), Tracer: limiterAfterQuery{after: func(context.Context) {
 		calls++
 		cancel()
 	}}})

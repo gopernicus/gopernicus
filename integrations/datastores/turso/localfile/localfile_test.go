@@ -11,6 +11,7 @@ import (
 
 	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
 	_ "github.com/gopernicus/gopernicus/integrations/datastores/turso/localfile"
+	"github.com/gopernicus/gopernicus/sdk"
 )
 
 // TestOpenAppliesTheLocalFileProfileOnEveryConnection proves the profile is a
@@ -23,7 +24,7 @@ func TestOpenAppliesTheLocalFileProfileOnEveryConnection(t *testing.T) {
 	ctx := context.Background()
 	cfg := tursodb.Config{
 		// A nested, not-yet-existing directory: Open must create it.
-		URL:          "file:" + filepath.Join(t.TempDir(), "nested", "auth.db"),
+		URL:          sdk.Secret("file:" + filepath.Join(t.TempDir(), "nested", "auth.db")),
 		MaxOpenConns: 4,
 		MaxIdleConns: 4,
 		BusyTimeout:  5 * time.Second,

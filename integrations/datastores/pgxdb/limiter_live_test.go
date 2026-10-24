@@ -86,7 +86,7 @@ func openLimiterDB(t *testing.T) *DB {
 		t.Skip("POSTGRES_TEST_DSN not set — pgxdb ratelimiter.Limiter conformance NOT verified")
 	}
 
-	db, err := Open(context.Background(), Config{DSN: dsn})
+	db, err := Open(context.Background(), Config{DSN: sdk.Secret(dsn)})
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -184,7 +184,7 @@ func TestLive_LimiterAdmitsExactlyLimitUnderConcurrency(t *testing.T) {
 		// between them: the point of the test is row-level contention, and an
 		// unbounded pool would trade that for connection-slot exhaustion on a
 		// small server.
-		instance, err := Open(context.Background(), Config{DSN: dsn, MaxConns: connsPerInstance})
+		instance, err := Open(context.Background(), Config{DSN: sdk.Secret(dsn), MaxConns: connsPerInstance})
 		if err != nil {
 			t.Fatalf("open instance %d: %v", i, err)
 		}
@@ -467,7 +467,7 @@ func openScopedToSchema(t *testing.T, schema string) *DB {
 	q.Set("search_path", schema)
 	u.RawQuery = q.Encode()
 
-	scoped, err := Open(context.Background(), Config{DSN: u.String(), MaxConns: 2})
+	scoped, err := Open(context.Background(), Config{DSN: sdk.Secret(u.String()), MaxConns: 2})
 	if err != nil {
 		t.Fatalf("open pool scoped to schema %q: %v", schema, err)
 	}

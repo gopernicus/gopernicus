@@ -12,6 +12,7 @@ import (
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuplecache"
 	"github.com/gopernicus/gopernicus/pockets/authorization/stores/memory"
 	"github.com/gopernicus/gopernicus/pockets/authorization/stores/storetest"
+	"github.com/gopernicus/gopernicus/sdk"
 )
 
 // TestTupleCacheLookupEquivalence repeats the short-circuit equivalence proof
@@ -75,7 +76,7 @@ func cacheConnection(t *testing.T, searchPath string) *pgxdb.DB {
 	query := parsed.Query()
 	query.Set("search_path", searchPath)
 	parsed.RawQuery = query.Encode()
-	db, err := pgxdb.Open(context.Background(), pgxdb.Config{DSN: parsed.String(), MaxConns: 1, MinConns: 1})
+	db, err := pgxdb.Open(context.Background(), pgxdb.Config{DSN: sdk.Secret(parsed.String()), MaxConns: 1, MinConns: 1})
 	if err != nil {
 		t.Fatal(err)
 	}

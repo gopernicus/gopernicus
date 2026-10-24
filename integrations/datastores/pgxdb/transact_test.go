@@ -7,6 +7,8 @@ import (
 	"os"
 	"testing"
 	"time"
+
+	"github.com/gopernicus/gopernicus/sdk"
 )
 
 // TestTxFromContext_Absent needs no database: a context outside any Transact
@@ -27,7 +29,7 @@ func transactLiveDB(t *testing.T) *DB {
 	if dsn == "" {
 		t.Skip("POSTGRES_TEST_DSN not set — Transact live semantics NOT verified")
 	}
-	db, err := Open(context.Background(), Config{DSN: dsn})
+	db, err := Open(context.Background(), Config{DSN: sdk.Secret(dsn)})
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}

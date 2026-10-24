@@ -17,6 +17,7 @@ import (
 	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
 	"github.com/gopernicus/gopernicus/pockets/cms"
 	"github.com/gopernicus/gopernicus/pockets/cms/storetest"
+	"github.com/gopernicus/gopernicus/sdk"
 )
 
 // cmsTables are the pocket's tables in child-before-parent order, so a
@@ -45,7 +46,7 @@ func TestConformance_Turso(t *testing.T) {
 	}
 
 	storetest.Run(t, func(t *testing.T) cms.Repositories {
-		db, err := tursodb.Open(context.Background(), tursodb.Config{URL: url, AuthToken: token})
+		db, err := tursodb.Open(context.Background(), tursodb.Config{URL: sdk.Secret(url), AuthToken: sdk.Secret(token)})
 		if err != nil {
 			t.Fatalf("connect: %v", err)
 		}

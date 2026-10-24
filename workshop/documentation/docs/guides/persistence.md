@@ -15,7 +15,7 @@ Gopernicus separates three responsibilities:
 
 ```go
 db, err := pgxdb.Open(ctx, pgxdb.Config{
-    DSN: os.Getenv("DATABASE_URL"),
+    DSN: sdk.Secret(os.Getenv("DATABASE_URL")),
 })
 if err != nil {
     return err

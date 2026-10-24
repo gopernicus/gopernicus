@@ -20,6 +20,7 @@ import (
 	job "github.com/gopernicus/gopernicus/pockets/jobs/logic/queue"
 	schedule "github.com/gopernicus/gopernicus/pockets/jobs/logic/schedules"
 	"github.com/gopernicus/gopernicus/pockets/jobs/stores/storetest"
+	"github.com/gopernicus/gopernicus/sdk"
 )
 
 // jobTables are the pocket's tables cleared before each newRepo call so every
@@ -82,7 +83,7 @@ func requireTursoEnv(t *testing.T) (url, token string) {
 // truncates the jobs tables so the returned store starts empty and isolated.
 func openAndMigrate(t *testing.T, url, token string) *tursodb.DB {
 	t.Helper()
-	db, err := tursodb.Open(context.Background(), tursodb.Config{URL: url, AuthToken: token})
+	db, err := tursodb.Open(context.Background(), tursodb.Config{URL: sdk.Secret(url), AuthToken: sdk.Secret(token)})
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}

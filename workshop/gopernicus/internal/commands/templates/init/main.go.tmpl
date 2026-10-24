@@ -14,7 +14,9 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
-
+{{if eq .DB "turso"}}
+	"github.com/gopernicus/gopernicus/sdk"
+{{- end}}
 	"github.com/gopernicus/gopernicus/sdk/pkg/environment"
 	"github.com/gopernicus/gopernicus/sdk/pkg/logging"
 	"github.com/gopernicus/gopernicus/sdk/pkg/web"
@@ -71,8 +73,8 @@ func run(ctx context.Context, log *slog.Logger, mode environment.Mode) error {
 	// Under production the connector refuses a connection without verified TLS.
 {{- if eq .DB "turso"}}
 	db, err := {{.ConnectorAlias}}.Open(ctx, {{.ConnectorAlias}}.Config{
-		URL:         os.Getenv("TURSO_DATABASE_URL"),
-		AuthToken:   os.Getenv("TURSO_AUTH_TOKEN"),
+		URL:         sdk.Secret(os.Getenv("TURSO_DATABASE_URL")),
+		AuthToken:   sdk.Secret(os.Getenv("TURSO_AUTH_TOKEN")),
 		RuntimeMode: mode,
 	})
 	if err != nil {

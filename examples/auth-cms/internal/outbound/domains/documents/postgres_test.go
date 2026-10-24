@@ -31,7 +31,7 @@ func postgresFixture(t *testing.T) (*Postgres, *testAuthorizationStore, pgxdb.Sc
 	if dsn == "" {
 		t.Skip("AUTHORIZATION_LISTING_TEST_DSN absent: live PostgreSQL listing unverified")
 	}
-	db, err := pgxdb.Open(context.Background(), pgxdb.Config{DSN: dsn})
+	db, err := pgxdb.Open(context.Background(), pgxdb.Config{DSN: sdk.Secret(dsn)})
 	if err != nil {
 		t.Fatal(err)
 	}

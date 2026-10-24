@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/pkg/environment"
 
 	"github.com/jackc/pgx/v5/pgconn"
@@ -178,7 +179,7 @@ func TestPosture_ProductionTLS(t *testing.T) {
 			cfg := tc.cfg
 			cfg.RuntimeMode = environment.ModeProduction
 			cfg.Logger = logger
-			cfg.DSN = tc.dsn
+			cfg.DSN = sdk.Secret(tc.dsn)
 			_, err := cfg.poolConfig(tc.dsn)
 			if tc.wantClass == "" {
 				if err != nil {
@@ -215,8 +216,8 @@ func TestPosture_ProductionTLS(t *testing.T) {
 // DSN only by its failing host.
 func TestPosture_RefusalNamesRedactedTarget(t *testing.T) {
 	clearLibpqTLSEnv(t)
-	cfg := Config{RuntimeMode: environment.ModeProduction, DSN: postureDSN("sslmode=disable")}
-	_, err := cfg.poolConfig(cfg.DSN)
+	cfg := Config{RuntimeMode: environment.ModeProduction, DSN: sdk.Secret(postureDSN("sslmode=disable"))}
+	_, err := cfg.poolConfig(cfg.DSN.Reveal())
 	if want := cfg.Redacted(); err == nil || !strings.Contains(err.Error(), want) {
 		t.Fatalf("refusal %v does not name %q", err, want)
 	}
@@ -243,21 +244,30 @@ func TestPosture_FallbackTargetsAreClassified(t *testing.T) {
 func TestPosture_ProductionRefusesQueryLogging(t *testing.T) {
 	clearLibpqTLSEnv(t)
 	other := &fakeQueryTracer{}
+	argsTracer := NewLoggingQueryTracerWithConfig(LoggingQueryTracerConfig{LogArgs: true})
 	for _, tc := range []struct {
-		name string
-		cfg  Config
+		name   string
+		cfg    Config
+		source string
 	}{
-		{"log_queries", Config{LogQueries: true}},
-		{"logging_tracer", Config{Tracer: NewLoggingQueryTracer(nil)}},
-		{"wrapped_logging_tracer", Config{Tracer: NewMultiQueryTracer(other, NewMultiQueryTracer(NewLoggingQueryTracer(nil)))}},
-		{"acknowledgements_do_not_admit", Config{LogQueries: true, TLSUnverifiedAcknowledged: true, TLSDisabledAcknowledged: true}},
+		{"log_queries", Config{LogQueries: true}, "Config.LogQueries (DB_LOG_QUERIES)"},
+		{"log_query_args_alone", Config{LogQueryArgs: true}, "Config.LogQueryArgs (DB_LOG_QUERY_ARGS)"},
+		{"log_queries_with_args", Config{LogQueries: true, LogQueryArgs: true}, "Config.LogQueries (DB_LOG_QUERIES) and Config.LogQueryArgs (DB_LOG_QUERY_ARGS)"},
+		{"logging_tracer", Config{Tracer: NewLoggingQueryTracer(nil)}, "Config.Tracer"},
+		{"logging_tracer_with_args", Config{Tracer: argsTracer}, "Config.Tracer"},
+		{"wrapped_logging_tracer", Config{Tracer: NewMultiQueryTracer(other, NewMultiQueryTracer(NewLoggingQueryTracer(nil)))}, "Config.Tracer"},
+		{"acknowledgements_do_not_admit", Config{LogQueries: true, TLSUnverifiedAcknowledged: true, TLSDisabledAcknowledged: true}, "Config.LogQueries (DB_LOG_QUERIES)"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := tc.cfg
 			cfg.RuntimeMode = environment.ModeProduction
 			cfg.Logger = slog.New(slog.DiscardHandler)
-			if _, err := cfg.poolConfig(postureDSN("sslmode=verify-full")); !errors.Is(err, ErrQueryLoggingRefused) {
+			_, err := cfg.poolConfig(postureDSN("sslmode=verify-full"))
+			if !errors.Is(err, ErrQueryLoggingRefused) {
 				t.Fatalf("poolConfig = %v, want ErrQueryLoggingRefused", err)
+			}
+			if msg := err.Error(); !strings.Contains(msg, "production refuses query logging") || !strings.Contains(msg, tc.source) {
+				t.Fatalf("refusal %q does not name %q", msg, tc.source)
 			}
 		})
 	}
@@ -287,13 +297,33 @@ func TestPosture_DevelopmentWarns(t *testing.T) {
 	if got := strings.Count(out, "level=WARN"); got != 2 {
 		t.Fatalf("development logged %d WARN lines, want 2:\n%s", got, out)
 	}
-	for _, want := range []string{"tls=plaintext", "source=Config.LogQueries"} {
+	for _, want := range []string{"tls=plaintext", `msg="postgres: query logging is on; production refuses it" source="Config.LogQueries (DB_LOG_QUERIES)"`} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("development log lacks %q:\n%s", want, out)
 		}
 	}
 	if strings.Contains(out, "posture_waiver") {
 		t.Fatalf("development logged a waiver:\n%s", out)
+	}
+
+	for _, tc := range []struct {
+		name string
+		cfg  Config
+		want string
+	}{
+		{"with_args", Config{LogQueries: true, LogQueryArgs: true}, `msg="postgres: query logging is on and logs bind arguments verbatim; production refuses it" source="Config.LogQueries (DB_LOG_QUERIES),Config.LogQueryArgs (DB_LOG_QUERY_ARGS)"`},
+		{"args_alone_is_inert", Config{LogQueryArgs: true}, `msg="postgres: LogQueryArgs is inert without LogQueries; production refuses it" source="Config.LogQueryArgs (DB_LOG_QUERY_ARGS)"`},
+	} {
+		buf.Reset()
+		cfg := tc.cfg
+		cfg.RuntimeMode = environment.ModeDevelopment
+		cfg.Logger = logger
+		if _, err := cfg.poolConfig(postureDSN("sslmode=verify-full")); err != nil {
+			t.Fatalf("%s: development poolConfig = %v, want admitted", tc.name, err)
+		}
+		if out := buf.String(); strings.Count(out, "level=WARN") != 1 || !strings.Contains(out, tc.want) {
+			t.Fatalf("%s: want one WARN %q, got:\n%s", tc.name, tc.want, out)
+		}
 	}
 
 	buf.Reset()

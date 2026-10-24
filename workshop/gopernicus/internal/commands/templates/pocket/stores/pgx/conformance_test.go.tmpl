@@ -16,6 +16,7 @@ import (
 	{{.Pocket}} "{{.ModulePath}}"
 	"{{.ModulePath}}/stores/storetest"
 	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
+	"github.com/gopernicus/gopernicus/sdk"
 )
 
 // TestConformance runs the shared {{.Pocket}} conformance suite against a live
@@ -49,7 +50,7 @@ func requireDSN(t *testing.T) string {
 // truncates the table so the returned repositories start empty and isolated.
 func openAndMigrate(t *testing.T, dsn string) *pgxdb.DB {
 	t.Helper()
-	db, err := pgxdb.Open(context.Background(), pgxdb.Config{DSN: dsn})
+	db, err := pgxdb.Open(context.Background(), pgxdb.Config{DSN: sdk.Secret(dsn)})
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}

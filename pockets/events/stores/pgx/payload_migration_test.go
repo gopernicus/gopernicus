@@ -12,7 +12,7 @@ import (
 )
 
 func TestPayloadMigrationPreservesHistoricalBytes(t *testing.T) {
-	db, err := pgxdb.Open(context.Background(), pgxdb.Config{DSN: requireDSN(t), MaxConns: 1})
+	db, err := pgxdb.Open(context.Background(), pgxdb.Config{DSN: sdk.Secret(requireDSN(t)), MaxConns: 1})
 	if err != nil {
 		t.Fatal(err)
 	}

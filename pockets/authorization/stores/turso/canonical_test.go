@@ -23,7 +23,7 @@ import (
 
 func emptyCanonicalFixture(t testing.TB) *tursodb.DB {
 	t.Helper()
-	db, err := tursodb.Open(t.Context(), tursodb.Config{URL: "file:" + filepath.Join(t.TempDir(), "canonical.sqlite"), MaxOpenConns: 4})
+	db, err := tursodb.Open(t.Context(), tursodb.Config{URL: sdk.Secret("file:" + filepath.Join(t.TempDir(), "canonical.sqlite")), MaxOpenConns: 4})
 	if err != nil {
 		t.Fatal(err)
 	}

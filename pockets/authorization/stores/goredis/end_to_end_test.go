@@ -24,6 +24,7 @@ import (
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/tuples"
 	pgxstore "github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx"
 	tursostore "github.com/gopernicus/gopernicus/pockets/authorization/stores/turso"
+	"github.com/gopernicus/gopernicus/sdk"
 	_ "modernc.org/sqlite"
 )
 
@@ -51,7 +52,7 @@ func endToEndRepositories(t testing.TB, dialect string) authorization.Repositori
 	t.Helper()
 	ctx := t.Context()
 	if dialect == "sqlite" {
-		db, err := tursodb.Open(ctx, tursodb.Config{URL: "file:" + filepath.Join(t.TempDir(), "authority.sqlite"), MaxOpenConns: 4, MaxIdleConns: 4})
+		db, err := tursodb.Open(ctx, tursodb.Config{URL: sdk.Secret("file:" + filepath.Join(t.TempDir(), "authority.sqlite")), MaxOpenConns: 4, MaxIdleConns: 4})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -77,7 +78,7 @@ func endToEndRepositories(t testing.TB, dialect string) authorization.Repositori
 	if dsn == "" {
 		t.Skip("POSTGRES_TEST_DSN unset — PostgreSQL to Redis integration NOT verified")
 	}
-	db, err := pgxdb.Open(ctx, pgxdb.Config{DSN: dsn})
+	db, err := pgxdb.Open(ctx, pgxdb.Config{DSN: sdk.Secret(dsn)})
 	if err != nil {
 		t.Fatal(err)
 	}

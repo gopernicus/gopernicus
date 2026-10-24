@@ -15,6 +15,7 @@ import (
 
 	"github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
 	invitations "github.com/gopernicus/gopernicus/pockets/authentication/logic/invitations"
+	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/pkg/list"
 	jackpgx "github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -69,7 +70,7 @@ func TestListActiveByResourceUsesPartialIndex(t *testing.T) {
 	}
 	ctx := context.Background()
 	schema := testSchema(t)
-	db, err := pgxdb.Open(ctx, pgxdb.Config{DSN: dsn})
+	db, err := pgxdb.Open(ctx, pgxdb.Config{DSN: sdk.Secret(dsn)})
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}

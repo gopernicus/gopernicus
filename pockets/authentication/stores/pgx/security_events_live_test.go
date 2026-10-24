@@ -27,7 +27,7 @@ func TestLive_RecorderBoundsClientAttribution(t *testing.T) {
 	}
 	ctx := context.Background()
 	schema := testSchema(t)
-	db, err := pgxdb.Open(ctx, pgxdb.Config{DSN: dsn})
+	db, err := pgxdb.Open(ctx, pgxdb.Config{DSN: sdk.Secret(dsn)})
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}

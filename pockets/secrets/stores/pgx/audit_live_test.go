@@ -71,7 +71,7 @@ func openAs(t *testing.T, dsn, role string, mode environment.Mode) *pgxdb.DB {
 	}
 	u.User = url.UserPassword(role, fixtureRolePassword)
 	db, err := pgxdb.Open(context.Background(), pgxdb.Config{
-		DSN:                     u.String(),
+		DSN:                     sdk.Secret(u.String()),
 		MaxConns:                2,
 		RuntimeMode:             mode,
 		Logger:                  slog.New(slog.DiscardHandler),
@@ -236,7 +236,7 @@ func TestLive_AuditRail(t *testing.T) {
 func TestLive_OpenRequiresIntegrityMigration(t *testing.T) {
 	dsn := requireDSN(t)
 	ctx := context.Background()
-	db, err := pgxdb.Open(ctx, pgxdb.Config{DSN: dsn})
+	db, err := pgxdb.Open(ctx, pgxdb.Config{DSN: sdk.Secret(dsn)})
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}
