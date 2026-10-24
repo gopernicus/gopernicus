@@ -5,7 +5,11 @@ package mediasvc
 
 import (
 	"context"
+	"fmt"
 	"io"
+	"mime"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/gopernicus/gopernicus/pockets/cms/domain/media"
@@ -14,6 +18,15 @@ import (
 
 // Clock returns the current time. Injected so tests can pin timestamps.
 type Clock func() time.Time
+
+// UploadPolicy is the upload rule set cms.Register resolves from cms.Config and
+// installs with SetUploadPolicy.
+type UploadPolicy struct {
+	// AllowedMediaTypes lists the media types an upload may carry. Entries and
+	// the upload's type are both compared after mime.ParseMediaType, so case
+	// and parameters never decide. Empty refuses every upload.
+	AllowedMediaTypes []string
+}
 
 // MediaService implements the media use cases over asset metadata + a blob
 // store. It owns the CMS rules (key generation, validation via NewAsset).
@@ -24,6 +37,9 @@ type MediaService struct {
 	// default nanoids.
 	ids   sdk.IDGenerator
 	clock Clock
+	// allowed is the parsed upload allow-list (SetUploadPolicy); empty refuses
+	// every upload.
+	allowed []string
 }
 
 // NewService constructs a MediaService. A nil clock defaults to time.Now. ids is
@@ -35,11 +51,32 @@ func NewService(assets media.AssetRepository, blobs media.BlobStore, ids sdk.IDG
 	return &MediaService{assets: assets, blobs: blobs, ids: ids, clock: clock}
 }
 
-// Upload validates, stores the bytes, and persists the asset metadata.
+// SetUploadPolicy installs p, replacing any earlier policy. cms.Register calls
+// it once, before the routes mount. An entry mime.ParseMediaType rejects wraps
+// sdk.ErrInvalidInput and leaves the previous policy in place.
+func (s *MediaService) SetUploadPolicy(p UploadPolicy) error {
+	allowed := make([]string, 0, len(p.AllowedMediaTypes))
+	for _, t := range p.AllowedMediaTypes {
+		mt, _, err := mime.ParseMediaType(t)
+		if err != nil {
+			return fmt.Errorf("allowed media type %q: %w", t, sdk.ErrInvalidInput)
+		}
+		allowed = append(allowed, mt)
+	}
+	s.allowed = allowed
+	return nil
+}
+
+// Upload validates, stores the bytes, and persists the asset metadata. A
+// contentType outside the upload policy wraps sdk.ErrInvalidInput with a
+// message naming the allowed types.
 func (s *MediaService) Upload(ctx context.Context, filename, contentType string, size int64, reader io.Reader) (media.Asset, error) {
 	a, err := media.NewAsset(s.ids, filename, contentType, size, s.clock())
 	if err != nil {
 		return media.Asset{}, err
+	}
+	if mt, _, err := mime.ParseMediaType(contentType); err != nil || !slices.Contains(s.allowed, mt) {
+		return media.Asset{}, fmt.Errorf("unsupported file type; allowed: %s: %w", strings.Join(s.allowed, ", "), sdk.ErrInvalidInput)
 	}
 	if err := s.blobs.Upload(ctx, a.StorageKey, reader); err != nil {
 		return media.Asset{}, err

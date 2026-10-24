@@ -17,6 +17,7 @@ import (
 	"github.com/gopernicus/gopernicus/pockets/cms/domain/menus"
 	"github.com/gopernicus/gopernicus/pockets/cms/domain/messaging"
 	"github.com/gopernicus/gopernicus/pockets/cms/domain/taxonomy"
+	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/notify"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/notify/email"
 	"github.com/gopernicus/gopernicus/sdk/pkg/environment"
@@ -321,5 +322,51 @@ func TestRegister_PostureAccepted(t *testing.T) {
 		if err := Register(pockets.Mount{Router: newRecordingRegistrar()}, Repositories{}, cfg); err != nil {
 			t.Errorf("%s: Register: %v", name, err)
 		}
+	}
+}
+
+// TestRegister_UploadConfigRefusals: a negative MaxUploadBytes or an
+// allow-list entry mime.ParseMediaType rejects is sdk.ErrInvalidInput and
+// registers nothing; zero cap and nil list are the defaults.
+func TestRegister_UploadConfigRefusals(t *testing.T) {
+	gate := []web.Middleware{passthrough}
+	for name, cfg := range map[string]Config{
+		"negative upload cap":       {Views: stubViews{}, AdminMiddleware: gate, MaxUploadBytes: -1},
+		"unparsable media type":     {Views: stubViews{}, AdminMiddleware: gate, AllowedMediaTypes: []string{"image/png", "not a type"}},
+		"negative cap without view": {MaxUploadBytes: -1},
+	} {
+		t.Run(name, func(t *testing.T) {
+			rec := newRecordingRegistrar()
+			if err := Register(pockets.Mount{Router: rec}, Repositories{}, cfg); !errors.Is(err, sdk.ErrInvalidInput) {
+				t.Fatalf("Register error = %v, want sdk.ErrInvalidInput", err)
+			}
+			if len(rec.routes) != 0 {
+				t.Errorf("refused Register mounted %d routes", len(rec.routes))
+			}
+		})
+	}
+	for name, cfg := range map[string]Config{
+		"zero cap, nil list":  {Views: stubViews{}, AdminMiddleware: gate},
+		"host cap, host list": {Views: stubViews{}, AdminMiddleware: gate, MaxUploadBytes: 1 << 30, AllowedMediaTypes: []string{"image/png", "Audio/MPEG"}},
+		"empty non-nil list":  {Views: stubViews{}, AdminMiddleware: gate, AllowedMediaTypes: []string{}},
+		"parameterised entry": {Views: stubViews{}, AdminMiddleware: gate, AllowedMediaTypes: []string{"text/plain; charset=utf-8"}},
+	} {
+		if err := Register(pockets.Mount{Router: newRecordingRegistrar()}, Repositories{}, cfg); err != nil {
+			t.Errorf("%s: Register: %v", name, err)
+		}
+	}
+}
+
+// TestDefaultAllowedMediaTypes pins the default list and that each call
+// returns its own copy.
+func TestDefaultAllowedMediaTypes(t *testing.T) {
+	want := []string{"image/png", "image/jpeg", "image/gif", "image/webp", "application/pdf"}
+	got := DefaultAllowedMediaTypes()
+	if !slices.Equal(got, want) {
+		t.Fatalf("DefaultAllowedMediaTypes() = %q, want %q", got, want)
+	}
+	got[0] = "image/svg+xml"
+	if again := DefaultAllowedMediaTypes(); !slices.Equal(again, want) {
+		t.Fatalf("mutating a returned list changed the default: %q", again)
 	}
 }
