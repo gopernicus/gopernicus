@@ -6,6 +6,8 @@ import (
 	"os"
 	"testing"
 	"time"
+
+	"github.com/gopernicus/gopernicus/sdk"
 )
 
 // TestLive_OpenAuthenticatesAsTheNamedUser proves Config.Username reaches the
@@ -55,7 +57,7 @@ func TestLive_OpenAuthenticatesAsTheNamedUser(t *testing.T) {
 		t.Errorf("ACL WHOAMI = %q, want %q", got, user)
 	}
 
-	byURL, err := Open(ctx, Config{URL: "redis://" + user + ":" + password + "@" + addr, Host: "ignored.invalid"})
+	byURL, err := Open(ctx, Config{URL: sdk.Secret("redis://" + user + ":" + password + "@" + addr), Host: "ignored.invalid"})
 	if err != nil {
 		t.Fatalf("Open() by URL as %q error = %v", user, err)
 	}

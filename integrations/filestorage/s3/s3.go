@@ -62,8 +62,8 @@ type Config struct {
 	// AccessKeyID and SecretAccessKey supply static credentials. When both are
 	// empty, Open falls back to the AWS default credential chain (environment,
 	// shared config, IAM role, ...).
-	AccessKeyID     string `env:"S3_ACCESS_KEY_ID"`
-	SecretAccessKey string `env:"S3_SECRET_ACCESS_KEY"`
+	AccessKeyID     string     `env:"S3_ACCESS_KEY_ID"`
+	SecretAccessKey sdk.Secret `env:"S3_SECRET_ACCESS_KEY"`
 
 	// Endpoint, when set, overrides the AWS endpoint so the client talks to an
 	// S3-compatible service. Examples:
@@ -123,7 +123,7 @@ func Open(ctx context.Context, cfg Config) (*Store, error) {
 	}
 	if cfg.AccessKeyID != "" && cfg.SecretAccessKey != "" {
 		loadOpts = append(loadOpts, awsconfig.WithCredentialsProvider(
-			credentials.NewStaticCredentialsProvider(cfg.AccessKeyID, cfg.SecretAccessKey, ""),
+			credentials.NewStaticCredentialsProvider(cfg.AccessKeyID, cfg.SecretAccessKey.Reveal(), ""),
 		))
 	}
 

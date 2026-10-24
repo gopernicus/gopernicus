@@ -7,13 +7,17 @@ integration because its dependency is GitHub's vendor API contract.
 ```go
 provider, err := github.New(github.Config{
     ClientID: clientID,
-    ClientSecret: clientSecret,
+    ClientSecret: sdk.Secret(clientSecret),
     HTTPClient: httpClient,
 })
 if err != nil {
     return err
 }
 ```
+
+**Secrets.** `ClientSecret` is an `sdk.Secret`: it renders as `[redacted]`
+through `fmt`, `slog` and `encoding/json`, a `string` variable converts with
+`sdk.Secret(v)`, and `Provider` formats and logs itself without the secret.
 
 Construction validates required credentials without network I/O. Empty `Scopes`
 defaults to `user:email`. Scopes and HTTP client configuration are copied; the

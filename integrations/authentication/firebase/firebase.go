@@ -96,10 +96,10 @@ type ClientConfig struct {
 	// ProjectID is the Firebase project. Required.
 	ProjectID string
 
-	// CredentialsJSON is a service-account key. Absent (nil/empty) uses
-	// Application Default Credentials, which also honor
-	// GOOGLE_APPLICATION_CREDENTIALS. Never logged.
-	CredentialsJSON []byte
+	// CredentialsJSON is a service-account key. Empty uses Application
+	// Default Credentials, which also honor GOOGLE_APPLICATION_CREDENTIALS.
+	// Never logged.
+	CredentialsJSON sdk.Secret
 }
 
 // NewClient builds an Admin SDK auth client: ADC by default, or a
@@ -111,7 +111,7 @@ func NewClient(ctx context.Context, cfg ClientConfig) (*auth.Client, error) {
 	}
 	var opts []option.ClientOption
 	if len(cfg.CredentialsJSON) > 0 {
-		opts = append(opts, option.WithAuthCredentialsJSON(option.ServiceAccount, cfg.CredentialsJSON))
+		opts = append(opts, option.WithAuthCredentialsJSON(option.ServiceAccount, []byte(cfg.CredentialsJSON.Reveal())))
 	}
 	app, err := firebasesdk.NewApp(ctx, &firebasesdk.Config{ProjectID: cfg.ProjectID}, opts...)
 	if err != nil {

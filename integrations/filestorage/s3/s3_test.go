@@ -31,6 +31,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	smithy "github.com/aws/smithy-go"
 
+	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/filestorage"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/filestorage/filestoragetest"
 )
@@ -238,7 +239,7 @@ func liveConfig(t *testing.T) (Config, bool) {
 		Bucket:          fmt.Sprintf("gopernicus-s3-test-%d", time.Now().UnixNano()),
 		Region:          region,
 		AccessKeyID:     os.Getenv("S3_TEST_ACCESS_KEY_ID"),
-		SecretAccessKey: os.Getenv("S3_TEST_SECRET_ACCESS_KEY"),
+		SecretAccessKey: sdk.Secret(os.Getenv("S3_TEST_SECRET_ACCESS_KEY")),
 		Endpoint:        endpoint,
 		UsePathStyle:    true, // MinIO and on-host deployments require path style.
 	}, true

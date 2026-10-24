@@ -74,7 +74,7 @@ func TestSignedURLHermetic(t *testing.T) {
 
 	st, err := gcs.Open(context.Background(), gcs.Config{
 		Bucket:          "test-bucket",
-		CredentialsJSON: saJSON,
+		CredentialsJSON: sdk.Secret(saJSON),
 	}, gcs.WithClientOption(option.WithoutAuthentication(), option.WithHTTPClient(noNetwork)))
 	if err != nil {
 		t.Fatalf("Open with generated credentials: %v", err)
@@ -117,7 +117,7 @@ func TestSignedURLHermetic(t *testing.T) {
 			}
 			return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"signedBlob":"AQID"}`)), Request: r}, nil
 		})}
-		st, err := gcs.Open(context.Background(), gcs.Config{Bucket: "bucket", CredentialsJSON: saJSON, SigningServiceAccount: "selected@example.invalid"},
+		st, err := gcs.Open(context.Background(), gcs.Config{Bucket: "bucket", CredentialsJSON: sdk.Secret(saJSON), SigningServiceAccount: "selected@example.invalid"},
 			gcs.WithClientOption(option.WithoutAuthentication(), option.WithHTTPClient(hc)))
 		if err != nil {
 			t.Fatal(err)
@@ -160,7 +160,7 @@ func TestConformance_GCS(t *testing.T) {
 			Bucket:          bucket,
 			Prefix:          prefix,
 			Endpoint:        endpoint,
-			CredentialsJSON: creds,
+			CredentialsJSON: sdk.Secret(creds),
 		})
 		if err != nil {
 			t.Fatalf("gcs.Open(bucket=%s): %v", bucket, err)

@@ -37,6 +37,9 @@ signer. For an existing decoded `[]byte` key, pass `string(keyBytes)`. Replacing
 that with its encoded representation changes the key and invalidates tokens.
 Hosts own secure key generation, storage, and rotation.
 
+**Secrets.** `Signer` formats and logs itself without its key: every `fmt`
+verb and `slog` print the method and `[redacted]`, never the secret bytes.
+
 Verification accepts only the configured method and checks the concrete HMAC
 method before returning the key. Different HMAC variants, asymmetric methods,
 and `alg=none` are rejected. Strict base64url decoding rejects padding and

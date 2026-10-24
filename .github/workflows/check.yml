@@ -1,5 +1,5 @@
 # Required CI gate: `make check` (templ drift in git mode, per-module
-# vet/build/test across every Makefile MODULE, the thirty-five layering guards,
+# vet/build/test across every Makefile MODULE, the thirty-six layering guards,
 # and the compile-only -tags=integration vet of the turso stores and the goredis
 # store).
 #

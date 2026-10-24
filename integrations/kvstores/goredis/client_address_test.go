@@ -125,7 +125,7 @@ func TestAURLFaultNeverRepeatsTheURL(t *testing.T) {
 		"rediss://app:s3cr3t-pw@managed.example:25061?no_such_option=1",
 		"rediss://app:s3cr3t-pw@managed.example:25061/%zz",
 	} {
-		_, err := Config{URL: raw}.options()
+		_, err := Config{URL: sdk.Secret(raw)}.options()
 		if !errors.Is(err, sdk.ErrInvalidInput) {
 			t.Errorf("%q: error = %v, want sdk.ErrInvalidInput", raw, err)
 			continue

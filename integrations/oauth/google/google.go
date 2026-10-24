@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"slices"
@@ -21,6 +22,7 @@ import (
 
 	"github.com/coreos/go-oidc/v3/oidc"
 
+	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/oauth"
 )
 
@@ -77,7 +79,7 @@ type Provider struct {
 // copied at construction; the underlying transport remains host-owned.
 type Config struct {
 	ClientID     string
-	ClientSecret string
+	ClientSecret sdk.Secret
 	Scopes       []string
 	HTTPClient   *http.Client
 	// AccessType may be empty, "online", or "offline". Prompt is an optional
@@ -131,6 +133,18 @@ func newProvider(ctx context.Context, cfg Config, eps endpoints) (*Provider, err
 		verifier: provider.Verifier(&oidc.Config{ClientID: cfg.ClientID})}, nil
 }
 
+// Format writes a summary without the client secret for every verb, so %v,
+// %+v and %#v of a Provider never print it.
+func (p *Provider) Format(f fmt.State, _ rune) {
+	_, _ = fmt.Fprintf(f, "google.Provider{ClientID:%s ClientSecret:%s}", p.config.ClientID, sdk.Redacted)
+}
+
+// LogValue returns the provider's name and client ID without the client
+// secret.
+func (p *Provider) LogValue() slog.Value {
+	return slog.GroupValue(slog.String("provider", "google"), slog.String("client_id", p.config.ClientID))
+}
+
 func (p *Provider) Name() string { return "google" }
 
 // GetAuthorizationURL builds an authorization-code URL with PKCE S256.
@@ -163,7 +177,7 @@ func (p *Provider) ExchangeCode(ctx context.Context, code, codeVerifier, redirec
 	data := url.Values{
 		"code":          {code},
 		"client_id":     {p.config.ClientID},
-		"client_secret": {p.config.ClientSecret},
+		"client_secret": {p.config.ClientSecret.Reveal()},
 		"redirect_uri":  {redirectURI},
 		"grant_type":    {"authorization_code"},
 		"code_verifier": {codeVerifier},
@@ -274,7 +288,7 @@ func (p *Provider) ValidateIDToken(ctx context.Context, idToken, nonce string) (
 func (p *Provider) RefreshToken(ctx context.Context, refreshToken string) (*oauth.TokenResponse, error) {
 	data := url.Values{
 		"client_id":     {p.config.ClientID},
-		"client_secret": {p.config.ClientSecret},
+		"client_secret": {p.config.ClientSecret.Reveal()},
 		"refresh_token": {refreshToken},
 		"grant_type":    {"refresh_token"},
 	}

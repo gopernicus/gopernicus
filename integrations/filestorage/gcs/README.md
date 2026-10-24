@@ -34,6 +34,10 @@ operations do not need signing configuration.
 | `Endpoint` | Storage API override for an emulator, with default authentication disabled. |
 | `WithClientOption(...option.ClientOption)` | Vendor credentials, scopes, HTTP client, quota project and endpoint settings, applied after Config. Storage operations, resumable initiation and IAM share the configured HTTP client. |
 
+**Secrets.** `CredentialsJSON` is an `sdk.Secret`: it renders as `[redacted]`
+through `fmt`, `slog` and `encoding/json`, a `string` variable converts with
+`sdk.Secret(v)`, and `Store` formats and logs itself without the private key.
+
 The vendor's `STORAGE_EMULATOR_HOST` default is honored; explicit endpoint options
 win. A host supplying its own HTTP client also supplies that client's
 authentication behavior. Do not disable authentication for production endpoints.

@@ -27,6 +27,10 @@ configuration, transports and other resources.
 `Config.Region` overrides the AWS environment/shared configuration; if none
 resolves, construction fails with `sdk.ErrInvalidInput` before a store is returned.
 
+**Secrets.** `SecretAccessKey` is an `sdk.Secret`: it renders as `[redacted]`
+through `fmt`, `slog` and `encoding/json`, and a `string` variable converts with
+`sdk.Secret(v)`; `AccessKeyID` is an identifier and stays a `string`.
+
 The `env:` tags work with `environment.ParseEnvTags`; struct literals remain
 first-class. Paths and list prefixes follow SDK validation. Keys are preserved
 literally and are never cleaned, trimmed or renamed. Inventory incompatible

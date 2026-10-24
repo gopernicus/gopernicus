@@ -154,6 +154,11 @@ passes its own app namespace):
 | `PoolSize` | `REDIS_POOL_SIZE` | `10` |
 | `MinIdleConns` | `REDIS_MIN_IDLE_CONNS` | `2` |
 
+**Secrets.** `URL` and `Password` are `sdk.Secret`: they render as `[redacted]`
+through `fmt`, `slog` and `encoding/json`, so a logged `Config` never prints
+them; a `string` variable converts with `sdk.Secret(v)`, and `Reveal()` is the
+one read.
+
 **Where the server is — a URL, or a host and a port. The URL wins.**
 `REDIS_URL` is a `redis://`, `rediss://` or `unix://` URL as go-redis's
 `ParseURL` reads it: `rediss://` turns TLS on, the userinfo is the ACL user and

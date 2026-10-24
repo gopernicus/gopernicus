@@ -17,6 +17,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"slices"
@@ -24,6 +25,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/oauth"
 )
 
@@ -76,7 +78,7 @@ type Provider struct {
 // copied at construction; the underlying transport remains host-owned.
 type Config struct {
 	ClientID     string
-	ClientSecret string
+	ClientSecret sdk.Secret
 	Scopes       []string
 	HTTPClient   *http.Client
 }
@@ -90,7 +92,7 @@ func newProvider(cfg Config, eps endpoints) (*Provider, error) {
 	if strings.TrimSpace(cfg.ClientID) == "" {
 		return nil, fmt.Errorf("oauth github: client ID is required")
 	}
-	if strings.TrimSpace(cfg.ClientSecret) == "" {
+	if strings.TrimSpace(cfg.ClientSecret.Reveal()) == "" {
 		return nil, fmt.Errorf("oauth github: client secret is required")
 	}
 	if len(cfg.Scopes) == 0 {
@@ -105,6 +107,18 @@ func newProvider(cfg Config, eps endpoints) (*Provider, error) {
 	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	cfg.HTTPClient = &client
 	return &Provider{config: cfg, endpoints: eps, client: &client}, nil
+}
+
+// Format writes a summary without the client secret for every verb, so %v,
+// %+v and %#v of a Provider never print it.
+func (p *Provider) Format(f fmt.State, _ rune) {
+	_, _ = fmt.Fprintf(f, "github.Provider{ClientID:%s ClientSecret:%s}", p.config.ClientID, sdk.Redacted)
+}
+
+// LogValue returns the provider's name and client ID without the client
+// secret.
+func (p *Provider) LogValue() slog.Value {
+	return slog.GroupValue(slog.String("provider", "github"), slog.String("client_id", p.config.ClientID))
 }
 
 func (p *Provider) Name() string { return "github" }
@@ -128,7 +142,7 @@ func (p *Provider) GetAuthorizationURL(r oauth.AuthorizationRequest) (string, er
 func (p *Provider) ExchangeCode(ctx context.Context, code, codeVerifier, redirectURI string) (*oauth.TokenResponse, error) {
 	data := url.Values{
 		"client_id":     {p.config.ClientID},
-		"client_secret": {p.config.ClientSecret},
+		"client_secret": {p.config.ClientSecret.Reveal()},
 		"code":          {code},
 		"redirect_uri":  {redirectURI},
 		"code_verifier": {codeVerifier},
@@ -235,7 +249,7 @@ func (p *Provider) GetUserInfo(ctx context.Context, accessToken string) (*oauth.
 func (p *Provider) RefreshToken(ctx context.Context, refreshToken string) (*oauth.TokenResponse, error) {
 	data := url.Values{
 		"client_id":     {p.config.ClientID},
-		"client_secret": {p.config.ClientSecret},
+		"client_secret": {p.config.ClientSecret.Reveal()},
 		"grant_type":    {"refresh_token"},
 		"refresh_token": {refreshToken},
 	}
