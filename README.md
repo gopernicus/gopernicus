@@ -52,7 +52,7 @@ examples/minimal/                   a host app: pockets/cms on an in-memory stor
 examples/auth-cms/                  a host app: auth + cms + events + the authorization flagship composed in-memory (rule 6, live)
 examples/jobs-minimal/              a host app: pockets/jobs on its memstore — zero drivers, the §8 protocol host
 examples/goth-showcase/             a zero-datastore browser and accessibility proof for ui/goth
-examples/production-baseline/       the auditable reference host: external OIDC identity + authorization on pgx, production posture, zero acknowledgements
+examples/production-baseline/       the auditable reference host: external OIDC identity + authorization on pgx, production posture, one acknowledgement (retention)
 workshop/gopernicus/                the scaffolding CLI (init / new pocket / db verbs) — stdlib-only, its own module
 ```
 

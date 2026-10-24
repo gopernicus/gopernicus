@@ -402,9 +402,20 @@ func run(ctx context.Context, log *slog.Logger, runtimeMode environment.Mode) er
 		return err
 	}
 	securityEvents.set(authSvc.SecurityEvents)
-	retention, err := runner.New(envPositiveDuration(log, "MAINTENANCE_INTERVAL", defaultMaintenanceInterval), log, runner.MaintenanceStep(authSvc.Maintenance))
+	retention, err := runner.New(envPositiveDuration(log, "MAINTENANCE_INTERVAL", defaultMaintenanceInterval), log,
+		runner.MaintenanceStep(authSvc.Maintenance), runner.OperationsStep(authzComponents.Mutations, defaultOperationExpiryBatch))
 	if err != nil {
 		return err
+	}
+	// Host-owned inquiry retention (SOC 2 S3), every delivery mode: a bounded PurgeBefore on the
+	// eraser this host wired as cmsRepos.InquiryMaintenance, on its own runner and interval.
+	inquiryCfg := inquiryPurgeConfigFromEnv(log)
+	var inquiries *runner.Runner
+	if cmsRepos.InquiryMaintenance != nil {
+		inquiries, err = newInquiryRunner(inquiryCfg, newInquiryPurge(cmsRepos.InquiryMaintenance, inquiryCfg, time.Now), log)
+		if err != nil {
+			return err
+		}
 	}
 	// The client-attribution stamp on every host route, so a denial the bridge
 	// records there (the role routes, the debug route) carries the client's IP
@@ -692,26 +703,16 @@ func run(ctx context.Context, log *slog.Logger, runtimeMode environment.Mode) er
 			"interval", deliveryPurgeInterval)
 	}
 
-	// Host-owned inquiry retention (SOC 2 S3), every delivery mode: a bounded PurgeBefore on the
-	// eraser this host wired as cmsRepos.InquiryMaintenance. Stopped beside the delivery purge.
+	// The inquiry runner built above; stopped beside the delivery purge.
 	var stopInquiryPurge func()
-	if cmsRepos.InquiryMaintenance != nil {
-		inquiryCfg := inquiryPurgeConfigFromEnv(log)
-		stopInquiryPurge = startInquiryPurge(inquiryCfg, newInquiryPurge(cmsRepos.InquiryMaintenance, inquiryCfg, time.Now), log)
+	if inquiries != nil {
+		stopInquiryPurge = startInquiryPurge(inquiryCfg, inquiries, log)
 	}
 
-	// Host-owned authorization operation expiry, in both delivery modes: the pocket keeps
-	// every operation record until ExpireOperations removes those past its retention. Its
-	// own Background-derived context stops it after HTTP drains, like the purge scheduler.
-	expiryCtx, cancelExpiry := context.WithCancel(context.Background())
-	expiryDone := make(chan struct{})
-	go func() {
-		defer close(expiryDone)
-		runOperationExpiryLoop(expiryCtx, defaultOperationExpiryInterval, authzComponents.Mutations.ExpireOperations, defaultOperationExpiryBatch, log)
-	}()
-
 	// Host-owned retention (SOC 2 S3): the retention host pocket's runner ticks the
-	// authentication maintenance pass at start and every MAINTENANCE_INTERVAL, on
+	// authentication maintenance pass and the authorization operation expiry (the pocket
+	// keeps every operation record until ExpireOperations removes those past its
+	// retention), in both delivery modes, at start and every MAINTENANCE_INTERVAL, on
 	// its own Background-derived context so shutdown stops it after HTTP drains.
 	// MaintenanceConfig.MaintenanceRunnerAcknowledged asserts exactly this.
 	retentionCtx, cancelRetention := context.WithCancel(context.Background())
@@ -764,12 +765,6 @@ func run(ctx context.Context, log *slog.Logger, runtimeMode environment.Mode) er
 	}
 	if stopInquiryPurge != nil {
 		stopInquiryPurge()
-	}
-	cancelExpiry()
-	select {
-	case <-expiryDone:
-	case <-time.After(5 * time.Second):
-		log.WarnContext(context.Background(), "authorization operation expiry did not stop within 5s")
 	}
 
 	log.InfoContext(context.Background(), "stopping retention runner")

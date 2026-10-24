@@ -214,7 +214,11 @@ func TestInquiryPurgeSchedulerLogsStep(t *testing.T) {
 	log := slog.New(slog.NewTextHandler(logs, nil))
 
 	cfg := inquiryPurgeConfig{Interval: 5 * time.Millisecond, Retention: 24 * time.Hour, Batch: 10}
-	stop := startInquiryPurge(cfg, newInquiryPurge(repos.InquiryMaintenance, cfg, time.Now), log)
+	inquiries, err := newInquiryRunner(cfg, newInquiryPurge(repos.InquiryMaintenance, cfg, time.Now), log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stop := startInquiryPurge(cfg, inquiries, log)
 
 	deadline := time.Now().Add(2 * time.Second)
 	for !strings.Contains(logs.String(), "step=inquiries count=1") {
@@ -237,7 +241,7 @@ func TestInquiryPurgeSchedulerLogsStep(t *testing.T) {
 }
 
 // TestInquiryPurgeLoopContinuesAfterError proves a failing pass is logged with its step name
-// and the loop keeps running until canceled.
+// and the scheduler keeps running until stopped.
 func TestInquiryPurgeLoopContinuesAfterError(t *testing.T) {
 	t.Parallel()
 	var mu sync.Mutex
@@ -249,12 +253,12 @@ func TestInquiryPurgeLoopContinuesAfterError(t *testing.T) {
 		return 0, errors.New("eraser unavailable")
 	}
 	logs := &syncBuffer{}
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		runInquiryPurgeLoop(ctx, 5*time.Millisecond, purge, slog.New(slog.NewTextHandler(logs, nil)))
-	}()
+	cfg := inquiryPurgeConfig{Interval: 5 * time.Millisecond, Retention: time.Hour, Batch: 1}
+	inquiries, err := newInquiryRunner(cfg, purge, slog.New(slog.NewTextHandler(logs, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	stop := startInquiryPurge(cfg, inquiries, slog.New(slog.NewTextHandler(logs, nil)))
 	deadline := time.Now().Add(2 * time.Second)
 	for {
 		mu.Lock()
@@ -264,73 +268,20 @@ func TestInquiryPurgeLoopContinuesAfterError(t *testing.T) {
 			break
 		}
 		if time.Now().After(deadline) {
+			stop()
 			t.Fatalf("inquiry purge loop stopped calling after errors (calls=%d)", n)
 		}
 		time.Sleep(2 * time.Millisecond)
 	}
-	cancel()
+	stopped := make(chan struct{})
+	go func() { stop(); close(stopped) }()
 	select {
-	case <-done:
+	case <-stopped:
 	case <-time.After(2 * time.Second):
 		t.Fatal("inquiry purge loop did not return after cancel")
 	}
 	if !strings.Contains(logs.String(), "retention step failed") || !strings.Contains(logs.String(), "step=inquiries") {
 		t.Errorf("no step-named error line: %s", logs.String())
-	}
-}
-
-// fakeExpirer stands in for the authorization mutations service's bounded expiry.
-type fakeExpirer struct {
-	mu     sync.Mutex
-	limits []int
-	err    error
-}
-
-func (e *fakeExpirer) ExpireOperations(_ context.Context, limit int) (int, error) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	e.limits = append(e.limits, limit)
-	if e.err != nil {
-		return 0, e.err
-	}
-	return 1, nil
-}
-
-func (e *fakeExpirer) calls() []int {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	return append([]int(nil), e.limits...)
-}
-
-// TestOperationExpiryLoopRunsBoundedPassesThroughErrors proves every tick asks for at most
-// the batch, a failed pass does not stop the loop, and cancellation returns promptly.
-func TestOperationExpiryLoopRunsBoundedPassesThroughErrors(t *testing.T) {
-	t.Parallel()
-	expirer := &fakeExpirer{err: errors.New("operation ledger unavailable")}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		runOperationExpiryLoop(ctx, 5*time.Millisecond, expirer.ExpireOperations, 7, quietLog())
-	}()
-	deadline := time.Now().Add(2 * time.Second)
-	for len(expirer.calls()) < 3 {
-		if time.Now().After(deadline) {
-			t.Fatalf("expiry loop stopped after errors (calls=%v)", expirer.calls())
-		}
-		time.Sleep(2 * time.Millisecond)
-	}
-	cancel()
-	select {
-	case <-done:
-	case <-time.After(2 * time.Second):
-		t.Fatal("expiry loop did not return after context cancel")
-	}
-	for _, limit := range expirer.calls() {
-		if limit != 7 {
-			t.Fatalf("pass requested limit %d, want the batch 7", limit)
-		}
 	}
 }
 

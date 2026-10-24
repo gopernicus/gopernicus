@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 
@@ -22,10 +23,12 @@ import (
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/securityevent"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/session"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/user"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/maintenance"
 	"github.com/gopernicus/gopernicus/pockets/authorization"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/mutations"
 	authorizationmemory "github.com/gopernicus/gopernicus/pockets/authorization/stores/memory"
 	"github.com/gopernicus/gopernicus/sdk"
+	"github.com/gopernicus/gopernicus/sdk/capabilities/filestorage"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/ratelimiter"
 	"github.com/gopernicus/gopernicus/sdk/pkg/environment"
 	"github.com/gopernicus/gopernicus/sdk/pkg/web"
@@ -50,6 +53,12 @@ const (
 // the subject mirror and the user's status. Every other port method is
 // unreachable in these tests and panics through the nil embedded interface.
 type users struct{ user.UserRepository }
+
+type userAdmin struct{ user.AdminRepository }
+
+type userErasure struct{ user.EraseRepository }
+
+type maintenanceStore struct{ maintenance.Repository }
 
 type identifiers struct {
 	identifier.IdentifierRepository
@@ -96,7 +105,8 @@ func (sharedLimiter) Reset(context.Context, string) error { return nil }
 func quietLog() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
 
 // identityRepositories is the authentication store bundle run wires, over the
-// doubles: the security-event audit rail included.
+// doubles: the security-event audit rail, user administration, erasure and
+// maintenance included.
 func identityRepositories() authentication.Repositories {
 	return authentication.Repositories{
 		Users:            users{},
@@ -105,6 +115,9 @@ func identityRepositories() authentication.Repositories {
 		ActiveSessions:   activeSessions{},
 		ExternalSubjects: externalSubjects{},
 		SecurityEvents:   securityEvents{},
+		UserAdmin:        userAdmin{},
+		UserErasure:      userErasure{},
+		Maintenance:      maintenanceStore{},
 	}
 }
 
@@ -128,9 +141,10 @@ func setKeys(t *testing.T) {
 }
 
 // productionBaseline is run's composition in production over the doubles, with
-// every input production asks for: both keys, an https public origin, an OIDC
-// provider that is not development-only, Secure cookies, a shared limiter, the
-// security-event rail, and a recording authorization store with its reader.
+// every input production asks for: both keys, an https public origin, the
+// archive, an OIDC provider that is not development-only, Secure cookies, a
+// shared limiter, the security-event rail, user administration, erasure and
+// maintenance, and a recording authorization store with its reader.
 func productionBaseline(t *testing.T) composition {
 	t.Helper()
 	setKeys(t)
@@ -138,6 +152,7 @@ func productionBaseline(t *testing.T) composition {
 	t.Setenv("IDP_ISSUER", "https://idp.example")
 	t.Setenv("IDP_AUDIENCE", "baseline")
 	t.Setenv("IDP_JWKS_URL", "https://idp.example/.well-known/jwks.json")
+	t.Setenv("AUDIT_ARCHIVE_DIR", t.TempDir())
 	log := quietLog()
 	keys, err := loadKeys(environment.ModeProduction, log)
 	if err != nil {
@@ -147,6 +162,11 @@ func productionBaseline(t *testing.T) composition {
 	if err != nil {
 		t.Fatalf("loadServerConfig: %v", err)
 	}
+	archive, closeArchive, err := openArchive(environment.ModeProduction)
+	if err != nil {
+		t.Fatalf("openArchive: %v", err)
+	}
+	t.Cleanup(closeArchive)
 	provider, err := newProvider(context.Background(), web.NewWebHandler(), srv.Origin(), environment.ModeProduction, log)
 	if err != nil {
 		t.Fatalf("newProvider: %v", err)
@@ -158,6 +178,7 @@ func productionBaseline(t *testing.T) composition {
 		keys:                keys,
 		sessionCookie:       authenticationhttp.CookieConfig{Secure: true},
 		limiter:             sharedLimiter{},
+		archive:             archive,
 		authenticationRepos: identityRepositories(),
 		authorizationRepos:  authorizationRepositories(true),
 		provider:            provider,
@@ -167,7 +188,10 @@ func productionBaseline(t *testing.T) composition {
 // TestProductionBaselineConstructs is the positive control: without it the
 // matrix below could pass with every case failing for the wrong reason. It also
 // proves the decision bridge is wired: the authorization registration line
-// reports the observer, and production logs no unrecorded-denials WARN.
+// reports the observer, and production logs no unrecorded-denials WARN. And it
+// proves retention is: the maintenance registration line reports the
+// acknowledged runner and the disk archive, the operation expiry is on, and
+// production logs none of the retention WARNs.
 func TestProductionBaselineConstructs(t *testing.T) {
 	var logs bytes.Buffer
 	c := productionBaseline(t)
@@ -177,6 +201,14 @@ func TestProductionBaselineConstructs(t *testing.T) {
 	}
 	if !strings.Contains(logs.String(), "decision_observer=true") || strings.Contains(logs.String(), "denials are not durably recorded") {
 		t.Fatalf("registration does not report the decision observer:\n%s", logs.String())
+	}
+	for _, want := range []string{"maintenance_runner=true", "archive_sink=disk:" + os.Getenv("AUDIT_ARCHIVE_DIR"), "security_event_retention=9600h0m0s", "operation_expiry"} {
+		if !strings.Contains(logs.String(), want) {
+			t.Errorf("registration lacks %q:\n%s", want, logs.String())
+		}
+	}
+	if strings.Contains(logs.String(), "level=WARN") {
+		t.Errorf("production logs a WARN:\n%s", logs.String())
 	}
 }
 
@@ -211,6 +243,16 @@ func TestProductionRefusesEachOmission(t *testing.T) {
 			mutate: func(_ *testing.T, c *composition) { c.sessionCookie.Secure = false },
 			want:   sdk.ErrInvalidInput,
 			names:  "Secure",
+		},
+		{
+			name:   "maintenance_repository",
+			mutate: func(_ *testing.T, c *composition) { c.authenticationRepos.Maintenance = nil },
+			want:   authentication.ErrMaintenanceAcknowledgedWithoutRepository,
+		},
+		{
+			name:   "user_erasure_repository",
+			mutate: func(_ *testing.T, c *composition) { c.authenticationRepos.UserErasure = nil },
+			want:   authentication.ErrUserErasureRouteRequires,
 		},
 		{
 			// The dev issuer refuses production itself, so a production pocket
@@ -270,6 +312,44 @@ func TestProductionRefusesUnsetKeys(t *testing.T) {
 	})
 }
 
+// TestArchiveIsRequiredInProduction proves production refuses to boot without
+// AUDIT_ARCHIVE_DIR, while development without it purges unarchived (the
+// registration line's archive_sink=none, no WARN), and that a set directory
+// opens as a disk sink labeled disk:<dir>.
+func TestArchiveIsRequiredInProduction(t *testing.T) {
+	t.Setenv("AUDIT_ARCHIVE_DIR", "")
+	if _, _, err := openArchive(environment.ModeProduction); !errors.Is(err, errArchiveDirRequired) {
+		t.Fatalf("production without AUDIT_ARCHIVE_DIR: err = %v, want errArchiveDirRequired", err)
+	}
+	archive, closeArchive, err := openArchive(environment.ModeDevelopment)
+	if err != nil || archive.sink != nil {
+		t.Fatalf("development without AUDIT_ARCHIVE_DIR: %+v %v, want no sink", archive, err)
+	}
+	closeArchive()
+
+	var logs bytes.Buffer
+	c := productionBaseline(t)
+	c.mode, c.archive = environment.ModeDevelopment, archive
+	c.log = slog.New(slog.NewTextHandler(&logs, nil))
+	if _, err := mount(web.NewWebHandler(), c); err != nil {
+		t.Fatalf("development without an archive: %v", err)
+	}
+	if !strings.Contains(logs.String(), "archive_sink=none") || strings.Contains(logs.String(), "maintenance_runner=unacknowledged") {
+		t.Fatalf("registration does not report archive_sink=none alone:\n%s", logs.String())
+	}
+
+	dir := t.TempDir()
+	t.Setenv("AUDIT_ARCHIVE_DIR", dir)
+	archive, closeArchive, err = openArchive(environment.ModeProduction)
+	if err != nil {
+		t.Fatalf("openArchive: %v", err)
+	}
+	defer closeArchive()
+	if _, ok := archive.sink.(*filestorage.Disk); !ok || archive.location != "disk:"+dir {
+		t.Fatalf("archive = %T %q, want a disk sink labeled disk:%s", archive.sink, archive.location, dir)
+	}
+}
+
 // TestProductionRequiresPublicBaseURL proves production refuses to serve
 // without the https origin cookie mutations are checked against.
 func TestProductionRequiresPublicBaseURL(t *testing.T) {
@@ -295,7 +375,8 @@ func TestProductionRefusesTheDevIssuer(t *testing.T) {
 // cross-site POST carrying the session cookie is refused by the browser-safe
 // mutation gate even with a valid provider token, a request without a
 // credential is refused by authentication, and the same token without the
-// cookie passes both and is refused by authorization.
+// cookie passes both and is refused by authorization. The erase route is
+// mounted behind the same principal and refuses a non-admin.
 func TestRoleRoutesGateOrder(t *testing.T) {
 	for name := range productionKeys {
 		t.Setenv(string(name), "")
@@ -361,6 +442,12 @@ func TestRoleRoutesGateOrder(t *testing.T) {
 	bearerOnly := http.Header{"Authorization": {"Bearer " + minted.Token}, "Content-Type": {"application/json"}}
 	if status, raw := send(t, http.MethodPost, origin+"/authorization/roles", assign, bearerOnly); status != http.StatusForbidden || strings.Contains(raw, "origin_rejected") {
 		t.Errorf("bearer POST by a non-admin: %d %s, want 403 from authorization", status, raw)
+	}
+	if status, raw := send(t, http.MethodPost, origin+"/auth/admin/users/user-2/erase", "{}", http.Header{"Content-Type": {"application/json"}}); status != http.StatusUnauthorized {
+		t.Errorf("erase without a credential: %d %s, want 401", status, raw)
+	}
+	if status, raw := send(t, http.MethodPost, origin+"/auth/admin/users/user-2/erase", "{}", bearerOnly); status != http.StatusForbidden {
+		t.Errorf("erase by a non-admin: %d %s, want 403 from the user-administration check", status, raw)
 	}
 }
 

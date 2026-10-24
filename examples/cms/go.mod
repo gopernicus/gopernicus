@@ -3,12 +3,12 @@ module github.com/gopernicus/gopernicus/examples/cms
 go 1.26.10
 
 require (
-	github.com/gopernicus/gopernicus/integrations/datastores/turso v0.4.0
-	github.com/gopernicus/gopernicus/integrations/tracing/otel v0.2.0
-	github.com/gopernicus/gopernicus/pockets/cms v0.3.0
-	github.com/gopernicus/gopernicus/pockets/cms/stores/turso v0.3.0
+	github.com/gopernicus/gopernicus/integrations/datastores/turso v0.8.0
+	github.com/gopernicus/gopernicus/integrations/tracing/otel v0.3.0
+	github.com/gopernicus/gopernicus/pockets/cms v0.5.0
+	github.com/gopernicus/gopernicus/pockets/cms/stores/turso v0.4.0
 	github.com/gopernicus/gopernicus/pockets/cms/views/goth v0.3.0
-	github.com/gopernicus/gopernicus/sdk v0.9.0
+	github.com/gopernicus/gopernicus/sdk v0.16.0
 	github.com/gopernicus/gopernicus/ui/goth v0.2.0
 )
 

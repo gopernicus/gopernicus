@@ -159,9 +159,13 @@ remain absent.
   `cms.Register` logs `inquiry_maintenance=wired`; a store without it keeps every inquiry
   forever and production `Register` WARNs.
 - **cms inquiry retention** (SOC 2 S3): the host keeps the eraser it handed to `cms.Register`
-  and runs a bounded `PurgeBefore` on its own ticker in every delivery mode —
+  and runs a bounded `PurgeBefore` in every delivery mode, as the one step of its own
+  retention runner (`pockets/retention/inbound/runner`, at boot and every interval) —
   `INQUIRY_PURGE_INTERVAL` (default `1h`), `INQUIRY_PURGE_RETENTION` (default `2160h`, 90
   days), `INQUIRY_PURGE_BATCH` (default `500`); each pass logs `step=inquiries count=<n>`.
+  The main retention runner ticks the authentication maintenance pass and
+  `Mutations.ExpireOperations` (`step=operations count=<n>`, at most 500 a tick) every
+  `MAINTENANCE_INTERVAL`.
   To see a pass remove a row, run with `INQUIRY_PURGE_INTERVAL=1m INQUIRY_PURGE_RETENTION=1m`
   and submit `POST /contact`. Nothing here runs `DeleteByEmail` (the erasure runbook's step);
   no route deletes an inquiry and no evidence row records a deletion — both are deferred
