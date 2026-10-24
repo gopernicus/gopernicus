@@ -3,9 +3,9 @@ module github.com/gopernicus/gopernicus/pockets/authentication/stores/turso
 go 1.26.10
 
 require (
-	github.com/gopernicus/gopernicus/integrations/datastores/turso v0.8.0
+	github.com/gopernicus/gopernicus/integrations/datastores/turso v0.9.0
 	github.com/gopernicus/gopernicus/pockets/authentication v0.23.0
-	github.com/gopernicus/gopernicus/sdk v0.16.0
+	github.com/gopernicus/gopernicus/sdk v0.18.0
 )
 
 require (
