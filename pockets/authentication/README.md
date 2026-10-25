@@ -2258,7 +2258,10 @@ renders none:
 
 - `data-auth-passkey` is `signin` (`AssertionOptions`/`Assertion`), `register`
   (`RegistrationOptions`/`Registration`, an optional `[data-auth-passkey-name]`
-  input inside, `data-done-url` the fallback after success) or `stepup`
+  input inside, an optional `[data-auth-passkey-require-uv]` checkbox inside —
+  checked, the options request body is `{"user_verification":"required"}`, else
+  `{}`; views/goth renders it checked while the user holds no AAL2-capable
+  passkey — and `data-done-url` the fallback after success) or `stepup`
   (`StepUpOptions`/`StepUp`). `data-return-to` (the validated `ReturnTo`) is
   where a success navigates, else `/`; a step-up navigates only on `aal2` and
   otherwise explains that the passkey cannot confirm a PIN or biometric.

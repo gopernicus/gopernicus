@@ -222,7 +222,10 @@ func passkeyUnsupported(text string) templ.Component {
 
 // passkeysBody renders the passkey manage page: each passkey with its rename and
 // remove forms (POST /auth/passkeys/{id}, action=rename|remove), and the add
-// control. Removal revokes every session, so its form says so.
+// control. Removal revokes every session, so its form says so. The add control's
+// "Require Face ID, Touch ID or a PIN" box starts checked while the user holds no
+// AAL2-capable passkey, so the step-up page's "Add a passkey" link (shown exactly
+// then) lands with it checked.
 func passkeysBody(m authentication.PasskeysPage) templ.Component {
 	return templruntime.GeneratedTemplate(func(templ_7745c5c3_Input templruntime.GeneratedComponentInput) (templ_7745c5c3_Err error) {
 		templ_7745c5c3_W, ctx := templ_7745c5c3_Input.Writer, templ_7745c5c3_Input.Context
@@ -280,7 +283,7 @@ func passkeysBody(m authentication.PasskeysPage) templ.Component {
 				var templ_7745c5c3_Var14 string
 				templ_7745c5c3_Var14, templ_7745c5c3_Err = templ.JoinStringErrs(m.Actor)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `passkey.templ`, Line: 51, Col: 28}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `passkey.templ`, Line: 54, Col: 28}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var14))
 				if templ_7745c5c3_Err != nil {
@@ -313,7 +316,7 @@ func passkeysBody(m authentication.PasskeysPage) templ.Component {
 					var templ_7745c5c3_Var15 string
 					templ_7745c5c3_Var15, templ_7745c5c3_Err = templ.JoinStringErrs(p.Name)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `passkey.templ`, Line: 61, Col: 19}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `passkey.templ`, Line: 64, Col: 19}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var15))
 					if templ_7745c5c3_Err != nil {
@@ -326,7 +329,7 @@ func passkeysBody(m authentication.PasskeysPage) templ.Component {
 					var templ_7745c5c3_Var16 string
 					templ_7745c5c3_Var16, templ_7745c5c3_Err = templ.JoinStringErrs(passkeyVerificationText(p.UserVerified))
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `passkey.templ`, Line: 63, Col: 49}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `passkey.templ`, Line: 66, Col: 49}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var16))
 					if templ_7745c5c3_Err != nil {
@@ -349,7 +352,7 @@ func passkeysBody(m authentication.PasskeysPage) templ.Component {
 					var templ_7745c5c3_Var17 string
 					templ_7745c5c3_Var17, templ_7745c5c3_Err = templ.JoinStringErrs(p.CreatedAt)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `passkey.templ`, Line: 68, Col: 29}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `passkey.templ`, Line: 71, Col: 29}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var17))
 					if templ_7745c5c3_Err != nil {
@@ -362,7 +365,7 @@ func passkeysBody(m authentication.PasskeysPage) templ.Component {
 					var templ_7745c5c3_Var18 string
 					templ_7745c5c3_Var18, templ_7745c5c3_Err = templ.JoinStringErrs(passkeyLastUsedText(p.LastUsedAt))
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `passkey.templ`, Line: 68, Col: 68}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `passkey.templ`, Line: 71, Col: 68}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var18))
 					if templ_7745c5c3_Err != nil {
@@ -375,7 +378,7 @@ func passkeysBody(m authentication.PasskeysPage) templ.Component {
 					var templ_7745c5c3_Var19 templ.SafeURL
 					templ_7745c5c3_Var19, templ_7745c5c3_Err = templ.JoinURLErrs(templ.SafeURL(p.Action))
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `passkey.templ`, Line: 69, Col: 59}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `passkey.templ`, Line: 72, Col: 59}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var19))
 					if templ_7745c5c3_Err != nil {
@@ -473,7 +476,7 @@ func passkeysBody(m authentication.PasskeysPage) templ.Component {
 						var templ_7745c5c3_Var23 templ.SafeURL
 						templ_7745c5c3_Var23, templ_7745c5c3_Err = templ.JoinURLErrs(templ.SafeURL(p.Action))
 						if templ_7745c5c3_Err != nil {
-							return templ.Error{Err: templ_7745c5c3_Err, FileName: `passkey.templ`, Line: 88, Col: 60}
+							return templ.Error{Err: templ_7745c5c3_Err, FileName: `passkey.templ`, Line: 91, Col: 60}
 						}
 						_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var23))
 						if templ_7745c5c3_Err != nil {
@@ -551,7 +554,7 @@ func passkeysBody(m authentication.PasskeysPage) templ.Component {
 							var templ_7745c5c3_Var27 string
 							templ_7745c5c3_Var27, templ_7745c5c3_Err = templ.JoinStringErrs(nonRemovableNote)
 							if templ_7745c5c3_Err != nil {
-								return templ.Error{Err: templ_7745c5c3_Err, FileName: `passkey.templ`, Line: 100, Col: 27}
+								return templ.Error{Err: templ_7745c5c3_Err, FileName: `passkey.templ`, Line: 103, Col: 27}
 							}
 							_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var27))
 							if templ_7745c5c3_Err != nil {
@@ -616,6 +619,18 @@ func passkeysBody(m authentication.PasskeysPage) templ.Component {
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 40, " <label for=\"passkey-require-uv\" data-slot=\"auth-passkey-require-uv\">")
+				if templ_7745c5c3_Err != nil {
+					return templ_7745c5c3_Err
+				}
+				templ_7745c5c3_Err = primitives.Checkbox(primitives.CheckboxProps{Base: primitives.Base{ID: "passkey-require-uv", Attributes: templ.Attributes{"data-auth-passkey-require-uv": true}}, Checked: !holdsVerifiedPasskey(m.Passkeys)}).Render(ctx, templ_7745c5c3_Buffer)
+				if templ_7745c5c3_Err != nil {
+					return templ_7745c5c3_Err
+				}
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 41, "Require Face ID, Touch ID or a PIN</label>")
+				if templ_7745c5c3_Err != nil {
+					return templ_7745c5c3_Err
+				}
 				return nil
 			})
 			templ_7745c5c3_Err = passkeyControl(passkeyControlProps{Mode: "register", OptionsURL: m.Links.RegistrationOptions, FinishURL: m.Links.Registration, CSRFToken: m.CSRFToken, ReturnTo: m.ReturnTo, DoneURL: passkeyAddedURL(m.Links), Label: "Add a passkey"}).Render(templ.WithChildren(ctx, templ_7745c5c3_Var28), templ_7745c5c3_Buffer)
@@ -626,7 +641,7 @@ func passkeysBody(m authentication.PasskeysPage) templ.Component {
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 40, "</section><nav class=\"goth-auth-links\" data-slot=\"auth-links\"><p><a href=\"/auth/account\">Back to account security</a></p></nav>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 42, "</section><nav class=\"goth-auth-links\" data-slot=\"auth-links\"><p><a href=\"/auth/account\">Back to account security</a></p></nav>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
@@ -681,35 +696,17 @@ func passkeyStepUpBody(m authentication.PasskeyStepUpPage) templ.Component {
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 41, " <p>To continue, confirm it's you with a passkey that checks your PIN or biometric.</p>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 43, " <p>To continue, confirm it's you with a passkey that checks your PIN or biometric.</p>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 			if !m.HasPasskeys {
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 42, "<p>You haven't added a passkey yet. Add one, then come back to confirm it's you.</p>")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 44, "<p>You haven't added a passkey yet. Add one, then come back to confirm it's you.</p>")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
 			} else if !m.CanReachAAL2 {
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 43, "<p>Your passkeys can't confirm a PIN or biometric, so they can't complete this check. Add a passkey that uses your device's screen lock or a security key with a PIN.</p>")
-				if templ_7745c5c3_Err != nil {
-					return templ_7745c5c3_Err
-				}
-			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 44, " ")
-			if templ_7745c5c3_Err != nil {
-				return templ_7745c5c3_Err
-			}
-			if m.HasPasskeys {
-				templ_7745c5c3_Err = passkeyControl(passkeyControlProps{Mode: "stepup", OptionsURL: m.Links.StepUpOptions, FinishURL: m.Links.StepUp, CSRFToken: m.CSRFToken, ReturnTo: m.ReturnTo, Label: "Use a passkey"}).Render(ctx, templ_7745c5c3_Buffer)
-				if templ_7745c5c3_Err != nil {
-					return templ_7745c5c3_Err
-				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 45, " ")
-				if templ_7745c5c3_Err != nil {
-					return templ_7745c5c3_Err
-				}
-				templ_7745c5c3_Err = passkeyUnsupported("This browser doesn't support passkeys, so it can't complete this check. Try a browser or device that does.").Render(ctx, templ_7745c5c3_Buffer)
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 45, "<p>Your passkeys can't confirm a PIN or biometric, so they can't complete this check. Add a passkey that uses your device's screen lock or a security key with a PIN.</p>")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
@@ -718,21 +715,39 @@ func passkeyStepUpBody(m authentication.PasskeyStepUpPage) templ.Component {
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
+			if m.HasPasskeys {
+				templ_7745c5c3_Err = passkeyControl(passkeyControlProps{Mode: "stepup", OptionsURL: m.Links.StepUpOptions, FinishURL: m.Links.StepUp, CSRFToken: m.CSRFToken, ReturnTo: m.ReturnTo, Label: "Use a passkey"}).Render(ctx, templ_7745c5c3_Buffer)
+				if templ_7745c5c3_Err != nil {
+					return templ_7745c5c3_Err
+				}
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 47, " ")
+				if templ_7745c5c3_Err != nil {
+					return templ_7745c5c3_Err
+				}
+				templ_7745c5c3_Err = passkeyUnsupported("This browser doesn't support passkeys, so it can't complete this check. Try a browser or device that does.").Render(ctx, templ_7745c5c3_Buffer)
+				if templ_7745c5c3_Err != nil {
+					return templ_7745c5c3_Err
+				}
+			}
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 48, " ")
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
 			if (!m.HasPasskeys || !m.CanReachAAL2) && m.Links.Manage != "" {
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 47, "<p><a href=\"")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 49, "<p><a href=\"")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
 				var templ_7745c5c3_Var32 templ.SafeURL
 				templ_7745c5c3_Var32, templ_7745c5c3_Err = templ.JoinURLErrs(templ.SafeURL(addPasskeyHref(m.Links, m.ReturnTo)))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `passkey.templ`, Line: 146, Col: 66}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `passkey.templ`, Line: 153, Col: 66}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var32))
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 48, "\">Add a passkey</a></p>")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 50, "\">Add a passkey</a></p>")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}

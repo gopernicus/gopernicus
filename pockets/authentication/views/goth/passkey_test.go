@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"regexp"
 	"strings"
 	"testing"
@@ -79,6 +80,10 @@ func TestPasskeyScript_Contract(t *testing.T) {
 		`addEventListener("click"`,
 		"[data-auth-passkey-status]",
 		"[data-auth-passkey-error]",
+		"[data-auth-passkey-require-uv]",
+		`mode === "register" && Boolean(uv && uv.checked)`,
+		`requireUV ? { user_verification: "required" } : {}`,
+		`requireUV && finish.status === 401 && finish.data.code === "passkey_rejected"`,
 	)
 	// Options are fetched on click only: the single post of the options URL
 	// sits inside run, which only the click listener calls.
@@ -107,6 +112,7 @@ func TestPasskeyScript_Copy(t *testing.T) {
 		"passkey_exists:",
 		"passkey_limit:",
 		"too_many_attempts:",
+		"That passkey didn't confirm a PIN or biometric. Try again and use Face ID, Touch ID or your PIN.",
 	)
 }
 
@@ -224,6 +230,10 @@ func TestPasskeysPage_Manage(t *testing.T) {
 		`data-auth-passkey-name`,
 		`data-auth-passkey-unsupported`,
 		`name="csrf_token" value="csrf-abc123"`,
+		`<label for="passkey-require-uv" data-slot="auth-passkey-require-uv">`,
+		`id="passkey-require-uv"`,
+		`data-auth-passkey-require-uv`,
+		"Require Face ID, Touch ID or a PIN",
 	)
 	if strings.Count(body, `value="remove"`) != 1 {
 		t.Error("only the removable passkey offers a remove form")
@@ -232,6 +242,32 @@ func TestPasskeysPage_Manage(t *testing.T) {
 
 	empty := render(t, newViews(t).Passkeys(inbound.PasskeysPage{PageContext: ctx(), Links: *passkeyLinks()}))
 	mustContain(t, "manage empty", empty, "You haven't added a passkey yet.", `data-return-to="/dashboard"`)
+}
+
+// TestPasskeysPage_RequireUVDefault proves the "Require Face ID, Touch ID or a
+// PIN" box starts checked while the user holds no AAL2-capable passkey (none, or
+// presence-only ones) and unchecked once they hold one.
+func TestPasskeysPage_RequireUVDefault(t *testing.T) {
+	v := newViews(t)
+	presenceOnly := inbound.PasskeyItem{ID: "pk2", Name: "Key", Action: "/auth/passkeys/pk2"}
+	verified := inbound.PasskeyItem{ID: "pk1", Name: "Laptop", UserVerified: true, Action: "/auth/passkeys/pk1"}
+	for name, tc := range map[string]struct {
+		passkeys []inbound.PasskeyItem
+		checked  bool
+	}{
+		"none":          {nil, true},
+		"presence-only": {[]inbound.PasskeyItem{presenceOnly}, true},
+		"verified":      {[]inbound.PasskeyItem{presenceOnly, verified}, false},
+	} {
+		body := render(t, v.Passkeys(inbound.PasskeysPage{PageContext: ctx(), Links: *passkeyLinks(), Passkeys: tc.passkeys}))
+		box := regexp.MustCompile(`<input[^>]*id="passkey-require-uv"[^>]*>`).FindString(body)
+		if box == "" {
+			t.Fatalf("%s: no require-uv checkbox", name)
+		}
+		if got := strings.Contains(box, " checked"); got != tc.checked {
+			t.Errorf("%s: checked = %v, want %v (%s)", name, got, tc.checked, box)
+		}
+	}
 }
 
 // TestPasskeyStepUpPage_States proves the three passkey step-up states: no
@@ -256,6 +292,35 @@ func TestPasskeyStepUpPage_States(t *testing.T) {
 	capable := render(t, v.PasskeyStepUp(inbound.PasskeyStepUpPage{PageContext: pc, Links: *passkeyLinks(), HasPasskeys: true, CanReachAAL2: true}))
 	mustContain(t, "capable", capable, `data-auth-passkey="stepup"`, "Use a passkey")
 	mustNotContain(t, "capable", capable, "Your passkeys can't confirm", add)
+}
+
+// TestPasskeyStepUpLink_ArrivesChecked proves the step-up page's "Add a passkey"
+// link carries return_to intact and lands on a manage page whose require-uv box
+// is checked: the link shows only without an AAL2-capable passkey, the same
+// predicate that checks the box, so it needs no parameter of its own.
+func TestPasskeyStepUpLink_ArrivesChecked(t *testing.T) {
+	v := newViews(t)
+	pc := ctx()
+	pc.ReturnTo = "/demo/mfa/page"
+	stepUp := render(t, v.PasskeyStepUp(inbound.PasskeyStepUpPage{PageContext: pc, Links: *passkeyLinks(), HasPasskeys: true}))
+	href := regexp.MustCompile(`href="(/auth/account/passkeys\?[^"]*)"`).FindStringSubmatch(stepUp)
+	if href == nil {
+		t.Fatal("no Add a passkey link")
+	}
+	u, err := url.Parse(href[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := u.Query().Get("return_to"); got != "/auth/step-up/passkey?return_to=%2Fdemo%2Fmfa%2Fpage" {
+		t.Fatalf("return_to = %q", got)
+	}
+	manage := pc
+	manage.ReturnTo = u.Query().Get("return_to")
+	body := render(t, v.Passkeys(inbound.PasskeysPage{PageContext: manage, Links: *passkeyLinks(),
+		Passkeys: []inbound.PasskeyItem{{ID: "pk2", Name: "Key", Action: "/auth/passkeys/pk2"}}}))
+	if box := regexp.MustCompile(`<input[^>]*id="passkey-require-uv"[^>]*>`).FindString(body); !strings.Contains(box, " checked") {
+		t.Error("the manage page reached from the step-up link must arrive checked")
+	}
 }
 
 // TestStepUpAndAccount_PasskeyOptions proves the generic step-up page offers a

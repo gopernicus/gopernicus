@@ -42,7 +42,10 @@ templ passkeyUnsupported(text string) {
 
 // passkeysBody renders the passkey manage page: each passkey with its rename and
 // remove forms (POST /auth/passkeys/{id}, action=rename|remove), and the add
-// control. Removal revokes every session, so its form says so.
+// control. Removal revokes every session, so its form says so. The add control's
+// "Require Face ID, Touch ID or a PIN" box starts checked while the user holds no
+// AAL2-capable passkey, so the step-up page's "Add a passkey" link (shown exactly
+// then) lands with it checked.
 templ passkeysBody(m authentication.PasskeysPage) {
 	@shell("Passkeys", "") {
 		@message(m.PageContext)
@@ -116,6 +119,10 @@ templ passkeysBody(m authentication.PasskeysPage) {
 						Name: "name",
 					})
 				}
+				<label for="passkey-require-uv" data-slot="auth-passkey-require-uv">
+					@primitives.Checkbox(primitives.CheckboxProps{Base: primitives.Base{ID: "passkey-require-uv", Attributes: templ.Attributes{"data-auth-passkey-require-uv": true}}, Checked: !holdsVerifiedPasskey(m.Passkeys)})
+					Require Face ID, Touch ID or a PIN
+				</label>
 			}
 			@passkeyUnsupported("This browser can't create passkeys. Try a browser or device that supports them.")
 		</section>

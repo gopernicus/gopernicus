@@ -29,6 +29,7 @@ package goth
 import (
 	"fmt"
 	"net/url"
+	"slices"
 
 	"github.com/a-h/templ"
 	inbound "github.com/gopernicus/gopernicus/pockets/authentication/inbound/http"
@@ -283,6 +284,12 @@ func passkeyAddedURL(links inbound.PasskeyLinks) string {
 		return ""
 	}
 	return links.Manage + "?auth=passkey_added"
+}
+
+// holdsVerifiedPasskey reports whether any passkey is AAL2-capable (registered
+// with user verification), the predicate behind PasskeyStepUpPage.CanReachAAL2.
+func holdsVerifiedPasskey(passkeys []inbound.PasskeyItem) bool {
+	return slices.ContainsFunc(passkeys, func(p inbound.PasskeyItem) bool { return p.UserVerified })
 }
 
 // addPasskeyHref links the step-up page to the manage page, returning to the

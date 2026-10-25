@@ -3,7 +3,9 @@
 // the pocket's passkey JSON routes; the markup contract is in the pocket README
 // ("Custom views"): data-options-url, data-finish-url, data-csrf, optional
 // data-return-to and data-done-url, a [data-auth-passkey-start] button, an
-// optional [data-auth-passkey-name] input, and the EMPTY live regions
+// optional [data-auth-passkey-name] input, an optional
+// [data-auth-passkey-require-uv] checkbox (register: checked sends
+// {"user_verification":"required"}), and the EMPTY live regions
 // [data-auth-passkey-status] (role="status") and [data-auth-passkey-error]
 // (role="alert"). The element is rendered hidden and revealed only when the
 // browser has window.PublicKeyCredential, which also hides every
@@ -20,6 +22,7 @@
     presenceOnly: "That passkey can't confirm a PIN or biometric, so it can't complete this check. Use a passkey that can, or add one.",
     challenge_expired: "That took too long. Please try again.",
     passkey_rejected: "That passkey wasn't accepted. Try another passkey or sign in another way.",
+    uvRequired: "That passkey didn't confirm a PIN or biometric. Try again and use Face ID, Touch ID or your PIN.",
     passkey_exists: "This device already has a passkey for your account.",
     passkey_limit: "You have the maximum number of passkeys. Remove one before adding another.",
     too_many_attempts: "Too many attempts. Please wait a minute and try again.",
@@ -148,11 +151,13 @@
       return;
     }
     var ds = root.dataset, mode = ds.authPasskey, leaving = false;
+    var uv = root.querySelector("[data-auth-passkey-require-uv]");
+    var requireUV = mode === "register" && Boolean(uv && uv.checked);
     root.setAttribute("aria-busy", "true");
     button.disabled = true;
     say(root, COPY.working, false);
     try {
-      var begin = await post(ds.optionsUrl, ds.csrf, {});
+      var begin = await post(ds.optionsUrl, ds.csrf, requireUV ? { user_verification: "required" } : {});
       if (begin.status !== 200) {
         return say(root, wireCopy(mode, begin), true);
       }
@@ -166,7 +171,8 @@
       }
       var finish = await post(ds.finishUrl, ds.csrf, body);
       if (finish.status !== 200 && finish.status !== 201) {
-        return say(root, wireCopy(mode, finish), true);
+        var rejectedUV = requireUV && finish.status === 401 && finish.data.code === "passkey_rejected";
+        return say(root, rejectedUV ? COPY.uvRequired : wireCopy(mode, finish), true);
       }
       if (mode === "stepup" && finish.data.assurance !== "aal2") {
         return say(root, COPY.presenceOnly, true);
