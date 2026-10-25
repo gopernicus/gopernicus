@@ -5,12 +5,12 @@ description: What the framework refuses in production today, what is documented 
 
 # Production posture
 
-This page describes the framework **as it is on `main` at 2026-10-24, after SOC 2 slices S1–S3,
-S4a, S5 and S6** (the production posture floor, audit completeness and integrity, retention and
-erasure, the MFA posture, transport and abuse hardening, secrets and logging; release records
-in `RELEASING.md`, host handoffs in `plans/soc2-s1-production-posture-handoff.md`,
+This page describes the framework **as it is on `main` at 2026-10-25, after SOC 2 slices S1–S3,
+S4a, S4b, S5 and S6** (the production posture floor, audit completeness and integrity, retention
+and erasure, the MFA posture, passkeys, transport and abuse hardening, secrets and logging;
+release records in `RELEASING.md`, host handoffs in `plans/soc2-s1-production-posture-handoff.md`,
 `plans/soc2-s2-audit-completeness-handoff.md` and `plans/soc2-s3-retention-erasure-handoff.md`;
-S4a, S5 and S6 have no handoff file — their records carry the upgrade notes).
+S4a, S4b, S5 and S6 have no handoff file — their records carry the upgrade notes).
 Where a control is still planned, it says so; an item marked *planned* is not a control a host
 can claim yet.
 
@@ -144,6 +144,30 @@ prints `ack` for a `SingleFactorAcknowledged: true` literal on either config, wi
 workshop change. Every `New` logs `auth: mfa posture mfa_required=<none|admins|all>
 gates=<none|/auth/admin/users*|external_tokens>`. The gates themselves are in the
 authentication page's *Assurance and MFA*.
+
+**Added by S4b** (sdk v0.20.0, go-webauthn v0.1.0, authentication v0.26.0 → v0.27.1, stores
+pgx v0.12.0 / Turso v0.11.0). A user-verified passkey is the native AAL2 source, so
+`MFAConfig.Required` is satisfiable by `WithPasskeys` as well as `WithExternal`, and the zero
+value resolves to `admins` when passkeys and a `UserAdminCheck` are both wired (the boot line
+adds `source=default`). The single-factor refusal is unchanged: passkeys add no cause and clear
+none.
+
+| Module | Production refuses | Sentinel | Acknowledgement |
+|---|---|---|---|
+| go-webauthn (`gowebauthn.New`, all modes) | a `webauthn.Config` that fails `Validate`: an RP ID that is not lowercase DNS labels or is an IP, an empty `RPName` or `Origins`, an origin host outside the RP ID, a `Timeout` above 5m | `sdk.ErrInvalidInput` (`webauthn.ErrOriginOutsideRPID` names the host) | none — fix `RPID` or `Origins` |
+| authentication | a passkey relying party whose `Config().RPID` is `localhost`, under `.localhost` or an IP, or whose `Origins` admits an `http` namespace: a passkey registered there is bound to a development origin | `ErrPasskeyDevelopmentRelyingParty` | none |
+| authentication (all modes) | `WithPasskeys` without `Repositories.Passkeys`, `CredentialMutations`, `AuthenticationGrants`, `Challenges` or a `ChallengeProtector`; `PasskeyConfig.Views` without a relying party or without `BrowserConfig.Views`; `UserVerification` `discouraged` | `ErrPasskeyReposRequired`; `sdk.ErrInvalidInput` | none |
+| authentication (all modes) | `MFAConfig.Required` `all` beside `WithPasskeys` (native `all` waits for recovery codes, S4c) | `ErrMFAUnsatisfiable` | use `admins` |
+| authentication stores pgx, Turso (all modes) | a database without `passkey_credentials`, passkeys wired or not | the probe error naming `0025_passkey_credentials.sql` (wraps `sdk.ErrNotFound`) | none — apply 0025 pre-boot |
+| authentication HTTP | the development CSRF cookie: a resolved `auth_csrf` (no `Secure`, no `__Host-` prefix) | `sdk.ErrInvalidInput`, naming the cookie | none |
+
+**The CSRF double refusal** (v0.27.0). The double-submit cookie follows the session cookie: a
+`Secure` session cookie gets `__Host-auth_csrf` (unchanged for every production host), and a
+development host with a non-`Secure` session cookie gets `auth_csrf`, because WebKit drops a
+`Secure` cookie on `http://localhost`. Production refuses the relaxed cookie twice, each check
+independent of the other: the S1 refusal of a non-`Secure` session cookie (row 12 above), and a
+second constructor check that refuses a resolved `auth_csrf` cookie. Development logs
+`csrf_cookie=auth_csrf secure=false`.
 
 ## Retention (S3)
 

@@ -39,6 +39,7 @@ Query logging is opt-in, logs arguments verbatim, and is development-only.
 |---|---|---|
 | `integrations/cryptids/bcrypt` | authentication's password-hasher shape | rejects passwords over bcrypt's 72-byte boundary instead of truncating |
 | `integrations/cryptids/go-oidc` | `cryptids.JWTVerifier` | external OIDC issuer tokens: pinned iss/aud, asymmetric allow-list, hardened JWKS cache; `oidctest` dev issuer ([details](go-oidc.md)) |
+| `integrations/cryptids/go-webauthn` | `webauthn.RelyingParty` | passkey ceremonies over go-webauthn v0.18.2: `Validate` at `New` in every mode, per-ceremony origin admission, ceremony-kind marked state, flags read from this ceremony's authenticator data; passes `webauthntest.Run` |
 | `integrations/cryptids/golang-jwt` | `cryptids.JWTSigner` | HMAC JWTs with method pinning and minimum secret length |
 | `integrations/cryptids/google-uuid` | `sdk.IDGenerateFunc` | UUID v4 or time-ordered v7 entity IDs |
 
