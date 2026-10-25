@@ -12,10 +12,10 @@ github.com/gopernicus/gopernicus/integrations/datastores/turso v0.9.0 h1:5rDRjVu
 github.com/gopernicus/gopernicus/integrations/datastores/turso v0.9.0/go.mod h1:nHHL9uIw5nQa0NpWMwoR58JU5ibaFjtY6o4EPxIojgk=
 github.com/gopernicus/gopernicus/pockets v0.1.0 h1:2WcybbfPw1km00DmG37CekPbxYmObyyj3T1Ec0eFSRY=
 github.com/gopernicus/gopernicus/pockets v0.1.0/go.mod h1:A2H/Tl9Pn2v2mFLOgkCQngMRFkMN10E1MEzGCQICsEw=
-github.com/gopernicus/gopernicus/pockets/authentication v0.23.0 h1:wAvUtjlwaRl3r5TZAERbVDNHvvVvS0hxfzcM/sr6iYw=
-github.com/gopernicus/gopernicus/pockets/authentication v0.23.0/go.mod h1:hCw1IY77LcnpywuBtfenqI8VTuzTU1HRqKyEY7UN6fA=
-github.com/gopernicus/gopernicus/sdk v0.18.0 h1:p1+Z6ljoezHt4UlylpY7DGilsPBzM43RhGhORCcY3/8=
-github.com/gopernicus/gopernicus/sdk v0.18.0/go.mod h1:zo9DGgXEfFANGvuo3VAIRWyRmlN4YRqavdncRsnCzu8=
+github.com/gopernicus/gopernicus/pockets/authentication v0.26.0 h1:T1AXc0a9SHmecc3q6/FE9KEWkGEy4vNc39I/3vyTd7w=
+github.com/gopernicus/gopernicus/pockets/authentication v0.26.0/go.mod h1:0NxBB92jJ55aPbByVTHlxaWRCRABHsJu4CD+zBZ7CbU=
+github.com/gopernicus/gopernicus/sdk v0.20.0 h1:VS/slG03lV3GMnb/7vt9ItsZya35ZC+YFKxMi8Vjo2c=
+github.com/gopernicus/gopernicus/sdk v0.20.0/go.mod h1:zo9DGgXEfFANGvuo3VAIRWyRmlN4YRqavdncRsnCzu8=
 github.com/hashicorp/golang-lru/v2 v2.0.7 h1:a+bsQ5rvGLjzHuww6tVxozPZFVghXaHOwFs4luLUK2k=
 github.com/hashicorp/golang-lru/v2 v2.0.7/go.mod h1:QeFd9opnmA6QUJc5vARoKUSoFhyfM2/ZepoAG6RGpeM=
 github.com/mattn/go-isatty v0.0.20 h1:xfD0iDuEKnDkl03q4limB+vH+GxLEtL/jb4xVJSWWEY=
