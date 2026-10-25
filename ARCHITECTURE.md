@@ -12,6 +12,7 @@ worked example `examples/cms`.
   sdk/                    module github.com/gopernicus/gopernicus/sdk                         — stdlib-only, LAYERED (sdk-layering 2026-07-10): the root package holds common vocabulary and primitives (errors/faults, context, identity, IDs, pointers, slugs); pkg/ = agnostic mechanism/vocabulary (imports the root only, flat); capabilities/ = behavioral ports + policy, defaults optional (import root+pkg, never each other)
   integrations/
     cryptids/bcrypt/      module …/integrations/cryptids/bcrypt         — a connector (x/crypto bcrypt)
+    cryptids/go-webauthn/ module …/integrations/cryptids/go-webauthn    — a connector (go-webauthn/webauthn; the WebAuthn relying-party port)
     cryptids/golang-jwt/  module …/integrations/cryptids/golang-jwt     — a connector (golang-jwt/jwt v5)
     cryptids/google-uuid/ module …/integrations/cryptids/google-uuid    — a connector (google/uuid v4/v7)
     datastores/pgxdb/       module …/integrations/datastores/pgxdb          — a connector (jackc/pgx v5; multi-port: transaction.Transactor + ratelimiter)

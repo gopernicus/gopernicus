@@ -8,11 +8,12 @@ infrastructure. Gopernicus is open source under the [MIT License](LICENSE),
 very much a work in progress, and not stable. See [ARCHITECTURE.md](ARCHITECTURE.md)
 for the full layering rules and [NOTES.md](NOTES.md) for the decision log.
 
-## The forty-seven modules
+## The forty-eight modules
 
 ```
 sdk/                                stdlib-only, layered: root = kernel; pkg/ + capabilities/ (empty go.mod = structural enforcement)
 integrations/cryptids/bcrypt/       password-hashing connector (x/crypto), its own module
+integrations/cryptids/go-webauthn/  WebAuthn relying-party connector (go-webauthn/webauthn), its own module
 integrations/cryptids/golang-jwt/   JWT-signing connector (golang-jwt/jwt v5), its own module
 integrations/cryptids/google-uuid/  uuid ID-generation connector (google/uuid v4/v7), its own module
 integrations/datastores/pgxdb/        reusable Postgres connector (sdk + pgx/v5), its own module
@@ -117,7 +118,7 @@ make migrate           # applies examples/cms/workshop/migrations pre-boot
 make run                # or: cd examples/cms && go run ./cmd/server
 ```
 
-From the repo root, `make check` builds, vets, and tests all forty-seven modules
+From the repo root, `make check` builds, vets, and tests all forty-eight modules
 and runs the thirty-six layering guards; `make test-stores` runs the live dialect
 conformance suites (expects `POSTGRES_TEST_DSN` / `TURSO_*`). See [examples/cms/README.md](examples/cms/README.md)
 for that host's full env/make-target reference.

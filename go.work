@@ -12,6 +12,7 @@ use (
 	./integrations/authentication/firebase
 	./integrations/cryptids/bcrypt
 	./integrations/cryptids/go-oidc
+	./integrations/cryptids/go-webauthn
 	./integrations/cryptids/golang-jwt
 	./integrations/cryptids/google-uuid
 	./integrations/datastores/pgxdb
