@@ -134,8 +134,8 @@ func TestMFARequiredResolvesOnce(t *testing.T) {
 	}
 
 	_, _, err = mfaWiring{ack: true, passkeys: rp, protector: protector, required: MFARequiredAll}.build(environment.ModeDevelopment)
-	if !errors.Is(err, ErrMFAUnsatisfiable) || !strings.Contains(err.Error(), "S4c") {
-		t.Fatalf("native all = %v, want ErrMFAUnsatisfiable naming S4c", err)
+	if !errors.Is(err, ErrMFAUnsatisfiable) || !strings.Contains(err.Error(), "s4c2-native-all") {
+		t.Fatalf("native all = %v, want ErrMFAUnsatisfiable naming s4c2-native-all", err)
 	}
 }
 

@@ -23,6 +23,7 @@ import (
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/securityevent"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/serviceaccount"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/session"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/totp"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/user"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/delivery"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/authentication/webauthn"
@@ -128,6 +129,28 @@ type Repositories struct {
 	// transaction-capable adapter as Users and CredentialMutations, whose
 	// Snapshot and Apply cover passkeys.
 	Passkeys passkey.Repository
+	// TOTP stores the second-factor aggregate: each user's authenticator-app
+	// credential and recovery codes. It is required when WithTOTP wires an
+	// encrypter and unused otherwise; it must be backed by the same
+	// transaction-capable adapter as Users, Sessions, AuthenticationGrants and
+	// Passkeys.
+	TOTP totp.Repository
+}
+
+// TOTPConfig enables the authenticator-app second factor and recovery codes.
+type TOTPConfig struct {
+	// Encrypter seals each TOTP secret at rest. Nil leaves TOTP off.
+	Encrypter cryptids.KeyedEncrypter
+	// Issuer is the name an authenticator app lists the account under. It is
+	// required and must not contain a colon.
+	Issuer string
+}
+
+// WithTOTP replaces the complete TOTPConfig group, including zero values.
+func WithTOTP(value TOTPConfig) Option {
+	return func(c *constructorConfig) {
+		c.TOTPConfig = value
+	}
 }
 
 // PasskeyConfig enables passkeys over a WebAuthn relying party.

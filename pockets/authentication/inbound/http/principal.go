@@ -82,9 +82,10 @@ func (s *Adapter) RequirePrincipal(opts ...PrincipalOption) web.Middleware {
 				s.denyPrincipal(w, r, set, errCredentialRefused, false)
 				return
 			}
-			if err := set.assure(ctx, cred); err != nil {
-				if errors.Is(err, authlogic.ErrMFARequired) {
-					s.recordMFADenial(ctx, authlogic.MFAGateRoute, cred)
+			if err := set.assure(ctx, cred, s.mfaRefusal); err != nil {
+				var refused *mfaRefused
+				if errors.As(err, &refused) {
+					s.recordMFADenial(ctx, authlogic.MFAGateRoute, cred, refused.reason)
 					if set.browser && cred.Kind == CredentialAccessToken {
 						s.denyBrowserMFA(w, r, cred)
 						return
@@ -227,17 +228,18 @@ func (s *Adapter) denyPrincipal(w http.ResponseWriter, r *http.Request, set prin
 }
 
 // denyBrowserMFA answers a Browser() set whose RequireMFA refused an access
-// token below AAL2. A sign-in would only mint another AAL1 session, so it never
-// redirects to login: a cookie goes to the passkey step-up page when passkeys
-// and their views are wired (return_to on GET and HEAD only, validated like the
-// login redirect's), and anything else gets the JSON 401 with the RFC 9470
-// challenge.
+// token below AAL2 or from a source MFAConfig.Methods does not admit. A
+// sign-in would only mint another AAL1 session, so it never redirects to
+// login: a cookie goes to the step-up page — the TOTP chooser when TOTP views
+// are wired, else the passkey step-up page when passkey views are (return_to on
+// GET and HEAD only, validated like the login redirect's) — and anything else
+// gets the JSON 401 with the RFC 9470 challenge.
 func (s *Adapter) denyBrowserMFA(w http.ResponseWriter, r *http.Request, cred Credential) {
-	if s.passkeyStepUpPath == "" || cred.Transport != TransportCookie {
+	if s.mfaStepUpPath == "" || cred.Transport != TransportCookie {
 		writeMFARequired(w)
 		return
 	}
-	loc := s.passkeyStepUpPath
+	loc := s.mfaStepUpPath
 	if r.Method == http.MethodGet || r.Method == http.MethodHead {
 		target := r.URL.Path
 		if r.URL.RawQuery != "" {

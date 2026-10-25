@@ -180,7 +180,8 @@ type authService interface {
 	RequirePrincipal(opts ...PrincipalOption) web.Middleware
 	RateLimitByIP(keyPrefix string, perMinute int) web.Middleware
 	rateLimitByIP(keyPrefix string, limit ratelimiter.Limit) web.Middleware
-	recordMFADenial(ctx context.Context, gate authlogic.MFAGate, cred Credential)
+	admitMFA(ctx context.Context, gate authlogic.MFAGate, cred Credential) bool
+	mfaAllows(m authlogic.MFAMethod) bool
 }
 
 // ---------------------------------------------------------------------------

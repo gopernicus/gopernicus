@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"slices"
 	"strings"
 	"time"
 
@@ -28,6 +29,12 @@ const (
 	// A row that recorded none signs no claim; a delegated token never carries
 	// one.
 	tokenClaimAssurance = "aal"
+	// tokenClaimMethods is the first-party access JWT's method kinds (password,
+	// passkey, totp, …), signed from the session row's authentication methods,
+	// so an MFAConfig.Methods gate can tell which factor produced its AAL2. A
+	// row that recorded none signs no claim; a delegated token never carries
+	// one.
+	tokenClaimMethods = "methods"
 )
 
 // ErrDelegatedCredential refuses a delegated credential at a first-party
@@ -115,6 +122,7 @@ func parseAccessClaims(claims map[string]any) (string, Credential, bool) {
 		cred.Profile = session.Profile(profile)
 	}
 	rawAssurance, hasAssurance := claims[tokenClaimAssurance]
+	rawMethods, hasMethods := claims[tokenClaimMethods]
 	if cred.Profile == session.ProfileFirstParty {
 		for _, name := range []string{"iss", "aud", "client_id", "origin_client_id", "act"} {
 			if _, present := claims[name]; present {
@@ -133,9 +141,14 @@ func parseAccessClaims(claims map[string]any) (string, Credential, bool) {
 			}
 			cred.Assurance = session.AssuranceLevel(level)
 		}
+		if hasMethods {
+			if cred.Methods, ok = claimMethods(rawMethods); !ok {
+				return "", Credential{}, false
+			}
+		}
 		return userID, cred, true
 	}
-	if cred.Profile != session.ProfileDelegated || cred.SessionID == "" || hasAssurance {
+	if cred.Profile != session.ProfileDelegated || cred.SessionID == "" || hasAssurance || hasMethods {
 		return "", Credential{}, false
 	}
 	if cred.accessExpiresAt, ok = claimExpiry(claims["exp"]); !ok {
@@ -168,6 +181,28 @@ func parseAccessClaims(claims map[string]any) (string, Credential, bool) {
 		}
 	}
 	return userID, cred, true
+}
+
+// claimMethods reads the methods claim: a non-empty array of distinct known
+// session method kinds. Anything else refuses the token.
+func claimMethods(raw any) ([]session.MethodKind, bool) {
+	values, ok := raw.([]any)
+	if !ok || len(values) == 0 {
+		return nil, false
+	}
+	kinds := make([]session.MethodKind, 0, len(values))
+	for _, v := range values {
+		name, ok := claimString(v)
+		if !ok {
+			return nil, false
+		}
+		kind := session.MethodKind(name)
+		if _, known := session.DescribeMethod(kind); !known || slices.Contains(kinds, kind) {
+			return nil, false
+		}
+		kinds = append(kinds, kind)
+	}
+	return kinds, true
 }
 
 func claimString(raw any) (string, bool) {

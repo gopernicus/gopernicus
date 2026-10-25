@@ -21,14 +21,17 @@ import (
 	environment "github.com/gopernicus/gopernicus/sdk/pkg/environment"
 )
 
-// productionKeys are distinct disposable hex fixture keys for the five AUTH_*
-// key variables; production refuses to mint any of them.
+// productionKeys are distinct disposable hex fixture keys for the AUTH_* key
+// variables (AUTH_TOTP_KEYS a one-key ring beside AUTH_TOTP_ACTIVE_KEY);
+// production refuses to mint any of them.
 var productionKeys = map[auth.KeyName]string{
 	auth.KeyJWT:               strings.Repeat("a1", 32),
 	auth.KeyChallengePepper:   strings.Repeat("b2", 32),
 	auth.KeyIdentifier:        strings.Repeat("c3", 32),
 	auth.KeyDeliveryEncrypter: strings.Repeat("d4", 32),
 	auth.KeyTokenEncrypter:    strings.Repeat("e5", 32),
+	auth.KeyTOTPRing:          "prod:" + strings.Repeat("f6", 32),
+	"AUTH_TOTP_ACTIVE_KEY":    "prod",
 }
 
 // prodSender is a production-capable email transport double: it declares
@@ -74,7 +77,7 @@ func (durableLimiter) RateLimiterDurability() authenticationlogic.LimiterDurabil
 	return authenticationlogic.LimiterDurability{InProcessOnly: false}
 }
 
-// setProductionKeys sets the five key variables for the test.
+// setProductionKeys sets the key variables for the test.
 func setProductionKeys(t *testing.T) {
 	t.Helper()
 	for name, value := range productionKeys {
@@ -291,7 +294,7 @@ func TestProductionStartTLSAcknowledgedConstructs(t *testing.T) {
 // needed AUTH_* key variable unset is reported by name, all in one error, and the
 // optional provider-token key is not among them.
 func TestProductionRefusesUnsetKeys(t *testing.T) {
-	needed := []auth.KeyName{auth.KeyJWT, auth.KeyChallengePepper, auth.KeyIdentifier, auth.KeyDeliveryEncrypter}
+	needed := []auth.KeyName{auth.KeyJWT, auth.KeyChallengePepper, auth.KeyIdentifier, auth.KeyDeliveryEncrypter, auth.KeyTOTPRing}
 	for _, missing := range needed {
 		t.Run(string(missing), func(t *testing.T) {
 			setProductionKeys(t)

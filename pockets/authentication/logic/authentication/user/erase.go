@@ -19,9 +19,9 @@ var ErrEraseBlockedByClaim = fmt.Errorf("user: an accepting invitation claim is 
 
 // EraseRepository is the OPTIONAL user-erasure capability (SOC 2 S3). It must be
 // backed by the same transaction-capable adapter as Users, Identifiers,
-// Passwords, Passkeys, Sessions, Challenges, AuthenticationGrants, Invitations,
-// ServiceAccounts, APIKeys and SecurityEvents: Erase is ONE transaction across
-// all of them.
+// Passwords, Passkeys, TOTP, Sessions, Challenges, AuthenticationGrants,
+// Invitations, ServiceAccounts, APIKeys and SecurityEvents: Erase is ONE
+// transaction across all of them.
 //
 // Erase, in order: lock the user row (already erased → Erasure{Changed: false,
 // ErasedAt: stored}, no statement, no row); capture the user's (kind, value)
@@ -31,7 +31,8 @@ var ErrEraseBlockedByClaim = fmt.Errorf("user: an accepting invitation claim is 
 // refuse with ErrEraseBlockedByClaim when any locked row is accepting; mark the
 // user erased (deactivated when active, display name blanked, auth_revision
 // incremented); retire and blank every identifier row of the user; delete the
-// password, passkeys, OAuth accounts, external subjects, contact changes, OAuth2
+// password, passkeys, the TOTP credential and its recovery codes (only when
+// in.TOTP), OAuth accounts, external subjects, contact changes, OAuth2
 // authorization codes, the challenges keyed to the user or to SubjectKeys, the
 // authentication grants and the sessions of both profiles; delete the locked
 // pending invitations and blank identifier and metadata on the locked terminal
@@ -59,11 +60,17 @@ type EraseRepository interface {
 // service prepared — the actor's attribution and client info, no counts; the
 // store merges the counts and appends it inside the transaction. A zero Event
 // (no EventType) appends nothing: the host runs without the rail.
+//
+// TOTP reports that the host wired the authenticator-app second factor: only
+// then does Erase delete the TOTP credential and recovery codes (EraseCounts.TOTP,
+// .RecoveryCodes). A false TOTP means the host may not have applied their
+// migration (0026), so a store touches neither table and reports zero counts.
 type EraseInput struct {
 	ID          string
 	Now         time.Time
 	SubjectKeys []string
 	Event       securityevent.SecurityEvent
+	TOTP        bool
 }
 
 // Erasure is the outcome of an Erase. Changed reports whether this call erased
@@ -82,6 +89,8 @@ type EraseCounts struct {
 	Grants               int
 	Passwords            int
 	Passkeys             int
+	TOTP                 int
+	RecoveryCodes        int
 	OAuthAccounts        int
 	ExternalSubjects     int
 	ContactChanges       int
@@ -107,6 +116,8 @@ func (c EraseCounts) Merge(details map[string]any) map[string]any {
 	out["grants"] = c.Grants
 	out["passwords"] = c.Passwords
 	out["passkeys"] = c.Passkeys
+	out["totp"] = c.TOTP
+	out["recovery_codes"] = c.RecoveryCodes
 	out["oauth_accounts"] = c.OAuthAccounts
 	out["external_subjects"] = c.ExternalSubjects
 	out["contact_changes"] = c.ContactChanges

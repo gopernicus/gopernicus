@@ -45,6 +45,7 @@ import (
 	securityevent "github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/securityevent"
 	serviceaccount "github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/serviceaccount"
 	session "github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/session"
+	totp "github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/totp"
 	user "github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/user"
 	invitation "github.com/gopernicus/gopernicus/pockets/authentication/logic/invitations"
 	"github.com/gopernicus/gopernicus/sdk"
@@ -93,6 +94,10 @@ type data struct {
 
 	// passkeys holds registered passkeys, by ID.
 	passkeys map[string]passkey.Passkey
+
+	// totpCreds and totpCodes are the second-factor aggregate, by user ID.
+	totpCreds map[string]totp.Credential
+	totpCodes map[string][]totp.RecoveryCode
 }
 
 // Store is an in-memory auth datastore. Its Repositories method yields the port
@@ -121,6 +126,8 @@ func New() *Store {
 		externalSubjects: map[externalKey]externalsubject.ExternalSubject{},
 		erasedAt:         map[string]time.Time{},
 		passkeys:         map[string]passkey.Passkey{},
+		totpCreds:        map[string]totp.Credential{},
+		totpCodes:        map[string][]totp.RecoveryCode{},
 	}}
 }
 
@@ -169,6 +176,9 @@ func (s *Store) Repositories() auth.Repositories {
 		// Passkeys (SOC 2 S4b): Snapshot and Apply cover them and erasure deletes
 		// them, so the credential rail and the store never disagree.
 		Passkeys: passkeyRepo{s.d},
+		// TOTP and recovery codes (SOC 2 S4c): Confirm and Remove run under the
+		// same mutex, and erasure deletes both when TOTP is wired.
+		TOTP: totpRepo{s.d},
 	}
 }
 

@@ -34,6 +34,23 @@ type MethodsView struct {
 	// Passkeys lists the user's passkeys when passkeys are enabled; nil when
 	// they are not.
 	Passkeys []PasskeyMethodView
+	// TOTP and RecoveryCodes report the authenticator app and the recovery codes
+	// left when TOTP is enabled; nil when it is not. They come from the TOTP
+	// store, not the credential Snapshot: neither is a login method.
+	TOTP          *TOTPMethodView
+	RecoveryCodes *RecoveryCodesMethodView
+}
+
+// TOTPMethodView is the authenticator app in the inventory: whether one is
+// confirmed and when it last stepped up.
+type TOTPMethodView struct {
+	Enrolled   bool
+	LastUsedAt *time.Time
+}
+
+// RecoveryCodesMethodView is the recovery codes left in the inventory.
+type RecoveryCodesMethodView struct {
+	Remaining int
 }
 
 // PasskeyMethodView is one passkey in the inventory: its row id and name, when
@@ -159,6 +176,14 @@ func (s *Service) Methods(ctx context.Context, userID string) (MethodsView, erro
 				Removable:  s.removable(ctx, snap, credential.RemovePasskey{PasskeyID: p.ID}),
 			})
 		}
+	}
+	if s.TOTPEnabled() {
+		status, err := s.TOTPStatus(ctx, userID)
+		if err != nil {
+			return MethodsView{}, err
+		}
+		view.TOTP = &TOTPMethodView{Enrolled: status.Enrolled, LastUsedAt: status.LastUsedAt}
+		view.RecoveryCodes = &RecoveryCodesMethodView{Remaining: status.RecoveryCodesRemaining}
 	}
 	return view, nil
 }

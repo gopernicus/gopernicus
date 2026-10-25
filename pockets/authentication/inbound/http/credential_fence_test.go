@@ -304,7 +304,10 @@ func mustAuthenticationService(d authenticationFixture) *authlogic.Components {
 	if d.Passkey.RelyingParty != nil {
 		opts = append(opts, authlogic.WithPasskeys(d.Passkey))
 	}
-	service, err := authlogic.New(authlogic.Repositories{Users: d.Users, Identifiers: d.Identifiers, Passwords: d.Passwords, Sessions: d.Sessions, UserAdmin: d.UserAdmin, PasswordlessRedeem: d.PasswordlessRedeem, ActiveSessions: d.ActiveSessions, Challenges: d.Challenges, PasswordResets: d.PasswordResets, ContactChanges: d.ContactChanges, CredentialMutations: d.CredentialMutations, AuthenticationGrants: d.AuthenticationGrants, SecurityEvents: d.SecurityEvents, OAuthAccounts: d.OAuthAccounts, OAuthStates: d.OAuthStates, ServiceAccounts: d.ServiceAccounts, APIKeys: d.APIKeys, ExternalSubjects: d.ExternalSubjects, Passkeys: d.Passkeys},
+	if d.TOTPConfig.Encrypter != nil {
+		opts = append(opts, authlogic.WithTOTP(d.TOTPConfig))
+	}
+	service, err := authlogic.New(authlogic.Repositories{Users: d.Users, Identifiers: d.Identifiers, Passwords: d.Passwords, Sessions: d.Sessions, UserAdmin: d.UserAdmin, PasswordlessRedeem: d.PasswordlessRedeem, ActiveSessions: d.ActiveSessions, Challenges: d.Challenges, PasswordResets: d.PasswordResets, ContactChanges: d.ContactChanges, CredentialMutations: d.CredentialMutations, AuthenticationGrants: d.AuthenticationGrants, SecurityEvents: d.SecurityEvents, OAuthAccounts: d.OAuthAccounts, OAuthStates: d.OAuthStates, ServiceAccounts: d.ServiceAccounts, APIKeys: d.APIKeys, ExternalSubjects: d.ExternalSubjects, Passkeys: d.Passkeys, TOTP: d.TOTP},
 		d.TokenSigner,
 		d.RuntimeMode,
 		d.Limiter,

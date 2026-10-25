@@ -115,6 +115,10 @@ const (
 	// UserAdminResetPasskeys deletes every passkey of the target subject and
 	// revokes their sessions, so they enroll again from a primary login.
 	UserAdminResetPasskeys UserAdminAction = "reset-passkeys"
+	// UserAdminResetTOTP removes the target subject's authenticator app and
+	// recovery codes and revokes their sessions, so they enroll again from a
+	// primary login.
+	UserAdminResetTOTP UserAdminAction = "reset-totp"
 )
 
 // UserAdminCheckRequest is the parsed, principal-resolved authorization question

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -328,5 +329,84 @@ func TestAdministrationMFARequiresUserAdminCheck(t *testing.T) {
 	}
 	if _, err := New(h.svc.Service, environment.ModeDevelopment, WithAdministrationMFA(), WithUserAdminCheck(func(context.Context, UserAdminCheckRequest) error { return nil })); err != nil {
 		t.Fatalf("WithAdministrationMFA beside a check: %v", err)
+	}
+}
+
+// TestMFAMethodsOnEveryGate pins MFAConfig.Methods (S4c): a TOTP AAL2 session is
+// admitted by RequireMFA(), the admin gate and the machine gate when the
+// restriction admits totp (or there is none) and refused with
+// mfa_required_denied reason=method method=totp when it names only passkey;
+// a first-party AAL2 token without a methods claim fails closed under a
+// restriction and passes without one.
+func TestMFAMethodsOnEveryGate(t *testing.T) {
+	allow := func(context.Context, UserAdminCheckRequest) error { return nil }
+	build := func(methods ...authlogic.MFAMethod) (*passkeyFixture, *http.Cookie) {
+		f := newPasskeyFixture(t, passkeyOptions{totp: true, machine: true, adminMFA: true, adminCheck: allow, mfaMethods: methods})
+		cookie := f.login(t)
+		secret, _ := f.enrollTOTP(t, cookie)
+		return f, f.totpStepUp(t, cookie, secret)
+	}
+	route := func(f *passkeyFixture, c *http.Cookie, bearer string) int {
+		h := f.svc.RequirePrincipal(RequireMFA())(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }))
+		r := httptest.NewRequest("GET", "/guarded", nil)
+		if c != nil {
+			r.AddCookie(c)
+		}
+		if bearer != "" {
+			r.Header.Set("Authorization", "Bearer "+bearer)
+		}
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, r)
+		return rec.Code
+	}
+	gates := func(f *passkeyFixture, c *http.Cookie) []int {
+		return []int{
+			route(f, c, ""),
+			f.do(t, call{method: "GET", path: "/auth/admin/users", cookie: c}).Code,
+			f.do(t, call{method: "GET", path: "/auth/service-accounts", cookie: c}).Code,
+		}
+	}
+	for _, methods := range [][]authlogic.MFAMethod{nil, {authlogic.MFAMethodTOTP}, {authlogic.MFAMethodPasskey, authlogic.MFAMethodTOTP}} {
+		f, aal2 := build(methods...)
+		if got := gates(f, aal2); !slices.Equal(got, []int{200, 200, 200}) {
+			t.Errorf("Methods %v: gates = %v, want all 200", methods, got)
+		}
+	}
+	f, aal2 := build(authlogic.MFAMethodPasskey)
+	if got := gates(f, aal2); !slices.Equal(got, []int{401, 401, 401}) {
+		t.Fatalf("Methods [passkey]: gates = %v, want all 401", got)
+	}
+	rows := mfaRows(f.events)
+	if len(rows) != 3 {
+		t.Fatalf("mfa_required_denied rows = %d, want 3", len(rows))
+	}
+	for i, gate := range []string{"route", "admin", "machine"} {
+		d := rows[i].Details
+		if d["gate"] != gate || d["reason"] != "method" || d["method"] != "totp" || d["assurance"] != "aal2" {
+			t.Errorf("row %d = %v", i, d)
+		}
+	}
+
+	legacy, err := f.signer.Sign(map[string]any{"user_id": f.userID, "session_id": "legacy", "session_profile": "first_party", "aal": "aal2"}, time.Now().Add(time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code := route(f, nil, legacy); code != http.StatusUnauthorized {
+		t.Fatalf("a token without methods under a restriction = %d, want 401", code)
+	}
+	if d := mfaRows(f.events)[3].Details; d["reason"] != "method" || d["method"] != "none" {
+		t.Fatalf("legacy denial = %v", d)
+	}
+	open := newPasskeyFixture(t, passkeyOptions{totp: true})
+	legacy, _ = open.signer.Sign(map[string]any{"user_id": open.userID, "session_id": "legacy", "session_profile": "first_party", "aal": "aal2"}, time.Now().Add(time.Minute))
+	if code := route(open, nil, legacy); code != http.StatusOK {
+		t.Fatalf("a token without methods and no restriction = %d, want 200", code)
+	}
+	if d := mfaRows(open.events); len(d) != 0 {
+		t.Fatalf("unexpected denials %v", d)
+	}
+	aal1 := open.login(t)
+	if code := route(open, aal1, ""); code != http.StatusUnauthorized || mfaRows(open.events)[0].Details["reason"] != "assurance" {
+		t.Fatalf("AAL1 = %d %v", code, mfaRows(open.events))
 	}
 }

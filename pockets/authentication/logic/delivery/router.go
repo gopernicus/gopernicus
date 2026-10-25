@@ -68,6 +68,11 @@ const (
 	// contact channels when a passkey is added or removed, or an administrator
 	// resets them (no secret, no passkey name).
 	PurposePasskeyChangeNotice = "passkey_change_notice"
+	// PurposeMFAChangeNotice carries the security notice sent to the verified
+	// contact channels when an authenticator app is set up or removed (by the
+	// owner or an administrator), the recovery codes are regenerated, or a
+	// recovery code is used (no secret, no code).
+	PurposeMFAChangeNotice = "mfa_change_notice"
 	// PurposeInvitation carries a resource-invitation secret/link.
 	PurposeInvitation = "invitation"
 	// PurposeMemberAdded carries the you-were-added notice for a direct add.
@@ -178,6 +183,7 @@ var specs = map[string]spec{
 	PurposeIdentifierChangeProof:    {template: "identifier_change_proof", subject: "Confirm your {{.IdentifierKind}}", sms: "Your confirmation code is {{.Secret}}", layout: email.LayoutTransactional},
 	PurposeIdentifierChangeNotice:   {template: "identifier_change_notice", subject: "Your {{.IdentifierKind}} was changed", sms: "The {{.IdentifierKind}} on your account was changed. If this was not you, secure your account.", layout: email.LayoutTransactional},
 	PurposePasskeyChangeNotice:      {template: "passkey_change_notice", subject: "Your passkeys were changed", sms: "The passkeys on your account were changed. If this was not you, secure your account.", layout: email.LayoutTransactional},
+	PurposeMFAChangeNotice:          {template: "mfa_change_notice", subject: "Your two-step verification changed", sms: "The two-step verification on your account changed. If this was not you, secure your account.", layout: email.LayoutTransactional},
 	PurposeInvitation:               {template: "invitation", subject: "You have an invitation", sms: "You were invited to {{.ResourceType}} {{or .ResourceName .ResourceID}} as {{.Relation}}: {{.Link}}", layout: email.LayoutTransactional},
 	PurposeMemberAdded:              {template: "member_added", subject: "You were added", sms: "You were added to {{.ResourceType}} {{or .ResourceName .ResourceID}} as {{.Relation}}: {{.Link}}", layout: email.LayoutTransactional},
 }

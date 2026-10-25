@@ -234,7 +234,7 @@ func (s *Service) EraseUser(ctx context.Context, actor Principal, id string) (us
 	})
 	storeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), EraseTimeout)
 	defer cancel()
-	erasure, err := s.userErasure.Erase(storeCtx, user.EraseInput{ID: id, Now: s.now().UTC(), SubjectKeys: keys, Event: evt})
+	erasure, err := s.userErasure.Erase(storeCtx, user.EraseInput{ID: id, Now: s.now().UTC(), SubjectKeys: keys, Event: evt, TOTP: s.TOTPEnabled()})
 	if err != nil {
 		return user.Summary{}, user.Erasure{}, err
 	}

@@ -1123,6 +1123,10 @@ func buildAuthConfig(log *slog.Logger, mode environment.Mode, granter invitation
 		return authenticationConfig{}, err
 	}
 	cfg.Passkeys = auth.PasskeyConfig{RelyingParty: rp, Views: authViews}
+	// TOTP and recovery codes (SOC 2 S4c): secrets sealed under the AUTH_TOTP_KEYS
+	// ring. Views stay nil until the goth TOTP pages ship, so the routes are
+	// JSON-only here.
+	cfg.TOTP = auth.TOTPConfig{Encrypter: keyed.totpEncrypter, Issuer: "Gopernicus CMS"}
 	return cfg, nil
 }
 

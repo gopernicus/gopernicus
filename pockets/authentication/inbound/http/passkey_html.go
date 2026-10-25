@@ -94,6 +94,10 @@ type PasskeyStepUpPage struct {
 	Links        PasskeyLinks
 	HasPasskeys  bool
 	CanReachAAL2 bool
+	// TOTP is present when TOTP is enabled, so a page whose passkeys cannot
+	// reach AAL2 (or a browser without WebAuthn) can offer "Use an authenticator
+	// app instead".
+	TOTP *TOTPLinks
 }
 
 // passkeyLinks returns the page-model links, or nil when passkeys are off.
@@ -218,7 +222,7 @@ func (h *handlers) passkeyStepUpPage(w http.ResponseWriter, r *http.Request) {
 	}
 	pc := h.newPageContext(w)
 	pc.ReturnTo = h.validatedReturnTo(r)
-	m := PasskeyStepUpPage{PageContext: pc, Links: *h.passkeyLinks()}
+	m := PasskeyStepUpPage{PageContext: pc, Links: *h.passkeyLinks(), TOTP: h.totpLinks()}
 	if passkeys, err := h.passkeys.ListPasskeys(r.Context(), userID); err == nil {
 		for _, p := range passkeys {
 			m.HasPasskeys = true

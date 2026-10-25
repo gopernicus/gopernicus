@@ -23,6 +23,7 @@ import (
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/securityevent"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/serviceaccount"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/session"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/totp"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/user"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/delivery"
 	"github.com/gopernicus/gopernicus/sdk"
@@ -96,4 +97,6 @@ type authenticationFixture struct {
 	ExternalSubjects        externalsubject.Repository
 	Passkeys                passkey.Repository
 	Passkey                 authlogic.PasskeyConfig
+	TOTP                    totp.Repository
+	TOTPConfig              authlogic.TOTPConfig
 }

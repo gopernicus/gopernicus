@@ -37,10 +37,25 @@ func TestDescribeMethod_SMSisPSTN(t *testing.T) {
 }
 
 // TestDescribeMethod_UnknownKind proves an unregistered kind reports ok=false so
-// a future method is never silently treated as AAL1.
+// a future method is never silently treated as AAL1; MethodExternal is evidence
+// on a Credential, never a session method, so it has no descriptor either.
 func TestDescribeMethod_UnknownKind(t *testing.T) {
-	if _, ok := DescribeMethod("totp"); ok {
-		t.Error("DescribeMethod(\"totp\"): ok=true, want false (unregistered)")
+	for _, kind := range []MethodKind{"sms_push", MethodExternal} {
+		if _, ok := DescribeMethod(kind); ok {
+			t.Errorf("DescribeMethod(%q): ok=true, want false (unregistered)", kind)
+		}
+	}
+}
+
+// TestDescribeMethod_SecondFactors pins TOTP and recovery codes: AAL1 on their
+// own (a step-up composes AAL2 onto a live session), replay-resistant, not
+// phishing-resistant, not PSTN.
+func TestDescribeMethod_SecondFactors(t *testing.T) {
+	for _, kind := range []MethodKind{MethodTOTP, MethodRecoveryCode} {
+		d, ok := DescribeMethod(kind)
+		if !ok || d.Assurance != AssuranceAAL1 || d.PhishingResistant || !d.ReplayResistant || d.PSTN {
+			t.Errorf("DescribeMethod(%q) = %+v, %v", kind, d, ok)
+		}
 	}
 }
 

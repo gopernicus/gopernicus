@@ -98,6 +98,13 @@ type Credential struct {
 	// and delegated tokens leave it AssuranceUnknown. RequireMFA and the MFA
 	// gates read it, so a host-implemented CredentialService must stamp it.
 	Assurance session.AssuranceLevel
+	// Methods are the method kinds behind Assurance, which an MFAConfig.Methods
+	// gate reads to tell which source produced AAL2. A first-party access token
+	// carries its session's kinds from the signed methods claim (a token minted
+	// before the claim existed carries none until its next refresh); an external
+	// token carries session.MethodExternal. API keys and delegated tokens leave
+	// it empty.
+	Methods []session.MethodKind
 }
 
 // The named helpers below are one-line pre-compositions of RequirePrincipal, so

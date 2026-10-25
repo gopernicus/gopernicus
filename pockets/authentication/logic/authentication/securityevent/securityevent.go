@@ -266,8 +266,10 @@ const (
 	// refuses before the subject resolves. Details carry bounded values only:
 	// gate (route, admin, machine or provider), credential (access_token,
 	// api_key or external_token), provider (external tokens), assurance (the
-	// presented level: aal1 or unknown) and required (aal2) — never an amr
-	// value, a claim or the token.
+	// presented level: aal1, aal2 or unknown), required (aal2), reason
+	// (assurance: below AAL2; method: AAL2 from a source MFAConfig.Methods does
+	// not admit) and method (the credential's AAL2 source: passkey, totp, idp or
+	// none) — never an amr value, a claim or the token.
 	TypeMFARequiredDenied = "mfa_required_denied"
 
 	// Passkey vocabulary (SOC 2 S4b). Details carry bounded values and opaque
@@ -298,6 +300,36 @@ const (
 	// authenticator (blocked, Budgeted per client IP; UserID the owner):
 	// passkey_id, stored and presented.
 	TypePasskeySignCountRegressed = "passkey_sign_count_regressed"
+
+	// Second-factor vocabulary (SOC 2 S4c). Details carry bounded values and
+	// small integers only — never a secret, code, digest, key URI or ciphertext.
+	//
+	// TypeTOTPEnrolled is an authenticator app confirmed (success; UserID the
+	// owner): tier (bootstrap or aal2, the gate the enrollment began under).
+	TypeTOTPEnrolled = "totp_enrolled"
+	// TypeTOTPRemoved is the owner removing the authenticator app and its
+	// recovery codes (success); every session was revoked.
+	TypeTOTPRemoved = "totp_removed"
+	// TypeTOTPReset is an administrator removing a user's authenticator app
+	// (success; UserID the target, Actor the administrator): removed.
+	TypeTOTPReset = "totp_reset"
+	// TypeTOTPStepUp is a TOTP or recovery-code step-up that re-minted the
+	// session (success): method (totp or recovery_code) and assurance.
+	TypeTOTPStepUp = "totp_step_up"
+	// TypeTOTPFailed is a refused second-factor code (failure, Budgeted per
+	// client IP; UserID the caller): method (totp or recovery_code) and reason
+	// (invalid, reused, locked, not_enrolled, expired, envelope, inactive or
+	// conflict).
+	TypeTOTPFailed = "totp_failed"
+	// TypeTOTPLocked is the failure that locked the second factor (blocked,
+	// Budgeted per client IP): attempts and locked_for_seconds.
+	TypeTOTPLocked = "totp_locked"
+	// TypeRecoveryCodesGenerated is a recovery-code set minted (success): count
+	// and trigger (enrollment or regenerate).
+	TypeRecoveryCodesGenerated = "recovery_codes_generated"
+	// TypeRecoveryCodeUsed is a recovery code spent on a step-up (success):
+	// remaining.
+	TypeRecoveryCodeUsed = "recovery_code_used"
 
 	// Session-management vocabulary. Both are recorded on success only; UserID is
 	// the session owner.
@@ -452,6 +484,17 @@ const (
 	// ReasonConflict is a passkey use that lost a concurrent change: the sign
 	// count moved, the passkey was removed, or the account revision advanced.
 	ReasonConflict = "conflict"
+	// ReasonInvalid is a second-factor code that matched nothing.
+	ReasonInvalid = "invalid"
+	// ReasonReused is a TOTP code whose time step was already accepted.
+	ReasonReused = "reused"
+	// ReasonLocked is a second-factor attempt refused by its lockout.
+	ReasonLocked = "locked"
+	// ReasonNotEnrolled is a second-factor attempt for a user with no confirmed
+	// authenticator app.
+	ReasonNotEnrolled = "not_enrolled"
+	// ReasonEnvelope is a sealed TOTP secret that did not open for its user.
+	ReasonEnvelope = "envelope"
 )
 
 // Attribution bounds BoundValue applies, in bytes.
@@ -506,6 +549,8 @@ var types = []string{
 	TypeExternalSubjectProvisioned, TypeExternalSubjectUnknown, TypeExternalSubjectCollision,
 	TypeExternalSubjectDenied, TypeExternalRevocationUnavailable, TypeExternalLogin, TypeMFARequiredDenied,
 	TypePasskeyRegistered, TypePasskeyRemoved, TypePasskeysReset, TypePasskeyLogin, TypePasskeyFailed, TypePasskeySignCountRegressed,
+	TypeTOTPEnrolled, TypeTOTPRemoved, TypeTOTPReset, TypeTOTPStepUp, TypeTOTPFailed, TypeTOTPLocked,
+	TypeRecoveryCodesGenerated, TypeRecoveryCodeUsed,
 	TypeSessionRevoked, TypeAllSessionsRevoked, TypeUserDirectoryRead,
 	TypeOAuth2ConsentApproved, TypeOAuth2ConsentDenied, TypeOAuth2ConnectionCreated, TypeOAuth2Refresh,
 	TypeOAuth2RefreshReuse, TypeOAuth2TokenExchanged, TypeOAuth2RevocationRequested, TypeOAuth2GrantFailed,

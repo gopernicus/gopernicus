@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -35,6 +36,7 @@ import (
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/securityevent"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/serviceaccount"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/session"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/totp"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/user"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/delivery"
 	"github.com/gopernicus/gopernicus/sdk"
@@ -222,6 +224,8 @@ type constructorConfig struct {
 	ExternalSubjects        externalsubject.Repository
 	Passkeys                passkey.Repository
 	Passkey                 PasskeyConfig
+	TOTP                    totp.Repository
+	TOTPConfig              TOTPConfig
 }
 
 // Service implements the auth use cases over the repository ports.
@@ -362,6 +366,12 @@ type Service struct {
 	relyingParty      webauthn.RelyingParty
 	passkeyUV         webauthn.Requirement
 	passkeyMaxPerUser int
+
+	// TOTP state (WithTOTP). totpEncrypter nil → TOTP is off and every TOTP and
+	// recovery-code method refuses with ErrTOTPUnavailable.
+	totp          totp.Repository
+	totpEncrypter cryptids.KeyedEncrypter
+	totpIssuer    string
 }
 
 // newService assembles already validated dependencies; isolated package tests
@@ -462,6 +472,9 @@ func newService(d constructorConfig) *Service {
 		relyingParty:       d.Passkey.RelyingParty,
 		passkeyUV:          d.Passkey.userVerification(),
 		passkeyMaxPerUser:  d.Passkey.maxPerUser(),
+		totp:               d.TOTP,
+		totpEncrypter:      d.TOTPConfig.Encrypter,
+		totpIssuer:         d.TOTPConfig.Issuer,
 	}
 }
 
@@ -1016,7 +1029,7 @@ func (s *Service) mintSessionUntil(ctx context.Context, userID string, expectedA
 	if err != nil {
 		return TokenPair{}, session.Session{}, err
 	}
-	access, accessExpiresAt, err := s.signAccessToken(userID, created.ID, created.Authentication.Assurance)
+	access, accessExpiresAt, err := s.signAccessToken(userID, created.ID, created.Authentication)
 	if err != nil {
 		return TokenPair{}, session.Session{}, err
 	}
@@ -1082,24 +1095,39 @@ func (s *Service) primaryAuthentication(kind session.MethodKind) session.Authent
 // signAccessToken signs an access JWT carrying {user_id, session_id} at
 // AccessTokenTTL (§1.1). The signer stamps exp (from the returned expiry) and
 // iat; this call sets the identity claims. session_id backs the Live() tier and
-// the logout fallback. assurance is the session row's level, signed as the aal
-// claim; a row that recorded none (a legacy empty assurance_level) signs no
-// claim, so the token reads AssuranceUnknown.
-func (s *Service) signAccessToken(userID, sessionID string, assurance session.AssuranceLevel) (string, time.Time, error) {
+// the logout fallback. auth is the session row's authentication: its level is
+// signed as the aal claim and its method kinds as the methods claim; a row that
+// recorded none (a legacy empty assurance_level, no methods) signs neither, so
+// the token reads AssuranceUnknown and no methods.
+func (s *Service) signAccessToken(userID, sessionID string, auth session.AuthenticationMetadata) (string, time.Time, error) {
 	expiresAt := s.now().Add(s.accessTTL)
 	claims := map[string]any{
 		tokenClaimUserID:    userID,
 		tokenClaimSessionID: sessionID,
 		tokenClaimProfile:   string(session.ProfileFirstParty),
 	}
-	if assurance != session.AssuranceUnknown {
-		claims[tokenClaimAssurance] = string(assurance)
+	if auth.Assurance != session.AssuranceUnknown {
+		claims[tokenClaimAssurance] = string(auth.Assurance)
+	}
+	if kinds := methodKinds(auth.Methods); len(kinds) > 0 {
+		claims[tokenClaimMethods] = kinds
 	}
 	token, err := s.tokenSigner.Sign(claims, expiresAt)
 	if err != nil {
 		return "", time.Time{}, fmt.Errorf("sign access token: %w", err)
 	}
 	return token, expiresAt, nil
+}
+
+// methodKinds lists the kinds of methods in order, each once.
+func methodKinds(methods []session.AuthenticationMethod) []string {
+	var kinds []string
+	for _, m := range methods {
+		if m.Kind != "" && !slices.Contains(kinds, string(m.Kind)) {
+			kinds = append(kinds, string(m.Kind))
+		}
+	}
+	return kinds
 }
 
 // hashSessionToken returns the stored form of a refresh token — its SHA-256 hex

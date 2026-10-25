@@ -31,6 +31,7 @@ import (
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/securityevent"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/serviceaccount"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/session"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/totp"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/user"
 	invitations "github.com/gopernicus/gopernicus/pockets/authentication/logic/invitations"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/maintenance"
@@ -43,6 +44,20 @@ import (
 func TestReferencePasskeys(t *testing.T) {
 	RunPasskeys(t, func(t *testing.T) auth.Repositories {
 		return newReference().repositories()
+	})
+}
+
+// TestReferenceTOTP runs the TOTP suite, separate from Run, against the
+// reference implementation, and the schema-probe contract over a reference
+// store marked unmigrated.
+func TestReferenceTOTP(t *testing.T) {
+	RunTOTP(t, func(t *testing.T) auth.Repositories {
+		return newReference().repositories()
+	})
+	RunTOTPSchemaProbe(t, func(t *testing.T) totp.Repository {
+		r := newReference()
+		r.totpSchemaMissing = true
+		return refTOTP{r}
 	})
 }
 
@@ -93,6 +108,12 @@ type reference struct {
 	// passkeys holds registered passkeys, by ID.
 	passkeys map[string]passkey.Passkey
 
+	// totpCreds and totpCodes are the second-factor aggregate, by user ID;
+	// totpSchemaMissing makes ProbeSchema report migration 0026 absent.
+	totpCreds         map[string]totp.Credential
+	totpCodes         map[string][]totp.RecoveryCode
+	totpSchemaMissing bool
+
 	// resetFailAt/resetFailErr inject an all-or-nothing rollback failure into
 	// refPasswordResets.Redeem (design §5.9): resetFailAt=N fails just after the
 	// Nth composition statement, so a test proves that a mid-transaction failure at
@@ -123,6 +144,8 @@ func newReference() *reference {
 		externalSubjects: map[externalKey]externalsubject.ExternalSubject{},
 		erasedAt:         map[string]time.Time{},
 		passkeys:         map[string]passkey.Passkey{},
+		totpCreds:        map[string]totp.Credential{},
+		totpCodes:        map[string][]totp.RecoveryCode{},
 	}
 }
 
@@ -152,6 +175,7 @@ func (r *reference) repositories() auth.Repositories {
 		Maintenance:          refMaintenance{r},
 		UserErasure:          refErasure{r},
 		Passkeys:             refPasskeys{r},
+		TOTP:                 refTOTP{r},
 	}
 }
 
@@ -2762,6 +2786,14 @@ func (r refErasure) Erase(ctx context.Context, in user.EraseInput) (user.Erasure
 		delete(r.passkeys, p.ID)
 		c.Passkeys++
 	}
+	if in.TOTP {
+		if _, ok := r.totpCreds[id]; ok {
+			delete(r.totpCreds, id)
+			c.TOTP = 1
+		}
+		c.RecoveryCodes = len(r.totpCodes[id])
+		delete(r.totpCodes, id)
+	}
 	kept := r.oauthAccounts[:0:0]
 	for _, a := range r.oauthAccounts {
 		if a.UserID == id {
@@ -2968,4 +3000,199 @@ func (r refPasskeys) RecordUse(_ context.Context, id string, expected, count uin
 	p.SignCount, p.BackupState, p.LastUsedAt = count, backupState, &at
 	r.passkeys[id] = p
 	return nil
+}
+
+// --- totp.Repository ---
+
+// refTOTP is the reference second-factor aggregate. Confirm and Remove run
+// under the one mutex that also serializes the credential-mutation rail, the
+// reference's user-row lock.
+type refTOTP struct{ *reference }
+
+var (
+	_ totp.Repository   = refTOTP{}
+	_ totp.SchemaProber = refTOTP{}
+)
+
+func cloneTOTPCredential(c totp.Credential) totp.Credential {
+	for _, p := range []**time.Time{&c.ExpiresAt, &c.ConfirmedAt, &c.LockedUntil, &c.LastUsedAt} {
+		if *p != nil {
+			at := **p
+			*p = &at
+		}
+	}
+	return c
+}
+
+func (r refTOTP) ProbeSchema(context.Context) error {
+	if r.totpSchemaMissing {
+		return fmt.Errorf("reference: totp_credentials and recovery_codes are missing; apply migration 0026_totp: %w", sdk.ErrNotFound)
+	}
+	return nil
+}
+
+func (r refTOTP) Begin(_ context.Context, c totp.Credential) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if ex, ok := r.totpCreds[c.UserID]; ok && ex.Confirmed() {
+		return totp.ErrAlreadyEnrolled
+	}
+	c.ConfirmedAt, c.LastUsedStep, c.FailedAttempts, c.LockedUntil, c.LastUsedAt = nil, 0, 0, nil, nil
+	r.totpCreds[c.UserID] = cloneTOTPCredential(c)
+	return nil
+}
+
+func (r refTOTP) Get(_ context.Context, userID string) (totp.Credential, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	c, ok := r.totpCreds[userID]
+	if !ok {
+		return totp.Credential{}, sdk.ErrNotFound
+	}
+	return cloneTOTPCredential(c), nil
+}
+
+func (r refTOTP) Confirm(_ context.Context, in totp.Confirmation) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	u, ok := r.users[in.UserID]
+	if !ok {
+		return sdk.ErrNotFound
+	}
+	if !r.projectLocked(u).Active() {
+		return session.ErrUserNotActive
+	}
+	c, ok := r.totpCreds[in.UserID]
+	switch {
+	case !ok:
+		return sdk.ErrNotFound
+	case c.Confirmed():
+		return totp.ErrAlreadyEnrolled
+	case u.AuthRevision != in.ExpectedAuthRevision:
+		return sdk.ErrConflict
+	case in.Bootstrap && slices.ContainsFunc(r.passkeysOfLocked(in.UserID), passkey.Passkey.AAL2Capable):
+		return totp.ErrBootstrapClosed
+	}
+	seen := map[string]bool{}
+	for _, code := range in.Codes {
+		if seen[code.Digest] {
+			return sdk.ErrAlreadyExists
+		}
+		seen[code.Digest] = true
+	}
+	at := in.ConfirmedAt
+	c.ConfirmedAt, c.LastUsedStep = &at, in.Step
+	c.SessionID, c.Tier, c.AuthRevision, c.ExpiresAt, c.FailedAttempts, c.LockedUntil = "", "", 0, nil, 0, nil
+	r.totpCreds[in.UserID] = c
+	r.totpCodes[in.UserID] = slices.Clone(in.Codes)
+	r.advanceCredentialRevisionLocked(in.UserID, time.Now())
+	return nil
+}
+
+func (r refTOTP) RecordUse(_ context.Context, userID string, expectedStep, step int64, at time.Time) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	c, ok := r.totpCreds[userID]
+	if !ok || !c.Confirmed() || c.LastUsedStep != expectedStep || step <= expectedStep {
+		return sdk.ErrConflict
+	}
+	c.LastUsedStep, c.LastUsedAt, c.FailedAttempts, c.LockedUntil = step, &at, 0, nil
+	r.totpCreds[userID] = c
+	return nil
+}
+
+func (r refTOTP) RecordFailure(_ context.Context, userID string, lockAt int, lockFor time.Duration, now time.Time) (totp.Failure, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	c, ok := r.totpCreds[userID]
+	if !ok {
+		return totp.Failure{}, sdk.ErrNotFound
+	}
+	c.FailedAttempts++
+	out := totp.Failure{Attempts: c.FailedAttempts}
+	if c.FailedAttempts >= lockAt {
+		until := now.Add(lockFor)
+		c.FailedAttempts, c.LockedUntil = 0, &until
+		out.LockedUntil = &until
+	}
+	r.totpCreds[userID] = c
+	return out, nil
+}
+
+func (r refTOTP) generatedAtLocked(userID string) *time.Time {
+	codes := r.totpCodes[userID]
+	if len(codes) == 0 {
+		return nil
+	}
+	at := codes[0].GeneratedAt
+	return &at
+}
+
+func (r refTOTP) ReplaceRecoveryCodes(_ context.Context, userID string, codes []totp.RecoveryCode, expected *time.Time) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if c, ok := r.totpCreds[userID]; !ok || !c.Confirmed() {
+		return sdk.ErrNotFound
+	}
+	if expected != nil {
+		if current := r.generatedAtLocked(userID); current == nil || !current.Equal(*expected) {
+			return sdk.ErrConflict
+		}
+	}
+	r.totpCodes[userID] = slices.Clone(codes)
+	return nil
+}
+
+func (r refTOTP) ConsumeRecoveryCode(_ context.Context, userID string, candidates []challenge.DigestCandidate, _ time.Time) (int, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	codes := r.totpCodes[userID]
+	for i, code := range codes {
+		if slices.ContainsFunc(candidates, func(c challenge.DigestCandidate) bool { return c.KeyID == code.KeyID && c.Digest == code.Digest }) {
+			r.totpCodes[userID] = slices.Delete(slices.Clone(codes), i, i+1)
+			return len(r.totpCodes[userID]), nil
+		}
+	}
+	return 0, sdk.ErrNotFound
+}
+
+func (r refTOTP) CountRecoveryCodes(_ context.Context, userID string) (int, *time.Time, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return len(r.totpCodes[userID]), r.generatedAtLocked(userID), nil
+}
+
+func (r refTOTP) Remove(_ context.Context, userID string, expectedRevision int64) (totp.Removed, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	u, ok := r.users[userID]
+	if !ok {
+		return totp.Removed{}, sdk.ErrNotFound
+	}
+	if u.AuthRevision != expectedRevision {
+		return totp.Removed{}, sdk.ErrConflict
+	}
+	if _, ok := r.totpCreds[userID]; !ok {
+		return totp.Removed{}, nil
+	}
+	removed := totp.Removed{Credential: true, RecoveryCodes: len(r.totpCodes[userID])}
+	delete(r.totpCreds, userID)
+	delete(r.totpCodes, userID)
+	r.advanceCredentialRevisionLocked(userID, time.Now())
+	r.revokeCredentialStateLocked(userID)
+	return removed, nil
+}
+
+func (r refTOTP) RecoveryCodeKeyIDs(context.Context) ([]string, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	var out []string
+	for _, codes := range r.totpCodes {
+		for _, code := range codes {
+			if !slices.Contains(out, code.KeyID) {
+				out = append(out, code.KeyID)
+			}
+		}
+	}
+	return out, nil
 }

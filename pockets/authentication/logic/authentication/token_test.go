@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -260,7 +261,7 @@ func TestIssueTokenRequireVerifiedEmailAllowsVerified(t *testing.T) {
 func TestAccessTokenAssuranceClaim(t *testing.T) {
 	h := newHarness(t, nil)
 	for level, want := range map[session.AssuranceLevel]bool{session.AssuranceAAL1: true, session.AssuranceAAL2: true, session.AssuranceUnknown: false} {
-		raw, _, err := h.svc.signAccessToken("u1", "s1", level)
+		raw, _, err := h.svc.signAccessToken("u1", "s1", session.AuthenticationMetadata{Assurance: level})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -306,6 +307,70 @@ func TestAccessTokenAssuranceClaim(t *testing.T) {
 	for name, raw := range map[string]string{"login": pair.AccessToken, "refresh": rotated.AccessToken} {
 		if _, cred, ok := h.svc.verifyAccessClaims(raw); !ok || cred.Assurance != session.AssuranceAAL1 {
 			t.Errorf("%s token assurance = %q, want aal1", name, cred.Assurance)
+		}
+	}
+}
+
+// TestAccessTokenMethodsClaim pins the methods claim: signed from the session
+// row's method kinds (each once, in order), omitted for a row that recorded
+// none, parsed into Credential.Methods, refused when it names an unknown,
+// duplicate or external kind or is not a non-empty string array, and refused on
+// a delegated token.
+func TestAccessTokenMethodsClaim(t *testing.T) {
+	h := newHarness(t, nil)
+	pw, _ := session.DescribeMethod(session.MethodPassword)
+	code, _ := session.DescribeMethod(session.MethodTOTP)
+	raw, _, err := h.svc.signAccessToken("u1", "s1", session.AuthenticationMetadata{
+		Assurance: session.AssuranceAAL2, Methods: []session.AuthenticationMethod{pw, code, pw},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	claims, err := h.signer.Verify(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := claims["methods"].([]any); !ok || len(got) != 2 || got[0] != "password" || got[1] != "totp" {
+		t.Fatalf("methods claim = %#v", claims["methods"])
+	}
+	if _, cred, ok := parseAccessClaims(claims); !ok || !slices.Equal(cred.Methods, []session.MethodKind{session.MethodPassword, session.MethodTOTP}) {
+		t.Fatalf("parsed methods = %v, %v", cred.Methods, ok)
+	}
+	bare, _, err := h.svc.signAccessToken("u1", "s1", session.AuthenticationMetadata{Assurance: session.AssuranceAAL1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if claims, _ := h.signer.Verify(bare); claims["methods"] != nil {
+		t.Fatalf("a row without methods signed %#v", claims["methods"])
+	}
+	firstParty := func(methods any) map[string]any {
+		return map[string]any{"user_id": "u1", "session_id": "s1", "session_profile": "first_party", "aal": "aal2", "methods": methods}
+	}
+	for _, bad := range []any{[]any{}, []any{"sms_push"}, []any{"external"}, []any{"totp", "totp"}, []any{2}, "totp", nil} {
+		if _, _, ok := parseAccessClaims(firstParty(bad)); ok {
+			t.Errorf("first-party methods %#v admitted", bad)
+		}
+	}
+	delegated := map[string]any{"user_id": "u1", "session_id": "s1", "session_profile": "delegated",
+		"exp": float64(time.Now().Add(time.Minute).Unix()), "iss": "https://as.example.test", "client_id": "client", "aud": "https://rs.example.test",
+		"methods": []any{"password"}}
+	if _, _, ok := parseAccessClaims(delegated); ok {
+		t.Error("a delegated token carrying methods was admitted")
+	}
+
+	h.mustRegister(t, "methods@example.com", "password123456789")
+	h.mustVerify(t, "methods@example.com")
+	pair, _, err := h.svc.Login(context.Background(), "methods@example.com", "password123456789")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rotated, err := h.svc.Refresh(context.Background(), pair.RefreshToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, raw := range map[string]string{"login": pair.AccessToken, "refresh": rotated.AccessToken} {
+		if _, cred, ok := h.svc.verifyAccessClaims(raw); !ok || !slices.Equal(cred.Methods, []session.MethodKind{session.MethodPassword}) {
+			t.Errorf("%s token methods = %v, want [password]", name, cred.Methods)
 		}
 	}
 }

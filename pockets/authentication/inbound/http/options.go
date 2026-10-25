@@ -4,6 +4,7 @@ import (
 	"maps"
 	"slices"
 
+	authlogic "github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication"
 	"github.com/gopernicus/gopernicus/sdk/pkg/list"
 	"github.com/gopernicus/gopernicus/sdk/pkg/web"
 )
@@ -134,4 +135,22 @@ func WithAdministrationMFA() Option {
 // Views (sdk.ErrInvalidInput at New). Nil leaves the passkey routes JSON-only.
 func WithPasskeyViews(value PasskeyViews) Option {
 	return func(c *adapterConfig) { c.PasskeyViews = value }
+}
+
+// WithTOTPViews mounts the TOTP pages — GET /auth/account/totp, GET
+// /auth/account/totp/enroll, the chooser GET /auth/step-up/mfa and the remove
+// form lane POST /auth/totp — adds the form arms of the TOTP POST routes, and
+// turns a Browser() RequireMFA() denial of an AAL1 cookie into a redirect to the
+// chooser. It requires a service with TOTP wired and BrowserConfig Views
+// (sdk.ErrInvalidInput at New). Nil leaves the TOTP routes JSON-only.
+func WithTOTPViews(value TOTPViews) Option {
+	return func(c *adapterConfig) { c.TOTPViews = value }
+}
+
+// WithMFAMethods restricts the AAL2 sources every MFA gate admits (MFAConfig.
+// Methods): RequireMFA(), the admin and machine gates, and the chooser's
+// offers. Empty admits any source.
+func WithMFAMethods(methods ...authlogic.MFAMethod) Option {
+	methods = slices.Clone(methods)
+	return func(c *adapterConfig) { c.MFAMethods = slices.Clone(methods) }
 }

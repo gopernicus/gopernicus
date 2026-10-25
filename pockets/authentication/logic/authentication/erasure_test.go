@@ -174,7 +174,7 @@ func TestEraseUserPreparesTheRowForTheTransaction(t *testing.T) {
 		t.Fatalf("the service wrote the row itself (%d rows); the store appends it in its transaction", len(rows))
 	}
 	merged := erasure.Counts.Merge(evt.Details)
-	if merged["sessions"] != 2 || merged["identifiers_blanked"] != 2 || merged["api_keys"] != 0 || len(merged) != 15 {
+	if merged["sessions"] != 2 || merged["identifiers_blanked"] != 2 || merged["api_keys"] != 0 || len(merged) != 17 {
 		t.Errorf("merged Details = %v", merged)
 	}
 	for key := range merged {

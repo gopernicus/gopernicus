@@ -36,6 +36,8 @@ type authenticationConfig struct {
 	// Passkeys is a named field, not embedded: PasskeyConfig.Views would collide
 	// with BrowserConfig.Views.
 	Passkeys auth.PasskeyConfig
+	// TOTP is named for the same reason.
+	TOTP auth.TOTPConfig
 }
 
 func (c authenticationConfig) options() []auth.Option {
@@ -54,6 +56,7 @@ func (c authenticationConfig) options() []auth.Option {
 		auth.WithAdministration(c.AdministrationConfig),
 		auth.WithMaintenance(c.MaintenanceConfig),
 		auth.WithPasskeys(c.Passkeys),
+		auth.WithTOTP(c.TOTP),
 		auth.WithIDs(c.IDs),
 		auth.WithLogger(c.Logger),
 	}

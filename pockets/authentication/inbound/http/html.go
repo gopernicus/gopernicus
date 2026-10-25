@@ -55,6 +55,7 @@ var (
 		outcomeSignedOut:      "You've been signed out.",
 		outcomePasswordReset:  "Your password was reset. Sign in with your new password.",
 		outcomePasskeyRemoved: "That passkey was removed and you were signed out everywhere. Sign in again.",
+		outcomeTOTPRemoved:    "Your authenticator app was removed and you were signed out everywhere. Sign in again.",
 	}
 )
 
@@ -403,6 +404,7 @@ func (h *handlers) accountPage(w http.ResponseWriter, r *http.Request) {
 	}
 	m.LinkableProviders = linkableProviders(h.svc.OAuthProviderNames(), m.OAuth)
 	m.Passkeys = h.passkeyLinks()
+	m.TOTP = h.totpLinks()
 	h.renderPage(w, r, pc.CSPNonce, h.views.AccountSecurity(m))
 }
 
@@ -561,6 +563,7 @@ func (h *handlers) stepUpModel(ctx context.Context, userID string, pc PageContex
 		Context:     p.context,
 		Kind:        p.kind,
 		Passkeys:    h.passkeyLinks(),
+		TOTP:        h.totpLinks(),
 	}
 	if userID == "" {
 		return m

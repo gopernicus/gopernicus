@@ -1,10 +1,12 @@
 package authentication
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/securityevent"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/session"
@@ -35,6 +37,26 @@ const (
 	MFAGateMachine MFAGate = "machine"
 )
 
+// The MFAConfig.Methods values: the AAL2 sources a host admits.
+const (
+	// MFAMethodPasskey is a user-verified passkey sign-in or step-up.
+	MFAMethodPasskey MFAMethod = "passkey"
+	// MFAMethodIdP is an external provider that asserted multi-factor
+	// authentication.
+	MFAMethodIdP MFAMethod = "idp"
+	// MFAMethodTOTP is a TOTP step-up; a recovery-code step-up counts under it.
+	MFAMethodTOTP MFAMethod = "totp"
+)
+
+// The mfa_required_denied reasons.
+const (
+	// MFADenialAssurance is a credential below AAL2.
+	MFADenialAssurance = "assurance"
+	// MFADenialMethod is an AAL2 credential whose sources MFAConfig.Methods does
+	// not admit.
+	MFADenialMethod = "method"
+)
+
 var (
 	// ErrMFARequired denies a credential below AAL2 where multi-factor
 	// authentication is required. It matches sdk.ErrUnauthorized; the HTTP
@@ -53,15 +75,57 @@ var (
 // MFAGate names the gate that refused a credential below AAL2.
 type MFAGate string
 
+// MFAMethod names one AAL2 source: passkey, idp or totp.
+type MFAMethod string
+
 // MFADenial is one refused multi-factor requirement: the gate that refused it,
-// the principal and the credential it refused. RecordMFADenied records it as
-// an mfa_required_denied row carrying bounded values only — the gate, the
-// credential kind, the provider name, the presented and required assurance —
-// never a claim, an amr value or the token.
+// the principal and the credential it refused, and why (Reason: assurance or
+// method; empty reads as assurance). RecordMFADenied records it as an
+// mfa_required_denied row carrying bounded values only — the gate, the
+// credential kind, the provider name, the presented and required assurance, the
+// reason and the credential's AAL2 source — never a claim, an amr value or the
+// token.
 type MFADenial struct {
 	Gate       MFAGate
 	Principal  Principal
 	Credential Credential
+	Reason     string
+}
+
+// MFASources reports the AAL2 sources behind cred: idp for an external token;
+// for an access token passkey when its methods carry a user-verified passkey
+// and totp when they carry a TOTP or recovery code. An access token without a
+// methods claim (minted before it existed) has none.
+func MFASources(cred Credential) []MFAMethod {
+	if cred.Kind == CredentialExternalToken {
+		return []MFAMethod{MFAMethodIdP}
+	}
+	var out []MFAMethod
+	add := func(m MFAMethod) {
+		if !slices.Contains(out, m) {
+			out = append(out, m)
+		}
+	}
+	for _, kind := range cred.Methods {
+		switch kind {
+		case session.MethodPasskey:
+			add(MFAMethodPasskey)
+		case session.MethodTOTP, session.MethodRecoveryCode:
+			add(MFAMethodTOTP)
+		}
+	}
+	return out
+}
+
+// MFASourceAllowed is the one source predicate every MFA gate applies beside
+// the AAL2 floor: an empty allowed admits any source; otherwise one of cred's
+// AAL2 sources (MFASources) must be allowed, so an access token without a
+// methods claim fails closed under a restriction until its next refresh.
+func MFASourceAllowed(cred Credential, allowed []MFAMethod) bool {
+	if len(allowed) == 0 {
+		return true
+	}
+	return slices.ContainsFunc(MFASources(cred), func(m MFAMethod) bool { return slices.Contains(allowed, m) })
 }
 
 // RecordMFADenied records d as an mfa_required_denied row through the
@@ -99,6 +163,11 @@ func mfaDenialEvent(d MFADenial, provider string) securityEventInput {
 		"credential": boundedEnum(string(d.Credential.Kind), string(CredentialAccessToken), string(CredentialAPIKey), string(CredentialExternalToken)),
 		"assurance":  boundedEnum(string(d.Credential.Assurance), string(session.AssuranceAAL1), string(session.AssuranceAAL2), string(session.AssuranceAAL3)),
 		"required":   string(session.AssuranceAAL2),
+		"reason":     boundedEnum(cmp.Or(d.Reason, MFADenialAssurance), MFADenialAssurance, MFADenialMethod),
+		"method":     "none",
+	}
+	if sources := MFASources(d.Credential); len(sources) > 0 {
+		details["method"] = string(sources[0])
 	}
 	if provider != "" {
 		details["provider"] = provider

@@ -51,6 +51,16 @@ const (
 	// PurposeRemovePasskey gates removing a passkey, under the same assurance
 	// rule as registration; the passkey id is the grant context.
 	PurposeRemovePasskey = "remove_passkey"
+	// PurposeRegisterTOTP gates starting an authenticator-app enrollment. It has
+	// no context. A holder of an AAL2 factor (a user-verified passkey or a
+	// confirmed TOTP) needs AAL2 proof; anyone else may bootstrap at AAL1.
+	PurposeRegisterTOTP = "register_totp"
+	// PurposeRemoveTOTP gates removing the authenticator app and its recovery
+	// codes, under the same assurance rule.
+	PurposeRemoveTOTP = "remove_totp"
+	// PurposeRegenerateRecoveryCodes gates replacing the recovery codes, under the
+	// same assurance rule.
+	PurposeRegenerateRecoveryCodes = "regenerate_recovery_codes"
 )
 
 // Grant is a consumed-once recent-authentication token. ContextDigest binds the

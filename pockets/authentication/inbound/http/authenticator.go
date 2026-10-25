@@ -11,6 +11,7 @@ import (
 
 	"github.com/gopernicus/gopernicus/pockets/authentication/internal/redirect"
 	authlogic "github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/session"
 	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/ratelimiter"
 	"github.com/gopernicus/gopernicus/sdk/pkg/environment"
@@ -74,9 +75,13 @@ type Adapter struct {
 	// mfaDenials records MFA denials when the credential service implements
 	// MFADenialRecorder; nil records nothing.
 	mfaDenials MFADenialRecorder
-	// passkeyStepUpPath is where a Browser() RequireMFA() denial of a cookie
-	// below AAL2 redirects; empty (no passkey pages mounted) answers JSON.
-	passkeyStepUpPath string
+	// mfaStepUpPath is where a Browser() RequireMFA() denial of a cookie below
+	// AAL2 redirects: the TOTP chooser when TOTP pages are mounted, else the
+	// passkey step-up page; empty (neither mounted) answers JSON.
+	mfaStepUpPath string
+	// mfaMethods is MFAConfig.Methods: the AAL2 sources every MFA gate admits,
+	// empty for any.
+	mfaMethods []authlogic.MFAMethod
 }
 
 // authenticatorConfig holds the HTTP adapter's resolved policy and dependencies.
@@ -117,12 +122,44 @@ func newAuthenticator(service CredentialService, cfg authenticatorConfig) *Adapt
 
 // recordMFADenial hands one MFA denial of gate to the credential service's
 // recorder, attributed to the request's principal.
-func (s *Adapter) recordMFADenial(ctx context.Context, gate authlogic.MFAGate, cred Credential) {
+func (s *Adapter) recordMFADenial(ctx context.Context, gate authlogic.MFAGate, cred Credential, reason string) {
 	if s.mfaDenials == nil {
 		return
 	}
 	principal, _ := s.service.CurrentPrincipal(ctx)
-	s.mfaDenials.RecordMFADenied(ctx, authlogic.MFADenial{Gate: gate, Principal: principal, Credential: cred})
+	s.mfaDenials.RecordMFADenied(ctx, authlogic.MFADenial{Gate: gate, Principal: principal, Credential: cred, Reason: reason})
+}
+
+// mfaRefusal is the one AAL2 predicate every MFA gate applies — RequireMFA(),
+// the admin and machine gates: the credential must hold AAL2, from a source
+// MFAConfig.Methods admits. It returns the denial reason, or "" when cred
+// passes.
+func (s *Adapter) mfaRefusal(cred Credential) string {
+	switch {
+	case !cred.Assurance.AtLeast(session.AssuranceAAL2):
+		return authlogic.MFADenialAssurance
+	case !authlogic.MFASourceAllowed(cred, s.mfaMethods):
+		return authlogic.MFADenialMethod
+	}
+	return ""
+}
+
+// mfaAllows reports whether MFAConfig.Methods admits m (any, when empty).
+func (s *Adapter) mfaAllows(m authlogic.MFAMethod) bool {
+	return len(s.mfaMethods) == 0 || slices.Contains(s.mfaMethods, m)
+}
+
+// admitMFA runs mfaRefusal for a gate outside RequirePrincipal and records a
+// refusal (gate, reason); an API key always passes, since no key can hold AAL2.
+func (s *Adapter) admitMFA(ctx context.Context, gate authlogic.MFAGate, cred Credential) bool {
+	if cred.Kind == authlogic.CredentialAPIKey {
+		return true
+	}
+	if reason := s.mfaRefusal(cred); reason != "" {
+		s.recordMFADenial(ctx, gate, cred, reason)
+		return false
+	}
+	return true
 }
 
 // clientIPFor returns the client-info carrier's IP, or clientIP(r) when no
@@ -252,8 +289,17 @@ func validExternalCookies(names []string, sessionName string, externalEnabled bo
 // path, as the login redirect is configured: a login path ending in /auth/login
 // keeps its mount prefix; any other keeps the default.
 func passkeyStepUpPathFor(loginPath string) string {
+	return pagePathFor(loginPath, defaultPasskeyStepUpPath)
+}
+
+// mfaStepUpPathFor derives the TOTP chooser page the same way.
+func mfaStepUpPathFor(loginPath string) string {
+	return pagePathFor(loginPath, mfaStepUpPagePath)
+}
+
+func pagePathFor(loginPath, page string) string {
 	if prefix, ok := strings.CutSuffix(loginPath, defaultBrowserLoginPath); ok {
-		return prefix + defaultPasskeyStepUpPath
+		return prefix + page
 	}
-	return defaultPasskeyStepUpPath
+	return page
 }

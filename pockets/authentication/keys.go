@@ -8,10 +8,11 @@ import (
 	"strings"
 
 	"github.com/gopernicus/gopernicus/sdk"
+	"github.com/gopernicus/gopernicus/sdk/pkg/cryptids"
 	environment "github.com/gopernicus/gopernicus/sdk/pkg/environment"
 )
 
-// The five key names. Each value is the environment variable KeysInput reads
+// The six key names. Each value is the environment variable KeysInput reads
 // the key from, so an error naming a KeyName names the variable to set.
 const (
 	// KeyJWT signs access JWTs: at least 32 bytes.
@@ -27,6 +28,15 @@ const (
 	// KeyTokenEncrypter seals stored OAuth provider tokens with AES-256-GCM:
 	// exactly 32 bytes. It is optional in every mode.
 	KeyTokenEncrypter KeyName = "AUTH_TOKEN_ENCRYPTER_KEY"
+	// KeyTOTPRing seals TOTP secrets with an AES-256-GCM key ring: AUTH_TOTP_KEYS
+	// holds "id:hex,id:hex" (each exactly 32 bytes) and AUTH_TOTP_ACTIVE_KEY names
+	// the id that seals. Keep a retired id in the ring until nothing is sealed
+	// under it.
+	KeyTOTPRing KeyName = "AUTH_TOTP_KEYS"
+	// keyTOTPActive is the TOTP ring's active-id variable.
+	keyTOTPActive = "AUTH_TOTP_ACTIVE_KEY"
+	// ephemeralRingKeyID is the id of a development ring minted for one boot.
+	ephemeralRingKeyID = "ephemeral"
 )
 
 const (
@@ -47,7 +57,7 @@ const (
 // environment.ErrSecretUnderMinimum.
 var ErrKeyRequired = errors.New("authentication: a needed key is unset or malformed")
 
-// KeyName names one of the pocket's five keys by its environment variable.
+// KeyName names one of the pocket's six keys by its environment variable.
 type KeyName string
 
 // KeysInput is the hex-encoded key material NewKeys decodes. A host fills it
@@ -60,20 +70,25 @@ type KeysInput struct {
 	IdentifierKey        string `env:"AUTH_IDENTIFIER_KEY"`
 	DeliveryEncrypterKey string `env:"AUTH_DELIVERY_ENCRYPTER_KEY"`
 	TokenEncrypterKey    string `env:"AUTH_TOKEN_ENCRYPTER_KEY"`
+	TOTPKeys             string `env:"AUTH_TOTP_KEYS"`
+	TOTPActiveKey        string `env:"AUTH_TOTP_ACTIVE_KEY"`
 }
 
 // Keys is the decoded key material NewKeys returns. A nil field is a key that
 // was not needed and not set, or the token encrypter key left unset. The host
 // builds each collaborator from its field: the JWT signer from
 // string(JWTSecret), the challenge protector's key ring from ChallengePepper,
-// the identifier keyer from IdentifierKey, and AES-GCM encrypters from the two
-// encrypter keys. Keys prints redacted through fmt and slog.
+// the identifier keyer from IdentifierKey, AES-GCM encrypters from the two
+// encrypter keys, and the TOTP encrypter from cryptids.NewAESGCMRing(TOTPRing).
+// A TOTPRing with no keys was not needed and not set. Keys prints redacted
+// through fmt and slog.
 type Keys struct {
 	JWTSecret            []byte
 	ChallengePepper      []byte
 	IdentifierKey        []byte
 	DeliveryEncrypterKey []byte
 	TokenEncrypterKey    []byte
+	TOTPRing             cryptids.KeyRing
 }
 
 // NewKeys decodes in for the runtime mode. need names the keys the host wires;
@@ -85,11 +100,15 @@ type Keys struct {
 //   - development: each unset needed key gets an ephemeral crypto/rand key and
 //     one WARN, valid for this process only;
 //   - KeyTokenEncrypter is optional in both modes: unset leaves it nil, with one
-//     INFO line when needed, and it is never minted.
+//     INFO line when needed, and it is never minted;
+//   - KeyTOTPRing is a ring, not one key: development mints a one-key ring
+//     (id "ephemeral") with the same WARN, production refuses it unset only when
+//     it is needed.
 //
 // A set value is decoded whether or not it is needed: hex, at least 32 bytes,
-// and exactly 32 for the two encrypter keys. A malformed value is an
-// ErrKeyRequired in every mode. Every failure is reported together with
+// and exactly 32 for the two encrypter keys; the TOTP ring parses with
+// cryptids.ParseKeyRing (each key exactly 32 bytes, the active id present). A
+// malformed value is an ErrKeyRequired in every mode. Every failure is reported together with
 // errors.Join. An unknown KeyName or an invalid mode is an error.
 func NewKeys(mode environment.Mode, in KeysInput, log *slog.Logger, need ...KeyName) (Keys, error) {
 	if err := validateRuntimeMode(mode); err != nil {
@@ -113,7 +132,7 @@ func NewKeys(mode environment.Mode, in KeysInput, log *slog.Logger, need ...KeyN
 	}
 	needed := make(map[KeyName]bool, len(need))
 	for _, name := range need {
-		known := false
+		known := name == KeyTOTPRing
 		for _, spec := range specs {
 			known = known || spec.name == name
 		}
@@ -145,10 +164,39 @@ func NewKeys(mode environment.Mode, in KeysInput, log *slog.Logger, need ...KeyN
 			log.Warn("authentication: key unset; using an EPHEMERAL per-boot key — development and single-instance only, it does not survive a restart and instances cannot share it", "key", string(spec.name))
 		}
 	}
+	ring, err := decodeTOTPRing(mode, in, needed[KeyTOTPRing], log)
+	if err != nil {
+		errs = append(errs, err)
+	}
+	keys.TOTPRing = ring
 	if len(errs) > 0 {
 		return Keys{}, errors.Join(errs...)
 	}
 	return keys, nil
+}
+
+// decodeTOTPRing parses the TOTP key ring, mints a development one when it is
+// needed and unset, and refuses a needed unset ring in production.
+func decodeTOTPRing(mode environment.Mode, in KeysInput, needed bool, log *slog.Logger) (cryptids.KeyRing, error) {
+	if in.TOTPKeys != "" || in.TOTPActiveKey != "" {
+		ring, err := cryptids.ParseKeyRing(in.TOTPKeys, in.TOTPActiveKey)
+		if err != nil {
+			return cryptids.KeyRing{}, fmt.Errorf("%w: %s / %s is malformed: %w", ErrKeyRequired, KeyTOTPRing, keyTOTPActive, err)
+		}
+		return ring, nil
+	}
+	switch {
+	case !needed:
+		return cryptids.KeyRing{}, nil
+	case mode.IsProduction():
+		return cryptids.KeyRing{}, fmt.Errorf("%w: %s is unset", ErrKeyRequired, KeyTOTPRing)
+	}
+	ephemeral := make([]byte, encrypterKeyBytes)
+	if _, err := rand.Read(ephemeral); err != nil {
+		return cryptids.KeyRing{}, fmt.Errorf("authentication: generate an ephemeral %s: %w", KeyTOTPRing, err)
+	}
+	log.Warn("authentication: key unset; using an EPHEMERAL per-boot key — development and single-instance only, it does not survive a restart and instances cannot share it", "key", string(KeyTOTPRing))
+	return cryptids.KeyRing{Active: ephemeralRingKeyID, Keys: map[string][]byte{ephemeralRingKeyID: ephemeral}}, nil
 }
 
 // decodeKey decodes one hex value. Empty returns nil, nil. The decoder's own
@@ -190,6 +238,7 @@ func (k Keys) fields() []keyField {
 		{"IdentifierKey", k.IdentifierKey != nil},
 		{"DeliveryEncrypterKey", k.DeliveryEncrypterKey != nil},
 		{"TokenEncrypterKey", k.TokenEncrypterKey != nil},
+		{"TOTPRing", len(k.TOTPRing.Keys) > 0},
 	}
 }
 
@@ -211,6 +260,7 @@ func (in KeysInput) fields() []keyField {
 		{"IdentifierKey", in.IdentifierKey != ""},
 		{"DeliveryEncrypterKey", in.DeliveryEncrypterKey != ""},
 		{"TokenEncrypterKey", in.TokenEncrypterKey != ""},
+		{"TOTPKeys", in.TOTPKeys != ""},
 	}
 }
 

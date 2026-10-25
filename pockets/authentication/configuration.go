@@ -69,13 +69,14 @@ func validateRepositories(repos Repositories, cfg constructorConfig) error {
 
 // resolveMFARequired resolves MFAConfig.Required once, before any consumer
 // reads it: an explicit value stands (source config); the zero value becomes
-// admins when a passkey relying party and a UserAdminCheck are both wired, and
-// none otherwise (source default).
+// admins when a native AAL2 source (a passkey relying party or a TOTP
+// encrypter) and a UserAdminCheck are both wired, and none otherwise (source
+// default).
 func resolveMFARequired(cfg constructorConfig) (MFARequirement, string) {
 	if cfg.MFARequired != MFARequiredDefault {
 		return cfg.MFARequired, "config"
 	}
-	if !nilDependency(cfg.Passkey.RelyingParty) && cfg.UserAdminCheck != nil {
+	if nativeMFA(cfg) && cfg.UserAdminCheck != nil {
 		return MFARequiredAdmins, "default"
 	}
 	return MFARequiredNone, "default"
@@ -88,6 +89,17 @@ func validateMFA(cfg constructorConfig) error {
 	if cfg.External != nil && cfg.External.SingleFactorAcknowledged {
 		return fmt.Errorf("authentication: ExternalConfig.SingleFactorAcknowledged is for NewExternalAuthenticator; New reads IdentityConfig.SingleFactorAcknowledged: %w", sdk.ErrInvalidInput)
 	}
+	wired := mfaSources(cfg)
+	for _, m := range cfg.MFAMethods {
+		switch m {
+		case MFAMethodPasskey, MFAMethodTOTP, MFAMethodIdP:
+		default:
+			return fmt.Errorf("authentication: MFAConfig.Methods %q is not passkey, totp or idp: %w", m, sdk.ErrInvalidInput)
+		}
+		if !slices.Contains(wired, m) {
+			return fmt.Errorf("%w: MFAConfig.Methods names %s, which is not wired (passkey needs WithPasskeys, totp WithTOTP, idp WithExternal)", ErrMFAUnsatisfiable, m)
+		}
+	}
 	switch cfg.MFARequired {
 	case MFARequiredNone:
 		return nil
@@ -95,12 +107,12 @@ func validateMFA(cfg constructorConfig) error {
 	default:
 		return fmt.Errorf("authentication: MFAConfig.Required %q is not none, admins or all: %w", cfg.MFARequired, sdk.ErrInvalidInput)
 	}
-	passkeys := !nilDependency(cfg.Passkey.RelyingParty)
-	if cfg.MFARequired == MFARequiredAll && passkeys {
-		return fmt.Errorf("%w: MFAConfig.Required all is not available beside WithPasskeys: native all waits for recovery codes (S4c); use admins meanwhile", ErrMFAUnsatisfiable)
+	native := nativeMFA(cfg)
+	if cfg.MFARequired == MFARequiredAll && native {
+		return fmt.Errorf("%w: MFAConfig.Required all is not available beside WithPasskeys or WithTOTP: native all is the follow-on s4c2-native-all; use admins meanwhile", ErrMFAUnsatisfiable)
 	}
-	if cfg.External == nil && (cfg.MFARequired == MFARequiredAll || !passkeys) {
-		return fmt.Errorf("%w: MFAConfig.Required %q needs WithExternal or WithPasskeys, the AAL2 sources (all needs WithExternal)", ErrMFAUnsatisfiable, cfg.MFARequired)
+	if cfg.External == nil && (cfg.MFARequired == MFARequiredAll || !native) {
+		return fmt.Errorf("%w: MFAConfig.Required %q needs WithExternal, WithPasskeys or WithTOTP, the AAL2 sources (all needs WithExternal)", ErrMFAUnsatisfiable, cfg.MFARequired)
 	}
 	if cfg.MFARequired == MFARequiredAdmins && cfg.UserAdminCheck == nil {
 		return fmt.Errorf("%w: MFAConfig.Required admins needs AdministrationConfig.UserAdminCheck, or it gates nothing", ErrMFAUnsatisfiable)
@@ -119,6 +131,51 @@ func validateMFA(cfg constructorConfig) error {
 		if len(native) > 0 {
 			return fmt.Errorf("%w: MFAConfig.Required all refuses native single-factor login (%s)", ErrMFAUnsatisfiable, strings.Join(native, "; "))
 		}
+	}
+	return nil
+}
+
+// nativeMFA reports whether a native AAL2 source is wired: a passkey relying
+// party or a TOTP encrypter.
+func nativeMFA(cfg constructorConfig) bool {
+	return !nilDependency(cfg.Passkey.RelyingParty) || !nilDependency(cfg.TOTP.Encrypter)
+}
+
+// mfaSources lists the wired AAL2 sources in the boot line's order.
+func mfaSources(cfg constructorConfig) []MFAMethod {
+	var out []MFAMethod
+	if !nilDependency(cfg.Passkey.RelyingParty) {
+		out = append(out, MFAMethodPasskey)
+	}
+	if !nilDependency(cfg.TOTP.Encrypter) {
+		out = append(out, MFAMethodTOTP)
+	}
+	if cfg.External != nil {
+		out = append(out, MFAMethodIdP)
+	}
+	return out
+}
+
+// validateTOTPConfig checks WithTOTP against the wiring. An encrypter needs
+// the TOTP store, the credential-mutation rail, the grants and the challenge
+// protector (recovery codes are digested under its pepper). Views needs an
+// encrypter and BrowserConfig.Views. Nothing here runs without WithTOTP.
+func validateTOTPConfig(repos Repositories, cfg constructorConfig) error {
+	t := cfg.TOTP
+	if t.Encrypter == nil {
+		if t.Views != nil {
+			return fmt.Errorf("authentication: TOTPConfig.Views requires TOTPConfig.Encrypter: %w", sdk.ErrInvalidInput)
+		}
+		return nil
+	}
+	if nilDependency(t.Encrypter) {
+		return fmt.Errorf("authentication: TOTPConfig.Encrypter contains a typed nil: %w", sdk.ErrInvalidInput)
+	}
+	if nilDependency(repos.TOTP) || nilDependency(repos.CredentialMutations) || nilDependency(repos.AuthenticationGrants) || nilDependency(cfg.ChallengeProtector) {
+		return ErrTOTPReposRequired
+	}
+	if t.Views != nil && (nilDependency(t.Views) || nilDependency(cfg.Views)) {
+		return fmt.Errorf("authentication: TOTPConfig.Views requires BrowserConfig.Views: %w", sdk.ErrInvalidInput)
 	}
 	return nil
 }

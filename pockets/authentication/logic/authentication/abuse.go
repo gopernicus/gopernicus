@@ -16,11 +16,14 @@ type RequestBudget struct {
 
 // AuthenticationLimits is host policy for password proofs and sensitive starts.
 // SensitiveCode is shared across operations so changing purpose does not reset it.
+// SecondFactor bounds every TOTP and recovery-code proof (enrollment confirm and
+// both step-ups) per user and per IP, checked before any secret is opened.
 type AuthenticationLimits struct {
 	Login             RequestBudget
 	PasswordReset     RequestBudget
 	SensitiveCode     RequestBudget
 	SensitivePassword RequestBudget
+	SecondFactor      RequestBudget
 }
 
 func (l AuthenticationLimits) withDefaults() AuthenticationLimits {
@@ -33,6 +36,7 @@ func (l AuthenticationLimits) withDefaults() AuthenticationLimits {
 		{&l.PasswordReset, 3, 20},
 		{&l.SensitiveCode, 5, 30},
 		{&l.SensitivePassword, 5, 30},
+		{&l.SecondFactor, 10, 30},
 	} {
 		if item.budget.PerSubject == (ratelimiter.Limit{}) {
 			item.budget.PerSubject = ratelimiter.PerMinute(item.subject)
@@ -54,6 +58,7 @@ func (l AuthenticationLimits) Validate() error {
 		{"PasswordReset", l.PasswordReset},
 		{"SensitiveCode", l.SensitiveCode},
 		{"SensitivePassword", l.SensitivePassword},
+		{"SecondFactor", l.SecondFactor},
 	} {
 		for _, limit := range []ratelimiter.Limit{item.budget.PerSubject, item.budget.PerIP} {
 			if _, err := limit.Normalize(); err != nil {
@@ -90,4 +95,8 @@ func (s *Service) sensitiveCodeBudget(ctx context.Context, userID string) error 
 
 func (s *Service) sensitivePasswordBudget(ctx context.Context, userID string) error {
 	return s.allowAuthenticationRequest(ctx, "sensitive_password", userID, s.authenticationLimits.SensitivePassword)
+}
+
+func (s *Service) secondFactorBudget(ctx context.Context, userID string) error {
+	return s.allowAuthenticationRequest(ctx, "second_factor", userID, s.authenticationLimits.SecondFactor)
 }

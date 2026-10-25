@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/authgrant"
@@ -154,8 +155,9 @@ func (s *Service) requirePasskeys() error {
 // BeginPasskeyRegistration starts a registration from the caller's live
 // session. It refuses a user already at PasskeyConfig.MaxPerUser before any
 // authenticator is involved, then consumes the enrollment gate: a user holding
-// a user-verified passkey must prove AAL2 within the last five minutes (a
-// passkey sign-in or step-up); anyone else — the first passkey included — may
+// an AAL2 factor — a user-verified passkey or a confirmed authenticator app —
+// must prove AAL2 within the last five minutes (a passkey, TOTP or
+// recovery-code step-up); anyone else — the first passkey included — may
 // bootstrap from a primary login or a password or code step-up grant in that
 // window. Missing proof is ErrStepUpRequired. The single-use ceremony row then
 // carries the authorization to FinishPasskeyRegistration, with the tier it was
@@ -184,9 +186,9 @@ func (s *Service) BeginPasskeyRegistration(ctx context.Context, sessionID, userI
 	if len(existing) >= s.passkeyMaxPerUser {
 		return PasskeyCeremony{}, ErrPasskeyLimit
 	}
-	policy, tier := passkeyEnrollmentPolicy(existing), passkeyTierBootstrap
-	if policy.MinAssurance == session.AssuranceAAL2 {
-		tier = passkeyTierAAL2
+	policy, tier, err := s.secondFactorPolicy(ctx, userID)
+	if err != nil {
+		return PasskeyCeremony{}, err
 	}
 	if _, err := s.RequireRecentAuthentication(ctx, sessionID, userID, authgrant.PurposeRegisterPasskey, "", policy); err != nil {
 		return PasskeyCeremony{}, err
@@ -614,15 +616,50 @@ func mintFailureReason(err error) (string, bool) {
 	return "", false
 }
 
-// passkeyEnrollmentPolicy is the gate on adding or removing a passkey: AAL2
-// once the user holds an AAL2-capable passkey, the bootstrap default otherwise.
-func passkeyEnrollmentPolicy(existing []passkey.Passkey) RecentAuthPolicy {
-	for _, p := range existing {
-		if p.AAL2Capable() {
-			return RecentAuthPolicy{MinAssurance: session.AssuranceAAL2}
+// HoldsAAL2Factor reports whether userID holds an AAL2 factor — an AAL2-capable
+// passkey or a confirmed authenticator app — so a page can send a caller who
+// needs a step-up to the AAL2 chooser rather than a password or code page.
+func (s *Service) HoldsAAL2Factor(ctx context.Context, userID string) (bool, error) {
+	return s.holdsAAL2Factor(ctx, userID)
+}
+
+// holdsAAL2Factor is the one predicate both second-factor gates apply: the user
+// holds an AAL2-capable passkey or a confirmed authenticator app.
+func (s *Service) holdsAAL2Factor(ctx context.Context, userID string) (bool, error) {
+	if s.relyingParty != nil && s.passkeys != nil {
+		existing, err := s.passkeys.ListByUser(ctx, userID)
+		if err != nil {
+			return false, err
+		}
+		if slices.ContainsFunc(existing, passkey.Passkey.AAL2Capable) {
+			return true, nil
 		}
 	}
-	return RecentAuthPolicy{}
+	if s.totpEncrypter != nil && s.totp != nil {
+		c, err := s.totp.Get(ctx, userID)
+		switch {
+		case err == nil:
+			return c.Confirmed(), nil
+		case !errors.Is(err, sdk.ErrNotFound):
+			return false, err
+		}
+	}
+	return false, nil
+}
+
+// secondFactorPolicy is the gate on adding or removing a second factor (a
+// passkey, the authenticator app, the recovery codes): AAL2 once the user holds
+// an AAL2 factor (holdsAAL2Factor), the AAL1 bootstrap otherwise. It returns the
+// tier the gate authorizes at beside the policy.
+func (s *Service) secondFactorPolicy(ctx context.Context, userID string) (RecentAuthPolicy, string, error) {
+	holds, err := s.holdsAAL2Factor(ctx, userID)
+	if err != nil {
+		return RecentAuthPolicy{}, "", err
+	}
+	if holds {
+		return RecentAuthPolicy{MinAssurance: session.AssuranceAAL2}, passkeyTierAAL2, nil
+	}
+	return RecentAuthPolicy{}, passkeyTierBootstrap, nil
 }
 
 // passkeyMethod maps an assertion to its method kind: AAL2 only when the
@@ -636,13 +673,18 @@ func passkeyMethod(pk passkey.Passkey, assertion webauthn.Assertion) session.Met
 }
 
 // mergeMethods keeps the replaced session's descriptors and appends auth's
-// whose kind is new. Below AAL2 it drops a carried AAL2 passkey descriptor, so
-// a presence-only step-up never keeps one.
+// whose kind is new. Below AAL2 it drops every carried AAL2-contributing
+// descriptor (a user-verified passkey, TOTP, a recovery code), so a
+// presence-only step-up never keeps one; at AAL2 it drops nothing, so a step-up
+// never loses the methods behind the assurance it keeps.
 func mergeMethods(current []session.AuthenticationMethod, auth session.AuthenticationMetadata) []session.AuthenticationMethod {
 	var out []session.AuthenticationMethod
 	for _, c := range current {
-		if c.Kind == session.MethodPasskey && !auth.Assurance.AtLeast(session.AssuranceAAL2) {
-			continue
+		switch c.Kind {
+		case session.MethodPasskey, session.MethodTOTP, session.MethodRecoveryCode:
+			if !auth.Assurance.AtLeast(session.AssuranceAAL2) {
+				continue
+			}
 		}
 		out = append(out, c)
 	}

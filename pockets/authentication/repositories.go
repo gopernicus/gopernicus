@@ -17,6 +17,7 @@ import (
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/securityevent"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/serviceaccount"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/session"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/totp"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/user"
 	invitations "github.com/gopernicus/gopernicus/pockets/authentication/logic/invitations"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/maintenance"
@@ -170,4 +171,14 @@ type Repositories struct {
 	// Create locks the user row the mutation rail serializes on, Snapshot counts
 	// passkeys as login methods, and Apply performs their removal.
 	Passkeys passkey.Repository
+
+	// TOTP stores the second-factor aggregate (SOC 2 S4c): each user's
+	// authenticator-app credential and recovery codes. It is REQUIRED when
+	// WithTOTP wires an encrypter and unused otherwise — a host that never wires
+	// TOTP needs neither the field nor migration 0026. It must be backed by the
+	// same transaction-capable adapter as Users, Sessions, AuthenticationGrants
+	// and Passkeys: Confirm and Remove lock the user row the credential rail
+	// serializes on. A store that implements totp.SchemaProber is probed at boot
+	// only when TOTP is wired.
+	TOTP totp.Repository
 }
