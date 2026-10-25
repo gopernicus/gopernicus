@@ -226,6 +226,56 @@ func TestOriginPolicy_HasNamespace(t *testing.T) {
 	}
 }
 
+func TestOriginPolicy_AllowsMatchesAllowsRequest(t *testing.T) {
+	p := testOriginPolicy(t)
+	for _, origin := range []string{
+		"https://acme.flight.deck.example.com",
+		"HTTPS://ACME.Flight.Deck.Example.COM",
+		"http://localhost:5173",
+		"https://accounts.flight.deck.example.com",
+		"https://acme.staging.example.com:8443",
+		"https://api.flight.deck.example.com",
+		"https://flight.deck.example.com",
+		"https://acme.staging.example.com",
+		"https://acme.flight.deck.example.com:443",
+		"https://acme.flight.deck.example.com/",
+		"null",
+		"",
+	} {
+		want := p.AllowsRequest(originRequest(origin))
+		if got := p.Allows(origin); got != want {
+			t.Errorf("Allows(%q) = %v, AllowsRequest = %v", origin, got, want)
+		}
+	}
+	if (OriginPolicy{}).Allows("https://app.example.com") {
+		t.Error("zero OriginPolicy admitted an origin")
+	}
+}
+
+func TestOriginPolicy_Domains(t *testing.T) {
+	if got := (OriginPolicy{}).Domains(); got != nil {
+		t.Errorf("zero policy Domains() = %q, want nil", got)
+	}
+	p, err := NewOriginPolicy(OriginPolicyConfig{
+		Exact: []string{
+			"https://Accounts.Example.com", "https://accounts.example.com:8443", "http://localhost:5173",
+			"https://127.0.0.1", "https://[2001:db8::1]:8443",
+		},
+		Namespaces: []OriginNamespace{
+			{Scheme: "https", Suffix: "Tenants.Example.com"},
+			{Scheme: "http", Suffix: "tenants.example.com", Ports: []int{8080}},
+			{Scheme: "https", Suffix: "localhost.example.com"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"accounts.example.com", "localhost", "127.0.0.1", "2001:db8::1", "tenants.example.com", "localhost.example.com"}
+	if got := p.Domains(); !slices.Equal(got, want) {
+		t.Errorf("Domains() = %q, want %q", got, want)
+	}
+}
+
 func TestNewOriginPolicy_DoesNotAliasInput(t *testing.T) {
 	cfg := OriginPolicyConfig{
 		Exact:      []string{"https://app.example.com"},

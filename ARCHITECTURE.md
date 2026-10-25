@@ -105,9 +105,12 @@ pockets/                  Separate shared-contract module, imports SDK only.
 
 A capability may contain cohesive subpackages: notify/email adapts typed email
 into notify.Delivery inside the notification subsystem. This stays stdlib-only
-and needs no separate integration module. Capabilities otherwise import root and
-pkg, never a different capability. Capability-owned middleware stays with
-its capability (for example cacher.Pages). Guard G12 enforces this
+and needs no separate integration module. A subsystem subpackage may also stand
+beside its parent and import nothing from it: authentication/webauthn, the
+WebAuthn relying-party port, imports root and pkg/web only, so a host wiring
+passkeys never links the external-provider port, nor the reverse. Capabilities
+otherwise import root and pkg, never a different capability. Capability-owned
+middleware stays with its capability (for example cacher.Pages). Guard G12 enforces this
 law over production and test code alike; tests use root/stdlib fakes or
 package-local contract checks rather than importing a peer tier. G13 keeps
 integrations pointing outward-only. G21 (web-crud-list-request, 2026-08-27)
@@ -190,6 +193,7 @@ relationship is not uniform:
 | `sdk.IdentityResolver` | `pockets/authentication` | IMPLEMENTS the Resolver; users/credentials stay pocket-owned |
 | `sdk/capabilities/events.Bus` | `pockets/events` | BUILDS ON the Bus (durable outbox + SSE gateway); is not the Bus implementation |
 | `sdk/capabilities/authentication` — external identity providers (`Provider` → `Identity`, optional `RevocationChecker`) | `pockets/authentication` | CONSUMES the port — the pocket is not the implementation of record (`NewOIDC` in sdk and the `integrations/authentication/*` presets are); `Identity` carries no principal or user id, so mapping an external subject to a user, JIT provisioning and status stay pocket-owned |
+| `sdk/capabilities/authentication/webauthn` — the WebAuthn relying-party port (passkey registration and discoverable assertion; `webauthntest` ships the software authenticator and the conformance suite) | `pockets/authentication` | CONSUMES the port (wired in S4b PR-3a) — NO default (the oauth/work precedent): the implementation of record is the go-webauthn integration (S4b PR-2); credential records and user handles, the challenge rail that holds `Ceremony.State`, assurance and the enrollment gates stay pocket-owned |
 | `sdk/capabilities/work` — the keyed-work submission protocol | `pockets/jobs` | IMPLEMENTS the protocol as the **implementation of record** — a capability with NO default (the oauth precedent); the durable `Job` aggregate and fenced runtime stay pocket-owned |
 | sdk/capabilities/authorization — the Zanzibar read protocol (Checker, Lookup, composite Authorizer; writes later) | pockets/authorization | IMPLEMENTS the protocol as the implementation of record (in-core engine adapter, Components.Authorizer) AND CONSUMES it (decisions.NewLoweredEvaluator); Unrestricted, reasons/explain, Expression/Require, roles exactness, ledger, audit, TupleCache, FilterPage stay pocket-owned |
 
