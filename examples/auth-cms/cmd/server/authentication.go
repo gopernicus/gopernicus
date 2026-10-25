@@ -33,6 +33,9 @@ type authenticationConfig struct {
 	auth.InvitationsConfig
 	auth.AdministrationConfig
 	auth.MaintenanceConfig
+	// Passkeys is a named field, not embedded: PasskeyConfig.Views would collide
+	// with BrowserConfig.Views.
+	Passkeys auth.PasskeyConfig
 }
 
 func (c authenticationConfig) options() []auth.Option {
@@ -50,6 +53,7 @@ func (c authenticationConfig) options() []auth.Option {
 		auth.WithInvitations(c.InvitationsConfig),
 		auth.WithAdministration(c.AdministrationConfig),
 		auth.WithMaintenance(c.MaintenanceConfig),
+		auth.WithPasskeys(c.Passkeys),
 		auth.WithIDs(c.IDs),
 		auth.WithLogger(c.Logger),
 	}

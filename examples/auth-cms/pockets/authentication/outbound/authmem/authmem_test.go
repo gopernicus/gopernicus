@@ -21,3 +21,11 @@ func TestConformance(t *testing.T) {
 		return New().Repositories()
 	})
 }
+
+// TestPasskeyConformance runs the passkey suite, separate from Run, against
+// authmem.
+func TestPasskeyConformance(t *testing.T) {
+	storetest.RunPasskeys(t, func(t *testing.T) auth.Repositories {
+		return New().Repositories()
+	})
+}

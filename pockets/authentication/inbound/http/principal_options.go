@@ -43,7 +43,15 @@ type principalSet struct {
 	firstParty         bool
 	audiences          []string
 	delegatedAudiences []string
-	assurances         []func(context.Context, Credential) error
+	assurances         []assurance
+}
+
+// assurance is one assurance option. RequireMFA reads Credential.Assurance,
+// which access tokens carry too, so it evaluates them (accessTokens); every
+// other option reads external provider evidence only.
+type assurance struct {
+	check        func(context.Context, Credential) error
+	accessTokens bool
 }
 
 // insufficientAuthentication is an assurance denial a re-authentication can
@@ -195,19 +203,24 @@ func Stateless() PrincipalOption {
 	return func(set *principalSet) { set.liveness = LivenessStateless }
 }
 
-// RequireMFA requires an external token at AAL2 (Credential.Assurance): one
-// whose provider asserted multi-factor authentication. Assurance options
-// evaluate external tokens only: an API key passes, and a set that also admits
-// access tokens panics at wiring time. A JSON denial carries the RFC 9470
-// insufficient_user_authentication challenge, and a credential service that
-// implements MFADenialRecorder records one mfa_required_denied row (gate route).
+// RequireMFA requires an access or external token at AAL2
+// (Credential.Assurance): an access token whose session a user-verified passkey
+// signed in or stepped up, or an external token whose provider asserted
+// multi-factor authentication. An API key passes (no key can reach AAL2). A
+// JSON denial carries the RFC 9470 insufficient_user_authentication challenge;
+// under Browser() an access-token cookie below AAL2 is redirected to the
+// passkey step-up page when passkeys and their views are wired, and otherwise
+// gets that JSON 401. A credential service that implements MFADenialRecorder
+// records one mfa_required_denied row (gate route).
 func RequireMFA() PrincipalOption {
-	return withAssurance(func(_ context.Context, cred Credential) error {
-		if !cred.Assurance.AtLeast(session.AssuranceAAL2) {
-			return authlogic.ErrMFARequired
-		}
-		return nil
-	})
+	return func(set *principalSet) {
+		set.assurances = append(slices.Clip(set.assurances), assurance{accessTokens: true, check: func(_ context.Context, cred Credential) error {
+			if !cred.Assurance.AtLeast(session.AssuranceAAL2) {
+				return authlogic.ErrMFARequired
+			}
+			return nil
+		}})
+	}
 }
 
 // FreshAuth requires an external token whose subject authenticated at the
@@ -269,8 +282,9 @@ func Check(fn func(ctx context.Context, cred Credential) error) PrincipalOption 
 	})
 }
 
+// withAssurance adds an option that reads external provider evidence.
 func withAssurance(check func(context.Context, Credential) error) PrincipalOption {
-	return func(set *principalSet) { set.assurances = append(slices.Clip(set.assurances), check) }
+	return func(set *principalSet) { set.assurances = append(slices.Clip(set.assurances), assurance{check: check}) }
 }
 
 // Browser switches the denial from a JSON 401 to a 303 toward
@@ -321,17 +335,18 @@ func defaultSet(s *Adapter) principalSet {
 
 // resolveSet applies opts over the service's default set. It runs at middleware
 // CONSTRUCTION, so a malformed posture panics at wiring time rather than on a
-// request: an empty Accept/Transports, an assurance option on a set that also
-// admits access tokens (which carry no provider assurance), or Browser() on a
-// set admitting external tokens without an explicit WithBrowserLoginPath (the
-// default /auth/login is not mounted on an external-only host).
+// request: an empty Accept/Transports, FreshAuth, VerifiedEmail, Tenant or
+// Check on a set that also admits access tokens (which carry no provider
+// evidence; RequireMFA does not panic), or Browser() on a set admitting
+// external tokens without an explicit WithBrowserLoginPath (the default
+// /auth/login is not mounted on an external-only host).
 func (s *Adapter) resolveSet(opts []PrincipalOption) principalSet {
 	set := defaultSet(s)
 	for _, opt := range opts {
 		opt(&set)
 	}
-	if len(set.assurances) > 0 && set.accessToken {
-		panic("authsvc: assurance options require a set that does not admit access tokens; add Accept(CredentialExternalToken, ...)")
+	if set.accessToken && slices.ContainsFunc(set.assurances, func(a assurance) bool { return !a.accessTokens }) {
+		panic("authsvc: FreshAuth, VerifiedEmail, Tenant and Check read external provider evidence and require a set that does not admit access tokens; add Accept(CredentialExternalToken, ...)")
 	}
 	if set.browser && set.resolves(CredentialExternalToken) && !s.browserLoginSet {
 		panic("authsvc: Browser() on a set admitting external tokens requires WithBrowserLoginPath")
@@ -351,14 +366,20 @@ func (set principalSet) resolves(kind CredentialKind) bool {
 	return false
 }
 
-// assure applies the set's assurance options to an external token; other kinds
-// pass (an access token never reaches a set carrying them).
+// assure applies the set's assurance options in option order: every option to
+// an external token, RequireMFA alone to an access token (a set admitting
+// access tokens carries no other), none to an API key.
 func (set principalSet) assure(ctx context.Context, cred Credential) error {
-	if cred.Kind != CredentialExternalToken {
+	switch cred.Kind {
+	case CredentialExternalToken, CredentialAccessToken:
+	default:
 		return nil
 	}
-	for _, check := range set.assurances {
-		if err := check(ctx, cred); err != nil {
+	for _, a := range set.assurances {
+		if cred.Kind == CredentialAccessToken && !a.accessTokens {
+			continue
+		}
+		if err := a.check(ctx, cred); err != nil {
 			return err
 		}
 	}

@@ -22,11 +22,12 @@ func TestPurposeConstantsAliasDelivery(t *testing.T) {
 		delivery.PurposeSensitiveCode:            delivery.PurposeSensitiveCode,
 		delivery.PurposeIdentifierChangeProof:    delivery.PurposeIdentifierChangeProof,
 		delivery.PurposeIdentifierChangeNotice:   delivery.PurposeIdentifierChangeNotice,
+		delivery.PurposePasskeyChangeNotice:      delivery.PurposePasskeyChangeNotice,
 		delivery.PurposeInvitation:               delivery.PurposeInvitation,
 		delivery.PurposeMemberAdded:              delivery.PurposeMemberAdded,
 	}
-	if len(pairs) != 10 {
-		t.Fatalf("%d distinct purposes exported, want 10", len(pairs))
+	if len(pairs) != 11 {
+		t.Fatalf("%d distinct purposes exported, want 11", len(pairs))
 	}
 	for pub, internal := range pairs {
 		if pub != internal {

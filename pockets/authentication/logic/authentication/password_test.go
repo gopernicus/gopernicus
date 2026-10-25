@@ -28,6 +28,7 @@ type fakeCredentials struct {
 	pw       *fakePasswords
 	idents   *fakeIdentifiers
 	accounts *fakeOAuthAccounts
+	passkeys *fakePasskeys
 
 	mu          sync.Mutex
 	beforeApply func()
@@ -64,6 +65,12 @@ func (f *fakeCredentials) Snapshot(ctx context.Context, userID string) (credenti
 			Primary:  it.IsPrimary,
 		})
 	}
+	if f.passkeys != nil {
+		owned, _ := f.passkeys.ListByUser(ctx, userID)
+		for _, p := range owned {
+			set.Passkeys = append(set.Passkeys, credential.PasskeyMethod{ID: p.ID, UserVerified: p.UserVerified})
+		}
+	}
 	return set, nil
 }
 
@@ -84,10 +91,19 @@ func (f *fakeCredentials) Apply(_ context.Context, userID string, expected int64
 	if u.AuthRevision != expected {
 		return sdk.ErrConflict
 	}
+	if v, ok := m.(credential.RemovePasskey); ok && (f.passkeys == nil || !f.passkeys.owns(userID, v.PasskeyID)) {
+		return sdk.ErrNotFound
+	}
 	u.AuthRevision++
 	f.users.byID[userID] = u
 	now := time.Now().UTC()
 	switch v := m.(type) {
+	case credential.RemovePasskey:
+		f.passkeys.delete(v.PasskeyID)
+	case credential.RemovePasskeys:
+		if f.passkeys != nil {
+			f.passkeys.deleteUser(userID)
+		}
 	case credential.RemovePassword:
 		f.pw.delete(userID)
 	case credential.RetireIdentifier:

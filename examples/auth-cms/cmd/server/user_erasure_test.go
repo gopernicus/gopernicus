@@ -62,6 +62,7 @@ type erasureBody struct {
 func TestUserErasureOverRealHTTP(t *testing.T) {
 	h := newErasureHost(t)
 	admin := h.signUpPlatformAdmin("erase-admin@example.com")
+	admin.stepUpToAAL2()
 	adminID := h.currentUserID(admin)
 	target := h.signUp("erase-target@example.com")
 	targetID := h.currentUserID(target)

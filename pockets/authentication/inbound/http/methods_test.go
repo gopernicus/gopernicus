@@ -9,8 +9,10 @@ import (
 
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/credential"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/identifier"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/passkey"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/session"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/user"
+	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/ratelimiter"
 	"github.com/gopernicus/gopernicus/sdk/pkg/web"
 )
@@ -24,6 +26,7 @@ type memCredentialMutations struct {
 	users     *memUsers
 	idents    *memIdentifiers
 	passwords *memPasswords
+	passkeys  *memPasskeys
 }
 
 var _ credential.MutationRepository = (*memCredentialMutations)(nil)
@@ -50,15 +53,32 @@ func (m *memCredentialMutations) Snapshot(ctx context.Context, userID string) (c
 			Primary:  it.IsPrimary,
 		})
 	}
+	if m.passkeys != nil {
+		owned, _ := m.passkeys.ListByUser(ctx, userID)
+		for _, p := range owned {
+			set.Passkeys = append(set.Passkeys, credential.PasskeyMethod{ID: p.ID, UserVerified: p.UserVerified})
+		}
+	}
 	return set, nil
 }
 
 func (m *memCredentialMutations) Apply(_ context.Context, userID string, expected int64, mut credential.Mutation) error {
+	if v, ok := mut.(credential.RemovePasskey); ok && (m.passkeys == nil || !m.passkeys.owns(userID, v.PasskeyID)) {
+		return sdk.ErrNotFound
+	}
 	if err := m.users.applyRevision(userID, expected); err != nil {
 		return err
 	}
 	now := time.Now().UTC()
 	switch v := mut.(type) {
+	case credential.RemovePasskey:
+		m.passkeys.remove(func(p passkey.Passkey) bool { return p.ID == v.PasskeyID })
+		m.revokeSessions(userID)
+	case credential.RemovePasskeys:
+		if m.passkeys != nil {
+			m.passkeys.remove(func(p passkey.Passkey) bool { return p.UserID == userID })
+		}
+		m.revokeSessions(userID)
 	case credential.RemovePassword:
 		m.passwords.mu.Lock()
 		delete(m.passwords.m, userID)
@@ -92,6 +112,13 @@ func (m *memCredentialMutations) Apply(_ context.Context, userID string, expecte
 		// no OAuth store in this harness
 	}
 	return nil
+}
+
+// revokeSessions is the session revocation a passkey removal's Apply performs.
+func (m *memCredentialMutations) revokeSessions(userID string) {
+	if m.users.sess != nil {
+		_ = m.users.sess.DeleteByUser(context.Background(), userID)
+	}
 }
 
 // methodsFixture holds the mem stores and the mounted handler for the /auth/methods

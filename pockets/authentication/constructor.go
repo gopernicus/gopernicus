@@ -112,7 +112,11 @@ func New(repos Repositories, signer cryptids.JWTSigner, runtimeMode environment.
 	if err := validateOAuthConfig(cfg); err != nil {
 		return nil, err
 	}
+	cfg.MFARequired, cfg.mfaRequiredSource = resolveMFARequired(cfg)
 	if err := validateMFA(cfg); err != nil {
+		return nil, err
+	}
+	if err := validatePasskeyConfig(repos, cfg); err != nil {
 		return nil, err
 	}
 	if (repos.ServiceAccounts == nil) != (repos.APIKeys == nil) {
@@ -557,6 +561,9 @@ func New(repos Repositories, signer cryptids.JWTSigner, runtimeMode environment.
 	if cfg.External != nil {
 		logicOptions = append(logicOptions, authlogic.WithExternal(requireExternalMFA(*cfg.External, cfg.MFARequired)))
 	}
+	if cfg.Passkey.RelyingParty != nil {
+		logicOptions = append(logicOptions, authlogic.WithPasskeys(authlogic.PasskeyConfig{RelyingParty: cfg.Passkey.RelyingParty, UserVerification: cfg.Passkey.UserVerification, MaxPerUser: cfg.Passkey.MaxPerUser}))
+	}
 	authComponents, err := authlogic.New(authlogic.Repositories{
 		Users: repos.Users, Identifiers: repos.Identifiers, Passwords: repos.Passwords, Sessions: repos.Sessions, SessionManagement: repos.SessionManagement,
 		UserAdmin: repos.UserAdmin, UserErasure: repos.UserErasure, PasswordlessRedeem: repos.Passwordless, ActiveSessions: repos.ActiveSessions,
@@ -564,6 +571,7 @@ func New(repos Repositories, signer cryptids.JWTSigner, runtimeMode environment.
 		CredentialMutations: repos.CredentialMutations, AuthenticationGrants: repos.AuthenticationGrants,
 		SecurityEvents: repos.SecurityEvents, OAuthAccounts: repos.OAuthAccounts, OAuthStates: repos.OAuthStates,
 		ServiceAccounts: repos.ServiceAccounts, APIKeys: repos.APIKeys, ExternalSubjects: repos.ExternalSubjects,
+		Passkeys: repos.Passkeys,
 	}, cfg.TokenSigner, cfg.RuntimeMode, limiter, logicOptions...)
 	if err != nil {
 		return nil, err
@@ -646,6 +654,9 @@ func New(repos Repositories, signer cryptids.JWTSigner, runtimeMode environment.
 	if cfg.MFARequired == MFARequiredAdmins {
 		httpOptions = append(httpOptions, inbound.WithAdministrationMFA())
 	}
+	if cfg.Passkey.Views != nil {
+		httpOptions = append(httpOptions, inbound.WithPasskeyViews(cfg.Passkey.Views))
+	}
 	adapter, err := inbound.New(authService, cfg.RuntimeMode, httpOptions...)
 	if err != nil {
 		return nil, err
@@ -704,17 +715,22 @@ func requireExternalMFA(external authlogic.ExternalConfig, required MFARequireme
 	return external
 }
 
-// logMFAPosture logs the one boot line naming MFAConfig.Required and what it
-// gates: /auth/admin/users* under admins, every external token under all.
+// logMFAPosture logs the one boot line naming the resolved MFAConfig.Required,
+// where it came from (config, or default for the resolved zero value) and what
+// it gates: /auth/admin/users* under admins — and the machine lifecycle routes
+// beside passkeys — every external token under all.
 func logMFAPosture(cfg constructorConfig, log *slog.Logger) {
-	required, gates := "none", "none"
+	required, gates := string(MFARequiredNone), "none"
 	switch cfg.MFARequired {
 	case MFARequiredAdmins:
 		required, gates = string(MFARequiredAdmins), "/auth/admin/users*"
+		if cfg.Passkey.RelyingParty != nil {
+			gates += ",machine_lifecycle"
+		}
 	case MFARequiredAll:
 		required, gates = string(MFARequiredAll), "external_tokens"
 	}
-	log.Info("auth: mfa posture", "mfa_required", required, "gates", gates)
+	log.Info("auth: mfa posture", "mfa_required", required, "source", cfg.mfaRequiredSource, "gates", gates)
 }
 
 // validateInvitationPolicy enforces the invitation-policy matrix. A host policy

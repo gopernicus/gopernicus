@@ -17,6 +17,7 @@ import (
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/identifier"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/oauthaccount"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/oauthstate"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/passkey"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/passwordless"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/passwordreset"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/securityevent"
@@ -93,4 +94,6 @@ type authenticationFixture struct {
 	OAuthLinkBaseURL        string
 	External                *authlogic.ExternalConfig
 	ExternalSubjects        externalsubject.Repository
+	Passkeys                passkey.Repository
+	Passkey                 authlogic.PasskeyConfig
 }

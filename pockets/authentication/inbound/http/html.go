@@ -52,8 +52,9 @@ var (
 	}
 
 	loginOutcomes = map[string]string{
-		outcomeSignedOut:     "You've been signed out.",
-		outcomePasswordReset: "Your password was reset. Sign in with your new password.",
+		outcomeSignedOut:      "You've been signed out.",
+		outcomePasswordReset:  "Your password was reset. Sign in with your new password.",
+		outcomePasskeyRemoved: "That passkey was removed and you were signed out everywhere. Sign in again.",
 	}
 )
 
@@ -208,6 +209,7 @@ func (h *handlers) loginPage(w http.ResponseWriter, r *http.Request) {
 		PasswordlessEnabled:   h.svc.PasswordlessEnabled(),
 		OAuthProviders:        h.svc.OAuthProviderNames(),
 		SessionRecovery:       h.sessionRecovery(r),
+		Passkeys:              h.passkeyLinks(),
 	}
 	h.renderPage(w, r, pc.CSPNonce, h.views.Login(m))
 }
@@ -400,6 +402,7 @@ func (h *handlers) accountPage(w http.ResponseWriter, r *http.Request) {
 		m.Identifiers = append(m.Identifiers, entry)
 	}
 	m.LinkableProviders = linkableProviders(h.svc.OAuthProviderNames(), m.OAuth)
+	m.Passkeys = h.passkeyLinks()
 	h.renderPage(w, r, pc.CSPNonce, h.views.AccountSecurity(m))
 }
 
@@ -557,6 +560,7 @@ func (h *handlers) stepUpModel(ctx context.Context, userID string, pc PageContex
 		Purpose:     p.purpose,
 		Context:     p.context,
 		Kind:        p.kind,
+		Passkeys:    h.passkeyLinks(),
 	}
 	if userID == "" {
 		return m

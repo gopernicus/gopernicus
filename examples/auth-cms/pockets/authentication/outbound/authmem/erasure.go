@@ -97,6 +97,10 @@ func (r erasureRepo) Erase(ctx context.Context, in user.EraseInput) (user.Erasur
 		delete(r.passwords, id)
 		c.Passwords = 1
 	}
+	for _, p := range r.passkeysOfLocked(id) {
+		delete(r.passkeys, p.ID)
+		c.Passkeys++
+	}
 	accounts := r.oauthAccounts[:0:0]
 	for _, a := range r.oauthAccounts {
 		if a.UserID == id {

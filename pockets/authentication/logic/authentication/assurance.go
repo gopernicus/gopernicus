@@ -29,6 +29,10 @@ const (
 	// MFAGateProvider is ExternalProvider.RequireMFA, checked in Verify before
 	// the subject resolves.
 	MFAGateProvider MFAGate = "provider"
+	// MFAGateMachine is the bundled machine-identity lifecycle gate MFAConfig
+	// admins enables beside passkeys, run after AdministrationConfig's
+	// MachineRoutesGate admits the caller.
+	MFAGateMachine MFAGate = "machine"
 )
 
 var (
@@ -62,7 +66,7 @@ type MFADenial struct {
 
 // RecordMFADenied records d as an mfa_required_denied row through the
 // service's recorder. The HTTP adapter calls it for the RequireMFA option and
-// the admin gate.
+// the admin and machine gates.
 func (s *Service) RecordMFADenied(ctx context.Context, d MFADenial) {
 	provider := ""
 	if s.external != nil {
@@ -91,7 +95,7 @@ func (e *ExternalAuthenticator) providerName(cred Credential) string {
 // holder can drive it, so the failure-row budget keys it per client IP.
 func mfaDenialEvent(d MFADenial, provider string) securityEventInput {
 	details := map[string]any{
-		"gate":       boundedEnum(string(d.Gate), string(MFAGateRoute), string(MFAGateAdmin), string(MFAGateProvider)),
+		"gate":       boundedEnum(string(d.Gate), string(MFAGateRoute), string(MFAGateAdmin), string(MFAGateMachine), string(MFAGateProvider)),
 		"credential": boundedEnum(string(d.Credential.Kind), string(CredentialAccessToken), string(CredentialAPIKey), string(CredentialExternalToken)),
 		"assurance":  boundedEnum(string(d.Credential.Assurance), string(session.AssuranceAAL1), string(session.AssuranceAAL2), string(session.AssuranceAAL3)),
 		"required":   string(session.AssuranceAAL2),

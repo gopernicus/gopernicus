@@ -13,6 +13,7 @@ import (
 	"github.com/gopernicus/gopernicus/pockets/authentication/internal/redirect"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/delivery"
 	"github.com/gopernicus/gopernicus/sdk"
+	"github.com/gopernicus/gopernicus/sdk/capabilities/authentication/webauthn"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/ratelimiter"
 	"github.com/gopernicus/gopernicus/sdk/pkg/environment"
 )
@@ -50,6 +51,7 @@ func New(repos Repositories, signer cryptids.JWTSigner, runtimeMode environment.
 	d.ServiceAccounts = repos.ServiceAccounts
 	d.APIKeys = repos.APIKeys
 	d.ExternalSubjects = repos.ExternalSubjects
+	d.Passkeys = repos.Passkeys
 	d.TokenSigner = signer
 	d.RuntimeMode = runtimeMode
 	d.Limiter = limiter
@@ -130,11 +132,14 @@ func New(repos Repositories, signer cryptids.JWTSigner, runtimeMode environment.
 		{"IdentifierKeyer", d.IdentifierKeyer}, {"UserAdmin", d.UserAdmin}, {"UserErasure", d.UserErasure}, {"PasswordlessRedeem", d.PasswordlessRedeem},
 		{"OAuthAccounts", d.OAuthAccounts}, {"OAuthStates", d.OAuthStates}, {"TokenEncrypter", d.TokenEncrypter},
 		{"SessionManagement", d.SessionManagement}, {"SecurityEvents", d.SecurityEvents}, {"Invitations", d.Invitations}, {"Compromised", d.Compromised},
-		{"ExternalSubjects", d.ExternalSubjects},
+		{"ExternalSubjects", d.ExternalSubjects}, {"Passkeys", d.Passkeys}, {"RelyingParty", d.Passkey.RelyingParty},
 	} {
 		if dep.value != nil && nilDependency(dep.value) {
 			return nil, fmt.Errorf("authentication: %s contains a typed nil: %w", dep.name, sdk.ErrInvalidInput)
 		}
+	}
+	if err := validatePasskeys(d); err != nil {
+		return nil, err
 	}
 	if d.ProvisionOnRedeem && (!slices.Contains(d.Passwordless, sdk.AddressKindEmail) || nilDependency(d.IdentifierKeyer)) {
 		return nil, fmt.Errorf("authentication: provisioning requires email passwordless and IdentifierKeyer: %w", sdk.ErrInvalidInput)
@@ -215,6 +220,31 @@ func validatePublicURL(mode environment.Mode, raw string, noFragment, noToken bo
 	u, err := url.Parse(raw)
 	if err != nil || !u.IsAbs() || u.Host == "" || (u.Scheme != "https" && u.Scheme != "http") || (mode == environment.ModeProduction && u.Scheme != "https") || (noFragment && strings.Contains(raw, "#")) || (noToken && u.Query().Has(PasswordResetTokenParam)) {
 		return fmt.Errorf("authentication: invalid or insecure public credential URL: %w", sdk.ErrInvalidInput)
+	}
+	return nil
+}
+
+// validatePasskeys checks WithPasskeys against the wiring: a relying party needs
+// the passkey store, the credential-mutation rail its removals ride, the
+// recent-authentication grants its enrollment gate consumes, and the challenge
+// rail that holds each ceremony's state.
+func validatePasskeys(d constructorConfig) error {
+	cfg := d.Passkey
+	if cfg.RelyingParty == nil {
+		return nil
+	}
+	if nilDependency(d.Passkeys) || nilDependency(d.CredentialMutations) || nilDependency(d.AuthenticationGrants) || nilDependency(d.Challenges) || nilDependency(d.Protector) {
+		return ErrPasskeyReposRequired
+	}
+	switch cfg.UserVerification {
+	case "", webauthn.Required, webauthn.Preferred:
+	case webauthn.Discouraged:
+		return fmt.Errorf("authentication: PasskeyConfig.UserVerification discouraged would leave no native AAL2 path (only a user-verified passkey reaches AAL2); use preferred or required: %w", sdk.ErrInvalidInput)
+	default:
+		return fmt.Errorf("authentication: PasskeyConfig.UserVerification %q is not preferred or required: %w", cfg.UserVerification, sdk.ErrInvalidInput)
+	}
+	if cfg.MaxPerUser < 0 || cfg.MaxPerUser > maxPasskeysPerUser {
+		return fmt.Errorf("authentication: PasskeyConfig.MaxPerUser %d is outside 0 to %d: %w", cfg.MaxPerUser, maxPasskeysPerUser, sdk.ErrInvalidInput)
 	}
 	return nil
 }

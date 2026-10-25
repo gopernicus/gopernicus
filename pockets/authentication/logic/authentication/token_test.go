@@ -253,3 +253,59 @@ func TestIssueTokenRequireVerifiedEmailAllowsVerified(t *testing.T) {
 }
 
 // --- bearer verification through the middleware trio ---
+
+// TestAccessTokenAssuranceClaim pins the aal claim: signed from the session's
+// level, omitted for a row that recorded none, only aal1/aal2 admitted on a
+// first-party token, and refused on a delegated one.
+func TestAccessTokenAssuranceClaim(t *testing.T) {
+	h := newHarness(t, nil)
+	for level, want := range map[session.AssuranceLevel]bool{session.AssuranceAAL1: true, session.AssuranceAAL2: true, session.AssuranceUnknown: false} {
+		raw, _, err := h.svc.signAccessToken("u1", "s1", level)
+		if err != nil {
+			t.Fatal(err)
+		}
+		claims, err := h.signer.Verify(raw)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, present := claims["aal"]; present != want {
+			t.Errorf("level %q: aal present = %v, want %v", level, present, want)
+		}
+		if _, cred, ok := parseAccessClaims(claims); !ok || cred.Assurance != level {
+			t.Errorf("level %q parsed as %q, %v", level, cred.Assurance, ok)
+		}
+	}
+	firstParty := func(aal any) map[string]any {
+		return map[string]any{"user_id": "u1", "session_id": "s1", "session_profile": "first_party", "aal": aal}
+	}
+	for _, bad := range []any{"aal3", "AAL2", "", 2, nil} {
+		if _, _, ok := parseAccessClaims(firstParty(bad)); ok {
+			t.Errorf("first-party aal %#v admitted", bad)
+		}
+	}
+	delegated := map[string]any{"user_id": "u1", "session_id": "s1", "session_profile": "delegated",
+		"exp": float64(time.Now().Add(time.Minute).Unix()), "iss": "https://as.example.test", "client_id": "client", "aud": "https://rs.example.test"}
+	if _, _, ok := parseAccessClaims(delegated); !ok {
+		t.Fatal("the delegated fixture does not parse")
+	}
+	delegated["aal"] = "aal2"
+	if _, _, ok := parseAccessClaims(delegated); ok {
+		t.Error("a delegated token carrying aal was admitted")
+	}
+
+	h.mustRegister(t, "aal@example.com", "password123456789")
+	h.mustVerify(t, "aal@example.com")
+	pair, _, err := h.svc.Login(context.Background(), "aal@example.com", "password123456789")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rotated, err := h.svc.Refresh(context.Background(), pair.RefreshToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, raw := range map[string]string{"login": pair.AccessToken, "refresh": rotated.AccessToken} {
+		if _, cred, ok := h.svc.verifyAccessClaims(raw); !ok || cred.Assurance != session.AssuranceAAL1 {
+			t.Errorf("%s token assurance = %q, want aal1", name, cred.Assurance)
+		}
+	}
+}

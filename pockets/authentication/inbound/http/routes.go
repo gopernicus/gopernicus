@@ -38,6 +38,13 @@ type handlers struct {
 	// pages render through it. The core never imports templ; this is a technology-
 	// neutral web.Renderer port a host (or the bundled views/templ module) satisfies.
 	views Views
+	// passkeys is the passkey capability, nil when the service has none wired;
+	// passkeyViews renders the passkey pages, nil leaving the routes JSON-only.
+	passkeys     passkeyService
+	passkeyViews PasskeyViews
+	// machineMFA requires AAL2 on the machine lifecycle routes after the host's
+	// MachineGate (MFAConfig admins beside passkeys).
+	machineMFA bool
 	// htmlPolicy is the optional, technology-neutral HTML resource policy (design
 	// §9.2, GOTH-0.4) writeHTMLSecurity applies to every HTML page and redirect. Nil
 	// → the historical asset-free CSP (script-src nonce-only); non-nil → the fixed
@@ -96,6 +103,12 @@ type mountDeps struct {
 	// RouteLimits are the per-client-IP budgets of the public routes; a zero
 	// field takes its default at mount.
 	RouteLimits PublicRouteLimits
+	// Passkeys is the service's passkey capability when it implements one and
+	// has a relying party wired; nil → none of the passkey routes mount.
+	Passkeys passkeyService
+	// PasskeyViews renders the passkey pages; nil → the passkey routes are
+	// JSON-only.
+	PasskeyViews PasskeyViews
 }
 
 // RouteAuthentication is the authenticator each bundled route group runs behind
@@ -224,7 +237,8 @@ func mount(r pockets.RouteRegistrar, d mountDeps) {
 	auth := d.RouteAuth.withDefaults(svc)
 	limits := d.RouteLimits.withDefaults()
 	r = clientInfoRegistrar{inner: noStoreRegistrar{inner: r}, proxies: d.Proxies}
-	h := &handlers{oauth2: d.OAuth2, inviteCheck: d.InviteCheck, resourceRule: d.ResourceRule, userAdminCheck: d.UserAdminCheck, adminMFA: d.AdministrationMFA, eraser: d.Eraser, svc: svc, inv: inv, listStrategy: d.ListStrategy, mutation: d.Mutation, views: views, htmlPolicy: d.HTMLPolicy}
+	h := &handlers{oauth2: d.OAuth2, inviteCheck: d.InviteCheck, resourceRule: d.ResourceRule, userAdminCheck: d.UserAdminCheck, adminMFA: d.AdministrationMFA, eraser: d.Eraser, svc: svc, inv: inv, listStrategy: d.ListStrategy, mutation: d.Mutation, views: views, htmlPolicy: d.HTMLPolicy,
+		passkeys: d.Passkeys, passkeyViews: d.PasskeyViews, machineMFA: d.AdministrationMFA && d.Passkeys != nil}
 	if d.OAuth2 != nil {
 		mountOAuth2(r, h)
 		mountSessionManagement(r, h)
@@ -376,6 +390,18 @@ func mount(r pockets.RouteRegistrar, d mountDeps) {
 		// destructive route by upgrading.
 		if d.Eraser != nil {
 			r.Handle("POST", "/auth/admin/users/{id}/erase", h.adminEraseUser, auth.UserAdministration, browserSafe)
+		}
+		if d.Passkeys != nil {
+			r.Handle("POST", "/auth/admin/users/{id}/passkeys/reset", h.adminResetPasskeys, auth.UserAdministration, browserSafe)
+		}
+	}
+
+	// Passkey routes (SOC 2 S4b) mount only when the service wires a relying
+	// party (deny-by-absence); the pages additionally need PasskeyViews.
+	if d.Passkeys != nil {
+		mountPasskeys(r, h, auth, browserSafe, requireBrowserSafeOrigin(h.mutation.csrf()), svc.rateLimitByIP("passkey", limits.Passkey))
+		if d.PasskeyViews != nil {
+			mountPasskeyHTML(r, h, auth.BrowserAccount, browserSafeForm)
 		}
 	}
 

@@ -301,7 +301,10 @@ func mustAuthenticationService(d authenticationFixture) *authlogic.Components {
 	if d.External != nil {
 		opts = append(opts, authlogic.WithExternal(*d.External))
 	}
-	service, err := authlogic.New(authlogic.Repositories{Users: d.Users, Identifiers: d.Identifiers, Passwords: d.Passwords, Sessions: d.Sessions, UserAdmin: d.UserAdmin, PasswordlessRedeem: d.PasswordlessRedeem, ActiveSessions: d.ActiveSessions, Challenges: d.Challenges, PasswordResets: d.PasswordResets, ContactChanges: d.ContactChanges, CredentialMutations: d.CredentialMutations, AuthenticationGrants: d.AuthenticationGrants, SecurityEvents: d.SecurityEvents, OAuthAccounts: d.OAuthAccounts, OAuthStates: d.OAuthStates, ServiceAccounts: d.ServiceAccounts, APIKeys: d.APIKeys, ExternalSubjects: d.ExternalSubjects},
+	if d.Passkey.RelyingParty != nil {
+		opts = append(opts, authlogic.WithPasskeys(d.Passkey))
+	}
+	service, err := authlogic.New(authlogic.Repositories{Users: d.Users, Identifiers: d.Identifiers, Passwords: d.Passwords, Sessions: d.Sessions, UserAdmin: d.UserAdmin, PasswordlessRedeem: d.PasswordlessRedeem, ActiveSessions: d.ActiveSessions, Challenges: d.Challenges, PasswordResets: d.PasswordResets, ContactChanges: d.ContactChanges, CredentialMutations: d.CredentialMutations, AuthenticationGrants: d.AuthenticationGrants, SecurityEvents: d.SecurityEvents, OAuthAccounts: d.OAuthAccounts, OAuthStates: d.OAuthStates, ServiceAccounts: d.ServiceAccounts, APIKeys: d.APIKeys, ExternalSubjects: d.ExternalSubjects, Passkeys: d.Passkeys},
 		d.TokenSigner,
 		d.RuntimeMode,
 		d.Limiter,

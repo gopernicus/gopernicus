@@ -7,9 +7,9 @@
 // grant by reauthenticating with an EXISTING enrolled method; proving a proposed
 // new email/phone can never satisfy it.
 //
-// The abstraction is intentionally broader than v3 needs: auth-v4 MFA adds
-// passkey/TOTP/recovery-code grant producers without changing this contract
-// (design §12.1). The grant records the methods and assurance it was earned under
+// The abstraction is intentionally broader than one factor: a passkey step-up
+// earns its proof by re-minting the session at AAL2, and TOTP/recovery-code
+// producers join without changing this contract (design §12.1). The grant records the methods and assurance it was earned under
 // (session.AuthenticationMethod / session.AssuranceLevel) so a sufficiently
 // recent primary login can satisfy it without an extra prompt.
 package authgrant
@@ -44,6 +44,13 @@ const (
 	// PurposeChangeIdentifierUses gates changing an identifier's use flags; the
 	// identifier id is the grant context (design §5.5).
 	PurposeChangeIdentifierUses = "change_identifier_uses"
+	// PurposeRegisterPasskey gates starting a passkey registration. It has no
+	// context. A holder of a user-verified passkey needs AAL2 proof; anyone else
+	// may bootstrap from a recent primary login or a password or code step-up.
+	PurposeRegisterPasskey = "register_passkey"
+	// PurposeRemovePasskey gates removing a passkey, under the same assurance
+	// rule as registration; the passkey id is the grant context.
+	PurposeRemovePasskey = "remove_passkey"
 )
 
 // Grant is a consumed-once recent-authentication token. ContextDigest binds the

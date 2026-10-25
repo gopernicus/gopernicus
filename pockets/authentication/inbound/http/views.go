@@ -120,6 +120,10 @@ type LoginPage struct {
 	// the login request. The hint is not authentication proof. Custom views may
 	// ignore it and render normal sign-in.
 	SessionRecovery *SessionRecovery
+	// Passkeys is present when passkeys are enabled: the endpoints a "Sign in
+	// with a passkey" control and its script call. Nil renders no passkey
+	// control.
+	Passkeys *PasskeyLinks
 }
 
 // SessionRecovery describes one browser renewal attempt, without credentials.
@@ -259,6 +263,9 @@ type StepUpPage struct {
 	// the service's, not the template's.
 	PasswordAvailable bool
 	CodeAvailable     bool
+	// Passkeys is present when passkeys are enabled, so the page can offer a
+	// passkey step-up beside the password and code completions.
+	Passkeys *PasskeyLinks
 }
 
 // OAuthMethod is one linked provider projected for display: masked/advisory only.
@@ -296,6 +303,9 @@ type AccountSecurityPage struct {
 	// for each. It is empty when OAuth is off or every wired provider is already
 	// linked; an empty value renders no affordance at all.
 	LinkableProviders []string
+	// Passkeys is present when passkeys are enabled: the manage-page link and
+	// the endpoints its controls use.
+	Passkeys *PasskeyLinks
 }
 
 // IdentifierFormPage models the add/edit identifier form. For an edit, MaskedValue

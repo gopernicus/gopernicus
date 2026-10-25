@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/gopernicus/gopernicus/examples/auth-cms/pockets/authentication/outbound/authmem"
+	gowebauthn "github.com/gopernicus/gopernicus/integrations/cryptids/go-webauthn"
 	auth "github.com/gopernicus/gopernicus/pockets/authentication"
 	authenticationlogic "github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication"
 	delivery "github.com/gopernicus/gopernicus/pockets/authentication/logic/delivery"
@@ -113,9 +114,46 @@ func productionBaseline(t *testing.T) (authenticationConfig, auth.Repositories) 
 	// Passwords and passwordless are one-factor; production asks for the host's
 	// explicit acceptance.
 	cfg.SingleFactorAcknowledged = true
+	// Production refuses a localhost RP ID; this baseline serves a real domain.
+	cfg.Passkeys.RelyingParty = productionRelyingParty(t)
 
 	repos := authmem.New().Repositories()
 	return cfg, repos
+}
+
+// productionRelyingParty is the go-webauthn relying party of a real domain,
+// which production admits.
+func productionRelyingParty(t *testing.T) *gowebauthn.RelyingParty {
+	t.Helper()
+	rp, err := passkeyRelyingParty("https://auth.example.com", []string{"https://auth.example.com"})
+	if err != nil {
+		t.Fatalf("passkeyRelyingParty: %v", err)
+	}
+	return rp
+}
+
+// TestPasskeyRelyingPartyInProduction pins the production refusal over the
+// go-webauthn relying party: a real domain constructs, the development
+// localhost RP buildAuthConfig derives is refused.
+func TestPasskeyRelyingPartyInProduction(t *testing.T) {
+	for name, tc := range map[string]struct {
+		origin  string
+		refused bool
+	}{
+		"a real domain": {"https://auth.example.com", false},
+		"localhost":     {"http://localhost:8082", true},
+	} {
+		cfg, repos := productionBaseline(t)
+		rp, err := passkeyRelyingParty(tc.origin, []string{tc.origin})
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		cfg.Passkeys.RelyingParty = rp
+		_, err = auth.New(repos, cfg.TokenSigner, environment.ModeProduction, cfg.DeliveryMode, cfg.options()...)
+		if got := errors.Is(err, auth.ErrPasskeyDevelopmentRelyingParty); got != tc.refused || (!tc.refused && err != nil) {
+			t.Errorf("%s: err = %v, refused %v want %v", name, err, got, tc.refused)
+		}
+	}
 }
 
 // TestProductionBaselineConstructs proves the production-valid baseline actually

@@ -23,6 +23,16 @@ type methodsResponse struct {
 	HasPassword bool                       `json:"has_password"`
 	OAuth       []oauthMethodResponse      `json:"oauth"`
 	Identifiers []identifierMethodResponse `json:"identifiers"`
+	// Passkeys is present only when passkeys are enabled; an SPA reads it to
+	// choose a step-up (a user-verified passkey reaches AAL2).
+	Passkeys *[]passkeyMethodResponse `json:"passkeys,omitempty"`
+}
+
+// passkeyMethodResponse is one passkey in the inventory: the list item plus the
+// advisory removable hint.
+type passkeyMethodResponse struct {
+	passkeyResponse
+	Removable bool `json:"removable"`
 }
 
 // oauthMethodResponse is one linked provider in the inventory.
@@ -94,6 +104,21 @@ func newMethodsResponse(view authlogic.MethodsView) methodsResponse {
 			entry.VerifiedAt = m.VerifiedAt.Format(time.RFC3339)
 		}
 		out.Identifiers = append(out.Identifiers, entry)
+	}
+	if view.Passkeys != nil {
+		passkeys := make([]passkeyMethodResponse, 0, len(view.Passkeys))
+		for _, p := range view.Passkeys {
+			item := passkeyMethodResponse{Removable: p.Removable, passkeyResponse: passkeyResponse{
+				ID: p.ID, Name: p.Name, CreatedAt: p.CreatedAt.UTC().Format(time.RFC3339),
+				UserVerified: p.UserVerified, BackupEligible: p.BackupEligible, BackupState: p.BackupState,
+				Transports: append([]string{}, p.Transports...),
+			}}
+			if p.LastUsedAt != nil {
+				item.LastUsedAt = p.LastUsedAt.UTC().Format(time.RFC3339)
+			}
+			passkeys = append(passkeys, item)
+		}
+		out.Passkeys = &passkeys
 	}
 	return out
 }

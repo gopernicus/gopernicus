@@ -1234,7 +1234,7 @@ pre-composition of it.
 | profile | first-party · delegated | delegated proof requires explicit `Audience` or `DelegatedAudience`; `FirstParty()` excludes delegated proof, API keys and external tokens |
 | audience | exact resource identifiers | `Audience` gates all credentials; `DelegatedAudience` gates only delegated proof (and refuses external tokens) |
 | liveness | `Live()` · `LiveOnMutation()` (**default**) · `Stateless()` | see the liveness table below |
-| assurance | `RequireMFA()` · `FreshAuth(d)` · `VerifiedEmail()` · `Tenant(ids…)` · `Check(fn)` | evaluated on external tokens only; an API key passes. `RequireMFA()` reads `Credential.Assurance` ([Assurance model](#assurance-model)) |
+| assurance | `RequireMFA()` · `FreshAuth(d)` · `VerifiedEmail()` · `Tenant(ids…)` · `Check(fn)` | `RequireMFA()` reads `Credential.Assurance` on access and external tokens ([Assurance model](#assurance-model)); the other four read external provider evidence only. An API key passes every one |
 
 **The primitive and its options:**
 
@@ -1244,7 +1244,7 @@ func Transports(ts ...Transport) PrincipalOption    // OR-set of transports;  de
 func Live() PrincipalOption                          // re-check on every request, always fail closed
 func LiveOnMutation() PrincipalOption                // the default: re-check on POST/PUT/PATCH/DELETE only
 func Stateless() PrincipalOption                     // never re-check (the per-route escape from the default)
-func RequireMFA() PrincipalOption                    // external token at AAL2 (Credential.Assurance): provider asserted MFA
+func RequireMFA() PrincipalOption                    // access or external token at AAL2 (Credential.Assurance): a user-verified passkey, or provider-asserted MFA
 func FreshAuth(within time.Duration) PrincipalOption // external token: authenticated at the provider within d
 func VerifiedEmail() PrincipalOption                 // external token: provider-verified email
 func Tenant(ids ...string) PrincipalOption           // external token: Identity.Tenant is one of ids
@@ -1266,9 +1266,10 @@ providers are wired — over both transports, header authoritative, at the
 `Accept()` / `Transports()` / `Audience()` / `DelegatedAudience()` called with **zero arguments panics at
 construction** — a set that admits nothing is a programming error, not a
 posture, so the mistake surfaces at wiring time, not on a request. Two more
-postures panic at construction: an assurance option on a set that also admits
-access tokens (they carry no provider assurance — write
-`Accept(CredentialExternalToken, …)`), and `Browser()` on a set admitting external
+postures panic at construction: `FreshAuth`, `VerifiedEmail`, `Tenant` or `Check`
+on a set that also admits access tokens (they read provider evidence an access
+token does not carry — write `Accept(CredentialExternalToken, …)`; `RequireMFA()`
+does not panic), and `Browser()` on a set admitting external
 tokens without an explicit `BrowserLoginPath` (the default `/auth/login` is not
 mounted on an external-only host).
 
@@ -1315,7 +1316,11 @@ name a provider is header-only.
 carry `WWW-Authenticate: Bearer error="insufficient_user_authentication"`
 (`FreshAuth` adds `max_age`), telling a SPA to re-authenticate at the provider;
 `VerifiedEmail()`, `Tenant()` and `Check()` deny with a plain 401, since
-re-authentication cannot cure them. `Browser()` keeps the 303. A provider's
+re-authentication cannot cure them. `Browser()` keeps the 303, except that
+`RequireMFA()` refusing an access token never redirects to sign-in (that would
+mint another AAL1 session): a cookie goes to the passkey step-up page when
+`PasskeyConfig.Views` is wired (`return_to` on `GET`/`HEAD` only), and
+otherwise gets the JSON challenge. A provider's
 `RequireMFA` floor (`authlogic.ErrMFARequired`) and the `MFARequiredAdmins` gate
 answer the same MFA challenge; every MFA denial records one `mfa_required_denied`
 row ([Assurance model](#assurance-model)). Provider claims are identity data,
@@ -1992,14 +1997,20 @@ unrecognised level ranks as unknown).
   pop`). `ClaimMapping.MFAFlag` sets it from a flag claim.
 - **The stamp.** The engine stamps an external token AAL2 when `Identity.MFA` is
   set and AAL1 otherwise — unknown is never higher, and nothing produces AAL3.
-  Access tokens and API keys stay `AssuranceUnknown`: native sessions carry no
-  assurance until native second factors ship.
+- **Native sessions** record their assurance on the session row, and every
+  access token signs it as the `aal` claim (`aal1` or `aal2`): a user-verified
+  passkey sign-in or step-up is AAL2 — the only native AAL2 source — and every
+  other native method (password, codes, links, OAuth, a presence-only passkey)
+  is AAL1. A token minted before `v0.26.0`, or from a row with an empty
+  `assurance_level`, carries no claim and reads `AssuranceUnknown` until its next
+  refresh. An unknown `aal` value is refused, and so is a delegated token
+  carrying the claim. API keys stay `AssuranceUnknown`.
 - **A host's own `CredentialService`** must stamp `Assurance` the same way (AAL2
   when `Identity.MFA`, else AAL1) on external tokens, or every MFA gate denies
   them. Implementing `authenticationhttp.MFADenialRecorder` makes its denials
   recorded; `NewAuthenticator` asserts it once.
 
-Three gates require AAL2. Each answers a JSON request with the RFC 9470
+Four gates require AAL2. Each answers a JSON request with the RFC 9470
 `insufficient_user_authentication` challenge and records one
 `mfa_required_denied` row (`blocked`, budgeted per client IP; Details `gate`,
 `credential`, `provider` for external tokens, `assurance` presented and
@@ -2007,21 +2018,33 @@ Three gates require AAL2. Each answers a JSON request with the RFC 9470
 
 | gate | where it runs | scope |
 |---|---|---|
-| `RequireMFA()` | a `RequirePrincipal` option | external tokens on that route; an API key passes; panics on a set admitting access tokens |
-| `ExternalProvider.RequireMFA` | `Verify`, before the subject resolves | every route; a denied token provisions nothing, so its row has no `UserID` |
-| `WithMFA(MFAConfig{Required: MFARequiredAdmins})` | `/auth/admin/users*`, after `UserAdminCheck` | callers the check admits; a non-admin keeps the check's 403, so the challenge never reveals who is an administrator; an API key passes |
+| `RequireMFA()` (gate `route`) | a `RequirePrincipal` option | access and external tokens on that route; an API key passes |
+| `ExternalProvider.RequireMFA` (gate `provider`) | `Verify`, before the subject resolves | every route; a denied token provisions nothing, so its row has no `UserID` |
+| `WithMFA(MFAConfig{Required: MFARequiredAdmins})` (gate `admin`) | `/auth/admin/users*`, after `UserAdminCheck` | callers the check admits; a non-admin keeps the check's 403, so the challenge never reveals who is an administrator; an API key passes |
+| the same `admins`, beside passkeys (gate `machine`) | the machine lifecycle routes, after `MachineRoutesGate` | every caller the gate admits: an AAL1 session cannot mint a key that would then pass the admin gates |
+
+**The zero value resolves once.** `New` resolves `MFAConfig.Required` before
+any check reads it: an explicit value stands; the zero value
+(`MFARequiredDefault`) becomes `admins` when `WithPasskeys` wires a relying party
+AND `AdministrationConfig.UserAdminCheck` is set, and `none` otherwise.
+`MFARequiredNone` (`"none"`) is the explicit opt-out — the sole-admin
+break-glass ([Passkeys](#passkeys-soc-2-s4b)). An IdP host at the zero value
+therefore resolves to `none` and still trips `external_no_mfa`.
 
 `MFARequiredAll` sets `RequireMFA` on a copy of every `WithExternal` provider
-(the host's slice is never written) and refuses native password, passwordless
-and OAuth login; a standalone `NewExternalAuthenticator` host sets `RequireMFA`
-on each provider itself. Any requirement needs `WithExternal`, and `admins` needs
-`AdministrationConfig.UserAdminCheck` (`ErrMFAUnsatisfiable` in every mode,
-naming the field); an unknown value is `sdk.ErrInvalidInput`. `New` logs one
-boot line, `auth: mfa posture mfa_required=<none|admins|all>
-gates=<none|/auth/admin/users*|external_tokens>`.
+(the host's slice is never written) and refuses native password, passwordless,
+OAuth and passkey login — native `all` waits for recovery codes (S4c); use
+`admins` meanwhile. A standalone `NewExternalAuthenticator` host sets
+`RequireMFA` on each provider itself. `admins` needs `WithPasskeys` or
+`WithExternal` and `AdministrationConfig.UserAdminCheck`; `all` needs
+`WithExternal` (`ErrMFAUnsatisfiable` in every mode, naming the field); an
+unknown value is `sdk.ErrInvalidInput`. `New` logs one boot line, `auth: mfa
+posture mfa_required=<none|admins|all> source=<config|default>
+gates=<none|/auth/admin/users*[,machine_lifecycle]|external_tokens>`.
 
-**`admins` does NOT gate** role routes, cms admin routes, host admin pages or
-the machine lifecycle routes: a host adds `RequireMFA()` to those itself.
+**`admins` does NOT gate** role routes, cms admin routes or host admin pages: a
+host adds `RequireMFA()` to those itself. Without passkeys it does not gate the
+machine lifecycle routes either.
 **API keys pass every MFA gate**, and an AAL1 native session can mint API keys,
 so a `UserAdminCheck` that admits service accounts allows administration
 without MFA.
@@ -2104,6 +2127,104 @@ Moving users onto native passwords depends on whether the vendor exports hashes:
 | Okta | **unverified** — check with the vendor | — | — |
 | Keycloak | self-hosted: the hashes are in your own database | depends on the realm's hash algorithm | — |
 
+## Passkeys (SOC 2 S4b)
+
+A passkey is a WebAuthn credential bound to this deployment's RP ID. A
+**user-verified** passkey (the authenticator checked a PIN or biometric) is the
+only native AAL2 factor: its sign-in or step-up session is AAL2 end to end — the
+session row, the signed `aal` claim, `RequireMFA()` and the `admins` gates. A
+presence-only passkey signs in at AAL1. Sign-in is **usernameless only**:
+`residentKey: required`, discoverable assertions, no credential id ever sent
+before authentication (U2F-only security keys cannot store a resident credential
+and cannot enroll). Attestation is `none`; the AAGUID is recorded when the client
+reports one, unverified.
+
+### Turn on passkeys
+
+1. Apply migration `0025_passkey_credentials` (pgx v0.12.0 / turso v0.11.0) —
+   the store probe refuses to boot without it, naming 0025.
+2. Build the relying party with the go-webauthn integration,
+   `gowebauthn.New(webauthn.Config{RPID, RPName, Origins})`. **The RP ID is
+   permanent**: changing it orphans every registered passkey. Every origin in
+   `Origins` must sit within the RP ID (`Validate` refuses boot otherwise), and
+   production refuses `localhost`, an IP RP ID or an http namespace.
+3. `WithPasskeys(PasskeyConfig{RelyingParty: rp, Views: …})`. `Views` (a
+   `PasskeyViews`) mounts the manage and step-up pages and turns a `Browser()` +
+   `RequireMFA()` denial into a redirect to the step-up page; nil keeps the
+   routes JSON-only. The `Views` interface itself gains no method.
+4. With a `UserAdminCheck`, the zero `MFAConfig.Required` now resolves to
+   `admins` (boot line `mfa_required=admins source=default`): `/auth/admin/users*`
+   and the machine lifecycle need AAL2. **Admins enroll two passkeys** before
+   relying on it.
+
+### The ceremonies
+
+Each ceremony is a single-use handle on the challenge rail (5 minutes); its
+stored context holds the relying party's ceremony state and the session it is
+bound to, and never leaves the server.
+
+| ceremony | gate | result |
+|---|---|---|
+| registration | a user holding a user-verified passkey needs AAL2 within 5 minutes (a passkey sign-in or step-up); anyone else — the first passkey included — bootstraps at AAL1 from a primary login or a password/code step-up grant (`register_passkey`) in that window. The cap is checked before any authenticator is involved | the passkey; an empty or invalid name becomes `Passkey N`; `passkey_registered` and a `passkey_change_notice` |
+| sign-in | public, per-IP budget `PublicRouteLimits.Passkey` (30/min), origin gate | a session at AAL2 (UV) or AAL1, answered exactly as `POST /auth/login` |
+| step-up | the caller's live session; another user's passkey is refused (`user_mismatch`) | the session re-minted (AuthenticatedAt now, the old `ExpiresAt`), the old one deleted; the body adds `assurance`, and a bearer caller gets the new pair |
+| removal | a `remove_passkey` grant (context: the passkey id) under the registration gate's policy; the credential policy must leave a login method | every session of the user revoked; `passkey_removed` and a notice |
+| admin reset | `UserAdminCheck` (action `reset-passkeys`), then the admins gate (an admin API key passes) | every passkey of the target removed and its sessions revoked; `passkeys_reset` and a notice; the user re-enrolls from a primary login |
+
+An assertion runs in a fixed order — consume the handle, read the credential id,
+load the passkey and then its owner (active; revision R), verify, refuse a
+regressed counter, record the use with a compare-and-swap, mint fenced on R — so
+a passkey removed or an account changed between lookup and mint is denied. A
+regressed counter (a possible clone) is refused and recorded as
+`passkey_sign_count_regressed`; the stored count is kept.
+
+### Routes and the wire contract
+
+| route | tier |
+|---|---|
+| `POST /auth/passkeys/registration/options` · `POST /auth/passkeys/registration` | CredentialManagement + browser-safe |
+| `POST /auth/passkeys/assertion/options` · `POST /auth/passkeys/assertion` | public; `PublicRouteLimits.Passkey`; origin gate |
+| `POST /auth/step-up/passkey/options` · `POST /auth/step-up/passkey` | CredentialManagement + browser-safe |
+| `GET /auth/passkeys` · `PATCH`/`DELETE /auth/passkeys/{id}` | SessionSecurityReads · CredentialManagement + browser-safe |
+| `POST /auth/admin/users/{id}/passkeys/reset` | UserAdministration + browser-safe + the admin chain |
+| `GET /auth/account/passkeys` · form `POST /auth/passkeys/{id}` (`action=rename\|remove`) · `GET /auth/step-up/passkey` | BrowserAccount (only with `PasskeyConfig.Views`) |
+
+Every `…/options` call takes `{}` and answers `{ceremony, public_key}`, where
+`public_key` is the inner options JSON `PublicKeyCredential.parseCreationOptionsFromJSON`
+/ `parseRequestOptionsFromJSON` takes. Every finish takes `{ceremony,
+credential}` (registration also an optional `name`), `credential` being the
+browser's `PublicKeyCredential.toJSON()`. Registration answers `201` with the list
+item `{id, name, created_at, last_used_at?, user_verified, backup_eligible,
+backup_state, transports}`. Refusals: `410 challenge_expired`, `401
+passkey_rejected`, `409 passkey_exists` / `passkey_limit`, `403` when the
+registration gate needs a step-up. No response carries a public key, ceremony
+state, or another user's credential id. `GET /auth/methods` lists `passkeys`
+(with the advisory `removable` hint) when passkeys are on: an SPA reads it on an
+admin 401 to choose its step-up.
+
+### Operators
+
+- **The reset path.** From an AAL2 session: `fetch('/auth/admin/users/<id>/passkeys/reset',
+  {method: 'POST', headers: {'Content-Type': 'application/json', 'X-CSRF-Token':
+  csrf}, body: '{}'})`; or with an admin API key the host's `UserAdminCheck`
+  admits.
+- **The sole-admin break-glass.** An administrator who lost every passkey sets
+  `MFAConfig{Required: MFARequiredNone}`, redeploys, re-enrolls, and reverts.
+- **The residual.** The first passkey is an AAL1 bootstrap: a stolen password can
+  enroll it. The `passkey_change_notice` to every verified contact channel is the
+  detective control.
+
+### Security events
+
+Bounded values only — never a public key, credential id, user handle, passkey
+name, origin or raw response: `passkey_registered` (`passkey_id`,
+`user_verified`, `backup_eligible`, `aaguid`), `passkey_removed` (`passkey_id`,
+`remaining`), `passkeys_reset` (`removed`; the actor), `passkey_login`
+(`ceremony`, `assurance`, `backup_state`), `passkey_failed` (budgeted per IP;
+`ceremony`, `reason` ∈ unknown_credential, user_mismatch, rejected, uv_required,
+expired, inactive, conflict), and `passkey_sign_count_regressed` (budgeted;
+`passkey_id`, `stored`, `presented`).
+
 ## Repositories (the ports a host or store adapter satisfies)
 
 The bundled store adapters fill the whole bundle from one handle
@@ -2130,7 +2251,8 @@ type Repositories struct {
     PasswordResets       passwordreset.Repository          // atomic reset composition
     ContactChanges       contactchange.Repository          // pending add/change flow state
     AuthenticationGrants authgrant.Repository              // single-use recent-auth / step-up grants
-    CredentialMutations  credential.MutationRepository     // revision-serialized typed mutations
+    CredentialMutations  credential.MutationRepository     // revision-serialized typed mutations (passkeys included)
+    Passkeys             passkey.Repository                // WebAuthn credentials (required with WithPasskeys)
     // v2 optional subsystems (nil semantics below).
     OAuthAccounts   oauthaccount.OAuthAccountRepository
     OAuthStates     oauthstate.StateRepository
@@ -2206,7 +2328,8 @@ store upgrade is needed.
 | `RuntimeMode` | **REQUIRED, no default.** `"production"` rejects development-only delivery transports and every incomplete security wiring (below); `"development"` warns instead. Uses `environment.Mode` (`sdk/pkg/environment`) — see [Security posture](#security-posture); app-wide code should name `environment.Mode` and needs no auth import. |
 | `Repositories.SecurityEvents` + `WithAuditDisabledAcknowledged()` | **Production requires the audit rail** (`ErrAuditRequired`); development WARNs. `WithAuditDisabledAcknowledged()` waives it and logs one `posture_waiver=AuditDisabledAcknowledged` WARN; passed beside a wired `SecurityEvents` it is `ErrAuditAcknowledgedWithSecurityEvents` in every mode. |
 | `IdentityConfig.SingleFactorAcknowledged` | **Production refuses single-factor sign-in** without it (`ErrSingleFactorUnacknowledged`, naming the causes); development logs one WARN naming it and the causes — the pre-deploy signal. The causes: `native_password` (`PasswordFlowsDisabled` false), `passwordless` (any `Passwordless` kind), `native_oauth` (any OAuth `Providers`), `external_no_mfa` (a `WithExternal` provider without `RequireMFA` while `MFAConfig.Required` is none). Set it to accept one-factor sign-in (one `posture_waiver=SingleFactorAcknowledged` WARN carrying `causes=[…]`), declare `WithMFA` (clears `external_no_mfa`; native causes remain), or turn native login off. Inert when no cause is present. |
-| `MFAConfig.Required` (`WithMFA`) | none: no requirement beyond each provider's `RequireMFA`. `admins` requires AAL2 on `/auth/admin/users*` of callers `UserAdminCheck` admits; `all` sets `RequireMFA` on every external provider. Unsatisfiable wiring is `ErrMFAUnsatisfiable`, an unknown value `sdk.ErrInvalidInput` — see [Assurance model](#assurance-model). A wiring literal, no env tag. |
+| `PasskeyConfig` (`WithPasskeys`) | nil `RelyingParty`: passkeys off and their routes unmounted. Wired: requires `Repositories.Passkeys`, `CredentialMutations`, `AuthenticationGrants`, `Challenges` and `ChallengeProtector` (`ErrPasskeyReposRequired`); production refuses a `localhost` or IP RP ID, or an http origin namespace (`ErrPasskeyDevelopmentRelyingParty`); `UserVerification` zero → `preferred`; `MaxPerUser` zero → 10, above 25 refused; `Views` nil → JSON only, non-nil needs `BrowserConfig.Views`. See [Passkeys](#passkeys-soc-2-s4b). |
+| `MFAConfig.Required` (`WithMFA`) | zero resolves once: `admins` beside `WithPasskeys` and `UserAdminCheck`, else `none` (`MFARequiredNone`, `"none"`, is the explicit opt-out). none: no requirement beyond each provider's `RequireMFA`. `admins` requires AAL2 on `/auth/admin/users*` of callers `UserAdminCheck` admits (and on the machine lifecycle beside passkeys); `all` sets `RequireMFA` on every external provider. Unsatisfiable wiring is `ErrMFAUnsatisfiable`, an unknown value `sdk.ErrInvalidInput` — see [Assurance model](#assurance-model). A wiring literal, no env tag. |
 | `BrowserConfig.CookieDomainAcknowledged` | **Production refuses `SessionCookie.Domain`** (`AUTH_COOKIE_DOMAIN`) without it (`ErrCookieDomainRefused`): a Domain sends the access and refresh cookies to every host under it. Set it to accept that sharing (one `posture_waiver=CookieDomainAcknowledged` WARN); development admits a Domain. Inert while Domain is empty. It never waives `ErrCookieDomainWithNamespaceRule`: a Domain beside an `OriginPolicy` namespace rule fails `New` in every mode, because the sdk's trust model keeps session cookies host-only under a namespace (`sdk/pkg/web/origin_policy.go:55-62`) — remove one. |
 | `AbuseProtectionConfig.PublicRouteLimiterFailOpen` | false (**FAIL CLOSED in every mode**, development included): a limiter outage answers 503 + `Retry-After: 5` on the bundled public-route budgets, host `RateLimitByIP` routes and the per-session refresh budget. true admits and WARNs per failure; in production it is a posture waiver (one `posture_waiver=PublicRouteLimiterFailOpen` WARN at `New`). See [Rate-limiter outage policy](#rate-limiter-outage-policy). |
 | `DeliveryConfig.OpportunisticTLSAcknowledged` | **Production refuses a Mailer or BodySender declaring opportunistic STARTTLS** (`ErrInsecureDeliveryTransport` wrapping `notify.ErrOpportunisticTLS`), at the root and in the delivery router's `ValidateTransports` (`delivery.WithOpportunisticTLSAcknowledged()`); development WARNs. Prefer a mandatory-TLS sender (`email.SMTPConfig.RequireTLS`). Inert when no transport declares STARTTLS. |

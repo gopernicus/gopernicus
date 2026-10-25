@@ -38,6 +38,7 @@ type adapterConfig struct {
 	UserErasureRoute  bool
 	AdministrationMFA bool
 	RouteLimits       PublicRouteLimits
+	PasskeyViews      PasskeyViews
 }
 
 type routedService struct {
@@ -72,6 +73,17 @@ func New(service AuthenticationService, runtimeMode environment.Mode, opts ...Op
 	}
 	if cfg.HTMLPolicy != nil && nilDependency(cfg.Views) {
 		return nil, fmt.Errorf("authentication HTTP: HTMLPolicy requires Views: %w", sdk.ErrInvalidInput)
+	}
+	var passkeys passkeyService
+	if p, ok := cfg.Authentication.(passkeyService); ok && p.PasskeysEnabled() {
+		passkeys = p
+	}
+	var passkeyViews PasskeyViews
+	if !nilDependency(cfg.PasskeyViews) {
+		if passkeys == nil || nilDependency(cfg.Views) {
+			return nil, fmt.Errorf("authentication HTTP: PasskeyViews requires a service with passkeys wired and Views: %w", sdk.ErrInvalidInput)
+		}
+		passkeyViews = cfg.PasskeyViews
 	}
 	if runtimeMode == environment.ModeProduction && cfg.OriginPolicy.HasHTTPNamespace() {
 		return nil, fmt.Errorf("authentication HTTP: production OriginPolicy must not admit an http namespace: %w", sdk.ErrInvalidInput)
@@ -131,6 +143,10 @@ func New(service AuthenticationService, runtimeMode environment.Mode, opts ...Op
 		RouteAuth: resolveBundledRouteAuth(cfg.RouteAuth, auth),
 		Eraser:    eraser,
 		Proxies:   auth.proxies, RouteLimits: cfg.RouteLimits, AdministrationMFA: cfg.AdministrationMFA,
+		Passkeys: passkeys, PasskeyViews: passkeyViews,
+	}
+	if passkeyViews != nil {
+		auth.passkeyStepUpPath = passkeyStepUpPathFor(auth.browserLoginPath)
 	}
 	return auth, nil
 }

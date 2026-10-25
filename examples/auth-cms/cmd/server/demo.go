@@ -44,6 +44,27 @@ func registerDemoRoutes(router *web.WebHandler, authentication *authenticationht
 		principal, authorization.Require(authorizationhttp.Can(demoAuditPermission, authorizationhttp.Fixed(demoResourceType, demoResourceID))))
 }
 
+// registerMFADemoRoutes mounts the two routes that require AAL2 of a person: GET
+// /demo/mfa for API clients (an AAL1 session gets the RFC 9470 401) and GET
+// /demo/mfa/page for the browser (an AAL1 cookie goes to the passkey step-up
+// page when its views are wired, else the same 401). Each answers the
+// credential's assurance. With passkeys on, a user-verified passkey sign-in or
+// step-up reaches them.
+func registerMFADemoRoutes(router *web.WebHandler, authentication *authenticationhttp.Adapter, credentials *authlogic.Service) {
+	router.Handle("GET", "/demo/mfa", demoAssurance(credentials), authentication.RequirePrincipal(authenticationhttp.RequireMFA()))
+	router.Handle("GET", "/demo/mfa/page", demoAssurance(credentials), authentication.RequirePrincipal(
+		authenticationhttp.Accept(authenticationhttp.CredentialAccessToken), authenticationhttp.Transports(authenticationhttp.TransportCookie),
+		authenticationhttp.Live(), authenticationhttp.Browser(), authenticationhttp.RequireMFA()))
+}
+
+// demoAssurance echoes the admitted credential's kind and assurance.
+func demoAssurance(credentials *authlogic.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		cred, _ := credentials.CurrentCredential(r.Context())
+		writeHostJSON(w, http.StatusOK, map[string]string{"credential": string(cred.Kind), "assurance": string(cred.Assurance)})
+	}
+}
+
 // The audit permission explicitly checks scoped auditor membership.
 const (
 	demoRole            = "auditor"

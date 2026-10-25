@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/gopernicus/gopernicus/pockets/authentication/internal/redirect"
@@ -18,6 +19,10 @@ import (
 const (
 	defaultRefreshCookiePath = "/auth"
 	defaultBrowserLoginPath  = "/auth/login"
+	// defaultPasskeyStepUpPath is the passkey step-up page a Browser() gate with
+	// RequireMFA() redirects to, re-rooted under the browser login path's prefix
+	// when that path ends in defaultBrowserLoginPath.
+	defaultPasskeyStepUpPath = passkeyStepUpPagePath
 )
 
 type (
@@ -68,6 +73,9 @@ type Adapter struct {
 	// mfaDenials records MFA denials when the credential service implements
 	// MFADenialRecorder; nil records nothing.
 	mfaDenials MFADenialRecorder
+	// passkeyStepUpPath is where a Browser() RequireMFA() denial of a cookie
+	// below AAL2 redirects; empty (no passkey pages mounted) answers JSON.
+	passkeyStepUpPath string
 }
 
 // authenticatorConfig holds the HTTP adapter's resolved policy and dependencies.
@@ -233,4 +241,14 @@ func validExternalCookies(names []string, sessionName string, externalEnabled bo
 		taken[name] = true
 	}
 	return nil
+}
+
+// passkeyStepUpPathFor derives the passkey step-up page from the browser login
+// path, as the login redirect is configured: a login path ending in /auth/login
+// keeps its mount prefix; any other keeps the default.
+func passkeyStepUpPathFor(loginPath string) string {
+	if prefix, ok := strings.CutSuffix(loginPath, defaultBrowserLoginPath); ok {
+		return prefix + defaultPasskeyStepUpPath
+	}
+	return defaultPasskeyStepUpPath
 }

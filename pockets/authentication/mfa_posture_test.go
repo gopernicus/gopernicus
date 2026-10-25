@@ -12,9 +12,11 @@ import (
 
 	inbound "github.com/gopernicus/gopernicus/pockets/authentication/inbound/http"
 	authlogic "github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/protection"
 	delivery "github.com/gopernicus/gopernicus/pockets/authentication/logic/delivery"
 	"github.com/gopernicus/gopernicus/sdk"
 	sdkauth "github.com/gopernicus/gopernicus/sdk/capabilities/authentication"
+	"github.com/gopernicus/gopernicus/sdk/capabilities/authentication/webauthn"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/oauth"
 	environment "github.com/gopernicus/gopernicus/sdk/pkg/environment"
 )
@@ -38,6 +40,10 @@ type mfaWiring struct {
 	adminCheck  bool
 	ack         bool
 	externalAck bool
+	// passkeys wires a relying party and the stores it requires; protector is
+	// the challenge rail's protector it needs.
+	passkeys  webauthn.RelyingParty
+	protector protection.ChallengeProtector
 }
 
 func idp(name, issuer string, requireMFA bool) authlogic.ExternalProvider {
@@ -50,7 +56,7 @@ func (w mfaWiring) build(mode environment.Mode) (*Components, string, error) {
 	repos := Repositories{SecurityEvents: stubSecurityEvents{}}
 	opts := []Option{
 		WithPassword(PasswordConfig{Hasher: stubHasher{}, PasswordFlowsDisabled: !w.password}),
-		WithIdentity(IdentityConfig{IdentifierKeyer: prodKeyer{}, SingleFactorAcknowledged: w.ack}),
+		WithIdentity(IdentityConfig{IdentifierKeyer: prodKeyer{}, SingleFactorAcknowledged: w.ack, ChallengeProtector: w.protector}),
 		WithAbuseProtection(AbuseProtectionConfig{RateLimiter: durableLimiter{}}),
 		WithDelivery(DeliveryConfig{Mailer: prodMailer{}}),
 		WithBrowser(BrowserConfig{SessionCookie: inbound.CookieConfig{Secure: true}}),
@@ -66,6 +72,10 @@ func (w mfaWiring) build(mode environment.Mode) (*Components, string, error) {
 		opts = append(opts,
 			WithOAuth(OAuthConfig{Providers: []oauth.Provider{stubProvider{}}, OAuthCallbackBase: "https://app.example.com"}),
 			WithLinks(LinksConfig{OAuthLinkBaseURL: "https://app.example.com/auth/oauth/link"}))
+	}
+	if w.passkeys != nil {
+		repos.Passkeys, repos.CredentialMutations, repos.AuthenticationGrants, repos.Challenges = stubPasskeys{}, stubCredentialMutations{}, stubGrants{}, stubChallenges{}
+		opts = append(opts, WithPasskeys(PasskeyConfig{RelyingParty: w.passkeys}))
 	}
 	if w.adminCheck {
 		repos.UserAdmin = stubUserAdmin{}
@@ -217,7 +227,7 @@ func TestMFARequiredAllClonesProviders(t *testing.T) {
 			t.Fatalf("%s AAL1 token under all = %v, want ErrMFARequired", issuer, err)
 		}
 	}
-	if !strings.Contains(logs, "auth: mfa posture") || !strings.Contains(logs, "mfa_required=all gates=external_tokens") {
+	if !strings.Contains(logs, "auth: mfa posture") || !strings.Contains(logs, "mfa_required=all source=config gates=external_tokens") {
 		t.Fatalf("boot line missing:\n%s", logs)
 	}
 }
@@ -226,8 +236,9 @@ func TestMFARequiredAllClonesProviders(t *testing.T) {
 func TestMFAPostureBootLine(t *testing.T) {
 	one := []authlogic.ExternalProvider{idp("idp", "https://idp.example.test", false)}
 	for want, wiring := range map[string]mfaWiring{
-		"mfa_required=none gates=none":                 {providers: one, ack: true},
-		"mfa_required=admins gates=/auth/admin/users*": {providers: one, required: MFARequiredAdmins, adminCheck: true},
+		"mfa_required=none source=default gates=none":                {providers: one, ack: true},
+		"mfa_required=none source=config gates=none":                 {providers: one, ack: true, required: MFARequiredNone},
+		"mfa_required=admins source=config gates=/auth/admin/users*": {providers: one, required: MFARequiredAdmins, adminCheck: true},
 	} {
 		_, logs, err := wiring.build(environment.ModeDevelopment)
 		if err != nil || strings.Count(logs, "auth: mfa posture") != 1 || !strings.Contains(logs, want) {

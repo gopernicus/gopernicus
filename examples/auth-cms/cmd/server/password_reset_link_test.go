@@ -212,6 +212,7 @@ func TestPasswordResetProductionRequiresTheURL(t *testing.T) {
 		cfg.RateLimiter = durableStubLimiter{}
 		cfg.Providers = nil                 // the fake provider is development-only
 		cfg.SingleFactorAcknowledged = true // passwords stay on in this host
+		cfg.Passkeys.RelyingParty = productionRelyingParty(t)
 
 		_, err := auth.New(authmem.New().Repositories(), cfg.TokenSigner, cfg.RuntimeMode, cfg.DeliveryMode, cfg.options()...)
 		if !errors.Is(err, auth.ErrPasswordResetURLRequired) {
@@ -230,6 +231,7 @@ func TestPasswordResetProductionRequiresTheURL(t *testing.T) {
 		cfg.RateLimiter = durableStubLimiter{}
 		cfg.Providers = nil                 // the fake provider is development-only
 		cfg.SingleFactorAcknowledged = true // passwords stay on in this host
+		cfg.Passkeys.RelyingParty = productionRelyingParty(t)
 
 		_, err := auth.New(authmem.New().Repositories(), cfg.TokenSigner, cfg.RuntimeMode, cfg.DeliveryMode, cfg.options()...)
 		if !errors.Is(err, auth.ErrPasswordResetURLInsecure) {

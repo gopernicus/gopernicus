@@ -45,6 +45,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"strings"
@@ -65,6 +66,7 @@ import (
 	"github.com/gopernicus/gopernicus/examples/auth-cms/pockets/events/outbound/outboxmem"
 	"github.com/gopernicus/gopernicus/examples/auth-cms/pockets/retention/inbound/runner"
 	"github.com/gopernicus/gopernicus/integrations/cryptids/bcrypt"
+	gowebauthn "github.com/gopernicus/gopernicus/integrations/cryptids/go-webauthn"
 	"github.com/gopernicus/gopernicus/pockets"
 	auth "github.com/gopernicus/gopernicus/pockets/authentication"
 	authenticationhttp "github.com/gopernicus/gopernicus/pockets/authentication/inbound/http"
@@ -84,6 +86,7 @@ import (
 	queue "github.com/gopernicus/gopernicus/pockets/jobs/logic/queue"
 	jobsmem "github.com/gopernicus/gopernicus/pockets/jobs/stores/memory"
 	"github.com/gopernicus/gopernicus/sdk"
+	"github.com/gopernicus/gopernicus/sdk/capabilities/authentication/webauthn"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/cacher"
 	sdkevents "github.com/gopernicus/gopernicus/sdk/capabilities/events"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/notify"
@@ -635,6 +638,7 @@ func run(ctx context.Context, log *slog.Logger, runtimeMode environment.Mode) er
 	}
 
 	registerDemoRoutes(router, authSvc.HTTP, authorizer, authzComponents.Roles, authzComponents.HTTP)
+	registerMFADemoRoutes(router, authSvc.HTTP, authSvc.Authentication)
 	registerDebugRoutes(router, authSvc.HTTP, authzComponents.HTTP, authRepos, log)
 
 	// Host-local liveness probe (host route, not pocket surface). Mounted on
@@ -1110,5 +1114,28 @@ func buildAuthConfig(log *slog.Logger, mode environment.Mode, granter invitation
 	if err := environment.ParseEnvTags("", &cfg); err != nil {
 		return authenticationConfig{}, err
 	}
+	// Passkeys (SOC 2 S4b) over the go-webauthn integration: the RP ID is this
+	// host's own origin host and the browser origins are its Origin allowlist.
+	// Views stays nil, so the passkey routes are JSON-only here.
+	rp, err := passkeyRelyingParty(origin, cfg.AllowedOrigins)
+	if err != nil {
+		return authenticationConfig{}, err
+	}
+	cfg.Passkeys = auth.PasskeyConfig{RelyingParty: rp}
 	return cfg, nil
+}
+
+// passkeyRelyingParty builds the WebAuthn relying party for origin. The RP ID is
+// permanent for a deployment — changing it orphans every registered passkey —
+// and every allowed origin must sit within it, or gowebauthn.New refuses boot.
+func passkeyRelyingParty(origin string, allowed []string) (*gowebauthn.RelyingParty, error) {
+	u, err := url.Parse(origin)
+	if err != nil {
+		return nil, fmt.Errorf("auth-cms: passkey origin %q: %w", origin, err)
+	}
+	policy, err := web.NewOriginPolicy(web.OriginPolicyConfig{Exact: allowed})
+	if err != nil {
+		return nil, err
+	}
+	return gowebauthn.New(webauthn.Config{RPID: u.Hostname(), RPName: "Gopernicus CMS", Origins: policy})
 }

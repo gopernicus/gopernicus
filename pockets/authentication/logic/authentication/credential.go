@@ -89,11 +89,14 @@ type Credential struct {
 	// named field because an embedded one would shadow Issuer. Native kinds leave
 	// it zero, and external tokens leave Issuer, Audiences and Profile zero.
 	Identity sdkauth.Identity
-	// Assurance is the authenticator assurance the credential proves. An
-	// external token is AAL2 when its provider asserted multi-factor
-	// authentication (Identity.MFA) and AAL1 otherwise; access tokens and API
-	// keys leave it AssuranceUnknown. RequireMFA and the MFA gates read it, so a
-	// host-implemented CredentialService must stamp it on external tokens.
+	// Assurance is the authenticator assurance the credential proves. A
+	// first-party access token carries its session's assurance from the signed
+	// aal claim — AAL2 after a user-verified passkey, AAL1 otherwise — and a
+	// token minted before the claim existed reads AssuranceUnknown until its
+	// next refresh. An external token is AAL2 when its provider asserted
+	// multi-factor authentication (Identity.MFA) and AAL1 otherwise. API keys
+	// and delegated tokens leave it AssuranceUnknown. RequireMFA and the MFA
+	// gates read it, so a host-implemented CredentialService must stamp it.
 	Assurance session.AssuranceLevel
 }
 

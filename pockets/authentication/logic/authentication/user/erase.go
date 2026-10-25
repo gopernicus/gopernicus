@@ -19,7 +19,7 @@ var ErrEraseBlockedByClaim = fmt.Errorf("user: an accepting invitation claim is 
 
 // EraseRepository is the OPTIONAL user-erasure capability (SOC 2 S3). It must be
 // backed by the same transaction-capable adapter as Users, Identifiers,
-// Passwords, Sessions, Challenges, AuthenticationGrants, Invitations,
+// Passwords, Passkeys, Sessions, Challenges, AuthenticationGrants, Invitations,
 // ServiceAccounts, APIKeys and SecurityEvents: Erase is ONE transaction across
 // all of them.
 //
@@ -31,7 +31,7 @@ var ErrEraseBlockedByClaim = fmt.Errorf("user: an accepting invitation claim is 
 // refuse with ErrEraseBlockedByClaim when any locked row is accepting; mark the
 // user erased (deactivated when active, display name blanked, auth_revision
 // incremented); retire and blank every identifier row of the user; delete the
-// password, OAuth accounts, external subjects, contact changes, OAuth2
+// password, passkeys, OAuth accounts, external subjects, contact changes, OAuth2
 // authorization codes, the challenges keyed to the user or to SubjectKeys, the
 // authentication grants and the sessions of both profiles; delete the locked
 // pending invitations and blank identifier and metadata on the locked terminal
@@ -81,6 +81,7 @@ type EraseCounts struct {
 	Sessions             int
 	Grants               int
 	Passwords            int
+	Passkeys             int
 	OAuthAccounts        int
 	ExternalSubjects     int
 	ContactChanges       int
@@ -105,6 +106,7 @@ func (c EraseCounts) Merge(details map[string]any) map[string]any {
 	out["sessions"] = c.Sessions
 	out["grants"] = c.Grants
 	out["passwords"] = c.Passwords
+	out["passkeys"] = c.Passkeys
 	out["oauth_accounts"] = c.OAuthAccounts
 	out["external_subjects"] = c.ExternalSubjects
 	out["contact_changes"] = c.ContactChanges

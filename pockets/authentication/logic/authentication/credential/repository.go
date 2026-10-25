@@ -11,7 +11,8 @@ import "context"
 // transaction-capable adapter coordinates them without a uniform storage model.
 type MutationRepository interface {
 	// Snapshot returns the user's current MethodSet, including the AuthRevision it
-	// was read at. An unknown user returns sdk.ErrNotFound.
+	// was read at and every passkey the user holds. An unknown user returns
+	// sdk.ErrNotFound.
 	Snapshot(ctx context.Context, userID string) (MethodSet, error)
 	// Apply performs mutation atomically, incrementing auth_revision exactly once
 	// on success, and revoking sessions, grants and password-reset challenges.
@@ -20,6 +21,8 @@ type MutationRepository interface {
 	// An unknown user returns sdk.ErrNotFound. Identifier mutations must validate
 	// active ownership and replacement eligibility within the same transaction
 	// (see RetireIdentifier.Validate and ChangeIdentifierUses.Validate).
+	// RemovePasskey of an id the user does not own returns sdk.ErrNotFound;
+	// RemovePasskeys deletes all of the user's passkeys, zero included.
 	// A conflict or any failure leaves the user's credential state unchanged — the
 	// mutation is never partially applied.
 	Apply(ctx context.Context, userID string, expectedAuthRevision int64, mutation Mutation) error

@@ -119,8 +119,19 @@ func WithUserAdminCheck(check UserAdminCheck) Option {
 // WithAdministrationMFA requires AAL2 on /auth/admin/users* of every caller the
 // UserAdminCheck admits: an admitted caller below AAL2 gets the RFC 9470 401
 // and an mfa_required_denied row, a non-admin keeps the check's 403, and an API
-// key passes. It gates no other route. Without WithUserAdminCheck it is
-// sdk.ErrInvalidInput at New.
+// key passes. When the service has passkeys wired it also gates the machine
+// lifecycle routes after the MachineGate (gate machine), since a passkey can
+// now satisfy it there. It gates no other route. Without WithUserAdminCheck it
+// is sdk.ErrInvalidInput at New.
 func WithAdministrationMFA() Option {
 	return func(c *adapterConfig) { c.AdministrationMFA = true }
+}
+
+// WithPasskeyViews mounts the passkey pages — GET /auth/account/passkeys, its
+// form lane POST /auth/passkeys/{id}, and GET /auth/step-up/passkey — and turns
+// a Browser() RequireMFA() denial of an AAL1 cookie into a redirect to the
+// step-up page. It requires a service with passkeys wired and BrowserConfig
+// Views (sdk.ErrInvalidInput at New). Nil leaves the passkey routes JSON-only.
+func WithPasskeyViews(value PasskeyViews) Option {
+	return func(c *adapterConfig) { c.PasskeyViews = value }
 }

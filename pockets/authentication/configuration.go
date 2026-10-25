@@ -2,6 +2,7 @@ package authentication
 
 import (
 	"fmt"
+	"net"
 	"reflect"
 	"slices"
 	"strings"
@@ -66,8 +67,22 @@ func validateRepositories(repos Repositories, cfg constructorConfig) error {
 	return nil
 }
 
-// validateMFA checks MFAConfig against the wiring in every mode, naming the
-// field to change. ExternalConfig.SingleFactorAcknowledged belongs to
+// resolveMFARequired resolves MFAConfig.Required once, before any consumer
+// reads it: an explicit value stands (source config); the zero value becomes
+// admins when a passkey relying party and a UserAdminCheck are both wired, and
+// none otherwise (source default).
+func resolveMFARequired(cfg constructorConfig) (MFARequirement, string) {
+	if cfg.MFARequired != MFARequiredDefault {
+		return cfg.MFARequired, "config"
+	}
+	if !nilDependency(cfg.Passkey.RelyingParty) && cfg.UserAdminCheck != nil {
+		return MFARequiredAdmins, "default"
+	}
+	return MFARequiredNone, "default"
+}
+
+// validateMFA checks the RESOLVED MFAConfig against the wiring in every mode,
+// naming the field to change. ExternalConfig.SingleFactorAcknowledged belongs to
 // NewExternalAuthenticator; New refuses it so it is never inert.
 func validateMFA(cfg constructorConfig) error {
 	if cfg.External != nil && cfg.External.SingleFactorAcknowledged {
@@ -80,8 +95,12 @@ func validateMFA(cfg constructorConfig) error {
 	default:
 		return fmt.Errorf("authentication: MFAConfig.Required %q is not none, admins or all: %w", cfg.MFARequired, sdk.ErrInvalidInput)
 	}
-	if cfg.External == nil {
-		return fmt.Errorf("%w: MFAConfig.Required %q needs WithExternal, the only AAL2 source", ErrMFAUnsatisfiable, cfg.MFARequired)
+	passkeys := !nilDependency(cfg.Passkey.RelyingParty)
+	if cfg.MFARequired == MFARequiredAll && passkeys {
+		return fmt.Errorf("%w: MFAConfig.Required all is not available beside WithPasskeys: native all waits for recovery codes (S4c); use admins meanwhile", ErrMFAUnsatisfiable)
+	}
+	if cfg.External == nil && (cfg.MFARequired == MFARequiredAll || !passkeys) {
+		return fmt.Errorf("%w: MFAConfig.Required %q needs WithExternal or WithPasskeys, the AAL2 sources (all needs WithExternal)", ErrMFAUnsatisfiable, cfg.MFARequired)
 	}
 	if cfg.MFARequired == MFARequiredAdmins && cfg.UserAdminCheck == nil {
 		return fmt.Errorf("%w: MFAConfig.Required admins needs AdministrationConfig.UserAdminCheck, or it gates nothing", ErrMFAUnsatisfiable)
@@ -99,6 +118,38 @@ func validateMFA(cfg constructorConfig) error {
 		}
 		if len(native) > 0 {
 			return fmt.Errorf("%w: MFAConfig.Required all refuses native single-factor login (%s)", ErrMFAUnsatisfiable, strings.Join(native, "; "))
+		}
+	}
+	return nil
+}
+
+// validatePasskeyConfig checks WithPasskeys against the wiring. A relying party
+// needs the passkey store, the credential-mutation rail, the grants and the
+// challenge rail with its protector. Views needs a relying party and
+// BrowserConfig.Views. Production refuses a relying party bound to a
+// development origin: a localhost or IP RP ID, or an Origins policy with an
+// http namespace.
+func validatePasskeyConfig(repos Repositories, cfg constructorConfig) error {
+	pk := cfg.Passkey
+	if pk.RelyingParty == nil {
+		if pk.Views != nil {
+			return fmt.Errorf("authentication: PasskeyConfig.Views requires PasskeyConfig.RelyingParty: %w", sdk.ErrInvalidInput)
+		}
+		return nil
+	}
+	if nilDependency(pk.RelyingParty) {
+		return fmt.Errorf("authentication: PasskeyConfig.RelyingParty contains a typed nil: %w", sdk.ErrInvalidInput)
+	}
+	if nilDependency(repos.Passkeys) || nilDependency(repos.CredentialMutations) || nilDependency(repos.AuthenticationGrants) || nilDependency(repos.Challenges) || nilDependency(cfg.ChallengeProtector) {
+		return ErrPasskeyReposRequired
+	}
+	if pk.Views != nil && (nilDependency(pk.Views) || nilDependency(cfg.Views)) {
+		return fmt.Errorf("authentication: PasskeyConfig.Views requires BrowserConfig.Views: %w", sdk.ErrInvalidInput)
+	}
+	if cfg.RuntimeMode.IsProduction() {
+		rp := pk.RelyingParty.Config()
+		if rp.RPID == "localhost" || strings.HasSuffix(rp.RPID, ".localhost") || net.ParseIP(rp.RPID) != nil || rp.Origins.HasHTTPNamespace() {
+			return fmt.Errorf("%w: RP ID %q", ErrPasskeyDevelopmentRelyingParty, rp.RPID)
 		}
 	}
 	return nil

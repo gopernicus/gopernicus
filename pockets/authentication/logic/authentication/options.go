@@ -17,6 +17,7 @@ import (
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/identifier"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/oauthaccount"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/oauthstate"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/passkey"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/passwordless"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/passwordreset"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/securityevent"
@@ -24,6 +25,7 @@ import (
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/session"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/user"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/delivery"
+	"github.com/gopernicus/gopernicus/sdk/capabilities/authentication/webauthn"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/oauth"
 	"github.com/gopernicus/gopernicus/sdk/pkg/cryptids"
 )
@@ -121,6 +123,45 @@ type Repositories struct {
 	// ExternalSubjects backs the external identity mirror. It is required when
 	// WithExternal wires providers and unused otherwise.
 	ExternalSubjects externalsubject.Repository
+	// Passkeys stores registered passkeys. It is required when WithPasskeys wires
+	// a relying party and unused otherwise; it must be backed by the same
+	// transaction-capable adapter as Users and CredentialMutations, whose
+	// Snapshot and Apply cover passkeys.
+	Passkeys passkey.Repository
+}
+
+// PasskeyConfig enables passkeys over a WebAuthn relying party.
+type PasskeyConfig struct {
+	// RelyingParty runs the ceremonies. Nil leaves passkeys off.
+	RelyingParty webauthn.RelyingParty
+	// UserVerification is requested of every ceremony: preferred (the zero
+	// value; a presence-only passkey still signs in, at AAL1) or required.
+	// Discouraged is refused: it would leave no native AAL2 path.
+	UserVerification webauthn.Requirement
+	// MaxPerUser caps the passkeys one user may hold. Zero selects 10; above 25
+	// is refused.
+	MaxPerUser int
+}
+
+func (c PasskeyConfig) userVerification() webauthn.Requirement {
+	if c.UserVerification == "" {
+		return webauthn.Preferred
+	}
+	return c.UserVerification
+}
+
+func (c PasskeyConfig) maxPerUser() int {
+	if c.MaxPerUser == 0 {
+		return defaultPasskeysPerUser
+	}
+	return c.MaxPerUser
+}
+
+// WithPasskeys replaces the complete PasskeyConfig group, including zero values.
+func WithPasskeys(value PasskeyConfig) Option {
+	return func(c *constructorConfig) {
+		c.Passkey = value
+	}
 }
 
 // PasswordConfig selects password availability, validation, and login requirements.

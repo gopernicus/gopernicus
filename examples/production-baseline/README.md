@@ -149,7 +149,7 @@ key, the plaintext-connection WARN, one `append_only=unenforced` WARN per store
 `authentication: development-only external identity provider wired; production
 refuses it`, the maintenance registration line (`maintenance_runner=true
 archive_sink=none` until `AUDIT_ARCHIVE_DIR` is set), the MFA posture line
-(`auth: mfa posture mfa_required=admins gates=/auth/admin/users*`) and the authorization
+(`auth: mfa posture mfa_required=admins source=config gates=/auth/admin/users*`) and the authorization
 registration line with `audit_recording=true audit_reader=true
 decision_observer=true runtime_mode=development`.
 
@@ -556,7 +556,7 @@ WARN. An HTTP test serves the router on a loopback listener and proves the role
 routes' gate order (403 for a cross-site cookie request, 401 without a
 credential, 401 with the RFC 9470 challenge for a single-factor token) and that
 the erase route refuses a non-admin with 403 whatever the token's assurance.
-The positive control also reads the `mfa_required=admins
+The positive control also reads the `mfa_required=admins source=config
 gates=/auth/admin/users*` line.
 
 `pockets/retention/inbound/runner/runner_test.go` proves the runner: it starts
