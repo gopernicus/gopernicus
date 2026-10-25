@@ -156,6 +156,36 @@ func (p OriginPolicy) HasHTTPNamespace() bool {
 	return false
 }
 
+// Allows reports whether the policy admits one serialized origin, as a browser
+// writes it into the Origin header or a WebAuthn clientDataJSON. It applies the
+// same parsing and matching as AllowsRequest.
+func (p OriginPolicy) Allows(origin string) bool {
+	return p.allows(origin)
+}
+
+// Domains returns the host of every exact origin and the suffix of every
+// namespace rule, lowercased and deduplicated in configuration order (exact
+// origins first). An IPv6 host is returned without brackets. A consumer that
+// scopes credentials to a domain, such as a WebAuthn relying party ID, uses it
+// to refuse a policy admitting origins outside that domain. The zero value
+// returns nil.
+func (p OriginPolicy) Domains() []string {
+	var domains []string
+	for _, canonical := range p.exact {
+		o, _ := parseOrigin(canonical)
+		if !slices.Contains(domains, o.host) {
+			domains = append(domains, o.host)
+		}
+	}
+	for _, ns := range p.namespaces {
+		suffix := strings.TrimPrefix(ns.suffix, ".")
+		if !slices.Contains(domains, suffix) {
+			domains = append(domains, suffix)
+		}
+	}
+	return domains
+}
+
 func (p OriginPolicy) allows(value string) bool {
 	if len(p.exact) == 0 && len(p.namespaces) == 0 {
 		return false
