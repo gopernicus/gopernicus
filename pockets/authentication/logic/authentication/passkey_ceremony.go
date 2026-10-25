@@ -93,6 +93,16 @@ type PasskeyRegistrationInput struct {
 	Name      string
 }
 
+// PasskeyRegistrationOptions are a registration's per-ceremony requests.
+// UserVerification webauthn.Required raises the ceremony to required user
+// verification, so the authenticator must verify the user (a PIN or biometric)
+// and a response without it is refused; empty or webauthn.Preferred keeps
+// PasskeyConfig.UserVerification. A request never lowers the host's
+// requirement; any other value is sdk.ErrInvalidInput.
+type PasskeyRegistrationOptions struct {
+	UserVerification webauthn.Requirement
+}
+
 // PasskeySignInInput finishes a usernameless sign-in. Response is the
 // AuthenticationResponseJSON.
 type PasskeySignInInput struct {
@@ -151,9 +161,16 @@ func (s *Service) requirePasskeys() error {
 // carries the authorization to FinishPasskeyRegistration, with the tier it was
 // granted at and the owner's auth revision, both re-checked when the passkey is
 // stored. The options exclude the user's existing credentials and reuse their
-// user handle, or carry a fresh random one.
-func (s *Service) BeginPasskeyRegistration(ctx context.Context, sessionID, userID string) (PasskeyCeremony, error) {
+// user handle, or carry a fresh random one. A ceremony that requires user
+// verification (the host's PasskeyConfig.UserVerification or opts) leaves the
+// user's presence-only passkeys out of the exclude list, so the same
+// authenticator can replace one with a verified passkey.
+func (s *Service) BeginPasskeyRegistration(ctx context.Context, sessionID, userID string, opts ...PasskeyRegistrationOptions) (PasskeyCeremony, error) {
 	if err := s.requirePasskeys(); err != nil {
+		return PasskeyCeremony{}, err
+	}
+	uv, err := s.registrationUserVerification(opts)
+	if err != nil {
 		return PasskeyCeremony{}, err
 	}
 	owner, err := s.users.Get(ctx, userID)
@@ -185,13 +202,16 @@ func (s *Service) BeginPasskeyRegistration(ctx context.Context, sessionID, userI
 		}
 	}
 	for _, p := range existing {
+		if uv == webauthn.Required && !p.AAL2Capable() {
+			continue
+		}
 		exclude = append(exclude, p.CredentialID)
 	}
 	name, display := passkeyAccountNames(view)
 	started, err := s.relyingParty.BeginRegistration(ctx, webauthn.RegistrationStart{
 		User:             webauthn.User{Handle: handle, Name: name, DisplayName: display},
 		Exclude:          exclude,
-		UserVerification: s.passkeyUV,
+		UserVerification: uv,
 	})
 	if err != nil {
 		return PasskeyCeremony{}, err
@@ -199,6 +219,22 @@ func (s *Service) BeginPasskeyRegistration(ctx context.Context, sessionID, userI
 	return s.issuePasskeyCeremony(ctx, userID, challenge.PurposePasskeyRegistration, started,
 		passkeyBinding{State: started.State, SessionID: sessionID, UserHandle: handle, Tier: tier, AuthRevision: owner.AuthRevision},
 		withSubjectKey(passkeySessionSubject(sessionID)))
+}
+
+// registrationUserVerification is a registration ceremony's requirement: the
+// host's, raised to Required when a request asks for it and never lowered.
+func (s *Service) registrationUserVerification(opts []PasskeyRegistrationOptions) (webauthn.Requirement, error) {
+	uv := s.passkeyUV
+	for _, o := range opts {
+		switch o.UserVerification {
+		case "", webauthn.Preferred:
+		case webauthn.Required:
+			uv = webauthn.Required
+		default:
+			return "", fmt.Errorf("authentication: passkey registration user verification %q is not required or preferred: %w", o.UserVerification, sdk.ErrInvalidInput)
+		}
+	}
+	return uv, nil
 }
 
 // FinishPasskeyRegistration consumes the ceremony, checks that it belongs to the

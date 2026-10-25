@@ -332,7 +332,7 @@ func TestCSRFBootstrapReusesExistingToken(t *testing.T) {
 // ORIGIN ALLOWLIST is the control that makes a fixated token unusable (the
 // mutation must still come from an allowlisted origin — see
 // TestCSRFBootstrapRejectsDisallowedOrigin). If this test ever fails, the reuse
-// policy changed and the security note on currentCSRFToken must change with it.
+// policy changed and the security note on csrfCookieSpec.current must change with it.
 func TestCSRFBootstrapReusesForeignWellFormedToken(t *testing.T) {
 	h := newCSRFHandler(t)
 	sess := csrfLogin(t, h, "foreign@example.com")

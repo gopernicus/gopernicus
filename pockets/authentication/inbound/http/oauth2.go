@@ -119,7 +119,7 @@ func (h *handlers) oauth2Authorize(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	csrf, err := r.Cookie(csrfCookieName)
+	csrf, err := r.Cookie(h.mutation.csrf().cookie.name)
 	if err != nil || csrf.Value == "" || form.Get("csrf_token") == "" || subtle.ConstantTimeCompare([]byte(csrf.Value), []byte(form.Get("csrf_token"))) != 1 {
 		writeOAuth2Failure(w, http.StatusForbidden, "access_denied")
 		return

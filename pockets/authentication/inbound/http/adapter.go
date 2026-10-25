@@ -138,7 +138,7 @@ func New(service AuthenticationService, runtimeMode environment.Mode, opts ...Op
 		InviteCheck: cfg.InviteCheck, ResourceRule: cfg.ResourceRule, UserAdminCheck: cfg.UserAdminCheck, OAuth2: cfg.OAuth2,
 		Auth:        &routedService{AuthenticationService: cfg.Authentication, Adapter: auth},
 		Invitations: inv, ListStrategy: cfg.ListStrategy,
-		Mutation: MutationSecurity{AllowedOrigins: append([]string(nil), cfg.AllowedOrigins...), OriginPolicy: cfg.OriginPolicy, SessionCookieName: auth.SessionCookieName()},
+		Mutation: MutationSecurity{AllowedOrigins: append([]string(nil), cfg.AllowedOrigins...), OriginPolicy: cfg.OriginPolicy, SessionCookieName: auth.SessionCookieName(), csrfCookie: auth.csrfCookie},
 		Views:    views, HTMLPolicy: snapshotHTMLPolicy(cfg.HTMLPolicy), MachineGate: cfg.MachineGate,
 		RouteAuth: resolveBundledRouteAuth(cfg.RouteAuth, auth),
 		Eraser:    eraser,
@@ -147,6 +147,9 @@ func New(service AuthenticationService, runtimeMode environment.Mode, opts ...Op
 	}
 	if passkeyViews != nil {
 		auth.passkeyStepUpPath = passkeyStepUpPathFor(auth.browserLoginPath)
+	}
+	if !auth.csrfCookie.secure {
+		auth.logger.Warn("authentication: development CSRF cookie wired; the session cookie is not Secure, so the double-submit cookie drops the __Host- prefix and Secure — production refuses it", "csrf_cookie", auth.csrfCookie.name, "secure", false)
 	}
 	return auth, nil
 }

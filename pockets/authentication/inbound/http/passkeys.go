@@ -10,6 +10,7 @@ import (
 	authlogic "github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/passkey"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/user"
+	"github.com/gopernicus/gopernicus/sdk/capabilities/authentication/webauthn"
 	"github.com/gopernicus/gopernicus/sdk/pkg/web"
 )
 
@@ -27,6 +28,9 @@ var _ passkeyService = (*authlogic.Service)(nil)
 //     public_key is the inner options JSON parseCreationOptionsFromJSON /
 //     parseRequestOptionsFromJSON takes; registration answers 403 when the
 //     enrollment gate needs a step-up and 409 passkey_limit at the cap;
+//   - registration options also take an optional user_verification: "required"
+//     makes the ceremony require user verification, "preferred" or absent keeps
+//     the host's requirement (never lowering it), any other value is 400;
 //   - each finish takes {ceremony, credential} — registration also an optional
 //     name — where credential is the browser's PublicKeyCredential.toJSON(),
 //     decoded raw so its extra members pass the strict decoder;
@@ -44,7 +48,7 @@ var _ passkeyService = (*authlogic.Service)(nil)
 // grow a method; *authlogic.Service implements it.
 type passkeyService interface {
 	PasskeysEnabled() bool
-	BeginPasskeyRegistration(ctx context.Context, sessionID, userID string) (authlogic.PasskeyCeremony, error)
+	BeginPasskeyRegistration(ctx context.Context, sessionID, userID string, opts ...authlogic.PasskeyRegistrationOptions) (authlogic.PasskeyCeremony, error)
 	FinishPasskeyRegistration(ctx context.Context, in authlogic.PasskeyRegistrationInput) (passkey.Passkey, error)
 	BeginPasskeySignIn(ctx context.Context) (authlogic.PasskeyCeremony, error)
 	FinishPasskeySignIn(ctx context.Context, in authlogic.PasskeySignInInput) (authlogic.TokenPair, user.User, error)
@@ -60,6 +64,11 @@ type passkeyService interface {
 type passkeyOptionsResponse struct {
 	Ceremony  string          `json:"ceremony"`
 	PublicKey json.RawMessage `json:"public_key"`
+}
+
+// passkeyRegistrationOptionsRequest is the registration options body.
+type passkeyRegistrationOptionsRequest struct {
+	UserVerification webauthn.Requirement `json:"user_verification"`
 }
 
 // passkeyRegistrationRequest is the registration finish body.
@@ -146,14 +155,18 @@ func mountPasskeys(r pockets.RouteRegistrar, h *handlers, auth RouteAuthenticati
 }
 
 func (h *handlers) beginPasskeyRegistration(w http.ResponseWriter, r *http.Request) {
-	if !passkeyEmptyBody(w, r) {
+	if !requireJSON(w, r) {
+		return
+	}
+	var req passkeyRegistrationOptionsRequest
+	if !strictJSONBody(w, r, &req, maxPasskeyBodyBytes) {
 		return
 	}
 	userID, sessionID, ok := h.stepUpPrincipal(w, r)
 	if !ok {
 		return
 	}
-	ceremony, err := h.passkeys.BeginPasskeyRegistration(r.Context(), sessionID, userID)
+	ceremony, err := h.passkeys.BeginPasskeyRegistration(r.Context(), sessionID, userID, authlogic.PasskeyRegistrationOptions{UserVerification: req.UserVerification})
 	if err != nil {
 		respondPasskeyError(w, err)
 		return
