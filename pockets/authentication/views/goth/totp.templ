@@ -1,0 +1,257 @@
+package goth
+
+import (
+	authentication "github.com/gopernicus/gopernicus/pockets/authentication/inbound/http"
+	"github.com/gopernicus/gopernicus/ui/goth/components/forms"
+	"github.com/gopernicus/gopernicus/ui/goth/primitives"
+)
+
+// totpBody renders the authenticator-app manage page. Enrolled: its status, the
+// recovery-code count with the regenerate form (carrying the generation it read
+// as expected_generated_at) and the remove form, which signs out everywhere. A
+// pending setup: continue it, or cancel it without signing anyone out. Neither:
+// the set-up form.
+templ totpBody(m authentication.TOTPPage) {
+	@shell("Authenticator app", "") {
+		@message(m.PageContext)
+		if m.Actor != "" {
+			<p>Signed in as { m.Actor }.</p>
+		}
+		if m.Enrolled {
+			<section aria-labelledby="totp-heading" data-slot="account-section">
+				<h2 id="totp-heading">Your authenticator app</h2>
+				<p>An authenticator app is set up. Use a code from it when you need to confirm it's you.</p>
+				<p>
+					if m.EnrolledAt != "" {
+						Set up { m.EnrolledAt }.
+					}
+					{ totpLastUsedText(m.LastUsedAt) }
+				</p>
+			</section>
+			<section aria-labelledby="recovery-codes-heading" data-slot="account-section">
+				<h2 id="recovery-codes-heading">Recovery codes</h2>
+				<p data-slot="auth-recovery-codes-remaining">{ recoveryCodesRemainingText(m.RecoveryCodesRemaining) }</p>
+				<p>Generating new codes replaces your current ones.</p>
+				<form method="post" action={ templ.SafeURL(m.Links.RecoveryCodes) }>
+					@csrfField(m.PageContext)
+					if m.RecoveryCodesGeneratedAt != "" {
+						<input type="hidden" name="expected_generated_at" value={ m.RecoveryCodesGeneratedAt }/>
+					}
+					@forms.FormActions(forms.FormActionsProps{}) {
+						@primitives.Button(primitives.ButtonProps{Type: primitives.ButtonTypeSubmit, Variant: primitives.ButtonSecondary}) {
+							Generate new recovery codes
+						}
+					}
+				</form>
+			</section>
+			<section aria-labelledby="remove-totp-heading" data-slot="account-section">
+				<h2 id="remove-totp-heading">Remove your authenticator app</h2>
+				<form method="post" action={ templ.SafeURL(m.Links.Remove) }>
+					@csrfField(m.PageContext)
+					<p>Removing your authenticator app deletes your recovery codes and signs you out on every device.</p>
+					@forms.FormActions(forms.FormActionsProps{}) {
+						@primitives.Button(primitives.ButtonProps{Type: primitives.ButtonTypeSubmit, Variant: primitives.ButtonDestructive}) {
+							Remove authenticator app
+						}
+					}
+				</form>
+			</section>
+		} else if m.Pending {
+			<section aria-labelledby="totp-heading" data-slot="account-section">
+				<h2 id="totp-heading">Finish setting up</h2>
+				<p>You started setting up an authenticator app but haven't entered a code from it yet.</p>
+				<p><a href={ templ.SafeURL(totpEnrollPageHref(m.Links)) }>Continue setup</a></p>
+				<form method="post" action={ templ.SafeURL(m.Links.Remove) }>
+					@csrfField(m.PageContext)
+					<p>Cancelling setup doesn't sign you out.</p>
+					@forms.FormActions(forms.FormActionsProps{}) {
+						@primitives.Button(primitives.ButtonProps{Type: primitives.ButtonTypeSubmit, Variant: primitives.ButtonSecondary}) {
+							Cancel setup
+						}
+					}
+				</form>
+			</section>
+		} else {
+			<section aria-labelledby="totp-heading" data-slot="account-section">
+				<h2 id="totp-heading">Set up an authenticator app</h2>
+				<p>An authenticator app on your phone or computer makes a new six-digit code every 30 seconds. You can use a code to confirm it's you.</p>
+				<form method="post" action={ templ.SafeURL(m.Links.Enroll) }>
+					@csrfField(m.PageContext)
+					@forms.FormActions(forms.FormActionsProps{}) {
+						@primitives.Button(primitives.ButtonProps{Type: primitives.ButtonTypeSubmit}) {
+							Set up an authenticator app
+						}
+					}
+				</form>
+			</section>
+		}
+		<nav class="goth-auth-links" data-slot="auth-links">
+			<p><a href="/auth/account">Back to account security</a></p>
+		</nav>
+	}
+}
+
+// totpEnrollBody renders the enrollment page: the QR code when one was built,
+// the key in groups of four for manual entry, the otpauth:// link for an app on
+// this device, and the confirm form. A wrong code re-renders this page with the
+// same key.
+templ totpEnrollBody(m authentication.TOTPEnrollPage, qr qrImage, hasQR bool) {
+	@shell("Set up an authenticator app", "") {
+		@message(m.PageContext)
+		if hasQR {
+			<p>Scan this QR code with your authenticator app.</p>
+			@totpQR(qr)
+			<p>Can't scan it? Enter this key in your app instead:</p>
+		} else {
+			<p>Enter this key in your authenticator app:</p>
+		}
+		<p><code data-slot="auth-totp-secret">{ m.Secret }</code></p>
+		<p>
+			if m.Account != "" {
+				Account: { m.Account }.
+			}
+			Time-based, six digits, every 30 seconds.
+		</p>
+		if m.OTPAuthURI != "" {
+			<p><a href={ templ.SafeURL(m.OTPAuthURI) } data-slot="auth-totp-link">Open in an authenticator app on this device</a></p>
+		}
+		<form method="post" action={ templ.SafeURL(m.Links.Confirm) } autocomplete="off">
+			@csrfField(m.PageContext)
+			@forms.FormField(forms.FormFieldProps{Label: "Code from your app", For: "totp-code", Required: true, Error: fieldErrorText(m.PageContext, "code")}) {
+				@primitives.Input(primitives.InputProps{
+					Base:     primitives.Base{ID: "totp-code", Attributes: totpConfirmFieldAttrs("totp-code")},
+					Type:     primitives.InputText,
+					Name:     "code",
+					Required: true,
+				})
+			}
+			@forms.FormActions(forms.FormActionsProps{}) {
+				@primitives.Button(primitives.ButtonProps{Type: primitives.ButtonTypeSubmit}) {
+					Turn on
+				}
+			}
+		</form>
+		if m.ExpiresAt != "" {
+			@primitives.Typography(primitives.TypographyProps{Variant: primitives.TypographyMuted}) {
+				Finish before { m.ExpiresAt }, or start again.
+			}
+		}
+		<nav class="goth-auth-links" data-slot="auth-links">
+			<p><a href={ templ.SafeURL(m.Links.Manage) }>Back to authenticator app</a></p>
+		</nav>
+	}
+}
+
+// totpQR draws the QR code as one SVG path with presentation attributes only:
+// black modules on a white square that includes the quiet zone, whatever the
+// page theme, since scanners need the contrast. No script, no data: URL.
+templ totpQR(qr qrImage) {
+	<svg
+		xmlns="http://www.w3.org/2000/svg"
+		viewBox={ qr.ViewBox }
+		width={ qr.Pixels }
+		height={ qr.Pixels }
+		shape-rendering="crispEdges"
+		role="img"
+		aria-label="QR code to set up your authenticator app"
+		data-slot="auth-totp-qr"
+	>
+		<rect width="100%" height="100%" fill="#fff"></rect>
+		<path d={ qr.Path } fill="#000"></path>
+	</svg>
+}
+
+// recoveryCodesBody shows a fresh recovery-code set once, with the instruction
+// to save it. Continue is the "I saved these" link.
+templ recoveryCodesBody(m authentication.RecoveryCodesPage) {
+	@shell("Save your recovery codes", "") {
+		@message(m.PageContext)
+		<p>Save these codes somewhere safe, like a password manager. Each code works once, when you can't use your authenticator app. You won't see them again.</p>
+		<ol data-slot="auth-recovery-codes">
+			for _, c := range m.Codes {
+				<li><code>{ c }</code></li>
+			}
+		</ol>
+		if m.GeneratedAt != "" {
+			@primitives.Typography(primitives.TypographyProps{Variant: primitives.TypographyMuted}) {
+				Generated { m.GeneratedAt }. Any older recovery codes no longer work.
+			}
+		}
+		if m.Continue != "" {
+			<p><a href={ templ.SafeURL(m.Continue) } data-slot="auth-recovery-codes-saved">I saved these codes</a></p>
+		}
+	}
+}
+
+// mfaStepUpBody renders the "Confirm it's you" chooser: the passkey control
+// first when offered, then the authenticator-app form, then the recovery-code
+// form, each carrying return_to; otherwise the setup links.
+templ mfaStepUpBody(m authentication.MFAStepUpPage) {
+	@shell("Confirm it's you", "") {
+		@message(m.PageContext)
+		@errorSummary(m.PageContext)
+		<p>To continue, confirm it's you with a second step.</p>
+		if m.OfferPasskey && m.Passkeys != nil {
+			<section aria-labelledby="mfa-passkey-heading" data-slot="account-section">
+				<h2 id="mfa-passkey-heading">Passkey</h2>
+				@passkeyControl(passkeyControlProps{Mode: "stepup", OptionsURL: m.Passkeys.StepUpOptions, FinishURL: m.Passkeys.StepUp, CSRFToken: m.CSRFToken, ReturnTo: m.ReturnTo, Label: "Use a passkey"})
+				@passkeyUnsupported("This browser doesn't support passkeys.")
+			</section>
+		}
+		if m.OfferTOTP {
+			<section aria-labelledby="mfa-totp-heading" data-slot="account-section">
+				<h2 id="mfa-totp-heading">Authenticator app</h2>
+				<form method="post" action={ templ.SafeURL(m.TOTP.StepUp) } autocomplete="off">
+					@csrfField(m.PageContext)
+					@returnToField(m.PageContext)
+					@forms.FormField(forms.FormFieldProps{Label: "Code from your authenticator app", For: "totp-code", Required: true, Error: fieldErrorText(m.PageContext, "code")}) {
+						@primitives.Input(primitives.InputProps{
+							Base:     primitives.Base{ID: "totp-code", Attributes: codeFieldAttrs("totp-code")},
+							Type:     primitives.InputText,
+							Name:     "code",
+							Required: true,
+						})
+					}
+					@forms.FormActions(forms.FormActionsProps{}) {
+						@primitives.Button(primitives.ButtonProps{Type: primitives.ButtonTypeSubmit}) {
+							Confirm with code
+						}
+					}
+				</form>
+			</section>
+		}
+		if m.OfferRecoveryCode {
+			<section aria-labelledby="mfa-recovery-heading" data-slot="account-section">
+				<h2 id="mfa-recovery-heading">Recovery code</h2>
+				<p>Can't use your app? Enter one of your recovery codes. Each works once.</p>
+				<form method="post" action={ templ.SafeURL(m.TOTP.RecoveryCodeStepUp) } autocomplete="off">
+					@csrfField(m.PageContext)
+					@returnToField(m.PageContext)
+					@forms.FormField(forms.FormFieldProps{Label: "Recovery code", For: "recovery-code", Required: true}) {
+						@primitives.Input(primitives.InputProps{
+							Base:     primitives.Base{ID: "recovery-code", Attributes: recoveryCodeFieldAttrs("recovery-code")},
+							Type:     primitives.InputText,
+							Name:     "code",
+							Required: true,
+						})
+					}
+					@forms.FormActions(forms.FormActionsProps{}) {
+						@primitives.Button(primitives.ButtonProps{Type: primitives.ButtonTypeSubmit, Variant: primitives.ButtonSecondary}) {
+							Use recovery code
+						}
+					}
+				</form>
+			</section>
+		}
+		if (m.OfferAddPasskey && m.Passkeys != nil && m.Passkeys.Manage != "") || (m.OfferSetUpTOTP && m.TOTP.Manage != "") {
+			<nav class="goth-auth-links" data-slot="auth-links" aria-label="Add a second step">
+				if m.OfferAddPasskey && m.Passkeys != nil && m.Passkeys.Manage != "" {
+					<p><a href={ templ.SafeURL(chooserAddPasskeyHref(*m.Passkeys, m.TOTP, m.ReturnTo)) }>Add a passkey</a></p>
+				}
+				if m.OfferSetUpTOTP && m.TOTP.Manage != "" {
+					<p><a href={ templ.SafeURL(m.TOTP.Manage) }>Set up an authenticator app</a></p>
+				}
+			</nav>
+		}
+	}
+}

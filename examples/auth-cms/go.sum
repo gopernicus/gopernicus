@@ -41,6 +41,8 @@ github.com/gopernicus/gopernicus/integrations/datastores/pgxdb v0.14.0 h1:UuEszj
 github.com/gopernicus/gopernicus/integrations/datastores/pgxdb v0.14.0/go.mod h1:VoUomlLH7YG7esv+SCSKScjY0C8R3BqX77wJnbn/3SY=
 github.com/gopernicus/gopernicus/integrations/datastores/turso v0.9.0 h1:5rDRjVuD+HeozwRjtkPT0B8xQVBVx8EjifLgZTpdC/E=
 github.com/gopernicus/gopernicus/integrations/datastores/turso v0.9.0/go.mod h1:nHHL9uIw5nQa0NpWMwoR58JU5ibaFjtY6o4EPxIojgk=
+github.com/gopernicus/gopernicus/integrations/encoding/rsc-qr v0.1.0 h1:WA5mUVIkppR8UxtA2zIxjZ4mySs6WQ3yw9I2/La66tg=
+github.com/gopernicus/gopernicus/integrations/encoding/rsc-qr v0.1.0/go.mod h1:V8sMoFgNSoKEEC7C0yJKIeGJKNSbm39Ay8efD1XygPw=
 github.com/gopernicus/gopernicus/pockets v0.1.0 h1:2WcybbfPw1km00DmG37CekPbxYmObyyj3T1Ec0eFSRY=
 github.com/gopernicus/gopernicus/pockets v0.1.0/go.mod h1:A2H/Tl9Pn2v2mFLOgkCQngMRFkMN10E1MEzGCQICsEw=
 github.com/gopernicus/gopernicus/pockets/authentication v0.27.1 h1:v1ij2H3NcQtVHyUP+6NDm+tFZT0oqAf278KRbVKiBFU=
@@ -121,3 +123,5 @@ modernc.org/memory v1.11.0 h1:o4QC8aMQzmcwCK3t3Ux/ZHmwFPzE6hf2Y5LbkRs+hbI=
 modernc.org/memory v1.11.0/go.mod h1:/JP4VbVC+K5sU2wZi9bHoq2MAkCnrt2r98UGeSK7Mjw=
 modernc.org/sqlite v1.52.0 h1:p4dhYh2tXZCiyaqHwRVJDjIGKWyXayiQpThxgDzJaxo=
 modernc.org/sqlite v1.52.0/go.mod h1:tcNzv5p84E0skkmJn038y+hWJbLQXQqEnQfeh5r2JLM=
+rsc.io/qr v0.2.0 h1:6vBLea5/NRMVTz8V66gipeLycZMl/+UlFmk8DvqQ6WY=
+rsc.io/qr v0.2.0/go.mod h1:IF+uZjkb9fqyeF/4tlBoynqmQxUoPfWEKh921coOuXs=

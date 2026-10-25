@@ -77,6 +77,29 @@ func codeFieldAttrs(controlID string) templ.Attributes {
 	}
 }
 
+// totpConfirmFieldAttrs is the enrollment confirm input: digits, but no
+// autofill — a password manager would offer a code for a different entry.
+func totpConfirmFieldAttrs(controlID string) templ.Attributes {
+	return templ.Attributes{
+		"inputmode":        "numeric",
+		"autocomplete":     "off",
+		"autocapitalize":   "none",
+		"spellcheck":       "false",
+		"aria-describedby": forms.ErrorID(controlID),
+	}
+}
+
+// recoveryCodeFieldAttrs is the recovery-code input: letters and digits, so no
+// numeric input mode, no autofill, no capitalization or spellcheck.
+func recoveryCodeFieldAttrs(controlID string) templ.Attributes {
+	return templ.Attributes{
+		"autocomplete":     "off",
+		"autocapitalize":   "none",
+		"spellcheck":       "false",
+		"aria-describedby": forms.ErrorID(controlID),
+	}
+}
+
 // autocompleteAttrs is the input attribute set for a field that only needs an
 // autocomplete token and its error wiring (the display-name/password fields).
 func autocompleteAttrs(token, controlID string) templ.Attributes {

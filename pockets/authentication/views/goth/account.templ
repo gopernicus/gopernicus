@@ -39,6 +39,12 @@ templ accountSecurityBody(m authentication.AccountSecurityPage) {
 				<p><a href={ templ.SafeURL(m.Passkeys.Manage) }>Manage passkeys</a></p>
 			</section>
 		}
+		if m.TOTP != nil && m.TOTP.Manage != "" {
+			<section aria-labelledby="totp-heading" data-slot="account-section">
+				<h2 id="totp-heading">Authenticator app</h2>
+				<p><a href={ templ.SafeURL(m.TOTP.Manage) }>Manage authenticator app and recovery codes</a></p>
+			</section>
+		}
 		<section aria-labelledby="identifiers-heading" data-slot="account-section">
 			<h2 id="identifiers-heading">Identifiers</h2>
 			if len(m.Identifiers) == 0 {

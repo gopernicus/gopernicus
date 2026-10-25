@@ -2404,6 +2404,59 @@ code inputs take `autocomplete="off"`, `autocapitalize="none"` and no numeric
 input mode; the server folds case, hyphens and spaces. Back/forward cache may
 show a no-store page on Back on the same device.
 
+### Custom TOTP views
+
+views/goth renders the four pages and links them from the account page, the
+generic step-up page (`Use an authenticator app or a recovery code`, to the
+chooser) and the passkey step-up page (`Use an authenticator app instead`).
+Construct it `authgoth.New(bundle, authgoth.WithQR(rscqr.Modules))`
+(`integrations/encoding/rsc-qr`; the views module imports no encoder) to draw
+the QR code; without `WithQR`, or when the encoder refuses the URI, the page
+shows the key and the `otpauth://` link only. The QR is one inline
+`<svg role="img" aria-label="…">` holding a white `<rect>` and one black
+`<path>` of the modules, with the four-module quiet zone drawn and an edge of
+at least 200 px — presentation attributes only, black on white in every theme,
+no `data:` image (the CSP's `default-src 'none'` refuses one), no script.
+
+**No TOTP control needs JavaScript**: each is a plain form posting the
+double-submit `csrf_token`, dispatched to the form arm by Content-Type. A host
+that overrides a page renders the same fields:
+
+```html
+<!-- TOTPPage (manage) -->
+<form method="post" action="{{.Links.Enroll}}">…csrf_token…</form>           <!-- 303 to the enroll page -->
+<form method="post" action="{{.Links.RecoveryCodes}}">…csrf_token…
+  <input type="hidden" name="expected_generated_at" value="{{.RecoveryCodesGeneratedAt}}"></form>
+<form method="post" action="{{.Links.Remove}}">…csrf_token…</form>           <!-- remove, or cancel a pending setup -->
+<a href="{{.Links.Manage}}/enroll">Continue setup</a>                       <!-- while .Pending -->
+
+<!-- TOTPEnrollPage -->
+<code>{{.Secret}}</code>  <a href="{{.OTPAuthURI}}">Open in an authenticator app</a>
+<form method="post" action="{{.Links.Confirm}}">…csrf_token…
+  <input name="code" inputmode="numeric" autocomplete="off" autocapitalize="none" spellcheck="false" required></form>
+
+<!-- RecoveryCodesPage: list {{.Codes}} once, with a "save these" instruction -->
+<a href="{{.Continue}}">I saved these codes</a>
+
+<!-- MFAStepUpPage (the chooser), each form only when its Offer* is true -->
+<form method="post" action="{{.TOTP.StepUp}}">…csrf_token…
+  <input type="hidden" name="return_to" value="{{.ReturnTo}}">
+  <input name="code" inputmode="numeric" autocomplete="one-time-code" required></form>
+<form method="post" action="{{.TOTP.RecoveryCodeStepUp}}">…csrf_token…
+  <input type="hidden" name="return_to" value="{{.ReturnTo}}">
+  <input name="code" autocomplete="off" autocapitalize="none" spellcheck="false" required></form>
+```
+
+- The removal copy says it signs the user out on every device; cancelling a
+  pending setup (the same form while `.Pending`) signs nobody out.
+- The chooser's passkey control is the `stepup` passkey markup (Custom views,
+  above), loading `passkey.js` only when `OfferPasskey` is true; the
+  `OfferAddPasskey` / `OfferSetUpTOTP` links go to `Passkeys.Manage` and
+  `TOTP.Manage`.
+- `html/template` rewrites an `otpauth:` URL to `#ZgotmplZ`: convert
+  `OTPAuthURI` to `template.URL` in Go before executing (the pocket builds it;
+  it is never user input).
+
 ### MFAConfig.Methods and the methods claim
 
 `MFAConfig{Methods: []MFAMethod{…}}` restricts which AAL2 sources every MFA gate

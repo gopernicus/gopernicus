@@ -215,8 +215,8 @@ func TestPasskeysThroughTheHost(t *testing.T) {
 		t.Fatalf("AAL1 /demo/mfa = %d, want 401", status)
 	}
 	if resp, _ := alice.do("GET", "/demo/mfa/page", "", nil); resp.StatusCode != http.StatusSeeOther ||
-		resp.Header.Get("Location") != "/auth/step-up/passkey?return_to=%2Fdemo%2Fmfa%2Fpage" {
-		t.Fatalf("AAL1 /demo/mfa/page = %d %q, want the 303 to the passkey step-up page", resp.StatusCode, resp.Header.Get("Location"))
+		resp.Header.Get("Location") != "/auth/step-up/mfa?return_to=%2Fdemo%2Fmfa%2Fpage" {
+		t.Fatalf("AAL1 /demo/mfa/page = %d %q, want the 303 to the chooser (TOTP views are wired)", resp.StatusCode, resp.Header.Get("Location"))
 	}
 
 	// (2) The first passkey bootstraps from the fresh login; a notice is mailed.

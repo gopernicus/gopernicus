@@ -46,10 +46,11 @@ func registerDemoRoutes(router *web.WebHandler, authentication *authenticationht
 
 // registerMFADemoRoutes mounts the two routes that require AAL2 of a person: GET
 // /demo/mfa for API clients (an AAL1 session gets the RFC 9470 401) and GET
-// /demo/mfa/page for the browser (an AAL1 cookie goes to the passkey step-up
-// page when its views are wired, else the same 401). Each answers the
-// credential's assurance. With passkeys on, a user-verified passkey sign-in or
-// step-up reaches them.
+// /demo/mfa/page for the browser (an AAL1 cookie goes to the "Confirm it's you"
+// chooser when the TOTP views are wired, else the passkey step-up page, else the
+// same 401). Each answers the credential's assurance. A user-verified passkey
+// sign-in or step-up, or an authenticator-app or recovery-code step-up, reaches
+// them.
 func registerMFADemoRoutes(router *web.WebHandler, authentication *authenticationhttp.Adapter, credentials *authlogic.Service) {
 	router.Handle("GET", "/demo/mfa", demoAssurance(credentials), authentication.RequirePrincipal(authenticationhttp.RequireMFA()))
 	router.Handle("GET", "/demo/mfa/page", demoAssurance(credentials), authentication.RequirePrincipal(

@@ -71,6 +71,9 @@ templ stepUpBody(m authentication.StepUpPage) {
 			</form>
 		}
 		@passkeyStepUpOption(m)
+		if m.TOTP != nil && m.TOTP.ChooserPage != "" {
+			<p><a href={ templ.SafeURL(chooserHref(*m.TOTP, m.ReturnTo)) }>Use an authenticator app or a recovery code</a></p>
+		}
 	}
 }
 
