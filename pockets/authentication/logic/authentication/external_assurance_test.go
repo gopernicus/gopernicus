@@ -97,7 +97,7 @@ func TestProviderMFAFloorPrecedesProvisioning(t *testing.T) {
 		t.Fatalf("mfa_required_denied rows = %d, want 2", len(denials))
 	}
 	requireMFADenial(t, denials[1:], "", map[string]any{
-		"gate": "provider", "credential": "external_token", "provider": "alpha", "assurance": "aal1", "required": "aal2",
+		"gate": "provider", "credential": "external_token", "provider": "alpha", "assurance": "aal1", "required": "aal2", "reason": "assurance", "method": "idp",
 	})
 	assertNoSecretInDetails(t, h.events.recorded(), "pwd", "s1@example.test", "s-new")
 
@@ -125,7 +125,7 @@ func TestMFADenialDetailsAreBounded(t *testing.T) {
 		}},
 	})
 	requireMFADenial(t, h.events.recorded(), "", map[string]any{
-		"gate": "unknown", "credential": "unknown", "assurance": "unknown", "required": "aal2",
+		"gate": "unknown", "credential": "unknown", "assurance": "unknown", "required": "aal2", "reason": "assurance", "method": "none",
 	})
 	h.engine.RecordMFADenied(context.Background(), MFADenial{
 		Gate:       MFAGateRoute,
@@ -192,10 +192,10 @@ func TestServiceRecordsMFADenialWithProvider(t *testing.T) {
 		t.Fatalf("rows = %+v, want 2", rows)
 	}
 	requireMFADenial(t, rows[:1], "u1", map[string]any{
-		"gate": "admin", "credential": "external_token", "provider": "alpha", "assurance": "aal1", "required": "aal2",
+		"gate": "admin", "credential": "external_token", "provider": "alpha", "assurance": "aal1", "required": "aal2", "reason": "assurance", "method": "idp",
 	})
 	requireMFADenial(t, rows[1:], "u2", map[string]any{
-		"gate": "admin", "credential": "access_token", "assurance": "unknown", "required": "aal2",
+		"gate": "admin", "credential": "access_token", "assurance": "unknown", "required": "aal2", "reason": "assurance", "method": "none",
 	})
 }
 

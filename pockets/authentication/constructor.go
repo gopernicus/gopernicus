@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/gopernicus/gopernicus/sdk/pkg/cryptids"
@@ -117,6 +118,9 @@ func New(repos Repositories, signer cryptids.JWTSigner, runtimeMode environment.
 		return nil, err
 	}
 	if err := validatePasskeyConfig(repos, cfg); err != nil {
+		return nil, err
+	}
+	if err := validateTOTPConfig(repos, cfg); err != nil {
 		return nil, err
 	}
 	if (repos.ServiceAccounts == nil) != (repos.APIKeys == nil) {
@@ -564,6 +568,12 @@ func New(repos Repositories, signer cryptids.JWTSigner, runtimeMode environment.
 	if cfg.Passkey.RelyingParty != nil {
 		logicOptions = append(logicOptions, authlogic.WithPasskeys(authlogic.PasskeyConfig{RelyingParty: cfg.Passkey.RelyingParty, UserVerification: cfg.Passkey.UserVerification, MaxPerUser: cfg.Passkey.MaxPerUser}))
 	}
+	if len(cfg.MFAMethods) > 0 {
+		logicOptions = append(logicOptions, authlogic.WithMFAMethods(cfg.MFAMethods...))
+	}
+	if cfg.TOTP.Encrypter != nil {
+		logicOptions = append(logicOptions, authlogic.WithTOTP(authlogic.TOTPConfig{Encrypter: cfg.TOTP.Encrypter, Issuer: cfg.TOTP.Issuer}))
+	}
 	authComponents, err := authlogic.New(authlogic.Repositories{
 		Users: repos.Users, Identifiers: repos.Identifiers, Passwords: repos.Passwords, Sessions: repos.Sessions, SessionManagement: repos.SessionManagement,
 		UserAdmin: repos.UserAdmin, UserErasure: repos.UserErasure, PasswordlessRedeem: repos.Passwordless, ActiveSessions: repos.ActiveSessions,
@@ -571,7 +581,7 @@ func New(repos Repositories, signer cryptids.JWTSigner, runtimeMode environment.
 		CredentialMutations: repos.CredentialMutations, AuthenticationGrants: repos.AuthenticationGrants,
 		SecurityEvents: repos.SecurityEvents, OAuthAccounts: repos.OAuthAccounts, OAuthStates: repos.OAuthStates,
 		ServiceAccounts: repos.ServiceAccounts, APIKeys: repos.APIKeys, ExternalSubjects: repos.ExternalSubjects,
-		Passkeys: repos.Passkeys,
+		Passkeys: repos.Passkeys, TOTP: repos.TOTP,
 	}, cfg.TokenSigner, cfg.RuntimeMode, limiter, logicOptions...)
 	if err != nil {
 		return nil, err
@@ -657,6 +667,12 @@ func New(repos Repositories, signer cryptids.JWTSigner, runtimeMode environment.
 	if cfg.Passkey.Views != nil {
 		httpOptions = append(httpOptions, inbound.WithPasskeyViews(cfg.Passkey.Views))
 	}
+	if cfg.TOTP.Views != nil {
+		httpOptions = append(httpOptions, inbound.WithTOTPViews(cfg.TOTP.Views))
+	}
+	if len(cfg.MFAMethods) > 0 {
+		httpOptions = append(httpOptions, inbound.WithMFAMethods(cfg.MFAMethods...))
+	}
 	adapter, err := inbound.New(authService, cfg.RuntimeMode, httpOptions...)
 	if err != nil {
 		return nil, err
@@ -716,21 +732,35 @@ func requireExternalMFA(external authlogic.ExternalConfig, required MFARequireme
 }
 
 // logMFAPosture logs the one boot line naming the resolved MFAConfig.Required,
-// where it came from (config, or default for the resolved zero value) and what
-// it gates: /auth/admin/users* under admins — and the machine lifecycle routes
-// beside passkeys — every external token under all.
+// where it came from (config, or default for the resolved zero value), what it
+// gates — /auth/admin/users* under admins, and the machine lifecycle routes
+// beside passkeys or TOTP; every external token under all — the wired AAL2
+// sources and the MFAConfig.Methods restriction (any when empty).
 func logMFAPosture(cfg constructorConfig, log *slog.Logger) {
 	required, gates := string(MFARequiredNone), "none"
 	switch cfg.MFARequired {
 	case MFARequiredAdmins:
 		required, gates = string(MFARequiredAdmins), "/auth/admin/users*"
-		if cfg.Passkey.RelyingParty != nil {
+		if nativeMFA(cfg) {
 			gates += ",machine_lifecycle"
 		}
 	case MFARequiredAll:
 		required, gates = string(MFARequiredAll), "external_tokens"
 	}
-	log.Info("auth: mfa posture", "mfa_required", required, "source", cfg.mfaRequiredSource, "gates", gates)
+	sources, methods := joinMFAMethods(mfaSources(cfg), "none"), joinMFAMethods(cfg.MFAMethods, "any")
+	log.Info("auth: mfa posture", "mfa_required", required, "source", cfg.mfaRequiredSource, "gates", gates, "sources", sources, "methods", methods)
+}
+
+// joinMFAMethods renders methods comma-separated, or empty when there are none.
+func joinMFAMethods(methods []MFAMethod, empty string) string {
+	if len(methods) == 0 {
+		return empty
+	}
+	parts := make([]string, 0, len(methods))
+	for _, m := range methods {
+		parts = append(parts, string(m))
+	}
+	return strings.Join(parts, ",")
 }
 
 // validateInvitationPolicy enforces the invitation-policy matrix. A host policy

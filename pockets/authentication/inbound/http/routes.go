@@ -42,8 +42,12 @@ type handlers struct {
 	// passkeyViews renders the passkey pages, nil leaving the routes JSON-only.
 	passkeys     passkeyService
 	passkeyViews PasskeyViews
+	// totp is the TOTP capability, nil when the service has none wired;
+	// totpViews renders the TOTP pages, nil leaving the routes JSON-only.
+	totp      totpService
+	totpViews TOTPViews
 	// machineMFA requires AAL2 on the machine lifecycle routes after the host's
-	// MachineGate (MFAConfig admins beside passkeys).
+	// MachineGate (MFAConfig admins beside passkeys or TOTP).
 	machineMFA bool
 	// htmlPolicy is the optional, technology-neutral HTML resource policy (design
 	// §9.2, GOTH-0.4) writeHTMLSecurity applies to every HTML page and redirect. Nil
@@ -109,6 +113,11 @@ type mountDeps struct {
 	// PasskeyViews renders the passkey pages; nil → the passkey routes are
 	// JSON-only.
 	PasskeyViews PasskeyViews
+	// TOTP is the service's TOTP capability when it implements one and has TOTP
+	// wired; nil → none of the TOTP routes mount.
+	TOTP totpService
+	// TOTPViews renders the TOTP pages; nil → the TOTP routes are JSON-only.
+	TOTPViews TOTPViews
 }
 
 // RouteAuthentication is the authenticator each bundled route group runs behind
@@ -238,7 +247,8 @@ func mount(r pockets.RouteRegistrar, d mountDeps) {
 	limits := d.RouteLimits.withDefaults()
 	r = clientInfoRegistrar{inner: noStoreRegistrar{inner: r}, proxies: d.Proxies}
 	h := &handlers{oauth2: d.OAuth2, inviteCheck: d.InviteCheck, resourceRule: d.ResourceRule, userAdminCheck: d.UserAdminCheck, adminMFA: d.AdministrationMFA, eraser: d.Eraser, svc: svc, inv: inv, listStrategy: d.ListStrategy, mutation: d.Mutation, views: views, htmlPolicy: d.HTMLPolicy,
-		passkeys: d.Passkeys, passkeyViews: d.PasskeyViews, machineMFA: d.AdministrationMFA && d.Passkeys != nil}
+		passkeys: d.Passkeys, passkeyViews: d.PasskeyViews, totp: d.TOTP, totpViews: d.TOTPViews,
+		machineMFA: d.AdministrationMFA && (d.Passkeys != nil || d.TOTP != nil)}
 	if d.OAuth2 != nil {
 		mountOAuth2(r, h)
 		mountSessionManagement(r, h)
@@ -394,6 +404,9 @@ func mount(r pockets.RouteRegistrar, d mountDeps) {
 		if d.Passkeys != nil {
 			r.Handle("POST", "/auth/admin/users/{id}/passkeys/reset", h.adminResetPasskeys, auth.UserAdministration, browserSafe)
 		}
+		if d.TOTP != nil {
+			r.Handle("POST", "/auth/admin/users/{id}/totp/reset", h.adminResetTOTP, auth.UserAdministration, browserSafe)
+		}
 	}
 
 	// Passkey routes (SOC 2 S4b) mount only when the service wires a relying
@@ -402,6 +415,15 @@ func mount(r pockets.RouteRegistrar, d mountDeps) {
 		mountPasskeys(r, h, auth, browserSafe, requireBrowserSafeOrigin(h.mutation.csrf()), svc.rateLimitByIP("passkey", limits.Passkey))
 		if d.PasskeyViews != nil {
 			mountPasskeyHTML(r, h, auth.BrowserAccount, browserSafeForm)
+		}
+	}
+
+	// TOTP routes (SOC 2 S4c) mount only when the service wires TOTP
+	// (deny-by-absence); the pages additionally need TOTPViews.
+	if d.TOTP != nil {
+		mountTOTP(r, h, auth, browserSafe, browserSafeForm)
+		if d.TOTPViews != nil {
+			mountTOTPHTML(r, h, auth.BrowserAccount, browserSafeForm)
 		}
 	}
 

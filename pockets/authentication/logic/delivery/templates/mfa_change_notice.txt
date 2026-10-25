@@ -1,0 +1,5 @@
+{{if eq .Change "totp_enrolled"}}An authenticator app was just set up for two-step verification on your account.{{else if eq .Change "totp_removed"}}The authenticator app was just removed from your account, and every session was signed out.{{else if eq .Change "totp_reset"}}An administrator just removed the authenticator app from your account.{{else if eq .Change "recovery_codes_regenerated"}}New recovery codes were just generated for your account; the old ones no longer work.{{else}}A recovery code was just used to confirm a sign-in on your account.{{end}}
+
+If you made this change, no action is needed.
+
+If you did not, secure your account immediately — someone may have access to it.

@@ -49,9 +49,27 @@ var (
 // MinAssurance is the least assurance level a recorded login must meet for the
 // operation (zero → AAL1). A policy above AAL1 requires a producer that actually
 // earns that assurance; ordinary password/email/SMS step-up cannot manufacture it.
+//
+// Sources, when set beside an AAL2 MinAssurance, restricts which AAL2 sources the
+// proving authentication may come from (MFAConfig.Methods): the session's or
+// grant's method kinds must name an allowed one (MFASourceAllowed).
 type RecentAuthPolicy struct {
 	MaxAge       time.Duration
 	MinAssurance session.AssuranceLevel
+	Sources      []MFAMethod
+}
+
+// admitsMethods reports whether proof carried by methods satisfies the policy's
+// Sources.
+func (p RecentAuthPolicy) admitsMethods(methods []session.AuthenticationMethod) bool {
+	if len(p.Sources) == 0 {
+		return true
+	}
+	cred := Credential{Kind: CredentialAccessToken}
+	for _, m := range methods {
+		cred.Methods = append(cred.Methods, m.Kind)
+	}
+	return MFASourceAllowed(cred, p.Sources)
 }
 
 func (p RecentAuthPolicy) maxAge() time.Duration {
@@ -154,7 +172,7 @@ func (s *Service) RequireRecentAuthentication(ctx context.Context, sessionID, us
 		return authgrant.Grant{}, err
 	}
 	meta := sess.Authentication
-	if requirement.Accepts(meta.AuthenticatedAt, meta.Assurance, now) {
+	if requirement.Accepts(meta.AuthenticatedAt, meta.Assurance, now) && policy.admitsMethods(meta.Methods) {
 		return authgrant.Grant{
 			SessionID: sessionID, UserID: userID, Purpose: purpose,
 			ContextDigest: requirement.ContextDigest,
@@ -165,6 +183,9 @@ func (s *Service) RequireRecentAuthentication(ctx context.Context, sessionID, us
 	}
 	g, err := s.authGrants.Consume(ctx, requirement, now)
 	if errors.Is(err, sdk.ErrExpired) || errors.Is(err, sdk.ErrNotFound) || errors.Is(err, sdk.ErrUnauthorized) {
+		return authgrant.Grant{}, ErrStepUpRequired
+	}
+	if err == nil && !policy.admitsMethods(g.Methods) {
 		return authgrant.Grant{}, ErrStepUpRequired
 	}
 	return g, err

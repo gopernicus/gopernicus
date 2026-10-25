@@ -287,7 +287,7 @@ func (e *ExternalAuthenticator) Verify(ctx context.Context, raw string, transpor
 	if p.RequireMFA && !assurance.AtLeast(session.AssuranceAAL2) {
 		e.events.Record(ctx, mfaDenialEvent(MFADenial{
 			Gate:       MFAGateProvider,
-			Credential: Credential{Kind: CredentialExternalToken, Transport: transport, Assurance: assurance},
+			Credential: Credential{Kind: CredentialExternalToken, Transport: transport, Assurance: assurance, Methods: []session.MethodKind{session.MethodExternal}},
 		}, p.Name))
 		return Principal{}, Credential{}, ErrMFARequired
 	}
@@ -296,7 +296,7 @@ func (e *ExternalAuthenticator) Verify(ctx context.Context, raw string, transpor
 		return Principal{}, Credential{}, err
 	}
 	e.recordLogin(ctx, p, userID, raw, identity.ExpiresAt, assurance)
-	return Principal{Type: PrincipalUser, ID: userID}, Credential{Kind: CredentialExternalToken, Transport: transport, Identity: identity.Clone(), Assurance: assurance}, nil
+	return Principal{Type: PrincipalUser, ID: userID}, Credential{Kind: CredentialExternalToken, Transport: transport, Identity: identity.Clone(), Assurance: assurance, Methods: []session.MethodKind{session.MethodExternal}}, nil
 }
 
 // recordLogin records external_login once per token per login-record cache,

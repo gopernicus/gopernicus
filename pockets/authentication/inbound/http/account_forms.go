@@ -38,6 +38,9 @@ const (
 	// or contact value is involved.
 	accountPolicyMsg = "That change would leave your account without a way to sign in, so it was not applied."
 
+	// secondFactorLockedMsg is the copy for a second-factor lockout.
+	secondFactorLockedMsg = "Too many incorrect codes. Wait a few minutes, then try again."
+
 	// csrfFailedMsg is the generic copy for a failed form double-submit CSRF check.
 	csrfFailedMsg = "That request could not be verified. Please reload the page and try again."
 )
@@ -127,7 +130,20 @@ func (h *handlers) stepUpRedirect(w http.ResponseWriter, r *http.Request, purpos
 // every other failure maps through the shared domain-error status with the generic
 // account message (never the raw error, preserving enumeration resistance).
 func accountFailure(err error) (int, string) {
+	var locked *authlogic.SecondFactorLockedError
 	switch {
+	case errors.As(err, &locked):
+		return http.StatusTooManyRequests, secondFactorLockedMsg
+	case errors.Is(err, authlogic.ErrTOTPRejected):
+		return http.StatusUnauthorized, "That code didn't work. Check the time on your device and try the current code."
+	case errors.Is(err, authlogic.ErrRecoveryCodeRejected):
+		return http.StatusUnauthorized, "That recovery code didn't work. Each code works once."
+	case errors.Is(err, authlogic.ErrRecoveryCodesStale):
+		return http.StatusConflict, totpStaleMsg
+	case errors.Is(err, authlogic.ErrTOTPExists):
+		return http.StatusConflict, totpAlreadySetUpMsg
+	case errors.Is(err, authlogic.ErrTOTPEnrollmentExpired):
+		return http.StatusGone, totpExpiredMsg
 	case errors.Is(err, authlogic.ErrRateLimited),
 		errors.Is(err, authlogic.ErrIdentifierChangeRateLimited),
 		errors.Is(err, authlogic.ErrPasswordlessRateLimited):

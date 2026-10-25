@@ -101,6 +101,14 @@ func (r erasureRepo) Erase(ctx context.Context, in user.EraseInput) (user.Erasur
 		delete(r.passkeys, p.ID)
 		c.Passkeys++
 	}
+	if in.TOTP {
+		if _, ok := r.totpCreds[id]; ok {
+			delete(r.totpCreds, id)
+			c.TOTP = 1
+		}
+		c.RecoveryCodes = len(r.totpCodes[id])
+		delete(r.totpCodes, id)
+	}
 	accounts := r.oauthAccounts[:0:0]
 	for _, a := range r.oauthAccounts {
 		if a.UserID == id {

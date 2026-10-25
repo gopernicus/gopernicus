@@ -1,6 +1,7 @@
 package authentication
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"net/url"
@@ -11,6 +12,7 @@ import (
 	"github.com/gopernicus/gopernicus/sdk/pkg/cryptids"
 
 	"github.com/gopernicus/gopernicus/pockets/authentication/internal/redirect"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/totp"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/delivery"
 	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/authentication/webauthn"
@@ -52,6 +54,7 @@ func New(repos Repositories, signer cryptids.JWTSigner, runtimeMode environment.
 	d.APIKeys = repos.APIKeys
 	d.ExternalSubjects = repos.ExternalSubjects
 	d.Passkeys = repos.Passkeys
+	d.TOTP = repos.TOTP
 	d.TokenSigner = signer
 	d.RuntimeMode = runtimeMode
 	d.Limiter = limiter
@@ -133,12 +136,16 @@ func New(repos Repositories, signer cryptids.JWTSigner, runtimeMode environment.
 		{"OAuthAccounts", d.OAuthAccounts}, {"OAuthStates", d.OAuthStates}, {"TokenEncrypter", d.TokenEncrypter},
 		{"SessionManagement", d.SessionManagement}, {"SecurityEvents", d.SecurityEvents}, {"Invitations", d.Invitations}, {"Compromised", d.Compromised},
 		{"ExternalSubjects", d.ExternalSubjects}, {"Passkeys", d.Passkeys}, {"RelyingParty", d.Passkey.RelyingParty},
+		{"TOTP", d.TOTP}, {"TOTPConfig.Encrypter", d.TOTPConfig.Encrypter},
 	} {
 		if dep.value != nil && nilDependency(dep.value) {
 			return nil, fmt.Errorf("authentication: %s contains a typed nil: %w", dep.name, sdk.ErrInvalidInput)
 		}
 	}
 	if err := validatePasskeys(d); err != nil {
+		return nil, err
+	}
+	if err := validateTOTP(d); err != nil {
 		return nil, err
 	}
 	if d.ProvisionOnRedeem && (!slices.Contains(d.Passwordless, sdk.AddressKindEmail) || nilDependency(d.IdentifierKeyer)) {
@@ -201,6 +208,7 @@ func New(repos Repositories, signer cryptids.JWTSigner, runtimeMode environment.
 		external = newExternalAuthenticator(repos, cfg, d.RuntimeMode, externalOptions{clock: d.Clock, logger: d.Logger, ids: d.IDs, normalizer: d.Normalizer, keyer: d.IdentifierKeyer, recorder: service.securityEvents})
 	}
 	service.external = external
+	service.warnOrphanedRecoveryCodes(context.Background())
 	return &Components{Service: service, DeliveryInitializer: &deliveryInitializer{service: service}}, nil
 }
 
@@ -245,6 +253,30 @@ func validatePasskeys(d constructorConfig) error {
 	}
 	if cfg.MaxPerUser < 0 || cfg.MaxPerUser > maxPasskeysPerUser {
 		return fmt.Errorf("authentication: PasskeyConfig.MaxPerUser %d is outside 0 to %d: %w", cfg.MaxPerUser, maxPasskeysPerUser, sdk.ErrInvalidInput)
+	}
+	return nil
+}
+
+// validateTOTP checks WithTOTP against the wiring: an encrypter needs the TOTP
+// store, the recent-authentication grants its gates consume, the challenge
+// protector that digests recovery codes, and an issuer an authenticator app
+// can list; a store that probes its schema must report it present. Without
+// WithTOTP nothing here runs, so an unmigrated store boots.
+func validateTOTP(d constructorConfig) error {
+	cfg := d.TOTPConfig
+	if cfg.Encrypter == nil {
+		return nil
+	}
+	if nilDependency(d.TOTP) || nilDependency(d.AuthenticationGrants) || nilDependency(d.Protector) || nilDependency(d.CredentialMutations) {
+		return ErrTOTPReposRequired
+	}
+	if strings.TrimSpace(cfg.Issuer) == "" || strings.Contains(cfg.Issuer, ":") {
+		return fmt.Errorf("authentication: TOTPConfig.Issuer is required and must not contain a colon: %w", sdk.ErrInvalidInput)
+	}
+	if prober, ok := d.TOTP.(totp.SchemaProber); ok {
+		if err := prober.ProbeSchema(context.Background()); err != nil {
+			return fmt.Errorf("%w: %w", ErrTOTPSchemaMissing, err)
+		}
 	}
 	return nil
 }

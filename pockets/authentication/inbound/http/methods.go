@@ -14,7 +14,9 @@ import (
 // round-trip. It is a bearer-safe read: GET with no request body, so it skips the
 // browser-safe-mutation CSRF gate (that gate protects state-changing routes). The
 // handler sets Cache-Control: no-store so the inventory is never retained by a
-// shared cache.
+// shared cache. The response also names the calling session's assurance and,
+// with TOTP enabled, the authenticator app and recovery codes, so an SPA picks
+// its step-up after an MFA 401.
 
 // methodsResponse is the GET /auth/methods body (design §5.1). Identifier values
 // are masked; the removable hints are advisory (the mutation guard is
@@ -26,6 +28,25 @@ type methodsResponse struct {
 	// Passkeys is present only when passkeys are enabled; an SPA reads it to
 	// choose a step-up (a user-verified passkey reaches AAL2).
 	Passkeys *[]passkeyMethodResponse `json:"passkeys,omitempty"`
+	// Assurance is the calling session's level (aal1 or aal2), so an SPA that
+	// meets an MFA 401 knows it must step up; omitted for a token minted before
+	// the aal claim.
+	Assurance string `json:"assurance,omitempty"`
+	// TOTP and RecoveryCodes are present only when TOTP is enabled: whether an
+	// authenticator app is confirmed, and how many recovery codes remain.
+	TOTP          *totpMethodResponse          `json:"totp,omitempty"`
+	RecoveryCodes *recoveryCodesMethodResponse `json:"recovery_codes,omitempty"`
+}
+
+// totpMethodResponse is the authenticator app in the inventory.
+type totpMethodResponse struct {
+	Enrolled   bool   `json:"enrolled"`
+	LastUsedAt string `json:"last_used_at,omitempty"`
+}
+
+// recoveryCodesMethodResponse is the recovery codes left in the inventory.
+type recoveryCodesMethodResponse struct {
+	Remaining int `json:"remaining"`
 }
 
 // passkeyMethodResponse is one passkey in the inventory: the list item plus the
@@ -69,7 +90,11 @@ func (h *handlers) methods(w http.ResponseWriter, r *http.Request) {
 		web.RespondJSONDomainError(w, err)
 		return
 	}
-	web.RespondJSONOK(w, newMethodsResponse(view))
+	out := newMethodsResponse(view)
+	if cred, ok := h.svc.CurrentCredential(r.Context()); ok {
+		out.Assurance = string(cred.Assurance)
+	}
+	web.RespondJSONOK(w, out)
 }
 
 // newMethodsResponse renders the service view model into the JSON contract. Empty
@@ -119,6 +144,12 @@ func newMethodsResponse(view authlogic.MethodsView) methodsResponse {
 			passkeys = append(passkeys, item)
 		}
 		out.Passkeys = &passkeys
+	}
+	if view.TOTP != nil {
+		out.TOTP = &totpMethodResponse{Enrolled: view.TOTP.Enrolled, LastUsedAt: rfc3339(view.TOTP.LastUsedAt)}
+	}
+	if view.RecoveryCodes != nil {
+		out.RecoveryCodes = &recoveryCodesMethodResponse{Remaining: view.RecoveryCodes.Remaining}
 	}
 	return out
 }

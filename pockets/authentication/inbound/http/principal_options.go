@@ -46,13 +46,25 @@ type principalSet struct {
 	assurances         []assurance
 }
 
-// assurance is one assurance option. RequireMFA reads Credential.Assurance,
-// which access tokens carry too, so it evaluates them (accessTokens); every
-// other option reads external provider evidence only.
+// assurance is one assurance option. RequireMFA (mfa) runs the adapter's one
+// AAL2 predicate over Credential.Assurance and Credential.Methods, which access
+// tokens carry too, so it evaluates them (accessTokens); every other option
+// reads external provider evidence only through check.
 type assurance struct {
 	check        func(context.Context, Credential) error
 	accessTokens bool
+	mfa          bool
 }
+
+// mfaRefused is RequireMFA's denial: ErrMFARequired, with the reason the
+// mfa_required_denied row records.
+type mfaRefused struct {
+	reason string
+}
+
+func (e *mfaRefused) Error() string { return authlogic.ErrMFARequired.Error() }
+
+func (e *mfaRefused) Unwrap() error { return authlogic.ErrMFARequired }
 
 // insufficientAuthentication is an assurance denial a re-authentication can
 // cure; JSON denials answer it with the RFC 9470 challenge.
@@ -204,22 +216,19 @@ func Stateless() PrincipalOption {
 }
 
 // RequireMFA requires an access or external token at AAL2
-// (Credential.Assurance): an access token whose session a user-verified passkey
-// signed in or stepped up, or an external token whose provider asserted
-// multi-factor authentication. An API key passes (no key can reach AAL2). A
-// JSON denial carries the RFC 9470 insufficient_user_authentication challenge;
-// under Browser() an access-token cookie below AAL2 is redirected to the
-// passkey step-up page when passkeys and their views are wired, and otherwise
-// gets that JSON 401. A credential service that implements MFADenialRecorder
-// records one mfa_required_denied row (gate route).
+// (Credential.Assurance): an access token whose session a user-verified
+// passkey, a TOTP or a recovery code signed in or stepped up, or an external
+// token whose provider asserted multi-factor authentication — from a source
+// MFAConfig.Methods admits (Credential.Methods). An API key passes (no key can
+// reach AAL2). A JSON denial carries the RFC 9470
+// insufficient_user_authentication challenge; under Browser() an access-token
+// cookie is redirected to the step-up page (the TOTP chooser, else the passkey
+// page) when its views are wired, and otherwise gets that JSON 401. A
+// credential service that implements MFADenialRecorder records one
+// mfa_required_denied row (gate route, reason assurance or method).
 func RequireMFA() PrincipalOption {
 	return func(set *principalSet) {
-		set.assurances = append(slices.Clip(set.assurances), assurance{accessTokens: true, check: func(_ context.Context, cred Credential) error {
-			if !cred.Assurance.AtLeast(session.AssuranceAAL2) {
-				return authlogic.ErrMFARequired
-			}
-			return nil
-		}})
+		set.assurances = append(slices.Clip(set.assurances), assurance{accessTokens: true, mfa: true})
 	}
 }
 
@@ -368,8 +377,9 @@ func (set principalSet) resolves(kind CredentialKind) bool {
 
 // assure applies the set's assurance options in option order: every option to
 // an external token, RequireMFA alone to an access token (a set admitting
-// access tokens carries no other), none to an API key.
-func (set principalSet) assure(ctx context.Context, cred Credential) error {
+// access tokens carries no other), none to an API key. RequireMFA runs mfa, the
+// adapter's AAL2 predicate.
+func (set principalSet) assure(ctx context.Context, cred Credential, mfa func(Credential) string) error {
 	switch cred.Kind {
 	case CredentialExternalToken, CredentialAccessToken:
 	default:
@@ -377,6 +387,12 @@ func (set principalSet) assure(ctx context.Context, cred Credential) error {
 	}
 	for _, a := range set.assurances {
 		if cred.Kind == CredentialAccessToken && !a.accessTokens {
+			continue
+		}
+		if a.mfa {
+			if reason := mfa(cred); reason != "" {
+				return &mfaRefused{reason: reason}
+			}
 			continue
 		}
 		if err := a.check(ctx, cred); err != nil {

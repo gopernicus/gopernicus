@@ -5,11 +5,13 @@ import (
 	"fmt"
 	"net/http"
 	"reflect"
+	"slices"
 	"strings"
 
 	"github.com/gopernicus/gopernicus/sdk/pkg/environment"
 
 	"github.com/gopernicus/gopernicus/pockets"
+	authlogic "github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/user"
 	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/pkg/list"
@@ -39,6 +41,8 @@ type adapterConfig struct {
 	AdministrationMFA bool
 	RouteLimits       PublicRouteLimits
 	PasskeyViews      PasskeyViews
+	TOTPViews         TOTPViews
+	MFAMethods        []authlogic.MFAMethod
 }
 
 type routedService struct {
@@ -84,6 +88,17 @@ func New(service AuthenticationService, runtimeMode environment.Mode, opts ...Op
 			return nil, fmt.Errorf("authentication HTTP: PasskeyViews requires a service with passkeys wired and Views: %w", sdk.ErrInvalidInput)
 		}
 		passkeyViews = cfg.PasskeyViews
+	}
+	var totps totpService
+	if t, ok := cfg.Authentication.(totpService); ok && t.TOTPEnabled() {
+		totps = t
+	}
+	var totpViews TOTPViews
+	if !nilDependency(cfg.TOTPViews) {
+		if totps == nil || nilDependency(cfg.Views) {
+			return nil, fmt.Errorf("authentication HTTP: TOTPViews requires a service with TOTP wired and Views: %w", sdk.ErrInvalidInput)
+		}
+		totpViews = cfg.TOTPViews
 	}
 	if runtimeMode == environment.ModeProduction && cfg.OriginPolicy.HasHTTPNamespace() {
 		return nil, fmt.Errorf("authentication HTTP: production OriginPolicy must not admit an http namespace: %w", sdk.ErrInvalidInput)
@@ -144,10 +159,15 @@ func New(service AuthenticationService, runtimeMode environment.Mode, opts ...Op
 		Eraser:    eraser,
 		Proxies:   auth.proxies, RouteLimits: cfg.RouteLimits, AdministrationMFA: cfg.AdministrationMFA,
 		Passkeys: passkeys, PasskeyViews: passkeyViews,
+		TOTP: totps, TOTPViews: totpViews,
 	}
-	if passkeyViews != nil {
-		auth.passkeyStepUpPath = passkeyStepUpPathFor(auth.browserLoginPath)
+	switch {
+	case totpViews != nil:
+		auth.mfaStepUpPath = mfaStepUpPathFor(auth.browserLoginPath)
+	case passkeyViews != nil:
+		auth.mfaStepUpPath = passkeyStepUpPathFor(auth.browserLoginPath)
 	}
+	auth.mfaMethods = slices.Clone(cfg.MFAMethods)
 	if !auth.csrfCookie.secure {
 		auth.logger.Warn("authentication: development CSRF cookie wired; the session cookie is not Secure, so the double-submit cookie drops the __Host- prefix and Secure — production refuses it", "csrf_cookie", auth.csrfCookie.name, "secure", false)
 	}

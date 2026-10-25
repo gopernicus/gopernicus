@@ -63,6 +63,10 @@ const (
 	PurposePasskeyRegistration = "passkey_registration"
 	PurposePasskeyAssertion    = "passkey_assertion"
 	PurposePasskeyStepUp       = "passkey_step_up"
+	// PurposeRecoveryCode is the domain separator recovery-code digests are taken
+	// under (the challenge protector's DigestCode purpose). It is reserved: no
+	// challenge row ever carries it.
+	PurposeRecoveryCode = "recovery_code"
 )
 
 // ConsumeOutcome is the disposition ConsumeCode decided inside its one atomic

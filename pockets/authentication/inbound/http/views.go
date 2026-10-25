@@ -266,6 +266,9 @@ type StepUpPage struct {
 	// Passkeys is present when passkeys are enabled, so the page can offer a
 	// passkey step-up beside the password and code completions.
 	Passkeys *PasskeyLinks
+	// TOTP is present when TOTP is enabled, so the page can offer the
+	// authenticator-app and recovery-code step-ups (or the chooser page).
+	TOTP *TOTPLinks
 }
 
 // OAuthMethod is one linked provider projected for display: masked/advisory only.
@@ -306,6 +309,9 @@ type AccountSecurityPage struct {
 	// Passkeys is present when passkeys are enabled: the manage-page link and
 	// the endpoints its controls use.
 	Passkeys *PasskeyLinks
+	// TOTP is present when TOTP is enabled: the authenticator-app manage page
+	// and the endpoints its controls use.
+	TOTP *TOTPLinks
 }
 
 // IdentifierFormPage models the add/edit identifier form. For an edit, MaskedValue

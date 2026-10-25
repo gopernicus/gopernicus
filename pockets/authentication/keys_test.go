@@ -10,10 +10,11 @@ import (
 	"testing"
 
 	"github.com/gopernicus/gopernicus/sdk"
+	"github.com/gopernicus/gopernicus/sdk/pkg/cryptids"
 	environment "github.com/gopernicus/gopernicus/sdk/pkg/environment"
 )
 
-var allKeys = []KeyName{KeyJWT, KeyChallengePepper, KeyIdentifier, KeyDeliveryEncrypter, KeyTokenEncrypter}
+var allKeys = []KeyName{KeyJWT, KeyChallengePepper, KeyIdentifier, KeyDeliveryEncrypter, KeyTokenEncrypter, KeyTOTPRing}
 
 func hexKey(fill byte, n int) string { return strings.Repeat(fmt.Sprintf("%02x", fill), n) }
 
@@ -24,6 +25,8 @@ func fullKeysInput() KeysInput {
 		IdentifierKey:        hexKey(0x03, 32),
 		DeliveryEncrypterKey: hexKey(0x04, 32),
 		TokenEncrypterKey:    hexKey(0x05, 32),
+		TOTPKeys:             "t1:" + hexKey(0x06, 32) + ",t0:" + hexKey(0x07, 32),
+		TOTPActiveKey:        "t1",
 	}
 }
 
@@ -32,8 +35,11 @@ func fullKeysInput() KeysInput {
 // variable a host must set.
 func TestKeyNamesMatchKeysInputTags(t *testing.T) {
 	typ := reflect.TypeOf(KeysInput{})
-	if typ.NumField() != len(allKeys) {
-		t.Fatalf("KeysInput has %d fields, want %d", typ.NumField(), len(allKeys))
+	if typ.NumField() != len(allKeys)+1 {
+		t.Fatalf("KeysInput has %d fields, want %d", typ.NumField(), len(allKeys)+1)
+	}
+	if got := typ.Field(len(allKeys)).Tag.Get("env"); got != keyTOTPActive {
+		t.Errorf("KeysInput.TOTPActiveKey env tag = %q, want %q", got, keyTOTPActive)
 	}
 	for i, name := range allKeys {
 		if got := typ.Field(i).Tag.Get("env"); got != string(name) {
@@ -51,6 +57,8 @@ func TestKeysInputParsesFromEnvironment(t *testing.T) {
 	t.Setenv(string(KeyIdentifier), want.IdentifierKey)
 	t.Setenv(string(KeyDeliveryEncrypter), want.DeliveryEncrypterKey)
 	t.Setenv(string(KeyTokenEncrypter), want.TokenEncrypterKey)
+	t.Setenv(string(KeyTOTPRing), want.TOTPKeys)
+	t.Setenv(keyTOTPActive, want.TOTPActiveKey)
 	var in KeysInput
 	if err := environment.ParseEnvTags("", &in); err != nil {
 		t.Fatal(err)
@@ -242,5 +250,51 @@ func TestKeysPrintRedacted(t *testing.T) {
 	}
 	if got := fmt.Sprint(keys); !strings.Contains(got, "JWTSecret:[redacted]") || !strings.Contains(got, "TokenEncrypterKey:[unset]") {
 		t.Errorf("String() = %q, want presence markers", got)
+	}
+}
+
+// TestNewKeysTOTPRing pins the sixth key: AUTH_TOTP_KEYS / AUTH_TOTP_ACTIVE_KEY
+// parse into a ring that builds an AES-GCM ring encrypter; production refuses
+// it unset only when it is needed; development mints a one-key ephemeral ring
+// with the WARN; a malformed ring is ErrKeyRequired naming the variables and
+// never echoing material.
+func TestNewKeysTOTPRing(t *testing.T) {
+	keys, err := NewKeys(environment.ModeProduction, fullKeysInput(), slog.New(slog.DiscardHandler), KeyTOTPRing)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if keys.TOTPRing.Active != "t1" || len(keys.TOTPRing.Keys) != 2 || keys.TOTPRing.Keys["t0"][0] != 0x07 {
+		t.Fatalf("ring = active %q, %d keys", keys.TOTPRing.Active, len(keys.TOTPRing.Keys))
+	}
+	if _, err := cryptids.NewAESGCMRing(keys.TOTPRing); err != nil {
+		t.Fatalf("NewAESGCMRing: %v", err)
+	}
+	if _, err := NewKeys(environment.ModeProduction, KeysInput{}, slog.New(slog.DiscardHandler)); err != nil {
+		t.Fatalf("an unneeded unset ring in production: %v", err)
+	}
+	if _, err := NewKeys(environment.ModeProduction, KeysInput{}, slog.New(slog.DiscardHandler), KeyTOTPRing); !errors.Is(err, ErrKeyRequired) || !strings.Contains(err.Error(), "AUTH_TOTP_KEYS is unset") {
+		t.Fatalf("a needed unset ring in production = %v", err)
+	}
+	var buf bytes.Buffer
+	dev, err := NewKeys(environment.ModeDevelopment, KeysInput{}, slog.New(slog.NewTextHandler(&buf, nil)), KeyTOTPRing)
+	if err != nil || dev.TOTPRing.Active != "ephemeral" || len(dev.TOTPRing.Keys["ephemeral"]) != 32 || !strings.Contains(buf.String(), "key=AUTH_TOTP_KEYS") {
+		t.Fatalf("development ring = %v, %v, %q", dev.TOTPRing.Active, err, buf.String())
+	}
+	if none, _ := NewKeys(environment.ModeDevelopment, KeysInput{}, slog.New(slog.DiscardHandler)); len(none.TOTPRing.Keys) != 0 {
+		t.Fatal("an unneeded ring was minted")
+	}
+	for _, bad := range []KeysInput{
+		{TOTPKeys: "t1:" + hexKey(0x06, 16), TOTPActiveKey: "t1"},
+		{TOTPKeys: "t1:" + hexKey(0x06, 32), TOTPActiveKey: "t2"},
+		{TOTPKeys: "t1:zz", TOTPActiveKey: "t1"},
+		{TOTPActiveKey: "t1"},
+	} {
+		_, err := NewKeys(environment.ModeDevelopment, bad, slog.New(slog.DiscardHandler))
+		if !errors.Is(err, ErrKeyRequired) || !strings.Contains(err.Error(), "AUTH_TOTP_KEYS") || strings.Contains(err.Error(), hexKey(0x06, 16)) {
+			t.Errorf("malformed ring %+v = %v", bad.TOTPActiveKey, err)
+		}
+	}
+	if got := fmt.Sprint(keys); !strings.Contains(got, "TOTPRing:[redacted]") || strings.Contains(got, hexKey(0x06, 4)) {
+		t.Errorf("String() = %q", got)
 	}
 }

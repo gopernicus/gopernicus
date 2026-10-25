@@ -13,6 +13,7 @@ import (
 	inbound "github.com/gopernicus/gopernicus/pockets/authentication/inbound/http"
 	authlogic "github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/protection"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/totp"
 	delivery "github.com/gopernicus/gopernicus/pockets/authentication/logic/delivery"
 	"github.com/gopernicus/gopernicus/sdk"
 	sdkauth "github.com/gopernicus/gopernicus/sdk/capabilities/authentication"
@@ -44,6 +45,11 @@ type mfaWiring struct {
 	// the challenge rail's protector it needs.
 	passkeys  webauthn.RelyingParty
 	protector protection.ChallengeProtector
+	// totp wires TOTP over totpRepo (stubTOTP when nil); methods is
+	// MFAConfig.Methods.
+	totp     bool
+	totpRepo totp.Repository
+	methods  []MFAMethod
 }
 
 func idp(name, issuer string, requireMFA bool) authlogic.ExternalProvider {
@@ -60,7 +66,7 @@ func (w mfaWiring) build(mode environment.Mode) (*Components, string, error) {
 		WithAbuseProtection(AbuseProtectionConfig{RateLimiter: durableLimiter{}}),
 		WithDelivery(DeliveryConfig{Mailer: prodMailer{}}),
 		WithBrowser(BrowserConfig{SessionCookie: inbound.CookieConfig{Secure: true}}),
-		WithMFA(MFAConfig{Required: w.required}),
+		WithMFA(MFAConfig{Required: w.required, Methods: w.methods}),
 		WithLogger(log),
 	}
 	if w.providers != nil {
@@ -76,6 +82,17 @@ func (w mfaWiring) build(mode environment.Mode) (*Components, string, error) {
 	if w.passkeys != nil {
 		repos.Passkeys, repos.CredentialMutations, repos.AuthenticationGrants, repos.Challenges = stubPasskeys{}, stubCredentialMutations{}, stubGrants{}, stubChallenges{}
 		opts = append(opts, WithPasskeys(PasskeyConfig{RelyingParty: w.passkeys}))
+	}
+	if w.totp {
+		repos.TOTP = w.totpRepo
+		if repos.TOTP == nil {
+			repos.TOTP = stubTOTP{}
+		}
+		repos.CredentialMutations, repos.AuthenticationGrants = stubCredentialMutations{}, stubGrants{}
+		if repos.Challenges == nil {
+			repos.Challenges = stubChallenges{}
+		}
+		opts = append(opts, WithTOTP(TOTPConfig{Encrypter: testTOTPEncrypter(), Issuer: "Example"}))
 	}
 	if w.adminCheck {
 		repos.UserAdmin = stubUserAdmin{}

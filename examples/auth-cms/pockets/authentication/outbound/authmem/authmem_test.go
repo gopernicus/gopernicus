@@ -29,3 +29,10 @@ func TestPasskeyConformance(t *testing.T) {
 		return New().Repositories()
 	})
 }
+
+// TestTOTPConformance runs the TOTP suite, separate from Run, against authmem.
+func TestTOTPConformance(t *testing.T) {
+	storetest.RunTOTP(t, func(t *testing.T) auth.Repositories {
+		return New().Repositories()
+	})
+}

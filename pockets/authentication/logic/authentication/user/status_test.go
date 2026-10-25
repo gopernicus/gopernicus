@@ -47,10 +47,10 @@ func TestEraseCountsMerge(t *testing.T) {
 	in := map[string]any{"note": "x"}
 	out := EraseCounts{Sessions: 1, Grants: 2, Passwords: 3, OAuthAccounts: 4, ExternalSubjects: 5, ContactChanges: 6, Codes: 7,
 		Challenges: 8, IdentifiersBlanked: 9, InvitationsDeleted: 10, InvitationsBlanked: 11, InvitationsCancelled: 12,
-		ServiceAccounts: 13, APIKeys: 14, Passkeys: 15}.Merge(in)
+		ServiceAccounts: 13, APIKeys: 14, Passkeys: 15, TOTP: 16, RecoveryCodes: 17}.Merge(in)
 	want := map[string]int{"sessions": 1, "grants": 2, "passwords": 3, "oauth_accounts": 4, "external_subjects": 5, "contact_changes": 6,
 		"codes": 7, "challenges": 8, "identifiers_blanked": 9, "invitations_deleted": 10, "invitations_blanked": 11,
-		"invitations_cancelled": 12, "service_accounts": 13, "api_keys": 14, "passkeys": 15}
+		"invitations_cancelled": 12, "service_accounts": 13, "api_keys": 14, "passkeys": 15, "totp": 16, "recovery_codes": 17}
 	for k, v := range want {
 		if out[k] != v {
 			t.Errorf("Details[%q] = %v, want %d", k, out[k], v)

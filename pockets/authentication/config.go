@@ -31,20 +31,33 @@ import (
 const (
 	// MFARequiredDefault is the zero value. New resolves it once, before any
 	// check reads it: to MFARequiredAdmins when WithPasskeys wires a relying
-	// party and AdministrationConfig.UserAdminCheck is set, else to
-	// MFARequiredNone. The boot line names the result with source=default.
+	// party or WithTOTP an encrypter, and AdministrationConfig.UserAdminCheck is
+	// set, else to MFARequiredNone. The boot line names the result with
+	// source=default.
 	MFARequiredDefault MFARequirement = ""
 	// MFARequiredNone requires nothing beyond each external provider's own
-	// RequireMFA. It is the explicit opt-out of the passkey default — the
-	// sole-admin break-glass.
+	// RequireMFA. It is the explicit opt-out of the passkey and TOTP default —
+	// the sole-admin break-glass.
 	MFARequiredNone MFARequirement = "none"
 	// MFARequiredAdmins requires AAL2 on /auth/admin/users* of every caller
-	// AdministrationConfig.UserAdminCheck admits — and, beside passkeys, on the
-	// machine lifecycle routes after MachineRoutesGate; an API key passes.
+	// AdministrationConfig.UserAdminCheck admits — and, beside passkeys or TOTP,
+	// on the machine lifecycle routes after MachineRoutesGate; an API key passes.
 	MFARequiredAdmins MFARequirement = "admins"
 	// MFARequiredAll requires AAL2 of every external-token user: New sets
 	// ExternalProvider.RequireMFA on a copy of every External provider.
 	MFARequiredAll MFARequirement = "all"
+)
+
+// The MFAConfig.Methods values.
+const (
+	// MFAMethodPasskey admits AAL2 from a user-verified passkey.
+	MFAMethodPasskey = authlogic.MFAMethodPasskey
+	// MFAMethodIdP admits AAL2 from an external provider that asserted
+	// multi-factor authentication.
+	MFAMethodIdP = authlogic.MFAMethodIdP
+	// MFAMethodTOTP admits AAL2 from a TOTP step-up; a recovery-code step-up
+	// counts under it.
+	MFAMethodTOTP = authlogic.MFAMethodTOTP
 )
 
 // constructorConfig holds resolved pocket construction settings.
@@ -125,10 +138,12 @@ type constructorConfig struct {
 	MaintenanceRunnerAcknowledged bool
 	UserErasureRoute              bool
 	MFARequired                   MFARequirement
+	MFAMethods                    []MFAMethod
 	// mfaRequiredSource records whether MFARequired came from configuration or
 	// the zero value's resolution; New sets it.
 	mfaRequiredSource string
 	Passkey           PasskeyConfig
+	TOTP              TOTPConfig
 	Logger            *slog.Logger
 }
 
@@ -959,19 +974,32 @@ func WithAdministration(value AdministrationConfig) Option {
 // MFARequirement selects which users must sign in at AAL2: none, admins or all.
 type MFARequirement string
 
+// MFAMethod names one AAL2 source MFAConfig.Methods admits: passkey, idp or
+// totp.
+type MFAMethod = authlogic.MFAMethod
+
 // MFAConfig is the pocket's multi-factor requirement. AAL2 comes from a
-// user-verified passkey or from an external provider that asserted multi-factor
-// authentication, so a requirement needs WithPasskeys or WithExternal
-// (ErrMFAUnsatisfiable without either). Admins also needs
-// AdministrationConfig.UserAdminCheck and gates /auth/admin/users* — plus the
-// machine lifecycle routes beside passkeys — only: it does NOT gate role
-// routes, cms admin routes or host admin pages, which add RequireMFA()
-// themselves. All needs WithExternal and refuses native password, passwordless,
-// OAuth and passkey login: native all waits for recovery codes (S4c). The zero
-// Required resolves as MFARequiredDefault documents; an unknown one is
+// user-verified passkey, a TOTP or recovery-code step-up, or an external
+// provider that asserted multi-factor authentication, so a requirement needs
+// WithPasskeys, WithTOTP or WithExternal (ErrMFAUnsatisfiable without one).
+// Admins also needs AdministrationConfig.UserAdminCheck and gates
+// /auth/admin/users* — plus the machine lifecycle routes beside passkeys or
+// TOTP — only: it does NOT gate role routes, cms admin routes or host admin
+// pages, which add RequireMFA() themselves. All needs WithExternal and refuses
+// native password, passwordless, OAuth and passkey login, and is refused beside
+// WithPasskeys or WithTOTP: native all is a follow-on (s4c2-native-all). The
+// zero Required resolves as MFARequiredDefault documents; an unknown one is
 // sdk.ErrInvalidInput. It is a wiring literal, not an env knob.
 type MFAConfig struct {
 	Required MFARequirement
+	// Methods restricts which AAL2 sources every MFA gate admits — RequireMFA(),
+	// the admin and machine gates, and the Browser() step-up redirect. Empty
+	// admits any source. An unknown value is sdk.ErrInvalidInput; a source that
+	// is not wired (passkey without WithPasskeys, totp without WithTOTP, idp
+	// without WithExternal) is ErrMFAUnsatisfiable. A first-party access token
+	// minted before the methods claim existed has no source and is denied under
+	// a non-empty Methods until it refreshes.
+	Methods []MFAMethod
 }
 
 // PasskeyViews renders the passkey pages; see PasskeyConfig.Views.
@@ -1013,8 +1041,45 @@ func WithPasskeys(value PasskeyConfig) Option {
 
 // WithMFA replaces the complete MFAConfig group, including zero values.
 func WithMFA(value MFAConfig) Option {
+	methods := slices.Clone(value.Methods)
 	return func(c *constructorConfig) {
 		c.MFARequired = value.Required
+		c.MFAMethods = slices.Clone(methods)
+	}
+}
+
+// TOTPViews renders the TOTP pages; see TOTPConfig.Views.
+type TOTPViews = inbound.TOTPViews
+
+// TOTPConfig turns on the authenticator-app second factor and recovery codes
+// (SOC 2 S4c): a TOTP step-up (RFC 6238, SHA-1, six digits, 30 seconds) or a
+// single-use recovery code re-mints the caller's session at AAL2. It is opt-in:
+// a host that leaves Encrypter nil sees no TOTP route, no TOTP probe and no
+// change in any gate.
+type TOTPConfig struct {
+	// Encrypter seals each TOTP secret at rest, bound to its user. Build it with
+	// cryptids.NewAESGCMRing(keys.TOTPRing) from NewKeys(…, KeyTOTPRing). Nil
+	// leaves TOTP off. Wiring one requires Repositories.TOTP,
+	// CredentialMutations, AuthenticationGrants and a ChallengeProtector
+	// (ErrTOTPReposRequired); a store that probes its schema must report
+	// migration 0026 applied (ErrTOTPSchemaMissing); and beside UserAdminCheck it
+	// moves the MFAConfig default to admins.
+	Encrypter cryptids.KeyedEncrypter
+	// Issuer is the name an authenticator app lists the account under, such as
+	// the product name. Required with Encrypter; it must not contain a colon.
+	Issuer string
+	// Views renders the TOTP pages: GET /auth/account/totp, the enrollment page
+	// GET /auth/account/totp/enroll, and the "Confirm it's you" chooser GET
+	// /auth/step-up/mfa, which then becomes the page a Browser() gate with
+	// RequireMFA() redirects an AAL1 session to. Nil keeps the TOTP routes
+	// JSON-only; non-nil requires BrowserConfig.Views.
+	Views TOTPViews
+}
+
+// WithTOTP replaces the complete TOTPConfig group, including zero values.
+func WithTOTP(value TOTPConfig) Option {
+	return func(c *constructorConfig) {
+		c.TOTP = value
 	}
 }
 

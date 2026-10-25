@@ -245,9 +245,10 @@ type keyedCollaborators struct {
 	identifierKeyer    protection.IdentifierKeyer
 	deliveryEncrypter  cryptids.Encrypter
 	tokenEncrypter     cryptids.Encrypter
+	totpEncrypter      cryptids.KeyedEncrypter
 }
 
-// buildKeyedCollaborators reads the five hex AUTH_* key variables into
+// buildKeyedCollaborators reads the six AUTH_* key variables (AUTH_TOTP_KEYS a ring) into
 // authentication.KeysInput and decodes them with one authentication.NewKeys call
 // (auth-jwt plan §1.6, design §3.3/§4.4/§6.1.1):
 //
@@ -269,7 +270,7 @@ func buildKeyedCollaborators(mode environment.Mode, log *slog.Logger) (keyedColl
 		return keyedCollaborators{}, err
 	}
 	keys, err := auth.NewKeys(mode, in, log,
-		auth.KeyJWT, auth.KeyChallengePepper, auth.KeyIdentifier, auth.KeyDeliveryEncrypter, auth.KeyTokenEncrypter)
+		auth.KeyJWT, auth.KeyChallengePepper, auth.KeyIdentifier, auth.KeyDeliveryEncrypter, auth.KeyTokenEncrypter, auth.KeyTOTPRing)
 	if err != nil {
 		return keyedCollaborators{}, err
 	}
@@ -293,11 +294,16 @@ func buildKeyedCollaborators(mode environment.Mode, log *slog.Logger) (keyedColl
 	if err != nil {
 		return keyedCollaborators{}, fmt.Errorf("build delivery encrypter: %w", err)
 	}
+	totpEncrypter, err := cryptids.NewAESGCMRing(keys.TOTPRing)
+	if err != nil {
+		return keyedCollaborators{}, fmt.Errorf("build totp encrypter: %w", err)
+	}
 	collaborators := keyedCollaborators{
 		signer:             signer,
 		challengeProtector: protector,
 		identifierKeyer:    keyer,
 		deliveryEncrypter:  deliveryEncrypter,
+		totpEncrypter:      totpEncrypter,
 	}
 	if keys.TokenEncrypterKey != nil {
 		tokenEncrypter, err := cryptids.NewAESGCM(keys.TokenEncrypterKey)

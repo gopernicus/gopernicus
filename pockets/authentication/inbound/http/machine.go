@@ -8,7 +8,6 @@ import (
 	authlogic "github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/apikey"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/serviceaccount"
-	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/session"
 	"github.com/gopernicus/gopernicus/sdk/pkg/list"
 	"github.com/gopernicus/gopernicus/sdk/pkg/web"
 )
@@ -142,7 +141,7 @@ func newPageResponse[E any, T any](p list.Page[E], mapFn func(E) T) pageResponse
 // callers skip it (requireBrowserSafeMutation short-circuits). The two GETs are
 // body-less reads and stay off the mutation gate.
 //
-// With MFAConfig admins beside passkeys, every route then requires AAL2 of the
+// With MFAConfig admins beside passkeys or TOTP, every route then requires AAL2 of the
 // caller the gate admitted (requireMachineMFA), so an AAL1 session cannot mint
 // a key that would then pass the admin gates.
 func mountMachine(r pockets.RouteRegistrar, h *handlers, machineLifecycle, browserSafe, gate web.Middleware) {
@@ -162,8 +161,7 @@ func (h *handlers) requireMachineMFA(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if h.machineMFA {
 			cred, _ := h.svc.CurrentCredential(r.Context())
-			if cred.Kind != authlogic.CredentialAPIKey && !cred.Assurance.AtLeast(session.AssuranceAAL2) {
-				h.svc.recordMFADenial(r.Context(), authlogic.MFAGateMachine, cred)
+			if !h.svc.admitMFA(r.Context(), authlogic.MFAGateMachine, cred) {
 				writeMFARequired(w)
 				return
 			}

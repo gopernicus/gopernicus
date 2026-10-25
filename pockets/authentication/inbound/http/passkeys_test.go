@@ -186,6 +186,12 @@ type passkeyOptions struct {
 	adminMFA   bool
 	machine    bool
 	uv         webauthn.Requirement
+	// totp wires TOTP over memTOTP; totpViews mounts its pages; mfaMethods is
+	// MFAConfig.Methods.
+	totp       bool
+	totpViews  *captureTOTPViews
+	mfaMethods []authlogic.MFAMethod
+	limitsAuth authlogic.AuthenticationLimits
 }
 
 type passkeyFixture struct {
@@ -199,6 +205,8 @@ type passkeyFixture struct {
 	rp       *webauthnstub.RelyingParty
 	offset   *time.Duration
 	userID   string
+	totp     *memTOTP
+	web      *web.WebHandler
 }
 
 func newPasskeyFixture(t *testing.T, o passkeyOptions) *passkeyFixture {
@@ -246,7 +254,15 @@ func newPasskeyFixture(t *testing.T, o passkeyOptions) *passkeyFixture {
 		fixture.ServiceAccounts = &memServiceAccounts{m: map[string]serviceaccount.ServiceAccount{}}
 		fixture.APIKeys = &memAPIKeys{m: map[string]apikey.APIKey{}}
 	}
+	var totpStore *memTOTP
+	if o.totp || o.totpViews != nil {
+		totpStore = newMemTOTP(users, passkeys)
+		fixture.TOTP, fixture.TOTPConfig = totpStore, authlogic.TOTPConfig{Encrypter: testTOTPRing(t), Issuer: "Example"}
+	}
+	fixture.AuthenticationLimits = o.limitsAuth
+	fixture.MFAMethods = o.mfaMethods
 	svc := newServiceWithFakes(fixture)
+	svc.Adapter.mfaMethods = o.mfaMethods
 	deps := mountDeps{Auth: svc, RouteLimits: o.limits, UserAdminCheck: o.adminCheck, AdministrationMFA: o.adminMFA,
 		Mutation: MutationSecurity{AllowedOrigins: []string{pkOrigin}, SessionCookieName: svc.SessionCookieName()}}
 	if svc.Service.PasskeysEnabled() {
@@ -257,11 +273,18 @@ func newPasskeyFixture(t *testing.T, o passkeyOptions) *passkeyFixture {
 	}
 	if o.views != nil {
 		deps.Views, deps.PasskeyViews = stubViews{}, o.views
-		svc.Adapter.passkeyStepUpPath = passkeyStepUpPathFor(svc.Adapter.browserLoginPath)
+		svc.Adapter.mfaStepUpPath = passkeyStepUpPathFor(svc.Adapter.browserLoginPath)
+	}
+	if svc.Service.TOTPEnabled() {
+		deps.TOTP = svc.Service
+	}
+	if o.totpViews != nil {
+		deps.Views, deps.TOTPViews = stubViews{}, o.totpViews
+		svc.Adapter.mfaStepUpPath = mfaStepUpPathFor(svc.Adapter.browserLoginPath)
 	}
 	h := web.NewWebHandler()
 	mount(h, deps)
-	f := &passkeyFixture{h: h, svc: svc, users: users, sessions: sessions, passkeys: passkeys, events: events, signer: signer, rp: rp, offset: &offset, userID: "u-passkey"}
+	f := &passkeyFixture{h: h, svc: svc, users: users, sessions: sessions, passkeys: passkeys, events: events, signer: signer, rp: rp, offset: &offset, userID: "u-passkey", totp: totpStore, web: h}
 	users.mu.Lock()
 	users.byID[f.userID] = user.User{ID: f.userID, DisplayName: "Pat Passkey", Status: user.StatusActive}
 	users.mu.Unlock()
@@ -882,8 +905,8 @@ func TestPasskeyViewsWiring(t *testing.T) {
 		t.Fatalf("PasskeyViews without Views = %v, want ErrInvalidInput", err)
 	}
 	adapter, err := New(f.svc.Service, "development", WithBrowser(BrowserConfig{Views: stubViews{}}), WithPasskeyViews(&capturePasskeyViews{}))
-	if err != nil || adapter.passkeyStepUpPath != passkeyStepUpPagePath {
-		t.Fatalf("New = %v step-up path %q", err, adapter.passkeyStepUpPath)
+	if err != nil || adapter.mfaStepUpPath != passkeyStepUpPagePath {
+		t.Fatalf("New = %v step-up path %q", err, adapter.mfaStepUpPath)
 	}
 	off := newPasskeyFixture(t, passkeyOptions{unwired: true})
 	if _, err := New(off.svc.Service, "development", WithBrowser(BrowserConfig{Views: stubViews{}}), WithPasskeyViews(&capturePasskeyViews{})); !errors.Is(err, sdk.ErrInvalidInput) {

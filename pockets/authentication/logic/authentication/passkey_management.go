@@ -65,8 +65,9 @@ func (s *Service) RenamePasskey(ctx context.Context, in PasskeyRenameInput) erro
 // RemovePasskey removes one of the caller's passkeys through the
 // revision-serialized credential rail, which revokes every session of the user,
 // the caller's included. It consumes a remove_passkey grant bound to the
-// passkey under the enrollment gate's policy — AAL2 while the user holds a
-// user-verified passkey — and the credential policy must leave a login method.
+// passkey under the second-factor gate's policy — AAL2 while the user holds a
+// user-verified passkey or a confirmed authenticator app — and the credential
+// policy must leave a login method.
 // Success records passkey_removed and sends the passkey_change_notice.
 func (s *Service) RemovePasskey(ctx context.Context, in PasskeyRemoveInput) error {
 	if err := s.requirePasskeys(); err != nil {
@@ -83,7 +84,11 @@ func (s *Service) RemovePasskey(ctx context.Context, in PasskeyRemoveInput) erro
 	if !slices.ContainsFunc(existing, func(p passkey.Passkey) bool { return p.ID == in.PasskeyID }) {
 		return fmt.Errorf("authentication: passkey %q not found: %w", in.PasskeyID, sdk.ErrNotFound)
 	}
-	if _, err := s.RequireRecentAuthentication(ctx, in.SessionID, in.UserID, authgrant.PurposeRemovePasskey, in.PasskeyID, passkeyEnrollmentPolicy(existing)); err != nil {
+	policy, _, err := s.secondFactorPolicy(ctx, in.UserID)
+	if err != nil {
+		return err
+	}
+	if _, err := s.RequireRecentAuthentication(ctx, in.SessionID, in.UserID, authgrant.PurposeRemovePasskey, in.PasskeyID, policy); err != nil {
 		return err
 	}
 	if err := s.applyCredentialMutationAtRevision(ctx, in.UserID, owner.AuthRevision, credential.RemovePasskey{PasskeyID: in.PasskeyID}); err != nil {

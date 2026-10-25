@@ -6,7 +6,6 @@ import (
 
 	"github.com/gopernicus/gopernicus/pockets"
 	authlogic "github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication"
-	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/session"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/user"
 	"github.com/gopernicus/gopernicus/sdk/pkg/web"
 )
@@ -71,6 +70,8 @@ type eraseCountsResponse struct {
 	Grants               int `json:"grants"`
 	Passwords            int `json:"passwords"`
 	Passkeys             int `json:"passkeys"`
+	TOTP                 int `json:"totp"`
+	RecoveryCodes        int `json:"recovery_codes"`
 	OAuthAccounts        int `json:"oauth_accounts"`
 	ExternalSubjects     int `json:"external_subjects"`
 	ContactChanges       int `json:"contact_changes"`
@@ -122,7 +123,7 @@ func mountUserAdmin(r pockets.RouteRegistrar, h *handlers, userAdministration, b
 // not pre-decide whether a service account may administer users.
 //
 // With WithAdministrationMFA the caller the check admits must also hold an AAL2
-// credential, or it gets the RFC 9470 401 and one mfa_required_denied row
+// credential from a source MFAConfig.Methods admits, or it gets the RFC 9470 401 and one mfa_required_denied row
 // (gate admin). The check runs first, so a non-admin keeps the host's 403 and
 // the challenge never reveals who is an administrator. An API key skips the
 // MFA requirement: no key can ever satisfy it.
@@ -143,8 +144,7 @@ func (h *handlers) adminPrincipal(w http.ResponseWriter, r *http.Request, action
 	}
 	if h.adminMFA {
 		cred, _ := h.svc.CurrentCredential(r.Context())
-		if cred.Kind != authlogic.CredentialAPIKey && !cred.Assurance.AtLeast(session.AssuranceAAL2) {
-			h.svc.recordMFADenial(r.Context(), authlogic.MFAGateAdmin, cred)
+		if !h.svc.admitMFA(r.Context(), authlogic.MFAGateAdmin, cred) {
 			writeMFARequired(w)
 			return authlogic.Principal{}, false
 		}
@@ -259,7 +259,7 @@ func (h *handlers) adminEraseUser(w http.ResponseWriter, r *http.Request) {
 		User:    newUserSummaryResponse(summary),
 		Changed: erasure.Changed,
 		Counts: eraseCountsResponse{
-			Sessions: c.Sessions, Grants: c.Grants, Passwords: c.Passwords, Passkeys: c.Passkeys, OAuthAccounts: c.OAuthAccounts,
+			Sessions: c.Sessions, Grants: c.Grants, Passwords: c.Passwords, Passkeys: c.Passkeys, TOTP: c.TOTP, RecoveryCodes: c.RecoveryCodes, OAuthAccounts: c.OAuthAccounts,
 			ExternalSubjects: c.ExternalSubjects, ContactChanges: c.ContactChanges, Codes: c.Codes, Challenges: c.Challenges,
 			IdentifiersBlanked: c.IdentifiersBlanked, InvitationsDeleted: c.InvitationsDeleted, InvitationsBlanked: c.InvitationsBlanked,
 			InvitationsCancelled: c.InvitationsCancelled, ServiceAccounts: c.ServiceAccounts, APIKeys: c.APIKeys,

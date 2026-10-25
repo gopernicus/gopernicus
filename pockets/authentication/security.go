@@ -108,18 +108,28 @@ var (
 	// It is the logic package's sentinel, re-exported here, so one errors.Is
 	// target serves New and NewExternalAuthenticator.
 	ErrSingleFactorUnacknowledged = authlogic.ErrSingleFactorUnacknowledged
-	// ErrMFAUnsatisfiable is returned in every mode when MFAConfig.Required cannot
-	// be met by the wiring: admins without WithPasskeys or WithExternal (the AAL2
+	// ErrMFAUnsatisfiable is returned in every mode when MFAConfig.Required or
+	// MFAConfig.Methods cannot be met by the wiring: a Methods source that is not
+	// wired, admins without WithPasskeys, WithTOTP or WithExternal (the AAL2
 	// sources) or without AdministrationConfig.UserAdminCheck (it would gate
 	// nothing); all without WithExternal, or beside native password,
-	// passwordless, OAuth or passkey login (native all waits for recovery codes,
-	// S4c). The error names the field to change.
+	// passwordless, OAuth or passkey login, or beside WithPasskeys or WithTOTP
+	// (native all is the follow-on s4c2-native-all). The error names the field
+	// to change.
 	ErrMFAUnsatisfiable = errors.New("auth: MFAConfig.Required cannot be satisfied by this wiring")
 	// ErrPasskeyReposRequired is returned when WithPasskeys wires a relying party
 	// without Repositories.Passkeys, CredentialMutations, AuthenticationGrants,
 	// Challenges or a ChallengeProtector. It is the logic package's sentinel,
 	// re-exported here.
 	ErrPasskeyReposRequired = authlogic.ErrPasskeyReposRequired
+	// ErrTOTPReposRequired is returned when WithTOTP wires an encrypter without
+	// Repositories.TOTP, CredentialMutations, AuthenticationGrants or a
+	// ChallengeProtector.
+	ErrTOTPReposRequired = authlogic.ErrTOTPReposRequired
+	// ErrTOTPSchemaMissing is returned when WithTOTP is wired and
+	// Repositories.TOTP reports its schema missing (apply migration 0026). A
+	// host that does not wire TOTP is never probed.
+	ErrTOTPSchemaMissing = authlogic.ErrTOTPSchemaMissing
 	// ErrPasskeyDevelopmentRelyingParty is returned in production RuntimeMode for
 	// a WebAuthn relying party whose Config().RPID is localhost or an IP address,
 	// or whose Config().Origins admits an http namespace: a passkey registered

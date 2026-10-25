@@ -234,9 +234,14 @@ func (s *Service) EraseUser(ctx context.Context, actor Principal, id string) (us
 	})
 	storeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), EraseTimeout)
 	defer cancel()
-	erasure, err := s.userErasure.Erase(storeCtx, user.EraseInput{ID: id, Now: s.now().UTC(), SubjectKeys: keys, Event: evt})
+	erasure, err := s.userErasure.Erase(storeCtx, user.EraseInput{ID: id, Now: s.now().UTC(), SubjectKeys: keys, Event: evt, TOTP: s.TOTPEnabled()})
 	if err != nil {
 		return user.Summary{}, user.Erasure{}, err
+	}
+	if s.TOTPEnabled() {
+		if _, err := s.totp.Get(storeCtx, id); err == nil {
+			s.logger.Error("auth: erasure left a TOTP credential; the store's EraseRepository must honour EraseInput.TOTP", "user_id", id)
+		}
 	}
 	summary, err := s.userAdmin.GetSummary(storeCtx, id)
 	if err != nil {

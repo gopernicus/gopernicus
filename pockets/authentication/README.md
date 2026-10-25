@@ -2307,6 +2307,148 @@ name, origin or raw response: `passkey_registered` (`passkey_id`,
 expired, inactive, conflict), and `passkey_sign_count_regressed` (budgeted;
 `passkey_id`, `stored`, `presented`).
 
+## TOTP and recovery codes (SOC 2 S4c)
+
+An authenticator app (RFC 6238: SHA-1, six digits, 30 seconds, ±1 step) is the
+native fallback second factor beside passkeys, and ten single-use recovery codes
+stand beside it. A TOTP or recovery-code **step-up of a live session** re-mints
+it at AAL2 — the session row, the signed `aal` and `methods` claims,
+`RequireMFA()` and the `admins` gates. TOTP is a second factor only: it never
+signs anyone in. It is **opt-in**: a host that does not call `WithTOTP` gets no
+TOTP route, no TOTP schema probe, no erasure of TOTP tables, and no change in
+any gate (its `/auth/methods` gains only `assurance`).
+
+### Turn on TOTP
+
+1. Apply migration `0026_totp` (stores pgx v0.13.0 / turso v0.12.0). It is
+   required **only when TOTP is wired**: `New` asks a `Repositories.TOTP` that
+   implements `totp.SchemaProber` to prove its tables at boot and refuses with
+   `ErrTOTPSchemaMissing`, naming 0026; a host that never wires TOTP is never
+   probed and may skip the migration (or apply its empty tables early).
+2. Add `KeyTOTPRing` to `NewKeys`: `AUTH_TOTP_KEYS` is a ring `id:hex,id:hex`
+   (each key exactly 32 bytes, `openssl rand -hex 32`) and `AUTH_TOTP_ACTIVE_KEY`
+   names the sealing id. Development mints a one-key `ephemeral` ring with a
+   WARN; production refuses it unset. Build the encrypter with
+   `cryptids.NewAESGCMRing(keys.TOTPRing)`.
+3. `WithTOTP(TOTPConfig{Encrypter: ring, Issuer: "Your product", Views: …})`.
+   It needs `Repositories.TOTP`, `CredentialMutations`, `AuthenticationGrants`
+   and a `ChallengeProtector` (recovery codes are digested under its pepper)
+   (`ErrTOTPReposRequired`). `Views` (a `TOTPViews`) mounts the pages; nil keeps
+   the routes JSON-only.
+4. With a `UserAdminCheck`, the zero `MFAConfig.Required` resolves to `admins`
+   (boot line `mfa_required=admins source=default … sources=totp methods=any`).
+
+Each secret is sealed as `{u: userID, s: secret}` under the ring, so a row
+copied onto another user never opens. Plaintext never rests, pending or
+confirmed. Keep NTP on: clock skew beyond ±30 s fails every code.
+
+### The gates
+
+One predicate gates every second factor: a user who **holds an AAL2 factor** (a
+user-verified passkey or a confirmed authenticator app) needs AAL2 within five
+minutes to add or remove a passkey, enroll or remove TOTP, or regenerate
+recovery codes; anyone else bootstraps at AAL1 from a primary login or a
+password/code step-up grant. So a TOTP holder adds a passkey only at AAL2, and
+the reverse.
+
+| flow | gate | result |
+|---|---|---|
+| enroll | `register_totp` under the predicate; a confirmed app answers 409 first | one pending row per user (a re-Begin replaces it), 10 minutes, bound to the session |
+| confirm | the second-factor budget (`AuthenticationLimits.SecondFactor`, 10/min per user, 30/min per IP), the pending row of this live session, a valid code | the credential and ten recovery codes, atomically under the user lock, `auth_revision` bumped; a bootstrap enrollment is refused if an AAL2 passkey appeared meanwhile; `totp_enrolled`, `recovery_codes_generated`, a notice |
+| step-up (TOTP or recovery code) | the budget, a confirmed app, the lockout | the session re-minted at AAL2 (AuthenticatedAt now, the old `ExpiresAt`), `totp`/`recovery_code` added to its methods; a code's step is never accepted twice |
+| remove | `remove_totp` under the predicate | the app and every code deleted, **every session revoked** (bearer tokens die too); `totp_removed`, a notice. A pending enrollment alone is only cancelled: nobody is signed out |
+| regenerate | `regenerate_recovery_codes` under the predicate; `expected_generated_at` must match | ten new codes, the old ones dead |
+| admin reset | `UserAdminCheck` (action `reset-totp`), then the admins gate | the app and codes removed, sessions revoked; `totp_reset`, a notice |
+
+A confirm is fenced on the pending row whose code it checked: a second
+enrollment begun meanwhile (another tab or session) is never confirmed by the
+first one's code. A step-up never extends assurance beyond what it proves: a
+weaker proof (a presence-only passkey) re-mints the session at its own level,
+so refreshing AuthenticatedAt can never carry an earlier AAL2 forward.
+
+The fifth consecutive refused code locks the second factor for five minutes
+(429 `too_many_attempts`, `Retry-After`). **One code is a recent AAL2 login for
+every gate for five minutes** — `DELETE /auth/totp` and regeneration included
+(NIST reauthentication); the notices are the detective control.
+
+### Routes and the wire contract
+
+| call | request | success | errors |
+|---|---|---|---|
+| `POST /auth/totp/enrollment` | `{}` | 200 `{secret, otpauth_uri, issuer, account, algorithm, digits, period, expires_at}` | 403 step-up required; 409 `totp_exists` |
+| `POST /auth/totp/enrollment/confirm` | `{code}` | 201 `{enrolled_at, recovery_codes, generated_at}` (once) | 410 `enrollment_expired`; 401 `totp_rejected`; 409 `totp_exists`; 429 |
+| `GET /auth/totp` | — | `{enrolled, pending, enrolled_at?, last_used_at?, recovery_codes_remaining}` | — |
+| `DELETE /auth/totp` | — | `{status: "removed"}`; cookies cleared | 403 |
+| `GET` / `POST /auth/recovery-codes` | — / `{expected_generated_at?}` | `{remaining, generated_at?}` / 201 `{recovery_codes, generated_at}` | 403; 409 `recovery_codes_stale` |
+| `POST /auth/step-up/totp`, `/auth/step-up/recovery-code` | `{code}` | as `POST /auth/login` plus `assurance` (a bearer caller also gets the new pair) | 401 `totp_rejected` / `recovery_code_rejected`; 429 `too_many_attempts` + `Retry-After` |
+| `POST /auth/admin/users/{id}/totp/reset` | `{}` | `{removed}` | 403; 401 + challenge below AAL2 |
+
+`GET /auth/methods` gains `assurance` (the caller's session), `totp {enrolled,
+last_used_at?}` and `recovery_codes {remaining}`, so an SPA picks its step-up
+after an MFA 401. The secret appears in the enrollment response and page only.
+
+### Pages and the chooser
+
+`TOTPViews` renders `TOTP` (manage), `TOTPEnroll` (the key in groups of four,
+the `otpauth://` URI, the confirm form), `RecoveryCodes` (shown once) and
+`MFAStepUp`, the "Confirm it's you" chooser at `GET /auth/step-up/mfa`. With
+TOTP views wired the chooser — not the passkey page — is where a `Browser()` +
+`RequireMFA()` denial of an AAL1 cookie lands; it offers, filtered by
+`MFAConfig.Methods`, the passkey control (an AAL2 passkey held), the TOTP form,
+the recovery-code form, or the setup links. Form arms: the enrollment POST
+PRGs to `GET /auth/account/totp/enroll`, which re-reads the pending row (a wrong
+code re-renders the same key); the confirm POST renders the recovery codes
+directly; its re-POST lands on the manage page ("already set up"); the step-up
+form PRGs to `return_to`; `POST /auth/totp` is the remove form lane. Recovery
+code inputs take `autocomplete="off"`, `autocapitalize="none"` and no numeric
+input mode; the server folds case, hyphens and spaces. Back/forward cache may
+show a no-store page on Back on the same device.
+
+### MFAConfig.Methods and the methods claim
+
+`MFAConfig{Methods: []MFAMethod{…}}` restricts which AAL2 sources every MFA gate
+admits — `RequireMFA()`, the admin and machine gates, the chooser:
+`MFAMethodPasskey`, `MFAMethodTOTP` (recovery codes count under it),
+`MFAMethodIdP`. Empty admits any. An unwired source is `ErrMFAUnsatisfiable`.
+Access tokens carry a `methods` claim (the session's method kinds); a token
+minted before it existed has no source and is denied under a non-empty `Methods`
+until it refreshes — leave `Methods` empty through the rollout. A host that
+refuses a possession code composed onto a passwordless or OAuth primary sets
+`Methods: [passkey, idp]`. Delegated tokens refuse the claim. `Methods` also
+binds the second-factor gate: under a restriction its AAL2 tier accepts only a
+proof from an allowed source, and only factors of allowed sources count as
+held (a TOTP-only user under `[passkey]` adds a passkey at the bootstrap tier).
+
+### Operators
+
+- **Pepper rotation.** Recovery codes are digested under the challenge
+  protector's active key and verified under every ring key. **Regenerate
+  recovery codes before dropping a pepper key**; `New` WARNs
+  `auth: recovery codes sealed under retired pepper keys key_ids=[…]` while any
+  remain.
+- **The reset path.** `POST /auth/admin/users/<id>/totp/reset` from an AAL2
+  session or an admin API key; the user re-enrolls at the bootstrap tier.
+- **Erasure.** `user.EraseInput.TOTP` is set when TOTP is wired; only then does a
+  store's `Erase` delete `totp_credentials` and `recovery_codes`
+  (`EraseCounts.TOTP`, `.RecoveryCodes`). A host `EraseRepository` must honour
+  it, or TOTP secrets survive erasure; `storetest.RunTOTP` pins it, and
+  `storetest.RunTOTPSchemaProbe` pins a store's boot probe. A host that
+  **unwires** TOTP stops erasing those tables: drop or purge them yourself
+  first. With TOTP wired, `EraseUser` logs an ERROR when a credential survives
+  the erase (a store ignoring `EraseInput.TOTP`).
+
+### Security events
+
+`totp_enrolled` (`tier`), `totp_removed`, `totp_reset` (`removed`; the actor),
+`totp_step_up` (`method`, `assurance`), `totp_failed` (budgeted; `method`,
+`reason` ∈ invalid, reused, locked, not_enrolled, expired, envelope, inactive,
+conflict), `totp_locked` (budgeted; `attempts`, `locked_for_seconds`),
+`recovery_codes_generated` (`count`, `trigger`) and `recovery_code_used`
+(`remaining`). `mfa_required_denied` gains `reason` (assurance or method) and
+`method`. The `mfa_change_notice` mails every verified contact channel on
+enroll, removal, reset, regeneration and each recovery-code use. No row carries
+a secret, code, digest, key URI or ciphertext.
+
 ## Repositories (the ports a host or store adapter satisfies)
 
 The bundled store adapters fill the whole bundle from one handle
