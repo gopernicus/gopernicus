@@ -18,7 +18,24 @@ with `db.ProbeAuditImmutable` last. The bundle fills `Maintenance`
 ## Migrations
 
 `migrations/*.sql` carry the same version (filename) set as the pgx tree,
-`0001`–`0024` with `0017` absent.
+`0001`–`0025` with `0017` absent.
+
+### Passkeys (`0025`)
+
+**`0025_passkey_credentials.sql` is REQUIRED** — without it the boot fails. It creates
+`passkey_credentials` — one registered WebAuthn credential per row, keyed by
+`id`, with a unique `credential_id` and a `(user_id, created_at, id)` index — and
+touches no existing table. `Repositories` refuses, in every mode, a database
+without it with `sdk.ErrNotFound` naming `0025_passkey_credentials.sql` — including hosts
+that wire no passkeys: export it (a host ledger gets a byte-identical copy) and
+apply it before deploying this adapter version.
+The bundle fills `Passkeys` (`NewPasskeyStore`). `Create` runs its guard under the
+`BEGIN IMMEDIATE` write transaction the credential-mutation rail serializes on
+(revision, bootstrap, the credential id, the cap, the user handle) and bumps
+nothing; `RecordUse` is one
+conditional `UPDATE` on the stored sign count. `CredentialMutationStore.Snapshot`
+lists the user's passkeys and `Apply` removes one (`RemovePasskey`) or all
+(`RemovePasskeys`), revoking every session; erasure deletes and counts them.
 
 ### Audit rail (`0021` and `0022`)
 

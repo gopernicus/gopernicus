@@ -59,6 +59,11 @@ var oauth2ProbeTables = []string{
 // boot rather than on the first external request.
 var externalProbeTables = []string{"external_subjects"}
 
+// passkeyProbeTables are the tables migration 0025 creates. They are probed in
+// every mode, even for a host that wires no passkeys, and the refusal names the
+// file (passkeyMigration).
+var passkeyProbeTables = []string{"passkey_credentials"}
+
 // Repositories returns the auth repository set backed by db, WITHOUT touching
 // migrations — AFTER verifying every canonical table (see probeTables) exists
 // (the boot-time probe). It errors with sdk.ErrNotFound naming the specific
@@ -68,10 +73,11 @@ var externalProbeTables = []string{"external_subjects"}
 // applies the schema (see ExportMigrations) and the store just provides repos.
 // db is the connector wrapper (error mapping + Tx), not a raw *sql.DB. It
 // refuses, with sdk.ErrNotFound naming the file, a database without migration
-// 0023 (the users.erased_at column) or without row 1 of 0024's
-// security_events_retention floor table — never a default floor. Last it
-// checks the 0022 immutability triggers (AuditTables) under the RuntimeMode db
-// was opened with, logging a WARN when they are missing or altered.
+// 0023 (the users.erased_at column), without row 1 of 0024's
+// security_events_retention floor table — never a default floor — or without
+// 0025's passkey_credentials table. Last it checks the 0022 immutability
+// triggers (AuditTables) under the RuntimeMode db was opened with, logging a
+// WARN when they are missing or altered.
 func Repositories(ctx context.Context, db *tursodb.DB) (auth.Repositories, error) {
 	if db == nil {
 		return auth.Repositories{}, fmt.Errorf("authentication turso: nil database: %w", sdk.ErrInvalidInput)
@@ -98,6 +104,11 @@ func Repositories(ctx context.Context, db *tursodb.DB) (auth.Repositories, error
 	}
 	if _, err := readFloorDays(ctx, db); err != nil {
 		return auth.Repositories{}, err
+	}
+	for _, table := range passkeyProbeTables {
+		if err := probeMigrationTable(ctx, db, table, passkeyMigration); err != nil {
+			return auth.Repositories{}, err
+		}
 	}
 	if err := db.ProbeAuditImmutable(ctx, AuditTables()...); err != nil {
 		return auth.Repositories{}, err
@@ -136,6 +147,7 @@ func Repositories(ctx context.Context, db *tursodb.DB) (auth.Repositories, error
 		// purge appends its evidence to the table it purges.
 		Maintenance: NewMaintenanceStore(db),
 		UserErasure: NewErasureStore(db),
+		Passkeys:    NewPasskeyStore(db),
 	}, nil
 }
 
@@ -227,6 +239,21 @@ func probeTable(ctx context.Context, db *tursodb.DB, table string) error {
 		`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?`, table).Scan(&name)
 	if errors.Is(err, sql.ErrNoRows) {
 		return fmt.Errorf("authentication turso store: %s table missing — apply the %q migration source before boot: %w", table, "authentication", sdk.ErrNotFound)
+	}
+	if err != nil {
+		return tursodb.MapError(err)
+	}
+	return nil
+}
+
+// probeMigrationTable is probeTable for one table a single migration file
+// creates: the refusal names that file.
+func probeMigrationTable(ctx context.Context, db *tursodb.DB, table, migration string) error {
+	var name string
+	err := db.QueryRow(ctx,
+		`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?`, table).Scan(&name)
+	if errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("authentication turso store: %s table missing — apply migration %s from the %q migration source before boot: %w", table, migration, "authentication", sdk.ErrNotFound)
 	}
 	if err != nil {
 		return tursodb.MapError(err)

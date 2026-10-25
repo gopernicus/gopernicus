@@ -14,9 +14,9 @@ import (
 
 // CredentialMutationStore implements credential.MutationRepository over a libSQL
 // database (design §5.6). Snapshot projects the typed MethodSet from the credential
-// source tables (user_passwords, oauth_accounts, user_identifiers) alongside the
-// user's auth_revision. Apply performs one revision-CAS mutation in a single
-// transaction: it reads the users row's auth_revision, rejects a stale revision as
+// source tables (user_passwords, oauth_accounts, user_identifiers,
+// passkey_credentials) alongside the user's auth_revision. Apply performs one
+// revision-CAS mutation in a single transaction: it reads the users row's auth_revision, rejects a stale revision as
 // sdk.ErrConflict, mutates exactly the targeted typed source, and increments
 // auth_revision exactly once. libSQL/SQLite has no FOR UPDATE, so single-winner
 // rests on the connector's serialized writes (the identifier ApplyVerifiedChange
@@ -102,6 +102,28 @@ func (s *CredentialMutationStore) Snapshot(ctx context.Context, userID string) (
 			return tursodb.MapError(err)
 		}
 		idents.Close()
+
+		passkeys, err := tx.Query(ctx, `SELECT id, user_verified FROM passkey_credentials WHERE user_id = ? ORDER BY created_at, id`, userID)
+		if err != nil {
+			return err
+		}
+		for passkeys.Next() {
+			var (
+				m        credential.PasskeyMethod
+				verified tursodb.Bool
+			)
+			if err := passkeys.Scan(&m.ID, &verified); err != nil {
+				passkeys.Close()
+				return tursodb.MapError(err)
+			}
+			m.UserVerified = bool(verified)
+			set.Passkeys = append(set.Passkeys, m)
+		}
+		if err := passkeys.Err(); err != nil {
+			passkeys.Close()
+			return tursodb.MapError(err)
+		}
+		passkeys.Close()
 		return nil
 	})
 	if err != nil {
@@ -186,6 +208,18 @@ func (s *CredentialMutationStore) Apply(ctx context.Context, userID string, expe
 			if _, err := tx.Exec(ctx, q,
 				tursodb.BoolToInt(m.Uses.Login), tursodb.BoolToInt(m.Uses.Recovery), tursodb.BoolToInt(m.Uses.Notification),
 				now, m.IdentifierID, userID); err != nil {
+				return err
+			}
+		case credential.RemovePasskey:
+			n, err := tursodb.ExecAffecting(ctx, tx, `DELETE FROM passkey_credentials WHERE id = ? AND user_id = ?`, m.PasskeyID, userID)
+			if err != nil {
+				return err
+			}
+			if n == 0 {
+				return sdk.ErrNotFound
+			}
+		case credential.RemovePasskeys:
+			if _, err := tx.Exec(ctx, `DELETE FROM passkey_credentials WHERE user_id = ?`, userID); err != nil {
 				return err
 			}
 		default:

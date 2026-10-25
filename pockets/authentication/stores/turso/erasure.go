@@ -157,6 +157,7 @@ func (s *ErasureStore) Erase(ctx context.Context, in user.EraseInput) (user.Eras
 			args  []any
 		}{
 			{&c.Passwords, `DELETE FROM user_passwords WHERE user_id = ?`, []any{id}},
+			{&c.Passkeys, `DELETE FROM passkey_credentials WHERE user_id = ?`, []any{id}},
 			{&c.OAuthAccounts, `DELETE FROM oauth_accounts WHERE user_id = ?`, []any{id}},
 			{&c.ExternalSubjects, `DELETE FROM external_subjects WHERE user_id = ?`, []any{id}},
 			{&c.ContactChanges, `DELETE FROM contact_changes WHERE user_id = ?`, []any{id}},

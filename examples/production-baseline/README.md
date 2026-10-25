@@ -117,6 +117,7 @@ never migrates. Its files are the host's:
 | `0027_security_events_integrity.sql`, `0028_security_events_immutable.sql` | `pockets/authentication/stores/pgx/migrations` `0021`, `0022`, renumbered |
 | `0029_iam_operations_expiry.sql` | `pockets/authorization/stores/pgx/migrations` `0007`, renumbered |
 | `0030_retention.sql`, `0031_security_events_retention.sql` | `pockets/authentication/stores/pgx/migrations` `0023`, `0024`, renumbered |
+| `0032_passkey_credentials.sql` | `pockets/authentication/stores/pgx/migrations` `0025`, renumbered; required by the store's boot probe even with passkeys unwired |
 
 When a store ships a new migration, copy it in as the next number. Never
 renumber a file once it is applied: the filename is its ledger identity.

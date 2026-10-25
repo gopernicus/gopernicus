@@ -33,6 +33,7 @@ import (
 var authTables = []string{
 	oauthClientsTable, oauthCodesTable, oauthHistoryTable,
 	externalSubjectsTable,
+	passkeyCredentialsTable,
 	passwordsTable,
 	sessionsTable,
 	apiKeysTable,
@@ -118,7 +119,7 @@ func TestConformance_Postgres(t *testing.T) {
 		_ = db.Close()
 	}
 
-	storetest.Run(t, func(t *testing.T) auth.Repositories {
+	newRepos := func(t *testing.T) auth.Repositories {
 		db, err := pgxdb.Open(context.Background(), pgxdb.Config{DSN: sdk.Secret(dsn)})
 		if err != nil {
 			t.Fatalf("connect: %v", err)
@@ -136,7 +137,9 @@ func TestConformance_Postgres(t *testing.T) {
 			t.Fatalf("Repositories: %v", err)
 		}
 		return repos
-	})
+	}
+	storetest.Run(t, newRepos)
+	storetest.RunPasskeys(t, newRepos)
 }
 
 // truncate clears every auth table so a Repositories starts empty. The names are

@@ -30,6 +30,7 @@ var authTables = []string{
 	"oauth_authorization_codes",
 	"oauth_refresh_history",
 	"external_subjects",
+	"passkey_credentials",
 	"user_passwords",
 	"sessions",
 	"api_keys",
@@ -57,7 +58,7 @@ func TestConformance_Turso(t *testing.T) {
 		t.Skip("TURSO_DATABASE_URL/TURSO_AUTH_TOKEN not set — turso conformance NOT verified")
 	}
 
-	storetest.Run(t, func(t *testing.T) auth.Repositories {
+	newRepos := func(t *testing.T) auth.Repositories {
 		db, err := tursodb.Open(context.Background(), tursodb.Config{URL: sdk.Secret(url), AuthToken: sdk.Secret(token)})
 		if err != nil {
 			t.Fatalf("connect: %v", err)
@@ -75,7 +76,9 @@ func TestConformance_Turso(t *testing.T) {
 			t.Fatalf("Repositories: %v", err)
 		}
 		return repos
-	})
+	}
+	storetest.Run(t, newRepos)
+	storetest.RunPasskeys(t, newRepos)
 }
 
 // truncate clears every auth table so a Repositories starts empty. The

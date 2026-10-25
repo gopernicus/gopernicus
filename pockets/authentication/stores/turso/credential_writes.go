@@ -1,11 +1,13 @@
 package turso
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"time"
 
 	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/passkey"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/session"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/user"
 	"github.com/gopernicus/gopernicus/sdk"
@@ -69,4 +71,78 @@ func changePassword(ctx context.Context, tx *tursodb.Tx, userID string, change u
 		return 0, err
 	}
 	return revision + 1, nil
+}
+
+// createPasskey stores p under the owner's user lock after the guard, in the
+// passkey.Repository order: unknown or inactive owner, moved revision, closed
+// bootstrap, taken credential id, the cap, a differing handle. It returns the
+// stored id.
+func createPasskey(ctx context.Context, tx *tursodb.Tx, p passkey.Passkey, transports string, in passkey.CreateInput) (string, error) {
+	revision, err := lockCredentialUser(ctx, tx, p.UserID)
+	if err != nil {
+		return "", err
+	}
+	if revision != in.ExpectedAuthRevision {
+		return "", sdk.ErrConflict
+	}
+	rows, err := tx.Query(ctx, `SELECT user_verified, user_handle FROM passkey_credentials WHERE user_id = ? ORDER BY created_at, id`, p.UserID)
+	if err != nil {
+		return "", err
+	}
+	var (
+		owned       int
+		aal2Capable bool
+		handle      []byte
+	)
+	for rows.Next() {
+		var (
+			verified tursodb.Bool
+			h        []byte
+		)
+		if err := rows.Scan(&verified, &h); err != nil {
+			rows.Close()
+			return "", tursodb.MapError(err)
+		}
+		if owned == 0 {
+			handle = h
+		}
+		owned++
+		aal2Capable = aal2Capable || (passkey.Passkey{UserVerified: bool(verified)}).AAL2Capable()
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return "", tursodb.MapError(err)
+	}
+	rows.Close()
+	if in.Bootstrap && aal2Capable {
+		return "", passkey.ErrBootstrapClosed
+	}
+	var taken tursodb.Bool
+	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM passkey_credentials WHERE credential_id = ?)`, nonNilBytes(p.CredentialID)).Scan(&taken); err != nil {
+		return "", tursodb.MapError(err)
+	}
+	if taken {
+		return "", sdk.ErrAlreadyExists
+	}
+	if owned >= in.MaxPerUser {
+		return "", passkey.ErrPasskeyLimit
+	}
+	if owned > 0 && !bytes.Equal(handle, p.UserHandle) {
+		return "", sdk.ErrConflict
+	}
+	args := []any{
+		p.UserID, p.Name, nonNilBytes(p.CredentialID), nonNilBytes(p.PublicKey), nonNilBytes(p.AAGUID), nonNilBytes(p.UserHandle),
+		int64(p.SignCount), transports, tursodb.BoolToInt(p.UserVerified), tursodb.BoolToInt(p.BackupEligible), tursodb.BoolToInt(p.BackupState),
+		tursodb.FormatTime(p.CreatedAt),
+	}
+	// Empty ID → the schema default generates the key, read back with RETURNING.
+	if p.ID == "" {
+		var id string
+		err := tx.QueryRow(ctx, `INSERT INTO passkey_credentials (user_id, name, credential_id, public_key, aaguid, user_handle, sign_count, transports, user_verified, backup_eligible, backup_state, created_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`, args...).Scan(&id)
+		return id, tursodb.MapError(err)
+	}
+	_, err = tx.Exec(ctx, `INSERT INTO passkey_credentials (id, user_id, name, credential_id, public_key, aaguid, user_handle, sign_count, transports, user_verified, backup_eligible, backup_state, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, append([]any{p.ID}, args...)...)
+	return p.ID, err
 }

@@ -15,9 +15,9 @@ import (
 
 // CredentialMutationStore implements credential.MutationRepository over a
 // PostgreSQL database (design §5.6). Snapshot projects the typed MethodSet from
-// the credential source tables (user_passwords, oauth_accounts, user_identifiers)
-// alongside the user's auth_revision. Apply performs one revision-CAS mutation in
-// a single transaction: it locks the users row FOR UPDATE, rejects a stale
+// the credential source tables (user_passwords, oauth_accounts, user_identifiers,
+// passkey_credentials) alongside the user's auth_revision. Apply performs one
+// revision-CAS mutation in a single transaction: it locks the users row FOR UPDATE, rejects a stale
 // revision as sdk.ErrConflict, mutates exactly the targeted typed source, and
 // increments auth_revision exactly once — so a concurrent double-apply produces
 // exactly one winner and never a partial mutation. The credential policy is the service's
@@ -97,12 +97,28 @@ func (s *CredentialMutationStore) Snapshot(ctx context.Context, userID string) (
 			return pgxdb.MapError(err)
 		}
 		set.Identifiers = append(set.Identifiers, methods...)
+
+		passkeys, err := pgxdb.Collect[passkeyMethodRow](ctx, tx,
+			`SELECT id, user_verified FROM `+s.table(passkeyCredentialsTable)+` WHERE user_id = @id ORDER BY created_at, id`,
+			pgx.NamedArgs{"id": userID})
+		if err != nil {
+			return err
+		}
+		for _, p := range passkeys {
+			set.Passkeys = append(set.Passkeys, credential.PasskeyMethod{ID: p.ID, UserVerified: p.UserVerified})
+		}
 		return nil
 	})
 	if err != nil {
 		return credential.MethodSet{}, err
 	}
 	return set, nil
+}
+
+// passkeyMethodRow is the Snapshot projection of a passkey_credentials row.
+type passkeyMethodRow struct {
+	ID           string `db:"id"`
+	UserVerified bool   `db:"user_verified"`
 }
 
 // Apply performs mutation atomically, incrementing auth_revision exactly once on
@@ -192,6 +208,19 @@ func (s *CredentialMutationStore) Apply(ctx context.Context, userID string, expe
 					WHERE id = @identifier_id AND user_id = @user_id AND replaced_at IS NULL`
 			}
 			if _, err := tx.Exec(ctx, q, args); err != nil {
+				return err
+			}
+		case credential.RemovePasskey:
+			n, err := pgxdb.ExecAffecting(ctx, tx, `DELETE FROM `+s.table(passkeyCredentialsTable)+` WHERE id = @passkey_id AND user_id = @id`,
+				pgx.NamedArgs{"passkey_id": m.PasskeyID, "id": userID})
+			if err != nil {
+				return err
+			}
+			if n == 0 {
+				return sdk.ErrNotFound
+			}
+		case credential.RemovePasskeys:
+			if _, err := tx.Exec(ctx, `DELETE FROM `+s.table(passkeyCredentialsTable)+` WHERE user_id = @id`, pgx.NamedArgs{"id": userID}); err != nil {
 				return err
 			}
 		default:
