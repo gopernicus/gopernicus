@@ -18,6 +18,7 @@ worked example `examples/cms`.
     datastores/pgxdb/       module …/integrations/datastores/pgxdb          — a connector (jackc/pgx v5; multi-port: transaction.Transactor + ratelimiter)
     datastores/turso/     module …/integrations/datastores/turso        — a connector (sdk + libsql); its opt-in localfile package adds modernc.org/sqlite because libsql's file: mode delegates to a registered SQLite driver
     email/sendgrid/       module …/integrations/email/sendgrid          — a connector (sendgrid/sendgrid-go)
+    encoding/rsc-qr/      module …/integrations/encoding/rsc-qr         — a connector (rsc.io/qr; QR modules for the views/goth TOTP page)
     filestorage/gcs/      module …/integrations/filestorage/gcs         — a connector (cloud.google.com/go/storage)
     filestorage/s3/       module …/integrations/filestorage/s3          — a connector (aws-sdk-go-v2 service/s3; S3-compatible endpoints)
     kvstores/goredis/     module …/integrations/kvstores/goredis        — a connector (redis/go-redis v9; multi-port: events bus + cacher + ratelimiter)
