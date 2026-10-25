@@ -1,5 +1,359 @@
 # Releasing gopernicus modules
 
+## Passkeys (SOC 2 slice S4b — published 2026-10-25)
+
+Eight annotated tags (not signed) on seven modules, one of them NEW. Each was cut at its PR's
+squash-merge commit on `main`, pushed, THEN polled on the proxy, and cold-verified from a
+scratch consumer (`GOWORK=off`, an empty module cache, `proxy.golang.org`, `sum.golang.org`, `go
+mod verify`, `go build <module>/...`). Every tag resolved on the first poll it was checked on. Design and rulings:
+[plans/s4b-passkeys.md](plans/s4b-passkeys.md) (rev 2, ratified 2026-10-24) and its addendum
+[plans/s4b-device-check-fixes.md](plans/s4b-device-check-fixes.md) (ratified 2026-10-25), which
+inserted two core patches (v0.27.0, v0.27.1) before the views tag after the owner's device check
+failed. Under the owner's 2026-10-23 process ruling this section is the whole record: there is
+no handoff file and no manifest. The handoff notes below say what a host does on upgrade, and
+hosts adopt them once, at the roadmap's end. The operator surface is the docs site: the
+authentication page's *Passkeys* and *Assurance and MFA*, the sdk authentication page's
+*WebAuthn (passkeys)*, and *Production posture* ("Added by S4b"). The pocket README's "Passkeys
+(SOC 2 S4b)" section is the reference.
+
+| Step | Tag | Commit | PR | Cold verification |
+|---|---|---|---|---|
+| 1 | `sdk/v0.20.0` | `bf671b27` | #191 (PR-1) | OK, poll 1; the `webauthn` and `webauthntest` tests pass from the cache |
+| 2 | `integrations/cryptids/go-webauthn/v0.1.0` (NEW module, first tag) | `d24a6f6c` | #192 (PR-2) | OK, poll 1; adapter + sdk v0.20.0 + go-webauthn v0.18.2 verified, built and tested from the cache |
+| 3 | `pockets/authentication/v0.26.0` | `2f029830` | #193 (PR-3a) + #194 (PR-3b) | OK, poll 1; set A (below) |
+| 4 | `pockets/authentication/stores/pgx/v0.12.0`, `pockets/authentication/stores/turso/v0.11.0` | `778bc45b` | #194 + #195 (PR-3c) | OK, poll 1; set B |
+| 3d | `pockets/authentication/v0.27.0` | `ca2433ae` | #197 (PR-3d) | OK, poll 1; beside stores pgx v0.12.0, turso v0.11.0 and views v0.6.0 |
+| 3e | `pockets/authentication/v0.27.1` | `c08d569a` | #198 (PR-3e) | OK; also inside set C |
+| 5 | `pockets/authentication/views/goth/v0.7.0` (requires core v0.27.1) | `ec69b0b0` | #196 (PR-4) | OK, poll 1; set C |
+
+Order: 1; then 2 and the core PRs; 3 after #193 and #194 merged and the live legs ran on `main`;
+4 after #195 and a `live-stores` dispatch; 3d and 3e after the device check (addendum); 5 last,
+rebased onto `main` after each core tag. #193 moved the core's sdk pin to v0.20.0 by explicit
+`GOWORK=off go get`; #195 moved both stores to core v0.26.0 and sdk v0.20.0 (pins only); #196
+moved views/goth from authentication v0.14.0 to v0.27.1 (forced: the page models changed), so
+views/goth v0.7.0 lifts a host to v0.27.1 by MVS. Every
+module ships MINOR under the v0 convention, v0.27.1 a PATCH. The tag messages name the access
+token's `aal` claim (row 3), the `RequireMFA()` lift (row 4), the `MFARequiredNone` value change
+(row 6), the host `MutationRepository` obligation (row 8) and the required migration 0025 (row 12).
+
+**The MVS sets.**
+- **Set A** (step 3): authentication v0.26.0 beside the RELEASED stores pgx v0.11.0 / turso
+  v0.10.0 and views/goth v0.6.0 built with passkeys unwired. MVS selected sdk v0.20.0; no
+  lockstep.
+- **Set B** (step 4): core v0.26.0 + stores pgx v0.12.0 / turso v0.11.0 + pgxdb v0.14.0 + turso
+  v0.9.0 selected sdk v0.20.0, verified and built.
+- **Set C** (step 5): views/goth v0.7.0 + core v0.27.1 + ui/goth v0.2.0 + go-webauthn v0.1.0 +
+  stores pgx v0.12.0 / turso v0.11.0 + pgxdb v0.14.0 + turso v0.9.0 built an auth-cms-shaped
+  `main`; `all modules verified`.
+
+**Not tagged.** `ui/goth`, `pockets`, `workshop/gopernicus` (neither new refusal carries a
+waiver, so guard P5 has nothing to print), the examples, and every other module. Nothing
+retracts. v0.26.0 and v0.27.0 stay published; hosts pin v0.27.1.
+
+**Upgrade notes.** Seventeen rows. Two are compile-adjacent breaks (row 6, a constant's value;
+row 8, host stores must cover new variants), one is a boot failure in every mode (row 12), row 17
+changes a decision without a compile error, and the rest are opt-in or additive. The "Read first"
+box and rows 1–14 with the paragraph under them are the plan's, verbatim; the pin bullet in the
+box and rows 15–17 (the addendum's two patches) are appended.
+
+> **Read first:** `grep -rnE 'MFARequiredNone|MutationRepository|RequireMFA\(' --include='*.go'`; apply 0025 before
+> repinning a store. **By host shape** (PR-5 expands each):
+> - **Every host that repins stores:** row 12 (apply 0025 first), rows 3 and 4; row 8 with a custom `MutationRepository`.
+> - **IdP-only hosts** (the production-baseline shape): row 12 only; 0025 is required with passkeys unwired.
+> - **Hosts turning passkeys on:** rows 2, 5–7, 9–11, 13 and the README "Turn on passkeys" recipe.
+> - **Pins:** rows 3–11 name where each change first shipped; pin **authentication v0.27.1** (not v0.26.0), which
+>   carries rows 15–17, and **views/goth v0.7.0**, which requires it.
+
+| # | Flip | What the host sees | Hatch | Module@version |
+|---|---|---|---|---|
+| 1 | `webauthn` port, `webauthntest`, `OriginPolicy.Allows`/`Domains` | additive | none | sdk@v0.20.0 |
+| 2 | new adapter `gowebauthn.New(webauthn.Config)` | `Validate` failures refuse boot in every mode | fix RPID/Origins | go-webauthn@v0.1.0 |
+| 3 | access tokens carry `aal`; native `Credential.Assurance` is aal1/aal2 | pre-upgrade tokens read `unknown` until refresh; a delegated token carrying `aal` is refused | none | authentication@v0.26.0 |
+| 4 | `RequireMFA()` beside access tokens no longer panics | AAL1 tokens get 401 + challenge; `FreshAuth`/`VerifiedEmail`/`Tenant`/`Check` still panic | `Accept(...)` | authentication@v0.26.0 |
+| 5 | `WithPasskeys(PasskeyConfig{…, Views})`, `Repositories.Passkeys`, the JSON routes, `PublicRouteLimits.Passkey`, `/auth/methods` `passkey`; `admins` satisfiable by passkeys | opt-in; production refuses a `localhost`/IP RP or an HTTP namespace; S4a's "needs WithExternal" refusal now boots | leave unwired | authentication@v0.26.0 |
+| 6 | **BREAKING value:** `MFARequiredNone` = `"none"`; zero resolves once (B-2) | passkeys + `UserAdminCheck` → `admins`; boot line `source=default` | `Required: MFARequiredNone` | authentication@v0.26.0 |
+| 7 | `admins` gates the machine lifecycle with passkeys (B-3) | AAL1 key minting → 401 after `MachineRoutesGate` | `MFARequiredNone` (drops the admin gate too) | authentication@v0.26.0 |
+| 8 | `MethodSet.Passkeys`; `RemovePasskey`/`RemovePasskeys`; erasure deletes passkeys (`EraseRepository`, `EraseCounts`) | a host `MutationRepository` must snapshot and apply them, or it undercounts login methods (conservative) and cannot remove passkeys | implement per `RunPasskeys` | authentication@v0.26.0 |
+| 9 | removing a passkey revokes its user's sessions; a UV-passkey holder adds/removes only at AAL2 | sign-out everywhere, as a password removal does | none | authentication@v0.26.0 |
+| 10 | six event types; `mfa_required_denied` gains `access_token`/`machine`; `passkey_change_notice` | new audit rows and notices | override the template (`AppTemplates`) | authentication@v0.26.0 |
+| 11 | `PasskeyViews`; page-model `Passkeys`; `Browser()`+`RequireMFA()` redirect | additive; the `Views` interface is unchanged | leave `PasskeyConfig.Views` nil | authentication@v0.26.0 |
+| 12 | **REQUIRED migration 0025** | BOOT FAILURE without `passkey_credentials`, naming 0025, every mode | apply 0025; ledger copy (P9) | stores pgx@v0.12.0, turso@v0.11.0 |
+| 13 | passkey pages; `PasskeyScriptHandler` | mount the script, or the passkey controls stay hidden | do not mount | views/goth@v0.7.0 |
+| 14 | auth-cms wires passkeys (admins by default; RP from its origin; login markup); baseline ledger 0032 | example behaviour | — | examples (untagged) |
+| 15 | the CSRF double-submit cookie follows the session cookie's `Secure`: a development host with a non-Secure session cookie gets `auth_csrf` (no `Secure`, no `__Host-`), which WebKit stores on `http://localhost`; production refuses it twice, independently | Safari over local HTTP stops 403-ing every JSON CSRF mutation; Secure hosts are byte-for-byte unchanged; SPAs keep reading `csrf_token` from the `GET /auth/csrf` body | none | authentication@v0.27.0 |
+| 16 | `POST /auth/passkeys/registration/options` accepts `{"user_verification":"required"}`; a required ceremony leaves presence-only passkeys out of `excludeCredentials` (upgrade in place) | additive; `PasskeyConfig.UserVerification` stays the host toggle (`preferred` default) | send `{}` | authentication@v0.27.0 |
+| 17 | a passkey step-up always requires user verification | a presence-only response to a step-up is refused (401 `passkey_rejected`, `uv_required`) instead of answering `aal1`; sign-in keeps the host setting | none | authentication@v0.27.1 |
+
+Two compile-adjacent breaks: row 6 (a constant's value changes) and row 8 (host stores must cover the new variants). Row 12
+is a boot failure. Every module ships MINOR under v0; tag messages name rows 3, 4, 6, 8 and 12.
+
+Build-time deviations a host can see, folded here (the table stays verbatim):
+- **Row 2.** `Config.Validate` also refuses an IP RP ID (browsers never accept one), so the
+  pocket's production "or an IP" refusal is unreachable through a real adapter. Begin refuses an
+  empty or over-64-byte user handle and an unknown `Requirement` (`sdk.ErrInvalidInput`); a
+  positive `Timeout` under one millisecond is refused. Cross-origin (iframe) ceremonies are
+  refused.
+- **Row 5.** `ErrPasskeyReposRequired` also requires `Repositories.AuthenticationGrants`;
+  `PasskeyConfig.Views` requires `BrowserConfig.Views`; `UserVerification: discouraged` is
+  refused (`sdk.ErrInvalidInput`: it would leave no native AAL2 path); production also refuses an
+  RP ID under `.localhost`. The passkey step-up page path derives from `BrowserLoginPath`
+  (`…/auth/login` → `…/auth/step-up/passkey`).
+- **Row 6.** The boot line is `auth: mfa posture mfa_required=<…> source=<config|default>
+  gates=<…>[,machine_lifecycle]`.
+- **Row 9 and the cap.** "AAL2-capable" is one predicate: the stored registration was
+  user-verified. A session is AAL2 only when that flag AND this assertion's user verification are
+  both set. The registration guard is evaluated under the user lock at `Create`: the bootstrap
+  tier is refused once an AAL2-capable passkey exists, and a moved auth revision since Begin is a
+  conflict (`ErrStepUpRequired`, `passkey_failed reason=conflict`).
+- **Row 10.** `passkey_failed` also records `ceremony=registration` for refused registrations;
+  `passkey_removed` has success rows only. The admin reset skips the credential policy
+  (break-glass).
+- **Row 11.** `PasskeyLinks` carries no script URL: a custom-view host renders `<script src>`
+  from the path it mounts `PasskeyScriptHandler` at. `FinishPasskeySignIn` returns `(TokenPair,
+  user.User, error)` and `StepUpResult` carries `User`. Unspecified shapes: `GET /auth/passkeys`
+  → `{items}`; `DELETE` → `{status:"removed"}` and clears the cookies; `PATCH` → the item; reset
+  → `{removed}`; `/auth/methods` lists `passkeys` only when enabled. An HTML removal without a
+  grant redirects UV holders to the passkey step-up page and others to `/auth/step-up` with
+  purpose `remove_passkey`.
+- **Row 12.** The passkey probe runs after the 0024 check (file order). `id` has a DB default;
+  `aaguid` is NOT NULL DEFAULT empty; `transports` DEFAULT `'[]'`.
+- **Row 15.** The collision set blocks both CSRF cookie names in every mode. A stale development
+  `auth_csrf` cookie from views v0.1.0 is now read on development plain-http hosts (the shape
+  check and the Origin allowlist still apply).
+- **Row 16.** `BeginPasskeyRegistration` takes variadic `PasskeyRegistrationOptions` (no break);
+  the refusal reuses `reason=uv_required`. views/goth's step-up "Add a passkey" link carries no
+  query parameter: it shows only while the user holds no AAL2-capable passkey, the same predicate
+  that checks the box on the manage page.
+
+**Handoff notes — what a host does on upgrade, by host shape and module** (applied at the
+roadmap's end). Pins: sdk v0.20.0; authentication **v0.27.1**; stores pgx v0.12.0 / turso
+v0.11.0; views/goth v0.7.0; go-webauthn v0.1.0 for hosts turning passkeys on. Repin with explicit
+`GOWORK=off go get <module>@<tag>`, then `GOWORK=off go mod tidy`.
+- **Every host that repins stores** (rows 12, 3, 4; row 8 with a custom `MutationRepository`).
+  1. Apply `0025_passkey_credentials.sql` from the store's migration source BEFORE the repinned
+     binary boots: copy it into the host ledger as the next number (the production-baseline copy
+     is `0032_passkey_credentials.sql`, byte-identical; guard P9 and G34 check the copy). The
+     probe refuses boot in every mode, passkeys wired or not, with
+     `authentication pgx store: passkey_credentials table missing — apply migration
+     0025_passkey_credentials.sql from the "authentication" migration source before boot`
+     (wraps `sdk.ErrNotFound`); turso names the same file. It is a new, empty table (`SET LOCAL
+     lock_timeout = '5s'`, `CREATE TABLE IF NOT EXISTS`, two `IF NOT EXISTS` indexes): no
+     `CONCURRENTLY`, no `index_missing` WARN, no backfill. Apply it in its own runner invocation
+     like any additive migration.
+  2. Row 3: access tokens minted before the upgrade carry no `aal` and read
+     `AssuranceUnknown` until they refresh; a legacy session row with an empty assurance level
+     omits the claim; an unknown `aal` value is rejected; a delegated token carrying `aal` is
+     refused. Nothing to change unless host code reads `Credential.Assurance`.
+  3. Row 4: `RequireMFA()` beside a set that admits access tokens no longer panics at wiring;
+     it is an `AtLeast(AAL2)` check, so an AAL1 access token gets 401 + the RFC 9470 challenge.
+     API keys still pass (S4d). `FreshAuth`, `VerifiedEmail`, `Tenant` and `Check` still panic
+     beside access tokens. A host that wants the old external-only scope narrows with
+     `Accept(...)`.
+  4. Row 8: a host-implemented `MutationRepository` must fill `MethodSet.Passkeys` in `Snapshot`
+     and apply `RemovePasskey` and `RemovePasskeys` (the admin reset) in `Apply`, under the user
+     lock; an `EraseRepository` deletes the user's passkeys and reports
+     `EraseCounts.Passkeys`. Run `storetest.RunPasskeys` against it (separate from `Run`, like
+     `RunOAuth2`). A store that ignores passkeys undercounts login methods (conservative: it
+     refuses a removal it should allow) and cannot remove passkeys.
+  5. Row 6, even without passkeys: `MFARequiredNone` is now `"none"`, and the zero value is the
+     new `MFARequiredDefault`. A host that wrote the constant is unaffected; a host that wrote
+     the string `""` or compared against it now reads the default. The boot line gains
+     `source=`.
+- **IdP-only hosts** (the production-baseline shape; row 12 only). Apply 0025 (or its ledger
+  copy) even though passkeys stay unwired. Nothing else moves: the zero `Required` resolves to
+  none without passkeys, so an IdP host at zero still trips S4a's `external_no_mfa` in
+  production. production-baseline sets `Required: MFARequiredAdmins` explicitly and its boot line
+  reads `mfa_required=admins source=config gates=/auth/admin/users*`.
+- **Hosts turning passkeys on** (rows 2, 5–7, 9–11, 13, 16, 17; the pocket README's "Turn on
+  passkeys").
+  1. Apply 0025 (above).
+  2. Build the relying party: `rp, err := gowebauthn.New(webauthn.Config{RPID, RPName,
+     Origins})` (`integrations/cryptids/go-webauthn` v0.1.0). `RPID` is the registrable domain
+     the passkeys bind to (`example.com`); every exact host and namespace suffix in `Origins` (a
+     `web.OriginPolicy`) must equal it or sit under it, or `Validate` refuses boot in every mode
+     (`webauthn.ErrOriginOutsideRPID` names the host). **The RP ID is permanent:** changing it
+     orphans every registered passkey. Production refuses `localhost`, `*.localhost`, an IP RP
+     ID and an http origin namespace (`ErrPasskeyDevelopmentRelyingParty`). auth-cms derives the
+     RP ID from its origin's hostname and `Origins` from `AllowedOrigins`.
+  3. `authentication.WithPasskeys(PasskeyConfig{RelyingParty: rp, Views: authViews})` with
+     `Repositories.Passkeys`, `CredentialMutations`, `AuthenticationGrants` and `Challenges`
+     wired (`ErrPasskeyReposRequired` otherwise). `UserVerification` stays `preferred` unless
+     the host wants every ceremony to require a biometric or PIN; `MaxPerUser` defaults to 10.
+     `PublicRouteLimits.Passkey` budgets sign-in (zero → 30/min per IP).
+  4. Row 6 and 7: with a `UserAdminCheck`, the zero `Required` now resolves to `admins`: every
+     `/auth/admin/users*` caller the check admits AND the machine lifecycle routes (after
+     `MachineRoutesGate`) need AAL2. Admins enroll two passkeys before deploying. The sole-admin
+     break-glass is `MFAConfig{Required: MFARequiredNone}` and a redeploy (it drops the machine
+     gate too; there is no machine-only opt-out). The reset operator path is `POST
+     /auth/admin/users/{id}/passkeys/reset` from an AAL2 session (a cookie + CSRF `fetch`) or
+     with an admin API key the host's `UserAdminCheck` admits.
+  5. Views (rows 11, 13): `PasskeyConfig.Views` takes the same `authgoth.Views` value as
+     `BrowserConfig.Views` (nil keeps the passkey routes JSON-only and an AAL1 `Browser()` +
+     `RequireMFA()` route answers the JSON 401). Mount `authgoth.PasskeyScriptHandler()` at
+     `authgoth.DefaultPasskeyScriptPath` (`/assets/auth/passkey.js`) or
+     `WithPasskeyScriptPath`, as `FragmentScriptHandler` is mounted. The tag carries no nonce:
+     `HTMLPolicy`'s `script-src 'self'` and `connect-src 'self'` load it; a host without an
+     `HTMLPolicy` keeps a nonce-only CSP that blocks it, and the controls stay hidden. A
+     `Permissions-Policy` must not deny `publickey-credentials-get` or
+     `publickey-credentials-create`.
+  6. **Custom views and SPAs: the markup contract.** A host that overrides a page (auth-cms
+     overrides `Login`) renders, for `passkey.js` to drive: a container
+     `data-auth-passkey="signin|register|stepup"` with `data-options-url`, `data-finish-url`,
+     `data-csrf` and `data-return-to` from `LoginPage.Passkeys` / the page model, `hidden` until
+     the script finds `window.PublicKeyCredential`; a `data-auth-passkey-start` button; EMPTY
+     `role="status"` `data-auth-passkey-status` and `role="alert"` `data-auth-passkey-error`
+     live regions; inside a `register` container an optional `data-auth-passkey-name` input and
+     the **checkbox** `data-auth-passkey-require-uv` ("Require Face ID, Touch ID or a PIN";
+     checked, the options body is `{"user_verification":"required"}`, else `{}`; views/goth
+     checks it while the user holds no AAL2-capable passkey). On the manage page, once the user
+     holds a verified passkey, offer **"Confirm with a passkey"** beside the add control: a link
+     to the passkey step-up page with `return_to` set to the manage page, because adding or
+     removing then needs a passkey check in the last five minutes (the options answer 403
+     without it). An SPA drives the same JSON calls: `…/options` with `{}` (registration
+     optionally the `user_verification` field) → `{ceremony, public_key}` →
+     `parse*OptionsFromJSON` → the finish with `{ceremony, credential: cred.toJSON()}` and the
+     `X-CSRF-Token` header; it reads `GET /auth/methods` on an admin 401 to pick its step-up,
+     and navigates after a step-up only when the body's `assurance` is `aal2`.
+  7. Row 17: a passkey step-up always asks for user verification; a presence-only passkey can
+     still sign in (AAL1) but never steps up. Row 16: a user holding only a presence-only passkey
+     adds a verified one on the same device with the checkbox on (upgrade in place), then removes
+     the old row. U2F-only security keys cannot enroll (B-5).
+- **Hosts with a plain-HTTP development setup and a browser front end** (row 15). Nothing to
+  change. Safari over `http://localhost` now stores the CSRF cookie (`auth_csrf`), so JSON
+  CSRF mutations stop answering 403. A development boot logs `csrf_cookie=auth_csrf
+  secure=false`. Production hosts keep `__Host-auth_csrf`; a production host that somehow
+  resolves the relaxed cookie fails construction twice over (the S1 non-`Secure` session cookie
+  refusal and a second, independent `sdk.ErrInvalidInput` naming the cookie).
+- **Examples (this PR).** Every example builds, vets and tests at `GOWORK=off` on the S4b tags.
+  Pins moved (explicit `GOWORK=off go get`, then `GOWORK=off go mod tidy`): `auth-cms`
+  authentication v0.25.0→v0.27.1 and views/goth v0.5.0→v0.7.0 (sdk v0.20.0 and go-webauthn
+  v0.1.0 were already pinned by #193; tidy also pruned its stale `go.sum` lines);
+  `cms` sdk v0.19.0→v0.20.0; `external-identity` sdk v0.19.0→v0.20.0 and authentication
+  v0.25.0→v0.27.1; `goth-showcase` sdk v0.19.0→v0.20.0; `jobs-minimal` sdk v0.19.0→v0.20.0;
+  `minimal` sdk v0.19.0→v0.20.0; `production-baseline` sdk v0.19.0→v0.20.0, authentication
+  v0.25.0→v0.27.1 and stores/pgx v0.11.0→v0.12.0. No non-S4b pin moved. The code-side example
+  changes landed with #193, #194 and #196 (auth-cms wires passkeys; the baseline ledger gained
+  0032).
+
+**The owner device check (Verification §5).**
+- **Safari 26.3 + Touch ID on macOS — PASS, 2026-10-25,** on auth-cms over
+  `http://localhost:8082` built from authentication v0.27.1 and the final #196: a verified
+  iCloud Keychain passkey (synced) enrolled on `/auth/account/passkeys` with the Touch ID
+  prompt, sign-out, usernameless sign-in on `/auth/login`, a Touch ID step-up from
+  `/demo/mfa/page`, and `/demo/mfa` answering `{"assurance":"aal2","credential":"access_token"}`.
+- **The three defects it found, each fixed and tagged before step 5:**
+  - **F1 — Safari 403 on every JSON CSRF mutation** (pre-existing since S5). WebKit drops the
+    `Secure` `__Host-auth_csrf` cookie on `http://localhost`; Chromium keeps it. Fixed by row 15
+    (#197, v0.27.0).
+  - **F2 — no biometric prompt at enrollment.** Under `preferred`, macOS saved the passkey
+    without Touch ID, so it was presence-only and could never reach AAL2. Fixed by row 16 and the
+    views checkbox (#197 → v0.27.0; #196 amended).
+  - **Step-up without user verification.** On v0.27.0 Safari with iCloud Keychain skipped Touch
+    ID on the step-up assertion under `preferred`, answering `aal1`. Fixed by row 17 (#198,
+    v0.27.1, owner-approved).
+- **Chrome on the Mac: pending owner check.**
+- **iOS, Android and Windows Hello: UNVERIFIED** (no HTTPS RP ID exists yet to test them on).
+- **The Chrome headless limit.** Chrome refuses a discoverable assertion from an authenticator
+  without user verification and refuses to create a resident `usb` credential without it, so a
+  presence-only passkey can enroll on an internal authenticator but never be used in this
+  usernameless-only design under Chrome. The browser legs therefore exercise presence-only
+  assurance by enrolling presence-only on an internal authenticator and asserting from a
+  UV-capable one (AAL1 from the stored registration flag), and the "non-UV authenticator with
+  the box checked" case by rewriting the options to `discouraged` in the page.
+
+**Verification record.**
+- CI `check` and `vuln` passed on the final run of every PR (#191–#198), and the CodeQL
+  analyses on each PR that ran them (#194, stacked on #193, ran `check` and `vuln` only). `make
+  guard` runs thirty-six guards; S4b adds none.
+- **Cold verification:** every tag above on poll 1; sets A, B and C as listed.
+- **Live legs on `main`.** Before step 3, counted with `go test -json` (pass / fail / skip):
+  authentication `stores/pgx` 453 / 0 / 1 bare and 453 / 0 / 1 schema-qualified (the known
+  non-C collation skip), `stores/turso` 758 / 0 / 0 (S4a baselines: 432 / 0 / 1 and 737 / 0 /
+  0), and a `live-stores` dispatch green (run 40163407415). Before step 4: `live-stores` green on
+  `778bc45b` (run 40213061410), and `make test-stores` exit 0 on fresh containers in PR-3c.
+- **§2, the real auth-cms binary over HTTP** (a scratch client on `webauthntest`, development
+  mode): the boot line `mfa_required=admins source=default`; a password session's `/demo/mfa`
+  401 `insufficient_user_authentication`; enrollment 201 with a `passkey_change_notice` on the
+  console mailer; usernameless sign-in → `/demo/mfa` 200 `aal2`; a fresh password login of a
+  holder 403 on registration options and removal until a passkey step-up; step-up re-minting
+  with the old refresh token refused and `ExpiresAt` unchanged; a second UV passkey stepping up
+  and another user's passkey refused (`user_mismatch`); a UV-registered credential asserting
+  without UV reading `aal1`; a regressed counter refused; a removal revoking every session — steps
+  1–9 PASS, re-run on the fixed PR-3a tree. PR-3e's real-adapter leg: step-up options request
+  `required`, a response without UV 401, with UV 200 `aal2`. Steps 10–11 (an AAL1 admin's 401
+  and the admin reset) are not reachable over HTTP on auth-cms, whose only platform admin is the
+  boot-seeded synthetic `user:demo-owner`; `TestPasskeysThroughTheHost` covers both on the real
+  adapter. Step 12: 21,905 bytes of server output scanned for the run's credential id, public
+  key, user handle and name (base64url, base64, hex) with no hit; event rows covered by a host
+  test against real ids.
+- **§3, the browser legs** (scratch Playwright scripts, never committed; headless Chromium 148
+  with a CDP virtual authenticator). Chromium **12/12** on the final #196: steps 1–9 of the plan
+  plus the addendum's (a) box checked + non-UV authenticator → the new copy, no row; (b) box
+  checked + UV authenticator → `user_verified: true`, step-up to `aal2`; (c) a presence-only
+  holder upgraded in place on one keychain. Playwright **WebKit 26.4 5/5**, proving F1 short of a
+  ceremony: `auth_csrf` stored over `http://localhost`, the options calls 200 instead of 403,
+  zero application CSP violations (Playwright's screenshots inject one inline style each), and
+  axe clean. WebKit has no virtual authenticator, so the real ceremony is the owner's Safari
+  check.
+- **§4, from the tags (this PR).** auth-cms built at `GOWORK=off` from the repinned tree; `go
+  version -m` reads `sdk v0.20.0`, `pockets/authentication v0.27.1`,
+  `pockets/authentication/views/goth v0.7.0` and `integrations/cryptids/go-webauthn v0.1.0`.
+  The Chromium leg against that binary: **12/12 PASS** — CSP `script-src 'self'` with a nonce
+  and no `unsafe-inline`, zero violations, console errors only on the allowlisted 401s of steps
+  4–6 and (a), `passkey.js` served as `application/javascript` with `nosniff`, a
+  Permissions-Policy that does not deny `publickey-credentials-*`, and axe zero serious or
+  critical on login, manage and both step-up pages. production-baseline built at `GOWORK=off`
+  (sdk v0.20.0, authentication v0.27.1, stores/pgx v0.12.0) applied its ledger through
+  `0032_passkey_credentials.sql` (31 rows in `schema_migrations`) on a fresh PostgreSQL 17 with
+  its own runner, booted in development (`auth: mfa posture mfa_required=admins source=config
+  gates=/auth/admin/users*`; `GET /healthz` 200), and, with `passkey_credentials` dropped,
+  refused to boot (exit 1): `level=ERROR msg="server exited with error" error="authentication
+  pgx store: passkey_credentials table missing — apply migration 0025_passkey_credentials.sql
+  from the \"authentication\" migration source before boot: pgxdb: relation
+  passkey_credentials does not exist: not found"`. Every example builds, vets and tests at `GOWORK=off`; `make guard` and
+  `make check` pass on the repinned tree; `pnpm build` in `workshop/documentation` succeeds.
+
+**Owner rulings.** Tags are annotated, not signed (ruling of 2026-10-22). 2026-10-24: passkeys
+first, TOTP the S4c fallback; libraries go behind sdk ports, in adapters named for the package
+whose API they use; example tiers may break. **B-1:** recovery codes, native `all`,
+`MFAConfig.Methods` and the enrollment grace go to S4c. **B-2:** the zero `Required` resolves to
+`admins` when passkeys and a `UserAdminCheck` are both wired; `MFARequiredNone` (`"none"`) opts
+out. **B-3:** with passkeys, `admins` gates the machine lifecycle after `MachineRoutesGate`.
+**B-4:** attestation `none`; the AAGUID is recorded when the client reports one, untrusted.
+**B-5:** `residentKey: required`, usernameless sign-in only. **B-6:** the script lives in
+views/goth. **The open question — YES:** a password/code step-up grant inside the 5-minute window
+bootstraps the first passkey beside a fresh login. 2026-10-25 (addendum): **F1** relax the CSRF
+cookie in development only, and production must hard-fail if the relaxed configuration is ever
+present; **F2** do not force `required` as the default — keep it a host toggle — and let a user
+add one or several passkeys with a biometric prompt. **The step-up UV fix** (#198) was approved
+("do it") after the owner's Safari re-check on v0.27.0. Lead rulings during the build: the cap
+on AAL2 (registration UV AND assertion UV), `discouraged` refused by the pocket, the
+ceremony-kind mark in adapter state, assertions ignoring unsolicited client extension results
+while registration rejects them, and the script path as a views/goth mount decision; each one a
+host can see is folded above.
+
+**Known and deferred.**
+- **To S4c.** TOTP, recovery codes, native `Required: all`, `MFAConfig.Methods` (with the
+  methods claim in the same PR as TOTP) and the enrollment grace.
+- **To S4d.** `aal` on delegated tokens; API keys under MFA gates (an API key passes every MFA
+  gate today).
+- **Follow-ups.** Username-first passkey sign-in; attestation and AAGUID allow-lists (B-4);
+  decoupled cross-origin SPA cookie sessions (cookie CSRF does not cross origins; such clients
+  use bearer tokens); a committed Playwright spec; autofill and Related Origin Requests; iOS,
+  Android and Windows Hello on an HTTPS RP ID.
+- **Cosmetic.** The views checkbox sits flush to its label (ui/goth form styling); the manage
+  page shows raw RFC3339 times.
+- **Housekeeping.** The pgx store's package doc still says "the 20-port bundle" (24 now). The
+  goredis `TestOpenHonorsDeadlineAfterConnection` flaked once under `make check` load (5/5 alone).
+  `passkey.js` sits at its 200-line budget, so the next control needs a trim first. A Makefile
+  guard for "a subsystem subpackage never imports its parent" is not built; the code holds it.
+- **Residuals.** The first passkey is an AAL1 bootstrap: a stolen password can enroll it and
+  reach AAL2; the `passkey_change_notice` is the detective control. AAL2 lasts the refresh
+  lifetime (a step-up keeps `ExpiresAt`). Synced passkeys trust the platform account (B-4).
+- **Browser legs and events.** `/debug/security-events` needs a platform admin, and auth-cms's
+  only one is the boot-seeded `user:demo-owner`, so the browser legs cannot read event rows;
+  `TestPasskeysThroughTheHost` pins them.
+
 ## MFA posture (SOC 2 slice S4a — published 2026-10-24)
 
 Two annotated tags (not signed), each cut at its PR's squash-merge commit on `main`, pushed,

@@ -1,6 +1,6 @@
 ---
 title: Authentication capability
-description: The external identity provider port — Provider, Identity, Profile, NewOIDC and the conformance suite.
+description: The external identity provider port — Provider, Identity, Profile, NewOIDC and the conformance suite — and the WebAuthn relying-party port for passkeys.
 ---
 
 # Authentication capability
@@ -114,3 +114,51 @@ suites hermetically and against the Auth emulator.
 See the [authentication pocket](../pockets/authentication.md) for how a host
 wires providers, and the pocket README's "External identity providers" section
 for per-vendor recipes.
+
+## WebAuthn (passkeys)
+
+`sdk/capabilities/authentication/webauthn` (sdk v0.20.0) is the relying-party
+port for passkeys, so a consumer never imports a WebAuthn library. It sits
+inside the authentication subsystem but imports nothing from its parent: root
+`sdk` and `sdk/pkg/web` only. A host that wires passkeys does not link the
+external-provider port, and the reverse. There is no default implementation;
+the implementation of record is the
+`integrations/cryptids/go-webauthn` adapter (`gowebauthn.New`), and
+`webauthntest` ships a software authenticator and the conformance suite.
+
+| Type | Role |
+|---|---|
+| `Config` | `RPID` (the domain credentials are scoped to: lowercase DNS labels, no scheme, port or path, not an IP), `RPName`, `Origins` (a `web.OriginPolicy`), `Timeout` (zero selects `MaxTimeout` = 5m; above it is refused) |
+| `RelyingParty` | `Config()`, `BeginRegistration`/`FinishRegistration`, `BeginAssertion`/`ReadAssertion`/`FinishAssertion` |
+| `Ceremony` | `Options` (the inner publicKey JSON the browser's `parse*OptionsFromJSON` takes), `State` (kept server-side, presented to Finish at most once), `ExpiresAt` |
+| `Credential`, `Assertion` | the verified result: id, COSE public key, AAGUID, sign count, transports, and this ceremony's `UserVerified`, `BackupEligible`, `BackupState`; `Assertion.CounterRegressed` |
+| `Requirement` | `required`, `preferred` (the zero value) or `discouraged`, the user-verification wire strings |
+
+- **`Config.Validate`** runs before anything else in every implementation, so a
+  bad configuration fails boot in every mode. Every origin host must equal
+  `RPID` or sit under it (`ErrOriginOutsideRPID`, naming the host); an empty
+  `Origins` and an empty `RPName` are refused. **The RP ID is permanent:**
+  changing it orphans every registered credential.
+- **Port rules.** Attestation is `none` and `residentKey` is `required`, so
+  every assertion is discoverable: the options carry an empty
+  `allowCredentials`, and no credential id leaves the server before the user is
+  authenticated. The algorithms are ES256, EdDSA and RS256. The flags and the
+  sign count come from this ceremony's authenticator data, never the stored
+  record.
+- **Errors.** `ErrCeremonyRejected` (wraps `sdk.ErrUnauthorized`) covers every
+  failed response or state. A response that passes every check but lacks user
+  verification under `required` is `ErrUserVerificationRequired` (also
+  `sdk.ErrUnauthorized`). A regressed counter is not an error: the caller reads
+  `CounterRegressed` and decides.
+- **`sdk/pkg/web`** gains `OriginPolicy.Allows(origin)` (one serialized origin,
+  as a browser writes it into `clientDataJSON`) and `Domains()` (every host the
+  policy admits), which `Validate` uses.
+- **Conformance.** `webauthntest.Run(t, factory)` pins registration and
+  assertion with and without user verification under `preferred` and
+  `required`, two credentials of one user, origin admission, every rejection
+  class, extension outputs, counter regression and each `Validate` refusal,
+  over a stdlib ES256 authenticator (`webauthntest.NewAuthenticator`). The
+  go-webauthn adapter runs it.
+
+The [authentication pocket](../pockets/authentication.md#passkeys) turns a
+user-verified passkey into a native AAL2 session.
