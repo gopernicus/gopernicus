@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"slices"
 	"strings"
@@ -613,7 +614,7 @@ func TestPasskeyStepUpKeepsTheSessionHorizon(t *testing.T) {
 	h := newPasskeyHarness(t)
 	ctx := context.Background()
 	u, pair, sessionID := h.account(t, "horizon@example.com")
-	a := newPasskeyAuthenticator(false)
+	a := newPasskeyAuthenticator(true)
 	h.enroll(t, a, sessionID, u.ID, "")
 	before, _ := h.sess.Get(ctx, h.sessionOf(t, pair))
 	h.offset = time.Hour
@@ -625,8 +626,44 @@ func TestPasskeyStepUpKeepsTheSessionHorizon(t *testing.T) {
 	if !after.ExpiresAt.Equal(before.ExpiresAt) {
 		t.Fatalf("ExpiresAt %v → %v, want unchanged", before.ExpiresAt, after.ExpiresAt)
 	}
-	if result.Assurance != session.AssuranceAAL1 || after.Authentication.Assurance != session.AssuranceAAL1 {
-		t.Fatalf("presence-only step-up = %q / %q, want aal1", result.Assurance, after.Authentication.Assurance)
+	if result.Assurance != session.AssuranceAAL2 || after.Authentication.Assurance != session.AssuranceAAL2 {
+		t.Fatalf("step-up = %q / %q, want aal2", result.Assurance, after.Authentication.Assurance)
+	}
+}
+
+// TestPasskeyStepUpRequiresUserVerification pins that a step-up requires user
+// verification whatever the host's setting, and refuses a response without it
+// as passkey_rejected with a uv_required row, leaving the caller's session as
+// it was.
+func TestPasskeyStepUpRequiresUserVerification(t *testing.T) {
+	h := newPasskeyHarness(t)
+	ctx := context.Background()
+	h.svc.passkeyUV = webauthn.Preferred
+	u, pair, sessionID := h.account(t, "stepup-uv@example.com")
+	a := newPasskeyAuthenticator(true)
+	h.enroll(t, a, sessionID, u.ID, "")
+
+	ceremony, err := h.svc.BeginPasskeyStepUp(ctx, sessionID, u.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var opts struct {
+		UserVerification string `json:"userVerification"`
+	}
+	if err := json.Unmarshal(ceremony.PublicKey, &opts); err != nil || opts.UserVerification != "required" {
+		t.Fatalf("step-up options userVerification = %q (%v), want required", opts.UserVerification, err)
+	}
+
+	a.SetUserVerified(false)
+	if _, err := h.stepUp(t, a, sessionID, u.ID); !errors.Is(err, ErrPasskeyRejected) {
+		t.Fatalf("step-up without user verification = %v, want ErrPasskeyRejected", err)
+	}
+	rows := h.rows(securityevent.TypePasskeyFailed)
+	if len(rows) != 1 || rows[0].Details["reason"] != securityevent.ReasonUVRequired || rows[0].Details["ceremony"] != "step_up" || rows[0].UserID != u.ID {
+		t.Fatalf("passkey_failed rows = %+v", rows)
+	}
+	if kept, err := h.sess.Get(ctx, h.sessionOf(t, pair)); err != nil || kept.Authentication.Assurance == session.AssuranceAAL2 {
+		t.Fatalf("caller's session after the refusal = %+v, %v; want it kept below AAL2", kept.Authentication, err)
 	}
 }
 
@@ -880,7 +917,9 @@ func TestPasskeyStepUpFencedOnTheFirstRead(t *testing.T) {
 	}
 }
 
-// TestPresenceOnlyStepUpDropsTheAAL2Descriptor pins finding 7.
+// TestPresenceOnlyStepUpDropsTheAAL2Descriptor pins finding 7. A step-up
+// requires user verification, so the AAL1 answer comes from a passkey
+// registered without it and asserted with it.
 func TestPresenceOnlyStepUpDropsTheAAL2Descriptor(t *testing.T) {
 	h := newPasskeyHarness(t)
 	ctx := context.Background()
@@ -893,6 +932,7 @@ func TestPresenceOnlyStepUpDropsTheAAL2Descriptor(t *testing.T) {
 	}
 	aal2 := h.sessionOf(t, first.Tokens)
 	h.enroll(t, presence, aal2, u.ID, "")
+	presence.SetUserVerified(true)
 	second, err := h.stepUp(t, presence, aal2, u.ID)
 	if err != nil {
 		t.Fatal(err)

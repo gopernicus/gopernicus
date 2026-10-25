@@ -367,6 +367,11 @@ func (s *Service) FinishPasskeySignIn(ctx context.Context, in PasskeySignInInput
 
 // BeginPasskeyStepUp starts a step-up from the caller's live session: a
 // discoverable assertion like sign-in, its ceremony row bound to the session.
+// It always requires user verification, whatever the host's
+// PasskeyConfig.UserVerification: a step-up exists to reach AAL2, and under
+// preferred a platform may sign without its biometric (Safari with iCloud
+// Keychain does), which would answer AAL1 from an AAL2-capable passkey. A
+// response without user verification is refused.
 func (s *Service) BeginPasskeyStepUp(ctx context.Context, sessionID, userID string) (PasskeyCeremony, error) {
 	if err := s.requirePasskeys(); err != nil {
 		return PasskeyCeremony{}, err
@@ -374,7 +379,7 @@ func (s *Service) BeginPasskeyStepUp(ctx context.Context, sessionID, userID stri
 	if _, err := s.liveStepUpSession(ctx, sessionID, userID, s.now()); err != nil {
 		return PasskeyCeremony{}, err
 	}
-	started, err := s.relyingParty.BeginAssertion(ctx, webauthn.AssertionStart{UserVerification: s.passkeyUV})
+	started, err := s.relyingParty.BeginAssertion(ctx, webauthn.AssertionStart{UserVerification: webauthn.Required})
 	if err != nil {
 		return PasskeyCeremony{}, err
 	}
@@ -389,7 +394,9 @@ func (s *Service) BeginPasskeyStepUp(ctx context.Context, sessionID, userID stri
 // session's ExpiresAt — fenced on the owner's revision, then deletes the
 // replaced session and its grants. A user-verified passkey yields AAL2, which
 // RequireMFA gates and the AAL2 enrollment gate accept for the next five
-// minutes; presence only yields AAL1.
+// minutes; a passkey registered without user verification yields AAL1, and a
+// response without user verification is refused (BeginPasskeyStepUp requires
+// it).
 func (s *Service) FinishPasskeyStepUp(ctx context.Context, in PasskeyStepUpInput) (StepUpResult, error) {
 	if err := s.requirePasskeys(); err != nil {
 		return StepUpResult{}, err
