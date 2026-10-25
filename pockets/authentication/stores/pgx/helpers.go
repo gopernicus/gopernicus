@@ -28,6 +28,8 @@ const (
 	oauthHistoryTable    = "oauth_refresh_history"
 
 	externalSubjectsTable = "external_subjects"
+
+	passkeyCredentialsTable = "passkey_credentials"
 )
 
 // MigrationsFS holds the embedded schema (app-owned). cmd wires it into the

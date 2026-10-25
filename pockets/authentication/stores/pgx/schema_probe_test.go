@@ -99,6 +99,9 @@ func TestSchemaProbe_MissingTable(t *testing.T) {
 			if !strings.Contains(err.Error(), table) {
 				t.Fatalf("missing %s: error does not name the table: %v", table, err)
 			}
+			if table == passkeyCredentialsTable && !strings.Contains(err.Error(), passkeyMigration) {
+				t.Fatalf("missing %s: error does not name %s: %v", table, passkeyMigration, err)
+			}
 		})
 	}
 }

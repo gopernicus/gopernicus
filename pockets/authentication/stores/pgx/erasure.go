@@ -127,6 +127,7 @@ func (s *ErasureStore) Erase(ctx context.Context, in user.EraseInput) (user.Eras
 			args  pgx.NamedArgs
 		}{
 			{&c.Passwords, `DELETE FROM ` + s.table(passwordsTable) + ` WHERE user_id = @id`, args},
+			{&c.Passkeys, `DELETE FROM ` + s.table(passkeyCredentialsTable) + ` WHERE user_id = @id`, args},
 			{&c.OAuthAccounts, `DELETE FROM ` + s.table(oauthAccountsTable) + ` WHERE user_id = @id`, args},
 			{&c.ExternalSubjects, `DELETE FROM ` + s.table(externalSubjectsTable) + ` WHERE user_id = @id`, args},
 			{&c.ContactChanges, `DELETE FROM ` + s.table(contactChangesTable) + ` WHERE user_id = @id`, args},

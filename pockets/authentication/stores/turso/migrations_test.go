@@ -50,6 +50,8 @@ var canonicalMigrations = []string{
 	// rail's floor table. 0024 adds the one table maintenance reads.
 	"0023_retention.sql",
 	"0024_security_events_retention.sql",
+	// SOC 2 S4b: the passkey table.
+	"0025_passkey_credentials.sql",
 }
 
 // expectedTables are every CREATE TABLE the canonical set must define.
@@ -72,6 +74,7 @@ var expectedTables = []string{
 	"oauth_refresh_history",
 	"external_subjects",
 	"security_events_retention",
+	"passkey_credentials",
 }
 
 // expectedIndexes are the auth-v3 indexes AV3-2.1 lands: the identifier claim /
@@ -100,6 +103,8 @@ var expectedIndexes = []string{
 	// refresh history keep their 0019 expiry indexes).
 	"idx_sessions_expires_at", "idx_authentication_grants_expires_at", "idx_contact_changes_expires_at",
 	"idx_oauth_states_expires_at", "idx_challenges_expires_at", "idx_oauth_clients_expires_at",
+	// SOC 2 S4b: the passkey lookups (0025).
+	"idx_passkey_credentials_credential_id", "idx_passkey_credentials_user_created_id",
 }
 
 // expectedColumns are the schema additions to existing tables this task lands.

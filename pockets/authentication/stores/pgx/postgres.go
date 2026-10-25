@@ -3,7 +3,7 @@
 // module graph (the load-bearing opt-out property). It owns the SQL; the HOST owns its database lifecycle. It is the
 // dialect sibling of pockets/authentication/stores/turso: same surface plus the
 // Postgres-only WithSchema option — SQLite has no schemas — same migration version
-// set (0001–0024 with 0017 absent, seventeen tables backing the 20-port bundle; 0014 adds the
+// set (0001–0025 with 0017 absent, eighteen tables backing the 20-port bundle; 0014 adds the
 // account-lifecycle columns to users rather than a table, and auth owns no
 // delivery table), same port semantics — a host switches dialect by one import +
 // one Open call. Secrets are persisted as digests, never plaintext (session
@@ -81,7 +81,12 @@ var oauthProbeTables = []string{oauthClientsTable, oauthCodesTable, oauthHistory
 // even for a host that wires no external provider, so a missed migration fails at
 // boot rather than on the first external request.
 var externalProbeTables = []string{externalSubjectsTable}
-var probeTables = append(append(append([]string{}, legacyProbeTables...), oauthProbeTables...), externalProbeTables...)
+
+// passkeyProbeTables are the tables migration 0025 creates. They are probed in
+// every mode, even for a host that wires no passkeys, and the refusal names the
+// file (passkeyMigration).
+var passkeyProbeTables = []string{passkeyCredentialsTable}
+var probeTables = append(append(append(append([]string{}, legacyProbeTables...), oauthProbeTables...), externalProbeTables...), passkeyProbeTables...)
 
 // Repositories returns the auth repository set backed by db, WITHOUT touching
 // migrations — AFTER verifying every canonical table (see probeTables) exists
@@ -94,8 +99,8 @@ var probeTables = append(append(append([]string{}, legacyProbeTables...), oauthP
 // WithSchema qualifies both the probe and every statement the stores run.
 //
 // It refuses, in every mode with sdk.ErrNotFound, a database without migration
-// 0023 (the users.erased_at column) or 0024 (the rail's retention functions),
-// naming the file.
+// 0023 (the users.erased_at column), 0024 (the rail's retention functions) or
+// 0025 (the passkey_credentials table), naming the file.
 //
 // Last it probes the runtime role's posture on AuditTables under the
 // RuntimeMode db was opened with (pgxdb.DB.ProbeAppendOnly): in production it
@@ -135,6 +140,11 @@ func Repositories(ctx context.Context, db *pgxdb.DB, opts ...Option) (auth.Repos
 	execute, err := s.probeRetentionFunctions(ctx, db)
 	if err != nil {
 		return auth.Repositories{}, err
+	}
+	for _, table := range passkeyProbeTables {
+		if err := s.probeMigrationTable(ctx, db, table, passkeyMigration); err != nil {
+			return auth.Repositories{}, err
+		}
 	}
 	if err := db.ProbeAppendOnly(ctx, AuditTables(opts...)...); err != nil {
 		return auth.Repositories{}, err
@@ -177,6 +187,7 @@ func Repositories(ctx context.Context, db *pgxdb.DB, opts ...Option) (auth.Repos
 		// purge appends its evidence to the table it purges.
 		Maintenance: NewMaintenanceStore(db, opts...),
 		UserErasure: NewErasureStore(db, opts...),
+		Passkeys:    NewPasskeyStore(db, opts...),
 	}, nil
 }
 
@@ -302,6 +313,19 @@ func (s qualified) probeColumn(ctx context.Context, db *pgxdb.DB, table, column,
 // The framework never reads or applies the host's copies.
 func ExportMigrations(dst string) error {
 	return pgxdb.ExportMigrations(MigrationsFS, MigrationsDir, dst)
+}
+
+// probeMigrationTable is probeTables for one table a single migration file
+// creates: the refusal names that file.
+func (s qualified) probeMigrationTable(ctx context.Context, db *pgxdb.DB, table, migration string) error {
+	name := s.table(table)
+	if err := pgxdb.ProbeTable(ctx, db, name); err != nil {
+		if errors.Is(err, sdk.ErrNotFound) {
+			return fmt.Errorf("authentication pgx store: %s table missing — apply migration %s from the %q migration source before boot: %w", name, migration, "authentication", err)
+		}
+		return err
+	}
+	return nil
 }
 
 func (s qualified) probeTables(ctx context.Context, db *pgxdb.DB, tables []string) error {
