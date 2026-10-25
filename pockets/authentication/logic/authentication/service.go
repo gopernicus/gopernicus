@@ -29,6 +29,7 @@ import (
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/identifier"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/oauthaccount"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/oauthstate"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/passkey"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/passwordless"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/passwordreset"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/securityevent"
@@ -37,6 +38,7 @@ import (
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/user"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/delivery"
 	"github.com/gopernicus/gopernicus/sdk"
+	"github.com/gopernicus/gopernicus/sdk/capabilities/authentication/webauthn"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/oauth"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/ratelimiter"
 	"github.com/gopernicus/gopernicus/sdk/pkg/cryptids"
@@ -218,6 +220,8 @@ type constructorConfig struct {
 	OAuthLinkBaseURL        string
 	External                *ExternalConfig
 	ExternalSubjects        externalsubject.Repository
+	Passkeys                passkey.Repository
+	Passkey                 PasskeyConfig
 }
 
 // Service implements the auth use cases over the repository ports.
@@ -351,6 +355,13 @@ type Service struct {
 	// external is the external identity engine (WithExternal); nil when no
 	// provider is wired.
 	external *ExternalAuthenticator
+
+	// Passkey state (WithPasskeys). relyingParty nil → passkeys are off and
+	// every passkey method refuses with ErrPasskeysUnavailable.
+	passkeys          passkey.Repository
+	relyingParty      webauthn.RelyingParty
+	passkeyUV         webauthn.Requirement
+	passkeyMaxPerUser int
 }
 
 // newService assembles already validated dependencies; isolated package tests
@@ -447,6 +458,10 @@ func newService(d constructorConfig) *Service {
 		activeSessions:     d.ActiveSessions,
 		passwordlessRedeem: d.PasswordlessRedeem,
 		provisionOnRedeem:  d.ProvisionOnRedeem,
+		passkeys:           d.Passkeys,
+		relyingParty:       d.Passkey.RelyingParty,
+		passkeyUV:          d.Passkey.userVerification(),
+		passkeyMaxPerUser:  d.Passkey.maxPerUser(),
 	}
 }
 
@@ -978,22 +993,34 @@ func (s *Service) CurrentUser(ctx context.Context) (string, bool) {
 // extra step-up prompt. A zero value means none recorded (the shortcut never fires
 // for that session).
 func (s *Service) mintSession(ctx context.Context, userID string, expectedAuthRevision int64, auth session.AuthenticationMetadata) (TokenPair, error) {
+	pair, _, err := s.mintSessionUntil(ctx, userID, expectedAuthRevision, auth, time.Time{})
+	return pair, err
+}
+
+// mintSessionUntil is mintSession with an explicit session horizon: a zero
+// expiresAt takes the configured refresh TTL; a passkey step-up passes the
+// replaced session's ExpiresAt so stepping up never extends a session. It
+// returns the created session beside the pair.
+func (s *Service) mintSessionUntil(ctx context.Context, userID string, expectedAuthRevision int64, auth session.AuthenticationMetadata, expiresAt time.Time) (TokenPair, session.Session, error) {
 	sess, rawRefresh := session.NewSession(userID, s.refreshTTL, s.now())
+	if !expiresAt.IsZero() {
+		sess.ExpiresAt = expiresAt.UTC()
+	}
 	refreshHash, err := s.hashSessionToken(rawRefresh)
 	if err != nil {
-		return TokenPair{}, err
+		return TokenPair{}, session.Session{}, err
 	}
 	sess.RefreshTokenHash = refreshHash
 	sess.Authentication = auth
 	created, err := s.createSession(ctx, sess, expectedAuthRevision)
 	if err != nil {
-		return TokenPair{}, err
+		return TokenPair{}, session.Session{}, err
 	}
-	access, expiresAt, err := s.signAccessToken(userID, created.ID)
+	access, accessExpiresAt, err := s.signAccessToken(userID, created.ID, created.Authentication.Assurance)
 	if err != nil {
-		return TokenPair{}, err
+		return TokenPair{}, session.Session{}, err
 	}
-	return TokenPair{AccessToken: access, AccessExpiresAt: expiresAt, RefreshToken: rawRefresh}, nil
+	return TokenPair{AccessToken: access, AccessExpiresAt: accessExpiresAt, RefreshToken: rawRefresh}, created, nil
 }
 
 // createSession never falls back to an unfenced insert. Every credential proof
@@ -1055,14 +1082,20 @@ func (s *Service) primaryAuthentication(kind session.MethodKind) session.Authent
 // signAccessToken signs an access JWT carrying {user_id, session_id} at
 // AccessTokenTTL (§1.1). The signer stamps exp (from the returned expiry) and
 // iat; this call sets the identity claims. session_id backs the Live() tier and
-// the logout fallback.
-func (s *Service) signAccessToken(userID, sessionID string) (string, time.Time, error) {
+// the logout fallback. assurance is the session row's level, signed as the aal
+// claim; a row that recorded none (a legacy empty assurance_level) signs no
+// claim, so the token reads AssuranceUnknown.
+func (s *Service) signAccessToken(userID, sessionID string, assurance session.AssuranceLevel) (string, time.Time, error) {
 	expiresAt := s.now().Add(s.accessTTL)
-	token, err := s.tokenSigner.Sign(map[string]any{
+	claims := map[string]any{
 		tokenClaimUserID:    userID,
 		tokenClaimSessionID: sessionID,
 		tokenClaimProfile:   string(session.ProfileFirstParty),
-	}, expiresAt)
+	}
+	if assurance != session.AssuranceUnknown {
+		claims[tokenClaimAssurance] = string(assurance)
+	}
+	token, err := s.tokenSigner.Sign(claims, expiresAt)
 	if err != nil {
 		return "", time.Time{}, fmt.Errorf("sign access token: %w", err)
 	}

@@ -51,3 +51,31 @@ func respondDomainError(w http.ResponseWriter, err error) {
 	}
 	web.RespondJSONDomainError(w, err)
 }
+
+// passkeyErrorFor maps a passkey ceremony refusal to its wire code:
+// ErrPasskeyRejected → passkey_rejected (401), ErrPasskeyLimit → passkey_limit
+// (409), ErrPasskeyExists → passkey_exists (409). It returns (nil, false) for
+// any other error.
+func passkeyErrorFor(err error) (*web.Error, bool) {
+	switch {
+	case errors.Is(err, authlogic.ErrPasskeyRejected):
+		return web.NewError(http.StatusUnauthorized, "passkey rejected").WithCode("passkey_rejected"), true
+	case errors.Is(err, authlogic.ErrPasskeyLimit):
+		return web.NewError(http.StatusConflict, "passkey limit reached").WithCode("passkey_limit"), true
+	case errors.Is(err, authlogic.ErrPasskeyExists):
+		return web.NewError(http.StatusConflict, "passkey already registered").WithCode("passkey_exists"), true
+	default:
+		return nil, false
+	}
+}
+
+// respondPasskeyError writes a passkey route's error: the passkey codes first,
+// then the challenge codes (an expired ceremony is challenge_expired, 410) and
+// the generic mapping (a missing step-up is 403).
+func respondPasskeyError(w http.ResponseWriter, err error) {
+	if mapped, ok := passkeyErrorFor(err); ok {
+		web.RespondJSONError(w, mapped)
+		return
+	}
+	respondDomainError(w, err)
+}

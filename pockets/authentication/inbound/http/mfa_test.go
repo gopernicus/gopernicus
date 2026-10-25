@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -140,14 +141,49 @@ func TestRequireMFAReadsAssurance(t *testing.T) {
 	}
 }
 
-// TestRequireMFABesideAccessTokensStillPanics pins the wiring-time panic: it
-// stays until access tokens carry assurance, and none reaches AAL2 yet.
-func TestRequireMFABesideAccessTokensStillPanics(t *testing.T) {
+// TestRequireMFABesideAccessTokens pins the lift: RequireMFA reads an access
+// token's signed aal claim — an AAL2 session passes, an AAL1 or claim-less one
+// gets the challenge and a row naming access_token — while the options that
+// read provider evidence still panic beside access tokens, naming themselves.
+func TestRequireMFABesideAccessTokens(t *testing.T) {
 	h := newExternalHarness(t, externalSetup{})
-	mustPanic(t, "RequireMFA beside access tokens", func() {
-		h.svc.RequirePrincipal(Accept(CredentialAccessToken, CredentialExternalToken), RequireMFA())
-	})
-	mustPanic(t, "RequireMFA on the default set", func() { h.svc.RequirePrincipal(RequireMFA()) })
+	gate := h.svc.RequirePrincipal(Accept(CredentialAccessToken, CredentialExternalToken), RequireMFA())
+	h.svc.RequirePrincipal(RequireMFA())
+	token := func(aal string) string {
+		claims := map[string]any{"user_id": h.userID, "session_id": "s-mfa", "session_profile": "first_party"}
+		if aal != "" {
+			claims["aal"] = aal
+		}
+		raw, err := h.signer.Sign(claims, time.Now().Add(time.Minute))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return raw
+	}
+	if rec, got := h.serve(gate, extReq{bearer: token("aal2")}); rec.Code != http.StatusOK || got.cred.Assurance != session.AssuranceAAL2 {
+		t.Fatalf("AAL2 access token = %d assurance %q", rec.Code, got.cred.Assurance)
+	}
+	for _, aal := range []string{"aal1", ""} {
+		rec, _ := h.serve(gate, extReq{bearer: token(aal)})
+		if rec.Code != http.StatusUnauthorized || rec.Header().Get("WWW-Authenticate") != mfaChallenge {
+			t.Fatalf("access token aal=%q = %d %q, want the RFC 9470 401", aal, rec.Code, rec.Header().Get("WWW-Authenticate"))
+		}
+	}
+	rows := mfaRows(h.events)
+	if len(rows) != 2 || rows[0].Details["credential"] != "access_token" || rows[0].Details["assurance"] != "aal1" || rows[1].Details["assurance"] != "unknown" || rows[0].Details["gate"] != "route" {
+		t.Fatalf("rows = %+v", rows)
+	}
+	for name, opt := range map[string]PrincipalOption{"FreshAuth": FreshAuth(time.Minute), "VerifiedEmail": VerifiedEmail(), "Tenant": Tenant("t"), "Check": Check(func(context.Context, Credential) error { return nil })} {
+		func() {
+			defer func() {
+				msg, _ := recover().(string)
+				if !strings.Contains(msg, "FreshAuth, VerifiedEmail, Tenant and Check") {
+					t.Errorf("%s beside access tokens panic = %q, want one naming the external-evidence options", name, msg)
+				}
+			}()
+			h.svc.RequirePrincipal(Accept(CredentialAccessToken, CredentialExternalToken), RequireMFA(), opt)
+		}()
+	}
 }
 
 // TestRequireMFAOverTheRealEngine runs the gate over the pocket's own service:
@@ -270,8 +306,8 @@ func TestAdministrationMFAGate(t *testing.T) {
 	nativeRec := httptest.NewRecorder()
 	native.ServeHTTP(nativeRec, nativeReq)
 	rows = mfaRows(h.events)
-	if nativeRec.Code != http.StatusUnauthorized || len(rows) != 2 || rows[1].UserID != h.userID || rows[1].Details["credential"] != "access_token" || rows[1].Details["assurance"] != "unknown" {
-		t.Fatalf("native admin session = %d rows %+v; want 401 and an access_token/unknown row", nativeRec.Code, rows)
+	if nativeRec.Code != http.StatusUnauthorized || len(rows) != 2 || rows[1].UserID != h.userID || rows[1].Details["credential"] != "access_token" || rows[1].Details["assurance"] != "aal1" {
+		t.Fatalf("native admin session = %d rows %+v; want 401 and an access_token/aal1 row", nativeRec.Code, rows)
 	}
 
 	plain := web.NewWebHandler()

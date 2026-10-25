@@ -115,7 +115,7 @@ func (s *Service) redeemPasswordlessAtomic(ctx context.Context, token string) (T
 	}
 
 	// Only now, after the commit, is the plaintext pair assembled.
-	access, expiresAt, err := s.signAccessToken(res.User.ID, res.Session.ID)
+	access, expiresAt, err := s.signAccessToken(res.User.ID, res.Session.ID, res.Session.Authentication.Assurance)
 	if err != nil {
 		return TokenPair{}, passwordless.RedeemResult{}, err
 	}

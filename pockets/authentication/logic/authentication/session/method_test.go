@@ -37,10 +37,21 @@ func TestDescribeMethod_SMSisPSTN(t *testing.T) {
 }
 
 // TestDescribeMethod_UnknownKind proves an unregistered kind reports ok=false so
-// an auth-v4 method is never silently treated as AAL1.
+// a future method is never silently treated as AAL1.
 func TestDescribeMethod_UnknownKind(t *testing.T) {
-	if _, ok := DescribeMethod("passkey"); ok {
-		t.Error("DescribeMethod(\"passkey\"): ok=true, want false (unregistered)")
+	if _, ok := DescribeMethod("totp"); ok {
+		t.Error("DescribeMethod(\"totp\"): ok=true, want false (unregistered)")
+	}
+}
+
+// TestDescribeMethod_Passkeys pins the only native AAL2 source: a user-verified
+// passkey is AAL2, a presence-only one AAL1, and both resist phishing and replay.
+func TestDescribeMethod_Passkeys(t *testing.T) {
+	for kind, want := range map[MethodKind]AssuranceLevel{MethodPasskey: AssuranceAAL2, MethodPasskeyUnverified: AssuranceAAL1} {
+		d, ok := DescribeMethod(kind)
+		if !ok || d.Assurance != want || !d.PhishingResistant || !d.ReplayResistant || d.PSTN {
+			t.Errorf("DescribeMethod(%q) = %+v, %v; want %s, phishing- and replay-resistant", kind, d, ok, want)
+		}
 	}
 }
 

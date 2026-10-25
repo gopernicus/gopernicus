@@ -70,6 +70,7 @@ type eraseCountsResponse struct {
 	Sessions             int `json:"sessions"`
 	Grants               int `json:"grants"`
 	Passwords            int `json:"passwords"`
+	Passkeys             int `json:"passkeys"`
 	OAuthAccounts        int `json:"oauth_accounts"`
 	ExternalSubjects     int `json:"external_subjects"`
 	ContactChanges       int `json:"contact_changes"`
@@ -258,7 +259,7 @@ func (h *handlers) adminEraseUser(w http.ResponseWriter, r *http.Request) {
 		User:    newUserSummaryResponse(summary),
 		Changed: erasure.Changed,
 		Counts: eraseCountsResponse{
-			Sessions: c.Sessions, Grants: c.Grants, Passwords: c.Passwords, OAuthAccounts: c.OAuthAccounts,
+			Sessions: c.Sessions, Grants: c.Grants, Passwords: c.Passwords, Passkeys: c.Passkeys, OAuthAccounts: c.OAuthAccounts,
 			ExternalSubjects: c.ExternalSubjects, ContactChanges: c.ContactChanges, Codes: c.Codes, Challenges: c.Challenges,
 			IdentifiersBlanked: c.IdentifiersBlanked, InvitationsDeleted: c.InvitationsDeleted, InvitationsBlanked: c.InvitationsBlanked,
 			InvitationsCancelled: c.InvitationsCancelled, ServiceAccounts: c.ServiceAccounts, APIKeys: c.APIKeys,

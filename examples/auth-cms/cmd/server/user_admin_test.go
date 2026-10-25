@@ -136,6 +136,8 @@ func TestUserAdminLifecycleThroughHostSeams(t *testing.T) {
 	adminID := admin.userIDFor()
 	targetID := target.userIDFor()
 	host.authorize(adminID)
+	// Passkeys are wired beside the check, so the admins default needs AAL2.
+	admin.stepUpToAAL2()
 
 	// 1. The directory lists both users with their real, unmasked addresses — this
 	//    surface is already explicitly authorized, so nothing is masked here.

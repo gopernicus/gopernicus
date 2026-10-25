@@ -19,6 +19,7 @@ const (
 	defaultOAuthNativePerMinute       = 40
 	defaultRefreshPerMinute           = 30
 	defaultInvitationDeclinePerMinute = 10
+	defaultPasskeyPerMinute           = 30
 )
 
 // PublicRouteLimits sets the per-client-IP budgets of the bundled public
@@ -52,6 +53,10 @@ type PublicRouteLimits struct {
 	// InvitationDecline budgets POST /auth/invitations/{id}/decline (key
 	// "invitation_decline"). Zero → 10/min.
 	InvitationDecline ratelimiter.Limit
+	// Passkey budgets the public passkey sign-in pair, POST
+	// /auth/passkeys/assertion/options and /auth/passkeys/assertion (one key
+	// shared by both, "passkey"). Zero → 30/min.
+	Passkey ratelimiter.Limit
 }
 
 // Validate reports the first limit, defaults applied, that
@@ -69,6 +74,7 @@ func (l PublicRouteLimits) Validate() error {
 		{"OAuthNative", l.OAuthNative},
 		{"Refresh", l.Refresh},
 		{"InvitationDecline", l.InvitationDecline},
+		{"Passkey", l.Passkey},
 	} {
 		if _, err := item.limit.Normalize(); err != nil {
 			return fmt.Errorf("authentication: PublicRouteLimits.%s: %w", item.name, err)
@@ -89,6 +95,7 @@ func (l PublicRouteLimits) withDefaults() PublicRouteLimits {
 		{&l.OAuthNative, defaultOAuthNativePerMinute},
 		{&l.Refresh, defaultRefreshPerMinute},
 		{&l.InvitationDecline, defaultInvitationDeclinePerMinute},
+		{&l.Passkey, defaultPasskeyPerMinute},
 	} {
 		if *item.limit == (ratelimiter.Limit{}) {
 			*item.limit = ratelimiter.PerMinute(item.perMinute)

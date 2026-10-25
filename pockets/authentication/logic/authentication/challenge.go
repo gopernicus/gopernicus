@@ -56,15 +56,18 @@ type challengeSpec struct {
 // the defense). The register-verify and password-reset purposes are added when
 // their flows migrate onto the rail (AV3-3.2 / AV3-3.3).
 var challengeSpecs = map[string]challengeSpec{
-	challenge.PurposeVerifyRegistration: {format: formatCode, ttl: 15 * time.Minute, maxAttempts: challenge.MaxAttempts},
-	challenge.PurposePasswordReset:      {format: formatToken, ttl: passwordResetTTL},
-	challenge.PurposeLoginMagicLink:     {format: formatToken, ttl: 15 * time.Minute},
-	challenge.PurposeLoginOTP:           {format: formatCode, ttl: 5 * time.Minute, maxAttempts: challenge.MaxAttempts},
-	challenge.PurposeChangeEmail:        {format: formatCode, ttl: 15 * time.Minute, maxAttempts: challenge.MaxAttempts},
-	challenge.PurposeChangePhone:        {format: formatCode, ttl: 15 * time.Minute, maxAttempts: challenge.MaxAttempts},
-	challenge.PurposeRemovePassword:     {format: formatCode, ttl: 15 * time.Minute, maxAttempts: challenge.MaxAttempts},
-	challenge.PurposeUnlinkOAuth:        {format: formatCode, ttl: 15 * time.Minute, maxAttempts: challenge.MaxAttempts},
-	challenge.PurposeStepUp:             {format: formatCode, ttl: 5 * time.Minute, maxAttempts: challenge.MaxAttempts},
+	challenge.PurposeVerifyRegistration:  {format: formatCode, ttl: 15 * time.Minute, maxAttempts: challenge.MaxAttempts},
+	challenge.PurposePasswordReset:       {format: formatToken, ttl: passwordResetTTL},
+	challenge.PurposeLoginMagicLink:      {format: formatToken, ttl: 15 * time.Minute},
+	challenge.PurposeLoginOTP:            {format: formatCode, ttl: 5 * time.Minute, maxAttempts: challenge.MaxAttempts},
+	challenge.PurposeChangeEmail:         {format: formatCode, ttl: 15 * time.Minute, maxAttempts: challenge.MaxAttempts},
+	challenge.PurposeChangePhone:         {format: formatCode, ttl: 15 * time.Minute, maxAttempts: challenge.MaxAttempts},
+	challenge.PurposeRemovePassword:      {format: formatCode, ttl: 15 * time.Minute, maxAttempts: challenge.MaxAttempts},
+	challenge.PurposeUnlinkOAuth:         {format: formatCode, ttl: 15 * time.Minute, maxAttempts: challenge.MaxAttempts},
+	challenge.PurposeStepUp:              {format: formatCode, ttl: 5 * time.Minute, maxAttempts: challenge.MaxAttempts},
+	challenge.PurposePasskeyRegistration: {format: formatToken, ttl: passkeyCeremonyTTL},
+	challenge.PurposePasskeyAssertion:    {format: formatToken, ttl: passkeyCeremonyTTL},
+	challenge.PurposePasskeyStepUp:       {format: formatToken, ttl: passkeyCeremonyTTL},
 }
 
 // Stable challenge-rail errors (design §5.8). The transport recognizes these
@@ -109,9 +112,10 @@ type challengeProtector interface {
 // ConsumeCode, a token compares the returned blob after the atomic delete. The
 // zero value means "no binding".
 type challengeOptions struct {
-	context    any
-	hasContext bool
-	subjectKey string
+	context           any
+	hasContext        bool
+	subjectKey        string
+	subjectFromDigest bool
 }
 
 // challengeOption configures issueChallengeSecret / consumeChallenge / redeemToken.
@@ -119,9 +123,11 @@ type challengeOption func(*challengeOptions)
 
 // withStoredContext binds context v into an issued challenge (design §3.2). For a
 // code it stores the context DIGEST that consumeChallenge later compares by
-// equality; for a token it stores the identity-binding blob the redeemer
-// validates against the current identifier. It is never a payload channel — only
-// a redemption-time binding validator.
+// equality; for a token it stores the blob the redeemer reads back: the
+// identity binding a link validates against the current identifier, or a passkey
+// ceremony's relying-party state and session id, which Finish needs and which
+// therefore never leaves the server. The blob holds no secret — the token is the
+// secret, and only its digest is stored.
 func withStoredContext(v any) challengeOption {
 	return func(o *challengeOptions) { o.context = v; o.hasContext = true }
 }
@@ -137,6 +143,13 @@ func withStoredContext(v any) challengeOption {
 // replace its predecessor even when the address gains an owner in between.
 func withSubjectKey(key string) challengeOption {
 	return func(o *challengeOptions) { o.subjectKey = key }
+}
+
+// withDigestSubjectKey keys an issued token on its own digest, so every issue is
+// its own row and none replaces another: the subject of a usernameless passkey
+// sign-in is unknown until Finish. Codes ignore it.
+func withDigestSubjectKey() challengeOption {
+	return func(o *challengeOptions) { o.subjectFromDigest = true }
 }
 
 // withExpectedContext supplies the CURRENT binding to validate a redemption
@@ -198,6 +211,9 @@ func (s *Service) issueChallenge(ctx context.Context, userID, purpose string, op
 			return "", challenge.Challenge{}, fmt.Errorf("generate token: %w", err)
 		}
 		digest = s.protector.DigestToken(secret)
+		if o.subjectFromDigest {
+			o.subjectKey = "token:" + digest
+		}
 		if o.hasContext {
 			contextBytes, err = contextBlob(o.context)
 			if err != nil {

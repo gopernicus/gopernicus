@@ -262,12 +262,42 @@ const (
 	// TypeMFARequiredDenied is a credential below AAL2 refused where
 	// multi-factor authentication is required: StatusBlocked, Budgeted per
 	// client IP because an AAL1 holder can drive it. UserID is the principal for
-	// the route and admin gates and empty for the provider gate, which refuses
-	// before the subject resolves. Details carry bounded values only: gate
-	// (route, admin or provider), credential (the kind), provider (external
-	// tokens), assurance (the presented level: aal1 or unknown) and required
-	// (aal2) — never an amr value, a claim or the token.
+	// the route, admin and machine gates and empty for the provider gate, which
+	// refuses before the subject resolves. Details carry bounded values only:
+	// gate (route, admin, machine or provider), credential (access_token,
+	// api_key or external_token), provider (external tokens), assurance (the
+	// presented level: aal1 or unknown) and required (aal2) — never an amr
+	// value, a claim or the token.
 	TypeMFARequiredDenied = "mfa_required_denied"
+
+	// Passkey vocabulary (SOC 2 S4b). Details carry bounded values and opaque
+	// row ids only — never a public key, credential id, user handle, passkey
+	// name, origin or raw ceremony response.
+	//
+	// TypePasskeyRegistered is a passkey added (success; UserID the owner):
+	// passkey_id, user_verified, backup_eligible and aaguid (32 hex digits).
+	TypePasskeyRegistered = "passkey_registered"
+	// TypePasskeyRemoved is the owner removing a passkey (success): passkey_id
+	// and remaining (the passkeys left).
+	TypePasskeyRemoved = "passkey_removed"
+	// TypePasskeysReset is an administrator deleting every passkey of a user
+	// (success; UserID the target, Actor the administrator): removed.
+	TypePasskeysReset = "passkeys_reset"
+	// TypePasskeyLogin is a verified passkey assertion that minted a session
+	// (success; UserID the owner): ceremony (sign_in or step_up), assurance
+	// (aal1 or aal2) and backup_state.
+	TypePasskeyLogin = "passkey_login"
+	// TypePasskeyFailed is a refused passkey ceremony (failure, Budgeted per
+	// client IP): ceremony (sign_in, step_up or registration) and reason
+	// (unknown_credential, user_mismatch, rejected, uv_required, expired,
+	// inactive or conflict). UserID is empty for sign-in and the caller for
+	// step-up and registration.
+	TypePasskeyFailed = "passkey_failed"
+	// TypePasskeySignCountRegressed is an assertion refused because its
+	// signature counter did not advance past the stored one — a possible cloned
+	// authenticator (blocked, Budgeted per client IP; UserID the owner):
+	// passkey_id, stored and presented.
+	TypePasskeySignCountRegressed = "passkey_sign_count_regressed"
 
 	// Session-management vocabulary. Both are recorded on success only; UserID is
 	// the session owner.
@@ -407,6 +437,21 @@ const (
 	ReasonInvalidScope = "invalid_scope"
 	// ReasonInvalidTarget is an OAuth2 resource or audience the server refused.
 	ReasonInvalidTarget = "invalid_target"
+	// ReasonUnknownCredential is a passkey assertion naming no stored passkey.
+	ReasonUnknownCredential = "unknown_credential"
+	// ReasonUserMismatch is a step-up assertion by another user's passkey.
+	ReasonUserMismatch = "user_mismatch"
+	// ReasonRejected is a passkey ceremony response or ceremony handle the
+	// relying party or the challenge rail refused.
+	ReasonRejected = "rejected"
+	// ReasonUVRequired is a passkey response without the user verification the
+	// relying party required.
+	ReasonUVRequired = "uv_required"
+	// ReasonExpired is a passkey ceremony finished after its handle expired.
+	ReasonExpired = "expired"
+	// ReasonConflict is a passkey use that lost a concurrent change: the sign
+	// count moved, the passkey was removed, or the account revision advanced.
+	ReasonConflict = "conflict"
 )
 
 // Attribution bounds BoundValue applies, in bytes.
@@ -460,6 +505,7 @@ var types = []string{
 	TypeServiceAccountCreated, TypeAPIKeyMinted, TypeAPIKeyRevoked,
 	TypeExternalSubjectProvisioned, TypeExternalSubjectUnknown, TypeExternalSubjectCollision,
 	TypeExternalSubjectDenied, TypeExternalRevocationUnavailable, TypeExternalLogin, TypeMFARequiredDenied,
+	TypePasskeyRegistered, TypePasskeyRemoved, TypePasskeysReset, TypePasskeyLogin, TypePasskeyFailed, TypePasskeySignCountRegressed,
 	TypeSessionRevoked, TypeAllSessionsRevoked, TypeUserDirectoryRead,
 	TypeOAuth2ConsentApproved, TypeOAuth2ConsentDenied, TypeOAuth2ConnectionCreated, TypeOAuth2Refresh,
 	TypeOAuth2RefreshReuse, TypeOAuth2TokenExchanged, TypeOAuth2RevocationRequested, TypeOAuth2GrantFailed,

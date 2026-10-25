@@ -15,6 +15,7 @@
 package credential
 
 import (
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/passkey"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/session"
 	"github.com/gopernicus/gopernicus/sdk"
 )
@@ -67,6 +68,20 @@ func (m IdentifierMethod) loginDescriptor() (session.AuthenticationMethod, bool)
 	}
 }
 
+// PasskeyMethod is one registered passkey in a MethodSet: its row id and whether
+// its registration ceremony reported user verification (the stored flag a
+// store projects). AAL2Capable applies passkey.Passkey.AAL2Capable to it.
+type PasskeyMethod struct {
+	ID           string
+	UserVerified bool
+}
+
+// AAL2Capable reports whether the passkey is an AAL2 login method, by the one
+// predicate passkey.Passkey.AAL2Capable defines.
+func (m PasskeyMethod) AAL2Capable() bool {
+	return passkey.Passkey{UserVerified: m.UserVerified}.AAL2Capable()
+}
+
 // MethodSet is the typed inventory a CredentialPolicy evaluates and a
 // MutationRepository snapshots (design §5.6). AuthRevision is the optimistic
 // serialization token the store increments on every applied mutation; a Snapshot
@@ -76,11 +91,13 @@ type MethodSet struct {
 	HasPassword  bool
 	OAuth        []OAuthMethod
 	Identifiers  []IdentifierMethod
+	Passkeys     []PasskeyMethod
 }
 
 // LoginMethods returns the honest descriptors of every direct login method in the
-// set: the password, each OAuth link, and each verified login-enabled identifier.
-// The policy reasons over these descriptors rather than a scalar count.
+// set: the password, each OAuth link, each passkey, and each verified
+// login-enabled identifier. The policy reasons over these descriptors rather than
+// a scalar count.
 func (s MethodSet) LoginMethods() []session.AuthenticationMethod {
 	var out []session.AuthenticationMethod
 	if s.HasPassword {
@@ -90,6 +107,15 @@ func (s MethodSet) LoginMethods() []session.AuthenticationMethod {
 	}
 	for range s.OAuth {
 		if d, ok := session.DescribeMethod(session.MethodOAuth); ok {
+			out = append(out, d)
+		}
+	}
+	for _, p := range s.Passkeys {
+		kind := session.MethodPasskeyUnverified
+		if p.AAL2Capable() {
+			kind = session.MethodPasskey
+		}
+		if d, ok := session.DescribeMethod(kind); ok {
 			out = append(out, d)
 		}
 	}
@@ -133,8 +159,22 @@ func (s MethodSet) With(m Mutation) MethodSet {
 		s.Identifiers = retireIdentifier(s.Identifiers, mut.IdentifierID, mut.ReplacementPrimaryID)
 	case ChangeIdentifierUses:
 		s.Identifiers = changeIdentifierUses(s.Identifiers, mut.IdentifierID, mut.Uses, mut.MakePrimary)
+	case RemovePasskey:
+		s.Passkeys = removePasskey(s.Passkeys, mut.PasskeyID)
+	case RemovePasskeys:
+		s.Passkeys = nil
 	}
 	return s
+}
+
+func removePasskey(passkeys []PasskeyMethod, id string) []PasskeyMethod {
+	out := make([]PasskeyMethod, 0, len(passkeys))
+	for _, p := range passkeys {
+		if p.ID != id {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 func removeOAuth(links []OAuthMethod, provider string) []OAuthMethod {
@@ -214,7 +254,19 @@ type ChangeIdentifierUses struct {
 	MakePrimary  bool
 }
 
+// RemovePasskey deletes the user's passkey PasskeyID. An id the user does not
+// own is sdk.ErrNotFound, with nothing applied.
+type RemovePasskey struct {
+	PasskeyID string
+}
+
+// RemovePasskeys deletes every passkey the user holds: the administrator's
+// reset. Zero passkeys is not an error.
+type RemovePasskeys struct{}
+
 func (RemovePassword) isMutation()       {}
 func (UnlinkOAuth) isMutation()          {}
 func (RetireIdentifier) isMutation()     {}
 func (ChangeIdentifierUses) isMutation() {}
+func (RemovePasskey) isMutation()        {}
+func (RemovePasskeys) isMutation()       {}

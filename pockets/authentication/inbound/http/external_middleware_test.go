@@ -435,8 +435,8 @@ func TestExternalCookieNameValidation(t *testing.T) {
 func TestExternalWiringPanics(t *testing.T) {
 	h := newExternalHarness(t, externalSetup{})
 	for name, opts := range map[string][]PrincipalOption{
-		"RequireMFA on the default set":   {RequireMFA()},
 		"FreshAuth with access tokens":    {Accept(CredentialAccessToken, CredentialExternalToken), FreshAuth(time.Minute)},
+		"Tenant on the default set":       {Tenant("t")},
 		"VerifiedEmail with access token": {Accept(CredentialAccessToken), VerifiedEmail()},
 		"Browser with external, no path":  {Browser()},
 		"Browser on RequireExternalToken": {Accept(CredentialExternalToken), Browser()},
@@ -448,6 +448,7 @@ func TestExternalWiringPanics(t *testing.T) {
 	mustPanic(t, "Check(nil)", func() { Check(nil) })
 
 	h.svc.RequirePrincipal(Accept(CredentialExternalToken, CredentialAPIKey), RequireMFA(), FreshAuth(time.Minute), VerifiedEmail(), Tenant("t"))
+	h.svc.RequirePrincipal(RequireMFA())
 	h.svc.RequirePrincipal(Accept(CredentialAccessToken), Browser())
 	withPath := newExternalHarness(t, externalSetup{loginPath: extLoginPath})
 	withPath.svc.RequirePrincipal(Browser())

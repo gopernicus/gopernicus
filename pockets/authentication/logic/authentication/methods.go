@@ -31,6 +31,24 @@ type MethodsView struct {
 	HasPassword bool
 	OAuth       []OAuthMethodView
 	Identifiers []IdentifierMethodView
+	// Passkeys lists the user's passkeys when passkeys are enabled; nil when
+	// they are not.
+	Passkeys []PasskeyMethodView
+}
+
+// PasskeyMethodView is one passkey in the inventory: its row id and name, when
+// it was registered and last used, its flags and transport hints, and the
+// advisory removable hint. It carries no credential id, key or handle.
+type PasskeyMethodView struct {
+	ID             string
+	Name           string
+	CreatedAt      time.Time
+	LastUsedAt     *time.Time
+	UserVerified   bool
+	BackupEligible bool
+	BackupState    bool
+	Transports     []string
+	Removable      bool
 }
 
 // OAuthMethodView is one linked provider in the inventory: the provider name, when
@@ -126,6 +144,21 @@ func (s *Service) Methods(ctx context.Context, userID string) (MethodsView, erro
 			entry.VerifiedAt = it.VerifiedAt
 		}
 		view.Identifiers = append(view.Identifiers, entry)
+	}
+	if s.relyingParty != nil && s.passkeys != nil {
+		passkeys, err := s.passkeys.ListByUser(ctx, userID)
+		if err != nil {
+			return MethodsView{}, err
+		}
+		view.Passkeys = make([]PasskeyMethodView, 0, len(passkeys))
+		for _, p := range passkeys {
+			view.Passkeys = append(view.Passkeys, PasskeyMethodView{
+				ID: p.ID, Name: p.Name, CreatedAt: p.CreatedAt, LastUsedAt: p.LastUsedAt,
+				UserVerified: p.UserVerified, BackupEligible: p.BackupEligible, BackupState: p.BackupState,
+				Transports: append([]string(nil), p.Transports...),
+				Removable:  s.removable(ctx, snap, credential.RemovePasskey{PasskeyID: p.ID}),
+			})
+		}
 	}
 	return view, nil
 }

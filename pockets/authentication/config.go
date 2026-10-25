@@ -17,6 +17,7 @@ import (
 	invitations "github.com/gopernicus/gopernicus/pockets/authentication/logic/invitations"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/maintenance"
 	"github.com/gopernicus/gopernicus/sdk"
+	"github.com/gopernicus/gopernicus/sdk/capabilities/authentication/webauthn"
 	sdkevents "github.com/gopernicus/gopernicus/sdk/capabilities/events"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/notify/email"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/oauth"
@@ -28,11 +29,18 @@ import (
 
 // The MFAConfig.Required values.
 const (
-	// MFARequiredNone is the zero value: no requirement beyond each external
-	// provider's own RequireMFA.
-	MFARequiredNone MFARequirement = ""
+	// MFARequiredDefault is the zero value. New resolves it once, before any
+	// check reads it: to MFARequiredAdmins when WithPasskeys wires a relying
+	// party and AdministrationConfig.UserAdminCheck is set, else to
+	// MFARequiredNone. The boot line names the result with source=default.
+	MFARequiredDefault MFARequirement = ""
+	// MFARequiredNone requires nothing beyond each external provider's own
+	// RequireMFA. It is the explicit opt-out of the passkey default — the
+	// sole-admin break-glass.
+	MFARequiredNone MFARequirement = "none"
 	// MFARequiredAdmins requires AAL2 on /auth/admin/users* of every caller
-	// AdministrationConfig.UserAdminCheck admits; an API key passes.
+	// AdministrationConfig.UserAdminCheck admits — and, beside passkeys, on the
+	// machine lifecycle routes after MachineRoutesGate; an API key passes.
 	MFARequiredAdmins MFARequirement = "admins"
 	// MFARequiredAll requires AAL2 of every external-token user: New sets
 	// ExternalProvider.RequireMFA on a copy of every External provider.
@@ -117,7 +125,11 @@ type constructorConfig struct {
 	MaintenanceRunnerAcknowledged bool
 	UserErasureRoute              bool
 	MFARequired                   MFARequirement
-	Logger                        *slog.Logger
+	// mfaRequiredSource records whether MFARequired came from configuration or
+	// the zero value's resolution; New sets it.
+	mfaRequiredSource string
+	Passkey           PasskeyConfig
+	Logger            *slog.Logger
 }
 
 // Option configures New before construction. Nil options are invalid.
@@ -947,16 +959,56 @@ func WithAdministration(value AdministrationConfig) Option {
 // MFARequirement selects which users must sign in at AAL2: none, admins or all.
 type MFARequirement string
 
-// MFAConfig is the pocket's multi-factor requirement. AAL2 comes only from an
-// external provider that asserted multi-factor authentication, so any
-// requirement needs WithExternal (ErrMFAUnsatisfiable without it). Admins also
-// needs AdministrationConfig.UserAdminCheck and gates /auth/admin/users* only:
-// it does NOT gate role routes, cms admin routes or host admin pages, which add
-// RequireMFA() themselves. All refuses native password, passwordless and OAuth
-// login. An unknown Required is sdk.ErrInvalidInput. It is a wiring literal,
-// not an env knob.
+// MFAConfig is the pocket's multi-factor requirement. AAL2 comes from a
+// user-verified passkey or from an external provider that asserted multi-factor
+// authentication, so a requirement needs WithPasskeys or WithExternal
+// (ErrMFAUnsatisfiable without either). Admins also needs
+// AdministrationConfig.UserAdminCheck and gates /auth/admin/users* — plus the
+// machine lifecycle routes beside passkeys — only: it does NOT gate role
+// routes, cms admin routes or host admin pages, which add RequireMFA()
+// themselves. All needs WithExternal and refuses native password, passwordless,
+// OAuth and passkey login: native all waits for recovery codes (S4c). The zero
+// Required resolves as MFARequiredDefault documents; an unknown one is
+// sdk.ErrInvalidInput. It is a wiring literal, not an env knob.
 type MFAConfig struct {
 	Required MFARequirement
+}
+
+// PasskeyViews renders the passkey pages; see PasskeyConfig.Views.
+type PasskeyViews = inbound.PasskeyViews
+
+// PasskeyConfig turns on passkeys (SOC 2 S4b): WebAuthn registration,
+// usernameless sign-in and step-up over the sdk webauthn port, with a
+// user-verified passkey as the native AAL2 factor.
+type PasskeyConfig struct {
+	// RelyingParty runs the ceremonies, typically the go-webauthn integration
+	// (gowebauthn.New). Nil leaves passkeys off. Its Config().RPID is permanent
+	// for a deployment: changing it orphans every registered passkey.
+	// Production refuses a localhost or IP RP ID and an Origins policy with an
+	// http namespace (ErrPasskeyDevelopmentRelyingParty). Wiring one requires
+	// Repositories.Passkeys, CredentialMutations, AuthenticationGrants and
+	// Challenges (ErrPasskeyReposRequired), and beside UserAdminCheck it moves
+	// the MFAConfig default to admins.
+	RelyingParty webauthn.RelyingParty
+	// UserVerification is requested of every ceremony. Zero selects preferred:
+	// a passkey without user verification still signs in, at AAL1.
+	UserVerification webauthn.Requirement
+	// MaxPerUser caps the passkeys one user may hold. Zero selects 10; above 25
+	// is refused.
+	MaxPerUser int
+	// Views renders the passkey pages: GET /auth/account/passkeys, its form
+	// lane, and GET /auth/step-up/passkey, which a Browser() gate with
+	// RequireMFA() redirects an AAL1 session to. Nil keeps the passkey routes
+	// JSON-only; non-nil requires BrowserConfig.Views. The Views interface itself
+	// gains no method.
+	Views PasskeyViews
+}
+
+// WithPasskeys replaces the complete PasskeyConfig group, including zero values.
+func WithPasskeys(value PasskeyConfig) Option {
+	return func(c *constructorConfig) {
+		c.Passkey = value
+	}
 }
 
 // WithMFA replaces the complete MFAConfig group, including zero values.

@@ -101,7 +101,7 @@ func (s *Service) rotate(ctx context.Context, sess session.Session, currentHash 
 		}
 		return TokenPair{}, err
 	}
-	access, expiresAt, err := s.signAccessToken(sess.UserID, sess.ID)
+	access, expiresAt, err := s.signAccessToken(sess.UserID, sess.ID, sess.Authentication.Assurance)
 	if err != nil {
 		return TokenPair{}, err
 	}
@@ -123,7 +123,7 @@ func (s *Service) grace(ctx context.Context, sess session.Session, previousHash 
 		}
 		return TokenPair{}, err
 	}
-	access, expiresAt, err := s.signAccessToken(sess.UserID, sess.ID)
+	access, expiresAt, err := s.signAccessToken(sess.UserID, sess.ID, sess.Authentication.Assurance)
 	if err != nil {
 		return TokenPair{}, err
 	}

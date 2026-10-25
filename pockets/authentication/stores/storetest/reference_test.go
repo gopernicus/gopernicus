@@ -24,6 +24,7 @@ import (
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/oauth2"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/oauthaccount"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/oauthstate"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/passkey"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/passwordless"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/passwordreset"
 	protection "github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/protection"
@@ -36,6 +37,14 @@ import (
 	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/pkg/list"
 )
+
+// TestReferencePasskeys runs the passkey suite, separate from Run, against the
+// reference implementation.
+func TestReferencePasskeys(t *testing.T) {
+	RunPasskeys(t, func(t *testing.T) auth.Repositories {
+		return newReference().repositories()
+	})
+}
 
 // TestReference runs the conformance suite against the in-package reference
 // implementation. This is what lets pockets/authentication self-verify under guard G2
@@ -81,6 +90,9 @@ type reference struct {
 	// status stays deactivated; every read projects StatusErased from it.
 	erasedAt map[string]time.Time
 
+	// passkeys holds registered passkeys, by ID.
+	passkeys map[string]passkey.Passkey
+
 	// resetFailAt/resetFailErr inject an all-or-nothing rollback failure into
 	// refPasswordResets.Redeem (design §5.9): resetFailAt=N fails just after the
 	// Nth composition statement, so a test proves that a mid-transaction failure at
@@ -110,6 +122,7 @@ func newReference() *reference {
 
 		externalSubjects: map[externalKey]externalsubject.ExternalSubject{},
 		erasedAt:         map[string]time.Time{},
+		passkeys:         map[string]passkey.Passkey{},
 	}
 }
 
@@ -138,6 +151,7 @@ func (r *reference) repositories() auth.Repositories {
 		ExternalSubjects:     refExternalSubjects{r},
 		Maintenance:          refMaintenance{r},
 		UserErasure:          refErasure{r},
+		Passkeys:             refPasskeys{r},
 	}
 }
 
@@ -2127,6 +2141,9 @@ func (r refCredentialMutations) snapshotLocked(userID string) credential.MethodS
 			set.Identifiers = append(set.Identifiers, credential.IdentifierMethod{ID: it.ID, Kind: string(it.Kind), Uses: credential.IdentifierUses{Login: it.LoginEnabled, Recovery: it.RecoveryEnabled, Notification: it.NotificationEnabled}, Verified: it.Verified(), Primary: it.IsPrimary})
 		}
 	}
+	for _, p := range r.passkeysOfLocked(userID) {
+		set.Passkeys = append(set.Passkeys, credential.PasskeyMethod{ID: p.ID, UserVerified: p.UserVerified})
+	}
 	return set
 }
 
@@ -2211,6 +2228,18 @@ func (r refCredentialMutations) Apply(_ context.Context, userID string, expected
 			r.userIdentifiers[target.ID] = target
 		}
 		r.identifiers[userID] = changeRefIdentifierUses(r.identifiers[userID], m.IdentifierID, m.Uses, m.MakePrimary)
+	case credential.RemovePasskey:
+		p, ok := r.passkeys[m.PasskeyID]
+		if !ok || p.UserID != userID {
+			return sdk.ErrNotFound
+		}
+		delete(r.passkeys, m.PasskeyID)
+	case credential.RemovePasskeys:
+		for _, p := range r.passkeysOfLocked(userID) {
+			delete(r.passkeys, p.ID)
+		}
+	default:
+		return fmt.Errorf("reference: unsupported credential mutation %T: %w", mutation, sdk.ErrInvalidInput)
 	}
 	if _, ok := r.users[userID]; ok {
 		r.advanceCredentialRevisionLocked(userID, time.Now())
@@ -2729,6 +2758,10 @@ func (r refErasure) Erase(ctx context.Context, in user.EraseInput) (user.Erasure
 		delete(r.passwords, id)
 		c.Passwords = 1
 	}
+	for _, p := range r.passkeysOfLocked(id) {
+		delete(r.passkeys, p.ID)
+		c.Passkeys++
+	}
 	kept := r.oauthAccounts[:0:0]
 	for _, a := range r.oauthAccounts {
 		if a.UserID == id {
@@ -2812,4 +2845,127 @@ func (r refErasure) Erase(ctx context.Context, in user.EraseInput) (user.Erasure
 		r.securityEvents = append(r.securityEvents, evt)
 	}
 	return user.Erasure{Changed: true, ErasedAt: now, Counts: c}, nil
+}
+
+// --- passkey.Repository ---
+
+// refPasskeys is the reference passkey store. Create runs its guard under the
+// one mutex that also serializes the credential-mutation rail, the reference's
+// user-row lock.
+type refPasskeys struct{ *reference }
+
+var _ passkey.Repository = refPasskeys{}
+
+// passkeysOfLocked returns userID's passkeys oldest first; callers hold r.mu.
+func (r *reference) passkeysOfLocked(userID string) []passkey.Passkey {
+	var out []passkey.Passkey
+	for _, p := range r.passkeys {
+		if p.UserID == userID {
+			out = append(out, clonePasskey(p))
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if !out[i].CreatedAt.Equal(out[j].CreatedAt) {
+			return out[i].CreatedAt.Before(out[j].CreatedAt)
+		}
+		return out[i].ID < out[j].ID
+	})
+	return out
+}
+
+func clonePasskey(p passkey.Passkey) passkey.Passkey {
+	p.CredentialID = slices.Clone(p.CredentialID)
+	p.PublicKey = slices.Clone(p.PublicKey)
+	p.AAGUID = slices.Clone(p.AAGUID)
+	p.UserHandle = slices.Clone(p.UserHandle)
+	p.Transports = slices.Clone(p.Transports)
+	if p.LastUsedAt != nil {
+		at := *p.LastUsedAt
+		p.LastUsedAt = &at
+	}
+	return p
+}
+
+func (r refPasskeys) Create(_ context.Context, in passkey.CreateInput) (passkey.Passkey, error) {
+	p := in.Passkey
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	u, ok := r.users[p.UserID]
+	if !ok {
+		return passkey.Passkey{}, sdk.ErrNotFound
+	}
+	if !r.projectLocked(u).Active() {
+		return passkey.Passkey{}, session.ErrUserNotActive
+	}
+	if u.AuthRevision != in.ExpectedAuthRevision {
+		return passkey.Passkey{}, sdk.ErrConflict
+	}
+	owned := r.passkeysOfLocked(p.UserID)
+	if in.Bootstrap && slices.ContainsFunc(owned, passkey.Passkey.AAL2Capable) {
+		return passkey.Passkey{}, passkey.ErrBootstrapClosed
+	}
+	for _, existing := range r.passkeys {
+		if string(existing.CredentialID) == string(p.CredentialID) {
+			return passkey.Passkey{}, sdk.ErrAlreadyExists
+		}
+	}
+	if len(owned) >= in.MaxPerUser {
+		return passkey.Passkey{}, passkey.ErrPasskeyLimit
+	}
+	if len(owned) > 0 && string(owned[0].UserHandle) != string(p.UserHandle) {
+		return passkey.Passkey{}, sdk.ErrConflict
+	}
+	if p.ID == "" {
+		p.ID = ids.MustGenerate()
+	}
+	p.CreatedAt = p.CreatedAt.UTC()
+	p.LastUsedAt = nil
+	r.passkeys[p.ID] = clonePasskey(p)
+	return clonePasskey(p), nil
+}
+
+func (r refPasskeys) GetByCredentialID(_ context.Context, credentialID []byte) (passkey.Passkey, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	for _, p := range r.passkeys {
+		if string(p.CredentialID) == string(credentialID) {
+			return clonePasskey(p), nil
+		}
+	}
+	return passkey.Passkey{}, sdk.ErrNotFound
+}
+
+func (r refPasskeys) ListByUser(_ context.Context, userID string) ([]passkey.Passkey, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	out := r.passkeysOfLocked(userID)
+	if out == nil {
+		out = []passkey.Passkey{}
+	}
+	return out, nil
+}
+
+func (r refPasskeys) Rename(_ context.Context, id, userID, name string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	p, ok := r.passkeys[id]
+	if !ok || p.UserID != userID {
+		return sdk.ErrNotFound
+	}
+	p.Name = name
+	r.passkeys[id] = p
+	return nil
+}
+
+func (r refPasskeys) RecordUse(_ context.Context, id string, expected, count uint32, backupState bool, at time.Time) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	p, ok := r.passkeys[id]
+	if !ok || p.SignCount != expected {
+		return sdk.ErrConflict
+	}
+	at = at.UTC()
+	p.SignCount, p.BackupState, p.LastUsedAt = count, backupState, &at
+	r.passkeys[id] = p
+	return nil
 }

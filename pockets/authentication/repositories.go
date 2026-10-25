@@ -11,6 +11,7 @@ import (
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/oauth2"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/oauthaccount"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/oauthstate"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/passkey"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/passwordless"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/passwordreset"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/securityevent"
@@ -162,4 +163,11 @@ type Repositories struct {
 	// (ErrUserErasureRequiresActiveSessions): a login racing the erase must not
 	// mint through the unfenced Sessions.Create after it commits.
 	UserErasure user.EraseRepository
+
+	// Passkeys stores registered passkeys (SOC 2 S4b). It is REQUIRED when
+	// WithPasskeys wires a relying party and unused otherwise. It must be backed
+	// by the same transaction-capable adapter as Users and CredentialMutations:
+	// Create locks the user row the mutation rail serializes on, Snapshot counts
+	// passkeys as login methods, and Apply performs their removal.
+	Passkeys passkey.Repository
 }

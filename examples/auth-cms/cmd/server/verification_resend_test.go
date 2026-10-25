@@ -162,6 +162,7 @@ func TestAdminResendReportsRealTargetState(t *testing.T) {
 	host := newAdminHost(t)
 	admin := host.signUp("resend-admin@example.com")
 	host.authorize(admin.userIDFor())
+	admin.stepUpToAAL2()
 
 	// An unverified target: registered, never verified, so it has no session and
 	// its id must come from the directory rather than /auth/me.

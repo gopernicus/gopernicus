@@ -1,0 +1,5 @@
+{{if eq .Change "added"}}A passkey was just added to your account.{{else if eq .Change "reset"}}An administrator just removed every passkey from your account.{{else}}A passkey was just removed from your account.{{end}}
+
+If you made this change, no action is needed.
+
+If you did not, secure your account immediately — someone may have access to it.

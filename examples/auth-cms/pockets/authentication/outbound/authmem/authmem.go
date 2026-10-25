@@ -41,6 +41,7 @@ import (
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/oauth2"
 	oauthaccount "github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/oauthaccount"
 	oauthstate "github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/oauthstate"
+	passkey "github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/passkey"
 	securityevent "github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/securityevent"
 	serviceaccount "github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/serviceaccount"
 	session "github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/session"
@@ -89,6 +90,9 @@ type data struct {
 	// erasedAt is the erasure marker (users.erased_at), by user ID. The stored
 	// status stays deactivated; every read projects user.StatusErased from it.
 	erasedAt map[string]time.Time
+
+	// passkeys holds registered passkeys, by ID.
+	passkeys map[string]passkey.Passkey
 }
 
 // Store is an in-memory auth datastore. Its Repositories method yields the port
@@ -116,6 +120,7 @@ func New() *Store {
 
 		externalSubjects: map[externalKey]externalsubject.ExternalSubject{},
 		erasedAt:         map[string]time.Time{},
+		passkeys:         map[string]passkey.Passkey{},
 	}}
 }
 
@@ -160,6 +165,10 @@ func (s *Store) Repositories() auth.Repositories {
 		// service drives, and the one-critical-section erase.
 		Maintenance: maintenanceRepo{s.d},
 		UserErasure: erasureRepo{s.d},
+
+		// Passkeys (SOC 2 S4b): Snapshot and Apply cover them and erasure deletes
+		// them, so the credential rail and the store never disagree.
+		Passkeys: passkeyRepo{s.d},
 	}
 }
 

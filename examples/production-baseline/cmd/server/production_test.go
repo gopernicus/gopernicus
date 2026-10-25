@@ -207,7 +207,7 @@ func TestProductionBaselineConstructs(t *testing.T) {
 			t.Errorf("registration lacks %q:\n%s", want, logs.String())
 		}
 	}
-	if !strings.Contains(logs.String(), "mfa_required=admins gates=/auth/admin/users*") {
+	if !strings.Contains(logs.String(), "mfa_required=admins source=config gates=/auth/admin/users*") {
 		t.Errorf("registration lacks the mfa posture line:\n%s", logs.String())
 	}
 	if strings.Contains(logs.String(), "level=WARN") {

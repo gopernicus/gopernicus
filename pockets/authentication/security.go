@@ -100,18 +100,31 @@ var (
 	// The causes are password flows on (native_password), any Passwordless kind
 	// (passwordless), any OAuth provider (native_oauth), and an External provider
 	// without RequireMFA while MFAConfig.Required is none (external_no_mfa); the
-	// refusal names the ones present. The pocket ships no native second factor
-	// yet, so production asks the host to accept one-factor sign-in explicitly,
-	// to require MFA of its external users (WithMFA), or to turn native login off.
+	// refusal names the ones present. A passkey is a second factor only where a
+	// gate requires AAL2 — native password, passwordless and OAuth login still
+	// sign in at AAL1 — so production asks the host to accept one-factor sign-in
+	// explicitly, to require MFA of its external users (WithMFA), or to turn
+	// native login off.
 	// It is the logic package's sentinel, re-exported here, so one errors.Is
 	// target serves New and NewExternalAuthenticator.
 	ErrSingleFactorUnacknowledged = authlogic.ErrSingleFactorUnacknowledged
 	// ErrMFAUnsatisfiable is returned in every mode when MFAConfig.Required cannot
-	// be met by the wiring: any requirement without WithExternal (the only AAL2
-	// source); admins without AdministrationConfig.UserAdminCheck (it would gate
-	// nothing); all beside native password, passwordless or OAuth login (the
-	// pocket ships no native second factor). The error names the field to change.
+	// be met by the wiring: admins without WithPasskeys or WithExternal (the AAL2
+	// sources) or without AdministrationConfig.UserAdminCheck (it would gate
+	// nothing); all without WithExternal, or beside native password,
+	// passwordless, OAuth or passkey login (native all waits for recovery codes,
+	// S4c). The error names the field to change.
 	ErrMFAUnsatisfiable = errors.New("auth: MFAConfig.Required cannot be satisfied by this wiring")
+	// ErrPasskeyReposRequired is returned when WithPasskeys wires a relying party
+	// without Repositories.Passkeys, CredentialMutations, AuthenticationGrants,
+	// Challenges or a ChallengeProtector. It is the logic package's sentinel,
+	// re-exported here.
+	ErrPasskeyReposRequired = authlogic.ErrPasskeyReposRequired
+	// ErrPasskeyDevelopmentRelyingParty is returned in production RuntimeMode for
+	// a WebAuthn relying party whose Config().RPID is localhost or an IP address,
+	// or whose Config().Origins admits an http namespace: a passkey registered
+	// there is bound to a development origin. There is no acknowledgement.
+	ErrPasskeyDevelopmentRelyingParty = errors.New("auth: production refuses a passkey relying party with a localhost or IP RP ID, or an http origin namespace")
 	// ErrMFARequired denies a credential below AAL2 where multi-factor
 	// authentication is required. It is the logic package's sentinel,
 	// re-exported here, and matches sdk.ErrUnauthorized.

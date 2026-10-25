@@ -23,6 +23,11 @@ const (
 	// app-minted id (§1.1); the Live() tier and the logout fallback read it.
 	tokenClaimSessionID = "session_id"
 	tokenClaimProfile   = "session_profile"
+	// tokenClaimAssurance is the first-party access JWT's authenticator
+	// assurance (aal1 or aal2), signed from the session row's assurance_level.
+	// A row that recorded none signs no claim; a delegated token never carries
+	// one.
+	tokenClaimAssurance = "aal"
 )
 
 // ErrDelegatedCredential refuses a delegated credential at a first-party
@@ -109,15 +114,28 @@ func parseAccessClaims(claims map[string]any) (string, Credential, bool) {
 		}
 		cred.Profile = session.Profile(profile)
 	}
+	rawAssurance, hasAssurance := claims[tokenClaimAssurance]
 	if cred.Profile == session.ProfileFirstParty {
 		for _, name := range []string{"iss", "aud", "client_id", "origin_client_id", "act"} {
 			if _, present := claims[name]; present {
 				return "", Credential{}, false
 			}
 		}
+		if hasAssurance {
+			level, valid := claimString(rawAssurance)
+			switch session.AssuranceLevel(level) {
+			case session.AssuranceAAL1, session.AssuranceAAL2:
+			default:
+				valid = false
+			}
+			if !valid {
+				return "", Credential{}, false
+			}
+			cred.Assurance = session.AssuranceLevel(level)
+		}
 		return userID, cred, true
 	}
-	if cred.Profile != session.ProfileDelegated || cred.SessionID == "" {
+	if cred.Profile != session.ProfileDelegated || cred.SessionID == "" || hasAssurance {
 		return "", Credential{}, false
 	}
 	if cred.accessExpiresAt, ok = claimExpiry(claims["exp"]); !ok {

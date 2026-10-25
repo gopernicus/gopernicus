@@ -5,8 +5,10 @@ import (
 	"time"
 
 	"github.com/gopernicus/gopernicus/pockets"
+	authlogic "github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/apikey"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/serviceaccount"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/session"
 	"github.com/gopernicus/gopernicus/sdk/pkg/list"
 	"github.com/gopernicus/gopernicus/sdk/pkg/web"
 )
@@ -139,12 +141,35 @@ func newPageResponse[E any, T any](p list.Page[E], mapFn func(E) T) pageResponse
 // cross-site request is refused as CSRF, never merely as unauthorized. Bearer-only
 // callers skip it (requireBrowserSafeMutation short-circuits). The two GETs are
 // body-less reads and stay off the mutation gate.
+//
+// With MFAConfig admins beside passkeys, every route then requires AAL2 of the
+// caller the gate admitted (requireMachineMFA), so an AAL1 session cannot mint
+// a key that would then pass the admin gates.
 func mountMachine(r pockets.RouteRegistrar, h *handlers, machineLifecycle, browserSafe, gate web.Middleware) {
-	r.Handle("POST", "/auth/service-accounts", h.createServiceAccount, machineLifecycle, browserSafe, gate)
-	r.Handle("GET", "/auth/service-accounts", h.listServiceAccounts, machineLifecycle, gate)
-	r.Handle("POST", "/auth/service-accounts/{id}/keys", h.mintAPIKey, machineLifecycle, browserSafe, gate)
-	r.Handle("GET", "/auth/service-accounts/{id}/keys", h.listAPIKeys, machineLifecycle, gate)
-	r.Handle("POST", "/auth/api-keys/{id}/revoke", h.revokeAPIKey, machineLifecycle, browserSafe, gate)
+	mfa := h.requireMachineMFA
+	r.Handle("POST", "/auth/service-accounts", h.createServiceAccount, machineLifecycle, browserSafe, gate, mfa)
+	r.Handle("GET", "/auth/service-accounts", h.listServiceAccounts, machineLifecycle, gate, mfa)
+	r.Handle("POST", "/auth/service-accounts/{id}/keys", h.mintAPIKey, machineLifecycle, browserSafe, gate, mfa)
+	r.Handle("GET", "/auth/service-accounts/{id}/keys", h.listAPIKeys, machineLifecycle, gate, mfa)
+	r.Handle("POST", "/auth/api-keys/{id}/revoke", h.revokeAPIKey, machineLifecycle, browserSafe, gate, mfa)
+}
+
+// requireMachineMFA is the machine gate of MFAConfig admins: a caller below AAL2
+// gets the RFC 9470 401 and one mfa_required_denied row (gate machine). An API
+// key a host's MachineLifecycle override admits passes, as at the admin gate.
+// Without the requirement it passes everything.
+func (h *handlers) requireMachineMFA(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if h.machineMFA {
+			cred, _ := h.svc.CurrentCredential(r.Context())
+			if cred.Kind != authlogic.CredentialAPIKey && !cred.Assurance.AtLeast(session.AssuranceAAL2) {
+				h.svc.recordMFADenial(r.Context(), authlogic.MFAGateMachine, cred)
+				writeMFARequired(w)
+				return
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // createServiceAccount creates a machine identity created by the calling human.

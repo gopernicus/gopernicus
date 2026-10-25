@@ -12,6 +12,7 @@ package authmem
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	authgrant "github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/authgrant"
@@ -467,6 +468,9 @@ func (r credentialMutationRepo) snapshotLocked(userID string) credential.MethodS
 			})
 		}
 	}
+	for _, p := range r.passkeysOfLocked(userID) {
+		set.Passkeys = append(set.Passkeys, credential.PasskeyMethod{ID: p.ID, UserVerified: p.UserVerified})
+	}
 	return set
 }
 
@@ -510,6 +514,18 @@ func (r credentialMutationRepo) Apply(_ context.Context, userID string, expected
 			return err
 		}
 		r.changeIdentifierUsesRowLocked(userID, m.IdentifierID, m.Uses, m.MakePrimary)
+	case credential.RemovePasskey:
+		p, ok := r.passkeys[m.PasskeyID]
+		if !ok || p.UserID != userID {
+			return sdk.ErrNotFound
+		}
+		delete(r.passkeys, m.PasskeyID)
+	case credential.RemovePasskeys:
+		for _, p := range r.passkeysOfLocked(userID) {
+			delete(r.passkeys, p.ID)
+		}
+	default:
+		return fmt.Errorf("authmem: unsupported credential mutation %T: %w", mutation, sdk.ErrInvalidInput)
 	}
 	// auth_revision rides the user row: bump it there when the row exists.
 	if u, ok := r.users[userID]; ok {

@@ -112,6 +112,9 @@ const (
 	// UserAdminErase erases the target subject (SOC 2 S3): irreversible, and a
 	// host policy that requires a step-up grant for it keys on this action.
 	UserAdminErase UserAdminAction = "erase"
+	// UserAdminResetPasskeys deletes every passkey of the target subject and
+	// revokes their sessions, so they enroll again from a primary login.
+	UserAdminResetPasskeys UserAdminAction = "reset-passkeys"
 )
 
 // UserAdminCheckRequest is the parsed, principal-resolved authorization question

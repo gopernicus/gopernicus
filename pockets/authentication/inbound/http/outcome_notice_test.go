@@ -117,7 +117,7 @@ func TestOutcomeVocabularyIsRouteSpecific(t *testing.T) {
 		outcomeIdentifierConfirmed, outcomeIdentifierRemoved, outcomeIdentifierUpdated,
 		outcomeProviderLinked, outcomeProviderUnlinked,
 	}
-	loginCodes := []string{outcomeSignedOut, outcomePasswordReset}
+	loginCodes := []string{outcomeSignedOut, outcomePasswordReset, outcomePasskeyRemoved}
 
 	if len(accountOutcomes) != len(accountCodes) || len(loginOutcomes) != len(loginCodes) {
 		t.Fatalf("vocabulary sizes = (%d,%d), want (%d,%d) — a new code needs a test",

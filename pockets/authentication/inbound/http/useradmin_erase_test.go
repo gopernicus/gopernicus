@@ -137,7 +137,7 @@ func TestEraseRouteMountedWithTheOptIn(t *testing.T) {
 	}
 	u, _ := body["user"].(map[string]any)
 	counts, _ := body["counts"].(map[string]any)
-	if u["status"] != "erased" || body["changed"] != true || counts["sessions"] != float64(2) || counts["api_keys"] != float64(1) || len(counts) != 14 {
+	if u["status"] != "erased" || body["changed"] != true || counts["sessions"] != float64(2) || counts["api_keys"] != float64(1) || len(counts) != 15 {
 		t.Errorf("body = %v", body)
 	}
 }

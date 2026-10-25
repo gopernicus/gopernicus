@@ -54,6 +54,15 @@ const (
 	// requested operation (grant purpose + context), so a code earned for one
 	// mutation cannot complete another. It carries the code lockout budget.
 	PurposeStepUp = "step_up"
+	// PurposePasskeyRegistration, PurposePasskeyAssertion and PurposePasskeyStepUp
+	// hold one WebAuthn ceremony each: the token is the single-use ceremony handle
+	// the client echoes, and the stored context carries the relying party's
+	// ceremony state and the session the ceremony is bound to (empty for
+	// sign-in). Registration and step-up rows are keyed by that session; sign-in
+	// rows by their own token digest.
+	PurposePasskeyRegistration = "passkey_registration"
+	PurposePasskeyAssertion    = "passkey_assertion"
+	PurposePasskeyStepUp       = "passkey_step_up"
 )
 
 // ConsumeOutcome is the disposition ConsumeCode decided inside its one atomic

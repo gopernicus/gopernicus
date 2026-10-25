@@ -30,9 +30,9 @@ var (
 
 // RequirePrincipal is THE authenticator. Its options are OR-sets over credential
 // kinds (Accept) and transports (Transports), a liveness tier (Live,
-// LiveOnMutation, Stateless), assurance requirements on external tokens
-// (RequireMFA, FreshAuth, VerifiedEmail, Tenant, Check) and a denial mode
-// (Browser, Optional). With no options it admits every wired credential kind —
+// LiveOnMutation, Stateless), assurance requirements (RequireMFA on access and
+// external tokens; FreshAuth, VerifiedEmail, Tenant and Check on external
+// tokens) and a denial mode (Browser, Optional). With no options it admits every wired credential kind —
 // first-party access tokens, API keys when the machine subsystem is wired, and
 // external tokens when providers are wired — over both transports, re-checking
 // liveness on unsafe methods (LiveOnMutation), denying with a JSON 401. Delegated
@@ -54,7 +54,8 @@ var (
 // Retry-After, never a 401: under Browser() too, and under Optional() too.
 //
 // The set is resolved at CONSTRUCTION, so an empty Accept()/Transports(), an
-// assurance option on a set admitting access tokens, or Browser() on a set
+// external-evidence assurance option (FreshAuth, VerifiedEmail, Tenant, Check)
+// on a set admitting access tokens, or Browser() on a set
 // admitting external tokens without an explicit WithBrowserLoginPath panics at
 // wiring time. Nested narrowing trusts the stash written earlier in the same
 // chain: the supported wiring invariant is ONE credential service per chain.
@@ -84,6 +85,10 @@ func (s *Adapter) RequirePrincipal(opts ...PrincipalOption) web.Middleware {
 			if err := set.assure(ctx, cred); err != nil {
 				if errors.Is(err, authlogic.ErrMFARequired) {
 					s.recordMFADenial(ctx, authlogic.MFAGateRoute, cred)
+					if set.browser && cred.Kind == CredentialAccessToken {
+						s.denyBrowserMFA(w, r, cred)
+						return
+					}
 				}
 				s.denyPrincipal(w, r, set, err, false)
 				return
@@ -219,6 +224,30 @@ func (s *Adapter) denyPrincipal(w http.ResponseWriter, r *http.Request, set prin
 		w.Header().Set("WWW-Authenticate", mfaRequired.challenge())
 	}
 	writeUnauthorized(w)
+}
+
+// denyBrowserMFA answers a Browser() set whose RequireMFA refused an access
+// token below AAL2. A sign-in would only mint another AAL1 session, so it never
+// redirects to login: a cookie goes to the passkey step-up page when passkeys
+// and their views are wired (return_to on GET and HEAD only, validated like the
+// login redirect's), and anything else gets the JSON 401 with the RFC 9470
+// challenge.
+func (s *Adapter) denyBrowserMFA(w http.ResponseWriter, r *http.Request, cred Credential) {
+	if s.passkeyStepUpPath == "" || cred.Transport != TransportCookie {
+		writeMFARequired(w)
+		return
+	}
+	loc := s.passkeyStepUpPath
+	if r.Method == http.MethodGet || r.Method == http.MethodHead {
+		target := r.URL.Path
+		if r.URL.RawQuery != "" {
+			target += "?" + r.URL.RawQuery
+		}
+		if safe := redirect.SafeRelativePath(target); safe != "" {
+			loc += "?return_to=" + url.QueryEscape(safe)
+		}
+	}
+	http.Redirect(w, r, loc, http.StatusSeeOther)
 }
 
 // writeMFARequired writes the JSON 401 an MFA gate outside RequirePrincipal
