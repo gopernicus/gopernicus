@@ -18,7 +18,7 @@ with `db.ProbeAuditImmutable` last. The bundle fills `Maintenance`
 ## Migrations
 
 `migrations/*.sql` carry the same version (filename) set as the pgx tree,
-`0001`–`0025` with `0017` absent.
+`0001`–`0026` with `0017` absent.
 
 ### Passkeys (`0025`)
 
@@ -36,6 +36,31 @@ nothing; `RecordUse` is one
 conditional `UPDATE` on the stored sign count. `CredentialMutationStore.Snapshot`
 lists the user's passkeys and `Apply` removes one (`RemovePasskey`) or all
 (`RemovePasskeys`), revoking every session; erasure deletes and counts them.
+
+### TOTP (`0026`)
+
+**`0026_totp.sql` ships; it is required only when `WithTOTP` is wired** — apply
+it ahead of time to toggle TOTP on later. It creates `totp_credentials` (one
+authenticator-app credential per user, keyed by `user_id`: the sealed secret, the
+pending-enrollment columns, `last_used_step`, the lockout counters) and
+`recovery_codes` (one row per unspent code: its digest under `key_id`, unique per
+`(user_id, code_digest)`, with `(user_id)` and `(key_id)` indexes), and touches no
+existing table.
+`Repositories` never probes it: a host that never wires TOTP boots without it.
+The bundle fills `TOTP` (`NewTOTPStore`), which implements `totp.SchemaProber`;
+the pocket calls `ProbeSchema` only under `WithTOTP`, and a database without
+either table then refuses the boot with `ErrTOTPSchemaMissing` wrapping
+`sdk.ErrNotFound`, naming `0026_totp.sql`. Export it (a host ledger gets a
+byte-identical copy) before wiring TOTP.
+`Confirm`, `Remove`, `ReplaceRecoveryCodes` and `ConsumeRecoveryCode` each run
+in one `BEGIN IMMEDIATE` write transaction — the lock the credential-mutation
+rail serializes on; `RecordUse` (a
+compare-and-swap on the step) and `RecordFailure` (one atomic increment that sets
+the lockout and resets the count in the same statement) are single statements on
+`totp_credentials`. `Remove` of a confirmed credential deletes both tables' rows,
+revokes every session and grant and bumps `auth_revision`; of a pending one, only
+the row. Erasure deletes and counts both tables only when `EraseInput.TOTP` says
+TOTP is wired, and otherwise never names them.
 
 ### Audit rail (`0021` and `0022`)
 

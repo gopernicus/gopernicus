@@ -3,7 +3,7 @@
 // module graph (the load-bearing opt-out property). It owns the SQL; the HOST owns its database lifecycle. It is the
 // dialect sibling of pockets/authentication/stores/turso: same surface plus the
 // Postgres-only WithSchema option — SQLite has no schemas — same migration version
-// set (0001–0025 with 0017 absent, eighteen tables backing the 20-port bundle; 0014 adds the
+// set (0001–0026 with 0017 absent, twenty tables backing the 20-port bundle; 0014 adds the
 // account-lifecycle columns to users rather than a table, and auth owns no
 // delivery table), same port semantics — a host switches dialect by one import +
 // one Open call. Secrets are persisted as digests, never plaintext (session
@@ -100,7 +100,10 @@ var probeTables = append(append(append(append([]string{}, legacyProbeTables...),
 //
 // It refuses, in every mode with sdk.ErrNotFound, a database without migration
 // 0023 (the users.erased_at column), 0024 (the rail's retention functions) or
-// 0025 (the passkey_credentials table), naming the file.
+// 0025 (the passkey_credentials table), naming the file. It never probes 0026
+// (totp_credentials, recovery_codes): TOTP is the host's opt-in, and the bundle's
+// TOTP store implements totp.SchemaProber, which the pocket calls only under
+// WithTOTP.
 //
 // Last it probes the runtime role's posture on AuditTables under the
 // RuntimeMode db was opened with (pgxdb.DB.ProbeAppendOnly): in production it
@@ -188,6 +191,9 @@ func Repositories(ctx context.Context, db *pgxdb.DB, opts ...Option) (auth.Repos
 		Maintenance: NewMaintenanceStore(db, opts...),
 		UserErasure: NewErasureStore(db, opts...),
 		Passkeys:    NewPasskeyStore(db, opts...),
+		// Never probed here: 0026 is required only when the host wires TOTP, and
+		// the pocket then asks through TOTPStore.ProbeSchema.
+		TOTP: NewTOTPStore(db, opts...),
 	}, nil
 }
 

@@ -170,6 +170,16 @@ func (s *ErasureStore) Erase(ctx context.Context, in user.EraseInput) (user.Eras
 				return err
 			}
 		}
+		// The TOTP tables only when the host wired TOTP: without it 0026 may
+		// never have been applied, so neither table is named.
+		if in.TOTP {
+			if err := exec(&c.TOTP, `DELETE FROM totp_credentials WHERE user_id = ?`, id); err != nil {
+				return err
+			}
+			if err := exec(&c.RecoveryCodes, `DELETE FROM recovery_codes WHERE user_id = ?`, id); err != nil {
+				return err
+			}
+		}
 
 		// (8) The read invitations: pending ones go; terminal ones keep their ids
 		// (invited_by, resolved_subject_id/type) and lose the address and the

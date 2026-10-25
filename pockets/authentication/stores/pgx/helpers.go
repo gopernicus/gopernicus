@@ -30,6 +30,9 @@ const (
 	externalSubjectsTable = "external_subjects"
 
 	passkeyCredentialsTable = "passkey_credentials"
+
+	totpCredentialsTable = "totp_credentials"
+	recoveryCodesTable   = "recovery_codes"
 )
 
 // MigrationsFS holds the embedded schema (app-owned). cmd wires it into the

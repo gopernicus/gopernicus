@@ -53,6 +53,8 @@ var canonicalMigrations = []string{
 	"0024_security_events_retention.sql",
 	// SOC 2 S4b: the passkey table.
 	"0025_passkey_credentials.sql",
+	// SOC 2 S4c: the TOTP credential and recovery-code tables.
+	"0026_totp.sql",
 }
 
 // expectedTables are every CREATE TABLE the canonical set must define.
@@ -73,6 +75,7 @@ var expectedTables = []string{
 	"oauth_clients", "oauth_authorization_codes", "oauth_refresh_history",
 	"external_subjects",
 	"passkey_credentials",
+	"totp_credentials", "recovery_codes",
 }
 
 // expectedIndexes are the auth-v3 indexes AV3-2.1 lands: the identifier claim /
@@ -100,6 +103,8 @@ var expectedIndexes = []string{
 	"idx_oauth_clients_expires_at", "idx_oauth_refresh_history_expires_at",
 	// SOC 2 S4b: the passkey lookups (0025).
 	"idx_passkey_credentials_credential_id", "idx_passkey_credentials_user_created_id",
+	// SOC 2 S4c: the recovery-code lookups (0026).
+	"idx_recovery_codes_key_id",
 }
 
 // expectedColumns are the schema additions to existing tables this task lands.
