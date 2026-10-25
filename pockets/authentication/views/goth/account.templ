@@ -33,6 +33,12 @@ templ accountSecurityBody(m authentication.AccountSecurityPage) {
 				<p><a href="/auth/password/set">Set a password</a></p>
 			}
 		</section>
+		if m.Passkeys != nil && m.Passkeys.Manage != "" {
+			<section aria-labelledby="passkeys-heading" data-slot="account-section">
+				<h2 id="passkeys-heading">Passkeys</h2>
+				<p><a href={ templ.SafeURL(m.Passkeys.Manage) }>Manage passkeys</a></p>
+			</section>
+		}
 		<section aria-labelledby="identifiers-heading" data-slot="account-section">
 			<h2 id="identifiers-heading">Identifiers</h2>
 			if len(m.Identifiers) == 0 {

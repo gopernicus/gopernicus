@@ -2165,7 +2165,10 @@ reports one, unverified.
 3. `WithPasskeys(PasskeyConfig{RelyingParty: rp, Views: …})`. `Views` (a
    `PasskeyViews`) mounts the manage and step-up pages and turns a `Browser()` +
    `RequireMFA()` denial into a redirect to the step-up page; nil keeps the
-   routes JSON-only. The `Views` interface itself gains no method.
+   routes JSON-only. The `Views` interface itself gains no method. With
+   views/goth, pass the same `authgoth.Views` value and mount
+   `authgoth.PasskeyScriptHandler()` at `authgoth.DefaultPasskeyScriptPath`
+   (or `WithPasskeyScriptPath`); unmounted, the passkey controls stay hidden.
 4. With a `UserAdminCheck`, the zero `MFAConfig.Required` now resolves to
    `admins` (boot line `mfa_required=admins source=default`): `/auth/admin/users*`
    and the machine lifecycle need AAL2. **Admins enroll two passkeys** before
@@ -2232,6 +2235,54 @@ and the user handle are unchanged.
 `GET /auth/methods` lists `passkeys`
 (with the advisory `removable` hint) when passkeys are on: an SPA reads it on an
 admin 401 to choose its step-up.
+
+### Custom views
+
+views/goth renders the passkey controls on the login, step-up, manage and
+passkey step-up pages and loads `passkey.js` (`authgoth.PasskeyScript()` /
+`PasskeyScriptHandler()`, under 200 lines, no build step). A host that
+overrides a page (auth-cms overrides `Login`) renders the same markup for the
+script to drive — the `LoginPage.Passkeys` links feed it; a nil `Passkeys`
+renders none:
+
+```html
+<script src="/assets/auth/passkey.js" defer></script>  <!-- the path you mount; no nonce -->
+<div data-auth-passkey="signin"
+     data-options-url="{{.Passkeys.AssertionOptions}}" data-finish-url="{{.Passkeys.Assertion}}"
+     data-csrf="{{.CSRFToken}}" data-return-to="{{.ReturnTo}}" hidden>
+  <button type="button" data-auth-passkey-start>Sign in with a passkey</button>
+  <p role="status" data-auth-passkey-status></p>
+  <p role="alert" data-auth-passkey-error></p>
+</div>
+```
+
+- `data-auth-passkey` is `signin` (`AssertionOptions`/`Assertion`), `register`
+  (`RegistrationOptions`/`Registration`, an optional `[data-auth-passkey-name]`
+  input inside, an optional `[data-auth-passkey-require-uv]` checkbox inside —
+  checked, the options request body is `{"user_verification":"required"}`, else
+  `{}`; views/goth renders it checked while the user holds no AAL2-capable
+  passkey — and `data-done-url` the fallback after success) or `stepup`
+  (`StepUpOptions`/`StepUp`). `data-return-to` (the validated `ReturnTo`) is
+  where a success navigates, else `/`; a step-up navigates only on `aal2` and
+  otherwise explains that the passkey cannot confirm a PIN or biometric.
+- Once the user holds an AAL2-capable passkey, adding or removing one needs a
+  passkey check in the last five minutes, and the registration options answer
+  403 without it. Offer that check beside the add control: views/goth links to
+  `{{.Links.StepUpPage}}?return_to=<the manage page>`. An SPA does the same
+  with the `stepup` calls before registering.
+- The element stays `hidden` unless the browser has `window.PublicKeyCredential`;
+  an element marked `data-auth-passkey-unsupported` (an explanation) is hidden
+  when it does. Keep the live regions EMPTY: the script writes them through
+  `textContent`.
+- Options are fetched on click only (the per-IP budget), as JSON with the
+  `X-CSRF-Token` double-submit header from `data-csrf`. The script uses
+  `parse*OptionsFromJSON` and `toJSON()` where the browser has them and a
+  base64url fallback otherwise, and guards a ceremony in flight (`aria-busy`).
+- The tag carries no nonce: `HTMLPolicy`'s `script-src 'self'` and
+  `connect-src 'self'` admit it. A host without an `HTMLPolicy` keeps the
+  nonce-only `script-src`, which blocks it, and the controls stay hidden. A
+  `Permissions-Policy` must not deny `publickey-credentials-get` or
+  `publickey-credentials-create`.
 
 ### Operators
 

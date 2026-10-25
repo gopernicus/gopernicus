@@ -20,6 +20,11 @@
 // code, or token — the password input carries no value attribute, so a failed
 // attempt never repopulates it, and only the display-safe LoginPage fields
 // (CSRF token, validated return-to, echoed email, field errors) reach the browser.
+//
+// With passkeys on, the branded Login also renders the custom-view passkey
+// contract: the hidden "Sign in with a passkey" control and its data attributes
+// from LoginPage.Passkeys, and the un-nonced <script src> of the path the host
+// mounts authgoth.PasskeyScriptHandler at (authgoth.DefaultPasskeyScriptPath).
 package authpages
 
 import (
@@ -53,6 +58,17 @@ type Views struct {
 // fifteen non-overridden methods, and Login below supplies the sixteenth.
 var _ inbound.Views = Views{}
 
+// _ pins the promoted passkey pages: the host hands this value to
+// PasskeyConfig.Views too.
+var _ inbound.PasskeyViews = Views{}
+
+// loginData is the branded Login's template data: the page model plus the path
+// the host serves the passkey script at.
+type loginData struct {
+	inbound.LoginPage
+	PasskeyScript string
+}
+
 // New returns the host override over the ui/goth bundle, with its branded Login
 // template parsed once. It fails loudly if the ui/goth Views cannot be constructed
 // (a nil bundle).
@@ -72,7 +88,7 @@ func New(bundle *uigoth.Bundle) (Views, error) {
 // names (email, password, csrf_token, return_to) so the pocket's dispatcher,
 // CSRF/origin gate, service call, and PRG are unchanged — only the chrome differs.
 func (v Views) Login(m inbound.LoginPage) web.Renderer {
-	return web.Template(v.login, loginTemplateName, m)
+	return web.Template(v.login, loginTemplateName, loginData{LoginPage: m, PasskeyScript: authgoth.DefaultPasskeyScriptPath})
 }
 
 // EmailOverride is the host's email LayerApp content override (design §6.2): a
@@ -85,9 +101,10 @@ func EmailOverride() delivery.TemplateOverride {
 	return delivery.TemplateOverride{Namespace: delivery.Namespace, FS: brandEmailFS}
 }
 
-// loginHTML is the branded sign-in page. It is deliberately plain and asset-free so
-// it renders within the pocket's restrictive CSP (default-src 'none', no inline
-// style, no third-party asset); the visible "Gopernicus CMS" branding and the
+// loginHTML is the branded sign-in page. It is deliberately plain and asset-free —
+// apart from the same-origin passkey script — so it renders within the pocket's
+// restrictive CSP (default-src 'none', no inline script or style, no third-party
+// asset); the visible "Gopernicus CMS" branding and the
 // data-brand marker make the override observable in the run-and-look. The password
 // input has no value attribute, so a failed sign-in never repopulates it.
 const loginHTML = `<!DOCTYPE html>
@@ -97,6 +114,7 @@ const loginHTML = `<!DOCTYPE html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="referrer" content="no-referrer">
 <title>Sign in — Gopernicus CMS</title>
+{{if .Passkeys}}<script src="{{.PasskeyScript}}" defer></script>{{end}}
 </head>
 <body>
 <header><p data-brand="gopernicus-cms">Gopernicus CMS</p></header>
@@ -119,6 +137,11 @@ const loginHTML = `<!DOCTYPE html>
 </p>
 <button type="submit">Sign in</button>
 </form>
+{{with .Passkeys}}<div data-auth-passkey="signin" data-options-url="{{.AssertionOptions}}" data-finish-url="{{.Assertion}}" data-csrf="{{$.CSRFToken}}"{{if $.ReturnTo}} data-return-to="{{$.ReturnTo}}"{{end}} hidden>
+<button type="button" data-auth-passkey-start>Sign in with a passkey</button>
+<p role="status" data-auth-passkey-status></p>
+<p role="alert" data-auth-passkey-error></p>
+</div>{{end}}
 <p><a href="/auth/password/forgot">Forgot your password?</a></p>
 <p><a href="/auth/register">Create an account</a></p>
 {{if .PasswordlessEnabled}}<p><a href="/auth/passwordless">Sign in without a password</a></p>{{end}}

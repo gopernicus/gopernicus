@@ -1,0 +1,173 @@
+package goth
+
+import (
+	authentication "github.com/gopernicus/gopernicus/pockets/authentication/inbound/http"
+	"github.com/gopernicus/gopernicus/ui/goth/components/forms"
+	"github.com/gopernicus/gopernicus/ui/goth/primitives"
+)
+
+// passkeyControl renders one passkey ceremony control for passkey.js: hidden
+// until the script finds window.PublicKeyCredential, with EMPTY live regions the
+// script writes through textContent. children (the register name field) render
+// before the button.
+templ passkeyControl(c passkeyControlProps) {
+	<div
+		data-auth-passkey={ c.Mode }
+		data-options-url={ c.OptionsURL }
+		data-finish-url={ c.FinishURL }
+		data-csrf={ c.CSRFToken }
+		if c.ReturnTo != "" {
+			data-return-to={ c.ReturnTo }
+		}
+		if c.DoneURL != "" {
+			data-done-url={ c.DoneURL }
+		}
+		data-slot="auth-passkey"
+		hidden
+	>
+		{ children... }
+		@primitives.Button(primitives.ButtonProps{Variant: c.Variant, Base: primitives.Base{Attributes: templ.Attributes{"data-auth-passkey-start": true}}}) {
+			{ c.Label }
+		}
+		<p role="status" data-auth-passkey-status></p>
+		<p role="alert" data-auth-passkey-error></p>
+	</div>
+}
+
+// passkeyUnsupported renders the explanation shown when the browser has no
+// WebAuthn; passkey.js hides it when the browser can use passkeys.
+templ passkeyUnsupported(text string) {
+	<p data-auth-passkey-unsupported>{ text }</p>
+}
+
+// passkeysBody renders the passkey manage page: each passkey with its rename and
+// remove forms (POST /auth/passkeys/{id}, action=rename|remove), and the add
+// control. Removal revokes every session, so its form says so. The add control's
+// "Require Face ID, Touch ID or a PIN" box starts checked while the user holds no
+// AAL2-capable passkey, so the step-up page's "Add a passkey" link (shown exactly
+// then) lands with it checked.
+templ passkeysBody(m authentication.PasskeysPage) {
+	@shell("Passkeys", "") {
+		@message(m.PageContext)
+		@errorSummary(m.PageContext)
+		if m.Actor != "" {
+			<p>Signed in as { m.Actor }.</p>
+		}
+		<section aria-labelledby="passkeys-heading" data-slot="account-section">
+			<h2 id="passkeys-heading">Your passkeys</h2>
+			if len(m.Passkeys) == 0 {
+				<p>You haven't added a passkey yet.</p>
+			} else {
+				<ul>
+					for _, p := range m.Passkeys {
+						<li data-slot="auth-passkey-item">
+							<h3>{ p.Name }</h3>
+							<p>
+								{ passkeyVerificationText(p.UserVerified) }
+								if p.BackupState {
+									<span> · Synced</span>
+								}
+							</p>
+							<p>Added { p.CreatedAt }. { passkeyLastUsedText(p.LastUsedAt) }</p>
+							<form method="post" action={ templ.SafeURL(p.Action) } autocomplete="off">
+								@csrfField(m.PageContext)
+								<input type="hidden" name="action" value="rename"/>
+								@forms.FormField(forms.FormFieldProps{Label: "New name", For: passkeyNameID(p.ID), Required: true}) {
+									@primitives.Input(primitives.InputProps{
+										Base:     primitives.Base{ID: passkeyNameID(p.ID), Attributes: templ.Attributes{"maxlength": "64"}},
+										Type:     primitives.InputText,
+										Name:     "name",
+										Value:    p.Name,
+										Required: true,
+									})
+								}
+								@forms.FormActions(forms.FormActionsProps{}) {
+									@primitives.Button(primitives.ButtonProps{Type: primitives.ButtonTypeSubmit, Variant: primitives.ButtonSecondary}) {
+										Rename
+									}
+								}
+							</form>
+							if p.Removable {
+								<form method="post" action={ templ.SafeURL(p.Action) }>
+									@csrfField(m.PageContext)
+									<input type="hidden" name="action" value="remove"/>
+									<p>Removing this passkey signs you out on every device.</p>
+									@forms.FormActions(forms.FormActionsProps{}) {
+										@primitives.Button(primitives.ButtonProps{Type: primitives.ButtonTypeSubmit, Variant: primitives.ButtonDestructive}) {
+											Remove
+										}
+									}
+								</form>
+							} else {
+								@primitives.Typography(primitives.TypographyProps{Variant: primitives.TypographyMuted}) {
+									{ nonRemovableNote }
+								}
+							}
+						</li>
+					}
+				</ul>
+			}
+		</section>
+		<section aria-labelledby="add-passkey-heading" data-slot="account-section">
+			<h2 id="add-passkey-heading">Add a passkey</h2>
+			<p>A passkey signs you in with your device's screen lock or a security key, with no password to type.</p>
+			if holdsVerifiedPasskey(m.Passkeys) && m.Links.StepUpPage != "" {
+				<p data-slot="auth-passkey-recent-check">Adding or removing a passkey needs a recent passkey check. <a href={ templ.SafeURL(confirmPasskeyHref(m.Links)) }>Confirm with a passkey</a></p>
+			}
+			@passkeyControl(passkeyControlProps{Mode: "register", OptionsURL: m.Links.RegistrationOptions, FinishURL: m.Links.Registration, CSRFToken: m.CSRFToken, ReturnTo: m.ReturnTo, DoneURL: passkeyAddedURL(m.Links), Label: "Add a passkey"}) {
+				@forms.FormField(forms.FormFieldProps{Label: "Name (optional)", For: "passkey-new-name"}) {
+					@primitives.Input(primitives.InputProps{
+						Base: primitives.Base{ID: "passkey-new-name", Attributes: templ.Attributes{"maxlength": "64", "autocomplete": "off", "data-auth-passkey-name": true}},
+						Type: primitives.InputText,
+						Name: "name",
+					})
+				}
+				<label for="passkey-require-uv" data-slot="auth-passkey-require-uv">
+					@primitives.Checkbox(primitives.CheckboxProps{Base: primitives.Base{ID: "passkey-require-uv", Attributes: templ.Attributes{"data-auth-passkey-require-uv": true}}, Checked: !holdsVerifiedPasskey(m.Passkeys)})
+					Require Face ID, Touch ID or a PIN
+				</label>
+			}
+			@passkeyUnsupported("This browser can't create passkeys. Try a browser or device that supports them.")
+		</section>
+		<nav class="goth-auth-links" data-slot="auth-links">
+			<p><a href="/auth/account">Back to account security</a></p>
+		</nav>
+	}
+}
+
+// passkeyStepUpBody renders the passkey step-up page. With no passkey it offers
+// "Add a passkey" (back to this page afterwards); with presence-only passkeys it
+// says they cannot confirm a PIN or biometric. The control renders whenever a
+// passkey exists, since the script reports a presence-only answer and stays put.
+templ passkeyStepUpBody(m authentication.PasskeyStepUpPage) {
+	@shell("Confirm it's you", "") {
+		@message(m.PageContext)
+		<p>To continue, confirm it's you with a passkey that checks your PIN or biometric.</p>
+		if !m.HasPasskeys {
+			<p>You haven't added a passkey yet. Add one, then come back to confirm it's you.</p>
+		} else if !m.CanReachAAL2 {
+			<p>Your passkeys can't confirm a PIN or biometric, so they can't complete this check. Add a passkey that uses your device's screen lock or a security key with a PIN.</p>
+		}
+		if m.HasPasskeys {
+			@passkeyControl(passkeyControlProps{Mode: "stepup", OptionsURL: m.Links.StepUpOptions, FinishURL: m.Links.StepUp, CSRFToken: m.CSRFToken, ReturnTo: m.ReturnTo, Label: "Use a passkey"})
+			@passkeyUnsupported("This browser doesn't support passkeys, so it can't complete this check. Try a browser or device that does.")
+		}
+		if (!m.HasPasskeys || !m.CanReachAAL2) && m.Links.Manage != "" {
+			<p><a href={ templ.SafeURL(addPasskeyHref(m.Links, m.ReturnTo)) }>Add a passkey</a></p>
+		}
+	}
+}
+
+// passkeySignIn renders the login page's "Sign in with a passkey" control.
+templ passkeySignIn(m authentication.LoginPage) {
+	if m.Passkeys != nil {
+		@passkeyControl(passkeyControlProps{Mode: "signin", OptionsURL: m.Passkeys.AssertionOptions, FinishURL: m.Passkeys.Assertion, CSRFToken: m.CSRFToken, ReturnTo: m.ReturnTo, Variant: primitives.ButtonOutline, Label: "Sign in with a passkey"})
+	}
+}
+
+// passkeyStepUpOption renders the generic step-up page's passkey completion.
+templ passkeyStepUpOption(m authentication.StepUpPage) {
+	if m.Passkeys != nil {
+		@passkeyControl(passkeyControlProps{Mode: "stepup", OptionsURL: m.Passkeys.StepUpOptions, FinishURL: m.Passkeys.StepUp, CSRFToken: m.CSRFToken, ReturnTo: m.ReturnTo, Variant: primitives.ButtonOutline, Label: "Confirm with a passkey"})
+	}
+}

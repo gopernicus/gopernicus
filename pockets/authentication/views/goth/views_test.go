@@ -100,6 +100,8 @@ func TestAllPagesRenderZeroModels(t *testing.T) {
 	render(t, v.OAuthUnlink(inbound.OAuthUnlinkPage{}))
 	render(t, v.OAuthConsent(inbound.OAuthConsentPage{}))
 	render(t, v.Sessions(inbound.SessionsPage{}))
+	render(t, v.Passkeys(inbound.PasskeysPage{}))
+	render(t, v.PasskeyStepUp(inbound.PasskeyStepUpPage{}))
 	render(t, v.Status(inbound.StatusPage{}))
 	render(t, v.Error(inbound.ErrorPage{}))
 }
