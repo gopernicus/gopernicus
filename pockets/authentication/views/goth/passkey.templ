@@ -111,6 +111,9 @@ templ passkeysBody(m authentication.PasskeysPage) {
 		<section aria-labelledby="add-passkey-heading" data-slot="account-section">
 			<h2 id="add-passkey-heading">Add a passkey</h2>
 			<p>A passkey signs you in with your device's screen lock or a security key, with no password to type.</p>
+			if holdsVerifiedPasskey(m.Passkeys) && m.Links.StepUpPage != "" {
+				<p data-slot="auth-passkey-recent-check">Adding or removing a passkey needs a recent passkey check. <a href={ templ.SafeURL(confirmPasskeyHref(m.Links)) }>Confirm with a passkey</a></p>
+			}
 			@passkeyControl(passkeyControlProps{Mode: "register", OptionsURL: m.Links.RegistrationOptions, FinishURL: m.Links.Registration, CSRFToken: m.CSRFToken, ReturnTo: m.ReturnTo, DoneURL: passkeyAddedURL(m.Links), Label: "Add a passkey"}) {
 				@forms.FormField(forms.FormFieldProps{Label: "Name (optional)", For: "passkey-new-name"}) {
 					@primitives.Input(primitives.InputProps{

@@ -270,6 +270,23 @@ func TestPasskeysPage_RequireUVDefault(t *testing.T) {
 	}
 }
 
+// TestPasskeysPage_ConfirmLink proves the manage page offers the passkey
+// step-up, returning here, once the user holds an AAL2-capable passkey (the
+// add and remove gate then needs a recent passkey check), and not before.
+func TestPasskeysPage_ConfirmLink(t *testing.T) {
+	v := newViews(t)
+	presenceOnly := inbound.PasskeyItem{ID: "pk2", Name: "Key", Action: "/auth/passkeys/pk2"}
+	verified := inbound.PasskeyItem{ID: "pk1", Name: "Laptop", UserVerified: true, Action: "/auth/passkeys/pk1"}
+	link := `href="/auth/step-up/passkey?return_to=%2Fauth%2Faccount%2Fpasskeys"`
+
+	with := render(t, v.Passkeys(inbound.PasskeysPage{PageContext: ctx(), Links: *passkeyLinks(), Passkeys: []inbound.PasskeyItem{presenceOnly, verified}}))
+	mustContain(t, "verified", with, "needs a recent passkey check", link, "Confirm with a passkey")
+	for name, passkeys := range map[string][]inbound.PasskeyItem{"none": nil, "presence-only": {presenceOnly}} {
+		body := render(t, v.Passkeys(inbound.PasskeysPage{PageContext: ctx(), Links: *passkeyLinks(), Passkeys: passkeys}))
+		mustNotContain(t, name, body, "Confirm with a passkey")
+	}
+}
+
 // TestPasskeyStepUpPage_States proves the three passkey step-up states: no
 // passkey → "Add a passkey" returning here; presence-only → the PIN/biometric
 // copy plus the control; an AAL2-capable passkey → the control alone.

@@ -292,6 +292,14 @@ func holdsVerifiedPasskey(passkeys []inbound.PasskeyItem) bool {
 	return slices.ContainsFunc(passkeys, func(p inbound.PasskeyItem) bool { return p.UserVerified })
 }
 
+// confirmPasskeyHref links the manage page to the passkey step-up page and back.
+// Once the user holds an AAL2-capable passkey, adding or removing one needs a
+// passkey check in the last five minutes; without this link the add control's
+// 403 would leave them no way to earn it.
+func confirmPasskeyHref(links inbound.PasskeyLinks) string {
+	return links.StepUpPage + "?return_to=" + url.QueryEscape(links.Manage)
+}
+
 // addPasskeyHref links the step-up page to the manage page, returning to the
 // step-up page (and its own return-to) once the passkey is added.
 func addPasskeyHref(links inbound.PasskeyLinks, returnTo string) string {

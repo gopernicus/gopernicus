@@ -2265,6 +2265,11 @@ renders none:
   (`StepUpOptions`/`StepUp`). `data-return-to` (the validated `ReturnTo`) is
   where a success navigates, else `/`; a step-up navigates only on `aal2` and
   otherwise explains that the passkey cannot confirm a PIN or biometric.
+- Once the user holds an AAL2-capable passkey, adding or removing one needs a
+  passkey check in the last five minutes, and the registration options answer
+  403 without it. Offer that check beside the add control: views/goth links to
+  `{{.Links.StepUpPage}}?return_to=<the manage page>`. An SPA does the same
+  with the `stepup` calls before registering.
 - The element stays `hidden` unless the browser has `window.PublicKeyCredential`;
   an element marked `data-auth-passkey-unsupported` (an explanation) is hidden
   when it does. Keep the live regions EMPTY: the script writes them through
