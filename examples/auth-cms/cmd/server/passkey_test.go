@@ -214,8 +214,9 @@ func TestPasskeysThroughTheHost(t *testing.T) {
 	if status, _ := alice.assurance("/demo/mfa"); status != http.StatusUnauthorized {
 		t.Fatalf("AAL1 /demo/mfa = %d, want 401", status)
 	}
-	if status, _ := alice.assurance("/demo/mfa/page"); status != http.StatusUnauthorized {
-		t.Fatalf("AAL1 /demo/mfa/page without passkey views = %d, want the JSON 401", status)
+	if resp, _ := alice.do("GET", "/demo/mfa/page", "", nil); resp.StatusCode != http.StatusSeeOther ||
+		resp.Header.Get("Location") != "/auth/step-up/passkey?return_to=%2Fdemo%2Fmfa%2Fpage" {
+		t.Fatalf("AAL1 /demo/mfa/page = %d %q, want the 303 to the passkey step-up page", resp.StatusCode, resp.Header.Get("Location"))
 	}
 
 	// (2) The first passkey bootstraps from the fresh login; a notice is mailed.

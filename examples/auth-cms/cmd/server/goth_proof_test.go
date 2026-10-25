@@ -19,7 +19,7 @@ import (
 )
 
 // gothProofRouter builds the host's real presentation composition — the ui/goth
-// asset routes, the externalized fragment-reader script route, and the auth pocket
+// asset routes, the externalized fragment-reader and passkey script routes, and the auth pocket
 // mounted with the ui/goth Views + the adapter-derived HTMLPolicy — exactly as run()
 // wires them, so the HTTP-level proofs below drive the shipped surface, not a stub.
 // global is installed with Use before anything mounts, as run() does.
@@ -43,6 +43,7 @@ func gothProofRouter(t *testing.T, global ...web.Middleware) *web.WebHandler {
 	uigothStatic := web.NewStaticFileServer(uigothassets.FS, web.WithAssetPrefix("dist/"))
 	uigothStatic.AddRoutes(router, authAssetBasePath)
 	router.Handle(http.MethodGet, authgoth.DefaultFragmentScriptPath, authgoth.FragmentScriptHandler().ServeHTTP)
+	router.Handle(http.MethodGet, authgoth.DefaultPasskeyScriptPath, authgoth.PasskeyScriptHandler().ServeHTTP)
 
 	if err := svc.HTTP.Register(pockets.Mount{Router: router, Logger: quietLog(), Events: sdkevents.NewMemory()}); err != nil {
 		t.Fatalf("auth Register: %v", err)
@@ -219,6 +220,7 @@ func TestGOTHNilViewsAssetFreePosture(t *testing.T) {
 	cfg.DeliveryEphemeralAcknowledged = true
 	cfg.Views = nil
 	cfg.HTMLPolicy = nil
+	cfg.Passkeys.Views = nil
 	svc, err := auth.New(authmem.New().Repositories(), cfg.TokenSigner, cfg.RuntimeMode, cfg.DeliveryMode, cfg.options()...)
 	if err != nil {
 		t.Fatalf("auth.NewService (nil Views): %v", err)
@@ -230,5 +232,60 @@ func TestGOTHNilViewsAssetFreePosture(t *testing.T) {
 	rec := get(t, router, "/auth/login")
 	if rec.Code == http.StatusOK {
 		t.Fatalf("GET /auth/login = 200 with nil Views: HTML surface leaked (want it unregistered)")
+	}
+}
+
+// TestGOTHLoginPasskeyContract proves the composed host serves the custom-view
+// passkey contract: the branded login renders the hidden sign-in control and the
+// un-nonced script tag, the script serves same-origin as JavaScript with nosniff
+// under a CSP whose script-src and connect-src admit 'self' with no
+// 'unsafe-inline', and the global Permissions-Policy never denies the
+// publickey-credentials-* features.
+func TestGOTHLoginPasskeyContract(t *testing.T) {
+	router := gothProofRouter(t, web.TrustProxies(0), web.SecurityHeaders())
+	rec := get(t, router, "/auth/login")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /auth/login = %d, want 200", rec.Code)
+	}
+	body := rec.Body.String()
+	for _, want := range []string{
+		`<script src="` + authgoth.DefaultPasskeyScriptPath + `" defer></script>`,
+		`data-auth-passkey="signin"`,
+		`data-options-url="/auth/passkeys/assertion/options"`,
+		`data-finish-url="/auth/passkeys/assertion"`,
+		`data-auth-passkey-start`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("login body missing %q", want)
+		}
+	}
+	csp := rec.Header().Get("Content-Security-Policy")
+	for _, want := range []string{"script-src 'self'", "connect-src 'self'"} {
+		if !strings.Contains(csp, want) {
+			t.Errorf("CSP missing %q in: %s", want, csp)
+		}
+	}
+	if strings.Contains(csp, "unsafe-inline") {
+		t.Errorf("CSP admits unsafe-inline: %s", csp)
+	}
+	if pp := rec.Header().Get("Permissions-Policy"); strings.Contains(pp, "publickey-credentials") {
+		t.Errorf("Permissions-Policy %q denies publickey-credentials-*", pp)
+	}
+
+	js := get(t, router, authgoth.DefaultPasskeyScriptPath)
+	if js.Code != http.StatusOK {
+		t.Fatalf("GET %s = %d, want 200", authgoth.DefaultPasskeyScriptPath, js.Code)
+	}
+	if ct := js.Header().Get("Content-Type"); !strings.HasPrefix(ct, "application/javascript") {
+		t.Errorf("passkey script content-type = %q, want application/javascript", ct)
+	}
+	if got := js.Header().Get("X-Content-Type-Options"); got != "nosniff" {
+		t.Errorf("passkey script X-Content-Type-Options = %q, want nosniff", got)
+	}
+
+	// The passkey pages mount from PasskeyConfig.Views: an anonymous visit is
+	// gated, not a 404.
+	if page := get(t, router, "/auth/account/passkeys"); page.Code == http.StatusNotFound {
+		t.Error("GET /auth/account/passkeys = 404: PasskeyConfig.Views is not wired")
 	}
 }

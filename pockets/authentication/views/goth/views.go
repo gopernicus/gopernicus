@@ -14,7 +14,8 @@
 //	authentication.WithBrowser(authentication.BrowserConfig{Views: authViews, HTMLPolicy: authViews.HTMLPolicy()})
 //
 // and serve bundle assets + authgoth.FragmentScriptHandler() under the paths the
-// bundle/adapter name. Customize by embedding this Views and overriding individual
+// bundle/adapter name. With passkeys, pass the same value as
+// authentication.PasskeyConfig.Views and serve authgoth.PasskeyScriptHandler() too. Customize by embedding this Views and overriding individual
 // methods (the blessed partial-override path).
 //
 // SECRET DISCIPLINE (design §9.2): no template here renders a password, one-time
@@ -27,17 +28,21 @@ package goth
 
 import (
 	"fmt"
+	"net/url"
 
 	"github.com/a-h/templ"
 	inbound "github.com/gopernicus/gopernicus/pockets/authentication/inbound/http"
 	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/pkg/web"
 	"github.com/gopernicus/gopernicus/ui/goth"
+	"github.com/gopernicus/gopernicus/ui/goth/primitives"
 )
 
 // _ pins Views to the authentication.Views port at compile time (mirrors the
 // stubViews assertion in the pocket's inbound html_test.go).
 var _ inbound.Views = Views{}
+
+var _ inbound.PasskeyViews = Views{}
 
 // Views is the ui/goth-backed renderer. It holds the immutable presentation Bundle
 // and the public path the host serves the externalized fragment-reader script at.
@@ -45,6 +50,7 @@ var _ inbound.Views = Views{}
 type Views struct {
 	bundle             *goth.Bundle
 	fragmentScriptPath string
+	passkeyScriptPath  string
 	brand              templ.Component
 	appName            string
 }
@@ -54,6 +60,7 @@ type Option func(*viewConfig)
 
 type viewConfig struct {
 	fragmentScriptPath string
+	passkeyScriptPath  string
 	brand              templ.Component
 	appName            string
 }
@@ -65,6 +72,17 @@ func WithFragmentScriptPath(path string) Option {
 	return func(v *viewConfig) {
 		if path != "" {
 			v.fragmentScriptPath = path
+		}
+	}
+}
+
+// WithPasskeyScriptPath overrides the public URL the passkey controls load their
+// script from. It must match the path the host mounts PasskeyScriptHandler() under.
+// Empty is ignored (the default is kept).
+func WithPasskeyScriptPath(path string) Option {
+	return func(v *viewConfig) {
+		if path != "" {
+			v.passkeyScriptPath = path
 		}
 	}
 }
@@ -93,14 +111,14 @@ func New(bundle *goth.Bundle, opts ...Option) (Views, error) {
 	if bundle == nil {
 		return Views{}, errNilBundle
 	}
-	cfg := viewConfig{fragmentScriptPath: DefaultFragmentScriptPath}
+	cfg := viewConfig{fragmentScriptPath: DefaultFragmentScriptPath, passkeyScriptPath: DefaultPasskeyScriptPath}
 	for _, opt := range opts {
 		if opt == nil {
 			return Views{}, fmt.Errorf("authentication goth: nil option: %w", sdk.ErrInvalidInput)
 		}
 		opt(&cfg)
 	}
-	return Views{bundle: bundle, fragmentScriptPath: cfg.fragmentScriptPath, brand: cfg.brand, appName: cfg.appName}, nil
+	return Views{bundle: bundle, fragmentScriptPath: cfg.fragmentScriptPath, passkeyScriptPath: cfg.passkeyScriptPath, brand: cfg.brand, appName: cfg.appName}, nil
 }
 
 // page wraps a page body in the shared GOTH document chrome: the bundle's head
@@ -121,9 +139,18 @@ func (v Views) page(title string, headExtra templ.Component, body templ.Componen
 // script for the reset/magic-link landings.
 func (v Views) fragmentHead() templ.Component { return fragmentScriptTag(v.fragmentScriptPath) }
 
+// passkeyHead returns the head extra that loads the passkey script, or nil when the
+// page model carries no passkey links (passkeys off).
+func (v Views) passkeyHead(links *inbound.PasskeyLinks) templ.Component {
+	if links == nil {
+		return nil
+	}
+	return passkeyScriptTag(v.passkeyScriptPath)
+}
+
 // Login renders the sign-in methods enabled by the page model.
 func (v Views) Login(m inbound.LoginPage) web.Renderer {
-	return v.page("Sign in", nil, loginBody(m))
+	return v.page("Sign in", v.passkeyHead(m.Passkeys), loginBody(m))
 }
 
 // Register renders the account-creation form.
@@ -173,7 +200,7 @@ func (v Views) OAuthLinkLanding(m inbound.OAuthLinkPage) web.Renderer {
 
 // StepUp renders the recent-authentication confirmation page.
 func (v Views) StepUp(m inbound.StepUpPage) web.Renderer {
-	return v.page("Confirm it's you", nil, stepUpBody(m))
+	return v.page("Confirm it's you", v.passkeyHead(m.Passkeys), stepUpBody(m))
 }
 
 // AccountSecurity renders the masked method inventory.
@@ -196,6 +223,17 @@ func (v Views) OAuthUnlink(m inbound.OAuthUnlinkPage) web.Renderer {
 	return v.page("Unlink account", nil, oauthUnlinkBody(m))
 }
 
+// Passkeys renders the passkey manage page: the list, rename, remove and add.
+func (v Views) Passkeys(m inbound.PasskeysPage) web.Renderer {
+	return v.page("Passkeys", v.passkeyHead(&m.Links), passkeysBody(m))
+}
+
+// PasskeyStepUp renders the passkey step-up page a Browser() + RequireMFA() gate
+// redirects an AAL1 cookie session to.
+func (v Views) PasskeyStepUp(m inbound.PasskeyStepUpPage) web.Renderer {
+	return v.page("Confirm it's you", v.passkeyHead(&m.Links), passkeyStepUpBody(m))
+}
+
 // Status renders a generic informational page.
 func (v Views) Status(m inbound.StatusPage) web.Renderer {
 	return v.page(statusTitle(m.Title), nil, statusBody(m))
@@ -204,4 +242,55 @@ func (v Views) Status(m inbound.StatusPage) web.Renderer {
 // Error renders a generic error page.
 func (v Views) Error(m inbound.ErrorPage) web.Renderer {
 	return v.page(statusText(m.Status), nil, errorBody(m))
+}
+
+// passkeyControlProps configures one passkeyControl: the ceremony mode passkey.js
+// runs, its routes, the double-submit token, where a success navigates, and the
+// button.
+type passkeyControlProps struct {
+	Mode       string
+	OptionsURL string
+	FinishURL  string
+	CSRFToken  string
+	ReturnTo   string
+	DoneURL    string
+	Variant    primitives.ButtonVariant
+	Label      string
+}
+
+// passkeyVerificationText describes whether a passkey confirms a PIN or biometric.
+func passkeyVerificationText(userVerified bool) string {
+	if userVerified {
+		return "Confirms your PIN or biometric"
+	}
+	return "Presence only: can't confirm a PIN or biometric"
+}
+
+// passkeyLastUsedText describes a passkey's last use.
+func passkeyLastUsedText(lastUsedAt string) string {
+	if lastUsedAt == "" {
+		return "Not used yet."
+	}
+	return "Last used " + lastUsedAt + "."
+}
+
+// passkeyNameID is a passkey row's rename input id.
+func passkeyNameID(id string) string { return "passkey-name-" + id }
+
+// passkeyAddedURL is where the manage page goes after an add without a return-to.
+func passkeyAddedURL(links inbound.PasskeyLinks) string {
+	if links.Manage == "" {
+		return ""
+	}
+	return links.Manage + "?auth=passkey_added"
+}
+
+// addPasskeyHref links the step-up page to the manage page, returning to the
+// step-up page (and its own return-to) once the passkey is added.
+func addPasskeyHref(links inbound.PasskeyLinks, returnTo string) string {
+	back := links.StepUpPage
+	if returnTo != "" {
+		back += "?return_to=" + url.QueryEscape(returnTo)
+	}
+	return links.Manage + "?return_to=" + url.QueryEscape(back)
 }

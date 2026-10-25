@@ -105,3 +105,39 @@ func TestEmailOverrideTargetsFeatureNamespace(t *testing.T) {
 		t.Fatalf("override template missing brand or {{.Secret}}: %s", data)
 	}
 }
+
+// TestLoginOverrideRendersPasskeyContract proves the branded Login renders the
+// custom-view passkey contract from LoginPage.Passkeys: the hidden sign-in
+// control, its data attributes, the empty live regions, and the un-nonced script
+// tag of the mounted path — and none of it when passkeys are off.
+func TestLoginOverrideRendersPasskeyContract(t *testing.T) {
+	v := newViews(t)
+	m := inbound.LoginPage{
+		PageContext: inbound.PageContext{CSRFToken: "csrf-abc", CSPNonce: "nonce-1", ReturnTo: "/dashboard"},
+		Passkeys:    &inbound.PasskeyLinks{AssertionOptions: "/auth/passkeys/assertion/options", Assertion: "/auth/passkeys/assertion"},
+	}
+	out := renderMethod(t, v.Login(m))
+	for _, want := range []string{
+		`<script src="/assets/auth/passkey.js" defer></script>`,
+		`data-auth-passkey="signin"`,
+		`data-options-url="/auth/passkeys/assertion/options"`,
+		`data-finish-url="/auth/passkeys/assertion"`,
+		`data-csrf="csrf-abc"`,
+		`data-return-to="/dashboard" hidden>`,
+		`<button type="button" data-auth-passkey-start>Sign in with a passkey</button>`,
+		`<p role="status" data-auth-passkey-status></p>`,
+		`<p role="alert" data-auth-passkey-error></p>`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("branded login missing %q\n---\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "nonce-1") || strings.Contains(out, "onclick") {
+		t.Error("the passkey markup must carry no nonce and no inline handler")
+	}
+
+	m.Passkeys = nil
+	if off := renderMethod(t, v.Login(m)); strings.Contains(off, "passkey") {
+		t.Errorf("login without passkeys renders passkey markup:\n%s", off)
+	}
+}

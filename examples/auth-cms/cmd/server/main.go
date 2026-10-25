@@ -244,13 +244,14 @@ func run(ctx context.Context, log *slog.Logger, runtimeMode environment.Mode) er
 	// that owns a stricter policy (the auth pages' CSP and no-referrer) keeps it.
 	router.Use(web.TrustProxies(srv.TrustedProxyCount), web.SecurityHeaders(), web.RequestID(), web.Logger(log), web.Panics(log))
 
-	// Serve the ui/goth fingerprinted assets (the auth pages' stylesheet) and the
-	// externalized fragment-reader script the reset/magic-link landings load. Both are
-	// same-origin, so the auth adapter's mapped CSP (style-src/script-src 'self')
+	// Serve the ui/goth fingerprinted assets (the auth pages' stylesheet), the
+	// externalized fragment-reader script the reset/magic-link landings load, and the
+	// passkey script the passkey controls load. All are same-origin, so the auth adapter's mapped CSP (style-src/script-src 'self')
 	// covers them; the kit owns no route, so the host mounts them (ui-goth GOTH-7.2).
 	uigothStatic := web.NewStaticFileServer(uigothassets.FS, web.WithAssetPrefix("dist/"))
 	uigothStatic.AddRoutes(router, authAssetBasePath)
 	router.Handle(http.MethodGet, authgoth.DefaultFragmentScriptPath, authgoth.FragmentScriptHandler().ServeHTTP)
+	router.Handle(http.MethodGet, authgoth.DefaultPasskeyScriptPath, authgoth.PasskeyScriptHandler().ServeHTTP)
 
 	// Shared in-process event bus (sdk default Memory). cms is the emitter (it
 	// publishes content.* post-write through mount.Events); the host subscribes
@@ -1116,12 +1117,12 @@ func buildAuthConfig(log *slog.Logger, mode environment.Mode, granter invitation
 	}
 	// Passkeys (SOC 2 S4b) over the go-webauthn integration: the RP ID is this
 	// host's own origin host and the browser origins are its Origin allowlist.
-	// Views stays nil, so the passkey routes are JSON-only here.
+	// Views mounts the manage and step-up pages from the same partial override.
 	rp, err := passkeyRelyingParty(origin, cfg.AllowedOrigins)
 	if err != nil {
 		return authenticationConfig{}, err
 	}
-	cfg.Passkeys = auth.PasskeyConfig{RelyingParty: rp}
+	cfg.Passkeys = auth.PasskeyConfig{RelyingParty: rp, Views: authViews}
 	return cfg, nil
 }
 

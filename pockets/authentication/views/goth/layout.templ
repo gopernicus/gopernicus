@@ -62,6 +62,13 @@ templ fragmentScriptTag(src string) {
 	<script src={ src } defer></script>
 }
 
+// passkeyScriptTag loads the passkey script. Like fragmentScriptTag it is
+// same-origin and carries NO nonce: HTMLPolicy's script-src 'self' admits it, and
+// a nonce-only CSP blocks it, leaving the hidden controls hidden.
+templ passkeyScriptTag(src string) {
+	<script src={ src } defer></script>
+}
+
 // message renders the generic, enumeration-resistant notice when present. It is
 // never a value that distinguishes an unknown/unverified account.
 templ message(pc authentication.PageContext) {
