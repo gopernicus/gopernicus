@@ -167,9 +167,9 @@ func TestRequireBrowserSafeOriginSameSite(t *testing.T) {
 
 func TestIssueCSRFTokenRoundTrips(t *testing.T) {
 	rec := httptest.NewRecorder()
-	token, err := issueCSRFToken(rec)
+	token, err := resolveCSRFCookie(true).issue(rec)
 	if err != nil {
-		t.Fatalf("issueCSRFToken: %v", err)
+		t.Fatalf("issue: %v", err)
 	}
 	if token == "" {
 		t.Fatal("empty token")

@@ -185,6 +185,7 @@ type passkeyOptions struct {
 	adminCheck UserAdminCheck
 	adminMFA   bool
 	machine    bool
+	uv         webauthn.Requirement
 }
 
 type passkeyFixture struct {
@@ -236,7 +237,7 @@ func newPasskeyFixture(t *testing.T, o passkeyOptions) *passkeyFixture {
 		Passkeys:             passkeys,
 	}
 	if !o.unwired {
-		fixture.Passkey = authlogic.PasskeyConfig{RelyingParty: rp, MaxPerUser: o.maxPerUser}
+		fixture.Passkey = authlogic.PasskeyConfig{RelyingParty: rp, MaxPerUser: o.maxPerUser, UserVerification: o.uv}
 	}
 	if o.adminCheck != nil {
 		fixture.UserAdmin = memUserAdmin{}
@@ -417,6 +418,15 @@ func TestPasskeyWireGoldens(t *testing.T) {
 	a := newPasskeyClient(true)
 	var bodies []string
 
+	// The one optional request field raises the ceremony to required user
+	// verification; the answer keeps the same shape. A later options call
+	// replaces this ceremony.
+	required := f.do(t, call{method: "POST", path: "/auth/passkeys/registration/options", body: `{"user_verification":"required"}`, cookie: cookie})
+	requiredOpts := decode(t, required)
+	if required.Code != http.StatusOK || !slices.Equal(keys(requiredOpts), []string{"ceremony", "public_key"}) || creationUserVerification(requiredOpts) != "required" {
+		t.Fatalf("registration options with user_verification = %d %v", required.Code, requiredOpts)
+	}
+
 	// The creation options necessarily carry the caller's own user handle and
 	// excluded credential ids to their authenticator; every other body carries
 	// neither.
@@ -431,6 +441,9 @@ func TestPasskeyWireGoldens(t *testing.T) {
 	publicKey, _ := opts["public_key"].(map[string]any)
 	if publicKey["challenge"] == nil || publicKey["rp"] == nil || publicKey["user"] == nil {
 		t.Fatalf("public_key is not the inner creation options: %v", publicKey)
+	}
+	if creationUserVerification(opts) != "preferred" {
+		t.Fatalf("registration options without user_verification = %v", publicKey)
 	}
 	raw, _ := json.Marshal(publicKey)
 	response, err := a.Register(raw)
@@ -484,6 +497,92 @@ func TestPasskeyWireGoldens(t *testing.T) {
 			t.Errorf("a response carries ceremony state: %s", b)
 		}
 	}
+}
+
+// creationUserVerification reads authenticatorSelection.userVerification from
+// a decoded options body.
+func creationUserVerification(body map[string]any) string {
+	publicKey, _ := body["public_key"].(map[string]any)
+	selection, _ := publicKey["authenticatorSelection"].(map[string]any)
+	uv, _ := selection["userVerification"].(string)
+	return uv
+}
+
+// TestPasskeyRegistrationOptionsUserVerification pins the options field:
+// absent and preferred keep the host's requirement, required raises it,
+// preferred never lowers a host's required, any other value or an unknown
+// field is 400, and a required ceremony refuses a presence-only response with
+// 401 passkey_rejected while a verified one stores an AAL2-capable passkey.
+func TestPasskeyRegistrationOptionsUserVerification(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		host webauthn.Requirement
+		body string
+		want string
+	}{
+		{"empty", "", "{}", "preferred"},
+		{"preferred", "", `{"user_verification":"preferred"}`, "preferred"},
+		{"required", "", `{"user_verification":"required"}`, "required"},
+		{"host required, empty", webauthn.Required, "{}", "required"},
+		{"host required, preferred does not lower it", webauthn.Required, `{"user_verification":"preferred"}`, "required"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newPasskeyFixture(t, passkeyOptions{uv: tc.host})
+			rec := f.do(t, call{method: "POST", path: "/auth/passkeys/registration/options", body: tc.body, cookie: f.login(t)})
+			if got := creationUserVerification(decode(t, rec)); rec.Code != http.StatusOK || got != tc.want {
+				t.Errorf("%s = %d %q, want %q", tc.body, rec.Code, got, tc.want)
+			}
+		})
+	}
+
+	f := newPasskeyFixture(t, passkeyOptions{})
+	cookie := f.login(t)
+	for _, body := range []string{`{"user_verification":"discouraged"}`, `{"user_verification":"Required"}`, `{"user_verification":true}`, `{"uv":"required"}`} {
+		if rec := f.do(t, call{method: "POST", path: "/auth/passkeys/registration/options", body: body, cookie: cookie}); rec.Code != http.StatusBadRequest {
+			t.Errorf("%s = %d %s, want 400", body, rec.Code, rec.Body)
+		}
+	}
+
+	presence := newPasskeyClient(false)
+	ceremony, options := f.requiredOptions(t, cookie)
+	response, err := presence.Register(options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec := f.do(t, call{method: "POST", path: "/auth/passkeys/registration", body: finishBody(t, ceremony, response, ""), cookie: cookie}); rec.Code != http.StatusUnauthorized || decode(t, rec)["code"] != "passkey_rejected" {
+		t.Fatalf("presence-only response to a required ceremony = %d %s", rec.Code, rec.Body)
+	}
+	var failed []securityevent.SecurityEvent
+	for _, evt := range f.events.recorded() {
+		if evt.EventType == securityevent.TypePasskeyFailed {
+			failed = append(failed, evt)
+		}
+	}
+	if len(failed) != 1 || failed[0].Details["reason"] != securityevent.ReasonUVRequired {
+		t.Fatalf("passkey_failed rows = %+v", failed)
+	}
+	presence.SetUserVerified(true)
+	ceremony, options = f.requiredOptions(t, cookie)
+	if response, err = presence.Register(options); err != nil {
+		t.Fatal(err)
+	}
+	rec := f.do(t, call{method: "POST", path: "/auth/passkeys/registration", body: finishBody(t, ceremony, response, ""), cookie: cookie})
+	if rec.Code != http.StatusCreated || decode(t, rec)["user_verified"] != true {
+		t.Fatalf("verified response to a required ceremony = %d %s", rec.Code, rec.Body)
+	}
+}
+
+func (f *passkeyFixture) requiredOptions(t *testing.T, cookie *http.Cookie) (string, json.RawMessage) {
+	t.Helper()
+	rec := f.do(t, call{method: "POST", path: "/auth/passkeys/registration/options", body: `{"user_verification":"required"}`, cookie: cookie})
+	var body struct {
+		Ceremony  string          `json:"ceremony"`
+		PublicKey json.RawMessage `json:"public_key"`
+	}
+	if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &body) != nil {
+		t.Fatalf("required options = %d %s", rec.Code, rec.Body)
+	}
+	return body.Ceremony, body.PublicKey
 }
 
 func TestPasskeyErrorCodes(t *testing.T) {

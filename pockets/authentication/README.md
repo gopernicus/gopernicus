@@ -414,7 +414,8 @@ that is the hatch.
 - `GET /auth/methods` — live-session-gated **masked** method inventory (below);
   `Cache-Control: no-store`.
 - `GET /auth/csrf` — live-session-gated JSON **CSRF bootstrap** →
-  `{"csrf_token":"..."}` plus the matching `__Host-auth_csrf` cookie,
+  `{"csrf_token":"..."}` plus the matching CSRF cookie (`__Host-auth_csrf`, or
+  `auth_csrf` on a development host without a Secure session cookie — below),
   `Cache-Control: no-store`. Origin-gated only (the double-submit gate cannot
   protect the endpoint that hands out the token). See the cross-origin SPA flow
   below.
@@ -555,8 +556,8 @@ bundled handlers write no 403 of their own. **No gate → all five answer 404**
 (deny-by-absence), with a boot WARN when the machine repositories are wired.
 
 **Cookie clients must double-submit the CSRF token on the three POSTs** (since
-v0.6.0), exactly as on `/auth/admin/*`: `GET /auth/csrf`, then echo the
-`__Host-auth_csrf` value in `X-CSRF-Token` from an allowlisted `Origin`. A
+v0.6.0), exactly as on `/auth/admin/*`: `GET /auth/csrf`, then echo its
+`csrf_token` in `X-CSRF-Token` from an allowlisted `Origin`. A
 missing or mismatched token is 403 `permission_denied`; a non-allowlisted origin
 is 403 `origin_rejected` — both BEFORE the host's gate runs. Bearer-only callers
 (no session cookie) skip the gate entirely, and the two GETs are body-less reads
@@ -646,8 +647,8 @@ wired kind — by default, immediate revocation), only decline is public:**
   (the one invitation route with no session gate), behind the Origin-only gate.
 
 **Cookie clients must double-submit the CSRF token on create, accept, cancel and
-resend**: `GET /auth/csrf`, then echo the `__Host-auth_csrf`
-value in `X-CSRF-Token` from an allowlisted `Origin`. Bearer and API-key callers
+resend**: `GET /auth/csrf`, then echo its `csrf_token`
+in `X-CSRF-Token` from an allowlisted `Origin`. Bearer and API-key callers
 are not gated.
 
 Every response built from an invitation row is `{id, resource_type, resource_id,
@@ -996,15 +997,14 @@ The flow:
    the SPA origin cannot read it) and hold it in memory.
 3. Send `X-CSRF-Token: <token>` on every browser-safe mutation
    (`/auth/password/*`, `/auth/step-up/*`, `/auth/identifiers/*`, …) with
-   `credentials: "include"` so the session and `__Host-auth_csrf` cookies ride
-   along.
+   `credentials: "include"` so the session and CSRF cookies ride along.
 
 Contract details:
 
 - **The body value is always the effective cookie value.** The two can never
   disagree.
-- **Bootstrapping does not rotate.** A well-formed existing `__Host-auth_csrf`
-  cookie is returned as-is, so a second tab holding the current token in flight is
+- **Bootstrapping does not rotate.** A well-formed existing CSRF cookie is
+  returned as-is, so a second tab holding the current token in flight is
   not broken; only a missing or malformed cookie mints. A cookie value that does
   not have the shape the pocket mints is never echoed back — it is replaced.
 - **The cookie name is the provenance control; the shape check is not.** Rejecting
@@ -1023,6 +1023,18 @@ Contract details:
   no deployment constraint — but the failure mode on a plain-HTTP host is now
   "the browser refuses the cookie entirely" rather than "the cookie is set and
   not sent". Serve the API over HTTPS (as production already must).
+- **Two cookie names, resolved from the session cookie.** A host whose session
+  cookie is `Secure` — every production host — gets `__Host-auth_csrf`
+  (`Secure; Path=/; SameSite=Lax`, no `Domain`), unchanged. A **development** host
+  whose session cookie is not `Secure` (plain `http://localhost`) gets
+  `auth_csrf`: the same cookie without `Secure` and so without the prefix,
+  because WebKit drops a `Secure` cookie over http. Boot logs
+  `csrf_cookie=auth_csrf secure=false`. Production refuses it twice, each check
+  independent: a non-`Secure` session cookie fails construction, and so does a
+  resolved `auth_csrf` cookie (`ErrInvalidInput`, naming it). Every reader — the
+  header and form double-submits, the OAuth consent, the bootstrap's reuse —
+  reads the resolved name. Clients need no change: they read `csrf_token` from
+  this body, never the cookie.
 - **It is live-gated** (`BundledRouteAuth.CSRFBootstrap`, default
   `RequirePrincipal(Live())` — every wired kind, so a provider-cookie user can
   bootstrap too). No credential and a revoked one are both 401;
@@ -1142,7 +1154,8 @@ allowlisted `Origin`/`Sec-Fetch-Site` check WITHOUT a pre-existing CSRF session
 (a first-time browser sign-in has no cookie to compare), and native/no-Origin
 clients pass. **Authenticated mutations** (account-security forms) use the full
 double-submit CSRF contract: the form's `csrf_token` field is compared to the
-`__Host-auth_csrf` cookie in constant time. Only routes whose handler runs that
+CSRF cookie (`__Host-auth_csrf`; `auth_csrf` on a plain-http development host) in
+constant time. Only routes whose handler runs that
 body compare accept a form body without the header; every other cookie-authenticated
 mutation (invitations, service accounts and API keys, user administration,
 identifier PATCH/DELETE) requires the `X-CSRF-Token` header whatever the body's
@@ -1309,7 +1322,8 @@ native session cookie is read first, then each provider cookie
 native cookie denies and never falls through. Provider cookies are read only by a
 set admitting external tokens, are never asked for native `recover=1`, and must
 be `HttpOnly; Secure; SameSite=Lax`. A provider cookie name equal to the native
-session, refresh or `__Host-auth_csrf` name fails construction. Without a cookie
+session, refresh or either CSRF cookie name (`__Host-auth_csrf`, `auth_csrf`)
+fails construction. Without a cookie
 name a provider is header-only.
 
 **Assurance (RFC 9470).** `RequireMFA()` and `FreshAuth(d)` denials on a JSON set
@@ -1780,7 +1794,7 @@ router.Handle(http.MethodPost, "/session/firebase", session.Exchange(idTokens, i
   Firebase guide recommends.
 - **TTL** is 5 minutes to 14 days (`ErrInvalidSessionTTL` otherwise).
 - **Cookie name** must differ from the native session, refresh and
-  `__Host-auth_csrf` names (construction fails otherwise); `HttpOnly; Secure;
+  CSRF (`__Host-auth_csrf`, `auth_csrf`) names (construction fails otherwise); `HttpOnly; Secure;
   SameSite=Lax`.
 - **Sign-out** clears the cookie. To end every session, call the Admin SDK's
   `RevokeRefreshTokens` from host code (the module does not wrap it); the
@@ -2189,7 +2203,8 @@ regressed counter (a possible clone) is refused and recorded as
 | `POST /auth/admin/users/{id}/passkeys/reset` | UserAdministration + browser-safe + the admin chain |
 | `GET /auth/account/passkeys` · form `POST /auth/passkeys/{id}` (`action=rename\|remove`) · `GET /auth/step-up/passkey` | BrowserAccount (only with `PasskeyConfig.Views`) |
 
-Every `…/options` call takes `{}` and answers `{ceremony, public_key}`, where
+Every `…/options` call takes `{}` — registration also an optional
+`user_verification` — and answers `{ceremony, public_key}`, where
 `public_key` is the inner options JSON `PublicKeyCredential.parseCreationOptionsFromJSON`
 / `parseRequestOptionsFromJSON` takes. Every finish takes `{ceremony,
 credential}` (registration also an optional `name`), `credential` being the
@@ -2198,7 +2213,23 @@ item `{id, name, created_at, last_used_at?, user_verified, backup_eligible,
 backup_state, transports}`. Refusals: `410 challenge_expired`, `401
 passkey_rejected`, `409 passkey_exists` / `passkey_limit`, `403` when the
 registration gate needs a step-up. No response carries a public key, ceremony
-state, or another user's credential id. `GET /auth/methods` lists `passkeys`
+state, or another user's credential id.
+
+**Requiring a biometric for one registration.** `PasskeyConfig.UserVerification`
+stays the host's toggle (preferred by default). `{"user_verification":"required"}`
+on `POST /auth/passkeys/registration/options` raises that one ceremony to
+required, so the browser must verify the user (Face ID, Touch ID, Windows Hello
+or a PIN) and a response without user verification is `401 passkey_rejected`
+(`passkey_failed` reason `uv_required`). `"preferred"` or no field keeps the
+host's requirement — a request never lowers a host's `required` — and any other
+value is `400`. **Upgrade in place:** a ceremony that requires user verification
+leaves the user's presence-only passkeys out of `excludeCredentials`, so the same
+device can add a verified passkey under the user's handle (Apple and Google
+replace a same-handle passkey on the device); the new row is AAL2-capable and the
+old presence-only row stays listed until removed. The enrollment gate, the cap
+and the user handle are unchanged.
+
+`GET /auth/methods` lists `passkeys`
 (with the advisory `removable` hint) when passkeys are on: an SPA reads it on an
 admin 401 to choose its step-up.
 

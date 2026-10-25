@@ -47,7 +47,7 @@ func TestRequireBrowserSafeMutationGate(t *testing.T) {
 		t.Fatal(err)
 	}
 	sessionCookie := &http.Cookie{Name: adapter.SessionCookieName(), Value: "opaque"}
-	csrfCookie := &http.Cookie{Name: csrfCookieName, Value: "double-submit"}
+	csrfCookie := &http.Cookie{Name: developmentCSRFCookieName, Value: "double-submit"}
 
 	cases := []struct {
 		name     string

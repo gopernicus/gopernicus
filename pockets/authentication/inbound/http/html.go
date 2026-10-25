@@ -160,14 +160,14 @@ func (h *handlers) renderPage(w http.ResponseWriter, r *http.Request, nonce stri
 }
 
 // newPageContext builds the shared per-render context: a fresh double-submit CSRF
-// token (also set as the __Host-auth_csrf cookie so a form POST can double-submit
+// token (also set as the CSRF cookie so a form POST can double-submit
 // it) and a per-render CSP nonce. Populating the return-to, message, actor, and field-error
 // fields is left to the individual handlers (and enriched in AV3-8.3/8.4).
 func (h *handlers) newPageContext(w http.ResponseWriter) PageContext {
-	// issueCSRFToken sets the __Host-auth_csrf cookie and returns the token; a form
+	// issue sets the CSRF cookie and returns the token; a form
 	// on the page echoes it in a hidden field for the browser-safe-mutation gate. A failure
 	// to source randomness leaves the token empty rather than failing the render.
-	token, _ := issueCSRFToken(w)
+	token, _ := h.mutation.csrf().cookie.issue(w)
 	return PageContext{CSRFToken: token, CSPNonce: newNonce()}
 }
 

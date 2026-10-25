@@ -57,6 +57,7 @@ type Adapter struct {
 	routes           *mountDeps
 	service          CredentialService
 	cookie           CookieConfig
+	csrfCookie       csrfCookieSpec
 	externalCookies  []string
 	browserLoginPath string
 	// browserLoginSet records an explicit WithBrowserLoginPath: the default
@@ -108,7 +109,7 @@ func newAuthenticator(service CredentialService, cfg authenticatorConfig) *Adapt
 	}
 	mfaDenials, _ := service.(MFADenialRecorder)
 	return &Adapter{
-		service: service, cookie: cfg.Cookie, externalCookies: slices.Clone(cfg.ExternalCookies),
+		service: service, cookie: cfg.Cookie, csrfCookie: resolveCSRFCookie(cfg.Cookie.Secure), externalCookies: slices.Clone(cfg.ExternalCookies),
 		browserLoginPath: cfg.BrowserLoginPath, browserLoginSet: browserLoginSet, limiter: cfg.Limiter, limiterFailOpen: cfg.LimiterFailOpen, logger: cfg.Logger,
 		proxies: newProxyPosture(cfg.RuntimeMode, cfg.Logger), mfaDenials: mfaDenials,
 	}
@@ -185,6 +186,9 @@ func NewAuthenticator(service CredentialService, runtimeMode environment.Mode, o
 	if cfg.RuntimeMode == environment.ModeProduction && !cfg.Cookie.Secure {
 		return nil, fmt.Errorf("authentication HTTP: production cookies require Secure: %w", sdk.ErrInvalidInput)
 	}
+	if err := validateCSRFCookie(cfg.RuntimeMode, resolveCSRFCookie(cfg.Cookie.Secure)); err != nil {
+		return nil, err
+	}
 
 	if nilDependency(service) {
 		return nil, fmt.Errorf("authentication HTTP: credential service is required: %w", sdk.ErrInvalidInput)
@@ -218,8 +222,9 @@ func NewAuthenticator(service CredentialService, runtimeMode environment.Mode, o
 }
 
 // validExternalCookies rejects a provider cookie name that is malformed,
-// repeated, or shared with the native session, refresh or CSRF cookie: a shared
-// name would let one credential be read as another.
+// repeated, or shared with the native session, refresh or CSRF cookie — either
+// CSRF cookie name, whichever the session cookie resolves to: a shared name
+// would let one credential be read as another.
 func validExternalCookies(names []string, sessionName string, externalEnabled bool) error {
 	if len(names) == 0 {
 		return nil
@@ -230,7 +235,7 @@ func validExternalCookies(names []string, sessionName string, externalEnabled bo
 	if sessionName == "" {
 		sessionName = "session"
 	}
-	taken := map[string]bool{sessionName: true, sessionName + "_refresh": true, csrfCookieName: true}
+	taken := map[string]bool{sessionName: true, sessionName + "_refresh": true, csrfCookieName: true, developmentCSRFCookieName: true}
 	for _, name := range names {
 		if (&http.Cookie{Name: name}).Valid() != nil || name == "" {
 			return fmt.Errorf("authentication HTTP: invalid external cookie name %q: %w", name, sdk.ErrInvalidInput)

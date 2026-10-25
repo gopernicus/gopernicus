@@ -73,13 +73,13 @@ func (h *handlers) accountForm(w http.ResponseWriter, r *http.Request, fn func(f
 }
 
 // formCSRFOK performs the double-submit CSRF compare for a form POST: the body's
-// csrf_token field must equal the __Host-auth_csrf cookie, compared in constant
+// csrf_token field must equal the CSRF cookie, compared in constant
 // time. On a missing/mismatched token it renders a generic 403 page and returns
 // false. This is
 // the form-lane twin of the header double-submit the middleware applies to
 // JSON/fetch callers; neither lane is weakened.
 func (h *handlers) formCSRFOK(w http.ResponseWriter, r *http.Request, form url.Values) bool {
-	cookie, err := r.Cookie(csrfCookieName)
+	cookie, err := r.Cookie(h.mutation.csrf().cookie.name)
 	token := form.Get("csrf_token")
 	if err != nil || cookie.Value == "" || token == "" ||
 		subtle.ConstantTimeCompare([]byte(cookie.Value), []byte(token)) != 1 {

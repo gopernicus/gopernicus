@@ -6,10 +6,13 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"mime"
 	"net/http"
 
+	"github.com/gopernicus/gopernicus/sdk"
+	"github.com/gopernicus/gopernicus/sdk/pkg/environment"
 	"github.com/gopernicus/gopernicus/sdk/pkg/web"
 )
 
@@ -25,11 +28,19 @@ const (
 	// page's own script so a same-origin SPA can attach it; a cross-site page
 	// cannot read it, which is what makes the double-submit comparison sound.
 	// The __Host- prefix makes a browser refuse the cookie unless it is Secure,
-	// Path=/, and carries NO Domain attribute (see setCSRFCookie), which is what
+	// Path=/, and carries NO Domain attribute (see csrfCookieSpec.set), which is what
 	// stops a sibling host under the same registrable domain from setting this
 	// name at all. The prefix therefore requires HTTPS: over plain http a browser
-	// rejects the Set-Cookie outright rather than downgrading it.
+	// rejects the Set-Cookie outright rather than downgrading it. It is the
+	// cookie of every host whose session cookie is Secure, production included.
 	csrfCookieName = "__Host-auth_csrf"
+
+	// developmentCSRFCookieName is the CSRF cookie of a development host whose
+	// session cookie is not Secure (plain http://localhost): the same cookie
+	// without Secure, so without the __Host- prefix, because some browsers
+	// (WebKit) drop a Secure cookie over http. resolveCSRFCookie selects it and
+	// validateCSRFCookie refuses it in production.
+	developmentCSRFCookieName = "auth_csrf"
 
 	// csrfHeaderName carries the CSRF token the client copies from the cookie.
 	csrfHeaderName = "X-CSRF-Token"
@@ -55,15 +66,25 @@ const (
 // is unavailable; production always reads crypto/rand.
 var randRead = rand.Read
 
+// csrfCookieSpec is the resolved double-submit cookie: its name and whether it is
+// Secure. Every reader and writer takes it from the handler config, so the
+// cookie a page is issued is the one every gate compares.
+type csrfCookieSpec struct {
+	name   string
+	secure bool
+}
+
 // csrfConfig configures the browser-safe-mutation gate. allowedOrigins is the
 // exact-match Origin allowlist (a "*" entry never authorizes a credentialed
 // cross-origin mutation); originPolicy admits further origins (exact and
 // one-label namespaces); sessionCookieName is the access cookie whose presence
-// marks a request as cookie-authenticated rather than bearer-only.
+// marks a request as cookie-authenticated rather than bearer-only; cookie is
+// the resolved double-submit cookie.
 type csrfConfig struct {
 	allowedOrigins    []string
 	originPolicy      web.OriginPolicy
 	sessionCookieName string
+	cookie            csrfCookieSpec
 }
 
 // MutationSecurity is the host-facing browser-safe-mutation policy the pocket's
@@ -76,11 +97,44 @@ type MutationSecurity struct {
 	AllowedOrigins    []string
 	OriginPolicy      web.OriginPolicy
 	SessionCookieName string
+	// csrfCookie is the CSRF cookie New resolved from the session cookie; the
+	// zero value is the __Host- cookie.
+	csrfCookie csrfCookieSpec
 }
 
 // csrf builds the internal gate config from the host policy.
 func (m MutationSecurity) csrf() csrfConfig {
-	return csrfConfig{allowedOrigins: m.AllowedOrigins, originPolicy: m.OriginPolicy, sessionCookieName: m.SessionCookieName}
+	return csrfConfig{allowedOrigins: m.AllowedOrigins, originPolicy: m.OriginPolicy, sessionCookieName: m.SessionCookieName, cookie: m.csrfCookie.orHost()}
+}
+
+// orHost returns c, or the __Host- cookie for the zero value.
+func (c csrfCookieSpec) orHost() csrfCookieSpec {
+	if c.name == "" {
+		return resolveCSRFCookie(true)
+	}
+	return c
+}
+
+// resolveCSRFCookie resolves the double-submit cookie from the session
+// cookie's Secure: a Secure session cookie gets the __Host- cookie
+// (csrfCookieName, Secure); a non-Secure one gets developmentCSRFCookieName
+// without Secure. Only validateCSRFCookie decides whether a mode admits it.
+func resolveCSRFCookie(sessionSecure bool) csrfCookieSpec {
+	if sessionSecure {
+		return csrfCookieSpec{name: csrfCookieName, secure: true}
+	}
+	return csrfCookieSpec{name: developmentCSRFCookieName}
+}
+
+// validateCSRFCookie refuses the relaxed development CSRF cookie in
+// production. It is independent of the production Secure session-cookie
+// refusal, so the relaxed cookie stays unreachable in production even if that
+// check changes.
+func validateCSRFCookie(mode environment.Mode, cookie csrfCookieSpec) error {
+	if mode.IsProduction() && (!cookie.secure || cookie.name != csrfCookieName) {
+		return fmt.Errorf("authentication HTTP: production refuses the development CSRF cookie %q; the CSRF cookie must be the Secure %s: %w", cookie.name, csrfCookieName, sdk.ErrInvalidInput)
+	}
+	return nil
 }
 
 // requireBrowserSafeMutation returns middleware that protects a
@@ -148,6 +202,7 @@ func (s *Adapter) RequireBrowserSafeMutation() web.Middleware {
 }
 
 func browserSafeMutation(cfg csrfConfig, formLane bool) web.Middleware {
+	csrf := cfg.cookie.orHost()
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if isBearerOnly(r, cfg.sessionCookieName) {
@@ -165,7 +220,7 @@ func browserSafeMutation(cfg csrfConfig, formLane bool) web.Middleware {
 				return
 			}
 
-			cookie, err := r.Cookie(csrfCookieName)
+			cookie, err := r.Cookie(csrf.name)
 			header := r.Header.Get(csrfHeaderName)
 			if err != nil || cookie.Value == "" || header == "" ||
 				subtle.ConstantTimeCompare([]byte(cookie.Value), []byte(header)) != 1 {
@@ -181,8 +236,8 @@ func browserSafeMutation(cfg csrfConfig, formLane bool) web.Middleware {
 // requireBrowserSafeOrigin returns middleware that enforces the allowlisted-Origin
 // / Sec-Fetch-Site policy for a CREDENTIAL-ESTABLISHMENT endpoint (passwordless
 // start/verify/redeem) WITHOUT the double-submit CSRF token check (design §9.1).
-// These endpoints have no pre-existing session, so there is no __Host-auth_csrf
-// cookie to double-submit; requiring one would break a first-time browser
+// These endpoints have no pre-existing session, so there is no CSRF cookie to
+// double-submit; requiring one would break a first-time browser
 // sign-in. The Origin
 // allowlist alone prevents a cross-site page from forcing a credential mint (login
 // CSRF) — a minted session cookie therefore cannot be established from a disallowed
@@ -227,53 +282,58 @@ func browserOriginAllowed(r *http.Request, allowedOrigins []string, policy web.O
 	}
 }
 
-// issueCSRFToken mints a 256-bit token, writes it as the double-submit cookie,
-// and returns it so a rendered form or JSON response can hand the same value to
-// the client for the csrfHeaderName header. On a randomness failure it returns
-// the error having written NO cookie, so the caller can fail closed.
-func issueCSRFToken(w http.ResponseWriter) (string, error) {
+// issue mints a 256-bit token, writes it as the double-submit cookie, and
+// returns it so a rendered form or JSON response can hand the same value to the
+// client for the csrfHeaderName header. On a randomness failure it returns the
+// error having written NO cookie, so the caller can fail closed.
+func (c csrfCookieSpec) issue(w http.ResponseWriter) (string, error) {
 	var b [csrfTokenBytes]byte
 	if _, err := randRead(b[:]); err != nil {
 		return "", err
 	}
 	token := base64.RawURLEncoding.EncodeToString(b[:])
-	setCSRFCookie(w, token)
+	c.set(w, token)
 	return token, nil
 }
 
-// setCSRFCookie writes token as the double-submit cookie. It is intentionally NOT
-// HttpOnly (the page script must read it) but is Secure + SameSite=Lax. Secure,
-// Path=/ and the absence of a Domain attribute are also the __Host- prefix
-// preconditions csrfCookieName depends on; none of the three may be relaxed.
-func setCSRFCookie(w http.ResponseWriter, token string) {
+// set writes token as the double-submit cookie. It is intentionally NOT
+// HttpOnly (the page script must read it) but is SameSite=Lax, Path=/ and
+// carries no Domain attribute. On the __Host- cookie it is also Secure: Secure,
+// Path=/ and no Domain are the prefix preconditions csrfCookieName depends on,
+// and none of the three is ever relaxed for it. Only the development cookie a
+// non-Secure session cookie resolves to (developmentCSRFCookieName) omits
+// Secure, and production refuses that cookie at construction.
+func (c csrfCookieSpec) set(w http.ResponseWriter, token string) {
 	http.SetCookie(w, &http.Cookie{
-		Name:     csrfCookieName,
+		Name:     c.name,
 		Value:    token,
 		Path:     "/",
-		Secure:   true,
+		Secure:   c.secure,
 		HttpOnly: false,
 		SameSite: http.SameSiteLaxMode,
 	})
 }
 
-// currentCSRFToken returns the request's existing double-submit token when it is
-// present AND carries the exact shape issueCSRFToken mints (csrfTokenBytes of
-// base64url entropy). Reuse is what keeps a second tab's in-flight token valid
-// across a bootstrap.
+// current returns the request's existing double-submit token when it is
+// present AND carries the exact shape issue mints (csrfTokenBytes of base64url
+// entropy). Reuse is what keeps a second tab's in-flight token valid across a
+// bootstrap.
 //
 // The shape check rejects a MALFORMED cookie only. It does NOT prove the pocket
 // minted the value: any well-formed 32-byte base64url string passes and IS reused
 // and echoed. Provenance is enforced by the cookie NAME instead — the __Host-
 // prefix makes a browser refuse a Set-Cookie for this name that carries a Domain
 // attribute, so a sibling host under the same registrable domain can no longer
-// plant it. What remains is script already running on THIS origin, which is
-// game-over regardless of CSRF. The ORIGIN ALLOWLIST remains the mutation gate:
-// even a fixated token cannot be spent from a non-allowlisted origin. Note that
+// plant it. The development cookie carries no prefix and so no such guarantee;
+// it exists only for a development host on plain http. What remains is script
+// already running on THIS origin, which is game-over regardless of CSRF. The
+// ORIGIN ALLOWLIST remains the mutation gate: even a fixated token cannot be
+// spent from a non-allowlisted origin. Note that
 // prefix rules are a BROWSER control — Go's net/http server and cookiejar treat
 // the name as an ordinary string, so a test may still supply any value it likes.
 // See TestCSRFBootstrapReusesForeignWellFormedToken, which pins the behavior.
-func currentCSRFToken(r *http.Request) (string, bool) {
-	cookie, err := r.Cookie(csrfCookieName)
+func (c csrfCookieSpec) current(r *http.Request) (string, bool) {
+	cookie, err := r.Cookie(c.name)
 	if err != nil || cookie.Value == "" {
 		return "", false
 	}
@@ -336,7 +396,7 @@ func forbidOrigin(w http.ResponseWriter) {
 }
 
 // csrfResponse is the GET /auth/csrf body. Token is ALWAYS the value of the
-// effective __Host-auth_csrf cookie on the same response, so a cross-origin SPA that
+// effective CSRF cookie on the same response, so a cross-origin SPA that
 // cannot read the API-origin cookie can still echo it in csrfHeaderName.
 type csrfResponse struct {
 	Token string `json:"csrf_token"`
@@ -344,7 +404,7 @@ type csrfResponse struct {
 
 // csrfBootstrap serves GET /auth/csrf: the JSON double-submit bootstrap for a
 // cookie-authenticated SPA on a different origin than the API, which cannot read
-// the __Host-auth_csrf cookie itself. The route is live-session-gated and rides the
+// the CSRF cookie itself. The route is live-session-gated and rides the
 // origin-only browser gate (see Mount).
 //
 // It REUSES a well-formed existing token instead of rotating: another tab may be
@@ -353,13 +413,14 @@ type csrfResponse struct {
 // randomness failure fails closed with a 500 and no token in the body. Either
 // way the response sets the cookie whose value the body reports, so the two can
 // never disagree.
-func (*handlers) csrfBootstrap(w http.ResponseWriter, r *http.Request) {
+func (h *handlers) csrfBootstrap(w http.ResponseWriter, r *http.Request) {
 	writeNoStore(w)
-	token, ok := currentCSRFToken(r)
+	csrf := h.mutation.csrf().cookie
+	token, ok := csrf.current(r)
 	if ok {
-		setCSRFCookie(w, token)
+		csrf.set(w, token)
 	} else {
-		minted, err := issueCSRFToken(w)
+		minted, err := csrf.issue(w)
 		if err != nil {
 			web.RespondJSONError(w, web.ErrInternal("could not issue a CSRF token"))
 			return
