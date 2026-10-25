@@ -118,6 +118,7 @@ never migrates. Its files are the host's:
 | `0029_iam_operations_expiry.sql` | `pockets/authorization/stores/pgx/migrations` `0007`, renumbered |
 | `0030_retention.sql`, `0031_security_events_retention.sql` | `pockets/authentication/stores/pgx/migrations` `0023`, `0024`, renumbered |
 | `0032_passkey_credentials.sql` | `pockets/authentication/stores/pgx/migrations` `0025`, renumbered; required by the store's boot probe even with passkeys unwired |
+| `0033_totp.sql` | `pockets/authentication/stores/pgx/migrations` `0026`, renumbered; required only when `WithTOTP` is wired (applied here ahead of time, so TOTP can be toggled on later) |
 
 When a store ships a new migration, copy it in as the next number. Never
 renumber a file once it is applied: the filename is its ledger identity.

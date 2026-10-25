@@ -75,7 +75,10 @@ var passkeyProbeTables = []string{"passkey_credentials"}
 // refuses, with sdk.ErrNotFound naming the file, a database without migration
 // 0023 (the users.erased_at column), without row 1 of 0024's
 // security_events_retention floor table — never a default floor — or without
-// 0025's passkey_credentials table. Last it checks the 0022 immutability
+// 0025's passkey_credentials table. It never probes 0026 (totp_credentials,
+// recovery_codes): TOTP is the host's opt-in, and the bundle's TOTP store
+// implements totp.SchemaProber, which the pocket calls only under WithTOTP.
+// Last it checks the 0022 immutability
 // triggers (AuditTables) under the RuntimeMode db was opened with, logging a
 // WARN when they are missing or altered.
 func Repositories(ctx context.Context, db *tursodb.DB) (auth.Repositories, error) {
@@ -148,6 +151,9 @@ func Repositories(ctx context.Context, db *tursodb.DB) (auth.Repositories, error
 		Maintenance: NewMaintenanceStore(db),
 		UserErasure: NewErasureStore(db),
 		Passkeys:    NewPasskeyStore(db),
+		// Never probed here: 0026 is required only when the host wires TOTP, and
+		// the pocket then asks through TOTPStore.ProbeSchema.
+		TOTP: NewTOTPStore(db),
 	}, nil
 }
 

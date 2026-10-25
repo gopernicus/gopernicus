@@ -144,6 +144,21 @@ func (s *ErasureStore) Erase(ctx context.Context, in user.EraseInput) (user.Eras
 			}
 			*d.count = int(n)
 		}
+		// The TOTP tables only when the host wired TOTP: without it 0026 may
+		// never have been applied, so neither table is named. The credential row
+		// goes before its codes, the order every TOTP writer locks them in.
+		if in.TOTP {
+			for _, d := range []struct {
+				count *int
+				table string
+			}{{&c.TOTP, totpCredentialsTable}, {&c.RecoveryCodes, recoveryCodesTable}} {
+				n, err := pgxdb.ExecAffecting(ctx, tx, `DELETE FROM `+s.table(d.table)+` WHERE user_id = @id`, args)
+				if err != nil {
+					return err
+				}
+				*d.count = int(n)
+			}
+		}
 
 		// (8) The locked invitations: pending ones go; terminal ones keep their
 		// ids (invited_by, resolved_subject_id/type) and lose the address and

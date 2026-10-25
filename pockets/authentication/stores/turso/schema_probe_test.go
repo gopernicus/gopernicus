@@ -19,6 +19,8 @@ import (
 	"testing"
 
 	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/totp"
+	"github.com/gopernicus/gopernicus/pockets/authentication/stores/storetest"
 	"github.com/gopernicus/gopernicus/sdk"
 )
 
@@ -45,7 +47,7 @@ func probeDial(t *testing.T) *tursodb.DB {
 func probeDropAll(t *testing.T, db *tursodb.DB) {
 	t.Helper()
 	ctx := context.Background()
-	for _, tbl := range slices.Concat(probeTables, oauth2ProbeTables, externalProbeTables, passkeyProbeTables, []string{"schema_migrations"}) {
+	for _, tbl := range slices.Concat(probeTables, oauth2ProbeTables, externalProbeTables, passkeyProbeTables, totpProbeTables, []string{"schema_migrations"}) {
 		if _, err := db.Exec(ctx, "DROP TABLE IF EXISTS "+tbl); err != nil {
 			t.Fatalf("drop %s: %v", tbl, err)
 		}
@@ -146,5 +148,29 @@ func TestSchemaProbe_CreatesNoSchema(t *testing.T) {
 		if !errors.Is(err, sql.ErrNoRows) {
 			t.Fatalf("inspect %s after construct: %v", table, err)
 		}
+	}
+}
+
+// TestSchemaProbe_TOTPConditional pins the owner ruling on 0026: without its
+// tables Repositories still constructs (TOTP is opt-in, never probed in every
+// mode), and the TOTP store's ProbeSchema — the pocket's check under WithTOTP —
+// refuses, naming the file.
+func TestSchemaProbe_TOTPConditional(t *testing.T) {
+	db := probeDial(t)
+	probeResetSchema(t, db)
+	t.Cleanup(func() { probeResetSchema(t, db) })
+	for _, table := range totpProbeTables {
+		if _, err := db.Exec(context.Background(), "DROP TABLE "+table); err != nil {
+			t.Fatalf("drop %s: %v", table, err)
+		}
+	}
+
+	repos, err := Repositories(context.Background(), db)
+	if err != nil {
+		t.Fatalf("Repositories without 0026 = %v, want it to construct (TOTP is opt-in)", err)
+	}
+	storetest.RunTOTPSchemaProbe(t, func(*testing.T) totp.Repository { return repos.TOTP })
+	if err := repos.TOTP.(totp.SchemaProber).ProbeSchema(context.Background()); err == nil || !strings.Contains(err.Error(), totpMigration) {
+		t.Fatalf("ProbeSchema = %v, want an error naming %s", err, totpMigration)
 	}
 }

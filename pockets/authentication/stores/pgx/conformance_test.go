@@ -34,6 +34,8 @@ var authTables = []string{
 	oauthClientsTable, oauthCodesTable, oauthHistoryTable,
 	externalSubjectsTable,
 	passkeyCredentialsTable,
+	totpCredentialsTable,
+	recoveryCodesTable,
 	passwordsTable,
 	sessionsTable,
 	apiKeysTable,
@@ -140,6 +142,7 @@ func TestConformance_Postgres(t *testing.T) {
 	}
 	storetest.Run(t, newRepos)
 	storetest.RunPasskeys(t, newRepos)
+	storetest.RunTOTP(t, newRepos)
 }
 
 // truncate clears every auth table so a Repositories starts empty. The names are
