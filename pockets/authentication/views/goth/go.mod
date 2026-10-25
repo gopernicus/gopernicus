@@ -4,7 +4,7 @@ go 1.26.10
 
 require (
 	github.com/a-h/templ v0.3.1020
-	github.com/gopernicus/gopernicus/pockets/authentication v0.27.1
+	github.com/gopernicus/gopernicus/pockets/authentication v0.28.0
 	github.com/gopernicus/gopernicus/sdk v0.20.0
 	github.com/gopernicus/gopernicus/ui/goth v0.2.0
 )

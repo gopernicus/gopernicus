@@ -9,6 +9,7 @@ require (
 	github.com/gopernicus/gopernicus/integrations/cryptids/golang-jwt v0.3.0
 	github.com/gopernicus/gopernicus/integrations/datastores/pgxdb v0.14.0
 	github.com/gopernicus/gopernicus/integrations/datastores/turso v0.9.0
+	github.com/gopernicus/gopernicus/integrations/encoding/rsc-qr v0.1.0
 	github.com/gopernicus/gopernicus/pockets/authentication v0.27.1
 	github.com/gopernicus/gopernicus/pockets/authentication/views/goth v0.7.0
 	github.com/gopernicus/gopernicus/pockets/authorization v0.30.0
@@ -38,6 +39,7 @@ require (
 	github.com/x448/float16 v0.8.4 // indirect
 	golang.org/x/oauth2 v0.36.0 // indirect
 	golang.org/x/sys v0.48.0 // indirect
+	rsc.io/qr v0.2.0 // indirect
 )
 
 require (

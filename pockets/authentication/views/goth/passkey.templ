@@ -35,9 +35,10 @@ templ passkeyControl(c passkeyControlProps) {
 }
 
 // passkeyUnsupported renders the explanation shown when the browser has no
-// WebAuthn; passkey.js hides it when the browser can use passkeys.
+// WebAuthn; passkey.js hides it when the browser can use passkeys. children (the
+// "Use an authenticator app instead" link) render inside it.
 templ passkeyUnsupported(text string) {
-	<p data-auth-passkey-unsupported>{ text }</p>
+	<p data-auth-passkey-unsupported>{ text }{ children... }</p>
 }
 
 // passkeysBody renders the passkey manage page: each passkey with its rename and
@@ -150,10 +151,17 @@ templ passkeyStepUpBody(m authentication.PasskeyStepUpPage) {
 		}
 		if m.HasPasskeys {
 			@passkeyControl(passkeyControlProps{Mode: "stepup", OptionsURL: m.Links.StepUpOptions, FinishURL: m.Links.StepUp, CSRFToken: m.CSRFToken, ReturnTo: m.ReturnTo, Label: "Use a passkey"})
-			@passkeyUnsupported("This browser doesn't support passkeys, so it can't complete this check. Try a browser or device that does.")
+			@passkeyUnsupported("This browser doesn't support passkeys, so it can't complete this check. Try a browser or device that does.") {
+				if m.CanReachAAL2 && m.TOTP != nil && m.TOTP.ChooserPage != "" {
+					{ " " }<a href={ templ.SafeURL(chooserHref(*m.TOTP, m.ReturnTo)) }>Use an authenticator app instead</a>
+				}
+			}
 		}
 		if (!m.HasPasskeys || !m.CanReachAAL2) && m.Links.Manage != "" {
 			<p><a href={ templ.SafeURL(addPasskeyHref(m.Links, m.ReturnTo)) }>Add a passkey</a></p>
+		}
+		if (!m.HasPasskeys || !m.CanReachAAL2) && m.TOTP != nil && m.TOTP.ChooserPage != "" {
+			<p><a href={ templ.SafeURL(chooserHref(*m.TOTP, m.ReturnTo)) }>Use an authenticator app instead</a></p>
 		}
 	}
 }

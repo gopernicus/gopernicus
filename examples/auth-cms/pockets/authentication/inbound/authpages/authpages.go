@@ -62,6 +62,9 @@ var _ inbound.Views = Views{}
 // PasskeyConfig.Views too.
 var _ inbound.PasskeyViews = Views{}
 
+// _ pins the promoted TOTP pages: the host hands this value to TOTPConfig.Views.
+var _ inbound.TOTPViews = Views{}
+
 // loginData is the branded Login's template data: the page model plus the path
 // the host serves the passkey script at.
 type loginData struct {
@@ -70,10 +73,11 @@ type loginData struct {
 }
 
 // New returns the host override over the ui/goth bundle, with its branded Login
-// template parsed once. It fails loudly if the ui/goth Views cannot be constructed
-// (a nil bundle).
-func New(bundle *uigoth.Bundle) (Views, error) {
-	gv, err := authgoth.New(bundle)
+// template parsed once. opts reach the embedded ui/goth Views (the composition
+// root passes authgoth.WithQR). It fails loudly if the ui/goth Views cannot be
+// constructed (a nil bundle).
+func New(bundle *uigoth.Bundle, opts ...authgoth.Option) (Views, error) {
+	gv, err := authgoth.New(bundle, opts...)
 	if err != nil {
 		return Views{}, err
 	}

@@ -15,7 +15,9 @@
 //
 // and serve bundle assets + authgoth.FragmentScriptHandler() under the paths the
 // bundle/adapter name. With passkeys, pass the same value as
-// authentication.PasskeyConfig.Views and serve authgoth.PasskeyScriptHandler() too. Customize by embedding this Views and overriding individual
+// authentication.PasskeyConfig.Views and serve authgoth.PasskeyScriptHandler() too. With TOTP, pass it
+// as authentication.TOTPConfig.Views and construct it WithQR(rscqr.Modules) for the
+// enrollment QR code. Customize by embedding this Views and overriding individual
 // methods (the blessed partial-override path).
 //
 // SECRET DISCIPLINE (design §9.2): no template here renders a password, one-time
@@ -30,6 +32,7 @@ import (
 	"fmt"
 	"net/url"
 	"slices"
+	"strconv"
 
 	"github.com/a-h/templ"
 	inbound "github.com/gopernicus/gopernicus/pockets/authentication/inbound/http"
@@ -45,6 +48,8 @@ var _ inbound.Views = Views{}
 
 var _ inbound.PasskeyViews = Views{}
 
+var _ inbound.TOTPViews = Views{}
+
 // Views is the ui/goth-backed renderer. It holds the immutable presentation Bundle
 // and the public path the host serves the externalized fragment-reader script at.
 // Its zero value is not usable — construct it with New so the Bundle is non-nil.
@@ -54,6 +59,7 @@ type Views struct {
 	passkeyScriptPath  string
 	brand              templ.Component
 	appName            string
+	qr                 QRModules
 }
 
 // Option customizes a Views at construction.
@@ -64,6 +70,7 @@ type viewConfig struct {
 	passkeyScriptPath  string
 	brand              templ.Component
 	appName            string
+	qr                 QRModules
 }
 
 // WithFragmentScriptPath overrides the public URL the reset/magic-link landings load
@@ -119,7 +126,7 @@ func New(bundle *goth.Bundle, opts ...Option) (Views, error) {
 		}
 		opt(&cfg)
 	}
-	return Views{bundle: bundle, fragmentScriptPath: cfg.fragmentScriptPath, passkeyScriptPath: cfg.passkeyScriptPath, brand: cfg.brand, appName: cfg.appName}, nil
+	return Views{bundle: bundle, fragmentScriptPath: cfg.fragmentScriptPath, passkeyScriptPath: cfg.passkeyScriptPath, brand: cfg.brand, appName: cfg.appName, qr: cfg.qr}, nil
 }
 
 // page wraps a page body in the shared GOTH document chrome: the bundle's head
@@ -235,6 +242,33 @@ func (v Views) PasskeyStepUp(m inbound.PasskeyStepUpPage) web.Renderer {
 	return v.page("Confirm it's you", v.passkeyHead(&m.Links), passkeyStepUpBody(m))
 }
 
+// TOTP renders the authenticator-app manage page.
+func (v Views) TOTP(m inbound.TOTPPage) web.Renderer {
+	return v.page("Authenticator app", nil, totpBody(m))
+}
+
+// TOTPEnroll renders the enrollment page: the QR code (WithQR), the grouped key,
+// the otpauth:// link and the confirm form.
+func (v Views) TOTPEnroll(m inbound.TOTPEnrollPage) web.Renderer {
+	qr, ok := qrFor(v.qr, m.OTPAuthURI)
+	return v.page("Set up an authenticator app", nil, totpEnrollBody(m, qr, ok))
+}
+
+// RecoveryCodes renders a fresh recovery-code set, shown once.
+func (v Views) RecoveryCodes(m inbound.RecoveryCodesPage) web.Renderer {
+	return v.page("Save your recovery codes", nil, recoveryCodesBody(m))
+}
+
+// MFAStepUp renders the "Confirm it's you" chooser. The passkey script loads only
+// when the passkey control is offered.
+func (v Views) MFAStepUp(m inbound.MFAStepUpPage) web.Renderer {
+	var links *inbound.PasskeyLinks
+	if m.OfferPasskey {
+		links = m.Passkeys
+	}
+	return v.page("Confirm it's you", v.passkeyHead(links), mfaStepUpBody(m))
+}
+
 // Status renders a generic informational page.
 func (v Views) Status(m inbound.StatusPage) web.Renderer {
 	return v.page(statusTitle(m.Title), nil, statusBody(m))
@@ -308,4 +342,42 @@ func addPasskeyHref(links inbound.PasskeyLinks, returnTo string) string {
 		back += "?return_to=" + url.QueryEscape(returnTo)
 	}
 	return links.Manage + "?return_to=" + url.QueryEscape(back)
+}
+
+// totpEnrollPageHref is the enrollment page, which re-reads the pending setup:
+// it sits under the manage page.
+func totpEnrollPageHref(links inbound.TOTPLinks) string { return links.Manage + "/enroll" }
+
+// totpLastUsedText describes the authenticator app's last use.
+func totpLastUsedText(lastUsedAt string) string {
+	if lastUsedAt == "" {
+		return "Not used yet."
+	}
+	return "Last used " + lastUsedAt + "."
+}
+
+// recoveryCodesRemainingText describes how many recovery codes are left.
+func recoveryCodesRemainingText(n int) string {
+	switch n {
+	case 0:
+		return "You have no recovery codes left. Generate new ones so you can still get in without your app."
+	case 1:
+		return "You have 1 recovery code left."
+	default:
+		return "You have " + strconv.Itoa(n) + " recovery codes left."
+	}
+}
+
+// chooserHref links to the "Confirm it's you" chooser, returning to returnTo.
+func chooserHref(links inbound.TOTPLinks, returnTo string) string {
+	if returnTo == "" {
+		return links.ChooserPage
+	}
+	return links.ChooserPage + "?return_to=" + url.QueryEscape(returnTo)
+}
+
+// chooserAddPasskeyHref links the chooser to the passkey manage page, coming
+// back to the chooser (and its own return-to) once the passkey is added.
+func chooserAddPasskeyHref(passkeys inbound.PasskeyLinks, totp inbound.TOTPLinks, returnTo string) string {
+	return passkeys.Manage + "?return_to=" + url.QueryEscape(chooserHref(totp, returnTo))
 }

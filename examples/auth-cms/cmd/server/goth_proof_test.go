@@ -1,8 +1,10 @@
 package main
 
 import (
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"regexp"
 	"strings"
 	"testing"
@@ -221,6 +223,7 @@ func TestGOTHNilViewsAssetFreePosture(t *testing.T) {
 	cfg.Views = nil
 	cfg.HTMLPolicy = nil
 	cfg.Passkeys.Views = nil
+	cfg.TOTP.Views = nil
 	svc, err := auth.New(authmem.New().Repositories(), cfg.TokenSigner, cfg.RuntimeMode, cfg.DeliveryMode, cfg.options()...)
 	if err != nil {
 		t.Fatalf("auth.NewService (nil Views): %v", err)
@@ -287,5 +290,85 @@ func TestGOTHLoginPasskeyContract(t *testing.T) {
 	// gated, not a 404.
 	if page := get(t, router, "/auth/account/passkeys"); page.Code == http.StatusNotFound {
 		t.Error("GET /auth/account/passkeys = 404: PasskeyConfig.Views is not wired")
+	}
+}
+
+// formPost posts form as an HTML form would: urlencoded, same-origin, with the
+// double-submit token in the body.
+func (c *linkClient) formPost(path string, form url.Values) (*http.Response, string) {
+	c.t.Helper()
+	form.Set("csrf_token", c.csrfToken())
+	req, err := http.NewRequest(http.MethodPost, c.host.srv.URL+path, strings.NewReader(form.Encode()))
+	if err != nil {
+		c.t.Fatal(err)
+	}
+	req.Header.Set("Origin", c.host.origin)
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	resp, err := c.http.Do(req)
+	if err != nil {
+		c.t.Fatalf("POST %s: %v", path, err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		c.t.Fatal(err)
+	}
+	return resp, string(body)
+}
+
+// TestGOTHTOTPPagesThroughTheHost drives the TOTP pages over this host's real
+// composition — TOTPConfig.Views from the authpages override, the QR drawn by
+// rsc-qr — as plain HTML forms: the chooser as the MFA redirect target, the
+// enrollment PRG, the QR code and the key, a wrong code keeping the same key,
+// the recovery codes shown once, and a code from the chooser reaching aal2.
+func TestGOTHTOTPPagesThroughTheHost(t *testing.T) {
+	host := newPasskeyHost(t, nil)
+	dora := host.signUp("dora@example.com")
+
+	resp, _ := dora.do("GET", "/demo/mfa/page", "", nil)
+	if resp.StatusCode != http.StatusSeeOther || resp.Header.Get("Location") != "/auth/step-up/mfa?return_to=%2Fdemo%2Fmfa%2Fpage" {
+		t.Fatalf("AAL1 /demo/mfa/page = %d %q, want the chooser", resp.StatusCode, resp.Header.Get("Location"))
+	}
+	_, chooser := dora.do("GET", "/auth/step-up/mfa?return_to=%2Fdemo%2Fmfa%2Fpage", "", nil)
+	if !strings.Contains(string(chooser), `href="/auth/account/totp"`) || strings.Contains(string(chooser), `action="/auth/step-up/totp"`) {
+		t.Fatalf("chooser without TOTP:\n%s", chooser)
+	}
+
+	resp, _ = dora.formPost("/auth/totp/enrollment", url.Values{})
+	if resp.StatusCode != http.StatusSeeOther || resp.Header.Get("Location") != "/auth/account/totp/enroll" {
+		t.Fatalf("enrollment form = %d %q", resp.StatusCode, resp.Header.Get("Location"))
+	}
+	secretRE := regexp.MustCompile(`<code data-slot="auth-totp-secret">([A-Z2-7 ]+)</code>`)
+	_, page := dora.do("GET", "/auth/account/totp/enroll", "", nil)
+	for _, want := range []string{`data-slot="auth-totp-qr"`, `<rect width="100%" height="100%" fill="#fff">`, `<path d="M4 4h7v1h-7z`, `href="otpauth://totp/Gopernicus%20CMS:`} {
+		if !strings.Contains(string(page), want) {
+			t.Fatalf("enroll page missing %q:\n%s", want, page)
+		}
+	}
+	m := secretRE.FindStringSubmatch(string(page))
+	if m == nil {
+		t.Fatalf("no secret on the enroll page:\n%s", page)
+	}
+	secret := strings.ReplaceAll(m[1], " ", "")
+
+	resp, wrong := dora.formPost("/auth/totp/enrollment/confirm", url.Values{"code": {totpCode(t, secret, 5)}})
+	if resp.StatusCode != http.StatusUnauthorized || secretRE.FindStringSubmatch(wrong)[1] != m[1] {
+		t.Fatalf("wrong code = %d, want 401 with the same key", resp.StatusCode)
+	}
+	resp, codes := dora.formPost("/auth/totp/enrollment/confirm", url.Values{"code": {totpCode(t, secret, 0)}})
+	if resp.StatusCode != http.StatusOK || strings.Count(codes, "<li><code>") != 10 || !strings.Contains(codes, "You won't see them again.") {
+		t.Fatalf("confirm = %d:\n%s", resp.StatusCode, codes)
+	}
+
+	_, chooser = dora.do("GET", "/auth/step-up/mfa?return_to=%2Fdemo%2Fmfa%2Fpage", "", nil)
+	if !strings.Contains(string(chooser), `action="/auth/step-up/totp"`) || !strings.Contains(string(chooser), `action="/auth/step-up/recovery-code"`) {
+		t.Fatalf("chooser after enrollment:\n%s", chooser)
+	}
+	resp, _ = dora.formPost("/auth/step-up/totp", url.Values{"code": {totpCode(t, secret, 1)}, "return_to": {"/demo/mfa/page"}})
+	if resp.StatusCode != http.StatusSeeOther || resp.Header.Get("Location") != "/demo/mfa/page" {
+		t.Fatalf("TOTP step-up form = %d %q", resp.StatusCode, resp.Header.Get("Location"))
+	}
+	if status, level := dora.assurance("/demo/mfa"); status != http.StatusOK || level != "aal2" {
+		t.Fatalf("/demo/mfa after the form step-up = %d %q", status, level)
 	}
 }

@@ -67,6 +67,7 @@ import (
 	"github.com/gopernicus/gopernicus/examples/auth-cms/pockets/retention/inbound/runner"
 	"github.com/gopernicus/gopernicus/integrations/cryptids/bcrypt"
 	gowebauthn "github.com/gopernicus/gopernicus/integrations/cryptids/go-webauthn"
+	rscqr "github.com/gopernicus/gopernicus/integrations/encoding/rsc-qr"
 	"github.com/gopernicus/gopernicus/pockets"
 	auth "github.com/gopernicus/gopernicus/pockets/authentication"
 	authenticationhttp "github.com/gopernicus/gopernicus/pockets/authentication/inbound/http"
@@ -967,7 +968,7 @@ func buildAuthConfig(log *slog.Logger, mode environment.Mode, granter invitation
 	if err != nil {
 		return authenticationConfig{}, err
 	}
-	authViews, err := authpages.New(bundle)
+	authViews, err := authpages.New(bundle, authgoth.WithQR(rscqr.Modules))
 	if err != nil {
 		return authenticationConfig{}, err
 	}
@@ -1124,9 +1125,10 @@ func buildAuthConfig(log *slog.Logger, mode environment.Mode, granter invitation
 	}
 	cfg.Passkeys = auth.PasskeyConfig{RelyingParty: rp, Views: authViews}
 	// TOTP and recovery codes (SOC 2 S4c): secrets sealed under the AUTH_TOTP_KEYS
-	// ring. Views stay nil until the goth TOTP pages ship, so the routes are
-	// JSON-only here.
-	cfg.TOTP = auth.TOTPConfig{Encrypter: keyed.totpEncrypter, Issuer: "Gopernicus CMS"}
+	// ring. Views mounts the manage, enrollment (its QR code drawn through
+	// rsc-qr), recovery-code and chooser pages; with them wired, a Browser() +
+	// RequireMFA() denial lands on the chooser instead of the passkey page.
+	cfg.TOTP = auth.TOTPConfig{Encrypter: keyed.totpEncrypter, Issuer: "Gopernicus CMS", Views: authViews}
 	return cfg, nil
 }
 
