@@ -568,6 +568,9 @@ func New(repos Repositories, signer cryptids.JWTSigner, runtimeMode environment.
 	if cfg.Passkey.RelyingParty != nil {
 		logicOptions = append(logicOptions, authlogic.WithPasskeys(authlogic.PasskeyConfig{RelyingParty: cfg.Passkey.RelyingParty, UserVerification: cfg.Passkey.UserVerification, MaxPerUser: cfg.Passkey.MaxPerUser}))
 	}
+	if len(cfg.MFAMethods) > 0 {
+		logicOptions = append(logicOptions, authlogic.WithMFAMethods(cfg.MFAMethods...))
+	}
 	if cfg.TOTP.Encrypter != nil {
 		logicOptions = append(logicOptions, authlogic.WithTOTP(authlogic.TOTPConfig{Encrypter: cfg.TOTP.Encrypter, Issuer: cfg.TOTP.Issuer}))
 	}

@@ -9,8 +9,11 @@ import (
 	"time"
 
 	auth "github.com/gopernicus/gopernicus/pockets/authentication"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/authgrant"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/challenge"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/session"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/totp"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/user"
 	"github.com/gopernicus/gopernicus/sdk"
 )
 
@@ -43,6 +46,15 @@ func RunTOTP(t *testing.T, newRepos func(*testing.T) auth.Repositories) {
 			{"ConcurrentConsumeOneWins", testTOTPConcurrentConsume},
 			{"RemoveBumpsRevisionAndClearsBothTables", testTOTPRemove},
 			{"RecoveryCodeKeyIDs", testTOTPKeyIDs},
+			{"ConfirmFencedOnThePendingRow", testTOTPConfirmFenced},
+			{"ConfirmRefusesInactiveUser", testTOTPConfirmInactive},
+			{"RecordUseRefusedWhileLocked", testTOTPRecordUseLocked},
+			{"ConsumeRecoveryCodeResetsFailures", testTOTPConsumeResets},
+			{"ReplaceExpectedWithEveryCodeSpent", testTOTPReplaceAllSpent},
+			{"ConcurrentReplaceOneWins", testTOTPConcurrentReplace},
+			{"ConcurrentConfirmOneWins", testTOTPConcurrentConfirm},
+			{"ConcurrentConfirmAndRemove", testTOTPConcurrentConfirmRemove},
+			{"RemoveOfAPendingRowRevokesNothing", testTOTPRemovePending},
 			{"SchemaProbeReportsMigrated", testTOTPProbeMigrated},
 		} {
 			t.Run(tc.name, func(t *testing.T) { tc.test(t, newRepos(t)) })
@@ -93,8 +105,14 @@ func recoveryCodes(userID, keyID string, n int, at time.Time) []totp.RecoveryCod
 	return out
 }
 
+// confirmation confirms userID's current pending row (its secret and session
+// read back as the expectation) at the owner's revision.
 func confirmation(r auth.Repositories, userID string, step int64, codes []totp.RecoveryCode) totp.Confirmation {
-	return totp.Confirmation{UserID: userID, ExpectedAuthRevision: currentAuthRevision(context.Background(), r.Users, userID), Step: step, ConfirmedAt: retentionNow(), Codes: codes}
+	pending, _ := r.TOTP.Get(context.Background(), userID)
+	return totp.Confirmation{
+		UserID: userID, ExpectedSecret: pending.Secret, ExpectedSessionID: pending.SessionID,
+		ExpectedAuthRevision: currentAuthRevision(context.Background(), r.Users, userID), Step: step, ConfirmedAt: retentionNow(), Codes: codes,
+	}
 }
 
 // mustConfirmTOTP seeds a user with a confirmed credential and n codes.
@@ -418,6 +436,7 @@ func testTOTPRemove(t *testing.T, r auth.Repositories) {
 	userID, _ := mustConfirmTOTP(t, r, "totp-remove@example.com", 6)
 	otherID, _ := mustConfirmTOTP(t, r, "totp-remove-other@example.com", 2)
 	s := createSession(t, r, userID, "totp-remove")
+	grant := mustCreateGrant(t, r, userID, s.ID)
 	rev := currentAuthRevision(ctx, r.Users, userID)
 	if _, err := r.TOTP.Remove(ctx, userID, rev-1); !errors.Is(err, sdk.ErrConflict) {
 		t.Fatalf("Remove at a stale revision = %v, want ErrConflict", err)
@@ -437,6 +456,9 @@ func testTOTPRemove(t *testing.T, r auth.Repositories) {
 	}
 	if _, err := r.Sessions.Get(ctx, s.ID); !errors.Is(err, sdk.ErrNotFound) {
 		t.Errorf("a session after Remove = %v, want revoked", err)
+	}
+	if grantSurvives(t, r, grant) {
+		t.Errorf("an authentication grant survived Remove")
 	}
 	if _, err := r.TOTP.Get(ctx, otherID); err != nil {
 		t.Errorf("the other user's credential: %v", err)
@@ -503,5 +525,240 @@ func testTOTPErase(t *testing.T, r auth.Repositories) {
 	}
 	if n, _, _ := r.TOTP.CountRecoveryCodes(ctx, off); n != 2 {
 		t.Errorf("an erase with TOTP off touched the codes: %d", n)
+	}
+}
+
+// testTOTPConfirmFenced (B1): a Confirm checked against one pending row never
+// confirms a row a concurrent Begin swapped in.
+func testTOTPConfirmFenced(t *testing.T, r auth.Repositories) {
+	ctx := context.Background()
+	u := seedPasskeyUser(t, r, "totp-fence@example.com")
+	p1 := pendingTOTP(r, u.ID, "aal2")
+	if err := r.TOTP.Begin(ctx, p1); err != nil {
+		t.Fatal(err)
+	}
+	stale := confirmation(r, u.ID, 5, nil)
+	p2 := p1
+	p2.Secret, p2.SessionID = "v1.k1.swapped", "session-swapped"
+	if err := r.TOTP.Begin(ctx, p2); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.TOTP.Confirm(ctx, stale); !errors.Is(err, sdk.ErrNotFound) {
+		t.Fatalf("Confirm against the replaced row = %v, want ErrNotFound", err)
+	}
+	got, _ := r.TOTP.Get(ctx, u.ID)
+	if got.Confirmed() || got.Secret != p2.Secret || got.SessionID != p2.SessionID {
+		t.Fatalf("after the refused Confirm = %+v, want P2 still pending", got)
+	}
+	sameSecret := stale
+	sameSecret.ExpectedSecret = p2.Secret
+	if err := r.TOTP.Confirm(ctx, sameSecret); !errors.Is(err, sdk.ErrNotFound) {
+		t.Fatalf("Confirm with the right secret and another session = %v, want ErrNotFound", err)
+	}
+	if err := r.TOTP.Confirm(ctx, confirmation(r, u.ID, 5, nil)); err != nil {
+		t.Fatalf("Confirm of the current row: %v", err)
+	}
+}
+
+func testTOTPConfirmInactive(t *testing.T, r auth.Repositories) {
+	if r.UserAdmin == nil {
+		t.Skip("UserAdmin not wired — the inactive-owner refusal NOT verified")
+	}
+	ctx := context.Background()
+	u := seedPasskeyUser(t, r, "totp-inactive@example.com")
+	if err := r.TOTP.Begin(ctx, pendingTOTP(r, u.ID, "aal2")); err != nil {
+		t.Fatal(err)
+	}
+	deactivate(t, r, u.ID)
+	if err := r.TOTP.Confirm(ctx, confirmation(r, u.ID, 1, nil)); !errors.Is(err, session.ErrUserNotActive) {
+		t.Fatalf("Confirm for an inactive owner = %v, want ErrUserNotActive", err)
+	}
+}
+
+// testTOTPRecordUseLocked (M1): RecordUse refuses while a lockout is in force.
+func testTOTPRecordUseLocked(t *testing.T, r auth.Repositories) {
+	ctx := context.Background()
+	userID, _ := mustConfirmTOTP(t, r, "totp-use-locked@example.com", 0)
+	now := retentionNow()
+	if f, err := r.TOTP.RecordFailure(ctx, userID, 1, 5*time.Minute, now); err != nil || f.LockedUntil == nil {
+		t.Fatalf("lock = %+v, %v", f, err)
+	}
+	if err := r.TOTP.RecordUse(ctx, userID, 100, 101, now.Add(time.Minute)); !errors.Is(err, sdk.ErrConflict) {
+		t.Fatalf("RecordUse while locked = %v, want ErrConflict", err)
+	}
+	if err := r.TOTP.RecordUse(ctx, userID, 100, 101, now.Add(6*time.Minute)); err != nil {
+		t.Fatalf("RecordUse after the lockout = %v", err)
+	}
+}
+
+func testTOTPConsumeResets(t *testing.T, r auth.Repositories) {
+	ctx := context.Background()
+	userID, codes := mustConfirmTOTP(t, r, "totp-consume-reset@example.com", 2)
+	if _, err := r.TOTP.RecordFailure(ctx, userID, 5, time.Minute, retentionNow()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.TOTP.ConsumeRecoveryCode(ctx, userID, candidate(codes[0]), retentionNow()); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := r.TOTP.Get(ctx, userID); got.FailedAttempts != 0 {
+		t.Fatalf("FailedAttempts after a recovery-code use = %d, want 0", got.FailedAttempts)
+	}
+}
+
+// testTOTPReplaceAllSpent: with every code consumed there is no current
+// generation, so a Replace expecting one conflicts.
+func testTOTPReplaceAllSpent(t *testing.T, r auth.Repositories) {
+	ctx := context.Background()
+	userID, codes := mustConfirmTOTP(t, r, "totp-replace-spent@example.com", 1)
+	generated := codes[0].GeneratedAt
+	if _, err := r.TOTP.ConsumeRecoveryCode(ctx, userID, candidate(codes[0]), retentionNow()); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.TOTP.ReplaceRecoveryCodes(ctx, userID, recoveryCodes(userID, "k1", 2, retentionNow().Add(time.Hour)), &generated); !errors.Is(err, sdk.ErrConflict) {
+		t.Fatalf("Replace expecting a spent generation = %v, want ErrConflict", err)
+	}
+}
+
+func testTOTPConcurrentReplace(t *testing.T, r auth.Repositories) {
+	ctx := context.Background()
+	userID, codes := mustConfirmTOTP(t, r, "totp-replace-race@example.com", 2)
+	expected := codes[0].GeneratedAt
+	oneWins(t, race(4, func(i int) error {
+		return r.TOTP.ReplaceRecoveryCodes(ctx, userID, recoveryCodes(userID, "k1", 3, retentionNow().Add(time.Duration(i+1)*time.Hour)), &expected)
+	}), sdk.ErrConflict)
+	if n, _, _ := r.TOTP.CountRecoveryCodes(ctx, userID); n != 3 {
+		t.Fatalf("codes after the race = %d, want 3", n)
+	}
+}
+
+func testTOTPConcurrentConfirm(t *testing.T, r auth.Repositories) {
+	ctx := context.Background()
+	u := seedPasskeyUser(t, r, "totp-confirm-race@example.com")
+	if err := r.TOTP.Begin(ctx, pendingTOTP(r, u.ID, "aal2")); err != nil {
+		t.Fatal(err)
+	}
+	in := confirmation(r, u.ID, 9, nil)
+	before := in.ExpectedAuthRevision
+	errs := race(3, func(i int) error {
+		c := in
+		c.Codes = recoveryCodes(u.ID, "k1", 2, retentionNow().Add(time.Duration(i)*time.Second))
+		return r.TOTP.Confirm(ctx, c)
+	})
+	wins := 0
+	for _, err := range errs {
+		if err == nil {
+			wins++
+		} else if !errors.Is(err, totp.ErrAlreadyEnrolled) && !errors.Is(err, sdk.ErrConflict) {
+			t.Fatalf("a losing Confirm = %v", err)
+		}
+	}
+	if wins != 1 {
+		t.Fatalf("Confirm winners = %d, want 1 (%v)", wins, errs)
+	}
+	if rev := currentAuthRevision(ctx, r.Users, u.ID); rev != before+1 {
+		t.Fatalf("auth_revision = %d, want %d", rev, before+1)
+	}
+	if n, _, _ := r.TOTP.CountRecoveryCodes(ctx, u.ID); n != 2 {
+		t.Fatalf("codes after the race = %d, want one set of 2", n)
+	}
+}
+
+// testTOTPConcurrentConfirmRemove: a Confirm racing a Remove at one revision —
+// whichever wins, the other is refused and no half state remains.
+func testTOTPConcurrentConfirmRemove(t *testing.T, r auth.Repositories) {
+	ctx := context.Background()
+	userID, _ := mustConfirmTOTP(t, r, "totp-cr-anchor@example.com", 0)
+	_ = userID
+	u := seedPasskeyUser(t, r, "totp-confirm-remove@example.com")
+	if err := r.TOTP.Begin(ctx, pendingTOTP(r, u.ID, "aal2")); err != nil {
+		t.Fatal(err)
+	}
+	in := confirmation(r, u.ID, 9, recoveryCodes(u.ID, "k1", 2, retentionNow()))
+	errs := race(2, func(i int) error {
+		if i == 0 {
+			return r.TOTP.Confirm(ctx, in)
+		}
+		_, err := r.TOTP.Remove(ctx, u.ID, in.ExpectedAuthRevision)
+		return err
+	})
+	if errs[0] != nil && errs[1] != nil {
+		t.Fatalf("both lost: %v", errs)
+	}
+	got, err := r.TOTP.Get(ctx, u.ID)
+	n, _, _ := r.TOTP.CountRecoveryCodes(ctx, u.ID)
+	switch {
+	case errors.Is(err, sdk.ErrNotFound):
+		if n != 0 {
+			t.Fatalf("removed, yet %d codes remain", n)
+		}
+	case err == nil && got.Confirmed():
+		if n != 2 {
+			t.Fatalf("confirmed with %d codes, want 2", n)
+		}
+	default:
+		t.Fatalf("after the race = %+v, %v", got, err)
+	}
+}
+
+// testTOTPRemovePending (N3): removing a pending-only row deletes it and
+// touches neither the revision nor any session.
+func testTOTPRemovePending(t *testing.T, r auth.Repositories) {
+	ctx := context.Background()
+	u := seedPasskeyUser(t, r, "totp-remove-pending@example.com")
+	if err := r.TOTP.Begin(ctx, pendingTOTP(r, u.ID, "aal2")); err != nil {
+		t.Fatal(err)
+	}
+	s := createSession(t, r, u.ID, "totp-remove-pending")
+	rev := currentAuthRevision(ctx, r.Users, u.ID)
+	got, err := r.TOTP.Remove(ctx, u.ID, rev)
+	if err != nil || !got.Pending || got.Credential {
+		t.Fatalf("Remove of a pending row = %+v, %v", got, err)
+	}
+	if _, err := r.TOTP.Get(ctx, u.ID); !errors.Is(err, sdk.ErrNotFound) {
+		t.Errorf("the pending row survived: %v", err)
+	}
+	if now := currentAuthRevision(ctx, r.Users, u.ID); now != rev {
+		t.Errorf("auth_revision moved %d → %d", rev, now)
+	}
+	if _, err := r.Sessions.Get(ctx, s.ID); err != nil {
+		t.Errorf("a session was revoked: %v", err)
+	}
+}
+
+// mustCreateGrant stores an AAL1 remove_totp grant of userID on sessionID.
+func mustCreateGrant(t *testing.T, r auth.Repositories, userID, sessionID string) authgrant.Grant {
+	t.Helper()
+	now := time.Now().UTC()
+	g, err := r.AuthenticationGrants.Create(context.Background(), authgrant.Grant{
+		SessionID: sessionID, UserID: userID, Purpose: authgrant.PurposeRemoveTOTP, ContextDigest: "totp-grant",
+		Assurance: session.AssuranceAAL1, AuthenticatedAt: now, ExpiresAt: now.Add(5 * time.Minute), CreatedAt: now,
+	}, currentAuthRevision(context.Background(), r.Users, userID), now)
+	if err != nil {
+		t.Fatalf("AuthenticationGrants.Create: %v", err)
+	}
+	return g
+}
+
+// grantSurvives reports whether g can still be consumed, after restoring its
+// session (Remove revoked it) so only the grant row decides.
+func grantSurvives(t *testing.T, r auth.Repositories, g authgrant.Grant) bool {
+	t.Helper()
+	ctx := context.Background()
+	now := time.Now().UTC()
+	if _, err := r.Sessions.Create(ctx, session.Session{ID: g.SessionID, UserID: g.UserID, RefreshTokenHash: "totp-grant-restored-" + g.SessionID, ExpiresAt: now.Add(time.Hour), CreatedAt: now}); err != nil {
+		t.Fatalf("restore the session: %v", err)
+	}
+	_, err := r.AuthenticationGrants.Consume(ctx, authgrant.Requirement{
+		SessionID: g.SessionID, UserID: g.UserID, Purpose: g.Purpose, ContextDigest: g.ContextDigest,
+		AuthenticatedAfter: now.Add(-5 * time.Minute), MinAssurance: session.AssuranceAAL1,
+	}, now)
+	return err == nil
+}
+
+// deactivate sets userID deactivated through the administration port.
+func deactivate(t *testing.T, r auth.Repositories, userID string) {
+	t.Helper()
+	if _, err := r.UserAdmin.SetStatus(context.Background(), userID, user.StatusDeactivated, time.Now().UTC()); err != nil {
+		t.Fatalf("SetStatus(deactivated): %v", err)
 	}
 }

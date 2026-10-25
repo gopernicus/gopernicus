@@ -326,11 +326,13 @@ func (h *handlers) removeTOTPForm(w http.ResponseWriter, r *http.Request) {
 		if !ok {
 			return
 		}
-		err := h.totp.RemoveTOTP(r.Context(), authlogic.TOTPRemoveInput{SessionID: sessionID, UserID: userID})
+		signedOut, err := h.totp.RemoveTOTP(r.Context(), authlogic.TOTPRemoveInput{SessionID: sessionID, UserID: userID})
 		switch {
-		case err == nil:
+		case err == nil && signedOut:
 			h.svc.ClearSessionCookies(w)
 			h.prgTo(w, r, loginDone(outcomeTOTPRemoved))
+		case err == nil:
+			h.prgTo(w, r, totpPagePath)
 		case errors.Is(err, authlogic.ErrStepUpRequired):
 			h.secondFactorStepUpRedirect(w, r, userID, authgrant.PurposeRemoveTOTP, "remove your authenticator app")
 		default:
@@ -364,13 +366,15 @@ func (h *handlers) stepUpCodeForm(w http.ResponseWriter, r *http.Request, step f
 // secondFactorStepUpRedirect sends a caller whose second-factor mutation needs
 // a step-up to the right page: the chooser (AAL2 is the gate) for a holder of
 // an AAL2 factor, else the code or password step-up page bound to purpose. The
-// manage page is the return_to either way.
+// manage page is the return_to either way; both paths keep the mount prefix the
+// browser login path carries, as the Browser() redirect does.
 func (h *handlers) secondFactorStepUpRedirect(w http.ResponseWriter, r *http.Request, userID, purpose, operation string) {
+	manage := h.svc.pagePath(totpPagePath)
 	if holds, err := h.totp.HoldsAAL2Factor(r.Context(), userID); err == nil && holds {
-		h.prgTo(w, r, mfaStepUpPagePath+"?return_to="+url.QueryEscape(totpPagePath))
+		h.prgTo(w, r, h.svc.pagePath(mfaStepUpPagePath)+"?return_to="+url.QueryEscape(manage))
 		return
 	}
-	h.stepUpRedirect(w, r, purpose, "", operation, totpPagePath)
+	h.stepUpRedirect(w, r, purpose, "", operation, manage)
 }
 
 // mfaStepUpPage renders the chooser. Its return_to is honoured on GET and HEAD

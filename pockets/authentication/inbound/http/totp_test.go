@@ -72,6 +72,8 @@ func (f *memTOTP) Confirm(_ context.Context, in totp.Confirmation) error {
 		return sdk.ErrNotFound
 	case c.Confirmed():
 		return totp.ErrAlreadyEnrolled
+	case c.Secret != in.ExpectedSecret || c.SessionID != in.ExpectedSessionID:
+		return sdk.ErrNotFound
 	case u.AuthRevision != in.ExpectedAuthRevision:
 		return sdk.ErrConflict
 	}
@@ -88,7 +90,7 @@ func (f *memTOTP) RecordUse(_ context.Context, userID string, expected, step int
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	c, ok := f.creds[userID]
-	if !ok || !c.Confirmed() || c.LastUsedStep != expected || step <= expected {
+	if !ok || !c.Confirmed() || c.LastUsedStep != expected || step <= expected || (c.LockedUntil != nil && c.LockedUntil.After(at)) {
 		return sdk.ErrConflict
 	}
 	c.LastUsedStep, c.LastUsedAt, c.FailedAttempts, c.LockedUntil = step, &at, 0, nil
@@ -156,13 +158,16 @@ func (f *memTOTP) Remove(ctx context.Context, userID string, expected int64) (to
 		return totp.Removed{}, sdk.ErrConflict
 	}
 	f.mu.Lock()
-	_, had := f.creds[userID]
+	c, had := f.creds[userID]
 	n := len(f.codes[userID])
 	delete(f.creds, userID)
 	delete(f.codes, userID)
 	f.mu.Unlock()
 	if !had {
 		return totp.Removed{}, nil
+	}
+	if !c.Confirmed() {
+		return totp.Removed{Pending: true}, nil
 	}
 	u.AuthRevision++
 	f.users.byID[userID] = u
@@ -537,4 +542,42 @@ func (s *memSessions) countFor(userID string) int {
 		}
 	}
 	return n
+}
+
+// TestTOTPReviewFixes pins the HTTP side of the review fixes: under Methods
+// [passkey] a TOTP-earned AAL2 session of a passkey holder gets 403 on passkey
+// registration (H1); cancelling a pending enrollment keeps the caller signed in
+// (N3); and the second-factor redirects keep the mount prefix (N8).
+func TestTOTPReviewFixes(t *testing.T) {
+	for _, tc := range []struct {
+		methods []authlogic.MFAMethod
+		want    int
+	}{{nil, http.StatusOK}, {[]authlogic.MFAMethod{authlogic.MFAMethodPasskey}, http.StatusForbidden}} {
+		f := newPasskeyFixture(t, passkeyOptions{totp: true, mfaMethods: tc.methods})
+		a := newPasskeyClient(true)
+		f.enroll(t, a, f.login(t), "")
+		secret, _ := f.enrollTOTP(t, f.aal2Cookie(t, a))
+		viaTOTP := f.totpStepUp(t, f.login(t), secret)
+		if rec := f.do(t, call{method: "POST", path: "/auth/passkeys/registration/options", body: `{}`, cookie: viaTOTP}); rec.Code != tc.want {
+			t.Errorf("Methods %v: registration options from a TOTP AAL2 session = %d, want %d", tc.methods, rec.Code, tc.want)
+		}
+	}
+
+	f := newPasskeyFixture(t, passkeyOptions{totp: true})
+	cookie := f.login(t)
+	if rec := f.do(t, call{method: "POST", path: "/auth/totp/enrollment", body: `{}`, cookie: cookie}); rec.Code != http.StatusOK {
+		t.Fatalf("enrollment = %d", rec.Code)
+	}
+	rec := f.do(t, call{method: "DELETE", path: "/auth/totp", cookie: cookie})
+	if rec.Code != http.StatusOK || sessionCookie(rec) != nil || len(rec.Result().Cookies()) != 0 {
+		t.Fatalf("cancel = %d cookies %v", rec.Code, rec.Result().Cookies())
+	}
+	if rec := f.do(t, call{method: "GET", path: "/auth/totp", cookie: cookie}); rec.Code != http.StatusOK || decode(t, rec)["pending"] != false {
+		t.Fatalf("after the cancel = %d %s", rec.Code, rec.Body)
+	}
+
+	prefixed := &Adapter{browserLoginPath: "/api/v1/auth/login"}
+	if got := prefixed.pagePath(mfaStepUpPagePath); got != "/api/v1/auth/step-up/mfa" {
+		t.Fatalf("pagePath = %q", got)
+	}
 }

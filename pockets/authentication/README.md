@@ -2356,9 +2356,15 @@ the reverse.
 | enroll | `register_totp` under the predicate; a confirmed app answers 409 first | one pending row per user (a re-Begin replaces it), 10 minutes, bound to the session |
 | confirm | the second-factor budget (`AuthenticationLimits.SecondFactor`, 10/min per user, 30/min per IP), the pending row of this live session, a valid code | the credential and ten recovery codes, atomically under the user lock, `auth_revision` bumped; a bootstrap enrollment is refused if an AAL2 passkey appeared meanwhile; `totp_enrolled`, `recovery_codes_generated`, a notice |
 | step-up (TOTP or recovery code) | the budget, a confirmed app, the lockout | the session re-minted at AAL2 (AuthenticatedAt now, the old `ExpiresAt`), `totp`/`recovery_code` added to its methods; a code's step is never accepted twice |
-| remove | `remove_totp` under the predicate | the app and every code deleted, **every session revoked** (bearer tokens die too); `totp_removed`, a notice |
+| remove | `remove_totp` under the predicate | the app and every code deleted, **every session revoked** (bearer tokens die too); `totp_removed`, a notice. A pending enrollment alone is only cancelled: nobody is signed out |
 | regenerate | `regenerate_recovery_codes` under the predicate; `expected_generated_at` must match | ten new codes, the old ones dead |
 | admin reset | `UserAdminCheck` (action `reset-totp`), then the admins gate | the app and codes removed, sessions revoked; `totp_reset`, a notice |
+
+A confirm is fenced on the pending row whose code it checked: a second
+enrollment begun meanwhile (another tab or session) is never confirmed by the
+first one's code. A step-up never extends assurance beyond what it proves: a
+weaker proof (a presence-only passkey) re-mints the session at its own level,
+so refreshing AuthenticatedAt can never carry an earlier AAL2 forward.
 
 The fifth consecutive refused code locks the second factor for five minutes
 (429 `too_many_attempts`, `Retry-After`). **One code is a recent AAL2 login for
@@ -2408,7 +2414,10 @@ Access tokens carry a `methods` claim (the session's method kinds); a token
 minted before it existed has no source and is denied under a non-empty `Methods`
 until it refreshes — leave `Methods` empty through the rollout. A host that
 refuses a possession code composed onto a passwordless or OAuth primary sets
-`Methods: [passkey, idp]`. Delegated tokens refuse the claim.
+`Methods: [passkey, idp]`. Delegated tokens refuse the claim. `Methods` also
+binds the second-factor gate: under a restriction its AAL2 tier accepts only a
+proof from an allowed source, and only factors of allowed sources count as
+held (a TOTP-only user under `[passkey]` adds a passkey at the bootstrap tier).
 
 ### Operators
 
@@ -2423,7 +2432,10 @@ refuses a possession code composed onto a passwordless or OAuth primary sets
   store's `Erase` delete `totp_credentials` and `recovery_codes`
   (`EraseCounts.TOTP`, `.RecoveryCodes`). A host `EraseRepository` must honour
   it, or TOTP secrets survive erasure; `storetest.RunTOTP` pins it, and
-  `storetest.RunTOTPSchemaProbe` pins a store's boot probe.
+  `storetest.RunTOTPSchemaProbe` pins a store's boot probe. A host that
+  **unwires** TOTP stops erasing those tables: drop or purge them yourself
+  first. With TOTP wired, `EraseUser` logs an ERROR when a credential survives
+  the erase (a store ignoring `EraseInput.TOTP`).
 
 ### Security events
 

@@ -20,7 +20,9 @@ import (
 //   - Get of a user with no row → sdk.ErrNotFound.
 //   - Confirm locks the owning user row FIRST, then refuses in this order: an
 //     unknown user → sdk.ErrNotFound; an inactive one → session.ErrUserNotActive;
-//     no pending row → sdk.ErrNotFound; a confirmed one → ErrAlreadyEnrolled; an
+//     no pending row → sdk.ErrNotFound; a confirmed one → ErrAlreadyEnrolled; a
+//     pending row whose sealed secret or session is not in.ExpectedSecret /
+//     in.ExpectedSessionID (replaced by a concurrent Begin) → sdk.ErrNotFound; an
 //     auth_revision other than in.ExpectedAuthRevision → sdk.ErrConflict; a
 //     bootstrap-tier input (in.Bootstrap) for an owner holding an AAL2-capable
 //     (user-verified) passkey → ErrBootstrapClosed. It then, atomically, sets
@@ -31,9 +33,10 @@ import (
 //     no confirmed row and no codes.
 //   - RecordUse is a compare-and-swap on a confirmed row: it sets LastUsedStep to
 //     step and LastUsedAt to at, and clears FailedAttempts and LockedUntil, only
-//     while the stored LastUsedStep equals expectedStep and step is greater; a
-//     miss, an equal or lower step, or no confirmed row → sdk.ErrConflict. Of two
-//     concurrent calls at one expected step exactly one succeeds.
+//     while the stored LastUsedStep equals expectedStep, step is greater, and no
+//     lockout is in force at at (LockedUntil unset or not after at); a miss, an
+//     equal or lower step, a lockout, or no confirmed row → sdk.ErrConflict. Of
+//     two concurrent calls at one expected step exactly one succeeds.
 //   - RecordFailure is ONE atomic increment of FailedAttempts that reads the row
 //     it writes: the failure reaching lockAt sets LockedUntil = now + lockFor and
 //     resets the count to zero in the same statement, returning Failure{Attempts:
@@ -45,16 +48,19 @@ import (
 //     is a compare-and-swap on the current set's GeneratedAt (absent codes compare
 //     as nil): a mismatch → sdk.ErrConflict with nothing written.
 //   - ConsumeRecoveryCode deletes the one code of userID matching a candidate
-//     (KeyID and Digest both) and returns how many remain; no match, or a code of
-//     another user → sdk.ErrNotFound. Concurrent consumes of one code: exactly one
-//     succeeds.
+//     (KeyID and Digest both), clears the credential's FailedAttempts, and
+//     returns how many remain; no match, or a code of another user →
+//     sdk.ErrNotFound. Concurrent consumes of one code: exactly one succeeds.
 //   - CountRecoveryCodes returns the count and the set's GeneratedAt (nil, zero
 //     when none).
 //   - Remove locks the owning user row FIRST: an unknown user → sdk.ErrNotFound;
 //     an auth_revision other than expectedRevision → sdk.ErrConflict; no row →
-//     Removed{} with nothing written. Otherwise it deletes the credential and every
-//     recovery code, deletes every session and authentication grant of the user,
-//     and increments auth_revision, in one transaction.
+//     Removed{} with nothing written. A PENDING row alone (no confirmed
+//     credential) is deleted with nothing else written — cancelling an enrollment
+//     revokes nothing — and reports Removed{Pending: true}. Otherwise it
+//     deletes the credential and every recovery code, deletes every session and
+//     authentication grant of the user, and increments auth_revision, in one
+//     transaction.
 //   - RecoveryCodeKeyIDs returns the distinct key ids recovery codes are stored
 //     under, across every user.
 //

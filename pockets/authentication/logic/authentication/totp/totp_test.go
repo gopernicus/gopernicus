@@ -90,6 +90,13 @@ func TestKeyURI(t *testing.T) {
 	if q.Get("secret") != "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ" || q.Get("issuer") != "Gopernicus CMS" || q.Get("algorithm") != "SHA1" || q.Get("digits") != "6" || q.Get("period") != "30" {
 		t.Fatalf("query = %v", q)
 	}
+	if !strings.Contains(uri, "issuer=Gopernicus%20CMS") || strings.Contains(uri, "+") {
+		t.Fatalf("issuer query = %q, want %%20 for the space", uri)
+	}
+	odd, err := KeyURI("Gopernicus CMS", "a:b+c@example.com", rfcSecret)
+	if err != nil || !strings.HasPrefix(odd, "otpauth://totp/Gopernicus%20CMS:a%3Ab+c@example.com?") || strings.Count(odd, ":") != 2 {
+		t.Fatalf("label with a colon = %q, %v", odd, err)
+	}
 	for _, tc := range []struct{ issuer, account string }{{"", "a"}, {"a:b", "a"}, {"Issuer", ""}} {
 		if _, err := KeyURI(tc.issuer, tc.account, rfcSecret); !errors.Is(err, sdk.ErrInvalidInput) {
 			t.Errorf("KeyURI(%q, %q) = %v", tc.issuer, tc.account, err)

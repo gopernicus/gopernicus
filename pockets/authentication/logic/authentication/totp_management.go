@@ -77,44 +77,49 @@ func (s *Service) TOTPStatus(ctx context.Context, userID string) (TOTPStatus, er
 	return TOTPStatus{Enrolled: true, EnrolledAt: c.ConfirmedAt, LastUsedAt: c.LastUsedAt, RecoveryCodesRemaining: remaining, RecoveryCodesGeneratedAt: generated}, nil
 }
 
-// RemoveTOTP removes the caller's authenticator app — confirmed or pending — and
-// every recovery code, and revokes every session of the user, the caller's
-// included. It consumes a remove_totp grant under the second-factor gate's
-// policy (AAL2 while the user holds an AAL2 factor, which a confirmed app is),
-// and the removal is fenced on the revision read first: a concurrent credential
-// change is ErrStepUpRequired. No app at all is sdk.ErrNotFound. Success records
-// totp_removed and sends the mfa_change_notice.
-func (s *Service) RemoveTOTP(ctx context.Context, in TOTPRemoveInput) error {
+// RemoveTOTP removes the caller's authenticator app and every recovery code,
+// and revokes every session of the user, the caller's included; it reports
+// signedOut true. A pending enrollment alone is cancelled instead: deleted with
+// nothing else touched, signedOut false. It consumes a remove_totp grant under
+// the second-factor gate's policy (AAL2 while the user holds an AAL2 factor,
+// which a confirmed app is), and the removal is fenced on the revision read
+// first: a concurrent credential change is ErrStepUpRequired. No app at all is
+// sdk.ErrNotFound. A removal records totp_removed and sends the
+// mfa_change_notice.
+func (s *Service) RemoveTOTP(ctx context.Context, in TOTPRemoveInput) (signedOut bool, err error) {
 	if err := s.requireTOTP(); err != nil {
-		return err
+		return false, err
 	}
 	owner, err := s.users.Get(ctx, in.UserID)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if _, err := s.totp.Get(ctx, in.UserID); err != nil {
-		return err
+		return false, err
 	}
 	policy, _, err := s.secondFactorPolicy(ctx, in.UserID)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if _, err := s.RequireRecentAuthentication(ctx, in.SessionID, in.UserID, authgrant.PurposeRemoveTOTP, "", policy); err != nil {
-		return err
+		return false, err
 	}
 	removed, err := s.totp.Remove(ctx, in.UserID, owner.AuthRevision)
 	if err != nil {
 		if errors.Is(err, sdk.ErrConflict) {
-			return ErrStepUpRequired
+			return false, ErrStepUpRequired
 		}
-		return err
+		return false, err
 	}
-	if !removed.Credential {
-		return sdk.ErrNotFound
+	switch {
+	case removed.Pending:
+		return false, nil
+	case !removed.Credential:
+		return false, sdk.ErrNotFound
 	}
 	s.recordSecurityEvent(ctx, securityEventInput{UserID: in.UserID, Type: securityevent.TypeTOTPRemoved, Status: securityevent.StatusSuccess})
 	s.enqueueMFAChangeNotices(ctx, in.UserID, mfaChangeTOTPRemoved)
-	return nil
+	return true, nil
 }
 
 // RegenerateRecoveryCodes replaces the caller's recovery codes with ten new ones

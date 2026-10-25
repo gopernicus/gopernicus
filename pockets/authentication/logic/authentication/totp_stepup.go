@@ -54,11 +54,15 @@ func (s *Service) StepUpWithTOTP(ctx context.Context, in StepUpCodeInput) (StepU
 			return s.secondFactorFailure(ctx, in.UserID, method, securityevent.ReasonReused, ErrTOTPRejected)
 		}
 		if err := s.totp.RecordUse(ctx, in.UserID, c.LastUsedStep, step, now); err != nil {
-			if errors.Is(err, sdk.ErrConflict) {
-				s.recordTOTPFailure(ctx, in.UserID, method, securityevent.ReasonConflict)
-				return ErrTOTPRejected
+			if !errors.Is(err, sdk.ErrConflict) {
+				return err
 			}
-			return err
+			if current, err := s.totp.Get(ctx, in.UserID); err == nil && current.Locked(now) {
+				s.recordTOTPFailure(ctx, in.UserID, method, securityevent.ReasonLocked)
+				return &SecondFactorLockedError{Until: *current.LockedUntil, Wait: current.LockedUntil.Sub(now)}
+			}
+			s.recordTOTPFailure(ctx, in.UserID, method, securityevent.ReasonConflict)
+			return ErrTOTPRejected
 		}
 		return nil
 	})

@@ -1,13 +1,17 @@
 package authentication
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/securityevent"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/totp"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/user"
 	"github.com/gopernicus/gopernicus/sdk"
 )
 
@@ -18,7 +22,7 @@ func TestRemoveTOTPNeedsAAL2AndRevokesEverySession(t *testing.T) {
 	e, _ := h.enrollTOTP(t, sessionID, u.ID)
 	pair, _, _ := h.svc.Login(ctx, "remove@example.com", passkeyPass)
 	fresh := h.sessionOf(t, pair)
-	if err := h.svc.RemoveTOTP(ctx, TOTPRemoveInput{SessionID: fresh, UserID: u.ID}); !errors.Is(err, ErrStepUpRequired) {
+	if _, err := h.svc.RemoveTOTP(ctx, TOTPRemoveInput{SessionID: fresh, UserID: u.ID}); !errors.Is(err, ErrStepUpRequired) {
 		t.Fatalf("an AAL1 removal = %v, want ErrStepUpRequired", err)
 	}
 	h.advance(totp.Period)
@@ -27,7 +31,7 @@ func TestRemoveTOTPNeedsAAL2AndRevokesEverySession(t *testing.T) {
 		t.Fatal(err)
 	}
 	before := h.mfaNotices()
-	if err := h.svc.RemoveTOTP(ctx, TOTPRemoveInput{SessionID: h.sessionOf(t, result.Tokens), UserID: u.ID}); err != nil {
+	if _, err := h.svc.RemoveTOTP(ctx, TOTPRemoveInput{SessionID: h.sessionOf(t, result.Tokens), UserID: u.ID}); err != nil {
 		t.Fatalf("RemoveTOTP: %v", err)
 	}
 	if h.sess.count() != 0 {
@@ -178,5 +182,138 @@ func TestTOTPSchemaProbe(t *testing.T) {
 	cfg = constructorConfig{TOTP: unwired}
 	if err := validateTOTP(cfg); err != nil || unwired.probed != 0 {
 		t.Fatalf("unwired = %v (probed %d)", err, unwired.probed)
+	}
+}
+
+// TestConfirmFencedOnThePendingRow pins B1: a code checked against one pending
+// row never confirms a row a concurrent Begin from another session swapped in.
+func TestConfirmFencedOnThePendingRow(t *testing.T) {
+	h := newTOTPHarness(t)
+	ctx := context.Background()
+	u, _, sessionID := h.totpAccount(t, "swap@example.com")
+	pair, _, _ := h.svc.Login(ctx, "swap@example.com", passkeyPass)
+	other := h.sessionOf(t, pair)
+	e1 := h.begin(t, sessionID, u.ID)
+	read := h.totp.creds[u.ID]
+	h.begin(t, other, u.ID)
+	swapped := h.totp.creds[u.ID]
+	err := h.totp.Confirm(ctx, totp.Confirmation{UserID: u.ID, ExpectedSecret: read.Secret, ExpectedSessionID: read.SessionID, ExpectedAuthRevision: read.AuthRevision, ConfirmedAt: time.Now()})
+	if !errors.Is(err, sdk.ErrNotFound) {
+		t.Fatalf("Confirm against the replaced row = %v", err)
+	}
+	if got := h.totp.creds[u.ID]; got.Confirmed() || got.Secret != swapped.Secret {
+		t.Fatalf("the swapped row = %+v", got)
+	}
+	if _, err := h.svc.ConfirmTOTPEnrollment(ctx, TOTPConfirmInput{SessionID: sessionID, UserID: u.ID, Code: h.code(t, e1, 0)}); !errors.Is(err, ErrTOTPEnrollmentExpired) {
+		t.Fatalf("the first session's confirm after the swap = %v, want ErrTOTPEnrollmentExpired", err)
+	}
+}
+
+// TestMethodsRestrictTheSecondFactorGate pins the H1 ruling: under
+// MFAConfig.Methods [passkey], a TOTP-earned AAL2 session of a passkey holder
+// cannot register another passkey; with Methods empty (or admitting totp) it
+// can; and a factor Methods does not admit (TOTP alone) is not counted as held,
+// so it never demands a proof the user cannot give.
+func TestMethodsRestrictTheSecondFactorGate(t *testing.T) {
+	for _, tc := range []struct {
+		methods []MFAMethod
+		allowed bool
+	}{{nil, true}, {[]MFAMethod{MFAMethodPasskey}, false}, {[]MFAMethod{MFAMethodPasskey, MFAMethodTOTP}, true}} {
+		h := newTOTPHarness(t)
+		h.svc.mfaMethods = tc.methods
+		ctx := context.Background()
+		u, _, sessionID := h.totpAccount(t, "methods@example.com")
+		key := newPasskeyAuthenticator(true)
+		h.enroll(t, key, sessionID, u.ID, "")
+		viaPasskey, err := h.stepUp(t, key, sessionID, u.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		e, _ := h.enrollTOTP(t, h.sessionOf(t, viaPasskey.Tokens), u.ID)
+		pair, _, _ := h.svc.Login(ctx, "methods@example.com", passkeyPass)
+		h.advance(totp.Period)
+		viaTOTP, err := h.svc.StepUpWithTOTP(ctx, StepUpCodeInput{SessionID: h.sessionOf(t, pair), UserID: u.ID, Code: h.code(t, e, 0)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = h.svc.BeginPasskeyRegistration(ctx, h.sessionOf(t, viaTOTP.Tokens), u.ID)
+		if tc.allowed != (err == nil) || (!tc.allowed && !errors.Is(err, ErrStepUpRequired)) {
+			t.Errorf("Methods %v: passkey registration from a TOTP AAL2 session = %v, allowed %v", tc.methods, err, tc.allowed)
+		}
+	}
+
+	h := newTOTPHarness(t)
+	h.svc.mfaMethods = []MFAMethod{MFAMethodPasskey}
+	u, _, sessionID := h.totpAccount(t, "totp-only@example.com")
+	h.enrollTOTP(t, sessionID, u.ID)
+	if _, err := h.svc.BeginPasskeyRegistration(context.Background(), sessionID, u.ID); err != nil {
+		t.Fatalf("a TOTP-only user under Methods [passkey] = %v, want the bootstrap", err)
+	}
+}
+
+// TestRecoveryCodeResetsFailures pins N2: a recovery-code step-up clears the
+// failure count, so earlier wrong codes do not shorten the next lockout.
+func TestRecoveryCodeResetsFailures(t *testing.T) {
+	h := newTOTPHarness(t)
+	ctx := context.Background()
+	u, _, sessionID := h.totpAccount(t, "reset-failures@example.com")
+	_, c := h.enrollTOTP(t, sessionID, u.ID)
+	for range 3 {
+		_, _ = h.svc.StepUpWithTOTP(ctx, StepUpCodeInput{SessionID: sessionID, UserID: u.ID, Code: "000000"})
+	}
+	if h.totp.creds[u.ID].FailedAttempts == 0 {
+		t.Fatal("no failures counted")
+	}
+	if _, err := h.svc.StepUpWithRecoveryCode(ctx, StepUpCodeInput{SessionID: sessionID, UserID: u.ID, Code: c.RecoveryCodes.Codes[0]}); err != nil {
+		t.Fatal(err)
+	}
+	if n := h.totp.creds[u.ID].FailedAttempts; n != 0 {
+		t.Fatalf("FailedAttempts after a recovery code = %d", n)
+	}
+}
+
+// TestRemoveTOTPCancelsAPendingEnrollment pins N3: removing a pending-only
+// enrollment deletes it and signs nobody out.
+func TestRemoveTOTPCancelsAPendingEnrollment(t *testing.T) {
+	h := newTOTPHarness(t)
+	ctx := context.Background()
+	u, _, sessionID := h.totpAccount(t, "cancel@example.com")
+	h.begin(t, sessionID, u.ID)
+	before, _ := h.users.Get(ctx, u.ID)
+	signedOut, err := h.svc.RemoveTOTP(ctx, TOTPRemoveInput{SessionID: sessionID, UserID: u.ID})
+	if err != nil || signedOut {
+		t.Fatalf("RemoveTOTP of a pending row = %v, %v", signedOut, err)
+	}
+	if _, err := h.totp.Get(ctx, u.ID); !errors.Is(err, sdk.ErrNotFound) {
+		t.Fatalf("the pending row survived: %v", err)
+	}
+	if after, _ := h.users.Get(ctx, u.ID); after.AuthRevision != before.AuthRevision || h.sess.count() == 0 {
+		t.Fatalf("cancelling moved the revision or revoked sessions (%d)", h.sess.count())
+	}
+	if rows := h.rows(securityevent.TypeTOTPRemoved); len(rows) != 0 {
+		t.Fatalf("a cancellation recorded totp_removed: %+v", rows)
+	}
+}
+
+// TestEraseLogsASurvivingTOTPCredential pins M4's defense in depth: with TOTP
+// wired, a store that ignored EraseInput.TOTP leaves a credential behind and
+// EraseUser logs one ERROR naming the obligation — never secret material.
+func TestEraseLogsASurvivingTOTPCredential(t *testing.T) {
+	store := &eraseStore{result: user.Erasure{Changed: true, ErasedAt: time.Now().UTC()}}
+	svc := newEraseService(store, &eraseAdmin{}, &eraseEvents{})
+	fake := newFakeTOTP(newFakeUsers(), nil)
+	fake.creds["target"] = totp.Credential{UserID: "target", Secret: "v1.t1.sealed-material"}
+	svc.totp, svc.totpEncrypter = fake, newTOTPHarness(t).ring
+	var buf bytes.Buffer
+	svc.logger = slog.New(slog.NewTextHandler(&buf, nil))
+	if _, _, err := svc.EraseUser(context.Background(), eraseAdminActor, "target"); err != nil {
+		t.Fatal(err)
+	}
+	if len(store.inputs) != 1 || !store.inputs[0].TOTP {
+		t.Fatalf("EraseInput.TOTP = %+v", store.inputs)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "level=ERROR") || !strings.Contains(out, "EraseInput.TOTP") || strings.Contains(out, "sealed-material") {
+		t.Fatalf("log = %q", out)
 	}
 }

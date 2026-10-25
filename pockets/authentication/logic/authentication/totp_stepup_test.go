@@ -53,7 +53,7 @@ func TestTOTPStepUpReachesAAL2(t *testing.T) {
 	}
 	// The re-minted session is a recent AAL2 login: the AAL2-gated removal passes
 	// on the shortcut.
-	if err := h.svc.RemoveTOTP(ctx, TOTPRemoveInput{SessionID: cred.SessionID, UserID: u.ID}); err != nil {
+	if _, err := h.svc.RemoveTOTP(ctx, TOTPRemoveInput{SessionID: cred.SessionID, UserID: u.ID}); err != nil {
 		t.Fatalf("RemoveTOTP after a step-up: %v", err)
 	}
 }
@@ -215,5 +215,26 @@ func TestMergeMethodsNeverLowersAtAAL2(t *testing.T) {
 	got = mergeMethods([]session.AuthenticationMethod{pw, pk, code}, session.AuthenticationMetadata{Assurance: session.AssuranceAAL1, Methods: []session.AuthenticationMethod{weak}})
 	if !slices.Equal(kinds(got), []session.MethodKind{session.MethodPassword, session.MethodPasskeyUnverified}) {
 		t.Fatalf("AAL1 merge = %v", kinds(got))
+	}
+}
+
+// TestRecordUseRefusedByAConcurrentLock pins M1: a lockout set between the
+// read and the use refuses the use, and the step-up answers with the lockout.
+func TestRecordUseRefusedByAConcurrentLock(t *testing.T) {
+	h := newTOTPHarness(t)
+	ctx := context.Background()
+	u, _, sessionID := h.totpAccount(t, "race-lock@example.com")
+	e, _ := h.enrollTOTP(t, sessionID, u.ID)
+	h.advance(totp.Period)
+	h.totp.beforeRecordUse = func() {
+		_, _ = h.totp.RecordFailure(ctx, u.ID, 1, totpLockFor, h.now())
+	}
+	_, err := h.svc.StepUpWithTOTP(ctx, StepUpCodeInput{SessionID: sessionID, UserID: u.ID, Code: h.code(t, e, 0)})
+	var locked *SecondFactorLockedError
+	if !errors.As(err, &locked) {
+		t.Fatalf("a use racing a lockout = %v, want the lockout", err)
+	}
+	if c, _ := h.totp.Get(ctx, u.ID); c.LastUsedAt != nil && c.LastUsedStep > totp.Step(h.now())-2 && c.LockedUntil == nil {
+		t.Fatalf("the use was recorded: %+v", c)
 	}
 }

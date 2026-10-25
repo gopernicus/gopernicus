@@ -292,6 +292,11 @@ func passkeyStepUpPathFor(loginPath string) string {
 	return pagePathFor(loginPath, defaultPasskeyStepUpPath)
 }
 
+// pagePath re-roots a bundled page under the browser login path's mount prefix.
+func (s *Adapter) pagePath(page string) string {
+	return pagePathFor(s.browserLoginPath, page)
+}
+
 // mfaStepUpPathFor derives the TOTP chooser page the same way.
 func mfaStepUpPathFor(loginPath string) string {
 	return pagePathFor(loginPath, mfaStepUpPagePath)

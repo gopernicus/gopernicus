@@ -624,9 +624,12 @@ func (s *Service) HoldsAAL2Factor(ctx context.Context, userID string) (bool, err
 }
 
 // holdsAAL2Factor is the one predicate both second-factor gates apply: the user
-// holds an AAL2-capable passkey or a confirmed authenticator app.
+// holds an AAL2-capable passkey or a confirmed authenticator app — counting
+// only the sources MFAConfig.Methods admits, so a factor no gate accepts never
+// demands a proof the user cannot give.
 func (s *Service) holdsAAL2Factor(ctx context.Context, userID string) (bool, error) {
-	if s.relyingParty != nil && s.passkeys != nil {
+	allowed := func(m MFAMethod) bool { return len(s.mfaMethods) == 0 || slices.Contains(s.mfaMethods, m) }
+	if s.relyingParty != nil && s.passkeys != nil && allowed(MFAMethodPasskey) {
 		existing, err := s.passkeys.ListByUser(ctx, userID)
 		if err != nil {
 			return false, err
@@ -635,7 +638,7 @@ func (s *Service) holdsAAL2Factor(ctx context.Context, userID string) (bool, err
 			return true, nil
 		}
 	}
-	if s.totpEncrypter != nil && s.totp != nil {
+	if s.totpEncrypter != nil && s.totp != nil && allowed(MFAMethodTOTP) {
 		c, err := s.totp.Get(ctx, userID)
 		switch {
 		case err == nil:
@@ -649,15 +652,16 @@ func (s *Service) holdsAAL2Factor(ctx context.Context, userID string) (bool, err
 
 // secondFactorPolicy is the gate on adding or removing a second factor (a
 // passkey, the authenticator app, the recovery codes): AAL2 once the user holds
-// an AAL2 factor (holdsAAL2Factor), the AAL1 bootstrap otherwise. It returns the
-// tier the gate authorizes at beside the policy.
+// an AAL2 factor (holdsAAL2Factor) — from a source MFAConfig.Methods admits —
+// the AAL1 bootstrap otherwise. It returns the tier the gate authorizes at
+// beside the policy.
 func (s *Service) secondFactorPolicy(ctx context.Context, userID string) (RecentAuthPolicy, string, error) {
 	holds, err := s.holdsAAL2Factor(ctx, userID)
 	if err != nil {
 		return RecentAuthPolicy{}, "", err
 	}
 	if holds {
-		return RecentAuthPolicy{MinAssurance: session.AssuranceAAL2}, passkeyTierAAL2, nil
+		return RecentAuthPolicy{MinAssurance: session.AssuranceAAL2, Sources: s.mfaMethods}, passkeyTierAAL2, nil
 	}
 	return RecentAuthPolicy{}, passkeyTierBootstrap, nil
 }

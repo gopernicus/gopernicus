@@ -238,6 +238,11 @@ func (s *Service) EraseUser(ctx context.Context, actor Principal, id string) (us
 	if err != nil {
 		return user.Summary{}, user.Erasure{}, err
 	}
+	if s.TOTPEnabled() {
+		if _, err := s.totp.Get(storeCtx, id); err == nil {
+			s.logger.Error("auth: erasure left a TOTP credential; the store's EraseRepository must honour EraseInput.TOTP", "user_id", id)
+		}
+	}
 	summary, err := s.userAdmin.GetSummary(storeCtx, id)
 	if err != nil {
 		return user.Summary{}, erasure, err

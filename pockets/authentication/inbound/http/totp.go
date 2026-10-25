@@ -32,7 +32,8 @@ var _ totpService = (*authlogic.Service)(nil)
 //     enrollment_expired, 401 totp_rejected, 409 totp_exists, 429;
 //   - GET /auth/totp → {enrolled, pending, enrolled_at?, last_used_at?,
 //     recovery_codes_remaining}; DELETE /auth/totp → {status: "removed"}, the
-//     cookies cleared and EVERY session revoked (bearer tokens die too);
+//     cookies cleared and EVERY session revoked (bearer tokens die too) — or,
+//     for a pending enrollment only, the enrollment cancelled and nothing else;
 //   - GET /auth/recovery-codes → {remaining, generated_at?}; POST
 //     {expected_generated_at?} → 201 {recovery_codes, generated_at}; 409
 //     recovery_codes_stale;
@@ -57,7 +58,7 @@ type totpService interface {
 	StepUpWithTOTP(ctx context.Context, in authlogic.StepUpCodeInput) (authlogic.StepUpResult, error)
 	StepUpWithRecoveryCode(ctx context.Context, in authlogic.StepUpCodeInput) (authlogic.StepUpResult, error)
 	TOTPStatus(ctx context.Context, userID string) (authlogic.TOTPStatus, error)
-	RemoveTOTP(ctx context.Context, in authlogic.TOTPRemoveInput) error
+	RemoveTOTP(ctx context.Context, in authlogic.TOTPRemoveInput) (bool, error)
 	RegenerateRecoveryCodes(ctx context.Context, in authlogic.RegenerateRecoveryCodesInput) (authlogic.RecoveryCodeSet, error)
 	ResetUserTOTP(ctx context.Context, actor authlogic.Principal, userID string) (bool, error)
 }
@@ -228,17 +229,21 @@ func (h *handlers) totpStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 // removeTOTP removes the authenticator app behind its step-up grant. The removal
-// revokes every session of the user, so it clears the caller's cookies too.
+// revokes every session of the user, so it clears the caller's cookies too;
+// cancelling a pending enrollment signs nobody out and keeps them.
 func (h *handlers) removeTOTP(w http.ResponseWriter, r *http.Request) {
 	userID, sessionID, ok := h.stepUpPrincipal(w, r)
 	if !ok {
 		return
 	}
-	if err := h.totp.RemoveTOTP(r.Context(), authlogic.TOTPRemoveInput{SessionID: sessionID, UserID: userID}); err != nil {
+	signedOut, err := h.totp.RemoveTOTP(r.Context(), authlogic.TOTPRemoveInput{SessionID: sessionID, UserID: userID})
+	if err != nil {
 		respondTOTPError(w, err)
 		return
 	}
-	h.svc.ClearSessionCookies(w)
+	if signedOut {
+		h.svc.ClearSessionCookies(w)
+	}
 	web.RespondJSONOK(w, map[string]string{"status": "removed"})
 }
 

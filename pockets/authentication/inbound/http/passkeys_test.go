@@ -260,6 +260,7 @@ func newPasskeyFixture(t *testing.T, o passkeyOptions) *passkeyFixture {
 		fixture.TOTP, fixture.TOTPConfig = totpStore, authlogic.TOTPConfig{Encrypter: testTOTPRing(t), Issuer: "Example"}
 	}
 	fixture.AuthenticationLimits = o.limitsAuth
+	fixture.MFAMethods = o.mfaMethods
 	svc := newServiceWithFakes(fixture)
 	svc.Adapter.mfaMethods = o.mfaMethods
 	deps := mountDeps{Auth: svc, RouteLimits: o.limits, UserAdminCheck: o.adminCheck, AdministrationMFA: o.adminMFA,

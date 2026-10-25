@@ -99,4 +99,5 @@ type authenticationFixture struct {
 	Passkey                 authlogic.PasskeyConfig
 	TOTP                    totp.Repository
 	TOTPConfig              authlogic.TOTPConfig
+	MFAMethods              []authlogic.MFAMethod
 }

@@ -3068,6 +3068,8 @@ func (r refTOTP) Confirm(_ context.Context, in totp.Confirmation) error {
 		return sdk.ErrNotFound
 	case c.Confirmed():
 		return totp.ErrAlreadyEnrolled
+	case c.Secret != in.ExpectedSecret || c.SessionID != in.ExpectedSessionID:
+		return sdk.ErrNotFound
 	case u.AuthRevision != in.ExpectedAuthRevision:
 		return sdk.ErrConflict
 	case in.Bootstrap && slices.ContainsFunc(r.passkeysOfLocked(in.UserID), passkey.Passkey.AAL2Capable):
@@ -3093,7 +3095,7 @@ func (r refTOTP) RecordUse(_ context.Context, userID string, expectedStep, step 
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	c, ok := r.totpCreds[userID]
-	if !ok || !c.Confirmed() || c.LastUsedStep != expectedStep || step <= expectedStep {
+	if !ok || !c.Confirmed() || c.LastUsedStep != expectedStep || step <= expectedStep || (c.LockedUntil != nil && c.LockedUntil.After(at)) {
 		return sdk.ErrConflict
 	}
 	c.LastUsedStep, c.LastUsedAt, c.FailedAttempts, c.LockedUntil = step, &at, 0, nil
@@ -3150,6 +3152,10 @@ func (r refTOTP) ConsumeRecoveryCode(_ context.Context, userID string, candidate
 	for i, code := range codes {
 		if slices.ContainsFunc(candidates, func(c challenge.DigestCandidate) bool { return c.KeyID == code.KeyID && c.Digest == code.Digest }) {
 			r.totpCodes[userID] = slices.Delete(slices.Clone(codes), i, i+1)
+			if c, ok := r.totpCreds[userID]; ok {
+				c.FailedAttempts = 0
+				r.totpCreds[userID] = c
+			}
 			return len(r.totpCodes[userID]), nil
 		}
 	}
@@ -3172,8 +3178,13 @@ func (r refTOTP) Remove(_ context.Context, userID string, expectedRevision int64
 	if u.AuthRevision != expectedRevision {
 		return totp.Removed{}, sdk.ErrConflict
 	}
-	if _, ok := r.totpCreds[userID]; !ok {
+	c, ok := r.totpCreds[userID]
+	if !ok {
 		return totp.Removed{}, nil
+	}
+	if !c.Confirmed() {
+		delete(r.totpCreds, userID)
+		return totp.Removed{Pending: true}, nil
 	}
 	removed := totp.Removed{Credential: true, RecoveryCodes: len(r.totpCodes[userID])}
 	delete(r.totpCreds, userID)

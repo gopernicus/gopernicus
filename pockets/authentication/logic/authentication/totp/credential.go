@@ -64,10 +64,15 @@ type RecoveryCode struct {
 
 // Confirmation is one Confirm: the pending credential of UserID becomes
 // confirmed at ConfirmedAt with LastUsedStep Step, and Codes replace the user's
-// recovery codes. ExpectedAuthRevision is the revision the pending row carries;
-// Bootstrap marks an enrollment begun at the AAL1 bootstrap tier.
+// recovery codes. ExpectedSecret and ExpectedSessionID are the sealed secret and
+// session of the pending row the code was checked against: a row replaced
+// meanwhile (a concurrent Begin) is never confirmed. ExpectedAuthRevision is the
+// revision the pending row carries; Bootstrap marks an enrollment begun at the
+// AAL1 bootstrap tier.
 type Confirmation struct {
 	UserID               string
+	ExpectedSecret       string
+	ExpectedSessionID    string
 	ExpectedAuthRevision int64
 	Bootstrap            bool
 	Step                 int64
@@ -83,10 +88,11 @@ type Failure struct {
 	LockedUntil *time.Time
 }
 
-// Removed is what Remove deleted: whether a credential (pending or confirmed)
-// existed and how many recovery codes went with it.
+// Removed is what Remove deleted: a confirmed credential (Credential) and how
+// many recovery codes went with it, or only a pending enrollment (Pending).
 type Removed struct {
 	Credential    bool
+	Pending       bool
 	RecoveryCodes int
 }
 

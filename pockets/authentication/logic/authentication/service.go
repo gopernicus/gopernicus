@@ -226,6 +226,7 @@ type constructorConfig struct {
 	Passkey                 PasskeyConfig
 	TOTP                    totp.Repository
 	TOTPConfig              TOTPConfig
+	MFAMethods              []MFAMethod
 }
 
 // Service implements the auth use cases over the repository ports.
@@ -372,6 +373,10 @@ type Service struct {
 	totp          totp.Repository
 	totpEncrypter cryptids.KeyedEncrypter
 	totpIssuer    string
+
+	// mfaMethods is MFAConfig.Methods: the AAL2 sources the second-factor gate
+	// admits, empty for any.
+	mfaMethods []MFAMethod
 }
 
 // newService assembles already validated dependencies; isolated package tests
@@ -475,6 +480,7 @@ func newService(d constructorConfig) *Service {
 		totp:               d.TOTP,
 		totpEncrypter:      d.TOTPConfig.Encrypter,
 		totpIssuer:         d.TOTPConfig.Issuer,
+		mfaMethods:         slices.Clone(d.MFAMethods),
 	}
 }
 

@@ -242,7 +242,8 @@ func (s *Service) ConfirmTOTPEnrollment(ctx context.Context, in TOTPConfirmInput
 		return TOTPConfirmation{}, err
 	}
 	err = s.totp.Confirm(ctx, totp.Confirmation{
-		UserID: in.UserID, ExpectedAuthRevision: c.AuthRevision, Bootstrap: c.Tier != passkeyTierAAL2,
+		UserID: in.UserID, ExpectedSecret: c.Secret, ExpectedSessionID: c.SessionID,
+		ExpectedAuthRevision: c.AuthRevision, Bootstrap: c.Tier != passkeyTierAAL2,
 		Step: step, ConfirmedAt: now, Codes: rows,
 	})
 	if err != nil {

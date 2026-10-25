@@ -146,6 +146,17 @@ type TOTPConfig struct {
 	Issuer string
 }
 
+// WithMFAMethods sets MFAConfig.Methods: the AAL2 sources the second-factor
+// gate admits when it requires AAL2 (adding or removing a passkey or the
+// authenticator app, regenerating recovery codes), and the factors it counts as
+// held. Empty admits any source.
+func WithMFAMethods(methods ...MFAMethod) Option {
+	methods = slices.Clone(methods)
+	return func(c *constructorConfig) {
+		c.MFAMethods = slices.Clone(methods)
+	}
+}
+
 // WithTOTP replaces the complete TOTPConfig group, including zero values.
 func WithTOTP(value TOTPConfig) Option {
 	return func(c *constructorConfig) {

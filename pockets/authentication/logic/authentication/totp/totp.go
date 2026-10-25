@@ -134,8 +134,9 @@ func Validate(secret []byte, code string, at time.Time, window int) (int64, bool
 
 // KeyURI is the otpauth:// key URI an authenticator app scans:
 // otpauth://totp/<issuer>:<account>?secret=…&issuer=…&algorithm=SHA1&digits=6&period=30.
-// The label is percent-encoded. An empty issuer or account, or a colon in the
-// issuer, is sdk.ErrInvalidInput.
+// The label is percent-encoded (a colon in the account too) and query spaces
+// are %20. An empty issuer or account, or a colon in the issuer, is
+// sdk.ErrInvalidInput.
 func KeyURI(issuer, account string, secret []byte) (string, error) {
 	if issuer == "" || account == "" || strings.Contains(issuer, ":") || len(secret) == 0 {
 		return "", fmt.Errorf("totp: key URI needs an issuer without a colon, an account and a secret: %w", sdk.ErrInvalidInput)
@@ -146,6 +147,8 @@ func KeyURI(issuer, account string, secret []byte) (string, error) {
 	q.Set("algorithm", Algorithm)
 	q.Set("digits", strconv.Itoa(Digits))
 	q.Set("period", strconv.Itoa(int(Period/time.Second)))
-	label := url.PathEscape(issuer) + ":" + url.PathEscape(account)
-	return "otpauth://totp/" + label + "?" + q.Encode(), nil
+	// Authenticator apps read the label's first colon as the issuer separator
+	// and decode the query with %20, not +, as a space.
+	label := url.PathEscape(issuer) + ":" + strings.ReplaceAll(url.PathEscape(account), ":", "%3A")
+	return "otpauth://totp/" + label + "?" + strings.ReplaceAll(q.Encode(), "+", "%20"), nil
 }

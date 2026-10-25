@@ -26,6 +26,8 @@ type fakeTOTP struct {
 	mu    sync.Mutex
 	creds map[string]totp.Credential
 	codes map[string][]totp.RecoveryCode
+	// beforeRecordUse runs once before RecordUse's compare-and-swap.
+	beforeRecordUse func()
 }
 
 func newFakeTOTP(users *fakeUsers, passkeys *fakePasskeys) *fakeTOTP {
@@ -71,6 +73,8 @@ func (f *fakeTOTP) Confirm(_ context.Context, in totp.Confirmation) error {
 		return sdk.ErrNotFound
 	case c.Confirmed():
 		return totp.ErrAlreadyEnrolled
+	case c.Secret != in.ExpectedSecret || c.SessionID != in.ExpectedSessionID:
+		return sdk.ErrNotFound
 	case u.AuthRevision != in.ExpectedAuthRevision:
 		return sdk.ErrConflict
 	}
@@ -96,9 +100,16 @@ func (f *fakeTOTP) Confirm(_ context.Context, in totp.Confirmation) error {
 
 func (f *fakeTOTP) RecordUse(_ context.Context, userID string, expectedStep, step int64, at time.Time) error {
 	f.mu.Lock()
+	hook := f.beforeRecordUse
+	f.beforeRecordUse = nil
+	f.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
+	f.mu.Lock()
 	defer f.mu.Unlock()
 	c, ok := f.creds[userID]
-	if !ok || !c.Confirmed() || c.LastUsedStep != expectedStep || step <= expectedStep {
+	if !ok || !c.Confirmed() || c.LastUsedStep != expectedStep || step <= expectedStep || (c.LockedUntil != nil && c.LockedUntil.After(at)) {
 		return sdk.ErrConflict
 	}
 	c.LastUsedStep, c.LastUsedAt, c.FailedAttempts, c.LockedUntil = step, &at, 0, nil
@@ -148,6 +159,10 @@ func (f *fakeTOTP) ConsumeRecoveryCode(_ context.Context, userID string, candida
 	for i, rc := range codes {
 		if slices.ContainsFunc(candidates, func(c challenge.DigestCandidate) bool { return c.KeyID == rc.KeyID && c.Digest == rc.Digest }) {
 			f.codes[userID] = slices.Delete(slices.Clone(codes), i, i+1)
+			if c, ok := f.creds[userID]; ok {
+				c.FailedAttempts = 0
+				f.creds[userID] = c
+			}
 			return len(f.codes[userID]), nil
 		}
 	}
@@ -171,13 +186,16 @@ func (f *fakeTOTP) Remove(_ context.Context, userID string, expectedRevision int
 		return totp.Removed{}, sdk.ErrConflict
 	}
 	f.mu.Lock()
-	_, had := f.creds[userID]
+	c, had := f.creds[userID]
 	n := len(f.codes[userID])
 	delete(f.creds, userID)
 	delete(f.codes, userID)
 	f.mu.Unlock()
 	if !had {
 		return totp.Removed{}, nil
+	}
+	if !c.Confirmed() {
+		return totp.Removed{Pending: true}, nil
 	}
 	u.AuthRevision++
 	f.users.byID[userID] = u

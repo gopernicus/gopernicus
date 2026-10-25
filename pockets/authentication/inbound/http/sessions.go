@@ -182,6 +182,7 @@ type authService interface {
 	rateLimitByIP(keyPrefix string, limit ratelimiter.Limit) web.Middleware
 	admitMFA(ctx context.Context, gate authlogic.MFAGate, cred Credential) bool
 	mfaAllows(m authlogic.MFAMethod) bool
+	pagePath(page string) string
 }
 
 // ---------------------------------------------------------------------------
