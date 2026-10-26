@@ -5,12 +5,12 @@ description: What the framework refuses in production today, what is documented 
 
 # Production posture
 
-This page describes the framework **as it is on `main` at 2026-10-25, after SOC 2 slices S1–S3,
-S4a, S4b, S5 and S6** (the production posture floor, audit completeness and integrity, retention
-and erasure, the MFA posture, passkeys, transport and abuse hardening, secrets and logging;
+This page describes the framework **as it is on `main` at 2026-10-26, after SOC 2 slices S1–S3,
+S4a, S4b, S4c, S5 and S6** (the production posture floor, audit completeness and integrity, retention
+and erasure, the MFA posture, passkeys, TOTP and recovery codes, transport and abuse hardening, secrets and logging;
 release records in `RELEASING.md`, host handoffs in `plans/soc2-s1-production-posture-handoff.md`,
 `plans/soc2-s2-audit-completeness-handoff.md` and `plans/soc2-s3-retention-erasure-handoff.md`;
-S4a, S4b, S5 and S6 have no handoff file — their records carry the upgrade notes).
+S4a, S4b, S4c, S5 and S6 have no handoff file — their records carry the upgrade notes).
 Where a control is still planned, it says so; an item marked *planned* is not a control a host
 can claim yet.
 
@@ -158,7 +158,7 @@ none.
 | authentication | a passkey relying party whose `Config().RPID` is `localhost`, under `.localhost` or an IP, or whose `Origins` admits an `http` namespace: a passkey registered there is bound to a development origin | `ErrPasskeyDevelopmentRelyingParty` | none |
 | authentication (all modes) | `WithPasskeys` without `Repositories.Passkeys`, `CredentialMutations`, `AuthenticationGrants`, `Challenges` or a `ChallengeProtector`; `PasskeyConfig.Views` without a relying party or without `BrowserConfig.Views`; `UserVerification` `discouraged` | `ErrPasskeyReposRequired`; `sdk.ErrInvalidInput` | none |
 | authentication (all modes) | `MFAConfig.Required` `all` beside `WithPasskeys` (native `all` waits for recovery codes, S4c) | `ErrMFAUnsatisfiable` | use `admins` |
-| authentication stores pgx, Turso (all modes) | a database without `passkey_credentials`, passkeys wired or not | the probe error naming `0025_passkey_credentials.sql` (wraps `sdk.ErrNotFound`) | none — apply 0025 pre-boot |
+| authentication stores pgx, Turso (all modes) | a database without `passkey_credentials`, passkeys wired or not (stores pgx v0.12.0–v0.13.0 / Turso v0.11.0–v0.12.0; since pgx v0.14.0 / Turso v0.13.0 only when passkeys are wired — see S4c below) | the probe error naming `0025_passkey_credentials.sql` (wraps `sdk.ErrNotFound`) | none — apply 0025 pre-boot |
 | authentication HTTP | the development CSRF cookie: a resolved `auth_csrf` (no `Secure`, no `__Host-` prefix) | `sdk.ErrInvalidInput`, naming the cookie | none |
 
 **The CSRF double refusal** (v0.27.0). The double-submit cookie follows the session cookie: a
@@ -168,6 +168,30 @@ development host with a non-`Secure` session cookie gets `auth_csrf`, because We
 independent of the other: the S1 refusal of a non-`Secure` session cookie (row 12 above), and a
 second constructor check that refuses a resolved `auth_csrf` cookie. Development logs
 `csrf_cookie=auth_csrf secure=false`.
+
+**Added by S4c** (rsc-qr v0.1.0, authentication v0.28.0 → v0.29.0, stores pgx v0.13.0 →
+v0.14.0 / Turso v0.12.0 → v0.13.0, views/goth v0.8.0 → v0.8.1). An authenticator app (TOTP) with
+recovery codes is the native fallback AAL2 source beside passkeys, and `MFAConfig.Methods`
+restricts which AAL2 sources the gates admit. Every factor is host opt-in, and since v0.29.0 its
+schema is required only when it is wired: a host that wires neither passkeys nor TOTP (an
+IdP-only or OAuth-only host) boots without `passkey_credentials` (0025) or `totp_credentials` /
+`recovery_codes` (0026), and may apply both ahead of time. The single-factor refusal is
+unchanged: TOTP is a second factor, never a sign-in method, so it adds no cause and clears none.
+
+| Module | Production refuses | Sentinel | Acknowledgement |
+|---|---|---|---|
+| authentication (`NewKeys`) | `KeyTOTPRing` named in `need` with `AUTH_TOTP_KEYS` unset (all modes: a malformed ring or a missing active id) | `ErrKeyRequired`, naming the variable | none — set the ring |
+| authentication (all modes) | `WithTOTP` whose `Repositories.TOTP` reports its schema missing through `totp.SchemaProber` | `ErrTOTPSchemaMissing`, naming `0026_totp` | none — apply 0026 pre-boot |
+| authentication (all modes) | `WithPasskeys` whose `Repositories.Passkeys` reports its schema missing through `passkey.SchemaProber` (v0.29.0; replaces the stores' every-mode 0025 probe) | `ErrPasskeySchemaMissing`, naming `0025_passkey_credentials.sql` | none — apply 0025 pre-boot |
+| authentication (all modes) | `WithTOTP` without `Repositories.TOTP`, `CredentialMutations`, `AuthenticationGrants` or a `ChallengeProtector` | `ErrTOTPReposRequired` (wraps `sdk.ErrInvalidInput`) | none |
+| authentication (all modes) | `MFAConfig.Methods` naming a source that is not wired (`passkey` without `WithPasskeys`, `totp` without `WithTOTP`, `idp` without `WithExternal`); an unknown value is `sdk.ErrInvalidInput` | `ErrMFAUnsatisfiable`, naming the method | none — wire the source or drop it |
+| authentication (all modes) | `MFAConfig.Required` `all` beside `WithPasskeys` or `WithTOTP` (native `all` is the follow-on `s4c2-native-all`) | `ErrMFAUnsatisfiable` | use `admins` |
+
+With TOTP and a `UserAdminCheck`, the zero `Required` resolves to `admins`. Every boot line
+now also names `sources=` (the wired AAL2 sources, such as `passkey,totp`, or `none`) and
+`methods=` (`any`, or the `Methods` list). `New` WARNs `auth: recovery codes
+sealed under retired pepper keys key_ids=[…]` while any recovery code is digested under a pepper
+key no longer in the ring (*Keys and rotation*).
 
 ## Retention (S3)
 

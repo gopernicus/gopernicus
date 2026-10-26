@@ -36,6 +36,7 @@ The claimed namespace is `/auth/*`. The JSON surface includes:
 - step-up and credential/identifier management;
 - passwordless code and magic-link flows when enabled;
 - passkey registration, usernameless sign-in, step-up and management when `WithPasskeys` wires a relying party;
+- authenticator-app (TOTP) enrollment, step-up and management, and single-use recovery codes, when `WithTOTP` wires an encrypter;
 - OAuth login/link/unlink when providers are wired;
 - service account and API key lifecycle routes when both repositories are wired and `MachineRoutesGate` is set (API-key authentication itself needs only the repositories);
 - invitations when a granter and host authorization check are wired;
@@ -267,7 +268,10 @@ provider. The runnable proofs are `examples/external-identity` and
 Since v0.25.0 (with sdk v0.19.0) a host on an identity provider can require
 MFA for its administrators or for every user. The pocket enforces it from what
 the provider asserted. Since v0.26.0 a user-verified [passkey](#passkeys) is
-the native AAL2 source, and native access tokens carry their assurance.
+a native AAL2 source, and native access tokens carry their assurance. Since
+v0.28.0 an [authenticator app or a recovery code](#totp-and-recovery-codes) is
+the fallback native AAL2 source, and `MFAConfig.Methods` restricts which
+sources the gates admit.
 
 - **The stamp.** `Credential.Assurance` (`session.AssuranceLevel`) is what a
   credential proves. An external token is AAL2 when the provider set
@@ -277,11 +281,24 @@ the native AAL2 source, and native access tokens carry their assurance.
 - **The `aal` claim** (since v0.26.0). Every native mint signs `aal` (`aal1` or
   `aal2`) into the access token from the session row, and
   `Credential.Assurance` reads it. A session is AAL2 only after a user-verified
-  passkey sign-in or step-up; password, code, magic-link and OAuth sessions are
-  AAL1. A token minted before the upgrade carries no `aal` and reads `unknown`
+  passkey sign-in or step-up, or after a TOTP or recovery-code step-up (since
+  v0.28.0); password, code, magic-link and OAuth sessions are AAL1. A token minted before the upgrade carries no `aal` and reads `unknown`
   until it refreshes; a legacy session row without an assurance level omits
   the claim; an unknown `aal` value is rejected; a delegated token
   carrying `aal` is refused. API keys stay `unknown` (S4d).
+- **The `methods` claim** (since v0.28.0). Every native mint also signs
+  `methods`, the session row's method kinds (`password`, `passkey`, `totp`,
+  `recovery_code`, …), beside `aal`, and `Credential.Methods` reads it. An
+  unknown kind is rejected, and a delegated token carrying `methods` is
+  refused, as for `aal`. An external token's source is `idp`.
+- **`MFAConfig.Methods`** (since v0.28.0) restricts the AAL2 sources every MFA
+  gate admits: `MFAMethodPasskey`, `MFAMethodTOTP` (recovery codes count under
+  it) and `MFAMethodIdP`. Empty admits any source. A first-party AAL2 token
+  minted before the claim existed has no source and is denied under a
+  non-empty `Methods` until it refreshes, so leave `Methods` empty through the
+  rollout. A host that refuses a possession code composed onto a passwordless
+  or OAuth primary sets `Methods: [passkey, idp]`. A denial records
+  `mfa_required_denied` with `reason` (`assurance` or `method`) and `method`.
 - **Three gates require AAL2.** Each answers with the RFC 9470 challenge
   (`WWW-Authenticate: Bearer error="insufficient_user_authentication"`) and
   records one `mfa_required_denied` row. The row is budgeted per client IP and
@@ -289,27 +306,33 @@ the native AAL2 source, and native access tokens carry their assurance.
 
   | Gate | Scope |
   |---|---|
-  | `RequireMFA()` on `RequirePrincipal` | access and external tokens on that route (since v0.26.0 it no longer panics beside access tokens; `FreshAuth`, `VerifiedEmail`, `Tenant` and `Check` still do). An API key passes. Beside `Browser()`, an AAL1 cookie session is redirected to the passkey step-up page when `PasskeyConfig.Views` is wired |
+  | `RequireMFA()` on `RequirePrincipal` | access and external tokens on that route (since v0.26.0 it no longer panics beside access tokens; `FreshAuth`, `VerifiedEmail`, `Tenant` and `Check` still do). An API key passes. Beside `Browser()`, an AAL1 cookie session is redirected to the "Confirm it's you" chooser (`/auth/step-up/mfa`) when `TOTPConfig.Views` is wired, else to the passkey step-up page when `PasskeyConfig.Views` is |
   | `ExternalProvider.RequireMFA` | every route. It is checked before the subject resolves, so a denied token provisions nothing |
   | `WithMFA(MFAConfig{Required: MFARequiredAdmins})` | `/auth/admin/users*`, for callers the `UserAdminCheck` admits, and beside passkeys the machine lifecycle routes after `MachineRoutesGate`. A non-admin keeps the check's 403, and an API key passes |
 
 - **`MFAConfig{Required}`** (`WithMFA`) is a wiring literal with no env tag.
   The zero value (`MFARequiredDefault`, since v0.26.0) resolves once at
-  construction: to `admins` when `WithPasskeys` wires a relying party and
+  construction: to `admins` when `WithPasskeys` wires a relying party or
+  `WithTOTP` an encrypter (since v0.28.0), and
   `AdministrationConfig.UserAdminCheck` is set, else to none.
   `MFARequiredNone` is now the explicit `"none"`, the opt-out and the sole-admin
   break-glass. `admins` gates the admin routes above, and `all` sets
   `RequireMFA` on a copy of every `WithExternal` provider. Some wiring cannot
   satisfy the requirement, and every mode refuses it with `ErrMFAUnsatisfiable`:
-  any requirement without `WithExternal` or `WithPasskeys`, `admins` without
-  `AdministrationConfig.UserAdminCheck`, or `all` beside native password,
-  passwordless, OAuth or passkey login (native `all` waits for recovery codes;
-  use `admins` meanwhile). An unknown value is `sdk.ErrInvalidInput`. `New`
-  logs one boot line, `auth: mfa posture mfa_required=<none|admins|all>
-  source=<config|default> gates=<none|/auth/admin/users*[,machine_lifecycle]|external_tokens>`.
+  any requirement without `WithExternal`, `WithPasskeys` or `WithTOTP`, `admins`
+  without `AdministrationConfig.UserAdminCheck`, `all` beside native password,
+  passwordless, OAuth, passkey or TOTP wiring (native `all` is the follow-on
+  `s4c2-native-all`; use `admins` meanwhile), or a `Methods` entry naming a
+  source that is not wired (`passkey` without `WithPasskeys`, `totp` without
+  `WithTOTP`, `idp` without `WithExternal`). An unknown value is
+  `sdk.ErrInvalidInput`. `New` logs one boot line, `auth: mfa posture
+  mfa_required=<none|admins|all> source=<config|default>
+  gates=<none|/auth/admin/users*[,machine_lifecycle]|external_tokens>
+  sources=<passkey,totp,idp|none> methods=<any|…>`.
 - **`admins` does not gate** role routes, cms admin routes or host admin pages.
   Add `RequireMFA()` to those yourself. Without passkeys it does not gate the
-  machine lifecycle routes either. API keys pass every MFA gate (S4d).
+  machine lifecycle routes either (with passkeys or TOTP it does). API keys
+  pass every MFA gate (S4d).
 - **A host's own `CredentialService`** stamps `Assurance` itself: AAL2 when
   `Identity.MFA` is set, else AAL1. Without the stamp, every MFA gate denies its
   external tokens.
@@ -325,7 +348,7 @@ Details must read `"assurance":"aal2"`. It also has the passkey caveat and the
 per-IdP table of what each vendor emits. Auth0 and Firebase are known. Google,
 Okta and Entra ID are **unknown**, so run the self-check. The production
 refusals are in [Production posture](../guides/production-posture.md), under
-"Added by S4a" and "Added by S4b".
+"Added by S4a", "Added by S4b" and "Added by S4c".
 
 ## Passkeys
 
@@ -339,8 +362,12 @@ U2F-only security keys cannot enroll. Attestation is `none`; the AAGUID is
 recorded when the client reports one, unverified.
 
 - **Turn it on.** Apply migration `0025_passkey_credentials` (stores pgx
-  v0.12.0, Turso v0.11.0; the store probe refuses to boot without it, naming
-  0025, in every mode — passkeys wired or not). Build the relying party with
+  v0.12.0, Turso v0.11.0). Since authentication v0.29.0 (stores pgx v0.14.0,
+  Turso v0.13.0) it is required **only when passkeys are wired**: `New` probes
+  a `Repositories.Passkeys` that implements `passkey.SchemaProber` and refuses
+  with `ErrPasskeySchemaMissing`, naming 0025; an unwired host is never probed
+  and never reads or erases the table. (From stores pgx v0.12.0 / Turso v0.11.0
+  until then, the store probe refused every mode, passkeys wired or not.) Build the relying party with
   `gowebauthn.New(webauthn.Config{RPID, RPName, Origins})`; **the RP ID is
   permanent**, and changing it orphans every registered passkey. Wire
   `WithPasskeys(PasskeyConfig{RelyingParty: rp, Views: …})`. It needs
@@ -391,6 +418,76 @@ The pocket README's "Passkeys (SOC 2 S4b)" section is the reference: the
 ceremony table, the routes, the custom-view markup contract for hosts that
 override a page, and the operator recipes. `examples/auth-cms` wires it end to
 end.
+
+## TOTP and recovery codes
+
+Since v0.28.0 (with views/goth v0.8.0 and the `integrations/encoding/rsc-qr`
+adapter v0.1.0; pin authentication v0.29.0 and views/goth v0.8.1) an
+authenticator app is the native fallback second factor beside passkeys, with
+ten single-use recovery codes beside it. TOTP is RFC 6238 in the pocket's
+standard library code: SHA-1, six digits, 30 seconds, ±1 step. A TOTP or
+recovery-code **step-up of a live session** re-mints it at AAL2 (the session
+row, the `aal` and `methods` claims, `RequireMFA()` and the `admins` gates).
+TOTP is a second factor only: it never signs anyone in. It is **opt-in**: a host
+that does not call `WithTOTP` gets no TOTP route, no TOTP schema probe and no
+erasure of TOTP tables.
+
+- **Turn it on.** Apply migration `0026_totp` (stores pgx v0.13.0, Turso
+  v0.12.0; required only when TOTP is wired, `ErrTOTPSchemaMissing` otherwise).
+  Add `KeyTOTPRing` to `NewKeys`: `AUTH_TOTP_KEYS` is a ring `id:hex,id:hex`
+  (32 bytes per key) and `AUTH_TOTP_ACTIVE_KEY` names the sealing id; production
+  refuses it unset (*[Keys and rotation](../guides/keys-and-rotation.md)*). Wire
+  `WithTOTP(TOTPConfig{Encrypter: cryptids.NewAESGCMRing(keys.TOTPRing), Issuer:
+  "Your product", Views: …})` with `Repositories.TOTP`, `CredentialMutations`,
+  `AuthenticationGrants` and a `ChallengeProtector` (`ErrTOTPReposRequired`).
+  Each secret is sealed with its user id, so a row copied onto another user
+  never opens. Keep NTP on: skew beyond ±30 s fails every code.
+- **The gates.** One predicate covers every second factor: a user who holds an
+  AAL2 factor (a user-verified passkey or a confirmed authenticator app) needs
+  AAL2 within five minutes to add or remove a passkey, enroll or remove TOTP, or
+  regenerate recovery codes; anyone else bootstraps at AAL1 from a fresh login
+  or a password/code step-up grant. The fifth refused code in a row locks the
+  second factor for five minutes (`429 too_many_attempts` with `Retry-After`),
+  and no code's step is accepted twice. **One code is a recent AAL2 login for
+  every gate for five minutes**, removal and regeneration included. Removing
+  TOTP revokes every session of the user; an admin resets it with `POST
+  /auth/admin/users/{id}/totp/reset`.
+- **Wire contract** (shared by SPAs and the goth forms). `POST
+  /auth/totp/enrollment` → `{secret, otpauth_uri, issuer, account, algorithm,
+  digits, period, expires_at}` (the only response that carries the secret);
+  `POST /auth/totp/enrollment/confirm {code}` → 201 `{enrolled_at,
+  recovery_codes, generated_at}`, shown once; `POST /auth/step-up/totp` and
+  `/auth/step-up/recovery-code {code}` answer as `POST /auth/login` plus
+  `assurance`; `GET`/`DELETE /auth/totp`; `GET`/`POST /auth/recovery-codes`
+  (regeneration takes `expected_generated_at`, else `409
+  recovery_codes_stale`). `GET /auth/methods` gains `assurance`, `totp` and
+  `recovery_codes`, so an SPA picks its step-up after an MFA 401 and renders
+  its own QR from `otpauth_uri`.
+- **Views and the chooser.** `TOTPConfig.Views` (views/goth's `authgoth.Views`
+  satisfies `TOTPViews`) mounts the manage page, the enroll page (the key in
+  groups of four, the `otpauth://` link and, with
+  `authgoth.WithQR(rscqr.Modules)`, a server-side SVG QR code; no script) and
+  the "Confirm it's you" chooser at `GET /auth/step-up/mfa`, which offers,
+  filtered by `MFAConfig.Methods`, a passkey, the authenticator code, a recovery
+  code, or the setup links. With TOTP views wired the chooser is where a
+  `Browser()` + `RequireMFA()` denial of an AAL1 cookie lands.
+- **Recovery codes and the pepper.** Codes are digested under the challenge
+  pepper with the key id stored. **Regenerate recovery codes before dropping a
+  pepper key**; `New` WARNs `auth: recovery codes sealed under retired pepper
+  keys key_ids=[…]` while any remain.
+- **Erasure.** `user.EraseInput.TOTP` and `.Passkeys` are set only when the
+  factor is wired; a host `EraseRepository` must then delete and count those
+  rows (`storetest.RunTOTP`, `storetest.RunPasskeys`). A host that unwires a
+  factor stops erasing its tables: purge them first.
+- **Events.** `totp_enrolled`, `totp_removed`, `totp_reset`, `totp_step_up`,
+  `totp_failed` and `totp_locked` (both budgeted per IP),
+  `recovery_codes_generated` and `recovery_code_used`; the `mfa_change_notice`
+  mails the user's verified channels on every change and every recovery-code
+  use. No row carries a secret, code, digest, key URI or ciphertext.
+
+The pocket README's "TOTP and recovery codes (SOC 2 S4c)" section is the
+reference: the gate table, the routes, the custom-view markup and the operator
+recipes. `examples/auth-cms` wires it end to end.
 
 ## Production posture
 
@@ -469,9 +566,15 @@ The pgx and Turso store modules implement the pocket repositories and export the
 
 Migration `0020_external_subjects.sql` (stores pgx v0.9.0 and Turso v0.8.0) is
 required for every SQL host, including hosts that wire no external provider,
-because both store constructors probe the table at boot. Migration
-`0025_passkey_credentials.sql` (stores pgx v0.12.0 and Turso v0.11.0) is
-required the same way, including hosts that wire no passkeys.
+because both store constructors probe the table at boot. Migrations
+`0025_passkey_credentials.sql` and `0026_totp.sql` are **conditional**: since
+authentication v0.29.0 with stores pgx v0.14.0 and Turso v0.13.0, each is
+required only when its factor is wired (`WithPasskeys`, `WithTOTP`), and the
+pocket probes it through the store's optional `SchemaProber`. A host that wires
+neither, such as an IdP-only or OAuth-only host, boots without both tables and
+may apply them ahead of time. (Stores pgx v0.12.0–v0.13.0 and Turso
+v0.11.0–v0.12.0 refused a database without `passkey_credentials` in every
+mode.)
 
 The pocket core imports neither store nor UI. `pockets/authentication/views/goth` maps the technology-neutral `Views` port onto `ui/goth`; hosts can embed that default and override pages, or implement the port with another renderer.
 
@@ -484,7 +587,7 @@ honor the same field. Its zero value keeps the existing password form.
 
 ## Not shipped
 
-Passkeys are the only native AAL2 method. There is no TOTP, no recovery codes, no native `MFAConfig.Required` `all`, no `MFAConfig.Methods` and no enrollment grace yet (S4c); no `aal` on delegated tokens and no API keys under MFA gates (S4d); no username-first passkey sign-in; and no attestation or AAGUID allow-list. MFA that an external identity provider asserted is enforced (see [Assurance and MFA](#assurance-and-mfa)).
+There is no native `MFAConfig.Required` `all` and no enrollment grace yet (the follow-on `s4c2-native-all`); no `aal` or `methods` on delegated tokens, no API keys under MFA gates and no re-sealing of TOTP secrets on ring rotation (S4d); no SHA-256 or 8-digit TOTP, no push or SMS second factor, and TOTP is never a sign-in method; no username-first passkey sign-in; and no attestation or AAGUID allow-list. MFA that an external identity provider asserted is enforced (see [Assurance and MFA](#assurance-and-mfa)).
 
 ## OAuth client transports and trust
 

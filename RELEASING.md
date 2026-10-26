@@ -1,5 +1,325 @@
 # Releasing gopernicus modules
 
+## TOTP fallback and recovery codes (SOC 2 slice S4c — published 2026-10-26)
+
+Ten annotated tags (not signed) on six modules, one of them NEW (`integrations/encoding/rsc-qr`).
+Each was cut at its PR's squash-merge commit on `main`, pushed, THEN polled on the proxy, and
+cold-verified from a scratch consumer (`GOWORK=off`, an empty module cache, `proxy.golang.org`,
+`sum.golang.org`, `go mod verify`, `go build <module>/...`). No sdk tag (BE8: TOTP is an algorithm
+with one consumer and lives in the pocket). Design and rulings:
+[plans/s4c-totp.md](plans/s4c-totp.md) (rev 1, ratified 2026-10-25, EXECUTED 2026-10-26). Two
+owner rulings during the build made both factor schemas conditional (0026, then S4b's 0025),
+which added a second core train (PR-2d, v0.29.0) and a second store repin (PR-2e) before this
+record, so the examples repin once. Under the owner's 2026-10-23 process ruling this section is
+the whole record: there is no handoff file and no manifest. The handoff notes below say what a
+host does on upgrade, and hosts adopt them once, at the roadmap's end. The operator surface is
+the docs site: the authentication page's *TOTP and recovery codes*, *Assurance and MFA* and
+*Persistence and views*, *Keys and rotation* (the TOTP ring, the recovery-code pepper), and
+*Production posture* ("Added by S4c"). The pocket README's "TOTP and recovery codes (SOC 2 S4c)"
+section is the reference.
+
+| Step | Tag | Commit | PR | Cold verification |
+|---|---|---|---|---|
+| 1 | `integrations/encoding/rsc-qr/v0.1.0` (NEW module, first tag) | `3805c1a3` | #200 (PR-1) | OK; adapter + rsc.io/qr v0.2.0 + sdk v0.20.0 |
+| 2 | `pockets/authentication/v0.28.0` | `4e14b835` | #201 (PR-2a) + #202 (PR-2b) | OK; set A |
+| 3 | `pockets/authentication/stores/pgx/v0.13.0`, `pockets/authentication/stores/turso/v0.12.0` | `fda49a03` | #203 (PR-2c) | OK; set B |
+| 4 | `pockets/authentication/views/goth/v0.8.0` (requires core v0.28.0) | `8c76ebee` | #204 (PR-3) | OK; set C |
+| 2d | `pockets/authentication/v0.29.0` (0025 conditional) | `e2f541a4` | #205 (PR-2d) | OK |
+| 4f | `ui/goth/v0.2.1`, `pockets/authentication/views/goth/v0.8.1` (follow-ups) | `92c37a59` | #206 | OK |
+| 3e | `pockets/authentication/stores/pgx/v0.14.0`, `pockets/authentication/stores/turso/v0.13.0` | `5d3a2776` | #207 (PR-2e) | OK |
+
+Order: 1 and the core PRs in parallel; 2 after #201 and #202 merged and the live legs ran again
+on `main`; 3 after #203 and a `live-stores` dispatch; 4 after #204 and its browser leg; 2d after
+the owner's second conditional-schema ruling (#205); 4f after the S4 presentation follow-ups
+(#206: dark-theme link contrast, the dark destructive foreground, checkbox spacing, human dates on
+the passkey and TOTP pages); 3e last (#207). #203 and #207 moved only the stores' core pin
+(v0.26.0 → v0.28.0 → v0.29.0, explicit `GOWORK=off go get`, then tidy); #204 moved views/goth from
+authentication v0.27.1 to v0.28.0 (forced: the page models changed). Every module ships MINOR
+under the v0 convention; ui/goth v0.2.1 and views/goth v0.8.1 are PATCH. The tag messages name
+the `methods` claim (row 3), the one AAL2-factor predicate (row 5), the host erasure obligation
+(row 9) and migration 0026 (row 10, required only when TOTP is wired).
+
+**The MVS sets.**
+- **Set A** (step 2): authentication v0.28.0 beside the RELEASED stores pgx v0.12.0 / turso
+  v0.11.0 and views/goth v0.7.0, TOTP unwired; no lockstep.
+- **Set B** (step 3): core v0.28.0 + stores pgx v0.13.0 / turso v0.12.0 + pgxdb v0.14.0 + turso
+  v0.9.0 selected sdk v0.20.0 and built.
+- **Set C** (step 4): views/goth v0.8.0 + core v0.28.0 + ui/goth v0.2.0 + rsc-qr v0.1.0 +
+  go-webauthn v0.1.0 + set B built an auth-cms-shaped `main`.
+- **This PR (from the tags):** auth-cms and production-baseline at `GOWORK=off` from an EMPTY
+  module cache over `proxy.golang.org` + `sum.golang.org`: `all modules verified` in both, and
+  both binaries built (see the verification record).
+
+**Not tagged.** sdk, go-webauthn, `pockets`, `workshop/gopernicus` (no new refusal carries a
+waiver, so guard P5 has nothing to print), the examples, and every other module. Nothing
+retracts. v0.28.0, the stores' v0.13.0 / v0.12.0 and views v0.8.0 stay published; hosts pin the
+versions below.
+
+**Upgrade notes.** Sixteen rows. No compile-time break; one boot refusal, only for a host that
+wires TOTP without its schema (row 10, amended); one boot refusal RELAXED (row 15: S4b's every-mode
+0025 refusal becomes passkeys-wired only); row 3 changes a decision only under a non-empty
+`Methods`; row 5 tightens a gate for TOTP holders (none exist before the upgrade); rows 13 and 14
+change what an unwired host's stores read and erase. The "Read first" box and rows 1–12 with the
+paragraph under them are the plan's, verbatim, except row 10, amended for the owner's
+2026-10-25 ruling (the plan's text was "**REQUIRED migration 0026** | BOOT FAILURE without
+`totp_credentials` + `recovery_codes`, naming 0026, every mode"); the pin bullet in the box and
+rows 13–16 (PR-2d, the second ruling) are appended.
+
+> **Read first:** `grep -rnE 'MFAConfig\{|RequireMFA\(|EraseRepository|KeysInput\{' --include='*.go'`; apply 0026 before repinning
+> a store, TOTP wired or not. **By host shape** (PR-4 expands each): every store host → rows 10, 3, 9; IdP-only → row 10
+> (and row 2 if it sets `Methods`); hosts turning TOTP on → rows 1, 4–8, 11; passkey hosts → rows 3, 5, 11 (the chooser page).
+> - **Pins (appended):** pin **authentication v0.29.0**, stores **pgx v0.14.0 / turso v0.13.0**, **views/goth v0.8.1**
+>   (requires authentication v0.28.0+) and **ui/goth v0.2.1**; **rsc-qr v0.1.0** only for a host that renders the QR through
+>   views/goth. Since v0.29.0, "apply 0026 before repinning, TOTP wired or not" is advice, not a requirement: 0026 and 0025
+>   are each required only when their factor is wired (rows 10 and 15).
+
+| # | Flip | What the host sees | Hatch | Module@version |
+|---|---|---|---|---|
+| 1 | new adapter `rscqr.Modules` | additive | none | rsc-qr@v0.1.0 |
+| 2 | `MFAConfig.Methods`; `mfa_required_denied` `reason`/`method` | additive; empty = any source; an unwired source → `ErrMFAUnsatisfiable` | leave empty | authentication@v0.28.0 |
+| 3 | access tokens carry `methods`; `Credential.Methods`; delegated tokens refuse it | pre-upgrade AAL2 tokens fail closed under a non-empty `Methods` until refresh | leave `Methods` empty through the rollout | authentication@v0.28.0 |
+| 4 | `WithTOTP`, `Repositories.TOTP`, the routes, `/auth/methods` `assurance`/`totp`/`recovery_codes`; `admins` satisfiable by TOTP; zero `Required` → `admins` with TOTP + `UserAdminCheck` | opt-in; a host wiring TOTP beside a `UserAdminCheck` gets the `admins` default (`source=default`) | `Required: MFARequiredNone` | authentication@v0.28.0 |
+| 5 | one AAL2-factor predicate on both gates | a TOTP holder adds/removes a passkey only at AAL2, and the reverse | none | authentication@v0.28.0 |
+| 6 | a TOTP/recovery step-up re-mints the session at AAL2 (R-3) and is a recent login for 5 min | new AAL2 source on every `RequireMFA()` gate | `Methods: [passkey, idp]` | authentication@v0.28.0 |
+| 7 | `NewKeys`: `KeysInput.TOTPKeys`/`TOTPActiveKey`, `Keys.TOTPRing`, `KeyTOTPRing` | additive; production refuses an unset ring only when `KeyTOTPRing` is needed | do not pass `KeyTOTPRing` | authentication@v0.28.0 |
+| 8 | seven event types; `mfa_change_notice`; the recovery-code key WARN | new audit rows and notices | override the template | authentication@v0.28.0 |
+| 9 | erasure deletes TOTP + recovery codes (`EraseCounts.TOTP`, `.RecoveryCodes`); a host `EraseRepository` must, or TOTP secrets survive erasure | host-store obligation; `RunTOTP` pins it | implement per `RunTOTP` | authentication@v0.28.0 |
+| 10 | **migration 0026 ships; REQUIRED ONLY WHEN TOTP IS WIRED** (owner ruling 2026-10-25, amending BE12) | with `WithTOTP`, BOOT FAILURE without `totp_credentials` + `recovery_codes` (`ErrTOTPSchemaMissing`, naming 0026, probed through the optional `totp.SchemaProber`); TOTP unwired, the tables are never probed, read or erased and boot proceeds without them | apply 0026 (hosts may apply the empty tables ahead of time); ledger copy (P9) | stores pgx@v0.13.0, turso@v0.12.0 |
+| 11 | `TOTPViews`; `WithQR`; the chooser page is the `Browser()`+`RequireMFA()` redirect target when TOTP views are wired; `TOTP *TOTPLinks` on three page models | additive; passkey-only hosts keep `/auth/step-up/passkey` | leave `TOTPConfig.Views` nil | views/goth@v0.8.0 |
+| 12 | auth-cms wires TOTP (ring from env, `rscqr.Modules`, views); baseline ledger 0033 | example behaviour | — | examples (untagged) |
+| 13 | `user.EraseInput.Passkeys`: a host `EraseRepository` deletes and counts passkeys only when it is true (false when passkeys are unwired, when 0025 may be absent) | host-store obligation; `storetest.RunPasskeys` `EraseLeavesPasskeysWhenUnwired` pins it; a host that unwires passkeys stops erasing `passkey_credentials` | purge the table before unwiring | authentication@v0.29.0 |
+| 14 | `credential.ScopedSnapshotter` / `SnapshotScope` (optional, no compile break) | passkeys unwired, the pocket reads the credential rail without passkeys (`SnapshotScoped`, `Passkeys: false`); a store without it gets `Snapshot` with its `Passkeys` dropped. Unwired passkeys no longer count as login methods | none | authentication@v0.29.0 |
+| 15 | `passkey.SchemaProber` / `ErrPasskeySchemaMissing`: 0025 ships, required only when `WithPasskeys` is wired; `Repositories` (pgx/turso) no longer refuses a database without it (**relaxes S4b row 12**) | an unwired host boots without `passkey_credentials`; a passkey host without it refuses, naming `0025_passkey_credentials.sql` | apply 0025 when turning passkeys on | authentication@v0.29.0, stores pgx@v0.14.0, turso@v0.13.0 |
+| 16 | `totp.Confirmation.Bootstrap` is false whenever passkeys are unwired | a TOTP confirm on a passkey-less host never reads the passkey table for its bootstrap check | none | authentication@v0.29.0 |
+
+No compile-time breaks. Row 10 is a boot failure; row 3 changes a decision only under a non-empty `Methods`; row 5 tightens a
+gate for TOTP holders (none exist before upgrade); rows 4 and 6 are opt-in. Every module ships MINOR under v0; tag messages name
+rows 3, 5, 9 and 10. **Not touched:** sdk (BE8), `Mutation`/`MethodSet` (BE1 resolved in the aggregate), `passkey.js`.
+
+Build-time deviations a host can see, folded here (rows 1–9, 11 and 12 stay verbatim):
+- **Row 1.** `rscqr.Modules` returns the smallest version that fits at level M, `true` = dark,
+  with **no quiet zone** (the renderer draws the four-module border); empty text or text over
+  2331 bytes is `sdk.ErrInvalidInput`. rsc.io/qr always uses mask 0: valid QR, not
+  penalty-optimal; the owner's device check is the scanning proof.
+- **Row 4.** `ErrTOTPReposRequired` also requires a `ChallengeProtector` (recovery codes are
+  digested under its pepper); `TOTPConfig.Issuer` is required with `Encrypter` and may not
+  contain a colon. The budget field is `AuthenticationLimits.SecondFactor` (zero → 10/min per
+  user, 30/min per IP). A host that never calls `WithTOTP` gets 404 on every TOTP route, and its
+  `/auth/methods` gains only the additive `assurance`.
+- **Row 9.** Erasure of the TOTP tables is gated on the new `user.EraseInput.TOTP`, set only when
+  TOTP is wired (the owner's first ruling): a host that unwires TOTP stops erasing
+  `totp_credentials` and `recovery_codes`, so purge them first. With TOTP wired, `EraseUser`
+  logs an ERROR when a credential survives the erase (a store ignoring the flag).
+  `storetest.RunTOTPSchemaProbe` pins a store's probe beside `RunTOTP`.
+- **Row 10.** The stores' every-mode `Repositories` probe never checks 0026; the pocket calls
+  `totp.SchemaProber` only under `WithTOTP`. Turso's twin is the same file name. The baseline
+  ledger copy is `0033_totp.sql`, byte-identical to pgx 0026 (G34). `recovery_codes` has
+  `UNIQUE (user_id, code_digest)` (it also serves the per-user lookups) and a `key_id` index;
+  the planned separate `user_id` index was dropped.
+- **Row 11.** The manage page offers "Continue setup" and "Cancel setup" while an enrollment is
+  pending; cancelling signs nobody out (N3). The README's "Custom TOTP views" carries the markup
+  contract and the `html/template` `#ZgotmplZ` note for `otpauth:` links.
+- **The PR-2a code review** (lead-backend, folded into #201 before merge): **B1 (blocker)**
+  `Confirm` is fenced on the pending secret and session it checked, so a concurrent
+  re-enrollment is never confirmed by the first code; **H1** `MFAConfig.Methods` also binds the
+  second-factor add/remove gate (under a restriction only allowed sources count as held, so a
+  TOTP-only user under `[passkey]` bootstraps a passkey); **M1** `RecordUse` refuses while
+  locked; **M2** a weaker step-up lowers assurance (the lead's amendment of BE6); **M3**
+  `RunTOTP` gained the concurrency and contract cases; **M4** the erasure README note and the
+  surviving-credential ERROR; NITs N1 (`KeyURI` uses `%20` and escapes `:` in the account), N2 (a
+  recovery code resets the failure count), N3 and N8 (the step-up redirect honours the route
+  prefix). N4–N7 and N9 are deferred (below).
+
+**Handoff notes — what a host does on upgrade, by host shape and module** (applied at the
+roadmap's end). Pins: sdk v0.20.0 (unchanged); authentication **v0.29.0**; stores pgx
+**v0.14.0** / turso **v0.13.0**; views/goth **v0.8.1**; ui/goth **v0.2.1**; rsc-qr v0.1.0 only
+for a host that renders the QR through views/goth. Repin with explicit `GOWORK=off go get
+<module>@<tag>`, then `GOWORK=off go mod tidy`.
+- **Every host that repins stores** (rows 10, 15, 3, 9, 13, 14).
+  1. Nothing new is required at boot unless the host wires a factor: with stores pgx v0.14.0 /
+     turso v0.13.0 the store constructors probe neither `passkey_credentials` (0025) nor the TOTP
+     tables (0026). Both migrations still ship; a host may copy them into its ledger as the next
+     numbers ahead of time (the production-baseline copies are `0032_passkey_credentials.sql` and
+     `0033_totp.sql`, byte-identical; guard P9 and G34 check the copies). 0026 is two new, empty
+     tables (`SET LOCAL lock_timeout = '5s'`, `CREATE TABLE IF NOT EXISTS`, `IF NOT EXISTS`
+     indexes, no foreign keys): no `CONCURRENTLY`, no backfill; apply it in its own runner
+     invocation like any additive migration.
+  2. Row 3: access tokens now carry `methods` beside `aal`; a delegated token carrying it is
+     refused. Nothing changes unless the host sets `MFAConfig.Methods` (leave it empty through
+     the rollout: a pre-upgrade AAL2 token has no source and is denied under a restriction until
+     it refreshes).
+  3. Rows 9 and 13: a host-implemented `EraseRepository` honours `EraseInput.TOTP` and
+     `EraseInput.Passkeys`, deleting and counting those rows only when the flag is true; run
+     `storetest.RunTOTP` and `storetest.RunPasskeys` against it. Unwiring a factor stops its
+     erasure: purge the tables first.
+  4. Row 14: a host-implemented `MutationRepository` may add `SnapshotScoped`; without it the
+     pocket drops `Passkeys` from `Snapshot` when passkeys are unwired. No compile break.
+- **IdP-only and OAuth-only hosts** (the production-baseline shape, and the owner's
+  gps-360-go). **Nothing to wire.** Neither 0025 nor 0026 is required: with neither factor wired
+  the pocket never probes, reads or erases those tables. A host may apply them ahead of time so a
+  factor can be turned on later (production-baseline does). Proven from the tags below: the
+  baseline binary boots on a ledger through 0031 with neither table present. Row 2 only if the
+  host sets `Methods` (an IdP-only host may set `[idp]`; `passkey` or `totp` there is
+  `ErrMFAUnsatisfiable`).
+- **Hosts turning TOTP on** (rows 1, 4–8, 10, 11; the pocket README's "Turn on TOTP").
+  1. Apply 0026 (above); `WithTOTP` refuses boot without it (`ErrTOTPSchemaMissing`).
+  2. Keys: add `KeyTOTPRing` to `NewKeys`. `AUTH_TOTP_KEYS` is a ring `id:hex,id:hex` (each key
+     exactly 32 bytes, `openssl rand -hex 32`) and `AUTH_TOTP_ACTIVE_KEY` names the sealing id;
+     development mints a one-key `ephemeral` ring with a WARN (enrolled apps stop working on
+     restart), production refuses it unset. Build the encrypter with
+     `cryptids.NewAESGCMRing(keys.TOTPRing)`. Rotation: add the new key, make it active, keep the
+     old id in the ring (secrets are not re-sealed). Recovery codes live under the challenge
+     pepper: **regenerate them before dropping a pepper key** (the boot WARN names orphaned key
+     ids).
+  3. `authentication.WithTOTP(TOTPConfig{Encrypter: ring, Issuer: "Your product", Views:
+     authViews})` with `Repositories.TOTP`, `CredentialMutations`, `AuthenticationGrants` and a
+     `ChallengeProtector`. With a `UserAdminCheck`, the zero `MFAConfig.Required` resolves to
+     `admins` (boot line `mfa_required=admins source=default … sources=totp methods=any`); the
+     sole-admin break-glass is `MFARequiredNone` and a redeploy; the operator reset is `POST
+     /auth/admin/users/{id}/totp/reset` from an AAL2 session or an admin API key.
+  4. `MFAConfig.Methods` (`passkey`, `totp`, `idp`; recovery codes count under `totp`) restricts
+     the AAL2 sources every MFA gate admits; empty admits any. A host that refuses a possession
+     code composed onto a passwordless or OAuth primary sets `Methods: [passkey, idp]`.
+  5. **Server-rendered (views/goth):** `authgoth.New(bundle, authgoth.WithQR(rscqr.Modules))`
+     (the views module imports no encoder; without `WithQR` the enroll page shows the key and the
+     `otpauth://` link only) and `TOTPConfig.Views: authViews`. With TOTP views wired, the
+     "Confirm it's you" chooser at `GET /auth/step-up/mfa` replaces the passkey page as the
+     `Browser()` + `RequireMFA()` redirect target; it offers, filtered by `Methods`, the passkey
+     control, the authenticator code, a recovery code, or the setup links. No new script.
+  6. **SPAs: the JSON contract.** `POST /auth/totp/enrollment` → `{secret, otpauth_uri, issuer,
+     account, algorithm, digits, period, expires_at}` (render the QR from `otpauth_uri`; the only
+     response carrying the secret); `POST /auth/totp/enrollment/confirm {code}` → 201
+     `{enrolled_at, recovery_codes, generated_at}`, shown once; `POST /auth/step-up/totp` and
+     `/auth/step-up/recovery-code {code}` answer as `POST /auth/login` plus `assurance` (bearer
+     callers get the new pair); `GET`/`DELETE /auth/totp` (removal revokes every session, bearer
+     tokens included); `GET`/`POST /auth/recovery-codes` with `expected_generated_at` (409
+     `recovery_codes_stale`); 429 `too_many_attempts` with `Retry-After`. On an MFA 401 read `GET
+     /auth/methods` (`assurance`, `totp`, `recovery_codes`) to pick the step-up. Cookie callers
+     send the double-submit CSRF header; bearer SPAs skip it.
+  7. Row 6 / BE9: one code is a recent AAL2 login for every gate for five minutes, removal and
+     regeneration included; the `mfa_change_notice` is the detective control.
+- **Passkey hosts** (rows 3, 5, 11, 15). Row 5: a TOTP holder adds or removes a passkey only at
+  AAL2, and the reverse. Row 15: 0025 stays required (now via `passkey.SchemaProber`, refusing
+  with `ErrPasskeySchemaMissing`). Without TOTP views nothing about the step-up page changes.
+- **Examples (this PR).** Every example builds, vets and tests at `GOWORK=off` on the S4c tags.
+  Pins moved (explicit `GOWORK=off go get`, then `GOWORK=off go mod tidy`): `auth-cms`
+  authentication v0.27.1→v0.29.0, views/goth v0.7.0→v0.8.1 and ui/goth v0.2.0→v0.2.1 (rsc-qr
+  v0.1.0 was already pinned by #204); `cms`, `goth-showcase` and `minimal` ui/goth
+  v0.2.0→v0.2.1; `external-identity` authentication v0.27.1→v0.29.0; `production-baseline`
+  authentication v0.27.1→v0.29.0 and stores/pgx v0.12.0→v0.14.0. `jobs-minimal` pins no moved
+  module. No non-S4c pin moved. The code-side example changes landed with #201, #202 and #204
+  (auth-cms wires TOTP; the baseline ledger gained 0033).
+
+**The owner device check (Verification §4)**, on the owner's own auth-cms build.
+- **Google Authenticator: PASS** — scanned the QR, enrolled, and stepped `/demo/mfa/page` up so
+  `/demo/mfa` answered `aal2`.
+- **Apple Passwords: inconclusive** — it attaches the codes to a saved website login instead of
+  creating an issuer-named entry; deferred by the owner.
+- **Other apps** (1Password and the rest), the `otpauth://` link handed to Apple Passwords on the
+  Mac, and a per-theme device pass: **unverified.** The QR itself decoded to the page's exact
+  `otpauth://` URI in Chromium and WebKit, light and dark (#204's browser leg).
+
+**Verification record.**
+- CI `check`, `vuln` and the CodeQL analyses passed on the final run of every PR (#200–#207). `make guard` runs
+  thirty-six guards; S4c adds none (G13, G34 and G35 cover the new module and the ledger copy).
+- **Cold verification:** every tag above; sets A, B and C as listed; this PR's empty-cache
+  from-the-tags builds.
+- **Live legs** (counted with `go test -json`, pass / fail / skip). Before step 2, on `main`:
+  authentication `stores/pgx` **480 / 0 / 1** bare and schema-qualified (S4b baseline 453 / 0 /
+  1; the known non-C collation skip), `stores/turso` **785 / 0 / 0** (758 / 0 / 0), and
+  `live-stores` green; #202 also ran a Linux-container `make test-stores` (exit 0) and #203 a
+  fresh PG17 + libSQL `make test-stores` (18 legs ok). PR-2d (#205): pgx **485 / 0 / 1** in both
+  legs on a native Homebrew PostgreSQL 17 (+6 new, −1 retired), `TestLive_RetentionUpgrade`
+  passing; turso **790 / 0 / 0 observed**, its log lost to a host disk-full event; a fresh PG17
+  migrated through 0024 booted the store and pocket with both factors unwired (a password change,
+  `/auth/methods` and an erasure succeeding) and refused with `WithPasskeys`, naming 0025;
+  `live-stores` green on the branch, and on `main` before v0.29.0 and the store tags (#207).
+- **§1, the real auth-cms binary over HTTP** (#201, development): **28/28** — enrollment and a
+  replaced pending enrollment; a wrong code leaving the pending row; confirm and its replay
+  refused; a step-up to `aal2` with `methods=[password totp]`; the lockout and its recovery after
+  302 seconds; the AAL2 gates on removal and passkey registration; a recovery code, its reuse
+  refused, and regeneration; 28.8 KB of server output scanned for secrets, codes and ciphertext
+  with no hit. The `Methods` restriction and the admin reset are covered by host tests (the
+  restriction has no env tag; auth-cms's only admin is boot-seeded).
+- **§2, the browser leg** (#204, scratch Playwright, never committed): Chromium and WebKit ×
+  light and dark, **36/36** — the AAL1 redirect to the chooser, enrollment, **the QR screenshot
+  decoding (jsQR) to the page's exact `otpauth://` URI in all four runs** with a white quiet zone
+  in dark, a reload keeping the secret, a wrong code 401 with the same secret, ten recovery
+  codes, a chooser code → `aal2`, an upper-cased recovery code → `aal2`, regeneration without
+  overlap and the old codes refused, removal signing out. CSP: zero violations in Chromium
+  (WebKit's per-run hits are Playwright's screenshot styles; zero on a no-screenshot rerun); axe
+  zero serious/critical in light. The dark-theme contrast hits it found were fixed by #206
+  (serious/critical dark 1–7 per page → 0).
+- **§3, from the tags (this PR).** auth-cms built at `GOWORK=off` from the repinned tree with an
+  empty module cache (`all modules verified`); `go version -m` reads
+  `pockets/authentication v0.29.0`, `pockets/authentication/views/goth v0.8.1`, `ui/goth v0.2.1`,
+  `integrations/encoding/rsc-qr v0.1.0` and `sdk v0.20.0`. A scratch Playwright check (headless
+  Chromium) against that binary in development (in-process delivery so the verification code
+  reaches the console log at once): **14/14 PASS** — register and verify through the forms, sign
+  in, `/demo/mfa` 401 with `insufficient_user_authentication` and `/demo/mfa/page` → the chooser,
+  enrollment PRG to the enroll page, **the QR decoded with jsQR equal to the page's `otpauth://`
+  URI** (issuer `Gopernicus CMS`, the page's secret), confirm with a code computed in Node from
+  the secret → ten recovery codes, a chooser TOTP step-up back to `/demo/mfa/page` and
+  `/demo/mfa` `aal2`; a fresh AAL1 sign-in in a second context, a recovery-code step-up →
+  `aal2`; zero CSP violations; console errors only the two expected AAL1 401 fetches.
+  **production-baseline without Docker** (Docker Desktop hung on the host): built at `GOWORK=off`
+  (authentication v0.29.0, stores/pgx v0.14.0, sdk v0.20.0); a fresh Homebrew PostgreSQL 17.4
+  cluster; its own runner applied the ledger **through `0031_security_events_retention.sql`
+  only** (30 rows in `schema_migrations`; `0032_passkey_credentials.sql` and `0033_totp.sql`
+  skipped, `passkey_credentials`, `totp_credentials` and `recovery_codes` absent); the server
+  booted in development (`auth: mfa posture mfa_required=admins source=config
+  gates=/auth/admin/users* sources=idp methods=any`) and `GET /healthz` answered **200**: an
+  IdP-only host needs neither table. The plan's "boots on ledger 0033, refuses with
+  `recovery_codes` dropped" leg no longer applies (row 10 amended: the baseline wires no TOTP);
+  the wired refusal is pinned by `TestTOTPSchema_Postgres` and `RunTOTPSchemaProbe`. Every
+  example builds, vets and tests at `GOWORK=off`; `make guard` and `make check` pass on the
+  repinned tree; `pnpm build` in `workshop/documentation` succeeds.
+
+**Owner rulings.** Ratified 2026-10-25 ("ratified"), R-1–R-5 at the recommendations: **R-1 (a)**
+split — native `all` and the enrollment grace go to `s4c2-native-all`; **R-2 (a)** the rsc.io/qr
+adapter behind a views/goth `WithQR` hook; **R-3 (a)** a TOTP or recovery-code step-up is AAL2
+on any live first-party session, one predicate for every gate, the residual excludable with
+`Methods`; **R-4 (a)** stdlib RFC 6238 in the pocket; **R-5 (a)** disabling TOTP revokes every
+session. Owner note: every factor is host opt-in (an OAuth-only host like gps-360-go wires
+none). **2026-10-25, first conditional-schema ruling** (amends BE12 / row 10): 0026 still ships,
+but is required only when TOTP is wired; the pocket probes through an optional interface only
+under `WithTOTP`; erasure and the admin reset skip TOTP when it is not wired. **2026-10-25,
+second ruling:** the same rule for S4b's 0025 (`passkey.SchemaProber`; erasure skips passkeys
+when unwired), shipped as PR-2d before this record so the examples repin once. **Lead amendment
+of BE6** after the PR-2a review (M2): a step-up that proves less than the session holds lowers
+assurance, and `mergeMethods` drops carried AAL2 methods below AAL2. Lead-accepted in PR-2d:
+unwired passkeys no longer count as login methods (they cannot be used, so counting them could
+let the policy remove the last usable method). Apple Passwords' behaviour: deferred by the owner.
+
+**Known and deferred.**
+- **To `s4c2-native-all`** (the plan's Notes handoff): native `Required: all` (deny below AAL2
+  on every first-party route but an allowlist of the step-up, TOTP, passkey-registration,
+  recovery-code, methods, me, logout and refresh routes), the enrollment grace
+  (`max(EnrollmentStart, user.CreatedAt) + EnrollmentGrace`, 7-day default, 30-day maximum; 403
+  `mfa_enrollment_required`; refresh re-checks) and the admin re-open through a 0027 per-user
+  marker, with `holdsAAL2Factor` as the enrollment test.
+- **To S4d.** API keys under MFA gates; `aal`/`methods` on delegated tokens; re-sealing TOTP
+  secrets on ring rotation.
+- **From the PR-2a review:** N4, N5, N6, N7 and N9 (nits, deferred at #201).
+- **Follow-ups.** SHA-256 TOTP once Google Authenticator honours it; an escalating lockout
+  replacing the fixed 5 × 5 minutes; a retention job for abandoned pending enrollments
+  (`expires_at`); a committed Playwright spec; Apple Passwords and the other authenticator apps
+  on real devices.
+- **Cosmetic.** With `data-theme=dark` the ui/goth page background outside the card stays white.
+  Pre-existing `gofmt` drift in three untouched ui/goth primitives.
+- **Housekeeping.** README / `ARCHITECTURE.md` module rows still missing: auth0, firebase,
+  external-identity, ui/goth, goth-showcase, and views/goth in the layout tree (#206 added
+  go-oidc).
+- **Owed legs.** Docker Desktop hung on the host from PR-2d on, so the local Linux-container
+  `make test-stores` for #205 and #207 was replaced by `live-stores` dispatches (Linux CI,
+  Postgres + turso), and this PR's from-the-tags baseline boot ran on a native Homebrew
+  PostgreSQL 17 instead of a container. PR-2d's turso count is observed, not logged.
+- **Residuals.** R-3(a) composes AAL2 from a passwordless or OAuth primary plus a possession
+  code (strictly two possession factors), excludable with `Methods`. One code is a recent AAL2
+  login for five minutes, so a stolen unlocked session that reads one code can disable TOTP; the
+  notices are the detective control. Retiring a pepper key kills recovery codes digested under
+  it (the WARN and the regenerate-first step). Clock skew beyond ±30 s fails every code.
+
 ## Passkeys (SOC 2 slice S4b — published 2026-10-25)
 
 Eight annotated tags (not signed) on seven modules, one of them NEW. Each was cut at its PR's

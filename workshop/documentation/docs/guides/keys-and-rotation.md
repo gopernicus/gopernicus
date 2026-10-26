@@ -1,6 +1,6 @@
 ---
 title: Keys and rotation
-description: The five authentication keys, how NewKeys decodes and loads them, what rotating each one costs, and the secrets-pocket key procedures.
+description: The six authentication keys, how NewKeys decodes and loads them, what rotating each one costs, and the secrets-pocket key procedures.
 ---
 
 # Keys and rotation
@@ -14,7 +14,7 @@ production (one joined error naming each variable) and a per-boot `crypto/rand` 
 WARN in development; a malformed value (not hex, too short) is refused in every mode. The
 reference host (`examples/auth-cms/cmd/server/demo.go`) and the `init` scaffold use it.
 
-## The five authentication keys
+## The six authentication keys
 
 | Env (reference host) | Protects | Encoding (`NewKeys`) | Minimum | Rotation consequence |
 |---|---|---|---|---|
@@ -23,6 +23,7 @@ reference host (`examples/auth-cms/cmd/server/demo.go`) and the `init` scaffold 
 | `AUTH_IDENTIFIER_KEY` | PII-free rate-limit and idempotency digests | hex, decoded to bytes | 32 bytes | single key: every budget and idempotency bucket resets once (transient) |
 | `AUTH_DELIVERY_ENCRYPTER_KEY` | AES-256-GCM over queued delivery envelopes (the rendered secret and destination) | hex, decoded to bytes (before S1: a raw 32-byte string) | 32 bytes | single key: drain the queue first; in-flight sealed rows dead-letter under a new key |
 | `AUTH_TOKEN_ENCRYPTER_KEY` | AES-256-GCM over stored OAuth provider tokens | hex, decoded to bytes (before S1: a raw 32-byte string); optional in every mode — unset → provider tokens are not persisted | 32 bytes | single key: stored provider tokens become unreadable; users re-link |
+| `AUTH_TOTP_KEYS` + `AUTH_TOTP_ACTIVE_KEY` (`KeyTOTPRing`, since authentication v0.28.0) | AES-256-GCM over stored TOTP secrets, each sealed with its user id | a ring `id:hex,id:hex` parsed by `cryptids.ParseKeyRing`; the active variable names the sealing id; needed only by a host that wires `WithTOTP` | 32 bytes per ring key | a ring: add the new key, make it active, and keep the old id in the ring while any secret is sealed under it (secrets are not re-sealed on rotation); dropping it means those users' codes stop verifying until an admin TOTP reset and re-enrollment |
 
 Two things to know before you repin a host that copied the pre-S1 reference host:
 
@@ -37,6 +38,16 @@ Two things to know before you repin a host that copied the pre-S1 reference host
   (`printf %s "$OLD" | xxd -p | tr -d '\n'`) so outstanding access tokens, in-flight sealed
   outbox rows and stored provider tokens stay valid. Never mint a new value at the upgrade;
   the consequences are the last column above.
+
+**The TOTP ring and the recovery-code pepper (S4c).** A host that wires TOTP builds the
+encrypter with `cryptids.NewAESGCMRing(keys.TOTPRing)` after naming `KeyTOTPRing` in `need`.
+Development mints a one-key `ephemeral` ring with the usual WARN, so enrolled apps stop working
+on restart; production refuses the ring unset only when `KeyTOTPRing` is needed. Recovery codes
+are not under the TOTP ring: they are digested under `AUTH_CHALLENGE_PEPPER`'s active key, with
+the key id stored beside each digest, and verify under every ring key. **Regenerate recovery
+codes before dropping a pepper key:** a code digested under a dropped key never verifies again.
+While any remain, `New` WARNs `auth: recovery codes sealed under retired pepper keys
+key_ids=[…]`; those users regenerate at their next AAL2 step-up.
 
 There is deliberately no separate CSRF or magic-link key: CSRF is a per-render double-submit
 token, and link tokens are digested under the challenge pepper.
