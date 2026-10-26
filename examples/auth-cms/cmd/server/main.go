@@ -336,6 +336,19 @@ func run(ctx context.Context, log *slog.Logger, runtimeMode environment.Mode) er
 	// The security-event listing (SOC 2 S7), behind the same check with the
 	// action UserAdminReadAudit; each page read records one audit_read row.
 	authCfg.SecurityEventsRoute = true
+	// The fleet-wide revoke (SOC 2 S4d): POST /auth/admin/sessions/revoke-all,
+	// behind the same check with the action UserAdminRevokeAllSessions and the
+	// admins MFA gate. AUTH_GLOBAL_SESSION_REVOCATION_ROUTE=false unmounts it.
+	// The service-account status (AUTH_SERVICE_ACCOUNT_STATUS) and the
+	// registration mode (AUTH_REGISTRATION) are the pocket's own keys, read
+	// with the rest in buildAuthConfig.
+	globalRevoke := struct {
+		Enabled bool `env:"AUTH_GLOBAL_SESSION_REVOCATION_ROUTE" default:"true"`
+	}{}
+	if err := environment.ParseEnvTags("", &globalRevoke); err != nil {
+		return err
+	}
+	authCfg.GlobalSessionRevocationRoute = globalRevoke.Enabled
 	// Apply the selected delivery mode to the auth config. buildAuthConfig returns the
 	// jobs-mode posture (in-memory fenced queue on this host); AUTH_DELIVERY_MODE=in_process flips
 	// it to the bounded EPHEMERAL pool here — and announces that posture LOUDLY. Neither mode
@@ -408,6 +421,21 @@ func run(ctx context.Context, log *slog.Logger, runtimeMode environment.Mode) er
 			return err
 		}
 		authOptions = append(authOptions, auth.WithExternal(external.config))
+	}
+	// AUTH_DEMO_API_KEYS_EXEMPT=1 (development only) lets API keys pass the MFA
+	// gates again (MFAConfig.APIKeysExempt), so the S4d drill can show the
+	// hatch; a real host sets the literal in code, never from the environment.
+	exemptDemo := struct {
+		Enabled bool `env:"AUTH_DEMO_API_KEYS_EXEMPT"`
+	}{}
+	if err := environment.ParseEnvTags("", &exemptDemo); err != nil {
+		return err
+	}
+	if exemptDemo.Enabled {
+		if authCfg.RuntimeMode != environment.ModeDevelopment {
+			return fmt.Errorf("AUTH_DEMO_API_KEYS_EXEMPT requires development mode")
+		}
+		authOptions = append(authOptions, auth.WithMFA(auth.MFAConfig{APIKeysExempt: true}))
 	}
 	// AUTH_DEMO_ADMIN_EMAIL (development only) grants platform admin to the
 	// account that verifies that address (demoadmin.go).

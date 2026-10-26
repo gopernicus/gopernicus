@@ -82,6 +82,9 @@ type Adapter struct {
 	// mfaMethods is MFAConfig.Methods: the AAL2 sources every MFA gate admits,
 	// empty for any.
 	mfaMethods []authlogic.MFAMethod
+	// apiKeysExempt is MFAConfig.APIKeysExempt: an API key passes every MFA
+	// gate instead of the 403 mfa_credential_not_eligible.
+	apiKeysExempt bool
 }
 
 // authenticatorConfig holds the HTTP adapter's resolved policy and dependencies.
@@ -131,11 +134,16 @@ func (s *Adapter) recordMFADenial(ctx context.Context, gate authlogic.MFAGate, c
 }
 
 // mfaRefusal is the one AAL2 predicate every MFA gate applies — RequireMFA(),
-// the admin and machine gates: the credential must hold AAL2, from a source
-// MFAConfig.Methods admits. It returns the denial reason, or "" when cred
-// passes.
+// the admin and machine gates: an API key is refused outright (reason api_key:
+// no key can step up) unless MFAConfig.APIKeysExempt passes it; any other
+// credential must hold AAL2, from a source MFAConfig.Methods admits. It
+// returns the denial reason, or "" when cred passes.
 func (s *Adapter) mfaRefusal(cred Credential) string {
 	switch {
+	case cred.Kind == authlogic.CredentialAPIKey && s.apiKeysExempt:
+		return ""
+	case cred.Kind == authlogic.CredentialAPIKey:
+		return authlogic.MFADenialAPIKey
 	case !cred.Assurance.AtLeast(session.AssuranceAAL2):
 		return authlogic.MFADenialAssurance
 	case !authlogic.MFASourceAllowed(cred, s.mfaMethods):
@@ -150,16 +158,14 @@ func (s *Adapter) mfaAllows(m authlogic.MFAMethod) bool {
 }
 
 // admitMFA runs mfaRefusal for a gate outside RequirePrincipal and records a
-// refusal (gate, reason); an API key always passes, since no key can hold AAL2.
-func (s *Adapter) admitMFA(ctx context.Context, gate authlogic.MFAGate, cred Credential) bool {
-	if cred.Kind == authlogic.CredentialAPIKey {
-		return true
-	}
-	if reason := s.mfaRefusal(cred); reason != "" {
+// refusal (gate, reason). It returns the reason, "" when cred passes; the
+// caller answers it with writeMFARequired.
+func (s *Adapter) admitMFA(ctx context.Context, gate authlogic.MFAGate, cred Credential) string {
+	reason := s.mfaRefusal(cred)
+	if reason != "" {
 		s.recordMFADenial(ctx, gate, cred, reason)
-		return false
 	}
-	return true
+	return reason
 }
 
 // clientIPFor returns the client-info carrier's IP, or clientIP(r) when no

@@ -394,3 +394,66 @@ func TestAdoptedAccountResolvesPendingInvitations(t *testing.T) {
 		t.Fatalf("adoption grants = %v, want the one auto-accept invitation", grants)
 	}
 }
+
+// newProvisioningHostWithMode boots a provisioning host, invitations mounted,
+// under IdentityConfig.Registration mode.
+func newProvisioningHostWithMode(t *testing.T, mode auth.RegistrationMode) *linkHost {
+	t.Helper()
+	sender := &recordingSender{}
+	cfg, err := buildAuthConfig(quietLog(), environment.ModeDevelopment, &recordingGranter{})
+	if err != nil {
+		t.Fatalf("buildAuthConfig: %v", err)
+	}
+	cfg.DeliveryMode = delivery.ModeInProcess
+	cfg.DeliveryJobsAcknowledged = false
+	cfg.DeliveryEphemeralAcknowledged = true
+	cfg.Mailer = sender
+	cfg.PasswordlessProvisionOnRedeem = true
+	cfg.Registration = mode
+	cfg.InviteCheck = func(context.Context, authenticationhttp.InviteCheckRequest) error { return nil }
+	svc, err := auth.New(authmem.New().Repositories(), cfg.TokenSigner, cfg.RuntimeMode, cfg.DeliveryMode, cfg.options()...)
+	if err != nil {
+		t.Fatalf("auth.New: %v", err)
+	}
+	router := mountInProcess(t, svc)
+	stop := runDelivery(t, svc)
+	t.Cleanup(stop)
+	srv := httptest.NewServer(router)
+	t.Cleanup(srv.Close)
+	return &linkHost{t: t, srv: srv, svc: svc, sender: sender, origin: hostAllowedOrigins(t)[0]}
+}
+
+// TestProvisionOnRedeemFollowsTheRegistrationMode proves the mode is decided at
+// issue: closed and an uninvited address under invitation_only mail no link at
+// all, while an invited address gets one that provisions on redeem.
+func TestProvisionOnRedeemFollowsTheRegistrationMode(t *testing.T) {
+	for _, mode := range []auth.RegistrationMode{auth.RegistrationClosed, auth.RegistrationInvitationOnly} {
+		t.Run(string(mode), func(t *testing.T) {
+			host := newProvisioningHostWithMode(t, mode)
+			c := host.newClient()
+			before := host.sender.count()
+			c.startMagicLink(t, "stranger@example.com")
+			time.Sleep(300 * time.Millisecond)
+			for _, m := range host.sender.all()[before:] {
+				if addressedTo(m.To, "stranger@example.com") {
+					t.Fatalf("%s mailed a provisioning link to an address it must not admit", mode)
+				}
+			}
+		})
+	}
+
+	host := newProvisioningHostWithMode(t, auth.RegistrationInvitationOnly)
+	if _, err := host.svc.Invitations.Create(context.Background(), invitations.CreateInput{
+		ResourceType: demoResourceType, ResourceID: demoResourceID, Relation: "member",
+		Identifier: "invitee@example.com", IdentifierKind: "email", InvitedBy: "admin", AutoAccept: true,
+	}); err != nil {
+		t.Fatalf("invitation: %v", err)
+	}
+	c := host.newClient()
+	before := host.sender.count()
+	c.startMagicLink(t, "invitee@example.com")
+	token := host.awaitMagicToken(t, before, "invitee@example.com")
+	if resp, body := c.do("POST", "/auth/passwordless/redeem", `{"token":"`+token+`"}`, nil); resp.StatusCode != http.StatusOK {
+		t.Fatalf("an invitee's redeem = %d %s, want 200", resp.StatusCode, body)
+	}
+}

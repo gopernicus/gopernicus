@@ -1,6 +1,7 @@
 package authenticationhttp
 
 import (
+	"errors"
 	"net/http"
 	"net/url"
 	"time"
@@ -97,6 +98,14 @@ func (h *handlers) oauthCallback(w http.ResponseWriter, r *http.Request) {
 	res, err := h.svc.OAuthCallback(r.Context(), web.Param(r, "provider"), authlogic.OAuthCallbackRequest{
 		Mode: authlogic.OAuthBrowser, Code: q.Get("code"), State: state, FlowSecret: cookie.Value,
 	})
+	var refusal *authlogic.RegistrationRefusal
+	if errors.As(err, &refusal) {
+		// A registration the mode refuses lands the browser on the flow's
+		// destination with a legible outcome, not a JSON page.
+		h.clearOAuthFlowCookie(w, state)
+		http.Redirect(w, r, outcomeRedirect(refusal.RedirectTo, refusal.Code), http.StatusFound)
+		return
+	}
 	if err != nil {
 		web.RespondJSONDomainError(w, err)
 		return
@@ -256,6 +265,20 @@ func pendingLinkRedirect(target, provider string) string {
 	return u.String()
 }
 
+// outcomeRedirect augments a callback destination with ?auth=<code>, the
+// pendingLinkRedirect shape without a provider.
+func outcomeRedirect(target, code string) string {
+	base := redirectOrDefault(target)
+	u, err := url.Parse(base)
+	if err != nil {
+		return base
+	}
+	q := u.Query()
+	q.Set("auth", code)
+	u.RawQuery = q.Encode()
+	return u.String()
+}
+
 // linkedRedirect augments the completed-link callback destination with the outcome
 // code the account page's closed reader whitelists. It mirrors pendingLinkRedirect —
 // url.Values, so existing query values and any fragment survive, and an unparseable
@@ -363,7 +386,7 @@ func (h *handlers) oauthNativeComplete(w http.ResponseWriter, r *http.Request) {
 		Mode: authlogic.OAuthNative, Code: body.Code, State: body.State, FlowSecret: body.FlowSecret,
 	})
 	if err != nil {
-		web.RespondJSONDomainError(w, err)
+		respondRegistrationError(w, err)
 		return
 	}
 	writeNativeOAuthResult(w, res)

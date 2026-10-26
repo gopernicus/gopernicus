@@ -2,12 +2,14 @@ package authentication
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/url"
 	"reflect"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/gopernicus/gopernicus/sdk/pkg/cryptids"
 
@@ -20,6 +22,10 @@ import (
 	"github.com/gopernicus/gopernicus/sdk/capabilities/ratelimiter"
 	"github.com/gopernicus/gopernicus/sdk/pkg/environment"
 )
+
+// serviceAccountStatusProbeTimeout bounds the boot-time probe of the
+// service-account status schema.
+const serviceAccountStatusProbeTimeout = 5 * time.Second
 
 // Components separates ordinary use cases from delivery initialization authority.
 // Hosts pass DeliveryInitializer only to their delivery processor; request handlers
@@ -56,6 +62,8 @@ func New(repos Repositories, signer cryptids.JWTSigner, runtimeMode environment.
 	d.ExternalSubjects = repos.ExternalSubjects
 	d.Passkeys = repos.Passkeys
 	d.TOTP = repos.TOTP
+	d.GlobalSessions = repos.GlobalSessions
+	d.ServiceAccountStatuses = repos.ServiceAccountStatus
 	d.TokenSigner = signer
 	d.RuntimeMode = runtimeMode
 	d.Limiter = limiter
@@ -138,6 +146,7 @@ func New(repos Repositories, signer cryptids.JWTSigner, runtimeMode environment.
 		{"SessionManagement", d.SessionManagement}, {"SecurityEvents", d.SecurityEvents}, {"Invitations", d.Invitations}, {"Compromised", d.Compromised},
 		{"ExternalSubjects", d.ExternalSubjects}, {"Passkeys", d.Passkeys}, {"RelyingParty", d.Passkey.RelyingParty},
 		{"TOTP", d.TOTP}, {"TOTPConfig.Encrypter", d.TOTPConfig.Encrypter},
+		{"GlobalSessions", d.GlobalSessions}, {"ServiceAccountStatus", d.ServiceAccountStatuses},
 	} {
 		if dep.value != nil && nilDependency(dep.value) {
 			return nil, fmt.Errorf("authentication: %s contains a typed nil: %w", dep.name, sdk.ErrInvalidInput)
@@ -148,6 +157,15 @@ func New(repos Repositories, signer cryptids.JWTSigner, runtimeMode environment.
 	}
 	if err := validateTOTP(d); err != nil {
 		return nil, err
+	}
+	if err := validateRegistration(d); err != nil {
+		return nil, err
+	}
+	if err := validateServiceAccountStatus(d); err != nil {
+		return nil, err
+	}
+	if d.APIKeyMaxTTL < 0 {
+		return nil, fmt.Errorf("authentication: MachineConfig.APIKeyMaxTTL is negative: %w", sdk.ErrInvalidInput)
 	}
 	if d.ProvisionOnRedeem && (!slices.Contains(d.Passwordless, sdk.AddressKindEmail) || nilDependency(d.IdentifierKeyer)) {
 		return nil, fmt.Errorf("authentication: provisioning requires email passwordless and IdentifierKeyer: %w", sdk.ErrInvalidInput)
@@ -206,7 +224,7 @@ func New(repos Repositories, signer cryptids.JWTSigner, runtimeMode environment.
 		if err != nil {
 			return nil, err
 		}
-		external = newExternalAuthenticator(repos, cfg, d.RuntimeMode, externalOptions{clock: d.Clock, logger: d.Logger, ids: d.IDs, normalizer: d.Normalizer, keyer: d.IdentifierKeyer, recorder: service.securityEvents})
+		external = newExternalAuthenticator(repos, cfg, d.RuntimeMode, externalOptions{clock: d.Clock, logger: d.Logger, ids: d.IDs, normalizer: d.Normalizer, keyer: d.IdentifierKeyer, recorder: service.securityEvents, registration: service.registration})
 	}
 	service.external = external
 	service.warnOrphanedRecoveryCodes(context.Background())
@@ -285,6 +303,52 @@ func validateTOTP(d constructorConfig) error {
 		if err := prober.ProbeSchema(context.Background()); err != nil {
 			return fmt.Errorf("%w: %w", ErrTOTPSchemaMissing, err)
 		}
+	}
+	return nil
+}
+
+// validateRegistration checks IdentityConfig.Registration in every mode: an
+// unknown value is refused, invitation_only needs an invitation service that
+// can look up a pending invitation, and closed contradicts an external
+// provider that provisions on first verification.
+func validateRegistration(d constructorConfig) error {
+	mode, err := normalizeRegistrationMode(d.Registration)
+	if err != nil {
+		return err
+	}
+	switch mode {
+	case RegistrationInvitationOnly:
+		if _, ok := d.Invitations.(invitationLookup); !ok || nilDependency(d.Invitations) {
+			return ErrRegistrationModeRequiresInvitations
+		}
+	case RegistrationClosed:
+		if d.External != nil && slices.ContainsFunc(d.External.Providers, func(p ExternalProvider) bool { return p.ProvisionOnFirstVerification }) {
+			return ErrRegistrationClosedWithProvisioning
+		}
+	}
+	return nil
+}
+
+// validateServiceAccountStatus checks MachineConfig.ServiceAccountStatus
+// against the wiring: the flag needs the machine repositories and the status
+// repository, whose schema probe runs under a bounded deadline. Only a probe
+// reporting sdk.ErrNotFound means migration 0027 is absent; any other probe
+// failure is sdk.ErrUnavailable. Without the flag nothing here runs, so an
+// unmigrated store boots.
+func validateServiceAccountStatus(d constructorConfig) error {
+	if !d.ServiceAccountStatus {
+		return nil
+	}
+	if nilDependency(d.ServiceAccountStatuses) || nilDependency(d.ServiceAccounts) || nilDependency(d.APIKeys) {
+		return ErrServiceAccountStatusRequires
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), serviceAccountStatusProbeTimeout)
+	defer cancel()
+	if err := d.ServiceAccountStatuses.ProbeSchema(ctx); err != nil {
+		if errors.Is(err, sdk.ErrNotFound) {
+			return fmt.Errorf("%w: %w", ErrServiceAccountStatusSchemaMissing, err)
+		}
+		return fmt.Errorf("authentication: probing the service-account status schema: %w: %w", sdk.ErrUnavailable, err)
 	}
 	return nil
 }

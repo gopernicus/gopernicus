@@ -36,6 +36,52 @@ const (
 // apiKeyPrefixLen is the length of the displayable key prefix (stored plain).
 const apiKeyPrefixLen = 8
 
+// apiKeyNeverExpires is the api_key_minted expires_at detail of a key without
+// an expiry.
+const apiKeyNeverExpires = "never"
+
+var (
+	// ErrAPIKeyTTLExceeded refuses a mint whose expires_at lies beyond now plus
+	// MachineConfig.APIKeyMaxTTL; the returned *APIKeyTTLExceededError carries
+	// the bound. It wraps sdk.ErrInvalidInput (400).
+	ErrAPIKeyTTLExceeded = fmt.Errorf("authentication: API key expires_at exceeds the maximum lifetime: %w", sdk.ErrInvalidInput)
+	// ErrAPIKeyExpiryPast refuses a mint whose expires_at is at or before now.
+	// It wraps sdk.ErrInvalidInput (400).
+	ErrAPIKeyExpiryPast = fmt.Errorf("authentication: API key expires_at is in the past: %w", sdk.ErrInvalidInput)
+	// ErrAPIKeyFilterUnsupported refuses a filtered key listing when the store
+	// does not implement apikey.FilteredLister. It wraps sdk.ErrInvalidInput
+	// (400): the pocket never filters a page in memory.
+	ErrAPIKeyFilterUnsupported = fmt.Errorf("authentication: the API-key store does not support filtered listings: %w", sdk.ErrInvalidInput)
+	// ErrServiceAccountDisabled refuses a mint for a disabled service account.
+	// It wraps sdk.ErrConflict (409).
+	ErrServiceAccountDisabled = fmt.Errorf("authentication: the service account is disabled: %w", sdk.ErrConflict)
+	// ErrServiceAccountStatusUnavailable is returned by DisableServiceAccount
+	// and EnableServiceAccount when MachineConfig.ServiceAccountStatus is not
+	// wired. It wraps sdk.ErrNotFound: an unwired capability is absent.
+	ErrServiceAccountStatusUnavailable = fmt.Errorf("authentication: service-account status is not wired: %w", sdk.ErrNotFound)
+	// ErrServiceAccountStatusRequires is returned by New when
+	// MachineConfig.ServiceAccountStatus is set without
+	// Repositories.ServiceAccountStatus and the machine repositories.
+	ErrServiceAccountStatusRequires = fmt.Errorf("authentication: ServiceAccountStatus requires Repositories.ServiceAccountStatus, ServiceAccounts and APIKeys: %w", sdk.ErrInvalidInput)
+	// ErrServiceAccountStatusSchemaMissing is returned by New when
+	// ServiceAccountStatus is wired and Repositories.ServiceAccountStatus
+	// reports its schema absent: apply migration
+	// 0027_service_account_status.sql. A host that does not wire it is never
+	// probed.
+	ErrServiceAccountStatusSchemaMissing = errors.New("authentication: ServiceAccountStatus is wired but its schema is missing (apply migration 0027_service_account_status.sql)")
+)
+
+// APIKeyTTLExceededError is ErrAPIKeyTTLExceeded with its bound: the maximum
+// lifetime and the latest expires_at a mint at that instant admits.
+type APIKeyTTLExceededError struct {
+	MaxTTL       time.Duration
+	MaxExpiresAt time.Time
+}
+
+func (e *APIKeyTTLExceededError) Error() string { return ErrAPIKeyTTLExceeded.Error() }
+
+func (e *APIKeyTTLExceededError) Unwrap() error { return ErrAPIKeyTTLExceeded }
+
 // Principal is the effective caller resolved from a credential (session, API
 // key, or — when a TokenSigner is wired — a bearer JWT). It is a type alias for
 // sdk.Principal (amendment A-I1): the single value type AV5 pins, which the
@@ -111,14 +157,33 @@ func (s *Service) ListServiceAccounts(ctx context.Context, req list.Request) (li
 // MintAPIKey generates a fresh key for serviceAccountID, persists only its
 // SHA-256 hash, and returns the created record alongside the plaintext key —
 // which is shown exactly once and never recoverable afterward. A zero expiresAt
-// means the key never expires. An unknown service account → sdk.ErrNotFound.
+// means the key never expires, unless MachineConfig.APIKeyMaxTTL bounds it: then
+// it is filled with now plus the bound, an expiresAt beyond that is
+// *APIKeyTTLExceededError, and one at or before now is ErrAPIKeyExpiryPast in
+// every case. An unknown service account → sdk.ErrNotFound; a disabled one,
+// with ServiceAccountStatus wired, → ErrServiceAccountDisabled.
 //
-// A minted key records an api_key_minted audit row carrying the key PREFIX and
-// the account id only (design §5.1 WI3 — never the raw key or its hash). For an
-// act-as-user account the row's UserID is the human owner the key authenticates
-// as, mirroring service_account_created.
+// A minted key records an api_key_minted audit row carrying the key PREFIX, the
+// account id, expires_at (or never) and expires_at_defaulted only (design §5.1
+// WI3 — never the raw key or its hash). For an act-as-user account the row's
+// UserID is the human owner the key authenticates as, mirroring
+// service_account_created.
 func (s *Service) MintAPIKey(ctx context.Context, serviceAccountID, name string, expiresAt time.Time) (apikey.APIKey, string, error) {
 	sa, err := s.serviceAccounts.Get(ctx, serviceAccountID)
+	if err != nil {
+		return apikey.APIKey{}, "", err
+	}
+	if s.accountStatus != nil {
+		status, err := s.accountStatus.GetStatus(ctx, sa.ID)
+		if err != nil {
+			return apikey.APIKey{}, "", storeUnavailable(err)
+		}
+		if status == serviceaccount.StatusDisabled {
+			return apikey.APIKey{}, "", ErrServiceAccountDisabled
+		}
+	}
+	now := s.now()
+	expiresAt, defaulted, err := s.apiKeyExpiry(now, expiresAt)
 	if err != nil {
 		return apikey.APIKey{}, "", err
 	}
@@ -127,13 +192,28 @@ func (s *Service) MintAPIKey(ctx context.Context, serviceAccountID, name string,
 	if err != nil {
 		return apikey.APIKey{}, "", err
 	}
-	k, err := apikey.New(s.ids, serviceAccountID, name, prefix, hashed, expiresAt, s.now())
+	k, err := apikey.New(s.ids, serviceAccountID, name, prefix, hashed, expiresAt, now)
 	if err != nil {
 		return apikey.APIKey{}, "", err
 	}
 	created, err := s.apiKeys.Create(ctx, k)
 	if err != nil {
 		return apikey.APIKey{}, "", err
+	}
+	// A disable that committed between the status read and the insert revoked
+	// every key it saw, but not this one: re-read and revoke it, so no key a
+	// later enable or un-wiring would resurrect survives the race.
+	if s.accountStatus != nil {
+		status, err := s.accountStatus.GetStatus(ctx, sa.ID)
+		if err != nil || status == serviceaccount.StatusDisabled {
+			if rerr := s.apiKeys.Revoke(ctx, created.ID, s.now()); rerr != nil {
+				s.logger.Error("auth: a key minted during a disable was not revoked", "error_kind", ErrorKind(rerr))
+			}
+			if err != nil {
+				return apikey.APIKey{}, "", storeUnavailable(err)
+			}
+			return apikey.APIKey{}, "", ErrServiceAccountDisabled
+		}
 	}
 	// An act-as-user key authenticates as a HUMAN, so the row names that human as
 	// its subject — the same UserID convention service_account_created follows.
@@ -147,17 +227,155 @@ func (s *Service) MintAPIKey(ctx context.Context, serviceAccountID, name string,
 		Type:   securityevent.TypeAPIKeyMinted,
 		Status: securityevent.StatusSuccess,
 		Details: map[string]any{
-			"key_prefix":         created.KeyPrefix,
-			"service_account_id": serviceAccountID,
+			"key_prefix":           created.KeyPrefix,
+			"service_account_id":   serviceAccountID,
+			"expires_at":           apiKeyExpiryDetail(created.ExpiresAt),
+			"expires_at_defaulted": defaulted,
 		},
 	})
 	return created, raw, nil
 }
 
+// apiKeyExpiry applies MachineConfig.APIKeyMaxTTL to a requested expiry at
+// now: a past one is refused, a zero one is filled with the bound (defaulted),
+// and one beyond the bound is refused with it. Without a bound a zero expiry
+// stays never-expiring.
+func (s *Service) apiKeyExpiry(now, expiresAt time.Time) (time.Time, bool, error) {
+	if !expiresAt.IsZero() && !expiresAt.After(now) {
+		return time.Time{}, false, ErrAPIKeyExpiryPast
+	}
+	if s.apiKeyMaxTTL <= 0 {
+		return expiresAt, false, nil
+	}
+	latest := now.Add(s.apiKeyMaxTTL).UTC()
+	if expiresAt.IsZero() {
+		return latest, true, nil
+	}
+	if expiresAt.After(latest) {
+		return time.Time{}, false, &APIKeyTTLExceededError{MaxTTL: s.apiKeyMaxTTL, MaxExpiresAt: latest}
+	}
+	return expiresAt, false, nil
+}
+
+// apiKeyExpiryDetail renders a key's expiry for the audit row: RFC 3339 UTC,
+// or never.
+func apiKeyExpiryDetail(expiresAt time.Time) string {
+	if expiresAt.IsZero() {
+		return apiKeyNeverExpires
+	}
+	return expiresAt.UTC().Format(time.RFC3339)
+}
+
+// APIKeyMaxTTL reports the resolved MachineConfig.APIKeyMaxTTL; zero is
+// unlimited.
+func (s *Service) APIKeyMaxTTL() time.Duration { return s.apiKeyMaxTTL }
+
 // ListAPIKeys returns a cursor-paginated page of a service account's keys
 // (ordered created_at DESC, id DESC).
 func (s *Service) ListAPIKeys(ctx context.Context, serviceAccountID string, req list.Request) (list.Page[apikey.APIKey], error) {
 	return s.apiKeys.ListByServiceAccount(ctx, serviceAccountID, req)
+}
+
+// APIKeyFilterSupported reports whether the key store implements
+// apikey.FilteredLister.
+func (s *Service) APIKeyFilterSupported() bool {
+	_, ok := s.apiKeys.(apikey.FilteredLister)
+	return ok
+}
+
+// ListAPIKeysFiltered is ListAPIKeys narrowed by filter in the store; a zero
+// filter.Now is the service clock. An invalid filter is sdk.ErrInvalidInput; a
+// store without apikey.FilteredLister is ErrAPIKeyFilterUnsupported. A key that
+// expires between two pages moves between statuses: cursors do not bind the
+// clock.
+func (s *Service) ListAPIKeysFiltered(ctx context.Context, serviceAccountID string, filter apikey.Filter, req list.Request) (list.Page[apikey.APIKey], error) {
+	if err := filter.Validate(); err != nil {
+		return list.Page[apikey.APIKey]{}, err
+	}
+	lister, ok := s.apiKeys.(apikey.FilteredLister)
+	if !ok {
+		return list.Page[apikey.APIKey]{}, ErrAPIKeyFilterUnsupported
+	}
+	if filter.Now.IsZero() {
+		filter.Now = s.now()
+	}
+	return lister.ListByServiceAccountFiltered(ctx, serviceAccountID, filter, req)
+}
+
+// ServiceAccountStatusEnabled reports whether MachineConfig.ServiceAccountStatus
+// wired the status repository.
+func (s *Service) ServiceAccountStatusEnabled() bool { return s.accountStatus != nil }
+
+// ServiceAccountStatuses returns the statuses of ids in one read, every id
+// StatusActive while the status repository is not wired.
+func (s *Service) ServiceAccountStatuses(ctx context.Context, ids []string) (map[string]serviceaccount.Status, error) {
+	if s.accountStatus == nil {
+		out := make(map[string]serviceaccount.Status, len(ids))
+		for _, id := range ids {
+			out[id] = serviceaccount.StatusActive
+		}
+		return out, nil
+	}
+	return s.accountStatus.Statuses(ctx, ids)
+}
+
+// DisableServiceAccount pauses the machine identity id: in one store
+// transaction it is marked disabled and every unrevoked key it holds is
+// revoked, so no key of it authenticates and none is minted — and a rollback
+// or un-wiring cannot resurrect the keys. A replay is Changed=false. A changed
+// status records service_account_disabled with keys_revoked, attributed to
+// actor. Unwired → ErrServiceAccountStatusUnavailable; unknown →
+// sdk.ErrNotFound.
+//
+// TRUSTED: it applies NO authorization — the caller owns that decision.
+func (s *Service) DisableServiceAccount(ctx context.Context, actor Principal, id string) (serviceaccount.ServiceAccount, serviceaccount.StatusChange, error) {
+	return s.setServiceAccountStatus(ctx, actor, id, serviceaccount.StatusDisabled)
+}
+
+// EnableServiceAccount restores minting for the disabled machine identity id;
+// the keys the disable revoked stay revoked. A changed status records
+// service_account_enabled. Otherwise it is DisableServiceAccount's twin.
+//
+// TRUSTED: it applies NO authorization — the caller owns that decision.
+func (s *Service) EnableServiceAccount(ctx context.Context, actor Principal, id string) (serviceaccount.ServiceAccount, serviceaccount.StatusChange, error) {
+	return s.setServiceAccountStatus(ctx, actor, id, serviceaccount.StatusActive)
+}
+
+func (s *Service) setServiceAccountStatus(ctx context.Context, actor Principal, id string, status serviceaccount.Status) (serviceaccount.ServiceAccount, serviceaccount.StatusChange, error) {
+	if s.accountStatus == nil || !s.MachineEnabled() {
+		return serviceaccount.ServiceAccount{}, serviceaccount.StatusChange{}, ErrServiceAccountStatusUnavailable
+	}
+	sa, err := s.serviceAccounts.Get(ctx, id)
+	if err != nil {
+		return serviceaccount.ServiceAccount{}, serviceaccount.StatusChange{}, err
+	}
+	change := s.accountStatus.Enable
+	eventType := securityevent.TypeServiceAccountEnabled
+	if status == serviceaccount.StatusDisabled {
+		change, eventType = s.accountStatus.Disable, securityevent.TypeServiceAccountDisabled
+	}
+	result, err := change(ctx, sa.ID, actor.Type+":"+actor.ID, s.now().UTC())
+	if err != nil {
+		return serviceaccount.ServiceAccount{}, serviceaccount.StatusChange{}, err
+	}
+	if result.Changed {
+		details := map[string]any{"service_account_id": sa.ID}
+		if status == serviceaccount.StatusDisabled {
+			details["keys_revoked"] = result.KeysRevoked
+		}
+		userID := ""
+		if sa.ActAsUser {
+			userID = sa.OwnerUserID
+		}
+		s.recordSecurityEvent(ctx, securityEventInput{
+			UserID:  userID,
+			Actor:   securityevent.Principal{Type: actor.Type, ID: actor.ID},
+			Type:    eventType,
+			Status:  securityevent.StatusSuccess,
+			Details: details,
+		})
+	}
+	return sa, result, nil
 }
 
 // RevokeAPIKey marks the key revoked as of now. An unknown key →
@@ -185,6 +403,8 @@ func (s *Service) RevokeAPIKey(ctx context.Context, keyID string) error {
 // ServiceAccounts.Delete and records zero counts with cascade=false. Unknown →
 // sdk.ErrNotFound.
 //
+// With ServiceAccountStatus wired the account's status row goes too.
+//
 // A deletion records one service_account_deleted row attributed to actor —
 // Details carry service_account_id, key_count, unrevoked_key_count and cascade,
 // never a key prefix, hash or key id. A key revoked by the deletion records no
@@ -208,6 +428,11 @@ func (s *Service) DeleteServiceAccount(ctx context.Context, actor Principal, id 
 	}
 	if err != nil {
 		return serviceaccount.Deletion{}, err
+	}
+	if s.accountStatus != nil {
+		if err := s.accountStatus.Delete(ctx, id); err != nil {
+			s.logger.Warn("auth: service-account status row not deleted", "error_kind", ErrorKind(err))
+		}
 	}
 	userID := ""
 	if sa.ActAsUser {
@@ -246,6 +471,10 @@ func auditActor(ctx context.Context) securityevent.Principal {
 // (the pinned GetByHash contract), and then branches in the SERVICE per design
 // §4.1:
 //
+//   - a disabled service account, with ServiceAccountStatus wired → deny,
+//     recording an apikey_auth `blocked` event with reason
+//     service_account_disabled (act-as-user keys included, and the keys the
+//     disable revoked);
 //   - revoked → deny, recording an apikey_auth `blocked` event WITH
 //     service-account attribution (key.ServiceAccountID — exactly why the pinned
 //     GetByHash contract returns revoked rows);
@@ -256,36 +485,50 @@ func auditActor(ctx context.Context) securityevent.Principal {
 //     best-effort touch LastUsedAt.
 //
 // Every denial is the same opaque false, so a response can never distinguish
-// unknown / revoked / expired, and a repository error denies rather than
-// admitting. TouchLastUsed failures never fail authentication. The audit rows
+// unknown / revoked / expired / disabled, and a repository error denies rather
+// than admitting — except an unreadable status, which is a non-nil error
+// matching sdk.ErrUnavailable (503), so an outage never reads as a bad key.
+// TouchLastUsed failures never fail authentication. The audit rows
 // carry the key PREFIX only, never the raw key (design §5.1 WI3). It is the
 // pocket's ONLY raw-key verification path: raw credential verification is not an
 // application-service entry point, so it is reached exclusively through
 // the inbound authenticator.
-func (s *Service) verifyAPIKeyCredential(ctx context.Context, rawKey string) (Principal, Credential, bool) {
+func (s *Service) verifyAPIKeyCredential(ctx context.Context, rawKey string) (Principal, Credential, bool, error) {
 	hashed, err := s.hashAPIKey(rawKey)
 	if err != nil {
 		// An empty/invalid key never matches a stored hash.
-		return Principal{}, Credential{}, false
+		return Principal{}, Credential{}, false, nil
 	}
 	key, err := s.apiKeys.GetByHash(ctx, hashed)
 	if err != nil {
-		return Principal{}, Credential{}, false
+		return Principal{}, Credential{}, false, nil
 	}
 
+	// The account's status is read first, so a key the disable revoked is
+	// attributed to the disable rather than to a bare revocation.
+	if s.accountStatus != nil {
+		status, err := s.accountStatus.GetStatus(ctx, key.ServiceAccountID)
+		if err != nil {
+			return Principal{}, Credential{}, false, storeUnavailable(err)
+		}
+		if status == serviceaccount.StatusDisabled {
+			s.recordAPIKeyAuth(ctx, key, saPrincipal(key.ServiceAccountID), securityevent.StatusBlocked, securityevent.ReasonServiceAccountDisabled)
+			return Principal{}, Credential{}, false, nil
+		}
+	}
 	now := s.now()
 	switch {
 	case key.Revoked():
-		s.recordAPIKeyAuth(ctx, key, saPrincipal(key.ServiceAccountID), securityevent.StatusBlocked)
-		return Principal{}, Credential{}, false
+		s.recordAPIKeyAuth(ctx, key, saPrincipal(key.ServiceAccountID), securityevent.StatusBlocked, "")
+		return Principal{}, Credential{}, false, nil
 	case key.Expired(now):
-		s.recordAPIKeyAuth(ctx, key, saPrincipal(key.ServiceAccountID), securityevent.StatusFailure)
-		return Principal{}, Credential{}, false
+		s.recordAPIKeyAuth(ctx, key, saPrincipal(key.ServiceAccountID), securityevent.StatusFailure, "")
+		return Principal{}, Credential{}, false, nil
 	}
 
 	sa, err := s.serviceAccounts.Get(ctx, key.ServiceAccountID)
 	if err != nil {
-		return Principal{}, Credential{}, false
+		return Principal{}, Credential{}, false, nil
 	}
 	p := effectivePrincipal(sa)
 	// An act-as-user key authenticates AS a human subject, so the subject's
@@ -297,14 +540,14 @@ func (s *Service) verifyAPIKeyCredential(ctx context.Context, rawKey string) (Pr
 		deactivated, err := s.userDeactivated(ctx, p.ID)
 		if err != nil {
 			// Fail closed: an unreadable subject is not proof of an active one.
-			return Principal{}, Credential{}, false
+			return Principal{}, Credential{}, false, nil
 		}
 		if deactivated {
-			s.recordAPIKeyAuth(ctx, key, securityevent.Principal{Type: p.Type, ID: p.ID}, securityevent.StatusBlocked)
-			return Principal{}, Credential{}, false
+			s.recordAPIKeyAuth(ctx, key, securityevent.Principal{Type: p.Type, ID: p.ID}, securityevent.StatusBlocked, "")
+			return Principal{}, Credential{}, false, nil
 		}
 	}
-	s.recordAPIKeyAuth(ctx, key, securityevent.Principal{Type: p.Type, ID: p.ID}, securityevent.StatusSuccess)
+	s.recordAPIKeyAuth(ctx, key, securityevent.Principal{Type: p.Type, ID: p.ID}, securityevent.StatusSuccess, "")
 	// Best-effort: a TouchLastUsed failure must never fail authentication
 	// (design §4.1). Now that the service carries a logger (A5), the previously
 	// silently-swallowed error is logged at WARN with coarse fields only.
@@ -317,19 +560,24 @@ func (s *Service) verifyAPIKeyCredential(ctx context.Context, rawKey string) (Pr
 		APIKeyID:         key.ID,
 		ServiceAccountID: sa.ID,
 		ActAsUser:        sa.ActAsUser,
-	}, true
+	}, true, nil
 }
 
 // recordAPIKeyAuth appends an apikey_auth audit row attributed to actor. Details
-// carries the key PREFIX only (never the raw key or its hash — design §5.1 WI3);
-// for a denied attempt the actor is the owning service account, so a blocked
-// key is traceable even though the credential itself is rejected.
-func (s *Service) recordAPIKeyAuth(ctx context.Context, key apikey.APIKey, actor securityevent.Principal, status string) {
+// carries the key PREFIX only (never the raw key or its hash — design §5.1 WI3)
+// and, when one is given, a bounded reason; for a denied attempt the actor is
+// the owning service account, so a blocked key is traceable even though the
+// credential itself is rejected.
+func (s *Service) recordAPIKeyAuth(ctx context.Context, key apikey.APIKey, actor securityevent.Principal, status, reason string) {
+	details := map[string]any{"key_prefix": key.KeyPrefix}
+	if reason != "" {
+		details["reason"] = reason
+	}
 	s.recordSecurityEvent(ctx, securityEventInput{
 		Actor:   actor,
 		Type:    securityevent.TypeAPIKeyAuth,
 		Status:  status,
-		Details: map[string]any{"key_prefix": key.KeyPrefix},
+		Details: details,
 	})
 }
 

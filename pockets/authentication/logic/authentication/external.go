@@ -79,6 +79,9 @@ type ExternalAuthenticator struct {
 	ids         sdk.IDGenerator
 	now         func() time.Time
 	logger      *slog.Logger
+	// registration is the host's IdentityConfig.Registration (open for an
+	// external-only engine).
+	registration RegistrationMode
 
 	cache   *cacher.Cache
 	logins  *cacher.Cache
@@ -207,6 +210,7 @@ func newExternalAuthenticator(repos ExternalRepositories, cfg ExternalConfig, mo
 		flights:     map[string]*revocationFlight{},
 		episodes:    map[string]*revocationEpisode{},
 	}
+	e.registration = o.registration
 	store := cfg.RevocationCache
 	if store == nil {
 		store = cacher.NewMemory(cacher.WithMaxEntries(cfg.RevocationCacheEntries))
@@ -694,6 +698,18 @@ func (e *ExternalAuthenticator) resolveSubject(ctx context.Context, p externalPr
 			})
 			return "", ErrExternalSubjectUnknown
 		}
+		reason, err := e.registrationRefusal(ctx, identity)
+		if err != nil {
+			return "", err
+		}
+		if reason != "" {
+			e.events.Record(ctx, securityEventInput{
+				Type:    securityevent.TypeExternalSubjectUnknown,
+				Status:  securityevent.StatusFailure,
+				Details: map[string]any{"provider": p.Name, "reason": reason},
+			})
+			return "", ErrExternalSubjectUnknown
+		}
 		if subject, err = e.provision(ctx, p, identity); err != nil {
 			return "", err
 		}
@@ -704,6 +720,32 @@ func (e *ExternalAuthenticator) resolveSubject(ctx context.Context, p externalPr
 		return "", err
 	}
 	return subject.UserID, nil
+}
+
+// registrationRefusal applies the registration mode to an unknown subject
+// about to be provisioned: only a provider-VERIFIED address with a pending
+// invitation is admitted under invitation_only, the email first, then the
+// phone, as provision picks them. An empty reason admits it.
+func (e *ExternalAuthenticator) registrationRefusal(ctx context.Context, identity sdkauth.Identity) (string, error) {
+	if e.registration != RegistrationInvitationOnly {
+		return registrationRefusal(ctx, e.registration, e.invitations, "", "")
+	}
+	kind, value, verified := identifier.KindEmail, identity.Email, identity.EmailVerified
+	if value == "" {
+		kind, value, verified = identifier.KindPhone, identity.Phone, identity.PhoneVerified
+	}
+	if value == "" || !verified {
+		return securityevent.ReasonInvitationRequired, nil
+	}
+	normalized, err := e.normalizer.Normalize(string(kind), value)
+	if err != nil {
+		return securityevent.ReasonInvitationRequired, nil
+	}
+	reason, err := registrationRefusal(ctx, e.registration, e.invitations, string(kind), normalized)
+	if err != nil {
+		return "", storeUnavailable(err)
+	}
+	return reason, nil
 }
 
 // requireActive is the local kill switch. It is never cached.

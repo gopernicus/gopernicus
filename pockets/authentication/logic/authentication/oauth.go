@@ -295,7 +295,10 @@ func ValidOAuthFlowValue(value string) bool {
 // three-way anti-takeover branch (existing link → login; matching email, no link
 // → pending link; no user → register + link) — or, for a session-gated link
 // start, attaches the identity to the linking user. A consumed/expired/unknown
-// state surfaces sdk.ErrNotFound / sdk.ErrExpired. A refusal records an
+// state surfaces sdk.ErrNotFound / sdk.ErrExpired. A registration the
+// IdentityConfig.Registration mode refuses is a *RegistrationRefusal carrying
+// the flow's validated destination, recorded as an oauth_register failure
+// with reason registration_closed or invitation_required. A refusal records an
 // oauth_login failure or blocked row with the provider and a reason, except a
 // link-start conflict, which records an oauth_linked failure, and an unknown
 // provider, which records reason unknown_provider with no provider as a
@@ -421,7 +424,18 @@ func (s *Service) OAuthCallback(ctx context.Context, providerName string, req OA
 		return OAuthResult{}, err
 	}
 
-	// Branch 3: no account claims the email → register + link.
+	// Branch 3: no account claims the email → register + link, when
+	// IdentityConfig.Registration admits the provider-verified address. A
+	// refusal carries the flow's validated destination for the browser lane.
+	reason, err := s.registrationRefusal(ctx, sdk.AddressKindEmail, normEmail)
+	if err != nil {
+		return OAuthResult{}, err
+	}
+	if reason != "" {
+		s.recordOAuth(ctx, "", providerName, securityevent.TypeOAuthRegister, securityevent.StatusFailure, reason)
+		refusal := registrationError(reason)
+		return OAuthResult{}, &RegistrationRefusal{Code: registrationCode(refusal), RedirectTo: fs.RedirectTo, err: refusal}
+	}
 	return s.registerAndLink(ctx, providerName, normEmail, ident, tok, fs.RedirectTo)
 }
 

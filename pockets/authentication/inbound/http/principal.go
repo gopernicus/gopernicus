@@ -28,6 +28,10 @@ var (
 	mfaRequired = &insufficientAuthentication{description: "multi-factor authentication is required"}
 )
 
+// codeMFACredentialNotEligible names the 403 an MFA gate answers an API key:
+// no key can step up, so it gets no challenge.
+const codeMFACredentialNotEligible = "mfa_credential_not_eligible"
+
 // RequirePrincipal is THE authenticator. Its options are OR-sets over credential
 // kinds (Accept) and transports (Transports), a liveness tier (Live,
 // LiveOnMutation, Stateless), assurance requirements (RequireMFA on access and
@@ -86,6 +90,10 @@ func (s *Adapter) RequirePrincipal(opts ...PrincipalOption) web.Middleware {
 				var refused *mfaRefused
 				if errors.As(err, &refused) {
 					s.recordMFADenial(ctx, authlogic.MFAGateRoute, cred, refused.reason)
+					if refused.reason == authlogic.MFADenialAPIKey {
+						writeMFARequired(w, refused.reason)
+						return
+					}
 					if set.browser && cred.Kind == CredentialAccessToken {
 						s.denyBrowserMFA(w, r, cred)
 						return
@@ -236,7 +244,7 @@ func (s *Adapter) denyPrincipal(w http.ResponseWriter, r *http.Request, set prin
 // gets the JSON 401 with the RFC 9470 challenge.
 func (s *Adapter) denyBrowserMFA(w http.ResponseWriter, r *http.Request, cred Credential) {
 	if s.mfaStepUpPath == "" || cred.Transport != TransportCookie {
-		writeMFARequired(w)
+		writeMFARequired(w, "")
 		return
 	}
 	loc := s.mfaStepUpPath
@@ -252,9 +260,15 @@ func (s *Adapter) denyBrowserMFA(w http.ResponseWriter, r *http.Request, cred Cr
 	http.Redirect(w, r, loc, http.StatusSeeOther)
 }
 
-// writeMFARequired writes the JSON 401 an MFA gate outside RequirePrincipal
-// answers, carrying the RFC 9470 challenge.
-func writeMFARequired(w http.ResponseWriter) {
+// writeMFARequired writes an MFA gate's denial for reason: an API key gets
+// the JSON 403 mfa_credential_not_eligible with NO challenge, since it cannot
+// step up and a challenge would loop a machine client; every other reason
+// gets the JSON 401 carrying the RFC 9470 challenge.
+func writeMFARequired(w http.ResponseWriter, reason string) {
+	if reason == authlogic.MFADenialAPIKey {
+		web.RespondJSONError(w, web.ErrForbidden("an API key cannot satisfy multi-factor authentication").WithCode(codeMFACredentialNotEligible))
+		return
+	}
 	w.Header().Set("WWW-Authenticate", mfaRequired.challenge())
 	writeUnauthorized(w)
 }

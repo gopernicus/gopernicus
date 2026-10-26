@@ -501,8 +501,14 @@ func TestExternalAssuranceOptions(t *testing.T) {
 		if c.challenge == "" && header != "" {
 			t.Errorf("%s carried a re-authentication challenge it cannot cure: %q", c.name, header)
 		}
-		if rec, _ := h.serve(mw, extReq{bearer: key}); rec.Code != http.StatusOK {
-			t.Errorf("%s refused an API key (assurance applies to external tokens only): %d", c.name, rec.Code)
+		// The external-evidence options never apply to a key; RequireMFA refuses
+		// one outright (S4d), with a 403 and no challenge.
+		want := http.StatusOK
+		if c.name == "RequireMFA" {
+			want = http.StatusForbidden
+		}
+		if rec, _ := h.serve(mw, extReq{bearer: key}); rec.Code != want || rec.Header().Get("WWW-Authenticate") != "" {
+			t.Errorf("%s over an API key = %d %q, want %d and no challenge", c.name, rec.Code, rec.Header().Get("WWW-Authenticate"), want)
 		}
 	}
 

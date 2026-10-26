@@ -53,7 +53,9 @@ type ExternalProvider struct {
 	// CookieName is the provider's own session cookie, read by the HTTP adapter.
 	CookieName string
 	// ProvisionOnFirstVerification creates a local user for an unknown subject.
-	// The zero value denies unknown subjects.
+	// The zero value denies unknown subjects. Under IdentityConfig.Registration
+	// invitation_only it provisions only a provider-verified address with a
+	// pending invitation; closed beside it is a construction error.
 	ProvisionOnFirstVerification bool
 	// RequireVerifiedEmail denies a token whose email is present but unverified.
 	RequireVerifiedEmail bool
@@ -126,6 +128,9 @@ type externalOptions struct {
 	normalizer identifier.Normalizer
 	keyer      identifierKeyer
 	recorder   *securityevent.Recorder
+	// registration is the service's IdentityConfig.Registration, handed in by
+	// New: an external-only engine stays open.
+	registration RegistrationMode
 }
 
 // WithExternal enables external identity providers on New. The Service builds

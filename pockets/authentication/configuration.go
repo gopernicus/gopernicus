@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"slices"
 	"strings"
+	"time"
 
 	delivery "github.com/gopernicus/gopernicus/pockets/authentication/logic/delivery"
 	"github.com/gopernicus/gopernicus/sdk"
@@ -133,6 +134,35 @@ func validateMFA(cfg constructorConfig) error {
 		}
 	}
 	return nil
+}
+
+// resolveRegistrationSource names where IdentityConfig.Registration came
+// from: config when set, default for the zero value. The value itself is
+// validated by the service constructor.
+func resolveRegistrationSource(cfg constructorConfig) string {
+	if cfg.Registration != RegistrationOpen {
+		return "config"
+	}
+	return "default"
+}
+
+// resolveAPIKeyMaxTTL resolves AdministrationConfig.APIKeyMaxTTL once: a
+// positive value stands (source config); zero is DefaultAPIKeyMaxTTL in
+// production unless APIKeyUnlimitedTTLAcknowledged keeps it unlimited (source
+// acknowledged), and unlimited in development (source default). A negative
+// value is sdk.ErrInvalidInput.
+func resolveAPIKeyMaxTTL(cfg constructorConfig) (time.Duration, string, error) {
+	switch {
+	case cfg.APIKeyMaxTTL < 0:
+		return 0, "", fmt.Errorf("authentication: AdministrationConfig.APIKeyMaxTTL (AUTH_API_KEY_MAX_TTL) is negative: %w", sdk.ErrInvalidInput)
+	case cfg.APIKeyMaxTTL > 0:
+		return cfg.APIKeyMaxTTL, "config", nil
+	case !cfg.RuntimeMode.IsProduction():
+		return 0, "default", nil
+	case cfg.APIKeyUnlimitedTTLAcknowledged:
+		return 0, "acknowledged", nil
+	}
+	return DefaultAPIKeyMaxTTL, "default", nil
 }
 
 // nativeMFA reports whether a native AAL2 source is wired: a passkey relying

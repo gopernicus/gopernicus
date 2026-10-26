@@ -1362,7 +1362,7 @@ pre-composition of it.
 | profile | first-party · delegated | delegated proof requires explicit `Audience` or `DelegatedAudience`; `FirstParty()` excludes delegated proof, API keys and external tokens |
 | audience | exact resource identifiers | `Audience` gates all credentials; `DelegatedAudience` gates only delegated proof (and refuses external tokens) |
 | liveness | `Live()` · `LiveOnMutation()` (**default**) · `Stateless()` | see the liveness table below |
-| assurance | `RequireMFA()` · `FreshAuth(d)` · `VerifiedEmail()` · `Tenant(ids…)` · `Check(fn)` | `RequireMFA()` reads `Credential.Assurance` on access and external tokens ([Assurance model](#assurance-model)); the other four read external provider evidence only. An API key passes every one |
+| assurance | `RequireMFA()` · `FreshAuth(d)` · `VerifiedEmail()` · `Tenant(ids…)` · `Check(fn)` | `RequireMFA()` reads `Credential.Assurance` on access and external tokens ([Assurance model](#assurance-model)) and refuses an API key with a 403 `mfa_credential_not_eligible` unless `MFAConfig.APIKeysExempt`; the other four read external provider evidence only and an API key passes them |
 
 **The primitive and its options:**
 
@@ -2147,9 +2147,9 @@ Four gates require AAL2. Each answers a JSON request with the RFC 9470
 
 | gate | where it runs | scope |
 |---|---|---|
-| `RequireMFA()` (gate `route`) | a `RequirePrincipal` option | access and external tokens on that route; an API key passes |
+| `RequireMFA()` (gate `route`) | a `RequirePrincipal` option | access and external tokens on that route; an API key gets the 403 `mfa_credential_not_eligible` ([API keys at the MFA gates](#api-keys-at-the-mfa-gates)) |
 | `ExternalProvider.RequireMFA` (gate `provider`) | `Verify`, before the subject resolves | every route; a denied token provisions nothing, so its row has no `UserID` |
-| `WithMFA(MFAConfig{Required: MFARequiredAdmins})` (gate `admin`) | `/auth/admin/users*`, after `UserAdminCheck` | callers the check admits; a non-admin keeps the check's 403, so the challenge never reveals who is an administrator; an API key passes |
+| `WithMFA(MFAConfig{Required: MFARequiredAdmins})` (gate `admin`) | `/auth/admin/users*`, after `UserAdminCheck` | callers the check admits; a non-admin keeps the check's 403, so the challenge never reveals who is an administrator; an admitted API key gets the 403 `mfa_credential_not_eligible` |
 | the same `admins`, beside passkeys (gate `machine`) | the machine lifecycle routes, after `MachineRoutesGate` | every caller the gate admits: an AAL1 session cannot mint a key that would then pass the admin gates |
 
 **The zero value resolves once.** `New` resolves `MFAConfig.Required` before
@@ -2174,9 +2174,10 @@ gates=<none|/auth/admin/users*[,machine_lifecycle]|external_tokens>`.
 **`admins` does NOT gate** role routes, cms admin routes or host admin pages: a
 host adds `RequireMFA()` to those itself. Without passkeys it does not gate the
 machine lifecycle routes either.
-**API keys pass every MFA gate**, and an AAL1 native session can mint API keys,
-so a `UserAdminCheck` that admits service accounts allows administration
-without MFA.
+**API keys are refused at every MFA gate** (S4d) unless `MFAConfig.APIKeysExempt`
+restores the pass; without a native factor an AAL1 native session can still mint
+API keys, and `New` WARNs once when the machine routes mount under `admins`
+with no native AAL2 source.
 
 - **Self-check.** Sign in at the IdP with a second factor, then read the newest
   `external_login` row: `select details from security_events where event_type =
@@ -2317,7 +2318,7 @@ bound to, and never leaves the server.
 | sign-in | public, per-IP budget `PublicRouteLimits.Passkey` (30/min), origin gate | a session at AAL2 (UV) or AAL1, answered exactly as `POST /auth/login` |
 | step-up | the caller's live session; user verification is always required, whatever `PasskeyConfig.UserVerification` says (under `preferred` a platform may sign without its biometric — Safari with iCloud Keychain does), so a response without it is refused (`uv_required`); another user's passkey is refused (`user_mismatch`) | the session re-minted (AuthenticatedAt now, the old `ExpiresAt`), the old one deleted; the body adds `assurance`, and a bearer caller gets the new pair |
 | removal | a `remove_passkey` grant (context: the passkey id) under the registration gate's policy; the credential policy must leave a login method | every session of the user revoked; `passkey_removed` and a notice |
-| admin reset | `UserAdminCheck` (action `reset-passkeys`), then the admins gate (an admin API key passes) | every passkey of the target removed and its sessions revoked; `passkeys_reset` and a notice; the user re-enrolls from a primary login |
+| admin reset | `UserAdminCheck` (action `reset-passkeys`), then the admins gate (an admin API key is refused unless `MFAConfig.APIKeysExempt`) | every passkey of the target removed and its sessions revoked; `passkeys_reset` and a notice; the user re-enrolls from a primary login |
 
 An assertion runs in a fixed order — consume the handle, read the credential id,
 load the passkey and then its owner (active; revision R), verify, refuse a
@@ -2633,6 +2634,171 @@ conflict), `totp_locked` (budgeted; `attempts`, `locked_for_seconds`),
 enroll, removal, reset, regeneration and each recovery-code use. No row carries
 a secret, code, digest, key URI or ciphertext.
 
+## Session and machine governance (SOC 2 S4d)
+
+Four host opt-ins: end every session with one audited call, choose who may
+create an account, bound and pause machine credentials, and keep API keys out
+of the MFA gates. Each is off, or today's behaviour, until the host asks.
+
+### Revoking every session
+
+`Service.RevokeAllSessions(ctx, actor)` ends every session in the fleet. It
+needs `Repositories.GlobalSessions` (the bundled stores fill it; nil →
+`ErrGlobalRevocationUnsupported`). It pages active users by id in batches of
+500, one store transaction each, in the per-user lock order — bump
+`auth_revision`, then delete the sessions, step-up grants and `password_reset`
+challenges — and finally sweeps the sessions and grants of users who are not
+active. The run is not globally atomic: a failure leaves the earlier batches
+committed and returns the partial counts beside the error; running it again is
+safe (it bumps again). It records `all_sessions_revoked_global` twice,
+attributed to the actor: `started` (`batch_size`) before the first batch, then
+`success` with `users`, `sessions`, `grants`, `batches` and `duration_ms` — or
+`failure` with the partial counts and `error_kind`. An evidence row that cannot
+be written is logged at ERROR.
+
+| Credential or proof | After `RevokeAllSessions` |
+|---|---|
+| refresh token, `Live()` routes, step-up grants, pending magic links / OTPs / OAuth codes / passkey and TOTP pending rows | dead at once (row gone or revision fenced) |
+| first-party access JWT on `LiveOnMutation` safe reads and on `Stateless()` routes | valid for at most `SessionsConfig.AccessTokenTTL` (15 m by default); rotate `AUTH_JWT_SECRET` for immediate death |
+| delegated OAuth2 connections | disconnected (they are sessions) |
+| API keys, act-as-user keys included | untouched — a separate rail: pair with key revocation or `DisableServiceAccount` |
+| external IdP tokens | the provider's session; the local kill switch is deactivation |
+| invitation tokens; deactivated or erased users' rows | untouched; swept (no bump) |
+
+**The opt-in route.** `AdministrationConfig.GlobalSessionRevocationRoute`
+mounts `POST /auth/admin/sessions/revoke-all` (set without `GlobalSessions` or
+`UserAdminCheck` → `ErrGlobalSessionRevocationRouteRequires`). It runs its own
+authenticator — a first-party access token or an external token, `Live()` —
+whatever `BundledRouteAuth.UserAdministration` admits, so an API key (which
+survives the revoke) and a delegated token are a 401; then the browser-safe gate, `UserAdminCheck` with
+`UserAdminRevokeAllSessions` (`revoke-all-sessions`, no target) and the admins
+MFA gate, then one call a minute per actor (429). An external admin's own IdP
+session survives the revoke — its next token signs in again — so the per-actor
+budget is the throttle on a repeat. The body is strict `{}`; the
+200 is `{"users":n,"sessions":n,"grants":n,"batches":n,"revoked_at":"<UTC RFC
+3339 nanos>"}` and clears the session cookies — the caller's own session is gone
+with the rest. It is JSON only, and distinct from the self-service
+`POST /auth/sessions/revoke-all`. Under `MFAConfig.Required: none` it is
+reachable at AAL1; the host check decides. The run is detached from the
+request (bounded at 10 minutes), so a client disconnect or a proxy idle timeout
+does not stop it — but the client then never sees the 200: give the route a
+proxy read timeout longer than a fleet run, or read the outcome from the
+`all_sessions_revoked_global` rows. A run that fails after a committed batch
+answers its error with the partial counts and clears the session cookies.
+
+**When the admin path is the thing that is compromised** — an IdP or an admin
+sign-in — the route may be unreachable. The method is the API; a host keeps a
+CLI beside its server:
+
+```go
+// cmd/revoke-all: same wiring as the server, no HTTP.
+components, err := authentication.New(repos, signer, mode, delivery.ModeOff, options...)
+if err != nil {
+	log.Fatal(err)
+}
+res, err := components.Authentication.RevokeAllSessions(ctx, sdk.Principal{Type: "system", ID: "incident-cli"})
+log.Printf("revoked users=%d sessions=%d grants=%d batches=%d err=%v", res.Users, res.Sessions, res.Grants, res.Batches, err)
+```
+
+### Registration mode
+
+`IdentityConfig.Registration` (`AUTH_REGISTRATION`) chooses who may create an
+account, on every path: `open` (the zero value), `invitation_only` or `closed`.
+An unknown value refuses boot in every mode; `invitation_only` needs a Granter
+(`ErrRegistrationModeRequiresInvitations`); `closed` beside an external
+provider with `ProvisionOnFirstVerification` is
+`ErrRegistrationClosedWithProvisioning`. The boot line is `auth: registration
+registration=<mode> source=config|default`.
+
+| Path | `open` | `invitation_only` | `closed` |
+|---|---|---|---|
+| `POST /auth/register` | as before | the pending-invitation lookup runs FIRST → 403 `registration_invitation_required`; then the usual checks (the 409 keeps its meaning) | the routes are unmounted (POST and the GET page answer 404); `/auth/verify` and the resend stay for accounts already awaiting verification |
+| passwordless provision-on-redeem | as before | a link provisions only for an address with a pending invitation at issue; an uninvited unknown address gets no link, and a redeem is the generic 401 | never provisions |
+| OAuth first sign-in | as before | the provider-verified email must have a pending invitation | refused |
+| external first verification (`ProvisionOnFirstVerification`) | as before | a provider-VERIFIED email (or phone) with a pending invitation; unverified → refused | construction error |
+| invitation accept | session-gated; creates no account | — | — |
+
+A pending invitation is one a verification could still act on: pending and
+unexpired, or accepting, whether or not it auto-accepts. Refusals are
+`ErrRegistrationClosed` / `ErrRegistrationInvitationRequired` (both
+`sdk.ErrForbidden`; codes `registration_closed` /
+`registration_invitation_required`). The register refusal records `register
+failure`, OAuth `oauth_register failure`, external `external_subject_unknown`,
+each with `reason=registration_closed|invitation_required`. The browser OAuth
+callback clears the flow cookie and 302s to the flow's validated destination
+with `?auth=registration_closed|registration_invitation_required`; the native
+complete answers the coded 403. `LoginPage.RegistrationClosed` hides the
+"Create an account" link under `closed` only.
+
+**Residuals, by design.** `invitation_only` answers "an invitation is pending
+for this address" at `POST /auth/register` (register already reveals existence
+through its 409); the per-IP register budget is the mitigation. A passwordless
+link issued under `invitation_only` provisions even if the invitation is
+revoked before the redeem (the binding decides), and registrations pending when
+the mode flips are not re-checked at verify.
+
+### API-key lifetime, listing and pause
+
+**Lifetime.** `AdministrationConfig.APIKeyMaxTTL` (`AUTH_API_KEY_MAX_TTL`)
+bounds a minted key. Zero resolves to `DefaultAPIKeyMaxTTL` (365 days) in
+production and to unlimited in development; `APIKeyUnlimitedTTLAcknowledged`
+keeps production unlimited with one `posture_waiver` WARN; 90 days is the
+recommended setting for hosts that rotate. An omitted `expires_at` is filled
+with now plus the bound (echoed in the 201); one beyond it is 400
+`api_key_ttl_exceeded` with `max_ttl_seconds` and `max_expires_at`; one at or
+before now is 400 `api_key_expiry_past` in every case. `api_key_minted` carries
+`expires_at` (or `never`) and `expires_at_defaulted`. Existing keys are
+untouched, and nothing warns before a key expires: find the keys that will,
+across accounts, in SQL —
+`select service_account_id, key_prefix, expires_at from api_keys where revoked_at is null and (expires_at is null or expires_at < now() + interval '30 days')`.
+The boot line is `auth: api key lifetime api_key_max_ttl=<d>|unlimited
+source=config|default|acknowledged`.
+
+**Listing.** `GET /auth/service-accounts/{id}/keys` takes
+`?status=active|expired|revoked` and `?never_expires=true|false`, filtered in
+the store (`apikey.FilteredLister`, an optional interface beside the port;
+without it a filtered call is 400 `filter_unsupported`). Each key may appear
+once; an unknown value is 400 `filter_invalid`; `status=expired` beside
+`never_expires=true` is 400 `filter_contradiction`. A key expires at or before
+the instant; revoked takes precedence. Every row carries its derived `status`.
+Cursors do not bind the clock: a key that expires between two pages moves.
+
+**Pause.** `AdministrationConfig.ServiceAccountStatus`
+(`AUTH_SERVICE_ACCOUNT_STATUS`) reads `Repositories.ServiceAccountStatus`
+(migration 0027; without the repository → `ErrServiceAccountStatusRequires`, a
+store reporting it absent → `ErrServiceAccountStatusSchemaMissing`; unset, the
+table is never read). `DisableServiceAccount` marks the account disabled AND
+revokes every unrevoked key in one transaction; `EnableServiceAccount` restores
+minting only — the keys stay revoked. A disabled account mints nothing (409
+`service_account_disabled`) and its keys, act-as-user ones included, are
+refused (`apikey_auth blocked reason=service_account_disabled`); with the
+status wired, every API-key authentication reads it, so a status-store outage
+answers 503 on API-key routes, never a 401. A mint that races a disable
+re-reads the status after its insert and revokes its own key, so no key minted
+in the race survives an enable. With the machine routes mounted, `POST
+/auth/service-accounts/{id}/disable|enable` (strict `{}`) answer
+`{"service_account":{…},"changed":bool,"keys_revoked":n}`;
+`serviceAccountResponse.status` is always present (`active` when unwired).
+Events: `service_account_disabled {keys_revoked}`, `service_account_enabled`.
+`changed_by` records the actor as `<type>:<id>`. Deleting a service account
+deletes its status row best-effort: a failure leaves an orphan row, harmless
+because account ids are never reused. A compromised account: revoke its keys
+or delete it; disable is a reversible pause of future mints. Un-wiring the flag or rolling the binary back stops
+reading the table, so mints on a disabled account resume — the keys the
+disable revoked stay revoked, which is why disable revokes.
+
+### API keys at the MFA gates
+
+An API key cannot step up, so `RequireMFA()`, the admins gate and the machine
+gate refuse it outright: a JSON 403 `mfa_credential_not_eligible` with NO
+`WWW-Authenticate` challenge (under `Browser()` too), recorded as
+`mfa_required_denied reason=api_key credential=api_key`. A service account that
+administers users through `UserAdminCheck`, or calls a route that both accepts
+keys and requires MFA, is refused from this release. `MFAConfig.APIKeysExempt`
+restores the pass at every gate (production logs
+`posture_waiver=APIKeysExempt`); the revoke-all route refuses keys regardless.
+The MFA boot line gains `api_keys=denied|exempt`.
+
 ## Repositories (the ports a host or store adapter satisfies)
 
 The bundled store adapters fill the whole bundle from one handle
@@ -2668,6 +2834,9 @@ type Repositories struct {
     APIKeys         apikey.APIKeyRepository
     SecurityEvents  securityevent.SecurityEventRepository
     Invitations     invitation.InvitationRepository
+    // S4d optional capabilities (new slots; no existing port changed).
+    GlobalSessions       session.GlobalRevoker              // RevokeAllSessions (no schema change)
+    ServiceAccountStatus serviceaccount.StatusRepository    // disable/enable (migration 0027; read only when wired)
 }
 ```
 
@@ -2682,6 +2851,8 @@ Nil semantics:
 | `ServiceAccounts`, `APIKeys` | both nil → machine subsystem OFF | **both-or-neither** → `ErrMachineReposRequired` |
 | `SecurityEvents` | **no audit trail** — the recording site is a no-op (AV9); degrades silently by design | none — never a construction error |
 | `Invitations` | allowed only while `Granter` is nil | Granter set + nil → `ErrInvitationRepoRequired` |
+| `GlobalSessions` | `RevokeAllSessions` refuses with `ErrGlobalRevocationUnsupported` | `GlobalSessionRevocationRoute` set + nil → `ErrGlobalSessionRevocationRouteRequires` |
+| `ServiceAccountStatus` | never read unless `AdministrationConfig.ServiceAccountStatus`; accounts are all active | flag set + nil → `ErrServiceAccountStatusRequires`; the probe answering `sdk.ErrNotFound` → `ErrServiceAccountStatusSchemaMissing` (naming 0027) |
 | `UserAdmin`, `ActiveSessions` | the account-lifecycle capability is OFF: the trusted admin methods fail closed with `ErrUserAdminUnavailable`, the bundled admin routes are not registered, and session minting uses the unfenced `Sessions.Create` | `AdministrationConfig.UserAdminCheck` set + either nil → `ErrUserAdminReposRequired`. The reverse is **not** an error: a bundled store adapter always supplies both, and the routes stay unmounted until the host makes an authorization decision |
 
 Sentinel contract (the port doc comments are the spec; `storetest` is its
@@ -2819,8 +2990,10 @@ must be drained-first (in-flight sealed payloads dead-letter), the provider-toke
 key loses stored OAuth tokens (users re-link), and the identifier key resets
 rate-limit/idempotency buckets once (transient). **JWT-secret rotation does not end
 sessions:** refresh never consults the signer, so a client holding a refresh token
-mints a new access token under the new key. To end sessions, revoke them
-(deactivate the user, log out, or delete the session rows).
+mints a new access token under the new key. To end sessions, revoke them —
+deactivate the user, log out, or, for every session in the fleet,
+`Service.RevokeAllSessions` ([Revoking every session](#revoking-every-session));
+deleting session rows by hand does not bump revisions and is not a substitute.
 
 | variable | `KeyName` | decoded length | role | unset in development | unset in production |
 |---|---|---|---|---|---|

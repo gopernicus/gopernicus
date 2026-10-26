@@ -219,13 +219,15 @@ func Stateless() PrincipalOption {
 // (Credential.Assurance): an access token whose session a user-verified
 // passkey, a TOTP or a recovery code signed in or stepped up, or an external
 // token whose provider asserted multi-factor authentication — from a source
-// MFAConfig.Methods admits (Credential.Methods). An API key passes (no key can
-// reach AAL2). A JSON denial carries the RFC 9470
+// MFAConfig.Methods admits (Credential.Methods). An API key cannot reach AAL2,
+// so it is refused with a JSON 403 mfa_credential_not_eligible and no
+// challenge — under Browser() too — unless MFAConfig.APIKeysExempt passes it.
+// Any other JSON denial carries the RFC 9470
 // insufficient_user_authentication challenge; under Browser() an access-token
 // cookie is redirected to the step-up page (the TOTP chooser, else the passkey
 // page) when its views are wired, and otherwise gets that JSON 401. A
 // credential service that implements MFADenialRecorder records one
-// mfa_required_denied row (gate route, reason assurance or method).
+// mfa_required_denied row (gate route, reason assurance, method or api_key).
 func RequireMFA() PrincipalOption {
 	return func(set *principalSet) {
 		set.assurances = append(slices.Clip(set.assurances), assurance{accessTokens: true, mfa: true})
@@ -377,15 +379,19 @@ func (set principalSet) resolves(kind CredentialKind) bool {
 
 // assure applies the set's assurance options in option order: every option to
 // an external token, RequireMFA alone to an access token (a set admitting
-// access tokens carries no other), none to an API key. RequireMFA runs mfa, the
-// adapter's AAL2 predicate.
+// access tokens carries no other) and to an API key, which never meets the
+// external-evidence checks. RequireMFA runs mfa, the adapter's AAL2 predicate,
+// which refuses a key unless MFAConfig.APIKeysExempt.
 func (set principalSet) assure(ctx context.Context, cred Credential, mfa func(Credential) string) error {
 	switch cred.Kind {
-	case CredentialExternalToken, CredentialAccessToken:
+	case CredentialExternalToken, CredentialAccessToken, CredentialAPIKey:
 	default:
 		return nil
 	}
 	for _, a := range set.assurances {
+		if cred.Kind == CredentialAPIKey && !a.mfa {
+			continue
+		}
 		if cred.Kind == CredentialAccessToken && !a.accessTokens {
 			continue
 		}

@@ -31,7 +31,10 @@ func (s *Service) Authenticate(ctx context.Context, kind CredentialKind, transpo
 		if transport != TransportHeader || !s.MachineEnabled() {
 			return ctx, errCredentialRejected
 		}
-		principal, credential, ok = s.verifyAPIKeyCredential(ctx, raw)
+		var err error
+		if principal, credential, ok, err = s.verifyAPIKeyCredential(ctx, raw); err != nil {
+			return ctx, err
+		}
 	case CredentialExternalToken:
 		if s.external == nil {
 			return ctx, errCredentialRejected

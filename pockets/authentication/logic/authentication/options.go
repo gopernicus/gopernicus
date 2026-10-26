@@ -136,6 +136,16 @@ type Repositories struct {
 	// transaction-capable adapter as Users, Sessions, AuthenticationGrants and
 	// Passkeys.
 	TOTP totp.Repository
+	// GlobalSessions ends every session in the fleet (RevokeAllSessions). It
+	// is optional; nil leaves the global revocation unsupported. It must be
+	// backed by the same transaction-capable adapter as Users, Sessions,
+	// AuthenticationGrants and Challenges.
+	GlobalSessions session.GlobalRevoker
+	// ServiceAccountStatus stores the service-account disable/enable status.
+	// It is read only when WithMachine sets ServiceAccountStatus; it must be
+	// backed by the same transaction-capable adapter as APIKeys, because a
+	// disable revokes the account's keys in the same transaction.
+	ServiceAccountStatus serviceaccount.StatusRepository
 }
 
 // TOTPConfig enables the authenticator-app second factor and recovery codes.
@@ -268,6 +278,13 @@ type IdentityConfig struct {
 	// hints and every sensitive mutation route it before their revision-CAS Apply.
 	// Nil selects the bundled safe credential.NewDefaultPolicy default.
 	CredentialPolicy credential.Policy
+	// Registration selects who may create an account, on every account-creating
+	// path: open (the zero value), invitation_only or closed. An unknown value
+	// is sdk.ErrInvalidInput; invitation_only needs WithInvitations
+	// (ErrRegistrationModeRequiresInvitations); closed beside an external
+	// provider with ProvisionOnFirstVerification is
+	// ErrRegistrationClosedWithProvisioning.
+	Registration RegistrationMode
 }
 
 // WithIdentity replaces the complete IdentityConfig group, including zero values.
@@ -276,6 +293,30 @@ func WithIdentity(value IdentityConfig) Option {
 		c.Normalizer = value.Normalizer
 		c.IdentifierKeyer = value.IdentifierKeyer
 		c.CredentialPolicy = value.CredentialPolicy
+		c.Registration = value.Registration
+	}
+}
+
+// MachineConfig governs the machine credentials: how long a minted API key may
+// live and whether service accounts carry a disable/enable status.
+type MachineConfig struct {
+	// APIKeyMaxTTL bounds a minted key's life: an expires_at beyond now plus
+	// it is ErrAPIKeyTTLExceeded, and an omitted one is filled with now plus
+	// it. Zero is unlimited. The pocket root resolves its production default
+	// before it reaches here.
+	APIKeyMaxTTL time.Duration
+	// ServiceAccountStatus reads Repositories.ServiceAccountStatus: a disabled
+	// account mints no key and its keys do not authenticate. Without the
+	// repository it is ErrServiceAccountStatusRequires; a store reporting its
+	// schema absent is ErrServiceAccountStatusSchemaMissing.
+	ServiceAccountStatus bool
+}
+
+// WithMachine replaces the complete MachineConfig group, including zero values.
+func WithMachine(value MachineConfig) Option {
+	return func(c *constructorConfig) {
+		c.APIKeyMaxTTL = value.APIKeyMaxTTL
+		c.ServiceAccountStatus = value.ServiceAccountStatus
 	}
 }
 

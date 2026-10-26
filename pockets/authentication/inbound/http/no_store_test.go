@@ -1,12 +1,16 @@
 package authenticationhttp
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
+	authlogic "github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/apikey"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/oauthstate"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/serviceaccount"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/session"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/oauth"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/ratelimiter"
@@ -31,11 +35,14 @@ func (r *recordingRegistrar) Handle(method, path string, _ http.HandlerFunc, mid
 // the response carries Cache-Control: no-store.
 func TestEveryBundledRouteIsNoStore(t *testing.T) {
 	users := newMemUsers()
+	sessions := &memSessions{m: map[string]session.Session{}}
+	sas := &memServiceAccounts{m: map[string]serviceaccount.ServiceAccount{}}
+	keys := &memAPIKeys{m: map[string]apikey.APIKey{}}
 	svc := newServiceWithFakes(authenticationFixture{
 		Users:                   users,
 		Identifiers:             newMemIdentifiers(users),
 		Passwords:               &memPasswords{m: map[string]string{}},
-		Sessions:                &memSessions{m: map[string]session.Session{}},
+		Sessions:                sessions,
 		Hasher:                  fakeHasher{},
 		Limiter:                 ratelimiter.NewMemory(),
 		OAuthAccounts:           &memOAuthAccounts{},
@@ -44,11 +51,29 @@ func TestEveryBundledRouteIsNoStore(t *testing.T) {
 		OAuthCallbackBase:       "https://app.example.com",
 		OAuthNativeRedirectURIs: []string{"com.example.app:/oauth"},
 		TokenSigner:             newFakeSigner(),
+		ServiceAccounts:         sas,
+		APIKeys:                 filteredKeys{keys},
+		UserAdmin:               memUserAdmin{},
+		GlobalSessions:          &fakeGlobalRevoker{sess: sessions},
+		ServiceAccountStatuses:  &memAccountStatus{sas: sas, keys: keys, m: map[string]serviceaccount.Status{}},
+		Machine:                 authlogic.MachineConfig{ServiceAccountStatus: true},
 	})
 	rec := &recordingRegistrar{}
-	mount(rec, mountDeps{Auth: svc, Views: stubViews{}})
+	// The admin and machine surfaces and every S4d opt-in mount too, so a new
+	// route that forgets the registrar wrap is caught here.
+	mount(rec, mountDeps{Auth: svc, Views: stubViews{}, UserAdminCheck: func(context.Context, UserAdminCheckRequest) error { return nil },
+		MachineGate: allowMachineGate, GlobalRevoker: svc, AccountStatus: svc, KeyFilter: svc})
 	if len(rec.routes) < 40 {
 		t.Fatalf("recorded %d routes; the fixture should mount the password, OAuth and HTML surfaces", len(rec.routes))
+	}
+	mounted := map[string]bool{}
+	for _, route := range rec.routes {
+		mounted[route.method+" "+route.path] = true
+	}
+	for _, want := range []string{"POST /auth/admin/sessions/revoke-all", "POST /auth/service-accounts/{id}/disable", "POST /auth/service-accounts/{id}/enable", "GET /auth/service-accounts/{id}/keys"} {
+		if !mounted[want] {
+			t.Errorf("%s is not mounted by the fixture", want)
+		}
 	}
 	bare := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
 	for _, route := range rec.routes {

@@ -2,6 +2,7 @@ package authentication
 
 import (
 	"testing"
+	"time"
 
 	"github.com/gopernicus/gopernicus/sdk/pkg/environment"
 )
@@ -18,6 +19,9 @@ func TestConfigEnvTags(t *testing.T) {
 	t.Setenv("AUTH_REDIRECT_ALLOWLIST", "https://app.example.com/welcome")
 	t.Setenv("AUTH_REQUIRE_VERIFIED_EMAIL", "true")
 	t.Setenv("AUTH_PASSWORDLESS", "email,phone")
+	t.Setenv("AUTH_REGISTRATION", "invitation_only")
+	t.Setenv("AUTH_SERVICE_ACCOUNT_STATUS", "true")
+	t.Setenv("AUTH_API_KEY_MAX_TTL", "2160h")
 
 	var cfg constructorConfig
 	if err := environment.ParseEnvTags("", &cfg); err != nil {
@@ -41,6 +45,28 @@ func TestConfigEnvTags(t *testing.T) {
 	}
 	if got, want := cfg.Passwordless, []string{"email", "phone"}; !equalStrings(got, want) {
 		t.Errorf("Passwordless = %v, want %v", got, want)
+	}
+	if cfg.Registration != RegistrationInvitationOnly {
+		t.Errorf("Registration = %q, want invitation_only", cfg.Registration)
+	}
+	if !cfg.ServiceAccountStatus {
+		t.Error("ServiceAccountStatus = false, want true")
+	}
+	if cfg.APIKeyMaxTTL != 2160*time.Hour {
+		t.Errorf("APIKeyMaxTTL = %v, want 2160h", cfg.APIKeyMaxTTL)
+	}
+
+	// The group structs carry the same keys, so a host embedding them parses
+	// them alike.
+	var groups struct {
+		IdentityConfig
+		AdministrationConfig
+	}
+	if err := environment.ParseEnvTags("", &groups); err != nil {
+		t.Fatalf("ParseEnvTags(groups): %v", err)
+	}
+	if groups.Registration != RegistrationInvitationOnly || !groups.ServiceAccountStatus || groups.APIKeyMaxTTL != 2160*time.Hour {
+		t.Errorf("groups = %q %v %v", groups.Registration, groups.ServiceAccountStatus, groups.APIKeyMaxTTL)
 	}
 }
 

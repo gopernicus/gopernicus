@@ -52,6 +52,16 @@ type handlers struct {
 	// machineMFA requires AAL2 on the machine lifecycle routes after the host's
 	// MachineGate (MFAConfig admins beside passkeys or TOTP).
 	machineMFA bool
+	// globalRevoker drives the opt-in revoke-all route; nil leaves it unmounted.
+	globalRevoker globalSessionRevoker
+	// accountStatus is the service-account status, nil unless wired: the
+	// machine DTOs then report every account active.
+	accountStatus serviceAccountStatusManager
+	// keyFilter is the filtered key listing; nil answers a filtered call 400.
+	keyFilter apiKeyFilterLister
+	// registration is IdentityConfig.Registration: closed unmounts the
+	// registration routes and hides the login page's link.
+	registration authlogic.RegistrationMode
 	// htmlPolicy is the optional, technology-neutral HTML resource policy (design
 	// §9.2, GOTH-0.4) writeHTMLSecurity applies to every HTML page and redirect. Nil
 	// → the historical asset-free CSP (script-src nonce-only); non-nil → the fixed
@@ -129,6 +139,18 @@ type mountDeps struct {
 	TOTP totpService
 	// TOTPViews renders the TOTP pages; nil → the TOTP routes are JSON-only.
 	TOTPViews TOTPViews
+	// GlobalRevoker drives POST /auth/admin/sessions/revoke-all. Nil unless
+	// the host opted in (WithGlobalSessionRevocationRoute) and the service's
+	// global revocation is wired.
+	GlobalRevoker globalSessionRevoker
+	// AccountStatus is the service-account status when the service wires it;
+	// nil leaves the disable/enable routes unmounted.
+	AccountStatus serviceAccountStatusManager
+	// KeyFilter is the service's filtered key listing; nil answers a filtered
+	// GET /auth/service-accounts/{id}/keys with 400 filter_unsupported.
+	KeyFilter apiKeyFilterLister
+	// Registration is the service's IdentityConfig.Registration.
+	Registration authlogic.RegistrationMode
 }
 
 // RouteAuthentication is the authenticator each bundled route group runs behind
@@ -259,7 +281,8 @@ func mount(r pockets.RouteRegistrar, d mountDeps) {
 	r = clientInfoRegistrar{inner: noStoreRegistrar{inner: r}, proxies: d.Proxies}
 	h := &handlers{oauth2: d.OAuth2, inviteCheck: d.InviteCheck, resourceRule: d.ResourceRule, userAdminCheck: d.UserAdminCheck, adminMFA: d.AdministrationMFA, eraser: d.Eraser, events: d.SecurityEvents, syncer: d.InvitationSync, claims: d.ClaimIdentifiers, svc: svc, inv: inv, listStrategy: d.ListStrategy, mutation: d.Mutation, views: views, htmlPolicy: d.HTMLPolicy,
 		passkeys: d.Passkeys, passkeyViews: d.PasskeyViews, totp: d.TOTP, totpViews: d.TOTPViews,
-		machineMFA: d.AdministrationMFA && (d.Passkeys != nil || d.TOTP != nil)}
+		machineMFA:    d.AdministrationMFA && (d.Passkeys != nil || d.TOTP != nil),
+		globalRevoker: d.GlobalRevoker, accountStatus: d.AccountStatus, keyFilter: d.KeyFilter, registration: d.Registration}
 	if d.OAuth2 != nil {
 		mountOAuth2(r, h)
 		mountSessionManagement(r, h)
@@ -268,7 +291,9 @@ func mount(r pockets.RouteRegistrar, d mountDeps) {
 	// (deny-by-absence, like machine identity and the token endpoint): a
 	// PasswordFlowsDisabled host answers 404 for every one of them.
 	pw := svc.PasswordFlowsEnabled()
-	if pw {
+	// IdentityConfig.Registration closed unmounts registration; verify and
+	// resend stay for accounts already awaiting verification.
+	if pw && h.registration != authlogic.RegistrationClosed {
 		r.Handle("POST", "/auth/register", h.register, svc.rateLimitByIP("register", limits.Register))
 	}
 	if pw {
@@ -416,6 +441,14 @@ func mount(r pockets.RouteRegistrar, d mountDeps) {
 		// UserAdminCheck ignores Action must not expose the rail by upgrading.
 		if d.SecurityEvents != nil {
 			r.Handle("GET", "/auth/admin/security-events", h.adminListSecurityEvents, auth.UserAdministration)
+		}
+		// The fleet-wide revoke is an explicit opt-in, behind its own
+		// authenticator: a first-party access token or an external token, Live —
+		// whatever a host overrides UserAdministration to admit, an API key (which
+		// the revoke leaves standing) never fires it, and a delegated token, which
+		// names no audience here, is refused.
+		if d.GlobalRevoker != nil {
+			r.Handle("POST", "/auth/admin/sessions/revoke-all", h.adminRevokeAllSessions, svc.RequirePrincipal(Accept(CredentialAccessToken, CredentialExternalToken), Live()), browserSafe)
 		}
 		if d.Passkeys != nil {
 			r.Handle("POST", "/auth/admin/users/{id}/passkeys/reset", h.adminResetPasskeys, auth.UserAdministration, browserSafe)

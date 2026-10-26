@@ -286,7 +286,8 @@ func mustAuthenticationService(d authenticationFixture) *authlogic.Components {
 		authlogic.WithPassword(authlogic.PasswordConfig{Hasher: d.Hasher, ValidatePassword: d.ValidatePassword, Compromised: d.Compromised, CompromisedFailOpen: d.CompromisedFailOpen, PasswordFlowsDisabled: d.PasswordFlowsDisabled, RequireVerifiedEmail: d.RequireVerifiedEmail}),
 		authlogic.WithSessions(authlogic.SessionsConfig{AccessTokenTTL: d.AccessTokenTTL, RefreshTTL: d.RefreshTTL}),
 		authlogic.WithDelegatedTokens(d.DelegatedTokens),
-		authlogic.WithIdentity(authlogic.IdentityConfig{Normalizer: d.Normalizer, IdentifierKeyer: d.IdentifierKeyer, CredentialPolicy: d.CredentialPolicy}),
+		authlogic.WithIdentity(authlogic.IdentityConfig{Normalizer: d.Normalizer, IdentifierKeyer: d.IdentifierKeyer, CredentialPolicy: d.CredentialPolicy, Registration: d.Registration}),
+		authlogic.WithMachine(d.Machine),
 		authlogic.WithDelivery(authlogic.DeliveryConfig{Deliver: d.Deliver, Queue: d.Queue}),
 		authlogic.WithOAuth(authlogic.OAuthConfig{Providers: d.Providers, TokenEncrypter: d.TokenEncrypter, OAuthCallbackBase: d.OAuthCallbackBase, OAuthNativeRedirectURIs: d.OAuthNativeRedirectURIs, TrustOAuthEmail: d.TrustOAuthEmail}),
 		authlogic.WithPasswordless(authlogic.PasswordlessConfig{Passwordless: d.Passwordless, ProvisionOnRedeem: d.ProvisionOnRedeem}),
@@ -310,7 +311,7 @@ func mustAuthenticationService(d authenticationFixture) *authlogic.Components {
 	if len(d.MFAMethods) > 0 {
 		opts = append(opts, authlogic.WithMFAMethods(d.MFAMethods...))
 	}
-	service, err := authlogic.New(authlogic.Repositories{Users: d.Users, Identifiers: d.Identifiers, Passwords: d.Passwords, Sessions: d.Sessions, UserAdmin: d.UserAdmin, PasswordlessRedeem: d.PasswordlessRedeem, ActiveSessions: d.ActiveSessions, Challenges: d.Challenges, PasswordResets: d.PasswordResets, ContactChanges: d.ContactChanges, CredentialMutations: d.CredentialMutations, AuthenticationGrants: d.AuthenticationGrants, SecurityEvents: d.SecurityEvents, OAuthAccounts: d.OAuthAccounts, OAuthStates: d.OAuthStates, ServiceAccounts: d.ServiceAccounts, APIKeys: d.APIKeys, ExternalSubjects: d.ExternalSubjects, Passkeys: d.Passkeys, TOTP: d.TOTP},
+	service, err := authlogic.New(authlogic.Repositories{Users: d.Users, Identifiers: d.Identifiers, Passwords: d.Passwords, Sessions: d.Sessions, UserAdmin: d.UserAdmin, PasswordlessRedeem: d.PasswordlessRedeem, ActiveSessions: d.ActiveSessions, Challenges: d.Challenges, PasswordResets: d.PasswordResets, ContactChanges: d.ContactChanges, CredentialMutations: d.CredentialMutations, AuthenticationGrants: d.AuthenticationGrants, SecurityEvents: d.SecurityEvents, OAuthAccounts: d.OAuthAccounts, OAuthStates: d.OAuthStates, ServiceAccounts: d.ServiceAccounts, APIKeys: d.APIKeys, ExternalSubjects: d.ExternalSubjects, Passkeys: d.Passkeys, TOTP: d.TOTP, GlobalSessions: d.GlobalSessions, ServiceAccountStatus: d.ServiceAccountStatuses},
 		d.TokenSigner,
 		d.RuntimeMode,
 		d.Limiter,

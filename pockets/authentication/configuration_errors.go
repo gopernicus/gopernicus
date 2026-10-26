@@ -2,6 +2,8 @@ package authentication
 
 import (
 	"errors"
+
+	authlogic "github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication"
 )
 
 // ErrHasherRequired and ErrMailerRequired are returned by New
@@ -200,3 +202,31 @@ var ErrCookieDomainRefused = errors.New("auth: production RuntimeMode refuses Br
 // label cannot also read the session. No acknowledgement waives it: remove the
 // Domain or the namespace rule.
 var ErrCookieDomainWithNamespaceRule = errors.New("auth: BrowserConfig.SessionCookie.Domain cannot be combined with an OriginPolicy namespace rule (keep session cookies host-only under a namespace; remove one)")
+
+// ErrGlobalSessionRevocationRouteRequires is returned by New when
+// AdministrationConfig.GlobalSessionRevocationRoute is set without
+// Repositories.GlobalSessions or without AdministrationConfig.UserAdminCheck:
+// the opt-in names a route that could never mount.
+var ErrGlobalSessionRevocationRouteRequires = errors.New("auth: AdministrationConfig.GlobalSessionRevocationRoute requires Repositories.GlobalSessions and AdministrationConfig.UserAdminCheck")
+
+// The S4d session and machine governance sentinels, re-exported from the logic
+// package so one errors.Is target serves New and the service.
+var (
+	// ErrRegistrationModeRequiresInvitations is returned by New when
+	// IdentityConfig.Registration is invitation_only without
+	// InvitationsConfig.Granter.
+	ErrRegistrationModeRequiresInvitations = authlogic.ErrRegistrationModeRequiresInvitations
+	// ErrRegistrationClosedWithProvisioning is returned by New when
+	// IdentityConfig.Registration is closed beside an external provider with
+	// ProvisionOnFirstVerification.
+	ErrRegistrationClosedWithProvisioning = authlogic.ErrRegistrationClosedWithProvisioning
+	// ErrServiceAccountStatusRequires is returned by New when
+	// AdministrationConfig.ServiceAccountStatus is set without
+	// Repositories.ServiceAccountStatus and the machine repositories.
+	ErrServiceAccountStatusRequires = authlogic.ErrServiceAccountStatusRequires
+	// ErrServiceAccountStatusSchemaMissing is returned by New when
+	// AdministrationConfig.ServiceAccountStatus is set and the store reports
+	// migration 0027_service_account_status.sql absent. A host that does not
+	// set it is never probed.
+	ErrServiceAccountStatusSchemaMissing = authlogic.ErrServiceAccountStatusSchemaMissing
+)

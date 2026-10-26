@@ -48,6 +48,13 @@ func (s *spySecurityEvents) recorded() []securityevent.SecurityEvent {
 	return append([]securityevent.SecurityEvent(nil), s.events...)
 }
 
+// reset forgets every recorded event.
+func (s *spySecurityEvents) reset() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.events = nil
+}
+
 func (s *spySecurityEvents) count() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()

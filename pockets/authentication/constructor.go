@@ -114,6 +114,12 @@ func New(repos Repositories, signer cryptids.JWTSigner, runtimeMode environment.
 		return nil, err
 	}
 	cfg.MFARequired, cfg.mfaRequiredSource = resolveMFARequired(cfg)
+	cfg.registrationSource = resolveRegistrationSource(cfg)
+	apiKeyMaxTTL, apiKeyMaxTTLSource, err := resolveAPIKeyMaxTTL(cfg)
+	if err != nil {
+		return nil, err
+	}
+	cfg.APIKeyMaxTTL, cfg.apiKeyMaxTTLSource = apiKeyMaxTTL, apiKeyMaxTTLSource
 	if err := validateMFA(cfg); err != nil {
 		return nil, err
 	}
@@ -307,6 +313,11 @@ func New(repos Repositories, signer cryptids.JWTSigner, runtimeMode environment.
 	// told about the rail, not about the route that reads it.
 	if cfg.SecurityEventsRoute && (nilDependency(repos.SecurityEvents) || cfg.UserAdminCheck == nil) {
 		return nil, ErrSecurityEventsRouteRequires
+	}
+	// The fleet-wide revoke is an explicit opt-in too: a host whose check
+	// ignores Action must not receive it by upgrading.
+	if cfg.GlobalSessionRevocationRoute && (nilDependency(repos.GlobalSessions) || cfg.UserAdminCheck == nil) {
+		return nil, ErrGlobalSessionRevocationRouteRequires
 	}
 
 	// The shared delivery renderer/router (design §6.1): one kind-aware policy
@@ -576,7 +587,8 @@ func New(repos Repositories, signer cryptids.JWTSigner, runtimeMode environment.
 	logicOptions := []authlogic.Option{
 		authlogic.WithPassword(authlogic.PasswordConfig{Hasher: cfg.Hasher, ValidatePassword: cfg.ValidatePassword, Compromised: cfg.CompromisedPasswordChecker, CompromisedFailOpen: cfg.CompromisedPasswordFailOpen, PasswordFlowsDisabled: cfg.PasswordFlowsDisabled, RequireVerifiedEmail: cfg.RequireVerifiedEmail}),
 		authlogic.WithSessions(authlogic.SessionsConfig{AccessTokenTTL: cfg.AccessTokenTTL, RefreshTTL: cfg.RefreshTTL}),
-		authlogic.WithIdentity(authlogic.IdentityConfig{Normalizer: cfg.IdentifierNormalizer, IdentifierKeyer: cfg.IdentifierKeyer, CredentialPolicy: cfg.CredentialPolicy}),
+		authlogic.WithIdentity(authlogic.IdentityConfig{Normalizer: cfg.IdentifierNormalizer, IdentifierKeyer: cfg.IdentifierKeyer, CredentialPolicy: cfg.CredentialPolicy, Registration: cfg.Registration}),
+		authlogic.WithMachine(authlogic.MachineConfig{APIKeyMaxTTL: cfg.APIKeyMaxTTL, ServiceAccountStatus: cfg.ServiceAccountStatus}),
 		authlogic.WithDelivery(logicDelivery),
 		authlogic.WithOAuth(authlogic.OAuthConfig{Providers: cfg.Providers, TokenEncrypter: cfg.TokenEncrypter, OAuthCallbackBase: cfg.OAuthCallbackBase, OAuthNativeRedirectURIs: cfg.OAuthNativeRedirectURIs, TrustOAuthEmail: cfg.TrustOAuthEmail}),
 		authlogic.WithPasswordless(authlogic.PasswordlessConfig{Passwordless: cfg.Passwordless, ProvisionOnRedeem: cfg.PasswordlessProvisionOnRedeem}),
@@ -614,6 +626,7 @@ func New(repos Repositories, signer cryptids.JWTSigner, runtimeMode environment.
 		SecurityEvents: repos.SecurityEvents, OAuthAccounts: repos.OAuthAccounts, OAuthStates: repos.OAuthStates,
 		ServiceAccounts: repos.ServiceAccounts, APIKeys: repos.APIKeys, ExternalSubjects: repos.ExternalSubjects,
 		Passkeys: repos.Passkeys, TOTP: repos.TOTP,
+		GlobalSessions: repos.GlobalSessions, ServiceAccountStatus: repos.ServiceAccountStatus,
 	}, cfg.TokenSigner, cfg.RuntimeMode, limiter, logicOptions...)
 	if err != nil {
 		return nil, err
@@ -693,6 +706,8 @@ func New(repos Repositories, signer cryptids.JWTSigner, runtimeMode environment.
 		inbound.WithRouteAuthentication(cfg.BundledRouteAuth),
 		inbound.WithUserErasureRoute(cfg.UserErasureRoute),
 		inbound.WithSecurityEventsRoute(cfg.SecurityEventsRoute),
+		inbound.WithGlobalSessionRevocationRoute(cfg.GlobalSessionRevocationRoute),
+		inbound.WithMFAAPIKeysExempt(cfg.MFAAPIKeysExempt),
 	}
 	if cfg.MFARequired == MFARequiredAdmins {
 		httpOptions = append(httpOptions, inbound.WithAdministrationMFA())
@@ -712,6 +727,7 @@ func New(repos Repositories, signer cryptids.JWTSigner, runtimeMode environment.
 	}
 	logMaintenancePosture(cfg, maintenanceService, transportLog)
 	logMFAPosture(cfg, transportLog)
+	logAccountPosture(cfg, repos, transportLog)
 	return &Components{Authentication: authService, External: authService.ExternalAuthenticator(), OAuth2: oauthService, Invitations: invSvc, HTTP: adapter, Delivery: deliveryRuntime, SecurityEvents: securityEvents, Maintenance: maintenanceService}, nil
 
 }
@@ -781,7 +797,38 @@ func logMFAPosture(cfg constructorConfig, log *slog.Logger) {
 		required, gates = string(MFARequiredAll), "external_tokens"
 	}
 	sources, methods := joinMFAMethods(mfaSources(cfg), "none"), joinMFAMethods(cfg.MFAMethods, "any")
-	log.Info("auth: mfa posture", "mfa_required", required, "source", cfg.mfaRequiredSource, "gates", gates, "sources", sources, "methods", methods)
+	apiKeys := "denied"
+	if cfg.MFAAPIKeysExempt {
+		apiKeys = "exempt"
+	}
+	log.Info("auth: mfa posture", "mfa_required", required, "source", cfg.mfaRequiredSource, "gates", gates, "sources", sources, "methods", methods, "api_keys", apiKeys)
+	switch {
+	case !cfg.MFAAPIKeysExempt:
+	case cfg.RuntimeMode.IsProduction():
+		log.Warn("auth: production posture requirement waived", "posture_waiver", "APIKeysExempt", "runtime_mode", cfg.RuntimeMode.String())
+	default:
+		log.Warn("auth: MFAConfig.APIKeysExempt lets API keys pass every MFA gate; a key cannot hold AAL2, so RequireMFA() and the admin and machine gates admit it unverified")
+	}
+}
+
+// logAccountPosture logs the registration and API-key lifetime boot lines,
+// the production waiver of an unlimited lifetime, and the one WARN for an
+// admins MFA requirement whose machine routes are reachable by native
+// sessions that can never hold AAL2.
+func logAccountPosture(cfg constructorConfig, repos Repositories, log *slog.Logger) {
+	log.Info("auth: registration", "registration", cfg.Registration.String(), "source", cfg.registrationSource)
+	ttl := "unlimited"
+	if cfg.APIKeyMaxTTL > 0 {
+		ttl = cfg.APIKeyMaxTTL.String()
+	}
+	log.Info("auth: api key lifetime", "api_key_max_ttl", ttl, "source", cfg.apiKeyMaxTTLSource)
+	if cfg.apiKeyMaxTTLSource == "acknowledged" {
+		log.Warn("auth: production posture requirement waived", "posture_waiver", "APIKeyUnlimitedTTLAcknowledged", "runtime_mode", cfg.RuntimeMode.String())
+	}
+	machineRoutes := !nilDependency(repos.ServiceAccounts) && !nilDependency(repos.APIKeys) && cfg.MachineRoutesGate != nil
+	if cfg.MFARequired == MFARequiredAdmins && !nativeMFA(cfg) && machineRoutes {
+		log.Warn("auth: MFAConfig.Required admins with no native AAL2 source: native sessions mint API keys at AAL1; wire a native factor (WithPasskeys or WithTOTP) or override BundledRouteAuth.MachineLifecycle")
+	}
 }
 
 // joinMFAMethods renders methods comma-separated, or empty when there are none.

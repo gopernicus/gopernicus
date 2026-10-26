@@ -185,4 +185,22 @@ type Repositories struct {
 	// serializes on. A store that implements totp.SchemaProber is probed at boot
 	// only when TOTP is wired.
 	TOTP totp.Repository
+
+	// GlobalSessions is the OPTIONAL fleet-wide revocation capability (SOC 2
+	// S4d) behind Service.RevokeAllSessions and the opt-in revoke-all route:
+	// chunked batches that bump every active user's auth_revision and delete
+	// their sessions, step-up grants and password_reset challenges. It needs no
+	// schema change, so a bundled store fills it unconditionally; it must be
+	// backed by the same transaction-capable adapter as Users, Sessions,
+	// AuthenticationGrants and Challenges. Nil → RevokeAllSessions refuses
+	// with ErrGlobalRevocationUnsupported.
+	GlobalSessions session.GlobalRevoker
+
+	// ServiceAccountStatus is the OPTIONAL service-account disable/enable
+	// capability (SOC 2 S4d, migration 0027). Presence alone changes nothing:
+	// it is read only when AdministrationConfig.ServiceAccountStatus is set,
+	// and a host that never sets it needs no migration 0027. It must be backed
+	// by the same transaction-capable adapter as ServiceAccounts and APIKeys —
+	// a disable revokes the account's keys in its own transaction.
+	ServiceAccountStatus serviceaccount.StatusRepository
 }

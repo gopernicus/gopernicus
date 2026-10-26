@@ -257,7 +257,7 @@ func TestSecurityEventAPIKeyAuthSuccess(t *testing.T) {
 	ctx := context.Background()
 	sa, _ := h.svc.CreateServiceAccount(ctx, "admin", "bot", "", false, "")
 	key, raw, _ := h.svc.MintAPIKey(ctx, sa.ID, "deploy", time.Time{})
-	if _, _, ok := h.svc.verifyAPIKeyCredential(ctx, raw); !ok {
+	if _, _, ok, _ := h.svc.verifyAPIKeyCredential(ctx, raw); !ok {
 		t.Fatal("resolveAPIKeyCredential denied a valid key")
 	}
 	e := requireEvent(t, h.events, securityevent.TypeAPIKeyAuth, securityevent.StatusSuccess)
@@ -281,7 +281,7 @@ func TestSecurityEventAPIKeyAuthBlockedRevoked(t *testing.T) {
 	if err := h.svc.RevokeAPIKey(ctx, key.ID); err != nil {
 		t.Fatalf("RevokeAPIKey: %v", err)
 	}
-	if _, _, ok := h.svc.verifyAPIKeyCredential(ctx, raw); ok {
+	if _, _, ok, _ := h.svc.verifyAPIKeyCredential(ctx, raw); ok {
 		t.Fatal("revoked key must deny")
 	}
 	e := requireEvent(t, h.events, securityevent.TypeAPIKeyAuth, securityevent.StatusBlocked)
@@ -296,8 +296,10 @@ func TestSecurityEventAPIKeyAuthFailureExpired(t *testing.T) {
 	h := newMachineHarness(t)
 	ctx := context.Background()
 	sa, _ := h.svc.CreateServiceAccount(ctx, "admin", "bot", "", false, "")
-	_, raw, _ := h.svc.MintAPIKey(ctx, sa.ID, "k", time.Now().Add(-time.Hour))
-	if _, _, ok := h.svc.verifyAPIKeyCredential(ctx, raw); ok {
+	// A past expires_at is refused at mint, so the key expires on the clock.
+	_, raw, _ := h.svc.MintAPIKey(ctx, sa.ID, "k", time.Now().Add(time.Hour))
+	h.svc.now = func() time.Time { return time.Now().Add(2 * time.Hour) }
+	if _, _, ok, _ := h.svc.verifyAPIKeyCredential(ctx, raw); ok {
 		t.Fatal("expired key must deny")
 	}
 	e := requireEvent(t, h.events, securityevent.TypeAPIKeyAuth, securityevent.StatusFailure)

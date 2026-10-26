@@ -45,6 +45,10 @@ type adapterConfig struct {
 	PasskeyViews        PasskeyViews
 	TOTPViews           TOTPViews
 	MFAMethods          []authlogic.MFAMethod
+	// GlobalSessionRevocationRoute opts in to POST /auth/admin/sessions/revoke-all.
+	GlobalSessionRevocationRoute bool
+	// MFAAPIKeysExempt lets API keys pass every MFA gate.
+	MFAAPIKeysExempt bool
 }
 
 type routedService struct {
@@ -133,6 +137,23 @@ func New(service AuthenticationService, runtimeMode environment.Mode, opts ...Op
 		}
 		events = e
 	}
+	var globalRevoker globalSessionRevoker
+	if cfg.GlobalSessionRevocationRoute {
+		g, ok := cfg.Authentication.(globalSessionRevoker)
+		if !ok || !g.GlobalSessionRevocationEnabled() || cfg.UserAdminCheck == nil {
+			return nil, fmt.Errorf("authentication HTTP: the global session revocation route requires a wired global revocation and UserAdminCheck: %w", sdk.ErrInvalidInput)
+		}
+		globalRevoker = g
+	}
+	var accountStatus serviceAccountStatusManager
+	if a, ok := cfg.Authentication.(serviceAccountStatusManager); ok && a.ServiceAccountStatusEnabled() {
+		accountStatus = a
+	}
+	keyFilter, _ := cfg.Authentication.(apiKeyFilterLister)
+	registration := authlogic.RegistrationOpen
+	if m, ok := cfg.Authentication.(registrationModer); ok {
+		registration = m.RegistrationMode()
+	}
 	syncer, _ := cfg.Authentication.(invitationSyncer)
 	claims, _ := cfg.Authentication.(claimIdentifierLister)
 	if err := cfg.RouteLimits.Validate(); err != nil {
@@ -172,6 +193,7 @@ func New(service AuthenticationService, runtimeMode environment.Mode, opts ...Op
 		Proxies: auth.proxies, RouteLimits: cfg.RouteLimits, AdministrationMFA: cfg.AdministrationMFA,
 		Passkeys: passkeys, PasskeyViews: passkeyViews,
 		TOTP: totps, TOTPViews: totpViews,
+		GlobalRevoker: globalRevoker, AccountStatus: accountStatus, KeyFilter: keyFilter, Registration: registration,
 	}
 	switch {
 	case totpViews != nil:
@@ -180,6 +202,7 @@ func New(service AuthenticationService, runtimeMode environment.Mode, opts ...Op
 		auth.mfaStepUpPath = passkeyStepUpPathFor(auth.browserLoginPath)
 	}
 	auth.mfaMethods = slices.Clone(cfg.MFAMethods)
+	auth.apiKeysExempt = cfg.MFAAPIKeysExempt
 	if !auth.csrfCookie.secure {
 		auth.logger.Warn("authentication: development CSRF cookie wired; the session cookie is not Secure, so the double-submit cookie drops the __Host- prefix and Secure — production refuses it", "csrf_cookie", auth.csrfCookie.name, "secure", false)
 	}

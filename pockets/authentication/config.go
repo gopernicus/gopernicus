@@ -41,12 +41,29 @@ const (
 	MFARequiredNone MFARequirement = "none"
 	// MFARequiredAdmins requires AAL2 on /auth/admin/users* of every caller
 	// AdministrationConfig.UserAdminCheck admits — and, beside passkeys or TOTP,
-	// on the machine lifecycle routes after MachineRoutesGate; an API key passes.
+	// on the machine lifecycle routes after MachineRoutesGate; an API key is
+	// refused there unless MFAConfig.APIKeysExempt.
 	MFARequiredAdmins MFARequirement = "admins"
 	// MFARequiredAll requires AAL2 of every external-token user: New sets
 	// ExternalProvider.RequireMFA on a copy of every External provider.
 	MFARequiredAll MFARequirement = "all"
 )
+
+// The IdentityConfig.Registration values.
+const (
+	// RegistrationOpen is the zero value ("" or "open"): anyone may create an
+	// account on every path the host wires.
+	RegistrationOpen = authlogic.RegistrationOpen
+	// RegistrationInvitationOnly creates an account only for an address with a
+	// pending invitation.
+	RegistrationInvitationOnly = authlogic.RegistrationInvitationOnly
+	// RegistrationClosed creates no account: the roster is frozen.
+	RegistrationClosed = authlogic.RegistrationClosed
+)
+
+// DefaultAPIKeyMaxTTL is the APIKeyMaxTTL production resolves a zero value to:
+// one year. Ninety days is the recommended setting for hosts that rotate.
+const DefaultAPIKeyMaxTTL = 365 * 24 * time.Hour
 
 // The MFAConfig.Methods values.
 const (
@@ -148,6 +165,17 @@ type constructorConfig struct {
 	Passkey           PasskeyConfig
 	TOTP              TOTPConfig
 	Logger            *slog.Logger
+
+	Registration                   RegistrationMode `env:"AUTH_REGISTRATION"`
+	GlobalSessionRevocationRoute   bool
+	ServiceAccountStatus           bool          `env:"AUTH_SERVICE_ACCOUNT_STATUS"`
+	APIKeyMaxTTL                   time.Duration `env:"AUTH_API_KEY_MAX_TTL"`
+	APIKeyUnlimitedTTLAcknowledged bool
+	MFAAPIKeysExempt               bool
+	// registrationSource and apiKeyMaxTTLSource record whether Registration and
+	// APIKeyMaxTTL came from configuration or a default; New sets them.
+	registrationSource string
+	apiKeyMaxTTLSource string
 }
 
 // Option configures New before construction. Nil options are invalid.
@@ -261,7 +289,23 @@ type IdentityConfig struct {
 	// several environments. It is a wiring assertion set as a literal in the
 	// composition root, not an env knob.
 	SingleFactorAcknowledged bool
+	// Registration selects who may create an account, on every
+	// account-creating path — POST /auth/register, passwordless
+	// provision-on-redeem, OAuth first sign-in and external first verification:
+	// open (the zero value, or "open"), invitation_only (an address with a
+	// pending invitation) or closed (the registration routes are not mounted
+	// and nothing provisions). An unknown value refuses boot in every mode;
+	// invitation_only needs InvitationsConfig.Granter
+	// (ErrRegistrationModeRequiresInvitations); closed beside an external
+	// provider with ProvisionOnFirstVerification is
+	// ErrRegistrationClosedWithProvisioning. The boot line names the mode.
+	// (env: AUTH_REGISTRATION)
+	Registration RegistrationMode `env:"AUTH_REGISTRATION"`
 }
+
+// RegistrationMode selects who may create an account: open, invitation_only
+// or closed.
+type RegistrationMode = authlogic.RegistrationMode
 
 // WithIdentity replaces the complete IdentityConfig group, including zero values.
 func WithIdentity(value IdentityConfig) Option {
@@ -271,6 +315,7 @@ func WithIdentity(value IdentityConfig) Option {
 		c.IdentifierKeyer = value.IdentifierKeyer
 		c.CredentialPolicy = value.CredentialPolicy
 		c.SingleFactorAcknowledged = value.SingleFactorAcknowledged
+		c.Registration = value.Registration
 	}
 }
 
@@ -988,6 +1033,40 @@ type AdministrationConfig struct {
 	// host whose check ignores the action must not expose the rail by upgrading.
 	// Set without both → ErrSecurityEventsRouteRequires.
 	SecurityEventsRoute bool
+	// GlobalSessionRevocationRoute opts in to POST
+	// /auth/admin/sessions/revoke-all (SOC 2 S4d): Service.RevokeAllSessions
+	// over HTTP, which ends EVERY session in the fleet, the caller's own
+	// included. It admits a first-party access token or an external token at
+	// the Live tier whatever the other groups admit — an API key survives the
+	// revoke, so it never fires it, and a delegated token is refused — then
+	// the browser-safe gate, UserAdminCheck with the action
+	// UserAdminRevokeAllSessions (the admins MFA gate applies) and a budget of
+	// one call a minute per actor. Set without Repositories.GlobalSessions or
+	// UserAdminCheck → ErrGlobalSessionRevocationRouteRequires.
+	GlobalSessionRevocationRoute bool
+	// ServiceAccountStatus turns on the service-account disable/enable status
+	// over Repositories.ServiceAccountStatus (migration 0027): a disable
+	// revokes every key of the account and refuses new mints until enabled,
+	// and POST /auth/service-accounts/{id}/disable|enable mount with the
+	// machine routes. Without the repository →
+	// ErrServiceAccountStatusRequires; with a store reporting 0027 absent →
+	// ErrServiceAccountStatusSchemaMissing. False never reads the table.
+	// Un-wiring it resumes mints on a disabled account; its revoked keys stay
+	// revoked. (env: AUTH_SERVICE_ACCOUNT_STATUS)
+	ServiceAccountStatus bool `env:"AUTH_SERVICE_ACCOUNT_STATUS"`
+	// APIKeyMaxTTL bounds a minted API key's life. An expires_at beyond now
+	// plus it is a 400 (api_key_ttl_exceeded); an omitted one is filled with
+	// now plus it, and api_key_minted records expires_at_defaulted. Zero
+	// resolves to DefaultAPIKeyMaxTTL (365 days) in production and to unlimited
+	// in development; set it explicitly (90 days is recommended) to choose. A
+	// past expires_at is a 400 (api_key_expiry_past) in every case. Existing
+	// keys are untouched. (env: AUTH_API_KEY_MAX_TTL, a Go duration)
+	APIKeyMaxTTL time.Duration `env:"AUTH_API_KEY_MAX_TTL"`
+	// APIKeyUnlimitedTTLAcknowledged keeps a zero APIKeyMaxTTL unlimited in
+	// production, with one posture_waiver=APIKeyUnlimitedTTLAcknowledged WARN.
+	// It is inert while APIKeyMaxTTL is set and in development. It is a wiring
+	// assertion set as a literal in the composition root, not an env knob.
+	APIKeyUnlimitedTTLAcknowledged bool
 }
 
 // WithAdministration replaces the complete AdministrationConfig group, including zero values.
@@ -998,6 +1077,10 @@ func WithAdministration(value AdministrationConfig) Option {
 		c.ListStrategy = value.ListStrategy
 		c.UserErasureRoute = value.UserErasureRoute
 		c.SecurityEventsRoute = value.SecurityEventsRoute
+		c.GlobalSessionRevocationRoute = value.GlobalSessionRevocationRoute
+		c.ServiceAccountStatus = value.ServiceAccountStatus
+		c.APIKeyMaxTTL = value.APIKeyMaxTTL
+		c.APIKeyUnlimitedTTLAcknowledged = value.APIKeyUnlimitedTTLAcknowledged
 	}
 }
 
@@ -1030,6 +1113,14 @@ type MFAConfig struct {
 	// minted before the methods claim existed has no source and is denied under
 	// a non-empty Methods until it refreshes.
 	Methods []MFAMethod
+	// APIKeysExempt lets an API key pass every MFA gate — RequireMFA(), the
+	// admin and the machine gates — as it did before S4d. By default a key at
+	// one is refused with a 403 mfa_credential_not_eligible and no challenge
+	// (a key cannot step up), recorded as mfa_required_denied reason api_key.
+	// Production logs one posture_waiver=APIKeysExempt WARN with it,
+	// development a plain WARN. POST /auth/admin/sessions/revoke-all refuses
+	// keys regardless. It is a wiring literal, not an env knob.
+	APIKeysExempt bool
 }
 
 // PasskeyViews renders the passkey pages; see PasskeyConfig.Views.
@@ -1076,6 +1167,7 @@ func WithMFA(value MFAConfig) Option {
 	return func(c *constructorConfig) {
 		c.MFARequired = value.Required
 		c.MFAMethods = slices.Clone(methods)
+		c.MFAAPIKeysExempt = value.APIKeysExempt
 	}
 }
 

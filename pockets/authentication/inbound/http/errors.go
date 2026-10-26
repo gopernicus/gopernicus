@@ -52,6 +52,30 @@ func respondDomainError(w http.ResponseWriter, err error) {
 	web.RespondJSONDomainError(w, err)
 }
 
+// registrationErrorFor maps a registration-mode refusal to its 403 and code:
+// registration_closed or registration_invitation_required. It returns
+// (nil, false) for any other error.
+func registrationErrorFor(err error) (*web.Error, bool) {
+	switch {
+	case errors.Is(err, authlogic.ErrRegistrationClosed):
+		return web.ErrForbidden("registration is closed").WithCode(authlogic.RegistrationCodeClosed), true
+	case errors.Is(err, authlogic.ErrRegistrationInvitationRequired):
+		return web.ErrForbidden("registration requires an invitation").WithCode(authlogic.RegistrationCodeInvitationRequired), true
+	default:
+		return nil, false
+	}
+}
+
+// respondRegistrationError writes a route's error, a registration-mode
+// refusal with its named code.
+func respondRegistrationError(w http.ResponseWriter, err error) {
+	if mapped, ok := registrationErrorFor(err); ok {
+		web.RespondJSONError(w, mapped)
+		return
+	}
+	web.RespondJSONDomainError(w, err)
+}
+
 // passkeyErrorFor maps a passkey ceremony refusal to its wire code:
 // ErrPasskeyRejected → passkey_rejected (401), ErrPasskeyLimit → passkey_limit
 // (409), ErrPasskeyExists → passkey_exists (409). It returns (nil, false) for

@@ -49,15 +49,16 @@ func (p *Policy) Can(ctx context.Context, principal sdk.Principal, permission, r
 }
 
 // UserAdmin admits a platform administrator to every user-administration
-// action this host knows, the irreversible erase and the security-event read
-// included, and refuses any other: an action a future release adds is denied
+// action this host knows, the irreversible erase, the security-event read and
+// the fleet-wide session revocation included, and refuses any other: an action a future release adds is denied
 // until this policy names it. A host that wants a step-up grant before an
 // erase keys that on request.Action.
 func (p *Policy) UserAdmin(ctx context.Context, request authenticationhttp.UserAdminCheckRequest) error {
 	switch request.Action {
 	case authenticationhttp.UserAdminList, authenticationhttp.UserAdminRead, authenticationhttp.UserAdminDeactivate,
 		authenticationhttp.UserAdminReactivate, authenticationhttp.UserAdminResendVerification, authenticationhttp.UserAdminErase,
-		authenticationhttp.UserAdminResetPasskeys, authenticationhttp.UserAdminResetTOTP, authenticationhttp.UserAdminReadAudit:
+		authenticationhttp.UserAdminResetPasskeys, authenticationhttp.UserAdminResetTOTP, authenticationhttp.UserAdminReadAudit,
+		authenticationhttp.UserAdminRevokeAllSessions:
 	default:
 		return fmt.Errorf("auth-cms: user administration action %q is not admitted: %w", request.Action, sdk.ErrForbidden)
 	}

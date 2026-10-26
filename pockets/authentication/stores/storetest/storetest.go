@@ -123,6 +123,12 @@ func Run(t *testing.T, newRepos func(t *testing.T) auth.Repositories) {
 	runMaintenance(t, newRepos)
 	runUserErasure(t, newRepos)
 
+	// Session and machine governance (SOC 2 S4d): every capability is OPTIONAL
+	// and skips LOUDLY when unwired.
+	runGlobalRevocation(t, newRepos)
+	runServiceAccountStatus(t, newRepos)
+	runAPIKeyFilter(t, newRepos)
+
 	t.Run("Passwords", func(t *testing.T) {
 		t.Run("SetGetUpsert", func(t *testing.T) { testPasswords(t, newRepos(t)) })
 		t.Run("AbsentNotFound", func(t *testing.T) { testPasswordsAbsent(t, newRepos(t)) })

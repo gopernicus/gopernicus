@@ -74,6 +74,16 @@ func TestReferenceTOTP(t *testing.T) {
 	})
 }
 
+// TestReferenceServiceAccountStatusSchema runs the status probe contract over a
+// reference store marked without migration 0027.
+func TestReferenceServiceAccountStatusSchema(t *testing.T) {
+	RunServiceAccountStatusSchemaProbe(t, func(t *testing.T) serviceaccount.StatusRepository {
+		r := newReference()
+		r.accountStatusSchemaMissing = true
+		return refAccountStatus{r}
+	})
+}
+
 // TestReference runs the conformance suite against the in-package reference
 // implementation. This is what lets pockets/authentication self-verify under guard G2
 // (the core cannot import a driver or a host store, so without an in-package
@@ -129,6 +139,12 @@ type reference struct {
 	totpCodes         map[string][]totp.RecoveryCode
 	totpSchemaMissing bool
 
+	// accountStatus is the service-account status table (migration 0027), by
+	// service-account ID; an absent row is active. accountStatusSchemaMissing
+	// makes ProbeSchema report migration 0027 absent.
+	accountStatus              map[string]serviceaccount.Status
+	accountStatusSchemaMissing bool
+
 	// resetFailAt/resetFailErr inject an all-or-nothing rollback failure into
 	// refPasswordResets.Redeem (design §5.9): resetFailAt=N fails just after the
 	// Nth composition statement, so a test proves that a mid-transaction failure at
@@ -161,6 +177,7 @@ func newReference() *reference {
 		passkeys:         map[string]passkey.Passkey{},
 		totpCreds:        map[string]totp.Credential{},
 		totpCodes:        map[string][]totp.RecoveryCode{},
+		accountStatus:    map[string]serviceaccount.Status{},
 	}
 }
 
@@ -191,7 +208,168 @@ func (r *reference) repositories() auth.Repositories {
 		UserErasure:          refErasure{r},
 		Passkeys:             refPasskeys{r},
 		TOTP:                 refTOTP{r},
+		GlobalSessions:       refGlobalSessions{r},
+		ServiceAccountStatus: refAccountStatus{r},
 	}
+}
+
+// --- session.GlobalRevoker ---
+
+// refGlobalSessions is the reference fleet-wide revocation: each batch runs
+// under one lock, the per-user order a SQL store's transaction takes.
+type refGlobalSessions struct{ *reference }
+
+func (r refGlobalSessions) RevokeAllBatch(ctx context.Context, afterUserID string, limit int, now time.Time) (session.GlobalRevocationBatch, error) {
+	if err := ctx.Err(); err != nil {
+		return session.GlobalRevocationBatch{}, err
+	}
+	if limit <= 0 {
+		return session.GlobalRevocationBatch{}, fmt.Errorf("limit must be positive: %w", sdk.ErrInvalidInput)
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var page []string
+	for id, u := range r.users {
+		if id > afterUserID && r.projectLocked(u).Active() {
+			page = append(page, id)
+		}
+	}
+	sort.Strings(page)
+	if len(page) > limit {
+		page = page[:limit]
+	}
+	batch := session.GlobalRevocationBatch{Users: len(page), Done: len(page) < limit, LastUserID: afterUserID}
+	in := map[string]bool{}
+	for _, id := range page {
+		u := r.users[id]
+		u.AuthRevision++
+		u.UpdatedAt = now
+		r.users[id] = u
+		r.authRevisions[id] = u.AuthRevision
+		in[id] = true
+		batch.LastUserID = id
+	}
+	for id, g := range r.grants {
+		if in[g.UserID] {
+			delete(r.grants, id)
+			batch.Grants++
+		}
+	}
+	for id, s := range r.sessions {
+		if in[s.UserID] {
+			delete(r.sessions, id)
+			batch.Sessions++
+		}
+	}
+	for id, c := range r.challenges {
+		if in[c.UserID] && c.Purpose == challenge.PurposePasswordReset {
+			delete(r.challenges, id)
+		}
+	}
+	return batch, nil
+}
+
+func (r refGlobalSessions) SweepOrphans(ctx context.Context, _ time.Time) (int, int, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, 0, err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	inactive := func(userID string) bool {
+		u, ok := r.users[userID]
+		return !ok || !r.projectLocked(u).Active()
+	}
+	sessions, grants := 0, 0
+	for id, g := range r.grants {
+		if inactive(g.UserID) {
+			delete(r.grants, id)
+			grants++
+		}
+	}
+	for id, s := range r.sessions {
+		if inactive(s.UserID) {
+			delete(r.sessions, id)
+			sessions++
+		}
+	}
+	return sessions, grants, nil
+}
+
+// --- serviceaccount.StatusRepository ---
+
+// refAccountStatus is the reference status table: a disable writes the row and
+// revokes the account's keys under one lock.
+type refAccountStatus struct{ *reference }
+
+func (r refAccountStatus) GetStatus(_ context.Context, id string) (serviceaccount.Status, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.statusLocked(id), nil
+}
+
+func (r *reference) statusLocked(id string) serviceaccount.Status {
+	if s, ok := r.accountStatus[id]; ok {
+		return s
+	}
+	return serviceaccount.StatusActive
+}
+
+func (r refAccountStatus) Statuses(_ context.Context, ids []string) (map[string]serviceaccount.Status, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	out := make(map[string]serviceaccount.Status, len(ids))
+	for _, id := range ids {
+		out[id] = r.statusLocked(id)
+	}
+	return out, nil
+}
+
+func (r refAccountStatus) Disable(_ context.Context, id, _ string, now time.Time) (serviceaccount.StatusChange, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, ok := r.serviceAccounts[id]; !ok {
+		return serviceaccount.StatusChange{}, sdk.ErrNotFound
+	}
+	if r.statusLocked(id) == serviceaccount.StatusDisabled {
+		return serviceaccount.StatusChange{}, nil
+	}
+	r.accountStatus[id] = serviceaccount.StatusDisabled
+	change := serviceaccount.StatusChange{Changed: true}
+	for kid, k := range r.apiKeys {
+		if k.ServiceAccountID == id && !k.Revoked() {
+			k.RevokedAt = now.UTC()
+			r.apiKeys[kid] = k
+			change.KeysRevoked++
+		}
+	}
+	return change, nil
+}
+
+func (r refAccountStatus) Enable(_ context.Context, id, _ string, _ time.Time) (serviceaccount.StatusChange, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, ok := r.serviceAccounts[id]; !ok {
+		return serviceaccount.StatusChange{}, sdk.ErrNotFound
+	}
+	if r.statusLocked(id) == serviceaccount.StatusActive {
+		return serviceaccount.StatusChange{}, nil
+	}
+	r.accountStatus[id] = serviceaccount.StatusActive
+	return serviceaccount.StatusChange{Changed: true}, nil
+}
+
+func (r refAccountStatus) Delete(_ context.Context, id string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.accountStatus, id)
+	return nil
+}
+
+func (r refAccountStatus) ProbeSchema(context.Context) error {
+	if r.accountStatusSchemaMissing {
+		return fmt.Errorf("service_account_status: %w", sdk.ErrNotFound)
+	}
+	return nil
 }
 
 // --- user.AdminRepository ---
@@ -1006,6 +1184,22 @@ func (r refAPIKeys) ListByServiceAccount(_ context.Context, serviceAccountID str
 			continue
 		}
 		all = append(all, k)
+	}
+	r.mu.RUnlock()
+	return pageMem(all, req, func(k apikey.APIKey) (time.Time, string) {
+		return k.CreatedAt, k.ID
+	})
+}
+
+// ListByServiceAccountFiltered narrows the listing by filter before paging —
+// the predicate a SQL store puts in its WHERE clause.
+func (r refAPIKeys) ListByServiceAccountFiltered(_ context.Context, serviceAccountID string, filter apikey.Filter, req list.Request) (list.Page[apikey.APIKey], error) {
+	r.mu.RLock()
+	all := make([]apikey.APIKey, 0, len(r.apiKeys))
+	for _, k := range r.apiKeys {
+		if k.ServiceAccountID == serviceAccountID && list.MatchesSearch(k.Name, req.Search) && filter.Matches(k) {
+			all = append(all, k)
+		}
 	}
 	r.mu.RUnlock()
 	return pageMem(all, req, func(k apikey.APIKey) (time.Time, string) {

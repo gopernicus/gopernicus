@@ -100,4 +100,8 @@ type authenticationFixture struct {
 	TOTP                    totp.Repository
 	TOTPConfig              authlogic.TOTPConfig
 	MFAMethods              []authlogic.MFAMethod
+	Registration            authlogic.RegistrationMode
+	GlobalSessions          session.GlobalRevoker
+	ServiceAccountStatuses  serviceaccount.StatusRepository
+	Machine                 authlogic.MachineConfig
 }

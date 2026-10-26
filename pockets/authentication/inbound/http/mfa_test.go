@@ -189,7 +189,8 @@ func TestRequireMFABesideAccessTokens(t *testing.T) {
 
 // TestRequireMFAOverTheRealEngine runs the gate over the pocket's own service:
 // an MFA token passes, an AAL1 token gets the challenge and one row, an API key
-// passes, and a nested gate narrows the outer credential without re-resolving.
+// gets the 403 mfa_credential_not_eligible with no challenge and an api_key row,
+// and a nested gate narrows the outer credential without re-resolving.
 func TestRequireMFAOverTheRealEngine(t *testing.T) {
 	h := newExternalHarness(t, externalSetup{})
 	mfa := h.identity("mfa", func(id *sdkauth.Identity) { id.MFA = true })
@@ -199,17 +200,19 @@ func TestRequireMFAOverTheRealEngine(t *testing.T) {
 	if rec, got := h.serve(gate, extReq{bearer: mfa}); rec.Code != http.StatusOK || got.cred.Assurance != session.AssuranceAAL2 {
 		t.Fatalf("MFA token = %d assurance %q", rec.Code, got.cred.Assurance)
 	}
-	if rec, _ := h.serve(gate, extReq{bearer: key}); rec.Code != http.StatusOK {
-		t.Fatalf("API key under RequireMFA = %d, want 200", rec.Code)
+	rec, got := h.serve(gate, extReq{bearer: key})
+	if rec.Code != http.StatusForbidden || got.reached || rec.Header().Get("WWW-Authenticate") != "" || !strings.Contains(rec.Body.String(), `"code":"mfa_credential_not_eligible"`) {
+		t.Fatalf("API key under RequireMFA = %d reached=%v %q %s, want the 403 without a challenge", rec.Code, got.reached, rec.Header().Get("WWW-Authenticate"), rec.Body)
 	}
-	if rows := mfaRows(h.events); len(rows) != 0 {
-		t.Fatalf("an admitted credential recorded %+v", rows)
+	if rows := mfaRows(h.events); len(rows) != 1 || rows[0].Details["reason"] != "api_key" || rows[0].Details["credential"] != "api_key" || rows[0].Details["gate"] != "route" {
+		t.Fatalf("API key denial rows = %+v, want one route/api_key row", rows)
 	}
+	h.events.reset()
 
 	outer := h.svc.RequirePrincipal(Accept(CredentialExternalToken))
 	inner := h.svc.RequirePrincipal(Accept(CredentialExternalToken), RequireMFA())
 	nested := func(next http.Handler) http.Handler { return outer(inner(next)) }
-	rec, got := h.serve(nested, extReq{bearer: h.token})
+	rec, got = h.serve(nested, extReq{bearer: h.token})
 	if rec.Code != http.StatusUnauthorized || got.reached || rec.Header().Get("WWW-Authenticate") != mfaChallenge {
 		t.Fatalf("nested AAL1 = %d reached=%v %q", rec.Code, got.reached, rec.Header().Get("WWW-Authenticate"))
 	}
@@ -248,7 +251,8 @@ func TestProviderMFAFloorAnswersTheChallenge(t *testing.T) {
 
 // TestAdministrationMFAGate proves the admin gate runs after the host check:
 // a non-admin keeps the 403 and records nothing; an admitted caller below AAL2
-// gets the challenge and one admin row; AAL2 and API keys pass.
+// gets the challenge and one admin row; AAL2 passes and an admitted API key
+// gets the 403 mfa_credential_not_eligible (S4d).
 func TestAdministrationMFAGate(t *testing.T) {
 	h := newExternalHarness(t, externalSetup{})
 	mfa := h.identity("mfa", func(id *sdkauth.Identity) { id.MFA = true })
@@ -293,11 +297,12 @@ func TestAdministrationMFAGate(t *testing.T) {
 	if rec := listUsers(mfa); rec.Code != http.StatusOK {
 		t.Fatalf("admin at AAL2 = %d, want 200", rec.Code)
 	}
-	if rec := listUsers(key); rec.Code != http.StatusOK {
-		t.Fatalf("admin API key = %d, want 200 (no key satisfies MFA)", rec.Code)
+	if rec := listUsers(key); rec.Code != http.StatusForbidden || rec.Header().Get("WWW-Authenticate") != "" || !strings.Contains(rec.Body.String(), "mfa_credential_not_eligible") {
+		t.Fatalf("admin API key = %d %q %s, want the 403 without a challenge", rec.Code, rec.Header().Get("WWW-Authenticate"), rec.Body)
 	}
-	if rows := mfaRows(h.events); len(rows) != 1 {
-		t.Fatalf("admitted callers recorded MFA rows: %+v", rows)
+	rows = mfaRows(h.events)
+	if len(rows) != 2 || rows[1].Details["reason"] != "api_key" || rows[1].Details["gate"] != "admin" {
+		t.Fatalf("admin API key rows = %+v, want an admin/api_key row", rows)
 	}
 
 	native := web.NewWebHandler()
@@ -307,7 +312,7 @@ func TestAdministrationMFAGate(t *testing.T) {
 	nativeRec := httptest.NewRecorder()
 	native.ServeHTTP(nativeRec, nativeReq)
 	rows = mfaRows(h.events)
-	if nativeRec.Code != http.StatusUnauthorized || len(rows) != 2 || rows[1].UserID != h.userID || rows[1].Details["credential"] != "access_token" || rows[1].Details["assurance"] != "aal1" {
+	if nativeRec.Code != http.StatusUnauthorized || len(rows) != 3 || rows[2].UserID != h.userID || rows[2].Details["credential"] != "access_token" || rows[2].Details["assurance"] != "aal1" {
 		t.Fatalf("native admin session = %d rows %+v; want 401 and an access_token/aal1 row", nativeRec.Code, rows)
 	}
 
@@ -408,5 +413,41 @@ func TestMFAMethodsOnEveryGate(t *testing.T) {
 	aal1 := open.login(t)
 	if code := route(open, aal1, ""); code != http.StatusUnauthorized || mfaRows(open.events)[0].Details["reason"] != "assurance" {
 		t.Fatalf("AAL1 = %d %v", code, mfaRows(open.events))
+	}
+}
+
+// TestAPIKeysExemptRestoresThePass pins the MFAConfig.APIKeysExempt hatch: a
+// key passes RequireMFA() and the admin gate again, recording no denial.
+func TestAPIKeysExemptRestoresThePass(t *testing.T) {
+	h := newExternalHarness(t, externalSetup{})
+	h.svc.Adapter.apiKeysExempt = true
+	key, _, _ := h.mintKey(t, "bot", false, "", time.Time{})
+	gate := h.svc.RequirePrincipal(Accept(CredentialExternalToken, CredentialAPIKey), RequireMFA())
+	if rec, _ := h.serve(gate, extReq{bearer: key}); rec.Code != http.StatusOK {
+		t.Fatalf("exempt API key under RequireMFA = %d, want 200", rec.Code)
+	}
+	router := web.NewWebHandler()
+	mount(router, mountDeps{Auth: h.svc, ListStrategy: list.StrategyCursor, UserAdminCheck: func(context.Context, UserAdminCheckRequest) error { return nil }, AdministrationMFA: true})
+	req := httptest.NewRequest(http.MethodGet, "/auth/admin/users", nil)
+	req.Header.Set("Authorization", "Bearer "+key)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("exempt admin API key = %d, want 200", rec.Code)
+	}
+	if rows := mfaRows(h.events); len(rows) != 0 {
+		t.Fatalf("an exempt key recorded %+v", rows)
+	}
+}
+
+// TestAPIKeyMFADenialUnderBrowser proves a key under a Browser() RequireMFA()
+// gate gets the JSON 403, never the login or step-up redirect.
+func TestAPIKeyMFADenialUnderBrowser(t *testing.T) {
+	h := newExternalHarness(t, externalSetup{loginPath: extLoginPath})
+	key, _, _ := h.mintKey(t, "bot", false, "", time.Time{})
+	gate := h.svc.RequirePrincipal(Accept(CredentialExternalToken, CredentialAPIKey), RequireMFA(), Browser())
+	rec, _ := h.serve(gate, extReq{bearer: key})
+	if rec.Code != http.StatusForbidden || rec.Header().Get("Location") != "" || rec.Header().Get("WWW-Authenticate") != "" {
+		t.Fatalf("API key under Browser() RequireMFA() = %d %q %q, want the JSON 403", rec.Code, rec.Header().Get("Location"), rec.Header().Get("WWW-Authenticate"))
 	}
 }
