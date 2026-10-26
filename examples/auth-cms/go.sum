@@ -45,12 +45,12 @@ github.com/gopernicus/gopernicus/integrations/encoding/rsc-qr v0.1.0 h1:WA5mUVIk
 github.com/gopernicus/gopernicus/integrations/encoding/rsc-qr v0.1.0/go.mod h1:V8sMoFgNSoKEEC7C0yJKIeGJKNSbm39Ay8efD1XygPw=
 github.com/gopernicus/gopernicus/pockets v0.1.0 h1:2WcybbfPw1km00DmG37CekPbxYmObyyj3T1Ec0eFSRY=
 github.com/gopernicus/gopernicus/pockets v0.1.0/go.mod h1:A2H/Tl9Pn2v2mFLOgkCQngMRFkMN10E1MEzGCQICsEw=
-github.com/gopernicus/gopernicus/pockets/authentication v0.29.0 h1:linWfbBkbAZ1OangQjitM/wFEQFmdF5t5f1K7+YcKNw=
-github.com/gopernicus/gopernicus/pockets/authentication v0.29.0/go.mod h1:0NxBB92jJ55aPbByVTHlxaWRCRABHsJu4CD+zBZ7CbU=
+github.com/gopernicus/gopernicus/pockets/authentication v0.30.0 h1:/Z29n2l2L0aJkeHORSVtT37rwSTEUGu/9imaX0b70qs=
+github.com/gopernicus/gopernicus/pockets/authentication v0.30.0/go.mod h1:0NxBB92jJ55aPbByVTHlxaWRCRABHsJu4CD+zBZ7CbU=
 github.com/gopernicus/gopernicus/pockets/authentication/views/goth v0.8.1 h1:NuwYgd6vQ7DekN02Lqdwr9dYTvSeutFYPXhppyYNj2s=
 github.com/gopernicus/gopernicus/pockets/authentication/views/goth v0.8.1/go.mod h1:BFqBjOjQfPYAoYgEX2pJKgDKw7kvO9cJTYPgsBfqags=
-github.com/gopernicus/gopernicus/pockets/authorization v0.30.0 h1:Wij1Y7AmthrkU3PFEgeypjTu5wOQCTgbFLumP/+5PM0=
-github.com/gopernicus/gopernicus/pockets/authorization v0.30.0/go.mod h1:pDN8HlJK0ZMncFZLnXergHZkEB5QjMxLwS/dkCo6XMs=
+github.com/gopernicus/gopernicus/pockets/authorization v0.31.0 h1:e31bZ2Tfdr2U0DrUi37CjdfFH9ftYQ37Nn/5zy75w3U=
+github.com/gopernicus/gopernicus/pockets/authorization v0.31.0/go.mod h1:pDN8HlJK0ZMncFZLnXergHZkEB5QjMxLwS/dkCo6XMs=
 github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx v0.21.0 h1:Qo0kqUa0h28Mki9NtgsJrrsi81hfYWdc7aOb3ydREco=
 github.com/gopernicus/gopernicus/pockets/authorization/stores/pgx v0.21.0/go.mod h1:JJcpMa7wnCd7ILr/VASW7MZstdYEtDaDfDbZ9SmR5vY=
 github.com/gopernicus/gopernicus/pockets/cms v0.6.0 h1:Z0Fo26IdEXDD1YJ2B3lJqxj9jsn00HhjbPGkW+nH8iA=

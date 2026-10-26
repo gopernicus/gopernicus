@@ -496,10 +496,12 @@ func run(ctx context.Context, log *slog.Logger, runtimeMode environment.Mode) er
 		if !ok {
 			return fmt.Errorf("auth delivery job runtime unavailable: jobs-mode dispatcher not wired")
 		}
-		// Bound each provider attempt inside the default 30-second claim lease.
+		// Bound each provider attempt inside the default 30-second claim lease. The
+		// fenced queue has no enqueue wake, so a one-second idle interval keeps mail
+		// prompt instead of waiting out the 30-second default.
 		df, err := authjobs.NewRuntime(deliveryJobs.Queue, deliveryRuntime,
 			queue.WithFencedRuntimeLogger(log),
-			queue.WithFencedRuntimePolicy(queue.FencedRuntimePolicy{PollInterval: time.Second, ProcessTimeout: 20 * time.Second}))
+			queue.WithFencedRuntimePolicy(queue.FencedRuntimePolicy{PollInterval: time.Second, IdleInterval: time.Second, ProcessTimeout: 20 * time.Second}))
 		if err != nil {
 			return err
 		}
