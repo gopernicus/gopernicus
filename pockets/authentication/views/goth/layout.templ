@@ -98,3 +98,24 @@ templ returnToField(pc authentication.PageContext) {
 		<input type="hidden" name="return_to" value={ pc.ReturnTo }/>
 	}
 }
+
+// dated renders before, value and after as one phrase, the RFC3339 page-model
+// value as a readable UTC date in a <time> element that keeps the machine value.
+// A value that doesn't parse prints as given. Each branch is one line so templ
+// puts no space before the punctuation in after.
+templ dated(before, value, after string) {
+	if label, ok := timestampLabel(value); ok {
+		<span>{ before }<time datetime={ value }>{ label }</time>{ after }</span>
+	} else {
+		<span>{ before }{ value }{ after }</span>
+	}
+}
+
+// lastUsed describes a credential's last use from its RFC3339 value.
+templ lastUsed(lastUsedAt string) {
+	if lastUsedAt == "" {
+		Not used yet.
+	} else {
+		@dated("Last used ", lastUsedAt, ".")
+	}
+}

@@ -10,9 +10,10 @@
  *
  * Scope is deliberately small: normalize the box model, strip default document
  * margins, keep media and form controls predictable, and set the base font from
- * the theme token so controls can inherit it. Lists, anchors, and borders are
- * left to the component layer — the primitives set their own list-style,
- * link, and `border: … solid` rules, so a base rule here would only fight them.
+ * the theme token so controls can inherit it. Lists and borders are left to
+ * the component layer — the primitives set their own list-style and
+ * `border: … solid` rules, so a base rule here would only fight them. Anchors
+ * get only a themed base color (below), which any component link rule overrides.
  * Never hand-edit the compiled dist/theme.<hash>.css; edit this source and run
  * the Node-gated asset build.
  */
@@ -34,6 +35,12 @@ html {
 body {
   margin: 0;
   line-height: inherit;
+}
+
+/* A plain <a> would otherwise keep the UA's fixed #0000ee, which fails contrast
+ * on the dark palette's surfaces. Element specificity, so component rules win. */
+a {
+  color: var(--primary);
 }
 
 /* Zero the margins the UA applies to flow content; spacing is a component or

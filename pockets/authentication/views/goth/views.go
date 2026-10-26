@@ -33,6 +33,7 @@ import (
 	"net/url"
 	"slices"
 	"strconv"
+	"time"
 
 	"github.com/a-h/templ"
 	inbound "github.com/gopernicus/gopernicus/pockets/authentication/inbound/http"
@@ -301,14 +302,6 @@ func passkeyVerificationText(userVerified bool) string {
 	return "Presence only: can't confirm a PIN or biometric"
 }
 
-// passkeyLastUsedText describes a passkey's last use.
-func passkeyLastUsedText(lastUsedAt string) string {
-	if lastUsedAt == "" {
-		return "Not used yet."
-	}
-	return "Last used " + lastUsedAt + "."
-}
-
 // passkeyNameID is a passkey row's rename input id.
 func passkeyNameID(id string) string { return "passkey-name-" + id }
 
@@ -348,12 +341,14 @@ func addPasskeyHref(links inbound.PasskeyLinks, returnTo string) string {
 // it sits under the manage page.
 func totpEnrollPageHref(links inbound.TOTPLinks) string { return links.Manage + "/enroll" }
 
-// totpLastUsedText describes the authenticator app's last use.
-func totpLastUsedText(lastUsedAt string) string {
-	if lastUsedAt == "" {
-		return "Not used yet."
+// timestampLabel formats an RFC3339 page-model value like the sessions page
+// does; ok is false when the value doesn't parse.
+func timestampLabel(value string) (string, bool) {
+	at, err := time.Parse(time.RFC3339, value)
+	if err != nil {
+		return "", false
 	}
-	return "Last used " + lastUsedAt + "."
+	return sessionDateLabel(at), true
 }
 
 // recoveryCodesRemainingText describes how many recovery codes are left.
