@@ -28,6 +28,7 @@ type handlers struct {
 	eraser         userEraser
 	events         securityEventReader
 	syncer         invitationSyncer
+	claims         claimIdentifierLister
 	svc            authService
 	inv            InvitationService
 	listStrategy   list.Strategy
@@ -108,6 +109,9 @@ type mountDeps struct {
 	SecurityEvents securityEventReader
 	// InvitationSync drives POST /auth/invitations/sync; nil leaves it unmounted.
 	InvitationSync invitationSyncer
+	// ClaimIdentifiers keys GET /auth/invitations/mine on claim-holding
+	// identifiers; nil falls back to ActiveVerifiedIdentifier.
+	ClaimIdentifiers claimIdentifierLister
 	// AdministrationMFA requires AAL2 of every caller UserAdminCheck admits on
 	// /auth/admin/users* (WithAdministrationMFA).
 	AdministrationMFA bool
@@ -253,7 +257,7 @@ func mount(r pockets.RouteRegistrar, d mountDeps) {
 	auth := d.RouteAuth.withDefaults(svc)
 	limits := d.RouteLimits.withDefaults()
 	r = clientInfoRegistrar{inner: noStoreRegistrar{inner: r}, proxies: d.Proxies}
-	h := &handlers{oauth2: d.OAuth2, inviteCheck: d.InviteCheck, resourceRule: d.ResourceRule, userAdminCheck: d.UserAdminCheck, adminMFA: d.AdministrationMFA, eraser: d.Eraser, events: d.SecurityEvents, syncer: d.InvitationSync, svc: svc, inv: inv, listStrategy: d.ListStrategy, mutation: d.Mutation, views: views, htmlPolicy: d.HTMLPolicy,
+	h := &handlers{oauth2: d.OAuth2, inviteCheck: d.InviteCheck, resourceRule: d.ResourceRule, userAdminCheck: d.UserAdminCheck, adminMFA: d.AdministrationMFA, eraser: d.Eraser, events: d.SecurityEvents, syncer: d.InvitationSync, claims: d.ClaimIdentifiers, svc: svc, inv: inv, listStrategy: d.ListStrategy, mutation: d.Mutation, views: views, htmlPolicy: d.HTMLPolicy,
 		passkeys: d.Passkeys, passkeyViews: d.PasskeyViews, totp: d.TOTP, totpViews: d.TOTPViews,
 		machineMFA: d.AdministrationMFA && (d.Passkeys != nil || d.TOTP != nil)}
 	if d.OAuth2 != nil {

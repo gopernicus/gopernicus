@@ -242,10 +242,6 @@ func (i *extInvitations) ResolveInvitations(_ context.Context, _, email, _, subj
 	return 1, nil
 }
 
-func (i *extInvitations) ResolvePendingInvitations(context.Context, string, string, string, string) (int, error) {
-	return 0, nil
-}
-
 type failingCache struct{ cacher.Storer }
 
 func (failingCache) Get(context.Context, string) ([]byte, bool, error) {

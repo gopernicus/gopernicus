@@ -24,6 +24,11 @@ import (
 	"github.com/gopernicus/gopernicus/sdk/pkg/environment"
 )
 
+// invitationTokenPattern extracts the token from an invitation link on this
+// host's landing page (InvitationURL is the origin root). It is anchored to that
+// path: a magic link also carries #token=, on /auth/magic.
+var invitationTokenPattern = regexp.MustCompile(`://[^/\s"]+/#token=([A-Za-z0-9._~-]+)`)
+
 // The failure occurs after the host's real grant commits and before authentication
 // finalizes it. A normal completed acceptance would bypass the Granter on retry.
 type failInvitationCompletionOnce struct {
@@ -83,7 +88,7 @@ func TestInvitationCommittedGrantRecoveryThroughHTTP(t *testing.T) {
 	if err := json.Unmarshal(body, &created); err != nil || created.ID == "" {
 		t.Fatalf("decode invitation %s: %v", body, err)
 	}
-	tokenPattern := regexp.MustCompile(`#token=([A-Za-z0-9._~-]+)`)
+	tokenPattern := invitationTokenPattern
 	var token string
 	deadline := time.Now().Add(5 * time.Second)
 	for token == "" && time.Now().Before(deadline) {
@@ -230,7 +235,7 @@ func (h *settlementHost) invite(t *testing.T) (string, string) {
 	if err := json.Unmarshal(body, &created); err != nil || created.ID == "" {
 		t.Fatalf("decode invitation %s: %v", body, err)
 	}
-	tokenPattern := regexp.MustCompile(`#token=([A-Za-z0-9._~-]+)`)
+	tokenPattern := invitationTokenPattern
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		for _, msg := range h.host.sender.all()[before:] {

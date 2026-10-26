@@ -207,8 +207,8 @@ records SMS methods, not email methods.
 
 `AbuseProtectionConfig.AuthenticationLimits` configures independent subject and IP budgets for
 login/password-token issuance, password-reset starts, sensitive-code starts and
-sensitive-password proofs. Defaults per minute are 5/30, 3/20, 5/30 and 5/30
-respectively. Full zero limits select defaults; partial invalid limits fail boot.
+sensitive-password proofs, second-factor proofs and the on-demand invitation sync.
+Defaults per minute are 5/30, 3/20, 5/30, 5/30, 10/30 and 10/60 respectively. Full zero limits select defaults; partial invalid limits fail boot.
 Subject keys contain digests; hosts supply trusted client IP context and a shared
 limiter for production. `AbuseProtectionConfig.PublicRouteLimits` sets the per-IP
 edge budgets of register, verify, password reset, verify-link, native OAuth, refresh
@@ -639,16 +639,16 @@ wired kind — by default, immediate revocation), only decline is public:**
   calling the policy-free listing service; `GET /auth/invitations/mine` remains
   identity-bound.
 - `GET /auth/invitations/mine?identifier_kind=email|phone` — the invitations
-  addressed to ONE of the caller's verified identifiers of that kind (primary
-  first). `identifier_kind` defaults to `email` (unchanged); any other value is
+  addressed to ONE of the caller's sign-in (login- or recovery-enabled) verified
+  identifiers of that kind (primary first); none of that kind → 404. `identifier_kind` defaults to `email` (unchanged); any other value is
   400. A merged listing across identifiers is not offered yet.
 - `POST /auth/invitations/accept` — `{token}` → grant through the Granter.
   Acceptance does NOT re-run inviter authority (issuance-time authority, below).
   A caller holding no verified identifier the invitation is addressed to gets
   403 `invitation_identity_mismatch`.
 - `POST /auth/invitations/sync` — `{}` → `{"resolved": n}`: resolves, on demand,
-  the pending auto-accept invitations addressed to any of the caller's verified
-  identifiers (below). Budgeted per user (`invitation_sync`, 10 a minute; 429
+  the pending auto-accept invitations addressed to any of the caller's sign-in
+  verified identifiers (below). Budgeted per user (`invitation_sync`, 10 a minute; 429
   past it).
 - `POST /auth/invitations/{id}/{cancel,resend}` — the HTTP adapter admits the
   caller against one prepared target before executing it: with the resource rule,
@@ -688,16 +688,22 @@ do not use the channel see byte-identical responses.
 
 **Verified ownership and identifier resolution.** An invitation is addressed to a
 `(kind, identifier)`. Email and phone invitations are accepted only by a caller
-holding that identifier VERIFIED — any of its active verified identifiers,
-primary or not (a second verified email matches), independently of
-`RequireVerifiedEmail`. A submitted email string is never ownership proof, and
-password registration alone grants nothing.
+holding that identifier VERIFIED **with the sign-in claim** — login- or
+recovery-enabled, the values unique across users (the predicate direct-add
+already uses) — any such identifier, primary or not (a second sign-in email
+matches), independently of `RequireVerifiedEmail`. A notification-only verified
+identifier never resolves, syncs, lists in `mine` or matches at accept: two
+accounts may both verify one phone for notifications. A submitted email string
+is never ownership proof, and password registration alone grants nothing.
 
 Every verification of an identifier on a subject resolves the invitations
-addressed to it: registration verify, passwordless provisioning, OAuth and
-external provisioning, and a confirmed identifier add or change
-(`ConfirmIdentifierChange`, last, after the change notices, and only once the
-change applied). Resolution accepts every unexpired `AutoAccept` invitation
+addressed to it: registration verify, passwordless provisioning and adoption of
+an unverified identifier, OAuth and
+external provisioning, a confirmed identifier add or change
+(`ConfirmIdentifierChange`, last, after the change notices, only once the change
+applied, and only when the identifier holds the claim), and enabling login or
+recovery on an already verified identifier (`SetIdentifierUses`,
+`PATCH /auth/identifiers/{id}`). Resolution accepts every unexpired `AutoAccept` invitation
 addressed to that identifier for the subject (`invitation_granted` with
 `resolved_by: verification`); the others stay pending until their token is
 accepted. `AutoAccept` is the inviter's choice and is unchanged. Resolver errors
@@ -705,36 +711,54 @@ never fail the authentication operation. The verified-email lookup also limits
 immediate direct-add to an active verified owner.
 
 `POST /auth/invitations/sync` (or `Service.SyncInvitations(ctx, userID)`) runs
-the same resolution on demand over the caller's verified identifiers (at most
-eight), pending rows only: an `accepting` claim is re-driven by a verification,
+the same resolution on demand over the caller's claim-holding verified
+identifiers (`Service.VerifiedIdentifiers`; at most eight), pending rows only: an `accepting` claim is re-driven by a verification,
 never by a client-triggered sync. It is idempotent — a second call answers
-`{"resolved":0}`. A token accept racing a sync for the same subject may reach the
-Granter twice under one `OperationID`; the Granter's dedupe and the
-`member_added:<id>` notice key make that safe, and only the caller whose
-completion moved the row records and counts it.
+`{"resolved":0}`. Two paths racing on one invitation for the same subject — a
+token accept, a verification, a sync — may each reach the Granter under the one
+`OperationID`; the Granter's dedupe and the `member_added:<id>` notice key make
+that safe, but **each racing path records its own `invitation_granted` row and
+counts it**, so duplicate rows are possible under concurrency. Auditors dedupe
+`invitation_granted` on `operation_id`. Its budget is
+`AuthenticationLimits.InvitationSync` (default 10 a minute per user, 60 per IP).
 
 - **The cross-identifier case.** Invited at `a@x`, a user signs up with another
-  identifier, then adds and verifies `a@x` through the identifier-change flow:
+  identifier, then adds and verifies `a@x` through the identifier-change flow,
+  login- or recovery-enabled (a notification-only add resolves only once login
+  or recovery is enabled on it):
   the `AutoAccept` invitations grant on the confirm, and the others appear under
   `GET /auth/invitations/mine?identifier_kind=email` for the token accept. An
   invitee who ends up with two accounts needs account merge, which the pocket
   does not offer yet.
-- **The current verified holder resolves.** A verified value is unique per
-  `(user, kind)` at a time, not across time: if one account gives up `x` and
-  another later verifies it, the later holder resolves every invitation still
-  pending for `x`. That is the model — the invitation is addressed to the
+- **The current verified holder of the sign-in/recovery claim resolves.** A
+  claim-holding value is unique across users at a time, not across time: if one
+  account gives up `x` and another later verifies it with the claim, the later
+  holder resolves every invitation still pending for `x`. That is the model — the invitation is addressed to the
   identifier — bounded by the 7-day TTL, the inviter's `AutoAccept` choice and
   the inviter's cancel.
 - **Other kinds.** Identifiers are verified for email and phone only, so an
   invitation of any other host-declared kind never resolves and is accepted by
-  token alone, by any authenticated holder of the link. The fragment link below
-  keeps that token out of logs and `Referer`s.
+  its token, by any authenticated holder of the link who holds at least one
+  claim-holding verified identifier (403 `invitation_identity_mismatch`
+  otherwise). The
+  fragment link below keeps that token out of logs and `Referer`s.
+- **A narrow race.** The accept-time match reads the verified identifiers, then
+  claims: an identifier removed between the two still lets that one accept
+  complete. The removal and the accept were both the subject's own.
 - **Upgrading.** `invitations.Service.ResolveInvitations` takes a `kind`
   (`ResolveInvitations(ctx, kind, value, subjectType, subjectID)`) beside the new
   `ResolvePendingInvitations`, and `invitations.AccessConfig.VerifiedIdentifiers`
-  (a lister of every verified identifier) replaces `CallerIdentifiers`. Both are
+  (a lister of the claim-holding verified identifiers) replaces `CallerIdentifiers`. Both are
   wired by the root `New`; only a host that calls or fakes them directly changes
-  code.
+  code. `AcceptInput.Identifier` is deprecated and ignored. On the wire, an
+  accept by a caller whose verified identifiers do not match answers 403
+  `invitation_identity_mismatch` (was `permission_denied`), and an accept by a
+  caller with no verified email no longer answers 404 before the match: an email
+  or phone invitation answers by the match, an open-kind one 403 unless the
+  caller holds some verified identifier.
+- **Known.** The duplicate `invitation_granted` rows above go away once the
+  store's `CompleteAcceptance` reports whether it moved the row, so only that
+  caller records and counts — a store-changing follow-up.
 
 **Provenance.** Every `invitation_granted` row carries `operation_id` and
 `resolved_by` — the path that completed the claim: `accept`, `verification`,
@@ -762,6 +786,9 @@ WARN, development one WARN. The next authentication minor removes the field.
 
 The landing page's responsibilities:
 
+- invitation links and magic links (and the OAuth pending link) all carry
+  `#token=`: tell them apart by the landing PATH, never by the bare fragment —
+  give the invitation landing (`InvitationURL`) its own route;
 - read `location.hash` and `history.replaceState` it away **before any network
   call or third-party script**;
 - accept is session-gated: when the invitee must sign in first, hold the token in
@@ -2181,7 +2208,7 @@ code, 2026-10-24):
 - **Accept** works for a provider user whose JIT email is verified (the
   verified-identifier match — applied to email and phone invitation kinds only;
   an invitation of any other, host-declared kind is accepted by any authenticated
-  holder of the token, see "Verified ownership and identifier resolution" under
+  holder of the token who holds a verified identifier, see "Verified ownership and identifier resolution" under
   [Route surface](#route-surface-json)) and, like every bundled mutation, needs
   `X-CSRF-Token` on the cookie transport; `GET /auth/csrf` admits provider
   cookies.

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -243,11 +244,15 @@ func TestDirectAddRecordsProvenance(t *testing.T) {
 
 // TestOpenKindInvitationAcceptsByToken pins the named residual: an open-kind
 // invitation resolves only for a verified identifier of that kind (the rail
-// verifies none today), and otherwise the token alone accepts it.
+// verifies none today), and otherwise the token accepts it for any subject
+// holding at least one verified identifier.
 func TestOpenKindInvitationAcceptsByToken(t *testing.T) {
 	repo := newFakeInvRepo()
 	granter := &fakeGranter{}
-	svc := newSvc(t, repo, granter, constructorConfig{VerifiedIdentifiers: func(context.Context, string) ([]sdk.IdentityAddress, error) {
+	svc := newSvc(t, repo, granter, constructorConfig{VerifiedIdentifiers: func(_ context.Context, userID string) ([]sdk.IdentityAddress, error) {
+		if userID == "user-4" {
+			return nil, nil
+		}
 		return []sdk.IdentityAddress{{Kind: "chat", Value: "@alice"}}, nil
 	}, BodySenders: map[string]delivery.BodySender{"chat": &fakeNotifier{}}})
 	seedInviteKind(t, repo, "project", "p1", "member", "@alice", "chat", "inviter", "secret-c", true, time.Now().Add(time.Hour))
@@ -258,10 +263,84 @@ func TestOpenKindInvitationAcceptsByToken(t *testing.T) {
 	if n, _ := svc.ResolveInvitations(context.Background(), "chat", "@bob", "user", "user-3"); n != 0 {
 		t.Fatalf("an unverified open-kind value resolved %d", n)
 	}
+	if _, err := svc.Accept(context.Background(), AcceptInput{Token: "secret-d", SubjectType: "user", SubjectID: "user-4"}); !errors.Is(err, ErrIdentifierMismatch) {
+		t.Fatalf("open-kind accept by a subject with no verified identifier: err = %v, want ErrIdentifierMismatch", err)
+	}
 	if _, err := svc.Accept(context.Background(), AcceptInput{Token: "secret-d", SubjectType: "user", SubjectID: "user-3"}); err != nil {
 		t.Fatalf("open-kind token accept: %v", err)
 	}
 	if got, _ := repo.Get(context.Background(), other.ID); got.Status != StatusAccepted {
 		t.Errorf("open-kind accept = %+v", got)
+	}
+}
+
+// barrierGranter holds a Grant briefly so a second resolution path can reach
+// the same invitation while the first is inside the Granter.
+type barrierGranter struct {
+	mu  sync.Mutex
+	ops []string
+}
+
+func (g *barrierGranter) Grant(_ context.Context, in GrantInput) error {
+	g.mu.Lock()
+	g.ops = append(g.ops, in.OperationID)
+	g.mu.Unlock()
+	time.Sleep(20 * time.Millisecond)
+	return nil
+}
+
+// lockedEvents is a fakeSecurityEvents safe for concurrent recording.
+type lockedEvents struct {
+	mu sync.Mutex
+	fakeSecurityEvents
+}
+
+func (r *lockedEvents) Create(ctx context.Context, evt securityevent.SecurityEvent) (securityevent.SecurityEvent, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.fakeSecurityEvents.Create(ctx, evt)
+}
+
+// TestConcurrentResolutionDuplicatesShareOperationID pins the documented
+// concurrency residual (BE-R2): a verification and a sync racing on one
+// invitation may both reach the Granter and both record invitation_granted,
+// but every row and every grant carries the invitation's one operation_id, the
+// key an auditor and the host's Granter dedupe on.
+func TestConcurrentResolutionDuplicatesShareOperationID(t *testing.T) {
+	repo := newFakeInvRepo()
+	granter := &barrierGranter{}
+	events := &lockedEvents{}
+	svc := newSvc(t, repo, granter, constructorConfig{VerifiedIdentifiers: multiIdentifier, SecurityEvents: events})
+	// The synchronous test outbox is not safe for concurrent sends; the
+	// member-added notice is not what this case is about.
+	svc.deliverer, svc.queue = nil, nil
+	inv := seedInvite(t, repo, "project", "A", "member", "second@x.com", "inviter", "s-a", true, time.Now().Add(time.Hour))
+	var wg sync.WaitGroup
+	for _, resolve := range []func(context.Context, string, string, string, string) (int, error){svc.ResolveInvitations, svc.ResolvePendingInvitations} {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, err := resolve(context.Background(), sdk.AddressKindEmail, "second@x.com", "user", "user-9"); err != nil {
+				t.Errorf("resolve: %v", err)
+			}
+		}()
+	}
+	wg.Wait()
+	rows := grantRows(&events.fakeSecurityEvents, securityevent.StatusSuccess)
+	if len(rows) == 0 || len(granter.ops) == 0 {
+		t.Fatalf("no grant recorded: rows=%d grants=%d", len(rows), len(granter.ops))
+	}
+	for _, row := range rows {
+		if row.Details["operation_id"] != inv.ID {
+			t.Errorf("row operation_id = %v, want %s", row.Details["operation_id"], inv.ID)
+		}
+	}
+	for _, op := range granter.ops {
+		if op != inv.ID {
+			t.Errorf("grant operation id = %s, want %s", op, inv.ID)
+		}
+	}
+	if got, _ := repo.Get(context.Background(), inv.ID); got.Status != StatusAccepted {
+		t.Errorf("invitation = %+v, want accepted", got)
 	}
 }

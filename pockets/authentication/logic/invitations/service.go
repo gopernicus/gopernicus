@@ -209,8 +209,9 @@ type MemberCheck func(ctx context.Context, resourceType, resourceID, subjectType
 // the Users repository — not a host configuration seam.
 type UserLookup func(ctx context.Context, email string) (subjectID string, found bool, err error)
 
-// IdentifierLister lists a subject's active VERIFIED identifiers as (kind,
-// normalized value) pairs, every kind and every value, primary or not. The
+// IdentifierLister lists a subject's active VERIFIED identifiers that hold the
+// authentication claim (login- or recovery-enabled) as (kind, normalized value)
+// pairs, every kind, primary or not. The
 // accept-time match and identifier resolution both ask it whether the subject
 // holds the invitation's (kind, identifier). It is an INTERNAL collaborator
 // wired by package auth from authlogic.VerifiedIdentifiers, so invitation
@@ -267,14 +268,15 @@ func (p PreparedCreate) Input() CreateInput {
 func (p PreparedCreate) ResolvedSubjectID() string { return p.subjectID }
 
 // AcceptInput is the input to Accept. Token is the plaintext secret from the
-// invitation mail; SubjectType/SubjectID is the accepting caller; Identifier is
-// retained for source compatibility; verified ownership comes from the configured
-// identifier reader, never this caller-supplied value.
+// invitation mail; SubjectType/SubjectID is the accepting caller. Verified
+// ownership comes from the configured identifier lister.
 type AcceptInput struct {
 	Token       string
 	SubjectType string
 	SubjectID   string
-	Identifier  string
+	// Deprecated: Accept ignores Identifier; ownership is read from the
+	// verified identifiers. It is kept for source compatibility.
+	Identifier string
 }
 
 // AcceptResult reports the granted tuple's resource/relation.
@@ -599,14 +601,20 @@ func (s *Service) Accept(ctx context.Context, in AcceptInput) (AcceptResult, err
 		return AcceptResult{}, sdk.ErrInvalidInput
 	}
 	if inv.Status == StatusPending {
+		var err error
 		switch inv.IdentifierKind {
 		case sdk.AddressKindEmail, sdk.AddressKindPhone:
-			if err := s.requireVerifiedIdentifier(ctx, in.SubjectID, inv.IdentifierKind, inv.Identifier); err != nil {
-				if errors.Is(err, ErrIdentifierMismatch) {
-					s.recordAcceptDenied(ctx, in.SubjectID, &inv, securityevent.ReasonPolicy)
-				}
-				return AcceptResult{}, err
+			err = s.requireVerifiedIdentifier(ctx, in.SubjectID, inv.IdentifierKind, inv.Identifier)
+		default:
+			// No identifier of an open kind is verified, so the token accepts; the
+			// caller must still hold some verified identifier.
+			err = s.requireAnyVerifiedIdentifier(ctx, in.SubjectID)
+		}
+		if err != nil {
+			if errors.Is(err, ErrIdentifierMismatch) {
+				s.recordAcceptDenied(ctx, in.SubjectID, &inv, securityevent.ReasonPolicy)
 			}
+			return AcceptResult{}, err
 		}
 	}
 	accepted, err := s.acceptClaim(ctx, inv, subjectType, in.SubjectID, resolvedByAccept)
@@ -1240,6 +1248,22 @@ func (s *Service) requireVerifiedIdentifier(ctx context.Context, userID, kind, w
 		}
 	}
 	return ErrIdentifierMismatch
+}
+
+// requireAnyVerifiedIdentifier admits a subject holding at least one active
+// verified identifier of any kind; none (or no lister) is ErrIdentifierMismatch.
+func (s *Service) requireAnyVerifiedIdentifier(ctx context.Context, userID string) error {
+	if s.verifiedIdentifiers == nil || userID == "" {
+		return ErrIdentifierMismatch
+	}
+	addresses, err := s.verifiedIdentifiers(ctx, userID)
+	if errors.Is(err, sdk.ErrNotFound) || err == nil && len(addresses) == 0 {
+		return ErrIdentifierMismatch
+	}
+	if err != nil {
+		return fmt.Errorf("list verified invitation identifiers: %w", err)
+	}
+	return nil
 }
 
 // hashSecret returns the stored form of an invitation secret — its SHA-256 hex

@@ -448,13 +448,22 @@ func accessModel() decisions.Model {
 func adminWritesAnyRole(context.Context, authorizationhttp.RoleWriteRequest) error { return nil }
 
 // userAdmins admits the global admin role to every user-administration
-// action, the irreversible erase included. decisions is set once the
-// authorization pocket exists, before any route is served.
+// action this host names, the irreversible erase and the security-event read
+// included, and refuses any other: an action a later release adds is denied
+// until the check names it. decisions is set once the authorization pocket
+// exists, before any route is served.
 type userAdmins struct {
 	decisions *decisions.Service
 }
 
 func (u *userAdmins) check(ctx context.Context, req authenticationhttp.UserAdminCheckRequest) error {
+	switch req.Action {
+	case authenticationhttp.UserAdminList, authenticationhttp.UserAdminRead, authenticationhttp.UserAdminDeactivate,
+		authenticationhttp.UserAdminReactivate, authenticationhttp.UserAdminResendVerification, authenticationhttp.UserAdminErase,
+		authenticationhttp.UserAdminResetPasskeys, authenticationhttp.UserAdminResetTOTP, authenticationhttp.UserAdminReadAudit:
+	default:
+		return fmt.Errorf("user administration action %q is not admitted: %w", req.Action, sdk.ErrForbidden)
+	}
 	result, err := u.decisions.EvaluateResolved(ctx, authorizationmodel.PrincipalFrom(req.Principal), decisions.Role(adminRole), nil)
 	if err != nil {
 		return err

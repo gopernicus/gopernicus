@@ -224,8 +224,8 @@ var (
 	// fragment. Development permits it with a startup WARN.
 	ErrInvitationURLRequired = errors.New("auth: production RuntimeMode requires LinksConfig.InvitationURL (AUTH_INVITATION_URL) when invitations are wired: set it to the absolute landing page that reads the #token fragment")
 	// ErrInvitationURLInvalid is returned when a non-empty LinksConfig.InvitationURL
-	// is not a valid absolute http(s) URL with a host, or carries a FRAGMENT (the
-	// builder appends "#token=<token>").
+	// is not a valid absolute http(s) URL with a host and no userinfo, or carries a
+	// FRAGMENT (the builder appends "#token=<token>").
 	ErrInvitationURLInvalid = errors.New("auth: LinksConfig.InvitationURL must be a valid absolute http(s) URL with no fragment")
 	// ErrInvitationURLInsecure is returned in production RuntimeMode when
 	// LinksConfig.InvitationURL is not HTTPS: the link carries a single-use
@@ -546,7 +546,7 @@ func validateOAuthLinkBaseURL(mode environment.Mode, raw string) error {
 // host and no fragment, HTTPS in production.
 func validateInvitationURL(mode environment.Mode, raw string) error {
 	u, err := url.Parse(raw)
-	if err != nil || !u.IsAbs() || u.Host == "" {
+	if err != nil || !u.IsAbs() || u.Host == "" || u.User != nil {
 		return fmt.Errorf("%w: %q", ErrInvitationURLInvalid, raw)
 	}
 	if u.Fragment != "" || strings.Contains(raw, "#") {

@@ -3,6 +3,7 @@ package authenticationhttp
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"time"
 
@@ -264,9 +265,9 @@ func (h *handlers) listResourceInvitations(w http.ResponseWriter, r *http.Reques
 
 // listMyInvitations pages the caller's own invitations, keyed on one of their
 // verified identifiers (session-gated): ?identifier_kind=email (the default) or
-// phone; any other kind is a 400. The value is the caller's active verified
-// identifier of that kind (primary first), resolved so invitation service stays
-// decoupled from the identifier store. It answers the RECIPIENT projection,
+// phone; any other kind is a 400. The value is the caller's first claim-holding
+// (login- or recovery-enabled) verified identifier of that kind, primary first,
+// resolved so invitation service stays decoupled from the identifier store. It answers the RECIPIENT projection,
 // which carries no host metadata.
 func (h *handlers) listMyInvitations(w http.ResponseWriter, r *http.Request) {
 	kind := r.URL.Query().Get(queryIdentifierKind)
@@ -287,7 +288,7 @@ func (h *handlers) listMyInvitations(w http.ResponseWriter, r *http.Request) {
 		web.RespondJSONError(w, web.ErrUnauthorized("authentication required"))
 		return
 	}
-	value, err := h.svc.ActiveVerifiedIdentifier(r.Context(), userID, kind)
+	value, err := h.mineIdentifier(r.Context(), userID, kind)
 	if err != nil {
 		web.RespondJSONDomainError(w, err)
 		return
@@ -298,6 +299,24 @@ func (h *handlers) listMyInvitations(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	web.RespondJSONOK(w, newPageResponse(page, newMyInvitationResponse))
+}
+
+// mineIdentifier is the caller's first claim-holding verified identifier of
+// kind (primary first); without a claim lister it is ActiveVerifiedIdentifier.
+func (h *handlers) mineIdentifier(ctx context.Context, userID, kind string) (string, error) {
+	if h.claims == nil {
+		return h.svc.ActiveVerifiedIdentifier(ctx, userID, kind)
+	}
+	addresses, err := h.claims.VerifiedIdentifiers(ctx, userID)
+	if err != nil {
+		return "", err
+	}
+	for _, a := range addresses {
+		if a.Kind == kind {
+			return a.Value, nil
+		}
+	}
+	return "", fmt.Errorf("no sign-in %s identifier for user: %w", kind, sdk.ErrNotFound)
 }
 
 // acceptInvitation redeems a token for the calling user (session-gated). An

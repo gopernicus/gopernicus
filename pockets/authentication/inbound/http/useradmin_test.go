@@ -143,6 +143,8 @@ func TestSecurityEventsRouteRefusesBadQueries(t *testing.T) {
 		{"since after until", "?since=2026-10-26T00:00:00Z&until=2026-10-25T00:00:00Z", ""},
 		{"since equals until", "?since=2026-10-25T00:00:00Z&until=2026-10-25T00:00:00Z", ""},
 		{"repeated key", "?event_type=a&event_type=b", ""},
+		{"malformed event_type", "?event_type=Not%20A%20Type", ""},
+		{"unknown event_status", "?event_status=maybe", ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			reader := &fakeSecurityEventReader{}
@@ -167,8 +169,13 @@ func TestSecurityEventsRouteDenialReadsNothing(t *testing.T) {
 	f := newSecurityEventsFixture(t, reader)
 	f.deny = true
 	key, _ := f.operatorKey(t)
-	if rec, _ := f.list(t, key, "?offset=5"); rec.Code != http.StatusForbidden {
-		t.Fatalf("denied listing = %d, want 403 before any query validation", rec.Code)
+	for _, query := range []string{"?offset=5", "?event_type=a&event_type=b", "?event_status=maybe"} {
+		if rec, _ := f.list(t, key, query); rec.Code != http.StatusForbidden {
+			t.Fatalf("denied listing %s = %d, want 403 before any query validation", query, rec.Code)
+		}
+	}
+	if rec, _ := f.list(t, key, "?user_id=a&user_id=b"); rec.Code != http.StatusBadRequest {
+		t.Fatalf("repeated user_id = %d, want 400 before the host check", rec.Code)
 	}
 	if len(reader.filters) != 0 {
 		t.Error("a denied caller reached the reader")

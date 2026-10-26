@@ -25,6 +25,7 @@ func TestValidateInvitationURL(t *testing.T) {
 		{"http rejected in production", environment.ModeProduction, "http://app.example.com/invite", ErrInvitationURLInsecure},
 		{"relative rejected", environment.ModeDevelopment, "/invite", ErrInvitationURLInvalid},
 		{"no host rejected", environment.ModeDevelopment, "https:///invite", ErrInvitationURLInvalid},
+		{"userinfo rejected", environment.ModeDevelopment, "https://user:pass@app.example.com/invite", ErrInvitationURLInvalid},
 		{"non-http scheme rejected", environment.ModeDevelopment, "ftp://app.example.com/invite", ErrInvitationURLInvalid},
 		{"fragment rejected", environment.ModeDevelopment, "https://app.example.com/#/invite", ErrInvitationURLInvalid},
 		{"empty fragment rejected", environment.ModeDevelopment, "https://app.example.com/invite#", ErrInvitationURLInvalid},

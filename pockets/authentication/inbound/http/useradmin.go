@@ -2,6 +2,9 @@ package authenticationhttp
 
 import (
 	"net/http"
+	"net/url"
+	"regexp"
+	"slices"
 	"time"
 
 	"github.com/gopernicus/gopernicus/pockets"
@@ -28,6 +31,15 @@ const codeOffsetNotSupported = "offset_not_supported"
 // securityEventQueryKeys are the keys the security-event listing reads. Each
 // may appear once, so the host check and this handler can never read
 // different values of one key.
+var (
+	// eventTypeShape bounds an event_type filter: the rail stores free TEXT
+	// (a host-bridged type such as authorization_denied is valid there without
+	// being in securityevent.Types()), so the filter admits any snake_case type.
+	eventTypeShape = regexp.MustCompile(`^[a-z][a-z0-9]*(_[a-z0-9]+)*$`)
+	// securityEventStatuses is the closed status vocabulary.
+	securityEventStatuses = []string{securityevent.StatusSuccess, securityevent.StatusFailure, securityevent.StatusBlocked}
+)
+
 var securityEventQueryKeys = []string{
 	querySecurityEventUserID, querySecurityEventType, querySecurityEventStatus, querySecurityEventSince, querySecurityEventUntil,
 	list.QueryKeyLimit, list.QueryKeyCursor, list.QueryKeyOffset, list.QueryKeyCount, list.QueryKeySearch, list.QueryKeyOrder,
@@ -330,14 +342,25 @@ func (h *handlers) adminEraseUser(w http.ResponseWriter, r *http.Request) {
 func (h *handlers) adminListSecurityEvents(w http.ResponseWriter, r *http.Request) {
 	writeNoStore(w)
 	q := r.URL.Query()
-	for _, key := range securityEventQueryKeys {
-		if len(q[key]) > 1 {
-			web.RespondJSONError(w, web.ErrBadRequest(key+" may appear at most once"))
-			return
-		}
+	// Only the key the host check reads is validated before it; everything
+	// else is the admitted caller's to get wrong.
+	if !singleValued(w, q, querySecurityEventUserID) {
+		return
 	}
 	userID := q.Get(querySecurityEventUserID)
 	if _, ok := h.adminPrincipal(w, r, UserAdminReadAudit, userID); !ok {
+		return
+	}
+	if !singleValued(w, q, securityEventQueryKeys...) {
+		return
+	}
+	eventType, eventStatus := q.Get(querySecurityEventType), q.Get(querySecurityEventStatus)
+	if eventType != "" && !eventTypeShape.MatchString(eventType) {
+		web.RespondJSONError(w, web.ErrBadRequest("event_type must be a snake_case event type"))
+		return
+	}
+	if eventStatus != "" && !slices.Contains(securityEventStatuses, eventStatus) {
+		web.RespondJSONError(w, web.ErrBadRequest("event_status must be success, failure or blocked"))
 		return
 	}
 	since, ok := parseOptionalTime(w, querySecurityEventSince, q.Get(querySecurityEventSince))
@@ -356,13 +379,24 @@ func (h *handlers) adminListSecurityEvents(w http.ResponseWriter, r *http.Reques
 	if !ok {
 		return
 	}
-	filter := securityevent.ListFilter{UserID: userID, EventType: q.Get(querySecurityEventType), EventStatus: q.Get(querySecurityEventStatus), Since: since, Until: until}
+	filter := securityevent.ListFilter{UserID: userID, EventType: eventType, EventStatus: eventStatus, Since: since, Until: until}
 	page, err := h.events.ListSecurityEvents(r.Context(), filter, req)
 	if err != nil {
 		web.RespondJSONDomainError(w, err)
 		return
 	}
 	web.RespondJSONOK(w, newPageResponse(page, newSecurityEventResponse))
+}
+
+// singleValued answers a named 400 when any of keys is repeated.
+func singleValued(w http.ResponseWriter, q url.Values, keys ...string) bool {
+	for _, key := range keys {
+		if len(q[key]) > 1 {
+			web.RespondJSONError(w, web.ErrBadRequest(key+" may appear at most once"))
+			return false
+		}
+	}
+	return true
 }
 
 // parseSecurityEventListRequest admits limit, cursor and count only: the rail

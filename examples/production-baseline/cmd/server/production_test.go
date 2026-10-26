@@ -585,3 +585,14 @@ func TestAuditRoutesAndSelfAssignment(t *testing.T) {
 		t.Errorf("role_write_refused rows = %d, want 1 (the self-assignment)", len(events.ofType(decisions.EventRoleWriteRefused)))
 	}
 }
+
+// TestUserAdminCheckSwitchesOnAction proves the user-administration check
+// refuses an action it does not name before consulting authorization, so an
+// action a later release adds is denied until the host admits it.
+func TestUserAdminCheckSwitchesOnAction(t *testing.T) {
+	admins := &userAdmins{}
+	err := admins.check(context.Background(), authenticationhttp.UserAdminCheckRequest{Principal: sdk.Principal{Type: "user", ID: memberID}, Action: "a-future-action"})
+	if !errors.Is(err, sdk.ErrForbidden) {
+		t.Fatalf("unknown action: err = %v, want forbidden", err)
+	}
+}

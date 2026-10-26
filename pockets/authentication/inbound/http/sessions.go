@@ -14,6 +14,7 @@ import (
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/serviceaccount"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/user"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/delivery"
+	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/ratelimiter"
 	"github.com/gopernicus/gopernicus/sdk/pkg/list"
 	"github.com/gopernicus/gopernicus/sdk/pkg/web"
@@ -184,6 +185,13 @@ type securityEventReader interface {
 // leaves the route unmounted.
 type invitationSyncer interface {
 	SyncInvitations(ctx context.Context, userID string) (int, error)
+}
+
+// claimIdentifierLister lists a user's verified identifiers that hold the
+// authentication claim; "mine" keys on it when the service provides it, so a
+// notification-only identifier never lists invitations.
+type claimIdentifierLister interface {
+	VerifiedIdentifiers(ctx context.Context, userID string) ([]sdk.IdentityAddress, error)
 }
 
 type authService interface {

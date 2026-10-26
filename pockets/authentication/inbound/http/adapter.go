@@ -134,6 +134,7 @@ func New(service AuthenticationService, runtimeMode environment.Mode, opts ...Op
 		events = e
 	}
 	syncer, _ := cfg.Authentication.(invitationSyncer)
+	claims, _ := cfg.Authentication.(claimIdentifierLister)
 	if err := cfg.RouteLimits.Validate(); err != nil {
 		return nil, err
 	}
@@ -167,7 +168,7 @@ func New(service AuthenticationService, runtimeMode environment.Mode, opts ...Op
 		Mutation: MutationSecurity{AllowedOrigins: append([]string(nil), cfg.AllowedOrigins...), OriginPolicy: cfg.OriginPolicy, SessionCookieName: auth.SessionCookieName(), csrfCookie: auth.csrfCookie},
 		Views:    views, HTMLPolicy: snapshotHTMLPolicy(cfg.HTMLPolicy), MachineGate: cfg.MachineGate,
 		RouteAuth: resolveBundledRouteAuth(cfg.RouteAuth, auth),
-		Eraser:    eraser, SecurityEvents: events, InvitationSync: syncer,
+		Eraser:    eraser, SecurityEvents: events, InvitationSync: syncer, ClaimIdentifiers: claims,
 		Proxies: auth.proxies, RouteLimits: cfg.RouteLimits, AdministrationMFA: cfg.AdministrationMFA,
 		Passkeys: passkeys, PasskeyViews: passkeyViews,
 		TOTP: totps, TOTPViews: totpViews,

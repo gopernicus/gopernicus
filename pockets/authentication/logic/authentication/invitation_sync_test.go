@@ -131,3 +131,63 @@ func TestListSecurityEventsRecordsAuditRead(t *testing.T) {
 		t.Errorf("filters = %v, want [event_type since]", d["filters"])
 	}
 }
+
+// TestNotificationOnlyIdentifierNeverResolves pins the owner's HIGH-1 ruling:
+// only identifiers holding the authentication claim (login or recovery) are
+// unique across users, so a notification-only identifier is not listed, does
+// not resolve on its confirm and is not synced; enabling login on it resolves.
+func TestNotificationOnlyIdentifierNeverResolves(t *testing.T) {
+	h := newHarness(t, nil)
+	ctx := context.Background()
+	userID, _, sessionID := h.mustVerifiedLogin(t, "owner@example.com", "password123456789")
+	resolver := &fakeResolver{}
+	h.svc.invitations = resolver
+
+	if err := h.startAndConfirmEmail(t, sessionID, userID, "notify@example.com", identifier.Uses{Notification: true}, false); err != nil {
+		t.Fatalf("confirm a notification-only email: %v", err)
+	}
+	if len(resolver.calls) != 0 {
+		t.Fatalf("a notification-only confirm resolved: %+v", resolver.calls)
+	}
+	addresses, err := h.svc.VerifiedIdentifiers(ctx, userID)
+	if err != nil || len(addresses) != 1 || addresses[0].Value != "owner@example.com" {
+		t.Fatalf("VerifiedIdentifiers = %+v, %v; want only the claim-holding owner@", addresses, err)
+	}
+	if _, err := h.svc.SyncInvitations(ctx, userID); err != nil {
+		t.Fatalf("SyncInvitations: %v", err)
+	}
+	if len(resolver.calls) != 1 || resolver.calls[0].email != "owner@example.com" {
+		t.Fatalf("sync walked %+v, want owner@ only", resolver.calls)
+	}
+
+	idents, err := h.idents.ListByUser(ctx, userID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var notifyID string
+	for _, it := range idents {
+		if it.NormalizedValue == "notify@example.com" && it.Active() {
+			notifyID = it.ID
+		}
+	}
+	if err := h.svc.SetIdentifierUses(ctx, IdentifierUsesInput{SessionID: sessionID, UserID: userID, IdentifierID: notifyID,
+		Uses: identifier.Uses{Login: true, Notification: true}}); err != nil {
+		t.Fatalf("enable login on notify@: %v", err)
+	}
+	want := resolverCall{string(identifier.KindEmail), "notify@example.com", PrincipalUser, userID}
+	if len(resolver.calls) != 2 || resolver.calls[1] != want {
+		t.Fatalf("enabling login resolved %+v, want %+v", resolver.calls, want)
+	}
+	// The uses change revised the credentials, so sign in again for the next one.
+	if _, _, err := h.svc.Login(ctx, "owner@example.com", "password123456789"); err != nil {
+		t.Fatalf("Login: %v", err)
+	}
+	sessionID = h.sessionIDFor(t, userID)
+	if err := h.svc.SetIdentifierUses(ctx, IdentifierUsesInput{SessionID: sessionID, UserID: userID, IdentifierID: notifyID,
+		Uses: identifier.Uses{Login: true, Recovery: true, Notification: true}}); err != nil {
+		t.Fatalf("add recovery on notify@: %v", err)
+	}
+	if len(resolver.calls) != 2 {
+		t.Errorf("a uses change on an identifier already holding the claim re-resolved: %+v", resolver.calls)
+	}
+}

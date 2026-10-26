@@ -155,12 +155,17 @@ type CompromisedPasswordChecker interface {
 // invitationResolver is the SINGLE narrow port authentication service holds on the sibling
 // invitation service (design §6 pin): every verification of an identifier calls
 // ResolveInvitations to grant the auto-accept invitations addressed to that
-// (kind, value), and SyncInvitations calls ResolvePendingInvitations, its
-// pending-only form, per verified identifier. It is
+// (kind, value). It is
 // declared here (structural) so authentication service carries NO import edge to invitation service
 // and never holds the Granter. Nil → invitations are off (a no-op).
 type invitationResolver interface {
 	ResolveInvitations(ctx context.Context, kind, value, subjectType, subjectID string) (int, error)
+}
+
+// pendingInvitationResolver is the optional pending-only form SyncInvitations
+// drives; the invitation service implements it. A resolver without it makes
+// SyncInvitations resolve nothing.
+type pendingInvitationResolver interface {
 	ResolvePendingInvitations(ctx context.Context, kind, value, subjectType, subjectID string) (int, error)
 }
 
@@ -649,23 +654,25 @@ func (s *Service) resolvePendingInvitations(ctx context.Context, kind, value, us
 const maxSyncIdentifiers = 8
 
 // SyncInvitations resolves, on demand, the pending auto-accept invitations
-// addressed to any of userID's verified identifiers (at most eight, primary
-// first) and returns how many it granted. It walks pending rows only — an
+// addressed to any of userID's claim-holding verified identifiers
+// (VerifiedIdentifiers; at most eight, primary first) and returns how many it granted. It walks pending rows only — an
 // accepting claim is re-driven by a verification, never by a sync — and it is
 // idempotent: a second call finds nothing left. Each call spends the
-// invitation_sync budget (ten a minute per user); exhaustion is
-// ErrRateLimited. Without invitations wired it resolves nothing.
+// invitation_sync budget (AuthenticationLimits.InvitationSync, default ten a
+// minute per user); exhaustion is ErrRateLimited. Without invitations wired, or
+// with a resolver that has no pending-only form, it resolves nothing.
 func (s *Service) SyncInvitations(ctx context.Context, userID string) (int, error) {
 	if strings.TrimSpace(userID) == "" {
 		return 0, fmt.Errorf("auth: sync invitations: empty user id: %w", sdk.ErrInvalidInput)
 	}
-	if s.invitations == nil {
+	pending, ok := s.invitations.(pendingInvitationResolver)
+	if !ok {
 		return 0, nil
 	}
 	if err := s.invitationSyncRequest(ctx, userID); err != nil {
 		return 0, err
 	}
-	addresses, err := s.projectAddresses(ctx, userID)
+	addresses, err := s.VerifiedIdentifiers(ctx, userID)
 	if err != nil {
 		return 0, err
 	}
@@ -674,7 +681,7 @@ func (s *Service) SyncInvitations(ctx context.Context, userID string) (int, erro
 	}
 	resolved := 0
 	for _, a := range addresses {
-		n, err := s.invitations.ResolvePendingInvitations(ctx, a.Kind, a.Value, PrincipalUser, userID)
+		n, err := pending.ResolvePendingInvitations(ctx, a.Kind, a.Value, PrincipalUser, userID)
 		resolved += n
 		if err != nil {
 			return resolved, err
@@ -683,21 +690,22 @@ func (s *Service) SyncInvitations(ctx context.Context, userID string) (int, erro
 	return resolved, nil
 }
 
-// VerifiedIdentifiers returns every active, VERIFIED identifier of userID as
-// (kind, normalized value) pairs, primary first, then oldest — the set the
-// invitation accept-time match and identifier resolution consult. None → an
-// empty slice and a nil error.
+// VerifiedIdentifiers returns the active, VERIFIED identifiers of userID that
+// hold the authentication claim (login- or recovery-enabled — the values unique
+// across users) as (kind, normalized value) pairs, primary first, then oldest:
+// the set invitation resolution, the sync, "mine" and the accept-time match
+// consult. A notification-only identifier is never listed. None → an empty
+// slice and a nil error.
 func (s *Service) VerifiedIdentifiers(ctx context.Context, userID string) ([]sdk.IdentityAddress, error) {
-	return s.projectAddresses(ctx, userID)
+	return claimAddresses(ctx, s.identifiers, userID)
 }
 
 // ActiveVerifiedIdentifier returns the normalized value of userID's active,
 // VERIFIED identifier of kind — primary first, then oldest — resolved through the
 // v3 identifier rail (design §7). It is the single kind-aware accessor that
-// replaced the EmailForUser/VerifiedPhoneForUser proliferation: the invitation
-// HTTP handlers key "mine" on it, so invitation service stays decoupled from the
-// identifier store (the auth pocket owns user identity); the accept-time match
-// uses VerifiedIdentifiers. No active verified identifier of that kind →
+// replaced the EmailForUser/VerifiedPhoneForUser proliferation. Invitation
+// "mine", resolution and the accept-time match use VerifiedIdentifiers (the
+// claim-holding subset) instead. No active verified identifier of that kind →
 // sdk.ErrNotFound.
 func (s *Service) ActiveVerifiedIdentifier(ctx context.Context, userID, kind string) (string, error) {
 	addresses, err := s.projectAddresses(ctx, userID)

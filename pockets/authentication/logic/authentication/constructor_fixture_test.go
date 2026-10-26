@@ -71,7 +71,6 @@ type authenticationFixture struct {
 	SecurityEvents        securityevent.SecurityEventRepository
 	Invitations           interface {
 		ResolveInvitations(context.Context, string, string, string, string) (int, error)
-		ResolvePendingInvitations(context.Context, string, string, string, string) (int, error)
 	}
 	OAuthAccounts           oauthaccount.OAuthAccountRepository
 	OAuthStates             oauthstate.StateRepository

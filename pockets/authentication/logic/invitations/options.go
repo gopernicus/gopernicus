@@ -22,9 +22,10 @@ type Option func(*constructorConfig)
 type AccessConfig struct {
 	MemberCheck MemberCheck
 	UserLookup  UserLookup
-	// VerifiedIdentifiers lists a subject's active verified identifiers for the
-	// accept-time account match and identifier resolution (design §7/V11): an
-	// email or phone invitation matches any of them, primary or not. Wired by
+	// VerifiedIdentifiers lists a subject's active verified identifiers holding
+	// the authentication claim (login or recovery) for the accept-time account
+	// match and identifier resolution (design §7/V11): an email or phone
+	// invitation matches any of them, primary or not. Wired by
 	// package auth from authlogic.VerifiedIdentifiers; nil disables the email/phone
 	// match (fail closed).
 	VerifiedIdentifiers IdentifierLister
