@@ -53,3 +53,19 @@ func TestHostCanUsePublicSensitiveAuthentication(t *testing.T) {
 		t.Fatalf("host live gate: %d %s", w.Code, w.Body)
 	}
 }
+
+// A host transport can read a user's verified identifiers and run the
+// on-demand invitation sync through the public service; this fixture wires no
+// Granter, so the sync resolves nothing.
+func TestHostCanUseVerifiedIdentifiersAndSync(t *testing.T) {
+	host := newLinkHost(t)
+	c := host.signUp("public-sync@example.com")
+	uid := c.userIDFor()
+	addresses, err := host.svc.Authentication.VerifiedIdentifiers(context.Background(), uid)
+	if err != nil || len(addresses) != 1 || addresses[0].Kind != "email" || addresses[0].Value != "public-sync@example.com" {
+		t.Fatalf("VerifiedIdentifiers = %+v, %v", addresses, err)
+	}
+	if n, err := host.svc.Authentication.SyncInvitations(context.Background(), uid); err != nil || n != 0 {
+		t.Fatalf("SyncInvitations = %d, %v; want 0 without invitations", n, err)
+	}
+}

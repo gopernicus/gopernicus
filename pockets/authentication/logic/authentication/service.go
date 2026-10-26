@@ -153,12 +153,20 @@ type CompromisedPasswordChecker interface {
 }
 
 // invitationResolver is the SINGLE narrow port authentication service holds on the sibling
-// invitation service (design §6 pin): verified-identity flows call it to grant
-// the verified email's pending auto-accept invitations. It is
+// invitation service (design §6 pin): every verification of an identifier calls
+// ResolveInvitations to grant the auto-accept invitations addressed to that
+// (kind, value). It is
 // declared here (structural) so authentication service carries NO import edge to invitation service
 // and never holds the Granter. Nil → invitations are off (a no-op).
 type invitationResolver interface {
-	ResolveInvitations(ctx context.Context, email, subjectType, subjectID string) (int, error)
+	ResolveInvitations(ctx context.Context, kind, value, subjectType, subjectID string) (int, error)
+}
+
+// pendingInvitationResolver is the optional pending-only form SyncInvitations
+// drives; the invitation service implements it. A resolver without it makes
+// SyncInvitations resolve nothing.
+type pendingInvitationResolver interface {
+	ResolvePendingInvitations(ctx context.Context, kind, value, subjectType, subjectID string) (int, error)
 }
 
 // constructorConfig holds storage and resolved host policy.
@@ -291,7 +299,7 @@ type Service struct {
 	// the supplied recorder or one over Repositories.SecurityEvents. Without a
 	// repository recordSecurityEvent is a no-op (ratified AV9).
 	securityEvents *securityevent.Recorder
-	// invitations resolves grants for proven email ownership. Nil disables it.
+	// invitations resolves grants for proven identifier ownership. Nil disables it.
 	invitations invitationResolver
 
 	// OAuth flow state (design §3). providers is keyed by Provider.Name();
@@ -630,25 +638,75 @@ func (s *Service) Verify(ctx context.Context, emailAddr, code string) error {
 	})
 	// The verified identifier is now the authoritative claim; resolve the invitee's
 	// pending auto-accept invitations against its normalized value.
-	s.resolvePendingInvitations(ctx, normalized, u.ID)
+	s.resolvePendingInvitations(ctx, sdk.AddressKindEmail, normalized, u.ID)
 	return nil
 }
 
-// resolvePendingInvitations processes invitations after verified email ownership.
-// Resolver errors are logged without failing authentication; durable acceptance
-// claims let the invitation service resume an interrupted grant.
-func (s *Service) resolvePendingInvitations(ctx context.Context, email, userID string) {
-	resolvePendingInvitations(ctx, s.invitations, s.logger, email, userID)
+// resolvePendingInvitations processes invitations after verified ownership of
+// (kind, value). Resolver errors are logged without failing authentication;
+// durable acceptance claims let the invitation service resume an interrupted
+// grant.
+func (s *Service) resolvePendingInvitations(ctx context.Context, kind, value, userID string) {
+	resolvePendingInvitations(ctx, s.invitations, s.logger, kind, value, userID)
+}
+
+// maxSyncIdentifiers caps the verified identifiers one SyncInvitations walks.
+const maxSyncIdentifiers = 8
+
+// SyncInvitations resolves, on demand, the pending auto-accept invitations
+// addressed to any of userID's claim-holding verified identifiers
+// (VerifiedIdentifiers; at most eight, primary first) and returns how many it granted. It walks pending rows only — an
+// accepting claim is re-driven by a verification, never by a sync — and it is
+// idempotent: a second call finds nothing left. Each call spends the
+// invitation_sync budget (AuthenticationLimits.InvitationSync, default ten a
+// minute per user); exhaustion is ErrRateLimited. Without invitations wired, or
+// with a resolver that has no pending-only form, it resolves nothing.
+func (s *Service) SyncInvitations(ctx context.Context, userID string) (int, error) {
+	if strings.TrimSpace(userID) == "" {
+		return 0, fmt.Errorf("auth: sync invitations: empty user id: %w", sdk.ErrInvalidInput)
+	}
+	pending, ok := s.invitations.(pendingInvitationResolver)
+	if !ok {
+		return 0, nil
+	}
+	if err := s.invitationSyncRequest(ctx, userID); err != nil {
+		return 0, err
+	}
+	addresses, err := s.VerifiedIdentifiers(ctx, userID)
+	if err != nil {
+		return 0, err
+	}
+	if len(addresses) > maxSyncIdentifiers {
+		addresses = addresses[:maxSyncIdentifiers]
+	}
+	resolved := 0
+	for _, a := range addresses {
+		n, err := pending.ResolvePendingInvitations(ctx, a.Kind, a.Value, PrincipalUser, userID)
+		resolved += n
+		if err != nil {
+			return resolved, err
+		}
+	}
+	return resolved, nil
+}
+
+// VerifiedIdentifiers returns the active, VERIFIED identifiers of userID that
+// hold the authentication claim (login- or recovery-enabled — the values unique
+// across users) as (kind, normalized value) pairs, primary first, then oldest:
+// the set invitation resolution, the sync, "mine" and the accept-time match
+// consult. A notification-only identifier is never listed. None → an empty
+// slice and a nil error.
+func (s *Service) VerifiedIdentifiers(ctx context.Context, userID string) ([]sdk.IdentityAddress, error) {
+	return claimAddresses(ctx, s.identifiers, userID)
 }
 
 // ActiveVerifiedIdentifier returns the normalized value of userID's active,
 // VERIFIED identifier of kind — primary first, then oldest — resolved through the
 // v3 identifier rail (design §7). It is the single kind-aware accessor that
-// replaced the EmailForUser/VerifiedPhoneForUser proliferation: the invitation
-// HTTP handlers key "mine" and the accept-time identifier match on it, and the
-// accept-time phone match resolves the caller's verified phone through it, so
-// invitation service stays decoupled from the identifier store (the auth pocket owns
-// user identity). No active verified identifier of that kind → sdk.ErrNotFound.
+// replaced the EmailForUser/VerifiedPhoneForUser proliferation. Invitation
+// "mine", resolution and the accept-time match use VerifiedIdentifiers (the
+// claim-holding subset) instead. No active verified identifier of that kind →
+// sdk.ErrNotFound.
 func (s *Service) ActiveVerifiedIdentifier(ctx context.Context, userID, kind string) (string, error) {
 	addresses, err := s.projectAddresses(ctx, userID)
 	if err != nil {

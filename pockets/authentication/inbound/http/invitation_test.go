@@ -68,7 +68,7 @@ func (stubInvitationService) CreatePrepared(context.Context, invitations.Prepare
 func (stubInvitationService) ListByResource(context.Context, string, string, list.Request) (list.Page[invitations.Invitation], error) {
 	return list.Page[invitations.Invitation]{}, nil
 }
-func (stubInvitationService) Mine(context.Context, string, list.Request) (list.Page[invitations.Invitation], error) {
+func (stubInvitationService) Mine(context.Context, string, string, list.Request) (list.Page[invitations.Invitation], error) {
 	return list.Page[invitations.Invitation]{}, nil
 }
 func (stubInvitationService) Accept(context.Context, invitations.AcceptInput) (invitations.AcceptResult, error) {
@@ -115,7 +115,7 @@ func (s *spyInvitationService) ListByResource(context.Context, string, string, l
 	s.listCalled = true
 	return s.listPage, nil
 }
-func (s *spyInvitationService) Mine(context.Context, string, list.Request) (list.Page[invitations.Invitation], error) {
+func (s *spyInvitationService) Mine(context.Context, string, string, list.Request) (list.Page[invitations.Invitation], error) {
 	s.mineCalled = true
 	return list.Page[invitations.Invitation]{}, nil
 }
@@ -915,7 +915,7 @@ type metadataMineInvitationService struct {
 	stubInvitationService
 }
 
-func (metadataMineInvitationService) Mine(context.Context, string, list.Request) (list.Page[invitations.Invitation], error) {
+func (metadataMineInvitationService) Mine(context.Context, string, string, list.Request) (list.Page[invitations.Invitation], error) {
 	return list.Page[invitations.Invitation]{Items: []invitations.Invitation{{
 		ID: "inv-1", ResourceType: "project", ResourceID: "p1", Relation: "member",
 		Identifier: "bob@example.com", InvitedBy: "u-owner", Status: "pending",

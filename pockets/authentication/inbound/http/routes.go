@@ -26,6 +26,9 @@ type handlers struct {
 	userAdminCheck UserAdminCheck
 	adminMFA       bool
 	eraser         userEraser
+	events         securityEventReader
+	syncer         invitationSyncer
+	claims         claimIdentifierLister
 	svc            authService
 	inv            InvitationService
 	listStrategy   list.Strategy
@@ -101,6 +104,14 @@ type mountDeps struct {
 	// Eraser drives POST /auth/admin/users/{id}/erase. Nil unless the host
 	// opted in (WithUserErasureRoute) and the service's erasure is wired.
 	Eraser userEraser
+	// SecurityEvents drives GET /auth/admin/security-events. Nil unless the host
+	// opted in (WithSecurityEventsRoute) and the service's repository is wired.
+	SecurityEvents securityEventReader
+	// InvitationSync drives POST /auth/invitations/sync; nil leaves it unmounted.
+	InvitationSync invitationSyncer
+	// ClaimIdentifiers keys GET /auth/invitations/mine on claim-holding
+	// identifiers; nil falls back to ActiveVerifiedIdentifier.
+	ClaimIdentifiers claimIdentifierLister
 	// AdministrationMFA requires AAL2 of every caller UserAdminCheck admits on
 	// /auth/admin/users* (WithAdministrationMFA).
 	AdministrationMFA bool
@@ -246,7 +257,7 @@ func mount(r pockets.RouteRegistrar, d mountDeps) {
 	auth := d.RouteAuth.withDefaults(svc)
 	limits := d.RouteLimits.withDefaults()
 	r = clientInfoRegistrar{inner: noStoreRegistrar{inner: r}, proxies: d.Proxies}
-	h := &handlers{oauth2: d.OAuth2, inviteCheck: d.InviteCheck, resourceRule: d.ResourceRule, userAdminCheck: d.UserAdminCheck, adminMFA: d.AdministrationMFA, eraser: d.Eraser, svc: svc, inv: inv, listStrategy: d.ListStrategy, mutation: d.Mutation, views: views, htmlPolicy: d.HTMLPolicy,
+	h := &handlers{oauth2: d.OAuth2, inviteCheck: d.InviteCheck, resourceRule: d.ResourceRule, userAdminCheck: d.UserAdminCheck, adminMFA: d.AdministrationMFA, eraser: d.Eraser, events: d.SecurityEvents, syncer: d.InvitationSync, claims: d.ClaimIdentifiers, svc: svc, inv: inv, listStrategy: d.ListStrategy, mutation: d.Mutation, views: views, htmlPolicy: d.HTMLPolicy,
 		passkeys: d.Passkeys, passkeyViews: d.PasskeyViews, totp: d.TOTP, totpViews: d.TOTPViews,
 		machineMFA: d.AdministrationMFA && (d.Passkeys != nil || d.TOTP != nil)}
 	if d.OAuth2 != nil {
@@ -400,6 +411,11 @@ func mount(r pockets.RouteRegistrar, d mountDeps) {
 		// destructive route by upgrading.
 		if d.Eraser != nil {
 			r.Handle("POST", "/auth/admin/users/{id}/erase", h.adminEraseUser, auth.UserAdministration, browserSafe)
+		}
+		// The security-event listing is an explicit opt-in too: a host whose
+		// UserAdminCheck ignores Action must not expose the rail by upgrading.
+		if d.SecurityEvents != nil {
+			r.Handle("GET", "/auth/admin/security-events", h.adminListSecurityEvents, auth.UserAdministration)
 		}
 		if d.Passkeys != nil {
 			r.Handle("POST", "/auth/admin/users/{id}/passkeys/reset", h.adminResetPasskeys, auth.UserAdministration, browserSafe)

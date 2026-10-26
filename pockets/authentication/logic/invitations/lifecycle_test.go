@@ -16,18 +16,18 @@ type grantFunc func(context.Context, GrantInput) error
 func (f grantFunc) Grant(ctx context.Context, in GrantInput) error { return f(ctx, in) }
 
 func TestAcceptanceRequiresVerifiedEmailIndependentlyOfInput(t *testing.T) {
-	for _, lookup := range []IdentifierLookup{nil, func(context.Context, string, string) (string, error) { return "", sdk.ErrNotFound }, func(context.Context, string, string) (string, error) { return "other@example.com", nil }} {
+	for _, lookup := range []IdentifierLister{nil, func(context.Context, string) ([]sdk.IdentityAddress, error) { return nil, sdk.ErrNotFound }, verifiedAs(sdk.AddressKindEmail, "other@example.com"), verifiedAs(sdk.AddressKindPhone, "invitee@x.com")} {
 		t.Run("unproven", func(t *testing.T) {
 			repo := newFakeInvRepo()
 			g := &fakeGranter{}
 			svc := newSvc(t, repo, g, constructorConfig{})
-			svc.callerIdentifiers = lookup
+			svc.verifiedIdentifiers = lookup
 			inv := seedInvite(t, repo, "project", "p", "member", "invitee@x.com", "owner", "secret", true, time.Now().Add(time.Hour))
 			_, err := svc.Accept(context.Background(), AcceptInput{Token: "secret", SubjectID: "user-9", Identifier: "invitee@x.com"})
 			if !errors.Is(err, ErrIdentifierMismatch) {
 				t.Fatalf("accept: %v", err)
 			}
-			n, err := svc.ResolveInvitations(context.Background(), "invitee@x.com", "user", "user-9")
+			n, err := svc.ResolveInvitations(context.Background(), sdk.AddressKindEmail, "invitee@x.com", "user", "user-9")
 			if err != nil || n != 0 || len(g.calls) != 0 {
 				t.Fatalf("resolve=%d,%v grants=%d", n, err, len(g.calls))
 			}
@@ -210,7 +210,7 @@ func TestClaimResumesAfterAmbiguousGrantOrFinalizationAndRestart(t *testing.T) {
 			// beyond token expiry; the persisted claim supplies the original proof.
 			resumed := newSvc(t, repo, grant, constructorConfig{Clock: func() time.Time { return inv.ExpiresAt.Add(time.Hour) }})
 			resumed.invitations = durable
-			resumed.callerIdentifiers = nil
+			resumed.verifiedIdentifiers = nil
 			if _, err := resumed.Accept(context.Background(), input); err != nil {
 				t.Fatalf("resume: %v", err)
 			}

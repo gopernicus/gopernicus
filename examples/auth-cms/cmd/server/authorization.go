@@ -90,13 +90,17 @@ func authzIntegrityPolicy() mutations.IntegrityPolicy {
 // requirement is met. A recording store needs an audit.Source on every change:
 // the bundled role routes stamp the principal, and this host's seeds and
 // granters stamp themselves as systems. With securityEvents set, the decision
-// bridge records denials and refused role writes into the authentication
-// pocket's security-event rail through that recorder; nil records none.
+// bridge records denials, refused role writes and audit-listing reads into the
+// authentication pocket's security-event rail through that recorder; nil
+// records none. The role routes and GET /authorization/audit share the one
+// gate; a role write naming the caller itself is refused before host policy.
 func newAuthorization(roleRoutesGate web.Middleware, securityEvents securityevents.Recorder, mode environment.Mode, logger *slog.Logger) (authorization.Components, error) {
 	store := authzmem.New(authzmem.WithIntegrityPolicy(authzIntegrityPolicy()), authzmem.WithAudit())
 	var observer decisions.DecisionObserver
+	var auditReads authorizationhttp.AuditReadObserver
 	if securityEvents != nil {
-		observer = securityevents.New(securityEvents)
+		bridge := securityevents.NewBridge(securityEvents)
+		observer, auditReads = bridge.Observer(), bridge.AuditReads()
 	}
 	components, err := authorization.New(
 		authorization.Repositories{
@@ -115,8 +119,14 @@ func newAuthorization(roleRoutesGate web.Middleware, securityEvents securityeven
 		return authorization.Components{}, err
 	}
 	if roleRoutesGate != nil {
-		components.HTTP, err = authorizationhttp.New(authorizationhttp.Services{Decisions: components.Decisions, Roles: components.Roles, Mutations: components.Mutations}, authorizationhttp.WithRoleRoutes(authorizationhttp.RoleRoutes{Gate: roleRoutesGate, WritePolicy: access.New(components.Decisions).RoleWrite}),
-			authorizationhttp.WithDecisionObserver(observer), authorizationhttp.WithLogger(logger))
+		components.HTTP, err = authorizationhttp.New(
+			authorizationhttp.Services{Decisions: components.Decisions, Roles: components.Roles, Mutations: components.Mutations, Audit: components.Audit},
+			authorizationhttp.WithRoleRoutes(authorizationhttp.RoleRoutes{
+				Gate:        roleRoutesGate,
+				WritePolicy: authorizationhttp.AllOf(authorizationhttp.RefuseSelfTarget, access.New(components.Decisions).RoleWrite),
+				AuditGate:   roleRoutesGate,
+			}),
+			authorizationhttp.WithDecisionObserver(observer), authorizationhttp.WithAuditReadObserver(auditReads), authorizationhttp.WithLogger(logger))
 	}
 	return components, err
 }

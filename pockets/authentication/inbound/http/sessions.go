@@ -10,9 +10,11 @@ import (
 	authlogic "github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/apikey"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/authgrant"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/securityevent"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/serviceaccount"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/user"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/delivery"
+	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/ratelimiter"
 	"github.com/gopernicus/gopernicus/sdk/pkg/list"
 	"github.com/gopernicus/gopernicus/sdk/pkg/web"
@@ -169,6 +171,27 @@ type AuthenticationService interface {
 type userEraser interface {
 	UserErasureEnabled() bool
 	EraseUser(ctx context.Context, actor authlogic.Principal, id string) (user.Summary, user.Erasure, error)
+}
+
+// securityEventReader is the security-event listing the admin route drives,
+// resolved from the AuthenticationService at New like userEraser.
+type securityEventReader interface {
+	SecurityEventsEnabled() bool
+	ListSecurityEvents(ctx context.Context, filter securityevent.ListFilter, req list.Request) (list.Page[securityevent.SecurityEvent], error)
+}
+
+// invitationSyncer is the on-demand invitation sync POST /auth/invitations/sync
+// drives, resolved from the AuthenticationService at New; a service without it
+// leaves the route unmounted.
+type invitationSyncer interface {
+	SyncInvitations(ctx context.Context, userID string) (int, error)
+}
+
+// claimIdentifierLister lists a user's verified identifiers that hold the
+// authentication claim; "mine" keys on it when the service provides it, so a
+// notification-only identifier never lists invitations.
+type claimIdentifierLister interface {
+	VerifiedIdentifiers(ctx context.Context, userID string) ([]sdk.IdentityAddress, error)
 }
 
 type authService interface {

@@ -119,11 +119,16 @@ const (
 	// recovery codes and revokes their sessions, so they enroll again from a
 	// primary login.
 	UserAdminResetTOTP UserAdminAction = "reset-totp"
+	// UserAdminReadAudit is a read of the security-event rail
+	// (GET /auth/admin/security-events). The target is the user_id filter, empty
+	// for a read across every user.
+	UserAdminReadAudit UserAdminAction = "read-audit"
 )
 
 // UserAdminCheckRequest is the parsed, principal-resolved authorization question
 // the pocket poses to a host UserAdminCheck. TargetUserID is empty for
-// UserAdminList and set for every other action.
+// UserAdminList and for a UserAdminReadAudit without a user_id filter, and set
+// for every other action.
 //
 // The Principal reaches the policy VERBATIM — including a machine principal from
 // an API key. The pocket does not pre-decide whether a service account may

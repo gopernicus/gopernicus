@@ -368,13 +368,14 @@ func (s *Service) RedeemPasswordless(ctx context.Context, token string) (TokenPa
 			s.recordPasswordlessLogin(ctx, "", "", purpose, securityevent.StatusFailure)
 			return TokenPair{}, genericRedemptionError(err)
 		}
-		s.recordPasswordlessOutcome(ctx, res, string(identifier.KindEmail))
-		// A newly provisioned account resolves its pending invitations exactly as a
-		// password registration or an OAuth provisioning does — best-effort, after
-		// the domain commit, and ONLY for a provision: an adoption or a login must
-		// not re-grant invitations that were already resolved (CHAU-6.6).
-		if res.Provisioned {
-			s.resolvePendingInvitations(ctx, res.Identifier.NormalizedValue, res.User.ID)
+		s.recordPasswordlessOutcome(ctx, res, string(res.Identifier.Kind))
+		// The identifier's first verification resolves its pending invitations
+		// exactly as a password registration or an OAuth provisioning does —
+		// best-effort, after the domain commit: a provision and an adoption of an
+		// unverified identifier both verify it; a login of an already verified one
+		// does not re-run resolution (CHAU-6.6, S7 every-verification rule).
+		if (res.Provisioned || res.Outcome == passwordless.OutcomeVerifyAndAdoptExistingUnverified) && holdsClaim(res.Identifier) {
+			s.resolvePendingInvitations(ctx, string(res.Identifier.Kind), res.Identifier.NormalizedValue, res.User.ID)
 		}
 		return pair, nil
 	}

@@ -103,6 +103,8 @@ type constructorConfig struct {
 	PublicAuthBaseURL             string   `env:"AUTH_PUBLIC_BASE_URL"`
 	PasswordResetURL              string   `env:"AUTH_PASSWORD_RESET_URL"`
 	OAuthLinkBaseURL              string   `env:"AUTH_OAUTH_LINK_URL"`
+	InvitationURL                 string   `env:"AUTH_INVITATION_URL"`
+	InvitationTokenInQuery        bool     `env:"AUTH_INVITATION_TOKEN_IN_QUERY"`
 	PasswordlessProvisionOnRedeem bool     `env:"AUTH_PASSWORDLESS_PROVISION_ON_REDEEM"`
 	Passwordless                  []string `env:"AUTH_PASSWORDLESS"`
 	IDs                           sdk.IDGenerator
@@ -137,6 +139,7 @@ type constructorConfig struct {
 	Maintenance                   maintenance.Config
 	MaintenanceRunnerAcknowledged bool
 	UserErasureRoute              bool
+	SecurityEventsRoute           bool
 	MFARequired                   MFARequirement
 	MFAMethods                    []MFAMethod
 	// mfaRequiredSource records whether MFARequired came from configuration or
@@ -690,6 +693,23 @@ type LinksConfig struct {
 	// landing page can scrub it from history. Request Host/forwarded headers never
 	// participate: the link is built from this configured value alone.
 	OAuthLinkBaseURL string `env:"AUTH_OAUTH_LINK_URL"`
+	// InvitationURL is the absolute landing URL an invitation (and its
+	// member-added notice) links to when the inviter requested no allowlisted
+	// redirect, BEFORE the "#token=<token>" fragment is appended. Without it the
+	// link falls back to the relative "/", which most mail clients cannot open.
+	//
+	// Validation at construction: a non-empty value must be an absolute http(s)
+	// URL with a host and NO fragment (the token owns it), HTTPS in production
+	// (ErrInvitationURLInvalid / ErrInvitationURLInsecure). PRODUCTION requires it
+	// whenever invitations are wired (a Granter; ErrInvitationURLRequired);
+	// development permits it empty with one startup WARN and keeps "/".
+	InvitationURL string `env:"AUTH_INVITATION_URL"`
+	// InvitationTokenInQuery restores the "?token=<token>" invitation link the
+	// URL fragment replaced, for ONE release: a host whose landing page still
+	// reads the query sets it while it moves to location.hash. Production logs
+	// one posture_waiver=InvitationTokenInQuery WARN with it, development one
+	// WARN; the next authentication minor removes the field.
+	InvitationTokenInQuery bool `env:"AUTH_INVITATION_TOKEN_IN_QUERY"`
 	// RedirectAllowlist is the exact-match allowlist of ABSOLUTE post-flow
 	// redirect destinations (open-redirect guard). The same-origin default ("/")
 	// is always allowed, and the browser lanes (OAuth flows and HTML form
@@ -710,6 +730,8 @@ func WithLinks(value LinksConfig) Option {
 		c.PublicAuthBaseURL = value.PublicAuthBaseURL
 		c.PasswordResetURL = value.PasswordResetURL
 		c.OAuthLinkBaseURL = value.OAuthLinkBaseURL
+		c.InvitationURL = value.InvitationURL
+		c.InvitationTokenInQuery = value.InvitationTokenInQuery
 		c.RedirectAllowlist = value.RedirectAllowlist
 	}
 }
@@ -959,6 +981,13 @@ type AdministrationConfig struct {
 	// without both → ErrUserErasureRouteRequires. A step-up requirement is host
 	// policy, keyed on the action.
 	UserErasureRoute bool
+	// SecurityEventsRoute opts in to GET /auth/admin/security-events (SOC 2 S7),
+	// the cursor-paged security-event listing, mounted under the admin gates with
+	// the action UserAdminReadAudit; each page read records one audit_read row.
+	// It never mounts on Repositories.SecurityEvents and UserAdminCheck alone: a
+	// host whose check ignores the action must not expose the rail by upgrading.
+	// Set without both → ErrSecurityEventsRouteRequires.
+	SecurityEventsRoute bool
 }
 
 // WithAdministration replaces the complete AdministrationConfig group, including zero values.
@@ -968,6 +997,7 @@ func WithAdministration(value AdministrationConfig) Option {
 		c.UserAdminCheck = value.UserAdminCheck
 		c.ListStrategy = value.ListStrategy
 		c.UserErasureRoute = value.UserErasureRoute
+		c.SecurityEventsRoute = value.SecurityEventsRoute
 	}
 }
 

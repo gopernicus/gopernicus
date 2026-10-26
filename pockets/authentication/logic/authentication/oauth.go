@@ -482,7 +482,7 @@ func (s *Service) VerifyLink(ctx context.Context, token string) (OAuthResult, er
 		return OAuthResult{}, genericIfNotActive(err, invalidCredentials())
 	}
 	if adoptID != "" {
-		s.resolvePendingInvitations(ctx, matched.NormalizedValue, u.ID)
+		s.resolvePendingInvitations(ctx, sdk.AddressKindEmail, matched.NormalizedValue, u.ID)
 	}
 	s.recordOAuth(ctx, created.UserID, created.Provider, securityevent.TypeOAuthLinkVerified, securityevent.StatusSuccess, "")
 	return OAuthResult{Action: ActionLinked, Token: pair.AccessToken, RefreshToken: pair.RefreshToken, User: u}, nil
@@ -632,7 +632,7 @@ func (s *Service) registerAndLink(ctx context.Context, providerName, normEmail s
 	if primaryEmail == "" {
 		primaryEmail = normEmail // a store that does not echo the identifier back
 	}
-	s.resolvePendingInvitations(ctx, primaryEmail, created.ID)
+	s.resolvePendingInvitations(ctx, sdk.AddressKindEmail, primaryEmail, created.ID)
 	pair, err := s.mintSession(ctx, created.ID, created.AuthRevision, s.primaryAuthentication(session.MethodOAuth))
 	if err != nil {
 		return OAuthResult{}, err

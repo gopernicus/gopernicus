@@ -18,12 +18,15 @@ type RequestBudget struct {
 // SensitiveCode is shared across operations so changing purpose does not reset it.
 // SecondFactor bounds every TOTP and recovery-code proof (enrollment confirm and
 // both step-ups) per user and per IP, checked before any secret is opened.
+// InvitationSync bounds the on-demand invitation sync (default ten a minute per
+// user, sixty per IP).
 type AuthenticationLimits struct {
 	Login             RequestBudget
 	PasswordReset     RequestBudget
 	SensitiveCode     RequestBudget
 	SensitivePassword RequestBudget
 	SecondFactor      RequestBudget
+	InvitationSync    RequestBudget
 }
 
 func (l AuthenticationLimits) withDefaults() AuthenticationLimits {
@@ -37,6 +40,7 @@ func (l AuthenticationLimits) withDefaults() AuthenticationLimits {
 		{&l.SensitiveCode, 5, 30},
 		{&l.SensitivePassword, 5, 30},
 		{&l.SecondFactor, 10, 30},
+		{&l.InvitationSync, 10, 60},
 	} {
 		if item.budget.PerSubject == (ratelimiter.Limit{}) {
 			item.budget.PerSubject = ratelimiter.PerMinute(item.subject)
@@ -59,6 +63,7 @@ func (l AuthenticationLimits) Validate() error {
 		{"SensitiveCode", l.SensitiveCode},
 		{"SensitivePassword", l.SensitivePassword},
 		{"SecondFactor", l.SecondFactor},
+		{"InvitationSync", l.InvitationSync},
 	} {
 		for _, limit := range []ratelimiter.Limit{item.budget.PerSubject, item.budget.PerIP} {
 			if _, err := limit.Normalize(); err != nil {
@@ -99,4 +104,8 @@ func (s *Service) sensitivePasswordBudget(ctx context.Context, userID string) er
 
 func (s *Service) secondFactorBudget(ctx context.Context, userID string) error {
 	return s.allowAuthenticationRequest(ctx, "second_factor", userID, s.authenticationLimits.SecondFactor)
+}
+
+func (s *Service) invitationSyncRequest(ctx context.Context, userID string) error {
+	return s.allowAuthenticationRequest(ctx, "invitation_sync", userID, s.authenticationLimits.InvitationSync)
 }

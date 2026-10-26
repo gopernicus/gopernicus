@@ -31,8 +31,10 @@ import (
 )
 
 // magicTokenPattern extracts the token from the fragment of a delivered
-// magic-link URL.
-var magicTokenPattern = regexp.MustCompile(`#token=([A-Za-z0-9._~%-]+)`)
+// magic-link URL. It is anchored to the magic-link landing path: an invitation
+// link to the same address also carries #token=, and its asynchronous delivery
+// may land after a test's mark.
+var magicTokenPattern = regexp.MustCompile(`/auth/magic#token=([A-Za-z0-9._~%-]+)`)
 
 // recordingGranter is a trivial auth.Granter that records what it granted. The
 // invitation flow needs a Granter to exist at all (deny-by-absence); what it does
@@ -354,5 +356,41 @@ func TestProvisionedAccountResolvesPendingInvitations(t *testing.T) {
 	}
 	if got := granter.grants(); len(got) != 1 {
 		t.Errorf("a subsequent link LOGIN re-granted invitations: %v", got)
+	}
+}
+
+// TestAdoptedAccountResolvesPendingInvitations pins the S7 every-verification
+// rule on the adoption branch: a password registration that never verified,
+// then a magic-link redeem that verifies and adopts it, resolves the
+// auto-accept invitation addressed to it.
+func TestAdoptedAccountResolvesPendingInvitations(t *testing.T) {
+	host, granter := newProvisioningHostWithInvitations(t)
+	const invitee = "adopted-by-link@example.com"
+
+	squatter := host.newClient()
+	if resp, body := squatter.do("POST", "/auth/register",
+		`{"email":"`+invitee+`","password":"`+linkPassword+`","display_name":"Unverified"}`, nil); resp.StatusCode != http.StatusCreated {
+		t.Fatalf("register = %d; body=%s", resp.StatusCode, body)
+	}
+	inviter := host.signUp("adopt-inviter@example.com")
+	body := `{"identifier":"` + invitee + `","relation":"member","auto_accept":true}`
+	if resp, respBody := inviter.do("POST", "/auth/invitations/project/p-adopt", body,
+		http.Header{"X-CSRF-Token": {inviter.csrfToken()}}); resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create invitation = %d; body=%s", resp.StatusCode, respBody)
+	}
+	if got := granter.grants(); len(got) != 0 {
+		t.Fatalf("an unverified address granted at create: %v", got)
+	}
+
+	c := host.newClient()
+	before := host.sender.count()
+	c.startMagicLink(t, invitee)
+	token := host.awaitMagicToken(t, before, invitee)
+	if resp, body := c.do("POST", "/auth/passwordless/redeem", `{"token":"`+token+`"}`, nil); resp.StatusCode != http.StatusOK {
+		t.Fatalf("redeem = %d; body=%s", resp.StatusCode, body)
+	}
+	grants := granter.grants()
+	if len(grants) != 1 || !strings.Contains(grants[0], "project:p-adopt#member") {
+		t.Fatalf("adoption grants = %v, want the one auto-accept invitation", grants)
 	}
 }

@@ -173,6 +173,12 @@ var ErrMaintenanceAcknowledgedWithoutRepository = errors.New("auth: MaintenanceC
 // that could never mount.
 var ErrUserErasureRouteRequires = errors.New("auth: AdministrationConfig.UserErasureRoute requires Repositories.UserErasure and AdministrationConfig.UserAdminCheck")
 
+// ErrSecurityEventsRouteRequires is returned by New when
+// AdministrationConfig.SecurityEventsRoute is set without
+// Repositories.SecurityEvents or without AdministrationConfig.UserAdminCheck:
+// the opt-in names a route that could never mount.
+var ErrSecurityEventsRouteRequires = errors.New("auth: AdministrationConfig.SecurityEventsRoute requires Repositories.SecurityEvents and AdministrationConfig.UserAdminCheck")
+
 // ErrUserErasureRequiresActiveSessions is returned by New when
 // Repositories.UserErasure is wired without Repositories.ActiveSessions: a
 // login racing the erase would mint through the unfenced Sessions.Create after

@@ -5,6 +5,8 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/gopernicus/gopernicus/sdk"
+
 	"github.com/gopernicus/gopernicus/sdk/capabilities/ratelimiter"
 )
 
@@ -15,11 +17,17 @@ type fakeResolver struct {
 	err   error
 }
 
-type resolverCall struct{ email, subjectType, subjectID string }
+type resolverCall struct{ kind, email, subjectType, subjectID string }
 
-func (f *fakeResolver) ResolveInvitations(_ context.Context, email, subjectType, subjectID string) (int, error) {
-	f.calls = append(f.calls, resolverCall{email, subjectType, subjectID})
+func (f *fakeResolver) ResolveInvitations(_ context.Context, kind, email, subjectType, subjectID string) (int, error) {
+	f.calls = append(f.calls, resolverCall{kind, email, subjectType, subjectID})
 	return len(f.calls), f.err
+}
+
+// ResolvePendingInvitations records a sync call as kind "sync:<kind>".
+func (f *fakeResolver) ResolvePendingInvitations(_ context.Context, kind, email, subjectType, subjectID string) (int, error) {
+	f.calls = append(f.calls, resolverCall{"sync:" + kind, email, subjectType, subjectID})
+	return 0, f.err
 }
 
 func serviceWithResolver(t *testing.T, resolver invitationResolver) (*Service, *recordingMailer) {
@@ -82,7 +90,7 @@ func TestVerifyResolvesInvitations(t *testing.T) {
 		t.Fatalf("resolver call count = %d, want 1 (verify only)", len(resolver.calls))
 	}
 	last := resolver.calls[0]
-	if last.email != "verify@example.com" || last.subjectType != PrincipalUser || last.subjectID != u.ID {
+	if last.kind != sdk.AddressKindEmail || last.email != "verify@example.com" || last.subjectType != PrincipalUser || last.subjectID != u.ID {
 		t.Errorf("verify resolve call = %+v, want {verify@example.com, user, %s}", last, u.ID)
 	}
 }

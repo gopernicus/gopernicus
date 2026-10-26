@@ -779,7 +779,7 @@ func (e *ExternalAuthenticator) provision(ctx context.Context, p externalProvide
 		return externalsubject.ExternalSubject{}, errMirrorNotPersisted
 	}
 	if kind == identifier.KindEmail && verified {
-		resolvePendingInvitations(ctx, e.invitations, e.logger, ident.NormalizedValue, created.ID)
+		resolvePendingInvitations(ctx, e.invitations, e.logger, sdk.AddressKindEmail, ident.NormalizedValue, created.ID)
 	}
 	e.events.Record(ctx, securityEventInput{
 		UserID:  created.ID,

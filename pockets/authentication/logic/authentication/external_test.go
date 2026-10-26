@@ -235,7 +235,7 @@ type extInvitations struct {
 	calls []string
 }
 
-func (i *extInvitations) ResolveInvitations(_ context.Context, email, _, subjectID string) (int, error) {
+func (i *extInvitations) ResolveInvitations(_ context.Context, _, email, _, subjectID string) (int, error) {
 	i.mu.Lock()
 	defer i.mu.Unlock()
 	i.calls = append(i.calls, email+"|"+subjectID)

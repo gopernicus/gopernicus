@@ -8,6 +8,8 @@ import (
 
 	authlogic "github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/securityevent"
+	authorizationhttp "github.com/gopernicus/gopernicus/pockets/authorization/inbound/http"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/audit"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/decisions"
 	"github.com/gopernicus/gopernicus/sdk"
 )
@@ -187,4 +189,50 @@ func TestDedupeWindowKeysByClientAddress(t *testing.T) {
 	if dedupeKey(decisions.EventAuthorizationDenied, denial("p1"), "203.0.113.7") == dedupeKey(decisions.EventAuthorizationDenied, denial("p1"), "203.0.113.8") {
 		t.Fatal("two client addresses share a dedupe key")
 	}
+}
+
+// TestAuditReadsRecordEveryReadWithoutDedupe proves each audit listing read is
+// one audit_read row on the authorization rail, the reader as Actor, naming
+// the filter pairs present — and that two identical reads are two rows.
+func TestAuditReadsRecordEveryReadWithoutDedupe(t *testing.T) {
+	rec := &memoryRecorder{}
+	observe := NewBridge(rec).AuditReads()
+	ev := authorizationhttp.AuditReadEvent{
+		Principal: sdk.Principal{Type: "user", ID: "admin"},
+		Filter:    audit.Filter{ResourceType: "project", ResourceID: "p1"},
+		Limit:     25, Returned: 3,
+	}
+	observe(context.Background(), ev)
+	observe(context.Background(), ev)
+	rows := rec.recorded()
+	if len(rows) != 2 {
+		t.Fatalf("rows = %d, want 2 (no dedupe)", len(rows))
+	}
+	want := securityevent.Input{
+		Actor: securityevent.Principal{Type: "user", ID: "admin"}, Type: securityevent.TypeAuditRead, Status: securityevent.StatusSuccess,
+		Details: map[string]any{"rail": "authorization", "filters": []string{"resource"}, "limit": 25, "returned": 3, "strategy": "cursor"},
+	}
+	if !reflect.DeepEqual(rows[0], want) {
+		t.Errorf("row = %+v, want %+v", rows[0], want)
+	}
+}
+
+// TestAuditReadsDropAtTheInFlightBound proves a read arriving while every
+// in-flight slot is taken is dropped and counted.
+func TestAuditReadsDropAtTheInFlightBound(t *testing.T) {
+	rec := &blockingRecorder{entered: make(chan struct{}), release: make(chan struct{})}
+	bridge := NewBridge(rec, WithMaxInFlight(1))
+	observe := bridge.AuditReads()
+	done := make(chan struct{})
+	go func() {
+		observe(context.Background(), authorizationhttp.AuditReadEvent{})
+		close(done)
+	}()
+	<-rec.entered
+	observe(context.Background(), authorizationhttp.AuditReadEvent{})
+	if got := bridge.Dropped(); got != 1 {
+		t.Fatalf("Dropped = %d, want 1", got)
+	}
+	close(rec.release)
+	<-done
 }

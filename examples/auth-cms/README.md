@@ -363,6 +363,8 @@ remain absent.
 | `BrowserConfig.Views` | `authpages.New(bundle)` (branded-Login override of the ui/goth `authgoth.Views`) | nil → API-only (no HTML pages, no templ/`ui/goth` in the graph) |
 | `MessagesConfig.EmailContentTemplates` | `authpages.EmailOverride()` | empty → bundled LayerCore email bodies |
 | `Repositories.SecurityEvents` | authmem | no audit trail (recording site is a no-op) |
+| `LinksConfig.InvitationURL` | this host's own `…/` (`AUTH_INVITATION_URL`) | the absolute landing URL the invitation link carries before `#token=`; production requires it beside a Granter (`ErrInvitationURLRequired`); empty in development → one WARN and the relative `/` |
+| `AdministrationConfig.SecurityEventsRoute` | true | `GET /auth/admin/security-events` not mounted (404) |
 | `AUTH_DEBUG` | off by default; development only (refused at boot in any other mode); live session + platform admin | `/debug/security-events` not registered (404) |
 
 ## Environment
@@ -373,7 +375,8 @@ the JWT/session knobs (`AUTH_JWT_SECRET`, `AUTH_ACCESS_TOKEN_TTL` default 15m,
 v3 secrets (`AUTH_CHALLENGE_PEPPER`, `AUTH_IDENTIFIER_KEY`,
 `AUTH_DELIVERY_ENCRYPTER_KEY`), the v3 HTML/passwordless/magic-link knobs
 (`AUTH_PUBLIC_BASE_URL`, `AUTH_OAUTH_LINK_URL`, `AUTH_ALLOWED_ORIGINS`,
-`AUTH_PASSWORDLESS`),
+`AUTH_PASSWORDLESS`), the invitation link (`AUTH_INVITATION_URL`,
+`AUTH_INVITATION_TOKEN_IN_QUERY`),
 `AUTH_DELIVERY_MODE` (`jobs` default / `in_process` for the ephemeral bounded variant —
 see the Delivery wiring bullet), and
 `AUTH_DEBUG` + `OAUTH_CLIENT_ID/SECRET`. `AUTH_RUNTIME_MODE` is read from the process
@@ -397,7 +400,8 @@ AUTH_RUNTIME_MODE=development AUTH_DEBUG=1 go run ./cmd/server
 
 The console mailer logs every message to the server's STDERR. Read the
 verification code from the `text="Your verification code is: …"` line and the
-invitation token from the `text="… (token: …)"` line.
+invitation token from the `#token=…` fragment of the invitation link (the token
+rides the fragment, never a query parameter).
 
 ### Leg 0 — verified-email gate (five-step, gate ON)
 
@@ -638,6 +642,47 @@ resource was deleted settles on retry → 200 `accepted`),
 `TestFencedInvitationNotRevivedByResourceRestore` (refused first grant, cancel, restore
 the resource → acceptance stays refused) and `TestFencerNamespaceMatchesGranter`
 (fence-then-grant → `ErrGrantFenced`; grant-then-fence → committed).
+
+### Leg 4b — invitations follow a verified identifier (SOC 2 S7)
+
+An invitation is addressed to its identifier: whoever VERIFIES it resolves the
+`auto_accept` invitations addressed to it, the rest wait for the token.
+
+```sh
+# A invites x@example.com twice: one auto-accept, one not (two resources)
+curl -sX POST -c jar -b jar http://localhost:8082/auth/invitations/project/demo -H "X-CSRF-Token: $CSRF" \
+  -H 'Content-Type: application/json' -d '{"identifier":"x@example.com","relation":"member","auto_accept":true}'
+curl -sX POST -c jar -b jar http://localhost:8082/auth/invitations/project/other -H "X-CSRF-Token: $CSRF" \
+  -H 'Content-Type: application/json' -d '{"identifier":"x@example.com","relation":"member"}'
+# Y signs up with ANOTHER address, steps up, then adds x@example.com and confirms
+# the code from the mailer log -> 200; the auto-accept invitation grants on the
+# confirm (invitation_granted resolved_by=verification)
+curl -sX POST -c yjar -b yjar http://localhost:8082/auth/step-up/password -H "X-CSRF-Token: $YCSRF" \
+  -H 'Content-Type: application/json' -d '{"purpose":"change_email","password":"<Y_PASSWORD>"}'
+curl -sX POST -c yjar -b yjar http://localhost:8082/auth/identifiers/email -H "X-CSRF-Token: $YCSRF" \
+  -H 'Content-Type: application/json' -d '{"email":"x@example.com","uses":{"login":true,"notification":true}}'
+curl -sX POST -c yjar -b yjar http://localhost:8082/auth/identifiers/email/confirm -H "X-CSRF-Token: $YCSRF" \
+  -H 'Content-Type: application/json' -d '{"code":"<CODE_FROM_LOG>"}'
+# the other one is listed under the email kind and accepted by its #token
+curl -s -c yjar -b yjar 'http://localhost:8082/auth/invitations/mine?identifier_kind=email'
+curl -s -c yjar -b yjar 'http://localhost:8082/auth/invitations/mine?identifier_kind=chat'   # 400
+# on-demand sync: idempotent, ten a minute per user (the eleventh -> 429)
+curl -sX POST -c yjar -b yjar http://localhost:8082/auth/invitations/sync -H "X-CSRF-Token: $YCSRF" \
+  -H 'Content-Type: application/json' -d '{}'                                     # {"resolved":0}
+```
+
+### Leg 4c — the audit listings (platform admin)
+
+Both audit listings answer a platform admin only, and every read records one
+`audit_read` row (`rail` `authorization` or `security_events`). A role write
+naming the caller itself is refused before host policy (`RefuseSelfTarget`).
+
+```sh
+curl -s -c jar -b jar 'http://localhost:8082/authorization/audit?resource_type=project&resource_id=demo'  # {items,next_cursor,has_more}
+curl -s -c jar -b jar 'http://localhost:8082/auth/admin/security-events?event_type=audit_read'          # the read above, as a row
+curl -s -c jar -b jar 'http://localhost:8082/auth/admin/security-events?offset=5'                       # 400 offset_not_supported
+curl -s -c bjar -b bjar 'http://localhost:8082/auth/admin/security-events'                              # 403 (not an admin)
+```
 
 ### Leg 5 — audit rows visible (DEFAULT-OFF, development only, platform-admin gated)
 

@@ -12,6 +12,10 @@
 // event arriving while they all do is dropped and counted (Dropped), and one
 // row is written per (event type, principal, permission, resource type,
 // resource id, client IP) per WithDedupe window.
+//
+// AuditReads records every read of the authorization change history as an
+// audit_read row (rail authorization). A compliance read trail is never
+// deduplicated; it shares the in-flight bound and the Dropped count.
 package securityevents
 
 import (
@@ -24,6 +28,8 @@ import (
 
 	authlogic "github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/securityevent"
+	authorizationhttp "github.com/gopernicus/gopernicus/pockets/authorization/inbound/http"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/audit"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/decisions"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/cacher"
 )
@@ -119,6 +125,45 @@ func (b *Bridge) Observer() decisions.DecisionObserver {
 				Details: map[string]any{"role": ev.Permission, "scope_type": ev.ResourceType, "scope_id": ev.ResourceID}})
 		}
 	}
+}
+
+// AuditReads returns the observer to pass to
+// authorizationhttp.WithAuditReadObserver: each completed audit listing read
+// becomes one audit_read row with the reader as Actor and the filter pairs
+// present, never their values. It is never deduplicated; a read arriving while
+// every in-flight slot is taken is dropped and counted.
+func (b *Bridge) AuditReads() authorizationhttp.AuditReadObserver {
+	return func(ctx context.Context, ev authorizationhttp.AuditReadEvent) {
+		select {
+		case b.inFlight <- struct{}{}:
+		default:
+			b.dropped.Add(1)
+			return
+		}
+		defer func() { <-b.inFlight }()
+		b.rec.Record(ctx, securityevent.Input{
+			Actor:  securityevent.Principal{Type: ev.Principal.Type, ID: ev.Principal.ID},
+			Type:   securityevent.TypeAuditRead,
+			Status: securityevent.StatusSuccess,
+			Details: map[string]any{"rail": securityevent.AuditReadRailAuthorization, "filters": auditFilterKeys(ev.Filter),
+				"limit": ev.Limit, "returned": ev.Returned, "strategy": "cursor"},
+		})
+	}
+}
+
+// auditFilterKeys names the filter pairs set, in a fixed order.
+func auditFilterKeys(f audit.Filter) []string {
+	keys := []string{}
+	if f.ResourceType != "" {
+		keys = append(keys, "resource")
+	}
+	if f.SubjectType != "" {
+		keys = append(keys, "subject")
+	}
+	if f.ActorType != "" {
+		keys = append(keys, "actor")
+	}
+	return keys
 }
 
 // Dropped returns how many events the in-flight bound has dropped since

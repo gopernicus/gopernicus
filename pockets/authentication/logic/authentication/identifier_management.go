@@ -199,8 +199,9 @@ func (s *Service) StartIdentifierChange(ctx context.Context, in IdentifierChange
 // and applies once at the proof's revision. A concurrent credential change rejects
 // the old proof. A lost authentication-claim race on the new
 // value surfaces the generic sdk.ErrAlreadyExists. Records email_changed /
-// phone_changed and enqueues an independent notice to the previously verified
-// channels.
+// phone_changed, enqueues an independent notice to the previously verified
+// channels, then resolves the invitations addressed to the newly verified value
+// (best-effort, never failing the change).
 func (s *Service) ConfirmIdentifierChange(ctx context.Context, in IdentifierChangeConfirm) error {
 	if s.contactChanges == nil {
 		return ErrIdentifierChangeUnavailable
@@ -260,6 +261,13 @@ func (s *Service) ConfirmIdentifierChange(ctx context.Context, in IdentifierChan
 	// Independent notice to previously verified channels (never only the newly proved
 	// address, design §5.5).
 	s.enqueueIdentifierChangeNotices(ctx, in.Kind, recipients)
+	// The newly verified value resolves the invitations addressed to it, last and
+	// best-effort — only when it holds the authentication claim (a
+	// notification-only identifier is not unique across users; enabling login or
+	// recovery on it later resolves, in SetIdentifierUses).
+	if pending.LoginEnabled || pending.RecoveryEnabled {
+		s.resolvePendingInvitations(ctx, string(pending.Kind), pending.NewValue, in.UserID)
+	}
 	return nil
 }
 
@@ -326,7 +334,8 @@ func (s *Service) RemoveIdentifier(ctx context.Context, in IdentifierRemoveInput
 // a live session plus an existing-method grant bound to the identifier, refuses
 // enabling login/recovery on an unverified identifier (the §2.3 verification
 // invariant), and routes the mutation through the policy-guarded revision-CAS Apply.
-// Records identifier_uses_changed.
+// Records identifier_uses_changed; an identifier that gains login or recovery
+// then resolves the invitations addressed to it.
 func (s *Service) SetIdentifierUses(ctx context.Context, in IdentifierUsesInput) error {
 	if s.credentialMutations == nil {
 		return ErrCredentialMutationUnavailable
@@ -361,6 +370,11 @@ func (s *Service) SetIdentifierUses(ctx context.Context, in IdentifierUsesInput)
 		Type:   securityevent.TypeIdentifierUsesChanged,
 		Status: securityevent.StatusSuccess,
 	})
+	// A verified identifier that gains the authentication claim (login or
+	// recovery) now resolves the invitations addressed to it, best-effort.
+	if (in.Uses.Login || in.Uses.Recovery) && !holdsClaim(target) {
+		s.resolvePendingInvitations(ctx, string(target.Kind), target.NormalizedValue, in.UserID)
+	}
 	return nil
 }
 

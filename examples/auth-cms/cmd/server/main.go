@@ -329,6 +329,9 @@ func run(ctx context.Context, log *slog.Logger, runtimeMode environment.Mode) er
 	// UserAdminErase reaching the check.
 	authCfg.UserAdminCheck = access.New(authorizer).UserAdmin
 	authCfg.UserErasureRoute = true
+	// The security-event listing (SOC 2 S7), behind the same check with the
+	// action UserAdminReadAudit; each page read records one audit_read row.
+	authCfg.SecurityEventsRoute = true
 	// Apply the selected delivery mode to the auth config. buildAuthConfig returns the
 	// jobs-mode posture (in-memory fenced queue on this host); AUTH_DELIVERY_MODE=in_process flips
 	// it to the bounded EPHEMERAL pool here — and announces that posture LOUDLY. Neither mode
@@ -1063,6 +1066,14 @@ func buildAuthConfig(log *slog.Logger, mode environment.Mode, granter invitation
 			// empty pre-seed is what that key overrides.
 
 			OAuthLinkBaseURL: "",
+			// The invitation landing URL (SOC 2 S7) an invitation links to when the
+			// inviter named no allowlisted redirect, before "#token=<token>" is
+			// appended. This demo serves no invitation landing page, so it points at
+			// its own home page and the token is read from the mail's link by hand;
+			// a real host points AUTH_INVITATION_URL at the SPA route that reads
+			// location.hash and POSTs /auth/invitations/accept. Production requires it.
+
+			InvitationURL: origin + "/",
 			// Absolute post-flow destinations only; safe same-origin relative paths
 			// (e.g. the account page's ?redirect=/auth/account) need no entry.
 

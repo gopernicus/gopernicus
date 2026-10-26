@@ -160,18 +160,18 @@ func TestResolveInvitationsLedgerSupersededRecovery(t *testing.T) {
 	failing := &failFinalization{InvitationRepository: repo}
 	failing.remaining.Store(1)
 	svc.invitations = failing
-	if n, err := svc.ResolveInvitations(t.Context(), "invitee@x.com", "user", "user-9"); err != nil || n != 0 || granter.commits != 1 {
+	if n, err := svc.ResolveInvitations(t.Context(), sdk.AddressKindEmail, "invitee@x.com", "user", "user-9"); err != nil || n != 0 || granter.commits != 1 {
 		t.Fatalf("initial resolve: %d, %v", n, err)
 	}
 	granter.current = grantCall{}
-	if n, err := svc.ResolveInvitations(t.Context(), "invitee@x.com", "user", "user-9"); err != nil || n != 0 {
+	if n, err := svc.ResolveInvitations(t.Context(), sdk.AddressKindEmail, "invitee@x.com", "user", "user-9"); err != nil || n != 0 {
 		t.Fatalf("superseded resolve: %d, %v", n, err)
 	}
 	got, _ := repo.Get(t.Context(), inv.ID)
 	if got.Status != StatusAccepted || granter.commits != 1 || granter.current != (grantCall{}) || len(mailer.sent) != 0 || len(events.created) != 1 || events.created[0].EventStatus != securityevent.StatusBlocked {
 		t.Fatalf("resolved invitation=%+v grant=%+v notices=%d events=%+v", got, granter, len(mailer.sent), events.created)
 	}
-	if n, err := svc.ResolveInvitations(t.Context(), "invitee@x.com", "user", "user-9"); err != nil || n != 0 {
+	if n, err := svc.ResolveInvitations(t.Context(), sdk.AddressKindEmail, "invitee@x.com", "user", "user-9"); err != nil || n != 0 {
 		t.Fatalf("terminal resolve: %d, %v", n, err)
 	}
 }

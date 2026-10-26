@@ -29,6 +29,22 @@ func newSecurityEventRecorder(events securityevent.SecurityEventRepository, ids 
 // subsystem off) projects nothing; a repository error is propagated so the
 // Resolver fails closed rather than fabricating a partial address set.
 func projectAddresses(ctx context.Context, identifiers identifier.IdentifierRepository, userID string) ([]sdk.IdentityAddress, error) {
+	return projectAddressesWhere(ctx, identifiers, userID, nil)
+}
+
+// claimAddresses is projectAddresses narrowed to the identifiers holding the
+// authentication claim (login- or recovery-enabled): the values unique across
+// users. Invitation resolution, sync and the accept-time match read only these.
+func claimAddresses(ctx context.Context, identifiers identifier.IdentifierRepository, userID string) ([]sdk.IdentityAddress, error) {
+	return projectAddressesWhere(ctx, identifiers, userID, holdsClaim)
+}
+
+// holdsClaim reports whether an identifier holds the authentication claim.
+func holdsClaim(it identifier.Identifier) bool { return it.LoginEnabled || it.RecoveryEnabled }
+
+// projectAddressesWhere is projectAddresses over the identifiers keep admits;
+// nil keeps every active verified identifier.
+func projectAddressesWhere(ctx context.Context, identifiers identifier.IdentifierRepository, userID string, keep func(identifier.Identifier) bool) ([]sdk.IdentityAddress, error) {
 	if identifiers == nil {
 		return nil, nil
 	}
@@ -38,7 +54,7 @@ func projectAddresses(ctx context.Context, identifiers identifier.IdentifierRepo
 	}
 	verified := make([]identifier.Identifier, 0, len(idents))
 	for _, it := range idents {
-		if it.Active() && it.Verified() {
+		if it.Active() && it.Verified() && (keep == nil || keep(it)) {
 			verified = append(verified, it)
 		}
 	}
@@ -62,14 +78,15 @@ func projectAddresses(ctx context.Context, identifiers identifier.IdentifierRepo
 	return addresses, nil
 }
 
-// resolvePendingInvitations processes invitations after verified email ownership.
-// Resolver errors are logged without failing authentication; durable acceptance
-// claims let the invitation service resume an interrupted grant.
-func resolvePendingInvitations(ctx context.Context, invitations invitationResolver, logger *slog.Logger, email, userID string) {
+// resolvePendingInvitations processes invitations after verified ownership of
+// (kind, value). Resolver errors are logged without failing authentication;
+// durable acceptance claims let the invitation service resume an interrupted
+// grant.
+func resolvePendingInvitations(ctx context.Context, invitations invitationResolver, logger *slog.Logger, kind, value, userID string) {
 	if invitations == nil {
 		return
 	}
-	if _, err := invitations.ResolveInvitations(ctx, email, PrincipalUser, userID); err != nil {
+	if _, err := invitations.ResolveInvitations(ctx, kind, value, PrincipalUser, userID); err != nil {
 		logger.Warn("resolve invitations failed", "error_kind", ErrorKind(err))
 	}
 }

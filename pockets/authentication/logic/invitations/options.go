@@ -22,11 +22,13 @@ type Option func(*constructorConfig)
 type AccessConfig struct {
 	MemberCheck MemberCheck
 	UserLookup  UserLookup
-	// CallerIdentifiers resolves the accepting caller's active verified identifier
-	// value of a kind for the accept-time account match (design §7/V11). Wired by
-	// package auth from authlogic.ActiveVerifiedIdentifier; nil disables email/phone
-	// accept-time match (fail closed).
-	CallerIdentifiers IdentifierLookup
+	// VerifiedIdentifiers lists a subject's active verified identifiers holding
+	// the authentication claim (login or recovery) for the accept-time account
+	// match and identifier resolution (design §7/V11): an email or phone
+	// invitation matches any of them, primary or not. Wired by
+	// package auth from authlogic.VerifiedIdentifiers; nil disables the email/phone
+	// match (fail closed).
+	VerifiedIdentifiers IdentifierLister
 }
 
 // WithAccess replaces the complete AccessConfig group, including zero values.
@@ -34,7 +36,25 @@ func WithAccess(value AccessConfig) Option {
 	return func(c *constructorConfig) {
 		c.MemberCheck = value.MemberCheck
 		c.UserLookup = value.UserLookup
-		c.CallerIdentifiers = value.CallerIdentifiers
+		c.VerifiedIdentifiers = value.VerifiedIdentifiers
+	}
+}
+
+// WithInvitationURL sets the absolute landing URL an invitation or member-added
+// link points at when no allowlisted redirect was requested. It must carry no
+// fragment (the token owns it). Empty keeps the same-origin default "/", a
+// relative link most mail clients cannot open.
+func WithInvitationURL(value string) Option {
+	return func(c *constructorConfig) {
+		c.InvitationURL = value
+	}
+}
+
+// WithLinkTokenInQuery restores the "?token=" invitation link the fragment
+// replaced. It is a one-release migration hatch: the next minor removes it.
+func WithLinkTokenInQuery(enabled bool) Option {
+	return func(c *constructorConfig) {
+		c.LinkTokenInQuery = enabled
 	}
 }
 

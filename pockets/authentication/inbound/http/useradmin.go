@@ -2,13 +2,48 @@ package authenticationhttp
 
 import (
 	"net/http"
+	"net/url"
+	"regexp"
+	"slices"
 	"time"
 
 	"github.com/gopernicus/gopernicus/pockets"
 	authlogic "github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication"
+	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/securityevent"
 	"github.com/gopernicus/gopernicus/pockets/authentication/logic/authentication/user"
+	"github.com/gopernicus/gopernicus/sdk/pkg/list"
 	"github.com/gopernicus/gopernicus/sdk/pkg/web"
 )
+
+// The security-event listing's filter keys.
+const (
+	querySecurityEventUserID = "user_id"
+	querySecurityEventType   = "event_type"
+	querySecurityEventStatus = "event_status"
+	querySecurityEventSince  = "since"
+	querySecurityEventUntil  = "until"
+)
+
+// codeOffsetNotSupported names the refusal of an offset on the cursor-only
+// security-event listing.
+const codeOffsetNotSupported = "offset_not_supported"
+
+// securityEventQueryKeys are the keys the security-event listing reads. Each
+// may appear once, so the host check and this handler can never read
+// different values of one key.
+var (
+	// eventTypeShape bounds an event_type filter: the rail stores free TEXT
+	// (a host-bridged type such as authorization_denied is valid there without
+	// being in securityevent.Types()), so the filter admits any snake_case type.
+	eventTypeShape = regexp.MustCompile(`^[a-z][a-z0-9]*(_[a-z0-9]+)*$`)
+	// securityEventStatuses is the closed status vocabulary.
+	securityEventStatuses = []string{securityevent.StatusSuccess, securityevent.StatusFailure, securityevent.StatusBlocked}
+)
+
+var securityEventQueryKeys = []string{
+	querySecurityEventUserID, querySecurityEventType, querySecurityEventStatus, querySecurityEventSince, querySecurityEventUntil,
+	list.QueryKeyLimit, list.QueryKeyCursor, list.QueryKeyOffset, list.QueryKeyCount, list.QueryKeySearch, list.QueryKeyOrder,
+}
 
 // The user-administration surface (CHAU-1.6). Registered by Mount ONLY when the
 // host supplied WithUserAdminCheck AND the administration/fenced-mint
@@ -83,6 +118,37 @@ type eraseCountsResponse struct {
 	InvitationsCancelled int `json:"invitations_cancelled"`
 	ServiceAccounts      int `json:"service_accounts"`
 	APIKeys              int `json:"api_keys"`
+}
+
+// securityEventResponse is one security-event row: everything the rail stores,
+// with created_at in UTC RFC 3339 nanoseconds. Details carry identifiers and
+// digests only, never a secret or an address (the rail's content contract).
+type securityEventResponse struct {
+	ID          string         `json:"id"`
+	UserID      string         `json:"user_id,omitempty"`
+	ActorType   string         `json:"actor_type,omitempty"`
+	ActorID     string         `json:"actor_id,omitempty"`
+	EventType   string         `json:"event_type"`
+	EventStatus string         `json:"event_status"`
+	IPAddress   string         `json:"ip_address,omitempty"`
+	UserAgent   string         `json:"user_agent,omitempty"`
+	RequestID   string         `json:"request_id,omitempty"`
+	TraceID     string         `json:"trace_id,omitempty"`
+	Details     map[string]any `json:"details"`
+	CreatedAt   string         `json:"created_at"`
+}
+
+func newSecurityEventResponse(e securityevent.SecurityEvent) securityEventResponse {
+	details := e.Details
+	if details == nil {
+		details = map[string]any{}
+	}
+	return securityEventResponse{
+		ID: e.ID, UserID: e.UserID, ActorType: e.Actor.Type, ActorID: e.Actor.ID,
+		EventType: e.EventType, EventStatus: e.EventStatus, IPAddress: e.IPAddress, UserAgent: e.UserAgent,
+		RequestID: e.RequestID, TraceID: e.TraceID, Details: details,
+		CreatedAt: e.CreatedAt.UTC().Format(time.RFC3339Nano),
+	}
 }
 
 func newUserSummaryResponse(s user.Summary) userSummaryResponse {
@@ -265,4 +331,95 @@ func (h *handlers) adminEraseUser(w http.ResponseWriter, r *http.Request) {
 			InvitationsCancelled: c.InvitationsCancelled, ServiceAccounts: c.ServiceAccounts, APIKeys: c.APIKeys,
 		},
 	})
+}
+
+// adminListSecurityEvents pages the security-event rail, newest first, for an
+// administrator the host check admits for UserAdminReadAudit; the user_id filter
+// reaches the check as the target. Every filter is optional, so an unfiltered
+// call lists the whole rail. The listing is cursor only: paging until has_more
+// is false is the export, and a changed filter needs a fresh cursor. The
+// service records one audit_read row per page read.
+func (h *handlers) adminListSecurityEvents(w http.ResponseWriter, r *http.Request) {
+	writeNoStore(w)
+	q := r.URL.Query()
+	// Only the key the host check reads is validated before it; everything
+	// else is the admitted caller's to get wrong.
+	if !singleValued(w, q, querySecurityEventUserID) {
+		return
+	}
+	userID := q.Get(querySecurityEventUserID)
+	if _, ok := h.adminPrincipal(w, r, UserAdminReadAudit, userID); !ok {
+		return
+	}
+	if !singleValued(w, q, securityEventQueryKeys...) {
+		return
+	}
+	eventType, eventStatus := q.Get(querySecurityEventType), q.Get(querySecurityEventStatus)
+	if eventType != "" && !eventTypeShape.MatchString(eventType) {
+		web.RespondJSONError(w, web.ErrBadRequest("event_type must be a snake_case event type"))
+		return
+	}
+	if eventStatus != "" && !slices.Contains(securityEventStatuses, eventStatus) {
+		web.RespondJSONError(w, web.ErrBadRequest("event_status must be success, failure or blocked"))
+		return
+	}
+	since, ok := parseOptionalTime(w, querySecurityEventSince, q.Get(querySecurityEventSince))
+	if !ok {
+		return
+	}
+	until, ok := parseOptionalTime(w, querySecurityEventUntil, q.Get(querySecurityEventUntil))
+	if !ok {
+		return
+	}
+	if !since.IsZero() && !until.IsZero() && !since.Before(until) {
+		web.RespondJSONError(w, web.ErrBadRequest("since must be before until"))
+		return
+	}
+	req, ok := parseSecurityEventListRequest(w, r)
+	if !ok {
+		return
+	}
+	filter := securityevent.ListFilter{UserID: userID, EventType: eventType, EventStatus: eventStatus, Since: since, Until: until}
+	page, err := h.events.ListSecurityEvents(r.Context(), filter, req)
+	if err != nil {
+		web.RespondJSONDomainError(w, err)
+		return
+	}
+	web.RespondJSONOK(w, newPageResponse(page, newSecurityEventResponse))
+}
+
+// singleValued answers a named 400 when any of keys is repeated.
+func singleValued(w http.ResponseWriter, q url.Values, keys ...string) bool {
+	for _, key := range keys {
+		if len(q[key]) > 1 {
+			web.RespondJSONError(w, web.ErrBadRequest(key+" may appear at most once"))
+			return false
+		}
+	}
+	return true
+}
+
+// parseSecurityEventListRequest admits limit, cursor and count only: the rail
+// orders by created_at DESC by contract and declares no search fields. The
+// cursor strategy is fixed whatever the adapter's ListStrategy says.
+func parseSecurityEventListRequest(w http.ResponseWriter, r *http.Request) (list.Request, bool) {
+	q := r.URL.Query()
+	switch {
+	case q.Has(list.QueryKeyOffset):
+		web.RespondJSONError(w, web.ErrBadRequest("the security-event listing pages by cursor only; the offset parameter is not supported").WithCode(codeOffsetNotSupported))
+		return list.Request{}, false
+	case q.Has(list.QueryKeySearch):
+		web.RespondJSONError(w, web.ErrBadRequest("the security-event listing declares no search fields; the q parameter is not supported"))
+		return list.Request{}, false
+	case q.Has(list.QueryKeyOrder):
+		web.RespondJSONError(w, web.ErrBadRequest("the security-event listing is ordered by created_at, newest first; the order parameter is not supported"))
+		return list.Request{}, false
+	}
+	req, err := list.ParseQuery(q, list.QueryOptions{DefaultStrategy: list.StrategyCursor})
+	if err != nil {
+		web.RespondJSONError(w, web.ErrValidation(err))
+		return list.Request{}, false
+	}
+	req.Order = securityevent.DefaultOrder
+	return req, true
 }

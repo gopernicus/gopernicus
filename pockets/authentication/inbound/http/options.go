@@ -81,6 +81,16 @@ func WithUserErasureRoute(enabled bool) Option {
 	}
 }
 
+// WithSecurityEventsRoute opts in to GET /auth/admin/security-events. It mounts
+// only beside WithUserAdminCheck and a service whose security-event repository
+// is wired; enabling it without either is sdk.ErrInvalidInput at New. False
+// (the default) leaves the listing unmounted.
+func WithSecurityEventsRoute(enabled bool) Option {
+	return func(c *adapterConfig) {
+		c.SecurityEventsRoute = enabled
+	}
+}
+
 // WithPublicRouteLimits replaces the per-client-IP budgets of the bundled public
 // routes; zero fields select their defaults and New validates the rest.
 func WithPublicRouteLimits(value PublicRouteLimits) Option {

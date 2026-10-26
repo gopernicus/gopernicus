@@ -217,6 +217,20 @@ var (
 	// LinksConfig.OAuthLinkBaseURL is not HTTPS: the pending-link URL carries a single-use
 	// credential in its fragment, and plain HTTP exposes it in transit.
 	ErrOAuthLinkURLInsecure = errors.New("auth: production RuntimeMode requires an HTTPS LinksConfig.OAuthLinkBaseURL")
+	// ErrInvitationURLRequired is returned in production RuntimeMode when
+	// invitations are wired (a Granter) without a LinksConfig.InvitationURL: the
+	// link would fall back to the relative "/#token=", which a mail client
+	// cannot open. Set AUTH_INVITATION_URL to the landing page that reads the
+	// fragment. Development permits it with a startup WARN.
+	ErrInvitationURLRequired = errors.New("auth: production RuntimeMode requires LinksConfig.InvitationURL (AUTH_INVITATION_URL) when invitations are wired: set it to the absolute landing page that reads the #token fragment")
+	// ErrInvitationURLInvalid is returned when a non-empty LinksConfig.InvitationURL
+	// is not a valid absolute http(s) URL with a host and no userinfo, or carries a
+	// FRAGMENT (the builder appends "#token=<token>").
+	ErrInvitationURLInvalid = errors.New("auth: LinksConfig.InvitationURL must be a valid absolute http(s) URL with no fragment")
+	// ErrInvitationURLInsecure is returned in production RuntimeMode when
+	// LinksConfig.InvitationURL is not HTTPS: the link carries a single-use
+	// credential in its fragment.
+	ErrInvitationURLInsecure = errors.New("auth: production RuntimeMode requires an HTTPS LinksConfig.InvitationURL")
 )
 
 // Passwordless enablement construction errors (design §4.2/§8). PasswordlessConfig.Passwordless
@@ -524,6 +538,30 @@ func validateOAuthLinkBaseURL(mode environment.Mode, raw string) error {
 		return nil
 	default:
 		return fmt.Errorf("%w: %q", ErrOAuthLinkURLInvalid, raw)
+	}
+}
+
+// validateInvitationURL validates the invitation landing URL (R-7). Empty is
+// handled by the caller; a non-empty value is an absolute http(s) URL with a
+// host and no fragment, HTTPS in production.
+func validateInvitationURL(mode environment.Mode, raw string) error {
+	u, err := url.Parse(raw)
+	if err != nil || !u.IsAbs() || u.Host == "" || u.User != nil {
+		return fmt.Errorf("%w: %q", ErrInvitationURLInvalid, raw)
+	}
+	if u.Fragment != "" || strings.Contains(raw, "#") {
+		return fmt.Errorf("%w: fragment present in %q", ErrInvitationURLInvalid, raw)
+	}
+	switch u.Scheme {
+	case "https":
+		return nil
+	case "http":
+		if mode == environment.ModeProduction {
+			return fmt.Errorf("%w: %q", ErrInvitationURLInsecure, raw)
+		}
+		return nil
+	default:
+		return fmt.Errorf("%w: %q", ErrInvitationURLInvalid, raw)
 	}
 }
 

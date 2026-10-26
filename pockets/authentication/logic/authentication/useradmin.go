@@ -35,6 +35,11 @@ var ErrUserErasureUnavailable = fmt.Errorf("auth: user erasure repository is not
 // It wraps sdk.ErrInvalidInput (400).
 var ErrEraseSelf = fmt.Errorf("auth: an administrator cannot erase their own account: %w", sdk.ErrInvalidInput)
 
+// ErrSecurityEventsUnavailable is returned by ListSecurityEvents when the
+// security-event repository is not wired. It wraps sdk.ErrNotFound: an unwired
+// capability is absent, not forbidden.
+var ErrSecurityEventsUnavailable = fmt.Errorf("auth: security-event repository is not wired: %w", sdk.ErrNotFound)
+
 // UserAdminEnabled reports whether the administration repository is wired. The
 // transport registers the bundled admin routes only when this is true AND a host
 // inbound policy is configured (deny-by-absence).
@@ -107,6 +112,57 @@ func (s *Service) recordDirectoryRead(ctx context.Context, details map[string]an
 		actor = securityevent.Principal{Type: p.Type, ID: p.ID}
 	}
 	s.recordSecurityEvent(ctx, securityEventInput{Type: securityevent.TypeUserDirectoryRead, Status: securityevent.StatusSuccess, Actor: actor, Details: details})
+}
+
+// SecurityEventsEnabled reports whether the security-event repository is wired.
+// The transport mounts the bundled security-event listing only when this is
+// true AND the host opted in (AdministrationConfig.SecurityEventsRoute).
+func (s *Service) SecurityEventsEnabled() bool { return s.securityEvents.Repository() != nil }
+
+// ListSecurityEvents returns a page of the security-event rail matching filter,
+// newest first, and records one audit_read row for the read, attributed to the
+// principal the caller's transport resolved onto ctx. The row names the filter
+// keys present, never their values.
+//
+// TRUSTED: it applies NO authorization — see ListUsers.
+func (s *Service) ListSecurityEvents(ctx context.Context, filter securityevent.ListFilter, req list.Request) (list.Page[securityevent.SecurityEvent], error) {
+	repo := s.securityEvents.Repository()
+	if repo == nil {
+		return list.Page[securityevent.SecurityEvent]{}, ErrSecurityEventsUnavailable
+	}
+	page, err := repo.List(ctx, filter, req)
+	if err != nil {
+		return page, err
+	}
+	var actor securityevent.Principal
+	if p, ok := sdk.PrincipalFromContext(ctx); ok {
+		actor = securityevent.Principal{Type: p.Type, ID: p.ID}
+	}
+	s.recordSecurityEvent(ctx, securityEventInput{Type: securityevent.TypeAuditRead, Status: securityevent.StatusSuccess, Actor: actor, Details: map[string]any{
+		"rail":     securityevent.AuditReadRailSecurityEvents,
+		"filters":  securityEventFilterKeys(filter),
+		"limit":    req.Limit,
+		"returned": len(page.Items),
+		"strategy": string(req.ResolvedStrategy()),
+	}})
+	return page, nil
+}
+
+// securityEventFilterKeys names the filter fields set, in a fixed order.
+func securityEventFilterKeys(f securityevent.ListFilter) []string {
+	keys := []string{}
+	for _, field := range []struct {
+		key string
+		set bool
+	}{
+		{"user_id", f.UserID != ""}, {"event_type", f.EventType != ""}, {"event_status", f.EventStatus != ""},
+		{"since", !f.Since.IsZero()}, {"until", !f.Until.IsZero()},
+	} {
+		if field.set {
+			keys = append(keys, field.key)
+		}
+	}
+	return keys
 }
 
 // SetUserStatus transitions a user's lifecycle status and returns the resulting

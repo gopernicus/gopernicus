@@ -3,6 +3,7 @@ package authenticationhttp
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"time"
 
@@ -14,6 +15,9 @@ import (
 	"github.com/gopernicus/gopernicus/sdk/pkg/web"
 )
 
+// queryIdentifierKind selects the identifier kind /auth/invitations/mine lists by.
+const queryIdentifierKind = "identifier_kind"
+
 // InvitationService supplies invitation preparation and policy-free use cases.
 // The adapter checks its policy against a prepared command before executing it.
 // A nil service leaves invitation routes unmounted.
@@ -21,7 +25,7 @@ type InvitationService interface {
 	PrepareCreate(ctx context.Context, in invitations.CreateInput) (invitations.PreparedCreate, error)
 	CreatePrepared(ctx context.Context, prepared invitations.PreparedCreate) (invitations.CreateResult, error)
 	ListByResource(ctx context.Context, resourceType, resourceID string, req list.Request) (list.Page[invitations.Invitation], error)
-	Mine(ctx context.Context, identifier string, req list.Request) (list.Page[invitations.Invitation], error)
+	Mine(ctx context.Context, kind, identifier string, req list.Request) (list.Page[invitations.Invitation], error)
 	Accept(ctx context.Context, in invitations.AcceptInput) (invitations.AcceptResult, error)
 	Decline(ctx context.Context, id, token string) error
 	PrepareManagement(ctx context.Context, id string) (invitations.PreparedManagement, error)
@@ -164,6 +168,9 @@ func mountInvitations(r pockets.RouteRegistrar, h *handlers, invitations, declin
 	r.Handle("GET", "/auth/invitations/{resource_type}/{resource_id}", h.listResourceInvitations, invitations)
 	r.Handle("GET", "/auth/invitations/mine", h.listMyInvitations, invitations)
 	r.Handle("POST", "/auth/invitations/accept", h.acceptInvitation, invitations, browserSafe)
+	if h.syncer != nil {
+		r.Handle("POST", "/auth/invitations/sync", h.syncInvitations, invitations, browserSafe)
+	}
 	r.Handle("POST", "/auth/invitations/{id}/cancel", h.cancelInvitation, invitations, browserSafe)
 	r.Handle("POST", "/auth/invitations/{id}/resend", h.resendInvitation, invitations, browserSafe)
 	r.Handle("POST", "/auth/invitations/{id}/decline", h.declineInvitation, requireBrowserSafeOrigin(h.mutation.csrf()), declineLimit)
@@ -195,7 +202,7 @@ func (h *handlers) createInvitation(w http.ResponseWriter, r *http.Request) {
 		Metadata:       req.Metadata,
 	})
 	if err != nil {
-		web.RespondJSONDomainError(w, err)
+		writeInvitationError(w, err)
 		return
 	}
 	in := prepared.Input()
@@ -256,11 +263,22 @@ func (h *handlers) listResourceInvitations(w http.ResponseWriter, r *http.Reques
 	web.RespondJSONOK(w, newPageResponse(page, newInvitationResponse))
 }
 
-// listMyInvitations pages the caller's own invitations, keyed on their email
-// (session-gated). The email is resolved from the caller's active verified email
-// identifier so invitation service stays decoupled from the identifier store. It
-// answers the RECIPIENT projection, which carries no host metadata.
+// listMyInvitations pages the caller's own invitations, keyed on one of their
+// verified identifiers (session-gated): ?identifier_kind=email (the default) or
+// phone; any other kind is a 400. The value is the caller's first claim-holding
+// (login- or recovery-enabled) verified identifier of that kind, primary first,
+// resolved so invitation service stays decoupled from the identifier store. It answers the RECIPIENT projection,
+// which carries no host metadata.
 func (h *handlers) listMyInvitations(w http.ResponseWriter, r *http.Request) {
+	kind := r.URL.Query().Get(queryIdentifierKind)
+	switch kind {
+	case "":
+		kind = sdk.AddressKindEmail
+	case sdk.AddressKindEmail, sdk.AddressKindPhone:
+	default:
+		web.RespondJSONError(w, web.ErrBadRequest("identifier_kind must be email or phone"))
+		return
+	}
 	req, ok := h.parseListRequest(w, r, invitations.OrderFields, invitations.DefaultOrder)
 	if !ok {
 		return
@@ -270,12 +288,12 @@ func (h *handlers) listMyInvitations(w http.ResponseWriter, r *http.Request) {
 		web.RespondJSONError(w, web.ErrUnauthorized("authentication required"))
 		return
 	}
-	email, err := h.svc.ActiveVerifiedIdentifier(r.Context(), userID, sdk.AddressKindEmail)
+	value, err := h.mineIdentifier(r.Context(), userID, kind)
 	if err != nil {
 		web.RespondJSONDomainError(w, err)
 		return
 	}
-	page, err := h.inv.Mine(r.Context(), email, req)
+	page, err := h.inv.Mine(r.Context(), kind, value, req)
 	if err != nil {
 		web.RespondJSONDomainError(w, err)
 		return
@@ -283,10 +301,28 @@ func (h *handlers) listMyInvitations(w http.ResponseWriter, r *http.Request) {
 	web.RespondJSONOK(w, newPageResponse(page, newMyInvitationResponse))
 }
 
-// acceptInvitation redeems a token for the calling user (session-gated). The
-// caller's email is checked against an email-kind invitation identifier in the
-// service; a phone-kind invitation is matched against the caller's active
-// verified phone identifier inside the service (design §7/V11).
+// mineIdentifier is the caller's first claim-holding verified identifier of
+// kind (primary first); without a claim lister it is ActiveVerifiedIdentifier.
+func (h *handlers) mineIdentifier(ctx context.Context, userID, kind string) (string, error) {
+	if h.claims == nil {
+		return h.svc.ActiveVerifiedIdentifier(ctx, userID, kind)
+	}
+	addresses, err := h.claims.VerifiedIdentifiers(ctx, userID)
+	if err != nil {
+		return "", err
+	}
+	for _, a := range addresses {
+		if a.Kind == kind {
+			return a.Value, nil
+		}
+	}
+	return "", fmt.Errorf("no sign-in %s identifier for user: %w", kind, sdk.ErrNotFound)
+}
+
+// acceptInvitation redeems a token for the calling user (session-gated). An
+// email or phone invitation is matched inside the service against every active
+// verified identifier of the caller (design §7/V11); a mismatch is a 403
+// invitation_identity_mismatch.
 func (h *handlers) acceptInvitation(w http.ResponseWriter, r *http.Request) {
 	var req acceptInvitationRequest
 	if !strictJSONBody(w, r, &req, maxJSONBodyBytes) {
@@ -297,19 +333,13 @@ func (h *handlers) acceptInvitation(w http.ResponseWriter, r *http.Request) {
 		web.RespondJSONError(w, web.ErrUnauthorized("authentication required"))
 		return
 	}
-	email, err := h.svc.ActiveVerifiedIdentifier(r.Context(), userID, sdk.AddressKindEmail)
-	if err != nil {
-		web.RespondJSONDomainError(w, err)
-		return
-	}
 	res, err := h.inv.Accept(r.Context(), invitations.AcceptInput{
 		Token:       req.Token,
 		SubjectType: authlogic.PrincipalUser,
 		SubjectID:   userID,
-		Identifier:  email,
 	})
 	if err != nil {
-		web.RespondJSONDomainError(w, err)
+		writeInvitationError(w, err)
 		return
 	}
 	web.RespondJSONOK(w, map[string]string{
@@ -352,7 +382,7 @@ func (h *handlers) resendInvitation(w http.ResponseWriter, r *http.Request) {
 	}
 	inv, err := h.inv.Resend(r.Context(), prepared, r.URL.Query().Get("redirect"))
 	if err != nil {
-		web.RespondJSONDomainError(w, err)
+		writeInvitationError(w, err)
 		return
 	}
 	web.RespondJSONOK(w, newInvitationResponse(inv))
@@ -406,4 +436,49 @@ func (h *handlers) declineInvitation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	web.RespondJSONOK(w, map[string]string{"status": "declined"})
+}
+
+// syncInvitationsResponse is the body of POST /auth/invitations/sync: how many
+// auto-accept invitations this call granted.
+type syncInvitationsResponse struct {
+	Resolved int `json:"resolved"`
+}
+
+// syncInvitations resolves, on demand, the pending auto-accept invitations
+// addressed to any of the caller's verified identifiers (session-gated). It is
+// idempotent and budgeted per user; exhaustion is a 429.
+func (h *handlers) syncInvitations(w http.ResponseWriter, r *http.Request) {
+	if !requireJSON(w, r) {
+		return
+	}
+	var body struct{}
+	if !strictJSONBody(w, r, &body, maxJSONBodyBytes) {
+		return
+	}
+	userID, ok := h.svc.CurrentUser(r.Context())
+	if !ok {
+		web.RespondJSONError(w, web.ErrUnauthorized("authentication required"))
+		return
+	}
+	n, err := h.syncer.SyncInvitations(r.Context(), userID)
+	if err != nil {
+		writeInvitationError(w, err)
+		return
+	}
+	web.RespondJSONOK(w, syncInvitationsResponse{Resolved: n})
+}
+
+// writeInvitationError maps the invitation refusals that carry a machine code
+// before the shared domain mapping: a redirect with a fragment is 400
+// invitation_redirect_fragment, an accept by a caller holding no matching
+// verified identifier is 403 invitation_identity_mismatch.
+func writeInvitationError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, invitations.ErrRedirectFragment):
+		web.RespondJSONError(w, web.NewError(http.StatusBadRequest, "invitation redirect must not carry a fragment").WithCode("invitation_redirect_fragment"))
+	case errors.Is(err, invitations.ErrIdentifierMismatch):
+		web.RespondJSONError(w, web.NewError(http.StatusForbidden, "invitation is addressed to another identifier").WithCode("invitation_identity_mismatch"))
+	default:
+		respondDomainError(w, err)
+	}
 }

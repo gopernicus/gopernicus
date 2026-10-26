@@ -110,7 +110,7 @@ func newPostureFixture(t *testing.T, routeAuth RouteAuthentication) *postureFixt
 	h := web.NewWebHandler()
 	mount(h, mountDeps{
 		Auth:        f.svc,
-		Invitations: f.inv,
+		Invitations: f.inv, InvitationSync: f.svc,
 		InviteCheck: allowInviteCheck, UserAdminCheck: f.recordAdminCheck,
 		ListStrategy: list.StrategyCursor,
 		MachineGate:  f.countingMachineGate,
