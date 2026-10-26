@@ -156,8 +156,8 @@ var DefaultOrder = list.NewOrder("occurred_at", list.DESC)
 // Records order by occurred_at then ID in the requested direction (default DESC).
 // Both cursor and offset strategies support optional totals. Records contain
 // owned values; mutating a result cannot change retained history.
-// Hosts own access control, retention and presentation; no audit HTTP route is
-// installed by this capability.
+// Hosts own access control, retention and presentation. The HTTP adapter serves
+// it as GET /authorization/audit only behind a host RoleRoutes.AuditGate.
 type Reader interface {
 	List(ctx context.Context, filter Filter, req list.Request) (list.Page[Record], error)
 }

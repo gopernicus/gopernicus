@@ -21,7 +21,13 @@ var (
 
 // State is a delivery receipt, never a cache-key namespace. An empty State
 // means no complete mirror exists. A receipt identifies one atomic publication.
-type State struct{ Binding, Receipt string }
+// FullAt is the mirror's last full publication on the backend's clock, reported
+// by Backend.State only; it is zero when the backend does not report it. Read
+// and Publish address a mirror by Binding and Receipt and ignore FullAt.
+type State struct {
+	Binding, Receipt string
+	FullAt           time.Time
+}
 
 // Protocol versions every canonical snapshot and backend namespace.
 const Protocol = 2

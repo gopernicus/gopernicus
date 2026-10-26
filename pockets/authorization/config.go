@@ -53,7 +53,7 @@ type Repositories struct {
 	OperationExpiry mutations.OperationExpirer
 
 	// Audit reads committed change history. The host controls access and retention.
-	// Production (WithRuntimeMode) requires it.
+	// Production (WithRuntimeMode) requires it, and RoleRoutes.AuditGate serves it.
 	Audit audit.Reader
 }
 
@@ -68,6 +68,8 @@ type config struct {
 	RoleRoutesGate            web.Middleware
 	RoleWritePolicy           authorizationhttp.RoleWritePolicy
 	ListStrategy              list.Strategy
+	AuditGate                 web.Middleware
+	AuditReadObserver         authorizationhttp.AuditReadObserver
 	RuntimeMode               environment.Mode
 	AuditDisabledAcknowledged bool
 	OperationRetention        time.Duration

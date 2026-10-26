@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log/slog"
 	"reflect"
+	"slices"
 	"strings"
 
 	"github.com/gopernicus/gopernicus/pockets"
@@ -41,6 +42,7 @@ type Components struct {
 	log             *slog.Logger
 	posture         auditPosture
 	operationExpiry bool
+	integrityRules  int
 }
 
 // auditPosture is New's verdict on audit wiring, reported at registration.
@@ -109,6 +111,10 @@ func New(repos Repositories, opts ...Option) (Components, error) {
 		return Components{}, err
 	}
 	comps.TupleCache = comps.Decisions.TupleCache()
+	if repos.Mutations != nil {
+		comps.integrityRules = len(repos.Mutations.IntegrityPolicy().Rules)
+	}
+	warnIntegrity(comps.log, posture.mode, comps.Decisions.CompiledModel(), repos.Mutations)
 	comps.Authorizer, err = authorizer.New(comps.Decisions)
 	if err != nil {
 		return Components{}, err
@@ -154,13 +160,15 @@ func New(repos Repositories, opts ...Option) (Components, error) {
 		roleReader = comps.Roles
 	}
 	comps.HTTP, err = authorizationhttp.New(
-		authorizationhttp.Services{Decisions: decision, Roles: roleReader, Mutations: roleWriter},
+		authorizationhttp.Services{Decisions: decision, Roles: roleReader, Mutations: roleWriter, Audit: repos.Audit},
 		authorizationhttp.WithRoleRoutes(authorizationhttp.RoleRoutes{
 			Gate:         cfg.RoleRoutesGate,
 			WritePolicy:  cfg.RoleWritePolicy,
 			ListStrategy: cfg.ListStrategy,
+			AuditGate:    cfg.AuditGate,
 		}),
 		authorizationhttp.WithDecisionObserver(cfg.DecisionObserver),
+		authorizationhttp.WithAuditReadObserver(cfg.AuditReadObserver),
 		authorizationhttp.WithLogger(comps.log),
 	)
 	if err != nil {
@@ -174,7 +182,7 @@ func (c Components) Register(m pockets.Mount) error {
 	if c.HTTP == nil {
 		return fmt.Errorf("authorization: components are not initialized: %w", sdk.ErrInvalidInput)
 	}
-	c.log.Info("registered authorization pocket", "relationships", c.Relationships != nil, "roles", c.Roles != nil, "model", c.Decisions.CompiledModel() != nil, "baseline_relationship_writes", c.RelationshipWriter != nil, "role_routes", c.HTTP.RoutesEnabled(), "audit_recording", c.posture.recording, "audit_reader", c.Audit != nil, "decision_observer", c.posture.observed, "operation_expiry", c.operationExpiry, "runtime_mode", c.posture.mode.String())
+	c.log.Info("registered authorization pocket", "relationships", c.Relationships != nil, "roles", c.Roles != nil, "model", c.Decisions.CompiledModel() != nil, "baseline_relationship_writes", c.RelationshipWriter != nil, "role_routes", c.HTTP.RoutesEnabled(), "audit_read_route", c.HTTP.AuditRouteEnabled(), "integrity_rules", c.integrityRules, "audit_recording", c.posture.recording, "audit_reader", c.Audit != nil, "decision_observer", c.posture.observed, "operation_expiry", c.operationExpiry, "runtime_mode", c.posture.mode.String())
 	return c.HTTP.Register(m.Router)
 }
 
@@ -238,6 +246,40 @@ func (p auditPosture) warn(log *slog.Logger) {
 	}
 	if p.mode.IsProduction() && !p.observed {
 		log.Warn("authorization: denials are not durably recorded; wire WithDecisionObserver", "runtime_mode", p.mode.String())
+	}
+}
+
+// warnIntegrity logs, in production and development, one WARN naming every
+// model type whose owner relation the store's integrity policy leaves
+// unprotected, or one WARN when Mutations is nil beside an owner relation. An
+// unprotected owner can be removed by its last holder; it never grants access.
+func warnIntegrity(log *slog.Logger, mode environment.Mode, model *decisions.CompiledModel, repo mutations.MutationRepository) {
+	if mode == "" || model == nil {
+		return
+	}
+	snapshot := model.Snapshot()
+	var owned []string
+	for _, resourceType := range snapshot.ResourceTypes() {
+		if slices.Contains(snapshot.Relations(resourceType), "owner") {
+			owned = append(owned, resourceType)
+		}
+	}
+	if len(owned) == 0 {
+		return
+	}
+	if repo == nil {
+		log.Warn("authorization: Repositories.Mutations is nil beside an owner relation; no integrity policy is verified and the baseline RelationshipWriter can remove a last owner", "resource_types", strings.Join(owned, ","), "runtime_mode", mode.String())
+		return
+	}
+	policy := repo.IntegrityPolicy()
+	var unprotected []string
+	for _, resourceType := range owned {
+		if !policy.Protects(resourceType, "owner") {
+			unprotected = append(unprotected, resourceType)
+		}
+	}
+	if len(unprotected) != 0 {
+		log.Warn("authorization: the integrity policy does not protect owner; a last owner can be removed — construct the store WithIntegrityPolicy(mutations.DefaultIntegrityPolicy()) or add a rule per type", "resource_types", strings.Join(unprotected, ","), "runtime_mode", mode.String())
 	}
 }
 

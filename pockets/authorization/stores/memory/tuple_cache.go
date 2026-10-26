@@ -15,7 +15,8 @@ import (
 
 // TupleCache is the in-memory reference backend for complete raw mirrors, one
 // per binding. It is separate from Store, which owns the authoritative
-// in-memory facts.
+// in-memory facts. State reports FullAt, the time of the mirror's last full
+// publication.
 type TupleCache struct {
 	mu      sync.Mutex
 	mirrors map[string]*mirror
@@ -24,6 +25,7 @@ type TupleCache struct {
 type mirror struct {
 	state tuplecache.State
 	until time.Time
+	full  time.Time
 	sets  map[tuplecache.SetKey][]tuples.Tuple
 }
 
@@ -63,7 +65,15 @@ func (c *TupleCache) State(ctx context.Context, binding string) (tuplecache.Stat
 	if err := ctx.Err(); err != nil {
 		return tuplecache.State{}, err
 	}
-	return c.mirrorFor(binding).state, nil
+	m := c.mirrorFor(binding)
+	state := m.state
+	state.FullAt = m.full
+	return state, nil
+}
+
+// sameMirror compares the publication identity, ignoring FullAt.
+func sameMirror(a, b tuplecache.State) bool {
+	return a.Binding == b.Binding && a.Receipt == b.Receipt
 }
 
 func (c *TupleCache) Read(ctx context.Context, expected tuplecache.State, keys []tuplecache.SetKey) ([][]tuples.Tuple, error) {
@@ -78,7 +88,7 @@ func (c *TupleCache) Read(ctx context.Context, expected tuplecache.State, keys [
 		return nil, err
 	}
 	m := c.mirrorFor(expected.Binding)
-	if expected != m.state || m.state.Receipt == "" || !time.Now().Before(m.until) {
+	if !sameMirror(expected, m.state) || m.state.Receipt == "" || !time.Now().Before(m.until) {
 		return nil, tuplecache.ErrUnavailable
 	}
 	out := make([][]tuples.Tuple, len(keys))
@@ -99,7 +109,7 @@ func (c *TupleCache) Publish(ctx context.Context, expected, next tuplecache.Stat
 	if expected.Binding != "" && expected.Binding != next.Binding {
 		return tuplecache.ErrBinding
 	}
-	if (snapshot.Full || len(snapshot.Changes) > 0) && next == expected {
+	if (snapshot.Full || len(snapshot.Changes) > 0) && sameMirror(next, expected) {
 		return fmt.Errorf("tuple cache: invalid publication: %w", sdk.ErrInvalidInput)
 	}
 	// Same refusal order as goredis: a delta needs an existing mirror.
@@ -134,7 +144,7 @@ func (c *TupleCache) Publish(ctx context.Context, expected, next tuplecache.Stat
 		return err
 	}
 	m := c.mirrorFor(next.Binding)
-	if m.state != expected {
+	if !sameMirror(m.state, expected) {
 		return tuplecache.ErrConflict
 	}
 	sets := maps.Clone(m.sets)
@@ -183,6 +193,10 @@ func (c *TupleCache) Publish(ctx context.Context, expected, next tuplecache.Stat
 	if c.mirrors == nil {
 		c.mirrors = make(map[string]*mirror)
 	}
-	c.mirrors[next.Binding] = &mirror{state: next, until: until, sets: sets}
+	full := m.full
+	if snapshot.Full {
+		full = started
+	}
+	c.mirrors[next.Binding] = &mirror{state: tuplecache.State{Binding: next.Binding, Receipt: next.Receipt}, until: until, full: full, sets: sets}
 	return nil
 }

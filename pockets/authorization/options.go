@@ -54,12 +54,23 @@ func WithLogger(logger *slog.Logger) Option {
 // The pocket does not install an authenticator or CSRF layer beneath that gate.
 // WritePolicy without Gate is invalid. ListStrategy is always validated,
 // including when routes are disabled. The host owns the gate's middleware stack.
+// AuditGate independently mounts GET /authorization/audit over
+// Repositories.Audit, which it requires; see WithAuditReadObserver.
 func WithRoleRoutes(routes authorizationhttp.RoleRoutes) Option {
 	return func(cfg *config) {
 		cfg.RoleRoutesGate = routes.Gate
 		cfg.RoleWritePolicy = routes.WritePolicy
 		cfg.ListStrategy = routes.ListStrategy
+		cfg.AuditGate = routes.AuditGate
 	}
+}
+
+// WithAuditReadObserver forwards observer to the HTTP adapter: one
+// authorizationhttp.AuditReadEvent per completed audit listing read. A host
+// records each as an audit_read row from a host pocket. Nil, the default,
+// records nothing; beside an AuditGate New logs one WARN in every mode.
+func WithAuditReadObserver(observer authorizationhttp.AuditReadObserver) Option {
+	return func(cfg *config) { cfg.AuditReadObserver = observer }
 }
 
 // WithTupleCache enables a maintained raw canonical tuple mirror. The backend is

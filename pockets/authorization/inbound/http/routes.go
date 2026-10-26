@@ -10,6 +10,7 @@ import (
 	"reflect"
 
 	"github.com/gopernicus/gopernicus/pockets"
+	"github.com/gopernicus/gopernicus/pockets/authorization/logic/audit"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/decisions"
 	authmodel "github.com/gopernicus/gopernicus/pockets/authorization/logic/model"
 	"github.com/gopernicus/gopernicus/pockets/authorization/logic/mutations"
@@ -25,6 +26,7 @@ const (
 	pathUnassignRole    = "/authorization/roles/unassign"
 	pathRolesBySubject  = "/authorization/roles/by-subject"
 	pathRolesByResource = "/authorization/roles/by-resource"
+	pathAudit           = "/authorization/audit"
 )
 
 var (
@@ -33,7 +35,8 @@ var (
 	ErrRoleRoutesWithoutWritePolicy = errors.New("authorization: RoleRoutes.Gate requires RoleRoutes.WritePolicy")
 	ErrRoleWritePolicyWithoutRoutes = errors.New("authorization: RoleRoutes.WritePolicy requires RoleRoutes.Gate")
 	ErrInvalidListStrategy          = errors.New(`authorization: RoleRoutes.ListStrategy must be "cursor" or "offset"`)
-	ErrRoleRoutesWithoutRouter      = errors.New("authorization: RoleRoutes.Gate is set but Mount.Router is nil (the bundled role-administration routes have nowhere to mount)")
+	ErrRoleRoutesWithoutRouter      = errors.New("authorization: RoleRoutes.Gate or AuditGate is set but Mount.Router is nil (the bundled routes have nowhere to mount)")
+	ErrAuditGateWithoutReader       = errors.New("authorization: RoleRoutes.AuditGate requires Services.Audit (wire Repositories.Audit)")
 )
 
 // DecisionService validates a policy and evaluates it as one coherent operation.
@@ -72,13 +75,15 @@ type RoleWriteRequest struct {
 // Return nil to admit, or an error to refuse. Later revocation does not retract admission.
 type RoleWritePolicy func(context.Context, RoleWriteRequest) error
 
-// Services supplies decision, role-read and data-write surfaces. Each kind may
-// be absent; enabled role routes require Roles and Mutations.
-// The adapter borrows these services without changing their policy.
+// Services supplies decision, role-read, data-write and audit-read surfaces.
+// Each kind may be absent; enabled role routes require Roles and Mutations, and
+// an AuditGate requires Audit. The adapter borrows these services without
+// changing their policy.
 type Services struct {
 	Decisions DecisionService
 	Roles     RoleReader
 	Mutations RoleWriter
+	Audit     audit.Reader
 }
 
 // RoleRoutes selects the optional bundled role-administration surface. A nil
@@ -92,13 +97,19 @@ type RoleRoutes struct {
 	// ListStrategy is the default pagination mode. Empty uses cursor. Invalid
 	// values fail construction even when Gate is absent.
 	ListStrategy list.Strategy
+	// AuditGate mounts GET /authorization/audit behind it, independently of
+	// Gate; nil disables the route. Like Gate it supplies authentication and
+	// authorization; a host may compose a stricter check (step-up) into it. It
+	// requires Services.Audit. Each completed read reaches WithAuditReadObserver.
+	AuditGate web.Middleware
 }
 
 type config struct {
 	Services
 	RoleRoutes
-	observer decisions.DecisionObserver
-	logger   *slog.Logger
+	observer      decisions.DecisionObserver
+	auditObserver AuditReadObserver
+	logger        *slog.Logger
 }
 
 // Adapter owns validated HTTP dependencies. Its state is immutable after New.
@@ -110,6 +121,9 @@ type Adapter struct {
 	writePolicy  RoleWritePolicy
 	listStrategy list.Strategy
 	observer     decisions.DecisionObserver
+	audit        audit.Reader
+	auditGate    web.Middleware
+	auditRead    AuditReadObserver
 	logger       *slog.Logger
 }
 
@@ -122,7 +136,7 @@ func New(services Services, opts ...Option) (*Adapter, error) {
 		}
 		opt(&cfg)
 	}
-	for _, dep := range []any{cfg.Decisions, cfg.Roles, cfg.Mutations} {
+	for _, dep := range []any{cfg.Decisions, cfg.Roles, cfg.Mutations, cfg.Audit} {
 		if typedNil(dep) {
 			return nil, fmt.Errorf("authorization HTTP: typed nil dependency: %w", sdk.ErrInvalidInput)
 		}
@@ -142,11 +156,17 @@ func New(services Services, opts ...Option) (*Adapter, error) {
 	if err := ValidateListStrategy(cfg.ListStrategy); err != nil {
 		return nil, err
 	}
+	if cfg.AuditGate != nil && cfg.Audit == nil {
+		return nil, ErrAuditGateWithoutReader
+	}
 
 	if cfg.logger == nil {
 		cfg.logger = slog.Default()
 	}
-	return &Adapter{decisions: cfg.Decisions, roles: cfg.Roles, mutations: cfg.Mutations, gate: cfg.Gate, writePolicy: cfg.WritePolicy, listStrategy: cfg.ListStrategy, observer: cfg.observer, logger: cfg.logger}, nil
+	if cfg.AuditGate != nil && cfg.auditObserver == nil {
+		cfg.logger.Warn("authorization: audit reads are not recorded; wire WithAuditReadObserver", "audit_read_route", true, "audit_read_observer", false)
+	}
+	return &Adapter{decisions: cfg.Decisions, roles: cfg.Roles, mutations: cfg.Mutations, gate: cfg.Gate, writePolicy: cfg.WritePolicy, listStrategy: cfg.ListStrategy, observer: cfg.observer, audit: cfg.Audit, auditGate: cfg.AuditGate, auditRead: cfg.auditObserver, logger: cfg.logger}, nil
 }
 func ValidateListStrategy(strategy list.Strategy) error {
 	switch strategy {
@@ -156,17 +176,25 @@ func ValidateListStrategy(strategy list.Strategy) error {
 	return ErrInvalidListStrategy
 }
 func (a *Adapter) RoutesEnabled() bool { return a != nil && a.gate != nil }
+
+// AuditRouteEnabled reports whether RoleRoutes.AuditGate mounts the audit listing.
+func (a *Adapter) AuditRouteEnabled() bool { return a != nil && a.auditGate != nil }
 func (a *Adapter) Register(r pockets.RouteRegistrar) error {
-	if !a.RoutesEnabled() {
+	if !a.RoutesEnabled() && !a.AuditRouteEnabled() {
 		return nil
 	}
 	if r == nil || typedNil(r) {
 		return ErrRoleRoutesWithoutRouter
 	}
-	r.Handle("POST", pathAssignRole, a.assignRole, a.gate)
-	r.Handle("POST", pathUnassignRole, a.unassignRole, a.gate)
-	r.Handle("GET", pathRolesBySubject, a.listBySubject, a.gate)
-	r.Handle("GET", pathRolesByResource, a.listByResource, a.gate)
+	if a.RoutesEnabled() {
+		r.Handle("POST", pathAssignRole, a.assignRole, a.gate)
+		r.Handle("POST", pathUnassignRole, a.unassignRole, a.gate)
+		r.Handle("GET", pathRolesBySubject, a.listBySubject, a.gate)
+		r.Handle("GET", pathRolesByResource, a.listByResource, a.gate)
+	}
+	if a.AuditRouteEnabled() {
+		r.Handle("GET", pathAudit, a.listAudit, a.auditGate)
+	}
 	return nil
 }
 
@@ -182,6 +210,14 @@ func (a *Adapter) AssignRole() http.Handler      { return a.handler(a.assignRole
 func (a *Adapter) UnassignRole() http.Handler    { return a.handler(a.unassignRole) }
 func (a *Adapter) RolesBySubject() http.Handler  { return a.handler(a.listBySubject) }
 func (a *Adapter) RolesByResource() http.Handler { return a.handler(a.listByResource) }
+
+// Audit returns the gated audit listing, or a 404 handler without an AuditGate.
+func (a *Adapter) Audit() http.Handler {
+	if !a.AuditRouteEnabled() {
+		return http.NotFoundHandler()
+	}
+	return a.auditGate(http.HandlerFunc(a.listAudit))
+}
 func typedNil(v any) bool {
 	if v == nil {
 		return false
