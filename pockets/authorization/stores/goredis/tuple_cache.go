@@ -87,7 +87,8 @@ func WithNamespace(namespace string) Option {
 
 // WithIntegrityKeys signs the mirror: every fact carries an HMAC-SHA256 tag
 // bound to the binding and the mirror's epoch, and every publication writes a
-// MAC over the binding, receipt, epoch, its time and the eligibility deadline.
+// MAC over the mirror key, binding, receipt, epoch, its time and the
+// eligibility deadline.
 // Read verifies both and treats a failure as an unavailable mirror, so a Redis
 // writer without the key cannot add a fact or extend a mirror's eligibility.
 // current signs new full publications; previous keys only verify, so rotate by
@@ -206,7 +207,7 @@ func (c *TupleCache) State(ctx context.Context, binding string) (tuplecache.Stat
 		return tuplecache.State{}, err
 	}
 	if c.ring != nil {
-		if _, ok := c.ring.verify(h); !ok {
+		if _, ok := c.ring.verify(h); !ok || h.binding != binding {
 			c.integrityFailures.Add(1)
 			return tuplecache.State{}, nil
 		}
@@ -235,7 +236,7 @@ func (c *TupleCache) header(ctx context.Context, key string) (header, int64, err
 	if !ok || now <= 0 {
 		return header{}, 0, tuplecache.ErrUnavailable
 	}
-	return header{binding: parts[0], receipt: parts[1], until: parts[2], epoch: parts[3], epochAt: parts[4], mac: parts[5]}, now, nil
+	return header{location: key, binding: parts[0], receipt: parts[1], until: parts[2], epoch: parts[3], epochAt: parts[4], mac: parts[5]}, now, nil
 }
 
 // fullAt parses !epoch_at; a mirror written before it existed reports zero.
@@ -292,7 +293,7 @@ func (c *TupleCache) Read(ctx context.Context, expected tuplecache.State, keys [
 	}
 	var signer *factSigner
 	if c.ring != nil {
-		h := header{binding: expected.Binding, receipt: expected.Receipt, until: stored[0], epoch: stored[1], epochAt: stored[2], mac: stored[3]}
+		h := header{location: key, binding: expected.Binding, receipt: expected.Receipt, until: stored[0], epoch: stored[1], epochAt: stored[2], mac: stored[3]}
 		key, ok := c.ring.verify(h)
 		if !ok {
 			c.integrityFailures.Add(1)
@@ -371,7 +372,7 @@ func (c *TupleCache) Publish(ctx context.Context, expected, next tuplecache.Stat
 			return ErrIntegrity
 		}
 		signer = newFactSigner(key, next.Binding, stored.epoch)
-		mac = header{binding: next.Binding, receipt: next.Receipt, until: strconv.FormatInt(deadline, 10), epoch: stored.epoch, epochAt: stored.epochAt}.sign(key)
+		mac = header{location: stored.location, binding: next.Binding, receipt: next.Receipt, until: strconv.FormatInt(deadline, 10), epoch: stored.epoch, epochAt: stored.epochAt}.sign(key)
 	}
 	payload, fields, err := changesWire(snapshot.Changes, c.limits.MaxMutationBytes, signer)
 	if err != nil {
@@ -398,10 +399,11 @@ func (c *TupleCache) publishFull(ctx context.Context, key string, expected, next
 	if c.ring != nil {
 		current := c.ring.keys[0]
 		signer = newFactSigner(current, next.Binding, epoch)
-		mac = header{binding: next.Binding, receipt: next.Receipt, until: strconv.FormatInt(deadline, 10), epoch: epoch, epochAt: epochAt}.sign(current)
+		mac = header{location: key, binding: next.Binding, receipt: next.Receipt, until: strconv.FormatInt(deadline, 10), epoch: epoch, epochAt: epochAt}.sign(current)
 		// State reported this mirror absent because its header failed
-		// verification; replace it only while it is unchanged.
-		if _, ok := c.ring.verify(stored); expected.Binding == "" && stored.binding != "" && !ok {
+		// verification or names another binding; replace it only while it is
+		// unchanged.
+		if _, ok := c.ring.verify(stored); expected.Binding == "" && stored.binding != "" && (!ok || stored.binding != next.Binding) {
 			replaceUnverified = "1"
 		}
 	}

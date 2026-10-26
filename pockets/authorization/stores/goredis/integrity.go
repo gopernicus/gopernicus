@@ -35,14 +35,17 @@ type keyRing struct {
 }
 
 // header is a mirror's metadata as stored. Every value is the raw Redis string.
+// location is the mirror's Redis key, so a signed mirror copied to another
+// namespace or binding fails verification. Facts need no location: they are
+// bound to the epoch, which only a verified header vouches for.
 type header struct {
-	binding, receipt, until, epoch, epochAt, mac string
+	location, binding, receipt, until, epoch, epochAt, mac string
 }
 
 // sign returns the header MAC under key.
 func (h header) sign(key []byte) string {
 	m := hmac.New(sha256.New, key)
-	writeParts(m, headerContext, h.binding, h.receipt, h.epoch, h.epochAt, h.until)
+	writeParts(m, headerContext, h.location, h.binding, h.receipt, h.epoch, h.epochAt, h.until)
 	return base64.RawURLEncoding.EncodeToString(m.Sum(nil))
 }
 

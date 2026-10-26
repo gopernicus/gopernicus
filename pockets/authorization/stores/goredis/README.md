@@ -237,11 +237,13 @@ authorization database:
   ```
   ACL SETUSER authz-cache on >CHANGE-ME resetkeys resetchannels -@all \
     ~tuplecache:v3:ik:{my-app/* \
-    +hello +ping +client|setinfo +eval +evalsha +del \
+    +hello +ping +client|setinfo +select +eval +evalsha +del \
     +time +type +exists +hget +hmget +hset +hdel +hstrlen +rename +pexpire +persist +pttl
   ```
 
-  Without `WithNamespace` the key pattern is `~tuplecache:v3:ik:*`. Disable the
+  `+select` is needed whenever the URL names a database other than 0: go-redis
+  selects it on every new connection. Without `WithNamespace` the key pattern
+  is `~tuplecache:v3:ik:*`. Disable the
   `default` user or give it no access to these keys.
 - **`maxmemory-policy`**: `noeviction` or a `volatile-*` policy. Whole-key
   eviction is safe (reads fall back, the next poll rebuilds); size the instance
@@ -263,16 +265,22 @@ client := redis.NewClient(opts)
 ### Integrity keys
 
 `WithIntegrityKeys(current, previous...)` makes a Redis compromise cost
-availability, not access:
+availability, not access. **Always pair it with a non-zero
+`tuplecache.Policy.FullRebuildEvery`** (one hour is a reasonable start): the
+replay residual and the recovery of a set holding a bad tag both end only at a
+full publication, and without the cadence nothing schedules one.
 
 - Every fact carries a tag: `HMAC-SHA256(key, "gopernicus.tuplecache.fact.v1"
   ‖ binding ‖ epoch ‖ the seven fields)`, length-prefixed and truncated to 16
   bytes. Lua never holds the key; Go tags facts before publication and checks
   every tag it reads.
 - Every publication writes `!mac = HMAC-SHA256(key,
-  "gopernicus.tuplecache.header.v1" ‖ binding ‖ receipt ‖ epoch ‖ epoch_at ‖
-  until)`. `State` and `Read` verify it. Every full publication mints a new
-  epoch, so it re-tags every fact.
+  "gopernicus.tuplecache.header.v1" ‖ mirror key ‖ binding ‖ receipt ‖ epoch ‖
+  epoch_at ‖ until)`. `State` and `Read` verify it. The mirror key (namespace
+  and binding included) means a signed mirror copied to another namespace or
+  binding fails verification; it is counted and replaced on the next poll.
+  Facts are bound to the epoch, a random value only a verified header vouches
+  for. Every full publication mints a new epoch, so it re-tags every fact.
 - Any failure returns `goredis.ErrIntegrity`, which matches
   `tuplecache.ErrUnavailable`: the decision is answered from the durable source
   and `(*TupleCache).Stats().IntegrityFailures` counts it. A header that fails
@@ -301,15 +309,31 @@ backend, err := goredis.NewTupleCache(client,
 ```
 
 Keep the keys in the host's secret store beside the database credential, never
-in Redis. Every replica sharing a binding must hold the same keys.
+in Redis. Every replica sharing a binding must hold the same keys. Use **one
+key per environment or deployment**, and never share a key between deployments
+whose databases may share an identity (a staging database cloned or restored
+from production carries the same source binding). The MAC binds the mirror
+key, not the Redis instance or database index, so a shared key would let a
+mirror DUMPed from one deployment's Redis verify when RESTOREd into another's
+under the same namespace.
 
 **Rotation.** The current key signs new full publications; every key verifies.
 An epoch stays signed by the key that opened it, so its deltas keep verifying
-across a rotation. Prepend a new key and deploy; once every mirror has had a
-full publication under it (one `FullRebuildEvery` period, or call the runtime's
-`Rebuild`), remove the old key. Removing it early is safe but not free: the
-mirror fails verification once and is rebuilt in full. During a rolling deploy,
-pods that do not yet hold the new key rebuild a mirror the new key opened.
+across a rotation. Rotate in two phases, so no pod ever sees an epoch it cannot
+verify:
+
+1. Deploy the new key as a *previous* key everywhere:
+   `WithIntegrityKeys(old, new)`. Nothing changes on the wire.
+2. Once every pod runs phase 1, promote it: `WithIntegrityKeys(new, old)`. Full
+   publications now sign with the new key, and phase-1 pods still verify them.
+3. Once every mirror has had a full publication under the new key (one
+   `FullRebuildEvery` period, or call the runtime's `Rebuild`), remove the old
+   key: `WithIntegrityKeys(new)`.
+
+Skipping phase 1 is safe but not free: during the rollout, pods that hold only
+the old key fail to verify an epoch the new key opened and rebuild it under the
+old key, and the two sets of pods keep replacing each other's mirror. Removing
+the old key early costs one verification failure and one full rebuild.
 
 **Turning keys on or off** changes the mirror key, so the first poll rebuilds in
 full; the old mirror expires after `WithExpiry`. As with any binding change,
@@ -324,12 +348,16 @@ while they overlap, so roll the change out quickly.
   the MAC covers, so it is ineligible within `MaxStaleness` and the next poll
   replaces it.
 - A revoked fact copied back with a tag from the current epoch verifies until
-  the next full publication mints a new epoch. Pair the keys with
-  `tuplecache.Policy.FullRebuildEvery` (one hour is a reasonable start) on
-  mirrors that rebuild well within `MaxStaleness`; a rebuild that takes longer
-  than `MaxStaleness` cannot publish.
+  the next full publication mints a new epoch, so `FullRebuildEvery` bounds it.
+  Use it on mirrors that rebuild well within `MaxStaleness`; a rebuild that
+  takes longer than `MaxStaleness` cannot publish.
 - Deleting facts or keys only denies: there is no exclusion or intersection in
   the model, so a missing fact never grants.
+- A value of another Redis type at the mirror key makes every poll fail until
+  an operator deletes it: a Redis writer can always deny service.
+- On an unkeyed mirror `!epoch_at` is trusted as stored, so a Redis writer can
+  set it in the future and suppress `FullRebuildEvery`; the keys' header MAC
+  covers it.
 - The key lives in the host process. A compromise of the host is out of scope;
   the threat these keys address is a Redis-only compromise.
 - Each stored fact grows by about 25 bytes, and each fact is stored twice

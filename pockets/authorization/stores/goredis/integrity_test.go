@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"maps"
 	"slices"
 	"strings"
@@ -449,4 +450,225 @@ func TestIntegrityDeltaRefusesUnverifiedHeader(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertSets(t, c, next, []tuplecache.SetKey{forward(row)}, [][]tuplefacts.Tuple{{row}})
+}
+
+// Review HIGH: the header MAC binds the mirror key, so a signed mirror copied
+// from another namespace under the same key and source binding never answers.
+func TestIntegrityCrossNamespaceCopyFallsBack(t *testing.T) {
+	client, _ := startRedis(t, "", false)
+	member := tuple("space", "a", "viewer", "user", "alice", "")
+	stagingOnly := tuple("space", "a", "viewer", "user", "mallory", "")
+	prod, err := NewTupleCache(client, WithNamespace("prod"), WithIntegrityKeys(keyA))
+	if err != nil {
+		t.Fatal(err)
+	}
+	staging, err := NewTupleCache(client, WithNamespace("staging"), WithIntegrityKeys(keyA))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rp := newRuntime(t, newDeltaSource(t, "same-db", member), prod, time.Minute)
+	rs := newRuntime(t, newDeltaSource(t, "same-db", member, stagingOnly), staging, time.Minute)
+	poll(t, rp)
+	poll(t, rs)
+	if err := client.Copy(t.Context(), keyFor(t, staging, rs.Binding()), keyFor(t, prod, rp.Binding()), 0, true).Err(); err != nil {
+		t.Fatal(err)
+	}
+	assertDurable(t, rp, prod, stagingOnly, false)
+	poll(t, rp)
+	if !rp.Stats().LastPoll.Full {
+		t.Fatal("the copied mirror was not replaced")
+	}
+	assertHit(t, rp, stagingOnly, false)
+	assertHit(t, rp, member, true)
+}
+
+// Review MEDIUM-2: a header naming another binding is an integrity failure,
+// counted and replaced, never a permanent ErrBinding.
+func TestIntegrityForeignBindingHeaderIsReplaced(t *testing.T) {
+	client, _ := startRedis(t, "", false)
+	member := tuple("space", "a", "viewer", "user", "alice", "")
+	backend := keyedCache(t, client, keyA)
+	ra := newRuntime(t, newDeltaSource(t, "db-a", member), backend, time.Minute)
+	rb := newRuntime(t, newDeltaSource(t, "db-b", member), backend, time.Minute)
+	poll(t, ra)
+	poll(t, rb)
+	if err := client.Copy(t.Context(), keyFor(t, backend, rb.Binding()), keyFor(t, backend, ra.Binding()), 0, true).Err(); err != nil {
+		t.Fatal(err)
+	}
+	if state, err := backend.State(t.Context(), ra.Binding()); err != nil || state != (tuplecache.State{}) {
+		t.Fatalf("foreign header state: %+v/%v", state, err)
+	}
+	if got := backend.Stats().IntegrityFailures; got != 1 {
+		t.Fatalf("integrity failures %d, want 1", got)
+	}
+	poll(t, ra)
+	if !ra.Stats().LastPoll.Full {
+		t.Fatal("the foreign mirror was not replaced")
+	}
+	assertHit(t, ra, member, true)
+	assertHit(t, rb, member, true)
+}
+
+// Review NIT (d): the recovery fence refuses to replace a mirror that a
+// legitimate publication changed after this process observed it.
+func TestIntegrityRecoveryFenceConflicts(t *testing.T) {
+	client, _ := startRedis(t, "", false)
+	ctx := t.Context()
+	c := keyedCache(t, client, keyA)
+	rivalOptions := *client.Options()
+	rivalClient := redis.NewClient(&rivalOptions)
+	t.Cleanup(func() { _ = rivalClient.Close() })
+	rival := keyedCache(t, rivalClient, keyA)
+	row := tuple("space", "a", "viewer", "user", "alice", "")
+	full := tuplecache.Snapshot{Full: true, Tuples: []tuplefacts.Tuple{row}}
+	if err := c.Publish(ctx, tuplecache.State{}, tuplecache.State{Binding: "store", Receipt: "first"}, full, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.HSet(ctx, keyFor(t, c, "store"), "!until", time.Now().Add(time.Hour).UnixMilli()).Err(); err != nil {
+		t.Fatal(err)
+	}
+	won := tuplecache.State{Binding: "store", Receipt: "rival"}
+	var rivalErr error
+	fired := false
+	client.AddHook(commandHook{observe: func(cmd redis.Cmder) {
+		if fired || cmd.Name() != "evalsha" || cmd.Args()[1] != replaceScript.Hash() {
+			return
+		}
+		fired = true
+		rivalErr = rival.Publish(ctx, tuplecache.State{}, won, full, time.Minute)
+	}})
+	err := c.Publish(ctx, tuplecache.State{}, tuplecache.State{Binding: "store", Receipt: "late"}, full, time.Minute)
+	if !fired || rivalErr != nil {
+		t.Fatalf("rival publication: fired=%v %v", fired, rivalErr)
+	}
+	if !errors.Is(err, tuplecache.ErrConflict) {
+		t.Fatalf("fenced replacement: %v", err)
+	}
+	if state, err := rival.State(ctx, "store"); err != nil || !sameMirror(state, won) {
+		t.Fatalf("the rival's publication was overwritten: %+v/%v", state, err)
+	}
+}
+
+// Review MEDIUM-1: the README's ACL recipe runs a keyed runtime on database 0
+// and on a non-zero database (go-redis SELECTs on connect).
+func TestIntegrityREADMEACLRecipe(t *testing.T) {
+	admin, _ := startRedis(t, "", false)
+	ctx := t.Context()
+	recipe := []any{"ACL", "SETUSER", "authz-cache", "on", ">pw", "resetkeys", "resetchannels", "-@all",
+		"~tuplecache:v3:ik:{my-app/*",
+		"+hello", "+ping", "+client|setinfo", "+select", "+eval", "+evalsha", "+del",
+		"+time", "+type", "+exists", "+hget", "+hmget", "+hset", "+hdel", "+hstrlen", "+rename", "+pexpire", "+persist", "+pttl"}
+	if err := admin.Do(ctx, recipe...).Err(); err != nil {
+		t.Fatal(err)
+	}
+	for _, db := range []int{0, 1} {
+		t.Run(fmt.Sprint("db=", db), func(t *testing.T) {
+			options := *admin.Options()
+			options.Username, options.Password, options.DB = "authz-cache", "pw", db
+			client := redis.NewClient(&options)
+			t.Cleanup(func() { _ = client.Close() })
+			backend, err := NewTupleCache(client, WithNamespace("my-app"), WithIntegrityKeys(keyA))
+			if err != nil {
+				t.Fatal(err)
+			}
+			member := tuple("space", "a", "viewer", "user", "alice", "")
+			source := newDeltaSource(t, "acl", member)
+			runtime := newRuntime(t, source, backend, time.Minute)
+			poll(t, runtime)
+			assertHit(t, runtime, member, true)
+			source.revoke(t, member)
+			poll(t, runtime)
+			assertHit(t, runtime, member, false)
+			if err := runtime.Rebuild(ctx); err != nil {
+				t.Fatal(err)
+			}
+			if leftover := admin.Do(ctx, "ACL", "LOG").Val(); leftover != nil && len(leftover.([]any)) != 0 {
+				t.Fatalf("ACL denials: %v", leftover)
+			}
+		})
+	}
+}
+
+// A mirror written before !epoch existed (v0.5.0) keeps taking deltas and
+// reports a zero FullAt until its next full publication.
+func TestIntegrityUnkeyedPreEpochMirrorResumes(t *testing.T) {
+	client, _ := startRedis(t, "", false)
+	ctx := t.Context()
+	member := tuple("space", "a", "viewer", "user", "alice", "")
+	source := newDeltaSource(t, "old", member)
+	backend := newCache(t, client)
+	runtime := newRuntime(t, source, backend, time.Minute)
+	poll(t, runtime)
+	if err := client.HDel(ctx, keyFor(t, backend, runtime.Binding()), "!epoch", "!epoch_at").Err(); err != nil {
+		t.Fatal(err)
+	}
+	if state, err := backend.State(ctx, runtime.Binding()); err != nil || state.Receipt == "" || !state.FullAt.IsZero() {
+		t.Fatalf("pre-epoch state: %+v/%v", state, err)
+	}
+	source.revoke(t, member)
+	poll(t, runtime)
+	if runtime.Stats().LastPoll.Full {
+		t.Fatal("a pre-epoch mirror was rebuilt instead of taking the delta")
+	}
+	assertHit(t, runtime, member, false)
+}
+
+// Review NIT (a): two-phase rotation never fails a verification.
+func TestIntegrityTwoPhaseRotation(t *testing.T) {
+	client, _ := startRedis(t, "", false)
+	member := tuple("space", "a", "viewer", "user", "alice", "")
+	source := newDeltaSource(t, "db-a", member)
+	start := keyedCache(t, client, keyA)
+	poll(t, newRuntime(t, source, start, time.Minute))
+	phase1 := keyedCache(t, client, keyA, keyB)
+	phase2 := keyedCache(t, client, keyB, keyA)
+	p1 := newRuntime(t, source, phase1, time.Minute)
+	p2 := newRuntime(t, source, phase2, time.Minute)
+	poll(t, p1)
+	if err := p2.Rebuild(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	poll(t, p1)
+	poll(t, p2)
+	assertHit(t, p1, member, true)
+	assertHit(t, p2, member, true)
+	if p1.Stats().Rebuilds != 0 {
+		t.Fatalf("a phase-1 pod rebuilt the new key's epoch: %+v", p1.Stats())
+	}
+	phase3 := keyedCache(t, client, keyB)
+	p3 := newRuntime(t, source, phase3, time.Minute)
+	poll(t, p3)
+	assertHit(t, p3, member, true)
+	for _, b := range []*TupleCache{phase1, phase2, phase3} {
+		if got := b.Stats().IntegrityFailures; got != 0 {
+			t.Fatalf("two-phase rotation failed a verification: %d", got)
+		}
+	}
+}
+
+// The named residual: another Redis type at the mirror key fails every poll
+// (a denial), while decisions stay correct on the durable path.
+func TestIntegrityWrongTypeDeniesService(t *testing.T) {
+	client, _ := startRedis(t, "", false)
+	member := tuple("space", "a", "viewer", "user", "alice", "")
+	backend := keyedCache(t, client, keyA)
+	runtime := newRuntime(t, newDeltaSource(t, "db-a", member), backend, time.Minute)
+	poll(t, runtime)
+	key := keyFor(t, backend, runtime.Binding())
+	if err := client.Del(t.Context(), key).Err(); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.Set(t.Context(), key, "x", 0).Err(); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		if err := runtime.Poll(t.Context()); !errors.Is(err, tuplecache.ErrUnavailable) {
+			t.Fatalf("poll over a string key: %v", err)
+		}
+	}
+	before := runtime.Stats()
+	assertAllowed(t, runtime, member, true)
+	if after := runtime.Stats(); after.Fallbacks != before.Fallbacks+1 {
+		t.Fatalf("decision did not fall back: %+v -> %+v", before, after)
+	}
 }
