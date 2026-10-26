@@ -18,6 +18,10 @@ backend, err := goredis.NewTupleCache(client,
 )
 ```
 
+Production hosts should also pass `goredis.WithIntegrityKeys` and treat Redis
+as part of the authorization boundary; see
+[Trust boundary and hardening](#trust-boundary-and-hardening).
+
 The namespace is optional; it only adds a readable key prefix. Mirrors are keyed
 on the runtime binding, so the host never types anything that must match it. The
 constructor starts no goroutines and performs no I/O. The host retains ownership
@@ -57,7 +61,10 @@ grants):
 ## Redis key
 
 Each mirror is keyed on its runtime binding: `tuplecache:v3:{<binding>}`, or
-`tuplecache:v3:{<namespace>/<binding>}` with `WithNamespace`. The runtime binding
+`tuplecache:v3:{<namespace>/<binding>}` with `WithNamespace`. With
+`WithIntegrityKeys` the key is `tuplecache:v3:ik:{<binding>}` (or
+`tuplecache:v3:ik:{<namespace>/<binding>}`), so keyed and unkeyed runtimes never
+read each other's mirror. The runtime binding
 is `protocol:2/<source binding>/max-staleness:<nanoseconds>`, so processes share
 a mirror exactly when their protocol, source identity and `MaxStaleness` match;
 any difference lands in a different mirror instead of failing with
@@ -148,6 +155,14 @@ One Redis hash contains metadata and raw forward/reverse canonical tuple sets:
   resource ID, relation, subject type, subject ID, and subject relation. The six
   string components use URL-base64 inside JSON arrays. Global resource type and
   ID are empty; zero or unknown scope kinds are invalid.
+- A keyed mirror stores eight-field facts: the seven fields plus a 22-character
+  URL-base64 tag (see below). A fact's identity is its seven fields, so a delta
+  that adds a fact replaces its stored tag and a revoke removes it whatever tag
+  is stored.
+- Metadata fields start with `!`: `!schema` (`2`), `!binding`, `!receipt`,
+  `!until` (the eligibility deadline, Redis ms), `!epoch` and `!epoch_at` (a
+  random identifier and the Redis time of the last full publication, which the
+  adapter reports as `tuplecache.State.FullAt`), and on a keyed mirror `!mac`.
 
 The mirror stores role and relationship facts together. There is no writer-origin
 classification: identical scope, relation and subject form one fact. Independent
@@ -201,6 +216,138 @@ Redis persistence is optional host configuration. A restored receipt is compared
 with the source's acknowledged receipt by the runtime; an older restored dataset
 must be reconstructed from authoritative tuples. The outbox is disposable pending
 work, not the rebuild source.
+
+## Trust boundary and hardening
+
+Redis is inside the authorization boundary. Without integrity keys the adapter
+trusts every well-formed hash it reads: anyone who can write the mirror key can
+grant access until the next full rebuild. Treat the instance like the
+authorization database:
+
+- **Dedicated instance**, or at least a logical database that holds nothing
+  else. Never share a database index with session stores, queues, rate limiters
+  or any lower-trust tenant; a shared index means every client of it can write
+  the mirror.
+- **TLS with a verified CA** (`rediss://`). Never set `skip_verify`; for a
+  private CA, fill `TLSConfig.RootCAs` after parsing the URL.
+- **An ACL user** limited to the mirror keys and the commands the adapter's
+  scripts run. Redis checks the commands a script calls against the caller's
+  ACL, so the user needs those as well as `EVAL`/`EVALSHA`:
+
+  ```
+  ACL SETUSER authz-cache on >CHANGE-ME resetkeys resetchannels -@all \
+    ~tuplecache:v3:ik:{my-app/* \
+    +hello +ping +client|setinfo +eval +evalsha +del \
+    +time +type +exists +hget +hmget +hset +hdel +hstrlen +rename +pexpire +persist +pttl
+  ```
+
+  Without `WithNamespace` the key pattern is `~tuplecache:v3:ik:*`. Disable the
+  `default` user or give it no access to these keys.
+- **`maxmemory-policy`**: `noeviction` or a `volatile-*` policy. Whole-key
+  eviction is safe (reads fall back, the next poll rebuilds); size the instance
+  so it is rare.
+- Persistence is optional: a restored older dataset is handled as below.
+
+The client comes from one URL, the shape `AUTH_CACHE_REDIS_URL` already uses
+(`rediss://<acl-user>:<password>@<host>:<port>/<db>`):
+
+```go
+opts, err := redis.ParseURL(os.Getenv("AUTH_CACHE_REDIS_URL"))
+if err != nil {
+    return err
+}
+opts.ContextTimeoutEnabled = true
+client := redis.NewClient(opts)
+```
+
+### Integrity keys
+
+`WithIntegrityKeys(current, previous...)` makes a Redis compromise cost
+availability, not access:
+
+- Every fact carries a tag: `HMAC-SHA256(key, "gopernicus.tuplecache.fact.v1"
+  ‖ binding ‖ epoch ‖ the seven fields)`, length-prefixed and truncated to 16
+  bytes. Lua never holds the key; Go tags facts before publication and checks
+  every tag it reads.
+- Every publication writes `!mac = HMAC-SHA256(key,
+  "gopernicus.tuplecache.header.v1" ‖ binding ‖ receipt ‖ epoch ‖ epoch_at ‖
+  until)`. `State` and `Read` verify it. Every full publication mints a new
+  epoch, so it re-tags every fact.
+- Any failure returns `goredis.ErrIntegrity`, which matches
+  `tuplecache.ErrUnavailable`: the decision is answered from the durable source
+  and `(*TupleCache).Stats().IntegrityFailures` counts it. A header that fails
+  verification reads as an absent mirror, so the next poll replaces it in full.
+  A set holding a bad tag stays unreadable (every read of it falls back) until
+  the next full publication: `FullRebuildEvery`, or the runtime's `Rebuild`.
+  Alert on a rising `IntegrityFailures`.
+
+Generate each key with `openssl rand -hex 32` (32 bytes minimum; shorter keys
+fail construction with `sdk.ErrInvalidInput`). A host might read a
+comma-separated list from `AUTHZ_CACHE_INTEGRITY_KEYS`, newest first:
+
+```go
+var keys [][]byte
+for _, part := range strings.Split(os.Getenv("AUTHZ_CACHE_INTEGRITY_KEYS"), ",") {
+    key, err := hex.DecodeString(strings.TrimSpace(part))
+    if err != nil {
+        return err
+    }
+    keys = append(keys, key)
+}
+backend, err := goredis.NewTupleCache(client,
+    goredis.WithNamespace("my-app"),
+    goredis.WithIntegrityKeys(keys[0], keys[1:]...),
+)
+```
+
+Keep the keys in the host's secret store beside the database credential, never
+in Redis. Every replica sharing a binding must hold the same keys.
+
+**Rotation.** The current key signs new full publications; every key verifies.
+An epoch stays signed by the key that opened it, so its deltas keep verifying
+across a rotation. Prepend a new key and deploy; once every mirror has had a
+full publication under it (one `FullRebuildEvery` period, or call the runtime's
+`Rebuild`), remove the old key. Removing it early is safe but not free: the
+mirror fails verification once and is rebuilt in full. During a rolling deploy,
+pods that do not yet hold the new key rebuild a mirror the new key opened.
+
+**Turning keys on or off** changes the mirror key, so the first poll rebuilds in
+full; the old mirror expires after `WithExpiry`. As with any binding change,
+keyed and unkeyed replicas on one authorization database rebuild on every poll
+while they overlap, so roll the change out quickly.
+
+**What the keys bound, and what they do not.**
+
+- A forged or altered fact is never read; a missing or seven-field fact on a
+  keyed mirror fails verification.
+- An older mirror restored over the current one keeps its old `!until`, which
+  the MAC covers, so it is ineligible within `MaxStaleness` and the next poll
+  replaces it.
+- A revoked fact copied back with a tag from the current epoch verifies until
+  the next full publication mints a new epoch. Pair the keys with
+  `tuplecache.Policy.FullRebuildEvery` (one hour is a reasonable start) on
+  mirrors that rebuild well within `MaxStaleness`; a rebuild that takes longer
+  than `MaxStaleness` cannot publish.
+- Deleting facts or keys only denies: there is no exclusion or intersection in
+  the model, so a missing fact never grants.
+- The key lives in the host process. A compromise of the host is out of scope;
+  the threat these keys address is a Redis-only compromise.
+- Each stored fact grows by about 25 bytes, and each fact is stored twice
+  (forward and reverse), so about 50 bytes per fact. Mirrors near the limits
+  fall back more often. Reads also verify one HMAC per fact read.
+
+**FullRebuildEvery and clock skew.** `State.FullAt` is the Redis `TIME` of the
+last full publication, read from `!epoch_at`, so replicas sharing a mirror
+rebuild once per period between them. The cadence compares it with each host's
+local wall clock, so skew between a host and Redis shifts that host's cadence by
+the skew: a Redis clock ahead delays the rebuild, one behind brings it forward.
+Keep both on NTP.
+
+**Drill.** On a scratch Redis, alter a fact and, separately, a header field of a
+keyed mirror; the next decision must come from the durable source
+(`Stats().Fallbacks` and `IntegrityFailures` rise, the answer matches the
+database) and the next poll must rebuild the mirror. `integrity_test.go` runs
+the same cases.
 
 ## Limits and verification
 

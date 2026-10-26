@@ -184,7 +184,7 @@ func TestTupleCacheReadinessAndRebuild(t *testing.T) {
 	if err := client.HSet(ctx, keyFor(t, c, "store"), "!until", 1).Err(); err != nil {
 		t.Fatal(err)
 	}
-	if got, err := c.State(ctx, "store"); err != nil || got != state {
+	if got, err := c.State(ctx, "store"); err != nil || !sameMirror(got, state) {
 		t.Fatalf("expired receipt lost: %v %v", got, err)
 	}
 	if _, err := c.Read(ctx, state, nil); !errors.Is(err, tuplecache.ErrUnavailable) {
@@ -284,7 +284,7 @@ func TestTupleCacheRestartPersistence(t *testing.T) {
 	server.stop()
 	restored, _ := startRedis(t, server.dir, true)
 	c = newCache(t, restored)
-	if got, err := c.State(ctx, "store"); err != nil || got != state {
+	if got, err := c.State(ctx, "store"); err != nil || !sameMirror(got, state) {
 		t.Fatalf("restored state: %v %v", got, err)
 	}
 	assertSets(t, c, state, []tuplecache.SetKey{forward(row), reverse(row)}, [][]tuplefacts.Tuple{{row}, {row}})
@@ -477,7 +477,7 @@ func TestTupleCachePublicationDoesNotRefreshLongBuild(t *testing.T) {
 	if err := c.Publish(ctx, state, next, tuplecache.Snapshot{Full: true, Tuples: []tuplefacts.Tuple{row}}, 40*time.Millisecond); !errors.Is(err, tuplecache.ErrUnavailable) {
 		t.Fatalf("late full publication: %v", err)
 	}
-	if got, err := c.State(ctx, "store"); err != nil || got != state {
+	if got, err := c.State(ctx, "store"); err != nil || !sameMirror(got, state) {
 		t.Fatalf("late build replaced mirror: %v %v", got, err)
 	}
 	keys := client.Keys(ctx, keyFor(t, c, "store")+":build:*").Val()
@@ -513,7 +513,7 @@ func TestTupleCacheBatchesBeyondRebuildChunk(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertSets(t, c, next, keys, want)
-	if fields := client.HLen(ctx, keyFor(t, c, "store")).Val(); fields != 4 {
+	if fields := client.HLen(ctx, keyFor(t, c, "store")).Val(); fields != 6 {
 		t.Fatalf("remaining fields %d, want metadata only", fields)
 	}
 }
@@ -801,6 +801,11 @@ func keyFor(t testing.TB, c *TupleCache, binding string) string {
 		t.Fatal(err)
 	}
 	return key
+}
+
+// sameMirror compares the publication identity; State also reports FullAt.
+func sameMirror(a, b tuplecache.State) bool {
+	return a.Binding == b.Binding && a.Receipt == b.Receipt
 }
 
 func tuple(rt, rid, relation, st, sid, sr string) tuplefacts.Tuple {

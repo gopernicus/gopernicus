@@ -592,3 +592,57 @@ func applyCacheBaseline(source fs.FS, dir string, apply func(string) error) erro
 	}
 	return nil
 }
+
+// BE5: the cadence reads the mirror's FullAt, so two replicas sharing a keyed
+// mirror rebuild once per period between them, not once each.
+func TestSQLRedisFullRebuildEveryIsFleetWide(t *testing.T) {
+	repos := endToEndRepositories(t, "sqlite")
+	fact := tuples.Tuple{Scope: tuples.Global(), Relation: "admin", Subject: tuples.SubjectRef{Type: "user", ID: "alice"}}
+	if err := repos.Tuples.ApplyTuples(t.Context(), tuples.Changes{Add: []tuples.Tuple{fact}}); err != nil {
+		t.Fatal(err)
+	}
+	client, _ := startRedis(t, "", false)
+	policy := tuplecache.Policy{MaxStaleness: time.Minute, PollInterval: 100 * time.Millisecond, FullRebuildEvery: 500 * time.Millisecond}
+	replica := func() authorization.Components {
+		t.Helper()
+		components, err := authorization.New(repos, authorization.WithTupleCache(keyedCache(t, client, keyA), policy))
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = components.TupleCache.Close() })
+		return components
+	}
+	a, b := replica(), replica()
+	pollAll := func(replicas ...authorization.Components) {
+		t.Helper()
+		for _, r := range replicas {
+			if err := r.TupleCache.Poll(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	scheduled := func() (uint64, uint64) {
+		return a.TupleCache.Stats().ScheduledRebuilds, b.TupleCache.Stats().ScheduledRebuilds
+	}
+	pollAll(a, b)
+	if stats := b.TupleCache.Stats(); stats.Rebuilds != 0 {
+		t.Fatalf("the second replica rebuilt a fresh mirror: %+v", stats)
+	}
+	time.Sleep(policy.FullRebuildEvery)
+	pollAll(a, b)
+	if sa, sb := scheduled(); sa != 1 || sb != 0 {
+		t.Fatalf("first period: scheduled a=%d b=%d, want 1 and 0", sa, sb)
+	}
+	time.Sleep(policy.FullRebuildEvery)
+	pollAll(b, a)
+	if sa, sb := scheduled(); sa != 1 || sb != 1 {
+		t.Fatalf("second period: scheduled a=%d b=%d, want 1 and 1", sa, sb)
+	}
+	principal := model.PrincipalRef{Type: "user", ID: "alice"}
+	if held, err := a.Roles.HasRole(t.Context(), principal, "admin"); err != nil || !held {
+		t.Fatalf("rebuilt keyed mirror: %v/%v", held, err)
+	}
+	if stats := a.TupleCache.Stats(); stats.Hits != 1 || stats.Fallbacks != 0 {
+		t.Fatalf("the rebuilt mirror did not answer: %+v", stats)
+	}
+}
