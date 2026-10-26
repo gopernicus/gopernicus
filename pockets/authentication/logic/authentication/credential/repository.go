@@ -2,6 +2,14 @@ package credential
 
 import "context"
 
+// SnapshotScope names the optional credential tables a scoped Snapshot reads.
+// Passkeys false means the host did not wire passkeys and may not have applied
+// migration 0025: the store must not read passkey_credentials, and the
+// MethodSet it returns carries no Passkeys.
+type SnapshotScope struct {
+	Passkeys bool
+}
+
 // MutationRepository is the revision-serialized credential/identifier mutation
 // port (design §5.6). It is the store seam that closes concurrent self-removal:
 // Snapshot reads the typed MethodSet together with the user's auth_revision, the
@@ -26,4 +34,15 @@ type MutationRepository interface {
 	// A conflict or any failure leaves the user's credential state unchanged — the
 	// mutation is never partially applied.
 	Apply(ctx context.Context, userID string, expectedAuthRevision int64, mutation Mutation) error
+}
+
+// ScopedSnapshotter is the OPTIONAL capability a MutationRepository implements
+// when a table Snapshot reads is migrated only for a host that wires its
+// feature (the SQL stores: passkey_credentials, migration 0025). SnapshotScoped
+// is Snapshot reading only the tables scope names. The service calls it in
+// place of Snapshot when passkeys are not wired; a repository without it is
+// read through Snapshot and the service drops the Passkeys it returns, so a
+// host implementation keeps working unchanged.
+type ScopedSnapshotter interface {
+	SnapshotScoped(ctx context.Context, userID string, scope SnapshotScope) (MethodSet, error)
 }

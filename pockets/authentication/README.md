@@ -2155,8 +2155,23 @@ reports one, unverified.
 
 ### Turn on passkeys
 
-1. Apply migration `0025_passkey_credentials` (pgx v0.12.0 / turso v0.11.0) —
-   the store probe refuses to boot without it, naming 0025.
+1. Apply migration `0025_passkey_credentials` (pgx v0.12.0 / turso v0.11.0). It
+   is required **only when passkeys are wired**: `New` asks a
+   `Repositories.Passkeys` that implements `passkey.SchemaProber` to prove its
+   table at boot and refuses with `ErrPasskeySchemaMissing`, naming
+   `0025_passkey_credentials.sql`; a host that never wires passkeys is never
+   probed and may skip the migration (or apply its empty table early). Unwired,
+   the pocket never reads `passkey_credentials`: `user.EraseInput.Passkeys` is
+   false, so a store's `Erase` neither deletes nor counts passkeys; the
+   credential rail is read through `credential.ScopedSnapshotter` without
+   passkeys (a `MutationRepository` without it is read through `Snapshot` and
+   its passkeys dropped, so a passkey no route can use never counts as a login
+   method); and a bootstrap-tier TOTP `Confirm` carries `Bootstrap: false`. A
+   host `EraseRepository` must honour `EraseInput.Passkeys` (it was always
+   delete-on-erase; now only when it is true). A host that **unwires** passkeys
+   stops erasing that table: drop or purge it yourself first.
+   `storetest.RunPasskeySchemaProbe` and `storetest.RunPasskeysUnwired` pin a
+   store's probe and its unwired rail.
 2. Build the relying party with the go-webauthn integration,
    `gowebauthn.New(webauthn.Config{RPID, RPName, Origins})`. **The RP ID is
    permanent**: changing it orphans every registered passkey. Every origin in

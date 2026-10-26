@@ -31,8 +31,8 @@ var ErrEraseBlockedByClaim = fmt.Errorf("user: an accepting invitation claim is 
 // refuse with ErrEraseBlockedByClaim when any locked row is accepting; mark the
 // user erased (deactivated when active, display name blanked, auth_revision
 // incremented); retire and blank every identifier row of the user; delete the
-// password, passkeys, the TOTP credential and its recovery codes (only when
-// in.TOTP), OAuth accounts, external subjects, contact changes, OAuth2
+// password, the passkeys (only when in.Passkeys), the TOTP credential and its
+// recovery codes (only when in.TOTP), OAuth accounts, external subjects, contact changes, OAuth2
 // authorization codes, the challenges keyed to the user or to SubjectKeys, the
 // authentication grants and the sessions of both profiles; delete the locked
 // pending invitations and blank identifier and metadata on the locked terminal
@@ -65,12 +65,18 @@ type EraseRepository interface {
 // then does Erase delete the TOTP credential and recovery codes (EraseCounts.TOTP,
 // .RecoveryCodes). A false TOTP means the host may not have applied their
 // migration (0026), so a store touches neither table and reports zero counts.
+//
+// Passkeys reports that the host wired passkeys: only then does Erase delete the
+// user's passkeys (EraseCounts.Passkeys). A false Passkeys means the host may
+// not have applied their migration (0025), so a store does not touch
+// passkey_credentials and reports zero.
 type EraseInput struct {
 	ID          string
 	Now         time.Time
 	SubjectKeys []string
 	Event       securityevent.SecurityEvent
 	TOTP        bool
+	Passkeys    bool
 }
 
 // Erasure is the outcome of an Erase. Changed reports whether this call erased

@@ -59,11 +59,6 @@ var oauth2ProbeTables = []string{
 // boot rather than on the first external request.
 var externalProbeTables = []string{"external_subjects"}
 
-// passkeyProbeTables are the tables migration 0025 creates. They are probed in
-// every mode, even for a host that wires no passkeys, and the refusal names the
-// file (passkeyMigration).
-var passkeyProbeTables = []string{"passkey_credentials"}
-
 // Repositories returns the auth repository set backed by db, WITHOUT touching
 // migrations — AFTER verifying every canonical table (see probeTables) exists
 // (the boot-time probe). It errors with sdk.ErrNotFound naming the specific
@@ -74,10 +69,11 @@ var passkeyProbeTables = []string{"passkey_credentials"}
 // db is the connector wrapper (error mapping + Tx), not a raw *sql.DB. It
 // refuses, with sdk.ErrNotFound naming the file, a database without migration
 // 0023 (the users.erased_at column), without row 1 of 0024's
-// security_events_retention floor table — never a default floor — or without
-// 0025's passkey_credentials table. It never probes 0026 (totp_credentials,
-// recovery_codes): TOTP is the host's opt-in, and the bundle's TOTP store
-// implements totp.SchemaProber, which the pocket calls only under WithTOTP.
+// security_events_retention floor table — never a default floor. It never
+// probes 0025 (passkey_credentials) or 0026 (totp_credentials, recovery_codes):
+// passkeys and TOTP are the host's opt-in, and the bundle's passkey and TOTP
+// stores implement passkey.SchemaProber and totp.SchemaProber, which the pocket
+// calls only under WithPasskeys and WithTOTP.
 // Last it checks the 0022 immutability
 // triggers (AuditTables) under the RuntimeMode db was opened with, logging a
 // WARN when they are missing or altered.
@@ -107,11 +103,6 @@ func Repositories(ctx context.Context, db *tursodb.DB) (auth.Repositories, error
 	}
 	if _, err := readFloorDays(ctx, db); err != nil {
 		return auth.Repositories{}, err
-	}
-	for _, table := range passkeyProbeTables {
-		if err := probeMigrationTable(ctx, db, table, passkeyMigration); err != nil {
-			return auth.Repositories{}, err
-		}
 	}
 	if err := db.ProbeAuditImmutable(ctx, AuditTables()...); err != nil {
 		return auth.Repositories{}, err
@@ -150,7 +141,9 @@ func Repositories(ctx context.Context, db *tursodb.DB) (auth.Repositories, error
 		// purge appends its evidence to the table it purges.
 		Maintenance: NewMaintenanceStore(db),
 		UserErasure: NewErasureStore(db),
-		Passkeys:    NewPasskeyStore(db),
+		// Never probed here: 0025 is required only when the host wires
+		// passkeys, and the pocket then asks through PasskeyStore.ProbeSchema.
+		Passkeys: NewPasskeyStore(db),
 		// Never probed here: 0026 is required only when the host wires TOTP, and
 		// the pocket then asks through TOTPStore.ProbeSchema.
 		TOTP: NewTOTPStore(db),

@@ -82,11 +82,7 @@ var oauthProbeTables = []string{oauthClientsTable, oauthCodesTable, oauthHistory
 // boot rather than on the first external request.
 var externalProbeTables = []string{externalSubjectsTable}
 
-// passkeyProbeTables are the tables migration 0025 creates. They are probed in
-// every mode, even for a host that wires no passkeys, and the refusal names the
-// file (passkeyMigration).
-var passkeyProbeTables = []string{passkeyCredentialsTable}
-var probeTables = append(append(append(append([]string{}, legacyProbeTables...), oauthProbeTables...), externalProbeTables...), passkeyProbeTables...)
+var probeTables = append(append(append([]string{}, legacyProbeTables...), oauthProbeTables...), externalProbeTables...)
 
 // Repositories returns the auth repository set backed by db, WITHOUT touching
 // migrations — AFTER verifying every canonical table (see probeTables) exists
@@ -99,10 +95,11 @@ var probeTables = append(append(append(append([]string{}, legacyProbeTables...),
 // WithSchema qualifies both the probe and every statement the stores run.
 //
 // It refuses, in every mode with sdk.ErrNotFound, a database without migration
-// 0023 (the users.erased_at column), 0024 (the rail's retention functions) or
-// 0025 (the passkey_credentials table), naming the file. It never probes 0026
-// (totp_credentials, recovery_codes): TOTP is the host's opt-in, and the bundle's
-// TOTP store implements totp.SchemaProber, which the pocket calls only under
+// 0023 (the users.erased_at column) or 0024 (the rail's retention functions),
+// naming the file. It never probes 0025 (passkey_credentials) or 0026
+// (totp_credentials, recovery_codes): passkeys and TOTP are the host's opt-in,
+// and the bundle's passkey and TOTP stores implement passkey.SchemaProber and
+// totp.SchemaProber, which the pocket calls only under WithPasskeys and
 // WithTOTP.
 //
 // Last it probes the runtime role's posture on AuditTables under the
@@ -143,11 +140,6 @@ func Repositories(ctx context.Context, db *pgxdb.DB, opts ...Option) (auth.Repos
 	execute, err := s.probeRetentionFunctions(ctx, db)
 	if err != nil {
 		return auth.Repositories{}, err
-	}
-	for _, table := range passkeyProbeTables {
-		if err := s.probeMigrationTable(ctx, db, table, passkeyMigration); err != nil {
-			return auth.Repositories{}, err
-		}
 	}
 	if err := db.ProbeAppendOnly(ctx, AuditTables(opts...)...); err != nil {
 		return auth.Repositories{}, err
@@ -190,7 +182,9 @@ func Repositories(ctx context.Context, db *pgxdb.DB, opts ...Option) (auth.Repos
 		// purge appends its evidence to the table it purges.
 		Maintenance: NewMaintenanceStore(db, opts...),
 		UserErasure: NewErasureStore(db, opts...),
-		Passkeys:    NewPasskeyStore(db, opts...),
+		// Never probed here: 0025 is required only when the host wires
+		// passkeys, and the pocket then asks through PasskeyStore.ProbeSchema.
+		Passkeys: NewPasskeyStore(db, opts...),
 		// Never probed here: 0026 is required only when the host wires TOTP, and
 		// the pocket then asks through TOTPStore.ProbeSchema.
 		TOTP: NewTOTPStore(db, opts...),

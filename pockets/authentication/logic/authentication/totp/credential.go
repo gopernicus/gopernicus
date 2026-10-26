@@ -68,7 +68,9 @@ type RecoveryCode struct {
 // session of the pending row the code was checked against: a row replaced
 // meanwhile (a concurrent Begin) is never confirmed. ExpectedAuthRevision is the
 // revision the pending row carries; Bootstrap marks an enrollment begun at the
-// AAL1 bootstrap tier.
+// AAL1 bootstrap tier. The service sets Bootstrap only when passkeys are wired:
+// the closure it asks Confirm to check is an AAL2-capable passkey, and a host
+// without passkeys may not have migration 0025's passkey_credentials table.
 type Confirmation struct {
 	UserID               string
 	ExpectedSecret       string

@@ -250,11 +250,28 @@ func (s *Service) verifiedRecoveryIdentifier(ctx context.Context, userID string)
 	return candidates[0], nil
 }
 
+// snapshotCredentials reads userID's MethodSet through the credential rail.
+// With passkeys unwired it never reads passkey_credentials (a store that
+// implements credential.ScopedSnapshotter is asked not to; any other has its
+// Passkeys dropped), so an unwired host needs no migration 0025 and an
+// unusable passkey never counts as a login method.
+func (s *Service) snapshotCredentials(ctx context.Context, userID string) (credential.MethodSet, error) {
+	if s.PasskeysEnabled() {
+		return s.credentialMutations.Snapshot(ctx, userID)
+	}
+	if scoped, ok := s.credentialMutations.(credential.ScopedSnapshotter); ok {
+		return scoped.SnapshotScoped(ctx, userID, credential.SnapshotScope{Passkeys: false})
+	}
+	snap, err := s.credentialMutations.Snapshot(ctx, userID)
+	snap.Passkeys = nil
+	return snap, err
+}
+
 func (s *Service) applyCredentialMutationAtRevision(ctx context.Context, userID string, revision int64, m credential.Mutation) error {
 	if s.credentialMutations == nil {
 		return ErrCredentialMutationUnavailable
 	}
-	snap, err := s.credentialMutations.Snapshot(ctx, userID)
+	snap, err := s.snapshotCredentials(ctx, userID)
 	if err != nil {
 		return err
 	}

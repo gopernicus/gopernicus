@@ -107,7 +107,7 @@ func (s *Service) Methods(ctx context.Context, userID string) (MethodsView, erro
 	if s.credentialMutations == nil {
 		return MethodsView{}, ErrCredentialInventoryUnavailable
 	}
-	snap, err := s.credentialMutations.Snapshot(ctx, userID)
+	snap, err := s.snapshotCredentials(ctx, userID)
 	if err != nil {
 		return MethodsView{}, err
 	}

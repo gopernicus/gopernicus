@@ -62,3 +62,13 @@ type Repository interface {
 	// and LastUsedAt to at, only while the stored count still equals expected.
 	RecordUse(ctx context.Context, id string, expected, count uint32, backupState bool, at time.Time) error
 }
+
+// SchemaProber is the optional boot check a Repository implements when its
+// schema is migrated separately (the SQL stores: migration
+// 0025_passkey_credentials.sql). The pocket calls ProbeSchema once at
+// construction, and ONLY when passkeys are wired: a host that never wires
+// passkeys never needs the table. A non-nil error refuses construction, so the
+// store's error should name the missing migration.
+type SchemaProber interface {
+	ProbeSchema(ctx context.Context) error
+}

@@ -54,6 +54,11 @@ var (
 	// party without Repositories.Passkeys, CredentialMutations,
 	// AuthenticationGrants, or the challenge rail and its protector.
 	ErrPasskeyReposRequired = fmt.Errorf("authentication: passkeys require Repositories.Passkeys, CredentialMutations, AuthenticationGrants, Challenges and a ChallengeProtector: %w", sdk.ErrInvalidInput)
+	// ErrPasskeySchemaMissing is returned by New when WithPasskeys is wired and
+	// Repositories.Passkeys (a passkey.SchemaProber) reports its table missing:
+	// apply migration 0025_passkey_credentials.sql before boot. It wraps the
+	// store's error. A host that does not wire passkeys is never probed.
+	ErrPasskeySchemaMissing = errors.New("authentication: passkeys are wired but their schema is missing; apply migration 0025_passkey_credentials.sql")
 	// ErrPasskeyRejected is the one refusal a passkey ceremony answers: an
 	// unknown, consumed or foreign ceremony handle, a response the relying party
 	// refused, an unknown or another user's credential, an inactive account, a

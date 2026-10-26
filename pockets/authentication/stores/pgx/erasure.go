@@ -127,7 +127,6 @@ func (s *ErasureStore) Erase(ctx context.Context, in user.EraseInput) (user.Eras
 			args  pgx.NamedArgs
 		}{
 			{&c.Passwords, `DELETE FROM ` + s.table(passwordsTable) + ` WHERE user_id = @id`, args},
-			{&c.Passkeys, `DELETE FROM ` + s.table(passkeyCredentialsTable) + ` WHERE user_id = @id`, args},
 			{&c.OAuthAccounts, `DELETE FROM ` + s.table(oauthAccountsTable) + ` WHERE user_id = @id`, args},
 			{&c.ExternalSubjects, `DELETE FROM ` + s.table(externalSubjectsTable) + ` WHERE user_id = @id`, args},
 			{&c.ContactChanges, `DELETE FROM ` + s.table(contactChangesTable) + ` WHERE user_id = @id`, args},
@@ -143,6 +142,15 @@ func (s *ErasureStore) Erase(ctx context.Context, in user.EraseInput) (user.Eras
 				return err
 			}
 			*d.count = int(n)
+		}
+		// The passkeys only when the host wired passkeys: without them 0025 may
+		// never have been applied, so the table is not named.
+		if in.Passkeys {
+			n, err := pgxdb.ExecAffecting(ctx, tx, `DELETE FROM `+s.table(passkeyCredentialsTable)+` WHERE user_id = @id`, args)
+			if err != nil {
+				return err
+			}
+			c.Passkeys = int(n)
 		}
 		// The TOTP tables only when the host wired TOTP: without it 0026 may
 		// never have been applied, so neither table is named. The credential row

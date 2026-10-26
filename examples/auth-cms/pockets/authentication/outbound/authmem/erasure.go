@@ -97,9 +97,11 @@ func (r erasureRepo) Erase(ctx context.Context, in user.EraseInput) (user.Erasur
 		delete(r.passwords, id)
 		c.Passwords = 1
 	}
-	for _, p := range r.passkeysOfLocked(id) {
-		delete(r.passkeys, p.ID)
-		c.Passkeys++
+	if in.Passkeys {
+		for _, p := range r.passkeysOfLocked(id) {
+			delete(r.passkeys, p.ID)
+			c.Passkeys++
+		}
 	}
 	if in.TOTP {
 		if _, ok := r.totpCreds[id]; ok {

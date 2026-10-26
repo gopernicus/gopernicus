@@ -127,7 +127,8 @@ type Repositories struct {
 	// Passkeys stores registered passkeys. It is required when WithPasskeys wires
 	// a relying party and unused otherwise; it must be backed by the same
 	// transaction-capable adapter as Users and CredentialMutations, whose
-	// Snapshot and Apply cover passkeys.
+	// Snapshot and Apply cover passkeys. A store implementing
+	// passkey.SchemaProber is probed only when passkeys are wired.
 	Passkeys passkey.Repository
 	// TOTP stores the second-factor aggregate: each user's authenticator-app
 	// credential and recovery codes. It is required when WithTOTP wires an

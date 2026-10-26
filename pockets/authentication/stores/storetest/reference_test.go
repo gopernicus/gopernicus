@@ -47,6 +47,19 @@ func TestReferencePasskeys(t *testing.T) {
 	})
 }
 
+// TestReferencePasskeySchema runs the schema-probe contract and the unwired
+// rail over a reference store marked without migration 0025, where every
+// passkey read or write fails.
+func TestReferencePasskeySchema(t *testing.T) {
+	missing := func() *reference {
+		r := newReference()
+		r.passkeySchemaMissing = true
+		return r
+	}
+	RunPasskeySchemaProbe(t, func(t *testing.T) passkey.Repository { return refPasskeys{missing()} })
+	RunPasskeysUnwired(t, func(t *testing.T) auth.Repositories { return missing().repositories() })
+}
+
 // TestReferenceTOTP runs the TOTP suite, separate from Run, against the
 // reference implementation, and the schema-probe contract over a reference
 // store marked unmigrated.
@@ -105,8 +118,10 @@ type reference struct {
 	// status stays deactivated; every read projects StatusErased from it.
 	erasedAt map[string]time.Time
 
-	// passkeys holds registered passkeys, by ID.
-	passkeys map[string]passkey.Passkey
+	// passkeys holds registered passkeys, by ID; passkeySchemaMissing makes
+	// every read or write of them fail as a store without migration 0025 would.
+	passkeys             map[string]passkey.Passkey
+	passkeySchemaMissing bool
 
 	// totpCreds and totpCodes are the second-factor aggregate, by user ID;
 	// totpSchemaMissing makes ProbeSchema report migration 0026 absent.
@@ -2149,7 +2164,7 @@ func (r refPasswordless) insertSessionLocked(proposed session.Session, userID st
 type refCredentialMutations struct{ *reference }
 
 // snapshotLocked builds the projection; callers hold r.mu.
-func (r refCredentialMutations) snapshotLocked(userID string) credential.MethodSet {
+func (r refCredentialMutations) snapshotLocked(userID string, passkeys bool) credential.MethodSet {
 	set := credential.MethodSet{
 		AuthRevision: r.authRevisions[userID],
 		HasPassword:  r.passwords[userID] != "",
@@ -2164,6 +2179,9 @@ func (r refCredentialMutations) snapshotLocked(userID string) credential.MethodS
 		if it.UserID == userID && it.Active() {
 			set.Identifiers = append(set.Identifiers, credential.IdentifierMethod{ID: it.ID, Kind: string(it.Kind), Uses: credential.IdentifierUses{Login: it.LoginEnabled, Recovery: it.RecoveryEnabled, Notification: it.NotificationEnabled}, Verified: it.Verified(), Primary: it.IsPrimary})
 		}
+	}
+	if !passkeys {
+		return set
 	}
 	for _, p := range r.passkeysOfLocked(userID) {
 		set.Passkeys = append(set.Passkeys, credential.PasskeyMethod{ID: p.ID, UserVerified: p.UserVerified})
@@ -2188,13 +2206,22 @@ func (r refCredentialMutations) userExistsLocked(userID string) bool {
 	return false
 }
 
-func (r refCredentialMutations) Snapshot(_ context.Context, userID string) (credential.MethodSet, error) {
+func (r refCredentialMutations) Snapshot(ctx context.Context, userID string) (credential.MethodSet, error) {
+	return r.SnapshotScoped(ctx, userID, credential.SnapshotScope{Passkeys: true})
+}
+
+func (r refCredentialMutations) SnapshotScoped(_ context.Context, userID string, scope credential.SnapshotScope) (credential.MethodSet, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	if !r.userExistsLocked(userID) {
 		return credential.MethodSet{}, sdk.ErrNotFound
 	}
-	return r.snapshotLocked(userID), nil
+	if scope.Passkeys {
+		if err := r.passkeyTableLocked(); err != nil {
+			return credential.MethodSet{}, err
+		}
+	}
+	return r.snapshotLocked(userID, scope.Passkeys), nil
 }
 
 func (r refCredentialMutations) Apply(_ context.Context, userID string, expectedAuthRevision int64, mutation credential.Mutation) error {
@@ -2253,12 +2280,18 @@ func (r refCredentialMutations) Apply(_ context.Context, userID string, expected
 		}
 		r.identifiers[userID] = changeRefIdentifierUses(r.identifiers[userID], m.IdentifierID, m.Uses, m.MakePrimary)
 	case credential.RemovePasskey:
+		if err := r.passkeyTableLocked(); err != nil {
+			return err
+		}
 		p, ok := r.passkeys[m.PasskeyID]
 		if !ok || p.UserID != userID {
 			return sdk.ErrNotFound
 		}
 		delete(r.passkeys, m.PasskeyID)
 	case credential.RemovePasskeys:
+		if err := r.passkeyTableLocked(); err != nil {
+			return err
+		}
 		for _, p := range r.passkeysOfLocked(userID) {
 			delete(r.passkeys, p.ID)
 		}
@@ -2782,9 +2815,14 @@ func (r refErasure) Erase(ctx context.Context, in user.EraseInput) (user.Erasure
 		delete(r.passwords, id)
 		c.Passwords = 1
 	}
-	for _, p := range r.passkeysOfLocked(id) {
-		delete(r.passkeys, p.ID)
-		c.Passkeys++
+	if in.Passkeys {
+		if err := r.passkeyTableLocked(); err != nil {
+			return user.Erasure{}, err
+		}
+		for _, p := range r.passkeysOfLocked(id) {
+			delete(r.passkeys, p.ID)
+			c.Passkeys++
+		}
 	}
 	if in.TOTP {
 		if _, ok := r.totpCreds[id]; ok {
@@ -2886,7 +2924,26 @@ func (r refErasure) Erase(ctx context.Context, in user.EraseInput) (user.Erasure
 // user-row lock.
 type refPasskeys struct{ *reference }
 
-var _ passkey.Repository = refPasskeys{}
+var (
+	_ passkey.Repository           = refPasskeys{}
+	_ passkey.SchemaProber         = refPasskeys{}
+	_ credential.ScopedSnapshotter = refCredentialMutations{}
+)
+
+// passkeyTableLocked is the reference's stand-in for a store without migration
+// 0025: every passkey read or write fails; callers hold r.mu.
+func (r *reference) passkeyTableLocked() error {
+	if r.passkeySchemaMissing {
+		return fmt.Errorf("reference: passkey_credentials is missing; apply migration 0025_passkey_credentials.sql: %w", sdk.ErrNotFound)
+	}
+	return nil
+}
+
+func (r refPasskeys) ProbeSchema(context.Context) error {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.passkeyTableLocked()
+}
 
 // passkeysOfLocked returns userID's passkeys oldest first; callers hold r.mu.
 func (r *reference) passkeysOfLocked(userID string) []passkey.Passkey {
@@ -2922,6 +2979,9 @@ func (r refPasskeys) Create(_ context.Context, in passkey.CreateInput) (passkey.
 	p := in.Passkey
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if err := r.passkeyTableLocked(); err != nil {
+		return passkey.Passkey{}, err
+	}
 	u, ok := r.users[p.UserID]
 	if !ok {
 		return passkey.Passkey{}, sdk.ErrNotFound
@@ -2959,6 +3019,9 @@ func (r refPasskeys) Create(_ context.Context, in passkey.CreateInput) (passkey.
 func (r refPasskeys) GetByCredentialID(_ context.Context, credentialID []byte) (passkey.Passkey, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
+	if err := r.passkeyTableLocked(); err != nil {
+		return passkey.Passkey{}, err
+	}
 	for _, p := range r.passkeys {
 		if string(p.CredentialID) == string(credentialID) {
 			return clonePasskey(p), nil
@@ -2970,6 +3033,9 @@ func (r refPasskeys) GetByCredentialID(_ context.Context, credentialID []byte) (
 func (r refPasskeys) ListByUser(_ context.Context, userID string) ([]passkey.Passkey, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
+	if err := r.passkeyTableLocked(); err != nil {
+		return nil, err
+	}
 	out := r.passkeysOfLocked(userID)
 	if out == nil {
 		out = []passkey.Passkey{}
@@ -2980,6 +3046,9 @@ func (r refPasskeys) ListByUser(_ context.Context, userID string) ([]passkey.Pas
 func (r refPasskeys) Rename(_ context.Context, id, userID, name string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if err := r.passkeyTableLocked(); err != nil {
+		return err
+	}
 	p, ok := r.passkeys[id]
 	if !ok || p.UserID != userID {
 		return sdk.ErrNotFound
@@ -2992,6 +3061,9 @@ func (r refPasskeys) Rename(_ context.Context, id, userID, name string) error {
 func (r refPasskeys) RecordUse(_ context.Context, id string, expected, count uint32, backupState bool, at time.Time) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if err := r.passkeyTableLocked(); err != nil {
+		return err
+	}
 	p, ok := r.passkeys[id]
 	if !ok || p.SignCount != expected {
 		return sdk.ErrConflict
@@ -3072,6 +3144,8 @@ func (r refTOTP) Confirm(_ context.Context, in totp.Confirmation) error {
 		return sdk.ErrNotFound
 	case u.AuthRevision != in.ExpectedAuthRevision:
 		return sdk.ErrConflict
+	case in.Bootstrap && r.passkeyTableLocked() != nil:
+		return r.passkeyTableLocked()
 	case in.Bootstrap && slices.ContainsFunc(r.passkeysOfLocked(in.UserID), passkey.Passkey.AAL2Capable):
 		return totp.ErrBootstrapClosed
 	}

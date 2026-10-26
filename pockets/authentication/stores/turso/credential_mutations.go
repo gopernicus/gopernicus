@@ -15,7 +15,9 @@ import (
 // CredentialMutationStore implements credential.MutationRepository over a libSQL
 // database (design §5.6). Snapshot projects the typed MethodSet from the credential
 // source tables (user_passwords, oauth_accounts, user_identifiers,
-// passkey_credentials) alongside the user's auth_revision. Apply performs one
+// passkey_credentials) alongside the user's auth_revision; SnapshotScoped
+// without passkeys never names passkey_credentials, so an unwired host needs no
+// migration 0025. Apply performs one
 // revision-CAS mutation in a single transaction: it reads the users row's auth_revision, rejects a stale revision as
 // sdk.ErrConflict, mutates exactly the targeted typed source, and increments
 // auth_revision exactly once. libSQL/SQLite has no FOR UPDATE, so single-winner
@@ -26,7 +28,10 @@ type CredentialMutationStore struct {
 	db *tursodb.DB
 }
 
-var _ credential.MutationRepository = (*CredentialMutationStore)(nil)
+var (
+	_ credential.MutationRepository = (*CredentialMutationStore)(nil)
+	_ credential.ScopedSnapshotter  = (*CredentialMutationStore)(nil)
+)
 
 // NewCredentialMutationStore returns a CredentialMutationStore backed by db.
 // It panics if db is nil; the caller owns the database lifecycle.
@@ -40,6 +45,12 @@ func NewCredentialMutationStore(db *tursodb.DB) *CredentialMutationStore {
 // Snapshot returns the user's current MethodSet, including the AuthRevision it was
 // read at. An unknown user returns sdk.ErrNotFound.
 func (s *CredentialMutationStore) Snapshot(ctx context.Context, userID string) (credential.MethodSet, error) {
+	return s.SnapshotScoped(ctx, userID, credential.SnapshotScope{Passkeys: true})
+}
+
+// SnapshotScoped is Snapshot reading passkey_credentials only when
+// scope.Passkeys. See credential.ScopedSnapshotter.
+func (s *CredentialMutationStore) SnapshotScoped(ctx context.Context, userID string, scope credential.SnapshotScope) (credential.MethodSet, error) {
 	var set credential.MethodSet
 	err := s.db.InTx(ctx, func(tx *tursodb.Tx) error {
 		var revision int64
@@ -103,6 +114,9 @@ func (s *CredentialMutationStore) Snapshot(ctx context.Context, userID string) (
 		}
 		idents.Close()
 
+		if !scope.Passkeys {
+			return nil
+		}
 		passkeys, err := tx.Query(ctx, `SELECT id, user_verified FROM passkey_credentials WHERE user_id = ? ORDER BY created_at, id`, userID)
 		if err != nil {
 			return err
