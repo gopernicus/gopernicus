@@ -69,7 +69,10 @@ templ passkeysBody(m authentication.PasskeysPage) {
 									<span> · Synced</span>
 								}
 							</p>
-							<p>Added { p.CreatedAt }. { passkeyLastUsedText(p.LastUsedAt) }</p>
+							<p>
+								@dated("Added ", p.CreatedAt, ". ")
+								@lastUsed(p.LastUsedAt)
+							</p>
 							<form method="post" action={ templ.SafeURL(p.Action) } autocomplete="off">
 								@csrfField(m.PageContext)
 								<input type="hidden" name="action" value="rename"/>

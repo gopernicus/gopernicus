@@ -23,9 +23,9 @@ templ totpBody(m authentication.TOTPPage) {
 				<p>An authenticator app is set up. Use a code from it when you need to confirm it's you.</p>
 				<p>
 					if m.EnrolledAt != "" {
-						Set up { m.EnrolledAt }.
+						@dated("Set up ", m.EnrolledAt, ". ")
 					}
-					{ totpLastUsedText(m.LastUsedAt) }
+					@lastUsed(m.LastUsedAt)
 				</p>
 			</section>
 			<section aria-labelledby="recovery-codes-heading" data-slot="account-section">
@@ -133,7 +133,7 @@ templ totpEnrollBody(m authentication.TOTPEnrollPage, qr qrImage, hasQR bool) {
 		</form>
 		if m.ExpiresAt != "" {
 			@primitives.Typography(primitives.TypographyProps{Variant: primitives.TypographyMuted}) {
-				Finish before { m.ExpiresAt }, or start again.
+				@dated("Finish before ", m.ExpiresAt, ", or start again.")
 			}
 		}
 		<nav class="goth-auth-links" data-slot="auth-links">
@@ -174,7 +174,7 @@ templ recoveryCodesBody(m authentication.RecoveryCodesPage) {
 		</ol>
 		if m.GeneratedAt != "" {
 			@primitives.Typography(primitives.TypographyProps{Variant: primitives.TypographyMuted}) {
-				Generated { m.GeneratedAt }. Any older recovery codes no longer work.
+				@dated("Generated ", m.GeneratedAt, ". Any older recovery codes no longer work.")
 			}
 		}
 		if m.Continue != "" {

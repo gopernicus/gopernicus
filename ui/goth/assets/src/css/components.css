@@ -1249,6 +1249,13 @@ a.goth-marker:hover {
 .goth-checkbox[aria-invalid="true"] {
   border-color: var(--destructive);
 }
+/* A checkbox wrapped in a plain <label> with its text: keep a gap before the
+ * text and center the box on the line. A .goth-label already spaces its
+ * children with gap. */
+label:not(.goth-label) > .goth-checkbox {
+  margin-inline-end: var(--space-2);
+  vertical-align: middle;
+}
 
 /* ---- P33 Switch ----------------------------------------------------------- */
 /* Native checkbox (role="switch") styled as a track; the thumb is a background

@@ -217,7 +217,8 @@ func TestPasskeysPage_Manage(t *testing.T) {
 	}))
 	mustContain(t, "manage", body,
 		"Laptop", "Key", "Synced", "Confirms your PIN or biometric", "Presence only",
-		"Last used 2026-10-02T00:00:00Z.", "Not used yet.",
+		`Added <time datetime="2026-10-01T00:00:00Z">Oct 1, 2026 at 00:00 UTC</time>.`,
+		`Last used <time datetime="2026-10-02T00:00:00Z">Oct 2, 2026 at 00:00 UTC</time>.`, "Not used yet.",
 		`action="/auth/passkeys/pk1"`, `action="/auth/passkeys/pk2"`,
 		`name="action" value="rename"`, `name="action" value="remove"`,
 		`id="passkey-name-pk1"`, `id="passkey-name-pk2"`,

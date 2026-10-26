@@ -13,6 +13,7 @@ for the full layering rules and [NOTES.md](NOTES.md) for the decision log.
 ```
 sdk/                                stdlib-only, layered: root = kernel; pkg/ + capabilities/ (empty go.mod = structural enforcement)
 integrations/cryptids/bcrypt/       password-hashing connector (x/crypto), its own module
+integrations/cryptids/go-oidc/      external-issuer bearer-JWT verification connector (coreos/go-oidc v3), its own module
 integrations/cryptids/go-webauthn/  WebAuthn relying-party connector (go-webauthn/webauthn), its own module
 integrations/cryptids/golang-jwt/   JWT-signing connector (golang-jwt/jwt v5), its own module
 integrations/cryptids/google-uuid/  uuid ID-generation connector (google/uuid v4/v7), its own module

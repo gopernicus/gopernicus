@@ -117,7 +117,7 @@ func TestTOTPEnroll_QR(t *testing.T) {
 		`action="/auth/totp/enrollment/confirm"`,
 		`name="csrf_token" value="csrf-abc123"`,
 		"Account: a@example.com.",
-		"2026-10-25T12:10:00Z",
+		`Finish before <time datetime="2026-10-25T12:10:00Z">Oct 25, 2026 at 12:10 UTC</time>, or start again.`,
 		`href="/auth/account/totp"`,
 	)
 	if strings.Count(body, "<path") != 1 {
@@ -162,7 +162,7 @@ func TestTOTPPage_States(t *testing.T) {
 		RecoveryCodesRemaining: 9, RecoveryCodesGeneratedAt: "2026-10-01T00:00:00Z",
 	}))
 	mustContain(t, "enrolled", enrolled,
-		"An authenticator app is set up.", "Set up 2026-10-01T00:00:00Z.", "Not used yet.",
+		"An authenticator app is set up.", `Set up <time datetime="2026-10-01T00:00:00Z">Oct 1, 2026 at 00:00 UTC</time>.`, "Not used yet.",
 		"You have 9 recovery codes left.",
 		`action="/auth/recovery-codes"`,
 		`<input type="hidden" name="expected_generated_at" value="2026-10-01T00:00:00Z">`,
@@ -204,7 +204,13 @@ func TestRecoveryCodesPage(t *testing.T) {
 		`<ol data-slot="auth-recovery-codes">`,
 		"<li><code>aaaa-bbbb</code></li>", "<li><code>cccc-dddd</code></li>", "<li><code>eeee-ffff</code></li>",
 		`<a href="/auth/account/totp" data-slot="auth-recovery-codes-saved">I saved these codes</a>`,
+		`Generated <time datetime="2026-10-25T00:00:00Z">Oct 25, 2026 at 00:00 UTC</time>. Any older recovery codes no longer work.`,
 	)
+
+	unparsed := render(t, newViews(t).RecoveryCodes(inbound.RecoveryCodesPage{
+		PageContext: ctx(), Links: totpLinks(), Codes: codes, GeneratedAt: "yesterday", Continue: "/auth/account/totp",
+	}))
+	mustContain(t, "codes with an unparseable time", unparsed, "<span>Generated yesterday. Any older recovery codes no longer work.</span>")
 }
 
 // TestMFAStepUp_Chooser proves the chooser renders only the offered options,

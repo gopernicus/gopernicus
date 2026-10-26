@@ -14,15 +14,15 @@
     },
     {
       "logicalName": "theme-default.css",
-      "path": "dist/theme-default.ae49d971.css",
-      "integrity": "sha384-LqXsNzHYwA5AmrXImvelEl/7io1Aq8bkbPxbZFVsrQFmthr71RGynmHoQTltxQsr",
-      "bytes": 2524
+      "path": "dist/theme-default.a8e6b3b7.css",
+      "integrity": "sha384-mfywoNGkzVnnztYwLBXEEH05tPekFS5UYGQq3SPgXz1Ikov8rqZ6/f8sesVhtYV6",
+      "bytes": 2523
     },
     {
       "logicalName": "theme.css",
-      "path": "dist/theme.b554d930.css",
-      "integrity": "sha384-MICeiv1MrkxzDclqzfR+0fTD1E9RNz4F9lwKR91bc89CC2Lv1Jha9MyGvUOKH36K",
-      "bytes": 82398
+      "path": "dist/theme.e3ca039f.css",
+      "integrity": "sha384-/Le4wMZwovKD9DDIaY8wrLsEvj71+MpAZLO4yPfF0+fIg9v8SU0dFC+PiHSxsbrW",
+      "bytes": 82514
     }
   ]
 }
