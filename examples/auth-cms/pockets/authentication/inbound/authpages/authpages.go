@@ -147,7 +147,7 @@ const loginHTML = `<!DOCTYPE html>
 <p role="alert" data-auth-passkey-error></p>
 </div>{{end}}
 <p><a href="/auth/password/forgot">Forgot your password?</a></p>
-<p><a href="/auth/register">Create an account</a></p>
+{{if not .RegistrationClosed}}<p><a href="/auth/register">Create an account</a></p>{{end}}
 {{if .PasswordlessEnabled}}<p><a href="/auth/passwordless">Sign in without a password</a></p>{{end}}
 {{if .OAuthProviders}}<ul>{{range .OAuthProviders}}<li><a href="/auth/oauth/{{.}}/start" rel="nofollow">Continue with {{.}}</a></li>{{end}}</ul>{{end}}
 </main>
