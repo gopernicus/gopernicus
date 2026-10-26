@@ -659,14 +659,15 @@ curl -sX POST -c jar -b jar http://localhost:8082/auth/invitations/project/demo 
   -H 'Content-Type: application/json' -d '{"identifier":"x@example.com","relation":"owner"}'
 # Y signs up with ANOTHER address, steps up, then adds x@example.com and confirms
 # the code from the mailer log -> 200; the auto-accept invitation grants on the
-# confirm (invitation_granted resolved_by=verification)
+# confirm (an invitation_granted security event, resolved_by=verification)
 curl -sX POST -c yjar -b yjar http://localhost:8082/auth/step-up/password -H "X-CSRF-Token: $YCSRF" \
   -H 'Content-Type: application/json' -d '{"purpose":"change_email","password":"<Y_PASSWORD>"}'
 curl -sX POST -c yjar -b yjar http://localhost:8082/auth/identifiers/email -H "X-CSRF-Token: $YCSRF" \
   -H 'Content-Type: application/json' -d '{"email":"x@example.com","uses":{"login":true,"notification":true}}'
 curl -sX POST -c yjar -b yjar http://localhost:8082/auth/identifiers/email/confirm -H "X-CSRF-Token: $YCSRF" \
   -H 'Content-Type: application/json' -d '{"code":"<CODE_FROM_LOG>"}'
-# the other one is listed under the email kind and accepted by its #token
+# mine lists Y's PRIMARY sign-in email only (y@, not the added x@), so the other
+# x@ invitation is not listed here; it stays pending and is accepted by its #token
 curl -s -c yjar -b yjar 'http://localhost:8082/auth/invitations/mine?identifier_kind=email'
 curl -s -c yjar -b yjar 'http://localhost:8082/auth/invitations/mine?identifier_kind=chat'   # 400
 # on-demand sync: idempotent, ten a minute per user (the eleventh -> 429)
@@ -710,8 +711,10 @@ AUTH_RUNTIME_MODE=development AUTH_DEMO_ADMIN_EMAIL=owner@example.com go run ./c
    console mailer's invitation link carries the token as `#token=…`, never a query.
 3. A second account signs up with another address, steps up, adds `x@example.com` with
    `"uses":{"login":true}` and confirms the code (Leg 4b) — the auto-accept invitation
-   grants on the confirm; the other lists under
-   `GET /auth/invitations/mine?identifier_kind=email` and accepts by its token.
+   grants on the confirm (an `invitation_granted` security event, visible in step 4's
+   listing); the other stays pending and accepts by its token. It does not list under
+   `GET /auth/invitations/mine?identifier_kind=email`, which reads the account's primary
+   sign-in email only (a listing across every sign-in identifier is a follow-up).
 4. As the admin, read both audit routes (Leg 4c). The security-event listing needs AAL2:
    enroll an authenticator app and step up first:
 

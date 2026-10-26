@@ -69,10 +69,23 @@ Rows carry `user_id`, `actor_type`/`actor_id`, `event_type`, `event_status`, `de
 join a row to the request's logs and trace (blank when the request carried none, or when the
 recorder refused an id that was not printable ASCII of at most 128 bytes).
 
-No bundled HTTP route exposes the rail. `examples/auth-cms` has `GET /debug/security-events`
-behind `AUTH_DEBUG=1` (refused outside development); it requires a live session holding the
-platform-admin permission (`admin` on `platform:main`) and is a harness feature — do not copy
-it into a host.
+**Over HTTP (since authentication v0.30.0).** With `AdministrationConfig.SecurityEventsRoute`
+on, `GET /auth/admin/security-events` serves the same listing to an admin the host's
+`UserAdminCheck` admits for the `read-audit` action (switch on `Action` before opting in), at
+AAL2 under `MFARequired: admins`:
+
+```sh
+curl -s "$HOST/auth/admin/security-events?event_type=login&event_status=failure&since=2026-10-01T00:00:00Z&limit=100" -H "$AUTH"
+```
+
+Filters `user_id`, `event_type`, `event_status`, `since` (inclusive), `until` (exclusive);
+cursor paging only. **Export is paging:** keep the filters fixed, follow `next_cursor` at
+`limit=100` until `has_more` is false. Every page read leaves one `audit_read` row naming the
+reader and the filter keys used, so the export is itself on the rail.
+
+`examples/auth-cms` also has `GET /debug/security-events` behind `AUTH_DEBUG=1` (refused
+outside development); it requires a live session holding the platform-admin permission
+(`admin` on `platform:main`) and is a harness feature — do not copy it into a host.
 
 ## Read authorization change history
 
@@ -90,8 +103,19 @@ page, err := repos.Audit.List(ctx, audit.Filter{
 Each record is one committed fact delta (`added` or `removed`) with its source (actor pair or
 system, optional reason) and time. Refusals and denials are not in this history: since S2 the
 decision observer reports them (`authorization_denied`, `role_write_refused`), and a host that
-wires the audit bridge records them on the security-event rail (above). The
-listing recipes for a periodic access review are in `pockets/authorization/README.md`,
+wires the audit bridge records them on the security-event rail (above).
+
+**Over HTTP (since authorization v0.31.0).** With `RoleRoutes.AuditGate` wired (a
+global-history gate: platform admin or auditor), `GET /authorization/audit` takes the same
+three filter pairs and pages by cursor; export it the same way (`limit=100`, follow
+`next_cursor` until `has_more` is false). With `WithAuditReadObserver` bridged into the
+security-event rail, each read leaves an `audit_read` row with `rail: authorization`.
+
+```sh
+curl -s "$HOST/authorization/audit?resource_type=project&resource_id=$ID&limit=100" -H "$AUTH"
+```
+
+The listing recipes for a periodic access review are in `pockets/authorization/README.md`,
 "Access review".
 
 ## Retention

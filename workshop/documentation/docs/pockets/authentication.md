@@ -489,13 +489,83 @@ The pocket README's "TOTP and recovery codes (SOC 2 S4c)" section is the
 reference: the gate table, the routes, the custom-view markup and the operator
 recipes. `examples/auth-cms` wires it end to end.
 
+## Invitations and the audit route (S7)
+
+Authentication v0.30.0 (SOC 2 slice S7) changes how invitation links travel and how
+invitations find their invitee, and adds an opt-in HTTP read of the security-event
+rail.
+
+- **The token is in the URL fragment (BREAKING for landing pages).** The mailed link
+  is `<destination>#token=<token>`, so the token never reaches a server log, a proxy
+  or a `Referer`. A landing page that reads `?token=` stops accepting the day the host
+  repins. `LinksConfig.InvitationTokenInQuery` (`AUTH_INVITATION_TOKEN_IN_QUERY`)
+  restores `?token=` for **one release** while the page moves (production logs one
+  `posture_waiver=InvitationTokenInQuery` WARN); the next minor removes the field. A
+  requested `redirect` containing `#` is 400 `invitation_redirect_fragment` before
+  anything persists. A template that builds its own link from `Secret` is unaffected.
+- **`LinksConfig.InvitationURL`** (`AUTH_INVITATION_URL`) is the default destination
+  when no allowlisted `redirect` is requested: an absolute http(s) URL with no
+  fragment or userinfo, HTTPS in production, and **required in production beside a
+  Granter** (`ErrInvitationURLRequired`). It replaces the old relative `/` fallback,
+  which broke in mail clients; development WARNs and keeps `/`.
+- **The landing page.** Invitation, magic-link and OAuth pending-link URLs all carry
+  `#token=`, so tell them apart **by path** and give the invitation landing its own
+  route. Read `location.hash` and `history.replaceState` it away before any network
+  call or third-party script; across a sign-in detour hold the token in
+  `sessionStorage` (never in `return_to` or a query); then `POST
+  /auth/invitations/accept {token}` (or `…/{id}/decline`); serve the page with
+  `Referrer-Policy: no-referrer` and `Cache-Control: no-store`. The pocket ships no
+  invitation page.
+- **Identifier resolution.** An invitation is addressed to a `(kind, identifier)`.
+  Every verification of that identifier on an account resolves the invitations
+  addressed to it: registration verify, passwordless provisioning and adoption,
+  OAuth and external provisioning, a confirmed identifier add or change, and
+  enabling login or recovery on a verified identifier. `AutoAccept` invitations grant
+  (`resolved_by: verification`); the others stay pending for the token. **Only
+  verified identifiers holding the sign-in/recovery claim** (login- or
+  recovery-enabled, unique across users) resolve, sync, list under `mine` and match
+  at accept; a notification-only identifier never does. A second sign-in email
+  matches, not only the primary. Identifiers of other kinds are never verified, so
+  an open-kind invitation accepts by token alone, and only for a caller holding a
+  claim-holding verified identifier.
+- **On demand.** `POST /auth/invitations/sync` → `{"resolved": n}` runs the same
+  resolution over the caller's claim-holding verified identifiers (pending rows
+  only, at most eight identifiers, `AuthenticationLimits.InvitationSync` 10 a minute
+  per user by default; idempotent). `GET
+  /auth/invitations/mine?identifier_kind=email|phone` (default `email`; any other
+  value 400) lists by the primary claim-holding identifier of that kind. SPAs call
+  sync after an identifier change and read `mine` per kind.
+- **Go callers.** `invitations.Service.ResolveInvitations` gains a `kind` parameter,
+  and `invitations.AccessConfig.VerifiedIdentifiers` replaces `CallerIdentifiers`;
+  both are wired by `New`, so only a host that calls or fakes them changes code.
+- **Error codes and provenance.** A caller whose verified identifiers do not match
+  gets 403 `invitation_identity_mismatch` (was `permission_denied`; a caller with no
+  verified email no longer gets 404 first). Every `invitation_granted` row carries
+  `operation_id` and `resolved_by` (`accept`, `verification`, `sync`, `direct_add`);
+  a direct add adds `direct_add` and `invited_by`. Racing paths may record duplicate
+  rows for one grant: dedupe on `operation_id`.
+- **`GET /auth/admin/security-events`.** `AdministrationConfig.SecurityEventsRoute`
+  (false by default) mounts the rail under the admin chain with the new action
+  `UserAdminReadAudit` (`read-audit`; the `user_id` filter is the target) and, under
+  `admins`, the AAL2 gate. It needs `Repositories.SecurityEvents` and a
+  `UserAdminCheck` (`ErrSecurityEventsRouteRequires`). **A `UserAdminCheck` that does
+  not switch on `Action` admits the new action:** switch on it with an allow-list
+  before opting in. Filters `user_id`, `event_type`, `event_status`, `since`
+  (inclusive), `until` (exclusive); cursor paging only (`offset`, `q`, `order` and a
+  repeated key are 400); `no-store`. Each page read records one `audit_read` row
+  (`rail: security_events`, the filter keys present, never their values).
+
+The pocket README's "The invitation link and the landing page" and "Reading the rail
+over HTTP" sections are the reference. Account merge (two existing accounts for one
+invitee) is not offered yet.
+
 ## Production posture
 
 Production has no implicit mode and fails closed on incomplete security wiring. Among other requirements:
 
 - signing/encryption/protection keys must be stable and shared across instances;
 - delivery transports must report production-capable posture;
-- passwordless/reset public links require configured HTTPS destinations;
+- passwordless/reset public links require configured HTTPS destinations, and invitation links require `LinksConfig.InvitationURL` beside a Granter (S7);
 - rate limiting should use a durable/shared implementation in multi-instance deployments;
 - in-process delivery should not be mistaken for durability;
 - SQL/query logs that include arguments must remain off.

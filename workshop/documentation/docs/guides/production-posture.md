@@ -193,6 +193,27 @@ now also names `sources=` (the wired AAL2 sources, such as `passkey,totp`, or `n
 sealed under retired pepper keys key_ids=[…]` while any recovery code is digested under a pepper
 key no longer in the ring (*Keys and rotation*).
 
+**Added by S7** (authorization v0.31.0, goredis store v0.6.0, authentication v0.30.0).
+Everything S7 adds is host opt-in; the one new refusal guards the invitation link, and the
+rest are WARNs.
+
+| Module | Production refuses | Sentinel | Acknowledgement |
+|---|---|---|---|
+| authentication | invitations wired (a Granter) with `LinksConfig.InvitationURL` (`AUTH_INVITATION_URL`) empty; all modes refuse a relative URL, a fragment or userinfo, production a non-`https` URL | `ErrInvitationURLRequired`; `ErrInvitationURLInvalid`, `ErrInvitationURLInsecure` | none — set an absolute `https` landing URL |
+| authentication (all modes) | `AdministrationConfig.SecurityEventsRoute` without `Repositories.SecurityEvents` or a `UserAdminCheck` | `ErrSecurityEventsRouteRequires` | none |
+| authorization (all modes) | `RoleRoutes.AuditGate` without `Services.Audit` | `ErrAuditGateWithoutReader` | none |
+| authorization (all modes) | `Policy.FullRebuildEvery` negative or below the defaulted `PollInterval` | `sdk.ErrInvalidInput` | none |
+| goredis store (all modes) | an integrity key shorter than 32 bytes | `sdk.ErrInvalidInput` | none |
+
+WARNs, never refusals: `LinksConfig.InvitationTokenInQuery` logs
+`posture_waiver=InvitationTokenInQuery` in production (the one-release `?token=` hatch);
+an `AuditGate` without `WithAuditReadObserver` logs that audit reads are not recorded; in
+production and development an `owner` relation the integrity policy does not protect, or
+`Repositories.Mutations` nil beside one, logs one WARN each. **Check before opting in to
+the security-events route:** a `UserAdminCheck` that does not switch on `Action` admits
+the new `read-audit` action. `guard --posture` gains no rule; the constructor refusals are
+the check.
+
 ## Retention (S3)
 
 Every row class the pockets write has an owner-set lifetime, each disposal is bounded, and the
@@ -391,10 +412,20 @@ notes table with module versions.
   `Use` (auth-cms and production-baseline do). Without it a host route's audit rows carry no
   IP or User-Agent and production logs one `mount ClientInfoMiddleware` WARN. Attribution is
   only as good as `TRUSTED_PROXY_COUNT` and an origin reachable solely through those proxies.
-- **Redis is inside the authorization trust boundary when TupleCache is on.** Cached tuple
-  sets are not signed; write access to that Redis is equivalent to write access to the
-  authorization database. Run it dedicated, with TLS and AUTH, and treat it as an in-scope
-  system. Without TupleCache, Redis holds only rate-limit windows, cache pages and events.
+- **Redis is inside the authorization trust boundary when TupleCache is on.** Without
+  integrity keys the cached tuple sets are not signed, so write access to that Redis is
+  equivalent to write access to the authorization database. Run it dedicated (or on a
+  logical database that holds nothing else), over `rediss://` with a verified CA and an ACL
+  user limited to the mirror keys, and treat it as an in-scope system. Since the goredis
+  store v0.6.0, `goredis.WithIntegrityKeys` (one 32-byte key per environment, in the secret
+  store, paired with `tuplecache.Policy.FullRebuildEvery`) makes a Redis-only compromise
+  cost availability rather than access: forged, altered or rolled-back mirror data fails
+  verification and the decision comes from SQL. A revoked fact replayed within the current
+  epoch reads until the next full rebuild, which `FullRebuildEvery` bounds. The recipe, the
+  ACL user and the rotation steps are in the
+  [goredis store README](https://github.com/gopernicus/gopernicus/blob/main/pockets/authorization/stores/goredis/README.md),
+  "Trust boundary and hardening". Without TupleCache, Redis holds only rate-limit windows,
+  cache pages and events.
 - **Audit tables are append-only in the database** on pgx (immutability triggers and the
   boot-time privilege probe, from the S2 store tags above) and by trigger only on turso. See
   *Production database posture* for the role split.

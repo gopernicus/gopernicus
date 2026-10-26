@@ -1,5 +1,313 @@
 # Releasing gopernicus modules
 
+## Authorization governance and invitations (SOC 2 slice S7 — published 2026-10-26)
+
+Three annotated tags (not signed) on three modules. Each was cut at its PR's squash-merge commit
+on `main`, pushed, THEN polled on the proxy, and cold-verified from a scratch consumer
+(`GOWORK=off`, an empty module cache, `proxy.golang.org`, `sum.golang.org`, `go mod verify`,
+`go build <module>/...`). No sdk, no pgx/turso store, no views tag and no migration. Design and
+rulings: [plans/s7-authorization-governance.md](plans/s7-authorization-governance.md) (rev 1, ratified 2026-10-26, EXECUTED 2026-10-26). One further PR,
+#212, is example-only and untagged: auth-cms's development-only `AUTH_DEMO_ADMIN_EMAIL`, which
+lets the owner run the drill as a real signed-in platform admin. Under the owner's 2026-10-23
+process ruling this section is the whole record: there is no handoff file and no manifest. The
+handoff notes below say what a host does on upgrade, and hosts adopt them once, at the roadmap's
+end. The operator surface is the docs site: the authorization page's *Added by S7*, the
+authentication page's *Invitations and the audit route (S7)*, *Production posture* ("Added by
+S7" and the Redis trust-boundary line) and *Operations runbooks* (the two audit rails over
+HTTP). The reference is the authorization README's "Audit listing", "Access review" and
+"Scheduled full rebuilds", the goredis store README's "Trust boundary and hardening", and the
+authentication README's "The invitation link and the landing page" and "Reading the rail over
+HTTP".
+
+| Step | Tag | Commit | PR | Cold verification |
+|---|---|---|---|---|
+| 1 | `pockets/authorization/v0.31.0` | `34192968` | #209 (PR-1) | OK; set A |
+| 2 | `pockets/authorization/stores/goredis/v0.6.0` (requires authorization v0.31.0, sdk v0.20.0) | `5982914e` | #210 (PR-2) | OK; set B |
+| 3 | `pockets/authentication/v0.30.0` | `09f6e5d9` | #211 (PR-3) | OK; set C |
+| — | none (example only: auth-cms `AUTH_DEMO_ADMIN_EMAIL`) | `32f22c0d` | #212 | — |
+
+Order: 1 after #209 merged; 2 after #210 merged and the goredis race tests ran again on `main`
+against a real `redis-server`; 3 after #211 merged and a `live-stores` dispatch went green on
+`main`. PR-2 and PR-3 ran in parallel worktrees off tag 1. #210 carried the slice's one store
+repin (goredis: authorization v0.27.0 → v0.31.0, sdk v0.18.0 → v0.20.0, explicit `GOWORK=off go
+get`, then tidy). Every module ships MINOR under the v0 convention. The tag messages name the
+`State.FullAt` change (authorization), the core requirement and the one-key-per-environment rule
+(goredis), and the fragment break with its hatch, `InvitationURL` and the identifier-resolution
+rule (authentication).
+
+**The MVS sets.** Each tag was cold-verified when it was cut; this PR re-ran the three sets from an empty module
+cache (`coldverify`: proxy poll, `GOWORK=off`, `go mod verify`, `go build`), all OK on the first poll.
+- **Set A** (step 1): authorization v0.31.0 beside the RELEASED stores pgx v0.21.0 / turso v0.20.0 and the released goredis
+  store v0.5.0 (authorization v0.27.0 pin): MVS selected core v0.31.0 and the set built (`all modules verified`). No
+  lockstep: v0.31.0 is additive for every released store.
+- **Set B** (step 2): goredis v0.6.0 + authorization v0.31.0 + the authorization pgx store v0.21.0 + pgxdb v0.14.0 (a
+  gps-360-go-shaped consumer) selected sdk v0.20.0 and go-redis v9.18.0 and built.
+- **Set C** (step 3): authentication v0.30.0 beside the RELEASED stores pgx v0.14.0 / turso v0.13.0 and views/goth v0.8.1
+  selected sdk v0.20.0 and built (no store or views lockstep).
+- **This PR (from the tags):** auth-cms and production-baseline at `GOWORK=off` from an EMPTY module cache over
+  `proxy.golang.org` + `sum.golang.org`: `all modules verified` in both, and both binaries built (see the verification
+  record).
+
+**Not tagged.** sdk, stores pgx/turso (both pockets), views/goth, ui/goth, `pockets`,
+`workshop/gopernicus` (no new P-rule: the constructor refusals are the check), the examples, and
+every other module. Nothing retracts.
+
+**Upgrade notes.** Sixteen rows. One behavior break (row 8, the invitation link's fragment, with
+a one-release hatch) and one new production refusal beside it (`InvitationURL`, folded into row
+8); two compile-adjacent changes (row 9's `ResolveInvitations` `kind` parameter and
+`VerifiedIdentifiers`; row 13's `State.FullAt` field for an unkeyed `tuplecache.State` literal);
+one error-code change (row 10); everything else opt-in or a WARN. The "Read first" box, rows 1–6
+and 11 and the paragraph under the table are the plan's, verbatim, with `authentication@next`
+resolved to `authentication@v0.30.0`; rows 7–10 are amended for the as-built #211 (the plan's
+text is quoted under the table) and rows 12–16 are appended (the PR-1 and PR-2 review fixes and
+#212). The pin bullet in the box is appended.
+
+> **Read first:** `grep -rnE 'tuplecache\.Policy\{|goredis\.NewTupleCache|RoleRoutes\{|InvitationsConfig\{|LinksConfig\{'
+> --include='*.go'`. **By host shape:** goredis TupleCache hosts (gps-360-go) → rows 1–3; every authorization host → rows
+> 4–6; every invitation host → rows 8–10 (row 8 is the break); IdP-only hosts without invitations → row 7 only.
+> - **Pins (appended):** pin **authorization v0.31.0** and **authentication v0.30.0**; a TupleCache host pins the goredis
+>   store **v0.6.0** (it requires authorization v0.31.0 and sdk v0.20.0). sdk stays v0.20.0; stores pgx/turso, views/goth
+>   and ui/goth are unchanged. Add to the grep `tuplecache\.State\{` (row 13), `ResolveInvitations|CallerIdentifiers`
+>   (row 9) and `UserAdminCheck` (row 7).
+
+| # | Flip | What the host sees | Hatch | Module@version |
+|---|---|---|---|---|
+| 1 | `WithIntegrityKeys`; the `tuplecache:v3:ik:{…}` prefix; header MAC + fact tags; `Stats()` | opt-in; turning it on rebuilds the mirror once; ~50 B per fact | leave unset | goredis store@v0.6.0 |
+| 2 | goredis store repinned to core v0.31.0 / sdk v0.20.0 (`State.FullAt`) | MVS lifts a goredis host from core v0.27.0 to v0.31.0 | none | goredis store@v0.6.0 |
+| 3 | `Policy.FullRebuildEvery`; `State.FullAt`; `Stats.LastFullRebuild` | additive; zero = never; a custom `Backend` may leave `FullAt` zero | leave zero | authorization@v0.31.0 |
+| 4 | `RoleRoutes.AuditGate`, `Services.Audit`, `WithAuditReadObserver`, `GET /authorization/audit` | opt-in; a gate without a reader fails `New`; a gate without an observer WARNs | leave nil | authorization@v0.31.0 |
+| 5 | `RefuseSelfTarget`, `AllOf` | additive | none | authorization@v0.31.0 |
+| 6 | integrity WARN (`owner` unprotected, or `Mutations` nil beside `owner`) | one WARN line in production and development | `WithIntegrityPolicy(DefaultIntegrityPolicy())` | authorization@v0.31.0 |
+| 7 | **(amended)** `AdministrationConfig.SecurityEventsRoute` → `GET /auth/admin/security-events`, `UserAdminReadAudit` (`read-audit`; the `user_id` filter is `TargetUserID`), `audit_read` (`securityevent.TypeAuditRead`); `ErrSecurityEventsRouteRequires` without `Repositories.SecurityEvents` or a `UserAdminCheck` | opt-in; **a `UserAdminCheck` that does not switch on `Action` admits the new action** (auth-cms's and the baseline's now switch on it with an allow-list) — scope it; cursor only, `since`/`until`, repeated keys, `offset`, `q` and `order` → 400; `event_type` validated by shape (snake_case), `event_status` ∈ success/failure/blocked | leave false | authentication@v0.30.0 |
+| 8 | **(amended) BREAKING:** invitation token in the URL fragment (`#token=`); a `#` in a requested `redirect` → 400 `invitation_redirect_fragment` before anything persists; **`LinksConfig.InvitationURL`** (`AUTH_INVITATION_URL`, R-7 (a)): the default destination, **required in production beside a Granter** (`ErrInvitationURLRequired`), validated in every mode (absolute http(s), no fragment, no userinfo: `ErrInvitationURLInvalid`; HTTPS in production: `ErrInvitationURLInsecure`) | a landing page reading `?token=` stops accepting; invitation, magic and OAuth pending links all carry `#token=` — tell them apart by path; a production invitation host without `AUTH_INVITATION_URL` refuses boot (development WARNs and keeps `/`); templates building their own link from `Secret` are unaffected | `LinksConfig.InvitationTokenInQuery` (`AUTH_INVITATION_TOKEN_IN_QUERY`; ONE release — the next minor removes the field; production `posture_waiver=InvitationTokenInQuery` WARN, development WARN) | authentication@v0.30.0 |
+| 9 | **(amended)** identifier resolution **by verified sign-in/recovery identifiers only** (login- or recovery-enabled, unique across users; owner ruling on HIGH-1) on every verification path: registration verify, passwordless provisioning **and adoption** (MEDIUM-3), OAuth, external, `ConfirmIdentifierChange` (last, after the notices, only on a nil apply) and `SetIdentifierUses` (an identifier gaining the claim); `SyncInvitations` + `POST /auth/invitations/sync` `{resolved}` (pending rows only, ≤ 8 identifiers, `AuthenticationLimits.InvitationSync` 10/min per user, 60/min per IP); `mine?identifier_kind=email\|phone` (else 400); **`ResolveInvitations` gains a `kind` parameter** (beside the new `ResolvePendingInvitations`); `VerifiedIdentifiers` replaces `CallerIdentifiers` in `invitations.AccessConfig`; an open-kind accept needs a claim-holding verified identifier; `AcceptInput.Identifier` deprecated and ignored | adding a sign-in identifier, or enabling login/recovery on a verified one, grants its AutoAccept invitations; a second sign-in email matches at accept; a notification-only identifier never resolves, syncs, lists or matches | none (behavior); fix the call | authentication@v0.30.0 |
+| 10 | **(amended)** error codes `invitation_identity_mismatch` 403 (replaces `permission_denied` for the identity mismatch, and the 404 a caller with no verified email got before the match) and `invitation_redirect_fragment` 400; `invitation_granted` Details gain `operation_id` + `resolved_by` (`accept`\|`verification`\|`sync`\|`direct_add`) on every row, `invitation_id` on the accept paths, `direct_add` + `invited_by` on a direct add | a client switching on `permission_denied` or the 404 sees the new code; racing paths may record duplicate `invitation_granted` rows for one grant — dedupe on `operation_id` | none | authentication@v0.30.0 |
+| 11 | baseline + auth-cms wire both routes, `AllOf(RefuseSelfTarget, …)`, the bridge method | example behaviour | — | examples (untagged) |
+| 12 | a failed SCHEDULED full rebuild backs off for `min(FullRebuildEvery, tuplecache.ScheduledRebuildBackoff × PollInterval)` (8 intervals); `Stats.ScheduledRebuilds`, `Stats.ScheduledRebuildFailures`; a backend without `FullAt` starts the per-process clock at construction (no rebuild at boot) | deltas, revocations included, keep publishing while rebuilds fail; alert on `ScheduledRebuildFailures` | none | authorization@v0.31.0 |
+| 13 | `tuplecache.State` gained `FullAt`: an unkeyed `State{binding, receipt}` literal no longer compiles; backends compare mirrors by `Binding` + `Receipt` only; `storetest` feeds the unstripped `State()` back into `Read`/`Publish` (`UnstrippedStateAddressesTheMirror`, `FullAtMarksFullPublications`) | compile break for an unkeyed literal; a custom `Backend` comparing whole `State` values with `==` fails the suite | use keyed fields; compare `Binding`/`Receipt` | authorization@v0.31.0, goredis store@v0.6.0 |
+| 14 | `GET /authorization/audit` as built: `no-store` set ahead of `AuditGate` (gate denials carry it), every listing key at most once (400), a `HEAD` records no read; **`AuditGate` must admit global-history readers only** (every filter pair is optional) | a per-resource gate is not a tenant boundary on this route | none | authorization@v0.31.0 |
+| 15 | `WithIntegrityKeys` as built: the header MAC also binds the **full mirror key** (namespace + binding), so a signed mirror copied across namespaces, bindings or cloned environments fails and is rebuilt; a header naming another binding is counted and replaced; `ErrIntegrity` matches `tuplecache.ErrUnavailable`; deltas sign with the key that opened the epoch; two-phase rotation `(old,new)` → `(new,old)` → `(new)`; the README ACL user grants `+select` | **one integrity key per environment/deployment**; a set holding a bad tag fails closed until the next full publication (bounded by `FullRebuildEvery`) | leave unset | goredis store@v0.6.0 |
+| 16 | auth-cms `AUTH_DEMO_ADMIN_EMAIL` (development only; production refuses boot with it set): the verified login-enabled email gets `platform:main#admin` once, through `Mutations`, audit source `system=demo-admin` | example behaviour | — | examples (untagged, #212) |
+
+Row 8 is the one behavior break; row 9 is a compile-adjacent signature change; row 10 changes one error code; row 7 is a
+named opt-in. Every module ships MINOR under v0; tag messages name rows 2, 7, 8, 9 and 10. **If R-7 = (a):** row 8 also gains `LinksConfig.InvitationURL`
+(production-required beside a Granter; `ErrInvitationURLRequired`), PR-3 adds it to `config.go`/`security.go`/both examples'
+env and `.env.example`, and `guard --posture` is NOT extended (no new P-rule; the constructor refusal is the check).
+
+R-7 was ruled (a), so `InvitationURL` is folded into amended row 8 (auth-cms sets it from its origin, overridable by
+`AUTH_INVITATION_URL` in `.env.example`; the baseline wires no Granter). The plan's text for the amended rows was:
+- **Row 7:** "`AdministrationConfig.SecurityEventsRoute` → `GET /auth/admin/security-events`, `UserAdminReadAudit`,
+  `audit_read` | opt-in; **a `UserAdminCheck` that does not switch on `Action` admits the new action** (auth-cms's does) —
+  scope it | leave false | authentication@next".
+- **Row 8:** "**BREAKING:** invitation token in the URL fragment; a `#` in a requested `redirect` → 400 | a landing page
+  reading `?token=` stops accepting; templates building their own link from `Secret` are unaffected |
+  `LinksConfig.InvitationTokenInQuery` (one release; production WARN) | authentication@next".
+- **Row 9:** "identifier resolution for every kind on every verification path incl. `ConfirmIdentifierChange`;
+  `SyncInvitations` + `POST /auth/invitations/sync`; `mine?identifier_kind=`; **`ResolveInvitations` gains a `kind`
+  parameter** (compile-adjacent: a host calling it or implementing `invitationResolver`); `VerifiedIdentifiers` replaces
+  `CallerIdentifiers` in `invitations.AccessConfig` | adding a verified identifier now grants its AutoAccept invitations; a
+  second verified email matches at accept | none (behavior); fix the call | authentication@next".
+- **Row 10:** "error codes `invitation_identity_mismatch` (replaces `forbidden` for the email/phone mismatch) and
+  `invitation_redirect_fragment`; `invitation_granted` Details gain `invited_by`/`operation_id`/`direct_add`/`invitation_id`/
+  `resolved_by` | a client switching on `forbidden` for the mismatch sees a new code | none | authentication@next".
+  As built, the replaced code is `permission_denied`, not `forbidden`.
+
+Build-time deviations a host can see, folded here (rows 1–6 and 11 stay verbatim):
+- **Row 9, the resolver port.** `authlogic`'s `invitationResolver` port stays one method; `SyncInvitations` type-asserts an
+  unexported pending-only resolver and resolves nothing without it. No outside caller exists in this repo; gps-360-go
+  carries only a vendored copy and never calls `ResolveInvitations` directly.
+- **Row 9, `mine`.** It lists the invitations addressed to ONE claim-holding verified identifier of the kind (the primary
+  first); none of that kind → 404. A merged listing across identifiers is deferred (below).
+- **Row 9, a narrow race.** The accept-time match reads the verified identifiers, then claims: an identifier removed
+  between the two still lets that one accept complete (both actions are the subject's own; README).
+- **Row 7.** Only `user_id` is validated before the host check; the other query keys after it. `event_type` is checked by shape, not against `Types()`, because the rail carries host-bridged types.
+- **Row 5.** `RefuseSelfTarget` compares the principal's and the subject's `Type`/`ID` byte for byte: a host mapping
+  principals into another subject namespace (`account:1` granted as `user:1`) writes its own check; a grant to a group
+  the actor belongs to passes.
+- **Row 2.** The goredis repin moved authorization v0.27.0 → v0.31.0 and sdk v0.18.0 → v0.20.0 in one step; set B proves it.
+
+**Handoff notes — what a host does on upgrade, by host shape and module** (applied at the roadmap's end). Pins: sdk
+v0.20.0 (unchanged); authorization **v0.31.0**; authentication **v0.30.0**; the goredis store **v0.6.0** for a TupleCache
+host; every other module unchanged. Repin with explicit `GOWORK=off go get <module>@<tag>`, then `GOWORK=off go mod tidy`.
+- **Every host repinning** (rows 3–6, 12, 13).
+  1. Nothing new is required at boot unless the host wires invitations in production (row 8: `AUTH_INVITATION_URL`). No
+     migration ships.
+  2. Row 13: grep for `tuplecache.State{`; give any unkeyed literal field names. A custom TupleCache `Backend` compares
+     `Binding` and `Receipt`, never the whole struct, and runs `storetest` again.
+  3. Row 6: read the boot log. An `owner` relation the integrity policy does not protect, or `Repositories.Mutations` nil
+     beside one, now logs one WARN in production and development. Fix it with
+     `WithIntegrityPolicy(mutations.DefaultIntegrityPolicy())` or a rule per type; it never refuses.
+  4. Rows 4, 5, 7 are opt-in. A host turning on `GET /auth/admin/security-events` first makes its `UserAdminCheck`
+     switch on `Action` with an allow-list, then sets `SecurityEventsRoute: true`. A host turning on
+     `GET /authorization/audit` passes a global-history gate (platform admin or auditor) as `AuditGate` and bridges
+     `WithAuditReadObserver` into its security-event rail as `audit_read` with `rail: authorization`. Role writes can
+     refuse self-grants with `WritePolicy: AllOf(RefuseSelfTarget, hostPolicy)`.
+- **IdP/OAuth-only hosts (gps-360-go): authorization + the goredis store** (rows 1–3, 12, 13, 15).
+  1. Repin authorization v0.31.0 and the goredis store v0.6.0 together (MVS lifts the core from v0.27.0; set B built this
+     exact shape). Authentication v0.30.0 matters only if the host wires invitations or the security-events route.
+  2. The hardening recipe matches its `AUTH_CACHE_REDIS_URL` (`rediss://<acl-user>:<password>@<host>:<port>/<db>`, an ACL
+     user, a dedicated instance): apply the README's ACL user, adding `+select` if the URL names a database other than 0
+     (go-redis selects it on every connection), and keep `rediss://` with a verified CA.
+  3. Turn on `WithIntegrityKeys` with **one key per environment** (`openssl rand -hex 32`, in the secret store beside the
+     database credential, never shared with a staging database cloned from production), and **pair it with
+     `FullRebuildEvery`** (one hour is a reasonable start; it must stay at or above the defaulted `PollInterval`). The
+     first poll after turning keys on rebuilds the mirror in full under the new `tuplecache:v3:ik:{…}` key; the old mirror
+     expires after `WithExpiry`. Roll it out quickly: keyed and unkeyed replicas on one database rebuild each other's
+     mirror while they overlap.
+  4. Rotate in two phases: deploy `WithIntegrityKeys(old, new)` everywhere, then `(new, old)`, then `(new)` after one full
+     publication. Alert on a rising `Stats().IntegrityFailures` (goredis) and `ScheduledRebuildFailures` (core).
+- **Hosts with invitations** (rows 8–10).
+  1. **Landing page.** Read the token from `location.hash`, not `?token=`; `history.replaceState` it away before any
+     network call or third-party script; hold it in `sessionStorage` across a sign-in detour (never `return_to` or a
+     query); serve the page with `Referrer-Policy: no-referrer` and `Cache-Control: no-store`. Invitation, magic and
+     OAuth pending links all carry `#token=`: **tell them apart BY PATH** and give the invitation landing its own route.
+  2. Set **`AUTH_INVITATION_URL`** to that route's absolute `https` URL (production refuses boot without it beside a
+     Granter). A requested `redirect` must not contain `#`.
+  3. Until the page reads the fragment, set `AUTH_INVITATION_TOKEN_IN_QUERY=1` for this release only (production logs the
+     waiver); the next authentication minor removes the field.
+  4. A client switching on `permission_denied` (or a 404) for an identity mismatch switches on
+     `invitation_identity_mismatch`. Audit queries over `invitation_granted` dedupe on `operation_id`.
+  5. A Go caller of `ResolveInvitations` adds the `kind`; a fake of `invitations.AccessConfig` implements
+     `VerifiedIdentifiers`.
+- **React/SPA hosts** (rows 8, 9). After an identifier add or a login/recovery change on an identifier, call
+  `POST /auth/invitations/sync` (`{}` → `{"resolved": n}`; cookie callers double-submit the CSRF header; 429 past the
+  budget) and read `GET /auth/invitations/mine?identifier_kind=email` and `?identifier_kind=phone` to list what is still
+  pending. The two audit routes are JSON only (R-4 (a)); page them by cursor.
+- **Examples (this PR).** Every example builds, vets and tests at `GOWORK=off` on the S7 tags. Pins moved (explicit
+  `GOWORK=off go get`, then `GOWORK=off go mod tidy`): `auth-cms` authentication v0.29.0→v0.30.0 and authorization
+  v0.30.0→v0.31.0; `production-baseline` authentication v0.29.0→v0.30.0 and authorization v0.30.0→v0.31.0;
+  `external-identity` authentication v0.29.0→v0.30.0. No example pins the goredis store. `cms`, `goth-showcase`,
+  `jobs-minimal` and `minimal` pin no moved module. No non-S7 pin moved, direct or indirect. The code-side example
+  changes landed with #211 (both routes, the bridges' `AuditReads()`, `AllOf(RefuseSelfTarget, …)`, `InvitationURL`, the
+  `Action` allow-lists) and #212 (`AUTH_DEMO_ADMIN_EMAIL`).
+
+**The review record.** Every PR passed a lead-backend code review before merge; the fixes were folded as follow-up
+commits on the PR.
+- **#209 (PR-1), no blocker.** **HIGH-1** (lead ruling: back off) a failed scheduled full rebuild re-promoted every poll,
+  so the mirror stayed unavailable; promotion now pauses for `min(FullRebuildEvery, 8 × PollInterval)` and
+  `ScheduledRebuildFailures` counts it (the reviewer's repro went from 5/5 polls unavailable to one failure, then four
+  publishes; row 12). **HIGH-2** `storetest` fed a stripped `State` back to the backend; it now feeds the unstripped
+  `State()` (`UnstrippedStateAddressesTheMirror`), a same-receipt publish with a different `FullAt` is refused, and
+  backends compare `Binding` + `Receipt` only (carried into #210; row 13). **MEDIUM-1** `no-store` runs ahead of the
+  gate. **MEDIUM-2** the README says `AuditGate` must be a global-history gate; repeated listing keys are 400 (row 14).
+  NITs: `HEAD` records no read; README notes on the `State.FullAt` upgrade, the restart period, replica races and the
+  `RefuseSelfTarget` namespace limit.
+- **#210 (PR-2), no blocker.** **HIGH** the header MAC did not cover the mirror key, so a signed mirror copied to another
+  namespace or binding (for example between environments with cloned databases) could serve foreign grants; the MAC now
+  binds the full mirror key, and the README requires one key per environment (row 15). **MEDIUM** the ACL recipe gained
+  `+select` (proven on DB 1 with an empty `ACL LOG`). **MEDIUM** a header naming another binding counts as an integrity
+  failure and is replaced instead of locking out silently. NITs: two-phase rotation, the `FullRebuildEvery` pairing, the
+  wrong-type-value and unkeyed `!epoch_at` residuals, a recovery-fence conflict test. The reviewer's adversarial tests
+  were ported as regressions and mutation-checked. Lead-accepted deviation: deltas sign with the key that opened the
+  epoch, so one epoch never mixes keys.
+- **#211 (PR-3), ship-with-edits, no blocker.** **HIGH-1** (owner-ruled 2026-10-26) resolution admitted any verified
+  identifier, so a notification-only identifier two accounts may share (a household phone) could resolve, sync, list
+  and match; only verified identifiers holding the sign-in/recovery claim do now, and enabling login or recovery on one
+  resolves its invitations (row 9). **MEDIUM-2** documented (the accept-time race). **MEDIUM-3** (lead) passwordless
+  adoption of an unverified identifier resolves like a provision. **LOW-4–6** and the NITs: an open-kind accept needs a
+  claim-holding verified identifier, the resolver port is one method again, the sync budget is
+  `AuthenticationLimits.InvitationSync`, the security-events query validates only `user_id` before the host check,
+  `validateInvitationURL` refuses userinfo, the baseline's `UserAdmin` check switches on `Action` with an allow-list, and
+  the landing-page "tell links apart by path" note. **A root-caused test flake:** `TestProvisionedAccountResolvesPending
+  Invitations` failed 5 of 15 runs because the test's magic-link mail scraper matched the invitation mail's new
+  `#token=`; the scrapers are anchored to the landing path (`/auth/magic#token=`). The product was unaffected.
+- **#212** (example only): verified by its tests and its real-binary leg below.
+
+**Verification record.**
+- CI `check`, `vuln` and the CodeQL analyses passed on the final run of #209–#212. `make guard` and `make check` pass on
+  this PR's repinned tree. S7 adds no guard and no P-rule.
+- **Cold verification:** every tag above; sets A, B and C as listed; this PR's empty-cache from-the-tags builds.
+- **Live legs.** #210: the goredis suite with `-race` and `-tags integration` against a scratch `redis-server` 8.4 on a
+  private socket, `GOWORK=off` build and test, govulncheck clean; the store's Postgres end-to-end leg on a native
+  PostgreSQL 17 (all four dual-dialect `TestSQLRedis` tests passing on sqlite and postgres); and the race tests again on
+  `main` before tag 2. `live-stores` green on `main` before tag 3. No pgx/turso store changed, so no store pass/fail
+  counts are owed.
+- **The Redis tamper drill** (#210, Verification §2, by hand as the README's ACL user on DB 1): **12/12** — the ACL user
+  reaches the cache keys only; forged and malformed facts are refused and answered from SQL; a tampered header is
+  refused; an older mirror restored over the current one is ineligible within `MaxStaleness` and rebuilt; a replayed
+  revoked fact is bounded by `Rebuild`; a revoke whose stored tag differs still removes; key rotation keeps reading;
+  keyed and unkeyed mirrors stay separate; a mirror copied across namespaces and one naming a foreign binding fail and
+  are rebuilt; two replicas with `FullRebuildEvery` made 2 scheduled rebuilds between them, not 4. Disabling tag
+  verification, header verification or the Lua identity rule each fails the tamper tests (mutation-checked).
+- **§1 + §3, the real binaries over HTTP** (#211, development): **auth-cms 44/44**, re-run after the review fixes, and
+  **production-baseline on a native PostgreSQL 17, 17/17**: both audit routes gated,
+  paged by cursor without duplicates, `no-store`, one `audit_read` per read and none deduplicated; a self-assign refused
+  with a `role_write_refused` row; the invitation mail link carrying `#token=` and the hatch binary carrying `?token=`;
+  the owner's cross-identifier case (add and verify an email on an existing account: the AutoAccept invitation grants
+  with `resolved_by: verification`, the other stays pending for its token, sync answers `{resolved: 0}`, the 11th sync in a
+  minute is 429). New tests pin the HIGH-1 ruling (`TestNotificationOnlyPhoneNeverResolvesSyncsOrMatches`,
+  `TestNotificationOnlyEmailResolvesOnceLoginIsEnabled`), MEDIUM-3 (`TestAdoptedAccountResolvesPendingInvitations`) and
+  the duplicate-row behaviour (`TestConcurrentResolutionDuplicatesShareOperationID`). auth-cms's full suite passed 3/3
+  (lead) and 5/5 plus 10/10 on the scraper fix (implementer).
+- **#212, the real auth-cms binary:** the grant fired on `/auth/verify` before sign-in; `/authorization/audit` 200 with
+  the `demo-admin` source; `/auth/admin/security-events` 401 at AAL1, then 200 after a TOTP step-up, with
+  `?event_type=audit_read` showing both rails; invitation links carrying `#token=`; a second user 403 on both routes.
+  `TestDemoAdminEmailGrantsPlatformAdmin` and `TestDemoAdminEmailRefusedInProduction` pin it.
+- **From the tags (this PR).** auth-cms and production-baseline built at `GOWORK=off` from the repinned tree with an
+  empty module cache (`all modules verified` in both); `go version -m` on auth-cms reads
+  `pockets/authentication v0.30.0`, `pockets/authorization v0.31.0`, `pockets/authentication/views/goth v0.8.1` and
+  `sdk v0.20.0`, and on the baseline `pockets/authentication v0.30.0`, `pockets/authorization v0.31.0`, stores/pgx
+  v0.14.0 (authentication) and v0.21.0 (authorization) and `sdk v0.20.0`. Every example builds, vets and tests at
+  `GOWORK=off` (the auth-cms server package three runs, all green); `pnpm build` in `workshop/documentation` succeeds.
+
+**Owner drill (Verification §4, R-6 (a)): PASSED 2026-10-26** on the auth-cms build at `main` 32f22c0d (development,
+console mailer, curl): `AUTH_DEMO_ADMIN_EMAIL` granted platform admin on verify; two invitations to `x@example.com` on
+`project/demo` (member AutoAccept, owner not), both mail links carrying `#token=`; a second account added and confirmed
+`x@example.com` with the sign-in claim and the member invitation was `accepted` at the confirm, the owner one stayed
+`pending` and accepted by its token; an authenticator-app enrollment and TOTP step-up to AAL2, then
+`/authorization/audit` and `/auth/admin/security-events` both 200 with `?event_type=audit_read` listing the reads.
+**One finding, docs only:** `mine?identifier_kind=email` was empty for the second account, because it lists the primary
+sign-in email (the account's own), not the added one — as row 9 says, but the auth-cms drill text promised the listing;
+the README is corrected here and the merged listing stays deferred (below). The drill also surfaced up-to-30-second mail
+latency in auth-cms (deferred below); auth-cms now sets the delivery runtime's idle interval to one second.
+
+**Owner rulings.** Ratified 2026-10-26 ("ratified"): **R-1 (a)** per-fact HMAC tags + the Go-computed header MAC + epoch;
+**R-4 (a)** the audit routes are JSON only; **R-5 (a)** the invitation landing page is a README checklist, no bundled page;
+**R-6 (a)** the drill on the auth-cms build (console mailer + browser JSON), the Redis drill optional, a gps-360-go goredis
+run at adoption; **R-7 (a)** `LinksConfig.InvitationURL`, required in production beside a Granter; **R-8 (a)** the current
+verified holder resolves. **R-2** (a typed `WithAuditReadObserver`, never deduplicated) and **R-3** (`RefuseSelfTarget` +
+`AllOf`; two-person approval is a README recipe) were decided by the two-reviewer gate (BE6, BE11). **Rev 1** (owner
+direction 2026-10-26): an invitation is addressed to `(kind, identifier)`, and every verification of that identifier
+resolves it, replacing the open-kind binding. **HIGH-1, owner ruling 2026-10-26 after the #211 review**, narrowing R-8: only
+verified identifiers holding the sign-in/recovery claim (unique across users) resolve, sync, list under `mine` and match at
+accept; notification-only identifiers never do, and enabling login or recovery on a verified identifier resolves its
+invitations. **MEDIUM-3, lead ruling:** passwordless adoption resolves too. Lead rulings on #209 HIGH-1 (back off) and the
+#210 rotation deviation are above.
+
+**Known and deferred.**
+- **`mine` lists the primary claim-holding identifier of a kind only.** A merged listing across identifiers needs a
+  `ListBySubjects` store change (pgx + turso); it is a follow-up and an owner question. The owner drill hit it: an
+  invitation addressed to an added (non-primary) sign-in email resolves and accepts but does not list; a React host
+  calls `POST /auth/invitations/sync` and accepts by token until then.
+- **The fenced delivery queue has no enqueue wake.** The ordinary queue signals its workers on enqueue; the fenced queue
+  that carries authentication delivery does not, so an idle worker waits out `IdleInterval` (30 s by default) before
+  sending. auth-cms sets one second; production hosts tune `JOBS_IDLE_INTERVAL` or wait for a jobs-pocket wake.
+- **Duplicate `invitation_granted` rows under concurrency.** Two paths racing on one invitation for the same subject (a
+  token accept, a verification, a sync) may each record and count a success row; the Granter's dedupe and the
+  `member_added:<id>` key keep the grant and the notice single. Auditors dedupe on `operation_id`. The fix is a store
+  change: `CompleteAcceptance` reports whether it moved the row, so only that caller records.
+- **goredis bad-tag self-heal** (lead-deferred at #210): a set holding a bad tag fails closed (every read of it falls back)
+  until the next full publication, bounded by `FullRebuildEvery`; documented, not repaired in place.
+- **Account merge** (owner: "merge accounts at some point with double verification") is a future slice: an invitee with two
+  existing accounts can only add the second identifier to one of them today. The plan's Notes list what a merge plan must
+  settle (double verification, the survivor, re-pointing relations and `iam_audit` actor ids through the host, every
+  credential and pending-invitation table, one transaction across pgx + turso + memory + `storetest`).
+- **Fixed in passing:** the auth-cms README's invitation leg targeted `project/other`, which is not a registered resource;
+  #212 points both invitations at `project/demo`, matching the drill that ran on the real binary.
+- **Follow-ups** (the plan's Notes): the reverse listing ("who can `manage` R") and an effective-access listing; removing
+  `InvitationTokenInQuery` in the next authentication minor; a goth admin page for both rails (R-4 (b)); retiring
+  auth-cms `/debug/security-events` now that the bundled route exists; an actor filter on `securityevent.ListFilter` and
+  an open-kind `Mine` (store changes); gps-360-go's adoption of `WithIntegrityKeys` + `FullRebuildEvery` at the roadmap's
+  end.
+- **Owed legs.** Docker Desktop hung on the host, so the baseline legs ran on a native PostgreSQL 17 instead of a
+  container; no Linux-container `make test-stores` ran (no pgx/turso store changed; `live-stores` covered `main`).
+- **Residuals.** A Redis writer can still deny (delete facts or keys, or plant a value of another type at the mirror key)
+  and can replay a revoked fact from the current epoch until the next full publication; the integrity key lives in the
+  host process, so a host compromise is out of scope; on an unkeyed mirror `!epoch_at` is trusted as stored. The audit
+  routes expose actor and subject ids to anyone the host gate admits. Decline stays token-only, so a leaked link lets
+  anyone decline (FE12, accepted). An open-kind invitation still accepts by its token alone (for a caller with a
+  claim-holding verified identifier); the fragment keeps that token out of logs and `Referer`s.
+
 ## TOTP fallback and recovery codes (SOC 2 slice S4c — published 2026-10-26)
 
 Ten annotated tags (not signed) on six modules, one of them NEW (`integrations/encoding/rsc-qr`).

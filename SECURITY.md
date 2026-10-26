@@ -6,6 +6,14 @@ for change management, vulnerability management and CI credentials. It describes
 repository as it is on 2026-10-26; host applications built on the framework document their
 own posture, starting from the docs site's *Production posture* guide.
 
+A host that turns on the authorization TupleCache brings its Redis into scope: the cache
+sits inside the authorization trust boundary, so that instance is an in-scope system with
+the database's controls (dedicated instance or logical database, TLS with a verified CA, an
+ACL user limited to the mirror keys). Since `pockets/authorization/stores/goredis` v0.6.0,
+`WithIntegrityKeys` (one key per environment, paired with `FullRebuildEvery`) makes a
+Redis-only compromise cost availability rather than access; the store README's "Trust
+boundary and hardening" section is the recipe.
+
 ## Reporting a vulnerability
 
 Report privately through GitHub's security advisories for this repository
@@ -21,13 +29,14 @@ each module receives fixes. Latest tags at the time of writing:
 | Module | Latest |
 |---|---|
 | `sdk` | v0.20.0 |
-| `pockets/authentication` | v0.29.0 |
+| `pockets/authentication` | v0.30.0 |
 | `pockets/authentication/stores/pgx` | v0.14.0 |
 | `pockets/authentication/stores/turso` | v0.13.0 |
 | `pockets/authentication/views/goth` | v0.8.1 |
-| `pockets/authorization` | v0.30.0 |
+| `pockets/authorization` | v0.31.0 |
 | `pockets/authorization/stores/pgx` | v0.21.0 |
 | `pockets/authorization/stores/turso` | v0.20.0 |
+| `pockets/authorization/stores/goredis` | v0.6.0 |
 | `pockets/cms` | v0.6.0 |
 | `pockets/cms/stores/pgx` | v0.5.0 |
 | `pockets/cms/stores/turso` | v0.4.0 |

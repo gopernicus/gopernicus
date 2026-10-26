@@ -339,6 +339,73 @@ fails construction. Scope is explicit in the JSON:
  "scope":{"kind":"resource","resource_type":"project","resource_id":"p1"}}
 ```
 
+## Added by S7
+
+Authorization v0.31.0 and the goredis store v0.6.0 (SOC 2 slice S7) add opt-in
+governance controls. A host that sets none of them sees only the WARNs below.
+
+- **The audit listing over HTTP.** `RoleRoutes.AuditGate` mounts
+  `GET /authorization/audit` behind the gate you pass (nil, the default, leaves it
+  unmounted). It needs `Services.Audit`, which `authorization.New` fills from
+  `Repositories.Audit`; a gate without a reader fails `New`
+  (`ErrAuditGateWithoutReader`). The three filter pairs (resource, subject, actor) are
+  each both-or-neither and optional, so **the gate must admit global-history readers
+  only** (a platform admin or an auditor), never a per-resource check. Paging is cursor
+  only (`limit` 25 by default, 100 at most; `offset` and `q` are 400, a repeated key is
+  400), items come newest first, and every answer, a gate denial included, carries
+  `Cache-Control: no-store`. **Paging is the export:** follow `next_cursor` at
+  `limit=100` until `has_more` is false.
+- **The read trail.** `WithAuditReadObserver` receives one
+  `authorizationhttp.AuditReadEvent{Principal, Filter, Limit, Returned}` per completed
+  read, never deduplicated; refused, failed and `HEAD` reads emit nothing. The pocket
+  has no event rail, so the host records it, typically as an `audit_read`
+  security event with `rail: authorization` in the authentication pocket's rail
+  (`examples/auth-cms` and `examples/production-baseline` do). A gate without an
+  observer logs one WARN in every mode.
+- **Write-policy helpers.** `authorizationhttp.RefuseSelfTarget` refuses an assign
+  whose subject is the acting principal (403 `ErrSelfTargetRefused`, through the
+  existing refused-write WARN and `OutcomeRefused` event); an unassign passes, so the
+  integrity policy decides. `authorizationhttp.AllOf(policies...)` admits only when
+  every policy admits:
+
+  ```go
+  WritePolicy: authorizationhttp.AllOf(authorizationhttp.RefuseSelfTarget, hostRoleWritePolicy),
+  ```
+
+  The comparison is the direct subject only: a grant to a group the actor belongs
+  to passes. A two-person approval is a host workflow inside `AllOf`, not a helper.
+- **The integrity WARN.** In production and development `New` logs one WARN listing
+  every resource type whose `owner` relation the store's integrity policy does not
+  protect (fix: `WithIntegrityPolicy(mutations.DefaultIntegrityPolicy())`, or a rule
+  per type), and a separate WARN when `Repositories.Mutations` is nil beside an
+  `owner` relation. Neither refuses. `Register` logs `audit_read_route` and
+  `integrity_rules`.
+- **Scheduled full rebuilds.** `tuplecache.Policy.FullRebuildEvery` promotes a poll to
+  a full rebuild once the mirror's last full publication (`tuplecache.State.FullAt`)
+  is that old; zero, the default, never does, and a value below the defaulted
+  `PollInterval` is `sdk.ErrInvalidInput`. Replicas sharing a mirror rebuild once per
+  period between them. A failed scheduled rebuild backs off for
+  `min(FullRebuildEvery, 8 × PollInterval)`, so deltas (revocations included) keep
+  publishing; `Stats` adds `ScheduledRebuilds`, `ScheduledRebuildFailures` and
+  `LastFullRebuild`. **Upgrade note:** `State` gained `FullAt`, so an unkeyed
+  `State{…}` literal no longer compiles, and a custom backend compares `Binding` and
+  `Receipt`, never the whole struct.
+- **Redis integrity keys.** `goredis.WithIntegrityKeys(current, previous...)` (each at
+  least 32 bytes, `openssl rand -hex 32`) tags every cached fact and MACs the mirror
+  header in Go, so a Redis-only compromise costs availability, not access: a forged
+  or altered fact, a tampered header, a mirror copied from another namespace or
+  binding, and an older mirror restored over the current one all fail verification
+  or eligibility, and the decision is answered from SQL (`Stats().IntegrityFailures`
+  counts them). Keyed mirrors live under `tuplecache:v3:ik:{…}`, so turning keys on
+  rebuilds once. The named residual: a revoked fact copied back from the current
+  epoch reads until the next full publication, so **always pair the keys with
+  `FullRebuildEvery`** (one hour is a reasonable start). Use one key per environment
+  or deployment, keep it in the secret store beside the database credential, and
+  rotate in two phases (`(old, new)` everywhere, then `(new, old)`, then `(new)`
+  after one full publication). The store README's "Trust boundary and hardening" has
+  the ACL user (`+select` when the URL names a database other than 0), the TLS and
+  instance requirements and the drill.
+
 ## Wiring it up
 
 ```go
@@ -356,10 +423,10 @@ routes and the authentication pocket's machine routes.
 
 | Module | Version | Notes |
 | --- | --- | --- |
-| `pockets/authorization` | v0.30.0 | Core, `stores/memory`, `stores/storetest` conformance |
+| `pockets/authorization` | v0.31.0 | Core, `stores/memory`, `stores/storetest` conformance |
 | `pockets/authorization/stores/pgx` | v0.21.0 | `migrations/0001_iam_tuples.sql` and `0003`–`0007` (the operation ledger, fencing, audit integrity and immutability, operation expiry), optional `tuple_cache_migrations/0002_iam_tuple_cache.sql` |
 | `pockets/authorization/stores/turso` | v0.20.0 | The same files for SQLite/Turso |
-| `pockets/authorization/stores/goredis` | v0.5.0 | TupleCache backend, protocol 2 |
+| `pockets/authorization/stores/goredis` | v0.6.0 | TupleCache backend, protocol 2; optional `WithIntegrityKeys` |
 
 Hosts apply the schema before boot; constructors validate it and never migrate.
 The authorization Firestore adapter has been retired. Custom adapters run the
