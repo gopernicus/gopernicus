@@ -55,6 +55,15 @@ Password policy stays in authentication; bcrypt owns hashing mechanics. Entity I
 Presets return SDK values and never import another integration; generic OIDC
 verification lives in `integrations/cryptids/go-oidc`.
 
+## Encoding
+
+| Module | Implements | Notes |
+|---|---|---|
+| `integrations/encoding/rsc-qr` | views/goth's `authgoth.QRModules` shape (no sdk port) | `rscqr.Modules(text) ([][]bool, error)` over rsc.io/qr v0.2.0 (BSD-3, no dependencies): level M, `true` = dark, no quiet zone (the renderer draws it); empty text or over 2331 bytes is `sdk.ErrInvalidInput`. Hosts pass it to `authgoth.WithQR` to draw the TOTP setup QR as server-side SVG |
+
+The views module never imports it: the host chooses the encoder, and without one the TOTP
+setup page shows the key and the `otpauth://` link only.
+
 ## Email and notification
 
 | Module | Implements | Notes |

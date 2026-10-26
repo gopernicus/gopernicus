@@ -3,7 +3,7 @@
 This file is the written security posture of the gopernicus framework repository: how to
 report a vulnerability, which versions are supported, and the controls an auditor can sample
 for change management, vulnerability management and CI credentials. It describes the
-repository as it is on 2026-10-25; host applications built on the framework document their
+repository as it is on 2026-10-26; host applications built on the framework document their
 own posture, starting from the docs site's *Production posture* guide.
 
 ## Reporting a vulnerability
@@ -21,10 +21,10 @@ each module receives fixes. Latest tags at the time of writing:
 | Module | Latest |
 |---|---|
 | `sdk` | v0.20.0 |
-| `pockets/authentication` | v0.27.1 |
-| `pockets/authentication/stores/pgx` | v0.12.0 |
-| `pockets/authentication/stores/turso` | v0.11.0 |
-| `pockets/authentication/views/goth` | v0.7.0 |
+| `pockets/authentication` | v0.29.0 |
+| `pockets/authentication/stores/pgx` | v0.14.0 |
+| `pockets/authentication/stores/turso` | v0.13.0 |
+| `pockets/authentication/views/goth` | v0.8.1 |
 | `pockets/authorization` | v0.30.0 |
 | `pockets/authorization/stores/pgx` | v0.21.0 |
 | `pockets/authorization/stores/turso` | v0.20.0 |
@@ -43,11 +43,13 @@ each module receives fixes. Latest tags at the time of writing:
 | `integrations/datastores/pgxdb` | v0.14.0 |
 | `integrations/datastores/turso` | v0.9.0 |
 | `integrations/email/sendgrid` | v0.5.0 |
+| `integrations/encoding/rsc-qr` | v0.1.0 |
 | `integrations/filestorage/gcs` | v0.3.0 |
 | `integrations/filestorage/s3` | v0.3.0 |
 | `integrations/kvstores/goredis` | v0.4.0 |
 | `integrations/oauth/github` | v0.3.0 |
 | `integrations/oauth/google` | v0.3.0 |
+| `ui/goth` | v0.2.1 |
 | `workshop/gopernicus` | v0.9.0 |
 
 Every module declares `go 1.26.10`; a host that honors the pin builds with a standard
